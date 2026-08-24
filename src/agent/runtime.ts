@@ -38,6 +38,30 @@ interface LiveSession {
 
 const sessions = new Map<string, LiveSession>();
 
+/**
+ * 模型能力字段的保守默认（Q2）：pi 的 ProviderConfigInput.models[] 这些字段必填，
+ * 而我们的 ModelDecl 全是可选。**内建 provider（zai / deepseek…）不会走到这里**——
+ * pi 的目录（每 4 小时从 pi.dev 刷新）已有官方参数，我们注册的同名条目只补 apiKey/baseUrl。
+ * 这些默认只服务于自建网关这条逃生路径：填错影响的是压缩时机与用量统计，不影响能不能跑。
+ */
+const FALLBACK_MODEL = {
+  reasoning: false,
+  input: ["text"] as ("text" | "image")[],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 8_192,
+};
+
+function toProviderConfig(provider: Extract<AgentCommand, { type: "create" }>["provider"]) {
+  return {
+    apiKey: provider.apiKey,
+    baseUrl: provider.baseUrl,
+    api: provider.api,
+    ...(provider.headers ? { headers: provider.headers } : {}),
+    models: provider.models.map((id) => ({ id, name: id, ...FALLBACK_MODEL })),
+  };
+}
+
 /** AgentSession 的事件里，只有这三种需要翻给 renderer；其余（工具、压缩、重试）等后续 slice。 */
 function asAdaptable(event: { type: string }): AdaptableEvent | null {
   if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end") {
@@ -49,7 +73,7 @@ function asAdaptable(event: { type: string }): AdaptableEvent | null {
 async function createSession(command: Extract<AgentCommand, { type: "create" }>): Promise<void> {
   // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
   const modelRuntime = await ModelRuntime.create({});
-  modelRuntime.registerProvider(command.providerId, { apiKey: command.apiKey });
+  modelRuntime.registerProvider(command.provider.id, toProviderConfig(command.provider));
 
   const { session } = await createAgentSession({
     cwd: command.cwd,

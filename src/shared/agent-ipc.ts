@@ -25,7 +25,22 @@ export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
 
 /** 主进程 → agent 进程 */
 export type AgentCommand =
-  | { type: "create"; sessionId: string; cwd: string; providerId: string; modelId: string; apiKey: string }
+  | {
+      type: "create";
+      sessionId: string;
+      cwd: string;
+      /** provider 装配参数。内建 id（zai / deepseek…）只靠 apiKey 就够，
+       *  自建网关必须带 baseUrl / api / models，否则 pi 不知道往哪发。 */
+      provider: {
+        id: string;
+        api: string;
+        baseUrl: string;
+        apiKey: string;
+        headers?: Record<string, string>;
+        models: string[];
+      };
+      modelId: string;
+    }
   | { type: "submit"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
   | { type: "dispose"; sessionId: string };

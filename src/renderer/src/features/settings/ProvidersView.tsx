@@ -12,11 +12,45 @@ import {
  * shared 契约 → main store → IPC → 这里。UI 只做列表 + 新建/编辑 + 删除。
  * 「测试连接」「发现模型」「能力旗标」都还没有消费者，按落库纪律不在本轮出现。
  */
+/**
+ * 各 api 的 baseUrl 约定。两种主流协议正好相反，而 pi 是把 baseUrl 原样交给官方 SDK
+ * 客户端的（openai / @anthropic-ai/sdk），由 SDK 自己接后半段——**我们不做任何 append**，
+ * 所以用户填错就是直接 404。这张表就是为了让用户不用猜。
+ */
+const BASE_URL_HINTS: Record<ProviderApi, { placeholder: string; hint: string }> = {
+  "openai-completions": {
+    placeholder: "https://open.bigmodel.cn/api/coding/paas/v4",
+    hint: "Include the version segment. The client appends /chat/completions.",
+  },
+  "openai-responses": {
+    placeholder: "https://api.openai.com/v1",
+    hint: "Include the version segment. The client appends /responses.",
+  },
+  "openai-codex-responses": {
+    placeholder: "https://chatgpt.com/backend-api/codex",
+    hint: "Codex gateway root. The client appends the responses path.",
+  },
+  "anthropic-messages": {
+    placeholder: "https://api.anthropic.com",
+    hint: "Gateway root only — no version segment. The client appends /v1/messages.",
+  },
+  "google-generative-ai": {
+    placeholder: "https://generativelanguage.googleapis.com",
+    hint: "Host root only. The client appends the v1beta model path.",
+  },
+  "mistral-conversations": {
+    placeholder: "https://api.mistral.ai/v1",
+    hint: "Include the version segment. The client appends /chat/completions.",
+  },
+};
+
 export function ProvidersView(props: { onChange?: () => void }) {
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState(emptyDraft());
+  /** 非 null 时表单处于「编辑既有 provider」状态，id 不可改。 */
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -33,6 +67,20 @@ export function ProvidersView(props: { onChange?: () => void }) {
   }, [refresh]);
 
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
+
+  /** 编辑：装回表单。密钥永远不会回到 renderer，所以留空 = 保留原密钥（store.upsert 的语义）。 */
+  const edit = (provider: ProviderDto) => {
+    setIssues([]);
+    setEditingId(provider.id);
+    setDraft({
+      id: provider.id,
+      displayName: provider.displayName,
+      baseUrl: provider.endpoint.baseUrl,
+      api: provider.endpoint.api,
+      models: provider.models.declared.map((m) => m.id).join(", "),
+      apiKey: "",
+    });
+  };
 
   const save = async () => {
     setError(null);
@@ -58,6 +106,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
     }
     setIssues([]);
     setDraft(emptyDraft());
+    setEditingId(null);
     await refresh();
   };
 
@@ -114,13 +163,18 @@ export function ProvidersView(props: { onChange?: () => void }) {
                 <code style={{ fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
                   {provider.endpoint.api}
                 </code>
-                <button
-                  type="button"
-                  onClick={() => void api.provider.remove(provider.id).then(refresh)}
-                  style={{ ...controlStyle, marginInlineStart: "auto" }}
-                >
-                  Remove
-                </button>
+                <span style={{ marginInlineStart: "auto", display: "flex", gap: "var(--space-2)" }}>
+                  <button type="button" onClick={() => edit(provider)} style={controlStyle}>
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void api.provider.remove(provider.id).then(refresh)}
+                    style={controlStyle}
+                  >
+                    Remove
+                  </button>
+                </span>
               </div>
               <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
                 {provider.endpoint.baseUrl}
@@ -156,7 +210,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
           <input
             value={draft.id}
             onChange={(e) => setDraft({ ...draft, id: e.target.value })}
-            placeholder="openai"
+            placeholder="zai"
+            disabled={editingId !== null}
             style={inputStyle}
           />
         </Field>
@@ -168,11 +223,15 @@ export function ProvidersView(props: { onChange?: () => void }) {
             style={inputStyle}
           />
         </Field>
-        <Field label="Base URL" issue={issueFor("endpoint.baseUrl")}>
+        <Field
+          label="Base URL"
+          hint={BASE_URL_HINTS[draft.api].hint}
+          issue={issueFor("endpoint.baseUrl")}
+        >
           <input
             value={draft.baseUrl}
             onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
-            placeholder="https://api.openai.com/v1"
+            placeholder={BASE_URL_HINTS[draft.api].placeholder}
             style={inputStyle}
           />
         </Field>
@@ -197,7 +256,15 @@ export function ProvidersView(props: { onChange?: () => void }) {
             style={inputStyle}
           />
         </Field>
-        <Field label="API key" hint="Stored by the operating system, write only" issue={issueFor("apiKey")}>
+        <Field
+          label="API key"
+          hint={
+            editingId === null
+              ? "Stored by the operating system, write only"
+              : "Leave blank to keep the current key"
+          }
+          issue={issueFor("apiKey")}
+        >
           <input
             type="password"
             value={draft.apiKey}
@@ -206,9 +273,24 @@ export function ProvidersView(props: { onChange?: () => void }) {
             style={inputStyle}
           />
         </Field>
-        <button type="submit" style={{ ...controlStyle, ...primaryStyle }}>
-          Save provider
-        </button>
+        <div style={{ display: "flex", gap: "var(--space-2)" }}>
+          <button type="submit" style={{ ...controlStyle, ...primaryStyle }}>
+            {editingId === null ? "Add provider" : "Save changes"}
+          </button>
+          {editingId !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingId(null);
+                setDraft(emptyDraft());
+                setIssues([]);
+              }}
+              style={controlStyle}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
     </section>
   );

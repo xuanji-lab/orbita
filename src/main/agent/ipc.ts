@@ -11,12 +11,25 @@ export function registerAgentIpc(host: AgentHost, providers: ProviderStore): voi
   ipcMain.handle(
     ipcChannels.agentCreate,
     async (_event, input: CreateAgentInput): Promise<string> => {
+      const dto = (await providers.list()).find((p) => p.id === input.providerId);
+      if (!dto) throw new Error(`unknown provider "${input.providerId}"`);
       const apiKey = await providers.resolveApiKey(input.providerId);
       if (apiKey === null) {
         throw new Error(`provider "${input.providerId}" has no API key stored`);
       }
       // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
-      return host.createSession({ ...input, apiKey });
+      return host.createSession({
+        cwd: input.cwd,
+        modelId: input.modelId,
+        provider: {
+          id: dto.id,
+          api: dto.endpoint.api,
+          baseUrl: dto.endpoint.baseUrl,
+          apiKey,
+          ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
+          models: dto.models.declared.map((m) => m.id),
+        },
+      });
     },
   );
 

@@ -45,12 +45,7 @@ export class AgentHost {
     return this.ready;
   }
 
-  async createSession(input: {
-    cwd: string;
-    providerId: string;
-    modelId: string;
-    apiKey: string;
-  }): Promise<string> {
+  async createSession(input: Omit<Extract<AgentCommand, { type: "create" }>, "type" | "sessionId">): Promise<string> {
     await this.ensure();
     const sessionId = randomUUID();
     this.post({ type: "create", sessionId, ...input });
