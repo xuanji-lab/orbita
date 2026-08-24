@@ -17,6 +17,15 @@ export class AgentHost {
   private builtins: BuiltinProvider[] = [];
   private resolveBuiltins: ((providers: BuiltinProvider[]) => void) | null = null;
   private builtinsArrived: Promise<BuiltinProvider[]> | null = null;
+  /**
+   * 正在创建中的 session。**create 是异步的**（runtime 要起 ModelRuntime 再建 AgentSession，
+   * 几百毫秒），而 postMessage 是发完就走——不等 `created` 就返回 id 的话，
+   * renderer 立刻 submit 会撞上「unknown session」。这张表就是那段等待。
+   */
+  private readonly pendingCreates = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
 
   constructor(runtimePath: string, onEvent: (event: AgentEvent) => void) {
     this.runtimePath = runtimePath;
@@ -41,6 +50,21 @@ export class AgentHost {
           this.resolveBuiltins = null;
           return;
         }
+        if (message.type === "created") {
+          this.pendingCreates.get(message.sessionId)?.resolve();
+          this.pendingCreates.delete(message.sessionId);
+          return;
+        }
+        if (message.type === "failed" && message.sessionId !== null) {
+          const pending = this.pendingCreates.get(message.sessionId);
+          if (pending) {
+            // 创建失败要把错误交回调用方，而不是只广播一条事件——
+            // 否则 renderer 会拿着一个永远不存在的 sessionId 继续发消息
+            pending.reject(new Error(message.message));
+            this.pendingCreates.delete(message.sessionId);
+            return;
+          }
+        }
         this.onEvent(message);
       });
 
@@ -51,6 +75,8 @@ export class AgentHost {
         this.builtinsArrived = null;
         this.resolveBuiltins = null;
         const message = `agent runtime exited with code ${code}`;
+        for (const pending of this.pendingCreates.values()) pending.reject(new Error(message));
+        this.pendingCreates.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -58,10 +84,21 @@ export class AgentHost {
     return this.ready;
   }
 
-  async createSession(input: Omit<Extract<AgentCommand, { type: "create" }>, "type" | "sessionId">): Promise<string> {
+  /** 创建 session。**等 runtime 回 `created` 才返回**——返回即可用。 */
+  async createSession(
+    input: Omit<Extract<AgentCommand, { type: "create" }>, "type" | "sessionId">,
+  ): Promise<string> {
     await this.ensure();
     const sessionId = randomUUID();
+    const created = new Promise<void>((resolve, reject) => {
+      this.pendingCreates.set(sessionId, { resolve, reject });
+      setTimeout(() => {
+        if (!this.pendingCreates.delete(sessionId)) return;
+        reject(new Error("agent runtime did not confirm the session in time"));
+      }, 60_000);
+    });
     this.post({ type: "create", sessionId, ...input });
+    await created;
     return sessionId;
   }
 
