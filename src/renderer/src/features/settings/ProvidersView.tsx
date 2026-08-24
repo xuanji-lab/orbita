@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import { KNOWN_PROVIDERS, type KnownProvider } from "@shared/known-providers";
 import type { ProviderDto, ValidationIssue } from "@shared/provider";
+import type { BuiltinProvider } from "@shared/agent-ipc";
 
 /**
  * Provider 设置面。
@@ -23,6 +24,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [discovered, setDiscovered] = useState<string[]>([]);
   const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
+  /** pi 的内建目录，按 catalogId 取官方模型清单——离线就有，不用打网络 */
+  const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -38,6 +41,10 @@ export function ProvidersView(props: { onChange?: () => void }) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    void api.provider.builtins().then(setCatalog).catch(() => setCatalog([]));
+  }, []);
+
   const known = KNOWN_PROVIDERS.find((k) => k.id === draft.kind);
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
   const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
@@ -48,12 +55,18 @@ export function ProvidersView(props: { onChange?: () => void }) {
     const target = KNOWN_PROVIDERS.find((k) => k.id === kind);
     setStatus(null);
     setDiscovered([]);
+    // 有 catalogId 就把 pi 目录里的官方模型清单一并填上——这是「选中即可用」的关键
+    const fromCatalog =
+      target?.catalogId === undefined
+        ? []
+        : (catalog.find((c) => c.id === target.catalogId)?.models ?? []);
     setDraft({
       ...draft,
       kind,
       id: target?.id ?? "",
       displayName: target?.label ?? "",
       baseUrl: target?.baseUrl ?? "",
+      models: fromCatalog,
     });
   };
 
@@ -90,22 +103,57 @@ export function ProvidersView(props: { onChange?: () => void }) {
     ...(editingId === null ? {} : { providerId: editingId }),
   });
 
-  const fetchModels = async () => {
-    setStatus({ tone: "busy", text: "Fetching models…" });
-    const result = await api.provider.discover({ baseUrl: draft.baseUrl.trim(), ...withKey() });
-    setStatus({ tone: result.ok ? "ok" : "bad", text: result.message });
-    setDiscovered(result.models.filter((m) => !draft.models.includes(m)));
-  };
-
-  const test = async () => {
-    setStatus({ tone: "busy", text: "Testing connection…" });
-    const result = await api.provider.test({
-      api: known?.api ?? "openai-completions",
-      baseUrl: draft.baseUrl.trim(),
-      modelId: draft.models[0] ?? "",
-      ...withKey(),
+  /**
+   * 取模型清单。**目录优先，网络兜底**：
+   * pi 的目录是离线的、比网关的 /models 更新（实测 zhipu 的目录有 glm-5.3，
+   * 而 anthropic 兼容端点的 /models 返回 200 包着 404，根本没有这个接口）。
+   */
+  const fetchModels = () =>
+    guard("Fetching models…", async () => {
+      const fromCatalog =
+        known?.catalogId === undefined
+          ? []
+          : (catalog.find((c) => c.id === known.catalogId)?.models ?? []);
+      if (fromCatalog.length > 0) {
+        setDiscovered(fromCatalog.filter((m) => !draft.models.includes(m)));
+        return { tone: "ok" as const, text: `${fromCatalog.length} models from pi's catalog.` };
+      }
+      if (known?.api === "anthropic-messages") {
+        return {
+          tone: "bad" as const,
+          text: "Anthropic-compatible gateways do not expose /models. Add model ids by hand.",
+        };
+      }
+      const result = await api.provider.discover({ baseUrl: draft.baseUrl.trim(), ...withKey() });
+      setDiscovered(result.models.filter((m) => !draft.models.includes(m)));
+      return { tone: result.ok ? ("ok" as const) : ("bad" as const), text: result.message };
     });
-    setStatus({ tone: result.ok ? "ok" : "bad", text: result.message });
+
+  const test = () =>
+    guard("Testing connection…", async () => {
+      const result = await api.provider.test({
+        api: known?.api ?? "openai-completions",
+        baseUrl: draft.baseUrl.trim(),
+        modelId: draft.models[0] ?? "",
+        ...withKey(),
+      });
+      return { tone: result.ok ? ("ok" as const) : ("bad" as const), text: result.message };
+    });
+
+  /**
+   * 异步动作的统一外壳。**没有它，一次 IPC reject 就会让状态永远停在「…ing」**——
+   * 主进程没重启、通道没注册时正是如此，用户看到的是挂起而不是错误。
+   */
+  const guard = async (
+    busy: string,
+    run: () => Promise<{ tone: "ok" | "bad"; text: string }>,
+  ): Promise<void> => {
+    setStatus({ tone: "busy", text: busy });
+    try {
+      setStatus(await run());
+    } catch (cause) {
+      setStatus({ tone: "bad", text: cause instanceof Error ? cause.message : String(cause) });
+    }
   };
 
   const toggleReveal = async () => {
