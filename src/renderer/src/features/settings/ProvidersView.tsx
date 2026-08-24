@@ -1,61 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
-import {
-  PROVIDER_APIS,
-  type ProviderApi,
-  type ProviderDto,
-  type ValidationIssue,
-} from "@shared/provider";
-import type { BuiltinProvider } from "@shared/agent-ipc";
+import { KNOWN_PROVIDERS, type KnownProvider } from "@shared/known-providers";
+import type { ProviderDto, ValidationIssue } from "@shared/provider";
 
 /**
- * Provider 设置面（最小可用版）。契约先行的最后一层：
- * shared 契约 → main store → IPC → 这里。UI 只做列表 + 新建/编辑 + 删除。
- * 「测试连接」「发现模型」「能力旗标」都还没有消费者，按落库纪律不在本轮出现。
+ * Provider 设置面。
+ *
+ * 三条刻意的设计约束，都是为了不重蹈 proma 那条路：
+ *  1. **没有协议选择框**——协议由「选哪个 provider」完全决定（智谱标准 API 是 OpenAI 兼容，
+ *     智谱 Coding Plan 是 Anthropic 兼容），让用户选第二次只会选错。
+ *  2. **下拉框只列我们适配过的**，不是 pi 的 41 个。pi 的目录是「模型参数」的真源，
+ *     不是「怎么接入」的真源。
+ *  3. **已发现 / 已启用两张卡**：/models 拿回来的是候选，用户点进「已启用」才算数——
+ *     发现的东西直接可用会让模型下拉框变得不确定。
  */
-/**
- * 各 api 的 baseUrl 约定。两种主流协议正好相反，而 pi 是把 baseUrl 原样交给官方 SDK
- * 客户端的（openai / @anthropic-ai/sdk），由 SDK 自己接后半段——**我们不做任何 append**，
- * 所以用户填错就是直接 404。这张表就是为了让用户不用猜。
- */
-const BASE_URL_HINTS: Record<ProviderApi, { placeholder: string; hint: string }> = {
-  "openai-completions": {
-    placeholder: "https://open.bigmodel.cn/api/coding/paas/v4",
-    hint: "Include the version segment. The client appends /chat/completions.",
-  },
-  "openai-responses": {
-    placeholder: "https://api.openai.com/v1",
-    hint: "Include the version segment. The client appends /responses.",
-  },
-  "openai-codex-responses": {
-    placeholder: "https://chatgpt.com/backend-api/codex",
-    hint: "Codex gateway root. The client appends the responses path.",
-  },
-  "anthropic-messages": {
-    placeholder: "https://api.anthropic.com",
-    hint: "Gateway root only — no version segment. The client appends /v1/messages.",
-  },
-  "google-generative-ai": {
-    placeholder: "https://generativelanguage.googleapis.com",
-    hint: "Host root only. The client appends the v1beta model path.",
-  },
-  "mistral-conversations": {
-    placeholder: "https://api.mistral.ai/v1",
-    hint: "Include the version segment. The client appends /chat/completions.",
-  },
-};
-
 export function ProvidersView(props: { onChange?: () => void }) {
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState(emptyDraft());
-  /** 非 null 时表单处于「编辑既有 provider」状态，id 不可改。 */
   const [editingId, setEditingId] = useState<string | null>(null);
-  /** pi 内建目录。为空说明 agent 进程还没起来或 pi 没给出目录——那就退回手填。 */
-  const [builtins, setBuiltins] = useState<BuiltinProvider[]>([]);
-  /** 「从供应商获取」的结果提示；内建 provider 用不上（清单已由目录预填）。 */
-  const [discovery, setDiscovery] = useState<string | null>(null);
+  const [draft, setDraft] = useState(emptyDraft());
+  const [discovered, setDiscovered] = useState<string[]>([]);
+  const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
+  const [revealed, setRevealed] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -71,65 +38,87 @@ export function ProvidersView(props: { onChange?: () => void }) {
     void refresh();
   }, [refresh]);
 
-  useEffect(() => {
-    void api.provider.builtins().then(setBuiltins).catch(() => setBuiltins([]));
-  }, []);
+  const known = KNOWN_PROVIDERS.find((k) => k.id === draft.kind);
+  const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
+  const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
+  const keyMask = editing?.auth.scheme === "api_key" ? editing.auth.masked : null;
 
-  /** 选中一个内建 provider：baseUrl / 协议 / 模型全部按 pi 的官方目录预填，用户只需填 key。 */
-  const pickBuiltin = (id: string) => {
-    if (id === "") {
-      setDraft({ ...emptyDraft(), apiKey: draft.apiKey });
-      return;
-    }
-    const builtin = builtins.find((b) => b.id === id);
-    if (!builtin) return;
+  /** 选 provider：baseUrl 与协议一并定下，用户只剩名称、模型、key */
+  const pick = (kind: string) => {
+    const target = KNOWN_PROVIDERS.find((k) => k.id === kind);
+    setStatus(null);
+    setDiscovered([]);
     setDraft({
-      id: builtin.id,
-      displayName: builtin.name,
-      baseUrl: builtin.baseUrl,
-      api: (PROVIDER_APIS as readonly string[]).includes(builtin.api)
-        ? (builtin.api as ProviderApi)
-        : "openai-completions",
-      models: builtin.models.slice(0, 6).join(", "),
-      apiKey: draft.apiKey,
+      ...draft,
+      kind,
+      id: target?.id ?? "",
+      displayName: target?.label ?? "",
+      baseUrl: target?.baseUrl ?? "",
     });
   };
 
-  const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
-
-  /** 正在编辑的 provider 已存密钥的掩码（没有则 null） */
-  const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
-  const editingKeyMask =
-    editing?.auth.scheme === "api_key" ? editing.auth.masked : null;
-
-  /** 编辑：装回表单。密钥永远不会回到 renderer，所以留空 = 保留原密钥（store.upsert 的语义）。 */
   const edit = (provider: ProviderDto) => {
+    const kind =
+      KNOWN_PROVIDERS.find((k) => k.id === provider.id)?.id ??
+      (provider.endpoint.api === "anthropic-messages" ? "anthropic-compatible" : "openai-compatible");
     setIssues([]);
+    setStatus(null);
+    setDiscovered([]);
+    setRevealed(null);
     setEditingId(provider.id);
     setDraft({
+      kind,
       id: provider.id,
       displayName: provider.displayName,
       baseUrl: provider.endpoint.baseUrl,
-      api: provider.endpoint.api,
-      models: provider.models.declared.map((m) => m.id).join(", "),
+      models: provider.models.declared.map((m) => m.id),
       apiKey: "",
     });
   };
 
-  /**
-   * 从供应商获取模型。**只对自建网关有意义**——内建 provider 的清单在选中下拉框时
-   * 就由 pi 的目录填好了，不需要网络往返。失败不是异常：很多网关（尤其 anthropic 系）
-   * 根本没有 /models，提示用户手填即可。
-   */
+  const reset = () => {
+    setEditingId(null);
+    setDraft(emptyDraft());
+    setIssues([]);
+    setStatus(null);
+    setDiscovered([]);
+    setRevealed(null);
+  };
+
+  const withKey = () => ({
+    ...(draft.apiKey === "" ? {} : { apiKey: draft.apiKey }),
+    ...(editingId === null ? {} : { providerId: editingId }),
+  });
+
   const fetchModels = async () => {
-    setDiscovery("Fetching…");
-    const result = await api.provider.discover({
+    setStatus({ tone: "busy", text: "Fetching models…" });
+    const result = await api.provider.discover({ baseUrl: draft.baseUrl.trim(), ...withKey() });
+    setStatus({ tone: result.ok ? "ok" : "bad", text: result.message });
+    setDiscovered(result.models.filter((m) => !draft.models.includes(m)));
+  };
+
+  const test = async () => {
+    setStatus({ tone: "busy", text: "Testing connection…" });
+    const result = await api.provider.test({
+      api: known?.api ?? "openai-completions",
       baseUrl: draft.baseUrl.trim(),
-      ...(draft.apiKey === "" ? {} : { apiKey: draft.apiKey }),
-      ...(editingId === null ? {} : { providerId: editingId }),
+      modelId: draft.models[0] ?? "",
+      ...withKey(),
     });
-    setDiscovery(result.message);
-    if (result.ok) setDraft((prev) => ({ ...prev, models: result.models.join(", ") }));
+    setStatus({ tone: result.ok ? "ok" : "bad", text: result.message });
+  };
+
+  const toggleReveal = async () => {
+    if (revealed !== null) {
+      setRevealed(null);
+      return;
+    }
+    if (draft.apiKey !== "") {
+      setRevealed(draft.apiKey);
+      return;
+    }
+    if (editingId === null) return;
+    setRevealed(await api.provider.reveal(editingId));
   };
 
   const save = async () => {
@@ -138,14 +127,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
       provider: {
         id: draft.id.trim(),
         displayName: draft.displayName.trim(),
-        endpoint: { baseUrl: draft.baseUrl.trim(), api: draft.api },
-        models: {
-          declared: draft.models
-            .split(",")
-            .map((m) => m.trim())
-            .filter(Boolean)
-            .map((id) => ({ id })),
-        },
+        endpoint: { baseUrl: draft.baseUrl.trim(), api: known?.api ?? "openai-completions" },
+        models: { declared: draft.models.map((id) => ({ id })) },
         auth: { scheme: "api_key" },
       },
       ...(draft.apiKey === "" ? {} : { apiKey: draft.apiKey }),
@@ -154,65 +137,28 @@ export function ProvidersView(props: { onChange?: () => void }) {
       setIssues(result.issues);
       return;
     }
-    setIssues([]);
-    setDraft(emptyDraft());
-    setEditingId(null);
+    reset();
     await refresh();
   };
 
   return (
     <section style={{ display: "grid", gap: "var(--space-6)", maxWidth: 640, width: "100%" }}>
       <header style={{ display: "grid", gap: "var(--space-1)" }}>
-        <h2 style={{ margin: 0, fontSize: "var(--font-size-heading)", fontWeight: 600 }}>
-          Providers
-        </h2>
+        <h2 style={{ margin: 0, fontSize: "var(--font-size-heading)", fontWeight: 600 }}>Providers</h2>
         <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
-          The API key never leaves this machine and is never sent to the interface — only a masked
-          preview is shown.
+          Model parameters come from pi's catalog, refreshed every four hours. You only supply the key.
         </p>
       </header>
 
-      {error !== null && (
-        <p role="alert" style={{ margin: 0, fontSize: "var(--font-size-control)", color: "var(--color-danger)" }}>
-          {error}
-        </p>
-      )}
+      {error !== null && <Line tone="bad">{error}</Line>}
 
-      {providers === null ? (
-        <p style={{ margin: 0, color: "var(--color-text-tertiary)" }}>Loading…</p>
-      ) : providers.length === 0 ? (
-        <p
-          style={{
-            margin: 0,
-            padding: "var(--space-6)",
-            border: "1px dashed var(--color-border-default)",
-            borderRadius: "var(--radius-lg)",
-            color: "var(--color-text-tertiary)",
-            fontSize: "var(--font-size-control)",
-            textAlign: "center",
-          }}
-        >
-          No provider yet. Add one below to give the agent a model to talk to.
-        </p>
-      ) : (
+      {providers !== null && providers.length > 0 && (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-2)" }}>
           {providers.map((provider) => (
-            <li
-              key={provider.id}
-              style={{
-                display: "grid",
-                gap: "var(--space-1)",
-                padding: "var(--space-4)",
-                background: "var(--color-bg-panel)",
-                border: "1px solid var(--color-border-subtle)",
-                borderRadius: "var(--radius-lg)",
-              }}
-            >
+            <li key={provider.id} style={cardStyle}>
               <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>
                 <strong style={{ fontWeight: 600 }}>{provider.displayName}</strong>
-                <code style={{ fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
-                  {provider.endpoint.api}
-                </code>
+                <code style={metaStyle}>{provider.endpoint.api}</code>
                 <span style={{ marginInlineStart: "auto", display: "flex", gap: "var(--space-2)" }}>
                   <button type="button" onClick={() => edit(provider)} style={controlStyle}>
                     Edit
@@ -229,13 +175,12 @@ export function ProvidersView(props: { onChange?: () => void }) {
               <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
                 {provider.endpoint.baseUrl}
               </span>
-              <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
+              <span style={metaStyle}>
                 {provider.auth.scheme === "api_key" && provider.auth.masked !== null
                   ? `Key ${provider.auth.masked}`
                   : "No key stored"}
                 {" · "}
-                {provider.models.declared.length} model
-                {provider.models.declared.length === 1 ? "" : "s"}
+                {provider.models.declared.length} enabled
               </span>
             </li>
           ))}
@@ -247,144 +192,192 @@ export function ProvidersView(props: { onChange?: () => void }) {
           event.preventDefault();
           void save();
         }}
-        style={{
-          display: "grid",
-          gap: "var(--space-3)",
-          padding: "var(--space-5)",
-          background: "var(--color-bg-panel)",
-          border: "1px solid var(--color-border-subtle)",
-          borderRadius: "var(--radius-lg)",
-        }}
+        style={{ ...cardStyle, gap: "var(--space-4)" }}
       >
-        {editingId === null && builtins.length === 0 && (
-          <p style={{ margin: 0, fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
-            Loading the built-in provider list…
-          </p>
-        )}
-
-        {editingId === null && builtins.length > 0 && (
-          <Field
-            label="Provider"
-            hint={`Pick one of pi's ${builtins.length} known providers to fill everything but the key, or choose Custom.`}
-          >
-            <select
-              value={builtins.some((b) => b.id === draft.id) ? draft.id : ""}
-              onChange={(e) => pickBuiltin(e.target.value)}
-              style={inputStyle}
-            >
-              <option value="">Custom (fill in manually)</option>
-              {builtins.map((builtin) => (
-                <option key={builtin.id} value={builtin.id}>
-                  {builtin.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        )}
-
-        <Field label="Identifier" hint="Lowercase letters, digits and dashes" issue={issueFor("id")}>
-          <input
-            value={draft.id}
-            onChange={(e) => setDraft({ ...draft, id: e.target.value })}
-            placeholder="zai"
-            disabled={editingId !== null}
-            style={inputStyle}
-          />
-        </Field>
-        <Field label="Display name" issue={issueFor("displayName")}>
-          <input
-            value={draft.displayName}
-            onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
-            placeholder="OpenAI"
-            style={inputStyle}
-          />
-        </Field>
         <Field
-          label="Base URL"
-          hint={BASE_URL_HINTS[draft.api].hint}
-          issue={issueFor("endpoint.baseUrl")}
+          label="Provider"
+          hint={known?.note ?? "Pick the provider you have an account with."}
         >
-          <input
-            value={draft.baseUrl}
-            onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
-            placeholder={BASE_URL_HINTS[draft.api].placeholder}
-            style={inputStyle}
-          />
-        </Field>
-        <Field label="Protocol" issue={issueFor("endpoint.api")}>
-          <select
-            value={draft.api}
-            onChange={(e) => setDraft({ ...draft, api: e.target.value as ProviderApi })}
-            style={inputStyle}
-          >
-            {PROVIDER_APIS.map((value) => (
-              <option key={value} value={value}>
-                {value}
+          <select value={draft.kind} onChange={(e) => pick(e.target.value)} disabled={editingId !== null} style={inputStyle}>
+            <option value="">Choose a provider…</option>
+            {KNOWN_PROVIDERS.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.label}
               </option>
             ))}
           </select>
         </Field>
-        <Field
-          label="Models"
-          hint={discovery ?? "Comma separated ids. Built-in providers are filled from pi's catalog."}
-          issue={issueFor("models.declared")}
-        >
-          <span style={{ display: "flex", gap: "var(--space-2)" }}>
-            <input
-              value={draft.models}
-              onChange={(e) => setDraft({ ...draft, models: e.target.value })}
-              placeholder="glm-5.3, glm-4.7"
-              style={{ ...inputStyle, flex: 1 }}
+
+        {known && (
+          <>
+            <Field label="Name" issue={issueFor("displayName")}>
+              <input
+                value={draft.displayName}
+                onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field
+              label="Base URL"
+              hint={
+                known.api === "anthropic-messages"
+                  ? "The client appends /v1/messages."
+                  : "The client appends /chat/completions."
+              }
+              issue={issueFor("endpoint.baseUrl")}
+            >
+              <input
+                value={draft.baseUrl}
+                onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
+                placeholder="https://…"
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field
+              label="API key"
+              hint={
+                editingId === null ? "Stored by the operating system" : "Leave blank to keep the current key"
+              }
+              issue={issueFor("apiKey")}
+            >
+              <span style={{ display: "flex", gap: "var(--space-2)" }}>
+                <input
+                  type={revealed === null ? "password" : "text"}
+                  value={revealed ?? draft.apiKey}
+                  onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
+                  readOnly={revealed !== null}
+                  placeholder={keyMask ?? "sk-…"}
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void toggleReveal()}
+                  aria-label={revealed === null ? "Show key" : "Hide key"}
+                  style={controlStyle}
+                >
+                  {revealed === null ? "Show" : "Hide"}
+                </button>
+                <button type="button" onClick={() => void test()} style={controlStyle}>
+                  Test
+                </button>
+              </span>
+            </Field>
+
+            {status !== null && <Line tone={status.tone}>{status.text}</Line>}
+
+            <ModelCard
+              title="Enabled models"
+              empty="Nothing enabled yet — fetch or add a model id."
+              models={draft.models}
+              actionLabel="Remove"
+              onAction={(id) => setDraft({ ...draft, models: draft.models.filter((m) => m !== id) })}
+              issue={issueFor("models.declared")}
+              footer={
+                <AddModel onAdd={(id) => setDraft({ ...draft, models: [...new Set([...draft.models, id])] })} />
+              }
             />
-            <button
-              type="button"
-              onClick={() => void fetchModels()}
-              disabled={draft.baseUrl.trim() === ""}
-              style={controlStyle}
-            >
-              Fetch
-            </button>
-          </span>
-        </Field>
-        <Field
-          label="API key"
-          hint={
-            editingId === null
-              ? "Stored by the operating system, write only"
-              : "Leave blank to keep the current key"
-          }
-          issue={issueFor("apiKey")}
-        >
-          <input
-            type="password"
-            value={draft.apiKey}
-            onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-            // 编辑态用**已存密钥的掩码**当 placeholder：框里是空的（明文不回 renderer），
-            // 但灰字显示 sk-…1234 就是「它确实存住了」的肉眼凭据。
-            placeholder={editingKeyMask ?? "sk-…"}
-            style={inputStyle}
-          />
-        </Field>
-        <div style={{ display: "flex", gap: "var(--space-2)" }}>
-          <button type="submit" style={{ ...controlStyle, ...primaryStyle }}>
-            {editingId === null ? "Add provider" : "Save changes"}
-          </button>
-          {editingId !== null && (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingId(null);
-                setDraft(emptyDraft());
-                setIssues([]);
+
+            <ModelCard
+              title="Available from the provider"
+              empty="Press Fetch to ask the provider which models your key can use."
+              models={discovered}
+              actionLabel="Enable"
+              onAction={(id) => {
+                setDraft({ ...draft, models: [...new Set([...draft.models, id])] });
+                setDiscovered(discovered.filter((m) => m !== id));
               }}
-              style={controlStyle}
-            >
-              Cancel
-            </button>
-          )}
-        </div>
+              footer={
+                <button
+                  type="button"
+                  onClick={() => void fetchModels()}
+                  disabled={draft.baseUrl.trim() === ""}
+                  style={controlStyle}
+                >
+                  Fetch
+                </button>
+              }
+            />
+
+            <div style={{ display: "flex", gap: "var(--space-2)" }}>
+              <button type="submit" style={{ ...controlStyle, ...primaryStyle }}>
+                {editingId === null ? "Add provider" : "Save changes"}
+              </button>
+              <button type="button" onClick={reset} style={controlStyle}>
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
       </form>
     </section>
+  );
+}
+
+/** 模型卡片：已启用与已发现共用一个形状，区别只在动作 */
+function ModelCard(props: {
+  title: string;
+  empty: string;
+  models: string[];
+  actionLabel: string;
+  onAction: (id: string) => void;
+  issue?: string | undefined;
+  footer?: React.ReactNode;
+}) {
+  return (
+    <div style={{ ...cardStyle, background: "var(--color-bg-muted)", gap: "var(--space-2)" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>
+        <span style={{ fontSize: "var(--font-size-control)", fontWeight: 500 }}>{props.title}</span>
+        <span style={metaStyle}>{props.models.length}</span>
+        <span style={{ marginInlineStart: "auto" }}>{props.footer}</span>
+      </div>
+      {props.models.length === 0 ? (
+        <span style={metaStyle}>{props.empty}</span>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-1)" }}>
+          {props.models.map((id) => (
+            <li key={id} style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+              <code style={{ ...metaStyle, flex: 1 }}>{id}</code>
+              <button type="button" onClick={() => props.onAction(id)} style={compactControlStyle}>
+                {props.actionLabel}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {props.issue !== undefined && (
+        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-danger)" }}>{props.issue}</span>
+      )}
+    </div>
+  );
+}
+
+function AddModel(props: { onAdd: (id: string) => void }) {
+  const [value, setValue] = useState("");
+  const commit = () => {
+    const id = value.trim();
+    if (id === "") return;
+    props.onAdd(id);
+    setValue("");
+  };
+  return (
+    <span style={{ display: "flex", gap: "var(--space-1)" }}>
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          commit();
+        }}
+        placeholder="model id"
+        style={{ ...inputStyle, height: "var(--control-height-sm)", width: 160 }}
+      />
+      <button type="button" onClick={commit} style={compactControlStyle}>
+        Add
+      </button>
+    </span>
   );
 }
 
@@ -399,17 +392,43 @@ function Field(props: {
       <span style={{ fontSize: "var(--font-size-control)", fontWeight: 500 }}>{props.label}</span>
       {props.children}
       {props.issue !== undefined ? (
-        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-danger)" }}>
-          {props.issue}
-        </span>
+        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-danger)" }}>{props.issue}</span>
       ) : props.hint !== undefined ? (
-        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
-          {props.hint}
-        </span>
+        <span style={metaStyle}>{props.hint}</span>
       ) : null}
     </label>
   );
 }
+
+/** 状态行：颜色是第二信号，文字才是主信号（设计系统：status prefers icons and words） */
+function Line(props: { tone: "ok" | "bad" | "busy"; children: React.ReactNode }) {
+  const color =
+    props.tone === "ok"
+      ? "var(--color-success)"
+      : props.tone === "bad"
+        ? "var(--color-danger)"
+        : "var(--color-text-tertiary)";
+  return (
+    <p role="status" style={{ margin: 0, fontSize: "var(--font-size-control)", color }}>
+      {props.children}
+    </p>
+  );
+}
+
+const cardStyle: React.CSSProperties = {
+  display: "grid",
+  gap: "var(--space-1)",
+  padding: "var(--space-4)",
+  background: "var(--color-bg-panel)",
+  border: "1px solid var(--color-border-subtle)",
+  borderRadius: "var(--radius-lg)",
+};
+
+const metaStyle: React.CSSProperties = {
+  fontFamily: "var(--font-family-mono)",
+  fontSize: "var(--font-size-micro)",
+  color: "var(--color-text-tertiary)",
+};
 
 const inputStyle: React.CSSProperties = {
   height: "var(--control-height-md)",
@@ -435,21 +454,20 @@ const controlStyle: React.CSSProperties = {
   transition: "var(--transition-hover)",
 };
 
+const compactControlStyle: React.CSSProperties = {
+  ...controlStyle,
+  height: "var(--control-height-xs)",
+  padding: "0 var(--space-2)",
+  fontSize: "var(--font-size-micro)",
+};
+
 /** accent 只给主操作（设计系统硬规则：一屏一个 accent） */
 const primaryStyle: React.CSSProperties = {
   background: "var(--color-accent)",
   color: "var(--color-accent-fg)",
   borderColor: "var(--color-accent)",
-  justifySelf: "start",
 };
 
 function emptyDraft() {
-  return {
-    id: "",
-    displayName: "",
-    baseUrl: "",
-    api: "openai-completions" as ProviderApi,
-    models: "",
-    apiKey: "",
-  };
+  return { kind: "", id: "", displayName: "", baseUrl: "", models: [] as string[], apiKey: "" };
 }

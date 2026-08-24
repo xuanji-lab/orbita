@@ -19,6 +19,16 @@ export const providerApi = {
     ipcRenderer.invoke(ipcChannels.providerUpsert, input),
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.providerRemove, id),
   /** 从供应商获取模型（仅 OpenAI 兼容的 /models；内建 provider 的清单来自 pi 目录，不走网络） */
+  /** 测试连接：按协议发一个 1 token 的真请求 */
+  test: (input: {
+    api: string;
+    baseUrl: string;
+    modelId: string;
+    apiKey?: string;
+    providerId?: string;
+  }): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke(ipcChannels.providerTest, input),
+  /** 显示明文密钥（用户点眼睛时才调，不随 list 下发） */
+  reveal: (id: string): Promise<string | null> => ipcRenderer.invoke(ipcChannels.providerReveal, id),
   discover: (input: {
     baseUrl: string;
     apiKey?: string;

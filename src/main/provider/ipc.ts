@@ -6,11 +6,23 @@ import { ipcMain } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
 import { discoverModels, type DiscoveredModels } from "./discover.ts";
+import { testConnection, type ConnectionTestResult } from "./test-connection.ts";
 import { ProviderStore, ProviderValidationError } from "./store.ts";
 
 export type UpsertResult =
   | { ok: true; provider: ProviderDto }
   | { ok: false; issues: ValidationIssue[] };
+
+/** 密钥来源：表单里刚输入的优先，否则取已存的 */
+async function resolveKey(
+  store: ProviderStore,
+  typed: string | undefined,
+  providerId: string | undefined,
+): Promise<string | null> {
+  if (typed !== undefined && typed !== "") return typed;
+  if (providerId === undefined) return null;
+  return store.resolveApiKey(providerId);
+}
 
 export function registerProviderIpc(store: ProviderStore): void {
   ipcMain.handle(ipcChannels.providerList, (): Promise<ProviderDto[]> => store.list());
@@ -34,17 +46,33 @@ export function registerProviderIpc(store: ProviderStore): void {
       _event,
       input: { baseUrl: string; apiKey?: string; providerId?: string },
     ): Promise<DiscoveredModels> => {
-      const apiKey =
-        input.apiKey !== undefined && input.apiKey !== ""
-          ? input.apiKey
-          : input.providerId === undefined
-            ? null
-            : await store.resolveApiKey(input.providerId);
+      const apiKey = await resolveKey(store, input.apiKey, input.providerId);
       if (apiKey === null) {
         return { ok: false, models: [], message: "Enter an API key first." };
       }
       return discoverModels({ baseUrl: input.baseUrl, apiKey });
     },
+  );
+
+  // 测试连接：用表单当前值，不必先保存
+  ipcMain.handle(
+    ipcChannels.providerTest,
+    async (
+      _event,
+      input: { api: string; baseUrl: string; modelId: string; apiKey?: string; providerId?: string },
+    ): Promise<ConnectionTestResult> => {
+      const apiKey = await resolveKey(store, input.apiKey, input.providerId);
+      if (apiKey === null) return { ok: false, message: "Enter an API key first." };
+      return testConnection({ ...input, apiKey });
+    },
+  );
+
+  /**
+   * 显示明文密钥。**这是「密钥不过 IPC」边界上唯一的一个显式开口**——
+   * 只在用户点眼睛时取一次，不随 list 下发。用户明确要求要能核对自己粘的 key 对不对。
+   */
+  ipcMain.handle(ipcChannels.providerReveal, (_event, id: string): Promise<string | null> =>
+    store.resolveApiKey(id),
   );
 
   ipcMain.handle(ipcChannels.providerRemove, (_event, id: string): Promise<void> =>

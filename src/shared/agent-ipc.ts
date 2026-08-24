@@ -21,6 +21,8 @@ export const ipcChannels = {
   agentEvent: "agent:event",
   providerBuiltins: "provider:builtins",
   providerDiscover: "provider:discover",
+  providerTest: "provider:test",
+  providerReveal: "provider:reveal",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
