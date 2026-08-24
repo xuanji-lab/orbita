@@ -31,6 +31,7 @@ export const providerApi = {
   reveal: (id: string): Promise<string | null> => ipcRenderer.invoke(ipcChannels.providerReveal, id),
   discover: (input: {
     baseUrl: string;
+    api: string;
     apiKey?: string;
     providerId?: string;
   }): Promise<{ ok: boolean; models: string[]; message: string }> =>

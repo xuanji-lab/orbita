@@ -44,13 +44,13 @@ export function registerProviderIpc(store: ProviderStore): void {
     ipcChannels.providerDiscover,
     async (
       _event,
-      input: { baseUrl: string; apiKey?: string; providerId?: string },
+      input: { baseUrl: string; api: string; apiKey?: string; providerId?: string },
     ): Promise<DiscoveredModels> => {
       const apiKey = await resolveKey(store, input.apiKey, input.providerId);
       if (apiKey === null) {
         return { ok: false, models: [], message: "Enter an API key first." };
       }
-      return discoverModels({ baseUrl: input.baseUrl, apiKey });
+      return discoverModels({ baseUrl: input.baseUrl, api: input.api, apiKey });
     },
   );
 

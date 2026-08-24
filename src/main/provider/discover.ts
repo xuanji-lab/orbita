@@ -1,16 +1,17 @@
 /**
- * 「从供应商获取模型」——**只有一条路径**：OpenAI 兼容的 `GET {baseUrl}/models`。
+ * 「从供应商获取模型」——问供应商本人，拿到的就是**这把 key、这个套餐实际能用**的清单。
  *
- * 为什么只有一条（这是刻意的设计约束）：内建 provider 的模型清单来自 pi 的目录
- * （41 个 provider，每 4 小时从 pi.dev 刷新），离线就有、不需要网络发现。
- * 网络发现只服务于 pi 目录里没有的**自建网关**，而自建网关几乎都是 OpenAI 兼容的。
+ * 两处教训都是实测出来的（2026-08-25，智谱 Coding Plan）：
  *
- * 对照：proma 的 fetchModels 是个 15+ 分支的 switch（deepseek/kimi 打 /models、
- * 小米走硬编码预设、codex 走 SDK 目录、anthropic 系根本没有 /models 端点……），
- * 那是因为他们不用 pi 的目录、每个供应商的知识都自己维护。我们不复制那条路。
+ * 1. **模型端点的路径按协议走，不是简单地 baseUrl + /models。**
+ *    Anthropic 兼容的模型端点在 `{baseUrl}/v1/models`（与对话端点 `/v1/messages` 同级）。
+ *    少了 `/v1` 会拿到 404。OpenAI 兼容的才是 `{baseUrl}/models`（baseUrl 已含版本段）。
  *
- * 已知不适用：anthropic-messages 协议的网关通常没有 /models。返回结构化错误，
- * 让用户手填 —— 而不是替他猜一张预设表。
+ * 2. **有的网关一律返回 HTTP 200，真实状态藏在 body 里**（智谱：`{"code":401,...,"success":false}`）。
+ *    只看 `response.ok` 会把 404 当成「成功但没有模型」——这正是先前误报的根因。
+ *
+ * 这两条都是**协议级**的处理，不是按厂商特判：任何 anthropic 兼容网关都适用，
+ * 任何「200 包错误」的网关都适用。厂商差异仍然只是 baseUrl 与鉴权头。
  */
 export interface DiscoveredModels {
   ok: boolean;
@@ -18,44 +19,94 @@ export interface DiscoveredModels {
   message: string;
 }
 
-/** OpenAI 的 /models 响应形状（只取 id，其余字段各家不一，不解析）。 */
+/** 各家 /models 的响应形状不统一，这里只取 id。 */
 interface ModelsResponse {
   data?: Array<{ id?: unknown }>;
+  models?: Array<{ id?: unknown } | string>;
+  /** 「200 包错误」的网关会带这些 */
+  code?: unknown;
+  msg?: unknown;
+  success?: unknown;
+  error?: { message?: unknown };
+}
+
+/** 模型列表端点。Anthropic 兼容与对话端点同级（都在 /v1 下）。 */
+export function resolveModelsUrl(baseUrl: string, api: string): string {
+  const base = baseUrl.replace(/\/+$/, "");
+  // 用户可能直接填了完整对话端点；同级替换即可
+  if (/\/v\d+\/messages$/.test(base)) return base.replace(/\/messages$/, "/models");
+  if (api === "anthropic-messages") return `${base}/v1/models`;
+  return `${base}/models`;
+}
+
+/**
+ * 从响应体里判断成败。**先看 body 再看 HTTP 状态**——因为「200 包错误」的网关存在，
+ * 反过来（先信状态码）会把错误当成空列表。
+ */
+export function parseModelsBody(payload: ModelsResponse, httpOk: boolean): DiscoveredModels {
+  const bodyFailed =
+    payload.success === false ||
+    (typeof payload.code === "number" && payload.code !== 200) ||
+    (typeof payload.code === "string" && payload.code !== "200" && payload.code !== "");
+  if (bodyFailed) {
+    const reason =
+      (typeof payload.msg === "string" && payload.msg) ||
+      (typeof payload.error?.message === "string" && payload.error.message) ||
+      "the provider rejected the request";
+    return { ok: false, models: [], message: `${reason} (code ${String(payload.code ?? "?")})` };
+  }
+
+  const raw = payload.data ?? payload.models ?? [];
+  const models = raw
+    .map((entry) => (typeof entry === "string" ? entry : entry.id))
+    .filter((id): id is string => typeof id === "string" && id.trim() !== "");
+
+  if (models.length === 0) {
+    return {
+      ok: false,
+      models: [],
+      message: httpOk
+        ? "The provider returned an empty model list."
+        : "The provider returned no usable model list.",
+    };
+  }
+  return { ok: true, models, message: `${models.length} models available on this key.` };
 }
 
 export async function discoverModels(input: {
   baseUrl: string;
+  api: string;
   apiKey: string;
   headers?: Record<string, string>;
   timeoutMs?: number;
 }): Promise<DiscoveredModels> {
-  const url = `${input.baseUrl.replace(/\/+$/, "")}/models`;
+  const url = resolveModelsUrl(input.baseUrl, input.api);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 15_000);
+  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 20_000);
   try {
     const response = await fetch(url, {
       headers: {
+        // 两种鉴权头都带上：不同网关认不同的那一个，而多带一个从不出错
         Authorization: `Bearer ${input.apiKey}`,
+        "x-api-key": input.apiKey,
+        "anthropic-version": "2023-06-01",
         Accept: "application/json",
         ...(input.headers ?? {}),
       },
       signal: controller.signal,
     });
-    if (!response.ok) {
+    const text = await response.text();
+    let payload: ModelsResponse;
+    try {
+      payload = JSON.parse(text) as ModelsResponse;
+    } catch {
       return {
         ok: false,
         models: [],
-        message: `${url} returned ${response.status}. This gateway may not expose /models — add model ids by hand.`,
+        message: `${url} did not return JSON (${response.status}). Add model ids by hand.`,
       };
     }
-    const payload = (await response.json()) as ModelsResponse;
-    const models = (payload.data ?? [])
-      .map((entry) => entry.id)
-      .filter((id): id is string => typeof id === "string" && id.trim() !== "");
-    if (models.length === 0) {
-      return { ok: false, models: [], message: "The gateway returned no models." };
-    }
-    return { ok: true, models, message: `Found ${models.length} models.` };
+    return parseModelsBody(payload, response.ok);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { ok: false, models: [], message: `Could not reach ${url}: ${reason}` };

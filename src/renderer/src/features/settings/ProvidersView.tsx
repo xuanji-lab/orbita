@@ -60,10 +60,9 @@ export function ProvidersView(props: { onChange?: () => void }) {
     const target = KNOWN_PROVIDERS.find((k) => k.id === kind);
     setStatus(null);
     setDiscovered([]);
-    // 目录进**候选池**，不进已启用（R10-01 的 C 方案：发现的结果要用户「提升」才算数）。
-    // 这也让目录不必百分百准确——智谱 Coding Plan 实际不提供 glm-5v-turbo，
-    // 而 pi 的 zai-coding-cn 目录里有它；候选池里多一条无害，你不 enable 就是了。
-    setDiscovered(catalogModels(target));
+    // 候选池留空，等 Fetch 去问供应商——目录是按厂商组织的，分不清套餐
+    // （pi 的 zai-coding-cn 含 glm-5v-turbo，但智谱 Coding Plan 并不提供它）。
+    setDiscovered([]);
     setDraft({
       ...draft,
       kind,
@@ -82,10 +81,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
     setStatus(null);
     setRevealed(null);
     setEditingId(provider.id);
-    const enabled = provider.models.declared.map((m) => m.id);
-    setDiscovered(
-      catalogModels(KNOWN_PROVIDERS.find((k) => k.id === kind)).filter((m) => !enabled.includes(m)),
-    );
+    setDiscovered([]);
     setDraft({
       kind,
       id: provider.id,
@@ -117,20 +113,24 @@ export function ProvidersView(props: { onChange?: () => void }) {
    */
   const fetchModels = () =>
     guard("Fetching models…", async () => {
+      // **先问供应商本人**：拿回来的是这把 key、这个套餐实际能用的清单，比任何目录都准。
+      const result = await api.provider.discover({
+        baseUrl: draft.baseUrl.trim(),
+        api: known?.api ?? "openai-completions",
+        ...withKey(),
+      });
+      if (result.ok) {
+        setDiscovered(result.models.filter((m) => !draft.models.includes(m)));
+        return { tone: "ok" as const, text: result.message };
+      }
+      // 供应商不给（没有该端点 / 网络不通）才退回 pi 目录，并说明它可能不精确
       const fromCatalog = catalogModels(known);
-      if (fromCatalog.length > 0) {
-        setDiscovered(fromCatalog.filter((m) => !draft.models.includes(m)));
-        return { tone: "ok" as const, text: `${fromCatalog.length} models from pi's catalog.` };
-      }
-      if (known?.api === "anthropic-messages") {
-        return {
-          tone: "bad" as const,
-          text: "Anthropic-compatible gateways do not expose /models. Add model ids by hand.",
-        };
-      }
-      const result = await api.provider.discover({ baseUrl: draft.baseUrl.trim(), ...withKey() });
-      setDiscovered(result.models.filter((m) => !draft.models.includes(m)));
-      return { tone: result.ok ? ("ok" as const) : ("bad" as const), text: result.message };
+      if (fromCatalog.length === 0) return { tone: "bad" as const, text: result.message };
+      setDiscovered(fromCatalog.filter((m) => !draft.models.includes(m)));
+      return {
+        tone: "bad" as const,
+        text: `${result.message} Showing ${fromCatalog.length} from pi's catalog instead — these may not all be on your plan.`,
+      };
     });
 
   const test = () =>
@@ -333,7 +333,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
 
             <ModelCard
               title="Available"
-              empty="Press Fetch to look up models for this provider."
+              empty="Press Fetch to ask the provider which models this key can use."
               models={discovered}
               actionLabel="Enable"
               onAction={(id) => {
