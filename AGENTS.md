@@ -24,6 +24,8 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
   接不上就不落库，写进 `docs/plans/` 等它被需要。
 - **避免过度抽象**：没有第二个消费者就不建包、不建抽象层、不建 barrel。
 - 禁 `any`；禁 inline import（`await import()` / `import("pkg").Type`）——顶层 import only。
+- **禁 TS 参数属性（`constructor(private x: T)`）、`enum`、`namespace`**：Node 原生只剥离类型、
+  不做代码生成，这些会让 `node --test` 直接加载失败。相对 import 必须带 `.ts` 后缀（同因）。
 - 先调研再新增依赖，明确版本与维护状态。
 - 本地优先：持久化用可移植文件（JSON / JSONL），不引入本地数据库。
   配置与会话元数据走原子写（临时文件 + rename），禁裸 `writeFileSync`。

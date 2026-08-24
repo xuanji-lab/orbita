@@ -4,6 +4,9 @@
  */
 import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
+import { registerProviderIpc } from "./provider/ipc.ts";
+import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
+import { ProviderStore } from "./provider/store.ts";
 
 /** 26-entry-layer §9.2 安全不变量：三条都不许放松。 */
 const SECURITY_INVARIANTS = {
@@ -24,7 +27,7 @@ function createMainWindow(): BrowserWindow {
     backgroundColor: "#f3f4f1",
     webPreferences: {
       ...SECURITY_INVARIANTS,
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(__dirname, "../preload/index.js"),
     },
   });
 
@@ -45,6 +48,11 @@ function createMainWindow(): BrowserWindow {
 }
 
 void app.whenReady().then(() => {
+  // 配置落在 Electron 的 userData 目录，不再依赖 pi 的 ~/.pi/agent。
+  // 从旧 models.json / auth.json 的迁移等到真有旧数据的用户时再单独立项（落库纪律：没有消费者不写）。
+  const configDir = app.getPath("userData");
+  registerProviderIpc(new ProviderStore(configDir, new SafeStorageSecrets(configDir)));
+
   createMainWindow();
 
   // macOS：点 dock 图标且无窗口时重开

@@ -8,10 +8,12 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
+    // Node 原生执行 TS 时相对 import 必须带 .ts 后缀（它不做扩展名解析）
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "composite": true,
     "paths": { "@shared/*": ["./src/shared/*"] }
   },
-  "include": ["src/renderer/src/**/*", "src/preload/index.ts", "src/shared/**/*"]
+  "include": ["src/renderer/src/**/*", "src/preload/**/*", "src/shared/**/*"]
 }
