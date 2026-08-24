@@ -4,6 +4,8 @@
  */
 import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
+import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { ProviderStore } from "./provider/store.ts";
@@ -51,7 +53,13 @@ void app.whenReady().then(() => {
   // 配置落在 Electron 的 userData 目录，不再依赖 pi 的 ~/.pi/agent。
   // 从旧 models.json / auth.json 的迁移等到真有旧数据的用户时再单独立项（落库纪律：没有消费者不写）。
   const configDir = app.getPath("userData");
-  registerProviderIpc(new ProviderStore(configDir, new SafeStorageSecrets(configDir)));
+  const providers = new ProviderStore(configDir, new SafeStorageSecrets(configDir));
+  registerProviderIpc(providers);
+
+  // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）
+  const agentHost = new AgentHost(resolveRuntimePath(__dirname), broadcastAgentEvent);
+  registerAgentIpc(agentHost, providers);
+  app.on("before-quit", () => agentHost.dispose());
 
   createMainWindow();
 

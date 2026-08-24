@@ -13,6 +13,9 @@
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@earendil-works/pi-client": "0.84.3",
+    "@earendil-works/pi-coding-agent": "0.84.3",
+    "@earendil-works/pi-protocol": "0.84.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

@@ -4,7 +4,7 @@
  * 注意 API 形状：明文密钥只有 renderer → main 这一个方向，回来的永远是 ProviderDto。
  */
 import { ipcRenderer } from "electron";
-import { ipcChannels } from "../../shared/ipc.ts";
+import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
 
 export type UpsertResult =

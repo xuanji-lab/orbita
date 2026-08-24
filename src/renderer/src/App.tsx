@@ -1,5 +1,9 @@
 import { useSystemTheme } from "./useSystemTheme";
+import { useCallback, useEffect, useState } from "react";
+import { ChatView } from "./features/chat/ChatView";
 import { ProvidersView } from "./features/settings/ProvidersView";
+import { api } from "./api";
+import type { ProviderDto } from "@shared/provider";
 
 /**
  * 应用外壳。目前只有 provider 设置这一面 —— 契约先行：
@@ -7,6 +11,11 @@ import { ProvidersView } from "./features/settings/ProvidersView";
  */
 export function App() {
   useSystemTheme();
+  const [providers, setProviders] = useState<ProviderDto[]>([]);
+  const refresh = useCallback(async () => setProviders(await api.provider.list()), []);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   return (
     <div
@@ -45,7 +54,9 @@ export function App() {
         </p>
       </header>
 
-      <ProvidersView />
+      <ChatView providers={providers} />
+
+      <ProvidersView onChange={refresh} />
     </div>
   );
 }

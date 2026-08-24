@@ -12,7 +12,7 @@ import {
  * shared 契约 → main store → IPC → 这里。UI 只做列表 + 新建/编辑 + 删除。
  * 「测试连接」「发现模型」「能力旗标」都还没有消费者，按落库纪律不在本轮出现。
  */
-export function ProvidersView() {
+export function ProvidersView(props: { onChange?: () => void }) {
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -21,11 +21,12 @@ export function ProvidersView() {
   const refresh = useCallback(async () => {
     try {
       setProviders(await api.provider.list());
+      props.onChange?.();
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, []);
+  }, [props]);
 
   useEffect(() => {
     void refresh();

@@ -10,7 +10,16 @@ import react from "@vitejs/plugin-react";
  */
 export default defineConfig({
   main: {
-    build: { rollupOptions: { input: resolve(__dirname, "src/main/index.ts") } },
+    build: {
+      rollupOptions: {
+        // agent runtime 与主进程同一段构建、同一个输出目录，但是**两个进程的入口**
+        input: {
+          index: resolve(__dirname, "src/main/index.ts"),
+          "agent-runtime": resolve(__dirname, "src/agent/runtime.ts"),
+        },
+        output: { entryFileNames: "[name].js" },
+      },
+    },
   },
   preload: {
     build: { rollupOptions: { input: resolve(__dirname, "src/preload/index.ts") } },

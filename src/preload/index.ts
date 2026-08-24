@@ -3,9 +3,10 @@
  * 只允许依赖 electron / node 内建 / src/shared —— 不得 import 主进程模块或渲染层模块。
  */
 import { contextBridge } from "electron";
+import { agentApi } from "./api/agent.ts";
 import { providerApi } from "./api/provider.ts";
 
-const api = { provider: providerApi } as const;
+const api = { agent: agentApi, provider: providerApi } as const;
 
 export type OrbitaApi = typeof api;
 

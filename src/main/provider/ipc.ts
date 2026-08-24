@@ -3,7 +3,7 @@
  * 校验失败不是异常路径而是正常结果：把 issues 结构化地还给 renderer，让表单逐项标红。
  */
 import { ipcMain } from "electron";
-import { ipcChannels } from "../../shared/ipc.ts";
+import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
 import { ProviderStore, ProviderValidationError } from "./store.ts";
 
