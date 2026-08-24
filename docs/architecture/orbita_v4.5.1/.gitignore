@@ -1,0 +1,23 @@
+﻿# OpenCode / Sisyphus local working state (plans, evidence, notepads)
+.sisyphus/
+
+# Graph/index caches
+.codegraph/
+.reasonix/
+.opencode/
+
+# Temporary files
+*.tmp
+*~
+18-zhinang-modes-temp.md
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

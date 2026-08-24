@@ -1,0 +1,49 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+out/
+coverage/
+*.tsbuildinfo
+*.js.map
+
+# ⚠ 不使用全局 `*.d.ts` 与全局 `src/` 忽略规则。
+# 旧仓用它们 + 一长串 `!` 豁免，三次静默吞掉新文件（见 AGENTS.md 陷阱史 #1）。
+# 需要忽略构建产物就写明确路径，不要写会命中源码的通配。
+
+# 环境
+.env
+.env.local
+.env.*.local
+
+# 日志
+*.log
+
+# 操作系统 / 编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Agent 工作目录（不是产品代码）
+.claude/
+.zcode/
+.omo/
+.sisyphus/
+.history/
+.reasonix/
+.worktrees/
+
+# 上一代实现的本地残留（源码在冻结分支 wip/home-view-zcode，此处不入库）
+/orbita-desktop/
+/orbita-sdk/
+/core/
+/progress/
+/.wuwo/
+/.orbita/
+
+# 测试产物
+*.db
+test-output.txt

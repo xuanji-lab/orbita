@@ -1,0 +1,47 @@
+:root {
+  /* families */
+  --font-family-base: "Manrope", "Source Han Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --font-family-brand: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* numerals, ids, durations, paths — same family as mono, separate job */
+  --font-family-business: var(--font-family-mono);
+
+  /* UI scale (default track; the app also ships compact/medium/large/xlarge) */
+  --font-size-micro: 11px;
+  --font-size-caption: 12px;
+  --font-size-control: 13px;
+  --font-size-body: 14px;
+  --font-size-chat: 15px;
+  --font-size-input: 14px;
+  --font-size-title: 16px;
+  --font-size-brand: 18px;
+  --font-size-heading: 20px;
+  --font-size-logo: 36px;
+
+  --line-height-micro: 16px;
+  --line-height-caption: 18px;
+  --line-height-control: 20px;
+  --line-height-body: 22px;
+  --line-height-input: 22px;
+  --line-height-title: 24px;
+  --line-height-heading: 28px;
+  /* unitless leadings for prose */
+  --line-height-chat: 1.68;
+  --line-height-bubble: 1.6;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  /* card/tool names sit at 650 in the app — kept verbatim */
+  --weight-strong: 650;
+  --weight-bold: 700;
+
+  --tracking-slogan: 0.04em;
+  --tracking-model: 0.01em;
+
+  /* semantic aliases */
+  --text-slogan-family: var(--font-family-brand);
+  --text-wordmark-family: var(--font-family-brand);
+  --text-body-family: var(--font-family-base);
+  --text-code-family: var(--font-family-mono);
+}

@@ -1,0 +1,32 @@
+/* One alpha for every glass surface. The layer ladder is not authored — it is
+   what stacking produces: a surface at alpha a, nested n deep, reads as
+   1-(1-a)^n. The depth cue comes free from compositing, so there is nothing to
+   keep in sync. Glass is for SURFACES only — text is always a solid
+   --color-text-* value.
+
+   Dark is the MORE opaque theme (.70 vs .60). Light text needs a dark, settled
+   ground: at a low alpha the wallpaper bleeds through and light-on-grey loses
+   its contrast. Dark glass therefore blocks more, not less. */
+:root {
+  --glass-alpha: 0.6; /* @kind other */
+  --glass-blur: 20px;
+  --glass-border: rgba(255, 255, 255, 0.55);
+  --glass-bg: rgba(255, 255, 255, 0.6);
+}
+
+:root[data-theme="dark"] {
+  --glass-alpha: 0.7; /* @kind other */
+  --glass-blur: 20px;
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-bg: rgba(29, 32, 36, 0.7);
+}
+
+/* The single card recipe. Reused everywhere by changing only width/height. */
+.glass-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-composer);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+}
