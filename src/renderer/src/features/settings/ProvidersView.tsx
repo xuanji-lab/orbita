@@ -46,6 +46,11 @@ export function ProvidersView(props: { onChange?: () => void }) {
   }, []);
 
   const known = KNOWN_PROVIDERS.find((k) => k.id === draft.kind);
+  /** 某个已适配 provider 在 pi 目录里的模型清单（没有 catalogId 或目录未到则为空） */
+  const catalogModels = (target: KnownProvider | undefined): string[] =>
+    target?.catalogId === undefined
+      ? []
+      : (catalog.find((c) => c.id === target.catalogId)?.models ?? []);
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
   const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
   const keyMask = editing?.auth.scheme === "api_key" ? editing.auth.masked : null;
@@ -55,18 +60,17 @@ export function ProvidersView(props: { onChange?: () => void }) {
     const target = KNOWN_PROVIDERS.find((k) => k.id === kind);
     setStatus(null);
     setDiscovered([]);
-    // 有 catalogId 就把 pi 目录里的官方模型清单一并填上——这是「选中即可用」的关键
-    const fromCatalog =
-      target?.catalogId === undefined
-        ? []
-        : (catalog.find((c) => c.id === target.catalogId)?.models ?? []);
+    // 目录进**候选池**，不进已启用（R10-01 的 C 方案：发现的结果要用户「提升」才算数）。
+    // 这也让目录不必百分百准确——智谱 Coding Plan 实际不提供 glm-5v-turbo，
+    // 而 pi 的 zai-coding-cn 目录里有它；候选池里多一条无害，你不 enable 就是了。
+    setDiscovered(catalogModels(target));
     setDraft({
       ...draft,
       kind,
       id: target?.id ?? "",
       displayName: target?.label ?? "",
       baseUrl: target?.baseUrl ?? "",
-      models: fromCatalog,
+      models: [],
     });
   };
 
@@ -76,9 +80,12 @@ export function ProvidersView(props: { onChange?: () => void }) {
       (provider.endpoint.api === "anthropic-messages" ? "anthropic-compatible" : "openai-compatible");
     setIssues([]);
     setStatus(null);
-    setDiscovered([]);
     setRevealed(null);
     setEditingId(provider.id);
+    const enabled = provider.models.declared.map((m) => m.id);
+    setDiscovered(
+      catalogModels(KNOWN_PROVIDERS.find((k) => k.id === kind)).filter((m) => !enabled.includes(m)),
+    );
     setDraft({
       kind,
       id: provider.id,
@@ -110,10 +117,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
    */
   const fetchModels = () =>
     guard("Fetching models…", async () => {
-      const fromCatalog =
-        known?.catalogId === undefined
-          ? []
-          : (catalog.find((c) => c.id === known.catalogId)?.models ?? []);
+      const fromCatalog = catalogModels(known);
       if (fromCatalog.length > 0) {
         setDiscovered(fromCatalog.filter((m) => !draft.models.includes(m)));
         return { tone: "ok" as const, text: `${fromCatalog.length} models from pi's catalog.` };
@@ -317,7 +321,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
 
             <ModelCard
               title="Enabled models"
-              empty="Nothing enabled yet — fetch or add a model id."
+              empty="Nothing enabled yet — enable one from the list below, or type an id."
               models={draft.models}
               actionLabel="Remove"
               onAction={(id) => setDraft({ ...draft, models: draft.models.filter((m) => m !== id) })}
@@ -328,8 +332,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
             />
 
             <ModelCard
-              title="Available from the provider"
-              empty="Press Fetch to ask the provider which models your key can use."
+              title="Available"
+              empty="Press Fetch to look up models for this provider."
               models={discovered}
               actionLabel="Enable"
               onAction={(id) => {

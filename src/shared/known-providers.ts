@@ -23,7 +23,13 @@ export interface KnownProvider {
   api: ProviderApi;
   /** 预填的 baseUrl。空串表示必须用户自己填（兼容格式的通用入口） */
   baseUrl: string;
-  /** 对应 pi 内建目录的 id；有值时模型参数走 pi 的官方目录 */
+  /**
+   * 对应 pi 内建目录的 id。有值时模型参数走 pi 的官方目录，且目录里的模型进**候选池**。
+   *
+   * ⚠ 候选池不等于可用：目录是按厂商 id 组织的，而同一厂商的不同套餐能用的模型并不相同
+   * （实例：pi 的 `zai-coding-cn` 含 `glm-5v-turbo`，但智谱 Coding Plan 实际不提供它）。
+   * 这正是「发现的结果要用户提升才算数」的理由——目录不必百分百准确，候选池里多一条无害。
+   */
   catalogId?: string;
   /** 一句话说明这条什么时候该选 */
   note: string;
