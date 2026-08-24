@@ -8,9 +8,15 @@
  * pi-protocol 的 progress、经 parentPort 发回主进程。**不碰 UI，不碰持久化路径策略。**
  */
 import { randomUUID } from "node:crypto";
-import { createAgentSession, type AgentSession } from "@earendil-works/pi-coding-agent";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  createCodingTools,
+  ModelRuntime,
+  type AgentSession,
+} from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
+import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import { wrapWithPermission, type WrappableTool } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 
 type ParentPortLike = {
@@ -34,9 +40,32 @@ interface LiveSession {
   session: AgentSession;
   adapter: TranscriptAdapter;
   unsubscribe: () => void;
+  mode: PermissionMode;
 }
 
 const sessions = new Map<string, LiveSession>();
+
+/** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
+const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
+
+/**
+ * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点，
+ * 而 pi 的工具执行本来就允许长时间等待（abort 走的是另一条路）。
+ */
+function askPermission(sessionId: string) {
+  return (request: { toolCallId: string; toolName: string; input: unknown }) =>
+    new Promise<PermissionAnswer>((resolve) => {
+      const requestId = `${sessionId}:${request.toolCallId}`;
+      pendingPermissions.set(requestId, resolve);
+      send({
+        type: "permission",
+        sessionId,
+        requestId,
+        toolName: request.toolName,
+        input: request.input,
+      });
+    });
+}
 
 /**
  * 模型能力字段的保守默认（Q2）：pi 的 ProviderConfigInput.models[] 这些字段必填，
@@ -75,11 +104,17 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
   const modelRuntime = await ModelRuntime.create({});
   modelRuntime.registerProvider(command.provider.id, toProviderConfig(command.provider));
 
+  // pi 的内建工具全开，但每一个都套上权限门——pi 自己没有审批钩子，
+  // 「执行前先请示」是靠替换 execute 实现的（见 agent/permission.ts）
+  const gate = askPermission(command.sessionId);
+  const tools = createCodingTools(command.cwd).map((tool) =>
+    wrapWithPermission(tool as unknown as WrappableTool, () => sessions.get(command.sessionId)?.mode ?? "plan", gate),
+  );
+
   const { session } = await createAgentSession({
     cwd: command.cwd,
     modelRuntime,
-    // 本刀只验「发一句、看到流式回答」：不开工具，工具与审批是下一刀（guideline §五）
-    noTools: "all",
+    tools: tools as never,
   });
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
@@ -95,7 +130,7 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     if (event.type === "agent_settled") send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
   });
 
-  sessions.set(command.sessionId, { session, adapter, unsubscribe });
+  sessions.set(command.sessionId, { session, adapter, unsubscribe, mode: command.mode });
   send({ type: "created", sessionId: command.sessionId });
 }
 
@@ -125,6 +160,12 @@ async function handle(command: AgentCommand): Promise<void> {
     await listBuiltins();
     return;
   }
+  if (command.type === "permissionAnswer") {
+    // 回答到得比请求晚是正常的；请求早已不在（abort 等）就丢弃，不报错
+    pendingPermissions.get(command.requestId)?.(command.answer);
+    pendingPermissions.delete(command.requestId);
+    return;
+  }
 
   if (command.type === "create") {
     await createSession(command);
@@ -134,6 +175,10 @@ async function handle(command: AgentCommand): Promise<void> {
   const live = sessions.get(command.sessionId);
   if (!live) throw new Error(`unknown session ${command.sessionId}`);
 
+  if (command.type === "setMode") {
+    live.mode = command.mode;
+    return;
+  }
   if (command.type === "submit") {
     // 用户消息先落地再发给模型——不等模型回，UI 立刻看得到自己刚说的话
     for (const progress of live.adapter.userPrompt(command.text)) {

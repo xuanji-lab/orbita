@@ -4,6 +4,7 @@
  */
 import { BrowserWindow, ipcMain } from "electron";
 import { ipcChannels, type CreateAgentInput } from "../../shared/agent-ipc.ts";
+import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import { AgentHost } from "./host.ts";
 
@@ -21,6 +22,7 @@ export function registerAgentIpc(host: AgentHost, providers: ProviderStore): voi
       return host.createSession({
         cwd: input.cwd,
         modelId: input.modelId,
+        mode: input.mode,
         provider: {
           id: dto.id,
           api: dto.endpoint.api,
@@ -39,6 +41,16 @@ export function registerAgentIpc(host: AgentHost, providers: ProviderStore): voi
     host.submit(sessionId, text),
   );
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
+
+  ipcMain.handle(ipcChannels.agentSetMode, (_e, sessionId: string, mode: PermissionMode) =>
+    host.setMode(sessionId, mode),
+  );
+
+  // 用户对工具审批的回答，原样送回 agent 进程（按 requestId 对号）
+  ipcMain.handle(
+    ipcChannels.agentAnswerPermission,
+    (_e, requestId: string, answer: PermissionAnswer) => host.answerPermission(requestId, answer),
+  );
 }
 
 /** agent 进程的事件 → 所有窗口 */

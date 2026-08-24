@@ -7,6 +7,8 @@ import {
 } from "@earendil-works/pi-coding-agent/client";
 import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
+import { ApprovalBar, type PendingApproval } from "./ApprovalBar";
+import { PERMISSION_MODES, PERMISSION_MODE_LABELS, type PermissionMode } from "@shared/permission";
 import type { ProviderDto } from "@shared/provider";
 
 /**
@@ -20,6 +22,10 @@ export function ChatView(props: { providers: ProviderDto[] }) {
   const [phase, setPhase] = useState<"idle" | "turn">("idle");
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  /** 三档权限模式。默认 plan——**默认最保守**，开工具要用户自己往下调。 */
+  const [mode, setMode] = useState<PermissionMode>("plan");
+  /** 排队中的工具审批。同一时刻可能有多个（并行工具调用），逐个应答。 */
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const sessionRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -35,6 +41,14 @@ export function ChatView(props: { providers: ProviderDto[] }) {
           return;
         }
         // ready / created 不带会话内容；其余按 sessionId 过滤，一个进程托管多个 session
+        if (event.type === "permission") {
+          if (event.sessionId !== sessionRef.current) return;
+          setApprovals((prev) => [
+            ...prev,
+            { requestId: event.requestId, toolName: event.toolName, input: event.input },
+          ]);
+          return;
+        }
         if (event.type !== "progress" && event.type !== "phase") return;
         if (event.sessionId !== sessionRef.current) return;
         if (event.type === "progress") setState((prev) => applyTranscriptProgress(prev, event.progress));
@@ -61,6 +75,7 @@ export function ChatView(props: { providers: ProviderDto[] }) {
           cwd: ".",
           providerId: provider.id,
           modelId: provider.models.declared[0]?.id ?? "",
+          mode,
         });
         setSessionId(id);
         sessionRef.current = id;
@@ -72,13 +87,53 @@ export function ChatView(props: { providers: ProviderDto[] }) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase("idle");
     }
-  }, [draft, sessionId, usable]);
+  }, [draft, sessionId, usable, mode]);
+
+  const changeMode = (next: PermissionMode) => {
+    setMode(next);
+    if (sessionId !== null) void api.agent.setMode(sessionId, next);
+  };
+
+  const answerApproval = (requestId: string, answer: Parameters<typeof api.agent.answerPermission>[1]) => {
+    setApprovals((prev) => prev.filter((a) => a.requestId !== requestId));
+    void api.agent.answerPermission(requestId, answer);
+  };
 
   const transcript = selectTranscript(state);
 
   return (
     <section style={{ display: "grid", gap: "var(--space-5)", width: "100%", maxWidth: 640 }}>
-      <h2 style={{ margin: 0, fontSize: "var(--font-size-heading)", fontWeight: 600 }}>Chat</h2>
+      <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-3)" }}>
+        <h2 style={{ margin: 0, fontSize: "var(--font-size-heading)", fontWeight: 600 }}>Chat</h2>
+        <span style={{ marginInlineStart: "auto", display: "flex", gap: "var(--space-1)" }}>
+          {PERMISSION_MODES.map((value) => {
+            const active = mode === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => changeMode(value)}
+                title={PERMISSION_MODE_LABELS[value].hint}
+                style={{
+                  height: "var(--control-height-sm)",
+                  padding: "0 var(--space-3)",
+                  // 模式选中用 mode-active token（设计系统：模式选择与主操作共用 accent 色相）
+                  background: active ? "var(--color-mode-active-bg)" : "transparent",
+                  color: active ? "var(--color-mode-active-fg)" : "var(--color-text-secondary)",
+                  border: `1px solid ${active ? "var(--color-mode-active-fg)" : "var(--color-border-default)"}`,
+                  borderRadius: "var(--radius-md)",
+                  font: "inherit",
+                  fontSize: "var(--font-size-caption)",
+                  cursor: "pointer",
+                  transition: "var(--transition-hover)",
+                }}
+              >
+                {PERMISSION_MODE_LABELS[value].label}
+              </button>
+            );
+          })}
+        </span>
+      </div>
 
       {usable.length === 0 && (
         <p style={{ margin: 0, fontSize: "var(--font-size-control)", color: "var(--color-text-tertiary)" }}>
@@ -102,6 +157,8 @@ export function ChatView(props: { providers: ProviderDto[] }) {
           </span>
         )}
       </div>
+
+      {approvals[0] && <ApprovalBar approval={approvals[0]} onAnswer={answerApproval} />}
 
       <form
         onSubmit={(event) => {

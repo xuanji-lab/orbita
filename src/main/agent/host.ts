@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { utilityProcess, type UtilityProcess } from "electron";
 import type { AgentCommand, AgentEvent, BuiltinProvider } from "../../shared/agent-ipc.ts";
+import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 export class AgentHost {
   private readonly runtimePath: string;
@@ -119,6 +120,16 @@ export class AgentHost {
   async submit(sessionId: string, text: string): Promise<void> {
     await this.ensure();
     this.post({ type: "submit", sessionId, text });
+  }
+
+  async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
+    await this.ensure();
+    this.post({ type: "setMode", sessionId, mode });
+  }
+
+  /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
+  answerPermission(requestId: string, answer: PermissionAnswer): void {
+    this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
   }
 
   async abort(sessionId: string): Promise<void> {

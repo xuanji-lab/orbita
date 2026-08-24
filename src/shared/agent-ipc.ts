@@ -10,6 +10,7 @@
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
 import type { SessionPhase, TranscriptProgress } from "@earendil-works/pi-protocol";
+import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -18,6 +19,8 @@ export const ipcChannels = {
   agentCreate: "agent:create",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
+  agentSetMode: "agent:set-mode",
+  agentAnswerPermission: "agent:answer-permission",
   agentEvent: "agent:event",
   providerBuiltins: "provider:builtins",
   providerDiscover: "provider:discover",
@@ -56,10 +59,14 @@ export type AgentCommand =
         models: string[];
       };
       modelId: string;
+      mode: PermissionMode;
     }
   | { type: "submit"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
   | { type: "listBuiltins" }
+  | { type: "setMode"; sessionId: string; mode: PermissionMode }
+  /** 用户对一次工具审批的回答，按 requestId 对回去 */
+  | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   | { type: "dispose"; sessionId: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
@@ -69,10 +76,19 @@ export type AgentEvent =
   | { type: "created"; sessionId: string }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
   | { type: "phase"; sessionId: string; phase: SessionPhase }
+  /** 工具执行前的请示。UI 要显示它并等用户回答（三档模式见 shared/permission.ts） */
+  | {
+      type: "permission";
+      sessionId: string;
+      requestId: string;
+      toolName: string;
+      input: unknown;
+    }
   | { type: "failed"; sessionId: string | null; message: string };
 
 export interface CreateAgentInput {
   cwd: string;
   providerId: string;
   modelId: string;
+  mode: PermissionMode;
 }

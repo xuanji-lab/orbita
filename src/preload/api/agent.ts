@@ -5,6 +5,7 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels, type AgentEvent, type CreateAgentInput } from "../../shared/agent-ipc.ts";
+import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 export const agentApi = {
   create: (input: CreateAgentInput): Promise<string> =>
@@ -12,6 +13,11 @@ export const agentApi = {
   submit: (sessionId: string, text: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSubmit, sessionId, text),
   abort: (sessionId: string): Promise<void> => ipcRenderer.invoke(ipcChannels.agentAbort, sessionId),
+  setMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentSetMode, sessionId, mode),
+  /** 回答一次工具审批 */
+  answerPermission: (requestId: string, answer: PermissionAnswer): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentAnswerPermission, requestId, answer),
   onEvent: (listener: (event: AgentEvent) => void): (() => void) => {
     const handler = (_e: unknown, event: AgentEvent) => listener(event);
     ipcRenderer.on(ipcChannels.agentEvent, handler);
