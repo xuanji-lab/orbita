@@ -19,9 +19,22 @@ export const ipcChannels = {
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
   agentEvent: "agent:event",
+  providerBuiltins: "provider:builtins",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
+
+/**
+ * pi 内建 provider 目录里的一条。目录由 pi 维护、每 4 小时从 pi.dev 刷新覆盖层，
+ * 我们零维护——用户选中名字就拿到官方 baseUrl / 协议 / 模型清单。
+ */
+export interface BuiltinProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  api: string;
+  models: string[];
+}
 
 /** 主进程 → agent 进程 */
 export type AgentCommand =
@@ -43,11 +56,13 @@ export type AgentCommand =
     }
   | { type: "submit"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
+  | { type: "listBuiltins" }
   | { type: "dispose"; sessionId: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
 export type AgentEvent =
   | { type: "ready" }
+  | { type: "builtins"; providers: BuiltinProvider[] }
   | { type: "created"; sessionId: string }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
   | { type: "phase"; sessionId: string; phase: SessionPhase }

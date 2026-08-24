@@ -99,7 +99,33 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
   send({ type: "created", sessionId: command.sessionId });
 }
 
+/**
+ * pi 内建 provider 目录 → 我们的 BuiltinProvider。
+ * agentDir 指向一个不存在的路径：只要 pi 的内建目录，不去读用户的 ~/.pi/agent 配置。
+ */
+async function listBuiltins(): Promise<void> {
+  const runtime = await ModelRuntime.create({});
+  const providers = runtime.getProviders().map((provider) => {
+    // 注意：models 是方法 getModels() 不是属性；api / baseUrl 也长在 Model 上而非 Provider 上。
+    const models = provider.getModels();
+    const first = models[0];
+    return {
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl ?? first?.baseUrl ?? "",
+      api: String(first?.api ?? "openai-completions"),
+      models: models.map((model) => model.id),
+    };
+  });
+  send({ type: "builtins", providers });
+}
+
 async function handle(command: AgentCommand): Promise<void> {
+  if (command.type === "listBuiltins") {
+    await listBuiltins();
+    return;
+  }
+
   if (command.type === "create") {
     await createSession(command);
     return;
@@ -137,3 +163,5 @@ parentPort.on("message", (event) => {
 });
 parentPort.start?.();
 send({ type: "ready" });
+// 目录不依赖任何 session，启动即报——设置面不必为了填个下拉框等一次往返
+void listBuiltins().catch(() => undefined);

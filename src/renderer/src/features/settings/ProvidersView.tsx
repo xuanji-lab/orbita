@@ -6,6 +6,7 @@ import {
   type ProviderDto,
   type ValidationIssue,
 } from "@shared/provider";
+import type { BuiltinProvider } from "@shared/agent-ipc";
 
 /**
  * Provider 设置面（最小可用版）。契约先行的最后一层：
@@ -51,6 +52,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [draft, setDraft] = useState(emptyDraft());
   /** 非 null 时表单处于「编辑既有 provider」状态，id 不可改。 */
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** pi 内建目录。为空说明 agent 进程还没起来或 pi 没给出目录——那就退回手填。 */
+  const [builtins, setBuiltins] = useState<BuiltinProvider[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -66,7 +69,36 @@ export function ProvidersView(props: { onChange?: () => void }) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    void api.provider.builtins().then(setBuiltins).catch(() => setBuiltins([]));
+  }, []);
+
+  /** 选中一个内建 provider：baseUrl / 协议 / 模型全部按 pi 的官方目录预填，用户只需填 key。 */
+  const pickBuiltin = (id: string) => {
+    if (id === "") {
+      setDraft({ ...emptyDraft(), apiKey: draft.apiKey });
+      return;
+    }
+    const builtin = builtins.find((b) => b.id === id);
+    if (!builtin) return;
+    setDraft({
+      id: builtin.id,
+      displayName: builtin.name,
+      baseUrl: builtin.baseUrl,
+      api: (PROVIDER_APIS as readonly string[]).includes(builtin.api)
+        ? (builtin.api as ProviderApi)
+        : "openai-completions",
+      models: builtin.models.slice(0, 6).join(", "),
+      apiKey: draft.apiKey,
+    });
+  };
+
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
+
+  /** 正在编辑的 provider 已存密钥的掩码（没有则 null） */
+  const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
+  const editingKeyMask =
+    editing?.auth.scheme === "api_key" ? editing.auth.masked : null;
 
   /** 编辑：装回表单。密钥永远不会回到 renderer，所以留空 = 保留原密钥（store.upsert 的语义）。 */
   const edit = (provider: ProviderDto) => {
@@ -206,6 +238,26 @@ export function ProvidersView(props: { onChange?: () => void }) {
           borderRadius: "var(--radius-lg)",
         }}
       >
+        {editingId === null && builtins.length > 0 && (
+          <Field
+            label="Provider"
+            hint={`Pick one of pi's ${builtins.length} known providers to fill everything but the key, or choose Custom.`}
+          >
+            <select
+              value={builtins.some((b) => b.id === draft.id) ? draft.id : ""}
+              onChange={(e) => pickBuiltin(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="">Custom (fill in manually)</option>
+              {builtins.map((builtin) => (
+                <option key={builtin.id} value={builtin.id}>
+                  {builtin.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+
         <Field label="Identifier" hint="Lowercase letters, digits and dashes" issue={issueFor("id")}>
           <input
             value={draft.id}
@@ -269,7 +321,9 @@ export function ProvidersView(props: { onChange?: () => void }) {
             type="password"
             value={draft.apiKey}
             onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-            placeholder="sk-…"
+            // 编辑态用**已存密钥的掩码**当 placeholder：框里是空的（明文不回 renderer），
+            // 但灰字显示 sk-…1234 就是「它确实存住了」的肉眼凭据。
+            placeholder={editingKeyMask ?? "sk-…"}
             style={inputStyle}
           />
         </Field>

@@ -33,6 +33,8 @@ export function registerAgentIpc(host: AgentHost, providers: ProviderStore): voi
     },
   );
 
+  ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
+
   ipcMain.handle(ipcChannels.agentSubmit, (_e, sessionId: string, text: string) =>
     host.submit(sessionId, text),
   );

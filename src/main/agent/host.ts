@@ -5,13 +5,15 @@
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { utilityProcess, type UtilityProcess } from "electron";
-import type { AgentCommand, AgentEvent } from "../../shared/agent-ipc.ts";
+import type { AgentCommand, AgentEvent, BuiltinProvider } from "../../shared/agent-ipc.ts";
 
 export class AgentHost {
   private readonly runtimePath: string;
   private readonly onEvent: (event: AgentEvent) => void;
   private child: UtilityProcess | null = null;
   private ready: Promise<void> | null = null;
+  /** pi 报上来的内建目录。进程在跑就一定有值；设置面读它填下拉框。 */
+  private builtins: BuiltinProvider[] = [];
 
   constructor(runtimePath: string, onEvent: (event: AgentEvent) => void) {
     this.runtimePath = runtimePath;
@@ -28,6 +30,10 @@ export class AgentHost {
       child.on("message", (message: AgentEvent) => {
         if (message.type === "ready") {
           resolve();
+          return;
+        }
+        if (message.type === "builtins") {
+          this.builtins = message.providers;
           return;
         }
         this.onEvent(message);
@@ -50,6 +56,12 @@ export class AgentHost {
     const sessionId = randomUUID();
     this.post({ type: "create", sessionId, ...input });
     return sessionId;
+  }
+
+  /** 内建 provider 目录。会顺带把 agent 进程拉起来——它是 pi 的唯一宿主。 */
+  async listBuiltins(): Promise<BuiltinProvider[]> {
+    await this.ensure();
+    return this.builtins;
   }
 
   async submit(sessionId: string, text: string): Promise<void> {

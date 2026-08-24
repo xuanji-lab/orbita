@@ -4,7 +4,7 @@
  * 注意 API 形状：明文密钥只有 renderer → main 这一个方向，回来的永远是 ProviderDto。
  */
 import { ipcRenderer } from "electron";
-import { ipcChannels } from "../../shared/agent-ipc.ts";
+import { ipcChannels, type BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
 
 export type UpsertResult =
@@ -12,6 +12,8 @@ export type UpsertResult =
   | { ok: false; issues: ValidationIssue[] };
 
 export const providerApi = {
+  /** pi 内建 provider 目录：选中名字即拿到官方 baseUrl / 协议 / 模型清单 */
+  builtins: (): Promise<BuiltinProvider[]> => ipcRenderer.invoke(ipcChannels.providerBuiltins),
   list: (): Promise<ProviderDto[]> => ipcRenderer.invoke(ipcChannels.providerList),
   upsert: (input: ProviderUpsertInput): Promise<UpsertResult> =>
     ipcRenderer.invoke(ipcChannels.providerUpsert, input),
