@@ -1,0 +1,27 @@
+/*
+ * 渲染层样式入口。token 与字体全部来自设计系统真源，不在此重定义。
+ * 设计系统是 UI 唯一真源（AGENTS.md「设计系统」）——这里只放应用外壳自身的布局。
+ */
+@import "../../../Orbita Design System/styles.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-app);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  -webkit-font-smoothing: antialiased;
+}
