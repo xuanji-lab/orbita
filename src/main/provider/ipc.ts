@@ -5,6 +5,7 @@
 import { ipcMain } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
+import { discoverModels, type DiscoveredModels } from "./discover.ts";
 import { ProviderStore, ProviderValidationError } from "./store.ts";
 
 export type UpsertResult =
@@ -23,6 +24,26 @@ export function registerProviderIpc(store: ProviderStore): void {
         if (error instanceof ProviderValidationError) return { ok: false, issues: error.issues };
         throw error;
       }
+    },
+  );
+
+  // 从供应商获取模型：密钥可以是表单里刚输入的（还没保存），也可以取已存的
+  ipcMain.handle(
+    ipcChannels.providerDiscover,
+    async (
+      _event,
+      input: { baseUrl: string; apiKey?: string; providerId?: string },
+    ): Promise<DiscoveredModels> => {
+      const apiKey =
+        input.apiKey !== undefined && input.apiKey !== ""
+          ? input.apiKey
+          : input.providerId === undefined
+            ? null
+            : await store.resolveApiKey(input.providerId);
+      if (apiKey === null) {
+        return { ok: false, models: [], message: "Enter an API key first." };
+      }
+      return discoverModels({ baseUrl: input.baseUrl, apiKey });
     },
   );
 

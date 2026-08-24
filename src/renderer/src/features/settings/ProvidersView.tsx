@@ -54,6 +54,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   /** pi 内建目录。为空说明 agent 进程还没起来或 pi 没给出目录——那就退回手填。 */
   const [builtins, setBuiltins] = useState<BuiltinProvider[]>([]);
+  /** 「从供应商获取」的结果提示；内建 provider 用不上（清单已由目录预填）。 */
+  const [discovery, setDiscovery] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -112,6 +114,22 @@ export function ProvidersView(props: { onChange?: () => void }) {
       models: provider.models.declared.map((m) => m.id).join(", "),
       apiKey: "",
     });
+  };
+
+  /**
+   * 从供应商获取模型。**只对自建网关有意义**——内建 provider 的清单在选中下拉框时
+   * 就由 pi 的目录填好了，不需要网络往返。失败不是异常：很多网关（尤其 anthropic 系）
+   * 根本没有 /models，提示用户手填即可。
+   */
+  const fetchModels = async () => {
+    setDiscovery("Fetching…");
+    const result = await api.provider.discover({
+      baseUrl: draft.baseUrl.trim(),
+      ...(draft.apiKey === "" ? {} : { apiKey: draft.apiKey }),
+      ...(editingId === null ? {} : { providerId: editingId }),
+    });
+    setDiscovery(result.message);
+    if (result.ok) setDraft((prev) => ({ ...prev, models: result.models.join(", ") }));
   };
 
   const save = async () => {
@@ -238,6 +256,12 @@ export function ProvidersView(props: { onChange?: () => void }) {
           borderRadius: "var(--radius-lg)",
         }}
       >
+        {editingId === null && builtins.length === 0 && (
+          <p style={{ margin: 0, fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
+            Loading the built-in provider list…
+          </p>
+        )}
+
         {editingId === null && builtins.length > 0 && (
           <Field
             label="Provider"
@@ -300,13 +324,27 @@ export function ProvidersView(props: { onChange?: () => void }) {
             ))}
           </select>
         </Field>
-        <Field label="Models" hint="Comma separated ids" issue={issueFor("models.declared")}>
-          <input
-            value={draft.models}
-            onChange={(e) => setDraft({ ...draft, models: e.target.value })}
-            placeholder="gpt-5, gpt-5-mini"
-            style={inputStyle}
-          />
+        <Field
+          label="Models"
+          hint={discovery ?? "Comma separated ids. Built-in providers are filled from pi's catalog."}
+          issue={issueFor("models.declared")}
+        >
+          <span style={{ display: "flex", gap: "var(--space-2)" }}>
+            <input
+              value={draft.models}
+              onChange={(e) => setDraft({ ...draft, models: e.target.value })}
+              placeholder="glm-5.3, glm-4.7"
+              style={{ ...inputStyle, flex: 1 }}
+            />
+            <button
+              type="button"
+              onClick={() => void fetchModels()}
+              disabled={draft.baseUrl.trim() === ""}
+              style={controlStyle}
+            >
+              Fetch
+            </button>
+          </span>
         </Field>
         <Field
           label="API key"

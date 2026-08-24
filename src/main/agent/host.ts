@@ -12,8 +12,11 @@ export class AgentHost {
   private readonly onEvent: (event: AgentEvent) => void;
   private child: UtilityProcess | null = null;
   private ready: Promise<void> | null = null;
-  /** pi 报上来的内建目录。进程在跑就一定有值；设置面读它填下拉框。 */
+  /** pi 报上来的内建目录。runtime 是**先发 ready 再异步建目录**，所以不能只等 ready
+   *  就返回缓存——那一刻缓存必然是空的（下拉框不出现就是这个竞态）。 */
   private builtins: BuiltinProvider[] = [];
+  private resolveBuiltins: ((providers: BuiltinProvider[]) => void) | null = null;
+  private builtinsArrived: Promise<BuiltinProvider[]> | null = null;
 
   constructor(runtimePath: string, onEvent: (event: AgentEvent) => void) {
     this.runtimePath = runtimePath;
@@ -34,6 +37,8 @@ export class AgentHost {
         }
         if (message.type === "builtins") {
           this.builtins = message.providers;
+          this.resolveBuiltins?.(message.providers);
+          this.resolveBuiltins = null;
           return;
         }
         this.onEvent(message);
@@ -43,6 +48,8 @@ export class AgentHost {
       child.on("exit", (code) => {
         this.child = null;
         this.ready = null;
+        this.builtinsArrived = null;
+        this.resolveBuiltins = null;
         const message = `agent runtime exited with code ${code}`;
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
@@ -58,10 +65,18 @@ export class AgentHost {
     return sessionId;
   }
 
-  /** 内建 provider 目录。会顺带把 agent 进程拉起来——它是 pi 的唯一宿主。 */
+  /**
+   * 内建 provider 目录。会顺带把 agent 进程拉起来——它是 pi 的唯一宿主。
+   * 目录还没到就等它到（带超时兜底：拿不到目录只是没有下拉框，不该把设置面卡死）。
+   */
   async listBuiltins(): Promise<BuiltinProvider[]> {
     await this.ensure();
-    return this.builtins;
+    if (this.builtins.length > 0) return this.builtins;
+    this.builtinsArrived ??= new Promise<BuiltinProvider[]>((resolve) => {
+      this.resolveBuiltins = resolve;
+      setTimeout(() => resolve(this.builtins), 15_000);
+    });
+    return this.builtinsArrived;
   }
 
   async submit(sessionId: string, text: string): Promise<void> {

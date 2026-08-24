@@ -18,4 +18,11 @@ export const providerApi = {
   upsert: (input: ProviderUpsertInput): Promise<UpsertResult> =>
     ipcRenderer.invoke(ipcChannels.providerUpsert, input),
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.providerRemove, id),
+  /** 从供应商获取模型（仅 OpenAI 兼容的 /models；内建 provider 的清单来自 pi 目录，不走网络） */
+  discover: (input: {
+    baseUrl: string;
+    apiKey?: string;
+    providerId?: string;
+  }): Promise<{ ok: boolean; models: string[]; message: string }> =>
+    ipcRenderer.invoke(ipcChannels.providerDiscover, input),
 };
