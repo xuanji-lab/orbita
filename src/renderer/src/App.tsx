@@ -4,7 +4,7 @@ import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, type AppSettings } from "@shared/settings";
 import { useChatSession } from "./features/chat/useChatSession";
-import { ChatView, sessionTitle, transcriptToText } from "./features/chat/ChatView";
+import { ChatView, transcriptToText } from "./features/chat/ChatView";
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { Sidebar } from "./shell/Sidebar";
 import { ActionRail } from "./shell/ActionRail";
@@ -49,15 +49,15 @@ export function App() {
   }, []);
 
   const session = useChatSession(providers);
-  const title = sessionTitle(session.transcript);
-  /** 右图标条只在有会话时出现——它承载的是「对这个会话做点什么」 */
-  const showRail = !settingsOpen && session.sessionId !== null;
+  /** 看历史时复制的是历史那一份，不是实时那一份 */
+  const visibleTranscript = session.archived?.transcript ?? session.transcript;
+  /** 动作条只在有内容可操作时出现——它承载的是「对这条会话做点什么」 */
+  const showRail = !settingsOpen && (session.sessionId !== null || session.archived !== null);
 
   return (
     <div className="layer">
       <Sidebar
         session={session}
-        title={title}
         settingsOpen={settingsOpen}
         settingsTab={settingsTab}
         onSettingsTab={setSettingsTab}
@@ -79,9 +79,9 @@ export function App() {
 
       {showRail && (
         <ActionRail
-          canCopy={session.transcript.length > 0}
+          canCopy={visibleTranscript.length > 0}
           onCopyTranscript={() =>
-            void navigator.clipboard.writeText(transcriptToText(session.transcript))
+            void navigator.clipboard.writeText(transcriptToText(visibleTranscript))
           }
         />
       )}

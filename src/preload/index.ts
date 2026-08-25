@@ -5,12 +5,14 @@
 import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
 import { providerApi } from "./api/provider.ts";
+import { sessionApi } from "./api/session.ts";
 import { settingsApi } from "./api/settings.ts";
 import { workspaceApi } from "./api/workspace.ts";
 
 const api = {
   agent: agentApi,
   provider: providerApi,
+  session: sessionApi,
   settings: settingsApi,
   workspace: workspaceApi,
   /**

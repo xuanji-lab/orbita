@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
+import { createSessionRecorder, registerSessionIpc } from "./session/ipc.ts";
+import { SessionStore } from "./session/store.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
@@ -90,9 +92,16 @@ void app.whenReady().then(() => {
   registerSettingsIpc(settings);
   void settings.read().then(applyNativeTheme);
 
-  // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）
-  const agentHost = new AgentHost(resolveRuntimePath(__dirname), broadcastAgentEvent);
-  registerAgentIpc(agentHost, providers);
+  // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
+  // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
+  const sessions = new SessionStore(join(configDir, "sessions"));
+  registerSessionIpc(sessions);
+  const record = createSessionRecorder(sessions);
+  const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
+    record(event);
+    broadcastAgentEvent(event);
+  });
+  registerAgentIpc(agentHost, providers, sessions);
   app.on("before-quit", () => agentHost.dispose());
 
   createMainWindow();

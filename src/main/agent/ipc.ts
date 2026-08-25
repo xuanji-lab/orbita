@@ -6,9 +6,14 @@ import { BrowserWindow, ipcMain } from "electron";
 import { ipcChannels, type CreateAgentInput } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ProviderStore } from "../provider/store.ts";
+import type { SessionStore } from "../session/store.ts";
 import { AgentHost } from "./host.ts";
 
-export function registerAgentIpc(host: AgentHost, providers: ProviderStore): void {
+export function registerAgentIpc(
+  host: AgentHost,
+  providers: ProviderStore,
+  sessions: SessionStore,
+): void {
   ipcMain.handle(
     ipcChannels.agentCreate,
     async (_event, input: CreateAgentInput): Promise<string> => {
@@ -19,7 +24,7 @@ export function registerAgentIpc(host: AgentHost, providers: ProviderStore): voi
         throw new Error(`provider "${input.providerId}" has no API key stored`);
       }
       // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
-      return host.createSession({
+      const sessionId = await host.createSession({
         cwd: input.cwd,
         modelId: input.modelId,
         mode: input.mode,
@@ -32,6 +37,20 @@ export function registerAgentIpc(host: AgentHost, providers: ProviderStore): voi
           models: dto.models.declared.map((m) => m.id),
         },
       });
+      // **建成之后才落 meta**：createSession 会等 runtime 回 created，
+      // 失败时抛错——不该在磁盘上留下一条永远打不开的会话。标题等第一条用户消息填。
+      const now = Date.now();
+      await sessions.create({
+        id: sessionId,
+        title: "",
+        cwd: input.cwd,
+        providerId: input.providerId,
+        modelId: input.modelId,
+        mode: input.mode,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return sessionId;
     },
   );
 
@@ -42,8 +61,13 @@ export function registerAgentIpc(host: AgentHost, providers: ProviderStore): voi
   );
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
 
-  ipcMain.handle(ipcChannels.agentSetMode, (_e, sessionId: string, mode: PermissionMode) =>
-    host.setMode(sessionId, mode),
+  ipcMain.handle(
+    ipcChannels.agentSetMode,
+    async (_e, sessionId: string, mode: PermissionMode) => {
+      await host.setMode(sessionId, mode);
+      // 档位也落盘：重开这条会话时不该静默换档，而这一档决定 bash 能不能跑
+      await sessions.setMode(sessionId, mode);
+    },
   );
 
   // 用户对工具审批的回答，原样送回 agent 进程（按 requestId 对号）

@@ -18,13 +18,14 @@ import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsVi
  */
 export function Sidebar(props: {
   session: ChatSession;
-  title: string | null;
   settingsOpen: boolean;
   settingsTab: SettingsTab;
   onSettingsTab: (tab: SettingsTab) => void;
   onToggleSettings: () => void;
 }) {
   const { session } = props;
+  /** 高亮哪一条：在看历史就是那条，否则是活着的那条 */
+  const openId = session.archived?.meta.id ?? session.sessionId;
   return (
     <aside
       style={{
@@ -182,19 +183,40 @@ export function Sidebar(props: {
                     <Icon name="plus" size={14} />
                   </IconButton>
                 </div>
-                {props.title === null ? (
-                  <Empty>No task yet. The one you start lands here.</Empty>
-                ) : (
-                  <SessionRow
-                    title={props.title}
-                    running={session.phase === "turn"}
-                    failed={session.error !== null}
-                    active={!props.settingsOpen}
-                    onClick={props.settingsOpen ? props.onToggleSettings : undefined}
-                  />
-                )}
               </div>
             )}
+
+            {/*
+              TASKS 节点列的是**落盘的会话**。今天全部会话都挂在这里而不是挂到
+              上面的工作区下面——按 cwd 归属工作区是刀 B 的事，现在按路径猜属于哪个
+              工作区就是在提前编一个还不存在的模型（docs/plans/）。
+            */}
+            <div style={{ marginTop: "var(--space-3)" }}>
+              <NodeHeader
+                label="Tasks"
+                addLabel="New task"
+                addIcon="plus"
+                onAdd={session.newTask}
+              />
+              {session.sessions.length === 0 ? (
+                <Empty>No task yet. The one you start lands here.</Empty>
+              ) : (
+                session.sessions.map((meta) => (
+                  <SessionRow
+                    key={meta.id}
+                    title={meta.title === "" ? "New task" : meta.title}
+                    running={meta.id === session.sessionId && session.phase === "turn"}
+                    failed={meta.id === session.sessionId && session.error !== null}
+                    active={!props.settingsOpen && meta.id === openId}
+                    onClick={() => {
+                      if (props.settingsOpen) props.onToggleSettings();
+                      session.openSession(meta.id);
+                    }}
+                    onDelete={() => session.removeSession(meta.id)}
+                  />
+                ))
+              )}
+            </div>
           </>
         )}
       </div>
@@ -280,6 +302,7 @@ function NavRow(props: {
   iconTitle?: string;
   /** 整行的悬停说明（planned 的东西用它讲为什么点不动） */
   hint?: string;
+  style?: React.CSSProperties;
 }) {
   const [hover, setHover] = useState(false);
   const disabled = props.disabled === true;
@@ -316,6 +339,7 @@ function NavRow(props: {
         textAlign: "left",
         cursor: disabled ? "not-allowed" : clickable ? "pointer" : "default",
         transition: "var(--transition-hover)",
+        ...props.style,
       }}
     >
       <span
@@ -340,29 +364,59 @@ function NavRow(props: {
 
 /**
  * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**。
+ *
+ * 删除键是**两段式**：第一下只是「举起」（变成 danger 色 + 问一句），第二下才真删，
+ * 鼠标移开自动放下。设计系统要求「先讲后果再动作」，而本分支还没有 Modal——
+ * 两段式是不引入弹窗又不让人误删的最小做法。
  */
 function SessionRow(props: {
   title: string;
   running: boolean;
   failed: boolean;
   active: boolean;
-  onClick?: (() => void) | undefined;
+  onClick: () => void;
+  onDelete: () => void;
 }) {
+  const [hover, setHover] = useState(false);
+  const [armed, setArmed] = useState(false);
   const status = props.running
     ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
     : props.failed
       ? { icon: "triangle-alert" as const, tone: "var(--color-danger)", label: "Failed", spin: false }
       : { icon: "check" as const, tone: "var(--color-text-tertiary)", label: "Idle", spin: false };
   return (
-    <NavRow
-      icon={status.icon}
-      label={props.title}
-      tone={status.tone}
-      spin={status.spin}
-      iconTitle={status.label}
-      active={props.active}
-      onClick={props.onClick}
-    />
+    <div
+      style={{ display: "flex", alignItems: "center", gap: 2 }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => {
+        setHover(false);
+        setArmed(false);
+      }}
+    >
+      <NavRow
+        icon={status.icon}
+        label={props.title}
+        tone={status.tone}
+        spin={status.spin}
+        iconTitle={status.label}
+        active={props.active}
+        onClick={props.onClick}
+        style={{ flex: 1, minWidth: 0 }}
+      />
+      <IconButton
+        label={armed ? "Delete this task? Click again." : "Delete task"}
+        size={20}
+        onClick={() => (armed ? props.onDelete() : setArmed(true))}
+        style={{
+          borderRadius: "var(--radius-xs)",
+          color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
+          opacity: hover || armed ? 1 : 0,
+          transition: "opacity var(--duration-instant) var(--ease-standard)",
+        }}
+      >
+        <Icon name="trash-2" size={11} />
+      </IconButton>
+    </div>
   );
 }
 

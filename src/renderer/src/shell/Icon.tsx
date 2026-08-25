@@ -13,6 +13,7 @@ import panelRight from "../../../../Orbita Design System/assets/icons/lucide/pan
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
+import trash2 from "../../../../Orbita Design System/assets/icons/lucide/trash-2.svg?raw";
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
@@ -43,6 +44,7 @@ const ICONS = {
   "shield-check": shieldCheck,
   sliders,
   square,
+  "trash-2": trash2,
   "triangle-alert": triangleAlert,
   workflow,
   wrench,

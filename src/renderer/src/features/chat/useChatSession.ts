@@ -10,6 +10,7 @@ import { api } from "../../api";
 import type { PendingApproval } from "./ApprovalBar";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ProviderDto } from "@shared/provider";
+import type { SessionDetail, SessionMeta } from "@shared/session";
 
 /**
  * 会话状态。**逻辑原样自 ChatView 上提**，一行未改语义——上提的唯一理由是
@@ -41,6 +42,15 @@ export interface ChatSession {
   defaultCwd: string;
   /** 至少声明了一个模型的 provider——没有它就发不出消息 */
   usable: ProviderDto[];
+  /** 落盘的会话列表，新的在前。侧栏 TASKS 节点列的就是它。 */
+  sessions: SessionMeta[];
+  /**
+   * 正在查看的历史会话。非 null 时聊天面渲染的是它而不是当前实时状态。
+   * **只读**——把历史回灌给 pi 让它接着跑是另一刀（见 docs/plans/）。
+   */
+  archived: SessionDetail | null;
+  openSession: (id: string) => void;
+  removeSession: (id: string) => void;
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
@@ -64,6 +74,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
   const [workspace, setWorkspace] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [archived, setArchived] = useState<SessionDetail | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
   const [defaultCwd, setDefaultCwd] = useState<string>("");
   const sessionRef = useRef<string | null>(null);
@@ -71,6 +83,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   useEffect(() => {
     sessionRef.current = sessionId;
   }, [sessionId]);
+
+  const refreshSessions = useCallback(() => {
+    void api.session
+      .list()
+      .then(setSessions)
+      .catch(() => setSessions([]));
+  }, []);
+
+  useEffect(refreshSessions, [refreshSessions]);
 
   useEffect(() => {
     void api.workspace
@@ -104,9 +125,13 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         if (event.sessionId !== sessionRef.current) return;
         if (event.type === "progress")
           setState((prev) => applyTranscriptProgress(prev, event.progress));
-        else setPhase(event.phase === "idle" ? "idle" : "turn");
+        else {
+          setPhase(event.phase === "idle" ? "idle" : "turn");
+          // 一轮跑完标题与 updatedAt 都变了，刷一次侧栏
+          if (event.phase === "idle") refreshSessions();
+        }
       }),
-    [],
+    [refreshSessions],
   );
 
   const usable = useMemo(
@@ -134,6 +159,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         });
         setSessionId(id);
         sessionRef.current = id;
+        refreshSessions();
       }
       setDraft("");
       setPhase("turn");
@@ -142,7 +168,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase("idle");
     }
-  }, [draft, sessionId, usable, mode, cwd, defaultCwd]);
+  }, [draft, sessionId, usable, mode, cwd, defaultCwd, refreshSessions]);
 
   const stop = useCallback(() => {
     if (sessionRef.current === null) return;
@@ -157,7 +183,41 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     setApprovals([]);
     setPhase("idle");
     setError(null);
+    setArchived(null);
   }, []);
+
+  /**
+   * 打开一条会话。点的就是当前这条活着的会话时只是**退出历史视图**回到实时，
+   * 而不是把自己的记录再当历史读一遍。
+   */
+  const openSession = useCallback(
+    (id: string) => {
+      if (id === sessionRef.current) {
+        setArchived(null);
+        return;
+      }
+      setError(null);
+      void api.session
+        .load(id)
+        .then(setArchived)
+        .catch((cause: unknown) =>
+          setError(cause instanceof Error ? cause.message : String(cause)),
+        );
+    },
+    [],
+  );
+
+  const removeSession = useCallback(
+    (id: string) => {
+      void api.session.remove(id).then(() => {
+        setArchived((current) => (current?.meta.id === id ? null : current));
+        // 删掉的正是当前活着的那条：回到首页，别让界面停在一条已经没有记录的会话上
+        if (id === sessionRef.current) reset();
+        refreshSessions();
+      });
+    },
+    [reset, refreshSessions],
+  );
 
   /** 不属于任何工作区的新任务：清掉 cwd，落在兜底 */
   const newTask = useCallback(() => {
@@ -204,6 +264,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     cwd,
     defaultCwd,
     usable,
+    sessions,
+    archived,
+    openSession,
+    removeSession,
     send: () => void send(),
     stop,
     chooseWorkspace: () => void chooseWorkspace(),

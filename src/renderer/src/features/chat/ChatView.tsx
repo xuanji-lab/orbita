@@ -4,6 +4,7 @@ import { Composer } from "../../shell/Composer";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
+import { deriveSessionTitle } from "@shared/session";
 import type { ChatSession } from "./useChatSession";
 
 /**
@@ -15,6 +16,30 @@ import type { ChatSession } from "./useChatSession";
  */
 export function ChatView(props: { session: ChatSession }) {
   const { session } = props;
+
+  // 在看历史：只读。把历史回灌给 pi 让它接着跑是另一刀（docs/plans/）——
+  // **说清楚比装作能用好**，不能让输入框看起来能打字、一发就报 unknown session。
+  if (session.archived !== null) {
+    const { meta, transcript } = session.archived;
+    return (
+      <Pane
+        title={meta.title === "" ? "New task" : meta.title}
+        badge={meta.id.slice(0, 6)}
+        badgeTitle={meta.id}
+        footer={
+          <Notice>
+            This task is from an earlier run — you can read it, but continuing it isn&apos;t wired
+            up yet. Start a new task to keep working.
+          </Notice>
+        }
+      >
+        {transcript.map((item) => (
+          <Item key={item.id} item={item} />
+        ))}
+      </Pane>
+    );
+  }
+
   const composer = (
     <Composer
       value={session.draft}
@@ -83,6 +108,40 @@ export function ChatView(props: { session: ChatSession }) {
   }
 
   return (
+    <Pane
+      title={sessionTitle(session.transcript) ?? "New task"}
+      badge={session.sessionId.slice(0, 6)}
+      badgeTitle={session.sessionId}
+      footer={
+        <>
+          {notices}
+          {session.approvals[0] && (
+            <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
+          )}
+          {composer}
+        </>
+      }
+    >
+      {session.transcript.map((item) => (
+        <Item key={item.id} item={item} />
+      ))}
+      {session.phase === "turn" && <Responding />}
+    </Pane>
+  );
+}
+
+/**
+ * 聊天面的骨架：页头 / 可滚动的内容列 / 底部。实时会话与历史会话共用它——
+ * 两者只有底部不同（一个是输入卡，一个是「这条不能继续」的说明）。
+ */
+function Pane(props: {
+  title: string;
+  badge: string;
+  badgeTitle: string;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+}) {
+  return (
     <div
       style={{
         height: "100%",
@@ -113,10 +172,10 @@ export function ChatView(props: { session: ChatSession }) {
             textOverflow: "ellipsis",
           }}
         >
-          {sessionTitle(session.transcript) ?? "New task"}
+          {props.title}
         </strong>
         <span
-          title={session.sessionId}
+          title={props.badgeTitle}
           style={{
             flex: "0 0 auto",
             padding: "2px 8px",
@@ -128,7 +187,7 @@ export function ChatView(props: { session: ChatSession }) {
             fontWeight: "var(--weight-semibold)",
           }}
         >
-          {session.sessionId.slice(0, 6)}
+          {props.badge}
         </span>
       </header>
 
@@ -142,10 +201,7 @@ export function ChatView(props: { session: ChatSession }) {
             gap: "var(--space-4)",
           }}
         >
-          {session.transcript.map((item) => (
-            <Item key={item.id} item={item} />
-          ))}
-          {session.phase === "turn" && <Responding />}
+          {props.children}
         </div>
       </div>
 
@@ -158,11 +214,7 @@ export function ChatView(props: { session: ChatSession }) {
             gap: "var(--space-2)",
           }}
         >
-          {notices}
-          {session.approvals[0] && (
-            <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
-          )}
-          {composer}
+          {props.footer}
         </div>
       </div>
     </div>
@@ -368,14 +420,18 @@ function Notice(props: { tone?: "bad"; children: React.ReactNode }) {
   );
 }
 
-/** 会话标题：第一条用户消息的第一行。会话存储落地后由 auto-titler 接管。 */
-export function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
+/**
+ * 还没落盘那条会话的标题：第一条用户消息的第一行。落盘之后以 `meta.title` 为准。
+ * **截断规则走 shared 的 `deriveSessionTitle`**——主进程落盘时用的是同一条，
+ * 两边不一致的话同一条会话会在侧栏和标题栏显示两个名字。
+ */
+function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
   for (const item of transcript) {
     if (item.role !== "user") continue;
     for (const block of item.content) {
       if (block.type !== "text") continue;
-      const line = block.text.trim().split("\n")[0]?.trim();
-      if (line !== undefined && line !== "") return line.length > 60 ? `${line.slice(0, 60)}…` : line;
+      const title = deriveSessionTitle(block.text);
+      if (title !== "") return title;
     }
   }
   return null;
