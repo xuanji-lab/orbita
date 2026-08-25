@@ -7,7 +7,16 @@ import { agentApi } from "./api/agent.ts";
 import { providerApi } from "./api/provider.ts";
 import { workspaceApi } from "./api/workspace.ts";
 
-const api = { agent: agentApi, provider: providerApi, workspace: workspaceApi } as const;
+const api = {
+  agent: agentApi,
+  provider: providerApi,
+  workspace: workspaceApi,
+  /**
+   * 宿主平台。**不是 IPC 通道**，是个同步常量——渲染层需要它，因为
+   * 「红黄绿三个键落在边界卡里」只在 macOS 成立，别的平台要给自己画圆角。
+   */
+  platform: process.platform,
+} as const;
 
 export type OrbitaApi = typeof api;
 

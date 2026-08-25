@@ -19,6 +19,28 @@ const SECURITY_INVARIANTS = {
   sandbox: true,
 } as const;
 
+/**
+ * macOS 上的窗口形态。**边界卡就是窗口本身**——我们不画背景，背景是用户自己的桌面。
+ *
+ * 三个选项各有各的必须：
+ *  - `titleBarStyle: "hidden"` —— 去掉标题栏但**留下红黄绿三个键**，让它们落进边界卡里。
+ *    渲染层给侧栏顶部留出净空并标 `-webkit-app-region: drag`，否则窗口就拖不动了。
+ *  - `vibrancy` —— CSS 的 `backdrop-filter` **模糊不了窗口背后的桌面**（合成器里根本没有那块内容），
+ *    真正的「透出桌面」只能由系统材质给。边界卡在它上面再画一层 `--glass-bg`，
+ *    合出来就是设计系统要的 layer 1。
+ *  - `backgroundColor` 全透明 —— 否则不透明底色会盖掉 vibrancy。
+ *
+ * 非 macOS 没有等价物，退回不透明底色；边界卡的圆角那时由渲染层自己画。
+ */
+const MAC_WINDOW = {
+  titleBarStyle: "hidden",
+  trafficLightPosition: { x: 18, y: 19 },
+  vibrancy: "under-window",
+  // 失焦不要把整面 UI 变灰——安静的工作台不该闪
+  visualEffectState: "active",
+  backgroundColor: "#00000000",
+} as const;
+
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
@@ -27,8 +49,10 @@ function createMainWindow(): BrowserWindow {
     minHeight: 520,
     show: false,
     autoHideMenuBar: true,
-    // 首帧之前窗口是空的；给一个中性底色，避免白闪（深浅由渲染层接管）
-    backgroundColor: "#f3f4f1",
+    ...(process.platform === "darwin"
+      ? MAC_WINDOW
+      : // 首帧之前窗口是空的；给一个中性底色，避免白闪（深浅由渲染层接管）
+        { backgroundColor: "#f3f4f1" }),
     webPreferences: {
       ...SECURITY_INVARIANTS,
       preload: join(__dirname, "../preload/index.js"),

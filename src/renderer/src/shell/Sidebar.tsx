@@ -31,10 +31,15 @@ export function Sidebar(props: {
         overflow: "hidden",
       }}
     >
-      {/* 没有 logo：品牌就是衬线体里的小写 orbita（设计系统 *No logo*） */}
+      {/*
+        顶栏兼作标题栏：`titleBarStyle: "hidden"` 之后这是窗口唯一的可拖区域，
+        macOS 上还要给红黄绿三个键让净空——见 styles.css 的 `.titlebar`。
+        没有 logo：品牌就是衬线体里的小写 orbita（设计系统 *No logo*）。
+      */}
       <div
+        className="titlebar"
         style={{
-          display: "inline-flex",
+          display: "flex",
           alignItems: "center",
           height: 34,
           fontFamily: "var(--font-family-brand)",

@@ -28,7 +28,8 @@ function bridgeless(): OrbitaApi {
           : () => Promise.reject(new Error(BRIDGE_MISSING)),
     },
   );
-  return new Proxy({}, { get: () => domain }) as OrbitaApi;
+  // platform 是标量而不是一个域，替身也得如实返回一个标量
+  return new Proxy({}, { get: (_target, key) => (key === "platform" ? "" : domain) }) as OrbitaApi;
 }
 
 /** renderer 侧统一入口：所有 IPC 走这里，组件不直接摸 window（旧仓 15 个文件各自直取过）。 */

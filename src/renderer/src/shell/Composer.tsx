@@ -5,9 +5,12 @@ import { Icon, type IconName } from "./Icon";
  * 输入框。**跨首页与聊天页是同一个组件、同一个宽度**（R8-01 ②：宽度连续性）——
  * 两边都由外层给 `min(100%, var(--content-max-width))`，这里只负责 100% 铺满。
  *
- * 它是第三层玻璃：浮在中卡之上，不在文档流里当一个方盒子。圆角取 `--radius-composer`
- * （14px），是唯一不吃 `--radius-xl` 的玻璃面——它是用户敲字的那一面，也是唯一
- * 会在页面之间旅行的卡（设计系统 *Corners and borders* 的那条例外）。
+ * 它是第三层玻璃：浮在内容面之上，不在文档流里当一个方盒子。
+ *
+ * 圆角取 `--radius-xl`，**不取** `--radius-composer`(14px)。设计系统对这条自相矛盾：
+ * readme 的 *Corners and borders* 说 composer 是唯一的例外，而 `Composer.jsx` 与
+ * `spacing.css` 的注释说「它首先是玻璃卡，所以吃 --radius-xl」。取后者：
+ * 玻璃卡就该有统一标准，一个例外换不来任何东西（2026-08-25 wafo 定）。
  */
 export function Composer(props: {
   value: string;
@@ -32,7 +35,7 @@ export function Composer(props: {
         padding: "10px 12px 8px",
         background: "var(--glass-bg)",
         border: "1px solid var(--glass-border)",
-        borderRadius: "var(--radius-composer)",
+        borderRadius: "var(--radius-xl)",
         boxShadow: "var(--shadow-composer)",
         WebkitBackdropFilter: "blur(var(--glass-blur))",
         backdropFilter: "blur(var(--glass-blur))",

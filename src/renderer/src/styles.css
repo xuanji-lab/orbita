@@ -4,22 +4,6 @@
  */
 @import "../../../Orbita Design System/styles.css";
 
-/*
- * 壁纸。设计系统没有把它做成 token——它写死在 `ui_kits/orbita-desktop/index.html`
- * 的 `.desk` / `.desk.wall-dark` 上。这里原样收成变量，是全渲染层唯一一处裸 hex，
- * 组件侧因此仍然只认变量（AGENTS.md：禁裸 hex / 未定义变量）。
- * 设计系统注明「壁纸与主题相互独立」，但应用只需要一个默认——跟随 data-theme。
- */
-:root {
-  --wallpaper: radial-gradient(1100px 620px at 22% 8%, #ffffff 0%, rgba(255, 255, 255, 0) 58%),
-    linear-gradient(140deg, #e8ebe4 0%, #f3f4f1 42%, #eae7dd 100%);
-}
-
-:root[data-theme="dark"] {
-  --wallpaper: radial-gradient(1100px 620px at 22% 8%, #3a4a42 0%, rgba(58, 74, 66, 0) 58%),
-    linear-gradient(140deg, #26332e 0%, #1b2024 42%, #332c22 100%);
-}
-
 *,
 *::before,
 *::after {
@@ -35,7 +19,11 @@ body,
 body {
   margin: 0;
   overflow: hidden;
-  background: var(--wallpaper);
+  /*
+   * macOS 上窗口是透明的、由系统 vibrancy 透出用户自己的桌面——**body 不许上不透明底色**，
+   * 否则就把桌面盖掉了。别的平台没有等价物，退回中性底色。
+   */
+  background: var(--color-bg-app);
   color: var(--color-text-primary);
   font-family: var(--font-family-base);
   font-size: var(--font-size-body);
@@ -43,17 +31,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/*
- * 三层玻璃。**一个 alpha，层级由嵌套合成**——`.layer` 与 `.pane` 都画同一个
- * `--glass-bg`，.60 → .84 的阶梯是 backdrop 叠出来的，不是手调的第二个值。
- * 两层都 `border: 0`：app 边界与内容面靠透明度差分层，不靠描边（设计系统
- * *Corners and borders*：the app shell and content pane run borderless）。
- */
-.shell {
-  height: 100%;
-  padding: 14px;
+:root[data-platform="darwin"] body {
+  background: transparent;
 }
 
+/*
+ * **一共三层，不是四层**：用户自己的桌面 → 边界卡(layer 1) → 内容面(layer 2) → 输入卡(layer 3)。
+ * 我们不画背景——设计系统里那张壁纸的类名就叫 `.desk`，它从头到尾是**桌面的替身**，
+ * 是给静态参考页看的，不是产品的一层。
+ *
+ * 所以边界卡 = 窗口本身：铺满、不留边距、不自己画圆角（macOS 的窗口自带圆角与裁切，
+ * 自己再圆一次会在四角漏出一圈 vibrancy）。
+ *
+ * 两层玻璃画的是同一个 `--glass-bg`，.60 → .84 的阶梯是嵌套合成出来的，不是手调的第二个值。
+ * 两层都 `border: 0`：分层靠透明度差，不靠描边（设计系统 *Corners and borders*：
+ * the app shell and content pane run borderless）。
+ */
 .layer {
   height: 100%;
   display: flex;
@@ -61,11 +54,23 @@ body {
   padding: var(--space-3);
   background: var(--glass-bg);
   border: 0;
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-composer);
+  border-radius: 0;
   -webkit-backdrop-filter: blur(var(--glass-blur));
   backdrop-filter: blur(var(--glass-blur));
   overflow: hidden;
+}
+
+/*
+ * 侧栏顶栏兼作标题栏：`titleBarStyle: "hidden"` 之后窗口没有任何可拖区域，
+ * 不标 drag 就拖不动窗口。macOS 上还要给红黄绿三个键让出净空——
+ * 它们从 x=18 起算，约占到 70px，字标从 78px 开始。
+ */
+.titlebar {
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="darwin"] .titlebar {
+  padding-inline-start: 66px;
 }
 
 .pane {
