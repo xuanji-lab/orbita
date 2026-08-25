@@ -31,6 +31,8 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
   配置与会话元数据走原子写（临时文件 + rename），禁裸 `writeFileSync`。
 - 功能改动附最小可执行测试（正常路径 + 主要边界）。
 - 注释与日志优先中文，保留技术术语。
+- **词撞了就落表**：同一个词在两处指不同东西并已造成误解 / bug 时，在
+  `docs/ubiquitous-language.md` 加一行。**该表优先于架构文档**（后者冻结，不改）。
 
 ## 架构边界
 
@@ -108,6 +110,7 @@ token 规范与实现不一致时以设计系统为准。
 | 主题 | 位置 |
 |---|---|
 | **单 agent 的范围、架构决定与理由** | `docs/single-agent-guideline.md` |
+| **通用语言**（同一个词在两处指不同东西时，以本表为准） | `docs/ubiquitous-language.md` |
 | UI 设计语言真源 | `Orbita Design System/readme.md` |
 | 品牌原始资产（字体 / lucide 图标 / logo） | `design/` |
 | 会话存储规格 | `docs/architecture/orbita_v4.5.1/28-session-storage.md` |
