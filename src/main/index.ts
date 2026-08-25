@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
+import { registerWorkspaceIpc } from "./workspace/ipc.ts";
+import { WorkspaceStore } from "./workspace/store.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { ProviderStore } from "./provider/store.ts";
 
@@ -55,6 +57,7 @@ void app.whenReady().then(() => {
   const configDir = app.getPath("userData");
   const providers = new ProviderStore(configDir, new SafeStorageSecrets(configDir));
   registerProviderIpc(providers);
+  registerWorkspaceIpc(new WorkspaceStore(configDir));
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), broadcastAgentEvent);

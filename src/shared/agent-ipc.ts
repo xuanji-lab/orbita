@@ -22,6 +22,8 @@ export const ipcChannels = {
   agentSetMode: "agent:set-mode",
   agentAnswerPermission: "agent:answer-permission",
   agentEvent: "agent:event",
+  workspaceCurrent: "workspace:current",
+  workspaceChoose: "workspace:choose",
   providerBuiltins: "provider:builtins",
   providerDiscover: "provider:discover",
   providerTest: "provider:test",

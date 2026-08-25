@@ -5,8 +5,9 @@
 import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
 import { providerApi } from "./api/provider.ts";
+import { workspaceApi } from "./api/workspace.ts";
 
-const api = { agent: agentApi, provider: providerApi } as const;
+const api = { agent: agentApi, provider: providerApi, workspace: workspaceApi } as const;
 
 export type OrbitaApi = typeof api;
 

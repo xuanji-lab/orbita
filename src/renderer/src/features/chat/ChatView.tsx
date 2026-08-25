@@ -26,11 +26,17 @@ export function ChatView(props: { providers: ProviderDto[] }) {
   const [mode, setMode] = useState<PermissionMode>("plan");
   /** 排队中的工具审批。同一时刻可能有多个（并行工具调用），逐个应答。 */
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
+  const [workspace, setWorkspace] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     sessionRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    void api.workspace.current().then(setWorkspace).catch(() => setWorkspace(null));
+  }, []);
 
   useEffect(
     () =>
@@ -71,8 +77,9 @@ export function ChatView(props: { providers: ProviderDto[] }) {
       if (id === null) {
         const provider = usable[0];
         if (!provider) throw new Error("Add a provider with at least one model first");
+        if (workspace === null) throw new Error("Choose a workspace folder first");
         id = await api.agent.create({
-          cwd: ".",
+          cwd: workspace,
           providerId: provider.id,
           modelId: provider.models.declared[0]?.id ?? "",
           mode,
@@ -87,7 +94,20 @@ export function ChatView(props: { providers: ProviderDto[] }) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase("idle");
     }
-  }, [draft, sessionId, usable, mode]);
+  }, [draft, sessionId, usable, mode, workspace]);
+
+  /** 换工作区：当前会话的 cwd 已经固定，只能开新会话——UI 上说清楚，不让用户以为切了目录对话还跟着走。 */
+  const chooseWorkspace = async () => {
+    const picked = await api.workspace.choose();
+    if (picked === null) return;
+    setWorkspace(picked);
+    if (sessionId !== null) {
+      setSessionId(null);
+      sessionRef.current = null;
+      setState(createTranscriptState(seedSnapshot()));
+      setApprovals([]);
+    }
+  };
 
   const changeMode = (next: PermissionMode) => {
     setMode(next);
@@ -133,6 +153,55 @@ export function ChatView(props: { providers: ProviderDto[] }) {
             );
           })}
         </span>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-2)",
+          padding: "var(--space-2) var(--space-3)",
+          background: "var(--color-bg-muted)",
+          border: "1px solid var(--color-border-subtle)",
+          borderRadius: "var(--radius-md)",
+        }}
+      >
+        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
+          Workspace
+        </span>
+        <code
+          title={workspace ?? ""}
+          style={{
+            flex: 1,
+            fontFamily: "var(--font-family-mono)",
+            fontSize: "var(--font-size-micro)",
+            color: "var(--color-text-secondary)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            direction: "rtl",
+            textAlign: "left",
+          }}
+        >
+          {workspace ?? "…"}
+        </code>
+        <button
+          type="button"
+          onClick={() => void chooseWorkspace()}
+          style={{
+            height: "var(--control-height-xs)",
+            padding: "0 var(--space-2)",
+            background: "var(--color-bg-app)",
+            color: "var(--color-text-primary)",
+            border: "1px solid var(--color-border-default)",
+            borderRadius: "var(--radius-md)",
+            font: "inherit",
+            fontSize: "var(--font-size-micro)",
+            cursor: "pointer",
+          }}
+        >
+          {sessionId === null ? "Change" : "Change (starts a new chat)"}
+        </button>
       </div>
 
       {usable.length === 0 && (
