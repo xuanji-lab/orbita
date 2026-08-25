@@ -98,7 +98,7 @@ export class TranscriptAdapter {
       if (!isAssistant(event.message)) return [];
       const id = this.deps.newId();
       this.activeAssistantId = id;
-      return [{ type: "item_started", item: this.assistantItem(id, event.message, "streaming") }];
+      return [{ type: "item_started", item: this.assistantItem(id, event.message, true) }];
     }
 
     if (event.type === "message_update") {
@@ -107,14 +107,16 @@ export class TranscriptAdapter {
       const delta = this.toDelta(id, event.assistantMessageEvent);
       // 非增量帧（text_start / text_end / start 等）：整条重发一次，让归约器与上游对齐。
       // 这些帧稀疏，代价可以接受；而漏掉它们会让「块刚出现」这类结构变化丢失。
-      return delta ?? [{ type: "item_updated", item: this.assistantItem(id, event.message, "streaming") }];
+      return delta ?? [{ type: "item_updated", item: this.assistantItem(id, event.message, true) }];
     }
 
-    // message_end：终态帧，status 从 streaming 翻成 complete
+    // message_end：终态帧。**abort 也走这里**——pi 的 agent-loop 是先无条件发
+    // message_end、之后才判 stopReason === "aborted"，所以被打断的半截回答同样
+    // 会经过这里落到 item_finished 上。终态具体是哪一种由 stopReason 决定。
     const id = this.activeAssistantId;
     if (id === null || !isAssistant(event.message)) return [];
     this.activeAssistantId = null;
-    return [{ type: "item_finished", item: this.assistantItem(id, event.message, "complete") }];
+    return [{ type: "item_finished", item: this.assistantItem(id, event.message, false) }];
   }
 
   /** 流式增量 → assistant_delta。不是增量帧就返回 null，由调用方走整条重发。 */
@@ -141,18 +143,39 @@ export class TranscriptAdapter {
     ];
   }
 
+  /**
+   * 终态怎么落，取决于 pi 的 `stopReason`。
+   *
+   * **协议里 assistant 有四种 status：streaming / complete / error / aborted**，
+   * 后三种都带 `stopReason`。我们以前一律写 complete 且不带 stopReason——
+   * 于是**被用户打断的半截回答，在记录里长得和正常说完的一模一样**。
+   * 落盘之后这条谎会留在磁盘上：重开会话时看到一句没说完的话，
+   * 却没有任何东西告诉你「这是你当时按了停止」。
+   */
   private assistantItem(
     id: string,
     message: AssistantMessage,
-    status: "streaming" | "complete",
+    streaming: boolean,
   ): TranscriptItem {
-    return {
+    const base = {
       id,
-      role: "assistant",
+      role: "assistant" as const,
       content: message.content.map(toAssistantContent),
       model: toModelRef(message),
       timestamp: this.deps.now(),
-      status,
     };
+    if (streaming) return { ...base, status: "streaming" };
+    // aborted 这一支的 stopReason 是它自己那个字面量，不是 complete 那三个之一
+    if (message.stopReason === "aborted") {
+      return { ...base, status: "aborted", stopReason: "aborted" };
+    }
+    // pi 的 StopReason 比协议宽（还有 pending / deferred / error）。
+    // 只有三个值协议认；其余落回 "stop"——它表示「就这么结束了」，是最不失真的兜底。
+    const stopReason =
+      message.stopReason === "length" || message.stopReason === "toolUse"
+        ? message.stopReason
+        : ("stop" as const);
+    if (message.stopReason === "error") return { ...base, status: "error", stopReason };
+    return { ...base, status: "complete", stopReason };
   }
 }

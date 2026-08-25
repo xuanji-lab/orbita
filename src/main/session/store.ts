@@ -54,9 +54,8 @@ export class SessionStore {
   }
 
   /**
-   * 记一条 transcript item。**只在终态调用**——assistant 走 `item_finished`，
-   * user 走 `item_started`（用户消息出生即完成，adapter 不会再给它发 finished）。
-   * 中途 abort 的半截 assistant 消息因此不落盘：只存完成了的。
+   * 记一条 transcript item。**只在终态调用**——哪些帧算终态、abort 怎么算，
+   * 全部由 `recorder.ts` 决定，这里只管写。
    */
   async record(id: string, item: TranscriptItem): Promise<void> {
     const meta = await this.readMeta(id);

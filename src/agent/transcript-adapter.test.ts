@@ -38,7 +38,10 @@ function emptySnapshot(): SessionSnapshot {
   };
 }
 
-function assistant(content: AssistantMessage["content"]): AssistantMessage {
+function assistant(
+  content: AssistantMessage["content"],
+  stopReason: AssistantMessage["stopReason"] = "stop",
+): AssistantMessage {
   return {
     role: "assistant",
     content,
@@ -46,7 +49,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
     provider: "zai",
     model: "glm-5.3",
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
-    stopReason: "stop",
+    stopReason,
   } as AssistantMessage;
 }
 
@@ -234,5 +237,49 @@ describe("TranscriptAdapter", () => {
       ],
     });
     assert.equal(selectTranscript(next).length, 1);
+  });
+});
+
+/**
+ * 终态不只有「说完了」一种。pi 的 agent-loop 在 abort 时是**先无条件发 message_end、
+ * 之后才判 `stopReason === "aborted"`**，所以被打断的半截回答同样走终态帧。
+ * 以前这里一律写 complete，等于**在记录里把「你按了停止」抹成了「它自己说完了」**；
+ * 会话落盘之后这条谎会留在磁盘上。
+ */
+describe("终态由 stopReason 决定", () => {
+  const cases: Array<[AssistantMessage["stopReason"], string]> = [
+    ["stop", "complete"],
+    ["length", "complete"],
+    ["toolUse", "complete"],
+    ["aborted", "aborted"],
+    ["error", "error"],
+  ];
+
+  for (const [stopReason, status] of cases) {
+    test(`stopReason=${stopReason} → status=${status}`, () => {
+      const message = assistant([{ type: "text", text: "半句话" }], stopReason);
+      const { transcript } = replay([
+        { type: "message_start", message },
+        { type: "message_end", message },
+      ]);
+      assert.equal(transcript[0]?.status, status);
+    });
+  }
+
+  test("length / toolUse 的 stopReason 原样带上，别的落回 stop", () => {
+    const seen = (stopReason: AssistantMessage["stopReason"]) => {
+      const message = assistant([{ type: "text", text: "x" }], stopReason);
+      const { transcript } = replay([
+        { type: "message_start", message },
+        { type: "message_end", message },
+      ]);
+      const item = transcript[0];
+      return item !== undefined && "stopReason" in item ? item.stopReason : undefined;
+    };
+    assert.equal(seen("length"), "length");
+    assert.equal(seen("toolUse"), "toolUse");
+    assert.equal(seen("stop"), "stop");
+    // pi 的 StopReason 比协议宽：pending / deferred 协议不认，落回 stop
+    assert.equal(seen("deferred"), "stop");
   });
 });
