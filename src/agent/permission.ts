@@ -12,6 +12,51 @@
  */
 import { decidePermission, type PermissionAnswer, type PermissionMode } from "../shared/permission.ts";
 
+/**
+ * pi 内建、且我们全开的八个工具（guideline §五）。
+ * 只有一个用途：**把权限模式讲给模型听**——见 `describePermissionMode`。
+ */
+const BUILTIN_TOOLS = ["bash", "edit", "find", "glob", "grep", "ls", "read", "write"] as const;
+
+/**
+ * 把当前模式翻成一段系统提示。
+ *
+ * 为什么需要它：审批只拦在 `tool_call` 上，**模型对此一无所知**。实测的表现是——
+ * plan 模式下问 agent「能不能改这个文件」，它答「能」，然后真去动工具，撞墙了才发现不能。
+ * 它不是在撒谎，是没人告诉过它。
+ *
+ * 文案**从 `decidePermission` 推出来**，不是另写一遍：三档的工具分桶由策略函数当场算，
+ * 策略改了这段话跟着改。两处描述各说各话，比没有描述更糟。
+ */
+export function describePermissionMode(mode: PermissionMode): string {
+  const allow: string[] = [];
+  const ask: string[] = [];
+  const deny: string[] = [];
+  for (const tool of BUILTIN_TOOLS) {
+    const decision = decidePermission(mode, tool);
+    if (decision.behavior === "allow") allow.push(tool);
+    else if (decision.behavior === "ask") ask.push(tool);
+    else deny.push(tool);
+  }
+
+  const lines = ["<orbita-permission>", `The user has set tool permission to "${mode}".`];
+  if (allow.length > 0) lines.push(`Runs immediately: ${allow.join(", ")}.`);
+  if (ask.length > 0) {
+    lines.push(
+      `Asks the user first: ${ask.join(", ")}. Each call is shown to them before it runs; ` +
+        "they may allow it, deny it, or edit the arguments. Expect pauses, and expect denials.",
+    );
+  }
+  if (deny.length > 0) {
+    lines.push(
+      `Refused outright: ${deny.join(", ")}. Do not call them, and do not tell the user you will ` +
+        "change anything on disk — describe the change instead, and say that this mode cannot apply it.",
+    );
+  }
+  lines.push("</orbita-permission>");
+  return lines.join("\n");
+}
+
 /** pi 的 tool_call 事件里我们用得上的部分 */
 export interface ToolCallLike {
   toolCallId: string;
@@ -26,6 +71,18 @@ export interface ToolCallGateResult {
 }
 
 export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>;
+
+/** pi 扩展 API 里我们用到的两个钩子。上游类型没导出成可直接消费的形状，这里只声明用得着的部分。 */
+export interface PiExtensionApi {
+  on(
+    event: "tool_call",
+    handler: (event: ToolCallLike) => ToolCallGateResult | Promise<ToolCallGateResult>,
+  ): void;
+  on(
+    event: "before_agent_start",
+    handler: (event: { systemPrompt: string }) => { systemPrompt: string },
+  ): void;
+}
 
 /**
  * 生成 `tool_call` 处理器。纯逻辑 + 一个注入的询问函数，可被测试穷尽。

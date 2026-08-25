@@ -16,7 +16,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
-import { createToolCallGate, type ToolCallLike } from "./permission.ts";
+import {
+  createToolCallGate,
+  describePermissionMode,
+  type PiExtensionApi,
+} from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 
 type ParentPortLike = {
@@ -106,10 +110,8 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
-  const gate = createToolCallGate(
-    () => sessions.get(command.sessionId)?.mode ?? "plan",
-    askPermission(command.sessionId),
-  );
+  const currentMode = () => sessions.get(command.sessionId)?.mode ?? "plan";
+  const gate = createToolCallGate(currentMode, askPermission(command.sessionId));
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -118,8 +120,13 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
         {
           name: "orbita-permission",
           hidden: true,
-          factory: (pi: { on: (event: string, handler: (e: ToolCallLike) => unknown) => void }) => {
+          factory: (pi: PiExtensionApi) => {
             pi.on("tool_call", (event) => gate(event));
+            // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
+            // 切模式下一轮就生效；只在建会话时讲一次的话，切了模式模型还按旧的答。
+            pi.on("before_agent_start", (event) => ({
+              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(currentMode())}`,
+            }));
           },
         },
       ],
