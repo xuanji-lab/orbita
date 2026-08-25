@@ -32,6 +32,9 @@ export const ipcChannels = {
   providerReveal: "provider:reveal",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
+  sessionList: "session:list",
+  sessionLoad: "session:load",
+  sessionDelete: "session:delete",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
