@@ -172,10 +172,12 @@ export function Sidebar(props: {
                       {basename(session.workspace)}
                     </strong>
                   </span>
+                  {/* 这个 + 建的是「这个工作区里的任务」：cwd 按路径直接选好，
+                      与顶上那个「+ New task」（不属于任何工作区，落在兜底）区分开 */}
                   <IconButton
                     label="New task in this workspace"
                     size={26}
-                    onClick={session.newTask}
+                    onClick={session.newTaskInWorkspace}
                   >
                     <Icon name="plus" size={14} />
                   </IconButton>
@@ -197,24 +199,20 @@ export function Sidebar(props: {
         )}
       </div>
 
-      <FooterRow>
-        <IconButton label="Archived tasks (planned)" size={26} disabled>
-          <Icon name="archive" size={14} />
-        </IconButton>
-        <span style={{ fontSize: "var(--font-size-caption)" }}>Archived (0)</span>
-      </FooterRow>
-
-      <FooterRow>
-        <IconButton
-          label="Settings"
-          size={26}
-          active={props.settingsOpen}
-          onClick={props.onToggleSettings}
-        >
-          <Icon name="settings" size={16} />
-        </IconButton>
-        <span style={{ fontSize: "var(--font-size-caption)" }}>Settings</span>
-      </FooterRow>
+      {/* 整条可点，不是只有图标可点——和 New task 一样是一整根横条 */}
+      <NavRow
+        icon="archive"
+        label="Archived (0)"
+        hint="Archived tasks (planned)"
+        active={false}
+        disabled
+      />
+      <NavRow
+        icon="settings"
+        label="Settings"
+        active={props.settingsOpen}
+        onClick={props.onToggleSettings}
+      />
     </aside>
   );
 }
@@ -264,23 +262,34 @@ function NodeHeader(props: {
 }
 
 /**
- * 侧栏里的一行导航。会话行与设置 tab 共用它——**它们本来就是一回事**：
- * 前导 13px 图标槽 + 一行文字，hover 与选中一律中性填充，绝不染 accent，
- * 选中只靠字重加一档（设计系统 R4-03：选中态近乎无额外信号）。
+ * 侧栏里的一行导航。**会话行、设置 tab、Archived、Settings 全都是它**——
+ * 它们本来就是一回事：前导 13px 图标槽 + 一行文字，整条可点（不是只有图标可点）。
+ *
+ * hover 与选中都走 `--row-hover-bg` / `--row-active-bg`，两个值在 styles.css
+ * 里一处定义，选中态的两个候选与取舍也写在那儿。
  */
 function NavRow(props: {
   icon: IconName;
   label: string;
   active: boolean;
+  onClick?: (() => void) | undefined;
+  disabled?: boolean;
   tone?: string;
   spin?: boolean;
-  title?: string;
-  onClick?: (() => void) | undefined;
+  /** 图标槽的悬停说明（会话行用它讲状态） */
+  iconTitle?: string;
+  /** 整行的悬停说明（planned 的东西用它讲为什么点不动） */
+  hint?: string;
 }) {
   const [hover, setHover] = useState(false);
+  const disabled = props.disabled === true;
+  const clickable = !disabled && props.onClick !== undefined;
   return (
     <button
       type="button"
+      title={props.hint}
+      disabled={disabled}
+      aria-pressed={clickable ? props.active : undefined}
       onClick={props.onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -294,23 +303,28 @@ function NavRow(props: {
         padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)",
         border: 0,
         borderRadius: "var(--radius-sm)",
-        background: props.active || hover ? "var(--color-bg-hover)" : "transparent",
-        color: "var(--color-text-primary)",
+        background: props.active
+          ? "var(--row-active-bg)"
+          : hover && clickable
+            ? "var(--row-hover-bg)"
+            : "transparent",
+        // 玻璃上的禁用态用实色 tertiary，不用 opacity（设计系统 *Hover, press, disabled*）
+        color: disabled ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         fontWeight: props.active ? "var(--weight-semibold)" : "var(--weight-regular)",
         textAlign: "left",
-        cursor: props.onClick === undefined ? "default" : "pointer",
+        cursor: disabled ? "not-allowed" : clickable ? "pointer" : "default",
         transition: "var(--transition-hover)",
       }}
     >
       <span
-        title={props.title}
+        title={props.iconTitle}
         style={{
           display: "grid",
           placeItems: "center",
           flex: "0 0 auto",
-          color: props.tone ?? "var(--color-text-secondary)",
+          color: disabled ? "var(--color-text-tertiary)" : (props.tone ?? "var(--color-text-secondary)"),
         }}
       >
         <Icon name={props.icon} size={13} strokeWidth={1.8} spin={props.spin ?? false} />
@@ -345,7 +359,7 @@ function SessionRow(props: {
       label={props.title}
       tone={status.tone}
       spin={status.spin}
-      title={status.label}
+      iconTitle={status.label}
       active={props.active}
       onClick={props.onClick}
     />
@@ -365,14 +379,6 @@ function Empty(props: { children: React.ReactNode }) {
     >
       {props.children}
     </p>
-  );
-}
-
-function FooterRow(props: { children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-      {props.children}
-    </div>
   );
 }
 

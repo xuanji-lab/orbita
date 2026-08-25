@@ -4,6 +4,25 @@
  */
 @import "../../../Orbita Design System/styles.css";
 
+/*
+ * 侧栏行的 hover 与选中底色。会话行与设置 tab 共用——**它们是同一件事**。
+ *
+ * 选中态有两个候选，各有取舍：
+ *   A `var(--color-bg-active)`
+ *     accent 淡底（明主题蓝 #e7eefd，暗主题黄 rgba(212,167,44,.18)）。选中不会认错，
+ *     设计系统的 IconButton active 用的就是它；代价是侧栏一列里会同时出现三处 accent
+ *     （New task 实心、Agent mode 芯片、选中行）。
+ *   B `color-mix(in srgb, var(--color-text-primary) 12%, transparent)`
+ *     半透明墨色。它**压暗玻璃**而不是在玻璃上盖一块不透明灰，因此属于玻璃这一叠；
+ *     全程中性，符合 readme 的 "List rows never tint"。
+ *
+ * 现取 A。换成 B 只需改这两行的值。
+ */
+:root {
+  --row-hover-bg: var(--color-bg-hover);
+  --row-active-bg: var(--color-bg-active);
+}
+
 *,
 *::before,
 *::after {

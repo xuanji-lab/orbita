@@ -28,6 +28,14 @@ export class WorkspaceStore {
     this.filePath = join(dir, "workspace.json");
   }
 
+  /**
+   * 没有选定工作区时 agent 落在哪儿。**只在这里定义一次**——
+   * `current()` 的兜底与渲染层显示给用户的那个「Home」必须是同一个值。
+   */
+  static defaultPath(): string {
+    return homedir();
+  }
+
   /** 当前工作区。没选过就是 home——显式、可见、一键可改，而不是一个说不清的 `"."`。 */
   async current(): Promise<string> {
     if (this.cache !== null) return this.cache;
@@ -40,7 +48,7 @@ export class WorkspaceStore {
     } catch {
       // 文件不存在或坏了都退回 home：工作区是可以随时重选的，不值得为此让应用起不来
     }
-    this.cache = homedir();
+    this.cache = WorkspaceStore.defaultPath();
     return this.cache;
   }
 

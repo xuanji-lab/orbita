@@ -175,12 +175,16 @@ function ComposerBar(props: { session: ChatSession }) {
   const model = session.usable[0]?.models.declared[0]?.id;
   return (
     <>
+      {/*
+        没选工作区时显示「Home」而不是一个空的「Choose folder」：**兜底不该是隐形的**，
+        用户要一眼知道不选会落在哪儿（WorkspaceStore 的 cwd 写死 "." 那次教训）。
+      */}
       <Chip
         icon="folder"
-        title={session.workspace ?? "Choose a workspace folder"}
+        title={`${session.cwd ?? session.defaultCwd} · click to choose a folder`}
         onClick={session.chooseWorkspace}
       >
-        {session.workspace === null ? "Choose folder" : basename(session.workspace)}
+        {session.cwd === null ? "Home" : basename(session.cwd)}
       </Chip>
       <span
         title="Tool permission"

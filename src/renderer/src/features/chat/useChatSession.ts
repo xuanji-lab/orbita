@@ -29,14 +29,26 @@ export interface ChatSession {
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
   approvals: PendingApproval[];
+  /** 侧栏列的那个工作区（落盘、跨会话）。今天只有一个，命名容器还没做。 */
   workspace: string | null;
+  /**
+   * 这个任务实际跑在哪儿。**null = 没选，落在 `defaultCwd`**——
+   * 工作区与「这一单用哪个目录」是两件事：New task 建的是不属于任何工作区的任务，
+   * 点工作区的 + 建的才是这个工作区里的任务。
+   */
+  cwd: string | null;
+  /** 没选工作区时的兜底（今天是 home）。UI 必须如实显示它，不能让它是个隐形默认。 */
+  defaultCwd: string;
   /** 至少声明了一个模型的 provider——没有它就发不出消息 */
   usable: ProviderDto[];
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
   chooseWorkspace: () => void;
+  /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
+  /** 这个工作区里的新任务：cwd 按路径自动选好 */
+  newTaskInWorkspace: () => void;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
 }
 
@@ -52,6 +64,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
   const [workspace, setWorkspace] = useState<string | null>(null);
+  const [cwd, setCwd] = useState<string | null>(null);
+  const [defaultCwd, setDefaultCwd] = useState<string>("");
   const sessionRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -63,6 +77,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       .current()
       .then(setWorkspace)
       .catch(() => setWorkspace(null));
+    void api.workspace
+      .default()
+      .then(setDefaultCwd)
+      .catch(() => setDefaultCwd(""));
   }, []);
 
   useEffect(
@@ -105,9 +123,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       if (id === null) {
         const provider = usable[0];
         if (!provider) throw new Error("Add a provider with at least one model first");
-        if (workspace === null) throw new Error("Choose a workspace folder first");
+        // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
+        const target = cwd ?? defaultCwd;
+        if (target === "") throw new Error("Choose a workspace folder first");
         id = await api.agent.create({
-          cwd: workspace,
+          cwd: target,
           providerId: provider.id,
           modelId: provider.models.declared[0]?.id ?? "",
           mode,
@@ -122,15 +142,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase("idle");
     }
-  }, [draft, sessionId, usable, mode, workspace]);
+  }, [draft, sessionId, usable, mode, cwd, defaultCwd]);
 
   const stop = useCallback(() => {
     if (sessionRef.current === null) return;
     void api.agent.abort(sessionRef.current);
   }, []);
 
-  /** 回到首页开新会话：会话在首条消息提交时才真正创建（R8-01 ①）。 */
-  const newTask = useCallback(() => {
+  /** 回到首页。会话在首条消息提交时才真正创建（R8-01 ①）。 */
+  const reset = useCallback(() => {
     setSessionId(null);
     sessionRef.current = null;
     setState(createTranscriptState(seedSnapshot()));
@@ -139,13 +159,26 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     setError(null);
   }, []);
 
+  /** 不属于任何工作区的新任务：清掉 cwd，落在兜底 */
+  const newTask = useCallback(() => {
+    reset();
+    setCwd(null);
+  }, [reset]);
+
+  /** 这个工作区里的新任务：路径直接选好，用户不用再点一次 */
+  const newTaskInWorkspace = useCallback(() => {
+    reset();
+    setCwd(workspace);
+  }, [reset, workspace]);
+
   /** 换工作区：当前会话的 cwd 已经固定，只能开新会话——UI 上说清楚，不让用户以为切了目录对话还跟着走。 */
   const chooseWorkspace = useCallback(async () => {
     const picked = await api.workspace.choose();
     if (picked === null) return;
     setWorkspace(picked);
-    if (sessionRef.current !== null) newTask();
-  }, [newTask]);
+    setCwd(picked);
+    if (sessionRef.current !== null) reset();
+  }, [reset]);
 
   const changeMode = useCallback((next: PermissionMode) => {
     setMode(next);
@@ -168,11 +201,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     changeMode,
     approvals,
     workspace,
+    cwd,
+    defaultCwd,
     usable,
     send: () => void send(),
     stop,
     chooseWorkspace: () => void chooseWorkspace(),
     newTask,
+    newTaskInWorkspace,
     answerApproval,
   };
 }

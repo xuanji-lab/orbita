@@ -4,10 +4,11 @@
  */
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { WorkspaceStore } from "./store.ts";
+import { WorkspaceStore } from "./store.ts";
 
 export function registerWorkspaceIpc(store: WorkspaceStore): void {
   ipcMain.handle(ipcChannels.workspaceCurrent, () => store.current());
+  ipcMain.handle(ipcChannels.workspaceDefault, () => WorkspaceStore.defaultPath());
 
   ipcMain.handle(ipcChannels.workspaceChoose, async (event): Promise<string | null> => {
     const window = BrowserWindow.fromWebContents(event.sender);
