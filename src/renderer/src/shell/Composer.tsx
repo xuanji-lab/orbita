@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Icon, type IconName } from "./Icon";
+import { isSubmitKey } from "./composer-keys.ts";
 
 /**
  * 输入框。**跨首页与聊天页是同一个组件、同一个宽度**（R8-01 ②：宽度连续性）——
@@ -16,6 +17,8 @@ export function Composer(props: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  /** 打断当前这一轮。跑着的时候发送键变成停止键——同一个位置，同一件事的两面 */
+  onStop: () => void;
   placeholder: string;
   disabled?: boolean;
   running?: boolean;
@@ -23,7 +26,8 @@ export function Composer(props: {
 }) {
   const [hover, setHover] = useState(false);
   const disabled = props.disabled === true;
-  const sendable = !disabled && props.running !== true && props.value.trim() !== "";
+  const running = props.running === true;
+  const sendable = !disabled && !running && props.value.trim() !== "";
   return (
     <div
       style={{
@@ -48,7 +52,13 @@ export function Composer(props: {
         placeholder={props.placeholder}
         onChange={(event) => props.onChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.shiftKey) return;
+          // 组词中的 Enter 是「确认候选词」，不是发送——规则与用例在 composer-keys.ts
+          if (!isSubmitKey({
+            key: event.key,
+            shiftKey: event.shiftKey,
+            isComposing: event.nativeEvent.isComposing,
+            keyCode: event.keyCode,
+          })) return;
           event.preventDefault();
           if (sendable) props.onSubmit();
         }}
@@ -69,10 +79,10 @@ export function Composer(props: {
         {props.bottomSlot}
         <button
           type="button"
-          aria-label="Send"
-          title={props.running === true ? "Waiting for the current turn" : "Send"}
-          disabled={!sendable}
-          onClick={() => props.onSubmit()}
+          aria-label={running ? "Stop" : "Send"}
+          title={running ? "Stop this turn" : "Send"}
+          disabled={!running && !sendable}
+          onClick={() => (running ? props.onStop() : props.onSubmit())}
           onMouseEnter={() => setHover(true)}
           onMouseLeave={() => setHover(false)}
           style={{
@@ -87,17 +97,23 @@ export function Composer(props: {
             border: 0,
             borderRadius: "var(--radius-pill)",
             // 玻璃上的禁用态用实色，不用 opacity（设计系统 *Hover, press, disabled*）
-            background: !sendable
-              ? "var(--color-bg-hover)"
-              : hover
-                ? "var(--color-accent-strong)"
-                : "var(--color-accent)",
-            color: sendable ? "var(--color-accent-fg)" : "var(--color-text-tertiary)",
-            cursor: sendable ? "pointer" : "not-allowed",
+            background: running
+              ? "var(--color-danger-soft)"
+              : sendable
+                ? hover
+                  ? "var(--color-accent-strong)"
+                  : "var(--color-accent)"
+                : "var(--color-bg-hover)",
+            color: running
+              ? "var(--color-danger)"
+              : sendable
+                ? "var(--color-accent-fg)"
+                : "var(--color-text-tertiary)",
+            cursor: running || sendable ? "pointer" : "not-allowed",
             transition: "var(--transition-hover)",
           }}
         >
-          <Icon name="arrow-up" size={16} />
+          <Icon name={running ? "square" : "arrow-up"} size={running ? 12 : 16} />
         </button>
       </div>
     </div>

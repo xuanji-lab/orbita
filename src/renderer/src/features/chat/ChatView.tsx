@@ -19,6 +19,7 @@ export function ChatView(props: { session: ChatSession }) {
       value={session.draft}
       onChange={session.setDraft}
       onSubmit={session.send}
+      onStop={session.stop}
       placeholder={
         session.sessionId === null ? "Ask anything, or start a task" : "Reply, or steer the agent"
       }

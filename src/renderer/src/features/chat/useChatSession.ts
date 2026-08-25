@@ -33,6 +33,8 @@ export interface ChatSession {
   /** 至少声明了一个模型的 provider——没有它就发不出消息 */
   usable: ProviderDto[];
   send: () => void;
+  /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
+  stop: () => void;
   chooseWorkspace: () => void;
   newTask: () => void;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
@@ -122,6 +124,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     }
   }, [draft, sessionId, usable, mode, workspace]);
 
+  const stop = useCallback(() => {
+    if (sessionRef.current === null) return;
+    void api.agent.abort(sessionRef.current);
+  }, []);
+
   /** 回到首页开新会话：会话在首条消息提交时才真正创建（R8-01 ①）。 */
   const newTask = useCallback(() => {
     setSessionId(null);
@@ -163,6 +170,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     workspace,
     usable,
     send: () => void send(),
+    stop,
     chooseWorkspace: () => void chooseWorkspace(),
     newTask,
     answerApproval,
