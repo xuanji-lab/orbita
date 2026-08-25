@@ -8,10 +8,10 @@
  * （落库纪律）。session 的 cwd 在 `createAgentSession` 时固定，所以换工作区 = 换会话，
  * 这一点在 UI 上要说清楚，不能让用户以为切了目录当前对话就跟着走。
  */
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { writeJsonAtomic } from "../atomic-write.ts";
 
 interface WorkspaceFile {
   version: 1;
@@ -19,12 +19,10 @@ interface WorkspaceFile {
 }
 
 export class WorkspaceStore {
-  private readonly dir: string;
   private readonly filePath: string;
   private cache: string | null = null;
 
   constructor(dir: string) {
-    this.dir = dir;
     this.filePath = join(dir, "workspace.json");
   }
 
@@ -54,15 +52,7 @@ export class WorkspaceStore {
 
   async set(path: string): Promise<void> {
     const payload: WorkspaceFile = { version: 1, current: path };
-    await mkdir(this.dir, { recursive: true });
-    const tempPath = `${this.filePath}.${randomBytes(4).toString("hex")}.tmp`;
-    try {
-      await writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-      await rename(tempPath, this.filePath);
-    } catch (error) {
-      await unlink(tempPath).catch(() => undefined);
-      throw error;
-    }
+    await writeJsonAtomic(this.filePath, payload);
     this.cache = path;
   }
 }
