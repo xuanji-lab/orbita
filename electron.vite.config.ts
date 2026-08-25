@@ -28,7 +28,21 @@ export default defineConfig({
     root: resolve(__dirname, "src/renderer"),
     resolve: { alias: { "@shared": resolve(__dirname, "src/shared") } },
     build: { rollupOptions: { input: resolve(__dirname, "src/renderer/index.html") } },
-    server: { fs: { allow: [resolve(__dirname)] } },
+    server: {
+      /**
+       * **固定端口，并且撞了就报错。**
+       *
+       * 事故（2026-08-25）：orbita 与同机的另一个 electron-vite 应用都吃 vite 默认的 5173。
+       * 一次 `pkill -f "electron-vite dev"` 同时打死了两边，5173 随后被对方占住，
+       * 而 vite 的默认行为是**悄悄换一个端口**——于是我们的截图验收对着别人的应用拍了一轮
+       * 才被发现。`strictPort` 让端口冲突当场失败，不给「悄悄漂走」留余地。
+       *
+       * 5273 是刻意挑的：离 5173 一位，读起来仍是「一个 vite dev server」，但不是默认那个。
+       */
+      port: 5273,
+      strictPort: true,
+      fs: { allow: [resolve(__dirname)] },
+    },
     plugins: [react()],
   },
 });
