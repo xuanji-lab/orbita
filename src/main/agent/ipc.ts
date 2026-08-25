@@ -44,6 +44,7 @@ export function registerAgentIpc(
         id: sessionId,
         title: "",
         cwd: input.cwd,
+        workspaceId: input.workspaceId,
         providerId: input.providerId,
         modelId: input.modelId,
         mode: input.mode,

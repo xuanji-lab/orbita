@@ -23,6 +23,11 @@ export interface SessionMeta {
    * 时锁定 cwd，所以换目录只能换会话。
    */
   cwd: string;
+  /**
+   * 属于哪个工作区；**null = 不属于任何工作区**（侧栏 TASKS 节点下那些）。
+   * 按**工作区 id** 而不是按 cwd 归属：用户挪个文件夹或改个名，会话不该成孤儿。
+   */
+  workspaceId: string | null;
   providerId: string;
   modelId: string;
   /** 最后一次用的权限档。存下来是为了重开这条会话时不会静默换档。 */
@@ -80,6 +85,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     cwd,
     providerId,
     modelId,
+    // 缺 workspaceId 的是刀 B 之前存的会话：它们不属于任何工作区，落到 TASKS 下
+    workspaceId: typeof value["workspaceId"] === "string" ? value["workspaceId"] : null,
     // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
     createdAt,

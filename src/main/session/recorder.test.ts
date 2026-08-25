@@ -58,6 +58,7 @@ beforeEach(async () => {
     id: ID,
     title: "",
     cwd: "/repo",
+    workspaceId: null,
     providerId: "zai",
     modelId: "glm-5.3",
     mode: "plan",

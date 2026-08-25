@@ -153,6 +153,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         if (target === "") throw new Error("Choose a workspace folder first");
         id = await api.agent.create({
           cwd: target,
+          workspaceId: null,
           providerId: provider.id,
           modelId: provider.models.declared[0]?.id ?? "",
           mode,

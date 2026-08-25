@@ -20,6 +20,7 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   createdAt: 1000,
   updatedAt: 1000,
   ...patch,
+  workspaceId: patch.workspaceId ?? null,
 });
 
 const userItem = (text: string, timestamp = 2000): TranscriptItem => ({

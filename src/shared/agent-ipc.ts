@@ -22,8 +22,14 @@ export const ipcChannels = {
   agentSetMode: "agent:set-mode",
   agentAnswerPermission: "agent:answer-permission",
   agentEvent: "agent:event",
+  /** @deprecated 单个工作区时代的两条，消费者迁到 list/add 之后删 */
   workspaceCurrent: "workspace:current",
   workspaceChoose: "workspace:choose",
+  workspaceList: "workspace:list",
+  /** 打开原生目录选择器并加为工作区 */
+  workspaceAdd: "workspace:add",
+  workspaceRename: "workspace:rename",
+  workspaceRemove: "workspace:remove",
   /** 没有选定工作区时 agent 落在哪儿。渲染层要如实告诉用户这个兜底，不能让它是个隐形默认 */
   workspaceDefault: "workspace:default",
   providerBuiltins: "provider:builtins",
@@ -97,6 +103,8 @@ export type AgentEvent =
 
 export interface CreateAgentInput {
   cwd: string;
+  /** 这条会话属于哪个工作区；null = 不属于任何工作区（侧栏 TASKS 节点下那些） */
+  workspaceId: string | null;
   providerId: string;
   modelId: string;
   mode: PermissionMode;

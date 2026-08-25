@@ -6,6 +6,7 @@ const valid = {
   id: "a7f3c1d2",
   title: "Rebuild the renderer",
   cwd: "/Users/wafo/repo/orbita-lab",
+  workspaceId: null,
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "manual",
@@ -69,9 +70,16 @@ describe("parseSessionMeta", () => {
   });
 
   it("不认识的字段丢掉，不原样带过去", () => {
-    deepStrictEqual(parseSessionMeta({ ...valid, workspaceId: "w1", junk: 1 }), {
+    deepStrictEqual(parseSessionMeta({ ...valid, junk: 1, nested: { a: 1 } }), {
       ...valid,
       mode: "manual",
     });
+  });
+
+  // 刀 B 之前存下的会话没有这个字段，它们不属于任何工作区，落到侧栏 TASKS 下
+  it("缺 workspaceId 视为不属于任何工作区", () => {
+    strictEqual(parseSessionMeta({ ...valid, workspaceId: undefined })?.workspaceId, null);
+    strictEqual(parseSessionMeta({ ...valid, workspaceId: 42 })?.workspaceId, null);
+    strictEqual(parseSessionMeta({ ...valid, workspaceId: "w1" })?.workspaceId, "w1");
   });
 });
