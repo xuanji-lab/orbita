@@ -9,14 +9,14 @@
  */
 import { randomUUID } from "node:crypto";
 import {
-  createAgentSession,
-  createCodingTools,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
   ModelRuntime,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
-import { wrapWithPermission, type WrappableTool } from "./permission.ts";
+import { createToolCallGate, type ToolCallLike } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 
 type ParentPortLike = {
@@ -104,18 +104,28 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
   const modelRuntime = await ModelRuntime.create({});
   modelRuntime.registerProvider(command.provider.id, toProviderConfig(command.provider));
 
-  // pi 的内建工具全开，但每一个都套上权限门——pi 自己没有审批钩子，
-  // 「执行前先请示」是靠替换 execute 实现的（见 agent/permission.ts）
-  const gate = askPermission(command.sessionId);
-  const tools = createCodingTools(command.cwd).map((tool) =>
-    wrapWithPermission(tool as unknown as WrappableTool, () => sessions.get(command.sessionId)?.mode ?? "plan", gate),
+  // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
+  // 内建工具默认全开，不需要我们自己装配。
+  const gate = createToolCallGate(
+    () => sessions.get(command.sessionId)?.mode ?? "plan",
+    askPermission(command.sessionId),
   );
-
-  const { session } = await createAgentSession({
+  const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
-    tools: tools as never,
+    resourceLoaderOptions: {
+      extensionFactories: [
+        {
+          name: "orbita-permission",
+          hidden: true,
+          factory: (pi: { on: (event: string, handler: (e: ToolCallLike) => unknown) => void }) => {
+            pi.on("tool_call", (event) => gate(event));
+          },
+        },
+      ],
+    },
   });
+  const { session } = await createAgentSessionFromServices({ services });
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
   const unsubscribe = session.subscribe((event) => {

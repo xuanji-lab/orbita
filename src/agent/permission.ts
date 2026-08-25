@@ -1,71 +1,52 @@
 /**
- * 把 pi 的工具定义包一层权限门。
+ * 工具审批 —— 走 pi 官方的 `tool_call` 扩展钩子。
  *
- * pi 的循环拿到工具对象就直接调 `execute`——它不认识「审批」这个概念。
- * 但**工具定义是我们递给它的**，所以替换掉 `execute` 字段就等于插入了一个执行前的关口：
+ * ⚠ 修正一个我先前的错误判断：我说过「pi 没有审批钩子，所以要把工具的 execute 包一层」。
+ * **pi 有**，在扩展 API 里：`pi.on("tool_call", handler)`，handler 返回
+ * `{ block?, reason? }` 即可拦截，注释还明写「要改参数就原地改 `event.input`」。
+ * 那正好是我们要的三种行为，而且比包装 execute 正确得多——
+ * 包装的路子当时还写错了（`createAgentSession` 的 `tools` 是**名字白名单**，
+ * 不是工具对象数组，传对象进去等于一个工具都没装上）。
  *
- *   模型 → pi 循环 → 我们包装后的 execute
- *                     ├─ decidePermission(mode, name)
- *                     ├─ deny  → 抛错（pi 当成工具失败，把原因回灌给模型）
- *                     ├─ ask   → 等用户回答；拒绝同上，允许则继续
- *                     └─ allow → 调原装 execute
- *
- * 三档模式只是同一个包装的三种返回策略，不需要动 pi 任何东西。
+ * 这层因此只剩一件事：把「模式 + 用户回答」翻成 pi 的 ToolCallEventResult。
  */
-import {
-  decidePermission,
-  type PermissionAnswer,
-  type PermissionMode,
-} from "../shared/permission.ts";
+import { decidePermission, type PermissionAnswer, type PermissionMode } from "../shared/permission.ts";
 
-/** 最小工具形状：只关心名字与 execute，其余字段原样透传。 */
-export interface WrappableTool {
-  name: string;
-  execute: (
-    toolCallId: string,
-    params: unknown,
-    signal?: AbortSignal,
-    onUpdate?: unknown,
-  ) => Promise<unknown>;
-}
-
-/** 询问用户。由 runtime 实现（跨进程往返），这里只依赖它的签名。 */
-export type PermissionAsk = (request: {
+/** pi 的 tool_call 事件里我们用得上的部分 */
+export interface ToolCallLike {
   toolCallId: string;
   toolName: string;
-  input: unknown;
-}) => Promise<PermissionAnswer>;
-
-export class PermissionDeniedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PermissionDeniedError";
-  }
+  input: Record<string, unknown>;
 }
 
-export function wrapWithPermission<T extends WrappableTool>(
-  tool: T,
-  getMode: () => PermissionMode,
-  ask: PermissionAsk,
-): T {
-  return {
-    ...tool,
-    execute: async (toolCallId, params, signal, onUpdate) => {
-      const decision = decidePermission(getMode(), tool.name);
+/** pi 的 tool_call 处理结果 */
+export interface ToolCallGateResult {
+  block?: boolean;
+  reason?: string;
+}
 
-      if (decision.behavior === "deny") throw new PermissionDeniedError(decision.message);
+export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>;
 
-      if (decision.behavior === "ask") {
-        const answer = await ask({ toolCallId, toolName: tool.name, input: params });
-        if (answer.behavior === "deny") {
-          throw new PermissionDeniedError(answer.message ?? "Denied by the user.");
-        }
-        // 用户可以改写入参后放行（把 rm -rf 改成别的路径），改写后的值优先
-        const effective = answer.input === undefined ? params : answer.input;
-        return tool.execute(toolCallId, effective, signal, onUpdate);
-      }
+/**
+ * 生成 `tool_call` 处理器。纯逻辑 + 一个注入的询问函数，可被测试穷尽。
+ *
+ * 改写入参走 pi 的约定：**原地改 `event.input`**（不是返回新对象）。
+ */
+export function createToolCallGate(getMode: () => PermissionMode, ask: PermissionAsk) {
+  return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
+    const decision = decidePermission(getMode(), event.toolName);
+    if (decision.behavior === "allow") return {};
+    if (decision.behavior === "deny") return { block: true, reason: decision.message };
 
-      return tool.execute(toolCallId, params, signal, onUpdate);
-    },
+    const answer = await ask(event);
+    if (answer.behavior === "deny") {
+      return { block: true, reason: answer.message ?? "Denied by the user." };
+    }
+    if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
+      // pi 的约定：原地修改，后续 handler 与真正的执行都看到改后的值
+      for (const key of Object.keys(event.input)) delete event.input[key];
+      Object.assign(event.input, answer.input as Record<string, unknown>);
+    }
+    return {};
   };
 }

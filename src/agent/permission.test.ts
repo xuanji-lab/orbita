@@ -1,93 +1,85 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { PermissionDeniedError, wrapWithPermission, type WrappableTool } from "./permission.ts";
+import { createToolCallGate, type ToolCallLike } from "./permission.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 
-function fakeTool(name: string) {
-  const calls: unknown[] = [];
-  const tool: WrappableTool & { calls: unknown[] } = {
-    name,
-    calls,
-    execute: async (_id, params) => {
-      calls.push(params);
-      return { ok: true };
-    },
-  };
-  return tool;
-}
-
-function wrap(name: string, mode: PermissionMode, answer?: PermissionAnswer) {
-  const tool = fakeTool(name);
-  const asked: unknown[] = [];
-  const wrapped = wrapWithPermission(
-    tool,
+function gateFor(mode: PermissionMode, answer?: PermissionAnswer) {
+  const asked: ToolCallLike[] = [];
+  const gate = createToolCallGate(
     () => mode,
-    async (request) => {
-      asked.push(request);
+    async (event) => {
+      asked.push({ ...event, input: { ...event.input } });
       return answer ?? { behavior: "allow" };
     },
   );
-  return { tool, wrapped, asked };
+  return { gate, asked };
 }
 
-describe("wrapWithPermission", () => {
-  test("plan 下 bash 直接抛错，原装 execute 一次都不会被调到", async () => {
-    const { tool, wrapped, asked } = wrap("bash", "plan");
-    await assert.rejects(
-      () => wrapped.execute("c1", { cmd: "rm -rf /" }),
-      (error: unknown) => error instanceof PermissionDeniedError,
-    );
-    assert.deepEqual(tool.calls, [], "被拒的工具绝不能被执行");
-    assert.deepEqual(asked, [], "plan 下不该去打扰用户");
-  });
+function event(toolName: string, input: Record<string, unknown> = {}): ToolCallLike {
+  return { toolCallId: "c1", toolName, input };
+}
 
-  test("skip 下不询问，直接执行", async () => {
-    const { tool, wrapped, asked } = wrap("bash", "skip");
-    await wrapped.execute("c1", { cmd: "ls" });
-    assert.deepEqual(tool.calls, [{ cmd: "ls" }]);
+describe("createToolCallGate", () => {
+  test("plan 下 bash 被 block，且不去打扰用户", async () => {
+    const { gate, asked } = gateFor("plan");
+    const result = await gate(event("bash", { cmd: "rm -rf /" }));
+    assert.equal(result.block, true);
+    assert.match(result.reason ?? "", /Plan mode/);
     assert.deepEqual(asked, []);
   });
 
-  test("manual 下先问再执行，问的内容带工具名与入参", async () => {
-    const { tool, wrapped, asked } = wrap("write", "manual", { behavior: "allow" });
-    await wrapped.execute("c7", { path: "a.ts" });
-    assert.deepEqual(asked, [{ toolCallId: "c7", toolName: "write", input: { path: "a.ts" } }]);
-    assert.deepEqual(tool.calls, [{ path: "a.ts" }]);
+  test("plan 下只读工具直接放行（空结果 = 不拦截）", async () => {
+    const { gate, asked } = gateFor("plan");
+    assert.deepEqual(await gate(event("read", { path: "a.ts" })), {});
+    assert.deepEqual(asked, []);
   });
 
-  test("用户拒绝 → 抛错且不执行；理由回灌给模型", async () => {
-    const { tool, wrapped } = wrap("bash", "manual", { behavior: "deny", message: "别删那个" });
-    await assert.rejects(
-      () => wrapped.execute("c1", { cmd: "rm -rf /" }),
-      (error: unknown) => error instanceof PermissionDeniedError && /别删那个/.test(error.message),
-    );
-    assert.deepEqual(tool.calls, []);
+  test("skip 下一律放行，不询问", async () => {
+    const { gate, asked } = gateFor("skip");
+    assert.deepEqual(await gate(event("bash", { cmd: "ls" })), {});
+    assert.deepEqual(asked, []);
   });
 
-  test("用户改写入参后放行 → 执行的是改写后的值", async () => {
-    const { tool, wrapped } = wrap("bash", "manual", {
-      behavior: "allow",
-      input: { cmd: "rm -rf ./build" },
-    });
-    await wrapped.execute("c1", { cmd: "rm -rf /" });
-    assert.deepEqual(tool.calls, [{ cmd: "rm -rf ./build" }], "必须用改写后的入参");
+  test("manual 下先问；问的内容带工具名与入参", async () => {
+    const { gate, asked } = gateFor("manual");
+    assert.deepEqual(await gate(event("write", { path: "a.ts" })), {});
+    assert.deepEqual(asked, [{ toolCallId: "c1", toolName: "write", input: { path: "a.ts" } }]);
   });
 
-  test("模式是每次取的，不是包装时固定的——中途切档立即生效", async () => {
-    const tool = fakeTool("bash");
+  test("用户拒绝 → block + 理由回灌给模型", async () => {
+    const { gate } = gateFor("manual", { behavior: "deny", message: "别动那个文件" });
+    const result = await gate(event("write", { path: "a.ts" }));
+    assert.equal(result.block, true);
+    assert.equal(result.reason, "别动那个文件");
+  });
+
+  test("改写入参：按 pi 的约定**原地改** event.input，不是返回新对象", async () => {
+    const { gate } = gateFor("manual", { behavior: "allow", input: { cmd: "rm -rf ./build" } });
+    const e = event("bash", { cmd: "rm -rf /" });
+    const result = await gate(e);
+    assert.deepEqual(result, {}, "放行不该带 block");
+    assert.deepEqual(e.input, { cmd: "rm -rf ./build" }, "input 必须被原地改掉");
+  });
+
+  test("改写时旧键被清掉，不残留", async () => {
+    const { gate } = gateFor("manual", { behavior: "allow", input: { path: "b.ts" } });
+    const e = event("write", { path: "a.ts", content: "old" });
+    await gate(e);
+    assert.deepEqual(e.input, { path: "b.ts" }, "content 不该残留");
+  });
+
+  test("允许但没给 input → 入参原样不动", async () => {
+    const { gate } = gateFor("manual", { behavior: "allow" });
+    const e = event("read", { path: "a.ts" });
+    await gate(e);
+    assert.deepEqual(e.input, { path: "a.ts" });
+  });
+
+  test("模式每次取——中途切档立即生效", async () => {
     let mode: PermissionMode = "skip";
-    const wrapped = wrapWithPermission(tool, () => mode, async () => ({ behavior: "allow" }));
-    await wrapped.execute("c1", { cmd: "ls" });
+    const gate = createToolCallGate(() => mode, async () => ({ behavior: "allow" }));
+    assert.deepEqual(await gate(event("bash")), {});
     mode = "plan";
-    await assert.rejects(() => wrapped.execute("c2", { cmd: "ls" }));
-    assert.equal(tool.calls.length, 1);
-  });
-
-  test("除 execute 外的字段原样透传（pi 还要用 description / parameters）", () => {
-    const tool = { name: "read", description: "d", parameters: { x: 1 }, execute: async () => ({}) };
-    const wrapped = wrapWithPermission(tool, () => "skip", async () => ({ behavior: "allow" }));
-    assert.equal(wrapped.description, "d");
-    assert.deepEqual(wrapped.parameters, { x: 1 });
-    assert.equal(wrapped.name, "read");
+    assert.equal((await gate(event("bash"))).block, true);
   });
 });
