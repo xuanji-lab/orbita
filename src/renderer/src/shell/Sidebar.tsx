@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import type { ChatSession } from "../features/chat/useChatSession";
+import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 
 /**
  * 左栏，288px。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
@@ -10,11 +11,17 @@ import type { ChatSession } from "../features/chat/useChatSession";
  * 只列真实存在的东西：本分支还没有会话存储，所以「会话列表」目前最多一条——
  * 就是当前这个 session。**不铺假数据**；没做的（编排、归档）按设计系统的
  * 规矩「显示、禁用、标注 planned」，不藏也不假装。
+ *
+ * 进设置时**换的是这块列表，不是弹一个窗**：tab 列表就长在这里，和会话行同一套
+ * 处理（透明、hover 中性、选中加重），右边还是同一张内容面。设置因此和聊天是
+ * 同一个壳的两种内容，而不是叠在壳上的另一层。
  */
 export function Sidebar(props: {
   session: ChatSession;
   title: string | null;
   settingsOpen: boolean;
+  settingsTab: SettingsTab;
+  onSettingsTab: (tab: SettingsTab) => void;
   onToggleSettings: () => void;
 }) {
   const { session } = props;
@@ -98,78 +105,95 @@ export function Sidebar(props: {
           paddingRight: "var(--space-3)",
         }}
       >
-        <NodeHeader
-          label="Workspaces"
-          addLabel="Choose a workspace folder"
-          addIcon="folder-plus"
-          onAdd={session.chooseWorkspace}
-        />
-        {session.workspace === null ? (
-          <Empty>No workspace yet. Choose the folder the agent may read.</Empty>
+        {props.settingsOpen ? (
+          <>
+            <NodeLabel>Settings</NodeLabel>
+            {SETTINGS_TABS.map((tab) => (
+              <NavRow
+                key={tab.id}
+                icon={tab.icon}
+                label={tab.label}
+                active={props.settingsTab === tab.id}
+                onClick={() => props.onSettingsTab(tab.id)}
+              />
+            ))}
+          </>
         ) : (
-          <div style={{ padding: "var(--space-2) 0" }}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(0,1fr) 26px",
-                alignItems: "center",
-                gap: 2,
-              }}
-            >
-              <span
-                title={session.workspace}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "24px minmax(0,1fr)",
-                  alignItems: "center",
-                  gap: "var(--space-2)",
-                  minHeight: 28,
-                }}
-              >
-                <span
+          <>
+            <NodeHeader
+              label="Workspaces"
+              addLabel="Choose a workspace folder"
+              addIcon="folder-plus"
+              onAdd={session.chooseWorkspace}
+            />
+            {session.workspace === null ? (
+              <Empty>No workspace yet. Choose the folder the agent may read.</Empty>
+            ) : (
+              <div style={{ padding: "var(--space-2) 0" }}>
+                <div
                   style={{
                     display: "grid",
-                    placeItems: "center",
-                    width: 24,
-                    height: 24,
-                    color: "var(--color-text-secondary)",
+                    gridTemplateColumns: "minmax(0,1fr) 26px",
+                    alignItems: "center",
+                    gap: 2,
                   }}
                 >
-                  <Icon name="folder" size={14} strokeWidth={1.8} />
-                </span>
-                <strong
-                  style={{
-                    minWidth: 0,
-                    fontSize: "var(--font-size-control)",
-                    fontWeight: "var(--weight-semibold)",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {basename(session.workspace)}
-                </strong>
-              </span>
-              <IconButton
-                label="New task in this workspace"
-                size={26}
-                onClick={session.newTask}
-              >
-                <Icon name="plus" size={14} />
-              </IconButton>
-            </div>
-            {props.title === null ? (
-              <Empty>No task yet. The one you start lands here.</Empty>
-            ) : (
-              <SessionRow
-                title={props.title}
-                running={session.phase === "turn"}
-                failed={session.error !== null}
-                active={!props.settingsOpen}
-                onClick={props.settingsOpen ? props.onToggleSettings : undefined}
-              />
+                  <span
+                    title={session.workspace}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "24px minmax(0,1fr)",
+                      alignItems: "center",
+                      gap: "var(--space-2)",
+                      minHeight: 28,
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "grid",
+                        placeItems: "center",
+                        width: 24,
+                        height: 24,
+                        color: "var(--color-text-secondary)",
+                      }}
+                    >
+                      <Icon name="folder" size={14} strokeWidth={1.8} />
+                    </span>
+                    <strong
+                      style={{
+                        minWidth: 0,
+                        fontSize: "var(--font-size-control)",
+                        fontWeight: "var(--weight-semibold)",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {basename(session.workspace)}
+                    </strong>
+                  </span>
+                  <IconButton
+                    label="New task in this workspace"
+                    size={26}
+                    onClick={session.newTask}
+                  >
+                    <Icon name="plus" size={14} />
+                  </IconButton>
+                </div>
+                {props.title === null ? (
+                  <Empty>No task yet. The one you start lands here.</Empty>
+                ) : (
+                  <SessionRow
+                    title={props.title}
+                    running={session.phase === "turn"}
+                    failed={session.error !== null}
+                    active={!props.settingsOpen}
+                    onClick={props.settingsOpen ? props.onToggleSettings : undefined}
+                  />
+                )}
+              </div>
             )}
-          </div>
+          </>
         )}
       </div>
 
@@ -196,6 +220,25 @@ export function Sidebar(props: {
 }
 
 /** 分组标题：机器面的小字用 business/mono，字号 micro，大写加字距 */
+function NodeLabel(props: { children: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        minHeight: 28,
+        fontFamily: "var(--font-family-business)",
+        fontSize: "var(--font-size-micro)",
+        letterSpacing: "0.06em",
+        textTransform: "uppercase",
+        color: "var(--color-text-secondary)",
+      }}
+    >
+      {props.children}
+    </span>
+  );
+}
+
 function NodeHeader(props: {
   label: string;
   addLabel: string;
@@ -212,17 +255,7 @@ function NodeHeader(props: {
         minHeight: 28,
       }}
     >
-      <span
-        style={{
-          fontFamily: "var(--font-family-business)",
-          fontSize: "var(--font-size-micro)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          color: "var(--color-text-secondary)",
-        }}
-      >
-        {props.label}
-      </span>
+      <NodeLabel>{props.label}</NodeLabel>
       <IconButton label={props.addLabel} size={26} onClick={props.onAdd}>
         <Icon name={props.addIcon} size={14} />
       </IconButton>
@@ -231,22 +264,20 @@ function NodeHeader(props: {
 }
 
 /**
- * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**；
- * hover / active 一律中性填充，绝不染 accent。
+ * 侧栏里的一行导航。会话行与设置 tab 共用它——**它们本来就是一回事**：
+ * 前导 13px 图标槽 + 一行文字，hover 与选中一律中性填充，绝不染 accent，
+ * 选中只靠字重加一档（设计系统 R4-03：选中态近乎无额外信号）。
  */
-function SessionRow(props: {
-  title: string;
-  running: boolean;
-  failed: boolean;
+function NavRow(props: {
+  icon: IconName;
+  label: string;
   active: boolean;
+  tone?: string;
+  spin?: boolean;
+  title?: string;
   onClick?: (() => void) | undefined;
 }) {
   const [hover, setHover] = useState(false);
-  const status = props.running
-    ? { icon: "loader-circle" as const, color: "var(--color-accent)", label: "Running", spin: true }
-    : props.failed
-      ? { icon: "triangle-alert" as const, color: "var(--color-danger)", label: "Failed", spin: false }
-      : { icon: "check" as const, color: "var(--color-text-tertiary)", label: "Idle", spin: false };
   return (
     <button
       type="button"
@@ -274,17 +305,50 @@ function SessionRow(props: {
       }}
     >
       <span
-        title={status.label}
-        style={{ display: "grid", placeItems: "center", flex: "0 0 auto", color: status.color }}
+        title={props.title}
+        style={{
+          display: "grid",
+          placeItems: "center",
+          flex: "0 0 auto",
+          color: props.tone ?? "var(--color-text-secondary)",
+        }}
       >
-        <Icon name={status.icon} size={13} strokeWidth={1.8} spin={status.spin} />
+        <Icon name={props.icon} size={13} strokeWidth={1.8} spin={props.spin ?? false} />
       </span>
       <span
         style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
       >
-        {props.title}
+        {props.label}
       </span>
     </button>
+  );
+}
+
+/**
+ * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**。
+ */
+function SessionRow(props: {
+  title: string;
+  running: boolean;
+  failed: boolean;
+  active: boolean;
+  onClick?: (() => void) | undefined;
+}) {
+  const status = props.running
+    ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
+    : props.failed
+      ? { icon: "triangle-alert" as const, tone: "var(--color-danger)", label: "Failed", spin: false }
+      : { icon: "check" as const, tone: "var(--color-text-tertiary)", label: "Idle", spin: false };
+  return (
+    <NavRow
+      icon={status.icon}
+      label={props.title}
+      tone={status.tone}
+      spin={status.spin}
+      title={status.label}
+      active={props.active}
+      onClick={props.onClick}
+    />
   );
 }
 

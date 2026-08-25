@@ -5,6 +5,7 @@ import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?ra
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
+import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
@@ -13,6 +14,7 @@ import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
+import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
 import wrench from "../../../../Orbita Design System/assets/icons/lucide/wrench.svg?raw";
@@ -31,6 +33,7 @@ const ICONS = {
   brain,
   check,
   copy,
+  cpu,
   folder,
   "folder-plus": folderPlus,
   "loader-circle": loaderCircle,
@@ -38,6 +41,7 @@ const ICONS = {
   plus,
   settings,
   "shield-check": shieldCheck,
+  sliders,
   square,
   "triangle-alert": triangleAlert,
   workflow,
@@ -45,6 +49,15 @@ const ICONS = {
 } as const;
 
 export type IconName = keyof typeof ICONS;
+
+/**
+ * SVG 源文件里的换行与缩进会原样变成 DOM 文本节点，把承载图标的按钮的 `textContent`
+ * 污染成 `"\n  \n  \nProviders"`——读屏与任何按文本找元素的东西都会踩到。
+ * 构建期洗一次，运行时零成本。
+ */
+function inline(svg: string): string {
+  return svg.trim().replace(/>\s+</g, "><");
+}
 
 /**
  * 尺寸与描边由外层 span 控制：`.orbita-icon svg` 用 CSS 覆盖 SVG 的呈现属性
@@ -71,7 +84,7 @@ export function Icon(props: {
       className="orbita-icon"
       aria-hidden="true"
       style={style}
-      dangerouslySetInnerHTML={{ __html: ICONS[props.name] }}
+      dangerouslySetInnerHTML={{ __html: inline(ICONS[props.name]) }}
     />
   );
 }

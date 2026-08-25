@@ -5,11 +5,13 @@
 import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
 import { providerApi } from "./api/provider.ts";
+import { settingsApi } from "./api/settings.ts";
 import { workspaceApi } from "./api/workspace.ts";
 
 const api = {
   agent: agentApi,
   provider: providerApi,
+  settings: settingsApi,
   workspace: workspaceApi,
   /**
    * 宿主平台。**不是 IPC 通道**，是个同步常量——渲染层需要它，因为

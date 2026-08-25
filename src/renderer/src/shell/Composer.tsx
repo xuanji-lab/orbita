@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Icon, type IconName } from "./Icon";
+import { Icon } from "./Icon";
 import { isSubmitKey } from "./composer-keys.ts";
 
 /**
@@ -117,64 +117,5 @@ export function Composer(props: {
         </button>
       </div>
     </div>
-  );
-}
-
-/**
- * composer 底栏里的安静控件。选中态用 `--color-mode-active-*`（明主题蓝、暗主题黄），
- * hover 是中性抬升——两者是设计系统里 accent 仅有的两个去处之一。
- */
-export function Chip(props: {
-  icon?: IconName;
-  active?: boolean;
-  disabled?: boolean;
-  title?: string;
-  onClick?: () => void;
-  children: React.ReactNode;
-}) {
-  const [hover, setHover] = useState(false);
-  const disabled = props.disabled === true;
-  const active = props.active === true;
-  return (
-    <button
-      type="button"
-      title={props.title}
-      aria-pressed={props.onClick === undefined ? undefined : active}
-      disabled={disabled}
-      onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-        maxWidth: 260,
-        padding: "3px 8px",
-        border: 0,
-        borderRadius: "var(--radius-md)",
-        background: active
-          ? "var(--color-mode-active-bg)"
-          : hover && !disabled
-            ? "var(--color-bg-hover)"
-            : "transparent",
-        color: active
-          ? "var(--color-mode-active-fg)"
-          : disabled
-            ? "var(--color-text-tertiary)"
-            : hover
-              ? "var(--color-text-primary)"
-              : "var(--color-text-secondary)",
-        fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
-        whiteSpace: "nowrap",
-        cursor: disabled ? "not-allowed" : props.onClick === undefined ? "default" : "pointer",
-        transition: "var(--transition-hover)",
-      }}
-    >
-      {props.icon !== undefined && <Icon name={props.icon} size={12} />}
-      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-        {props.children}
-      </span>
-    </button>
   );
 }

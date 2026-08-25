@@ -195,12 +195,10 @@ export function ProvidersView(props: { onChange?: () => void }) {
 
   return (
     <section style={{ display: "grid", gap: "var(--space-6)", width: "100%" }}>
-      <header style={{ display: "grid", gap: "var(--space-1)" }}>
-        <h2 style={{ margin: 0, fontSize: "var(--font-size-heading)", fontWeight: 600 }}>Providers</h2>
-        <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
-          Model parameters come from pi's catalog, refreshed every four hours. You only supply the key.
-        </p>
-      </header>
+      {/* 标题由内容面的页头统一给（SettingsView），这里不再重复一个 h2 */}
+      <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
+        Model parameters come from pi's catalog, refreshed every four hours. You only supply the key.
+      </p>
 
       {error !== null && <Line tone="bad">{error}</Line>}
 

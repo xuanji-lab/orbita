@@ -1,6 +1,7 @@
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
-import { Composer, Chip } from "../../shell/Composer";
+import { Composer } from "../../shell/Composer";
+import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import type { ChatSession } from "./useChatSession";

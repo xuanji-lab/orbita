@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
+import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
+import { SettingsStore } from "./settings/store.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
@@ -82,6 +84,11 @@ void app.whenReady().then(() => {
   const providers = new ProviderStore(configDir, new SafeStorageSecrets(configDir));
   registerProviderIpc(providers);
   registerWorkspaceIpc(new WorkspaceStore(configDir));
+
+  // 主题先于窗口生效：晚一步的话第一帧会用系统外观画出 vibrancy，然后当着用户的面跳一下
+  const settings = new SettingsStore(configDir);
+  registerSettingsIpc(settings);
+  void settings.read().then(applyNativeTheme);
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), broadcastAgentEvent);

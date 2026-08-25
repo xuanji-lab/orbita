@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { useSystemTheme } from "./useSystemTheme";
+import { useTheme } from "./useTheme";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
+import { DEFAULT_SETTINGS, type AppSettings } from "@shared/settings";
 import { useChatSession } from "./features/chat/useChatSession";
 import { ChatView, sessionTitle, transcriptToText } from "./features/chat/ChatView";
-import { ProvidersView } from "./features/settings/ProvidersView";
+import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { Sidebar } from "./shell/Sidebar";
 import { ActionRail } from "./shell/ActionRail";
 
@@ -20,10 +21,12 @@ import { ActionRail } from "./shell/ActionRail";
  * （设计系统 *Layout*：both sidebars are unbounded）。
  */
 export function App() {
-  useSystemTheme();
   usePlatform();
   const [providers, setProviders] = useState<ProviderDto[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  useTheme(settings.theme);
   const refresh = useCallback(async () => {
     // 读不到就当没有 provider——真正的原因由设置面自己报（它有 error 行），
     // 外壳不该因为一次 IPC 失败而白屏
@@ -36,7 +39,14 @@ export function App() {
 
   useEffect(() => {
     void refresh();
+    // 读不到设置就用默认——主题是可以随时再选的，不值得为此让外壳起不来
+    void api.settings.get().then(setSettings).catch(() => setSettings(DEFAULT_SETTINGS));
   }, [refresh]);
+
+  /** 先落盘再回填：写失败时 UI 不该显示一个其实没存下来的选择 */
+  const changeSettings = useCallback((patch: Partial<AppSettings>) => {
+    void api.settings.set(patch).then(setSettings);
+  }, []);
 
   const session = useChatSession(providers);
   const title = sessionTitle(session.transcript);
@@ -49,16 +59,19 @@ export function App() {
         session={session}
         title={title}
         settingsOpen={settingsOpen}
+        settingsTab={settingsTab}
+        onSettingsTab={setSettingsTab}
         onToggleSettings={() => setSettingsOpen((open) => !open)}
       />
 
       <main className="pane">
         {settingsOpen ? (
-          <div className="scroll" style={{ height: "100%", padding: "var(--space-6) var(--space-5)" }}>
-            <div style={{ maxWidth: 640, margin: "0 auto" }}>
-              <ProvidersView onChange={refresh} />
-            </div>
-          </div>
+          <SettingsView
+            tab={settingsTab}
+            settings={settings}
+            onSettingsChange={changeSettings}
+            onProvidersChange={refresh}
+          />
         ) : (
           <ChatView session={session} />
         )}
