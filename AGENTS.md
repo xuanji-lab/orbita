@@ -64,7 +64,7 @@ bun run typecheck    # 类型检查
 bun run test         # 测试
 ```
 
-> **dev server 固定在 `http://localhost:5273`**（`strictPort`，撞了当场失败，不会悄悄漂走）。
+> **dev server 固定在 `http://127.0.0.1:5273`**（只绑 IPv4 回环 + `strictPort`，撞了当场失败）。
 > 停服务按 PID 杀，**不要 `pkill -f "electron-vite dev"`**——同机别的 electron-vite 应用会陪葬（陷阱史 #2）。
 
 > 骨架落地后在此补实测命令与打包命令，并注明实测平台与日期。
@@ -93,9 +93,12 @@ token 规范与实现不一致时以设计系统为准。
 1. **`.gitignore` 的全局 `src/` 与 `*.d.ts` 规则会静默吞掉新文件**——已咬三次（吞 SDK 包源码两次、
    吞设计系统 20 份 `.d.ts` 一次）。**新增目录入库后必须核对「磁盘文件数 == `git add -An` 行数」**，不等就是有东西被吞了。
 2. **`pkill -f "electron-vite dev"` 会打死同机其它 electron-vite 应用**——已咬一次（2026-08-25，
-   打死了用户正在跑的 proma）。而且 vite 撞端口时**默认悄悄换一个**，于是 5173 被对方占住之后，
-   我们的截图验收对着别人的应用拍了整整一轮才被发现。
-   两条对策都已落库：renderer 固定 `port: 5273` + `strictPort: true`（撞了当场失败）；
+   打死了用户正在跑的 proma）。真正难查的后果是**双栈**：macOS 允许一个进程绑 `127.0.0.1:5173`、
+   另一个绑 `[::1]:5173`，两个 bind **都成功**，`strictPort` 拦不住；而 `localhost` 解析到谁
+   取决于客户端（curl 走 IPv4、Chrome 常偏好 IPv6），于是同一个 URL 在两个工具里指向两个不同的应用——
+   截图验收对着别人的应用拍了整整一轮才被发现。
+   对策：renderer 固定 `host: "127.0.0.1"` + `port: 5273` + `strictPort: true`（只绑一个地址族，
+   撞了当场失败）；脚本里用 `127.0.0.1:5273` 而不是 `localhost`；
    **停服务只按自己记下的 PID 杀，不用 `pkill -f` 匹配进程名**。
 3. **改根 `overrides` 里的构建工具版本会打死依赖它的 runner**——vite 7 的 override 曾让全仓 vitest
    在 transform 阶段整片失败且长期没被发现。改 overrides 必须回头核对依赖它的 runner 的版本区间。

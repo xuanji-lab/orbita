@@ -30,15 +30,22 @@ export default defineConfig({
     build: { rollupOptions: { input: resolve(__dirname, "src/renderer/index.html") } },
     server: {
       /**
-       * **固定端口，并且撞了就报错。**
+       * **固定端口、只绑 IPv4 回环、撞了当场失败。**
        *
-       * 事故（2026-08-25）：orbita 与同机的另一个 electron-vite 应用都吃 vite 默认的 5173。
-       * 一次 `pkill -f "electron-vite dev"` 同时打死了两边，5173 随后被对方占住，
-       * 而 vite 的默认行为是**悄悄换一个端口**——于是我们的截图验收对着别人的应用拍了一轮
-       * 才被发现。`strictPort` 让端口冲突当场失败，不给「悄悄漂走」留余地。
+       * 事故（2026-08-25）：orbita 与同机的 proma 都吃 vite 默认的 5173，
+       * 一次 `pkill -f "electron-vite dev"` 把两边一起打死了。
        *
-       * 5273 是刻意挑的：离 5173 一位，读起来仍是「一个 vite dev server」，但不是默认那个。
+       * 但真正难查的不是撞端口，是**双栈**：macOS 允许一个进程绑
+       * `127.0.0.1:5173`、另一个绑 `[::1]:5173`，两个 bind 都成功，
+       * 所以 `strictPort` **拦不住**。此时 `localhost` 解析到谁取决于客户端——
+       * curl 走 IPv4、Chrome 常偏好 IPv6——于是同一个 URL 在两个工具里
+       * 指向两个不同的应用。我的截图验收因此对着 proma 拍了整整一轮。
+       *
+       * 三条一起才管用：唯一端口 5273、`host` 明确绑 IPv4 回环（不再双栈监听）、
+       * `strictPort` 让冲突当场失败。脚本里也一律用 `127.0.0.1:5273`，
+       * 不用 `localhost`——把解析这一层的歧义整个去掉。
        */
+      host: "127.0.0.1",
       port: 5273,
       strictPort: true,
       fs: { allow: [resolve(__dirname)] },
