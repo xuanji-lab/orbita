@@ -24,6 +24,8 @@ export const ipcChannels = {
   agentEvent: "agent:event",
   workspaceCurrent: "workspace:current",
   workspaceChoose: "workspace:choose",
+  /** 没有选定工作区时 agent 落在哪儿。渲染层要如实告诉用户这个兜底，不能让它是个隐形默认 */
+  workspaceDefault: "workspace:default",
   providerBuiltins: "provider:builtins",
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
