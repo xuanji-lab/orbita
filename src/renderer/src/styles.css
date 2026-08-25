@@ -1,8 +1,24 @@
 /*
  * 渲染层样式入口。token 与字体全部来自设计系统真源，不在此重定义。
- * 设计系统是 UI 唯一真源（AGENTS.md「设计系统」）——这里只放应用外壳自身的布局。
+ * 设计系统是 UI 唯一真源（AGENTS.md「设计系统」）——这里只放 app shell 自身的构图。
  */
 @import "../../../Orbita Design System/styles.css";
+
+/*
+ * 壁纸。设计系统没有把它做成 token——它写死在 `ui_kits/orbita-desktop/index.html`
+ * 的 `.desk` / `.desk.wall-dark` 上。这里原样收成变量，是全渲染层唯一一处裸 hex，
+ * 组件侧因此仍然只认变量（AGENTS.md：禁裸 hex / 未定义变量）。
+ * 设计系统注明「壁纸与主题相互独立」，但应用只需要一个默认——跟随 data-theme。
+ */
+:root {
+  --wallpaper: radial-gradient(1100px 620px at 22% 8%, #ffffff 0%, rgba(255, 255, 255, 0) 58%),
+    linear-gradient(140deg, #e8ebe4 0%, #f3f4f1 42%, #eae7dd 100%);
+}
+
+:root[data-theme="dark"] {
+  --wallpaper: radial-gradient(1100px 620px at 22% 8%, #3a4a42 0%, rgba(58, 74, 66, 0) 58%),
+    linear-gradient(140deg, #26332e 0%, #1b2024 42%, #332c22 100%);
+}
 
 *,
 *::before,
@@ -18,10 +34,92 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-bg-app);
+  overflow: hidden;
+  background: var(--wallpaper);
   color: var(--color-text-primary);
   font-family: var(--font-family-base);
   font-size: var(--font-size-body);
   line-height: var(--line-height-body);
   -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * 三层玻璃。**一个 alpha，层级由嵌套合成**——`.layer` 与 `.pane` 都画同一个
+ * `--glass-bg`，.60 → .84 的阶梯是 backdrop 叠出来的，不是手调的第二个值。
+ * 两层都 `border: 0`：app 边界与内容面靠透明度差分层，不靠描边（设计系统
+ * *Corners and borders*：the app shell and content pane run borderless）。
+ */
+.shell {
+  height: 100%;
+  padding: 14px;
+}
+
+.layer {
+  height: 100%;
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--glass-bg);
+  border: 0;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-composer);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  overflow: hidden;
+}
+
+.pane {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--glass-bg);
+  border: 0;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-composer);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.scroll {
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-pill);
+}
+
+/* lucide SVG 内联后由外层 span 决定尺寸与描边；CSS 覆盖 SVG 的 presentation attribute */
+.orbita-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  line-height: 0;
+}
+
+.orbita-icon svg {
+  width: 100%;
+  height: 100%;
+  stroke-width: var(--icon-stroke, 2);
+}
+
+@keyframes orbita-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 动效只解释「东西去哪了」；用户要求减少动效时全部塌成 0（设计系统 *Motion*） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

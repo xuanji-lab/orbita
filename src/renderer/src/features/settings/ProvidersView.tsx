@@ -194,7 +194,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
   };
 
   return (
-    <section style={{ display: "grid", gap: "var(--space-6)", maxWidth: 640, width: "100%" }}>
+    <section style={{ display: "grid", gap: "var(--space-6)", width: "100%" }}>
       <header style={{ display: "grid", gap: "var(--space-1)" }}>
         <h2 style={{ margin: 0, fontSize: "var(--font-size-heading)", fontWeight: 600 }}>Providers</h2>
         <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
@@ -378,7 +378,18 @@ function ModelCard(props: {
   footer?: React.ReactNode;
 }) {
   return (
-    <div style={{ ...cardStyle, background: "var(--color-bg-muted)", gap: "var(--space-2)" }}>
+    <div
+      style={{
+        ...cardStyle,
+        background: "var(--color-chat-muted-bg)",
+        border: 0,
+        boxShadow: "none",
+        backdropFilter: "none",
+        WebkitBackdropFilter: "none",
+        borderRadius: "var(--radius-md)",
+        gap: "var(--space-2)",
+      }}
+    >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>
         <span style={{ fontSize: "var(--font-size-control)", fontWeight: 500 }}>{props.title}</span>
         <span style={metaStyle}>{props.models.length}</span>
@@ -467,13 +478,17 @@ function Line(props: { tone: "ok" | "bad" | "busy"; children: React.ReactNode })
   );
 }
 
+/** 设置面的卡走的是同一个玻璃配方——一个卡片配方，改宽高即可复用 */
 const cardStyle: React.CSSProperties = {
   display: "grid",
   gap: "var(--space-1)",
   padding: "var(--space-4)",
-  background: "var(--color-bg-panel)",
-  border: "1px solid var(--color-border-subtle)",
-  borderRadius: "var(--radius-lg)",
+  background: "var(--glass-bg)",
+  border: "1px solid var(--glass-border)",
+  borderRadius: "var(--radius-xl)",
+  boxShadow: "var(--shadow-composer)",
+  WebkitBackdropFilter: "blur(var(--glass-blur))",
+  backdropFilter: "blur(var(--glass-blur))",
 };
 
 const metaStyle: React.CSSProperties = {
@@ -485,9 +500,9 @@ const metaStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   height: "var(--control-height-md)",
   padding: "0 var(--space-3)",
-  background: "var(--color-bg-app)",
+  background: "var(--color-bg-panel)",
   color: "var(--color-text-primary)",
-  border: "1px solid var(--color-border-default)",
+  border: "1px solid var(--color-border-subtle)",
   borderRadius: "var(--radius-md)",
   font: "inherit",
   fontSize: "var(--font-size-input)",
@@ -496,9 +511,9 @@ const inputStyle: React.CSSProperties = {
 const controlStyle: React.CSSProperties = {
   height: "var(--control-height-md)",
   padding: "0 var(--space-4)",
-  background: "var(--color-bg-app)",
+  background: "var(--color-bg-muted)",
   color: "var(--color-text-primary)",
-  border: "1px solid var(--color-border-default)",
+  border: 0,
   borderRadius: "var(--radius-md)",
   font: "inherit",
   fontSize: "var(--font-size-control)",
@@ -517,7 +532,7 @@ const compactControlStyle: React.CSSProperties = {
 const primaryStyle: React.CSSProperties = {
   background: "var(--color-accent)",
   color: "var(--color-accent-fg)",
-  borderColor: "var(--color-accent)",
+  fontWeight: "var(--weight-medium)",
 };
 
 function emptyDraft() {

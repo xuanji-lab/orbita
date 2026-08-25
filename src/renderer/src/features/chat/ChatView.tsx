@@ -1,351 +1,399 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  applyTranscriptProgress,
-  createTranscriptState,
-  selectTranscript,
-  type TranscriptState,
-} from "@earendil-works/pi-coding-agent/client";
-import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
-import { api } from "../../api";
-import { ApprovalBar, type PendingApproval } from "./ApprovalBar";
-import { PERMISSION_MODES, PERMISSION_MODE_LABELS, type PermissionMode } from "@shared/permission";
-import type { ProviderDto } from "@shared/provider";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import { ApprovalBar } from "./ApprovalBar";
+import { Composer, Chip } from "../../shell/Composer";
+import { Icon } from "../../shell/Icon";
+import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
+import type { ChatSession } from "./useChatSession";
 
 /**
- * 最小对话面：发一句、看到流式回答。
- * transcript 状态由 **pi 自带的归约器**维护，我们不写第二份归约逻辑（guideline §三）。
- * 工具、审批、会话列表分别是后续三刀。
+ * 中卡的内容：首页与聊天页。
+ *
+ * 两页共用同一个 `Composer`，宽度都是 `min(100%, var(--content-max-width))`——
+ * 这就是 R8-01 ②「输入框宽度跨页面保持一致」：两页的差别只有 slogan 消失、
+ * 输入框从居中落到底部，别的都不动。
  */
-export function ChatView(props: { providers: ProviderDto[] }) {
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [state, setState] = useState<TranscriptState>(() => createTranscriptState(seedSnapshot()));
-  const [phase, setPhase] = useState<"idle" | "turn">("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  /** 三档权限模式。默认 plan——**默认最保守**，开工具要用户自己往下调。 */
-  const [mode, setMode] = useState<PermissionMode>("plan");
-  /** 排队中的工具审批。同一时刻可能有多个（并行工具调用），逐个应答。 */
-  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
-  /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
-  const [workspace, setWorkspace] = useState<string | null>(null);
-  const sessionRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    sessionRef.current = sessionId;
-  }, [sessionId]);
-
-  useEffect(() => {
-    void api.workspace.current().then(setWorkspace).catch(() => setWorkspace(null));
-  }, []);
-
-  useEffect(
-    () =>
-      api.agent.onEvent((event) => {
-        if (event.type === "failed") {
-          setError(event.message);
-          setPhase("idle");
-          return;
-        }
-        // ready / created 不带会话内容；其余按 sessionId 过滤，一个进程托管多个 session
-        if (event.type === "permission") {
-          if (event.sessionId !== sessionRef.current) return;
-          setApprovals((prev) => [
-            ...prev,
-            { requestId: event.requestId, toolName: event.toolName, input: event.input },
-          ]);
-          return;
-        }
-        if (event.type !== "progress" && event.type !== "phase") return;
-        if (event.sessionId !== sessionRef.current) return;
-        if (event.type === "progress") setState((prev) => applyTranscriptProgress(prev, event.progress));
-        else setPhase(event.phase === "idle" ? "idle" : "turn");
-      }),
-    [],
-  );
-
-  const usable = useMemo(
-    () => props.providers.filter((p) => p.models.declared.length > 0),
-    [props.providers],
-  );
-
-  const send = useCallback(async () => {
-    const text = draft.trim();
-    if (text === "") return;
-    setError(null);
-    try {
-      let id = sessionId;
-      if (id === null) {
-        const provider = usable[0];
-        if (!provider) throw new Error("Add a provider with at least one model first");
-        if (workspace === null) throw new Error("Choose a workspace folder first");
-        id = await api.agent.create({
-          cwd: workspace,
-          providerId: provider.id,
-          modelId: provider.models.declared[0]?.id ?? "",
-          mode,
-        });
-        setSessionId(id);
-        sessionRef.current = id;
+export function ChatView(props: { session: ChatSession }) {
+  const { session } = props;
+  const composer = (
+    <Composer
+      value={session.draft}
+      onChange={session.setDraft}
+      onSubmit={session.send}
+      placeholder={
+        session.sessionId === null ? "Ask anything, or start a task" : "Reply, or steer the agent"
       }
-      setDraft("");
-      setPhase("turn");
-      await api.agent.submit(id, text);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setPhase("idle");
-    }
-  }, [draft, sessionId, usable, mode, workspace]);
+      disabled={session.usable.length === 0}
+      running={session.phase === "turn"}
+      bottomSlot={<ComposerBar session={session} />}
+    />
+  );
 
-  /** 换工作区：当前会话的 cwd 已经固定，只能开新会话——UI 上说清楚，不让用户以为切了目录对话还跟着走。 */
-  const chooseWorkspace = async () => {
-    const picked = await api.workspace.choose();
-    if (picked === null) return;
-    setWorkspace(picked);
-    if (sessionId !== null) {
-      setSessionId(null);
-      sessionRef.current = null;
-      setState(createTranscriptState(seedSnapshot()));
-      setApprovals([]);
-    }
-  };
+  const notices = (
+    <>
+      {session.usable.length === 0 && (
+        <Notice>Add a provider with at least one model in Settings, then send a message.</Notice>
+      )}
+      {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+    </>
+  );
 
-  const changeMode = (next: PermissionMode) => {
-    setMode(next);
-    if (sessionId !== null) void api.agent.setMode(sessionId, next);
-  };
-
-  const answerApproval = (requestId: string, answer: Parameters<typeof api.agent.answerPermission>[1]) => {
-    setApprovals((prev) => prev.filter((a) => a.requestId !== requestId));
-    void api.agent.answerPermission(requestId, answer);
-  };
-
-  const transcript = selectTranscript(state);
+  if (session.sessionId === null) {
+    return (
+      <div
+        style={{
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "var(--space-5)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: "min(100%, var(--content-max-width))",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "var(--space-5)",
+          }}
+        >
+          {/* 全产品唯一一句抒情的话，也是唯一保持中文的界面文案 */}
+          <h1
+            style={{
+              margin: "0 0 var(--space-1)",
+              fontFamily: "var(--font-family-brand)",
+              fontSize: "var(--font-size-logo)",
+              fontWeight: 600,
+              letterSpacing: "var(--tracking-slogan)",
+              textAlign: "center",
+            }}
+          >
+            璇玑运转，诸事得序
+          </h1>
+          <div style={{ width: "100%", display: "grid", gap: "var(--space-2)" }}>
+            {notices}
+            {composer}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <section style={{ display: "grid", gap: "var(--space-5)", width: "100%", maxWidth: 640 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-3)" }}>
-        <h2 style={{ margin: 0, fontSize: "var(--font-size-heading)", fontWeight: 600 }}>Chat</h2>
-        <span style={{ marginInlineStart: "auto", display: "flex", gap: "var(--space-1)" }}>
-          {PERMISSION_MODES.map((value) => {
-            const active = mode === value;
-            return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => changeMode(value)}
-                title={PERMISSION_MODE_LABELS[value].hint}
-                style={{
-                  height: "var(--control-height-sm)",
-                  padding: "0 var(--space-3)",
-                  // 模式选中用 mode-active token（设计系统：模式选择与主操作共用 accent 色相）
-                  background: active ? "var(--color-mode-active-bg)" : "transparent",
-                  color: active ? "var(--color-mode-active-fg)" : "var(--color-text-secondary)",
-                  border: `1px solid ${active ? "var(--color-mode-active-fg)" : "var(--color-border-default)"}`,
-                  borderRadius: "var(--radius-md)",
-                  font: "inherit",
-                  fontSize: "var(--font-size-caption)",
-                  cursor: "pointer",
-                  transition: "var(--transition-hover)",
-                }}
-              >
-                {PERMISSION_MODE_LABELS[value].label}
-              </button>
-            );
-          })}
-        </span>
-      </div>
-
-      <div
+    <div
+      style={{
+        height: "100%",
+        minHeight: 0,
+        display: "grid",
+        gridTemplateRows: "auto minmax(0,1fr) auto",
+      }}
+    >
+      <header
         style={{
           display: "flex",
           alignItems: "center",
           gap: "var(--space-2)",
-          padding: "var(--space-2) var(--space-3)",
-          background: "var(--color-bg-muted)",
-          border: "1px solid var(--color-border-subtle)",
-          borderRadius: "var(--radius-md)",
+          minWidth: 0,
+          height: 30,
+          padding: "12px 18px",
+          boxSizing: "content-box",
+          borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
-        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
-          Workspace
-        </span>
-        <code
-          title={workspace ?? ""}
+        <strong
           style={{
-            flex: 1,
-            fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-micro)",
-            color: "var(--color-text-secondary)",
+            minWidth: 0,
+            fontSize: "var(--font-size-title)",
+            fontWeight: "var(--weight-bold)",
+            whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            direction: "rtl",
-            textAlign: "left",
           }}
         >
-          {workspace ?? "…"}
-        </code>
-        <button
-          type="button"
-          onClick={() => void chooseWorkspace()}
+          {sessionTitle(session.transcript) ?? "New task"}
+        </strong>
+        <span
+          title={session.sessionId}
           style={{
-            height: "var(--control-height-xs)",
-            padding: "0 var(--space-2)",
-            background: "var(--color-bg-app)",
-            color: "var(--color-text-primary)",
-            border: "1px solid var(--color-border-default)",
+            flex: "0 0 auto",
+            padding: "2px 8px",
             borderRadius: "var(--radius-md)",
-            font: "inherit",
+            background: "var(--color-bg-muted)",
+            color: "var(--color-text-secondary)",
+            fontFamily: "var(--font-family-business)",
             fontSize: "var(--font-size-micro)",
-            cursor: "pointer",
+            fontWeight: "var(--weight-semibold)",
           }}
         >
-          {sessionId === null ? "Change" : "Change (starts a new chat)"}
-        </button>
-      </div>
+          {session.sessionId.slice(0, 6)}
+        </span>
+      </header>
 
-      {usable.length === 0 && (
-        <p style={{ margin: 0, fontSize: "var(--font-size-control)", color: "var(--color-text-tertiary)" }}>
-          Add a provider with at least one model below, then send a message.
-        </p>
-      )}
-
-      {error !== null && (
-        <p role="alert" style={{ margin: 0, fontSize: "var(--font-size-control)", color: "var(--color-danger)" }}>
-          {error}
-        </p>
-      )}
-
-      <div style={{ display: "grid", gap: "var(--space-3)" }}>
-        {transcript.map((item) => (
-          <Item key={item.id} item={item} />
-        ))}
-        {phase === "turn" && transcript.at(-1)?.role !== "assistant" && (
-          <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
-            Thinking…
-          </span>
-        )}
-      </div>
-
-      {approvals[0] && <ApprovalBar approval={approvals[0]} onAnswer={answerApproval} />}
-
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-        style={{ display: "flex", gap: "var(--space-2)" }}
-      >
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask anything"
-          disabled={usable.length === 0}
+      <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+        <div
           style={{
-            flex: 1,
-            height: "var(--control-height-lg)",
-            padding: "0 var(--space-4)",
-            background: "var(--color-bg-panel)",
-            color: "var(--color-text-primary)",
-            border: "1px solid var(--color-border-default)",
-            borderRadius: "var(--radius-composer)",
-            font: "inherit",
-            fontSize: "var(--font-size-input)",
-          }}
-        />
-        <button
-          type="submit"
-          disabled={usable.length === 0 || draft.trim() === ""}
-          style={{
-            height: "var(--control-height-lg)",
-            padding: "0 var(--space-5)",
-            background: "var(--color-accent)",
-            color: "var(--color-accent-fg)",
-            border: "1px solid var(--color-accent)",
-            borderRadius: "var(--radius-md)",
-            font: "inherit",
-            fontSize: "var(--font-size-control)",
-            cursor: "pointer",
+            width: "min(100%, var(--content-max-width))",
+            margin: "0 auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--space-4)",
           }}
         >
-          Send
-        </button>
-      </form>
-    </section>
+          {session.transcript.map((item) => (
+            <Item key={item.id} item={item} />
+          ))}
+          {session.phase === "turn" && <Responding />}
+        </div>
+      </div>
+
+      <div style={{ padding: "var(--space-1) var(--space-5) 10px" }}>
+        <div
+          style={{
+            width: "min(100%, var(--content-max-width))",
+            margin: "0 auto",
+            display: "grid",
+            gap: "var(--space-2)",
+          }}
+        >
+          {notices}
+          {session.approvals[0] && (
+            <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
+          )}
+          {composer}
+        </div>
+      </div>
+    </div>
   );
 }
 
-/** 一条 transcript item。content 是块数组——按块渲染，不压扁（这正是换协议的目的）。 */
-function Item(props: { item: TranscriptItem }) {
-  const isUser = props.item.role === "user";
+/** composer 底栏：作用域 / 权限 / 模型——都是「这一句会以什么身份发出去」的事实 */
+function ComposerBar(props: { session: ChatSession }) {
+  const { session } = props;
+  const model = session.usable[0]?.models.declared[0]?.id;
   return (
-    <article
-      style={{
-        display: "grid",
-        gap: "var(--space-1)",
-        padding: "var(--space-3) var(--space-4)",
-        background: isUser ? "var(--color-bg-muted)" : "var(--color-bg-panel)",
-        border: "1px solid var(--color-border-subtle)",
-        borderRadius: "var(--radius-bubble)",
-        justifySelf: isUser ? "end" : "stretch",
-        maxWidth: isUser ? "min(82%, 64ch)" : undefined,
-      }}
-    >
+    <>
+      <Chip
+        icon="folder"
+        title={session.workspace ?? "Choose a workspace folder"}
+        onClick={session.chooseWorkspace}
+      >
+        {session.workspace === null ? "Choose folder" : basename(session.workspace)}
+      </Chip>
+      <span
+        title="Tool permission"
+        style={{ display: "inline-flex", color: "var(--color-text-tertiary)", marginInlineStart: 2 }}
+      >
+        <Icon name="shield-check" size={12} />
+      </span>
+      {PERMISSION_MODES.map((value) => (
+        <Chip
+          key={value}
+          active={session.mode === value}
+          title={PERMISSION_MODE_LABELS[value].hint}
+          onClick={() => session.changeMode(value)}
+        >
+          {PERMISSION_MODE_LABELS[value].label}
+        </Chip>
+      ))}
+      {model !== undefined && (
+        <span
+          style={{
+            marginInlineStart: "var(--space-2)",
+            fontStyle: "italic",
+            fontSize: "var(--font-size-control)",
+            letterSpacing: "var(--tracking-model)",
+            color: "var(--color-text-secondary)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {model}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * 一条 transcript item。content 是块数组——按块渲染，不压扁（这正是换协议的目的）。
+ * 用户指令走独立气泡、agent 输出走全宽文档式（R4-05 hybrid）。
+ */
+function Item(props: { item: TranscriptItem }) {
+  if (props.item.role === "user") {
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+        <div
+          style={{
+            width: "fit-content",
+            maxWidth: "var(--bubble-max-width)",
+            minWidth: 0,
+            padding: "9px 13px",
+            background: "var(--color-chat-card-bg)",
+            border: "1px solid var(--color-border-subtle)",
+            borderRadius: "var(--radius-bubble)",
+            fontSize: "var(--font-size-chat)",
+            lineHeight: "var(--line-height-bubble)",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {props.item.content.map((block, index) =>
+            block.type === "text" ? <span key={index}>{block.text}</span> : null,
+          )}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "grid", gap: "var(--space-2)", width: "100%", minWidth: 0 }}>
       {props.item.content.map((block, index) => {
         if (block.type === "text") {
-          return (
-            <p key={index} style={{ margin: 0, whiteSpace: "pre-wrap", lineHeight: "var(--line-height-chat)" }}>
-              {block.text}
-            </p>
-          );
-        }
-        if (block.type === "thinking") {
           return (
             <p
               key={index}
               style={{
                 margin: 0,
+                fontSize: "var(--font-size-chat)",
+                lineHeight: "var(--line-height-chat)",
                 whiteSpace: "pre-wrap",
-                fontSize: "var(--font-size-caption)",
-                color: "var(--color-text-tertiary)",
+                textWrap: "pretty",
               }}
             >
-              {block.thinking}
+              {block.text}
             </p>
+          );
+        }
+        // 思考与工具都是「过程」，默认只占一行——简洁为默认，细节可展开是下一刀
+        if (block.type === "thinking") {
+          return (
+            <ProcessLine key={index} icon="brain" tone="var(--color-info)">
+              {block.thinking.trim().split("\n")[0] ?? "Thinking"}
+            </ProcessLine>
           );
         }
         if (block.type === "toolCall") {
           return (
-            <code
-              key={index}
-              style={{ fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-micro)" }}
-            >
+            <ProcessLine key={index} icon="wrench" tone="var(--color-text-tertiary)" mono>
               {block.toolName}
-            </code>
+            </ProcessLine>
           );
         }
         return null;
       })}
-    </article>
+    </div>
   );
 }
 
-/** 本地起点快照：会话由 pi 持有，renderer 只需要一个空壳来启动归约器。 */
-function seedSnapshot(): SessionSnapshot {
-  const now = Date.now();
-  return {
-    id: "local",
-    cwd: ".",
-    createdAt: now,
-    updatedAt: now,
-    phase: "idle",
-    model: { provider: "pending", id: "pending" },
-    thinkingLevel: "off",
-    attached: true,
-    locked: false,
-    revision: 0,
-    transcript: [],
-    queuedSteer: [],
-    queuedSteerCount: 0,
-  };
+/** 过程行：图标 + 一行文字，坐在聊天面上，无填充无描边（设计系统 *Cards*） */
+function ProcessLine(props: {
+  icon: "brain" | "wrench";
+  tone: string;
+  mono?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <p
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        margin: 0,
+        minWidth: 0,
+        color: "var(--color-text-secondary)",
+        fontFamily: props.mono === true ? "var(--font-family-business)" : "var(--font-family-base)",
+        fontSize: "var(--font-size-control)",
+      }}
+    >
+      <span style={{ display: "inline-flex", flex: "0 0 auto", color: props.tone }}>
+        <Icon name={props.icon} size={13} strokeWidth={1.8} />
+      </span>
+      <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {props.children}
+      </span>
+    </p>
+  );
+}
+
+function Responding() {
+  return (
+    <p
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        width: "fit-content",
+        margin: 0,
+        color: "var(--color-text-secondary)",
+        fontSize: "var(--font-size-control)",
+      }}
+    >
+      <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
+        <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
+      </span>
+      Responding
+    </p>
+  );
+}
+
+/** 提示行：文字是主信号，颜色是第二信号 */
+function Notice(props: { tone?: "bad"; children: React.ReactNode }) {
+  return (
+    <p
+      role={props.tone === "bad" ? "alert" : undefined}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        margin: 0,
+        padding: "0 var(--space-2)",
+        color: props.tone === "bad" ? "var(--color-danger)" : "var(--color-text-secondary)",
+        fontSize: "var(--font-size-control)",
+      }}
+    >
+      {props.tone === "bad" && (
+        <span style={{ display: "inline-flex", flex: "0 0 auto" }}>
+          <Icon name="triangle-alert" size={13} strokeWidth={1.8} />
+        </span>
+      )}
+      {props.children}
+    </p>
+  );
+}
+
+/** 会话标题：第一条用户消息的第一行。会话存储落地后由 auto-titler 接管。 */
+export function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
+  for (const item of transcript) {
+    if (item.role !== "user") continue;
+    for (const block of item.content) {
+      if (block.type !== "text") continue;
+      const line = block.text.trim().split("\n")[0]?.trim();
+      if (line !== undefined && line !== "") return line.length > 60 ? `${line.slice(0, 60)}…` : line;
+    }
+  }
+  return null;
+}
+
+/** 复制整条对话（右图标条的动作）。按块拼，保留块级顺序。 */
+export function transcriptToText(transcript: readonly TranscriptItem[]): string {
+  return transcript
+    .map((item) => {
+      const body = item.content
+        .map((block) => {
+          if (block.type === "text") return block.text;
+          if (block.type === "thinking") return `[thinking] ${block.thinking}`;
+          if (block.type === "toolCall") return `[tool] ${block.toolName}`;
+          return "";
+        })
+        .filter((part) => part !== "")
+        .join("\n");
+      return `${item.role}:\n${body}`;
+    })
+    .join("\n\n");
+}
+
+function basename(path: string): string {
+  const parts = path.split("/").filter((part) => part !== "");
+  return parts[parts.length - 1] ?? path;
 }

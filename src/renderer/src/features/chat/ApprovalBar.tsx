@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { PermissionAnswer } from "@shared/permission";
+import { Icon } from "../../shell/Icon";
 
 /**
  * 工具审批条（R6-04 五屏之一）。设计系统的相关硬规则都落在这里：
+ *  - **浮起的卡，不是方盒子**：玻璃配方 + popover 阴影，落在 composer 正上方——
+ *    它比聊天面高一层，因为它要求一个回答才继续
  *  - **不用 accent 染底**：需要回答的信号交给标题文字与位置，不是一块蓝
  *  - 状态优先用文字，颜色是第二信号
  *  - **键盘优先**：打开即聚焦「Allow」，Esc 拒绝——R6-03 要求首版就能键盘应答
@@ -52,13 +55,19 @@ export function ApprovalBar(props: {
         display: "grid",
         gap: "var(--space-3)",
         padding: "var(--space-4)",
-        background: "var(--color-bg-panel)",
-        border: "1px solid var(--color-border-strong)",
-        borderRadius: "var(--radius-lg)",
-        boxShadow: "var(--shadow-composer)",
+        background: "var(--glass-bg)",
+        border: "1px solid var(--glass-border)",
+        borderRadius: "var(--radius-xl)",
+        // 比 composer 再抬一级的阴影：它是当前唯一挡路的东西
+        boxShadow: "var(--shadow-popover)",
+        WebkitBackdropFilter: "blur(var(--glass-blur))",
+        backdropFilter: "blur(var(--glass-blur))",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>
+        <span style={{ display: "inline-flex", color: "var(--color-text-secondary)" }}>
+          <Icon name="shield-check" size={14} />
+        </span>
         <strong style={{ fontSize: "var(--font-size-control)", fontWeight: 600 }}>
           Run {props.approval.toolName}?
         </strong>
@@ -120,8 +129,8 @@ function stringify(input: unknown): string {
 
 const codeStyle: React.CSSProperties = {
   padding: "var(--space-3)",
-  background: "var(--color-bg-muted)",
-  border: "1px solid var(--color-border-subtle)",
+  background: "var(--color-chat-muted-bg)",
+  border: 0,
   borderRadius: "var(--radius-md)",
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-micro)",
@@ -133,9 +142,9 @@ const codeStyle: React.CSSProperties = {
 const buttonStyle: React.CSSProperties = {
   height: "var(--control-height-md)",
   padding: "0 var(--space-4)",
-  background: "var(--color-bg-app)",
+  background: "var(--color-bg-muted)",
   color: "var(--color-text-primary)",
-  border: "1px solid var(--color-border-default)",
+  border: 0,
   borderRadius: "var(--radius-md)",
   font: "inherit",
   fontSize: "var(--font-size-control)",
@@ -147,5 +156,5 @@ const buttonStyle: React.CSSProperties = {
 const primaryStyle: React.CSSProperties = {
   background: "var(--color-accent)",
   color: "var(--color-accent-fg)",
-  borderColor: "var(--color-accent)",
+  fontWeight: "var(--weight-medium)",
 };

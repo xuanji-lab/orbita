@@ -1,62 +1,77 @@
-import { useSystemTheme } from "./useSystemTheme";
 import { useCallback, useEffect, useState } from "react";
-import { ChatView } from "./features/chat/ChatView";
-import { ProvidersView } from "./features/settings/ProvidersView";
+import { useSystemTheme } from "./useSystemTheme";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
+import { useChatSession } from "./features/chat/useChatSession";
+import { ChatView, sessionTitle, transcriptToText } from "./features/chat/ChatView";
+import { ProvidersView } from "./features/settings/ProvidersView";
+import { Sidebar } from "./shell/Sidebar";
+import { ActionRail } from "./shell/ActionRail";
 
 /**
- * 应用外壳。目前只有 provider 设置这一面 —— 契约先行：
- * shared 契约 → main store → IPC → UI，会话与聊天面随后续 PR 落地。
+ * App shell —— 设计系统的构图，不只是它的 token。
+ *
+ * 三层：**壁纸**（body）→ **layer 1 玻璃大卡**（`.layer`，app 的边界，侧栏也在里面）
+ * → **layer 2 中卡**（`.pane`，四边等距浮在大卡里，它的左边缘决定左栏宽度）。
+ * 两层画同一个 `--glass-bg`，深度是合成出来的；两层都 `border: 0`。
+ *
+ * 左右两条栏都没有自己的面：左栏 288px 是会话与工作区，右栏 32px 是会话动作，
+ * 都直接坐在 layer 1 上（设计系统 *Layout*：both sidebars are unbounded）。
  */
 export function App() {
   useSystemTheme();
   const [providers, setProviders] = useState<ProviderDto[]>([]);
-  const refresh = useCallback(async () => setProviders(await api.provider.list()), []);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const refresh = useCallback(async () => {
+    // 读不到就当没有 provider——真正的原因由设置面自己报（它有 error 行），
+    // 外壳不该因为一次 IPC 失败而白屏
+    try {
+      setProviders(await api.provider.list());
+    } catch {
+      setProviders([]);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  const session = useChatSession(providers);
+  const title = sessionTitle(session.transcript);
+  /** 右图标条只在有会话时出现——它承载的是「对这个会话做点什么」 */
+  const showRail = !settingsOpen && session.sessionId !== null;
+
   return (
-    <div
-      style={{
-        height: "100%",
-        overflowY: "auto",
-        display: "grid",
-        justifyItems: "center",
-        alignContent: "start",
-        gap: "var(--space-8)",
-        padding: "var(--space-8) var(--space-6)",
-      }}
-    >
-      <header style={{ display: "grid", justifyItems: "center", gap: "var(--space-2)" }}>
-        <h1
-          style={{
-            margin: 0,
-            fontFamily: "var(--font-family-brand)",
-            fontSize: "var(--font-size-heading)",
-            fontWeight: "var(--weight-regular)",
-          }}
-        >
-          orbita
-        </h1>
-        {/* 品牌标语保持中文，其余界面文案一律英文（设计系统内容规范） */}
-        <p
-          style={{
-            margin: 0,
-            fontFamily: "var(--text-slogan-family)",
-            fontSize: "var(--font-size-caption)",
-            letterSpacing: "var(--tracking-slogan)",
-            color: "var(--color-text-tertiary)",
-          }}
-        >
-          璇玑运转，诸事得序
-        </p>
-      </header>
+    <div className="shell">
+      <div className="layer">
+        <Sidebar
+          session={session}
+          title={title}
+          settingsOpen={settingsOpen}
+          onToggleSettings={() => setSettingsOpen((open) => !open)}
+        />
 
-      <ChatView providers={providers} />
+        <main className="pane">
+          {settingsOpen ? (
+            <div className="scroll" style={{ height: "100%", padding: "var(--space-6) var(--space-5)" }}>
+              <div style={{ maxWidth: 640, margin: "0 auto" }}>
+                <ProvidersView onChange={refresh} />
+              </div>
+            </div>
+          ) : (
+            <ChatView session={session} />
+          )}
+        </main>
 
-      <ProvidersView onChange={refresh} />
+        {showRail && (
+          <ActionRail
+            canCopy={session.transcript.length > 0}
+            onCopyTranscript={() =>
+              void navigator.clipboard.writeText(transcriptToText(session.transcript))
+            }
+          />
+        )}
+      </div>
     </div>
   );
 }
