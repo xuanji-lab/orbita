@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -115,6 +115,18 @@ describe("SessionStore", () => {
     await store.record(ID, userItem("x"));
     await store.remove(ID);
     assert.deepEqual(await readdir(join(dir, "sessions")), []);
+    assert.equal(await store.load(ID), null);
+  });
+
+  /**
+   * `remove()` 先删 transcript 后删 meta，为的是崩在两次 rm 之间时残留是**看得见**的那一种。
+   * 顺序本身没法从外面观测，所以这里验的是它想避免的后果：
+   * 一个没有 meta 的 .jsonl 既列不出来、也没有任何入口能删掉它。
+   */
+  test("没有 meta 的 .jsonl 是隐形的——列不出来，所以也删不掉", async () => {
+    await mkdir(join(dir, "sessions"), { recursive: true });
+    await writeFile(join(dir, "sessions", `${ID}.jsonl`), '{"id":"u1"}\n', "utf8");
+    assert.deepEqual(await store.list(), []);
     assert.equal(await store.load(ID), null);
   });
 

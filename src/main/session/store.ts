@@ -101,9 +101,16 @@ export class SessionStore {
     return { meta, transcript: await this.readLog(id) };
   }
 
+  /**
+   * 删一条会话。**先删 transcript，后删 meta**——顺序不是随意的：
+   * 两次 rm 之间崩了的话，
+   *   先删 meta：留下一个**列不出来也删不掉**的 .jsonl，永远占着盘；
+   *   先删 transcript：留下一条打得开但空的会话，用户看得见、能自己再删一次。
+   * 可见的残留优于隐形的残留。
+   */
   async remove(id: string): Promise<void> {
-    await rm(this.metaPath(id), { force: true });
     await rm(this.logPath(id), { force: true });
+    await rm(this.metaPath(id), { force: true });
   }
 
   private async readMeta(id: string): Promise<SessionMeta | null> {
