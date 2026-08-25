@@ -4,23 +4,29 @@
  */
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
+import type { Workspace } from "../../shared/workspace.ts";
 import { WorkspaceStore } from "./store.ts";
 
 export function registerWorkspaceIpc(store: WorkspaceStore): void {
-  ipcMain.handle(ipcChannels.workspaceCurrent, () => store.current());
+  ipcMain.handle(ipcChannels.workspaceList, () => store.list());
   ipcMain.handle(ipcChannels.workspaceDefault, () => WorkspaceStore.defaultPath());
 
-  ipcMain.handle(ipcChannels.workspaceChoose, async (event): Promise<string | null> => {
+  ipcMain.handle(ipcChannels.workspaceAdd, async (event): Promise<Workspace | null> => {
     const window = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      properties: ["openDirectory", "createDirectory"] as const,
+      defaultPath: WorkspaceStore.defaultPath(),
+    };
     const result = await (window
-      ? dialog.showOpenDialog(window, {
-          properties: ["openDirectory", "createDirectory"],
-          defaultPath: await store.current(),
-        })
-      : dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] }));
+      ? dialog.showOpenDialog(window, { ...options, properties: [...options.properties] })
+      : dialog.showOpenDialog({ ...options, properties: [...options.properties] }));
     const picked = result.canceled ? undefined : result.filePaths[0];
     if (picked === undefined) return null;
-    await store.set(picked);
-    return picked;
+    return store.add(picked);
   });
+
+  ipcMain.handle(ipcChannels.workspaceRename, (_event, id: string, name: string) =>
+    store.rename(id, name),
+  );
+  ipcMain.handle(ipcChannels.workspaceRemove, (_event, id: string) => store.remove(id));
 }

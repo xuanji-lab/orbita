@@ -22,9 +22,6 @@ export const ipcChannels = {
   agentSetMode: "agent:set-mode",
   agentAnswerPermission: "agent:answer-permission",
   agentEvent: "agent:event",
-  /** @deprecated 单个工作区时代的两条，消费者迁到 list/add 之后删 */
-  workspaceCurrent: "workspace:current",
-  workspaceChoose: "workspace:choose",
   workspaceList: "workspace:list",
   /** 打开原生目录选择器并加为工作区 */
   workspaceAdd: "workspace:add",

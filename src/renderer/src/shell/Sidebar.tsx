@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import type { ChatSession } from "../features/chat/useChatSession";
+import type { SessionMeta } from "@shared/session";
+import type { Workspace } from "@shared/workspace";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 
 /**
@@ -24,8 +26,16 @@ export function Sidebar(props: {
   onToggleSettings: () => void;
 }) {
   const { session } = props;
-  /** 高亮哪一条：在看历史就是那条，否则是活着的那条 */
-  const openId = session.archived?.meta.id ?? session.sessionId;
+  /** 高亮哪一条：设置面开着时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
+  const openId = props.settingsOpen ? null : (session.archived?.meta.id ?? session.sessionId);
+  /**
+   * 不属于任何工作区的会话。**也包括归属指向已移除工作区的那些**——
+   * 移除工作区不该让它的会话从界面上消失，它们只是回到 TASKS 下。
+   */
+  const known = new Set(session.workspaces.map((w) => w.id));
+  const loose = session.sessions.filter(
+    (m) => m.workspaceId === null || !known.has(m.workspaceId),
+  );
   return (
     <aside
       style={{
@@ -123,73 +133,38 @@ export function Sidebar(props: {
           <>
             <NodeHeader
               label="Workspaces"
-              addLabel="Choose a workspace folder"
+              addLabel="Add a workspace folder"
               addIcon="folder-plus"
-              onAdd={session.chooseWorkspace}
+              onAdd={session.addWorkspace}
             />
-            {session.workspace === null ? (
-              <Empty>No workspace yet. Choose the folder the agent may read.</Empty>
+            {session.workspaces.length === 0 ? (
+              <Empty>No workspace yet. Add the folder the agent may read.</Empty>
             ) : (
-              <div style={{ padding: "var(--space-2) 0" }}>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(0,1fr) 26px",
-                    alignItems: "center",
-                    gap: 2,
+              session.workspaces.map((workspace) => (
+                <WorkspaceGroup
+                  key={workspace.id}
+                  workspace={workspace}
+                  sessions={session.sessions.filter((m) => m.workspaceId === workspace.id)}
+                  openId={openId}
+                  liveId={session.sessionId}
+                  running={session.phase === "turn"}
+                  failed={session.error !== null}
+                  onNewTask={() => session.newTaskIn(workspace)}
+                  onRename={(name) => session.renameWorkspace(workspace.id, name)}
+                  onRemove={() => session.removeWorkspace(workspace.id)}
+                  onOpen={(id) => {
+                    if (props.settingsOpen) props.onToggleSettings();
+                    session.openSession(id);
                   }}
-                >
-                  <span
-                    title={session.workspace}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "24px minmax(0,1fr)",
-                      alignItems: "center",
-                      gap: "var(--space-2)",
-                      minHeight: 28,
-                    }}
-                  >
-                    <span
-                      style={{
-                        display: "grid",
-                        placeItems: "center",
-                        width: 24,
-                        height: 24,
-                        color: "var(--color-text-secondary)",
-                      }}
-                    >
-                      <Icon name="folder" size={14} strokeWidth={1.8} />
-                    </span>
-                    <strong
-                      style={{
-                        minWidth: 0,
-                        fontSize: "var(--font-size-control)",
-                        fontWeight: "var(--weight-semibold)",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {basename(session.workspace)}
-                    </strong>
-                  </span>
-                  {/* 这个 + 建的是「这个工作区里的任务」：cwd 按路径直接选好，
-                      与顶上那个「+ New task」（不属于任何工作区，落在兜底）区分开 */}
-                  <IconButton
-                    label="New task in this workspace"
-                    size={26}
-                    onClick={session.newTaskInWorkspace}
-                  >
-                    <Icon name="plus" size={14} />
-                  </IconButton>
-                </div>
-              </div>
+                  onDelete={(id) => session.removeSession(id)}
+                />
+              ))
             )}
 
             {/*
               TASKS 节点列的是**落盘的会话**。今天全部会话都挂在这里而不是挂到
-              上面的工作区下面——按 cwd 归属工作区是刀 B 的事，现在按路径猜属于哪个
-              工作区就是在提前编一个还不存在的模型（docs/plans/）。
+              **不属于任何工作区**的那些。这就是设计系统里 TASKS 与 WORKSPACES
+              两个节点的区别，也是「+ New task」与工作区那个「+」的区别。
             */}
             <div style={{ marginTop: "var(--space-3)" }}>
               <NodeHeader
@@ -198,16 +173,16 @@ export function Sidebar(props: {
                 addIcon="plus"
                 onAdd={session.newTask}
               />
-              {session.sessions.length === 0 ? (
+              {loose.length === 0 ? (
                 <Empty>No task yet. The one you start lands here.</Empty>
               ) : (
-                session.sessions.map((meta) => (
+                loose.map((meta) => (
                   <SessionRow
                     key={meta.id}
                     title={meta.title === "" ? "New task" : meta.title}
                     running={meta.id === session.sessionId && session.phase === "turn"}
                     failed={meta.id === session.sessionId && session.error !== null}
-                    active={!props.settingsOpen && meta.id === openId}
+                    active={meta.id === openId}
                     onClick={() => {
                       if (props.settingsOpen) props.onToggleSettings();
                       session.openSession(meta.id);
@@ -236,6 +211,149 @@ export function Sidebar(props: {
         onClick={props.onToggleSettings}
       />
     </aside>
+  );
+}
+
+/**
+ * 一个工作区，连同它自己的会话。
+ *
+ * 改名走**双击名字**：设计系统的纪律是克制，288px 的一行里再挂一个铅笔键
+ * 就开始堆图标了；tooltip 负责把这句话讲出来（*Tooltips carry the second half
+ * of the sentence*）。移除走两段式，和删会话一致。
+ */
+function WorkspaceGroup(props: {
+  workspace: Workspace;
+  sessions: SessionMeta[];
+  openId: string | null;
+  liveId: string | null;
+  running: boolean;
+  failed: boolean;
+  onNewTask: () => void;
+  onRename: (name: string) => void;
+  onRemove: () => void;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+
+  const commit = () => {
+    if (editing !== null) props.onRename(editing);
+    setEditing(null);
+  };
+
+  return (
+    <div
+      style={{ padding: "var(--space-2) 0" }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => {
+        setHover(false);
+        setArmed(false);
+      }}
+    >
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "24px minmax(0,1fr) auto 26px",
+          alignItems: "center",
+          gap: "var(--space-1)",
+          minHeight: 28,
+        }}
+      >
+        <span
+          style={{
+            display: "grid",
+            placeItems: "center",
+            width: 24,
+            height: 24,
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          <Icon name="folder" size={14} strokeWidth={1.8} />
+        </span>
+
+        {editing === null ? (
+          <strong
+            title={`${props.workspace.path} · double-click to rename`}
+            onDoubleClick={() => setEditing(props.workspace.name)}
+            style={{
+              minWidth: 0,
+              fontSize: "var(--font-size-control)",
+              fontWeight: "var(--weight-semibold)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              cursor: "default",
+            }}
+          >
+            {props.workspace.name}
+          </strong>
+        ) : (
+          <input
+            autoFocus
+            value={editing}
+            onChange={(event) => setEditing(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commit();
+              // Esc 放弃这次改名，不留一个半截名字
+              if (event.key === "Escape") setEditing(null);
+            }}
+            style={{
+              minWidth: 0,
+              width: "100%",
+              height: 22,
+              padding: "0 4px",
+              border: 0,
+              borderRadius: "var(--radius-xs)",
+              background: "var(--color-bg-panel)",
+              color: "var(--color-text-primary)",
+              fontFamily: "var(--font-family-base)",
+              fontSize: "var(--font-size-control)",
+              fontWeight: "var(--weight-semibold)",
+              outline: "none",
+              boxShadow: "var(--focus-ring)",
+            }}
+          />
+        )}
+
+        <IconButton
+          label={armed ? "Remove from the list? Click again." : "Remove from the list"}
+          title={
+            armed
+              ? "Click again to remove. The folder and its tasks stay — the tasks move to Tasks."
+              : "Remove from the list. The folder on disk is not touched."
+          }
+          size={20}
+          onClick={() => (armed ? props.onRemove() : setArmed(true))}
+          style={{
+            borderRadius: "var(--radius-xs)",
+            color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
+            opacity: hover || armed ? 1 : 0,
+            transition: "opacity var(--duration-instant) var(--ease-standard)",
+          }}
+        >
+          <Icon name="trash-2" size={11} />
+        </IconButton>
+
+        <IconButton label="New task in this workspace" size={26} onClick={props.onNewTask}>
+          <Icon name="plus" size={14} />
+        </IconButton>
+      </div>
+
+      {props.sessions.map((meta) => (
+        <SessionRow
+          key={meta.id}
+          title={meta.title === "" ? "New task" : meta.title}
+          running={meta.id === props.liveId && props.running}
+          failed={meta.id === props.liveId && props.failed}
+          active={meta.id === props.openId}
+          onClick={() => props.onOpen(meta.id)}
+          onDelete={() => props.onDelete(meta.id)}
+        />
+      ))}
+    </div>
   );
 }
 

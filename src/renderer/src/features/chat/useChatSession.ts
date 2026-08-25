@@ -11,6 +11,7 @@ import type { PendingApproval } from "./ApprovalBar";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ProviderDto } from "@shared/provider";
 import type { SessionDetail, SessionMeta } from "@shared/session";
+import type { Workspace } from "@shared/workspace";
 
 /**
  * 会话状态。**逻辑原样自 ChatView 上提**，一行未改语义——上提的唯一理由是
@@ -30,14 +31,19 @@ export interface ChatSession {
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
   approvals: PendingApproval[];
-  /** 侧栏列的那个工作区（落盘、跨会话）。今天只有一个，命名容器还没做。 */
-  workspace: string | null;
+  /** 侧栏列的工作区（落盘、跨会话）。 */
+  workspaces: Workspace[];
+  addWorkspace: () => void;
+  renameWorkspace: (id: string, name: string) => void;
+  removeWorkspace: (id: string) => void;
   /**
    * 这个任务实际跑在哪儿。**null = 没选，落在 `defaultCwd`**——
    * 工作区与「这一单用哪个目录」是两件事：New task 建的是不属于任何工作区的任务，
    * 点工作区的 + 建的才是这个工作区里的任务。
    */
   cwd: string | null;
+  /** 这个任务属于哪个工作区；与 cwd 永远同进同出 */
+  workspaceId: string | null;
   /** 没选工作区时的兜底（今天是 home）。UI 必须如实显示它，不能让它是个隐形默认。 */
   defaultCwd: string;
   /** 至少声明了一个模型的 provider——没有它就发不出消息 */
@@ -54,11 +60,10 @@ export interface ChatSession {
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
-  chooseWorkspace: () => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
-  /** 这个工作区里的新任务：cwd 按路径自动选好 */
-  newTaskInWorkspace: () => void;
+  /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
+  newTaskIn: (workspace: Workspace) => void;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
 }
 
@@ -73,10 +78,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   /** 排队中的工具审批。同一时刻可能有多个（并行工具调用），逐个应答。 */
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
-  const [workspace, setWorkspace] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [archived, setArchived] = useState<SessionDetail | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [defaultCwd, setDefaultCwd] = useState<string>("");
   const sessionRef = useRef<string | null>(null);
 
@@ -93,11 +99,16 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
 
   useEffect(refreshSessions, [refreshSessions]);
 
-  useEffect(() => {
+  const refreshWorkspaces = useCallback(() => {
     void api.workspace
-      .current()
-      .then(setWorkspace)
-      .catch(() => setWorkspace(null));
+      .list()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
+  }, []);
+
+  useEffect(refreshWorkspaces, [refreshWorkspaces]);
+
+  useEffect(() => {
     void api.workspace
       .default()
       .then(setDefaultCwd)
@@ -153,7 +164,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         if (target === "") throw new Error("Choose a workspace folder first");
         id = await api.agent.create({
           cwd: target,
-          workspaceId: null,
+          workspaceId,
           providerId: provider.id,
           modelId: provider.models.declared[0]?.id ?? "",
           mode,
@@ -169,7 +180,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase("idle");
     }
-  }, [draft, sessionId, usable, mode, cwd, defaultCwd, refreshSessions]);
+  }, [draft, sessionId, usable, mode, cwd, workspaceId, defaultCwd, refreshSessions]);
 
   const stop = useCallback(() => {
     if (sessionRef.current === null) return;
@@ -220,26 +231,54 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     [reset, refreshSessions],
   );
 
-  /** 不属于任何工作区的新任务：清掉 cwd，落在兜底 */
+  /** 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底 */
   const newTask = useCallback(() => {
     reset();
     setCwd(null);
+    setWorkspaceId(null);
   }, [reset]);
 
-  /** 这个工作区里的新任务：路径直接选好，用户不用再点一次 */
-  const newTaskInWorkspace = useCallback(() => {
-    reset();
-    setCwd(workspace);
-  }, [reset, workspace]);
+  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次 */
+  const newTaskIn = useCallback(
+    (workspace: Workspace) => {
+      reset();
+      setCwd(workspace.path);
+      setWorkspaceId(workspace.id);
+    },
+    [reset],
+  );
 
   /** 换工作区：当前会话的 cwd 已经固定，只能开新会话——UI 上说清楚，不让用户以为切了目录对话还跟着走。 */
-  const chooseWorkspace = useCallback(async () => {
-    const picked = await api.workspace.choose();
-    if (picked === null) return;
-    setWorkspace(picked);
-    setCwd(picked);
-    if (sessionRef.current !== null) reset();
-  }, [reset]);
+  /** 加一个工作区，并把下一条任务直接落在它里面——加完就想用，别让人再点一次 */
+  const addWorkspace = useCallback(() => {
+    void api.workspace.add().then((added) => {
+      if (added === null) return;
+      refreshWorkspaces();
+      reset();
+      setCwd(added.path);
+      setWorkspaceId(added.id);
+    });
+  }, [reset, refreshWorkspaces]);
+
+  const renameWorkspace = useCallback(
+    (id: string, name: string) => {
+      void api.workspace.rename(id, name).then(refreshWorkspaces);
+    },
+    [refreshWorkspaces],
+  );
+
+  /** 移出列表。**不动磁盘上的文件夹，也不删它的会话**——那些会话落回 TASKS 下 */
+  const removeWorkspace = useCallback(
+    (id: string) => {
+      void api.workspace.remove(id).then(() => {
+        refreshWorkspaces();
+        // 正在往这个工作区里开新任务的话，退回「不属于任何工作区」
+        setWorkspaceId((current) => (current === id ? null : current));
+        setCwd((current) => (workspaceId === id ? null : current));
+      });
+    },
+    [refreshWorkspaces, workspaceId],
+  );
 
   const changeMode = useCallback((next: PermissionMode) => {
     setMode(next);
@@ -261,8 +300,12 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     mode,
     changeMode,
     approvals,
-    workspace,
+    workspaces,
+    addWorkspace,
+    renameWorkspace,
+    removeWorkspace,
     cwd,
+    workspaceId,
     defaultCwd,
     usable,
     sessions,
@@ -271,9 +314,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     removeSession,
     send: () => void send(),
     stop,
-    chooseWorkspace: () => void chooseWorkspace(),
     newTask,
-    newTaskInWorkspace,
+    newTaskIn,
     answerApproval,
   };
 }

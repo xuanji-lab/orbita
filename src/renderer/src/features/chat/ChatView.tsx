@@ -225,6 +225,14 @@ function Pane(props: {
 function ComposerBar(props: { session: ChatSession }) {
   const { session } = props;
   const model = session.usable[0]?.models.declared[0]?.id;
+  // 有归属就显示**用户起的名字**，而不是路径末段——他改了名就该看见改后的
+  const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
+  const scope =
+    workspace !== undefined
+      ? workspace.name
+      : session.cwd === null
+        ? "Home"
+        : basename(session.cwd);
   return (
     <>
       {/*
@@ -234,9 +242,9 @@ function ComposerBar(props: { session: ChatSession }) {
       <Chip
         icon="folder"
         title={`${session.cwd ?? session.defaultCwd} · click to choose a folder`}
-        onClick={session.chooseWorkspace}
+        onClick={session.addWorkspace}
       >
-        {session.cwd === null ? "Home" : basename(session.cwd)}
+        {scope}
       </Chip>
       <span
         title="Tool permission"
