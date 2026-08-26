@@ -37,6 +37,7 @@ export const ipcChannels = {
   settingsSet: "settings:set",
   sessionList: "session:list",
   sessionLoad: "session:load",
+  sessionRename: "session:rename",
   sessionDelete: "session:delete",
 } as const;
 
