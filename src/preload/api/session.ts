@@ -12,5 +12,8 @@ export const sessionApi = {
   /** 读一条会话的元数据与 transcript；不存在返回 null */
   load: (id: string): Promise<SessionDetail | null> =>
     ipcRenderer.invoke(ipcChannels.sessionLoad, id),
+  /** 改名；空名字会退回从第一条用户消息推导 */
+  rename: (id: string, title: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionRename, id, title),
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.sessionDelete, id),
 };

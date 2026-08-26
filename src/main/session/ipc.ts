@@ -9,5 +9,8 @@ import type { SessionStore } from "./store.ts";
 export function registerSessionIpc(store: SessionStore): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
   ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.load(id));
+  ipcMain.handle(ipcChannels.sessionRename, (_event, id: string, title: string) =>
+    store.rename(id, title),
+  );
   ipcMain.handle(ipcChannels.sessionDelete, (_event, id: string) => store.remove(id));
 }

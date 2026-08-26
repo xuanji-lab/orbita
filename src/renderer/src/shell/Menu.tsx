@@ -12,6 +12,13 @@ export interface MenuItem {
   /** 当前项。用 check 图标标出来，不用染色——状态优先图标与文字 */
   checked?: boolean;
   disabled?: boolean;
+  /** 破坏性动作：danger 色。**只给真的会丢东西的那一项** */
+  danger?: boolean;
+  /**
+   * 选中之后菜单不关。给两段式确认用——「删除…」先把菜单换成一组确认项，
+   * 第二下才真删。设计系统要求「先讲后果再动作」，而本分支还没有 Modal。
+   */
+  keepOpen?: boolean;
   onSelect?: () => void;
 }
 
@@ -97,7 +104,8 @@ export function Menu(props: {
   };
 
   const choose = (item: MenuItem) => {
-    close();
+    if (item.keepOpen !== true) close();
+    else setActive(0);
     item.onSelect?.();
   };
 
@@ -207,13 +215,21 @@ function MenuRow(props: {
         border: 0,
         borderRadius: "var(--radius-sm)",
         ...selectionStyle({ selected: item.checked, hover: props.cursor, disabled }),
+        // danger 只改文字色，不染底——底是选择态的地盘（selection.ts）
+        ...(item.danger === true && !disabled ? { color: "var(--color-danger)" } : null),
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         textAlign: "left",
         cursor: disabled ? "not-allowed" : "pointer",
       }}
     >
-      <span style={{ display: "grid", placeItems: "center", color: "var(--color-text-secondary)" }}>
+      <span
+        style={{
+          display: "grid",
+          placeItems: "center",
+          color: item.danger === true ? "var(--color-danger)" : "var(--color-text-secondary)",
+        }}
+      >
         {item.checked === true ? (
           <Icon name="check" size={13} strokeWidth={2} />
         ) : item.icon !== undefined ? (

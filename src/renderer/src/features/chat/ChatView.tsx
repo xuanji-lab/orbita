@@ -1,8 +1,11 @@
+import { useState } from "react";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { Composer } from "../../shell/Composer";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
+import { InlineName } from "../../shell/InlineName";
+import { IconButton } from "../../shell/IconButton";
 import { Icon } from "../../shell/Icon";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle } from "@shared/session";
@@ -104,6 +107,8 @@ export function ChatView(props: { session: ChatSession }) {
       title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
       badge={openId.slice(0, 6)}
       badgeTitle={openId}
+      // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
+      onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
       footer={
         <>
           {notices}
@@ -130,9 +135,12 @@ function Pane(props: {
   title: string;
   badge: string;
   badgeTitle: string;
+  /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
+  onRename?: ((title: string) => void) | undefined;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
+  const [editing, setEditing] = useState(false);
   return (
     <div
       style={{
@@ -154,18 +162,39 @@ function Pane(props: {
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
-        <strong
+        <InlineName
+          editing={editing}
+          value={props.title}
+          onCommit={(value) => {
+            setEditing(false);
+            props.onRename?.(value);
+          }}
+          onCancel={() => setEditing(false)}
           style={{
-            minWidth: 0,
             fontSize: "var(--font-size-title)",
             fontWeight: "var(--weight-bold)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            height: 30,
           }}
         >
-          {props.title}
-        </strong>
+          <strong
+            style={{
+              minWidth: 0,
+              fontSize: "var(--font-size-title)",
+              fontWeight: "var(--weight-bold)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {props.title}
+          </strong>
+        </InlineName>
+        {/* 铅笔夹在名字与 id 之间：它属于名字，不属于这条会话的其它动作 */}
+        {props.onRename !== undefined && !editing && (
+          <IconButton label="Rename task" size={24} onClick={() => setEditing(true)}>
+            <Icon name="pencil-line" size={13} />
+          </IconButton>
+        )}
         <span
           title={props.badgeTitle}
           style={{

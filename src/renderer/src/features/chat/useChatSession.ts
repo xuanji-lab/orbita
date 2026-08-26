@@ -65,6 +65,8 @@ export interface ChatSession {
    */
   readOnly: boolean;
   openSession: (id: string) => void;
+  /** 改名。空名字会退回从第一条用户消息推导——侧栏不留看不见的行 */
+  renameSession: (id: string, title: string) => void;
   removeSession: (id: string) => void;
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
@@ -253,6 +255,22 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       );
   }, []);
 
+  const renameSession = useCallback((id: string, title: string) => {
+    void api.session
+      .rename(id, title)
+      .then(() => api.session.list())
+      .then((list) => {
+        setSessions(list);
+        // **不做乐观更新**：改成空名字时后端会退回推导，猜不出来。
+        // 正开着的就是这条时，标题栏也要跟着变，所以从刷新回来的真值里取。
+        setOpened((current) => {
+          if (current === null) return current;
+          const fresh = list.find((meta) => meta.id === current.id);
+          return fresh ?? current;
+        });
+      });
+  }, []);
+
   const removeSession = useCallback(
     (id: string) => {
       void api.session.remove(id).then(() => {
@@ -361,6 +379,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读
     readOnly: opened !== null && opened.piSessionFile === null && sessionId === null,
     openSession,
+    renameSession,
     removeSession,
     send: () => void send(),
     stop,

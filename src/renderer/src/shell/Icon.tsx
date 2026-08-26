@@ -7,9 +7,11 @@ import check from "../../../../Orbita Design System/assets/icons/lucide/check.sv
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
+import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
+import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
@@ -19,6 +21,7 @@ import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/sh
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
+import x from "../../../../Orbita Design System/assets/icons/lucide/x.svg?raw";
 import wrench from "../../../../Orbita Design System/assets/icons/lucide/wrench.svg?raw";
 
 /**
@@ -37,10 +40,12 @@ const ICONS = {
   "chevron-down": chevronDown,
   copy,
   cpu,
+  "ellipsis-vertical": ellipsisVertical,
   folder,
   "folder-plus": folderPlus,
   "loader-circle": loaderCircle,
   "panel-right": panelRight,
+  "pencil-line": pencilLine,
   plus,
   settings,
   "shield-check": shieldCheck,
@@ -50,6 +55,7 @@ const ICONS = {
   "triangle-alert": triangleAlert,
   workflow,
   wrench,
+  x,
 } as const;
 
 export type IconName = keyof typeof ICONS;

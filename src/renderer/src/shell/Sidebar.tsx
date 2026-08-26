@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { selectionStyle } from "./selection";
+import { InlineName } from "./InlineName";
+import { Menu, type MenuItem } from "./Menu";
 import type { ChatSession } from "../features/chat/useChatSession";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -157,6 +159,7 @@ export function Sidebar(props: {
                     if (props.settingsOpen) props.onToggleSettings();
                     session.openSession(id);
                   }}
+                  onRenameTask={(id, title) => session.renameSession(id, title)}
                   onDelete={(id) => session.removeSession(id)}
                 />
               ))
@@ -188,6 +191,7 @@ export function Sidebar(props: {
                       if (props.settingsOpen) props.onToggleSettings();
                       session.openSession(meta.id);
                     }}
+                    onRename={(title) => session.renameSession(meta.id, title)}
                     onDelete={() => session.removeSession(meta.id)}
                   />
                 ))
@@ -233,6 +237,8 @@ function WorkspaceGroup(props: {
   onRename: (name: string) => void;
   onRemove: () => void;
   onOpen: (id: string) => void;
+  /** 改**会话**的名字。工作区自己的改名是上面那个 `onRename` */
+  onRenameTask: (id: string, title: string) => void;
   onDelete: (id: string) => void;
 }) {
   const [hover, setHover] = useState(false);
@@ -351,6 +357,7 @@ function WorkspaceGroup(props: {
           failed={meta.id === props.liveId && props.failed}
           active={meta.id === props.openId}
           onClick={() => props.onOpen(meta.id)}
+          onRename={(title) => props.onRenameTask(meta.id, title)}
           onDelete={() => props.onDelete(meta.id)}
         />
       ))}
@@ -476,9 +483,10 @@ function NavRow(props: {
 /**
  * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**。
  *
- * 删除键是**两段式**：第一下只是「举起」（变成 danger 色 + 问一句），第二下才真删，
- * 鼠标移开自动放下。设计系统要求「先讲后果再动作」，而本分支还没有 Modal——
- * 两段式是不引入弹窗又不让人误删的最小做法。
+ * 右边是三个点，而不是一排图标。设计系统的纪律是克制，288px 的一行挂不下
+ * 改名 / 删除 / 导出 / 置顶 / 转移 / 归档；把它们收进菜单，行上只留一个入口。
+ * **删除在菜单里仍然是两段式**（选「Delete task…」→ 菜单换成确认项），
+ * 因为「先讲后果再动作」不能因为换了容器就省掉。
  */
 function SessionRow(props: {
   title: string;
@@ -486,47 +494,99 @@ function SessionRow(props: {
   failed: boolean;
   active: boolean;
   onClick: () => void;
+  onRename: (title: string) => void;
   onDelete: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const [armed, setArmed] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const status = props.running
     ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
     : props.failed
       ? { icon: "triangle-alert" as const, tone: "var(--color-danger)", label: "Failed", spin: false }
       : { icon: "check" as const, tone: "var(--color-text-tertiary)", label: "Idle", spin: false };
+
+  const items: MenuItem[] = confirming
+    ? [
+        { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setConfirming(false) },
+        {
+          id: "confirm",
+          label: "Delete permanently",
+          icon: "trash-2",
+          danger: true,
+          onSelect: () => {
+            setConfirming(false);
+            props.onDelete();
+          },
+        },
+      ]
+    : [
+        { id: "rename", label: "Rename", icon: "pencil-line", onSelect: () => setEditing(true) },
+        {
+          id: "delete",
+          label: "Delete task…",
+          icon: "trash-2",
+          danger: true,
+          keepOpen: true,
+          onSelect: () => setConfirming(true),
+        },
+      ];
+
   return (
     <div
       style={{ display: "flex", alignItems: "center", gap: 2 }}
       onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => {
-        setHover(false);
-        setArmed(false);
-      }}
+      onMouseLeave={() => setHover(false)}
     >
-      <NavRow
-        icon={status.icon}
-        label={props.title}
-        tone={status.tone}
-        spin={status.spin}
-        iconTitle={status.label}
-        active={props.active}
-        onClick={props.onClick}
-        style={{ flex: 1, minWidth: 0 }}
+      {editing ? (
+        <span style={{ flex: 1, minWidth: 0, padding: "var(--space-1) var(--space-1)" }}>
+          <InlineName
+            editing
+            value={props.title}
+            onCommit={(value) => {
+              setEditing(false);
+              props.onRename(value);
+            }}
+            onCancel={() => setEditing(false)}
+            style={{ height: 22, fontSize: "var(--font-size-control)" }}
+          >
+            {null}
+          </InlineName>
+        </span>
+      ) : (
+        <NavRow
+          icon={status.icon}
+          label={props.title}
+          tone={status.tone}
+          spin={status.spin}
+          iconTitle={status.label}
+          active={props.active}
+          onClick={props.onClick}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+      )}
+      <Menu
+        items={items}
+        align="end"
+        trigger={({ open, toggle }) => (
+          <IconButton
+            label="Task actions"
+            size={20}
+            onClick={() => {
+              setConfirming(false);
+              toggle();
+            }}
+            style={{
+              borderRadius: "var(--radius-xs)",
+              color: open ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+              opacity: hover || open ? 1 : 0,
+              transition: "opacity var(--duration-instant) var(--ease-standard)",
+            }}
+          >
+            <Icon name="ellipsis-vertical" size={13} />
+          </IconButton>
+        )}
       />
-      <IconButton
-        label={armed ? "Delete this task? Click again." : "Delete task"}
-        size={20}
-        onClick={() => (armed ? props.onDelete() : setArmed(true))}
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
-          opacity: hover || armed ? 1 : 0,
-          transition: "opacity var(--duration-instant) var(--ease-standard)",
-        }}
-      >
-        <Icon name="trash-2" size={11} />
-      </IconButton>
     </div>
   );
 }

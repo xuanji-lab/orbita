@@ -72,6 +72,18 @@ export class SessionStore {
     await writeJsonAtomic(this.metaPath(id), patch);
   }
 
+  /**
+   * 改名。**改成空名字就退回推导**——侧栏里一行看不见的东西比一个坏名字更糟，
+   * 用户会以为会话丢了（工作区改名走的是同一条规矩：空名退回路径末段）。
+   */
+  async rename(id: string, title: string): Promise<void> {
+    const meta = await this.readMeta(id);
+    if (meta === null) return;
+    const wanted = deriveSessionTitle(title);
+    const next = wanted !== "" ? wanted : derivedFrom(await this.readLog(id));
+    await writeJsonAtomic(this.metaPath(id), { ...meta, title: next });
+  }
+
   /** 记住 pi 这一次用的那份 session 文件——没有它，这条会话下次就只能读不能续 */
   async setPiSessionFile(id: string, piSessionFile: string | null): Promise<void> {
     const meta = await this.readMeta(id);
@@ -150,4 +162,17 @@ export class SessionStore {
     }
     return items;
   }
+}
+
+/** 从记录里推导标题：第一条用户消息的第一行。改名清空时退回它。 */
+function derivedFrom(transcript: TranscriptItem[]): string {
+  for (const item of transcript) {
+    if (item.role !== "user") continue;
+    for (const block of item.content) {
+      if (block.type !== "text") continue;
+      const title = deriveSessionTitle(block.text);
+      if (title !== "") return title;
+    }
+  }
+  return "";
 }
