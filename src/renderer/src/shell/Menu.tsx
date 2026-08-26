@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
+import { selectionStyle } from "./selection";
 
 export interface MenuItem {
   id: string;
@@ -87,6 +88,8 @@ export function Menu(props: {
   }, [open, close]);
 
   const enabled = props.items.filter((item) => item.disabled !== true);
+  /** 打开时光标落在**当前项**上。落在第一项会让人以为选中的是第一项。 */
+  const cursorAtChecked = () => Math.max(0, enabled.findIndex((item) => item.checked === true));
 
   const move = (delta: number) => {
     if (enabled.length === 0) return;
@@ -104,7 +107,7 @@ export function Menu(props: {
         {props.trigger({
           open,
           toggle: () => {
-            setActive(0);
+            setActive(cursorAtChecked());
             setOpen((value) => !value);
           },
         })}
@@ -162,7 +165,7 @@ export function Menu(props: {
               <MenuRow
                 key={item.id}
                 item={item}
-                active={enabled[active]?.id === item.id}
+                cursor={enabled[active]?.id === item.id}
                 onHover={() => {
                   const index = enabled.findIndex((candidate) => candidate.id === item.id);
                   if (index >= 0) setActive(index);
@@ -179,7 +182,8 @@ export function Menu(props: {
 
 function MenuRow(props: {
   item: MenuItem;
-  active: boolean;
+  /** 键盘 / 鼠标的停留位置。与「选中」是两件事——见 selection.ts */
+  cursor: boolean;
   onHover: () => void;
   onSelect: () => void;
 }) {
@@ -202,15 +206,11 @@ function MenuRow(props: {
         padding: "var(--space-1) var(--space-2)",
         border: 0,
         borderRadius: "var(--radius-sm)",
-        // hover / 键盘停留是同一个中性填充——它们是同一件事
-        background: props.active && !disabled ? "var(--row-hover-bg)" : "transparent",
-        // 玻璃上的禁用态用实色 tertiary，不用 opacity
-        color: disabled ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
+        ...selectionStyle({ selected: item.checked, hover: props.cursor, disabled }),
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         textAlign: "left",
         cursor: disabled ? "not-allowed" : "pointer",
-        transition: "var(--transition-hover)",
       }}
     >
       <span style={{ display: "grid", placeItems: "center", color: "var(--color-text-secondary)" }}>

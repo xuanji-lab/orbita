@@ -46,7 +46,7 @@ export function IconButton(props: {
         background: active
           ? "var(--color-mode-active-bg)"
           : hover && !disabled
-            ? "var(--color-bg-hover)"
+            ? "var(--option-hover-bg)"
             : props.variant === "soft"
               ? "var(--color-bg-muted)"
               : "transparent",

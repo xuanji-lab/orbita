@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
+import { selectionStyle } from "./selection";
 import type { ChatSession } from "../features/chat/useChatSession";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -405,7 +406,7 @@ function NodeHeader(props: {
  * 侧栏里的一行导航。**会话行、设置 tab、Archived、Settings 全都是它**——
  * 它们本来就是一回事：前导 13px 图标槽 + 一行文字，整条可点（不是只有图标可点）。
  *
- * hover 与选中都走 `--row-hover-bg` / `--row-active-bg`，两个值在 styles.css
+ * hover 与选中都走 `--option-hover-bg` / `--option-active-bg`，两个值在 styles.css
  * 里一处定义，选中态的两个候选与取舍也写在那儿。
  */
 function NavRow(props: {
@@ -444,19 +445,11 @@ function NavRow(props: {
         padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)",
         border: 0,
         borderRadius: "var(--radius-sm)",
-        background: props.active
-          ? "var(--row-active-bg)"
-          : hover && clickable
-            ? "var(--row-hover-bg)"
-            : "transparent",
-        // 玻璃上的禁用态用实色 tertiary，不用 opacity（设计系统 *Hover, press, disabled*）
-        color: disabled ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
+        ...selectionStyle({ selected: props.active, hover: hover && clickable, disabled }),
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
-        fontWeight: props.active ? "var(--weight-semibold)" : "var(--weight-regular)",
         textAlign: "left",
         cursor: disabled ? "not-allowed" : clickable ? "pointer" : "default",
-        transition: "var(--transition-hover)",
         ...props.style,
       }}
     >
@@ -560,7 +553,11 @@ function basename(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-/** 模式选择：选中用 mode-active（明主题蓝、暗主题黄），未选中是纯文字 */
+/**
+ * 模式选择。**不走 `selection.ts` 那条通用规则**——设计系统 readme 点名了它：
+ * 「the selected mode reads blue on the light theme and yellow on the dark」，
+ * 它的选中是 accent **文字**，不是 accent 底 + 墨色字。
+ */
 function ModeChip(props: {
   icon: IconName;
   active?: boolean;
@@ -593,7 +590,7 @@ function ModeChip(props: {
         background: active
           ? "var(--color-mode-active-bg)"
           : hover && !disabled
-            ? "var(--color-bg-hover)"
+            ? "var(--option-hover-bg)"
             : "transparent",
         // 玻璃上的禁用态用实色 tertiary，不用 opacity
         color: active

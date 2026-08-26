@@ -42,7 +42,7 @@ export function Chip(props: {
         background: active
           ? "var(--color-mode-active-bg)"
           : hover && !disabled
-            ? "var(--color-bg-hover)"
+            ? "var(--option-hover-bg)"
             : "transparent",
         color: active
           ? "var(--color-mode-active-fg)"
