@@ -22,6 +22,8 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   ...patch,
   workspaceId: patch.workspaceId ?? null,
   piSessionFile: patch.piSessionFile ?? null,
+  pinned: patch.pinned ?? false,
+  archived: patch.archived ?? false,
 });
 
 const userItem = (text: string, timestamp = 2000): TranscriptItem => ({

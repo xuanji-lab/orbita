@@ -60,6 +60,8 @@ beforeEach(async () => {
     cwd: "/repo",
     workspaceId: null,
     piSessionFile: null,
+    pinned: false,
+    archived: false,
     providerId: "zai",
     modelId: "glm-5.3",
     mode: "plan",

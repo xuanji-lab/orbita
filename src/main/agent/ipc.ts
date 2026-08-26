@@ -60,6 +60,8 @@ export function registerAgentIpc(
           cwd: input.cwd,
           workspaceId: input.workspaceId,
           piSessionFile,
+          pinned: false,
+          archived: false,
           providerId: input.providerId,
           modelId: input.modelId,
           mode: input.mode,

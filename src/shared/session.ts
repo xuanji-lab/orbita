@@ -40,6 +40,10 @@ export interface SessionMeta {
    * 本字段落地之前存的会话、或 pi 那份被删了的，都是 null。
    */
   piSessionFile: string | null;
+  /** 置顶。列表里排在最前，与 updatedAt 无关 */
+  pinned: boolean;
+  /** 归档。从主列表里移走，收进侧栏底部的 Archived——**不是删除** */
+  archived: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -97,9 +101,81 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     workspaceId: typeof value["workspaceId"] === "string" ? value["workspaceId"] : null,
     // 缺 piSessionFile 的会话只能读不能续——界面要如实说出来
     piSessionFile: typeof value["piSessionFile"] === "string" ? value["piSessionFile"] : null,
+    // 两个开关都**默认关**：老会话不该因为加了字段就突然被置顶或藏起来
+    pinned: value["pinned"] === true,
+    archived: value["archived"] === true,
     // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
+}
+
+/**
+ * 会话列表的排序：**置顶的在前，其余按最近活动倒序**。
+ *
+ * 抽成函数是因为它有两个消费者（主进程的 `list()` 与渲染层重排后的列表），
+ * 两处排法不一致会让同一条会话在刷新前后跳位置。
+ */
+export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
+  return [...sessions].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return b.updatedAt - a.updatedAt;
+  });
+}
+
+/** 机器事实用 ISO 8601 UTC：无歧义、可测、与设计系统「mono for machine facts」一致。 */
+function iso(timestamp: number): string {
+  return new Date(timestamp).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/**
+ * transcript → Markdown。**导出与「复制整条对话」共用它**——
+ * 两处各写一份的话，导出的和复制的会长得不一样，而用户以为是同一个东西。
+ *
+ * 思考与工具调用**保留但标出来**：导出是给人看的存档，把过程抹掉就没法追溯了
+ * （设计系统：用户需要的是「知道 agent 在干嘛」与可追溯）。
+ */
+export function transcriptToMarkdown(
+  transcript: readonly TranscriptItem[],
+  meta?: SessionMeta,
+): string {
+  const parts: string[] = [];
+  if (meta !== undefined) {
+    parts.push(`# ${meta.title === "" ? "Untitled task" : meta.title}`);
+    parts.push(
+      [
+        `- Folder: \`${meta.cwd}\``,
+        `- Model: \`${meta.providerId} / ${meta.modelId}\``,
+        `- Permission: \`${meta.mode}\``,
+        `- Created: \`${iso(meta.createdAt)}\``,
+        `- Updated: \`${iso(meta.updatedAt)}\``,
+      ].join("\n"),
+    );
+    parts.push("---");
+  }
+
+  for (const item of transcript) {
+    const body: string[] = [];
+    for (const block of item.content) {
+      if (block.type === "text") body.push(block.text.trim());
+      else if (block.type === "thinking") {
+        // 用引用块：读起来是「旁白」，而不是它说出口的话
+        body.push(
+          block.thinking
+            .trim()
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n"),
+        );
+      } else if (block.type === "toolCall") {
+        body.push(`\`\`\`json\n${JSON.stringify({ tool: block.toolName, input: block.input }, null, 2)}\n\`\`\``);
+      }
+    }
+    if (body.length === 0) continue;
+    parts.push(`**${item.role === "user" ? "User" : "Assistant"}**`);
+    parts.push(body.join("\n\n"));
+  }
+
+  return `${parts.join("\n\n")}\n`;
 }

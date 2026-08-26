@@ -1,6 +1,13 @@
-import { deepStrictEqual, strictEqual } from "node:assert/strict";
+import { deepStrictEqual, doesNotMatch, match, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { deriveSessionTitle, parseSessionMeta, SESSION_TITLE_MAX } from "./session.ts";
+import {
+  deriveSessionTitle,
+  parseSessionMeta,
+  SESSION_TITLE_MAX,
+  sortSessions,
+  transcriptToMarkdown,
+  type SessionMeta,
+} from "./session.ts";
 
 const valid = {
   id: "a7f3c1d2",
@@ -8,6 +15,8 @@ const valid = {
   cwd: "/Users/wafo/repo/orbita-lab",
   workspaceId: null,
   piSessionFile: null,
+  pinned: false,
+  archived: false,
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "manual",
@@ -92,5 +101,81 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, workspaceId: undefined })?.workspaceId, null);
     strictEqual(parseSessionMeta({ ...valid, workspaceId: 42 })?.workspaceId, null);
     strictEqual(parseSessionMeta({ ...valid, workspaceId: "w1" })?.workspaceId, "w1");
+  });
+});
+
+describe("sortSessions", () => {
+  const at = (id: string, updatedAt: number, pinned = false): SessionMeta => ({
+    ...valid,
+    mode: "manual",
+    id,
+    updatedAt,
+    pinned,
+  });
+
+  it("置顶的在前，其余按最近活动倒序", () => {
+    const sorted = sortSessions([at("a", 3), at("b", 1, true), at("c", 5), at("d", 4, true)]);
+    deepStrictEqual(sorted.map((s) => s.id), ["d", "b", "c", "a"]);
+  });
+
+  it("不改原数组", () => {
+    const input = [at("a", 1), at("b", 2)];
+    sortSessions(input);
+    deepStrictEqual(input.map((s) => s.id), ["a", "b"]);
+  });
+});
+
+describe("transcriptToMarkdown", () => {
+  const user = {
+    id: "u1",
+    role: "user" as const,
+    content: [{ type: "text" as const, text: "重做外壳" }],
+    timestamp: 1,
+  };
+  const assistant = {
+    id: "a1",
+    role: "assistant" as const,
+    content: [
+      { type: "thinking" as const, thinking: "先读模板\n再看 token" },
+      { type: "text" as const, text: "好的" },
+      { type: "toolCall" as const, toolCallId: "t1", toolName: "read", input: { path: "a.css" } },
+    ],
+    model: { provider: "zai", id: "glm-5.3" },
+    timestamp: 2,
+    status: "complete" as const,
+    stopReason: "stop" as const,
+  };
+
+  it("带 meta 时出标题与机器事实", () => {
+    const md = transcriptToMarkdown([user], { ...valid, mode: "manual", title: "重做外壳" });
+    match(md, /^# 重做外壳\n/);
+    match(md, /- Folder: `\/Users\/wafo\/repo\/orbita-lab`/);
+    match(md, /- Model: `zai \/ glm-5\.3`/);
+    // ISO 8601 UTC：无歧义、可测
+    match(md, /- Created: `1970-01-01T00:00:01Z`/);
+  });
+
+  it("不带 meta 时只出正文——「复制整条对话」用的就是这一支", () => {
+    const md = transcriptToMarkdown([user]);
+    doesNotMatch(md, /^#/);
+    match(md, /\*\*User\*\*\n\n重做外壳/);
+  });
+
+  // 导出是给人看的存档，把过程抹掉就没法追溯了
+  it("思考进引用块，工具调用进 json 代码块，都不丢", () => {
+    const md = transcriptToMarkdown([assistant]);
+    match(md, /> 先读模板\n> 再看 token/);
+    match(md, /```json/);
+    match(md, /"tool": "read"/);
+    match(md, /"path": "a\.css"/);
+  });
+
+  it("空内容的条目不留一个孤零零的角色标题", () => {
+    const empty = { id: "x", role: "user" as const, content: [], timestamp: 1 };
+    doesNotMatch(transcriptToMarkdown([empty]), /\*\*User\*\*/);
+  });
+
+  it("结尾带换行——文本文件该以换行结束", () => {
+    match(transcriptToMarkdown([user]), /\n$/);
   });
 });

@@ -38,6 +38,12 @@ export const ipcChannels = {
   sessionList: "session:list",
   sessionLoad: "session:load",
   sessionRename: "session:rename",
+  sessionPin: "session:pin",
+  sessionArchive: "session:archive",
+  /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
+  sessionMove: "session:move",
+  /** 导出成 Markdown，走原生保存对话框；取消返回 null */
+  sessionExport: "session:export",
   sessionDelete: "session:delete",
 } as const;
 
