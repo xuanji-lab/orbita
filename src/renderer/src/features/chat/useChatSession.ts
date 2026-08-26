@@ -165,6 +165,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         id = await api.agent.create({
           cwd: target,
           workspaceId,
+          resume: null,
           providerId: provider.id,
           modelId: provider.models.declared[0]?.id ?? "",
           mode,

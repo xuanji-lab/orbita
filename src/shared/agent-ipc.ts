@@ -72,6 +72,12 @@ export type AgentCommand =
       };
       modelId: string;
       mode: PermissionMode;
+      /**
+       * pi 把自己的 session 文件放在哪。**由主进程给**——runtime 不做路径策略决定。
+       */
+      piSessionDir: string;
+      /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
+      piSessionFile?: string;
     }
   | { type: "submit"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
@@ -85,7 +91,8 @@ export type AgentCommand =
 export type AgentEvent =
   | { type: "ready" }
   | { type: "builtins"; providers: BuiltinProvider[] }
-  | { type: "created"; sessionId: string }
+  /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
+  | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
   | { type: "phase"; sessionId: string; phase: SessionPhase }
   /** 工具执行前的请示。UI 要显示它并等用户回答（三档模式见 shared/permission.ts） */
@@ -100,6 +107,11 @@ export type AgentEvent =
 
 export interface CreateAgentInput {
   cwd: string;
+  /**
+   * 续一条已有会话：**沿用它的 id**（新消息接着写进同一份记录），
+   * 并把 pi 自己那份 session 文件还给 pi。null = 开新的一条。
+   */
+  resume: { sessionId: string; piSessionFile: string } | null;
   /** 这条会话属于哪个工作区；null = 不属于任何工作区（侧栏 TASKS 节点下那些） */
   workspaceId: string | null;
   providerId: string;

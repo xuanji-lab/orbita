@@ -32,6 +32,14 @@ export interface SessionMeta {
   modelId: string;
   /** 最后一次用的权限档。存下来是为了重开这条会话时不会静默换档。 */
   mode: PermissionMode;
+  /**
+   * pi 自己那份 session 文件的路径；**null = 这条会话只能读不能续**。
+   *
+   * 续会话不是我们把历史重讲一遍，而是把 pi 自己的本子还给它
+   * （`SessionManager.open`）——理由与被否决的方案见 guideline §四。
+   * 本字段落地之前存的会话、或 pi 那份被删了的，都是 null。
+   */
+  piSessionFile: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -87,6 +95,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     modelId,
     // 缺 workspaceId 的是刀 B 之前存的会话：它们不属于任何工作区，落到 TASKS 下
     workspaceId: typeof value["workspaceId"] === "string" ? value["workspaceId"] : null,
+    // 缺 piSessionFile 的会话只能读不能续——界面要如实说出来
+    piSessionFile: typeof value["piSessionFile"] === "string" ? value["piSessionFile"] : null,
     // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
     createdAt,

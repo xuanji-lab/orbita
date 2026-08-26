@@ -21,6 +21,7 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   updatedAt: 1000,
   ...patch,
   workspaceId: patch.workspaceId ?? null,
+  piSessionFile: patch.piSessionFile ?? null,
 });
 
 const userItem = (text: string, timestamp = 2000): TranscriptItem => ({

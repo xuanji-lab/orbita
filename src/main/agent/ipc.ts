@@ -45,6 +45,7 @@ export function registerAgentIpc(
         title: "",
         cwd: input.cwd,
         workspaceId: input.workspaceId,
+        piSessionFile: null,
         providerId: input.providerId,
         modelId: input.modelId,
         mode: input.mode,

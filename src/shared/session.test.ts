@@ -7,6 +7,7 @@ const valid = {
   title: "Rebuild the renderer",
   cwd: "/Users/wafo/repo/orbita-lab",
   workspaceId: null,
+  piSessionFile: null,
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "manual",
@@ -74,6 +75,16 @@ describe("parseSessionMeta", () => {
       ...valid,
       mode: "manual",
     });
+  });
+
+  // 本字段落地之前存的会话没有 pi 的本子，只能读不能续——界面要如实说出来
+  it("缺 piSessionFile 视为不能续", () => {
+    strictEqual(parseSessionMeta({ ...valid, piSessionFile: undefined })?.piSessionFile, null);
+    strictEqual(parseSessionMeta({ ...valid, piSessionFile: 7 })?.piSessionFile, null);
+    strictEqual(
+      parseSessionMeta({ ...valid, piSessionFile: "/x/pi-sessions/a.jsonl" })?.piSessionFile,
+      "/x/pi-sessions/a.jsonl",
+    );
   });
 
   // 刀 B 之前存下的会话没有这个字段，它们不属于任何工作区，落到侧栏 TASKS 下
