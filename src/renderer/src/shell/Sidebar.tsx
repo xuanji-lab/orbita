@@ -27,7 +27,7 @@ export function Sidebar(props: {
 }) {
   const { session } = props;
   /** 高亮哪一条：设置面开着时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
-  const openId = props.settingsOpen ? null : (session.archived?.meta.id ?? session.sessionId);
+  const openId = props.settingsOpen ? null : (session.sessionId ?? session.opened?.id ?? null);
   /**
    * 不属于任何工作区的会话。**也包括归属指向已移除工作区的那些**——
    * 移除工作区不该让它的会话从界面上消失，它们只是回到 TASKS 下。

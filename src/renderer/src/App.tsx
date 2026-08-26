@@ -49,10 +49,8 @@ export function App() {
   }, []);
 
   const session = useChatSession(providers);
-  /** 看历史时复制的是历史那一份，不是实时那一份 */
-  const visibleTranscript = session.archived?.transcript ?? session.transcript;
   /** 动作条只在有内容可操作时出现——它承载的是「对这条会话做点什么」 */
-  const showRail = !settingsOpen && (session.sessionId !== null || session.archived !== null);
+  const showRail = !settingsOpen && (session.sessionId !== null || session.opened !== null);
 
   return (
     <div className="layer">
@@ -79,9 +77,9 @@ export function App() {
 
       {showRail && (
         <ActionRail
-          canCopy={visibleTranscript.length > 0}
+          canCopy={session.transcript.length > 0}
           onCopyTranscript={() =>
-            void navigator.clipboard.writeText(transcriptToText(visibleTranscript))
+            void navigator.clipboard.writeText(transcriptToText(session.transcript))
           }
         />
       )}

@@ -12,6 +12,7 @@ import {
   createAgentSessionFromServices,
   createAgentSessionServices,
   ModelRuntime,
+  SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
@@ -132,7 +133,17 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
       ],
     },
   });
-  const { session } = await createAgentSessionFromServices({ services });
+  /**
+   * **pi 存它自己的本子**（guideline §四，2026-08-26 修订）。
+   * 续会话是把这份文件还给 pi，而不是我们把历史重讲一遍——
+   * 被否决的反向适配方案与理由都写在那一节。
+   *
+   * 目录由主进程给（`piSessionDir`）：runtime 不做路径策略决定。
+   * 打不开就退回新建——**宁可开一条没有前文的会话，也不要整个建不起来**：
+   * 用户至少还能接着说话，而不是对着一条打不开的会话干瞪眼。
+   */
+  const sessionManager = openOrCreate(command);
+  const { session } = await createAgentSessionFromServices({ services, sessionManager });
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
   const unsubscribe = session.subscribe((event) => {
@@ -148,7 +159,23 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
   });
 
   sessions.set(command.sessionId, { session, adapter, unsubscribe, mode: command.mode });
-  send({ type: "created", sessionId: command.sessionId });
+  send({
+    type: "created",
+    sessionId: command.sessionId,
+    // 主进程要把它记进会话 meta，否则下次就找不回这本子了
+    piSessionFile: sessionManager.getSessionFile() ?? null,
+  });
+}
+
+function openOrCreate(command: Extract<AgentCommand, { type: "create" }>): SessionManager {
+  if (command.piSessionFile !== undefined) {
+    try {
+      return SessionManager.open(command.piSessionFile, command.piSessionDir, command.cwd);
+    } catch (error) {
+      console.error("[agent-runtime] 打不开 pi 的 session 文件，退回新建", error);
+    }
+  }
+  return SessionManager.create(command.cwd, command.piSessionDir);
 }
 
 /**

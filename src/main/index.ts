@@ -102,7 +102,8 @@ void app.whenReady().then(() => {
     record(event);
     broadcastAgentEvent(event);
   });
-  registerAgentIpc(agentHost, providers, sessions);
+  // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
+  registerAgentIpc(agentHost, providers, sessions, join(configDir, "pi-sessions"));
   app.on("before-quit", () => agentHost.dispose());
 
   createMainWindow();

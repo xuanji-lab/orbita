@@ -13,6 +13,8 @@ export function registerAgentIpc(
   host: AgentHost,
   providers: ProviderStore,
   sessions: SessionStore,
+  /** pi 把自己的 session 文件放在哪。**路径策略在主进程**，agent 进程只收数据 */
+  piSessionDir: string,
 ): void {
   ipcMain.handle(
     ipcChannels.agentCreate,
@@ -24,34 +26,47 @@ export function registerAgentIpc(
         throw new Error(`provider "${input.providerId}" has no API key stored`);
       }
       // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
-      const sessionId = await host.createSession({
-        cwd: input.cwd,
-        modelId: input.modelId,
-        mode: input.mode,
-        provider: {
-          id: dto.id,
-          api: dto.endpoint.api,
-          baseUrl: dto.endpoint.baseUrl,
-          apiKey,
-          ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
-          models: dto.models.declared.map((m) => m.id),
+      const { sessionId, piSessionFile } = await host.createSession(
+        {
+          cwd: input.cwd,
+          modelId: input.modelId,
+          mode: input.mode,
+          piSessionDir,
+          // 续会话：把 pi 自己那份本子还给它（guideline §四）
+          ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
+          provider: {
+            id: dto.id,
+            api: dto.endpoint.api,
+            baseUrl: dto.endpoint.baseUrl,
+            apiKey,
+            ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
+            models: dto.models.declared.map((m) => m.id),
+          },
         },
-      });
-      // **建成之后才落 meta**：createSession 会等 runtime 回 created，
-      // 失败时抛错——不该在磁盘上留下一条永远打不开的会话。标题等第一条用户消息填。
-      const now = Date.now();
-      await sessions.create({
-        id: sessionId,
-        title: "",
-        cwd: input.cwd,
-        workspaceId: input.workspaceId,
-        piSessionFile: null,
-        providerId: input.providerId,
-        modelId: input.modelId,
-        mode: input.mode,
-        createdAt: now,
-        updatedAt: now,
-      });
+        input.resume?.sessionId,
+      );
+
+      if (input.resume) {
+        // 续会话不新建记录：新消息接着写进同一份 jsonl。
+        // 但 pi 那本子的路径可能变了（open 失败退回新建时就会），所以要更新回去。
+        await sessions.setPiSessionFile(sessionId, piSessionFile);
+      } else {
+        // **建成之后才落 meta**：createSession 会等 runtime 回 created，
+        // 失败时抛错——不该在磁盘上留下一条永远打不开的会话。标题等第一条用户消息填。
+        const now = Date.now();
+        await sessions.create({
+          id: sessionId,
+          title: "",
+          cwd: input.cwd,
+          workspaceId: input.workspaceId,
+          piSessionFile,
+          providerId: input.providerId,
+          modelId: input.modelId,
+          mode: input.mode,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
       return sessionId;
     },
   );

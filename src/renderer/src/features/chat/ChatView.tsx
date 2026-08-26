@@ -17,29 +17,6 @@ import type { ChatSession } from "./useChatSession";
 export function ChatView(props: { session: ChatSession }) {
   const { session } = props;
 
-  // 在看历史：只读。把历史回灌给 pi 让它接着跑是另一刀（docs/plans/）——
-  // **说清楚比装作能用好**，不能让输入框看起来能打字、一发就报 unknown session。
-  if (session.archived !== null) {
-    const { meta, transcript } = session.archived;
-    return (
-      <Pane
-        title={meta.title === "" ? "New task" : meta.title}
-        badge={meta.id.slice(0, 6)}
-        badgeTitle={meta.id}
-        footer={
-          <Notice>
-            This task is from an earlier run — you can read it, but continuing it isn&apos;t wired
-            up yet. Start a new task to keep working.
-          </Notice>
-        }
-      >
-        {transcript.map((item) => (
-          <Item key={item.id} item={item} />
-        ))}
-      </Pane>
-    );
-  }
-
   const composer = (
     <Composer
       value={session.draft}
@@ -49,11 +26,14 @@ export function ChatView(props: { session: ChatSession }) {
       placeholder={
         session.sessionId === null ? "Ask anything, or start a task" : "Reply, or steer the agent"
       }
-      disabled={session.usable.length === 0}
+      disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase === "turn"}
       bottomSlot={<ComposerBar session={session} />}
     />
   );
+
+  /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
+  const openId = session.sessionId ?? session.opened?.id ?? "";
 
   const notices = (
     <>
@@ -61,10 +41,21 @@ export function ChatView(props: { session: ChatSession }) {
         <Notice>Add a provider with at least one model in Settings, then send a message.</Notice>
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+      {/*
+        只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
+        （guideline §四把这条代价写明了）。
+      */}
+      {session.readOnly && (
+        <Notice>
+          This task was recorded before tasks could be resumed, so it can be read but not
+          continued. Start a new task to keep working.
+        </Notice>
+      )}
     </>
   );
 
-  if (session.sessionId === null) {
+  // 首页 = 既没有活着的会话，也没有打开任何一条旧会话
+  if (session.sessionId === null && session.opened === null) {
     return (
       <div
         style={{
@@ -109,9 +100,9 @@ export function ChatView(props: { session: ChatSession }) {
 
   return (
     <Pane
-      title={sessionTitle(session.transcript) ?? "New task"}
-      badge={session.sessionId.slice(0, 6)}
-      badgeTitle={session.sessionId}
+      title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
+      badge={openId.slice(0, 6)}
+      badgeTitle={openId}
       footer={
         <>
           {notices}

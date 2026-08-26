@@ -25,7 +25,7 @@ export class AgentHost {
    */
   private readonly pendingCreates = new Map<
     string,
-    { resolve: () => void; reject: (error: Error) => void }
+    { resolve: (piSessionFile: string | null) => void; reject: (error: Error) => void }
   >();
 
   constructor(runtimePath: string, onEvent: (event: AgentEvent) => void) {
@@ -52,7 +52,7 @@ export class AgentHost {
           return;
         }
         if (message.type === "created") {
-          this.pendingCreates.get(message.sessionId)?.resolve();
+          this.pendingCreates.get(message.sessionId)?.resolve(message.piSessionFile);
           this.pendingCreates.delete(message.sessionId);
           return;
         }
@@ -85,13 +85,19 @@ export class AgentHost {
     return this.ready;
   }
 
-  /** 创建 session。**等 runtime 回 `created` 才返回**——返回即可用。 */
+  /**
+   * 创建 session。**等 runtime 回 `created` 才返回**——返回即可用。
+   *
+   * `reuseId` 是续会话：沿用原来的 id，新消息接着写进同一份记录，而不是分裂成两条。
+   * 返回 pi 这一次用的那份 session 文件，调用方要把它记进会话 meta。
+   */
   async createSession(
     input: Omit<Extract<AgentCommand, { type: "create" }>, "type" | "sessionId">,
-  ): Promise<string> {
+    reuseId?: string,
+  ): Promise<{ sessionId: string; piSessionFile: string | null }> {
     await this.ensure();
-    const sessionId = randomUUID();
-    const created = new Promise<void>((resolve, reject) => {
+    const sessionId = reuseId ?? randomUUID();
+    const created = new Promise<string | null>((resolve, reject) => {
       this.pendingCreates.set(sessionId, { resolve, reject });
       setTimeout(() => {
         if (!this.pendingCreates.delete(sessionId)) return;
@@ -99,8 +105,7 @@ export class AgentHost {
       }, 60_000);
     });
     this.post({ type: "create", sessionId, ...input });
-    await created;
-    return sessionId;
+    return { sessionId, piSessionFile: await created };
   }
 
   /**

@@ -10,7 +10,7 @@ import { api } from "../../api";
 import type { PendingApproval } from "./ApprovalBar";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ProviderDto } from "@shared/provider";
-import type { SessionDetail, SessionMeta } from "@shared/session";
+import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 
 /**
@@ -51,10 +51,16 @@ export interface ChatSession {
   /** 落盘的会话列表，新的在前。侧栏 TASKS 节点列的就是它。 */
   sessions: SessionMeta[];
   /**
-   * 正在查看的历史会话。非 null 时聊天面渲染的是它而不是当前实时状态。
-   * **只读**——把历史回灌给 pi 让它接着跑是另一刀（见 docs/plans/）。
+   * 正在看/正在续的那条会话（从磁盘打开的）。
+   * **打开就把它的 transcript 种进状态**，所以聊天面不需要第二条渲染路径——
+   * 续上之后新消息接着往下追加，自然衔接。
    */
-  archived: SessionDetail | null;
+  opened: SessionMeta | null;
+  /**
+   * 这条会话只能读不能续：pi 没有它的本子（本功能之前存的，或那份被删了）。
+   * 界面要如实说出来，不能让输入框看起来能打字（guideline §四写明的代价）。
+   */
+  readOnly: boolean;
   openSession: (id: string) => void;
   removeSession: (id: string) => void;
   send: () => void;
@@ -80,7 +86,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  const [archived, setArchived] = useState<SessionDetail | null>(null);
+  const [opened, setOpened] = useState<SessionMeta | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [defaultCwd, setDefaultCwd] = useState<string>("");
@@ -162,10 +168,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
         const target = cwd ?? defaultCwd;
         if (target === "") throw new Error("Choose a workspace folder first");
+        // 打开的是一条能续的旧会话：沿用它的 id 与 pi 的本子，新消息接着写进同一份记录
+        const resume =
+          opened !== null && opened.piSessionFile !== null
+            ? { sessionId: opened.id, piSessionFile: opened.piSessionFile }
+            : null;
         id = await api.agent.create({
           cwd: target,
           workspaceId,
-          resume: null,
+          resume,
           providerId: provider.id,
           modelId: provider.models.declared[0]?.id ?? "",
           mode,
@@ -181,7 +192,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase("idle");
     }
-  }, [draft, sessionId, usable, mode, cwd, workspaceId, defaultCwd, refreshSessions]);
+  }, [draft, sessionId, usable, mode, cwd, workspaceId, defaultCwd, opened, refreshSessions]);
 
   const stop = useCallback(() => {
     if (sessionRef.current === null) return;
@@ -196,34 +207,42 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     setApprovals([]);
     setPhase("idle");
     setError(null);
-    setArchived(null);
+    setOpened(null);
   }, []);
 
   /**
-   * 打开一条会话。点的就是当前这条活着的会话时只是**退出历史视图**回到实时，
-   * 而不是把自己的记录再当历史读一遍。
+   * 打开一条会话：**把它的 transcript 种进 transcript 状态**，并把 cwd / 归属 / 权限档
+   * 一起恢复成它当时的样子。点的就是当前这条活着的会话时什么都不用做。
+   *
+   * 这里不建 agent——**续跑推迟到用户真的说话时**（send 里带 resume）。
+   * 打开一条会话就起一个进程内的 session 太贵了，翻记录是最常见的动作。
    */
-  const openSession = useCallback(
-    (id: string) => {
-      if (id === sessionRef.current) {
-        setArchived(null);
-        return;
-      }
-      setError(null);
-      void api.session
-        .load(id)
-        .then(setArchived)
-        .catch((cause: unknown) =>
-          setError(cause instanceof Error ? cause.message : String(cause)),
-        );
-    },
-    [],
-  );
+  const openSession = useCallback((id: string) => {
+    if (id === sessionRef.current) return;
+    setError(null);
+    void api.session
+      .load(id)
+      .then((detail) => {
+        if (detail === null) return;
+        setSessionId(null);
+        sessionRef.current = null;
+        setApprovals([]);
+        setPhase("idle");
+        setState(createTranscriptState(seedSnapshot(detail.transcript)));
+        setOpened(detail.meta);
+        setCwd(detail.meta.cwd);
+        setWorkspaceId(detail.meta.workspaceId);
+        setMode(detail.meta.mode);
+      })
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : String(cause)),
+      );
+  }, []);
 
   const removeSession = useCallback(
     (id: string) => {
       void api.session.remove(id).then(() => {
-        setArchived((current) => (current?.meta.id === id ? null : current));
+        setOpened((current) => (current?.id === id ? null : current));
         // 删掉的正是当前活着的那条：回到首页，别让界面停在一条已经没有记录的会话上
         if (id === sessionRef.current) reset();
         refreshSessions();
@@ -310,7 +329,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     defaultCwd,
     usable,
     sessions,
-    archived,
+    opened,
+    // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读
+    readOnly: opened !== null && opened.piSessionFile === null && sessionId === null,
     openSession,
     removeSession,
     send: () => void send(),
@@ -321,8 +342,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   };
 }
 
-/** 本地起点快照：会话由 pi 持有，renderer 只需要一个空壳来启动归约器。 */
-function seedSnapshot(): SessionSnapshot {
+/**
+ * 归约器的起点快照。打开旧会话时**把落盘的 transcript 种进去**，
+ * 之后的 progress 直接往下追加——所以实时与历史是同一条渲染路径，不是两条。
+ */
+function seedSnapshot(transcript: readonly TranscriptItem[] = []): SessionSnapshot {
   const now = Date.now();
   return {
     id: "local",
@@ -335,7 +359,7 @@ function seedSnapshot(): SessionSnapshot {
     attached: true,
     locked: false,
     revision: 0,
-    transcript: [],
+    transcript: [...transcript],
     queuedSteer: [],
     queuedSteerCount: 0,
   };

@@ -72,6 +72,13 @@ export class SessionStore {
     await writeJsonAtomic(this.metaPath(id), patch);
   }
 
+  /** 记住 pi 这一次用的那份 session 文件——没有它，这条会话下次就只能读不能续 */
+  async setPiSessionFile(id: string, piSessionFile: string | null): Promise<void> {
+    const meta = await this.readMeta(id);
+    if (meta === null) return;
+    await writeJsonAtomic(this.metaPath(id), { ...meta, piSessionFile });
+  }
+
   async setMode(id: string, mode: PermissionMode): Promise<void> {
     const meta = await this.readMeta(id);
     if (meta === null) return;
