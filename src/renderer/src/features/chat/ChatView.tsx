@@ -2,6 +2,7 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { Composer } from "../../shell/Composer";
 import { Chip } from "../../shell/Chip";
+import { Menu, type MenuItem } from "../../shell/Menu";
 import { Icon } from "../../shell/Icon";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle } from "@shared/session";
@@ -212,62 +213,102 @@ function Pane(props: {
   );
 }
 
-/** composer 底栏：作用域 / 权限 / 模型——都是「这一句会以什么身份发出去」的事实 */
+/**
+ * 输入卡底栏：作用域 / 权限档 / 模型——都是「这一句会以什么身份发出去」的事实。
+ *
+ * 三个都是菜单而不是并排的芯片：权限档摊开是三个、模型摊开是所有 provider 的所有模型，
+ * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
+ * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
+ */
 function ComposerBar(props: { session: ChatSession }) {
   const { session } = props;
-  const model = session.usable[0]?.models.declared[0]?.id;
-  // 有归属就显示**用户起的名字**，而不是路径末段——他改了名就该看见改后的
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
-  const scope =
-    workspace !== undefined
-      ? workspace.name
-      : session.cwd === null
-        ? "Home"
-        : basename(session.cwd);
+  const scope = workspace?.name ?? (session.cwd === null ? "Home" : basename(session.cwd));
+
+  const scopeItems: MenuItem[] = [
+    {
+      id: "home",
+      label: "Home",
+      icon: "folder",
+      hint: session.defaultCwd,
+      checked: session.workspaceId === null && session.cwd === null,
+      onSelect: session.newTask,
+    },
+    ...session.workspaces.map((item) => ({
+      id: item.id,
+      label: item.name,
+      icon: "folder" as const,
+      checked: session.workspaceId === item.id,
+      onSelect: () => session.newTaskIn(item),
+    })),
+    { id: "add", label: "Add a folder…", icon: "folder-plus", onSelect: session.addWorkspace },
+  ];
+
+  const modeItems: MenuItem[] = PERMISSION_MODES.map((value) => ({
+    id: value,
+    label: PERMISSION_MODE_LABELS[value].label,
+    hint: PERMISSION_MODE_LABELS[value].hint,
+    checked: session.mode === value,
+    onSelect: () => session.changeMode(value),
+  }));
+
+  // 所有 provider 的所有已启用模型摊平；provider 名字放在右边当说明
+  const modelItems: MenuItem[] = session.usable.flatMap((provider) =>
+    provider.models.declared.map((declared) => ({
+      id: `${provider.id}:${declared.id}`,
+      label: declared.id,
+      hint: provider.displayName,
+      checked:
+        session.model?.providerId === provider.id && session.model.modelId === declared.id,
+      onSelect: () => session.chooseModel(provider.id, declared.id),
+    })),
+  );
+
   return (
     <>
-      {/*
-        没选工作区时显示「Home」而不是一个空的「Choose folder」：**兜底不该是隐形的**，
-        用户要一眼知道不选会落在哪儿（WorkspaceStore 的 cwd 写死 "." 那次教训）。
-      */}
-      <Chip
-        icon="folder"
-        title={`${session.cwd ?? session.defaultCwd} · click to choose a folder`}
-        onClick={session.addWorkspace}
-      >
-        {scope}
-      </Chip>
-      <span
-        title="Tool permission"
-        style={{ display: "inline-flex", color: "var(--color-text-tertiary)", marginInlineStart: 2 }}
-      >
-        <Icon name="shield-check" size={12} />
-      </span>
-      {PERMISSION_MODES.map((value) => (
-        <Chip
-          key={value}
-          active={session.mode === value}
-          title={PERMISSION_MODE_LABELS[value].hint}
-          onClick={() => session.changeMode(value)}
-        >
-          {PERMISSION_MODE_LABELS[value].label}
-        </Chip>
-      ))}
-      {model !== undefined && (
-        <span
-          style={{
-            marginInlineStart: "var(--space-2)",
-            fontStyle: "italic",
-            fontSize: "var(--font-size-control)",
-            letterSpacing: "var(--tracking-model)",
-            color: "var(--color-text-secondary)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {model}
-        </span>
+      <Menu
+        items={scopeItems}
+        trigger={({ open, toggle }) => (
+          <Chip
+            icon="folder"
+            active={open}
+            title={`${session.cwd ?? session.defaultCwd} · switching starts a new task`}
+            onClick={toggle}
+            chevron
+          >
+            {scope}
+          </Chip>
+        )}
+      />
+      <Menu
+        items={modeItems}
+        trigger={({ open, toggle }) => (
+          <Chip
+            icon="shield-check"
+            active={open}
+            title={PERMISSION_MODE_LABELS[session.mode].hint}
+            onClick={toggle}
+            chevron
+          >
+            {PERMISSION_MODE_LABELS[session.mode].label}
+          </Chip>
+        )}
+      />
+      {modelItems.length > 0 && (
+        <Menu
+          items={modelItems}
+          trigger={({ open, toggle }) => (
+            <Chip
+              active={open}
+              title="Model · switching starts a new task"
+              onClick={toggle}
+              chevron
+              italic
+            >
+              {session.model?.modelId ?? "No model"}
+            </Chip>
+          )}
+        />
       )}
     </>
   );

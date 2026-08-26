@@ -12,6 +12,10 @@ export function Chip(props: {
   active?: boolean;
   disabled?: boolean;
   title?: string;
+  /** 尾部的下拉指示。**用 lucide 的 chevron-down**——设计系统自己那个 `▾` 是 Unicode 字符，违反它自己的硬规则 */
+  chevron?: boolean;
+  /** 模型与思考档的标签是斜体次级灰——UI 里唯一的斜体（设计系统 *Type*） */
+  italic?: boolean;
   onClick?: () => void;
   children: React.ReactNode;
 }) {
@@ -49,6 +53,8 @@ export function Chip(props: {
               : "var(--color-text-secondary)",
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
+        fontStyle: props.italic === true ? "italic" : "normal",
+        letterSpacing: props.italic === true ? "var(--tracking-model)" : "normal",
         whiteSpace: "nowrap",
         cursor: disabled ? "not-allowed" : props.onClick === undefined ? "default" : "pointer",
         transition: "var(--transition-hover)",
@@ -58,6 +64,7 @@ export function Chip(props: {
       <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
         {props.children}
       </span>
+      {props.chevron === true && <Icon name="chevron-down" size={11} strokeWidth={2} />}
     </button>
   );
 }

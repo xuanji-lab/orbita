@@ -4,6 +4,7 @@ import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-
 import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
+import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
@@ -33,6 +34,7 @@ const ICONS = {
   bot,
   brain,
   check,
+  "chevron-down": chevronDown,
   copy,
   cpu,
   folder,

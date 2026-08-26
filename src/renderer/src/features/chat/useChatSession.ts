@@ -48,6 +48,9 @@ export interface ChatSession {
   defaultCwd: string;
   /** 至少声明了一个模型的 provider——没有它就发不出消息 */
   usable: ProviderDto[];
+  /** 下一条任务用哪个模型。**改它会开新任务**——pi 的 session 在创建时定下模型 */
+  model: { providerId: string; modelId: string } | null;
+  chooseModel: (providerId: string, modelId: string) => void;
   /** 落盘的会话列表，新的在前。侧栏 TASKS 节点列的就是它。 */
   sessions: SessionMeta[];
   /**
@@ -89,6 +92,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const [opened, setOpened] = useState<SessionMeta | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
   const [defaultCwd, setDefaultCwd] = useState<string>("");
   const sessionRef = useRef<string | null>(null);
 
@@ -156,6 +160,16 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     [providers],
   );
 
+  // provider 到位后先落一个默认模型：第一个 provider 的第一个模型。
+  // 用户没选过时界面上也该显示出到底会用哪个，而不是一片空白
+  useEffect(() => {
+    if (model !== null) return;
+    const first = usable[0];
+    const firstModel = first?.models.declared[0];
+    if (first === undefined || firstModel === undefined) return;
+    setModel({ providerId: first.id, modelId: firstModel.id });
+  }, [usable, model]);
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (text === "") return;
@@ -163,8 +177,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     try {
       let id = sessionId;
       if (id === null) {
-        const provider = usable[0];
-        if (!provider) throw new Error("Add a provider with at least one model first");
+        if (model === null) throw new Error("Add a provider with at least one model first");
         // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
         const target = cwd ?? defaultCwd;
         if (target === "") throw new Error("Choose a workspace folder first");
@@ -177,8 +190,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           cwd: target,
           workspaceId,
           resume,
-          providerId: provider.id,
-          modelId: provider.models.declared[0]?.id ?? "",
+          providerId: model.providerId,
+          modelId: model.modelId,
           mode,
         });
         setSessionId(id);
@@ -192,7 +205,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase("idle");
     }
-  }, [draft, sessionId, usable, mode, cwd, workspaceId, defaultCwd, opened, refreshSessions]);
+  }, [draft, sessionId, model, mode, cwd, workspaceId, defaultCwd, opened, refreshSessions]);
 
   const stop = useCallback(() => {
     if (sessionRef.current === null) return;
@@ -233,6 +246,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setCwd(detail.meta.cwd);
         setWorkspaceId(detail.meta.workspaceId);
         setMode(detail.meta.mode);
+        setModel({ providerId: detail.meta.providerId, modelId: detail.meta.modelId });
       })
       .catch((cause: unknown) =>
         setError(cause instanceof Error ? cause.message : String(cause)),
@@ -279,6 +293,18 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       setWorkspaceId(added.id);
     });
   }, [reset, refreshWorkspaces]);
+
+  /**
+   * 换模型。**开新任务**——pi 的 session 在创建时定下模型，
+   * 中途换会让界面上写的和实际在跑的对不上。作用域同理。
+   */
+  const chooseModel = useCallback(
+    (providerId: string, modelId: string) => {
+      reset();
+      setModel({ providerId, modelId });
+    },
+    [reset],
+  );
 
   const renameWorkspace = useCallback(
     (id: string, name: string) => {
@@ -328,6 +354,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     workspaceId,
     defaultCwd,
     usable,
+    model,
+    chooseModel,
     sessions,
     opened,
     // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读
