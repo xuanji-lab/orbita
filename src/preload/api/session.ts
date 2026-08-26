@@ -16,4 +16,15 @@ export const sessionApi = {
   rename: (id: string, title: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRename, id, title),
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.sessionDelete, id),
+  pin: (id: string, pinned: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionPin, id, pinned),
+  /** 归档：从主列表移走，**不是删除** */
+  archive: (id: string, archived: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionArchive, id, archived),
+  /** 换归属工作区；null = 回到 TASKS */
+  move: (id: string, workspaceId: string | null): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionMove, id, workspaceId),
+  /** 导出成 Markdown，走原生保存对话框；取消返回 null，否则返回落盘路径 */
+  exportMarkdown: (id: string): Promise<string | null> =>
+    ipcRenderer.invoke(ipcChannels.sessionExport, id),
 };

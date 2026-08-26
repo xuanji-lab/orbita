@@ -67,6 +67,12 @@ export interface ChatSession {
   openSession: (id: string) => void;
   /** 改名。空名字会退回从第一条用户消息推导——侧栏不留看不见的行 */
   renameSession: (id: string, title: string) => void;
+  pinSession: (id: string, pinned: boolean) => void;
+  /** 归档：从主列表移走，**不是删除** */
+  archiveSession: (id: string, archived: boolean) => void;
+  moveSession: (id: string, workspaceId: string | null) => void;
+  /** 导出成 Markdown；取消时什么都不做 */
+  exportSession: (id: string) => void;
   removeSession: (id: string) => void;
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
@@ -271,6 +277,38 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       });
   }, []);
 
+  const pinSession = useCallback(
+    (id: string, pinned: boolean) => {
+      void api.session.pin(id, pinned).then(refreshSessions);
+    },
+    [refreshSessions],
+  );
+
+  const archiveSession = useCallback(
+    (id: string, archived: boolean) => {
+      void api.session.archive(id, archived).then(refreshSessions);
+    },
+    [refreshSessions],
+  );
+
+  const moveSession = useCallback(
+    (id: string, targetWorkspaceId: string | null) => {
+      void api.session.move(id, targetWorkspaceId).then(() => {
+        refreshSessions();
+        // 正开着的就是这条：底栏那个作用域芯片也要跟着变
+        setOpened((current) =>
+          current?.id === id ? { ...current, workspaceId: targetWorkspaceId } : current,
+        );
+        if (id === sessionRef.current) setWorkspaceId(targetWorkspaceId);
+      });
+    },
+    [refreshSessions],
+  );
+
+  const exportSession = useCallback((id: string) => {
+    void api.session.exportMarkdown(id);
+  }, []);
+
   const removeSession = useCallback(
     (id: string) => {
       void api.session.remove(id).then(() => {
@@ -380,6 +418,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     readOnly: opened !== null && opened.piSessionFile === null && sessionId === null,
     openSession,
     renameSession,
+    pinSession,
+    archiveSession,
+    moveSession,
+    exportSession,
     removeSession,
     send: () => void send(),
     stop,

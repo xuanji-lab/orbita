@@ -2,8 +2,10 @@
  * 会话的 IPC —— 四层契约的第 2 层。
  * 落盘那一半在 `recorder.ts`：它是纯模块，抽出去是为了能被 `node --test` 直接测。
  */
-import { ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain } from "electron";
+import { writeFile } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
+import { transcriptToMarkdown } from "../../shared/session.ts";
 import type { SessionStore } from "./store.ts";
 
 export function registerSessionIpc(store: SessionStore): void {
@@ -13,4 +15,39 @@ export function registerSessionIpc(store: SessionStore): void {
     store.rename(id, title),
   );
   ipcMain.handle(ipcChannels.sessionDelete, (_event, id: string) => store.remove(id));
+  ipcMain.handle(ipcChannels.sessionPin, (_event, id: string, pinned: boolean) =>
+    store.setPinned(id, pinned),
+  );
+  ipcMain.handle(ipcChannels.sessionArchive, (_event, id: string, archived: boolean) =>
+    store.setArchived(id, archived),
+  );
+  ipcMain.handle(
+    ipcChannels.sessionMove,
+    (_event, id: string, workspaceId: string | null) => store.move(id, workspaceId),
+  );
+
+  /**
+   * 导出成 Markdown。**渲染在主进程做**：`transcriptToMarkdown` 在 shared，
+   * 与「复制整条对话」是同一份实现；写文件必须在主进程（renderer 在 sandbox 里）。
+   */
+  ipcMain.handle(ipcChannels.sessionExport, async (event, id: string): Promise<string | null> => {
+    const detail = await store.load(id);
+    if (detail === null) return null;
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options = { defaultPath: `${safeFileName(detail.meta.title || id)}.md` };
+    const result = await (window
+      ? dialog.showSaveDialog(window, options)
+      : dialog.showSaveDialog(options));
+    if (result.canceled || result.filePath === undefined) return null;
+    await writeFile(result.filePath, transcriptToMarkdown(detail.transcript, detail.meta), "utf8");
+    return result.filePath;
+  });
+}
+
+/**
+ * 标题 → 能当文件名的东西。**这是安全检查，不是美观**：标题是用户输入的，
+ * 里面的 `/` 会被当成路径分隔符，`..` 会往上跳一级。
+ */
+function safeFileName(title: string): string {
+  return title.replace(/[/\\:*?"<>|\u0000-\u001f]/g, "-").replace(/^\.+/, "").slice(0, 80) || "task";
 }

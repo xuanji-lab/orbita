@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import archive from "../../../../Orbita Design System/assets/icons/lucide/archive.svg?raw";
+import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
 import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
@@ -7,12 +8,15 @@ import check from "../../../../Orbita Design System/assets/icons/lucide/check.sv
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
+import download from "../../../../Orbita Design System/assets/icons/lucide/download.svg?raw";
 import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
+import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off.svg?raw";
+import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
@@ -33,6 +37,7 @@ import wrench from "../../../../Orbita Design System/assets/icons/lucide/wrench.
  */
 const ICONS = {
   archive,
+  "archive-restore": archiveRestore,
   "arrow-up": arrowUp,
   bot,
   brain,
@@ -40,12 +45,15 @@ const ICONS = {
   "chevron-down": chevronDown,
   copy,
   cpu,
+  download,
   "ellipsis-vertical": ellipsisVertical,
   folder,
   "folder-plus": folderPlus,
   "loader-circle": loaderCircle,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
+  pin,
+  "pin-off": pinOff,
   plus,
   settings,
   "shield-check": shieldCheck,

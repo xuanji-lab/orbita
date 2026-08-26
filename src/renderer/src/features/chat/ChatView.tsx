@@ -506,24 +506,6 @@ function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
   return null;
 }
 
-/** 复制整条对话（右图标条的动作）。按块拼，保留块级顺序。 */
-export function transcriptToText(transcript: readonly TranscriptItem[]): string {
-  return transcript
-    .map((item) => {
-      const body = item.content
-        .map((block) => {
-          if (block.type === "text") return block.text;
-          if (block.type === "thinking") return `[thinking] ${block.thinking}`;
-          if (block.type === "toolCall") return `[tool] ${block.toolName}`;
-          return "";
-        })
-        .filter((part) => part !== "")
-        .join("\n");
-      return `${item.role}:\n${body}`;
-    })
-    .join("\n\n");
-}
-
 function basename(path: string): string {
   const parts = path.split("/").filter((part) => part !== "");
   return parts[parts.length - 1] ?? path;

@@ -17,6 +17,7 @@ import type { PermissionMode } from "../../shared/permission.ts";
 import {
   deriveSessionTitle,
   parseSessionMeta,
+  sortSessions,
   type SessionDetail,
   type SessionMeta,
 } from "../../shared/session.ts";
@@ -63,13 +64,14 @@ export class SessionStore {
     await mkdir(this.dir, { recursive: true });
     await appendFile(this.logPath(id), `${JSON.stringify(item)}\n`, "utf8");
 
-    const patch: SessionMeta = { ...meta, updatedAt: item.timestamp };
-    // 标题只认第一条用户消息，之后不再改——否则会话会在侧栏里改名
+    const changes: Partial<SessionMeta> = { updatedAt: item.timestamp };
+    // 标题只认第一条用户消息，之后不再改——否则会话会在侧栏里改名。
+    // 手动改过名的会话 title 不为空，因此这条守卫自动让位给它。
     if (meta.title === "" && item.role === "user") {
       const text = item.content.find((block) => block.type === "text");
-      if (text !== undefined && text.type === "text") patch.title = deriveSessionTitle(text.text);
+      if (text !== undefined && text.type === "text") changes.title = deriveSessionTitle(text.text);
     }
-    await writeJsonAtomic(this.metaPath(id), patch);
+    await this.update(id, changes);
   }
 
   /**
@@ -77,27 +79,45 @@ export class SessionStore {
    * 用户会以为会话丢了（工作区改名走的是同一条规矩：空名退回路径末段）。
    */
   async rename(id: string, title: string): Promise<void> {
-    const meta = await this.readMeta(id);
-    if (meta === null) return;
     const wanted = deriveSessionTitle(title);
     const next = wanted !== "" ? wanted : derivedFrom(await this.readLog(id));
-    await writeJsonAtomic(this.metaPath(id), { ...meta, title: next });
+    await this.update(id, { title: next });
+  }
+
+  /**
+   * 改 meta 上的字段。**六处「读 → 改一个字段 → 原子写回」收成这一个**——
+   * meta 不在就悄悄不做：会话可能刚被别处删掉，为此抛错没有意义。
+   */
+  private async update(id: string, changes: Partial<SessionMeta>): Promise<void> {
+    const meta = await this.readMeta(id);
+    if (meta === null) return;
+    await writeJsonAtomic(this.metaPath(id), { ...meta, ...changes });
   }
 
   /** 记住 pi 这一次用的那份 session 文件——没有它，这条会话下次就只能读不能续 */
-  async setPiSessionFile(id: string, piSessionFile: string | null): Promise<void> {
-    const meta = await this.readMeta(id);
-    if (meta === null) return;
-    await writeJsonAtomic(this.metaPath(id), { ...meta, piSessionFile });
+  setPiSessionFile(id: string, piSessionFile: string | null): Promise<void> {
+    return this.update(id, { piSessionFile });
   }
 
-  async setMode(id: string, mode: PermissionMode): Promise<void> {
-    const meta = await this.readMeta(id);
-    if (meta === null) return;
-    await writeJsonAtomic(this.metaPath(id), { ...meta, mode });
+  setMode(id: string, mode: PermissionMode): Promise<void> {
+    return this.update(id, { mode });
   }
 
-  /** 会话列表，新的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。 */
+  setPinned(id: string, pinned: boolean): Promise<void> {
+    return this.update(id, { pinned });
+  }
+
+  /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
+  setArchived(id: string, archived: boolean): Promise<void> {
+    return this.update(id, { archived });
+  }
+
+  /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
+  move(id: string, workspaceId: string | null): Promise<void> {
+    return this.update(id, { workspaceId });
+  }
+
+  /** 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。 */
   async list(): Promise<SessionMeta[]> {
     let names: string[];
     try {
@@ -111,7 +131,7 @@ export class SessionStore {
       const meta = await this.readMeta(name.slice(0, -META_SUFFIX.length)).catch(() => null);
       if (meta !== null) metas.push(meta);
     }
-    return metas.sort((a, b) => b.updatedAt - a.updatedAt);
+    return sortSessions(metas);
   }
 
   async load(id: string): Promise<SessionDetail | null> {

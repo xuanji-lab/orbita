@@ -29,6 +29,7 @@ export function Sidebar(props: {
   onToggleSettings: () => void;
 }) {
   const { session } = props;
+  const [showArchived, setShowArchived] = useState(false);
   /** 高亮哪一条：设置面开着时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.settingsOpen ? null : (session.sessionId ?? session.opened?.id ?? null);
   /**
@@ -36,9 +37,14 @@ export function Sidebar(props: {
    * 移除工作区不该让它的会话从界面上消失，它们只是回到 TASKS 下。
    */
   const known = new Set(session.workspaces.map((w) => w.id));
-  const loose = session.sessions.filter(
-    (m) => m.workspaceId === null || !known.has(m.workspaceId),
-  );
+  /** 归档的从主列表里移走——**不是删除**，它们收在底部那一行后面 */
+  const live = session.sessions.filter((m) => !m.archived);
+  const archived = session.sessions.filter((m) => m.archived);
+  const loose = live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
+  const open = (id: string) => {
+    if (props.settingsOpen) props.onToggleSettings();
+    session.openSession(id);
+  };
   return (
     <aside
       style={{
@@ -119,7 +125,20 @@ export function Sidebar(props: {
           paddingRight: "var(--space-3)",
         }}
       >
-        {props.settingsOpen ? (
+        {showArchived && !props.settingsOpen ? (
+          <>
+            <NodeLabel>Archived</NodeLabel>
+            {archived.map((meta) => (
+              <SessionRow
+                key={meta.id}
+                meta={meta}
+                session={session}
+                active={meta.id === openId}
+                onClick={() => open(meta.id)}
+              />
+            ))}
+          </>
+        ) : props.settingsOpen ? (
           <>
             <NodeLabel>Settings</NodeLabel>
             {SETTINGS_TABS.map((tab) => (
@@ -147,20 +166,13 @@ export function Sidebar(props: {
                 <WorkspaceGroup
                   key={workspace.id}
                   workspace={workspace}
-                  sessions={session.sessions.filter((m) => m.workspaceId === workspace.id)}
+                  sessions={live.filter((m) => m.workspaceId === workspace.id)}
+                  session={session}
                   openId={openId}
-                  liveId={session.sessionId}
-                  running={session.phase === "turn"}
-                  failed={session.error !== null}
                   onNewTask={() => session.newTaskIn(workspace)}
                   onRename={(name) => session.renameWorkspace(workspace.id, name)}
                   onRemove={() => session.removeWorkspace(workspace.id)}
-                  onOpen={(id) => {
-                    if (props.settingsOpen) props.onToggleSettings();
-                    session.openSession(id);
-                  }}
-                  onRenameTask={(id, title) => session.renameSession(id, title)}
-                  onDelete={(id) => session.removeSession(id)}
+                  onOpen={open}
                 />
               ))
             )}
@@ -183,16 +195,10 @@ export function Sidebar(props: {
                 loose.map((meta) => (
                   <SessionRow
                     key={meta.id}
-                    title={meta.title === "" ? "New task" : meta.title}
-                    running={meta.id === session.sessionId && session.phase === "turn"}
-                    failed={meta.id === session.sessionId && session.error !== null}
+                    meta={meta}
+                    session={session}
                     active={meta.id === openId}
-                    onClick={() => {
-                      if (props.settingsOpen) props.onToggleSettings();
-                      session.openSession(meta.id);
-                    }}
-                    onRename={(title) => session.renameSession(meta.id, title)}
-                    onDelete={() => session.removeSession(meta.id)}
+                    onClick={() => open(meta.id)}
                   />
                 ))
               )}
@@ -202,12 +208,17 @@ export function Sidebar(props: {
       </div>
 
       {/* 整条可点，不是只有图标可点——和 New task 一样是一整根横条 */}
+      {/*
+        归档不是删除：它把会话从主列表移走，收在这一行后面。
+        一条都没有时禁用——一个点了什么都不发生的入口比禁用更让人困惑。
+      */}
       <NavRow
         icon="archive"
-        label="Archived (0)"
-        hint="Archived tasks (planned)"
-        active={false}
-        disabled
+        label={`Archived (${archived.length})`}
+        hint={archived.length === 0 ? "Nothing archived yet" : "Archived tasks"}
+        active={showArchived && !props.settingsOpen}
+        disabled={archived.length === 0}
+        onClick={() => setShowArchived((value) => !value)}
       />
       <NavRow
         icon="settings"
@@ -229,17 +240,12 @@ export function Sidebar(props: {
 function WorkspaceGroup(props: {
   workspace: Workspace;
   sessions: SessionMeta[];
+  session: ChatSession;
   openId: string | null;
-  liveId: string | null;
-  running: boolean;
-  failed: boolean;
   onNewTask: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
   onOpen: (id: string) => void;
-  /** 改**会话**的名字。工作区自己的改名是上面那个 `onRename` */
-  onRenameTask: (id: string, title: string) => void;
-  onDelete: (id: string) => void;
 }) {
   const [hover, setHover] = useState(false);
   const [armed, setArmed] = useState(false);
@@ -352,13 +358,10 @@ function WorkspaceGroup(props: {
       {props.sessions.map((meta) => (
         <SessionRow
           key={meta.id}
-          title={meta.title === "" ? "New task" : meta.title}
-          running={meta.id === props.liveId && props.running}
-          failed={meta.id === props.liveId && props.failed}
+          meta={meta}
+          session={props.session}
           active={meta.id === props.openId}
           onClick={() => props.onOpen(meta.id)}
-          onRename={(title) => props.onRenameTask(meta.id, title)}
-          onDelete={() => props.onDelete(meta.id)}
         />
       ))}
     </div>
@@ -483,54 +486,98 @@ function NavRow(props: {
 /**
  * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**。
  *
- * 右边是三个点，而不是一排图标。设计系统的纪律是克制，288px 的一行挂不下
- * 改名 / 删除 / 导出 / 置顶 / 转移 / 归档；把它们收进菜单，行上只留一个入口。
- * **删除在菜单里仍然是两段式**（选「Delete task…」→ 菜单换成确认项），
- * 因为「先讲后果再动作」不能因为换了容器就省掉。
+ * 右边是三个点，不是一排图标：288px 的一行挂不下六个动作。
+ * **两处破坏性/有去处的动作在菜单里仍然是两段式**——删除要确认，
+ * 转移要选目标——都靠 `keepOpen` 把菜单原地换成第二组项，
+ * 「先讲后果再动作」不因为换了容器就省掉。
  */
 function SessionRow(props: {
-  title: string;
-  running: boolean;
-  failed: boolean;
+  meta: SessionMeta;
+  session: ChatSession;
   active: boolean;
   onClick: () => void;
-  onRename: (title: string) => void;
-  onDelete: () => void;
 }) {
+  const { meta, session } = props;
   const [hover, setHover] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const status = props.running
+  const [step, setStep] = useState<"main" | "move" | "delete">("main");
+  const live = meta.id === session.sessionId;
+  /**
+   * 置顶图标**只顶替 idle 那一档**。正在跑或失败时状态优先——
+   * 置顶是用户的偏好，运行中是正在发生的事，后者更该被看见。
+   */
+  const idle = !(live && (session.phase === "turn" || session.error !== null));
+  const status = live && session.phase === "turn"
     ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
-    : props.failed
+    : live && session.error !== null
       ? { icon: "triangle-alert" as const, tone: "var(--color-danger)", label: "Failed", spin: false }
       : { icon: "check" as const, tone: "var(--color-text-tertiary)", label: "Idle", spin: false };
 
-  const items: MenuItem[] = confirming
-    ? [
-        { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setConfirming(false) },
-        {
-          id: "confirm",
-          label: "Delete permanently",
-          icon: "trash-2",
-          danger: true,
-          onSelect: () => {
-            setConfirming(false);
-            props.onDelete();
+  const items: MenuItem[] =
+    step === "delete"
+      ? [
+          { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+          {
+            id: "confirm",
+            label: "Delete permanently",
+            icon: "trash-2",
+            danger: true,
+            onSelect: () => session.removeSession(meta.id),
           },
-        },
-      ]
-    : [
-        { id: "rename", label: "Rename", icon: "pencil-line", onSelect: () => setEditing(true) },
-        {
-          id: "delete",
-          label: "Delete task…",
-          icon: "trash-2",
-          danger: true,
-          keepOpen: true,
-          onSelect: () => setConfirming(true),
-        },
-      ];
+        ]
+      : step === "move"
+        ? [
+            {
+              id: "none",
+              label: "No workspace",
+              icon: "folder",
+              checked: meta.workspaceId === null,
+              onSelect: () => session.moveSession(meta.id, null),
+            },
+            ...session.workspaces.map((workspace) => ({
+              id: workspace.id,
+              label: workspace.name,
+              icon: "folder" as const,
+              checked: meta.workspaceId === workspace.id,
+              onSelect: () => session.moveSession(meta.id, workspace.id),
+            })),
+          ]
+        : [
+            { id: "rename", label: "Rename", icon: "pencil-line", onSelect: () => setEditing(true) },
+            {
+              id: "pin",
+              label: meta.pinned ? "Unpin" : "Pin to top",
+              icon: meta.pinned ? "pin-off" : "pin",
+              onSelect: () => session.pinSession(meta.id, !meta.pinned),
+            },
+            {
+              id: "move",
+              label: "Move to…",
+              icon: "folder",
+              keepOpen: true,
+              onSelect: () => setStep("move"),
+            },
+            {
+              id: "export",
+              label: "Export as Markdown…",
+              icon: "download",
+              onSelect: () => session.exportSession(meta.id),
+            },
+            {
+              id: "archive",
+              label: meta.archived ? "Unarchive" : "Archive",
+              icon: meta.archived ? "archive-restore" : "archive",
+              onSelect: () => session.archiveSession(meta.id, !meta.archived),
+            },
+            {
+              id: "delete",
+              label: "Delete task…",
+              icon: "trash-2",
+              danger: true,
+              keepOpen: true,
+              onSelect: () => setStep("delete"),
+            },
+          ];
 
   return (
     <div
@@ -539,13 +586,13 @@ function SessionRow(props: {
       onMouseLeave={() => setHover(false)}
     >
       {editing ? (
-        <span style={{ flex: 1, minWidth: 0, padding: "var(--space-1) var(--space-1)" }}>
+        <span style={{ flex: 1, minWidth: 0, padding: "var(--space-1)" }}>
           <InlineName
             editing
-            value={props.title}
+            value={meta.title}
             onCommit={(value) => {
               setEditing(false);
-              props.onRename(value);
+              session.renameSession(meta.id, value);
             }}
             onCancel={() => setEditing(false)}
             style={{ height: 22, fontSize: "var(--font-size-control)" }}
@@ -555,11 +602,11 @@ function SessionRow(props: {
         </span>
       ) : (
         <NavRow
-          icon={status.icon}
-          label={props.title}
-          tone={status.tone}
+          icon={idle && meta.pinned ? "pin" : status.icon}
+          label={meta.title === "" ? "New task" : meta.title}
+          tone={idle && meta.pinned ? "var(--color-text-secondary)" : status.tone}
           spin={status.spin}
-          iconTitle={status.label}
+          iconTitle={idle && meta.pinned ? "Pinned" : status.label}
           active={props.active}
           onClick={props.onClick}
           style={{ flex: 1, minWidth: 0 }}
@@ -573,7 +620,7 @@ function SessionRow(props: {
             label="Task actions"
             size={20}
             onClick={() => {
-              setConfirming(false);
+              setStep("main");
               toggle();
             }}
             style={{

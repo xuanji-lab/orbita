@@ -4,7 +4,8 @@ import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, type AppSettings } from "@shared/settings";
 import { useChatSession } from "./features/chat/useChatSession";
-import { ChatView, transcriptToText } from "./features/chat/ChatView";
+import { ChatView } from "./features/chat/ChatView";
+import { transcriptToMarkdown } from "@shared/session";
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { Sidebar } from "./shell/Sidebar";
 import { ActionRail } from "./shell/ActionRail";
@@ -79,7 +80,8 @@ export function App() {
         <ActionRail
           canCopy={session.transcript.length > 0}
           onCopyTranscript={() =>
-            void navigator.clipboard.writeText(transcriptToText(session.transcript))
+            // 与「导出」同一份实现：复制出来的和导出的必须长得一样
+            void navigator.clipboard.writeText(transcriptToMarkdown(session.transcript))
           }
         />
       )}
