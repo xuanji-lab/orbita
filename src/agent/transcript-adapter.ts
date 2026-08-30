@@ -85,6 +85,28 @@ function isToolContent(value: unknown): value is ToolContent {
  * 与其让一条畸形结果把整条 transcript 打断，不如把它序列化成文本留在记录里——
  * **看得到一坨 JSON，好过一条工具调用在记录里没有下文。**
  */
+/**
+ * 工具的结构化副产品。协议把它定为可选的 JsonValue，不入模型上下文，只给 UI 与日志。
+ *
+ * **为什么要带它**：pi 的 edit 工具已经把 diff 算好放在这里了
+ * （`EditToolDetails { diff, patch, firstChangedLine }`）。丢了它，后面做内联 diff
+ * 就得拿旧新内容重算一遍——而旧内容在结果里根本不存在。
+ *
+ * 不做深度校验：能序列化就带上，不能就丢。details 是锦上添花，
+ * 不能为了它把一条本来能记下的工具结果整条弄丢。
+ */
+function toToolDetails(result: unknown): ToolTranscriptItem["details"] {
+  if (!isRecord(result) || !("details" in result)) return undefined;
+  const details = result.details;
+  if (details === undefined || details === null) return undefined;
+  try {
+    JSON.stringify(details);
+  } catch {
+    return undefined;
+  }
+  return details as ToolTranscriptItem["details"];
+}
+
 function toToolContent(result: unknown): ToolContent[] {
   if (isRecord(result) && Array.isArray(result.content)) {
     const blocks = result.content.filter(isToolContent);
@@ -207,6 +229,7 @@ export class TranscriptAdapter {
             active.input,
             toToolContent(event.partialResult),
             "running",
+            toToolDetails(event.partialResult),
           ),
         },
       ];
@@ -227,6 +250,7 @@ export class TranscriptAdapter {
           active.input,
           toToolContent(event.result),
           event.isError ? "error" : "complete",
+          toToolDetails(event.result),
         ),
       },
     ];
@@ -245,6 +269,7 @@ export class TranscriptAdapter {
     input: unknown,
     content: ToolContent[],
     status: "running" | "complete" | "error",
+    details?: ToolTranscriptItem["details"],
   ): TranscriptItem {
     const base = {
       id,
@@ -254,6 +279,7 @@ export class TranscriptAdapter {
       input: input as ToolTranscriptItem["input"],
       content,
       timestamp: this.deps.now(),
+      ...(details === undefined ? null : { details }),
     };
     if (status === "error") return { ...base, status: "error", isError: true };
     if (status === "complete") return { ...base, status: "complete", isError: false };

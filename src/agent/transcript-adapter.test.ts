@@ -414,6 +414,51 @@ describe("TranscriptAdapter · 工具结果", () => {
     assert.deepEqual(seen(cyclic), [{ type: "text", text: "[unserializable tool result]" }]);
   });
 
+  test("details 带进记录——pi 的 edit 工具把 diff 算好放在这里了", () => {
+    const { transcript } = replay([
+      { type: "tool_execution_start", toolCallId: "c", toolName: "edit", args: { path: "a.ts" } },
+      {
+        type: "tool_execution_end",
+        toolCallId: "c",
+        toolName: "edit",
+        result: {
+          content: [{ type: "text", text: "ok" }],
+          details: { diff: "- old\n+ new", patch: "@@ -1 +1 @@", firstChangedLine: 1 },
+        },
+        isError: false,
+      },
+    ]);
+    const item = transcript[0];
+    assert.equal(item?.role, "tool");
+    if (item?.role !== "tool") return;
+    assert.deepEqual(item.details, {
+      diff: "- old\n+ new",
+      patch: "@@ -1 +1 @@",
+      firstChangedLine: 1,
+    });
+  });
+
+  test("details 序列化不了就丢掉 details，不连坑整条结果", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const { transcript } = replay([
+      { type: "tool_execution_start", toolCallId: "c", toolName: "custom", args: {} },
+      {
+        type: "tool_execution_end",
+        toolCallId: "c",
+        toolName: "custom",
+        result: { content: [{ type: "text", text: "still here" }], details: cyclic },
+        isError: false,
+      },
+    ]);
+    const item = transcript[0];
+    assert.equal(item?.role, "tool");
+    if (item?.role !== "tool") return;
+    assert.equal(item.details, undefined);
+    // 内容还在——details 是锦上添花，不能拖累正文
+    assert.deepEqual(item.content, [{ type: "text", text: "still here" }]);
+  });
+
   test("两个工具并行执行：各管各的，不串台", () => {
     const { transcript } = replay([
       { type: "tool_execution_start", toolCallId: "a", toolName: "read", args: { path: "a" } },
