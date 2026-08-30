@@ -96,12 +96,25 @@ function toProviderConfig(provider: Extract<AgentCommand, { type: "create" }>["p
   };
 }
 
-/** AgentSession 的事件里，只有这三种需要翻给 renderer；其余（工具、压缩、重试）等后续 slice。 */
+/**
+ * AgentSession 的事件里，需要翻给 renderer 的那几种；其余（压缩、重试、排队）等后续 slice。
+ *
+ * 三个 `tool_execution_*` **就在 `AgentEvent` 里**（pi-agent-core `types.d.ts`），
+ * `session.subscribe()` 直接能拿到——工具结果不需要写 pi 扩展。
+ * 以前不放行它们的后果是：屏幕上只看得到「调用了 bash」，看不到它返回了什么，
+ * `.jsonl` 里也没有——**那是记录不完整，不只是界面少一块**。
+ */
+const ADAPTABLE_TYPES = new Set([
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+]);
+
 function asAdaptable(event: { type: string }): AdaptableEvent | null {
-  if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end") {
-    return event as AdaptableEvent;
-  }
-  return null;
+  return ADAPTABLE_TYPES.has(event.type) ? (event as AdaptableEvent) : null;
 }
 
 async function createSession(command: Extract<AgentCommand, { type: "create" }>): Promise<void> {

@@ -16,10 +16,14 @@ import type { AssistantMessage, Message, TextContent, ThinkingContent, ToolCall 
 import type {
   AssistantContent,
   ModelRef,
+  ToolTranscriptItem,
   TranscriptItem,
   TranscriptProgress,
   UserContent,
 } from "@earendil-works/pi-protocol";
+
+/** 工具结果的内容块。协议里只允许 text 与 image 两种。 */
+type ToolContent = ToolTranscriptItem["content"][number];
 
 /** 铸 id 的能力注入进来：测试要可预测的 id，生产用 randomUUID。 */
 export interface AdapterDeps {
@@ -27,11 +31,26 @@ export interface AdapterDeps {
   now(): number;
 }
 
-/** 本模块只消费这些事件；其余 AgentSessionEvent 一律忽略（返回空数组）。 */
+/**
+ * 本模块只消费这些事件；其余 AgentSessionEvent 一律忽略（返回空数组）。
+ *
+ * 三个 `tool_execution_*` 就在 pi 的 `AgentEvent` 里（pi-agent-core `types.d.ts`），
+ * `session.subscribe()` 直接拿得到——**不需要写 pi 扩展**。
+ * 上游把 result 声明成 `any`；进到我们这里一律收窄成 `unknown`，转换时再逐层验形状。
+ */
 export type AdaptableEvent =
   | { type: "message_start"; message: Message }
   | { type: "message_update"; message: Message; assistantMessageEvent: AssistantStreamEvent }
-  | { type: "message_end"; message: Message };
+  | { type: "message_end"; message: Message }
+  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
+  | {
+      type: "tool_execution_update";
+      toolCallId: string;
+      toolName: string;
+      args: unknown;
+      partialResult: unknown;
+    }
+  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean };
 
 /** pi-ai AssistantMessageEvent 里我们用得上的分支。 */
 export type AssistantStreamEvent =
@@ -42,6 +61,43 @@ export type AssistantStreamEvent =
 
 function isAssistant(message: Message): message is AssistantMessage {
   return message.role === "assistant";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** 协议只认 text 与 image；别的形状一律丢弃，不猜。 */
+function isToolContent(value: unknown): value is ToolContent {
+  if (!isRecord(value)) return false;
+  if (value.type === "text") return typeof value.text === "string";
+  if (value.type === "image") return typeof value.data === "string" && typeof value.mimeType === "string";
+  return false;
+}
+
+/**
+ * pi 的工具产出 → 协议的内容块。
+ *
+ * 正常路径：pi 给的是 `AgentToolResult`（`{ content: (TextContent|ImageContent)[], details }`），
+ * 它的 content 与协议的 content **形状本来就一样**，过一遍类型守卫直接用。
+ *
+ * 兜底存在的理由：`result` 在上游是 `any`，自定义工具可以返回任何东西。
+ * 与其让一条畸形结果把整条 transcript 打断，不如把它序列化成文本留在记录里——
+ * **看得到一坨 JSON，好过一条工具调用在记录里没有下文。**
+ */
+function toToolContent(result: unknown): ToolContent[] {
+  if (isRecord(result) && Array.isArray(result.content)) {
+    const blocks = result.content.filter(isToolContent);
+    if (blocks.length > 0) return blocks;
+  }
+  if (typeof result === "string") return [{ type: "text", text: result }];
+  if (result === undefined || result === null) return [];
+  try {
+    return [{ type: "text", text: JSON.stringify(result) ?? "" }];
+  } catch {
+    // 循环引用之类：宁可记一句「没法显示」，也不要抛异常打断整条链路
+    return [{ type: "text", text: "[unserializable tool result]" }];
+  }
 }
 
 /** pi-ai 的内容块 → protocol 的内容块。字段名不同的只有 toolCall。 */
@@ -75,6 +131,13 @@ export class TranscriptAdapter {
   private readonly deps: AdapterDeps;
   /** 当前正在流式的 assistant 消息 id；不在流式中时为 null。 */
   private activeAssistantId: string | null = null;
+  /**
+   * 正在执行的工具：toolCallId → 我们铸的 item id 与入参。
+   *
+   * **为什么要存入参**：`tool_execution_end` 上游只给 `result`，**不再给 `args`**，
+   * 而协议的 tool item 要求 input 必填。不在 start 时接住，终态帧就只能编一个空入参。
+   */
+  private readonly activeTools = new Map<string, { id: string; input: unknown }>();
 
   constructor(deps: AdapterDeps) {
     this.deps = deps;
@@ -110,13 +173,91 @@ export class TranscriptAdapter {
       return delta ?? [{ type: "item_updated", item: this.assistantItem(id, event.message, true) }];
     }
 
-    // message_end：终态帧。**abort 也走这里**——pi 的 agent-loop 是先无条件发
-    // message_end、之后才判 stopReason === "aborted"，所以被打断的半截回答同样
-    // 会经过这里落到 item_finished 上。终态具体是哪一种由 stopReason 决定。
-    const id = this.activeAssistantId;
-    if (id === null || !isAssistant(event.message)) return [];
-    this.activeAssistantId = null;
-    return [{ type: "item_finished", item: this.assistantItem(id, event.message, false) }];
+    if (event.type === "message_end") {
+      // 终态帧。**abort 也走这里**——pi 的 agent-loop 是先无条件发
+      // message_end、之后才判 stopReason === "aborted"，所以被打断的半截回答同样
+      // 会经过这里落到 item_finished 上。终态具体是哪一种由 stopReason 决定。
+      const id = this.activeAssistantId;
+      if (id === null || !isAssistant(event.message)) return [];
+      this.activeAssistantId = null;
+      return [{ type: "item_finished", item: this.assistantItem(id, event.message, false) }];
+    }
+
+    if (event.type === "tool_execution_start") {
+      const id = this.deps.newId();
+      this.activeTools.set(event.toolCallId, { id, input: event.args });
+      return [
+        {
+          type: "item_started",
+          item: this.toolItem(id, event.toolCallId, event.toolName, event.args, [], "running"),
+        },
+      ];
+    }
+
+    if (event.type === "tool_execution_update") {
+      const active = this.activeTools.get(event.toolCallId);
+      if (active === undefined) return [];
+      return [
+        {
+          type: "item_updated",
+          item: this.toolItem(
+            active.id,
+            event.toolCallId,
+            event.toolName,
+            active.input,
+            toToolContent(event.partialResult),
+            "running",
+          ),
+        },
+      ];
+    }
+
+    // tool_execution_end：终态帧。没有配对的 start 就丢弃——凭空造一条没有入参的
+    // 工具记录，比不记更差：重开会话时它看起来像一次真实发生过的、参数为空的调用。
+    const active = this.activeTools.get(event.toolCallId);
+    if (active === undefined) return [];
+    this.activeTools.delete(event.toolCallId);
+    return [
+      {
+        type: "item_finished",
+        item: this.toolItem(
+          active.id,
+          event.toolCallId,
+          event.toolName,
+          active.input,
+          toToolContent(event.result),
+          event.isError ? "error" : "complete",
+        ),
+      },
+    ];
+  }
+
+  /**
+   * 工具执行 → 协议的 tool item。
+   *
+   * 协议把 `status` 与 `isError` 做成了**绑定的三个变体**（running/false、complete/false、
+   * error/true），不能自由组合——所以这里按变体分支返回，而不是拼一个对象再补字段。
+   */
+  private toolItem(
+    id: string,
+    toolCallId: string,
+    toolName: string,
+    input: unknown,
+    content: ToolContent[],
+    status: "running" | "complete" | "error",
+  ): TranscriptItem {
+    const base = {
+      id,
+      role: "tool" as const,
+      toolCallId,
+      toolName,
+      input: input as ToolTranscriptItem["input"],
+      content,
+      timestamp: this.deps.now(),
+    };
+    if (status === "error") return { ...base, status: "error", isError: true };
+    if (status === "complete") return { ...base, status: "complete", isError: false };
+    return { ...base, status: "running", isError: false };
   }
 
   /** 流式增量 → assistant_delta。不是增量帧就返回 null，由调用方走整条重发。 */

@@ -1,6 +1,13 @@
 import { useState } from "react";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
+import {
+  indexToolResults,
+  isStandaloneItem,
+  summarizeToolResult,
+  toolResultText,
+  type ToolResultIndex,
+} from "./tool-results";
 import { Composer } from "../../shell/Composer";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
@@ -102,6 +109,9 @@ export function ChatView(props: { session: ChatSession }) {
     );
   }
 
+  // 工具结果不单独占一行——先建索引，渲染工具调用那一行时挂上去（见 tool-results.ts）
+  const toolResults = indexToolResults(session.transcript);
+
   return (
     <Pane
       title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
@@ -119,8 +129,8 @@ export function ChatView(props: { session: ChatSession }) {
         </>
       }
     >
-      {session.transcript.map((item) => (
-        <Item key={item.id} item={item} />
+      {session.transcript.filter(isStandaloneItem).map((item) => (
+        <Item key={item.id} item={item} toolResults={toolResults} />
       ))}
       {session.phase === "turn" && <Responding />}
     </Pane>
@@ -347,7 +357,8 @@ function ComposerBar(props: { session: ChatSession }) {
  * 一条 transcript item。content 是块数组——按块渲染，不压扁（这正是换协议的目的）。
  * 用户指令走独立气泡、agent 输出走全宽文档式（R4-05 hybrid）。
  */
-function Item(props: { item: TranscriptItem }) {
+function Item(props: { item: TranscriptItem; toolResults: ToolResultIndex }) {
+  if (props.item.role === "tool") return null; // 已挂到调用行上，不该走到这里
   if (props.item.role === "user") {
     return (
       <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
@@ -402,13 +413,115 @@ function Item(props: { item: TranscriptItem }) {
         }
         if (block.type === "toolCall") {
           return (
-            <ProcessLine key={index} icon="wrench" tone="var(--color-text-tertiary)" mono>
-              {block.toolName}
-            </ProcessLine>
+            <ToolLine
+              key={index}
+              toolName={block.toolName}
+              result={props.toolResults.get(block.toolCallId)}
+            />
           );
         }
         return null;
       })}
+    </div>
+  );
+}
+
+/**
+ * 工具调用行：折叠时一行，点开看结果原文。
+ *
+ * 设计系统要的是「思考、工具调用、文件阅读都折叠成一行、**点击才展开**」——
+ * 折叠一直有，展开一直没做，因为展开之后根本没东西可看（工具结果从来没进过协议）。
+ *
+ * 状态优先用图标与文字，颜色是第二信号（AGENTS.md）：失败是 `triangle-alert` + "failed"，
+ * 不是光把字染红。
+ */
+function ToolLine(props: { toolName: string; result: ToolTranscriptItem | undefined }) {
+  const [open, setOpen] = useState(false);
+  const { result } = props;
+  const failed = result?.status === "error";
+  const running = result === undefined || result.status === "running";
+  const summary = summarizeToolResult(result);
+  // 还在跑的时候没有完整结果可展——此时给展开只会开出一个空盒子
+  const expandable = result !== undefined && result.status !== "running";
+  const body = expandable ? toolResultText(result) : "";
+
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <button
+        type="button"
+        disabled={!expandable}
+        aria-expanded={expandable ? open : undefined}
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-2)",
+          width: "fit-content",
+          maxWidth: "100%",
+          minWidth: 0,
+          padding: 0,
+          border: "none",
+          background: "none",
+          color: "var(--color-text-secondary)",
+          fontFamily: "var(--font-family-business)",
+          fontSize: "var(--font-size-control)",
+          textAlign: "left",
+          cursor: expandable ? "pointer" : "default",
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            flex: "0 0 auto",
+            color: failed ? "var(--color-danger)" : "var(--color-text-tertiary)",
+          }}
+        >
+          <Icon
+            name={failed ? "triangle-alert" : running ? "loader-circle" : "wrench"}
+            size={13}
+            strokeWidth={1.8}
+            spin={running}
+          />
+        </span>
+        <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {props.toolName}
+        </span>
+        {summary !== null && (
+          <span style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}>{summary}</span>
+        )}
+        {expandable && (
+          <span
+            style={{
+              display: "inline-flex",
+              flex: "0 0 auto",
+              color: "var(--color-text-tertiary)",
+              transform: open ? "rotate(180deg)" : undefined,
+            }}
+          >
+            <Icon name="chevron-down" size={13} strokeWidth={1.8} />
+          </span>
+        )}
+      </button>
+      {open && expandable && (
+        <pre
+          style={{
+            margin: 0,
+            padding: "var(--space-2) var(--space-3)",
+            maxHeight: 320,
+            overflow: "auto",
+            background: "var(--color-bg-muted)",
+            borderRadius: "var(--radius-md)",
+            color: "var(--color-text-secondary)",
+            fontFamily: "var(--font-family-business)",
+            fontSize: "var(--font-size-micro)",
+            lineHeight: "var(--line-height-chat)",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {body === "" ? "(no output)" : body}
+        </pre>
+      )}
     </div>
   );
 }

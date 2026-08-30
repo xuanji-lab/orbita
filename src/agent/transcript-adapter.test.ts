@@ -283,3 +283,152 @@ describe("终态由 stopReason 决定", () => {
     assert.equal(seen("deferred"), "stop");
   });
 });
+
+/**
+ * 工具执行。判分方式同上——帧喂进 pi 自己的归约器，看重建出来的 transcript。
+ *
+ * 这一组之前完全不存在：`asAdaptable` 只放行三个 `message_*`，于是协议的第三支
+ * （`role: "tool"`）**我们从来没生产过**——屏幕、`.jsonl`、导出的 Markdown 里都没有。
+ */
+describe("TranscriptAdapter · 工具结果", () => {
+  test("start → end：重建出一条 complete 的 tool item，入参与产出都在", () => {
+    const { transcript } = replay([
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-1",
+        toolName: "bash",
+        args: { command: "ls src" },
+      },
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-1",
+        toolName: "bash",
+        result: { content: [{ type: "text", text: "agent\nmain\nshared" }], details: null },
+        isError: false,
+      },
+    ]);
+
+    assert.equal(transcript.length, 1);
+    const item = transcript[0];
+    assert.equal(item?.role, "tool");
+    if (item?.role !== "tool") return;
+    assert.equal(item.toolCallId, "call-1");
+    assert.equal(item.toolName, "bash");
+    assert.equal(item.status, "complete");
+    assert.equal(item.isError, false);
+    assert.deepEqual(item.content, [{ type: "text", text: "agent\nmain\nshared" }]);
+    // end 事件上游不再给 args——入参能在，靠的是 start 时接住了它
+    assert.deepEqual(item.input, { command: "ls src" });
+  });
+
+  test("失败的工具：status=error 且 isError=true", () => {
+    const { transcript } = replay([
+      { type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} },
+      {
+        type: "tool_execution_end",
+        toolCallId: "c",
+        toolName: "bash",
+        result: { content: [{ type: "text", text: "command not found" }], details: null },
+        isError: true,
+      },
+    ]);
+    const item = transcript[0];
+    assert.equal(item?.role, "tool");
+    if (item?.role !== "tool") return;
+    assert.equal(item.status, "error");
+    assert.equal(item.isError, true);
+  });
+
+  test("流式中间态：start 后是 running，update 不改变终态前的身份", () => {
+    const { frames } = replay([
+      { type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} },
+      {
+        type: "tool_execution_update",
+        toolCallId: "c",
+        toolName: "bash",
+        args: {},
+        partialResult: { content: [{ type: "text", text: "half" }] },
+      },
+    ]);
+    assert.equal(frames.length, 2);
+    assert.equal(frames[0]?.type, "item_started");
+    assert.equal(frames[1]?.type, "item_updated");
+    for (const frame of frames) {
+      if (frame.type === "assistant_delta") continue;
+      assert.equal(frame.item.role === "tool" ? frame.item.status : null, "running");
+    }
+  });
+
+  test("一次执行从头到尾只有一个 id", () => {
+    const { frames } = replay([
+      { type: "tool_execution_start", toolCallId: "c", toolName: "read", args: { path: "a.ts" } },
+      {
+        type: "tool_execution_update",
+        toolCallId: "c",
+        toolName: "read",
+        args: { path: "a.ts" },
+        partialResult: "partial",
+      },
+      {
+        type: "tool_execution_end",
+        toolCallId: "c",
+        toolName: "read",
+        result: "done",
+        isError: false,
+      },
+    ]);
+    const ids = new Set(frames.map((f) => (f.type === "assistant_delta" ? f.messageId : f.item.id)));
+    assert.equal(ids.size, 1, `一次工具执行应只有一个 id，实际 ${[...ids].join(",")}`);
+  });
+
+  test("没有配对 start 的 end 一律丢弃——不凭空造一条没有入参的记录", () => {
+    const { transcript, frames } = replay([
+      {
+        type: "tool_execution_end",
+        toolCallId: "孤儿",
+        toolName: "bash",
+        result: "x",
+        isError: false,
+      },
+    ]);
+    assert.equal(frames.length, 0);
+    assert.equal(transcript.length, 0);
+  });
+
+  test("非 AgentToolResult 形状的产出序列化成文本，不打断链路", () => {
+    const seen = (result: unknown) => {
+      const { transcript } = replay([
+        { type: "tool_execution_start", toolCallId: "c", toolName: "custom", args: {} },
+        { type: "tool_execution_end", toolCallId: "c", toolName: "custom", result, isError: false },
+      ]);
+      const item = transcript[0];
+      return item?.role === "tool" ? item.content : null;
+    };
+
+    assert.deepEqual(seen("plain string"), [{ type: "text", text: "plain string" }]);
+    assert.deepEqual(seen({ ok: 1 }), [{ type: "text", text: '{"ok":1}' }]);
+    assert.deepEqual(seen(null), []);
+    // 循环引用：JSON.stringify 会抛——宁可记一句「没法显示」也不能抛出去
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    assert.deepEqual(seen(cyclic), [{ type: "text", text: "[unserializable tool result]" }]);
+  });
+
+  test("两个工具并行执行：各管各的，不串台", () => {
+    const { transcript } = replay([
+      { type: "tool_execution_start", toolCallId: "a", toolName: "read", args: { path: "a" } },
+      { type: "tool_execution_start", toolCallId: "b", toolName: "read", args: { path: "b" } },
+      { type: "tool_execution_end", toolCallId: "b", toolName: "read", result: "B", isError: false },
+      { type: "tool_execution_end", toolCallId: "a", toolName: "read", result: "A", isError: false },
+    ]);
+
+    assert.equal(transcript.length, 2);
+    const byCall = new Map(
+      transcript.flatMap((item) => (item.role === "tool" ? [[item.toolCallId, item]] : [])),
+    );
+    assert.deepEqual(byCall.get("a")?.input, { path: "a" });
+    assert.deepEqual(byCall.get("a")?.content, [{ type: "text", text: "A" }]);
+    assert.deepEqual(byCall.get("b")?.input, { path: "b" });
+    assert.deepEqual(byCall.get("b")?.content, [{ type: "text", text: "B" }]);
+  });
+});
