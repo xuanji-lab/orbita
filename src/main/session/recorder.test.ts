@@ -117,6 +117,55 @@ describe("createSessionRecorder", () => {
     assert.deepEqual((await store.load(ID))?.transcript, []);
   });
 
+  /** 刀 0-1 之后 adapter 会发 tool 的终态帧——`item_finished` 分支不看 role,天然收进来。 */
+  type ToolDoneItem = {
+    id: string;
+    role: "tool";
+    toolCallId: string;
+    toolName: string;
+    input: { command: string };
+    content: { type: "text"; text: string }[];
+    timestamp: number;
+  } & ({ status: "error"; isError: true } | { status: "complete"; isError: false });
+
+  // 返回类型显式写成联合：让 TS 保留判别配对，别把 isError 归并成 boolean
+  const toolDone = (isError: boolean): ToolDoneItem => ({
+    id: "t1",
+    role: "tool",
+    toolCallId: "tc1",
+    toolName: "bash",
+    input: { command: "ls src" },
+    content: [{ type: "text", text: "agent/\nmain/" }],
+    timestamp: 3000,
+    ...(isError
+      ? { status: "error" as const, isError: true }
+      : { status: "complete" as const, isError: false }),
+  });
+
+  test("tool 终态帧落盘,字段原样", async () => {
+    record(progress({ type: "item_finished", item: toolDone(false) }));
+    await settle();
+    const item = (await store.load(ID))?.transcript[0];
+    assert.equal(item?.role, "tool");
+    assert.deepEqual(item, toolDone(false));
+  });
+
+  test("失败的 tool 调用照样落盘,isError 带在身上", async () => {
+    record(progress({ type: "item_finished", item: toolDone(true) }));
+    await settle();
+    const item = (await store.load(ID))?.transcript[0];
+    assert.equal(item !== undefined && "isError" in item ? item.isError : undefined, true);
+  });
+
+  test("tool 的 running / 流式帧不落盘——与 assistant 流式同理,只认终态", async () => {
+    // running 态：isError 恒为 false（pi 判别联合的要求），spread 会把它拓宽成 boolean,这里钉死
+    const running = { ...toolDone(false), status: "running" as const, isError: false as const };
+    record(progress({ type: "item_started", item: running }));
+    record(progress({ type: "item_updated", item: running }));
+    await settle();
+    assert.deepEqual((await store.load(ID))?.transcript, []);
+  });
+
   test("写不进去也不抛——落盘失败不该让对话中断", async () => {
     const broken = createSessionRecorder(new SessionStore("/dev/null/nope"));
     assert.doesNotThrow(() => broken(progress({ type: "item_started", item: user })));
