@@ -14,6 +14,7 @@ import { Menu, type MenuItem } from "../../shell/Menu";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon } from "../../shell/Icon";
+import { MarkdownBlock } from "./MarkdownBlock";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle } from "@shared/session";
 import type { ChatSession } from "./useChatSession";
@@ -388,28 +389,11 @@ function Item(props: { item: TranscriptItem; toolResults: ToolResultIndex }) {
     <div style={{ display: "grid", gap: "var(--space-2)", width: "100%", minWidth: 0 }}>
       {props.item.content.map((block, index) => {
         if (block.type === "text") {
-          return (
-            <p
-              key={index}
-              style={{
-                margin: 0,
-                fontSize: "var(--font-size-chat)",
-                lineHeight: "var(--line-height-chat)",
-                whiteSpace: "pre-wrap",
-                textWrap: "pretty",
-              }}
-            >
-              {block.text}
-            </p>
-          );
+          return <MarkdownBlock key={index} text={block.text} />;
         }
-        // 思考与工具都是「过程」，默认只占一行——简洁为默认，细节可展开是下一刀
+        // 思考与工具都是「过程」，默认只占一行；展开契约见 ThinkingLine / ToolLine
         if (block.type === "thinking") {
-          return (
-            <ProcessLine key={index} icon="brain" tone="var(--color-info)">
-              {block.thinking.trim().split("\n")[0] ?? "Thinking"}
-            </ProcessLine>
-          );
+          return <ThinkingLine key={index} text={block.thinking} />;
         }
         if (block.type === "toolCall") {
           return (
@@ -526,33 +510,80 @@ function ToolLine(props: { toolName: string; result: ToolTranscriptItem | undefi
   );
 }
 
-/** 过程行：图标 + 一行文字，坐在聊天面上，无填充无描边（设计系统 *Cards*） */
-function ProcessLine(props: {
-  icon: "brain" | "wrench";
-  tone: string;
-  mono?: boolean;
-  children: React.ReactNode;
-}) {
+/**
+ * 思考行：折叠时一行（brain 图标是全转写里唯一的蓝记号，设计系统 *ThinkingCard*），
+ * 点开看全文。与 ToolLine 同一份折叠契约；展开体 160px 封顶滚动——长思考不许把
+ * 输入卡顶出屏幕。
+ */
+function ThinkingLine(props: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const body = props.text.trim();
   return (
-    <p
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        margin: 0,
-        minWidth: 0,
-        color: "var(--color-text-secondary)",
-        fontFamily: props.mono === true ? "var(--font-family-business)" : "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
-      }}
-    >
-      <span style={{ display: "inline-flex", flex: "0 0 auto", color: props.tone }}>
-        <Icon name={props.icon} size={13} strokeWidth={1.8} />
-      </span>
-      <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {props.children}
-      </span>
-    </p>
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-2)",
+          width: "fit-content",
+          maxWidth: "100%",
+          minWidth: 0,
+          padding: 0,
+          border: "none",
+          background: "none",
+          color: "var(--color-text-secondary)",
+          fontFamily: "var(--font-family-base)",
+          fontSize: "var(--font-size-control)",
+          textAlign: "left",
+          cursor: "pointer",
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            flex: "0 0 auto",
+            color: "var(--color-info)",
+          }}
+        >
+          <Icon name="brain" size={13} strokeWidth={1.8} />
+        </span>
+        <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {body === "" ? "Thinking" : body.split("\n")[0]}
+        </span>
+        <span
+          style={{
+            display: "inline-flex",
+            flex: "0 0 auto",
+            color: "var(--color-text-tertiary)",
+            transform: open ? "rotate(180deg)" : undefined,
+          }}
+        >
+          <Icon name="chevron-down" size={13} strokeWidth={1.8} />
+        </span>
+      </button>
+      {open && body !== "" && (
+        <div
+          style={{
+            maxHeight: 160,
+            overflow: "auto",
+            margin: 0,
+            padding: "var(--space-2) var(--space-3)",
+            background: "var(--color-bg-muted)",
+            borderRadius: "var(--radius-md)",
+            color: "var(--color-text-secondary)",
+            fontSize: "var(--font-size-control)",
+            lineHeight: "var(--line-height-bubble)",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {body}
+        </div>
+      )}
+    </div>
   );
 }
 

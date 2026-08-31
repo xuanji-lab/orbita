@@ -133,6 +133,217 @@ body {
   stroke-width: var(--icon-stroke, 2);
 }
 
+/*
+ * 聊天 markdown（.chat-md）：assistant 文本块经 react-markdown 渲染后的元素样式。
+ * 值全部取设计系统 token；代码块在深浅主题下都是深底（--color-code-bg 不随主题切换，
+ * 设计系统只定义了一份），所以语法色只需要一套。
+ * 语法色是本文件新增的 app 级 token（设计系统没有语法色）——取 github-dark 一族，
+ * 与暗主题的 --color-danger (#ff7b72) 同源，整块拼起来才不杂。
+ */
+:root {
+  --syntax-comment: #8b949e;
+  --syntax-keyword: #ff7b72;
+  --syntax-string: #a5d6ff;
+  --syntax-constant: #79c0ff;
+  --syntax-entity: #d2a8ff;
+  --syntax-tag: #7ee787;
+}
+
+.chat-md {
+  min-width: 0;
+  font-size: var(--font-size-chat);
+  line-height: var(--line-height-chat);
+  overflow-wrap: anywhere;
+}
+
+.chat-md > :first-child {
+  margin-top: 0;
+}
+
+.chat-md > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-md p {
+  margin: var(--space-2) 0;
+}
+
+.chat-md h1,
+.chat-md h2,
+.chat-md h3,
+.chat-md h4,
+.chat-md h5,
+.chat-md h6 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-weight: var(--weight-bold);
+  line-height: 1.4;
+}
+
+.chat-md h1 {
+  font-size: var(--font-size-heading);
+}
+
+.chat-md h2 {
+  font-size: var(--font-size-title);
+}
+
+.chat-md h3,
+.chat-md h4,
+.chat-md h5,
+.chat-md h6 {
+  font-size: var(--font-size-chat);
+}
+
+.chat-md ul,
+.chat-md ol {
+  margin: var(--space-2) 0;
+  padding-inline-start: 24px;
+}
+
+.chat-md li {
+  margin: 3px 0;
+}
+
+.chat-md li > p {
+  margin: 0;
+}
+
+.chat-md li::marker {
+  color: var(--color-text-tertiary);
+}
+
+.chat-md blockquote {
+  margin: var(--space-2) 0;
+  padding-inline-start: var(--space-3);
+  border-left: 2px solid var(--color-border-strong);
+  color: var(--color-text-secondary);
+}
+
+.chat-md a {
+  color: var(--color-chat-link);
+  text-decoration: none;
+}
+
+.chat-md a:hover {
+  text-decoration: underline;
+}
+
+/* 行内 code 是深色小芯片；代码块整体也是深底——同一对 token，深浅主题共用 */
+.chat-md code {
+  font-family: var(--font-family-business);
+  font-size: 0.9em;
+  background: var(--color-code-bg);
+  color: var(--color-code-text);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+}
+
+.chat-md pre {
+  margin: var(--space-2) 0;
+  padding: var(--space-3);
+  background: var(--color-code-bg);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.chat-md pre code {
+  background: none;
+  padding: 0;
+  font-size: var(--font-size-caption);
+  line-height: 1.55;
+}
+
+.chat-md table {
+  margin: var(--space-2) 0;
+  border-collapse: collapse;
+}
+
+.chat-md th,
+.chat-md td {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-subtle);
+  text-align: left;
+}
+
+.chat-md th {
+  background: var(--color-chat-table-bg);
+  font-weight: var(--weight-semibold);
+}
+
+.chat-md hr {
+  margin: var(--space-3) 0;
+  border: none;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.chat-md img {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+}
+
+/* rehype-highlight 打出的语法记号；只映射常用的那些，没映射的保持 --color-code-text */
+.chat-md .hljs-comment,
+.chat-md .hljs-quote {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.chat-md .hljs-keyword,
+.chat-md .hljs-selector-tag,
+.chat-md .hljs-literal,
+.chat-md .hljs-doctag,
+.chat-md .hljs-formula {
+  color: var(--syntax-keyword);
+}
+
+.chat-md .hljs-string,
+.chat-md .hljs-regexp {
+  color: var(--syntax-string);
+}
+
+.chat-md .hljs-number,
+.chat-md .hljs-symbol,
+.chat-md .hljs-bullet,
+.chat-md .hljs-link,
+.chat-md .hljs-attr,
+.chat-md .hljs-attribute,
+.chat-md .hljs-variable,
+.chat-md .hljs-template-variable,
+.chat-md .hljs-params {
+  color: var(--syntax-constant);
+}
+
+.chat-md .hljs-title,
+.chat-md .hljs-title.function_,
+.chat-md .hljs-section,
+.chat-md .hljs-name {
+  color: var(--syntax-entity);
+}
+
+.chat-md .hljs-type,
+.chat-md .hljs-built_in,
+.chat-md .hljs-title.class_,
+.chat-md .hljs-selector-id,
+.chat-md .hljs-selector-class {
+  color: var(--syntax-tag);
+}
+
+.chat-md .hljs-addition {
+  color: var(--syntax-tag);
+}
+
+.chat-md .hljs-deletion {
+  color: var(--syntax-keyword);
+}
+
+.chat-md .hljs-emphasis {
+  font-style: italic;
+}
+
+.chat-md .hljs-strong {
+  font-weight: var(--weight-semibold);
+}
+
 @keyframes orbita-spin {
   to {
     transform: rotate(360deg);
