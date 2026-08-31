@@ -183,15 +183,38 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
     const compact = parseCompactCommand(text);
     if (compact !== null) {
-      const active = sessionRef.current;
+      // 压缩要有可续的会话：活着的直接压；从盘上打开还没唤醒的先按 resume
+      // 唤醒再压。**绝不为压缩新建会话**——对一条空会话压缩没有意义。
+      let active = sessionRef.current;
+      try {
+        if (active === null && opened !== null && opened.piSessionFile !== null) {
+          if (model === null) throw new Error("Add a provider with at least one model first");
+          active = await api.agent.create({
+            cwd: opened.cwd,
+            workspaceId: opened.workspaceId,
+            resume: { sessionId: opened.id, piSessionFile: opened.piSessionFile },
+            providerId: model.providerId,
+            modelId: model.modelId,
+            mode,
+          });
+          setSessionId(active);
+          sessionRef.current = active;
+          liveRef.current.add(active);
+          refreshSessions();
+        }
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
       if (active === null) {
         setError("没有正在运行的任务可压缩");
         return;
       }
       setDraft("");
+      const id: string = active;
       // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
-      setStates((prev) => setEntryPhase(prev, active, "turn"));
-      void api.agent.compact(active, compact.instructions);
+      setStates((prev) => setEntryPhase(prev, id, "turn"));
+      void api.agent.compact(id, compact.instructions);
       return;
     }
     let id: string | null = sessionId;
