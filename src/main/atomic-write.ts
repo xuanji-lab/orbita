@@ -12,6 +12,20 @@ import { randomBytes } from "node:crypto";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+/**
+ * Windows 上杀软 / 搜索索引器可能瞬时锁住刚创建的临时文件或目标文件，rename 撞上就是
+ * EPERM / EACCES / EBUSY（2026-08-31 真实咬过一次：meta.json 落盘失败）。这种锁通常
+ * 几十毫秒内自己放开——退避重试基本都能过；重试耗尽就照原样抛，由调用方接。
+ */
+const RETRY_DELAYS_MS = [25, 50, 100];
+
+function isTransientLock(error: unknown): boolean {
+  if (!(error instanceof Error) || !("code" in error)) return false;
+  return error.code === "EPERM" || error.code === "EACCES" || error.code === "EBUSY";
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** 把 `value` 序列化成带尾换行的格式化 JSON，原子落到 `filePath`。 */
 export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   await writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
@@ -19,13 +33,18 @@ export async function writeJsonAtomic(filePath: string, value: unknown): Promise
 
 export async function writeTextAtomic(filePath: string, text: string): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
-  // 随机后缀：同一目标被并发写时两个临时文件不会互相踩
-  const tempPath = `${filePath}.${randomBytes(4).toString("hex")}.tmp`;
-  try {
-    await writeFile(tempPath, text, "utf8");
-    await rename(tempPath, filePath);
-  } catch (error) {
-    await unlink(tempPath).catch(() => undefined);
-    throw error;
+  for (let attempt = 0; ; attempt += 1) {
+    // 随机后缀：同一目标被并发写时两个临时文件不会互相踩
+    const tempPath = `${filePath}.${randomBytes(4).toString("hex")}.tmp`;
+    try {
+      await writeFile(tempPath, text, "utf8");
+      await rename(tempPath, filePath);
+      return;
+    } catch (error) {
+      await unlink(tempPath).catch(() => undefined);
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !isTransientLock(error)) throw error;
+      await sleep(delay);
+    }
   }
 }
