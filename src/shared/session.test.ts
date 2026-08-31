@@ -2,6 +2,7 @@ import { deepStrictEqual, doesNotMatch, match, strictEqual } from "node:assert/s
 import { describe, it } from "node:test";
 import {
   deriveSessionTitle,
+  isCompactedRecord,
   parseSessionMeta,
   SESSION_TITLE_MAX,
   sortSessions,
@@ -177,5 +178,63 @@ describe("transcriptToMarkdown", () => {
 
   it("结尾带换行——文本文件该以换行结束", () => {
     match(transcriptToMarkdown([user]), /\n$/);
+  });
+});
+
+describe("isCompactedRecord", () => {
+  const compacted = {
+    role: "compacted" as const,
+    id: "c1",
+    summary: "## Goal\n做完了",
+    tokensBefore: 85000,
+    timestamp: 3,
+  };
+
+  it("完整的一条原样认出", () => {
+    strictEqual(isCompactedRecord(compacted), true);
+  });
+
+  it("缺任一字段都不算——半截界碑不能当消息渲染", () => {
+    for (const key of ["id", "summary", "tokensBefore", "timestamp"]) {
+      strictEqual(isCompactedRecord({ ...compacted, [key]: undefined }), false, `缺 ${key}`);
+    }
+    strictEqual(isCompactedRecord({ ...compacted, summary: 42 }), false);
+    strictEqual(isCompactedRecord({ ...compacted, tokensBefore: "many" }), false);
+    strictEqual(isCompactedRecord(null), false);
+    strictEqual(isCompactedRecord("compacted"), false);
+  });
+
+  it("role 冒充不算", () => {
+    strictEqual(isCompactedRecord({ ...compacted, role: "assistant" }), false);
+  });
+});
+
+describe("transcriptToMarkdown 的压缩界碑", () => {
+  const compacted = {
+    role: "compacted" as const,
+    id: "c1",
+    summary: "## Goal\n重做外壳\n## Done\n一半",
+    tokensBefore: 85000,
+    timestamp: 3,
+  };
+  const user = {
+    id: "u1",
+    role: "user" as const,
+    content: [{ type: "text" as const, text: "继续" }],
+    timestamp: 4,
+  };
+
+  it("界碑出标记行 + 引用块摘要，不冒充 User / Assistant", () => {
+    const md = transcriptToMarkdown([compacted, user]);
+    match(md, /\*\*\[已压缩\]\*\*（此前上下文约 85,000 tokens）/);
+    match(md, /> ## Goal\n> 重做外壳\n> ## Done\n> 一半/);
+    match(md, /\*\*User\*\*\n\n继续/);
+    doesNotMatch(md, /\*\*Assistant\*\*/);
+  });
+
+  it("摘要首尾空白先修掉再进引用块", () => {
+    const md = transcriptToMarkdown([{ ...compacted, summary: "\n 摘要 \n" }]);
+    match(md, /> 摘要/);
+    doesNotMatch(md, /> \n/);
   });
 });

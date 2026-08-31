@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent/client";
 import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "@shared/agent-ipc";
+import type { SessionRecord } from "@shared/session";
 
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
 export interface PendingApproval {
@@ -99,11 +100,14 @@ export function setEntryPhase(
 export function seedFromDisk(
   states: SessionStates,
   sessionId: string,
-  transcript: readonly TranscriptItem[],
+  transcript: readonly SessionRecord[],
 ): SessionStates {
+  // 压缩界碑不是消息，pi 的归约器不认识它——只把往来种进去；界碑进槽是下一步的事。
+  // 内联谓词而非 isCompactedRecord()：本文件会被 node --test 加载，@shared 的值导入解析不了。
+  const items = transcript.filter((item): item is TranscriptItem => item.role !== "compacted");
   const next = new Map(states);
   next.set(sessionId, {
-    transcript: createTranscriptState(seedSnapshot(transcript)),
+    transcript: createTranscriptState(seedSnapshot(items)),
     phase: "idle",
     approvals: [],
   });

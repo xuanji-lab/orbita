@@ -6,13 +6,47 @@
  *
  * 存储形状（理由见 `docs/plans/2026-08-25-会话存储与命名工作区.md`）：
  *   sessions/<id>.meta.json   本文件的 SessionMeta，可变，原子写
- *   sessions/<id>.jsonl       只追加，一行一个 TranscriptItem
+ *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
+
+/**
+ * 压缩边界记录。上下文压缩不是一条消息，是「此前的一切已折叠成摘要」的界碑——
+ * 单独一个 role，不塞进 pi 的 TranscriptItem，也不做通用 visibility 包装：
+ * 今天唯一的内部记录就是它，等第二个消费者出现再泛化（加字段是加法）。
+ */
+export interface CompactedRecord {
+  role: "compacted";
+  id: string;
+  /** 压缩生成的摘要全文（markdown） */
+  summary: string;
+  /** 压缩前上下文的 token 数，折叠行上给人看 */
+  tokensBefore: number;
+  timestamp: number;
+}
+
+/** 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）或压缩界碑（我们的）。 */
+export type SessionRecord = TranscriptItem | CompactedRecord;
+
+/**
+ * 逐字段校验，坏值判 false。readLog 靠它分流：**坏掉的 compacted 行按坏行跳过**，
+ * 绝不把半截界碑当消息渲染——用户会把摘要残渣当成 agent 说过的话。
+ */
+export function isCompactedRecord(raw: unknown): raw is CompactedRecord {
+  if (typeof raw !== "object" || raw === null) return false;
+  const value = raw as Record<string, unknown>;
+  return (
+    value["role"] === "compacted" &&
+    typeof value["id"] === "string" &&
+    typeof value["summary"] === "string" &&
+    typeof value["tokensBefore"] === "number" &&
+    typeof value["timestamp"] === "number"
+  );
+}
 
 export interface SessionMeta {
   id: string;
@@ -51,7 +85,7 @@ export interface SessionMeta {
 /** 打开一条会话拿到的东西：元数据 + 落盘的 transcript */
 export interface SessionDetail {
   meta: SessionMeta;
-  transcript: TranscriptItem[];
+  transcript: SessionRecord[];
 }
 
 /**
@@ -137,7 +171,7 @@ function iso(timestamp: number): string {
  * （设计系统：用户需要的是「知道 agent 在干嘛」与可追溯）。
  */
 export function transcriptToMarkdown(
-  transcript: readonly TranscriptItem[],
+  transcript: readonly SessionRecord[],
   meta?: SessionMeta,
 ): string {
   const parts: string[] = [];
@@ -156,6 +190,18 @@ export function transcriptToMarkdown(
   }
 
   for (const item of transcript) {
+    if (isCompactedRecord(item)) {
+      // 界碑在导出里同样站得住：标记 + 摘要进引用块，读起来是「此前发生过」而不是对话
+      parts.push(`**[已压缩]**（此前上下文约 ${item.tokensBefore.toLocaleString("en-US")} tokens）`);
+      parts.push(
+        item.summary
+          .trim()
+          .split("\n")
+          .map((line) => `> ${line}`)
+          .join("\n"),
+      );
+      continue;
+    }
     const body: string[] = [];
     for (const block of item.content) {
       if (block.type === "text") body.push(block.text.trim());

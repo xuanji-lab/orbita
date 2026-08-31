@@ -20,6 +20,7 @@ import {
   sortSessions,
   type SessionDetail,
   type SessionMeta,
+  type SessionRecord,
 } from "../../shared/session.ts";
 
 /**
@@ -55,10 +56,10 @@ export class SessionStore {
   }
 
   /**
-   * 记一条 transcript item。**只在终态调用**——哪些帧算终态、abort 怎么算，
+   * 记一条 transcript 记录。**只在终态调用**——哪些帧算终态、abort 怎么算，
    * 全部由 `recorder.ts` 决定，这里只管写。
    */
-  async record(id: string, item: TranscriptItem): Promise<void> {
+  async record(id: string, item: SessionRecord): Promise<void> {
     const meta = await this.readMeta(id);
     if (meta === null) return; // 会话的 meta 没了就别再往日志里加，避免长出孤儿日志
     await mkdir(this.dir, { recursive: true });

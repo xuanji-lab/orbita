@@ -11,6 +11,7 @@
  */
 import type { SessionPhase, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
+import type { CompactedRecord } from "./session.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -102,6 +103,11 @@ export type AgentEvent =
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
   | { type: "phase"; sessionId: string; phase: SessionPhase }
+  /**
+   * 上下文压缩完成，附边界记录（摘要 + tokensBefore）。pi 只经 `compaction_end`
+   * 事件暴露压缩，摘要不在任何 TranscriptItem 里——我们在这里把它变成一条落盘的界碑。
+   */
+  | { type: "compaction"; sessionId: string; record: CompactedRecord }
   /** 工具执行前的请示。UI 要显示它并等用户回答（三档模式见 shared/permission.ts） */
   | {
       type: "permission";
