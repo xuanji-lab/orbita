@@ -11,6 +11,7 @@ import {
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
+  type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
@@ -34,6 +35,11 @@ export interface ChatSession {
   compactions: readonly CompactedRecord[];
   /** turn = 这一轮还在跑；compaction = 上下文压缩中；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
+  /**
+   * 按 id 查某条会话的运行态（槽里有真相）。侧栏每行要显示**它自己**的转圈/完成，
+   * 与「当前看哪条」无关——后台在跑的会话切走了也照样转圈。
+   */
+  phaseOf: (id: string) => SessionEntry["phase"];
   error: string | null;
   draft: string;
   setDraft: (value: string) => void;
@@ -452,6 +458,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     transcript: selectTranscript(entry.transcript),
     compactions: entry.compactions,
     phase: entry.phase,
+    phaseOf: (id: string): SessionEntry["phase"] => states.get(id)?.phase ?? "idle",
     error,
     draft,
     setDraft,

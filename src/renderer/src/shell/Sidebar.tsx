@@ -502,12 +502,14 @@ function SessionRow(props: {
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState<"main" | "move" | "delete">("main");
   const live = meta.id === session.sessionId;
+  // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
+  const running = session.phaseOf(meta.id) !== "idle";
   /**
    * 置顶图标**只顶替 idle 那一档**。正在跑或失败时状态优先——
    * 置顶是用户的偏好，运行中是正在发生的事，后者更该被看见。
    */
-  const idle = !(live && (session.phase === "turn" || session.error !== null));
-  const status = live && session.phase === "turn"
+  const idle = !(running || (live && session.error !== null));
+  const status = running
     ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
     : live && session.error !== null
       ? { icon: "triangle-alert" as const, tone: "var(--color-danger)", label: "Failed", spin: false }
