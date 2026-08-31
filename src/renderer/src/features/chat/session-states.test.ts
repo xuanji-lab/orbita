@@ -1,4 +1,4 @@
-import { test, describe } from "node:test";
+import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -9,6 +9,7 @@ import {
   applyAgentEvent,
   applyCompactionBoundary,
   markAllIdle,
+  parseCompactCommand,
   removeApproval,
   seedFromDisk,
   setEntryPhase,
@@ -235,5 +236,28 @@ describe("applyCompactionBoundary —— 只显示最后一条边界之后", () 
   test("同毫秒时界碑在前——边界之后的东西不该被边界自己挡住", () => {
     const records = applyCompactionBoundary([compacted("c1", 3000)], [userItem("u2", 3000)]);
     assert.deepEqual(records.map((r) => r.id), ["c1", "u2"]);
+  });
+});
+
+describe("parseCompactCommand —— 手动压缩指令在本地拦下，不落进模型手里", () => {
+  it("/compact 直接压缩，不带要求", () => {
+    assert.deepEqual(parseCompactCommand("/compact"), {});
+    assert.deepEqual(parseCompactCommand("  /compact  "), {});
+  });
+
+  it("/compact <要求> 把要求带回去，前后空白修掉", () => {
+    assert.deepEqual(parseCompactCommand("/compact 保留技术术语"), { instructions: "保留技术术语" });
+    assert.deepEqual(parseCompactCommand("  /compact   保留术语  "), { instructions: "保留术语" });
+  });
+
+  it("/compact 后只有空白等同裸指令，不给空字符串要求", () => {
+    assert.deepEqual(parseCompactCommand("/compact   "), {});
+  });
+
+  it("别的输入一律不拦——普通消息、别的斜杠、前缀撞车都不算", () => {
+    assert.equal(parseCompactCommand("帮我压缩一下上下文"), null);
+    assert.equal(parseCompactCommand("/compactx"), null);
+    assert.equal(parseCompactCommand("请 /compact"), null);
+    assert.equal(parseCompactCommand(""), null);
   });
 });

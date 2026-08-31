@@ -142,6 +142,12 @@ export class AgentHost {
     this.post({ type: "abort", sessionId });
   }
 
+  /** 手动压缩上下文。**发完即回**：忙碌态与界碑走 compaction 事件链，调用方不等结果。 */
+  async compact(sessionId: string, instructions?: string): Promise<void> {
+    await this.ensure();
+    this.post({ type: "compact", sessionId, ...(instructions ? { instructions } : {}) });
+  }
+
   dispose(): void {
     this.child?.kill();
     this.child = null;

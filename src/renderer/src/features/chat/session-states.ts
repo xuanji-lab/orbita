@@ -25,6 +25,21 @@ export interface PendingApproval {
   input: unknown;
 }
 
+/**
+ * 输入框里的手动压缩指令：`/compact` 直接压缩，`/compact <要求>` 带自定义要求。
+ * **必须在这里拦下**——发出去的话它会落到模型手里，模型会角色扮演一段
+ * 「摘要」贴进对话，而什么都没压缩（真实发生过的事故，刀 0-3 的验收发现）。
+ * null = 不是压缩指令，照常发送。
+ */
+export function parseCompactCommand(text: string): { instructions?: string } | null {
+  const trimmed = text.trim();
+  if (trimmed === "/compact") return {};
+  if (trimmed.startsWith("/compact ")) {
+    return { instructions: trimmed.slice("/compact ".length).trim() || undefined };
+  }
+  return null;
+}
+
 /** 一条会话在 renderer 里的全部运行时状态。 */
 export interface SessionEntry {
   transcript: TranscriptState;

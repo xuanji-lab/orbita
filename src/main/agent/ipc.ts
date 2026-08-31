@@ -79,6 +79,10 @@ export function registerAgentIpc(
     host.submit(sessionId, text),
   );
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
+  ipcMain.handle(
+    ipcChannels.agentCompact,
+    (_e, sessionId: string, instructions?: string) => host.compact(sessionId, instructions),
+  );
 
   ipcMain.handle(
     ipcChannels.agentSetMode,

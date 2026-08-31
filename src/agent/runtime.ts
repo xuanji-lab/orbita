@@ -275,6 +275,19 @@ async function handle(command: AgentCommand): Promise<void> {
     live.session.abort();
     return;
   }
+  if (command.type === "compact") {
+    // 手动压缩。pi 的 compact() 内部先 abort 当前这一轮；忙碌态与界碑
+    // 都走 compaction_start / compaction_end 事件那条已接好的链。
+    void live.session.compact(command.instructions).catch((error: unknown) => {
+      // 压缩起不来（没模型 / 被占用）必须把忙碌态放掉，否则输入卡永远锁着
+      send({
+        type: "failed",
+        sessionId: command.sessionId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return;
+  }
   live.unsubscribe();
   live.session.dispose();
   sessions.delete(command.sessionId);

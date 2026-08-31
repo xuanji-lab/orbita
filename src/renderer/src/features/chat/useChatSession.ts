@@ -6,6 +6,7 @@ import {
   EMPTY_ENTRY,
   applyAgentEvent,
   createSessionStates,
+  parseCompactCommand,
   removeApproval,
   seedFromDisk,
   setEntryPhase,
@@ -178,6 +179,21 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     const text = draft.trim();
     if (text === "") return;
     setError(null);
+    // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
+    // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
+    const compact = parseCompactCommand(text);
+    if (compact !== null) {
+      const active = sessionRef.current;
+      if (active === null) {
+        setError("没有正在运行的任务可压缩");
+        return;
+      }
+      setDraft("");
+      // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
+      setStates((prev) => setEntryPhase(prev, active, "turn"));
+      void api.agent.compact(active, compact.instructions);
+      return;
+    }
     let id: string | null = sessionId;
     try {
       if (id === null) {
