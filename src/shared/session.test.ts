@@ -192,6 +192,8 @@ describe("isCompactedRecord", () => {
 
   it("完整的一条原样认出", () => {
     strictEqual(isCompactedRecord(compacted), true);
+    // tokensAfter 是后来加的可选字段：旧记录没有照样认
+    strictEqual(isCompactedRecord({ ...compacted, tokensAfter: 8200 }), true);
   });
 
   it("缺任一字段都不算——半截界碑不能当消息渲染", () => {
@@ -202,6 +204,10 @@ describe("isCompactedRecord", () => {
     strictEqual(isCompactedRecord({ ...compacted, tokensBefore: "many" }), false);
     strictEqual(isCompactedRecord(null), false);
     strictEqual(isCompactedRecord("compacted"), false);
+  });
+
+  it("tokensAfter 坏值整行判坏——与既有逐字段校验一致", () => {
+    strictEqual(isCompactedRecord({ ...compacted, tokensAfter: "small" }), false);
   });
 
   it("role 冒充不算", () => {

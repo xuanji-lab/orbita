@@ -26,6 +26,8 @@ export interface CompactedRecord {
   summary: string;
   /** 压缩前上下文的 token 数，折叠行上给人看 */
   tokensBefore: number;
+  /** 压缩后上下文的估算 token 数（pi 的 estimate）。旧记录没有，展示时回退 */
+  tokensAfter?: number;
   timestamp: number;
 }
 
@@ -44,6 +46,7 @@ export function isCompactedRecord(raw: unknown): raw is CompactedRecord {
     typeof value["id"] === "string" &&
     typeof value["summary"] === "string" &&
     typeof value["tokensBefore"] === "number" &&
+    (value["tokensAfter"] === undefined || typeof value["tokensAfter"] === "number") &&
     typeof value["timestamp"] === "number"
   );
 }
