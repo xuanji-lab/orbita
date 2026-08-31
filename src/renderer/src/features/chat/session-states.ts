@@ -146,24 +146,24 @@ export function seedFromDisk(
 }
 
 /**
- * 视图合成：界碑按时间插回往来流，再应用「只显示最后一条边界之后」的规则——
- * pi `buildContextEntries` 的同款语义（对模型不可见的历史，对视图也不可见）。
- * **只是显示规则**：原始记录仍全量在盘上，这里一个字节都不丢。
+ * 视图合成：界碑按发生位置插回往来流。**历史一条不少地保持可见**——
+ * 被收进「已压缩」折叠行的是摘要本身（它才是混进对话的内部消息），
+ * 不是压缩点之前的往来。pi 的「边界前隐藏」语义在这里被用户裁决否决：
+ * 可追溯是产品底线，pi 的做法照搬错了对象。
  */
-export function applyCompactionBoundary(
+export function mergeCompactions(
   compactions: readonly CompactedRecord[],
   transcript: readonly TranscriptItem[],
 ): SessionRecord[] {
   if (compactions.length === 0) return [...transcript];
   const records: SessionRecord[] = [...transcript, ...compactions];
-  // 同毫秒时界碑排在前（两边都是界碑则保持原序）——「界碑之后」的东西不该被边界自己挡住
+  // 同毫秒时界碑排在前（两边都是界碑则保持原序）
   records.sort(
     (a, b) =>
       a.timestamp - b.timestamp ||
       Number(b.role === "compacted") - Number(a.role === "compacted"),
   );
-  const last = compactions.reduce((a, b) => (b.timestamp >= a.timestamp ? b : a));
-  return records.slice(records.indexOf(last));
+  return records;
 }
 
 /** 按 requestId 跨槽摘除一条审批。没有匹配就原样返回（同一引用）。 */

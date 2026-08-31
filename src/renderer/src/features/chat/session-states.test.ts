@@ -7,8 +7,8 @@ import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
   applyAgentEvent,
-  applyCompactionBoundary,
   markAllIdle,
+  mergeCompactions,
   parseCompactCommand,
   removeApproval,
   seedFromDisk,
@@ -204,37 +204,37 @@ describe("压缩界碑的进出槽", () => {
   });
 });
 
-describe("applyCompactionBoundary —— 只显示最后一条边界之后", () => {
+describe("mergeCompactions —— 界碑就地插回，历史一条不少", () => {
   test("没有界碑时原样全显", () => {
     const items = [userItem("u1", 1), userItem("u2", 2)];
-    assert.deepEqual(applyCompactionBoundary([], items), items);
+    assert.deepEqual(mergeCompactions([], items), items);
   });
 
-  test("界碑按时间插回，此前的往来隐去——pi 的 buildContextEntries 同款语义", () => {
-    const records = applyCompactionBoundary([compacted("c1", 2000)], [
+  test("界碑按发生位置插回，此前的往来保持可见——被收起的是摘要，不是历史", () => {
+    const records = mergeCompactions([compacted("c1", 2000)], [
       userItem("u1", 1000),
       userItem("u2", 3000),
       userItem("u3", 4000),
     ]);
-    assert.deepEqual(roles(records), ["compacted", "user", "user"]);
+    assert.deepEqual(roles(records), ["user", "compacted", "user", "user"]);
     assert.deepEqual(
       records.map((r) => r.id),
-      ["c1", "u2", "u3"],
+      ["u1", "c1", "u2", "u3"],
     );
   });
 
-  test("多次压缩只认最后一条边界，更早的界碑连同历史一起隐去", () => {
-    const records = applyCompactionBoundary([compacted("c1", 2000), compacted("c2", 6000)], [
+  test("多次压缩各自就位，不吞掉任何一段", () => {
+    const records = mergeCompactions([compacted("c1", 2000), compacted("c2", 6000)], [
       userItem("u1", 1000),
       userItem("u2", 3000),
       userItem("u3", 7000),
     ]);
-    assert.deepEqual(roles(records), ["compacted", "user"]);
-    assert.deepEqual(records.map((r) => r.id), ["c2", "u3"]);
+    assert.deepEqual(roles(records), ["user", "compacted", "user", "compacted", "user"]);
+    assert.deepEqual(records.map((r) => r.id), ["u1", "c1", "u2", "c2", "u3"]);
   });
 
-  test("同毫秒时界碑在前——边界之后的东西不该被边界自己挡住", () => {
-    const records = applyCompactionBoundary([compacted("c1", 3000)], [userItem("u2", 3000)]);
+  test("同毫秒时界碑在前——先立碑，后发生的消息排在碑后", () => {
+    const records = mergeCompactions([compacted("c1", 3000)], [userItem("u2", 3000)]);
     assert.deepEqual(records.map((r) => r.id), ["c1", "u2"]);
   });
 });

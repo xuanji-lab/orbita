@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
-import { applyCompactionBoundary } from "./session-states";
+import { mergeCompactions } from "./session-states";
 import {
   diffLineKind,
   editDiffText,
@@ -116,8 +116,8 @@ export function ChatView(props: { session: ChatSession }) {
 
   // 工具结果不单独占一行——先建索引，渲染工具调用那一行时挂上去（见 tool-results.ts）
   const toolResults = indexToolResults(session.transcript);
-  // 界碑插回往来流并应用边界规则：压缩前的历史对视图隐藏（pi 同款语义），原始记录仍在盘上
-  const records = applyCompactionBoundary(session.compactions, session.transcript);
+  // 界碑按发生位置插回往来流：压缩摘要收进「已压缩」折叠行，历史一条不少
+  const records = mergeCompactions(session.compactions, session.transcript);
 
   return (
     <Pane
