@@ -169,6 +169,12 @@ translucency step alone. No thick rules, no coloured left-border accents.
 **Cards.** One recipe: the single `--glass-bg`, 1px light border, `--shadow-composer`
 (`0 8px 28px rgba(20,24,31,.08)`), 10px radius. Chat-internal cards (tool, thinking) have **no**
 border and **no** fill — they sit directly on the chat surface and are separated by 16px of space.
+Process rows live in the quiet tiers: while a row's activity is in progress its head (icon + label)
+is the only bright thing at secondary; once the state settles the **whole row** recedes to tertiary —
+one flat grey, with failure red as the only exception. Body text never competes with the past.
+A run of same-type tool calls gathers under a plain verb header (`读取 · × 4`): it lives expanded
+while the turn runs, and folds itself away — every group, every time, without memory — the moment
+the turn settles; a failed run keeps a red glyph on the header so failure never folds away silently.
 Solid panels (dialogs, drawers) are white with a hairline and a heavier shadow.
 
 **Shadows.** Four steps, all cool-grey and soft: `--shadow-border` (a 1px inner hairline),
@@ -189,7 +195,9 @@ up and out, 240ms for the composer gliding to the bottom of the window and becom
 composer. Easing is `cubic-bezier(.22,1,.36,1)` for entrances and `cubic-bezier(.4,0,.6,1)` for that
 one travel. Continuous motion exists only for states in progress, and only in two forms: rotation
 (loaders, `loader-circle`) and breathing (`orbita-breath`, 1.6s ease-in-out between opacity 1 and
-.45) for background maintenance such as context compaction. Beyond those two there is no idle
+.45) for background maintenance such as context compaction — and for the head of a process row
+(thinking, tool, tool group) whose state is still in progress: the head breathes at secondary,
+and stops the moment the state settles. Beyond those two there is no idle
 animation, no bounce, no parallax; `prefers-reduced-motion` collapses everything to 0.01ms.
 
 ## Iconography

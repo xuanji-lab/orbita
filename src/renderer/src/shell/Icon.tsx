@@ -20,6 +20,9 @@ import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?ra
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
+import search from "../../../../Orbita Design System/assets/icons/lucide/search.svg?raw";
+import terminal from "../../../../Orbita Design System/assets/icons/lucide/terminal.svg?raw";
+import fileText from "../../../../Orbita Design System/assets/icons/lucide/file-text.svg?raw";
 import trash2 from "../../../../Orbita Design System/assets/icons/lucide/trash-2.svg?raw";
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
@@ -59,6 +62,9 @@ const ICONS = {
   "shield-check": shieldCheck,
   sliders,
   square,
+  search,
+  terminal,
+  "file-text": fileText,
   "trash-2": trash2,
   "triangle-alert": triangleAlert,
   workflow,

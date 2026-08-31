@@ -1,16 +1,23 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { compactionBoundaryText, mergeCompactions } from "./session-states";
 import { isAtBottom } from "./scroll";
 import {
-  diffLineKind,
   editDiffText,
+  flattenRenderUnits,
+  groupToolUnits,
   indexToolResults,
-  isStandaloneItem,
+  parseDiffLines,
+  streamingThinkingKey,
   summarizeToolResult,
+  thinkingDurationText,
+  thinkingPreview,
   toolCallSummary,
+  toolGroupStatus,
   toolResultText,
+  type RenderEntry,
+  type ToolGroupUnit,
   type ToolResultIndex,
 } from "./tool-results";
 import { Composer } from "../../shell/Composer";
@@ -18,10 +25,10 @@ import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
-import { Icon } from "../../shell/Icon";
+import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
-import { deriveSessionTitle, isCompactedRecord, type CompactedRecord, type SessionRecord } from "@shared/session";
+import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
 import type { ChatSession } from "./useChatSession";
 
 /**
@@ -150,6 +157,12 @@ export function ChatView(props: { session: ChatSession }) {
   const toolResults = indexToolResults(session.transcript);
   // 界碑按发生位置插回往来流：压缩摘要收进「已压缩」折叠行，历史一条不少
   const records = mergeCompactions(session.compactions, session.transcript);
+  // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
+  const entries = groupToolUnits(flattenRenderUnits(records));
+  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
+  const activeThinkingKey = streamingThinkingKey(records, session.phase === "turn");
+  // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
+  const turnActive = session.phase === "turn";
 
   return (
     <Pane
@@ -170,8 +183,14 @@ export function ChatView(props: { session: ChatSession }) {
         </>
       }
     >
-      {records.filter(isStandaloneItem).map((item) => (
-        <Item key={item.id} item={item} toolResults={toolResults} />
+      {entries.map((entry) => (
+        <EntryView
+          key={entry.key}
+          entry={entry}
+          toolResults={toolResults}
+          activeThinkingKey={activeThinkingKey}
+          turnActive={turnActive}
+        />
       ))}
       {session.phase === "turn" && <Responding />}
       {session.phase === "compaction" && <Compacting />}
@@ -404,168 +423,295 @@ function ComposerBar(props: { session: ChatSession }) {
 }
 
 /**
- * 一条 transcript 记录。content 是块数组——按块渲染，不压扁（这正是换协议的目的）。
- * 用户指令走独立气泡、agent 输出走全宽文档式（R4-05 hybrid）。
+ * 一个渲染单元：摊平后每单元独立占一行——用户气泡、正文、思考行、工具行/组、界碑行。
+ * 单元间距由外层内容列统一（16px）——设计系统：chat 内卡片之间由 16px 空白分隔。
  */
-function Item(props: { item: SessionRecord; toolResults: ToolResultIndex }) {
-  if (isCompactedRecord(props.item)) return <CompactedLine record={props.item} />;
-  if (props.item.role === "tool") return null; // 已挂到调用行上，不该走到这里
-  if (props.item.role === "user") {
+function EntryView(props: {
+  entry: RenderEntry;
+  toolResults: ToolResultIndex;
+  activeThinkingKey: string | null;
+  turnActive: boolean;
+}) {
+  const { entry } = props;
+  if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
+  if (entry.kind === "user") return <UserBubble item={entry.item} />;
+  if (entry.kind === "text") return <MarkdownBlock text={entry.text} />;
+  if (entry.kind === "thinking") {
     return (
-      <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
-        <div
-          style={{
-            width: "fit-content",
-            maxWidth: "var(--bubble-max-width)",
-            minWidth: 0,
-            padding: "9px 13px",
-            background: "var(--color-chat-card-bg)",
-            border: "1px solid var(--color-border-subtle)",
-            borderRadius: "var(--radius-bubble)",
-            fontSize: "var(--font-size-chat)",
-            lineHeight: "var(--line-height-bubble)",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
-          }}
-        >
-          {props.item.content.map((block, index) =>
-            block.type === "text" ? <span key={index}>{block.text}</span> : null,
-          )}
-        </div>
-      </div>
+      <ThinkingLine text={entry.text} active={entry.key === props.activeThinkingKey} blockKey={entry.key} />
     );
   }
+  if (entry.kind === "toolCall") {
+    return (
+      <ToolLine
+        toolName={entry.toolName}
+        input={entry.input}
+        result={props.toolResults.get(entry.toolCallId)}
+      />
+    );
+  }
+  return <ToolGroupLine group={entry} toolResults={props.toolResults} turnActive={props.turnActive} />;
+}
+
+/** 用户消息：右对齐的独立气泡；只有 text 块进气泡。 */
+function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
   return (
-    <div style={{ display: "grid", gap: "var(--space-2)", width: "100%", minWidth: 0 }}>
-      {props.item.content.map((block, index) => {
-        if (block.type === "text") {
-          return <MarkdownBlock key={index} text={block.text} />;
-        }
-        // 思考与工具都是「过程」，默认只占一行；展开契约见 ThinkingLine / ToolLine
-        if (block.type === "thinking") {
-          return <ThinkingLine key={index} text={block.thinking} />;
-        }
-        if (block.type === "toolCall") {
-          return (
-            <ToolLine
-              key={index}
-              toolName={block.toolName}
-              input={block.input}
-              result={props.toolResults.get(block.toolCallId)}
-            />
-          );
-        }
-        return null;
-      })}
+    <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+      <div
+        style={{
+          width: "fit-content",
+          maxWidth: "var(--bubble-max-width)",
+          minWidth: 0,
+          padding: "9px 13px",
+          background: "var(--color-chat-card-bg)",
+          border: "1px solid var(--color-border-subtle)",
+          borderRadius: "var(--radius-bubble)",
+          fontSize: "var(--font-size-chat)",
+          lineHeight: "var(--line-height-bubble)",
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {props.item.content.map((block, index) =>
+          block.type === "text" ? <span key={index}>{block.text}</span> : null,
+        )}
+      </div>
     </div>
   );
 }
 
 /**
- * 工具调用行：折叠时一行（工具名 + 参数摘要），点开看结果——edit 展开是红绿 diff，
- * 其余是原文。设计系统要的是「思考、工具调用、文件阅读都折叠成一行、点击才展开」。
- *
- * 状态优先用图标与文字，颜色是第二信号（AGENTS.md）：失败是 `triangle-alert` + "failed"，
- * 不是光把字染红。
+ * 折叠行共用骨架（设计系统 ToolCard / ThinkingCard）：满宽热区、hover 淡底、
+ * 圆角裁边。行首（图标+label）是「状态」本体，副标是注脚（tertiary mono），
+ * 状态词是机器事实（micro mono 等宽数字）。
+ */
+function CollapseRow(props: {
+  open: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  const [hover, setHover] = useState(false);
+  const interactive = props.disabled !== true;
+  return (
+    <div style={{ minWidth: 0, borderRadius: "var(--radius-sm)", overflow: "hidden" }}>
+      <button
+        type="button"
+        aria-expanded={interactive ? props.open : undefined}
+        disabled={!interactive}
+        onClick={props.onToggle}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-2)",
+          width: "100%",
+          minHeight: 32,
+          padding: "6px 10px",
+          border: "none",
+          background: hover && interactive
+            ? "color-mix(in srgb, var(--color-bg-hover) 50%, transparent)"
+            : "transparent",
+          transition: "var(--transition-hover)",
+          color: "var(--color-text-secondary)",
+          fontFamily: "var(--font-family-base)",
+          fontSize: "var(--font-size-control)",
+          lineHeight: "var(--line-height-control)",
+          textAlign: "left",
+          cursor: interactive ? "pointer" : "default",
+        }}
+      >
+        {props.children}
+      </button>
+    </div>
+  );
+}
+
+const SLOT = {
+  /** 副标不占满整行（flex 0 1 auto）：状态词与箭头紧跟其后，行不被拉长 */
+  sub: {
+    flex: "0 1 auto",
+    minWidth: 0,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    color: "var(--color-text-tertiary)",
+    fontFamily: "var(--font-family-mono)",
+    fontSize: "var(--font-size-caption)",
+  },
+  status: {
+    flex: "0 0 auto",
+    color: "var(--color-text-tertiary)",
+    fontFamily: "var(--font-family-business)",
+    fontSize: "var(--font-size-micro)",
+    fontVariantNumeric: "tabular-nums",
+  },
+} satisfies Record<string, React.CSSProperties>;
+
+/**
+ * 行首 label 的亮度是**时间态**：进行中 secondary 半粗（比正文暗一档，全场唯一在动），
+ * 状态落定整行退到 tertiary——完成的都是过去时，行与行不再争层次。
+ * 失败红是语义色，不参与档位，由调用方另行覆盖。
+ */
+function headLabel(active: boolean): React.CSSProperties {
+  return {
+    flex: "0 0 auto",
+    fontWeight: "var(--weight-strong)",
+    fontSize: "var(--font-size-body)",
+    color: active ? "var(--color-text-secondary)" : "var(--color-text-tertiary)",
+  };
+}
+
+/** 行首图标同 label 的时间态；思考的 brain 进行中保持 info 蓝（全转写唯一蓝记号）。 */
+function headIconColor(active: boolean): string {
+  return active ? "var(--color-text-secondary)" : "var(--color-text-tertiary)";
+}
+
+/** 呼吸只包行首（图标+label）——副标和状态词不跟着呼吸，它们不是状态。 */
+const HEAD_WRAP = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "var(--space-2)",
+  flex: "0 0 auto",
+} satisfies React.CSSProperties;
+
+function chevronSlot(open: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    flex: "0 0 auto",
+    color: "var(--color-text-tertiary)",
+    transform: open ? "rotate(180deg)" : "none",
+    transition: "transform var(--duration-fast) var(--ease-standard)",
+  };
+}
+
+/** 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。 */
+const EXPANDED_BODY = {
+  margin: 0,
+  padding: "var(--space-2)",
+  maxHeight: 320,
+  overflow: "auto",
+  borderTop: "1px solid var(--color-border-subtle)",
+  fontFamily: "var(--font-family-mono)",
+  fontSize: "var(--font-size-caption)",
+  lineHeight: 1.6,
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+} satisfies React.CSSProperties;
+
+/** 工具的类型图标：图标只说「哪一类事」，具体哪个工具由旁边的名字说。 */
+function toolIcon(toolName: string): IconName {
+  switch (toolName) {
+    case "bash":
+      return "terminal";
+    case "read":
+      return "file-text";
+    case "write":
+    case "edit":
+      return "pencil-line";
+    case "grep":
+    case "find":
+    case "glob":
+      return "search";
+    case "ls":
+      return "folder";
+    default:
+      return "wrench";
+  }
+}
+
+/** 组行的动词标签：一行里 N 件同类事，说类别不说工具名；不认识的用回工具名。 */
+function toolGroupLabel(toolName: string): string {
+  switch (toolName) {
+    case "bash":
+      return "执行";
+    case "read":
+      return "读取";
+    case "grep":
+    case "find":
+    case "glob":
+      return "搜索";
+    case "write":
+      return "写入";
+    case "edit":
+      return "修改";
+    case "ls":
+      return "浏览";
+    default:
+      return toolName;
+  }
+}
+
+/** 组头折叠态的量词——跟着动词说量级：「读取 3 个文件 / 执行 3 条命令」。 */
+function toolGroupCountLabel(toolName: string, count: number): string {
+  switch (toolName) {
+    case "read":
+    case "write":
+      return `${count} 个文件`;
+    case "bash":
+      return `${count} 条命令`;
+    case "edit":
+      return `${count} 处`;
+    case "ls":
+      return `${count} 个目录`;
+    default:
+      return `${count} 次`;
+  }
+}
+
+/**
+ * 工具调用行：折叠时一行（行首 + 参数摘要 + 状态词），点开看结果——edit 展开是
+ * 带行号的 diff，其余是原文。**进行中：行首（图标+工具名）secondary + 呼吸**——
+ * 呼吸即状态，不转圈；状态落定呼吸与高亮一起消失，整行退到 tertiary。
+ * 失败是语义色不参与档位：`triangle-alert` + "failed" 染 danger（AGENTS.md：
+ * 状态优先图标与文字，颜色是第二信号）。
  */
 function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscriptItem | undefined }) {
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
-  const running = result === undefined || result.status === "running";
+  const active = result === undefined || result.status === "running";
   const summary = summarizeToolResult(result);
   const callSummary = toolCallSummary(props.toolName, props.input);
   // 还在跑的时候没有完整结果可展——此时给展开只会开出一个空盒子
-  const expandable = result !== undefined && result.status !== "running";
+  const expandable = !active && result !== undefined;
   const diff = expandable && result !== undefined ? editDiffText(result) : null;
   const body = expandable && result !== undefined ? toolResultText(result) : "";
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      <button
-        type="button"
-        disabled={!expandable}
-        aria-expanded={expandable ? open : undefined}
-        onClick={() => setOpen((value) => !value)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          width: "fit-content",
-          maxWidth: "100%",
-          minWidth: 0,
-          padding: 0,
-          border: "none",
-          background: "none",
-          color: "var(--color-text-secondary)",
-          fontFamily: "var(--font-family-business)",
-          fontSize: "var(--font-size-control)",
-          textAlign: "left",
-          cursor: expandable ? "pointer" : "default",
-        }}
-      >
-        <span
-          style={{
-            display: "inline-flex",
-            flex: "0 0 auto",
-            color: failed ? "var(--color-danger)" : "var(--color-text-tertiary)",
-          }}
-        >
-          <Icon
-            name={failed ? "triangle-alert" : running ? "loader-circle" : "wrench"}
-            size={13}
-            strokeWidth={1.8}
-            spin={running}
-          />
-        </span>
-        <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {props.toolName}
-        </span>
-        {callSummary !== null && (
-          <span
-            style={{
-              minWidth: 0,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              fontFamily: "var(--font-family-business)",
-            }}
-          >
-            {callSummary}
+      <CollapseRow open={open} disabled={!expandable} onToggle={() => setOpen((value) => !value)}>
+        <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
+          <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
+            <Icon
+              name={failed ? "triangle-alert" : toolIcon(props.toolName)}
+              size={14}
+              strokeWidth={1.8}
+            />
           </span>
-        )}
-        {summary !== null && (
-          <span style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}>{summary}</span>
+          <span style={headLabel(active)}>{props.toolName}</span>
+        </span>
+        {callSummary !== null && <span style={SLOT.sub}>{callSummary}</span>}
+        {summary !== null && !active && (
+          <span
+            style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}
+          >
+            {summary}
+          </span>
         )}
         {expandable && (
-          <span
-            style={{
-              display: "inline-flex",
-              flex: "0 0 auto",
-              color: "var(--color-text-tertiary)",
-              transform: open ? "rotate(180deg)" : undefined,
-            }}
-          >
-            <Icon name="chevron-down" size={13} strokeWidth={1.8} />
+          <span style={chevronSlot(open)}>
+            <Icon name="chevron-down" size={14} strokeWidth={1.8} />
           </span>
         )}
-      </button>
+      </CollapseRow>
       {open && expandable && diff !== null && <DiffView diff={diff} />}
       {open && expandable && diff === null && (
         <pre
           style={{
-            margin: 0,
-            padding: "var(--space-2) var(--space-3)",
-            maxHeight: 320,
-            overflow: "auto",
-            background: "var(--color-bg-muted)",
-            borderRadius: "var(--radius-md)",
-            color: "var(--color-text-secondary)",
-            fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-micro)",
-            lineHeight: "var(--line-height-chat)",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
+            ...EXPANDED_BODY,
+            color: "var(--color-text-tertiary)",
           }}
         >
           {body === "" ? "(no output)" : body}
@@ -576,52 +722,179 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
 }
 
 /**
- * edit 的展开体：pi 已经算好的 unified diff（上一刀落进 details 的），按行上色。
+ * 同类工具的组：agent 连续做同类事（连读 N 个文件）时，组头「读取」声明在做什么。
+ * **展开是时间态**：活跃期间成员常驻铺开（用户正看着的东西不能在眼前消失）；
+ * 整轮落定**一次性收纳全部组**——无记忆（Q17b），手动展开的也折，用户可再点开。
+ * 折叠态组头带 `× N`（成员可见时不显示）；组内有失败时组头换红色 triangle-alert
+ * ——折了也不能让失败无声消失。组头亮暗呼吸跟随成员：任一还在跑 → 行首
+ * secondary + 呼吸；**全部落定**才退到 tertiary。
+ */
+function ToolGroupLine(props: {
+  group: ToolGroupUnit;
+  toolResults: ToolResultIndex;
+  turnActive: boolean;
+}) {
+  const { group } = props;
+  // 挂载时的相态决定初始展开：活跃轮里长出来的组铺开，idle 会话（旧历史）收着
+  const [open, setOpen] = useState(props.turnActive);
+  useEffect(() => {
+    if (!props.turnActive) setOpen(false);
+  }, [props.turnActive]);
+
+  const status = toolGroupStatus(group.calls, props.toolResults);
+  const active = status.running > 0;
+  const failed = status.failed > 0;
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
+          <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
+            <Icon
+              name={failed ? "triangle-alert" : toolIcon(group.toolName)}
+              size={14}
+              strokeWidth={1.8}
+            />
+          </span>
+          <span style={headLabel(active)}>{toolGroupLabel(group.toolName)}</span>
+        </span>
+        {!open && <span style={SLOT.status}>{toolGroupCountLabel(group.toolName, status.total)}</span>}
+        {!open && failed && (
+          <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>{status.failed} 失败</span>
+        )}
+        <span style={chevronSlot(open)}>
+          <Icon name="chevron-down" size={14} strokeWidth={1.8} />
+        </span>
+      </CollapseRow>
+      {open && (
+        <div style={{ display: "grid", gap: "var(--space-1)", paddingLeft: "var(--space-2)" }}>
+          {group.calls.map((call) => (
+            <ToolLine
+              key={call.key}
+              toolName={call.toolName}
+              input={call.input}
+              result={props.toolResults.get(call.toolCallId)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * edit 的展开体：pi 算好的 unified diff（details 里），parseDiffLines 拆成
+ * 「头行（路径 + 增删统计）+ 带新旧行号的行」。行是四列 grid：旧行号 | 新行号 |
+ * +/- gutter | 正文；行号与 gutter 是 tertiary 注脚，正文颜色按角色。
  * 增删行的底色用各自的 -soft token——文字才是主信号，颜色是第二信号；底色只淡染一层，
  * 行文字仍可读。空行渲染成一个空格占位，保住行高。
  */
 function DiffView(props: { diff: string }) {
-  const lines = props.diff.split("\n");
-  if (lines[lines.length - 1] === "") lines.pop();
+  const parsed = parseDiffLines(props.diff);
   return (
     <div
       style={{
         maxHeight: 320,
         overflow: "auto",
-        padding: "var(--space-2) 0",
-        background: "var(--color-bg-muted)",
-        borderRadius: "var(--radius-md)",
-        fontFamily: "var(--font-family-business)",
-        fontSize: "var(--font-size-micro)",
-        lineHeight: "var(--line-height-chat)",
+        borderTop: "1px solid var(--color-border-subtle)",
+        fontFamily: "var(--font-family-mono)",
+        fontSize: "var(--font-size-caption)",
+        lineHeight: 1.6,
       }}
     >
-      {lines.map((line, index) => {
-        const kind = diffLineKind(line);
+      {parsed.path !== null && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+            padding: "var(--space-1) var(--space-2)",
+          }}
+        >
+          <span
+            style={{
+              flex: "1 1 auto",
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              color: "var(--color-text-secondary)",
+            }}
+          >
+            {parsed.path}
+          </span>
+          <span
+            style={{
+              ...SLOT.status,
+              color: "var(--color-success)",
+            }}
+          >
+            +{parsed.added}
+          </span>
+          <span
+            style={{
+              ...SLOT.status,
+              color: "var(--color-danger)",
+            }}
+          >
+            -{parsed.removed}
+          </span>
+        </div>
+      )}
+      {parsed.rows.map((row, index) => {
+        if (row.kind === "meta") {
+          return (
+            <div
+              key={index}
+              style={{
+                padding: "0 var(--space-2)",
+                color: "var(--color-text-tertiary)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {row.text}
+            </div>
+          );
+        }
         return (
           <div
             key={index}
             style={{
-              padding: "0 var(--space-3)",
-              whiteSpace: "pre-wrap",
-              overflowWrap: "anywhere",
-              color:
-                kind === "add"
-                  ? "var(--color-success)"
-                  : kind === "del"
-                    ? "var(--color-danger)"
-                    : kind === "meta"
-                      ? "var(--color-text-tertiary)"
-                      : "var(--color-text-secondary)",
+              display: "grid",
+              gridTemplateColumns: "3.5ch 3.5ch 1ch 1fr",
               background:
-                kind === "add"
+                row.kind === "add"
                   ? "var(--color-success-soft)"
-                  : kind === "del"
+                  : row.kind === "del"
                     ? "var(--color-danger-soft)"
                     : undefined,
             }}
           >
-            {line === "" ? " " : line}
+            <span style={diffNumberSlot}>{row.oldLine ?? ""}</span>
+            <span style={diffNumberSlot}>{row.newLine ?? ""}</span>
+            <span
+              style={{
+                color:
+                  row.kind === "add"
+                    ? "var(--color-success)"
+                    : row.kind === "del"
+                      ? "var(--color-danger)"
+                      : "var(--color-text-tertiary)",
+              }}
+            >
+              {row.kind === "add" ? "+" : row.kind === "del" ? "-" : ""}
+            </span>
+            <span
+              style={{
+                paddingRight: "var(--space-2)",
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+                color: "var(--color-text-tertiary)",
+              }}
+            >
+              {row.text === "" ? " " : row.text}
+            </span>
           </div>
         );
       })}
@@ -629,74 +902,47 @@ function DiffView(props: { diff: string }) {
   );
 }
 
+/** diff 行号列：右对齐的 tertiary 等宽数字，只作注脚不作内容。 */
+const diffNumberSlot = {
+  textAlign: "right",
+  color: "var(--color-text-tertiary)",
+  fontVariantNumeric: "tabular-nums",
+} satisfies React.CSSProperties;
+
 /**
- * 思考行：折叠时一行（brain 图标是全转写里唯一的蓝记号，设计系统 *ThinkingCard*），
- * 点开看全文。与 ToolLine 同一份折叠契约；展开体 160px 封顶滚动——长思考不许把
- * 输入卡顶出屏幕。
+ * 思考行：brain 图标（进行中保持 info 蓝——全转写里唯一的蓝记号）+「思考」
+ * label + 副标。副标是时间态：**流式中**是活尾预览（新的一行顶替上一行）；
+ * **落定**换成「持续了 N 秒」（现场计时，重开的旧会话量不到就什么都不显示）。
+ * 行首呼吸同其它过程行：进行中 secondary + 呼吸，写完呼吸与高亮一起消失。
+ * 要看全文点开，展开体 160px 封顶滚动。
  */
-function ThinkingLine(props: { text: string }) {
+function ThinkingLine(props: { text: string; active: boolean; blockKey: string }) {
   const [open, setOpen] = useState(false);
+  const { active } = props;
   const body = props.text.trim();
+  const duration = thinkingDurationText(props.blockKey, active);
+  const preview = active ? thinkingPreview(body) : "";
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          width: "fit-content",
-          maxWidth: "100%",
-          minWidth: 0,
-          padding: 0,
-          border: "none",
-          background: "none",
-          color: "var(--color-text-secondary)",
-          fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-control)",
-          textAlign: "left",
-          cursor: "pointer",
-        }}
-      >
-        <span
-          style={{
-            display: "inline-flex",
-            flex: "0 0 auto",
-            color: "var(--color-info)",
-          }}
-        >
-          <Icon name="brain" size={13} strokeWidth={1.8} />
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
+          <span style={{ color: active ? "var(--color-info)" : headIconColor(active) }}>
+            <Icon name="brain" size={14} strokeWidth={1.8} />
+          </span>
+          <span style={headLabel(active)}>思考</span>
         </span>
-        <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {body === "" ? "Thinking" : body.split("\n")[0]}
+        {active && preview !== "" && <span style={SLOT.sub}>{preview}</span>}
+        {!active && duration !== null && <span style={SLOT.sub}>{duration}</span>}
+        <span style={chevronSlot(open)}>
+          <Icon name="chevron-down" size={14} strokeWidth={1.8} />
         </span>
-        <span
-          style={{
-            display: "inline-flex",
-            flex: "0 0 auto",
-            color: "var(--color-text-tertiary)",
-            transform: open ? "rotate(180deg)" : undefined,
-          }}
-        >
-          <Icon name="chevron-down" size={13} strokeWidth={1.8} />
-        </span>
-      </button>
+      </CollapseRow>
       {open && body !== "" && (
         <div
           style={{
+            ...EXPANDED_BODY,
+            color: "var(--color-text-tertiary)",
             maxHeight: 160,
-            overflow: "auto",
-            margin: 0,
-            padding: "var(--space-2) var(--space-3)",
-            background: "var(--color-bg-muted)",
-            borderRadius: "var(--radius-md)",
-            color: "var(--color-text-secondary)",
-            fontSize: "var(--font-size-control)",
-            lineHeight: "var(--line-height-bubble)",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
           }}
         >
           {body}
@@ -781,6 +1027,7 @@ function CompactedLine(props: { record: CompactedRecord }) {
 function Responding() {
   return (
     <p
+      className="orbita-breath"
       style={{
         display: "inline-flex",
         alignItems: "center",

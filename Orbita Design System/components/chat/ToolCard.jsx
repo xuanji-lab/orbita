@@ -17,12 +17,16 @@ export function ToolCard({ name, subtitle, icon = "wrench", tone = "done", statu
           onMouseLeave={() => setHover(false)}
           style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flex: "1 1 auto", minWidth: 0, minHeight: 32, padding: "6px 10px", border: 0, background: "transparent", color: "var(--color-text-secondary)", fontFamily: "var(--font-family-base)", fontSize: "var(--font-size-control)", lineHeight: "var(--line-height-control)", textAlign: "left", cursor: "pointer" }}
         >
-          <span style={{ display: "inline-flex", color: "var(--color-text-tertiary)" }}><Icon name={icon} size={14} strokeWidth={1.8} /></span>
-          <span style={{ flex: "0 0 auto", fontWeight: "var(--weight-strong)", fontSize: "var(--font-size-body)", color: "var(--color-text-primary)", textTransform: "lowercase" }}>{name}</span>
+          {/*
+            The head (icon + name) is the row's state. Running: secondary + orbita-breath —
+            breathing is the running signal, no spinner. Settled: the whole row recedes to
+            tertiary; only failure red (TONE_COLOR.error) stays semantic.
+          */}
+          <span className={tone === "running" ? "orbita-breath" : undefined} style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)", flex: "0 0 auto" }}>
+            <span style={{ display: "inline-flex", color: tone === "running" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}><Icon name={icon} size={14} strokeWidth={1.8} /></span>
+            <span style={{ flex: "0 0 auto", fontWeight: "var(--weight-strong)", fontSize: "var(--font-size-body)", color: tone === "running" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)", textTransform: "lowercase" }}>{name}</span>
+          </span>
           <span style={{ flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--color-text-tertiary)", fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-caption)" }}>{subtitle}</span>
-          {tone === "running" ? (
-            <span style={{ width: 10, height: 10, flex: "0 0 auto", borderRadius: "var(--radius-pill)", border: "2px solid color-mix(in srgb, var(--color-warning) 30%, transparent)", borderTopColor: "var(--color-warning)", animation: "orbita-spin 0.7s linear infinite" }} />
-          ) : null}
           {status ? (
             <span style={{ flex: "0 0 auto", color: TONE_COLOR[tone] || TONE_COLOR.done, fontSize: "var(--font-size-micro)", fontFamily: "var(--font-family-business)", fontVariantNumeric: "tabular-nums" }}>{status}</span>
           ) : null}
@@ -35,7 +39,7 @@ export function ToolCard({ name, subtitle, icon = "wrench", tone = "done", statu
         </button>
       </div>
       {open && detail ? (
-        <pre style={{ margin: 0, padding: "var(--space-2)", maxHeight: 320, overflow: "auto", borderTop: "1px solid var(--color-border-subtle)", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-caption)", lineHeight: 1.6, color: "var(--color-text-secondary)" }}>{detail}</pre>
+        <pre style={{ margin: 0, padding: "var(--space-2)", maxHeight: 320, overflow: "auto", borderTop: "1px solid var(--color-border-subtle)", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-caption)", lineHeight: 1.6, color: "var(--color-text-tertiary)" }}>{detail}</pre>
       ) : null}
     </div>
   );
