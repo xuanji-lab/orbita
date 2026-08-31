@@ -361,6 +361,22 @@ body {
   }
 }
 
+/* 呼吸：进行中的后台维护态（如上下文压缩）。持续动效只有旋转与呼吸两类，
+   都只用于「正在进行」的状态（设计系统 *Motion*） */
+@keyframes orbita-breath {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.orbita-breath {
+  animation: orbita-breath 1.6s ease-in-out infinite;
+}
+
 /* 动效只解释「东西去哪了」；用户要求减少动效时全部塌成 0（设计系统 *Motion*） */
 @media (prefers-reduced-motion: reduce) {
   *,

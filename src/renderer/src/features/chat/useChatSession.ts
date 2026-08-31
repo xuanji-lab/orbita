@@ -32,8 +32,8 @@ export interface ChatSession {
   transcript: readonly TranscriptItem[];
   /** 压缩界碑（与 transcript 分开记账）；显示时由 applyCompactionBoundary 合成 */
   compactions: readonly CompactedRecord[];
-  /** turn = 这一轮还在跑；idle = 可以发下一句 */
-  phase: "idle" | "turn";
+  /** turn = 这一轮还在跑；compaction = 上下文压缩中；idle = 可以发下一句 */
+  phase: "idle" | "turn" | "compaction";
   error: string | null;
   draft: string;
   setDraft: (value: string) => void;

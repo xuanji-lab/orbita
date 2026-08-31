@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
-import { mergeCompactions } from "./session-states";
+import { compactionBoundaryText, mergeCompactions } from "./session-states";
 import {
   diffLineKind,
   editDiffText,
@@ -43,7 +43,7 @@ export function ChatView(props: { session: ChatSession }) {
         session.sessionId === null ? "Ask anything, or start a task" : "Reply, or steer the agent"
       }
       disabled={session.usable.length === 0 || session.readOnly}
-      running={session.phase === "turn"}
+      running={session.phase !== "idle"}
       bottomSlot={<ComposerBar session={session} />}
     />
   );
@@ -140,6 +140,7 @@ export function ChatView(props: { session: ChatSession }) {
         <Item key={item.id} item={item} toolResults={toolResults} />
       ))}
       {session.phase === "turn" && <Responding />}
+      {session.phase === "compaction" && <Compacting />}
     </Pane>
   );
 }
@@ -664,7 +665,7 @@ function ThinkingLine(props: { text: string }) {
 }
 
 /**
- * 压缩界碑行：折叠时一行（已压缩 + 压缩前的 token 数），点开看摘要全文。
+ * 压缩界碑行：折叠时一行（已压缩 + token 数变化），点开看摘要全文。
  * 与 ThinkingLine 同一份折叠契约，展开体 320px 封顶（摘要值得读，但也不许顶走输入卡）。
  * 摘要是 markdown——它走 MarkdownBlock，与 agent 回复同一套渲染。
  * 不放图标：archive 与侧栏「归档」撞车，文字本身已足够指认。
@@ -705,7 +706,7 @@ function CompactedLine(props: { record: CompactedRecord }) {
         }}
       >
         <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          已压缩 · 此前上下文约 {props.record.tokensBefore.toLocaleString("en-US")} tokens
+          {compactionBoundaryText(props.record)}
         </span>
         <span
           style={{
@@ -752,6 +753,33 @@ function Responding() {
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
       Responding
+    </p>
+  );
+}
+
+/**
+ * 压缩进行态：转录末尾、内容列内居中的一行，整体呼吸（styles.css 的 orbita-breath）。
+ * 图标不旋转、整行呼吸——旋转是「agent 在干活」，呼吸是「后台维护中」，
+ * 两种进行态两种语言（设计系统 Motion 段）。完成后本行卸载，界碑按时间落进流里。
+ */
+function Compacting() {
+  return (
+    <p
+      className="orbita-breath"
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        margin: 0,
+        color: "var(--color-text-secondary)",
+        fontSize: "var(--font-size-control)",
+      }}
+    >
+      <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
+        <Icon name="loader-circle" size={13} strokeWidth={1.8} />
+      </span>
+      正在压缩上下文…
     </p>
   );
 }

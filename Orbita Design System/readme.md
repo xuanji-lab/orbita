@@ -187,8 +187,10 @@ rather than opacity**: a dimmed glyph over translucency reads as neither ink nor
 the composer's border and shadow, 160ms for chevrons, 220ms for the slogan and session cards fading
 up and out, 240ms for the composer gliding to the bottom of the window and becoming the chat
 composer. Easing is `cubic-bezier(.22,1,.36,1)` for entrances and `cubic-bezier(.4,0,.6,1)` for that
-one travel. There is no idle animation, no bounce, no parallax; `prefers-reduced-motion` collapses
-everything to 0.01ms.
+one travel. Continuous motion exists only for states in progress, and only in two forms: rotation
+(loaders, `loader-circle`) and breathing (`orbita-breath`, 1.6s ease-in-out between opacity 1 and
+.45) for background maintenance such as context compaction. Beyond those two there is no idle
+animation, no bounce, no parallax; `prefers-reduced-motion` collapses everything to 0.01ms.
 
 ## Iconography
 

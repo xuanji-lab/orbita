@@ -48,8 +48,8 @@ export interface SessionEntry {
    * 显示时由 `applyCompactionBoundary` 按时间插回往来流。
    */
   compactions: CompactedRecord[];
-  /** turn = 这一轮还在跑；idle = 可以发下一句 */
-  phase: "idle" | "turn";
+  /** turn = 这一轮还在跑；compaction = 上下文压缩中（居中呼吸行）；idle = 可以发下一句 */
+  phase: "idle" | "turn" | "compaction";
   approvals: PendingApproval[];
 }
 
@@ -83,7 +83,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   if (event.type === "phase") {
     return update(states, event.sessionId, (entry) => ({
       ...entry,
-      phase: event.phase === "idle" ? "idle" : "turn",
+      phase: event.phase === "idle" ? "idle" : event.phase === "compaction" ? "compaction" : "turn",
     }));
   }
   if (event.type === "compaction") {
@@ -114,7 +114,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
 export function setEntryPhase(
   states: SessionStates,
   sessionId: string,
-  phase: "idle" | "turn",
+  phase: SessionEntry["phase"],
 ): SessionStates {
   return update(states, sessionId, (entry) => ({ ...entry, phase }));
 }
@@ -166,8 +166,19 @@ export function mergeCompactions(
   return records;
 }
 
-/** 按 requestId 跨槽摘除一条审批。没有匹配就原样返回（同一引用）。 */
-export function removeApproval(states: SessionStates, requestId: string): SessionStates {
+/**
+ * 界碑折叠行的文案。tokensAfter 是估算值（pi 的 estimate），旧记录没有：
+ * 没有 → 只说压之前多大；有 → 「N → M」把压缩效果摆出来。
+ */
+export function compactionBoundaryText(record: CompactedRecord): string {
+  const before = record.tokensBefore.toLocaleString("en-US");
+  if (record.tokensAfter === undefined) {
+    return `已压缩 · 此前上下文约 ${before} tokens`;
+  }
+  return `已压缩 · ${before} → ${record.tokensAfter.toLocaleString("en-US")} tokens`;
+}
+
+/** 按 requestId 跨槽摘除一条审批。没有匹配就原样返回（同一引用）。 */export function removeApproval(states: SessionStates, requestId: string): SessionStates {
   for (const [sessionId, entry] of states) {
     if (!entry.approvals.some((approval) => approval.requestId === requestId)) continue;
     const next = new Map(states);
@@ -180,12 +191,12 @@ export function removeApproval(states: SessionStates, requestId: string): Sessio
   return states;
 }
 
-/** runtime 没了：所有还在 turn 的槽一并归位。全是 idle 时返回原引用。 */
+/** runtime 没了：所有还在忙的槽（turn / 压缩中）一并归位。全是 idle 时返回原引用。 */
 export function markAllIdle(states: SessionStates): SessionStates {
   let changed = false;
   const next = new Map<string, SessionEntry>();
   for (const [sessionId, entry] of states) {
-    if (entry.phase === "turn") {
+    if (entry.phase !== "idle") {
       next.set(sessionId, { ...entry, phase: "idle" });
       changed = true;
     } else {

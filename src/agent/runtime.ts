@@ -175,7 +175,7 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     if (event.type === "agent_start") send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
     if (event.type === "agent_settled") send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
     // 压缩是一次真实的 LLM 调用，期间必须显示忙碌而不是「可以说话」；
-    // renderer 只认 idle / turn，"compaction" 在那边自动按忙碌渲染。
+    // renderer 按 phase === "compaction" 显示居中的压缩进行态。
     if (event.type === "compaction_start") {
       send({ type: "phase", sessionId: command.sessionId, phase: "compaction" });
     }
@@ -191,8 +191,18 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
             id: randomUUID(),
             summary: event.result.summary,
             tokensBefore: event.result.tokensBefore,
+            tokensAfter: event.result.estimatedTokensAfter,
             timestamp: Date.now(),
           },
+        });
+      }
+      // 失败（手动与自动同一条路）唯一的报错出口；pi 会给消息加
+      // "Compaction failed: " 前缀，翻译前剥掉
+      if (!event.aborted && event.errorMessage !== undefined) {
+        send({
+          type: "failed",
+          sessionId: command.sessionId,
+          message: compactionErrorText(event.errorMessage.replace(/^Compaction failed: /, "")),
         });
       }
     }
@@ -276,16 +286,12 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
   if (command.type === "compact") {
-    // 手动压缩。pi 的 compact() 内部先 abort 当前这一轮；忙碌态与界碑
-    // 都走 compaction_start / compaction_end 事件那条已接好的链。
-    void live.session.compact(command.instructions).catch((error: unknown) => {
-      // 压缩起不来（没模型 / 被占用）必须把忙碌态放掉，否则输入卡永远锁着
-      send({
-        type: "failed",
-        sessionId: command.sessionId,
-        message: compactionErrorText(error instanceof Error ? error.message : String(error)),
-      });
-    });
+    // 手动压缩。pi 的 compact() 内部先 abort 当前这一轮；忙碌态、界碑、失败提示
+    // 全走 compaction_start / compaction_end 事件那条已接好的链——compact() 起来
+    // 之后 compaction_end 必然到（pi 在自己的 catch 里先发事件再 rethrow），
+    // 这里只吞 rejection 防 unhandled。
+    // ponytail: 若 pi 未来在 compaction_start 之前抛错，这里会静默——届时补个前置标志位
+    void live.session.compact(command.instructions).catch(() => {});
     return;
   }
   live.unsubscribe();

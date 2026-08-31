@@ -7,6 +7,7 @@ import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
   applyAgentEvent,
+  compactionBoundaryText,
   markAllIdle,
   mergeCompactions,
   parseCompactCommand,
@@ -259,5 +260,43 @@ describe("parseCompactCommand —— 手动压缩指令在本地拦下，不落�
     assert.equal(parseCompactCommand("/compactx"), null);
     assert.equal(parseCompactCommand("请 /compact"), null);
     assert.equal(parseCompactCommand(""), null);
+  });
+});
+
+describe("phase 三态 —— 压缩有自己的进行态", () => {
+  test("compaction 透传，不再压扁成 turn", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "compaction" });
+    assert.equal(states.get("A")?.phase, "compaction");
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
+    assert.equal(states.get("A")?.phase, "idle");
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    assert.equal(states.get("A")?.phase, "turn");
+  });
+
+  test("runtime 没了：压缩中的槽也一并归位", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "compaction" });
+    states = markAllIdle(states);
+    assert.equal(states.get("A")?.phase, "idle");
+  });
+});
+
+describe("compactionBoundaryText —— 界碑折叠行文案", () => {
+  const base: CompactedRecord = {
+    role: "compacted",
+    id: "c1",
+    summary: "## Goal",
+    tokensBefore: 128000,
+    timestamp: 3,
+  };
+
+  it("有估算的 tokensAfter：N → M，压缩效果摆出来", () => {
+    assert.equal(
+      compactionBoundaryText({ ...base, tokensAfter: 8200 }),
+      "已压缩 · 128,000 → 8,200 tokens",
+    );
+  });
+
+  it("旧记录没有 tokensAfter：只说压之前多大", () => {
+    assert.equal(compactionBoundaryText(base), "已压缩 · 此前上下文约 128,000 tokens");
   });
 });

@@ -180,10 +180,11 @@ describe("createSessionRecorder", () => {
     id: "c1",
     summary: "## Goal\n重做外壳",
     tokensBefore: 85000,
+    tokensAfter: 8200,
     timestamp: 4000,
   };
 
-  test("compaction 事件原样落盘,五字段一个不少", async () => {
+  test("compaction 事件原样落盘,六个字段一个不少", async () => {
     record({ type: "compaction", sessionId: ID, record: compacted });
     await settle();
     const item = (await store.load(ID))?.transcript[0];
