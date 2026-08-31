@@ -668,12 +668,21 @@ function ThinkingLine(props: { text: string }) {
  * 与 ThinkingLine 同一份折叠契约，展开体 320px 封顶（摘要值得读，但也不许顶走输入卡）。
  * 摘要是 markdown——它走 MarkdownBlock，与 agent 回复同一套渲染。
  * 不放图标：archive 与侧栏「归档」撞车，文字本身已足够指认。
- * 上方多留一倍间距：列表的条目间距不变，界碑是「分段」不是上一轮回复的一部分。
+ * 上方一条 hairline + 多留一倍间距：界碑是「分段」，不是上一轮回复的一部分。
  */
 function CompactedLine(props: { record: CompactedRecord }) {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0, marginTop: "var(--space-4)" }}>
+    <div
+      style={{
+        display: "grid",
+        gap: "var(--space-1)",
+        minWidth: 0,
+        marginTop: "var(--space-4)",
+        borderTop: "1px solid var(--color-border-subtle)",
+        paddingTop: "var(--space-3)",
+      }}
+    >
       <button
         type="button"
         aria-expanded={open}
