@@ -166,6 +166,16 @@ function iso(timestamp: number): string {
   return new Date(timestamp).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+/** 工具输出的导出截断上限。一次 grep 可能几千行——导出是给人读的存档，不是磁盘镜像。 */
+const TOOL_EXPORT_MAX_LINES = 50;
+
+/** 截断必须标注真实行数——「被截掉了」这件事不能是悄悄的。 */
+function clipLines(text: string): string {
+  const lines = text.split("\n");
+  if (lines.length <= TOOL_EXPORT_MAX_LINES) return text;
+  return `${lines.slice(0, TOOL_EXPORT_MAX_LINES).join("\n")}\n…（已截断，共 ${lines.length} 行）`;
+}
+
 /**
  * transcript → Markdown。**导出与「复制整条对话」共用它**——
  * 两处各写一份的话，导出的和复制的会长得不一样，而用户以为是同一个东西。
@@ -203,6 +213,17 @@ export function transcriptToMarkdown(
           .map((line) => `> ${line}`)
           .join("\n"),
       );
+      continue;
+    }
+    if (item.role === "tool") {
+      // 工具结果自成一块：调用本身（toolName + input）已经在它前面那条 assistant
+      // 消息的 toolCall 块里，这里只落结果与成败——导出要的是可追溯，不是重复
+      const output = item.content
+        .map((block) => (block.type === "text" ? block.text : `[image ${block.mimeType}]`))
+        .join("\n")
+        .trim();
+      parts.push(`**Tool · ${item.toolName}**${item.isError ? "（失败）" : ""}`);
+      parts.push(`\`\`\`text\n${output === "" ? "（无输出）" : clipLines(output)}\n\`\`\``);
       continue;
     }
     const body: string[] = [];

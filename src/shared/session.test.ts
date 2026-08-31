@@ -244,3 +244,47 @@ describe("transcriptToMarkdown 的压缩界碑", () => {
     doesNotMatch(md, /> \n/);
   });
 });
+
+describe("transcriptToMarkdown 的工具结果", () => {
+  const tool = {
+    id: "t1",
+    role: "tool" as const,
+    toolCallId: "tc1",
+    toolName: "bash",
+    input: { command: "ls src" },
+    content: [{ type: "text" as const, text: "main.ts\nstyles.css" }],
+    timestamp: 3,
+    status: "complete" as const,
+    isError: false as const,
+  };
+
+  it("自成一块：带工具名与输出，不再冒充 Assistant", () => {
+    const md = transcriptToMarkdown([tool]);
+    match(md, /\*\*Tool · bash\*\*/);
+    match(md, /```text\nmain\.ts\nstyles\.css\n```/);
+    doesNotMatch(md, /\*\*Assistant\*\*/);
+  });
+
+  it("失败的条目看得出失败", () => {
+    const md = transcriptToMarkdown([
+      { ...tool, status: "error" as const, isError: true, content: [{ type: "text" as const, text: "command not found" }] },
+    ]);
+    match(md, /\*\*Tool · bash\*\*（失败）/);
+    match(md, /command not found/);
+  });
+
+  it("超长输出截断并标注真实行数", () => {
+    const text = Array.from({ length: 120 }, (_, i) => `line-${i}`).join("\n");
+    const md = transcriptToMarkdown([{ ...tool, content: [{ type: "text" as const, text }] }]);
+    match(md, /…（已截断，共 120 行）/);
+    doesNotMatch(md, /line-119/);
+  });
+
+  it("图片占位、空输出不空块", () => {
+    const md = transcriptToMarkdown([
+      { ...tool, content: [{ type: "image" as const, data: "xx", mimeType: "image/png" }] },
+    ]);
+    match(md, /\[image image\/png\]/);
+    match(transcriptToMarkdown([{ ...tool, content: [] }]), /（无输出）/);
+  });
+});
