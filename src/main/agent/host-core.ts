@@ -156,6 +156,15 @@ export class AgentHostCore {
     this.post({ type: "compact", sessionId, ...(instructions ? { instructions } : {}) });
   }
 
+  /**
+   * 释放一条会话（runtime 侧退订 + `session.dispose()` + 出 Map）。
+   * **不 ensure**：进程没起的话这条会话本来就不在 runtime 里（answerPermission 同款理由），
+   * 为释放去拉起一个进程才是本末倒置。发完即回，runtime 对不存在的 id 静默容忍。
+   */
+  disposeSession(sessionId: string): void {
+    this.child?.postMessage({ type: "dispose", sessionId } satisfies AgentCommand);
+  }
+
   dispose(): void {
     this.child?.kill();
     this.child = null;

@@ -12,6 +12,7 @@ import {
   mergeCompactions,
   parseCompactCommand,
   removeApproval,
+  removeSessionEntry,
   seedFromDisk,
   setEntryPhase,
   type SessionStates,
@@ -131,6 +132,16 @@ describe("applyAgentEvent —— 每会话一槽", () => {
       applyAgentEvent(states, { type: "created", sessionId: "A", piSessionFile: null }),
       states,
     );
+  });
+
+  test("removeSessionEntry：删槽只删那一条，删不存在的原样返回", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
+    states = applyAgentEvent(states, progress("B", assistantDone("b1", "乙一")));
+
+    const afterRemove = removeSessionEntry(states, "A");
+    assert.equal(afterRemove.has("A"), false);
+    assert.deepEqual(texts(afterRemove, "B"), ["乙一"]);
+    assert.equal(removeSessionEntry(afterRemove, "A"), afterRemove);
   });
 });
 

@@ -8,13 +8,18 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import { transcriptToMarkdown } from "../../shared/session.ts";
 import type { SessionStore } from "./store.ts";
 
-export function registerSessionIpc(store: SessionStore): void {
+export function registerSessionIpc(store: SessionStore, onSessionRemoved?: (id: string) => void): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
   ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.load(id));
   ipcMain.handle(ipcChannels.sessionRename, (_event, id: string, title: string) =>
     store.rename(id, title),
   );
-  ipcMain.handle(ipcChannels.sessionDelete, (_event, id: string) => store.remove(id));
+  ipcMain.handle(ipcChannels.sessionDelete, async (_event, id: string) => {
+    // 先停事件源再删文件：顺序反了的话，runtime 里还活着的会话会继续喷事件，
+    // record() 虽有 meta 守卫不会重建文件，但那一轮里事件还是白跑
+    onSessionRemoved?.(id);
+    await store.remove(id);
+  });
   ipcMain.handle(ipcChannels.sessionPin, (_event, id: string, pinned: boolean) =>
     store.setPinned(id, pinned),
   );

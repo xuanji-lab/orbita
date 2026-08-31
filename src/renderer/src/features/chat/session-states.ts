@@ -206,6 +206,14 @@ export function markAllIdle(states: SessionStates): SessionStates {
   return changed ? next : states;
 }
 
+/** 会话被删除：槽一并丢掉，否则它连同整份 transcript 在 renderer 内存里留一具尸体。 */
+export function removeSessionEntry(states: SessionStates, sessionId: string): SessionStates {
+  if (!states.has(sessionId)) return states;
+  const next = new Map(states);
+  next.delete(sessionId);
+  return next;
+}
+
 function update(
   states: SessionStates,
   sessionId: string,

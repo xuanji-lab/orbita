@@ -162,3 +162,45 @@ describe("内建 provider 目录的到达时机（债务 B #2）", () => {
     assert.equal(ctx.forks(), 1);
   });
 });
+
+describe("disposeSession —— 会话释放（刀 0-4 债务 A）", () => {
+  test("从未启动过 agent：不拉起进程、不抛错（懒启动不破）", async () => {
+    const ctx = await freshHost();
+    ctx.host.disposeSession("never-created");
+    assert.equal(ctx.forks(), 0);
+  });
+
+  test("活着就发 dispose 命令；进程已死就静默", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = ctx.host.createSession(CREATE_INPUT, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    ctx.host.disposeSession("s1");
+    assert.deepEqual(ctx.child().posted.at(-1), { type: "dispose", sessionId: "s1" });
+
+    ctx.host.dispose(); // kill → exit → child 置空
+    ctx.host.disposeSession("s1"); // 不抛
+  });
+
+  test("建 3 条销 3 条 —— 每条都收到 dispose 命令（清单验收的等价形式）", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    for (const id of ["s1", "s2", "s3"]) {
+      const pending = ctx.host.createSession(CREATE_INPUT, id);
+      ctx.child().emit({ type: "ready" });
+      await flush();
+      ctx.child().emit({ type: "created", sessionId: id, piSessionFile: null });
+      await pending;
+      ctx.host.disposeSession(id);
+    }
+    const disposed = ctx
+      .child()
+      .posted.filter((command) => command.type === "dispose")
+      .map((command) => (command as { sessionId: string }).sessionId);
+    assert.deepEqual(disposed, ["s1", "s2", "s3"]);
+  });
+});

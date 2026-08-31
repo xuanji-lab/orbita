@@ -266,6 +266,24 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
 
+  if (command.type === "dispose") {
+    // 删除会话。**没建过的也走这里**（删除一条从未唤醒的会话是正常路径）——
+    // 没有就没什么可释放的，静默返回，不能走下面那个「unknown session」的 throw。
+    const dying = sessions.get(command.sessionId);
+    if (dying) {
+      dying.unsubscribe();
+      // pi 的 dispose 自己会 abort 全部在飞工作（当前轮 / 重试 / 压缩 / 本会话的 bash），
+      // 正在跑的会话被删也成立，无需先 abort。
+      dying.session.dispose();
+      sessions.delete(command.sessionId);
+    }
+    // 审批 resolve 函数不随会话一起删的话，会把已销毁会话的工具执行闭包整条钉在内存里
+    for (const key of pendingPermissions.keys()) {
+      if (key.startsWith(`${command.sessionId}:`)) pendingPermissions.delete(key);
+    }
+    return;
+  }
+
   const live = sessions.get(command.sessionId);
   if (!live) throw new Error(`unknown session ${command.sessionId}`);
 
@@ -294,9 +312,9 @@ async function handle(command: AgentCommand): Promise<void> {
     void live.session.compact(command.instructions).catch(() => {});
     return;
   }
-  live.unsubscribe();
-  live.session.dispose();
-  sessions.delete(command.sessionId);
+  // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——
+  // 曾经这里是无 if 的兜底（新命令会静默销毁会话），那是事故的形状
+  command satisfies never;
 }
 
 /**

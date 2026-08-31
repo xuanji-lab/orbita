@@ -8,6 +8,7 @@ import {
   createSessionStates,
   parseCompactCommand,
   removeApproval,
+  removeSessionEntry,
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
@@ -371,6 +372,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setOpened((current) => (current?.id === id ? null : current));
         // 删掉的正是当前活着的那条：回到首页，别让界面停在一条已经没有记录的会话上
         if (id === sessionRef.current) reset();
+        // 槽与 live 账本一并丢——runtime 那头由主进程删文件时同步释放（刀 0-4）
+        setStates((current) => removeSessionEntry(current, id));
+        liveRef.current.delete(id);
         refreshSessions();
       });
     },

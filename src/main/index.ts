@@ -96,12 +96,14 @@ void app.whenReady().then(() => {
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
   const sessions = new SessionStore(join(configDir, "sessions"));
-  registerSessionIpc(sessions);
   const record = createSessionRecorder(sessions);
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
     record(event);
     broadcastAgentEvent(event);
   });
+  // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
+  // 活到退出应用（刀 0-4 债务 A）
+  registerSessionIpc(sessions, (id) => agentHost.disposeSession(id));
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   registerAgentIpc(agentHost, providers, sessions, join(configDir, "pi-sessions"));
   app.on("before-quit", () => agentHost.dispose());
