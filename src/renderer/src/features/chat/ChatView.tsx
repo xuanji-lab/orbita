@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { compactionBoundaryText, mergeCompactions } from "./session-states";
+import { isAtBottom } from "./scroll";
 import {
   diffLineKind,
   editDiffText,
@@ -33,11 +34,45 @@ import type { ChatSession } from "./useChatSession";
 export function ChatView(props: { session: ChatSession }) {
   const { session } = props;
 
+  // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
+  // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const followRef = useRef(true);
+
+  /** 用户滚动（滚轮/键盘/滚动条都一样）后重判是否在底部；程序化钉底触发的事件判真，不打架 */
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (el !== null) {
+      followRef.current = isAtBottom(el.scrollTop, el.clientHeight, el.scrollHeight);
+    }
+  };
+
+  // 每次 commit 后钉底：不挑触发源——流式输出、忙碌指示出现、折叠展开全兜住；scrollTop 赋值廉价。
+  // 绘制前同步执行，用户看不到先长高再滚下去的闪动。
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el !== null && followRef.current) el.scrollTop = el.scrollHeight;
+  });
+
+  /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
+  const openId = session.sessionId ?? session.opened?.id ?? "";
+
+  // 打开/切换会话无条件跳到底并恢复跟随：后台会话的事件一直进自己的槽，切回时转录已是最新
+  useLayoutEffect(() => {
+    followRef.current = true;
+    const el = scrollRef.current;
+    if (el !== null) el.scrollTop = el.scrollHeight;
+  }, [openId]);
+
   const composer = (
     <Composer
       value={session.draft}
       onChange={session.setDraft}
-      onSubmit={session.send}
+      // 发送即恢复跟随：翻着历史发消息，新对话永远长在底部
+      onSubmit={() => {
+        followRef.current = true;
+        session.send();
+      }}
       onStop={session.stop}
       placeholder={
         session.sessionId === null ? "Ask anything, or start a task" : "Reply, or steer the agent"
@@ -47,9 +82,6 @@ export function ChatView(props: { session: ChatSession }) {
       bottomSlot={<ComposerBar session={session} />}
     />
   );
-
-  /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
-  const openId = session.sessionId ?? session.opened?.id ?? "";
 
   const notices = (
     <>
@@ -124,6 +156,8 @@ export function ChatView(props: { session: ChatSession }) {
       title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
       badge={openId.slice(0, 6)}
       badgeTitle={openId}
+      scrollRef={scrollRef}
+      onScroll={handleScroll}
       // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
       onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
       footer={
@@ -155,6 +189,9 @@ function Pane(props: {
   badgeTitle: string;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
+  /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
+  scrollRef?: React.Ref<HTMLDivElement>;
+  onScroll?: (() => void) | undefined;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
@@ -230,7 +267,12 @@ function Pane(props: {
         </span>
       </header>
 
-      <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+      <div
+        ref={props.scrollRef}
+        onScroll={props.onScroll}
+        className="scroll"
+        style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}
+      >
         <div
           style={{
             width: "min(100%, var(--content-max-width))",

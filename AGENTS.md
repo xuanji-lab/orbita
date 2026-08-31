@@ -103,6 +103,10 @@ token 规范与实现不一致时以设计系统为准。
    **停服务只按自己记下的 PID 杀，不用 `pkill -f` 匹配进程名**。
 3. **改根 `overrides` 里的构建工具版本会打死依赖它的 runner**——vite 7 的 override 曾让全仓 vitest
    在 transform 阶段整片失败且长期没被发现。改 overrides 必须回头核对依赖它的 runner 的版本区间。
+4. **electron-vite 的 HMR 可能静默不生效**（2026-08-31，自动滚动一刀）：改完 renderer 代码，磁盘与
+   dev server 侧都是新的（`curl http://127.0.0.1:5273/src/...` 可验证），但改动前启动的 Electron 窗口
+   还在跑旧模块——表现为「功能没实现」，对着不存在的 bug 排查了一整轮。
+   对策：renderer 行为与代码不符时，先在窗口里 **Ctrl+R 硬刷新**再排查；刷新即从 vite 重新拉全量模块。
 
 ## 深度路由（用到再读，不要背进上下文）
 
