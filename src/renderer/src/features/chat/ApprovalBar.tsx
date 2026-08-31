@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PermissionAnswer } from "@shared/permission";
 import { Icon } from "../../shell/Icon";
+import type { PendingApproval } from "./session-states.ts";
 
 /**
  * 工具审批条（R6-04 五屏之一）。设计系统的相关硬规则都落在这里：
@@ -11,11 +12,6 @@ import { Icon } from "../../shell/Icon";
  *  - **键盘优先**：打开即聚焦「Allow」，Esc 拒绝——R6-03 要求首版就能键盘应答
  *  - 玻璃只用在面上，文字始终是实色
  */
-export interface PendingApproval {
-  requestId: string;
-  toolName: string;
-  input: unknown;
-}
 
 export function ApprovalBar(props: {
   approval: PendingApproval;

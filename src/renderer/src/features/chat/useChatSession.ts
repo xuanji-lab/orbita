@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  applyTranscriptProgress,
-  createTranscriptState,
-  selectTranscript,
-  type TranscriptState,
-} from "@earendil-works/pi-coding-agent/client";
-import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
+import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
-import type { PendingApproval } from "./ApprovalBar";
+import {
+  EMPTY_ENTRY,
+  applyAgentEvent,
+  createSessionStates,
+  removeApproval,
+  seedFromDisk,
+  setEntryPhase,
+  type PendingApproval,
+  type SessionStates,
+} from "./session-states.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ProviderDto } from "@shared/provider";
 import type { SessionMeta } from "@shared/session";
@@ -18,7 +22,9 @@ import type { Workspace } from "@shared/workspace";
  * app shell 里左栏（会话列表 / 工作区）与中卡（聊天面）需要读同一份状态，
  * 而它们在 DOM 上是兄弟，状态没法再留在中卡里。
  *
- * transcript 由 **pi 自带的归约器**维护，我们不写第二份归约逻辑（guideline §三）。
+ * transcript / phase / 审批**按会话分槽**（session-states.ts）：事件无条件进自己的槽，
+ * 切走正在跑的会话不再丢更新——「看哪条」只是显示问题，不再决定「记不记」。
+ * transcript 归约仍是 **pi 自带的归约器**，我们不写第二份归约逻辑（guideline §三）。
  */
 export interface ChatSession {
   sessionId: string | null;
@@ -86,14 +92,12 @@ export interface ChatSession {
 
 export function useChatSession(providers: ProviderDto[]): ChatSession {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [state, setState] = useState<TranscriptState>(() => createTranscriptState(seedSnapshot()));
-  const [phase, setPhase] = useState<"idle" | "turn">("idle");
+  /** 全部会话的槽；「当前看哪条」由 sessionId ?? opened?.id 推出，不另设状态 */
+  const [states, setStates] = useState<SessionStates>(createSessionStates);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   /** 三档权限模式。默认 plan——**默认最保守**，开工具要用户自己往下调。 */
   const [mode, setMode] = useState<PermissionMode>("plan");
-  /** 排队中的工具审批。同一时刻可能有多个（并行工具调用），逐个应答。 */
-  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -103,6 +107,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
   const [defaultCwd, setDefaultCwd] = useState<string>("");
   const sessionRef = useRef<string | null>(null);
+  /** 还在 runtime 里活着的会话。send 创建时加入，runtime 崩溃时清空；
+   *  openSession 命中它就重连活槽，而不是从盘上种一份旧的。 */
+  const liveRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     sessionRef.current = sessionId;
@@ -138,27 +145,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       api.agent.onEvent((event) => {
         if (event.type === "failed") {
           setError(event.message);
-          setPhase("idle");
-          return;
+          // runtime 整个没了：live 账本清零，全部槽归位（归约在 applyAgentEvent 里）
+          if (event.sessionId === null) liveRef.current.clear();
         }
-        // ready / created 不带会话内容；其余按 sessionId 过滤，一个进程托管多个 session
-        if (event.type === "permission") {
-          if (event.sessionId !== sessionRef.current) return;
-          setApprovals((prev) => [
-            ...prev,
-            { requestId: event.requestId, toolName: event.toolName, input: event.input },
-          ]);
-          return;
-        }
-        if (event.type !== "progress" && event.type !== "phase") return;
-        if (event.sessionId !== sessionRef.current) return;
-        if (event.type === "progress")
-          setState((prev) => applyTranscriptProgress(prev, event.progress));
-        else {
-          setPhase(event.phase === "idle" ? "idle" : "turn");
-          // 一轮跑完标题与 updatedAt 都变了，刷一次侧栏
-          if (event.phase === "idle") refreshSessions();
-        }
+        // 一轮跑完标题与 updatedAt 都变了，刷一次侧栏——**哪条会话跑完都刷**，
+        // 后台完成的会话侧栏也该亮起来
+        if (event.type === "phase" && event.phase === "idle") refreshSessions();
+        // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
+        setStates((prev) => applyAgentEvent(prev, event));
       }),
     [refreshSessions],
   );
@@ -182,8 +176,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     const text = draft.trim();
     if (text === "") return;
     setError(null);
+    let id: string | null = sessionId;
     try {
-      let id = sessionId;
       if (id === null) {
         if (model === null) throw new Error("Add a provider with at least one model first");
         // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
@@ -204,14 +198,22 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         });
         setSessionId(id);
         sessionRef.current = id;
+        liveRef.current.add(id);
         refreshSessions();
       }
       setDraft("");
-      setPhase("turn");
-      await api.agent.submit(id, text);
+      // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
+      // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
+      const active: string = id;
+      setStates((prev) => setEntryPhase(prev, active, "turn"));
+      await api.agent.submit(active, text);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-      setPhase("idle");
+      // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位
+      if (id !== null) {
+        const failed: string = id;
+        setStates((prev) => setEntryPhase(prev, failed, "idle"));
+      }
     }
   }, [draft, sessionId, model, mode, cwd, workspaceId, defaultCwd, opened, refreshSessions]);
 
@@ -224,19 +226,19 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const reset = useCallback(() => {
     setSessionId(null);
     sessionRef.current = null;
-    setState(createTranscriptState(seedSnapshot()));
-    setApprovals([]);
-    setPhase("idle");
     setError(null);
     setOpened(null);
+    // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
   }, []);
 
   /**
-   * 打开一条会话：**把它的 transcript 种进 transcript 状态**，并把 cwd / 归属 / 权限档
-   * 一起恢复成它当时的样子。点的就是当前这条活着的会话时什么都不用做。
+   * 打开一条会话：cwd / 归属 / 权限档一起恢复成它当时的样子。点的就是当前这条
+   * 活着的会话时什么都不用做。**还在 runtime 里跑的会话直接重连活槽**——
+   * 切回来就是最新画面，事件继续实时进。
    *
-   * 这里不建 agent——**续跑推迟到用户真的说话时**（send 里带 resume）。
-   * 打开一条会话就起一个进程内的 session 太贵了，翻记录是最常见的动作。
+   * 没在跑的才从盘上把 transcript 种进槽；**续跑推迟到用户真的说话时**
+   * （send 里带 resume）——打开一条会话就起一个进程内的 session 太贵了，
+   * 翻记录是最常见的动作。
    */
   const openSession = useCallback((id: string) => {
     if (id === sessionRef.current) return;
@@ -245,16 +247,23 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       .load(id)
       .then((detail) => {
         if (detail === null) return;
-        setSessionId(null);
-        sessionRef.current = null;
-        setApprovals([]);
-        setPhase("idle");
-        setState(createTranscriptState(seedSnapshot(detail.transcript)));
+        // meta（cwd / 归属 / 权限档 / 模型）两条路都要恢复
         setOpened(detail.meta);
         setCwd(detail.meta.cwd);
         setWorkspaceId(detail.meta.workspaceId);
         setMode(detail.meta.mode);
         setModel({ providerId: detail.meta.providerId, modelId: detail.meta.modelId });
+        if (liveRef.current.has(id)) {
+          // **还在跑：重连活槽**。sessionId 接上，事件继续实时进；
+          // 不种盘上的快照——槽里的累积比盘新，种盘等于把画面倒回去
+          setSessionId(id);
+          sessionRef.current = id;
+          return;
+        }
+        // 没在跑：从盘上种槽，readOnly 与「说话时才续跑」语义照旧
+        setSessionId(null);
+        sessionRef.current = null;
+        setStates((prev) => seedFromDisk(prev, id, detail.transcript));
       })
       .catch((cause: unknown) =>
         setError(cause instanceof Error ? cause.message : String(cause)),
@@ -388,20 +397,25 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, []);
 
   const answerApproval = useCallback((requestId: string, answer: PermissionAnswer) => {
-    setApprovals((prev) => prev.filter((a) => a.requestId !== requestId));
+    setStates((prev) => removeApproval(prev, requestId));
     void api.agent.answerPermission(requestId, answer);
   }, []);
 
+  // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
+  // ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账
+  const viewedId = sessionId ?? opened?.id ?? null;
+  const entry = (viewedId !== null ? states.get(viewedId) : undefined) ?? EMPTY_ENTRY;
+
   return {
     sessionId,
-    transcript: selectTranscript(state),
-    phase,
+    transcript: selectTranscript(entry.transcript),
+    phase: entry.phase,
     error,
     draft,
     setDraft,
     mode,
     changeMode,
-    approvals,
+    approvals: entry.approvals,
     workspaces,
     addWorkspace,
     renameWorkspace,
@@ -428,28 +442,5 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     newTask,
     newTaskIn,
     answerApproval,
-  };
-}
-
-/**
- * 归约器的起点快照。打开旧会话时**把落盘的 transcript 种进去**，
- * 之后的 progress 直接往下追加——所以实时与历史是同一条渲染路径，不是两条。
- */
-function seedSnapshot(transcript: readonly TranscriptItem[] = []): SessionSnapshot {
-  const now = Date.now();
-  return {
-    id: "local",
-    cwd: ".",
-    createdAt: now,
-    updatedAt: now,
-    phase: "idle",
-    model: { provider: "pending", id: "pending" },
-    thinkingLevel: "off",
-    attached: true,
-    locked: false,
-    revision: 0,
-    transcript: [...transcript],
-    queuedSteer: [],
-    queuedSteerCount: 0,
   };
 }

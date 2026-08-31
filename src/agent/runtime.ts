@@ -118,6 +118,11 @@ function asAdaptable(event: { type: string }): AdaptableEvent | null {
 }
 
 async function createSession(command: Extract<AgentCommand, { type: "create" }>): Promise<void> {
+  // **双开保险丝**：同 id 还活着就拒绝，绝不覆盖——覆盖会漏掉旧 session 的退订，
+  // 还让两个 AgentSession 写同一份 pi JSONL（记录写坏，修不回来）。
+  if (sessions.has(command.sessionId)) {
+    throw new Error(`session ${command.sessionId} is already running`);
+  }
   // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
   const modelRuntime = await ModelRuntime.create({});
   modelRuntime.registerProvider(command.provider.id, toProviderConfig(command.provider));
