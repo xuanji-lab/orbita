@@ -54,3 +54,71 @@ export function toolResultText(result: ToolTranscriptItem): string {
     .map((block) => (block.type === "text" ? block.text : `[image ${block.mimeType}]`))
     .join("\n");
 }
+
+/**
+ * 折叠行上工具名右边的参数摘要：`bash · git status`、`edit · src/app.ts`。
+ * 字段名按 pi 工具 schema 的真名（bash→command，路径类→path，搜索类→pattern）；
+ * 不认识的工具、input 不是对象、字段缺失或不是字符串，一律返回 null——
+ * 摘要缺了不碍事，编造才碍事。
+ */
+export function toolCallSummary(toolName: string, input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const record = input as Record<string, unknown>;
+  const str = (key: string): string | null => {
+    const value = record[key];
+    return typeof value === "string" && value !== "" ? value : null;
+  };
+  switch (toolName) {
+    case "bash":
+      return str("command");
+    case "read":
+    case "write":
+    case "edit":
+      return str("path");
+    case "grep":
+    case "find":
+    case "glob": {
+      const pattern = str("pattern");
+      if (pattern === null) return null;
+      const path = str("path");
+      return path === null || path === "." ? pattern : `${pattern} in ${path}`;
+    }
+    case "ls":
+      return str("path") ?? ".";
+    default:
+      return null;
+  }
+}
+
+/** diff 行的四种角色：增 / 删 / 头与块标记 / 上下文 */
+export type DiffLineKind = "add" | "del" | "meta" | "ctx";
+
+/**
+ * unified diff 一行的角色。`@@` 块头与 `diff --git`、`---`、`+++` 文件头归 meta；
+ * 只看前缀不看内容——diff 的渲染是给它上色，不是给它解析语义。
+ */
+export function diffLineKind(line: string): DiffLineKind {
+  if (
+    line.startsWith("@@") ||
+    line.startsWith("diff --git") ||
+    line.startsWith("--- ") ||
+    line.startsWith("+++ ")
+  ) {
+    return "meta";
+  }
+  if (line.startsWith("+")) return "add";
+  if (line.startsWith("-")) return "del";
+  return "ctx";
+}
+
+/**
+ * edit 落在 details 里的 diff（上一刀才带上来的，pi 算好的现成货）。
+ * 不是 edit、没有 details、diff 不是非空字符串，都返回 null——调用方退回原文展示。
+ */
+export function editDiffText(result: ToolTranscriptItem): string | null {
+  if (result.toolName !== "edit") return null;
+  const details = result.details;
+  if (typeof details !== "object" || details === null) return null;
+  const diff = (details as Record<string, unknown>)["diff"];
+  return typeof diff === "string" && diff !== "" ? diff : null;
+}

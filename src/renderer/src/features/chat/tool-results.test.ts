@@ -2,9 +2,12 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import {
+  diffLineKind,
+  editDiffText,
   indexToolResults,
   isStandaloneItem,
   summarizeToolResult,
+  toolCallSummary,
   toolResultText,
 } from "./tool-results.ts";
 
@@ -120,5 +123,78 @@ describe("toolResultText", () => {
       }),
     ]).get("a");
     assert.equal(item === undefined ? "" : toolResultText(item), "[image image/png]");
+  });
+});
+
+describe("toolCallSummary", () => {
+  test("bash 摘要取 command，路径类工具取 path", () => {
+    assert.equal(toolCallSummary("bash", { command: "git status" }), "git status");
+    assert.equal(toolCallSummary("edit", { path: "src/app.ts", edits: [] }), "src/app.ts");
+    assert.equal(toolCallSummary("write", { path: "notes.md", content: "…" }), "notes.md");
+    assert.equal(toolCallSummary("read", { path: "a.ts", offset: 2 }), "a.ts");
+  });
+
+  test("搜索类取 pattern，带了具体目录才一起显示", () => {
+    assert.equal(toolCallSummary("grep", { pattern: "TODO" }), "TODO");
+    assert.equal(toolCallSummary("grep", { pattern: "TODO", path: "." }), "TODO");
+    assert.equal(toolCallSummary("find", { pattern: "*.ts", path: "src" }), "*.ts in src");
+  });
+
+  test("ls 不带路径就是当前目录", () => {
+    assert.equal(toolCallSummary("ls", {}), ".");
+    assert.equal(toolCallSummary("ls", { path: "src" }), "src");
+  });
+
+  test("缺字段、非字符串、非对象、不认识的工具——一律 null，不编造", () => {
+    assert.equal(toolCallSummary("bash", {}), null);
+    assert.equal(toolCallSummary("bash", { command: 42 }), null);
+    assert.equal(toolCallSummary("bash", "git status"), null);
+    assert.equal(toolCallSummary("bash", null), null);
+    assert.equal(toolCallSummary("mystery", { path: "x" }), null);
+  });
+});
+
+describe("diffLineKind", () => {
+  test("+ 增 / - 删 / 空格上下文", () => {
+    assert.equal(diffLineKind("+added"), "add");
+    assert.equal(diffLineKind("-removed"), "del");
+    assert.equal(diffLineKind("  context"), "ctx");
+    assert.equal(diffLineKind(""), "ctx");
+  });
+
+  test("@@ 块头与文件头归 meta；删空行是独立的 -，不与 --- 混淆", () => {
+    assert.equal(diffLineKind("@@ -1,3 +1,4 @@"), "meta");
+    assert.equal(diffLineKind("diff --git a/x b/x"), "meta");
+    assert.equal(diffLineKind("--- a/x.ts"), "meta");
+    assert.equal(diffLineKind("+++ b/x.ts"), "meta");
+    assert.equal(diffLineKind("---"), "del");
+  });
+});
+
+describe("editDiffText", () => {
+  test("edit 且 details.diff 是非空字符串时取出来", () => {
+    const item = indexToolResults([
+      toolItem({
+        toolCallId: "a",
+        toolName: "edit",
+        details: { diff: "+hi\n-bye", firstChangedLine: 3 },
+      }),
+    ]).get("a");
+    assert.equal(item === undefined ? null : editDiffText(item), "+hi\n-bye");
+  });
+
+  test("不是 edit、没有 details、diff 缺失或为空——都返回 null", () => {
+    const bash = indexToolResults([toolItem({ toolCallId: "b" })]).get("b");
+    assert.equal(bash === undefined ? null : editDiffText(bash), null);
+
+    const noDetails = indexToolResults([
+      toolItem({ toolCallId: "c", toolName: "edit" }),
+    ]).get("c");
+    assert.equal(noDetails === undefined ? null : editDiffText(noDetails), null);
+
+    const emptyDiff = indexToolResults([
+      toolItem({ toolCallId: "d", toolName: "edit", details: { diff: "" } }),
+    ]).get("d");
+    assert.equal(emptyDiff === undefined ? null : editDiffText(emptyDiff), null);
   });
 });

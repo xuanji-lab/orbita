@@ -2,9 +2,12 @@ import { useState } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import {
+  diffLineKind,
+  editDiffText,
   indexToolResults,
   isStandaloneItem,
   summarizeToolResult,
+  toolCallSummary,
   toolResultText,
   type ToolResultIndex,
 } from "./tool-results";
@@ -400,6 +403,7 @@ function Item(props: { item: TranscriptItem; toolResults: ToolResultIndex }) {
             <ToolLine
               key={index}
               toolName={block.toolName}
+              input={block.input}
               result={props.toolResults.get(block.toolCallId)}
             />
           );
@@ -411,23 +415,23 @@ function Item(props: { item: TranscriptItem; toolResults: ToolResultIndex }) {
 }
 
 /**
- * 工具调用行：折叠时一行，点开看结果原文。
- *
- * 设计系统要的是「思考、工具调用、文件阅读都折叠成一行、**点击才展开**」——
- * 折叠一直有，展开一直没做，因为展开之后根本没东西可看（工具结果从来没进过协议）。
+ * 工具调用行：折叠时一行（工具名 + 参数摘要），点开看结果——edit 展开是红绿 diff，
+ * 其余是原文。设计系统要的是「思考、工具调用、文件阅读都折叠成一行、点击才展开」。
  *
  * 状态优先用图标与文字，颜色是第二信号（AGENTS.md）：失败是 `triangle-alert` + "failed"，
  * 不是光把字染红。
  */
-function ToolLine(props: { toolName: string; result: ToolTranscriptItem | undefined }) {
+function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscriptItem | undefined }) {
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
   const running = result === undefined || result.status === "running";
   const summary = summarizeToolResult(result);
+  const callSummary = toolCallSummary(props.toolName, props.input);
   // 还在跑的时候没有完整结果可展——此时给展开只会开出一个空盒子
   const expandable = result !== undefined && result.status !== "running";
-  const body = expandable ? toolResultText(result) : "";
+  const diff = expandable && result !== undefined ? editDiffText(result) : null;
+  const body = expandable && result !== undefined ? toolResultText(result) : "";
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
@@ -470,6 +474,19 @@ function ToolLine(props: { toolName: string; result: ToolTranscriptItem | undefi
         <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {props.toolName}
         </span>
+        {callSummary !== null && (
+          <span
+            style={{
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              fontFamily: "var(--font-family-business)",
+            }}
+          >
+            {callSummary}
+          </span>
+        )}
         {summary !== null && (
           <span style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}>{summary}</span>
         )}
@@ -486,7 +503,8 @@ function ToolLine(props: { toolName: string; result: ToolTranscriptItem | undefi
           </span>
         )}
       </button>
-      {open && expandable && (
+      {open && expandable && diff !== null && <DiffView diff={diff} />}
+      {open && expandable && diff === null && (
         <pre
           style={{
             margin: 0,
@@ -506,6 +524,60 @@ function ToolLine(props: { toolName: string; result: ToolTranscriptItem | undefi
           {body === "" ? "(no output)" : body}
         </pre>
       )}
+    </div>
+  );
+}
+
+/**
+ * edit 的展开体：pi 已经算好的 unified diff（上一刀落进 details 的），按行上色。
+ * 增删行的底色用各自的 -soft token——文字才是主信号，颜色是第二信号；底色只淡染一层，
+ * 行文字仍可读。空行渲染成一个空格占位，保住行高。
+ */
+function DiffView(props: { diff: string }) {
+  const lines = props.diff.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return (
+    <div
+      style={{
+        maxHeight: 320,
+        overflow: "auto",
+        padding: "var(--space-2) 0",
+        background: "var(--color-bg-muted)",
+        borderRadius: "var(--radius-md)",
+        fontFamily: "var(--font-family-business)",
+        fontSize: "var(--font-size-micro)",
+        lineHeight: "var(--line-height-chat)",
+      }}
+    >
+      {lines.map((line, index) => {
+        const kind = diffLineKind(line);
+        return (
+          <div
+            key={index}
+            style={{
+              padding: "0 var(--space-3)",
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              color:
+                kind === "add"
+                  ? "var(--color-success)"
+                  : kind === "del"
+                    ? "var(--color-danger)"
+                    : kind === "meta"
+                      ? "var(--color-text-tertiary)"
+                      : "var(--color-text-secondary)",
+              background:
+                kind === "add"
+                  ? "var(--color-success-soft)"
+                  : kind === "del"
+                    ? "var(--color-danger-soft)"
+                    : undefined,
+            }}
+          >
+            {line === "" ? " " : line}
+          </div>
+        );
+      })}
     </div>
   );
 }
