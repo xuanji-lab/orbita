@@ -664,9 +664,10 @@ function ThinkingLine(props: { text: string }) {
 }
 
 /**
- * 压缩界碑行：折叠时一行（archive 图标 + 已压缩 + 压缩前的 token 数），点开看摘要全文。
+ * 压缩界碑行：折叠时一行（已压缩 + 压缩前的 token 数），点开看摘要全文。
  * 与 ThinkingLine 同一份折叠契约，展开体 320px 封顶（摘要值得读，但也不许顶走输入卡）。
  * 摘要是 markdown——它走 MarkdownBlock，与 agent 回复同一套渲染。
+ * 不放图标：archive 与侧栏「归档」撞车，文字本身已足够指认。
  */
 function CompactedLine(props: { record: CompactedRecord }) {
   const [open, setOpen] = useState(false);
@@ -693,15 +694,6 @@ function CompactedLine(props: { record: CompactedRecord }) {
           cursor: "pointer",
         }}
       >
-        <span
-          style={{
-            display: "inline-flex",
-            flex: "0 0 auto",
-            color: "var(--color-text-tertiary)",
-          }}
-        >
-          <Icon name="archive" size={13} strokeWidth={1.8} />
-        </span>
         <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           已压缩 · 此前上下文约 {props.record.tokensBefore.toLocaleString("en-US")} tokens
         </span>
