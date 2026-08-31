@@ -283,7 +283,7 @@ async function handle(command: AgentCommand): Promise<void> {
       send({
         type: "failed",
         sessionId: command.sessionId,
-        message: error instanceof Error ? error.message : String(error),
+        message: compactionErrorText(error instanceof Error ? error.message : String(error)),
       });
     });
     return;
@@ -291,6 +291,20 @@ async function handle(command: AgentCommand): Promise<void> {
   live.unsubscribe();
   live.session.dispose();
   sessions.delete(command.sessionId);
+}
+
+/**
+ * pi 的两种「压不了」是预期拒绝而不是故障（见 compaction.js prepareCompaction 的守卫），
+ * 直接透传英文会让人以为系统坏了；其余报错照原样走。
+ */
+function compactionErrorText(raw: string): string {
+  if (raw === "Already compacted") {
+    return "已经压缩过了，上次压缩之后还没有新对话——继续聊一轮再压";
+  }
+  if (raw === "Nothing to compact (session too small)") {
+    return "这个会话的内容还太少，没有值得压缩的上下文";
+  }
+  return raw;
 }
 
 parentPort.on("message", (event) => {
