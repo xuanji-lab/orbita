@@ -759,8 +759,8 @@ function Responding() {
 
 /**
  * 压缩进行态：转录末尾、内容列内居中的一行，整体呼吸（styles.css 的 orbita-breath）。
- * 图标不旋转、整行呼吸——旋转是「agent 在干活」，呼吸是「后台维护中」，
- * 两种进行态两种语言（设计系统 Motion 段）。完成后本行卸载，界碑按时间落进流里。
+ * 图标旋转表示「在干活」，整行呼吸表示「后台维护中，别急」——两层信号叠在一起
+ * （旋转与呼吸都是设计系统 Motion 段认可的持续动效）。完成后本行卸载，界碑按时间落进流里。
  */
 function Compacting() {
   return (
@@ -777,7 +777,7 @@ function Compacting() {
       }}
     >
       <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
-        <Icon name="loader-circle" size={13} strokeWidth={1.8} />
+        <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
       正在压缩上下文…
     </p>
