@@ -14,7 +14,7 @@ import {
 } from "./session-states.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ProviderDto } from "@shared/provider";
-import type { SessionMeta } from "@shared/session";
+import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 
 /**
@@ -29,6 +29,8 @@ import type { Workspace } from "@shared/workspace";
 export interface ChatSession {
   sessionId: string | null;
   transcript: readonly TranscriptItem[];
+  /** 压缩界碑（与 transcript 分开记账）；显示时由 applyCompactionBoundary 合成 */
+  compactions: readonly CompactedRecord[];
   /** turn = 这一轮还在跑；idle = 可以发下一句 */
   phase: "idle" | "turn";
   error: string | null;
@@ -409,6 +411,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   return {
     sessionId,
     transcript: selectTranscript(entry.transcript),
+    compactions: entry.compactions,
     phase: entry.phase,
     error,
     draft,

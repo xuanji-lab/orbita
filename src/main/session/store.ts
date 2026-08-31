@@ -3,7 +3,7 @@
  * `docs/plans/2026-08-25-会话存储与命名工作区.md`）：
  *
  *   sessions/<id>.meta.json   可变（标题 / updatedAt / 权限档），原子写
- *   sessions/<id>.jsonl       只追加，一行一个 TranscriptItem
+ *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  *
  * 分两个文件的理由：meta 会变而 transcript 只增。把可变记录塞进只追加的日志里，
  * 要么改个标题就重写全文，要么读取时全文扫描找最后一条 meta。分开之后
@@ -16,6 +16,7 @@ import { writeJsonAtomic } from "../atomic-write.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import {
   deriveSessionTitle,
+  isCompactedRecord,
   parseSessionMeta,
   sortSessions,
   type SessionDetail,
@@ -165,28 +166,37 @@ export class SessionStore {
    * 读日志。**逐行解析、坏行跳过**——只追加的文件最后一行可能因为断电写了一半，
    * 为此丢掉整条会话的记录是不划算的。
    */
-  private async readLog(id: string): Promise<TranscriptItem[]> {
+  private async readLog(id: string): Promise<SessionRecord[]> {
     let raw: string;
     try {
       raw = await readFile(this.logPath(id), "utf8");
     } catch {
       return [];
     }
-    const items: TranscriptItem[] = [];
+    const records: SessionRecord[] = [];
     for (const line of raw.split("\n")) {
       if (line.trim() === "") continue;
       try {
-        items.push(JSON.parse(line) as TranscriptItem);
+        const parsed: unknown = JSON.parse(line);
+        // 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——
+        // 半截摘要当消息渲染，比少渲染一行更糟
+        if (isCompactedRecord(parsed)) {
+          records.push(parsed);
+          continue;
+        }
+        const suspect = parsed as { role?: unknown } | null;
+        if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") continue;
+        records.push(parsed as TranscriptItem);
       } catch {
         // 半截行：跳过它，前面读到的照常返回
       }
     }
-    return items;
+    return records;
   }
 }
 
 /** 从记录里推导标题：第一条用户消息的第一行。改名清空时退回它。 */
-function derivedFrom(transcript: TranscriptItem[]): string {
+function derivedFrom(transcript: readonly SessionRecord[]): string {
   for (const item of transcript) {
     if (item.role !== "user") continue;
     for (const block of item.content) {

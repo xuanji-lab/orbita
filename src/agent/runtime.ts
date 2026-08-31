@@ -174,6 +174,28 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     }
     if (event.type === "agent_start") send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
     if (event.type === "agent_settled") send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
+    // 压缩是一次真实的 LLM 调用，期间必须显示忙碌而不是「可以说话」；
+    // renderer 只认 idle / turn，"compaction" 在那边自动按忙碌渲染。
+    if (event.type === "compaction_start") {
+      send({ type: "phase", sessionId: command.sessionId, phase: "compaction" });
+    }
+    if (event.type === "compaction_end") {
+      send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
+      // aborted / 无 result 的压缩（用户中止、摘要失败）不留界碑——历史没有被折叠
+      if (!event.aborted && event.result !== undefined) {
+        send({
+          type: "compaction",
+          sessionId: command.sessionId,
+          record: {
+            role: "compacted",
+            id: randomUUID(),
+            summary: event.result.summary,
+            tokensBefore: event.result.tokensBefore,
+            timestamp: Date.now(),
+          },
+        });
+      }
+    }
   });
 
   sessions.set(command.sessionId, { session, adapter, unsubscribe, mode: command.mode });

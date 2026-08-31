@@ -1,10 +1,11 @@
 /**
  * agent 事件 → 落盘。**纯模块**：不 import electron，可被 `node --test` 直接加载。
  *
- * 只认两个终态帧：
+ * 认三个终态帧：
  *
  *   assistant  `item_finished`  —— message_end 时 adapter 发的终态帧
  *   user       `item_started`   —— 用户消息出生即完成，adapter 不会再给它发 finished
+ *   compacted  `compaction`     —— 压缩界碑，事件里就是完整的记录，直接落
  *
  * **abort 的半截回答同样落盘**，这是刻意的。pi 的 agent-loop 在 abort 时先无条件发
  * `message_end`、之后才判 `stopReason === "aborted"`，所以它照样走终态帧。
@@ -15,10 +16,18 @@
  * **不做归约。** 归约是渲染层的事（用 pi 自带的归约器），这里只挑终态帧。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
+import type { SessionRecord } from "../../shared/session.ts";
 import type { SessionStore } from "./store.ts";
 
 export function createSessionRecorder(store: SessionStore): (event: AgentEvent) => void {
+  // 写失败不该让对话中断——记一条到 stderr，界面照常
+  const persist = (sessionId: string, item: SessionRecord): void => {
+    void store.record(sessionId, item).catch((error: unknown) => {
+      console.error("[session] 落盘失败", sessionId, error);
+    });
+  };
   return (event) => {
+    if (event.type === "compaction") return persist(event.sessionId, event.record);
     if (event.type !== "progress") return;
     const progress = event.progress;
     const item =
@@ -28,9 +37,6 @@ export function createSessionRecorder(store: SessionStore): (event: AgentEvent) 
           ? progress.item
           : null;
     if (item === null) return;
-    // 写失败不该让对话中断——记一条到 stderr，界面照常
-    void store.record(event.sessionId, item).catch((error: unknown) => {
-      console.error("[session] 落盘失败", event.sessionId, error);
-    });
+    persist(event.sessionId, item);
   };
 }

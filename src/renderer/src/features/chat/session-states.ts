@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent/client";
 import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "@shared/agent-ipc";
-import type { SessionRecord } from "@shared/session";
+import type { CompactedRecord, SessionRecord } from "@shared/session";
 
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
 export interface PendingApproval {
@@ -28,6 +28,11 @@ export interface PendingApproval {
 /** 一条会话在 renderer 里的全部运行时状态。 */
 export interface SessionEntry {
   transcript: TranscriptState;
+  /**
+   * 压缩界碑单独记账，**不进 pi 的归约器**——它不是消息，归约器不认识。
+   * 显示时由 `applyCompactionBoundary` 按时间插回往来流。
+   */
+  compactions: CompactedRecord[];
   /** turn = 这一轮还在跑；idle = 可以发下一句 */
   phase: "idle" | "turn";
   approvals: PendingApproval[];
@@ -43,6 +48,7 @@ export function createSessionStates(): SessionStates {
 /** 空槽是常量：首页/无选中时用它兜底，避免每次渲染新建 TranscriptState。 */
 export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
+  compactions: [],
   phase: "idle",
   approvals: [],
 };
@@ -63,6 +69,12 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       phase: event.phase === "idle" ? "idle" : "turn",
+    }));
+  }
+  if (event.type === "compaction") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      compactions: [...entry.compactions, event.record],
     }));
   }
   if (event.type === "permission") {
@@ -102,16 +114,41 @@ export function seedFromDisk(
   sessionId: string,
   transcript: readonly SessionRecord[],
 ): SessionStates {
-  // 压缩界碑不是消息，pi 的归约器不认识它——只把往来种进去；界碑进槽是下一步的事。
-  // 内联谓词而非 isCompactedRecord()：本文件会被 node --test 加载，@shared 的值导入解析不了。
+  // 界碑不进 pi 的归约器（它不是消息），分开记账；实时与历史从此是同一条显示路径。
+  // 内联 role 谓词而非 isCompactedRecord()：本文件被 node --test 加载，@shared 的值导入解析不了。
   const items = transcript.filter((item): item is TranscriptItem => item.role !== "compacted");
+  const compactions = transcript.filter(
+    (item): item is CompactedRecord => item.role === "compacted",
+  );
   const next = new Map(states);
   next.set(sessionId, {
     transcript: createTranscriptState(seedSnapshot(items)),
+    compactions,
     phase: "idle",
     approvals: [],
   });
   return next;
+}
+
+/**
+ * 视图合成：界碑按时间插回往来流，再应用「只显示最后一条边界之后」的规则——
+ * pi `buildContextEntries` 的同款语义（对模型不可见的历史，对视图也不可见）。
+ * **只是显示规则**：原始记录仍全量在盘上，这里一个字节都不丢。
+ */
+export function applyCompactionBoundary(
+  compactions: readonly CompactedRecord[],
+  transcript: readonly TranscriptItem[],
+): SessionRecord[] {
+  if (compactions.length === 0) return [...transcript];
+  const records: SessionRecord[] = [...transcript, ...compactions];
+  // 同毫秒时界碑排在前（两边都是界碑则保持原序）——「界碑之后」的东西不该被边界自己挡住
+  records.sort(
+    (a, b) =>
+      a.timestamp - b.timestamp ||
+      Number(b.role === "compacted") - Number(a.role === "compacted"),
+  );
+  const last = compactions.reduce((a, b) => (b.timestamp >= a.timestamp ? b : a));
+  return records.slice(records.indexOf(last));
 }
 
 /** 按 requestId 跨槽摘除一条审批。没有匹配就原样返回（同一引用）。 */

@@ -162,4 +162,46 @@ describe("SessionStore", () => {
     assert.equal(raw.trimEnd().split("\n").length, 1);
     assert.equal(JSON.parse(raw.trim()).role, "user");
   });
+
+  // ── 刀 0-3：界碑与消息共用一个日志 ──
+
+  const compacted = {
+    role: "compacted" as const,
+    id: "c1",
+    summary: "## Goal",
+    tokensBefore: 85000,
+    timestamp: 4000,
+  };
+
+  test("混合日志回读：界碑认成界碑，消息照旧", async () => {
+    await store.create(meta());
+    await store.record(ID, userItem("之前", 2000));
+    await store.record(ID, compacted);
+    await store.record(ID, userItem("之后", 5000));
+    const transcript = (await store.load(ID))?.transcript ?? [];
+    assert.deepEqual(
+      transcript.map((r) => r.role),
+      ["user", "compacted", "user"],
+    );
+    assert.equal(transcript[1] !== undefined && "tokensBefore" in transcript[1] ? transcript[1].tokensBefore : undefined, 85000);
+  });
+
+  test("坏掉的界碑行跳过，不当消息也不崩", async () => {
+    await store.create(meta());
+    await store.record(ID, userItem("完整的一行"));
+    await writeFile(
+      join(dir, "sessions", `${ID}.jsonl`),
+      `${JSON.stringify({ role: "compacted", id: "bad" })}\n`,
+      { flag: "a" },
+    );
+    const transcript = (await store.load(ID))?.transcript ?? [];
+    assert.deepEqual(transcript.map((r) => r.role), ["user"]);
+  });
+
+  test("刀 0-3 之前的旧日志原样读出——没有界碑就没有界碑", async () => {
+    await store.create(meta());
+    await store.record(ID, userItem("旧消息"));
+    const transcript = (await store.load(ID))?.transcript ?? [];
+    assert.deepEqual(transcript.map((r) => r.role), ["user"]);
+  });
 });

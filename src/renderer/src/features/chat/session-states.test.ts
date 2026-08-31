@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "@shared/agent-ipc";
+import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
   applyAgentEvent,
+  applyCompactionBoundary,
   markAllIdle,
   removeApproval,
   seedFromDisk,
@@ -159,5 +161,79 @@ describe("seedFromDisk / setEntryPhase", () => {
 test("EMPTY_ENTRY 是稳定兜底：phase idle、无审批", () => {
   assert.equal(EMPTY_ENTRY.phase, "idle");
   assert.deepEqual(EMPTY_ENTRY.approvals, []);
+  assert.deepEqual(EMPTY_ENTRY.compactions, []);
   assert.deepEqual(selectTranscript(EMPTY_ENTRY.transcript), []);
+});
+
+// ── 刀 0-3：压缩界碑 ──
+
+const compacted = (id: string, timestamp: number): CompactedRecord => ({
+  role: "compacted",
+  id,
+  summary: `## 摘要 ${id}`,
+  tokensBefore: 85000,
+  timestamp,
+});
+const userItem = (id: string, timestamp: number): TranscriptItem => ({
+  id,
+  role: "user",
+  content: [{ type: "text", text: id }],
+  timestamp,
+});
+const roles = (records: readonly SessionRecord[]) => records.map((r) => r.role);
+
+describe("压缩界碑的进出槽", () => {
+  test("compaction 事件进自己的槽，不碰 transcript 归约器", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
+    states = applyAgentEvent(states, { type: "compaction", sessionId: "A", record: compacted("c1", 500) });
+
+    assert.deepEqual(states.get("A")?.compactions, [compacted("c1", 500)]);
+    assert.deepEqual(texts(states, "A"), ["甲一"]);
+  });
+
+  test("seedFromDisk 分流：界碑进 compactions，往来进归约器", () => {
+    const disk = [userItem("u1", 1000), compacted("c1", 2000), userItem("u2", 3000)];
+    const states = seedFromDisk(new Map(), "A", disk);
+
+    assert.deepEqual(states.get("A")?.compactions, [compacted("c1", 2000)]);
+    assert.deepEqual(
+      selectTranscript(states.get("A")!.transcript).map((item) => item.id),
+      ["u1", "u2"],
+    );
+  });
+});
+
+describe("applyCompactionBoundary —— 只显示最后一条边界之后", () => {
+  test("没有界碑时原样全显", () => {
+    const items = [userItem("u1", 1), userItem("u2", 2)];
+    assert.deepEqual(applyCompactionBoundary([], items), items);
+  });
+
+  test("界碑按时间插回，此前的往来隐去——pi 的 buildContextEntries 同款语义", () => {
+    const records = applyCompactionBoundary([compacted("c1", 2000)], [
+      userItem("u1", 1000),
+      userItem("u2", 3000),
+      userItem("u3", 4000),
+    ]);
+    assert.deepEqual(roles(records), ["compacted", "user", "user"]);
+    assert.deepEqual(
+      records.map((r) => r.id),
+      ["c1", "u2", "u3"],
+    );
+  });
+
+  test("多次压缩只认最后一条边界，更早的界碑连同历史一起隐去", () => {
+    const records = applyCompactionBoundary([compacted("c1", 2000), compacted("c2", 6000)], [
+      userItem("u1", 1000),
+      userItem("u2", 3000),
+      userItem("u3", 7000),
+    ]);
+    assert.deepEqual(roles(records), ["compacted", "user"]);
+    assert.deepEqual(records.map((r) => r.id), ["c2", "u3"]);
+  });
+
+  test("同毫秒时界碑在前——边界之后的东西不该被边界自己挡住", () => {
+    const records = applyCompactionBoundary([compacted("c1", 3000)], [userItem("u2", 3000)]);
+    assert.deepEqual(records.map((r) => r.id), ["c1", "u2"]);
+  });
 });

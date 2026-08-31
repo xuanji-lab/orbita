@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
+import { applyCompactionBoundary } from "./session-states";
 import {
   diffLineKind,
   editDiffText,
@@ -19,7 +20,7 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
-import { deriveSessionTitle } from "@shared/session";
+import { deriveSessionTitle, isCompactedRecord, type CompactedRecord, type SessionRecord } from "@shared/session";
 import type { ChatSession } from "./useChatSession";
 
 /**
@@ -115,6 +116,8 @@ export function ChatView(props: { session: ChatSession }) {
 
   // 工具结果不单独占一行——先建索引，渲染工具调用那一行时挂上去（见 tool-results.ts）
   const toolResults = indexToolResults(session.transcript);
+  // 界碑插回往来流并应用边界规则：压缩前的历史对视图隐藏（pi 同款语义），原始记录仍在盘上
+  const records = applyCompactionBoundary(session.compactions, session.transcript);
 
   return (
     <Pane
@@ -133,7 +136,7 @@ export function ChatView(props: { session: ChatSession }) {
         </>
       }
     >
-      {session.transcript.filter(isStandaloneItem).map((item) => (
+      {records.filter(isStandaloneItem).map((item) => (
         <Item key={item.id} item={item} toolResults={toolResults} />
       ))}
       {session.phase === "turn" && <Responding />}
@@ -358,10 +361,11 @@ function ComposerBar(props: { session: ChatSession }) {
 }
 
 /**
- * 一条 transcript item。content 是块数组——按块渲染，不压扁（这正是换协议的目的）。
+ * 一条 transcript 记录。content 是块数组——按块渲染，不压扁（这正是换协议的目的）。
  * 用户指令走独立气泡、agent 输出走全宽文档式（R4-05 hybrid）。
  */
-function Item(props: { item: TranscriptItem; toolResults: ToolResultIndex }) {
+function Item(props: { item: SessionRecord; toolResults: ToolResultIndex }) {
+  if (isCompactedRecord(props.item)) return <CompactedLine record={props.item} />;
   if (props.item.role === "tool") return null; // 已挂到调用行上，不该走到这里
   if (props.item.role === "user") {
     return (
@@ -653,6 +657,76 @@ function ThinkingLine(props: { text: string }) {
           }}
         >
           {body}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 压缩界碑行：折叠时一行（archive 图标 + 已压缩 + 压缩前的 token 数），点开看摘要全文。
+ * 与 ThinkingLine 同一份折叠契约，展开体 320px 封顶（摘要值得读，但也不许顶走输入卡）。
+ * 摘要是 markdown——它走 MarkdownBlock，与 agent 回复同一套渲染。
+ */
+function CompactedLine(props: { record: CompactedRecord }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-2)",
+          width: "fit-content",
+          maxWidth: "100%",
+          minWidth: 0,
+          padding: 0,
+          border: "none",
+          background: "none",
+          color: "var(--color-text-secondary)",
+          fontFamily: "var(--font-family-base)",
+          fontSize: "var(--font-size-control)",
+          textAlign: "left",
+          cursor: "pointer",
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            flex: "0 0 auto",
+            color: "var(--color-text-tertiary)",
+          }}
+        >
+          <Icon name="archive" size={13} strokeWidth={1.8} />
+        </span>
+        <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          已压缩 · 此前上下文约 {props.record.tokensBefore.toLocaleString("en-US")} tokens
+        </span>
+        <span
+          style={{
+            display: "inline-flex",
+            flex: "0 0 auto",
+            color: "var(--color-text-tertiary)",
+            transform: open ? "rotate(180deg)" : undefined,
+          }}
+        >
+          <Icon name="chevron-down" size={13} strokeWidth={1.8} />
+        </span>
+      </button>
+      {open && (
+        <div
+          style={{
+            maxHeight: 320,
+            overflow: "auto",
+            padding: "var(--space-2) var(--space-3)",
+            background: "var(--color-bg-muted)",
+            borderRadius: "var(--radius-md)",
+          }}
+        >
+          <MarkdownBlock text={props.record.summary} />
         </div>
       )}
     </div>

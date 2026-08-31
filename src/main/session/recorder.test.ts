@@ -171,4 +171,29 @@ describe("createSessionRecorder", () => {
     assert.doesNotThrow(() => broken(progress({ type: "item_started", item: user })));
     await settle();
   });
+
+  // ── 刀 0-3：压缩界碑 ──
+  // （aborted / 摘要失败的压缩在 runtime 就不发事件——recorder 没机会见到它,无需测）
+
+  const compacted = {
+    role: "compacted" as const,
+    id: "c1",
+    summary: "## Goal\n重做外壳",
+    tokensBefore: 85000,
+    timestamp: 4000,
+  };
+
+  test("compaction 事件原样落盘,五字段一个不少", async () => {
+    record({ type: "compaction", sessionId: ID, record: compacted });
+    await settle();
+    const item = (await store.load(ID))?.transcript[0];
+    assert.deepEqual(item, compacted);
+    assert.equal(item !== undefined && "summary" in item ? item.summary : undefined, compacted.summary);
+  });
+
+  test("界碑不挤占标题推导——title 只认第一条用户消息", async () => {
+    record({ type: "compaction", sessionId: ID, record: compacted });
+    await settle();
+    assert.equal((await store.load(ID))?.meta.title, "");
+  });
 });

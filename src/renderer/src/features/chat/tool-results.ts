@@ -10,6 +10,7 @@
  * 纯模块：不 import React，可被 `node --test` 直接加载。
  */
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { SessionRecord } from "@shared/session";
 
 /** toolCallId → 那次调用的结果。同一个 id 出现多次时以最后一条为准（终态帧在增量帧之后）。 */
 export type ToolResultIndex = ReadonlyMap<string, ToolTranscriptItem>;
@@ -23,14 +24,14 @@ export function indexToolResults(transcript: readonly TranscriptItem[]): ToolRes
 }
 
 /**
- * 这一条 item 该不该在主列表里单独占一行。
+ * 这一条记录该不该在主列表里单独占一行。
  *
  * tool item 一律不占——它已经被 `indexToolResults` 挂到对应的调用行上了。
  * **代价写明白**：万一某条 tool 结果找不到对应的调用（协议上不该发生，
  * 因为结果必然由一次调用产生），它就不会被显示。宁可如此，也不要为了兜这个
  * 不存在的情形，让正常路径多出一行冗余。
  */
-export function isStandaloneItem(item: TranscriptItem): boolean {
+export function isStandaloneItem(item: SessionRecord): boolean {
   return item.role !== "tool";
 }
 
