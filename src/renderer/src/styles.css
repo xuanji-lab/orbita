@@ -135,12 +135,24 @@ body {
 
 /*
  * 聊天 markdown（.chat-md）：assistant 文本块经 react-markdown 渲染后的元素样式。
- * 值全部取设计系统 token；代码块在深浅主题下都是深底（--color-code-bg 不随主题切换，
- * 设计系统只定义了一份），所以语法色只需要一套。
- * 语法色是本文件新增的 app 级 token（设计系统没有语法色）——取 github-dark 一族，
- * 与暗主题的 --color-danger (#ff7b72) 同源，整块拼起来才不杂。
+ * 值全部取设计系统 token。
+ *
+ * 代码底色的取舍：设计系统给的 --color-code-bg 是不随主题切换的近黑（#111418），
+ * 在浅主题玻璃面上黑得太重（2026-08-31 用户反馈）。改用 --color-chat-muted-bg——
+ * 它本来就按主题定义了两份（浅 #f4f4f5 / 深 #242932），代码底色从此跟随主题；
+ * 文字用正文字色。语法色因此要两套：浅主题 github-light 一族，深主题 github-dark
+ * 一族（与暗主题 --color-danger #ff7b72 同源），随 data-theme 切换。
  */
 :root {
+  --syntax-comment: #6e7781;
+  --syntax-keyword: #cf222e;
+  --syntax-string: #0a3069;
+  --syntax-constant: #0550ae;
+  --syntax-entity: #8250df;
+  --syntax-tag: #116329;
+}
+
+:root[data-theme="dark"] {
   --syntax-comment: #8b949e;
   --syntax-keyword: #ff7b72;
   --syntax-string: #a5d6ff;
@@ -228,12 +240,11 @@ body {
   text-decoration: underline;
 }
 
-/* 行内 code 是深色小芯片；代码块整体也是深底——同一对 token，深浅主题共用 */
+/* 行内 code 是浅色小芯片（跟随主题），文字继承正文色；代码块同一份底 */
 .chat-md code {
   font-family: var(--font-family-business);
   font-size: 0.9em;
-  background: var(--color-code-bg);
-  color: var(--color-code-text);
+  background: var(--color-chat-muted-bg);
   padding: 1px 5px;
   border-radius: var(--radius-sm);
 }
@@ -241,7 +252,7 @@ body {
 .chat-md pre {
   margin: var(--space-2) 0;
   padding: var(--space-3);
-  background: var(--color-code-bg);
+  background: var(--color-chat-muted-bg);
   border-radius: var(--radius-md);
   overflow-x: auto;
 }
@@ -281,7 +292,7 @@ body {
   border-radius: var(--radius-md);
 }
 
-/* rehype-highlight 打出的语法记号；只映射常用的那些，没映射的保持 --color-code-text */
+/* rehype-highlight 打出的语法记号；只映射常用的那些，没映射的继承正文字色 */
 .chat-md .hljs-comment,
 .chat-md .hljs-quote {
   color: var(--syntax-comment);
