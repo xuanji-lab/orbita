@@ -20,6 +20,8 @@ export const ipcChannels = {
   agentCreate: "agent:create",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
+  /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
+  agentCompact: "agent:compact",
   agentSetMode: "agent:set-mode",
   agentAnswerPermission: "agent:answer-permission",
   agentEvent: "agent:event",
@@ -89,6 +91,11 @@ export type AgentCommand =
     }
   | { type: "submit"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
+  /**
+   * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
+   * 忙碌态与界碑都走 `compaction_start` / `compaction` 事件那一条链。
+   */
+  | { type: "compact"; sessionId: string; instructions?: string }
   | { type: "listBuiltins" }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /** 用户对一次工具审批的回答，按 requestId 对回去 */
