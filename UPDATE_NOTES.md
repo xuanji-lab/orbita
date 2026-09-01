@@ -1,5 +1,10 @@
 # UPDATE NOTES
 
+## 预置厂商新增 StepFun 与 OpenCode Go
+
+- 设置 → Providers 的厂商下拉框新增两条预置：**StepFun**（官方 Step 套餐端点已预填，pi 目录未收录该厂商——模型参数靠 Fetch 或手填，行摘要会如实标注）与 **OpenCode Go**（OpenCode Zen 聚合网关，一个 key 调用多家模型；pi 目录有它的官方参数，DeepSeek / MiniMax 模型直接显示真实窗口与费率）。
+- 此前用「OpenAI 兼容」手动配过 StepFun 的可以不动——旧配置照常工作；想换预置条目就新建一个再把旧的删掉。
+
 ## 设置里改模型不再找不到保存
 
 - **启停与参数改动即时生效**：已保存 provider 的 Enable / Remove / 参数 Apply 在点击的那一层立即落盘，不再需要滚到表单最底部找「Save changes」——那个按钮现在只管名称、Base URL 和密钥（此前三层嵌套的编辑共享一个沉底的保存，改完参数找不到保存入口，真实事故）。

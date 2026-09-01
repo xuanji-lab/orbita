@@ -69,6 +69,22 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     note: "智谱国际站，与国内站账号不通用",
   },
   {
+    id: "stepfun",
+    label: "StepFun",
+    api: "openai-completions",
+    baseUrl: "https://api.stepfun.com/step_plan/v1",
+    // pi 目录未收录 stepfun：参数靠网关 Fetch 或手填，行摘要会如实标注走兜底
+    note: "StepFun 官方 API（Step 套餐端点，地址要带到 /v1）",
+  },
+  {
+    id: "opencode-go",
+    label: "OpenCode Go",
+    api: "openai-completions",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    catalogId: "opencode-go",
+    note: "OpenCode Zen 聚合网关——一个 key 调用多家模型（DeepSeek / MiniMax…）",
+  },
+  {
     id: "anthropic-compatible",
     label: "Anthropic 兼容",
     api: "anthropic-messages",
