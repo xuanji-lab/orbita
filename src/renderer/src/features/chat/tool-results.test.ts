@@ -13,6 +13,7 @@ import {
   groupToolUnits,
   indexToolResults,
   intraLineTokens,
+  liveTailLines,
   parseDiffLines,
   parseEditDiff,
   parseGrepLine,
@@ -25,6 +26,7 @@ import {
   thinkingPreview,
   toolCallSummary,
   toolDurationText,
+  toolExpandable,
   toolGroupStatus,
   toolResultText,
   writeContent,
@@ -867,5 +869,51 @@ describe("splitPathTail", () => {
 
   test("ls 目录条目的尾分隔符不拆出空名", () => {
     assert.deepEqual(splitPathTail("docs/"), { dir: "", name: "docs/" });
+  });
+});
+
+describe("toolExpandable", () => {
+  test("没有结果帧不可展开", () => {
+    assert.equal(toolExpandable(undefined, "bash"), false);
+  });
+
+  test("跑完与失败都可展开", () => {
+    const done = indexToolResults([toolItem({ toolCallId: "a", status: "complete" })]).get("a");
+    assert.equal(toolExpandable(done, "read"), true);
+
+    const failed = indexToolResults([
+      toolItem({ toolCallId: "a", status: "error", isError: true }),
+    ]).get("a");
+    assert.equal(toolExpandable(failed, "bash"), true);
+  });
+
+  test("跑着的只有 shell 可展开——其余工具开了只是空盒子", () => {
+    const running = (toolName: string): ToolTranscriptItem => {
+      const item = indexToolResults([
+        toolItem({ toolCallId: "a", toolName, status: "running", content: [] }),
+      ]).get("a");
+      if (item === undefined) throw new Error("unreachable");
+      return item;
+    };
+    assert.equal(toolExpandable(running("bash"), "bash"), true);
+    assert.equal(toolExpandable(running("powershell"), "powershell"), true);
+    assert.equal(toolExpandable(running("read"), "read"), false);
+    assert.equal(toolExpandable(running("grep"), "grep"), false);
+  });
+});
+
+describe("liveTailLines", () => {
+  test("不超过上限原样返回", () => {
+    assert.equal(liveTailLines("1\n2\n3"), "1\n2\n3");
+    assert.equal(liveTailLines(""), "");
+  });
+
+  test("超过上限只留尾部（默认 200 行封顶）", () => {
+    const lines = Array.from({ length: 205 }, (_, i) => `line-${i}`);
+    assert.equal(liveTailLines(lines.join("\n")), lines.slice(5).join("\n"));
+  });
+
+  test("上限可调", () => {
+    assert.equal(liveTailLines("1\n2\n3\n4", 2), "3\n4");
   });
 });

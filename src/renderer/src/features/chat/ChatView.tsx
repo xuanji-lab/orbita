@@ -11,6 +11,7 @@ import {
   flattenRenderUnits,
   groupToolUnits,
   indexToolResults,
+  liveTailLines,
   parseEditDiff,
   editDiffEntries,
   parseGrepLine,
@@ -23,6 +24,7 @@ import {
   thinkingPreview,
   toolCallSummary,
   toolDurationText,
+  toolExpandable,
   toolGroupStatus,
   toolResultText,
   writeLineCount,
@@ -760,7 +762,8 @@ function toolGroupCountLabel(toolName: string, count: number): string {
 /**
  * 工具调用行：折叠时一行（行首 + 参数摘要 + 状态词），点开看结果——edit 展开是
  * 带行号的 diff，其余是原文。**进行中：行首（图标+工具名）secondary + 呼吸**——
- * 呼吸即状态，不转圈；状态落定呼吸与高亮一起消失，整行退到 tertiary。
+ * 呼吸即状态，不转圈；跑着的 shell 可展开看实时输出（贴底跟随），其余工具
+ * 跑完才能展开。状态落定呼吸与高亮一起消失，整行退到 tertiary。
  * 失败是语义色不参与档位：`triangle-alert` + "failed" 染 danger（AGENTS.md：
  * 状态优先图标与文字，颜色是第二信号）。
  */
@@ -776,13 +779,17 @@ function ToolLine(props: {
   const active = result === undefined || result.status === "running";
   const summary = summarizeToolResult(result);
   const callSummary = toolCallSummary(props.toolName, props.input);
-  // 还在跑的时候没有完整结果可展——此时给展开只会开出一个空盒子
-  const expandable = !active && result !== undefined;
-  const diff = expandable && result !== undefined ? editDiffText(result) : null;
-  const stats = expandable && result !== undefined ? editDiffStats(result) : null;
-  const body = expandable && result !== undefined ? toolResultText(result) : "";
+  // 跑着的 shell 有实时增量可展，其余工具跑完才有完整结果（见 toolExpandable）
+  const expandable = toolExpandable(result, props.toolName);
+  const live = expandable && active;
+  const finished = result !== undefined && result.status !== "running";
+  const diff = finished ? editDiffText(result) : null;
+  const stats = finished ? editDiffStats(result) : null;
+  const rawBody = result !== undefined ? toolResultText(result) : "";
+  // 跑着时只渲染尾部：partial 是累积快照、每帧整条重渲染，万行输出会拖垮 DOM
+  const body = live ? liveTailLines(rawBody) : rawBody;
   // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
-  const fileView = expandable && result !== undefined ? fileViewFor(props.toolName, props.input, result) : null;
+  const fileView = finished ? fileViewFor(props.toolName, props.input, result) : null;
   const fileLang =
     fileView !== null ? langFromPath(toolCallSummary(props.toolName, props.input) ?? "") : null;
   const writeLines =
@@ -839,7 +846,7 @@ function ToolLine(props: {
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
       {open && expandable && diff === null && fileView === null && (
-        <PlainToolBody toolName={props.toolName} text={body} failed={failed} />
+        <PlainToolBody toolName={props.toolName} text={body} failed={failed} live={live} />
       )}
     </div>
   );
@@ -1087,21 +1094,29 @@ function tokenSpans(line: readonly TokenSpan[]) {
  * 解析不出的行原样渲染，宁可不解析也不猜错。
  * **失败时整块退回原样行并染 danger**（折叠行的红 triangle 在这里续上），
  * 结构化只对成功结果做——错误文本长得不像清单，硬解析是猜。
+ * `live` 是跑着的 shell：输出增长贴底跟随（用户上滚脱离、回底恢复），
+ * 还没吐出第一个字时显示「等待输出」。
  */
-function PlainToolBody(props: { toolName: string; text: string; failed: boolean }) {
+function PlainToolBody(props: {
+  toolName: string;
+  text: string;
+  failed: boolean;
+  live?: boolean;
+}) {
+  const follow = useFollowScroll(props.live === true);
   if (props.text === "") {
     return (
       <div
         className="scroll"
         style={{ ...PLAIN_BODY, color: "var(--color-text-secondary)", padding: "0 var(--space-2)" }}
       >
-        （无输出）
+        {props.live === true ? "（等待输出…）" : "（无输出）"}
       </div>
     );
   }
   if (props.failed) {
     return (
-      <div className="scroll" style={PLAIN_BODY}>
+      <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
         {props.text.split("\n").map((line, index) => (
           <div key={index} style={{ ...BODY_LINE, color: "var(--color-danger)" }}>
             {line === "" ? " " : line}
@@ -1111,7 +1126,7 @@ function PlainToolBody(props: { toolName: string; text: string; failed: boolean 
     );
   }
   return (
-    <div className="scroll" style={PLAIN_BODY}>
+    <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
       {props.text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
     </div>
   );

@@ -279,6 +279,28 @@ export function toolResultText(result: ToolTranscriptItem): string {
 }
 
 /**
+ * 工具行能不能展开：跑完（含失败）都能；**跑着的只有 shell 能**——pi 的 bash /
+ * powershell 执行中持续吐部分输出帧（adapter 已映射成 running 态 item 的累积文本），
+ * 展开就是实时输出；read / grep 这类在结束前没有部分产出，展开只会开出一个空盒子。
+ * 还没收到任何结果帧（item 未建成）同样不可展开。
+ */
+export function toolExpandable(result: ToolTranscriptItem | undefined, toolName: string): boolean {
+  if (result === undefined) return false;
+  if (result.status !== "running") return true;
+  return toolName === "bash" || toolName === "powershell";
+}
+
+/**
+ * 跑着的时候只渲染尾部 keep 行：partial 是**累积快照**、每帧整条重渲染，
+ * 万行输出会拖垮 DOM。跑完的完整结果不走这里（pi 侧对超长输出自己有截断）。
+ */
+export function liveTailLines(text: string, keep = 200): string {
+  const lines = text.split("\n");
+  if (lines.length <= keep) return text;
+  return lines.slice(lines.length - keep).join("\n");
+}
+
+/**
  * 折叠行上工具名右边的参数摘要：`bash · git status`、`edit · src/app.ts`。
  * 字段名按 pi 工具 schema 的真名（bash→command，路径类→path，搜索类→pattern）；
  * 不认识的工具、input 不是对象、字段缺失或不是字符串，一律返回 null——
