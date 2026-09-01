@@ -40,7 +40,7 @@ export function registerAgentIpc(
             baseUrl: dto.endpoint.baseUrl,
             apiKey,
             ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
-            models: dto.models.declared.map((m) => m.id),
+            models: dto.models.declared,
           },
         },
         input.resume?.sessionId,

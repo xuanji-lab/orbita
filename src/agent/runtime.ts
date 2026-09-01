@@ -18,7 +18,9 @@ import {
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
+  hasModelOverrides,
   toAuthConfig,
+  toBuiltinModel,
   toFallbackRegistration,
   type PiModel,
 } from "./model-registration.ts";
@@ -121,10 +123,11 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
   /**
    * **选中的模型必须显式解析并传给会话**。不传的话 pi 自己挑默认模型——实测会挑到
    * 一个完全不相干的 provider（UI 里选的从来不是会话里跑的那个，存量 bug）。
-   * 目录里有的 id 直接拿官方元数据；没有的（自建网关 / 目录未收录）才补注册兜底。
+   * 目录里有的 id 直接拿官方元数据；没有的（自建网关 / 目录未收录）——或任一声明
+   * 模型带了用户覆盖字段（用户填的窗口 / 费率要盖过目录值）——才补注册兜底。
    */
   let model: PiModel | undefined = modelRuntime.getModel(command.provider.id, command.modelId);
-  if (model === undefined) {
+  if (model === undefined || hasModelOverrides(command.provider.models)) {
     const known = modelRuntime.getProviders().find((p) => p.id === command.provider.id);
     // 补注册带完整 auth 面：pi 的校验跑在合并之前，只传 models 的话
     // 自建网关没有目录 defaults 可借 api，当场抛「no "api" specified」
@@ -266,7 +269,7 @@ async function listBuiltins(): Promise<void> {
       name: provider.name,
       baseUrl: provider.baseUrl ?? first?.baseUrl ?? "",
       api: String(first?.api ?? "openai-completions"),
-      models: models.map((model) => model.id),
+      models: models.map(toBuiltinModel),
     };
   });
   send({ type: "builtins", providers });

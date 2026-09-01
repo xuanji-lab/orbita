@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import { KNOWN_PROVIDERS, type KnownProvider } from "@shared/known-providers";
-import type { ProviderDto, ValidationIssue } from "@shared/provider";
-import type { BuiltinProvider } from "@shared/agent-ipc";
+import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
+import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
+import { formatCostRate, formatTokens } from "../../utils/format-tokens.ts";
 
 /**
  * Provider 设置面。
@@ -24,6 +25,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [discovered, setDiscovered] = useState<string[]>([]);
   const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
+  /** 行内参数编辑器展开在第几个模型上（Enabled 列表的下标） */
+  const [editingModelIndex, setEditingModelIndex] = useState<number | null>(null);
   /** pi 的内建目录，按 catalogId 取官方模型清单——离线就有，不用打网络 */
   const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
 
@@ -46,11 +49,16 @@ export function ProvidersView(props: { onChange?: () => void }) {
   }, []);
 
   const known = KNOWN_PROVIDERS.find((k) => k.id === draft.kind);
-  /** 某个已适配 provider 在 pi 目录里的模型清单（没有 catalogId 或目录未到则为空） */
-  const catalogModels = (target: KnownProvider | undefined): string[] =>
+  /** 目录里这个模型的官方参数（自建网关没有 catalogId，查不到——如实显示走兜底） */
+  const catalogMeta = (target: KnownProvider | undefined, id: string): BuiltinModel | undefined =>
+    target?.catalogId === undefined
+      ? undefined
+      : catalog.find((c) => c.id === target.catalogId)?.models.find((m) => m.id === id);
+  /** 某个已适配 provider 在 pi 目录里的模型 id 清单（Fetch 的兜底候选池） */
+  const catalogIds = (target: KnownProvider | undefined): string[] =>
     target?.catalogId === undefined
       ? []
-      : (catalog.find((c) => c.id === target.catalogId)?.models ?? []);
+      : (catalog.find((c) => c.id === target.catalogId)?.models ?? []).map((m) => m.id);
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
   const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
   const keyMask = editing?.auth.scheme === "api_key" ? editing.auth.masked : null;
@@ -82,12 +90,14 @@ export function ProvidersView(props: { onChange?: () => void }) {
     setRevealed(null);
     setEditingId(provider.id);
     setDiscovered([]);
+    setEditingModelIndex(null);
     setDraft({
       kind,
       id: provider.id,
       displayName: provider.displayName,
       baseUrl: provider.endpoint.baseUrl,
-      models: provider.models.declared.map((m) => m.id),
+      // 保留已填的参数覆盖（浅拷贝 cost 引用即可——编辑时整个替换，从不动内层）
+      models: provider.models.declared.map((m) => ({ ...m })),
       apiKey: "",
     });
   };
@@ -99,6 +109,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
     setStatus(null);
     setDiscovered([]);
     setRevealed(null);
+    setEditingModelIndex(null);
   };
 
   const withKey = () => ({
@@ -120,13 +131,13 @@ export function ProvidersView(props: { onChange?: () => void }) {
         ...withKey(),
       });
       if (result.ok) {
-        setDiscovered(result.models.filter((m) => !draft.models.includes(m)));
+        setDiscovered(result.models.filter((m) => !draft.models.some((d) => d.id === m)));
         return { tone: "ok" as const, text: result.message };
       }
       // 供应商不给（没有该端点 / 网络不通）才退回 pi 目录，并说明它可能不精确
-      const fromCatalog = catalogModels(known);
+      const fromCatalog = catalogIds(known);
       if (fromCatalog.length === 0) return { tone: "bad" as const, text: result.message };
-      setDiscovered(fromCatalog.filter((m) => !draft.models.includes(m)));
+      setDiscovered(fromCatalog.filter((m) => !draft.models.some((d) => d.id === m)));
       return {
         tone: "bad" as const,
         text: `${result.message} Showing ${fromCatalog.length} from pi's catalog instead — these may not all be on your plan.`,
@@ -138,7 +149,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
       const result = await api.provider.test({
         api: known?.api ?? "openai-completions",
         baseUrl: draft.baseUrl.trim(),
-        modelId: draft.models[0] ?? "",
+        modelId: draft.models[0]?.id ?? "",
         ...withKey(),
       });
       return { tone: result.ok ? ("ok" as const) : ("bad" as const), text: result.message };
@@ -173,6 +184,12 @@ export function ProvidersView(props: { onChange?: () => void }) {
     setRevealed(await api.provider.reveal(editingId));
   };
 
+  /** 启用一个模型：**只带 id，不预填目录值**——预填会把 4 小时刷新的目录冻结进配置 */
+  const enableModel = (id: string) => {
+    if (draft.models.some((m) => m.id === id)) return;
+    setDraft({ ...draft, models: [...draft.models, { id }] });
+  };
+
   const save = async () => {
     setError(null);
     const result = await api.provider.upsert({
@@ -180,7 +197,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
         id: draft.id.trim(),
         displayName: draft.displayName.trim(),
         endpoint: { baseUrl: draft.baseUrl.trim(), api: known?.api ?? "openai-completions" },
-        models: { declared: draft.models.map((id) => ({ id })) },
+        models: { declared: draft.models },
         auth: { scheme: "api_key" },
       },
       ...(draft.apiKey === "" ? {} : { apiKey: draft.apiKey }),
@@ -197,7 +214,9 @@ export function ProvidersView(props: { onChange?: () => void }) {
     <section style={{ display: "grid", gap: "var(--space-6)", width: "100%" }}>
       {/* 标题由内容面的页头统一给（SettingsView），这里不再重复一个 h2 */}
       <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
-        Model parameters come from pi's catalog, refreshed every four hours. You only supply the key.
+        Model parameters come from pi's catalog, refreshed every four hours. For models the catalog
+        doesn't know (custom gateways), fill in the parameters yourself — they override the catalog
+        wherever it's wrong.
       </p>
 
       {error !== null && <Line tone="bad">{error}</Line>}
@@ -320,24 +339,63 @@ export function ProvidersView(props: { onChange?: () => void }) {
             <ModelCard
               title="Enabled models"
               empty="Nothing enabled yet — enable one from the list below, or type an id."
-              models={draft.models}
-              actionLabel="Remove"
-              onAction={(id) => setDraft({ ...draft, models: draft.models.filter((m) => m !== id) })}
+              count={draft.models.length}
               issue={issueFor("models.declared")}
               footer={
-                <AddModel onAdd={(id) => setDraft({ ...draft, models: [...new Set([...draft.models, id])] })} />
+                <AddModel onAdd={(id) => enableModel(id)} />
               }
-            />
+            >
+              {draft.models.map((model, index) => {
+                const meta = catalogMeta(known, model.id);
+                const costTitle = modelCostTitle(model, meta);
+                return (
+                  <li key={model.id} style={{ display: "grid", gap: "var(--space-1)" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                      <code style={{ ...metaStyle, flex: 1 }}>{model.id}</code>
+                      <span style={metaStyle} title={costTitle}>
+                        {modelMetaText(model, meta)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setEditingModelIndex(editingModelIndex === index ? null : index)}
+                        style={compactControlStyle}
+                      >
+                        {editingModelIndex === index ? "Close" : "Edit"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingModelIndex(null);
+                          setDraft({ ...draft, models: draft.models.filter((m) => m.id !== model.id) });
+                        }}
+                        style={compactControlStyle}
+                      >
+                        Remove
+                      </button>
+                    </span>
+                    {editingModelIndex === index && (
+                      <ModelMetaEditor
+                        index={index}
+                        model={model}
+                        meta={meta}
+                        issueFor={issueFor}
+                        onChange={(next) =>
+                          setDraft({
+                            ...draft,
+                            models: draft.models.map((m, i) => (i === index ? next : m)),
+                          })
+                        }
+                      />
+                    )}
+                  </li>
+                );
+              })}
+            </ModelCard>
 
             <ModelCard
               title="Available"
               empty="Press Fetch to ask the provider which models this key can use."
-              models={discovered}
-              actionLabel="Enable"
-              onAction={(id) => {
-                setDraft({ ...draft, models: [...new Set([...draft.models, id])] });
-                setDiscovered(discovered.filter((m) => m !== id));
-              }}
+              count={discovered.length}
               footer={
                 <button
                   type="button"
@@ -348,7 +406,29 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   Fetch
                 </button>
               }
-            />
+            >
+              {discovered.map((id) => {
+                const meta = catalogMeta(known, id);
+                return (
+                  <li key={id} style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                    <code style={{ ...metaStyle, flex: 1 }}>{id}</code>
+                    <span style={metaStyle} title={modelCostTitle(undefined, meta)}>
+                      {modelMetaText(undefined, meta)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        enableModel(id);
+                        setDiscovered(discovered.filter((m) => m !== id));
+                      }}
+                      style={compactControlStyle}
+                    >
+                      Enable
+                    </button>
+                  </li>
+                );
+              })}
+            </ModelCard>
 
             <div style={{ display: "flex", gap: "var(--space-2)" }}>
               <button type="submit" style={{ ...controlStyle, ...primaryStyle }}>
@@ -365,15 +445,17 @@ export function ProvidersView(props: { onChange?: () => void }) {
   );
 }
 
-/** 模型卡片：已启用与已发现共用一个形状，区别只在动作 */
+/**
+ * 模型卡片的外壳：标题 / 计数 / 底部动作。行内容由调用方给——
+ * 已启用（ModelDecl + 行内编辑器）与候选（id + 目录摘要）两张卡行形状不同了。
+ */
 function ModelCard(props: {
   title: string;
   empty: string;
-  models: string[];
-  actionLabel: string;
-  onAction: (id: string) => void;
+  count: number;
   issue?: string | undefined;
   footer?: React.ReactNode;
+  children: React.ReactNode;
 }) {
   return (
     <div
@@ -390,27 +472,208 @@ function ModelCard(props: {
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>
         <span style={{ fontSize: "var(--font-size-control)", fontWeight: 500 }}>{props.title}</span>
-        <span style={metaStyle}>{props.models.length}</span>
+        <span style={metaStyle}>{props.count}</span>
         <span style={{ marginInlineStart: "auto" }}>{props.footer}</span>
       </div>
-      {props.models.length === 0 ? (
+      {props.count === 0 ? (
         <span style={metaStyle}>{props.empty}</span>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-1)" }}>
-          {props.models.map((id) => (
-            <li key={id} style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-              <code style={{ ...metaStyle, flex: 1 }}>{id}</code>
-              <button type="button" onClick={() => props.onAction(id)} style={compactControlStyle}>
-                {props.actionLabel}
-              </button>
-            </li>
-          ))}
+          {props.children}
         </ul>
       )}
       {props.issue !== undefined && (
         <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-danger)" }}>{props.issue}</span>
       )}
     </div>
+  );
+}
+
+/**
+ * 目录不认识且用户未填时的兜底显示值——与 agent 侧 model-registration 的 FALLBACK_MODEL
+ * 是同一组数字（那边还有 reasoning / 零费率）。改任一处要同步另一处。
+ */
+const FALLBACK_CONTEXT_WINDOW = 128_000;
+const FALLBACK_MAX_TOKENS = 8_192;
+
+/**
+ * 模型行的参数摘要：**生效值 = 用户覆盖 > pi 目录 > 兜底**。目录不认识也没填过时
+ * 如实标注走兜底，不把 128k 假装成官方值。
+ */
+function modelMetaText(decl: ModelDecl | undefined, meta: BuiltinModel | undefined): string {
+  const ctx = decl?.contextWindow ?? meta?.contextWindow;
+  const maxOut = decl?.maxTokens ?? meta?.maxTokens;
+  const inputRate = decl?.cost?.input ?? meta?.cost.input;
+  const parts =
+    ctx === undefined
+      ? [`${formatTokens(FALLBACK_CONTEXT_WINDOW)} ctx (fallback)`]
+      : [`${formatTokens(ctx)} ctx`];
+  if (maxOut !== undefined) parts.push(`${formatTokens(maxOut)} out`);
+  const rate = inputRate === undefined ? null : formatCostRate(inputRate);
+  if (rate !== null) parts.push(`${rate} in`);
+  return parts.join(" · ");
+}
+
+/** hover 的四档费率全文。全零（定价未知）不给 title——没有可看的信息 */
+function modelCostTitle(decl: ModelDecl | undefined, meta: BuiltinModel | undefined): string | undefined {
+  const cost = decl?.cost ?? meta?.cost;
+  if (cost === undefined) return undefined;
+  if (cost.input === 0 && cost.output === 0 && cost.cacheRead === 0 && cost.cacheWrite === 0) return undefined;
+  return [
+    `input $${cost.input}/M`,
+    `output $${cost.output}/M`,
+    `cache read $${cost.cacheRead}/M`,
+    `cache write $${cost.cacheWrite}/M`,
+  ].join("\n");
+}
+
+/**
+ * 模型参数的行内编辑器。**空 = 不覆盖**：placeholder 永远显示当前生效值，填了的才落
+ * providers.json。数字以 string 暂存（受控输入），离开编辑器前就写回 draft——
+ * 非法值（NaN）由 upsert 的 validateProvider 结构化拦下，按字段标红。
+ */
+function ModelMetaEditor(props: {
+  index: number;
+  model: ModelDecl;
+  meta: BuiltinModel | undefined;
+  issueFor: (field: string) => string | undefined;
+  onChange: (next: ModelDecl) => void;
+}) {
+  const [ctx, setCtx] = useState(props.model.contextWindow?.toString() ?? "");
+  const [maxOut, setMaxOut] = useState(props.model.maxTokens?.toString() ?? "");
+  const [rates, setRates] = useState({
+    input: props.model.cost?.input?.toString() ?? "",
+    output: props.model.cost?.output?.toString() ?? "",
+    cacheRead: props.model.cost?.cacheRead?.toString() ?? "",
+    cacheWrite: props.model.cost?.cacheWrite?.toString() ?? "",
+  });
+  const eff = {
+    ctx: props.model.contextWindow ?? props.meta?.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
+    maxOut: props.model.maxTokens ?? props.meta?.maxTokens ?? FALLBACK_MAX_TOKENS,
+    input: props.model.cost?.input ?? props.meta?.cost.input ?? 0,
+    output: props.model.cost?.output ?? props.meta?.cost.output ?? 0,
+    cacheRead: props.model.cost?.cacheRead ?? props.meta?.cost.cacheRead ?? 0,
+    cacheWrite: props.model.cost?.cacheWrite ?? props.meta?.cost.cacheWrite ?? 0,
+  };
+  const toNumber = (raw: string): number | undefined => (raw.trim() === "" ? undefined : Number(raw));
+  const applyCost = (next: typeof rates) => {
+    setRates(next);
+    // 四格全空 = 整份撤掉覆盖；填了任何一格，其余按 0（明确报价）计
+    if (next.input === "" && next.output === "" && next.cacheRead === "" && next.cacheWrite === "") {
+      props.onChange({ ...props.model, cost: undefined });
+      return;
+    }
+    props.onChange({
+      ...props.model,
+      cost: {
+        input: Number(next.input || "0"),
+        output: Number(next.output || "0"),
+        cacheRead: Number(next.cacheRead || "0"),
+        cacheWrite: Number(next.cacheWrite || "0"),
+      },
+    });
+  };
+  const reset = () => {
+    setCtx("");
+    setMaxOut("");
+    setRates({ input: "", output: "", cacheRead: "", cacheWrite: "" });
+    props.onChange({ id: props.model.id, contextWindow: undefined, maxTokens: undefined, cost: undefined });
+  };
+  const field = (name: string) => `models.declared[${props.index}].${name}`;
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: "var(--space-2)",
+        padding: "var(--space-2)",
+        background: "var(--color-bg-panel)",
+        borderRadius: "var(--radius-md)",
+      }}
+    >
+      <span style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "start" }}>
+        <NumCell
+          label="context window"
+          value={ctx}
+          placeholder={String(eff.ctx)}
+          issue={props.issueFor(field("contextWindow"))}
+          onChange={(raw) => {
+            setCtx(raw);
+            props.onChange({ ...props.model, contextWindow: toNumber(raw) });
+          }}
+        />
+        <NumCell
+          label="max output"
+          value={maxOut}
+          placeholder={String(eff.maxOut)}
+          issue={props.issueFor(field("maxTokens"))}
+          onChange={(raw) => {
+            setMaxOut(raw);
+            props.onChange({ ...props.model, maxTokens: toNumber(raw) });
+          }}
+        />
+        <NumCell
+          label="cost $/M in"
+          value={rates.input}
+          placeholder={String(eff.input)}
+          issue={props.issueFor(field("cost.input"))}
+          onChange={(raw) => applyCost({ ...rates, input: raw })}
+        />
+        <NumCell
+          label="out"
+          value={rates.output}
+          placeholder={String(eff.output)}
+          issue={props.issueFor(field("cost.output"))}
+          onChange={(raw) => applyCost({ ...rates, output: raw })}
+        />
+        <NumCell
+          label="cache read"
+          value={rates.cacheRead}
+          placeholder={String(eff.cacheRead)}
+          issue={props.issueFor(field("cost.cacheRead"))}
+          onChange={(raw) => applyCost({ ...rates, cacheRead: raw })}
+        />
+        <NumCell
+          label="cache write"
+          value={rates.cacheWrite}
+          placeholder={String(eff.cacheWrite)}
+          issue={props.issueFor(field("cost.cacheWrite"))}
+          onChange={(raw) => applyCost({ ...rates, cacheWrite: raw })}
+        />
+      </span>
+      <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+        <span style={metaStyle}>
+          Empty fields use the catalog value (or the {formatTokens(FALLBACK_CONTEXT_WINDOW)} fallback).
+        </span>
+        <button type="button" onClick={reset} style={{ ...compactControlStyle, marginInlineStart: "auto" }}>
+          Reset
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/** 行内编辑器的一个数字格：值以 string 暂存，空串 = 不覆盖 */
+function NumCell(props: {
+  label: string;
+  value: string;
+  placeholder: string;
+  issue?: string | undefined;
+  onChange: (raw: string) => void;
+}) {
+  return (
+    <label style={{ display: "grid", gap: "var(--space-1)" }}>
+      <span style={metaStyle}>{props.label}</span>
+      <input
+        type="number"
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value)}
+        placeholder={props.placeholder}
+        style={{ ...inputStyle, height: "var(--control-height-sm)", width: 104 }}
+      />
+      {props.issue !== undefined && (
+        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-danger)" }}>{props.issue}</span>
+      )}
+    </label>
   );
 }
 
@@ -534,5 +797,5 @@ const primaryStyle: React.CSSProperties = {
 };
 
 function emptyDraft() {
-  return { kind: "", id: "", displayName: "", baseUrl: "", models: [] as string[], apiKey: "" };
+  return { kind: "", id: "", displayName: "", baseUrl: "", models: [] as ModelDecl[], apiKey: "" };
 }

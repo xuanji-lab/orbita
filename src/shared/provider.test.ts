@@ -86,6 +86,50 @@ describe("validateProvider", () => {
     assert.ok(fieldsOf(noId).includes("models.declared[0].id"));
   });
 
+  test("模型参数覆盖声明：合法值全放行（含零费率——明确不计费）", () => {
+    const declared = [
+      {
+        id: "m",
+        name: "My model",
+        contextWindow: 1_000_000,
+        maxTokens: 16_384,
+        cost: { input: 0.5, output: 1.5, cacheRead: 0, cacheWrite: 0 },
+      },
+    ];
+    assert.deepEqual(fieldsOf({ ...(validInput() as object), models: { declared } }), []);
+  });
+
+  test("contextWindow / maxTokens 必须是正有限数：0、负数、NaN、字符串都拒", () => {
+    for (const bad of [0, -128000, Number.NaN, "200000"]) {
+      for (const field of ["contextWindow", "maxTokens"]) {
+        const declared = [{ id: "m", [field]: bad }];
+        assert.ok(
+          fieldsOf({ ...(validInput() as object), models: { declared } }).includes(
+            `models.declared[0].${field}`,
+          ),
+          `应拒绝 ${field}=${String(bad)}`,
+        );
+      }
+    }
+  });
+
+  test("cost 四档都要 ≥0 的有限数：缺档、负数、NaN 都按各自路径报", () => {
+    const costIssue = (cost: unknown): string[] =>
+      validateProvider({
+        ...(validInput() as object),
+        models: { declared: [{ id: "m", cost }] },
+      }).map((i) => i.field);
+    assert.deepEqual(costIssue({ input: 0.5, output: 1.5, cacheRead: 0, cacheWrite: 0 }), []);
+    assert.ok(costIssue({ input: 0.5, output: 1.5, cacheRead: 0 }).includes("models.declared[0].cost.cacheWrite"));
+    assert.ok(costIssue({ input: -1, output: 1.5, cacheRead: 0, cacheWrite: 0 }).includes("models.declared[0].cost.input"));
+    assert.ok(
+      costIssue({ input: Number.NaN, output: 1.5, cacheRead: 0, cacheWrite: 0 }).includes(
+        "models.declared[0].cost.input",
+      ),
+    );
+    assert.ok(costIssue("cheap").includes("models.declared[0].cost"));
+  });
+
   test("一次收齐全部问题，不在第一个错误处短路（表单要逐项标红）", () => {
     const issues = validateProvider({ id: "BAD", displayName: "", endpoint: {}, models: {} });
     assert.ok(issues.length >= 4, `期望至少 4 条，实际 ${issues.length}`);

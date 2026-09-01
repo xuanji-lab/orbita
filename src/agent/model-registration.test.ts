@@ -2,7 +2,9 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   FALLBACK_MODEL,
+  hasModelOverrides,
   toAuthConfig,
+  toBuiltinModel,
   toFallbackModels,
   toFallbackRegistration,
   type PiModel,
@@ -44,17 +46,17 @@ describe("toAuthConfig —— 注册不带 models，目录官方参数才能存�
   });
 });
 
-describe("toFallbackModels —— 补注册的保留合并", () => {
+describe("toFallbackModels —— 保留合并 + 用户字段覆盖", () => {
   test("目录认识的 id 原样保留：官方窗口与单价不被兜底覆盖", () => {
     const glm = catalogModel("glm-4.7", 204_800, 0.6);
-    const result = toFallbackModels([glm], ["glm-4.7"]);
+    const result = toFallbackModels([glm], [{ id: "glm-4.7" }]);
     assert.equal(result.length, 1);
     assert.equal(result[0]?.contextWindow, 204_800);
     assert.equal(result[0]?.cost.input, 0.6);
   });
 
   test("目录没有的 id 落保守默认：128k 窗口、零单价（未知定价不冒充免费之外的数）", () => {
-    const result = toFallbackModels([], ["my-gateway-model"]);
+    const result = toFallbackModels([], [{ id: "my-gateway-model" }]);
     assert.equal(result.length, 1);
     assert.equal(result[0]?.contextWindow, FALLBACK_MODEL.contextWindow);
     assert.equal(result[0]?.cost.input, 0);
@@ -62,9 +64,78 @@ describe("toFallbackModels —— 补注册的保留合并", () => {
 
   test("混着来：一个目录条目保官方参数，一个新 id 拿兜底——补一个不砸另一个", () => {
     const glm = catalogModel("glm-4.7", 204_800, 0.6);
-    const result = toFallbackModels([glm], ["glm-4.7", "glm-future-99"]);
+    const result = toFallbackModels([glm], [{ id: "glm-4.7" }, { id: "glm-future-99" }]);
     assert.equal(result[0]?.contextWindow, 204_800);
     assert.equal(result[1]?.contextWindow, FALLBACK_MODEL.contextWindow);
+  });
+
+  test("用户覆盖逐字段生效：目录条目只被填了的字段盖掉，其余保官方值", () => {
+    const glm = catalogModel("glm-4.7", 204_800, 0.6);
+    const result = toFallbackModels([glm], [
+      { id: "glm-4.7", contextWindow: 1_000_000, cost: { input: 1.2, output: 3, cacheRead: 0.2, cacheWrite: 1.2 } },
+    ]);
+    assert.equal(result[0]?.contextWindow, 1_000_000); // 用户填的窗口盖目录
+    assert.equal(result[0]?.maxTokens, undefined); // 没填的字段不虚构
+    assert.deepEqual(result[0]?.cost, { input: 1.2, output: 3, cacheRead: 0.2, cacheWrite: 1.2 });
+  });
+
+  test("网关模型填了参数：覆盖落在兜底之上（pi modelFromJson 同款语义）", () => {
+    const result = toFallbackModels([], [
+      {
+        id: "step-3.7-flash",
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+        cost: { input: 0.5, output: 1.5, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+    assert.equal(result[0]?.contextWindow, 200_000);
+    assert.equal(result[0]?.maxTokens, 16_384);
+    assert.equal(result[0]?.cost.input, 0.5);
+  });
+
+  test("用户声明 name 时跟着带过去（无声明则目录名 / id 兜底）", () => {
+    const result = toFallbackModels([], [{ id: "m1", name: "My Model" }]);
+    assert.equal(result[0]?.name, "My Model");
+  });
+});
+
+describe("hasModelOverrides —— 补注册的触发条件之一", () => {
+  test("纯 id 声明不算覆盖：目录认识的模型走原值，不触发重注册", () => {
+    assert.equal(hasModelOverrides([{ id: "glm-4.7" }, { id: "glm-future-99" }]), false);
+  });
+
+  test("任一声明带 contextWindow / maxTokens / cost 就算——用户填的要盖过目录", () => {
+    assert.equal(hasModelOverrides([{ id: "m", contextWindow: 200_000 }]), true);
+    assert.equal(hasModelOverrides([{ id: "m" }, { id: "n", maxTokens: 16_384 }]), true);
+    assert.equal(
+      hasModelOverrides([{ id: "m", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }]),
+      true,
+    );
+  });
+
+  test("显式 undefined（表单 Reset 后残留）不算覆盖", () => {
+    assert.equal(
+      hasModelOverrides([{ id: "m", contextWindow: undefined, maxTokens: undefined, cost: undefined }]),
+      false,
+    );
+  });
+});
+
+describe("toBuiltinModel —— 目录条目瘦身给设置面", () => {
+  test("带官方参数，剥掉 tiers 等无消费者字段", () => {
+    const glm = {
+      ...catalogModel("glm-4.7", 204_800, 0.6),
+      maxTokens: 8_192,
+      cost: { input: 0.6, output: 2.2, cacheRead: 0.05, cacheWrite: 0.6, tiers: [{ inputTokensAbove: 0 }] },
+    } as unknown as PiModel;
+    const model = toBuiltinModel(glm);
+    assert.deepEqual(model, {
+      id: "glm-4.7",
+      contextWindow: 204_800,
+      maxTokens: 8_192,
+      cost: { input: 0.6, output: 2.2, cacheRead: 0.05, cacheWrite: 0.6 },
+    });
+    assert.equal("tiers" in model.cost, false);
   });
 });
 
@@ -73,7 +144,7 @@ describe("toFallbackRegistration —— 补注册必须带完整 auth 面", () =
     apiKey: "sk-gw",
     baseUrl: "https://gw.example/v1",
     api: "openai-completions",
-    models: ["step-3.7-flash"],
+    models: [{ id: "step-3.7-flash" }],
   };
 
   test("api / baseUrl / apiKey 都在原始载荷里——自建网关没有目录 defaults 可借，缺了当场抛", () => {

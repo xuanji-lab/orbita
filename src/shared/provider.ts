@@ -35,12 +35,29 @@ export type ProviderAuth =
   | { scheme: "env"; envKeys: string[] }
   | { scheme: "none" };
 
-/** 声明的模型。用户输入或导入产生，持久化。 */
+/**
+ * 模型费率，单位 **$ 每百万 token**（与 pi 的 ModelCost 同形；`tiers` 分段计价不抄——无消费者）。
+ * 四档全零 = 明确声明不计费；字段缺省（整个 cost 不存在）= 未表态，交给 pi 目录或兜底。
+ */
+export interface ModelCostDecl {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
+ * 声明的模型。用户输入或导入产生，持久化。
+ *
+ * 可选参数字段是**覆盖声明**，不是 pi 目录的快照：留空 = 用目录官方值（目录不认识则落
+ * 128k / 8k / 零价的兜底）；填了 = 用户说了算（目录会过时或缺失，实测 glm-5.3 目录定价全零）。
+ */
 export interface ModelDecl {
   id: string;
   name?: string;
   contextWindow?: number;
   maxTokens?: number;
+  cost?: ModelCostDecl;
 }
 
 export interface ProviderEndpoint {
@@ -143,13 +160,35 @@ export function validateProvider(input: unknown): ValidationIssue[] {
         push(`models.declared[${index}]`, "model must be an object");
         return;
       }
-      const id = (m as Record<string, unknown>)["id"];
+      const model = m as Record<string, unknown>;
+      const id = model["id"];
       if (typeof id !== "string" || id.trim() === "") {
         push(`models.declared[${index}].id`, "model id is required");
         return;
       }
       if (seen.has(id)) push(`models.declared[${index}].id`, `duplicate model id "${id}"`);
       seen.add(id);
+      // 参数是覆盖声明：只校验「填了的」，留空完全合法。isFinite 拦住表单 Number("…") 产出的 NaN
+      for (const field of ["contextWindow", "maxTokens"] as const) {
+        const value = model[field];
+        if (value === undefined) continue;
+        if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+          push(`models.declared[${index}].${field}`, `${field} must be a positive number`);
+        }
+      }
+      const cost = model["cost"];
+      if (cost !== undefined) {
+        if (typeof cost !== "object" || cost === null) {
+          push(`models.declared[${index}].cost`, "cost must be an object");
+        } else {
+          for (const rate of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+            const value = (cost as Record<string, unknown>)[rate];
+            if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+              push(`models.declared[${index}].cost.${rate}`, `cost.${rate} must be a number ≥ 0`);
+            }
+          }
+        }
+      }
     });
   }
 

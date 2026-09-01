@@ -12,6 +12,7 @@
 import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { SessionPhase, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
+import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 
 export const ipcChannels = {
@@ -62,7 +63,18 @@ export interface BuiltinProvider {
   name: string;
   baseUrl: string;
   api: string;
-  models: string[];
+  models: BuiltinModel[];
+}
+
+/**
+ * 目录模型自带的官方参数（费率单位 $ 每百万 token；pi 的分段计价 tiers 剥掉——无消费者）。
+ * 只服务设置面的展示与占位：真正建会话时 runtime 直接从 pi 注册表取活值。
+ */
+export interface BuiltinModel {
+  id: string;
+  contextWindow: number;
+  maxTokens: number;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
 /** 主进程 → agent 进程 */
@@ -72,14 +84,15 @@ export type AgentCommand =
       sessionId: string;
       cwd: string;
       /** provider 装配参数。内建 id（zai / deepseek…）只靠 apiKey 就够，
-       *  自建网关必须带 baseUrl / api / models，否则 pi 不知道往哪发。 */
+       *  自建网关必须带 baseUrl / api / models，否则 pi 不知道往哪发。
+       *  models 上的可选参数字段是用户覆盖声明（用户 > pi 目录 > 兜底）。 */
       provider: {
         id: string;
         api: string;
         baseUrl: string;
         apiKey: string;
         headers?: Record<string, string>;
-        models: string[];
+        models: ModelDecl[];
       };
       modelId: string;
       mode: PermissionMode;

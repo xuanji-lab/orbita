@@ -4,10 +4,13 @@
  *
  * 背景语义（pi provider-composer 的 applyExtension）：注册时的 models 数组是
  * **整体替换**——带上它就会把内建目录里的官方参数（上下文窗口 / 单价）盖掉。
- * 所以注册分两步：先只给 auth（目录元数据存活），目录里解析不到选中的模型 id 时
- * 才补注册兜底 models，且补注册要**保留合并**——已认识的目录条目原样带回。
+ * 所以注册分两步：先只给 auth（目录元数据存活），目录里解析不到选中 id、**或任一
+ * 声明模型带了用户覆盖字段**时才补注册 models。补注册做**保留合并 + 用户字段覆盖**：
+ * 已认识的目录条目原样带回，用户声明的字段逐个盖上（用户 > 目录 > 兜底）。
  */
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { BuiltinModel } from "../shared/agent-ipc.ts";
+import type { ModelDecl } from "../shared/provider.ts";
 
 /** pi 注册表里的模型对象——从 ModelRuntime 的方法签名推出来，不另维护一份类型 */
 export type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
@@ -43,18 +46,54 @@ export function toAuthConfig(provider: {
 }
 
 /**
- * 补注册的 models：**保留合并**——注册表里已认识的 id（目录条目，带官方窗口 / 单价）
- * 原样带回，只有目录没有的 id 才落兜底默认。不做保留的话，补一个新 id 会把同
- * provider 其它目录模型的官方参数一并砸掉（models 是整体替换，已验证）。
+ * 补注册的 models：**保留合并 + 用户字段覆盖**——注册表里已认识的 id（目录条目，带官方
+ * 窗口 / 单价）原样带回，目录没有的 id 落兜底默认；之后用户声明的字段逐个盖上
+ * （pi modelOverrides 同款 `??` 语义：目录会过时或零价——实测 glm-5.3 目录定价全零——
+ * 用户填了的才算数）。不做保留的话，补一个新 id 会把同 provider 其它目录模型的
+ * 官方参数一并砸掉（models 是整体替换，已验证）。
  */
 export function toFallbackModels(
   current: readonly PiModel[],
-  declared: readonly string[],
+  declared: readonly ModelDecl[],
 ): NonNullable<PiProviderRegistration["models"]> {
-  return declared.map((id) => {
-    const known = current.find((model) => model.id === id);
-    return known === undefined ? { id, name: id, ...FALLBACK_MODEL } : { ...known };
+  return declared.map((decl) => {
+    const known = current.find((model) => model.id === decl.id);
+    const base = known === undefined ? { id: decl.id, name: decl.id, ...FALLBACK_MODEL } : { ...known };
+    return {
+      ...base,
+      name: decl.name ?? base.name,
+      contextWindow: decl.contextWindow ?? base.contextWindow,
+      maxTokens: decl.maxTokens ?? base.maxTokens,
+      // cost 是整份替换（校验保证四档齐全）：用户明确报价，连目录的 tiers 一起作废
+      ...(decl.cost === undefined ? {} : { cost: { ...decl.cost } }),
+    };
   });
+}
+
+/**
+ * 任一声明模型带了用户覆盖字段吗。**带覆盖时即使目录认识选中 id 也必须补注册**——
+ * 不重注册的话 getModel 返回的是目录原值，用户填的窗口 / 费率永远不生效。
+ */
+export function hasModelOverrides(models: readonly ModelDecl[]): boolean {
+  return models.some(
+    (model) =>
+      model.contextWindow !== undefined || model.maxTokens !== undefined || model.cost !== undefined,
+  );
+}
+
+/** 目录模型 → 设置面展示的瘦身形状：只留 id 与三组参数，剥掉 pi 的 tiers 等无消费者字段 */
+export function toBuiltinModel(model: PiModel): BuiltinModel {
+  return {
+    id: model.id,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    cost: {
+      input: model.cost.input,
+      output: model.cost.output,
+      cacheRead: model.cost.cacheRead,
+      cacheWrite: model.cost.cacheWrite,
+    },
+  };
 }
 
 /** 与 runtime 的 create 命令里 provider 载荷同形（结构匹配，不引 AgentCommand 耦合） */
@@ -63,7 +102,7 @@ interface ProviderWire {
   baseUrl: string;
   api: string;
   headers?: Record<string, string>;
-  models: string[];
+  models: ModelDecl[];
 }
 
 /**
