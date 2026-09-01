@@ -1,5 +1,9 @@
 # UPDATE NOTES
 
+## powershell 工具行不再是「扳手 + 英文原名」
+
+- Windows 上 agent 实际执行的 powershell 工具（pi 0.84.3 的独立工具，bash 的 PowerShell 壳）此前图标落兜底扳手、组头显示英文原名、折叠行没有命令摘要。现在与 bash 同一待遇：终端图标、组头「执行 · N 条命令」、折叠行直接显示命令本身。
+
 ## read 展开也是高亮的文件视图
 
 - read 工具展开后从纯文本升级为与 write 相同的「行号列 + 语法高亮」文件视图，语言按文件扩展名推断、跟随明暗主题（pi 的 TUI 同样给 read 做语法高亮）。

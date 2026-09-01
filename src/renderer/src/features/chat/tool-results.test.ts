@@ -311,6 +311,11 @@ describe("toolResultText", () => {
 describe("toolCallSummary", () => {
   test("bash 摘要取 command，路径类工具取 path", () => {
     assert.equal(toolCallSummary("bash", { command: "git status" }), "git status");
+    assert.equal(
+      toolCallSummary("powershell", { command: "Get-ChildItem" }),
+      "Get-ChildItem",
+      "powershell 是 pi 0.84.3 的独立工具（bash 的 PowerShell 壳）",
+    );
     assert.equal(toolCallSummary("edit", { path: "src/app.ts", edits: [] }), "src/app.ts");
     assert.equal(toolCallSummary("write", { path: "notes.md", content: "…" }), "notes.md");
     assert.equal(toolCallSummary("read", { path: "a.ts", offset: 2 }), "a.ts");

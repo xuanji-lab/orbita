@@ -672,6 +672,7 @@ const EXPANDED_BODY = {
 function toolIcon(toolName: string): IconName {
   switch (toolName) {
     case "bash":
+    case "powershell":
       return "terminal";
     case "read":
       return "file-text";
@@ -680,7 +681,6 @@ function toolIcon(toolName: string): IconName {
       return "pencil-line";
     case "grep":
     case "find":
-    case "glob":
       return "search";
     case "ls":
       return "folder";
@@ -693,12 +693,12 @@ function toolIcon(toolName: string): IconName {
 function toolGroupLabel(toolName: string): string {
   switch (toolName) {
     case "bash":
+    case "powershell":
       return "执行";
     case "read":
       return "读取";
     case "grep":
     case "find":
-    case "glob":
       return "搜索";
     case "write":
       return "写入";
@@ -718,6 +718,7 @@ function toolGroupCountLabel(toolName: string, count: number): string {
     case "write":
       return `${count} 个文件`;
     case "bash":
+    case "powershell":
       return `${count} 条命令`;
     case "edit":
       return `${count} 处`;

@@ -256,14 +256,14 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
   };
   switch (toolName) {
     case "bash":
+    case "powershell": // pi 0.84.3 的独立工具（bash 的 PowerShell 壳，schema 同构）
       return str("command");
     case "read":
     case "write":
     case "edit":
       return str("path");
     case "grep":
-    case "find":
-    case "glob": {
+    case "find": {
       const pattern = str("pattern");
       if (pattern === null) return null;
       const path = str("path");
