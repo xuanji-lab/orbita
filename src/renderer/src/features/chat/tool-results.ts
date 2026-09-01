@@ -365,13 +365,15 @@ export function parseDiffLines(diff: string): ParsedDiff {
 }
 
 /**
- * edit 落在 details 里的 diff（上一刀才带上来的，pi 算好的现成货）。
- * 不是 edit、没有 details、diff 不是非空字符串，都返回 null——调用方退回原文展示。
+ * edit 落在 details.patch 里的标准 unified diff（pi 用 createTwoFilesPatch 生成）。
+ * 同一份 details 里的 `diff` 是 pi 给 TUI 看的自定义显示格式——行号嵌在正文、
+ * 无 @@ 头、无文件路径，喂给 parseDiffLines 会把行号当正文渲染；要 unified 就读 patch。
+ * 不是 edit、没有 details、patch 缺失或不是非空字符串，都返回 null——调用方退回原文展示。
  */
 export function editDiffText(result: ToolTranscriptItem): string | null {
   if (result.toolName !== "edit") return null;
   const details = result.details;
   if (typeof details !== "object" || details === null) return null;
-  const diff = (details as Record<string, unknown>)["diff"];
-  return typeof diff === "string" && diff !== "" ? diff : null;
+  const patch = (details as Record<string, unknown>)["patch"];
+  return typeof patch === "string" && patch !== "" ? patch : null;
 }

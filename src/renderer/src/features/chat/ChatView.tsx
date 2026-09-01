@@ -842,7 +842,8 @@ function ToolGroupLine(props: {
 }
 
 /**
- * edit 的展开体：pi 算好的 unified diff（details 里），parseDiffLines 拆成
+ * edit 的展开体：pi 的 details.patch（标准 unified diff；同在 details 里的 diff
+ * 字段是 TUI 显示格式，不能用），parseDiffLines 拆成
  * 「头行（路径 + 增删统计）+ 带新旧行号的行」。行是四列 grid：旧行号 | 新行号 |
  * +/- gutter | 正文；行号与 gutter 是 tertiary 注脚，正文颜色按角色。
  * 增删行的底色用各自的 -soft token——文字才是主信号，颜色是第二信号；底色只淡染一层，

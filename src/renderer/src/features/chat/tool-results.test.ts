@@ -418,21 +418,41 @@ describe("parseDiffLines", () => {
     assert.equal(parsed.path, "gone.ts");
     assert.equal(parsed.removed, 1);
   });
+
+  test("pi 的 details.patch 真身：createTwoFilesPatch 的文件头不带 a//b/ 前缀", () => {
+    const parsed = parseDiffLines(
+      ["--- src/app.ts", "+++ src/app.ts", "@@ -1,2 +1,2 @@", " keep", "-old", "+new"].join("\n"),
+    );
+    assert.equal(parsed.path, "src/app.ts");
+    assert.equal(parsed.removed, 1);
+    assert.equal(parsed.added, 1);
+  });
 });
 
 describe("editDiffText", () => {
-  test("edit 且 details.diff 是非空字符串时取出来", () => {
+  test("edit 且 details.patch 是非空字符串时取出来", () => {
     const item = indexToolResults([
       toolItem({
         toolCallId: "a",
         toolName: "edit",
-        details: { diff: "+hi\n-bye", firstChangedLine: 3 },
+        details: {
+          diff: "+ 3 hi",
+          patch: "@@ -1 +1 @@\n-hi\n+bye",
+          firstChangedLine: 3,
+        },
       }),
     ]).get("a");
-    assert.equal(item === undefined ? null : editDiffText(item), "+hi\n-bye");
+    assert.equal(item === undefined ? null : editDiffText(item), "@@ -1 +1 @@\n-hi\n+bye");
   });
 
-  test("不是 edit、没有 details、diff 缺失或为空——都返回 null", () => {
+  test("details 里只有 TUI 显示格式的 diff、没有 patch——返回 null，不把显示格式当 unified 喂进渲染", () => {
+    const item = indexToolResults([
+      toolItem({ toolCallId: "d0", toolName: "edit", details: { diff: "+ 3 hi" } }),
+    ]).get("d0");
+    assert.equal(item === undefined ? null : editDiffText(item), null);
+  });
+
+  test("不是 edit、没有 details、patch 缺失或为空——都返回 null", () => {
     const bash = indexToolResults([toolItem({ toolCallId: "b" })]).get("b");
     assert.equal(bash === undefined ? null : editDiffText(bash), null);
 
@@ -441,9 +461,9 @@ describe("editDiffText", () => {
     ]).get("c");
     assert.equal(noDetails === undefined ? null : editDiffText(noDetails), null);
 
-    const emptyDiff = indexToolResults([
-      toolItem({ toolCallId: "d", toolName: "edit", details: { diff: "" } }),
+    const emptyPatch = indexToolResults([
+      toolItem({ toolCallId: "d", toolName: "edit", details: { patch: "" } }),
     ]).get("d");
-    assert.equal(emptyDiff === undefined ? null : editDiffText(emptyDiff), null);
+    assert.equal(emptyPatch === undefined ? null : editDiffText(emptyPatch), null);
   });
 });
