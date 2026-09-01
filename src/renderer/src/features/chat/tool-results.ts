@@ -14,6 +14,7 @@
  *
  * 纯模块：不 import React，可被 `node --test` 直接加载。
  */
+import { diffWords } from "diff";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 
@@ -365,17 +366,22 @@ export function parseDiffLines(diff: string): ParsedDiff {
 }
 
 /**
- * edit 落在 details.patch 里的标准 unified diff（pi 用 createTwoFilesPatch 生成）。
- * 同一份 details 里的 `diff` 是 pi 给 TUI 看的自定义显示格式——行号嵌在正文、
- * 无 @@ 头、无文件路径，喂给 parseDiffLines 会把行号当正文渲染；要 unified 就读 patch。
- * 不是 edit、没有 details、patch 缺失或不是非空字符串，都返回 null——调用方退回原文展示。
+ * edit 落在 details 里的两份 diff 各司其职：
+ * - `diff` 是 pi **专为展示生成**的格式（±标记 + 行号 + 正文，增/上下文带新文档行号），
+ *   无文件头、无 @@ 头、无 `\ No newline` 标记——展开显示用它（`editDiffText` + `parseEditDiff`）。
+ * - `patch` 是标准 unified diff（createTwoFilesPatch 产物）——折叠行的 +N/-M 统计用它数数。
  */
-export function editDiffText(result: ToolTranscriptItem): string | null {
+function editDetailField(result: ToolTranscriptItem, key: string): string | null {
   if (result.toolName !== "edit") return null;
   const details = result.details;
   if (typeof details !== "object" || details === null) return null;
-  const patch = (details as Record<string, unknown>)["patch"];
-  return typeof patch === "string" && patch !== "" ? patch : null;
+  const value = (details as Record<string, unknown>)[key];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** edit 展开显示用的 pi 显示格式 diff；缺失返回 null——调用方退回原文展示 */
+export function editDiffText(result: ToolTranscriptItem): string | null {
+  return editDetailField(result, "diff");
 }
 
 /** edit 折叠行的增删统计（来自 details.patch）；没有 patch 返回 null */
@@ -385,10 +391,116 @@ export interface EditDiffStats {
 }
 
 export function editDiffStats(result: ToolTranscriptItem): EditDiffStats | null {
-  const patch = editDiffText(result);
+  const patch = editDetailField(result, "patch");
   if (patch === null) return null;
   const { added, removed } = parseDiffLines(patch);
   return { added, removed };
+}
+
+/** pi 显示格式的一行：角色 + 行号（增/上下文带新文档行号、删带旧文档行号）+ 正文 */
+export interface EditDiffRow {
+  kind: "add" | "del" | "ctx";
+  lineNum: string;
+  text: string;
+}
+
+/** pi 的 diff.ts 同款行格式：「+123 内容」/「-123 内容」/「 123 内容」/ 跳段「   ...」 */
+const EDIT_DIFF_LINE = /^([+\- ])(\s*\d*)\s(.*)$/;
+
+/**
+ * pi 显示格式 → 行数组。解析不了的行按 ctx 原样保留（跳段「...」就是这么进来的，
+ * pi 对解析失败同样按上下文色渲染）；行号两侧空白剥掉。
+ */
+export function parseEditDiff(diff: string): EditDiffRow[] {
+  const rows: EditDiffRow[] = [];
+  for (const line of diff.split("\n")) {
+    if (line === "") continue;
+    const match = EDIT_DIFF_LINE.exec(line);
+    if (match === null) {
+      rows.push({ kind: "ctx", lineNum: "", text: line });
+      continue;
+    }
+    const marker = match[1] ?? " ";
+    const kind = marker === "+" ? "add" : marker === "-" ? "del" : "ctx";
+    rows.push({ kind, lineNum: (match[2] ?? "").trim(), text: match[3] ?? "" });
+  }
+  return rows;
+}
+
+/** 词级对比 token：changed 的片段是这行里真正变动的部分（pi 的 inverse 在 DOM 里的等价物） */
+export interface IntraToken {
+  text: string;
+  changed: boolean;
+}
+
+export interface IntraLineTokens {
+  removed: readonly IntraToken[];
+  added: readonly IntraToken[];
+}
+
+/** 首个 changed token 的行首空白不算改动（pi 同款规则——缩进不该被高亮） */
+function stripLeadingWhitespace(tokens: IntraToken[]): void {
+  const first = tokens[0];
+  if (first === undefined || !first.changed) return;
+  const ws = /^\s*/.exec(first.text)?.[0] ?? "";
+  if (ws === "") return;
+  first.text = first.text.slice(ws.length);
+  tokens.unshift({ text: ws, changed: false });
+  if (first.text === "") tokens.splice(1, 1);
+}
+
+/** 单行修改的词级对比：diffWords 分词，删行与增行各得一组 token */
+export function intraLineTokens(oldText: string, newText: string): IntraLineTokens {
+  const removed: IntraToken[] = [];
+  const added: IntraToken[] = [];
+  for (const part of diffWords(oldText, newText)) {
+    if (part.removed) removed.push({ text: part.value, changed: true });
+    else if (part.added) added.push({ text: part.value, changed: true });
+    else {
+      removed.push({ text: part.value, changed: false });
+      added.push({ text: part.value, changed: false });
+    }
+  }
+  stripLeadingWhitespace(removed);
+  stripLeadingWhitespace(added);
+  return { removed, added };
+}
+
+/** DiffView 的渲染单元：普通行，或「单行修改」对（相邻的 1 删 + 1 增，pi 对它做词级对比） */
+export type EditDiffEntry =
+  | { kind: "row"; row: EditDiffRow }
+  | { kind: "pair"; removed: EditDiffRow; added: EditDiffRow; tokens: IntraLineTokens };
+
+/**
+ * 行数组 → 渲染单元。只有「恰好 1 删 + 1 增」相邻才算单行修改做词级对比；
+ * 多删多增按普通行逐行渲染（pi 的 diff.ts 同款判定）。
+ */
+export function editDiffEntries(rows: readonly EditDiffRow[]): EditDiffEntry[] {
+  const entries: EditDiffEntry[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    const current = rows[i];
+    if (current !== undefined && current.kind === "del") {
+      let dels = 1;
+      while (rows[i + dels]?.kind === "del") dels++;
+      let adds = 0;
+      while (rows[i + dels + adds]?.kind === "add") adds++;
+      const added = rows[i + 1];
+      if (dels === 1 && adds === 1 && added !== undefined) {
+        entries.push({
+          kind: "pair",
+          removed: current,
+          added,
+          tokens: intraLineTokens(current.text, added.text),
+        });
+        i += 2;
+        continue;
+      }
+    }
+    if (current !== undefined) entries.push({ kind: "row", row: current });
+    i++;
+  }
+  return entries;
 }
 
 /**

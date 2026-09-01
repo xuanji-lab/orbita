@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { CompactedRecord } from "@shared/session";
 import {
+  editDiffEntries,
   editDiffStats,
   editDiffText,
   editGroupFileCount,
@@ -10,7 +11,9 @@ import {
   formatThinkingDuration,
   groupToolUnits,
   indexToolResults,
+  intraLineTokens,
   parseDiffLines,
+  parseEditDiff,
   streamingThinkingKey,
   summarizeToolResult,
   thinkingDurationText,
@@ -433,29 +436,29 @@ describe("parseDiffLines", () => {
 });
 
 describe("editDiffText", () => {
-  test("edit 且 details.patch 是非空字符串时取出来", () => {
+  test("edit 且 details.diff 是非空字符串时取出来（pi 的显示格式）", () => {
     const item = indexToolResults([
       toolItem({
         toolCallId: "a",
         toolName: "edit",
         details: {
-          diff: "+ 3 hi",
-          patch: "@@ -1 +1 @@\n-hi\n+bye",
-          firstChangedLine: 3,
+          diff: "-1 9876\n+1 hello",
+          patch: "@@ -1 +1 @@\n-9876\n+hello",
+          firstChangedLine: 1,
         },
       }),
     ]).get("a");
-    assert.equal(item === undefined ? null : editDiffText(item), "@@ -1 +1 @@\n-hi\n+bye");
+    assert.equal(item === undefined ? null : editDiffText(item), "-1 9876\n+1 hello");
   });
 
-  test("details 里只有 TUI 显示格式的 diff、没有 patch——返回 null，不把显示格式当 unified 喂进渲染", () => {
+  test("details 里只有 patch、没有 diff——返回 null（展开退回原文展示）", () => {
     const item = indexToolResults([
-      toolItem({ toolCallId: "d0", toolName: "edit", details: { diff: "+ 3 hi" } }),
+      toolItem({ toolCallId: "d0", toolName: "edit", details: { patch: "@@ -1 +1 @@\n-a\n+b" } }),
     ]).get("d0");
     assert.equal(item === undefined ? null : editDiffText(item), null);
   });
 
-  test("不是 edit、没有 details、patch 缺失或为空——都返回 null", () => {
+  test("不是 edit、没有 details、diff 缺失或为空——都返回 null", () => {
     const bash = indexToolResults([toolItem({ toolCallId: "b" })]).get("b");
     assert.equal(bash === undefined ? null : editDiffText(bash), null);
 
@@ -464,10 +467,10 @@ describe("editDiffText", () => {
     ]).get("c");
     assert.equal(noDetails === undefined ? null : editDiffText(noDetails), null);
 
-    const emptyPatch = indexToolResults([
-      toolItem({ toolCallId: "d", toolName: "edit", details: { patch: "" } }),
+    const emptyDiff = indexToolResults([
+      toolItem({ toolCallId: "d", toolName: "edit", details: { diff: "" } }),
     ]).get("d");
-    assert.equal(emptyPatch === undefined ? null : editDiffText(emptyPatch), null);
+    assert.equal(emptyDiff === undefined ? null : editDiffText(emptyDiff), null);
   });
 });
 
@@ -486,9 +489,103 @@ describe("editDiffStats", () => {
     assert.equal(bash === undefined ? null : editDiffStats(bash), null);
 
     const onlyDiff = indexToolResults([
-      toolItem({ toolCallId: "s3", toolName: "edit", details: { diff: "+ 3 hi" } }),
+      toolItem({ toolCallId: "s3", toolName: "edit", details: { diff: "-1 a\n+1 b" } }),
     ]).get("s3");
     assert.equal(onlyDiff === undefined ? null : editDiffStats(onlyDiff), null);
+  });
+});
+
+describe("parseEditDiff", () => {
+  // fixture 由 pi 0.84.3 的 generateDiffString 真实产出（2026-09-01 核对）
+  test("单行修改：删带旧行号、增带新行号，没有头行", () => {
+    const rows = parseEditDiff("-1 const oldValue = compute(x);\n+1 const newValue = compute(y);");
+    assert.deepEqual(rows, [
+      { kind: "del", lineNum: "1", text: "const oldValue = compute(x);" },
+      { kind: "add", lineNum: "1", text: "const newValue = compute(y);" },
+    ]);
+  });
+
+  test("长文件跳段：上下文 + 改动 + 「...」跳行", () => {
+    const rows = parseEditDiff(
+      [
+        "  1 line 1",
+        "  2 line 2",
+        "  3 line 3",
+        "- 4 line 4",
+        "+ 4 LINE-FOUR",
+        "  5 line 5",
+        "  6 line 6",
+        "  7 line 7",
+        "  8 line 8",
+        "    ...",
+      ].join("\n"),
+    );
+    assert.equal(rows.length, 10);
+    assert.deepEqual(
+      rows.slice(0, 5).map((row) => [row.kind, row.lineNum]),
+      [
+        ["ctx", "1"],
+        ["ctx", "2"],
+        ["ctx", "3"],
+        ["del", "4"],
+        ["add", "4"],
+      ],
+    );
+    const skip = rows[9];
+    assert.ok(skip !== undefined && skip.kind === "ctx" && skip.text.includes("..."));
+  });
+
+  test("解析不了的行按 ctx 原样保留，不炸", () => {
+    const rows = parseEditDiff("random junk\n+1 ok");
+    assert.deepEqual(rows[0], { kind: "ctx", lineNum: "", text: "random junk" });
+    assert.deepEqual(rows[1], { kind: "add", lineNum: "1", text: "ok" });
+  });
+});
+
+describe("editDiffEntries", () => {
+  test("相邻的 1 删 + 1 增 → 单行修改对，带词级 token", () => {
+    const entries = editDiffEntries(
+      parseEditDiff("-1 const oldValue = compute(x);\n+1 const newValue = compute(y);"),
+    );
+    assert.equal(entries.length, 1);
+    const entry = entries[0];
+    assert.ok(entry !== undefined && entry.kind === "pair");
+    assert.equal(entry.tokens.removed.map((t) => t.text).join(""), "const oldValue = compute(x);");
+    assert.equal(entry.tokens.added.map((t) => t.text).join(""), "const newValue = compute(y);");
+    assert.ok(entry.tokens.removed.some((t) => t.changed));
+  });
+
+  test("多删多增不算单行修改，逐行渲染", () => {
+    const entries = editDiffEntries(parseEditDiff("-1 a\n-2 b\n+1 A\n+2 B"));
+    assert.equal(entries.length, 4);
+    assert.ok(entries.every((e) => e.kind === "row"));
+  });
+
+  test("删与增之间隔着上下文 → 不配对", () => {
+    const entries = editDiffEntries(parseEditDiff("-1 a\n 2 c\n+2 A"));
+    assert.equal(entries.length, 3);
+    assert.ok(entries.every((e) => e.kind === "row"));
+  });
+});
+
+describe("intraLineTokens", () => {
+  test("拼接保真；完全相同的行全 unchanged", () => {
+    const same = intraLineTokens("const a = 1;", "const a = 1;");
+    assert.ok(same.removed.length > 0 && same.removed.every((t) => !t.changed));
+
+    const tokens = intraLineTokens("const oldValue = compute(x);", "const newValue = compute(y);");
+    assert.equal(tokens.removed.map((t) => t.text).join(""), "const oldValue = compute(x);");
+    assert.equal(tokens.added.map((t) => t.text).join(""), "const newValue = compute(y);");
+  });
+
+  test("行首空白不算改动——缩进不被高亮（pi 同款规则）", () => {
+    const tokens = intraLineTokens("  if (old) {", "  if (new) {");
+    assert.ok(tokens.removed.some((t) => t.changed));
+    for (const token of [...tokens.removed, ...tokens.added]) {
+      if (token.changed) {
+        assert.ok(!/^\s/.test(token.text), `changed token 不应带行首空白: ${JSON.stringify(token.text)}`);
+      }
+    }
   });
 });
 

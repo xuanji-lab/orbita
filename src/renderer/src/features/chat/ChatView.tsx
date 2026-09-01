@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
@@ -9,7 +10,8 @@ import {
   flattenRenderUnits,
   groupToolUnits,
   indexToolResults,
-  parseDiffLines,
+  parseEditDiff,
+  editDiffEntries,
   streamingThinkingKey,
   summarizeToolResult,
   editDiffStats,
@@ -19,6 +21,7 @@ import {
   toolCallSummary,
   toolGroupStatus,
   toolResultText,
+  type IntraToken,
   type RenderEntry,
   type ToolGroupUnit,
   type ToolResultIndex,
@@ -857,15 +860,15 @@ function ToolGroupLine(props: {
 }
 
 /**
- * edit 的展开体：pi 的 details.patch（标准 unified diff；同在 details 里的 diff
- * 字段是 TUI 显示格式，不能用），parseDiffLines 拆成
- * 「头行（路径 + 增删统计）+ 带新旧行号的行」。行是四列 grid：旧行号 | 新行号 |
- * +/- gutter | 正文；行号与 gutter 是 tertiary 注脚，正文颜色按角色。
- * 增删行的底色用各自的 -soft token——文字才是主信号，颜色是第二信号；底色只淡染一层，
- * 行文字仍可读。空行渲染成一个空格占位，保住行高。
+ * edit 的展开体：pi 的 details.diff 显示格式——每行「±标记 + 行号 + 正文」，
+ * 增/上下文行带**新文档（当前文档）行号**、删行带旧文档行号；没有文件头、@@ 头
+ * 与 `\ No newline` 噪音（文件名折叠行已经在说），长文件跳段是「...」行。
+ * 相邻的「1 删 + 1 增」是单行修改，词级对比后真正变动的片段加底高亮
+ * （pi TUI 的 inverse 在 DOM 里的等价物）。增删行底色用各自 -soft token、
+ * 文字按角色着色——文字才是主信号，颜色是第二信号。
  */
 function DiffView(props: { diff: string }) {
-  const parsed = parseDiffLines(props.diff);
+  const entries = editDiffEntries(parseEditDiff(props.diff));
   return (
     <div
       style={{
@@ -877,113 +880,85 @@ function DiffView(props: { diff: string }) {
         lineHeight: 1.6,
       }}
     >
-      {parsed.path !== null && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            padding: "var(--space-1) var(--space-2)",
-          }}
-        >
-          <span
-            style={{
-              flex: "1 1 auto",
-              minWidth: 0,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              color: "var(--color-text-secondary)",
-            }}
-          >
-            {parsed.path}
-          </span>
-          <span
-            style={{
-              ...SLOT.status,
-              color: "var(--color-success)",
-            }}
-          >
-            +{parsed.added}
-          </span>
-          <span
-            style={{
-              ...SLOT.status,
-              color: "var(--color-danger)",
-            }}
-          >
-            -{parsed.removed}
-          </span>
-        </div>
+      {entries.map((entry, index) =>
+        entry.kind === "pair" ? (
+          <Fragment key={index}>
+            <DiffRow kind="del" lineNum={entry.removed.lineNum}>
+              {intraSpans(entry.tokens.removed, "del")}
+            </DiffRow>
+            <DiffRow kind="add" lineNum={entry.added.lineNum}>
+              {intraSpans(entry.tokens.added, "add")}
+            </DiffRow>
+          </Fragment>
+        ) : (
+          <DiffRow key={index} kind={entry.row.kind} lineNum={entry.row.lineNum}>
+            {entry.row.text === "" ? " " : entry.row.text}
+          </DiffRow>
+        ),
       )}
-      {parsed.rows.map((row, index) => {
-        if (row.kind === "meta") {
-          return (
-            <div
-              key={index}
-              style={{
-                padding: "0 var(--space-2)",
-                color: "var(--color-text-tertiary)",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {row.text}
-            </div>
-          );
-        }
-        return (
-          <div
-            key={index}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "3.5ch 3.5ch 1ch 1fr",
-              background:
-                row.kind === "add"
-                  ? "var(--color-success-soft)"
-                  : row.kind === "del"
-                    ? "var(--color-danger-soft)"
-                    : undefined,
-            }}
-          >
-            <span style={diffNumberSlot}>{row.oldLine ?? ""}</span>
-            <span style={diffNumberSlot}>{row.newLine ?? ""}</span>
-            <span
-              style={{
-                color:
-                  row.kind === "add"
-                    ? "var(--color-success)"
-                    : row.kind === "del"
-                      ? "var(--color-danger)"
-                      : "var(--color-text-tertiary)",
-              }}
-            >
-              {row.kind === "add" ? "+" : row.kind === "del" ? "-" : ""}
-            </span>
-            <span
-              style={{
-                paddingRight: "var(--space-2)",
-                whiteSpace: "pre-wrap",
-                overflowWrap: "anywhere",
-                color: "var(--color-text-tertiary)",
-              }}
-            >
-              {row.text === "" ? " " : row.text}
-            </span>
-          </div>
-        );
-      })}
     </div>
   );
 }
 
-/** diff 行号列：右对齐的 tertiary 等宽数字，只作注脚不作内容。 */
-const diffNumberSlot = {
-  textAlign: "right",
-  color: "var(--color-text-tertiary)",
-  fontVariantNumeric: "tabular-nums",
-} satisfies React.CSSProperties;
+/** diff 行三列 grid：±标记 | 当前行号 | 正文；行号是 tertiary 注脚，正文按角色着色 */
+function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children: ReactNode }) {
+  const { kind } = props;
+  const tone =
+    kind === "add"
+      ? "var(--color-success)"
+      : kind === "del"
+        ? "var(--color-danger)"
+        : "var(--color-text-tertiary)";
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1.5ch 5ch 1fr",
+        background:
+          kind === "add"
+            ? "var(--color-success-soft)"
+            : kind === "del"
+              ? "var(--color-danger-soft)"
+              : undefined,
+      }}
+    >
+      <span style={{ color: tone }}>{kind === "add" ? "+" : kind === "del" ? "-" : " "}</span>
+      <span style={{ textAlign: "right", color: "var(--color-text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
+        {props.lineNum}
+      </span>
+      <span
+        style={{
+          paddingRight: "var(--space-2)",
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          color: tone,
+        }}
+      >
+        {props.children}
+      </span>
+    </div>
+  );
+}
+
+/** 词级对比 token → span；changed 片段按角色加底（pi inverse 的 DOM 等价物） */
+function intraSpans(tokens: readonly IntraToken[], kind: "del" | "add") {
+  return tokens.map((token, index) =>
+    token.changed ? (
+      <span
+        key={index}
+        style={{
+          backgroundColor: kind === "add" ? "var(--color-success)" : "var(--color-danger)",
+          color: "var(--color-bg-panel)",
+          borderRadius: 2,
+        }}
+      >
+        {token.text}
+      </span>
+    ) : (
+      <span key={index}>{token.text}</span>
+    ),
+  );
+}
 
 /**
  * 思考行：brain 图标（进行中保持 info 蓝——全转写里唯一的蓝记号）+「思考」
