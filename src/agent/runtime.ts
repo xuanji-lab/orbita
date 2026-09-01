@@ -18,6 +18,11 @@ import {
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
+  toAuthConfig,
+  toFallbackRegistration,
+  type PiModel,
+} from "./model-registration.ts";
+import {
   createToolCallGate,
   describePermissionMode,
   type PiExtensionApi,
@@ -83,30 +88,6 @@ function askPermission(sessionId: string) {
 }
 
 /**
- * 模型能力字段的保守默认（Q2）：pi 的 ProviderConfigInput.models[] 这些字段必填，
- * 而我们的 ModelDecl 全是可选。**内建 provider（zai / deepseek…）不会走到这里**——
- * pi 的目录（每 4 小时从 pi.dev 刷新）已有官方参数，我们注册的同名条目只补 apiKey/baseUrl。
- * 这些默认只服务于自建网关这条逃生路径：填错影响的是压缩时机与用量统计，不影响能不能跑。
- */
-const FALLBACK_MODEL = {
-  reasoning: false,
-  input: ["text"] as ("text" | "image")[],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-};
-
-function toProviderConfig(provider: Extract<AgentCommand, { type: "create" }>["provider"]) {
-  return {
-    apiKey: provider.apiKey,
-    baseUrl: provider.baseUrl,
-    api: provider.api,
-    ...(provider.headers ? { headers: provider.headers } : {}),
-    models: provider.models.map((id) => ({ id, name: id, ...FALLBACK_MODEL })),
-  };
-}
-
-/**
  * AgentSession 的事件里，需要翻给 renderer 的那几种；其余（压缩、重试、排队）等后续 slice。
  *
  * 三个 `tool_execution_*` **就在 `AgentEvent` 里**（pi-agent-core `types.d.ts`），
@@ -135,7 +116,27 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
   }
   // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
   const modelRuntime = await ModelRuntime.create({});
-  modelRuntime.registerProvider(command.provider.id, toProviderConfig(command.provider));
+  // 第一步只注册 auth：内建 provider 的模型元数据（窗口 / 单价）留在 pi 的目录里
+  modelRuntime.registerProvider(command.provider.id, toAuthConfig(command.provider));
+  /**
+   * **选中的模型必须显式解析并传给会话**。不传的话 pi 自己挑默认模型——实测会挑到
+   * 一个完全不相干的 provider（UI 里选的从来不是会话里跑的那个，存量 bug）。
+   * 目录里有的 id 直接拿官方元数据；没有的（自建网关 / 目录未收录）才补注册兜底。
+   */
+  let model: PiModel | undefined = modelRuntime.getModel(command.provider.id, command.modelId);
+  if (model === undefined) {
+    const known = modelRuntime.getProviders().find((p) => p.id === command.provider.id);
+    // 补注册带完整 auth 面：pi 的校验跑在合并之前，只传 models 的话
+    // 自建网关没有目录 defaults 可借 api，当场抛「no "api" specified」
+    modelRuntime.registerProvider(
+      command.provider.id,
+      toFallbackRegistration(command.provider, known?.getModels() ?? []),
+    );
+    model = modelRuntime.getModel(command.provider.id, command.modelId);
+  }
+  if (model === undefined) {
+    throw new Error(`unknown model "${command.provider.id}/${command.modelId}"`);
+  }
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
@@ -171,7 +172,7 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
    * 用户至少还能接着说话，而不是对着一条打不开的会话干瞪眼。
    */
   const sessionManager = openOrCreate(command);
-  const { session } = await createAgentSessionFromServices({ services, sessionManager });
+  const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
   const unsubscribe = session.subscribe((event) => {
