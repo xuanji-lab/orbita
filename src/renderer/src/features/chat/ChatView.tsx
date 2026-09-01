@@ -47,6 +47,30 @@ import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 
 /**
+ * 展开体的贴底跟随：chat 级滚动（上方 ChatView）同款语义的缩小版——内容增长
+ * 钉住底部，用户上滚脱离即停跟，滚回底部自动恢复。`enabled` 只在活体上开
+ * （流式思考、跑着的 shell）；静态内容没有「跟随」可言，展开从顶部开始读，
+ * 用户滚到哪就停在哪。跟 chat 级一样用 ref 不用 state：滚动是高频事件，
+ * 不值得为它重渲染。
+ */
+function useFollowScroll(enabled: boolean) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const followRef = useRef(true);
+  const onScroll = () => {
+    const el = ref.current;
+    if (el !== null) {
+      followRef.current = isAtBottom(el.scrollTop, el.clientHeight, el.scrollHeight);
+    }
+  };
+  // 无依赖数组：不挑触发源，每次 commit 都尝试钉底（scrollTop 赋值廉价），绘制前同步执行
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el !== null && enabled && followRef.current) el.scrollTop = el.scrollHeight;
+  });
+  return { ref, onScroll };
+}
+
+/**
  * 中卡的内容：首页与聊天页。
  *
  * 两页共用同一个 `Composer`，宽度都是 `min(100%, var(--content-max-width))`——
@@ -898,6 +922,7 @@ function DiffView(props: { diff: string }) {
   const entries = editDiffEntries(parseEditDiff(props.diff));
   return (
     <div
+      className="scroll"
       style={{
         maxHeight: 320,
         overflow: "auto",
@@ -1009,6 +1034,7 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
   const gutter = `${Math.max(3, String(lastLine).length)}ch`;
   return (
     <div
+      className="scroll"
       style={{
         display: "grid",
         gridTemplateColumns: `${gutter} 1fr`,
@@ -1065,14 +1091,17 @@ function tokenSpans(line: readonly TokenSpan[]) {
 function PlainToolBody(props: { toolName: string; text: string; failed: boolean }) {
   if (props.text === "") {
     return (
-      <div style={{ ...PLAIN_BODY, color: "var(--color-text-secondary)", padding: "0 var(--space-2)" }}>
+      <div
+        className="scroll"
+        style={{ ...PLAIN_BODY, color: "var(--color-text-secondary)", padding: "0 var(--space-2)" }}
+      >
         （无输出）
       </div>
     );
   }
   if (props.failed) {
     return (
-      <div style={PLAIN_BODY}>
+      <div className="scroll" style={PLAIN_BODY}>
         {props.text.split("\n").map((line, index) => (
           <div key={index} style={{ ...BODY_LINE, color: "var(--color-danger)" }}>
             {line === "" ? " " : line}
@@ -1082,7 +1111,7 @@ function PlainToolBody(props: { toolName: string; text: string; failed: boolean 
     );
   }
   return (
-    <div style={PLAIN_BODY}>
+    <div className="scroll" style={PLAIN_BODY}>
       {props.text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
     </div>
   );
@@ -1153,12 +1182,14 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
  * label + 副标。副标是时间态：**流式中**是活尾预览（新的一行顶替上一行）；
  * **落定**换成「持续了 N 秒」（现场计时，重开的旧会话量不到就什么都不显示）。
  * 行首呼吸同其它过程行：进行中 secondary + 呼吸，写完呼吸与高亮一起消失。
- * 要看全文点开，展开体 160px 封顶滚动。
+ * 要看全文点开，展开体 160px 封顶滚动；**流式中展开会贴底跟随**（上滚脱离、
+ * 回底恢复），落定后内容定格，跟随停止。
  */
 function ThinkingLine(props: { text: string; active: boolean; blockKey: string }) {
   const [open, setOpen] = useState(false);
   const { active } = props;
   const body = props.text.trim();
+  const follow = useFollowScroll(active);
   const duration = thinkingDurationText(props.blockKey, active);
   const preview = active ? thinkingPreview(body) : "";
   return (
@@ -1178,6 +1209,9 @@ function ThinkingLine(props: { text: string; active: boolean; blockKey: string }
       </CollapseRow>
       {open && body !== "" && (
         <div
+          ref={follow.ref}
+          onScroll={follow.onScroll}
+          className="scroll"
           style={{
             ...EXPANDED_BODY,
             color: "var(--color-text-tertiary)",
@@ -1248,6 +1282,7 @@ function CompactedLine(props: { record: CompactedRecord }) {
       </button>
       {open && (
         <div
+          className="scroll"
           style={{
             maxHeight: 320,
             overflow: "auto",
