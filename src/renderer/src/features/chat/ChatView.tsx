@@ -20,6 +20,7 @@ import {
   thinkingDurationText,
   thinkingPreview,
   toolCallSummary,
+  toolDurationText,
   toolGroupStatus,
   toolResultText,
   writeLineCount,
@@ -512,6 +513,7 @@ function EntryView(props: {
   if (entry.kind === "toolCall") {
     return (
       <ToolLine
+        toolCallId={entry.toolCallId}
         toolName={entry.toolName}
         input={entry.input}
         result={props.toolResults.get(entry.toolCallId)}
@@ -736,7 +738,12 @@ function toolGroupCountLabel(toolName: string, count: number): string {
  * 失败是语义色不参与档位：`triangle-alert` + "failed" 染 danger（AGENTS.md：
  * 状态优先图标与文字，颜色是第二信号）。
  */
-function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscriptItem | undefined }) {
+function ToolLine(props: {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  result: ToolTranscriptItem | undefined;
+}) {
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
@@ -754,6 +761,11 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
     fileView !== null ? langFromPath(toolCallSummary(props.toolName, props.input) ?? "") : null;
   const writeLines =
     !open && props.toolName === "write" && fileView !== null ? writeLineCount(props.input) : null;
+  // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有
+  const shellDuration =
+    (props.toolName === "bash" || props.toolName === "powershell") && !active
+      ? toolDurationText(props.toolCallId)
+      : null;
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
@@ -788,6 +800,8 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
             {summary}
           </span>
         )}
+        {/* shell 类的执行耗时——慢命令（install / typecheck）不展开也讲清楚花在哪 */}
+        {shellDuration !== null && <span style={SLOT.status}>{shellDuration}</span>}
         {expandable && (
           <span style={chevronSlot(open)}>
             <Icon name="chevron-down" size={14} strokeWidth={1.8} />
@@ -865,6 +879,7 @@ function ToolGroupLine(props: {
           {group.calls.map((call) => (
             <ToolLine
               key={call.key}
+              toolCallId={call.toolCallId}
               toolName={call.toolName}
               input={call.input}
               result={props.toolResults.get(call.toolCallId)}

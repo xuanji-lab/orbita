@@ -15,11 +15,14 @@ import {
   intraLineTokens,
   parseDiffLines,
   parseEditDiff,
+  formatToolDuration,
+  recordToolFrame,
   streamingThinkingKey,
   summarizeToolResult,
   thinkingDurationText,
   thinkingPreview,
   toolCallSummary,
+  toolDurationText,
   toolGroupStatus,
   toolResultText,
   writeContent,
@@ -364,6 +367,41 @@ describe("thinkingDurationText", () => {
 
   test("没赶上开始的旧会话（没见过的 key 直接落定）——量不到，不显示", () => {
     assert.equal(thinkingDurationText("k-unknown", false, 5_000), null);
+  });
+});
+
+describe("recordToolFrame / toolDurationText", () => {
+  test("running 帧记起点、终态帧记终点；增量帧重复到达不覆盖", () => {
+    assert.equal(toolDurationText("t1"), null);
+    recordToolFrame(toolItem({ toolCallId: "t1", status: "running", timestamp: 1_000 }));
+    // 后到的 running 帧不改起点（adapter 的增量 item_updated 也是 running 态）
+    recordToolFrame(toolItem({ toolCallId: "t1", status: "running", timestamp: 9_000 }));
+    assert.equal(toolDurationText("t1"), null, "进行中不显示");
+    recordToolFrame(toolItem({ toolCallId: "t1", timestamp: 13_300 }));
+    assert.equal(toolDurationText("t1"), "12.3 秒");
+    // 重复终态帧不改终点
+    recordToolFrame(toolItem({ toolCallId: "t1", timestamp: 99_000 }));
+    assert.equal(toolDurationText("t1"), "12.3 秒");
+  });
+
+  test("旧会话只有终态帧（没见过 running）——量不到，返回 null", () => {
+    recordToolFrame(toolItem({ toolCallId: "t2", timestamp: 5_000 }));
+    assert.equal(toolDurationText("t2"), null);
+  });
+
+  test("非 tool 记录不记（user/assistant 帧直接忽略）", () => {
+    recordToolFrame(userItem);
+    assert.equal(toolDurationText("item-undefined"), null);
+  });
+});
+
+describe("formatToolDuration", () => {
+  test("不足一分钟带一位小数；满一分钟「N 分 M 秒」且秒两位补零", () => {
+    assert.equal(formatToolDuration(80), "0.1 秒");
+    assert.equal(formatToolDuration(12_340), "12.3 秒");
+    assert.equal(formatToolDuration(59_940), "59.9 秒");
+    assert.equal(formatToolDuration(61_000), "1 分 01 秒");
+    assert.equal(formatToolDuration(125_000), "2 分 05 秒");
   });
 });
 

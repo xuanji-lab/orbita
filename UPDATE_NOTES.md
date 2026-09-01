@@ -1,5 +1,10 @@
 # UPDATE NOTES
 
+## bash 命令行能看到执行耗时了
+
+- bash / powershell 的工具行落定后在折叠行显示执行耗时（如「12.3 秒」），npm install、typecheck 这类慢命令不展开也知道花在哪。耗时来自工具级开始/结束帧的精确计时；重开的旧会话没有那两帧，量不到就不显示（不编数）。
+- 只给 shell 类工具显示——read/edit 这类毫秒级操作的耗时是噪音。
+
 ## powershell 工具行不再是「扳手 + 英文原名」
 
 - Windows 上 agent 实际执行的 powershell 工具（pi 0.84.3 的独立工具，bash 的 PowerShell 壳）此前图标落兜底扳手、组头显示英文原名、折叠行没有命令摘要。现在与 bash 同一待遇：终端图标、组头「执行 · N 条命令」、折叠行直接显示命令本身。

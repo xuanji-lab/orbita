@@ -220,6 +220,42 @@ export function thinkingDurationText(
   return formatThinkingDuration(entry.end - entry.start);
 }
 
+/**
+ * 工具执行的现场计时（bash/powershell 折叠行的耗时）。**事件帧驱动**：running 帧
+ * 的 timestamp 是 adapter 在 tool_execution_start 落的 now()，起点精确；终态帧落
+ * 终点。挂在事件入口（useChatSession）记——组折叠时成员行不渲染，渲染驱动会漏。
+ * 旧会话只有盘上终态帧、没见过 running 帧，量不到就返回 null（thinking 计时同款
+ * 限制）。ponytail: Map 无上限，每个工具几十字节。
+ */
+const toolTimers = new Map<string, { start: number; end: number | null }>();
+
+/** 记一帧工具记录。幂等：running 只记首个起点、终态只记首个终点（增量帧会重复到达）。 */
+export function recordToolFrame(item: TranscriptItem): void {
+  if (item.role !== "tool") return;
+  const entry = toolTimers.get(item.toolCallId);
+  if (item.status === "running") {
+    if (entry === undefined) toolTimers.set(item.toolCallId, { start: item.timestamp, end: null });
+    return;
+  }
+  if (entry === undefined || entry.end !== null) return;
+  toolTimers.set(item.toolCallId, { start: entry.start, end: item.timestamp });
+}
+
+/** 执行时长文案（如「12.3 秒」）；没记到起点（旧会话）或还在跑返回 null。 */
+export function toolDurationText(toolCallId: string): string | null {
+  const entry = toolTimers.get(toolCallId);
+  if (entry === undefined || entry.end === null) return null;
+  return formatToolDuration(entry.end - entry.start);
+}
+
+/** 工具时长格式：不足一分钟带一位小数（毫秒级工具是噪音，只有慢命令值得看），满一分钟「N 分 M 秒」。 */
+export function formatToolDuration(ms: number): string {
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)} 秒`;
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)} 分 ${String(whole % 60).padStart(2, "0")} 秒`;
+}
+
 /** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。 */
 export function summarizeToolResult(result: ToolTranscriptItem | undefined): string | null {
   if (result === undefined) return null;

@@ -16,6 +16,7 @@ import {
   type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
+import { recordToolFrame } from "./tool-results.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
@@ -170,6 +171,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         // 一轮跑完标题与 updatedAt 都变了，刷一次侧栏——**哪条会话跑完都刷**，
         // 后台完成的会话侧栏也该亮起来
         if (event.type === "phase" && event.phase === "idle") refreshSessions();
+        // 工具耗时在这里记账（事件必经之路）：组折叠时成员行不渲染，渲染驱动会漏
+        if (
+          event.type === "progress" &&
+          (event.progress.type === "item_started" ||
+            event.progress.type === "item_updated" ||
+            event.progress.type === "item_finished")
+        ) {
+          recordToolFrame(event.progress.item);
+        }
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
         setStates((prev) => applyAgentEvent(prev, event));
       }),
