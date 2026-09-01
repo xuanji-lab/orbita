@@ -434,7 +434,14 @@ async function handle(command: AgentCommand): Promise<void> {
     // 期间 loop 正在 stream 等待中，drain 不会插进来；即使竞态，后果只是某条
     // 提前/推后投递，不是丢失。
     const { steering, followUp } = live.session.clearQueue();
-    const plans = planQueueEdit(steering, followUp, command.index, command.text, command.op);
+    const plans = planQueueEdit(
+      steering,
+      followUp,
+      command.index,
+      command.text,
+      command.op,
+      command.newText,
+    );
     for (const plan of plans) {
       await (plan.as === "steer" ? live.session.steer(plan.text) : live.session.followUp(plan.text));
     }

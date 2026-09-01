@@ -228,7 +228,9 @@ export function ChatView(props: { session: ChatSession }) {
             phase={session.phase}
             onPromote={session.promoteQueued}
             onCancel={session.cancelQueued}
+            onEdit={session.editQueued}
             onCancelPending={session.cancelPendingSend}
+            onEditPending={session.editPendingSend}
           />
           {composer}
         </>

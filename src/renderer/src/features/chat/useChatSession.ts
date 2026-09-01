@@ -7,7 +7,10 @@ import {
   EMPTY_ENTRY,
   addPendingSend,
   applyAgentEvent,
+  consumePendingSends,
+  consumePendingTexts,
   createSessionStates,
+  editPendingSend,
   parseCompactCommand,
   removeApproval,
   removePendingSend,
@@ -15,6 +18,7 @@ import {
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
+  type PendingSend,
   type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
@@ -107,14 +111,18 @@ export interface ChatSession {
   stop: () => void;
   /** pi 排队快照（当前槽）：steering = 插队中，followUp = 等本轮结束 */
   queue: SessionEntry["queue"];
-  /** 压缩期间的本地缓冲：phase 离开 compaction 时自动逐条发出 */
-  pendingSends: readonly string[];
+  /** 本地待办（当前槽）：压缩期间的消息 + 排队的手动 /compact */
+  pendingSends: readonly PendingSend[];
   /** 排队项转插队（下一个工具边界注入当前轮）。index 指 [...steering, ...followUp] 拼接视图 */
   promoteQueued: (index: number, text: string) => void;
   /** 排队项移出 pi 队列（runtime 侧 clearQueue + 重放实现） */
   cancelQueued: (index: number, text: string) => void;
-  /** 取消一条压缩缓冲（纯本地状态） */
+  /** 排队项改文本（保持原属队列与顺位） */
+  editQueued: (index: number, text: string, newText: string) => void;
+  /** 取消一条本地待办（纯本地状态） */
   cancelPendingSend: (index: number) => void;
+  /** 改写一条本地待办的文本（compact 项不可编辑） */
+  editPendingSend: (index: number, text: string) => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
@@ -206,16 +214,39 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           recordToolFrame(event.progress.item);
         }
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
-        // 压缩结束（phase 离开 compaction）：缓冲消息自动逐条发出。此刻 runtime 侧
-        // 自动分流——已空闲就正常发送，又跑起来了（压缩后有 followUp 在跑）就进 pi
-        // 队列，两条路都是对的。读 ref 而不是闭包 states：上面可能有同拍的事件已经
-        // 更新过它。发送在 setStates 清缓冲之前触发，本回调按序执行不会重发。
+        // 本地待办的执行时机（读 ref 而不是闭包 states：同拍可能已有事件更新过它）：
+        //  - phase 到 idle：先发前面的 text，碰到第一个 compact 就执行它并停——
+        //    同时压两个会互相踩，剩余项留给压缩结束的下一拍
+        //  - phase 离开 compaction 但又跑起来（压缩后有排队消息在跑）：text 全放
+        //    （runtime 侧自动分流进 pi 队列），compact 必须等完全 idle
         if (event.type === "phase" && event.phase !== "compaction") {
-          const buffered = statesRef.current.get(event.sessionId)?.pendingSends ?? [];
-          for (const text of buffered) {
-            void api.agent.submit(event.sessionId, text).catch((cause: unknown) =>
-              setError(cause instanceof Error ? cause.message : String(cause)),
-            );
+          const id = event.sessionId;
+          const pending = statesRef.current.get(id)?.pendingSends ?? [];
+          if (pending.length > 0) {
+            if (event.phase === "idle") {
+              let executed = 0;
+              for (const item of pending) {
+                executed++;
+                if (item.kind === "compact") {
+                  void api.agent.compact(id, item.instructions).catch((cause: unknown) =>
+                    setError(cause instanceof Error ? cause.message : String(cause)),
+                  );
+                  break;
+                }
+                void api.agent.submit(id, item.text).catch((cause: unknown) =>
+                  setError(cause instanceof Error ? cause.message : String(cause)),
+                );
+              }
+              setStates((prev) => consumePendingSends(prev, id, executed));
+            } else {
+              for (const item of pending) {
+                if (item.kind !== "text") continue;
+                void api.agent.submit(id, item.text).catch((cause: unknown) =>
+                  setError(cause instanceof Error ? cause.message : String(cause)),
+                );
+              }
+              setStates((prev) => consumePendingTexts(prev, id));
+            }
           }
         }
         setStates((prev) => {
@@ -250,10 +281,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
     const compact = parseCompactCommand(text);
     if (compact !== null) {
-      // 已在压缩中再压没有意义（pi 会拒绝），也不进缓冲——缓冲发出的是普通消息
-      if (sessionRef.current !== null &&
-          statesRef.current.get(sessionRef.current)?.phase === "compaction") {
-        setError("正在压缩上下文，等它结束再压");
+      const busyId = sessionRef.current;
+      const busyPhase = busyId !== null ? statesRef.current.get(busyId)?.phase : undefined;
+      // 跑着或压缩中：/compact 也排队——不打断正在跑的轮，等完全空闲（pi 队列里的
+      // 排队消息也处理完）再压。压缩指令进不了 pi 队列（那里只存消息文本），只能本地等。
+      if (busyId !== null && busyPhase !== undefined && busyPhase !== "idle") {
+        setStates((prev) =>
+          addPendingSend(prev, busyId, { kind: "compact", instructions: compact.instructions }),
+        );
+        setDraft("");
         return;
       }
       // 压缩要有可续的会话：活着的直接压；从盘上打开还没唤醒的先按 resume
@@ -291,11 +327,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       return;
     }
     let id: string | null = sessionId;
-    // 压缩中 pi 连入队入口都关着（prompt 直接抛）：普通消息进本地缓冲，压缩结束自动发；
-    // /compact 在压缩中更无意义，直接拦下。
+    // 压缩中 pi 连入队入口都关着（prompt 直接抛）：消息进本地待办，压缩结束自动发
     if (id !== null && statesRef.current.get(id)?.phase === "compaction") {
-      setError("正在压缩上下文——这条先排着，压缩结束自动发送");
-      setStates((prev) => addPendingSend(prev, id as string, text));
+      setStates((prev) => addPendingSend(prev, id as string, { kind: "text", text }));
       setDraft("");
       return;
     }
@@ -530,13 +564,21 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
 
   // 排队编辑只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框
   const queueEdit = useCallback(
-    (op: "promote" | "cancel", index: number, text: string) => {
+    (op: "promote" | "cancel" | "edit", index: number, text: string, newText?: string) => {
       const id = sessionRef.current;
       if (id === null) return;
-      void api.agent.queueEdit(id, op, index, text);
+      void api.agent
+        .queueEdit(id, op, index, text, newText)
+        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
     },
     [],
   );
+
+  const editPending = useCallback((index: number, text: string) => {
+    const id = sessionRef.current;
+    if (id === null) return;
+    setStates((prev) => editPendingSend(prev, id, index, text));
+  }, []);
 
   const cancelPendingSend = useCallback((index: number) => {
     const id = sessionRef.current;
@@ -590,7 +632,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     pendingSends: entry.pendingSends,
     promoteQueued: (index: number, text: string) => queueEdit("promote", index, text),
     cancelQueued: (index: number, text: string) => queueEdit("cancel", index, text),
+    editQueued: (index: number, text: string, newText: string) =>
+      queueEdit("edit", index, text, newText),
     cancelPendingSend,
+    editPendingSend: editPending,
     newTask,
     newTaskIn,
     answerApproval,

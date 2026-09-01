@@ -27,6 +27,13 @@ export interface PendingApproval {
 }
 
 /**
+ * 本地待办的一条：text = 压缩期间发的普通消息（pi 压缩中连入队入口都关着）；
+ * compact = 排队的手动 `/compact`（pi 队列只能存消息文本，压缩指令进不去，
+ * 只能本地等时机）。两者都不能进 pi 队列，所以都排在这里。
+ */
+export type PendingSend = { kind: "text"; text: string } | { kind: "compact"; instructions?: string };
+
+/**
  * 输入框里的手动压缩指令：`/compact` 直接压缩，`/compact <要求>` 带自定义要求。
  * **必须在这里拦下**——发出去的话它会落到模型手里，模型会角色扮演一段
  * 「摘要」贴进对话，而什么都没压缩（真实发生过的事故，刀 0-3 的验收发现）。
@@ -58,11 +65,11 @@ export interface SessionEntry {
    */
   queue: { steering: readonly string[]; followUp: readonly string[] };
   /**
-   * 压缩期间的本地缓冲：pi 在压缩中连入队入口都关着（prompt 直接抛），这几条只能
-   * 排在 renderer；phase 一离开 compaction 就由 hook 逐条 submit（那时 runtime 侧
-   * 自动分流：空闲正常发、又在跑就进 pi 队列）。纯 ephemeral。
+   * 本地待发队列：phase 一离开 compaction，text 项立刻 submit（runtime 侧自动分流：
+   * 空闲正常发、又在跑就进 pi 队列）；compact 项必须等 phase 完全 idle 才执行——
+   * 排队消息（pi 队列里的）全处理完再压，压的就是完整对话。纯 ephemeral。
    */
-  pendingSends: readonly string[];
+  pendingSends: readonly PendingSend[];
   /**
    * 自动重试进行态（等待下一次重试中）。非 null 时：phase 为 turn 则重试行替换
    * Responding，phase 为 compaction 则补在压缩行下。任何 phase 事件都会清空它
@@ -115,9 +122,9 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       phase: event.phase === "idle" ? "idle" : event.phase === "compaction" ? "compaction" : "turn",
       // 任何 phase 事件都清重试槽：重试尝试开跑（agent_start）、整轮落定（settled）、
       // 压缩起止——都是「重试等待结束了」的时刻，倒数行不该再挂。
+      // pendingSends 不在这里清：执行与消费由 hook 在事件那拍完成（见 useChatSession），
+      // reducer 不知道 hook 执行到哪，抢先清会把没执行的消息丢掉。
       retry: null,
-      // 也清压缩缓冲：phase 变了说明压缩早已结束，hook 该发的已发走；残留即异常滞留
-      pendingSends: [],
     }));
   }
   if (event.type === "queue") {
@@ -272,18 +279,51 @@ export function markAllIdle(states: SessionStates): SessionStates {
   return changed ? next : states;
 }
 
-/** 压缩期间发送：消息进本地缓冲（phase 离开 compaction 时由 hook 自动发出）。 */
-export function addPendingSend(states: SessionStates, sessionId: string, text: string): SessionStates {
-  return update(states, sessionId, (entry) => ({ ...entry, pendingSends: [...entry.pendingSends, text] }));
+/** 本地待办入队（压缩期间的消息、排队的手动压缩）。 */
+export function addPendingSend(states: SessionStates, sessionId: string, item: PendingSend): SessionStates {
+  return update(states, sessionId, (entry) => ({ ...entry, pendingSends: [...entry.pendingSends, item] }));
 }
 
-/** 取消一条压缩缓冲。纯本地状态，即点即删，按下标定位；越界原样返回。 */
+/** 改写一条本地待办的文本（text 项改 text；compact 项目前不支持编辑）。 */
+export function editPendingSend(states: SessionStates, sessionId: string, index: number, text: string): SessionStates {
+  const entry = states.get(sessionId);
+  const item = entry?.pendingSends[index];
+  if (item === undefined || item.kind !== "text") return states;
+  return update(states, sessionId, (current) => ({
+    ...current,
+    pendingSends: current.pendingSends.map((pending, i) => (i === index ? { kind: "text", text } : pending)),
+  }));
+}
+
+/** 取消一条本地待办。纯本地状态，即点即删，按下标定位；越界原样返回。 */
 export function removePendingSend(states: SessionStates, sessionId: string, index: number): SessionStates {
   const entry = states.get(sessionId);
   if (entry === undefined || index < 0 || index >= entry.pendingSends.length) return states;
   return update(states, sessionId, (current) => ({
     ...current,
     pendingSends: current.pendingSends.filter((_, i) => i !== index),
+  }));
+}
+
+/**
+ * 消费前 n 条本地待办（hook 已执行它们）。越界的 n 当清空处理——执行方与消费方
+ * 读的是同一份快照，越界只在竞态下发生，宁可少留不可重发。
+ */
+export function consumePendingSends(states: SessionStates, sessionId: string, count: number): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || count <= 0) return states;
+  const nextItems = entry.pendingSends.slice(count);
+  if (nextItems.length === entry.pendingSends.length) return states;
+  return update(states, sessionId, (current) => ({ ...current, pendingSends: nextItems }));
+}
+
+/** 消费全部 text 项（agent 又跑起来的那拍：文本安全进 pi 队列，compact 继续等 idle）。 */
+export function consumePendingTexts(states: SessionStates, sessionId: string): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || !entry.pendingSends.some((item) => item.kind === "text")) return states;
+  return update(states, sessionId, (current) => ({
+    ...current,
+    pendingSends: current.pendingSends.filter((item) => item.kind !== "text"),
   }));
 }
 

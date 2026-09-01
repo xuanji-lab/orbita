@@ -41,3 +41,32 @@ describe("planQueueEdit", () => {
     assert.deepEqual(planQueueEdit([], [], 0, "x", "cancel"), []);
   });
 });
+
+describe("planQueueEdit · edit", () => {
+  test("followUp 项改文本，保持队列与顺位", () => {
+    const plans = planQueueEdit(["s1"], ["f1", "f2"], 2, "f2", "edit", "改好的");
+    assert.deepEqual(plans, [
+      { text: "s1", as: "steer" },
+      { text: "f1", as: "followUp" },
+      { text: "改好的", as: "followUp" },
+    ]);
+  });
+
+  test("steering 项改文本，仍是插队", () => {
+    const plans = planQueueEdit(["s1"], ["f1"], 0, "s1", "edit", "插队新文本");
+    assert.deepEqual(plans, [
+      { text: "插队新文本", as: "steer" },
+      { text: "f1", as: "followUp" },
+    ]);
+  });
+
+  test("text 不匹配：原样重放（编辑落空）", () => {
+    const plans = planQueueEdit(["s1"], [], 0, "别人", "edit", "新文本");
+    assert.deepEqual(plans, [{ text: "s1", as: "steer" }]);
+  });
+
+  test("newText 缺席：等价 no-op 重放", () => {
+    const plans = planQueueEdit([], ["f1"], 0, "f1", "edit");
+    assert.deepEqual(plans, [{ text: "f1", as: "followUp" }]);
+  });
+});

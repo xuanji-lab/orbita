@@ -10,6 +10,9 @@ import {
   addPendingSend,
   applyAgentEvent,
   compactionBoundaryText,
+  consumePendingSends,
+  consumePendingTexts,
+  editPendingSend,
   markAllIdle,
   mergeCompactions,
   parseCompactCommand,
@@ -433,7 +436,7 @@ describe("compactionBoundaryText —— 界碑折叠行文案", () => {
   });
 });
 
-describe("排队槽 —— pi 队列快照全量覆盖，压缩缓冲走本地", () => {
+describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind 分流", () => {
   const queueEvent = (steering: string[], followUp: string[]): AgentEvent => ({
     type: "queue",
     sessionId: "A",
@@ -448,28 +451,53 @@ describe("排队槽 —— pi 队列快照全量覆盖，压缩缓冲走本地",
     assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
   });
 
-  test("phase 事件清压缩缓冲，但不动 pi 队列（队列真源在 queue 事件）", () => {
-    let states = addPendingSend(new Map(), "A", "压缩完发我");
+  test("phase 事件不清本地待办（消费由 hook 执行后显式做），也不动 pi 队列", () => {
+    let states = addPendingSend(new Map(), "A", { kind: "text", text: "压缩完发我" });
     states = applyAgentEvent(states, queueEvent([], ["pi 队列那条"]));
     states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
-    assert.deepEqual(states.get("A")?.pendingSends, []);
+    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "text", text: "压缩完发我" }]);
     assert.deepEqual(states.get("A")?.queue.followUp, ["pi 队列那条"]);
   });
 
-  test("addPendingSend / removePendingSend：缓冲增删按序", () => {
-    let states = addPendingSend(new Map(), "A", "第一条");
-    states = addPendingSend(states, "A", "第二条");
-    states = removePendingSend(states, "A", 0);
-    assert.deepEqual(states.get("A")?.pendingSends, ["第二条"]);
-    // 删不存在的下标不动原槽
+  test("addPendingSend / removePendingSend / editPendingSend：增删改按序，compact 项不可编辑", () => {
+    let states = addPendingSend(new Map(), "A", { kind: "text", text: "第一条" });
+    states = addPendingSend(states, "A", { kind: "compact", instructions: "保留代码细节" });
+    states = editPendingSend(states, "A", 0, "改过的第一条");
+    assert.deepEqual(states.get("A")?.pendingSends, [
+      { kind: "text", text: "改过的第一条" },
+      { kind: "compact", instructions: "保留代码细节" },
+    ]);
+    // compact 项编辑落空（原样返回）
     const before = states;
-    states = removePendingSend(states, "A", 9);
+    states = editPendingSend(states, "A", 1, "改不了");
     assert.equal(states, before);
+    states = removePendingSend(states, "A", 0);
+    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "compact", instructions: "保留代码细节" }]);
+    // 删不存在的下标不动原槽
+    const before2 = states;
+    states = removePendingSend(states, "A", 9);
+    assert.equal(states, before2);
   });
 
-  test("runtime 没了：队列与缓冲一并清空（物理消失，不留尸体）", () => {
+  test("consumePendingSends：消费前缀（hook 执行了多少吃多少）", () => {
+    let states = addPendingSend(new Map(), "A", { kind: "text", text: "a" });
+    states = addPendingSend(states, "A", { kind: "compact" });
+    states = addPendingSend(states, "A", { kind: "text", text: "b" });
+    states = consumePendingSends(states, "A", 2);
+    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "text", text: "b" }]);
+  });
+
+  test("consumePendingTexts：只吃 text，compact 留给 idle 拍", () => {
+    let states = addPendingSend(new Map(), "A", { kind: "text", text: "a" });
+    states = addPendingSend(states, "A", { kind: "compact" });
+    states = addPendingSend(states, "A", { kind: "text", text: "b" });
+    states = consumePendingTexts(states, "A");
+    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "compact" }]);
+  });
+
+  test("runtime 没了：队列与本地待办一并清空（物理消失，不留尸体）", () => {
     let states = applyAgentEvent(new Map(), queueEvent(["s"], ["f"]));
-    states = addPendingSend(states, "A", "缓冲");
+    states = addPendingSend(states, "A", { kind: "text", text: "缓冲" });
     states = applyAgentEvent(states, { type: "failed", sessionId: null, message: "runtime exited" });
     assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
     assert.deepEqual(states.get("A")?.pendingSends, []);
@@ -477,7 +505,7 @@ describe("排队槽 —— pi 队列快照全量覆盖，压缩缓冲走本地",
 
   test("seedFromDisk 清空排队槽：ephemeral 状态不跨会话存留", () => {
     let states = applyAgentEvent(new Map(), queueEvent(["s"], ["f"]));
-    states = addPendingSend(states, "A", "缓冲");
+    states = addPendingSend(states, "A", { kind: "compact" });
     states = seedFromDisk(states, "A", []);
     assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
     assert.deepEqual(states.get("A")?.pendingSends, []);

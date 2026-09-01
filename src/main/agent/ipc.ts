@@ -81,8 +81,14 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(
     ipcChannels.agentQueueEdit,
-    (_e, sessionId: string, op: "promote" | "cancel", index: number, text: string) =>
-      host.queueEdit(sessionId, op, index, text),
+    (
+      _e,
+      sessionId: string,
+      op: "promote" | "cancel" | "edit",
+      index: number,
+      text: string,
+      newText?: string,
+    ) => host.queueEdit(sessionId, op, index, text, newText),
   );
   ipcMain.handle(
     ipcChannels.agentCompact,
