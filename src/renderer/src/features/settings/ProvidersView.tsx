@@ -4,17 +4,21 @@ import { KNOWN_PROVIDERS, type KnownProvider } from "@shared/known-providers";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
 import { formatCostRate, formatTokens } from "../../utils/format-tokens.ts";
+import { buildModelDecl, contextWindowWarning, parseOverrideNumber } from "./model-meta.ts";
 
 /**
  * Provider 设置面。
  *
- * 三条刻意的设计约束，都是为了不重蹈 proma 那条路：
+ * 四条刻意的设计约束，都是为了不重蹈 proma 那条路：
  *  1. **没有协议选择框**——协议由「选哪个 provider」完全决定（智谱标准 API 是 OpenAI 兼容，
  *     智谱 Coding Plan 是 Anthropic 兼容），让用户选第二次只会选错。
  *  2. **下拉框只列我们适配过的**，不是 pi 的 41 个。pi 的目录是「模型参数」的真源，
  *     不是「怎么接入」的真源。
  *  3. **已发现 / 已启用两张卡**：/models 拿回来的是候选，用户点进「已启用」才算数——
  *     发现的东西直接可用会让模型下拉框变得不确定。
+ *  4. **保存语义就近分层**（对齐 pi 的 /models 即选即生效）：已存在 provider 的启停与
+ *     参数改动在操作发生的那一层立即落盘；表单的 Save 只管身份字段（名称 / URL / key）。
+ *     此前三层嵌套一个保存还沉在表单最底部——用户改完参数找不到保存按钮，真实事故。
  */
 export function ProvidersView(props: { onChange?: () => void }) {
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
@@ -184,10 +188,42 @@ export function ProvidersView(props: { onChange?: () => void }) {
     setRevealed(await api.provider.reveal(editingId));
   };
 
-  /** 启用一个模型：**只带 id，不预填目录值**——预填会把 4 小时刷新的目录冻结进配置 */
-  const enableModel = (id: string) => {
-    if (draft.models.some((m) => m.id === id)) return;
-    setDraft({ ...draft, models: [...draft.models, { id }] });
+  /**
+   * 模型层变更的就地落盘（约束 4）：已存在的 provider 立即 read-modify-write——
+   * Enable / Remove / 参数 Apply 都不再等表单底部的 Save。以**盘上的 provider** 为底
+   * 合并，不夹带身份字段（名称 / URL / key）的未保存改动；还没落盘的新建 provider
+   * 只动草稿，随 Add provider 一起提交。返回是否成功（失败时 issues 已就位，编辑器留着标红）。
+   */
+  const mutateModels = async (mutate: (models: ModelDecl[]) => ModelDecl[]): Promise<boolean> => {
+    const next = mutate(draft.models.map((m) => ({ ...m })));
+    if (editingId === null) {
+      setDraft((d) => ({ ...d, models: next }));
+      return true;
+    }
+    const current = providers?.find((p) => p.id === editingId);
+    if (current === undefined) return false;
+    try {
+      const result = await api.provider.upsert({
+        provider: {
+          id: current.id,
+          displayName: current.displayName,
+          endpoint: current.endpoint,
+          models: { declared: next },
+          auth: { scheme: current.auth.scheme },
+        },
+      });
+      if (!result.ok) {
+        setIssues(result.issues);
+        return false;
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    }
+    setIssues([]);
+    setDraft((d) => ({ ...d, models: next.map((m) => ({ ...m })) }));
+    await refresh();
+    return true;
   };
 
   const save = async () => {
@@ -216,7 +252,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
       <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
         Model parameters come from pi's catalog, refreshed every four hours. For models the catalog
         doesn't know (custom gateways), fill in the parameters yourself — they override the catalog
-        wherever it's wrong.
+        wherever it's wrong. Enabling, removing and parameter changes apply immediately; Save only
+        covers the name, URL and key.
       </p>
 
       {error !== null && <Line tone="bad">{error}</Line>}
@@ -342,7 +379,13 @@ export function ProvidersView(props: { onChange?: () => void }) {
               count={draft.models.length}
               issue={issueFor("models.declared")}
               footer={
-                <AddModel onAdd={(id) => enableModel(id)} />
+                <AddModel
+                  onAdd={(id) =>
+                    void mutateModels((models) =>
+                      models.some((m) => m.id === id) ? models : [...models, { id }],
+                    )
+                  }
+                />
               }
             >
               {draft.models.map((model, index) => {
@@ -365,8 +408,9 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       <button
                         type="button"
                         onClick={() => {
+                          // 先收起行内编辑器：Remove 会平移下标，开着的编辑器会绑错行
                           setEditingModelIndex(null);
-                          setDraft({ ...draft, models: draft.models.filter((m) => m.id !== model.id) });
+                          void mutateModels((models) => models.filter((m) => m.id !== model.id));
                         }}
                         style={compactControlStyle}
                       >
@@ -379,12 +423,15 @@ export function ProvidersView(props: { onChange?: () => void }) {
                         model={model}
                         meta={meta}
                         issueFor={issueFor}
-                        onChange={(next) =>
-                          setDraft({
-                            ...draft,
-                            models: draft.models.map((m, i) => (i === index ? next : m)),
-                          })
-                        }
+                        onApply={(next) => {
+                          void (async () => {
+                            const ok = await mutateModels((models) =>
+                              models.map((m, i) => (i === index ? next : m)),
+                            );
+                            // 失败（校验 issues / IPC 错误）编辑器留着标红；成功即收起
+                            if (ok) setEditingModelIndex(null);
+                          })();
+                        }}
                       />
                     )}
                   </li>
@@ -418,7 +465,9 @@ export function ProvidersView(props: { onChange?: () => void }) {
                     <button
                       type="button"
                       onClick={() => {
-                        enableModel(id);
+                        void mutateModels((models) =>
+                          models.some((m) => m.id === id) ? models : [...models, { id }],
+                        );
                         setDiscovered(discovered.filter((m) => m !== id));
                       }}
                       style={compactControlStyle}
@@ -529,15 +578,16 @@ function modelCostTitle(decl: ModelDecl | undefined, meta: BuiltinModel | undefi
 
 /**
  * 模型参数的行内编辑器。**空 = 不覆盖**：placeholder 永远显示当前生效值，填了的才落
- * providers.json。数字以 string 暂存（受控输入），离开编辑器前就写回 draft——
- * 非法值（NaN）由 upsert 的 validateProvider 结构化拦下，按字段标红。
+ * providers.json。数字以 string 暂存（受控输入），**改动只在本地攒着，Apply 才提交**
+ * ——保存语义与编辑器同层（约束 4），不再指望表单底部的 Save。非法值（NaN）由
+ * upsert 的 validateProvider 结构化拦下，按字段标红、编辑器保持展开。
  */
 function ModelMetaEditor(props: {
   index: number;
   model: ModelDecl;
   meta: BuiltinModel | undefined;
   issueFor: (field: string) => string | undefined;
-  onChange: (next: ModelDecl) => void;
+  onApply: (next: ModelDecl) => void;
 }) {
   const [ctx, setCtx] = useState(props.model.contextWindow?.toString() ?? "");
   const [maxOut, setMaxOut] = useState(props.model.maxTokens?.toString() ?? "");
@@ -555,31 +605,14 @@ function ModelMetaEditor(props: {
     cacheRead: props.model.cost?.cacheRead ?? props.meta?.cost.cacheRead ?? 0,
     cacheWrite: props.model.cost?.cacheWrite ?? props.meta?.cost.cacheWrite ?? 0,
   };
-  const toNumber = (raw: string): number | undefined => (raw.trim() === "" ? undefined : Number(raw));
-  const applyCost = (next: typeof rates) => {
-    setRates(next);
-    // 四格全空 = 整份撤掉覆盖；填了任何一格，其余按 0（明确报价）计
-    if (next.input === "" && next.output === "" && next.cacheRead === "" && next.cacheWrite === "") {
-      props.onChange({ ...props.model, cost: undefined });
-      return;
-    }
-    props.onChange({
-      ...props.model,
-      cost: {
-        input: Number(next.input || "0"),
-        output: Number(next.output || "0"),
-        cacheRead: Number(next.cacheRead || "0"),
-        cacheWrite: Number(next.cacheWrite || "0"),
-      },
-    });
-  };
+  const field = (name: string) => `models.declared[${props.index}].${name}`;
+  const apply = () => props.onApply(buildModelDecl(props.model, { ctx, maxOut, rates }));
   const reset = () => {
     setCtx("");
     setMaxOut("");
     setRates({ input: "", output: "", cacheRead: "", cacheWrite: "" });
-    props.onChange({ id: props.model.id, contextWindow: undefined, maxTokens: undefined, cost: undefined });
+    props.onApply(buildModelDecl(props.model, { ctx: "", maxOut: "", rates: { input: "", output: "", cacheRead: "", cacheWrite: "" } }));
   };
-  const field = (name: string) => `models.declared[${props.index}].${name}`;
   return (
     <div
       style={{
@@ -596,68 +629,71 @@ function ModelMetaEditor(props: {
           value={ctx}
           placeholder={String(eff.ctx)}
           issue={props.issueFor(field("contextWindow"))}
-          onChange={(raw) => {
-            setCtx(raw);
-            props.onChange({ ...props.model, contextWindow: toNumber(raw) });
-          }}
+          warning={contextWindowWarning(parseOverrideNumber(ctx)) ?? undefined}
+          onChange={setCtx}
         />
         <NumCell
           label="max output"
           value={maxOut}
           placeholder={String(eff.maxOut)}
           issue={props.issueFor(field("maxTokens"))}
-          onChange={(raw) => {
-            setMaxOut(raw);
-            props.onChange({ ...props.model, maxTokens: toNumber(raw) });
-          }}
+          onChange={setMaxOut}
         />
         <NumCell
           label="cost $/M in"
           value={rates.input}
           placeholder={String(eff.input)}
           issue={props.issueFor(field("cost.input"))}
-          onChange={(raw) => applyCost({ ...rates, input: raw })}
+          onChange={(raw) => setRates({ ...rates, input: raw })}
         />
         <NumCell
           label="out"
           value={rates.output}
           placeholder={String(eff.output)}
           issue={props.issueFor(field("cost.output"))}
-          onChange={(raw) => applyCost({ ...rates, output: raw })}
+          onChange={(raw) => setRates({ ...rates, output: raw })}
         />
         <NumCell
           label="cache read"
           value={rates.cacheRead}
           placeholder={String(eff.cacheRead)}
           issue={props.issueFor(field("cost.cacheRead"))}
-          onChange={(raw) => applyCost({ ...rates, cacheRead: raw })}
+          onChange={(raw) => setRates({ ...rates, cacheRead: raw })}
         />
         <NumCell
           label="cache write"
           value={rates.cacheWrite}
           placeholder={String(eff.cacheWrite)}
           issue={props.issueFor(field("cost.cacheWrite"))}
-          onChange={(raw) => applyCost({ ...rates, cacheWrite: raw })}
+          onChange={(raw) => setRates({ ...rates, cacheWrite: raw })}
         />
       </span>
       <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
         <span style={metaStyle}>
           Empty fields use the catalog value (or the {formatTokens(FALLBACK_CONTEXT_WINDOW)} fallback).
         </span>
-        <button type="button" onClick={reset} style={{ ...compactControlStyle, marginInlineStart: "auto" }}>
+        <button
+          type="button"
+          onClick={reset}
+          style={{ ...compactControlStyle, marginInlineStart: "auto" }}
+        >
           Reset
+        </button>
+        <button type="button" onClick={apply} style={compactControlStyle}>
+          Apply
         </button>
       </span>
     </div>
   );
 }
 
-/** 行内编辑器的一个数字格：值以 string 暂存，空串 = 不覆盖 */
+/** 行内编辑器的一个数字格：值以 string 暂存，空串 = 不覆盖；warning 是不拦保存的防呆提示 */
 function NumCell(props: {
   label: string;
   value: string;
   placeholder: string;
   issue?: string | undefined;
+  warning?: string | undefined;
   onChange: (raw: string) => void;
 }) {
   return (
@@ -670,9 +706,11 @@ function NumCell(props: {
         placeholder={props.placeholder}
         style={{ ...inputStyle, height: "var(--control-height-sm)", width: 104 }}
       />
-      {props.issue !== undefined && (
+      {props.issue !== undefined ? (
         <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-danger)" }}>{props.issue}</span>
-      )}
+      ) : props.warning !== undefined ? (
+        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-warning)" }}>{props.warning}</span>
+      ) : null}
     </label>
   );
 }
