@@ -30,6 +30,7 @@ import {
   type PiExtensionApi,
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
+import { planQueueEdit } from "./queue-edit.ts";
 
 type ParentPortLike = {
   on(event: "message", listener: (event: { data: unknown }) => void): void;
@@ -63,6 +64,14 @@ interface LiveSession {
   adapter: TranscriptAdapter;
   unsubscribe: () => void;
   mode: PermissionMode;
+  /**
+   * 已在本地回显（adapter.userPrompt 造过 item）的用户消息文本。pi 随后 emit 的
+   * user `message_start` 是回声，命中即丢弃；**未命中**的一定是排队消息的投递
+   * （正常发送永远先 userPrompt，排队发送要等投递才 message_start）。
+   * ponytail: 按文本对账——两条同文本消息一正常一排队的极端场景会误判，与 pi
+   * 内部的 queue 对账同款天花板。
+   */
+  echoed: Set<string>;
 }
 
 const sessions = new Map<string, LiveSession>();
@@ -187,9 +196,22 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
   const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
+  const echoed = new Set<string>();
   const unsubscribe = session.subscribe((event) => {
     const adaptable = asAdaptable(event);
     if (adaptable) {
+      // 排队消息在这里「迟到显形」：本地没回显过的 user message_start 一定是 pi 从
+      // 队列里投递出来的，当场造 item（显示 + 落盘同步发生——排队期间两边本子都没写过）。
+      if (adaptable.type === "message_start" && adaptable.message.role === "user") {
+        const text = userText(adaptable.message.content);
+        if (echoed.has(text)) {
+          echoed.delete(text);
+        } else if (text !== "") {
+          for (const progress of adapter.userPrompt(text)) {
+            send({ type: "progress", sessionId: command.sessionId, progress });
+          }
+        }
+      }
       for (const progress of adapter.apply(adaptable)) {
         send({ type: "progress", sessionId: command.sessionId, progress });
       }
@@ -199,6 +221,15 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
       return;
     }
     if (event.type === "agent_start") send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
+    // 排队快照原样翻译：入队 / 投递 / 清队后 pi 都重发整份，renderer 覆盖槽即可
+    if (event.type === "queue_update") {
+      send({
+        type: "queue",
+        sessionId: command.sessionId,
+        steering: [...event.steering],
+        followUp: [...event.followUp],
+      });
+    }
     if (event.type === "agent_settled") {
       send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
       // 整轮落定兜一次：接住最后一条消息之后落账的用量（toolResult 计费）与 abort 边角
@@ -277,7 +308,7 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     }
   });
 
-  sessions.set(command.sessionId, { session, adapter, unsubscribe, mode: command.mode });
+  sessions.set(command.sessionId, { session, adapter, unsubscribe, mode: command.mode, echoed });
   // 建会话即推一次：新会话给零值；唤醒的旧会话立刻给真累计——余量不用等第一轮跑完
   pushStats(command.sessionId, session);
   send({
@@ -363,15 +394,42 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
   if (command.type === "submit") {
-    // 用户消息先落地再发给模型——不等模型回，UI 立刻看得到自己刚说的话
+    // expandPromptTemplates 关掉：展开会改写文本，破坏下面按文本做的回声对账；
+    // 且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
+    if (live.session.isStreaming) {
+      // 运行中：进 followUp 队列，本轮结束后投递。**不本地回显**——排队期间可取消，
+      // 取消就当没说过（两边本子都没写过）；投递时经 user message_start 迟到显形。
+      await live.session.prompt(command.text, {
+        streamingBehavior: "followUp",
+        expandPromptTemplates: false,
+      });
+      return;
+    }
+    // 用户消息先落地再发给模型——不等模型回，UI 立刻看得到自己刚说的话。
+    // echoed 记一笔：pi 随后 emit 的 message_start 是这条的回声，别重复显示。
+    live.echoed.add(command.text);
     for (const progress of live.adapter.userPrompt(command.text)) {
       send({ type: "progress", sessionId: command.sessionId, progress });
     }
-    await live.session.prompt(command.text);
+    await live.session.prompt(command.text, { expandPromptTemplates: false });
     return;
   }
   if (command.type === "abort") {
+    // 停止 = 全放弃：排队消息清掉（clearQueue 会触发 queue_update，UI 的排队卡片随之消失）。
+    // pi 的 abort 自己不清队列，不清的话滞留消息会在下一次发送时全部涌进模型。
+    live.session.clearQueue();
     live.session.abort();
+    return;
+  }
+  if (command.type === "queueEdit") {
+    // pi 没有单条删 / 挪的 API：先全清拿真值，再按规划重放。
+    // 期间 loop 正在 stream 等待中，drain 不会插进来；即使竞态，后果只是某条
+    // 提前/推后投递，不是丢失。
+    const { steering, followUp } = live.session.clearQueue();
+    const plans = planQueueEdit(steering, followUp, command.index, command.text, command.op);
+    for (const plan of plans) {
+      await (plan.as === "steer" ? live.session.steer(plan.text) : live.session.followUp(plan.text));
+    }
     return;
   }
   if (command.type === "compact") {
@@ -386,6 +444,26 @@ async function handle(command: AgentCommand): Promise<void> {
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——
   // 曾经这里是无 if 的兜底（新命令会静默销毁会话），那是事故的形状
   command satisfies never;
+}
+
+/**
+ * 从 user 消息的 content 块提取纯文本，供回声对账用。只认 text 块——
+ * 与 adapter.userPrompt 造 item 的文本同一来源（submit 只发纯文本）。
+ */
+function userText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      parts.push((block as { text: string }).text);
+    }
+  }
+  return parts.join("\n");
 }
 
 /**

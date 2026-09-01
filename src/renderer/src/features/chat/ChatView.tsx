@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
+import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryText, mergeCompactions } from "./session-states";
 import { isAtBottom } from "./scroll";
 import {
@@ -123,7 +124,11 @@ export function ChatView(props: { session: ChatSession }) {
       }}
       onStop={session.stop}
       placeholder={
-        session.sessionId === null ? "Ask anything, or start a task" : "Reply, or steer the agent"
+        session.sessionId === null
+          ? "Ask anything, or start a task"
+          : session.phase === "idle"
+            ? "Reply, or steer the agent"
+            : "补充指令，回车排队发送"
       }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
@@ -220,6 +225,14 @@ export function ChatView(props: { session: ChatSession }) {
           {session.approvals[0] && (
             <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
           )}
+          {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
+          <QueueStrip
+            queue={session.queue}
+            pendingSends={session.pendingSends}
+            onPromote={session.promoteQueued}
+            onCancel={session.cancelQueued}
+            onCancelPending={session.cancelPendingSend}
+          />
           {composer}
         </>
       }

@@ -17,7 +17,7 @@ export function Composer(props: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
-  /** 打断当前这一轮。跑着的时候发送键变成停止键——同一个位置，同一件事的两面 */
+  /** 打断当前这一轮。没字 + 跑着时发送键变停止键；有字时永远是发送（跑着 = 排队） */
   onStop: () => void;
   placeholder: string;
   disabled?: boolean;
@@ -27,7 +27,10 @@ export function Composer(props: {
   const [hover, setHover] = useState(false);
   const disabled = props.disabled === true;
   const running = props.running === true;
-  const sendable = !disabled && !running && props.value.trim() !== "";
+  // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
+  // 同一个位置的两面，按输入态切换。想停止时清掉草稿即可，排队是高频动作、停止是少数。
+  const sendable = !disabled && props.value.trim() !== "";
+  const stopping = running && !sendable;
   return (
     <div
       style={{
@@ -79,10 +82,10 @@ export function Composer(props: {
         {props.bottomSlot}
         <button
           type="button"
-          aria-label={running ? "Stop" : "Send"}
-          title={running ? "Stop this turn" : "Send"}
-          disabled={!running && !sendable}
-          onClick={() => (running ? props.onStop() : props.onSubmit())}
+          aria-label={sendable ? "Send" : stopping ? "Stop" : "Send"}
+          title={sendable ? "Send" : stopping ? "Stop this turn" : "Send"}
+          disabled={!sendable && !stopping}
+          onClick={() => (sendable ? props.onSubmit() : props.onStop())}
           onMouseEnter={() => setHover(true)}
           onMouseLeave={() => setHover(false)}
           style={{
@@ -97,23 +100,23 @@ export function Composer(props: {
             border: 0,
             borderRadius: "var(--radius-pill)",
             // 玻璃上的禁用态用实色，不用 opacity（设计系统 *Hover, press, disabled*）
-            background: running
-              ? "var(--color-danger-soft)"
-              : sendable
-                ? hover
-                  ? "var(--color-accent-strong)"
-                  : "var(--color-accent)"
+            background: sendable
+              ? hover
+                ? "var(--color-accent-strong)"
+                : "var(--color-accent)"
+              : stopping
+                ? "var(--color-danger-soft)"
                 : "var(--color-bg-hover)",
-            color: running
-              ? "var(--color-danger)"
-              : sendable
-                ? "var(--color-accent-fg)"
+            color: sendable
+              ? "var(--color-accent-fg)"
+              : stopping
+                ? "var(--color-danger)"
                 : "var(--color-text-tertiary)",
-            cursor: running || sendable ? "pointer" : "not-allowed",
+            cursor: sendable || stopping ? "pointer" : "not-allowed",
             transition: "var(--transition-hover)",
           }}
         >
-          <Icon name={running ? "square" : "arrow-up"} size={running ? 12 : 16} />
+          <Icon name={sendable ? "arrow-up" : "square"} size={sendable ? 16 : 12} />
         </button>
       </div>
     </div>

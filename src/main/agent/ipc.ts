@@ -80,6 +80,11 @@ export function registerAgentIpc(
   );
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(
+    ipcChannels.agentQueueEdit,
+    (_e, sessionId: string, op: "promote" | "cancel", index: number, text: string) =>
+      host.queueEdit(sessionId, op, index, text),
+  );
+  ipcMain.handle(
     ipcChannels.agentCompact,
     (_e, sessionId: string, instructions?: string) => host.compact(sessionId, instructions),
   );

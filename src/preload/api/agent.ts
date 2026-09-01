@@ -12,6 +12,13 @@ export const agentApi = {
     ipcRenderer.invoke(ipcChannels.agentCreate, input),
   submit: (sessionId: string, text: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSubmit, sessionId, text),
+  /** 编辑排队消息：promote = 转插队，cancel = 移出队列。index+text 防错删（乐观校验） */
+  queueEdit: (
+    sessionId: string,
+    op: "promote" | "cancel",
+    index: number,
+    text: string,
+  ): Promise<void> => ipcRenderer.invoke(ipcChannels.agentQueueEdit, sessionId, op, index, text),
   abort: (sessionId: string): Promise<void> => ipcRenderer.invoke(ipcChannels.agentAbort, sessionId),
   /** 手动压缩上下文（`/compact`）。忙碌态与界碑从 agent:event 的 compaction 事件回来 */
   compact: (sessionId: string, instructions?: string): Promise<void> =>

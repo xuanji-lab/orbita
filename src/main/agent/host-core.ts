@@ -135,6 +135,16 @@ export class AgentHostCore {
     this.post({ type: "submit", sessionId, text });
   }
 
+  async queueEdit(
+    sessionId: string,
+    op: "promote" | "cancel",
+    index: number,
+    text: string,
+  ): Promise<void> {
+    await this.ensure();
+    this.post({ type: "queueEdit", sessionId, op, index, text });
+  }
+
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
     await this.ensure();
     this.post({ type: "setMode", sessionId, mode });

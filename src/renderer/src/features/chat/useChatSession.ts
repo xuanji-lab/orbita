@@ -5,10 +5,13 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
 import {
   EMPTY_ENTRY,
+  addPendingSend,
   applyAgentEvent,
+  clearPendingSends,
   createSessionStates,
   parseCompactCommand,
   removeApproval,
+  removePendingSend,
   removeSessionEntry,
   seedFromDisk,
   setEntryPhase,
@@ -103,6 +106,16 @@ export interface ChatSession {
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
+  /** pi 排队快照（当前槽）：steering = 插队中，followUp = 等本轮结束 */
+  queue: SessionEntry["queue"];
+  /** 压缩期间的本地缓冲：phase 离开 compaction 时自动逐条发出 */
+  pendingSends: readonly string[];
+  /** 排队项转插队（下一个工具边界注入当前轮）。index 指 [...steering, ...followUp] 拼接视图 */
+  promoteQueued: (index: number, text: string) => void;
+  /** 排队项移出 pi 队列（runtime 侧 clearQueue + 重放实现） */
+  cancelQueued: (index: number, text: string) => void;
+  /** 取消一条压缩缓冲（纯本地状态） */
+  cancelPendingSend: (index: number) => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
@@ -114,6 +127,13 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const [sessionId, setSessionId] = useState<string | null>(null);
   /** 全部会话的槽；「当前看哪条」由 sessionId ?? opened?.id 推出，不另设状态 */
   const [states, setStates] = useState<SessionStates>(createSessionStates);
+  /**
+   * states 的同步镜像。事件回调（自动重发缓冲、send 查压缩态）要在 setStates 之外
+   * 读最新值——闭包里的 states 是渲染时的旧值。在 setStates 的 updater 里同步：
+   * 幂等（重复赋同一个 next），换掉effect 方案是因为 effect 晚一拍，连发两个
+   * phase 事件时第二个会拿旧值重发已被清空的缓冲。
+   */
+  const statesRef = useRef<SessionStates>(states);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   /** 三档权限模式。默认 plan——**默认最保守**，开工具要用户自己往下调。 */
@@ -134,6 +154,12 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   useEffect(() => {
     sessionRef.current = sessionId;
   }, [sessionId]);
+
+  // ref 兜底同步：onEvent 的 updater 已即时写 ref，这里接住其余 setStates 路径
+  // （seed / removeApproval / 乐观 phase……）——只晚一拍，这些路径没有重发竞态。
+  useEffect(() => {
+    statesRef.current = states;
+  }, [states]);
 
   const refreshSessions = useCallback(() => {
     void api.session
@@ -181,7 +207,23 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           recordToolFrame(event.progress.item);
         }
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
-        setStates((prev) => applyAgentEvent(prev, event));
+        // 压缩结束（phase 离开 compaction）：缓冲消息自动逐条发出。此刻 runtime 侧
+        // 自动分流——已空闲就正常发送，又跑起来了（压缩后有 followUp 在跑）就进 pi
+        // 队列，两条路都是对的。读 ref 而不是闭包 states：上面可能有同拍的事件已经
+        // 更新过它。发送在 setStates 清缓冲之前触发，本回调按序执行不会重发。
+        if (event.type === "phase" && event.phase !== "compaction") {
+          const buffered = statesRef.current.get(event.sessionId)?.pendingSends ?? [];
+          for (const text of buffered) {
+            void api.agent.submit(event.sessionId, text).catch((cause: unknown) =>
+              setError(cause instanceof Error ? cause.message : String(cause)),
+            );
+          }
+        }
+        setStates((prev) => {
+          const next = applyAgentEvent(prev, event);
+          statesRef.current = next;
+          return next;
+        });
       }),
     [refreshSessions],
   );
@@ -209,6 +251,12 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
     const compact = parseCompactCommand(text);
     if (compact !== null) {
+      // 已在压缩中再压没有意义（pi 会拒绝），也不进缓冲——缓冲发出的是普通消息
+      if (sessionRef.current !== null &&
+          statesRef.current.get(sessionRef.current)?.phase === "compaction") {
+        setError("正在压缩上下文，等它结束再压");
+        return;
+      }
       // 压缩要有可续的会话：活着的直接压；从盘上打开还没唤醒的先按 resume
       // 唤醒再压。**绝不为压缩新建会话**——对一条空会话压缩没有意义。
       let active = sessionRef.current;
@@ -244,6 +292,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       return;
     }
     let id: string | null = sessionId;
+    // 压缩中 pi 连入队入口都关着（prompt 直接抛）：普通消息进本地缓冲，压缩结束自动发；
+    // /compact 在压缩中更无意义，直接拦下。
+    if (id !== null && statesRef.current.get(id)?.phase === "compaction") {
+      setError("正在压缩上下文——这条先排着，压缩结束自动发送");
+      setStates((prev) => addPendingSend(prev, id as string, text));
+      setDraft("");
+      return;
+    }
     try {
       if (id === null) {
         if (model === null) throw new Error("Add a provider with at least one model first");
@@ -285,8 +341,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, [draft, sessionId, model, mode, cwd, workspaceId, defaultCwd, opened, refreshSessions]);
 
   const stop = useCallback(() => {
-    if (sessionRef.current === null) return;
-    void api.agent.abort(sessionRef.current);
+    const id = sessionRef.current;
+    if (id === null) return;
+    // 停止 = 全放弃：pi 队列由 runtime 的 clearQueue 清，压缩缓冲在这里清
+    setStates((prev) => clearPendingSends(prev, id));
+    void api.agent.abort(id);
   }, []);
 
   /** 回到首页。会话在首条消息提交时才真正创建（R8-01 ①）。 */
@@ -471,6 +530,22 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.agent.answerPermission(requestId, answer);
   }, []);
 
+  // 排队编辑只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框
+  const queueEdit = useCallback(
+    (op: "promote" | "cancel", index: number, text: string) => {
+      const id = sessionRef.current;
+      if (id === null) return;
+      void api.agent.queueEdit(id, op, index, text);
+    },
+    [],
+  );
+
+  const cancelPendingSend = useCallback((index: number) => {
+    const id = sessionRef.current;
+    if (id === null) return;
+    setStates((prev) => removePendingSend(prev, id, index));
+  }, []);
+
   // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
   // ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账
   const viewedId = sessionId ?? opened?.id ?? null;
@@ -513,6 +588,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     removeSession,
     send: () => void send(),
     stop,
+    queue: entry.queue,
+    pendingSends: entry.pendingSends,
+    promoteQueued: (index: number, text: string) => queueEdit("promote", index, text),
+    cancelQueued: (index: number, text: string) => queueEdit("cancel", index, text),
+    cancelPendingSend,
     newTask,
     newTaskIn,
     answerApproval,

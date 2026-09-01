@@ -6,6 +6,7 @@ import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?ra
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
+import clock from "../../../../Orbita Design System/assets/icons/lucide/clock.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
 import download from "../../../../Orbita Design System/assets/icons/lucide/download.svg?raw";
@@ -46,6 +47,7 @@ const ICONS = {
   brain,
   check,
   "chevron-down": chevronDown,
+  clock,
   copy,
   cpu,
   download,

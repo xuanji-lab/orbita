@@ -52,6 +52,18 @@ export interface SessionEntry {
   /** turn = 这一轮还在跑；compaction = 上下文压缩中（居中呼吸行）；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
   /**
+   * pi 排队消息的快照（queue 事件全量覆盖）。steering = 已插队等工具边界注入；
+   * followUp = 等本轮结束投递。投递 / 清队后 pi 重发整份，UI 的排队卡片随之消失。
+   * 纯 ephemeral，不落盘。
+   */
+  queue: { steering: readonly string[]; followUp: readonly string[] };
+  /**
+   * 压缩期间的本地缓冲：pi 在压缩中连入队入口都关着（prompt 直接抛），这几条只能
+   * 排在 renderer；phase 一离开 compaction 就由 hook 逐条 submit（那时 runtime 侧
+   * 自动分流：空闲正常发、又在跑就进 pi 队列）。纯 ephemeral。
+   */
+  pendingSends: readonly string[];
+  /**
    * 自动重试进行态（等待下一次重试中）。非 null 时：phase 为 turn 则重试行替换
    * Responding，phase 为 compaction 则补在压缩行下。任何 phase 事件都会清空它
    * ——重试尝试开跑时 pi 再发的 agent_start 就是天然的清除信号，不依赖 retry
@@ -78,6 +90,8 @@ export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
   compactions: [],
   phase: "idle",
+  queue: { steering: [], followUp: [] },
+  pendingSends: [],
   retry: null,
   stats: null,
   approvals: [],
@@ -102,6 +116,14 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       // 任何 phase 事件都清重试槽：重试尝试开跑（agent_start）、整轮落定（settled）、
       // 压缩起止——都是「重试等待结束了」的时刻，倒数行不该再挂。
       retry: null,
+      // 也清压缩缓冲：phase 变了说明压缩早已结束，hook 该发的已发走；残留即异常滞留
+      pendingSends: [],
+    }));
+  }
+  if (event.type === "queue") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      queue: { steering: event.steering, followUp: event.followUp },
     }));
   }
   if (event.type === "retry") {
@@ -165,6 +187,9 @@ export function seedFromDisk(
     transcript: createTranscriptState(seedSnapshot(items)),
     compactions,
     phase: "idle",
+    // 排队是 ephemeral：盘上没有，也不该有（会话断了一次排队就物理消失了）
+    queue: { steering: [], followUp: [] },
+    pendingSends: [],
     retry: null,
     // 盘上没有用量（真源在 pi 的本子里）：种盘清掉旧值，等唤醒后的第一次推送
     stats: null,
@@ -224,14 +249,49 @@ export function markAllIdle(states: SessionStates): SessionStates {
   let changed = false;
   const next = new Map<string, SessionEntry>();
   for (const [sessionId, entry] of states) {
-    if (entry.phase !== "idle" || entry.retry !== null) {
-      next.set(sessionId, { ...entry, phase: "idle", retry: null });
+    const busy =
+      entry.phase !== "idle" ||
+      entry.retry !== null ||
+      entry.queue.steering.length > 0 ||
+      entry.queue.followUp.length > 0 ||
+      entry.pendingSends.length > 0;
+    if (busy) {
+      next.set(sessionId, {
+        ...entry,
+        phase: "idle",
+        retry: null,
+        // runtime 进程没了 = pi 的队列与缓冲物理消失，槽里不留尸体
+        queue: { steering: [], followUp: [] },
+        pendingSends: [],
+      });
       changed = true;
     } else {
       next.set(sessionId, entry);
     }
   }
   return changed ? next : states;
+}
+
+/** 压缩期间发送：消息进本地缓冲（phase 离开 compaction 时由 hook 自动发出）。 */
+export function addPendingSend(states: SessionStates, sessionId: string, text: string): SessionStates {
+  return update(states, sessionId, (entry) => ({ ...entry, pendingSends: [...entry.pendingSends, text] }));
+}
+
+/** 取消一条压缩缓冲。纯本地状态，即点即删，按下标定位；越界原样返回。 */
+export function removePendingSend(states: SessionStates, sessionId: string, index: number): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || index < 0 || index >= entry.pendingSends.length) return states;
+  return update(states, sessionId, (current) => ({
+    ...current,
+    pendingSends: current.pendingSends.filter((_, i) => i !== index),
+  }));
+}
+
+/** 清空一条会话的压缩缓冲（停止 = 全放弃）。空缓冲原样返回。 */
+export function clearPendingSends(states: SessionStates, sessionId: string): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || entry.pendingSends.length === 0) return states;
+  return update(states, sessionId, (current) => ({ ...current, pendingSends: [] }));
 }
 
 /** 会话被删除：槽一并丢掉，否则它连同整份 transcript 在 renderer 内存里留一具尸体。 */

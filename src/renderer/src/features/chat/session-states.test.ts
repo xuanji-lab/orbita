@@ -7,12 +7,14 @@ import type { AgentEvent, RetryStatus } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
+  addPendingSend,
   applyAgentEvent,
   compactionBoundaryText,
   markAllIdle,
   mergeCompactions,
   parseCompactCommand,
   removeApproval,
+  removePendingSend,
   removeSessionEntry,
   seedFromDisk,
   setEntryPhase,
@@ -428,5 +430,56 @@ describe("compactionBoundaryText —— 界碑折叠行文案", () => {
 
   it("旧记录没有 tokensAfter：只说压之前多大", () => {
     assert.equal(compactionBoundaryText(base), "已压缩 · 此前上下文约 128,000 tokens");
+  });
+});
+
+describe("排队槽 —— pi 队列快照全量覆盖，压缩缓冲走本地", () => {
+  const queueEvent = (steering: string[], followUp: string[]): AgentEvent => ({
+    type: "queue",
+    sessionId: "A",
+    steering,
+    followUp,
+  });
+
+  test("queue 事件全量覆盖：投递 / 清队后的空快照直接抹掉旧值", () => {
+    let states = applyAgentEvent(new Map(), queueEvent(["插队中"], ["等下一轮"]));
+    assert.deepEqual(states.get("A")?.queue, { steering: ["插队中"], followUp: ["等下一轮"] });
+    states = applyAgentEvent(states, queueEvent([], []));
+    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
+  });
+
+  test("phase 事件清压缩缓冲，但不动 pi 队列（队列真源在 queue 事件）", () => {
+    let states = addPendingSend(new Map(), "A", "压缩完发我");
+    states = applyAgentEvent(states, queueEvent([], ["pi 队列那条"]));
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
+    assert.deepEqual(states.get("A")?.pendingSends, []);
+    assert.deepEqual(states.get("A")?.queue.followUp, ["pi 队列那条"]);
+  });
+
+  test("addPendingSend / removePendingSend：缓冲增删按序", () => {
+    let states = addPendingSend(new Map(), "A", "第一条");
+    states = addPendingSend(states, "A", "第二条");
+    states = removePendingSend(states, "A", 0);
+    assert.deepEqual(states.get("A")?.pendingSends, ["第二条"]);
+    // 删不存在的下标不动原槽
+    const before = states;
+    states = removePendingSend(states, "A", 9);
+    assert.equal(states, before);
+  });
+
+  test("runtime 没了：队列与缓冲一并清空（物理消失，不留尸体）", () => {
+    let states = applyAgentEvent(new Map(), queueEvent(["s"], ["f"]));
+    states = addPendingSend(states, "A", "缓冲");
+    states = applyAgentEvent(states, { type: "failed", sessionId: null, message: "runtime exited" });
+    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
+    assert.deepEqual(states.get("A")?.pendingSends, []);
+  });
+
+  test("seedFromDisk 清空排队槽：ephemeral 状态不跨会话存留", () => {
+    let states = applyAgentEvent(new Map(), queueEvent(["s"], ["f"]));
+    states = addPendingSend(states, "A", "缓冲");
+    states = seedFromDisk(states, "A", []);
+    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
+    assert.deepEqual(states.get("A")?.pendingSends, []);
   });
 });
