@@ -4,6 +4,7 @@
 
 - agent 回答里的代码块改用 **shiki**（TextMate 语法，VS Code 同源）高亮，配色为 github-light / github-dark 双主题，跟随明暗主题即时切换——tsx/jsx 这类此前完全没高亮的块现在正确分层着色。预置 14 种语言（typescript/tsx/javascript/jsx/json/bash/css/html/python/yaml/markdown/toml/powershell/diff），没预置的语言块照常显示、只是无色。
 - **修复 edit 工具展开的 diff 显示**：此前把 pi 的 TUI 显示格式当 unified diff 解析，行号串进正文、行号列错位、文件路径头永远不显示。现改读标准 `details.patch`，路径头、新旧行号、增删统计恢复正确。
+- **不用展开也能看到改动量级**：单条 edit 折叠行在文件名后直接显示绿色 `+N` / 红色 `-M`（git stat 读法；展开时让位给 diff 头，不重复）；连续多条 edit 折叠成组时组头显示「N 处 · M 个文件」（按路径去重，只数改成功的）。
 
 ## 预置厂商新增 StepFun 与 OpenCode Go
 

@@ -377,3 +377,35 @@ export function editDiffText(result: ToolTranscriptItem): string | null {
   const patch = (details as Record<string, unknown>)["patch"];
   return typeof patch === "string" && patch !== "" ? patch : null;
 }
+
+/** edit 折叠行的增删统计（来自 details.patch）；没有 patch 返回 null */
+export interface EditDiffStats {
+  added: number;
+  removed: number;
+}
+
+export function editDiffStats(result: ToolTranscriptItem): EditDiffStats | null {
+  const patch = editDiffText(result);
+  if (patch === null) return null;
+  const { added, removed } = parseDiffLines(patch);
+  return { added, removed };
+}
+
+/**
+ * edit 组折叠头的文件数：按成员 input.path **字符串去重**（「./a.ts」与「a.ts」算两个，
+ * 归一化不值得——同轮调用几乎总是一种写法），只数落定且非失败的（改成才算改）。
+ * 复用 toolCallSummary 抽 path（edit 的摘要就是 path）。
+ */
+export function editGroupFileCount(
+  calls: readonly ToolCallUnit[],
+  results: ToolResultIndex,
+): number | null {
+  const paths = new Set<string>();
+  for (const call of calls) {
+    const result = results.get(call.toolCallId);
+    if (result === undefined || result.status === "running" || result.status === "error") continue;
+    const path = toolCallSummary("edit", call.input);
+    if (path !== null) paths.add(path);
+  }
+  return paths.size > 0 ? paths.size : null;
+}

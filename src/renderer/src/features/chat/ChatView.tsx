@@ -12,6 +12,8 @@ import {
   parseDiffLines,
   streamingThinkingKey,
   summarizeToolResult,
+  editDiffStats,
+  editGroupFileCount,
   thinkingDurationText,
   thinkingPreview,
   toolCallSummary,
@@ -737,6 +739,7 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
   // 还在跑的时候没有完整结果可展——此时给展开只会开出一个空盒子
   const expandable = !active && result !== undefined;
   const diff = expandable && result !== undefined ? editDiffText(result) : null;
+  const stats = expandable && result !== undefined ? editDiffStats(result) : null;
   const body = expandable && result !== undefined ? toolResultText(result) : "";
 
   return (
@@ -753,7 +756,15 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
           <span style={headLabel(active)}>{props.toolName}</span>
         </span>
         {callSummary !== null && <span style={SLOT.sub}>{callSummary}</span>}
-        {summary !== null && !active && (
+        {/* 增删统计紧跟文件名（git stat 读法）；与展开后 DiffView 头重复，展开时藏起 */}
+        {!open && stats !== null && (
+          <span style={SLOT.status}>
+            <span style={{ color: "var(--color-success)" }}>+{stats.added}</span>{" "}
+            <span style={{ color: "var(--color-danger)" }}>-{stats.removed}</span>
+          </span>
+        )}
+        {/* 有统计时「N lines」是同一量级的第二遍，让位 */}
+        {summary !== null && !active && stats === null && (
           <span
             style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}
           >
@@ -804,6 +815,7 @@ function ToolGroupLine(props: {
   const status = toolGroupStatus(group.calls, props.toolResults);
   const active = status.running > 0;
   const failed = status.failed > 0;
+  const fileCount = group.toolName === "edit" ? editGroupFileCount(group.calls, props.toolResults) : null;
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
@@ -818,6 +830,9 @@ function ToolGroupLine(props: {
           <span style={headLabel(active)}>{toolGroupLabel(group.toolName)}</span>
         </span>
         {!open && <span style={SLOT.status}>{toolGroupCountLabel(group.toolName, status.total)}</span>}
+        {!open && group.toolName === "edit" && fileCount !== null && (
+          <span style={SLOT.status}>{fileCount} 个文件</span>
+        )}
         {!open && failed && (
           <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>{status.failed} 失败</span>
         )}

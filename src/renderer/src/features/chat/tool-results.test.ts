@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { CompactedRecord } from "@shared/session";
 import {
+  editDiffStats,
   editDiffText,
+  editGroupFileCount,
   flattenRenderUnits,
   formatThinkingDuration,
   groupToolUnits,
@@ -16,6 +18,7 @@ import {
   toolCallSummary,
   toolGroupStatus,
   toolResultText,
+  type RenderUnit,
 } from "./tool-results.ts";
 
 function toolItem(
@@ -465,5 +468,76 @@ describe("editDiffText", () => {
       toolItem({ toolCallId: "d", toolName: "edit", details: { patch: "" } }),
     ]).get("d");
     assert.equal(emptyPatch === undefined ? null : editDiffText(emptyPatch), null);
+  });
+});
+
+describe("editDiffStats", () => {
+  const patch = "@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+extra";
+
+  test("从 patch 解析增删统计", () => {
+    const item = indexToolResults([
+      toolItem({ toolCallId: "s1", toolName: "edit", details: { patch } }),
+    ]).get("s1");
+    assert.deepEqual(item === undefined ? null : editDiffStats(item), { added: 2, removed: 1 });
+  });
+
+  test("没有 patch 的（非 edit / details 缺失 / 只有 diff）——返回 null", () => {
+    const bash = indexToolResults([toolItem({ toolCallId: "s2" })]).get("s2");
+    assert.equal(bash === undefined ? null : editDiffStats(bash), null);
+
+    const onlyDiff = indexToolResults([
+      toolItem({ toolCallId: "s3", toolName: "edit", details: { diff: "+ 3 hi" } }),
+    ]).get("s3");
+    assert.equal(onlyDiff === undefined ? null : editDiffStats(onlyDiff), null);
+  });
+});
+
+describe("editGroupFileCount", () => {
+  function editCall(toolCallId: string, path: string | null): unknown {
+    return {
+      type: "toolCall",
+      toolCallId,
+      toolName: "edit",
+      input: path === null ? {} : { path },
+    };
+  }
+
+  function callUnits(records: readonly TranscriptItem[]) {
+    return flattenRenderUnits(records).filter(
+      (unit): unit is Extract<RenderUnit, { kind: "toolCall" }> => unit.kind === "toolCall",
+    );
+  }
+
+  test("按 path 去重：同一文件两处编辑算一个文件", () => {
+    const records: readonly TranscriptItem[] = [
+      assistantItem("a1", [editCall("e1", "src/app.ts"), editCall("e2", "src/app.ts"), editCall("e3", "src/util.ts")]),
+      toolItem({ toolCallId: "e1", toolName: "edit", details: { patch: "@@ -1 +1 @@\n-a\n+b" } }),
+      toolItem({ toolCallId: "e2", toolName: "edit", details: { patch: "@@ -2 +2 @@\n-b\n+c" } }),
+      toolItem({ toolCallId: "e3", toolName: "edit", details: { patch: "@@ -1 +1 @@\n-x\n+y" } }),
+    ];
+    assert.equal(editGroupFileCount(callUnits(records), indexToolResults(records)), 2);
+  });
+
+  test("失败与进行中的成员不计入（改成才算改）；一个都没有时返回 null", () => {
+    const none: readonly TranscriptItem[] = [
+      assistantItem("a1", [editCall("f1", "a.ts"), editCall("f2", "b.ts")]),
+      toolItem({ toolCallId: "f1", toolName: "edit", status: "error" }),
+      toolItem({ toolCallId: "f2", toolName: "edit", status: "running" }),
+    ];
+    assert.equal(editGroupFileCount(callUnits(none), indexToolResults(none)), null);
+
+    const one: readonly TranscriptItem[] = [
+      assistantItem("a1", [editCall("f3", "b.ts")]),
+      toolItem({ toolCallId: "f3", toolName: "edit", details: { patch: "@@ -1 +1 @@\n-x\n+y" } }),
+    ];
+    assert.equal(editGroupFileCount(callUnits(one), indexToolResults(one)), 1);
+  });
+
+  test("input 里没有 path 的落定成员跳过，不炸", () => {
+    const records: readonly TranscriptItem[] = [
+      assistantItem("a1", [editCall("g1", null)]),
+      toolItem({ toolCallId: "g1", toolName: "edit" }),
+    ];
+    assert.equal(editGroupFileCount(callUnits(records), indexToolResults(records)), null);
   });
 });
