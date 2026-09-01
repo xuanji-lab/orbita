@@ -230,6 +230,42 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
       // 推一次让 UI 如实显示未知；token / 花费总额不受压缩影响、继续累计
       pushStats(command.sessionId, session);
     }
+    // 自动重试：对话主链路（auto_retry）与压缩/摘要调用（summarization_retry）共用这份翻译。
+    // pi 只经事件暴露、不落盘。等待结束时 pi 会再发一次 agent_start（翻回 phase "turn"），
+    // renderer 靠它清重试槽——不依赖下面 status: null 的到达，事件丢了也自愈。
+    if (event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled") {
+      send({
+        type: "retry",
+        sessionId: command.sessionId,
+        status: {
+          attempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          delayMs: event.delayMs,
+          startedAt: Date.now(),
+          errorMessage: event.errorMessage,
+        },
+      });
+    }
+    if (
+      event.type === "auto_retry_end" ||
+      event.type === "summarization_retry_attempt_start" ||
+      event.type === "summarization_retry_finished"
+    ) {
+      send({ type: "retry", sessionId: command.sessionId, status: null });
+      // 重试耗尽是回合级终局，沿用压缩失败的同一条报错通路（failed → 红色提示）。
+      // "Retry cancelled" 是用户主动点停止（pi 固定字面量，精确锁版本稳定）：自己按的，不报。
+      if (
+        event.type === "auto_retry_end" &&
+        !event.success &&
+        event.finalError !== "Retry cancelled"
+      ) {
+        send({
+          type: "failed",
+          sessionId: command.sessionId,
+          message: `重试 ${event.attempt} 次后仍失败：${event.finalError ?? "未知错误"}`,
+        });
+      }
+    }
   });
 
   sessions.set(command.sessionId, { session, adapter, unsubscribe, mode: command.mode });

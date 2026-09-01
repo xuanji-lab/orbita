@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import type { AgentEvent } from "@shared/agent-ipc";
+import type { AgentEvent, RetryStatus } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
@@ -172,10 +172,11 @@ describe("seedFromDisk / setEntryPhase", () => {
   });
 });
 
-test("EMPTY_ENTRY 是稳定兜底：phase idle、无审批", () => {
+test("EMPTY_ENTRY 是稳定兜底：phase idle、无审批、无重试", () => {
   assert.equal(EMPTY_ENTRY.phase, "idle");
   assert.deepEqual(EMPTY_ENTRY.approvals, []);
   assert.deepEqual(EMPTY_ENTRY.compactions, []);
+  assert.equal(EMPTY_ENTRY.retry, null);
   assert.deepEqual(selectTranscript(EMPTY_ENTRY.transcript), []);
 });
 
@@ -330,6 +331,82 @@ describe("phase 三态 —— 压缩有自己的进行态", () => {
     let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "compaction" });
     states = markAllIdle(states);
     assert.equal(states.get("A")?.phase, "idle");
+  });
+});
+
+// ── 刀 A-3：自动重试 ──
+
+const retryStatus = (over: Partial<RetryStatus> = {}): RetryStatus => ({
+  attempt: 2,
+  maxAttempts: 3,
+  delayMs: 4000,
+  startedAt: 1000,
+  errorMessage: "fetch failed",
+  ...over,
+});
+
+describe("重试槽 —— phase 事件是清除信号", () => {
+  test("retry 事件设槽；未知会话就地建槽", () => {
+    const states = applyAgentEvent(new Map(), {
+      type: "retry",
+      sessionId: "A",
+      status: retryStatus(),
+    });
+    assert.deepEqual(states.get("A")?.retry, retryStatus());
+  });
+
+  test("任何 phase 事件清空重试槽——重试尝试开跑的 agent_start 就是天然清除信号", () => {
+    for (const phase of ["turn", "idle", "compaction"] as const) {
+      let states = applyAgentEvent(new Map(), {
+        type: "retry",
+        sessionId: "A",
+        status: retryStatus(),
+      });
+      states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase });
+      assert.equal(states.get("A")?.retry, null, `phase=${phase} 应清空重试槽`);
+    }
+  });
+
+  test("status: null 显式清除（auto_retry_end 的翻译）", () => {
+    let states = applyAgentEvent(new Map(), {
+      type: "retry",
+      sessionId: "A",
+      status: retryStatus(),
+    });
+    states = applyAgentEvent(states, { type: "retry", sessionId: "A", status: null });
+    assert.equal(states.get("A")?.retry, null);
+  });
+
+  test("failed / markAllIdle / seedFromDisk / setEntryPhase 都不留僵尸倒数", () => {
+    let states = applyAgentEvent(new Map(), {
+      type: "retry",
+      sessionId: "A",
+      status: retryStatus(),
+    });
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "重试 3 次后仍失败" });
+    assert.equal(states.get("A")?.retry, null);
+
+    states = applyAgentEvent(states, { type: "retry", sessionId: "A", status: retryStatus() });
+    states = markAllIdle(states);
+    assert.equal(states.get("A")?.retry, null);
+
+    states = applyAgentEvent(states, { type: "retry", sessionId: "A", status: retryStatus() });
+    states = seedFromDisk(states, "A", [userItem("u1", 1000)]);
+    assert.equal(states.get("A")?.retry, null);
+
+    states = applyAgentEvent(states, { type: "retry", sessionId: "A", status: retryStatus() });
+    states = setEntryPhase(states, "A", "turn");
+    assert.equal(states.get("A")?.retry, null);
+  });
+
+  test("压缩中摘要也在重试：phase 与重试槽独立共存", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "compaction" });
+    states = applyAgentEvent(
+      states,
+      { type: "retry", sessionId: "A", status: retryStatus({ attempt: 1, maxAttempts: 2, delayMs: 2000 }) },
+    );
+    assert.equal(states.get("A")?.phase, "compaction");
+    assert.equal(states.get("A")?.retry?.attempt, 1);
   });
 });
 

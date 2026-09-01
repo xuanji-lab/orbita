@@ -77,6 +77,20 @@ export interface BuiltinModel {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
+/**
+ * 一次自动重试的等待态。对话主链路（auto_retry）与压缩/摘要的 LLM 调用
+ * （summarization_retry）共用同一份形状。startedAt 由 agent 进程盖时间戳——
+ * renderer 据此算活倒数，切走再切回不重启；事件不落盘，旧会话没有历史重试。
+ */
+export interface RetryStatus {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  /** 等待开始的时刻（epoch ms，agent 进程时钟） */
+  startedAt: number;
+  errorMessage: string;
+}
+
 /** 主进程 → agent 进程 */
 export type AgentCommand =
   | {
@@ -131,11 +145,18 @@ export type AgentEvent =
    * contextUsage.tokens 压缩后到下一次 LLM 响应前是 null，UI 如实显示未知。
    */
   | { type: "stats"; sessionId: string; stats: SessionStats }
-  /**
-   * 上下文压缩完成，附边界记录（摘要 + tokensBefore）。pi 只经 `compaction_end`
-   * 事件暴露压缩，摘要不在任何 TranscriptItem 里——我们在这里把它变成一条落盘的界碑。
-   */
+/**
+ * 上下文压缩完成，附边界记录（摘要 + tokensBefore）。pi 只经 `compaction_end`
+ * 事件暴露压缩，摘要不在任何 TranscriptItem 里——我们在这里把它变成一条落盘的界碑。
+ */
   | { type: "compaction"; sessionId: string; record: CompactedRecord }
+  /**
+   * 自动重试进行态（pi 的 auto_retry_* / summarization_retry_* 翻译而来）。
+   * status 非 null = 正在等下一次重试；null = 清除。纯 ephemeral，不落盘。
+   * 清除信号**不依赖本事件**：重试尝试真正开跑时 pi 会再发一次 agent_start，
+   * runtime 翻成 phase 事件，renderer 的重试槽随任何 phase 事件一并清空（自愈）。
+   */
+  | { type: "retry"; sessionId: string; status: RetryStatus | null }
   /** 工具执行前的请示。UI 要显示它并等用户回答（三档模式见 shared/permission.ts） */
   | {
       type: "permission";

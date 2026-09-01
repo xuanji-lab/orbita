@@ -17,6 +17,7 @@ import {
   type SessionStates,
 } from "./session-states.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
+import type { RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
 import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -37,6 +38,8 @@ export interface ChatSession {
   compactions: readonly CompactedRecord[];
   /** turn = 这一轮还在跑；compaction = 上下文压缩中；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
+  /** 自动重试等待态：非 null 时重试行替换 Responding（或补在压缩行下） */
+  retry: RetryStatus | null;
   /**
    * 最近一次用量快照（token / 花费 / 上下文余量），每轮落定时由 runtime 推来。
    * null = 还没有：纯浏览的旧会话不起 runtime session，等说话唤醒后才有数字。
@@ -468,6 +471,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     transcript: selectTranscript(entry.transcript),
     compactions: entry.compactions,
     phase: entry.phase,
+    retry: entry.retry,
     stats: entry.stats,
     phaseOf: (id: string): SessionEntry["phase"] => states.get(id)?.phase ?? "idle",
     error,

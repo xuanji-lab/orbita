@@ -29,8 +29,10 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { contextText, contextTone, costText, statsTitleText } from "./stats-text";
+import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
+import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 
 /**
@@ -194,8 +196,18 @@ export function ChatView(props: { session: ChatSession }) {
           turnActive={turnActive}
         />
       ))}
-      {session.phase === "turn" && <Responding />}
-      {session.phase === "compaction" && <Compacting />}
+      {session.phase === "turn" &&
+        (session.retry !== null ? <Retrying status={session.retry} /> : <Responding />)}
+      {session.phase === "compaction" && (
+        <>
+          <Compacting />
+          {session.retry !== null && (
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <Retrying status={session.retry} />
+            </div>
+          )}
+        </>
+      )}
     </Pane>
   );
 }
@@ -1117,6 +1129,55 @@ function Compacting() {
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
       正在压缩上下文…
+    </p>
+  );
+}
+
+/**
+ * 自动重试进行态：转录末尾一行（重试等待中替换 Responding），或压缩行下的居中补充行
+ * （摘要调用的重试）。倒数是活的——挂载期间每秒重算，锚点在 agent 进程盖的 startedAt
+ * 上，切走再切回不重启。视觉语法与 Responding / Compacting 同一套（呼吸 + 旋转 +
+ * warning 图标），失败原因是最淡一档的注脚、悬停看全文——断网还是限流一眼可辨。
+ */
+function Retrying(props: { status: RetryStatus }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const cause = retryCauseText(props.status.errorMessage);
+  return (
+    <p
+      className="orbita-breath"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        width: "fit-content",
+        maxWidth: "100%",
+        margin: 0,
+        color: "var(--color-text-secondary)",
+        fontSize: "var(--font-size-control)",
+      }}
+    >
+      <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
+        <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
+      </span>
+      {retryLineText(props.status, now)}
+      {cause !== null && (
+        <span
+          title={props.status.errorMessage}
+          style={{
+            color: "var(--color-text-tertiary)",
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {cause}
+        </span>
+      )}
     </p>
   );
 }

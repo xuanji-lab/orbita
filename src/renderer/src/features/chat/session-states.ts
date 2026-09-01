@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent/client";
 import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { AgentEvent } from "@shared/agent-ipc";
+import type { AgentEvent, RetryStatus } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
@@ -52,6 +52,13 @@ export interface SessionEntry {
   /** turn = 这一轮还在跑；compaction = 上下文压缩中（居中呼吸行）；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
   /**
+   * 自动重试进行态（等待下一次重试中）。非 null 时：phase 为 turn 则重试行替换
+   * Responding，phase 为 compaction 则补在压缩行下。任何 phase 事件都会清空它
+   * ——重试尝试开跑时 pi 再发的 agent_start 就是天然的清除信号，不依赖 retry
+   * 事件的 null 到达，丢了也自愈。纯 ephemeral，不落盘。
+   */
+  retry: RetryStatus | null;
+  /**
    * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
    */
@@ -71,6 +78,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
   compactions: [],
   phase: "idle",
+  retry: null,
   stats: null,
   approvals: [],
 };
@@ -91,7 +99,13 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       phase: event.phase === "idle" ? "idle" : event.phase === "compaction" ? "compaction" : "turn",
+      // 任何 phase 事件都清重试槽：重试尝试开跑（agent_start）、整轮落定（settled）、
+      // 压缩起止——都是「重试等待结束了」的时刻，倒数行不该再挂。
+      retry: null,
     }));
+  }
+  if (event.type === "retry") {
+    return update(states, event.sessionId, (entry) => ({ ...entry, retry: event.status }));
   }
   if (event.type === "compaction") {
     return update(states, event.sessionId, (entry) => ({
@@ -120,13 +134,14 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   return states;
 }
 
-/** 指定槽的 phase。槽不存在就建（send 的乐观 turn 先于任何事件到达时用）。 */
+/** 指定槽的 phase，顺带清重试槽。槽不存在就建（send 的乐观 turn 先于任何事件到达时用）。 */
 export function setEntryPhase(
   states: SessionStates,
   sessionId: string,
   phase: SessionEntry["phase"],
 ): SessionStates {
-  return update(states, sessionId, (entry) => ({ ...entry, phase }));
+  // 乐观 turn（新一轮开始）与 failed 归位都不该留上一次的倒数
+  return update(states, sessionId, (entry) => ({ ...entry, phase, retry: null }));
 }
 
 /**
@@ -150,6 +165,7 @@ export function seedFromDisk(
     transcript: createTranscriptState(seedSnapshot(items)),
     compactions,
     phase: "idle",
+    retry: null,
     // 盘上没有用量（真源在 pi 的本子里）：种盘清掉旧值，等唤醒后的第一次推送
     stats: null,
     approvals: [],
@@ -203,13 +219,13 @@ export function compactionBoundaryText(record: CompactedRecord): string {
   return states;
 }
 
-/** runtime 没了：所有还在忙的槽（turn / 压缩中）一并归位。全是 idle 时返回原引用。 */
+/** runtime 没了：所有还在忙的槽（turn / 压缩中 / 重试等待中）一并归位。全是 idle 时返回原引用。 */
 export function markAllIdle(states: SessionStates): SessionStates {
   let changed = false;
   const next = new Map<string, SessionEntry>();
   for (const [sessionId, entry] of states) {
-    if (entry.phase !== "idle") {
-      next.set(sessionId, { ...entry, phase: "idle" });
+    if (entry.phase !== "idle" || entry.retry !== null) {
+      next.set(sessionId, { ...entry, phase: "idle", retry: null });
       changed = true;
     } else {
       next.set(sessionId, entry);
