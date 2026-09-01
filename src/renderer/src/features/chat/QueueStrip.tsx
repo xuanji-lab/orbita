@@ -1,14 +1,12 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../../shell/Icon";
-import type { PendingSend } from "./session-states.ts";
+import type { QueueViewEntry } from "./session-states.ts";
 
 /**
- * 排队卡片（C-1）：输入框上方、逐条一行的待发消息。三个来源统一显示：
- *  - pi 队列的 steering：已插队，等当前轮的下一个工具边界注入（不打断正在流式的输出）
- *  - pi 队列的 followUp：等本轮结束自动投递，可「立即」转插队、可取消
- *  - 本地待办：压缩期间的消息（pi 压缩中连入队入口都关着）与排队的手动 /compact
- *    （pi 队列只存消息文本，压缩指令进不去）
+ * 排队卡片（C-1）：输入框上方、逐条一行。**按输入顺序显示**（queueView 把 pi 队列
+ * 与本地待办交错合成）——执行顺序仍由机制决定：pi 队列的消息本轮结束投递，
+ * 本地 compact 必须等完全空闲，注脚各自如实写。
  *
  * 每条可编辑（笔图标，Enter 保存 / Esc 放弃）——排队期间随时改口是排队的意义之一；
  * compact 项不可编辑（它不是一条消息）。
@@ -16,8 +14,7 @@ import type { PendingSend } from "./session-states.ts";
  * 状态用图标与文字、不拿 accent 染底——accent 留给发送键。
  */
 export function QueueStrip(props: {
-  queue: { steering: readonly string[]; followUp: readonly string[] };
-  pendingSends: readonly PendingSend[];
+  view: readonly QueueViewEntry[];
   /** idle 时 pi 队列是「停止后滞留」态：下次发送时自动带上，注脚要如实说 */
   phase: "idle" | "turn" | "compaction";
   onPromote: (index: number, text: string) => void;
@@ -26,14 +23,8 @@ export function QueueStrip(props: {
   onCancelPending: (index: number) => void;
   onEditPending: (index: number, text: string) => void;
 }) {
-  const { queue, pendingSends } = props;
-  const empty =
-    queue.steering.length === 0 && queue.followUp.length === 0 && pendingSends.length === 0;
-  if (empty) return null;
-  // 停止后的滞留态：本轮已不存在，消息等下一次发送时自动带上
+  if (props.view.length === 0) return null;
   const haltedNote = props.phase === "idle" ? "下次发送时一起投递" : null;
-  // pi 队列的命令下标指 [...steering, ...followUp] 拼接视图（runtime 按同一顺序重放）
-  const offset = queue.steering.length;
   return (
     <section
       aria-label="排队中的消息"
@@ -49,37 +40,27 @@ export function QueueStrip(props: {
         backdropFilter: "blur(var(--glass-blur))",
       }}
     >
-      {queue.steering.map((text, i) => (
+      {props.view.map((item) => (
         <QueueRow
-          key={`s${i}:${text}`}
-          icon="arrow-up"
-          note={haltedNote ?? "插队中 · 下个工具边界生效"}
-          text={text}
-          onCancel={() => props.onCancel(i, text)}
-          onEdit={(newText) => props.onEdit(i, text, newText)}
-        />
-      ))}
-      {queue.followUp.map((text, i) => (
-        <QueueRow
-          key={`f${i}:${text}`}
-          icon="clock"
-          note={haltedNote ?? "等本轮结束发送"}
-          text={text}
-          onPromote={() => props.onPromote(offset + i, text)}
-          onCancel={() => props.onCancel(offset + i, text)}
-          onEdit={(newText) => props.onEdit(offset + i, text, newText)}
-        />
-      ))}
-      {pendingSends.map((item, i) => (
-        <QueueRow
-          key={`p${i}:${pendingLabel(item)}`}
-          icon="clock"
-          note={pendingNote(item, props.phase)}
-          text={pendingLabel(item)}
-          editable={item.kind === "text"}
-          onCancel={() => props.onCancelPending(i)}
+          key={rowKey(item)}
+          icon={item.source === "pi" && item.steering ? "arrow-up" : "clock"}
+          note={noteOf(item, haltedNote)}
+          text={labelOf(item)}
+          editable={item.source === "local" && item.item.kind === "text"}
+          onPromote={
+            item.source === "pi" && !item.steering && haltedNote === null
+              ? () => props.onPromote(item.piIndex, item.text)
+              : undefined
+          }
+          onCancel={() =>
+            item.source === "pi"
+              ? props.onCancel(item.piIndex, item.text)
+              : props.onCancelPending(item.localIndex)
+          }
           onEdit={
-            item.kind === "text" ? (newText) => props.onEditPending(i, newText) : undefined
+            item.source === "pi"
+              ? (newText) => props.onEdit(item.piIndex, item.text, newText)
+              : (newText) => props.onEditPending(item.localIndex, newText)
           }
         />
       ))}
@@ -87,16 +68,30 @@ export function QueueStrip(props: {
   );
 }
 
-function pendingLabel(item: PendingSend): string {
-  if (item.kind === "text") return item.text;
-  return item.instructions === undefined ? "/compact" : `/compact ${item.instructions}`;
+function rowKey(item: QueueViewEntry): string {
+  return item.source === "pi"
+    ? `s${item.piIndex}:${item.text}`
+    : `p${item.localIndex}:${labelOf(item)}`;
 }
 
-/** 本地待办的注脚：text 只在压缩期间产生；compact 必须等完全空闲——pi 队列里的
- *  排队消息全处理完才轮到它（反过来压会让消息滞留，且压不到最新内容）。 */
-function pendingNote(item: PendingSend, phase: "idle" | "turn" | "compaction"): string {
-  if (item.kind === "text") return "正在压缩上下文，压缩结束自动发送";
-  return phase === "compaction" ? "当前压缩结束后再压缩" : "空闲后压缩（上面的排队先发）";
+function labelOf(item: QueueViewEntry): string {
+  if (item.source === "pi") return item.text;
+  return item.item.kind === "text"
+    ? item.item.text
+    : item.item.instructions === undefined
+      ? "/compact"
+      : `/compact ${item.item.instructions}`;
+}
+
+/** 注脚：pi 项按滞留/插队/等待三态；本地项按 kind 与 phase（compact 必须等完全空闲）。 */
+function noteOf(item: QueueViewEntry, haltedNote: string | null): string {
+  if (item.source === "pi") {
+    if (haltedNote !== null) return haltedNote;
+    return item.steering ? "插队中 · 下个工具边界生效" : "等本轮结束发送";
+  }
+  if (item.item.kind === "text") return "正在压缩上下文，压缩结束自动发送";
+  // compact 排在 pi 队列消息之后执行（机制使然），如实写明
+  return "空闲后压缩（上面的排队先发）";
 }
 
 /** 一条排队项：图标 + 文本（截断）+ 状态注脚 + 操作；点笔进入行内编辑。 */
@@ -112,7 +107,7 @@ function QueueRow(props: {
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(props.text);
-  const editable = props.editable !== false && props.onEdit !== undefined;
+  const editable = props.editable === true && props.onEdit !== undefined;
 
   const commit = () => {
     setEditing(false);

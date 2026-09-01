@@ -65,6 +65,12 @@ export interface SessionEntry {
    */
   queue: { steering: readonly string[]; followUp: readonly string[] };
   /**
+   * 排队项的进入顺序账本（键序 = 输入序）。pi 队列项与本地待办存在两个队列里，
+   * 快照各自有序、合起来无序——卡片要按输入序显示，就得记这份账。键与快照对账
+   * （见 syncQueueOrder）：消失的键删掉，新键补到尾部。纯 ephemeral。
+   */
+  queueOrder: readonly string[];
+  /**
    * 本地待发队列：phase 一离开 compaction，text 项立刻 submit（runtime 侧自动分流：
    * 空闲正常发、又在跑就进 pi 队列）；compact 项必须等 phase 完全 idle 才执行——
    * 排队消息（pi 队列里的）全处理完再压，压的就是完整对话。纯 ephemeral。
@@ -98,6 +104,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   compactions: [],
   phase: "idle",
   queue: { steering: [], followUp: [] },
+  queueOrder: [],
   pendingSends: [],
   retry: null,
   stats: null,
@@ -128,10 +135,12 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     }));
   }
   if (event.type === "queue") {
-    return update(states, event.sessionId, (entry) => ({
-      ...entry,
-      queue: { steering: event.steering, followUp: event.followUp },
-    }));
+    return update(states, event.sessionId, (entry) =>
+      syncQueueOrder({
+        ...entry,
+        queue: { steering: event.steering, followUp: event.followUp },
+      }),
+    );
   }
   if (event.type === "retry") {
     return update(states, event.sessionId, (entry) => ({ ...entry, retry: event.status }));
@@ -196,6 +205,7 @@ export function seedFromDisk(
     phase: "idle",
     // 排队是 ephemeral：盘上没有，也不该有（会话断了一次排队就物理消失了）
     queue: { steering: [], followUp: [] },
+    queueOrder: [],
     pendingSends: [],
     retry: null,
     // 盘上没有用量（真源在 pi 的本子里）：种盘清掉旧值，等唤醒后的第一次推送
@@ -267,8 +277,9 @@ export function markAllIdle(states: SessionStates): SessionStates {
         ...entry,
         phase: "idle",
         retry: null,
-        // runtime 进程没了 = pi 的队列与缓冲物理消失，槽里不留尸体
+        // runtime 进程没了 = pi 的队列与待办物理消失，槽里不留尸体
         queue: { steering: [], followUp: [] },
+        queueOrder: [],
         pendingSends: [],
       });
       changed = true;
@@ -281,28 +292,35 @@ export function markAllIdle(states: SessionStates): SessionStates {
 
 /** 本地待办入队（压缩期间的消息、排队的手动压缩）。 */
 export function addPendingSend(states: SessionStates, sessionId: string, item: PendingSend): SessionStates {
-  return update(states, sessionId, (entry) => ({ ...entry, pendingSends: [...entry.pendingSends, item] }));
+  return update(states, sessionId, (entry) =>
+    syncQueueOrder({ ...entry, pendingSends: [...entry.pendingSends, item] }),
+  );
 }
 
-/** 改写一条本地待办的文本（text 项改 text；compact 项目前不支持编辑）。 */
+/** 改写一条本地待办的文本（text 项改 text；compact 项目前不支持编辑）。键同步替换保位。 */
 export function editPendingSend(states: SessionStates, sessionId: string, index: number, text: string): SessionStates {
   const entry = states.get(sessionId);
   const item = entry?.pendingSends[index];
   if (item === undefined || item.kind !== "text") return states;
-  return update(states, sessionId, (current) => ({
-    ...current,
-    pendingSends: current.pendingSends.map((pending, i) => (i === index ? { kind: "text", text } : pending)),
-  }));
+  const rekeyed = replaceQueueOrderKey(states, sessionId, `local-text\0${item.text}`, `local-text\0${text}`);
+  return update(rekeyed, sessionId, (current) =>
+    syncQueueOrder({
+      ...current,
+      pendingSends: current.pendingSends.map((pending, i) => (i === index ? { kind: "text", text } : pending)),
+    }),
+  );
 }
 
 /** 取消一条本地待办。纯本地状态，即点即删，按下标定位；越界原样返回。 */
 export function removePendingSend(states: SessionStates, sessionId: string, index: number): SessionStates {
   const entry = states.get(sessionId);
   if (entry === undefined || index < 0 || index >= entry.pendingSends.length) return states;
-  return update(states, sessionId, (current) => ({
-    ...current,
-    pendingSends: current.pendingSends.filter((_, i) => i !== index),
-  }));
+  return update(states, sessionId, (current) =>
+    syncQueueOrder({
+      ...current,
+      pendingSends: current.pendingSends.filter((_, i) => i !== index),
+    }),
+  );
 }
 
 /**
@@ -314,17 +332,127 @@ export function consumePendingSends(states: SessionStates, sessionId: string, co
   if (entry === undefined || count <= 0) return states;
   const nextItems = entry.pendingSends.slice(count);
   if (nextItems.length === entry.pendingSends.length) return states;
-  return update(states, sessionId, (current) => ({ ...current, pendingSends: nextItems }));
+  return update(states, sessionId, (current) =>
+    syncQueueOrder({ ...current, pendingSends: nextItems }),
+  );
 }
 
 /** 消费全部 text 项（agent 又跑起来的那拍：文本安全进 pi 队列，compact 继续等 idle）。 */
 export function consumePendingTexts(states: SessionStates, sessionId: string): SessionStates {
   const entry = states.get(sessionId);
   if (entry === undefined || !entry.pendingSends.some((item) => item.kind === "text")) return states;
-  return update(states, sessionId, (current) => ({
-    ...current,
-    pendingSends: current.pendingSends.filter((item) => item.kind !== "text"),
-  }));
+  return update(states, sessionId, (current) =>
+    syncQueueOrder({
+      ...current,
+      pendingSends: current.pendingSends.filter((item) => item.kind !== "text"),
+    }),
+  );
+}
+
+/** pi 队列项编辑保位：hook 发起 edit 的同时把账本里的旧键替换成新键（首个匹配）。 */
+export function replaceQueueOrderKey(
+  states: SessionStates,
+  sessionId: string,
+  oldKey: string,
+  newKey: string,
+): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined) return states;
+  const at = entry.queueOrder.indexOf(oldKey);
+  if (at === -1) return states;
+  const next = [...entry.queueOrder];
+  next[at] = newKey;
+  return update(states, sessionId, (current) => ({ ...current, queueOrder: next }));
+}
+
+// ---------------------------------------------------------------------------
+// 排队显示合成：pi 队列与本地待办按输入序交错（键 = 来源 + 内容）
+// ---------------------------------------------------------------------------
+
+function localQueueKey(item: PendingSend): string {
+  return item.kind === "text" ? `local-text\0${item.text}` : `local-compact\0${item.instructions ?? ""}`;
+}
+
+/**
+ * 账本与两个队列快照对账：消失的键（投递 / 取消 / 执行掉）删除，新出现的键
+ * （pi 先按快照序、本地按数组序）补到尾部。没有变化时返回原 entry（保引用）。
+ */
+function syncQueueOrder(entry: SessionEntry): SessionEntry {
+  const piKeys = [...entry.queue.steering, ...entry.queue.followUp].map((text) => `pi\0${text}`);
+  const localKeys = entry.pendingSends.map(localQueueKey);
+  const alive = new Map<string, number>();
+  for (const key of [...piKeys, ...localKeys]) {
+    alive.set(key, (alive.get(key) ?? 0) + 1);
+  }
+  const kept: string[] = [];
+  for (const key of entry.queueOrder) {
+    const left = alive.get(key) ?? 0;
+    if (left > 0) {
+      kept.push(key);
+      alive.set(key, left - 1);
+    }
+  }
+  const appended: string[] = [];
+  for (const key of [...piKeys, ...localKeys]) {
+    const left = alive.get(key) ?? 0;
+    if (left > 0) {
+      appended.push(key);
+      alive.set(key, left - 1);
+    }
+  }
+  const next = [...kept, ...appended];
+  const unchanged =
+    next.length === entry.queueOrder.length && next.every((key, i) => key === entry.queueOrder[i]);
+  return unchanged ? entry : { ...entry, queueOrder: next };
+}
+
+/** 卡片渲染用的合成视图项：pi 项带拼接视图下标（runtime 命令用），本地项带数组下标。 */
+export type QueueViewEntry =
+  | { source: "pi"; steering: boolean; text: string; piIndex: number }
+  | { source: "local"; item: PendingSend; localIndex: number };
+
+/**
+ * pi 队列 + 本地待办 → 按输入序（queueOrder）交错的显示视图。
+ * 账本没覆盖到的项（对账竞态漏网）按「pi 先、本地后」补在尾部，保证一条不丢。
+ */
+export function mergeQueueView(entry: SessionEntry): QueueViewEntry[] {
+  const piItems = [
+    ...entry.queue.steering.map((text) => ({ steering: true, text })),
+    ...entry.queue.followUp.map((text) => ({ steering: false, text })),
+  ];
+  const piUsed = new Set<number>();
+  const localUsed = new Set<number>();
+  const view: QueueViewEntry[] = [];
+  for (const key of entry.queueOrder) {
+    const piIndex = piItems.findIndex(
+      (item, i) => !piUsed.has(i) && `pi\0${item.text}` === key,
+    );
+    if (piIndex !== -1) {
+      const hit = piItems[piIndex];
+      if (hit !== undefined) {
+        piUsed.add(piIndex);
+        view.push({ source: "pi", steering: hit.steering, text: hit.text, piIndex });
+        continue;
+      }
+    }
+    const localIndex = entry.pendingSends.findIndex(
+      (item, i) => !localUsed.has(i) && localQueueKey(item) === key,
+    );
+    if (localIndex !== -1) {
+      const hit = entry.pendingSends[localIndex];
+      if (hit !== undefined) {
+        localUsed.add(localIndex);
+        view.push({ source: "local", item: hit, localIndex });
+      }
+    }
+  }
+  for (const [i, item] of piItems.entries()) {
+    if (!piUsed.has(i)) view.push({ source: "pi", steering: item.steering, text: item.text, piIndex: i });
+  }
+  for (const [i, item] of entry.pendingSends.entries()) {
+    if (!localUsed.has(i)) view.push({ source: "local", item, localIndex: i });
+  }
+  return view;
 }
 
 /** 会话被删除：槽一并丢掉，否则它连同整份 transcript 在 renderer 内存里留一具尸体。 */

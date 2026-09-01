@@ -223,8 +223,7 @@ export function ChatView(props: { session: ChatSession }) {
           )}
           {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
           <QueueStrip
-            queue={session.queue}
-            pendingSends={session.pendingSends}
+            view={session.queueView}
             phase={session.phase}
             onPromote={session.promoteQueued}
             onCancel={session.cancelQueued}

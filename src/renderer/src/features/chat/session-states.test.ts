@@ -15,12 +15,15 @@ import {
   editPendingSend,
   markAllIdle,
   mergeCompactions,
+  mergeQueueView,
   parseCompactCommand,
   removeApproval,
   removePendingSend,
   removeSessionEntry,
+  replaceQueueOrderKey,
   seedFromDisk,
   setEntryPhase,
+  type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
 
@@ -509,5 +512,57 @@ describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind �
     states = seedFromDisk(states, "A", []);
     assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
     assert.deepEqual(states.get("A")?.pendingSends, []);
+  });
+});
+
+describe("mergeQueueView —— 卡片按输入顺序交错，不看队列归属", () => {
+  const queueEvent = (steering: string[], followUp: string[]): AgentEvent => ({
+    type: "queue",
+    sessionId: "A",
+    steering,
+    followUp,
+  });
+  const labelsOf = (entry: SessionEntry | undefined) =>
+    mergeQueueView(entry ?? EMPTY_ENTRY).map((item) =>
+      item.source === "pi" ? item.text : item.item.kind,
+    );
+
+  test("先排 pi 消息、再排 /compact、又排一条 pi 消息：显示保持输入序", () => {
+    // 用户在 turn 期间依次输入：消息A → /compact → 消息B
+    let states = applyAgentEvent(new Map(), queueEvent([], ["A"]));
+    states = addPendingSend(states, "A", { kind: "compact" });
+    states = applyAgentEvent(states, queueEvent([], ["A", "B"]));
+    assert.deepEqual(labelsOf(states.get("A")), ["A", "compact", "B"]);
+  });
+
+  test("投递一条后其余保位：A 投掉，compact 仍在 B 前面", () => {
+    let states = applyAgentEvent(new Map(), queueEvent([], ["A"]));
+    states = addPendingSend(states, "A", { kind: "compact" });
+    states = applyAgentEvent(states, queueEvent([], ["A", "B"]));
+    // A 被投递，队列只剩 B；compact 的账本位置在 B 之前
+    states = applyAgentEvent(states, queueEvent([], ["B"]));
+    assert.deepEqual(labelsOf(states.get("A")), ["compact", "B"]);
+  });
+
+  test("pi 项编辑换键保位（replaceQueueOrderKey + queue_update 新文本）", () => {
+    let states = applyAgentEvent(new Map(), queueEvent([], ["A"]));
+    states = replaceQueueOrderKey(states, "A", "pi\0A", "pi\0改过的");
+    states = applyAgentEvent(states, queueEvent([], ["改过的"]));
+    const view = mergeQueueView(states.get("A") ?? EMPTY_ENTRY);
+    assert.equal(view.length, 1);
+    const first = view[0];
+    assert.ok(first?.source === "pi" && first.text === "改过的");
+  });
+
+  test("本地 text 消费后 compact 保位；账本漏网的项补尾不丢", () => {
+    let states = applyAgentEvent(new Map(), queueEvent([], ["A"]));
+    states = addPendingSend(states, "A", { kind: "compact" });
+    // 压缩期间的本地 text：排在 compact 之后（后输入）
+    states = addPendingSend(states, "A", { kind: "text", text: "压缩完发我" });
+    states = consumePendingTexts(states, "A");
+    assert.deepEqual(labelsOf(states.get("A")), ["A", "compact"]);
+    // pi 队列整批投递：只剩 compact
+    states = applyAgentEvent(states, queueEvent([], []));
+    assert.deepEqual(labelsOf(states.get("A")), ["compact"]);
   });
 });

@@ -11,14 +11,17 @@ import {
   consumePendingTexts,
   createSessionStates,
   editPendingSend,
+  mergeQueueView,
   parseCompactCommand,
   removeApproval,
   removePendingSend,
   removeSessionEntry,
+  replaceQueueOrderKey,
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
   type PendingSend,
+  type QueueViewEntry,
   type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
@@ -113,6 +116,8 @@ export interface ChatSession {
   queue: SessionEntry["queue"];
   /** 本地待办（当前槽）：压缩期间的消息 + 排队的手动 /compact */
   pendingSends: readonly PendingSend[];
+  /** 排队卡片视图：pi 队列项与本地待办按输入顺序交错 */
+  queueView: readonly QueueViewEntry[];
   /** 排队项转插队（下一个工具边界注入当前轮）。index 指 [...steering, ...followUp] 拼接视图 */
   promoteQueued: (index: number, text: string) => void;
   /** 排队项移出 pi 队列（runtime 侧 clearQueue + 重放实现） */
@@ -567,6 +572,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     (op: "promote" | "cancel" | "edit", index: number, text: string, newText?: string) => {
       const id = sessionRef.current;
       if (id === null) return;
+      // edit 先把顺序账本里的键换掉：queue_update 带新文本回来时对账能保住原位
+      if (op === "edit" && newText !== undefined) {
+        setStates((prev) => replaceQueueOrderKey(prev, id, `pi\0${text}`, `pi\0${newText}`));
+      }
       void api.agent
         .queueEdit(id, op, index, text, newText)
         .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
@@ -630,6 +639,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     stop,
     queue: entry.queue,
     pendingSends: entry.pendingSends,
+    /** 卡片渲染视图：pi 队列 + 本地待办按输入序交错（见 mergeQueueView） */
+    queueView: mergeQueueView(entry),
     promoteQueued: (index: number, text: string) => queueEdit("promote", index, text),
     cancelQueued: (index: number, text: string) => queueEdit("cancel", index, text),
     editQueued: (index: number, text: string, newText: string) =>
