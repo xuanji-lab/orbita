@@ -900,7 +900,8 @@ function DiffView(props: { diff: string }) {
   );
 }
 
-/** diff 行两列 grid：行号（tertiary 注脚）| 正文；增删整行淡底色，正文用中性色 */
+/** diff 行两列 grid：行号（gutter——右侧细分隔线 + 自有内距，与正文拉开）| 正文；
+ * 增删整行淡底色，正文用中性色 */
 function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children: ReactNode }) {
   const { kind } = props;
   return (
@@ -908,7 +909,6 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
       style={{
         display: "grid",
         gridTemplateColumns: "4ch 1fr",
-        columnGap: "var(--space-2)",
         background:
           kind === "add"
             ? "var(--color-success-soft)"
@@ -917,12 +917,20 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
               : undefined,
       }}
     >
-      <span style={{ textAlign: "right", color: "var(--color-text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
+      <span
+        style={{
+          textAlign: "right",
+          padding: "0 var(--space-2) 0 var(--space-1)",
+          borderRight: "1px solid var(--color-border-subtle)",
+          color: "var(--color-text-tertiary)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
         {props.lineNum}
       </span>
       <span
         style={{
-          paddingRight: "var(--space-2)",
+          padding: "0 var(--space-2) 0 var(--space-2)",
           whiteSpace: "pre-wrap",
           overflowWrap: "anywhere",
           color: kind === "ctx" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
