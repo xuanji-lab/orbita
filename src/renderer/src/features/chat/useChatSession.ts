@@ -7,7 +7,6 @@ import {
   EMPTY_ENTRY,
   addPendingSend,
   applyAgentEvent,
-  clearPendingSends,
   createSessionStates,
   parseCompactCommand,
   removeApproval,
@@ -341,11 +340,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, [draft, sessionId, model, mode, cwd, workspaceId, defaultCwd, opened, refreshSessions]);
 
   const stop = useCallback(() => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    // 停止 = 全放弃：pi 队列由 runtime 的 clearQueue 清，压缩缓冲在这里清
-    setStates((prev) => clearPendingSends(prev, id));
-    void api.agent.abort(id);
+    // 只停当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
+    // （含被停止的压缩）的 phase 事件里自动发出——停止不替用户放弃任何已说的话
+    if (sessionRef.current === null) return;
+    void api.agent.abort(sessionRef.current);
   }, []);
 
   /** 回到首页。会话在首条消息提交时才真正创建（R8-01 ①）。 */

@@ -13,6 +13,8 @@ import { Icon } from "../../shell/Icon";
 export function QueueStrip(props: {
   queue: { steering: readonly string[]; followUp: readonly string[] };
   pendingSends: readonly string[];
+  /** idle 时队列是「停止后滞留」态：pi 会在下次发送时自动带上，注脚要如实说 */
+  phase: "idle" | "turn" | "compaction";
   onPromote: (index: number, text: string) => void;
   onCancel: (index: number, text: string) => void;
   onCancelPending: (index: number) => void;
@@ -21,6 +23,8 @@ export function QueueStrip(props: {
   const empty =
     queue.steering.length === 0 && queue.followUp.length === 0 && pendingSends.length === 0;
   if (empty) return null;
+  // 停止后的滞留态：本轮已不存在，消息等下一次发送时自动带上
+  const haltedNote = props.phase === "idle" ? "下次发送时一起投递" : null;
   // pi 队列的命令下标指 [...steering, ...followUp] 拼接视图（runtime 按同一顺序重放）
   const offset = queue.steering.length;
   return (
@@ -42,7 +46,7 @@ export function QueueStrip(props: {
         <QueueRow
           key={`s${i}:${text}`}
           icon="arrow-up"
-          note="插队中 · 下个工具边界生效"
+          note={haltedNote ?? "插队中 · 下个工具边界生效"}
           text={text}
           onCancel={() => props.onCancel(i, text)}
         />
@@ -51,7 +55,7 @@ export function QueueStrip(props: {
         <QueueRow
           key={`f${i}:${text}`}
           icon="clock"
-          note="等本轮结束发送"
+          note={haltedNote ?? "等本轮结束发送"}
           text={text}
           onPromote={() => props.onPromote(offset + i, text)}
           onCancel={() => props.onCancel(offset + i, text)}
@@ -61,7 +65,7 @@ export function QueueStrip(props: {
         <QueueRow
           key={`p${i}:${text}`}
           icon="clock"
-          note="压缩结束自动发送"
+          note="正在压缩上下文，压缩结束自动发送"
           text={text}
           onCancel={() => props.onCancelPending(i)}
         />

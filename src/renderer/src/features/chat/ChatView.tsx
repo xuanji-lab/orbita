@@ -124,11 +124,7 @@ export function ChatView(props: { session: ChatSession }) {
       }}
       onStop={session.stop}
       placeholder={
-        session.sessionId === null
-          ? "Ask anything, or start a task"
-          : session.phase === "idle"
-            ? "Reply, or steer the agent"
-            : "补充指令，回车排队发送"
+        session.sessionId === null ? "Ask anything, or start a task" : "Reply, or steer the agent"
       }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
@@ -229,6 +225,7 @@ export function ChatView(props: { session: ChatSession }) {
           <QueueStrip
             queue={session.queue}
             pendingSends={session.pendingSends}
+            phase={session.phase}
             onPromote={session.promoteQueued}
             onCancel={session.cancelQueued}
             onCancelPending={session.cancelPendingSend}

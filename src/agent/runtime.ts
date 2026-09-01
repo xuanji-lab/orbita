@@ -424,9 +424,8 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
   if (command.type === "abort") {
-    // 停止 = 全放弃：排队消息清掉（clearQueue 会触发 queue_update，UI 的排队卡片随之消失）。
-    // pi 的 abort 自己不清队列，不清的话滞留消息会在下一次发送时全部涌进模型。
-    live.session.clearQueue();
+    // 停止只停当前轮：排队消息滞留在 pi 队列（idle 下的合法状态），下次发送时
+    // loop 自动带上投递。不 clearQueue——用户裁决：排队是用户的意图，停止不该替他放弃。
     live.session.abort();
     return;
   }

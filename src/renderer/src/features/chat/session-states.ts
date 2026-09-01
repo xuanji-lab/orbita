@@ -287,13 +287,6 @@ export function removePendingSend(states: SessionStates, sessionId: string, inde
   }));
 }
 
-/** 清空一条会话的压缩缓冲（停止 = 全放弃）。空缓冲原样返回。 */
-export function clearPendingSends(states: SessionStates, sessionId: string): SessionStates {
-  const entry = states.get(sessionId);
-  if (entry === undefined || entry.pendingSends.length === 0) return states;
-  return update(states, sessionId, (current) => ({ ...current, pendingSends: [] }));
-}
-
 /** 会话被删除：槽一并丢掉，否则它连同整份 transcript 在 renderer 内存里留一具尸体。 */
 export function removeSessionEntry(states: SessionStates, sessionId: string): SessionStates {
   if (!states.has(sessionId)) return states;
