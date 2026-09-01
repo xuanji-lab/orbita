@@ -7,6 +7,7 @@ import { compactionBoundaryText, mergeCompactions } from "./session-states";
 import { isAtBottom } from "./scroll";
 import {
   editDiffText,
+  fileViewFor,
   flattenRenderUnits,
   groupToolUnits,
   indexToolResults,
@@ -21,11 +22,13 @@ import {
   toolCallSummary,
   toolGroupStatus,
   toolResultText,
+  writeLineCount,
   type IntraToken,
   type RenderEntry,
   type ToolGroupUnit,
   type ToolResultIndex,
 } from "./tool-results";
+import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
@@ -744,6 +747,11 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
   const diff = expandable && result !== undefined ? editDiffText(result) : null;
   const stats = expandable && result !== undefined ? editDiffStats(result) : null;
   const body = expandable && result !== undefined ? toolResultText(result) : "";
+  // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
+  const fileView = expandable && result !== undefined ? fileViewFor(props.toolName, props.input, result) : null;
+  const fileLang =
+    fileView !== null ? langFromPath(toolCallSummary(props.toolName, props.input) ?? "") : null;
+  const writeLines = !open && fileView !== null ? writeLineCount(props.input) : null;
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
@@ -766,8 +774,12 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
             <span style={{ color: "var(--color-danger)" }}>-{stats.removed}</span>
           </span>
         )}
+        {/* write 的量词是行数（无增删语义，不染色）；有了它「N chars」是统计句的长度，让位 */}
+        {!open && stats === null && writeLines !== null && (
+          <span style={SLOT.status}>{writeLines} 行</span>
+        )}
         {/* 有统计时「N lines」是同一量级的第二遍，让位 */}
-        {summary !== null && !active && stats === null && (
+        {summary !== null && !active && stats === null && writeLines === null && (
           <span
             style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}
           >
@@ -781,7 +793,10 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
         )}
       </CollapseRow>
       {open && expandable && diff !== null && <DiffView diff={diff} />}
-      {open && expandable && diff === null && (
+      {open && expandable && diff === null && fileView !== null && (
+        <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
+      )}
+      {open && expandable && diff === null && fileView === null && (
         <pre
           style={{
             ...EXPANDED_BODY,
@@ -900,6 +915,16 @@ function DiffView(props: { diff: string }) {
   );
 }
 
+/** 行号列（DiffView 与 FileContentView 共用）：右对齐等宽数字、细分隔线、褪色——只作定位不作内容 */
+const LINE_NUM_COLUMN = {
+  textAlign: "right",
+  padding: "0 var(--space-2) 0 var(--space-1)",
+  borderRight: "1px solid var(--color-border-subtle)",
+  color: "var(--color-text-tertiary)",
+  opacity: 0.7,
+  fontVariantNumeric: "tabular-nums",
+} satisfies React.CSSProperties;
+
 /** diff 行两列 grid：行号（gutter——细分隔线 + 最低调的褪色，只作定位不作内容）| 正文。
  * 深浅三级：改动行正文 primary（第一眼）> 上下文正文 secondary > 行号（tertiary 再降
  * 不透明度）；增删整行淡底色 */
@@ -918,18 +943,7 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
               : undefined,
       }}
     >
-      <span
-        style={{
-          textAlign: "right",
-          padding: "0 var(--space-2) 0 var(--space-1)",
-          borderRight: "1px solid var(--color-border-subtle)",
-          color: "var(--color-text-tertiary)",
-          opacity: 0.7,
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {props.lineNum}
-      </span>
+      <span style={LINE_NUM_COLUMN}>{props.lineNum}</span>
       <span
         style={{
           padding: "0 var(--space-2) 0 var(--space-2)",
@@ -960,6 +974,70 @@ function intraSpans(tokens: readonly IntraToken[], kind: "del" | "add") {
       </span>
     ) : (
       <span key={index}>{token.text}</span>
+    ),
+  );
+}
+
+/**
+ * 文件内容视图（write 写入的正文）：行号列 + shiki 高亮正文，视觉语言与 DiffView
+ * 同源（行号列右对齐褪色、正文列 pre-wrap）。语言推断不出或引擎未就绪时正文退纯色，
+ * 行号列照常有——行号是定位工具不依赖语法。pi 的 write 也是调用阶段渲染正文，
+ * 只是它无行号；成功后那行英文统计句两边都不再显示。
+ */
+function FileContentView(props: { text: string; startLine: number; lang: string | null }) {
+  // shiki 就绪触发一次重渲（FenceBlock 同款）；之后缓存命中同步返回
+  const [, setWarm] = useState(false);
+  useEffect(() => {
+    void highlighterReady.then(() => setWarm(true));
+  }, []);
+  const lines = props.lang !== null ? highlightLines(props.text, props.lang) : null;
+  const rows: readonly (string | readonly TokenSpan[])[] = lines ?? props.text.split("\n");
+  const lastLine = props.startLine + rows.length - 1;
+  // 行号列宽随位数长（read/write 不设上限），最小 3ch 保持与 diff 4ch 相近的观感
+  const gutter = `${Math.max(3, String(lastLine).length)}ch`;
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: `${gutter} 1fr`,
+        maxHeight: 320,
+        overflow: "auto",
+        borderTop: "1px solid var(--color-border-subtle)",
+        fontFamily: "var(--font-family-mono)",
+        fontSize: "var(--font-size-caption)",
+        lineHeight: 1.6,
+      }}
+    >
+      {rows.flatMap((row, index) => [
+        <span key={`${index}n`} style={LINE_NUM_COLUMN}>
+          {props.startLine + index}
+        </span>,
+        <span
+          key={`${index}b`}
+          style={{
+            padding: "0 var(--space-2)",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {typeof row === "string" ? row === "" ? " " : row : tokenSpans(row)}
+        </span>,
+      ])}
+    </div>
+  );
+}
+
+/** 高亮行 → token span 序列；shiki-tok 类挂暗主题切换（styles.css 的 --shiki-dark 翻色） */
+function tokenSpans(line: readonly TokenSpan[]) {
+  if (line.length === 0) return " ";
+  return line.map((token, index) =>
+    token.style === undefined ? (
+      <span key={index}>{token.text}</span>
+    ) : (
+      <span key={index} className="shiki-tok" style={token.style as React.CSSProperties}>
+        {token.text}
+      </span>
     ),
   );
 }

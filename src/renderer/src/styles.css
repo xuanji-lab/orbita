@@ -268,6 +268,19 @@ body {
   text-decoration: var(--shiki-dark-text-decoration) !important;
 }
 
+/*
+ * 工具行展开体（write/read 的行级高亮，ChatView 的 FileContentView）：token 的
+ * 内联样式来自 shiki codeToTokens（浅色 color + --shiki-dark 变量），与上面整块
+ * pre.shiki 同一套双主题机制，这里只给行级 span 补暗主题翻色。
+ */
+:root[data-theme="dark"] .shiki-tok {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg, transparent) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
+}
+
 .chat-md table {
   margin: var(--space-2) 0;
   border-collapse: collapse;

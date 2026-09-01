@@ -1,5 +1,10 @@
 # UPDATE NOTES
 
+## write 工具能看到写了什么了
+
+- **write 展开后直接显示写入的正文**：此前展开只有一行英文统计——pi 的 write 结果只回报一句 "Successfully wrote N bytes"，写入的内容在调用入参里（pi 自己的 TUI 也是在调用阶段渲染正文）。现在展开是「行号列 + 语法高亮」的文件视图，与 edit diff 同一视觉语言；语言按文件扩展名推断、跟随明暗主题切换，推断不出的文件正文退纯色、行号列照常有。
+- write 折叠行在文件名后显示「N 行」量词——此前那个 "N chars" 数的其实是那行英文统计句的字符长度，没有意义。
+
 ## 代码块高亮换 shiki，edit 的 diff 修好了
 
 - agent 回答里的代码块改用 **shiki**（TextMate 语法，VS Code 同源）高亮，配色为 github-light / github-dark 双主题，跟随明暗主题即时切换——tsx/jsx 这类此前完全没高亮的块现在正确分层着色。预置 14 种语言（typescript/tsx/javascript/jsx/json/bash/css/html/python/yaml/markdown/toml/powershell/diff），没预置的语言块照常显示、只是无色。

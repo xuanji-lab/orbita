@@ -7,6 +7,7 @@ import {
   editDiffStats,
   editDiffText,
   editGroupFileCount,
+  fileViewFor,
   flattenRenderUnits,
   formatThinkingDuration,
   groupToolUnits,
@@ -21,6 +22,8 @@ import {
   toolCallSummary,
   toolGroupStatus,
   toolResultText,
+  writeContent,
+  writeLineCount,
   type RenderUnit,
 } from "./tool-results.ts";
 
@@ -636,5 +639,63 @@ describe("editGroupFileCount", () => {
       toolItem({ toolCallId: "g1", toolName: "edit" }),
     ];
     assert.equal(editGroupFileCount(callUnits(records), indexToolResults(records)), null);
+  });
+});
+
+describe("writeContent / writeLineCount", () => {
+  test("正文在入参 content 里（pi 的 write 结果只有一行统计）", () => {
+    assert.equal(writeContent({ path: "a.ts", content: "const a = 1;\n" }), "const a = 1;\n");
+  });
+
+  test("缺字段、非字符串、空串返回 null", () => {
+    assert.equal(writeContent({ path: "a.ts" }), null);
+    assert.equal(writeContent({ path: "a.ts", content: 42 }), null);
+    assert.equal(writeContent({ path: "a.ts", content: "" }), null);
+    assert.equal(writeContent(null), null);
+  });
+
+  test("行数去尾部空行（pi 的 trimTrailingEmptyLines）", () => {
+    assert.equal(writeLineCount({ content: "a\nb\n" }), 2);
+    assert.equal(writeLineCount({ content: "a\nb\n\n\n" }), 2);
+    assert.equal(writeLineCount({ content: "single" }), 1);
+  });
+
+  test("没有正文返回 null", () => {
+    assert.equal(writeLineCount({}), null);
+    assert.equal(writeLineCount({ content: "" }), null);
+  });
+});
+
+describe("fileViewFor", () => {
+  /** indexToolResults 的 get 天然把类型收窄到 ToolTranscriptItem（editDiffText 用例同款） */
+  const result = (overrides: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCallId">) =>
+    indexToolResults([toolItem(overrides)]).get(overrides.toolCallId);
+  const ok = result({
+    toolCallId: "w1",
+    toolName: "write",
+    content: [{ type: "text", text: "Successfully wrote 12 bytes to a.ts" }],
+  });
+
+  test("write 成功：视图用入参正文，起始行 1", () => {
+    assert.equal(ok === undefined ? null : fileViewFor("write", { path: "a.ts", content: "const a = 1;" }, ok)?.text, "const a = 1;");
+  });
+
+  test("write 失败：不显示正文（展开退回错误文本）", () => {
+    const failed = result({
+      toolCallId: "w2",
+      toolName: "write",
+      status: "error",
+      content: [{ type: "text", text: "EACCES" }],
+    });
+    assert.equal(failed === undefined ? null : fileViewFor("write", { path: "a.ts", content: "x" }, failed), null);
+  });
+
+  test("write 入参没有正文：null（空文件/坏调用退回原文展示）", () => {
+    assert.equal(ok === undefined ? null : fileViewFor("write", { path: "a.ts" }, ok), null);
+  });
+
+  test("其它工具不适用", () => {
+    assert.equal(ok === undefined ? null : fileViewFor("read", { path: "a.ts" }, ok), null);
+    assert.equal(ok === undefined ? null : fileViewFor("bash", { command: "ls" }, ok), null);
   });
 });

@@ -521,3 +521,46 @@ export function editGroupFileCount(
   }
   return paths.size > 0 ? paths.size : null;
 }
+
+/**
+ * write 要写入的正文。**不在结果里**——pi 的 write 成功只回一行
+ * `Successfully wrote N bytes to <path>`（details 也是 undefined），内容在调用入参里；
+ * pi 自己的 TUI 也在调用阶段渲染正文。空串与缺字段返回 null（退回原文展示）。
+ */
+export function writeContent(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const value = (input as Record<string, unknown>)["content"];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** 去掉尾部空行（pi 的 trimTrailingEmptyLines：写入正文末尾的换行不数成行） */
+function trimTrailingEmptyLines(lines: readonly string[]): string[] {
+  let end = lines.length;
+  while (end > 0 && lines[end - 1] === "") end--;
+  return lines.slice(0, end);
+}
+
+/** write 折叠行的量词：写入了多少行。入参没正文时返回 null（摘要让位给状态词）。 */
+export function writeLineCount(input: unknown): number | null {
+  const content = writeContent(input);
+  if (content === null) return null;
+  return trimTrailingEmptyLines(content.split("\n")).length;
+}
+
+/** 工具行展开的「文件内容视图」参数。write 用入参正文；其余工具返回 null（原文展示）。 */
+export interface FileViewInput {
+  text: string;
+  startLine: number;
+}
+
+export function fileViewFor(
+  toolName: string,
+  input: unknown,
+  result: ToolTranscriptItem,
+): FileViewInput | null {
+  if (toolName === "write" && result.status !== "error") {
+    const text = writeContent(input);
+    return text === null ? null : { text, startLine: 1 };
+  }
+  return null;
+}

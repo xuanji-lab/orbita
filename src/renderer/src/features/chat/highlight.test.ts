@@ -5,7 +5,13 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { highlighterReady, highlightBlock, resolveLang } from "./highlight.ts";
+import {
+  highlighterReady,
+  highlightBlock,
+  highlightLines,
+  langFromPath,
+  resolveLang,
+} from "./highlight.ts";
 
 await highlighterReady;
 
@@ -25,6 +31,77 @@ describe("resolveLang", () => {
     assert.equal(resolveLang("foobar"), null);
     assert.equal(resolveLang("text"), null);
     assert.equal(resolveLang(""), null);
+  });
+});
+
+describe("langFromPath", () => {
+  test("常见扩展名可解析（扩展名与 fence 别名同池）", () => {
+    const cases: ReadonlyArray<[string, string]> = [
+      ["src/app.ts", "ts"],
+      ["C:\\Users\\x\\a.py", "py"],
+      ["docs/README.md", "md"],
+      [".github/workflows/ci.yml", "yml"],
+      ["scripts/run.sh", "sh"],
+      ["config/settings.json", "json"],
+      ["a/b/c.tsx", "tsx"],
+    ];
+    for (const [path, ext] of cases) {
+      assert.ok(langFromPath(path) !== null, `${path} 应可解析（.${ext}）`);
+    }
+  });
+
+  test("大小写不敏感：README.MD 也认", () => {
+    assert.ok(langFromPath("README.MD") !== null);
+  });
+
+  test("无扩展名、点文件、未预置扩展名返回 null", () => {
+    assert.equal(langFromPath("LICENSE"), null);
+    assert.equal(langFromPath(".gitignore"), null);
+    assert.equal(langFromPath("logo.svg"), null);
+    assert.equal(langFromPath("archive.tar.gz"), null); // gz 未预置
+    assert.equal(langFromPath(""), null);
+  });
+});
+
+describe("highlightLines", () => {
+  test("行数与行内拼接都对：拼起来等于原文各行", () => {
+    const code = "const a = 1;\n// 注释\nlet b = \"x\";";
+    const lines = highlightLines(code, "ts");
+    assert.ok(lines !== null);
+    assert.equal(lines.length, 3);
+    for (const [i, line] of lines.entries()) {
+      assert.equal(
+        line.map((token) => token.text).join(""),
+        code.split("\n")[i],
+        `第 ${i + 1} 行 token 拼接应等于原文`,
+      );
+    }
+  });
+
+  test("双主题：token 样式带浅色 color 与 --shiki-dark 变量", () => {
+    const lines = highlightLines("const a = 1;", "ts");
+    assert.ok(lines !== null);
+    const styled = lines[0]?.filter((token) => token.style !== undefined) ?? [];
+    assert.ok(styled.length > 0, "应有带样式的 token");
+    const first = styled[0]?.style;
+    assert.ok(first !== undefined && typeof first["color"] === "string");
+    assert.ok(first !== undefined && typeof first["--shiki-dark"] === "string");
+  });
+
+  test("空行是空 token 数组（渲染层给占位空格）", () => {
+    const lines = highlightLines("a\n\nb", "ts");
+    assert.ok(lines !== null);
+    assert.deepEqual(lines[1], []);
+  });
+
+  test("未知语言返回 null（纯文本降级）", () => {
+    assert.equal(highlightLines("whatever", "foobar"), null);
+  });
+
+  test("同输入命中缓存：返回同一份引用", () => {
+    const first = highlightLines("let y = 2;", "js");
+    const second = highlightLines("let y = 2;", "js");
+    assert.ok(first !== null && first === second);
   });
 });
 

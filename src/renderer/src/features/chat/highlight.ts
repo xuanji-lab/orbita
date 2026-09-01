@@ -81,6 +81,24 @@ export function resolveLang(fence: string): string | null {
   return loadedLangs.has(name) ? name : null;
 }
 
+/** 文件路径 → 可高亮语言名（按扩展名）；无扩展名、点文件、未预置语言返回 null。
+ * 扩展名与 fence 同池归一——ts/md/py/yml/ps1 这些短名本就是语法自带别名。 */
+export function langFromPath(path: string): string | null {
+  const base = path.split(/[\\/]/).pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return null;
+  return resolveLang(base.slice(dot + 1).toLowerCase());
+}
+
+/** 行级 token：text 是片段原文，style 是 shiki 双主题内联样式（浅色 color + --shiki-dark 变量） */
+export interface TokenSpan {
+  text: string;
+  style: Readonly<Record<string, string>> | undefined;
+}
+
+/** 一行的高亮结果：token 序列；拼起来等于该行原文 */
+export type HighlightedLine = readonly TokenSpan[];
+
 const cache = new Map<string, string>();
 
 /**
@@ -100,4 +118,34 @@ export function highlightBlock(code: string, fence: string): string | null {
   });
   cache.set(key, html);
   return html;
+}
+
+const lineCache = new Map<string, readonly HighlightedLine[]>();
+
+/**
+ * 代码 → 行级双主题 token（工具行展开体用：行号列要与正文逐行对齐，整块 HTML 拆不动）。
+ * 引擎未就绪或语言未预置返回 null——调用方按纯文本行渲染，行号列照常有。
+ */
+export function highlightLines(code: string, fence: string): readonly HighlightedLine[] | null {
+  if (highlighter === null) return null;
+  const lang = resolveLang(fence);
+  if (lang === null) return null;
+  const key = `${lang}\u0000${code}`;
+  const hit = lineCache.get(key);
+  if (hit !== undefined) return hit;
+  const { tokens } = highlighter.codeToTokens(code, {
+    lang,
+    themes: { light: "github-light", dark: "github-dark" },
+  });
+  const lines = tokens.map((line) =>
+    line.map((token) => ({
+      text: token.content,
+      style:
+        token.htmlStyle !== undefined && Object.keys(token.htmlStyle).length > 0
+          ? token.htmlStyle
+          : undefined,
+    })),
+  );
+  lineCache.set(key, lines);
+  return lines;
 }
