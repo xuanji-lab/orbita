@@ -194,6 +194,15 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
    */
   const sessionManager = openOrCreate(command);
   const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
+  /**
+   * 排队整批投递：多条排队在一个注入点全部给模型、一次回应（Claude Code 同款）。
+   * pi 默认 one-at-a-time（每条各起一轮）会把互相修正的碎片补充——「先跑」「别跑」
+   * 「还是跑」——割裂成多轮回应，又慢又贵。直设内存属性而不走 setSteeringMode：
+   * 那个会写用户磁盘上的 pi 全局设置（跨出本会话的副作用，不能带）。
+   * 该值只在 TUI 的 reload() 里会被设置文件覆盖回来，本 runtime 不调 reload。
+   */
+  session.agent.steeringMode = "all";
+  session.agent.followUpMode = "all";
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
   const echoed = new Set<string>();
