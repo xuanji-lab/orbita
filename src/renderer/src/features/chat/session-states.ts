@@ -297,16 +297,26 @@ export function addPendingSend(states: SessionStates, sessionId: string, item: P
   );
 }
 
-/** 改写一条本地待办的文本（text 项改 text；compact 项目前不支持编辑）。键同步替换保位。 */
+/**
+ * 改写一条本地待办的文本（text 项改 text；compact 项改压缩要求，空串 = 无要求）。
+ * 键同步替换保位。
+ */
 export function editPendingSend(states: SessionStates, sessionId: string, index: number, text: string): SessionStates {
   const entry = states.get(sessionId);
   const item = entry?.pendingSends[index];
-  if (item === undefined || item.kind !== "text") return states;
-  const rekeyed = replaceQueueOrderKey(states, sessionId, `local-text\0${item.text}`, `local-text\0${text}`);
+  if (item === undefined) return states;
+  const trimmed = text.trim();
+  // text 项存空串等于排一条空消息，落空；compact 项空串合法（清掉压缩要求）
+  if (item.kind === "text" && trimmed === "") return states;
+  const replacement: PendingSend =
+    item.kind === "text"
+      ? { kind: "text", text }
+      : { kind: "compact", ...(trimmed === "" ? {} : { instructions: trimmed }) };
+  const rekeyed = replaceQueueOrderKey(states, sessionId, localQueueKey(item), localQueueKey(replacement));
   return update(rekeyed, sessionId, (current) =>
     syncQueueOrder({
       ...current,
-      pendingSends: current.pendingSends.map((pending, i) => (i === index ? { kind: "text", text } : pending)),
+      pendingSends: current.pendingSends.map((pending, i) => (i === index ? replacement : pending)),
     }),
   );
 }

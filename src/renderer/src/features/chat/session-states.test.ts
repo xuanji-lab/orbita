@@ -462,7 +462,7 @@ describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind �
     assert.deepEqual(states.get("A")?.queue.followUp, ["pi 队列那条"]);
   });
 
-  test("addPendingSend / removePendingSend / editPendingSend：增删改按序，compact 项不可编辑", () => {
+  test("addPendingSend / removePendingSend / editPendingSend：增删改按序，compact 项改要求", () => {
     let states = addPendingSend(new Map(), "A", { kind: "text", text: "第一条" });
     states = addPendingSend(states, "A", { kind: "compact", instructions: "保留代码细节" });
     states = editPendingSend(states, "A", 0, "改过的第一条");
@@ -470,12 +470,17 @@ describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind �
       { kind: "text", text: "改过的第一条" },
       { kind: "compact", instructions: "保留代码细节" },
     ]);
-    // compact 项编辑落空（原样返回）
+    // compact 项可编辑压缩要求；清空 = 无要求
+    states = editPendingSend(states, "A", 1, "换个要求");
+    assert.deepEqual(states.get("A")?.pendingSends[1], { kind: "compact", instructions: "换个要求" });
+    states = editPendingSend(states, "A", 1, "");
+    assert.deepEqual(states.get("A")?.pendingSends[1], { kind: "compact" });
+    // text 项清空落空（存空串等于排一条空消息）
     const before = states;
-    states = editPendingSend(states, "A", 1, "改不了");
+    states = editPendingSend(states, "A", 0, "");
     assert.equal(states, before);
     states = removePendingSend(states, "A", 0);
-    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "compact", instructions: "保留代码细节" }]);
+    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "compact" }]);
     // 删不存在的下标不动原槽
     const before2 = states;
     states = removePendingSend(states, "A", 9);

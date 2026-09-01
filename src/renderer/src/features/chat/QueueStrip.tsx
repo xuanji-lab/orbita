@@ -22,6 +22,8 @@ export function QueueStrip(props: {
   onEdit: (index: number, text: string, newText: string) => void;
   onCancelPending: (index: number) => void;
   onEditPending: (index: number, text: string) => void;
+  /** 本地 compact 待办的「立即」：马上压缩，不等空闲 */
+  onRunPendingNow: (index: number) => void;
 }) {
   if (props.view.length === 0) return null;
   const haltedNote = props.phase === "idle" ? "下次发送时一起投递" : null;
@@ -46,11 +48,15 @@ export function QueueStrip(props: {
           icon={item.source === "pi" && item.steering ? "arrow-up" : "clock"}
           note={noteOf(item, haltedNote)}
           text={labelOf(item)}
-          editable={item.source === "local" && item.item.kind === "text"}
+          editValue={editValueOf(item)}
           onPromote={
-            item.source === "pi" && !item.steering && haltedNote === null
-              ? () => props.onPromote(item.piIndex, item.text)
-              : undefined
+            item.source === "pi"
+              ? item.steering || haltedNote !== null
+                ? undefined
+                : () => props.onPromote(item.piIndex, item.text)
+              : item.item.kind === "compact"
+                ? () => props.onRunPendingNow(item.localIndex)
+                : undefined
           }
           onCancel={() =>
             item.source === "pi"
@@ -83,6 +89,12 @@ function labelOf(item: QueueViewEntry): string {
       : `/compact ${item.item.instructions}`;
 }
 
+/** 编辑态的初值：compact 项编辑的是压缩要求（不带 /compact 前缀），空 = 无要求 */
+function editValueOf(item: QueueViewEntry): string {
+  if (item.source === "pi") return item.text;
+  return item.item.kind === "text" ? item.item.text : item.item.instructions ?? "";
+}
+
 /** 注脚：pi 项按滞留/插队/等待三态；本地项按 kind 与 phase（compact 必须等完全空闲）。 */
 function noteOf(item: QueueViewEntry, haltedNote: string | null): string {
   if (item.source === "pi") {
@@ -99,20 +111,22 @@ function QueueRow(props: {
   icon: "clock" | "arrow-up";
   note: string;
   text: string;
-  /** compact 项不可编辑 */
-  editable?: boolean;
+  /** 编辑态初值（compact 项编辑的是压缩要求，不带前缀）；不给 = 不可编辑 */
+  editValue?: string;
   onPromote?: () => void;
   onCancel: () => void;
   onEdit?: (newText: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(props.text);
-  const editable = props.editable === true && props.onEdit !== undefined;
+  const initial = props.editValue ?? props.text;
+  const [draft, setDraft] = useState(initial);
+  const editable = props.editValue !== undefined && props.onEdit !== undefined;
 
   const commit = () => {
     setEditing(false);
     const next = draft.trim();
-    if (next !== "" && next !== props.text) props.onEdit?.(next);
+    // 空串也传下去：compact 项空串 = 清掉压缩要求（editPendingSend 按项分流）
+    if (next !== initial) props.onEdit?.(next);
   };
 
   return (
@@ -132,7 +146,7 @@ function QueueRow(props: {
               commit();
             } else if (event.key === "Escape") {
               event.preventDefault();
-              setDraft(props.text);
+              setDraft(initial);
               setEditing(false);
             }
           }}
@@ -179,7 +193,7 @@ function QueueRow(props: {
         <QueueAction
           title="编辑这条排队"
           onClick={() => {
-            setDraft(props.text);
+            setDraft(initial);
             setEditing(true);
           }}
         >

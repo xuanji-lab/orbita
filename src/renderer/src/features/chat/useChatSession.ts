@@ -126,8 +126,10 @@ export interface ChatSession {
   editQueued: (index: number, text: string, newText: string) => void;
   /** 取消一条本地待办（纯本地状态） */
   cancelPendingSend: (index: number) => void;
-  /** 改写一条本地待办的文本（compact 项不可编辑） */
+  /** 改写一条本地待办的文本（text 改内容，compact 改压缩要求） */
   editPendingSend: (index: number, text: string) => void;
+  /** 本地 compact 待办的「立即」：马上压缩，不等空闲 */
+  runPendingNow: (index: number) => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
@@ -595,6 +597,18 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     setStates((prev) => removePendingSend(prev, id, index));
   }, []);
 
+  /** 本地待办的「立即」：只对 compact 有意义——不等空闲，马上压（pi 会先停当前轮） */
+  const runPendingNow = useCallback((index: number) => {
+    const id = sessionRef.current;
+    if (id === null) return;
+    const item = statesRef.current.get(id)?.pendingSends[index];
+    if (item === undefined || item.kind !== "compact") return;
+    setStates((prev) => removePendingSend(prev, id, index));
+    void api.agent
+      .compact(id, item.instructions)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, []);
+
   // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
   // ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账
   const viewedId = sessionId ?? opened?.id ?? null;
@@ -647,6 +661,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       queueEdit("edit", index, text, newText),
     cancelPendingSend,
     editPendingSend: editPending,
+    runPendingNow,
     newTask,
     newTaskIn,
     answerApproval,

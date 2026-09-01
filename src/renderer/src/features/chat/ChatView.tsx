@@ -230,6 +230,7 @@ export function ChatView(props: { session: ChatSession }) {
             onEdit={session.editQueued}
             onCancelPending={session.cancelPendingSend}
             onEditPending={session.editPendingSend}
+            onRunPendingNow={session.runPendingNow}
           />
           {composer}
         </>
