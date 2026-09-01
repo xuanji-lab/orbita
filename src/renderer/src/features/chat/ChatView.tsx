@@ -860,12 +860,12 @@ function ToolGroupLine(props: {
 }
 
 /**
- * edit 的展开体：pi 的 details.diff 显示格式——每行「±标记 + 行号 + 正文」，
+ * edit 的展开体：pi 的 details.diff 显示格式（VSCode 式两列：行号 | 正文）。
  * 增/上下文行带**新文档（当前文档）行号**、删行带旧文档行号；没有文件头、@@ 头
  * 与 `\ No newline` 噪音（文件名折叠行已经在说），长文件跳段是「...」行。
- * 相邻的「1 删 + 1 增」是单行修改，词级对比后真正变动的片段加底高亮
- * （pi TUI 的 inverse 在 DOM 里的等价物）。增删行底色用各自 -soft token、
- * 文字按角色着色——文字才是主信号，颜色是第二信号。
+ * 增删的信号是**整行底色**（-soft token），没有 +/- 标记列——底色说了的事不重复说；
+ * 相邻的「1 删 + 1 增」是单行修改，词级对比后真正变动的片段加实底色块
+ * （pi TUI 的 inverse 在 DOM 里的等价物）。
  */
 function DiffView(props: { diff: string }) {
   const entries = editDiffEntries(parseEditDiff(props.diff));
@@ -900,20 +900,15 @@ function DiffView(props: { diff: string }) {
   );
 }
 
-/** diff 行三列 grid：±标记 | 当前行号 | 正文；行号是 tertiary 注脚，正文按角色着色 */
+/** diff 行两列 grid：行号（tertiary 注脚）| 正文；增删整行淡底色，正文用中性色 */
 function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children: ReactNode }) {
   const { kind } = props;
-  const tone =
-    kind === "add"
-      ? "var(--color-success)"
-      : kind === "del"
-        ? "var(--color-danger)"
-        : "var(--color-text-tertiary)";
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "1.5ch 5ch 1fr",
+        gridTemplateColumns: "4ch 1fr",
+        columnGap: "var(--space-2)",
         background:
           kind === "add"
             ? "var(--color-success-soft)"
@@ -922,7 +917,6 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
               : undefined,
       }}
     >
-      <span style={{ color: tone }}>{kind === "add" ? "+" : kind === "del" ? "-" : " "}</span>
       <span style={{ textAlign: "right", color: "var(--color-text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
         {props.lineNum}
       </span>
@@ -931,7 +925,7 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
           paddingRight: "var(--space-2)",
           whiteSpace: "pre-wrap",
           overflowWrap: "anywhere",
-          color: tone,
+          color: kind === "ctx" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
         }}
       >
         {props.children}
