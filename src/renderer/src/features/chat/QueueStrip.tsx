@@ -92,10 +92,11 @@ function pendingLabel(item: PendingSend): string {
   return item.instructions === undefined ? "/compact" : `/compact ${item.instructions}`;
 }
 
-/** 本地待办的注脚：text 只在压缩期间产生；compact 的执行时机必须等完全空闲 */
+/** 本地待办的注脚：text 只在压缩期间产生；compact 必须等完全空闲——pi 队列里的
+ *  排队消息全处理完才轮到它（反过来压会让消息滞留，且压不到最新内容）。 */
 function pendingNote(item: PendingSend, phase: "idle" | "turn" | "compaction"): string {
   if (item.kind === "text") return "正在压缩上下文，压缩结束自动发送";
-  return phase === "compaction" ? "当前压缩结束后再压缩" : "本轮结束后压缩上下文";
+  return phase === "compaction" ? "当前压缩结束后再压缩" : "空闲后压缩（上面的排队先发）";
 }
 
 /** 一条排队项：图标 + 文本（截断）+ 状态注脚 + 操作；点笔进入行内编辑。 */
