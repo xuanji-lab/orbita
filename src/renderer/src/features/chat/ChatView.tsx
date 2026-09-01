@@ -900,8 +900,9 @@ function DiffView(props: { diff: string }) {
   );
 }
 
-/** diff 行两列 grid：行号（gutter——右侧细分隔线 + 自有内距，与正文拉开）| 正文；
- * 增删整行淡底色，正文用中性色 */
+/** diff 行两列 grid：行号（gutter——细分隔线 + 最低调的褪色，只作定位不作内容）| 正文。
+ * 深浅三级：改动行正文 primary（第一眼）> 上下文正文 secondary > 行号（tertiary 再降
+ * 不透明度）；增删整行淡底色 */
 function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children: ReactNode }) {
   const { kind } = props;
   return (
@@ -923,6 +924,7 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
           padding: "0 var(--space-2) 0 var(--space-1)",
           borderRight: "1px solid var(--color-border-subtle)",
           color: "var(--color-text-tertiary)",
+          opacity: 0.7,
           fontVariantNumeric: "tabular-nums",
         }}
       >
@@ -933,7 +935,7 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
           padding: "0 var(--space-2) 0 var(--space-2)",
           whiteSpace: "pre-wrap",
           overflowWrap: "anywhere",
-          color: kind === "ctx" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
+          color: kind === "ctx" ? "var(--color-text-secondary)" : "var(--color-text-primary)",
         }}
       >
         {props.children}
