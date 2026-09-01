@@ -547,10 +547,17 @@ export function writeLineCount(input: unknown): number | null {
   return trimTrailingEmptyLines(content.split("\n")).length;
 }
 
-/** 工具行展开的「文件内容视图」参数。write 用入参正文；其余工具返回 null（原文展示）。 */
+/** 工具行展开的「文件内容视图」参数。write 用入参正文、read 用读到的原文；其余工具返回 null（原文展示）。 */
 export interface FileViewInput {
   text: string;
   startLine: number;
+}
+
+/** read 的起始行号：pi 的 offset 是 1-indexed，缺省 1（行号列从它起算，不然带 offset 读时行号是假的） */
+export function readStartLine(input: unknown): number {
+  if (typeof input !== "object" || input === null) return 1;
+  const value = (input as Record<string, unknown>)["offset"];
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : 1;
 }
 
 export function fileViewFor(
@@ -558,9 +565,17 @@ export function fileViewFor(
   input: unknown,
   result: ToolTranscriptItem,
 ): FileViewInput | null {
-  if (toolName === "write" && result.status !== "error") {
+  if (result.status === "error") return null;
+  if (toolName === "write") {
     const text = writeContent(input);
     return text === null ? null : { text, startLine: 1 };
+  }
+  if (toolName === "read") {
+    // 图片读取（content 混着 image 块）不进文件视图——行号列对图片标记没有意义；
+    // 截断尾注（`[N more lines in file...]`）留在正文里跟 pi 一致
+    if (result.content.some((block) => block.type !== "text")) return null;
+    const text = toolResultText(result);
+    return text === "" ? null : { text, startLine: readStartLine(input) };
   }
   return null;
 }

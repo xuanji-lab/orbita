@@ -751,7 +751,8 @@ function ToolLine(props: { toolName: string; input: unknown; result: ToolTranscr
   const fileView = expandable && result !== undefined ? fileViewFor(props.toolName, props.input, result) : null;
   const fileLang =
     fileView !== null ? langFromPath(toolCallSummary(props.toolName, props.input) ?? "") : null;
-  const writeLines = !open && fileView !== null ? writeLineCount(props.input) : null;
+  const writeLines =
+    !open && props.toolName === "write" && fileView !== null ? writeLineCount(props.input) : null;
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>

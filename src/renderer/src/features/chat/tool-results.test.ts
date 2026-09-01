@@ -694,8 +694,71 @@ describe("fileViewFor", () => {
     assert.equal(ok === undefined ? null : fileViewFor("write", { path: "a.ts" }, ok), null);
   });
 
-  test("其它工具不适用", () => {
-    assert.equal(ok === undefined ? null : fileViewFor("read", { path: "a.ts" }, ok), null);
-    assert.equal(ok === undefined ? null : fileViewFor("bash", { command: "ls" }, ok), null);
+  test("其它工具不适用（bash 读写两者皆非）", () => {
+    const bash = result({
+      toolCallId: "b1",
+      toolName: "bash",
+      content: [{ type: "text", text: "out" }],
+    });
+    assert.equal(bash === undefined ? null : fileViewFor("bash", { command: "ls" }, bash), null);
+  });
+});
+
+describe("fileViewFor · read 分支", () => {
+  const result = (overrides: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCallId">) =>
+    indexToolResults([toolItem(overrides)]).get(overrides.toolCallId);
+  const read = (content: { type: "text"; text: string }[]) =>
+    result({ toolCallId: "r1", toolName: "read", content });
+
+  test("read 成功：视图用读到的原文，起始行 1", () => {
+    const item = read([{ type: "text", text: "line1\nline2" }]);
+    assert.deepEqual(item === undefined ? null : fileViewFor("read", { path: "a.ts" }, item), {
+      text: "line1\nline2",
+      startLine: 1,
+    });
+  });
+
+  test("带 offset 读中段：行号从 offset 起（pi 的 offset 是 1-indexed）", () => {
+    const item = read([{ type: "text", text: "mid1\nmid2" }]);
+    assert.equal(
+      item === undefined ? null : fileViewFor("read", { path: "a.ts", offset: 41 }, item)?.startLine,
+      41,
+    );
+  });
+
+  test("offset 非法（0、负数、非整数、非数字）退回 1", () => {
+    for (const offset of [0, -3, 2.5, "x"]) {
+      const item = read([{ type: "text", text: "a" }]);
+      assert.equal(
+        item === undefined ? null : fileViewFor("read", { path: "a.ts", offset }, item)?.startLine,
+        1,
+        `offset=${String(offset)} 应退回 1`,
+      );
+    }
+  });
+
+  test("图片读取不进文件视图；空结果也是 null", () => {
+    const image = result({
+      toolCallId: "r2",
+      toolName: "read",
+      content: [
+        { type: "text", text: "Read image file [image/png]..." },
+        { type: "image", data: "x", mimeType: "image/png" },
+      ],
+    });
+    assert.equal(image === undefined ? null : fileViewFor("read", { path: "a.png" }, image), null);
+
+    const empty = result({ toolCallId: "r3", toolName: "read", content: [] });
+    assert.equal(empty === undefined ? null : fileViewFor("read", { path: "a.ts" }, empty), null);
+  });
+
+  test("read 失败：null（展开退回错误文本）", () => {
+    const failed = result({
+      toolCallId: "r4",
+      toolName: "read",
+      status: "error",
+      content: [{ type: "text", text: "ENOENT" }],
+    });
+    assert.equal(failed === undefined ? null : fileViewFor("read", { path: "a.ts" }, failed), null);
   });
 });
