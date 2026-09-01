@@ -14,6 +14,7 @@ import {
   createTranscriptState,
   type TranscriptState,
 } from "@earendil-works/pi-coding-agent/client";
+import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
@@ -50,6 +51,11 @@ export interface SessionEntry {
   compactions: CompactedRecord[];
   /** turn = 这一轮还在跑；compaction = 上下文压缩中（居中呼吸行）；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
+  /**
+   * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
+   * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
+   */
+  stats: SessionStats | null;
   approvals: PendingApproval[];
 }
 
@@ -65,6 +71,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
   compactions: [],
   phase: "idle",
+  stats: null,
   approvals: [],
 };
 
@@ -91,6 +98,9 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       ...entry,
       compactions: [...entry.compactions, event.record],
     }));
+  }
+  if (event.type === "stats") {
+    return update(states, event.sessionId, (entry) => ({ ...entry, stats: event.stats }));
   }
   if (event.type === "permission") {
     return update(states, event.sessionId, (entry) => ({
@@ -140,6 +150,8 @@ export function seedFromDisk(
     transcript: createTranscriptState(seedSnapshot(items)),
     compactions,
     phase: "idle",
+    // 盘上没有用量（真源在 pi 的本子里）：种盘清掉旧值，等唤醒后的第一次推送
+    stats: null,
     approvals: [],
   });
   return next;

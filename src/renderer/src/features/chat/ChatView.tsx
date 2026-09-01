@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { compactionBoundaryText, mergeCompactions } from "./session-states";
@@ -27,6 +28,7 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { contextText, contextTone, costText, statsTitleText } from "./stats-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
 import type { ChatSession } from "./useChatSession";
@@ -418,7 +420,53 @@ function ComposerBar(props: { session: ChatSession }) {
           )}
         />
       )}
+      <StatsLine stats={session.stats} />
     </>
+  );
+}
+
+/**
+ * 用量行：底栏最右侧的安静注脚——上下文余量 + 累计花费，hover（原生 title）看
+ * token 分项。上下文段 >70% 染 warning、>90% 染 danger（颜色第二信号）；刚压缩完
+ * 显示 `? / 200k`（诚实未知）。花费 ≤0 不显示——自建网关定价未知，$0.000 会误读为免费。
+ *
+ * 布局：外层撑满剩余空间、内容右贴——不能用 marginInlineStart:auto，发送键已经
+ * 用了一个，两个 auto 会平分剩余空间把用量行推到中间去。
+ */
+function StatsLine(props: { stats: SessionStats | null }) {
+  const { stats } = props;
+  if (stats === null) return null;
+  const cost = costText(stats.cost);
+  const usage = stats.contextUsage;
+  if (usage === undefined && cost === null) return null;
+  const tone = contextTone(usage?.percent ?? null);
+  const toneColor =
+    tone === "danger"
+      ? "var(--color-danger)"
+      : tone === "warning"
+        ? "var(--color-warning)"
+        : undefined;
+  return (
+    <span
+      style={{
+        flex: "1 1 auto",
+        minWidth: 0,
+        display: "flex",
+        justifyContent: "flex-end",
+      }}
+    >
+      <span
+        title={statsTitleText(stats)}
+        style={{ ...SLOT.status, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+      >
+        {usage !== undefined && (
+          <span style={toneColor === undefined ? undefined : { color: toneColor }}>
+            {contextText(usage)}
+          </span>
+        )}
+        {cost !== null && (usage !== undefined ? ` · ${cost}` : cost)}
+      </span>
+    </span>
   );
 }
 

@@ -1,6 +1,7 @@
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
+import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
@@ -271,6 +272,47 @@ describe("parseCompactCommand —— 手动压缩指令在本地拦下，不落�
     assert.equal(parseCompactCommand("/compactx"), null);
     assert.equal(parseCompactCommand("请 /compact"), null);
     assert.equal(parseCompactCommand(""), null);
+  });
+});
+
+// ── 刀 A-1：用量快照 ──
+
+const stats = (over: Partial<SessionStats> = {}): SessionStats => ({
+  sessionFile: undefined,
+  sessionId: "A",
+  userMessages: 1,
+  assistantMessages: 1,
+  toolCalls: 0,
+  toolResults: 0,
+  totalMessages: 2,
+  tokens: { input: 18200, output: 4100, cacheRead: 120000, cacheWrite: 5100, total: 147400 },
+  cost: 0.062,
+  ...over,
+});
+
+describe("stats 快照的进出槽", () => {
+  test("stats 事件进自己的槽，后到覆盖先到（每轮落定更新一次）", () => {
+    let states = applyAgentEvent(new Map(), { type: "stats", sessionId: "A", stats: stats() });
+    const first = states.get("A")?.stats;
+    assert.equal(first?.cost, 0.062);
+
+    states = applyAgentEvent(
+      states,
+      { type: "stats", sessionId: "A", stats: stats({ cost: 0.121 }) },
+    );
+    assert.equal(states.get("A")?.stats?.cost, 0.121);
+  });
+
+  test("未知会话的 stats 事件就地建槽——建会话后的首次推送可能先于 renderer 认识它", () => {
+    const states = applyAgentEvent(new Map(), { type: "stats", sessionId: "X", stats: stats() });
+    assert.equal(states.get("X")?.stats?.tokens.input, 18200);
+  });
+
+  test("seedFromDisk 清掉 stats：盘上没有用量，等唤醒后的第一次推送", () => {
+    let states = applyAgentEvent(new Map(), { type: "stats", sessionId: "A", stats: stats() });
+    assert.notEqual(states.get("A")?.stats, null);
+    states = seedFromDisk(states, "A", [userItem("u1", 1000)]);
+    assert.equal(states.get("A")?.stats, null);
   });
 });
 

@@ -9,6 +9,7 @@
  * sessionId 从第一天就贯穿所有消息：一个 agent runtime 进程要托管 N 个 session，
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
+import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { SessionPhase, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { CompactedRecord } from "./session.ts";
@@ -110,6 +111,13 @@ export type AgentEvent =
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
   | { type: "phase"; sessionId: string; phase: SessionPhase }
+  /**
+   * 一份会话用量快照（token 分项 / 花费 / 上下文余量）。推送粒度与 pi 的数据粒度对齐
+   * ——usage 跟着每次 LLM 响应落地，所以每条 assistant 消息完成（message_end）推一次；
+   * 建会话后、每轮落定、压缩结束再各兜一次。单条消息流式期间 usage 还没回来，不推。
+   * contextUsage.tokens 压缩后到下一次 LLM 响应前是 null，UI 如实显示未知。
+   */
+  | { type: "stats"; sessionId: string; stats: SessionStats }
   /**
    * 上下文压缩完成，附边界记录（摘要 + tokensBefore）。pi 只经 `compaction_end`
    * 事件暴露压缩，摘要不在任何 TranscriptItem 里——我们在这里把它变成一条落盘的界碑。

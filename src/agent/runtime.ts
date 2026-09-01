@@ -40,6 +40,16 @@ function send(event: AgentEvent): void {
   parentPort?.postMessage(event);
 }
 
+/**
+ * 用量快照（token / 花费 / 上下文余量）推给 UI。pi 的本子从盘加载全部 usage 记录，
+ * 所以唤醒的旧会话拿到的是跨重启累计值。推送粒度与 pi 的数据粒度对齐——usage
+ * 跟着每次 LLM 响应落地，所以每条 assistant 消息完成（message_end）推一次；
+ * 建会话后、压缩结束、整轮落定再各兜一次。单条消息流式期间 usage 还没回来，不推。
+ */
+function pushStats(sessionId: string, session: AgentSession): void {
+  send({ type: "stats", sessionId, stats: session.getSessionStats() });
+}
+
 /** 一个 session 的运行时状态。N 个 session 共用本进程（Q8：多 session 形状从第一天就有）。 */
 interface LiveSession {
   session: AgentSession;
@@ -170,10 +180,17 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
       for (const progress of adapter.apply(adaptable)) {
         send({ type: "progress", sessionId: command.sessionId, progress });
       }
+      // usage 与这条 LLM 响应一起落账：消息完成即推，轮内多次工具往返时数字逐条跳。
+      // 一轮多推几个几百字节的小对象，比起上面每条 delta 一帧的流式转发可忽略。
+      if (event.type === "message_end") pushStats(command.sessionId, session);
       return;
     }
     if (event.type === "agent_start") send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
-    if (event.type === "agent_settled") send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
+    if (event.type === "agent_settled") {
+      send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
+      // 整轮落定兜一次：接住最后一条消息之后落账的用量（toolResult 计费）与 abort 边角
+      pushStats(command.sessionId, session);
+    }
     // 压缩是一次真实的 LLM 调用，期间必须显示忙碌而不是「可以说话」；
     // renderer 按 phase === "compaction" 显示居中的压缩进行态。
     if (event.type === "compaction_start") {
@@ -205,10 +222,15 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
           message: compactionErrorText(event.errorMessage.replace(/^Compaction failed: /, "")),
         });
       }
+      // 压缩后 contextUsage.tokens 变 null（上一次 usage 反映的是压缩前的上下文，不可信），
+      // 推一次让 UI 如实显示未知；token / 花费总额不受压缩影响、继续累计
+      pushStats(command.sessionId, session);
     }
   });
 
   sessions.set(command.sessionId, { session, adapter, unsubscribe, mode: command.mode });
+  // 建会话即推一次：新会话给零值；唤醒的旧会话立刻给真累计——余量不用等第一轮跑完
+  pushStats(command.sessionId, session);
   send({
     type: "created",
     sessionId: command.sessionId,
