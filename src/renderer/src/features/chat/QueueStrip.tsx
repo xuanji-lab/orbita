@@ -128,6 +128,10 @@ function QueueRow(props: {
     // 空串也传下去：compact 项空串 = 清掉压缩要求（editPendingSend 按项分流）
     if (next !== initial) props.onEdit?.(next);
   };
+  const discard = () => {
+    setDraft(initial);
+    setEditing(false);
+  };
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
@@ -146,11 +150,9 @@ function QueueRow(props: {
               commit();
             } else if (event.key === "Escape") {
               event.preventDefault();
-              setDraft(initial);
-              setEditing(false);
+              discard();
             }
           }}
-          onBlur={commit}
           style={{
             flex: "1 1 auto",
             minWidth: 0,
@@ -189,21 +191,35 @@ function QueueRow(props: {
       >
         {props.note}
       </span>
-      {editable && !editing && (
-        <QueueAction
-          title="编辑这条排队"
-          onClick={() => {
-            setDraft(initial);
-            setEditing(true);
-          }}
-        >
-          <Icon name="pencil-line" size={12} />
-        </QueueAction>
+      {editing ? (
+        <>
+          {/* 显式的保存/放弃：只靠 Enter 收尾用户发现不了 */}
+          <QueueAction title="保存修改" onClick={commit}>
+            <Icon name="check" size={12} />
+          </QueueAction>
+          <QueueAction title="放弃修改" onClick={discard}>
+            <Icon name="x" size={12} />
+          </QueueAction>
+        </>
+      ) : (
+        <>
+          {editable && (
+            <QueueAction
+              title="编辑这条排队"
+              onClick={() => {
+                setDraft(initial);
+                setEditing(true);
+              }}
+            >
+              <Icon name="pencil-line" size={12} />
+            </QueueAction>
+          )}
+          {props.onPromote !== undefined && <QueueAction onClick={props.onPromote}>立即</QueueAction>}
+          <QueueAction title="取消这条排队" onClick={props.onCancel}>
+            取消
+          </QueueAction>
+        </>
       )}
-      {props.onPromote !== undefined && !editing && <QueueAction onClick={props.onPromote}>立即</QueueAction>}
-      <QueueAction title="取消这条排队" onClick={props.onCancel}>
-        取消
-      </QueueAction>
     </div>
   );
 }

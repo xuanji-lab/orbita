@@ -208,6 +208,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           // runtime 整个没了：live 账本清零，全部槽归位（归约在 applyAgentEvent 里）
           if (event.sessionId === null) liveRef.current.clear();
         }
+        // 新一轮真的跑起来了（重试成功 / 用户重发 / 压缩开始）：上一次的失败已成
+        // 过去，红字不再挂着——只有最后状态是失败时才该看到失败提示
+        if (event.type === "phase" && event.phase !== "idle") setError(null);
         // 一轮跑完标题与 updatedAt 都变了，刷一次侧栏——**哪条会话跑完都刷**，
         // 后台完成的会话侧栏也该亮起来
         if (event.type === "phase" && event.phase === "idle") refreshSessions();
