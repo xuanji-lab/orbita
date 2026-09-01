@@ -815,7 +815,7 @@ function ToolLine(props: {
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
       {open && expandable && diff === null && fileView === null && (
-        <PlainToolBody toolName={props.toolName} text={body} />
+        <PlainToolBody toolName={props.toolName} text={body} failed={failed} />
       )}
     </div>
   );
@@ -1059,11 +1059,26 @@ function tokenSpans(line: readonly TokenSpan[]) {
  * 「path:行号: 正文」按匹配/上下文分两档（匹配正文 primary、上下文 secondary，
  * 前缀退成注脚），find / ls 的清单行把文件名亮出来（目录前缀退灰）。
  * 解析不出的行原样渲染，宁可不解析也不猜错。
+ * **失败时整块退回原样行并染 danger**（折叠行的红 triangle 在这里续上），
+ * 结构化只对成功结果做——错误文本长得不像清单，硬解析是猜。
  */
-function PlainToolBody(props: { toolName: string; text: string }) {
+function PlainToolBody(props: { toolName: string; text: string; failed: boolean }) {
   if (props.text === "") {
     return (
-      <div style={{ ...PLAIN_BODY, color: "var(--color-text-tertiary)" }}>(no output)</div>
+      <div style={{ ...PLAIN_BODY, color: "var(--color-text-secondary)", padding: "0 var(--space-2)" }}>
+        （无输出）
+      </div>
+    );
+  }
+  if (props.failed) {
+    return (
+      <div style={PLAIN_BODY}>
+        {props.text.split("\n").map((line, index) => (
+          <div key={index} style={{ ...BODY_LINE, color: "var(--color-danger)" }}>
+            {line === "" ? " " : line}
+          </div>
+        ))}
+      </div>
     );
   }
   return (
@@ -1089,7 +1104,7 @@ const BODY_LINE = {
   overflowWrap: "anywhere",
 } satisfies React.CSSProperties;
 
-/** 单行按工具着色；工具没有专门形态的走 tertiary 原样行（正文色基线随后一刀统一） */
+/** 单行按工具着色；工具没有专门形态的走 secondary 原样行（无结构正文的内容基线） */
 function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
   if (toolName === "grep") {
     const parsed = parseGrepLine(line);
@@ -1127,7 +1142,7 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
     );
   }
   return (
-    <div key={key} style={{ ...BODY_LINE, color: "var(--color-text-tertiary)" }}>
+    <div key={key} style={{ ...BODY_LINE, color: "var(--color-text-secondary)" }}>
       {line === "" ? " " : line}
     </div>
   );

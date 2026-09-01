@@ -262,29 +262,29 @@ describe("summarizeToolResult", () => {
     const running = indexToolResults([
       toolItem({ toolCallId: "a", status: "running", isError: false }),
     ]).get("a");
-    assert.equal(summarizeToolResult(running), "running");
+    assert.equal(summarizeToolResult(running), "运行中");
 
     const failed = indexToolResults([
       toolItem({ toolCallId: "a", status: "error", isError: true }),
     ]).get("a");
-    assert.equal(summarizeToolResult(failed), "failed");
+    assert.equal(summarizeToolResult(failed), "失败");
   });
 
   test("多行数行数，单行数字符数", () => {
     const multi = indexToolResults([
       toolItem({ toolCallId: "a", content: [{ type: "text", text: "1\n2\n3" }] }),
     ]).get("a");
-    assert.equal(summarizeToolResult(multi), "3 lines");
+    assert.equal(summarizeToolResult(multi), "3 行");
 
     const single = indexToolResults([
       toolItem({ toolCallId: "a", content: [{ type: "text", text: "hello" }] }),
     ]).get("a");
-    assert.equal(summarizeToolResult(single), "5 chars");
+    assert.equal(summarizeToolResult(single), "5 字符");
   });
 
-  test("空产出说 no output，而不是显示成 0 chars", () => {
+  test("空产出说无输出，而不是显示成 0 字符", () => {
     const empty = indexToolResults([toolItem({ toolCallId: "a", content: [] })]).get("a");
-    assert.equal(summarizeToolResult(empty), "no output");
+    assert.equal(summarizeToolResult(empty), "无输出");
   });
 });
 

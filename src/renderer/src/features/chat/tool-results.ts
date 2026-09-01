@@ -256,18 +256,19 @@ export function formatToolDuration(ms: number): string {
   return `${Math.floor(whole / 60)} 分 ${String(whole % 60).padStart(2, "0")} 秒`;
 }
 
-/** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。 */
+/** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。中文措辞——
+ *  与同行的量词（「N 行」「N 个文件」）同一种语言，不中英混排。 */
 export function summarizeToolResult(result: ToolTranscriptItem | undefined): string | null {
   if (result === undefined) return null;
-  if (result.status === "running") return "running";
-  if (result.status === "error") return "failed";
+  if (result.status === "running") return "运行中";
+  if (result.status === "error") return "失败";
   const text = result.content
     .map((block) => (block.type === "text" ? block.text : "[image]"))
     .join("\n")
     .trim();
-  if (text === "") return "no output";
+  if (text === "") return "无输出";
   const lines = text.split("\n").length;
-  return lines > 1 ? `${lines} lines` : `${text.length} chars`;
+  return lines > 1 ? `${lines} 行` : `${text.length} 字符`;
 }
 
 /** 展开后要显示的正文。图片暂不渲染，只标记它存在——真正的图片渲染是后面的事。 */
