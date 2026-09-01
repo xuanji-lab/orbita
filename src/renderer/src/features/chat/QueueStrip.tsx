@@ -179,7 +179,6 @@ function QueueRow(props: {
       >
         {props.note}
       </span>
-      {props.onPromote !== undefined && !editing && <QueueAction onClick={props.onPromote}>立即</QueueAction>}
       {editable && !editing && (
         <QueueAction
           title="编辑这条排队"
@@ -191,6 +190,7 @@ function QueueRow(props: {
           <Icon name="pencil-line" size={12} />
         </QueueAction>
       )}
+      {props.onPromote !== undefined && !editing && <QueueAction onClick={props.onPromote}>立即</QueueAction>}
       <QueueAction title="取消这条排队" onClick={props.onCancel}>
         取消
       </QueueAction>
