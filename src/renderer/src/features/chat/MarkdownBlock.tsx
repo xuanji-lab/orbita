@@ -1,17 +1,20 @@
 import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import type { ComponentPropsWithoutRef } from "react";
+import { MdPre } from "./CodeBlock";
 
 /**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
  *
  * - **memo 按 text 记忆**：流式期间 transcript 每帧都产生新对象，但只有正在流的那条
  *   的 text 真的在变——没变的消息不重新解析 markdown。
+ * - 代码块高亮走 shiki（`CodeBlock.tsx` 覆写 pre，双主题 HTML + CSS 变量切换），
+ *   配色来自 github-light / github-dark 主题，是设计系统 token 的既定例外。
  * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 会把它送去系统浏览器
  *   （`src/main/index.ts`），外链绝不能在应用窗口内导航走。
- * - 默认不渲染 raw HTML（react-markdown 的缺省行为），模型输出里夹 HTML 也无害。
+ * - 默认不渲染 raw HTML（react-markdown 的缺省行为），模型输出里夹 HTML 也无害
+ *   ——代码块的 shiki HTML 是我们自己生成的，不受此限。
  * - 元素样式在 `styles.css` 的 `.chat-md` 作用域里，走设计系统 token。
  */
 export const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
@@ -19,8 +22,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: strin
     <div className="chat-md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
-        components={{ a: ExternalAnchor }}
+        components={{ a: ExternalAnchor, pre: MdPre }}
       >
         {text}
       </ReactMarkdown>

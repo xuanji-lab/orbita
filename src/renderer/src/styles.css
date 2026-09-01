@@ -139,27 +139,13 @@ body {
  *
  * 代码底色的取舍：设计系统给的 --color-code-bg 是不随主题切换的近黑（#111418），
  * 在浅主题玻璃面上黑得太重（2026-08-31 用户反馈）。改用 --color-chat-muted-bg——
- * 它本来就按主题定义了两份（浅 #f4f4f5 / 深 #242932），代码底色从此跟随主题；
- * 文字用正文字色。语法色因此要两套：浅主题 github-light 一族，深主题 github-dark
- * 一族（与暗主题 --color-danger #ff7b72 同源），随 data-theme 切换。
+ * 它本来就按主题定义了两份（浅 #f4f4f5 / 深 #242932），代码底色从此跟随主题。
+ *
+ * 语法色是设计系统 token 的**既定例外**：由 shiki 的 github-light / github-dark
+ * 主题提供（TextMate 语法，VS Code 同源），不走 --syntax-* 一类的自有 token——
+ * 6 个颜色桶撑不起 TextMate 的 scope 层次。明暗切换靠 shiki 双主题 CSS 变量
+ * （--shiki-dark），见下方 pre.shiki 规则。
  */
-:root {
-  --syntax-comment: #6e7781;
-  --syntax-keyword: #cf222e;
-  --syntax-string: #0a3069;
-  --syntax-constant: #0550ae;
-  --syntax-entity: #8250df;
-  --syntax-tag: #116329;
-}
-
-:root[data-theme="dark"] {
-  --syntax-comment: #8b949e;
-  --syntax-keyword: #ff7b72;
-  --syntax-string: #a5d6ff;
-  --syntax-constant: #79c0ff;
-  --syntax-entity: #d2a8ff;
-  --syntax-tag: #7ee787;
-}
 
 .chat-md {
   min-width: 0;
@@ -264,6 +250,24 @@ body {
   line-height: 1.55;
 }
 
+/*
+ * shiki 高亮块（B-1）。pre.shiki 带内联 style（浅主题的底色/前景 + 每元素一份
+ * --shiki-dark 变量），!important 是压过内联 style 的唯一手段；底色换回主题的
+ * muted 底（见上方取舍注释），暗主题把前景与 span 语法色翻到 --shiki-dark。
+ */
+.chat-md pre.shiki {
+  background-color: var(--color-chat-muted-bg) !important;
+}
+
+:root[data-theme="dark"] .chat-md pre.shiki,
+:root[data-theme="dark"] .chat-md pre.shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg, transparent) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
+}
+
 .chat-md table {
   margin: var(--space-2) 0;
   border-collapse: collapse;
@@ -290,69 +294,6 @@ body {
 .chat-md img {
   max-width: 100%;
   border-radius: var(--radius-md);
-}
-
-/* rehype-highlight 打出的语法记号；只映射常用的那些，没映射的继承正文字色 */
-.chat-md .hljs-comment,
-.chat-md .hljs-quote {
-  color: var(--syntax-comment);
-  font-style: italic;
-}
-
-.chat-md .hljs-keyword,
-.chat-md .hljs-selector-tag,
-.chat-md .hljs-literal,
-.chat-md .hljs-doctag,
-.chat-md .hljs-formula {
-  color: var(--syntax-keyword);
-}
-
-.chat-md .hljs-string,
-.chat-md .hljs-regexp {
-  color: var(--syntax-string);
-}
-
-.chat-md .hljs-number,
-.chat-md .hljs-symbol,
-.chat-md .hljs-bullet,
-.chat-md .hljs-link,
-.chat-md .hljs-attr,
-.chat-md .hljs-attribute,
-.chat-md .hljs-variable,
-.chat-md .hljs-template-variable,
-.chat-md .hljs-params {
-  color: var(--syntax-constant);
-}
-
-.chat-md .hljs-title,
-.chat-md .hljs-title.function_,
-.chat-md .hljs-section,
-.chat-md .hljs-name {
-  color: var(--syntax-entity);
-}
-
-.chat-md .hljs-type,
-.chat-md .hljs-built_in,
-.chat-md .hljs-title.class_,
-.chat-md .hljs-selector-id,
-.chat-md .hljs-selector-class {
-  color: var(--syntax-tag);
-}
-
-.chat-md .hljs-addition {
-  color: var(--syntax-tag);
-}
-
-.chat-md .hljs-deletion {
-  color: var(--syntax-keyword);
-}
-
-.chat-md .hljs-emphasis {
-  font-style: italic;
-}
-
-.chat-md .hljs-strong {
-  font-weight: var(--weight-semibold);
 }
 
 @keyframes orbita-spin {
