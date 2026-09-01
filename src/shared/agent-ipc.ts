@@ -126,13 +126,15 @@ export type AgentCommand =
    * index 指 `[...steering, ...followUp]` 拼接视图的下标（UI 就是按这个顺序渲染的）；
    * text 是期望文本，与队列现状不符时（投递/并发编辑刚发生）操作落空、队列原样重放，
    * 等 queue 事件校准 UI。promote 只对 followUp 段有效——steering 段的项已在插队，no-op。
+   * edit 改写目标条目的文本（保持它原属的队列与顺位），newText 为替换文本。
    */
   | {
       type: "queueEdit";
       sessionId: string;
-      op: "promote" | "cancel";
+      op: "promote" | "cancel" | "edit";
       index: number;
       text: string;
+      newText?: string;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
