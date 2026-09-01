@@ -22,6 +22,8 @@ export const ipcChannels = {
   agentCreate: "agent:create",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
+  /** 编辑排队中的消息：promote = 转插队（steer），cancel = 移出队列 */
+  agentQueueEdit: "agent:queue-edit",
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
   agentSetMode: "agent:set-mode",
@@ -120,6 +122,19 @@ export type AgentCommand =
   | { type: "submit"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
   /**
+   * 编辑 pi 的排队消息（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
+   * index 指 `[...steering, ...followUp]` 拼接视图的下标（UI 就是按这个顺序渲染的）；
+   * text 是期望文本，与队列现状不符时（投递/并发编辑刚发生）操作落空、队列原样重放，
+   * 等 queue 事件校准 UI。promote 只对 followUp 段有效——steering 段的项已在插队，no-op。
+   */
+  | {
+      type: "queueEdit";
+      sessionId: string;
+      op: "promote" | "cancel";
+      index: number;
+      text: string;
+    }
+  /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
    * 忙碌态与界碑都走 `compaction_start` / `compaction` 事件那一条链。
    */
@@ -157,6 +172,17 @@ export type AgentEvent =
    * runtime 翻成 phase 事件，renderer 的重试槽随任何 phase 事件一并清空（自愈）。
    */
   | { type: "retry"; sessionId: string; status: RetryStatus | null }
+  /**
+   * 排队消息快照（pi 的 queue_update 翻译）。**全量**：每次入队、投递、清队后 pi 都重发整份，
+   * renderer 直接覆盖槽里的值即可，不做增量合并。steering = 已插队、等当前轮的工具边界注入；
+   * followUp = 等本轮结束作为下一轮投递。纯 ephemeral，不落盘。
+   */
+  | {
+      type: "queue";
+      sessionId: string;
+      steering: readonly string[];
+      followUp: readonly string[];
+    }
   /** 工具执行前的请示。UI 要显示它并等用户回答（三档模式见 shared/permission.ts） */
   | {
       type: "permission";
