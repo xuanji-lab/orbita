@@ -15,8 +15,10 @@ import {
   intraLineTokens,
   parseDiffLines,
   parseEditDiff,
+  parseGrepLine,
   formatToolDuration,
   recordToolFrame,
+  splitPathTail,
   streamingThinkingKey,
   summarizeToolResult,
   thinkingDurationText,
@@ -803,5 +805,67 @@ describe("fileViewFor · read 分支", () => {
       content: [{ type: "text", text: "ENOENT" }],
     });
     assert.equal(failed === undefined ? null : fileViewFor("read", { path: "a.ts" }, failed), null);
+  });
+});
+
+describe("parseGrepLine", () => {
+  test("匹配行 `path:N: 正文`", () => {
+    assert.deepEqual(parseGrepLine("src/app.ts:42: const x = 1;"), {
+      kind: "match",
+      path: "src/app.ts",
+      lineNum: "42",
+      text: "const x = 1;",
+    });
+  });
+
+  test("上下文行 `path-N- 正文`", () => {
+    assert.deepEqual(parseGrepLine("src/app.ts-41- // 前一行"), {
+      kind: "context",
+      path: "src/app.ts",
+      lineNum: "41",
+      text: "// 前一行",
+    });
+  });
+
+  test("带空格与反斜杠的路径也认（惰性前缀在第一个行号定界符处断开）", () => {
+    const spaced = parseGrepLine("reference project/x.ts:7: hi");
+    assert.ok(spaced !== null);
+    assert.equal(spaced.path, "reference project/x.ts");
+    const win = parseGrepLine("src\\app.ts:7: hi");
+    assert.ok(win !== null);
+    assert.equal(win.path, "src\\app.ts");
+  });
+
+  test("正文里再出现冒号数字不干扰（惰性匹配取第一个定界符）", () => {
+    const hit = parseGrepLine("a.ts:1: foo:2: bar");
+    assert.ok(hit !== null);
+    assert.equal(hit.text, "foo:2: bar");
+  });
+
+  test("尾注、No matches found、空行——不解析，返回 null", () => {
+    assert.equal(parseGrepLine("[Truncated: 100 matches limit, 50KB limit]"), null);
+    assert.equal(parseGrepLine("No matches found"), null);
+    assert.equal(parseGrepLine(""), null);
+  });
+});
+
+describe("splitPathTail", () => {
+  test("目录前缀与文件名分离（正反斜杠都认）", () => {
+    assert.deepEqual(splitPathTail("src/renderer/src/App.tsx"), {
+      dir: "src/renderer/src/",
+      name: "App.tsx",
+    });
+    assert.deepEqual(splitPathTail("src\\renderer\\App.tsx"), {
+      dir: "src\\renderer\\",
+      name: "App.tsx",
+    });
+  });
+
+  test("无分隔符的裸名（ls 条目）整个是文件名", () => {
+    assert.deepEqual(splitPathTail("package.json"), { dir: "", name: "package.json" });
+  });
+
+  test("ls 目录条目的尾分隔符不拆出空名", () => {
+    assert.deepEqual(splitPathTail("docs/"), { dir: "", name: "docs/" });
   });
 });

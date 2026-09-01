@@ -13,6 +13,8 @@ import {
   indexToolResults,
   parseEditDiff,
   editDiffEntries,
+  parseGrepLine,
+  splitPathTail,
   streamingThinkingKey,
   summarizeToolResult,
   editDiffStats,
@@ -813,14 +815,7 @@ function ToolLine(props: {
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
       {open && expandable && diff === null && fileView === null && (
-        <pre
-          style={{
-            ...EXPANDED_BODY,
-            color: "var(--color-text-tertiary)",
-          }}
-        >
-          {body === "" ? "(no output)" : body}
-        </pre>
+        <PlainToolBody toolName={props.toolName} text={body} />
       )}
     </div>
   );
@@ -1056,6 +1051,85 @@ function tokenSpans(line: readonly TokenSpan[]) {
         {token.text}
       </span>
     ),
+  );
+}
+
+/**
+ * 其余工具的展开体：逐行渲染的文本底座 + 工具级轻结构化——grep 的
+ * 「path:行号: 正文」按匹配/上下文分两档（匹配正文 primary、上下文 secondary，
+ * 前缀退成注脚），find / ls 的清单行把文件名亮出来（目录前缀退灰）。
+ * 解析不出的行原样渲染，宁可不解析也不猜错。
+ */
+function PlainToolBody(props: { toolName: string; text: string }) {
+  if (props.text === "") {
+    return (
+      <div style={{ ...PLAIN_BODY, color: "var(--color-text-tertiary)" }}>(no output)</div>
+    );
+  }
+  return (
+    <div style={PLAIN_BODY}>
+      {props.text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
+    </div>
+  );
+}
+
+/** 展开体滚动容器的共用形态（DiffView / FileContentView 同款，无内边距——行自带） */
+const PLAIN_BODY = {
+  maxHeight: 320,
+  overflow: "auto",
+  borderTop: "1px solid var(--color-border-subtle)",
+  fontFamily: "var(--font-family-mono)",
+  fontSize: "var(--font-size-caption)",
+  lineHeight: 1.6,
+} satisfies React.CSSProperties;
+
+const BODY_LINE = {
+  padding: "0 var(--space-2)",
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+} satisfies React.CSSProperties;
+
+/** 单行按工具着色；工具没有专门形态的走 tertiary 原样行（正文色基线随后一刀统一） */
+function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
+  if (toolName === "grep") {
+    const parsed = parseGrepLine(line);
+    if (parsed !== null) {
+      const separator = parsed.kind === "match" ? ":" : "-";
+      return (
+        <div key={key} style={BODY_LINE}>
+          <span style={{ color: "var(--color-text-tertiary)" }}>
+            {parsed.path}
+            {separator}
+            {parsed.lineNum}
+            {separator}{" "}
+          </span>
+          <span
+            style={{
+              color:
+                parsed.kind === "match"
+                  ? "var(--color-text-primary)"
+                  : "var(--color-text-secondary)",
+            }}
+          >
+            {parsed.text === "" ? " " : parsed.text}
+          </span>
+        </div>
+      );
+    }
+  }
+  if (toolName === "find" || toolName === "ls") {
+    const { dir, name } = splitPathTail(line);
+    return (
+      <div key={key} style={BODY_LINE}>
+        {dir !== "" && <span style={{ color: "var(--color-text-secondary)" }}>{dir}</span>}
+        <span style={{ color: "var(--color-text-primary)" }}>{name === "" ? " " : name}</span>
+      </div>
+    );
+  }
+  return (
+    <div key={key} style={{ ...BODY_LINE, color: "var(--color-text-tertiary)" }}>
+      {line === "" ? " " : line}
+    </div>
   );
 }
 

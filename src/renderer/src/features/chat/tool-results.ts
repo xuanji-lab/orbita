@@ -583,6 +583,44 @@ export function writeLineCount(input: unknown): number | null {
   return trimTrailingEmptyLines(content.split("\n")).length;
 }
 
+/** grep 结果行：pi 的输出格式——匹配行 `path:N: 正文`、上下文行 `path-N- 正文`。 */
+export interface GrepLine {
+  kind: "match" | "context";
+  path: string;
+  lineNum: string;
+  text: string;
+}
+
+const GREP_MATCH_LINE = /^(.+?):(\d+): ?(.*)$/;
+const GREP_CONTEXT_LINE = /^(.+?)-(\d+)- ?(.*)$/;
+
+/**
+ * 单行解析 grep 输出。不匹配（尾注 `[Truncated: ...]`、"No matches found"、空行）
+ * 返回 null——调用方按原样行渲染，宁可不解析也不猜错。前缀惰性匹配，
+ * 带空格 / 反斜杠的路径也认（在第一个 `:数字:` / `-数字-` 处断开）。
+ */
+export function parseGrepLine(line: string): GrepLine | null {
+  const match = GREP_MATCH_LINE.exec(line);
+  if (match !== null) {
+    return { kind: "match", path: match[1] ?? "", lineNum: match[2] ?? "", text: match[3] ?? "" };
+  }
+  const context = GREP_CONTEXT_LINE.exec(line);
+  if (context !== null) {
+    return { kind: "context", path: context[1] ?? "", lineNum: context[2] ?? "", text: context[3] ?? "" };
+  }
+  return null;
+}
+
+/**
+ * 路径清单行（find / ls）拆尾：目录前缀退灰、文件名亮。ls 的目录条目
+ * （`docs/`）尾分隔符后没有名字——整条当文件名，不拆出空名。
+ */
+export function splitPathTail(line: string): { dir: string; name: string } {
+  const idx = Math.max(line.lastIndexOf("/"), line.lastIndexOf("\\"));
+  if (idx === -1 || idx === line.length - 1) return { dir: "", name: line };
+  return { dir: line.slice(0, idx + 1), name: line.slice(idx + 1) };
+}
+
 /** 工具行展开的「文件内容视图」参数。write 用入参正文、read 用读到的原文；其余工具返回 null（原文展示）。 */
 export interface FileViewInput {
   text: string;
