@@ -627,7 +627,7 @@ function CollapseRow(props: {
 }
 
 const SLOT = {
-  /** 副标不占满整行（flex 0 1 auto）：状态词与箭头紧跟其后，行不被拉长 */
+  /** 副标不占满整行（flex 0 1 auto）：状态词紧跟其后，行不被拉长 */
   sub: {
     flex: "0 1 auto",
     minWidth: 0,
@@ -673,16 +673,6 @@ const HEAD_WRAP = {
   gap: "var(--space-2)",
   flex: "0 0 auto",
 } satisfies React.CSSProperties;
-
-function chevronSlot(open: boolean): React.CSSProperties {
-  return {
-    display: "inline-flex",
-    flex: "0 0 auto",
-    color: "var(--color-text-tertiary)",
-    transform: open ? "rotate(180deg)" : "none",
-    transition: "transform var(--duration-fast) var(--ease-standard)",
-  };
-}
 
 /** 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。 */
 const EXPANDED_BODY = {
@@ -835,11 +825,6 @@ function ToolLine(props: {
         )}
         {/* shell 类的执行耗时——慢命令（install / typecheck）不展开也讲清楚花在哪 */}
         {shellDuration !== null && <span style={SLOT.status}>{shellDuration}</span>}
-        {expandable && (
-          <span style={chevronSlot(open)}>
-            <Icon name="chevron-down" size={14} strokeWidth={1.8} />
-          </span>
-        )}
       </CollapseRow>
       {open && expandable && diff !== null && <DiffView diff={diff} />}
       {open && expandable && diff === null && fileView !== null && (
@@ -896,9 +881,6 @@ function ToolGroupLine(props: {
         {!open && failed && (
           <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>{status.failed} 失败</span>
         )}
-        <span style={chevronSlot(open)}>
-          <Icon name="chevron-down" size={14} strokeWidth={1.8} />
-        </span>
       </CollapseRow>
       {open && (
         <div style={{ display: "grid", gap: "var(--space-1)", paddingLeft: "var(--space-2)" }}>
@@ -1216,11 +1198,9 @@ function ThinkingLine(props: { text: string; active: boolean; blockKey: string }
           </span>
           <span style={headLabel(active)}>思考</span>
         </span>
-        {active && preview !== "" && <span style={SLOT.sub}>{preview}</span>}
+        {/* 展开时预览让位——正文已经是更全的信息，同一行不必再放一遍尾巴 */}
+        {active && !open && preview !== "" && <span style={SLOT.sub}>{preview}</span>}
         {!active && duration !== null && <span style={SLOT.sub}>{duration}</span>}
-        <span style={chevronSlot(open)}>
-          <Icon name="chevron-down" size={14} strokeWidth={1.8} />
-        </span>
       </CollapseRow>
       {open && body !== "" && (
         <div
@@ -1283,16 +1263,6 @@ function CompactedLine(props: { record: CompactedRecord }) {
       >
         <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {compactionBoundaryText(props.record)}
-        </span>
-        <span
-          style={{
-            display: "inline-flex",
-            flex: "0 0 auto",
-            color: "var(--color-text-tertiary)",
-            transform: open ? "rotate(180deg)" : undefined,
-          }}
-        >
-          <Icon name="chevron-down" size={13} strokeWidth={1.8} />
         </span>
       </button>
       {open && (
