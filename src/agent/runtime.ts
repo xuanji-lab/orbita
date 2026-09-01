@@ -71,6 +71,15 @@ const sessions = new Map<string, LiveSession>();
 const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
 
 /**
+ * 每轮重讲的工具使用指引。bash 的 schema 暴露了可选 `timeout`（秒），模型会自作主张
+ * 给大扫描带上 60 秒这种小值，把 node_modules 级别的正常慢命令拦腰杀掉（实测：
+ * `grep -r node_modules/` + `timeout:60` → "Command timed out after 60 seconds"）。
+ * 短命令不受影响，只要求慢命令别自己设短超时。
+ */
+const TOOL_GUIDELINES =
+  "跑可能耗时的命令（大目录/全仓搜索、依赖安装、构建、测试）时，不要给 bash/powershell 传 timeout 参数，或至少设 300 秒以上——Windows 上扫大目录本来就慢，短超时会把正常的慢命令拦腰杀掉。";
+
+/**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点，
  * 而 pi 的工具执行本来就允许长时间等待（abort 走的是另一条路）。
  */
@@ -158,7 +167,7 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在建会话时讲一次的话，切了模式模型还按旧的答。
             pi.on("before_agent_start", (event) => ({
-              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(currentMode())}`,
+              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(currentMode())}\n\n${TOOL_GUIDELINES}`,
             }));
           },
         },
