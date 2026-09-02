@@ -304,6 +304,8 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
       send({ type: "retry", sessionId: command.sessionId, status: null });
       // 重试耗尽是回合级终局，沿用压缩失败的同一条报错通路（failed → 红色提示）。
       // "Retry cancelled" 是用户主动点停止（pi 固定字面量，精确锁版本稳定）：自己按的，不报。
+      // turn 标记让 renderer 把它标注到对话里——挂在这轮没送出去的消息下面，
+      // 而不是输入框上方的全局红字（用户裁决：失败属于那句话，不属于输入框）。
       if (
         event.type === "auto_retry_end" &&
         !event.success &&
@@ -312,7 +314,8 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
         send({
           type: "failed",
           sessionId: command.sessionId,
-          message: `重试 ${event.attempt} 次后仍失败：${event.finalError ?? "未知错误"}`,
+          message: `重试 ${event.attempt} 次后仍失败：${event.finalError ?? "未知"}`,
+          turn: true,
         });
       }
     }
