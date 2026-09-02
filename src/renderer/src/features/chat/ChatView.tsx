@@ -629,8 +629,8 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
 
 /**
  * 分支按钮行（C-2）：挂在每轮 agent 最终完整输出的下面，回答落定即**常驻显示**
- * （用户裁决：不用 hover 浮现）。点了开出一条新会话（该回答及之前的全部），
- * 原会话原封不动，所以**无需确认弹窗**。
+ * （用户裁决：不用 hover 浮现）。图标即按钮——悬停 / 读屏都走「从当前分支」这同一个
+ * 名字。点了开出一条新会话（该回答及之前的全部），原会话原封不动，所以**无需确认弹窗**。
  * 工具还在跑时禁用：它的结果没齐，此刻裁出去的上下文是畸形的。
  */
 function BranchRow(props: {
@@ -644,22 +644,19 @@ function BranchRow(props: {
         type="button"
         disabled={props.disabled}
         onClick={() => props.onBranch(props.anchorItemId)}
-        title="保留到这里为止的前文，另开一条会话继续；原会话不动"
+        title="从当前分支"
+        aria-label="从当前分支"
         style={{
           display: "inline-flex",
           alignItems: "center",
-          gap: "var(--space-1)",
-          padding: "3px 8px",
+          padding: 4,
           border: "none",
           background: "none",
           color: "var(--color-text-tertiary)",
-          fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-micro)",
           cursor: props.disabled ? "default" : "pointer",
         }}
       >
         <Icon name="git-branch" size={12} strokeWidth={1.8} />
-        从这里分支
       </button>
     </div>
   );
