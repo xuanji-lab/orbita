@@ -71,12 +71,18 @@ function pushStats(sessionId: string, session: AgentSession): void {
  * ponytail: maxTokens 1024 是硬上限不是目标——后端无视思考抑制时标记仍可达
  * （oh-my-pi issue #4355 同款）；本仓锁的 pi-ai 0.84.3 没有 disableReasoning。
  */
+/** 标题调用的硬上限。标题是易耗品，宁可超时重试也不挂着占住单飞守卫。 */
+const TITLE_TIMEOUT_MS = 30_000;
+
 async function generateSessionTitle(live: LiveSession, sessionId: string, text: string): Promise<void> {
   if (live.titleInFlight) return;
   live.titleInFlight = true;
   try {
     const model = live.session.model;
     if (model === undefined) return;
+    // **30 秒硬超时必须有**：标题与当前轮并发抢 provider，请求可能被网关挂住
+    // 不返回——没有超时的话 titleInFlight 永远不放，这条会话之后的所有重试
+    // 都被在途守卫吞掉（真实事故：一条会话 17 条消息一次标题都没成）。
     const response = await completeSimple(
       model,
       {
@@ -86,18 +92,31 @@ async function generateSessionTitle(live: LiveSession, sessionId: string, text: 
       {
         apiKey: live.apiKey,
         maxTokens: 1024,
+        timeoutMs: TITLE_TIMEOUT_MS,
+        signal: AbortSignal.timeout(TITLE_TIMEOUT_MS),
         ...(live.headers ? { headers: live.headers } : {}),
       },
     );
-    if (response.stopReason === "error") return;
+    if (response.stopReason === "error") {
+      console.error(`[title] ${model.id} 响应错误：`, response.errorMessage);
+      return;
+    }
     let output = "";
     for (const block of response.content) {
       if (block.type === "text") output += block.text;
     }
     const title = normalizeGeneratedTitle(output);
-    if (title !== null) send({ type: "title", sessionId, title });
-  } catch {
-    // 标题失败静默：侧栏保留首句截断
+    if (title !== null) {
+      send({ type: "title", sessionId, title });
+    } else {
+      // 失败本就静默（侧栏保留首句截断），但原因必须落到 dev 终端，
+      // 否则「为什么大多数会话没有标题」无从查起
+      console.warn(
+        `[title] ${model.id} 放弃（none/空/超长），原文前 120 字：${JSON.stringify(output.slice(0, 120))}`,
+      );
+    }
+  } catch (cause) {
+    console.error("[title] 生成失败：", cause);
   } finally {
     live.titleInFlight = false;
   }

@@ -191,11 +191,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const refreshSessions = useCallback(() => {
     void api.session.list().then((list) => {
       setSessions(list);
-      // **opened 是列表里那条的快照，必须跟着刷**——不刷的话同一份会话在侧栏和
-      // 顶栏显示两个名字（模型标题、rename 都只换了列表那份，顶栏还是旧的）
+      // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
+      // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
+      // 改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
+      // 与 viewedId 同一条规则：盘上打开的优先，否则看活着的。
       setOpened((current) => {
-        if (current === null) return current;
-        return list.find((meta) => meta.id === current.id) ?? current;
+        const id = current?.id ?? sessionRef.current ?? null;
+        if (id === null) return null;
+        return list.find((meta) => meta.id === id) ?? current;
       });
     }).catch(() => setSessions([]));
   }, []);
