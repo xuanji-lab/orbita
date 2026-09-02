@@ -36,6 +36,9 @@ export function InlineName(props: {
       onBlur={commit}
       onKeyDown={(event) => {
         event.stopPropagation();
+        // 中文输入法组包中的 Enter / Escape 是确认候选、取消组包，不是提交/放弃——
+        // 不挡的话打拼音直接就把半截拼音提交成名字了
+        if (event.nativeEvent.isComposing) return;
         if (event.key === "Enter") {
           event.preventDefault();
           commit();

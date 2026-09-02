@@ -189,10 +189,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, [states]);
 
   const refreshSessions = useCallback(() => {
-    void api.session
-      .list()
-      .then(setSessions)
-      .catch(() => setSessions([]));
+    void api.session.list().then((list) => {
+      setSessions(list);
+      // **opened 是列表里那条的快照，必须跟着刷**——不刷的话同一份会话在侧栏和
+      // 顶栏显示两个名字（模型标题、rename 都只换了列表那份，顶栏还是旧的）
+      setOpened((current) => {
+        if (current === null) return current;
+        return list.find((meta) => meta.id === current.id) ?? current;
+      });
+    }).catch(() => setSessions([]));
   }, []);
 
   useEffect(refreshSessions, [refreshSessions]);
@@ -455,21 +460,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       );
   }, []);
 
-  const renameSession = useCallback((id: string, title: string) => {
-    void api.session
-      .rename(id, title)
-      .then(() => api.session.list())
-      .then((list) => {
-        setSessions(list);
-        // **不做乐观更新**：改成空名字时后端会退回推导，猜不出来。
-        // 正开着的就是这条时，标题栏也要跟着变，所以从刷新回来的真值里取。
-        setOpened((current) => {
-          if (current === null) return current;
-          const fresh = list.find((meta) => meta.id === current.id);
-          return fresh ?? current;
-        });
-      });
-  }, []);
+  const renameSession = useCallback(
+    (id: string, title: string) => {
+      // **不做乐观更新**：改成空名字时后端会退回推导，猜不出来。
+      // refreshSessions 会把列表与正开着的顶栏一起从真值同步。
+      void api.session.rename(id, title).then(refreshSessions);
+    },
+    [refreshSessions],
+  );
 
   const pinSession = useCallback(
     (id: string, pinned: boolean) => {
