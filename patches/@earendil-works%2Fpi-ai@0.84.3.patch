@@ -1,0 +1,13 @@
+diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+index 65c7c9efd7667445b711fcd43549062ee3eb5ecf..88b1d2e3ae08d44398dcac972ec15679bedb7e1d 100644
+--- a/dist/utils/retry.js	
++++ b/dist/utils/retry.js
+@@ -137,7 +137,7 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
+         }
+         attempt++;
+         lastRetry = { attempt, errorMessage: response.errorMessage || "Unknown error" };
+-        const delayMs = policy.baseDelayMs * 2 ** (attempt - 1);
++        const delayMs = policy.baseDelayMs;
+         await callbacks?.onRetryScheduled?.(attempt, maxAttempts, delayMs, lastRetry.errorMessage);
+         // Normalize aborts during retry backoff to the same AssistantMessage shape as
+         // provider stream aborts, so callers do not need to care when cancellation happened.

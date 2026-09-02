@@ -13,6 +13,7 @@
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.84.3",
     "@earendil-works/pi-client": "0.84.3",
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@earendil-works/pi-protocol": "0.84.3",
@@ -32,5 +33,9 @@
     "electron-vite": "^4.0.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.6"
+  },
+  "patchedDependencies": {
+    "@earendil-works/pi-ai@0.84.3": "patches/@earendil-works%2Fpi-ai@0.84.3.patch",
+    "@earendil-works/pi-coding-agent@0.84.3": "patches/@earendil-works%2Fpi-coding-agent@0.84.3.patch"
   }
 }

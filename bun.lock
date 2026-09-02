@@ -5,6 +5,7 @@
     "": {
       "name": "orbita",
       "dependencies": {
+        "@earendil-works/pi-ai": "0.84.3",
         "@earendil-works/pi-client": "0.84.3",
         "@earendil-works/pi-coding-agent": "0.84.3",
         "@earendil-works/pi-protocol": "0.84.3",
@@ -26,6 +27,10 @@
         "vite": "^7.3.6",
       },
     },
+  },
+  "patchedDependencies": {
+    "@earendil-works/pi-ai@0.84.3": "patches/@earendil-works%2Fpi-ai@0.84.3.patch",
+    "@earendil-works/pi-coding-agent@0.84.3": "patches/@earendil-works%2Fpi-coding-agent@0.84.3.patch",
   },
   "packages": {
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.91.1", "https://registry.npmmirror.com/@anthropic-ai/sdk/-/sdk-0.91.1.tgz", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-LAmu761tSN9r66ixvmciswUj/ZC+1Q4iAfpedTfSVLeswRwnY3n2Nb6Tsk+cLPP28aLOPWeMgIuTuCcMC6W/iw=="],

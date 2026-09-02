@@ -1,0 +1,13 @@
+diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
+index f4fd9f37d9826a3e791f25c9ec748645a33d5616..2dac44fc00c4db60f9063a8acc0b1f3ee2ae2899 100644
+--- a/dist/core/agent-session.js	
++++ b/dist/core/agent-session.js
+@@ -2219,7 +2219,7 @@ export class AgentSession {
+             this._retryAttempt--;
+             return false;
+         }
+-        const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
++        const delayMs = settings.baseDelayMs;
+         this._emit({
+             type: "auto_retry_start",
+             attempt: this._retryAttempt,

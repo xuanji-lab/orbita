@@ -185,6 +185,13 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     },
   });
   /**
+   * 重试节奏由本应用自持：**固定 5 秒一次、最多 3 次**（pi 的指数退避已用 patch 拍平，
+   * 见 patches/README.md）。不显式覆盖的话会静默继承用户 pi TUI 的全局
+   * `~/.pi/agent/settings.json`——那是另一个应用的配置，不该左右这里等多久。
+   * applyOverrides 只改内存、不落盘，不会写回用户的全局设置文件。
+   */
+  services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
+  /**
    * **pi 存它自己的本子**（guideline §四，2026-08-26 修订）。
    * 续会话是把这份文件还给 pi，而不是我们把历史重讲一遍——
    * 被否决的反向适配方案与理由都写在那一节。
