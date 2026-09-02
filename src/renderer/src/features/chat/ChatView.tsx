@@ -267,10 +267,20 @@ export function ChatView(props: { session: ChatSession }) {
       })}
       {session.turnError !== null && (
         /*
-         * 回合失败标注（重试耗尽）：挂在转录末尾——正是这轮没送出去的那条用户消息
-         * 下面（失败的归属是那句话，不是输入框）。新一轮开跑自动清除（槽里清）。
+         * 回合失败标注（重试耗尽）：跟着失败的归属走——它追在谁后面，就贴着谁的
+         * 对齐侧（用户消息居右、agent 消息居左，UserBubble 同款）。常见情形是模型
+         * 调用重试耗尽、转录末尾正是那条没送出去的用户消息 → 居右；回答中途断掉
+         * （末条是半截 assistant）→ 居左。新一轮开跑自动清除（槽里清）。
          */
-        <Notice tone="bad">{session.turnError}</Notice>
+        <div
+          style={{
+            display: "flex",
+            width: "100%",
+            justifyContent: session.transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
+          }}
+        >
+          <Notice tone="bad">{session.turnError}</Notice>
+        </div>
       )}
       {session.phase === "turn" &&
         (session.retry !== null ? <Retrying status={session.retry} /> : <Responding />)}
