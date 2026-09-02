@@ -27,6 +27,8 @@ export const ipcChannels = {
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
   agentSetMode: "agent:set-mode",
+  /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
+  agentSetModel: "agent:set-model",
   agentAnswerPermission: "agent:answer-permission",
   agentEvent: "agent:event",
   workspaceList: "workspace:list",
@@ -98,23 +100,28 @@ export interface RetryStatus {
   errorMessage: string;
 }
 
+/**
+ * create / setModel 共用的 provider 装配载荷。**明文密钥只在主进程 → agent 进程
+ * 这一跳出现，永不进 renderer**——renderer 侧只报 id，主进程负责装配。
+ * 内建 id（zai / deepseek…）只靠 apiKey 就够，自建网关必须带 baseUrl / api / models，
+ * 否则 pi 不知道往哪发。models 上的可选参数字段是用户覆盖声明（用户 > pi 目录 > 兜底）。
+ */
+export interface ProviderSecrets {
+  id: string;
+  api: string;
+  baseUrl: string;
+  apiKey: string;
+  headers?: Record<string, string>;
+  models: ModelDecl[];
+}
+
 /** 主进程 → agent 进程 */
 export type AgentCommand =
   | {
       type: "create";
       sessionId: string;
       cwd: string;
-      /** provider 装配参数。内建 id（zai / deepseek…）只靠 apiKey 就够，
-       *  自建网关必须带 baseUrl / api / models，否则 pi 不知道往哪发。
-       *  models 上的可选参数字段是用户覆盖声明（用户 > pi 目录 > 兜底）。 */
-      provider: {
-        id: string;
-        api: string;
-        baseUrl: string;
-        apiKey: string;
-        headers?: Record<string, string>;
-        models: ModelDecl[];
-      };
+      provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
       /**
@@ -155,6 +162,12 @@ export type AgentCommand =
   | { type: "listBuiltins" }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
+   * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
+   * **对正在跑的轮无效**：pi 在轮启动时快照模型，当前轮用旧模型跑完，
+   * 下一次 prompt 起新模型。结果不当场返回：成功经 `model` 事件、失败经 `failed` 事件。
+   */
+  | { type: "setModel"; sessionId: string; provider: ProviderSecrets; modelId: string }
+  /**
    * pi 侧分支（C-2）：把源 pi 本子裁一份只含「锚点回答及之前」的新文件。
    * sessionId 是主进程先生成好的**新会话 id**（此刻 record/meta 都还没落盘）。
    * roles 是我们这本账前缀（含锚点）的 user/assistant 角色序列——两本账没有
@@ -185,6 +198,12 @@ export type AgentEvent =
    * 侧栏保留首句截断。
    */
   | { type: "title"; sessionId: string; title: string }
+  /**
+   * 会话内模型切换成功（C-4 的 `setModel` 命令翻译而来）。主进程落 meta
+   * （providerId / modelId——分支继承与重开恢复都读它）并转给 renderer 对齐
+   * 模型显示与新任务默认。失败不发本事件（`failed` 事件说明原因），meta 不动。
+   */
+  | { type: "model"; sessionId: string; providerId: string; modelId: string }
   | { type: "phase"; sessionId: string; phase: SessionPhase }
   /**
    * 一份会话用量快照（token 分项 / 花费 / 上下文余量）。推送粒度与 pi 的数据粒度对齐
