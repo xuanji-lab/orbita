@@ -27,6 +27,9 @@ export const agentApi = {
     ipcRenderer.invoke(ipcChannels.agentCompact, sessionId, instructions),
   setMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSetMode, sessionId, mode),
+  /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
+  setModel: (sessionId: string, providerId: string, modelId: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentSetModel, sessionId, providerId, modelId),
   /** 回答一次工具审批 */
   answerPermission: (requestId: string, answer: PermissionAnswer): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentAnswerPermission, requestId, answer),

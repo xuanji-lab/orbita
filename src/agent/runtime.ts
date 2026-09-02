@@ -19,11 +19,8 @@ import {
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
-  hasModelOverrides,
-  toAuthConfig,
+  registerAndResolveModel,
   toBuiltinModel,
-  toFallbackRegistration,
-  type PiModel,
 } from "./model-registration.ts";
 import {
   createToolCallGate,
@@ -122,6 +119,33 @@ async function generateSessionTitle(live: LiveSession, sessionId: string, text: 
   }
 }
 
+/**
+ * 会话内换模型（C-4）。注册 + 解析目标模型（与 createSession 同一条装配路径），
+ * 然后 `session.setModel`——pi 自己校验 auth、把 model_change 落进它的本子、
+ * clamp thinking。**不传 persist**：全局默认模型是 pi TUI 的概念，会话内切换
+ * 不该改写用户磁盘上的全局设置。生效边界是 pi 定的：当前轮用旧模型跑完
+ * （run 启动时快照），下一次 prompt 起新模型。
+ */
+async function setSessionModel(
+  live: LiveSession,
+  sessionId: string,
+  provider: Extract<AgentCommand, { type: "setModel" }>["provider"],
+  modelId: string,
+): Promise<void> {
+  try {
+    const model = registerAndResolveModel(live.session.modelRuntime, provider, modelId);
+    if (model === undefined) {
+      throw new Error(`unknown model "${provider.id}/${modelId}"`);
+    }
+    await live.session.setModel(model);
+    send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    // 操作级失败（无 key / 未知模型）：红字报给用户，chip 与 meta 都不动
+    send({ type: "failed", sessionId, message });
+  }
+}
+
 /** 一个 session 的运行时状态。N 个 session 共用本进程（Q8：多 session 形状从第一天就有）。 */
 interface LiveSession {
   session: AgentSession;
@@ -205,25 +229,13 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
   }
   // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
   const modelRuntime = await ModelRuntime.create({});
-  // 第一步只注册 auth：内建 provider 的模型元数据（窗口 / 单价）留在 pi 的目录里
-  modelRuntime.registerProvider(command.provider.id, toAuthConfig(command.provider));
   /**
    * **选中的模型必须显式解析并传给会话**。不传的话 pi 自己挑默认模型——实测会挑到
    * 一个完全不相干的 provider（UI 里选的从来不是会话里跑的那个，存量 bug）。
-   * 目录里有的 id 直接拿官方元数据；没有的（自建网关 / 目录未收录）——或任一声明
-   * 模型带了用户覆盖字段（用户填的窗口 / 费率要盖过目录值）——才补注册兜底。
+   * 注册与解析的完整规则（auth 面 → 补注册兜底）抽在 model-registration，
+   * 会话内换模型（C-4）走同一条路径——两处的「能不能用某个模型」必须是一套真相。
    */
-  let model: PiModel | undefined = modelRuntime.getModel(command.provider.id, command.modelId);
-  if (model === undefined || hasModelOverrides(command.provider.models)) {
-    const known = modelRuntime.getProviders().find((p) => p.id === command.provider.id);
-    // 补注册带完整 auth 面：pi 的校验跑在合并之前，只传 models 的话
-    // 自建网关没有目录 defaults 可借 api，当场抛「no "api" specified」
-    modelRuntime.registerProvider(
-      command.provider.id,
-      toFallbackRegistration(command.provider, known?.getModels() ?? []),
-    );
-    model = modelRuntime.getModel(command.provider.id, command.modelId);
-  }
+  const model = registerAndResolveModel(modelRuntime, command.provider, command.modelId);
   if (model === undefined) {
     throw new Error(`unknown model "${command.provider.id}/${command.modelId}"`);
   }
@@ -510,6 +522,12 @@ async function handle(command: AgentCommand): Promise<void> {
 
   if (command.type === "setMode") {
     live.mode = command.mode;
+    return;
+  }
+  if (command.type === "setModel") {
+    // 会话内换模型（C-4）。fire-and-forget：成功经 `model` 事件、失败经 `failed`
+    // 事件回传，主进程与 renderer 都靠事件对齐，这一跳不等结果。
+    void setSessionModel(live, command.sessionId, command.provider, command.modelId);
     return;
   }
   if (command.type === "generateTitle") {

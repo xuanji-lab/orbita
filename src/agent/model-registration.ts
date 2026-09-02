@@ -120,3 +120,23 @@ export function toFallbackRegistration(
     models: toFallbackModels(current, provider.models),
   };
 }
+
+/**
+ * 注册（先 auth 面，目录 miss / 用户覆盖时补注册兜底）并解析选中模型。
+ * create 与会话内换模型（C-4）共用同一条装配路径——解析规则必须一致，
+ * 否则「建会话能用的模型」和「切过去能用的模型」是两套真相。
+ */
+export function registerAndResolveModel(
+  runtime: Pick<ModelRuntime, "registerProvider" | "getModel" | "getProviders">,
+  provider: ProviderWire,
+  modelId: string,
+): PiModel | undefined {
+  runtime.registerProvider(provider.id, toAuthConfig(provider));
+  let model: PiModel | undefined = runtime.getModel(provider.id, modelId);
+  if (model === undefined || hasModelOverrides(provider.models)) {
+    const known = runtime.getProviders().find((p) => p.id === provider.id);
+    runtime.registerProvider(provider.id, toFallbackRegistration(provider, known?.getModels() ?? []));
+    model = runtime.getModel(provider.id, modelId);
+  }
+  return model;
+}

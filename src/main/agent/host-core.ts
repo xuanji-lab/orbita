@@ -181,6 +181,19 @@ export class AgentHostCore {
     this.post({ type: "setMode", sessionId, mode });
   }
 
+  /**
+   * 会话内换模型（C-4）。**发完即回**：成功经 `model` 事件、失败经 `failed` 事件
+   * 回传，调用方不等也不该等——切换是一次真实的注册与校验，忙碌态由事件链表达。
+   */
+  async setModel(
+    sessionId: string,
+    provider: Extract<AgentCommand, { type: "setModel" }>["provider"],
+    modelId: string,
+  ): Promise<void> {
+    await this.ensure();
+    this.post({ type: "setModel", sessionId, provider, modelId });
+  }
+
   /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerPermission(requestId: string, answer: PermissionAnswer): void {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);

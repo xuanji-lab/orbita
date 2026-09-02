@@ -219,3 +219,14 @@ describe("recorder 的 title 事件（C-3）", () => {
     assert.equal(detail?.meta.titleSource, "user");
   });
 });
+
+describe("recorder 的 model 事件（C-4）", () => {
+  test("providerId / modelId 落 meta，不落 transcript——重开播种与分支继承读的就是它", async () => {
+    record({ type: "model", sessionId: ID, providerId: "other", modelId: "m2" });
+    await settle();
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.providerId, "other");
+    assert.equal(detail?.meta.modelId, "m2");
+    assert.deepEqual(detail?.transcript, []);
+  });
+});

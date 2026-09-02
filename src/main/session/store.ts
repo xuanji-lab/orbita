@@ -164,6 +164,11 @@ export class SessionStore {
     return this.update(id, { mode });
   }
 
+  /** 会话内切换模型（C-4）成功后落 meta——重开播种、分支继承、resume 对齐全读它 */
+  setModel(id: string, providerId: string, modelId: string): Promise<void> {
+    return this.update(id, { providerId, modelId });
+  }
+
   setPinned(id: string, pinned: boolean): Promise<void> {
     return this.update(id, { pinned });
   }

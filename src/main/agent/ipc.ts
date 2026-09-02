@@ -3,11 +3,40 @@
  * 事件是单向广播：主进程收到 agent 进程的消息就原样转给所有窗口，不在中间加工。
  */
 import { BrowserWindow, ipcMain } from "electron";
-import { ipcChannels, type CreateAgentInput } from "../../shared/agent-ipc.ts";
+import {
+  ipcChannels,
+  type CreateAgentInput,
+  type ProviderSecrets,
+} from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
 import { AgentHost } from "./host.ts";
+
+/**
+ * 按 id 取 provider 并装配成给 agent 进程的完整载荷（含明文 key）。
+ * create 与 setModel 共用——「能不能用某个 provider」两条路必须同一套校验与报错。
+ */
+async function resolveProviderSecrets(
+  providers: ProviderStore,
+  providerId: string,
+): Promise<ProviderSecrets> {
+  const dto = (await providers.list()).find((p) => p.id === providerId);
+  if (!dto) throw new Error(`unknown provider "${providerId}"`);
+  const apiKey = await providers.resolveApiKey(providerId);
+  if (apiKey === null) {
+    throw new Error(`provider "${providerId}" has no API key stored`);
+  }
+  // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
+  return {
+    id: dto.id,
+    api: dto.endpoint.api,
+    baseUrl: dto.endpoint.baseUrl,
+    apiKey,
+    ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
+    models: dto.models.declared,
+  };
+}
 
 export function registerAgentIpc(
   host: AgentHost,
@@ -19,13 +48,7 @@ export function registerAgentIpc(
   ipcMain.handle(
     ipcChannels.agentCreate,
     async (_event, input: CreateAgentInput): Promise<string> => {
-      const dto = (await providers.list()).find((p) => p.id === input.providerId);
-      if (!dto) throw new Error(`unknown provider "${input.providerId}"`);
-      const apiKey = await providers.resolveApiKey(input.providerId);
-      if (apiKey === null) {
-        throw new Error(`provider "${input.providerId}" has no API key stored`);
-      }
-      // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
+      const provider = await resolveProviderSecrets(providers, input.providerId);
       const { sessionId, piSessionFile } = await host.createSession(
         {
           cwd: input.cwd,
@@ -34,14 +57,7 @@ export function registerAgentIpc(
           piSessionDir,
           // 续会话：把 pi 自己那份本子还给它（guideline §四）
           ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
-          provider: {
-            id: dto.id,
-            api: dto.endpoint.api,
-            baseUrl: dto.endpoint.baseUrl,
-            apiKey,
-            ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
-            models: dto.models.declared,
-          },
+          provider,
         },
         input.resume?.sessionId,
       );
@@ -106,6 +122,16 @@ export function registerAgentIpc(
       await host.setMode(sessionId, mode);
       // 档位也落盘：重开这条会话时不该静默换档，而这一档决定 bash 能不能跑
       await sessions.setMode(sessionId, mode);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.agentSetModel,
+    async (_e, sessionId: string, providerId: string, modelId: string) => {
+      // provider 在这里装配（含 key）再传给 runtime——renderer 永远不碰密钥。
+      // meta 不在此落：成功与否由 runtime 的 model / failed 事件定，recorder 统一落盘。
+      const provider = await resolveProviderSecrets(providers, providerId);
+      await host.setModel(sessionId, provider, modelId);
     },
   );
 

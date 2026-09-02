@@ -1,13 +1,16 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   FALLBACK_MODEL,
   hasModelOverrides,
+  registerAndResolveModel,
   toAuthConfig,
   toBuiltinModel,
   toFallbackModels,
   toFallbackRegistration,
   type PiModel,
+  type PiProviderRegistration,
 } from "./model-registration.ts";
 
 /** 目录条目的最小替身：只填断言要看的字段，其余靠结构断言不需要 */
@@ -163,5 +166,82 @@ describe("toFallbackRegistration —— 补注册必须带完整 auth 面", () =
       ["step-3.7-flash"],
     );
     assert.equal(registration.models?.[0]?.contextWindow, FALLBACK_MODEL.contextWindow);
+  });
+});
+
+describe("registerAndResolveModel —— create 与会话内换模型（C-4）共用的装配路径", () => {
+  const wire = {
+    id: "prov",
+    apiKey: "sk-x",
+    baseUrl: "https://api.example/v1",
+    api: "openai-completions",
+  };
+
+  /**
+   * ModelRuntime 的最小替身：注册整体替换（pi 的注册语义）——auth 面注册不动
+   * 目录条目，带 models 的注册盖掉目录。kinds 记下注册顺序供断言。
+   */
+  function fakeRuntime(catalog: readonly PiModel[]) {
+    let registered: PiProviderRegistration | null = null;
+    const kinds: string[] = [];
+    return {
+      kinds,
+      registerProvider(_id: string, registration: PiProviderRegistration): void {
+        kinds.push(registration.models === undefined ? "auth" : "fallback");
+        registered = registration;
+      },
+      getModel(providerId: string, modelId: string): PiModel | undefined {
+        if (providerId !== "prov") return undefined;
+        return (
+          registered?.models?.find((model) => model.id === modelId) ??
+          catalog.find((model) => model.id === modelId)
+        );
+      },
+      getProviders(): { id: string; getModels: () => readonly PiModel[] }[] {
+        return [{ id: "prov", getModels: () => registered?.models ?? catalog }];
+      },
+    };
+  }
+
+  const cast = (fake: ReturnType<typeof fakeRuntime>) =>
+    fake as unknown as Pick<ModelRuntime, "registerProvider" | "getModel" | "getProviders">;
+
+  test("目录认识的 id：只注册 auth 面，拿到目录原值——官方窗口不被兜底盖掉", () => {
+    const rt = fakeRuntime([catalogModel("glm-4.7", 204_800, 0.6)]);
+    const model = registerAndResolveModel(
+      cast(rt),
+      { ...wire, models: [{ id: "glm-4.7" }] },
+      "glm-4.7",
+    );
+    assert.deepEqual(rt.kinds, ["auth"]);
+    assert.equal(model?.contextWindow, 204_800);
+  });
+
+  test("目录没有的 id：auth 之后再补注册兜底，拿到兜底条目", () => {
+    const rt = fakeRuntime([]);
+    const model = registerAndResolveModel(
+      cast(rt),
+      { ...wire, models: [{ id: "gateway-model" }] },
+      "gateway-model",
+    );
+    assert.deepEqual(rt.kinds, ["auth", "fallback"]);
+    assert.equal(model?.contextWindow, FALLBACK_MODEL.contextWindow);
+  });
+
+  test("声明带覆盖：目录认识也补注册——用户填的窗口必须生效", () => {
+    const rt = fakeRuntime([catalogModel("glm-4.7", 204_800, 0.6)]);
+    const model = registerAndResolveModel(
+      cast(rt),
+      { ...wire, models: [{ id: "glm-4.7", contextWindow: 1_000_000 }] },
+      "glm-4.7",
+    );
+    assert.deepEqual(rt.kinds, ["auth", "fallback"]);
+    assert.equal(model?.contextWindow, 1_000_000);
+  });
+
+  test("声明里根本没有这个 id：注册了也解析不到——undefined 交调用方报错", () => {
+    const rt = fakeRuntime([]);
+    const model = registerAndResolveModel(cast(rt), { ...wire, models: [{ id: "a" }] }, "b");
+    assert.equal(model, undefined);
   });
 });

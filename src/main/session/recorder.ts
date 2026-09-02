@@ -36,6 +36,14 @@ export function createSessionRecorder(store: SessionStore): (event: AgentEvent) 
         .catch((error: unknown) => console.error("[session] 标题落盘失败", event.sessionId, error));
       return;
     }
+    if (event.type === "model") {
+      // 会话内换模型（C-4）成功：providerId / modelId 落 meta 不落 transcript——
+      // 分支继承、重开播种、resume 对齐都读它。失败走 failed 事件，不经过这里。
+      void store
+        .setModel(event.sessionId, event.providerId, event.modelId)
+        .catch((error: unknown) => console.error("[session] 模型切换落盘失败", event.sessionId, error));
+      return;
+    }
     if (event.type !== "progress") return;
     const progress = event.progress;
     const item =

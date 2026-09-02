@@ -257,3 +257,24 @@ describe("generateTitle —— 标题生成的发送侧（C-3）", () => {
     });
   });
 });
+
+describe("setModel —— 会话内换模型的发送侧（C-4）", () => {
+  test("ensure 后发命令，provider 载荷与 modelId 原样带上", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = ctx.host.createSession(CREATE_INPUT, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    const provider = { id: "zai", api: "openai-completions", baseUrl: "", apiKey: "k2", models: [] };
+    await ctx.host.setModel("s1", provider, "glm-5.3");
+    assert.deepEqual(ctx.child().posted.at(-1), {
+      type: "setModel",
+      sessionId: "s1",
+      provider,
+      modelId: "glm-5.3",
+    });
+  });
+});

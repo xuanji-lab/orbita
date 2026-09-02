@@ -141,6 +141,14 @@ describe("SessionStore", () => {
     assert.equal((await store.load(ID))?.meta.mode, "skip");
   });
 
+  test("setModel 落 meta——重开播种、分支继承读的就是它（C-4）", async () => {
+    await store.create(meta());
+    await store.setModel(ID, "other", "m2");
+    const loaded = (await store.load(ID))?.meta;
+    assert.equal(loaded?.providerId, "other");
+    assert.equal(loaded?.modelId, "m2");
+  });
+
   // id 从 renderer 经 IPC 进来，直接拼路径的话一个 ../../ 就能写到别处
   test("非法 id 一律拒绝，不落在 sessions 目录之外", async () => {
     for (const bad of ["../../etc/passwd", "..", "a/b", "", "not-a-uuid", `${ID}/../x`]) {
