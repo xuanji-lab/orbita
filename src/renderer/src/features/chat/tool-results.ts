@@ -32,12 +32,21 @@ export function indexToolResults(transcript: readonly TranscriptItem[]): ToolRes
 /**
  * 渲染单元：records 摊平后的最小渲染单位。user 整条一个单元，assistant 按块拆，
  * 界碑自成单元。key 跨渲染稳定（`${item.id}:${blockIndex}`），折叠展开状态靠它保住。
+ * assistant 单元带 `messageId`（所属消息的 id）——分支按钮要落在锚点消息的
+ * **最后一个**单元后面，分组后归属只能靠它追溯。
  */
 export type RenderUnit =
   | { kind: "user"; key: string; item: Extract<TranscriptItem, { role: "user" }> }
-  | { kind: "text"; key: string; text: string }
-  | { kind: "thinking"; key: string; text: string }
-  | { kind: "toolCall"; key: string; toolCallId: string; toolName: string; input: unknown }
+  | { kind: "text"; key: string; messageId: string; text: string }
+  | { kind: "thinking"; key: string; messageId: string; text: string }
+  | {
+      kind: "toolCall";
+      key: string;
+      messageId: string;
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+    }
   | { kind: "compacted"; key: string; record: CompactedRecord };
 
 /** toolCall 单元的别名：分组函数的输入输出都说它。 */
@@ -75,13 +84,14 @@ export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUni
     record.content.forEach((block, index) => {
       const key = `${record.id}:${index}`;
       if (block.type === "text") {
-        units.push({ kind: "text", key, text: block.text });
+        units.push({ kind: "text", key, messageId: record.id, text: block.text });
       } else if (block.type === "thinking") {
-        units.push({ kind: "thinking", key, text: block.thinking });
+        units.push({ kind: "thinking", key, messageId: record.id, text: block.thinking });
       } else if (block.type === "toolCall") {
         units.push({
           kind: "toolCall",
           key,
+          messageId: record.id,
           toolCallId: block.toolCallId,
           toolName: block.toolName,
           input: block.input,
@@ -299,6 +309,86 @@ export function liveTailLines(text: string, keep = 200): string {
   if (lines.length <= keep) return text;
   return lines.slice(lines.length - keep).join("\n");
 }
+
+// ── C-2：分支锚点 ──
+
+/**
+ * 分支锚点：每轮 agent 的**最终完整输出**（按钮出在它下面）。
+ *
+ * 判据——assistant 记录已终态（非 streaming）、带 ≥1 个非空 text 块、它的每个
+ * toolCall 都有落定的结果（complete / error：有调用没结果的上下文是畸形的，
+ * 切出去就是一条坏分支），且后面跟的不再是本轮的 tool / assistant（轮边界 =
+ * user 记录、界碑或转录末尾；轮里的中间回答会被后面的回答顶替）。
+ *
+ * 这是**展示层**判定（决定按钮出不出），最终裁决在 agent 进程的对账守卫——
+ * 界面判对而账对不上时，分支会被拒绝并报错，不会切错。
+ */
+export function branchAnchorIds(
+  records: readonly SessionRecord[],
+  toolResults: ToolResultIndex,
+): ReadonlySet<string> {
+  const settled = (toolCallId: string): boolean => {
+    const result = toolResults.get(toolCallId);
+    return result !== undefined && (result.status === "complete" || result.status === "error");
+  };
+  const anchors = new Set<string>();
+  let candidate: string | null = null;
+  const confirm = () => {
+    if (candidate !== null) anchors.add(candidate);
+    candidate = null;
+  };
+  for (const record of records) {
+    if (record.role === "user" || record.role === "compacted") {
+      confirm();
+      continue;
+    }
+    if (record.role === "tool") continue; // 结果归位到调用行，不构成边界
+    if (record.status === "streaming") {
+      candidate = null; // 还没完整——这一轮没有可分支的「最终输出」
+      continue;
+    }
+    const hasText = record.content.some(
+      (block) => block.type === "text" && block.text.trim() !== "",
+    );
+    const toolsSettled = record.content.every(
+      (block) => block.type !== "toolCall" || settled(block.toolCallId),
+    );
+    candidate = hasText && toolsSettled ? record.id : null;
+  }
+  confirm();
+  return anchors;
+}
+
+/**
+ * 锚点消息 → 它**最后一个渲染单元**所在的 entry 下标。渲染层在该 entry 后面插
+ * 分支按钮行——组行的归属看组内最后一个成员（组只合相邻，最后一成员之后必然
+ * 是轮边界，不会把按钮插到组中间）。同一条锚点消息占多个 entry 时，下标大的
+ * 覆盖小的，天然取到最后。
+ */
+export function branchAnchorEntries(
+  anchorIds: ReadonlySet<string>,
+  entries: readonly RenderEntry[],
+): Map<number, string> {
+  // 倒序扫：每个锚点消息**首次**命中就是它的最后一个 entry，后面不再覆盖
+  const lastOf = new Map<string, number>();
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry === undefined) continue;
+    let messageId: string | null = null;
+    if (entry.kind === "text" || entry.kind === "thinking" || entry.kind === "toolCall") {
+      messageId = entry.messageId;
+    } else if (entry.kind === "toolGroup") {
+      messageId = entry.calls.at(-1)?.messageId ?? null;
+    }
+    if (messageId !== null && anchorIds.has(messageId) && !lastOf.has(messageId)) {
+      lastOf.set(messageId, i);
+    }
+  }
+  const rows = new Map<number, string>();
+  for (const [messageId, index] of lastOf) rows.set(index, messageId);
+  return rows;
+}
+
 
 /**
  * 折叠行上工具名右边的参数摘要：`bash · git status`、`edit · src/app.ts`。

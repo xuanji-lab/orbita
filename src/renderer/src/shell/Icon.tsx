@@ -13,6 +13,7 @@ import download from "../../../../Orbita Design System/assets/icons/lucide/downl
 import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
+import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
@@ -54,6 +55,7 @@ const ICONS = {
   "ellipsis-vertical": ellipsisVertical,
   folder,
   "folder-plus": folderPlus,
+  "git-branch": gitBranch,
   "loader-circle": loaderCircle,
   "panel-right": panelRight,
   "pencil-line": pencilLine,

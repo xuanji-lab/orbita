@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { CompactedRecord } from "@shared/session";
 import {
+  branchAnchorEntries,
+  branchAnchorIds,
   editDiffEntries,
   editDiffStats,
   editDiffText,
@@ -915,5 +917,110 @@ describe("liveTailLines", () => {
 
   test("上限可调", () => {
     assert.equal(liveTailLines("1\n2\n3\n4", 2), "3\n4");
+  });
+});
+
+// ── C-2：分支锚点 ──
+
+/** 终态 assistant 记录（分支判定要读 status，公共工厂不带它） */
+function said(id: string, blocks: unknown[], status = "complete"): TranscriptItem {
+  return { id, role: "assistant", content: blocks, timestamp: 0, status } as TranscriptItem;
+}
+
+describe("branchAnchorIds", () => {
+  test("每轮的最终输出是锚点；轮中中间回答被后面的顶替", () => {
+    const records = [
+      userItem,
+      said("a1", [{ type: "text", text: "先看看" }, readCall("r1", "a.ts")]),
+      toolItem({ toolCallId: "r1", toolName: "read" }),
+      said("a2", [{ type: "text", text: "再看一个" }, readCall("r2", "b.ts")]),
+      toolItem({ toolCallId: "r2", toolName: "read" }),
+      said("a3", [{ type: "text", text: "结论" }]),
+      { ...userItem, id: "u2" },
+      said("a4", [{ type: "text", text: "第二轮回答" }]),
+    ];
+    const anchors = branchAnchorIds(records, indexToolResults(records as TranscriptItem[]));
+    // a1 / a2 是轮中回答（后面还有 a3），a3 是第一轮末尾，a4 是第二轮末尾
+    assert.deepEqual([...anchors], ["a3", "a4"]);
+  });
+
+  test("轮以界碑或转录末尾收尾同样确认锚点", () => {
+    const withBoundary = [userItem, said("a1", [{ type: "text", text: "答" }]), compacted];
+    assert.deepEqual(
+      [...branchAnchorIds(withBoundary, indexToolResults([]))],
+      ["a1"],
+    );
+  });
+
+  test("流式中的消息不是锚点；纯工具轮（无正文）没有锚点", () => {
+    const records = [
+      userItem,
+      said("a1", [{ type: "text", text: "半截" }], "streaming"),
+      { ...userItem, id: "u2" },
+      said("a2", [readCall("r1", "a.ts")]),
+      toolItem({ toolCallId: "r1", toolName: "read" }),
+    ];
+    assert.equal(branchAnchorIds(records, indexToolResults(records as TranscriptItem[])).size, 0);
+  });
+
+  test("工具没落定（跑着 / 没有结果帧）不锚——有调用没结果的上下文切出去是畸形的", () => {
+    const records = [
+      userItem,
+      said("a1", [{ type: "text", text: "跑着" }, readCall("r1", "a.ts")]),
+      toolItem({ toolCallId: "r1", toolName: "read", status: "running" }),
+    ];
+    assert.equal(branchAnchorIds(records, indexToolResults(records as TranscriptItem[])).size, 0);
+
+    // 连结果帧都没有（abort 掐在执行前）同样不锚
+    const noResult = [userItem, said("a1", [{ type: "text", text: "调了没回" }, readCall("r9", "x.ts")])];
+    assert.equal(branchAnchorIds(noResult, indexToolResults([])).size, 0);
+  });
+
+  test("被打断但带正文、且工具都有完结记录的回答可锚", () => {
+    const records = [
+      userItem,
+      said("a1", [{ type: "text", text: "说到一半" }], "aborted"),
+    ];
+    assert.deepEqual([...branchAnchorIds(records, indexToolResults([]))], ["a1"]);
+  });
+
+  test("正文是纯空白不算「最终输出」", () => {
+    const records = [userItem, said("a1", [{ type: "text", text: "   " }])];
+    assert.equal(branchAnchorIds(records, indexToolResults([])).size, 0);
+  });
+});
+
+describe("branchAnchorEntries", () => {
+  test("锚点消息最后一个单元所在的 entry：独立单元与跨消息分组都归末成员", () => {
+    const records = [
+      userItem,
+      said("a1", [readCall("r1", "a.ts")]),
+      toolItem({ toolCallId: "r1", toolName: "read" }),
+      // a2 与 a1 跨消息相邻同类——合成一个组，末成员是 a2
+      said("a2", [readCall("r2", "b.ts")]),
+      toolItem({ toolCallId: "r2", toolName: "read" }),
+      said("a3", [{ type: "text", text: "结论" }]),
+    ];
+    const entries = groupToolUnits(flattenRenderUnits(records));
+    const anchors = new Set(["a2", "a3"]);
+    const rows = branchAnchorEntries(anchors, entries);
+    // entries = [user, group(r1,r2), text(a3)]；a2 的最后单元在组里 → 组后；a3 → 自己后面
+    assert.deepEqual([...rows.entries()].sort((x, y) => x[0] - y[0]), [
+      [1, "a2"],
+      [2, "a3"],
+    ]);
+  });
+
+  test("同一条锚点消息占多个 entry 时取最后一个", () => {
+    const records = [
+      userItem,
+      said("a1", [
+        { type: "thinking", thinking: "想想" },
+        { type: "text", text: "结论" },
+      ]),
+    ];
+    const entries = groupToolUnits(flattenRenderUnits(records));
+    const rows = branchAnchorEntries(new Set(["a1"]), entries);
+    assert.deepEqual([...rows.entries()], [[2, "a1"]]);
   });
 });

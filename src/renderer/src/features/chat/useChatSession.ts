@@ -106,6 +106,12 @@ export interface ChatSession {
   /** 归档：从主列表移走，**不是删除** */
   archiveSession: (id: string, archived: boolean) => void;
   moveSession: (id: string, workspaceId: string | null) => void;
+  /**
+   * 从某条 agent 回答另起一支（C-2）：新会话 = 该回答及之前的全部，原会话不动
+   * （在跑的话照跑，槽里继续涨）。成功后切过去；两本账对不上时主进程以错误拒绝，
+   * 报到 error 上——宁可不分支，不切错位置。
+   */
+  branchFrom: (anchorItemId: string) => void;
   /** 导出成 Markdown；取消时什么都不做 */
   exportSession: (id: string) => void;
   removeSession: (id: string) => void;
@@ -486,6 +492,22 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.session.exportMarkdown(id);
   }, []);
 
+  // 分支的源是「活着的或正打开的那条」——按钮就长在它的转录里
+  const branchFrom = useCallback(
+    (anchorItemId: string) => {
+      const id = sessionRef.current ?? opened?.id ?? null;
+      if (id === null) return;
+      void api.session
+        .branch(id, anchorItemId)
+        .then((newId) => {
+          refreshSessions();
+          openSession(newId);
+        })
+        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+    },
+    [opened, openSession, refreshSessions],
+  );
+
   const removeSession = useCallback(
     (id: string) => {
       void api.session.remove(id).then(() => {
@@ -650,6 +672,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     pinSession,
     archiveSession,
     moveSession,
+    branchFrom,
     exportSession,
     removeSession,
     send: () => void send(),

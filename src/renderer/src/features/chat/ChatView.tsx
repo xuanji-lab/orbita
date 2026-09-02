@@ -7,6 +7,8 @@ import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryText, mergeCompactions } from "./session-states";
 import { isAtBottom } from "./scroll";
 import {
+  branchAnchorEntries,
+  branchAnchorIds,
   editDiffText,
   fileViewFor,
   flattenRenderUnits,
@@ -200,11 +202,18 @@ export function ChatView(props: { session: ChatSession }) {
   // 界碑按发生位置插回往来流：压缩摘要收进「已压缩」折叠行，历史一条不少
   const records = mergeCompactions(session.compactions, session.transcript);
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
-  const entries = groupToolUnits(flattenRenderUnits(records));
+  const units = flattenRenderUnits(records);
+  const entries = groupToolUnits(units);
   // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
   const activeThinkingKey = streamingThinkingKey(records, session.phase === "turn");
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = session.phase === "turn";
+  // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
+  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的
+  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), entries);
+  const toolsRunning = session.transcript.some(
+    (item) => item.role === "tool" && item.status === "running",
+  );
 
   return (
     <Pane
@@ -236,15 +245,26 @@ export function ChatView(props: { session: ChatSession }) {
         </>
       }
     >
-      {entries.map((entry) => (
-        <EntryView
-          key={entry.key}
-          entry={entry}
-          toolResults={toolResults}
-          activeThinkingKey={activeThinkingKey}
-          turnActive={turnActive}
-        />
-      ))}
+      {entries.map((entry, index) => {
+        const branchAfter = branchRows.get(index);
+        return (
+          <Fragment key={entry.key}>
+            <EntryView
+              entry={entry}
+              toolResults={toolResults}
+              activeThinkingKey={activeThinkingKey}
+              turnActive={turnActive}
+            />
+            {branchAfter !== undefined && (
+              <BranchRow
+                anchorItemId={branchAfter}
+                disabled={toolsRunning}
+                onBranch={session.branchFrom}
+              />
+            )}
+          </Fragment>
+        );
+      })}
       {session.phase === "turn" &&
         (session.retry !== null ? <Retrying status={session.retry} /> : <Responding />)}
       {session.phase === "compaction" && (
@@ -586,6 +606,44 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           block.type === "text" ? <span key={index}>{block.text}</span> : null,
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 分支按钮行（C-2）：挂在每轮 agent 最终完整输出的下面。
+ * 透明占位、hover / 聚焦现形（styles.css 的 .branch-row——键盘可达）；点了开出一条
+ * 新会话（该回答及之前的全部），原会话原封不动，所以**无需确认弹窗**。
+ * 工具还在跑时禁用：它的结果没齐，此刻裁出去的上下文是畸形的。
+ */
+function BranchRow(props: {
+  anchorItemId: string;
+  disabled: boolean;
+  onBranch: (anchorItemId: string) => void;
+}) {
+  return (
+    <div className="branch-row" style={{ display: "flex", width: "100%" }}>
+      <button
+        type="button"
+        disabled={props.disabled}
+        onClick={() => props.onBranch(props.anchorItemId)}
+        title="保留到这里为止的前文，另开一条会话继续；原会话不动"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "var(--space-1)",
+          padding: "3px 8px",
+          border: "none",
+          background: "none",
+          color: "var(--color-text-tertiary)",
+          fontFamily: "var(--font-family-base)",
+          fontSize: "var(--font-size-micro)",
+          cursor: props.disabled ? "default" : "pointer",
+        }}
+      >
+        <Icon name="git-branch" size={12} strokeWidth={1.8} />
+        从这里分支
+      </button>
     </div>
   );
 }
