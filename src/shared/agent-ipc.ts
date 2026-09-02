@@ -212,7 +212,12 @@ export type AgentEvent =
       toolName: string;
       input: unknown;
     }
-  | { type: "failed"; sessionId: string | null; message: string };
+  /**
+   * 回合级失败的标记（如重试耗尽）：true = 这一轮没跑成，renderer 把文案标注进
+   * 该会话的槽、挂在这轮没送出去的消息下面（转录末尾）；缺省 = 操作级失败
+   * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
+   */
+  | { type: "failed"; sessionId: string | null; message: string; turn?: true };
 
 export interface CreateAgentInput {
   cwd: string;
