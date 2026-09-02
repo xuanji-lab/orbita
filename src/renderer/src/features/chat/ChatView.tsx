@@ -628,9 +628,9 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
 }
 
 /**
- * 分支按钮行（C-2）：挂在每轮 agent 最终完整输出的下面。
- * 透明占位、hover / 聚焦现形（styles.css 的 .branch-row——键盘可达）；点了开出一条
- * 新会话（该回答及之前的全部），原会话原封不动，所以**无需确认弹窗**。
+ * 分支按钮行（C-2）：挂在每轮 agent 最终完整输出的下面，回答落定即**常驻显示**
+ * （用户裁决：不用 hover 浮现）。点了开出一条新会话（该回答及之前的全部），
+ * 原会话原封不动，所以**无需确认弹窗**。
  * 工具还在跑时禁用：它的结果没齐，此刻裁出去的上下文是畸形的。
  */
 function BranchRow(props: {
@@ -639,7 +639,7 @@ function BranchRow(props: {
   onBranch: (anchorItemId: string) => void;
 }) {
   return (
-    <div className="branch-row" style={{ display: "flex", width: "100%" }}>
+    <div style={{ display: "flex", width: "100%" }}>
       <button
         type="button"
         disabled={props.disabled}

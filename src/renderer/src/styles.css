@@ -331,18 +331,6 @@ body {
   animation: orbita-breath 1.6s ease-in-out infinite;
 }
 
-/* 分支按钮行（C-2）：透明占位、hover / 键盘聚焦现形——行一直占着布局（跳动为零），
-   按钮本身可聚焦，focus-within 现形保证键盘可达（不出现在布局上的按钮键盘摸不到） */
-.branch-row {
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.branch-row:hover,
-.branch-row:focus-within {
-  opacity: 1;
-}
-
 /* 动效只解释「东西去哪了」；用户要求减少动效时全部塌成 0（设计系统 *Motion*） */
 @media (prefers-reduced-motion: reduce) {
   *,
