@@ -30,6 +30,7 @@ import {
   type PiExtensionApi,
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
+import { planBranchCut } from "./branch-cut.ts";
 import { planQueueEdit } from "./queue-edit.ts";
 
 type ParentPortLike = {
@@ -340,6 +341,21 @@ function openOrCreate(command: Extract<AgentCommand, { type: "create" }>): Sessi
 }
 
 /**
+ * pi 侧分支（C-2）：开一个**一次性的** SessionManager 读源本子，对账后用 pi 自己的
+ * `createBranchedSession` 裁新文件。绝不碰活着的 manager——那个方法会把实例原地
+ * 换绑到新文件上，误用在活会话的 manager 上，后续追加就写进分支文件了（事故形状）。
+ * 源会话正在跑也没关系：只读源文件、只写新文件，追加与读取互不干扰。
+ */
+async function branchPiSession(command: Extract<AgentCommand, { type: "branch" }>): Promise<void> {
+  const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
+  const targetId = planBranchCut(manager.getEntries(), command.roles);
+  const branchFile = manager.createBranchedSession(targetId);
+  if (branchFile === undefined) throw new Error("pi 没有产出分支文件");
+  // 复用 created 事件通路：主进程对 branch 与 create 用同一条等待逻辑
+  send({ type: "created", sessionId: command.sessionId, piSessionFile: branchFile });
+}
+
+/**
  * pi 内建 provider 目录 → 我们的 BuiltinProvider。
  * agentDir 指向一个不存在的路径：只要 pi 的内建目录，不去读用户的 ~/.pi/agent 配置。
  */
@@ -374,6 +390,13 @@ async function handle(command: AgentCommand): Promise<void> {
 
   if (command.type === "create") {
     await createSession(command);
+    return;
+  }
+
+  // 分支带的是「新会话的 id」，此刻还不在 sessions 表里——必须在下面的
+  // unknown session 检查之前处理
+  if (command.type === "branch") {
+    await branchPiSession(command);
     return;
   }
 
