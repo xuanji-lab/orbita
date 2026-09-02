@@ -504,14 +504,16 @@ function SessionRow(props: {
   const live = meta.id === session.sessionId;
   // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
   const running = session.phaseOf(meta.id) !== "idle";
+  // 失败同样查槽：后台会话重试耗尽（turnError）也亮 Failed，不止正看着的那条
+  const failed = !running && (session.turnErrorOf(meta.id) !== null || (live && session.error !== null));
   /**
    * 置顶图标**只顶替 idle 那一档**。正在跑或失败时状态优先——
    * 置顶是用户的偏好，运行中是正在发生的事，后者更该被看见。
    */
-  const idle = !(running || (live && session.error !== null));
+  const idle = !(running || failed);
   const status = running
     ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
-    : live && session.error !== null
+    : failed
       ? { icon: "triangle-alert" as const, tone: "var(--color-danger)", label: "Failed", spin: false }
       : { icon: "check" as const, tone: "var(--color-text-tertiary)", label: "Idle", spin: false };
 

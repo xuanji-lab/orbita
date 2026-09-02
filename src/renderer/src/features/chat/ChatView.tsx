@@ -265,6 +265,13 @@ export function ChatView(props: { session: ChatSession }) {
           </Fragment>
         );
       })}
+      {session.turnError !== null && (
+        /*
+         * 回合失败标注（重试耗尽）：挂在转录末尾——正是这轮没送出去的那条用户消息
+         * 下面（失败的归属是那句话，不是输入框）。新一轮开跑自动清除（槽里清）。
+         */
+        <Notice tone="bad">{session.turnError}</Notice>
+      )}
       {session.phase === "turn" &&
         (session.retry !== null ? <Retrying status={session.retry} /> : <Responding />)}
       {session.phase === "compaction" && (

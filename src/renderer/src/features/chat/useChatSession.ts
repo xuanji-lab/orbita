@@ -51,6 +51,11 @@ export interface ChatSession {
   /** 自动重试等待态：非 null 时重试行替换 Responding（或补在压缩行下） */
   retry: RetryStatus | null;
   /**
+   * 回合级失败标注（重试耗尽）：渲染在转录末尾——这轮没送出去的那条用户消息下面。
+   * 新一轮开跑自动清除。操作级失败（建会话 / 压缩 / 分支被拒）仍在 error 上。
+   */
+  turnError: string | null;
+  /**
    * 最近一次用量快照（token / 花费 / 上下文余量），每轮落定时由 runtime 推来。
    * null = 还没有：纯浏览的旧会话不起 runtime session，等说话唤醒后才有数字。
    */
@@ -60,6 +65,8 @@ export interface ChatSession {
    * 与「当前看哪条」无关——后台在跑的会话切走了也照样转圈。
    */
   phaseOf: (id: string) => SessionEntry["phase"];
+  /** 按 id 查回合失败标注（槽里有真相）——侧栏失败图标用，与「当前看哪条」无关 */
+  turnErrorOf: (id: string) => string | null;
   error: string | null;
   draft: string;
   setDraft: (value: string) => void;
@@ -210,7 +217,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     () =>
       api.agent.onEvent((event) => {
         if (event.type === "failed") {
-          setError(event.message);
+          // 回合级失败（重试耗尽）进槽、标注在对话里（applyAgentEvent 收）；
+          // 操作级失败仍走全局红字（输入框上方）
+          if (event.turn !== true) setError(event.message);
           // runtime 整个没了：live 账本清零，全部槽归位（归约在 applyAgentEvent 里）
           if (event.sessionId === null) liveRef.current.clear();
         }
@@ -645,8 +654,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     compactions: entry.compactions,
     phase: entry.phase,
     retry: entry.retry,
+    turnError: entry.turnError,
     stats: entry.stats,
     phaseOf: (id: string): SessionEntry["phase"] => states.get(id)?.phase ?? "idle",
+    turnErrorOf: (id: string): string | null => states.get(id)?.turnError ?? null,
     error,
     draft,
     setDraft,

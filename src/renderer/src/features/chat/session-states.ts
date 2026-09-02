@@ -84,6 +84,12 @@ export interface SessionEntry {
    */
   retry: RetryStatus | null;
   /**
+   * 回合级失败标注（重试耗尽）：渲染在转录末尾——正是这轮没送出去的那条用户消息
+   * 下面。**新一轮开跑即清**（非 idle 的 phase 事件 / 乐观置 turn），落定的 idle
+   * 不清（failed 之后紧随的 agent_settled 不能把标注抹掉）。纯 ephemeral，不落盘。
+   */
+  turnError: string | null;
+  /**
    * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
    */
@@ -107,6 +113,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   queueOrder: [],
   pendingSends: [],
   retry: null,
+  turnError: null,
   stats: null,
   approvals: [],
 };
@@ -132,6 +139,9 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       // pendingSends 不在这里清：执行与消费由 hook 在事件那拍完成（见 useChatSession），
       // reducer 不知道 hook 执行到哪，抢先清会把没执行的消息丢掉。
       retry: null,
+      // 回合失败标注只随「新一轮开跑」消失：非 idle 的 phase 事件清它；
+      // 落定的 idle **不清**——failed(turn) 之后紧随的 agent_settled 正是 idle
+      ...(event.phase === "idle" ? null : { turnError: null }),
     }));
   }
   if (event.type === "queue") {
@@ -167,7 +177,18 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     // runtime 整个没了：所有槽归位；单条失败只归位那条（不存在的槽不凭空造）
     if (event.sessionId === null) return markAllIdle(states);
     const entry = states.get(event.sessionId);
-    return entry === undefined ? states : setEntryPhase(states, event.sessionId, "idle");
+    if (entry === undefined) return states;
+    // 回合级失败（重试耗尽）：标注进槽，渲染在这轮没送出去的消息下面；
+    // 操作级失败照旧只归位——它的红字在 hook 的全局 error 上
+    if (event.turn === true) {
+      return update(states, event.sessionId, (current) => ({
+        ...current,
+        phase: "idle",
+        retry: null,
+        turnError: event.message,
+      }));
+    }
+    return setEntryPhase(states, event.sessionId, "idle");
   }
   return states;
 }
@@ -178,8 +199,14 @@ export function setEntryPhase(
   sessionId: string,
   phase: SessionEntry["phase"],
 ): SessionStates {
-  // 乐观 turn（新一轮开始）与 failed 归位都不该留上一次的倒数
-  return update(states, sessionId, (entry) => ({ ...entry, phase, retry: null }));
+  // 乐观 turn（新一轮开始）与 failed 归位都不该留上一次的倒数；
+  // 新一轮开跑（非 idle）也清回合失败标注——用户已经在重试那句话了
+  return update(states, sessionId, (entry) => ({
+    ...entry,
+    phase,
+    retry: null,
+    ...(phase === "idle" ? null : { turnError: null }),
+  }));
 }
 
 /**
@@ -208,6 +235,8 @@ export function seedFromDisk(
     queueOrder: [],
     pendingSends: [],
     retry: null,
+    // 盘上没有失败标注（纯 ephemeral）：种盘即清
+    turnError: null,
     // 盘上没有用量（真源在 pi 的本子里）：种盘清掉旧值，等唤醒后的第一次推送
     stats: null,
     approvals: [],

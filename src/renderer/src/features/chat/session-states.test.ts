@@ -571,3 +571,70 @@ describe("mergeQueueView —— 卡片按输入顺序交错，不看队列归属
     assert.deepEqual(labelsOf(states.get("A")), ["compact"]);
   });
 });
+
+// ── 回合失败标注（重试耗尽标在对话里，不放输入框上方） ──
+
+describe("turnError —— 回合失败标注的进出槽", () => {
+  test("failed(turn) 进槽：phase 归位、标注留档", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, {
+      type: "failed",
+      sessionId: "A",
+      message: "重试 3 次后仍失败：fetch failed",
+      turn: true,
+    });
+    const entry = states.get("A");
+    assert.equal(entry?.phase, "idle");
+    assert.equal(entry?.turnError, "重试 3 次后仍失败：fetch failed");
+  });
+
+  test("failed 不带 turn：槽里不产生标注（操作级失败走全局红字），归位照旧", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "两本账对不上" });
+    assert.equal(states.get("A")?.phase, "idle");
+    assert.equal(states.get("A")?.turnError, null);
+  });
+
+  test("落定的 idle phase 事件不清标注——failed 之后紧随的 agent_settled 不能抹掉它", () => {
+    // 先建槽（真实时序里这轮一直在跑、槽早就在了），再 failed(turn)，再落定
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, {
+      type: "failed",
+      sessionId: "A",
+      message: "重试 3 次后仍失败：fetch failed",
+      turn: true,
+    });
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
+    assert.equal(states.get("A")?.turnError, "重试 3 次后仍失败：fetch failed");
+  });
+
+  test("新一轮开跑即清：phase turn / compaction 与乐观置 turn 都算", () => {
+    const base = applyAgentEvent(new Map(), {
+      type: "failed",
+      sessionId: "A",
+      message: "重试 3 次后仍失败：fetch failed",
+      turn: true,
+    });
+    assert.equal(
+      applyAgentEvent(base, { type: "phase", sessionId: "A", phase: "turn" }).get("A")?.turnError,
+      null,
+    );
+    assert.equal(
+      applyAgentEvent(base, { type: "phase", sessionId: "A", phase: "compaction" }).get("A")
+        ?.turnError,
+      null,
+    );
+    assert.equal(setEntryPhase(base, "A", "turn").get("A")?.turnError, null);
+  });
+
+  test("seedFromDisk 清标注：盘上没有 ephemeral 的失败", () => {
+    let states = applyAgentEvent(new Map(), {
+      type: "failed",
+      sessionId: "A",
+      message: "重试 3 次后仍失败：fetch failed",
+      turn: true,
+    });
+    states = seedFromDisk(states, "A", [userItem("u1", 1000)]);
+    assert.equal(states.get("A")?.turnError, null);
+  });
+});
