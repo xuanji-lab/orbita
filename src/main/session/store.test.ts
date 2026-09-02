@@ -205,6 +205,60 @@ describe("SessionStore", () => {
     const transcript = (await store.load(ID))?.transcript ?? [];
     assert.deepEqual(transcript.map((r) => r.role), ["user"]);
   });
+
+  // ── C-3：auto-title ──
+
+  test("needsAutoTitle：derived 要，user / auto / meta 没了都不要", async () => {
+    await store.create(meta());
+    assert.equal(await store.needsAutoTitle(ID), true);
+    await store.setAutoTitle(ID, "模型起的");
+    assert.equal(await store.needsAutoTitle(ID), false);
+    await store.rename(ID, "用户起的");
+    assert.equal(await store.needsAutoTitle(ID), false);
+    assert.equal(await store.needsAutoTitle(OTHER), false);
+  });
+
+  test("setAutoTitle 落标题并标成 auto", async () => {
+    await store.create(meta());
+    await store.setAutoTitle(ID, "修复登录按钮");
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.title, "修复登录按钮");
+    assert.equal(detail?.meta.titleSource, "auto");
+  });
+
+  test("setAutoTitle 不覆盖用户改过的名字", async () => {
+    await store.create(meta());
+    await store.rename(ID, "我的名字");
+    await store.setAutoTitle(ID, "模型猜的名字");
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.title, "我的名字");
+    assert.equal(detail?.meta.titleSource, "user");
+  });
+
+  test("setAutoTitle 的迟到标题不重复写：auto 之后整份丢弃", async () => {
+    await store.create(meta());
+    await store.setAutoTitle(ID, "第一个标题");
+    await store.setAutoTitle(ID, "迟到的标题");
+    assert.equal((await store.load(ID))?.meta.title, "第一个标题");
+  });
+
+  test("setAutoTitle 拿到空结果就不写，门禁保持 derived", async () => {
+    await store.create(meta());
+    await store.setAutoTitle(ID, "  \n ");
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.title, "");
+    assert.equal(detail?.meta.titleSource, "derived");
+    assert.equal(await store.needsAutoTitle(ID), true);
+  });
+
+  test("rename 改空也记成 user——用户清掉的名字不该自己长回来", async () => {
+    await store.create(meta());
+    await store.record(ID, userItem("第一句"));
+    await store.rename(ID, "");
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.title, "第一句");
+    assert.equal(detail?.meta.titleSource, "user");
+  });
 });
 
 // ── C-2：会话分支 ──

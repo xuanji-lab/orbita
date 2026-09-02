@@ -8,6 +8,7 @@
  * pi-protocol 的 progress、经 parentPort 发回主进程。**不碰 UI，不碰持久化路径策略。**
  */
 import { randomUUID } from "node:crypto";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -30,6 +31,7 @@ import {
   type PiExtensionApi,
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
+import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { planQueueEdit } from "./queue-edit.ts";
 
@@ -59,6 +61,48 @@ function pushStats(sessionId: string, session: AgentSession): void {
   send({ type: "stats", sessionId, stats: session.getSessionStats() });
 }
 
+/**
+ * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用，用会话当前模型。
+ * 与当前轮并发跑，不阻塞对话；成功（且模型没答 none）才发 `title` 事件。
+ * 失败一律静默——标题是易耗品，不该有任何一条报错通路；门禁（meta 的
+ * titleSource 仍是 derived）在主进程，这里不发事件它自然不变，下一条用户
+ * 消息就再试一次。不做取消：调用几秒量级，进程退出自然带走，会话被删时
+ * 主进程落盘侧读不到 meta 悄悄不做。
+ * ponytail: maxTokens 1024 是硬上限不是目标——后端无视思考抑制时标记仍可达
+ * （oh-my-pi issue #4355 同款）；本仓锁的 pi-ai 0.84.3 没有 disableReasoning。
+ */
+async function generateSessionTitle(live: LiveSession, sessionId: string, text: string): Promise<void> {
+  if (live.titleInFlight) return;
+  live.titleInFlight = true;
+  try {
+    const model = live.session.model;
+    if (model === undefined) return;
+    const response = await completeSimple(
+      model,
+      {
+        systemPrompt: TITLE_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: text, timestamp: Date.now() }],
+      },
+      {
+        apiKey: live.apiKey,
+        maxTokens: 1024,
+        ...(live.headers ? { headers: live.headers } : {}),
+      },
+    );
+    if (response.stopReason === "error") return;
+    let output = "";
+    for (const block of response.content) {
+      if (block.type === "text") output += block.text;
+    }
+    const title = normalizeGeneratedTitle(output);
+    if (title !== null) send({ type: "title", sessionId, title });
+  } catch {
+    // 标题失败静默：侧栏保留首句截断
+  } finally {
+    live.titleInFlight = false;
+  }
+}
+
 /** 一个 session 的运行时状态。N 个 session 共用本进程（Q8：多 session 形状从第一天就有）。 */
 interface LiveSession {
   session: AgentSession;
@@ -73,6 +117,11 @@ interface LiveSession {
    * 内部的 queue 对账同款天花板。
    */
   echoed: Set<string>;
+  /** 标题调用（C-3）的鉴权面——provider 的 key 与自定义头，create 命令带进来的 */
+  apiKey: string;
+  headers?: Record<string, string>;
+  /** 标题在途标记：连发两条消息也只生成一次，失败后下一条自然重试 */
+  titleInFlight: boolean;
 }
 
 const sessions = new Map<string, LiveSession>();
@@ -328,7 +377,16 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     }
   });
 
-  sessions.set(command.sessionId, { session, adapter, unsubscribe, mode: command.mode, echoed });
+  sessions.set(command.sessionId, {
+    session,
+    adapter,
+    unsubscribe,
+    mode: command.mode,
+    echoed,
+    apiKey: command.provider.apiKey,
+    ...(command.provider.headers ? { headers: command.provider.headers } : {}),
+    titleInFlight: false,
+  });
   // 建会话即推一次：新会话给零值；唤醒的旧会话立刻给真累计——余量不用等第一轮跑完
   pushStats(command.sessionId, session);
   send({
@@ -433,6 +491,11 @@ async function handle(command: AgentCommand): Promise<void> {
 
   if (command.type === "setMode") {
     live.mode = command.mode;
+    return;
+  }
+  if (command.type === "generateTitle") {
+    // 发送方（主进程）已做过 titleSource 门禁；fire-and-forget，不拖慢这一跳
+    void generateSessionTitle(live, command.sessionId, command.text);
     return;
   }
   if (command.type === "submit") {

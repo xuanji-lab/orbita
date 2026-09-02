@@ -199,3 +199,23 @@ describe("createSessionRecorder", () => {
     assert.equal((await store.load(ID))?.meta.title, "");
   });
 });
+
+describe("recorder 的 title 事件（C-3）", () => {
+  test("标题落 meta（title + titleSource = auto），不落 transcript", async () => {
+    record({ type: "title", sessionId: ID, title: "修复登录按钮" });
+    await settle();
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.title, "修复登录按钮");
+    assert.equal(detail?.meta.titleSource, "auto");
+    assert.deepEqual(detail?.transcript, []);
+  });
+
+  test("用户已改名的会话，迟到的标题整份丢弃", async () => {
+    await store.rename(ID, "我的名字");
+    record({ type: "title", sessionId: ID, title: "模型猜的名字" });
+    await settle();
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.title, "我的名字");
+    assert.equal(detail?.meta.titleSource, "user");
+  });
+});

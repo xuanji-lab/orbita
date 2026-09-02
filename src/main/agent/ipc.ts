@@ -76,9 +76,13 @@ export function registerAgentIpc(
 
   ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
 
-  ipcMain.handle(ipcChannels.agentSubmit, (_e, sessionId: string, text: string) =>
-    host.submit(sessionId, text),
-  );
+  ipcMain.handle(ipcChannels.agentSubmit, async (_e, sessionId: string, text: string) => {
+    await host.submit(sessionId, text);
+    // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
+    // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
+    // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
+    if (await sessions.needsAutoTitle(sessionId)) host.generateTitle(sessionId, text);
+  });
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(
     ipcChannels.agentQueueEdit,

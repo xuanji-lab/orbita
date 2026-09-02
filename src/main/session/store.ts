@@ -117,11 +117,32 @@ export class SessionStore {
   /**
    * 改名。**改成空名字就退回推导**——侧栏里一行看不见的东西比一个坏名字更糟，
    * 用户会以为会话丢了（工作区改名走的是同一条规矩：空名退回路径末段）。
+   * **任何显式改名（含改空）都记成 `user`**：auto-title 永不覆盖用户起的名字，
+   * 连「用户清掉的名字」也不该在几条消息后自己长回来——那会被当成改名丢失。
    */
   async rename(id: string, title: string): Promise<void> {
     const wanted = deriveSessionTitle(title);
     const next = wanted !== "" ? wanted : derivedFrom(await this.readLog(id));
-    await this.update(id, { title: next });
+    await this.update(id, { title: next, titleSource: "user" });
+  }
+
+  /** 还需要自动生成标题吗（C-3 的发送门禁）。用户改过名 / 已生成过就不再试。 */
+  async needsAutoTitle(id: string): Promise<boolean> {
+    const meta = await this.readMeta(id);
+    return meta !== null && meta.titleSource === "derived";
+  }
+
+  /**
+   * 落一个模型生成的标题。**写入时再查一次 titleSource**——生成在途的几秒里
+   * 用户可能刚改过名，读时是 derived 不算数，写前是 derived 才算。核验不过
+   * （meta 没了 / 已 user / 已 auto）就整份丢弃：迟到的标题不该吵醒任何东西。
+   */
+  async setAutoTitle(id: string, title: string): Promise<void> {
+    const meta = await this.readMeta(id);
+    if (meta === null || meta.titleSource !== "derived") return;
+    const next = deriveSessionTitle(title);
+    if (next === "") return;
+    await writeJsonAtomic(this.metaPath(id), { ...meta, title: next, titleSource: "auto" });
   }
 
   /**

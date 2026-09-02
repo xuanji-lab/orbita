@@ -232,3 +232,28 @@ describe("disposeSession —— 会话释放（刀 0-4 债务 A）", () => {
     assert.deepEqual(disposed, ["s1", "s2", "s3"]);
   });
 });
+
+describe("generateTitle —— 标题生成的发送侧（C-3）", () => {
+  test("从未启动过 agent：不拉起进程、不抛错——标题不值得为它 fork", async () => {
+    const ctx = await freshHost();
+    ctx.host.generateTitle("s1", "第一句");
+    assert.equal(ctx.forks(), 0);
+  });
+
+  test("活着就发 generateTitle 命令，文本原样带上", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = ctx.host.createSession(CREATE_INPUT, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    ctx.host.generateTitle("s1", "把登录按钮修一下");
+    assert.deepEqual(ctx.child().posted.at(-1), {
+      type: "generateTitle",
+      sessionId: "s1",
+      text: "把登录按钮修一下",
+    });
+  });
+});

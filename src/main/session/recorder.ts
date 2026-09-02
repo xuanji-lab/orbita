@@ -28,6 +28,14 @@ export function createSessionRecorder(store: SessionStore): (event: AgentEvent) 
   };
   return (event) => {
     if (event.type === "compaction") return persist(event.sessionId, event.record);
+    if (event.type === "title") {
+      // 标题落 meta 不落 transcript——它不是对话的一部分。store 内部核验
+      // titleSource 仍是 derived 才写，迟到的标题盖不掉用户刚改的名字。
+      void store
+        .setAutoTitle(event.sessionId, event.title)
+        .catch((error: unknown) => console.error("[session] 标题落盘失败", event.sessionId, error));
+      return;
+    }
     if (event.type !== "progress") return;
     const progress = event.progress;
     const item =

@@ -155,6 +155,16 @@ export class AgentHostCore {
     this.post({ type: "submit", sessionId, text });
   }
 
+  /**
+   * 生成会话标题（C-3）。**发完即回**：结果走 `title` 事件，调用方不等也不该等
+   * ——它与当前轮并发，成败都不影响对话本身。门禁（titleSource 是否仍是 derived）
+   * 在调用方查 meta，runtime 侧只做在途去重。
+   */
+  generateTitle(sessionId: string, text: string): void {
+    if (!this.child) return; // 进程没起：标题不重要，别为它拉起整个 runtime
+    this.post({ type: "generateTitle", sessionId, text });
+  }
+
   async queueEdit(
     sessionId: string,
     op: "promote" | "cancel" | "edit",
