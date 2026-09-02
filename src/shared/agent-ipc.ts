@@ -49,6 +49,11 @@ export const ipcChannels = {
   sessionArchive: "session:archive",
   /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
   sessionMove: "session:move",
+  /**
+   * 从某条 agent 回答另起一支（C-2）：保留该回答及之前的全部，开出一条新会话。
+   * 返回新会话 id；对不上账（罕见落账漂移）时以错误拒绝——宁可不分支，不切错位置。
+   */
+  sessionBranch: "session:branch",
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
@@ -143,6 +148,20 @@ export type AgentCommand =
   | { type: "compact"; sessionId: string; instructions?: string }
   | { type: "listBuiltins" }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
+  /**
+   * pi 侧分支（C-2）：把源 pi 本子裁一份只含「锚点回答及之前」的新文件。
+   * sessionId 是主进程先生成好的**新会话 id**（此刻 record/meta 都还没落盘）。
+   * roles 是我们这本账前缀（含锚点）的 user/assistant 角色序列——两本账没有
+   * id 映射（pi-ai 的 Message 没有 id），按位对账是唯一桥梁；对不上 runtime
+   * 直接抛错。成功经 `created` 事件回传新 pi 文件路径。
+   */
+  | {
+      type: "branch";
+      sessionId: string;
+      sourcePiSessionFile: string;
+      cwd: string;
+      roles: readonly ("user" | "assistant")[];
+    }
   /** 用户对一次工具审批的回答，按 requestId 对回去 */
   | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   | { type: "dispose"; sessionId: string };
