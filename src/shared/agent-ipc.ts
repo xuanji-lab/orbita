@@ -125,6 +125,12 @@ export type AgentCommand =
       piSessionFile?: string;
     }
   | { type: "submit"; sessionId: string; text: string }
+  /**
+   * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
+   * 生成是一次独立的小 LLM 调用，成功经 `title` 事件回传；失败/模型拒答不发事件，
+   * 门禁（meta 的 titleSource 仍是 derived）不变，下一条用户消息自然重试。
+   */
+  | { type: "generateTitle"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
   /**
    * 编辑 pi 的排队消息（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
@@ -173,6 +179,12 @@ export type AgentEvent =
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
+  /**
+   * 模型生成的会话标题（C-3 的 `generateTitle` 命令翻译而来）。**只在成功时发**：
+   * 主进程落 meta（title + titleSource = auto）并转给 renderer 刷新侧栏；失败静默，
+   * 侧栏保留首句截断。
+   */
+  | { type: "title"; sessionId: string; title: string }
   | { type: "phase"; sessionId: string; phase: SessionPhase }
   /**
    * 一份会话用量快照（token 分项 / 花费 / 上下文余量）。推送粒度与 pi 的数据粒度对齐

@@ -13,6 +13,7 @@ const OTHER = "b1c2d3e4-5f60-4a71-8b92-0c1d2e3f4a5b";
 const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   id: ID,
   title: "",
+  titleSource: "derived",
   cwd: "/repo/orbita-lab",
   providerId: "zai",
   modelId: "glm-5.3",

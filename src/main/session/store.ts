@@ -189,6 +189,7 @@ export class SessionStore {
       meta: {
         id: newId,
         title: deriveSessionTitle(`${meta.title}（分支）`),
+        titleSource: "derived",
         cwd: meta.cwd,
         workspaceId: meta.workspaceId,
         providerId: meta.providerId,

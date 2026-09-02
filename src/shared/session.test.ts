@@ -13,6 +13,7 @@ import {
 const valid = {
   id: "a7f3c1d2",
   title: "Rebuild the renderer",
+  titleSource: "derived" as const,
   cwd: "/Users/wafo/repo/orbita-lab",
   workspaceId: null,
   piSessionFile: null,
@@ -102,6 +103,14 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, workspaceId: undefined })?.workspaceId, null);
     strictEqual(parseSessionMeta({ ...valid, workspaceId: 42 })?.workspaceId, null);
     strictEqual(parseSessionMeta({ ...valid, workspaceId: "w1" })?.workspaceId, "w1");
+  });
+
+  // auto-title（C-3）之前存的会话没有这个字段：它们是首句截断，允许模型再试
+  it("缺 titleSource 视为 derived；坏值同样退回 derived，不丢会话", () => {
+    strictEqual(parseSessionMeta({ ...valid, titleSource: undefined })?.titleSource, "derived");
+    strictEqual(parseSessionMeta({ ...valid, titleSource: "hacked" })?.titleSource, "derived");
+    strictEqual(parseSessionMeta({ ...valid, titleSource: "user" })?.titleSource, "user");
+    strictEqual(parseSessionMeta({ ...valid, titleSource: "auto" })?.titleSource, "auto");
   });
 });
 

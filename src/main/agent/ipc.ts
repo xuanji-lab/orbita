@@ -57,6 +57,7 @@ export function registerAgentIpc(
         await sessions.create({
           id: sessionId,
           title: "",
+          titleSource: "derived",
           cwd: input.cwd,
           workspaceId: input.workspaceId,
           piSessionFile,

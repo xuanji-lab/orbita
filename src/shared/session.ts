@@ -51,10 +51,18 @@ export function isCompactedRecord(raw: unknown): raw is CompactedRecord {
   );
 }
 
+/**
+ * 标题的来源。三态是 auto-title 的门禁（C-3，`docs/plans/2026-09-02-会话标题模型生成.md`）：
+ * `derived` = 首句截断（含从未生成过 / 生成失败），允许模型再试；
+ * `auto` = 模型已生成，不再试；`user` = 用户改过名（含改空），模型永不覆盖。
+ */
+export type TitleSource = "derived" | "auto" | "user";
+
 export interface SessionMeta {
   id: string;
-  /** 首条用户消息的第一行。会话标题由 LLM 生成是后续的事（auto-titler） */
+  /** 首条用户消息的第一行；模型生成成功后替换为概括（titleSource = auto） */
   title: string;
+  titleSource: TitleSource;
   /**
    * 这一单跑在哪儿。**创建时固定、不可改**——pi 的 session 在 `createAgentSession`
    * 时锁定 cwd，所以换目录只能换会话。
@@ -106,6 +114,12 @@ function isPermissionMode(value: unknown): value is PermissionMode {
   return (PERMISSION_MODES as readonly unknown[]).includes(value);
 }
 
+const TITLE_SOURCES: readonly TitleSource[] = ["derived", "auto", "user"];
+
+function isTitleSource(value: unknown): value is TitleSource {
+  return (TITLE_SOURCES as readonly unknown[]).includes(value);
+}
+
 function str(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
@@ -131,6 +145,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     id,
     // 标题可以为空（会话建了但一条消息都没发过），所以它不是必填
     title: typeof value["title"] === "string" ? value["title"] : "",
+    // 缺 titleSource 的是 auto-title 之前存的会话：它们是首句截断，允许模型再试
+    titleSource: isTitleSource(value["titleSource"]) ? value["titleSource"] : "derived",
     cwd,
     providerId,
     modelId,

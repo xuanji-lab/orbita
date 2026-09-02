@@ -57,6 +57,7 @@ beforeEach(async () => {
   await store.create({
     id: ID,
     title: "",
+    titleSource: "derived",
     cwd: "/repo",
     workspaceId: null,
     piSessionFile: null,
