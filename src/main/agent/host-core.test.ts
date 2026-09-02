@@ -111,6 +111,34 @@ describe("pendingCreates —— 创建请求与 created 事件的竞态（债务
     await assert.rejects(pending, /no provider/);
   });
 
+  test("branchSession：created 回分支文件；对账失败经 failed 拒绝（C-2 共用同一条等待通路）", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const ok = ctx.host.branchSession(
+      { sourcePiSessionFile: "pi/src.jsonl", cwd: "C:/work", roles: ["user", "assistant"] },
+      "s9",
+    );
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s9", piSessionFile: "pi/branch.jsonl" });
+    assert.equal(await ok, "pi/branch.jsonl");
+    assert.deepEqual(ctx.child().posted[0], {
+      type: "branch",
+      sessionId: "s9",
+      sourcePiSessionFile: "pi/src.jsonl",
+      cwd: "C:/work",
+      roles: ["user", "assistant"],
+    });
+
+    const rejected = ctx.host.branchSession(
+      { sourcePiSessionFile: "pi/src.jsonl", cwd: "C:/work", roles: ["user"] },
+      "s8",
+    );
+    await flush();
+    ctx.child().emit({ type: "failed", sessionId: "s8", message: "两本账对不上" });
+    await assert.rejects(rejected, /两本账对不上/);
+  });
+
   test("pending 中进程退出 —— 全部 reject、广播 failed(null)、下次 ensure 重新 fork", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();

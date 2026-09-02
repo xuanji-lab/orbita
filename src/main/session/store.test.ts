@@ -205,3 +205,102 @@ describe("SessionStore", () => {
     assert.deepEqual(transcript.map((r) => r.role), ["user"]);
   });
 });
+
+// ── C-2：会话分支 ──
+
+describe("SessionStore.branch", () => {
+  const PI_FILE = "C:/pi-sessions/source.jsonl";
+
+  /** 可指定 id 的记录工厂——分支按锚点 id 定位，固定 id 的公共工厂不够用 */
+  const item = (id: string, role: "user" | "assistant", text: string): TranscriptItem =>
+    role === "user"
+      ? { id, role: "user", content: [{ type: "text", text }], timestamp: 2000 }
+      : {
+          id,
+          role: "assistant",
+          content: [{ type: "text", text }],
+          model: { provider: "zai", id: "glm-5.3" },
+          timestamp: 3000,
+          status: "complete",
+          stopReason: "stop",
+        };
+
+  /** pi 不落盘的失败尾巴：status=error 且内容为空 */
+  const emptyError = (id: string): TranscriptItem => ({
+    id,
+    role: "assistant",
+    content: [],
+    model: { provider: "zai", id: "glm-5.3" },
+    timestamp: 3000,
+    status: "error",
+    stopReason: "error",
+  });
+
+  test("prepareBranch：前缀含锚点、角色序列对、meta 继承且标题带后缀", async () => {
+    await store.create(meta({ title: "读一下项目", piSessionFile: PI_FILE, pinned: true }));
+    await store.record(ID, item("u1", "user", "第一句"));
+    await store.record(ID, item("a1", "assistant", "第一次回答"));
+    await store.record(ID, emptyError("e1"));
+    await store.record(ID, item("u2", "user", "第二句"));
+    await store.record(ID, item("a2", "assistant", "第二次回答"));
+    await store.record(ID, item("u3", "user", "第三句（不该带进分支）"));
+
+    const plan = await store.prepareBranch(ID, "a2");
+    assert.deepEqual(
+      plan.records.map((r) => r.id),
+      ["u1", "a1", "e1", "u2", "a2"],
+    );
+    // 空 error 消息不入角色序列（pi 不落它）；tool / compacted 也不入
+    assert.deepEqual(plan.roles, ["user", "assistant", "user", "assistant"]);
+    assert.equal(plan.sourcePiSessionFile, PI_FILE);
+    assert.match(plan.newId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(plan.meta.id, plan.newId);
+    assert.equal(plan.meta.title, "读一下项目（分支）");
+    assert.equal(plan.meta.cwd, meta().cwd);
+    assert.equal(plan.meta.piSessionFile, null);
+    assert.equal(plan.meta.pinned, false);
+  });
+
+  test("prepareBranch：锚点不存在 / 不是 assistant / 没有 pi 本子，都拒绝", async () => {
+    await store.create(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问题"));
+    await store.record(ID, item("a1", "assistant", "回答"));
+    await assert.rejects(() => store.prepareBranch(ID, "nope"), /找不到/);
+    await assert.rejects(() => store.prepareBranch(ID, "u1"), /agent 的回答/);
+    await assert.rejects(
+      () => store.prepareBranch("00000000-0000-4000-8000-000000000000", "a1"),
+      /not found/,
+    );
+
+    await store.create(meta({ id: OTHER, piSessionFile: null }));
+    await assert.rejects(() => store.prepareBranch(OTHER, "a1"), /不能分支/);
+  });
+
+  test("commitBranch：meta 补上 pi 文件、JSONL 逐行等于前缀、列表能看到新会话", async () => {
+    await store.create(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, item("a1", "assistant", "答"));
+    const plan = await store.prepareBranch(ID, "a1");
+
+    await store.commitBranch(plan, "C:/pi-sessions/branch.jsonl");
+    const detail = await store.load(plan.newId);
+    assert.equal(detail?.meta.piSessionFile, "C:/pi-sessions/branch.jsonl");
+    assert.deepEqual(detail?.transcript.map((r) => r.id), ["u1", "a1"]);
+    // 列表里有它，源会话也原封不动
+    const listed = await store.list();
+    assert.deepEqual(
+      listed.map((m) => m.id).sort(),
+      [ID, plan.newId].sort(),
+    );
+    assert.equal((await store.load(ID))?.transcript.length, 2);
+  });
+
+  test("commitBranch：pi 没给文件就拒绝，什么也不落", async () => {
+    await store.create(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, item("a1", "assistant", "答"));
+    const plan = await store.prepareBranch(ID, "a1");
+    await assert.rejects(() => store.commitBranch(plan, null), /没有产出分支文件/);
+    assert.equal(await store.load(plan.newId), null);
+  });
+});

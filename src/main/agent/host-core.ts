@@ -105,15 +105,35 @@ export class AgentHostCore {
   ): Promise<{ sessionId: string; piSessionFile: string | null }> {
     await this.ensure();
     const sessionId = reuseId ?? randomUUID();
-    const created = new Promise<string | null>((resolve, reject) => {
+    const created = this.awaitCreated(sessionId, "agent runtime did not confirm the session in time");
+    this.post({ type: "create", sessionId, ...input });
+    return { sessionId, piSessionFile: await created };
+  }
+
+  /**
+   * pi 侧分支（C-2）：让 runtime 把源 pi 本子裁一份新文件，等 `created` 回来。
+   * sessionId 是主进程先生成好的**新会话 id**（与 createSession 同一条等待通路）；
+   * 调用方拿到文件路径后再把新会话落盘。
+   */
+  async branchSession(
+    input: Omit<Extract<AgentCommand, { type: "branch" }>, "type" | "sessionId">,
+    sessionId: string,
+  ): Promise<string | null> {
+    await this.ensure();
+    const created = this.awaitCreated(sessionId, "agent runtime did not confirm the branch in time");
+    this.post({ type: "branch", sessionId, ...input });
+    return created;
+  }
+
+  /** 等 runtime 对一条命令回 `created`（create 与 branch 共用；失败经 failed / exit 拒绝）。 */
+  private awaitCreated(sessionId: string, timeoutMessage: string): Promise<string | null> {
+    return new Promise<string | null>((resolve, reject) => {
       this.pendingCreates.set(sessionId, { resolve, reject });
       setTimeout(() => {
         if (!this.pendingCreates.delete(sessionId)) return;
-        reject(new Error("agent runtime did not confirm the session in time"));
+        reject(new Error(timeoutMessage));
       }, 60_000);
     });
-    this.post({ type: "create", sessionId, ...input });
-    return { sessionId, piSessionFile: await created };
   }
 
   /**

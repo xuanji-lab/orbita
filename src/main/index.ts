@@ -102,8 +102,8 @@ void app.whenReady().then(() => {
     broadcastAgentEvent(event);
   });
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
-  // 活到退出应用（刀 0-4 债务 A）
-  registerSessionIpc(sessions, (id) => agentHost.disposeSession(id));
+  // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
+  registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost);
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   registerAgentIpc(agentHost, providers, sessions, join(configDir, "pi-sessions"));
   app.on("before-quit", () => agentHost.dispose());

@@ -10,9 +10,10 @@
  * **列会话只需读 N 个小 meta 文件，完全不碰日志**。
  */
 import { appendFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { writeJsonAtomic } from "../atomic-write.ts";
+import { writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import {
   deriveSessionTitle,
@@ -33,6 +34,43 @@ import {
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const META_SUFFIX = ".meta.json";
+
+/**
+ * 一次分支的全部预制件（C-2）。prepareBranch 只读不写；pi 那边把分支文件落了
+ * （agent 进程的 createBranchedSession），才由 commitBranch 落盘——顺序保证中途
+ * 失败最多留下一个孤儿 pi 文件，而不是一条「看得见历史但 pi 没有前文」的半残会话。
+ */
+export interface BranchPlan {
+  /** 新会话 id（新 meta 与新 JSONL 都用它） */
+  newId: string;
+  /** 源会话的 pi 本子——agent 进程要打开它裁分支 */
+  sourcePiSessionFile: string;
+  /** 前缀记录（含锚点回答）：新会话的初始 transcript */
+  records: SessionRecord[];
+  /** 前缀的 user/assistant 角色序列，发去 agent 进程与 pi 文件逐位对账 */
+  roles: ("user" | "assistant")[];
+  /** 新会话 meta（piSessionFile 空着占位，commitBranch 补真值） */
+  meta: SessionMeta;
+}
+
+/**
+ * 前缀的 user/assistant 角色序列——与 pi 文件里的消息条目按位对账用（两本账没有
+ * id 映射，顺序是唯一桥梁）。跳过「status=error 且内容为空」的 assistant 记录：
+ * pi 不把这种失败尾巴落进它的本子（2026-09-01 对 72 条真实会话实测的唯一系统性
+ * 落账差异），带上它对账必炸。其余罕见漂移由 agent 进程的对账守卫兜底——
+ * 拒绝分支优于切错位置。
+ */
+export function branchRoles(records: readonly SessionRecord[]): ("user" | "assistant")[] {
+  const roles: ("user" | "assistant")[] = [];
+  for (const record of records) {
+    if (record.role !== "user" && record.role !== "assistant") continue;
+    if (record.role === "assistant" && record.status === "error" && record.content.length === 0) {
+      continue;
+    }
+    roles.push(record.role);
+  }
+  return roles;
+}
 
 export class SessionStore {
   private readonly dir: string;
@@ -117,6 +155,64 @@ export class SessionStore {
   /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
   move(id: string, workspaceId: string | null): Promise<void> {
     return this.update(id, { workspaceId });
+  }
+
+  /**
+   * 准备一次分支（C-2）：定位锚点、截前缀、抽角色序列、起好新 meta。
+   * 锚点必须是 assistant 记录（界面只在轮末 agent 回答下给入口，这里是信任边界
+   * 的再校验）。**只读不写**，落盘在 commitBranch。
+   */
+  async prepareBranch(id: string, anchorItemId: string): Promise<BranchPlan> {
+    const meta = await this.readMeta(id);
+    if (meta === null) throw new Error(`session ${id} not found`);
+    if (meta.piSessionFile === null) {
+      throw new Error("这条会话没有 pi 的本子，只能读不能续，也不能分支");
+    }
+    const records = await this.readLog(id);
+    const anchorIndex = records.findIndex(
+      (record) => record.role !== "compacted" && record.id === anchorItemId,
+    );
+    const anchor = records[anchorIndex];
+    if (anchor === undefined) throw new Error(`找不到分支点消息 ${anchorItemId}`);
+    if (anchor.role !== "assistant") throw new Error("分支点必须是 agent 的回答");
+
+    const prefix = records.slice(0, anchorIndex + 1);
+    const newId = randomUUID();
+    const now = Date.now();
+    return {
+      newId,
+      sourcePiSessionFile: meta.piSessionFile,
+      records: prefix,
+      roles: branchRoles(prefix),
+      // 标题沿用原标题加后缀（截断规则复用 deriveSessionTitle）；不置顶、
+      // 不继承归档——分支的目的就是去那边继续说话
+      meta: {
+        id: newId,
+        title: deriveSessionTitle(`${meta.title}（分支）`),
+        cwd: meta.cwd,
+        workspaceId: meta.workspaceId,
+        providerId: meta.providerId,
+        modelId: meta.modelId,
+        mode: meta.mode,
+        piSessionFile: null,
+        pinned: false,
+        archived: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    };
+  }
+
+  /** 分支落盘：新 meta（补上 pi 分支文件）+ 前缀整写为初始 JSONL（原子写）。 */
+  async commitBranch(plan: BranchPlan, piSessionFile: string | null): Promise<void> {
+    if (piSessionFile === null) throw new Error("pi 没有产出分支文件，分支未落盘");
+    await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile });
+    if (plan.records.length > 0) {
+      await writeTextAtomic(
+        this.logPath(plan.meta.id),
+        `${plan.records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      );
+    }
   }
 
   /** 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。 */

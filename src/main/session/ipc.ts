@@ -6,9 +6,14 @@ import { BrowserWindow, dialog, ipcMain } from "electron";
 import { writeFile } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import { transcriptToMarkdown } from "../../shared/session.ts";
+import type { AgentHost } from "../agent/host.ts";
 import type { SessionStore } from "./store.ts";
 
-export function registerSessionIpc(store: SessionStore, onSessionRemoved?: (id: string) => void): void {
+export function registerSessionIpc(
+  store: SessionStore,
+  onSessionRemoved: ((id: string) => void) | undefined,
+  agentHost: AgentHost,
+): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
   ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.load(id));
   ipcMain.handle(ipcChannels.sessionRename, (_event, id: string, title: string) =>
@@ -29,6 +34,29 @@ export function registerSessionIpc(store: SessionStore, onSessionRemoved?: (id: 
   ipcMain.handle(
     ipcChannels.sessionMove,
     (_event, id: string, workspaceId: string | null) => store.move(id, workspaceId),
+  );
+
+  /**
+   * 从某条 agent 回答另起一支（C-2）。三步有序：先在本地算前缀与角色序列（store），
+   * 再让 pi 把它的本子裁一份新文件（agent 进程，对账守卫在那边），最后才把新会话
+   * 落盘——中途失败最多留一个孤儿 pi 文件，不出现「看得见历史但 pi 没有前文」的
+   * 半残会话。
+   */
+  ipcMain.handle(
+    ipcChannels.sessionBranch,
+    async (_event, id: string, anchorItemId: string): Promise<string> => {
+      const plan = await store.prepareBranch(id, anchorItemId);
+      const piSessionFile = await agentHost.branchSession(
+        {
+          sourcePiSessionFile: plan.sourcePiSessionFile,
+          cwd: plan.meta.cwd,
+          roles: plan.roles,
+        },
+        plan.newId,
+      );
+      await store.commitBranch(plan, piSessionFile);
+      return plan.newId;
+    },
   );
 
   /**
