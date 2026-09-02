@@ -508,7 +508,7 @@ function ComposerBar(props: { session: ChatSession }) {
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
-              title="Model · switching starts a new task"
+              title="Model · applies from the next message"
               onClick={toggle}
               chevron
               italic

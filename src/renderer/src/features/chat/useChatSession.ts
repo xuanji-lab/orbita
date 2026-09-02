@@ -90,7 +90,10 @@ export interface ChatSession {
   defaultCwd: string;
   /** 至少声明了一个模型的 provider——没有它就发不出消息 */
   usable: ProviderDto[];
-  /** 下一条任务用哪个模型。**改它会开新任务**——pi 的 session 在创建时定下模型 */
+  /**
+   * 当前模型的意图：新任务的默认，也是会话内切换（C-4）的目标。
+   * 活会话切换成功后由 `model` 事件回环对齐——不乐观，失败时 chip 不动。
+   */
   model: { providerId: string; modelId: string } | null;
   chooseModel: (providerId: string, modelId: string) => void;
   /** 落盘的会话列表，新的在前。侧栏 TASKS 节点列的就是它。 */
@@ -239,6 +242,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         if (event.type === "phase" && event.phase === "idle") refreshSessions();
         // 模型标题到了（C-3，主进程已落 meta）：可能早于整轮结束，不等 phase idle
         if (event.type === "title") refreshSessions();
+        // 会话内模型切换成功（C-4，主进程已落 meta）：对齐这份意图——
+        // 它既是新任务默认也是会话切换的目标，只认正看着的那条会话的回执
+        if (event.type === "model") {
+          if (event.sessionId === sessionRef.current) {
+            setModel({ providerId: event.providerId, modelId: event.modelId });
+          }
+          refreshSessions();
+        }
         // 工具耗时在这里记账（事件必经之路）：组折叠时成员行不渲染，渲染驱动会漏
         if (
           event.type === "progress" &&
@@ -565,16 +576,22 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, [reset, refreshWorkspaces]);
 
   /**
-   * 换模型。**开新任务**——pi 的 session 在创建时定下模型，
-   * 中途换会让界面上写的和实际在跑的对不上。作用域同理。
+   * 换模型（C-4）。**有活会话就地切**：命令发过去，成功经 `model` 事件回环对齐
+   * model state（不乐观——切换会失败：无 key、未知模型；失败红字说明，chip 不动）；
+   * 没活的（首页 / 盘上打开未唤醒）只改意图，下一条消息 create 时生效——
+   * 换了却不发言就切走，会被 openSession 的 meta 播种冲掉，等于没换过（已裁决接受）。
+   * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
    */
-  const chooseModel = useCallback(
-    (providerId: string, modelId: string) => {
-      reset();
+  const chooseModel = useCallback((providerId: string, modelId: string) => {
+    const id = sessionRef.current;
+    if (id === null) {
       setModel({ providerId, modelId });
-    },
-    [reset],
-  );
+      return;
+    }
+    void api.agent
+      .setModel(id, providerId, modelId)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, []);
 
   const renameWorkspace = useCallback(
     (id: string, name: string) => {
