@@ -121,16 +121,17 @@ on the theme ground, and as a fill they leave white text at 2.5:1. Filled danger
 `--color-danger-solid`, which is darker.
 Status prefers icons and words over colour — a spinner, a check, a lock glyph. List rows never tint:
 hover and active share one neutral fill and active is marked by weight. Max two
-background colours per screen. The dark theme — **Warm** in settings — is a softened warm
-near-black (`#1d2021` shell, `#282828` panel, low-saturation cream ink `#dfd9c9 / #b0aa9c / #8b877c`,
-yellow washes at `.14`): warm and yellow are one family, but full-gruvbox cream (`#ebdbb2`) read as
-"过于黄色" and was cut. The black theme — **Ink** — is a **neutral near-black** (Vercel-referenced
+background colours per screen. The dark theme — **Warm** in settings — is a barely-warm
+near-black (`#191c1d` shell, `#232525` panel, ink `#d6d5cf / #a3a29b / #82817b` with only a
+whisper of warmth, yellow washes at `.10`): gruvbox's full cream (`#ebdbb2`) read as "过于黄色"
+and was cut twice. The black theme — **Ink** — is a **neutral near-black** (Vercel-referenced
 `#0a0a0a` shell, `#111111` panel, ink `#ededed / #a1a1a1 / #707070`), the darkest ground in the set
 and **the dark landing of `system`**. Both take the yellow accent (`#e3c25a`) on
 `--color-accent-fg`; both are manual choices, `system` resolves to light or Ink. (Both dark grounds
-re-cut 2026-09-03 after six same-day iterations — true black, GitHub default, GitHub ×0.78 and
+re-cut 2026-09-03 after seven same-day iterations — true black, GitHub default, GitHub ×0.78 and
 neutral gray each bounced; the user picked warm for dark and darkest-neutral for black from a
-rendered comparison page, then softened and renamed both.)
+rendered comparison page, then softened, renamed, darkened and de-yellowed Warm across two more
+rounds.)
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**

@@ -73,32 +73,32 @@
   --action-primary-hover: var(--color-accent-strong);
 }
 
-/* dark — Warm · 柔化暖黑（2026-09-03 修订七）：地面保持中性微暖（#1d2021 系），
-   墨降饱和到一半——暖米 #dfd9c9 / #b0aa9c / #8b877c，原 gruvbox 全饱和暖米
-   #ebdbb2 被否（「过于黄色」）；悬停与边线中性化，黄 accent 的 wash 从
-   .18 降到 .14。设置里叫 Warm；system 不落这档（落 Ink），是纯手动档。 */
+/* dark — Warm · 再柔化 + 压暗（2026-09-03 修订八）：墨只留一丝暖
+   #d6d5cf / #a3a29b / #82817b（原 gruvbox 暖米已两轮退烧），地面整条降一档
+   （app #191c1d、panel #232525），黄 accent 的 wash 降到 .10。
+   设置里叫 Warm；system 不落这档（落 Ink），是纯手动档。 */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg-app: #1d2021;
-  --color-bg-sidebar: #222627;
-  --color-bg-panel: #282828;
-  --color-bg-muted: #202425;
-  --color-bg-hover: #303332;
-  --color-bg-active: rgba(212, 167, 44, 0.14);
-  --color-text-primary: #dfd9c9;
-  --color-text-secondary: #b0aa9c;
-  --color-text-tertiary: #8b877c;
+  --color-bg-app: #191c1d;
+  --color-bg-sidebar: #1e2223;
+  --color-bg-panel: #232525;
+  --color-bg-muted: #1b1f20;
+  --color-bg-hover: #2a2d2c;
+  --color-bg-active: rgba(212, 167, 44, 0.1);
+  --color-text-primary: #d6d5cf;
+  --color-text-secondary: #a3a29b;
+  --color-text-tertiary: #82817b;
   /*真正取反：暗主题正文近白，其反色即近黑。填充面上的字改用 --color-*-fg。 */
-  --color-text-inverse: #1d2021;
+  --color-text-inverse: #191c1d;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: #303030;
-  --color-border-default: #3a3b3b;
-  --color-border-strong: #454746;
+  --color-border-subtle: #292b2b;
+  --color-border-default: #333534;
+  --color-border-strong: #3d403f;
   --color-accent: #e3c25a;
   --color-accent-strong: #f0d375;
-  --color-accent-soft: rgba(212, 167, 44, 0.14);
+  --color-accent-soft: rgba(212, 167, 44, 0.1);
   --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(212, 167, 44, 0.14);
+  --color-mode-active-bg: rgba(212, 167, 44, 0.1);
   --color-mode-active-fg: #e3c25a;
   --color-danger: #ff7b72;
   --color-danger-solid: #c9372c;
@@ -110,10 +110,10 @@
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #282828;
-  --color-chat-muted-bg: #303332;
-  --color-chat-control-bg: #222627;
-  --color-chat-table-bg: #282828;
+  --color-chat-card-bg: #232525;
+  --color-chat-muted-bg: #2a2d2c;
+  --color-chat-control-bg: #1e2223;
+  --color-chat-table-bg: #232525;
   --color-chat-link: #83a598;
 }
 

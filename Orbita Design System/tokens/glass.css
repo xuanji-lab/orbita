@@ -18,7 +18,7 @@
   --glass-alpha: 0.7; /* @kind other */
   --glass-blur: 20px;
   --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-bg: rgba(40, 40, 40, 0.7);
+  --glass-bg: rgba(35, 37, 37, 0.7);
 }
 
 /* black 与 dark 同透明度；tint 同一个配方——**用各自的 panel 色当 tint**
