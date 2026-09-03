@@ -331,6 +331,40 @@ body {
   animation: orbita-breath 1.6s ease-in-out infinite;
 }
 
+/* 首页首发过渡（R5-05，动效白名单）：slogan 与会话卡 220ms 向上淡出（--transition-layer），
+   composer 240ms 滑向窗口底部（--transition-composer-exit）。leaving 是离场；
+   prep/entering 是回场的两拍——prep 先无过渡摆到起点，entering 过渡回原位 */
+.home-fade {
+  transition: var(--transition-layer);
+}
+
+.home-travel {
+  transition: var(--transition-composer-exit);
+}
+
+.home-stage[data-leaving="true"] .home-fade {
+  opacity: 0;
+  transform: translateY(-12px);
+}
+
+.home-stage[data-leaving="true"] .home-travel {
+  transform: translateY(var(--travel-dy, 320px));
+}
+
+.home-stage[data-travel="prep"] .home-fade,
+.home-stage[data-travel="prep"] .home-travel {
+  transition: none;
+}
+
+.home-stage[data-travel="prep"] .home-fade {
+  opacity: 0;
+  transform: translateY(-12px);
+}
+
+.home-stage[data-travel="prep"] .home-travel {
+  transform: translateY(var(--travel-dy, 320px));
+}
+
 /* 动效只解释「东西去哪了」；用户要求减少动效时全部塌成 0（设计系统 *Motion*） */
 @media (prefers-reduced-motion: reduce) {
   *,

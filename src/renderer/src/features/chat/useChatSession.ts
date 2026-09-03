@@ -108,6 +108,8 @@ export interface ChatSession {
   /** 就地重试两个列表的加载（侧栏错误行上的按钮用） */
   retrySessions: () => void;
   retryWorkspaces: () => void;
+  /** 会话列表的第一读是否已落定（首页会话卡的骨架态只在这一读期间显示） */
+  sessionsLoaded: boolean;
   /** 正在从磁盘恢复某条会话的历史（openSession 的 load 在途） */
   loadingHistory: boolean;
   /**
@@ -184,6 +186,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [workspacesError, setWorkspacesError] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [opened, setOpened] = useState<SessionMeta | null>(null);
@@ -209,6 +212,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const refreshSessions = useCallback(() => {
     void api.session.list().then((list) => {
       setSessions(list);
+      setSessionsLoaded(true);
       setSessionsError(null);
       // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
       // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
@@ -219,10 +223,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         if (id === null) return null;
         return list.find((meta) => meta.id === id) ?? current;
       });
-    }).catch((cause: unknown) =>
+    }).catch((cause: unknown) => {
+      setSessionsLoaded(true);
       // 读盘失败不是「没有会话」：旧列表留着不动，错误就地亮在侧栏
-      setSessionsError(cause instanceof Error ? cause.message : String(cause)),
-    );
+      setSessionsError(cause instanceof Error ? cause.message : String(cause));
+    });
   }, []);
 
   useEffect(refreshSessions, [refreshSessions]);
@@ -730,6 +735,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     workspacesError,
     retrySessions: refreshSessions,
     retryWorkspaces: refreshWorkspaces,
+    sessionsLoaded,
     loadingHistory,
     opened,
     // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读

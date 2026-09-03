@@ -38,6 +38,7 @@ import {
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { InlineName } from "../../shell/InlineName";
@@ -108,6 +109,51 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
 
+  // —— R5-05 首发过渡：slogan 与会话卡 220ms 向上淡出，composer 240ms 滑向窗口底部。
+  // leaving 由事件处理器（发送 / 点会话卡）同步置位，首页保持挂载走完动画再让位；
+  // 目的地没就绪（create / load 慢于动画）就宁可不动画，硬切也不闪回。
+  const [travel, setTravel] = useState<"none" | "leaving" | "prep" | "entering">("none");
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const leaveTimer = useRef<number | undefined>(undefined);
+  const chattedRef = useRef(false);
+  const homeActive = session.sessionId === null && session.opened === null;
+
+  /** 滑落距离：composer 现位到窗口底部（聊天页 footer 的大致位置）。外层量——prep 拍里它自己带着 transform。 */
+  const measureTravel = () => {
+    const el = stageRef.current;
+    if (el === null) return;
+    const rect = el.getBoundingClientRect();
+    el.style.setProperty("--travel-dy", `${Math.max(0, window.innerHeight - rect.bottom - 32)}px`);
+  };
+
+  const startLeave = () => {
+    if (travel === "leaving" || travel === "prep") return;
+    measureTravel();
+    setTravel("leaving");
+    window.clearTimeout(leaveTimer.current);
+    leaveTimer.current = window.setTimeout(() => setTravel("none"), 260);
+  };
+
+  // 回场（New task / 发送失败回家）：反方向走一遍。**首启不算「回来」**，不做动画
+  useEffect(() => {
+    if (!homeActive) {
+      chattedRef.current = true;
+      return;
+    }
+    if (!chattedRef.current) return;
+    setTravel("prep");
+    const raf = requestAnimationFrame(() => {
+      measureTravel();
+      requestAnimationFrame(() => setTravel("entering"));
+    });
+    const timer = window.setTimeout(() => setTravel("none"), 300);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [homeActive]);
+
   // 打开/切换会话无条件跳到底并恢复跟随：后台会话的事件一直进自己的槽，切回时转录已是最新
   useLayoutEffect(() => {
     followRef.current = true;
@@ -119,9 +165,11 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
     <Composer
       value={session.draft}
       onChange={session.setDraft}
-      // 发送即恢复跟随：翻着历史发消息，新对话永远长在底部
+      // 发送即恢复跟随：翻着历史发消息，新对话永远长在底部。
+      // 首页发送时同步起离场动画（R8-01 ③：首条消息提交才 createAgent）
       onSubmit={() => {
         followRef.current = true;
+        if (homeActive) startLeave();
         session.send();
       }}
       onStop={session.stop}
@@ -160,10 +208,17 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
     </>
   );
 
-  // 首页 = 既没有活着的会话，也没有打开任何一条旧会话
-  if (session.sessionId === null && session.opened === null) {
+  // 首页 = 既没有活着的会话，也没有打开任何一条旧会话。
+  // leaving 期间保持首页挂载（homeActive 已翻 false 也一样），动画走完再让位给聊天页
+  if (homeActive || travel === "leaving") {
+    // 会话卡数据：全局最近活跃的前 3 条（list 已按 sortSessions 排序），
+    // 排除已归档与从未发过消息的——后者连标题都没有，卡片无物可显
+    const recents = session.sessions.filter((m) => !m.archived && m.title !== "").slice(0, 3);
     return (
       <div
+        className="home-stage"
+        data-leaving={travel === "leaving" ? "true" : undefined}
+        data-travel={travel === "prep" || travel === "entering" ? travel : undefined}
         style={{
           height: "100%",
           display: "flex",
@@ -174,6 +229,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         }}
       >
         <div
+          ref={stageRef}
           style={{
             width: "min(100%, var(--content-max-width))",
             display: "flex",
@@ -182,20 +238,61 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
             gap: "var(--space-5)",
           }}
         >
-          {/* 全产品唯一一句抒情的话，也是唯一保持中文的界面文案 */}
-          <h1
+          {/* 淡出组：slogan 与会话卡一起向上走（--transition-layer，220ms） */}
+          <div
+            className="home-fade"
             style={{
-              margin: "0 0 var(--space-1)",
-              fontFamily: "var(--font-family-brand)",
-              fontSize: "var(--font-size-logo)",
-              fontWeight: 600,
-              letterSpacing: "var(--tracking-slogan)",
-              textAlign: "center",
+              width: "100%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "var(--space-5)",
             }}
           >
-            璇玑运转，诸事得序
-          </h1>
-          <div style={{ width: "100%", display: "grid", gap: "var(--space-2)" }}>
+            {/* 全产品唯一一句抒情的话，也是唯一保持中文的界面文案 */}
+            <h1
+              style={{
+                margin: "0 0 var(--space-1)",
+                fontFamily: "var(--font-family-brand)",
+                fontSize: "var(--font-size-logo)",
+                fontWeight: 600,
+                letterSpacing: "var(--tracking-slogan)",
+                textAlign: "center",
+              }}
+            >
+              璇玑运转，诸事得序
+            </h1>
+            {/* 一排最近会话卡（SessionCard 规格：恒三槽、等高、hover 只抬阴影） */}
+            {!session.sessionsLoaded ? (
+              <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
+                {[0, 1, 2].map((index) => (
+                  <SessionCard key={index} name="" loading />
+                ))}
+              </div>
+            ) : (
+              recents.length > 0 && (
+                <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
+                  {recents.map((meta) => (
+                    <SessionCard
+                      key={meta.id}
+                      name={meta.title}
+                      queries={meta.recentQueries}
+                      running={session.phaseOf(meta.id) !== "idle"}
+                      onClick={() => {
+                        startLeave();
+                        session.openSession(meta.id);
+                      }}
+                    />
+                  ))}
+                </div>
+              )
+            )}
+          </div>
+          {/* 滑落组：notices 与 composer 一起滑向窗口底部（--transition-composer-exit，240ms） */}
+          <div
+            className="home-travel"
+            style={{ width: "100%", display: "grid", gap: "var(--space-2)" }}
+          >
             {notices}
             {composer}
           </div>
