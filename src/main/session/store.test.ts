@@ -388,3 +388,61 @@ describe("SessionStore.branch", () => {
     assert.equal(await store.load(plan.newId), null);
   });
 });
+
+// ── A-1 回归：meta 的「读-改-写」必须串行（wafo 2026-09-03 实测）──
+
+describe("meta 并发写入", () => {
+  test("标题落盘不会被同时在跑的用量落盘冲回 derived", async () => {
+    const store = new SessionStore(dir);
+    await store.create(meta());
+    // 真实时序：标题生成是一次 LLM 调用（几秒），这几秒里 record 与 setStats 都在写 meta。
+    // 不串行的话，它们手里的旧快照会把 titleSource 冲回 derived，
+    // 于是下一条消息又生成一次标题——用户看到「已经命名好的会话又被重命名」。
+    await Promise.all([
+      store.setAutoTitle(ID, "模型起的名字"),
+      store.setStats(ID, {
+        tokens: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 },
+        cost: 0.1,
+        contextUsage: null,
+      }),
+      store.record(ID, userItem("u1", 1000)),
+    ]);
+    const after = (await store.list())[0];
+    assert.equal(after?.title, "模型起的名字");
+    assert.equal(after?.titleSource, "auto");
+    // 三份改动都要在，谁也不该被谁抹掉
+    assert.equal(after?.stats?.cost, 0.1);
+    assert.equal(after?.updatedAt, 1000);
+  });
+
+  test("门禁仍然有效：已 auto 的标题，迟到的第二个标题不覆盖", async () => {
+    const store = new SessionStore(dir);
+    await store.create(meta());
+    await store.setAutoTitle(ID, "先到的");
+    await store.setAutoTitle(ID, "迟到的");
+    assert.equal((await store.list())[0]?.title, "先到的");
+  });
+
+  test("用户改过名之后，模型标题永不覆盖", async () => {
+    const store = new SessionStore(dir);
+    await store.create(meta());
+    await store.rename(ID, "我自己起的");
+    await store.setAutoTitle(ID, "模型起的");
+    const after = (await store.list())[0];
+    assert.equal(after?.title, "我自己起的");
+    assert.equal(after?.titleSource, "user");
+  });
+
+  test("删会话时在途的写入不会把 meta 又写回来", async () => {
+    const store = new SessionStore(dir);
+    await store.create(meta());
+    const inflight = store.setStats(ID, {
+      tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      cost: 0,
+      contextUsage: null,
+    });
+    await store.remove(ID);
+    await inflight.catch(() => undefined);
+    assert.deepEqual(await store.list(), []);
+  });
+});

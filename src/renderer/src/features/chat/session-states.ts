@@ -217,6 +217,7 @@ export function seedFromDisk(
   states: SessionStates,
   sessionId: string,
   transcript: readonly SessionRecord[],
+  stats: AgentStats | null = null,
 ): SessionStates {
   // 界碑不进 pi 的归约器（它不是消息），分开记账；实时与历史从此是同一条显示路径。
   // 内联 role 谓词而非 isCompactedRecord()：本文件被 node --test 加载，@shared 的值导入解析不了。
@@ -236,8 +237,10 @@ export function seedFromDisk(
     retry: null,
     // 盘上没有失败标注（纯 ephemeral）：种盘即清
     turnError: null,
-    // 盘上没有用量（真源在 pi 的本子里）：种盘清掉旧值，等唤醒后的第一次推送
-    stats: null,
+    // **盘上有用量**（A1-Q1：`SessionMeta.stats` 存的是上一次跑完时的快照）。
+    // 种盘就把它放回来——否则关掉应用再打开，底栏是空的，而账本明明还在。
+    // 唤醒后 agent 会推真累计覆盖它（pi 的本子才是原始账本，这里只是上次看到的样子）。
+    stats,
     approvals: [],
   });
   return next;

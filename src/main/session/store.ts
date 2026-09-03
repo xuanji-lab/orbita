@@ -78,6 +78,12 @@ export function branchRoles(records: readonly SessionRecord[]): ("user" | "assis
 export class SessionStore {
   private readonly dir: string;
 
+  /**
+   * 每条会话的 meta 写入链（见 `queueMeta`）。会话删掉时清掉自己那条，
+   * 不然长会话跑一天下来这里会攒下一堆已经没人要的 promise。
+   */
+  private readonly metaWrites = new Map<string, Promise<unknown>>();
+
   constructor(dir: string) {
     this.dir = dir;
   }
@@ -107,21 +113,27 @@ export class SessionStore {
     await mkdir(this.dir, { recursive: true });
     await appendFile(this.logPath(id), `${JSON.stringify(item)}\n`, "utf8");
 
-    const changes: Partial<SessionMeta> = { updatedAt: item.timestamp };
-    // 标题只认第一条用户消息，之后不再改——否则会话会在侧栏里改名。
-    // 手动改过名的会话 title 不为空，因此这条守卫自动让位给它。
-    if (meta.title === "" && item.role === "user") {
-      const text = item.content.find((block) => block.type === "text");
-      if (text !== undefined && text.type === "text") changes.title = deriveSessionTitle(text.text);
-    }
-    // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致
-    if (item.role === "user") {
-      const text = item.content.find((block) => block.type === "text");
-      if (text !== undefined && text.type === "text") {
-        changes.recentQueries = pushRecentQuery(meta.recentQueries, text.text);
+    // **基于链内刚读的 meta 算**，不用上面 appendFile 之前那份快照——
+    // 写盘期间标题可能刚落、最近提问可能刚被别的消息推过
+    await this.update(id, (current) => {
+      const changes: Partial<SessionMeta> = { updatedAt: item.timestamp };
+      // 标题只认第一条用户消息，之后不再改——否则会话会在侧栏里改名。
+      // 手动改过名的会话 title 不为空，因此这条守卫自动让位给它。
+      if (current.title === "" && item.role === "user") {
+        const text = item.content.find((block) => block.type === "text");
+        if (text !== undefined && text.type === "text") {
+          changes.title = deriveSessionTitle(text.text);
+        }
       }
-    }
-    await this.update(id, changes);
+      // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致
+      if (item.role === "user") {
+        const text = item.content.find((block) => block.type === "text");
+        if (text !== undefined && text.type === "text") {
+          changes.recentQueries = pushRecentQuery(current.recentQueries, text.text);
+        }
+      }
+      return changes;
+    });
   }
 
   /**
@@ -147,12 +159,14 @@ export class SessionStore {
    * 用户可能刚改过名，读时是 derived 不算数，写前是 derived 才算。核验不过
    * （meta 没了 / 已 user / 已 auto）就整份丢弃：迟到的标题不该吵醒任何东西。
    */
-  async setAutoTitle(id: string, title: string): Promise<void> {
-    const meta = await this.readMeta(id);
-    if (meta === null || meta.titleSource !== "derived") return;
+  setAutoTitle(id: string, title: string): Promise<void> {
     const next = deriveSessionTitle(title);
-    if (next === "") return;
-    await writeJsonAtomic(this.metaPath(id), { ...meta, title: next, titleSource: "auto" });
+    if (next === "") return Promise.resolve();
+    // **这一次查必须和写在同一条写入链里**（见 `queueMeta`）：分开的话，读到的
+    // derived 到写回之前可能已被别的写入改过，那句「写前再查」就是假的。
+    return this.update(id, (meta) =>
+      meta.titleSource === "derived" ? { title: next, titleSource: "auto" } : null,
+    );
   }
 
   /**
@@ -167,10 +181,45 @@ export class SessionStore {
    * 改 meta 上的字段。**六处「读 → 改一个字段 → 原子写回」收成这一个**——
    * meta 不在就悄悄不做：会话可能刚被别处删掉，为此抛错没有意义。
    */
-  private async update(id: string, changes: Partial<SessionMeta>): Promise<void> {
-    const meta = await this.readMeta(id);
-    if (meta === null) return;
-    await writeJsonAtomic(this.metaPath(id), { ...meta, ...changes });
+  private update(
+    id: string,
+    changes: Partial<SessionMeta> | ((meta: SessionMeta) => Partial<SessionMeta> | null),
+  ): Promise<void> {
+    return this.queueMeta(id, async () => {
+      const meta = await this.readMeta(id);
+      if (meta === null) return;
+      const patch = typeof changes === "function" ? changes(meta) : changes;
+      if (patch === null) return;
+      await writeJsonAtomic(this.metaPath(id), { ...meta, ...patch });
+    });
+  }
+
+  /**
+   * 每条会话一条 meta 写入链。
+   *
+   * **原子写只保证单次写不撕裂，不保证两次「读-改-写」不互相覆盖。**
+   * 真事故（wafo 2026-09-03 实测）：标题生成是一次 LLM 调用，要跑几秒；这几秒里
+   * `record`（每条消息都调）与 `setStats`（每轮落定）已经各自读过 meta。标题写回
+   * `titleSource: "auto"` 之后，它们手里那份旧快照一落盘就把它冲回 `derived`——
+   * 于是下一条消息又生成一次标题，用户看到的是「已经命名好的会话又被重命名」。
+   *
+   * 这个竞态本来就在（record / setModel / setPiSessionFile 之间），只是都是低频事件、
+   * 撞不上；A-1 加的 `setStats` 是高频的，把潜伏的变成了必现的。
+   *
+   * 链上某一环失败不该卡死后续写入，所以存回去的是吃掉异常的那一支；
+   * 调用方拿到的仍是真实结果。
+   */
+  private queueMeta<T>(id: string, run: () => Promise<T>): Promise<T> {
+    const prev = this.metaWrites.get(id) ?? Promise.resolve();
+    const next = prev.then(run, run);
+    this.metaWrites.set(
+      id,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return next;
   }
 
   /** 记住 pi 这一次用的那份 session 文件——没有它，这条会话下次就只能读不能续 */
@@ -298,6 +347,10 @@ export class SessionStore {
    * 可见的残留优于隐形的残留。
    */
   async remove(id: string): Promise<void> {
+    // 先等它自己那条写入链排完，再删——否则在途的 `update` 会在删完之后
+    // 把 meta 文件又写回去（`update` 内部读不到才跳过，它已经读到了）。
+    await this.queueMeta(id, async () => undefined);
+    this.metaWrites.delete(id);
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
   }

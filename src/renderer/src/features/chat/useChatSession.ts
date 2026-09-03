@@ -503,7 +503,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         // 没在跑：从盘上种槽，readOnly 与「说话时才续跑」语义照旧
         setSessionId(null);
         sessionRef.current = null;
-        setStates((prev) => seedFromDisk(prev, id, detail.transcript));
+        setStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
       })
       .catch((cause: unknown) => {
         setLoadingHistory(false);

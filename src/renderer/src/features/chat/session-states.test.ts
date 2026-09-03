@@ -631,3 +631,27 @@ describe("turnError —— 回合失败标注的进出槽", () => {
     assert.equal(states.get("A")?.turnError, null);
   });
 });
+
+// ── A-1 回归：关掉应用重开，底栏不该是空的（wafo 2026-09-03 实测）──
+
+describe("seedFromDisk 播种用量", () => {
+  test("盘上有快照就放回槽——否则重开应用底栏是空的，而账本明明还在", () => {
+    const snapshot = stats({ contextUsage: { tokens: 18200, contextWindow: 200_000, percent: 9 } });
+    const states = seedFromDisk(new Map(), "A", [], snapshot);
+    assert.deepEqual(states.get("A")?.stats, snapshot);
+  });
+
+  test("旧会话没有快照：槽里是 null，环只画底环", () => {
+    assert.equal(seedFromDisk(new Map(), "A", []).get("A")?.stats, null);
+  });
+
+  test("唤醒后 agent 推的真累计覆盖盘上的快照", () => {
+    let states = seedFromDisk(new Map(), "A", [], stats({ cost: 0.001 }));
+    states = applyAgentEvent(states, {
+      type: "stats",
+      sessionId: "A",
+      stats: stats({ cost: 0.5 }),
+    });
+    assert.equal(states.get("A")?.stats?.cost, 0.5);
+  });
+});
