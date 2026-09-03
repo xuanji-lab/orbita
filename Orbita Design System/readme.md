@@ -109,7 +109,7 @@ brand copy — the slogan — stays in Chinese and is deliberately **not** run t
 ## Visual foundations
 
 **Colour.** Three themes: **white + blue** (light), **black + yellow** (dark), and black — the same
-black + yellow carried to a true-black ground. A warm off-white shell (`#f3f4f1`) with
+black + yellow on a cooler, GitHub-dark-referenced ground. A warm off-white shell (`#f3f4f1`) with
 pure-white panels, three text greys, three hairline greys. Every colour has exactly one job: the
 accent is blue `#1d4ed8` on light and yellow `#e3c25a` on dark, and it means the single primary
 action (the send button, "New task", "Start Agent") plus the selected mode — nothing else; amber
@@ -123,9 +123,10 @@ Status prefers icons and words over colour — a spinner, a check, a lock glyph.
 hover and active share one neutral fill and active is marked by weight. Max two
 background colours per screen. The dark theme is a cool near-black (`#111315` shell,
 `#1d2024` panel) with the yellow accent (`#e3c25a`) on dark glyph colour (`--color-accent-fg`).
-The black theme is dark's identity carried to the floor — the same yellow and ink on a true-black
-ramp (`#000000` shell, `#121519` panel); it is a manual choice only, `system` still resolves to
-light/dark.
+The black theme is dark's identity on GitHub-dark neutrals — the same yellow and ink on a deep
+blue-black ramp (`#0d1117` shell, `#161b22` panel, hairlines near `#30363d`); it is a manual choice
+only, `system` still resolves to light/dark. (Revised 2026-09-03: the first cut was a true-black
+`#000000` ramp and the user bounced it — "太黑了" — so the ground moved to GitHub dark.)
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
@@ -152,9 +153,10 @@ from colour.
 
 **Transparency and blur.** Blur is *only* for surfaces: `blur(20px)` over a single `--glass-bg`.
 One alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
-`.60 / .84 / .936`, dark `.70 / .91 / .973` and black `.78 / .95 / .99`. The themes are deliberately
-unequal — **the blacker the ground, the more the glass blocks** — because light text needs a settled
-ground and a bleeding wallpaper costs a true-black theme its whole promise.
+`.60 / .84 / .936` and dark and black `.70 / .91 / .973`. The themes are deliberately unequal —
+**dark and black block more than light** — because light text needs a settled ground and a bleeding
+wallpaper costs a dark ground its whole promise. Black differs from dark by tint, not opacity:
+GitHub-dark's cool blue-black (`rgba(13,17,23,.7)`) against dark's neutral graphite.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.

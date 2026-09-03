@@ -113,25 +113,26 @@
   --color-chat-link: #93c5fd;
 }
 
-/* black — 真黑档（OLED）。dark 的「黑 + 黄」走到底：底色阶从纯黑起抬，
-   黄 accent、墨色与状态色沿用 dark 不重调——换的是地，不是墨。
-   black 是手动档，system 跟随系统只落 light/dark（2026-09-03 黑色皮肤）。 */
+/* black — 深蓝黑档，底色阶参考 GitHub dark：canvas #0d1117、subtle #161b22、
+   border.default #30363d。黄 accent、墨色与状态色沿用 dark 不重调——换的是地，不是墨。
+   2026-09-03 修订：真黑 #000 起抬被用户否（「太黑了」），见 docs/plans/2026-09-03-黑色皮肤.md。
+   black 是手动档，system 跟随系统只落 light/dark。 */
 :root[data-theme="black"] {
   color-scheme: dark;
-  --color-bg-app: #000000;
-  --color-bg-sidebar: #0b0d0f;
-  --color-bg-panel: #121519;
-  --color-bg-muted: #0d0f12;
-  --color-bg-hover: #1b2026;
+  --color-bg-app: #0d1117;
+  --color-bg-sidebar: #11171e;
+  --color-bg-panel: #161b22;
+  --color-bg-muted: #10161d;
+  --color-bg-hover: #1d262f;
   --color-bg-active: rgba(212, 167, 44, 0.18);
   --color-text-primary: #eceff3;
   --color-text-secondary: #b9c0c8;
   --color-text-tertiary: #858e99;
   --color-text-inverse: #1b1a15;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: #20262c;
-  --color-border-default: #282f36;
-  --color-border-strong: #303841;
+  --color-border-subtle: #21262d;
+  --color-border-default: #2a313a;
+  --color-border-strong: #30363d;
   --color-accent: #e3c25a;
   --color-accent-strong: #f0d375;
   --color-accent-soft: rgba(212, 167, 44, 0.18);
@@ -148,9 +149,9 @@
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #171b20;
-  --color-chat-muted-bg: #1b2026;
-  --color-chat-control-bg: #121519;
-  --color-chat-table-bg: #121519;
+  --color-chat-card-bg: #1a212a;
+  --color-chat-muted-bg: #1e2731;
+  --color-chat-control-bg: #12181f;
+  --color-chat-table-bg: #12181f;
   --color-chat-link: #93c5fd;
 }
