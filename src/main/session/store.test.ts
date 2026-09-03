@@ -25,6 +25,7 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   piSessionFile: patch.piSessionFile ?? null,
   pinned: patch.pinned ?? false,
   archived: patch.archived ?? false,
+  recentQueries: patch.recentQueries ?? [],
 });
 
 const userItem = (text: string, timestamp = 2000): TranscriptItem => ({
@@ -87,6 +88,17 @@ describe("SessionStore", () => {
     await store.create(meta());
     await store.record(ID, assistantItem("我先说话"));
     assert.equal((await store.load(ID))?.meta.title, "");
+  });
+
+  // 首页会话卡（D-1）的三槽吃它：每条用户消息都记，新的在前，封顶 3 条
+  test("用户消息记进 recentQueries，assistant 不记", async () => {
+    await store.create(meta());
+    await store.record(ID, userItem("第一问"));
+    await store.record(ID, assistantItem("答"));
+    await store.record(ID, userItem("第二问", 4000));
+    await store.record(ID, userItem("第三问", 5000));
+    await store.record(ID, userItem("第四问", 6000));
+    assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["第四问", "第三问", "第二问"]);
   });
 
   test("列表按 updatedAt 倒序——新的在前", async () => {

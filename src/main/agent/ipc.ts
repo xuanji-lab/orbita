@@ -79,6 +79,7 @@ export function registerAgentIpc(
           piSessionFile,
           pinned: false,
           archived: false,
+          recentQueries: [],
           providerId: input.providerId,
           modelId: input.modelId,
           mode: input.mode,

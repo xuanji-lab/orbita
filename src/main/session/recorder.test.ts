@@ -63,6 +63,7 @@ beforeEach(async () => {
     piSessionFile: null,
     pinned: false,
     archived: false,
+    recentQueries: [],
     providerId: "zai",
     modelId: "glm-5.3",
     mode: "plan",

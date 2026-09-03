@@ -4,6 +4,9 @@ import {
   deriveSessionTitle,
   isCompactedRecord,
   parseSessionMeta,
+  pushRecentQuery,
+  recentQueriesFromRecords,
+  RECENT_QUERIES_MAX,
   SESSION_TITLE_MAX,
   sortSessions,
   transcriptToMarkdown,
@@ -22,6 +25,7 @@ const valid = {
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "manual",
+  recentQueries: [],
   createdAt: 1000,
   updatedAt: 2000,
 };
@@ -111,6 +115,65 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, titleSource: "hacked" })?.titleSource, "derived");
     strictEqual(parseSessionMeta({ ...valid, titleSource: "user" })?.titleSource, "user");
     strictEqual(parseSessionMeta({ ...valid, titleSource: "auto" })?.titleSource, "auto");
+  });
+
+  // 会话卡（D-1）之前存的会话没有这个字段：空槽显示，不读日志补算
+  it("缺 recentQueries 视为空；坏值丢掉只留字符串前 3 个", () => {
+    deepStrictEqual(parseSessionMeta({ ...valid, recentQueries: undefined })?.recentQueries, []);
+    deepStrictEqual(parseSessionMeta({ ...valid, recentQueries: "x" })?.recentQueries, []);
+    deepStrictEqual(
+      parseSessionMeta({ ...valid, recentQueries: ["a", 42, "b", "c", "d"] })?.recentQueries,
+      ["a", "b", "c"],
+    );
+  });
+});
+
+describe("pushRecentQuery", () => {
+  it("新的在前，超出上限丢最旧的", () => {
+    let queries = pushRecentQuery([], "第一问");
+    queries = pushRecentQuery(queries, "第二问");
+    queries = pushRecentQuery(queries, "第三问");
+    queries = pushRecentQuery(queries, "第四问");
+    deepStrictEqual(queries, ["第四问", "第三问", "第二问"]);
+    strictEqual(queries.length, RECENT_QUERIES_MAX);
+  });
+
+  it("空消息不记——图片消息等没有文本可显示", () => {
+    deepStrictEqual(pushRecentQuery(["旧问"], "  \n  "), ["旧问"]);
+  });
+
+  it("多行只取首行，截断规则与标题一致", () => {
+    deepStrictEqual(pushRecentQuery([], "  首行才是提问\n第二行不要"), ["首行才是提问"]);
+  });
+});
+
+describe("recentQueriesFromRecords", () => {
+  const userItem = (id: string, text: string) => ({
+    id,
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    timestamp: 1,
+  });
+
+  it("按时间顺序折进「最近提问」，新→旧", () => {
+    const queries = recentQueriesFromRecords([userItem("u1", "第一问"), userItem("u2", "第二问")]);
+    deepStrictEqual(queries, ["第二问", "第一问"]);
+  });
+
+  it("跳过非用户记录；分支的新会话从它的前缀继承", () => {
+    const assistant = {
+      id: "a1",
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "答" }],
+      model: { provider: "zai", id: "glm-5.3" },
+      timestamp: 2,
+      status: "complete" as const,
+      stopReason: "stop" as const,
+    };
+    deepStrictEqual(
+      recentQueriesFromRecords([userItem("u1", "问"), assistant, userItem("u2", "再问")]),
+      ["再问", "问"],
+    );
   });
 });
 

@@ -58,6 +58,31 @@ export function isCompactedRecord(raw: unknown): raw is CompactedRecord {
  */
 export type TitleSource = "derived" | "auto" | "user";
 
+/** 会话卡上「最近提问」槽位数。规格固定 3（不足留空槽），超出丢最旧的。 */
+export const RECENT_QUERIES_MAX = 3;
+
+/**
+ * 把一条用户消息记进「最近提问」。**截断与首行规则复用 `deriveSessionTitle`**——
+ * 会话卡上的提问行和侧栏标题一样必须一行放得下，两处不各写一套。
+ * 空消息（图片消息等没有文本块的）不记；不查重——发三次「继续」就是三条提问。
+ */
+export function pushRecentQuery(current: readonly string[], text: string): string[] {
+  const query = deriveSessionTitle(text);
+  if (query === "") return [...current];
+  return [query, ...current].slice(0, RECENT_QUERIES_MAX);
+}
+
+/** 从一段 transcript 抽「最近提问」（新→旧）——分支的新会话从它的前缀里继承。 */
+export function recentQueriesFromRecords(records: readonly SessionRecord[]): string[] {
+  let queries: string[] = [];
+  for (const record of records) {
+    if (record.role !== "user") continue;
+    const text = record.content.find((block) => block.type === "text");
+    if (text !== undefined && text.type === "text") queries = pushRecentQuery(queries, text.text);
+  }
+  return queries;
+}
+
 export interface SessionMeta {
   id: string;
   /** 首条用户消息的第一行；模型生成成功后替换为概括（titleSource = auto） */
@@ -89,6 +114,11 @@ export interface SessionMeta {
   pinned: boolean;
   /** 归档。从主列表里移走，收进侧栏底部的 Archived——**不是删除** */
   archived: boolean;
+  /**
+   * 最近 3 条用户提问（新→旧，每条首行、截断规则同 title）。
+   * 首页会话卡的三个提问槽吃它；**旧会话没有这个字段，显示空槽**。
+   */
+  recentQueries: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -118,6 +148,12 @@ const TITLE_SOURCES: readonly TitleSource[] = ["derived", "auto", "user"];
 
 function isTitleSource(value: unknown): value is TitleSource {
   return (TITLE_SOURCES as readonly unknown[]).includes(value);
+}
+
+/** 磁盘上的 recentQueries 只收「字符串数组的前 3 个」，其余全部丢掉，不给坏值过路。 */
+function parseRecentQueries(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string").slice(0, RECENT_QUERIES_MAX);
 }
 
 function str(value: unknown): string | null {
@@ -157,6 +193,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 两个开关都**默认关**：老会话不该因为加了字段就突然被置顶或藏起来
     pinned: value["pinned"] === true,
     archived: value["archived"] === true,
+    // 缺 recentQueries 的是会话卡之前存的会话：空槽显示，不补算（读日志太贵）
+    recentQueries: parseRecentQueries(value["recentQueries"]),
     // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
     createdAt,

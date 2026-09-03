@@ -19,6 +19,8 @@ import {
   deriveSessionTitle,
   isCompactedRecord,
   parseSessionMeta,
+  pushRecentQuery,
+  recentQueriesFromRecords,
   sortSessions,
   type SessionDetail,
   type SessionMeta,
@@ -110,6 +112,13 @@ export class SessionStore {
     if (meta.title === "" && item.role === "user") {
       const text = item.content.find((block) => block.type === "text");
       if (text !== undefined && text.type === "text") changes.title = deriveSessionTitle(text.text);
+    }
+    // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致
+    if (item.role === "user") {
+      const text = item.content.find((block) => block.type === "text");
+      if (text !== undefined && text.type === "text") {
+        changes.recentQueries = pushRecentQuery(meta.recentQueries, text.text);
+      }
     }
     await this.update(id, changes);
   }
@@ -224,6 +233,8 @@ export class SessionStore {
         piSessionFile: null,
         pinned: false,
         archived: false,
+        // 分支的新会话带着前缀里的最近提问——它的历史是真的，卡片不该显示空槽
+        recentQueries: recentQueriesFromRecords(prefix),
         createdAt: now,
         updatedAt: now,
       },
