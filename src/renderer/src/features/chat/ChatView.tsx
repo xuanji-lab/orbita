@@ -664,8 +664,22 @@ function UsageRing(props: { session: ChatSession }) {
    * 低于它压缩省不了什么，高于它才值得问一句「确认压吗」。
    */
   const [confirming, setConfirming] = useState(false);
+  /**
+   * 「值得压」的量不是「当前上下文多大」，而是**还有多少没被压过的内容**。
+   *
+   * 已压缩过的会话当前 tokens 里大部分是摘要——摘要本身再压一遍没有意义，
+   * 有意义的是上次界碑之后又攒了多少新对话。用 `tokensAfter`（上次压缩完的
+   * 估算）当基线：新增 = 当前 − 基线。没压过的会话没有基线，全部都算新增。
+   * （wafo 2026-09-03 深夜实测撞的坑：压缩到 15k 后判「≤20k 不值得」用的是
+   * 总量，把「压完只剩摘要」和「压根没得压」混成了同一句话。）
+   *
+   * 阈值 20k = pi 的 keepRecentTokens 默认值。
+   */
   const usageTokens = stats?.contextUsage?.tokens ?? null;
-  const worthIt = usageTokens !== null && usageTokens > 20_000;
+  const lastCompactedTo = session.compactions.at(-1)?.tokensAfter ?? null;
+  const freshTokens =
+    usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
+  const worthIt = freshTokens !== null && freshTokens > 20_000;
   const items: MenuItem[] = [
     ...usageBreakdown(stats, billing).map((row) => ({
       id: row.label,

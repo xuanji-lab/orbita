@@ -2,6 +2,7 @@
  * 主进程入口。职责边界（AGENTS.md「架构边界」）：只负责窗口、IPC 与持久化。
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
+import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
@@ -16,6 +17,9 @@ import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { ProviderStore } from "./provider/store.ts";
+
+// 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
+preferIPv4();
 
 /** 26-entry-layer §9.2 安全不变量：三条都不许放松。 */
 const SECURITY_INVARIANTS = {

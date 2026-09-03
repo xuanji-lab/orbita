@@ -22,7 +22,8 @@
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "shiki": "^4.4.3"
+    "shiki": "^4.4.3",
+    "undici": "8.9.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

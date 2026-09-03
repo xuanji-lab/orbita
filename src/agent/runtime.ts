@@ -32,6 +32,11 @@ import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { planQueueEdit } from "./queue-edit.ts";
 
+import { preferIPv4 } from "../shared/dial-v4.ts";
+
+// pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
+preferIPv4();
+
 type ParentPortLike = {
   on(event: "message", listener: (event: { data: unknown }) => void): void;
   postMessage(message: unknown): void;
