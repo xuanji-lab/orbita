@@ -41,8 +41,6 @@ export const ipcChannels = {
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
-  /** 删掉这家存的密钥（auth 退回 none）。清空输入框不算删——upsert 的空值语义是保留 */
-  providerRemoveKey: "provider:remove-key",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
   sessionList: "session:list",

@@ -300,21 +300,6 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   : "No key stored"}
                 {" · "}
                 {provider.models.declared.length} enabled
-                {provider.auth.scheme === "api_key" && provider.auth.masked !== null && (
-                  <>
-                    {" · "}
-                    <button
-                      type="button"
-                      // 删 key 是显式动作——清空输入框保存不算（upsert 空值 = 保留旧密钥）
-                      onClick={() => {
-                        void api.provider.removeKey(provider.id).then(refresh);
-                      }}
-                      style={{ ...compactControlStyle, color: "var(--color-danger)" }}
-                    >
-                      Remove key
-                    </button>
-                  </>
-                )}
               </span>
             </li>
           ))}
