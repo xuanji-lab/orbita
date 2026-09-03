@@ -4,7 +4,6 @@ import { KNOWN_PROVIDERS, type KnownProvider } from "@shared/known-providers";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
 import { formatCostRate, formatTokens } from "../../utils/format-tokens.ts";
-import { buildModelDecl, contextWindowWarning, parseOverrideNumber } from "./model-meta.ts";
 
 /**
  * Provider 设置面。
@@ -30,7 +29,6 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
   /** 行内参数编辑器展开在第几个模型上（Enabled 列表的下标） */
-  const [editingModelIndex, setEditingModelIndex] = useState<number | null>(null);
   /** pi 的内建目录，按 catalogId 取官方模型清单——离线就有，不用打网络 */
   const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
 
@@ -94,7 +92,6 @@ export function ProvidersView(props: { onChange?: () => void }) {
     setRevealed(null);
     setEditingId(provider.id);
     setDiscovered([]);
-    setEditingModelIndex(null);
     setDraft({
       kind,
       id: provider.id,
@@ -113,7 +110,6 @@ export function ProvidersView(props: { onChange?: () => void }) {
     setStatus(null);
     setDiscovered([]);
     setRevealed(null);
-    setEditingModelIndex(null);
   };
 
   const withKey = () => ({
@@ -417,16 +413,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       </span>
                       <button
                         type="button"
-                        onClick={() => setEditingModelIndex(editingModelIndex === index ? null : index)}
-                        style={compactControlStyle}
-                      >
-                        {editingModelIndex === index ? "Close" : "Edit"}
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => {
-                          // 先收起行内编辑器：Remove 会平移下标，开着的编辑器会绑错行
-                          setEditingModelIndex(null);
                           void mutateModels((models) => models.filter((m) => m.id !== model.id));
                         }}
                         style={compactControlStyle}
@@ -434,23 +421,6 @@ export function ProvidersView(props: { onChange?: () => void }) {
                         Remove
                       </button>
                     </span>
-                    {editingModelIndex === index && (
-                      <ModelMetaEditor
-                        index={index}
-                        model={model}
-                        meta={meta}
-                        issueFor={issueFor}
-                        onApply={(next) => {
-                          void (async () => {
-                            const ok = await mutateModels((models) =>
-                              models.map((m, i) => (i === index ? next : m)),
-                            );
-                            // 失败（校验 issues / IPC 错误）编辑器留着标红；成功即收起
-                            if (ok) setEditingModelIndex(null);
-                          })();
-                        }}
-                      />
-                    )}
                   </li>
                 );
               })}
@@ -591,145 +561,6 @@ function modelCostTitle(decl: ModelDecl | undefined, meta: BuiltinModel | undefi
     `cache read $${cost.cacheRead}/M`,
     `cache write $${cost.cacheWrite}/M`,
   ].join("\n");
-}
-
-/**
- * 模型参数的行内编辑器。**空 = 不覆盖**：placeholder 永远显示当前生效值，填了的才落
- * providers.json。数字以 string 暂存（受控输入），**改动只在本地攒着，Apply 才提交**
- * ——保存语义与编辑器同层（约束 4），不再指望表单底部的 Save。非法值（NaN）由
- * upsert 的 validateProvider 结构化拦下，按字段标红、编辑器保持展开。
- */
-function ModelMetaEditor(props: {
-  index: number;
-  model: ModelDecl;
-  meta: BuiltinModel | undefined;
-  issueFor: (field: string) => string | undefined;
-  onApply: (next: ModelDecl) => void;
-}) {
-  const [ctx, setCtx] = useState(props.model.contextWindow?.toString() ?? "");
-  const [maxOut, setMaxOut] = useState(props.model.maxTokens?.toString() ?? "");
-  const [rates, setRates] = useState({
-    input: props.model.cost?.input?.toString() ?? "",
-    output: props.model.cost?.output?.toString() ?? "",
-    cacheRead: props.model.cost?.cacheRead?.toString() ?? "",
-    cacheWrite: props.model.cost?.cacheWrite?.toString() ?? "",
-  });
-  const eff = {
-    ctx: props.model.contextWindow ?? props.meta?.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
-    maxOut: props.model.maxTokens ?? props.meta?.maxTokens ?? FALLBACK_MAX_TOKENS,
-    input: props.model.cost?.input ?? props.meta?.cost.input ?? 0,
-    output: props.model.cost?.output ?? props.meta?.cost.output ?? 0,
-    cacheRead: props.model.cost?.cacheRead ?? props.meta?.cost.cacheRead ?? 0,
-    cacheWrite: props.model.cost?.cacheWrite ?? props.meta?.cost.cacheWrite ?? 0,
-  };
-  const field = (name: string) => `models.declared[${props.index}].${name}`;
-  const apply = () => props.onApply(buildModelDecl(props.model, { ctx, maxOut, rates }));
-  const reset = () => {
-    setCtx("");
-    setMaxOut("");
-    setRates({ input: "", output: "", cacheRead: "", cacheWrite: "" });
-    props.onApply(buildModelDecl(props.model, { ctx: "", maxOut: "", rates: { input: "", output: "", cacheRead: "", cacheWrite: "" } }));
-  };
-  return (
-    <div
-      style={{
-        display: "grid",
-        gap: "var(--space-2)",
-        padding: "var(--space-2)",
-        background: "var(--color-bg-panel)",
-        borderRadius: "var(--radius-md)",
-      }}
-    >
-      <span style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "start" }}>
-        <NumCell
-          label="context window"
-          value={ctx}
-          placeholder={String(eff.ctx)}
-          issue={props.issueFor(field("contextWindow"))}
-          warning={contextWindowWarning(parseOverrideNumber(ctx)) ?? undefined}
-          onChange={setCtx}
-        />
-        <NumCell
-          label="max output"
-          value={maxOut}
-          placeholder={String(eff.maxOut)}
-          issue={props.issueFor(field("maxTokens"))}
-          onChange={setMaxOut}
-        />
-        <NumCell
-          label="cost $/M in"
-          value={rates.input}
-          placeholder={String(eff.input)}
-          issue={props.issueFor(field("cost.input"))}
-          onChange={(raw) => setRates({ ...rates, input: raw })}
-        />
-        <NumCell
-          label="out"
-          value={rates.output}
-          placeholder={String(eff.output)}
-          issue={props.issueFor(field("cost.output"))}
-          onChange={(raw) => setRates({ ...rates, output: raw })}
-        />
-        <NumCell
-          label="cache read"
-          value={rates.cacheRead}
-          placeholder={String(eff.cacheRead)}
-          issue={props.issueFor(field("cost.cacheRead"))}
-          onChange={(raw) => setRates({ ...rates, cacheRead: raw })}
-        />
-        <NumCell
-          label="cache write"
-          value={rates.cacheWrite}
-          placeholder={String(eff.cacheWrite)}
-          issue={props.issueFor(field("cost.cacheWrite"))}
-          onChange={(raw) => setRates({ ...rates, cacheWrite: raw })}
-        />
-      </span>
-      <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <span style={metaStyle}>
-          Empty fields use the catalog value (or the {formatTokens(FALLBACK_CONTEXT_WINDOW)} fallback).
-        </span>
-        <button
-          type="button"
-          onClick={reset}
-          style={{ ...compactControlStyle, marginInlineStart: "auto" }}
-        >
-          Reset
-        </button>
-        <button type="button" onClick={apply} style={compactControlStyle}>
-          Apply
-        </button>
-      </span>
-    </div>
-  );
-}
-
-/** 行内编辑器的一个数字格：值以 string 暂存，空串 = 不覆盖；warning 是不拦保存的防呆提示 */
-function NumCell(props: {
-  label: string;
-  value: string;
-  placeholder: string;
-  issue?: string | undefined;
-  warning?: string | undefined;
-  onChange: (raw: string) => void;
-}) {
-  return (
-    <label style={{ display: "grid", gap: "var(--space-1)" }}>
-      <span style={metaStyle}>{props.label}</span>
-      <input
-        type="number"
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        placeholder={props.placeholder}
-        style={{ ...inputStyle, height: "var(--control-height-sm)", width: 104 }}
-      />
-      {props.issue !== undefined ? (
-        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-danger)" }}>{props.issue}</span>
-      ) : props.warning !== undefined ? (
-        <span style={{ fontSize: "var(--font-size-micro)", color: "var(--color-warning)" }}>{props.warning}</span>
-      ) : null}
-    </label>
-  );
 }
 
 function AddModel(props: { onAdd: (id: string) => void }) {
