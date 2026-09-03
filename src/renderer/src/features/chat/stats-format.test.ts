@@ -5,7 +5,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentStats } from "@shared/agent-ipc";
-import { contextRing, costText, usageBreakdown } from "./stats-format.ts";
+import { contextRing, usageBreakdown } from "./stats-format.ts";
 
 const stats = (over: Partial<AgentStats> = {}): AgentStats => ({
   tokens: { input: 18200, output: 4100, cacheRead: 0, cacheWrite: 0, total: 22300 },
@@ -60,50 +60,45 @@ describe("contextRing —— 不知道就别画", () => {
   });
 });
 
-describe("costText —— 0 不是免费，是不知道", () => {
-  test("有花费给三位小数", () => {
-    assert.equal(costText(0.062), "$0.062");
-  });
-  test("0 返回 null（不显示），不写 $0.000", () => {
-    assert.equal(costText(0), null);
-  });
-  test("负数同样不显示", () => {
-    assert.equal(costText(-1), null);
-  });
-  test("亚分级花费仍看得见——三位小数就是为了它", () => {
-    assert.equal(costText(0.0007), "$0.001");
-  });
-});
-
 describe("usageBreakdown —— 菜单里那几行", () => {
   test("没有 stats 就没有行", () => {
     assert.deepEqual(usageBreakdown(null), []);
   });
 
-  test("缓存两项都是 0 就整个不显示——不挂两行零", () => {
-    const rows = usageBreakdown(stats());
+  test("缓存读写单列，不折进 total——那是「为什么比看起来便宜」的答案", () => {
     assert.deepEqual(
-      rows.map((r) => r.label),
-      ["Cost", "Input", "Output"],
+      usageBreakdown(stats()).map((r) => r.label),
+      ["Input", "Output", "Cache read", "Cache write", "Total tokens", "Context", "Cost"],
     );
   });
 
-  test("用上了缓存才显示那两行", () => {
+  test("包月制不显示花费——那个数字是估价，跟这个月的账单无关", () => {
+    const labels = usageBreakdown(stats(), "plan").map((r) => r.label);
+    assert.equal(labels.includes("Cost"), false);
+  });
+
+  test("按量计费且真的算得出来才显示花费", () => {
+    assert.equal(usageBreakdown(stats(), "metered").at(-1)?.label, "Cost");
+  });
+
+  test("没价目表（cost 为 0）就不占那一行——不写 no price list，也不写 unknown", () => {
+    const labels = usageBreakdown(stats({ cost: 0 })).map((r) => r.label);
+    assert.equal(labels.includes("Cost"), false);
+  });
+
+  test("花费四位小数——展开看的人要的正是底栏舍入掉的那几位", () => {
+    assert.equal(usageBreakdown(stats({ cost: 0.0625 })).at(-1)?.value, "$0.0625");
+  });
+
+  test("压缩刚完：Context 行如实说未知，不写 0", () => {
     const rows = usageBreakdown(
-      stats({ tokens: { input: 1, output: 2, cacheRead: 120_000, cacheWrite: 0, total: 3 } }),
+      stats({ contextUsage: { tokens: null, contextWindow: 200_000, percent: null } }),
     );
-    assert.deepEqual(
-      rows.map((r) => r.label),
-      ["Cost", "Input", "Output", "Cache read", "Cache write"],
-    );
+    assert.equal(rows.find((r) => r.label === "Context")?.value, "unknown until next reply");
   });
 
-  test("花费未知写 unknown，不写 $0.000", () => {
-    const rows = usageBreakdown(stats({ cost: 0 }));
-    assert.equal(rows[0]?.value, "unknown");
-  });
-
-  test("钱排在最前——那是唯一一个用户拿去做决定的数", () => {
-    assert.equal(usageBreakdown(stats())[0]?.label, "Cost");
+  test("完全没有上下文数据时连 Context 行都不给", () => {
+    const labels = usageBreakdown(stats({ contextUsage: null })).map((r) => r.label);
+    assert.equal(labels.includes("Context"), false);
   });
 });

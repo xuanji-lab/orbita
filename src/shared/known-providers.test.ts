@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { KNOWN_PROVIDERS } from "./known-providers.ts";
+import { KNOWN_PROVIDERS, isPlanBilling } from "./known-providers.ts";
 
 // 与 validateProvider 的 ID_PATTERN 同一条规则（那边未导出，这里镜像一份；改要同步）
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,64}$/;
@@ -12,4 +12,21 @@ test("KNOWN_PROVIDERS：id 合法且不重复——下拉框的 key 与 upsert �
     assert.match(provider.id, ID_PATTERN, `${provider.id} 过不了 upsert 校验`);
     assert.ok(provider.label !== "", `${provider.id} 缺显示名`);
   }
+});
+
+describe("isPlanBilling —— 两句话不能混", () => {
+  it("Coding Plan 是包月制", () => {
+    assert.equal(isPlanBilling("zhipu-coding"), true);
+    assert.equal(isPlanBilling("zai"), true);
+  });
+
+  it("标准 API 按量计费", () => {
+    assert.equal(isPlanBilling("zhipu"), false);
+    assert.equal(isPlanBilling("deepseek"), false);
+  });
+
+  it("认不得的 id（自建网关）一律当按量算——藏起真实花费比多一行估价更坏", () => {
+    assert.equal(isPlanBilling("my-own-gateway"), false);
+    assert.equal(isPlanBilling(""), false);
+  });
 });

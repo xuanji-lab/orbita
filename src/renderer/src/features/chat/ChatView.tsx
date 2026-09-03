@@ -45,6 +45,7 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { contextRing, usageBreakdown, type ContextRing } from "./stats-format";
+import { isPlanBilling } from "@shared/known-providers";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
@@ -652,8 +653,12 @@ function UsageRing(props: { session: ChatSession }) {
   const stats = session.stats;
   const ring = contextRing(stats);
   const busy = session.phase !== "idle";
+  // 包月制的 provider 不显示花费——那个数字是拿 API 价目表算的估价，不是他的账单。
+  // 认不得的 id（自建网关）一律当按量算：藏起真实花费比多一行估价更坏。
+  const billing =
+    session.model !== null && isPlanBilling(session.model.providerId) ? "plan" : "metered";
   const items: MenuItem[] = [
-    ...usageBreakdown(stats).map((row) => ({
+    ...usageBreakdown(stats, billing).map((row) => ({
       id: row.label,
       label: row.label,
       hint: row.value,
