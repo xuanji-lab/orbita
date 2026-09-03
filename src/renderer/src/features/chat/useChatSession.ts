@@ -24,6 +24,7 @@ import {
   type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
+import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { AgentStats, RetryStatus } from "@shared/agent-ipc";
@@ -100,15 +101,12 @@ export interface ChatSession {
   /** 落盘的会话列表，新的在前。侧栏 TASKS 节点列的就是它。 */
   sessions: SessionMeta[];
   /**
-   * 会话列表加载失败的原因；null = 正常。**读盘失败必须说成失败**——
-   * 吞成空列表的话，一次磁盘错误会显示成「你的会话全没了」。
+   * 两份列表各自读到哪一步了。**读失败不等于空**（D-3）：
+   * 失败时 `sessions` / `workspaces` 保留上一份，错误由这里带出去，侧栏原地显示并给重试。
    */
-  sessionsError: string | null;
-  /** 工作区列表加载失败的原因；null = 正常。同一条规矩。 */
-  workspacesError: string | null;
-  /** 就地重试两个列表的加载（侧栏错误行上的按钮用） */
-  retrySessions: () => void;
-  retryWorkspaces: () => void;
+  loads: { sessions: LoadState; workspaces: LoadState };
+  reloadSessions: () => void;
+  reloadWorkspaces: () => void;
   /** 会话列表的第一读是否已落定（首页会话卡的骨架态只在这一读期间显示） */
   sessionsLoaded: boolean;
   /** 正在从磁盘恢复某条会话的历史（openSession 的 load 在途） */
@@ -187,9 +185,12 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  const [sessionsError, setSessionsError] = useState<string | null>(null);
-  const [sessionsLoaded, setSessionsLoaded] = useState(false);
-  const [workspacesError, setWorkspacesError] = useState<string | null>(null);
+  const [loads, setLoads] = useState<{ sessions: LoadState; workspaces: LoadState }>({
+    sessions: LOADING,
+    workspaces: LOADING,
+  });
+  /** 会话列表第一读是否已落定：从 loads 派生（首页骨架态用）。 */
+  const sessionsLoaded = loads.sessions.kind !== "loading";
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [opened, setOpened] = useState<SessionMeta | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
@@ -211,11 +212,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     statesRef.current = states;
   }, [states]);
 
+  /**
+   * **读失败不清空。** 以前这里会 `.catch(() => setSessions([]))`，磁盘权限坏了就显示成
+   * 「你的会话全没了」。现在失败只记到 `loads` 里，手里那份原样保留。
+   */
   const refreshSessions = useCallback(() => {
     void api.session.list().then((list) => {
       setSessions(list);
-      setSessionsLoaded(true);
-      setSessionsError(null);
+      setLoads((prev) => ({ ...prev, sessions: READY }));
       // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
       // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
       // 改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
@@ -225,11 +229,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         if (id === null) return null;
         return list.find((meta) => meta.id === id) ?? current;
       });
-    }).catch((cause: unknown) => {
-      setSessionsLoaded(true);
-      // 读盘失败不是「没有会话」：旧列表留着不动，错误就地亮在侧栏
-      setSessionsError(cause instanceof Error ? cause.message : String(cause));
-    });
+    }).catch((cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })));
   }, []);
 
   useEffect(refreshSessions, [refreshSessions]);
@@ -239,12 +239,31 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       .list()
       .then((list) => {
         setWorkspaces(list);
-        setWorkspacesError(null);
+        setLoads((prev) => ({ ...prev, workspaces: READY }));
       })
-      .catch((cause: unknown) =>
-        setWorkspacesError(cause instanceof Error ? cause.message : String(cause)),
-      );
+      .catch((cause: unknown) => setLoads((prev) => ({ ...prev, workspaces: failed(cause) })));
   }, []);
+
+  /**
+   * 工作区的**写**操作失败也走列表那行错误。add / rename / remove 都要先把
+   * 列表读一遍，所以读不出来时它们一定失败；失败原因跟列表是同一个（权限 / IO），
+   * 没必要再开一块新的报错位。
+   */
+  const workspaceFailed = useCallback(
+    (cause: unknown) => setLoads((prev) => ({ ...prev, workspaces: failed(cause) })),
+    [],
+  );
+
+  /** 用户点了重试：先回到加载态让那一行有反应，再真的去读 */
+  const reloadSessions = useCallback(() => {
+    setLoads((prev) => ({ ...prev, sessions: LOADING }));
+    refreshSessions();
+  }, [refreshSessions]);
+
+  const reloadWorkspaces = useCallback(() => {
+    setLoads((prev) => ({ ...prev, workspaces: LOADING }));
+    refreshWorkspaces();
+  }, [refreshWorkspaces]);
 
   useEffect(refreshWorkspaces, [refreshWorkspaces]);
 
@@ -625,14 +644,17 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   /** 换工作区：当前会话的 cwd 已经固定，只能开新会话——UI 上说清楚，不让用户以为切了目录对话还跟着走。 */
   /** 加一个工作区，并把下一条任务直接落在它里面——加完就想用，别让人再点一次 */
   const addWorkspace = useCallback(() => {
-    void api.workspace.add().then((added) => {
-      if (added === null) return;
-      refreshWorkspaces();
-      reset();
-      setCwd(added.path);
-      setWorkspaceId(added.id);
-    });
-  }, [reset, refreshWorkspaces]);
+    void api.workspace
+      .add()
+      .then((added) => {
+        if (added === null) return;
+        refreshWorkspaces();
+        reset();
+        setCwd(added.path);
+        setWorkspaceId(added.id);
+      })
+      .catch(workspaceFailed);
+  }, [reset, refreshWorkspaces, workspaceFailed]);
 
   /**
    * 换模型（C-4）。**有活会话就地切**：命令发过去，成功经 `model` 事件回环对齐
@@ -735,22 +757,25 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
 
   const renameWorkspace = useCallback(
     (id: string, name: string) => {
-      void api.workspace.rename(id, name).then(refreshWorkspaces);
+      void api.workspace.rename(id, name).then(refreshWorkspaces).catch(workspaceFailed);
     },
-    [refreshWorkspaces],
+    [refreshWorkspaces, workspaceFailed],
   );
 
   /** 移出列表。**不动磁盘上的文件夹，也不删它的会话**——那些会话落回 TASKS 下 */
   const removeWorkspace = useCallback(
     (id: string) => {
-      void api.workspace.remove(id).then(() => {
-        refreshWorkspaces();
-        // 正在往这个工作区里开新任务的话，退回「不属于任何工作区」
-        setWorkspaceId((current) => (current === id ? null : current));
-        setCwd((current) => (workspaceId === id ? null : current));
-      });
+      void api.workspace
+        .remove(id)
+        .then(() => {
+          refreshWorkspaces();
+          // 正在往这个工作区里开新任务的话，退回「不属于任何工作区」
+          setWorkspaceId((current) => (current === id ? null : current));
+          setCwd((current) => (workspaceId === id ? null : current));
+        })
+        .catch(workspaceFailed);
     },
-    [refreshWorkspaces, workspaceId],
+    [refreshWorkspaces, workspaceId, workspaceFailed],
   );
 
   const changeMode = useCallback((next: PermissionMode) => {
@@ -846,10 +871,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     chooseModel,
     compact,
     sessions,
-    sessionsError,
-    workspacesError,
-    retrySessions: refreshSessions,
-    retryWorkspaces: refreshWorkspaces,
+    loads,
+    reloadSessions,
+    reloadWorkspaces,
     sessionsLoaded,
     loadingHistory,
     opened,

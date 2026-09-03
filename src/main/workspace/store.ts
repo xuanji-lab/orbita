@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
+import { isNotFound } from "../fs-errors.ts";
 import {
   deriveWorkspaceName,
   normalizeWorkspaceName,
@@ -92,19 +93,32 @@ export class WorkspaceStore {
     this.cache = workspaces;
   }
 
+  /**
+   * 读 v2 文件。`null` = 没有这份文件（该去试 v1 迁移），**不是「读失败」**。
+   *
+   * 读不出来必须抛。这里不只是显示对不对的问题：把一份读坏的文件当成「空列表」交出去，
+   * 用户下一次 add 就会踩着 `save()` 把它**整个覆盖写掉**——
+   * 本来只是文件损坏（还能手工救），变成真的没了。**读不懂的东西不能默默覆写。**
+   *
+   * 所以 `null` 只有一个来源：文件不存在。JSON 坏了、结构不对（比如未来的 v3 格式）
+   * 都是「读不懂」，一律抛。
+   */
   private async read(): Promise<Workspace[] | null> {
+    let raw: string;
     try {
-      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as { workspaces?: unknown };
-      if (!Array.isArray(parsed.workspaces)) return null;
-      // 坏掉的一条跳过，不让它挡住整张列表
-      return parsed.workspaces
-        .map(parseWorkspace)
-        .filter((w): w is Workspace => w !== null);
+      raw = await readFile(this.filePath, "utf8");
     } catch (cause) {
-      // 文件不存在 = 还没存过（走迁移/空列表）；**读不了 ≠ 没有**，照抛让 UI 说失败
-      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw cause;
+      if (isNotFound(cause)) return null; // 还没写过 v2：去走迁移
+      throw cause; // 权限 / IO 坏了
     }
+    const parsed = JSON.parse(raw) as { workspaces?: unknown };
+    if (!Array.isArray(parsed.workspaces)) {
+      throw new Error(`workspaces.json 读不懂：没有 workspaces 数组（${this.filePath}）`);
+    }
+    // 坏掉的一条跳过，不让它挡住整张列表
+    return parsed.workspaces
+      .map(parseWorkspace)
+      .filter((w): w is Workspace => w !== null);
   }
 
   /**
@@ -114,12 +128,18 @@ export class WorkspaceStore {
    * 它以后没人读，代价只是几十字节。
    */
   private async migrate(): Promise<Workspace[]> {
+    let raw: string;
+    try {
+      raw = await readFile(this.legacyPath, "utf8");
+    } catch (cause) {
+      if (isNotFound(cause)) return []; // 全新安装：真的一个工作区都没有
+      throw cause; // 权限 / IO 坏了
+    }
     let legacy: LegacyWorkspaceFile;
     try {
-      legacy = JSON.parse(await readFile(this.legacyPath, "utf8")) as LegacyWorkspaceFile;
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return []; // 全新安装：一个工作区都没有
-      throw cause; // 读不了 ≠ 没有，同 read() 一条规矩
+      legacy = JSON.parse(raw) as LegacyWorkspaceFile;
+    } catch {
+      return []; // v1 文件损坏：它只是个迁移来源，不该拦住全新开始
     }
     if (typeof legacy.current !== "string" || legacy.current === "") return [];
     const workspaces: Workspace[] = [

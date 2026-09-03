@@ -8,6 +8,7 @@ import type { ChatSession } from "../features/chat/useChatSession";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
+import { describeList } from "../features/chat/load-state.ts";
 
 /** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
 const COLLAPSE_BREAKPOINT = 960;
@@ -65,6 +66,9 @@ export function Sidebar(props: {
   /** 归档的从主列表里移走——**不是删除**，它们收在底部那一行后面 */
   const live = session.sessions.filter((m) => !m.archived);
   const archived = session.sessions.filter((m) => m.archived);
+  // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
+  const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
+  const sessionList = describeList(session.loads.sessions, session.sessions.length);
   const loose = live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
   const open = (id: string) => {
     if (props.settingsOpen) props.onToggleSettings();
@@ -245,11 +249,18 @@ export function Sidebar(props: {
               addIcon="folder-plus"
               onAdd={session.addWorkspace}
             />
-            {session.workspacesError !== null ? (
-              <ListError message={session.workspacesError} onRetry={session.retryWorkspaces} />
-            ) : session.workspaces.length === 0 ? (
+            {/*
+              读失败时错误行贴在列表上方，旧列表照常列（失败不清空手里那份）；
+              只有从没读成功过才是空空的错误行 + 什么都不列（none）。
+            */}
+            {workspaceList.error !== null && (
+              <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />
+            )}
+            {workspaceList.body === "loading" ? (
+              <Empty>Loading workspaces…</Empty>
+            ) : workspaceList.body === "empty" ? (
               <Empty>No workspace yet. Add the folder the agent may read.</Empty>
-            ) : (
+            ) : workspaceList.body === "list" ? (
               session.workspaces.map((workspace) => (
                 <WorkspaceGroup
                   key={workspace.id}
@@ -263,7 +274,7 @@ export function Sidebar(props: {
                   onOpen={open}
                 />
               ))
-            )}
+            ) : null}
 
             {/*
               TASKS 节点列的是**落盘的会话**。今天全部会话都挂在这里而不是挂到
@@ -277,9 +288,12 @@ export function Sidebar(props: {
                 addIcon="plus"
                 onAdd={session.newTask}
               />
-              {session.sessionsError !== null ? (
-                <ListError message={session.sessionsError} onRetry={session.retrySessions} />
-              ) : loose.length === 0 ? (
+              {sessionList.error !== null && (
+                <ListError message={sessionList.error} onRetry={session.reloadSessions} />
+              )}
+              {sessionList.body === "loading" ? (
+                <Empty>Loading tasks…</Empty>
+              ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
                 <Empty>No task yet. The one you start lands here.</Empty>
               ) : (
                 loose.map((meta) => (

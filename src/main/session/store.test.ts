@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -68,6 +68,27 @@ describe("SessionStore", () => {
     await writeFile(join(dir, "sessions"), "not a dir", "utf8");
     const blocked = new SessionStore(join(dir, "sessions"));
     await assert.rejects(() => blocked.list());
+  });
+
+  /** root 无视权限位，Windows 没有 chmod——那两个环境里造不出 EACCES */
+  const skipChmod =
+    process.platform === "win32" || process.getuid?.() === 0
+      ? "chmod 在这个环境里拦不住读取"
+      : false;
+
+  /**
+   * D-3 的靶心：会话好端端躺在盘上，只因为目录权限坏了，
+   * 侧栏以前会说「还没有任务」——用户据此去翻备份、去重装，而重装可能真把它们删了。
+   */
+  test("目录读不出来时抛错，不谎报「一条都没有」", { skip: skipChmod }, async () => {
+    await store.create(meta());
+    const sessions = join(dir, "sessions");
+    await chmod(sessions, 0o000);
+    try {
+      await assert.rejects(store.list(), /EACCES/);
+    } finally {
+      await chmod(sessions, 0o700); // 不恢复的话 afterEach 的 rm 也删不掉
+    }
   });
 
   test("建了就能列出来、能读回来", async () => {

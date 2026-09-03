@@ -260,7 +260,15 @@ export function ProvidersView(props: { onChange?: () => void }) {
         covers the name, URL and key.
       </p>
 
-      {error !== null && <Line tone="bad">{error}</Line>}
+      {/* 读失败可原地重试（D-3）：错误长在列表上方，不用关掉设置页再开 */}
+      {error !== null && (
+        <Line tone="bad">
+          {error}{" "}
+          <button type="button" onClick={() => void refresh()} style={compactControlStyle}>
+            Retry
+          </button>
+        </Line>
+      )}
 
       {/*
         加载与空必须分得开：providers === null 是「还在读」（或读失败——失败走上面的

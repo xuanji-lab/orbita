@@ -115,6 +115,32 @@ describe("WorkspaceStore", () => {
     await assert.rejects(() => new WorkspaceStore(dir).list());
   });
 
+  // 真正的代价在这里：损坏只是「读不懂」，被覆盖才是「真的没了」
+  test("文件坏了不会被下一次 add 覆盖掉——原文还在，能手工救", async () => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "workspaces.json"), "{ 这不是 JSON", "utf8");
+    await assert.rejects(() => new WorkspaceStore(dir).add("/repo/new"));
+    assert.equal(await readFile(join(dir, "workspaces.json"), "utf8"), "{ 这不是 JSON");
+  });
+
+  // 合法 JSON 但结构不对（手改坏了，或未来的 v3 格式）也是「读不懂」，同样不能被覆写
+  test("结构不对的文件不当成空列表", async () => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "workspaces.json"),
+      JSON.stringify({ version: 3, folders: [] }),
+      "utf8",
+    );
+    await assert.rejects(() => new WorkspaceStore(dir).list());
+  });
+
+  // v1 只是迁移来源，它坏了不该拦住一个全新开始的用户
+  test("v1 旧文件坏了不拦路，当作没有工作区", async () => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "workspace.json"), "{ 这不是 JSON", "utf8");
+    assert.deepEqual(await new WorkspaceStore(dir).list(), []);
+  });
+
   test("原子写不留临时文件", async () => {
     await store.add("/repo/a");
     await store.add("/repo/b");

@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isNotFound } from "../fs-errors.ts";
 import {
   maskSecret,
   normalizeBaseUrl,
@@ -66,7 +67,7 @@ export class ProviderStore {
     try {
       raw = await readFile(this.filePath, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isNotFound(error)) {
         this.cache = [];
         return this.cache;
       }

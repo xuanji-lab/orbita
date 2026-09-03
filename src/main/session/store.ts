@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
+import { isNotFound } from "../fs-errors.ts";
 import type { AgentStats } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import {
@@ -321,7 +322,7 @@ export class SessionStore {
     } catch (cause) {
       // 目录还不存在 = 一条会话都没有；**读不了 ≠ 没有**——权限、ENOTDIR 等照抛，
       // 吞成空列表会让用户以为会话全没了（D-3 的根因）
-      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if (isNotFound(cause)) return [];
       throw cause;
     }
     const metas: SessionMeta[] = [];
