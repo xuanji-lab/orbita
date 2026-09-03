@@ -95,29 +95,32 @@ function pushStats(sessionId: string, session: AgentSession, persist?: true): vo
 }
 
 /**
- * 压缩期间把思考档按到 off，完事恢复原值。
+ * 手动压缩的两项临时调参，完事恢复（wafo 2026-09-03 裁决：用户意愿优先）。
  *
- * **为什么压缩慢（wafo 2026-09-03）**：它本来就是全应用最重的一次请求——
- * pi 给摘要请求另起 sessionId 并 `cacheRetention: "none"`（`compaction.ts:571`），
- * 所以没有 prompt cache 可用，要把整段历史从头 prefill 一遍。
- * 而 `compaction.ts:549` 又把**会话当前的思考档原样带进去**（`this.thinkingLevel`）：
- * 于是模型先吐一大段 reasoning，再吐摘要。
+ * 1. **思考档按到 off**。压缩本来就是全应用最重的一次请求——pi 给摘要另起
+ *    sessionId 并 `cacheRetention: "none"`（compaction.ts:571），没有 prompt cache
+ *    可用，要把整段历史从头 prefill；而 compaction.ts:549 又把会话当前的思考档
+ *    原样带进去——模型先吐一大段 reasoning 再吐摘要。摘要是结构化提取不是推理
+ *    （pi 的 system prompt 自己写着 ONLY output the structured summary），
+ *    这种活儿不需要先想一想。
  *
- * 关掉它不影响质量：摘要是**结构化提取**，不是推理。pi 自己的 system prompt
- * 就写着「Do NOT continue the conversation. ONLY output the structured summary」，
- * 用户 prompt 又给了固定的六段格式——这种活儿不需要先想一想。
+ * 2. **keepRecentTokens 临时降到 0**。pi 的 prepareCompaction 按「保留最近
+ *    20k token」找切点，找不到可摘要的消息就抛 "Nothing to compact (session
+ *    too small)"。UI 已经改成两段式确认（价值不大都让用户自己决定），内核侧
+ *    不该再有第二道门把用户意愿挡回去。压完恢复原值——自动压缩的节奏不受影响。
  *
- * **只盖住手动压缩**（用户发 compact 命令这条路）。自动压缩（threshold / overflow）
- * 是 pi 在自己的循环里触发的，没有插针；要盖全得改 pi。
+ * 只盖得住手动压缩；自动压缩（threshold / overflow）走 pi 自己的循环，不经过这里。
  */
-async function withThinkingOff<T>(session: AgentSession, run: () => Promise<T>): Promise<T> {
-  const before = session.thinkingLevel;
-  if (before === "off") return run();
-  session.setThinkingLevel("off");
+async function withManualCompactionTuning<T>(session: AgentSession, run: () => Promise<T>): Promise<T> {
+  const beforeThinking = session.thinkingLevel;
+  const beforeCompaction = session.settingsManager.getCompactionSettings();
+  session.settingsManager.applyOverrides({ compaction: { keepRecentTokens: 0 } });
+  if (beforeThinking !== "off") session.setThinkingLevel("off");
   try {
     return await run();
   } finally {
-    session.setThinkingLevel(before);
+    session.settingsManager.applyOverrides({ compaction: beforeCompaction });
+    session.setThinkingLevel(beforeThinking);
   }
 }
 
@@ -652,9 +655,9 @@ async function handle(command: AgentCommand): Promise<void> {
     // 之后 compaction_end 必然到（pi 在自己的 catch 里先发事件再 rethrow），
     // 这里只吞 rejection 防 unhandled。
     // ponytail: 若 pi 未来在 compaction_start 之前抛错，这里会静默——届时补个前置标志位
-    void withThinkingOff(live.session, () => live.session.compact(command.instructions)).catch(
-      () => {},
-    );
+    void withManualCompactionTuning(live.session, () =>
+      live.session.compact(command.instructions),
+    ).catch(() => {});
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——

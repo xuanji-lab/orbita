@@ -435,12 +435,29 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setSessionId(id);
         sessionRef.current = id;
         liveRef.current.add(id);
+        // 建会话就是把当前的 model / mode 注进去了——台账对齐，send 尾部不用再冲
+        injectedModelRef.current = { providerId: model.providerId, modelId: model.modelId };
+        injectedModeRef.current = mode;
         refreshSessions();
       }
       setDraft("");
       // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
       // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
       const active: string = id;
+      /**
+       * **冲欠账**：跑着的轮里换的模型 / 权限档只动了显示（见 chooseModel），
+       * 这里才是它们真正注入的时刻——**新的一轮开始之前**。
+       * pi 的 setModel 原地改 agent.state.model，轮内注入会让重试的下一次尝试
+       * 换模型成功（一轮两模）；挪到这里，注入永远发生在轮与轮的间隙。
+       */
+      if (model !== null && injectedModelRef.current !== null && model !== injectedModelRef.current) {
+        await api.agent.setModel(active, model.providerId, model.modelId);
+        injectedModelRef.current = { providerId: model.providerId, modelId: model.modelId };
+      }
+      if (injectedModeRef.current !== null && mode !== injectedModeRef.current) {
+        await api.agent.setMode(active, mode);
+        injectedModeRef.current = mode;
+      }
       setStates((prev) => setEntryPhase(prev, active, "turn"));
       await api.agent.submit(active, text);
     } catch (cause) {
@@ -503,6 +520,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         // 没在跑：从盘上种槽，readOnly 与「说话时才续跑」语义照旧
         setSessionId(null);
         sessionRef.current = null;
+        // 打开的是盘上的死会话：agent 那边什么都没注入，台账清零；
+        // 唤醒（下一条消息）时 create 会带着当前显示值重新记账
+        injectedModelRef.current = null;
+        injectedModeRef.current = null;
         setStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
       })
       .catch((cause: unknown) => {
@@ -663,6 +684,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, [opened, model, mode, refreshSessions]);
 
   /**
+   * **已注入 agent 的模型 / 权限档**。与显示值（`model` / `mode`）分离——
+   * 跑着的轮里改的只是显示，注入被推迟，这里记的是 agent 那边真正的状态。
+   * 不追它就不知道 send 时有没有欠账要冲。
+   */
+  /** 显示值不读它们（读 model / mode），所以 ref 就够，不必是 state */
+  const injectedModelRef = useRef<{ providerId: string; modelId: string } | null>(null);
+  const injectedModeRef = useRef<PermissionMode | null>(null);
+
+  /**
    * 当前正在看的这条会话的相位。没有活会话（首页 / 盘上打开未唤醒）算 idle——
    * 那时根本没有「一轮」在跑，不该拦。
    */
@@ -671,20 +701,36 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     return id === null ? "idle" : (statesRef.current.get(id)?.phase ?? "idle");
   }, []);
 
-  const chooseModel = useCallback((providerId: string, modelId: string) => {
-    // **这一轮没结束就不许换**（D0）。chip 已经禁用了，但那只管住那一个 DOM 节点——
-    // 菜单项、快捷键、以后的命令面板都绕得过去，而所有入口最终都调这个函数。
-    // 芯片是界面，守卫才是事实。
-    if (currentPhase() !== "idle") return;
-    const id = sessionRef.current;
-    if (id === null) {
+  const chooseModel = useCallback(
+    (providerId: string, modelId: string) => {
+      /**
+       * **UI 即时、注入延迟**（D0 修订，wafo 2026-09-03 晚间裁决）。
+       *
+       * 第一版是「跑着就锁死 chip」——与 D-4 要做的「悬浮告诉用户这是 model」
+       * 冲突（disabled 的语义先被占了），且拦的是用户而不是问题本身。
+       *
+       * 真正要防的是：pi 的 `setModel` 原地改 `agent.state.model`，重试循环的
+       * 下一次尝试（`_prepareRetry` 后的 `agent.continue()`）读的就是它——
+       * **一轮里既有失败记录又有成功回答**。所以只要保证注入不发生在轮内，
+       * chip 永远可以点、选了就换显示：
+       *
+       *   闲着 → 立即注入（原有路径，成功后 model 事件回环对齐）
+       *   跑着 → 只改本地显示，真正 IPC 挪到下一条消息发送前（见 send 里的
+       *         flushPendingInjection）
+       */
       setModel({ providerId, modelId });
-      return;
-    }
-    void api.agent
-      .setModel(id, providerId, modelId)
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, []);
+      const id = sessionRef.current;
+      if (id !== null && currentPhase() === "idle") {
+        void api.agent
+          .setModel(id, providerId, modelId)
+          .then(() => {
+            injectedModelRef.current = { providerId, modelId };
+          })
+          .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+      }
+    },
+    [],
+  );
 
   const renameWorkspace = useCallback(
     (id: string, name: string) => {
@@ -707,10 +753,18 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   );
 
   const changeMode = useCallback((next: PermissionMode) => {
-    // 理由同 chooseModel：权限档决定 bash 能不能跑，跑到一半改是另一种串台
-    if (currentPhase() !== "idle") return;
+    // 理由同 chooseModel：权限档决定 bash 能不能跑，轮内改是另一种串台——
+    // 所以注入延迟（UI 即时），不是锁 chip
     setMode(next);
-    if (sessionRef.current !== null) void api.agent.setMode(sessionRef.current, next);
+    const id = sessionRef.current;
+    if (id !== null && currentPhase() === "idle") {
+      void api.agent
+        .setMode(id, next)
+        .then(() => {
+          injectedModeRef.current = next;
+        })
+        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+    }
   }, []);
 
   const answerApproval = useCallback((requestId: string, answer: PermissionAnswer) => {

@@ -541,25 +541,10 @@ function Pane(props: {
  * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
  * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
  */
-/**
- * 这一轮没落定，模型与权限档都不许换（D0，wafo 2026-09-03 裁决）。
- *
- * 不拦的后果是具体的：pi 的 `setModel` 原地改 `agent.state.model`，而重试循环的
- * 下一次尝试（`_prepareRetry` 之后的 `agent.continue()`）读的就是它——坏网关正在
- * 重试时切到好网关，重试会用新模型成功，**一轮里既有失败记录又有成功回答**，
- * 看起来像两轮串台。权限档同理：它决定 bash 能不能跑，跑到一半改是另一种串台。
- *
- * 更根本的理由是语义：一句话发出去、回答还没回来，这一轮就没结束。
- * 要换就先停这一轮——pi 的退避 sleep 是 abortable 的，停止随时生效。
- */
-const TURN_LOCK_HINT = "Stop the current turn to switch";
-
 function ComposerBar(props: { session: ChatSession }) {
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
   const scope = workspace?.name ?? (session.cwd === null ? "Home" : basename(session.cwd));
-  /** 这一轮还没落定——模型与权限档都锁住（见 TURN_LOCK_HINT） */
-  const turnBusy = session.phase !== "idle";
 
   const scopeItems: MenuItem[] = [
     {
@@ -622,8 +607,7 @@ function ComposerBar(props: { session: ChatSession }) {
           <Chip
             icon="shield-check"
             active={open}
-            disabled={turnBusy}
-            title={turnBusy ? TURN_LOCK_HINT : PERMISSION_MODE_LABELS[session.mode].hint}
+            title={PERMISSION_MODE_LABELS[session.mode].hint}
             onClick={toggle}
             chevron
           >
@@ -637,8 +621,7 @@ function ComposerBar(props: { session: ChatSession }) {
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
-              disabled={turnBusy}
-              title={turnBusy ? TURN_LOCK_HINT : "Model · applies from the next message"}
+                title="Model · applies from the next message"
               onClick={toggle}
               chevron
               italic
@@ -674,6 +657,15 @@ function UsageRing(props: { session: ChatSession }) {
   // 认不得的 id（自建网关）一律当按量算：藏起真实花费比多一行估价更坏。
   const billing =
     session.model !== null && isPlanBilling(session.model.providerId) ? "plan" : "metered";
+  /**
+   * 压缩走两段式（与侧栏 Delete 同一副骨架，wafo 2026-09-03 裁决）：
+   * 用户意愿优先——不再拿「内容太少」当拒绝理由，改说「价值不大」再让他确认。
+   * 第二段的文案按规模分岔：阈值取 pi 的 keepRecentTokens 默认值（20k）——
+   * 低于它压缩省不了什么，高于它才值得问一句「确认压吗」。
+   */
+  const [confirming, setConfirming] = useState(false);
+  const usageTokens = stats?.contextUsage?.tokens ?? null;
+  const worthIt = usageTokens !== null && usageTokens > 20_000;
   const items: MenuItem[] = [
     ...usageBreakdown(stats, billing).map((row) => ({
       id: row.label,
@@ -681,18 +673,47 @@ function UsageRing(props: { session: ChatSession }) {
       hint: row.value,
       fact: true,
     })),
-    {
-      id: "compact",
-      label: "Compact context now",
-      icon: "fold-vertical" as const,
-      hint: session.readOnly
-        ? "this task can't be continued"
-        : busy
-          ? "wait for this turn"
-          : undefined,
-      disabled: session.readOnly || busy,
-      onSelect: session.compact,
-    },
+    ...(confirming
+      ? [
+          {
+            id: "compact-confirm-hint",
+            label: worthIt
+              ? "Compress the conversation so far into a summary?"
+              : "This conversation is still short — compacting now saves little. Compact anyway?",
+            fact: true,
+          } satisfies MenuItem,
+          {
+            id: "compact-confirm",
+            label: "Compact anyway",
+            icon: "fold-vertical" as const,
+            onSelect: () => {
+              setConfirming(false);
+              session.compact();
+            },
+          },
+          {
+            id: "compact-cancel",
+            label: "Cancel",
+            icon: "x" as const,
+            keepOpen: false,
+            onSelect: () => setConfirming(false),
+          } satisfies MenuItem,
+        ]
+      : [
+          {
+            id: "compact",
+            label: "Compact context now",
+            icon: "fold-vertical" as const,
+            hint: session.readOnly
+              ? "this task can't be continued"
+              : busy
+                ? "wait for this turn"
+                : undefined,
+            disabled: session.readOnly || busy,
+            keepOpen: true,
+            onSelect: () => setConfirming(true),
+          } satisfies MenuItem,
+        ]),
   ];
   return (
     <span style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end" }}>
