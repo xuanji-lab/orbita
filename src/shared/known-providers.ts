@@ -111,6 +111,22 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     api: "openai-completions",
     baseUrl: "https://api.stepfun.com/step_plan/v1",
     // pi 目录未收录 stepfun：参数靠网关 Fetch 或手填，行摘要会如实标注走兜底
+    // **Step Plan 是订阅制**（Credit 月池，platform.stepfun.com/docs/zh/step-plan）
+    billing: "plan",
+    /**
+     * 快速适配通道（2026-09-03，源：官方模型页，当日实拉）：
+     *   step-3.7-flash        256K（198B MoE 旗舰多模态推理）
+     *   step-3.5-flash        256K（196B MoE 旗舰语言推理）
+     *   step-3.5-flash-2603   256K（3.5 的 Agent 优化变体，官方变体页写明
+     *                          「基于 step-3.5-flash」，上下文随基型）
+     * 三者官方页都没写输出上限——maxTokens 不填，留给兜底。
+     * pi 目录收录 stepfun 之后本块整个可删（目录优先级本来就高于白名单）。
+     */
+    modelParams: {
+      "step-3.7-flash": { contextWindow: 256_000 },
+      "step-3.5-flash": { contextWindow: 256_000 },
+      "step-3.5-flash-2603": { contextWindow: 256_000 },
+    },
     note: "StepFun 官方 API（Step 套餐端点，地址要带到 /v1）",
   },
   {
