@@ -541,10 +541,25 @@ function Pane(props: {
  * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
  * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
  */
+/**
+ * 这一轮没落定，模型与权限档都不许换（D0，wafo 2026-09-03 裁决）。
+ *
+ * 不拦的后果是具体的：pi 的 `setModel` 原地改 `agent.state.model`，而重试循环的
+ * 下一次尝试（`_prepareRetry` 之后的 `agent.continue()`）读的就是它——坏网关正在
+ * 重试时切到好网关，重试会用新模型成功，**一轮里既有失败记录又有成功回答**，
+ * 看起来像两轮串台。权限档同理：它决定 bash 能不能跑，跑到一半改是另一种串台。
+ *
+ * 更根本的理由是语义：一句话发出去、回答还没回来，这一轮就没结束。
+ * 要换就先停这一轮——pi 的退避 sleep 是 abortable 的，停止随时生效。
+ */
+const TURN_LOCK_HINT = "Stop the current turn to switch";
+
 function ComposerBar(props: { session: ChatSession }) {
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
   const scope = workspace?.name ?? (session.cwd === null ? "Home" : basename(session.cwd));
+  /** 这一轮还没落定——模型与权限档都锁住（见 TURN_LOCK_HINT） */
+  const turnBusy = session.phase !== "idle";
 
   const scopeItems: MenuItem[] = [
     {
@@ -607,7 +622,8 @@ function ComposerBar(props: { session: ChatSession }) {
           <Chip
             icon="shield-check"
             active={open}
-            title={PERMISSION_MODE_LABELS[session.mode].hint}
+            disabled={turnBusy}
+            title={turnBusy ? TURN_LOCK_HINT : PERMISSION_MODE_LABELS[session.mode].hint}
             onClick={toggle}
             chevron
           >
@@ -621,7 +637,8 @@ function ComposerBar(props: { session: ChatSession }) {
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
-              title="Model · applies from the next message"
+              disabled={turnBusy}
+              title={turnBusy ? TURN_LOCK_HINT : "Model · applies from the next message"}
               onClick={toggle}
               chevron
               italic

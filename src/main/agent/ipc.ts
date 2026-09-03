@@ -9,6 +9,7 @@ import {
   type ProviderSecrets,
 } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
 import { AgentHost } from "./host.ts";
@@ -34,8 +35,32 @@ async function resolveProviderSecrets(
     baseUrl: dto.endpoint.baseUrl,
     apiKey,
     ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
-    models: dto.models.declared,
+    /**
+     * 声明的模型 + **我们自己补的参数**（快速适配通道）。用户显式填过的优先，
+     * 其次是白名单，再其次由 runtime 走「pi 目录 → 兜底」。
+     * 白名单存在的理由：pi 目录只收录它已知的模型，厂商新上线的型号要等 1–2 周。
+     */
+    models: dto.models.declared.map((decl) => {
+      const patch = knownModelParams(dto.id, decl.id);
+      return {
+        ...decl,
+        ...(decl.contextWindow === undefined && patch.contextWindow !== undefined
+          ? { contextWindow: patch.contextWindow }
+          : {}),
+        ...(decl.maxTokens === undefined && patch.maxTokens !== undefined
+          ? { maxTokens: patch.maxTokens }
+          : {}),
+      };
+    }),
+    // pi 目录里这家叫什么。**模型官方参数按它查**——我们的 id 与目录 id 不是一回事
+    // （zhipu-coding ↔ zai-coding-cn），拿自己的 id 查一无所获，1M 会被拍成 128k。
+    ...(catalogIdOf(dto.id) === undefined ? {} : { catalogId: catalogIdOf(dto.id) }),
   };
+}
+
+/** 这家在 pi 目录里的 id。自建 provider 不在表里 → undefined，由 runtime 落兜底。 */
+function catalogIdOf(providerId: string): string | undefined {
+  return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.catalogId;
 }
 
 export function registerAgentIpc(

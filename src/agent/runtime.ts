@@ -95,6 +95,33 @@ function pushStats(sessionId: string, session: AgentSession, persist?: true): vo
 }
 
 /**
+ * 压缩期间把思考档按到 off，完事恢复原值。
+ *
+ * **为什么压缩慢（wafo 2026-09-03）**：它本来就是全应用最重的一次请求——
+ * pi 给摘要请求另起 sessionId 并 `cacheRetention: "none"`（`compaction.ts:571`），
+ * 所以没有 prompt cache 可用，要把整段历史从头 prefill 一遍。
+ * 而 `compaction.ts:549` 又把**会话当前的思考档原样带进去**（`this.thinkingLevel`）：
+ * 于是模型先吐一大段 reasoning，再吐摘要。
+ *
+ * 关掉它不影响质量：摘要是**结构化提取**，不是推理。pi 自己的 system prompt
+ * 就写着「Do NOT continue the conversation. ONLY output the structured summary」，
+ * 用户 prompt 又给了固定的六段格式——这种活儿不需要先想一想。
+ *
+ * **只盖住手动压缩**（用户发 compact 命令这条路）。自动压缩（threshold / overflow）
+ * 是 pi 在自己的循环里触发的，没有插针；要盖全得改 pi。
+ */
+async function withThinkingOff<T>(session: AgentSession, run: () => Promise<T>): Promise<T> {
+  const before = session.thinkingLevel;
+  if (before === "off") return run();
+  session.setThinkingLevel("off");
+  try {
+    return await run();
+  } finally {
+    session.setThinkingLevel(before);
+  }
+}
+
+/**
  * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用，用会话当前模型。
  * 与当前轮并发跑，不阻塞对话；成功（且模型没答 none）才发 `title` 事件。
  * 失败一律静默——标题是易耗品，不该有任何一条报错通路；门禁（meta 的
@@ -625,7 +652,9 @@ async function handle(command: AgentCommand): Promise<void> {
     // 之后 compaction_end 必然到（pi 在自己的 catch 里先发事件再 rethrow），
     // 这里只吞 rejection 防 unhandled。
     // ponytail: 若 pi 未来在 compaction_start 之前抛错，这里会静默——届时补个前置标志位
-    void live.session.compact(command.instructions).catch(() => {});
+    void withThinkingOff(live.session, () => live.session.compact(command.instructions)).catch(
+      () => {},
+    );
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——

@@ -245,3 +245,59 @@ describe("registerAndResolveModel —— create 与会话内换模型（C-4）�
     assert.equal(model, undefined);
   });
 });
+
+// ── D4：按 catalogId 查目录（wafo 2026-09-03 实测 1M 被拍成 128k）──
+
+describe("catalogId —— 我们的 id 与 pi 目录的 id 不是一回事", () => {
+  test("目录里叫 zai-coding-cn，我们叫 zhipu-coding：按 catalogId 才查得到官方参数", () => {
+    const catalogModels = [
+      // 展开放最前：官方参数必须盖住兜底，不是反过来
+      { ...FALLBACK_MODEL, id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxTokens: 131_072 },
+    ];
+    const registered: Record<string, unknown> = {};
+    const runtime = {
+      registerProvider: (id: string, config: unknown) => {
+        registered[id] = config;
+      },
+      // 我们自己的 id 在目录里查不到任何模型——这正是 bug 的起点
+      getModel: (id: string, modelId: string) =>
+        id === "zhipu-coding" && registered["zhipu-coding"] !== undefined
+          ? ((registered["zhipu-coding"] as { models?: PiModel[] }).models ?? []).find(
+              (m) => m.id === modelId,
+            )
+          : undefined,
+      getProviders: () => [
+        { id: "zai-coding-cn", getModels: () => catalogModels as PiModel[] },
+      ],
+    } as unknown as Parameters<typeof registerAndResolveModel>[0];
+
+    const model = registerAndResolveModel(
+      runtime,
+      {
+        id: "zhipu-coding",
+        apiKey: "k",
+        baseUrl: "https://open.bigmodel.cn/api/anthropic",
+        api: "anthropic-messages",
+        catalogId: "zai-coding-cn",
+        models: [{ id: "glm-5.3" }],
+      },
+      "glm-5.3",
+    );
+    // 官方 1M 保住了，没被拍成兜底的 128k
+    assert.equal(model?.contextWindow, 1_000_000);
+  });
+
+  test("没有 catalogId（自建网关）退回按自己的 id 查——查不到就落兜底，不报错", () => {
+    const runtime = {
+      registerProvider: () => undefined,
+      getModel: () => undefined,
+      getProviders: () => [],
+    } as unknown as Parameters<typeof registerAndResolveModel>[0];
+    const model = registerAndResolveModel(
+      runtime,
+      { id: "my-gateway", apiKey: "k", baseUrl: "https://x/v1", api: "openai-completions", models: [{ id: "m" }] },
+      "m",
+    );
+    assert.equal(model, undefined);
+  });
+});

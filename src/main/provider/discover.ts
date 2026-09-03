@@ -81,6 +81,31 @@ export async function discoverModels(input: {
   timeoutMs?: number;
 }): Promise<DiscoveredModels> {
   const url = resolveModelsUrl(input.baseUrl, input.api);
+  /**
+   * **冷连接超时重试一次。**
+   *
+   * 实测（wafo 2026-09-03，StepFun）：同一个 URL、同一个进程里连打三次，
+   * 第一次 ETIMEDOUT，后两次正常返回 401。`api.stepfun.com` 解析到火山
+   * 引擎 WAF，冷连接偶尔被卡住——不是地址错也不是鉴权错，重试就好。
+   *
+   * 只重试**网络层失败**（fetch 抛异常）；HTTP 回来了就是真实结果，不重试。
+   */
+  const first = await attemptModelsFetch(url, input);
+  if (first.kind === "ok") return first.result;
+  const second = await attemptModelsFetch(url, input);
+  return second.kind === "ok"
+    ? second.result
+    : { ok: false, models: [], message: `Could not reach ${url}: ${second.reason}` };
+}
+
+type FetchAttempt =
+  | { kind: "ok"; result: DiscoveredModels }
+  | { kind: "unreachable"; reason: string };
+
+async function attemptModelsFetch(
+  url: string,
+  input: { api: string; apiKey: string; headers?: Record<string, string>; timeoutMs?: number },
+): Promise<FetchAttempt> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 20_000);
   try {
@@ -101,15 +126,17 @@ export async function discoverModels(input: {
       payload = JSON.parse(text) as ModelsResponse;
     } catch {
       return {
-        ok: false,
-        models: [],
-        message: `${url} did not return JSON (${response.status}). Add model ids by hand.`,
+        kind: "ok",
+        result: {
+          ok: false,
+          models: [],
+          message: `${url} did not return JSON (${response.status}). Add model ids by hand.`,
+        },
       };
     }
-    return parseModelsBody(payload, response.ok);
+    return { kind: "ok", result: parseModelsBody(payload, response.ok) };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, models: [], message: `Could not reach ${url}: ${reason}` };
+    return { kind: "unreachable", reason: error instanceof Error ? error.message : String(error) };
   } finally {
     clearTimeout(timer);
   }

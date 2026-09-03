@@ -662,7 +662,20 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.agent.compact(id, undefined);
   }, [opened, model, mode, refreshSessions]);
 
+  /**
+   * 当前正在看的这条会话的相位。没有活会话（首页 / 盘上打开未唤醒）算 idle——
+   * 那时根本没有「一轮」在跑，不该拦。
+   */
+  const currentPhase = useCallback((): SessionEntry["phase"] => {
+    const id = sessionRef.current;
+    return id === null ? "idle" : (statesRef.current.get(id)?.phase ?? "idle");
+  }, []);
+
   const chooseModel = useCallback((providerId: string, modelId: string) => {
+    // **这一轮没结束就不许换**（D0）。chip 已经禁用了，但那只管住那一个 DOM 节点——
+    // 菜单项、快捷键、以后的命令面板都绕得过去，而所有入口最终都调这个函数。
+    // 芯片是界面，守卫才是事实。
+    if (currentPhase() !== "idle") return;
     const id = sessionRef.current;
     if (id === null) {
       setModel({ providerId, modelId });
@@ -694,6 +707,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   );
 
   const changeMode = useCallback((next: PermissionMode) => {
+    // 理由同 chooseModel：权限档决定 bash 能不能跑，跑到一半改是另一种串台
+    if (currentPhase() !== "idle") return;
     setMode(next);
     if (sessionRef.current !== null) void api.agent.setMode(sessionRef.current, next);
   }, []);

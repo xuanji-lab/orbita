@@ -42,6 +42,21 @@ export interface KnownProvider {
    * 缺省 = `metered`：不知道的当按量算，那是绝大多数（自建网关也落在这一档）。
    */
   billing?: "metered" | "plan";
+  /**
+   * **快速适配通道：我们自己补的模型参数。**
+   *
+   * pi 的目录每 4 小时从 pi.dev 刷新，但**只能刷到 pi 已经收录的模型**。
+   * 厂商刚上线、或者只在官方 `/models` 里 fetch 得到的型号，目录里没有——
+   * 而用户已经能用了。没这条通道的后果是一个 1M 窗口的模型被当成 128k，
+   * 压缩会提前很多轮就触发。
+   *
+   * **优先于 pi 目录**：它存在的意义就是赶在目录前面，顺带也能纠目录的错。
+   * 代价是它会陈旧——**pi 目录收录且数值正确之后，应当把对应条目删掉**。
+   *
+   * 只写**确知**的字段（官方口径或实测），其余仍由目录 / 兑底补。
+   * 编一个数进去，就是把「1M 显示成 128k」换成「128k 显示成 1M」，更坏。
+   */
+  modelParams?: Record<string, { contextWindow?: number; maxTokens?: number }>;
   /** 一句话说明这条什么时候该选 */
   note: string;
 }
@@ -70,6 +85,14 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     catalogId: "zai-coding-cn",
     billing: "plan",
+    modelParams: {
+      /**
+       * pi 的 `zai-coding-cn` 目录里没有 flash（只到 glm-5.3），
+       * 而官方 `/models` 接口 fetch 得到。参数向 glm-5.3 看齐：
+       * 同代同系，官方口径都是 1M 上下文。
+       */
+      "glm-5.3-flash": { contextWindow: 1_000_000, maxTokens: 131_072 },
+    },
     note: "Coding Plan 订阅，走 Anthropic 兼容端点",
   },
   {
@@ -120,4 +143,15 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
  */
 export function isPlanBilling(providerId: string): boolean {
   return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.billing === "plan";
+}
+
+/**
+ * 我们自己补的模型参数。**优先于 pi 目录**（见 `modelParams` 的说明）。
+ * 认不得的组合返回空对象——调用方据此原样走目录 / 兜底。
+ */
+export function knownModelParams(
+  providerId: string,
+  modelId: string,
+): { contextWindow?: number; maxTokens?: number } {
+  return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.modelParams?.[modelId] ?? {};
 }

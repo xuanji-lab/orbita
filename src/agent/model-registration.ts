@@ -103,6 +103,11 @@ interface ProviderWire {
   api: string;
   headers?: Record<string, string>;
   models: ModelDecl[];
+  /**
+   * pi 目录里这家叫什么（`KNOWN_PROVIDERS.catalogId`）。**官方参数按它去查。**
+   * 缺席 = 目录里没这家（自建网关）。
+   */
+  catalogId?: string;
 }
 
 /**
@@ -128,13 +133,28 @@ export function toFallbackRegistration(
  */
 export function registerAndResolveModel(
   runtime: Pick<ModelRuntime, "registerProvider" | "getModel" | "getProviders">,
-  provider: ProviderWire,
+  provider: ProviderWire & { id: string },
   modelId: string,
 ): PiModel | undefined {
   runtime.registerProvider(provider.id, toAuthConfig(provider));
   let model: PiModel | undefined = runtime.getModel(provider.id, modelId);
   if (model === undefined || hasModelOverrides(provider.models)) {
-    const known = runtime.getProviders().find((p) => p.id === provider.id);
+    /**
+     * **拿哪家的目录条目去保留合并：按 catalogId，不是按我们自己的 id。**
+     *
+     * 同一厂商的不同套餐是不同的接入方式，所以我们的 `zhipu-coding` 在 pi 目录里
+     * 叫 `zai-coding-cn`。拿 `zhipu-coding` 去查一无所获 → `known` 为空 →
+     * `toFallbackModels` 全落 FALLBACK_MODEL → **官方的 1M 窗口被拍成 128k**
+     * （wafo 2026-09-03 实测）。
+     *
+     * 这与上面「先只注 auth 面」是**两个正交的 bug**，症状都是 128k：
+     * 前者防的是「models 整体替换盖掉目录」，本处防的是「压根就没查到目录」。
+     * 只修一个都还是 128k。
+     *
+     * 注册仍然用我们自己的 id：会话里 `model.provider` 要与 meta 对得上。
+     */
+    const source = provider.catalogId ?? provider.id;
+    const known = runtime.getProviders().find((p) => p.id === source);
     runtime.registerProvider(provider.id, toFallbackRegistration(provider, known?.getModels() ?? []));
     model = runtime.getModel(provider.id, modelId);
   }

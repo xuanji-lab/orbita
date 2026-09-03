@@ -8,6 +8,8 @@
  *
  * 所以这里只有两个分支，而且它不会随支持的厂商变多而增长。
  */
+import { discoverModels } from "./discover.ts";
+
 export interface ConnectionTestResult {
   ok: boolean;
   message: string;
@@ -23,8 +25,29 @@ interface TestInput {
 }
 
 export async function testConnection(input: TestInput): Promise<ConnectionTestResult> {
+  /**
+   * **没填模型也能测**——改去问它的 `/models`。
+   *
+   * 上一版直接拒绝（「Add at least one model id before testing.」），而模型 id
+   * 只能靠 fetch 拿——于是网关一抽风就死锁：fetch 不到 → 加不了模型 →
+   * test 也点不了，用户卡在原地连「我这把 key 到底对不对」都问不出来
+   * （wafo 2026-09-03，StepFun）。
+   *
+   * 而「这把 key 能不能用」本来就不需要模型 id：`/models` 同样要鉴权。
+   * 拿得到清单就顺便告诉他有几个可选。
+   */
   if (input.modelId.trim() === "") {
-    return { ok: false, message: "Add at least one model id before testing." };
+    const found = await discoverModels({
+      baseUrl: input.baseUrl,
+      api: input.api,
+      apiKey: input.apiKey,
+      ...(input.headers ? { headers: input.headers } : {}),
+      ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+    });
+    if (!found.ok) return { ok: false, message: found.message };
+    return found.models.length === 0
+      ? { ok: true, message: "Key accepted, but the provider listed no models. Add one by hand." }
+      : { ok: true, message: `Key accepted — ${found.models.length} model(s) available.` };
   }
   const base = input.baseUrl.replace(/\/+$/, "");
   const anthropic = input.api === "anthropic-messages";
