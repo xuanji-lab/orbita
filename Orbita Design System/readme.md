@@ -121,15 +121,16 @@ on the theme ground, and as a fill they leave white text at 2.5:1. Filled danger
 `--color-danger-solid`, which is darker.
 Status prefers icons and words over colour — a spinner, a check, a lock glyph. List rows never tint:
 hover and active share one neutral fill and active is marked by weight. Max two
-background colours per screen. The dark theme is a **warm near-black** (gruvbox-referenced
-`#1d2021` shell, `#282828` panel, warm-cream ink `#ebdbb2 / #bdae93 / #928374`) — warm and yellow
-are one family, so the accent never fights the ground. The black theme is a **neutral near-black**
-(Vercel-referenced `#0a0a0a` shell, `#111111` panel, ink `#ededed / #a1a1a1 / #707070`) — the
-darkest ground in the set. Both take the yellow accent (`#e3c25a`) on `--color-accent-fg`; the
-manual black stays manual, `system` still resolves to light/dark. (Both dark grounds re-cut
-2026-09-03 after five same-day iterations — true black, GitHub default, GitHub ×0.78 and neutral
-gray each bounced; the user picked warm for dark and darkest-neutral for black from a rendered
-comparison page.)
+background colours per screen. The dark theme — **Warm** in settings — is a softened warm
+near-black (`#1d2021` shell, `#282828` panel, low-saturation cream ink `#dfd9c9 / #b0aa9c / #8b877c`,
+yellow washes at `.14`): warm and yellow are one family, but full-gruvbox cream (`#ebdbb2`) read as
+"过于黄色" and was cut. The black theme — **Ink** — is a **neutral near-black** (Vercel-referenced
+`#0a0a0a` shell, `#111111` panel, ink `#ededed / #a1a1a1 / #707070`), the darkest ground in the set
+and **the dark landing of `system`**. Both take the yellow accent (`#e3c25a`) on
+`--color-accent-fg`; both are manual choices, `system` resolves to light or Ink. (Both dark grounds
+re-cut 2026-09-03 after six same-day iterations — true black, GitHub default, GitHub ×0.78 and
+neutral gray each bounced; the user picked warm for dark and darkest-neutral for black from a
+rendered comparison page, then softened and renamed both.)
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**

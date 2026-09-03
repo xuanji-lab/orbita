@@ -73,31 +73,32 @@
   --action-primary-hover: var(--color-accent-strong);
 }
 
-/* dark — 暖黑档（2026-09-03 换装，gruvbox 参考）：bg0_h #1d2021 地、bg0 #282828 卡、
-   bg2 #32302f 悬停；墨是 gruvbox 暖米三级 #ebdbb2 / #bdae93 / #928374。
-   黄 accent 与暖地同族，从根上不存在「泛黄 / 泛蓝」的互相污染。 */
+/* dark — Warm · 柔化暖黑（2026-09-03 修订七）：地面保持中性微暖（#1d2021 系），
+   墨降饱和到一半——暖米 #dfd9c9 / #b0aa9c / #8b877c，原 gruvbox 全饱和暖米
+   #ebdbb2 被否（「过于黄色」）；悬停与边线中性化，黄 accent 的 wash 从
+   .18 降到 .14。设置里叫 Warm；system 不落这档（落 Ink），是纯手动档。 */
 :root[data-theme="dark"] {
   color-scheme: dark;
   --color-bg-app: #1d2021;
   --color-bg-sidebar: #222627;
   --color-bg-panel: #282828;
   --color-bg-muted: #202425;
-  --color-bg-hover: #32302f;
-  --color-bg-active: rgba(212, 167, 44, 0.18);
-  --color-text-primary: #ebdbb2;
-  --color-text-secondary: #bdae93;
-  --color-text-tertiary: #928374;
+  --color-bg-hover: #303332;
+  --color-bg-active: rgba(212, 167, 44, 0.14);
+  --color-text-primary: #dfd9c9;
+  --color-text-secondary: #b0aa9c;
+  --color-text-tertiary: #8b877c;
   /*真正取反：暗主题正文近白，其反色即近黑。填充面上的字改用 --color-*-fg。 */
   --color-text-inverse: #1d2021;
   --color-text-on-dark: #ffffff;
   --color-border-subtle: #303030;
-  --color-border-default: #3a3a39;
-  --color-border-strong: #44433f;
+  --color-border-default: #3a3b3b;
+  --color-border-strong: #454746;
   --color-accent: #e3c25a;
   --color-accent-strong: #f0d375;
-  --color-accent-soft: rgba(212, 167, 44, 0.18);
+  --color-accent-soft: rgba(212, 167, 44, 0.14);
   --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(212, 167, 44, 0.18);
+  --color-mode-active-bg: rgba(212, 167, 44, 0.14);
   --color-mode-active-fg: #e3c25a;
   --color-danger: #ff7b72;
   --color-danger-solid: #c9372c;
@@ -110,7 +111,7 @@
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
   --color-chat-card-bg: #282828;
-  --color-chat-muted-bg: #32302f;
+  --color-chat-muted-bg: #303332;
   --color-chat-control-bg: #222627;
   --color-chat-table-bg: #282828;
   --color-chat-link: #83a598;
