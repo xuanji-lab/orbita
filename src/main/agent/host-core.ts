@@ -167,7 +167,7 @@ export class AgentHostCore {
 
   async queueEdit(
     sessionId: string,
-    op: "promote" | "cancel" | "edit",
+    op: "cancel" | "edit",
     index: number,
     text: string,
     newText?: string,
@@ -197,6 +197,11 @@ export class AgentHostCore {
   /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerPermission(requestId: string, answer: PermissionAnswer): void {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
+  }
+
+  /** 立即发送排队中的第 index 条：打断当前轮（含工具调用），它成为新一轮 */
+  async interrupt(sessionId: string, index: number, text: string): Promise<void> {
+    this.post({ type: "interrupt", sessionId, index, text });
   }
 
   async abort(sessionId: string): Promise<void> {

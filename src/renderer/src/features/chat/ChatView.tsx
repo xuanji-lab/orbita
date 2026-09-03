@@ -338,7 +338,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
           <QueueStrip
             view={session.queueView}
             phase={session.phase}
-            onPromote={session.promoteQueued}
+            onInterrupt={session.interruptQueued}
             onCancel={session.cancelQueued}
             onEdit={session.editQueued}
             onCancelPending={session.cancelPendingSend}
@@ -721,6 +721,9 @@ function UsageRing(props: { session: ChatSession }) {
         items={items}
         align="end"
         hoverOpen
+        onOpenChange={(next) => {
+          if (!next) setConfirming(false);
+        }}
         trigger={({ open, toggle }) => (
           <Chip active={open} onClick={toggle} aria-label={ring.label}>
             <Ring ring={ring} />

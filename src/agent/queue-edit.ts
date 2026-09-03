@@ -19,15 +19,14 @@ export interface QueueEntryPlan {
  * 队列已被调用方清空，不重放就等于把别人的排队消息丢了。调用方无法区分
  * 「操作落空」与「正常重放」，也不需要：queue 事件会把 UI 校准到真相。
  *
- * promote 对 steering 段的项是 no-op（已在插队），按原样重放。
- * edit 改写目标条目的文本，保持它原属的队列与顺位（不顺便 promote）。
+ * edit 改写目标条目的文本，保持它原属的队列与顺位。
  */
 export function planQueueEdit(
 	steering: readonly string[],
 	followUp: readonly string[],
 	index: number,
 	text: string,
-	op: "promote" | "cancel" | "edit",
+	op: "cancel" | "edit",
 	newText?: string,
 ): QueueEntryPlan[] {
 	const merged = [...steering, ...followUp];
@@ -38,8 +37,8 @@ export function planQueueEdit(
 		const isTarget = hits && i === index;
 		if (op === "cancel" && isTarget) continue;
 		const replacement = op === "edit" && isTarget ? (newText ?? entry) : entry;
-		// 原 steering 段保持插队；promote 命中的那条从 followUp 提到 steer
-		const as = i < steering.length || (op === "promote" && isTarget) ? "steer" : "followUp";
+		// 原 steering 段保持插队
+		const as = i < steering.length ? "steer" : "followUp";
 		plans.push({ text: replacement, as });
 	}
 	return plans;

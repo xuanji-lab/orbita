@@ -150,7 +150,8 @@ export interface ChatSession {
   /** 排队卡片视图：pi 队列项与本地待办按输入顺序交错 */
   queueView: readonly QueueViewEntry[];
   /** 排队项转插队（下一个工具边界注入当前轮）。index 指 [...steering, ...followUp] 拼接视图 */
-  promoteQueued: (index: number, text: string) => void;
+  /** 立即发送排队中的第 index 条：打断当前轮（含工具调用），它成为新一轮 */
+  interruptQueued: (index: number, text: string) => void;
   /** 排队项移出 pi 队列（runtime 侧 clearQueue + 重放实现） */
   cancelQueued: (index: number, text: string) => void;
   /** 排队项改文本（保持原属队列与顺位） */
@@ -774,7 +775,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
 
   // 排队编辑只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框
   const queueEdit = useCallback(
-    (op: "promote" | "cancel" | "edit", index: number, text: string, newText?: string) => {
+    (op: "cancel" | "edit", index: number, text: string, newText?: string) => {
       const id = sessionRef.current;
       if (id === null) return;
       // edit 先把顺序账本里的键换掉：queue_update 带新文本回来时对账能保住原位
@@ -868,7 +869,13 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     pendingSends: entry.pendingSends,
     /** 卡片渲染视图：pi 队列 + 本地待办按输入序交错（见 mergeQueueView） */
     queueView: mergeQueueView(entry),
-    promoteQueued: (index: number, text: string) => queueEdit("promote", index, text),
+    interruptQueued: (index: number, text: string) => {
+      const id = sessionRef.current;
+      if (id === null) return;
+      void api.agent.interrupt(id, index, text).catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : String(cause)),
+      );
+    },
     cancelQueued: (index: number, text: string) => queueEdit("cancel", index, text),
     editQueued: (index: number, text: string, newText: string) =>
       queueEdit("edit", index, text, newText),

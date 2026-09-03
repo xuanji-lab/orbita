@@ -17,7 +17,7 @@ export function QueueStrip(props: {
   view: readonly QueueViewEntry[];
   /** idle 时 pi 队列是「停止后滞留」态：下次发送时自动带上，注脚要如实说 */
   phase: "idle" | "turn" | "compaction";
-  onPromote: (index: number, text: string) => void;
+  onInterrupt: (index: number, text: string) => void;
   onCancel: (index: number, text: string) => void;
   onEdit: (index: number, text: string, newText: string) => void;
   onCancelPending: (index: number) => void;
@@ -49,11 +49,11 @@ export function QueueStrip(props: {
           note={noteOf(item, haltedNote)}
           text={labelOf(item)}
           editValue={editValueOf(item)}
-          onPromote={
+          onInterrupt={
             item.source === "pi"
               ? item.steering || haltedNote !== null
                 ? undefined
-                : () => props.onPromote(item.piIndex, item.text)
+                : () => props.onInterrupt(item.piIndex, item.text)
               : item.item.kind === "compact"
                 ? () => props.onRunPendingNow(item.localIndex)
                 : undefined
@@ -113,7 +113,7 @@ function QueueRow(props: {
   text: string;
   /** 编辑态初值（compact 项编辑的是压缩要求，不带前缀）；不给 = 不可编辑 */
   editValue?: string;
-  onPromote?: () => void;
+  onInterrupt?: () => void;
   onCancel: () => void;
   onEdit?: (newText: string) => void;
 }) {
@@ -214,7 +214,7 @@ function QueueRow(props: {
               <Icon name="pencil-line" size={12} />
             </QueueAction>
           )}
-          {props.onPromote !== undefined && <QueueAction onClick={props.onPromote}>立即</QueueAction>}
+          {props.onInterrupt !== undefined && <QueueAction onClick={props.onInterrupt}>立即</QueueAction>}
           <QueueAction title="取消这条排队" onClick={props.onCancel}>
             取消
           </QueueAction>

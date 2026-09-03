@@ -83,7 +83,8 @@ export async function testConnection(input: TestInput): Promise<ConnectionTestRe
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, message: `Could not reach ${url}: ${reason}` };
+    const code = (error as { cause?: { code?: string } }).cause?.code;
+    return { ok: false, message: `Could not reach ${url}: ${code === undefined ? reason : `${reason} (${code})`}` };
   } finally {
     clearTimeout(timer);
   }

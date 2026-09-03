@@ -58,6 +58,8 @@ export function Menu(props: {
    * 光标只是路过输入框上方，正在打的字不该因此断掉；点开的才把焦点交给菜单。
    */
   hoverOpen?: boolean;
+  /** 开合的回声。给调用方复位自己的两段式状态用（菜单关了，确认态不该留着） */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
@@ -88,6 +90,10 @@ export function Menu(props: {
     }, HOVER_GRACE_MS);
   };
   useEffect(() => cancelLeave, []);
+  const { onOpenChange } = props;
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
 
   // 量到真实高度之后再定位。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下
   useLayoutEffect(() => {

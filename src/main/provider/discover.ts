@@ -136,7 +136,10 @@ async function attemptModelsFetch(
     }
     return { kind: "ok", result: parseModelsBody(payload, response.ok) };
   } catch (error) {
-    return { kind: "unreachable", reason: error instanceof Error ? error.message : String(error) };
+    // "fetch failed" 本身没有信息量——真实原因（ETIMEDOUT / 证书 / 拒连）在 cause 里
+    const reason = error instanceof Error ? error.message : String(error);
+    const code = (error as { cause?: { code?: string } }).cause?.code;
+    return { kind: "unreachable", reason: code === undefined ? reason : `${reason} (${code})` };
   } finally {
     clearTimeout(timer);
   }

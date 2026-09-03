@@ -21,7 +21,9 @@ export const ipcChannels = {
   agentCreate: "agent:create",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
-  /** 编辑排队中的消息：promote = 转插队（steer），cancel = 移出队列 */
+  /** 把排队中的某一条**立即**发出：打断当前轮（含正在跑的工具调用），它成为新一轮 */
+  agentInterrupt: "agent:interrupt",
+  /** 编辑排队中的消息：cancel = 移出队列，edit = 改文本 */
   agentQueueEdit: "agent:queue-edit",
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
@@ -162,6 +164,14 @@ export type AgentCommand =
    */
   | { type: "generateTitle"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
+  | {
+      /** 立即发送排队中的第 index 条：出队 → abort 当前轮（含工具调用）→ 它成为新一轮 */
+      type: "interrupt";
+      sessionId: string;
+      index: number;
+      /** 期望文本，与队列现状不符时放弃（队列刚被并发改过） */
+      text: string;
+    }
   /**
    * 编辑 pi 的排队消息（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
    * index 指 `[...steering, ...followUp]` 拼接视图的下标（UI 就是按这个顺序渲染的）；
@@ -172,7 +182,7 @@ export type AgentCommand =
   | {
       type: "queueEdit";
       sessionId: string;
-      op: "promote" | "cancel" | "edit";
+      op: "cancel" | "edit";
       index: number;
       text: string;
       newText?: string;

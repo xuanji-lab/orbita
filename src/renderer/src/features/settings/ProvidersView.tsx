@@ -173,15 +173,23 @@ export function ProvidersView(props: { onChange?: () => void }) {
 
   const toggleReveal = async () => {
     if (revealed !== null) {
+      // 只收起显示（type 回 password），**不动 draft**——用户改过的字符不能被弹回
       setRevealed(null);
       return;
     }
     if (draft.apiKey !== "") {
+      // 粘贴过的：直接明文显示，它本来就是可编辑的草稿
       setRevealed(draft.apiKey);
       return;
     }
     if (editingId === null) return;
-    setRevealed(await api.provider.reveal(editingId));
+    const stored = await api.provider.reveal(editingId);
+    if (stored === null) return;
+    // 已存 key 的「Show」= 把明文拉进输入框当**可编辑草稿**。
+    // 上一版把 revealed 接管 value 还加 readOnly——backspace 全部无效，
+    // 用户删不掉粘贴的 key（wafo 2026-09-03）。
+    setDraft({ ...draft, apiKey: stored });
+    setRevealed(stored);
   };
 
   /**
@@ -364,9 +372,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
               <span style={{ display: "flex", gap: "var(--space-2)" }}>
                 <input
                   type={revealed === null ? "password" : "text"}
-                  value={revealed ?? draft.apiKey}
+                  value={draft.apiKey}
                   onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-                  readOnly={revealed !== null}
                   placeholder={keyMask ?? "sk-…"}
                   style={{ ...inputStyle, flex: 1 }}
                 />
