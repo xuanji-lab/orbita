@@ -12,7 +12,7 @@ export const agentApi = {
     ipcRenderer.invoke(ipcChannels.agentCreate, input),
   submit: (sessionId: string, text: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSubmit, sessionId, text),
-  /** 编辑排队消息：promote = 转插队，cancel = 移出队列，edit = 改文本。index+text 防错删（乐观校验） */
+  /** 编辑排队消息：cancel = 移出队列，edit = 改文本。index+text 防错删（乐观校验） */
   queueEdit: (
     sessionId: string,
     op: "cancel" | "edit",

@@ -176,7 +176,7 @@ export type AgentCommand =
    * 编辑 pi 的排队消息（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
    * index 指 `[...steering, ...followUp]` 拼接视图的下标（UI 就是按这个顺序渲染的）；
    * text 是期望文本，与队列现状不符时（投递/并发编辑刚发生）操作落空、队列原样重放，
-   * 等 queue 事件校准 UI。promote 只对 followUp 段有效——steering 段的项已在插队，no-op。
+   * 等 queue 事件校准 UI。「立即发送」不走这里——那是 interrupt 命令，打断当前轮。
    * edit 改写目标条目的文本（保持它原属的队列与顺位），newText 为替换文本。
    */
   | {
