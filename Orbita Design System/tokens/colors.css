@@ -73,9 +73,10 @@
   --action-primary-hover: var(--color-accent-strong);
 }
 
-/* dark — Warm · 再柔化 + 压暗（2026-09-03 修订八）：墨只留一丝暖
+/* dark — Warm · 再柔化 + 压暗（2026-09-03 修订八/九）：墨只留一丝暖
    #d6d5cf / #a3a29b / #82817b（原 gruvbox 暖米已两轮退烧），地面整条降一档
-   （app #191c1d、panel #232525），黄 accent 的 wash 降到 .10。
+   （app #191c1d、panel #232525），黄 accent 的 wash 压到 .05——选中态靠
+   字重与文字色兜底（readme：active is marked by weight），不靠色块。
    设置里叫 Warm；system 不落这档（落 Ink），是纯手动档。 */
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -84,7 +85,7 @@
   --color-bg-panel: #232525;
   --color-bg-muted: #1b1f20;
   --color-bg-hover: #2a2d2c;
-  --color-bg-active: rgba(212, 167, 44, 0.1);
+  --color-bg-active: rgba(212, 167, 44, 0.05);
   --color-text-primary: #d6d5cf;
   --color-text-secondary: #a3a29b;
   --color-text-tertiary: #82817b;
@@ -96,9 +97,9 @@
   --color-border-strong: #3d403f;
   --color-accent: #e3c25a;
   --color-accent-strong: #f0d375;
-  --color-accent-soft: rgba(212, 167, 44, 0.1);
+  --color-accent-soft: rgba(212, 167, 44, 0.05);
   --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(212, 167, 44, 0.1);
+  --color-mode-active-bg: rgba(212, 167, 44, 0.05);
   --color-mode-active-fg: #e3c25a;
   --color-danger: #ff7b72;
   --color-danger-solid: #c9372c;

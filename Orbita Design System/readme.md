@@ -123,8 +123,8 @@ Status prefers icons and words over colour — a spinner, a check, a lock glyph.
 hover and active share one neutral fill and active is marked by weight. Max two
 background colours per screen. The dark theme — **Warm** in settings — is a barely-warm
 near-black (`#191c1d` shell, `#232525` panel, ink `#d6d5cf / #a3a29b / #82817b` with only a
-whisper of warmth, yellow washes at `.10`): gruvbox's full cream (`#ebdbb2`) read as "过于黄色"
-and was cut twice. The black theme — **Ink** — is a **neutral near-black** (Vercel-referenced
+whisper of warmth, yellow washes at `.05` — selection is carried by weight and ink, not fill):
+gruvbox's full cream (`#ebdbb2`) read as "过于黄色" and was cut twice. The black theme — **Ink** — is a **neutral near-black** (Vercel-referenced
 `#0a0a0a` shell, `#111111` panel, ink `#ededed / #a1a1a1 / #707070`), the darkest ground in the set
 and **the dark landing of `system`**. Both take the yellow accent (`#e3c25a`) on
 `--color-accent-fg`; both are manual choices, `system` resolves to light or Ink. (Both dark grounds
