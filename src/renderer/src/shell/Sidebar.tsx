@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { selectionStyle } from "./selection";
@@ -8,6 +8,9 @@ import type { ChatSession } from "../features/chat/useChatSession";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
+
+/** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
+const COLLAPSE_BREAKPOINT = 960;
 
 /**
  * 左栏，288px。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
@@ -30,6 +33,18 @@ export function Sidebar(props: {
 }) {
   const { session } = props;
   const [showArchived, setShowArchived] = useState(false);
+  /**
+   * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
+   * **手动状态不持久化**——窗口宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
+   */
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
+    const sync = () => setCollapsed(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
   /** 高亮哪一条：设置面开着时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.settingsOpen ? null : (session.sessionId ?? session.opened?.id ?? null);
   /**
@@ -45,6 +60,60 @@ export function Sidebar(props: {
     if (props.settingsOpen) props.onToggleSettings();
     session.openSession(id);
   };
+
+  // —— 折叠态：48px 图标条（RailButton 规格：32px 方块、tooltip 即标签、
+  // 底部 archive + settings 簇）。折叠期间列表不可达，要切会话先展开。
+  if (collapsed) {
+    return (
+      <aside
+        style={{
+          width: 48,
+          flex: "0 0 48px",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 4,
+          padding: "var(--space-2) 0",
+          background: "transparent",
+          overflow: "hidden",
+          transition: "width var(--duration-fast) var(--ease-standard)",
+        }}
+      >
+        {/* 顶栏仍兼窗口拖拽区：48px 里没有 logo 的位置 */}
+        <div className="titlebar" style={{ height: 34, width: "100%" }} />
+        <RailButton icon="panel-left" title="Expand sidebar" onClick={() => setCollapsed(false)} />
+        <RailButton
+          icon="plus"
+          title="New task"
+          accent
+          onClick={() => {
+            setCollapsed(false);
+            session.newTask();
+          }}
+        />
+        <span style={{ flex: 1 }} />
+        <RailButton
+          icon="archive"
+          title={`Archived (${session.sessions.filter((m) => m.archived).length})`}
+          active={showArchived && !props.settingsOpen}
+          onClick={() => {
+            setCollapsed(false);
+            setShowArchived(true);
+          }}
+        />
+        <RailButton
+          icon="settings"
+          title="Settings"
+          active={props.settingsOpen}
+          onClick={() => {
+            setCollapsed(false);
+            if (!props.settingsOpen) props.onToggleSettings();
+          }}
+        />
+      </aside>
+    );
+  }
+
   return (
     <aside
       style={{
@@ -56,6 +125,7 @@ export function Sidebar(props: {
         padding: "var(--space-2) var(--space-3)",
         background: "transparent",
         overflow: "hidden",
+        transition: "width var(--duration-fast) var(--ease-standard)",
       }}
     >
       {/*
@@ -78,6 +148,15 @@ export function Sidebar(props: {
         }}
       >
         orbita
+        <IconButton
+          label="Collapse sidebar"
+          title="Collapse to the icon rail"
+          size={24}
+          onClick={() => setCollapsed(true)}
+          style={{ marginInlineStart: "auto", color: "var(--color-text-tertiary)" }}
+        >
+          <Icon name="panel-left" size={14} />
+        </IconButton>
       </div>
 
       <div role="tablist" style={{ display: "flex", gap: 4 }}>
@@ -712,6 +791,62 @@ function ListError(props: { message: string; onRetry: () => void }) {
 function basename(path: string): string {
   const parts = path.split("/").filter((part) => part !== "");
   return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * 折叠图标条上的按钮（设计系统 components/navigation/RailButton）：
+ * 48px rail 里的 32px 方块，**tooltip 是它唯一的标签**。
+ * 当前项用模式选中色（R4-03 修正：明蓝暗黄，图标条当前项同款）；
+ * accent 只给 New task 这个主操作。
+ */
+function RailButton(props: {
+  icon: IconName;
+  title: string;
+  active?: boolean;
+  accent?: boolean;
+  onClick?: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const active = props.active === true;
+  const accent = props.accent === true;
+  return (
+    <button
+      type="button"
+      title={props.title}
+      aria-label={props.title}
+      aria-pressed={active || accent ? true : undefined}
+      onClick={props.onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: "grid",
+        placeItems: "center",
+        width: 32,
+        height: 32,
+        flex: "0 0 auto",
+        border: 0,
+        borderRadius: "var(--radius-md)",
+        background: active
+          ? "var(--color-mode-active-bg)"
+          : accent
+            ? "var(--color-accent)"
+            : hover
+              ? "var(--option-hover-bg)"
+              : "transparent",
+        color: active
+          ? "var(--color-mode-active-fg)"
+          : accent
+            ? "var(--color-accent-fg)"
+            : hover
+              ? "var(--color-text-primary)"
+              : "var(--color-text-secondary)",
+        cursor: "pointer",
+        transition: "var(--transition-hover)",
+      }}
+    >
+      <Icon name={props.icon} size={16} />
+    </button>
+  );
 }
 
 /**

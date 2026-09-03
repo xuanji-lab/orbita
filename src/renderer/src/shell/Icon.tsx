@@ -16,6 +16,7 @@ import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/fol
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
+import panelLeft from "../../../../Orbita Design System/assets/icons/lucide/panel-left.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
 import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off.svg?raw";
 import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?raw";
@@ -57,6 +58,7 @@ const ICONS = {
   "folder-plus": folderPlus,
   "git-branch": gitBranch,
   "loader-circle": loaderCircle,
+  "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
   pin,
