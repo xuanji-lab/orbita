@@ -113,10 +113,12 @@
   --color-chat-link: #93c5fd;
 }
 
-/* black — 深蓝黑档，底色阶参考 GitHub dark：canvas #0d1117、subtle #161b22、
-   border.default #30363d。黄 accent、墨色与状态色沿用 dark 不重调——换的是地，不是墨。
-   2026-09-03 修订：真黑 #000 起抬被用户否（「太黑了」），见 docs/plans/2026-09-03-黑色皮肤.md。
-   black 是手动档，system 跟随系统只落 light/dark。 */
+/* black — GitHub dark 档：地与墨都取自 GitHub 的暗色 Primer——
+   canvas #0d1117、subtle #161b22、border.default #30363d、文字三级
+   #e6edf3 / #9198a1 / #656d76。唯一留给品牌的是黄 accent（黑 + 黄的身份）。
+   2026-09-03 修订二：墨不再沿用 dark 主题（用户反馈「还是不太对」——GitHub 的
+   文字层级本身就是它的观感），玻璃 tint 改用 panel 色。black 是手动档，
+   system 跟随系统只落 light/dark。 */
 :root[data-theme="black"] {
   color-scheme: dark;
   --color-bg-app: #0d1117;
@@ -125,10 +127,10 @@
   --color-bg-muted: #10161d;
   --color-bg-hover: #1d262f;
   --color-bg-active: rgba(212, 167, 44, 0.18);
-  --color-text-primary: #eceff3;
-  --color-text-secondary: #b9c0c8;
-  --color-text-tertiary: #858e99;
-  --color-text-inverse: #1b1a15;
+  --color-text-primary: #e6edf3;
+  --color-text-secondary: #9198a1;
+  --color-text-tertiary: #656d76;
+  --color-text-inverse: #0d1117;
   --color-text-on-dark: #ffffff;
   --color-border-subtle: #21262d;
   --color-border-default: #2a313a;
@@ -149,9 +151,9 @@
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #1a212a;
-  --color-chat-muted-bg: #1e2731;
-  --color-chat-control-bg: #12181f;
-  --color-chat-table-bg: #12181f;
+  --color-chat-card-bg: #161b22;
+  --color-chat-muted-bg: #1c242e;
+  --color-chat-control-bg: #11171e;
+  --color-chat-table-bg: #161b22;
   --color-chat-link: #93c5fd;
 }

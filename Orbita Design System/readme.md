@@ -123,10 +123,12 @@ Status prefers icons and words over colour — a spinner, a check, a lock glyph.
 hover and active share one neutral fill and active is marked by weight. Max two
 background colours per screen. The dark theme is a cool near-black (`#111315` shell,
 `#1d2024` panel) with the yellow accent (`#e3c25a`) on dark glyph colour (`--color-accent-fg`).
-The black theme is dark's identity on GitHub-dark neutrals — the same yellow and ink on a deep
-blue-black ramp (`#0d1117` shell, `#161b22` panel, hairlines near `#30363d`); it is a manual choice
-only, `system` still resolves to light/dark. (Revised 2026-09-03: the first cut was a true-black
-`#000000` ramp and the user bounced it — "太黑了" — so the ground moved to GitHub dark.)
+The black theme reads GitHub dark through our identity — GitHub's neutrals and text trio
+(`#e6edf3 / #9198a1 / #656d76`) on their blue-black ground (`#0d1117` shell, `#161b22` panel,
+hairlines near `#30363d`), with the yellow accent as the one brand-held colour. It is a manual
+choice only, `system` still resolves to light/dark. (Revised 2026-09-03: the first cut was a
+true-black `#000000` ramp and the user bounced it — "太黑了"; the second kept our own ink and
+flattened the glass ladder — also bounced. Ground *and* ink are GitHub's; the accent is ours.)
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
@@ -155,8 +157,9 @@ from colour.
 One alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
 `.60 / .84 / .936` and dark and black `.70 / .91 / .973`. The themes are deliberately unequal —
 **dark and black block more than light** — because light text needs a settled ground and a bleeding
-wallpaper costs a dark ground its whole promise. Black differs from dark by tint, not opacity:
-GitHub-dark's cool blue-black (`rgba(13,17,23,.7)`) against dark's neutral graphite.
+wallpaper costs a dark ground its whole promise. Dark and black share one glass recipe: **the tint
+is each theme's own panel colour** (graphite `rgba(29,32,36,.7)`, GitHub blue-black
+`rgba(22,27,34,.7)`), so the ladder always climbs from the page ground toward the panel colour.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
