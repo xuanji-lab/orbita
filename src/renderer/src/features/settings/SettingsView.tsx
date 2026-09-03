@@ -65,6 +65,7 @@ const THEME_LABELS: Record<ThemePreference, string> = {
   system: "System",
   light: "Light",
   dark: "Dark",
+  black: "Black",
 };
 
 function General(props: { settings: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
@@ -72,7 +73,7 @@ function General(props: { settings: AppSettings; onChange: (patch: Partial<AppSe
     <Section label="Appearance">
       <Row
         name="Theme"
-        hint="System follows your desktop's light or dark appearance."
+        hint="System follows your desktop's light or dark appearance; Black is true black."
         control={
           <span style={{ display: "flex", gap: 2 }}>
             {THEME_PREFERENCES.map((value) => (
