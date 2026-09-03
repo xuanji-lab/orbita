@@ -123,13 +123,14 @@ Status prefers icons and words over colour — a spinner, a check, a lock glyph.
 hover and active share one neutral fill and active is marked by weight. Max two
 background colours per screen. The dark theme is a cool near-black (`#111315` shell,
 `#1d2024` panel) with the yellow accent (`#e3c25a`) on dark glyph colour (`--color-accent-fg`).
-The black theme is **neutral dark gray** — the tool-gray camp, not a hue: Material's dark surface
-`#121212` for the shell, `#1e1e1e` (also VS Code's editor ground) for panels, hueless hairlines
-`#232323 / #2a2a2a / #303030`, and Google's dark text trio `#e8eaed / #9aa0a6 / #80868b` with
-Google blue `#8ab4f8` for links/info. The yellow accent is the one brand-held colour. It is a
-manual choice only, `system` still resolves to light/dark. (Revised 2026-09-03, three cuts in one
-day: true-black `#000000` — "太黑了"; GitHub default then ×0.78 — "再深一点"; the user then named
-the camp itself — 中性深灰 — so the blue cast left with the GitHub ground.)
+The black theme is **GitHub dark at full strength** — their blue-black ground (`#0d1117` shell,
+`#161b22` panel, hairlines `#21262d / #2a313a / #30363d`) and their text trio
+(`#e6edf3 / #9198a1 / #656d76`), with the yellow accent as the one brand-held colour: blue-black
+and yellow are complements, so the accent reads clean instead of staining the ground. It is a
+manual choice only, `system` still resolves to light/dark. (Revised 2026-09-03, four cuts in one
+day: true-black `#000000` — "太黑了"; GitHub default ×0.78 — "再深一点"; neutral tool-gray
+Material `#121212` — "有点泛黄", the yellow accent warm-shifted a hueless ground by simultaneous
+contrast; back to GitHub full strength, the user's pick.)
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
