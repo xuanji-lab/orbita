@@ -25,8 +25,12 @@ describe("isPlanBilling —— 两句话不能混", () => {
     const params = knownModelParams("stepfun", "step-3.7-flash");
     assert.equal(params.contextWindow, 256_000);
     assert.equal("maxTokens" in params, false);
-    // 目录已收录的 deepseek 不需要白名单——查了也是空
+    // deepseek 只有 vision-exp 走白名单（pi 目录没收它）；其余两个目录已有
     assert.deepEqual(knownModelParams("deepseek", "deepseek-v4-flash"), {});
+    assert.deepEqual(knownModelParams("deepseek", "deepseek-v4-flash-vision-exp"), {
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    });
   });
 
   it("标准 API 按量计费", () => {

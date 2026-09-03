@@ -68,6 +68,16 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     api: "openai-completions",
     baseUrl: "https://api.deepseek.com",
     catalogId: "deepseek",
+    /**
+     * 快速适配通道（2026-09-03，wafo 指出遗漏）：pi 的 deepseek 目录条目
+     * 只有 v4-flash / v4-pro 两个，**vision-exp 没收**——但它是官方三模型之一
+     * （Models & Pricing 页三模型共用同一行规格：1M / 384K），且 /models 拉得回。
+     * 参数另有交叉印证：pi 的 opencode-go 目录收录了同名模型，同为 1M/384K。
+     * pi 的 deepseek 条目补上它之后，这条可删。
+     */
+    modelParams: {
+      "deepseek-v4-flash-vision-exp": { contextWindow: 1_000_000, maxTokens: 384_000 },
+    },
     note: "DeepSeek 官方 API",
   },
   {
