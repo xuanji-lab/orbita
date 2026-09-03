@@ -73,23 +73,26 @@
   --action-primary-hover: var(--color-accent-strong);
 }
 
+/* dark — 暖黑档（2026-09-03 换装，gruvbox 参考）：bg0_h #1d2021 地、bg0 #282828 卡、
+   bg2 #32302f 悬停；墨是 gruvbox 暖米三级 #ebdbb2 / #bdae93 / #928374。
+   黄 accent 与暖地同族，从根上不存在「泛黄 / 泛蓝」的互相污染。 */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg-app: #111315;
-  --color-bg-sidebar: #171a1d;
-  --color-bg-panel: #1d2024;
-  --color-bg-muted: #16191c;
-  --color-bg-hover: #252a2f;
+  --color-bg-app: #1d2021;
+  --color-bg-sidebar: #222627;
+  --color-bg-panel: #282828;
+  --color-bg-muted: #202425;
+  --color-bg-hover: #32302f;
   --color-bg-active: rgba(212, 167, 44, 0.18);
-  --color-text-primary: #eceff3;
-  --color-text-secondary: #b9c0c8;
-  --color-text-tertiary: #858e99;
+  --color-text-primary: #ebdbb2;
+  --color-text-secondary: #bdae93;
+  --color-text-tertiary: #928374;
   /*真正取反：暗主题正文近白，其反色即近黑。填充面上的字改用 --color-*-fg。 */
-  --color-text-inverse: #1b1a15;
+  --color-text-inverse: #1d2021;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: #2a2f35;
-  --color-border-default: #32383f;
-  --color-border-strong: #3a414a;
+  --color-border-subtle: #303030;
+  --color-border-default: #3a3a39;
+  --color-border-strong: #44433f;
   --color-accent: #e3c25a;
   --color-accent-strong: #f0d375;
   --color-accent-soft: rgba(212, 167, 44, 0.18);
@@ -101,40 +104,39 @@
   --color-danger-fg: #ffffff;
   --color-danger-soft: #3b1f1d;
   --color-warning: #d4a72c;
-  --color-info: #6aa4ff;
+  --color-info: #83a598;
   --color-info-fg: #1b1a15;
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #20242a;
-  --color-chat-muted-bg: #242932;
-  --color-chat-control-bg: #1d2024;
-  --color-chat-table-bg: #1d2024;
-  --color-chat-link: #93c5fd;
+  --color-chat-card-bg: #282828;
+  --color-chat-muted-bg: #32302f;
+  --color-chat-control-bg: #222627;
+  --color-chat-table-bg: #282828;
+  --color-chat-link: #83a598;
 }
 
-/* black — GitHub dark 档（定稿）：地与墨都取自 GitHub 的暗色 Primer——
-   canvas #0d1117、subtle #161b22、border.default #30363d、文字三级
-   #e6edf3 / #9198a1 / #656d76。唯一留给品牌的是黄 accent（黑 + 黄的身份）。
-   2026-09-03 修订五定稿：中性灰被否（「有点泛黄」）——纯灰地上黄 accent
-   面积不小，同时对比把整片灰带暖；蓝黑地与黄互补，黄衬得干净。
-   black 是手动档，system 跟随系统只落 light/dark。 */
+/* black — 极暗中性档（2026-09-03 定稿，Vercel/Geist 参考）：#0a0a0a 地、#111111 卡、
+   发丝线 #1e1e1e / #262626 / #2e2e2e，墨 #ededed / #a1a1a1 / #707070，链接蓝 #52a8ff。
+   唯一留给品牌的是黄 accent。历史：真黑 #000「太黑了」→ GitHub default「有点蓝」→
+   中性灰 #121212「有点泛黄」→ 定这版更暗的中性。若仍泛黄，退手是地加一丝冷偏
+   （#0a0b0c）或降 accent-soft 透明度。black 是手动档，system 跟随系统只落 light/dark。 */
 :root[data-theme="black"] {
   color-scheme: dark;
-  --color-bg-app: #0d1117;
-  --color-bg-sidebar: #11171e;
-  --color-bg-panel: #161b22;
-  --color-bg-muted: #10161d;
-  --color-bg-hover: #1d262f;
+  --color-bg-app: #0a0a0a;
+  --color-bg-sidebar: #0e0e0e;
+  --color-bg-panel: #111111;
+  --color-bg-muted: #0d0d0d;
+  --color-bg-hover: #1b1b1b;
   --color-bg-active: rgba(212, 167, 44, 0.18);
-  --color-text-primary: #e6edf3;
-  --color-text-secondary: #9198a1;
-  --color-text-tertiary: #656d76;
-  --color-text-inverse: #0d1117;
+  --color-text-primary: #ededed;
+  --color-text-secondary: #a1a1a1;
+  --color-text-tertiary: #707070;
+  --color-text-inverse: #0a0a0a;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: #21262d;
-  --color-border-default: #2a313a;
-  --color-border-strong: #30363d;
+  --color-border-subtle: #1e1e1e;
+  --color-border-default: #262626;
+  --color-border-strong: #2e2e2e;
   --color-accent: #e3c25a;
   --color-accent-strong: #f0d375;
   --color-accent-soft: rgba(212, 167, 44, 0.18);
@@ -146,14 +148,14 @@
   --color-danger-fg: #ffffff;
   --color-danger-soft: #3b1f1d;
   --color-warning: #d4a72c;
-  --color-info: #6aa4ff;
+  --color-info: #52a8ff;
   --color-info-fg: #1b1a15;
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #161b22;
-  --color-chat-muted-bg: #1c242e;
-  --color-chat-control-bg: #11171e;
-  --color-chat-table-bg: #161b22;
-  --color-chat-link: #93c5fd;
+  --color-chat-card-bg: #111111;
+  --color-chat-muted-bg: #1b1b1b;
+  --color-chat-control-bg: #0e0e0e;
+  --color-chat-table-bg: #111111;
+  --color-chat-link: #52a8ff;
 }

@@ -18,19 +18,18 @@
   --glass-alpha: 0.7; /* @kind other */
   --glass-blur: 20px;
   --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-bg: rgba(29, 32, 36, 0.7);
+  --glass-bg: rgba(40, 40, 40, 0.7);
 }
 
 /* black 与 dark 同透明度；tint 同一个配方——**用各自的 panel 色当 tint**
-   （dark 是石墨 rgba(29,32,36,.7)=#1d2024，black 是 GitHub 的 canvas.subtle
-   rgba(22,27,34,.7)=#161b22）。层叠后地面从 #0d1117 单调升向 #161b22，
-   与 GitHub「页面深、卡片浅」的层级同构。2026-09-03 修订二：首版用 canvas 色
-   当 tint，层叠塌成一块平色，没有层级。 */
+   （dark 是暖灰 rgba(40,40,40,.7)=#282828，black 是中性 rgba(17,17,17,.7)=#111111）。
+   层叠后地面各自从 app 色单调升向 panel 色，保持「页面深、卡片浅」的层级。
+   2026-09-03 修订二教训：tint 不能用 app 色，层叠会塌成一块平色。 */
 :root[data-theme="black"] {
   --glass-alpha: 0.7; /* @kind other */
   --glass-blur: 20px;
   --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-bg: rgba(22, 27, 34, 0.7);
+  --glass-bg: rgba(17, 17, 17, 0.7);
 }
 
 /* The single card recipe. Reused everywhere by changing only width/height. */

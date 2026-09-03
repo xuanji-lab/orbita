@@ -108,8 +108,8 @@ brand copy — the slogan — stays in Chinese and is deliberately **not** run t
 
 ## Visual foundations
 
-**Colour.** Three themes: **white + blue** (light), **black + yellow** (dark), and black — the same
-black + yellow on a cooler, GitHub-dark-referenced ground. A warm off-white shell (`#f3f4f1`) with
+**Colour.** Three themes: **white + blue** (light), **warm dark + yellow** (dark), and
+**neutral black + yellow** (black). A warm off-white shell (`#f3f4f1`) with
 pure-white panels, three text greys, three hairline greys. Every colour has exactly one job: the
 accent is blue `#1d4ed8` on light and yellow `#e3c25a` on dark, and it means the single primary
 action (the send button, "New task", "Start Agent") plus the selected mode — nothing else; amber
@@ -121,16 +121,15 @@ on the theme ground, and as a fill they leave white text at 2.5:1. Filled danger
 `--color-danger-solid`, which is darker.
 Status prefers icons and words over colour — a spinner, a check, a lock glyph. List rows never tint:
 hover and active share one neutral fill and active is marked by weight. Max two
-background colours per screen. The dark theme is a cool near-black (`#111315` shell,
-`#1d2024` panel) with the yellow accent (`#e3c25a`) on dark glyph colour (`--color-accent-fg`).
-The black theme is **GitHub dark at full strength** — their blue-black ground (`#0d1117` shell,
-`#161b22` panel, hairlines `#21262d / #2a313a / #30363d`) and their text trio
-(`#e6edf3 / #9198a1 / #656d76`), with the yellow accent as the one brand-held colour: blue-black
-and yellow are complements, so the accent reads clean instead of staining the ground. It is a
-manual choice only, `system` still resolves to light/dark. (Revised 2026-09-03, four cuts in one
-day: true-black `#000000` — "太黑了"; GitHub default ×0.78 — "再深一点"; neutral tool-gray
-Material `#121212` — "有点泛黄", the yellow accent warm-shifted a hueless ground by simultaneous
-contrast; back to GitHub full strength, the user's pick.)
+background colours per screen. The dark theme is a **warm near-black** (gruvbox-referenced
+`#1d2021` shell, `#282828` panel, warm-cream ink `#ebdbb2 / #bdae93 / #928374`) — warm and yellow
+are one family, so the accent never fights the ground. The black theme is a **neutral near-black**
+(Vercel-referenced `#0a0a0a` shell, `#111111` panel, ink `#ededed / #a1a1a1 / #707070`) — the
+darkest ground in the set. Both take the yellow accent (`#e3c25a`) on `--color-accent-fg`; the
+manual black stays manual, `system` still resolves to light/dark. (Both dark grounds re-cut
+2026-09-03 after five same-day iterations — true black, GitHub default, GitHub ×0.78 and neutral
+gray each bounced; the user picked warm for dark and darkest-neutral for black from a rendered
+comparison page.)
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
@@ -160,8 +159,8 @@ One alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), s
 `.60 / .84 / .936` and dark and black `.70 / .91 / .973`. The themes are deliberately unequal —
 **dark and black block more than light** — because light text needs a settled ground and a bleeding
 wallpaper costs a dark ground its whole promise. Dark and black share one glass recipe: **the tint
-is each theme's own panel colour** (graphite `rgba(29,32,36,.7)`, GitHub blue-black
-`rgba(22,27,34,.7)`), so the ladder always climbs from the page ground toward the panel colour.
+is each theme's own panel colour** (warm `rgba(40,40,40,.7)`, neutral `rgba(17,17,17,.7)`), so the
+ladder always climbs from the page ground toward the panel colour.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
