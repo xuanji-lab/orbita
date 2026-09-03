@@ -21,6 +21,13 @@ describe("WorkspaceStore", () => {
     assert.deepEqual(await store.list(), []);
   });
 
+  // 读不了 ≠ 没有：吞成空列表会让用户以为工作区全没了（D-3 真实教训）
+  test("文件读不了就抛错，不吞成空列表", async () => {
+    // 用同名目录顶替文件——readFile 打在目录上必炸，且不是 ENOENT
+    await mkdir(join(dir, "workspaces.json"));
+    await assert.rejects(() => store.list());
+  });
+
   test("加一个，名字默认取路径末段", async () => {
     const added = await store.add("/Users/wafo/repo/orbita-lab");
     assert.equal(added.name, "orbita-lab");
@@ -100,10 +107,12 @@ describe("WorkspaceStore", () => {
     assert.deepEqual((await new WorkspaceStore(dir).list()).map((w) => w.id), [good.id]);
   });
 
-  test("整个文件坏了退回空列表，不抛", async () => {
+  // 2026-09-03（D-3）改语义：文件坏了照抛，与 provider store 同一条规矩——
+  // 「坏文件 → 空列表」会让用户以为工作区全没了，静默吞掉的正是这一刀要杀的东西
+  test("整个文件坏了就抛错，不静默清空", async () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "workspaces.json"), "{ 这不是 JSON", "utf8");
-    assert.deepEqual(await new WorkspaceStore(dir).list(), []);
+    await assert.rejects(() => new WorkspaceStore(dir).list());
   });
 
   test("原子写不留临时文件", async () => {

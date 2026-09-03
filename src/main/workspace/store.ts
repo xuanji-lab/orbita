@@ -100,8 +100,10 @@ export class WorkspaceStore {
       return parsed.workspaces
         .map(parseWorkspace)
         .filter((w): w is Workspace => w !== null);
-    } catch {
-      return null;
+    } catch (cause) {
+      // 文件不存在 = 还没存过（走迁移/空列表）；**读不了 ≠ 没有**，照抛让 UI 说失败
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw cause;
     }
   }
 
@@ -115,8 +117,9 @@ export class WorkspaceStore {
     let legacy: LegacyWorkspaceFile;
     try {
       legacy = JSON.parse(await readFile(this.legacyPath, "utf8")) as LegacyWorkspaceFile;
-    } catch {
-      return []; // 全新安装：一个工作区都没有
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return []; // 全新安装：一个工作区都没有
+      throw cause; // 读不了 ≠ 没有，同 read() 一条规矩
     }
     if (typeof legacy.current !== "string" || legacy.current === "") return [];
     const workspaces: Workspace[] = [

@@ -61,6 +61,14 @@ describe("SessionStore", () => {
     assert.deepEqual(await store.list(), []);
   });
 
+  // 读不了 ≠ 没有：吞成空列表会让用户以为会话全没了（D-3 真实教训）
+  test("目录读不了就抛错，不吞成空列表", async () => {
+    // 用同名文件顶替目录——readdir 打在文件上必炸，且不是 ENOENT
+    await writeFile(join(dir, "sessions"), "not a dir", "utf8");
+    const blocked = new SessionStore(join(dir, "sessions"));
+    await assert.rejects(() => blocked.list());
+  });
+
   test("建了就能列出来、能读回来", async () => {
     await store.create(meta());
     assert.deepEqual((await store.list()).map((m) => m.id), [ID]);
