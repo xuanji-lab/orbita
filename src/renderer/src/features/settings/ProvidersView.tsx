@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
-import { KNOWN_PROVIDERS, type KnownProvider } from "@shared/known-providers";
+import { KNOWN_PROVIDERS, knownModelParams, type KnownProvider } from "@shared/known-providers";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
 import { formatCostRate, formatTokens } from "../../utils/format-tokens.ts";
@@ -410,13 +410,14 @@ export function ProvidersView(props: { onChange?: () => void }) {
             >
               {draft.models.map((model, index) => {
                 const meta = catalogMeta(known, model.id);
+                const patch = knownModelParams(known?.id ?? "", model.id);
                 const costTitle = modelCostTitle(model, meta);
                 return (
                   <li key={model.id} style={{ display: "grid", gap: "var(--space-1)" }}>
                     <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                       <code style={{ ...metaStyle, flex: 1 }}>{model.id}</code>
                       <span style={metaStyle} title={costTitle}>
-                        {modelMetaText(model, meta)}
+                        {modelMetaText(model, meta, patch)}
                       </span>
                       <button
                         type="button"
@@ -454,7 +455,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   <li key={id} style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                     <code style={{ ...metaStyle, flex: 1 }}>{id}</code>
                     <span style={metaStyle} title={modelCostTitle(undefined, meta)}>
-                      {modelMetaText(undefined, meta)}
+                      {modelMetaText(undefined, meta, knownModelParams(known?.id ?? "", id))}
                     </span>
                     <button
                       type="button"
@@ -543,9 +544,18 @@ const FALLBACK_MAX_TOKENS = 8_192;
  * 模型行的参数摘要：**生效值 = 用户覆盖 > pi 目录 > 兜底**。目录不认识也没填过时
  * 如实标注走兜底，不把 128k 假装成官方值。
  */
-function modelMetaText(decl: ModelDecl | undefined, meta: BuiltinModel | undefined): string {
-  const ctx = decl?.contextWindow ?? meta?.contextWindow;
-  const maxOut = decl?.maxTokens ?? meta?.maxTokens;
+/**
+ * 参数显示的两个真源（wafo 2026-09-03 裁决）：**pi 目录优先，目录没有再读白名单**。
+ * 手填参数的编辑器已删，`decl` 上的参数字段是死数据，不再进这条链——
+ * 它和 runtime 的装配顺序一致（目录命中即用目录，白名单只补缺口）。
+ */
+function modelMetaText(
+  decl: ModelDecl | undefined,
+  meta: BuiltinModel | undefined,
+  patch: { contextWindow?: number; maxTokens?: number } = {},
+): string {
+  const ctx = meta?.contextWindow ?? patch.contextWindow;
+  const maxOut = meta?.maxTokens ?? patch.maxTokens;
   const inputRate = decl?.cost?.input ?? meta?.cost.input;
   const parts =
     ctx === undefined

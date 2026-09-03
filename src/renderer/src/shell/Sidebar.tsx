@@ -47,6 +47,16 @@ export function Sidebar(props: {
   }, []);
   /** 高亮哪一条：设置面开着时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.settingsOpen ? null : (session.sessionId ?? session.opened?.id ?? null);
+
+  /**
+   * 新建任务顺带退出设置页（wafo 2026-09-03：此前停在 Settings 里点 New Task
+   * 没反应，得再按一次 Settings 才回得去——用户的心智是「新建 = 回到对话」）。
+   */
+  const startNewTask = (): void => {
+    if (props.settingsOpen) props.onToggleSettings();
+    setCollapsed(false);
+    session.newTask();
+  };
   /**
    * 不属于任何工作区的会话。**也包括归属指向已移除工作区的那些**——
    * 移除工作区不该让它的会话从界面上消失，它们只是回到 TASKS 下。
@@ -86,10 +96,7 @@ export function Sidebar(props: {
           icon="plus"
           title="New task"
           accent
-          onClick={() => {
-            setCollapsed(false);
-            session.newTask();
-          }}
+          onClick={startNewTask}
         />
         <span style={{ flex: 1 }} />
         <RailButton
@@ -171,7 +178,7 @@ export function Sidebar(props: {
       {/* 一屏一个 accent：主操作（新建 / 发送）与模式选中，别处一律中性 */}
       <button
         type="button"
-        onClick={session.newTask}
+        onClick={startNewTask}
         style={{
           display: "flex",
           alignItems: "center",
