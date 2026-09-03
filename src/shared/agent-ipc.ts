@@ -9,7 +9,6 @@
  * sessionId 从第一天就贯穿所有消息：一个 agent runtime 进程要托管 N 个 session，
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
-import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { SessionPhase, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ModelDecl } from "./provider.ts";
@@ -98,6 +97,30 @@ export interface RetryStatus {
   /** 等待开始的时刻（epoch ms，agent 进程时钟） */
   startedAt: number;
   errorMessage: string;
+}
+
+/**
+ * 一条会话到此刻的用量。**pi 的 `SessionStats` 只搬界面要显示的那几项**（D1，2026-09-03）。
+ *
+ * 为什么不直接透传 pi 的类型：
+ * 1. 透传会把 `@earendil-works/pi-coding-agent` 漏进 shared 契约，而 AGENTS.md 的架构边界
+ *    写的是「适配层吸收内核差异，换内核时 renderer 不动」。
+ * 2. 它要**落盘**（`SessionMeta.stats`）。落盘的形状必须是我们自己拥有、能逐字段校验的，
+ *    不能是 pi 随时可能加字段的结构。
+ * 3. pi 的 `SessionStats` 里我们只用 3/10 个字段（sessionFile / sessionId / 四个计数都无消费者）。
+ *
+ * 口径随 pi：跨整条 session 累计，**包含已经被压缩掉的那些历史**——那些 token 是真花了钱的。
+ */
+export interface AgentStats {
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  /** 累计花费（美元）。provider 没有价目表时是 0——**0 不是免费，是不知道** */
+  cost: number;
+  /**
+   * 上下文占用。**压缩刚做完、下一次模型响应之前 pi 自己也不知道**，那时 `tokens` 是 null，
+   * 界面要如实留白而不是显示 0（显示 0 会让人以为上下文被清空了）。
+   * `null` 本体 = 连窗口都不知道（pi 的 `contextUsage` 缺席）。
+   */
+  contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | null;
 }
 
 /**
@@ -211,7 +234,19 @@ export type AgentEvent =
    * 建会话后、每轮落定、压缩结束再各兜一次。单条消息流式期间 usage 还没回来，不推。
    * contextUsage.tokens 压缩后到下一次 LLM 响应前是 null，UI 如实显示未知。
    */
-  | { type: "stats"; sessionId: string; stats: SessionStats }
+  | {
+      type: "stats";
+      sessionId: string;
+      stats: AgentStats;
+      /**
+       * 这一帧该不该落盘（A1-Q1）。
+       *
+       * **推送很密、落盘很稀是故意的**：界面要跟着每条消息走（`message_end`），
+       * 而磁盘只需要「上一次跑完时的快照」。不分的话，一轮 30 个工具就是 30 次原子写。
+       * 缺席 = 只给界面看，recorder 不落盘。
+       */
+      persist?: true;
+    }
 /**
  * 上下文压缩完成，附边界记录（摘要 + tokensBefore）。pi 只经 `compaction_end`
  * 事件暴露压缩，摘要不在任何 TranscriptItem 里——我们在这里把它变成一条落盘的界碑。

@@ -9,6 +9,7 @@
  *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { AgentStats } from "./agent-ipc.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
@@ -119,6 +120,20 @@ export interface SessionMeta {
    * 首页会话卡的三个提问槽吃它；**旧会话没有这个字段，显示空槽**。
    */
   recentQueries: string[];
+  /**
+   * 上一次跑完时的用量快照（A1-Q1，2026-09-03 裁决）。
+   * **null = 没有账本**（本字段之前存的会话，或还没跑过一轮）。
+   *
+   * **为什么存快照而不是每次重算**：pi 的 `getSessionStats()` 里 token 与花费
+   * 确实能从 session 文件重新聚合，但 `contextUsage` 不行——它要模型的
+   * contextWindow 加 pi 的 token 估算器跑当前分支的消息，两样都只活在
+   * `AgentSession` 上，pi 也没把它们单独导出。而「打开一条会话就建一个
+   * AgentSession」太贵——翻记录是最常见的动作。
+   *
+   * 代价说清楚：pi 那份 session 文件才是原始账本，这里只是我们上次看到的样子。
+   * 同一份 pi session 被别的客户端续过的话，这份快照会偏旧，直到它在这里再跑一轮。
+   */
+  stats: AgentStats | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -154,6 +169,59 @@ function isTitleSource(value: unknown): value is TitleSource {
 function parseRecentQueries(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string").slice(0, RECENT_QUERIES_MAX);
+}
+
+/** 有限数字才算数字。NaN / Infinity 进了界面就是一行胡话 */
+function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 上下文占用。**没有它不影响剩下的账本**，所以单独解、单独为 null：
+ * 压缩刚发生完那一刻存下的快照本来就没有它（`tokens: null`）。
+ */
+function parseContextUsage(raw: unknown): AgentStats["contextUsage"] {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const contextWindow = num(value["contextWindow"]);
+  if (contextWindow === null) return null;
+  return { tokens: num(value["tokens"]), contextWindow, percent: num(value["percent"]) };
+}
+
+/**
+ * 解磁盘上的一份用量快照。**缺一项就整条丢**（返回 null）——
+ * 半份账本比没有账本更容易骗人：缺了 cacheRead 的那一行会显示成 0，
+ * 而 0 在这个界面上的意思是「真的没用缓存」。
+ */
+export function parseAgentStats(raw: unknown): AgentStats | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const cost = num(value["cost"]);
+  if (cost === null) return null;
+
+  const rawTokens = value["tokens"];
+  if (typeof rawTokens !== "object" || rawTokens === null) return null;
+  const t = rawTokens as Record<string, unknown>;
+  const input = num(t["input"]);
+  const output = num(t["output"]);
+  const cacheRead = num(t["cacheRead"]);
+  const cacheWrite = num(t["cacheWrite"]);
+  const total = num(t["total"]);
+  if (
+    input === null ||
+    output === null ||
+    cacheRead === null ||
+    cacheWrite === null ||
+    total === null
+  ) {
+    return null;
+  }
+
+  return {
+    tokens: { input, output, cacheRead, cacheWrite, total },
+    cost,
+    contextUsage: parseContextUsage(value["contextUsage"]),
+  };
 }
 
 function str(value: unknown): string | null {
@@ -195,6 +263,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     archived: value["archived"] === true,
     // 缺 recentQueries 的是会话卡之前存的会话：空槽显示，不补算（读日志太贵）
     recentQueries: parseRecentQueries(value["recentQueries"]),
+    // 读不出用量就当没有——一份坏账本不该连带丢掉整条会话
+    stats: parseAgentStats(value["stats"]),
     // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
     createdAt,

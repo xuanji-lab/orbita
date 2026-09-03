@@ -1,8 +1,9 @@
-import { deepStrictEqual, doesNotMatch, match, strictEqual } from "node:assert/strict";
+import { deepStrictEqual, doesNotMatch, match, notStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   deriveSessionTitle,
   isCompactedRecord,
+  parseAgentStats,
   parseSessionMeta,
   pushRecentQuery,
   recentQueriesFromRecords,
@@ -26,6 +27,7 @@ const valid = {
   modelId: "glm-5.3",
   mode: "manual",
   recentQueries: [],
+  stats: null,
   createdAt: 1000,
   updatedAt: 2000,
 };
@@ -358,5 +360,68 @@ describe("transcriptToMarkdown 的工具结果", () => {
     ]);
     match(md, /\[image image\/png\]/);
     match(transcriptToMarkdown([{ ...tool, content: [] }]), /（无输出）/);
+  });
+});
+
+// ── 刀 A-1：用量快照落盘（A1-Q1 裁决 2026-09-03）──
+
+describe("parseAgentStats —— 半份账本比没有账本更容易骗人", () => {
+  const raw = {
+    tokens: { input: 18200, output: 4100, cacheRead: 120000, cacheWrite: 5100, total: 147400 },
+    cost: 0.062,
+    contextUsage: { tokens: 18200, contextWindow: 200000, percent: 9 },
+  };
+
+  it("完整的一份原样解出来", () => {
+    deepStrictEqual(parseAgentStats(raw), raw);
+  });
+
+  it("缺一项 token 就整条丢——缺的那行会显示成 0，而 0 的意思是「真没用」", () => {
+    const { cacheRead: _drop, ...rest } = raw.tokens;
+    strictEqual(parseAgentStats({ ...raw, tokens: rest }), null);
+  });
+
+  it("缺 cost 整条丢", () => {
+    const { cost: _drop, ...rest } = raw;
+    strictEqual(parseAgentStats(rest), null);
+  });
+
+  it("NaN / Infinity 不算数字——进了界面就是一行胡话", () => {
+    strictEqual(parseAgentStats({ ...raw, cost: Number.NaN }), null);
+    strictEqual(
+      parseAgentStats({ ...raw, tokens: { ...raw.tokens, total: Number.POSITIVE_INFINITY } }),
+      null,
+    );
+  });
+
+  it("contextUsage 缺席不连累账本：单独为 null", () => {
+    const { contextUsage: _drop, ...rest } = raw;
+    deepStrictEqual(parseAgentStats(rest), { ...raw, contextUsage: null });
+  });
+
+  it("压缩刚完那一刻的快照：tokens 为 null 但窗口还在", () => {
+    const usage = { tokens: null, contextWindow: 200000, percent: null };
+    deepStrictEqual(parseAgentStats({ ...raw, contextUsage: usage })?.contextUsage, usage);
+  });
+
+  it("contextWindow 都没有就当没有占用", () => {
+    strictEqual(parseAgentStats({ ...raw, contextUsage: { tokens: 1 } })?.contextUsage, null);
+  });
+
+  it("不是对象一律 null", () => {
+    strictEqual(parseAgentStats(null), null);
+    strictEqual(parseAgentStats("stats"), null);
+  });
+});
+
+describe("parseSessionMeta 的 stats 字段", () => {
+  it("旧会话没有这个字段：当作没有账本，不丢整条会话", () => {
+    strictEqual(parseSessionMeta(valid)?.stats, null);
+  });
+
+  it("坏账本也只丢账本", () => {
+    const meta = parseSessionMeta({ ...valid, stats: { cost: "免费" } });
+    notStrictEqual(meta, null);
+    strictEqual(meta?.stats, null);
   });
 });
