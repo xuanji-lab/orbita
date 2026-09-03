@@ -144,6 +144,21 @@ export class ProviderStore {
   }
 
   /** 取明文密钥。**只给主进程内的装配代码用**，不经 IPC 暴露。 */
+  /**
+   * 删掉这家存的密钥，auth 退回 none（wafo 2026-09-03：清空输入框删不掉 key——
+   * upsert 的空值语义是「保留原有密钥」，编辑别的字段不该清 key；所以删除
+   * 必须是一个显式动作，而不是「留空保存」）。
+   */
+  async removeApiKey(id: string): Promise<void> {
+    const providers = await this.load();
+    const existing = providers.find((p) => p.id === id);
+    if (existing?.auth.scheme === "api_key") {
+      await this.secrets.delete(existing.auth.secretRef.account);
+      existing.auth = { scheme: "none" };
+      await this.persist(providers);
+    }
+  }
+
   async resolveApiKey(id: ProviderId): Promise<string | null> {
     const provider = (await this.load()).find((p) => p.id === id);
     if (!provider || provider.auth.scheme !== "api_key") return null;

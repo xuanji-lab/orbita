@@ -75,6 +75,11 @@ export function registerProviderIpc(store: ProviderStore): void {
     store.resolveApiKey(id),
   );
 
+  // 删密钥是显式动作：清空输入框保存 ≠ 删除（upsert 空值 = 保留）
+  ipcMain.handle(ipcChannels.providerRemoveKey, (_event, id: string): Promise<void> =>
+    store.removeApiKey(id),
+  );
+
   ipcMain.handle(ipcChannels.providerRemove, (_event, id: string): Promise<void> =>
     store.remove(id),
   );

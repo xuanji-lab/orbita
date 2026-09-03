@@ -29,6 +29,7 @@ export const providerApi = {
   }): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke(ipcChannels.providerTest, input),
   /** 显示明文密钥（用户点眼睛时才调，不随 list 下发） */
   reveal: (id: string): Promise<string | null> => ipcRenderer.invoke(ipcChannels.providerReveal, id),
+  removeKey: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.providerRemoveKey, id),
   discover: (input: {
     baseUrl: string;
     api: string;
