@@ -123,12 +123,13 @@ Status prefers icons and words over colour — a spinner, a check, a lock glyph.
 hover and active share one neutral fill and active is marked by weight. Max two
 background colours per screen. The dark theme is a cool near-black (`#111315` shell,
 `#1d2024` panel) with the yellow accent (`#e3c25a`) on dark glyph colour (`--color-accent-fg`).
-The black theme reads GitHub dark through our identity — GitHub's neutrals and text trio
-(`#e6edf3 / #9198a1 / #656d76`) on their blue-black ground (`#0d1117` shell, `#161b22` panel,
-hairlines near `#30363d`), with the yellow accent as the one brand-held colour. It is a manual
-choice only, `system` still resolves to light/dark. (Revised 2026-09-03: the first cut was a
-true-black `#000000` ramp and the user bounced it — "太黑了"; the second kept our own ink and
-flattened the glass ladder — also bounced. Ground *and* ink are GitHub's; the accent is ours.)
+The black theme reads GitHub dark through our identity — GitHub's text trio
+(`#e6edf3 / #9198a1 / #656d76`) and hairline language on their blue-black ground, scaled as a
+whole ~0.78× deeper (`#0a0d12` shell, `#11151a` panel) — between true black and GitHub's default.
+The yellow accent is the one brand-held colour. It is a manual choice only, `system` still
+resolves to light/dark. (Revised 2026-09-03: cut one was true-black `#000000` — bounced as
+"太黑了"; cut two was GitHub default at full strength — bounced as "再深一点"; cut three is the
+scaled ramp. Ground *and* ink follow GitHub; the accent is ours.)
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**

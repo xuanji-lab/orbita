@@ -22,15 +22,15 @@
 }
 
 /* black 与 dark 同透明度；tint 同一个配方——**用各自的 panel 色当 tint**
-   （dark 是石墨 rgba(29,32,36,.7)=#1d2024，black 是 GitHub 的 canvas.subtle
-   rgba(22,27,34,.7)=#161b22）。层叠后地面从 #0d1117 单调升向 #161b22，
+   （dark 是石墨 rgba(29,32,36,.7)=#1d2024，black 是加深后的 panel
+   rgba(17,21,26,.7)=#11151a）。层叠后地面从 #0a0d12 单调升向 #11151a，
    与 GitHub「页面深、卡片浅」的层级同构。2026-09-03 修订二：首版用 canvas 色
    当 tint，层叠塌成一块平色，没有层级。 */
 :root[data-theme="black"] {
   --glass-alpha: 0.7; /* @kind other */
   --glass-blur: 20px;
   --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-bg: rgba(22, 27, 34, 0.7);
+  --glass-bg: rgba(17, 21, 26, 0.7);
 }
 
 /* The single card recipe. Reused everywhere by changing only width/height. */
