@@ -24,17 +24,20 @@ import { ActionRail } from "./shell/ActionRail";
 export function App() {
   usePlatform();
   const [providers, setProviders] = useState<ProviderDto[]>([]);
+  /** provider 列表加载失败的原因；null = 正常。**失败要亮在聊天面上**，
+   * 不然一次 IPC 失败会显示成「还没有 provider」，用户被引去白配一遍。 */
+  const [providersError, setProvidersError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   useTheme(settings.theme);
   const refresh = useCallback(async () => {
-    // 读不到就当没有 provider——真正的原因由设置面自己报（它有 error 行），
-    // 外壳不该因为一次 IPC 失败而白屏
     try {
       setProviders(await api.provider.list());
-    } catch {
+      setProvidersError(null);
+    } catch (cause) {
       setProviders([]);
+      setProvidersError(cause instanceof Error ? cause.message : String(cause));
     }
   }, []);
 
@@ -72,7 +75,7 @@ export function App() {
             onProvidersChange={refresh}
           />
         ) : (
-          <ChatView session={session} />
+          <ChatView session={session} providersError={providersError} />
         )}
       </main>
 

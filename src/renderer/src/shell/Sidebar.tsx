@@ -159,7 +159,9 @@ export function Sidebar(props: {
               addIcon="folder-plus"
               onAdd={session.addWorkspace}
             />
-            {session.workspaces.length === 0 ? (
+            {session.workspacesError !== null ? (
+              <ListError message={session.workspacesError} onRetry={session.retryWorkspaces} />
+            ) : session.workspaces.length === 0 ? (
               <Empty>No workspace yet. Add the folder the agent may read.</Empty>
             ) : (
               session.workspaces.map((workspace) => (
@@ -189,7 +191,9 @@ export function Sidebar(props: {
                 addIcon="plus"
                 onAdd={session.newTask}
               />
-              {loose.length === 0 ? (
+              {session.sessionsError !== null ? (
+                <ListError message={session.sessionsError} onRetry={session.retrySessions} />
+              ) : loose.length === 0 ? (
                 <Empty>No task yet. The one you start lands here.</Empty>
               ) : (
                 loose.map((meta) => (
@@ -654,6 +658,52 @@ function Empty(props: { children: React.ReactNode }) {
       }}
     >
       {props.children}
+    </p>
+  );
+}
+
+/**
+ * 列表加载失败的就地错误行。**失败要长成失败的样子**——吞成空列表会让用户
+ * 以为记录丢了；这一行给出原因和一个重试入口，恢复不需要重新找路。
+ */
+function ListError(props: { message: string; onRetry: () => void }) {
+  return (
+    <p
+      style={{
+        margin: "var(--space-2) 0",
+        padding: "0 var(--space-1)",
+        display: "flex",
+        alignItems: "baseline",
+        gap: 6,
+        flexWrap: "wrap",
+        fontSize: "var(--font-size-caption)",
+        lineHeight: "var(--line-height-caption)",
+        color: "var(--color-text-secondary)",
+      }}
+    >
+      <Icon
+        name="triangle-alert"
+        size={12}
+        strokeWidth={1.8}
+        style={{ color: "var(--color-danger)", flex: "0 0 auto", alignSelf: "center" }}
+      />
+      <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{props.message}</span>
+      <button
+        type="button"
+        onClick={props.onRetry}
+        style={{
+          border: 0,
+          background: "transparent",
+          padding: 0,
+          fontFamily: "var(--font-family-base)",
+          fontSize: "var(--font-size-caption)",
+          color: "var(--color-text-primary)",
+          textDecoration: "underline",
+          cursor: "pointer",
+        }}
+      >
+        Retry
+      </button>
     </p>
   );
 }

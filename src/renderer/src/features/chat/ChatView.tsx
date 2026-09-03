@@ -82,8 +82,8 @@ function useFollowScroll(enabled: boolean) {
  * 这就是 R8-01 ②「输入框宽度跨页面保持一致」：两页的差别只有 slogan 消失、
  * 输入框从居中落到底部，别的都不动。
  */
-export function ChatView(props: { session: ChatSession }) {
-  const { session } = props;
+export function ChatView(props: { session: ChatSession; providersError?: string | null }) {
+  const { session, providersError } = props;
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -136,8 +136,15 @@ export function ChatView(props: { session: ChatSession }) {
 
   const notices = (
     <>
-      {session.usable.length === 0 && (
-        <Notice>Add a provider with at least one model in Settings, then send a message.</Notice>
+      {providersError != null ? (
+        // 加载失败 ≠ 没有 provider：原因说清楚，去设置面重试（打开设置会重新拉取）
+        <Notice tone="bad">
+          Providers failed to load: {providersError} — open Settings to retry.
+        </Notice>
+      ) : (
+        session.usable.length === 0 && (
+          <Notice>Add a provider with at least one model in Settings, then send a message.</Notice>
+        )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
       {/*
@@ -245,6 +252,15 @@ export function ChatView(props: { session: ChatSession }) {
         </>
       }
     >
+      {/* 历史恢复在途：一行安静的加载指示，正文区不再是一片无解释的空白 */}
+      {session.loadingHistory && entries.length === 0 && <StatusLine spin>Loading…</StatusLine>}
+      {/* 空会话（没发过消息）：一行 tertiary 交代「这里为什么是空的」 */}
+      {entries.length === 0 &&
+        !session.loadingHistory &&
+        session.phase === "idle" &&
+        session.turnError === null && (
+          <StatusLine>No messages yet. Send the first one to start.</StatusLine>
+        )}
       {entries.map((entry, index) => {
         const branchAfter = branchRows.get(index);
         return (
@@ -1487,6 +1503,34 @@ function Notice(props: { tone?: "bad"; children: React.ReactNode }) {
       )}
       {props.children}
     </p>
+  );
+}
+
+/**
+ * 正文区的状态行（空会话提示 / 历史恢复加载）：居中一行 tertiary，
+ * 唯一的动效是 loader 的旋转（设计系统：continuous motion 只有 rotation 与 breathing）。
+ */
+function StatusLine(props: { children: React.ReactNode; spin?: boolean }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "var(--space-2)",
+        width: "100%",
+        padding: "var(--space-4) 0",
+        color: "var(--color-text-tertiary)",
+        fontSize: "var(--font-size-caption)",
+      }}
+    >
+      {props.spin === true && (
+        <span style={{ display: "inline-flex", flex: "0 0 auto" }}>
+          <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
+        </span>
+      )}
+      {props.children}
+    </div>
   );
 }
 

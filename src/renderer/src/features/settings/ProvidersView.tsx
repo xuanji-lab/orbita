@@ -258,6 +258,23 @@ export function ProvidersView(props: { onChange?: () => void }) {
 
       {error !== null && <Line tone="bad">{error}</Line>}
 
+      {/*
+        加载与空必须分得开：providers === null 是「还在读」（或读失败——失败走上面的
+        error 行），[] 是「真的一个都没有」。三态一种脸的话，第一次打开永远像坏了。
+      */}
+      {providers === null && error === null && <Line tone="busy">Loading providers…</Line>}
+      {providers !== null && providers.length === 0 && (
+        <p
+          style={{
+            margin: 0,
+            fontSize: "var(--font-size-caption)",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          No provider yet. Pick one below and save it with a key.
+        </p>
+      )}
+
       {providers !== null && providers.length > 0 && (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-2)" }}>
           {providers.map((provider) => (

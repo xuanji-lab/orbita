@@ -99,6 +99,18 @@ export interface ChatSession {
   /** 落盘的会话列表，新的在前。侧栏 TASKS 节点列的就是它。 */
   sessions: SessionMeta[];
   /**
+   * 会话列表加载失败的原因；null = 正常。**读盘失败必须说成失败**——
+   * 吞成空列表的话，一次磁盘错误会显示成「你的会话全没了」。
+   */
+  sessionsError: string | null;
+  /** 工作区列表加载失败的原因；null = 正常。同一条规矩。 */
+  workspacesError: string | null;
+  /** 就地重试两个列表的加载（侧栏错误行上的按钮用） */
+  retrySessions: () => void;
+  retryWorkspaces: () => void;
+  /** 正在从磁盘恢复某条会话的历史（openSession 的 load 在途） */
+  loadingHistory: boolean;
+  /**
    * 正在看/正在续的那条会话（从磁盘打开的）。
    * **打开就把它的 transcript 种进状态**，所以聊天面不需要第二条渲染路径——
    * 续上之后新消息接着往下追加，自然衔接。
@@ -171,6 +183,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [workspacesError, setWorkspacesError] = useState<string | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [opened, setOpened] = useState<SessionMeta | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -194,6 +209,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const refreshSessions = useCallback(() => {
     void api.session.list().then((list) => {
       setSessions(list);
+      setSessionsError(null);
       // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
       // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
       // 改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
@@ -203,7 +219,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         if (id === null) return null;
         return list.find((meta) => meta.id === id) ?? current;
       });
-    }).catch(() => setSessions([]));
+    }).catch((cause: unknown) =>
+      // 读盘失败不是「没有会话」：旧列表留着不动，错误就地亮在侧栏
+      setSessionsError(cause instanceof Error ? cause.message : String(cause)),
+    );
   }, []);
 
   useEffect(refreshSessions, [refreshSessions]);
@@ -211,8 +230,13 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const refreshWorkspaces = useCallback(() => {
     void api.workspace
       .list()
-      .then(setWorkspaces)
-      .catch(() => setWorkspaces([]));
+      .then((list) => {
+        setWorkspaces(list);
+        setWorkspacesError(null);
+      })
+      .catch((cause: unknown) =>
+        setWorkspacesError(cause instanceof Error ? cause.message : String(cause)),
+      );
   }, []);
 
   useEffect(refreshWorkspaces, [refreshWorkspaces]);
@@ -221,7 +245,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.workspace
       .default()
       .then(setDefaultCwd)
-      .catch(() => setDefaultCwd(""));
+      // 兜底目录读不到就不能静默落成 ""——那会让 send 报「先选工作区」，
+      // 而真正的原因（磁盘 / 配置坏了）用户永远看不到
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : String(cause)),
+      );
   }, []);
 
   useEffect(
@@ -447,9 +475,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const openSession = useCallback((id: string) => {
     if (id === sessionRef.current) return;
     setError(null);
+    setLoadingHistory(true);
     void api.session
       .load(id)
       .then((detail) => {
+        setLoadingHistory(false);
         if (detail === null) return;
         // meta（cwd / 归属 / 权限档 / 模型）两条路都要恢复
         setOpened(detail.meta);
@@ -469,9 +499,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         sessionRef.current = null;
         setStates((prev) => seedFromDisk(prev, id, detail.transcript));
       })
-      .catch((cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : String(cause)),
-      );
+      .catch((cause: unknown) => {
+        setLoadingHistory(false);
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
   }, []);
 
   const renameSession = useCallback(
@@ -695,6 +726,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     model,
     chooseModel,
     sessions,
+    sessionsError,
+    workspacesError,
+    retrySessions: refreshSessions,
+    retryWorkspaces: refreshWorkspaces,
+    loadingHistory,
     opened,
     // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读
     readOnly: opened !== null && opened.piSessionFile === null && sessionId === null,
