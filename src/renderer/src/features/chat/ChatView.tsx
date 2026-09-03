@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
@@ -45,7 +44,7 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
-import { contextText, contextTone, costText, statsTitleText } from "./stats-text";
+import { contextRing, usageBreakdown, type ContextRing } from "./stats-format";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
@@ -631,53 +630,114 @@ function ComposerBar(props: { session: ChatSession }) {
           )}
         />
       )}
-      <StatsLine stats={session.stats} />
+      <UsageRing session={session} />
     </>
   );
 }
 
 /**
- * 用量行：底栏最右侧的安静注脚——上下文余量 + 累计花费，hover（原生 title）看
- * token 分项。上下文段 >70% 染 warning、>90% 染 danger（颜色第二信号）；刚压缩完
- * 显示 `? / 200k`（诚实未知）。花费 ≤0 不显示——自建网关定价未知，$0.000 会误读为免费。
+ * 底栏最右侧的用量环（A-1）。它顶替了 `18.2k / 200k · $0.06` 那行字——
+ * 文字每次都要读，环扫一眼就够，省下的宽度留给别的芯片。
  *
- * 布局：外层撑满剩余空间、内容右贴——不能用 marginInlineStart:auto，发送键已经
- * 用了一个，两个 auto 会平分剩余空间把用量行推到中间去。
+ * **悬停即开分项菜单**（`hoverOpen`），不用点；分项走我们自己画的菜单行，
+ * **不用原生 `title`**——原生 tooltip 的字体/字号/颜色由系统决定，改不了，
+ * 而且它会在悬停约 1 秒后再弹一次，与菜单重复（wafo 2026-09-03 报的两次悬停）。
+ *
+ * 菜单底下挂「Compact context now」（A2-Q1 裁决：菜单项与 `/compact` 都要）。
+ * 压缩只在闲着时给：pi 的 `compact()` 会先打断当前这一轮——跑着时让人点得动，
+ * 他以为只是整理一下，实际把回答砍了。**禁用的理由写在 hint 里**，不让它只是变灰。
  */
-function StatsLine(props: { stats: SessionStats | null }) {
-  const { stats } = props;
-  if (stats === null) return null;
-  const cost = costText(stats.cost);
-  const usage = stats.contextUsage;
-  if (usage === undefined && cost === null) return null;
-  const tone = contextTone(usage?.percent ?? null);
-  const toneColor =
+function UsageRing(props: { session: ChatSession }) {
+  const { session } = props;
+  const stats = session.stats;
+  const ring = contextRing(stats);
+  const busy = session.phase !== "idle";
+  const items: MenuItem[] = [
+    ...usageBreakdown(stats).map((row) => ({
+      id: row.label,
+      label: row.label,
+      hint: row.value,
+      fact: true,
+    })),
+    {
+      id: "compact",
+      label: "Compact context now",
+      icon: "fold-vertical" as const,
+      hint: session.readOnly
+        ? "this task can't be continued"
+        : busy
+          ? "wait for this turn"
+          : undefined,
+      disabled: session.readOnly || busy,
+      onSelect: session.compact,
+    },
+  ];
+  return (
+    <span style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end" }}>
+      <Menu
+        items={items}
+        align="end"
+        hoverOpen
+        trigger={({ open, toggle }) => (
+          <Chip active={open} onClick={toggle} aria-label={ring.label}>
+            <Ring ring={ring} />
+          </Chip>
+        )}
+      />
+    </span>
+  );
+}
+
+/** 环的几何：直径、线宽——底栏芯片里 12px 的图标位 */
+const RING_SIZE = 14;
+const RING_STROKE = 2;
+
+/**
+ * 上下文占用环。底环一圈中性边框色，弧从 12 点方向顺时针长——和钟一样，不用学。
+ * 颜色是第二信号（设计系统）：过七成前继承文字色，之后才用 warning / danger。
+ * `fill` 为 null 时只有底环：没数字就不画数字。
+ */
+function Ring(props: { ring: ContextRing }) {
+  const radius = (RING_SIZE - RING_STROKE) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const { fill, tone } = props.ring;
+  const color =
     tone === "danger"
       ? "var(--color-danger)"
       : tone === "warning"
         ? "var(--color-warning)"
-        : undefined;
+        : "currentColor";
   return (
-    <span
-      style={{
-        flex: "1 1 auto",
-        minWidth: 0,
-        display: "flex",
-        justifyContent: "flex-end",
-      }}
+    <svg
+      width={RING_SIZE}
+      height={RING_SIZE}
+      viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+      aria-hidden
+      style={{ display: "block" }}
     >
-      <span
-        title={statsTitleText(stats)}
-        style={{ ...SLOT.status, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-      >
-        {usage !== undefined && (
-          <span style={toneColor === undefined ? undefined : { color: toneColor }}>
-            {contextText(usage)}
-          </span>
-        )}
-        {cost !== null && (usage !== undefined ? ` · ${cost}` : cost)}
-      </span>
-    </span>
+      <circle
+        cx={RING_SIZE / 2}
+        cy={RING_SIZE / 2}
+        r={radius}
+        fill="none"
+        stroke="var(--color-border-strong)"
+        strokeWidth={RING_STROKE}
+      />
+      {fill !== null && fill > 0 && (
+        <circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={radius}
+          fill="none"
+          stroke={color}
+          strokeWidth={RING_STROKE}
+          strokeLinecap="round"
+          strokeDasharray={`${circumference * fill} ${circumference}`}
+          transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+          style={{ transition: "stroke-dasharray var(--duration-hover) var(--ease-standard)" }}
+        />
+      )}
+    </svg>
   );
 }
 

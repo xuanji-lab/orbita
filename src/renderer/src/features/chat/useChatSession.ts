@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
-import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
 import {
@@ -27,7 +26,7 @@ import {
 } from "./session-states.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
-import type { RetryStatus } from "@shared/agent-ipc";
+import type { AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
 import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -59,7 +58,7 @@ export interface ChatSession {
    * 最近一次用量快照（token / 花费 / 上下文余量），每轮落定时由 runtime 推来。
    * null = 还没有：纯浏览的旧会话不起 runtime session，等说话唤醒后才有数字。
    */
-  stats: SessionStats | null;
+  stats: AgentStats | null;
   /**
    * 按 id 查某条会话的运行态（槽里有真相）。侧栏每行要显示**它自己**的转圈/完成，
    * 与「当前看哪条」无关——后台在跑的会话切走了也照样转圈。
@@ -96,6 +95,8 @@ export interface ChatSession {
    */
   model: { providerId: string; modelId: string } | null;
   chooseModel: (providerId: string, modelId: string) => void;
+  /** 立刻压一次上下文（用量菜单里那一项）。只在 phase 为 idle 时可用 */
+  compact: () => void;
   /** 落盘的会话列表，新的在前。侧栏 TASKS 节点列的就是它。 */
   sessions: SessionMeta[];
   /**
@@ -618,6 +619,49 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
    * 换了却不发言就切走，会被 openSession 的 meta 播种冲掉，等于没换过（已裁决接受）。
    * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
    */
+  /**
+   * 立刻压一次上下文（A-1 用量菜单里那一项；A2-Q1 裁决：菜单项与 `/compact` 都要）。
+   *
+   * **只在闲着时给**——调用方（菜单项）已按 `phase !== "idle"` 禁用。
+   * pi 的 `compact()` 会先打断当前这一轮，跑着时点它等于把回答砍了。
+   *
+   * 从盘上打开、还没唤醒的会话先按 resume 唤醒再压；**绝不为压缩新建会话**
+   * ——对一条空会话压缩没有意义。进度不用单独回包：`compaction_start` /
+   * `compaction` 事件那条链已经通了。
+   */
+  const compact = useCallback(async (): Promise<void> => {
+    setError(null);
+    let active = sessionRef.current;
+    try {
+      if (active === null && opened !== null && opened.piSessionFile !== null) {
+        if (model === null) throw new Error("Add a provider with at least one model first");
+        active = await api.agent.create({
+          cwd: opened.cwd,
+          workspaceId: opened.workspaceId,
+          resume: { sessionId: opened.id, piSessionFile: opened.piSessionFile },
+          providerId: model.providerId,
+          modelId: model.modelId,
+          mode,
+        });
+        setSessionId(active);
+        sessionRef.current = active;
+        liveRef.current.add(active);
+        refreshSessions();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return;
+    }
+    if (active === null) {
+      setError("没有正在运行的任务可压缩");
+      return;
+    }
+    const id: string = active;
+    // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
+    setStates((prev) => setEntryPhase(prev, id, "turn"));
+    void api.agent.compact(id, undefined);
+  }, [opened, model, mode, refreshSessions]);
+
   const chooseModel = useCallback((providerId: string, modelId: string) => {
     const id = sessionRef.current;
     if (id === null) {
@@ -730,6 +774,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     usable,
     model,
     chooseModel,
+    compact,
     sessions,
     sessionsError,
     workspacesError,

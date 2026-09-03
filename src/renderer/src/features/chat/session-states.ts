@@ -14,9 +14,8 @@ import {
   createTranscriptState,
   type TranscriptState,
 } from "@earendil-works/pi-coding-agent/client";
-import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { AgentEvent, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
@@ -93,7 +92,7 @@ export interface SessionEntry {
    * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
    */
-  stats: SessionStats | null;
+  stats: AgentStats | null;
   approvals: PendingApproval[];
 }
 

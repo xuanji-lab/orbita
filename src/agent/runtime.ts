@@ -53,9 +53,45 @@ function send(event: AgentEvent): void {
  * 所以唤醒的旧会话拿到的是跨重启累计值。推送粒度与 pi 的数据粒度对齐——usage
  * 跟着每次 LLM 响应落地，所以每条 assistant 消息完成（message_end）推一次；
  * 建会话后、压缩结束、整轮落定再各兜一次。单条消息流式期间 usage 还没回来，不推。
+ *
+ * **只搬界面要显示的那几项**（D1）：显式列出而不是整个对象透传，契约声明了搬哪几项，
+ * pi 以后加字段时不该悄悄从这里漏进 renderer。
+ *
+ * `persist` 只在「这一轮真的告一段落」的时机带上（settled / 压缩结束 / 建会话）：
+ * 界面要跟着每条消息走，而磁盘只需要上一次跑完时的快照。不分的话一轮 30 个工具就是 30 次原子写。
+ *
+ * 读不出来就安静跳过：用量是给人看的一行字，不该由它决定一轮对话成不成立。
  */
-function pushStats(sessionId: string, session: AgentSession): void {
-  send({ type: "stats", sessionId, stats: session.getSessionStats() });
+function pushStats(sessionId: string, session: AgentSession, persist?: true): void {
+  try {
+    const stats = session.getSessionStats();
+    const usage = stats.contextUsage;
+    send({
+      type: "stats",
+      sessionId,
+      stats: {
+        tokens: {
+          input: stats.tokens.input,
+          output: stats.tokens.output,
+          cacheRead: stats.tokens.cacheRead,
+          cacheWrite: stats.tokens.cacheWrite,
+          total: stats.tokens.total,
+        },
+        cost: stats.cost,
+        contextUsage:
+          usage === undefined
+            ? null
+            : {
+                tokens: usage.tokens ?? null,
+                contextWindow: usage.contextWindow,
+                percent: usage.percent ?? null,
+              },
+      },
+      ...(persist === true ? { persist } : null),
+    });
+  } catch (cause) {
+    console.error("[agent] 读用量失败", sessionId, cause);
+  }
 }
 
 /**
@@ -329,8 +365,9 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     }
     if (event.type === "agent_settled") {
       send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
-      // 整轮落定兜一次：接住最后一条消息之后落账的用量（toolResult 计费）与 abort 边角
-      pushStats(command.sessionId, session);
+      // 整轮落定兜一次：接住最后一条消息之后落账的用量（toolResult 计费）与 abort 边角。
+      // **这一帧落盘**：它就是 `SessionMeta.stats` 说的「上一次跑完时的快照」
+      pushStats(command.sessionId, session, true);
     }
     // 压缩是一次真实的 LLM 调用，期间必须显示忙碌而不是「可以说话」；
     // renderer 按 phase === "compaction" 显示居中的压缩进行态。
@@ -364,8 +401,9 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
         });
       }
       // 压缩后 contextUsage.tokens 变 null（上一次 usage 反映的是压缩前的上下文，不可信），
-      // 推一次让 UI 如实显示未知；token / 花费总额不受压缩影响、继续累计
-      pushStats(command.sessionId, session);
+      // 推一次让 UI 如实显示未知；token / 花费总额不受压缩影响、继续累计。
+      // **落盘**：重开应用时该看到的就是「压缩过、上下文占用未知」这个真实状态
+      pushStats(command.sessionId, session, true);
     }
     // 自动重试：对话主链路（auto_retry）与压缩/摘要调用（summarization_retry）共用这份翻译。
     // pi 只经事件暴露、不落盘。等待结束时 pi 会再发一次 agent_start（翻回 phase "turn"），
@@ -418,8 +456,9 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     ...(command.provider.headers ? { headers: command.provider.headers } : {}),
     titleInFlight: false,
   });
-  // 建会话即推一次：新会话给零值；唤醒的旧会话立刻给真累计——余量不用等第一轮跑完
-  pushStats(command.sessionId, session);
+  // 建会话即推一次：新会话给零值；唤醒的旧会话立刻给真累计——余量不用等第一轮跑完。
+  // **落盘**：唤醒时 pi 给的才是跨重启的真累计，比我们上次存的快照新，当场就该校准
+  pushStats(command.sessionId, session, true);
   send({
     type: "created",
     sessionId: command.sessionId,

@@ -80,6 +80,8 @@ export function registerAgentIpc(
           pinned: false,
           archived: false,
           recentQueries: [],
+          // 还没跑过一轮 = 没有账本。第一次 agent_settled 才落真值
+          stats: null,
           providerId: input.providerId,
           modelId: input.modelId,
           mode: input.mode,

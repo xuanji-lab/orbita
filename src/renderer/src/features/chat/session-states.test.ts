@@ -1,9 +1,8 @@
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
-import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import type { AgentEvent, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
@@ -286,16 +285,10 @@ describe("parseCompactCommand —— 手动压缩指令在本地拦下，不落�
 
 // ── 刀 A-1：用量快照 ──
 
-const stats = (over: Partial<SessionStats> = {}): SessionStats => ({
-  sessionFile: undefined,
-  sessionId: "A",
-  userMessages: 1,
-  assistantMessages: 1,
-  toolCalls: 0,
-  toolResults: 0,
-  totalMessages: 2,
+const stats = (over: Partial<AgentStats> = {}): AgentStats => ({
   tokens: { input: 18200, output: 4100, cacheRead: 120000, cacheWrite: 5100, total: 147400 },
   cost: 0.062,
+  contextUsage: null,
   ...over,
 });
 

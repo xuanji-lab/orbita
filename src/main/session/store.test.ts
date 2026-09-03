@@ -14,6 +14,7 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   id: ID,
   title: "",
   titleSource: "derived",
+  stats: null,
   cwd: "/repo/orbita-lab",
   providerId: "zai",
   modelId: "glm-5.3",

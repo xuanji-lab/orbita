@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
+import type { AgentStats } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import {
   deriveSessionTitle,
@@ -155,6 +156,14 @@ export class SessionStore {
   }
 
   /**
+   * 落一份用量快照（A1-Q1）。**只在 agent 带 `persist` 的那几帧调**——
+   * 界面跟着每条消息走，磁盘只需要「上一次跑完时的样子」。
+   */
+  setStats(id: string, stats: AgentStats): Promise<void> {
+    return this.update(id, { stats });
+  }
+
+  /**
    * 改 meta 上的字段。**六处「读 → 改一个字段 → 原子写回」收成这一个**——
    * meta 不在就悄悄不做：会话可能刚被别处删掉，为此抛错没有意义。
    */
@@ -235,6 +244,8 @@ export class SessionStore {
         archived: false,
         // 分支的新会话带着前缀里的最近提问——它的历史是真的，卡片不该显示空槽
         recentQueries: recentQueriesFromRecords(prefix),
+        // 分支的新会话不继承用量：pi 那本是裁过的，累计值对不上，等它自己跑一轮
+        stats: null,
         createdAt: now,
         updatedAt: now,
       },

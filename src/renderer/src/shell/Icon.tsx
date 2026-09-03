@@ -11,6 +11,7 @@ import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
 import download from "../../../../Orbita Design System/assets/icons/lucide/download.svg?raw";
 import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
+import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
@@ -54,6 +55,7 @@ const ICONS = {
   cpu,
   download,
   "ellipsis-vertical": ellipsisVertical,
+  "fold-vertical": foldVertical,
   folder,
   "folder-plus": folderPlus,
   "git-branch": gitBranch,

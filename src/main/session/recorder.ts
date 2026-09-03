@@ -36,6 +36,16 @@ export function createSessionRecorder(store: SessionStore): (event: AgentEvent) 
         .catch((error: unknown) => console.error("[session] 标题落盘失败", event.sessionId, error));
       return;
     }
+    if (event.type === "stats") {
+      // 用量落 meta 不落 transcript——它是一份快照，不是对话里的一条。
+      // **只落带 persist 的那几帧**（settled / 压缩结束 / 建会话）：不分的话，
+      // 一轮 30 个工具就是 30 次「读-改-原子写」，而界面要的那些中间帧本来就不需要存。
+      if (event.persist !== true) return;
+      void store
+        .setStats(event.sessionId, event.stats)
+        .catch((error: unknown) => console.error("[session] 用量落盘失败", event.sessionId, error));
+      return;
+    }
     if (event.type === "model") {
       // 会话内换模型（C-4）成功：providerId / modelId 落 meta 不落 transcript——
       // 分支继承、重开播种、resume 对齐都读它。失败走 failed 事件，不经过这里。

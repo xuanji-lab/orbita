@@ -12,6 +12,12 @@ export interface MenuItem {
   /** 当前项。用 check 图标标出来，不用染色——状态优先图标与文字 */
   checked?: boolean;
   disabled?: boolean;
+  /**
+   * **这一行是事实，不是动作**（用量分项那几行）。不可选中、不抢键盘焦点，
+   * 光标也不变成禁止符——`disabled` 说的是「你现在不能做这件事」，
+   * 而这些行从来不是一件事。数字用 mono 字体（设计系统：mono for machine facts）。
+   */
+  fact?: boolean;
   /** 破坏性动作：danger 色。**只给真的会丢东西的那一项** */
   danger?: boolean;
   /**
@@ -25,6 +31,8 @@ export interface MenuItem {
 /** 菜单离触发点、离窗口边的余量 */
 const GAP = 6;
 const EDGE = 8;
+/** 悬停打开的菜单：光标离开后多久关。够穿过那道缝，又不至于像粘住了 */
+const HOVER_GRACE_MS = 160;
 
 /**
  * 下拉（必要时上拉）菜单。**本分支唯一的弹层原语**。
@@ -44,17 +52,42 @@ export function Menu(props: {
   trigger: (state: { open: boolean; toggle: () => void }) => React.ReactNode;
   /** 菜单与触发器哪一边对齐。默认左对齐；靠右的触发器（如三个点）用 end */
   align?: "start" | "end";
+  /**
+   * 悬停即开、移开即关——给「看一眼事实」的菜单用（底栏的用量环）。
+   * 点击仍然能开：键盘与触屏没有悬停。**悬停打开的菜单不抢焦点**——
+   * 光标只是路过输入框上方，正在打的字不该因此断掉；点开的才把焦点交给菜单。
+   */
+  hoverOpen?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const [active, setActive] = useState(0);
   const anchorRef = useRef<HTMLSpanElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  /** 这次是点开的还是悬停开的——决定要不要把焦点交给菜单 */
+  const byClickRef = useRef(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const close = useCallback(() => {
     setOpen(false);
     setPosition(null);
   }, []);
+
+  const cancelLeave = () => {
+    if (leaveTimer.current !== null) {
+      clearTimeout(leaveTimer.current);
+      leaveTimer.current = null;
+    }
+  };
+  /** 从触发器挪到菜单要穿过那 6px 的缝，留一拍再关，免得半路就没了 */
+  const scheduleLeave = () => {
+    cancelLeave();
+    leaveTimer.current = setTimeout(() => {
+      leaveTimer.current = null;
+      if (!byClickRef.current) close();
+    }, HOVER_GRACE_MS);
+  };
+  useEffect(() => cancelLeave, []);
 
   // 量到真实高度之后再定位。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下
   useLayoutEffect(() => {
@@ -73,6 +106,8 @@ export function Menu(props: {
     // 横向夹回窗口内：宁可不对齐，也不要有一半在屏幕外
     const left = Math.min(Math.max(EDGE, wanted), window.innerWidth - menu.width - EDGE);
     setPosition({ top, left });
+    // 点开的才拿焦点（键盘导航）；悬停开的把焦点留在原处
+    if (byClickRef.current) menuRef.current?.focus();
   }, [open, props.align, props.items.length]);
 
   useEffect(() => {
@@ -94,7 +129,7 @@ export function Menu(props: {
     };
   }, [open, close]);
 
-  const enabled = props.items.filter((item) => item.disabled !== true);
+  const enabled = props.items.filter((item) => item.disabled !== true && item.fact !== true);
   /** 打开时光标落在**当前项**上。落在第一项会让人以为选中的是第一项。 */
   const cursorAtChecked = () => Math.max(0, enabled.findIndex((item) => item.checked === true));
 
@@ -111,10 +146,33 @@ export function Menu(props: {
 
   return (
     <>
-      <span ref={anchorRef} style={{ display: "inline-flex", minWidth: 0 }}>
+      <span
+        ref={anchorRef}
+        style={{ display: "inline-flex", minWidth: 0 }}
+        onPointerEnter={
+          props.hoverOpen === true
+            ? () => {
+                cancelLeave();
+                if (open) return;
+                byClickRef.current = false;
+                setActive(cursorAtChecked());
+                setOpen(true);
+              }
+            : undefined
+        }
+        onPointerLeave={props.hoverOpen === true ? scheduleLeave : undefined}
+      >
         {props.trigger({
           open,
           toggle: () => {
+            cancelLeave();
+            // 悬停开着的菜单被点了一下：不是要关，是要接管——拿焦点、移开光标也不关
+            if (open && !byClickRef.current) {
+              byClickRef.current = true;
+              menuRef.current?.focus();
+              return;
+            }
+            byClickRef.current = true;
             setActive(cursorAtChecked());
             setOpen((value) => !value);
           },
@@ -127,7 +185,8 @@ export function Menu(props: {
             ref={menuRef}
             role="menu"
             tabIndex={-1}
-            autoFocus
+            onPointerEnter={props.hoverOpen === true ? cancelLeave : undefined}
+            onPointerLeave={props.hoverOpen === true ? scheduleLeave : undefined}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 event.preventDefault();
@@ -196,11 +255,12 @@ function MenuRow(props: {
   onSelect: () => void;
 }) {
   const { item } = props;
-  const disabled = item.disabled === true;
+  const fact = item.fact === true;
+  const disabled = item.disabled === true || fact;
   return (
     <button
       type="button"
-      role="menuitem"
+      role={fact ? "presentation" : "menuitem"}
       disabled={disabled}
       onMouseEnter={props.onHover}
       onClick={props.onSelect}
@@ -220,7 +280,10 @@ function MenuRow(props: {
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         textAlign: "left",
-        cursor: disabled ? "not-allowed" : "pointer",
+        // 事实行不是「禁止你点」，光标不该摆出禁止符
+        cursor: fact ? "default" : disabled ? "not-allowed" : "pointer",
+        // 事实行矮一档（xs）：一眼能看出它们不是可点的那一类
+        ...(fact ? { minHeight: "var(--control-height-xs)" } : null),
       }}
     >
       <span
@@ -245,6 +308,13 @@ function MenuRow(props: {
             color: "var(--color-text-tertiary)",
             fontSize: "var(--font-size-micro)",
             whiteSpace: "nowrap",
+            ...(fact
+              ? {
+                  fontFamily: "var(--font-family-business)",
+                  fontVariantNumeric: "tabular-nums",
+                  color: "var(--color-text-secondary)",
+                }
+              : null),
           }}
         >
           {item.hint}

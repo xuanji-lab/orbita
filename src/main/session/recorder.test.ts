@@ -58,6 +58,7 @@ beforeEach(async () => {
     id: ID,
     title: "",
     titleSource: "derived",
+    stats: null,
     cwd: "/repo",
     workspaceId: null,
     piSessionFile: null,
