@@ -22,3 +22,17 @@
   --overlay-backdrop-soft: rgba(0, 0, 0, 0.4);
   --overlay-backdrop-subtle: rgba(0, 0, 0, 0.24);
 }
+
+/* black：纯黑地上阴影本就难见，取更深一档保住发丝线与弹层的分离感；
+   焦点环沿用 dark 的黄。 */
+:root[data-theme="black"] {
+  --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.07);
+  --shadow-composer: 0 8px 28px rgba(0, 0, 0, 0.4);
+  --shadow-popover: 0 14px 36px rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.66);
+  --shadow-drawer: -8px 0 24px rgba(0, 0, 0, 0.4);
+  --focus-ring: 0 0 0 2px rgba(227, 194, 90, 0.3);
+  --overlay-backdrop: rgba(0, 0, 0, 0.6);
+  --overlay-backdrop-soft: rgba(0, 0, 0, 0.5);
+  --overlay-backdrop-subtle: rgba(0, 0, 0, 0.3);
+}

@@ -108,7 +108,8 @@ brand copy — the slogan — stays in Chinese and is deliberately **not** run t
 
 ## Visual foundations
 
-**Colour.** Two themes only: **white + blue** and **black + yellow**. A warm off-white shell (`#f3f4f1`) with
+**Colour.** Three themes: **white + blue** (light), **black + yellow** (dark), and black — the same
+black + yellow carried to a true-black ground. A warm off-white shell (`#f3f4f1`) with
 pure-white panels, three text greys, three hairline greys. Every colour has exactly one job: the
 accent is blue `#1d4ed8` on light and yellow `#e3c25a` on dark, and it means the single primary
 action (the send button, "New task", "Start Agent") plus the selected mode — nothing else; amber
@@ -122,6 +123,9 @@ Status prefers icons and words over colour — a spinner, a check, a lock glyph.
 hover and active share one neutral fill and active is marked by weight. Max two
 background colours per screen. The dark theme is a cool near-black (`#111315` shell,
 `#1d2024` panel) with the yellow accent (`#e3c25a`) on dark glyph colour (`--color-accent-fg`).
+The black theme is dark's identity carried to the floor — the same yellow and ink on a true-black
+ramp (`#000000` shell, `#121519` panel); it is a manual choice only, `system` still resolves to
+light/dark.
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
@@ -148,8 +152,9 @@ from colour.
 
 **Transparency and blur.** Blur is *only* for surfaces: `blur(20px)` over a single `--glass-bg`.
 One alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
-`.60 / .84 / .936` and dark `.70 / .91 / .973`. The two themes are deliberately unequal — **dark
-blocks more** — because light text needs a settled ground and a bleeding wallpaper costs more there.
+`.60 / .84 / .936`, dark `.70 / .91 / .973` and black `.78 / .95 / .99`. The themes are deliberately
+unequal — **the blacker the ground, the more the glass blocks** — because light text needs a settled
+ground and a bleeding wallpaper costs a true-black theme its whole promise.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
@@ -225,11 +230,11 @@ animation, no bounce, no parallax; `prefers-reduced-motion` collapses everything
 | Path | What it is |
 | --- | --- |
 | `styles.css` | The single entry point consumers link. `@import` lines only. |
-| `tokens/colors.css` | Surfaces, text, borders, accent, mode selection, status, chat surfaces + the dark theme. |
+| `tokens/colors.css` | Surfaces, text, borders, accent, mode selection, status, chat surfaces + the dark and black themes. |
 | `tokens/typography.css` | Families, the 11→20px UI scale, line heights, weights, tracking. |
 | `tokens/fonts.css` | `@font-face` for Literata, Manrope, Source Han Serif/Sans SC. |
 | `tokens/spacing.css` | Space scale, radii, control and row heights, layout widths. |
-| `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (both themes). |
+| `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (all three themes). |
 | `tokens/glass.css` | The single glass alpha, blur, border, and the `.glass-card` recipe. |
 | `tokens/motion.css` | Durations, easings, the three composed transitions. |
 | `guidelines/*.card.html` | 18 foundation specimen cards (Colors, Type, Spacing, Brand). |
@@ -338,10 +343,11 @@ source does not define them.
   defines 197. The ~114 it does not model are shadcn bridge variables and feature-local families
   (git panel, right drawer, image preview, file tree, terminal, logo gradients). Those are
   implementation surface, not brand — do not treat their absence here as a deletion.
-- **One light theme, one dark theme.** The shipping app also offers five light-background variants
-  (`data-light-background`: white / warm / paper / blue / green) and `data-ui-font-size` /
-  `data-chat-font-size` / `data-font-base` scales. This system models the default pair only; a new
-  variant must not break the token contract, but its values are not specified here.
+- **One light theme, one dark theme, one black theme.** The shipping app also offers five
+  light-background variants (`data-light-background`: white / warm / paper / blue / green) and
+  `data-ui-font-size` / `data-chat-font-size` / `data-font-base` scales. This system models all
+  three theme sets (black added 2026-09-03, `docs/plans/2026-09-03-黑色皮肤.md`); a new variant
+  must not break the token contract, but its values are not specified here.
 - The webfonts are shipped **not yet wired into the app**: `renderer/src/styles.css` still runs a
   system font stack and still declares an older commercial-substitute set (`PlantinNowVariable`,
   `CommitMono`, `DepartureMono`) left over from a previous theme. This system follows
