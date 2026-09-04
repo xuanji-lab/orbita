@@ -23,8 +23,10 @@ import { demoteBoundaryMath } from "./math-guard";
  *   配色来自 github-light / github-dark 主题，是设计系统 token 的既定例外。
  * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 会把它送去系统浏览器
  *   （`src/main/index.ts`），外链绝不能在应用窗口内导航走。
- * - 默认不渲染 raw HTML（react-markdown 的缺省行为），模型输出里夹 HTML 也无害
- *   ——代码块的 shiki HTML 是我们自己生成的，不受此限。
+ * - **图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
+ *   渲染成占位链接，点击才去系统浏览器看（ImagePlaceholder）。
+ * - **raw HTML 只放行 `<details>`/`<summary>`**：rehype-raw 解析 + rehype-sanitize
+ *   白名单剥离，其余标签仍是纯文本。白名单可审计，攻击面有界。
  * - 元素样式在 `styles.css` 的 `.chat-md` 作用域里，走设计系统 token。
  */
 export const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
@@ -33,7 +35,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: strin
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath, demoteBoundaryMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false, trust: false }]]}
-        components={{ a: ExternalAnchor, pre: MdPre }}
+        components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre }}
       >
         {closePendingMath(text)}
       </ReactMarkdown>
@@ -62,6 +64,34 @@ function ExternalAnchor(props: AnchorProps) {
     </a>
   );
 }
+
+/**
+ * 图片占位：永不设 `src`，远程图就不可能被加载。占位本身是个链接——
+ * 用户点了才在系统浏览器里看，加载与否、何时加载由用户决定。
+ */
+function ImagePlaceholder(props: ImageProps) {
+  const { src, alt, node: _node } = props;
+  const url = typeof src === "string" && src !== "" ? src : undefined;
+  return (
+    <a
+      className="chat-img-placeholder"
+      href={url}
+      onClick={
+        url
+          ? (event) => {
+              event.preventDefault();
+              window.open(url);
+            }
+          : undefined
+      }
+    >
+      {typeof alt === "string" && alt !== "" ? alt : (url ?? "image")}
+    </a>
+  );
+}
+
+/** react-markdown v10 会多传一个 `node`，不能落到 <img> 的 DOM 属性上 */
+type ImageProps = ComponentPropsWithoutRef<"img"> & { node?: unknown };
 
 /** react-markdown v10 会多传一个 `node`，不能落到 <a> 的 DOM 属性上 */
 type AnchorProps = ComponentPropsWithoutRef<"a"> & { node?: unknown };

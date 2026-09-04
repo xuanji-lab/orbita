@@ -226,6 +226,18 @@ body {
   text-decoration: underline;
 }
 
+/* 图片占位（永不加载远程图，见 MarkdownBlock.ImagePlaceholder）：可点的链接芯片 */
+.chat-md .chat-img-placeholder {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
 /* 行内 code 是浅色小芯片（跟随主题）；代码块同一份底，另加发丝线——
    深色下 muted 底与地面只差几阶，块的边界靠线不靠色。 */
 .chat-md code {
