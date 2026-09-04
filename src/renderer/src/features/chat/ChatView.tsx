@@ -901,15 +901,16 @@ const EXPANDED_BODY = {
 /**
  * markdown 展开体（压缩界碑行用）：EXPANDED_BODY 的骨架（hairline 顶线 + 320 封顶 +
  * 可滚），排版让给 .chat-md——摘要是结构化文档，不套 mono caption / pre-wrap。
- * 界碑行没有 icon：不画导轨，但内容列与导轨后的正文对齐（+1 补的是导轨线宽）。
+ * 导轨照挂：界碑行虽无 icon，竖线仍与其余展开体同一位置（x=10px），内容列全体一致。
  */
 const MARKDOWN_EXPANDED_BODY = {
   margin: 0,
-  marginLeft: RAIL_X + 1,
+  marginLeft: RAIL_X,
   padding: "var(--space-2)",
   maxHeight: 320,
   overflow: "auto",
   borderTop: "1px solid var(--color-border-subtle)",
+  borderLeft: RAIL_LINE,
 } satisfies React.CSSProperties;
 
 // ── 信息区文案（本模块全部用户可见字符串集中在此；英文先行，中文化等真实需求出现再抽字典） ──
