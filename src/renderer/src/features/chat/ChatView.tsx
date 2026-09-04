@@ -12,7 +12,10 @@ import {
   editDiffText,
   fileViewFor,
   flattenRenderUnits,
+  formatThinkingDuration,
+  formatToolDuration,
   groupToolUnits,
+  groupTurns,
   indexToolResults,
   liveTailLines,
   parseEditDiff,
@@ -30,11 +33,13 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  turnStats,
   writeLineCount,
   type IntraToken,
   type RenderEntry,
   type ToolGroupUnit,
   type ToolResultIndex,
+  type TurnGroupUnit,
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
@@ -308,13 +313,16 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = flattenRenderUnits(records);
   const entries = groupToolUnits(units);
-  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
-  const activeThinkingKey = streamingThinkingKey(records, session.phase === "turn");
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = session.phase === "turn";
+  // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
+  const turnView = groupTurns(entries, turnActive, toolResults);
+  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
+  const activeThinkingKey = streamingThinkingKey(records, turnActive);
   // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
-  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的
-  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), entries);
+  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的。
+  // 锚点算在**大折叠视图**上：锚点的正文永远在折叠外面，按钮跟着正文走。
+  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), turnView);
   const toolsRunning = session.transcript.some(
     (item) => item.role === "tool" && item.status === "running",
   );
@@ -358,16 +366,20 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         session.turnError === null && (
           <StatusLine>No messages yet. Send the first one to start.</StatusLine>
         )}
-      {entries.map((entry, index) => {
+      {turnView.map((entry, index) => {
         const branchAfter = branchRows.get(index);
         return (
           <Fragment key={entry.key}>
-            <EntryView
-              entry={entry}
-              toolResults={toolResults}
-              activeThinkingKey={activeThinkingKey}
-              turnActive={turnActive}
-            />
+            {entry.kind === "turnGroup" ? (
+              <TurnRollupLine group={entry} toolResults={toolResults} />
+            ) : (
+              <EntryView
+                entry={entry}
+                toolResults={toolResults}
+                activeThinkingKey={activeThinkingKey}
+                turnActive={turnActive}
+              />
+            )}
             {branchAfter !== undefined && (
               <BranchRow
                 anchorItemId={branchAfter}
@@ -713,6 +725,68 @@ function EntryView(props: {
   return <ToolGroupLine group={entry} toolResults={props.toolResults} turnActive={props.turnActive} />;
 }
 
+/**
+ * 大折叠行（一轮一行）：agent 整轮回答落定后，这轮的思考行与工具行/组收成
+ * 一条统计——`Worked 45s · Thought 12s · 8 tools · Read 5 · Run 3 · 1 failed`。
+ * 展开就是成员行原样（小折叠降级为成员，两层折叠契约）；轮耗时是记录时间戳
+ * 的跨度（adapter 每帧落 now()，旧会话也准），思考总时长是现场计时求和
+ * （旧会话没有就不显示——诚实未知）。失败沿用组行语法：红 triangle + N failed，
+ * 折了也不能让失败无声消失；回合级失败（turnError 红字）仍渲染在轮后面。
+ * 成员行与折叠头同左缘（不缩进），与 ToolGroupLine 的成员同一规矩。
+ */
+function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex }) {
+  const [open, setOpen] = useState(false);
+  const { group } = props;
+  const stats = turnStats(group, props.toolResults);
+  const failed = stats.failed > 0;
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        <span style={HEAD_WRAP}>
+          <span style={{ color: failed ? "var(--color-danger)" : headIconColor(false) }}>
+            <Icon name={failed ? "triangle-alert" : "workflow"} size={14} strokeWidth={1.8} />
+          </span>
+          {stats.durationMs !== null && (
+            <span style={headLabel(false)}>
+              {COPY.worked} {formatToolDuration(stats.durationMs)}
+            </span>
+          )}
+        </span>
+        {stats.thinkingMs !== null && (
+          <span style={SLOT.status}>
+            {COPY.thought} {formatThinkingDuration(stats.thinkingMs)}
+          </span>
+        )}
+        {stats.calls > 0 && <span style={SLOT.status}>{COPY.tools(stats.calls)}</span>}
+        {stats.byTool.length >= 2 &&
+          stats.byTool.map(({ toolName, count }) => (
+            <span key={toolName} style={SLOT.status}>
+              {toolGroupLabel(toolName)} {count}
+            </span>
+          ))}
+        {failed && (
+          <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>
+            {COPY.failed(stats.failed)}
+          </span>
+        )}
+      </CollapseRow>
+      {open && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          {group.members.map((member) => (
+            <EntryView
+              key={member.key}
+              entry={member}
+              toolResults={props.toolResults}
+              activeThinkingKey={null}
+              turnActive={false}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 用户消息：右对齐的独立气泡；只有 text 块进气泡。 */
 function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
   return (
@@ -924,12 +998,15 @@ const COPY = {
   waitingOutput: "(waiting for output…)",
   noOutput: "(no output)",
   branchFromHere: "Branch from here",
+  worked: "Worked",
+  thought: "Thought",
   lines: (n: number): string => `${n} lines`,
   files: (n: number): string => `${n} files`,
   commands: (n: number): string => `${n} commands`,
   matches: (n: number): string => `${n} matches`,
   directories: (n: number): string => `${n} directories`,
   calls: (n: number): string => `${n} calls`,
+  tools: (n: number): string => `${n} tools`,
   failed: (n: number): string => `${n} failed`,
 };
 
