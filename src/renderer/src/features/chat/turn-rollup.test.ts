@@ -195,16 +195,16 @@ describe("turnStats", () => {
     assert.ok(fold !== undefined);
     const stats = turnStats(fold, indexToolResults(records), 5000);
     assert.equal(stats.calls, 4);
-    assert.equal(stats.failed, 1);
-    assert.equal(stats.running, 1);
+    assert.equal(stats.thinkingCount, 1);
+    // 失败数按工具跟各自的类别走：read 全成、bash 一败一跑；进行中不算失败
     assert.deepEqual(stats.byTool, [
-      { toolName: "read", count: 2 },
-      { toolName: "bash", count: 2 },
+      { toolName: "read", count: 2, failed: 0 },
+      { toolName: "bash", count: 2, failed: 1 },
     ]);
     assert.equal(stats.durationMs, 3200 - 1000);
   });
 
-  test("思考总时长 = 现场计时求和，且顺手把没冻结的表冻结在 now", () => {
+  test("思考总时长 = 现场计时求和（冻结副作用），次数单独数块", () => {
     const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [
@@ -222,6 +222,7 @@ describe("turnStats", () => {
     thinkingDurationText("a1:1", true, 2000);
     const stats = turnStats(fold, indexToolResults([]), 5000);
     assert.equal(stats.thinkingMs, 4000);
+    assert.equal(stats.thinkingCount, 2);
     // 冻结之后成员行展开也能读到同一份落定时长
     assert.equal(thinkingDurationText("a1:1", false, 9999), "3s");
   });
@@ -238,9 +239,10 @@ describe("turnStats", () => {
     thinkingDurationText("a1:0", true, 1500);
     const stats = turnStats(fold, indexToolResults([]), 5000);
     assert.equal(stats.thinkingMs, null);
+    assert.equal(stats.thinkingCount, 2);
   });
 
-  test("没有思考的轮 thinkingMs 为 0（不是 null）——有数字就诚实显示", () => {
+  test("没有思考的轮 thinkingMs 为 0（不是 null）、次数为 0——头部不显示思考段", () => {
     const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [
@@ -251,6 +253,8 @@ describe("turnStats", () => {
     const view = turnView(records, false);
     const fold = foldUnits(view)[0];
     assert.ok(fold !== undefined);
-    assert.equal(turnStats(fold, indexToolResults(records)).thinkingMs, 0);
+    const stats = turnStats(fold, indexToolResults(records));
+    assert.equal(stats.thinkingMs, 0);
+    assert.equal(stats.thinkingCount, 0);
   });
 });

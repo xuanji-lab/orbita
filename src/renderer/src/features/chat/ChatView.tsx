@@ -12,7 +12,6 @@ import {
   editDiffText,
   fileViewFor,
   flattenRenderUnits,
-  formatThinkingDuration,
   formatToolDuration,
   groupToolUnits,
   groupTurns,
@@ -326,6 +325,13 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
   const toolsRunning = session.transcript.some(
     (item) => item.role === "tool" && item.status === "running",
   );
+  // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**最后一条**折叠——
+  // turnError 属于转录末尾那轮，红字就渲染在它后面，图标与文字是一对；
+  // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
+  const failedFoldKey =
+    session.turnError !== null
+      ? ([...turnView].reverse().find((entry) => entry.kind === "turnGroup")?.key ?? null)
+      : null;
 
   return (
     <Pane
@@ -371,7 +377,11 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         return (
           <Fragment key={entry.key}>
             {entry.kind === "turnGroup" ? (
-              <TurnRollupLine group={entry} toolResults={toolResults} />
+              <TurnRollupLine
+                group={entry}
+                toolResults={toolResults}
+                turnFailed={entry.key === failedFoldKey}
+              />
             ) : (
               <EntryView
                 entry={entry}
@@ -727,48 +737,46 @@ function EntryView(props: {
 
 /**
  * 大折叠行（一轮一行）：agent 整轮回答落定后，这轮的思考行与工具行/组收成
- * 一条统计——`Worked 45s · Thought 12s · 8 tools · Read 5 · Run 3 · 1 failed`。
+ * 一条统计——`Worked 45s · 8 tools · Thought 2 · Run 3 · Read 5 1 failed · Edit 2`。
  * 展开就是成员行原样（小折叠降级为成员，两层折叠契约）；轮耗时是记录时间戳
- * 的跨度（adapter 每帧落 now()，旧会话也准），思考总时长是现场计时求和
- * （旧会话没有就不显示——诚实未知）。失败沿用组行语法：红 triangle + N failed，
- * 折了也不能让失败无声消失；回合级失败（turnError 红字）仍渲染在轮后面。
+ * 的跨度（adapter 每帧落 now()，旧会话也准）。
+ * 图标裁决（用户）：折叠头**不带图标**——工具类失败靠跟在工具后面的红色
+ * failed 计数说话（红色是第二信号，文字先行）；只有回合级失败（网络中断、
+ * 重试耗尽——turnError 的红字就渲染在折叠后面）才在行首亮红 triangle，
+ * 图标与那行红字是一对。
  * 成员行与折叠头同左缘（不缩进），与 ToolGroupLine 的成员同一规矩。
  */
-function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex }) {
+function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex; turnFailed: boolean }) {
   const [open, setOpen] = useState(false);
   const { group } = props;
   const stats = turnStats(group, props.toolResults);
-  const failed = stats.failed > 0;
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
-        <span style={HEAD_WRAP}>
-          <span style={{ color: failed ? "var(--color-danger)" : headIconColor(false) }}>
-            <Icon name={failed ? "triangle-alert" : "workflow"} size={14} strokeWidth={1.8} />
+        {props.turnFailed && (
+          <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
+            <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
           </span>
-          {stats.durationMs !== null && (
-            <span style={headLabel(false)}>
-              {COPY.worked} {formatToolDuration(stats.durationMs)}
-            </span>
-          )}
-        </span>
-        {stats.thinkingMs !== null && (
-          <span style={SLOT.status}>
-            {COPY.thought} {formatThinkingDuration(stats.thinkingMs)}
+        )}
+        {stats.durationMs !== null && (
+          <span style={headLabel(false)}>
+            {COPY.worked} {formatToolDuration(stats.durationMs)}
           </span>
         )}
         {stats.calls > 0 && <span style={SLOT.status}>{COPY.tools(stats.calls)}</span>}
-        {stats.byTool.length >= 2 &&
-          stats.byTool.map(({ toolName, count }) => (
-            <span key={toolName} style={SLOT.status}>
-              {toolGroupLabel(toolName)} {count}
-            </span>
-          ))}
-        {failed && (
-          <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>
-            {COPY.failed(stats.failed)}
+        {stats.thinkingCount > 0 && (
+          <span style={SLOT.status}>
+            {COPY.thought} {stats.thinkingCount}
           </span>
         )}
+        {stats.byTool.map(({ toolName, count, failed }) => (
+          <span key={toolName} style={SLOT.status}>
+            {toolGroupLabel(toolName)} {count}
+            {failed > 0 && (
+              <span style={{ color: "var(--color-danger)" }}> {COPY.failed(failed)}</span>
+            )}
+          </span>
+        ))}
       </CollapseRow>
       {open && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>

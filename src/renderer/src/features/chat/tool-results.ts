@@ -253,22 +253,30 @@ export function groupTurns(
   return view;
 }
 
-/** 大折叠头的统计。轮耗时在分组时已算好（durationMs），这里补思考总时长与工具计数。 */
+/** 单个工具类别的计数：调用了几次、失败几次——失败计数红字跟在类别后面显示。 */
+export interface TurnToolStat {
+  toolName: string;
+  count: number;
+  failed: number;
+}
+
+/** 大折叠头的统计。轮耗时在分组时已算好（durationMs），这里补思考与工具计数。 */
 export interface TurnStats {
   durationMs: number | null;
   /**
-   * 思考总时长：各思考块**现场计时**求和（thinkingTimers）。落定后成员行不再渲染、
-   * 没机会自己冻结计时，所以这里顺带把没冻结的表冻上（首次渲染即落定时刻）。
+   * 思考总时长：各思考块**现场计时**求和（thinkingTimers）。头部显示的是思考
+   * **次数**，这个总时长不上界面，但求和过程顺带把没冻结的表冻上（首次渲染即
+   * 落定时刻）——成员行展开时才能显示落定时长，而不是「展开那一刻」的膨胀值。
    * 任一块没见过现场（旧会话、后台轮）→ 整个返回 null——部分和是编造。
    * ponytail: 后台落定的轮冻结在「下次被看到」的时刻，数字偏大；根治要像
    * recordToolFrame 那样在事件入口记账，等这个误差真的咬人再做。
    */
   thinkingMs: number | null;
+  /** 思考次数（思考块数量）。 */
+  thinkingCount: number;
   calls: number;
-  failed: number;
-  running: number;
-  /** 按工具类别的计数，首次出现序。 */
-  byTool: ReadonlyArray<{ toolName: string; count: number }>;
+  /** 各工具的次数与失败数，首次出现序；零次的工具不出现。 */
+  byTool: ReadonlyArray<TurnToolStat>;
 }
 
 export function turnStats(
@@ -277,12 +285,12 @@ export function turnStats(
   now: number = Date.now(),
 ): TurnStats {
   let thinkingMs: number | null = 0;
+  let thinkingCount = 0;
   let calls = 0;
-  let failed = 0;
-  let running = 0;
-  const counts = new Map<string, number>();
+  const tools = new Map<string, TurnToolStat>();
   for (const member of group.members) {
     if (member.kind === "thinking") {
+      thinkingCount++;
       const entry = thinkingTimers.get(member.key);
       if (entry === undefined) {
         thinkingMs = null;
@@ -294,19 +302,18 @@ export function turnStats(
     }
     for (const call of member.kind === "toolGroup" ? member.calls : [member]) {
       calls++;
-      counts.set(call.toolName, (counts.get(call.toolName) ?? 0) + 1);
-      const result = results.get(call.toolCallId);
-      if (result === undefined || result.status === "running") running++;
-      else if (result.status === "error") failed++;
+      const stat = tools.get(call.toolName) ?? { toolName: call.toolName, count: 0, failed: 0 };
+      stat.count++;
+      if (results.get(call.toolCallId)?.status === "error") stat.failed++;
+      tools.set(call.toolName, stat);
     }
   }
   return {
     durationMs: group.durationMs,
     thinkingMs,
+    thinkingCount,
     calls,
-    failed,
-    running,
-    byTool: [...counts].map(([toolName, count]) => ({ toolName, count })),
+    byTool: [...tools.values()],
   };
 }
 
