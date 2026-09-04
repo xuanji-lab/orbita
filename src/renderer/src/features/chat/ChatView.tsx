@@ -872,11 +872,11 @@ const HEAD_WRAP = {
 } satisfies React.CSSProperties;
 
 /**
- * 展开体的纵向导轨：挂在行首 icon 的正下方——x = 10px（按钮内边距）+ 7px（半个
- * 14px icon）。展开内容一律不越过导轨左侧：展开体明确属于它上面那一行，不与
+ * 展开体的纵向导轨：与行首 icon 的**左缘相切**——x = 10px（按钮内边距，即 icon 的
+ * 左缘）。展开内容一律不越过导轨左侧：展开体明确属于它上面那一行，不与
  * 别的行抢左缘；多条展开体并排时导轨与 icon 连成一条竖线。
  */
-const RAIL_X = 10 + 7;
+const RAIL_X = 10;
 const RAIL_LINE = "1px solid var(--color-border-subtle)";
 
 /**
