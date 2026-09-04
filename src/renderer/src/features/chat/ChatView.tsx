@@ -737,8 +737,11 @@ function EntryView(props: {
 
 /**
  * 大折叠行（一轮一行）：agent 整轮回答落定后，这轮的思考行与工具行/组收成
- * 一条统计——`Worked 45s · Thought 2 · 8 tools · Run 3 · Read 5 1 · Edit 2`
- * （失败数是紧跟在次数后面的红色数字）。思考排在工具之前——先想后做，时间序。
+ * 一条统计——`Worked 45s · Thought 2 · 8 tools · bash 3 · read 5 1 · edit 2`
+ * （段与段之间用 · 分隔；失败数是紧跟在工具次数后面的红色数字）。
+ * 工具类别用**真实工具名**而非组行动词（Run/Read…）：统计行是机器事实，
+ * Run 会把 bash 与 powershell 混为一谈，且成员行展开后显示的也是同一套名字。
+ * 思考排在工具之前——先想后做，时间序。
  * 展开就是成员行原样（小折叠降级为成员，两层折叠契约）；轮耗时是记录时间戳
  * 的跨度（adapter 每帧落 now()，旧会话也准）。
  * 图标裁决（用户）：折叠头**不带图标**——工具类失败靠跟在工具后面的红色数字
@@ -750,6 +753,35 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
   const [open, setOpen] = useState(false);
   const { group } = props;
   const stats = turnStats(group, props.toolResults);
+  // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
+  // 工具次数与它的失败数字是一个段，中间不插
+  const segments: ReactNode[] = [];
+  if (stats.durationMs !== null) {
+    segments.push(
+      <span style={headLabel(false)}>
+        {COPY.worked} {formatToolDuration(stats.durationMs)}
+      </span>,
+    );
+  }
+  if (stats.thinkingCount > 0) {
+    segments.push(
+      <span style={SLOT.status}>
+        {COPY.thought} {stats.thinkingCount}
+      </span>,
+    );
+  }
+  if (stats.calls > 0) {
+    segments.push(<span style={SLOT.status}>{COPY.tools(stats.calls)}</span>);
+  }
+  for (const { toolName, count, failed } of stats.byTool) {
+    segments.push(
+      <span style={SLOT.status}>
+        {toolName} {count}
+        {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
+        {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
+      </span>,
+    );
+  }
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
@@ -758,24 +790,11 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
             <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
           </span>
         )}
-        {stats.durationMs !== null && (
-          <span style={headLabel(false)}>
-            {COPY.worked} {formatToolDuration(stats.durationMs)}
-          </span>
-        )}
-        {/* 思考排在工具之前——先想清楚再动手，时间序即语义 */}
-        {stats.thinkingCount > 0 && (
-          <span style={SLOT.status}>
-            {COPY.thought} {stats.thinkingCount}
-          </span>
-        )}
-        {stats.calls > 0 && <span style={SLOT.status}>{COPY.tools(stats.calls)}</span>}
-        {stats.byTool.map(({ toolName, count, failed }) => (
-          <span key={toolName} style={SLOT.status}>
-            {toolGroupLabel(toolName)} {count}
-            {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
-            {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
-          </span>
+        {segments.map((segment, index) => (
+          <Fragment key={index}>
+            {index > 0 && <span style={SEP_DOT}>·</span>}
+            {segment}
+          </Fragment>
         ))}
       </CollapseRow>
       {open && (
@@ -951,6 +970,13 @@ const HEAD_WRAP = {
   alignItems: "center",
   gap: "var(--space-2)",
   flex: "0 0 auto",
+} satisfies React.CSSProperties;
+
+/** 大折叠统计段的分隔点：段落边界的标点，最淡一档——它是标点不是内容。 */
+const SEP_DOT = {
+  flex: "0 0 auto",
+  color: "var(--color-text-tertiary)",
+  opacity: 0.6,
 } satisfies React.CSSProperties;
 
 /**
