@@ -737,13 +737,13 @@ function EntryView(props: {
 
 /**
  * 大折叠行（一轮一行）：agent 整轮回答落定后，这轮的思考行与工具行/组收成
- * 一条统计——`Worked 45s · 8 tools · Thought 2 · Run 3 · Read 5 1 failed · Edit 2`。
+ * 一条统计——`Worked 45s · Thought 2 · 8 tools · Run 3 · Read 5 1 · Edit 2`
+ * （失败数是紧跟在次数后面的红色数字）。思考排在工具之前——先想后做，时间序。
  * 展开就是成员行原样（小折叠降级为成员，两层折叠契约）；轮耗时是记录时间戳
  * 的跨度（adapter 每帧落 now()，旧会话也准）。
- * 图标裁决（用户）：折叠头**不带图标**——工具类失败靠跟在工具后面的红色
- * failed 计数说话（红色是第二信号，文字先行）；只有回合级失败（网络中断、
- * 重试耗尽——turnError 的红字就渲染在折叠后面）才在行首亮红 triangle，
- * 图标与那行红字是一对。
+ * 图标裁决（用户）：折叠头**不带图标**——工具类失败靠跟在工具后面的红色数字
+ * 说话；只有回合级失败（网络中断、重试耗尽——turnError 的红字就渲染在折叠
+ * 后面）才在行首亮红 triangle，图标与那行红字是一对。
  * 成员行与折叠头同左缘（不缩进），与 ToolGroupLine 的成员同一规矩。
  */
 function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex; turnFailed: boolean }) {
@@ -763,18 +763,18 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
             {COPY.worked} {formatToolDuration(stats.durationMs)}
           </span>
         )}
-        {stats.calls > 0 && <span style={SLOT.status}>{COPY.tools(stats.calls)}</span>}
+        {/* 思考排在工具之前——先想清楚再动手，时间序即语义 */}
         {stats.thinkingCount > 0 && (
           <span style={SLOT.status}>
             {COPY.thought} {stats.thinkingCount}
           </span>
         )}
+        {stats.calls > 0 && <span style={SLOT.status}>{COPY.tools(stats.calls)}</span>}
         {stats.byTool.map(({ toolName, count, failed }) => (
           <span key={toolName} style={SLOT.status}>
             {toolGroupLabel(toolName)} {count}
-            {failed > 0 && (
-              <span style={{ color: "var(--color-danger)" }}> {COPY.failed(failed)}</span>
-            )}
+            {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
+            {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
           </span>
         ))}
       </CollapseRow>
