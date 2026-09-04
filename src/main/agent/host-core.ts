@@ -201,6 +201,7 @@ export class AgentHostCore {
 
   /** 立即发送排队中的第 index 条：打断当前轮（含工具调用），它成为新一轮 */
   async interrupt(sessionId: string, index: number, text: string): Promise<void> {
+    await this.ensure();
     this.post({ type: "interrupt", sessionId, index, text });
   }
 

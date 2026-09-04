@@ -24,7 +24,9 @@ export const agentApi = {
   abort: (sessionId: string): Promise<void> => ipcRenderer.invoke(ipcChannels.agentAbort, sessionId),
 
   interrupt: (id: string, index: number, text: string): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentInterrupt, id, index, text),  /** 手动压缩上下文（`/compact`）。忙碌态与界碑从 agent:event 的 compaction 事件回来 */
+    ipcRenderer.invoke(ipcChannels.agentInterrupt, id, index, text),
+
+  /** 手动压缩上下文（`/compact`）。忙碌态与界碑从 agent:event 的 compaction 事件回来 */
   compact: (sessionId: string, instructions?: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentCompact, sessionId, instructions),
   setMode: (sessionId: string, mode: PermissionMode): Promise<void> =>

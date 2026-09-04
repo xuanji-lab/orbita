@@ -8,8 +8,8 @@
 
 /** 一条排队消息的去向：steer = 插队（工具边界注入），followUp = 等本轮结束。 */
 export interface QueueEntryPlan {
-	text: string;
-	as: "steer" | "followUp";
+  text: string;
+  as: "steer" | "followUp";
 }
 
 /**
@@ -22,24 +22,24 @@ export interface QueueEntryPlan {
  * edit 改写目标条目的文本，保持它原属的队列与顺位。
  */
 export function planQueueEdit(
-	steering: readonly string[],
-	followUp: readonly string[],
-	index: number,
-	text: string,
-	op: "cancel" | "edit",
-	newText?: string,
+  steering: readonly string[],
+  followUp: readonly string[],
+  index: number,
+  text: string,
+  op: "cancel" | "edit",
+  newText?: string,
 ): QueueEntryPlan[] {
-	const merged = [...steering, ...followUp];
-	const target = merged[index];
-	const hits = target === text;
-	const plans: QueueEntryPlan[] = [];
-	for (const [i, entry] of merged.entries()) {
-		const isTarget = hits && i === index;
-		if (op === "cancel" && isTarget) continue;
-		const replacement = op === "edit" && isTarget ? (newText ?? entry) : entry;
-		// 原 steering 段保持插队
-		const as = i < steering.length ? "steer" : "followUp";
-		plans.push({ text: replacement, as });
-	}
-	return plans;
+  const merged = [...steering, ...followUp];
+  const target = merged[index];
+  const hits = target === text;
+  const plans: QueueEntryPlan[] = [];
+  for (const [i, entry] of merged.entries()) {
+    const isTarget = hits && i === index;
+    if (op === "cancel" && isTarget) continue;
+    const replacement = op === "edit" && isTarget ? (newText ?? entry) : entry;
+    // 原 steering 段保持插队
+    const as = i < steering.length ? "steer" : "followUp";
+    plans.push({ text: replacement, as });
+  }
+  return plans;
 }
