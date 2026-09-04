@@ -871,13 +871,26 @@ const HEAD_WRAP = {
   flex: "0 0 auto",
 } satisfies React.CSSProperties;
 
-/** 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。 */
+/**
+ * 展开体的纵向导轨：挂在行首 icon 的正下方——x = 10px（按钮内边距）+ 7px（半个
+ * 14px icon）。展开内容一律不越过导轨左侧：展开体明确属于它上面那一行，不与
+ * 别的行抢左缘；多条展开体并排时导轨与 icon 连成一条竖线。
+ */
+const RAIL_X = 10 + 7;
+const RAIL_LINE = "1px solid var(--color-border-subtle)";
+
+/**
+ * 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。
+ * 左侧挂导轨（顶线与导轨在左上角相接成直角），正文从导轨右侧起。
+ */
 const EXPANDED_BODY = {
   margin: 0,
+  marginLeft: RAIL_X,
   padding: "var(--space-2)",
   maxHeight: 320,
   overflow: "auto",
   borderTop: "1px solid var(--color-border-subtle)",
+  borderLeft: RAIL_LINE,
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-caption)",
   lineHeight: 1.6,
@@ -888,9 +901,11 @@ const EXPANDED_BODY = {
 /**
  * markdown 展开体（压缩界碑行用）：EXPANDED_BODY 的骨架（hairline 顶线 + 320 封顶 +
  * 可滚），排版让给 .chat-md——摘要是结构化文档，不套 mono caption / pre-wrap。
+ * 界碑行没有 icon：不画导轨，但内容列与导轨后的正文对齐（+1 补的是导轨线宽）。
  */
 const MARKDOWN_EXPANDED_BODY = {
   margin: 0,
+  marginLeft: RAIL_X + 1,
   padding: "var(--space-2)",
   maxHeight: 320,
   overflow: "auto",
@@ -1157,7 +1172,10 @@ function DiffView(props: { diff: string }) {
       style={{
         maxHeight: 320,
         overflow: "auto",
+        marginLeft: RAIL_X,
+        paddingLeft: "var(--space-2)",
         borderTop: "1px solid var(--color-border-subtle)",
+        borderLeft: RAIL_LINE,
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-caption)",
         lineHeight: 1.6,
@@ -1271,7 +1289,10 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
         gridTemplateColumns: `${gutter} 1fr`,
         maxHeight: 320,
         overflow: "auto",
+        marginLeft: RAIL_X,
+        paddingLeft: "var(--space-2)",
         borderTop: "1px solid var(--color-border-subtle)",
+        borderLeft: RAIL_LINE,
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-caption)",
         lineHeight: 1.6,
@@ -1356,11 +1377,13 @@ function PlainToolBody(props: {
   );
 }
 
-/** 展开体滚动容器的共用形态（DiffView / FileContentView 同款，无内边距——行自带） */
+/** 展开体滚动容器的共用形态（无水平内边距——行自带）；左侧挂 RAIL 导轨，同 EXPANDED_BODY。 */
 const PLAIN_BODY = {
   maxHeight: 320,
   overflow: "auto",
+  marginLeft: RAIL_X,
   borderTop: "1px solid var(--color-border-subtle)",
+  borderLeft: RAIL_LINE,
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-caption)",
   lineHeight: 1.6,
