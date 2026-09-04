@@ -1,4 +1,3 @@
-import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -7,10 +6,11 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
-import type { ComponentPropsWithoutRef } from "react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { Component, memo } from "react";
 import { MdPre } from "./CodeBlock";
 import { closePendingMath } from "./pending-math";
-import { demoteBoundaryMath } from "./math-guard";
+import { remarkDemoteBoundaryMath } from "./math-guard";
 
 /**
  * sanitize 白名单：defaultSchema 之上只放行 `<details>`/`<summary>`，其余标签
@@ -46,20 +46,46 @@ const SANITIZE_SCHEMA = {
 export const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
   return (
     <div className="chat-md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath, demoteBoundaryMath]}
-        rehypePlugins={[
-          rehypeRaw,
-          [rehypeSanitize, SANITIZE_SCHEMA],
-          [rehypeKatex, { throwOnError: false, strict: false, trust: false }],
-        ]}
-        components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre }}
-      >
-        {closePendingMath(text)}
-      </ReactMarkdown>
+      <MarkdownErrorBoundary>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath, remarkDemoteBoundaryMath]}
+          rehypePlugins={[
+            rehypeRaw,
+            [rehypeSanitize, SANITIZE_SCHEMA],
+            [rehypeKatex, { throwOnError: false, strict: false, trust: false }],
+          ]}
+          components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre }}
+        >
+          {closePendingMath(text)}
+        </ReactMarkdown>
+      </MarkdownErrorBoundary>
     </div>
   );
 });
+
+/**
+ * 渲染错误的护栏：markdown 管线任何一环抛异常，只降级这一条消息（红字说明），
+ * 不许把整棵 React 树掀翻——2026-09-04 插件形状错误导致全应用黑屏的教训。
+ * ErrorBoundary 只能用 class 组件实现（React 限制）。
+ */
+class MarkdownErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error): { error: Error | null } {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error !== null) {
+      return (
+        <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-caption)" }}>
+          这条消息渲染失败：{this.state.error.message}
+        </p>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /** 只放行 http(s) 与 mailto；其余协议一律吞掉——绝对不给 javascript: 这类 href 留门。 */
 function ExternalAnchor(props: AnchorProps) {

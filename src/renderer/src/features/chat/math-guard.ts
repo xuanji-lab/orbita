@@ -31,3 +31,15 @@ export function demoteBoundaryMath(node: MdNode): void {
     demoteBoundaryMath(child);
   }
 }
+
+/**
+ * unified 插件形状：**工厂返回变换器，且使用处传工厂本身、不要调用**——
+ * `.use(remarkDemoteBoundaryMath)`。unified 在首个 parse 冻结时以无参调用插件，
+ * 直接塞变换器或提前调用工厂，都会让 tree = undefined 当场崩
+ * （2026-09-04 黑屏事故根因）。
+ */
+export function remarkDemoteBoundaryMath(): (tree: MdNode) => void {
+  return (tree) => {
+    demoteBoundaryMath(tree);
+  };
+}
