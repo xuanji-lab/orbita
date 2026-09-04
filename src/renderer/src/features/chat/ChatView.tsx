@@ -1066,12 +1066,13 @@ function toolIcon(toolName: string): IconName {
   }
 }
 
-/** 组行的动词标签：一行里 N 件同类事，说类别不说工具名；不认识的用回工具名。 */
+/**
+ * 组行的标签。bash / powershell 直接用**真实工具名**（用户裁决：不说 Run）——
+ * Run 是编造的动词，还把两个不同的工具混为一谈；其余保留动词标签（Read/Search…，
+ * 与「N files」量词配套），不认识的工具本就回落真名。
+ */
 function toolGroupLabel(toolName: string): string {
   switch (toolName) {
-    case "bash":
-    case "powershell":
-      return "Run";
     case "read":
       return "Read";
     case "grep":
