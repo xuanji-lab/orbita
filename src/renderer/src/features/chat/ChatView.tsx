@@ -1083,6 +1083,7 @@ function ToolLine(props: {
  * 折叠态组头带 `× N`（成员可见时不显示）；组内有失败时组头换红色 triangle-alert
  * ——折了也不能让失败无声消失。组头亮暗呼吸跟随成员：任一还在跑 → 行首
  * secondary + 呼吸；**全部落定**才退到 tertiary。
+ * 成员行与组头**同左缘**（不缩进）：折叠行的 icon 上下连成一条线，缩进会把线打断。
  */
 function ToolGroupLine(props: {
   group: ToolGroupUnit;
@@ -1124,7 +1125,7 @@ function ToolGroupLine(props: {
         )}
       </CollapseRow>
       {open && (
-        <div style={{ display: "grid", gap: "var(--space-1)", paddingLeft: "var(--space-2)" }}>
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
           {group.calls.map((call) => (
             <ToolLine
               key={call.key}
