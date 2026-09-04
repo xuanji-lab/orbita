@@ -7,6 +7,7 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef } from "react";
 import { MdPre } from "./CodeBlock";
+import { closePendingMath } from "./pending-math";
 
 /**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
@@ -33,7 +34,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: strin
         rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false, trust: false }]]}
         components={{ a: ExternalAnchor, pre: MdPre }}
       >
-        {text}
+        {closePendingMath(text)}
       </ReactMarkdown>
     </div>
   );
