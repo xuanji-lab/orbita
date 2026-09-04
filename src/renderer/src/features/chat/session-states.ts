@@ -266,15 +266,17 @@ export function mergeCompactions(
 }
 
 /**
- * 界碑折叠行的文案。tokensAfter 是估算值（pi 的 estimate），旧记录没有：
+ * 界碑折叠行 status 槽的文案。tokensAfter 是估算值（pi 的 estimate），旧记录没有：
  * 没有 → 只说压之前多大；有 → 「N → M」把压缩效果摆出来。
+ * label 是静态词（`Compacted`），归 ChatView 的文案区。数字用千分位精确值、
+ * 不走底栏的紧凑写法（formatTokens）——界碑是把压缩效果摆出来给人看一次的，不是常显。
  */
-export function compactionBoundaryText(record: CompactedRecord): string {
+export function compactionBoundaryStatus(record: CompactedRecord): string {
   const before = record.tokensBefore.toLocaleString("en-US");
   if (record.tokensAfter === undefined) {
-    return `已压缩 · 此前上下文约 ${before} tokens`;
+    return `~${before} tokens`;
   }
-  return `已压缩 · ${before} → ${record.tokensAfter.toLocaleString("en-US")} tokens`;
+  return `${before} → ${record.tokensAfter.toLocaleString("en-US")} tokens`;
 }
 
 /** 按 requestId 跨槽摘除一条审批。没有匹配就原样返回（同一引用）。 */export function removeApproval(states: SessionStates, requestId: string): SessionStates {

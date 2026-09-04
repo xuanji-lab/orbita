@@ -1,5 +1,19 @@
 # UPDATE NOTES
 
+## 信息区折叠卡统一：压缩界碑行并入标准折叠骨架
+
+- **压缩卡与工具/思考行同款骨架**：此前压缩界碑行的折叠头是一段散文字（无热区、无悬停反馈、无槽位），现在并入与 thinking / 工具折叠行同一份折叠契约——满宽 32px 热区、悬停淡底、圆角裁边、「label + 状态词」槽位结构。
+- **折叠头改两段式**：label `Compacted` + 右侧等宽数字状态槽（`~128,000 tokens` / `128,000 → 8,200 tokens`），千分位精确数字；原来的「已压缩 · …」整串散字废除。
+- **界碑分割线保留**：压缩行上方的一条 hairline 加一倍额外间距不动——它是「分段」的语义标记，不随骨架统一抹掉。
+- **展开体收敛**：点开后的摘要去掉了孤例的灰底圆角面板，改为与其它折叠行一致的细分隔线加透明底；摘要的 markdown 排版不变，320px 封顶滚动。
+
+## 信息区文案英文化
+
+- **折叠行与状态词全部英文**：组行动词（读取→Read、执行→Run、搜索→Search、写入→Write、修改→Edit、浏览→List）与量词（N 个文件→N files、N 条命令→N commands、N 处→N matches、N 个目录→N directories、N 次→N calls）；结果状态词（运行中→Running、失败→Failed、无输出→No output、N 行→N lines、N 字符→N chars）；思考行（思考→Thinking，时长「持续了 N 秒」→ `3s` / `1m 05s`）；工具耗时（`3.2s` / `1m 04s`）。
+- **排队卡英文**：注脚（下次发送时一起投递→Sends with your next message、插队中→Steering · next tool boundary 等）与操作（立即→Now、取消→Cancel、保存/放弃/编辑）。
+- **报错与提示英文**：markdown 渲染失败提示、空输出占位（(waiting for output…) / (no output)）、压缩进行态（Compacting context…）、重试行（Retry 2/3 · in 5s）、分支失败的报错、分支会话标题后缀（`(branch)`）。
+- 首页 slogan「璇玑运转，诸事得序」保持中文——全产品唯一保留的中文界面文案；导出 markdown 文件内的中文不在本刀，另立处理。
+
 ## 对话区渲染数学公式（KaTeX）
 
 - **数学公式直接渲染**：`$…$` 行内公式与 `$$…$$` 块级公式（块级居中）由 KaTeX 排版，颜色跟随主题、公式字体本地打包，离线可用。模型输出的 LaTeX 不再是一坨源码。

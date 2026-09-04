@@ -9,7 +9,7 @@ import {
   EMPTY_ENTRY,
   addPendingSend,
   applyAgentEvent,
-  compactionBoundaryText,
+  compactionBoundaryStatus,
   consumePendingSends,
   consumePendingTexts,
   editPendingSend,
@@ -418,7 +418,7 @@ describe("重试槽 —— phase 事件是清除信号", () => {
   });
 });
 
-describe("compactionBoundaryText —— 界碑折叠行文案", () => {
+describe("compactionBoundaryStatus —— 界碑折叠行 status 槽文案", () => {
   const base: CompactedRecord = {
     role: "compacted",
     id: "c1",
@@ -429,13 +429,13 @@ describe("compactionBoundaryText —— 界碑折叠行文案", () => {
 
   it("有估算的 tokensAfter：N → M，压缩效果摆出来", () => {
     assert.equal(
-      compactionBoundaryText({ ...base, tokensAfter: 8200 }),
-      "已压缩 · 128,000 → 8,200 tokens",
+      compactionBoundaryStatus({ ...base, tokensAfter: 8200 }),
+      "128,000 → 8,200 tokens",
     );
   });
 
-  it("旧记录没有 tokensAfter：只说压之前多大", () => {
-    assert.equal(compactionBoundaryText(base), "已压缩 · 此前上下文约 128,000 tokens");
+  it("旧记录没有 tokensAfter：只说压之前多大（~ 前缀声明是估算前的量级）", () => {
+    assert.equal(compactionBoundaryStatus(base), "~128,000 tokens");
   });
 });
 

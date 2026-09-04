@@ -26,13 +26,13 @@ describe("retryRemainingSeconds —— 向上取整，到期为 null", () => {
   });
 });
 
-describe("retryLineText —— 第 N/M 次重试与倒数", () => {
+describe("retryLineText —— Retry N/M 与倒数", () => {
   it("等待中：次数 + 秒数", () => {
-    assert.equal(retryLineText(status(), 11_000), "第 2/3 次重试 · 3 秒后");
+    assert.equal(retryLineText(status(), 11_000), "Retry 2/3 · in 3s");
   });
 
   it("到期后不显示 0 秒——如实说正在重试（倒数到 0 与尝试开跑之间有零点几秒的缝）", () => {
-    assert.equal(retryLineText(status(), 14_000), "第 2/3 次重试 · 正在重试…");
+    assert.equal(retryLineText(status(), 14_000), "Retry 2/3 · Retrying…");
   });
 });
 

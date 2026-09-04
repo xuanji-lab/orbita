@@ -338,7 +338,7 @@ describe("SessionStore.branch", () => {
     assert.equal(plan.sourcePiSessionFile, PI_FILE);
     assert.match(plan.newId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     assert.equal(plan.meta.id, plan.newId);
-    assert.equal(plan.meta.title, "读一下项目（分支）");
+    assert.equal(plan.meta.title, "读一下项目 (branch)");
     assert.equal(plan.meta.cwd, meta().cwd);
     assert.equal(plan.meta.piSessionFile, null);
     assert.equal(plan.meta.pinned, false);
@@ -348,15 +348,15 @@ describe("SessionStore.branch", () => {
     await store.create(meta({ piSessionFile: PI_FILE }));
     await store.record(ID, item("u1", "user", "问题"));
     await store.record(ID, item("a1", "assistant", "回答"));
-    await assert.rejects(() => store.prepareBranch(ID, "nope"), /找不到/);
-    await assert.rejects(() => store.prepareBranch(ID, "u1"), /agent 的回答/);
+    await assert.rejects(() => store.prepareBranch(ID, "nope"), /Branch anchor message not found/);
+    await assert.rejects(() => store.prepareBranch(ID, "u1"), /must be an agent reply/);
     await assert.rejects(
       () => store.prepareBranch("00000000-0000-4000-8000-000000000000", "a1"),
       /not found/,
     );
 
     await store.create(meta({ id: OTHER, piSessionFile: null }));
-    await assert.rejects(() => store.prepareBranch(OTHER, "a1"), /不能分支/);
+    await assert.rejects(() => store.prepareBranch(OTHER, "a1"), /not continued or branched/);
   });
 
   test("commitBranch：meta 补上 pi 文件、JSONL 逐行等于前缀、列表能看到新会话", async () => {
@@ -383,7 +383,7 @@ describe("SessionStore.branch", () => {
     await store.record(ID, item("u1", "user", "问"));
     await store.record(ID, item("a1", "assistant", "答"));
     const plan = await store.prepareBranch(ID, "a1");
-    await assert.rejects(() => store.commitBranch(plan, null), /没有产出分支文件/);
+    await assert.rejects(() => store.commitBranch(plan, null), /no branch session file/);
     assert.equal(await store.load(plan.newId), null);
   });
 });

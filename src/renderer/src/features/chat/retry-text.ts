@@ -13,14 +13,14 @@ export function retryRemainingSeconds(status: RetryStatus, nowMs: number): numbe
 }
 
 /**
- * 重试行的主文案：「第 2/3 次重试 · 3 秒后」。到期后秒数换成「正在重试…」——
+ * 重试行的主文案：「Retry 2/3 · in 3s」。到期后秒数换成「Retrying…」——
  * 倒数到 0 与下一次尝试开跑（agent_start 翻回 Responding）之间可能有零点几秒的缝，
- * 卡在「0 秒后」比如实说「正在重试」更让人慌。
+ * 卡在「in 0s」比如实说「Retrying…」更让人慌。
  */
 export function retryLineText(status: RetryStatus, nowMs: number): string {
   const seconds = retryRemainingSeconds(status, nowMs);
-  const wait = seconds === null ? "正在重试…" : `${seconds} 秒后`;
-  return `第 ${status.attempt}/${status.maxAttempts} 次重试 · ${wait}`;
+  const wait = seconds === null ? "Retrying…" : `in ${seconds}s`;
+  return `Retry ${status.attempt}/${status.maxAttempts} · ${wait}`;
 }
 
 /**
