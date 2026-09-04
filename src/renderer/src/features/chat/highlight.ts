@@ -46,7 +46,7 @@ import themeGithubDark from "shiki/themes/github-dark.mjs";
 const GITHUB_DARK = {
   ...themeGithubDark,
   tokenColors: [
-    ...themeGithubDark.tokenColors,
+    ...(themeGithubDark.tokenColors ?? []),
     {
       scope: [
         "entity.name.function",
