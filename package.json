@@ -18,10 +18,13 @@
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@earendil-works/pi-protocol": "0.84.3",
     "diff": "^9.0.0",
+    "katex": "0.16.47",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
+    "rehype-katex": "7.0.1",
     "remark-gfm": "^4.0.1",
+    "remark-math": "6.0.0",
     "shiki": "^4.4.3"
   },
   "devDependencies": {
