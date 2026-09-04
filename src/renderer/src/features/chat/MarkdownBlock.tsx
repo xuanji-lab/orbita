@@ -3,12 +3,26 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef } from "react";
 import { MdPre } from "./CodeBlock";
 import { closePendingMath } from "./pending-math";
 import { demoteBoundaryMath } from "./math-guard";
+
+/**
+ * sanitize 白名单：defaultSchema 之上只放行 `<details>`/`<summary>`，其余标签
+ * rehype-raw 解析完照剥。**顺序敏感**（rehypePlugins 数组序）：rehypeRaw →
+ * rehypeSanitize → rehypeKatex——sanitize 必须在 katex 前，否则会把 KaTeX 的
+ * 输出剥掉；其默认 schema 保留 code 的 language-* class，math 节点能活着走到
+ * katex。
+ */
+const SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary"],
+};
 
 /**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
@@ -34,7 +48,11 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: strin
     <div className="chat-md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath, demoteBoundaryMath]}
-        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false, trust: false }]]}
+        rehypePlugins={[
+          rehypeRaw,
+          [rehypeSanitize, SANITIZE_SCHEMA],
+          [rehypeKatex, { throwOnError: false, strict: false, trust: false }],
+        ]}
         components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre }}
       >
         {closePendingMath(text)}

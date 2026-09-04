@@ -226,6 +226,20 @@ body {
   text-decoration: underline;
 }
 
+/* <details> 折叠（sanitize 白名单唯二放行的标签）：模型常用它包长输出 */
+.chat-md details {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+.chat-md summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+
 /* 图片占位（永不加载远程图，见 MarkdownBlock.ImagePlaceholder）：可点的链接芯片 */
 .chat-md .chat-img-placeholder {
   font-family: var(--font-family-business);
