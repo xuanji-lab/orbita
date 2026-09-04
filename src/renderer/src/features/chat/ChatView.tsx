@@ -877,7 +877,10 @@ const HEAD_WRAP = {
  * 别的行抢左缘；多条展开体并排时导轨与 icon 连成一条竖线。
  */
 const RAIL_X = 10;
-const RAIL_LINE = "1px solid var(--color-border-subtle)";
+/** 导轨用 border-default 而非 subtle：深色下 subtle 与地面只差几阶（black #1e1e1e 对
+ * #0a0a0a），孤立的 1px 竖线会隐形；default（#262626 / #333534）强一档才立得住。
+ * 浅色下两者几乎无差，三主题同一 token。 */
+const RAIL_LINE = "1px solid var(--color-border-default)";
 
 /**
  * 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。
