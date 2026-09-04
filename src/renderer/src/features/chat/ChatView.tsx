@@ -737,8 +737,10 @@ function EntryView(props: {
 
 /**
  * 大折叠行（一轮一行）：agent 整轮回答落定后，这轮的思考行与工具行/组收成
- * 一条统计——`Worked 45s · Thought 2 · 8 tools · bash 3 · read 5 1 · edit 2`
+ * 一条统计——`Worked 45s · thought 2 · tools 8 · bash 3 · read 5 1 · edit 2`
  * （段与段之间用 · 分隔；失败数是紧跟在工具次数后面的红色数字）。
+ * Worked 之后每个段都是「标签 + 数字」同一语法：thought / tools 与工具名
+ * 同一套小写词汇，数字一律在后。
  * 工具类别用**真实工具名**而非组行动词（Run/Read…）：统计行是机器事实，
  * Run 会把 bash 与 powershell 混为一谈，且成员行展开后显示的也是同一套名字。
  * 思考排在工具之前——先想后做，时间序。
@@ -772,8 +774,7 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
   }
   if (stats.calls > 0) {
     segments.push(<span style={SLOT.status}>{COPY.tools(stats.calls)}</span>);
-  }
-  for (const { toolName, count, failed } of stats.byTool) {
+  }  for (const { toolName, count, failed } of stats.byTool) {
     segments.push(
       <span style={SLOT.status}>
         {toolName} {count}
@@ -1033,14 +1034,14 @@ const COPY = {
   noOutput: "(no output)",
   branchFromHere: "Branch from here",
   worked: "Worked",
-  thought: "Thought",
+  thought: "thought",
   lines: (n: number): string => `${n} lines`,
   files: (n: number): string => `${n} files`,
   commands: (n: number): string => `${n} commands`,
   matches: (n: number): string => `${n} matches`,
   directories: (n: number): string => `${n} directories`,
   calls: (n: number): string => `${n} calls`,
-  tools: (n: number): string => `${n} tools`,
+  tools: (n: number): string => `tools ${n}`,
   failed: (n: number): string => `${n} failed`,
 };
 
