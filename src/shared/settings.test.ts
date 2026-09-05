@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { DEFAULT_SETTINGS, parseSettings, THEME_PREFERENCES } from "./settings.ts";
 
 describe("parseSettings", () => {
-  it("三档主题都认", () => {
+  it("四档主题都认（含 black 手动档）", () => {
     for (const theme of THEME_PREFERENCES) {
       deepStrictEqual(parseSettings({ theme }), { theme });
     }

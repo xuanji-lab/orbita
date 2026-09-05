@@ -17,7 +17,21 @@
   --shadow-popover: 0 14px 36px rgba(0, 0, 0, 0.38);
   --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.55);
   --shadow-drawer: -8px 0 24px rgba(0, 0, 0, 0.32);
-  --focus-ring: 0 0 0 2px rgba(227, 194, 90, 0.28);
+  --focus-ring: 0 0 0 2px rgba(214, 194, 69, 0.28);
+  --overlay-backdrop: rgba(0, 0, 0, 0.48);
+  --overlay-backdrop-soft: rgba(0, 0, 0, 0.4);
+  --overlay-backdrop-subtle: rgba(0, 0, 0, 0.24);
+}
+
+/* black 与 dark 同阶（2026-09-03 修订）：地面已从纯黑退到 GitHub 深蓝黑，
+   阴影不需要更深；分块只是 token 按 data-theme 键控的结构要求。 */
+:root[data-theme="black"] {
+  --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-composer: 0 8px 28px rgba(0, 0, 0, 0.28);
+  --shadow-popover: 0 14px 36px rgba(0, 0, 0, 0.38);
+  --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.55);
+  --shadow-drawer: -8px 0 24px rgba(0, 0, 0, 0.32);
+  --focus-ring: 0 0 0 2px rgba(214, 194, 69, 0.28);
   --overlay-backdrop: rgba(0, 0, 0, 0.48);
   --overlay-backdrop-soft: rgba(0, 0, 0, 0.4);
   --overlay-backdrop-subtle: rgba(0, 0, 0, 0.24);

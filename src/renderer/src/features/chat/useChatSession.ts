@@ -373,6 +373,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     setModel({ providerId: first.id, modelId: firstModel.id });
   }, [usable, model]);
 
+  // 会话 meta 里存的模型可能已随 provider 被删而失效——失效就清空，让上面的
+  // 默认播种兜住。真实事故（2026-09-04）：旧会话存着已删除的 openai-compatible，
+  // 打开后直接发送，主进程炸 unknown provider。providers 未加载完（usable 空）不判。
+  useEffect(() => {
+    if (model === null || usable.length === 0) return;
+    if (!usable.some((p) => p.id === model.providerId)) setModel(null);
+  }, [usable, model]);
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (text === "") return;
@@ -416,7 +424,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         return;
       }
       if (active === null) {
-        setError("没有正在运行的任务可压缩");
+        setError("No running task to compact");
         return;
       }
       setDraft("");

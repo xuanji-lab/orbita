@@ -8,10 +8,11 @@
 import { ipcMain, nativeTheme } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { AppSettings } from "../../shared/settings.ts";
+import { resolveNativeThemeSource } from "./native-theme.ts";
 import type { SettingsStore } from "./store.ts";
 
 export function applyNativeTheme(settings: AppSettings): void {
-  nativeTheme.themeSource = settings.theme;
+  nativeTheme.themeSource = resolveNativeThemeSource(settings.theme);
 }
 
 export function registerSettingsIpc(store: SettingsStore): void {

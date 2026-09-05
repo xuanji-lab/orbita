@@ -6,10 +6,11 @@
  */
 
 /**
- * 主题偏好。**三态，不是两态**——"system" 是真正的默认，不是「light 的别名」：
- * 用户没表态时应用要跟着系统深浅走，而不是把某一档钉死。
+ * 主题偏好。**四态**——"system" 是真正的默认，不是「light 的别名」：
+ * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（Ink，
+ * 2026-09-03 用户指定）；"dark"（Warm）与 "black" 从此都是手动档。
  */
-export const THEME_PREFERENCES = ["system", "light", "dark"] as const;
+export const THEME_PREFERENCES = ["system", "light", "dark", "black"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 export interface AppSettings {

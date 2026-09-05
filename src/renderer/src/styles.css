@@ -226,7 +226,34 @@ body {
   text-decoration: underline;
 }
 
-/* 行内 code 是浅色小芯片（跟随主题），文字继承正文色；代码块同一份底 */
+/* <details> 折叠（sanitize 白名单唯二放行的标签）：模型常用它包长输出 */
+.chat-md details {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+.chat-md summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+/* 图片占位（永不加载远程图，见 MarkdownBlock.ImagePlaceholder）：可点的链接芯片 */
+.chat-md .chat-img-placeholder {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+/* 行内 code 是浅色小芯片（跟随主题）；代码块同一份底，另加发丝线——
+   深色下 muted 底与地面只差几阶，块的边界靠线不靠色。 */
 .chat-md code {
   font-family: var(--font-family-business);
   font-size: 0.9em;
@@ -235,10 +262,20 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/*
+ * 行内 code（正文里的文件名、路径、标识符——「机器内容」）用链接色，与正文墨色
+ * 分层：Light 蓝 / Warm 青 / Ink 蓝（2026-09-04 用户反馈：深色下与正文难分辨）。
+ * 只上行内：块内是语法色的领地，无语法色的裸块继承正文色，不能整块变链接色。
+ */
+.chat-md :not(pre) > code {
+  color: var(--color-chat-link);
+}
+
 .chat-md pre {
   margin: var(--space-2) 0;
   padding: var(--space-3);
   background: var(--color-chat-muted-bg);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   overflow-x: auto;
 }
@@ -251,16 +288,40 @@ body {
 }
 
 /*
+ * 数学公式（KaTeX，math 渲染管线见 MarkdownBlock）：颜色继承正文墨色、字号微升；
+ * 块级公式居中（LaTeX 惯例）；解析失败的源码降级为斜体次级灰——这是流式期间
+ * 半截公式的常态长相（pending 策略见 pending-math.ts），不是报警。
+ */
+.chat-md .katex {
+  font-size: 1.05em;
+  color: inherit;
+}
+
+.chat-md .katex-display {
+  margin: var(--space-2) 0;
+}
+
+.chat-md .katex-error {
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  font-family: var(--font-family-business);
+  font-size: 0.95em;
+}
+
+/*
  * shiki 高亮块（B-1）。pre.shiki 带内联 style（浅主题的底色/前景 + 每元素一份
  * --shiki-dark 变量），!important 是压过内联 style 的唯一手段；底色换回主题的
- * muted 底（见上方取舍注释），暗主题把前景与 span 语法色翻到 --shiki-dark。
+ * muted 底（见上方取舍注释），暗 / 黑主题把前景与 span 语法色翻到 --shiki-dark
+ * ——black 底与 dark 底同样近黑，共用同一套双主题翻色，不生成第三套语法色。
  */
 .chat-md pre.shiki {
   background-color: var(--color-chat-muted-bg) !important;
 }
 
 :root[data-theme="dark"] .chat-md pre.shiki,
-:root[data-theme="dark"] .chat-md pre.shiki span {
+:root[data-theme="black"] .chat-md pre.shiki,
+:root[data-theme="dark"] .chat-md pre.shiki span,
+:root[data-theme="black"] .chat-md pre.shiki span {
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg, transparent) !important;
   font-style: var(--shiki-dark-font-style) !important;
@@ -271,9 +332,10 @@ body {
 /*
  * 工具行展开体（write/read 的行级高亮，ChatView 的 FileContentView）：token 的
  * 内联样式来自 shiki codeToTokens（浅色 color + --shiki-dark 变量），与上面整块
- * pre.shiki 同一套双主题机制，这里只给行级 span 补暗主题翻色。
+ * pre.shiki 同一套双主题机制，这里只给行级 span 补暗 / 黑主题翻色。
  */
-:root[data-theme="dark"] .shiki-tok {
+:root[data-theme="dark"] .shiki-tok,
+:root[data-theme="black"] .shiki-tok {
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg, transparent) !important;
   font-style: var(--shiki-dark-font-style) !important;

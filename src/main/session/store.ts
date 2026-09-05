@@ -260,15 +260,15 @@ export class SessionStore {
     const meta = await this.readMeta(id);
     if (meta === null) throw new Error(`session ${id} not found`);
     if (meta.piSessionFile === null) {
-      throw new Error("这条会话没有 pi 的本子，只能读不能续，也不能分支");
+      throw new Error("This task predates resumable sessions and can be read but not continued or branched");
     }
     const records = await this.readLog(id);
     const anchorIndex = records.findIndex(
       (record) => record.role !== "compacted" && record.id === anchorItemId,
     );
     const anchor = records[anchorIndex];
-    if (anchor === undefined) throw new Error(`找不到分支点消息 ${anchorItemId}`);
-    if (anchor.role !== "assistant") throw new Error("分支点必须是 agent 的回答");
+    if (anchor === undefined) throw new Error(`Branch anchor message not found: ${anchorItemId}`);
+    if (anchor.role !== "assistant") throw new Error("Branch anchor must be an agent reply");
 
     const prefix = records.slice(0, anchorIndex + 1);
     const newId = randomUUID();
@@ -282,7 +282,7 @@ export class SessionStore {
       // 不继承归档——分支的目的就是去那边继续说话
       meta: {
         id: newId,
-        title: deriveSessionTitle(`${meta.title}（分支）`),
+        title: deriveSessionTitle(`${meta.title} (branch)`),
         titleSource: "derived",
         cwd: meta.cwd,
         workspaceId: meta.workspaceId,
@@ -304,7 +304,7 @@ export class SessionStore {
 
   /** 分支落盘：新 meta（补上 pi 分支文件）+ 前缀整写为初始 JSONL（原子写）。 */
   async commitBranch(plan: BranchPlan, piSessionFile: string | null): Promise<void> {
-    if (piSessionFile === null) throw new Error("pi 没有产出分支文件，分支未落盘");
+    if (piSessionFile === null) throw new Error("pi produced no branch session file; branch was not persisted");
     await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile });
     if (plan.records.length > 0) {
       await writeTextAtomic(
