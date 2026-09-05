@@ -226,6 +226,32 @@ body {
   text-decoration: underline;
 }
 
+/* <details> 折叠（sanitize 白名单唯二放行的标签）：模型常用它包长输出 */
+.chat-md details {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+.chat-md summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+/* 图片占位（永不加载远程图，见 MarkdownBlock.ImagePlaceholder）：可点的链接芯片 */
+.chat-md .chat-img-placeholder {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
 /* 行内 code 是浅色小芯片（跟随主题）；代码块同一份底，另加发丝线——
    深色下 muted 底与地面只差几阶，块的边界靠线不靠色。 */
 .chat-md code {
@@ -259,6 +285,27 @@ body {
   padding: 0;
   font-size: var(--font-size-caption);
   line-height: 1.55;
+}
+
+/*
+ * 数学公式（KaTeX，math 渲染管线见 MarkdownBlock）：颜色继承正文墨色、字号微升；
+ * 块级公式居中（LaTeX 惯例）；解析失败的源码降级为斜体次级灰——这是流式期间
+ * 半截公式的常态长相（pending 策略见 pending-math.ts），不是报警。
+ */
+.chat-md .katex {
+  font-size: 1.05em;
+  color: inherit;
+}
+
+.chat-md .katex-display {
+  margin: var(--space-2) 0;
+}
+
+.chat-md .katex-error {
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  font-family: var(--font-family-business);
+  font-size: 0.95em;
 }
 
 /*
