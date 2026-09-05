@@ -674,7 +674,7 @@ async function handle(command: AgentCommand): Promise<void> {
       command.index,
       command.text,
       command.op,
-      command.newText,
+      command.toIndex,
     );
     for (const plan of plans) {
       await (plan.as === "steer" ? live.session.steer(plan.text) : live.session.followUp(plan.text));
