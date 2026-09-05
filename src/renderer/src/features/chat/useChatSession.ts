@@ -14,6 +14,7 @@ import {
   removeApproval,
   removePendingSend,
   removeSessionEntry,
+  reorderQueueOptimistic,
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
@@ -816,6 +817,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const moveQueued = useCallback((index: number, text: string, toIndex: number) => {
     const id = sessionRef.current;
     if (id === null) return;
+    // 先本地重排：拖拽松手到 runtime 回程是一个完整 IPC 往返，
+    // 不乐观更新就会看到行先原地不动、过一拍才跳过去。
+    // 真值回来时会覆盖；命令落空就覆回原顺序，弹回去就是失败的诚实表达。
+    setStates((prev) => reorderQueueOptimistic(prev, id, index, toIndex));
     void api.agent
       .queueEdit(id, "move", index, text, toIndex)
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));

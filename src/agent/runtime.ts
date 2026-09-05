@@ -242,6 +242,26 @@ interface LiveSession {
   headers?: Record<string, string>;
   /** 标题在途标记：连发两条消息也只生成一次，失败后下一条自然重试 */
   titleInFlight: boolean;
+  /**
+   * 正在重写队列（撤回 / 拖拽排序 / 立即发送）。
+   *
+   * pi 没有单条删/挪的 API，所以每一次都是 `clearQueue` + 逐条重放，
+   * 而 `clearQueue()` 自己就 emit 一次、每条重放再 emit 一次——N 条队列
+   * 会打出 N+1 个 queue 事件。它们走独立 IPC message，React 的自动批处理
+   * 跨不了宏任务，于是 UI 会真的渲染出「先变空 → 逐条长回来」。
+   * 置位期间不转发中间态，重写完成后只广播一次最终快照。
+   */
+  queueRewriting: boolean;
+}
+
+/** 广播一次队列真值。重写结束时用它代替被吞掉的一串中间态。 */
+function sendQueueSnapshot(live: LiveSession, sessionId: string): void {
+  send({
+    type: "queue",
+    sessionId,
+    steering: [...live.session.getSteeringMessages()],
+    followUp: [...live.session.getFollowUpMessages()],
+  });
 }
 
 const sessions = new Map<string, LiveSession>();
@@ -396,7 +416,9 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     }
     if (event.type === "agent_start") send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
     // 排队快照原样翻译：入队 / 投递 / 清队后 pi 都重发整份，renderer 覆盖槽即可
-    if (event.type === "queue_update") {
+    // 重写队列期间吞掉中间态（见 LiveSession.queueRewriting）：否则一次拖拽会让
+    // 排队卡先清空再逐条长回来。重写结束时由 sendQueueSnapshot 补一次终态。
+    if (event.type === "queue_update" && sessions.get(command.sessionId)?.queueRewriting !== true) {
       send({
         type: "queue",
         sessionId: command.sessionId,
@@ -496,6 +518,7 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     apiKey: command.provider.apiKey,
     ...(command.provider.headers ? { headers: command.provider.headers } : {}),
     titleInFlight: false,
+    queueRewriting: false,
   });
   // 建会话即推一次：新会话给零值；唤醒的旧会话立刻给真累计——余量不用等第一轮跑完。
   // **落盘**：唤醒时 pi 给的才是跨重启的真累计，比我们上次存的快照新，当场就该校准
@@ -638,23 +661,36 @@ async function handle(command: AgentCommand): Promise<void> {
   }
   if (command.type === "interrupt") {
     // 调用序与它们各自的理由在 interrupt.ts（那里有测试）。
-    await interruptWithQueued(
-      {
-        clearQueue: () => live.session.clearQueue(),
-        isStreaming: () => live.session.isStreaming,
-        abort: () => live.session.abort(),
-        followUp: (text) => live.session.followUp(text),
-        echoUserPrompt: (text) => {
-          live.echoed.add(text);
-          for (const progress of live.adapter.userPrompt(text)) {
-            send({ type: "progress", sessionId: command.sessionId, progress });
-          }
+    live.queueRewriting = true;
+    try {
+      await interruptWithQueued(
+        {
+          clearQueue: () => live.session.clearQueue(),
+          isStreaming: () => live.session.isStreaming,
+          abort: () => live.session.abort(),
+          followUp: (text) => live.session.followUp(text),
+          echoUserPrompt: (text) => {
+            // 这一拍正好是「队列重写完毕、即将开新一轮」：先把终态队列放出去，
+            // 再解除抑制——接下来 prompt 要 await 整整一轮，不能让抑制盖到那么远。
+            sendQueueSnapshot(live, command.sessionId);
+            live.queueRewriting = false;
+            live.echoed.add(text);
+            for (const progress of live.adapter.userPrompt(text)) {
+              send({ type: "progress", sessionId: command.sessionId, progress });
+            }
+          },
+          prompt: (text) => live.session.prompt(text, { expandPromptTemplates: false }),
         },
-        prompt: (text) => live.session.prompt(text, { expandPromptTemplates: false }),
-      },
-      command.index,
-      command.text,
-    );
+        command.index,
+        command.text,
+      );
+    } finally {
+      // 对账落空时 echoUserPrompt 不会被调到，这里兵底，否则抑制标志永久挂着
+      if (live.queueRewriting) {
+        live.queueRewriting = false;
+        sendQueueSnapshot(live, command.sessionId);
+      }
+    }
     return;
   }
   if (command.type === "abort") {
@@ -667,17 +703,26 @@ async function handle(command: AgentCommand): Promise<void> {
     // pi 没有单条删 / 挪的 API：先全清拿真值，再按规划重放。
     // 期间 loop 正在 stream 等待中，drain 不会插进来；即使竞态，后果只是某条
     // 提前/推后投递，不是丢失。
-    const { steering, followUp } = live.session.clearQueue();
-    const plans = planQueueEdit(
-      steering,
-      followUp,
-      command.index,
-      command.text,
-      command.op,
-      command.toIndex,
-    );
-    for (const plan of plans) {
-      await (plan.as === "steer" ? live.session.steer(plan.text) : live.session.followUp(plan.text));
+    live.queueRewriting = true;
+    try {
+      const { steering, followUp } = live.session.clearQueue();
+      const plans = planQueueEdit(
+        steering,
+        followUp,
+        command.index,
+        command.text,
+        command.op,
+        command.toIndex,
+      );
+      for (const plan of plans) {
+        await (plan.as === "steer"
+          ? live.session.steer(plan.text)
+          : live.session.followUp(plan.text));
+      }
+    } finally {
+      live.queueRewriting = false;
+      // 中间态已被吞，这里补一次终态——一次操作对应 UI 上一次变化
+      sendQueueSnapshot(live, command.sessionId);
     }
     return;
   }

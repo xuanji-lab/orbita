@@ -330,6 +330,51 @@ export function addPendingSend(states: SessionStates, sessionId: string, item: P
   );
 }
 
+/**
+ * 拖拽排序的乐观重排：本地先把顺序改到位，不等 runtime 往返。
+ *
+ * 真值随后的 queue 事件会覆盖这里；命令落空时它覆回原顺序，
+ * 看到的就是「弹回去」——那正是失败的诚实表达，不掩盖。
+ *
+ * 分段规则与 runtime 的 planQueueEdit 一致：steering 段长度不变，
+ * 重排后落在前段的就是插队（位置即投递时机）。故意不复用那个函数：
+ * 它在 agent 进程侧，renderer 跨进程 import 它会把两边绑死，
+ * 而 move 的重排就是一次 splice，重复这几行比建一层共享便宜。
+ */
+export function reorderQueueOptimistic(
+  states: SessionStates,
+  sessionId: string,
+  fromIndex: number,
+  toIndex: number,
+): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined) return states;
+  const merged = [...entry.queue.steering, ...entry.queue.followUp];
+  if (
+    fromIndex < 0 ||
+    fromIndex >= merged.length ||
+    toIndex < 0 ||
+    toIndex >= merged.length ||
+    fromIndex === toIndex
+  ) {
+    return states;
+  }
+  const ordered = [...merged];
+  const [moved] = ordered.splice(fromIndex, 1);
+  if (moved === undefined) return states;
+  ordered.splice(toIndex, 0, moved);
+  const steerCount = entry.queue.steering.length;
+  return update(states, sessionId, (current) =>
+    syncQueueOrder({
+      ...current,
+      queue: {
+        steering: ordered.slice(0, steerCount),
+        followUp: ordered.slice(steerCount),
+      },
+    }),
+  );
+}
+
 /** 取消一条本地待办。纯本地状态，即点即删，按下标定位；越界原样返回。 */
 export function removePendingSend(states: SessionStates, sessionId: string, index: number): SessionStates {
   const entry = states.get(sessionId);

@@ -18,6 +18,7 @@ import {
   removeApproval,
   removePendingSend,
   removeSessionEntry,
+  reorderQueueOptimistic,
   seedFromDisk,
   setEntryPhase,
   type SessionEntry,
@@ -436,6 +437,35 @@ describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind �
     sessionId: "A",
     steering,
     followUp,
+  });
+
+  test("乐观重排：本地先到位，不等 runtime 往返", () => {
+    let states = applyAgentEvent(new Map(), queueEvent([], ["甲", "乙", "丙"]));
+    states = reorderQueueOptimistic(states, "A", 2, 0);
+    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: ["丙", "甲", "乙"] });
+  });
+
+  test("乐观重排：steering 段长度不变——挪进前段就变插队，与 planQueueEdit 一致", () => {
+    let states = applyAgentEvent(new Map(), queueEvent(["s1"], ["f1"]));
+    states = reorderQueueOptimistic(states, "A", 1, 0);
+    assert.deepEqual(states.get("A")?.queue, { steering: ["f1"], followUp: ["s1"] });
+  });
+
+  test("乐观重排：越界 / 原位不动槽", () => {
+    const states = applyAgentEvent(new Map(), queueEvent([], ["甲", "乙"]));
+    assert.equal(reorderQueueOptimistic(states, "A", 0, 0), states);
+    assert.equal(reorderQueueOptimistic(states, "A", 5, 0), states);
+    assert.equal(reorderQueueOptimistic(states, "A", 0, 9), states);
+    assert.equal(reorderQueueOptimistic(states, "B", 0, 1), states);
+  });
+
+  test("乐观重排会被真值覆盖：命令落空就弹回原顺序", () => {
+    let states = applyAgentEvent(new Map(), queueEvent([], ["甲", "乙"]));
+    states = reorderQueueOptimistic(states, "A", 1, 0);
+    assert.deepEqual(states.get("A")?.queue.followUp, ["乙", "甲"]);
+    // runtime 对账落空，原样重放回来
+    states = applyAgentEvent(states, queueEvent([], ["甲", "乙"]));
+    assert.deepEqual(states.get("A")?.queue.followUp, ["甲", "乙"]);
   });
 
   test("queue 事件全量覆盖：投递 / 清队后的空快照直接抹掉旧值", () => {
