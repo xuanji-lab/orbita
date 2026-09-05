@@ -11,12 +11,18 @@ describe("planQueueEdit · cancel", () => {
     ]);
   });
 
-  test("index/text 与队列不符：原样重放（不丢别人的消息）", () => {
+  test("目标不在队列里：原样重放（不丢别人的消息）", () => {
     const plans = planQueueEdit(["s1"], ["f1"], 5, "别的", "cancel");
     assert.deepEqual(plans, [
       { text: "s1", as: "steer" },
       { text: "f1", as: "followUp" },
     ]);
+  });
+
+  test("下标过期但文本还在：按文本找回来，撤回不落空", () => {
+    // 与 interrupt 同源的竞态：前面有条目被拿走，后面的下标全前移
+    const plans = planQueueEdit([], ["f1", "f2"], 5, "f2", "cancel");
+    assert.deepEqual(plans, [{ text: "f1", as: "followUp" }]);
   });
 
   test("空队列：返回空序列", () => {
@@ -60,9 +66,18 @@ describe("planQueueEdit · move", () => {
     ]);
   });
 
-  test("text 不匹配：原样重放（挪动落空，不切错人）", () => {
+  test("目标不在队列里：原样重放（挪动落空，不切错人）", () => {
     const plans = planQueueEdit([], ["f1", "f2"], 0, "别人", "move", 1);
     assert.deepEqual(plans, [
+      { text: "f1", as: "followUp" },
+      { text: "f2", as: "followUp" },
+    ]);
+  });
+
+  test("下标过期但文本还在：按文本找回来，拖拽不落空", () => {
+    const plans = planQueueEdit([], ["f1", "f2", "f3"], 9, "f3", "move", 0);
+    assert.deepEqual(plans, [
+      { text: "f3", as: "followUp" },
       { text: "f1", as: "followUp" },
       { text: "f2", as: "followUp" },
     ]);

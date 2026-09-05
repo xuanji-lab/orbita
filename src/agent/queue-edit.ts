@@ -1,3 +1,5 @@
+import { locateQueued } from "./queue-locate.ts";
+
 /**
  * 排队队列改动的重放规划 —— 纯函数，runtime 的可测内核。
  *
@@ -15,7 +17,8 @@ export interface QueueEntryPlan {
 /**
  * 规划一次队列改动的重放序列。
  *
- * index / text 与队列现状不符时（投递或并发改动刚发生）返回「原样重放」——
+ * 目标用 `locateQueued` 找：下标只是提示，文本才是用户意图的载体——
+ * 队列一变下标就过期，而它变得很频繁。真的找不到（已投递）则「原样重放」：
  * 队列已被调用方清空，不重放就等于把别人的排队消息丢了。调用方无法区分
  * 「操作落空」与「正常重放」，也不需要：queue 事件会把 UI 校准到真相。
  *
@@ -32,19 +35,19 @@ export function planQueueEdit(
   toIndex?: number,
 ): QueueEntryPlan[] {
   const merged = [...steering, ...followUp];
-  const hits = merged[index] === text;
+  const at = locateQueued(merged, index, text);
   const ordered = [...merged];
-  if (hits) {
+  if (at !== null) {
     if (op === "cancel") {
-      ordered.splice(index, 1);
+      ordered.splice(at, 1);
     } else if (toIndex !== undefined && toIndex >= 0 && toIndex < merged.length) {
-      const [moved] = ordered.splice(index, 1);
+      const [moved] = ordered.splice(at, 1);
       if (moved !== undefined) ordered.splice(toIndex, 0, moved);
     }
   }
   // steering 段长度：move 不增删所以不变；cancel 掉段内一条则跟着收一格——
   // 否则后面那条会被白白「提升」成插队，用户没请求过这件事
-  const cancelledFromSteering = hits && op === "cancel" && index < steering.length;
+  const cancelledFromSteering = at !== null && op === "cancel" && at < steering.length;
   const steerCount = Math.min(
     steering.length - (cancelledFromSteering ? 1 : 0),
     ordered.length,

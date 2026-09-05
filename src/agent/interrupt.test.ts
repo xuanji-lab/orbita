@@ -88,18 +88,31 @@ describe("interruptWithQueued —— 打断的调用序", () => {
     ]);
   });
 
-  test("对账不中：整单放弃，不 abort 不 prompt，队列原样放回", async () => {
+  test("目标不在队列里：整单放弃，不 abort 不 prompt，队列原样放回", async () => {
     const { ops, calls } = fakeOps({ steering: [], followUp: ["甲", "乙"] });
-    // 期望文本与队列现状不符（那条刚被投递）
     assert.equal(await interruptWithQueued(ops, 0, "已经不在了"), false);
     assert.deepEqual(calls, ["clearQueue", "followUp:甲", "followUp:乙"]);
     assert.ok(!calls.includes("abort"));
     assert.ok(!calls.some((call) => call.startsWith("prompt:")));
   });
 
-  test("下标越界：同样整单放弃并放回", async () => {
+  test("下标过期但文本还在：按文本找回来，不落空", async () => {
+    // 真实事故（wafo 2026-09-06）：[甲,乙,丙] 先发走乙，丙的下标从 2 变成 1，
+    // UI 仍按旧快照传 2。精确对账会静默丢掉命令，表现为「点了没反应」
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲", "丙"] });
+    assert.equal(await interruptWithQueued(ops, 2, "丙"), true);
+    assert.deepEqual(calls, ["clearQueue", "abort", "followUp:甲", "echo:丙", "prompt:丙"]);
+  });
+
+  test("下标指到了别人身上：以文本为准，不切错人", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲", "乙"] });
+    assert.equal(await interruptWithQueued(ops, 0, "乙"), true);
+    assert.deepEqual(calls, ["clearQueue", "abort", "followUp:甲", "echo:乙", "prompt:乙"]);
+  });
+
+  test("那条真的已被投递：整单放弃并放回", async () => {
     const { ops, calls } = fakeOps({ steering: [], followUp: ["甲"] });
-    assert.equal(await interruptWithQueued(ops, 5, "甲"), false);
+    assert.equal(await interruptWithQueued(ops, 5, "已经飞了的"), false);
     assert.deepEqual(calls, ["clearQueue", "followUp:甲"]);
   });
 

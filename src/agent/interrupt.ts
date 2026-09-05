@@ -16,11 +16,15 @@
  *    （`_runAgentPrompt` 连 post-run 续轮一起等），排它后面意味着这些消息
  *    消失一整轮，而且错过 agent loop 在 `agent_end` 前的 drain——回来时只能
  *    干等用户下次发送，「等这一轮结束再投递」根本没发生。
- * 3. 对账不中就整单放弃：队列刚被并发改过（投递/编辑），宁可不发也不切错人。
+ * 3. 目标用 `locateQueued` 找：下标只是提示，文本才是用户意图的载体。
+ *    连续点两条时，第一条的 clearQueue 已经把后面的下标全前移了。
+ *    真的找不到（已投递）才整单放弃，宁可不发也不切错人。
  * 4. 原 steering / followUp 之分在打断语境下不再有意义，一律 followUp 回队。
  */
 
-/** 打断要用到的会话能力。只列这四件事，方便测试塞假实现。 */
+import { locateQueued } from "./queue-locate.ts";
+
+/** 打断要用到的会话能力。只列这几件事，方便测试塞假实现。 */
 export interface InterruptOps {
   /** 端走整个队列并拿到真值（pi 没有单条删的 API） */
   clearQueue: () => { steering: readonly string[]; followUp: readonly string[] };
@@ -47,13 +51,13 @@ export async function interruptWithQueued(
 ): Promise<boolean> {
   const { steering, followUp } = ops.clearQueue();
   const combined = [...steering, ...followUp];
-  // 对账守卫：index / text 与队列现状不符就整单放弃
-  if (combined[index] !== text) {
+  const at = locateQueued(combined, index, text);
+  if (at === null) {
     // 队列已被端走，不放回就等于把别人的排队消息丢了
     for (const rest of combined) await ops.followUp(rest);
     return false;
   }
-  combined.splice(index, 1);
+  combined.splice(at, 1);
   // 空闲时不打断：没有在跑的一轮，abort 只会多制造一个 aborted 终态
   if (ops.isStreaming()) await ops.abort();
   // 先回队再开新轮——见上面第 2 条
