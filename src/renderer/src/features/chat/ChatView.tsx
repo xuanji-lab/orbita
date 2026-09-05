@@ -341,6 +341,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
             onInterrupt={session.interruptQueued}
             onWithdraw={session.withdrawQueued}
             onWithdrawPending={session.withdrawPendingSend}
+            onMove={session.moveQueued}
             onRunPendingNow={session.runPendingNow}
           />
           {composer}

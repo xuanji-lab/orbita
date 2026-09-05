@@ -151,6 +151,8 @@ export interface ChatSession {
   interruptQueued: (index: number, text: string) => void;
   /** 撤回：移出 pi 队列（runtime 侧 clearQueue + 重放），文字落回草稿 */
   withdrawQueued: (index: number, text: string) => void;
+  /** 把排队项挪到 toIndex（同一个拼接视图的下标）。位置即投递时机 */
+  moveQueued: (index: number, text: string, toIndex: number) => void;
   /** 撤回一条本地待办；text 项文字落回草稿，compact 项只取消 */
   withdrawPendingSend: (index: number) => void;
   /** 本地 compact 待办的「立即」：马上压缩，不等空闲。与 pi 项的「立即」同名不同物 */
@@ -811,6 +813,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, []);
 
+  const moveQueued = useCallback((index: number, text: string, toIndex: number) => {
+    const id = sessionRef.current;
+    if (id === null) return;
+    void api.agent
+      .queueEdit(id, "move", index, text, toIndex)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, []);
+
   /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。 */
   const restoreToDraft = useCallback((text: string) => {
     setDraft((prev) => appendWithdrawn(prev, text));
@@ -911,6 +921,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       // 用户看得见。比原来「静默吞字」严格更好。
       restoreToDraft(text);
     },
+    moveQueued,
     withdrawPendingSend,
     runPendingNow,
     newTask,

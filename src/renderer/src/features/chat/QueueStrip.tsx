@@ -18,6 +18,8 @@ const COPY = {
   runNowCompact: "Compact now",
   withdraw: "Withdraw to the input box",
   withdrawCompact: "Withdraw this compaction",
+  moveUp: "Move earlier in the queue",
+  moveDown: "Move later in the queue",
 };
 
 /**
@@ -40,11 +42,15 @@ export function QueueStrip(props: {
   /** 撤回：从队列移出，文字落回 composer 草稿 */
   onWithdraw: (index: number, text: string) => void;
   onWithdrawPending: (index: number) => void;
+  /** 调顺序。只在 pi 队列项之间挪——本地 compact 的时机由机制定（必须等空闲） */
+  onMove: (index: number, text: string, toIndex: number) => void;
   /** 本地 compact 待办的「立即」：马上压缩，不等空闲。与 pi 项的「立即」同名不同物 */
   onRunPendingNow: (index: number) => void;
 }) {
   if (props.view.length === 0) return null;
   const haltedNote = props.phase === "idle" ? COPY.haltedNote : null;
+  // 只数 pi 项：调顺序在 pi 队列内部进行，中间夹的本地待办不参与（也不占位）
+  const piCount = props.view.filter((item) => item.source === "pi").length;
   return (
     <section
       aria-label={COPY.queued}
@@ -94,6 +100,18 @@ export function QueueStrip(props: {
               ? props.onWithdraw(item.piIndex, item.text)
               : props.onWithdrawPending(item.localIndex)
           }
+          onMoveUp={
+            item.source === "pi" && item.piIndex > 0
+              ? () => props.onMove(item.piIndex, item.text, item.piIndex - 1)
+              : undefined
+          }
+          onMoveDown={
+            item.source === "pi" && item.piIndex < piCount - 1
+              ? () => props.onMove(item.piIndex, item.text, item.piIndex + 1)
+              : undefined
+          }
+          moveUpTitle={COPY.moveUp}
+          moveDownTitle={COPY.moveDown}
         />
       ))}
     </section>
@@ -133,8 +151,13 @@ function QueueRow(props: {
   text: string;
   runNowTitle: string;
   withdrawTitle: string;
+  moveUpTitle: string;
+  moveDownTitle: string;
   onInterrupt?: () => void;
   onWithdraw: () => void;
+  /** 不给 = 已在队首 / 队尾，或者本来就不参与排序 */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
@@ -164,6 +187,16 @@ function QueueRow(props: {
       >
         {props.note}
       </span>
+      {props.onMoveUp !== undefined && (
+        <QueueAction title={props.moveUpTitle} onClick={props.onMoveUp}>
+          <Icon name="chevron-up" size={12} />
+        </QueueAction>
+      )}
+      {props.onMoveDown !== undefined && (
+        <QueueAction title={props.moveDownTitle} onClick={props.onMoveDown}>
+          <Icon name="chevron-down" size={12} />
+        </QueueAction>
+      )}
       {props.onInterrupt !== undefined && (
         <QueueAction title={props.runNowTitle} onClick={props.onInterrupt}>
           <Icon name="corner-down-left" size={12} />
