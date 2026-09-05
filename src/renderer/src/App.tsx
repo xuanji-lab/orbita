@@ -7,7 +7,9 @@ import { useChatSession } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
 import { transcriptToMarkdown } from "@shared/session";
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
-import { Sidebar } from "./shell/Sidebar";
+import { SkillsView } from "./features/skills/SkillsView";
+import { useSkills } from "./features/skills/useSkills";
+import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { ActionRail } from "./shell/ActionRail";
 
 /**
@@ -27,7 +29,8 @@ export function App() {
   /** provider 列表加载失败的原因；null = 正常。**失败要亮在聊天面上**，
    * 不然一次 IPC 失败会显示成「还没有 provider」，用户被引去白配一遍。 */
   const [providersError, setProvidersError] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 中卡盖着哪个面（聊天 / 设置 / Skills）——三者互斥，一个字段说完 */
+  const [overlay, setOverlay] = useState<Overlay>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   useTheme(settings.theme);
@@ -53,27 +56,31 @@ export function App() {
   }, []);
 
   const session = useChatSession(providers);
+  const skills = useSkills(overlay === "skills");
   /** 动作条只在有内容可操作时出现——它承载的是「对这条会话做点什么」 */
-  const showRail = !settingsOpen && (session.sessionId !== null || session.opened !== null);
+  const showRail = overlay === null && (session.sessionId !== null || session.opened !== null);
 
   return (
     <div className="layer">
       <Sidebar
         session={session}
-        settingsOpen={settingsOpen}
+        overlay={overlay}
         settingsTab={settingsTab}
         onSettingsTab={setSettingsTab}
-        onToggleSettings={() => setSettingsOpen((open) => !open)}
+        onOverlay={setOverlay}
+        skills={skills}
       />
 
       <main className="pane">
-        {settingsOpen ? (
+        {overlay === "settings" ? (
           <SettingsView
             tab={settingsTab}
             settings={settings}
             onSettingsChange={changeSettings}
             onProvidersChange={refresh}
           />
+        ) : overlay === "skills" ? (
+          <SkillsView skills={skills} />
         ) : (
           <ChatView session={session} providersError={providersError} />
         )}
