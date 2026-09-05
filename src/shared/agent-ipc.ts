@@ -154,6 +154,16 @@ export type AgentCommand =
        * pi 把自己的 session 文件放在哪。**由主进程给**——runtime 不做路径策略决定。
        */
       piSessionDir: string;
+      /**
+       * 启用中的 skills 目录。同样**由主进程给**（同 `piSessionDir`）。
+       *
+       * **启停就是目录互移**：在 `skills/` 里就生效，移到旁边的 `skills-inactive/` 就不生效。
+       * 不引入开关字段、不维护启用清单——**磁盘布局就是全部状态**，不会出现
+       * 「清单说启用了但文件早删了」这种两份真相对不上的情况。
+       *
+       * 目录不存在不是错，当作一个 skill 都没装（pi 内部先 existsSync 拦一道）。
+       */
+      skillsDir: string;
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
     }
