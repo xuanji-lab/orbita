@@ -5,6 +5,7 @@ import { describeList } from "../chat/load-state";
 import type { SkillsState } from "./useSkills";
 import { api } from "../../api";
 import type { SkillContent } from "@shared/skill";
+import type { McpStatus } from "@shared/mcp";
 
 
 /**
@@ -103,7 +104,108 @@ function Overview(props: { skills: SkillsState }) {
           <Icon name="folder" size={14} /> Open skills folder
         </button>
       </span>
+
+      <Servers skills={skills} />
     </section>
+  );
+}
+
+/**
+ * MCP server 区。**和 skills 同一个面**：用户问的是「这个 agent 会什么」，
+ * 而 skill（怎么做）与 MCP 工具（能碰什么）是同一个问题的两半。
+ *
+ * 只读：加减 server 要填命令、参数、环境变量，做成表单不如直接给文件——
+ * 而且用户手上现成的 Claude Desktop 配置能直接粘进去。
+ */
+function Servers(props: { skills: SkillsState }) {
+  const { servers, serversLoad } = props.skills;
+  const list = describeList(serversLoad, servers.length);
+  return (
+    <section style={{ display: "grid", gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
+      <h2
+        style={{
+          margin: 0,
+          fontSize: "var(--font-size-label)",
+          fontWeight: "var(--weight-medium)",
+        }}
+      >
+        MCP servers
+      </h2>
+      <p style={{ margin: 0, fontSize: "var(--font-size-body)", color: "var(--color-text-secondary)" }}>
+        Each connected server adds its tools to the agent, named{" "}
+        <code>mcp__server__tool</code>. Connections are shared by all tasks.
+      </p>
+      {list.error !== null && <Line tone="bad">{list.error}</Line>}
+      {list.body === "loading" ? (
+        <Line tone="busy">Loading servers…</Line>
+      ) : list.body === "empty" ? (
+        <Line tone="busy">No MCP server configured.</Line>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-2)" }}>
+          {servers.map((server) => (
+            <li
+              key={server.name}
+              style={{
+                display: "grid",
+                gap: 2,
+                padding: "var(--space-3)",
+                background: "var(--color-bg-panel)",
+                border: "1px solid var(--color-border-subtle)",
+                borderRadius: "var(--radius-md)",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>
+                <strong style={{ fontSize: "var(--font-size-body)" }}>{server.name}</strong>
+                <ServerStatus status={server.status} />
+              </span>
+              <code
+                style={{
+                  fontSize: "var(--font-size-caption)",
+                  color: "var(--color-text-tertiary)",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {server.detail}
+              </code>
+            </li>
+          ))}
+        </ul>
+      )}
+      <span>
+        <button type="button" onClick={props.skills.openMcpConfig} style={buttonStyle}>
+          <Icon name="wrench" size={14} /> Edit mcp.json
+        </button>
+      </span>
+      <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+        Changes apply the next time the agent process starts a task.
+      </p>
+    </section>
+  );
+}
+
+/** 状态优先用文字，颜色是第二信号（设计系统）。 */
+function ServerStatus(props: { status: McpStatus }) {
+  const { status } = props;
+  const text =
+    status.kind === "ready"
+      ? `${status.tools.length} tool${status.tools.length === 1 ? "" : "s"}`
+      : status.kind === "failed"
+        ? `Failed · ${status.message}`
+        : status.kind === "disabled"
+          ? "Disabled"
+          : "Not connected yet";
+  return (
+    <span
+      title={status.kind === "ready" ? status.tools.join("\n") : undefined}
+      style={{
+        fontSize: "var(--font-size-caption)",
+        color: status.kind === "failed" ? "var(--color-danger)" : "var(--color-text-tertiary)",
+        minWidth: 0,
+        overflowWrap: "anywhere",
+      }}
+    >
+      {text}
+    </span>
   );
 }
 

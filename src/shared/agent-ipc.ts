@@ -11,6 +11,7 @@
  */
 import type { SessionPhase, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
+import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 
@@ -71,6 +72,10 @@ export const ipcChannels = {
   skillWrite: "skill:write",
   /** 在系统文件管理器里揭示该 skill 目录（新建 / 删除走这里，不自建 UI） */
   skillReveal: "skill:reveal",
+  /** MCP server 列表与它们此刻的连接状态 */
+  mcpList: "mcp:list",
+  /** 用系统默认编辑器打开 mcp.json（加减 server 走文件，不做表单） */
+  mcpOpenConfig: "mcp:open-config",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
@@ -174,6 +179,15 @@ export type AgentCommand =
        * 目录不存在不是错，当作一个 skill 都没装（pi 内部先 existsSync 拦一道）。
        */
       skillsDir: string;
+      /**
+       * MCP server 配置。**传解析好的而不是文件路径**：读文件与讲错误是主进程的事
+       * （跟 skillsDir 同一条纪律），而且 env 里往往有密钥，路径传过去等于让
+       * agent 进程自己去读一份我们已经读过的敏感文件。
+       *
+       * **连接是进程级的**：同一个 agent 进程里只连一次，后续会话共享已连上的
+       * 那批工具——每条会话都拉起一份 `npx some-server` 会让子进程数量随会话线性增长。
+       */
+      mcpServers: Record<string, McpServer>;
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
     }
@@ -227,6 +241,11 @@ export type AgentCommand =
 export type AgentEvent =
   | { type: "ready" }
   | { type: "builtins"; providers: BuiltinProvider[] }
+  /**
+   * MCP 连接结果。**没有 sessionId**：连接是进程级的，不属于哪一条会话。
+   * 主进程接住它当缓存，管理面查的就是这份快照（连接状态是运行时事实，不落盘）。
+   */
+  | { type: "mcp"; servers: McpServerInfo[] }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }

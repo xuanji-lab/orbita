@@ -4,6 +4,7 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { SkillContent, SkillMeta, SkillPatch } from "../../shared/skill.ts";
+import type { McpServerInfo } from "../../shared/mcp.ts";
 
 export const skillApi = {
   /** 两个目录一起列，按 slug 排序 */
@@ -20,4 +21,12 @@ export const skillApi = {
   /** 在文件管理器里揭示；传 null 打开 skills 根目录（新建走这里） */
   reveal: (slug: string | null): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.skillReveal, slug),
+} as const;
+
+/** MCP 的 contextBridge 面。和 skills 放同一个文件：两者是同一个「能力」面的两半。 */
+export const mcpApi = {
+  /** server 列表与它们此刻的连接状态 */
+  list: (): Promise<McpServerInfo[]> => ipcRenderer.invoke(ipcChannels.mcpList),
+  /** 用系统默认编辑器打开 mcp.json（加减 server 走文件） */
+  openConfig: (): Promise<void> => ipcRenderer.invoke(ipcChannels.mcpOpenConfig),
 } as const;

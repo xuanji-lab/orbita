@@ -65,6 +65,7 @@ const CREATE_INPUT = {
   mode: "manual" as const,
   piSessionDir: "C:/pi-sessions",
   skillsDir: "C:/skills",
+  mcpServers: {},
 };
 
 /** 排空微任务队列——emit(ready) 之后 host 的续体（注册 pending、发命令）要等一跳才跑。 */

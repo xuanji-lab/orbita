@@ -17,6 +17,7 @@
     "@earendil-works/pi-client": "0.84.3",
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@earendil-works/pi-protocol": "0.84.3",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "diff": "^9.0.0",
     "katex": "0.16.47",
     "react": "^19.2.0",

@@ -9,6 +9,8 @@ import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { registerMcpIpc } from "./mcp/ipc.ts";
+import { McpStore } from "./mcp/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
@@ -103,7 +105,11 @@ void app.whenReady().then(() => {
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
   const sessions = new SessionStore(join(configDir, "sessions"));
   const record = createSessionRecorder(sessions);
+  // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
+  const mcp = new McpStore(configDir);
+  const mcpIpc = registerMcpIpc(mcp);
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
+    if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
     record(event);
     broadcastAgentEvent(event);
   });
@@ -122,7 +128,14 @@ void app.whenReady().then(() => {
     console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
   });
   registerSkillIpc(skills);
-  registerAgentIpc(agentHost, providers, sessions, join(configDir, "pi-sessions"), skills.enabledDir());
+  registerAgentIpc(
+    agentHost,
+    providers,
+    sessions,
+    join(configDir, "pi-sessions"),
+    skills.enabledDir(),
+    mcp,
+  );
   app.on("before-quit", () => agentHost.dispose());
 
   createMainWindow();

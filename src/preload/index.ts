@@ -7,7 +7,7 @@ import { agentApi } from "./api/agent.ts";
 import { providerApi } from "./api/provider.ts";
 import { sessionApi } from "./api/session.ts";
 import { settingsApi } from "./api/settings.ts";
-import { skillApi } from "./api/skill.ts";
+import { mcpApi, skillApi } from "./api/skill.ts";
 import { workspaceApi } from "./api/workspace.ts";
 
 const api = {
@@ -16,6 +16,7 @@ const api = {
   session: sessionApi,
   settings: settingsApi,
   skill: skillApi,
+  mcp: mcpApi,
   workspace: workspaceApi,
   /**
    * 宿主平台。**不是 IPC 通道**，是个同步常量——渲染层需要它，因为

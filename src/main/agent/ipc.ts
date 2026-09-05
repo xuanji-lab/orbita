@@ -12,6 +12,7 @@ import type { PermissionAnswer, PermissionMode } from "../../shared/permission.t
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
+import type { McpStore } from "../mcp/store.ts";
 import { AgentHost } from "./host.ts";
 
 /**
@@ -71,6 +72,8 @@ export function registerAgentIpc(
   piSessionDir: string,
   /** 启用中的 skills 目录。同上：路径策略在主进程 */
   skillsDir: string,
+  /** MCP 配置。**主进程读文件**，agent 进程只收解析好的结果（同 skillsDir 的纪律） */
+  mcp: McpStore,
 ): void {
   ipcMain.handle(
     ipcChannels.agentCreate,
@@ -83,6 +86,15 @@ export function registerAgentIpc(
           mode: input.mode,
           piSessionDir,
           skillsDir,
+          /*
+           * 读不出来不拦建会话。这里与 D-3 不矛盾：那条纪律是「不把失败伪装成空」，
+           * 而这里失败会当场打日志、管理面也会把读错原文显示出来；
+           * 一份写坏的 mcp.json 不该让用户连对话都开不了。
+           */
+          mcpServers: await mcp.read().catch((error: unknown) => {
+            console.error("[main] mcp.json 读不了，这一条会话没有 MCP 工具", error);
+            return {};
+          }),
           // 续会话：把 pi 自己那份本子还给它（guideline §四）
           ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
           provider,

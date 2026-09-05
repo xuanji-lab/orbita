@@ -30,6 +30,7 @@ import {
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { McpHub } from "./mcp.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
 
@@ -244,6 +245,12 @@ interface LiveSession {
 
 const sessions = new Map<string, LiveSession>();
 
+/**
+ * MCP 连接。**进程级一份**，所有会话共享——每条会话各拉一份 `npx some-server`
+ * 会让子进程数量随会话线性增长，而 MCP server 本来就是无状态的工具提供方。
+ */
+const mcpHub = new McpHub();
+
 /** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
 const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
 
@@ -371,7 +378,20 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
    * 用户至少还能接着说话，而不是对着一条打不开的会话干瞪眼。
    */
   const sessionManager = openOrCreate(command);
-  const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
+  /**
+   * MCP 工具。**连接在进程级只做一次**（`McpHub.start` 自己幂等），后续会话直接拿
+   * 已连上的那批。连不上不拦建会话——MCP server 是外部程序，装错命令、缺环境变量
+   * 都是常态，不该让一台坏的把会话堵死；状态经 `mcp` 事件告诉界面。
+   */
+  await mcpHub.start(command.mcpServers);
+  send({ type: "mcp", servers: mcpHub.describe() });
+  const customTools = mcpHub.currentTools();
+  const { session } = await createAgentSessionFromServices({
+    services,
+    sessionManager,
+    model,
+    ...(customTools.length > 0 ? { customTools } : {}),
+  });
   /**
    * 排队整批投递：多条排队在一个注入点全部给模型、一次回应（Claude Code 同款）。
    * pi 默认 one-at-a-time（每条各起一轮）会把互相修正的碎片补充——「先跑」「别跑」
