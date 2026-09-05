@@ -61,6 +61,16 @@ export const ipcChannels = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
+  /** 两个目录一起扫：`skills/` 算启用，`skills-inactive/` 算停用 */
+  skillList: "skill:list",
+  /** 启停 = 在两个目录间 rename。不写开关位，磁盘布局就是状态 */
+  skillToggle: "skill:toggle",
+  /** 读详情（已拆成 name / description / 正文）；不存在返回 null */
+  skillRead: "skill:read",
+  /** 改详情。缺席的字段不动，frontmatter 其它字段原样保留 */
+  skillWrite: "skill:write",
+  /** 在系统文件管理器里揭示该 skill 目录（新建 / 删除走这里，不自建 UI） */
+  skillReveal: "skill:reveal",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
