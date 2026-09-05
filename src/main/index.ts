@@ -4,12 +4,13 @@
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, shell } from "electron";
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { registerSkillIpc } from "./skill/ipc.ts";
+import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
@@ -21,28 +22,6 @@ import { ProviderStore } from "./provider/store.ts";
 
 // 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
 preferIPv4();
-
-/** 启用中的 skills。pi 只看这一个目录。 */
-const SKILLS_DIR = "skills";
-/** 停用的 skills。**仅供存放**，不交给 pi——启停就是在这两个目录间 rename。 */
-const SKILLS_INACTIVE_DIR = "skills-inactive";
-
-/**
- * 把两个 skills 目录先建出来。
- *
- * 建不出来不拦启动：没有 skills 目录是合法状态（一个都没装），为它让整个应用
- * 起不来是过度反应。但要留日志——不打印的话，一个权限坏掉的目录会表现成
- * 「skill 放了但没生效」，而那是最难查的一类问题。
- */
-async function ensureSkillDirs(configDir: string): Promise<void> {
-  for (const name of [SKILLS_DIR, SKILLS_INACTIVE_DIR]) {
-    try {
-      await mkdir(join(configDir, name), { recursive: true });
-    } catch (error) {
-      console.error(`[main] 建不了 ${name} 目录，skills 可能不生效`, error);
-    }
-  }
-}
 
 /** 26-entry-layer §9.2 安全不变量：三条都不许放松。 */
 const SECURITY_INVARIANTS = {
@@ -132,17 +111,18 @@ void app.whenReady().then(() => {
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost);
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
-  // 两个 skills 目录先建出来：**空目录就是说明书**——用户打开 userData 看到
-  // `skills/` 与 `skills-inactive/` 并排，「放进去生效、移出去失效」不需要再解释。
-  // 只建 `skills/` 的话，停用该往哪儿移就得去翻文档了。
-  void ensureSkillDirs(configDir);
-  registerAgentIpc(
-    agentHost,
-    providers,
-    sessions,
-    join(configDir, "pi-sessions"),
-    join(configDir, SKILLS_DIR),
-  );
+  /*
+   * 两个 skills 目录先建出来：**空目录就是说明书**——用户打开 userData 看到
+   * `skills/` 与 `skills-inactive/` 并排，「放进去生效、移出去失效」不需要再解释。
+   * 建不出来不拦启动：没有 skills 目录是合法状态（一个都没装）。但要留日志——
+   * 不打印的话，一个权限坏掉的目录会表现成「skill 放了但没生效」，那是最难查的一类。
+   */
+  const skills = new SkillStore(configDir);
+  void skills.ensureDirs().catch((error: unknown) => {
+    console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
+  });
+  registerSkillIpc(skills);
+  registerAgentIpc(agentHost, providers, sessions, join(configDir, "pi-sessions"), skills.enabledDir());
   app.on("before-quit", () => agentHost.dispose());
 
   createMainWindow();
