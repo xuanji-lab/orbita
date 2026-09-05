@@ -29,7 +29,6 @@ import terminal from "../../../../Orbita Design System/assets/icons/lucide/termi
 import fileText from "../../../../Orbita Design System/assets/icons/lucide/file-text.svg?raw";
 import trash2 from "../../../../Orbita Design System/assets/icons/lucide/trash-2.svg?raw";
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
-import sigma from "../../../../Orbita Design System/assets/icons/lucide/sigma.svg?raw";
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
@@ -69,7 +68,6 @@ const ICONS = {
   plus,
   settings,
   "shield-check": shieldCheck,
-  sigma,
   sliders,
   square,
   search,
