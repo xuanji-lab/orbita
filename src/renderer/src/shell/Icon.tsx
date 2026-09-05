@@ -8,6 +8,7 @@ import check from "../../../../Orbita Design System/assets/icons/lucide/check.sv
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import clock from "../../../../Orbita Design System/assets/icons/lucide/clock.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
+import cornerDownLeft from "../../../../Orbita Design System/assets/icons/lucide/corner-down-left.svg?raw";
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
 import download from "../../../../Orbita Design System/assets/icons/lucide/download.svg?raw";
 import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
@@ -31,6 +32,7 @@ import trash2 from "../../../../Orbita Design System/assets/icons/lucide/trash-2
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
+import undo2 from "../../../../Orbita Design System/assets/icons/lucide/undo-2.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
 import x from "../../../../Orbita Design System/assets/icons/lucide/x.svg?raw";
 import wrench from "../../../../Orbita Design System/assets/icons/lucide/wrench.svg?raw";
@@ -52,6 +54,7 @@ const ICONS = {
   "chevron-down": chevronDown,
   clock,
   copy,
+  "corner-down-left": cornerDownLeft,
   cpu,
   download,
   "ellipsis-vertical": ellipsisVertical,
@@ -75,6 +78,7 @@ const ICONS = {
   "file-text": fileText,
   "trash-2": trash2,
   "triangle-alert": triangleAlert,
+  "undo-2": undo2,
   workflow,
   wrench,
   x,

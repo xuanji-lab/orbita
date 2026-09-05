@@ -9,13 +9,11 @@ import {
   consumePendingSends,
   consumePendingTexts,
   createSessionStates,
-  editPendingSend,
   mergeQueueView,
   parseCompactCommand,
   removeApproval,
   removePendingSend,
   removeSessionEntry,
-  replaceQueueOrderKey,
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
@@ -26,6 +24,7 @@ import {
 } from "./session-states.ts";
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { recordToolFrame } from "./tool-results.ts";
+import { appendWithdrawn } from "./withdraw-draft.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
@@ -147,18 +146,14 @@ export interface ChatSession {
   pendingSends: readonly PendingSend[];
   /** 排队卡片视图：pi 队列项与本地待办按输入顺序交错 */
   queueView: readonly QueueViewEntry[];
-  /** 排队项转插队（下一个工具边界注入当前轮）。index 指 [...steering, ...followUp] 拼接视图 */
-  /** 立即发送排队中的第 index 条：打断当前轮（含工具调用），它成为新一轮 */
+  /** 立即发送排队中的第 index 条：打断当前轮（含工具调用），它成为新一轮。
+   *  index 指 [...steering, ...followUp] 拼接视图 */
   interruptQueued: (index: number, text: string) => void;
-  /** 排队项移出 pi 队列（runtime 侧 clearQueue + 重放实现） */
-  cancelQueued: (index: number, text: string) => void;
-  /** 排队项改文本（保持原属队列与顺位） */
-  editQueued: (index: number, text: string, newText: string) => void;
-  /** 取消一条本地待办（纯本地状态） */
-  cancelPendingSend: (index: number) => void;
-  /** 改写一条本地待办的文本（text 改内容，compact 改压缩要求） */
-  editPendingSend: (index: number, text: string) => void;
-  /** 本地 compact 待办的「立即」：马上压缩，不等空闲 */
+  /** 撤回：移出 pi 队列（runtime 侧 clearQueue + 重放），文字落回草稿 */
+  withdrawQueued: (index: number, text: string) => void;
+  /** 撤回一条本地待办；text 项文字落回草稿，compact 项只取消 */
+  withdrawPendingSend: (index: number) => void;
+  /** 本地 compact 待办的「立即」：马上压缩，不等空闲。与 pi 项的「立即」同名不同物 */
   runPendingNow: (index: number) => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
@@ -806,33 +801,34 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.agent.answerPermission(requestId, answer);
   }, []);
 
-  // 排队编辑只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框
-  const queueEdit = useCallback(
-    (op: "cancel" | "edit", index: number, text: string, newText?: string) => {
+  // 排队撤回只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框。
+  // pi 没有单条删的 API，runtime 侧是 clearQueue + 按规划重放。
+  const dropFromQueue = useCallback((index: number, text: string) => {
+    const id = sessionRef.current;
+    if (id === null) return;
+    void api.agent
+      .queueEdit(id, "cancel", index, text)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, []);
+
+  /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。 */
+  const restoreToDraft = useCallback((text: string) => {
+    setDraft((prev) => appendWithdrawn(prev, text));
+  }, []);
+
+  const withdrawPendingSend = useCallback(
+    (index: number) => {
       const id = sessionRef.current;
       if (id === null) return;
-      // edit 先把顺序账本里的键换掉：queue_update 带新文本回来时对账能保住原位
-      if (op === "edit" && newText !== undefined) {
-        setStates((prev) => replaceQueueOrderKey(prev, id, `pi\0${text}`, `pi\0${newText}`));
-      }
-      void api.agent
-        .queueEdit(id, op, index, text, newText)
-        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+      const item = statesRef.current.get(id)?.pendingSends[index];
+      if (item === undefined) return;
+      setStates((prev) => removePendingSend(prev, id, index));
+      // compact 项没有「用户的话」可拿回——本仓没有斜杠命令 UI，把 `/compact`
+      // 塞进输入框只会变成一条普通消息。它的撤回就是单纯取消。
+      if (item.kind === "text") restoreToDraft(item.text);
     },
-    [],
+    [restoreToDraft],
   );
-
-  const editPending = useCallback((index: number, text: string) => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    setStates((prev) => editPendingSend(prev, id, index, text));
-  }, []);
-
-  const cancelPendingSend = useCallback((index: number) => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    setStates((prev) => removePendingSend(prev, id, index));
-  }, []);
 
   /** 本地待办的「立即」：只对 compact 有意义——不等空闲，马上压（pi 会先停当前轮） */
   const runPendingNow = useCallback((index: number) => {
@@ -908,11 +904,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setError(cause instanceof Error ? cause.message : String(cause)),
       );
     },
-    cancelQueued: (index: number, text: string) => queueEdit("cancel", index, text),
-    editQueued: (index: number, text: string, newText: string) =>
-      queueEdit("edit", index, text, newText),
-    cancelPendingSend,
-    editPendingSend: editPending,
+    withdrawQueued: (index: number, text: string) => {
+      dropFromQueue(index, text);
+      // 乐观回填：取消可能因对账不中而落空（那一瞬刚好被投递）。
+      // 不为此改 IPC 契约：文字明摆在输入框里、那条也已在对话里显形，
+      // 用户看得见。比原来「静默吞字」严格更好。
+      restoreToDraft(text);
+    },
+    withdrawPendingSend,
     runPendingNow,
     newTask,
     newTaskIn,

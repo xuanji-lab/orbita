@@ -330,30 +330,6 @@ export function addPendingSend(states: SessionStates, sessionId: string, item: P
   );
 }
 
-/**
- * 改写一条本地待办的文本（text 项改 text；compact 项改压缩要求，空串 = 无要求）。
- * 键同步替换保位。
- */
-export function editPendingSend(states: SessionStates, sessionId: string, index: number, text: string): SessionStates {
-  const entry = states.get(sessionId);
-  const item = entry?.pendingSends[index];
-  if (item === undefined) return states;
-  const trimmed = text.trim();
-  // text 项存空串等于排一条空消息，落空；compact 项空串合法（清掉压缩要求）
-  if (item.kind === "text" && trimmed === "") return states;
-  const replacement: PendingSend =
-    item.kind === "text"
-      ? { kind: "text", text }
-      : { kind: "compact", ...(trimmed === "" ? {} : { instructions: trimmed }) };
-  const rekeyed = replaceQueueOrderKey(states, sessionId, localQueueKey(item), localQueueKey(replacement));
-  return update(rekeyed, sessionId, (current) =>
-    syncQueueOrder({
-      ...current,
-      pendingSends: current.pendingSends.map((pending, i) => (i === index ? replacement : pending)),
-    }),
-  );
-}
-
 /** 取消一条本地待办。纯本地状态，即点即删，按下标定位；越界原样返回。 */
 export function removePendingSend(states: SessionStates, sessionId: string, index: number): SessionStates {
   const entry = states.get(sessionId);
@@ -390,22 +366,6 @@ export function consumePendingTexts(states: SessionStates, sessionId: string): S
       pendingSends: current.pendingSends.filter((item) => item.kind !== "text"),
     }),
   );
-}
-
-/** pi 队列项编辑保位：hook 发起 edit 的同时把账本里的旧键替换成新键（首个匹配）。 */
-export function replaceQueueOrderKey(
-  states: SessionStates,
-  sessionId: string,
-  oldKey: string,
-  newKey: string,
-): SessionStates {
-  const entry = states.get(sessionId);
-  if (entry === undefined) return states;
-  const at = entry.queueOrder.indexOf(oldKey);
-  if (at === -1) return states;
-  const next = [...entry.queueOrder];
-  next[at] = newKey;
-  return update(states, sessionId, (current) => ({ ...current, queueOrder: next }));
 }
 
 // ---------------------------------------------------------------------------
