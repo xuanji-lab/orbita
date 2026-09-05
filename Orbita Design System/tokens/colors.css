@@ -112,3 +112,45 @@
   --color-chat-table-bg: #1d2024;
   --color-chat-link: #93c5fd;
 }
+
+/* black — 真黑档（OLED）。dark 的「黑 + 黄」走到底：底色阶从纯黑起抬，
+   黄 accent、墨色与状态色沿用 dark 不重调——换的是地，不是墨。
+   black 是手动档，system 跟随系统只落 light/dark（2026-09-03 黑色皮肤）。 */
+:root[data-theme="black"] {
+  color-scheme: dark;
+  --color-bg-app: #000000;
+  --color-bg-sidebar: #0b0d0f;
+  --color-bg-panel: #121519;
+  --color-bg-muted: #0d0f12;
+  --color-bg-hover: #1b2026;
+  --color-bg-active: rgba(212, 167, 44, 0.18);
+  --color-text-primary: #eceff3;
+  --color-text-secondary: #b9c0c8;
+  --color-text-tertiary: #858e99;
+  --color-text-inverse: #1b1a15;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: #20262c;
+  --color-border-default: #282f36;
+  --color-border-strong: #303841;
+  --color-accent: #e3c25a;
+  --color-accent-strong: #f0d375;
+  --color-accent-soft: rgba(212, 167, 44, 0.18);
+  --color-accent-fg: #1b1a15;
+  --color-mode-active-bg: rgba(212, 167, 44, 0.18);
+  --color-mode-active-fg: #e3c25a;
+  --color-danger: #ff7b72;
+  --color-danger-solid: #c9372c;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #3b1f1d;
+  --color-warning: #d4a72c;
+  --color-info: #6aa4ff;
+  --color-info-fg: #1b1a15;
+  --color-success: #56d364;
+  --color-success-bg: #12251a;
+  --color-success-border: #1d4429;
+  --color-chat-card-bg: #171b20;
+  --color-chat-muted-bg: #1b2026;
+  --color-chat-control-bg: #121519;
+  --color-chat-table-bg: #121519;
+  --color-chat-link: #93c5fd;
+}
