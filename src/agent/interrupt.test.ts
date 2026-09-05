@@ -1,0 +1,101 @@
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
+import { interruptWithQueued, type InterruptOps } from "./interrupt.ts";
+
+/** 记录调用序的假会话：顺序正是本模块要守的东西。 */
+function fakeOps(queue: { steering: string[]; followUp: string[] }): {
+  ops: InterruptOps;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const ops: InterruptOps = {
+    clearQueue: () => {
+      calls.push("clearQueue");
+      return { steering: [...queue.steering], followUp: [...queue.followUp] };
+    },
+    abort: async () => {
+      calls.push("abort");
+    },
+    followUp: async (text) => {
+      calls.push(`followUp:${text}`);
+    },
+    echoUserPrompt: (text) => {
+      calls.push(`echo:${text}`);
+    },
+    prompt: async (text) => {
+      calls.push(`prompt:${text}`);
+    },
+  };
+  return { ops, calls };
+}
+
+describe("interruptWithQueued —— 打断的调用序", () => {
+  test("单条排队：清队 → abort → 开新一轮", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲"] });
+    assert.equal(await interruptWithQueued(ops, 0, "甲"), true);
+    assert.deepEqual(calls, ["clearQueue", "abort", "echo:甲", "prompt:甲"]);
+  });
+
+  test("其余排队项在 prompt 之前回队——prompt 会 await 完整一轮，排它后面就晚了一整轮", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲", "乙", "丙"] });
+    assert.equal(await interruptWithQueued(ops, 0, "甲"), true);
+    assert.deepEqual(calls, [
+      "clearQueue",
+      "abort",
+      "followUp:乙",
+      "followUp:丙",
+      "echo:甲",
+      "prompt:甲",
+    ]);
+    // 回队必须早于 prompt：这一条挂了就是「乙丙消失一整轮且不会被自动投递」
+    assert.ok(calls.indexOf("followUp:乙") < calls.indexOf("prompt:甲"));
+    assert.ok(calls.indexOf("followUp:丙") < calls.indexOf("prompt:甲"));
+  });
+
+  test("clearQueue 必须早于 abort——反过来 post-run 会自动续轮，打断变换人", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲", "乙"] });
+    await interruptWithQueued(ops, 0, "甲");
+    assert.ok(calls.indexOf("clearQueue") < calls.indexOf("abort"));
+  });
+
+  test("打断队列中间一条：前后的都回队，相对顺序不变", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲", "乙", "丙"] });
+    assert.equal(await interruptWithQueued(ops, 1, "乙"), true);
+    assert.deepEqual(calls, [
+      "clearQueue",
+      "abort",
+      "followUp:甲",
+      "followUp:丙",
+      "echo:乙",
+      "prompt:乙",
+    ]);
+  });
+
+  test("steering 与 followUp 合成一个视图，回队一律走 followUp", async () => {
+    const { ops, calls } = fakeOps({ steering: ["插队的"], followUp: ["等着的"] });
+    // index 1 指的是拼接视图 [插队的, 等着的] 里的第二条
+    assert.equal(await interruptWithQueued(ops, 1, "等着的"), true);
+    assert.deepEqual(calls, [
+      "clearQueue",
+      "abort",
+      "followUp:插队的",
+      "echo:等着的",
+      "prompt:等着的",
+    ]);
+  });
+
+  test("对账不中：整单放弃，不 abort 不 prompt，队列原样放回", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲", "乙"] });
+    // 期望文本与队列现状不符（那条刚被投递）
+    assert.equal(await interruptWithQueued(ops, 0, "已经不在了"), false);
+    assert.deepEqual(calls, ["clearQueue", "followUp:甲", "followUp:乙"]);
+    assert.ok(!calls.includes("abort"));
+    assert.ok(!calls.some((call) => call.startsWith("prompt:")));
+  });
+
+  test("下标越界：同样整单放弃并放回", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲"] });
+    assert.equal(await interruptWithQueued(ops, 5, "甲"), false);
+    assert.deepEqual(calls, ["clearQueue", "followUp:甲"]);
+  });
+});

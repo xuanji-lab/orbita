@@ -30,6 +30,7 @@ import {
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { interruptWithQueued } from "./interrupt.ts";
 import { planQueueEdit } from "./queue-edit.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
@@ -636,26 +637,23 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
   if (command.type === "interrupt") {
-    // **立即发送 = 打断**（wafo 2026-09-03 裁决）：pi 的 steering 只在两次 LLM 响应
-    // 之间消化（agent-loop.ts:166，工具调用跑完才轮到），走插队永远打断不了
-    // 正在跑的工具。所以这里不走队列：出队 → abort → 它自己成为新一轮。
-    const { steering, followUp } = live.session.clearQueue();
-    const combined = [...steering, ...followUp];
-    // 对账守卫：队列刚被并发改过（index/text 对不上）就整单放弃，宁可不发不切错
-    if (combined[command.index] !== command.text) return;
-    combined.splice(command.index, 1);
-    const steeringCount = steering.length - (command.index < steering.length ? 1 : 0);
-    // 队列先清空再 abort——否则 post-run 看到还有排队就会自动续轮，打断变成换人
-    await live.session.abort();
-    live.echoed.add(command.text);
-    for (const progress of live.adapter.userPrompt(command.text)) {
-      send({ type: "progress", sessionId: command.sessionId, progress });
-    }
-    await live.session.prompt(command.text, { expandPromptTemplates: false });
-    // 其余排队消息全部转 followUp 回队：它们等打断后的这一轮结束再投递，
-    // 不混进被插队的这一轮（原 steer/followUp 之分在打断语境下不再有意义）
-    for (const text of combined.slice(0, steeringCount)) await live.session.followUp(text);
-    for (const text of combined.slice(steeringCount)) await live.session.followUp(text);
+    // 调用序与它们各自的理由在 interrupt.ts（那里有测试）。
+    await interruptWithQueued(
+      {
+        clearQueue: () => live.session.clearQueue(),
+        abort: () => live.session.abort(),
+        followUp: (text) => live.session.followUp(text),
+        echoUserPrompt: (text) => {
+          live.echoed.add(text);
+          for (const progress of live.adapter.userPrompt(text)) {
+            send({ type: "progress", sessionId: command.sessionId, progress });
+          }
+        },
+        prompt: (text) => live.session.prompt(text, { expandPromptTemplates: false }),
+      },
+      command.index,
+      command.text,
+    );
     return;
   }
   if (command.type === "abort") {
