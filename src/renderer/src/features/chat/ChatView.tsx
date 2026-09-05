@@ -1120,7 +1120,20 @@ function ToolLine(props: {
           </span>
           <span style={headLabel(active)}>{props.toolName}</span>
         </span>
-        {callSummary !== null && <span style={SLOT.sub}>{callSummary}</span>}
+        {callSummary !== null && (
+          <span
+            style={
+              props.toolName === "read" ||
+              props.toolName === "write" ||
+              props.toolName === "edit" ||
+              props.toolName === "ls"
+                ? { ...SLOT.sub, color: "var(--color-chat-link)" }
+                : SLOT.sub
+            }
+          >
+            {callSummary}
+          </span>
+        )}
         {/* 增删统计紧跟文件名（git stat 读法）；与展开后 DiffView 头重复，展开时藏起 */}
         {!open && stats !== null && (
           <span style={SLOT.status}>
@@ -1480,7 +1493,7 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
     return (
       <div key={key} style={BODY_LINE}>
         {dir !== "" && <span style={{ color: "var(--color-text-secondary)" }}>{dir}</span>}
-        <span style={{ color: "var(--color-text-primary)" }}>{name === "" ? " " : name}</span>
+        <span style={{ color: "var(--color-chat-link)" }}>{name === "" ? " " : name}</span>
       </div>
     );
   }

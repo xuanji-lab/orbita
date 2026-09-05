@@ -226,7 +226,8 @@ body {
   text-decoration: underline;
 }
 
-/* 行内 code 是浅色小芯片（跟随主题），文字继承正文色；代码块同一份底 */
+/* 行内 code 是浅色小芯片（跟随主题）；代码块同一份底，另加发丝线——
+   深色下 muted 底与地面只差几阶，块的边界靠线不靠色。 */
 .chat-md code {
   font-family: var(--font-family-business);
   font-size: 0.9em;
@@ -235,10 +236,20 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/*
+ * 行内 code（正文里的文件名、路径、标识符——「机器内容」）用链接色，与正文墨色
+ * 分层：Light 蓝 / Warm 青 / Ink 蓝（2026-09-04 用户反馈：深色下与正文难分辨）。
+ * 只上行内：块内是语法色的领地，无语法色的裸块继承正文色，不能整块变链接色。
+ */
+.chat-md :not(pre) > code {
+  color: var(--color-chat-link);
+}
+
 .chat-md pre {
   margin: var(--space-2) 0;
   padding: var(--space-3);
   background: var(--color-chat-muted-bg);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   overflow-x: auto;
 }

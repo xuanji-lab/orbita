@@ -36,11 +36,36 @@ import langYaml from "shiki/langs/yaml.mjs";
 import themeGithubLight from "shiki/themes/github-light.mjs";
 import themeGithubDark from "shiki/themes/github-dark.mjs";
 
+/**
+ * github-dark（旧版调色板）只有函数**声明**的规则（entity.name → #b392f0），
+ * **调用位**（代码里的大多数 `foo()`）没有规则，落到与正文同色的默认前景——
+ * 函数在代码里隐身（2026-09-04 用户反馈）。补一条 GitHub 新版暗色的函数紫
+ * #d2a8ff：声明与调用一视同仁，且比旧紫亮一档。TextMate 最长 scope 胜出，
+ * 这条会压过同名的宽规则。浅色主题不动。
+ */
+const GITHUB_DARK = {
+  ...themeGithubDark,
+  tokenColors: [
+    ...(themeGithubDark.tokenColors ?? []),
+    {
+      scope: [
+        "entity.name.function",
+        "variable.function",
+        "support.function",
+        "meta.function-call entity.name.function",
+        "meta.function-call.generic entity.name.function",
+        "meta.function-call.method entity.name.function",
+      ],
+      settings: { foreground: "#d2a8ff" },
+    },
+  ],
+};
+
 type Highlighter = Awaited<ReturnType<typeof createHighlighterCore>>;
 
 /** import 即预热；resolve 后 `highlightBlock` 才会真正产出 HTML */
 export const highlighterReady: Promise<Highlighter> = createHighlighterCore({
-  themes: [themeGithubLight, themeGithubDark],
+  themes: [themeGithubLight, GITHUB_DARK],
   langs: [
     langBash,
     langCss,

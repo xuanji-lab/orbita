@@ -111,7 +111,7 @@ brand copy — the slogan — stays in Chinese and is deliberately **not** run t
 **Colour.** Three themes: **white + blue** (light), **warm dark + yellow** (dark), and
 **neutral black + yellow** (black). A warm off-white shell (`#f3f4f1`) with
 pure-white panels, three text greys, three hairline greys. Every colour has exactly one job: the
-accent is blue `#1d4ed8` on light and yellow `#e3c25a` on dark, and it means the single primary
+accent is blue `#1d4ed8` on light and yellow `#d6c245` on dark, and it means the single primary
 action (the send button, "New task", "Start Agent") plus the selected mode — nothing else; amber
 `#b7791f` means running; info blue `#2563eb` marks the thinking glyph; red `#b42318` is failure;
 green `#1a7f37` (dark `#56d364`) is success — git additions, passed validation, editor badges.
@@ -126,7 +126,7 @@ near-black (`#191c1d` shell, `#232525` panel, ink `#d6d5cf / #a3a29b / #82817b` 
 whisper of warmth, yellow washes at `.05` — selection is carried by weight and ink, not fill):
 gruvbox's full cream (`#ebdbb2`) read as "过于黄色" and was cut twice. The black theme — **Ink** — is a **neutral near-black** (Vercel-referenced
 `#0a0a0a` shell, `#111111` panel, ink `#ededed / #a1a1a1 / #707070`), the darkest ground in the set
-and **the dark landing of `system`**. Both take the yellow accent (`#e3c25a`) on
+and **the dark landing of `system`**. Both take the yellow accent (`#d6c245`) on
 `--color-accent-fg`; both are manual choices, `system` resolves to light or Ink. (Both dark grounds
 re-cut 2026-09-03 after seven same-day iterations — true black, GitHub default, GitHub ×0.78 and
 neutral gray each bounced; the user picked warm for dark and darkest-neutral for black from a
