@@ -6,7 +6,6 @@ import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?ra
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
-import chevronUp from "../../../../Orbita Design System/assets/icons/lucide/chevron-up.svg?raw";
 import clock from "../../../../Orbita Design System/assets/icons/lucide/clock.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
 import cornerDownLeft from "../../../../Orbita Design System/assets/icons/lucide/corner-down-left.svg?raw";
@@ -17,6 +16,7 @@ import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/f
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
+import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import panelLeft from "../../../../Orbita Design System/assets/icons/lucide/panel-left.svg?raw";
@@ -53,7 +53,6 @@ const ICONS = {
   brain,
   check,
   "chevron-down": chevronDown,
-  "chevron-up": chevronUp,
   clock,
   copy,
   "corner-down-left": cornerDownLeft,
@@ -64,6 +63,7 @@ const ICONS = {
   folder,
   "folder-plus": folderPlus,
   "git-branch": gitBranch,
+  "grip-vertical": gripVertical,
   "loader-circle": loaderCircle,
   "panel-left": panelLeft,
   "panel-right": panelRight,

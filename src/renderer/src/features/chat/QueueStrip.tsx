@@ -1,5 +1,7 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../../shell/Icon";
+import { placementFromOffset, resolveDropIndex, type DropPlacement } from "./queue-drop.ts";
 import type { QueueViewEntry } from "./session-states.ts";
 
 // ── 本模块全部用户可见文案（英文先行，中文化等真实需求出现再抽字典） ──
@@ -18,8 +20,7 @@ const COPY = {
   runNowCompact: "Compact now",
   withdraw: "Withdraw to the input box",
   withdrawCompact: "Withdraw this compaction",
-  moveUp: "Move earlier in the queue",
-  moveDown: "Move later in the queue",
+  reorder: "Drag to reorder",
 };
 
 /**
@@ -27,8 +28,9 @@ const COPY = {
  * 与本地待办交错合成）——执行顺序仍由机制决定：pi 队列的消息本轮结束投递，
  * 本地 compact 必须等完全空闲，注脚各自如实写。
  *
- * 每条只有两个动作（见 docs/plans/2026-09-06-排队卡动作收敛.md）：
- * **立即发送**（回车图标）与**撤回**（undo 图标，文字落回输入框）。
+ * 每条只有两个按钮（见 docs/plans/2026-09-06-排队卡动作收敛.md）：
+ * **立即发送**（回车图标）与**撤回**（undo 图标，文字落回输入框）；
+ * 调顺序走**行首抓手拖拽**，不占按钮位。
  * 就地编辑已删：它在跟投递赛跑，而队列一动 rowKey 就变、编辑态连同草稿一起蒸发。
  * 撤回把条目从队列里拿走，竞态从根上消失——拿回来了想改多久改多久。
  * 设计规则与 ApprovalBar 同源：浮起的玻璃卡（popover 阴影，比 composer 高一层）、
@@ -47,10 +49,17 @@ export function QueueStrip(props: {
   /** 本地 compact 待办的「立即」：马上压缩，不等空闲。与 pi 项的「立即」同名不同物 */
   onRunPendingNow: (index: number) => void;
 }) {
+  // 拖拽中的源（pi 下标）与当前落点。只活在拖拽过程里，不进任何持久状态。
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [dropAt, setDropAt] = useState<{ index: number; placement: DropPlacement } | null>(null);
   if (props.view.length === 0) return null;
   const haltedNote = props.phase === "idle" ? COPY.haltedNote : null;
   // 只数 pi 项：调顺序在 pi 队列内部进行，中间夹的本地待办不参与（也不占位）
   const piCount = props.view.filter((item) => item.source === "pi").length;
+  const endDrag = () => {
+    setDragging(null);
+    setDropAt(null);
+  };
   return (
     <section
       aria-label={COPY.queued}
@@ -100,18 +109,41 @@ export function QueueStrip(props: {
               ? props.onWithdraw(item.piIndex, item.text)
               : props.onWithdrawPending(item.localIndex)
           }
-          onMoveUp={
-            item.source === "pi" && item.piIndex > 0
-              ? () => props.onMove(item.piIndex, item.text, item.piIndex - 1)
+          reorderTitle={COPY.reorder}
+          // 单条时不给抓手：没有可交换的对象，一个拖不动的抓手只是误导
+          draggable={item.source === "pi" && piCount > 1}
+          dragging={item.source === "pi" && dragging === item.piIndex}
+          dropPlacement={
+            item.source === "pi" && dropAt?.index === item.piIndex ? dropAt.placement : null
+          }
+          onDragStart={
+            item.source === "pi" ? () => setDragging(item.piIndex) : undefined
+          }
+          onDragOverRow={
+            item.source === "pi"
+              ? (placement) => {
+                  if (dragging === null) return;
+                  setDropAt({ index: item.piIndex, placement });
+                }
               : undefined
           }
-          onMoveDown={
-            item.source === "pi" && item.piIndex < piCount - 1
-              ? () => props.onMove(item.piIndex, item.text, item.piIndex + 1)
+          onDropRow={
+            item.source === "pi"
+              ? (placement) => {
+                  if (dragging === null) return;
+                  const toIndex = resolveDropIndex(dragging, item.piIndex, placement);
+                  const source = props.view.find(
+                    (entry) => entry.source === "pi" && entry.piIndex === dragging,
+                  );
+                  // 拖回原位（toIndex 为 null）就什么都不发
+                  if (toIndex !== null && source !== undefined && source.source === "pi") {
+                    props.onMove(dragging, source.text, toIndex);
+                  }
+                  endDrag();
+                }
               : undefined
           }
-          moveUpTitle={COPY.moveUp}
-          moveDownTitle={COPY.moveDown}
+          onDragEnd={endDrag}
         />
       ))}
     </section>
@@ -144,23 +176,81 @@ function noteOf(item: QueueViewEntry, haltedNote: string | null): string {
   return COPY.compactsWhenIdle;
 }
 
-/** 一条排队项：图标 + 文本（截断）+ 状态注脚 + 两个图标动作。 */
+/** 一条排队项：抓手 + 状态图标 + 文本（截断）+ 注脚 + 两个图标动作。 */
 function QueueRow(props: {
   icon: "clock" | "arrow-up";
   note: string;
   text: string;
   runNowTitle: string;
   withdrawTitle: string;
-  moveUpTitle: string;
-  moveDownTitle: string;
+  reorderTitle: string;
+  draggable: boolean;
+  /** 自己正被拖着 */
+  dragging: boolean;
+  /** 非 null = 落点在本行上/下沿，画一条插入线 */
+  dropPlacement: DropPlacement | null;
   onInterrupt?: () => void;
   onWithdraw: () => void;
-  /** 不给 = 已在队首 / 队尾，或者本来就不参与排序 */
-  onMoveUp?: () => void;
-  onMoveDown?: () => void;
+  onDragStart?: () => void;
+  onDragOverRow?: (placement: DropPlacement) => void;
+  onDropRow?: (placement: DropPlacement) => void;
+  onDragEnd: () => void;
 }) {
+  const placementOf = (event: React.DragEvent<HTMLDivElement>): DropPlacement => {
+    const box = event.currentTarget.getBoundingClientRect();
+    return placementFromOffset(event.clientY - box.top, box.height);
+  };
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
+    <div
+      draggable={props.draggable}
+      onDragStart={(event) => {
+        // Firefox 不设 dataTransfer 就不发 drag 事件；内容用不着，给个占位
+        event.dataTransfer.setData("text/plain", "");
+        event.dataTransfer.effectAllowed = "move";
+        props.onDragStart?.();
+      }}
+      onDragOver={(event) => {
+        if (props.onDragOverRow === undefined) return;
+        // 不阻止默认行为就不会触发 drop
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        props.onDragOverRow(placementOf(event));
+      }}
+      onDrop={(event) => {
+        if (props.onDropRow === undefined) return;
+        event.preventDefault();
+        props.onDropRow(placementOf(event));
+      }}
+      onDragEnd={props.onDragEnd}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        minWidth: 0,
+        // 拖拽中的源行压淡，让注意力跟着落点走
+        opacity: props.dragging ? 0.4 : 1,
+        // 插入线用 box-shadow 而不是 border：不撑开布局，行不会因为悬停而跳
+        boxShadow:
+          props.dropPlacement === "before"
+            ? "inset 0 1px 0 0 var(--color-accent)"
+            : props.dropPlacement === "after"
+              ? "inset 0 -1px 0 0 var(--color-accent)"
+              : "none",
+      }}
+    >
+      <span
+        title={props.draggable ? props.reorderTitle : undefined}
+        style={{
+          display: "inline-flex",
+          flex: "0 0 auto",
+          color: "var(--color-text-tertiary)",
+          cursor: props.draggable ? "grab" : "default",
+          // 不可拖时保位：行首对齐不能因为能不能拖而变
+          visibility: props.draggable ? "visible" : "hidden",
+        }}
+      >
+        <Icon name="grip-vertical" size={12} />
+      </span>
       <span style={{ display: "inline-flex", color: "var(--color-text-secondary)", flex: "0 0 auto" }}>
         <Icon name={props.icon} size={12} />
       </span>
@@ -187,16 +277,6 @@ function QueueRow(props: {
       >
         {props.note}
       </span>
-      {props.onMoveUp !== undefined && (
-        <QueueAction title={props.moveUpTitle} onClick={props.onMoveUp}>
-          <Icon name="chevron-up" size={12} />
-        </QueueAction>
-      )}
-      {props.onMoveDown !== undefined && (
-        <QueueAction title={props.moveDownTitle} onClick={props.onMoveDown}>
-          <Icon name="chevron-down" size={12} />
-        </QueueAction>
-      )}
       {props.onInterrupt !== undefined && (
         <QueueAction title={props.runNowTitle} onClick={props.onInterrupt}>
           <Icon name="corner-down-left" size={12} />
