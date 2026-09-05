@@ -340,6 +340,12 @@ export function addPendingSend(states: SessionStates, sessionId: string, item: P
  * 重排后落在前段的就是插队（位置即投递时机）。故意不复用那个函数：
  * 它在 agent 进程侧，renderer 跨进程 import 它会把两边绑死，
  * 而 move 的重排就是一次 splice，重复这几行比建一层共享便宜。
+ *
+ * **账本必须一起改**：显示顺序的真源是 `queueOrder`（mergeQueueView 按它遍历，
+ * `queue` 两个数组只用来按文本查条目），而 syncQueueOrder 会**原样保留**
+ * 账本里已存在的键顺序。只排数组不排账本，界面纹丝不动——真值回来也一样被
+ * 账本压制，表现为「拖拽完全失效」（真实事故 2026-09-06）。
+ * 反过来说，乐观重排账本后真值回来正好被保留，不会回弹。
  */
 export function reorderQueueOptimistic(
   states: SessionStates,
@@ -364,9 +370,21 @@ export function reorderQueueOptimistic(
   if (moved === undefined) return states;
   ordered.splice(toIndex, 0, moved);
   const steerCount = entry.queue.steering.length;
+  // 账本同步：pi 键在 queueOrder 里的**槽位不动**，只把内容按新顺序填回去——
+  // 这样中间夹的本地待办保持它们相对位置，又能让 pi 项换序。
+  const slots: number[] = [];
+  entry.queueOrder.forEach((key, i) => {
+    if (key.startsWith("pi\0")) slots.push(i);
+  });
+  const nextOrder = [...entry.queueOrder];
+  slots.forEach((slot, i) => {
+    const text = ordered[i];
+    if (text !== undefined) nextOrder[slot] = `pi\0${text}`;
+  });
   return update(states, sessionId, (current) =>
     syncQueueOrder({
       ...current,
+      queueOrder: nextOrder,
       queue: {
         steering: ordered.slice(0, steerCount),
         followUp: ordered.slice(steerCount),

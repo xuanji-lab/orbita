@@ -439,16 +439,44 @@ describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind �
     followUp,
   });
 
-  test("乐观重排：本地先到位，不等 runtime 往返", () => {
+  // 断言层次必须是 **mergeQueueView 的输出**，不是 queue 数组：
+  // 显示顺序的真源是 queueOrder 账本，只改数组不改账本时数组断言照样绿、
+  // 界面却纹丝不动（真实事故 2026-09-06）。
+  const shownTexts = (states: SessionStates): string[] =>
+    mergeQueueView(states.get("A") ?? EMPTY_ENTRY).map((item) =>
+      item.source === "pi" ? item.text : "(local)",
+    );
+
+  test("乐观重排：显示顺序当场到位，不等 runtime 往返", () => {
     let states = applyAgentEvent(new Map(), queueEvent([], ["甲", "乙", "丙"]));
     states = reorderQueueOptimistic(states, "A", 2, 0);
+    assert.deepEqual(shownTexts(states), ["丙", "甲", "乙"]);
     assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: ["丙", "甲", "乙"] });
+  });
+
+  test("乐观重排：账本跟着改，否则真值回来会被旧账本压回去", () => {
+    let states = applyAgentEvent(new Map(), queueEvent([], ["甲", "乙", "丙"]));
+    states = reorderQueueOptimistic(states, "A", 2, 0);
+    // runtime 重排成功，真值回来——显示应该稳在新顺序，不回弹
+    states = applyAgentEvent(states, queueEvent([], ["丙", "甲", "乙"]));
+    assert.deepEqual(shownTexts(states), ["丙", "甲", "乙"]);
   });
 
   test("乐观重排：steering 段长度不变——挪进前段就变插队，与 planQueueEdit 一致", () => {
     let states = applyAgentEvent(new Map(), queueEvent(["s1"], ["f1"]));
     states = reorderQueueOptimistic(states, "A", 1, 0);
+    assert.deepEqual(shownTexts(states), ["f1", "s1"]);
     assert.deepEqual(states.get("A")?.queue, { steering: ["f1"], followUp: ["s1"] });
+  });
+
+  test("乐观重排：中间夹着本地待办时，pi 项换序而本地项位置不动", () => {
+    let states = applyAgentEvent(new Map(), queueEvent([], ["甲"]));
+    states = addPendingSend(states, "A", { kind: "compact" });
+    states = applyAgentEvent(states, queueEvent([], ["甲", "乙"]));
+    assert.deepEqual(shownTexts(states), ["甲", "(local)", "乙"]);
+    states = reorderQueueOptimistic(states, "A", 1, 0);
+    // pi 的两个槽位（第 0 与第 2）交换内容，本地项仍夹在中间
+    assert.deepEqual(shownTexts(states), ["乙", "(local)", "甲"]);
   });
 
   test("乐观重排：越界 / 原位不动槽", () => {
@@ -459,11 +487,11 @@ describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind �
     assert.equal(reorderQueueOptimistic(states, "B", 0, 1), states);
   });
 
-  test("乐观重排会被真值覆盖：命令落空就弹回原顺序", () => {
+  test("命令落空：真值把乐观重排覆回原顺序（弹回去 = 失败的诚实表达）", () => {
     let states = applyAgentEvent(new Map(), queueEvent([], ["甲", "乙"]));
     states = reorderQueueOptimistic(states, "A", 1, 0);
-    assert.deepEqual(states.get("A")?.queue.followUp, ["乙", "甲"]);
-    // runtime 对账落空，原样重放回来
+    assert.deepEqual(shownTexts(states), ["乙", "甲"]);
+    // runtime 对账落空，原样重放回来——只有 pi 两条时两个槽位按真值重填
     states = applyAgentEvent(states, queueEvent([], ["甲", "乙"]));
     assert.deepEqual(states.get("A")?.queue.followUp, ["甲", "乙"]);
   });
