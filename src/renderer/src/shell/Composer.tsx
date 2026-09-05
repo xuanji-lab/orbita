@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
+import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 
 /**
@@ -25,6 +26,26 @@ export function Composer(props: {
   bottomSlot?: React.ReactNode;
 }) {
   const [hover, setHover] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 随内容长高：撤回能把好几条排队消息堆进来，写死两行就只能盲着改。
+  // useLayoutEffect 而非 useEffect——量完就改高度，放到绘制后会闪一帧。
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (el === null) return;
+    // 先塌回 auto 才能量到真实内容高度，否则只涨不落
+    el.style.height = "auto";
+    const computed = getComputedStyle(el);
+    const lineHeight = Number.parseFloat(computed.lineHeight);
+    const padding =
+      Number.parseFloat(computed.paddingTop) + Number.parseFloat(computed.paddingBottom);
+    const { height, scrollable } = composerBoxHeight(
+      el.scrollHeight,
+      Number.isFinite(lineHeight) ? lineHeight : 22,
+      Number.isFinite(padding) ? padding : 0,
+    );
+    el.style.height = `${height}px`;
+    el.style.overflowY = scrollable ? "auto" : "hidden";
+  }, [props.value]);
   const disabled = props.disabled === true;
   const running = props.running === true;
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
@@ -49,7 +70,8 @@ export function Composer(props: {
       }}
     >
       <textarea
-        rows={2}
+        ref={textareaRef}
+        rows={COMPOSER_MIN_ROWS}
         value={props.value}
         disabled={disabled}
         placeholder={props.placeholder}
@@ -70,7 +92,9 @@ export function Composer(props: {
           padding: "2px 4px",
           border: 0,
           background: "transparent",
+          // 高度由上面的 layout effect 接管；把手会和自增高打架
           resize: "none",
+          overflowY: "hidden",
           outline: "none",
           fontFamily: "var(--font-family-base)",
           fontSize: "var(--font-size-input)",
