@@ -79,7 +79,7 @@ class MarkdownErrorBoundary extends Component<{ children: ReactNode }, { error: 
     if (this.state.error !== null) {
       return (
         <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-caption)" }}>
-          这条消息渲染失败：{this.state.error.message}
+          This message failed to render: {this.state.error.message}
         </p>
       );
     }

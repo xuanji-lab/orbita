@@ -198,11 +198,11 @@ export function streamingThinkingKey(
   return block !== undefined && block.type === "thinking" ? `${last.id}:${index}` : null;
 }
 
-/** 思考时长格式：不足 1 秒按 1 秒；满一分钟说「N 分 M 秒」（中文界面，中文措辞）。 */
+/** 思考时长格式：不足 1 秒按 1 秒；满一分钟「1m 05s」（秒两位补零，与 formatToolDuration 同款）。 */
 export function formatThinkingDuration(ms: number): string {
   const seconds = Math.max(1, Math.round(ms / 1000));
-  if (seconds < 60) return `持续了 ${seconds} 秒`;
-  return `持续了 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
 /**
@@ -258,27 +258,26 @@ export function toolDurationText(toolCallId: string): string | null {
   return formatToolDuration(entry.end - entry.start);
 }
 
-/** 工具时长格式：不足一分钟带一位小数（毫秒级工具是噪音，只有慢命令值得看），满一分钟「N 分 M 秒」。 */
+/** 工具时长格式：不足一分钟带一位小数（毫秒级工具是噪音，只有慢命令值得看），满一分钟「1m 04s」（秒两位补零）。 */
 export function formatToolDuration(ms: number): string {
   const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)} 秒`;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
   const whole = Math.round(seconds);
-  return `${Math.floor(whole / 60)} 分 ${String(whole % 60).padStart(2, "0")} 秒`;
+  return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
 }
 
-/** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。中文措辞——
- *  与同行的量词（「N 行」「N 个文件」）同一种语言，不中英混排。 */
+/** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。 */
 export function summarizeToolResult(result: ToolTranscriptItem | undefined): string | null {
   if (result === undefined) return null;
-  if (result.status === "running") return "运行中";
-  if (result.status === "error") return "失败";
+  if (result.status === "running") return "Running";
+  if (result.status === "error") return "Failed";
   const text = result.content
     .map((block) => (block.type === "text" ? block.text : "[image]"))
     .join("\n")
     .trim();
-  if (text === "") return "无输出";
+  if (text === "") return "No output";
   const lines = text.split("\n").length;
-  return lines > 1 ? `${lines} 行` : `${text.length} 字符`;
+  return lines > 1 ? `${lines} lines` : `${text.length} chars`;
 }
 
 /** 展开后要显示的正文。图片暂不渲染，只标记它存在——真正的图片渲染是后面的事。 */

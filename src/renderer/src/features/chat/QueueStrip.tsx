@@ -3,6 +3,23 @@ import type { ReactNode } from "react";
 import { Icon } from "../../shell/Icon";
 import type { QueueViewEntry } from "./session-states.ts";
 
+// ── 本模块全部用户可见文案（英文先行，中文化等真实需求出现再抽字典） ──
+const COPY = {
+  queued: "Queued messages",
+  /** idle 时 pi 队列是「停止后滞留」态：下次发送时自动带上 */
+  haltedNote: "Sends with your next message",
+  steering: "Steering · next tool boundary",
+  waitsTurnEnd: "Sends after this turn",
+  waitsCompaction: "Sends when compaction finishes",
+  compactsWhenIdle: "Compacts when idle (queued items go first)",
+  save: "Save changes",
+  discard: "Discard changes",
+  edit: "Edit this queued item",
+  runNow: "Now",
+  cancel: "Cancel",
+  cancelItem: "Cancel this queued item",
+};
+
 /**
  * 排队卡片（C-1）：输入框上方、逐条一行。**按输入顺序显示**（queueView 把 pi 队列
  * 与本地待办交错合成）——执行顺序仍由机制决定：pi 队列的消息本轮结束投递，
@@ -26,10 +43,10 @@ export function QueueStrip(props: {
   onRunPendingNow: (index: number) => void;
 }) {
   if (props.view.length === 0) return null;
-  const haltedNote = props.phase === "idle" ? "下次发送时一起投递" : null;
+  const haltedNote = props.phase === "idle" ? COPY.haltedNote : null;
   return (
     <section
-      aria-label="排队中的消息"
+      aria-label={COPY.queued}
       style={{
         display: "grid",
         gap: "var(--space-1)",
@@ -99,11 +116,11 @@ function editValueOf(item: QueueViewEntry): string {
 function noteOf(item: QueueViewEntry, haltedNote: string | null): string {
   if (item.source === "pi") {
     if (haltedNote !== null) return haltedNote;
-    return item.steering ? "插队中 · 下个工具边界生效" : "等本轮结束发送";
+    return item.steering ? COPY.steering : COPY.waitsTurnEnd;
   }
-  if (item.item.kind === "text") return "正在压缩上下文，压缩结束自动发送";
+  if (item.item.kind === "text") return COPY.waitsCompaction;
   // compact 排在 pi 队列消息之后执行（机制使然），如实写明
-  return "空闲后压缩（上面的排队先发）";
+  return COPY.compactsWhenIdle;
 }
 
 /** 一条排队项：图标 + 文本（截断）+ 状态注脚 + 操作；点笔进入行内编辑。 */
@@ -194,10 +211,10 @@ function QueueRow(props: {
       {editing ? (
         <>
           {/* 显式的保存/放弃：只靠 Enter 收尾用户发现不了 */}
-          <QueueAction title="保存修改" onClick={commit}>
+          <QueueAction title={COPY.save} onClick={commit}>
             <Icon name="check" size={12} />
           </QueueAction>
-          <QueueAction title="放弃修改" onClick={discard}>
+          <QueueAction title={COPY.discard} onClick={discard}>
             <Icon name="x" size={12} />
           </QueueAction>
         </>
@@ -205,7 +222,7 @@ function QueueRow(props: {
         <>
           {editable && (
             <QueueAction
-              title="编辑这条排队"
+              title={COPY.edit}
               onClick={() => {
                 setDraft(initial);
                 setEditing(true);
@@ -214,9 +231,11 @@ function QueueRow(props: {
               <Icon name="pencil-line" size={12} />
             </QueueAction>
           )}
-          {props.onInterrupt !== undefined && <QueueAction onClick={props.onInterrupt}>立即</QueueAction>}
-          <QueueAction title="取消这条排队" onClick={props.onCancel}>
-            取消
+          {props.onInterrupt !== undefined && (
+            <QueueAction onClick={props.onInterrupt}>{COPY.runNow}</QueueAction>
+          )}
+          <QueueAction title={COPY.cancelItem} onClick={props.onCancel}>
+            {COPY.cancel}
           </QueueAction>
         </>
       )}

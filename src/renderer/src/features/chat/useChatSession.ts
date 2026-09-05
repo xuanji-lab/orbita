@@ -424,7 +424,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         return;
       }
       if (active === null) {
-        setError("没有正在运行的任务可压缩");
+        setError("No running task to compact");
         return;
       }
       setDraft("");
