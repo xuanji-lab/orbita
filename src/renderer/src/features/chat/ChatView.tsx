@@ -11,7 +11,9 @@ import {
   editDiffText,
   fileViewFor,
   flattenRenderUnits,
+  formatToolDuration,
   groupToolUnits,
+  groupTurns,
   indexToolResults,
   liveTailLines,
   parseEditDiff,
@@ -29,11 +31,13 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  turnStats,
   writeLineCount,
   type IntraToken,
   type RenderEntry,
   type ToolGroupUnit,
   type ToolResultIndex,
+  type TurnGroupUnit,
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
@@ -308,16 +312,26 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = flattenRenderUnits(records);
   const entries = groupToolUnits(units);
-  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
-  const activeThinkingKey = streamingThinkingKey(records, session.phase === "turn");
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = session.phase === "turn";
+  // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
+  const turnView = groupTurns(entries, turnActive, toolResults);
+  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
+  const activeThinkingKey = streamingThinkingKey(records, turnActive);
   // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
-  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的
-  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), entries);
+  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的。
+  // 锚点算在**大折叠视图**上：锚点的正文永远在折叠外面，按钮跟着正文走。
+  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), turnView);
   const toolsRunning = session.transcript.some(
     (item) => item.role === "tool" && item.status === "running",
   );
+  // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**最后一条**折叠——
+  // turnError 属于转录末尾那轮，红字就渲染在它后面，图标与文字是一对；
+  // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
+  const failedFoldKey =
+    session.turnError !== null
+      ? ([...turnView].reverse().find((entry) => entry.kind === "turnGroup")?.key ?? null)
+      : null;
 
   return (
     <Pane
@@ -358,16 +372,24 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         session.turnError === null && (
           <StatusLine>No messages yet. Send the first one to start.</StatusLine>
         )}
-      {entries.map((entry, index) => {
+      {turnView.map((entry, index) => {
         const branchAfter = branchRows.get(index);
         return (
           <Fragment key={entry.key}>
-            <EntryView
-              entry={entry}
-              toolResults={toolResults}
-              activeThinkingKey={activeThinkingKey}
-              turnActive={turnActive}
-            />
+            {entry.kind === "turnGroup" ? (
+              <TurnRollupLine
+                group={entry}
+                toolResults={toolResults}
+                turnFailed={entry.key === failedFoldKey}
+              />
+            ) : (
+              <EntryView
+                entry={entry}
+                toolResults={toolResults}
+                activeThinkingKey={activeThinkingKey}
+                turnActive={turnActive}
+              />
+            )}
             {branchAfter !== undefined && (
               <BranchRow
                 anchorItemId={branchAfter}
@@ -833,6 +855,86 @@ function EntryView(props: {
   return <ToolGroupLine group={entry} toolResults={props.toolResults} turnActive={props.turnActive} />;
 }
 
+/**
+ * 大折叠行（一轮一行）：agent 整轮回答落定后，这轮的思考行与工具行/组收成
+ * 一条统计——`Worked 45s · thought 2 · tools 8 · bash 3 · read 5 1 · edit 2`
+ * （段与段之间用 · 分隔；失败数是紧跟在工具次数后面的红色数字）。
+ * Worked 之后每个段都是「标签 + 数字」同一语法：thought / tools 与工具名
+ * 同一套小写词汇，数字一律在后。
+ * 工具类别用**真实工具名**而非组行动词（Run/Read…）：统计行是机器事实，
+ * Run 会把 bash 与 powershell 混为一谈，且成员行展开后显示的也是同一套名字。
+ * 思考排在工具之前——先想后做，时间序。
+ * 展开就是成员行原样（小折叠降级为成员，两层折叠契约）；轮耗时是记录时间戳
+ * 的跨度（adapter 每帧落 now()，旧会话也准）。
+ * 图标裁决（用户）：折叠头**不带图标**——工具类失败靠跟在工具后面的红色数字
+ * 说话；只有回合级失败（网络中断、重试耗尽——turnError 的红字就渲染在折叠
+ * 后面）才在行首亮红 triangle，图标与那行红字是一对。
+ * 成员行与折叠头同左缘（不缩进），与 ToolGroupLine 的成员同一规矩。
+ */
+function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex; turnFailed: boolean }) {
+  const [open, setOpen] = useState(false);
+  const { group } = props;
+  const stats = turnStats(group, props.toolResults);
+  // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
+  // 工具次数与它的失败数字是一个段，中间不插
+  const segments: ReactNode[] = [];
+  if (stats.durationMs !== null) {
+    segments.push(
+      <span style={headLabel(false)}>
+        {COPY.worked} {formatToolDuration(stats.durationMs)}
+      </span>,
+    );
+  }
+  if (stats.thinkingCount > 0) {
+    segments.push(
+      <span style={SLOT.status}>
+        {COPY.thought} {stats.thinkingCount}
+      </span>,
+    );
+  }
+  if (stats.calls > 0) {
+    segments.push(<span style={SLOT.status}>{COPY.tools(stats.calls)}</span>);
+  }  for (const { toolName, count, failed } of stats.byTool) {
+    segments.push(
+      <span style={SLOT.status}>
+        {toolName} {count}
+        {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
+        {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
+      </span>,
+    );
+  }
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        {props.turnFailed && (
+          <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
+            <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          </span>
+        )}
+        {segments.map((segment, index) => (
+          <Fragment key={index}>
+            {index > 0 && <span style={SEP_DOT}>·</span>}
+            {segment}
+          </Fragment>
+        ))}
+      </CollapseRow>
+      {open && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          {group.members.map((member) => (
+            <EntryView
+              key={member.key}
+              entry={member}
+              toolResults={props.toolResults}
+              activeThinkingKey={null}
+              turnActive={false}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 用户消息：右对齐的独立气泡；只有 text 块进气泡。 */
 function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
   return (
@@ -991,6 +1093,13 @@ const HEAD_WRAP = {
   flex: "0 0 auto",
 } satisfies React.CSSProperties;
 
+/** 大折叠统计段的分隔点：段落边界的标点，最淡一档——它是标点不是内容。 */
+const SEP_DOT = {
+  flex: "0 0 auto",
+  color: "var(--color-text-tertiary)",
+  opacity: 0.6,
+} satisfies React.CSSProperties;
+
 /**
  * 展开体的纵向导轨：与行首 icon 的**左缘相切**——x = 10px（按钮内边距，即 icon 的
  * 左缘）。展开内容一律不越过导轨左侧：展开体明确属于它上面那一行，不与
@@ -1044,12 +1153,15 @@ const COPY = {
   waitingOutput: "(waiting for output…)",
   noOutput: "(no output)",
   branchFromHere: "Branch from here",
+  worked: "Worked",
+  thought: "thought",
   lines: (n: number): string => `${n} lines`,
   files: (n: number): string => `${n} files`,
   commands: (n: number): string => `${n} commands`,
   matches: (n: number): string => `${n} matches`,
   directories: (n: number): string => `${n} directories`,
   calls: (n: number): string => `${n} calls`,
+  tools: (n: number): string => `tools ${n}`,
   failed: (n: number): string => `${n} failed`,
 };
 
@@ -1074,12 +1186,13 @@ function toolIcon(toolName: string): IconName {
   }
 }
 
-/** 组行的动词标签：一行里 N 件同类事，说类别不说工具名；不认识的用回工具名。 */
+/**
+ * 组行的标签。bash / powershell 直接用**真实工具名**（用户裁决：不说 Run）——
+ * Run 是编造的动词，还把两个不同的工具混为一谈；其余保留动词标签（Read/Search…，
+ * 与「N files」量词配套），不认识的工具本就回落真名。
+ */
 function toolGroupLabel(toolName: string): string {
   switch (toolName) {
-    case "bash":
-    case "powershell":
-      return "Run";
     case "read":
       return "Read";
     case "grep":
