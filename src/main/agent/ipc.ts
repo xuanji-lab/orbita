@@ -137,11 +137,11 @@ export function registerAgentIpc(
     (
       _e,
       sessionId: string,
-      op: "cancel" | "edit",
+      op: "cancel" | "move",
       index: number,
       text: string,
-      newText?: string,
-    ) => host.queueEdit(sessionId, op, index, text, newText),
+      toIndex?: number,
+    ) => host.queueEdit(sessionId, op, index, text, toIndex),
   );
   ipcMain.handle(
     ipcChannels.agentCompact,

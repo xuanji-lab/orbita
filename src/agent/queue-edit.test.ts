@@ -2,15 +2,14 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { planQueueEdit } from "./queue-edit.ts";
 
-describe("planQueueEdit", () => {
-  test("cancel：目标被移出，其余原样重放", () => {
+describe("planQueueEdit · cancel", () => {
+  test("目标被移出，其余原样重放", () => {
     const plans = planQueueEdit(["s1"], ["f1", "f2"], 0, "s1", "cancel");
     assert.deepEqual(plans, [
       { text: "f1", as: "followUp" },
       { text: "f2", as: "followUp" },
     ]);
   });
-
 
   test("index/text 与队列不符：原样重放（不丢别人的消息）", () => {
     const plans = planQueueEdit(["s1"], ["f1"], 5, "别的", "cancel");
@@ -20,36 +19,76 @@ describe("planQueueEdit", () => {
     ]);
   });
 
-  test("空队列编辑：返回空序列", () => {
+  test("空队列：返回空序列", () => {
     assert.deepEqual(planQueueEdit([], [], 0, "x", "cancel"), []);
   });
 });
 
-describe("planQueueEdit · edit", () => {
-  test("followUp 项改文本，保持队列与顺位", () => {
-    const plans = planQueueEdit(["s1"], ["f1", "f2"], 2, "f2", "edit", "改好的");
+describe("planQueueEdit · move", () => {
+  test("同段内下移：相对顺序按新位置重排", () => {
+    const plans = planQueueEdit([], ["f1", "f2", "f3"], 0, "f1", "move", 1);
     assert.deepEqual(plans, [
-      { text: "s1", as: "steer" },
+      { text: "f2", as: "followUp" },
       { text: "f1", as: "followUp" },
-      { text: "改好的", as: "followUp" },
+      { text: "f3", as: "followUp" },
     ]);
   });
 
-  test("steering 项改文本，仍是插队", () => {
-    const plans = planQueueEdit(["s1"], ["f1"], 0, "s1", "edit", "插队新文本");
+  test("同段内上移", () => {
+    const plans = planQueueEdit([], ["f1", "f2", "f3"], 2, "f3", "move", 0);
     assert.deepEqual(plans, [
-      { text: "插队新文本", as: "steer" },
+      { text: "f3", as: "followUp" },
       { text: "f1", as: "followUp" },
+      { text: "f2", as: "followUp" },
     ]);
   });
 
-  test("text 不匹配：原样重放（编辑落空）", () => {
-    const plans = planQueueEdit(["s1"], [], 0, "别人", "edit", "新文本");
-    assert.deepEqual(plans, [{ text: "s1", as: "steer" }]);
+  test("挪进 steering 段就变成插队——位置即投递时机，这正是拖过去的目的", () => {
+    const plans = planQueueEdit(["s1"], ["f1"], 1, "f1", "move", 0);
+    assert.deepEqual(plans, [
+      { text: "f1", as: "steer" },
+      { text: "s1", as: "followUp" },
+    ]);
   });
 
-  test("newText 缺席：等价 no-op 重放", () => {
-    const plans = planQueueEdit([], ["f1"], 0, "f1", "edit");
-    assert.deepEqual(plans, [{ text: "f1", as: "followUp" }]);
+  test("挪出 steering 段就退回等待", () => {
+    const plans = planQueueEdit(["s1", "s2"], ["f1"], 0, "s1", "move", 2);
+    assert.deepEqual(plans, [
+      { text: "s2", as: "steer" },
+      { text: "f1", as: "steer" },
+      { text: "s1", as: "followUp" },
+    ]);
+  });
+
+  test("text 不匹配：原样重放（挪动落空，不切错人）", () => {
+    const plans = planQueueEdit([], ["f1", "f2"], 0, "别人", "move", 1);
+    assert.deepEqual(plans, [
+      { text: "f1", as: "followUp" },
+      { text: "f2", as: "followUp" },
+    ]);
+  });
+
+  test("toIndex 越界：原样重放", () => {
+    const plans = planQueueEdit([], ["f1", "f2"], 0, "f1", "move", 9);
+    assert.deepEqual(plans, [
+      { text: "f1", as: "followUp" },
+      { text: "f2", as: "followUp" },
+    ]);
+  });
+
+  test("toIndex 缺席：等价 no-op 重放", () => {
+    const plans = planQueueEdit([], ["f1", "f2"], 0, "f1", "move");
+    assert.deepEqual(plans, [
+      { text: "f1", as: "followUp" },
+      { text: "f2", as: "followUp" },
+    ]);
+  });
+
+  test("挪到原位：序列不变", () => {
+    const plans = planQueueEdit([], ["f1", "f2"], 1, "f2", "move", 1);
+    assert.deepEqual(plans, [
+      { text: "f1", as: "followUp" },
+      { text: "f2", as: "followUp" },
+    ]);
   });
 });

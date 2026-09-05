@@ -173,19 +173,23 @@ export type AgentCommand =
       text: string;
     }
   /**
-   * 编辑 pi 的排队消息（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
+   * 改动 pi 的排队队列（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
    * index 指 `[...steering, ...followUp]` 拼接视图的下标（UI 就是按这个顺序渲染的）；
-   * text 是期望文本，与队列现状不符时（投递/并发编辑刚发生）操作落空、队列原样重放，
+   * text 是期望文本，与队列现状不符时（投递/并发改动刚发生）操作落空、队列原样重放，
    * 等 queue 事件校准 UI。「立即发送」不走这里——那是 interrupt 命令，打断当前轮。
-   * edit 改写目标条目的文本（保持它原属的队列与顺位），newText 为替换文本。
+   *
+   * - `cancel`：把目标条目移出队列（UI 上是「撤回」，文字同时落回输入框）。
+   * - `move`：把目标条目挪到 `toIndex`（同一个拼接视图的下标）。
+   *   跨 steering / followUp 段挪动会改变条目的投递时机，这是用户意图，不拦。
    */
   | {
       type: "queueEdit";
       sessionId: string;
-      op: "cancel" | "edit";
+      op: "cancel" | "move";
       index: number;
       text: string;
-      newText?: string;
+      /** move 的目标下标；越界或缺失则操作落空 */
+      toIndex?: number;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，

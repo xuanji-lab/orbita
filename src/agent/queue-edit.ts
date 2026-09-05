@@ -1,7 +1,7 @@
 /**
- * 排队编辑的重放规划 —— 纯函数，runtime 的可测内核。
+ * 排队队列改动的重放规划 —— 纯函数，runtime 的可测内核。
  *
- * pi 没有单条删除 / 挪队的 API（只有 clearQueue 全清），「立即插队」「取消」
+ * pi 没有单条删除 / 挪队的 API（只有 clearQueue 全清），「撤回」「调顺序」
  * 都要靠 clearQueue + 把剩余条目按新顺序重放回去。本模块只算「重放序列」，
  * 不碰 session——runtime 先 clearQueue 拿到真值，喂进来，再按返回序列逐条入队。
  */
@@ -13,33 +13,44 @@ export interface QueueEntryPlan {
 }
 
 /**
- * 规划一次队列编辑的重放序列。
+ * 规划一次队列改动的重放序列。
  *
- * index / text 与队列现状不符时（投递或并发编辑刚发生）返回「原样重放」——
+ * index / text 与队列现状不符时（投递或并发改动刚发生）返回「原样重放」——
  * 队列已被调用方清空，不重放就等于把别人的排队消息丢了。调用方无法区分
  * 「操作落空」与「正常重放」，也不需要：queue 事件会把 UI 校准到真相。
  *
- * edit 改写目标条目的文本，保持它原属的队列与顺位。
+ * `as`（steer / followUp）**按重放后的位置重新判定**，不跟着条目走：
+ * 把一条挪进前面的 steering 段，它就该变成插队——位置就是投递时机，
+ * 这正是用户拖它过去的目的。
  */
 export function planQueueEdit(
   steering: readonly string[],
   followUp: readonly string[],
   index: number,
   text: string,
-  op: "cancel" | "edit",
-  newText?: string,
+  op: "cancel" | "move",
+  toIndex?: number,
 ): QueueEntryPlan[] {
   const merged = [...steering, ...followUp];
-  const target = merged[index];
-  const hits = target === text;
-  const plans: QueueEntryPlan[] = [];
-  for (const [i, entry] of merged.entries()) {
-    const isTarget = hits && i === index;
-    if (op === "cancel" && isTarget) continue;
-    const replacement = op === "edit" && isTarget ? (newText ?? entry) : entry;
-    // 原 steering 段保持插队
-    const as = i < steering.length ? "steer" : "followUp";
-    plans.push({ text: replacement, as });
+  const hits = merged[index] === text;
+  const ordered = [...merged];
+  if (hits) {
+    if (op === "cancel") {
+      ordered.splice(index, 1);
+    } else if (toIndex !== undefined && toIndex >= 0 && toIndex < merged.length) {
+      const [moved] = ordered.splice(index, 1);
+      if (moved !== undefined) ordered.splice(toIndex, 0, moved);
+    }
   }
-  return plans;
+  // steering 段长度：move 不增删所以不变；cancel 掉段内一条则跟着收一格——
+  // 否则后面那条会被白白「提升」成插队，用户没请求过这件事
+  const cancelledFromSteering = hits && op === "cancel" && index < steering.length;
+  const steerCount = Math.min(
+    steering.length - (cancelledFromSteering ? 1 : 0),
+    ordered.length,
+  );
+  return ordered.map((entry, i) => ({
+    text: entry,
+    as: i < steerCount ? "steer" : "followUp",
+  }));
 }

@@ -12,15 +12,15 @@ export const agentApi = {
     ipcRenderer.invoke(ipcChannels.agentCreate, input),
   submit: (sessionId: string, text: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSubmit, sessionId, text),
-  /** 编辑排队消息：cancel = 移出队列，edit = 改文本。index+text 防错删（乐观校验） */
+  /** 改动排队队列：cancel = 移出，move = 挪到 toIndex。index+text 防错删（乐观校验） */
   queueEdit: (
     sessionId: string,
-    op: "cancel" | "edit",
+    op: "cancel" | "move",
     index: number,
     text: string,
-    newText?: string,
+    toIndex?: number,
   ): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentQueueEdit, sessionId, op, index, text, newText),
+    ipcRenderer.invoke(ipcChannels.agentQueueEdit, sessionId, op, index, text, toIndex),
   abort: (sessionId: string): Promise<void> => ipcRenderer.invoke(ipcChannels.agentAbort, sessionId),
 
   interrupt: (id: string, index: number, text: string): Promise<void> =>

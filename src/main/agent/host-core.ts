@@ -167,13 +167,20 @@ export class AgentHostCore {
 
   async queueEdit(
     sessionId: string,
-    op: "cancel" | "edit",
+    op: "cancel" | "move",
     index: number,
     text: string,
-    newText?: string,
+    toIndex?: number,
   ): Promise<void> {
     await this.ensure();
-    this.post({ type: "queueEdit", sessionId, op, index, text, ...(newText !== undefined ? { newText } : {}) });
+    this.post({
+      type: "queueEdit",
+      sessionId,
+      op,
+      index,
+      text,
+      ...(toIndex !== undefined ? { toIndex } : {}),
+    });
   }
 
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
