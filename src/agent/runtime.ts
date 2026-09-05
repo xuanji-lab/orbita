@@ -641,6 +641,7 @@ async function handle(command: AgentCommand): Promise<void> {
     await interruptWithQueued(
       {
         clearQueue: () => live.session.clearQueue(),
+        isStreaming: () => live.session.isStreaming,
         abort: () => live.session.abort(),
         followUp: (text) => live.session.followUp(text),
         echoUserPrompt: (text) => {

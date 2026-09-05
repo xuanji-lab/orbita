@@ -13,6 +13,8 @@ const COPY = {
   compactsWhenIdle: "Compacts when idle (queued items go first)",
   /** 纯图标按钮必须有 title：图标自己说不出「会打断当前这一轮」 */
   runNow: "Send now — interrupts this turn",
+  /** 空闲时没有当前轮可打断，同一个键退化成「直接发」 */
+  runNowIdle: "Send now",
   runNowCompact: "Compact now",
   withdraw: "Withdraw to the input box",
   withdrawCompact: "Withdraw this compaction",
@@ -64,7 +66,13 @@ export function QueueStrip(props: {
           icon={item.source === "pi" && item.steering ? "arrow-up" : "clock"}
           note={noteOf(item, haltedNote)}
           text={labelOf(item)}
-          runNowTitle={item.source === "pi" ? COPY.runNow : COPY.runNowCompact}
+          runNowTitle={
+            item.source !== "pi"
+              ? COPY.runNowCompact
+              : haltedNote !== null
+                ? COPY.runNowIdle
+                : COPY.runNow
+          }
           withdrawTitle={
             item.source === "pi" || item.item.kind === "text"
               ? COPY.withdraw
@@ -72,7 +80,9 @@ export function QueueStrip(props: {
           }
           onInterrupt={
             item.source === "pi"
-              ? item.steering || haltedNote !== null
+              ? // steering 项本来就在插队，再给一个「立即」没有意义；
+                // 空闲滞留态则**保留入口**，只是不再打断任何东西
+                item.steering
                 ? undefined
                 : () => props.onInterrupt(item.piIndex, item.text)
               : item.item.kind === "compact"

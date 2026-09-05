@@ -3,7 +3,10 @@ import { describe, test } from "node:test";
 import { interruptWithQueued, type InterruptOps } from "./interrupt.ts";
 
 /** 记录调用序的假会话：顺序正是本模块要守的东西。 */
-function fakeOps(queue: { steering: string[]; followUp: string[] }): {
+function fakeOps(
+  queue: { steering: string[]; followUp: string[] },
+  streaming = true,
+): {
   ops: InterruptOps;
   calls: string[];
 } {
@@ -13,6 +16,7 @@ function fakeOps(queue: { steering: string[]; followUp: string[] }): {
       calls.push("clearQueue");
       return { steering: [...queue.steering], followUp: [...queue.followUp] };
     },
+    isStreaming: () => streaming,
     abort: async () => {
       calls.push("abort");
     },
@@ -97,5 +101,18 @@ describe("interruptWithQueued —— 打断的调用序", () => {
     const { ops, calls } = fakeOps({ steering: [], followUp: ["甲"] });
     assert.equal(await interruptWithQueued(ops, 5, "甲"), false);
     assert.deepEqual(calls, ["clearQueue", "followUp:甲"]);
+  });
+
+  test("空闲时不 abort：没有在跑的一轮，直接发就是", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["停止后滞留的"] }, false);
+    assert.equal(await interruptWithQueued(ops, 0, "停止后滞留的"), true);
+    assert.deepEqual(calls, ["clearQueue", "echo:停止后滞留的", "prompt:停止后滞留的"]);
+    assert.ok(!calls.includes("abort"));
+  });
+
+  test("空闲时其余排队项照样先回队，再开新一轮", async () => {
+    const { ops, calls } = fakeOps({ steering: [], followUp: ["甲", "乙"] }, false);
+    assert.equal(await interruptWithQueued(ops, 0, "甲"), true);
+    assert.deepEqual(calls, ["clearQueue", "followUp:乙", "echo:甲", "prompt:甲"]);
   });
 });

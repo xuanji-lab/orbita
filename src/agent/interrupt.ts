@@ -4,6 +4,10 @@
  * 「立即发送 = 打断」（wafo 2026-09-03 裁决）：pi 的 steering 只在两次 LLM 响应
  * 之间消化，走插队永远打断不了正在跑的工具。所以出队 → abort → 它自己成为新一轮。
  *
+ * 空闲时它也成立：没有「当前轮」可打断，语义退化成「直接发这条」——
+ * 对用户是同一件事：别等了，现在就办。此时跳过 abort（空转还会弄出一个
+ * aborted 终态）。
+ *
  * 这里唯一要守住的是**顺序**，四步各有各的理由，错一步就是一个真 bug：
  *
  * 1. `clearQueue` 必须在 `abort` 之前——否则 post-run 看到还有排队就会自动续轮，
@@ -20,6 +24,8 @@
 export interface InterruptOps {
   /** 端走整个队列并拿到真值（pi 没有单条删的 API） */
   clearQueue: () => { steering: readonly string[]; followUp: readonly string[] };
+  /** 正在跑一轮吗。空闲时无需 abort，直接发就是 */
+  isStreaming: () => boolean;
   abort: () => Promise<void>;
   /** 回队一条（只入队，不触发投递） */
   followUp: (text: string) => Promise<void>;
@@ -48,7 +54,8 @@ export async function interruptWithQueued(
     return false;
   }
   combined.splice(index, 1);
-  await ops.abort();
+  // 空闲时不打断：没有在跑的一轮，abort 只会多制造一个 aborted 终态
+  if (ops.isStreaming()) await ops.abort();
   // 先回队再开新轮——见上面第 2 条
   for (const rest of combined) await ops.followUp(rest);
   ops.echoUserPrompt(text);
