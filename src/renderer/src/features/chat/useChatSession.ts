@@ -4,22 +4,19 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
 import {
   EMPTY_ENTRY,
-  addPendingSend,
+  dequeue,
   applyAgentEvent,
-  consumePendingSends,
-  consumePendingTexts,
+  enqueue,
   createSessionStates,
-  mergeQueueView,
+  moveQueued as moveQueuedIn,
   parseCompactCommand,
   removeApproval,
-  removePendingSend,
+  nextDeliverable,
   removeSessionEntry,
-  reorderQueueOptimistic,
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
-  type PendingSend,
-  type QueueViewEntry,
+  type QueuedMessage,
   type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
@@ -141,23 +138,14 @@ export interface ChatSession {
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
-  /** pi 排队快照（当前槽）：steering = 插队中，followUp = 等本轮结束 */
-  queue: SessionEntry["queue"];
-  /** 本地待办（当前槽）：压缩期间的消息 + 排队的手动 /compact */
-  pendingSends: readonly PendingSend[];
-  /** 排队卡片视图：pi 队列项与本地待办按输入顺序交错 */
-  queueView: readonly QueueViewEntry[];
-  /** 立即发送排队中的第 index 条：打断当前轮（含工具调用），它成为新一轮。
-   *  index 指 [...steering, ...followUp] 拼接视图 */
-  interruptQueued: (index: number, text: string) => void;
-  /** 撤回：移出 pi 队列（runtime 侧 clearQueue + 重放），文字落回草稿 */
-  withdrawQueued: (index: number, text: string) => void;
-  /** 把排队项挪到 toIndex（同一个拼接视图的下标）。位置即投递时机 */
-  moveQueued: (index: number, text: string, toIndex: number) => void;
-  /** 撤回一条本地待办；text 项文字落回草稿，compact 项只取消 */
-  withdrawPendingSend: (index: number) => void;
-  /** 本地 compact 待办的「立即」：马上压缩，不等空闲。与 pi 项的「立即」同名不同物 */
-  runPendingNow: (index: number) => void;
+  /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
+  queued: readonly QueuedMessage[];
+  /** 立即发送：停下当前这一轮，把这条作为新一轮发出去 */
+  sendQueuedNow: (id: string) => void;
+  /** 撤回：移出队列，文字落回 composer 草稿 */
+  withdrawQueued: (id: string) => void;
+  /** 拖拽排序：把 sourceId 放到 targetId 的前 / 后 */
+  moveQueuedTo: (sourceId: string, targetId: string, placement: "before" | "after") => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
@@ -312,46 +300,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           recordToolFrame(event.progress.item);
         }
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
-        // 本地待办的执行时机（读 ref 而不是闭包 states：同拍可能已有事件更新过它）：
-        //  - phase 到 idle：先发前面的 text，碰到第一个 compact 就执行它并停——
-        //    同时压两个会互相踩，剩余项留给压缩结束的下一拍
-        //  - phase 离开 compaction 但又跑起来（压缩后有排队消息在跑）：text 全放
-        //    （runtime 侧自动分流进 pi 队列），compact 必须等完全 idle
-        if (event.type === "phase" && event.phase !== "compaction") {
-          const id = event.sessionId;
-          const pending = statesRef.current.get(id)?.pendingSends ?? [];
-          if (pending.length > 0) {
-            if (event.phase === "idle") {
-              let executed = 0;
-              for (const item of pending) {
-                executed++;
-                if (item.kind === "compact") {
-                  void api.agent.compact(id, item.instructions).catch((cause: unknown) =>
-                    setError(cause instanceof Error ? cause.message : String(cause)),
-                  );
-                  break;
-                }
-                void api.agent.submit(id, item.text).catch((cause: unknown) =>
-                  setError(cause instanceof Error ? cause.message : String(cause)),
-                );
-              }
-              setStates((prev) => consumePendingSends(prev, id, executed));
-            } else {
-              for (const item of pending) {
-                if (item.kind !== "text") continue;
-                void api.agent.submit(id, item.text).catch((cause: unknown) =>
-                  setError(cause instanceof Error ? cause.message : String(cause)),
-                );
-              }
-              setStates((prev) => consumePendingTexts(prev, id));
-            }
-          }
-        }
         setStates((prev) => {
           const next = applyAgentEvent(prev, event);
           statesRef.current = next;
           return next;
         });
+        // **投递节奏归我们**：phase 一变就看队首该不该发，一次只发一条。
+        // 交给 pi 的 post-run 自动 drain 会把好几条一起吹出去——用户一条条点、
+        // 最后两条自己一起飞，就是那么来的（2026-09-06 事故）。
+        if (event.type === "phase") deliverNext(event.sessionId);
       }),
     [refreshSessions],
   );
@@ -389,11 +346,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     if (compact !== null) {
       const busyId = sessionRef.current;
       const busyPhase = busyId !== null ? statesRef.current.get(busyId)?.phase : undefined;
-      // 跑着或压缩中：/compact 也排队——不打断正在跑的轮，等完全空闲（pi 队列里的
-      // 排队消息也处理完）再压。压缩指令进不了 pi 队列（那里只存消息文本），只能本地等。
+      // 跑着或压缩中：/compact 也排队——不打断正在跑的轮，等完全空闲
+      // （前面排着的消息也发完）再压，压的才是完整对话。
       if (busyId !== null && busyPhase !== undefined && busyPhase !== "idle") {
         setStates((prev) =>
-          addPendingSend(prev, busyId, { kind: "compact", instructions: compact.instructions }),
+          enqueue(prev, busyId, {
+            id: crypto.randomUUID(),
+            kind: "compact",
+            ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
+          }),
         );
         setDraft("");
         return;
@@ -433,9 +394,16 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       return;
     }
     let id: string | null = sessionId;
-    // 压缩中 pi 连入队入口都关着（prompt 直接抛）：消息进本地待办，压缩结束自动发
-    if (id !== null && statesRef.current.get(id)?.phase === "compaction") {
-      setStates((prev) => addPendingSend(prev, id as string, { kind: "text", text }));
+    // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
+    // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
+    const busy = id !== null && statesRef.current.get(id)?.phase !== "idle";
+    if (id !== null && busy) {
+      const queuedId = crypto.randomUUID();
+      setStates((prev) => {
+        const next = enqueue(prev, id as string, { id: queuedId, kind: "text", text });
+        statesRef.current = next;
+        return next;
+      });
       setDraft("");
       return;
     }
@@ -804,40 +772,46 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.agent.answerPermission(requestId, answer);
   }, []);
 
-  // 排队撤回只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框。
-  // pi 没有单条删的 API，runtime 侧是 clearQueue + 按规划重放。
-  const dropFromQueue = useCallback((index: number, text: string) => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    void api.agent
-      .queueEdit(id, "cancel", index, text)
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, []);
-
-  const moveQueued = useCallback((index: number, text: string, toIndex: number) => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    // 先本地重排：拖拽松手到 runtime 回程是一个完整 IPC 往返，
-    // 不乐观更新就会看到行先原地不动、过一拍才跳过去。
-    // 真值回来时会覆盖；命令落空就覆回原顺序，弹回去就是失败的诚实表达。
-    setStates((prev) => reorderQueueOptimistic(prev, id, index, toIndex));
-    void api.agent
-      .queueEdit(id, "move", index, text, toIndex)
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, []);
-
   /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。 */
   const restoreToDraft = useCallback((text: string) => {
     setDraft((prev) => appendWithdrawn(prev, text));
   }, []);
 
-  const withdrawPendingSend = useCallback(
-    (index: number) => {
+  /**
+   * 投递队首的一条。**一次只发一条**——发完这一轮结束会再来一次 phase 事件，
+   * 那时再取下一条。先出队再发：出队是同步的，避免同一拍被投递两次。
+   */
+  const deliverNext = useCallback((id: string) => {
+    const entry = statesRef.current.get(id);
+    if (entry === undefined) return;
+    const head = nextDeliverable(entry);
+    if (head === null) return;
+    setStates((prev) => {
+      const next = dequeue(prev, id, head.id);
+      statesRef.current = next;
+      return next;
+    });
+    const fail = (cause: unknown): void =>
+      setError(cause instanceof Error ? cause.message : String(cause));
+    if (head.kind === "compact") {
+      void api.agent.compact(id, head.instructions).catch(fail);
+    } else {
+      void api.agent.submit(id, head.text).catch(fail);
+    }
+  }, []);
+
+  /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。 */
+  const withdrawQueued = useCallback(
+    (queuedId: string) => {
       const id = sessionRef.current;
       if (id === null) return;
-      const item = statesRef.current.get(id)?.pendingSends[index];
+      const item = statesRef.current.get(id)?.queued.find((entry) => entry.id === queuedId);
       if (item === undefined) return;
-      setStates((prev) => removePendingSend(prev, id, index));
+      setStates((prev) => {
+        const next = dequeue(prev, id, queuedId);
+        statesRef.current = next;
+        return next;
+      });
       // compact 项没有「用户的话」可拿回——本仓没有斜杠命令 UI，把 `/compact`
       // 塞进输入框只会变成一条普通消息。它的撤回就是单纯取消。
       if (item.kind === "text") restoreToDraft(item.text);
@@ -845,17 +819,50 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     [restoreToDraft],
   );
 
-  /** 本地待办的「立即」：只对 compact 有意义——不等空闲，马上压（pi 会先停当前轮） */
-  const runPendingNow = useCallback((index: number) => {
+  /** 拖拽排序：纯本地一次 splice，即时生效。 */
+  const moveQueuedTo = useCallback(
+    (sourceId: string, targetId: string, placement: "before" | "after") => {
+      const id = sessionRef.current;
+      if (id === null) return;
+      setStates((prev) => {
+        const next = moveQueuedIn(prev, id, sourceId, targetId, placement);
+        statesRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
+  /**
+   * 立即发送：停下当前这一轮，把这条作为新一轮发出去。
+   *
+   * 空闲时没有「当前轮」可停，退化成直接发——对用户是同一件事：别等了，现在就办。
+   */
+  const sendQueuedNow = useCallback((queuedId: string) => {
     const id = sessionRef.current;
     if (id === null) return;
-    const item = statesRef.current.get(id)?.pendingSends[index];
-    if (item === undefined || item.kind !== "compact") return;
-    setStates((prev) => removePendingSend(prev, id, index));
-    void api.agent
-      .compact(id, item.instructions)
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+    const entry = statesRef.current.get(id);
+    const item = entry?.queued.find((queued) => queued.id === queuedId);
+    if (entry === undefined || item === undefined) return;
+    setStates((prev) => {
+      const next = dequeue(prev, id, queuedId);
+      statesRef.current = next;
+      return next;
+    });
+    const fail = (cause: unknown): void =>
+      setError(cause instanceof Error ? cause.message : String(cause));
+    // compact 的「立即」是另一回事：不打断，只是不等空闲马上压
+    if (item.kind === "compact") {
+      void api.agent.compact(id, item.instructions).catch(fail);
+      return;
+    }
+    if (entry.phase === "idle") {
+      void api.agent.submit(id, item.text).catch(fail);
+    } else {
+      void api.agent.interrupt(id, item.text).catch(fail);
+    }
   }, []);
+
 
   // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
   // ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账
@@ -908,27 +915,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     removeSession,
     send: () => void send(),
     stop,
-    queue: entry.queue,
-    pendingSends: entry.pendingSends,
-    /** 卡片渲染视图：pi 队列 + 本地待办按输入序交错（见 mergeQueueView） */
-    queueView: mergeQueueView(entry),
-    interruptQueued: (index: number, text: string) => {
-      const id = sessionRef.current;
-      if (id === null) return;
-      void api.agent.interrupt(id, index, text).catch((cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : String(cause)),
-      );
-    },
-    withdrawQueued: (index: number, text: string) => {
-      dropFromQueue(index, text);
-      // 乐观回填：取消可能因对账不中而落空（那一瞬刚好被投递）。
-      // 不为此改 IPC 契约：文字明摆在输入框里、那条也已在对话里显形，
-      // 用户看得见。比原来「静默吞字」严格更好。
-      restoreToDraft(text);
-    },
-    moveQueued,
-    withdrawPendingSend,
-    runPendingNow,
+    queued: entry.queued,
+    sendQueuedNow,
+    withdrawQueued,
+    moveQueuedTo,
     newTask,
     newTaskIn,
     answerApproval,

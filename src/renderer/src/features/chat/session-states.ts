@@ -26,11 +26,19 @@ export interface PendingApproval {
 }
 
 /**
- * 本地待办的一条：text = 压缩期间发的普通消息（pi 压缩中连入队入口都关着）；
- * compact = 排队的手动 `/compact`（pi 队列只能存消息文本，压缩指令进不去，
- * 只能本地等时机）。两者都不能进 pi 队列，所以都排在这里。
+ * 排队里的一条。
+ *
+ * **队列归我们，pi 不持有排队状态**（见
+ * `docs/plans/2026-09-06-排队队列所有权收回.md`）。
+ * `id` 是稳定身份：所有操作（撤回 / 拖拽 / 立即发送）按 id 定位，
+ * 不再用下标加文本对账——那套对账在连续操作时必然落空（2026-09-06 事故）。
+ *
+ * `kind`：text = 一条普通消息；compact = 排队的手动 `/compact`（它是命令不是消息，
+ * 执行时机另受约束：必须等完全空闲）。
  */
-export type PendingSend = { kind: "text"; text: string } | { kind: "compact"; instructions?: string };
+export type QueuedMessage =
+  | { id: string; kind: "text"; text: string }
+  | { id: string; kind: "compact"; instructions?: string };
 
 /**
  * 输入框里的手动压缩指令：`/compact` 直接压缩，`/compact <要求>` 带自定义要求。
@@ -58,23 +66,16 @@ export interface SessionEntry {
   /** turn = 这一轮还在跑；compaction = 上下文压缩中（居中呼吸行）；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
   /**
-   * pi 排队消息的快照（queue 事件全量覆盖）。steering = 已插队等工具边界注入；
-   * followUp = 等本轮结束投递。投递 / 清队后 pi 重发整份，UI 的排队卡片随之消失。
-   * 纯 ephemeral，不落盘。
+   * 排队队列——**唯一真源**，按显示顺序存。
+   *
+   * 不再有 pi 快照、不再有顺序账本、不再有另一套本地待办：那三份要互相对账，
+   * 而对账只能靠文本（pi 队列里只有裸字符串），一旦某次落空就永久分叉。
+   * 现在只有这一份，按 id 操作，拖拽就是一次 splice。
+   *
+   * 投递时机也归我们：`phase` 回到 idle 时取第一条发，而不是由 pi 的 post-run
+   * 自动 drain（那会把好几条一起吹出去）。纯 ephemeral，不落盘。
    */
-  queue: { steering: readonly string[]; followUp: readonly string[] };
-  /**
-   * 排队项的进入顺序账本（键序 = 输入序）。pi 队列项与本地待办存在两个队列里，
-   * 快照各自有序、合起来无序——卡片要按输入序显示，就得记这份账。键与快照对账
-   * （见 syncQueueOrder）：消失的键删掉，新键补到尾部。纯 ephemeral。
-   */
-  queueOrder: readonly string[];
-  /**
-   * 本地待发队列：phase 一离开 compaction，text 项立刻 submit（runtime 侧自动分流：
-   * 空闲正常发、又在跑就进 pi 队列）；compact 项必须等 phase 完全 idle 才执行——
-   * 排队消息（pi 队列里的）全处理完再压，压的就是完整对话。纯 ephemeral。
-   */
-  pendingSends: readonly PendingSend[];
+  queued: readonly QueuedMessage[];
   /**
    * 自动重试进行态（等待下一次重试中）。非 null 时：phase 为 turn 则重试行替换
    * Responding，phase 为 compaction 则补在压缩行下。任何 phase 事件都会清空它
@@ -108,9 +109,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
   compactions: [],
   phase: "idle",
-  queue: { steering: [], followUp: [] },
-  queueOrder: [],
-  pendingSends: [],
+  queued: [],
   retry: null,
   turnError: null,
   stats: null,
@@ -135,21 +134,13 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       phase: event.phase === "idle" ? "idle" : event.phase === "compaction" ? "compaction" : "turn",
       // 任何 phase 事件都清重试槽：重试尝试开跑（agent_start）、整轮落定（settled）、
       // 压缩起止——都是「重试等待结束了」的时刻，倒数行不该再挂。
-      // pendingSends 不在这里清：执行与消费由 hook 在事件那拍完成（见 useChatSession），
-      // reducer 不知道 hook 执行到哪，抢先清会把没执行的消息丢掉。
+      // queued 不在这里清：投递由 hook 在 phase 事件那拍驱动（见 useChatSession），
+      // reducer 不知道 hook 执行到哪，抢先清会把没发出去的消息丢掉。
       retry: null,
       // 回合失败标注只随「新一轮开跑」消失：非 idle 的 phase 事件清它；
       // 落定的 idle **不清**——failed(turn) 之后紧随的 agent_settled 正是 idle
       ...(event.phase === "idle" ? null : { turnError: null }),
     }));
-  }
-  if (event.type === "queue") {
-    return update(states, event.sessionId, (entry) =>
-      syncQueueOrder({
-        ...entry,
-        queue: { steering: event.steering, followUp: event.followUp },
-      }),
-    );
   }
   if (event.type === "retry") {
     return update(states, event.sessionId, (entry) => ({ ...entry, retry: event.status }));
@@ -231,9 +222,7 @@ export function seedFromDisk(
     compactions,
     phase: "idle",
     // 排队是 ephemeral：盘上没有，也不该有（会话断了一次排队就物理消失了）
-    queue: { steering: [], followUp: [] },
-    queueOrder: [],
-    pendingSends: [],
+    queued: [],
     retry: null,
     // 盘上没有失败标注（纯 ephemeral）：种盘即清
     turnError: null,
@@ -302,18 +291,14 @@ export function markAllIdle(states: SessionStates): SessionStates {
     const busy =
       entry.phase !== "idle" ||
       entry.retry !== null ||
-      entry.queue.steering.length > 0 ||
-      entry.queue.followUp.length > 0 ||
-      entry.pendingSends.length > 0;
+      entry.queued.length > 0;
     if (busy) {
       next.set(sessionId, {
         ...entry,
         phase: "idle",
         retry: null,
-        // runtime 进程没了 = pi 的队列与待办物理消失，槽里不留尸体
-        queue: { steering: [], followUp: [] },
-        queueOrder: [],
-        pendingSends: [],
+        // runtime 进程没了 = 这一轮彻底断了，排队的消息没人会发，槽里不留尸体
+        queued: [],
       });
       changed = true;
     } else {
@@ -323,203 +308,68 @@ export function markAllIdle(states: SessionStates): SessionStates {
   return changed ? next : states;
 }
 
-/** 本地待办入队（压缩期间的消息、排队的手动压缩）。 */
-export function addPendingSend(states: SessionStates, sessionId: string, item: PendingSend): SessionStates {
-  return update(states, sessionId, (entry) =>
-    syncQueueOrder({ ...entry, pendingSends: [...entry.pendingSends, item] }),
-  );
-}
-
-/**
- * 拖拽排序的乐观重排：本地先把顺序改到位，不等 runtime 往返。
- *
- * 真值随后的 queue 事件会覆盖这里；命令落空时它覆回原顺序，
- * 看到的就是「弹回去」——那正是失败的诚实表达，不掩盖。
- *
- * 分段规则与 runtime 的 planQueueEdit 一致：steering 段长度不变，
- * 重排后落在前段的就是插队（位置即投递时机）。故意不复用那个函数：
- * 它在 agent 进程侧，renderer 跨进程 import 它会把两边绑死，
- * 而 move 的重排就是一次 splice，重复这几行比建一层共享便宜。
- *
- * **账本必须一起改**：显示顺序的真源是 `queueOrder`（mergeQueueView 按它遍历，
- * `queue` 两个数组只用来按文本查条目），而 syncQueueOrder 会**原样保留**
- * 账本里已存在的键顺序。只排数组不排账本，界面纹丝不动——真值回来也一样被
- * 账本压制，表现为「拖拽完全失效」（真实事故 2026-09-06）。
- * 反过来说，乐观重排账本后真值回来正好被保留，不会回弹。
- */
-export function reorderQueueOptimistic(
+/** 排队入队：新条目落到队尾，带一个稳定 id。 */
+export function enqueue(
   states: SessionStates,
   sessionId: string,
-  fromIndex: number,
-  toIndex: number,
+  item: QueuedMessage,
+): SessionStates {
+  return update(states, sessionId, (entry) => ({ ...entry, queued: [...entry.queued, item] }));
+}
+
+/** 按 id 移出一条（撤回 / 删除 / 投递后出队都走它）。找不到就原样返回。 */
+export function dequeue(states: SessionStates, sessionId: string, id: string): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || !entry.queued.some((item) => item.id === id)) return states;
+  return update(states, sessionId, (current) => ({
+    ...current,
+    queued: current.queued.filter((item) => item.id !== id),
+  }));
+}
+
+/**
+ * 按 id 挪位：把 sourceId 放到 targetId 的前面或后面。
+ *
+ * 全程按 id，不碰下标——下标会随投递前移，那正是旧实现每次连续操作都落空的原因。
+ */
+export function moveQueued(
+  states: SessionStates,
+  sessionId: string,
+  sourceId: string,
+  targetId: string,
+  placement: "before" | "after",
 ): SessionStates {
   const entry = states.get(sessionId);
-  if (entry === undefined) return states;
-  const merged = [...entry.queue.steering, ...entry.queue.followUp];
-  if (
-    fromIndex < 0 ||
-    fromIndex >= merged.length ||
-    toIndex < 0 ||
-    toIndex >= merged.length ||
-    fromIndex === toIndex
-  ) {
-    return states;
-  }
-  const ordered = [...merged];
-  const [moved] = ordered.splice(fromIndex, 1);
+  if (entry === undefined || sourceId === targetId) return states;
+  const from = entry.queued.findIndex((item) => item.id === sourceId);
+  const target = entry.queued.find((item) => item.id === targetId);
+  if (from === -1 || target === undefined) return states;
+  const rest = entry.queued.filter((item) => item.id !== sourceId);
+  const at = rest.findIndex((item) => item.id === targetId);
+  if (at === -1) return states;
+  const moved = entry.queued[from];
   if (moved === undefined) return states;
-  ordered.splice(toIndex, 0, moved);
-  const steerCount = entry.queue.steering.length;
-  // 账本同步：pi 键在 queueOrder 里的**槽位不动**，只把内容按新顺序填回去——
-  // 这样中间夹的本地待办保持它们相对位置，又能让 pi 项换序。
-  const slots: number[] = [];
-  entry.queueOrder.forEach((key, i) => {
-    if (key.startsWith("pi\0")) slots.push(i);
-  });
-  const nextOrder = [...entry.queueOrder];
-  slots.forEach((slot, i) => {
-    const text = ordered[i];
-    if (text !== undefined) nextOrder[slot] = `pi\0${text}`;
-  });
-  return update(states, sessionId, (current) =>
-    syncQueueOrder({
-      ...current,
-      queueOrder: nextOrder,
-      queue: {
-        steering: ordered.slice(0, steerCount),
-        followUp: ordered.slice(steerCount),
-      },
-    }),
-  );
-}
-
-/** 取消一条本地待办。纯本地状态，即点即删，按下标定位；越界原样返回。 */
-export function removePendingSend(states: SessionStates, sessionId: string, index: number): SessionStates {
-  const entry = states.get(sessionId);
-  if (entry === undefined || index < 0 || index >= entry.pendingSends.length) return states;
-  return update(states, sessionId, (current) =>
-    syncQueueOrder({
-      ...current,
-      pendingSends: current.pendingSends.filter((_, i) => i !== index),
-    }),
-  );
+  const insertAt = placement === "before" ? at : at + 1;
+  const next = [...rest.slice(0, insertAt), moved, ...rest.slice(insertAt)];
+  const unchanged = next.every((item, i) => item.id === entry.queued[i]?.id);
+  return unchanged
+    ? states
+    : update(states, sessionId, (current) => ({ ...current, queued: next }));
 }
 
 /**
- * 消费前 n 条本地待办（hook 已执行它们）。越界的 n 当清空处理——执行方与消费方
- * 读的是同一份快照，越界只在竞态下发生，宁可少留不可重发。
+ * 下一条该投递的是谁。取不到返回 null，调用方什么都不做。
+ *
+ * 条件只有一个：**完全空闲**。队列归我们之后，投递就发生在「上一轮落定」那一拍，
+ * 没必要再区分消息与 `/compact`——两者都只在 idle 时发。
+ * 这也是「一次只跑一轮」的保障：轮还在跑就不放下一条，
+ * 不会出现 pi 的 post-run 那种「好几条一起吹出去」。
  */
-export function consumePendingSends(states: SessionStates, sessionId: string, count: number): SessionStates {
-  const entry = states.get(sessionId);
-  if (entry === undefined || count <= 0) return states;
-  const nextItems = entry.pendingSends.slice(count);
-  if (nextItems.length === entry.pendingSends.length) return states;
-  return update(states, sessionId, (current) =>
-    syncQueueOrder({ ...current, pendingSends: nextItems }),
-  );
+export function nextDeliverable(entry: SessionEntry): QueuedMessage | null {
+  if (entry.phase !== "idle") return null;
+  return entry.queued[0] ?? null;
 }
 
-/** 消费全部 text 项（agent 又跑起来的那拍：文本安全进 pi 队列，compact 继续等 idle）。 */
-export function consumePendingTexts(states: SessionStates, sessionId: string): SessionStates {
-  const entry = states.get(sessionId);
-  if (entry === undefined || !entry.pendingSends.some((item) => item.kind === "text")) return states;
-  return update(states, sessionId, (current) =>
-    syncQueueOrder({
-      ...current,
-      pendingSends: current.pendingSends.filter((item) => item.kind !== "text"),
-    }),
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 排队显示合成：pi 队列与本地待办按输入序交错（键 = 来源 + 内容）
-// ---------------------------------------------------------------------------
-
-function localQueueKey(item: PendingSend): string {
-  return item.kind === "text" ? `local-text\0${item.text}` : `local-compact\0${item.instructions ?? ""}`;
-}
-
-/**
- * 账本与两个队列快照对账：消失的键（投递 / 取消 / 执行掉）删除，新出现的键
- * （pi 先按快照序、本地按数组序）补到尾部。没有变化时返回原 entry（保引用）。
- */
-function syncQueueOrder(entry: SessionEntry): SessionEntry {
-  const piKeys = [...entry.queue.steering, ...entry.queue.followUp].map((text) => `pi\0${text}`);
-  const localKeys = entry.pendingSends.map(localQueueKey);
-  const alive = new Map<string, number>();
-  for (const key of [...piKeys, ...localKeys]) {
-    alive.set(key, (alive.get(key) ?? 0) + 1);
-  }
-  const kept: string[] = [];
-  for (const key of entry.queueOrder) {
-    const left = alive.get(key) ?? 0;
-    if (left > 0) {
-      kept.push(key);
-      alive.set(key, left - 1);
-    }
-  }
-  const appended: string[] = [];
-  for (const key of [...piKeys, ...localKeys]) {
-    const left = alive.get(key) ?? 0;
-    if (left > 0) {
-      appended.push(key);
-      alive.set(key, left - 1);
-    }
-  }
-  const next = [...kept, ...appended];
-  const unchanged =
-    next.length === entry.queueOrder.length && next.every((key, i) => key === entry.queueOrder[i]);
-  return unchanged ? entry : { ...entry, queueOrder: next };
-}
-
-/** 卡片渲染用的合成视图项：pi 项带拼接视图下标（runtime 命令用），本地项带数组下标。 */
-export type QueueViewEntry =
-  | { source: "pi"; steering: boolean; text: string; piIndex: number }
-  | { source: "local"; item: PendingSend; localIndex: number };
-
-/**
- * pi 队列 + 本地待办 → 按输入序（queueOrder）交错的显示视图。
- * 账本没覆盖到的项（对账竞态漏网）按「pi 先、本地后」补在尾部，保证一条不丢。
- */
-export function mergeQueueView(entry: SessionEntry): QueueViewEntry[] {
-  const piItems = [
-    ...entry.queue.steering.map((text) => ({ steering: true, text })),
-    ...entry.queue.followUp.map((text) => ({ steering: false, text })),
-  ];
-  const piUsed = new Set<number>();
-  const localUsed = new Set<number>();
-  const view: QueueViewEntry[] = [];
-  for (const key of entry.queueOrder) {
-    const piIndex = piItems.findIndex(
-      (item, i) => !piUsed.has(i) && `pi\0${item.text}` === key,
-    );
-    if (piIndex !== -1) {
-      const hit = piItems[piIndex];
-      if (hit !== undefined) {
-        piUsed.add(piIndex);
-        view.push({ source: "pi", steering: hit.steering, text: hit.text, piIndex });
-        continue;
-      }
-    }
-    const localIndex = entry.pendingSends.findIndex(
-      (item, i) => !localUsed.has(i) && localQueueKey(item) === key,
-    );
-    if (localIndex !== -1) {
-      const hit = entry.pendingSends[localIndex];
-      if (hit !== undefined) {
-        localUsed.add(localIndex);
-        view.push({ source: "local", item: hit, localIndex });
-      }
-    }
-  }
-  for (const [i, item] of piItems.entries()) {
-    if (!piUsed.has(i)) view.push({ source: "pi", steering: item.steering, text: item.text, piIndex: i });
-  }
-  for (const [i, item] of entry.pendingSends.entries()) {
-    if (!localUsed.has(i)) view.push({ source: "local", item, localIndex: i });
-  }
-  return view;
-}
 
 /** 会话被删除：槽一并丢掉，否则它连同整份 transcript 在 renderer 内存里留一具尸体。 */
 export function removeSessionEntry(states: SessionStates, sessionId: string): SessionStates {

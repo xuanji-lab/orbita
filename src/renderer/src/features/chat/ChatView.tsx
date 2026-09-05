@@ -336,13 +336,11 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
           )}
           {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
           <QueueStrip
-            view={session.queueView}
+            items={session.queued}
             phase={session.phase}
-            onInterrupt={session.interruptQueued}
+            onSendNow={session.sendQueuedNow}
             onWithdraw={session.withdrawQueued}
-            onWithdrawPending={session.withdrawPendingSend}
-            onMove={session.moveQueued}
-            onRunPendingNow={session.runPendingNow}
+            onMove={session.moveQueuedTo}
           />
           {composer}
         </>

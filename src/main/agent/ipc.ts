@@ -130,18 +130,7 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(
     ipcChannels.agentInterrupt,
-    (_e, sessionId: string, index: number, text: string) => host.interrupt(sessionId, index, text),
-  );
-  ipcMain.handle(
-    ipcChannels.agentQueueEdit,
-    (
-      _e,
-      sessionId: string,
-      op: "cancel" | "move",
-      index: number,
-      text: string,
-      toIndex?: number,
-    ) => host.queueEdit(sessionId, op, index, text, toIndex),
+    (_e, sessionId: string, text: string) => host.interrupt(sessionId, text),
   );
   ipcMain.handle(
     ipcChannels.agentCompact,

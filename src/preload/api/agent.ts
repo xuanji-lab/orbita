@@ -12,19 +12,11 @@ export const agentApi = {
     ipcRenderer.invoke(ipcChannels.agentCreate, input),
   submit: (sessionId: string, text: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSubmit, sessionId, text),
-  /** 改动排队队列：cancel = 移出，move = 挪到 toIndex。index+text 防错删（乐观校验） */
-  queueEdit: (
-    sessionId: string,
-    op: "cancel" | "move",
-    index: number,
-    text: string,
-    toIndex?: number,
-  ): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentQueueEdit, sessionId, op, index, text, toIndex),
   abort: (sessionId: string): Promise<void> => ipcRenderer.invoke(ipcChannels.agentAbort, sessionId),
 
-  interrupt: (id: string, index: number, text: string): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentInterrupt, id, index, text),
+  /** 停下当前这一轮（含工具调用），把这句话作为新一轮发出去。队列在 renderer 一侧 */
+  interrupt: (id: string, text: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentInterrupt, id, text),
 
   /** 手动压缩上下文（`/compact`）。忙碌态与界碑从 agent:event 的 compaction 事件回来 */
   compact: (sessionId: string, instructions?: string): Promise<void> =>

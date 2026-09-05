@@ -165,24 +165,6 @@ export class AgentHostCore {
     this.post({ type: "generateTitle", sessionId, text });
   }
 
-  async queueEdit(
-    sessionId: string,
-    op: "cancel" | "move",
-    index: number,
-    text: string,
-    toIndex?: number,
-  ): Promise<void> {
-    await this.ensure();
-    this.post({
-      type: "queueEdit",
-      sessionId,
-      op,
-      index,
-      text,
-      ...(toIndex !== undefined ? { toIndex } : {}),
-    });
-  }
-
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
     await this.ensure();
     this.post({ type: "setMode", sessionId, mode });
@@ -206,10 +188,10 @@ export class AgentHostCore {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
   }
 
-  /** 立即发送排队中的第 index 条：打断当前轮（含工具调用），它成为新一轮 */
-  async interrupt(sessionId: string, index: number, text: string): Promise<void> {
+  /** 停下当前这一轮（含工具调用），把这句话作为新一轮发出去 */
+  async interrupt(sessionId: string, text: string): Promise<void> {
     await this.ensure();
-    this.post({ type: "interrupt", sessionId, index, text });
+    this.post({ type: "interrupt", sessionId, text });
   }
 
   async abort(sessionId: string): Promise<void> {
