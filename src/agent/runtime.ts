@@ -323,6 +323,21 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     cwd: command.cwd,
     modelRuntime,
     resourceLoaderOptions: {
+      /**
+       * Skills：把目录交给 pi，扫盘与拼 prompt 都是它的事。
+       *
+       * **不自己调 `loadSkillsFromDir` / `formatSkillsForPrompt`**：用了那两个就得自己拼
+       * system prompt，而 pi 的 ResourceLoader 本来就在做这件事——多一份就多一份会漂的格式。
+       *
+       * `noSkills: true` 不是「不要 skills」，而是**不要自动发现的那些**（pi 0.84.3 的
+       * `resource-loader.js:330`：它只把 `enabledSkills` 排掉，`additionalSkillPaths` 照常合并）。
+       * 不加这一句的后果实测过：pi 的 packageManager 会扫 `~/.agents/skills/`（Agent Skills
+       * 标准的全局目录），当场多出 9 个用户用 CLI 装的 skill。那些 skill 在我们的界面里
+       * 没有任何地方能解释自己从哪来，而「放进目录就能用」的对偶必须是「没放就不生效」。
+       * 隔离是可逆的：以后想共享全局 skill，加个设置项就行；反过来是破坏性变更。
+       */
+      noSkills: true,
+      additionalSkillPaths: [command.skillsDir],
       extensionFactories: [
         {
           name: "orbita-permission",

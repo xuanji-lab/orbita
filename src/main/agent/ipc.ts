@@ -69,6 +69,8 @@ export function registerAgentIpc(
   sessions: SessionStore,
   /** pi 把自己的 session 文件放在哪。**路径策略在主进程**，agent 进程只收数据 */
   piSessionDir: string,
+  /** 启用中的 skills 目录。同上：路径策略在主进程 */
+  skillsDir: string,
 ): void {
   ipcMain.handle(
     ipcChannels.agentCreate,
@@ -80,6 +82,7 @@ export function registerAgentIpc(
           modelId: input.modelId,
           mode: input.mode,
           piSessionDir,
+          skillsDir,
           // 续会话：把 pi 自己那份本子还给它（guideline §四）
           ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
           provider,
