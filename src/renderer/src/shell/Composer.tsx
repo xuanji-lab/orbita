@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Icon } from "./Icon";
 import { isSubmitKey } from "./composer-keys.ts";
+import { containsMathDelimiter } from "./math-text.ts";
+import { MathText } from "./MathText.tsx";
 
 /**
  * 输入框。**跨首页与聊天页是同一个组件、同一个宽度**（R8-01 ②：宽度连续性）——
@@ -25,6 +27,11 @@ export function Composer(props: {
   bottomSlot?: React.ReactNode;
 }) {
   const [hover, setHover] = useState(false);
+  // Σ 门控预览（docs/plans/2026-09-05-用户输入公式渲染.md）：草稿有 $ 才出现按钮，
+  // 点了才展开预览条；$ 删光则按钮与预览条一起消失——不打公式的人零打扰。
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const mathInDraft = containsMathDelimiter(props.value);
+  const previewVisible = mathInDraft && previewOpen;
   const disabled = props.disabled === true;
   const running = props.running === true;
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
@@ -78,7 +85,66 @@ export function Composer(props: {
           color: "var(--color-text-primary)",
         }}
       />
+      {previewVisible && (
+        <div
+          style={{
+            borderTop: "1px solid var(--color-border-subtle)",
+            padding: "6px 4px 2px",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "var(--font-size-micro)",
+              color: "var(--color-text-tertiary)",
+              marginBottom: 2,
+              userSelect: "none",
+            }}
+          >
+            Math preview
+          </div>
+          <div
+            style={{
+              maxHeight: 140,
+              overflow: "auto",
+              fontSize: "var(--font-size-input)",
+              lineHeight: 1.7,
+              color: "var(--color-text-primary)",
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+            }}
+          >
+            <MathText text={props.value} />
+          </div>
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {mathInDraft && (
+          <button
+            type="button"
+            title="Preview math"
+            aria-label="Preview math"
+            aria-pressed={previewVisible}
+            onClick={() => setPreviewOpen((value) => !value)}
+            style={{
+              flex: "0 0 auto",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 24,
+              height: 24,
+              padding: 0,
+              border: 0,
+              borderRadius: "var(--radius-pill)",
+              // 按下态用选中底（accent-soft 系），未按下保持安静的三级墨——次级工具不抢发送键
+              background: previewVisible ? "var(--color-bg-active)" : "transparent",
+              color: previewVisible ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+              cursor: "pointer",
+              transition: "var(--transition-hover)",
+            }}
+          >
+            <Icon name="sigma" size={14} />
+          </button>
+        )}
         {props.bottomSlot}
         <button
           type="button"
