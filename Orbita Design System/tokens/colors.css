@@ -73,65 +73,72 @@
   --action-primary-hover: var(--color-accent-strong);
 }
 
+/* dark — Warm · 再柔化 + 压暗（2026-09-03 修订八/九）：墨只留一丝暖
+   #d6d5cf / #a3a29b / #82817b（原 gruvbox 暖米已两轮退烧），地面整条降一档
+   （app #191c1d、panel #232525），黄 accent 的 wash 压到 .05——选中态靠
+   字重与文字色兜底（readme：active is marked by weight），不靠色块。
+   设置里叫 Warm；system 不落这档（落 Ink），是纯手动档。 */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg-app: #111315;
-  --color-bg-sidebar: #171a1d;
-  --color-bg-panel: #1d2024;
-  --color-bg-muted: #16191c;
-  --color-bg-hover: #252a2f;
-  --color-bg-active: rgba(212, 167, 44, 0.18);
-  --color-text-primary: #eceff3;
-  --color-text-secondary: #b9c0c8;
-  --color-text-tertiary: #858e99;
+  --color-bg-app: #191c1d;
+  --color-bg-sidebar: #1e2223;
+  --color-bg-panel: #232525;
+  --color-bg-muted: #1b1f20;
+  --color-bg-hover: #2a2d2c;
+  --color-bg-active: rgba(212, 167, 44, 0.05);
+  --color-text-primary: #d6d5cf;
+  --color-text-secondary: #a3a29b;
+  --color-text-tertiary: #82817b;
   /*真正取反：暗主题正文近白，其反色即近黑。填充面上的字改用 --color-*-fg。 */
-  --color-text-inverse: #1b1a15;
+  --color-text-inverse: #191c1d;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: #2a2f35;
-  --color-border-default: #32383f;
-  --color-border-strong: #3a414a;
+  --color-border-subtle: #292b2b;
+  --color-border-default: #333534;
+  --color-border-strong: #3d403f;
   --color-accent: #e3c25a;
   --color-accent-strong: #f0d375;
-  --color-accent-soft: rgba(212, 167, 44, 0.18);
+  --color-accent-soft: rgba(212, 167, 44, 0.05);
   --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(212, 167, 44, 0.18);
+  --color-mode-active-bg: rgba(212, 167, 44, 0.05);
   --color-mode-active-fg: #e3c25a;
   --color-danger: #ff7b72;
   --color-danger-solid: #c9372c;
   --color-danger-fg: #ffffff;
   --color-danger-soft: #3b1f1d;
   --color-warning: #d4a72c;
-  --color-info: #6aa4ff;
+  --color-info: #83a598;
   --color-info-fg: #1b1a15;
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #20242a;
-  --color-chat-muted-bg: #242932;
-  --color-chat-control-bg: #1d2024;
-  --color-chat-table-bg: #1d2024;
-  --color-chat-link: #93c5fd;
+  --color-chat-card-bg: #232525;
+  --color-chat-muted-bg: #2a2d2c;
+  --color-chat-control-bg: #1e2223;
+  --color-chat-table-bg: #232525;
+  --color-chat-link: #83a598;
 }
 
-/* black — 真黑档（OLED）。dark 的「黑 + 黄」走到底：底色阶从纯黑起抬，
-   黄 accent、墨色与状态色沿用 dark 不重调——换的是地，不是墨。
-   black 是手动档，system 跟随系统只落 light/dark（2026-09-03 黑色皮肤）。 */
+/* black — 极暗中性档（2026-09-03 定稿，Vercel/Geist 参考）：#0a0a0a 地、#111111 卡、
+   发丝线 #1e1e1e / #262626 / #2e2e2e，墨 #ededed / #a1a1a1 / #707070，链接蓝 #52a8ff。
+   唯一留给品牌的是黄 accent。历史：真黑 #000「太黑了」→ GitHub default「有点蓝」→
+   中性灰 #121212「有点泛黄」→ 定这版更暗的中性。若仍泛黄，退手是地加一丝冷偏
+   （#0a0b0c）或降 accent-soft 透明度。black 是手动档，system 跟随系统只落 light/dark。 */
 :root[data-theme="black"] {
   color-scheme: dark;
-  --color-bg-app: #000000;
-  --color-bg-sidebar: #0b0d0f;
-  --color-bg-panel: #121519;
-  --color-bg-muted: #0d0f12;
-  --color-bg-hover: #1b2026;
+  --color-bg-app: #0a0a0a;
+  --color-bg-sidebar: #0e0e0e;
+  --color-bg-panel: #111111;
+  --color-bg-muted: #0d0d0d;
+  --color-bg-hover: #1b1b1b;
   --color-bg-active: rgba(212, 167, 44, 0.18);
-  --color-text-primary: #eceff3;
-  --color-text-secondary: #b9c0c8;
-  --color-text-tertiary: #858e99;
-  --color-text-inverse: #1b1a15;
+  --color-text-primary: #ededed;
+  --color-text-secondary: #a1a1a1;
+  --color-text-tertiary: #707070;
+  --color-text-inverse: #0a0a0a;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: #20262c;
-  --color-border-default: #282f36;
-  --color-border-strong: #303841;
+  --color-border-subtle: #1e1e1e;
+  --color-border-default: #262626;
+  --color-border-strong: #2e2e2e;
   --color-accent: #e3c25a;
   --color-accent-strong: #f0d375;
   --color-accent-soft: rgba(212, 167, 44, 0.18);
@@ -143,14 +150,14 @@
   --color-danger-fg: #ffffff;
   --color-danger-soft: #3b1f1d;
   --color-warning: #d4a72c;
-  --color-info: #6aa4ff;
+  --color-info: #52a8ff;
   --color-info-fg: #1b1a15;
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #171b20;
-  --color-chat-muted-bg: #1b2026;
-  --color-chat-control-bg: #121519;
-  --color-chat-table-bg: #121519;
-  --color-chat-link: #93c5fd;
+  --color-chat-card-bg: #111111;
+  --color-chat-muted-bg: #1b1b1b;
+  --color-chat-control-bg: #0e0e0e;
+  --color-chat-table-bg: #111111;
+  --color-chat-link: #52a8ff;
 }

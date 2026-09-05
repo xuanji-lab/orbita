@@ -108,8 +108,8 @@ brand copy — the slogan — stays in Chinese and is deliberately **not** run t
 
 ## Visual foundations
 
-**Colour.** Three themes: **white + blue** (light), **black + yellow** (dark), and black — the same
-black + yellow carried to a true-black ground. A warm off-white shell (`#f3f4f1`) with
+**Colour.** Three themes: **white + blue** (light), **warm dark + yellow** (dark), and
+**neutral black + yellow** (black). A warm off-white shell (`#f3f4f1`) with
 pure-white panels, three text greys, three hairline greys. Every colour has exactly one job: the
 accent is blue `#1d4ed8` on light and yellow `#e3c25a` on dark, and it means the single primary
 action (the send button, "New task", "Start Agent") plus the selected mode — nothing else; amber
@@ -121,11 +121,17 @@ on the theme ground, and as a fill they leave white text at 2.5:1. Filled danger
 `--color-danger-solid`, which is darker.
 Status prefers icons and words over colour — a spinner, a check, a lock glyph. List rows never tint:
 hover and active share one neutral fill and active is marked by weight. Max two
-background colours per screen. The dark theme is a cool near-black (`#111315` shell,
-`#1d2024` panel) with the yellow accent (`#e3c25a`) on dark glyph colour (`--color-accent-fg`).
-The black theme is dark's identity carried to the floor — the same yellow and ink on a true-black
-ramp (`#000000` shell, `#121519` panel); it is a manual choice only, `system` still resolves to
-light/dark.
+background colours per screen. The dark theme — **Warm** in settings — is a barely-warm
+near-black (`#191c1d` shell, `#232525` panel, ink `#d6d5cf / #a3a29b / #82817b` with only a
+whisper of warmth, yellow washes at `.05` — selection is carried by weight and ink, not fill):
+gruvbox's full cream (`#ebdbb2`) read as "过于黄色" and was cut twice. The black theme — **Ink** — is a **neutral near-black** (Vercel-referenced
+`#0a0a0a` shell, `#111111` panel, ink `#ededed / #a1a1a1 / #707070`), the darkest ground in the set
+and **the dark landing of `system`**. Both take the yellow accent (`#e3c25a`) on
+`--color-accent-fg`; both are manual choices, `system` resolves to light or Ink. (Both dark grounds
+re-cut 2026-09-03 after seven same-day iterations — true black, GitHub default, GitHub ×0.78 and
+neutral gray each bounced; the user picked warm for dark and darkest-neutral for black from a
+rendered comparison page, then softened, renamed, darkened and de-yellowed Warm across two more
+rounds.)
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
@@ -152,9 +158,11 @@ from colour.
 
 **Transparency and blur.** Blur is *only* for surfaces: `blur(20px)` over a single `--glass-bg`.
 One alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
-`.60 / .84 / .936`, dark `.70 / .91 / .973` and black `.78 / .95 / .99`. The themes are deliberately
-unequal — **the blacker the ground, the more the glass blocks** — because light text needs a settled
-ground and a bleeding wallpaper costs a true-black theme its whole promise.
+`.60 / .84 / .936` and dark and black `.70 / .91 / .973`. The themes are deliberately unequal —
+**dark and black block more than light** — because light text needs a settled ground and a bleeding
+wallpaper costs a dark ground its whole promise. Dark and black share one glass recipe: **the tint
+is each theme's own panel colour** (warm `rgba(40,40,40,.7)`, neutral `rgba(17,17,17,.7)`), so the
+ladder always climbs from the page ground toward the panel colour.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
