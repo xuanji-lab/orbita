@@ -41,6 +41,7 @@ import {
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
@@ -935,7 +936,11 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
   );
 }
 
-/** 用户消息：右对齐的独立气泡；只有 text 块进气泡。 */
+/**
+ * 用户消息：右对齐的独立气泡；只有 text 块进气泡。text 走 MathText——
+ * 公式就地渲染（行内随文、块级居中），**不解析 markdown**：其余一切按原样，
+ * 用户气泡与模型回复（MarkdownBlock）刻意是两套渲染。
+ */
 function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
   return (
     <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
@@ -955,7 +960,7 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         }}
       >
         {props.item.content.map((block, index) =>
-          block.type === "text" ? <span key={index}>{block.text}</span> : null,
+          block.type === "text" ? <MathText key={index} text={block.text} /> : null,
         )}
       </div>
     </div>
