@@ -1254,6 +1254,15 @@ function ToolLine(props: {
   const active = result === undefined || result.status === "running";
   const summary = summarizeToolResult(result);
   const callSummary = toolCallSummary(props.toolName, props.input);
+  // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
+  // 完整路径进 tooltip。toolCallSummary 本身保持原始 path 语义（editGroupFileCount 靠它去重）
+  const pathTool =
+    props.toolName === "read" ||
+    props.toolName === "write" ||
+    props.toolName === "edit" ||
+    props.toolName === "ls";
+  const callLabel =
+    callSummary !== null && pathTool ? splitPathTail(callSummary).name : callSummary;
   // 跑着的 shell 有实时增量可展，其余工具跑完才有完整结果（见 toolExpandable）
   const expandable = toolExpandable(result, props.toolName);
   const live = expandable && active;
@@ -1265,8 +1274,7 @@ function ToolLine(props: {
   const body = live ? liveTailLines(rawBody) : rawBody;
   // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
   const fileView = finished ? fileViewFor(props.toolName, props.input, result) : null;
-  const fileLang =
-    fileView !== null ? langFromPath(toolCallSummary(props.toolName, props.input) ?? "") : null;
+  const fileLang = fileView !== null ? langFromPath(callSummary ?? "") : null;
   const writeLines =
     !open && props.toolName === "write" && fileView !== null ? writeLineCount(props.input) : null;
   // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有
@@ -1288,18 +1296,12 @@ function ToolLine(props: {
           </span>
           <span style={headLabel(active)}>{props.toolName}</span>
         </span>
-        {callSummary !== null && (
+        {callLabel !== null && (
           <span
-            style={
-              props.toolName === "read" ||
-              props.toolName === "write" ||
-              props.toolName === "edit" ||
-              props.toolName === "ls"
-                ? { ...SLOT.sub, color: "var(--color-chat-link)" }
-                : SLOT.sub
-            }
+            title={callSummary !== callLabel ? (callSummary ?? undefined) : undefined}
+            style={pathTool ? { ...SLOT.sub, color: "var(--color-chat-link)" } : SLOT.sub}
           >
-            {callSummary}
+            {callLabel}
           </span>
         )}
         {/* 增删统计紧跟文件名（git stat 读法）；与展开后 DiffView 头重复，展开时藏起 */}
@@ -1935,7 +1937,8 @@ function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
   return null;
 }
 
+/** 取路径尾段。分隔符 `/` 与 `\` 都认——Windows 的 cwd 是反斜杠，只切 `/` 会整条漏出来 */
 function basename(path: string): string {
-  const parts = path.split("/").filter((part) => part !== "");
+  const parts = path.split(/[\\/]/).filter((part) => part !== "");
   return parts[parts.length - 1] ?? path;
 }
