@@ -329,6 +329,8 @@ export class TranscriptAdapter {
       role: "assistant" as const,
       content: message.content.map(toAssistantContent),
       model: toModelRef(message),
+      // usage 随帧透传：renderer 的 token 速度靠终态帧上的它记账，丢了就算不出来
+      usage: message.usage,
       timestamp: this.deps.now(),
     };
     if (streaming) return { ...base, status: "streaming" };

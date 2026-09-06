@@ -114,6 +114,18 @@ describe("TranscriptAdapter", () => {
     assert.equal(ids.size, 1, `一条消息应只有一个 id，实际 ${[...ids].join(",")}`);
   });
 
+  test("终态帧透传 usage——renderer 的 token 速度靠它记账，丢了就算不出来", () => {
+    const end = assistant([{ type: "text", text: "Hello, world" }]);
+    end.usage = { ...end.usage, output: 4100 };
+    const { frames } = replay([
+      { type: "message_start", message: assistant([{ type: "text", text: "" }]) },
+      { type: "message_end", message: end },
+    ]);
+    const finished = frames.find((f) => f.type === "item_finished");
+    assert.ok(finished !== undefined && finished.type === "item_finished");
+    assert.equal(finished.item.usage?.output, 4100);
+  });
+
   test("思考 + 回答：两个内容块各自按 contentIndex 增量，不串台", () => {
     const events: AdaptableEvent[] = [
       {
