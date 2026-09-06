@@ -26,7 +26,7 @@ import {
 } from "./session-states.ts";
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { recordToolFrame } from "./tool-results.ts";
-import { recordAssistantFrame } from "./stats-format.ts";
+import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
@@ -313,8 +313,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
             event.progress.type === "item_finished")
         ) {
           recordToolFrame(event.progress.item);
-          // token 速度同路记账（stats-format）：起点与落定 usage 只在事件现场经过
-          recordAssistantFrame(event.sessionId, event.progress.item);
+          // 流式起点在这里记账（stats-format）：Responding 行的估算分母要它，
+          // 而归约器只留最后一帧的时间戳。真值不需要——真值在终态帧的 speed 上
+          recordAssistantStart(event.progress.item);
         }
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
         // 本地待办的执行时机（读 ref 而不是闭包 states：同拍可能已有事件更新过它）：

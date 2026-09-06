@@ -12,6 +12,7 @@ import {
   fileViewFor,
   flattenRenderUnits,
   formatToolDuration,
+  formatThinkingDuration,
   groupToolUnits,
   groupTurns,
   indexToolResults,
@@ -49,8 +50,9 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
-import { contextRing, sessionSpeed, usageBreakdown, type ContextRing } from "./stats-format";
+import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
+import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
@@ -394,6 +396,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
             {branchAfter !== undefined && (
               <BranchRow
                 anchorItemId={branchAfter}
+                speed={replySpeed(records.find((record) => record.id === branchAfter))}
                 disabled={toolsRunning}
                 onBranch={session.branchFrom}
               />
@@ -419,7 +422,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         </div>
       )}
       {session.phase === "turn" &&
-        (session.retry !== null ? <Retrying status={session.retry} /> : <Responding />)}
+        (session.retry !== null ? <Retrying status={session.retry} /> : <Responding session={session} />)}
       {session.phase === "compaction" && (
         <>
           <Compacting />
@@ -703,10 +706,8 @@ function UsageRing(props: { session: ChatSession }) {
   const freshTokens =
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
-  // 最近一条落定消息的速度（stats-format 记账）；null = 没见过现场（旧会话/还没落定），行不出现
-  const speed = session.sessionId !== null ? sessionSpeed(session.sessionId) : null;
   const items: MenuItem[] = [
-    ...usageBreakdown(stats, billing, speed).map((row) => ({
+    ...usageBreakdown(stats, billing).map((row) => ({
       id: row.label,
       label: row.label,
       hint: row.value,
@@ -974,14 +975,17 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
  * （用户裁决：不用 hover 浮现）。图标即按钮——悬停 / 读屏都走「Branch from here」这同一个
  * 名字。点了开出一条新会话（该回答及之前的全部），原会话原封不动，所以**无需确认弹窗**。
  * 工具还在跑时禁用：它的结果没齐，此刻裁出去的上下文是畸形的。
+ * 按钮右侧的速度标注（usage-speed-X）：adapter 挂在该回答终态帧上的真值，随记录
+ * 落盘、重开即回；过不了噪音门的回答没有这个字段，也就不显示。
  */
 function BranchRow(props: {
   anchorItemId: string;
+  speed: number | null;
   disabled: boolean;
   onBranch: (anchorItemId: string) => void;
 }) {
   return (
-    <div style={{ display: "flex", width: "100%" }}>
+    <div style={{ display: "flex", width: "100%", alignItems: "center" }}>
       <button
         type="button"
         disabled={props.disabled}
@@ -1000,6 +1004,18 @@ function BranchRow(props: {
       >
         <Icon name="git-branch" size={12} strokeWidth={1.8} />
       </button>
+      {props.speed !== null && (
+        <span
+          style={{
+            color: "var(--color-text-tertiary)",
+            fontFamily: "var(--font-family-business)",
+            fontVariantNumeric: "tabular-nums",
+            fontSize: "var(--font-size-micro)",
+          }}
+        >
+          {formatSpeed(props.speed)}
+        </span>
+      )}
     </div>
   );
 }
@@ -1769,7 +1785,34 @@ function CompactedLine(props: { record: CompactedRecord }) {
   );
 }
 
-function Responding() {
+function Responding(props: { session: ChatSession }) {
+  const { transcript } = props.session;
+  // 秒针：Responding 只在回答期间挂载，一秒一跳不白算（Retrying 同款）
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  // 耗时：本轮用户发话至今——「agent 回答了多久」是人感知的那段时间
+  let userTs: number | null = null;
+  for (const item of transcript) {
+    if (item.role === "user") userTs = item.timestamp;
+  }
+  const elapsed = userTs !== null ? formatThinkingDuration(Math.max(0, now - userTs)) : null;
+  // 流式速度：in-flight 的字符估算（estimateStreamingTokens，英文校准的粗账——
+  // 中文会低估数倍，落定即被回答旁的真值顶替）÷ 本条消息已生成的秒数
+  let speedText: string | null = null;
+  const streaming = transcript.at(-1);
+  if (streaming !== undefined && streaming.role === "assistant" && streaming.status === "streaming") {
+    const chars = streaming.content.reduce(
+      (sum, block) =>
+        sum + (block.type === "text" ? block.text.length : block.type === "thinking" ? block.thinking.length : 0),
+      0,
+    );
+    const start = streamingStart(streaming.id);
+    const speed = start !== null ? messageSpeed(start, now, estimateStreamingTokens(chars)) : null;
+    if (speed !== null) speedText = formatSpeed(speed);
+  }
   return (
     <p
       className="orbita-breath"
@@ -1787,6 +1830,17 @@ function Responding() {
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
       Responding
+      {elapsed !== null && <span>· {elapsed}</span>}
+      {speedText !== null && (
+        <span
+          style={{
+            fontFamily: "var(--font-family-business)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          · {speedText}
+        </span>
+      )}
     </p>
   );
 }

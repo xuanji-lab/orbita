@@ -10,9 +10,9 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import {
   contextRing,
   formatSpeed,
-  messageSpeed,
-  recordAssistantFrame,
-  sessionSpeed,
+  recordAssistantStart,
+  replySpeed,
+  streamingStart,
   usageBreakdown,
 } from "./stats-format.ts";
 
@@ -110,30 +110,16 @@ describe("usageBreakdown —— 菜单里那几行", () => {
     const labels = usageBreakdown(stats({ contextUsage: null })).map((r) => r.label);
     assert.equal(labels.includes("Context"), false);
   });
-
-  test("有速度就在 Total tokens 后插 Speed 行——同为「这轮花了多少」的量词", () => {
-    const labels = usageBreakdown(stats(), "metered", 42).map((r) => r.label);
-    assert.deepEqual(
-      labels,
-      ["Input", "Output", "Cache read", "Cache write", "Total tokens", "Speed", "Context", "Cost"],
-    );
-    assert.equal(usageBreakdown(stats(), "metered", 42).find((r) => r.label === "Speed")?.value, "42 tok/s");
-  });
-
-  test("没速度整行不出现——宁缺不编，不写 — 也不写 unknown", () => {
-    const labels = usageBreakdown(stats(), "metered", null).map((r) => r.label);
-    assert.equal(labels.includes("Speed"), false);
-  });
 });
 
-// ── token 速度（usage-speed-X）──
+// ── token 速度（usage-speed-X）：真值在回答的终态帧上，这里只有展示支援 ──
 
 /** assistant 帧的最小构造；字段按 pi-protocol 的形状，测试只关心记账用得到的那几个 */
 const assistantFrame = (over: {
   id: string;
   status: "streaming" | "complete" | "error";
   timestamp: number;
-  usage?: { output: number };
+  speed?: number;
 }): TranscriptItem =>
   ({
     id: over.id,
@@ -142,26 +128,8 @@ const assistantFrame = (over: {
     model: { provider: "p", id: "m" },
     timestamp: over.timestamp,
     status: over.status,
-    ...(over.usage === undefined ? {} : { usage: { output: over.usage.output } }),
+    ...(over.speed === undefined ? {} : { speed: over.speed }),
   }) as TranscriptItem;
-
-describe("messageSpeed —— 真值除法与噪音门", () => {
-  test("正常：output ÷ 生成秒", () => {
-    assert.equal(messageSpeed(1_000, 3_000, 1_000), 500);
-  });
-
-  test("不足 500ms 不当真——除以极小时间会出荒谬瞬时值", () => {
-    assert.equal(messageSpeed(0, 499, 1_000), null);
-  });
-
-  test("500ms 恰好过门（含边界）", () => {
-    assert.equal(messageSpeed(0, 500, 400), 800);
-  });
-
-  test("输出 0 不算——0 不是速度，是没产出", () => {
-    assert.equal(messageSpeed(0, 5_000, 0), null);
-  });
-});
 
 describe("formatSpeed —— 整数 tok/s", () => {
   test("四舍五入取整", () => {
@@ -170,64 +138,30 @@ describe("formatSpeed —— 整数 tok/s", () => {
   });
 });
 
-describe("recordAssistantFrame / sessionSpeed —— 事件现场记账", () => {
-  test("streaming 记起点，落定帧出真值；增量帧重复到达不覆盖起点", () => {
-    const session = "sess-speed-1";
-    recordAssistantFrame(session, assistantFrame({ id: "m1", status: "streaming", timestamp: 1_000 }));
-    recordAssistantFrame(session, assistantFrame({ id: "m1", status: "streaming", timestamp: 2_500 }));
-    recordAssistantFrame(
-      session,
-      assistantFrame({ id: "m1", status: "complete", timestamp: 5_000, usage: { output: 800 } }),
-    );
-    assert.equal(sessionSpeed(session), 200); // 800 tok ÷ (5000−1000)ms
+describe("recordAssistantStart / streamingStart —— 估算用的起点记账", () => {
+  test("streaming 帧记起点，增量帧重复到达不覆盖", () => {
+    recordAssistantStart(assistantFrame({ id: "sm1", status: "streaming", timestamp: 1_000 }));
+    recordAssistantStart(assistantFrame({ id: "sm1", status: "streaming", timestamp: 2_500 }));
+    assert.equal(streamingStart("sm1"), 1_000);
   });
 
-  test("没见过起点的终态帧不动账——renderer 中途才挂上，量不到就不编", () => {
-    const session = "sess-speed-2";
-    recordAssistantFrame(
-      session,
-      assistantFrame({ id: "m2", status: "complete", timestamp: 9_000, usage: { output: 500 } }),
-    );
-    assert.equal(sessionSpeed(session), null);
+  test("非 streaming 帧、非 assistant 帧不入账；没见过的返回 null", () => {
+    recordAssistantStart(assistantFrame({ id: "sm2", status: "complete", timestamp: 9_000 }));
+    recordAssistantStart({ id: "t9", role: "tool" } as TranscriptItem);
+    assert.equal(streamingStart("sm2"), null);
+    assert.equal(streamingStart("never-seen"), null);
+  });
+});
+
+describe("replySpeed —— 回答上的速度标注", () => {
+  test("读 adapter 挂在终态帧上的 speed", () => {
+    assert.equal(replySpeed(assistantFrame({ id: "a1", status: "complete", timestamp: 0, speed: 42 })), 42);
   });
 
-  test("终态帧没 usage 不动账；不足 500ms 的短消息沿用上一条", () => {
-    const session = "sess-speed-3";
-    recordAssistantFrame(session, assistantFrame({ id: "m3", status: "streaming", timestamp: 0 }));
-    recordAssistantFrame(
-      session,
-      assistantFrame({ id: "m3", status: "complete", timestamp: 2_000, usage: { output: 600 } }),
-    );
-    assert.equal(sessionSpeed(session), 300);
-    // 没 usage：保持 300
-    recordAssistantFrame(session, assistantFrame({ id: "m4", status: "streaming", timestamp: 10_000 }));
-    recordAssistantFrame(session, assistantFrame({ id: "m4", status: "complete", timestamp: 12_000 }));
-    assert.equal(sessionSpeed(session), 300);
-    // 300ms 的短消息：过不了门，还是 300
-    recordAssistantFrame(session, assistantFrame({ id: "m5", status: "streaming", timestamp: 20_000 }));
-    recordAssistantFrame(
-      session,
-      assistantFrame({ id: "m5", status: "complete", timestamp: 20_300, usage: { output: 9_999 } }),
-    );
-    assert.equal(sessionSpeed(session), 300);
-  });
-
-  test("打断（error 态）的消息有 usage 就算——真值就是真值", () => {
-    const session = "sess-speed-4";
-    recordAssistantFrame(session, assistantFrame({ id: "m6", status: "streaming", timestamp: 0 }));
-    recordAssistantFrame(
-      session,
-      assistantFrame({ id: "m6", status: "error", timestamp: 4_000, usage: { output: 1_000 } }),
-    );
-    assert.equal(sessionSpeed(session), 250);
-  });
-
-  test("没见过现场的会话返回 null（行不出现），工具帧串场也不受影响", () => {
-    assert.equal(sessionSpeed("sess-never-seen"), null);
-    recordAssistantFrame("sess-speed-5", {
-      id: "t9",
-      role: "tool",
-    } as TranscriptItem);
-    assert.equal(sessionSpeed("sess-speed-5"), null);
+  test("没挂 speed（噪音门没过 / 旧会话）、坏值、非 assistant 记录，一律 null", () => {
+    assert.equal(replySpeed(assistantFrame({ id: "a2", status: "complete", timestamp: 0 })), null);
+    assert.equal(replySpeed(assistantFrame({ id: "a3", status: "complete", timestamp: 0, speed: -1 })), null);
+    assert.equal(replySpeed({ id: "c1", role: "compacted" } as unknown as TranscriptItem), null);
+    assert.equal(replySpeed(undefined), null);
   });
 });
