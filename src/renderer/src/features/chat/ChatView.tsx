@@ -49,7 +49,7 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
-import { contextRing, usageBreakdown, type ContextRing } from "./stats-format";
+import { contextRing, sessionSpeed, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
@@ -703,8 +703,10 @@ function UsageRing(props: { session: ChatSession }) {
   const freshTokens =
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
+  // 最近一条落定消息的速度（stats-format 记账）；null = 没见过现场（旧会话/还没落定），行不出现
+  const speed = session.sessionId !== null ? sessionSpeed(session.sessionId) : null;
   const items: MenuItem[] = [
-    ...usageBreakdown(stats, billing).map((row) => ({
+    ...usageBreakdown(stats, billing, speed).map((row) => ({
       id: row.label,
       label: row.label,
       hint: row.value,

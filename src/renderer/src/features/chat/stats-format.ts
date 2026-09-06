@@ -8,6 +8,7 @@
  * （第二个消费者出现才建那一层）。
  */
 import type { AgentStats } from "../../../../shared/agent-ipc.ts";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { formatTokens } from "../../utils/format-tokens.ts";
 
 /** 用量环的一帧：`fill` 是 0–1 的弧长，null = 只画底环 */
@@ -64,10 +65,15 @@ export interface UsageRow {
  *
  * 不是删掉而是条件显示：按量计费的 provider 上它仍然是最该被看见的一行。
  * 四位小数——展开看的人要的正是底栏那几位被舍入掉的。
+ *
+ * `speed` 是最近一条落定消息的速度（`sessionSpeed`），null 时整行不出现——
+ * 同一句「宁缺不编」：没有事实的行不占地方（`Speed` 紧跟 `Total tokens`，
+ * 都是「这轮花了多少」的量词，Context 是另一码事）。
  */
 export function usageBreakdown(
   stats: AgentStats | null,
   billing: "metered" | "plan" = "metered",
+  speed: number | null = null,
 ): UsageRow[] {
   if (stats === null) return [];
   const rows: UsageRow[] = [
@@ -77,6 +83,7 @@ export function usageBreakdown(
     { label: "Cache write", value: formatTokens(stats.tokens.cacheWrite) },
     { label: "Total tokens", value: formatTokens(stats.tokens.total) },
   ];
+  if (speed !== null) rows.push({ label: "Speed", value: formatSpeed(speed) });
   const usage = stats.contextUsage;
   if (usage !== null) {
     rows.push({
@@ -92,4 +99,63 @@ export function usageBreakdown(
     rows.push({ label: "Cost", value: `$${stats.cost.toFixed(4)}` });
   }
   return rows;
+}
+
+// ── token 速度（usage-speed-X）──
+
+/**
+ * 速度行的口径：**最近一条落定 assistant 消息**的真值速度。
+ *
+ * 分子 = 终态帧 `usage.output`（provider 真值）；分母 = `item_started → item_finished`
+ * 两帧的 adapter 时间戳差（同钟盖章，纯模型生成时间——工具执行、等批准天然剔除）。
+ * 口径与被否方案见 `docs/plans/2026-09-06-usage-speed.md`。
+ */
+
+/**
+ * 生成不足 500ms 的消息不参与——除以极小时间会出「167 tok/s」这种荒谬瞬时值
+ * （读完小文件后的短消息就是这种）。500ms 是 Reasonix 验证过的噪音线。
+ */
+const SPEED_MIN_MS = 500;
+
+/** 纯函数：tok/s；输出 0、时长不足门控或不合法返回 null（调用方沿用上一条的值）。 */
+export function messageSpeed(startTs: number, endTs: number, outputTokens: number): number | null {
+  const ms = endTs - startTs;
+  if (!(ms >= SPEED_MIN_MS) || !(outputTokens > 0)) return null;
+  return outputTokens / (ms / 1000);
+}
+
+/** `42 tok/s`——整数，tok/s 是 agent 工具界的通用写法，不翻译 */
+export function formatSpeed(speed: number): string {
+  return `${Math.round(speed)} tok/s`;
+}
+
+/** messageId → 生成起点（首个 streaming 帧的 adapter 时间戳）。终态帧算完即删。 */
+const assistantStarts = new Map<string, number>();
+
+/** sessionId → 最近一条落定消息的速度。旧会话没有条目，行就不出现（诚实未知）。 */
+const latestSpeeds = new Map<string, number>();
+
+/**
+ * 事件入口记账（`recordToolFrame` 同款：useChatSession 的 progress 处理处调）。
+ * streaming 帧记起点（幂等：增量帧重复到达不覆盖）；终态帧（complete / error 一视
+ * 同仁——打断的速度也是真实速度，有 usage 就算）算真值存进 `latestSpeeds`。
+ * 没见过起点（renderer 中途才挂上）或终态帧没 usage，就不动旧值——宁缺不编。
+ * ponytail: 两个 Map 无上限，起点记完即删、速度每会话一个数，各几十字节。
+ */
+export function recordAssistantFrame(sessionId: string, item: TranscriptItem): void {
+  if (item.role !== "assistant") return;
+  if (item.status === "streaming") {
+    if (!assistantStarts.has(item.id)) assistantStarts.set(item.id, item.timestamp);
+    return;
+  }
+  const start = assistantStarts.get(item.id);
+  assistantStarts.delete(item.id);
+  if (start === undefined || item.usage === undefined) return;
+  const speed = messageSpeed(start, item.timestamp, item.usage.output);
+  if (speed !== null) latestSpeeds.set(sessionId, speed);
+}
+
+/** 这条会话最近一次算出的速度；没见过现场返回 null（行不出现）。 */
+export function sessionSpeed(sessionId: string): number | null {
+  return latestSpeeds.get(sessionId) ?? null;
 }
