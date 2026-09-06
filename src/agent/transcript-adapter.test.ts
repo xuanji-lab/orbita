@@ -126,6 +126,43 @@ describe("TranscriptAdapter", () => {
     assert.equal(finished.item.usage?.output, 4100);
   });
 
+  test("终态帧挂真值速度——usage.output ÷ 本条生成时长（usage-speed-X）", () => {
+    let clock = 1_000;
+    const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
+    const message = assistant([{ type: "text", text: "done" }]);
+    message.usage = { ...message.usage, output: 800 };
+    timed.apply({ type: "message_start", message: assistant([{ type: "text", text: "" }]) });
+    clock = 3_000; // 生成 2 秒
+    const frames = timed.apply({ type: "message_end", message });
+    assert.ok(frames[0]?.type === "item_finished");
+    assert.equal((frames[0].item as { speed?: number }).speed, 400);
+  });
+
+  test("过不了 500ms 噪音门的帧不带 speed——不显示，也不编数", () => {
+    let clock = 1_000;
+    const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
+    const message = assistant([{ type: "text", text: "quick" }]);
+    message.usage = { ...message.usage, output: 9_999 };
+    timed.apply({ type: "message_start", message: assistant([{ type: "text", text: "" }]) });
+    clock = 1_300; // 只生成 300ms
+    const frames = timed.apply({ type: "message_end", message });
+    assert.ok(frames[0]?.type === "item_finished");
+    assert.equal((frames[0].item as { speed?: number }).speed, undefined);
+  });
+
+  test("打断（aborted）的回答照样挂速度，且终态判定不被劫持", () => {
+    let clock = 1_000;
+    const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
+    const message = assistant([{ type: "text", text: "half…" }], "aborted");
+    message.usage = { ...message.usage, output: 400 };
+    timed.apply({ type: "message_start", message: assistant([{ type: "text", text: "" }]) });
+    clock = 3_000;
+    const frames = timed.apply({ type: "message_end", message });
+    assert.ok(frames[0]?.type === "item_finished");
+    assert.equal(frames[0].item.status, "aborted");
+    assert.equal((frames[0].item as { speed?: number }).speed, 200);
+  });
+
   test("思考 + 回答：两个内容块各自按 contentIndex 增量，不串台", () => {
     const events: AdaptableEvent[] = [
       {
