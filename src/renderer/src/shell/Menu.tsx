@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
 import { selectionStyle } from "./selection";
+import { placeMenu, type MenuBox } from "./menu-position";
 
 export interface MenuItem {
   id: string;
@@ -28,9 +29,6 @@ export interface MenuItem {
   onSelect?: () => void;
 }
 
-/** 菜单离触发点、离窗口边的余量 */
-const GAP = 6;
-const EDGE = 8;
 /** 悬停打开的菜单：光标离开后多久关。够穿过那道缝，又不至于像粘住了 */
 const HOVER_GRACE_MS = 160;
 
@@ -95,26 +93,48 @@ export function Menu(props: {
     onOpenChange?.(open);
   }, [open, onOpenChange]);
 
-  // 量到真实高度之后再定位。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下
-  useLayoutEffect(() => {
-    if (!open) return;
+  /**
+   * 重定位：跟随锚点当前位置。**滚动不再关门**——模型回答时消息区一直在自动
+   * 滚动，「滚动即关」等于「回答期间用量菜单永远开不住」（一闪一闪、点不开，
+   * 2026-09-06 用户实测）。而输入卡钉在窗口底部，自动滚动根本不动锚点——
+   * 位置没变就不 setState，流式期间的滚动风暴一次重渲染都不产生。
+   */
+  const positionMenu = useCallback(() => {
     const anchor = anchorRef.current?.getBoundingClientRect();
     const menu = menuRef.current?.getBoundingClientRect();
     if (anchor === undefined || menu === undefined) return;
+    const box: MenuBox = {
+      top: anchor.top,
+      bottom: anchor.bottom,
+      left: anchor.left,
+      right: anchor.right,
+      width: anchor.width,
+      height: anchor.height,
+    };
+    const placed = placeMenu(
+      box,
+      { width: menu.width, height: menu.height },
+      props.align,
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    if (!placed.visible) {
+      close();
+      return;
+    }
+    setPosition((prev) =>
+      prev !== null && prev.top === placed.top && prev.left === placed.left ? prev : { top: placed.top, left: placed.left },
+    );
+  }, [props.align, close]);
 
-    // 默认向下；下面装不下、而上面装得下时才翻上去
-    const below = anchor.bottom + GAP;
-    const fitsBelow = below + menu.height + EDGE <= window.innerHeight;
-    const fitsAbove = anchor.top - GAP - menu.height - EDGE >= 0;
-    const top = fitsBelow || !fitsAbove ? below : anchor.top - GAP - menu.height;
-
-    const wanted = props.align === "end" ? anchor.right - menu.width : anchor.left;
-    // 横向夹回窗口内：宁可不对齐，也不要有一半在屏幕外
-    const left = Math.min(Math.max(EDGE, wanted), window.innerWidth - menu.width - EDGE);
-    setPosition({ top, left });
-    // 点开的才拿焦点（键盘导航）；悬停开的把焦点留在原处
+  // 首次打开：先按旧位置渲染但不可见，量到真实高度之后再定位——菜单高度取决于
+  // 内容，不先量就只能猜。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下
+  useLayoutEffect(() => {
+    if (!open) return;
+    positionMenu();
+    // 点开的才拿焦点（键盘导航）；悬停开的把焦点留在原处。滚动跟随不在这里走——
+    // 焦点只在该拿到的那一刻给一次，跟着滚动反复 focus 会把用户的选区打飞
     if (byClickRef.current) menuRef.current?.focus();
-  }, [open, props.align, props.items.length]);
+  }, [open, props.items.length, positionMenu]);
 
   useEffect(() => {
     if (!open) return;
@@ -124,16 +144,17 @@ export function Menu(props: {
       if (anchorRef.current?.contains(target) === true) return;
       close();
     };
-    // 滚动或改窗口大小之后位置就不对了，直接关掉比追着重算诚实
+    // 滚动与改窗口大小：追着重定位而不是关门。锚点跟着界面动了，菜单跟着锚点走；
+    // 锚点整个出屏（placeMenu 判 visible=false）才关门——那时跟着走是挂在天上
     document.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
     };
-  }, [open, close]);
+  }, [open, close, positionMenu]);
 
   const enabled = props.items.filter((item) => item.disabled !== true && item.fact !== true);
   /** 打开时光标落在**当前项**上。落在第一项会让人以为选中的是第一项。 */
