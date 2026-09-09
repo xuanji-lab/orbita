@@ -1043,7 +1043,7 @@ function BranchRow(props: {
     return () => window.clearTimeout(timer);
   }, [copied]);
   return (
-    <div style={{ display: "flex", width: "100%", alignItems: "center", gap: "var(--space-3)" }}>
+    <div style={{ display: "flex", width: "100%", alignItems: "center", gap: "calc(var(--space-3) / 2)" }}>
       <button
         type="button"
         title={copied ? "Copied" : "Copy answer"}
