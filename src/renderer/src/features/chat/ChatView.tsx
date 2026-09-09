@@ -1006,24 +1006,6 @@ function BranchRow(props: {
     <div style={{ display: "flex", width: "100%", alignItems: "center" }}>
       <button
         type="button"
-        disabled={props.disabled}
-        onClick={() => props.onBranch(props.anchorItemId)}
-        title={COPY.branchFromHere}
-        aria-label={COPY.branchFromHere}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          padding: 4,
-          border: "none",
-          background: "none",
-          color: "var(--color-text-tertiary)",
-          cursor: props.disabled ? "default" : "pointer",
-        }}
-      >
-        <Icon name="git-branch" size={12} strokeWidth={1.8} />
-      </button>
-      <button
-        type="button"
         title={copied ? "Copied" : "Copy answer"}
         aria-label={copied ? "Copied" : "Copy answer"}
         onClick={() => {
@@ -1041,6 +1023,24 @@ function BranchRow(props: {
         }}
       >
         <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
+      </button>
+      <button
+        type="button"
+        disabled={props.disabled}
+        onClick={() => props.onBranch(props.anchorItemId)}
+        title={COPY.branchFromHere}
+        aria-label={COPY.branchFromHere}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: 4,
+          border: "none",
+          background: "none",
+          color: "var(--color-text-tertiary)",
+          cursor: props.disabled ? "default" : "pointer",
+        }}
+      >
+        <Icon name="git-branch" size={12} strokeWidth={1.8} />
       </button>
       {props.speed !== null && (
         <span
