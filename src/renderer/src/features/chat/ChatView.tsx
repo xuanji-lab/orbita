@@ -570,7 +570,10 @@ function Pane(props: {
 function ComposerBar(props: { session: ChatSession }) {
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
-  const scope = workspace?.name ?? (session.cwd === null ? "Home" : basename(session.cwd));
+  // 作用域显示**目录名**。老工作区落库的名可能是完整路径（早期创建没截尾），
+  // 所以两个分支都要过 basename——显示层截尾，不动落库数据
+  const scopeSource = workspace?.name ?? session.cwd;
+  const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
 
   const scopeItems: MenuItem[] = [
     {
