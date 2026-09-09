@@ -952,10 +952,29 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
  * 用户消息：右对齐的独立气泡；只有 text 块进气泡。text 走 MathText——
  * 公式就地渲染（行内随文、块级居中），**不解析 markdown**：其余一切按原样，
  * 用户气泡与模型回复（MarkdownBlock）刻意是两套渲染。
+ * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
  */
 function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  const copyText = props.item.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
   return (
-    <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        width: "100%",
+        gap: 2,
+      }}
+    >
       <div
         style={{
           width: "fit-content",
@@ -975,6 +994,27 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           block.type === "text" ? <MathText key={index} text={block.text} /> : null,
         )}
       </div>
+      <button
+        type="button"
+        title={copied ? "Copied" : "Copy message"}
+        aria-label={copied ? "Copied" : "Copy message"}
+        disabled={copyText === ""}
+        onClick={() => {
+          void navigator.clipboard.writeText(copyText);
+          setCopied(true);
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: 3,
+          border: "none",
+          background: "none",
+          color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
+          cursor: copyText === "" ? "default" : "pointer",
+        }}
+      >
+        <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
+      </button>
     </div>
   );
 }
