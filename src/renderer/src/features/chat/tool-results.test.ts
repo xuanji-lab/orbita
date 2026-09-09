@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { CompactedRecord } from "@shared/session";
 import {
+  answerText,
   branchAnchorEntries,
   branchAnchorIds,
   editDiffEntries,
@@ -304,6 +305,22 @@ describe("toolResultText", () => {
       }),
     ]).get("a");
     assert.equal(item === undefined ? "" : toolResultText(item), "line 1\nline 2");
+  });
+
+  test("answerText —— 复制按钮拷的正文：只取 text 块，thinking 与 toolCall 不进", () => {
+    const record = assistantItem("a1", [
+      { type: "text", text: "第一段。" },
+      { type: "thinking", thinking: "先想想" },
+      readCall("t1", "src/a.ts"),
+      { type: "text", text: "第二段。" },
+    ]);
+    assert.equal(answerText(record), "第一段。\n\n第二段。");
+  });
+
+  test("answerText —— 非 assistant、无记录、空 content 都给空串（按钮无从复制）", () => {
+    assert.equal(answerText(userItem), "");
+    assert.equal(answerText(undefined), "");
+    assert.equal(answerText(assistantItem("a2", [])), "");
   });
 
   test("图片标记它存在，不丢掉也不假装能渲染", () => {

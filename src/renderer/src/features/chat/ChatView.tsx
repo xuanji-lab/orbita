@@ -8,6 +8,7 @@ import { isAtBottom } from "./scroll";
 import {
   branchAnchorEntries,
   branchAnchorIds,
+  answerText,
   editDiffText,
   fileViewFor,
   flattenRenderUnits,
@@ -377,6 +378,10 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         )}
       {turnView.map((entry, index) => {
         const branchAfter = branchRows.get(index);
+        const anchorRecord =
+          branchAfter !== undefined
+            ? records.find((record) => record.id === branchAfter)
+            : undefined;
         return (
           <Fragment key={entry.key}>
             {entry.kind === "turnGroup" ? (
@@ -396,7 +401,8 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
             {branchAfter !== undefined && (
               <BranchRow
                 anchorItemId={branchAfter}
-                speed={replySpeed(records.find((record) => record.id === branchAfter))}
+                speed={replySpeed(anchorRecord)}
+                copyText={answerText(anchorRecord)}
                 disabled={toolsRunning}
                 onBranch={session.branchFrom}
               />
@@ -978,15 +984,24 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
  * （用户裁决：不用 hover 浮现）。图标即按钮——悬停 / 读屏都走「Branch from here」这同一个
  * 名字。点了开出一条新会话（该回答及之前的全部），原会话原封不动，所以**无需确认弹窗**。
  * 工具还在跑时禁用：它的结果没齐，此刻裁出去的上下文是畸形的。
- * 按钮右侧的速度标注（usage-speed-X）：adapter 挂在该回答终态帧上的真值，随记录
- * 落盘、重开即回；过不了噪音门的回答没有这个字段，也就不显示。
+ * 分支旁的复制图标（usage-speed-X 同行）：拷该回答的正文（markdown 原样，只含 text 块），
+ * 成功后图标换对勾 1.2s——复制成功用图标换字形，不用颜色（ActionRail 同款）。
+ * 再右边是这条回答的生成速度：adapter 挂在终态帧上的真值，随记录落盘、重开即回；
+ * 过不了噪音门的回答没有这个字段，也就不显示。
  */
 function BranchRow(props: {
   anchorItemId: string;
   speed: number | null;
+  copyText: string;
   disabled: boolean;
   onBranch: (anchorItemId: string) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   return (
     <div style={{ display: "flex", width: "100%", alignItems: "center" }}>
       <button
@@ -1006,6 +1021,26 @@ function BranchRow(props: {
         }}
       >
         <Icon name="git-branch" size={12} strokeWidth={1.8} />
+      </button>
+      <button
+        type="button"
+        title={copied ? "Copied" : "Copy answer"}
+        aria-label={copied ? "Copied" : "Copy answer"}
+        onClick={() => {
+          void navigator.clipboard.writeText(props.copyText);
+          setCopied(true);
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: 4,
+          border: "none",
+          background: "none",
+          color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
       </button>
       {props.speed !== null && (
         <span

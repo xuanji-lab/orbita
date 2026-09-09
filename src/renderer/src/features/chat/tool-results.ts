@@ -942,3 +942,18 @@ export function fileViewFor(
   }
   return null;
 }
+
+/**
+ * 回答的正文文本——「复制回答」按钮拷的就是它。**只取 text 块**（markdown 原样），
+ * thinking 与 toolCall 不进：用户要的是答案，不是过程。参数放宽成结构类型：
+ * 调用方手里的记录可能混着压缩界碑，界碑与非 assistant 一律空串。
+ */
+export function answerText(
+  record: { role: unknown; content?: readonly { type: string; text?: string }[] } | undefined | null,
+): string {
+  if (record === undefined || record === null || record.role !== "assistant") return "";
+  return (record.content ?? [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.text ?? "")
+    .join("\n\n");
+}
