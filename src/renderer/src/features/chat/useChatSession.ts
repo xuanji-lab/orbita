@@ -866,9 +866,13 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const viewedId = sessionId ?? opened?.id ?? null;
   const entry = (viewedId !== null ? states.get(viewedId) : undefined) ?? EMPTY_ENTRY;
 
+  // selectTranscript 每次调用都造新数组（pi 的实现如此）——在这里按 entry 引用
+  // 稳定化，否则 ChatView 的 memo 转录列每次渲染都被新引用击穿，隔离形同虚设
+  const transcript = useMemo(() => selectTranscript(entry.transcript), [entry.transcript]);
+
   return {
     sessionId,
-    transcript: selectTranscript(entry.transcript),
+    transcript,
     compactions: entry.compactions,
     phase: entry.phase,
     retry: entry.retry,
