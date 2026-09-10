@@ -2,9 +2,9 @@ import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   TASKS_FOLD_KEY,
-  expandGroup,
   foldKeyForWorkspace,
   toggleGroupFold,
+  toggleGroupFull,
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
@@ -20,13 +20,13 @@ describe("toggleGroupFold", () => {
   });
 
   it("折叠时清掉「全部显示」——重开回到默认预览，折叠才算归位", () => {
-    const expanded = expandGroup(empty(), "workspace:a");
+    const expanded = toggleGroupFull(empty(), "workspace:a");
     const folded = toggleGroupFold(expanded, "workspace:a");
     deepStrictEqual(folded.full.has("workspace:a"), false);
   });
 
   it("展开不动「全部显示」——点过 Show more 的组加新任务，列不变回预览", () => {
-    const expanded = expandGroup(empty(), "workspace:a");
+    const expanded = toggleGroupFull(empty(), "workspace:a");
     const unfolded = unfoldGroup(expanded, "workspace:a");
     deepStrictEqual(unfolded.full.has("workspace:a"), true);
   });
@@ -39,11 +39,18 @@ describe("toggleGroupFold", () => {
   });
 });
 
-describe("expandGroup", () => {
-  it("标记后组全量显示；重复标记幂等（原引用返回）", () => {
-    const once = expandGroup(empty(), "workspace:a");
-    deepStrictEqual(once.full.has("workspace:a"), true);
-    deepStrictEqual(expandGroup(once, "workspace:a"), once);
+describe("toggleGroupFull", () => {
+  it("Show more 铺开全组，Show less 收回最近的 N 条（双向）", () => {
+    const expanded = toggleGroupFull(empty(), "workspace:a");
+    deepStrictEqual(expanded.full.has("workspace:a"), true);
+    const collapsed = toggleGroupFull(expanded, "workspace:a");
+    deepStrictEqual(collapsed.full.has("workspace:a"), false);
+  });
+
+  it("不动折叠态——收起 Show more 不该顺带把组折了", () => {
+    const folded = toggleGroupFold(empty(), "workspace:a");
+    const full = toggleGroupFull(folded, "workspace:a");
+    deepStrictEqual(full.folds.has("workspace:a"), true);
   });
 });
 
