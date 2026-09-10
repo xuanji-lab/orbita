@@ -30,7 +30,7 @@ import {
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
-import { planQueueEdit } from "./queue-edit.ts";
+import { planQueueCancel } from "./queue-cancel.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
 
@@ -664,19 +664,12 @@ async function handle(command: AgentCommand): Promise<void> {
     live.session.abort();
     return;
   }
-  if (command.type === "queueEdit") {
-    // pi 没有单条删 / 挪的 API：先全清拿真值，再按规划重放。
+  if (command.type === "queueCancel") {
+    // pi 没有单条删的 API：先全清拿真值，再按规划重放（目标条目除外）。
     // 期间 loop 正在 stream 等待中，drain 不会插进来；即使竞态，后果只是某条
     // 提前/推后投递，不是丢失。
     const { steering, followUp } = live.session.clearQueue();
-    const plans = planQueueEdit(
-      steering,
-      followUp,
-      command.index,
-      command.text,
-      command.op,
-      command.newText,
-    );
+    const plans = planQueueCancel(steering, followUp, command.index, command.text);
     for (const plan of plans) {
       await (plan.as === "steer" ? live.session.steer(plan.text) : live.session.followUp(plan.text));
     }

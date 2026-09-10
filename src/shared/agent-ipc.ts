@@ -23,8 +23,8 @@ export const ipcChannels = {
   agentAbort: "agent:abort",
   /** 把排队中的某一条**立即**发出：打断当前轮（含正在跑的工具调用），它成为新一轮 */
   agentInterrupt: "agent:interrupt",
-  /** 编辑排队中的消息：cancel = 移出队列，edit = 改文本 */
-  agentQueueEdit: "agent:queue-edit",
+  /** 取消排队中的一条消息（改写不走进程：UI 把该条收回输入框，重新发送即再入队） */
+  agentQueueCancel: "agent:queue-cancel",
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
   agentSetMode: "agent:set-mode",
@@ -173,20 +173,12 @@ export type AgentCommand =
       text: string;
     }
   /**
-   * 编辑 pi 的排队消息（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
+   * 取消 pi 队列里的一条消息（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
    * index 指 `[...steering, ...followUp]` 拼接视图的下标（UI 就是按这个顺序渲染的）；
-   * text 是期望文本，与队列现状不符时（投递/并发编辑刚发生）操作落空、队列原样重放，
+   * text 是期望文本，与队列现状不符时（投递/并发操作刚发生）操作落空、队列原样重放，
    * 等 queue 事件校准 UI。「立即发送」不走这里——那是 interrupt 命令，打断当前轮。
-   * edit 改写目标条目的文本（保持它原属的队列与顺位），newText 为替换文本。
    */
-  | {
-      type: "queueEdit";
-      sessionId: string;
-      op: "cancel" | "edit";
-      index: number;
-      text: string;
-      newText?: string;
-    }
+  | { type: "queueCancel"; sessionId: string; index: number; text: string }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
    * 忙碌态与界碑都走 `compaction_start` / `compaction` 事件那一条链。

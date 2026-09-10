@@ -821,7 +821,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     const id = sessionRef.current;
     if (id === null) return;
     void api.agent
-      .queueEdit(id, "cancel", index, text)
+      .queueCancel(id, index, text)
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, []);
 

@@ -165,15 +165,9 @@ export class AgentHostCore {
     this.post({ type: "generateTitle", sessionId, text });
   }
 
-  async queueEdit(
-    sessionId: string,
-    op: "cancel" | "edit",
-    index: number,
-    text: string,
-    newText?: string,
-  ): Promise<void> {
+  async queueCancel(sessionId: string, index: number, text: string): Promise<void> {
     await this.ensure();
-    this.post({ type: "queueEdit", sessionId, op, index, text, ...(newText !== undefined ? { newText } : {}) });
+    this.post({ type: "queueCancel", sessionId, index, text });
   }
 
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
