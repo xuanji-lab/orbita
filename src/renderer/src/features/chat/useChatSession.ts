@@ -24,10 +24,11 @@ import {
   type SessionStates,
 } from "./session-states.ts";
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
+import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
-import type { AgentStats, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
 import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -281,9 +282,20 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       );
   }, []);
 
-  useEffect(
-    () =>
-      api.agent.onEvent((event) => {
+  useEffect(() => {
+    // 流式帧合帧：progress 的归约是纯函数（廉价），贵的是每次应用触发的渲染。
+    // 回答期间 delta 可密到十几毫秒一帧，渲染把主线程挤满，点击与打字只能排在
+    // 流式渲染后面——排队卡片点铅笔「时快时慢」的可感延迟根源（2026-09-10）。
+    // 按 ~50ms 节拍攒批整批应用，渲染频率封顶，主线程留出空档；
+    // phase / queue / permission 等低频且对延迟敏感的事件照旧即时应用。
+    const coalescer = createProgressCoalescer<AgentEvent>((batch) => {
+      setStates((prev) => {
+        const next = batch.reduce((acc, event) => applyAgentEvent(acc, event), prev);
+        statesRef.current = next;
+        return next;
+      });
+    }, 50);
+    const off = api.agent.onEvent((event) => {
         if (event.type === "failed") {
           // 回合级失败（重试耗尽）进槽、标注在对话里（applyAgentEvent 收）；
           // 操作级失败仍走全局红字（输入框上方）
@@ -355,14 +367,22 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
             }
           }
         }
+        // 流式帧进合帧器按节拍整批应用（见 effect 开头）；其余事件即时
+        if (event.type === "progress") {
+          coalescer.push(event);
+          return;
+        }
         setStates((prev) => {
           const next = applyAgentEvent(prev, event);
           statesRef.current = next;
           return next;
         });
-      }),
-    [refreshSessions],
-  );
+      });
+    return () => {
+      off();
+      coalescer.dispose();
+    };
+  }, [refreshSessions]);
 
   const usable = useMemo(
     () => providers.filter((p) => p.models.declared.length > 0),
