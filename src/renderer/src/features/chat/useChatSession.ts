@@ -13,6 +13,7 @@ import {
   parseCompactCommand,
   removeApproval,
   removePendingSend,
+  removeQueued,
   removeSessionEntry,
   seedFromDisk,
   setEntryPhase,
@@ -820,6 +821,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const cancelQueued = useCallback((index: number, text: string) => {
     const id = sessionRef.current;
     if (id === null) return;
+    // 即时反馈先行：不等 IPC 绕一圈回来才移除行；随后的 queue 事件全量覆盖本槽，
+    // 操作落空时条目随事件原样回来（自愈），无需回滚。
+    setStates((prev) => removeQueued(prev, id, index));
     void api.agent
       .queueCancel(id, index, text)
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));

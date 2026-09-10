@@ -17,6 +17,7 @@ import {
   parseCompactCommand,
   removeApproval,
   removePendingSend,
+  removeQueued,
   removeSessionEntry,
   seedFromDisk,
   setEntryPhase,
@@ -466,6 +467,19 @@ describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind �
     const before2 = states;
     states = removePendingSend(states, "A", 9);
     assert.equal(states, before2);
+  });
+
+  test("removeQueued：乐观移除按拼接下标命中 steering / followUp，账本键随对账消失", () => {
+    let states = applyAgentEvent(new Map(), queueEvent(["s1"], ["f1", "f2"]));
+    states = removeQueued(states, "A", 0);
+    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: ["f1", "f2"] });
+    assert.ok(!states.get("A")?.queueOrder.includes("pi\0s1"));
+    states = removeQueued(states, "A", 1);
+    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: ["f1"] });
+    // 越界不动原槽
+    const before = states;
+    states = removeQueued(states, "A", 9);
+    assert.equal(states, before);
   });
 
   test("consumePendingSends：消费前缀（hook 执行了多少吃多少）", () => {

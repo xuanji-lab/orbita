@@ -368,6 +368,29 @@ export function consumePendingTexts(states: SessionStates, sessionId: string): S
   );
 }
 
+/**
+ * 乐观移除 pi 队列的第 index 条（`[...steering, ...followUp]` 拼接视图下标）：
+ * 取消 / 收回的**即时**反馈，不等 runtime 的 queue 事件绕一圈 IPC 回来。
+ * 之后到达的 queue 事件本就全量覆盖本槽——操作落空时条目随事件原样回来
+ * （自愈），不需要回滚逻辑。
+ */
+export function removeQueued(states: SessionStates, sessionId: string, index: number): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined) return states;
+  const steering = [...entry.queue.steering];
+  const followUp = [...entry.queue.followUp];
+  if (index >= 0 && index < steering.length) {
+    steering.splice(index, 1);
+  } else if (index >= steering.length && index - steering.length < followUp.length) {
+    followUp.splice(index - steering.length, 1);
+  } else {
+    return states;
+  }
+  return update(states, sessionId, (current) =>
+    syncQueueOrder({ ...current, queue: { steering, followUp } }),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 排队显示合成：pi 队列与本地待办按输入序交错（键 = 来源 + 内容）
 // ---------------------------------------------------------------------------
