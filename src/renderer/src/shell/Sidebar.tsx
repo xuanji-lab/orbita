@@ -10,11 +10,13 @@ import type { Workspace } from "@shared/workspace";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
 import {
+  SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
+  expandGroup,
   foldKeyForWorkspace,
-  toggleFold,
-  unfold,
-  type SidebarFolds,
+  toggleGroupFold,
+  unfoldGroup,
+  type SidebarGroupState,
 } from "./sidebar-fold.ts";
 
 /** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
@@ -47,10 +49,13 @@ export function Sidebar(props: {
    */
   const [collapsed, setCollapsed] = useState(false);
   /**
-   * 分组折叠：哪些组（工作区组、TASKS）的会话被收起来了。状态本体在
+   * 分组状态：哪些组折叠着、哪些组点了 Show more 全量铺开。状态本体在
    * `sidebar-fold.ts`；同样**不持久化**，理由同上——列表每次启动从盘上重读。
    */
-  const [folds, setFolds] = useState<SidebarFolds>(new Set<string>());
+  const [groups, setGroups] = useState<SidebarGroupState>({
+    folds: new Set<string>(),
+    full: new Set<string>(),
+  });
   useEffect(() => {
     const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
     const sync = () => setCollapsed(query.matches);
@@ -69,7 +74,7 @@ export function Sidebar(props: {
     if (props.settingsOpen) props.onToggleSettings();
     setCollapsed(false);
     // 新任务落在 TASKS 里——不能落进一个收着的组里无声无息
-    setFolds((current) => unfold(current, TASKS_FOLD_KEY));
+    setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
     session.newTask();
   };
   /**
@@ -84,7 +89,10 @@ export function Sidebar(props: {
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   const sessionList = describeList(session.loads.sessions, session.sessions.length);
   const loose = live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
-  const tasksFolded = folds.has(TASKS_FOLD_KEY);
+  const tasksFolded = groups.folds.has(TASKS_FOLD_KEY);
+  // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
+  const tasksTruncated = !groups.full.has(TASKS_FOLD_KEY) && loose.length > SESSIONS_PREVIEW_LIMIT;
+  const looseVisible = tasksTruncated ? loose.slice(0, SESSIONS_PREVIEW_LIMIT) : loose;
   const open = (id: string) => {
     if (props.settingsOpen) props.onToggleSettings();
     session.openSession(id);
@@ -283,13 +291,19 @@ export function Sidebar(props: {
                   sessions={live.filter((m) => m.workspaceId === workspace.id)}
                   session={session}
                   openId={openId}
-                  folded={folds.has(foldKeyForWorkspace(workspace.id))}
+                  folded={groups.folds.has(foldKeyForWorkspace(workspace.id))}
                   onToggleFold={() =>
-                    setFolds((current) => toggleFold(current, foldKeyForWorkspace(workspace.id)))
+                    setGroups((current) =>
+                      toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
+                    )
+                  }
+                  full={groups.full.has(foldKeyForWorkspace(workspace.id))}
+                  onExpand={() =>
+                    setGroups((current) => expandGroup(current, foldKeyForWorkspace(workspace.id)))
                   }
                   onNewTask={() => {
                     // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
-                    setFolds((current) => unfold(current, foldKeyForWorkspace(workspace.id)));
+                    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(workspace.id)));
                     session.newTaskIn(workspace);
                   }}
                   onRename={(name) => session.renameWorkspace(workspace.id, name)}
@@ -311,13 +325,13 @@ export function Sidebar(props: {
                 addIcon="plus"
                 onAdd={() => {
                   // 同上：新任务落 TASKS，先展开再建
-                  setFolds((current) => unfold(current, TASKS_FOLD_KEY));
+                  setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
                   session.newTask();
                 }}
                 folded={tasksFolded}
                 onToggleFold={
                   loose.length > 0
-                    ? () => setFolds((current) => toggleFold(current, TASKS_FOLD_KEY))
+                    ? () => setGroups((current) => toggleGroupFold(current, TASKS_FOLD_KEY))
                     : undefined
                 }
               />
@@ -329,15 +343,25 @@ export function Sidebar(props: {
               ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
                 <Empty>No task yet. The one you start lands here.</Empty>
               ) : tasksFolded ? null : (
-                loose.map((meta) => (
-                  <SessionRow
-                    key={meta.id}
-                    meta={meta}
-                    session={session}
-                    active={meta.id === openId}
-                    onClick={() => open(meta.id)}
-                  />
-                ))
+                <>
+                  {looseVisible.map((meta) => (
+                    <SessionRow
+                      key={meta.id}
+                      meta={meta}
+                      session={session}
+                      active={meta.id === openId}
+                      onClick={() => open(meta.id)}
+                    />
+                  ))}
+                  {tasksTruncated && (
+                    <ShowMoreRow
+                      hidden={loose.length - SESSIONS_PREVIEW_LIMIT}
+                      onClick={() =>
+                        setGroups((current) => expandGroup(current, TASKS_FOLD_KEY))
+                      }
+                    />
+                  )}
+                </>
               )}
             </div>
           </>
@@ -385,6 +409,8 @@ function WorkspaceGroup(props: {
   openId: string | null;
   folded: boolean;
   onToggleFold: () => void;
+  full: boolean;
+  onExpand: () => void;
   onNewTask: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
@@ -393,6 +419,9 @@ function WorkspaceGroup(props: {
   const [hover, setHover] = useState(false);
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  // 超过预览数只列前 N 条，其余收进「Show N more」；点了才全量铺开
+  const truncated = !props.full && props.sessions.length > SESSIONS_PREVIEW_LIMIT;
+  const visible = truncated ? props.sessions.slice(0, SESSIONS_PREVIEW_LIMIT) : props.sessions;
 
   const commit = () => {
     if (editing !== null) props.onRename(editing);
@@ -513,16 +542,25 @@ function WorkspaceGroup(props: {
         </IconButton>
       </div>
 
-      {!props.folded &&
-        props.sessions.map((meta) => (
-          <SessionRow
-            key={meta.id}
-            meta={meta}
-            session={props.session}
-            active={meta.id === props.openId}
-            onClick={() => props.onOpen(meta.id)}
-          />
-        ))}
+      {!props.folded && (
+        <>
+          {visible.map((meta) => (
+            <SessionRow
+              key={meta.id}
+              meta={meta}
+              session={props.session}
+              active={meta.id === props.openId}
+              onClick={() => props.onOpen(meta.id)}
+            />
+          ))}
+          {truncated && (
+            <ShowMoreRow
+              hidden={props.sessions.length - SESSIONS_PREVIEW_LIMIT}
+              onClick={props.onExpand}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -631,6 +669,22 @@ function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () 
       <FoldChevron folded={props.folded} />
       <NodeLabel>{props.label}</NodeLabel>
     </button>
+  );
+}
+
+/**
+ * 「Show N more」行：一组超过预览数时垫在列表尾。**条数写进文案**——
+ * 被藏起来多少这件事不能是悄悄的。点击单向全量铺开；想收回预览，折叠再展开就回去。
+ */
+function ShowMoreRow(props: { hidden: number; onClick: () => void }) {
+  return (
+    <NavRow
+      icon="chevron-down"
+      label={`Show ${props.hidden} more`}
+      active={false}
+      tone="var(--color-text-tertiary)"
+      onClick={props.onClick}
+    />
   );
 }
 
