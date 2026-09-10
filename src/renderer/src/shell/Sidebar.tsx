@@ -9,6 +9,13 @@ import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
+import {
+  TASKS_FOLD_KEY,
+  foldKeyForWorkspace,
+  toggleFold,
+  unfold,
+  type SidebarFolds,
+} from "./sidebar-fold.ts";
 
 /** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
 const COLLAPSE_BREAKPOINT = 960;
@@ -39,6 +46,11 @@ export function Sidebar(props: {
    * **手动状态不持久化**——窗口宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
    */
   const [collapsed, setCollapsed] = useState(false);
+  /**
+   * 分组折叠：哪些组（工作区组、TASKS）的会话被收起来了。状态本体在
+   * `sidebar-fold.ts`；同样**不持久化**，理由同上——列表每次启动从盘上重读。
+   */
+  const [folds, setFolds] = useState<SidebarFolds>(new Set<string>());
   useEffect(() => {
     const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
     const sync = () => setCollapsed(query.matches);
@@ -56,6 +68,8 @@ export function Sidebar(props: {
   const startNewTask = (): void => {
     if (props.settingsOpen) props.onToggleSettings();
     setCollapsed(false);
+    // 新任务落在 TASKS 里——不能落进一个收着的组里无声无息
+    setFolds((current) => unfold(current, TASKS_FOLD_KEY));
     session.newTask();
   };
   /**
@@ -70,6 +84,7 @@ export function Sidebar(props: {
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   const sessionList = describeList(session.loads.sessions, session.sessions.length);
   const loose = live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
+  const tasksFolded = folds.has(TASKS_FOLD_KEY);
   const open = (id: string) => {
     if (props.settingsOpen) props.onToggleSettings();
     session.openSession(id);
@@ -268,7 +283,15 @@ export function Sidebar(props: {
                   sessions={live.filter((m) => m.workspaceId === workspace.id)}
                   session={session}
                   openId={openId}
-                  onNewTask={() => session.newTaskIn(workspace)}
+                  folded={folds.has(foldKeyForWorkspace(workspace.id))}
+                  onToggleFold={() =>
+                    setFolds((current) => toggleFold(current, foldKeyForWorkspace(workspace.id)))
+                  }
+                  onNewTask={() => {
+                    // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
+                    setFolds((current) => unfold(current, foldKeyForWorkspace(workspace.id)));
+                    session.newTaskIn(workspace);
+                  }}
                   onRename={(name) => session.renameWorkspace(workspace.id, name)}
                   onRemove={() => session.removeWorkspace(workspace.id)}
                   onOpen={open}
@@ -286,7 +309,17 @@ export function Sidebar(props: {
                 label="Tasks"
                 addLabel="New task"
                 addIcon="plus"
-                onAdd={session.newTask}
+                onAdd={() => {
+                  // 同上：新任务落 TASKS，先展开再建
+                  setFolds((current) => unfold(current, TASKS_FOLD_KEY));
+                  session.newTask();
+                }}
+                folded={tasksFolded}
+                onToggleFold={
+                  loose.length > 0
+                    ? () => setFolds((current) => toggleFold(current, TASKS_FOLD_KEY))
+                    : undefined
+                }
               />
               {sessionList.error !== null && (
                 <ListError message={sessionList.error} onRetry={session.reloadSessions} />
@@ -295,7 +328,7 @@ export function Sidebar(props: {
                 <Empty>Loading tasks…</Empty>
               ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
                 <Empty>No task yet. The one you start lands here.</Empty>
-              ) : (
+              ) : tasksFolded ? null : (
                 loose.map((meta) => (
                   <SessionRow
                     key={meta.id}
@@ -337,6 +370,10 @@ export function Sidebar(props: {
 /**
  * 一个工作区，连同它自己的会话。
  *
+ * **行首的 chevron 折叠这一组**：会话开得太多时，把不看的组收起来。开合只认
+ * chevron（VS Code 同款纪律）——行身保持双击改名一条干净的路，两个手势不打架。
+ * 折叠只藏会话行，工作区头永远在：归属关系不能跟着藏掉。
+ *
  * 改名走**双击名字**：设计系统的纪律是克制，288px 的一行里再挂一个铅笔键
  * 就开始堆图标了；tooltip 负责把这句话讲出来（*Tooltips carry the second half
  * of the sentence*）。移除走两段式，和删会话一致。
@@ -346,6 +383,8 @@ function WorkspaceGroup(props: {
   sessions: SessionMeta[];
   session: ChatSession;
   openId: string | null;
+  folded: boolean;
+  onToggleFold: () => void;
   onNewTask: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
@@ -372,12 +411,27 @@ function WorkspaceGroup(props: {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "24px minmax(0,1fr) auto 26px",
+          gridTemplateColumns: "20px 24px minmax(0,1fr) auto 26px",
           alignItems: "center",
           gap: "var(--space-1)",
           minHeight: 28,
         }}
       >
+        {/* 空组没有可折的东西，开关就不摆——一个点了什么都不发生的开关比没有更吵 */}
+        {props.sessions.length > 0 ? (
+          <IconButton
+            label={props.folded ? "Expand group" : "Collapse group"}
+            ariaExpanded={!props.folded}
+            size={20}
+            onClick={props.onToggleFold}
+            style={{ color: "var(--color-text-tertiary)" }}
+          >
+            <FoldChevron folded={props.folded} />
+          </IconButton>
+        ) : (
+          <span />
+        )}
+
         <span
           style={{
             display: "grid",
@@ -459,15 +513,16 @@ function WorkspaceGroup(props: {
         </IconButton>
       </div>
 
-      {props.sessions.map((meta) => (
-        <SessionRow
-          key={meta.id}
-          meta={meta}
-          session={props.session}
-          active={meta.id === props.openId}
-          onClick={() => props.onOpen(meta.id)}
-        />
-      ))}
+      {!props.folded &&
+        props.sessions.map((meta) => (
+          <SessionRow
+            key={meta.id}
+            meta={meta}
+            session={props.session}
+            active={meta.id === props.openId}
+            onClick={() => props.onOpen(meta.id)}
+          />
+        ))}
     </div>
   );
 }
@@ -497,6 +552,9 @@ function NodeHeader(props: {
   addLabel: string;
   addIcon: IconName;
   onAdd: () => void;
+  /** 传了 onToggleFold 就说明这个节点的孩子可折叠：label 变成开合按钮（chevron + 名字） */
+  folded?: boolean;
+  onToggleFold?: (() => void) | undefined;
 }) {
   return (
     <div
@@ -508,11 +566,71 @@ function NodeHeader(props: {
         minHeight: 28,
       }}
     >
-      <NodeLabel>{props.label}</NodeLabel>
+      {props.onToggleFold !== undefined ? (
+        <FoldHeaderButton
+          label={props.label}
+          folded={props.folded === true}
+          onToggle={props.onToggleFold}
+        />
+      ) : (
+        <NodeLabel>{props.label}</NodeLabel>
+      )}
       <IconButton label={props.addLabel} size={26} onClick={props.onAdd}>
         <Icon name={props.addIcon} size={14} />
       </IconButton>
     </div>
+  );
+}
+
+/**
+ * 折叠 chevron：展开是 chevron-down，收起转 -90°。转场用 motion token——
+ * `--duration-fast` 正是设计系统给 chevron 定的 160ms。
+ */
+function FoldChevron(props: { folded: boolean }) {
+  return (
+    <Icon
+      name="chevron-down"
+      size={12}
+      strokeWidth={1.8}
+      style={{
+        transform: props.folded ? "rotate(-90deg)" : "rotate(0deg)",
+        transition: "transform var(--duration-fast) var(--ease-standard)",
+      }}
+    />
+  );
+}
+
+/**
+ * 节点级的开合按钮（TASKS 用）：chevron + 名字整块可点，比工作区组的
+ * 单个 chevron 大——它折的是整个 loose 列表，是最常用的那一刀。
+ */
+function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-expanded={!props.folded}
+      onClick={props.onToggle}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-1)",
+        minWidth: 0,
+        minHeight: 28,
+        padding: 0,
+        border: 0,
+        borderRadius: "var(--radius-xs)",
+        background: hover ? "var(--option-hover-bg)" : "transparent",
+        cursor: "pointer",
+        textAlign: "left",
+        transition: "var(--transition-hover)",
+      }}
+    >
+      <FoldChevron folded={props.folded} />
+      <NodeLabel>{props.label}</NodeLabel>
+    </button>
   );
 }
 

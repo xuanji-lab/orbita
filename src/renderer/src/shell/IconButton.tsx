@@ -16,6 +16,8 @@ export function IconButton(props: {
   active?: boolean;
   disabled?: boolean;
   title?: string;
+  /** 开合开关用（折叠 chevron 这类）：读屏要听得到「这块内容现在是收着的」 */
+  ariaExpanded?: boolean;
   children: React.ReactNode;
   style?: React.CSSProperties;
 }) {
@@ -29,6 +31,7 @@ export function IconButton(props: {
       aria-label={props.label}
       title={props.title ?? props.label}
       aria-pressed={active || undefined}
+      aria-expanded={props.ariaExpanded}
       disabled={disabled}
       onClick={props.onClick}
       onMouseEnter={() => setHover(true)}
