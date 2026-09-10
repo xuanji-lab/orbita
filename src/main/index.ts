@@ -78,8 +78,18 @@ function createMainWindow(): BrowserWindow {
   });
 
   const devServerUrl = process.env["ELECTRON_RENDERER_URL"];
-  if (devServerUrl) void window.loadURL(devServerUrl);
-  else void window.loadFile(join(__dirname, "../renderer/index.html"));
+  if (devServerUrl) {
+    // dev server 起得比窗口慢时（整栈刚重启的几秒窗口）首载会失败——fire-and-forget
+    // 失败一次窗口就永远白着（真实事故 2026-09-10：白屏直到手动 Ctrl+R）。
+    // 退避重试直到成功；ready-to-show 没到窗口也不会露出来，重试对用户不可见。
+    const load = (attempt: number): void => {
+      window.loadURL(devServerUrl).catch(() => {
+        if (window.isDestroyed() || attempt >= 10) return;
+        setTimeout(() => load(attempt + 1), 500 * attempt);
+      });
+    };
+    load(0);
+  } else void window.loadFile(join(__dirname, "../renderer/index.html"));
 
   return window;
 }
