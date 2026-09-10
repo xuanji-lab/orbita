@@ -12,9 +12,9 @@ import { describeList } from "../features/chat/load-state.ts";
 import {
   SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
-  expandGroup,
   foldKeyForWorkspace,
   toggleGroupFold,
+  toggleGroupFull,
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
@@ -91,8 +91,8 @@ export function Sidebar(props: {
   const loose = live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
   const tasksFolded = groups.folds.has(TASKS_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
-  const tasksTruncated = !groups.full.has(TASKS_FOLD_KEY) && loose.length > SESSIONS_PREVIEW_LIMIT;
-  const looseVisible = tasksTruncated ? loose.slice(0, SESSIONS_PREVIEW_LIMIT) : loose;
+  const tasksFull = groups.full.has(TASKS_FOLD_KEY);
+  const looseVisible = tasksFull ? loose : loose.slice(0, SESSIONS_PREVIEW_LIMIT);
   const open = (id: string) => {
     if (props.settingsOpen) props.onToggleSettings();
     session.openSession(id);
@@ -298,8 +298,10 @@ export function Sidebar(props: {
                     )
                   }
                   full={groups.full.has(foldKeyForWorkspace(workspace.id))}
-                  onExpand={() =>
-                    setGroups((current) => expandGroup(current, foldKeyForWorkspace(workspace.id)))
+                  onToggleFull={() =>
+                    setGroups((current) =>
+                      toggleGroupFull(current, foldKeyForWorkspace(workspace.id)),
+                    )
                   }
                   onNewTask={() => {
                     // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
@@ -353,12 +355,11 @@ export function Sidebar(props: {
                       onClick={() => open(meta.id)}
                     />
                   ))}
-                  {tasksTruncated && (
-                    <ShowMoreRow
+                  {loose.length > SESSIONS_PREVIEW_LIMIT && (
+                    <ShowAllRow
+                      full={tasksFull}
                       hidden={loose.length - SESSIONS_PREVIEW_LIMIT}
-                      onClick={() =>
-                        setGroups((current) => expandGroup(current, TASKS_FOLD_KEY))
-                      }
+                      onClick={() => setGroups((current) => toggleGroupFull(current, TASKS_FOLD_KEY))}
                     />
                   )}
                 </>
@@ -410,7 +411,7 @@ function WorkspaceGroup(props: {
   folded: boolean;
   onToggleFold: () => void;
   full: boolean;
-  onExpand: () => void;
+  onToggleFull: () => void;
   onNewTask: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
@@ -553,10 +554,11 @@ function WorkspaceGroup(props: {
               onClick={() => props.onOpen(meta.id)}
             />
           ))}
-          {truncated && (
-            <ShowMoreRow
+          {props.sessions.length > SESSIONS_PREVIEW_LIMIT && (
+            <ShowAllRow
+              full={props.full}
               hidden={props.sessions.length - SESSIONS_PREVIEW_LIMIT}
-              onClick={props.onExpand}
+              onClick={props.onToggleFull}
             />
           )}
         </>
@@ -673,14 +675,15 @@ function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () 
 }
 
 /**
- * 「Show N more」行：一组超过预览数时垫在列表尾。**条数写进文案**——
- * 被藏起来多少这件事不能是悄悄的。点击单向全量铺开；想收回预览，折叠再展开就回去。
+ * 「Show N more / Show less」行：一组超过预览数时垫在列表尾。**条数写进文案**——
+ * 被藏起来多少这件事不能是悄悄的。双向：铺开后原地变成「Show less」，
+ * 点一下收回最近的 N 条（排序保证前 N 条就是最近 N 条，置顶恒在最前）。
  */
-function ShowMoreRow(props: { hidden: number; onClick: () => void }) {
+function ShowAllRow(props: { full: boolean; hidden: number; onClick: () => void }) {
   return (
     <NavRow
-      icon="chevron-down"
-      label={`Show ${props.hidden} more`}
+      icon={props.full ? "chevron-up" : "chevron-down"}
+      label={props.full ? "Show less" : `Show ${props.hidden} more`}
       active={false}
       tone="var(--color-text-tertiary)"
       onClick={props.onClick}

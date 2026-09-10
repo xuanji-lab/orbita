@@ -54,10 +54,15 @@ export function unfoldGroup(state: SidebarGroupState, key: string): SidebarGroup
 }
 
 /**
- * 标记一组「全部显示」（Show N more）。**单向**——几十条列表想收回预览，
- * 折叠再展开就回去了，不为此多发一个反向按钮。
+ * 翻转一组的「全部显示」（Show N more ↔ Show less）。
+ * 收回时回到默认的前 N 条预览——排序是置顶优先、按最近更新，
+ * 预览的那 N 条就是最近的 N 条（置顶的恒在，不计较先后）。
  */
-export function expandGroup(state: SidebarGroupState, key: string): SidebarGroupState {
-  if (state.full.has(key)) return state;
+export function toggleGroupFull(state: SidebarGroupState, key: string): SidebarGroupState {
+  if (state.full.has(key)) {
+    const full = new Set(state.full);
+    full.delete(key);
+    return { folds: state.folds, full };
+  }
   return { folds: state.folds, full: new Set(state.full).add(key) };
 }
