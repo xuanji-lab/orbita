@@ -9,13 +9,11 @@ import {
   consumePendingSends,
   consumePendingTexts,
   createSessionStates,
-  editPendingSend,
   mergeQueueView,
   parseCompactCommand,
   removeApproval,
   removePendingSend,
   removeSessionEntry,
-  replaceQueueOrderKey,
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
@@ -153,12 +151,15 @@ export interface ChatSession {
   interruptQueued: (index: number, text: string) => void;
   /** 排队项移出 pi 队列（runtime 侧 clearQueue + 重放实现） */
   cancelQueued: (index: number, text: string) => void;
-  /** 排队项改文本（保持原属队列与顺位） */
-  editQueued: (index: number, text: string, newText: string) => void;
+  /**
+   * 排队项改写 = 收回输入框：该条移出队列，原文本放回 draft，
+   * 用户在输入框里改完重新发送即再次入队（队尾）
+   */
+  recallQueued: (index: number, text: string) => void;
   /** 取消一条本地待办（纯本地状态） */
   cancelPendingSend: (index: number) => void;
-  /** 改写一条本地待办的文本（text 改内容，compact 改压缩要求） */
-  editPendingSend: (index: number, text: string) => void;
+  /** 本地待办收回输入框：text 项原样回，compact 项以 `/compact` 指令回 */
+  recallPendingSend: (index: number, text: string) => void;
   /** 本地 compact 待办的「立即」：马上压缩，不等空闲 */
   runPendingNow: (index: number) => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
@@ -810,26 +811,32 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.agent.answerPermission(requestId, answer);
   }, []);
 
-  // 排队编辑只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框
-  const queueEdit = useCallback(
-    (op: "cancel" | "edit", index: number, text: string, newText?: string) => {
-      const id = sessionRef.current;
-      if (id === null) return;
-      // edit 先把顺序账本里的键换掉：queue_update 带新文本回来时对账能保住原位
-      if (op === "edit" && newText !== undefined) {
-        setStates((prev) => replaceQueueOrderKey(prev, id, `pi\0${text}`, `pi\0${newText}`));
-      }
-      void api.agent
-        .queueEdit(id, op, index, text, newText)
-        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
-    },
-    [],
-  );
+  // 排队项的取消与收回都只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框。
+  // 收回（改写）= 文本先放回 draft 再走取消移除队列里的那条；两步独立，取消失败时
+  // 文本留在输入框不丢，队列由 queue 事件校准回真相。
+  // draft 已有内容时换行拼接——收回不该覆盖用户正在打的字。
+  const appendDraft = (text: string) => setDraft((prev) => (prev === "" ? text : `${prev}\n${text}`));
 
-  const editPending = useCallback((index: number, text: string) => {
+  const cancelQueued = useCallback((index: number, text: string) => {
     const id = sessionRef.current;
     if (id === null) return;
-    setStates((prev) => editPendingSend(prev, id, index, text));
+    void api.agent
+      .queueEdit(id, "cancel", index, text)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, []);
+
+  const recallQueued = useCallback((index: number, text: string) => {
+    const id = sessionRef.current;
+    if (id === null) return;
+    appendDraft(text);
+    cancelQueued(index, text);
+  }, [cancelQueued]);
+
+  const recallPendingSend = useCallback((index: number, text: string) => {
+    const id = sessionRef.current;
+    if (id === null) return;
+    setStates((prev) => removePendingSend(prev, id, index));
+    appendDraft(text);
   }, []);
 
   const cancelPendingSend = useCallback((index: number) => {
@@ -912,11 +919,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setError(cause instanceof Error ? cause.message : String(cause)),
       );
     },
-    cancelQueued: (index: number, text: string) => queueEdit("cancel", index, text),
-    editQueued: (index: number, text: string, newText: string) =>
-      queueEdit("edit", index, text, newText),
+    cancelQueued,
+    recallQueued,
     cancelPendingSend,
-    editPendingSend: editPending,
+    recallPendingSend,
     runPendingNow,
     newTask,
     newTaskIn,

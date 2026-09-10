@@ -358,9 +358,9 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
             phase={session.phase}
             onInterrupt={session.interruptQueued}
             onCancel={session.cancelQueued}
-            onEdit={session.editQueued}
+            onRecall={session.recallQueued}
             onCancelPending={session.cancelPendingSend}
-            onEditPending={session.editPendingSend}
+            onRecallPending={session.recallPendingSend}
             onRunPendingNow={session.runPendingNow}
           />
           {composer}
