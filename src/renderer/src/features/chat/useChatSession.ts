@@ -69,7 +69,9 @@ export interface ChatSession {
   /** 按 id 查回合失败标注（槽里有真相）——侧栏失败图标用，与「当前看哪条」无关 */
   turnErrorOf: (id: string) => string | null;
   error: string | null;
+  /** 当前查看会话的输入框草稿——**按会话隔离**，切换 / 新开会话互不带走 */
   draft: string;
+  /** 写当前查看会话的草稿 */
   setDraft: (value: string) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
@@ -183,7 +185,22 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
    */
   const statesRef = useRef<SessionStates>(states);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  /**
+   * 输入框草稿**按会话隔离**（含首页）：key = 当前查看的会话 id，首页用 "home"。
+   * 以前是全局单份，切换 / 新开会话草稿跟着走（2026-09-10 用户裁决：新会话就是
+   * 新的，旧会话的草稿留在原地等他回来）。纯内存，不落盘——与旧行为一致。
+   */
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
+  const writeDraft = useCallback((key: string, value: string) => {
+    setDrafts((prev) => (prev.get(key) === value ? prev : new Map(prev).set(key, value)));
+  }, []);
+  /** 收回排队内容用：已有草稿时换行拼接，不覆盖正在打的字 */
+  const appendDraft = useCallback((key: string, text: string) => {
+    setDrafts((prev) => {
+      const existing = prev.get(key) ?? "";
+      return new Map(prev).set(key, existing === "" ? text : `${existing}\n${text}`);
+    });
+  }, []);
   /** 三档权限模式。默认 plan——**默认最保守**，开工具要用户自己往下调。 */
   const [mode, setMode] = useState<PermissionMode>("plan");
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
@@ -407,6 +424,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     if (!usable.some((p) => p.id === model.providerId)) setModel(null);
   }, [usable, model]);
 
+  // 草稿键 = 当前查看的会话；send 与收回都写自己的键，互不串
+  const draftKey = sessionId ?? opened?.id ?? "home";
+  const draft = drafts.get(draftKey) ?? "";
+  const setDraft = (value: string) => writeDraft(draftKey, value);
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (text === "") return;
@@ -423,7 +445,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setStates((prev) =>
           addPendingSend(prev, busyId, { kind: "compact", instructions: compact.instructions }),
         );
-        setDraft("");
+        writeDraft(draftKey, "");
         return;
       }
       // 压缩要有可续的会话：活着的直接压；从盘上打开还没唤醒的先按 resume
@@ -453,7 +475,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setError("No running task to compact");
         return;
       }
-      setDraft("");
+      writeDraft(draftKey, "");
       const id: string = active;
       // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
       setStates((prev) => setEntryPhase(prev, id, "turn"));
@@ -464,7 +486,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     // 压缩中 pi 连入队入口都关着（prompt 直接抛）：消息进本地待办，压缩结束自动发
     if (id !== null && statesRef.current.get(id)?.phase === "compaction") {
       setStates((prev) => addPendingSend(prev, id as string, { kind: "text", text }));
-      setDraft("");
+      writeDraft(draftKey, "");
       return;
     }
     try {
@@ -494,7 +516,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         injectedModeRef.current = mode;
         refreshSessions();
       }
-      setDraft("");
+      writeDraft(draftKey, "");
       // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
       // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
       const active: string = id;
@@ -833,11 +855,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, []);
 
   // 排队项的取消与收回都只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框。
-  // 收回（改写）= 文本先放回 draft 再走取消移除队列里的那条；两步独立，取消失败时
-  // 文本留在输入框不丢，队列由 queue 事件校准回真相。
+  // 收回（改写）= 文本先放回该会话的 draft 再走取消移除队列里的那条；两步独立，
+  // 取消失败时文本留在输入框不丢，队列由 queue 事件校准回真相。
   // draft 已有内容时换行拼接——收回不该覆盖用户正在打的字。
-  const appendDraft = (text: string) => setDraft((prev) => (prev === "" ? text : `${prev}\n${text}`));
-
   const cancelQueued = useCallback((index: number, text: string) => {
     const id = sessionRef.current;
     if (id === null) return;
@@ -849,19 +869,22 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, []);
 
-  const recallQueued = useCallback((index: number, text: string) => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    appendDraft(text);
-    cancelQueued(index, text);
-  }, [cancelQueued]);
+  const recallQueued = useCallback(
+    (index: number, text: string) => {
+      const id = sessionRef.current;
+      if (id === null) return;
+      appendDraft(id, text);
+      cancelQueued(index, text);
+    },
+    [appendDraft, cancelQueued],
+  );
 
   const recallPendingSend = useCallback((index: number, text: string) => {
     const id = sessionRef.current;
     if (id === null) return;
     setStates((prev) => removePendingSend(prev, id, index));
-    appendDraft(text);
-  }, []);
+    appendDraft(id, text);
+  }, [appendDraft]);
 
   const cancelPendingSend = useCallback((index: number) => {
     const id = sessionRef.current;
