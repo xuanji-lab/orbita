@@ -144,6 +144,20 @@ export class ProviderStore {
     await this.persist(providers.filter((p) => p.id !== id));
   }
 
+  /**
+   * 按给定 id 顺序重排（拖拽排序的落盘）。sort 稳定，所以清单里漏掉的 id 保序垫底、
+   * 多余的 id 忽略——renderer 传旧快照也不会丢数据。顺序没变就不写盘。
+   */
+  async reorder(ids: ProviderId[]): Promise<void> {
+    const providers = await this.load();
+    const rank = new Map(ids.map((id, i) => [id, i]));
+    const next = [...providers].sort(
+      (a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+    );
+    if (next.every((p, i) => p === providers[i])) return;
+    await this.persist(next);
+  }
+
   /** 取明文密钥。**只给主进程内的装配代码用**，不经 IPC 暴露。 */
   async resolveApiKey(id: ProviderId): Promise<string | null> {
     const provider = (await this.load()).find((p) => p.id === id);
