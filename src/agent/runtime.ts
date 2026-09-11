@@ -388,8 +388,9 @@ interface OpenedTurn {
  * create 命令一字不差地同源（同一套注册解析、同一套审批门、同一套事件翻译）。
  *
  * @param isCompactionTurn 这一轮的生命周期就是一次手动压缩（决定 compaction_end
- *   的相位翻译：压缩轮回 idle，轮内自动压缩回 turn——自动压缩跑在 loop 里，
- *   压完轮还在，发 idle 会让 renderer 误投递）。
+ *   的相位翻译：手动压缩轮什么都不发——idle 只由 startTurn 的 finally 发，
+ *   与 agent_settled 同一条纪律；轮内自动压缩压完回 turn——自动压缩跑在 loop
+ *   里，压完轮还在，发 idle 会让 renderer 误投递）。
  */
 async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<OpenedTurn> {
   const note = ledgerNote(command.sessionId);
@@ -497,12 +498,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       send({ type: "phase", sessionId: command.sessionId, phase: "compaction" });
     }
     if (event.type === "compaction_end") {
-      // 相位按轮型翻：手动压缩轮压完回 idle；轮内自动压缩压完回 turn（轮还在跑）。
-      send({
-        type: "phase",
-        sessionId: command.sessionId,
-        phase: isCompactionTurn ? "idle" : "turn",
-      });
+      // 手动压缩轮不在这里发 idle——idle 只由 startTurn 的 finally 发（晚于 dispose
+      // 与 running.delete），在这里发会让 renderer 的投递撞上 already running，
+      // 与 agent_settled 那处同一条纪律。轮内自动压缩压完轮还在，回 turn。
+      if (!isCompactionTurn) send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
       // aborted / 无 result 的压缩（用户中止、摘要失败）不留界碑——历史没有被折叠
       if (!event.aborted && event.result !== undefined) {
         send({
