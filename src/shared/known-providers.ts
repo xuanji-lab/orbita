@@ -24,6 +24,11 @@ export interface KnownProvider {
   /** 预填的 baseUrl。空串表示必须用户自己填（兼容格式的通用入口） */
   baseUrl: string;
   /**
+   * **这家网关要求的额外请求头**，随 endpoint 持久化，真实会话与测试 / 发现同源带上。
+   * 现在只有 OpenCode Go 的会话头——它的网关缺这个头直接 400（无法高效路由）。
+   */
+  headers?: Record<string, string>;
+  /**
    * 对应 pi 内建目录的 id。有值时模型参数走 pi 的官方目录，且目录里的模型进**候选池**。
    *
    * ⚠ 候选池不等于可用：目录是按厂商 id 组织的，而同一厂商的不同套餐能用的模型并不相同
@@ -145,6 +150,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     api: "openai-completions",
     baseUrl: "https://opencode.ai/zen/go/v1",
     catalogId: "opencode-go",
+    // 网关硬要求（缺了 400 MissingSessionID）：会话头用于前缀缓存路由，任意稳定值即可
+    headers: { "x-opencode-session": "orbita" },
     note: "OpenCode Zen 聚合网关——一个 key 调用多家模型（DeepSeek / MiniMax…）",
   },
   {

@@ -18,6 +18,8 @@ export const ipcChannels = {
   providerList: "provider:list",
   providerUpsert: "provider:upsert",
   providerRemove: "provider:remove",
+  /** 拖拽排序的落盘：载荷是全量 id 的新顺序 */
+  providerReorder: "provider:reorder",
   agentCreate: "agent:create",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",

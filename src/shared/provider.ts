@@ -51,6 +51,8 @@ export interface ModelCostDecl {
  *
  * 可选参数字段是**覆盖声明**，不是 pi 目录的快照：留空 = 用目录官方值（目录不认识则落
  * 128k / 8k / 零价的兜底）；填了 = 用户说了算（目录会过时或缺失，实测 glm-5.3 目录定价全零）。
+ * `vision` 同语义：留空 = 目录怎么说就怎么（目录没说的当纯文本）；填了 = 用户说了算
+ * （厂商刚上线的多模态目录往往没跟上）。runtime 侧由 model-registration 落成 input 模态。
  */
 export interface ModelDecl {
   id: string;
@@ -58,6 +60,8 @@ export interface ModelDecl {
   contextWindow?: number;
   maxTokens?: number;
   cost?: ModelCostDecl;
+  /** 覆盖声明：true = 可吃图片输入（多模态），false = 强制纯文本；缺省 = 听目录的 */
+  vision?: boolean;
 }
 
 export interface ProviderEndpoint {
@@ -175,6 +179,10 @@ export function validateProvider(input: unknown): ValidationIssue[] {
         if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
           push(`models.declared[${index}].${field}`, `${field} must be a positive number`);
         }
+      }
+      const vision = model["vision"];
+      if (vision !== undefined && typeof vision !== "boolean") {
+        push(`models.declared[${index}].vision`, "vision must be a boolean");
       }
       const cost = model["cost"];
       if (cost !== undefined) {
