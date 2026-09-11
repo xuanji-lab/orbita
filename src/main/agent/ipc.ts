@@ -5,8 +5,9 @@
 import { BrowserWindow, ipcMain } from "electron";
 import {
   ipcChannels,
-  type CreateAgentInput,
+  type CompactAgentInput,
   type ProviderSecrets,
+  type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
@@ -63,6 +64,23 @@ function catalogIdOf(providerId: string): string | undefined {
   return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.catalogId;
 }
 
+/** AgentTurnContext 的 renderer 载荷 → AgentCommand 的公共字段（submit / interrupt / compact 共用）。 */
+function turnFields(
+  input: SubmitAgentInput | CompactAgentInput,
+  provider: ProviderSecrets,
+  piSessionDir: string,
+) {
+  return {
+    sessionId: input.sessionId,
+    cwd: input.cwd,
+    provider,
+    modelId: input.modelId,
+    mode: input.mode,
+    piSessionDir,
+    ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
+  };
+}
+
 export function registerAgentIpc(
   host: AgentHost,
   providers: ProviderStore,
@@ -70,72 +88,60 @@ export function registerAgentIpc(
   /** pi 把自己的 session 文件放在哪。**路径策略在主进程**，agent 进程只收数据 */
   piSessionDir: string,
 ): void {
-  ipcMain.handle(
-    ipcChannels.agentCreate,
-    async (_event, input: CreateAgentInput): Promise<string> => {
-      const provider = await resolveProviderSecrets(providers, input.providerId);
-      const { sessionId, piSessionFile } = await host.createSession(
-        {
-          cwd: input.cwd,
-          modelId: input.modelId,
-          mode: input.mode,
-          piSessionDir,
-          // 续会话：把 pi 自己那份本子还给它（guideline §四）
-          ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
-          provider,
-        },
-        input.resume?.sessionId,
-      );
-
-      if (input.resume) {
-        // 续会话不新建记录：新消息接着写进同一份 jsonl。
-        // 但 pi 那本子的路径可能变了（open 失败退回新建时就会），所以要更新回去。
-        await sessions.setPiSessionFile(sessionId, piSessionFile);
-      } else {
-        // **建成之后才落 meta**：createSession 会等 runtime 回 created，
-        // 失败时抛错——不该在磁盘上留下一条永远打不开的会话。标题等第一条用户消息填。
-        const now = Date.now();
-        await sessions.create({
-          id: sessionId,
-          title: "",
-          titleSource: "derived",
-          cwd: input.cwd,
-          workspaceId: input.workspaceId,
-          piSessionFile,
-          pinned: false,
-          archived: false,
-          recentQueries: [],
-          // 还没跑过一轮 = 没有账本。第一次 agent_settled 才落真值
-          stats: null,
-          providerId: input.providerId,
-          modelId: input.modelId,
-          mode: input.mode,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-      return sessionId;
-    },
-  );
-
   ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
 
-  ipcMain.handle(ipcChannels.agentSubmit, async (_e, sessionId: string, text: string) => {
-    await host.submit(sessionId, text);
+  /**
+   * 首轮开机的收尾：拿到 pi 本子真路径后，真新会话建 meta（建成之后才落盘——
+   * 开机失败时不在磁盘上留一条永远打不开的会话），旧会话（pi 本子曾经缺席）
+   * 校准回去。transcript 记录不依赖 meta（直写 log），先到的回显不会丢。
+   */
+  async function settleFirstTurn(input: SubmitAgentInput, piSessionFile: string | null): Promise<void> {
+    if (piSessionFile === null) return;
+    if ((await sessions.load(input.sessionId)) === null) {
+      const now = Date.now();
+      await sessions.create({
+        id: input.sessionId,
+        title: "",
+        titleSource: "derived",
+        cwd: input.cwd,
+        workspaceId: input.workspaceId,
+        piSessionFile,
+        pinned: false,
+        archived: false,
+        recentQueries: [],
+        // 还没跑过一轮 = 没有账本。第一次 agent_settled 才落真值
+        stats: null,
+        providerId: input.providerId,
+        modelId: input.modelId,
+        mode: input.mode,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else {
+      await sessions.setPiSessionFile(input.sessionId, piSessionFile);
+    }
+  }
+
+  ipcMain.handle(ipcChannels.agentSubmit, async (_e, input: SubmitAgentInput): Promise<void> => {
+    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir) });
+    await settleFirstTurn(input, piSessionFile);
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
-    if (await sessions.needsAutoTitle(sessionId)) host.generateTitle(sessionId, text);
+    if (await sessions.needsAutoTitle(input.sessionId)) host.generateTitle(input.sessionId, input.text);
   });
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
-  ipcMain.handle(
-    ipcChannels.agentInterrupt,
-    (_e, sessionId: string, text: string) => host.interrupt(sessionId, text),
-  );
-  ipcMain.handle(
-    ipcChannels.agentCompact,
-    (_e, sessionId: string, instructions?: string) => host.compact(sessionId, instructions),
-  );
+  ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
+    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir) });
+    await settleFirstTurn(input, piSessionFile);
+  });
+  ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
+    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir) });
+    if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
+  });
 
   ipcMain.handle(
     ipcChannels.agentSetMode,
