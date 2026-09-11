@@ -1,0 +1,709 @@
+/*
+ * ProvidersView 的样式层——主从两栏、模型弹窗、窄窗口降级。
+ * 布局从已验收的小样移植（docs/plans/2026-09-10-providers-view-mockup.html）：
+ * 平铺内容面 + 发丝线（不套第二张卡），左栏与右栏各自内部滚动，
+ * 窄窗口（容器 ≤ 860px）收成 40px 图标栏 + 上下堆叠。
+ * token 全部来自设计系统真源，禁裸值。
+ */
+
+.pv-root {
+  position: relative;
+  container-type: inline-size;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pv-intro {
+  flex: none;
+  margin: 0 0 var(--space-4);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 主从两栏：外层不滚，左右各自内部滚动 ---------- */
+
+.pv-master {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  gap: var(--space-4);
+  min-height: 0;
+}
+
+.pv-nav {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding-right: var(--space-4);
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.pv-sec-label {
+  padding: 0 0 var(--space-2);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.pv-nav .pv-sec-label {
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.pv-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px;
+  margin: -2px;
+  overflow: auto;
+}
+
+/* 厂商行：可拖动排序，点选切换。选中态与设置 tab / 侧栏行同源（--color-bg-active + 加重） */
+.pv-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--list-item-rich);
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  transition: var(--transition-hover);
+}
+.pv-row:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.pv-row.on {
+  background: var(--color-bg-active);
+}
+/* 拖拽排序：拖动中的行半透明让出「这块在动」的视觉；目标行用 accent 小框整行圈住 */
+.pv-row.dragging {
+  opacity: 0.4;
+}
+.pv-row.drop-on {
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+
+.pv-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-pill);
+}
+.pv-dot.ok {
+  background: var(--color-success);
+}
+.pv-dot.none {
+  border: 1.5px solid var(--color-border-strong);
+}
+
+.pv-row-main {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.pv-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-control);
+  line-height: var(--line-height-control);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.pv-row.on .pv-row-name {
+  font-weight: var(--weight-semibold);
+}
+.pv-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  line-height: 14px;
+  color: var(--color-text-tertiary);
+}
+.pv-row-count {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.pv-nav-empty {
+  padding: var(--space-2);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.pv-add {
+  margin-top: var(--space-3);
+}
+
+/* ---------- 右栏：header / 可滚 body / 固定 footer ---------- */
+
+.pv-detail {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pv-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.pv-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-title);
+  line-height: var(--line-height-title);
+  font-weight: var(--weight-semibold);
+}
+.pv-headend {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.pv-note {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}
+
+.pv-body {
+  min-height: 0;
+  padding: var(--space-4) 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.pv-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.pv-hint {
+  margin-right: auto;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-tertiary);
+}
+.pv-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-caption);
+  color: var(--color-success);
+}
+
+/* ---------- 表单字段：单列堆叠 ---------- */
+
+.pv-fields {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.pv-field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.pv-field > label {
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.pv-sub {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-tertiary);
+}
+.pv-krow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.pv-krow .pv-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 锁定的事实（协议 / 模型 id）：input 的形、读_only 的实 */
+.pv-locked {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--control-height-md);
+  padding: 0 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-control);
+  cursor: default;
+}
+.pv-locked svg {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.pv-mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-control);
+}
+
+/* ---------- 控件：ghost / accent（唯一主操作）/ danger ---------- */
+
+.pv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: none;
+  height: var(--control-height-md);
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-control);
+  line-height: var(--line-height-control);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.pv-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-strong);
+}
+.pv-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pv-btn.icon {
+  width: var(--control-height-md);
+  padding: 0;
+}
+.pv-btn.sm {
+  height: var(--control-height-sm);
+  font-size: var(--font-size-caption);
+}
+.pv-btn.accent {
+  background: var(--color-accent);
+  border-color: transparent;
+  color: var(--color-accent-fg);
+  font-weight: var(--weight-semibold);
+}
+.pv-btn.accent:hover {
+  background: var(--color-accent-strong);
+}
+.pv-btn.danger {
+  color: var(--color-danger);
+}
+.pv-btn.danger:hover {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-color: transparent;
+}
+.pv-btn.danger-solid,
+.pv-btn.danger-solid:hover {
+  background: var(--color-danger-solid);
+  border-color: transparent;
+  color: var(--color-danger-fg);
+}
+.pv-btn:focus-visible {
+  outline: 1px solid var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+
+.pv-input {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-height-md);
+  padding: 0 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-input);
+  line-height: var(--line-height-input);
+  transition: var(--transition-hover);
+}
+.pv-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+.pv-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* 状态行：图标 + 文字在前，颜色第二信号（设计系统） */
+.pv-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--space-1);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+}
+.pv-status.ok {
+  color: var(--color-success);
+}
+.pv-status.bad {
+  color: var(--color-danger);
+}
+.pv-status.busy {
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 模型区：区头一行（Add / Fetch），行简报右对齐 ---------- */
+
+.pv-mhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+.pv-mhead .pv-sec-label {
+  margin-right: auto;
+  padding-bottom: 0;
+}
+
+.pv-mlist {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-2);
+}
+.pv-mitem {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.pv-mitem:last-child {
+  border-bottom: none;
+}
+.pv-mrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 40px;
+  padding: 4px var(--space-2);
+}
+.pv-mid {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-control);
+  color: var(--color-text-primary);
+}
+.pv-mid.dim {
+  flex: none;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.pv-mname {
+  flex: none;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+.pv-grow {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  overflow: hidden;
+}
+.pv-badges {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+.pv-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-chat-muted-bg);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  line-height: 16px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.pv-acts {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin-left: var(--space-2);
+}
+/* 行内测试结果徽标：ok / bad 各自取语义色（文字为主，颜色第二信号） */
+.pv-badge.pv-test-ok {
+  color: var(--color-success);
+}
+.pv-badge.pv-test-bad {
+  color: var(--color-danger);
+}
+/* 失败原因：在被测行下方展开一块小面板，完整文案可换行、可悬停选中复制 */
+.pv-mreason {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.pv-mreason svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--color-danger);
+  opacity: 0.7;
+}
+.pv-mempty {
+  padding: var(--space-3) var(--space-2);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* ---------- Fetch 多选清单 ---------- */
+
+.pv-fetch {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+.pv-fetch-search {
+  position: relative;
+}
+/* 定位 Icon 的外层 span（内里 svg 按 span 的 14px 取尺寸）——直接抓 svg 会按搜索框取 100% 宽 */
+.pv-fetch-search .orbita-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  translate: 0 -50%;
+  color: var(--color-text-tertiary);
+}
+.pv-fetch-search .pv-input {
+  padding-left: 28px;
+}
+.pv-fetch-list {
+  max-height: 200px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.pv-frow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 30px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.pv-frow:hover {
+  background: var(--color-bg-hover);
+}
+.pv-frow input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+.pv-frow .pv-mid {
+  font-size: var(--font-size-control);
+}
+.pv-frow .pv-added {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.pv-frow.has {
+  cursor: default;
+  opacity: 0.75;
+}
+.pv-fetch-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.pv-fetch-count {
+  margin-right: auto;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 目录视图（Add provider） ---------- */
+
+.pv-catalog {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-2);
+}
+.pv-crow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  min-height: var(--list-item-rich);
+  padding: var(--space-2);
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-family-base);
+  transition: var(--transition-hover);
+}
+.pv-crow:hover {
+  background: var(--color-bg-hover);
+}
+.pv-crow-main {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.pv-crow-name {
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.pv-crow-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+.pv-empty {
+  display: grid;
+  grid-row: 1 / -1;
+  place-content: center;
+  gap: var(--space-3);
+  padding: var(--space-8) 0;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+/* ---------- 模型弹窗：实心面板 + 发丝线 + 重投影（dialogs 配方） ---------- */
+
+.pv-modal-root {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+.pv-modal-backdrop {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--overlay-backdrop);
+  pointer-events: auto;
+}
+.pv-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(520px, calc(100% - 48px));
+  max-height: calc(100% - 48px);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-modal);
+}
+.pv-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.pv-modal-head strong {
+  font-size: var(--font-size-title);
+  line-height: var(--line-height-title);
+  font-weight: var(--weight-semibold);
+}
+.pv-modal-body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  overflow: auto;
+}
+.pv-modal-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.pv-modal-foot .pv-spacer {
+  margin-right: auto;
+}
+.pv-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3) var(--space-4);
+}
+
+/* 滚动条已全局弱化（styles.css 的 * 规则，口径就是这里定下的），本地不再重复 */
+
+/* 设置页不做窄窗口降级（wafo 2026-09-10）：永远三栏——左侧设置菜单、
+   中间厂商列表、右侧厂商详情。master 恒为 264px + 1fr 双栏，各自内滚。 */
+

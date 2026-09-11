@@ -49,7 +49,7 @@ export function SettingsView(props: {
       </header>
 
       <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-        <div style={{ width: "min(100%, var(--content-max-width))", margin: "0 auto" }}>
+        <div style={{ width: "min(100%, var(--content-max-width))", height: "100%", margin: "0 auto" }}>
           {props.tab === "general" ? (
             <General settings={props.settings} onChange={props.onSettingsChange} />
           ) : (
