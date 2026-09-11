@@ -42,6 +42,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  /** 正等待二次确认删除的模型 id；一次只有一条，点别的行的 trash 就换成那条 */
+  const [confirmRemoveModel, setConfirmRemoveModel] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState(0);
   /** Fetch 多选清单：null = 收起。ids 已过滤掉已启用项 */
   const [discovered, setDiscovered] = useState<{ ok: boolean; ids: string[]; message: string } | null>(null);
@@ -152,6 +154,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
     setRevealed(false);
     setDiscovered(null);
     setConfirmRemove(false);
+    setConfirmRemoveModel(null);
     setModelTests({});
     setEditor(null);
   };
@@ -808,16 +811,39 @@ export function ProvidersView(props: { onChange?: () => void }) {
                             >
                               <Icon name="pencil-line" size={13} strokeWidth={1.8} />
                             </button>
-                            <button
-                              type="button"
-                              className="pv-btn icon sm danger"
-                              title={`Remove ${model.id}`}
-                              onClick={() => {
-                                void mutateModels((models) => models.filter((m) => m.id !== model.id));
-                              }}
-                            >
-                              <Icon name="trash-2" size={13} strokeWidth={1.8} />
-                            </button>
+                            {confirmRemoveModel === model.id ? (
+                              <>
+                                {/* 与 provider 删除同款的两段式：一点就没是破坏性动作的禁忌（2026-09-11 验收发现） */}
+                                <button
+                                  type="button"
+                                  className="pv-btn icon sm danger-solid"
+                                  title={`Click again to remove ${model.id}`}
+                                  onClick={() => {
+                                    setConfirmRemoveModel(null);
+                                    void mutateModels((models) => models.filter((m) => m.id !== model.id));
+                                  }}
+                                >
+                                  <Icon name="trash-2" size={13} strokeWidth={1.8} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="pv-btn icon sm"
+                                  title="Cancel remove"
+                                  onClick={() => setConfirmRemoveModel(null)}
+                                >
+                                  <Icon name="x" size={13} strokeWidth={1.8} />
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                className="pv-btn icon sm danger"
+                                title={`Remove ${model.id}`}
+                                onClick={() => setConfirmRemoveModel(model.id)}
+                              >
+                                <Icon name="trash-2" size={13} strokeWidth={1.8} />
+                              </button>
+                            )}
                           </span>
                         </div>
                         {tested !== undefined && tested.tone === "bad" && (
