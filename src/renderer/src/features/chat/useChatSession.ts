@@ -26,7 +26,7 @@ import { recordToolFrame } from "./tool-results.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
-import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
 import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -196,9 +196,6 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
   const [defaultCwd, setDefaultCwd] = useState<string>("");
   const sessionRef = useRef<string | null>(null);
-  /** 还在 runtime 里活着的会话。send 创建时加入，runtime 崩溃时清空；
-   *  openSession 命中它就重连活槽，而不是从盘上种一份旧的。 */
-  const liveRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     sessionRef.current = sessionId;
@@ -211,12 +208,81 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, [states]);
 
   /**
+   * **同步读-改-写**：先算 next、同步落 ref、再 setStates。不用
+   * `setStates((prev) => { ...; statesRef.current = next; return next; })`——
+   * updater 要到渲染阶段才跑，紧接着的同步读（deliverNext / 连发两个事件时
+   * 第二个的入队判定）拿到的是上一拍，排队卡「停止后不投递 / 两条一起飞」
+   * 就是这个滞后（B4 修）。所有需要紧跟同步读的写入都走这里。
+   */
+  const applyStates = useCallback((f: (prev: SessionStates) => SessionStates): void => {
+    const next = f(statesRef.current);
+    statesRef.current = next;
+    setStates(next);
+  }, []);
+
+  /**
+   * 会话 meta 真值的 ref 镜像（refreshSessions 灌入）。无状态 submit 每轮都要
+   * 带 cwd / 归属 / pi 本子——它们是**会话固定**的，以 meta 为准而不是当前的
+   * 工作区选择（用户切了工作区再对旧会话发消息，工具目录不能跟着变）。
+   * 事件路径（deliverNext 等 useCallback([]) 的回调）闭包里读不到 state，走 ref。
+   */
+  const sessionsRef = useRef<SessionMeta[]>([]);
+
+  /**
+   * 无状态开工的「当前意图」：显示值即注入值——每轮 submit 显式带上 model / mode，
+   * 轮内改的只是显示，下一轮自然生效（一轮一模的保证在轮开始时的快照里）。
+   * 同上，事件路径闭包读不到 state，走 ref。
+   */
+  const intentRef = useRef<{
+    model: { providerId: string; modelId: string } | null;
+    mode: PermissionMode;
+    cwd: string | null;
+    workspaceId: string | null;
+    defaultCwd: string;
+  }>({ model: null, mode: "plan", cwd: null, workspaceId: null, defaultCwd: "" });
+  useEffect(() => {
+    intentRef.current = { model, mode, cwd, workspaceId, defaultCwd };
+  }, [model, mode, cwd, workspaceId, defaultCwd]);
+
+  /**
+   * 组装无状态开工上下文（AgentTurnContext 的主体）：meta 真值（cwd / 归属 /
+   * pi 本子）+ 当前意图（模型 / 档位）。新会话（meta 还没落盘）用当前选择。
+   * 拿不出可用上下文时把错误写进红字并返回 null——调用方直接放弃这一跳。
+   */
+  const buildTurn = useCallback(
+    (id: string): Omit<SubmitAgentInput, "sessionId" | "text"> | null => {
+      const intent = intentRef.current;
+      if (intent.model === null) {
+        setError("Add a provider with at least one model first");
+        return null;
+      }
+      const meta = sessionsRef.current.find((entry) => entry.id === id) ?? null;
+      const cwdTarget = meta?.cwd ?? intent.cwd ?? intent.defaultCwd;
+      if (cwdTarget === "") {
+        setError("Choose a workspace folder first");
+        return null;
+      }
+      return {
+        cwd: cwdTarget,
+        workspaceId: meta?.workspaceId ?? intent.workspaceId ?? null,
+        resume: meta?.piSessionFile != null ? { piSessionFile: meta.piSessionFile } : null,
+        providerId: intent.model.providerId,
+        modelId: intent.model.modelId,
+        mode: intent.mode,
+      };
+    },
+    [],
+  );
+
+
+  /**
    * **读失败不清空。** 以前这里会 `.catch(() => setSessions([]))`，磁盘权限坏了就显示成
    * 「你的会话全没了」。现在失败只记到 `loads` 里，手里那份原样保留。
    */
   const refreshSessions = useCallback(() => {
     void api.session.list().then((list) => {
       setSessions(list);
+      sessionsRef.current = list;
       setLoads((prev) => ({ ...prev, sessions: READY }));
       // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
       // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
@@ -283,19 +349,16 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     // 按 ~50ms 节拍攒批整批应用，渲染频率封顶，主线程留出空档；
     // phase / queue / permission 等低频且对延迟敏感的事件照旧即时应用。
     const coalescer = createProgressCoalescer<AgentEvent>((batch) => {
-      setStates((prev) => {
-        const next = batch.reduce((acc, event) => applyAgentEvent(acc, event), prev);
-        statesRef.current = next;
-        return next;
-      });
+      applyStates((prev) => batch.reduce((acc, event) => applyAgentEvent(acc, event), prev));
     }, 50);
     const off = api.agent.onEvent((event) => {
         if (event.type === "failed") {
           // 回合级失败（重试耗尽）进槽、标注在对话里（applyAgentEvent 收）；
           // 操作级失败仍走全局红字（输入框上方）
           if (event.turn !== true) setError(event.message);
-          // runtime 整个没了：live 账本清零，全部槽归位（归约在 applyAgentEvent 里）
-          if (event.sessionId === null) liveRef.current.clear();
+          // runtime 整个没了：全部槽归位（归约在 applyAgentEvent 里）。
+          // 无状态后没有「活会话集合」要清——在不在跑由 runtime 的 running 表
+          // 按真值回答，进程没了它自然空。
         }
         // 新一轮真的跑起来了（重试成功 / 用户重发 / 压缩开始）：上一次的失败已成
         // 过去，红字不再挂着——只有最后状态是失败时才该看到失败提示
@@ -331,11 +394,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           coalescer.push(event);
           return;
         }
-        setStates((prev) => {
-          const next = applyAgentEvent(prev, event);
-          statesRef.current = next;
-          return next;
-        });
+        applyStates((prev) => applyAgentEvent(prev, event));
         // **投递节奏归我们**：phase 一变就看队首该不该发，一次只发一条。
         // 交给 pi 的 post-run 自动 drain 会把好几条一起吹出去——用户一条条点、
         // 最后两条自己一起飞，就是那么来的（2026-09-06 事故）。
@@ -407,110 +466,89 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         writeDraft(draftKey, "");
         return;
       }
-      // 压缩要有可续的会话：活着的直接压；从盘上打开还没唤醒的先按 resume
-      // 唤醒再压。**绝不为压缩新建会话**——对一条空会话压缩没有意义。
-      let active = sessionRef.current;
-      try {
-        if (active === null && opened !== null && opened.piSessionFile !== null) {
-          if (model === null) throw new Error("Add a provider with at least one model first");
-          active = await api.agent.create({
-            cwd: opened.cwd,
-            workspaceId: opened.workspaceId,
-            resume: { sessionId: opened.id, piSessionFile: opened.piSessionFile },
-            providerId: model.providerId,
-            modelId: model.modelId,
-            mode,
-          });
-          setSessionId(active);
-          sessionRef.current = active;
-          liveRef.current.add(active);
-          refreshSessions();
-        }
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-        return;
-      }
+      // 压缩要有可续的会话；**绝不为压缩新建会话**——对一条空会话压缩没有意义。
+      // 无状态：压缩也是一次开机（resume 带上 pi 本子），不需要先「唤醒」。
+      const active =
+        sessionId ?? (opened !== null && opened.piSessionFile !== null ? opened.id : null);
       if (active === null) {
         setError("No running task to compact");
         return;
       }
+      if (model === null) {
+        setError("Add a provider with at least one model first");
+        return;
+      }
       writeDraft(draftKey, "");
-      const id: string = active;
       // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
-      setStates((prev) => setEntryPhase(prev, id, "turn"));
-      void api.agent.compact(id, compact.instructions);
+      applyStates((prev) => setEntryPhase(prev, active, "turn"));
+      void api.agent.compact({
+        sessionId: active,
+        cwd: opened?.cwd ?? cwd ?? defaultCwd,
+        workspaceId: opened?.workspaceId ?? workspaceId ?? null,
+        resume: opened?.piSessionFile != null ? { piSessionFile: opened.piSessionFile } : null,
+        providerId: model.providerId,
+        modelId: model.modelId,
+        mode,
+        ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
+      });
       return;
     }
-    let id: string | null = sessionId;
+    // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的
+    let id: string | null = sessionId ?? opened?.id ?? null;
     // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
     // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
     const busy = id !== null && statesRef.current.get(id)?.phase !== "idle";
     if (id !== null && busy) {
       const queuedId = crypto.randomUUID();
-      setStates((prev) => {
-        const next = enqueue(prev, id as string, { id: queuedId, kind: "text", text });
-        statesRef.current = next;
-        return next;
-      });
+      applyStates((prev) => enqueue(prev, id as string, { id: queuedId, kind: "text", text }));
       setDraft("");
       return;
     }
     try {
+      if (model === null) throw new Error("Add a provider with at least one model first");
+      // 已有会话的 cwd / 归属 / 本子以 meta 真值为准（会话固定——用户切了工作区
+      // 再对旧会话发消息，工具目录不能跟着变）；新会话用当前选择。
+      const meta = id !== null ? sessions.find((entry) => entry.id === id) ?? null : null;
+      const resume = meta?.piSessionFile != null ? { piSessionFile: meta.piSessionFile } : null;
+      // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
+      const target = meta?.cwd ?? cwd ?? defaultCwd;
+      if (target === "") throw new Error("Choose a workspace folder first");
+      const workspace = meta?.workspaceId ?? workspaceId ?? null;
       if (id === null) {
-        if (model === null) throw new Error("Add a provider with at least one model first");
-        // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
-        const target = cwd ?? defaultCwd;
-        if (target === "") throw new Error("Choose a workspace folder first");
-        // 打开的是一条能续的旧会话：沿用它的 id 与 pi 的本子，新消息接着写进同一份记录
-        const resume =
-          opened !== null && opened.piSessionFile !== null
-            ? { sessionId: opened.id, piSessionFile: opened.piSessionFile }
-            : null;
-        id = await api.agent.create({
-          cwd: target,
-          workspaceId,
-          resume,
-          providerId: model.providerId,
-          modelId: model.modelId,
-          mode,
-        });
+        // 无状态：新会话没有独立的「建」这一步——id 由 renderer 生成，
+        // 主进程首次 submit 落 meta 时接纳它
+        id = crypto.randomUUID();
         setSessionId(id);
         sessionRef.current = id;
-        liveRef.current.add(id);
-        // 建会话就是把当前的 model / mode 注进去了——台账对齐，send 尾部不用再冲
-        injectedModelRef.current = { providerId: model.providerId, modelId: model.modelId };
-        injectedModeRef.current = mode;
-        refreshSessions();
       }
       writeDraft(draftKey, "");
       // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
       // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
       const active: string = id;
-      /**
-       * **冲欠账**：跑着的轮里换的模型 / 权限档只动了显示（见 chooseModel），
-       * 这里才是它们真正注入的时刻——**新的一轮开始之前**。
-       * pi 的 setModel 原地改 agent.state.model，轮内注入会让重试的下一次尝试
-       * 换模型成功（一轮两模）；挪到这里，注入永远发生在轮与轮的间隙。
-       */
-      if (model !== null && injectedModelRef.current !== null && model !== injectedModelRef.current) {
-        await api.agent.setModel(active, model.providerId, model.modelId);
-        injectedModelRef.current = { providerId: model.providerId, modelId: model.modelId };
-      }
-      if (injectedModeRef.current !== null && mode !== injectedModeRef.current) {
-        await api.agent.setMode(active, mode);
-        injectedModeRef.current = mode;
-      }
-      setStates((prev) => setEntryPhase(prev, active, "turn"));
-      await api.agent.submit(active, text);
+      applyStates((prev) => setEntryPhase(prev, active, "turn"));
+      // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效，
+      // 轮内改显示、下一轮才注入的老冲账路径退场。
+      await api.agent.submit({
+        sessionId: active,
+        text,
+        cwd: target,
+        workspaceId: workspace,
+        resume,
+        providerId: model.providerId,
+        modelId: model.modelId,
+        mode,
+      });
+      // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
+      if (resume === null) refreshSessions();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位
       if (id !== null) {
         const failed: string = id;
-        setStates((prev) => setEntryPhase(prev, failed, "idle"));
+        applyStates((prev) => setEntryPhase(prev, failed, "idle"));
       }
     }
-  }, [draft, sessionId, model, mode, cwd, workspaceId, defaultCwd, opened, refreshSessions]);
+  }, [draft, sessionId, model, mode, cwd, workspaceId, defaultCwd, opened, sessions, refreshSessions]);
 
   const stop = useCallback(() => {
     // 只停当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -552,21 +590,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setWorkspaceId(detail.meta.workspaceId);
         setMode(detail.meta.mode);
         setModel({ providerId: detail.meta.providerId, modelId: detail.meta.modelId });
-        if (liveRef.current.has(id)) {
-          // **还在跑：重连活槽**。sessionId 接上，事件继续实时进；
-          // 不种盘上的快照——槽里的累积比盘新，种盘等于把画面倒回去
-          setSessionId(id);
-          sessionRef.current = id;
-          return;
-        }
-        // 没在跑：从盘上种槽，readOnly 与「说话时才续跑」语义照旧
+        // 无状态：没有「活会话集合」要重连——正在跑的会话它的槽本来就在 states
+        // 里（事件一直实时进），不种盘上的快照（种盘等于把画面倒回去）；
+        // 没在跑的才从盘上种，readOnly 与「说话时才续跑」（send 带 resume）语义照旧。
         setSessionId(null);
         sessionRef.current = null;
-        // 打开的是盘上的死会话：agent 那边什么都没注入，台账清零；
-        // 唤醒（下一条消息）时 create 会带着当前显示值重新记账
-        injectedModelRef.current = null;
-        injectedModeRef.current = null;
-        setStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
+        if (!statesRef.current.has(id)) {
+          setStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
+        }
       })
       .catch((cause: unknown) => {
         setLoadingHistory(false);
@@ -637,9 +668,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setOpened((current) => (current?.id === id ? null : current));
         // 删掉的正是当前活着的那条：回到首页，别让界面停在一条已经没有记录的会话上
         if (id === sessionRef.current) reset();
-        // 槽与 live 账本一并丢——runtime 那头由主进程删文件时同步释放（刀 0-4）
+        // 槽一并丢——runtime 那头由主进程删文件时同步释放（刀 0-4）
         setStates((current) => removeSessionEntry(current, id));
-        liveRef.current.delete(id);
         refreshSessions();
       });
     },
@@ -695,47 +725,21 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
    * ——对一条空会话压缩没有意义。进度不用单独回包：`compaction_start` /
    * `compaction` 事件那条链已经通了。
    */
-  const compact = useCallback(async (): Promise<void> => {
+  const compact = useCallback((): void => {
     setError(null);
-    let active = sessionRef.current;
-    try {
-      if (active === null && opened !== null && opened.piSessionFile !== null) {
-        if (model === null) throw new Error("Add a provider with at least one model first");
-        active = await api.agent.create({
-          cwd: opened.cwd,
-          workspaceId: opened.workspaceId,
-          resume: { sessionId: opened.id, piSessionFile: opened.piSessionFile },
-          providerId: model.providerId,
-          modelId: model.modelId,
-          mode,
-        });
-        setSessionId(active);
-        sessionRef.current = active;
-        liveRef.current.add(active);
-        refreshSessions();
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      return;
-    }
+    // 压缩要有可续的会话；无状态下压缩也是一次开机（resume 带 pi 本子），
+    // 不需要先「唤醒」，更绝不为压缩新建会话。
+    const active = sessionId ?? (opened !== null && opened.piSessionFile !== null ? opened.id : null);
     if (active === null) {
       setError("没有正在运行的任务可压缩");
       return;
     }
-    const id: string = active;
+    const turn = buildTurn(active);
+    if (turn === null) return;
     // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
-    setStates((prev) => setEntryPhase(prev, id, "turn"));
-    void api.agent.compact(id, undefined);
-  }, [opened, model, mode, refreshSessions]);
-
-  /**
-   * **已注入 agent 的模型 / 权限档**。与显示值（`model` / `mode`）分离——
-   * 跑着的轮里改的只是显示，注入被推迟，这里记的是 agent 那边真正的状态。
-   * 不追它就不知道 send 时有没有欠账要冲。
-   */
-  /** 显示值不读它们（读 model / mode），所以 ref 就够，不必是 state */
-  const injectedModelRef = useRef<{ providerId: string; modelId: string } | null>(null);
-  const injectedModeRef = useRef<PermissionMode | null>(null);
+    applyStates((prev) => setEntryPhase(prev, active, "turn"));
+    void api.agent.compact({ sessionId: active, ...turn });
+  }, [sessionId, opened, buildTurn, applyStates]);
 
   /**
    * 当前正在看的这条会话的相位。没有活会话（首页 / 盘上打开未唤醒）算 idle——
@@ -766,11 +770,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       setModel({ providerId, modelId });
       const id = sessionRef.current;
       if (id !== null && currentPhase() === "idle") {
+        // 闲着就注入（校验 + 落 meta + model 事件回环）；跑着只改显示——
+        // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账
         void api.agent
           .setModel(id, providerId, modelId)
-          .then(() => {
-            injectedModelRef.current = { providerId, modelId };
-          })
           .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
       }
     },
@@ -802,15 +805,12 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
 
   const changeMode = useCallback((next: PermissionMode) => {
     // 理由同 chooseModel：权限档决定 bash 能不能跑，轮内改是另一种串台——
-    // 所以注入延迟（UI 即时），不是锁 chip
+    // 所以注入延迟（UI 即时），不是锁 chip；跑着时下一轮 submit 自带新档
     setMode(next);
     const id = sessionRef.current;
     if (id !== null && currentPhase() === "idle") {
       void api.agent
         .setMode(id, next)
-        .then(() => {
-          injectedModeRef.current = next;
-        })
         .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
     }
   }, []);
@@ -840,19 +840,21 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     if (entry === undefined) return;
     const head = nextDeliverable(entry);
     if (head === null) return;
-    setStates((prev) => {
-      const next = dequeue(prev, id, head.id);
-      statesRef.current = next;
-      return next;
-    });
+    applyStates((prev) => dequeue(prev, id, head.id));
     const fail = (cause: unknown): void =>
       setError(cause instanceof Error ? cause.message : String(cause));
     if (head.kind === "compact") {
-      void api.agent.compact(id, head.instructions).catch(fail);
+      const turn = buildTurn(id);
+      if (turn === null) return;
+      void api.agent
+        .compact({ sessionId: id, ...turn, ...(head.instructions !== undefined ? { instructions: head.instructions } : {}) })
+        .catch(fail);
     } else {
-      void api.agent.submit(id, head.text).catch(fail);
+      const turn = buildTurn(id);
+      if (turn === null) return;
+      void api.agent.submit({ sessionId: id, text: head.text, ...turn }).catch(fail);
     }
-  }, []);
+  }, [applyStates, buildTurn]);
 
   /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。 */
   const withdrawQueued = useCallback(
@@ -861,11 +863,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       if (id === null) return;
       const item = statesRef.current.get(id)?.queued.find((entry) => entry.id === queuedId);
       if (item === undefined) return;
-      setStates((prev) => {
-        const next = dequeue(prev, id, queuedId);
-        statesRef.current = next;
-        return next;
-      });
+      applyStates((prev) => dequeue(prev, id, queuedId));
       // compact 项没有「用户的话」可拿回——本仓没有斜杠命令 UI，把 `/compact`
       // 塞进输入框只会变成一条普通消息。它的撤回就是单纯取消。
       if (item.kind === "text") restoreToDraft(item.text);
@@ -878,13 +876,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     (sourceId: string, targetId: string, placement: "before" | "after") => {
       const id = sessionRef.current;
       if (id === null) return;
-      setStates((prev) => {
-        const next = moveQueuedIn(prev, id, sourceId, targetId, placement);
-        statesRef.current = next;
-        return next;
-      });
+      applyStates((prev) => moveQueuedIn(prev, id, sourceId, targetId, placement));
     },
-    [],
+    [applyStates],
   );
 
   /**
@@ -898,24 +892,26 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     const entry = statesRef.current.get(id);
     const item = entry?.queued.find((queued) => queued.id === queuedId);
     if (entry === undefined || item === undefined) return;
-    setStates((prev) => {
-      const next = dequeue(prev, id, queuedId);
-      statesRef.current = next;
-      return next;
-    });
+    applyStates((prev) => dequeue(prev, id, queuedId));
     const fail = (cause: unknown): void =>
       setError(cause instanceof Error ? cause.message : String(cause));
     // compact 的「立即」是另一回事：不打断，只是不等空闲马上压
     if (item.kind === "compact") {
-      void api.agent.compact(id, item.instructions).catch(fail);
+      const turn = buildTurn(id);
+      if (turn === null) return;
+      void api.agent
+        .compact({ sessionId: id, ...turn, ...(item.instructions !== undefined ? { instructions: item.instructions } : {}) })
+        .catch(fail);
       return;
     }
+    const turn = buildTurn(id);
+    if (turn === null) return;
     if (entry.phase === "idle") {
-      void api.agent.submit(id, item.text).catch(fail);
+      void api.agent.submit({ sessionId: id, text: item.text, ...turn }).catch(fail);
     } else {
-      void api.agent.interrupt(id, item.text).catch(fail);
+      void api.agent.interrupt({ sessionId: id, text: item.text, ...turn }).catch(fail);
     }
-  }, []);
+  }, [applyStates, buildTurn]);
 
 
 
