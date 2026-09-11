@@ -1,17 +1,22 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
-import { compactionBoundaryText, mergeCompactions } from "./session-states";
+import { compactionBoundaryStatus, mergeCompactions } from "./session-states";
 import { isAtBottom } from "./scroll";
 import {
   branchAnchorEntries,
   branchAnchorIds,
+  answerText,
   editDiffText,
+  failedFoldKey,
   fileViewFor,
   flattenRenderUnits,
+  formatToolDuration,
+  formatThinkingDuration,
   groupToolUnits,
+  groupTurns,
   indexToolResults,
   liveTailLines,
   parseEditDiff,
@@ -29,14 +34,18 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  turnAssistantRecords,
+  turnStats,
   writeLineCount,
   type IntraToken,
   type RenderEntry,
   type ToolGroupUnit,
   type ToolResultIndex,
+  type TurnGroupUnit,
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
@@ -44,8 +53,12 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
-import { contextRing, usageBreakdown, type ContextRing } from "./stats-format";
-import { isPlanBilling } from "@shared/known-providers";
+import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
+import { isPlanBilling, KNOWN_PROVIDERS, knownModelParams } from "@shared/known-providers";
+import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
+import { api } from "../../api";
+import { kindOf, modelContextText } from "../settings/providers-view-model.ts";
+import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
@@ -301,24 +314,6 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
     );
   }
 
-  // 工具结果不单独占一行——先建索引，渲染工具调用那一行时挂上去（见 tool-results.ts）
-  const toolResults = indexToolResults(session.transcript);
-  // 界碑按发生位置插回往来流：压缩摘要收进「已压缩」折叠行，历史一条不少
-  const records = mergeCompactions(session.compactions, session.transcript);
-  // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
-  const units = flattenRenderUnits(records);
-  const entries = groupToolUnits(units);
-  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
-  const activeThinkingKey = streamingThinkingKey(records, session.phase === "turn");
-  // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
-  const turnActive = session.phase === "turn";
-  // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
-  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的
-  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), entries);
-  const toolsRunning = session.transcript.some(
-    (item) => item.role === "tool" && item.status === "running",
-  );
-
   return (
     <Pane
       title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
@@ -336,49 +331,127 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
           )}
           {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
           <QueueStrip
-            view={session.queueView}
+            items={session.queued}
             phase={session.phase}
-            onInterrupt={session.interruptQueued}
-            onCancel={session.cancelQueued}
-            onEdit={session.editQueued}
-            onCancelPending={session.cancelPendingSend}
-            onEditPending={session.editPendingSend}
-            onRunPendingNow={session.runPendingNow}
+            onSendNow={session.sendQueuedNow}
+            onWithdraw={session.withdrawQueued}
+            onMove={session.moveQueuedTo}
           />
           {composer}
         </>
       }
     >
+      <TranscriptColumn
+        transcript={session.transcript}
+        compactions={session.compactions}
+        phase={session.phase}
+        retry={session.retry}
+        turnError={session.turnError}
+        loadingHistory={session.loadingHistory}
+        onBranch={session.branchFrom}
+      />
+    </Pane>
+  );
+}
+
+/**
+ * 转录列（memo 隔离）：往来流与它的一切派生（摊平 / 分组 / 折叠 / 分支锚点）只吃
+ * 这几个 props。隔离的理由是可感的点击延迟（2026-09-10）：草稿每个字、排队卡每次
+ * 乐观更新都会让 useChatSession 重渲染，此前整列几百行单元跟着全部重新对账一遍，
+ * 流式期间主线程被逐帧渲染占满，点击反馈排不上队。transcript 引用在 hook 侧
+ * 已按 entry 稳定化——闲时（打字 / 排队操作）memo 命中，整列跳过；流式期间它
+ * 逐帧变化，列照旧逐帧重渲染，活体的实时性不变。
+ */
+const TranscriptColumn = memo(function TranscriptColumn(props: {
+  transcript: readonly TranscriptItem[];
+  compactions: readonly CompactedRecord[];
+  phase: "idle" | "turn" | "compaction";
+  retry: RetryStatus | null;
+  turnError: string | null;
+  loadingHistory: boolean;
+  onBranch: (anchorItemId: string) => void;
+}) {
+  const { transcript } = props;
+  // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
+  const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
+  // 界碑按发生位置插回往来流：压缩摘要收进「已压缩」折叠行，历史一条不少
+  const records = useMemo(
+    () => mergeCompactions(props.compactions, transcript),
+    [props.compactions, transcript],
+  );
+  // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
+  const units = useMemo(() => flattenRenderUnits(records), [records]);
+  const entries = useMemo(() => groupToolUnits(units), [units]);
+  // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
+  const turnActive = props.phase === "turn";
+  // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
+  const turnView = useMemo(() => groupTurns(entries, turnActive, toolResults), [entries, turnActive, toolResults]);
+  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
+  const activeThinkingKey = useMemo(
+    () => streamingThinkingKey(records, turnActive),
+    [records, turnActive],
+  );
+  // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
+  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的。
+  // 锚点算在**大折叠视图**上：锚点的正文永远在折叠外面，按钮跟着正文走。
+  const branchRows = useMemo(
+    () => branchAnchorEntries(branchAnchorIds(records, toolResults), turnView),
+    [records, toolResults, turnView],
+  );
+  const toolsRunning = useMemo(
+    () => transcript.some((item) => item.role === "tool" && item.status === "running"),
+    [transcript],
+  );
+  // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
+  // 那轮没折叠就不挂，红字自带的图标是全部。
+  // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
+  // 局部名叫 failedFold：failedFoldKey 是 turn-rollup 里的函数，不能重名遮蔽。
+  const failedFold = props.turnError !== null ? failedFoldKey(turnView) : null;
+
+  return (
+    <>
       {/* 历史恢复在途：一行安静的加载指示，正文区不再是一片无解释的空白 */}
-      {session.loadingHistory && entries.length === 0 && <StatusLine spin>Loading…</StatusLine>}
+      {props.loadingHistory && entries.length === 0 && <StatusLine spin>Loading…</StatusLine>}
       {/* 空会话（没发过消息）：一行 tertiary 交代「这里为什么是空的」 */}
       {entries.length === 0 &&
-        !session.loadingHistory &&
-        session.phase === "idle" &&
-        session.turnError === null && (
+        !props.loadingHistory &&
+        props.phase === "idle" &&
+        props.turnError === null && (
           <StatusLine>No messages yet. Send the first one to start.</StatusLine>
         )}
-      {entries.map((entry, index) => {
+      {turnView.map((entry, index) => {
         const branchAfter = branchRows.get(index);
+        // 复制与速度都按锚点所在的**整轮**取：轮内可能有多条 assistant 记录（每次 toolCall 切一条）
+        const turnRecords = branchAfter !== undefined ? turnAssistantRecords(records, branchAfter) : [];
         return (
           <Fragment key={entry.key}>
-            <EntryView
-              entry={entry}
-              toolResults={toolResults}
-              activeThinkingKey={activeThinkingKey}
-              turnActive={turnActive}
-            />
+            {entry.kind === "turnGroup" ? (
+              <TurnRollupLine
+                group={entry}
+                toolResults={toolResults}
+                turnFailed={entry.key === failedFold}
+              />
+            ) : (
+              <EntryView
+                entry={entry}
+                toolResults={toolResults}
+                activeThinkingKey={activeThinkingKey}
+                turnActive={turnActive}
+              />
+            )}
             {branchAfter !== undefined && (
               <BranchRow
                 anchorItemId={branchAfter}
+                speed={replySpeed(turnRecords)}
+                copyText={answerText(turnRecords)}
                 disabled={toolsRunning}
-                onBranch={session.branchFrom}
+                onBranch={props.onBranch}
               />
             )}
           </Fragment>
         );
       })}
-      {session.turnError !== null && (
+      {props.turnError !== null && (
         /*
          * 回合失败标注（重试耗尽）：跟着失败的归属走——它追在谁后面，就贴着谁的
          * 对齐侧（用户消息居右、agent 消息居左，UserBubble 同款）。常见情形是模型
@@ -389,27 +462,27 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
           style={{
             display: "flex",
             width: "100%",
-            justifyContent: session.transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
+            justifyContent: transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
           }}
         >
-          <Notice tone="bad">{session.turnError}</Notice>
+          <Notice tone="bad">{props.turnError}</Notice>
         </div>
       )}
-      {session.phase === "turn" &&
-        (session.retry !== null ? <Retrying status={session.retry} /> : <Responding />)}
-      {session.phase === "compaction" && (
+      {props.phase === "turn" &&
+        (props.retry !== null ? <Retrying status={props.retry} /> : <Responding transcript={transcript} />)}
+      {props.phase === "compaction" && (
         <>
           <Compacting />
-          {session.retry !== null && (
+          {props.retry !== null && (
             <div style={{ display: "flex", justifyContent: "center" }}>
-              <Retrying status={session.retry} />
+              <Retrying status={props.retry} />
             </div>
           )}
         </>
       )}
-    </Pane>
+    </>
   );
-}
+});
 
 /**
  * 聊天面的骨架：页头 / 可滚动的内容列 / 底部。实时会话与历史会话共用它——
@@ -544,7 +617,20 @@ function Pane(props: {
 function ComposerBar(props: { session: ChatSession }) {
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
-  const scope = workspace?.name ?? (session.cwd === null ? "Home" : basename(session.cwd));
+  // 作用域显示**目录名**。老工作区落库的名可能是完整路径（早期创建没截尾），
+  // 所以两个分支都要过 basename——显示层截尾，不动落库数据
+  const scopeSource = workspace?.name ?? session.cwd;
+  const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
+
+  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
+  // 拉不到就空目录——徽标如实落到 fallback，不挡选模型
+  const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
+  useEffect(() => {
+    void api.provider
+      .builtins()
+      .then(setCatalog)
+      .catch(() => setCatalog([]));
+  }, []);
 
   const scopeItems: MenuItem[] = [
     {
@@ -573,17 +659,45 @@ function ComposerBar(props: { session: ChatSession }) {
     onSelect: () => session.changeMode(value),
   }));
 
-  // 所有 provider 的所有已启用模型摊平；provider 名字放在右边当说明
-  const modelItems: MenuItem[] = session.usable.flatMap((provider) =>
-    provider.models.declared.map((declared) => ({
-      id: `${provider.id}:${declared.id}`,
-      label: declared.id,
-      hint: provider.displayName,
-      checked:
-        session.model?.providerId === provider.id && session.model.modelId === declared.id,
-      onSelect: () => session.chooseModel(provider.id, declared.id),
-    })),
-  );
+  // 按厂商分组：厂商名做组头行，模型行缩进其下只带参数徽标——参数口径与设置页
+  // 完全同源（用户覆盖 > pi 目录 > 白名单 > 兜底），两边讲同一个故事
+  const modelItems: MenuItem[] = session.usable.flatMap((provider) => {
+    const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
+    const metaOf = (id: string): BuiltinModel | undefined =>
+      known?.catalogId === undefined
+        ? undefined
+        : catalog.find((c) => c.id === known.catalogId)?.models.find((m) => m.id === id);
+    const rows: MenuItem[] = [
+      { id: `hdr:${provider.id}`, label: provider.displayName, header: true },
+    ];
+    for (const declared of provider.models.declared) {
+      const badge = modelContextText(
+        declared,
+        metaOf(declared.id),
+        knownModelParams(known?.id ?? "", declared.id),
+      );
+      rows.push({
+        id: `${provider.id}:${declared.id}`,
+        label: declared.id,
+        badge: (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
+            <span className="pv-badge" title="Context window">
+              {badge.text}
+            </span>
+            {declared.vision === true && (
+              <span className="pv-badge" title="Accepts image input — multimodal">
+                <Icon name="image" size={11} strokeWidth={1.8} />
+              </span>
+            )}
+          </span>
+        ),
+        checked:
+          session.model?.providerId === provider.id && session.model.modelId === declared.id,
+        onSelect: () => session.chooseModel(provider.id, declared.id),
+      });
+    }
+    return rows;
+  });
 
   return (
     <>
@@ -618,13 +732,13 @@ function ComposerBar(props: { session: ChatSession }) {
       {modelItems.length > 0 && (
         <Menu
           items={modelItems}
+          searchable
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
                 title="Model · applies from the next message"
               onClick={toggle}
               chevron
-              italic
             >
               {session.model?.modelId ?? "No model"}
             </Chip>
@@ -833,10 +947,113 @@ function EntryView(props: {
   return <ToolGroupLine group={entry} toolResults={props.toolResults} turnActive={props.turnActive} />;
 }
 
-/** 用户消息：右对齐的独立气泡；只有 text 块进气泡。 */
-function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
+/**
+ * 大折叠行（一轮一行）：agent 整轮回答落定后，这轮的思考行与工具行/组收成
+ * 一条统计——`Worked 45s · thought 2 · tools 8 · bash 3 · read 5 1 · edit 2`
+ * （段与段之间用 · 分隔；失败数是紧跟在工具次数后面的红色数字）。
+ * Worked 之后每个段都是「标签 + 数字」同一语法：thought / tools 与工具名
+ * 同一套小写词汇，数字一律在后。
+ * 工具类别用**真实工具名**而非组行动词（Run/Read…）：统计行是机器事实，
+ * Run 会把 bash 与 powershell 混为一谈，且成员行展开后显示的也是同一套名字。
+ * 思考排在工具之前——先想后做，时间序。
+ * 展开就是成员行原样（小折叠降级为成员，两层折叠契约）；轮耗时是记录时间戳
+ * 的跨度（adapter 每帧落 now()，旧会话也准）。
+ * 图标裁决（用户）：折叠头**不带图标**——工具类失败靠跟在工具后面的红色数字
+ * 说话；只有回合级失败（网络中断、重试耗尽——turnError 的红字就渲染在折叠
+ * 后面）才在行首亮红 triangle，图标与那行红字是一对。
+ * 成员行与折叠头同左缘（不缩进），与 ToolGroupLine 的成员同一规矩。
+ */
+function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex; turnFailed: boolean }) {
+  const [open, setOpen] = useState(false);
+  const { group } = props;
+  const stats = turnStats(group, props.toolResults);
+  // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
+  // 工具次数与它的失败数字是一个段，中间不插
+  const segments: ReactNode[] = [];
+  if (stats.durationMs !== null) {
+    segments.push(
+      <span style={headLabel(false)}>
+        {COPY.worked} {formatToolDuration(stats.durationMs)}
+      </span>,
+    );
+  }
+  if (stats.thinkingCount > 0) {
+    segments.push(
+      <span style={SLOT.status}>
+        {COPY.thought} {stats.thinkingCount}
+      </span>,
+    );
+  }
+  if (stats.calls > 0) {
+    segments.push(<span style={SLOT.status}>{COPY.tools(stats.calls)}</span>);
+  }  for (const { toolName, count, failed } of stats.byTool) {
+    segments.push(
+      <span style={SLOT.status}>
+        {toolName} {count}
+        {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
+        {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
+      </span>,
+    );
+  }
   return (
-    <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        {props.turnFailed && (
+          <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
+            <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          </span>
+        )}
+        {segments.map((segment, index) => (
+          <Fragment key={index}>
+            {index > 0 && <span style={SEP_DOT}>·</span>}
+            {segment}
+          </Fragment>
+        ))}
+      </CollapseRow>
+      {open && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          {group.members.map((member) => (
+            <EntryView
+              key={member.key}
+              entry={member}
+              toolResults={props.toolResults}
+              activeThinkingKey={null}
+              turnActive={false}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 用户消息：右对齐的独立气泡；只有 text 块进气泡。text 走 MathText——
+ * 公式就地渲染（行内随文、块级居中），**不解析 markdown**：其余一切按原样，
+ * 用户气泡与模型回复（MarkdownBlock）刻意是两套渲染。
+ * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
+ */
+function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  const copyText = props.item.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        width: "100%",
+        gap: 2,
+      }}
+    >
       <div
         style={{
           width: "fit-content",
@@ -853,32 +1070,85 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         }}
       >
         {props.item.content.map((block, index) =>
-          block.type === "text" ? <span key={index}>{block.text}</span> : null,
+          block.type === "text" ? <MathText key={index} text={block.text} /> : null,
         )}
       </div>
+      <button
+        type="button"
+        title={copied ? "Copied" : "Copy message"}
+        aria-label={copied ? "Copied" : "Copy message"}
+        disabled={copyText === ""}
+        onClick={() => {
+          void navigator.clipboard.writeText(copyText);
+          setCopied(true);
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: 3,
+          border: "none",
+          background: "none",
+          color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
+          cursor: copyText === "" ? "default" : "pointer",
+        }}
+      >
+        <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
+      </button>
     </div>
   );
 }
 
 /**
  * 分支按钮行（C-2）：挂在每轮 agent 最终完整输出的下面，回答落定即**常驻显示**
- * （用户裁决：不用 hover 浮现）。图标即按钮——悬停 / 读屏都走「从当前分支」这同一个
+ * （用户裁决：不用 hover 浮现）。图标即按钮——悬停 / 读屏都走「Branch from here」这同一个
  * 名字。点了开出一条新会话（该回答及之前的全部），原会话原封不动，所以**无需确认弹窗**。
  * 工具还在跑时禁用：它的结果没齐，此刻裁出去的上下文是畸形的。
+ * 分支旁的复制图标（usage-speed-X 同行）：拷该回答的正文（markdown 原样，只含 text 块），
+ * 成功后图标换对勾 1.2s——复制成功用图标换字形，不用颜色（ActionRail 同款）。
+ * 再右边是这条回答的生成速度：adapter 挂在终态帧上的真值，随记录落盘、重开即回；
+ * 过不了噪音门的回答没有这个字段，也就不显示。
  */
 function BranchRow(props: {
   anchorItemId: string;
+  speed: number | null;
+  copyText: string;
   disabled: boolean;
   onBranch: (anchorItemId: string) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   return (
-    <div style={{ display: "flex", width: "100%" }}>
+    <div style={{ display: "flex", width: "100%", alignItems: "center", gap: "calc(var(--space-3) / 2)" }}>
+      <button
+        type="button"
+        title={copied ? "Copied" : "Copy answer"}
+        aria-label={copied ? "Copied" : "Copy answer"}
+        onClick={() => {
+          void navigator.clipboard.writeText(props.copyText);
+          setCopied(true);
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: 4,
+          border: "none",
+          background: "none",
+          color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
+      </button>
       <button
         type="button"
         disabled={props.disabled}
         onClick={() => props.onBranch(props.anchorItemId)}
-        title="从当前分支"
-        aria-label="从当前分支"
+        title={COPY.branchFromHere}
+        aria-label={COPY.branchFromHere}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -891,6 +1161,18 @@ function BranchRow(props: {
       >
         <Icon name="git-branch" size={12} strokeWidth={1.8} />
       </button>
+      {props.speed !== null && (
+        <span
+          style={{
+            color: "var(--color-text-tertiary)",
+            fontFamily: "var(--font-family-business)",
+            fontVariantNumeric: "tabular-nums",
+            fontSize: "var(--font-size-micro)",
+          }}
+        >
+          {formatSpeed(props.speed)}
+        </span>
+      )}
     </div>
   );
 }
@@ -991,19 +1273,77 @@ const HEAD_WRAP = {
   flex: "0 0 auto",
 } satisfies React.CSSProperties;
 
-/** 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。 */
+/** 大折叠统计段的分隔点：段落边界的标点，最淡一档——它是标点不是内容。 */
+const SEP_DOT = {
+  flex: "0 0 auto",
+  color: "var(--color-text-tertiary)",
+  opacity: 0.6,
+} satisfies React.CSSProperties;
+
+/**
+ * 展开体的纵向导轨：与行首 icon 的**左缘相切**——x = 10px（按钮内边距，即 icon 的
+ * 左缘）。展开内容一律不越过导轨左侧：展开体明确属于它上面那一行，不与
+ * 别的行抢左缘；多条展开体并排时导轨与 icon 连成一条竖线。
+ */
+const RAIL_X = 10;
+/** 导轨用 border-default 而非 subtle：深色下 subtle 与地面只差几阶（black #1e1e1e 对
+ * #0a0a0a），孤立的 1px 竖线会隐形；default（#262626 / #333534）强一档才立得住。
+ * 浅色下两者几乎无差，三主题同一 token。 */
+const RAIL_LINE = "1px solid var(--color-border-default)";
+
+/**
+ * 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。
+ * 左侧挂导轨（顶线与导轨在左上角相接成直角），正文从导轨右侧起。
+ */
 const EXPANDED_BODY = {
   margin: 0,
+  marginLeft: RAIL_X,
   padding: "var(--space-2)",
   maxHeight: 320,
   overflow: "auto",
   borderTop: "1px solid var(--color-border-subtle)",
+  borderLeft: RAIL_LINE,
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-caption)",
   lineHeight: 1.6,
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
 } satisfies React.CSSProperties;
+
+/**
+ * markdown 展开体（压缩界碑行用）：EXPANDED_BODY 的骨架（hairline 顶线 + 320 封顶 +
+ * 可滚），排版让给 .chat-md——摘要是结构化文档，不套 mono caption / pre-wrap。
+ * 导轨照挂：界碑行虽无 icon，竖线仍与其余展开体同一位置（x=10px），内容列全体一致。
+ */
+const MARKDOWN_EXPANDED_BODY = {
+  margin: 0,
+  marginLeft: RAIL_X,
+  padding: "var(--space-2)",
+  maxHeight: 320,
+  overflow: "auto",
+  borderTop: "1px solid var(--color-border-subtle)",
+  borderLeft: RAIL_LINE,
+} satisfies React.CSSProperties;
+
+// ── 信息区文案（本模块全部用户可见字符串集中在此；英文先行，中文化等真实需求出现再抽字典） ──
+const COPY = {
+  thinking: "Thinking",
+  compacted: "Compacted",
+  compacting: "Compacting context…",
+  waitingOutput: "(waiting for output…)",
+  noOutput: "(no output)",
+  branchFromHere: "Branch from here",
+  worked: "Worked",
+  thought: "thought",
+  lines: (n: number): string => `${n} lines`,
+  files: (n: number): string => `${n} files`,
+  commands: (n: number): string => `${n} commands`,
+  matches: (n: number): string => `${n} matches`,
+  directories: (n: number): string => `${n} directories`,
+  calls: (n: number): string => `${n} calls`,
+  tools: (n: number): string => `tools ${n}`,
+  failed: (n: number): string => `${n} failed`,
+};
 
 /** 工具的类型图标：图标只说「哪一类事」，具体哪个工具由旁边的名字说。 */
 function toolIcon(toolName: string): IconName {
@@ -1026,43 +1366,44 @@ function toolIcon(toolName: string): IconName {
   }
 }
 
-/** 组行的动词标签：一行里 N 件同类事，说类别不说工具名；不认识的用回工具名。 */
+/**
+ * 组行的标签。bash / powershell 直接用**真实工具名**（用户裁决：不说 Run）——
+ * Run 是编造的动词，还把两个不同的工具混为一谈；其余保留动词标签（Read/Search…，
+ * 与「N files」量词配套），不认识的工具本就回落真名。
+ */
 function toolGroupLabel(toolName: string): string {
   switch (toolName) {
-    case "bash":
-    case "powershell":
-      return "执行";
     case "read":
-      return "读取";
+      return "Read";
     case "grep":
     case "find":
-      return "搜索";
+      return "Search";
     case "write":
-      return "写入";
+      return "Write";
     case "edit":
-      return "修改";
+      return "Edit";
     case "ls":
-      return "浏览";
+      return "List";
     default:
       return toolName;
   }
 }
 
-/** 组头折叠态的量词——跟着动词说量级：「读取 3 个文件 / 执行 3 条命令」。 */
+/** 组头折叠态的量词——跟着动词说量级：「Read 3 files / Run 3 commands」。 */
 function toolGroupCountLabel(toolName: string, count: number): string {
   switch (toolName) {
     case "read":
     case "write":
-      return `${count} 个文件`;
+      return COPY.files(count);
     case "bash":
     case "powershell":
-      return `${count} 条命令`;
+      return COPY.commands(count);
     case "edit":
-      return `${count} 处`;
+      return COPY.matches(count);
     case "ls":
-      return `${count} 个目录`;
+      return COPY.directories(count);
     default:
-      return `${count} 次`;
+      return COPY.calls(count);
   }
 }
 
@@ -1086,6 +1427,15 @@ function ToolLine(props: {
   const active = result === undefined || result.status === "running";
   const summary = summarizeToolResult(result);
   const callSummary = toolCallSummary(props.toolName, props.input);
+  // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
+  // 完整路径进 tooltip。toolCallSummary 本身保持原始 path 语义（editGroupFileCount 靠它去重）
+  const pathTool =
+    props.toolName === "read" ||
+    props.toolName === "write" ||
+    props.toolName === "edit" ||
+    props.toolName === "ls";
+  const callLabel =
+    callSummary !== null && pathTool ? splitPathTail(callSummary).name : callSummary;
   // 跑着的 shell 有实时增量可展，其余工具跑完才有完整结果（见 toolExpandable）
   const expandable = toolExpandable(result, props.toolName);
   const live = expandable && active;
@@ -1097,8 +1447,7 @@ function ToolLine(props: {
   const body = live ? liveTailLines(rawBody) : rawBody;
   // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
   const fileView = finished ? fileViewFor(props.toolName, props.input, result) : null;
-  const fileLang =
-    fileView !== null ? langFromPath(toolCallSummary(props.toolName, props.input) ?? "") : null;
+  const fileLang = fileView !== null ? langFromPath(callSummary ?? "") : null;
   const writeLines =
     !open && props.toolName === "write" && fileView !== null ? writeLineCount(props.input) : null;
   // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有
@@ -1120,7 +1469,14 @@ function ToolLine(props: {
           </span>
           <span style={headLabel(active)}>{props.toolName}</span>
         </span>
-        {callSummary !== null && <span style={SLOT.sub}>{callSummary}</span>}
+        {callLabel !== null && (
+          <span
+            title={callSummary !== callLabel ? (callSummary ?? undefined) : undefined}
+            style={pathTool ? { ...SLOT.sub, color: "var(--color-chat-link)" } : SLOT.sub}
+          >
+            {callLabel}
+          </span>
+        )}
         {/* 增删统计紧跟文件名（git stat 读法）；与展开后 DiffView 头重复，展开时藏起 */}
         {!open && stats !== null && (
           <span style={SLOT.status}>
@@ -1130,7 +1486,7 @@ function ToolLine(props: {
         )}
         {/* write 的量词是行数（无增删语义，不染色）；有了它「N chars」是统计句的长度，让位 */}
         {!open && stats === null && writeLines !== null && (
-          <span style={SLOT.status}>{writeLines} 行</span>
+          <span style={SLOT.status}>{COPY.lines(writeLines)}</span>
         )}
         {/* 有统计时「N lines」是同一量级的第二遍，让位 */}
         {summary !== null && !active && stats === null && writeLines === null && (
@@ -1161,6 +1517,7 @@ function ToolLine(props: {
  * 折叠态组头带 `× N`（成员可见时不显示）；组内有失败时组头换红色 triangle-alert
  * ——折了也不能让失败无声消失。组头亮暗呼吸跟随成员：任一还在跑 → 行首
  * secondary + 呼吸；**全部落定**才退到 tertiary。
+ * 成员行与组头**同左缘**（不缩进）：折叠行的 icon 上下连成一条线，缩进会把线打断。
  */
 function ToolGroupLine(props: {
   group: ToolGroupUnit;
@@ -1193,14 +1550,16 @@ function ToolGroupLine(props: {
         </span>
         {!open && <span style={SLOT.status}>{toolGroupCountLabel(group.toolName, status.total)}</span>}
         {!open && group.toolName === "edit" && fileCount !== null && (
-          <span style={SLOT.status}>{fileCount} 个文件</span>
+          <span style={SLOT.status}>{COPY.files(fileCount)}</span>
         )}
         {!open && failed && (
-          <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>{status.failed} 失败</span>
+          <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>
+            {COPY.failed(status.failed)}
+          </span>
         )}
       </CollapseRow>
       {open && (
-        <div style={{ display: "grid", gap: "var(--space-1)", paddingLeft: "var(--space-2)" }}>
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
           {group.calls.map((call) => (
             <ToolLine
               key={call.key}
@@ -1232,7 +1591,10 @@ function DiffView(props: { diff: string }) {
       style={{
         maxHeight: 320,
         overflow: "auto",
+        marginLeft: RAIL_X,
+        paddingLeft: "var(--space-2)",
         borderTop: "1px solid var(--color-border-subtle)",
+        borderLeft: RAIL_LINE,
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-caption)",
         lineHeight: 1.6,
@@ -1277,7 +1639,8 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "4ch 1fr",
+        // 轨道要连 LINE_NUM_COLUMN 的横向内边距一起算进去，否则三位数行号顶穿竖线挤进正文
+        gridTemplateColumns: "calc(4ch + var(--space-2) + var(--space-1)) 1fr",
         background:
           kind === "add"
             ? "var(--color-success-soft)"
@@ -1336,8 +1699,9 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
   const lines = props.lang !== null ? highlightLines(props.text, props.lang) : null;
   const rows: readonly (string | readonly TokenSpan[])[] = lines ?? props.text.split("\n");
   const lastLine = props.startLine + rows.length - 1;
-  // 行号列宽随位数长（read/write 不设上限），最小 3ch 保持与 diff 4ch 相近的观感
-  const gutter = `${Math.max(3, String(lastLine).length)}ch`;
+  // 轨道 = 位数 + 行号格的横向内边距（不算 padding 的话三位数起就顶穿竖线挤进正文）
+  const digits = Math.max(3, String(lastLine).length);
+  const gutter = `calc(${digits}ch + var(--space-2) + var(--space-1))`;
   return (
     <div
       className="scroll"
@@ -1346,7 +1710,10 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
         gridTemplateColumns: `${gutter} 1fr`,
         maxHeight: 320,
         overflow: "auto",
+        marginLeft: RAIL_X,
+        paddingLeft: "var(--space-2)",
         borderTop: "1px solid var(--color-border-subtle)",
+        borderLeft: RAIL_LINE,
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-caption)",
         lineHeight: 1.6,
@@ -1409,7 +1776,7 @@ function PlainToolBody(props: {
         className="scroll"
         style={{ ...PLAIN_BODY, color: "var(--color-text-secondary)", padding: "0 var(--space-2)" }}
       >
-        {props.live === true ? "（等待输出…）" : "（无输出）"}
+        {props.live === true ? COPY.waitingOutput : COPY.noOutput}
       </div>
     );
   }
@@ -1431,11 +1798,13 @@ function PlainToolBody(props: {
   );
 }
 
-/** 展开体滚动容器的共用形态（DiffView / FileContentView 同款，无内边距——行自带） */
+/** 展开体滚动容器的共用形态（无水平内边距——行自带）；左侧挂 RAIL 导轨，同 EXPANDED_BODY。 */
 const PLAIN_BODY = {
   maxHeight: 320,
   overflow: "auto",
+  marginLeft: RAIL_X,
   borderTop: "1px solid var(--color-border-subtle)",
+  borderLeft: RAIL_LINE,
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-caption)",
   lineHeight: 1.6,
@@ -1480,7 +1849,7 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
     return (
       <div key={key} style={BODY_LINE}>
         {dir !== "" && <span style={{ color: "var(--color-text-secondary)" }}>{dir}</span>}
-        <span style={{ color: "var(--color-text-primary)" }}>{name === "" ? " " : name}</span>
+        <span style={{ color: "var(--color-chat-link)" }}>{name === "" ? " " : name}</span>
       </div>
     );
   }
@@ -1494,7 +1863,7 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
 /**
  * 思考行：brain 图标（进行中保持 info 蓝——全转写里唯一的蓝记号）+「思考」
  * label + 副标。副标是时间态：**流式中**是活尾预览（新的一行顶替上一行）；
- * **落定**换成「持续了 N 秒」（现场计时，重开的旧会话量不到就什么都不显示）。
+ * **落定**换成秒数（`3s`，现场计时，重开的旧会话量不到就什么都不显示）。
  * 行首呼吸同其它过程行：进行中 secondary + 呼吸，写完呼吸与高亮一起消失。
  * 要看全文点开，展开体 160px 封顶滚动；**流式中展开会贴底跟随**（上滚脱离、
  * 回底恢复），落定后内容定格，跟随停止。
@@ -1513,7 +1882,7 @@ function ThinkingLine(props: { text: string; active: boolean; blockKey: string }
           <span style={{ color: active ? "var(--color-info)" : headIconColor(active) }}>
             <Icon name="brain" size={14} strokeWidth={1.8} />
           </span>
-          <span style={headLabel(active)}>思考</span>
+          <span style={headLabel(active)}>{COPY.thinking}</span>
         </span>
         {/* 展开时预览让位——正文已经是更全的信息，同一行不必再放一遍尾巴 */}
         {active && !open && preview !== "" && <span style={SLOT.sub}>{preview}</span>}
@@ -1538,11 +1907,14 @@ function ThinkingLine(props: { text: string; active: boolean; blockKey: string }
 }
 
 /**
- * 压缩界碑行：折叠时一行（已压缩 + token 数变化），点开看摘要全文。
- * 与 ThinkingLine 同一份折叠契约，展开体 320px 封顶（摘要值得读，但也不许顶走输入卡）。
- * 摘要是 markdown——它走 MarkdownBlock，与 agent 回复同一套渲染。
- * 不放图标：archive 与侧栏「归档」撞车，文字本身已足够指认。
- * 上方一条 hairline + 多留一倍间距：界碑是「分段」，不是上一轮回复的一部分。
+ * 压缩界碑行：折叠时一行（Compacted + token 数变化），点开看摘要全文。
+ * 头部与工具/思考行同一份 CollapseRow 契约（32px 热区、hover、三槽）；无图标——
+ * archive 与侧栏「归档」撞车，文字本身已足够指认。label 是落定时间态（headLabel(false)），
+ * 界碑永远不是「正在进行的事」，没有呼吸。
+ * 界碑语义由外层 wrapper 承担：上方一条 hairline + 多留一倍间距——「分段，
+ * 不是上一轮回复的一部分」，不随壳统一抹掉。
+ * 展开体 320px 封顶（摘要值得读，但也不许顶走输入卡）；摘要是 markdown——
+ * 走 MarkdownBlock 与 agent 回复同一套渲染，容器用 MARKDOWN_EXPANDED_BODY。
  */
 function CompactedLine(props: { record: CompactedRecord }) {
   const [open, setOpen] = useState(false);
@@ -1557,42 +1929,14 @@ function CompactedLine(props: { record: CompactedRecord }) {
         paddingTop: "var(--space-3)",
       }}
     >
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          width: "fit-content",
-          maxWidth: "100%",
-          minWidth: 0,
-          padding: 0,
-          border: "none",
-          background: "none",
-          color: "var(--color-text-secondary)",
-          fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-control)",
-          textAlign: "left",
-          cursor: "pointer",
-        }}
-      >
-        <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {compactionBoundaryText(props.record)}
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        <span style={HEAD_WRAP}>
+          <span style={headLabel(false)}>{COPY.compacted}</span>
         </span>
-      </button>
+        <span style={SLOT.status}>{compactionBoundaryStatus(props.record)}</span>
+      </CollapseRow>
       {open && (
-        <div
-          className="scroll"
-          style={{
-            maxHeight: 320,
-            overflow: "auto",
-            padding: "var(--space-2) var(--space-3)",
-            background: "var(--color-bg-muted)",
-            borderRadius: "var(--radius-md)",
-          }}
-        >
+        <div className="scroll" style={MARKDOWN_EXPANDED_BODY}>
           <MarkdownBlock text={props.record.summary} />
         </div>
       )}
@@ -1600,7 +1944,34 @@ function CompactedLine(props: { record: CompactedRecord }) {
   );
 }
 
-function Responding() {
+function Responding(props: { transcript: readonly TranscriptItem[] }) {
+  const { transcript } = props;
+  // 秒针：Responding 只在回答期间挂载，一秒一跳不白算（Retrying 同款）
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  // 耗时：本轮用户发话至今——「agent 回答了多久」是人感知的那段时间
+  let userTs: number | null = null;
+  for (const item of transcript) {
+    if (item.role === "user") userTs = item.timestamp;
+  }
+  const elapsed = userTs !== null ? formatThinkingDuration(Math.max(0, now - userTs)) : null;
+  // 流式速度：in-flight 的字符估算（estimateStreamingTokens，英文校准的粗账——
+  // 中文会低估数倍，落定即被回答旁的真值顶替）÷ 本条消息已生成的秒数
+  let speedText: string | null = null;
+  const streaming = transcript.at(-1);
+  if (streaming !== undefined && streaming.role === "assistant" && streaming.status === "streaming") {
+    const chars = streaming.content.reduce(
+      (sum, block) =>
+        sum + (block.type === "text" ? block.text.length : block.type === "thinking" ? block.thinking.length : 0),
+      0,
+    );
+    const start = streamingStart(streaming.id);
+    const speed = start !== null ? messageSpeed(now - start, estimateStreamingTokens(chars)) : null;
+    if (speed !== null) speedText = formatSpeed(speed);
+  }
   return (
     <p
       className="orbita-breath"
@@ -1618,6 +1989,17 @@ function Responding() {
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
       Responding
+      {elapsed !== null && <span>· {elapsed}</span>}
+      {speedText !== null && (
+        <span
+          style={{
+            fontFamily: "var(--font-family-business)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          · {speedText}
+        </span>
+      )}
     </p>
   );
 }
@@ -1644,7 +2026,7 @@ function Compacting() {
       <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
-      正在压缩上下文…
+      {COPY.compacting}
     </p>
   );
 }
@@ -1768,7 +2150,8 @@ function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
   return null;
 }
 
+/** 取路径尾段。分隔符 `/` 与 `\` 都认——Windows 的 cwd 是反斜杠，只切 `/` 会整条漏出来 */
 function basename(path: string): string {
-  const parts = path.split("/").filter((part) => part !== "");
+  const parts = path.split(/[\\/]/).filter((part) => part !== "");
   return parts[parts.length - 1] ?? path;
 }

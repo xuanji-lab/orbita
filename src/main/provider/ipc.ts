@@ -44,13 +44,18 @@ export function registerProviderIpc(store: ProviderStore): void {
     ipcChannels.providerDiscover,
     async (
       _event,
-      input: { baseUrl: string; api: string; apiKey?: string; providerId?: string },
+      input: { baseUrl: string; api: string; apiKey?: string; providerId?: string; headers?: Record<string, string> },
     ): Promise<DiscoveredModels> => {
       const apiKey = await resolveKey(store, input.apiKey, input.providerId);
       if (apiKey === null) {
         return { ok: false, models: [], message: "Enter an API key first." };
       }
-      return discoverModels({ baseUrl: input.baseUrl, api: input.api, apiKey });
+      return discoverModels({
+        baseUrl: input.baseUrl,
+        api: input.api,
+        apiKey,
+        ...(input.headers === undefined ? {} : { headers: input.headers }),
+      });
     },
   );
 
@@ -59,11 +64,22 @@ export function registerProviderIpc(store: ProviderStore): void {
     ipcChannels.providerTest,
     async (
       _event,
-      input: { api: string; baseUrl: string; modelId: string; apiKey?: string; providerId?: string },
+      input: {
+        api: string;
+        baseUrl: string;
+        modelId: string;
+        apiKey?: string;
+        providerId?: string;
+        headers?: Record<string, string>;
+      },
     ): Promise<ConnectionTestResult> => {
       const apiKey = await resolveKey(store, input.apiKey, input.providerId);
       if (apiKey === null) return { ok: false, message: "Enter an API key first." };
-      return testConnection({ ...input, apiKey });
+      return testConnection({
+        ...input,
+        apiKey,
+        ...(input.headers === undefined ? {} : { headers: input.headers }),
+      });
     },
   );
 
@@ -77,5 +93,9 @@ export function registerProviderIpc(store: ProviderStore): void {
 
   ipcMain.handle(ipcChannels.providerRemove, (_event, id: string): Promise<void> =>
     store.remove(id),
+  );
+
+  ipcMain.handle(ipcChannels.providerReorder, (_event, ids: string[]): Promise<void> =>
+    store.reorder(ids),
   );
 }

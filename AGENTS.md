@@ -83,6 +83,7 @@ token 规范与实现不一致时以设计系统为准。
 
 - **一个功能一个 PR**。commit 前缀：`feat(scope):` / `fix(scope):` / `chore(scope):` / `docs(scope):`。
 - 大改动前先写 `docs/plans/YYYY-MM-DD-主题.md`（设计意图 + 被否决的方案 + 为什么）；小改动不写。
+  **计划文档只留本地**——`docs/plans/` 在 `.gitignore`，不进 commit（2026-09-06 裁决）。
   本分支**不写 progress 笔记**——PR 的 diff 与描述就是异步同步机制。
 - **版本号暂停使用**：本分支尚无发布通道，版本号没有消费者，`package.json` 的 version 冻结不动。
   发布通道落地当天恢复「每次改动至少 patch +1」。

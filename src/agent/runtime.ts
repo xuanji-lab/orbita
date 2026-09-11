@@ -30,7 +30,6 @@ import {
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
-import { planQueueEdit } from "./queue-edit.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
 
@@ -395,14 +394,6 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     }
     if (event.type === "agent_start") send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
     // 排队快照原样翻译：入队 / 投递 / 清队后 pi 都重发整份，renderer 覆盖槽即可
-    if (event.type === "queue_update") {
-      send({
-        type: "queue",
-        sessionId: command.sessionId,
-        steering: [...event.steering],
-        followUp: [...event.followUp],
-      });
-    }
     if (event.type === "agent_settled") {
       send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
       // 整轮落定兜一次：接住最后一条消息之后落账的用量（toolResult 计费）与 abort 边角。
@@ -636,50 +627,21 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
   if (command.type === "interrupt") {
-    // **立即发送 = 打断**（wafo 2026-09-03 裁决）：pi 的 steering 只在两次 LLM 响应
-    // 之间消化（agent-loop.ts:166，工具调用跑完才轮到），走插队永远打断不了
-    // 正在跑的工具。所以这里不走队列：出队 → abort → 它自己成为新一轮。
-    const { steering, followUp } = live.session.clearQueue();
-    const combined = [...steering, ...followUp];
-    // 对账守卫：队列刚被并发改过（index/text 对不上）就整单放弃，宁可不发不切错
-    if (combined[command.index] !== command.text) return;
-    combined.splice(command.index, 1);
-    const steeringCount = steering.length - (command.index < steering.length ? 1 : 0);
-    // 队列先清空再 abort——否则 post-run 看到还有排队就会自动续轮，打断变成换人
-    await live.session.abort();
+    // 队列已经在 renderer 一侧（见 docs/plans/2026-09-06-排队队列所有权收回.md），
+    // 这里只做两件事：停下正在跑的这一轮，把这句话作为新一轮发出去。
+    // 不碰 pi 的 steering/followUp——那正是这次要断掉的耦合。
+    if (live.session.isStreaming) await live.session.abort();
     live.echoed.add(command.text);
     for (const progress of live.adapter.userPrompt(command.text)) {
       send({ type: "progress", sessionId: command.sessionId, progress });
     }
     await live.session.prompt(command.text, { expandPromptTemplates: false });
-    // 其余排队消息全部转 followUp 回队：它们等打断后的这一轮结束再投递，
-    // 不混进被插队的这一轮（原 steer/followUp 之分在打断语境下不再有意义）
-    for (const text of combined.slice(0, steeringCount)) await live.session.followUp(text);
-    for (const text of combined.slice(steeringCount)) await live.session.followUp(text);
     return;
   }
   if (command.type === "abort") {
     // 停止只停当前轮：排队消息滞留在 pi 队列（idle 下的合法状态），下次发送时
     // loop 自动带上投递。不 clearQueue——用户裁决：排队是用户的意图，停止不该替他放弃。
     live.session.abort();
-    return;
-  }
-  if (command.type === "queueEdit") {
-    // pi 没有单条删 / 挪的 API：先全清拿真值，再按规划重放。
-    // 期间 loop 正在 stream 等待中，drain 不会插进来；即使竞态，后果只是某条
-    // 提前/推后投递，不是丢失。
-    const { steering, followUp } = live.session.clearQueue();
-    const plans = planQueueEdit(
-      steering,
-      followUp,
-      command.index,
-      command.text,
-      command.op,
-      command.newText,
-    );
-    for (const plan of plans) {
-      await (plan.as === "steer" ? live.session.steer(plan.text) : live.session.followUp(plan.text));
-    }
     return;
   }
   if (command.type === "compact") {

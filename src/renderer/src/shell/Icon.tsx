@@ -6,22 +6,30 @@ import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?ra
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
+import chevronUp from "../../../../Orbita Design System/assets/icons/lucide/chevron-up.svg?raw";
 import clock from "../../../../Orbita Design System/assets/icons/lucide/clock.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
+import cornerDownLeft from "../../../../Orbita Design System/assets/icons/lucide/corner-down-left.svg?raw";
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
 import download from "../../../../Orbita Design System/assets/icons/lucide/download.svg?raw";
 import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
+import eye from "../../../../Orbita Design System/assets/icons/lucide/eye.svg?raw";
+import eyeOff from "../../../../Orbita Design System/assets/icons/lucide/eye-off.svg?raw";
+import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
+import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
+import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import panelLeft from "../../../../Orbita Design System/assets/icons/lucide/panel-left.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
 import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off.svg?raw";
 import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
+import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
 import search from "../../../../Orbita Design System/assets/icons/lucide/search.svg?raw";
@@ -31,9 +39,11 @@ import trash2 from "../../../../Orbita Design System/assets/icons/lucide/trash-2
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
+import undo2 from "../../../../Orbita Design System/assets/icons/lucide/undo-2.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
 import x from "../../../../Orbita Design System/assets/icons/lucide/x.svg?raw";
 import wrench from "../../../../Orbita Design System/assets/icons/lucide/wrench.svg?raw";
+import zap from "../../../../Orbita Design System/assets/icons/lucide/zap.svg?raw";
 
 /**
  * 图标只用 lucide（AGENTS.md 硬规则：禁 emoji 与 Unicode 字符当图标）。
@@ -50,22 +60,30 @@ const ICONS = {
   brain,
   check,
   "chevron-down": chevronDown,
+  "chevron-up": chevronUp,
   clock,
   copy,
+  "corner-down-left": cornerDownLeft,
   cpu,
   download,
   "ellipsis-vertical": ellipsisVertical,
+  eye,
+  "eye-off": eyeOff,
   "fold-vertical": foldVertical,
   folder,
   "folder-plus": folderPlus,
   "git-branch": gitBranch,
+  "grip-vertical": gripVertical,
+  image,
   "loader-circle": loaderCircle,
+  lock,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
   pin,
   "pin-off": pinOff,
   plus,
+  "refresh-cw": refreshCw,
   settings,
   "shield-check": shieldCheck,
   sliders,
@@ -75,9 +93,11 @@ const ICONS = {
   "file-text": fileText,
   "trash-2": trash2,
   "triangle-alert": triangleAlert,
+  "undo-2": undo2,
   workflow,
   wrench,
   x,
+  zap,
 } as const;
 
 export type IconName = keyof typeof ICONS;

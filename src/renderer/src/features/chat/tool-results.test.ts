@@ -1,8 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { CompactedRecord } from "@shared/session";
+import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
+  answerText,
   branchAnchorEntries,
   branchAnchorIds,
   editDiffEntries,
@@ -31,6 +32,7 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  turnAssistantRecords,
   writeContent,
   writeLineCount,
   type RenderUnit,
@@ -266,29 +268,29 @@ describe("summarizeToolResult", () => {
     const running = indexToolResults([
       toolItem({ toolCallId: "a", status: "running", isError: false }),
     ]).get("a");
-    assert.equal(summarizeToolResult(running), "运行中");
+    assert.equal(summarizeToolResult(running), "Running");
 
     const failed = indexToolResults([
       toolItem({ toolCallId: "a", status: "error", isError: true }),
     ]).get("a");
-    assert.equal(summarizeToolResult(failed), "失败");
+    assert.equal(summarizeToolResult(failed), "Failed");
   });
 
   test("多行数行数，单行数字符数", () => {
     const multi = indexToolResults([
       toolItem({ toolCallId: "a", content: [{ type: "text", text: "1\n2\n3" }] }),
     ]).get("a");
-    assert.equal(summarizeToolResult(multi), "3 行");
+    assert.equal(summarizeToolResult(multi), "3 lines");
 
     const single = indexToolResults([
       toolItem({ toolCallId: "a", content: [{ type: "text", text: "hello" }] }),
     ]).get("a");
-    assert.equal(summarizeToolResult(single), "5 字符");
+    assert.equal(summarizeToolResult(single), "5 chars");
   });
 
   test("空产出说无输出，而不是显示成 0 字符", () => {
     const empty = indexToolResults([toolItem({ toolCallId: "a", content: [] })]).get("a");
-    assert.equal(summarizeToolResult(empty), "无输出");
+    assert.equal(summarizeToolResult(empty), "No output");
   });
 });
 
@@ -304,6 +306,58 @@ describe("toolResultText", () => {
       }),
     ]).get("a");
     assert.equal(item === undefined ? "" : toolResultText(item), "line 1\nline 2");
+  });
+
+  test("answerText —— 复制按钮拷的正文：只取 text 块，thinking 与 toolCall 不进", () => {
+    const record = assistantItem("a1", [
+      { type: "text", text: "第一段。" },
+      { type: "thinking", thinking: "先想想" },
+      readCall("t1", "src/a.ts"),
+      { type: "text", text: "第二段。" },
+    ]);
+    assert.equal(answerText([record]), "第一段。\n\n第二段。");
+  });
+
+  test("answerText —— 一轮多条记录（pi 每次 toolCall 切一条）：全部 text 块按序拼，不只拿末条", () => {
+    const turn = [
+      assistantItem("a1", [{ type: "text", text: "我接下来要跑命令。" }, readCall("t1", "x")]),
+      assistantItem("a2", [{ type: "text", text: "跑完了，输出 hello。" }]),
+    ];
+    assert.equal(answerText(turn), "我接下来要跑命令。\n\n跑完了，输出 hello。");
+  });
+
+  test("answerText —— 非 assistant 跳过、空数组、空 content、空白 text 块都不占段", () => {
+    assert.equal(answerText([userItem]), "");
+    assert.equal(answerText([]), "");
+    assert.equal(answerText([assistantItem("a2", [])]), "");
+    assert.equal(
+      answerText([assistantItem("a3", [{ type: "text", text: "  " }, { type: "text", text: "有字" }])]),
+      "有字",
+    );
+  });
+
+  test("turnAssistantRecords —— 锚点所在轮的全部 assistant 记录，user / 界碑是轮边界", () => {
+    const records: SessionRecord[] = [
+      userItem,
+      assistantItem("a0", [{ type: "text", text: "上一轮" }]),
+      { ...userItem, id: "u2" },
+      assistantItem("a1", [{ type: "text", text: "这轮第一句" }, readCall("t1", "x")]),
+      { id: "r1", role: "tool", toolCallId: "t1", toolName: "read", input: {}, content: [], timestamp: 0, status: "complete", isError: false } as TranscriptItem,
+      assistantItem("a2", [{ type: "text", text: "这轮第二句" }]),
+    ];
+    assert.deepEqual(
+      turnAssistantRecords(records, "a2").map((r) => r.id),
+      ["a1", "a2"],
+    );
+    // 锚点在上一轮：只拿上一轮的
+    assert.deepEqual(turnAssistantRecords(records, "a0").map((r) => r.id), ["a0"]);
+    // 界碑也是边界
+    assert.deepEqual(
+      turnAssistantRecords([...records.slice(0, 2), compacted, ...records.slice(3)], "a2").map((r) => r.id),
+      ["a1", "a2"],
+    );
+    // 锚点不存在：空
+    assert.deepEqual(turnAssistantRecords(records, "nope"), []);
   });
 
   test("图片标记它存在，不丢掉也不假装能渲染", () => {
@@ -352,23 +406,24 @@ describe("toolCallSummary", () => {
 
 describe("formatThinkingDuration", () => {
   test("不足 1 秒按 1 秒，秒数取整", () => {
-    assert.equal(formatThinkingDuration(0), "持续了 1 秒");
-    assert.equal(formatThinkingDuration(300), "持续了 1 秒");
-    assert.equal(formatThinkingDuration(12_400), "持续了 12 秒");
+    assert.equal(formatThinkingDuration(0), "1s");
+    assert.equal(formatThinkingDuration(300), "1s");
+    assert.equal(formatThinkingDuration(12_400), "12s");
   });
 
-  test("满一分钟说 N 分 M 秒", () => {
-    assert.equal(formatThinkingDuration(61_000), "持续了 1 分 1 秒");
-    assert.equal(formatThinkingDuration(125_000), "持续了 2 分 5 秒");
+  test("满一分钟「1m 05s」，秒两位补零", () => {
+    assert.equal(formatThinkingDuration(60_000), "1m 00s");
+    assert.equal(formatThinkingDuration(61_000), "1m 01s");
+    assert.equal(formatThinkingDuration(125_000), "2m 05s");
   });
 });
 
 describe("thinkingDurationText", () => {
   test("active 起表但不显示；落定冻结时长，之后不再变", () => {
     assert.equal(thinkingDurationText("k1", true, 1_000), null);
-    assert.equal(thinkingDurationText("k1", false, 6_400), "持续了 5 秒");
+    assert.equal(thinkingDurationText("k1", false, 6_400), "5s");
     // 再过多久都还是落定那一刻的值
-    assert.equal(thinkingDurationText("k1", false, 60_000), "持续了 5 秒");
+    assert.equal(thinkingDurationText("k1", false, 60_000), "5s");
   });
 
   test("没赶上开始的旧会话（没见过的 key 直接落定）——量不到，不显示", () => {
@@ -384,10 +439,10 @@ describe("recordToolFrame / toolDurationText", () => {
     recordToolFrame(toolItem({ toolCallId: "t1", status: "running", timestamp: 9_000 }));
     assert.equal(toolDurationText("t1"), null, "进行中不显示");
     recordToolFrame(toolItem({ toolCallId: "t1", timestamp: 13_300 }));
-    assert.equal(toolDurationText("t1"), "12.3 秒");
+    assert.equal(toolDurationText("t1"), "12.3s");
     // 重复终态帧不改终点
     recordToolFrame(toolItem({ toolCallId: "t1", timestamp: 99_000 }));
-    assert.equal(toolDurationText("t1"), "12.3 秒");
+    assert.equal(toolDurationText("t1"), "12.3s");
   });
 
   test("旧会话只有终态帧（没见过 running）——量不到，返回 null", () => {
@@ -402,12 +457,12 @@ describe("recordToolFrame / toolDurationText", () => {
 });
 
 describe("formatToolDuration", () => {
-  test("不足一分钟带一位小数；满一分钟「N 分 M 秒」且秒两位补零", () => {
-    assert.equal(formatToolDuration(80), "0.1 秒");
-    assert.equal(formatToolDuration(12_340), "12.3 秒");
-    assert.equal(formatToolDuration(59_940), "59.9 秒");
-    assert.equal(formatToolDuration(61_000), "1 分 01 秒");
-    assert.equal(formatToolDuration(125_000), "2 分 05 秒");
+  test("不足一分钟带一位小数；满一分钟「1m 04s」且秒两位补零", () => {
+    assert.equal(formatToolDuration(80), "0.1s");
+    assert.equal(formatToolDuration(12_340), "12.3s");
+    assert.equal(formatToolDuration(59_940), "59.9s");
+    assert.equal(formatToolDuration(61_000), "1m 01s");
+    assert.equal(formatToolDuration(125_000), "2m 05s");
   });
 });
 

@@ -134,6 +134,20 @@ describe("ProviderStore", () => {
     await store.remove("openai");
   });
 
+  test("reorder 按 id 顺序落盘；清单漏掉的 id 保序垫底", async () => {
+    await store.upsert(input());
+    await store.upsert(input({ id: "zhipu", displayName: "Zhipu" }));
+    await store.upsert(input({ id: "deepseek", displayName: "DeepSeek" }));
+    assert.deepEqual((await store.list()).map((p) => p.id), ["openai", "zhipu", "deepseek"]);
+
+    await store.reorder(["deepseek", "openai"]);
+    assert.deepEqual((await store.list()).map((p) => p.id), ["deepseek", "openai", "zhipu"]);
+
+    // 顺序是持久化的，不是 renderer 本地态：新实例（模拟重启）读盘顺序一致
+    const fresh = new ProviderStore(dir, secrets);
+    assert.deepEqual((await fresh.list()).map((p) => p.id), ["deepseek", "openai", "zhipu"]);
+  });
+
   test("原子写：落盘后目录里没有 .tmp 残留", async () => {
     await store.upsert(input());
     const files = await readdir(dir);

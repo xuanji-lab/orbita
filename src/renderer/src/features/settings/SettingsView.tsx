@@ -49,7 +49,7 @@ export function SettingsView(props: {
       </header>
 
       <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-        <div style={{ width: "min(100%, var(--content-max-width))", margin: "0 auto" }}>
+        <div style={{ width: "min(100%, var(--content-max-width))", height: "100%", margin: "0 auto" }}>
           {props.tab === "general" ? (
             <General settings={props.settings} onChange={props.onSettingsChange} />
           ) : (
@@ -64,7 +64,8 @@ export function SettingsView(props: {
 const THEME_LABELS: Record<ThemePreference, string> = {
   system: "System",
   light: "Light",
-  dark: "Dark",
+  dark: "Warm",
+  black: "Ink",
 };
 
 function General(props: { settings: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
@@ -72,7 +73,7 @@ function General(props: { settings: AppSettings; onChange: (patch: Partial<AppSe
     <Section label="Appearance">
       <Row
         name="Theme"
-        hint="System follows your desktop's light or dark appearance."
+        hint="System follows your desktop's light or dark appearance and lands on Ink; Warm and Ink are manual."
         control={
           <span style={{ display: "flex", gap: 2 }}>
             {THEME_PREFERENCES.map((value) => (

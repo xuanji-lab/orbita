@@ -94,9 +94,31 @@ describe("validateProvider", () => {
         contextWindow: 1_000_000,
         maxTokens: 16_384,
         cost: { input: 0.5, output: 1.5, cacheRead: 0, cacheWrite: 0 },
+        vision: true,
       },
     ];
     assert.deepEqual(fieldsOf({ ...(validInput() as object), models: { declared } }), []);
+  });
+
+  test("vision 是布尔覆盖声明：缺省合法，非布尔拒", () => {
+    assert.deepEqual(
+      fieldsOf({ ...(validInput() as object), models: { declared: [{ id: "m" }] } }),
+      [],
+    );
+    assert.deepEqual(
+      fieldsOf({ ...(validInput() as object), models: { declared: [{ id: "m", vision: false }] } }),
+      [],
+    );
+    for (const bad of ["yes", 1, null]) {
+      const issues = validateProvider({
+        ...(validInput() as object),
+        models: { declared: [{ id: "m", vision: bad }] },
+      });
+      assert.ok(
+        issues.map((i) => i.field).includes("models.declared[0].vision"),
+        `应拒绝 vision=${String(bad)}`,
+      );
+    }
   });
 
   test("contextWindow / maxTokens 必须是正有限数：0、负数、NaN、字符串都拒", () => {

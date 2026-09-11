@@ -4,30 +4,29 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
 import {
   EMPTY_ENTRY,
-  addPendingSend,
+  dequeue,
   applyAgentEvent,
-  consumePendingSends,
-  consumePendingTexts,
+  enqueue,
   createSessionStates,
-  editPendingSend,
-  mergeQueueView,
+  moveQueued as moveQueuedIn,
   parseCompactCommand,
   removeApproval,
-  removePendingSend,
+  nextDeliverable,
   removeSessionEntry,
-  replaceQueueOrderKey,
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
-  type PendingSend,
-  type QueueViewEntry,
+  type QueuedMessage,
   type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
+import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
+import { appendWithdrawn } from "./withdraw-draft.ts";
+import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
-import type { AgentStats, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
 import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -68,7 +67,9 @@ export interface ChatSession {
   /** 按 id 查回合失败标注（槽里有真相）——侧栏失败图标用，与「当前看哪条」无关 */
   turnErrorOf: (id: string) => string | null;
   error: string | null;
+  /** 当前查看会话的输入框草稿——**按会话隔离**，切换 / 新开会话互不带走 */
   draft: string;
+  /** 写当前查看会话的草稿 */
   setDraft: (value: string) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
@@ -88,7 +89,7 @@ export interface ChatSession {
   workspaceId: string | null;
   /** 没选工作区时的兜底（今天是 home）。UI 必须如实显示它，不能让它是个隐形默认。 */
   defaultCwd: string;
-  /** 至少声明了一个模型的 provider——没有它就发不出消息 */
+  /** 至少声明了一个模型且**配置好**（有密钥，能真正发起请求）的 provider——没有它就发不出消息 */
   usable: ProviderDto[];
   /**
    * 当前模型的意图：新任务的默认，也是会话内切换（C-4）的目标。
@@ -141,25 +142,14 @@ export interface ChatSession {
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
-  /** pi 排队快照（当前槽）：steering = 插队中，followUp = 等本轮结束 */
-  queue: SessionEntry["queue"];
-  /** 本地待办（当前槽）：压缩期间的消息 + 排队的手动 /compact */
-  pendingSends: readonly PendingSend[];
-  /** 排队卡片视图：pi 队列项与本地待办按输入顺序交错 */
-  queueView: readonly QueueViewEntry[];
-  /** 排队项转插队（下一个工具边界注入当前轮）。index 指 [...steering, ...followUp] 拼接视图 */
-  /** 立即发送排队中的第 index 条：打断当前轮（含工具调用），它成为新一轮 */
-  interruptQueued: (index: number, text: string) => void;
-  /** 排队项移出 pi 队列（runtime 侧 clearQueue + 重放实现） */
-  cancelQueued: (index: number, text: string) => void;
-  /** 排队项改文本（保持原属队列与顺位） */
-  editQueued: (index: number, text: string, newText: string) => void;
-  /** 取消一条本地待办（纯本地状态） */
-  cancelPendingSend: (index: number) => void;
-  /** 改写一条本地待办的文本（text 改内容，compact 改压缩要求） */
-  editPendingSend: (index: number, text: string) => void;
-  /** 本地 compact 待办的「立即」：马上压缩，不等空闲 */
-  runPendingNow: (index: number) => void;
+  /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
+  queued: readonly QueuedMessage[];
+  /** 立即发送：停下当前这一轮，把这条作为新一轮发出去 */
+  sendQueuedNow: (id: string) => void;
+  /** 撤回：移出队列，文字落回 composer 草稿 */
+  withdrawQueued: (id: string) => void;
+  /** 拖拽排序：把 sourceId 放到 targetId 的前 / 后 */
+  moveQueuedTo: (sourceId: string, targetId: string, placement: "before" | "after") => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
@@ -179,7 +169,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
    */
   const statesRef = useRef<SessionStates>(states);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  /**
+   * 输入框草稿**按会话隔离**（含首页）：key = 当前查看的会话 id，首页用 "home"。
+   * 以前是全局单份，切换 / 新开会话草稿跟着走（2026-09-10 用户裁决：新会话就是
+   * 新的，旧会话的草稿留在原地等他回来）。纯内存，不落盘——与旧行为一致。
+   */
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
+  const writeDraft = useCallback((key: string, value: string) => {
+    setDrafts((prev) => (prev.get(key) === value ? prev : new Map(prev).set(key, value)));
+  }, []);
   /** 三档权限模式。默认 plan——**默认最保守**，开工具要用户自己往下调。 */
   const [mode, setMode] = useState<PermissionMode>("plan");
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
@@ -278,9 +276,20 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       );
   }, []);
 
-  useEffect(
-    () =>
-      api.agent.onEvent((event) => {
+  useEffect(() => {
+    // 流式帧合帧：progress 的归约是纯函数（廉价），贵的是每次应用触发的渲染。
+    // 回答期间 delta 可密到十几毫秒一帧，渲染把主线程挤满，点击与打字只能排在
+    // 流式渲染后面——排队卡片点铅笔「时快时慢」的可感延迟根源（2026-09-10）。
+    // 按 ~50ms 节拍攒批整批应用，渲染频率封顶，主线程留出空档；
+    // phase / queue / permission 等低频且对延迟敏感的事件照旧即时应用。
+    const coalescer = createProgressCoalescer<AgentEvent>((batch) => {
+      setStates((prev) => {
+        const next = batch.reduce((acc, event) => applyAgentEvent(acc, event), prev);
+        statesRef.current = next;
+        return next;
+      });
+    }, 50);
+    const off = api.agent.onEvent((event) => {
         if (event.type === "failed") {
           // 回合级失败（重试耗尽）进槽、标注在对话里（applyAgentEvent 收）；
           // 操作级失败仍走全局红字（输入框上方）
@@ -312,54 +321,43 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
             event.progress.type === "item_finished")
         ) {
           recordToolFrame(event.progress.item);
+          // 流式起点在这里记账（stats-format）：Responding 行的估算分母要它，
+          // 而归约器只留最后一帧的时间戳。真值不需要——真值在终态帧的 speed 上
+          recordAssistantStart(event.progress.item);
         }
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
-        // 本地待办的执行时机（读 ref 而不是闭包 states：同拍可能已有事件更新过它）：
-        //  - phase 到 idle：先发前面的 text，碰到第一个 compact 就执行它并停——
-        //    同时压两个会互相踩，剩余项留给压缩结束的下一拍
-        //  - phase 离开 compaction 但又跑起来（压缩后有排队消息在跑）：text 全放
-        //    （runtime 侧自动分流进 pi 队列），compact 必须等完全 idle
-        if (event.type === "phase" && event.phase !== "compaction") {
-          const id = event.sessionId;
-          const pending = statesRef.current.get(id)?.pendingSends ?? [];
-          if (pending.length > 0) {
-            if (event.phase === "idle") {
-              let executed = 0;
-              for (const item of pending) {
-                executed++;
-                if (item.kind === "compact") {
-                  void api.agent.compact(id, item.instructions).catch((cause: unknown) =>
-                    setError(cause instanceof Error ? cause.message : String(cause)),
-                  );
-                  break;
-                }
-                void api.agent.submit(id, item.text).catch((cause: unknown) =>
-                  setError(cause instanceof Error ? cause.message : String(cause)),
-                );
-              }
-              setStates((prev) => consumePendingSends(prev, id, executed));
-            } else {
-              for (const item of pending) {
-                if (item.kind !== "text") continue;
-                void api.agent.submit(id, item.text).catch((cause: unknown) =>
-                  setError(cause instanceof Error ? cause.message : String(cause)),
-                );
-              }
-              setStates((prev) => consumePendingTexts(prev, id));
-            }
-          }
+        // 流式帧进合帧器按节拍整批应用（见 effect 开头）；其余事件即时
+        if (event.type === "progress") {
+          coalescer.push(event);
+          return;
         }
         setStates((prev) => {
           const next = applyAgentEvent(prev, event);
           statesRef.current = next;
           return next;
         });
-      }),
-    [refreshSessions],
-  );
+        // **投递节奏归我们**：phase 一变就看队首该不该发，一次只发一条。
+        // 交给 pi 的 post-run 自动 drain 会把好几条一起吹出去——用户一条条点、
+        // 最后两条自己一起飞，就是那么来的（2026-09-06 事故）。
+        if (event.type === "phase") deliverNext(event.sessionId);
+      });
+    return () => {
+      off();
+      coalescer.dispose();
+    };
+  }, [refreshSessions]);
 
+  /**
+   * 「配置好」= 设置里绿点的标准：api_key 已入库，或 env 档（密钥来自环境）。
+   * 没填 key 的厂商与复制出来的副本不该出现在模型芯片里——选了也发不出去。
+   */
   const usable = useMemo(
-    () => providers.filter((p) => p.models.declared.length > 0),
+    () =>
+      providers.filter(
+        (p) =>
+          ((p.auth.scheme === "api_key" && p.auth.hasSecret) || p.auth.scheme === "env") &&
+          p.models.declared.length > 0,
+      ),
     [providers],
   );
 
@@ -373,6 +371,19 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     setModel({ providerId: first.id, modelId: firstModel.id });
   }, [usable, model]);
 
+  // 会话 meta 里存的模型可能已随 provider 被删而失效——失效就清空，让上面的
+  // 默认播种兜住。真实事故（2026-09-04）：旧会话存着已删除的 openai-compatible，
+  // 打开后直接发送，主进程炸 unknown provider。providers 未加载完（usable 空）不判。
+  useEffect(() => {
+    if (model === null || usable.length === 0) return;
+    if (!usable.some((p) => p.id === model.providerId)) setModel(null);
+  }, [usable, model]);
+
+  // 草稿键 = 当前查看的会话；send 与收回都写自己的键，互不串
+  const draftKey = sessionId ?? opened?.id ?? "home";
+  const draft = drafts.get(draftKey) ?? "";
+  const setDraft = (value: string) => writeDraft(draftKey, value);
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (text === "") return;
@@ -383,13 +394,17 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     if (compact !== null) {
       const busyId = sessionRef.current;
       const busyPhase = busyId !== null ? statesRef.current.get(busyId)?.phase : undefined;
-      // 跑着或压缩中：/compact 也排队——不打断正在跑的轮，等完全空闲（pi 队列里的
-      // 排队消息也处理完）再压。压缩指令进不了 pi 队列（那里只存消息文本），只能本地等。
+      // 跑着或压缩中：/compact 也排队——不打断正在跑的轮，等完全空闲
+      // （前面排着的消息也发完）再压，压的才是完整对话。
       if (busyId !== null && busyPhase !== undefined && busyPhase !== "idle") {
         setStates((prev) =>
-          addPendingSend(prev, busyId, { kind: "compact", instructions: compact.instructions }),
+          enqueue(prev, busyId, {
+            id: crypto.randomUUID(),
+            kind: "compact",
+            ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
+          }),
         );
-        setDraft("");
+        writeDraft(draftKey, "");
         return;
       }
       // 压缩要有可续的会话：活着的直接压；从盘上打开还没唤醒的先按 resume
@@ -416,10 +431,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         return;
       }
       if (active === null) {
-        setError("没有正在运行的任务可压缩");
+        setError("No running task to compact");
         return;
       }
-      setDraft("");
+      writeDraft(draftKey, "");
       const id: string = active;
       // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
       setStates((prev) => setEntryPhase(prev, id, "turn"));
@@ -427,9 +442,16 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       return;
     }
     let id: string | null = sessionId;
-    // 压缩中 pi 连入队入口都关着（prompt 直接抛）：消息进本地待办，压缩结束自动发
-    if (id !== null && statesRef.current.get(id)?.phase === "compaction") {
-      setStates((prev) => addPendingSend(prev, id as string, { kind: "text", text }));
+    // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
+    // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
+    const busy = id !== null && statesRef.current.get(id)?.phase !== "idle";
+    if (id !== null && busy) {
+      const queuedId = crypto.randomUUID();
+      setStates((prev) => {
+        const next = enqueue(prev, id as string, { id: queuedId, kind: "text", text });
+        statesRef.current = next;
+        return next;
+      });
       setDraft("");
       return;
     }
@@ -460,7 +482,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         injectedModeRef.current = mode;
         refreshSessions();
       }
-      setDraft("");
+      writeDraft(draftKey, "");
       // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
       // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
       const active: string = id;
@@ -798,54 +820,117 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.agent.answerPermission(requestId, answer);
   }, []);
 
-  // 排队编辑只对「当前活着的会话」有意义——排队的消息本来就来自这里的输入框
-  const queueEdit = useCallback(
-    (op: "cancel" | "edit", index: number, text: string, newText?: string) => {
+  /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。
+   *  目标是**当前会话**的草稿——草稿已按会话隔离，不再是一份全局 string。 */
+  const restoreToDraft = useCallback(
+    (text: string) => {
+      setDrafts((prev) =>
+        new Map(prev).set(draftKey, appendWithdrawn(prev.get(draftKey) ?? "", text)),
+      );
+    },
+    [draftKey],
+  );
+
+  /**
+   * 投递队首的一条。**一次只发一条**——发完这一轮结束会再来一次 phase 事件，
+   * 那时再取下一条。先出队再发：出队是同步的，避免同一拍被投递两次。
+   */
+  const deliverNext = useCallback((id: string) => {
+    const entry = statesRef.current.get(id);
+    if (entry === undefined) return;
+    const head = nextDeliverable(entry);
+    if (head === null) return;
+    setStates((prev) => {
+      const next = dequeue(prev, id, head.id);
+      statesRef.current = next;
+      return next;
+    });
+    const fail = (cause: unknown): void =>
+      setError(cause instanceof Error ? cause.message : String(cause));
+    if (head.kind === "compact") {
+      void api.agent.compact(id, head.instructions).catch(fail);
+    } else {
+      void api.agent.submit(id, head.text).catch(fail);
+    }
+  }, []);
+
+  /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。 */
+  const withdrawQueued = useCallback(
+    (queuedId: string) => {
       const id = sessionRef.current;
       if (id === null) return;
-      // edit 先把顺序账本里的键换掉：queue_update 带新文本回来时对账能保住原位
-      if (op === "edit" && newText !== undefined) {
-        setStates((prev) => replaceQueueOrderKey(prev, id, `pi\0${text}`, `pi\0${newText}`));
-      }
-      void api.agent
-        .queueEdit(id, op, index, text, newText)
-        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+      const item = statesRef.current.get(id)?.queued.find((entry) => entry.id === queuedId);
+      if (item === undefined) return;
+      setStates((prev) => {
+        const next = dequeue(prev, id, queuedId);
+        statesRef.current = next;
+        return next;
+      });
+      // compact 项没有「用户的话」可拿回——本仓没有斜杠命令 UI，把 `/compact`
+      // 塞进输入框只会变成一条普通消息。它的撤回就是单纯取消。
+      if (item.kind === "text") restoreToDraft(item.text);
+    },
+    [restoreToDraft],
+  );
+
+  /** 拖拽排序：纯本地一次 splice，即时生效。 */
+  const moveQueuedTo = useCallback(
+    (sourceId: string, targetId: string, placement: "before" | "after") => {
+      const id = sessionRef.current;
+      if (id === null) return;
+      setStates((prev) => {
+        const next = moveQueuedIn(prev, id, sourceId, targetId, placement);
+        statesRef.current = next;
+        return next;
+      });
     },
     [],
   );
 
-  const editPending = useCallback((index: number, text: string) => {
+  /**
+   * 立即发送：停下当前这一轮，把这条作为新一轮发出去。
+   *
+   * 空闲时没有「当前轮」可停，退化成直接发——对用户是同一件事：别等了，现在就办。
+   */
+  const sendQueuedNow = useCallback((queuedId: string) => {
     const id = sessionRef.current;
     if (id === null) return;
-    setStates((prev) => editPendingSend(prev, id, index, text));
+    const entry = statesRef.current.get(id);
+    const item = entry?.queued.find((queued) => queued.id === queuedId);
+    if (entry === undefined || item === undefined) return;
+    setStates((prev) => {
+      const next = dequeue(prev, id, queuedId);
+      statesRef.current = next;
+      return next;
+    });
+    const fail = (cause: unknown): void =>
+      setError(cause instanceof Error ? cause.message : String(cause));
+    // compact 的「立即」是另一回事：不打断，只是不等空闲马上压
+    if (item.kind === "compact") {
+      void api.agent.compact(id, item.instructions).catch(fail);
+      return;
+    }
+    if (entry.phase === "idle") {
+      void api.agent.submit(id, item.text).catch(fail);
+    } else {
+      void api.agent.interrupt(id, item.text).catch(fail);
+    }
   }, []);
 
-  const cancelPendingSend = useCallback((index: number) => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    setStates((prev) => removePendingSend(prev, id, index));
-  }, []);
 
-  /** 本地待办的「立即」：只对 compact 有意义——不等空闲，马上压（pi 会先停当前轮） */
-  const runPendingNow = useCallback((index: number) => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    const item = statesRef.current.get(id)?.pendingSends[index];
-    if (item === undefined || item.kind !== "compact") return;
-    setStates((prev) => removePendingSend(prev, id, index));
-    void api.agent
-      .compact(id, item.instructions)
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, []);
 
   // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
   // ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账
   const viewedId = sessionId ?? opened?.id ?? null;
   const entry = (viewedId !== null ? states.get(viewedId) : undefined) ?? EMPTY_ENTRY;
 
+  // selectTranscript 每次调用都造新数组（pi 的实现如此）——在这里按 entry 引用
+  // 稳定化，否则 ChatView 的 memo 转录列每次渲染都被新引用击穿，隔离形同虚设
+  const transcript = useMemo(() => selectTranscript(entry.transcript), [entry.transcript]);
+
   return {
     sessionId,
-    transcript: selectTranscript(entry.transcript),
+    transcript,
     compactions: entry.compactions,
     phase: entry.phase,
     retry: entry.retry,
@@ -889,23 +974,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     removeSession,
     send: () => void send(),
     stop,
-    queue: entry.queue,
-    pendingSends: entry.pendingSends,
-    /** 卡片渲染视图：pi 队列 + 本地待办按输入序交错（见 mergeQueueView） */
-    queueView: mergeQueueView(entry),
-    interruptQueued: (index: number, text: string) => {
-      const id = sessionRef.current;
-      if (id === null) return;
-      void api.agent.interrupt(id, index, text).catch((cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : String(cause)),
-      );
-    },
-    cancelQueued: (index: number, text: string) => queueEdit("cancel", index, text),
-    editQueued: (index: number, text: string, newText: string) =>
-      queueEdit("edit", index, text, newText),
-    cancelPendingSend,
-    editPendingSend: editPending,
-    runPendingNow,
+    queued: entry.queued,
+    sendQueuedNow,
+    withdrawQueued,
+    moveQueuedTo,
     newTask,
     newTaskIn,
     answerApproval,

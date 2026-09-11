@@ -114,6 +114,54 @@ describe("TranscriptAdapter", () => {
     assert.equal(ids.size, 1, `一条消息应只有一个 id，实际 ${[...ids].join(",")}`);
   });
 
+  test("终态帧透传 usage——renderer 的 token 速度靠它记账，丢了就算不出来", () => {
+    const end = assistant([{ type: "text", text: "Hello, world" }]);
+    end.usage = { ...end.usage, output: 4100 };
+    const { frames } = replay([
+      { type: "message_start", message: assistant([{ type: "text", text: "" }]) },
+      { type: "message_end", message: end },
+    ]);
+    const finished = frames.find((f) => f.type === "item_finished");
+    assert.ok(finished !== undefined && finished.type === "item_finished");
+    assert.equal(finished.item.usage?.output, 4100);
+  });
+
+  test("终态帧挂纯生成时长 genMs——message_start 到 message_end 的钟，不在这里算速度", () => {
+    let clock = 1_000;
+    const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
+    const message = assistant([{ type: "text", text: "done" }]);
+    message.usage = { ...message.usage, output: 800 };
+    timed.apply({ type: "message_start", message: assistant([{ type: "text", text: "" }]) });
+    clock = 3_000; // 生成 2 秒
+    const frames = timed.apply({ type: "message_end", message });
+    assert.ok(frames[0]?.type === "item_finished");
+    assert.equal((frames[0].item as { genMs?: number }).genMs, 2_000);
+    assert.equal(frames[0].item.usage?.output, 800);
+  });
+
+  test("短到几百毫秒的帧照样挂 genMs——噪音门在 renderer 按整轮加总后判，不在这里丢", () => {
+    let clock = 1_000;
+    const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
+    const message = assistant([{ type: "text", text: "quick" }]);
+    timed.apply({ type: "message_start", message: assistant([{ type: "text", text: "" }]) });
+    clock = 1_300; // 只生成 300ms
+    const frames = timed.apply({ type: "message_end", message });
+    assert.ok(frames[0]?.type === "item_finished");
+    assert.equal((frames[0].item as { genMs?: number }).genMs, 300);
+  });
+
+  test("打断（aborted）的回答照样挂 genMs，且终态判定不被劫持", () => {
+    let clock = 1_000;
+    const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
+    const message = assistant([{ type: "text", text: "half…" }], "aborted");
+    timed.apply({ type: "message_start", message: assistant([{ type: "text", text: "" }]) });
+    clock = 3_000;
+    const frames = timed.apply({ type: "message_end", message });
+    assert.ok(frames[0]?.type === "item_finished");
+    assert.equal(frames[0].item.status, "aborted");
+    assert.equal((frames[0].item as { genMs?: number }).genMs, 2_000);
+  });
+
   test("思考 + 回答：两个内容块各自按 contentIndex 增量，不串台", () => {
     const events: AdaptableEvent[] = [
       {

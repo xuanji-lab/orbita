@@ -6,22 +6,20 @@ import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
-  addPendingSend,
+  dequeue,
   applyAgentEvent,
-  compactionBoundaryText,
-  consumePendingSends,
-  consumePendingTexts,
-  editPendingSend,
+  compactionBoundaryStatus,
+  enqueue,
   markAllIdle,
   mergeCompactions,
-  mergeQueueView,
+  moveQueued,
   parseCompactCommand,
   removeApproval,
-  removePendingSend,
+  nextDeliverable,
   removeSessionEntry,
-  replaceQueueOrderKey,
   seedFromDisk,
   setEntryPhase,
+  type QueuedMessage,
   type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
@@ -411,7 +409,7 @@ describe("重试槽 —— phase 事件是清除信号", () => {
   });
 });
 
-describe("compactionBoundaryText —— 界碑折叠行文案", () => {
+describe("compactionBoundaryStatus —— 界碑折叠行 status 槽文案", () => {
   const base: CompactedRecord = {
     role: "compacted",
     id: "c1",
@@ -422,148 +420,117 @@ describe("compactionBoundaryText —— 界碑折叠行文案", () => {
 
   it("有估算的 tokensAfter：N → M，压缩效果摆出来", () => {
     assert.equal(
-      compactionBoundaryText({ ...base, tokensAfter: 8200 }),
-      "已压缩 · 128,000 → 8,200 tokens",
+      compactionBoundaryStatus({ ...base, tokensAfter: 8200 }),
+      "128,000 → 8,200 tokens",
     );
   });
 
-  it("旧记录没有 tokensAfter：只说压之前多大", () => {
-    assert.equal(compactionBoundaryText(base), "已压缩 · 此前上下文约 128,000 tokens");
+  it("旧记录没有 tokensAfter：只说压之前多大（~ 前缀声明是估算前的量级）", () => {
+    assert.equal(compactionBoundaryStatus(base), "~128,000 tokens");
   });
 });
 
-describe("排队槽 —— pi 队列快照全量覆盖，本地待办按 kind 分流", () => {
-  const queueEvent = (steering: string[], followUp: string[]): AgentEvent => ({
-    type: "queue",
-    sessionId: "A",
-    steering,
-    followUp,
+describe("排队队列 —— 唯一真源，操作一律按 id", () => {
+  const msg = (id: string, text: string): QueuedMessage => ({ id, kind: "text", text });
+  const seed = (...items: QueuedMessage[]): SessionStates => {
+    let states: SessionStates = new Map();
+    for (const item of items) states = enqueue(states, "A", item);
+    return states;
+  };
+  const ids = (states: SessionStates): string[] =>
+    (states.get("A")?.queued ?? []).map((item) => item.id);
+
+  test("入队落到队尾，顺序即显示顺序", () => {
+    const states = seed(msg("1", "甲"), msg("2", "乙"), msg("3", "丙"));
+    assert.deepEqual(ids(states), ["1", "2", "3"]);
   });
 
-  test("queue 事件全量覆盖：投递 / 清队后的空快照直接抹掉旧值", () => {
-    let states = applyAgentEvent(new Map(), queueEvent(["插队中"], ["等下一轮"]));
-    assert.deepEqual(states.get("A")?.queue, { steering: ["插队中"], followUp: ["等下一轮"] });
-    states = applyAgentEvent(states, queueEvent([], []));
-    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
-  });
-
-  test("phase 事件不清本地待办（消费由 hook 执行后显式做），也不动 pi 队列", () => {
-    let states = addPendingSend(new Map(), "A", { kind: "text", text: "压缩完发我" });
-    states = applyAgentEvent(states, queueEvent([], ["pi 队列那条"]));
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
-    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "text", text: "压缩完发我" }]);
-    assert.deepEqual(states.get("A")?.queue.followUp, ["pi 队列那条"]);
-  });
-
-  test("addPendingSend / removePendingSend / editPendingSend：增删改按序，compact 项改要求", () => {
-    let states = addPendingSend(new Map(), "A", { kind: "text", text: "第一条" });
-    states = addPendingSend(states, "A", { kind: "compact", instructions: "保留代码细节" });
-    states = editPendingSend(states, "A", 0, "改过的第一条");
-    assert.deepEqual(states.get("A")?.pendingSends, [
-      { kind: "text", text: "改过的第一条" },
-      { kind: "compact", instructions: "保留代码细节" },
-    ]);
-    // compact 项可编辑压缩要求；清空 = 无要求
-    states = editPendingSend(states, "A", 1, "换个要求");
-    assert.deepEqual(states.get("A")?.pendingSends[1], { kind: "compact", instructions: "换个要求" });
-    states = editPendingSend(states, "A", 1, "");
-    assert.deepEqual(states.get("A")?.pendingSends[1], { kind: "compact" });
-    // text 项清空落空（存空串等于排一条空消息）
+  test("按 id 出队；找不到就原样返回同一个槽", () => {
+    let states = seed(msg("1", "甲"), msg("2", "乙"));
+    states = dequeue(states, "A", "1");
+    assert.deepEqual(ids(states), ["2"]);
     const before = states;
-    states = editPendingSend(states, "A", 0, "");
-    assert.equal(states, before);
-    states = removePendingSend(states, "A", 0);
-    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "compact" }]);
-    // 删不存在的下标不动原槽
-    const before2 = states;
-    states = removePendingSend(states, "A", 9);
-    assert.equal(states, before2);
+    assert.equal(dequeue(states, "A", "不存在"), before);
   });
 
-  test("consumePendingSends：消费前缀（hook 执行了多少吃多少）", () => {
-    let states = addPendingSend(new Map(), "A", { kind: "text", text: "a" });
-    states = addPendingSend(states, "A", { kind: "compact" });
-    states = addPendingSend(states, "A", { kind: "text", text: "b" });
-    states = consumePendingSends(states, "A", 2);
-    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "text", text: "b" }]);
+  test("挪位按 id——下标会随投递前移，那正是旧实现每次连续操作都落空的原因", () => {
+    let states = seed(msg("1", "甲"), msg("2", "乙"), msg("3", "丙"));
+    // 把丙放到甲前面
+    states = moveQueued(states, "A", "3", "1", "before");
+    assert.deepEqual(ids(states), ["3", "1", "2"]);
+    // 再把丙放到乙后面
+    states = moveQueued(states, "A", "3", "2", "after");
+    assert.deepEqual(ids(states), ["1", "2", "3"]);
   });
 
-  test("consumePendingTexts：只吃 text，compact 留给 idle 拍", () => {
-    let states = addPendingSend(new Map(), "A", { kind: "text", text: "a" });
-    states = addPendingSend(states, "A", { kind: "compact" });
-    states = addPendingSend(states, "A", { kind: "text", text: "b" });
-    states = consumePendingTexts(states, "A");
-    assert.deepEqual(states.get("A")?.pendingSends, [{ kind: "compact" }]);
+  test("挪位：向下拖时的差一格——源抽走后目标位置前移", () => {
+    let states = seed(msg("1", "甲"), msg("2", "乙"), msg("3", "丙"));
+    states = moveQueued(states, "A", "1", "2", "after");
+    assert.deepEqual(ids(states), ["2", "1", "3"]);
   });
 
-  test("runtime 没了：队列与本地待办一并清空（物理消失，不留尸体）", () => {
-    let states = applyAgentEvent(new Map(), queueEvent(["s"], ["f"]));
-    states = addPendingSend(states, "A", { kind: "text", text: "缓冲" });
-    states = applyAgentEvent(states, { type: "failed", sessionId: null, message: "runtime exited" });
-    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
-    assert.deepEqual(states.get("A")?.pendingSends, []);
+  test("挪到原位 / 挪到自己 / 目标不存在：都不动槽", () => {
+    const states = seed(msg("1", "甲"), msg("2", "乙"));
+    assert.equal(moveQueued(states, "A", "1", "1", "before"), states);
+    assert.equal(moveQueued(states, "A", "1", "2", "before"), states);
+    assert.equal(moveQueued(states, "A", "2", "1", "after"), states);
+    assert.equal(moveQueued(states, "A", "1", "没这条", "before"), states);
   });
 
-  test("seedFromDisk 清空排队槽：ephemeral 状态不跨会话存留", () => {
-    let states = applyAgentEvent(new Map(), queueEvent(["s"], ["f"]));
-    states = addPendingSend(states, "A", { kind: "compact" });
-    states = seedFromDisk(states, "A", []);
-    assert.deepEqual(states.get("A")?.queue, { steering: [], followUp: [] });
-    assert.deepEqual(states.get("A")?.pendingSends, []);
+  test("撤回一条不影响其他条的身份——id 稳定，不像下标会整体前移", () => {
+    let states = seed(msg("1", "甲"), msg("2", "乙"), msg("3", "丙"));
+    states = dequeue(states, "A", "2");
+    assert.deepEqual(ids(states), ["1", "3"]);
+    // 丙仍然是丙：拿它的 id 去挪，照样命中
+    states = moveQueued(states, "A", "3", "1", "before");
+    assert.deepEqual(ids(states), ["3", "1"]);
   });
 });
 
-describe("mergeQueueView —— 卡片按输入顺序交错，不看队列归属", () => {
-  const queueEvent = (steering: string[], followUp: string[]): AgentEvent => ({
-    type: "queue",
-    sessionId: "A",
-    steering,
-    followUp,
+describe("nextDeliverable —— 投递节奏归我们，一次只放一条", () => {
+  const entryWith = (
+    phase: SessionEntry["phase"],
+    queued: QueuedMessage[],
+  ): SessionEntry => ({ ...EMPTY_ENTRY, phase, queued });
+
+  test("空闲且队列非空：放队首", () => {
+    const head = nextDeliverable(entryWith("idle", [{ id: "1", kind: "text", text: "甲" }]));
+    assert.equal(head?.id, "1");
   });
-  const labelsOf = (entry: SessionEntry | undefined) =>
-    mergeQueueView(entry ?? EMPTY_ENTRY).map((item) =>
-      item.source === "pi" ? item.text : item.item.kind,
+
+  test("空队列：null", () => {
+    assert.equal(nextDeliverable(entryWith("idle", [])), null);
+  });
+
+  test("压缩中：一律不放——pi 压缩时连入队入口都关着", () => {
+    assert.equal(
+      nextDeliverable(entryWith("compaction", [{ id: "1", kind: "text", text: "甲" }])),
+      null,
     );
-
-  test("先排 pi 消息、再排 /compact、又排一条 pi 消息：显示保持输入序", () => {
-    // 用户在 turn 期间依次输入：消息A → /compact → 消息B
-    let states = applyAgentEvent(new Map(), queueEvent([], ["A"]));
-    states = addPendingSend(states, "A", { kind: "compact" });
-    states = applyAgentEvent(states, queueEvent([], ["A", "B"]));
-    assert.deepEqual(labelsOf(states.get("A")), ["A", "compact", "B"]);
   });
 
-  test("投递一条后其余保位：A 投掉，compact 仍在 B 前面", () => {
-    let states = applyAgentEvent(new Map(), queueEvent([], ["A"]));
-    states = addPendingSend(states, "A", { kind: "compact" });
-    states = applyAgentEvent(states, queueEvent([], ["A", "B"]));
-    // A 被投递，队列只剩 B；compact 的账本位置在 B 之前
-    states = applyAgentEvent(states, queueEvent([], ["B"]));
-    assert.deepEqual(labelsOf(states.get("A")), ["compact", "B"]);
+  test("轮跑着：普通消息也不放——一次只跑一轮，等这轮结束的 phase 事件", () => {
+    assert.equal(
+      nextDeliverable(entryWith("turn", [{ id: "1", kind: "text", text: "甲" }])),
+      null,
+    );
   });
 
-  test("pi 项编辑换键保位（replaceQueueOrderKey + queue_update 新文本）", () => {
-    let states = applyAgentEvent(new Map(), queueEvent([], ["A"]));
-    states = replaceQueueOrderKey(states, "A", "pi\0A", "pi\0改过的");
-    states = applyAgentEvent(states, queueEvent([], ["改过的"]));
-    const view = mergeQueueView(states.get("A") ?? EMPTY_ENTRY);
-    assert.equal(view.length, 1);
-    const first = view[0];
-    assert.ok(first?.source === "pi" && first.text === "改过的");
-  });
-
-  test("本地 text 消费后 compact 保位；账本漏网的项补尾不丢", () => {
-    let states = applyAgentEvent(new Map(), queueEvent([], ["A"]));
-    states = addPendingSend(states, "A", { kind: "compact" });
-    // 压缩期间的本地 text：排在 compact 之后（后输入）
-    states = addPendingSend(states, "A", { kind: "text", text: "压缩完发我" });
-    states = consumePendingTexts(states, "A");
-    assert.deepEqual(labelsOf(states.get("A")), ["A", "compact"]);
-    // pi 队列整批投递：只剩 compact
-    states = applyAgentEvent(states, queueEvent([], []));
-    assert.deepEqual(labelsOf(states.get("A")), ["compact"]);
+  test("compact 项要求完全空闲：非 idle 一律不放", () => {
+    assert.equal(nextDeliverable(entryWith("turn", [{ id: "c", kind: "compact" }])), null);
+    assert.equal(nextDeliverable(entryWith("idle", [{ id: "c", kind: "compact" }]))?.id, "c");
   });
 });
+
+describe("markAllIdle —— runtime 没了，排队的消息没人会发", () => {
+  test("队列一并清空，槽里不留尸体", () => {
+    let states = enqueue(new Map(), "A", { id: "1", kind: "text", text: "甲" });
+    states = markAllIdle(states);
+    assert.deepEqual(states.get("A")?.queued, []);
+    assert.equal(states.get("A")?.phase, "idle");
+  });
+});
+
 
 // ── 回合失败标注（重试耗尽标在对话里，不放输入框上方） ──
 

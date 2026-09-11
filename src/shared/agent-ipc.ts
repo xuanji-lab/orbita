@@ -18,13 +18,14 @@ export const ipcChannels = {
   providerList: "provider:list",
   providerUpsert: "provider:upsert",
   providerRemove: "provider:remove",
+  /** 拖拽排序的落盘：载荷是全量 id 的新顺序 */
+  providerReorder: "provider:reorder",
   agentCreate: "agent:create",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
   /** 把排队中的某一条**立即**发出：打断当前轮（含正在跑的工具调用），它成为新一轮 */
   agentInterrupt: "agent:interrupt",
   /** 编辑排队中的消息：cancel = 移出队列，edit = 改文本 */
-  agentQueueEdit: "agent:queue-edit",
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
   agentSetMode: "agent:set-mode",
@@ -168,24 +169,8 @@ export type AgentCommand =
       /** 立即发送排队中的第 index 条：出队 → abort 当前轮（含工具调用）→ 它成为新一轮 */
       type: "interrupt";
       sessionId: string;
-      index: number;
-      /** 期望文本，与队列现状不符时放弃（队列刚被并发改过） */
+      /** 要发的文本。**队列在 renderer 一侧**，这里只负责「停下当前这一轮、发这句话」 */
       text: string;
-    }
-  /**
-   * 编辑 pi 的排队消息（pi 没有单条删/挪的 API，runtime 用 clearQueue + 重放实现）。
-   * index 指 `[...steering, ...followUp]` 拼接视图的下标（UI 就是按这个顺序渲染的）；
-   * text 是期望文本，与队列现状不符时（投递/并发编辑刚发生）操作落空、队列原样重放，
-   * 等 queue 事件校准 UI。「立即发送」不走这里——那是 interrupt 命令，打断当前轮。
-   * edit 改写目标条目的文本（保持它原属的队列与顺位），newText 为替换文本。
-   */
-  | {
-      type: "queueEdit";
-      sessionId: string;
-      op: "cancel" | "edit";
-      index: number;
-      text: string;
-      newText?: string;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
@@ -269,17 +254,6 @@ export type AgentEvent =
    * runtime 翻成 phase 事件，renderer 的重试槽随任何 phase 事件一并清空（自愈）。
    */
   | { type: "retry"; sessionId: string; status: RetryStatus | null }
-  /**
-   * 排队消息快照（pi 的 queue_update 翻译）。**全量**：每次入队、投递、清队后 pi 都重发整份，
-   * renderer 直接覆盖槽里的值即可，不做增量合并。steering = 已插队、等当前轮的工具边界注入；
-   * followUp = 等本轮结束作为下一轮投递。纯 ephemeral，不落盘。
-   */
-  | {
-      type: "queue";
-      sessionId: string;
-      steering: readonly string[];
-      followUp: readonly string[];
-    }
   /** 工具执行前的请示。UI 要显示它并等用户回答（三档模式见 shared/permission.ts） */
   | {
       type: "permission";

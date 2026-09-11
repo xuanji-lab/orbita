@@ -33,12 +33,13 @@ export function indexToolResults(transcript: readonly TranscriptItem[]): ToolRes
  * 渲染单元：records 摊平后的最小渲染单位。user 整条一个单元，assistant 按块拆，
  * 界碑自成单元。key 跨渲染稳定（`${item.id}:${blockIndex}`），折叠展开状态靠它保住。
  * assistant 单元带 `messageId`（所属消息的 id）——分支按钮要落在锚点消息的
- * **最后一个**单元后面，分组后归属只能靠它追溯。
+ * **最后一个**单元后面，分组后归属只能靠它追溯；`timestamp` 从记录上原样带来
+ * （adapter 每帧落 now()，终态帧即完成时刻）——大折叠的轮耗时靠它算，自己不计时。
  */
 export type RenderUnit =
   | { kind: "user"; key: string; item: Extract<TranscriptItem, { role: "user" }> }
-  | { kind: "text"; key: string; messageId: string; text: string }
-  | { kind: "thinking"; key: string; messageId: string; text: string }
+  | { kind: "text"; key: string; messageId: string; text: string; timestamp: number }
+  | { kind: "thinking"; key: string; messageId: string; text: string; timestamp: number }
   | {
       kind: "toolCall";
       key: string;
@@ -46,6 +47,7 @@ export type RenderUnit =
       toolCallId: string;
       toolName: string;
       input: unknown;
+      timestamp: number;
     }
   | { kind: "compacted"; key: string; record: CompactedRecord };
 
@@ -84,9 +86,9 @@ export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUni
     record.content.forEach((block, index) => {
       const key = `${record.id}:${index}`;
       if (block.type === "text") {
-        units.push({ kind: "text", key, messageId: record.id, text: block.text });
+        units.push({ kind: "text", key, messageId: record.id, text: block.text, timestamp: record.timestamp });
       } else if (block.type === "thinking") {
-        units.push({ kind: "thinking", key, messageId: record.id, text: block.thinking });
+        units.push({ kind: "thinking", key, messageId: record.id, text: block.thinking, timestamp: record.timestamp });
       } else if (block.type === "toolCall") {
         units.push({
           kind: "toolCall",
@@ -95,6 +97,7 @@ export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUni
           toolCallId: block.toolCallId,
           toolName: block.toolName,
           input: block.input,
+          timestamp: record.timestamp,
         });
       }
     });
@@ -140,6 +143,202 @@ export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
   }
   flush();
   return entries;
+}
+
+// ── 大折叠（一轮一行）：已落定轮次的思考与工具收进一条统计行 ──
+
+/**
+ * 大折叠单元：一个**已落定轮次**里全部思考行与工具行/组的收纳。
+ * 正文（text）、用户气泡与界碑**永远不进**——中间正文留在外面各在原位，
+ * 折叠只是把它的成员在原序列里**原地**替换掉，不重排任何东西。
+ */
+export interface TurnGroupUnit {
+  kind: "turnGroup";
+  /** `turn:${首成员 key}`：成员集合不变时 key 不变，折叠的展开状态得以保住 */
+  key: string;
+  /** 收进的成员（thinking / toolCall / toolGroup），原时间序；展开后就是原有的行 */
+  members: readonly TurnMemberEntry[];
+  /**
+   * 轮时间跨度 = 段内全部渲染单元 timestamp 的极差。adapter 每帧落 now()，末条
+   * assistant 的终态帧即正文流式完成时刻——所以这个跨度**含正文时间且旧会话也准**，
+   * 不需要现场计时。缺时间戳的单元在场时 null（诚实未知）。
+   */
+  durationMs: number | null;
+}
+
+export type TurnViewEntry = RenderEntry | TurnGroupUnit;
+
+/** 折叠能收的成员：思考、单行工具调用、工具组。正文/气泡/界碑永远不在内。 */
+export type TurnMemberEntry = Extract<
+  RenderEntry,
+  { kind: "thinking" } | { kind: "toolCall" } | { kind: "toolGroup" }
+>;
+
+function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
+  return entry.kind === "thinking" || entry.kind === "toolCall" || entry.kind === "toolGroup";
+}
+
+function entryTimestamp(entry: RenderEntry): number | null {
+  if (entry.kind === "user") return entry.item.timestamp;
+  if (entry.kind === "compacted") return entry.record.timestamp;
+  if (entry.kind === "toolGroup") return entry.calls[0]?.timestamp ?? null;
+  return entry.timestamp;
+}
+
+function segmentSpan(segment: readonly RenderEntry[], results?: ToolResultIndex): number | null {
+  let min: number | null = null;
+  let max: number | null = null;
+  const raise = (ts: number) => {
+    max = max === null || ts > max ? ts : max;
+  };
+  for (const entry of segment) {
+    const ts = entryTimestamp(entry);
+    if (ts === null) return null;
+    min = min === null || ts < min ? ts : min;
+    raise(ts);
+    // 工具的终态时刻在**结果**上（调用单元只带所属消息的帧时间）——轮的真正
+    // 结束可能是最后一次工具落定（以工具收尾的失败轮尤其如此）
+    const calls = entry.kind === "toolGroup" ? entry.calls : entry.kind === "toolCall" ? [entry] : [];
+    for (const call of calls) {
+      const end = results?.get(call.toolCallId)?.timestamp;
+      if (end !== undefined) raise(end);
+    }
+  }
+  return min !== null && max !== null ? max - min : null;
+}
+
+/**
+ * 大折叠分组：把渲染单元流按轮边界（user / 界碑）切段，**已落定的段**把成员收进
+ * 一个 TurnGroupUnit，位置在第一个成员处。
+ *
+ * 时机（用户裁决）：折叠只在整轮回答落定后发生——活跃轮（turnActive 时的最后一段）
+ * 原样铺开什么都不收；落定即一次性收进，无记忆（ToolGroupLine 同款裁决，用户可再
+ * 点开）。旧会话加载即全收——长会话的 DOM 从「每行全渲染」降到「一轮一行」。
+ * 纯正文段（无思考无工具）没有可收的，原样放行，不包折叠壳。
+ */
+export function groupTurns(
+  entries: readonly RenderEntry[],
+  turnActive: boolean,
+  results?: ToolResultIndex,
+): TurnViewEntry[] {
+  const segments: RenderEntry[][] = [];
+  for (const entry of entries) {
+    if (entry.kind === "user" || entry.kind === "compacted" || segments.length === 0) {
+      segments.push([entry]);
+    } else {
+      segments[segments.length - 1]?.push(entry);
+    }
+  }
+  const activeIndex = turnActive ? segments.length - 1 : -1;
+  const view: TurnViewEntry[] = [];
+  segments.forEach((segment, index) => {
+    if (index === activeIndex) {
+      view.push(...segment);
+      return;
+    }
+    const firstMember = segment.findIndex(isTurnMember);
+    if (firstMember === -1) {
+      view.push(...segment);
+      return;
+    }
+    view.push(...segment.slice(0, firstMember));
+    view.push({
+      kind: "turnGroup",
+      key: `turn:${segment[firstMember]?.key ?? ""}`,
+      members: segment.filter(isTurnMember),
+      durationMs: segmentSpan(segment, results),
+    });
+    view.push(...segment.slice(firstMember).filter((entry) => !isTurnMember(entry)));
+  });
+  return view;
+}
+
+/**
+ * 回合级失败（重试耗尽）该亮红警示的折叠：**只在失败那一轮里找**。
+ *
+ * 失败归属于转录末尾那轮（最后一条 user / 界碑之后）。那轮若有折叠（工具跑了几个才断），
+ * 图标亮在它头上、与后面的红字成对；若没有（模型开口前就断，重试耗尽的常态），红字自带的
+ * 图标就是全部——**上一轮的折叠不能背锅**。旧写法取「整个视图里最后一个折叠」，
+ * 失败轮没折叠时就拿到上一轮的，图标和红字隔着一条用户消息（2026-09-11 验收复现）。
+ */
+export function failedFoldKey(view: readonly TurnViewEntry[]): string | null {
+  let start = 0;
+  for (let i = view.length - 1; i >= 0; i -= 1) {
+    const entry = view[i];
+    if (entry !== undefined && (entry.kind === "user" || entry.kind === "compacted")) {
+      start = i + 1;
+      break;
+    }
+  }
+  for (let i = start; i < view.length; i += 1) {
+    const entry = view[i];
+    if (entry !== undefined && entry.kind === "turnGroup") return entry.key;
+  }
+  return null;
+}
+
+/** 单个工具类别的计数：调用了几次、失败几次——失败计数红字跟在类别后面显示。 */
+export interface TurnToolStat {
+  toolName: string;
+  count: number;
+  failed: number;
+}
+
+/** 大折叠头的统计。轮耗时在分组时已算好（durationMs），这里补思考与工具计数。 */
+export interface TurnStats {
+  durationMs: number | null;
+  /**
+   * 思考总时长：各思考块**现场计时**求和（thinkingTimers）。头部显示的是思考
+   * **次数**，这个总时长不上界面，但求和过程顺带把没冻结的表冻上（首次渲染即
+   * 落定时刻）——成员行展开时才能显示落定时长，而不是「展开那一刻」的膨胀值。
+   * 任一块没见过现场（旧会话、后台轮）→ 整个返回 null——部分和是编造。
+   * ponytail: 后台落定的轮冻结在「下次被看到」的时刻，数字偏大；根治要像
+   * recordToolFrame 那样在事件入口记账，等这个误差真的咬人再做。
+   */
+  thinkingMs: number | null;
+  /** 思考次数（思考块数量）。 */
+  thinkingCount: number;
+  calls: number;
+  /** 各工具的次数与失败数，首次出现序；零次的工具不出现。 */
+  byTool: ReadonlyArray<TurnToolStat>;
+}
+
+export function turnStats(
+  group: TurnGroupUnit,
+  results: ToolResultIndex,
+  now: number = Date.now(),
+): TurnStats {
+  let thinkingMs: number | null = 0;
+  let thinkingCount = 0;
+  let calls = 0;
+  const tools = new Map<string, TurnToolStat>();
+  for (const member of group.members) {
+    if (member.kind === "thinking") {
+      thinkingCount++;
+      const entry = thinkingTimers.get(member.key);
+      if (entry === undefined) {
+        thinkingMs = null;
+      } else {
+        if (entry.end === null) entry.end = now;
+        if (thinkingMs !== null) thinkingMs += entry.end - entry.start;
+      }
+      continue;
+    }
+    for (const call of member.kind === "toolGroup" ? member.calls : [member]) {
+      calls++;
+      const stat = tools.get(call.toolName) ?? { toolName: call.toolName, count: 0, failed: 0 };
+      stat.count++;
+      if (results.get(call.toolCallId)?.status === "error") stat.failed++;
+      tools.set(call.toolName, stat);
+    }
+  }
+  return {
+    durationMs: group.durationMs,
+    thinkingMs,
+    thinkingCount,
+    calls,
+    byTool: [...tools.values()],
+  };
 }
 
 /** 组行的状态汇总：结果索引上数一遍，失败/进行中/完成各多少。 */
@@ -198,11 +397,11 @@ export function streamingThinkingKey(
   return block !== undefined && block.type === "thinking" ? `${last.id}:${index}` : null;
 }
 
-/** 思考时长格式：不足 1 秒按 1 秒；满一分钟说「N 分 M 秒」（中文界面，中文措辞）。 */
+/** 思考时长格式：不足 1 秒按 1 秒；满一分钟「1m 05s」（秒两位补零，与 formatToolDuration 同款）。 */
 export function formatThinkingDuration(ms: number): string {
   const seconds = Math.max(1, Math.round(ms / 1000));
-  if (seconds < 60) return `持续了 ${seconds} 秒`;
-  return `持续了 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
 /**
@@ -258,27 +457,26 @@ export function toolDurationText(toolCallId: string): string | null {
   return formatToolDuration(entry.end - entry.start);
 }
 
-/** 工具时长格式：不足一分钟带一位小数（毫秒级工具是噪音，只有慢命令值得看），满一分钟「N 分 M 秒」。 */
+/** 工具时长格式：不足一分钟带一位小数（毫秒级工具是噪音，只有慢命令值得看），满一分钟「1m 04s」（秒两位补零）。 */
 export function formatToolDuration(ms: number): string {
   const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)} 秒`;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
   const whole = Math.round(seconds);
-  return `${Math.floor(whole / 60)} 分 ${String(whole % 60).padStart(2, "0")} 秒`;
+  return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
 }
 
-/** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。中文措辞——
- *  与同行的量词（「N 行」「N 个文件」）同一种语言，不中英混排。 */
+/** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。 */
 export function summarizeToolResult(result: ToolTranscriptItem | undefined): string | null {
   if (result === undefined) return null;
-  if (result.status === "running") return "运行中";
-  if (result.status === "error") return "失败";
+  if (result.status === "running") return "Running";
+  if (result.status === "error") return "Failed";
   const text = result.content
     .map((block) => (block.type === "text" ? block.text : "[image]"))
     .join("\n")
     .trim();
-  if (text === "") return "无输出";
+  if (text === "") return "No output";
   const lines = text.split("\n").length;
-  return lines > 1 ? `${lines} 行` : `${text.length} 字符`;
+  return lines > 1 ? `${lines} lines` : `${text.length} chars`;
 }
 
 /** 展开后要显示的正文。图片暂不渲染，只标记它存在——真正的图片渲染是后面的事。 */
@@ -364,16 +562,18 @@ export function branchAnchorIds(
  * 分支按钮行——组行的归属看组内最后一个成员（组只合相邻，最后一成员之后必然
  * 是轮边界，不会把按钮插到组中间）。同一条锚点消息占多个 entry 时，下标大的
  * 覆盖小的，天然取到最后。
+ * 输入是**大折叠分组后的视图**：折叠单元不携带归属（其成员的正文才是锚点的
+ * 最后一单元，而正文永远在折叠外面），直接跳过——倒序扫自然先命中锚点的正文。
  */
 export function branchAnchorEntries(
   anchorIds: ReadonlySet<string>,
-  entries: readonly RenderEntry[],
+  entries: readonly (RenderEntry | TurnGroupUnit)[],
 ): Map<number, string> {
   // 倒序扫：每个锚点消息**首次**命中就是它的最后一个 entry，后面不再覆盖
   const lastOf = new Map<string, number>();
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry === undefined) continue;
+    if (entry === undefined || entry.kind === "turnGroup") continue;
     let messageId: string | null = null;
     if (entry.kind === "text" || entry.kind === "thinking" || entry.kind === "toolCall") {
       messageId = entry.messageId;
@@ -765,4 +965,49 @@ export function fileViewFor(
     return text === "" ? null : { text, startLine: readStartLine(input) };
   }
   return null;
+}
+
+/** 轮内的记录：参数放宽成结构类型，调用方手里的可能混着压缩界碑。 */
+interface TurnRecordLike {
+  id: string;
+  role: unknown;
+  content?: readonly { type: string; text?: string }[];
+}
+
+/**
+ * 锚点消息所在那一轮的全部 assistant 记录（原序）。轮边界 = user / 界碑。
+ *
+ * pi 每次 toolCall 都结束当前消息：「说一句 → 跑工具 → 再说一句」是两三条记录。
+ * 只读锚点（末条）会丢前面那句——复制漏前半段、速度只算末条那几百毫秒（2026-09-11 验收复现）。
+ * 找不到锚点返回空数组。
+ */
+export function turnAssistantRecords<T extends TurnRecordLike>(
+  records: readonly T[],
+  anchorId: string,
+): T[] {
+  const end = records.findIndex((record) => record.id === anchorId);
+  if (end === -1) return [];
+  let start = 0;
+  for (let i = end; i >= 0; i -= 1) {
+    const role = records[i]?.role;
+    if (role === "user" || role === "compacted") {
+      start = i + 1;
+      break;
+    }
+  }
+  return records.slice(start, end + 1).filter((record) => record.role === "assistant");
+}
+
+/**
+ * 回答的正文文本——「复制回答」按钮拷的就是它。收一轮里全部 assistant 记录的
+ * **text 块**（markdown 原样），段间空行；thinking 与 toolCall 不进：用户要的是答案，不是过程。
+ * 非 assistant 记录跳过，空 text 块不占段。
+ */
+export function answerText(records: readonly TurnRecordLike[]): string {
+  return records
+    .filter((record) => record.role === "assistant")
+    .flatMap((record) => (record.content ?? []).filter((block) => block.type === "text"))
+    .map((block) => block.text ?? "")
+    .filter((text) => text.trim() !== "")
+    .join("\n\n");
 }

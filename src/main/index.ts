@@ -78,8 +78,29 @@ function createMainWindow(): BrowserWindow {
   });
 
   const devServerUrl = process.env["ELECTRON_RENDERER_URL"];
-  if (devServerUrl) void window.loadURL(devServerUrl);
-  else void window.loadFile(join(__dirname, "../renderer/index.html"));
+  if (devServerUrl) {
+    // 两类 dev 首载故障都会把窗口留在底色上（真实事故 2026-09-10：白屏只能手动 Ctrl+R）：
+    // ① server 未就绪 loadURL 拒绝——退避重试；ready-to-show 没到窗口不可见，重试无感。
+    // ② 首帧合成失败——页面加载零错误、DOM 完整，但画面停在窗口底色（reload 能救活）；
+    //    落定后 executeJavaScript 探到内容即 invalidate() 强制重绘上屏。
+    const load = (attempt: number): void => {
+      window.loadURL(devServerUrl).catch(() => {
+        if (window.isDestroyed() || attempt >= 10) return;
+        setTimeout(() => load(attempt + 1), 500 * attempt);
+      });
+    };
+    load(0);
+    window.webContents.on("did-finish-load", () => {
+      setTimeout(() => {
+        void window.webContents
+          .executeJavaScript(`Boolean(document.getElementById("root")?.children.length)`)
+          .then((hasContent) => {
+            if (hasContent) window.webContents.invalidate();
+          })
+          .catch(() => {});
+      }, 1500);
+    });
+  } else void window.loadFile(join(__dirname, "../renderer/index.html"));
 
   return window;
 }

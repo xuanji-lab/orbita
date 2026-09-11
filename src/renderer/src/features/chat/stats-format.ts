@@ -8,7 +8,9 @@
  * （第二个消费者出现才建那一层）。
  */
 import type { AgentStats } from "../../../../shared/agent-ipc.ts";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { formatTokens } from "../../utils/format-tokens.ts";
+import { messageSpeed } from "../../../../shared/message-speed.ts";
 
 /** 用量环的一帧：`fill` 是 0–1 的弧长，null = 只画底环 */
 export interface ContextRing {
@@ -65,10 +67,7 @@ export interface UsageRow {
  * 不是删掉而是条件显示：按量计费的 provider 上它仍然是最该被看见的一行。
  * 四位小数——展开看的人要的正是底栏那几位被舍入掉的。
  */
-export function usageBreakdown(
-  stats: AgentStats | null,
-  billing: "metered" | "plan" = "metered",
-): UsageRow[] {
+export function usageBreakdown(stats: AgentStats | null, billing: "metered" | "plan" = "metered"): UsageRow[] {
   if (stats === null) return [];
   const rows: UsageRow[] = [
     { label: "Input", value: formatTokens(stats.tokens.input) },
@@ -92,4 +91,55 @@ export function usageBreakdown(
     rows.push({ label: "Cost", value: `$${stats.cost.toFixed(4)}` });
   }
   return rows;
+}
+
+// ── token 速度（usage-speed-X）──
+// 真值的家在**回答自己身上**：adapter 在终态帧上算好挂 `speed`，随 transcript
+// 落盘、重开即回（归约器实测原样保留）。这里只有两样展示支援。
+
+/** `42 tok/s`——整数，tok/s 是 agent 工具界的通用写法，不翻译 */
+export function formatSpeed(speed: number): string {
+  return `${Math.round(speed)} tok/s`;
+}
+
+/** messageId → 生成起点（首个 streaming 帧的 adapter 时间戳）。Responding 行的估算分母。 */
+const streamingStarts = new Map<string, number>();
+
+/**
+ * 事件入口记账（`recordToolFrame` 同款：useChatSession 的 progress 处理处调）。
+ * 只记起点，幂等——增量帧重复到达不覆盖。真值不需要它（在帧上），Responding 行的
+ * 流式估算需要「这条消息从什么时候开始生成」，而归约器只留最后一帧的时间戳。
+ * ponytail: Map 无上限，一条消息几十字节。
+ */
+export function recordAssistantStart(item: TranscriptItem): void {
+  if (item.role !== "assistant" || item.status !== "streaming") return;
+  if (!streamingStarts.has(item.id)) streamingStarts.set(item.id, item.timestamp);
+}
+
+/** 这条消息的生成起点；没见过起点（中途才挂上 / 已落盘重开）返回 null。 */
+export function streamingStart(messageId: string): number | null {
+  return streamingStarts.get(messageId) ?? null;
+}
+
+/**
+ * 回答上的速度标注：按**整轮**算——轮内各条 assistant 记录的 `usage.output` 与 adapter
+ * 挂在终态帧上的 `genMs`（纯生成毫秒）各自求和，再过同一道噪音门。
+ * 单条算不代表这轮：末条常常只有十几个 token、几百毫秒，永远过不了门（验收复现）。
+ * `genMs` 不在 pi 的 schema 类型上（归约器实测原样保留），按运行时形态读；
+ * 没挂的记录（旧会话）两边都不计，全部没挂就 null——不编。
+ */
+export function replySpeed(
+  records: readonly { role: unknown; usage?: { output?: unknown } }[],
+): number | null {
+  let outputTokens = 0;
+  let genMs = 0;
+  for (const record of records) {
+    if (record.role !== "assistant") continue;
+    const ms = (record as { genMs?: unknown }).genMs;
+    const output = record.usage?.output;
+    if (typeof ms !== "number" || !(ms >= 0) || typeof output !== "number") continue;
+    genMs += ms;
+    outputTokens += output;
+  }
+  return messageSpeed(genMs, outputTokens);
 }

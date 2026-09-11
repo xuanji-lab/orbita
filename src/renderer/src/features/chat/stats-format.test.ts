@@ -1,11 +1,20 @@
 /**
  * 用量显示口径的边界（A-1）。这几条规则会被争论，所以钉住：
- * 「不知道」不能显示成 0、定价未知不能显示成免费、缓存全零不进菜单。
+ * 「不知道」不能显示成 0、定价未知不能显示成免费、缓存全零不进菜单、
+ * 速度没见过现场不出行、不足 500ms 的短消息不当真。
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentStats } from "@shared/agent-ipc";
-import { contextRing, usageBreakdown } from "./stats-format.ts";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import {
+  contextRing,
+  formatSpeed,
+  recordAssistantStart,
+  replySpeed,
+  streamingStart,
+  usageBreakdown,
+} from "./stats-format.ts";
 
 const stats = (over: Partial<AgentStats> = {}): AgentStats => ({
   tokens: { input: 18200, output: 4100, cacheRead: 0, cacheWrite: 0, total: 22300 },
@@ -100,5 +109,83 @@ describe("usageBreakdown —— 菜单里那几行", () => {
   test("完全没有上下文数据时连 Context 行都不给", () => {
     const labels = usageBreakdown(stats({ contextUsage: null })).map((r) => r.label);
     assert.equal(labels.includes("Context"), false);
+  });
+});
+
+// ── token 速度（usage-speed-X）：真值在回答的终态帧上，这里只有展示支援 ──
+
+/** assistant 帧的最小构造；字段按 pi-protocol 的形状，测试只关心记账用得到的那几个 */
+const assistantFrame = (over: {
+  id: string;
+  status: "streaming" | "complete" | "error";
+  timestamp: number;
+  genMs?: number;
+  output?: number;
+}): TranscriptItem =>
+  ({
+    id: over.id,
+    role: "assistant",
+    content: [],
+    model: { provider: "p", id: "m" },
+    timestamp: over.timestamp,
+    status: over.status,
+    ...(over.output === undefined
+      ? {}
+      : { usage: { input: 0, output: over.output, cacheRead: 0, cacheWrite: 0, totalTokens: over.output, cost: {} } }),
+    ...(over.genMs === undefined ? {} : { genMs: over.genMs }),
+  }) as TranscriptItem;
+
+describe("formatSpeed —— 整数 tok/s", () => {
+  test("四舍五入取整", () => {
+    assert.equal(formatSpeed(41.6), "42 tok/s");
+    assert.equal(formatSpeed(1200.4), "1200 tok/s");
+  });
+});
+
+describe("recordAssistantStart / streamingStart —— 估算用的起点记账", () => {
+  test("streaming 帧记起点，增量帧重复到达不覆盖", () => {
+    recordAssistantStart(assistantFrame({ id: "sm1", status: "streaming", timestamp: 1_000 }));
+    recordAssistantStart(assistantFrame({ id: "sm1", status: "streaming", timestamp: 2_500 }));
+    assert.equal(streamingStart("sm1"), 1_000);
+  });
+
+  test("非 streaming 帧、非 assistant 帧不入账；没见过的返回 null", () => {
+    recordAssistantStart(assistantFrame({ id: "sm2", status: "complete", timestamp: 9_000 }));
+    recordAssistantStart({ id: "t9", role: "tool" } as TranscriptItem);
+    assert.equal(streamingStart("sm2"), null);
+    assert.equal(streamingStart("never-seen"), null);
+  });
+});
+
+describe("replySpeed —— 回答上的速度标注，按整轮加总", () => {
+  test("单条：usage.output ÷ genMs", () => {
+    assert.equal(
+      replySpeed([assistantFrame({ id: "a1", status: "complete", timestamp: 0, genMs: 2_000, output: 84 })]),
+      42,
+    );
+  });
+
+  test("多条：各自不过门的短尾巴加在一起过门——验收复现的那种「说一句→跑工具→再说一句」", () => {
+    const turn = [
+      assistantFrame({ id: "a1", status: "complete", timestamp: 0, genMs: 822, output: 67 }),
+      assistantFrame({ id: "a2", status: "complete", timestamp: 1, genMs: 300, output: 21 }),
+    ];
+    assert.equal(replySpeed([turn[1] as TranscriptItem]), null); // 末条单算：300ms 过不了门
+    assert.equal(replySpeed(turn), 88 / 1.122); // 整轮：(67+21) / (822+300)ms
+  });
+
+  test("没挂 genMs（旧会话）、缺 usage、非 assistant，都不计；全部不计就 null", () => {
+    assert.equal(replySpeed([assistantFrame({ id: "a2", status: "complete", timestamp: 0, output: 500 })]), null);
+    assert.equal(replySpeed([assistantFrame({ id: "a3", status: "complete", timestamp: 0, genMs: 2_000 })]), null);
+    assert.equal(replySpeed([{ id: "c1", role: "compacted" } as unknown as TranscriptItem]), null);
+    assert.equal(replySpeed([]), null);
+    // 混着一条旧记录：只算挂了的那条
+    assert.equal(
+      replySpeed([
+        assistantFrame({ id: "a4", status: "complete", timestamp: 0, output: 9_999 }),
+        assistantFrame({ id: "a5", status: "complete", timestamp: 1, genMs: 1_000, output: 50 }),
+      ]),
+      50,
+    );
   });
 });

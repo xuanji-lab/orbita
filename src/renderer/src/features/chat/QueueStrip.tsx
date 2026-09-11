@@ -1,35 +1,62 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../../shell/Icon";
-import type { QueueViewEntry } from "./session-states.ts";
+import type { QueuedMessage } from "./session-states.ts";
+import { dropPlacement } from "./queue-drop.ts";
+
+// ── 本模块全部用户可见文案（英文先行，中文化等真实需求出现再抽字典） ──
+const COPY = {
+  queued: "Queued messages",
+  /** idle 时队列是「停止后滞留」态：下一轮开跑时才轮到它 */
+  haltedNote: "Sends with your next message",
+  waitsTurnEnd: "Sends after this turn",
+  waitsCompaction: "Sends when compaction finishes",
+  compactsWhenIdle: "Compacts when idle (queued items go first)",
+  /** 纯图标按钮必须有 title：图标自己说不出「会打断当前这一轮」 */
+  runNow: "Send now — interrupts this turn",
+  /** 空闲时没有当前轮可打断，同一个键退化成「直接发」 */
+  runNowIdle: "Send now",
+  runNowCompact: "Compact now",
+  withdraw: "Withdraw to the input box",
+  withdrawCompact: "Withdraw this compaction",
+  reorder: "Drag to reorder",
+};
 
 /**
- * 排队卡片（C-1）：输入框上方、逐条一行。**按输入顺序显示**（queueView 把 pi 队列
- * 与本地待办交错合成）——执行顺序仍由机制决定：pi 队列的消息本轮结束投递，
- * 本地 compact 必须等完全空闲，注脚各自如实写。
+ * 排队卡片：输入框上方、逐条一行，**顺序即投递顺序**。
  *
- * 每条可编辑（笔图标，Enter 保存 / Esc 放弃）——排队期间随时改口是排队的意义之一；
- * compact 项不可编辑（它不是一条消息）。
+ * 队列归我们所有（`docs/plans/2026-09-06-排队队列所有权收回.md`）：每条带稳定 id，
+ * 所有操作按 id——撤回、拖拽、立即发送都是本地数组操作，没有下标对账、没有跨进程
+ * 往返、没有中间态。旧实现把队列寄存在 pi 里，只能靠「下标 + 文本」对账，
+ * 连续操作时必然落空（2026-09-06 一晚四个 bug）。
+ *
+ * 每条两个按钮：**立即发送**（回车图标）与**撤回**（undo 图标，文字落回输入框）；
+ * 调顺序走**行首抓手拖拽**，不占按钮位。落点语义见 queue-drop.ts：落到谁身上就占谁的
+ * 位置，悬停整行描边——与 Providers 厂商排序同一套手感。
  * 设计规则与 ApprovalBar 同源：浮起的玻璃卡（popover 阴影，比 composer 高一层）、
  * 状态用图标与文字、不拿 accent 染底——accent 留给发送键。
  */
 export function QueueStrip(props: {
-  view: readonly QueueViewEntry[];
-  /** idle 时 pi 队列是「停止后滞留」态：下次发送时自动带上，注脚要如实说 */
+  items: readonly QueuedMessage[];
+  /** idle 时队列是「停止后滞留」态：注脚要如实说 */
   phase: "idle" | "turn" | "compaction";
-  onInterrupt: (index: number, text: string) => void;
-  onCancel: (index: number, text: string) => void;
-  onEdit: (index: number, text: string, newText: string) => void;
-  onCancelPending: (index: number) => void;
-  onEditPending: (index: number, text: string) => void;
-  /** 本地 compact 待办的「立即」：马上压缩，不等空闲 */
-  onRunPendingNow: (index: number) => void;
+  onSendNow: (id: string) => void;
+  onWithdraw: (id: string) => void;
+  onMove: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {
-  if (props.view.length === 0) return null;
-  const haltedNote = props.phase === "idle" ? "下次发送时一起投递" : null;
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  /** 正悬停在哪一行上（整行亮起）；悬在源自己身上不算 */
+  const [dropOn, setDropOn] = useState<string | null>(null);
+  if (props.items.length === 0) return null;
+  const halted = props.phase === "idle";
+  const endDrag = (): void => {
+    setDraggingId(null);
+    setDropOn(null);
+  };
+  const indexOf = (id: string): number => props.items.findIndex((item) => item.id === id);
   return (
     <section
-      aria-label="排队中的消息"
+      aria-label={COPY.queued}
       style={{
         display: "grid",
         gap: "var(--space-1)",
@@ -42,146 +69,137 @@ export function QueueStrip(props: {
         backdropFilter: "blur(var(--glass-blur))",
       }}
     >
-      {props.view.map((item) => (
+      {props.items.map((item) => (
         <QueueRow
-          key={rowKey(item)}
-          icon={item.source === "pi" && item.steering ? "arrow-up" : "clock"}
-          note={noteOf(item, haltedNote)}
+          key={item.id}
           text={labelOf(item)}
-          editValue={editValueOf(item)}
-          onInterrupt={
-            item.source === "pi"
-              ? item.steering || haltedNote !== null
-                ? undefined
-                : () => props.onInterrupt(item.piIndex, item.text)
-              : item.item.kind === "compact"
-                ? () => props.onRunPendingNow(item.localIndex)
-                : undefined
+          note={noteOf(item, props.phase)}
+          runNowTitle={
+            item.kind === "compact" ? COPY.runNowCompact : halted ? COPY.runNowIdle : COPY.runNow
           }
-          onCancel={() =>
-            item.source === "pi"
-              ? props.onCancel(item.piIndex, item.text)
-              : props.onCancelPending(item.localIndex)
-          }
-          onEdit={
-            item.source === "pi"
-              ? (newText) => props.onEdit(item.piIndex, item.text, newText)
-              : (newText) => props.onEditPending(item.localIndex, newText)
-          }
+          withdrawTitle={item.kind === "compact" ? COPY.withdrawCompact : COPY.withdraw}
+          reorderTitle={COPY.reorder}
+          // 单条时不给抓手：没有可交换的对象，一个拖不动的抓手只是误导
+          draggable={props.items.length > 1}
+          dragging={draggingId === item.id}
+          dropOn={dropOn === item.id}
+          onSendNow={() => props.onSendNow(item.id)}
+          onWithdraw={() => props.onWithdraw(item.id)}
+          onDragStart={() => setDraggingId(item.id)}
+          onDragOverRow={() => {
+            if (draggingId === null || draggingId === item.id) return;
+            // 同值返回让 React 跳过无谓的重渲——dragover 是高频事件
+            setDropOn((cur) => (cur === item.id ? cur : item.id));
+          }}
+          onDropRow={() => {
+            if (draggingId !== null) {
+              const placement = dropPlacement(indexOf(draggingId), indexOf(item.id));
+              if (placement !== null) props.onMove(draggingId, item.id, placement);
+            }
+            endDrag();
+          }}
+          onDragEnd={endDrag}
         />
       ))}
     </section>
   );
 }
 
-function rowKey(item: QueueViewEntry): string {
-  return item.source === "pi"
-    ? `s${item.piIndex}:${item.text}`
-    : `p${item.localIndex}:${labelOf(item)}`;
+function labelOf(item: QueuedMessage): string {
+  if (item.kind === "text") return item.text;
+  return item.instructions === undefined ? "/compact" : `/compact ${item.instructions}`;
 }
 
-function labelOf(item: QueueViewEntry): string {
-  if (item.source === "pi") return item.text;
-  return item.item.kind === "text"
-    ? item.item.text
-    : item.item.instructions === undefined
-      ? "/compact"
-      : `/compact ${item.item.instructions}`;
+/** 注脚：如实写清「这条什么时候会发出去」，机制约束不粉饰。 */
+function noteOf(item: QueuedMessage, phase: "idle" | "turn" | "compaction"): string {
+  if (item.kind === "compact") return COPY.compactsWhenIdle;
+  if (phase === "compaction") return COPY.waitsCompaction;
+  if (phase === "idle") return COPY.haltedNote;
+  return COPY.waitsTurnEnd;
 }
 
-/** 编辑态的初值：compact 项编辑的是压缩要求（不带 /compact 前缀），空 = 无要求 */
-function editValueOf(item: QueueViewEntry): string {
-  if (item.source === "pi") return item.text;
-  return item.item.kind === "text" ? item.item.text : item.item.instructions ?? "";
-}
-
-/** 注脚：pi 项按滞留/插队/等待三态；本地项按 kind 与 phase（compact 必须等完全空闲）。 */
-function noteOf(item: QueueViewEntry, haltedNote: string | null): string {
-  if (item.source === "pi") {
-    if (haltedNote !== null) return haltedNote;
-    return item.steering ? "插队中 · 下个工具边界生效" : "等本轮结束发送";
-  }
-  if (item.item.kind === "text") return "正在压缩上下文，压缩结束自动发送";
-  // compact 排在 pi 队列消息之后执行（机制使然），如实写明
-  return "空闲后压缩（上面的排队先发）";
-}
-
-/** 一条排队项：图标 + 文本（截断）+ 状态注脚 + 操作；点笔进入行内编辑。 */
+/** 一条排队项：抓手 + 文本（截断）+ 注脚 + 两个图标动作。 */
 function QueueRow(props: {
-  icon: "clock" | "arrow-up";
-  note: string;
   text: string;
-  /** 编辑态初值（compact 项编辑的是压缩要求，不带前缀）；不给 = 不可编辑 */
-  editValue?: string;
-  onInterrupt?: () => void;
-  onCancel: () => void;
-  onEdit?: (newText: string) => void;
+  note: string;
+  runNowTitle: string;
+  withdrawTitle: string;
+  reorderTitle: string;
+  draggable: boolean;
+  /** 自己正被拖着 */
+  dragging: boolean;
+  /** 正被拖着的那条悬在本行上：整行描边，松手就占本行的位置 */
+  dropOn: boolean;
+  onSendNow: () => void;
+  onWithdraw: () => void;
+  onDragStart: () => void;
+  /** 只上报「悬停 / 落在本行」；行不看鼠标坐标，落点语义由 QueueStrip 按下标算 */
+  onDragOverRow: () => void;
+  onDropRow: () => void;
+  onDragEnd: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const initial = props.editValue ?? props.text;
-  const [draft, setDraft] = useState(initial);
-  const editable = props.editValue !== undefined && props.onEdit !== undefined;
-
-  const commit = () => {
-    setEditing(false);
-    const next = draft.trim();
-    // 空串也传下去：compact 项空串 = 清掉压缩要求（editPendingSend 按项分流）
-    if (next !== initial) props.onEdit?.(next);
-  };
-  const discard = () => {
-    setDraft(initial);
-    setEditing(false);
-  };
-
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
-      <span style={{ display: "inline-flex", color: "var(--color-text-secondary)", flex: "0 0 auto" }}>
-        <Icon name={props.icon} size={12} />
+    <div
+      draggable={props.draggable}
+      onDragStart={(event) => {
+        // Firefox 不设 dataTransfer 就不发 drag 事件；内容用不着，给个占位
+        event.dataTransfer.setData("text/plain", "");
+        event.dataTransfer.effectAllowed = "move";
+        props.onDragStart();
+      }}
+      onDragOver={(event) => {
+        // 不阻止默认行为就不会触发 drop
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        props.onDragOverRow();
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        props.onDropRow();
+      }}
+      onDragEnd={props.onDragEnd}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        minWidth: 0,
+        // 拖拽中的源行压淡，让注意力跟着落点走
+        opacity: props.dragging ? 0.4 : 1,
+        // 落点用整行内描边（Providers 厂商排序同款）：box-shadow 不撑开布局，行不会因悬停而跳
+        borderRadius: "var(--radius-md)",
+        boxShadow: props.dropOn ? "inset 0 0 0 1.5px var(--color-accent)" : "none",
+      }}
+    >
+      <span
+        title={props.draggable ? props.reorderTitle : undefined}
+        style={{
+          display: "inline-flex",
+          flex: "0 0 auto",
+          color: "var(--color-text-tertiary)",
+          cursor: props.draggable ? "grab" : "default",
+          // 不可拖时保位：行首对齐不能因为能不能拖而变
+          visibility: props.draggable ? "visible" : "hidden",
+        }}
+      >
+        <Icon name="grip-vertical" size={12} />
       </span>
-      {editing ? (
-        <input
-          value={draft}
-          autoFocus
-          onChange={(event) => setDraft(event.target.value)}
-          onFocus={(event) => event.target.select()}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              commit();
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              discard();
-            }
-          }}
-          style={{
-            flex: "1 1 auto",
-            minWidth: 0,
-            padding: "2px var(--space-2)",
-            border: "1px solid var(--glass-border)",
-            borderRadius: "var(--radius-md)",
-            background: "var(--color-bg-muted)",
-            font: "inherit",
-            fontSize: "var(--font-size-control)",
-            color: "var(--color-text-primary)",
-            outline: "none",
-          }}
-        />
-      ) : (
-        <span
-          title={props.text}
-          style={{
-            flex: "1 1 auto",
-            minWidth: 0,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            fontSize: "var(--font-size-control)",
-            color: "var(--color-text-primary)",
-          }}
-        >
-          {props.text}
-        </span>
-      )}
+      <span style={{ display: "inline-flex", color: "var(--color-text-secondary)", flex: "0 0 auto" }}>
+        <Icon name="clock" size={12} />
+      </span>
+      <span
+        title={props.text}
+        style={{
+          flex: "1 1 auto",
+          minWidth: 0,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          fontSize: "var(--font-size-control)",
+          color: "var(--color-text-primary)",
+        }}
+      >
+        {props.text}
+      </span>
       <span
         style={{
           flex: "0 0 auto",
@@ -191,58 +209,37 @@ function QueueRow(props: {
       >
         {props.note}
       </span>
-      {editing ? (
-        <>
-          {/* 显式的保存/放弃：只靠 Enter 收尾用户发现不了 */}
-          <QueueAction title="保存修改" onClick={commit}>
-            <Icon name="check" size={12} />
-          </QueueAction>
-          <QueueAction title="放弃修改" onClick={discard}>
-            <Icon name="x" size={12} />
-          </QueueAction>
-        </>
-      ) : (
-        <>
-          {editable && (
-            <QueueAction
-              title="编辑这条排队"
-              onClick={() => {
-                setDraft(initial);
-                setEditing(true);
-              }}
-            >
-              <Icon name="pencil-line" size={12} />
-            </QueueAction>
-          )}
-          {props.onInterrupt !== undefined && <QueueAction onClick={props.onInterrupt}>立即</QueueAction>}
-          <QueueAction title="取消这条排队" onClick={props.onCancel}>
-            取消
-          </QueueAction>
-        </>
-      )}
+      <QueueAction title={props.runNowTitle} onClick={props.onSendNow}>
+        <Icon name="corner-down-left" size={12} />
+      </QueueAction>
+      <QueueAction title={props.withdrawTitle} onClick={props.onWithdraw}>
+        <Icon name="undo-2" size={12} />
+      </QueueAction>
     </div>
   );
 }
 
-function QueueAction(props: { onClick: () => void; title?: string; children: ReactNode }) {
+/** 图标动作键：方形热区，`title` 是唯一的语义来源，不得缺。 */
+function QueueAction(props: { onClick: () => void; title: string; children: ReactNode }) {
   return (
     <button
       type="button"
       title={props.title}
+      // Icon 是 aria-hidden，纯图标按钮对读屏就是一个空按钮——label 必须显式给
+      aria-label={props.title}
       onClick={props.onClick}
       style={{
         flex: "0 0 auto",
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
+        width: 22,
         height: 22,
-        padding: "0 var(--space-3)",
         background: "var(--color-bg-muted)",
-        color: "var(--color-text-primary)",
+        color: "var(--color-text-secondary)",
         border: 0,
         borderRadius: "var(--radius-md)",
         font: "inherit",
-        fontSize: "var(--font-size-micro)",
         cursor: "pointer",
         transition: "var(--transition-hover)",
       }}
