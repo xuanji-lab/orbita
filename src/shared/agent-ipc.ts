@@ -20,12 +20,10 @@ export const ipcChannels = {
   providerRemove: "provider:remove",
   /** 拖拽排序的落盘：载荷是全量 id 的新顺序 */
   providerReorder: "provider:reorder",
-  agentCreate: "agent:create",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
   /** 把排队中的某一条**立即**发出：打断当前轮（含正在跑的工具调用），它成为新一轮 */
   agentInterrupt: "agent:interrupt",
-  /** 编辑排队中的消息：cancel = 移出队列，edit = 改文本 */
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
   agentSetMode: "agent:set-mode",
@@ -141,11 +139,47 @@ export interface ProviderSecrets {
   models: ModelDecl[];
 }
 
+/**
+ * 一轮 agent 调用的完整开工上下文（runtime 无状态化后每次都要带）：
+ * pi 只当无状态循环，每轮开 → 跑 → 销毁，「建会话」不再是独立的一步——
+ * 原本 create 需要的全部上下文，随每次 submit / interrupt / compact 一起给。
+ * renderer 只报 providerId，明文密钥由主进程装配（ProviderSecrets）后发给 agent 进程。
+ */
+export interface AgentTurnContext {
+  sessionId: string;
+  cwd: string;
+  /** 这条会话属于哪个工作区；null = 不属于任何工作区（侧栏 TASKS 节点下那些）。首次 submit 时主进程用它建 meta */
+  workspaceId: string | null;
+  /**
+   * 续跑 pi 的本子：把它自己的 session 文件路径还给 pi（`SessionManager.open`）；
+   * null = 开新本子（`.create`）。
+   */
+  resume: { piSessionFile: string } | null;
+  providerId: string;
+  modelId: string;
+  mode: PermissionMode;
+}
+
+/** 发一轮（renderer → 主进程的载荷） */
+export interface SubmitAgentInput extends AgentTurnContext {
+  text: string;
+}
+
+/** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
+export interface CompactAgentInput extends AgentTurnContext {
+  instructions?: string;
+}
+
 /** 主进程 → agent 进程 */
 export type AgentCommand =
   | {
-      type: "create";
+      /**
+       * 开一轮：open（piSessionFile 有值就续，没有就新建）→ prompt → 跑完销毁。
+       * 同一会话已在跑时 agent 进程抛 already running。
+       */
+      type: "submit";
       sessionId: string;
+      text: string;
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;
@@ -157,7 +191,6 @@ export type AgentCommand =
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
     }
-  | { type: "submit"; sessionId: string; text: string }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
    * 生成是一次独立的小 LLM 调用，成功经 `title` 事件回传；失败/模型拒答不发事件，
@@ -166,17 +199,34 @@ export type AgentCommand =
   | { type: "generateTitle"; sessionId: string; text: string }
   | { type: "abort"; sessionId: string }
   | {
-      /** 立即发送排队中的第 index 条：出队 → abort 当前轮（含工具调用）→ 它成为新一轮 */
+      /** 立即发送排队中的某一条：abort 当前轮（含正在跑的工具调用）→ 这条作为新一轮 submit */
       type: "interrupt";
       sessionId: string;
       /** 要发的文本。**队列在 renderer 一侧**，这里只负责「停下当前这一轮、发这句话」 */
       text: string;
+      cwd: string;
+      provider: ProviderSecrets;
+      modelId: string;
+      mode: PermissionMode;
+      piSessionDir: string;
+      piSessionFile?: string;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
    * 忙碌态与界碑都走 `compaction_start` / `compaction` 事件那一条链。
    */
-  | { type: "compact"; sessionId: string; instructions?: string }
+  | {
+      /** 手动压缩：开（或续）本子 → compact → 销毁。忙碌态与界碑走事件链，不当场返回 */
+      type: "compact";
+      sessionId: string;
+      instructions?: string;
+      cwd: string;
+      provider: ProviderSecrets;
+      modelId: string;
+      mode: PermissionMode;
+      piSessionDir: string;
+      piSessionFile?: string;
+    }
   | { type: "listBuiltins" }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
@@ -268,17 +318,3 @@ export type AgentEvent =
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
   | { type: "failed"; sessionId: string | null; message: string; turn?: true };
-
-export interface CreateAgentInput {
-  cwd: string;
-  /**
-   * 续一条已有会话：**沿用它的 id**（新消息接着写进同一份记录），
-   * 并把 pi 自己那份 session 文件还给 pi。null = 开新的一条。
-   */
-  resume: { sessionId: string; piSessionFile: string } | null;
-  /** 这条会话属于哪个工作区；null = 不属于任何工作区（侧栏 TASKS 节点下那些） */
-  workspaceId: string | null;
-  providerId: string;
-  modelId: string;
-  mode: PermissionMode;
-}
