@@ -122,6 +122,32 @@ describe("hasModelOverrides —— 补注册的触发条件之一", () => {
       false,
     );
   });
+
+  test("vision 覆盖也算：图片能力声明要触发补注册才能落成 input 模态", () => {
+    assert.equal(hasModelOverrides([{ id: "m", vision: true }]), true);
+    assert.equal(hasModelOverrides([{ id: "m", vision: false }]), true);
+    assert.equal(hasModelOverrides([{ id: "m", vision: undefined }]), false);
+  });
+});
+
+describe("vision 覆盖落成 input 模态", () => {
+  test("vision: true → 可吃图片；false → 强制纯文本；缺省 → 目录原样", () => {
+    const visionModel = catalogModel("glm-5v", 204_800, 0.6);
+    (visionModel as { input?: string[] }).input = ["text", "image", "pdf"];
+    const plainWithImage = catalogModel("glm-5-plain", 131_072, 0.6);
+    (plainWithImage as { input?: string[] }).input = ["text", "image", "pdf"];
+    const result = toFallbackModels([visionModel, plainWithImage], [
+      { id: "glm-5v", vision: false },
+      { id: "gateway-novel", vision: true },
+      { id: "glm-5-plain" },
+    ]);
+    // 用户强制关：目录带的 image / pdf 都收走
+    assert.deepEqual(result[0]?.input, ["text"]);
+    // 用户强制开：目录没有的条目也开出来（兜底本是纯文本）
+    assert.deepEqual(result[1]?.input, ["text", "image"]);
+    // 没写 vision 的目录条目原样带回，不被本字段碰
+    assert.deepEqual(result[2]?.input, ["text", "image", "pdf"]);
+  });
 });
 
 describe("toBuiltinModel —— 目录条目瘦身给设置面", () => {

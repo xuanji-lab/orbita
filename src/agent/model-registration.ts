@@ -66,18 +66,23 @@ export function toFallbackModels(
       maxTokens: decl.maxTokens ?? base.maxTokens,
       // cost 是整份替换（校验保证四档齐全）：用户明确报价，连目录的 tiers 一起作废
       ...(decl.cost === undefined ? {} : { cost: { ...decl.cost } }),
+      // vision 是覆盖声明：填了才动 input 模态（目录怎么说就怎么的留空不动）
+      ...(decl.vision === undefined ? {} : { input: decl.vision ? ["text", "image"] : ["text"] }),
     };
   });
 }
 
 /**
  * 任一声明模型带了用户覆盖字段吗。**带覆盖时即使目录认识选中 id 也必须补注册**——
- * 不重注册的话 getModel 返回的是目录原值，用户填的窗口 / 费率永远不生效。
+ * 不重注册的话 getModel 返回的是目录原值，用户填的窗口 / 费率 / 图片能力永远不生效。
  */
 export function hasModelOverrides(models: readonly ModelDecl[]): boolean {
   return models.some(
     (model) =>
-      model.contextWindow !== undefined || model.maxTokens !== undefined || model.cost !== undefined,
+      model.contextWindow !== undefined ||
+      model.maxTokens !== undefined ||
+      model.cost !== undefined ||
+      model.vision !== undefined,
   );
 }
 
