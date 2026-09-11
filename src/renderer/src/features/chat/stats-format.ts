@@ -8,6 +8,7 @@
  * （第二个消费者出现才建那一层）。
  */
 import type { AgentStats } from "../../../../shared/agent-ipc.ts";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { formatTokens } from "../../utils/format-tokens.ts";
 
 /** 用量环的一帧：`fill` 是 0–1 的弧长，null = 只画底环 */
@@ -65,10 +66,7 @@ export interface UsageRow {
  * 不是删掉而是条件显示：按量计费的 provider 上它仍然是最该被看见的一行。
  * 四位小数——展开看的人要的正是底栏那几位被舍入掉的。
  */
-export function usageBreakdown(
-  stats: AgentStats | null,
-  billing: "metered" | "plan" = "metered",
-): UsageRow[] {
+export function usageBreakdown(stats: AgentStats | null, billing: "metered" | "plan" = "metered"): UsageRow[] {
   if (stats === null) return [];
   const rows: UsageRow[] = [
     { label: "Input", value: formatTokens(stats.tokens.input) },
@@ -92,4 +90,44 @@ export function usageBreakdown(
     rows.push({ label: "Cost", value: `$${stats.cost.toFixed(4)}` });
   }
   return rows;
+}
+
+// ── token 速度（usage-speed-X）──
+// 真值的家在**回答自己身上**：adapter 在终态帧上算好挂 `speed`，随 transcript
+// 落盘、重开即回（归约器实测原样保留）。这里只有两样展示支援。
+
+/** `42 tok/s`——整数，tok/s 是 agent 工具界的通用写法，不翻译 */
+export function formatSpeed(speed: number): string {
+  return `${Math.round(speed)} tok/s`;
+}
+
+/** messageId → 生成起点（首个 streaming 帧的 adapter 时间戳）。Responding 行的估算分母。 */
+const streamingStarts = new Map<string, number>();
+
+/**
+ * 事件入口记账（`recordToolFrame` 同款：useChatSession 的 progress 处理处调）。
+ * 只记起点，幂等——增量帧重复到达不覆盖。真值不需要它（在帧上），Responding 行的
+ * 流式估算需要「这条消息从什么时候开始生成」，而归约器只留最后一帧的时间戳。
+ * ponytail: Map 无上限，一条消息几十字节。
+ */
+export function recordAssistantStart(item: TranscriptItem): void {
+  if (item.role !== "assistant" || item.status !== "streaming") return;
+  if (!streamingStarts.has(item.id)) streamingStarts.set(item.id, item.timestamp);
+}
+
+/** 这条消息的生成起点；没见过起点（中途才挂上 / 已落盘重开）返回 null。 */
+export function streamingStart(messageId: string): number | null {
+  return streamingStarts.get(messageId) ?? null;
+}
+
+/**
+ * 回答上的速度标注：adapter 挂在终态帧的 `speed` 字段，随记录落盘、重开照读。
+ * 字段不在 pi 的 schema 类型上（归约器实测原样保留），这里按运行时形态读，
+ * 不是一个数就当没有——不编。参数放宽成结构类型：调用方手里的可能是混着
+ * 压缩界碑的记录数组，界碑与没挂速度的都落 null。
+ */
+export function replySpeed(record: { role: unknown } | undefined | null): number | null {
+  if (record === undefined || record === null || record.role !== "assistant") return null;
+  const speed = (record as { speed?: unknown }).speed;
+  return typeof speed === "number" && speed > 0 ? speed : null;
 }

@@ -23,6 +23,7 @@ import {
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
+import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
@@ -298,6 +299,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
             event.progress.type === "item_finished")
         ) {
           recordToolFrame(event.progress.item);
+          // 流式起点在这里记账（stats-format）：Responding 行的估算分母要它，
+          // 而归约器只留最后一帧的时间戳。真值不需要——真值在终态帧的 speed 上
+          recordAssistantStart(event.progress.item);
         }
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
         setStates((prev) => {

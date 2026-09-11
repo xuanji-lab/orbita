@@ -8,10 +8,14 @@ import { isAtBottom } from "./scroll";
 import {
   branchAnchorEntries,
   branchAnchorIds,
+  answerText,
   editDiffText,
   fileViewFor,
   flattenRenderUnits,
+  formatToolDuration,
+  formatThinkingDuration,
   groupToolUnits,
+  groupTurns,
   indexToolResults,
   liveTailLines,
   parseEditDiff,
@@ -29,14 +33,17 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  turnStats,
   writeLineCount,
   type IntraToken,
   type RenderEntry,
   type ToolGroupUnit,
   type ToolResultIndex,
+  type TurnGroupUnit,
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
@@ -44,8 +51,9 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
-import { contextRing, usageBreakdown, type ContextRing } from "./stats-format";
+import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
+import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
@@ -308,16 +316,26 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = flattenRenderUnits(records);
   const entries = groupToolUnits(units);
-  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
-  const activeThinkingKey = streamingThinkingKey(records, session.phase === "turn");
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = session.phase === "turn";
+  // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
+  const turnView = groupTurns(entries, turnActive, toolResults);
+  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
+  const activeThinkingKey = streamingThinkingKey(records, turnActive);
   // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
-  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的
-  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), entries);
+  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的。
+  // 锚点算在**大折叠视图**上：锚点的正文永远在折叠外面，按钮跟着正文走。
+  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), turnView);
   const toolsRunning = session.transcript.some(
     (item) => item.role === "tool" && item.status === "running",
   );
+  // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**最后一条**折叠——
+  // turnError 属于转录末尾那轮，红字就渲染在它后面，图标与文字是一对；
+  // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
+  const failedFoldKey =
+    session.turnError !== null
+      ? ([...turnView].reverse().find((entry) => entry.kind === "turnGroup")?.key ?? null)
+      : null;
 
   return (
     <Pane
@@ -355,19 +373,33 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         session.turnError === null && (
           <StatusLine>No messages yet. Send the first one to start.</StatusLine>
         )}
-      {entries.map((entry, index) => {
+      {turnView.map((entry, index) => {
         const branchAfter = branchRows.get(index);
+        const anchorRecord =
+          branchAfter !== undefined
+            ? records.find((record) => record.id === branchAfter)
+            : undefined;
         return (
           <Fragment key={entry.key}>
-            <EntryView
-              entry={entry}
-              toolResults={toolResults}
-              activeThinkingKey={activeThinkingKey}
-              turnActive={turnActive}
-            />
+            {entry.kind === "turnGroup" ? (
+              <TurnRollupLine
+                group={entry}
+                toolResults={toolResults}
+                turnFailed={entry.key === failedFoldKey}
+              />
+            ) : (
+              <EntryView
+                entry={entry}
+                toolResults={toolResults}
+                activeThinkingKey={activeThinkingKey}
+                turnActive={turnActive}
+              />
+            )}
             {branchAfter !== undefined && (
               <BranchRow
                 anchorItemId={branchAfter}
+                speed={replySpeed(anchorRecord)}
+                copyText={answerText(anchorRecord)}
                 disabled={toolsRunning}
                 onBranch={session.branchFrom}
               />
@@ -393,7 +425,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         </div>
       )}
       {session.phase === "turn" &&
-        (session.retry !== null ? <Retrying status={session.retry} /> : <Responding />)}
+        (session.retry !== null ? <Retrying status={session.retry} /> : <Responding session={session} />)}
       {session.phase === "compaction" && (
         <>
           <Compacting />
@@ -541,7 +573,10 @@ function Pane(props: {
 function ComposerBar(props: { session: ChatSession }) {
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
-  const scope = workspace?.name ?? (session.cwd === null ? "Home" : basename(session.cwd));
+  // 作用域显示**目录名**。老工作区落库的名可能是完整路径（早期创建没截尾），
+  // 所以两个分支都要过 basename——显示层截尾，不动落库数据
+  const scopeSource = workspace?.name ?? session.cwd;
+  const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
 
   const scopeItems: MenuItem[] = [
     {
@@ -830,10 +865,113 @@ function EntryView(props: {
   return <ToolGroupLine group={entry} toolResults={props.toolResults} turnActive={props.turnActive} />;
 }
 
-/** 用户消息：右对齐的独立气泡；只有 text 块进气泡。 */
-function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
+/**
+ * 大折叠行（一轮一行）：agent 整轮回答落定后，这轮的思考行与工具行/组收成
+ * 一条统计——`Worked 45s · thought 2 · tools 8 · bash 3 · read 5 1 · edit 2`
+ * （段与段之间用 · 分隔；失败数是紧跟在工具次数后面的红色数字）。
+ * Worked 之后每个段都是「标签 + 数字」同一语法：thought / tools 与工具名
+ * 同一套小写词汇，数字一律在后。
+ * 工具类别用**真实工具名**而非组行动词（Run/Read…）：统计行是机器事实，
+ * Run 会把 bash 与 powershell 混为一谈，且成员行展开后显示的也是同一套名字。
+ * 思考排在工具之前——先想后做，时间序。
+ * 展开就是成员行原样（小折叠降级为成员，两层折叠契约）；轮耗时是记录时间戳
+ * 的跨度（adapter 每帧落 now()，旧会话也准）。
+ * 图标裁决（用户）：折叠头**不带图标**——工具类失败靠跟在工具后面的红色数字
+ * 说话；只有回合级失败（网络中断、重试耗尽——turnError 的红字就渲染在折叠
+ * 后面）才在行首亮红 triangle，图标与那行红字是一对。
+ * 成员行与折叠头同左缘（不缩进），与 ToolGroupLine 的成员同一规矩。
+ */
+function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex; turnFailed: boolean }) {
+  const [open, setOpen] = useState(false);
+  const { group } = props;
+  const stats = turnStats(group, props.toolResults);
+  // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
+  // 工具次数与它的失败数字是一个段，中间不插
+  const segments: ReactNode[] = [];
+  if (stats.durationMs !== null) {
+    segments.push(
+      <span style={headLabel(false)}>
+        {COPY.worked} {formatToolDuration(stats.durationMs)}
+      </span>,
+    );
+  }
+  if (stats.thinkingCount > 0) {
+    segments.push(
+      <span style={SLOT.status}>
+        {COPY.thought} {stats.thinkingCount}
+      </span>,
+    );
+  }
+  if (stats.calls > 0) {
+    segments.push(<span style={SLOT.status}>{COPY.tools(stats.calls)}</span>);
+  }  for (const { toolName, count, failed } of stats.byTool) {
+    segments.push(
+      <span style={SLOT.status}>
+        {toolName} {count}
+        {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
+        {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
+      </span>,
+    );
+  }
   return (
-    <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        {props.turnFailed && (
+          <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
+            <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          </span>
+        )}
+        {segments.map((segment, index) => (
+          <Fragment key={index}>
+            {index > 0 && <span style={SEP_DOT}>·</span>}
+            {segment}
+          </Fragment>
+        ))}
+      </CollapseRow>
+      {open && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          {group.members.map((member) => (
+            <EntryView
+              key={member.key}
+              entry={member}
+              toolResults={props.toolResults}
+              activeThinkingKey={null}
+              turnActive={false}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 用户消息：右对齐的独立气泡；只有 text 块进气泡。text 走 MathText——
+ * 公式就地渲染（行内随文、块级居中），**不解析 markdown**：其余一切按原样，
+ * 用户气泡与模型回复（MarkdownBlock）刻意是两套渲染。
+ * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
+ */
+function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  const copyText = props.item.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        width: "100%",
+        gap: 2,
+      }}
+    >
       <div
         style={{
           width: "fit-content",
@@ -850,9 +988,30 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         }}
       >
         {props.item.content.map((block, index) =>
-          block.type === "text" ? <span key={index}>{block.text}</span> : null,
+          block.type === "text" ? <MathText key={index} text={block.text} /> : null,
         )}
       </div>
+      <button
+        type="button"
+        title={copied ? "Copied" : "Copy message"}
+        aria-label={copied ? "Copied" : "Copy message"}
+        disabled={copyText === ""}
+        onClick={() => {
+          void navigator.clipboard.writeText(copyText);
+          setCopied(true);
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: 3,
+          border: "none",
+          background: "none",
+          color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
+          cursor: copyText === "" ? "default" : "pointer",
+        }}
+      >
+        <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
+      </button>
     </div>
   );
 }
@@ -862,14 +1021,46 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
  * （用户裁决：不用 hover 浮现）。图标即按钮——悬停 / 读屏都走「Branch from here」这同一个
  * 名字。点了开出一条新会话（该回答及之前的全部），原会话原封不动，所以**无需确认弹窗**。
  * 工具还在跑时禁用：它的结果没齐，此刻裁出去的上下文是畸形的。
+ * 分支旁的复制图标（usage-speed-X 同行）：拷该回答的正文（markdown 原样，只含 text 块），
+ * 成功后图标换对勾 1.2s——复制成功用图标换字形，不用颜色（ActionRail 同款）。
+ * 再右边是这条回答的生成速度：adapter 挂在终态帧上的真值，随记录落盘、重开即回；
+ * 过不了噪音门的回答没有这个字段，也就不显示。
  */
 function BranchRow(props: {
   anchorItemId: string;
+  speed: number | null;
+  copyText: string;
   disabled: boolean;
   onBranch: (anchorItemId: string) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   return (
-    <div style={{ display: "flex", width: "100%" }}>
+    <div style={{ display: "flex", width: "100%", alignItems: "center", gap: "calc(var(--space-3) / 2)" }}>
+      <button
+        type="button"
+        title={copied ? "Copied" : "Copy answer"}
+        aria-label={copied ? "Copied" : "Copy answer"}
+        onClick={() => {
+          void navigator.clipboard.writeText(props.copyText);
+          setCopied(true);
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: 4,
+          border: "none",
+          background: "none",
+          color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
+      </button>
       <button
         type="button"
         disabled={props.disabled}
@@ -888,6 +1079,18 @@ function BranchRow(props: {
       >
         <Icon name="git-branch" size={12} strokeWidth={1.8} />
       </button>
+      {props.speed !== null && (
+        <span
+          style={{
+            color: "var(--color-text-tertiary)",
+            fontFamily: "var(--font-family-business)",
+            fontVariantNumeric: "tabular-nums",
+            fontSize: "var(--font-size-micro)",
+          }}
+        >
+          {formatSpeed(props.speed)}
+        </span>
+      )}
     </div>
   );
 }
@@ -988,6 +1191,13 @@ const HEAD_WRAP = {
   flex: "0 0 auto",
 } satisfies React.CSSProperties;
 
+/** 大折叠统计段的分隔点：段落边界的标点，最淡一档——它是标点不是内容。 */
+const SEP_DOT = {
+  flex: "0 0 auto",
+  color: "var(--color-text-tertiary)",
+  opacity: 0.6,
+} satisfies React.CSSProperties;
+
 /**
  * 展开体的纵向导轨：与行首 icon 的**左缘相切**——x = 10px（按钮内边距，即 icon 的
  * 左缘）。展开内容一律不越过导轨左侧：展开体明确属于它上面那一行，不与
@@ -1041,12 +1251,15 @@ const COPY = {
   waitingOutput: "(waiting for output…)",
   noOutput: "(no output)",
   branchFromHere: "Branch from here",
+  worked: "Worked",
+  thought: "thought",
   lines: (n: number): string => `${n} lines`,
   files: (n: number): string => `${n} files`,
   commands: (n: number): string => `${n} commands`,
   matches: (n: number): string => `${n} matches`,
   directories: (n: number): string => `${n} directories`,
   calls: (n: number): string => `${n} calls`,
+  tools: (n: number): string => `tools ${n}`,
   failed: (n: number): string => `${n} failed`,
 };
 
@@ -1071,12 +1284,13 @@ function toolIcon(toolName: string): IconName {
   }
 }
 
-/** 组行的动词标签：一行里 N 件同类事，说类别不说工具名；不认识的用回工具名。 */
+/**
+ * 组行的标签。bash / powershell 直接用**真实工具名**（用户裁决：不说 Run）——
+ * Run 是编造的动词，还把两个不同的工具混为一谈；其余保留动词标签（Read/Search…，
+ * 与「N files」量词配套），不认识的工具本就回落真名。
+ */
 function toolGroupLabel(toolName: string): string {
   switch (toolName) {
-    case "bash":
-    case "powershell":
-      return "Run";
     case "read":
       return "Read";
     case "grep":
@@ -1131,6 +1345,15 @@ function ToolLine(props: {
   const active = result === undefined || result.status === "running";
   const summary = summarizeToolResult(result);
   const callSummary = toolCallSummary(props.toolName, props.input);
+  // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
+  // 完整路径进 tooltip。toolCallSummary 本身保持原始 path 语义（editGroupFileCount 靠它去重）
+  const pathTool =
+    props.toolName === "read" ||
+    props.toolName === "write" ||
+    props.toolName === "edit" ||
+    props.toolName === "ls";
+  const callLabel =
+    callSummary !== null && pathTool ? splitPathTail(callSummary).name : callSummary;
   // 跑着的 shell 有实时增量可展，其余工具跑完才有完整结果（见 toolExpandable）
   const expandable = toolExpandable(result, props.toolName);
   const live = expandable && active;
@@ -1142,8 +1365,7 @@ function ToolLine(props: {
   const body = live ? liveTailLines(rawBody) : rawBody;
   // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
   const fileView = finished ? fileViewFor(props.toolName, props.input, result) : null;
-  const fileLang =
-    fileView !== null ? langFromPath(toolCallSummary(props.toolName, props.input) ?? "") : null;
+  const fileLang = fileView !== null ? langFromPath(callSummary ?? "") : null;
   const writeLines =
     !open && props.toolName === "write" && fileView !== null ? writeLineCount(props.input) : null;
   // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有
@@ -1165,18 +1387,12 @@ function ToolLine(props: {
           </span>
           <span style={headLabel(active)}>{props.toolName}</span>
         </span>
-        {callSummary !== null && (
+        {callLabel !== null && (
           <span
-            style={
-              props.toolName === "read" ||
-              props.toolName === "write" ||
-              props.toolName === "edit" ||
-              props.toolName === "ls"
-                ? { ...SLOT.sub, color: "var(--color-chat-link)" }
-                : SLOT.sub
-            }
+            title={callSummary !== callLabel ? (callSummary ?? undefined) : undefined}
+            style={pathTool ? { ...SLOT.sub, color: "var(--color-chat-link)" } : SLOT.sub}
           >
-            {callSummary}
+            {callLabel}
           </span>
         )}
         {/* 增删统计紧跟文件名（git stat 读法）；与展开后 DiffView 头重复，展开时藏起 */}
@@ -1644,7 +1860,34 @@ function CompactedLine(props: { record: CompactedRecord }) {
   );
 }
 
-function Responding() {
+function Responding(props: { session: ChatSession }) {
+  const { transcript } = props.session;
+  // 秒针：Responding 只在回答期间挂载，一秒一跳不白算（Retrying 同款）
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  // 耗时：本轮用户发话至今——「agent 回答了多久」是人感知的那段时间
+  let userTs: number | null = null;
+  for (const item of transcript) {
+    if (item.role === "user") userTs = item.timestamp;
+  }
+  const elapsed = userTs !== null ? formatThinkingDuration(Math.max(0, now - userTs)) : null;
+  // 流式速度：in-flight 的字符估算（estimateStreamingTokens，英文校准的粗账——
+  // 中文会低估数倍，落定即被回答旁的真值顶替）÷ 本条消息已生成的秒数
+  let speedText: string | null = null;
+  const streaming = transcript.at(-1);
+  if (streaming !== undefined && streaming.role === "assistant" && streaming.status === "streaming") {
+    const chars = streaming.content.reduce(
+      (sum, block) =>
+        sum + (block.type === "text" ? block.text.length : block.type === "thinking" ? block.thinking.length : 0),
+      0,
+    );
+    const start = streamingStart(streaming.id);
+    const speed = start !== null ? messageSpeed(start, now, estimateStreamingTokens(chars)) : null;
+    if (speed !== null) speedText = formatSpeed(speed);
+  }
   return (
     <p
       className="orbita-breath"
@@ -1662,6 +1905,17 @@ function Responding() {
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
       Responding
+      {elapsed !== null && <span>· {elapsed}</span>}
+      {speedText !== null && (
+        <span
+          style={{
+            fontFamily: "var(--font-family-business)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          · {speedText}
+        </span>
+      )}
     </p>
   );
 }
@@ -1812,7 +2066,8 @@ function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
   return null;
 }
 
+/** 取路径尾段。分隔符 `/` 与 `\` 都认——Windows 的 cwd 是反斜杠，只切 `/` 会整条漏出来 */
 function basename(path: string): string {
-  const parts = path.split("/").filter((part) => part !== "");
+  const parts = path.split(/[\\/]/).filter((part) => part !== "");
   return parts[parts.length - 1] ?? path;
 }
