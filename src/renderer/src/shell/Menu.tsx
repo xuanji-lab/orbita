@@ -10,6 +10,8 @@ export interface MenuItem {
   icon?: IconName;
   /** 右侧的说明。菜单项自己解释后果，比事后弹一个确认框好 */
   hint?: string;
+  /** 最右端的徽标区（如模型项的 ctx 窗口与图片能力）。小而事实性的东西，不参与布局语义 */
+  badge?: React.ReactNode;
   /** 当前项。用 check 图标标出来，不用染色——状态优先图标与文字 */
   checked?: boolean;
   disabled?: boolean;
@@ -19,6 +21,8 @@ export interface MenuItem {
    * 而这些行从来不是一件事。数字用 mono 字体（设计系统：mono for machine facts）。
    */
   fact?: boolean;
+  /** 分组头：菜单里一节的小标题（如模型菜单的厂商名）。不可选、不抢焦点，样式同设置面的节标题 */
+  header?: boolean;
   /** 破坏性动作：danger 色。**只给真的会丢东西的那一项** */
   danger?: boolean;
   /**
@@ -27,6 +31,41 @@ export interface MenuItem {
    */
   keepOpen?: boolean;
   onSelect?: () => void;
+}
+
+/**
+ * 搜索过滤（searchable 菜单用）：命中行保留；组头跟着走——组内有命中就带组头，
+ * 组头名自己命中（按厂商搜）就整组保留。q 为空原样返回。
+ */
+function filterMenuItems(items: MenuItem[], q: string): MenuItem[] {
+  if (q === "") return items;
+  const hit = (label: string) => label.toLowerCase().includes(q);
+  const out: MenuItem[] = [];
+  let header: MenuItem | null = null;
+  let all: MenuItem[] = [];
+  let matched: MenuItem[] = [];
+  const flush = () => {
+    if (header !== null) {
+      if (hit(header.label)) out.push(header, ...all);
+      else if (matched.length > 0) out.push(header, ...matched);
+    } else {
+      out.push(...matched);
+    }
+    header = null;
+    all = [];
+    matched = [];
+  };
+  for (const item of items) {
+    if (item.header === true) {
+      flush();
+      header = item;
+    } else {
+      all.push(item);
+      if (hit(item.label)) matched.push(item);
+    }
+  }
+  flush();
+  return out;
 }
 
 /** 悬停打开的菜单：光标离开后多久关。够穿过那道缝，又不至于像粘住了 */
@@ -56,14 +95,18 @@ export function Menu(props: {
    * 光标只是路过输入框上方，正在打的字不该因此断掉；点开的才把焦点交给菜单。
    */
   hoverOpen?: boolean;
+  /** 顶部渲染搜索框，按键实时过滤（模型菜单这类长清单）。打开即聚焦，关闭即清空 */
+  searchable?: boolean;
   /** 开合的回声。给调用方复位自己的两段式状态用（菜单关了，确认态不该留着） */
   onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const [active, setActive] = useState(0);
+  const [query, setQuery] = useState("");
   const anchorRef = useRef<HTMLSpanElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   /** 这次是点开的还是悬停开的——决定要不要把焦点交给菜单 */
   const byClickRef = useRef(false);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -71,6 +114,7 @@ export function Menu(props: {
   const close = useCallback(() => {
     setOpen(false);
     setPosition(null);
+    setQuery("");
   }, []);
 
   const cancelLeave = () => {
@@ -127,14 +171,21 @@ export function Menu(props: {
   }, [props.align, close]);
 
   // 首次打开：先按旧位置渲染但不可见，量到真实高度之后再定位——菜单高度取决于
-  // 内容，不先量就只能猜。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下
+  // 内容，不先量就只能猜。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下。
+  // 搜索过滤改变行数时同样要重量——deps 里的 visible.length 就是为此
+  const visible = filterMenuItems(props.items, query.trim().toLowerCase());
+  const searching = props.searchable === true && query.trim() !== "";
   useLayoutEffect(() => {
     if (!open) return;
     positionMenu();
-    // 点开的才拿焦点（键盘导航）；悬停开的把焦点留在原处。滚动跟随不在这里走——
-    // 焦点只在该拿到的那一刻给一次，跟着滚动反复 focus 会把用户的选区打飞
-    if (byClickRef.current) menuRef.current?.focus();
-  }, [open, props.items.length, positionMenu]);
+    // 点开的才拿焦点（键盘导航）；悬停开的把焦点留在原处。搜索框优先——
+    // 打开就想打字，不该再点一下。滚动跟随不在这里走——焦点只在该拿到的那一刻
+    // 给一次，跟着滚动反复 focus 会把用户的选区打飞
+    if (byClickRef.current) {
+      if (props.searchable === true) searchRef.current?.focus();
+      else menuRef.current?.focus();
+    }
+  }, [open, visible.length, positionMenu, props.searchable]);
 
   useEffect(() => {
     if (!open) return;
@@ -156,7 +207,10 @@ export function Menu(props: {
     };
   }, [open, close, positionMenu]);
 
-  const enabled = props.items.filter((item) => item.disabled !== true && item.fact !== true);
+  // 键盘导航与渲染都走**过滤后**的清单——搜索时 cursor 与 Enter 只在可见项里打转
+  const enabled = visible.filter(
+    (item) => item.disabled !== true && item.fact !== true && item.header !== true,
+  );
   /** 打开时光标落在**当前项**上。落在第一项会让人以为选中的是第一项。 */
   const cursorAtChecked = () => Math.max(0, enabled.findIndex((item) => item.checked === true));
 
@@ -228,6 +282,8 @@ export function Menu(props: {
                 move(-1);
               }
               if (event.key === "Enter" || event.key === " ") {
+                // 焦点在搜索框时空格是打字，不是选择
+                if (event.key === " " && searchRef.current === document.activeElement) return;
                 event.preventDefault();
                 const item = enabled[active];
                 if (item !== undefined) choose(item);
@@ -255,7 +311,59 @@ export function Menu(props: {
               outline: "none",
             }}
           >
-            {props.items.map((item) => (
+            {props.searchable === true && (
+              <div style={{ position: "relative", margin: "1px 1px var(--space-1)" }}>
+                <span
+                  style={{
+                    position: "absolute",
+                    left: 8,
+                    top: "50%",
+                    translate: "0 -50%",
+                    display: "inline-flex",
+                    color: "var(--color-text-tertiary)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <Icon name="search" size={13} />
+                </span>
+                <input
+                  ref={searchRef}
+                  value={query}
+                  placeholder="Search models…"
+                  spellCheck={false}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setActive(0);
+                  }}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    height: "var(--control-height-sm)",
+                    padding: "0 10px 0 27px",
+                    border: "1px solid var(--color-border-default)",
+                    borderRadius: "var(--radius-md)",
+                    background: "var(--color-bg-panel)",
+                    color: "var(--color-text-primary)",
+                    fontFamily: "var(--font-family-base)",
+                    fontSize: "var(--font-size-control)",
+                    outline: "none",
+                  }}
+                />
+              </div>
+            )}
+            {searching && visible.length === 0 && (
+              <div
+                style={{
+                  padding: "var(--space-2)",
+                  fontFamily: "var(--font-family-base)",
+                  fontSize: "var(--font-size-caption)",
+                  color: "var(--color-text-tertiary)",
+                }}
+              >
+                No models match.
+              </div>
+            )}
+            {visible.map((item) => (
               <MenuRow
                 key={item.id}
                 item={item}
@@ -283,17 +391,18 @@ function MenuRow(props: {
 }) {
   const { item } = props;
   const fact = item.fact === true;
-  const disabled = item.disabled === true || fact;
+  const header = item.header === true;
+  const disabled = item.disabled === true || fact || header;
   return (
     <button
       type="button"
-      role={fact ? "presentation" : "menuitem"}
+      role={fact || header ? "presentation" : "menuitem"}
       disabled={disabled}
       onMouseEnter={props.onHover}
       onClick={props.onSelect}
       style={{
         display: "grid",
-        gridTemplateColumns: "16px minmax(0,1fr) auto",
+        gridTemplateColumns: "16px minmax(0,1fr) auto auto",
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
@@ -308,9 +417,21 @@ function MenuRow(props: {
         fontSize: "var(--font-size-control)",
         textAlign: "left",
         // 事实行不是「禁止你点」，光标不该摆出禁止符
-        cursor: fact ? "default" : disabled ? "not-allowed" : "pointer",
+        cursor: fact || header ? "default" : disabled ? "not-allowed" : "pointer",
         // 事实行矮一档（xs）：一眼能看出它们不是可点的那一类
         ...(fact ? { minHeight: "var(--control-height-xs)" } : null),
+        // 分组头 = 设置面节标题的同款语言：mono、micro、大写加字距
+        ...(header
+          ? {
+              minHeight: "var(--control-height-sm)",
+              paddingTop: "var(--space-2)",
+              fontFamily: "var(--font-family-mono)",
+              fontSize: "var(--font-size-micro)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: "var(--color-text-secondary)",
+            }
+          : null),
       }}
     >
       <span
@@ -347,6 +468,7 @@ function MenuRow(props: {
           {item.hint}
         </span>
       )}
+      {item.badge}
     </button>
   );
 }

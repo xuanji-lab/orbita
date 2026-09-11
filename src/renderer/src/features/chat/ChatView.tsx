@@ -52,7 +52,10 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
-import { isPlanBilling } from "@shared/known-providers";
+import { isPlanBilling, KNOWN_PROVIDERS, knownModelParams } from "@shared/known-providers";
+import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
+import { api } from "../../api";
+import { kindOf, modelContextText } from "../settings/providers-view-model.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
@@ -623,6 +626,16 @@ function ComposerBar(props: { session: ChatSession }) {
   const scopeSource = workspace?.name ?? session.cwd;
   const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
 
+  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
+  // 拉不到就空目录——徽标如实落到 fallback，不挡选模型
+  const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
+  useEffect(() => {
+    void api.provider
+      .builtins()
+      .then(setCatalog)
+      .catch(() => setCatalog([]));
+  }, []);
+
   const scopeItems: MenuItem[] = [
     {
       id: "home",
@@ -650,17 +663,45 @@ function ComposerBar(props: { session: ChatSession }) {
     onSelect: () => session.changeMode(value),
   }));
 
-  // 所有 provider 的所有已启用模型摊平；provider 名字放在右边当说明
-  const modelItems: MenuItem[] = session.usable.flatMap((provider) =>
-    provider.models.declared.map((declared) => ({
-      id: `${provider.id}:${declared.id}`,
-      label: declared.id,
-      hint: provider.displayName,
-      checked:
-        session.model?.providerId === provider.id && session.model.modelId === declared.id,
-      onSelect: () => session.chooseModel(provider.id, declared.id),
-    })),
-  );
+  // 按厂商分组：厂商名做组头行，模型行缩进其下只带参数徽标——参数口径与设置页
+  // 完全同源（用户覆盖 > pi 目录 > 白名单 > 兜底），两边讲同一个故事
+  const modelItems: MenuItem[] = session.usable.flatMap((provider) => {
+    const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
+    const metaOf = (id: string): BuiltinModel | undefined =>
+      known?.catalogId === undefined
+        ? undefined
+        : catalog.find((c) => c.id === known.catalogId)?.models.find((m) => m.id === id);
+    const rows: MenuItem[] = [
+      { id: `hdr:${provider.id}`, label: provider.displayName, header: true },
+    ];
+    for (const declared of provider.models.declared) {
+      const badge = modelContextText(
+        declared,
+        metaOf(declared.id),
+        knownModelParams(known?.id ?? "", declared.id),
+      );
+      rows.push({
+        id: `${provider.id}:${declared.id}`,
+        label: declared.id,
+        badge: (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
+            <span className="pv-badge" title="Context window">
+              {badge.text}
+            </span>
+            {declared.vision === true && (
+              <span className="pv-badge" title="Accepts image input — multimodal">
+                <Icon name="image" size={11} strokeWidth={1.8} />
+              </span>
+            )}
+          </span>
+        ),
+        checked:
+          session.model?.providerId === provider.id && session.model.modelId === declared.id,
+        onSelect: () => session.chooseModel(provider.id, declared.id),
+      });
+    }
+    return rows;
+  });
 
   return (
     <>
@@ -695,13 +736,13 @@ function ComposerBar(props: { session: ChatSession }) {
       {modelItems.length > 0 && (
         <Menu
           items={modelItems}
+          searchable
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
                 title="Model · applies from the next message"
               onClick={toggle}
               chevron
-              italic
             >
               {session.model?.modelId ?? "No model"}
             </Chip>
@@ -1602,7 +1643,8 @@ function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "4ch 1fr",
+        // 轨道要连 LINE_NUM_COLUMN 的横向内边距一起算进去，否则三位数行号顶穿竖线挤进正文
+        gridTemplateColumns: "calc(4ch + var(--space-2) + var(--space-1)) 1fr",
         background:
           kind === "add"
             ? "var(--color-success-soft)"
@@ -1661,8 +1703,9 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
   const lines = props.lang !== null ? highlightLines(props.text, props.lang) : null;
   const rows: readonly (string | readonly TokenSpan[])[] = lines ?? props.text.split("\n");
   const lastLine = props.startLine + rows.length - 1;
-  // 行号列宽随位数长（read/write 不设上限），最小 3ch 保持与 diff 4ch 相近的观感
-  const gutter = `${Math.max(3, String(lastLine).length)}ch`;
+  // 轨道 = 位数 + 行号格的横向内边距（不算 padding 的话三位数起就顶穿竖线挤进正文）
+  const digits = Math.max(3, String(lastLine).length);
+  const gutter = `calc(${digits}ch + var(--space-2) + var(--space-1))`;
   return (
     <div
       className="scroll"
