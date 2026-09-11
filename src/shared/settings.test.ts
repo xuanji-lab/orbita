@@ -1,11 +1,11 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_SETTINGS, parseSettings, THEME_PREFERENCES } from "./settings.ts";
+import { DEFAULT_SETTINGS, DRAWER_WIDTH, parseSettings, THEME_PREFERENCES } from "./settings.ts";
 
 describe("parseSettings", () => {
   it("四档主题都认（含 black 手动档）", () => {
     for (const theme of THEME_PREFERENCES) {
-      deepStrictEqual(parseSettings({ theme }), { theme });
+      deepStrictEqual(parseSettings({ theme }), { theme, drawer: DEFAULT_SETTINGS.drawer });
     }
   });
 
@@ -31,6 +31,47 @@ describe("parseSettings", () => {
   it("不认识的字段丢掉，不原样带过去", () => {
     deepStrictEqual(parseSettings({ theme: "dark", fontScale: 2, nested: { a: 1 } }), {
       theme: "dark",
+      drawer: DEFAULT_SETTINGS.drawer,
     });
+  });
+});
+
+describe("parseSettings: drawer 字段", () => {
+  it("旧文件没有 drawer 字段：退回默认（收起 / 320 / 无停靠）", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).drawer, DEFAULT_SETTINGS.drawer);
+  });
+
+  it("合法值原样保留；宽度取整", () => {
+    const parsed = parseSettings({ drawer: { open: true, width: 412.7, docked: ["a", "b"] } });
+    deepStrictEqual(parsed.drawer, { open: true, width: 413, docked: ["a", "b"] });
+  });
+
+  it("越界宽度不钳制、退回默认——钳制是渲染层拖拽的事，这里不猜", () => {
+    deepStrictEqual(
+      parseSettings({ drawer: { open: true, width: 99 } }).drawer.width,
+      DRAWER_WIDTH.default,
+    );
+    deepStrictEqual(
+      parseSettings({ drawer: { open: true, width: 9999 } }).drawer.width,
+      DRAWER_WIDTH.default,
+    );
+  });
+
+  it("坏值逐字段退回默认：非字符串的停靠 id 直接丢", () => {
+    deepStrictEqual(parseSettings({ drawer: { open: "yes", width: "wide", docked: "all" } }).drawer, {
+      open: false,
+      width: DRAWER_WIDTH.default,
+      docked: [],
+    });
+    deepStrictEqual(
+      parseSettings({ drawer: { open: true, width: 380, docked: [1, "a", null] } }).drawer.docked,
+      ["a"],
+    );
+  });
+
+  it("drawer 整体不是对象：整体退回默认，theme 不受牵连", () => {
+    const parsed = parseSettings({ theme: "light", drawer: "collapsed" });
+    deepStrictEqual(parsed.theme, "light");
+    deepStrictEqual(parsed.drawer, DEFAULT_SETTINGS.drawer);
   });
 });

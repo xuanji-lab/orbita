@@ -13,6 +13,19 @@
 export const THEME_PREFERENCES = ["system", "light", "dark", "black"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
+/**
+ * 右抽屉的记忆（2026-09-11 裁决：记住上次，而不是每次启动都收回）。
+ * - `open`：抽屉开关。首次启动无记录时默认收起（设计系统 closed by default 按「初次默认」解释）。
+ * - `width`：抽屉宽度，px。钳制与重置在渲染层（drawer-prefs.ts），这里只存干净值。
+ * - `docked`：抽屉标签条里开着的 task id，按标签顺序。启动时逐条恢复，
+ *   已删除的会话静默丢弃——不弹错、不占位。
+ */
+export interface DrawerSettings {
+  open: boolean;
+  width: number;
+  docked: string[];
+}
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -21,9 +34,16 @@ export interface AppSettings {
    * 拖动中不落盘，松手才写（避免写风暴）。
    */
   rightPanelWidth?: number;
+  drawer: DrawerSettings;
 }
 
-export const DEFAULT_SETTINGS: AppSettings = { theme: "system" };
+export const DEFAULT_SETTINGS: AppSettings = {
+  theme: "system",
+  drawer: { open: false, width: 320, docked: [] },
+};
+
+/** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
+export const DRAWER_WIDTH = { min: 280, max: 560, default: 320 } as const;
 
 /** 右侧面板宽度的合法区间与默认值（与拖拽热区的夹取同源）。 */
 export const RIGHT_PANEL_WIDTH_MIN = 280;
@@ -32,6 +52,13 @@ export const RIGHT_PANEL_WIDTH_DEFAULT = 320;
 
 function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
+}
+
+/** 只在区间内才认；钳制交给渲染层，这里不「猜」用户想要的宽度 */
+function parseWidth(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DRAWER_WIDTH.default;
+  if (value < DRAWER_WIDTH.min || value > DRAWER_WIDTH.max) return DRAWER_WIDTH.default;
+  return Math.round(value);
 }
 
 /**
@@ -43,15 +70,30 @@ function isThemePreference(value: unknown): value is ThemePreference {
  */
 export function parseSettings(raw: unknown): AppSettings {
   if (typeof raw !== "object" || raw === null) return DEFAULT_SETTINGS;
-  const theme = (raw as { theme?: unknown }).theme;
-  const width = (raw as { rightPanelWidth?: unknown }).rightPanelWidth;
+  const record = raw as { theme?: unknown; drawer?: unknown; rightPanelWidth?: unknown };
+  const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
+  const width = record.rightPanelWidth;
   return {
-    theme: isThemePreference(theme) ? theme : DEFAULT_SETTINGS.theme,
+    theme,
     ...(typeof width === "number" &&
     Number.isFinite(width) &&
     width >= RIGHT_PANEL_WIDTH_MIN &&
     width <= RIGHT_PANEL_WIDTH_MAX
       ? { rightPanelWidth: Math.round(width) }
       : {}),
+    drawer: parseDrawer(record.drawer),
+  };
+}
+
+function parseDrawer(raw: unknown): DrawerSettings {
+  const fallback = DEFAULT_SETTINGS.drawer;
+  if (typeof raw !== "object" || raw === null) return fallback;
+  const record = raw as { open?: unknown; width?: unknown; docked?: unknown };
+  return {
+    open: typeof record.open === "boolean" ? record.open : fallback.open,
+    width: parseWidth(record.width),
+    docked: Array.isArray(record.docked)
+      ? record.docked.filter((id): id is string => typeof id === "string")
+      : fallback.docked,
   };
 }
