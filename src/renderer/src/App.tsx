@@ -90,7 +90,8 @@ export function App() {
   const [docked, setDocked] = useState<DockedTab[]>(DEFAULT_SETTINGS.drawer.docked);
   useEffect(() => {
     setDrawerWidth(settings.drawer.width);
-    setDocked(settings.drawer.docked);
+    // 兼容存量文件：旧版本可能把 "new" 占位写进了 docked，启动时一并洗掉
+    setDocked(settings.drawer.docked.filter((tab) => tab !== NEW_TASK_TAB));
   }, [settings.drawer]);
 
   /** 抽屉偏好改动：只发改的键，主进程做 drawer 内部的键级合并
