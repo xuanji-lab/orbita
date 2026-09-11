@@ -705,16 +705,24 @@ async function handle(command: AgentCommand): Promise<void> {
     // 队列在 renderer 一侧（docs/plans/2026-09-06-排队队列所有权收回），
     // 这里只做两件事：停下正在跑的这一轮（等它完全收尾），把这句话作为新一轮发出去。
     // 不碰 pi 的 steering/followUp——那正是要断掉的耦合。
-    abortCycle(running, command.sessionId);
+    // **抢跑语义：中间没有「空闲」**——旧轮收尾不发 idle（preempt），否则 renderer
+    // 收到 idle 就投递队首，撞上新轮的 already running，排队项丢失。
+    abortCycle(running, command.sessionId, { preempt: true });
     await running.get(command.sessionId)?.lifecycle;
-    await startTurn(command, async (opened) => {
-      const note = ledgerNote(command.sessionId);
-      note.echoed.add(command.text);
-      for (const progress of opened.adapter.userPrompt(command.text)) {
-        send({ type: "progress", sessionId: command.sessionId, progress });
-      }
-      await opened.session.prompt(command.text, { expandPromptTemplates: false });
-    });
+    try {
+      await startTurn(command, async (opened) => {
+        const note = ledgerNote(command.sessionId);
+        note.echoed.add(command.text);
+        for (const progress of opened.adapter.userPrompt(command.text)) {
+          send({ type: "progress", sessionId: command.sessionId, progress });
+        }
+        await opened.session.prompt(command.text, { expandPromptTemplates: false });
+      });
+    } catch (cause) {
+      // 抢跑的旧轮没发 idle，新轮又没开起来——renderer 会卡在 turn。这里兑底。
+      send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
+      throw cause;
+    }
     return;
   }
 
@@ -722,11 +730,18 @@ async function handle(command: AgentCommand): Promise<void> {
     // 手动压缩。pi 的旧 compact() 内部先 abort 当前轮——无状态化沿用这个语义：
     // 在跑就先停（等收尾），再以压缩为一轮生命周期开机。忙碌态、界碑、失败提示
     // 全走 compaction_start / compaction_end 事件那条已接好的链。
-    abortCycle(running, command.sessionId);
+    // 抢跑语义同 interrupt：旧轮收尾不发 idle（preempt），中间没有「空闲」可投递。
+    abortCycle(running, command.sessionId, { preempt: true });
     await running.get(command.sessionId)?.lifecycle;
-    await startTurn(command, (opened) =>
-      withManualCompactionTuning(opened.session, () => opened.session.compact(command.instructions)),
-    );
+    try {
+      await startTurn(command, (opened) =>
+        withManualCompactionTuning(opened.session, () => opened.session.compact(command.instructions)),
+      );
+    } catch (cause) {
+      // 抢跑的旧轮没发 idle，新轮又没开起来——renderer 会卡在 turn。这里兑底。
+      send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
+      throw cause;
+    }
     return;
   }
 

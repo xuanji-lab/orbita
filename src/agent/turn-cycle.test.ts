@@ -125,6 +125,54 @@ describe("abortCycle —— open 期间与跑中两条路", () => {
     abortCycle(running, "never");
     assert.equal(running.size, 0);
   });
+
+  test("preempt 抢跑：收尾不发 settled——退订 / dispose / 出表照走", async () => {
+    const running = newTable();
+    const parts = new FakeParts();
+    const gate = defer<FakeParts>();
+    const hold = defer<void>();
+    let settled = 0;
+    const lifecycle = startCycle(
+      running,
+      "s1",
+      () => gate.promise,
+      () => hold.promise,
+      () => {
+        settled += 1;
+      },
+    );
+    gate.resolve(parts);
+    await flush();
+    abortCycle(running, "s1", { preempt: true });
+    hold.resolve();
+    await lifecycle;
+    assert.deepEqual(parts.calls, ["abort", "unsubscribe", "dispose"], "收尾序照走");
+    assert.equal(running.has("s1"), false, "照常出表");
+    assert.equal(settled, 0, "抢跑的旧轮不发 settled——中间没有「空闲」");
+  });
+
+  test("不传 preempt 的 abort 照旧发 settled（stop 的投递链依赖它）", async () => {
+    const running = newTable();
+    const parts = new FakeParts();
+    const gate = defer<FakeParts>();
+    const hold = defer<void>();
+    let settled = 0;
+    const lifecycle = startCycle(
+      running,
+      "s1",
+      () => gate.promise,
+      () => hold.promise,
+      () => {
+        settled += 1;
+      },
+    );
+    gate.resolve(parts);
+    await flush();
+    abortCycle(running, "s1"); // 普通 stop：不 preempt
+    hold.resolve();
+    await lifecycle;
+    assert.equal(settled, 1, "stop 的 idle 要发——队列接着投递靠它");
+  });
 });
 
 describe("killCycle —— 删除会话的直杀", () => {

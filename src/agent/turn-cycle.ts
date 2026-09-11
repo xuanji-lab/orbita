@@ -29,6 +29,14 @@ export interface CycleSlot<P extends CycleParts> {
   abortRequested: boolean;
   /** dispose 命令已直接杀过对象：收尾跳过二次 dispose（退订与出表仍做） */
   disposed: boolean;
+  /**
+   * 被 interrupt / compact 抢跑：收尾**不发 settled**——下一轮紧接着开，
+   * 中间没有「空闲」可投递。旧轮的 settled（phase idle）若在这里逃逸，
+   * renderer 会立刻投递队首，撞上新轮的 already running，排队项丢失
+   * （2026-09-11 B 验收复现）。普通 abort（stop）不设它——用户按停止
+   * 就是要它空闲、让队列接着投递。
+   */
+  preempted: boolean;
   opened: P | null;
   /** 整轮生命周期（open → 跑 → 清理）。抢跑（interrupt / compact）前 await 它 */
   lifecycle: Promise<void>;
@@ -47,6 +55,7 @@ export function startCycle<P extends CycleParts>(
   const slot: CycleSlot<P> = {
     abortRequested: false,
     disposed: false,
+    preempted: false,
     opened: null,
     lifecycle: Promise.resolve(),
   };
@@ -61,17 +70,26 @@ export function startCycle<P extends CycleParts>(
       slot.opened?.unsubscribe();
       if (!slot.disposed && slot.opened !== null) slot.opened.dispose();
       running.delete(id);
-      onSettled();
+      if (!slot.preempted) onSettled();
     }
   })();
   return slot.lifecycle;
 }
 
-/** 停当前轮：对象还没 open 出来就只记账（open 完成时 startCycle 兑现）。没在跑静默。 */
-export function abortCycle<P extends CycleParts>(running: Map<string, CycleSlot<P>>, id: string): void {
+/**
+ * 停当前轮：对象还没 open 出来就只记账（open 完成时 startCycle 兑现）。没在跑静默。
+ * `{ preempt: true }` = 抢跑（interrupt / compact）：旧轮收尾不发 settled——
+ * 下一轮紧接着开，中间没有「空闲」；普通 stop 不带它。
+ */
+export function abortCycle<P extends CycleParts>(
+  running: Map<string, CycleSlot<P>>,
+  id: string,
+  options?: { preempt?: boolean },
+): void {
   const slot = running.get(id);
   if (slot === undefined) return;
   slot.abortRequested = true;
+  if (options?.preempt === true) slot.preempted = true;
   slot.opened?.abort();
 }
 
