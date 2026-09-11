@@ -13,6 +13,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
   describeServer,
   isHttpServer,
@@ -158,12 +159,19 @@ interface McpToolShape {
   inputSchema: unknown;
 }
 
+/** MCP 工具结果里模型看得懂的两种块——形状与 pi 的 `TextContent` / `ImageContent` 相同。 */
+type McpResultContent = TextContent | ImageContent;
+
 /**
  * MCP 工具 → pi 的 ToolDefinition。
  *
  * `inputSchema` 直接当 `parameters` 用：MCP 给的就是 JSON Schema，而 pi 只是把它
  * 转交给 provider 的 tool schema，不做 typebox 运行时校验（见
  * `tools/tool-definition-wrapper.js`，parameters 原样透传）。
+ *
+ * `execute` 的返回必须是 pi 的 `AgentToolResult`（`content` 块数组 + `details`）；
+ * **错误靠 throw 表达**——pi 的 agent-loop 只在 execute 抛出时才把结果标成 isError，
+ * 返回值上没有这个字段（pi-agent-core `agent-loop.js` 的 executePreparedToolCall）。
  */
 function toPiTool(client: Client, serverName: string, tool: McpToolShape): ToolDefinition {
   const publicName = qualifiedToolName(serverName, tool.name);
@@ -171,7 +179,7 @@ function toPiTool(client: Client, serverName: string, tool: McpToolShape): ToolD
     name: publicName,
     label: `${serverName}: ${tool.name}`,
     description: tool.description ?? `${tool.name} (MCP: ${serverName})`,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON Schema 与 TSchema 结构兼容，pi 不做 typebox 校验
+    // JSON Schema 与 TSchema 结构兼容，pi 不做 typebox 校验，直接透传
     parameters: (tool.inputSchema ?? { type: "object", properties: {} }) as never,
     async execute(_toolCallId, params, signal) {
       const result = await withTimeout(
@@ -183,32 +191,40 @@ function toPiTool(client: Client, serverName: string, tool: McpToolShape): ToolD
         CALL_TIMEOUT_MS,
         `${publicName} 调用超时`,
       );
-      const text = renderContent(result.content);
-      // MCP 的 isError 是业务级失败（不是传输失败），要如实告诉模型
-      return result.isError === true
-        ? { output: text, isError: true }
-        : { output: text };
+      const content = toResultContent(result.content);
+      // MCP 的 isError 是业务级失败（不是传输失败），要如实告诉模型——
+      // 在 pi 里唯一的途径是抛出，它会把 message 当成结果文本并标 isError
+      if (result.isError === true) {
+        throw new Error(content.map((c) => (c.type === "text" ? c.text : "(image)")).join("\n"));
+      }
+      return { content, details: undefined };
     },
-  } as ToolDefinition;
+  };
 }
 
 /**
- * MCP 的返回是内容块数组。**只取模型看得懂的部分**：文本直接用，
- * 其余（图片、资源引用）降级成一行说明——凭空丢掉会让模型以为工具什么都没返回。
+ * MCP 的返回是内容块数组。文本与图片的形状和 pi 的完全一致，直接透传；
+ * 其余（资源引用、音频）降级成一行说明——凭空丢掉会让模型以为工具什么都没返回。
  */
-function renderContent(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
+function toResultContent(content: unknown): McpResultContent[] {
+  if (!Array.isArray(content)) return [];
+  const out: McpResultContent[] = [];
   for (const block of content) {
     if (typeof block !== "object" || block === null) continue;
     const item = block as Record<string, unknown>;
     if (item["type"] === "text" && typeof item["text"] === "string") {
-      parts.push(item["text"]);
+      out.push({ type: "text", text: item["text"] });
+    } else if (
+      item["type"] === "image" &&
+      typeof item["data"] === "string" &&
+      typeof item["mimeType"] === "string"
+    ) {
+      out.push({ type: "image", data: item["data"], mimeType: item["mimeType"] });
     } else if (typeof item["type"] === "string") {
-      parts.push(`(${item["type"]} content omitted)`);
+      out.push({ type: "text", text: `(${item["type"]} content omitted)` });
     }
   }
-  return parts.join("\n");
+  return out;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {

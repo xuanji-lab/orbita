@@ -51,27 +51,37 @@ describe("McpHub", () => {
     assert.equal(echo?.description, "把收到的话原样回一遍");
   });
 
-  test("真的能调用，拿到文本结果", async () => {
+  /**
+   * 返回形状必须是 pi 的 `AgentToolResult`：`content` 块数组 + `details`。
+   * 上一版返的是 `{ output }`，pi 收到后 `content` 为空——模型看到一个什么都没说的工具结果。
+   */
+  test("真的能调用，结果是 pi 的 content 块数组", async () => {
     const echo = hub.currentTools().find((t) => t.name === "mcp__demo__echo");
     assert.ok(echo);
     const result = await echo.execute("call-1", { text: "在" }, undefined, undefined, undefined as never);
-    assert.match(String(result.output), /echo: 在/);
+    assert.ok(Array.isArray(result.content));
+    assert.deepEqual(result.content[0], { type: "text", text: "echo: 在" });
   });
 
-  // 凭空丢掉会让模型以为工具什么都没返回
-  test("非文本内容块降级成一行说明，不整个丢掉", async () => {
+  // 图片块的形状和 pi 的 ImageContent 完全一致，直接透传，不再降级成一行说明
+  test("图片内容块原样透传给 pi", async () => {
     const echo = hub.currentTools().find((t) => t.name === "mcp__demo__echo");
     assert.ok(echo);
     const result = await echo.execute("call-2", { text: "x" }, undefined, undefined, undefined as never);
-    assert.match(String(result.output), /image content omitted/);
+    assert.deepEqual(result.content[1], { type: "image", data: "AAAA", mimeType: "image/png" });
   });
 
-  test("server 报的业务失败如实带上 isError", async () => {
+  /**
+   * pi 只在 execute **抛出**时才把结果标成 isError（返回值上没有这个字段），
+   * 所以 server 的业务失败必须翻成抛出，且 message 就是 server 给的文本。
+   */
+  test("server 报的业务失败翻成抛出，message 带上 server 的话", async () => {
     const boom = hub.currentTools().find((t) => t.name === "mcp__demo__boom");
     assert.ok(boom);
-    const result = await boom.execute("call-3", {}, undefined, undefined, undefined as never);
-    assert.equal(result.isError, true);
-    assert.match(String(result.output), /炸了/);
+    await assert.rejects(
+      boom.execute("call-3", {}, undefined, undefined, undefined as never),
+      (error: unknown) => error instanceof Error && /炸了/.test(error.message),
+    );
   });
 
   // MCP server 是外部程序，装错命令是常态，不该让一台坏的挡住全部
