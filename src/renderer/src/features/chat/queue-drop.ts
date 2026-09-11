@@ -1,29 +1,21 @@
 /**
  * 排队卡拖拽的落点语义。纯函数：不 import React，可被 `node --test` 直接加载。
  *
- * 语义与 Proma 同源（`AgentMessageQueue.tsx` 的 resolvePlacement）：鼠标落在目标行的
- * **上半 = 放到它前面，下半 = 放到它后面**——插入线跟着鼠标走，N 条队列有 N+1 条缝，
- * 想插哪条缝就悬到哪条缝。
+ * **落到谁身上就占谁的位置**——与 Providers 设置面的厂商排序同一套语义
+ * （`providers-view-model.ts` 的 reorderIds）：源抽走，插到目标当前所在的下标。
+ * 悬停反馈是整行描边，不是行间的插入线。
  *
- * 多做的一件事：**落点是源自己的缝时返回 null**——源的上缝（悬在它上一行的下半）和
- * 下缝（悬在它下一行的上半）落进去等于不动。旧写法照样画线，用户松手后什么都没发生，
- * 感知为「弹回去了」，越相邻越容易撞上（2026-09-11 验收复现）。现在这两条缝不画线，
- * 用户拖到那儿看不到线就知道松手不会动；线一出现，松手必然动。
+ * 为什么不用「上半 / 下半 → 前 / 后」的缝语义：排队卡通常只有两到五条，
+ * 「插到两行之间」的表达力用不上，而半行判定带来的死区（落进源自己的缝等于不动）
+ * 与一条 1px 的线，对用户都不如「整行亮起、松手就占它的位」来得直观
+ * （2026-09-11 验收后用户裁决：与 Providers 拖拽统一）。
+ *
+ * 返回 moveQueued 需要的 before / after：源在上方 → 插到目标后面（目标前移一格，
+ * 源正好落到目标原来的下标）；源在下方 → 插到目标前面。同一行 null。
  */
 export type DropPlacement = "before" | "after";
 
-/**
- * 源行下标、目标行下标、鼠标在目标行的哪一半 → 落点语义；null = 落进去等于不动
- * （拖到自己身上，或落进源自己的上/下缝）。
- */
-export function dropPlacement(
-  sourceIndex: number,
-  targetIndex: number,
-  half: DropPlacement,
-): DropPlacement | null {
+export function dropPlacement(sourceIndex: number, targetIndex: number): DropPlacement | null {
   if (sourceIndex === targetIndex) return null;
-  // 源的上缝：上一行的下半；源的下缝：下一行的上半
-  if (half === "after" && targetIndex === sourceIndex - 1) return null;
-  if (half === "before" && targetIndex === sourceIndex + 1) return null;
-  return half;
+  return sourceIndex < targetIndex ? "after" : "before";
 }
