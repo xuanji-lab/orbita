@@ -4,6 +4,12 @@
  * 为什么单独一个进程（guideline §二）：工具结果的大字符串处理与 JSON 序列化会和 UI
  * 抢事件循环；内核崩溃不该带走窗口与未落盘的会话；而且这是最难后补的一刀。
  *
+ * **pi 只当无状态循环**（B2，2026-09-11）：每轮 open → 跑 → dispose，
+ * 不跨轮持有 AgentSession 对象。「对象在不在」这个问题消失，只剩「在不在跑」，
+ * 由 `running` 按真值回答；跨轮要记住的东西（权限档、回声对账、标题鉴权面）
+ * 全在 `ledger`——它不持有任何 pi 对象。prompt cache 不受影响：缓存在 provider
+ * 服务端按请求前缀命中，与客户端是否持有对象无关。
+ *
  * 本文件只做三件事：起 pi 的 AgentSession、把它的事件经 TranscriptAdapter 翻成
  * pi-protocol 的 progress、经 parentPort 发回主进程。**不碰 UI，不碰持久化路径策略。**
  */
@@ -16,7 +22,7 @@ import {
   SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
+import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
@@ -56,12 +62,12 @@ function send(event: AgentEvent): void {
  * 用量快照（token / 花费 / 上下文余量）推给 UI。pi 的本子从盘加载全部 usage 记录，
  * 所以唤醒的旧会话拿到的是跨重启累计值。推送粒度与 pi 的数据粒度对齐——usage
  * 跟着每次 LLM 响应落地，所以每条 assistant 消息完成（message_end）推一次；
- * 建会话后、压缩结束、整轮落定再各兜一次。单条消息流式期间 usage 还没回来，不推。
+ * 开机后、压缩结束、整轮落定再各兜一次。单条消息流式期间 usage 还没回来，不推。
  *
  * **只搬界面要显示的那几项**（D1）：显式列出而不是整个对象透传，契约声明了搬哪几项，
  * pi 以后加字段时不该悄悄从这里漏进 renderer。
  *
- * `persist` 只在「这一轮真的告一段落」的时机带上（settled / 压缩结束 / 建会话）：
+ * `persist` 只在「这一轮真的告一段落」的时机带上（settled / 压缩结束 / 开机）：
  * 界面要跟着每条消息走，而磁盘只需要上一次跑完时的快照。不分的话一轮 30 个工具就是 30 次原子写。
  *
  * 读不出来就安静跳过：用量是给人看的一行字，不该由它决定一轮对话成不成立。
@@ -135,7 +141,8 @@ async function withManualCompactionTuning<T>(session: AgentSession, run: () => P
 
 /**
  * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用，用会话当前模型。
- * 与当前轮并发跑，不阻塞对话；成功（且模型没答 none）才发 `title` 事件。
+ * 与当前轮并发跑（主进程在 submit 后立刻发本命令，轮还在 `running` 里），
+ * 不阻塞对话；成功（且模型没答 none）才发 `title` 事件。
  * 失败一律静默——标题是易耗品，不该有任何一条报错通路；门禁（meta 的
  * titleSource 仍是 derived）在主进程，这里不发事件它自然不变，下一条用户
  * 消息就再试一次。不做取消：调用几秒量级，进程退出自然带走，会话被删时
@@ -146,11 +153,16 @@ async function withManualCompactionTuning<T>(session: AgentSession, run: () => P
 /** 标题调用的硬上限。标题是易耗品，宁可超时重试也不挂着占住单飞守卫。 */
 const TITLE_TIMEOUT_MS = 30_000;
 
-async function generateSessionTitle(live: LiveSession, sessionId: string, text: string): Promise<void> {
-  if (live.titleInFlight) return;
-  live.titleInFlight = true;
+async function generateSessionTitle(
+  note: LedgerNote,
+  session: AgentSession,
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  if (note.titleInFlight) return;
+  note.titleInFlight = true;
   try {
-    const model = live.session.model;
+    const model = session.model;
     if (model === undefined) return;
     // **30 秒硬超时必须有**：标题与当前轮并发抢 provider，请求可能被网关挂住
     // 不返回——没有超时的话 titleInFlight 永远不放，这条会话之后的所有重试
@@ -162,11 +174,11 @@ async function generateSessionTitle(live: LiveSession, sessionId: string, text: 
         messages: [{ role: "user", content: text, timestamp: Date.now() }],
       },
       {
-        apiKey: live.apiKey,
+        apiKey: note.apiKey,
         maxTokens: 1024,
         timeoutMs: TITLE_TIMEOUT_MS,
         signal: AbortSignal.timeout(TITLE_TIMEOUT_MS),
-        ...(live.headers ? { headers: live.headers } : {}),
+        ...(note.headers ? { headers: note.headers } : {}),
       },
     );
     if (response.stopReason === "error") {
@@ -190,29 +202,31 @@ async function generateSessionTitle(live: LiveSession, sessionId: string, text: 
   } catch (cause) {
     console.error("[title] 生成失败：", cause);
   } finally {
-    live.titleInFlight = false;
+    note.titleInFlight = false;
   }
 }
 
 /**
- * 会话内换模型（C-4）。注册 + 解析目标模型（与 createSession 同一条装配路径），
- * 然后 `session.setModel`——pi 自己校验 auth、把 model_change 落进它的本子、
- * clamp thinking。**不传 persist**：全局默认模型是 pi TUI 的概念，会话内切换
+ * 会话内换模型（C-4），**轮在跑**的路径：注册 + 解析目标模型（与 openTurn 同一条
+ * 装配路径），然后 `session.setModel`——pi 自己校验 auth、把 model_change 落进它的
+ * 本子、clamp thinking。**不传 persist**：全局默认模型是 pi TUI 的概念，会话内切换
  * 不该改写用户磁盘上的全局设置。生效边界是 pi 定的：当前轮用旧模型跑完
- * （run 启动时快照），下一次 prompt 起新模型。
+ * （run 启动时快照），下一次 prompt 起新模型——无状态模型下就是下一次 open 时
+ * 主进程装配的新 provider/modelId。
  */
 async function setSessionModel(
-  live: LiveSession,
+  session: AgentSession,
   sessionId: string,
-  provider: Extract<AgentCommand, { type: "setModel" }>["provider"],
+  provider: ProviderSecrets,
   modelId: string,
 ): Promise<void> {
   try {
-    const model = registerAndResolveModel(live.session.modelRuntime, provider, modelId);
+    const model = registerAndResolveModel(session.modelRuntime, provider, modelId);
     if (model === undefined) {
       throw new Error(`unknown model "${provider.id}/${modelId}"`);
     }
-    await live.session.setModel(model);
+    await session.setModel(model);
+    updateLedgerAuth(sessionId, provider);
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -221,28 +235,95 @@ async function setSessionModel(
   }
 }
 
-/** 一个 session 的运行时状态。N 个 session 共用本进程（Q8：多 session 形状从第一天就有）。 */
-interface LiveSession {
-  session: AgentSession;
-  adapter: TranscriptAdapter;
-  unsubscribe: () => void;
+/**
+ * 会话内换模型，**没在跑**的路径（无状态模型的常态）：不持有 AgentSession，
+ * 自建一次性 ModelRuntime 做同一套「注册 + 解析」校验——「能不能用某个模型」
+ * 两条路必须是同一套真相。成功只发 `model` 事件（主进程落 meta，下一次
+ * open 自然用新装配）；失败发 `failed`。pi 本子里没有 model_change 记录也
+ * 成立：每轮 open 都显式解析并传入 model，不依赖本子恢复。
+ */
+async function setLedgerModel(
+  sessionId: string,
+  provider: ProviderSecrets,
+  modelId: string,
+): Promise<void> {
+  try {
+    const runtime = await ModelRuntime.create({});
+    const model = registerAndResolveModel(runtime, provider, modelId);
+    if (model === undefined) {
+      throw new Error(`unknown model "${provider.id}/${modelId}"`);
+    }
+    updateLedgerAuth(sessionId, provider);
+    send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    send({ type: "failed", sessionId, message });
+  }
+}
+
+/** 跨轮账本里的一条：不持有任何 pi 对象，会话「不在跑」时也活着。 */
+interface LedgerNote {
+  /** 三档权限模式。每轮 open 的 before_agent_start 都会重讲（中途切档下一轮生效） */
   mode: PermissionMode;
   /**
    * 已在本地回显（adapter.userPrompt 造过 item）的用户消息文本。pi 随后 emit 的
-   * user `message_start` 是回声，命中即丢弃；**未命中**的一定是排队消息的投递
-   * （正常发送永远先 userPrompt，排队发送要等投递才 message_start）。
-   * ponytail: 按文本对账——两条同文本消息一正常一排队的极端场景会误判，与 pi
-   * 内部的 queue 对账同款天花板。
+   * user `message_start` 是回声，命中即丢弃。跨轮保留：上一轮没消费完的回声
+   * 留给下一轮对账（abort 边角）。
    */
   echoed: Set<string>;
-  /** 标题调用（C-3）的鉴权面——provider 的 key 与自定义头，create 命令带进来的 */
-  apiKey: string;
-  headers?: Record<string, string>;
   /** 标题在途标记：连发两条消息也只生成一次，失败后下一条自然重试 */
   titleInFlight: boolean;
+  /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
+  apiKey: string;
+  headers?: Record<string, string>;
 }
 
-const sessions = new Map<string, LiveSession>();
+/**
+ * 跨轮账本：sessionId → 不持有 pi 对象的跨轮状态。key 在首次开机时落账，
+ * dispose（删除会话）时销账；进程重启自然清零（一切都可从盘上重建）。
+ */
+const ledger = new Map<string, LedgerNote>();
+
+/** 取账；没有就先落一条默认（setMode 等「会话不在跑也合法」的命令用）。 */
+function ledgerNote(sessionId: string): LedgerNote {
+  let note = ledger.get(sessionId);
+  if (note === undefined) {
+    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "" };
+    ledger.set(sessionId, note);
+  }
+  return note;
+}
+
+/** 换 provider 后把标题鉴权面对齐到最近一次装配（setModel 两条路径共用）。 */
+function updateLedgerAuth(sessionId: string, provider: ProviderSecrets): void {
+  const note = ledgerNote(sessionId);
+  note.apiKey = provider.apiKey;
+  if (provider.headers === undefined) delete note.headers;
+  else note.headers = provider.headers;
+}
+
+/** 运行态：只在一轮进行中存在。open 完成前 session 是 null（占坑期）。 */
+interface RunningTurn {
+  /** open 完成前为 null——abort/interrupt 这段时间只能记账等 open 完 */
+  session: AgentSession | null;
+  /** open 完成前是 no-op，finally 里调用总是安全的 */
+  unsubscribe: () => void;
+  /**
+   * open 期间到达的 abort 记在这里，open 一完成立刻执行——「发送后几百毫秒内
+   * 点停止」不该因为开机竞态被吞掉。
+   */
+  abortRequested: boolean;
+  /** dispose 命令已直接杀过 session：finally 跳过二次 dispose（退订仍要做） */
+  disposed: boolean;
+  /**
+   * 整轮生命周期（open → 跑 → 清理）。interrupt / compact 抢跑前要 await 它，
+   * 确保上一轮的退订 + dispose + 出表全部完成，绝不双开同一本 pi JSONL。
+   */
+  lifecycle: Promise<void>;
+}
+
+/** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
+const running = new Map<string, RunningTurn>();
 
 /** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
 const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
@@ -296,12 +377,32 @@ function asAdaptable(event: { type: string }): AdaptableEvent | null {
   return ADAPTABLE_TYPES.has(event.type) ? (event as AdaptableEvent) : null;
 }
 
-async function createSession(command: Extract<AgentCommand, { type: "create" }>): Promise<void> {
-  // **双开保险丝**：同 id 还活着就拒绝，绝不覆盖——覆盖会漏掉旧 session 的退订，
-  // 还让两个 AgentSession 写同一份 pi JSONL（记录写坏，修不回来）。
-  if (sessions.has(command.sessionId)) {
-    throw new Error(`session ${command.sessionId} is already running`);
-  }
+/** 开一轮需要的装配输入：submit / interrupt / compact 命令共有的那几个字段。 */
+type OpenInput = Extract<AgentCommand, { type: "submit" | "interrupt" | "compact" }>;
+
+/** open 的产物：一轮的全部挂件（退订闭包持有订阅，别弄丢）。 */
+interface OpenedTurn {
+  session: AgentSession;
+  adapter: TranscriptAdapter;
+  unsubscribe: () => void;
+}
+
+/**
+ * 开一轮：装配（provider → model → services → 订阅 → created 事件）。
+ * 与 startTurn 分开只是为了把「纯装配」单独读——每轮都走，路径必须与旧
+ * create 命令一字不差地同源（同一套注册解析、同一套审批门、同一套事件翻译）。
+ *
+ * @param isCompactionTurn 这一轮的生命周期就是一次手动压缩（决定 compaction_end
+ *   的相位翻译：压缩轮回 idle，轮内自动压缩回 turn——自动压缩跑在 loop 里，
+ *   压完轮还在，发 idle 会让 renderer 误投递）。
+ */
+async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<OpenedTurn> {
+  const note = ledgerNote(command.sessionId);
+  note.mode = command.mode;
+  note.apiKey = command.provider.apiKey;
+  if (command.provider.headers === undefined) delete note.headers;
+  else note.headers = command.provider.headers;
+
   // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
   const modelRuntime = await ModelRuntime.create({});
   /**
@@ -317,7 +418,8 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
-  const currentMode = () => sessions.get(command.sessionId)?.mode ?? "plan";
+  // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
+  const currentMode = () => ledgerNote(command.sessionId).mode;
   const gate = createToolCallGate(currentMode, askPermission(command.sessionId));
   const services = await createAgentSessionServices({
     cwd: command.cwd,
@@ -330,7 +432,7 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
           factory: (pi: PiExtensionApi) => {
             pi.on("tool_call", (event) => gate(event));
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
-            // 切模式下一轮就生效；只在建会话时讲一次的话，切了模式模型还按旧的答。
+            // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             pi.on("before_agent_start", (event) => ({
               systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(currentMode())}\n\n${TOOL_GUIDELINES}`,
             }));
@@ -357,23 +459,15 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
    */
   const sessionManager = openOrCreate(command);
   const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
-  /**
-   * 排队整批投递：多条排队在一个注入点全部给模型、一次回应（Claude Code 同款）。
-   * pi 默认 one-at-a-time（每条各起一轮）会把互相修正的碎片补充——「先跑」「别跑」
-   * 「还是跑」——割裂成多轮回应，又慢又贵。直设内存属性而不走 setSteeringMode：
-   * 那个会写用户磁盘上的 pi 全局设置（跨出本会话的副作用，不能带）。
-   * 该值只在 TUI 的 reload() 里会被设置文件覆盖回来，本 runtime 不调 reload。
-   */
-  session.agent.steeringMode = "all";
-  session.agent.followUpMode = "all";
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
-  const echoed = new Set<string>();
+  const echoed = note.echoed;
   const unsubscribe = session.subscribe((event) => {
     const adaptable = asAdaptable(event);
     if (adaptable) {
-      // 排队消息在这里「迟到显形」：本地没回显过的 user message_start 一定是 pi 从
-      // 队列里投递出来的，当场造 item（显示 + 落盘同步发生——排队期间两边本子都没写过）。
+      // 排队消息的「迟到显形」留在原处：本地没回显过的 user message_start 当场造
+      // item（显示 + 落盘同步发生）。无状态模型下 pi 队列不再被使用，这里是纯
+      // 防御——万一 pi 再 emit user 消息，宁可显示也不丢记录。
       if (adaptable.type === "message_start" && adaptable.message.role === "user") {
         const text = userText(adaptable.message.content);
         if (echoed.has(text)) {
@@ -393,9 +487,11 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
       return;
     }
     if (event.type === "agent_start") send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
-    // 排队快照原样翻译：入队 / 投递 / 清队后 pi 都重发整份，renderer 覆盖槽即可
+    // 注意：agent_settled **不在这里发 idle**——idle 只由 startTurn 的 finally 发，
+    // 保证它一定晚于 dispose 与 running.delete。早发的话 renderer 的投递会在
+    // 清理完成前回流，撞上「already running」（prompt resolve 与事件发射的
+    // 先后没有契约保证，不能赌）。stats 落盘照旧在这里：settled 就是轮的账已结清。
     if (event.type === "agent_settled") {
-      send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
       // 整轮落定兜一次：接住最后一条消息之后落账的用量（toolResult 计费）与 abort 边角。
       // **这一帧落盘**：它就是 `SessionMeta.stats` 说的「上一次跑完时的快照」
       pushStats(command.sessionId, session, true);
@@ -406,7 +502,12 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
       send({ type: "phase", sessionId: command.sessionId, phase: "compaction" });
     }
     if (event.type === "compaction_end") {
-      send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
+      // 相位按轮型翻：手动压缩轮压完回 idle；轮内自动压缩压完回 turn（轮还在跑）。
+      send({
+        type: "phase",
+        sessionId: command.sessionId,
+        phase: isCompactionTurn ? "idle" : "turn",
+      });
       // aborted / 无 result 的压缩（用户中止、摘要失败）不留界碑——历史没有被折叠
       if (!event.aborted && event.result !== undefined) {
         send({
@@ -477,28 +578,21 @@ async function createSession(command: Extract<AgentCommand, { type: "create" }>)
     }
   });
 
-  sessions.set(command.sessionId, {
-    session,
-    adapter,
-    unsubscribe,
-    mode: command.mode,
-    echoed,
-    apiKey: command.provider.apiKey,
-    ...(command.provider.headers ? { headers: command.provider.headers } : {}),
-    titleInFlight: false,
-  });
-  // 建会话即推一次：新会话给零值；唤醒的旧会话立刻给真累计——余量不用等第一轮跑完。
+  // 开机即推一次：新会话给零值；唤醒的旧会话立刻给真累计——余量不用等第一轮跑完。
   // **落盘**：唤醒时 pi 给的才是跨重启的真累计，比我们上次存的快照新，当场就该校准
   pushStats(command.sessionId, session, true);
   send({
     type: "created",
     sessionId: command.sessionId,
-    // 主进程要把它记进会话 meta，否则下次就找不回这本子了
+    // 主进程要把它记进会话 meta，否则下次就找不回这本子了。**每轮都发**：
+    // open 失败退回新建时 pi 会换文件，按轮自愈比只在首轮发一次稳。
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
+
+  return { session, adapter, unsubscribe };
 }
 
-function openOrCreate(command: Extract<AgentCommand, { type: "create" }>): SessionManager {
+function openOrCreate(command: OpenInput): SessionManager {
   if (command.piSessionFile !== undefined) {
     try {
       return SessionManager.open(command.piSessionFile, command.piSessionDir, command.cwd);
@@ -507,6 +601,50 @@ function openOrCreate(command: Extract<AgentCommand, { type: "create" }>): Sessi
     }
   }
   return SessionManager.create(command.cwd, command.piSessionDir);
+}
+
+/**
+ * 跑一轮（submit / compact 共用骨架）：占坑 → open → run → 清理。
+ *
+ * **占坑在最前**：open 是几百毫秒的异步，中间会让渡事件循环——不先占坑的话，
+ * 同一会话的 interrupt 会在 open 期间到达、看不到坑、再开一本同样的 JSONL，
+ * 两个 AgentSession 写同一份 pi 本子（记录写坏，修不回来）。
+ *
+ * 清理序列（finally）：退订 → dispose → 出表 → **补发 phase idle**。idle 放在
+ * 这里而不是 agent_settled 的翻译处，是给 renderer 投递排队消息的时序契约：
+ * 「收到 idle 时，这一轮一定已经完全收尾，submit 不会撞 already running」。
+ * 正常结束、abort、异常路径都经过这里，幂等（renderer 的槽是 set 不是累加）。
+ */
+function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<void>): Promise<void> {
+  const id = command.sessionId;
+  // 双开保险丝：同 id 还在跑（含还在 open）就拒绝。
+  if (running.has(id)) {
+    throw new Error(`session ${id} is already running`);
+  }
+  const entry: RunningTurn = {
+    session: null,
+    unsubscribe: () => {},
+    abortRequested: false,
+    disposed: false,
+    lifecycle: Promise.resolve(),
+  };
+  running.set(id, entry);
+  entry.lifecycle = (async () => {
+    try {
+      const opened = await openTurn(command, command.type === "compact");
+      entry.session = opened.session;
+      entry.unsubscribe = opened.unsubscribe;
+      // 开机期间到达的停止请求：open 一完成立刻兑现
+      if (entry.abortRequested) opened.session.abort();
+      await run(opened);
+    } finally {
+      entry.unsubscribe();
+      if (!entry.disposed && entry.session !== null) entry.session.dispose();
+      running.delete(id);
+      send({ type: "phase", sessionId: id, phase: "idle" });
+    }
+  })();
+  return entry.lifecycle;
 }
 
 /**
@@ -520,7 +658,7 @@ async function branchPiSession(command: Extract<AgentCommand, { type: "branch" }
   const targetId = planBranchCut(manager.getEntries(), command.roles);
   const branchFile = manager.createBranchedSession(targetId);
   if (branchFile === undefined) throw new Error("pi 没有产出分支文件");
-  // 复用 created 事件通路：主进程对 branch 与 create 用同一条等待逻辑
+  // 复用 created 事件通路：主进程对 branch 与开机用同一条等待逻辑
   send({ type: "created", sessionId: command.sessionId, piSessionFile: branchFile });
 }
 
@@ -557,29 +695,90 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
 
-  if (command.type === "create") {
-    await createSession(command);
-    return;
-  }
-
-  // 分支带的是「新会话的 id」，此刻还不在 sessions 表里——必须在下面的
-  // unknown session 检查之前处理
+  // 分支带的是「新会话的 id」，此刻账本里还没有——不依赖任何表，直接裁文件
   if (command.type === "branch") {
     await branchPiSession(command);
     return;
   }
 
-  if (command.type === "dispose") {
-    // 删除会话。**没建过的也走这里**（删除一条从未唤醒的会话是正常路径）——
-    // 没有就没什么可释放的，静默返回，不能走下面那个「unknown session」的 throw。
-    const dying = sessions.get(command.sessionId);
-    if (dying) {
-      dying.unsubscribe();
-      // pi 的 dispose 自己会 abort 全部在飞工作（当前轮 / 重试 / 压缩 / 本会话的 bash），
-      // 正在跑的会话被删也成立，无需先 abort。
-      dying.session.dispose();
-      sessions.delete(command.sessionId);
+  if (command.type === "submit") {
+    await startTurn(command, async (opened) => {
+      const note = ledgerNote(command.sessionId);
+      // 用户消息先落地再发给模型——不等模型回，UI 立刻看得到自己刚说的话。
+      // echoed 记一笔：pi 随后 emit 的 message_start 是这条的回声，别重复显示。
+      // expandPromptTemplates 关掉：展开会改写文本，破坏按文本做的回声对账；
+      // 且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
+      note.echoed.add(command.text);
+      for (const progress of opened.adapter.userPrompt(command.text)) {
+        send({ type: "progress", sessionId: command.sessionId, progress });
+      }
+      await opened.session.prompt(command.text, { expandPromptTemplates: false });
+    });
+    return;
+  }
+
+  if (command.type === "interrupt") {
+    // 队列在 renderer 一侧（docs/plans/2026-09-06-排队队列所有权收回），
+    // 这里只做两件事：停下正在跑的这一轮（等它完全收尾），把这句话作为新一轮发出去。
+    // 不碰 pi 的 steering/followUp——那正是要断掉的耦合。
+    const prev = running.get(command.sessionId);
+    if (prev !== undefined) {
+      prev.abortRequested = true;
+      prev.session?.abort();
+      await prev.lifecycle;
     }
+    await startTurn(command, async (opened) => {
+      const note = ledgerNote(command.sessionId);
+      note.echoed.add(command.text);
+      for (const progress of opened.adapter.userPrompt(command.text)) {
+        send({ type: "progress", sessionId: command.sessionId, progress });
+      }
+      await opened.session.prompt(command.text, { expandPromptTemplates: false });
+    });
+    return;
+  }
+
+  if (command.type === "compact") {
+    // 手动压缩。pi 的旧 compact() 内部先 abort 当前轮——无状态化沿用这个语义：
+    // 在跑就先停（等收尾），再以压缩为一轮生命周期开机。忙碌态、界碑、失败提示
+    // 全走 compaction_start / compaction_end 事件那条已接好的链。
+    const prev = running.get(command.sessionId);
+    if (prev !== undefined) {
+      prev.abortRequested = true;
+      prev.session?.abort();
+      await prev.lifecycle;
+    }
+    await startTurn(command, (opened) =>
+      withManualCompactionTuning(opened.session, () => opened.session.compact(command.instructions)),
+    );
+    return;
+  }
+
+  if (command.type === "abort") {
+    // 停止只停当前轮。没在跑就静默——「停止」按钮对空闲会话本就该是 no-op。
+    // 排队消息滞留在 renderer 的本地队列，idle 事件（startTurn 的 finally）到了
+    // 自然逐条投递；不替用户清队（排队是用户的意图，停止不该替他放弃）。
+    const current = running.get(command.sessionId);
+    if (current !== undefined) {
+      current.abortRequested = true;
+      current.session?.abort();
+    }
+    return;
+  }
+
+  if (command.type === "dispose") {
+    // 删除会话。**没开过账的也走这里**（删除一条从未唤醒的会话是正常路径）——
+    // 没有就没什么可释放的，静默返回。
+    const current = running.get(command.sessionId);
+    if (current !== undefined) {
+      // pi 的 dispose 自己会 abort 全部在飞工作（当前轮 / 重试 / 压缩 / 本会话的 bash），
+      // 正在跑的会话被删也成立，无需先 abort。标记 disposed：lifecycle 的 finally
+      // 跳过二次 dispose（退订与出表仍由它做）。
+      current.session?.dispose();
+      current.disposed = true;
+      await current.lifecycle;
+    }
+    ledger.delete(command.sessionId);
     // 审批 resolve 函数不随会话一起删的话，会把已销毁会话的工具执行闭包整条钉在内存里
     for (const key of pendingPermissions.keys()) {
       if (key.startsWith(`${command.sessionId}:`)) pendingPermissions.delete(key);
@@ -587,72 +786,34 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
 
-  const live = sessions.get(command.sessionId);
-  if (!live) throw new Error(`unknown session ${command.sessionId}`);
-
   if (command.type === "setMode") {
-    live.mode = command.mode;
+    // 档位是账本字段：每轮 before_agent_start 都重讲，这里只改账。会话不在跑
+    // 也合法（Ctrl+R 后重开，renderer 会同步当前档位）——先落账，下一轮生效。
+    ledgerNote(command.sessionId).mode = command.mode;
     return;
   }
   if (command.type === "setModel") {
     // 会话内换模型（C-4）。fire-and-forget：成功经 `model` 事件、失败经 `failed`
     // 事件回传，主进程与 renderer 都靠事件对齐，这一跳不等结果。
-    void setSessionModel(live, command.sessionId, command.provider, command.modelId);
+    // 轮在跑：落 pi 本子（model_change）；不在跑：只校验 + 落账——下一次 open
+    // 的装配本来就用主进程的新 provider/modelId。
+    const current = running.get(command.sessionId);
+    if (current?.session != null) {
+      void setSessionModel(current.session, command.sessionId, command.provider, command.modelId);
+    } else {
+      void setLedgerModel(command.sessionId, command.provider, command.modelId);
+    }
     return;
   }
   if (command.type === "generateTitle") {
-    // 发送方（主进程）已做过 titleSource 门禁；fire-and-forget，不拖慢这一跳
-    void generateSessionTitle(live, command.sessionId, command.text);
-    return;
-  }
-  if (command.type === "submit") {
-    // expandPromptTemplates 关掉：展开会改写文本，破坏下面按文本做的回声对账；
-    // 且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
-    if (live.session.isStreaming) {
-      // 运行中：进 followUp 队列，本轮结束后投递。**不本地回显**——排队期间可取消，
-      // 取消就当没说过（两边本子都没写过）；投递时经 user message_start 迟到显形。
-      await live.session.prompt(command.text, {
-        streamingBehavior: "followUp",
-        expandPromptTemplates: false,
-      });
-      return;
+    // 发送方（主进程）已做过 titleSource 门禁，且在 submit 后立刻发——轮还在跑，
+    // 用当轮 session 的模型与账本里的鉴权面。fire-and-forget，不拖慢这一跳。
+    // 迟到到轮已收尾（极端窗口）就跳过：标题是易耗品，下一条消息自然重试。
+    const current = running.get(command.sessionId);
+    const note = ledger.get(command.sessionId);
+    if (current?.session != null && note !== undefined) {
+      void generateSessionTitle(note, current.session, command.sessionId, command.text);
     }
-    // 用户消息先落地再发给模型——不等模型回，UI 立刻看得到自己刚说的话。
-    // echoed 记一笔：pi 随后 emit 的 message_start 是这条的回声，别重复显示。
-    live.echoed.add(command.text);
-    for (const progress of live.adapter.userPrompt(command.text)) {
-      send({ type: "progress", sessionId: command.sessionId, progress });
-    }
-    await live.session.prompt(command.text, { expandPromptTemplates: false });
-    return;
-  }
-  if (command.type === "interrupt") {
-    // 队列已经在 renderer 一侧（见 docs/plans/2026-09-06-排队队列所有权收回.md），
-    // 这里只做两件事：停下正在跑的这一轮，把这句话作为新一轮发出去。
-    // 不碰 pi 的 steering/followUp——那正是这次要断掉的耦合。
-    if (live.session.isStreaming) await live.session.abort();
-    live.echoed.add(command.text);
-    for (const progress of live.adapter.userPrompt(command.text)) {
-      send({ type: "progress", sessionId: command.sessionId, progress });
-    }
-    await live.session.prompt(command.text, { expandPromptTemplates: false });
-    return;
-  }
-  if (command.type === "abort") {
-    // 停止只停当前轮：排队消息滞留在 pi 队列（idle 下的合法状态），下次发送时
-    // loop 自动带上投递。不 clearQueue——用户裁决：排队是用户的意图，停止不该替他放弃。
-    live.session.abort();
-    return;
-  }
-  if (command.type === "compact") {
-    // 手动压缩。pi 的 compact() 内部先 abort 当前这一轮；忙碌态、界碑、失败提示
-    // 全走 compaction_start / compaction_end 事件那条已接好的链——compact() 起来
-    // 之后 compaction_end 必然到（pi 在自己的 catch 里先发事件再 rethrow），
-    // 这里只吞 rejection 防 unhandled。
-    // ponytail: 若 pi 未来在 compaction_start 之前抛错，这里会静默——届时补个前置标志位
-    void withManualCompactionTuning(live.session, () =>
-      live.session.compact(command.instructions),
-    ).catch(() => {});
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——
