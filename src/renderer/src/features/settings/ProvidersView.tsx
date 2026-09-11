@@ -10,6 +10,7 @@ import {
   kindOf,
   mergeModelCost,
   modelContextText,
+  modelIdIssue,
   nextCopyId,
   parseRateInput,
   parseTokenInput,
@@ -1030,8 +1031,9 @@ function ModelDialog(props: {
   const apply = () => {
     const finalId = isNew ? idValue.trim().toLowerCase() : (props.decl?.id ?? "");
     if (isNew) {
-      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(finalId)) {
-        setIdIssue("Lowercase letters, digits and dashes; 1–64 chars, no leading dash.");
+      const shapeIssue = modelIdIssue(finalId);
+      if (shapeIssue !== null) {
+        setIdIssue(shapeIssue);
         return;
       }
       if (props.existingIds.includes(finalId)) {
@@ -1091,8 +1093,8 @@ function ModelDialog(props: {
                   style={idIssue !== null ? { borderColor: "var(--color-danger)" } : undefined}
                 />
                 <span className="pv-sub">
-                  Lowercase letters, digits and dashes. Matching a built-in catalog entry inherits its
-                  official parameters — leave fields empty to use them.
+                  Lowercase letters, digits, dots and dashes. Matching a built-in catalog entry inherits
+                  its official parameters — leave fields empty to use them.
                 </span>
                 {idIssue !== null && (
                   <span className="pv-sub" style={{ color: "var(--color-danger)" }}>

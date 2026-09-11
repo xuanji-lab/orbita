@@ -101,3 +101,19 @@ export function modelContextText(
   // 徽标要 1M 不要 1.0M——底栏统计要小数，这里不要；只抹 .0，1.2M 原样
   return { text: formatTokens(ctx).replace(/\.0(?=[kM]$)/, ""), fallback: false };
 }
+
+/**
+ * 手填模型 id 的合法形状：小写字母 / 数字 / 点 / 短横，1–64 字，不以点或短横开头。
+ *
+ * **点号必须允许**——内置目录（known-providers）自己就有 `glm-5.3-flash`、`step-3.5-flash`，
+ * 不认点号的校验会拒绝自家目录的 id 格式（2026-09-11 验收：加 `glm-5.3` 被拦）。
+ * 这是 renderer 侧对用户输入的形状约束；shared 层对 model id 只查非空 + 不重复。
+ */
+export const MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9.-]{0,63}$/;
+
+/** 校验不过时给用户看的话；过了返回 null。 */
+export function modelIdIssue(id: string): string | null {
+  return MODEL_ID_PATTERN.test(id)
+    ? null
+    : "Lowercase letters, digits, dots and dashes; 1–64 chars, no leading dot or dash.";
+}

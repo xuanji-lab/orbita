@@ -2,12 +2,14 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   mergeModelCost,
+  modelIdIssue,
   modelContextText,
   nextCopyId,
   parseRateInput,
   parseTokenInput,
   reorderIds,
 } from "./providers-view-model.ts";
+import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
 
 describe("parseTokenInput", () => {
   test("裸数字 / k / M 后缀都认；空串 = 继承", () => {
@@ -109,5 +111,31 @@ describe("reorderIds —— 拖拽排序：落到目标行的位置，其余行�
     assert.deepEqual(reorderIds(["a", "b"], "a", "a"), ["a", "b"]);
     assert.deepEqual(reorderIds(["a", "b"], "x", "a"), ["a", "b"]);
     assert.deepEqual(reorderIds(["a", "b"], "a", "x"), ["a", "b"]);
+  });
+});
+
+describe("modelIdIssue —— 手填模型 id 的形状", () => {
+  test("内置目录的每个模型 id 都必须过——校验不能拒绝自家目录的格式", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      for (const id of Object.keys(provider.modelParams ?? {})) {
+        assert.equal(modelIdIssue(id), null, `${provider.id}/${id} 被拦`);
+      }
+    }
+  });
+
+  test("带点号的真实 id 过：glm-5.3、gpt-4.1、claude-3.5-sonnet", () => {
+    assert.equal(modelIdIssue("glm-5.3"), null);
+    assert.equal(modelIdIssue("gpt-4.1"), null);
+    assert.equal(modelIdIssue("claude-3.5-sonnet"), null);
+  });
+
+  test("不过：空、大写、以点/短横开头、超长、非法字符", () => {
+    assert.notEqual(modelIdIssue(""), null);
+    assert.notEqual(modelIdIssue("GLM-5"), null);
+    assert.notEqual(modelIdIssue(".hidden"), null);
+    assert.notEqual(modelIdIssue("-x"), null);
+    assert.notEqual(modelIdIssue("a".repeat(65)), null);
+    assert.notEqual(modelIdIssue("a b"), null);
+    assert.notEqual(modelIdIssue("a_b"), null);
   });
 });
