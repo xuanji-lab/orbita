@@ -237,14 +237,14 @@ export function ChatView(props: {
   // leaving 期间保持首页挂载（homeActive 已翻 false 也一样），动画走完再让位给聊天页
   if (homeActive || travel === "leaving") {
     // 极简首页（右抽屉里还没发话的新任务）：slogan 与会话卡都不出现，
-    // notices + 输入卡居中即用——辅助对话要的是直接开写，不是仪式
+    // notices + 输入卡贴底——辅助对话要的是直接开写，不是仪式（wafo 2026-09-12：输入卡在下）
     if (homeBare) {
       return (
         <div
           style={{
             height: "100%",
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-end",
             justifyContent: "center",
             padding: "var(--space-5)",
             overflow: "hidden",
