@@ -246,7 +246,8 @@ export function ChatView(props: {
             display: "flex",
             alignItems: "flex-end",
             justifyContent: "center",
-            padding: "var(--space-5)",
+            // 底距与聊天页 footer 同为 10px——两边输入卡的下沿齐平（wafo 2026-09-12）
+            padding: "var(--space-5) var(--space-5) 10px",
             overflow: "hidden",
           }}
         >
