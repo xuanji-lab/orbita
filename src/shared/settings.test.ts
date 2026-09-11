@@ -42,29 +42,28 @@ describe("parseSettings: drawer 字段", () => {
   });
 
   it("合法值原样保留；宽度取整", () => {
-    const parsed = parseSettings({ drawer: { open: true, width: 412.7, docked: ["a", "b"] } });
-    deepStrictEqual(parsed.drawer, { open: true, width: 413, docked: ["a", "b"] });
+    const parsed = parseSettings({ drawer: { width: 412.7, docked: ["a", "b"] } });
+    deepStrictEqual(parsed.drawer, { width: 413, docked: ["a", "b"] });
   });
 
   it("越界宽度不钳制、退回默认——钳制是渲染层拖拽的事，这里不猜", () => {
     deepStrictEqual(
-      parseSettings({ drawer: { open: true, width: 99 } }).drawer.width,
+      parseSettings({ drawer: { width: 99 } }).drawer.width,
       DRAWER_WIDTH.default,
     );
     deepStrictEqual(
-      parseSettings({ drawer: { open: true, width: 9999 } }).drawer.width,
+      parseSettings({ drawer: { width: 9999 } }).drawer.width,
       DRAWER_WIDTH.default,
     );
   });
 
   it("坏值逐字段退回默认：非字符串的停靠 id 直接丢", () => {
-    deepStrictEqual(parseSettings({ drawer: { open: "yes", width: "wide", docked: "all" } }).drawer, {
-      open: false,
+    deepStrictEqual(parseSettings({ drawer: { width: "wide", docked: "all" } }).drawer, {
       width: DRAWER_WIDTH.default,
       docked: [],
     });
     deepStrictEqual(
-      parseSettings({ drawer: { open: true, width: 380, docked: [1, "a", null] } }).drawer.docked,
+      parseSettings({ drawer: { width: 380, docked: [1, "a", null] } }).drawer.docked,
       ["a"],
     );
   });

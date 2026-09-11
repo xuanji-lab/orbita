@@ -181,8 +181,13 @@ export function Drawer(props: {
           ) : activeTab === null ? (
             <Chooser onAux={() => setPicking(true)} />
           ) : (
-            // 辅助对话 = 主会话同一个 ChatView：标题头、消息列、输入卡全部同构（Q5/v9）
-            <ChatView session={props.view} providersError={props.providersError} />
+            // 辅助对话 = 主会话同一个 ChatView：标题头、消息列、输入卡全部同构（Q5/v9）。
+            // 还没发过首条消息的新任务用极简首页——欢迎界面是主会话的仪式（wafo 2026-09-12）
+            <ChatView
+              session={props.view}
+              providersError={props.providersError}
+              homeBare={activeTab === NEW_TASK_TAB && props.view.sessionId === null}
+            />
           )}
         </div>
       </div>

@@ -15,6 +15,7 @@ import { McpPanel } from "./features/mcp/McpPanel";
 import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
+import { NEW_TASK_TAB } from "./shell/drawer-state";
 import type { DrawerSettings } from "@shared/settings";
 
 /**
@@ -82,12 +83,12 @@ export function App() {
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
   const drawerView = useSessionView(engine, "drawer");
 
-  // 抽屉的开关 / 宽度 / 停靠，记忆在设置里（初次默认收起，之后记住上次——Q3/Q4 裁决）
-  const [drawerOpen, setDrawerOpen] = useState(DEFAULT_SETTINGS.drawer.open);
+  // 抽屉的宽度与停靠记忆在设置里；**开关不记**——每次启动默认收起
+  // （2026-09-12 wafo 裁决，设计系统 closed by default 按字面执行）。
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerWidth, setDrawerWidth] = useState(DEFAULT_SETTINGS.drawer.width);
   const [docked, setDocked] = useState<DockedTab[]>(DEFAULT_SETTINGS.drawer.docked);
   useEffect(() => {
-    setDrawerOpen(settings.drawer.open);
     setDrawerWidth(settings.drawer.width);
     setDocked(settings.drawer.docked);
   }, [settings.drawer]);
@@ -96,7 +97,6 @@ export function App() {
    *  （整块回写会拿到渲染层闭包里的旧值，先后覆盖有竞态——真机冒烟实测） */
   const changeDrawer = useCallback(
     (patch: Partial<DrawerSettings>) => {
-      if ("open" in patch) setDrawerOpen(patch.open ?? false);
       if ("width" in patch) setDrawerWidth(patch.width ?? DEFAULT_SETTINGS.drawer.width);
       if ("docked" in patch) setDocked(patch.docked ?? []);
       changeSettings({ drawer: patch });
@@ -105,8 +105,8 @@ export function App() {
   );
 
   const toggleDrawer = useCallback(() => {
-    changeDrawer({ open: !drawerOpen });
-  }, [changeDrawer, drawerOpen]);
+    setDrawerOpen((open) => !open);
+  }, []);
 
   // Ctrl+Alt+D 开关抽屉（与右图标条按钮、动作同源）
   useEffect(() => {
@@ -184,7 +184,12 @@ export function App() {
               onWidthChange={setDrawerWidth}
               onWidthCommit={() => changeDrawer({ width: drawerWidth })}
               docked={docked}
-              onDockedChange={(list) => changeDrawer({ docked: [...list] })}
+              onDockedChange={(list) =>
+                changeDrawer({
+                  // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
+                  docked: [...list].filter((tab) => tab !== NEW_TASK_TAB),
+                })
+              }
             />
           )}
         </main>

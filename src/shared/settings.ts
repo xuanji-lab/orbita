@@ -14,14 +14,14 @@ export const THEME_PREFERENCES = ["system", "light", "dark", "black"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 /**
- * 右抽屉的记忆（2026-09-11 裁决：记住上次，而不是每次启动都收回）。
- * - `open`：抽屉开关。首次启动无记录时默认收起（设计系统 closed by default 按「初次默认」解释）。
- * - `width`：抽屉宽度，px。钳制与重置在渲染层（drawer-prefs.ts），这里只存干净值。
+ * 右抽屉的记忆。**开关不记**：每次启动默认收起（2026-09-12 wafo 裁决，
+ * 设计系统 closed by default 按字面执行）；只有宽度和停靠的记忆值得跨启动。
+ * - `width`：抽屉宽度，px。钳制与重置在渲染层（drawer-state.ts），这里只存干净值。
  * - `docked`：抽屉标签条里开着的 task id，按标签顺序。启动时逐条恢复，
- *   已删除的会话静默丢弃——不弹错、不占位。
+ *   已删除的会话静默丢弃——不弹错、不占位。**没发过首条消息的新任务占位不落盘**
+   （它还不是 task，没有 id 可记）。
  */
 export interface DrawerSettings {
-  open: boolean;
   width: number;
   docked: string[];
 }
@@ -39,7 +39,7 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
-  drawer: { open: false, width: 320, docked: [] },
+  drawer: { width: 320, docked: [] },
 };
 
 /**
@@ -96,9 +96,8 @@ export function parseSettings(raw: unknown): AppSettings {
 function parseDrawer(raw: unknown): DrawerSettings {
   const fallback = DEFAULT_SETTINGS.drawer;
   if (typeof raw !== "object" || raw === null) return fallback;
-  const record = raw as { open?: unknown; width?: unknown; docked?: unknown };
+  const record = raw as { width?: unknown; docked?: unknown };
   return {
-    open: typeof record.open === "boolean" ? record.open : fallback.open,
     width: parseWidth(record.width),
     docked: Array.isArray(record.docked)
       ? record.docked.filter((id): id is string => typeof id === "string")

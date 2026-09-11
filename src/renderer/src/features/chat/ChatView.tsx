@@ -100,8 +100,16 @@ function useFollowScroll(enabled: boolean) {
  * 这就是 R8-01 ②「输入框宽度跨页面保持一致」：两页的差别只有 slogan 消失、
  * 输入框从居中落到底部，别的都不动。
  */
-export function ChatView(props: { session: ChatSession; providersError?: string | null }) {
-  const { session, providersError } = props;
+export function ChatView(props: {
+  session: ChatSession;
+  providersError?: string | null;
+  /**
+   * 极简首页：只出输入卡，不出 slogan 与会话卡。右抽屉里「还没发过第一句话」的
+   * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
+   */
+  homeBare?: boolean;
+}) {
+  const { session, providersError, homeBare } = props;
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -228,6 +236,33 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
   // 首页 = 既没有活着的会话，也没有打开任何一条旧会话。
   // leaving 期间保持首页挂载（homeActive 已翻 false 也一样），动画走完再让位给聊天页
   if (homeActive || travel === "leaving") {
+    // 极简首页（右抽屉里还没发话的新任务）：slogan 与会话卡都不出现，
+    // notices + 输入卡居中即用——辅助对话要的是直接开写，不是仪式
+    if (homeBare) {
+      return (
+        <div
+          style={{
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "var(--space-5)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: "min(100%, var(--content-max-width))",
+              display: "grid",
+              gap: "var(--space-2)",
+            }}
+          >
+            {notices}
+            {composer}
+          </div>
+        </div>
+      );
+    }
     // 会话卡数据：全局最近活跃的前 3 条（list 已按 sortSessions 排序），
     // 排除已归档与从未发过消息的——后者连标题都没有，卡片无物可显
     const recents = session.sessions.filter((m) => !m.archived && m.title !== "").slice(0, 3);

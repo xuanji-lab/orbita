@@ -51,11 +51,11 @@ describe("SettingsStore", () => {
   });
 
   test("drawer 的部分更新按键合并，不整块覆盖", async () => {
-    await store.write({ drawer: { open: true, width: 380, docked: ["a"] } });
+    await store.write({ drawer: { width: 380, docked: ["a"] } });
     // 只发改一个键：其余两个保持——渲染层闭包里的旧值不许冲掉它（真机实测过的竞态）
     await store.write({ drawer: { docked: ["a", "b"] } });
     const read = await store.read();
-    assert.deepEqual(read.drawer, { open: true, width: 380, docked: ["a", "b"] });
+    assert.deepEqual(read.drawer, { width: 380, docked: ["a", "b"] });
   });
 
   test("落盘的是格式化 JSON，用户手改得动", async () => {
@@ -64,7 +64,7 @@ describe("SettingsStore", () => {
     // drawer 字段随 DEFAULT_SETTINGS 一起落盘——手改得到的形状要保持一眼可读
     assert.equal(
       raw,
-      '{\n  "theme": "light",\n  "drawer": {\n    "open": false,\n    "width": 320,\n    "docked": []\n  }\n}\n',
+      '{\n  "theme": "light",\n  "drawer": {\n    "width": 320,\n    "docked": []\n  }\n}\n',
     );
   });
 });
