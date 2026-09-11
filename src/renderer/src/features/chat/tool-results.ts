@@ -967,17 +967,47 @@ export function fileViewFor(
   return null;
 }
 
+/** 轮内的记录：参数放宽成结构类型，调用方手里的可能混着压缩界碑。 */
+interface TurnRecordLike {
+  id: string;
+  role: unknown;
+  content?: readonly { type: string; text?: string }[];
+}
+
 /**
- * 回答的正文文本——「复制回答」按钮拷的就是它。**只取 text 块**（markdown 原样），
- * thinking 与 toolCall 不进：用户要的是答案，不是过程。参数放宽成结构类型：
- * 调用方手里的记录可能混着压缩界碑，界碑与非 assistant 一律空串。
+ * 锚点消息所在那一轮的全部 assistant 记录（原序）。轮边界 = user / 界碑。
+ *
+ * pi 每次 toolCall 都结束当前消息：「说一句 → 跑工具 → 再说一句」是两三条记录。
+ * 只读锚点（末条）会丢前面那句——复制漏前半段、速度只算末条那几百毫秒（2026-09-11 验收复现）。
+ * 找不到锚点返回空数组。
  */
-export function answerText(
-  record: { role: unknown; content?: readonly { type: string; text?: string }[] } | undefined | null,
-): string {
-  if (record === undefined || record === null || record.role !== "assistant") return "";
-  return (record.content ?? [])
-    .filter((block) => block.type === "text")
+export function turnAssistantRecords<T extends TurnRecordLike>(
+  records: readonly T[],
+  anchorId: string,
+): T[] {
+  const end = records.findIndex((record) => record.id === anchorId);
+  if (end === -1) return [];
+  let start = 0;
+  for (let i = end; i >= 0; i -= 1) {
+    const role = records[i]?.role;
+    if (role === "user" || role === "compacted") {
+      start = i + 1;
+      break;
+    }
+  }
+  return records.slice(start, end + 1).filter((record) => record.role === "assistant");
+}
+
+/**
+ * 回答的正文文本——「复制回答」按钮拷的就是它。收一轮里全部 assistant 记录的
+ * **text 块**（markdown 原样），段间空行；thinking 与 toolCall 不进：用户要的是答案，不是过程。
+ * 非 assistant 记录跳过，空 text 块不占段。
+ */
+export function answerText(records: readonly TurnRecordLike[]): string {
+  return records
+    .filter((record) => record.role === "assistant")
+    .flatMap((record) => (record.content ?? []).filter((block) => block.type === "text"))
     .map((block) => block.text ?? "")
+    .filter((text) => text.trim() !== "")
     .join("\n\n");
 }

@@ -126,7 +126,7 @@ describe("TranscriptAdapter", () => {
     assert.equal(finished.item.usage?.output, 4100);
   });
 
-  test("终态帧挂真值速度——usage.output ÷ 本条生成时长（usage-speed-X）", () => {
+  test("终态帧挂纯生成时长 genMs——message_start 到 message_end 的钟，不在这里算速度", () => {
     let clock = 1_000;
     const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
     const message = assistant([{ type: "text", text: "done" }]);
@@ -135,32 +135,31 @@ describe("TranscriptAdapter", () => {
     clock = 3_000; // 生成 2 秒
     const frames = timed.apply({ type: "message_end", message });
     assert.ok(frames[0]?.type === "item_finished");
-    assert.equal((frames[0].item as { speed?: number }).speed, 400);
+    assert.equal((frames[0].item as { genMs?: number }).genMs, 2_000);
+    assert.equal(frames[0].item.usage?.output, 800);
   });
 
-  test("过不了 500ms 噪音门的帧不带 speed——不显示，也不编数", () => {
+  test("短到几百毫秒的帧照样挂 genMs——噪音门在 renderer 按整轮加总后判，不在这里丢", () => {
     let clock = 1_000;
     const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
     const message = assistant([{ type: "text", text: "quick" }]);
-    message.usage = { ...message.usage, output: 9_999 };
     timed.apply({ type: "message_start", message: assistant([{ type: "text", text: "" }]) });
     clock = 1_300; // 只生成 300ms
     const frames = timed.apply({ type: "message_end", message });
     assert.ok(frames[0]?.type === "item_finished");
-    assert.equal((frames[0].item as { speed?: number }).speed, undefined);
+    assert.equal((frames[0].item as { genMs?: number }).genMs, 300);
   });
 
-  test("打断（aborted）的回答照样挂速度，且终态判定不被劫持", () => {
+  test("打断（aborted）的回答照样挂 genMs，且终态判定不被劫持", () => {
     let clock = 1_000;
     const timed = new TranscriptAdapter({ newId: () => `id-${++counter}`, now: () => clock });
     const message = assistant([{ type: "text", text: "half…" }], "aborted");
-    message.usage = { ...message.usage, output: 400 };
     timed.apply({ type: "message_start", message: assistant([{ type: "text", text: "" }]) });
     clock = 3_000;
     const frames = timed.apply({ type: "message_end", message });
     assert.ok(frames[0]?.type === "item_finished");
     assert.equal(frames[0].item.status, "aborted");
-    assert.equal((frames[0].item as { speed?: number }).speed, 200);
+    assert.equal((frames[0].item as { genMs?: number }).genMs, 2_000);
   });
 
   test("思考 + 回答：两个内容块各自按 contentIndex 增量，不串台", () => {

@@ -21,7 +21,6 @@ import type {
   TranscriptProgress,
   UserContent,
 } from "@earendil-works/pi-protocol";
-import { messageSpeed } from "../shared/message-speed.ts";
 
 /** 工具结果的内容块。协议里只允许 text 与 image 两种。 */
 type ToolContent = ToolTranscriptItem["content"][number];
@@ -154,7 +153,7 @@ export class TranscriptAdapter {
   private readonly deps: AdapterDeps;
   /** 当前正在流式的 assistant 消息 id；不在流式中时为 null。 */
   private activeAssistantId: string | null = null;
-  /** 本条消息的生成起点（message_start 的钟）；落定即清——速度的分母（usage-speed-X）。 */
+  /** 本条消息的生成起点（message_start 的钟）；落定即清——genMs 的起算点。 */
   private genStart: number | null = null;
   /**
    * 正在执行的工具：toolCallId → 我们铸的 item id 与入参。
@@ -206,19 +205,16 @@ export class TranscriptAdapter {
       const id = this.activeAssistantId;
       if (id === null || !isAssistant(event.message)) return [];
       this.activeAssistantId = null;
-      // 速度挂终态帧（usage-speed-X）：真值 = usage.output ÷ 本条生成时长，跟着
-      // 回答落盘、重开即回——「速度就有记录」。过不了噪音门就不挂，回答旁不显示，
-      // 不编数。字段不在 pi 的 schema 上，归约器实测原样保留（探针 2026-09-06）。
-      const end = this.deps.now();
-      const speed =
-        this.genStart !== null
-          ? messageSpeed(this.genStart, end, event.message.usage.output)
-          : null;
+      // 纯生成时长挂终态帧：message_start 到 message_end 的钟——工具执行在两条消息之间，
+      // 天然不计入。跟着回答落盘、重开即回。速度由 renderer 按**整轮**把各条的 usage.output
+      // 与 genMs 加总后算（shared/message-speed.ts）——单条算不代表这轮，末条常常只有几百毫秒。
+      // 字段不在 pi 的 schema 上，归约器实测原样保留（探针 2026-09-06）。
+      const genMs = this.genStart !== null ? this.deps.now() - this.genStart : undefined;
       this.genStart = null;
       return [
         {
           type: "item_finished",
-          item: this.assistantItem(id, event.message, false, speed ?? undefined),
+          item: this.assistantItem(id, event.message, false, genMs),
         },
       ];
     }
@@ -341,7 +337,7 @@ export class TranscriptAdapter {
     id: string,
     message: AssistantMessage,
     streaming: boolean,
-    speed?: number,
+    genMs?: number,
   ): TranscriptItem {
     const base = {
       id,
@@ -353,11 +349,11 @@ export class TranscriptAdapter {
       timestamp: this.deps.now(),
     };
     if (streaming) return { ...base, status: "streaming" };
-    // speed 是我们挂在 pi item 上的展示字段（不在 pi schema 上，归约器实测原样保留）：
-    // 真值 tok/s，过不了噪音门的帧不带这个字段。**只附加，不劫持**——
-    // aborted / error / toolUse 的终态判定原样走，速度跟着哪一种终态都能挂。
+    // genMs 是我们挂在 pi item 上的字段（不在 pi schema 上，归约器实测原样保留）：
+    // 本条的纯生成毫秒。**只附加，不劫持**——aborted / error / toolUse 的终态判定
+    // 原样走，哪一种终态都能挂。
     const withSpeed = (item: TranscriptItem): TranscriptItem =>
-      speed === undefined ? item : ({ ...item, speed } as TranscriptItem);
+      genMs === undefined ? item : ({ ...item, genMs } as TranscriptItem);
     // aborted 这一支的 stopReason 是它自己那个字面量，不是 complete 那三个之一
     if (message.stopReason === "aborted") {
       return withSpeed({ ...base, status: "aborted", stopReason: "aborted" });

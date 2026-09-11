@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { CompactedRecord } from "@shared/session";
+import type { CompactedRecord, SessionRecord } from "@shared/session";
 import {
   answerText,
   branchAnchorEntries,
@@ -32,6 +32,7 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  turnAssistantRecords,
   writeContent,
   writeLineCount,
   type RenderUnit,
@@ -314,13 +315,49 @@ describe("toolResultText", () => {
       readCall("t1", "src/a.ts"),
       { type: "text", text: "第二段。" },
     ]);
-    assert.equal(answerText(record), "第一段。\n\n第二段。");
+    assert.equal(answerText([record]), "第一段。\n\n第二段。");
   });
 
-  test("answerText —— 非 assistant、无记录、空 content 都给空串（按钮无从复制）", () => {
-    assert.equal(answerText(userItem), "");
-    assert.equal(answerText(undefined), "");
-    assert.equal(answerText(assistantItem("a2", [])), "");
+  test("answerText —— 一轮多条记录（pi 每次 toolCall 切一条）：全部 text 块按序拼，不只拿末条", () => {
+    const turn = [
+      assistantItem("a1", [{ type: "text", text: "我接下来要跑命令。" }, readCall("t1", "x")]),
+      assistantItem("a2", [{ type: "text", text: "跑完了，输出 hello。" }]),
+    ];
+    assert.equal(answerText(turn), "我接下来要跑命令。\n\n跑完了，输出 hello。");
+  });
+
+  test("answerText —— 非 assistant 跳过、空数组、空 content、空白 text 块都不占段", () => {
+    assert.equal(answerText([userItem]), "");
+    assert.equal(answerText([]), "");
+    assert.equal(answerText([assistantItem("a2", [])]), "");
+    assert.equal(
+      answerText([assistantItem("a3", [{ type: "text", text: "  " }, { type: "text", text: "有字" }])]),
+      "有字",
+    );
+  });
+
+  test("turnAssistantRecords —— 锚点所在轮的全部 assistant 记录，user / 界碑是轮边界", () => {
+    const records: SessionRecord[] = [
+      userItem,
+      assistantItem("a0", [{ type: "text", text: "上一轮" }]),
+      { ...userItem, id: "u2" },
+      assistantItem("a1", [{ type: "text", text: "这轮第一句" }, readCall("t1", "x")]),
+      { id: "r1", role: "tool", toolCallId: "t1", toolName: "read", input: {}, content: [], timestamp: 0, status: "complete", isError: false } as TranscriptItem,
+      assistantItem("a2", [{ type: "text", text: "这轮第二句" }]),
+    ];
+    assert.deepEqual(
+      turnAssistantRecords(records, "a2").map((r) => r.id),
+      ["a1", "a2"],
+    );
+    // 锚点在上一轮：只拿上一轮的
+    assert.deepEqual(turnAssistantRecords(records, "a0").map((r) => r.id), ["a0"]);
+    // 界碑也是边界
+    assert.deepEqual(
+      turnAssistantRecords([...records.slice(0, 2), compacted, ...records.slice(3)], "a2").map((r) => r.id),
+      ["a1", "a2"],
+    );
+    // 锚点不存在：空
+    assert.deepEqual(turnAssistantRecords(records, "nope"), []);
   });
 
   test("图片标记它存在，不丢掉也不假装能渲染", () => {

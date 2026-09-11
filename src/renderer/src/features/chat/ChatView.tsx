@@ -34,6 +34,7 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  turnAssistantRecords,
   turnStats,
   writeLineCount,
   type IntraToken,
@@ -373,10 +374,8 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         )}
       {turnView.map((entry, index) => {
         const branchAfter = branchRows.get(index);
-        const anchorRecord =
-          branchAfter !== undefined
-            ? records.find((record) => record.id === branchAfter)
-            : undefined;
+        // 复制与速度都按锚点所在的**整轮**取：轮内可能有多条 assistant 记录（每次 toolCall 切一条）
+        const turnRecords = branchAfter !== undefined ? turnAssistantRecords(records, branchAfter) : [];
         return (
           <Fragment key={entry.key}>
             {entry.kind === "turnGroup" ? (
@@ -396,8 +395,8 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
             {branchAfter !== undefined && (
               <BranchRow
                 anchorItemId={branchAfter}
-                speed={replySpeed(anchorRecord)}
-                copyText={answerText(anchorRecord)}
+                speed={replySpeed(turnRecords)}
+                copyText={answerText(turnRecords)}
                 disabled={toolsRunning}
                 onBranch={session.branchFrom}
               />
@@ -1883,7 +1882,7 @@ function Responding(props: { session: ChatSession }) {
       0,
     );
     const start = streamingStart(streaming.id);
-    const speed = start !== null ? messageSpeed(start, now, estimateStreamingTokens(chars)) : null;
+    const speed = start !== null ? messageSpeed(now - start, estimateStreamingTokens(chars)) : null;
     if (speed !== null) speedText = formatSpeed(speed);
   }
   return (

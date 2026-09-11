@@ -5,19 +5,25 @@ import { estimateStreamingTokens, messageSpeed, SPEED_MIN_MS } from "./message-s
 
 describe("messageSpeed —— 真值除法与噪音门", () => {
   test("正常：output ÷ 生成秒", () => {
-    assert.equal(messageSpeed(1_000, 3_000, 1_000), 500);
+    assert.equal(messageSpeed(2_000, 1_000), 500);
   });
 
   test(`不足 ${SPEED_MIN_MS}ms 不当真——除以极小时间会出荒谬瞬时值`, () => {
-    assert.equal(messageSpeed(0, SPEED_MIN_MS - 1, 1_000), null);
+    assert.equal(messageSpeed(SPEED_MIN_MS - 1, 1_000), null);
   });
 
   test("恰好压线算过门（含边界）", () => {
-    assert.equal(messageSpeed(0, SPEED_MIN_MS, 400), 800);
+    assert.equal(messageSpeed(SPEED_MIN_MS, 400), 800);
   });
 
   test("输出 0 不算——0 不是速度，是没产出", () => {
-    assert.equal(messageSpeed(0, 5_000, 0), null);
+    assert.equal(messageSpeed(5_000, 0), null);
+  });
+
+  test("整轮加总：两条各自不过门，加起来过门——这正是按轮算的理由", () => {
+    assert.equal(messageSpeed(300, 20), null);
+    assert.equal(messageSpeed(300, 15), null);
+    assert.equal(messageSpeed(300 + 300, 20 + 15), 35 / 0.6);
   });
 });
 

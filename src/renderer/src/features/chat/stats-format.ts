@@ -10,6 +10,7 @@
 import type { AgentStats } from "../../../../shared/agent-ipc.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { formatTokens } from "../../utils/format-tokens.ts";
+import { messageSpeed } from "../../../../shared/message-speed.ts";
 
 /** 用量环的一帧：`fill` 是 0–1 的弧长，null = 只画底环 */
 export interface ContextRing {
@@ -121,13 +122,24 @@ export function streamingStart(messageId: string): number | null {
 }
 
 /**
- * 回答上的速度标注：adapter 挂在终态帧的 `speed` 字段，随记录落盘、重开照读。
- * 字段不在 pi 的 schema 类型上（归约器实测原样保留），这里按运行时形态读，
- * 不是一个数就当没有——不编。参数放宽成结构类型：调用方手里的可能是混着
- * 压缩界碑的记录数组，界碑与没挂速度的都落 null。
+ * 回答上的速度标注：按**整轮**算——轮内各条 assistant 记录的 `usage.output` 与 adapter
+ * 挂在终态帧上的 `genMs`（纯生成毫秒）各自求和，再过同一道噪音门。
+ * 单条算不代表这轮：末条常常只有十几个 token、几百毫秒，永远过不了门（验收复现）。
+ * `genMs` 不在 pi 的 schema 类型上（归约器实测原样保留），按运行时形态读；
+ * 没挂的记录（旧会话）两边都不计，全部没挂就 null——不编。
  */
-export function replySpeed(record: { role: unknown } | undefined | null): number | null {
-  if (record === undefined || record === null || record.role !== "assistant") return null;
-  const speed = (record as { speed?: unknown }).speed;
-  return typeof speed === "number" && speed > 0 ? speed : null;
+export function replySpeed(
+  records: readonly { role: unknown; usage?: { output?: unknown } }[],
+): number | null {
+  let outputTokens = 0;
+  let genMs = 0;
+  for (const record of records) {
+    if (record.role !== "assistant") continue;
+    const ms = (record as { genMs?: unknown }).genMs;
+    const output = record.usage?.output;
+    if (typeof ms !== "number" || !(ms >= 0) || typeof output !== "number") continue;
+    genMs += ms;
+    outputTokens += output;
+  }
+  return messageSpeed(genMs, outputTokens);
 }

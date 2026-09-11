@@ -119,7 +119,8 @@ const assistantFrame = (over: {
   id: string;
   status: "streaming" | "complete" | "error";
   timestamp: number;
-  speed?: number;
+  genMs?: number;
+  output?: number;
 }): TranscriptItem =>
   ({
     id: over.id,
@@ -128,7 +129,10 @@ const assistantFrame = (over: {
     model: { provider: "p", id: "m" },
     timestamp: over.timestamp,
     status: over.status,
-    ...(over.speed === undefined ? {} : { speed: over.speed }),
+    ...(over.output === undefined
+      ? {}
+      : { usage: { input: 0, output: over.output, cacheRead: 0, cacheWrite: 0, totalTokens: over.output, cost: {} } }),
+    ...(over.genMs === undefined ? {} : { genMs: over.genMs }),
   }) as TranscriptItem;
 
 describe("formatSpeed —— 整数 tok/s", () => {
@@ -153,15 +157,35 @@ describe("recordAssistantStart / streamingStart —— 估算用的起点记账"
   });
 });
 
-describe("replySpeed —— 回答上的速度标注", () => {
-  test("读 adapter 挂在终态帧上的 speed", () => {
-    assert.equal(replySpeed(assistantFrame({ id: "a1", status: "complete", timestamp: 0, speed: 42 })), 42);
+describe("replySpeed —— 回答上的速度标注，按整轮加总", () => {
+  test("单条：usage.output ÷ genMs", () => {
+    assert.equal(
+      replySpeed([assistantFrame({ id: "a1", status: "complete", timestamp: 0, genMs: 2_000, output: 84 })]),
+      42,
+    );
   });
 
-  test("没挂 speed（噪音门没过 / 旧会话）、坏值、非 assistant 记录，一律 null", () => {
-    assert.equal(replySpeed(assistantFrame({ id: "a2", status: "complete", timestamp: 0 })), null);
-    assert.equal(replySpeed(assistantFrame({ id: "a3", status: "complete", timestamp: 0, speed: -1 })), null);
-    assert.equal(replySpeed({ id: "c1", role: "compacted" } as unknown as TranscriptItem), null);
-    assert.equal(replySpeed(undefined), null);
+  test("多条：各自不过门的短尾巴加在一起过门——验收复现的那种「说一句→跑工具→再说一句」", () => {
+    const turn = [
+      assistantFrame({ id: "a1", status: "complete", timestamp: 0, genMs: 822, output: 67 }),
+      assistantFrame({ id: "a2", status: "complete", timestamp: 1, genMs: 300, output: 21 }),
+    ];
+    assert.equal(replySpeed([turn[1] as TranscriptItem]), null); // 末条单算：300ms 过不了门
+    assert.equal(replySpeed(turn), 88 / 1.122); // 整轮：(67+21) / (822+300)ms
+  });
+
+  test("没挂 genMs（旧会话）、缺 usage、非 assistant，都不计；全部不计就 null", () => {
+    assert.equal(replySpeed([assistantFrame({ id: "a2", status: "complete", timestamp: 0, output: 500 })]), null);
+    assert.equal(replySpeed([assistantFrame({ id: "a3", status: "complete", timestamp: 0, genMs: 2_000 })]), null);
+    assert.equal(replySpeed([{ id: "c1", role: "compacted" } as unknown as TranscriptItem]), null);
+    assert.equal(replySpeed([]), null);
+    // 混着一条旧记录：只算挂了的那条
+    assert.equal(
+      replySpeed([
+        assistantFrame({ id: "a4", status: "complete", timestamp: 0, output: 9_999 }),
+        assistantFrame({ id: "a5", status: "complete", timestamp: 1, genMs: 1_000, output: 50 }),
+      ]),
+      50,
+    );
   });
 });
