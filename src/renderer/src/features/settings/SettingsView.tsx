@@ -1,7 +1,7 @@
 import { Chip } from "../../shell/Chip";
 import type { IconName } from "../../shell/Icon";
 import { ProvidersView } from "./ProvidersView";
-import { THEME_PREFERENCES, type AppSettings, type ThemePreference } from "@shared/settings";
+import { THEME_PREFERENCES, type AppSettings, type SettingsPatch, type ThemePreference } from "@shared/settings";
 
 /**
  * 设置面。**它不是弹窗，是内容面的另一种内容**——tab 列表浮在侧栏上（透明、无面），
@@ -18,7 +18,7 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 export function SettingsView(props: {
   tab: SettingsTab;
   settings: AppSettings;
-  onSettingsChange: (patch: Partial<AppSettings>) => void;
+  onSettingsChange: (patch: SettingsPatch) => void;
   onProvidersChange: () => void;
 }) {
   const active = SETTINGS_TABS.find((t) => t.id === props.tab) ?? SETTINGS_TABS[0];
@@ -69,7 +69,7 @@ const THEME_LABELS: Record<ThemePreference, string> = {
   black: "Ink",
 };
 
-function General(props: { settings: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
+function General(props: { settings: AppSettings; onChange: (patch: SettingsPatch) => void }) {
   return (
     <Section label="Appearance">
       <Row

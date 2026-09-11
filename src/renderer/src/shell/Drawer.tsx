@@ -170,9 +170,7 @@ export function Drawer(props: {
         )}
 
         <div className="drawer-body">
-          {activeTab === null ? (
-            <Chooser onAux={() => setPicking(true)} />
-          ) : showPicker ? (
+          {showPicker ? (
             <Picker
               sessions={props.engine.sessions}
               excludeId={props.mainSessionId}
@@ -180,6 +178,8 @@ export function Drawer(props: {
               onNew={() => dock(NEW_TASK_TAB)}
               onBack={() => setPicking(false)}
             />
+          ) : activeTab === null ? (
+            <Chooser onAux={() => setPicking(true)} />
           ) : (
             // 辅助对话 = 主会话同一个 ChatView：标题头、消息列、输入卡全部同构（Q5/v9）
             <ChatView session={props.view} providersError={props.providersError} />

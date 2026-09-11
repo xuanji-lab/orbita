@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTheme } from "./useTheme";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, type AppSettings } from "@shared/settings";
+import { DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from "@shared/settings";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
 import { transcriptToMarkdown } from "@shared/session";
@@ -68,7 +68,7 @@ export function App() {
   }, [refresh]);
 
   /** 先落盘再回填：写失败时 UI 不该显示一个其实没存下来的选择 */
-  const changeSettings = useCallback((patch: Partial<AppSettings>) => {
+  const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
 
@@ -92,16 +92,16 @@ export function App() {
     setDocked(settings.drawer.docked);
   }, [settings.drawer]);
 
-  /** 抽屉偏好改动：设置对象整体回写，落盘走既有 settings 通道（原子写） */
+  /** 抽屉偏好改动：只发改的键，主进程做 drawer 内部的键级合并
+   *  （整块回写会拿到渲染层闭包里的旧值，先后覆盖有竞态——真机冒烟实测） */
   const changeDrawer = useCallback(
     (patch: Partial<DrawerSettings>) => {
-      const next = { ...settings.drawer, ...patch };
-      setDrawerOpen(next.open);
-      setDrawerWidth(next.width);
-      setDocked(next.docked);
-      changeSettings({ drawer: next });
+      if ("open" in patch) setDrawerOpen(patch.open ?? false);
+      if ("width" in patch) setDrawerWidth(patch.width ?? DEFAULT_SETTINGS.drawer.width);
+      if ("docked" in patch) setDocked(patch.docked ?? []);
+      changeSettings({ drawer: patch });
     },
-    [changeSettings, settings.drawer],
+    [changeSettings],
   );
 
   const toggleDrawer = useCallback(() => {

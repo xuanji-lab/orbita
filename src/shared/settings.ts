@@ -42,6 +42,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   drawer: { open: false, width: 320, docked: [] },
 };
 
+/**
+ * 写入补丁：顶层按键覆盖，`drawer` 内部再按键合并（见 SettingsStore.write）。
+ * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
+ */
+export type SettingsPatch = Partial<Omit<AppSettings, "drawer">> & {
+  drawer?: Partial<DrawerSettings>;
+};
+
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
 export const DRAWER_WIDTH = { min: 280, max: 560, default: 320 } as const;
 

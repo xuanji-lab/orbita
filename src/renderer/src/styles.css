@@ -108,6 +108,7 @@ body {
 
 .window-titlebar {
   flex: 0 0 auto;
+  display: flex;
   align-items: center;
   height: 38px;
   padding: 0 8px 0 12px;
