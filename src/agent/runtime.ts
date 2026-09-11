@@ -34,6 +34,7 @@ import {
   type PiExtensionApi,
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
+import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
 
@@ -302,28 +303,22 @@ function updateLedgerAuth(sessionId: string, provider: ProviderSecrets): void {
   else note.headers = provider.headers;
 }
 
-/** 运行态：只在一轮进行中存在。open 完成前 session 是 null（占坑期）。 */
-interface RunningTurn {
-  /** open 完成前为 null——abort/interrupt 这段时间只能记账等 open 完 */
-  session: AgentSession | null;
-  /** open 完成前是 no-op，finally 里调用总是安全的 */
+/**
+ * 一轮 open 出来的对象面：`turn-cycle` 的 CycleParts（abort / dispose /
+ * unsubscribe）挂到 pi session 与退订闭包上，session / adapter 供 run 回调用。
+ * 占坑-收尾的骨架与三个不变量（先占坑防双开 / open 期 abort 记账兑现 /
+ * settled 晚于出表）全在 turn-cycle.ts——那里有测试。
+ */
+interface TurnParts {
+  abort: () => void;
+  dispose: () => void;
   unsubscribe: () => void;
-  /**
-   * open 期间到达的 abort 记在这里，open 一完成立刻执行——「发送后几百毫秒内
-   * 点停止」不该因为开机竞态被吞掉。
-   */
-  abortRequested: boolean;
-  /** dispose 命令已直接杀过 session：finally 跳过二次 dispose（退订仍要做） */
-  disposed: boolean;
-  /**
-   * 整轮生命周期（open → 跑 → 清理）。interrupt / compact 抢跑前要 await 它，
-   * 确保上一轮的退订 + dispose + 出表全部完成，绝不双开同一本 pi JSONL。
-   */
-  lifecycle: Promise<void>;
+  session: AgentSession;
+  adapter: TranscriptAdapter;
 }
 
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
-const running = new Map<string, RunningTurn>();
+const running = new Map<string, CycleSlot<TurnParts>>();
 
 /** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
 const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
@@ -617,34 +612,24 @@ function openOrCreate(command: OpenInput): SessionManager {
  */
 function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<void>): Promise<void> {
   const id = command.sessionId;
-  // 双开保险丝：同 id 还在跑（含还在 open）就拒绝。
-  if (running.has(id)) {
-    throw new Error(`session ${id} is already running`);
-  }
-  const entry: RunningTurn = {
-    session: null,
-    unsubscribe: () => {},
-    abortRequested: false,
-    disposed: false,
-    lifecycle: Promise.resolve(),
-  };
-  running.set(id, entry);
-  entry.lifecycle = (async () => {
-    try {
+  return startCycle(
+    running,
+    id,
+    async () => {
       const opened = await openTurn(command, command.type === "compact");
-      entry.session = opened.session;
-      entry.unsubscribe = opened.unsubscribe;
-      // 开机期间到达的停止请求：open 一完成立刻兑现
-      if (entry.abortRequested) opened.session.abort();
-      await run(opened);
-    } finally {
-      entry.unsubscribe();
-      if (!entry.disposed && entry.session !== null) entry.session.dispose();
-      running.delete(id);
-      send({ type: "phase", sessionId: id, phase: "idle" });
-    }
-  })();
-  return entry.lifecycle;
+      return {
+        abort: () => opened.session.abort(),
+        dispose: () => opened.session.dispose(),
+        unsubscribe: opened.unsubscribe,
+        session: opened.session,
+        adapter: opened.adapter,
+      };
+    },
+    async (parts) => run({ session: parts.session, adapter: parts.adapter, unsubscribe: parts.unsubscribe }),
+    // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
+    // idle 时本轮已完全收尾，排队投递不会撞 already running
+    () => send({ type: "phase", sessionId: id, phase: "idle" }),
+  );
 }
 
 /**
@@ -721,12 +706,8 @@ async function handle(command: AgentCommand): Promise<void> {
     // 队列在 renderer 一侧（docs/plans/2026-09-06-排队队列所有权收回），
     // 这里只做两件事：停下正在跑的这一轮（等它完全收尾），把这句话作为新一轮发出去。
     // 不碰 pi 的 steering/followUp——那正是要断掉的耦合。
-    const prev = running.get(command.sessionId);
-    if (prev !== undefined) {
-      prev.abortRequested = true;
-      prev.session?.abort();
-      await prev.lifecycle;
-    }
+    abortCycle(running, command.sessionId);
+    await running.get(command.sessionId)?.lifecycle;
     await startTurn(command, async (opened) => {
       const note = ledgerNote(command.sessionId);
       note.echoed.add(command.text);
@@ -742,12 +723,8 @@ async function handle(command: AgentCommand): Promise<void> {
     // 手动压缩。pi 的旧 compact() 内部先 abort 当前轮——无状态化沿用这个语义：
     // 在跑就先停（等收尾），再以压缩为一轮生命周期开机。忙碌态、界碑、失败提示
     // 全走 compaction_start / compaction_end 事件那条已接好的链。
-    const prev = running.get(command.sessionId);
-    if (prev !== undefined) {
-      prev.abortRequested = true;
-      prev.session?.abort();
-      await prev.lifecycle;
-    }
+    abortCycle(running, command.sessionId);
+    await running.get(command.sessionId)?.lifecycle;
     await startTurn(command, (opened) =>
       withManualCompactionTuning(opened.session, () => opened.session.compact(command.instructions)),
     );
@@ -758,26 +735,17 @@ async function handle(command: AgentCommand): Promise<void> {
     // 停止只停当前轮。没在跑就静默——「停止」按钮对空闲会话本就该是 no-op。
     // 排队消息滞留在 renderer 的本地队列，idle 事件（startTurn 的 finally）到了
     // 自然逐条投递；不替用户清队（排队是用户的意图，停止不该替他放弃）。
-    const current = running.get(command.sessionId);
-    if (current !== undefined) {
-      current.abortRequested = true;
-      current.session?.abort();
-    }
+    abortCycle(running, command.sessionId);
     return;
   }
 
   if (command.type === "dispose") {
     // 删除会话。**没开过账的也走这里**（删除一条从未唤醒的会话是正常路径）——
     // 没有就没什么可释放的，静默返回。
-    const current = running.get(command.sessionId);
-    if (current !== undefined) {
-      // pi 的 dispose 自己会 abort 全部在飞工作（当前轮 / 重试 / 压缩 / 本会话的 bash），
-      // 正在跑的会话被删也成立，无需先 abort。标记 disposed：lifecycle 的 finally
-      // 跳过二次 dispose（退订与出表仍由它做）。
-      current.session?.dispose();
-      current.disposed = true;
-      await current.lifecycle;
-    }
+    // pi 的 dispose 自己会 abort 全部在飞工作（当前轮 / 重试 / 压缩 / 本会话的
+    // bash），正在跑的会话被删也成立，无需先 abort。killCycle 标记 disposed，
+    // 收尾跳过二次 dispose（退订与出表仍做），并等它完全收尾。
+    await killCycle(running, command.sessionId);
     ledger.delete(command.sessionId);
     // 审批 resolve 函数不随会话一起删的话，会把已销毁会话的工具执行闭包整条钉在内存里
     for (const key of pendingPermissions.keys()) {
@@ -798,8 +766,8 @@ async function handle(command: AgentCommand): Promise<void> {
     // 轮在跑：落 pi 本子（model_change）；不在跑：只校验 + 落账——下一次 open
     // 的装配本来就用主进程的新 provider/modelId。
     const current = running.get(command.sessionId);
-    if (current?.session != null) {
-      void setSessionModel(current.session, command.sessionId, command.provider, command.modelId);
+    if (current?.opened != null) {
+      void setSessionModel(current.opened.session, command.sessionId, command.provider, command.modelId);
     } else {
       void setLedgerModel(command.sessionId, command.provider, command.modelId);
     }
@@ -811,8 +779,8 @@ async function handle(command: AgentCommand): Promise<void> {
     // 迟到到轮已收尾（极端窗口）就跳过：标题是易耗品，下一条消息自然重试。
     const current = running.get(command.sessionId);
     const note = ledger.get(command.sessionId);
-    if (current?.session != null && note !== undefined) {
-      void generateSessionTitle(note, current.session, command.sessionId, command.text);
+    if (current?.opened != null && note !== undefined) {
+      void generateSessionTitle(note, current.opened.session, command.sessionId, command.text);
     }
     return;
   }

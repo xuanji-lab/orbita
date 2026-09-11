@@ -106,6 +106,42 @@ describe("pendingCreates —— 首轮开机与 created 事件的竞态（债务
     assert.equal(ctx.child().posted[0]?.type, "submit");
   });
 
+  test("续轮（piSessionFile 已带）：不等 created，发完即回 null", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = ctx.host.submit({
+      type: "submit",
+      sessionId: "s1",
+      text: "hi",
+      ...TURN_FIELDS,
+      piSessionFile: "pi/abc.jsonl",
+    });
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    // 没等 created 就返回了；命令带着完整开工上下文
+    assert.equal(await pending, null);
+    assert.deepEqual(ctx.child().posted[0], {
+      type: "submit",
+      sessionId: "s1",
+      text: "hi",
+      ...TURN_FIELDS,
+      piSessionFile: "pi/abc.jsonl",
+    });
+  });
+
+  test("无等待者的 created（续轮自愈）：转发 onEvent 给主进程钩子", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const builtins = ctx.host.listBuiltins(); // 拉起进程（懒启动）
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s7", piSessionFile: "pi/new.jsonl" });
+    // host-core 不消化它，原样交给 onEvent（main/index.ts 的 meta 校准钩子）
+    assert.deepEqual(ctx.events.at(-1), { type: "created", sessionId: "s7", piSessionFile: "pi/new.jsonl" });
+    ctx.host.dispose();
+    await Promise.race([builtins.catch(() => undefined), Promise.resolve()]);
+  });
+
   test("failed 带同一个 sessionId —— 错误交回调用方，不是只广播一条事件", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
