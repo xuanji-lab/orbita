@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../../shell/Icon";
 import type { QueuedMessage } from "./session-states.ts";
+import { dropPlacement, type DropPlacement } from "./queue-drop.ts";
 
 // ── 本模块全部用户可见文案（英文先行，中文化等真实需求出现再抽字典） ──
 const COPY = {
@@ -30,7 +31,8 @@ const COPY = {
  * 连续操作时必然落空（2026-09-06 一晚四个 bug）。
  *
  * 每条两个按钮：**立即发送**（回车图标）与**撤回**（undo 图标，文字落回输入框）；
- * 调顺序走**行首抓手拖拽**，不占按钮位。
+ * 调顺序走**行首抓手拖拽**，不占按钮位。落点语义见 queue-drop.ts：插入线跟鼠标走，
+ * 落进源自己的缝时不画线——线一出现，松手必然动。
  * 设计规则与 ApprovalBar 同源：浮起的玻璃卡（popover 阴影，比 composer 高一层）、
  * 状态用图标与文字、不拿 accent 染底——accent 留给发送键。
  */
@@ -43,13 +45,17 @@ export function QueueStrip(props: {
   onMove: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dropAt, setDropAt] = useState<{ id: string; placement: "before" | "after" } | null>(null);
+  const [dropAt, setDropAt] = useState<{ id: string; placement: DropPlacement } | null>(null);
   if (props.items.length === 0) return null;
   const halted = props.phase === "idle";
   const endDrag = (): void => {
     setDraggingId(null);
     setDropAt(null);
   };
+  const indexOf = (id: string): number => props.items.findIndex((item) => item.id === id);
+  /** 正拖着的那条落到 targetId 的 half 半时的语义；null = 没在拖 / 落进去等于不动 */
+  const placementOnto = (targetId: string, half: DropPlacement): DropPlacement | null =>
+    draggingId === null ? null : dropPlacement(indexOf(draggingId), indexOf(targetId), half);
   return (
     <section
       aria-label={COPY.queued}
@@ -82,12 +88,13 @@ export function QueueStrip(props: {
           onSendNow={() => props.onSendNow(item.id)}
           onWithdraw={() => props.onWithdraw(item.id)}
           onDragStart={() => setDraggingId(item.id)}
-          onDragOverRow={(placement) => {
-            if (draggingId === null) return;
-            setDropAt({ id: item.id, placement });
+          onDragOverRow={(half) => {
+            const placement = placementOnto(item.id, half);
+            setDropAt(placement === null ? null : { id: item.id, placement });
           }}
-          onDropRow={(placement) => {
-            if (draggingId !== null && draggingId !== item.id) {
+          onDropRow={(half) => {
+            const placement = placementOnto(item.id, half);
+            if (draggingId !== null && placement !== null) {
               props.onMove(draggingId, item.id, placement);
             }
             endDrag();
@@ -123,15 +130,16 @@ function QueueRow(props: {
   /** 自己正被拖着 */
   dragging: boolean;
   /** 非 null = 落点在本行上/下沿，画一条插入线 */
-  dropPlacement: "before" | "after" | null;
+  dropPlacement: DropPlacement | null;
   onSendNow: () => void;
   onWithdraw: () => void;
   onDragStart: () => void;
-  onDragOverRow: (placement: "before" | "after") => void;
-  onDropRow: (placement: "before" | "after") => void;
+  /** 上报鼠标在本行的哪一半；是否真的动、动到哪由 QueueStrip 结合源行位置判 */
+  onDragOverRow: (half: DropPlacement) => void;
+  onDropRow: (half: DropPlacement) => void;
   onDragEnd: () => void;
 }) {
-  const placementOf = (event: React.DragEvent<HTMLDivElement>): "before" | "after" => {
+  const placementOf = (event: React.DragEvent<HTMLDivElement>): DropPlacement => {
     const box = event.currentTarget.getBoundingClientRect();
     return event.clientY - box.top < box.height / 2 ? "before" : "after";
   };
