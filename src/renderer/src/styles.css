@@ -90,7 +90,72 @@ body {
  *
  * **所有顶部行都要挂 `.titlebar`**（侧栏字标、聊天页头、设置页头、首页的空条），
  * 否则用户会碰到「同一条横栏有的地方能拖、有的地方不能拖」这种隐形边界。
+ *
+ * 自绘标题栏（right-drawer-X）：转帧式窗口后窗口键自己画，整条 drag、
+ * 按钮逐个 no-drag；这里只管它的高度与右端动作簇。
  */
+.app-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell .layer {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.window-titlebar {
+  flex: 0 0 auto;
+  align-items: center;
+  height: 38px;
+  padding: 0 8px 0 12px;
+}
+
+.window-titlebar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-btn {
+  width: 36px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.titlebar-btn:hover:enabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.titlebar-btn.active {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+.titlebar-btn.close:hover:enabled {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+}
+
+.window-titlebar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--color-border-default);
+  margin: 0 6px 0 8px;
+}
+
 .titlebar {
   -webkit-app-region: drag;
 }
@@ -118,12 +183,327 @@ body {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: row;
   background: var(--glass-bg);
   border: 0;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-composer);
   -webkit-backdrop-filter: blur(var(--glass-blur));
   backdrop-filter: blur(var(--glass-blur));
+}
+
+/*
+ * 内容面的两列：左会话列（ChatView 自带 height:100% 的栅格根），右抽屉。
+ * 抽屉是 pane 的子元素——**同一个面板**：同一份玻璃底、同一份阴影、四角一体的圆角，
+ * 中间只有一根竖线（wafo v7/v8 裁决：不要「有间距的长方形」）。
+ */
+.pane-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ===== 右抽屉 ===== */
+.drawer {
+  flex: 0 0 auto;
+  width: 0;
+  transition:
+    width 0.2s ease,
+    border-left-width 0.2s ease;
+  overflow: hidden;
+  position: relative;
+  border-left: 0 solid var(--color-border-default);
+}
+
+.drawer.open {
+  width: var(--drawer-w, 320px);
+  border-left-width: 1px;
+}
+
+/* 拖拽过程中不要过渡——每一步都实时跟手，收起/展开的动画才保留 */
+.drawer.dragging {
+  transition: none;
+}
+
+.drawer-inner {
+  width: var(--drawer-w, 320px);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 280px;
+}
+
+/* 竖线即分界；把手骑在竖线上（pane overflow:hidden 裁掉了向外伸的部分） */
+.drawer-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.drawer-resizer:hover {
+  background: var(--color-border-subtle);
+}
+
+.drawer-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px 6px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.drawer-tablist {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.drawer-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 170px;
+  min-width: 0;
+  padding: 5px 8px 5px 10px;
+  border-radius: var(--radius-md);
+  border: 0;
+  cursor: pointer;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-control);
+  font-family: inherit;
+}
+
+.drawer-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.drawer-tab.on {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.drawer-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-tab-close {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+
+.drawer-tab-close:hover {
+  background: var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.drawer-tab-add {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+  font-family: inherit;
+}
+
+.drawer-tab-add:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 空态选择卡：辅助对话可用；审查/终端/浏览器禁用 + 标 planned（仓库既有规矩） */
+.drawer-choose {
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+}
+
+.drawer-choose-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.drawer-choose-title {
+  font-size: var(--font-size-title);
+  font-weight: 600;
+}
+
+.drawer-choose-sub {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--space-4);
+}
+
+.drawer-choose-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(84px, 1fr));
+  gap: 10px;
+  width: 100%;
+  max-width: 340px;
+}
+
+.drawer-typebtn {
+  position: relative;
+  height: 64px;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-control);
+  font-family: inherit;
+}
+
+.drawer-typebtn:hover:enabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-popover);
+}
+
+.drawer-typebtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.drawer-typebtn-plan {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  font-size: var(--font-size-micro);
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  padding: 0 5px;
+  line-height: 14px;
+}
+
+/* task 选择器 */
+.drawer-picker {
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+
+.drawer-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px var(--space-2);
+  font-size: var(--font-size-control);
+  font-weight: 600;
+}
+
+.drawer-picker-back {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.drawer-picker-back:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.drawer-picker-sub {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  padding: 0 4px var(--space-2);
+}
+
+.drawer-pickrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-control);
+  font-family: inherit;
+  min-width: 0;
+}
+
+.drawer-pickrow:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.drawer-pickrow.new {
+  color: var(--color-mode-active-fg);
+  font-weight: 600;
+}
+
+.drawer-pickrow-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-pickrow-meta {
+  margin-left: auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  flex: 0 0 auto;
+}
+
+.drawer-picksep {
+  height: 1px;
+  background: var(--color-border-subtle);
+  margin: var(--space-2) 4px;
 }
 
 .scroll {

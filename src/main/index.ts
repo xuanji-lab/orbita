@@ -18,6 +18,7 @@ import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
+import { registerWindowIpc } from "./window/ipc.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
@@ -65,8 +66,10 @@ function createMainWindow(): BrowserWindow {
     autoHideMenuBar: true,
     ...(process.platform === "darwin"
       ? MAC_WINDOW
-      : // 首帧之前窗口是空的；给一个中性底色，避免白闪（深浅由渲染层接管）
-        { backgroundColor: "#f3f4f1" }),
+      : // Windows/Linux：转帧式窗口——最小化/最大化/关闭由渲染层标题栏自绘
+        // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
+        // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
+        { frame: false, backgroundColor: "#f3f4f1" }),
     webPreferences: {
       ...SECURITY_INVARIANTS,
       preload: join(__dirname, "../preload/index.js"),
@@ -121,6 +124,7 @@ void app.whenReady().then(() => {
   // 主题先于窗口生效：晚一步的话第一帧会用系统外观画出 vibrancy，然后当着用户的面跳一下
   const settings = new SettingsStore(configDir);
   registerSettingsIpc(settings);
+  registerWindowIpc();
   void settings.read().then(applyNativeTheme);
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——

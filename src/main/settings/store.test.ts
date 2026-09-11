@@ -23,8 +23,14 @@ describe("SettingsStore", () => {
   });
 
   test("写完能读回来，并且换个实例也读得到", async () => {
-    assert.deepEqual(await store.write({ theme: "dark" }), { theme: "dark" });
-    assert.deepEqual(await new SettingsStore(dir).read(), { theme: "dark" });
+    assert.deepEqual(await store.write({ theme: "dark" }), {
+      theme: "dark",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
+    assert.deepEqual(await new SettingsStore(dir).read(), {
+      theme: "dark",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
   });
 
   test("坏文件退回默认，不抛——设置随时能再选，不值得为此让应用起不来", async () => {
@@ -47,6 +53,10 @@ describe("SettingsStore", () => {
   test("落盘的是格式化 JSON，用户手改得动", async () => {
     await store.write({ theme: "light" });
     const raw = await readFile(join(dir, "settings.json"), "utf8");
-    assert.equal(raw, '{\n  "theme": "light"\n}\n');
+    // drawer 字段随 DEFAULT_SETTINGS 一起落盘——手改得到的形状要保持一眼可读
+    assert.equal(
+      raw,
+      '{\n  "theme": "light",\n  "drawer": {\n    "open": false,\n    "width": 320,\n    "docked": []\n  }\n}\n',
+    );
   });
 });
