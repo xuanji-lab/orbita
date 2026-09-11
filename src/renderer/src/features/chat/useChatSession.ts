@@ -478,6 +478,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setError("Add a provider with at least one model first");
         return;
       }
+      // 压缩轮开起来的那一刻起它也是「当前活会话」——压缩期间按 stop 才能找到它
+      if (sessionRef.current !== active) {
+        setSessionId(active);
+        sessionRef.current = active;
+      }
       writeDraft(draftKey, "");
       // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
       applyStates((prev) => setEntryPhase(prev, active, "turn"));
@@ -514,10 +519,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       const target = meta?.cwd ?? cwd ?? defaultCwd;
       if (target === "") throw new Error("Choose a workspace folder first");
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
-      if (id === null) {
-        // 无状态：新会话没有独立的「建」这一步——id 由 renderer 生成，
-        // 主进程首次 submit 落 meta 时接纳它
-        id = crypto.randomUUID();
+      if (id === null) id = crypto.randomUUID();
+      // 无论新建还是从盘上重开：发出去的那一刻起它就是「当前活会话」——排队 /
+      // 停止 / 撤回都靠 sessionRef 找它，不设就全部静默 no-op（2026-09-11 B 验收复现）
+      if (sessionRef.current !== id) {
         setSessionId(id);
         sessionRef.current = id;
       }
@@ -736,6 +741,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     }
     const turn = buildTurn(active);
     if (turn === null) return;
+    // 压缩轮开起来的那一刻起它也是「当前活会话」——压缩期间按 stop 才能找到它
+    if (sessionRef.current !== active) {
+      setSessionId(active);
+      sessionRef.current = active;
+    }
     // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
     applyStates((prev) => setEntryPhase(prev, active, "turn"));
     void api.agent.compact({ sessionId: active, ...turn });
