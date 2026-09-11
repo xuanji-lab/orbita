@@ -21,11 +21,12 @@ import {
   type SessionStates,
 } from "./session-states.ts";
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
+import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
-import type { AgentStats, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
 import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -66,7 +67,9 @@ export interface ChatSession {
   /** 按 id 查回合失败标注（槽里有真相）——侧栏失败图标用，与「当前看哪条」无关 */
   turnErrorOf: (id: string) => string | null;
   error: string | null;
+  /** 当前查看会话的输入框草稿——**按会话隔离**，切换 / 新开会话互不带走 */
   draft: string;
+  /** 写当前查看会话的草稿 */
   setDraft: (value: string) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
@@ -166,7 +169,15 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
    */
   const statesRef = useRef<SessionStates>(states);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  /**
+   * 输入框草稿**按会话隔离**（含首页）：key = 当前查看的会话 id，首页用 "home"。
+   * 以前是全局单份，切换 / 新开会话草稿跟着走（2026-09-10 用户裁决：新会话就是
+   * 新的，旧会话的草稿留在原地等他回来）。纯内存，不落盘——与旧行为一致。
+   */
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
+  const writeDraft = useCallback((key: string, value: string) => {
+    setDrafts((prev) => (prev.get(key) === value ? prev : new Map(prev).set(key, value)));
+  }, []);
   /** 三档权限模式。默认 plan——**默认最保守**，开工具要用户自己往下调。 */
   const [mode, setMode] = useState<PermissionMode>("plan");
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
@@ -265,9 +276,20 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       );
   }, []);
 
-  useEffect(
-    () =>
-      api.agent.onEvent((event) => {
+  useEffect(() => {
+    // 流式帧合帧：progress 的归约是纯函数（廉价），贵的是每次应用触发的渲染。
+    // 回答期间 delta 可密到十几毫秒一帧，渲染把主线程挤满，点击与打字只能排在
+    // 流式渲染后面——排队卡片点铅笔「时快时慢」的可感延迟根源（2026-09-10）。
+    // 按 ~50ms 节拍攒批整批应用，渲染频率封顶，主线程留出空档；
+    // phase / queue / permission 等低频且对延迟敏感的事件照旧即时应用。
+    const coalescer = createProgressCoalescer<AgentEvent>((batch) => {
+      setStates((prev) => {
+        const next = batch.reduce((acc, event) => applyAgentEvent(acc, event), prev);
+        statesRef.current = next;
+        return next;
+      });
+    }, 50);
+    const off = api.agent.onEvent((event) => {
         if (event.type === "failed") {
           // 回合级失败（重试耗尽）进槽、标注在对话里（applyAgentEvent 收）；
           // 操作级失败仍走全局红字（输入框上方）
@@ -304,6 +326,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           recordAssistantStart(event.progress.item);
         }
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
+        // 流式帧进合帧器按节拍整批应用（见 effect 开头）；其余事件即时
+        if (event.type === "progress") {
+          coalescer.push(event);
+          return;
+        }
         setStates((prev) => {
           const next = applyAgentEvent(prev, event);
           statesRef.current = next;
@@ -313,9 +340,12 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         // 交给 pi 的 post-run 自动 drain 会把好几条一起吹出去——用户一条条点、
         // 最后两条自己一起飞，就是那么来的（2026-09-06 事故）。
         if (event.type === "phase") deliverNext(event.sessionId);
-      }),
-    [refreshSessions],
-  );
+      });
+    return () => {
+      off();
+      coalescer.dispose();
+    };
+  }, [refreshSessions]);
 
   /**
    * 「配置好」= 设置里绿点的标准：api_key 已入库，或 env 档（密钥来自环境）。
@@ -349,6 +379,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     if (!usable.some((p) => p.id === model.providerId)) setModel(null);
   }, [usable, model]);
 
+  // 草稿键 = 当前查看的会话；send 与收回都写自己的键，互不串
+  const draftKey = sessionId ?? opened?.id ?? "home";
+  const draft = drafts.get(draftKey) ?? "";
+  const setDraft = (value: string) => writeDraft(draftKey, value);
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (text === "") return;
@@ -369,7 +404,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
             ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
           }),
         );
-        setDraft("");
+        writeDraft(draftKey, "");
         return;
       }
       // 压缩要有可续的会话：活着的直接压；从盘上打开还没唤醒的先按 resume
@@ -399,7 +434,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setError("No running task to compact");
         return;
       }
-      setDraft("");
+      writeDraft(draftKey, "");
       const id: string = active;
       // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
       setStates((prev) => setEntryPhase(prev, id, "turn"));
@@ -447,7 +482,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         injectedModeRef.current = mode;
         refreshSessions();
       }
-      setDraft("");
+      writeDraft(draftKey, "");
       // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
       // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
       const active: string = id;
@@ -785,10 +820,16 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.agent.answerPermission(requestId, answer);
   }, []);
 
-  /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。 */
-  const restoreToDraft = useCallback((text: string) => {
-    setDraft((prev) => appendWithdrawn(prev, text));
-  }, []);
+  /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。
+   *  目标是**当前会话**的草稿——草稿已按会话隔离，不再是一份全局 string。 */
+  const restoreToDraft = useCallback(
+    (text: string) => {
+      setDrafts((prev) =>
+        new Map(prev).set(draftKey, appendWithdrawn(prev.get(draftKey) ?? "", text)),
+      );
+    },
+    [draftKey],
+  );
 
   /**
    * 投递队首的一条。**一次只发一条**——发完这一轮结束会再来一次 phase 事件，
@@ -877,14 +918,19 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, []);
 
 
+
   // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
   // ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账
   const viewedId = sessionId ?? opened?.id ?? null;
   const entry = (viewedId !== null ? states.get(viewedId) : undefined) ?? EMPTY_ENTRY;
 
+  // selectTranscript 每次调用都造新数组（pi 的实现如此）——在这里按 entry 引用
+  // 稳定化，否则 ChatView 的 memo 转录列每次渲染都被新引用击穿，隔离形同虚设
+  const transcript = useMemo(() => selectTranscript(entry.transcript), [entry.transcript]);
+
   return {
     sessionId,
-    transcript: selectTranscript(entry.transcript),
+    transcript,
     compactions: entry.compactions,
     phase: entry.phase,
     retry: entry.retry,

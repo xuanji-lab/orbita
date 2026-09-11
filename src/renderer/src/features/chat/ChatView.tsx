@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
@@ -314,31 +314,6 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
     );
   }
 
-  // 工具结果不单独占一行——先建索引，渲染工具调用那一行时挂上去（见 tool-results.ts）
-  const toolResults = indexToolResults(session.transcript);
-  // 界碑按发生位置插回往来流：压缩摘要收进「已压缩」折叠行，历史一条不少
-  const records = mergeCompactions(session.compactions, session.transcript);
-  // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
-  const units = flattenRenderUnits(records);
-  const entries = groupToolUnits(units);
-  // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
-  const turnActive = session.phase === "turn";
-  // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
-  const turnView = groupTurns(entries, turnActive, toolResults);
-  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
-  const activeThinkingKey = streamingThinkingKey(records, turnActive);
-  // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
-  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的。
-  // 锚点算在**大折叠视图**上：锚点的正文永远在折叠外面，按钮跟着正文走。
-  const branchRows = branchAnchorEntries(branchAnchorIds(records, toolResults), turnView);
-  const toolsRunning = session.transcript.some(
-    (item) => item.role === "tool" && item.status === "running",
-  );
-  // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
-  // 那轮没折叠就不挂，红字自带的图标是全部。
-  // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
-  const failedFold = session.turnError !== null ? failedFoldKey(turnView) : null;
-
   return (
     <Pane
       title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
@@ -366,13 +341,82 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         </>
       }
     >
+      <TranscriptColumn
+        transcript={session.transcript}
+        compactions={session.compactions}
+        phase={session.phase}
+        retry={session.retry}
+        turnError={session.turnError}
+        loadingHistory={session.loadingHistory}
+        onBranch={session.branchFrom}
+      />
+    </Pane>
+  );
+}
+
+/**
+ * 转录列（memo 隔离）：往来流与它的一切派生（摊平 / 分组 / 折叠 / 分支锚点）只吃
+ * 这几个 props。隔离的理由是可感的点击延迟（2026-09-10）：草稿每个字、排队卡每次
+ * 乐观更新都会让 useChatSession 重渲染，此前整列几百行单元跟着全部重新对账一遍，
+ * 流式期间主线程被逐帧渲染占满，点击反馈排不上队。transcript 引用在 hook 侧
+ * 已按 entry 稳定化——闲时（打字 / 排队操作）memo 命中，整列跳过；流式期间它
+ * 逐帧变化，列照旧逐帧重渲染，活体的实时性不变。
+ */
+const TranscriptColumn = memo(function TranscriptColumn(props: {
+  transcript: readonly TranscriptItem[];
+  compactions: readonly CompactedRecord[];
+  phase: "idle" | "turn" | "compaction";
+  retry: RetryStatus | null;
+  turnError: string | null;
+  loadingHistory: boolean;
+  onBranch: (anchorItemId: string) => void;
+}) {
+  const { transcript } = props;
+  // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
+  const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
+  // 界碑按发生位置插回往来流：压缩摘要收进「已压缩」折叠行，历史一条不少
+  const records = useMemo(
+    () => mergeCompactions(props.compactions, transcript),
+    [props.compactions, transcript],
+  );
+  // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
+  const units = useMemo(() => flattenRenderUnits(records), [records]);
+  const entries = useMemo(() => groupToolUnits(units), [units]);
+  // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
+  const turnActive = props.phase === "turn";
+  // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
+  const turnView = useMemo(() => groupTurns(entries, turnActive, toolResults), [entries, turnActive, toolResults]);
+  // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
+  const activeThinkingKey = useMemo(
+    () => streamingThinkingKey(records, turnActive),
+    [records, turnActive],
+  );
+  // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
+  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的。
+  // 锚点算在**大折叠视图**上：锚点的正文永远在折叠外面，按钮跟着正文走。
+  const branchRows = useMemo(
+    () => branchAnchorEntries(branchAnchorIds(records, toolResults), turnView),
+    [records, toolResults, turnView],
+  );
+  const toolsRunning = useMemo(
+    () => transcript.some((item) => item.role === "tool" && item.status === "running"),
+    [transcript],
+  );
+  // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
+  // 那轮没折叠就不挂，红字自带的图标是全部。
+  // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
+  // 局部名叫 failedFold：failedFoldKey 是 turn-rollup 里的函数，不能重名遮蔽。
+  const failedFold = props.turnError !== null ? failedFoldKey(turnView) : null;
+
+  return (
+    <>
       {/* 历史恢复在途：一行安静的加载指示，正文区不再是一片无解释的空白 */}
-      {session.loadingHistory && entries.length === 0 && <StatusLine spin>Loading…</StatusLine>}
+      {props.loadingHistory && entries.length === 0 && <StatusLine spin>Loading…</StatusLine>}
       {/* 空会话（没发过消息）：一行 tertiary 交代「这里为什么是空的」 */}
       {entries.length === 0 &&
-        !session.loadingHistory &&
-        session.phase === "idle" &&
-        session.turnError === null && (
+        !props.loadingHistory &&
+        props.phase === "idle" &&
+        props.turnError === null && (
           <StatusLine>No messages yet. Send the first one to start.</StatusLine>
         )}
       {turnView.map((entry, index) => {
@@ -401,13 +445,13 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
                 speed={replySpeed(turnRecords)}
                 copyText={answerText(turnRecords)}
                 disabled={toolsRunning}
-                onBranch={session.branchFrom}
+                onBranch={props.onBranch}
               />
             )}
           </Fragment>
         );
       })}
-      {session.turnError !== null && (
+      {props.turnError !== null && (
         /*
          * 回合失败标注（重试耗尽）：跟着失败的归属走——它追在谁后面，就贴着谁的
          * 对齐侧（用户消息居右、agent 消息居左，UserBubble 同款）。常见情形是模型
@@ -418,27 +462,27 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
           style={{
             display: "flex",
             width: "100%",
-            justifyContent: session.transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
+            justifyContent: transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
           }}
         >
-          <Notice tone="bad">{session.turnError}</Notice>
+          <Notice tone="bad">{props.turnError}</Notice>
         </div>
       )}
-      {session.phase === "turn" &&
-        (session.retry !== null ? <Retrying status={session.retry} /> : <Responding session={session} />)}
-      {session.phase === "compaction" && (
+      {props.phase === "turn" &&
+        (props.retry !== null ? <Retrying status={props.retry} /> : <Responding transcript={transcript} />)}
+      {props.phase === "compaction" && (
         <>
           <Compacting />
-          {session.retry !== null && (
+          {props.retry !== null && (
             <div style={{ display: "flex", justifyContent: "center" }}>
-              <Retrying status={session.retry} />
+              <Retrying status={props.retry} />
             </div>
           )}
         </>
       )}
-    </Pane>
+    </>
   );
-}
+});
 
 /**
  * 聊天面的骨架：页头 / 可滚动的内容列 / 底部。实时会话与历史会话共用它——
@@ -1900,8 +1944,8 @@ function CompactedLine(props: { record: CompactedRecord }) {
   );
 }
 
-function Responding(props: { session: ChatSession }) {
-  const { transcript } = props.session;
+function Responding(props: { transcript: readonly TranscriptItem[] }) {
+  const { transcript } = props;
   // 秒针：Responding 只在回答期间挂载，一秒一跳不白算（Retrying 同款）
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
