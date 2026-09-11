@@ -69,8 +69,3 @@ export function splitMathSegments(text: string): MathSegment[] {
   }
   return segments;
 }
-
-/** 草稿里出现 `$` 才可能藏着公式——Σ 预览按钮的出现门控（宽在先：多显示不误事） */
-export function containsMathDelimiter(text: string): boolean {
-  return text.includes("$");
-}

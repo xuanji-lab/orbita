@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { containsMathDelimiter, splitMathSegments } from "./math-text.ts";
+import { splitMathSegments } from "./math-text.ts";
 
 /** 往返不变量：按段类型补回定界符后，拼接必须还原原文（渲染器靠它不丢字、不错位） */
 function source(segments: ReturnType<typeof splitMathSegments>): string {
@@ -80,14 +80,5 @@ describe("splitMathSegments", () => {
       { kind: "blockMath", value: "x \n= y" },
       { kind: "text", value: " 完" },
     ]);
-  });
-});
-
-describe("containsMathDelimiter", () => {
-  test("有 $ 就 true", () => {
-    assert.equal(containsMathDelimiter("a $ b"), true);
-  });
-  test("没有就 false", () => {
-    assert.equal(containsMathDelimiter("纯文字"), false);
   });
 });
