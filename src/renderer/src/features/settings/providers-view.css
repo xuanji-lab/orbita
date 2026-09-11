@@ -643,10 +643,13 @@
 
 /* ---------- 模型弹窗：实心面板 + 发丝线 + 重投影（dialogs 配方） ---------- */
 
+/* fixed 而非 absolute：遮罩要盖住整个窗口（含侧栏），不是只盖 Providers 面板。
+   z-index 与 Menu 的 portal（Menu.tsx，40）同档：弹窗开着时底栏菜单不该浮在它上面。
+   不加 blur：设计系统裁决 blur 只给 surface（readme 《Transparency and blur》），遮罩只用纯色 alpha。 */
 .pv-modal-root {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 40;
   pointer-events: none;
 }
 .pv-modal-backdrop {
