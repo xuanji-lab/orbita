@@ -108,16 +108,34 @@ body {
 
 .scroll {
   overflow-y: auto;
+}
+
+/*
+ * 滚动条全局弱化（wafo 2026-09-10，口径取自设置面 Providers）：
+ * 8px 细条、thumb 贴 --color-border-default（token 随三主题各自变色）、track 透明、
+ * hover 才加深一档。全局 * 一刀——聊天、侧栏、设置不再各长各的。
+ */
+* {
   scrollbar-width: thin;
+  scrollbar-color: var(--color-border-default) transparent;
 }
 
-.scroll::-webkit-scrollbar {
+*::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 
-.scroll::-webkit-scrollbar-thumb {
-  background: var(--color-border-strong);
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-default);
   border-radius: var(--radius-pill);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* lucide SVG 内联后由外层 span 决定尺寸与描边；CSS 覆盖 SVG 的 presentation attribute */
