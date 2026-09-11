@@ -10,6 +10,7 @@ import {
   branchAnchorIds,
   answerText,
   editDiffText,
+  failedFoldKey,
   fileViewFor,
   flattenRenderUnits,
   formatToolDuration,
@@ -329,13 +330,10 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
   const toolsRunning = session.transcript.some(
     (item) => item.role === "tool" && item.status === "running",
   );
-  // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**最后一条**折叠——
-  // turnError 属于转录末尾那轮，红字就渲染在它后面，图标与文字是一对；
+  // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
+  // 那轮没折叠就不挂，红字自带的图标是全部。
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
-  const failedFoldKey =
-    session.turnError !== null
-      ? ([...turnView].reverse().find((entry) => entry.kind === "turnGroup")?.key ?? null)
-      : null;
+  const failedFold = session.turnError !== null ? failedFoldKey(turnView) : null;
 
   return (
     <Pane
@@ -385,7 +383,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
               <TurnRollupLine
                 group={entry}
                 toolResults={toolResults}
-                turnFailed={entry.key === failedFoldKey}
+                turnFailed={entry.key === failedFold}
               />
             ) : (
               <EntryView

@@ -6,6 +6,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import {
+  failedFoldKey,
   flattenRenderUnits,
   groupToolUnits,
   groupTurns,
@@ -256,5 +257,49 @@ describe("turnStats", () => {
     const stats = turnStats(fold, indexToolResults(records));
     assert.equal(stats.thinkingMs, 0);
     assert.equal(stats.thinkingCount, 0);
+  });
+});
+
+describe("failedFoldKey —— 回合级失败的图标只在失败轮里找折叠", () => {
+  const settledTurn: TranscriptItem[] = [
+    userItem("u1", 0),
+    assistantItem("a1", 1, [
+      { type: "toolCall", toolCallId: "r1", toolName: "read", input: { path: "a.ts" } },
+    ]),
+    toolItem({ toolCallId: "r1", timestamp: 2 }),
+    assistantItem("a2", 3, [{ type: "text", text: "读完了。" }]),
+  ];
+
+  test("失败轮有折叠（工具跑了才断）：拿那一轮的折叠 key", () => {
+    const records = [
+      ...settledTurn,
+      userItem("u2", 10),
+      assistantItem("a3", 11, [
+        { type: "toolCall", toolCallId: "r2", toolName: "read", input: { path: "b.ts" } },
+      ]),
+      toolItem({ toolCallId: "r2", timestamp: 12 }),
+    ];
+    const view = turnView(records, false);
+    const folds = foldUnits(view);
+    assert.equal(folds.length, 2);
+    assert.equal(failedFoldKey(view), folds[1]?.key);
+  });
+
+  test("失败轮没折叠（模型开口前就断）：null，不拿上一轮的", () => {
+    const view = turnView([...settledTurn, userItem("u2", 10)], false);
+    assert.equal(foldUnits(view).length, 1);
+    assert.equal(failedFoldKey(view), null);
+  });
+
+  test("界碑也是轮边界：界碑后没折叠就 null", () => {
+    const view = groupTurns(
+      groupToolUnits(flattenRenderUnits([...settledTurn, compacted as never])),
+      false,
+    );
+    assert.equal(failedFoldKey(view), null);
+  });
+
+  test("空视图 null", () => {
+    assert.equal(failedFoldKey([]), null);
   });
 });

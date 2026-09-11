@@ -253,6 +253,30 @@ export function groupTurns(
   return view;
 }
 
+/**
+ * 回合级失败（重试耗尽）该亮红警示的折叠：**只在失败那一轮里找**。
+ *
+ * 失败归属于转录末尾那轮（最后一条 user / 界碑之后）。那轮若有折叠（工具跑了几个才断），
+ * 图标亮在它头上、与后面的红字成对；若没有（模型开口前就断，重试耗尽的常态），红字自带的
+ * 图标就是全部——**上一轮的折叠不能背锅**。旧写法取「整个视图里最后一个折叠」，
+ * 失败轮没折叠时就拿到上一轮的，图标和红字隔着一条用户消息（2026-09-11 验收复现）。
+ */
+export function failedFoldKey(view: readonly TurnViewEntry[]): string | null {
+  let start = 0;
+  for (let i = view.length - 1; i >= 0; i -= 1) {
+    const entry = view[i];
+    if (entry !== undefined && (entry.kind === "user" || entry.kind === "compacted")) {
+      start = i + 1;
+      break;
+    }
+  }
+  for (let i = start; i < view.length; i += 1) {
+    const entry = view[i];
+    if (entry !== undefined && entry.kind === "turnGroup") return entry.key;
+  }
+  return null;
+}
+
 /** 单个工具类别的计数：调用了几次、失败几次——失败计数红字跟在类别后面显示。 */
 export interface TurnToolStat {
   toolName: string;
