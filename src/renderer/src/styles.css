@@ -499,3 +499,13 @@ body {
     opacity: 1;
   }
 }
+
+/* loader-circle 的旋转（MCP 面板 connecting / Reload 进行中） */
+@keyframes mcp-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

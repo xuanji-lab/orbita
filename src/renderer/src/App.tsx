@@ -10,7 +10,8 @@ import { SettingsView, type SettingsTab } from "./features/settings/SettingsView
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRail";
-import { RightPanel } from "./shell/RightPanel";
+import { SkillsPanel } from "./features/skills/SkillsPanel";
+import { McpPanel } from "./features/mcp/McpPanel";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -105,14 +106,11 @@ export function App() {
         )}
       </main>
 
-      {rightPanel !== null && (
-        <RightPanel
-          panel={rightPanel}
-          narrow={narrow}
-          skills={skills}
-          onClose={() => setRightPanel(null)}
-        />
-      )}
+      {rightPanel === "skills" ? (
+        <SkillsPanel narrow={narrow} skills={skills} onClose={() => setRightPanel(null)} />
+      ) : rightPanel === "mcp" ? (
+        <McpPanel narrow={narrow} skills={skills} onClose={() => setRightPanel(null)} />
+      ) : null}
 
       <RightRail panel={rightPanel} onPanel={setRightPanel} sessionActions={sessionActions} />
     </div>

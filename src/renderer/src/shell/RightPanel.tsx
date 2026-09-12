@@ -1,51 +1,43 @@
 import { useEffect, useState } from "react";
-import { Icon } from "./Icon";
-import type { RightPanelKind } from "./RightRail";
-import type { SkillsState } from "../features/skills/useSkills";
+import { Icon } from "../shell/Icon";
 
 /**
- * 右侧分屏面板的共享壳（规格 §3）：页头（view toggle 位 + 标题 + x）、内容区
- * （原地替换，120ms 淡入）、footer 动作区（发丝顶线分隔）。Skills / MCP 两个
- * 面板共用这一副骨架。
+ * 右侧分屏面板的框架（规格 §3）：页头（标题区 + x）、内容区（120ms 淡入，
+ * contentKey 换帧）、footer 动作区（发丝顶线分隔）。Skills / MCP 两个面板
+ * 共用这一副骨架，各自把 header / 内容 / footer 塞进来。
  *
- * 两种容器形态（规格 §1.3）：
- * - **分屏**：320px 固定宽，插在聊天面与右图标条之间，chat 保持挂载可交互；
- * - **窄窗覆盖**（<960px）：绝对定位于 layer 右缘，宽 320、内容区全高，阴影升
- *   `--shadow-popover`。不是 modal：无遮罩、点外面不关（关闭只有三个出口：
- *   再点图标 / x / Esc）。
- *
- * 进入 220ms `--duration-enter --ease-out-quint` 向右滑入——动效只解释「东西
- * 去哪了」。内容在两个面板之间切换时 120ms fade（key 换帧触发）。
- *
- * S-0 的内容是最小平铺（链路是真的：数据、link/unlink、Reload 都接通）；
- * 1-4 / 1-1 renderer 按设计稿重写内容区。
+ * 两种容器形态（规格 §1.3）：分屏 320px；窄窗（<960px）转右侧锚定覆盖层，
+ * 阴影升 --shadow-popover，无遮罩不是 modal。进入 220ms
+ * --duration-enter --ease-out-quint 滑入。关闭三出口：再点图标 / x / Esc。
  */
-export function RightPanel(props: {
-  panel: RightPanelKind;
+export function RightPanelFrame(props: {
   narrow: boolean;
-  skills: SkillsState;
+  /** 页头标题区（x 与拖拽区由框架出）；list/detail 换头就换这个 */
+  header: React.ReactNode;
+  /** 内容切换的 key（换帧触发 120ms fade） */
+  contentKey: string;
+  footer?: React.ReactNode;
   onClose: () => void;
+  children: React.ReactNode;
 }) {
-  const { panel, narrow } = props;
+  const { narrow } = props;
 
   useEffect(() => {
-    if (panel === null) return;
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") props.onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, props]);
+  }, [props]);
 
-  const title = panel === "skills" ? "Skills" : "MCP servers";
   return (
     <aside
-      className={narrow ? "pane right-panel-overlay" : "pane"}
+      className="pane"
       style={{
         flex: narrow ? undefined : "0 0 320px",
         width: narrow ? 320 : undefined,
         display: "grid",
-        gridTemplateRows: "auto minmax(0,1fr)",
+        gridTemplateRows: "auto minmax(0,1fr) auto",
         animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
         ...(narrow
           ? {
@@ -64,7 +56,7 @@ export function RightPanel(props: {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "var(--space-3)",
+          gap: "var(--space-2)",
           minWidth: 0,
           height: 30,
           padding: "12px 14px",
@@ -72,206 +64,128 @@ export function RightPanel(props: {
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
-        {/* view toggle 的位置（1-4 的 list/blend chips 长在这里；MCP 面板没有它） */}
-        <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-          {title}
-        </strong>
+        {props.header}
         <span style={{ flex: 1 }} />
-        <button
-          type="button"
-          title="Close"
-          onClick={props.onClose}
-          className="no-drag"
-          style={{
-            width: 26,
-            height: 26,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 0,
-            border: 0,
-            borderRadius: "var(--radius-sm)",
-            background: "transparent",
-            color: "var(--color-text-secondary)",
-            cursor: "pointer",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--color-bg-hover)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-          }}
-        >
+        <PanelIconButton title="Close" onClick={props.onClose}>
           <Icon name="x" size={16} />
-        </button>
+        </PanelIconButton>
       </header>
 
-      {/* key 换帧：skills ↔ mcp 切内容时 120ms 淡入（原地替换，不关再开） */}
       <div
-        key={panel}
+        key={props.contentKey}
         className="scroll"
-        style={{
-          minHeight: 0,
-          padding: "var(--space-5) var(--space-4)",
-          display: "grid",
-          gap: "var(--space-2)",
-          alignContent: "start",
-          animation: "right-panel-fade 120ms var(--ease-out-quint)",
-        }}
+        style={{ minHeight: 0, animation: "right-panel-fade 120ms var(--ease-out-quint)" }}
       >
-        {panel === "skills" ? <SkillsBody skills={props.skills} /> : <McpBody skills={props.skills} />}
+        {props.children}
       </div>
+
+      {props.footer !== undefined && (
+        <footer
+          style={{
+            borderTop: "1px solid var(--color-border-subtle)",
+            padding: "var(--space-3) var(--space-4)",
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+          }}
+        >
+          {props.footer}
+        </footer>
+      )}
     </aside>
   );
 }
 
-/** S-0 的 skills 平铺：每行名字 + 归属一句话。1-4 按设计稿重写（分组 / N sets / missing 徽标）。 */
-function SkillsBody(props: { skills: SkillsState }) {
-  const { skills } = props;
-  if (skills.load.kind === "loading" && skills.skills.length === 0) {
-    return <PanelLine>Loading skills…</PanelLine>;
-  }
-  if (skills.load.kind === "failed" && skills.skills.length === 0) {
-    return <PanelLine>Couldn’t load skills. {skills.load.message}</PanelLine>;
-  }
-  if (skills.skills.length === 0) {
-    return <PanelLine>No skill yet. Put a folder with a SKILL.md into the skills directory.</PanelLine>;
-  }
+/** 面板内的 26px 图标方块（x / ←）：hover 中性抬升，永不点亮。 */
+export function PanelIconButton(props: {
+  title: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  const disabled = props.disabled === true;
   return (
-    <>
-      {skills.skills.map((skill) => (
-        <div
-          key={skill.slug}
-          style={{
-            display: "grid",
-            gap: 2,
-            padding: "var(--space-3)",
-            background: "var(--color-bg-panel)",
-            border: "1px solid var(--color-border-subtle)",
-            borderRadius: "var(--radius-md)",
-          }}
-        >
-          <span style={{ fontSize: "var(--font-size-body)" }}>{skill.name}</span>
-          <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
-            {skill.missing
-              ? "Missing · links exist but the folder is gone"
-              : [
-                  skill.global ? "Global" : "",
-                  ...skills.workspaces
-                    .filter((ws) => skill.workspaces.includes(ws.id))
-                    .map((ws) => ws.name),
-                ]
-                  .filter(Boolean)
-                  .join(", ") || "Not linked"}
-          </span>
-        </div>
-      ))}
-    </>
-  );
-}
-
-/** S-0 的 MCP 平铺：server + 状态 + Edit/Reload（1-1 的链路保活，1-1 renderer 重写样式）。 */
-function McpBody(props: { skills: SkillsState }) {
-  const { servers, serversLoad } = props.skills;
-  const [busy, setBusy] = useState(false);
-  if (serversLoad.kind === "loading" && servers.length === 0) {
-    return <PanelLine>Loading servers…</PanelLine>;
-  }
-  if (serversLoad.kind === "failed" && servers.length === 0) {
-    return <PanelLine>Couldn’t load MCP config. {serversLoad.message}</PanelLine>;
-  }
-  if (servers.length === 0) return <PanelLine>No MCP server configured.</PanelLine>;
-  return (
-    <>
-      {servers.map((server) => (
-        <div
-          key={server.name}
-          style={{
-            display: "grid",
-            gap: 2,
-            padding: "var(--space-3)",
-            background: "var(--color-bg-panel)",
-            border: "1px solid var(--color-border-subtle)",
-            borderRadius: "var(--radius-md)",
-          }}
-        >
-          <span style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>
-            <strong style={{ fontSize: "var(--font-size-body)" }}>{server.name}</strong>
-            <span
-              style={{
-                fontSize: "var(--font-size-caption)",
-                color: server.status.kind === "failed" ? "var(--color-danger)" : "var(--color-text-tertiary)",
-              }}
-            >
-              {server.status.kind === "ready"
-                ? `${server.status.tools.length} tool${server.status.tools.length === 1 ? "" : "s"}`
-                : server.status.kind === "failed"
-                  ? `Failed · ${server.status.message}`
-                  : server.status.kind === "disabled"
-                    ? "Disabled"
-                    : "Not connected yet"}
-            </span>
-          </span>
-          <code
-            style={{
-              fontSize: "var(--font-size-caption)",
-              color: "var(--color-text-tertiary)",
-              overflowWrap: "anywhere",
-            }}
-          >
-            {server.detail}
-          </code>
-        </div>
-      ))}
-      <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-2)" }}>
-        <PanelButton onClick={() => props.skills.openMcpConfig()}>
-          <Icon name="pencil-line" size={14} /> Edit mcp.json
-        </PanelButton>
-        <PanelButton
-          onClick={() => {
-            setBusy(true);
-            // reloadMcp 自己会把状态拉回来；busy 只管按钮在途
-            window.setTimeout(() => setBusy(false), 400);
-            props.skills.reloadMcp();
-          }}
-        >
-          <Icon name="refresh-cw" size={14} /> {busy ? "Reloading…" : "Reload"}
-        </PanelButton>
-      </div>
-      <PanelLine>Changes apply to the next task the agent starts.</PanelLine>
-    </>
-  );
-}
-
-function PanelLine(props: { children: React.ReactNode }) {
-  return (
-    <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+    <button
+      type="button"
+      title={props.title}
+      disabled={disabled}
+      onClick={props.onClick}
+      className="no-drag"
+      style={{
+        width: 26,
+        height: 26,
+        flex: "0 0 auto",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 0,
+        border: 0,
+        borderRadius: "var(--radius-sm)",
+        background: "transparent",
+        color: disabled ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
+        cursor: disabled ? "default" : "pointer",
+      }}
+      onMouseEnter={(e) => {
+        if (disabled) return;
+        e.currentTarget.style.background = "var(--color-bg-hover)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+      }}
+    >
       {props.children}
-    </p>
+    </button>
   );
 }
 
-function PanelButton(props: { onClick: () => void; children: React.ReactNode }) {
+/** 面板 footer 的次级按钮（sm 高度，中性面）。variant=danger 给破坏性动作。 */
+export function PanelButton(props: {
+  onClick?: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  const disabled = props.disabled === true;
+  const danger = props.danger === true;
   return (
     <button
       type="button"
       onClick={props.onClick}
+      disabled={disabled}
+      title={props.title}
       style={{
         display: "inline-flex",
         alignItems: "center",
         gap: "var(--space-2)",
         height: "var(--control-height-sm)",
         padding: "0 var(--space-3)",
-        background: "var(--color-bg-muted)",
-        color: "var(--color-text-primary)",
-        border: 0,
+        background: danger ? "transparent" : "var(--color-bg-muted)",
+        color: danger ? "var(--color-danger)" : "var(--color-text-primary)",
+        border: danger ? "1px solid var(--color-danger)" : 0,
         borderRadius: "var(--radius-md)",
         font: "inherit",
         fontSize: "var(--font-size-control)",
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
       }}
     >
       {props.children}
     </button>
+  );
+}
+
+/** 面板里的一行小字（caption/tertiary），说明与空态用。 */
+export function PanelLine(props: { children: React.ReactNode; danger?: boolean }) {
+  return (
+    <p
+      role={props.danger === true ? "alert" : undefined}
+      style={{
+        margin: 0,
+        fontSize: "var(--font-size-caption)",
+        color: props.danger === true ? "var(--color-danger)" : "var(--color-text-tertiary)",
+      }}
+    >
+      {props.children}
+    </p>
   );
 }
