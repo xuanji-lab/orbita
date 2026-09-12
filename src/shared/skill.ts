@@ -33,6 +33,12 @@ export interface SkillMeta {
    * 要列出来并提供清理，**不能静默消失**——否则用户不知道自己的归属配置悬空了。
    */
   missing: boolean;
+  /**
+   * 中心存储条目本身是个指向用户目录的 symlink（4-1 导入的形态，两跳：
+   * skill-link → store 条目 → 真身）。null = 普通文件夹。详情里要标 Linked
+   * 并显示真实路径，「在访达里显示」揭示的也是真身。
+   */
+  linkedPath: string | null;
 }
 
 /**
