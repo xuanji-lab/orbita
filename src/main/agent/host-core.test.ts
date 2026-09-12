@@ -58,13 +58,18 @@ class FakeChild implements AgentChild {
   }
 }
 
-const CREATE_INPUT = {
+const TURN_FIELDS = {
   cwd: "C:/work",
   provider: { id: "zai", api: "openai-completions", baseUrl: "", apiKey: "k", models: [{ id: "m" }] },
   modelId: "m",
   mode: "manual" as const,
   piSessionDir: "C:/pi-sessions",
 };
+
+/** 首轮 submit（不带 piSessionFile）：host 等 created 才返回，与旧 create 同构。 */
+function firstSubmit(host: AgentHostCore, sessionId: string, text = "hi") {
+  return host.submit({ type: "submit", sessionId, text, ...TURN_FIELDS });
+}
 
 /** 排空微任务队列——emit(ready) 之后 host 的续体（注册 pending、发命令）要等一跳才跑。 */
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -89,22 +94,58 @@ async function freshHost(): Promise<{
   return { host, child: () => child, forks: () => forks, events };
 }
 
-describe("pendingCreates —— 创建请求与 created 事件的竞态（债务 B #1）", () => {
+describe("pendingCreates —— 首轮开机与 created 事件的竞态（债务 B #1）", () => {
   test("created 到了才返回，piSessionFile 原样交回", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
-    const pending = ctx.host.createSession(CREATE_INPUT, "s1");
+    const pending = firstSubmit(ctx.host, "s1");
     ctx.child().emit({ type: "ready" });
     await flush();
     ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: "pi/abc.jsonl" });
-    assert.deepEqual(await pending, { sessionId: "s1", piSessionFile: "pi/abc.jsonl" });
-    assert.equal(ctx.child().posted[0]?.type, "create");
+    assert.equal(await pending, "pi/abc.jsonl");
+    assert.equal(ctx.child().posted[0]?.type, "submit");
+  });
+
+  test("续轮（piSessionFile 已带）：不等 created，发完即回 null", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = ctx.host.submit({
+      type: "submit",
+      sessionId: "s1",
+      text: "hi",
+      ...TURN_FIELDS,
+      piSessionFile: "pi/abc.jsonl",
+    });
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    // 没等 created 就返回了；命令带着完整开工上下文
+    assert.equal(await pending, null);
+    assert.deepEqual(ctx.child().posted[0], {
+      type: "submit",
+      sessionId: "s1",
+      text: "hi",
+      ...TURN_FIELDS,
+      piSessionFile: "pi/abc.jsonl",
+    });
+  });
+
+  test("无等待者的 created（续轮自愈）：转发 onEvent 给主进程钩子", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const builtins = ctx.host.listBuiltins(); // 拉起进程（懒启动）
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s7", piSessionFile: "pi/new.jsonl" });
+    // host-core 不消化它，原样交给 onEvent（main/index.ts 的 meta 校准钩子）
+    assert.deepEqual(ctx.events.at(-1), { type: "created", sessionId: "s7", piSessionFile: "pi/new.jsonl" });
+    ctx.host.dispose();
+    await Promise.race([builtins.catch(() => undefined), Promise.resolve()]);
   });
 
   test("failed 带同一个 sessionId —— 错误交回调用方，不是只广播一条事件", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
-    const pending = ctx.host.createSession(CREATE_INPUT, "s1");
+    const pending = firstSubmit(ctx.host, "s1");
     ctx.child().emit({ type: "ready" });
     await flush();
     ctx.child().emit({ type: "failed", sessionId: "s1", message: "no provider" });
@@ -142,8 +183,8 @@ describe("pendingCreates —— 创建请求与 created 事件的竞态（债务
   test("pending 中进程退出 —— 全部 reject、广播 failed(null)、下次 ensure 重新 fork", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
-    const first = ctx.host.createSession(CREATE_INPUT, "s1");
-    const second = ctx.host.createSession(CREATE_INPUT, "s2");
+    const first = firstSubmit(ctx.host, "s1");
+    const second = firstSubmit(ctx.host, "s2");
     ctx.child().emit({ type: "ready" });
     await flush();
     ctx.child().exitWith(1);
@@ -158,11 +199,11 @@ describe("pendingCreates —— 创建请求与 created 事件的竞态（债务
     );
 
     // 进程死了不等于 host 死了：下一次用时重新 fork
-    const again = ctx.host.createSession(CREATE_INPUT, "s3");
+    const again = firstSubmit(ctx.host, "s3");
     ctx.child().emit({ type: "ready" });
     await flush();
     ctx.child().emit({ type: "created", sessionId: "s3", piSessionFile: null });
-    assert.deepEqual(await again, { sessionId: "s3", piSessionFile: null });
+    assert.equal(await again, null);
     assert.equal(ctx.forks(), 2);
   });
 });
@@ -201,7 +242,7 @@ describe("disposeSession —— 会话释放（刀 0-4 债务 A）", () => {
   test("活着就发 dispose 命令；进程已死就静默", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
-    const pending = ctx.host.createSession(CREATE_INPUT, "s1");
+    const pending = firstSubmit(ctx.host, "s1");
     ctx.child().emit({ type: "ready" });
     await flush();
     ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
@@ -218,7 +259,7 @@ describe("disposeSession —— 会话释放（刀 0-4 债务 A）", () => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
     for (const id of ["s1", "s2", "s3"]) {
-      const pending = ctx.host.createSession(CREATE_INPUT, id);
+      const pending = firstSubmit(ctx.host, id);
       ctx.child().emit({ type: "ready" });
       await flush();
       ctx.child().emit({ type: "created", sessionId: id, piSessionFile: null });
@@ -243,7 +284,7 @@ describe("generateTitle —— 标题生成的发送侧（C-3）", () => {
   test("活着就发 generateTitle 命令，文本原样带上", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
-    const pending = ctx.host.createSession(CREATE_INPUT, "s1");
+    const pending = firstSubmit(ctx.host, "s1");
     ctx.child().emit({ type: "ready" });
     await flush();
     ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
@@ -262,7 +303,7 @@ describe("setModel —— 会话内换模型的发送侧（C-4）", () => {
   test("ensure 后发命令，provider 载荷与 modelId 原样带上", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
-    const pending = ctx.host.createSession(CREATE_INPUT, "s1");
+    const pending = firstSubmit(ctx.host, "s1");
     ctx.child().emit({ type: "ready" });
     await flush();
     ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });

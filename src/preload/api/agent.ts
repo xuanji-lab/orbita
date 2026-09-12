@@ -4,23 +4,30 @@
  * 用 pi 自带的 transcript 归约器消费，主进程不预处理。
  */
 import { ipcRenderer } from "electron";
-import { ipcChannels, type AgentEvent, type CreateAgentInput } from "../../shared/agent-ipc.ts";
+import {
+  ipcChannels,
+  type AgentEvent,
+  type CompactAgentInput,
+  type SubmitAgentInput,
+} from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 export const agentApi = {
-  create: (input: CreateAgentInput): Promise<string> =>
-    ipcRenderer.invoke(ipcChannels.agentCreate, input),
-  submit: (sessionId: string, text: string): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentSubmit, sessionId, text),
+  /**
+   * 发一轮（无状态：原 create 的全部上下文随每次 submit 带上）。
+   * sessionId 由 renderer 生成；resume 带上已知 pi 本子，null = 开新本子。
+   */
+  submit: (input: SubmitAgentInput): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentSubmit, input),
   abort: (sessionId: string): Promise<void> => ipcRenderer.invoke(ipcChannels.agentAbort, sessionId),
 
   /** 停下当前这一轮（含工具调用），把这句话作为新一轮发出去。队列在 renderer 一侧 */
-  interrupt: (id: string, text: string): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentInterrupt, id, text),
+  interrupt: (input: SubmitAgentInput): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentInterrupt, input),
 
   /** 手动压缩上下文（`/compact`）。忙碌态与界碑从 agent:event 的 compaction 事件回来 */
-  compact: (sessionId: string, instructions?: string): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentCompact, sessionId, instructions),
+  compact: (input: CompactAgentInput): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentCompact, input),
   setMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSetMode, sessionId, mode),
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */

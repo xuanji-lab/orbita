@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../../shell/Icon";
 import type { QueuedMessage } from "./session-states.ts";
@@ -118,7 +118,17 @@ function noteOf(item: QueuedMessage, phase: "idle" | "turn" | "compaction"): str
   return COPY.waitsTurnEnd;
 }
 
-/** 一条排队项：抓手 + 文本（截断）+ 注脚 + 两个图标动作。 */
+/**
+ * 一条排队项：抓手 + 文本（截断）+ 注脚 + 两个图标动作。
+ *
+ * **`draggable` 只给行首抓手，不给整行**——这不是洁癖，是 bug 修复：
+ * 整行 draggable 时，在行内任何位置（包括两个 22×22 的图标按钮）按下鼠标后指针只要
+ * 移动过 Chromium 的拖拽阈值（约 3px），这次手势就被判给拖拽，dragstart 之后浏览器
+ * **不再派发 click**。表现是「点了一次没反应、以为没点准、再点一次才出去」——
+ * 2026-09-12 插队失效的真因：命令根本没进 `sendQueuedNow`，所以 runtime 侧查不到任何痕迹。
+ * 触发与否取决于手抖几个像素，因此时灵时不灵；队列只剩一条时 `draggable` 为 false，反而从不复现。
+ * 抓手自己做拖拽源之后，按钮与文本都不在 draggable 子树里，点击不可能再被吞。
+ */
 function QueueRow(props: {
   text: string;
   note: string;
@@ -138,15 +148,11 @@ function QueueRow(props: {
   onDropRow: () => void;
   onDragEnd: () => void;
 }) {
+  // 拖拽源是抓手，但拖影要拿整行——否则跟着指针走的只有一个 12px 的点
+  const rowRef = useRef<HTMLDivElement>(null);
   return (
     <div
-      draggable={props.draggable}
-      onDragStart={(event) => {
-        // Firefox 不设 dataTransfer 就不发 drag 事件；内容用不着，给个占位
-        event.dataTransfer.setData("text/plain", "");
-        event.dataTransfer.effectAllowed = "move";
-        props.onDragStart();
-      }}
+      ref={rowRef}
       onDragOver={(event) => {
         // 不阻止默认行为就不会触发 drop
         event.preventDefault();
@@ -157,7 +163,6 @@ function QueueRow(props: {
         event.preventDefault();
         props.onDropRow();
       }}
-      onDragEnd={props.onDragEnd}
       style={{
         display: "flex",
         alignItems: "center",
@@ -172,6 +177,20 @@ function QueueRow(props: {
     >
       <span
         title={props.draggable ? props.reorderTitle : undefined}
+        draggable={props.draggable}
+        onDragStart={(event) => {
+          // Firefox 不设 dataTransfer 就不发 drag 事件；内容用不着，给个占位
+          event.dataTransfer.setData("text/plain", "");
+          event.dataTransfer.effectAllowed = "move";
+          const row = rowRef.current;
+          if (row !== null) {
+            const rect = row.getBoundingClientRect();
+            event.dataTransfer.setDragImage(row, event.clientX - rect.left, event.clientY - rect.top);
+          }
+          props.onDragStart();
+        }}
+        // dragend 只在拖拽源上触发，所以收尾挂在抓手上（拖到空处松手也要复位）
+        onDragEnd={props.onDragEnd}
         style={{
           display: "inline-flex",
           flex: "0 0 auto",

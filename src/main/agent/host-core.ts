@@ -4,7 +4,6 @@
  *
  * 只做三件事：懒启动进程、把命令发进去、把事件广播给窗口。业务判断全在两端，不在这里。
  */
-import { randomUUID } from "node:crypto";
 import type { AgentCommand, AgentEvent, BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
@@ -27,9 +26,9 @@ export class AgentHostCore {
   private resolveBuiltins: ((providers: BuiltinProvider[]) => void) | null = null;
   private builtinsArrived: Promise<BuiltinProvider[]> | null = null;
   /**
-   * 正在创建中的 session。**create 是异步的**（runtime 要起 ModelRuntime 再建 AgentSession，
-   * 几百毫秒），而 postMessage 是发完就走——不等 `created` 就返回 id 的话，
-   * renderer 立刻 submit 会撞上「unknown session」。这张表就是那段等待。
+   * 正在等待 `created` 的命令（submit / interrupt / compact 的首轮开机、branch）。
+   * runtime 无状态化后每轮开机都会发 `created`：等待者拿到 pi 本子路径；
+   * 没人等的（续轮）交 onEvent 转发，主进程用它把真值校准回 meta（自愈）。
    */
   private readonly pendingCreates = new Map<
     string,
@@ -60,8 +59,15 @@ export class AgentHostCore {
           return;
         }
         if (message.type === "created") {
-          this.pendingCreates.get(message.sessionId)?.resolve(message.piSessionFile);
-          this.pendingCreates.delete(message.sessionId);
+          const pending = this.pendingCreates.get(message.sessionId);
+          if (pending) {
+            pending.resolve(message.piSessionFile);
+            this.pendingCreates.delete(message.sessionId);
+            return;
+          }
+          // 没人等的 created（续轮）：交给主进程钩子把 pi 本子路径校准回 meta。
+          // renderer 不消费 created，broadcast 面不必见它。
+          this.onEvent(message);
           return;
         }
         if (message.type === "failed" && message.sessionId !== null) {
@@ -94,26 +100,27 @@ export class AgentHostCore {
   }
 
   /**
-   * 创建 session。**等 runtime 回 `created` 才返回**——返回即可用。
+   * 开一轮（submit / interrupt / compact 共用骨架）。
    *
-   * `reuseId` 是续会话：沿用原来的 id，新消息接着写进同一份记录，而不是分裂成两条。
-   * 返回 pi 这一次用的那份 session 文件，调用方要把它记进会话 meta。
+   * `piSessionFile` 缺席（这台会话的第一次开机，或旧会话的 pi 本子曾经缺席）时
+   * **等 runtime 回 `created` 才返回**——调用方要拿真文件路径建/校准 meta；
+   * 带文件（续跑）时发完即回，返回 null——续轮的 created 交给事件钩子自愈。
    */
-  async createSession(
-    input: Omit<Extract<AgentCommand, { type: "create" }>, "type" | "sessionId">,
-    reuseId?: string,
-  ): Promise<{ sessionId: string; piSessionFile: string | null }> {
+  private async postTurn(
+    command: Extract<AgentCommand, { type: "submit" | "interrupt" | "compact" }>,
+  ): Promise<string | null> {
     await this.ensure();
-    const sessionId = reuseId ?? randomUUID();
-    const created = this.awaitCreated(sessionId, "agent runtime did not confirm the session in time");
-    this.post({ type: "create", sessionId, ...input });
-    return { sessionId, piSessionFile: await created };
+    let created: Promise<string | null> | null = null;
+    if (command.piSessionFile === undefined) {
+      created = this.awaitCreated(command.sessionId, "agent runtime did not confirm the session in time");
+    }
+    this.post(command);
+    return created;
   }
 
   /**
    * pi 侧分支（C-2）：让 runtime 把源 pi 本子裁一份新文件，等 `created` 回来。
-   * sessionId 是主进程先生成好的**新会话 id**（与 createSession 同一条等待通路）；
-   * 调用方拿到文件路径后再把新会话落盘。
+   * sessionId 是主进程先生成好的**新会话 id**；调用方拿到文件路径后再把新会话落盘。
    */
   async branchSession(
     input: Omit<Extract<AgentCommand, { type: "branch" }>, "type" | "sessionId">,
@@ -150,9 +157,9 @@ export class AgentHostCore {
     return this.builtinsArrived;
   }
 
-  async submit(sessionId: string, text: string): Promise<void> {
-    await this.ensure();
-    this.post({ type: "submit", sessionId, text });
+  /** 开一轮：无状态 submit。返回见 postTurn */
+  async submit(command: Extract<AgentCommand, { type: "submit" }>): Promise<string | null> {
+    return this.postTurn(command);
   }
 
   /**
@@ -189,9 +196,8 @@ export class AgentHostCore {
   }
 
   /** 停下当前这一轮（含工具调用），把这句话作为新一轮发出去 */
-  async interrupt(sessionId: string, text: string): Promise<void> {
-    await this.ensure();
-    this.post({ type: "interrupt", sessionId, text });
+  async interrupt(command: Extract<AgentCommand, { type: "interrupt" }>): Promise<string | null> {
+    return this.postTurn(command);
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -199,10 +205,9 @@ export class AgentHostCore {
     this.post({ type: "abort", sessionId });
   }
 
-  /** 手动压缩上下文。**发完即回**：忙碌态与界碑走 compaction 事件链，调用方不等结果。 */
-  async compact(sessionId: string, instructions?: string): Promise<void> {
-    await this.ensure();
-    this.post({ type: "compact", sessionId, ...(instructions ? { instructions } : {}) });
+  /** 手动压缩上下文。**发完即回**（续轮）：忙碌态与界碑走 compaction 事件链。首轮开机时等 created */
+  async compact(command: Extract<AgentCommand, { type: "compact" }>): Promise<string | null> {
+    return this.postTurn(command);
   }
 
   /**

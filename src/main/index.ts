@@ -123,6 +123,13 @@ void app.whenReady().then(() => {
   const sessions = new SessionStore(join(configDir, "sessions"));
   const record = createSessionRecorder(sessions);
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
+    // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
+    // 真值校准回 meta——open 失败退回新建时 pi 会换文件，按轮自愈。
+    // 首轮的 created 由 submit handler 等待并建 meta，不经过这里。
+    if (event.type === "created" && event.piSessionFile !== null) {
+      void sessions.setPiSessionFile(event.sessionId, event.piSessionFile).catch(() => undefined);
+      return;
+    }
     record(event);
     broadcastAgentEvent(event);
   });

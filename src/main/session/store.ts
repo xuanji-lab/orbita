@@ -99,9 +99,30 @@ export class SessionStore {
     return join(this.dir, `${id}.jsonl`);
   }
 
-  /** 建会话即落一条 meta：标题空着，等第一条用户消息填。 */
-  async create(meta: SessionMeta): Promise<void> {
-    await writeJsonAtomic(this.metaPath(meta.id), meta);
+  /**
+   * 确保这条会话在盘上，并把 pi 本子对齐到这一轮。标题空着，等第一条用户消息填。
+   *
+   * **整件事是写入链上的一个任务**，这是它不拆成「读一下 + 建」两步的全部理由：
+   * 首轮建 meta 与首条用户消息的 `record` 是并发到达的两件事，不排进同一条链就会赛跑。
+   * `record` 的存在性守卫先跑就读到「meta 还没有」，把首条用户消息整条丢掉
+   * （2026-09-12 实测：新会话第一句不落盘，侧栏标题因此永远空着，重开会话比当时少一截）。
+   *
+   * 已存在时**只校准 `piSessionFile`**：标题、用量、置顶这些已经长出来的字段不能被一份
+   * 刚拼的初始 meta 盖掉。
+   */
+  ensureSession(meta: SessionMeta): Promise<void> {
+    return this.queueMeta(meta.id, async () => {
+      const current = await this.readMeta(meta.id);
+      if (current === null) {
+        await writeJsonAtomic(this.metaPath(meta.id), meta);
+        return;
+      }
+      if (current.piSessionFile === meta.piSessionFile) return;
+      await writeJsonAtomic(this.metaPath(meta.id), {
+        ...current,
+        piSessionFile: meta.piSessionFile,
+      });
+    });
   }
 
   /**
@@ -109,7 +130,10 @@ export class SessionStore {
    * 全部由 `recorder.ts` 决定，这里只管写。
    */
   async record(id: string, item: SessionRecord): Promise<void> {
-    const meta = await this.readMeta(id);
+    // **存在性守卫必须排进写入链**：首轮的 `ensureSession` 也在这条链上，直接
+    // `readMeta` 会和它赛跑——输了就把首条用户消息整条丢掉。这是一个只读任务，
+    // 排到链尾即可，不嵌套在别的链内任务里，不会与下面的 `update` 死锁。
+    const meta = await this.queueMeta(id, () => this.readMeta(id));
     if (meta === null) return; // 会话的 meta 没了就别再往日志里加，避免长出孤儿日志
     await mkdir(this.dir, { recursive: true });
     await appendFile(this.logPath(id), `${JSON.stringify(item)}\n`, "utf8");

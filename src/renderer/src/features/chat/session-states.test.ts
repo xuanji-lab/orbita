@@ -107,6 +107,28 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.equal(removeApproval(afterRemove, "nope"), afterRemove);
   });
 
+  /**
+   * 审批不听 abort（pi 是 await beforeToolCall 之后才查 signal），所以停止 / 抢跑时
+   * runtime 会把挂起的审批按拒绝结清。卡片必须跟着消失，否则用户会去回答一个
+   * runtime 那边已经不存在的请求（点了没任何事发生）。
+   */
+  test("phase idle 清掉挂起的审批卡，不碰别的会话", () => {
+    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
+    states = applyAgentEvent(states, permission("B", "B:tc2"));
+
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
+    assert.deepEqual(states.get("A")?.approvals, [], "轮结束就不可能还有挂起的审批");
+    assert.equal(states.get("B")?.approvals.length, 1, "别的会话的审批不受影响");
+  });
+
+  test("phase turn / compaction 不清审批卡——工具还在等回答", () => {
+    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    assert.equal(states.get("A")?.approvals.length, 1);
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "compaction" });
+    assert.equal(states.get("A")?.approvals.length, 1);
+  });
+
   test("单条 failed 只归位那条，不存在的槽不凭空造", () => {
     let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
     states = applyAgentEvent(states, { type: "phase", sessionId: "B", phase: "turn" });
