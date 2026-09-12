@@ -11,6 +11,7 @@ import { api } from "../../api";
 import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
 import { isSkillSlug } from "@shared/skill";
+import { SkillsMap } from "./SkillsMap";
 
 /**
  * Skills 面板（1-4 / 2-1d）：列表视图按集合分组 + 详情视图改归属与三段编辑。
@@ -32,7 +33,9 @@ export function SkillsPanel(props: {
 }) {
   const { skills } = props;
   /** 当前面板视图：列表 / 详情 / 新建表单（4-1） */
-  const [view, setView] = useState<"list" | "detail" | "create">("list");
+  const [view, setView] = useState<"list" | "detail" | "create" | "map">("list");
+  /** +N more 跳列表后要滚到的组（global 或 workspaceId）；一次性的 */
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
   /** 当前详情的 slug；null = 列表。面板内状态，不进 useSkills（侧栏列表已删） */
   const [selected, setSelected] = useState<string | null>(null);
   const meta = selected === null ? null : (skills.skills.find((s) => s.slug === selected) ?? null);
@@ -45,6 +48,14 @@ export function SkillsPanel(props: {
   const workspaceName = (id: string): string =>
     skills.workspaces.find((w) => w.id === id)?.name ?? id;
 
+  // +N more 的落点：回到列表后滚到对应组（组容器挂了 id），滚完清掉一次性意图
+  useEffect(() => {
+    if (view !== "list" || scrollTo === null) return;
+    const target = document.getElementById(`skills-group-${scrollTo}`);
+    target?.scrollIntoView({ block: "start" });
+    setScrollTo(null);
+  }, [view, scrollTo]);
+
   if (view === "create") {
     return (
       <NewSkillForm
@@ -56,6 +67,28 @@ export function SkillsPanel(props: {
           setSelected(slug);
           setView("detail");
         }}
+        onClose={props.onClose}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
+      />
+    );
+  }
+  if (view === "map") {
+    return (
+      <SkillMapView
+        narrow={props.narrow}
+        skills={skills}
+        onOpenDetail={(slug) => {
+          setSelected(slug);
+          setView("detail");
+        }}
+        onJumpToGroup={(group) => {
+          setScrollTo(group);
+          setView("list");
+        }}
+        onSwitchToList={() => setView("list")}
+        onNewSkill={() => setView("create")}
         onClose={props.onClose}
         width={props.width}
         onWidthChange={props.onWidthChange}
@@ -91,6 +124,7 @@ export function SkillsPanel(props: {
         setView("detail");
       }}
       onNewSkill={() => setView("create")}
+      onSwitchToMap={() => setView("map")}
       onClose={props.onClose}
     />
   );
@@ -122,6 +156,7 @@ function SkillList(props: {
   workspaceName: (id: string) => string;
   onSelect: (slug: string) => void;
   onNewSkill: () => void;
+  onSwitchToMap: () => void;
   onClose: () => void;
   width: number;
   onWidthChange: (width: number) => void;
@@ -134,9 +169,17 @@ function SkillList(props: {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const header = (
-    <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-      Skills
-    </strong>
+    <>
+      <Chip active title="List view">
+        <Icon name="list" size={13} />
+      </Chip>
+      <Chip onClick={props.onSwitchToMap} title="Set map">
+        <Icon name="blend" size={13} />
+      </Chip>
+      <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
+        Skills
+      </strong>
+    </>
   );
 
   // 空态与加载：footer 的 reveal 行照常（新建的路一直在）
@@ -274,16 +317,16 @@ function SkillList(props: {
           </div>
         )}
         {skills.skills.some((s) => s.global) && (
-          <>
+          <div id="skills-group-global">
             <GroupLabel>Global</GroupLabel>
             {skills.skills.filter((s) => s.global).map((s) => row(s, `g:${s.slug}`))}
-          </>
+          </div>
         )}
         {skills.workspaces.map((ws) => {
           const members = linked.filter((s) => !s.global && s.workspaces.includes(ws.id));
           if (members.length === 0) return null;
           return (
-            <div key={ws.id}>
+            <div key={ws.id} id={`skills-group-${ws.id}`}>
               <GroupLabel>{ws.name}</GroupLabel>
               {members.map((s) => row(s, `${ws.id}:${s.slug}`))}
             </div>
@@ -902,5 +945,63 @@ function FieldError(props: { children: React.ReactNode }) {
     <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
       {props.children}
     </span>
+  );
+}
+
+/**
+ * map 视图（4-4）：页头 [list][blend] 两枚 Chip + 标题 + AddMenu + x；
+ * 内容是韦恩图（≥4 workspace 自动退化矩阵）。
+ */
+function SkillMapView(props: {
+  narrow: boolean;
+  skills: SkillsState;
+  onOpenDetail: (slug: string) => void;
+  onJumpToGroup: (groupId: string) => void;
+  onSwitchToList: () => void;
+  onNewSkill: () => void;
+  onClose: () => void;
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
+}) {
+  const { skills } = props;
+  const error = skills.load.kind === "failed" ? skills.load.message : null;
+  return (
+    <RightPanelFrame
+      narrow={props.narrow}
+      width={props.width}
+      onWidthChange={props.onWidthChange}
+      onWidthCommit={props.onWidthCommit}
+      contentKey="map"
+      onClose={props.onClose}
+      header={
+        <>
+          <Chip onClick={props.onSwitchToList} title="List view">
+            <Icon name="list" size={13} />
+          </Chip>
+          <Chip active title="Set map">
+            <Icon name="blend" size={13} />
+          </Chip>
+          <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
+            Skills
+          </strong>
+        </>
+      }
+      headerExtra={<AddMenu skills={skills} onNewSkill={props.onNewSkill} />}
+      footer={<FooterReveal skills={skills} />}
+    >
+      <div style={{ padding: "var(--space-3) var(--space-3) var(--space-4)" }}>
+        {error !== null && <PanelLine danger>Couldn’t read skills. {error}</PanelLine>}
+        {skills.load.kind === "loading" && skills.skills.length === 0 ? (
+          <PanelLine>Loading…</PanelLine>
+        ) : (
+          <SkillsMap
+            skills={skills}
+            onOpenDetail={props.onOpenDetail}
+            onJumpToGroup={props.onJumpToGroup}
+          />
+        )}
+      </div>
+    </RightPanelFrame>
   );
 }

@@ -509,3 +509,60 @@ body {
     transform: rotate(360deg);
   }
 }
+
+/*
+ * Skills 韦恩图（4-4，几何取自 skills-map-3circle-v2）：圆淡填充 --venn-fill +
+ * 描边；点/环只用位置与形状表达集合，不用颜色区分；名字 10px 带 paint-order
+ * 玻璃底描边（压在圆边上也能读）；missing 三角 + danger。
+ */
+.venn-ws {
+  fill: var(--venn-fill);
+  stroke: var(--color-border-strong);
+  stroke-width: 1;
+}
+.venn-ws-label {
+  font-family: var(--font-family-mono);
+  font-size: 9px;
+  letter-spacing: 1.1px;
+  fill: var(--color-text-tertiary);
+  text-transform: uppercase;
+}
+.venn-skill {
+  cursor: pointer;
+}
+.venn-dot {
+  fill: var(--color-text-primary);
+}
+.venn-ring {
+  fill: none;
+  stroke: var(--color-text-primary);
+  stroke-width: 1.2;
+}
+.venn-nm {
+  font-size: 10px;
+  fill: var(--color-text-primary);
+  paint-order: stroke;
+  stroke: var(--glass-bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.venn-skill:hover .venn-nm {
+  text-decoration: underline;
+}
+.venn-missing .venn-nm {
+  fill: var(--color-danger);
+}
+.venn-tri {
+  fill: none;
+  stroke: var(--color-danger);
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.venn-more {
+  font-size: 10px;
+  fill: var(--color-text-tertiary);
+  cursor: pointer;
+  paint-order: stroke;
+  stroke: var(--glass-bg);
+  stroke-width: 3px;
+}
