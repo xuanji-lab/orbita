@@ -37,6 +37,8 @@ import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts"
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { McpHub } from "./mcp.ts";
+import { WriteRequestBroker, createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
 
@@ -320,6 +322,17 @@ interface TurnParts {
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
 const running = new Map<string, CycleSlot<TurnParts>>();
 
+/**
+ * MCP 连接。**进程级一份**，所有会话共享——每条会话各拉一份 `npx some-server`
+ * 会让子进程数量随会话线性增长，而 MCP server 本来就是无状态的工具提供方。
+ */
+const mcpHub = new McpHub();
+/**
+ * 写盘请求的在途表（4-3）：create_skill / add_mcp_server 的回执由 handle 的
+ * 命令分支结掉。进程级一份——主进程是唯一的对端，不需要按会话分。
+ */
+const writeBroker = new WriteRequestBroker((event) => send(event as AgentEvent));
+
 /** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
 const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
 
@@ -440,6 +453,25 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     cwd: command.cwd,
     modelRuntime,
     resourceLoaderOptions: {
+      /**
+       * Skills：把集合目录交给 pi，扫盘与拼 prompt 都是它的事。
+       *
+       * **不自己调 `loadSkillsFromDir` / `formatSkillsForPrompt`**：用了那两个就得自己拼
+       * system prompt，而 pi 的 ResourceLoader 本来就在做这件事——多一份就多一份会漂的格式。
+       *
+       * 2-1 起 skillsDirs 是数组（global 恒在 + 当前工作区），里面的 symlink 指向
+       * 中心存储，pi 的加载器跟符号链接（skills.js 对 isSymbolicLink 做 statSync，
+       * 断链自动跳过）。顺序由主进程定且稳定，我们不重排——重排会作废 prefix 缓存。
+       *
+       * `noSkills: true` 不是「不要 skills」，而是**不要自动发现的那些**（pi 0.84.3 的
+       * `resource-loader.js:330`：它只把 `enabledSkills` 排掉，`additionalSkillPaths` 照常合并）。
+       * 不加这一句的后果实测过：pi 的 packageManager 会扫 `~/.agents/skills/`（Agent Skills
+       * 标准的全局目录），当场多出 9 个用户用 CLI 装的 skill。那些 skill 在我们的界面里
+       * 没有任何地方能解释自己从哪来，而「放进目录就能用」的对偶必须是「没放就不生效」。
+       * 隔离是可逆的：以后想共享全局 skill，加个设置项就行；反过来是破坏性变更。
+       */
+      noSkills: true,
+      additionalSkillPaths: command.skillsDirs,
       extensionFactories: [
         {
           name: "orbita-permission",
@@ -448,8 +480,12 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             pi.on("tool_call", (event) => gate(event));
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
+            // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
             pi.on("before_agent_start", (event) => ({
-              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(currentMode())}\n\n${TOOL_GUIDELINES}`,
+              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(
+                currentMode(),
+                [...mcpHub.currentTools().map((tool) => tool.name), "create_skill", "add_mcp_server"],
+              )}\n\n${STORE_TOOLS_GUIDELINES}\n\n${TOOL_GUIDELINES}`,
             }));
           },
         },
@@ -473,7 +509,24 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * 用户至少还能接着说话，而不是对着一条打不开的会话干瞪眼。
    */
   const sessionManager = openOrCreate(command);
-  const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
+  /**
+   * MCP 工具。**连接在进程级只做一次**（`McpHub.start` 幂等：首个 start 连，后续轮直接
+   * 复用）；无状态化后每轮都经过这里，但只有第一轮真的拉起连接。连不上不拦开轮——
+   * MCP server 是外部程序，装错命令、缺环境变量都是常态，不该让一台坏的把会话堵死；
+   * 状态经 `mcp` 事件告诉界面（每轮重报一次快照，自愈主进程缓存）。
+   */
+  await mcpHub.start(command.mcpServers);
+  send({ type: "mcp", servers: mcpHub.describe() });
+  const customTools = [
+    ...mcpHub.currentTools(),
+    ...createStoreTools(writeBroker, command.sessionId),
+  ];
+  const { session } = await createAgentSessionFromServices({
+    services,
+    sessionManager,
+    model,
+    ...(customTools.length > 0 ? { customTools } : {}),
+  });
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
   const echoed = note.echoed;
@@ -628,7 +681,7 @@ function openOrCreate(command: OpenInput): SessionManager {
  * 「收到 idle 时，这一轮一定已经完全收尾，submit 不会撞 already running」。
  * 正常结束、abort、异常路径都经过这里，幂等（renderer 的槽是 set 不是累加）。
  */
-function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<void>): Promise<void> {
+function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unknown>): Promise<void> {
   const id = command.sessionId;
   return startCycle(
     running,
@@ -820,6 +873,31 @@ async function handle(command: AgentCommand): Promise<void> {
     if (current?.opened != null && note !== undefined) {
       void generateSessionTitle(note, current.opened.session, command.sessionId, command.text);
     }
+    return;
+  }
+  if (command.type === "skillWriteResult") {
+    writeBroker.resolve(
+      command.requestId,
+      command.ok
+        ? { ok: true, ...(command.path === undefined ? {} : { path: command.path }) }
+        : { ok: false, error: command.error ?? "写盘失败" },
+    );
+    return;
+  }
+  if (command.type === "mcpWriteResult") {
+    writeBroker.resolve(
+      command.requestId,
+      command.ok
+        ? { ok: true, ...(command.status === undefined ? {} : { status: command.status }) }
+        : { ok: false, error: command.error ?? "写盘失败" },
+    );
+    return;
+  }
+  if (command.type === "mcpReload") {
+    // 重连后把新快照报给主进程（缓存 + 广播给管理面）。
+    // 已在跑的轮不受影响：它们的 customTools 在开机时已定格。
+    await mcpHub.restart(command.servers);
+    send({ type: "mcp", servers: mcpHub.describe() });
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——

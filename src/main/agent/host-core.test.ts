@@ -64,6 +64,8 @@ const TURN_FIELDS = {
   modelId: "m",
   mode: "manual" as const,
   piSessionDir: "C:/pi-sessions",
+  skillsDirs: ["C:/skills"],
+  mcpServers: {},
 };
 
 /** 首轮 submit（不带 piSessionFile）：host 等 created 才返回，与旧 create 同构。 */

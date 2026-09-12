@@ -21,7 +21,7 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
   不得重新引入第二套内核、第二套 session 语义，也不自写 agent 循环。
   需要改 pi 的行为时走 **patch 文件**，不把 pi 源码 vendored 进仓。
 - **消费者纪律**：新模块 / 新导出必须在**同一个 PR** 里有真实调用点（测试文件不算）。
-  接不上就不落库，写进 `docs/plans/` 等它被需要。
+  接不上就不落库，留在会话工作台等它被需要。
 - **避免过度抽象**：没有第二个消费者就不建包、不建抽象层、不建 barrel。
 - 禁 `any`；禁 inline import（`await import()` / `import("pkg").Type`）——顶层 import only。
 - **禁 TS 参数属性（`constructor(private x: T)`）、`enum`、`namespace`**：Node 原生只剥离类型、
@@ -82,12 +82,13 @@ token 规范与实现不一致时以设计系统为准。
 ## 分支 / PR / 版本
 
 - **一个功能一个 PR**。commit 前缀：`feat(scope):` / `fix(scope):` / `chore(scope):` / `docs(scope):`。
-- 大改动前先写 `docs/plans/YYYY-MM-DD-主题.md`（设计意图 + 被否决的方案 + 为什么）；小改动不写。
-  **计划文档只留本地**——`docs/plans/` 在 `.gitignore`，不进 commit（2026-09-06 裁决）。
-  本分支**不写 progress 笔记**——PR 的 diff 与描述就是异步同步机制。
+- **不往仓里写 markdown**（硬规则）。唯一真相是**代码 + commit 历史 + commit 描述**：
+  设计意图、被否决的方案与理由写进 commit message——它跟着 diff 走，不会和代码分家。
+  计划、调研、progress 笔记一律留在 agent 自己的会话工作台，**不进仓**。
+  `docs/plans/`、`UPDATE_NOTES.md` 及任何新增 `.md`，只在**用户当次明确点名**时才写。
+  理由：多出来的文字要么过期后误导后来者，要么每轮吃上下文，而它描述的事实代码里都有。
 - **版本号暂停使用**：本分支尚无发布通道，版本号没有消费者，`package.json` 的 version 冻结不动。
   发布通道落地当天恢复「每次改动至少 patch +1」。
-- 用户可见变更写 `UPDATE_NOTES.md`，条目按主题起标题，不绑版本号。
 - 提交前 `git diff` / `git status` 核对：不含无关文件、不覆盖他人未提交改动。
 
 ## 工程陷阱史（真实事故，新会话必读）

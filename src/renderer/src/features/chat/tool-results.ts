@@ -479,6 +479,77 @@ export function summarizeToolResult(result: ToolTranscriptItem | undefined): str
   return lines > 1 ? `${lines} lines` : `${text.length} chars`;
 }
 
+/** MCP 工具的入参摘要（4-5）：不认识的工具没有专用摘要器，退回 JSON 一行
+ * 截断——有东西总比空白强，完整参数在展开体/审批条里。 */
+export function mcpInputSummary(input: unknown, max = 40): string | null {
+  if (input === null || input === undefined) return null;
+  let text: string;
+  try {
+    text = typeof input === "string" ? input : JSON.stringify(input) ?? "";
+  } catch {
+    return null;
+  }
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat === "" || flat === "{}") return null;
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/**
+ * MCP 工具卡的折叠摘要（4-5）：成功按规格说量词——纯文本 `{n} chars`、
+ * 含图 `{n} images · {n} chars`（图片张数在前，因为它是这类 server 的主产出）。
+ * 失败不在这里分型（见 mcpFailureKind）。
+ */
+export function summarizeMcpResult(result: ToolTranscriptItem | undefined): string | null {
+  if (result === undefined) return null;
+  if (result.status === "running") return "Running";
+  if (result.status === "error") return mcpFailureKind(result) === "business" ? "Failed" : mcpFailureLabel(result);
+  const images = result.content.filter((block) => block.type === "image").length;
+  const chars = result.content
+    .filter((block) => block.type === "text")
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("")
+    .trim().length;
+  if (images === 0 && chars === 0) return "No output";
+  if (images === 0) return `${chars} chars`;
+  return `${images} image${images === 1 ? "" : "s"} · ${chars} chars`;
+}
+
+/**
+ * MCP 失败分型（4-5）：业务失败 = server 自己报错（isError 语义，mcp.ts 翻成
+ * 抛出、正文是 server 的话）；传输失败 = 我们这边连不上 / 等不到（超时、
+ * 连接断、reload 后 server 没了）。两者的下一步完全不同——前者去修 server，
+ * 后者去修连接，折叠行和展开体都要分得开。
+ */
+export function mcpFailureKind(
+  result: ToolTranscriptItem,
+): "business" | "timedOut" | "unreachable" {
+  const text = result.content
+    .filter((block) => block.type === "text")
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("\n");
+  if (/调用超时|timed?[- ]?out/i.test(text)) return "timedOut";
+  if (/not connected|ECONNREFUSED|ENOTFOUND|ECONNRESET|socket|连接|Unreachable/i.test(text)) {
+    return "unreachable";
+  }
+  return "business";
+}
+
+/** 折叠行的失败词（分型驱动）：Timed out / Unreachable；业务失败是 Failed。 */
+export function mcpFailureLabel(result: ToolTranscriptItem): string {
+  const kind = mcpFailureKind(result);
+  if (kind === "timedOut") return "Timed out";
+  if (kind === "unreachable") return "Unreachable";
+  return "Failed";
+}
+
+/** 展开体的首行（分型驱动）：讲清「错在哪一层」。 */
+export function mcpFailureLead(result: ToolTranscriptItem): string {
+  const kind = mcpFailureKind(result);
+  if (kind === "business") return "The server reported an error.";
+  if (kind === "timedOut") return "Timed out — no response from the server within the call limit.";
+  return "Unreachable — no response from the server. Check the command or URL in mcp.json.";
+}
+
 /** 展开后要显示的正文。图片暂不渲染，只标记它存在——真正的图片渲染是后面的事。 */
 export function toolResultText(result: ToolTranscriptItem): string {
   return result.content

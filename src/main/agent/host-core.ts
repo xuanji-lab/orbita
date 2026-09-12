@@ -34,6 +34,12 @@ export class AgentHostCore {
     string,
     { resolve: (piSessionFile: string | null) => void; reject: (error: Error) => void }
   >();
+  /**
+   * 在等的 mcpReload 回执（1-1 热重载）：runtime 重连完会发一条 `mcp` 快照事件，
+   * 用它把 invoke 的 promise 结掉——reload 是显式动作，调用方等着拿结果。
+   * 进程退出要 reject：那量重启后状态未知，不能装作重载成功。
+   */
+  private pendingMcpReload: { resolve: () => void; reject: (error: Error) => void } | null = null;
 
   constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
     this.forkRuntime = forkRuntime;
@@ -57,6 +63,11 @@ export class AgentHostCore {
           this.resolveBuiltins?.(message.providers);
           this.resolveBuiltins = null;
           return;
+        }
+        if (message.type === "mcp") {
+          // reload 的回执到了：事件照常往下走（缓存 + 广播），这里只结 promise
+          this.pendingMcpReload?.resolve();
+          this.pendingMcpReload = null;
         }
         if (message.type === "created") {
           const pending = this.pendingCreates.get(message.sessionId);
@@ -92,6 +103,8 @@ export class AgentHostCore {
         const message = `agent runtime exited with code ${code}`;
         for (const pending of this.pendingCreates.values()) pending.reject(new Error(message));
         this.pendingCreates.clear();
+        this.pendingMcpReload?.reject(new Error(message));
+        this.pendingMcpReload = null;
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -157,6 +170,24 @@ export class AgentHostCore {
     return this.builtinsArrived;
   }
 
+  /**
+   * 重读配置后重连（1-1）。等 runtime 的 `mcp` 快照事件回来才返回——
+   * 那一刻新状态已缓存并广播。**不 ensure**：进程没起就没有连接，reload 无对象
+   * （generateTitle 同款理由），配置会在下一次开轮时生效。
+   */
+  mcpReload(servers: Extract<AgentCommand, { type: "mcpReload" }>["servers"]): Promise<void> {
+    if (!this.child) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      this.pendingMcpReload = { resolve, reject };
+      setTimeout(() => {
+        if (this.pendingMcpReload?.resolve !== resolve) return;
+        this.pendingMcpReload = null;
+        reject(new Error("agent runtime did not report MCP status in time"));
+      }, 60_000);
+      this.post({ type: "mcpReload", servers });
+    });
+  }
+
   /** 开一轮：无状态 submit。返回见 postTurn */
   async submit(command: Extract<AgentCommand, { type: "submit" }>): Promise<string | null> {
     return this.postTurn(command);
@@ -193,6 +224,30 @@ export class AgentHostCore {
   /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerPermission(requestId: string, answer: PermissionAnswer): void {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
+  }
+
+  /** 写盘请求的回执（4-3）。同 answerPermission 的理由：不 ensure、发完即回。 */
+  answerSkillWrite(requestId: string, result: { ok: boolean; path?: string; error?: string }): void {
+    this.child?.postMessage({
+      type: "skillWriteResult",
+      requestId,
+      ok: result.ok,
+      ...(result.path === undefined ? {} : { path: result.path }),
+      ...(result.error === undefined ? {} : { error: result.error }),
+    } satisfies AgentCommand);
+  }
+
+  answerMcpWrite(
+    requestId: string,
+    result: { ok: boolean; status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string }; error?: string },
+  ): void {
+    this.child?.postMessage({
+      type: "mcpWriteResult",
+      requestId,
+      ok: result.ok,
+      ...(result.status === undefined ? {} : { status: result.status }),
+      ...(result.error === undefined ? {} : { error: result.error }),
+    } satisfies AgentCommand);
   }
 
   /** 停下当前这一轮（含工具调用），把这句话作为新一轮发出去 */

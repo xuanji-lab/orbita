@@ -50,7 +50,7 @@ export function startCycle<P extends CycleParts>(
   running: Map<string, CycleSlot<P>>,
   id: string,
   open: () => Promise<P>,
-  run: (opened: P) => Promise<void>,
+  run: (opened: P) => Promise<unknown>,
   onSettled: () => void,
 ): Promise<void> {
   if (running.has(id)) {

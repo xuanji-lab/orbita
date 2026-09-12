@@ -2,10 +2,14 @@
 import archive from "../../../../Orbita Design System/assets/icons/lucide/archive.svg?raw";
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
+import blend from "../../../../Orbita Design System/assets/icons/lucide/blend.svg?raw";
+import bookOpen from "../../../../Orbita Design System/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
+import circleOff from "../../../../Orbita Design System/assets/icons/lucide/circle-off.svg?raw";
+import chevronLeft from "../../../../Orbita Design System/assets/icons/lucide/chevron-left.svg?raw";
 import chevronUp from "../../../../Orbita Design System/assets/icons/lucide/chevron-up.svg?raw";
 import clock from "../../../../Orbita Design System/assets/icons/lucide/clock.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
@@ -22,12 +26,15 @@ import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/fol
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
+import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import panelLeft from "../../../../Orbita Design System/assets/icons/lucide/panel-left.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
 import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off.svg?raw";
 import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?raw";
+import plug from "../../../../Orbita Design System/assets/icons/lucide/plug.svg?raw";
+import power from "../../../../Orbita Design System/assets/icons/lucide/power.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
@@ -54,14 +61,18 @@ import zap from "../../../../Orbita Design System/assets/icons/lucide/zap.svg?ra
  */
 const ICONS = {
   archive,
+  blend,
+  "book-open": bookOpen,
   "archive-restore": archiveRestore,
   "arrow-up": arrowUp,
   bot,
   brain,
   check,
   "chevron-down": chevronDown,
+  "chevron-left": chevronLeft,
   "chevron-up": chevronUp,
   clock,
+  "circle-off": circleOff,
   copy,
   "corner-down-left": cornerDownLeft,
   cpu,
@@ -76,12 +87,15 @@ const ICONS = {
   "grip-vertical": gripVertical,
   image,
   "loader-circle": loaderCircle,
+  list,
   lock,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
   pin,
   "pin-off": pinOff,
+  plug,
+  power,
   plus,
   "refresh-cw": refreshCw,
   settings,

@@ -15,9 +15,20 @@ export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 export interface AppSettings {
   theme: ThemePreference;
+  /**
+   * 右侧分屏面板的宽度（4-0 拖宽）。缺席 = 默认 320；合法区间 280–560，
+   * 越界或非数丢掉——这个文件用户手改得到，一个坏值不该把面板拖成一条线。
+   * 拖动中不落盘，松手才写（避免写风暴）。
+   */
+  rightPanelWidth?: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = { theme: "system" };
+
+/** 右侧面板宽度的合法区间与默认值（与拖拽热区的夹取同源）。 */
+export const RIGHT_PANEL_WIDTH_MIN = 280;
+export const RIGHT_PANEL_WIDTH_MAX = 560;
+export const RIGHT_PANEL_WIDTH_DEFAULT = 320;
 
 function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
@@ -33,5 +44,14 @@ function isThemePreference(value: unknown): value is ThemePreference {
 export function parseSettings(raw: unknown): AppSettings {
   if (typeof raw !== "object" || raw === null) return DEFAULT_SETTINGS;
   const theme = (raw as { theme?: unknown }).theme;
-  return { theme: isThemePreference(theme) ? theme : DEFAULT_SETTINGS.theme };
+  const width = (raw as { rightPanelWidth?: unknown }).rightPanelWidth;
+  return {
+    theme: isThemePreference(theme) ? theme : DEFAULT_SETTINGS.theme,
+    ...(typeof width === "number" &&
+    Number.isFinite(width) &&
+    width >= RIGHT_PANEL_WIDTH_MIN &&
+    width <= RIGHT_PANEL_WIDTH_MAX
+      ? { rightPanelWidth: Math.round(width) }
+      : {}),
+  };
 }

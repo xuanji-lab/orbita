@@ -7,7 +7,11 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { Workspace } from "../../shared/workspace.ts";
 import { WorkspaceStore } from "./store.ts";
 
-export function registerWorkspaceIpc(store: WorkspaceStore): void {
+export function registerWorkspaceIpc(
+  store: WorkspaceStore,
+  /** 工作区被移除时的连带清理（2-1b：删它的 skill 集合目录，只删链接不伤存储） */
+  onRemove: (id: string) => Promise<void> | void,
+): void {
   ipcMain.handle(ipcChannels.workspaceList, () => store.list());
   ipcMain.handle(ipcChannels.workspaceDefault, () => WorkspaceStore.defaultPath());
 
@@ -28,5 +32,12 @@ export function registerWorkspaceIpc(store: WorkspaceStore): void {
   ipcMain.handle(ipcChannels.workspaceRename, (_event, id: string, name: string) =>
     store.rename(id, name),
   );
-  ipcMain.handle(ipcChannels.workspaceRemove, (_event, id: string) => store.remove(id));
+  ipcMain.handle(ipcChannels.workspaceRemove, async (_event, id: string) => {
+    await store.remove(id);
+    // 连带清理失败不拦工作区移除（那是一件更主要的事），但必须留日志——
+    // 悬空的集合目录会让 skill 多出一个看不见的归属面
+    await Promise.resolve(onRemove(id)).catch((cause: unknown) => {
+      console.error(`[main] 工作区 ${id} 的 skill 集合目录没删掉`, cause);
+    });
+  });
 }

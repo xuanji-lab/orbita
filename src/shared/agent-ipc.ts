@@ -11,6 +11,7 @@
  */
 import type { SessionPhase, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
+import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 
@@ -59,6 +60,34 @@ export const ipcChannels = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
+  /** 中心存储里的全部 skill（含没链进任何集合的） */
+  skillList: "skill:list",
+  /** 把 skill 链进一个集合（global 或某个 workspace）；互斥规则见 SkillScope */
+  skillLink: "skill:link",
+  /** 把 skill 从一个集合里移出（只删链接，永不碰中心存储） */
+  skillUnlink: "skill:unlink",
+  /** 清掉一条 skill 的全部断链引用（missing 后的收尾动作） */
+  skillClean: "skill:clean",
+  /** 导入用户已有目录：主进程开目录选择框，store 条目做成指向真身的 symlink（4-1）。返回 slug，取消返回 null */
+  skillImport: "skill:import",
+  /** 读详情（已拆成 name / description / 正文）；不存在返回 null */
+  skillRead: "skill:read",
+  /** 改详情。缺席的字段不动，frontmatter 其它字段原样保留 */
+  skillWrite: "skill:write",
+  /** 在系统文件管理器里揭示该 skill 目录（新建 / 删除走这里，不自建 UI） */
+  skillReveal: "skill:reveal",
+  /** MCP server 列表与它们此刻的连接状态 */
+  mcpList: "mcp:list",
+  /** 用系统默认编辑器打开 mcp.json（加减 server 走文件，不做表单） */
+  mcpOpenConfig: "mcp:open-config",
+  /** 重读 mcp.json 并重连全部 server（已开任务的工具集不变，新任务拿新集） */
+  mcpReload: "mcp:reload",
+  /** 加一台 server（4-2）：写 mcp.json 后自动重连 */
+  mcpAdd: "mcp:add",
+  /** 删一台 server（4-2）：写盘后自动重连 */
+  mcpRemove: "mcp:remove",
+  /** 启停一台 server（4-2）：改 disabled 字段后自动重连 */
+  mcpSetDisabled: "mcp:set-disabled",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
@@ -188,6 +217,23 @@ export type AgentCommand =
        * pi 把自己的 session 文件放在哪。**由主进程给**——runtime 不做路径策略决定。
        */
       piSessionDir: string;
+      /**
+       * skill 的链接集合目录（2-1 起是数组：global 恒在，当前工作区再加一条）。
+       * **路径由主进程给**（同 `piSessionDir`）：哪个集合对该会话生效是主进程的策略，
+       * agent 进程只收数据。目录里是指向中心存储的 symlink，pi 的加载器跟符号链接。
+       *
+       * 目录不存在不是错，当作一个 skill 都没链（pi 内部先 existsSync 拦一道）。
+       */
+      skillsDirs: string[];
+      /**
+       * MCP server 配置。**传解析好的而不是文件路径**：读文件与讲错误是主进程的事
+       * （跟 skillsDir 同一条纪律），而且 env 里往往有密钥，路径传过去等于让
+       * agent 进程自己去读一份我们已经读过的敏感文件。
+       *
+       * **连接是进程级的**：同一个 agent 进程里只连一次，后续会话共享已连上的
+       * 那批工具——每条会话都拉起一份 `npx some-server` 会让子进程数量随会话线性增长。
+       */
+      mcpServers: Record<string, McpServer>;
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
     }
@@ -209,6 +255,9 @@ export type AgentCommand =
       modelId: string;
       mode: PermissionMode;
       piSessionDir: string;
+      /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
+      skillsDirs: string[];
+      mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
     }
   /**
@@ -225,9 +274,36 @@ export type AgentCommand =
       modelId: string;
       mode: PermissionMode;
       piSessionDir: string;
+      /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
+      skillsDirs: string[];
+      mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
     }
   | { type: "listBuiltins" }
+  /**
+   * 重读 mcp.json 后重连（1-1 热重载）。servers 由主进程读好传进来——读文件与
+   * 讲错误是主进程的事（与开轮命令里的 mcpServers 同一条纪律）。重连是进程级的：
+   * 已开会话的 customTools 在开机时已定格，不受影响；下一轮开机拿新工具集。
+   */
+  | { type: "mcpReload"; servers: Record<string, McpServer> }
+  /** 4-3：主进程对 skillWriteRequest 的回执（同 permissionAnswer 的 requestId 模式） */
+  | {
+      type: "skillWriteResult";
+      requestId: string;
+      ok: boolean;
+      /** 成功时的中心存储路径 */
+      path?: string;
+      error?: string;
+    }
+  /** 4-3：主进程对 mcpWriteRequest 的回执 */
+  | {
+      type: "mcpWriteResult";
+      requestId: string;
+      ok: boolean;
+      /** 重连后这台 server 的状态（ready / failed …），给模型看连接结果 */
+      status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string };
+      error?: string;
+    }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
@@ -257,6 +333,38 @@ export type AgentCommand =
 export type AgentEvent =
   | { type: "ready" }
   | { type: "builtins"; providers: BuiltinProvider[] }
+  /**
+   * MCP 连接结果。**没有 sessionId**：连接是进程级的，不属于哪一条会话。
+   * 主进程接住它当缓存，管理面查的就是这份快照（连接状态是运行时事实，不落盘）。
+   */
+  | { type: "mcp"; servers: McpServerInfo[] }
+  /**
+   * 4-3：agent 工具 create_skill 的写盘请求。**写盘在主进程**（agent 进程
+   * 不碰 userData）——主进程调 SkillStore 后回 skillWriteResult。
+   * scope 的 workspace 一侧由主进程按会话归属解析（agent 不知道 workspaceId）。
+   */
+  | {
+      type: "skillWriteRequest";
+      requestId: string;
+      sessionId: string;
+      slug: string;
+      name: string;
+      description: string;
+      body: string;
+      scope: "global" | "workspace";
+    }
+  /** 4-3：agent 工具 add_mcp_server 的写盘请求（MCP 无 workspace 语义） */
+  | {
+      type: "mcpWriteRequest";
+      requestId: string;
+      name: string;
+      server: McpServer;
+    }
+  /**
+   * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
+   * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
+   */
+  | { type: "skillsChanged" }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }

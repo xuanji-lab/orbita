@@ -98,7 +98,8 @@ describe("abortCycle —— open 期间与跑中两条路", () => {
     const parts = new FakeParts();
     const lifecycle = startCycle(running, "s1", () => gate.promise, async () => {}, () => {});
     abortCycle(running, "s1"); // 此时 parts 还没 open 出来
-    assert.deepEqual(parts.calls, [], "open 前无对象可停");
+    // 显式泛型：deepEqual 是断言函数，不标会把 calls 窄化成 never[]、窄化到下面 includes 的参数
+    assert.deepEqual<string[]>(parts.calls, [], "open 前无对象可停");
     gate.resolve(parts);
     await lifecycle;
     assert.ok(parts.calls.includes("abort"), "open 完成后兑现 abort");

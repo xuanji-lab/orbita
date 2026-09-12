@@ -19,6 +19,9 @@ import {
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
 
+/** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
+export type Overlay = "settings" | null;
+
 /** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
 const COLLAPSE_BREAKPOINT = 960;
 
@@ -36,12 +39,17 @@ const COLLAPSE_BREAKPOINT = 960;
  */
 export function Sidebar(props: {
   session: ChatSession;
-  settingsOpen: boolean;
+  /**
+   * 中卡现在盖着哪个面。**三者互斥是事实，所以用一个联合类型而不是两个 boolean**
+   * ——两个 boolean 能表达「同时打开」这种不存在的状态，而那正是 bug 的住处。
+   */
+  overlay: Overlay;
   settingsTab: SettingsTab;
   onSettingsTab: (tab: SettingsTab) => void;
-  onToggleSettings: () => void;
+  onOverlay: (next: Overlay) => void;
 }) {
   const { session } = props;
+  const settingsOpen = props.overlay === "settings";
   const [showArchived, setShowArchived] = useState(false);
   /**
    * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
@@ -63,15 +71,15 @@ export function Sidebar(props: {
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
-  /** 高亮哪一条：设置面开着时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
-  const openId = props.settingsOpen ? null : (session.sessionId ?? session.opened?.id ?? null);
+  /** 高亮哪一条：盖着别的面时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
+  const openId = props.overlay !== null ? null : (session.sessionId ?? session.opened?.id ?? null);
 
   /**
    * 新建任务顺带退出设置页（wafo 2026-09-03：此前停在 Settings 里点 New Task
    * 没反应，得再按一次 Settings 才回得去——用户的心智是「新建 = 回到对话」）。
    */
   const startNewTask = (): void => {
-    if (props.settingsOpen) props.onToggleSettings();
+    props.onOverlay(null);
     setCollapsed(false);
     // 新任务落在 TASKS 里——不能落进一个收着的组里无声无息
     setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
@@ -94,7 +102,7 @@ export function Sidebar(props: {
   const tasksFull = groups.full.has(TASKS_FOLD_KEY);
   const looseVisible = tasksFull ? loose : loose.slice(0, SESSIONS_PREVIEW_LIMIT);
   const open = (id: string) => {
-    if (props.settingsOpen) props.onToggleSettings();
+    props.onOverlay(null);
     session.openSession(id);
   };
 
@@ -129,7 +137,7 @@ export function Sidebar(props: {
         <RailButton
           icon="archive"
           title={`Archived (${session.sessions.filter((m) => m.archived).length})`}
-          active={showArchived && !props.settingsOpen}
+          active={showArchived && !settingsOpen}
           onClick={() => {
             setCollapsed(false);
             setShowArchived(true);
@@ -138,10 +146,10 @@ export function Sidebar(props: {
         <RailButton
           icon="settings"
           title="Settings"
-          active={props.settingsOpen}
+          active={settingsOpen}
           onClick={() => {
             setCollapsed(false);
-            if (!props.settingsOpen) props.onToggleSettings();
+            props.onOverlay("settings");
           }}
         />
       </aside>
@@ -238,7 +246,7 @@ export function Sidebar(props: {
           paddingRight: "var(--space-3)",
         }}
       >
-        {showArchived && !props.settingsOpen ? (
+        {showArchived && !settingsOpen ? (
           <>
             <NodeLabel>Archived</NodeLabel>
             {archived.map((meta) => (
@@ -251,7 +259,7 @@ export function Sidebar(props: {
               />
             ))}
           </>
-        ) : props.settingsOpen ? (
+        ) : settingsOpen ? (
           <>
             <NodeLabel>Settings</NodeLabel>
             {SETTINGS_TABS.map((tab) => (
@@ -378,15 +386,15 @@ export function Sidebar(props: {
         icon="archive"
         label={`Archived (${archived.length})`}
         hint={archived.length === 0 ? "Nothing archived yet" : "Archived tasks"}
-        active={showArchived && !props.settingsOpen}
+        active={showArchived && !settingsOpen}
         disabled={archived.length === 0}
         onClick={() => setShowArchived((value) => !value)}
       />
       <NavRow
         icon="settings"
         label="Settings"
-        active={props.settingsOpen}
-        onClick={props.onToggleSettings}
+        active={settingsOpen}
+        onClick={() => props.onOverlay(settingsOpen ? null : "settings")}
       />
     </aside>
   );

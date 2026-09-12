@@ -37,7 +37,8 @@ export function planBranchCut(
   const counted: { id: string; role: "user" | "assistant"; fileIndex: number }[] = [];
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
-    if (entry.type !== "message") continue;
+    // noUncheckedIndexedAccess：下标访问可能 undefined，跳过而非拿到再判
+    if (entry === undefined || entry.type !== "message") continue;
     const role = entry.message?.role;
     if (role === "user" || role === "assistant") counted.push({ id: entry.id, role, fileIndex: i });
   }
@@ -65,11 +66,10 @@ export function planBranchCut(
   // tool_use 会被 LLM API 拒收）。遇到别的（user / assistant / 压缩界碑 / 非消息
   // 条目）即停：那些属于「锚点之后」的世界。
   let fileIndex = anchor.fileIndex;
-  while (
-    entries[fileIndex + 1] !== undefined &&
-    entries[fileIndex + 1]?.type === "message" &&
-    entries[fileIndex + 1]?.message?.role === "toolResult"
-  ) {
+  while (true) {
+    const next = entries[fileIndex + 1];
+    // noUncheckedIndexedAccess 下索引访问可能 undefined——收进局部变量只判一次
+    if (next?.type !== "message" || next.message?.role !== "toolResult") break;
     fileIndex++;
   }
   return entries[fileIndex]?.id ?? anchor.id;

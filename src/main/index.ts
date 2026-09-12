@@ -6,9 +6,14 @@ import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { registerMcpIpc } from "./mcp/ipc.ts";
+import { McpStore } from "./mcp/store.ts";
+import { registerSkillIpc } from "./skill/ipc.ts";
+import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
@@ -111,7 +116,7 @@ void app.whenReady().then(() => {
   const configDir = app.getPath("userData");
   const providers = new ProviderStore(configDir, new SafeStorageSecrets(configDir));
   registerProviderIpc(providers);
-  registerWorkspaceIpc(new WorkspaceStore(configDir));
+  // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 
   // 主题先于窗口生效：晚一步的话第一帧会用系统外观画出 vibrancy，然后当着用户的面跳一下
   const settings = new SettingsStore(configDir);
@@ -122,7 +127,26 @@ void app.whenReady().then(() => {
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
   const sessions = new SessionStore(join(configDir, "sessions"));
   const record = createSessionRecorder(sessions);
+  const mcp = new McpStore(configDir);
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
+    // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
+    if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
+    // 4-3：agent 工具的写盘请求——主进程落盘、回执、广播刷新。
+    if (event.type === "skillWriteRequest") {
+      void applySkillWrite(skills, sessions, event).then((result) => {
+        agentHost.answerSkillWrite(event.requestId, result);
+        if (result.ok) broadcastAgentEvent({ type: "skillsChanged" });
+      });
+      return;
+    }
+    if (event.type === "mcpWriteRequest") {
+      void applyMcpWrite(mcp, (servers) => agentHost.mcpReload(servers), (name) => mcpIpc.statusOf(name), event).then(
+        (result) => {
+          agentHost.answerMcpWrite(event.requestId, result);
+        },
+      );
+      return;
+    }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
     // 真值校准回 meta——open 失败退回新建时 pi 会换文件，按轮自愈。
     // 首轮的 created 由 submit handler 等待并建 meta，不经过这里。
@@ -133,11 +157,34 @@ void app.whenReady().then(() => {
     record(event);
     broadcastAgentEvent(event);
   });
+  // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
+  // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
+  const mcpIpc = registerMcpIpc(mcp, (servers) => agentHost.mcpReload(servers));
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost);
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
-  registerAgentIpc(agentHost, providers, sessions, join(configDir, "pi-sessions"));
+  /*
+   * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
+   * `skills/` 与 `skill-links/global/` 并排，「放进去、链上就生效」不需要再解释。
+   * 建不出来不拦启动：没有目录是合法状态（一个都没装）。但要留日志——
+   * 不打印的话，一个权限坏掉的目录会表现成「skill 放了但没生效」，那是最难查的一类。
+   */
+  const skills = new SkillStore(configDir);
+  void skills.ensureDirs().catch((error: unknown) => {
+    console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
+  });
+  registerSkillIpc(skills);
+  // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
+  registerWorkspaceIpc(new WorkspaceStore(configDir), (id) => skills.removeWorkspace(id));
+  registerAgentIpc(
+    agentHost,
+    providers,
+    sessions,
+    join(configDir, "pi-sessions"),
+    (workspaceId) => skills.linkDirs(workspaceId),
+    mcp,
+  );
   app.on("before-quit", () => agentHost.dispose());
 
   createMainWindow();

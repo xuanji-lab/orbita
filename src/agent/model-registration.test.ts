@@ -206,25 +206,33 @@ describe("registerAndResolveModel —— create 与会话内换模型（C-4）�
   /**
    * ModelRuntime 的最小替身：注册整体替换（pi 的注册语义）——auth 面注册不动
    * 目录条目，带 models 的注册盖掉目录。kinds 记下注册顺序供断言。
+   *
+   * 注册载荷里的 model 条目没有 provider/api/baseUrl（真 runtime 的组合层会补齐），
+   * 替身在这里补齐后才能当 getModel 的返回值用——形状差异在替身内消化，不往外泄。
    */
   function fakeRuntime(catalog: readonly PiModel[]) {
-    let registered: PiProviderRegistration | null = null;
+    let registeredModels: PiModel[] | undefined;
     const kinds: string[] = [];
     return {
       kinds,
       registerProvider(_id: string, registration: PiProviderRegistration): void {
         kinds.push(registration.models === undefined ? "auth" : "fallback");
-        registered = registration;
+        registeredModels = registration.models?.map((model) => ({
+          ...model,
+          provider: "prov" as const,
+          api: registration.api ?? "openai-completions",
+          baseUrl: registration.baseUrl ?? "",
+        }));
       },
       getModel(providerId: string, modelId: string): PiModel | undefined {
         if (providerId !== "prov") return undefined;
         return (
-          registered?.models?.find((model) => model.id === modelId) ??
+          registeredModels?.find((model) => model.id === modelId) ??
           catalog.find((model) => model.id === modelId)
         );
       },
       getProviders(): { id: string; getModels: () => readonly PiModel[] }[] {
-        return [{ id: "prov", getModels: () => registered?.models ?? catalog }];
+        return [{ id: "prov", getModels: () => registeredModels ?? catalog }];
       },
     };
   }

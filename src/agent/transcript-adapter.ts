@@ -14,13 +14,30 @@
  */
 import type { AssistantMessage, Message, TextContent, ThinkingContent, ToolCall } from "@earendil-works/pi-ai";
 import type {
-  AssistantContent,
+  AssistantTranscriptItem,
   ModelRef,
   ToolTranscriptItem,
   TranscriptItem,
   TranscriptProgress,
-  UserContent,
 } from "@earendil-works/pi-protocol";
+
+/** 0.84.3 起协议只导出 Schema 常量不导出内容类型——从 TranscriptItem 反推，不为此引 typebox */
+type AssistantContent = AssistantTranscriptItem["content"][number];
+type UserContent = Extract<TranscriptItem, { role: "user" }>["content"][number];
+
+/** 我们自挂在 assistant item 上的生成时长：不在 pi schema 上，归约器实测原样保留（探针 2026-09-06） */
+type WithGenMs = { genMs?: number };
+
+/**
+ * 协议把 status 与终态字段绑成固定变体，三个事件槽位各只认一部分：
+ * item_updated 不收 user 条目，item_finished 还不收 streaming 条目。
+ * 构造函数的返回类型必须与槽位同宽——宽了（泛指 TranscriptItem）对不上窄槽，
+ * 窄了丢失不了什么（我们本来就只按分支生产对应变体）。
+ */
+type StreamingAssistantItem = Extract<AssistantTranscriptItem, { status: "streaming" }>;
+type FinalAssistantItem = Exclude<AssistantTranscriptItem, { status: "streaming" }>;
+type RunningToolItem = Extract<ToolTranscriptItem, { status: "running" }>;
+type FinalToolItem = Exclude<ToolTranscriptItem, { status: "running" }>;
 
 /** 工具结果的内容块。协议里只允许 text 与 image 两种。 */
 type ToolContent = ToolTranscriptItem["content"][number];
@@ -131,11 +148,13 @@ function toAssistantContent(block: TextContent | ThinkingContent | ToolCall): As
       : { type: "thinking", thinking: block.thinking, redacted: block.redacted };
   }
   // pi-ai: {id, name, arguments} → protocol: {toolCallId, toolName, input}
+  // pi-ai 的 arguments 是 Record<string, any>（上游就宽），协议要 JsonValue——
+  // 工具入参本来就是模型产出的 JSON，这一处断言是唯一的形合点
   return {
     type: "toolCall",
     toolCallId: block.id,
     toolName: block.name,
-    input: block.arguments as AssistantContent extends { input: infer I } ? I : never,
+    input: block.arguments as Extract<AssistantContent, { type: "toolCall" }>["input"],
   };
 }
 
@@ -186,7 +205,7 @@ export class TranscriptAdapter {
       const id = this.deps.newId();
       this.activeAssistantId = id;
       this.genStart = this.deps.now();
-      return [{ type: "item_started", item: this.assistantItem(id, event.message, true) }];
+      return [{ type: "item_started", item: this.streamingAssistantItem(id, event.message) }];
     }
 
     if (event.type === "message_update") {
@@ -195,7 +214,7 @@ export class TranscriptAdapter {
       const delta = this.toDelta(id, event.assistantMessageEvent);
       // 非增量帧（text_start / text_end / start 等）：整条重发一次，让归约器与上游对齐。
       // 这些帧稀疏，代价可以接受；而漏掉它们会让「块刚出现」这类结构变化丢失。
-      return delta ?? [{ type: "item_updated", item: this.assistantItem(id, event.message, true) }];
+      return delta ?? [{ type: "item_updated", item: this.streamingAssistantItem(id, event.message) }];
     }
 
     if (event.type === "message_end") {
@@ -214,7 +233,7 @@ export class TranscriptAdapter {
       return [
         {
           type: "item_finished",
-          item: this.assistantItem(id, event.message, false, genMs),
+          item: this.finalAssistantItem(id, event.message, genMs),
         },
       ];
     }
@@ -225,7 +244,7 @@ export class TranscriptAdapter {
       return [
         {
           type: "item_started",
-          item: this.toolItem(id, event.toolCallId, event.toolName, event.args, [], "running"),
+          item: this.runningToolItem(id, event.toolCallId, event.toolName, event.args, []),
         },
       ];
     }
@@ -236,13 +255,12 @@ export class TranscriptAdapter {
       return [
         {
           type: "item_updated",
-          item: this.toolItem(
+          item: this.runningToolItem(
             active.id,
             event.toolCallId,
             event.toolName,
             active.input,
             toToolContent(event.partialResult),
-            "running",
             toToolDetails(event.partialResult),
           ),
         },
@@ -257,7 +275,7 @@ export class TranscriptAdapter {
     return [
       {
         type: "item_finished",
-        item: this.toolItem(
+        item: this.finalToolItem(
           active.id,
           event.toolCallId,
           event.toolName,
@@ -274,30 +292,59 @@ export class TranscriptAdapter {
    * 工具执行 → 协议的 tool item。
    *
    * 协议把 `status` 与 `isError` 做成了**绑定的三个变体**（running/false、complete/false、
-   * error/true），不能自由组合——所以这里按变体分支返回，而不是拼一个对象再补字段。
+   * error/true），不能自由组合；且 item_finished 槽位不收 running、item_started / item_updated
+   * 不收终态——所以按生命周期拆两个构造函数，返回类型各自与槽位同宽。
    */
-  private toolItem(
+  private runningToolItem(
     id: string,
     toolCallId: string,
     toolName: string,
     input: unknown,
     content: ToolContent[],
-    status: "running" | "complete" | "error",
     details?: ToolTranscriptItem["details"],
-  ): TranscriptItem {
-    const base = {
+  ): RunningToolItem {
+    return {
+      ...this.toolBase(id, toolCallId, toolName, input, content, details),
+      status: "running" as const,
+      isError: false,
+    };
+  }
+
+  private finalToolItem(
+    id: string,
+    toolCallId: string,
+    toolName: string,
+    input: unknown,
+    content: ToolContent[],
+    status: "complete" | "error",
+    details?: ToolTranscriptItem["details"],
+  ): FinalToolItem {
+    const base = this.toolBase(id, toolCallId, toolName, input, content, details);
+    return status === "error"
+      ? { ...base, status: "error" as const, isError: true }
+      : { ...base, status: "complete" as const, isError: false };
+  }
+
+  private toolBase(
+    id: string,
+    toolCallId: string,
+    toolName: string,
+    input: unknown,
+    content: ToolContent[],
+    details: ToolTranscriptItem["details"],
+  ) {
+    return {
       id,
       role: "tool" as const,
       toolCallId,
       toolName,
+      // 上游 args 是 any/unknown，协议要 JsonValue——入参本来就是模型产出的 JSON，
+      // 这一处断言是唯一的形合点
       input: input as ToolTranscriptItem["input"],
       content,
       timestamp: this.deps.now(),
       ...(details === undefined ? null : { details }),
     };
-    if (status === "error") return { ...base, status: "error", isError: true };
-    if (status === "complete") return { ...base, status: "complete", isError: false };
-    return { ...base, status: "running", isError: false };
   }
 
   /** 流式增量 → assistant_delta。不是增量帧就返回 null，由调用方走整条重发。 */
@@ -328,17 +375,17 @@ export class TranscriptAdapter {
    * 终态怎么落，取决于 pi 的 `stopReason`。
    *
    * **协议里 assistant 有四种 status：streaming / complete / error / aborted**，
-   * 后三种都带 `stopReason`。我们以前一律写 complete 且不带 stopReason——
-   * 于是**被用户打断的半截回答，在记录里长得和正常说完的一模一样**。
-   * 落盘之后这条谎会留在磁盘上：重开会话时看到一句没说完的话，
-   * 却没有任何东西告诉你「这是你当时按了停止」。
+   * 后三种都带 `stopReason`，且 error 变体绑死 `stopReason: "error"`（协议的绑定变体，
+   * 不能自由组合——此前 error 落的是 "stop"，在 typecheck 盲区里漏了三年才被 0-3 抓出来）。
+   * 我们以前一律写 complete 且不带 stopReason——于是**被用户打断的半截回答，
+   * 在记录里长得和正常说完的一模一样**。落盘之后这条谎会留在磁盘上：重开会话时
+   * 看到一句没说完的话，却没有任何东西告诉你「这是你当时按了停止」。
    */
-  private assistantItem(
+  private finalAssistantItem(
     id: string,
     message: AssistantMessage,
-    streaming: boolean,
     genMs?: number,
-  ): TranscriptItem {
+  ): FinalAssistantItem & WithGenMs {
     const base = {
       id,
       role: "assistant" as const,
@@ -348,23 +395,37 @@ export class TranscriptAdapter {
       usage: message.usage,
       timestamp: this.deps.now(),
     };
-    if (streaming) return { ...base, status: "streaming" };
     // genMs 是我们挂在 pi item 上的字段（不在 pi schema 上，归约器实测原样保留）：
     // 本条的纯生成毫秒。**只附加，不劫持**——aborted / error / toolUse 的终态判定
     // 原样走，哪一种终态都能挂。
-    const withSpeed = (item: TranscriptItem): TranscriptItem =>
-      genMs === undefined ? item : ({ ...item, genMs } as TranscriptItem);
+    const withSpeed = (item: FinalAssistantItem): FinalAssistantItem & WithGenMs =>
+      genMs === undefined ? item : { ...item, genMs };
     // aborted 这一支的 stopReason 是它自己那个字面量，不是 complete 那三个之一
     if (message.stopReason === "aborted") {
-      return withSpeed({ ...base, status: "aborted", stopReason: "aborted" });
+      return withSpeed({ ...base, status: "aborted" as const, stopReason: "aborted" as const });
     }
-    // pi 的 StopReason 比协议宽（还有 pending / deferred / error）。
-    // 只有三个值协议认；其余落回 "stop"——它表示「就这么结束了」，是最不失真的兜底。
+    if (message.stopReason === "error") {
+      return withSpeed({ ...base, status: "error" as const, stopReason: "error" as const });
+    }
+    // pi 的 StopReason 比协议宽（还有 pending / deferred）。只有 length / toolUse
+    // 两个值协议认；其余落回 "stop"——它表示「就这么结束了」，是最不失真的兜底。
     const stopReason =
       message.stopReason === "length" || message.stopReason === "toolUse"
         ? message.stopReason
         : ("stop" as const);
-    if (message.stopReason === "error") return withSpeed({ ...base, status: "error", stopReason });
-    return withSpeed({ ...base, status: "complete", stopReason });
+    return withSpeed({ ...base, status: "complete" as const, stopReason });
+  }
+
+  /** 流式中的 assistant 条目：只有 streaming 一个变体，item_started / item_updated 槽都收。 */
+  private streamingAssistantItem(id: string, message: AssistantMessage): StreamingAssistantItem {
+    return {
+      id,
+      role: "assistant" as const,
+      content: message.content.map(toAssistantContent),
+      model: toModelRef(message),
+      usage: message.usage,
+      timestamp: this.deps.now(),
+      status: "streaming" as const,
+    };
   }
 }

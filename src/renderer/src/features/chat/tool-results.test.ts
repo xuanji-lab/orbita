@@ -24,6 +24,11 @@ import {
   recordToolFrame,
   splitPathTail,
   streamingThinkingKey,
+  mcpFailureKind,
+  mcpInputSummary,
+  mcpFailureLabel,
+  mcpFailureLead,
+  summarizeMcpResult,
   summarizeToolResult,
   thinkingDurationText,
   thinkingPreview,
@@ -1077,5 +1082,81 @@ describe("branchAnchorEntries", () => {
     const entries = groupToolUnits(flattenRenderUnits(records));
     const rows = branchAnchorEntries(new Set(["a1"]), entries);
     assert.deepEqual([...rows.entries()], [[2, "a1"]]);
+  });
+});
+
+// ── 4-5：MCP 工具卡的摘要与失败分型 ──
+
+/** 4-5 用：MCP 工具记录（复用上面的 toolItem，只换名与终态） */
+const mcpItem = (
+  status: "complete" | "error",
+  content: ToolTranscriptItem["content"],
+  toolCallId = "c1",
+): ToolTranscriptItem =>
+  status === "error"
+    ? {
+        id: `item-${toolCallId}`,
+        role: "tool",
+        toolCallId,
+        toolName: "mcp__demo__echo",
+        input: {},
+        content,
+        timestamp: 0,
+        status: "error",
+        isError: true,
+      }
+    : {
+        id: `item-${toolCallId}`,
+        role: "tool",
+        toolCallId,
+        toolName: "mcp__demo__echo",
+        input: {},
+        content,
+        timestamp: 0,
+        status: "complete",
+        isError: false,
+      };
+
+describe("summarizeMcpResult / mcpFailureKind（4-5）", () => {
+  test("成功：纯文本说 chars，含图说 images · chars（规格原文量词）", () => {
+    assert.equal(summarizeMcpResult(mcpItem("complete", [{ type: "text", text: "echo: hello" }])), "11 chars");
+    assert.equal(
+      summarizeMcpResult(
+        mcpItem("complete", [
+          { type: "text", text: "echo: hi" },
+          { type: "image", data: "AAAA", mimeType: "image/png" },
+        ]),
+      ),
+      "1 image · 8 chars",
+    );
+  });
+
+  test("业务失败 = Failed（server 的话在正文里）", () => {
+    const failed = mcpItem("error", [{ type: "text", text: "炸了" }]);
+    assert.equal(summarizeMcpResult(failed), "Failed");
+    assert.equal(mcpFailureKind(failed), "business");
+    assert.equal(mcpFailureLead(failed), "The server reported an error.");
+  });
+
+  test("超时与不可达分得开：Timed out / Unreachable，各自的展开首行", () => {
+    const timedOut = mcpItem("error", [{ type: "text", text: "mcp__demo__echo 调用超时" }]);
+    assert.equal(mcpFailureKind(timedOut), "timedOut");
+    assert.equal(mcpFailureLabel(timedOut), "Timed out");
+    assert.match(mcpFailureLead(timedOut), /Timed out/);
+    const gone = mcpItem("error", [
+      { type: "text", text: 'mcp__demo__echo: server "demo" is not connected (it may have been removed by a reload)' },
+    ]);
+    assert.equal(mcpFailureKind(gone), "unreachable");
+    assert.equal(mcpFailureLabel(gone), "Unreachable");
+    assert.match(mcpFailureLead(gone), /no response from the server/i);
+  });
+});
+
+describe("mcpInputSummary（4-5）", () => {
+  test("对象收成一行并截断；空对象与 null 不出摘要", () => {
+    assert.equal(mcpInputSummary({ text: "卡片验证" }), '{"text":"卡片验证"}');
+    assert.equal(mcpInputSummary({ text: "x".repeat(60) })?.endsWith("…"), true);
+    assert.equal(mcpInputSummary({}), null);
+    assert.equal(mcpInputSummary(null), null);
   });
 });

@@ -70,6 +70,7 @@ body {
  */
 .layer {
   height: 100%;
+  position: relative;
   display: flex;
   gap: var(--space-3);
   padding: var(--space-3);
@@ -473,4 +474,95 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/*
+ * 右侧分屏面板（S-0）：进入向右滑入 + 淡入，220ms（--duration-enter --ease-out-quint）；
+ * 两个面板之间原地切内容时 120ms 淡入。动效只解释「东西去哪了」。
+ */
+@keyframes right-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes right-panel-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* loader-circle 的旋转（MCP 面板 connecting / Reload 进行中） */
+@keyframes mcp-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * Skills 韦恩图（4-4，几何取自 skills-map-3circle-v2）：圆淡填充 --venn-fill +
+ * 描边；点/环只用位置与形状表达集合，不用颜色区分；名字 10px 带 paint-order
+ * 玻璃底描边（压在圆边上也能读）；missing 三角 + danger。
+ */
+.venn-ws {
+  fill: var(--venn-fill);
+  stroke: var(--color-border-strong);
+  stroke-width: 1;
+}
+.venn-ws-label {
+  font-family: var(--font-family-mono);
+  font-size: 9px;
+  letter-spacing: 1.1px;
+  fill: var(--color-text-tertiary);
+  text-transform: uppercase;
+}
+.venn-skill {
+  cursor: pointer;
+}
+.venn-dot {
+  fill: var(--color-text-primary);
+}
+.venn-ring {
+  fill: none;
+  stroke: var(--color-text-primary);
+  stroke-width: 1.2;
+}
+.venn-nm {
+  font-size: 10px;
+  fill: var(--color-text-primary);
+  paint-order: stroke;
+  stroke: var(--glass-bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.venn-skill:hover .venn-nm {
+  text-decoration: underline;
+}
+.venn-missing .venn-nm {
+  fill: var(--color-danger);
+}
+.venn-tri {
+  fill: none;
+  stroke: var(--color-danger);
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.venn-more {
+  font-size: 10px;
+  fill: var(--color-text-tertiary);
+  cursor: pointer;
+  paint-order: stroke;
+  stroke: var(--glass-bg);
+  stroke-width: 3px;
 }
