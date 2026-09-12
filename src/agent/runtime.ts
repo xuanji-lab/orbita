@@ -333,8 +333,12 @@ const TOOL_GUIDELINES =
   "跑可能耗时的命令（大目录/全仓搜索、依赖安装、构建、测试）时，不要给 bash/powershell 传 timeout 参数，或至少设 300 秒以上——Windows 上扫大目录本来就慢，短超时会把正常的慢命令拦腰杀掉。";
 
 /**
- * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点，
- * 而 pi 的工具执行本来就允许长时间等待（abort 走的是另一条路）。
+ * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
+ *
+ * 但这个 promise 也**不听 abort**：pi 的 prepareToolCall 是 `await beforeToolCall(...)`
+ * 之后才查 `signal.aborted`，所以卡在审批上时 AbortController 炸了也没人听。
+ * 停止 / 抢跑 / 删会话都必须走 `settlePendingPermissions` 把它手动结掉，
+ * 否则那一轮永远不会收尾（interrupt 还会卡在 `await lifecycle` 上）。
  */
 function askPermission(sessionId: string) {
   return (request: { toolCallId: string; toolName: string; input: unknown }) =>
@@ -349,6 +353,21 @@ function askPermission(sessionId: string) {
         input: request.input,
       });
     });
+}
+
+/**
+ * 把该会话挂起的审批一次结清，按拒绝放行——工具调用立刻拿到结果返回，
+ * pi 的 loop 随即查到 `signal.aborted` 并收尾。
+ *
+ * 不结就掉引用（旧 dispose 分支的做法）的话，工具执行的闭包会挂在那里等一个
+ * 永远不会到的回答。
+ */
+function settlePendingPermissions(sessionId: string): void {
+  for (const [key, resolve] of pendingPermissions) {
+    if (!key.startsWith(`${sessionId}:`)) continue;
+    resolve({ behavior: "deny", message: "已停止" });
+    pendingPermissions.delete(key);
+  }
 }
 
 /**
@@ -708,6 +727,8 @@ async function handle(command: AgentCommand): Promise<void> {
     // **抢跑语义：中间没有「空闲」**——旧轮收尾不发 idle（preempt），否则 renderer
     // 收到 idle 就投递队首，撞上新轮的 already running，排队项丢失。
     abortCycle(running, command.sessionId, { preempt: true });
+    // 旧轮可能正卡在审批上；不结掉的话下面的 await lifecycle 永远不返回
+    settlePendingPermissions(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
       await startTurn(command, async (opened) => {
@@ -732,6 +753,8 @@ async function handle(command: AgentCommand): Promise<void> {
     // 全走 compaction_start / compaction_end 事件那条已接好的链。
     // 抢跑语义同 interrupt：旧轮收尾不发 idle（preempt），中间没有「空闲」可投递。
     abortCycle(running, command.sessionId, { preempt: true });
+    // 理由同 interrupt：卡在审批的旧轮不结就等不到它收尾
+    settlePendingPermissions(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
       await startTurn(command, (opened) =>
@@ -750,6 +773,9 @@ async function handle(command: AgentCommand): Promise<void> {
     // 排队消息滞留在 renderer 的本地队列，idle 事件（startTurn 的 finally）到了
     // 自然逐条投递；不替用户清队（排队是用户的意图，停止不该替他放弃）。
     abortCycle(running, command.sessionId);
+    // **审批不听 abort**（见 askPermission）：不在这里结掉的话，停止对「正卡在
+    // 审批上的轮」完全无效——要等用户先回答审批，那个停止才生效
+    settlePendingPermissions(command.sessionId);
     return;
   }
 
@@ -761,10 +787,8 @@ async function handle(command: AgentCommand): Promise<void> {
     // 收尾跳过二次 dispose（退订与出表仍做），并等它完全收尾。
     await killCycle(running, command.sessionId);
     ledger.delete(command.sessionId);
-    // 审批 resolve 函数不随会话一起删的话，会把已销毁会话的工具执行闭包整条钉在内存里
-    for (const key of pendingPermissions.keys()) {
-      if (key.startsWith(`${command.sessionId}:`)) pendingPermissions.delete(key);
-    }
+    // 审批 resolve 函数不随会话一起结的话，会把已销毁会话的工具执行闭包整条钉在内存里
+    settlePendingPermissions(command.sessionId);
     return;
   }
 
