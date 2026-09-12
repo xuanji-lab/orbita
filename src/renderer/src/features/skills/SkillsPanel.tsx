@@ -23,6 +23,9 @@ export function SkillsPanel(props: {
   narrow: boolean;
   skills: SkillsState;
   onClose: () => void;
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
 }) {
   const { skills } = props;
   /** 当前详情的 slug；null = 列表。面板内状态，不进 useSkills（侧栏列表已删） */
@@ -41,6 +44,9 @@ export function SkillsPanel(props: {
     return (
       <SkillDetail
         narrow={props.narrow}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
         skills={skills}
         meta={meta}
         workspaceName={workspaceName}
@@ -52,6 +58,9 @@ export function SkillsPanel(props: {
   return (
     <SkillList
       narrow={props.narrow}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
       skills={skills}
       workspaceName={workspaceName}
       onSelect={setSelected}
@@ -86,6 +95,9 @@ function SkillList(props: {
   workspaceName: (id: string) => string;
   onSelect: (slug: string) => void;
   onClose: () => void;
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
 }) {
   const { skills } = props;
   const load = skills.load;
@@ -102,6 +114,9 @@ function SkillList(props: {
     return (
       <RightPanelFrame
         narrow={props.narrow}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
         header={header}
         contentKey="list"
         onClose={props.onClose}
@@ -115,6 +130,9 @@ function SkillList(props: {
     return (
       <RightPanelFrame
         narrow={props.narrow}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
         header={header}
         contentKey="list"
         onClose={props.onClose}
@@ -208,6 +226,9 @@ function SkillList(props: {
   return (
     <RightPanelFrame
       narrow={props.narrow}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
       header={header}
       contentKey="list"
       onClose={props.onClose}
@@ -339,6 +360,9 @@ function SkillDetail(props: {
   workspaceName: (id: string) => string;
   onBack: () => void;
   onClose: () => void;
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
 }) {
   const { skills, meta } = props;
   const [content, setContent] = useState<SkillContent | null>(null);
@@ -390,6 +414,9 @@ function SkillDetail(props: {
   return (
     <RightPanelFrame
       narrow={props.narrow}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
       contentKey={`detail:${meta.slug}`}
       onClose={props.onClose}
       header={

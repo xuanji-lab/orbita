@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../shell/Icon";
+import { RIGHT_PANEL_WIDTH_MAX, RIGHT_PANEL_WIDTH_MIN } from "@shared/settings";
 
 /**
  * 右侧分屏面板的框架（规格 §3）：页头（标题区 + x）、内容区（120ms 淡入，
@@ -17,10 +18,17 @@ export function RightPanelFrame(props: {
   /** 内容切换的 key（换帧触发 120ms fade） */
   contentKey: string;
   footer?: React.ReactNode;
+  /** 面板宽度（4-0 拖宽）。分屏态生效；窄窗覆盖层固定 320 不可拖 */
+  width: number;
+  /** 拖动中每帧回调（只改本地状态，不落盘） */
+  onWidthChange: (width: number) => void;
+  /** 松手 / 双击复位时回调（落盘） */
+  onWidthCommit: (width: number) => void;
   onClose: () => void;
   children: React.ReactNode;
 }) {
   const { narrow } = props;
+  const asideRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -30,18 +38,56 @@ export function RightPanelFrame(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [props]);
 
+  /**
+   * 拖宽（4-0）：左移变宽。夹取两道：硬区间 280–560，以及 chat ≥ 480 的底线
+   * （按下那一刻用 pane 当前宽度算出面板能长到的上限——拖动中 pane 收缩、面板
+   * 变宽，总和不变，所以起点一次算准，不需要每帧重测）。拖动中不做动画；
+   * 松手不 snap；双击热区回 320。
+   */
+  const startResize = (event: React.PointerEvent): void => {
+    if (event.button !== 0) return;
+    const panel = asideRef.current;
+    if (panel === null) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panel.getBoundingClientRect().width;
+    const pane = panel.parentElement?.querySelector("main.pane");
+    const paneWidth = pane?.getBoundingClientRect().width ?? startWidth + 480;
+    const maxByChat = startWidth + Math.max(0, paneWidth - 480);
+    const max = Math.min(RIGHT_PANEL_WIDTH_MAX, maxByChat);
+    const clamp = (value: number): number =>
+      Math.min(max, Math.max(RIGHT_PANEL_WIDTH_MIN, Math.round(value)));
+    // 拖动期间全文选择与光标都固定成拖拽语义，松手还原
+    const previousSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    const move = (ev: PointerEvent): void => {
+      props.onWidthChange(clamp(startWidth - (ev.clientX - startX)));
+    };
+    const up = (ev: PointerEvent): void => {
+      window.removeEventListener("pointermove", move);
+      document.body.style.userSelect = previousSelect;
+      document.body.style.cursor = previousCursor;
+      props.onWidthCommit(clamp(startWidth - (ev.clientX - startX)));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  };
+
   return (
     <aside
+      ref={asideRef}
       className="pane"
       style={{
-        flex: narrow ? undefined : "0 0 320px",
+        position: narrow ? "absolute" : "relative",
+        flex: narrow ? undefined : `0 0 ${props.width}px`,
         width: narrow ? 320 : undefined,
         display: "grid",
         gridTemplateRows: "auto minmax(0,1fr) auto",
         animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
         ...(narrow
           ? {
-              position: "absolute",
               top: "var(--space-3)",
               bottom: "var(--space-3)",
               right: "calc(var(--space-3) + 32px + var(--space-3))",
@@ -51,6 +97,23 @@ export function RightPanelFrame(props: {
           : {}),
       }}
     >
+      {/* 拖宽热区：左缘 6px（骑缝 3px），只在分屏态存在；双击回 320 */}
+      {!narrow && (
+        <span
+          onPointerDown={startResize}
+          onDoubleClick={() => props.onWidthCommit(320)}
+          title="Drag to resize · double-click to reset"
+          style={{
+            position: "absolute",
+            left: -3,
+            top: 0,
+            bottom: 0,
+            width: 6,
+            cursor: "col-resize",
+            zIndex: 5,
+          }}
+        />
+      )}
       <header
         className="titlebar"
         style={{

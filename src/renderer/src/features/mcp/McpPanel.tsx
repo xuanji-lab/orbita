@@ -11,7 +11,14 @@ import type { McpStatus } from "@shared/mcp";
  * Reload 的进行中态：按钮 loading、非 disabled 行实时转 connecting、列表不清空
  * （invoke 在 agent 重连完、新快照已缓存时才返回，见 host 的回执等待）。
  */
-export function McpPanel(props: { narrow: boolean; skills: SkillsState; onClose: () => void }) {
+export function McpPanel(props: {
+  narrow: boolean;
+  skills: SkillsState;
+  onClose: () => void;
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
+}) {
   const { servers, serversLoad, openMcpConfig, reloadMcp } = props.skills;
   const [reloading, setReloading] = useState(false);
   const error = serversLoad.kind === "failed" ? serversLoad.message : null;
@@ -32,6 +39,9 @@ export function McpPanel(props: { narrow: boolean; skills: SkillsState; onClose:
   return (
     <RightPanelFrame
       narrow={props.narrow}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
       header={header}
       contentKey="mcp"
       onClose={props.onClose}

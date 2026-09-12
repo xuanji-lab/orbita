@@ -12,6 +12,7 @@ import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRail";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
+import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -66,6 +67,12 @@ export function App() {
     void api.settings.set(patch).then(setSettings);
   }, []);
 
+  /** 右侧面板宽度（4-0 拖宽）：拖动中只改本地，松手才落 settings */
+  const [panelWidth, setPanelWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
+  useEffect(() => {
+    if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
+  }, [settings.rightPanelWidth]);
+
   const session = useChatSession(providers);
   const skills = useSkills(rightPanel === "skills");
   /** 会话动作只在有会话时出现——它承载的是「对这个会话做点什么」；
@@ -107,9 +114,23 @@ export function App() {
       </main>
 
       {rightPanel === "skills" ? (
-        <SkillsPanel narrow={narrow} skills={skills} onClose={() => setRightPanel(null)} />
+        <SkillsPanel
+          narrow={narrow}
+          skills={skills}
+          onClose={() => setRightPanel(null)}
+          width={panelWidth}
+          onWidthChange={setPanelWidth}
+          onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+        />
       ) : rightPanel === "mcp" ? (
-        <McpPanel narrow={narrow} skills={skills} onClose={() => setRightPanel(null)} />
+        <McpPanel
+          narrow={narrow}
+          skills={skills}
+          onClose={() => setRightPanel(null)}
+          width={panelWidth}
+          onWidthChange={setPanelWidth}
+          onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+        />
       ) : null}
 
       <RightRail panel={rightPanel} onPanel={setRightPanel} sessionActions={sessionActions} />
