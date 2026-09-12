@@ -54,7 +54,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "orbita-recorder-"));
   store = new SessionStore(join(dir, "sessions"));
   record = createSessionRecorder(store);
-  await store.create({
+  await store.ensureSession({
     id: ID,
     title: "",
     titleSource: "derived",

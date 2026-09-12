@@ -82,12 +82,31 @@ body {
 }
 
 /*
- * 侧栏顶栏兼作标题栏：`titleBarStyle: "hidden"` 之后窗口没有任何可拖区域，
- * 不标 drag 就拖不动窗口。macOS 上还要给红黄绿三个键让出净空——
- * 它们从 x=18 起算，约占到 70px，字标从 78px 开始。
+ * 窗口拖拽区。`titleBarStyle: "hidden"` 之后窗口没有系统标题栏，顶部这一条必须
+ * 自己声明 drag：不声明就拖不动窗口，而且 macOS 的「双击标题栏缩放」也没有落点
+ * （双击行为由系统在 drag 区上提供，不需要我们写 JS）。
+ * macOS 上还要给红黄绿三个键让出净空——它们从 x=18 起算，约占到 70px。
+ *
+ * **所有顶部行都要挂 `.titlebar`**（侧栏字标、聊天页头、设置页头、首页的空条），
+ * 否则用户会碰到「同一条横栏有的地方能拖、有的地方不能拖」这种隐形边界。
  */
 .titlebar {
   -webkit-app-region: drag;
+}
+
+/*
+ * **drag 会被子元素继承**：区域里的交互件不反标 no-drag 就收不到点击（整片被
+ * 当成窗口把手）。这里按**元素类型**兜而不是靠每处手动加类：顶栏以后还会加
+ * 按钮，靠人记得加 no-drag 是算不清的账（侧栏的折叠键就是这么漏的）。
+ */
+.titlebar button,
+.titlebar input,
+.titlebar select,
+.titlebar textarea,
+.titlebar a,
+.titlebar [role="button"],
+.no-drag {
+  -webkit-app-region: no-drag;
 }
 
 :root[data-platform="darwin"] .titlebar {

@@ -140,6 +140,9 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       // 回合失败标注只随「新一轮开跑」消失：非 idle 的 phase 事件清它；
       // 落定的 idle **不清**——failed(turn) 之后紧随的 agent_settled 正是 idle
       ...(event.phase === "idle" ? null : { turnError: null }),
+      // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
+      // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
+      ...(event.phase === "idle" ? { approvals: [] } : null),
     }));
   }
   if (event.type === "retry") {

@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../../shell/Icon";
 import type { QueuedMessage } from "./session-states.ts";
-import { dropPlacement, type DropPlacement } from "./queue-drop.ts";
+import { dropPlacement } from "./queue-drop.ts";
 
 // ── 本模块全部用户可见文案（英文先行，中文化等真实需求出现再抽字典） ──
 const COPY = {
@@ -31,8 +31,8 @@ const COPY = {
  * 连续操作时必然落空（2026-09-06 一晚四个 bug）。
  *
  * 每条两个按钮：**立即发送**（回车图标）与**撤回**（undo 图标，文字落回输入框）；
- * 调顺序走**行首抓手拖拽**，不占按钮位。落点语义见 queue-drop.ts：插入线跟鼠标走，
- * 落进源自己的缝时不画线——线一出现，松手必然动。
+ * 调顺序走**行首抓手拖拽**，不占按钮位。落点语义见 queue-drop.ts：落到谁身上就占谁的
+ * 位置，悬停整行描边——与 Providers 厂商排序同一套手感。
  * 设计规则与 ApprovalBar 同源：浮起的玻璃卡（popover 阴影，比 composer 高一层）、
  * 状态用图标与文字、不拿 accent 染底——accent 留给发送键。
  */
@@ -45,17 +45,15 @@ export function QueueStrip(props: {
   onMove: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dropAt, setDropAt] = useState<{ id: string; placement: DropPlacement } | null>(null);
+  /** 正悬停在哪一行上（整行亮起）；悬在源自己身上不算 */
+  const [dropOn, setDropOn] = useState<string | null>(null);
   if (props.items.length === 0) return null;
   const halted = props.phase === "idle";
   const endDrag = (): void => {
     setDraggingId(null);
-    setDropAt(null);
+    setDropOn(null);
   };
   const indexOf = (id: string): number => props.items.findIndex((item) => item.id === id);
-  /** 正拖着的那条落到 targetId 的 half 半时的语义；null = 没在拖 / 落进去等于不动 */
-  const placementOnto = (targetId: string, half: DropPlacement): DropPlacement | null =>
-    draggingId === null ? null : dropPlacement(indexOf(draggingId), indexOf(targetId), half);
   return (
     <section
       aria-label={COPY.queued}
@@ -84,18 +82,19 @@ export function QueueStrip(props: {
           // 单条时不给抓手：没有可交换的对象，一个拖不动的抓手只是误导
           draggable={props.items.length > 1}
           dragging={draggingId === item.id}
-          dropPlacement={dropAt?.id === item.id ? dropAt.placement : null}
+          dropOn={dropOn === item.id}
           onSendNow={() => props.onSendNow(item.id)}
           onWithdraw={() => props.onWithdraw(item.id)}
           onDragStart={() => setDraggingId(item.id)}
-          onDragOverRow={(half) => {
-            const placement = placementOnto(item.id, half);
-            setDropAt(placement === null ? null : { id: item.id, placement });
+          onDragOverRow={() => {
+            if (draggingId === null || draggingId === item.id) return;
+            // 同值返回让 React 跳过无谓的重渲——dragover 是高频事件
+            setDropOn((cur) => (cur === item.id ? cur : item.id));
           }}
-          onDropRow={(half) => {
-            const placement = placementOnto(item.id, half);
-            if (draggingId !== null && placement !== null) {
-              props.onMove(draggingId, item.id, placement);
+          onDropRow={() => {
+            if (draggingId !== null) {
+              const placement = dropPlacement(indexOf(draggingId), indexOf(item.id));
+              if (placement !== null) props.onMove(draggingId, item.id, placement);
             }
             endDrag();
           }}
@@ -119,7 +118,17 @@ function noteOf(item: QueuedMessage, phase: "idle" | "turn" | "compaction"): str
   return COPY.waitsTurnEnd;
 }
 
-/** 一条排队项：抓手 + 文本（截断）+ 注脚 + 两个图标动作。 */
+/**
+ * 一条排队项：抓手 + 文本（截断）+ 注脚 + 两个图标动作。
+ *
+ * **`draggable` 只给行首抓手，不给整行**——这不是洁癖，是 bug 修复：
+ * 整行 draggable 时，在行内任何位置（包括两个 22×22 的图标按钮）按下鼠标后指针只要
+ * 移动过 Chromium 的拖拽阈值（约 3px），这次手势就被判给拖拽，dragstart 之后浏览器
+ * **不再派发 click**。表现是「点了一次没反应、以为没点准、再点一次才出去」——
+ * 2026-09-12 插队失效的真因：命令根本没进 `sendQueuedNow`，所以 runtime 侧查不到任何痕迹。
+ * 触发与否取决于手抖几个像素，因此时灵时不灵；队列只剩一条时 `draggable` 为 false，反而从不复现。
+ * 抓手自己做拖拽源之后，按钮与文本都不在 draggable 子树里，点击不可能再被吞。
+ */
 function QueueRow(props: {
   text: string;
   note: string;
@@ -129,40 +138,31 @@ function QueueRow(props: {
   draggable: boolean;
   /** 自己正被拖着 */
   dragging: boolean;
-  /** 非 null = 落点在本行上/下沿，画一条插入线 */
-  dropPlacement: DropPlacement | null;
+  /** 正被拖着的那条悬在本行上：整行描边，松手就占本行的位置 */
+  dropOn: boolean;
   onSendNow: () => void;
   onWithdraw: () => void;
   onDragStart: () => void;
-  /** 上报鼠标在本行的哪一半；是否真的动、动到哪由 QueueStrip 结合源行位置判 */
-  onDragOverRow: (half: DropPlacement) => void;
-  onDropRow: (half: DropPlacement) => void;
+  /** 只上报「悬停 / 落在本行」；行不看鼠标坐标，落点语义由 QueueStrip 按下标算 */
+  onDragOverRow: () => void;
+  onDropRow: () => void;
   onDragEnd: () => void;
 }) {
-  const placementOf = (event: React.DragEvent<HTMLDivElement>): DropPlacement => {
-    const box = event.currentTarget.getBoundingClientRect();
-    return event.clientY - box.top < box.height / 2 ? "before" : "after";
-  };
+  // 拖拽源是抓手，但拖影要拿整行——否则跟着指针走的只有一个 12px 的点
+  const rowRef = useRef<HTMLDivElement>(null);
   return (
     <div
-      draggable={props.draggable}
-      onDragStart={(event) => {
-        // Firefox 不设 dataTransfer 就不发 drag 事件；内容用不着，给个占位
-        event.dataTransfer.setData("text/plain", "");
-        event.dataTransfer.effectAllowed = "move";
-        props.onDragStart();
-      }}
+      ref={rowRef}
       onDragOver={(event) => {
         // 不阻止默认行为就不会触发 drop
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
-        props.onDragOverRow(placementOf(event));
+        props.onDragOverRow();
       }}
       onDrop={(event) => {
         event.preventDefault();
-        props.onDropRow(placementOf(event));
+        props.onDropRow();
       }}
-      onDragEnd={props.onDragEnd}
       style={{
         display: "flex",
         alignItems: "center",
@@ -170,17 +170,27 @@ function QueueRow(props: {
         minWidth: 0,
         // 拖拽中的源行压淡，让注意力跟着落点走
         opacity: props.dragging ? 0.4 : 1,
-        // 插入线用 box-shadow 而不是 border：不撑开布局，行不会因为悬停而跳
-        boxShadow:
-          props.dropPlacement === "before"
-            ? "inset 0 1px 0 0 var(--color-accent)"
-            : props.dropPlacement === "after"
-              ? "inset 0 -1px 0 0 var(--color-accent)"
-              : "none",
+        // 落点用整行内描边（Providers 厂商排序同款）：box-shadow 不撑开布局，行不会因悬停而跳
+        borderRadius: "var(--radius-md)",
+        boxShadow: props.dropOn ? "inset 0 0 0 1.5px var(--color-accent)" : "none",
       }}
     >
       <span
         title={props.draggable ? props.reorderTitle : undefined}
+        draggable={props.draggable}
+        onDragStart={(event) => {
+          // Firefox 不设 dataTransfer 就不发 drag 事件；内容用不着，给个占位
+          event.dataTransfer.setData("text/plain", "");
+          event.dataTransfer.effectAllowed = "move";
+          const row = rowRef.current;
+          if (row !== null) {
+            const rect = row.getBoundingClientRect();
+            event.dataTransfer.setDragImage(row, event.clientX - rect.left, event.clientY - rect.top);
+          }
+          props.onDragStart();
+        }}
+        // dragend 只在拖拽源上触发，所以收尾挂在抓手上（拖到空处松手也要复位）
+        onDragEnd={props.onDragEnd}
         style={{
           display: "inline-flex",
           flex: "0 0 auto",

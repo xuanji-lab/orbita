@@ -5,14 +5,16 @@
 import { BrowserWindow, ipcMain } from "electron";
 import {
   ipcChannels,
-  type CreateAgentInput,
+  type CompactAgentInput,
   type ProviderSecrets,
+  type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { McpStore } from "../mcp/store.ts";
+import type { McpServer } from "../../shared/mcp.ts";
 import { AgentHost } from "./host.ts";
 
 /**
@@ -64,6 +66,26 @@ function catalogIdOf(providerId: string): string | undefined {
   return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.catalogId;
 }
 
+/** AgentTurnContext 的 renderer 载荷 → AgentCommand 的公共字段（submit / interrupt / compact 共用）。 */
+function turnFields(
+  input: SubmitAgentInput | CompactAgentInput,
+  provider: ProviderSecrets,
+  piSessionDir: string,
+  /** 开轮环境（skills 目录 + MCP 配置）：无状态化后每轮命令都要带全 */
+  environment: { skillsDir: string; mcpServers: Record<string, McpServer> },
+) {
+  return {
+    sessionId: input.sessionId,
+    cwd: input.cwd,
+    provider,
+    modelId: input.modelId,
+    mode: input.mode,
+    piSessionDir,
+    ...environment,
+    ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
+  };
+}
+
 export function registerAgentIpc(
   host: AgentHost,
   providers: ProviderStore,
@@ -75,82 +97,72 @@ export function registerAgentIpc(
   /** MCP 配置。**主进程读文件**，agent 进程只收解析好的结果（同 skillsDir 的纪律） */
   mcp: McpStore,
 ): void {
-  ipcMain.handle(
-    ipcChannels.agentCreate,
-    async (_event, input: CreateAgentInput): Promise<string> => {
-      const provider = await resolveProviderSecrets(providers, input.providerId);
-      const { sessionId, piSessionFile } = await host.createSession(
-        {
-          cwd: input.cwd,
-          modelId: input.modelId,
-          mode: input.mode,
-          piSessionDir,
-          skillsDir,
-          /*
-           * 读不出来不拦建会话。这里与 D-3 不矛盾：那条纪律是「不把失败伪装成空」，
-           * 而这里失败会当场打日志、管理面也会把读错原文显示出来；
-           * 一份写坏的 mcp.json 不该让用户连对话都开不了。
-           */
-          mcpServers: await mcp.read().catch((error: unknown) => {
-            console.error("[main] mcp.json 读不了，这一条会话没有 MCP 工具", error);
-            return {};
-          }),
-          // 续会话：把 pi 自己那份本子还给它（guideline §四）
-          ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
-          provider,
-        },
-        input.resume?.sessionId,
-      );
-
-      if (input.resume) {
-        // 续会话不新建记录：新消息接着写进同一份 jsonl。
-        // 但 pi 那本子的路径可能变了（open 失败退回新建时就会），所以要更新回去。
-        await sessions.setPiSessionFile(sessionId, piSessionFile);
-      } else {
-        // **建成之后才落 meta**：createSession 会等 runtime 回 created，
-        // 失败时抛错——不该在磁盘上留下一条永远打不开的会话。标题等第一条用户消息填。
-        const now = Date.now();
-        await sessions.create({
-          id: sessionId,
-          title: "",
-          titleSource: "derived",
-          cwd: input.cwd,
-          workspaceId: input.workspaceId,
-          piSessionFile,
-          pinned: false,
-          archived: false,
-          recentQueries: [],
-          // 还没跑过一轮 = 没有账本。第一次 agent_settled 才落真值
-          stats: null,
-          providerId: input.providerId,
-          modelId: input.modelId,
-          mode: input.mode,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-      return sessionId;
-    },
-  );
+  /**
+   * 读一份 mcp.json。读不出来不拦开轮：失败当场打日志、管理面会把读错原文显示出来；
+   * 一份写坏的 mcp.json 不该让用户连对话都开不了（与 D-3 不矛盾：那条纪律是
+   * 「不把失败伪装成空」且不披露，这里两者都做到）。
+   */
+  const readMcpServers = (): Promise<Record<string, McpServer>> =>
+    mcp.read().catch((error: unknown) => {
+      console.error("[main] mcp.json 读不了，这一轮没有 MCP 工具", error);
+      return {};
+    });
 
   ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
 
-  ipcMain.handle(ipcChannels.agentSubmit, async (_e, sessionId: string, text: string) => {
-    await host.submit(sessionId, text);
+  /**
+   * 首轮开机的收尾：拿到 pi 本子真路径后，真新会话建 meta（建成之后才落盘——
+   * 开机失败时不在磁盘上留一条永远打不开的会话），旧会话（pi 本子曾经缺席）校准回去。
+   *
+   * **函数体里不得在 `ensureSession` 之前 await 任何东西。**紧跟 `created` 的第一个
+   * progress 事件会把首条用户消息交给 `record`，两者排同一条 meta 写入链：
+   * `created` 的处理是微任务、progress 是下一个端口消息（宏任务），只要本函数
+   * 同步入链就一定排在它前面；中间多一次 await（原本的 `sessions.load`）就把顺序
+   * 让出去了——那正是 2026-09-12「新会话第一句不落盘」的成因。
+   */
+  function settleFirstTurn(input: SubmitAgentInput, piSessionFile: string | null): Promise<void> {
+    if (piSessionFile === null) return Promise.resolve();
+    const now = Date.now();
+    return sessions.ensureSession({
+      id: input.sessionId,
+      title: "",
+      titleSource: "derived",
+      cwd: input.cwd,
+      workspaceId: input.workspaceId,
+      piSessionFile,
+      pinned: false,
+      archived: false,
+      recentQueries: [],
+      // 还没跑过一轮 = 没有账本。第一次 agent_settled 才落真值
+      stats: null,
+      providerId: input.providerId,
+      modelId: input.modelId,
+      mode: input.mode,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  ipcMain.handle(ipcChannels.agentSubmit, async (_e, input: SubmitAgentInput): Promise<void> => {
+    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDir, mcpServers: await readMcpServers() }) });
+    await settleFirstTurn(input, piSessionFile);
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
-    if (await sessions.needsAutoTitle(sessionId)) host.generateTitle(sessionId, text);
+    if (await sessions.needsAutoTitle(input.sessionId)) host.generateTitle(input.sessionId, input.text);
   });
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
-  ipcMain.handle(
-    ipcChannels.agentInterrupt,
-    (_e, sessionId: string, text: string) => host.interrupt(sessionId, text),
-  );
-  ipcMain.handle(
-    ipcChannels.agentCompact,
-    (_e, sessionId: string, instructions?: string) => host.compact(sessionId, instructions),
-  );
+  ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
+    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDir, mcpServers: await readMcpServers() }) });
+    await settleFirstTurn(input, piSessionFile);
+  });
+  ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
+    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, { skillsDir, mcpServers: await readMcpServers() }) });
+    if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
+  });
 
   ipcMain.handle(
     ipcChannels.agentSetMode,
