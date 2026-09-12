@@ -68,6 +68,16 @@ export function qualifiedToolName(server: string, tool: string): string {
  * 工具名会进 LLM 的 tool schema，各家 provider 对它的字符集都有要求
  * （OpenAI 是 `^[a-zA-Z0-9_-]+$`），所以这里从严。
  */
+/**
+ * 拆 `mcp__<server>__<tool>`（4-5）：聊天面的工具卡要按 server 名归组展示，
+ * 拆法只此一份——renderer 不自己写正则。不是这个形状返回 null。
+ */
+export function parseQualifiedToolName(name: string): { server: string; tool: string } | null {
+  const match = /^mcp__([a-zA-Z0-9_-]+)__(.+)$/.exec(name);
+  if (match === null) return null;
+  return { server: match[1] ?? "", tool: match[2] ?? "" };
+}
+
 export function isMcpServerName(name: string): boolean {
   return name.length > 0 && name.length <= 64 && /^[a-zA-Z0-9_-]+$/.test(name);
 }

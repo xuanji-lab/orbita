@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { McpHub } from "./mcp.ts";
-import { parseMcpConfig, qualifiedToolName } from "../shared/mcp.ts";
+import { parseMcpConfig, parseQualifiedToolName, qualifiedToolName } from "../shared/mcp.ts";
 
 const FIXTURE = fileURLToPath(new URL("./mcp-fixture-server.ts", import.meta.url));
 
@@ -231,5 +231,18 @@ describe("parseMcpConfig", () => {
     assert.deepEqual(parseMcpConfig(null), {});
     assert.deepEqual(parseMcpConfig("nope"), {});
     assert.deepEqual(parseMcpConfig({}), {});
+  });
+});
+
+describe("parseQualifiedToolName（4-5）", () => {
+  test("拆出 server 与 tool", () => {
+    assert.deepEqual(parseQualifiedToolName("mcp__demo__echo"), { server: "demo", tool: "echo" });
+    assert.deepEqual(parseQualifiedToolName("mcp__fs_1__read_file"), { server: "fs_1", tool: "read_file" });
+  });
+
+  test("不是 MCP 形状返回 null（内建工具名照常走路）", () => {
+    assert.equal(parseQualifiedToolName("bash"), null);
+    assert.equal(parseQualifiedToolName("mcp__onlyone"), null);
+    assert.equal(parseQualifiedToolName("mcp____tool"), null);
   });
 });
