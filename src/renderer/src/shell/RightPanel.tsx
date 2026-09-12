@@ -17,6 +17,8 @@ export function RightPanelFrame(props: {
   header: React.ReactNode;
   /** 内容切换的 key（换帧触发 120ms fade） */
   contentKey: string;
+  /** 页头右侧、x 左边的槽（添加按钮等） */
+  headerExtra?: React.ReactNode;
   footer?: React.ReactNode;
   /** 面板宽度（4-0 拖宽）。分屏态生效；窄窗覆盖层固定 320 不可拖 */
   width: number;
@@ -129,6 +131,7 @@ export function RightPanelFrame(props: {
       >
         {props.header}
         <span style={{ flex: 1 }} />
+        {props.headerExtra}
         <PanelIconButton title="Close" onClick={props.onClose}>
           <Icon name="x" size={16} />
         </PanelIconButton>

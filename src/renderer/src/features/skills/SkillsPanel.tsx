@@ -10,6 +10,7 @@ import {
 import { api } from "../../api";
 import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
+import { isSkillSlug } from "@shared/skill";
 
 /**
  * Skills 面板（1-4 / 2-1d）：列表视图按集合分组 + 详情视图改归属与三段编辑。
@@ -26,20 +27,42 @@ export function SkillsPanel(props: {
   width: number;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
+  /** 表单默认归属的 workspace（会话当前所在）；null = 默认 Global */
+  defaultWorkspaceId: string | null;
 }) {
   const { skills } = props;
+  /** 当前面板视图：列表 / 详情 / 新建表单（4-1） */
+  const [view, setView] = useState<"list" | "detail" | "create">("list");
   /** 当前详情的 slug；null = 列表。面板内状态，不进 useSkills（侧栏列表已删） */
   const [selected, setSelected] = useState<string | null>(null);
   const meta = selected === null ? null : (skills.skills.find((s) => s.slug === selected) ?? null);
 
   // 列表刷新后选中的那条没了（被清理）→ 回列表
   useEffect(() => {
-    if (selected !== null && meta === null) setSelected(null);
+    if (selected !== null && meta === null) setView("list");
   }, [selected, meta]);
 
   const workspaceName = (id: string): string =>
     skills.workspaces.find((w) => w.id === id)?.name ?? id;
 
+  if (view === "create") {
+    return (
+      <NewSkillForm
+        narrow={props.narrow}
+        skills={skills}
+        defaultWorkspaceId={props.defaultWorkspaceId}
+        onCancel={() => setView("list")}
+        onCreated={(slug) => {
+          setSelected(slug);
+          setView("detail");
+        }}
+        onClose={props.onClose}
+        width={props.width}
+        onWidthChange={props.onWidthChange}
+        onWidthCommit={props.onWidthCommit}
+      />
+    );
+  }
   if (meta !== null) {
     return (
       <SkillDetail
@@ -58,12 +81,16 @@ export function SkillsPanel(props: {
   return (
     <SkillList
       narrow={props.narrow}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
+      width={props.width}
+      onWidthChange={props.onWidthChange}
+      onWidthCommit={props.onWidthCommit}
       skills={skills}
       workspaceName={workspaceName}
-      onSelect={setSelected}
+      onSelect={(slug) => {
+        setSelected(slug);
+        setView("detail");
+      }}
+      onNewSkill={() => setView("create")}
       onClose={props.onClose}
     />
   );
@@ -94,6 +121,7 @@ function SkillList(props: {
   skills: SkillsState;
   workspaceName: (id: string) => string;
   onSelect: (slug: string) => void;
+  onNewSkill: () => void;
   onClose: () => void;
   width: number;
   onWidthChange: (width: number) => void;
@@ -102,6 +130,8 @@ function SkillList(props: {
   const { skills } = props;
   const load = skills.load;
   const error = load.kind === "failed" ? load.message : null;
+  /** + 的两项菜单（4-1）：面板内展开不弹窗；再点 + 收起 */
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const header = (
     <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
@@ -120,6 +150,7 @@ function SkillList(props: {
         header={header}
         contentKey="list"
         onClose={props.onClose}
+        headerExtra={<AddMenu skills={skills} onNewSkill={props.onNewSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
         <PanelLine>Loading…</PanelLine>
@@ -136,6 +167,7 @@ function SkillList(props: {
         header={header}
         contentKey="list"
         onClose={props.onClose}
+        headerExtra={<AddMenu skills={skills} onNewSkill={props.onNewSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
         {error !== null && <PanelLine danger>Couldn’t read skills. {error}</PanelLine>}
@@ -226,12 +258,13 @@ function SkillList(props: {
   return (
     <RightPanelFrame
       narrow={props.narrow}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
+      width={props.width}
+      onWidthChange={props.onWidthChange}
+      onWidthCommit={props.onWidthCommit}
       header={header}
       contentKey="list"
       onClose={props.onClose}
+      headerExtra={<AddMenu skills={skills} onNewSkill={props.onNewSkill} />}
       footer={<FooterReveal skills={skills} />}
     >
       <div style={{ display: "grid", alignContent: "start" }}>
@@ -405,8 +438,15 @@ function SkillDetail(props: {
       .finally(() => setSaving(false));
   };
 
-  const badge =
-    meta.missing ? "Missing" : meta.global ? "Global" : meta.workspaces.length > 0 ? "Workspace" : "Disabled";
+  const badge = meta.missing
+    ? "Missing"
+    : meta.linkedPath !== null
+      ? "Linked"
+      : meta.global
+        ? "Global"
+        : meta.workspaces.length > 0
+          ? "Workspace"
+          : "Disabled";
   const disabled = meta.missing;
   const disabledTitle =
     "The file is gone — clean up the references or restore the folder.";
@@ -468,7 +508,7 @@ function SkillDetail(props: {
         {meta.missing && (
           <PanelLine danger>The folder for this skill is missing on disk.</PanelLine>
         )}
-        <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
           <code
             style={{
               fontSize: "var(--font-size-caption)",
@@ -492,6 +532,20 @@ function SkillDetail(props: {
           >
             {badge}
           </span>
+          {/* 导入的 skill：标 Linked 并显示真身路径（4-1）；「在访达里显示」揭示的也是真身 */}
+          {meta.linkedPath !== null && (
+            <span
+              style={{
+                fontSize: "var(--font-size-micro)",
+                color: "var(--color-text-secondary)",
+                fontFamily: "var(--font-family-mono)",
+                overflowWrap: "anywhere",
+              }}
+              title={meta.linkedPath}
+            >
+              → {meta.linkedPath}
+            </span>
+          )}
         </span>
 
         {!meta.missing && (
@@ -610,6 +664,7 @@ function PanelInput(props: {
   value: string;
   disabled?: boolean;
   title?: string;
+  placeholder?: string;
   onChange: (value: string) => void;
   onBlur: () => void;
 }) {
@@ -618,6 +673,7 @@ function PanelInput(props: {
       value={props.value}
       disabled={props.disabled}
       title={props.title}
+      placeholder={props.placeholder}
       onChange={(e) => props.onChange(e.target.value)}
       onBlur={props.onBlur}
       style={{ ...inputStyle, cursor: props.disabled ? "not-allowed" : undefined }}
@@ -637,3 +693,214 @@ const inputStyle: React.CSSProperties = {
   width: "100%",
   boxSizing: "border-box",
 };
+
+
+/** + 菜单（4-1）：New skill / Link existing folder…。列表、空态、加载态三处共用。 */
+function AddMenu(props: { skills: SkillsState; onNewSkill: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span style={{ position: "relative", display: "inline-flex" }}>
+      <PanelIconButton title="Add a skill" onClick={() => setOpen((v) => !v)}>
+        <Icon name="plus" size={16} />
+      </PanelIconButton>
+      {open && (
+        <span
+          style={{
+            position: "absolute",
+            top: 30,
+            right: 0,
+            display: "grid",
+            gap: 2,
+            padding: 4,
+            background: "var(--color-bg-panel)",
+            border: "1px solid var(--color-border-subtle)",
+            borderRadius: "var(--radius-md)",
+            boxShadow: "var(--shadow-popover)",
+            zIndex: 30,
+            minWidth: 200,
+          }}
+        >
+          <MenuItemRow
+            onClick={() => {
+              setOpen(false);
+              props.onNewSkill();
+            }}
+          >
+            <Icon name="plus" size={14} /> New skill
+          </MenuItemRow>
+          <MenuItemRow
+            onClick={() => {
+              setOpen(false);
+              props.skills.importFolder(null);
+            }}
+          >
+            <Icon name="folder-plus" size={14} /> Link existing folder…
+          </MenuItemRow>
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** 菜单行（+ 展开的两项）：与面板按钮同语汇，hover 中性抬升。 */
+function MenuItemRow(props: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        height: "var(--control-height-sm)",
+        padding: "0 var(--space-3)",
+        border: 0,
+        background: "transparent",
+        font: "inherit",
+        fontSize: "var(--font-size-control)",
+        color: "var(--color-text-primary)",
+        textAlign: "left",
+        cursor: "pointer",
+        borderRadius: "var(--radius-sm)",
+        whiteSpace: "nowrap",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "var(--color-bg-hover)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+      }}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+/**
+ * 新建表单（4-1）：slug 校验（isSkillSlug + 不重名）、name 默认跟 slug、
+ * 初始归属默认当前 workspace（没有就 Global）。字段竖排，错误贴字段下方；
+ * footer 是 [Cancel] [Create]，secondary——本面无主操作，不给 accent。
+ */
+function NewSkillForm(props: {
+  narrow: boolean;
+  skills: SkillsState;
+  defaultWorkspaceId: string | null;
+  onCancel: () => void;
+  onCreated: (slug: string) => void;
+  onClose: () => void;
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
+}) {
+  const [slug, setSlug] = useState("");
+  const [name, setName] = useState("");
+  const [scope, setScope] = useState<string>(
+    props.defaultWorkspaceId ?? "global",
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const slugError =
+    slug === ""
+      ? null
+      : isSkillSlug(slug)
+        ? props.skills.skills.some((s) => s.slug === slug)
+          ? "A skill with this folder name already exists."
+          : null
+        : "Use lowercase letters, digits, dots, dashes or underscores; no spaces.";
+
+  const submit = (): void => {
+    if (slug === "" || slugError !== null || busy) return;
+    const target =
+      scope === "global"
+        ? ({ kind: "global" } as const)
+        : scope === "none"
+          ? null
+          : ({ kind: "workspace", workspaceId: scope } as const);
+    setBusy(true);
+    setError(null);
+    props.skills
+      .create(slug, name === "" ? slug : name, target)
+      .then(() => props.onCreated(slug))
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <RightPanelFrame
+      narrow={props.narrow}
+      width={props.width}
+      onWidthChange={props.onWidthChange}
+      onWidthCommit={props.onWidthCommit}
+      contentKey="create"
+      onClose={props.onClose}
+      header={
+        <>
+          <PanelIconButton title="Back to list" onClick={props.onCancel}>
+            <Icon name="chevron-left" size={16} />
+          </PanelIconButton>
+          <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
+            New skill
+          </strong>
+        </>
+      }
+      footer={
+        <>
+          <PanelButton onClick={props.onCancel}>Cancel</PanelButton>
+          <span style={{ flex: 1 }} />
+          <PanelButton onClick={submit} disabled={slug === "" || slugError !== null || busy}>
+            {busy ? "Creating…" : "Create"}
+          </PanelButton>
+        </>
+      }
+    >
+      <div
+        style={{
+          padding: "var(--space-5) var(--space-4)",
+          display: "grid",
+          gap: "var(--space-4)",
+          alignContent: "start",
+        }}
+      >
+        <Field label="Folder name" hint="The slug. It becomes the folder name and never changes.">
+          <PanelInput value={slug} onChange={(v) => setSlug(v.trim())} onBlur={() => {}} />
+          {slugError !== null && <FieldError>{slugError}</FieldError>}
+        </Field>
+        <Field label="Name" hint="How the agent refers to this skill. Defaults to the folder name.">
+          <PanelInput
+            value={name}
+            onChange={(v) => setName(v)}
+            onBlur={() => {}}
+            placeholder={slug === "" ? undefined : slug}
+          />
+        </Field>
+        <Field label="Works in" hint="Where this skill applies. You can change it later in the detail view.">
+          <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            <Chip active={scope === "global"} onClick={() => setScope("global")}>
+              Global
+            </Chip>
+            {props.skills.workspaces.map((ws) => (
+              <Chip key={ws.id} active={scope === ws.id} onClick={() => setScope(ws.id)}>
+                {ws.name}
+              </Chip>
+            ))}
+            <Chip active={scope === "none"} onClick={() => setScope("none")}>
+              Not linked yet
+            </Chip>
+          </span>
+        </Field>
+        {error !== null && <FieldError>Couldn’t create. {error}</FieldError>}
+      </div>
+    </RightPanelFrame>
+  );
+}
+
+function FieldError(props: { children: React.ReactNode }) {
+  return (
+    <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+      {props.children}
+    </span>
+  );
+}

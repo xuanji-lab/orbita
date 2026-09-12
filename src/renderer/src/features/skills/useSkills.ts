@@ -30,6 +30,8 @@ export interface SkillsState {
   unlink: (slug: string, scope: SkillScope) => void;
   /** 清一条 skill 的全部断链引用（missing 的收尾） */
   clean: (slug: string) => void;
+  create: (slug: string, name: string, scope: SkillScope | null) => Promise<void>;
+  importFolder: (scope: SkillScope | null) => Promise<string | null>;
   save: (slug: string, patch: SkillPatch) => Promise<void>;
   reveal: (slug: string | null) => void;
 }
@@ -113,6 +115,29 @@ export function useSkills(active: boolean): SkillsState {
     [refresh],
   );
 
+  /** 应用内新建（4-1）：返回 promise 给表单管 busy；成功后由调用方回读刷新 */
+  const create = useCallback(
+    (slug: string, name: string, scope: SkillScope | null) =>
+      api.skill.create(slug, name, scope).then(refresh),
+    [refresh],
+  );
+
+  /** 导入已有目录（4-1）：主进程开目录选择框；返回 slug（取消为 null） */
+  const importFolder = useCallback(
+    (scope: SkillScope | null) =>
+      api.skill
+        .import(scope)
+        .then((slug) => {
+          if (slug !== null) refresh();
+          return slug;
+        })
+        .catch((cause: unknown) => {
+          setLoad(failed(cause));
+          return null;
+        }),
+    [refresh],
+  );
+
   const save = useCallback(
     async (slug: string, patch: SkillPatch) => {
       await api.skill.write(slug, patch);
@@ -157,6 +182,8 @@ export function useSkills(active: boolean): SkillsState {
     link,
     unlink,
     clean,
+    create,
+    importFolder,
     save,
     reveal,
   };

@@ -50,7 +50,7 @@ describe("SkillStore.list", () => {
   test("中心存储里的都列出来，没链任何集合的也在（归属空）", async () => {
     await put("alpha", SKILL("alpha", "一条"));
     assert.deepEqual(await store.list(), [
-      { slug: "alpha", name: "alpha", description: "一条", global: false, workspaces: [], missing: false },
+      { slug: "alpha", name: "alpha", description: "一条", global: false, workspaces: [], missing: false, linkedPath: null },
     ]);
   });
 
@@ -74,7 +74,7 @@ describe("SkillStore.list", () => {
   test("没有 frontmatter 时 name 退回目录名，不丢掉这条", async () => {
     await put("headless", "只有正文，没有头");
     assert.deepEqual(await store.list(), [
-      { slug: "headless", name: "headless", description: "", global: false, workspaces: [], missing: false },
+      { slug: "headless", name: "headless", description: "", global: false, workspaces: [], missing: false, linkedPath: null },
     ]);
   });
 
@@ -207,6 +207,67 @@ describe("断链（missing）与 clean", () => {
   test("missing 的 skill 不能 link（要先修文件夹或 clean）", async () => {
     await putBrokenLink("global", "gone");
     await assert.rejects(store.link("gone", { kind: "global" }), /不存在/);
+  });
+});
+
+describe("create / importFrom（4-1 应用内添加）", () => {
+  test("新建：骨架 SKILL.md + 按归属建链；不重名不覆盖", async () => {
+    await store.create("fresh", "Fresh Skill", { kind: "workspace", workspaceId: "ws-1" });
+    const list = await store.list();
+    assert.deepEqual(meta(list, "fresh").workspaces, ["ws-1"]);
+    assert.match(await readFile(join(dir, "skills", "fresh", "SKILL.md"), "utf8"), /name: Fresh Skill/);
+    await assert.rejects(store.create("fresh", "叉子", null), /已存在同名/);
+  });
+
+  test("新建 scope=null：只落存储不建链（Disabled 组）", async () => {
+    await store.create("shy", "Shy", null);
+    const shy = meta(await store.list(), "shy");
+    assert.equal(shy.global, false);
+    assert.deepEqual(shy.workspaces, []);
+  });
+
+  test("导入：store 条目是指向真身的 symlink，linkedPath 带出真身；两跳可读", async () => {
+    const real = join(dir, "real-dir");
+    await mkdir(real, { recursive: true });
+    await writeFile(join(real, "SKILL.md"), SKILL("Imported", "真身里的"), "utf8");
+    const slug = await store.importFrom(real, { kind: "global" });
+    assert.equal(slug, "real-dir");
+    const imported = meta(await store.list(), "real-dir");
+    assert.equal(imported.global, true);
+    assert.equal(imported.linkedPath, real);
+    assert.equal((await store.read("real-dir"))?.description, "真身里的");
+    // skill-link → store 条目 → 真身，两跳都通
+    assert.equal(
+      typeof (await readFile(join(dir, "skill-links", "global", "real-dir", "SKILL.md"), "utf8")),
+      "string",
+    );
+  });
+
+  test("导入的目录里没有 SKILL.md 就报错，不落盘", async () => {
+    const real = join(dir, "no-skill-md");
+    await mkdir(real, { recursive: true });
+    await writeFile(join(real, "别的.txt"), "x", "utf8");
+    await assert.rejects(store.importFrom(real, null), /没有 SKILL\.md/);
+    assert.equal((await store.list()).some((s) => s.slug === "no-skill-md"), false);
+  });
+
+  test("目录名不合法（当不了 slug）报错，让用户改名后再选", async () => {
+    const real = join(dir, "Bad Name!");
+    await mkdir(real, { recursive: true });
+    await writeFile(join(real, "SKILL.md"), SKILL("x", "y"), "utf8");
+    await assert.rejects(store.importFrom(real, null), /非法/);
+  });
+
+  test("导入的两跳断链：真身被删后，scanStore 跳过 + skill-link 还在 → 落成 missing（回归钉）", async () => {
+    const real = join(dir, "vanishing");
+    await mkdir(real, { recursive: true });
+    await writeFile(join(real, "SKILL.md"), SKILL("Vanishing", "会没的"), "utf8");
+    await store.importFrom(real, { kind: "global" });
+    // 真身被用户在访达里删掉
+    await rm(real, { recursive: true, force: true });
+    const gone = meta(await store.list(), "vanishing");
+    assert.equal(gone.missing, true);
+    assert.equal(gone.global, true);
   });
 });
 

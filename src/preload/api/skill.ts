@@ -17,6 +17,12 @@ export const skillApi = {
     ipcRenderer.invoke(ipcChannels.skillUnlink, slug, scope),
   /** 清掉一条 skill 的全部断链引用（missing 的收尾） */
   clean: (slug: string): Promise<void> => ipcRenderer.invoke(ipcChannels.skillClean, slug),
+  /** 应用内新建：主进程写骨架 + 建链；重名由主进程抛错 */
+  create: (slug: string, name: string, scope: SkillScope | null): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.skillCreate, slug, name, scope),
+  /** 导入已有目录：主进程开目录选择框；取消返回 null，成功返回 slug */
+  import: (scope: SkillScope | null): Promise<string | null> =>
+    ipcRenderer.invoke(ipcChannels.skillImport, scope),
   /** 读详情；不存在返回 null */
   read: (slug: string): Promise<SkillContent | null> =>
     ipcRenderer.invoke(ipcChannels.skillRead, slug),

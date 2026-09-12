@@ -121,6 +121,7 @@ export function App() {
           width={panelWidth}
           onWidthChange={setPanelWidth}
           onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+          defaultWorkspaceId={session.workspaceId}
         />
       ) : rightPanel === "mcp" ? (
         <McpPanel

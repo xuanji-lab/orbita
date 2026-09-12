@@ -16,9 +16,10 @@
  * symlink 目标一律绝对路径：Windows 目录链接要走 junction（要特权才能建真
  * symlink），而 junction 只认绝对路径——统一用绝对目标，一条代码路径两平台通吃。
  */
-import { lstat, mkdir, readFile, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { lstat, mkdir, readFile, readdir, readlink, rm, symlink, unlink } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { isNotFound } from "../fs-errors.ts";
+import { writeTextAtomic } from "../atomic-write.ts";
 import {
   isSkillSlug,
   type SkillContent,
@@ -91,6 +92,7 @@ export class SkillStore {
           global: sets.has(GLOBAL_SET),
           workspaces: [...sets].filter((s) => s !== GLOBAL_SET).sort(),
           missing: true,
+          linkedPath: null,
         });
         continue;
       }
@@ -168,6 +170,50 @@ export class SkillStore {
   }
 
   /**
+   * 应用内新建（4-1）：写骨架 SKILL.md + 按归属建链。同名条目已存在就拒绝——
+   * 不覆盖（吃掉一份用户文件比让用户改名严重）。scope 为 null = 先不启用
+   * （只落存储，不建链，列表里落在 Disabled 组）。
+   */
+  async create(slug: string, name: string, scope: SkillScope | null): Promise<void> {
+    assertSlug(slug);
+    if (scope !== null && scope.kind === "workspace") assertSetId(scope.workspaceId);
+    const storeDir = join(this.storeDir, slug);
+    const file = join(storeDir, SKILL_FILE);
+    if (await exists(file)) {
+      throw new Error(`已存在同名 skill：${slug}`);
+    }
+    await mkdir(storeDir, { recursive: true });
+    // 骨架：name 必有；description 空；正文一行占位。SKILL.md 是用户内容，原子写
+    await writeTextAtomic(
+      file,
+      `${rebuildSkillMd("", { name, description: "" })}\n(Write the instructions here.)\n`,
+    );
+    if (scope === null) return;
+    await this.link(slug, scope);
+  }
+
+  /**
+   * 导入用户已有目录（4-1）：store 条目本身做成指向真身的 symlink（两跳：
+   * skill-link → store 条目 → 真身；pi 跟链已核实）。目录里必须有 SKILL.md，
+   * slug 取目录名（不合法报错，让用户改名后再选）。返回 slug。
+   */
+  async importFrom(sourceDir: string, scope: SkillScope | null): Promise<string> {
+    const slug = assertSlug(basename(sourceDir));
+    if (!(await exists(join(sourceDir, SKILL_FILE)))) {
+      throw new Error(`选的目录里没有 SKILL.md：${sourceDir}`);
+    }
+    const entry = join(this.storeDir, slug);
+    const existing = await lstat(entry).catch(() => null);
+    if (existing !== null) {
+      throw new Error(`已存在同名 skill：${slug}`);
+    }
+    await mkdir(this.storeDir, { recursive: true });
+    await symlink(sourceDir, entry, process.platform === "win32" ? "junction" : undefined);
+    if (scope !== null) await this.link(slug, scope);
+    return slug;
+  }
+
+  /**
    * 改详情。**只替换指定字段**，frontmatter 里其它键原样保留——
    * 用户手写的 `disable-model-invocation`、`allowed-tools` 之类不该因为我们
    * 不认识就被吃掉。
@@ -176,7 +222,8 @@ export class SkillStore {
     const file = await this.locate(assertSlug(slug));
     if (file === null) throw new Error(`skill 不存在：${slug}`);
     const raw = await readFile(file, "utf8");
-    await writeFile(file, rebuildSkillMd(raw, patch), "utf8");
+    // 核验发现（4dda167 待补）：SKILL.md 是用户内容，写一半崩溃会毁文件——改原子写
+    await writeTextAtomic(file, rebuildSkillMd(raw, patch));
   }
 
   /** 这条 skill 的目录在哪（给「在文件管理器中显示」用）；不存在返回 null。 */
@@ -251,8 +298,14 @@ export class SkillStore {
     const metas: SkillMeta[] = [];
     for (const slug of entries) {
       if (!isSkillSlug(slug)) continue;
-      const raw = await readFile(join(this.storeDir, slug, SKILL_FILE), "utf8").catch(() => null);
+      const entry = join(this.storeDir, slug);
+      const raw = await readFile(join(entry, SKILL_FILE), "utf8").catch(() => null);
       if (raw === null) continue;
+      // 导入的条目本身是指向真身的 symlink（两跳）——记下真身路径给详情标 Linked
+      const linked = await lstat(entry).then(
+        (info) => (info.isSymbolicLink() ? readlink(entry) : null),
+        () => null,
+      );
       const parsed = parseSkillMd(raw);
       metas.push({
         slug,
@@ -261,6 +314,7 @@ export class SkillStore {
         global: false,
         workspaces: [],
         missing: false,
+        linkedPath: linked,
       });
     }
     return metas;
