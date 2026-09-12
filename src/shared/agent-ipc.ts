@@ -60,10 +60,14 @@ export const ipcChannels = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
-  /** 两个目录一起扫：`skills/` 算启用，`skills-inactive/` 算停用 */
+  /** 中心存储里的全部 skill（含没链进任何集合的） */
   skillList: "skill:list",
-  /** 启停 = 在两个目录间 rename。不写开关位，磁盘布局就是状态 */
-  skillToggle: "skill:toggle",
+  /** 把 skill 链进一个集合（global 或某个 workspace）；互斥规则见 SkillScope */
+  skillLink: "skill:link",
+  /** 把 skill 从一个集合里移出（只删链接，永不碰中心存储） */
+  skillUnlink: "skill:unlink",
+  /** 清掉一条 skill 的全部断链引用（missing 后的收尾动作） */
+  skillClean: "skill:clean",
   /** 读详情（已拆成 name / description / 正文）；不存在返回 null */
   skillRead: "skill:read",
   /** 改详情。缺席的字段不动，frontmatter 其它字段原样保留 */
@@ -206,15 +210,13 @@ export type AgentCommand =
        */
       piSessionDir: string;
       /**
-       * 启用中的 skills 目录。同样**由主进程给**（同 `piSessionDir`）。
+       * skill 的链接集合目录（2-1 起是数组：global 恒在，当前工作区再加一条）。
+       * **路径由主进程给**（同 `piSessionDir`）：哪个集合对该会话生效是主进程的策略，
+       * agent 进程只收数据。目录里是指向中心存储的 symlink，pi 的加载器跟符号链接。
        *
-       * **启停就是目录互移**：在 `skills/` 里就生效，移到旁边的 `skills-inactive/` 就不生效。
-       * 不引入开关字段、不维护启用清单——**磁盘布局就是全部状态**，不会出现
-       * 「清单说启用了但文件早删了」这种两份真相对不上的情况。
-       *
-       * 目录不存在不是错，当作一个 skill 都没装（pi 内部先 existsSync 拦一道）。
+       * 目录不存在不是错，当作一个 skill 都没链（pi 内部先 existsSync 拦一道）。
        */
-      skillsDir: string;
+      skillsDirs: string[];
       /**
        * MCP server 配置。**传解析好的而不是文件路径**：读文件与讲错误是主进程的事
        * （跟 skillsDir 同一条纪律），而且 env 里往往有密钥，路径传过去等于让
@@ -245,8 +247,8 @@ export type AgentCommand =
       modelId: string;
       mode: PermissionMode;
       piSessionDir: string;
-      /** 开轮环境，语义同 submit（skills 目录 + MCP 配置）——无状态化后每轮开机都要带全 */
-      skillsDir: string;
+      /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
+      skillsDirs: string[];
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
     }
@@ -264,8 +266,8 @@ export type AgentCommand =
       modelId: string;
       mode: PermissionMode;
       piSessionDir: string;
-      /** 开轮环境，语义同 submit（skills 目录 + MCP 配置）——无状态化后每轮开机都要带全 */
-      skillsDir: string;
+      /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
+      skillsDirs: string[];
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
     }
