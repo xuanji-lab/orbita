@@ -10,6 +10,7 @@ import { SettingsView, type SettingsTab } from "./features/settings/SettingsView
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRail";
+import { RightPanelClosingContext } from "./shell/RightPanel";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
@@ -118,6 +119,25 @@ export function App() {
     if (next !== null) setDrawerOpen(false);
   }, []);
 
+  /**
+   * 收起动画期间仍渲染原面板：rightPanel 置空后先保持挂载（RightPanelFrame 的
+   * width 过渡回 0，与抽屉收起同款 0.2s ease），动画走完再真正卸载。
+   * 期间再点同一图标（rightPanel 回到非空）则取消卸载、面板重新展开。
+   */
+  const [mountedPanel, setMountedPanel] = useState<RightPanelKind | null>(rightPanel);
+  const panelClosing = rightPanel === null && mountedPanel !== null;
+  useEffect(() => {
+    if (rightPanel !== null) {
+      setMountedPanel(rightPanel);
+      return;
+    }
+    if (mountedPanel === null) return;
+    const timer = setTimeout(() => setMountedPanel(null), 220);
+    return () => clearTimeout(timer);
+    // mountedPanel 故意不进依赖：收起窗口里只需为这次置空排一次定时器
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rightPanel]);
+
   // Ctrl+Alt+D 开关抽屉（与右图标条按钮、动作同源）
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -141,7 +161,9 @@ export function App() {
     else session.newTask();
     session.setDraft("Describe the workflow you want to turn into a skill.");
   }, [session]);
-  const skills = useSkills(rightPanel === "skills");
+  // 用 mountedPanel 而不是 rightPanel：收起动画期间（rightPanel 已空）数据订阅保持，
+  // 面板收起时不会闪空态
+  const skills = useSkills(mountedPanel === "skills");
   /** 会话动作只在有会话时出现——它承载的是「对这个会话做点什么」；
    * 顶部入口常驻，不随会话消失（首页也能开 Skills / MCP）。 */
   const sessionActions =
@@ -204,27 +226,57 @@ export function App() {
               }
             />
           )}
-          {rightPanel === "skills" ? (
-            <SkillsPanel
-              narrow={narrow}
-              skills={skills}
-              onClose={() => setRightPanel(null)}
-              width={panelWidth}
-              onWidthChange={setPanelWidth}
-              onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-              defaultWorkspaceId={session.workspaceId}
-              onCreateSkill={createSkillDraft}
-            />
-          ) : rightPanel === "mcp" ? (
-            <McpPanel
-              narrow={narrow}
-              skills={skills}
-              onClose={() => setRightPanel(null)}
-              width={panelWidth}
-              onWidthChange={setPanelWidth}
-              onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-            />
-          ) : null}
+          {rightPanel !== null && (
+            <RightPanelClosingContext.Provider value={false}>
+              {rightPanel === "skills" ? (
+                <SkillsPanel
+                  narrow={narrow}
+                  skills={skills}
+                  onClose={() => setRightPanel(null)}
+                  width={panelWidth}
+                  onWidthChange={setPanelWidth}
+                  onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+                  defaultWorkspaceId={session.workspaceId}
+                  onCreateSkill={createSkillDraft}
+                />
+              ) : (
+                <McpPanel
+                  narrow={narrow}
+                  skills={skills}
+                  onClose={() => setRightPanel(null)}
+                  width={panelWidth}
+                  onWidthChange={setPanelWidth}
+                  onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+                />
+              )}
+            </RightPanelClosingContext.Provider>
+          )}
+          {panelClosing && (
+            /* 收起动画窗口：面板保持挂载，宽度过渡回 0 后由上面的 effect 卸载 */
+            <RightPanelClosingContext.Provider value={true}>
+              {mountedPanel === "skills" ? (
+                <SkillsPanel
+                  narrow={narrow}
+                  skills={skills}
+                  onClose={() => setRightPanel(null)}
+                  width={panelWidth}
+                  onWidthChange={setPanelWidth}
+                  onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+                  defaultWorkspaceId={session.workspaceId}
+                  onCreateSkill={createSkillDraft}
+                />
+              ) : (
+                <McpPanel
+                  narrow={narrow}
+                  skills={skills}
+                  onClose={() => setRightPanel(null)}
+                  width={panelWidth}
+                  onWidthChange={setPanelWidth}
+                  onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+                />
+              )}
+            </RightPanelClosingContext.Provider>
+          )}
         </main>
 
         <RightRail

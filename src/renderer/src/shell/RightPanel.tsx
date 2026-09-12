@@ -1,6 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Icon } from "../shell/Icon";
 import { RIGHT_PANEL_WIDTH_MAX, RIGHT_PANEL_WIDTH_MIN } from "@shared/settings";
+
+/**
+ * 折叠中（closing）由调用方在「目标面板已置空、但还没卸载」的收起动画窗口里置真：
+ * 面板宽度过渡回 0（与抽屉收起同款），动画走完调用方再卸载。面板内部零感知。
+ */
+export const RightPanelClosingContext = createContext(false);
 
 /**
  * 右侧分屏面板的框架（规格 §3）：页头（标题区 + x）、内容区（120ms 淡入，
@@ -8,9 +14,10 @@ import { RIGHT_PANEL_WIDTH_MAX, RIGHT_PANEL_WIDTH_MIN } from "@shared/settings";
  * 共用这一副骨架，各自把 header / 内容 / footer 塞进来。
  *
  * 两种容器形态：宽窗是 **pane 内的一列**，左缘一条竖线与主会话区分界（2026-09-12
- * 裁决：与辅助对话抽屉同款，不要间隔）；窄窗（<960px）转右侧锚定覆盖层，
- * 那时才需要自己的面——玻璃底、圆角，阴影升 --shadow-popover，无遮罩不是 modal。
- * 进入 220ms --duration-enter --ease-out-quint 滑入。关闭三出口：再点图标 / x / Esc。
+ * 裁决：与辅助对话抽屉同款，不要间隔），展开动画也同款——width 0→目标 0.2s ease；
+ * 窄窗（<960px）转右侧锚定覆盖层，那时才需要自己的面——玻璃底、圆角，
+ * 阴影升 --shadow-popover，无遮罩不是 modal，进入保留滑入 + 淡入（right-panel-in）。
+ * 关闭三出口：再点图标 / x / Esc。
  */
 export function RightPanelFrame(props: {
   narrow: boolean;
@@ -31,7 +38,18 @@ export function RightPanelFrame(props: {
   children: React.ReactNode;
 }) {
   const { narrow } = props;
+  const closing = useContext(RightPanelClosingContext);
   const asideRef = useRef<HTMLElement | null>(null);
+  /** 分栏态的展开/收起动画与抽屉同款（width 0↔目标，0.2s ease）：挂载下一拍才到位，过渡才会发生 */
+  const [entered, setEntered] = useState(false);
+  /** 拖宽中禁掉 width 过渡——实时跟手（同 .drawer.dragging 的纪律） */
+  const [resizing, setResizing] = useState(false);
+
+  useEffect(() => {
+    if (narrow) return;
+    const id = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(id);
+  }, [narrow]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -52,6 +70,7 @@ export function RightPanelFrame(props: {
     const panel = asideRef.current;
     if (panel === null) return;
     event.preventDefault();
+    setResizing(true);
     const startX = event.clientX;
     const startWidth = panel.getBoundingClientRect().width;
     // 面板是 pane 的子元素（分栏形态），closest 拿它算 chat ≥480 的底线
@@ -73,6 +92,7 @@ export function RightPanelFrame(props: {
       window.removeEventListener("pointermove", move);
       document.body.style.userSelect = previousSelect;
       document.body.style.cursor = previousCursor;
+      setResizing(false);
       props.onWidthCommit(clamp(startWidth - (ev.clientX - startX)));
     };
     window.addEventListener("pointermove", move);
@@ -84,11 +104,14 @@ export function RightPanelFrame(props: {
       ref={asideRef}
       style={{
         position: narrow ? "absolute" : "relative",
-        flex: narrow ? undefined : `0 0 ${props.width}px`,
-        width: narrow ? 320 : undefined,
-        display: "grid",
-        gridTemplateRows: "auto minmax(0,1fr) auto",
-        animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
+        // 分栏态：展开/收起动画与辅助对话抽屉同款——width 0↔目标 0.2s ease，拖宽中禁过渡
+        width: narrow ? 320 : entered && !closing ? props.width : 0,
+        flex: narrow ? undefined : "0 0 auto",
+        overflow: "hidden",
+        transition:
+          narrow || resizing
+            ? undefined
+            : "width 0.2s ease, border-left-width 0.2s ease",
         // 窄窗覆盖层的定位基准是 .layer（pane 无 position）——右侧让过 rail 一条
         ...(narrow
           ? {
@@ -100,13 +123,25 @@ export function RightPanelFrame(props: {
               borderRadius: "var(--radius-xl)",
               boxShadow: "var(--shadow-popover)",
               zIndex: 20,
+              animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
             }
           : {
-              // 与主会话区的分界：一条竖线，同卡无间隔（与抽屉一致）
-              borderLeft: "1px solid var(--color-border-default)",
+              borderLeft: `${entered && !closing ? 1 : 0}px solid var(--color-border-default)`,
             }),
       }}
     >
+      {/*
+        内容固定宽，外层 width 动画时它只被 overflow hidden 逐渐「拉开」——
+        与抽屉的 drawer-inner 同一个道理，动画期间内容不 reflow。
+      */}
+      <div
+        style={{
+          width: narrow ? 320 : props.width,
+          height: "100%",
+          display: "grid",
+          gridTemplateRows: "auto minmax(0,1fr) auto",
+        }}
+      >
       {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320 */}
       {!narrow && (
         <span
@@ -166,6 +201,7 @@ export function RightPanelFrame(props: {
           {props.footer}
         </footer>
       )}
+      </div>
     </aside>
   );
 }
