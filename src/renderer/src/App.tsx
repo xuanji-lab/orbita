@@ -10,7 +10,7 @@ import { SettingsView, type SettingsTab } from "./features/settings/SettingsView
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRail";
-import { RightPanelClosingContext } from "./shell/RightPanel";
+import { RightPanelClosingContext, RightPanelEnteredContext } from "./shell/RightPanel";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
@@ -114,10 +114,24 @@ export function App() {
     setDrawerOpen(!drawerOpen);
   }, [drawerOpen]);
 
-  const handlePanel = useCallback((next: RightPanelKind | null) => {
-    setRightPanel(next);
-    if (next !== null) setDrawerOpen(false);
-  }, []);
+  /**
+   * 这次面板挂载要不要播展开动画：只有「从收起状态展开」才播（2026-09-12 裁决）；
+   * 面板位已展开（面板间切换）时新面板直接就位，不重新走一遍折叠展开。
+   */
+  const [panelAnimated, setPanelAnimated] = useState(true);
+
+  const handlePanel = useCallback(
+    (next: RightPanelKind | null) => {
+      if (next !== null) {
+        setPanelAnimated(rightPanel === null);
+        setRightPanel(next);
+        setDrawerOpen(false);
+      } else {
+        setRightPanel(null);
+      }
+    },
+    [rightPanel],
+  );
 
   /**
    * 收起动画期间仍渲染原面板：rightPanel 置空后先保持挂载（RightPanelFrame 的
@@ -227,29 +241,33 @@ export function App() {
             />
           )}
           {rightPanel !== null && (
-            <RightPanelClosingContext.Provider value={false}>
-              {rightPanel === "skills" ? (
-                <SkillsPanel
-                  narrow={narrow}
-                  skills={skills}
-                  onClose={() => setRightPanel(null)}
-                  width={panelWidth}
-                  onWidthChange={setPanelWidth}
-                  onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-                  defaultWorkspaceId={session.workspaceId}
-                  onCreateSkill={createSkillDraft}
-                />
-              ) : (
-                <McpPanel
-                  narrow={narrow}
-                  skills={skills}
-                  onClose={() => setRightPanel(null)}
-                  width={panelWidth}
-                  onWidthChange={setPanelWidth}
-                  onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-                />
-              )}
-            </RightPanelClosingContext.Provider>
+            /* entered=true = 跳过动画直接就位：面板间切换（panelAnimated=false）直接出现；
+               从收起状态展开（panelAnimated=true）才从 0 播动画 */
+            <RightPanelEnteredContext.Provider value={!panelAnimated}>
+              <RightPanelClosingContext.Provider value={false}>
+                {rightPanel === "skills" ? (
+                  <SkillsPanel
+                    narrow={narrow}
+                    skills={skills}
+                    onClose={() => setRightPanel(null)}
+                    width={panelWidth}
+                    onWidthChange={setPanelWidth}
+                    onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+                    defaultWorkspaceId={session.workspaceId}
+                    onCreateSkill={createSkillDraft}
+                  />
+                ) : (
+                  <McpPanel
+                    narrow={narrow}
+                    skills={skills}
+                    onClose={() => setRightPanel(null)}
+                    width={panelWidth}
+                    onWidthChange={setPanelWidth}
+                    onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+                  />
+                )}
+              </RightPanelClosingContext.Provider>
+            </RightPanelEnteredContext.Provider>
           )}
           {panelClosing && (
             /* 收起动画窗口：面板保持挂载，宽度过渡回 0 后由上面的 effect 卸载 */

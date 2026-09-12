@@ -9,6 +9,12 @@ import { RIGHT_PANEL_WIDTH_MAX, RIGHT_PANEL_WIDTH_MIN } from "@shared/settings";
 export const RightPanelClosingContext = createContext(false);
 
 /**
+ * 面板挂载那一刻「面板位是否已经处于展开态」（面板间切换时为真）：为真则跳过
+ * 展开动画直接就位——同一个面板位换内容不该重新走一遍折叠展开。
+ */
+export const RightPanelEnteredContext = createContext(true);
+
+/**
  * 右侧分屏面板的框架（规格 §3）：页头（标题区 + x）、内容区（120ms 淡入，
  * contentKey 换帧）、footer 动作区（发丝顶线分隔）。Skills / MCP 两个面板
  * 共用这一副骨架，各自把 header / 内容 / footer 塞进来。
@@ -39,9 +45,11 @@ export function RightPanelFrame(props: {
 }) {
   const { narrow } = props;
   const closing = useContext(RightPanelClosingContext);
+  const enteredBySlot = useContext(RightPanelEnteredContext);
   const asideRef = useRef<HTMLElement | null>(null);
-  /** 分栏态的展开/收起动画与抽屉同款（width 0↔目标，0.2s ease）：挂载下一拍才到位，过渡才会发生 */
-  const [entered, setEntered] = useState(false);
+  /** 分栏态的展开/收起动画与抽屉同款（width 0↔目标，0.2s ease）：
+   *  挂载下一拍才到位，过渡才会发生；面板间切换（enteredBySlot）直接就位不播动画 */
+  const [entered, setEntered] = useState(narrow || enteredBySlot);
   /** 拖宽中禁掉 width 过渡——实时跟手（同 .drawer.dragging 的纪律） */
   const [resizing, setResizing] = useState(false);
 
