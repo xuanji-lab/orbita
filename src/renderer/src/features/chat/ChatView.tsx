@@ -18,6 +18,9 @@ import {
   groupToolUnits,
   groupTurns,
   indexToolResults,
+  mcpFailureLead,
+  mcpInputSummary,
+  summarizeMcpResult,
   liveTailLines,
   parseEditDiff,
   editDiffEntries,
@@ -59,6 +62,7 @@ import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
 import { api } from "../../api";
 import { kindOf, modelContextText } from "../settings/providers-view-model.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
+import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
@@ -1439,7 +1443,9 @@ function ToolLine(props: {
   const { result } = props;
   const failed = result?.status === "error";
   const active = result === undefined || result.status === "running";
-  const summary = summarizeToolResult(result);
+  /** MCP 工具（4-5）：行首只说 tool 名，server 进副标；量词与失败分型另有规格 */
+  const mcp = parseQualifiedToolName(props.toolName);
+  const summary = mcp === null ? summarizeToolResult(result) : summarizeMcpResult(result);
   const callSummary = toolCallSummary(props.toolName, props.input);
   // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
   // 完整路径进 tooltip。toolCallSummary 本身保持原始 path 语义（editGroupFileCount 靠它去重）
@@ -1481,9 +1487,23 @@ function ToolLine(props: {
               strokeWidth={1.8}
             />
           </span>
-          <span style={headLabel(active)}>{props.toolName}</span>
+          <span style={mcp === null ? headLabel(active) : { ...headLabel(active), fontWeight: 650 }}>
+            {mcp === null ? props.toolName : mcp.tool}
+          </span>
         </span>
-        {callLabel !== null && (
+        {mcp !== null ? (
+          // MCP 副标：{server} · {输入摘要}（mono caption tertiary，规格 §8）。
+          // 内建摘要器不认识 MCP 工具，退回 JSON 一行截断。
+          (() => {
+            const brief = callLabel ?? mcpInputSummary(props.input);
+            return (
+              <span style={{ ...SLOT.sub, fontFamily: "var(--font-family-mono)" }}>
+                {mcp.server}
+                {brief !== null ? ` · ${brief}` : ""}
+              </span>
+            );
+          })()
+        ) : callLabel !== null && (
           <span
             title={callSummary !== callLabel ? (callSummary ?? undefined) : undefined}
             style={pathTool ? { ...SLOT.sub, color: "var(--color-chat-link)" } : SLOT.sub}
@@ -1517,7 +1537,10 @@ function ToolLine(props: {
       {open && expandable && diff === null && fileView !== null && (
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
-      {open && expandable && diff === null && fileView === null && (
+      {open && expandable && diff === null && fileView === null && mcp !== null && (
+        <McpToolBody result={result} />
+      )}
+      {open && expandable && diff === null && fileView === null && mcp === null && (
         <PlainToolBody toolName={props.toolName} text={body} failed={failed} live={live} />
       )}
     </div>
@@ -1777,6 +1800,79 @@ function tokenSpans(line: readonly TokenSpan[]) {
  * `live` 是跑着的 shell：输出增长贴底跟随（用户上滚脱离、回底恢复），
  * 还没吐出第一个字时显示「等待输出」。
  */
+/**
+ * MCP 工具的展开体（4-5，规格 §8）：失败时首行讲清错在哪一层（业务失败是
+ * server 报的错，传输失败是我们连不上/等不到）；成功时文本照常、图片内联
+ * （max-height 240、--radius-md、发丝边框、mimeType 一行 micro）。
+ * 相邻同名照常组折叠（组行不在这里，flatten 阶段已按 toolName 归组）。
+ */
+function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
+  const { result } = props;
+  if (result === undefined) return null;
+  const isFailure = result.status === "error";
+  const texts = result.content.filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text");
+  const images = result.content.filter((block): block is Extract<typeof block, { type: "image" }> => block.type === "image");
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: "var(--space-2)",
+        padding: "var(--space-3)",
+        background: "var(--color-bg-panel)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        minWidth: 0,
+      }}
+    >
+      {isFailure && (
+        <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+          {mcpFailureLead(result)}
+        </p>
+      )}
+      {texts.map((block, i) => (
+        <pre
+          key={i}
+          style={{
+            margin: 0,
+            fontFamily: "var(--font-family-mono)",
+            fontSize: "var(--font-size-caption)",
+            lineHeight: 1.6,
+            color: isFailure ? "var(--color-danger)" : "var(--color-text-primary)",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {block.text}
+        </pre>
+      ))}
+      {images.map((block, i) => (
+        <figure key={`img-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
+          <img
+            src={`data:${block.mimeType};base64,${block.data}`}
+            alt=""
+            style={{
+              display: "block",
+              maxWidth: "100%",
+              maxHeight: 240,
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--color-border-subtle)",
+            }}
+          />
+          <figcaption
+            style={{
+              fontSize: "var(--font-size-micro)",
+              color: "var(--color-text-tertiary)",
+              fontFamily: "var(--font-family-mono)",
+            }}
+          >
+            {block.mimeType}
+          </figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
 function PlainToolBody(props: {
   toolName: string;
   text: string;
