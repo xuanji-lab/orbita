@@ -7,10 +7,10 @@ import { useChatSession } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
 import { transcriptToMarkdown } from "@shared/session";
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
-import { SkillsView } from "./features/skills/SkillsView";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
-import { ActionRail } from "./shell/ActionRail";
+import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRail";
+import { RightPanel } from "./shell/RightPanel";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -29,8 +29,18 @@ export function App() {
   /** provider 列表加载失败的原因；null = 正常。**失败要亮在聊天面上**，
    * 不然一次 IPC 失败会显示成「还没有 provider」，用户被引去白配一遍。 */
   const [providersError, setProvidersError] = useState<string | null>(null);
-  /** 中卡盖着哪个面（聊天 / 设置 / Skills）——三者互斥，一个字段说完 */
+  /** 中卡盖着哪个面（聊天 / 设置）——与右侧面板是**两个独立状态**，不是一个枚举 */
   const [overlay, setOverlay] = useState<Overlay>(null);
+  /** 右侧分屏面板开哪个；两个面板互斥，同一时刻至多一个 */
+  const [rightPanel, setRightPanel] = useState<RightPanelKind | null>(null);
+  /** 窄窗（<960px）：并排分屏守不住 chat ≥480px 的底线，面板转右侧锚定覆盖层 */
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 959px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 959px)");
+    const sync = () => setNarrow(query.matches);
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   useTheme(settings.theme);
@@ -56,9 +66,21 @@ export function App() {
   }, []);
 
   const session = useChatSession(providers);
-  const skills = useSkills(overlay === "skills");
-  /** 动作条只在有内容可操作时出现——它承载的是「对这条会话做点什么」 */
-  const showRail = overlay === null && (session.sessionId !== null || session.opened !== null);
+  const skills = useSkills(rightPanel === "skills");
+  /** 会话动作只在有会话时出现——它承载的是「对这个会话做点什么」；
+   * 顶部入口常驻，不随会话消失（首页也能开 Skills / MCP）。 */
+  const sessionActions =
+    session.sessionId !== null || session.opened !== null ? (
+      <SessionActions
+        canCopy={session.transcript.length > 0}
+        onCopyTranscript={() =>
+          // 与「导出」同一份实现：复制出来的和导出的必须长得一样
+          void navigator.clipboard.writeText(transcriptToMarkdown(session.transcript))
+        }
+      />
+    ) : (
+      false
+    );
 
   return (
     <div className="layer">
@@ -68,7 +90,6 @@ export function App() {
         settingsTab={settingsTab}
         onSettingsTab={setSettingsTab}
         onOverlay={setOverlay}
-        skills={skills}
       />
 
       <main className="pane">
@@ -79,22 +100,21 @@ export function App() {
             onSettingsChange={changeSettings}
             onProvidersChange={refresh}
           />
-        ) : overlay === "skills" ? (
-          <SkillsView skills={skills} />
         ) : (
           <ChatView session={session} providersError={providersError} />
         )}
       </main>
 
-      {showRail && (
-        <ActionRail
-          canCopy={session.transcript.length > 0}
-          onCopyTranscript={() =>
-            // 与「导出」同一份实现：复制出来的和导出的必须长得一样
-            void navigator.clipboard.writeText(transcriptToMarkdown(session.transcript))
-          }
+      {rightPanel !== null && (
+        <RightPanel
+          panel={rightPanel}
+          narrow={narrow}
+          skills={skills}
+          onClose={() => setRightPanel(null)}
         />
       )}
+
+      <RightRail panel={rightPanel} onPanel={setRightPanel} sessionActions={sessionActions} />
     </div>
   );
 }

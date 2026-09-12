@@ -18,10 +18,9 @@ import {
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
-import type { SkillsState } from "../features/skills/useSkills";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
-export type Overlay = "settings" | "skills" | null;
+export type Overlay = "settings" | null;
 
 /** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
 const COLLAPSE_BREAKPOINT = 960;
@@ -48,11 +47,9 @@ export function Sidebar(props: {
   settingsTab: SettingsTab;
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
-  skills: SkillsState;
 }) {
   const { session } = props;
   const settingsOpen = props.overlay === "settings";
-  const skillsOpen = props.overlay === "skills";
   const [showArchived, setShowArchived] = useState(false);
   /**
    * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
@@ -137,15 +134,6 @@ export function Sidebar(props: {
           onClick={startNewTask}
         />
         <span style={{ flex: 1 }} />
-        <RailButton
-          icon="brain"
-          title="Skills"
-          active={skillsOpen}
-          onClick={() => {
-            setCollapsed(false);
-            props.onOverlay("skills");
-          }}
-        />
         <RailButton
           icon="archive"
           title={`Archived (${session.sessions.filter((m) => m.archived).length})`}
@@ -258,9 +246,7 @@ export function Sidebar(props: {
           paddingRight: "var(--space-3)",
         }}
       >
-        {skillsOpen ? (
-          <SkillNodes skills={props.skills} />
-        ) : showArchived && !settingsOpen ? (
+        {showArchived && !settingsOpen ? (
           <>
             <NodeLabel>Archived</NodeLabel>
             {archived.map((meta) => (
@@ -403,13 +389,6 @@ export function Sidebar(props: {
         active={showArchived && !settingsOpen}
         disabled={archived.length === 0}
         onClick={() => setShowArchived((value) => !value)}
-      />
-      <NavRow
-        icon="brain"
-        label="Skills"
-        hint="What the agent knows how to do"
-        active={skillsOpen}
-        onClick={() => props.onOverlay(skillsOpen ? null : "skills")}
       />
       <NavRow
         icon="settings"
@@ -597,60 +576,6 @@ function WorkspaceGroup(props: {
 }
 
 /** 分组标题：机器面的小字用 business/mono，字号 micro，大写加字距 */
-/**
- * Skills 列表（侧栏）。没链任何集合的也列，只是排在后面并标出来——
- * 看不见未链接的就无从重新链上，那等于把它们藏进文件系统里。
- */
-function SkillNodes(props: { skills: SkillsState }) {
-  const { skills } = props;
-  const list = describeList(skills.load, skills.skills.length);
-  const on = skills.skills.filter((s) => s.global || s.workspaces.length > 0);
-  const off = skills.skills.filter((s) => !s.global && s.workspaces.length === 0);
-  return (
-    <>
-      <NodeLabel>Skills</NodeLabel>
-      {list.error !== null && <ListError message={list.error} onRetry={skills.reload} />}
-      {list.body === "loading" ? (
-        <Empty>Loading skills…</Empty>
-      ) : list.body === "empty" ? (
-        <Empty>No skill yet. Put a folder with a SKILL.md into the skills directory.</Empty>
-      ) : list.body === "none" ? null : (
-        <>
-          {on.map((skill) => (
-            <NavRow
-              key={skill.slug}
-              icon="brain"
-              label={skill.name}
-              hint={hintOf(skill)}
-              active={skills.selected === skill.slug}
-              onClick={() => skills.select(skill.slug)}
-            />
-          ))}
-          {off.length > 0 && <NodeLabel>Not linked</NodeLabel>}
-          {off.map((skill) => (
-            <NavRow
-              key={skill.slug}
-              icon="brain"
-              label={skill.name}
-              hint={`Not linked · ${hintOf(skill)}`}
-              active={skills.selected === skill.slug}
-              onClick={() => skills.select(skill.slug)}
-            />
-          ))}
-        </>
-      )}
-    </>
-  );
-}
-
-/** 列表行的一句hint：断链优先说，否则是归属 + description */
-function hintOf(skill: { missing: boolean; global: boolean; workspaces: string[]; description: string; slug: string }): string {
-  if (skill.missing) return `Missing · links exist but the folder is gone`;
-  const sets = [skill.global ? "Global" : "", ...skill.workspaces].filter(Boolean).join(", ");
-  const desc = skill.description === "" ? skill.slug : skill.description;
-  return sets === "" ? desc : `${sets} · ${desc}`;
-}
-
 function NodeLabel(props: { children: React.ReactNode }) {
   return (
     <span
