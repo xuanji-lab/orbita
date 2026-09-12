@@ -201,8 +201,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     sessionRef.current = sessionId;
   }, [sessionId]);
 
-  // ref 兜底同步：onEvent 的 updater 已即时写 ref，这里接住其余 setStates 路径
-  // （seed / removeApproval / 乐观 phase……）——只晚一拍，这些路径没有重发竞态。
+  // ref 兜底同步：所有写入都应走 applyStates（它已即时写 ref），这里只是保险丝。
+  // **不得再新增裸 `setStates((prev) => …)`**：applyStates 写的是平译值，
+  // React 的更新队列遇到平译值会**丢掉先前排队的 updater**，不是合并。
   useEffect(() => {
     statesRef.current = states;
   }, [states]);
@@ -456,7 +457,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       // 跑着或压缩中：/compact 也排队——不打断正在跑的轮，等完全空闲
       // （前面排着的消息也发完）再压，压的才是完整对话。
       if (busyId !== null && busyPhase !== undefined && busyPhase !== "idle") {
-        setStates((prev) =>
+        applyStates((prev) =>
           enqueue(prev, busyId, {
             id: crypto.randomUUID(),
             kind: "compact",
@@ -601,7 +602,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setSessionId(null);
         sessionRef.current = null;
         if (!statesRef.current.has(id)) {
-          setStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
+          applyStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
         }
       })
       .catch((cause: unknown) => {
@@ -826,9 +827,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, []);
 
   const answerApproval = useCallback((requestId: string, answer: PermissionAnswer) => {
-    setStates((prev) => removeApproval(prev, requestId));
+    applyStates((prev) => removeApproval(prev, requestId));
     void api.agent.answerPermission(requestId, answer);
-  }, []);
+  }, [applyStates]);
 
   /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。
    *  目标是**当前会话**的草稿——草稿已按会话隔离，不再是一份全局 string。 */
