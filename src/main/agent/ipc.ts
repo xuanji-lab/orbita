@@ -92,34 +92,35 @@ export function registerAgentIpc(
 
   /**
    * 首轮开机的收尾：拿到 pi 本子真路径后，真新会话建 meta（建成之后才落盘——
-   * 开机失败时不在磁盘上留一条永远打不开的会话），旧会话（pi 本子曾经缺席）
-   * 校准回去。transcript 记录不依赖 meta（直写 log），先到的回显不会丢。
+   * 开机失败时不在磁盘上留一条永远打不开的会话），旧会话（pi 本子曾经缺席）校准回去。
+   *
+   * **函数体里不得在 `ensureSession` 之前 await 任何东西。**紧跟 `created` 的第一个
+   * progress 事件会把首条用户消息交给 `record`，两者排同一条 meta 写入链：
+   * `created` 的处理是微任务、progress 是下一个端口消息（宏任务），只要本函数
+   * 同步入链就一定排在它前面；中间多一次 await（原本的 `sessions.load`）就把顺序
+   * 让出去了——那正是 2026-09-12「新会话第一句不落盘」的成因。
    */
-  async function settleFirstTurn(input: SubmitAgentInput, piSessionFile: string | null): Promise<void> {
-    if (piSessionFile === null) return;
-    if ((await sessions.load(input.sessionId)) === null) {
-      const now = Date.now();
-      await sessions.create({
-        id: input.sessionId,
-        title: "",
-        titleSource: "derived",
-        cwd: input.cwd,
-        workspaceId: input.workspaceId,
-        piSessionFile,
-        pinned: false,
-        archived: false,
-        recentQueries: [],
-        // 还没跑过一轮 = 没有账本。第一次 agent_settled 才落真值
-        stats: null,
-        providerId: input.providerId,
-        modelId: input.modelId,
-        mode: input.mode,
-        createdAt: now,
-        updatedAt: now,
-      });
-    } else {
-      await sessions.setPiSessionFile(input.sessionId, piSessionFile);
-    }
+  function settleFirstTurn(input: SubmitAgentInput, piSessionFile: string | null): Promise<void> {
+    if (piSessionFile === null) return Promise.resolve();
+    const now = Date.now();
+    return sessions.ensureSession({
+      id: input.sessionId,
+      title: "",
+      titleSource: "derived",
+      cwd: input.cwd,
+      workspaceId: input.workspaceId,
+      piSessionFile,
+      pinned: false,
+      archived: false,
+      recentQueries: [],
+      // 还没跑过一轮 = 没有账本。第一次 agent_settled 才落真值
+      stats: null,
+      providerId: input.providerId,
+      modelId: input.modelId,
+      mode: input.mode,
+      createdAt: now,
+      updatedAt: now,
+    });
   }
 
   ipcMain.handle(ipcChannels.agentSubmit, async (_e, input: SubmitAgentInput): Promise<void> => {

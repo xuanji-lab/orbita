@@ -81,7 +81,7 @@ describe("SessionStore", () => {
    * 侧栏以前会说「还没有任务」——用户据此去翻备份、去重装，而重装可能真把它们删了。
    */
   test("目录读不出来时抛错，不谎报「一条都没有」", { skip: skipChmod }, async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     const sessions = join(dir, "sessions");
     await chmod(sessions, 0o000);
     try {
@@ -92,14 +92,14 @@ describe("SessionStore", () => {
   });
 
   test("建了就能列出来、能读回来", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     assert.deepEqual((await store.list()).map((m) => m.id), [ID]);
     assert.deepEqual((await store.load(ID))?.meta.id, ID);
     assert.deepEqual((await store.load(ID))?.transcript, []);
   });
 
   test("记一条就追加一行，并把 updatedAt 推到那条的时间", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("重做外壳"));
     await store.record(ID, assistantItem("好的"));
     const detail = await store.load(ID);
@@ -108,21 +108,21 @@ describe("SessionStore", () => {
   });
 
   test("标题取第一条用户消息，之后不再改——否则会话会在侧栏里改名", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("第一句"));
     await store.record(ID, userItem("第二句", 4000));
     assert.equal((await store.load(ID))?.meta.title, "第一句");
   });
 
   test("assistant 消息不当标题用", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, assistantItem("我先说话"));
     assert.equal((await store.load(ID))?.meta.title, "");
   });
 
   // 首页会话卡（D-1）的三槽吃它：每条用户消息都记，新的在前，封顶 3 条
   test("用户消息记进 recentQueries，assistant 不记", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("第一问"));
     await store.record(ID, assistantItem("答"));
     await store.record(ID, userItem("第二问", 4000));
@@ -132,20 +132,20 @@ describe("SessionStore", () => {
   });
 
   test("列表按 updatedAt 倒序——新的在前", async () => {
-    await store.create(meta({ id: ID, updatedAt: 1000 }));
-    await store.create(meta({ id: OTHER, updatedAt: 5000 }));
+    await store.ensureSession(meta({ id: ID, updatedAt: 1000 }));
+    await store.ensureSession(meta({ id: OTHER, updatedAt: 5000 }));
     assert.deepEqual((await store.list()).map((m) => m.id), [OTHER, ID]);
   });
 
   test("meta 坏了就跳过这条，不让一条坏记录挡住整张列表", async () => {
-    await store.create(meta({ id: ID }));
+    await store.ensureSession(meta({ id: ID }));
     await writeFile(join(dir, "sessions", `${OTHER}.meta.json`), "{ 这不是 JSON", "utf8");
     assert.deepEqual((await store.list()).map((m) => m.id), [ID]);
   });
 
   // 只追加的文件断电时最后一行可能只写了一半
   test("日志里的半截行跳过，前面读到的照常返回", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("完整的一行"));
     await writeFile(join(dir, "sessions", `${ID}.jsonl`), '{"id":"u1","role":"user"', { flag: "a" });
     const detail = await store.load(ID);
@@ -158,7 +158,7 @@ describe("SessionStore", () => {
   });
 
   test("删掉两个文件都清干净", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("x"));
     await store.remove(ID);
     assert.deepEqual(await readdir(join(dir, "sessions")), []);
@@ -178,13 +178,13 @@ describe("SessionStore", () => {
   });
 
   test("setMode 落盘——重开会话不该静默换档", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.setMode(ID, "skip");
     assert.equal((await store.load(ID))?.meta.mode, "skip");
   });
 
   test("setModel 落 meta——重开播种、分支继承读的就是它（C-4）", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.setModel(ID, "other", "m2");
     const loaded = (await store.load(ID))?.meta;
     assert.equal(loaded?.providerId, "other");
@@ -194,20 +194,20 @@ describe("SessionStore", () => {
   // id 从 renderer 经 IPC 进来，直接拼路径的话一个 ../../ 就能写到别处
   test("非法 id 一律拒绝，不落在 sessions 目录之外", async () => {
     for (const bad of ["../../etc/passwd", "..", "a/b", "", "not-a-uuid", `${ID}/../x`]) {
-      await assert.rejects(() => store.create(meta({ id: bad })), /invalid session id/);
+      await assert.rejects(() => store.ensureSession(meta({ id: bad })), /invalid session id/);
       await assert.rejects(() => store.remove(bad), /invalid session id/);
     }
   });
 
   test("原子写不留临时文件", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("x"));
     const names = await readdir(join(dir, "sessions"));
     assert.deepEqual(names.filter((n) => n.endsWith(".tmp")), []);
   });
 
   test("日志是一行一条 JSON，人能直接读", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("看得懂吗"));
     const raw = await readFile(join(dir, "sessions", `${ID}.jsonl`), "utf8");
     assert.equal(raw.trimEnd().split("\n").length, 1);
@@ -225,7 +225,7 @@ describe("SessionStore", () => {
   };
 
   test("混合日志回读：界碑认成界碑，消息照旧", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("之前", 2000));
     await store.record(ID, compacted);
     await store.record(ID, userItem("之后", 5000));
@@ -238,7 +238,7 @@ describe("SessionStore", () => {
   });
 
   test("坏掉的界碑行跳过，不当消息也不崩", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("完整的一行"));
     await writeFile(
       join(dir, "sessions", `${ID}.jsonl`),
@@ -250,7 +250,7 @@ describe("SessionStore", () => {
   });
 
   test("刀 0-3 之前的旧日志原样读出——没有界碑就没有界碑", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("旧消息"));
     const transcript = (await store.load(ID))?.transcript ?? [];
     assert.deepEqual(transcript.map((r) => r.role), ["user"]);
@@ -259,7 +259,7 @@ describe("SessionStore", () => {
   // ── C-3：auto-title ──
 
   test("needsAutoTitle：derived 要，user / auto / meta 没了都不要", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     assert.equal(await store.needsAutoTitle(ID), true);
     await store.setAutoTitle(ID, "模型起的");
     assert.equal(await store.needsAutoTitle(ID), false);
@@ -269,7 +269,7 @@ describe("SessionStore", () => {
   });
 
   test("setAutoTitle 落标题并标成 auto", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.setAutoTitle(ID, "修复登录按钮");
     const detail = await store.load(ID);
     assert.equal(detail?.meta.title, "修复登录按钮");
@@ -277,7 +277,7 @@ describe("SessionStore", () => {
   });
 
   test("setAutoTitle 不覆盖用户改过的名字", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.rename(ID, "我的名字");
     await store.setAutoTitle(ID, "模型猜的名字");
     const detail = await store.load(ID);
@@ -286,14 +286,14 @@ describe("SessionStore", () => {
   });
 
   test("setAutoTitle 的迟到标题不重复写：auto 之后整份丢弃", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.setAutoTitle(ID, "第一个标题");
     await store.setAutoTitle(ID, "迟到的标题");
     assert.equal((await store.load(ID))?.meta.title, "第一个标题");
   });
 
   test("setAutoTitle 拿到空结果就不写，门禁保持 derived", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.setAutoTitle(ID, "  \n ");
     const detail = await store.load(ID);
     assert.equal(detail?.meta.title, "");
@@ -302,7 +302,7 @@ describe("SessionStore", () => {
   });
 
   test("rename 改空也记成 user——用户清掉的名字不该自己长回来", async () => {
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.record(ID, userItem("第一句"));
     await store.rename(ID, "");
     const detail = await store.load(ID);
@@ -342,7 +342,7 @@ describe("SessionStore.branch", () => {
   });
 
   test("prepareBranch：前缀含锚点、角色序列对、meta 继承且标题带后缀", async () => {
-    await store.create(meta({ title: "读一下项目", piSessionFile: PI_FILE, pinned: true }));
+    await store.ensureSession(meta({ title: "读一下项目", piSessionFile: PI_FILE, pinned: true }));
     await store.record(ID, item("u1", "user", "第一句"));
     await store.record(ID, item("a1", "assistant", "第一次回答"));
     await store.record(ID, emptyError("e1"));
@@ -367,7 +367,7 @@ describe("SessionStore.branch", () => {
   });
 
   test("prepareBranch：锚点不存在 / 不是 assistant / 没有 pi 本子，都拒绝", async () => {
-    await store.create(meta({ piSessionFile: PI_FILE }));
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
     await store.record(ID, item("u1", "user", "问题"));
     await store.record(ID, item("a1", "assistant", "回答"));
     await assert.rejects(() => store.prepareBranch(ID, "nope"), /Branch anchor message not found/);
@@ -377,12 +377,12 @@ describe("SessionStore.branch", () => {
       /not found/,
     );
 
-    await store.create(meta({ id: OTHER, piSessionFile: null }));
+    await store.ensureSession(meta({ id: OTHER, piSessionFile: null }));
     await assert.rejects(() => store.prepareBranch(OTHER, "a1"), /not continued or branched/);
   });
 
   test("commitBranch：meta 补上 pi 文件、JSONL 逐行等于前缀、列表能看到新会话", async () => {
-    await store.create(meta({ piSessionFile: PI_FILE }));
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
     await store.record(ID, item("u1", "user", "问"));
     await store.record(ID, item("a1", "assistant", "答"));
     const plan = await store.prepareBranch(ID, "a1");
@@ -401,7 +401,7 @@ describe("SessionStore.branch", () => {
   });
 
   test("commitBranch：pi 没给文件就拒绝，什么也不落", async () => {
-    await store.create(meta({ piSessionFile: PI_FILE }));
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
     await store.record(ID, item("u1", "user", "问"));
     await store.record(ID, item("a1", "assistant", "答"));
     const plan = await store.prepareBranch(ID, "a1");
@@ -413,9 +413,43 @@ describe("SessionStore.branch", () => {
 // ── A-1 回归：meta 的「读-改-写」必须串行（wafo 2026-09-03 实测）──
 
 describe("meta 并发写入", () => {
+  /**
+   * 首轮的真实时序：主进程收到 `created` 后同步发起 `ensureSession`，下一个端口消息
+   * 就是首条用户消息的 `record`——两者几乎同时在飞，谁都没 await 谁。
+   *
+   * 修之前 `record` 直接 `readMeta`，在 `ensureSession` 写盘之前就读到 null 并 return，
+   * 首条用户消息既不进 JSONL 也不填标题（2026-09-12 实测：会话磁盘上只剩 assistant，
+   * 侧栏永远显示 New task，重开会话比当时少一截）。
+   */
+  test("建 meta 与首条用户消息并发：记录不丢，标题照样 derive", async () => {
+    const store = new SessionStore(dir);
+    // 故意不 await：复现两者并发入链的那一拍
+    const created = store.ensureSession(meta());
+    await store.record(ID, userItem("帮我看看目录结构", 2000));
+    await created;
+
+    const detail = await store.load(ID);
+    assert.equal(detail?.transcript.length, 1, "首条用户消息必须在盘上");
+    assert.equal(detail?.transcript[0]?.role, "user");
+    assert.equal(detail?.meta.title, "帮我看看目录结构", "标题由首条用户消息 derive");
+  });
+
+  test("ensureSession 对已存在的会话只校准 pi 本子，不盖已有字段", async () => {
+    const store = new SessionStore(dir);
+    await store.ensureSession(meta({ piSessionFile: null }));
+    await store.setAutoTitle(ID, "已经起好的名字");
+    // 续轮又来一次：带着一份刚拼的初始 meta（title 空、titleSource derived）
+    await store.ensureSession(meta({ piSessionFile: "/pi/s1.jsonl" }));
+
+    const after = (await store.list())[0];
+    assert.equal(after?.piSessionFile, "/pi/s1.jsonl", "pi 本子要校准");
+    assert.equal(after?.title, "已经起好的名字", "标题不能被初始 meta 盖回空");
+    assert.equal(after?.titleSource, "auto");
+  });
+
   test("标题落盘不会被同时在跑的用量落盘冲回 derived", async () => {
     const store = new SessionStore(dir);
-    await store.create(meta());
+    await store.ensureSession(meta());
     // 真实时序：标题生成是一次 LLM 调用（几秒），这几秒里 record 与 setStats 都在写 meta。
     // 不串行的话，它们手里的旧快照会把 titleSource 冲回 derived，
     // 于是下一条消息又生成一次标题——用户看到「已经命名好的会话又被重命名」。
@@ -438,7 +472,7 @@ describe("meta 并发写入", () => {
 
   test("门禁仍然有效：已 auto 的标题，迟到的第二个标题不覆盖", async () => {
     const store = new SessionStore(dir);
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.setAutoTitle(ID, "先到的");
     await store.setAutoTitle(ID, "迟到的");
     assert.equal((await store.list())[0]?.title, "先到的");
@@ -446,7 +480,7 @@ describe("meta 并发写入", () => {
 
   test("用户改过名之后，模型标题永不覆盖", async () => {
     const store = new SessionStore(dir);
-    await store.create(meta());
+    await store.ensureSession(meta());
     await store.rename(ID, "我自己起的");
     await store.setAutoTitle(ID, "模型起的");
     const after = (await store.list())[0];
@@ -456,7 +490,7 @@ describe("meta 并发写入", () => {
 
   test("删会话时在途的写入不会把 meta 又写回来", async () => {
     const store = new SessionStore(dir);
-    await store.create(meta());
+    await store.ensureSession(meta());
     const inflight = store.setStats(ID, {
       tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
       cost: 0,
