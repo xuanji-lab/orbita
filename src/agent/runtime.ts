@@ -470,8 +470,12 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             pi.on("tool_call", (event) => gate(event));
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
+            // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
             pi.on("before_agent_start", (event) => ({
-              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(currentMode())}\n\n${TOOL_GUIDELINES}`,
+              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(
+                currentMode(),
+                mcpHub.currentTools().map((tool) => tool.name),
+              )}\n\n${TOOL_GUIDELINES}`,
             }));
           },
         },

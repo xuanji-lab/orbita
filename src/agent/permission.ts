@@ -27,12 +27,17 @@ const BUILTIN_TOOLS = ["bash", "edit", "find", "glob", "grep", "ls", "read", "wr
  *
  * 文案**从 `decidePermission` 推出来**，不是另写一遍：三档的工具分桶由策略函数当场算，
  * 策略改了这段话跟着改。两处描述各说各话，比没有描述更糟。
+ *
+ * @param extraToolNames 内建之外当前真实注册的工具名（1-2 起 MCP 的
+ * `mcp__server__tool` 全部由调用方从注册表里拿来传入）——不再只枚举内建八个，
+ * 否则 plan 模式下模型不知道 MCP 工具会被拒，照样一头撞墙（已知缺口 #4）。
+ * MCP 工具没有「只读」豁免，分桶全由 decidePermission 算，不在提示词里另立规则。
  */
-export function describePermissionMode(mode: PermissionMode): string {
+export function describePermissionMode(mode: PermissionMode, extraToolNames: readonly string[] = []): string {
   const allow: string[] = [];
   const ask: string[] = [];
   const deny: string[] = [];
-  for (const tool of BUILTIN_TOOLS) {
+  for (const tool of [...BUILTIN_TOOLS, ...extraToolNames]) {
     const decision = decidePermission(mode, tool);
     if (decision.behavior === "allow") allow.push(tool);
     else if (decision.behavior === "ask") ask.push(tool);
