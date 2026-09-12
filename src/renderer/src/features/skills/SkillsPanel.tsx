@@ -30,10 +30,12 @@ export function SkillsPanel(props: {
   onWidthCommit: (width: number) => void;
   /** 表单默认归属的 workspace（会话当前所在）；null = 默认 Global */
   defaultWorkspaceId: string | null;
+  /** Create skill…：新建会话并预填 composer，让 agent 用 create_skill 落盘 */
+  onCreateSkill: () => void;
 }) {
   const { skills } = props;
   /** 当前面板视图：列表 / 详情 / 新建表单（4-1） */
-  const [view, setView] = useState<"list" | "detail" | "create" | "map">("list");
+  const [view, setView] = useState<"list" | "detail" | "map">("list");
   /** +N more 跳列表后要滚到的组（global 或 workspaceId）；一次性的 */
   const [scrollTo, setScrollTo] = useState<string | null>(null);
   /** 当前详情的 slug；null = 列表。面板内状态，不进 useSkills（侧栏列表已删） */
@@ -56,24 +58,6 @@ export function SkillsPanel(props: {
     setScrollTo(null);
   }, [view, scrollTo]);
 
-  if (view === "create") {
-    return (
-      <NewSkillForm
-        narrow={props.narrow}
-        skills={skills}
-        defaultWorkspaceId={props.defaultWorkspaceId}
-        onCancel={() => setView("list")}
-        onCreated={(slug) => {
-          setSelected(slug);
-          setView("detail");
-        }}
-        onClose={props.onClose}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
-      />
-    );
-  }
   if (view === "map") {
     return (
       <SkillMapView
@@ -88,7 +72,7 @@ export function SkillsPanel(props: {
           setView("list");
         }}
         onSwitchToList={() => setView("list")}
-        onNewSkill={() => setView("create")}
+        onCreateSkill={props.onCreateSkill}
         onClose={props.onClose}
         width={props.width}
         onWidthChange={props.onWidthChange}
@@ -123,7 +107,7 @@ export function SkillsPanel(props: {
         setSelected(slug);
         setView("detail");
       }}
-      onNewSkill={() => setView("create")}
+      onCreateSkill={props.onCreateSkill}
       onSwitchToMap={() => setView("map")}
       onClose={props.onClose}
     />
@@ -155,7 +139,7 @@ function SkillList(props: {
   skills: SkillsState;
   workspaceName: (id: string) => string;
   onSelect: (slug: string) => void;
-  onNewSkill: () => void;
+  onCreateSkill: () => void;
   onSwitchToMap: () => void;
   onClose: () => void;
   width: number;
@@ -193,7 +177,7 @@ function SkillList(props: {
         header={header}
         contentKey="list"
         onClose={props.onClose}
-        headerExtra={<AddMenu skills={skills} onNewSkill={props.onNewSkill} />}
+        headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
         <PanelLine>Loading…</PanelLine>
@@ -210,7 +194,7 @@ function SkillList(props: {
         header={header}
         contentKey="list"
         onClose={props.onClose}
-        headerExtra={<AddMenu skills={skills} onNewSkill={props.onNewSkill} />}
+        headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
         {error !== null && <PanelLine danger>Couldn’t read skills. {error}</PanelLine>}
@@ -307,7 +291,7 @@ function SkillList(props: {
       header={header}
       contentKey="list"
       onClose={props.onClose}
-      headerExtra={<AddMenu skills={skills} onNewSkill={props.onNewSkill} />}
+      headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
       footer={<FooterReveal skills={skills} />}
     >
       <div style={{ display: "grid", alignContent: "start" }}>
@@ -738,8 +722,8 @@ const inputStyle: React.CSSProperties = {
 };
 
 
-/** + 菜单（4-1）：New skill / Link existing folder…。列表、空态、加载态三处共用。 */
-function AddMenu(props: { skills: SkillsState; onNewSkill: () => void }) {
+/** + 菜单：Create skill… / Link existing folder…。列表、空态、加载态三处共用。 */
+function AddMenu(props: { skills: SkillsState; onCreateSkill: () => void }) {
   const [open, setOpen] = useState(false);
   return (
     <span style={{ position: "relative", display: "inline-flex" }}>
@@ -766,10 +750,10 @@ function AddMenu(props: { skills: SkillsState; onNewSkill: () => void }) {
           <MenuItemRow
             onClick={() => {
               setOpen(false);
-              props.onNewSkill();
+              props.onCreateSkill();
             }}
           >
-            <Icon name="plus" size={14} /> New skill
+            <Icon name="plus" size={14} /> Create skill…
           </MenuItemRow>
           <MenuItemRow
             onClick={() => {
@@ -819,134 +803,6 @@ function MenuItemRow(props: { onClick: () => void; children: React.ReactNode }) 
   );
 }
 
-/**
- * 新建表单（4-1）：slug 校验（isSkillSlug + 不重名）、name 默认跟 slug、
- * 初始归属默认当前 workspace（没有就 Global）。字段竖排，错误贴字段下方；
- * footer 是 [Cancel] [Create]，secondary——本面无主操作，不给 accent。
- */
-function NewSkillForm(props: {
-  narrow: boolean;
-  skills: SkillsState;
-  defaultWorkspaceId: string | null;
-  onCancel: () => void;
-  onCreated: (slug: string) => void;
-  onClose: () => void;
-  width: number;
-  onWidthChange: (width: number) => void;
-  onWidthCommit: (width: number) => void;
-}) {
-  const [slug, setSlug] = useState("");
-  const [name, setName] = useState("");
-  const [scope, setScope] = useState<string>(
-    props.defaultWorkspaceId ?? "global",
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const slugError =
-    slug === ""
-      ? null
-      : isSkillSlug(slug)
-        ? props.skills.skills.some((s) => s.slug === slug)
-          ? "A skill with this folder name already exists."
-          : null
-        : "Use lowercase letters, digits, dots, dashes or underscores; no spaces.";
-
-  const submit = (): void => {
-    if (slug === "" || slugError !== null || busy) return;
-    const target =
-      scope === "global"
-        ? ({ kind: "global" } as const)
-        : scope === "none"
-          ? null
-          : ({ kind: "workspace", workspaceId: scope } as const);
-    setBusy(true);
-    setError(null);
-    props.skills
-      .create(slug, name === "" ? slug : name, target)
-      .then(() => props.onCreated(slug))
-      .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      })
-      .finally(() => setBusy(false));
-  };
-
-  return (
-    <RightPanelFrame
-      narrow={props.narrow}
-      width={props.width}
-      onWidthChange={props.onWidthChange}
-      onWidthCommit={props.onWidthCommit}
-      contentKey="create"
-      onClose={props.onClose}
-      header={
-        <>
-          <PanelIconButton title="Back to list" onClick={props.onCancel}>
-            <Icon name="chevron-left" size={16} />
-          </PanelIconButton>
-          <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-            New skill
-          </strong>
-        </>
-      }
-      footer={
-        <>
-          <PanelButton onClick={props.onCancel}>Cancel</PanelButton>
-          <span style={{ flex: 1 }} />
-          <PanelButton onClick={submit} disabled={slug === "" || slugError !== null || busy}>
-            {busy ? "Creating…" : "Create"}
-          </PanelButton>
-        </>
-      }
-    >
-      <div
-        style={{
-          padding: "var(--space-5) var(--space-4)",
-          display: "grid",
-          gap: "var(--space-4)",
-          alignContent: "start",
-        }}
-      >
-        <Field label="Folder name" hint="The slug. It becomes the folder name and never changes.">
-          <PanelInput value={slug} onChange={(v) => setSlug(v.trim())} onBlur={() => {}} />
-          {slugError !== null && <FieldError>{slugError}</FieldError>}
-        </Field>
-        <Field label="Name" hint="How the agent refers to this skill. Defaults to the folder name.">
-          <PanelInput
-            value={name}
-            onChange={(v) => setName(v)}
-            onBlur={() => {}}
-            placeholder={slug === "" ? undefined : slug}
-          />
-        </Field>
-        <Field label="Works in" hint="Where this skill applies. You can change it later in the detail view.">
-          <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            <Chip active={scope === "global"} onClick={() => setScope("global")}>
-              Global
-            </Chip>
-            {props.skills.workspaces.map((ws) => (
-              <Chip key={ws.id} active={scope === ws.id} onClick={() => setScope(ws.id)}>
-                {ws.name}
-              </Chip>
-            ))}
-            <Chip active={scope === "none"} onClick={() => setScope("none")}>
-              Not linked yet
-            </Chip>
-          </span>
-        </Field>
-        {error !== null && <FieldError>Couldn’t create. {error}</FieldError>}
-      </div>
-    </RightPanelFrame>
-  );
-}
-
-function FieldError(props: { children: React.ReactNode }) {
-  return (
-    <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
-      {props.children}
-    </span>
-  );
-}
 
 /**
  * map 视图（4-4）：页头 [list][blend] 两枚 Chip + 标题 + AddMenu + x；
@@ -958,7 +814,7 @@ function SkillMapView(props: {
   onOpenDetail: (slug: string) => void;
   onJumpToGroup: (groupId: string) => void;
   onSwitchToList: () => void;
-  onNewSkill: () => void;
+  onCreateSkill: () => void;
   onClose: () => void;
   width: number;
   onWidthChange: (width: number) => void;
@@ -987,7 +843,7 @@ function SkillMapView(props: {
           </strong>
         </>
       }
-      headerExtra={<AddMenu skills={skills} onNewSkill={props.onNewSkill} />}
+      headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
       footer={<FooterReveal skills={skills} />}
     >
       <div style={{ padding: "var(--space-3) var(--space-3) var(--space-4)" }}>

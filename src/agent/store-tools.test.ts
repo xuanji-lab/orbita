@@ -83,5 +83,9 @@ describe("create_skill / add_mcp_server（4-3）", () => {
     assert.match(STORE_TOOLS_GUIDELINES, /"global"/);
     assert.match(STORE_TOOLS_GUIDELINES, /"workspace"/);
     assert.match(STORE_TOOLS_GUIDELINES, /approval/);
+    // 4-7 补刀：正文写法要讲给「未来读它的 agent」，scope 有默认取向
+    assert.match(STORE_TOOLS_GUIDELINES, /WHEN to use it/);
+    assert.match(STORE_TOOLS_GUIDELINES, /No greetings/);
+    assert.match(STORE_TOOLS_GUIDELINES, /default to "workspace"/);
   });
 });

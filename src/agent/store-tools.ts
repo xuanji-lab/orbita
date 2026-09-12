@@ -68,6 +68,15 @@ You can configure this agent itself with two tools:
 - add_mcp_server adds an MCP server from its config (stdio command or http url). The result reports the
   connection status; a failed server can be fixed by editing mcp.json.
 Both tools change disk state and require approval. Prefer them over telling the user to "add this manually".
+
+Writing a skill body (this matters — a skill is instructions for a future agent, not a reply to this user):
+- Write for the reader that will load it cold: start with WHEN to use it (trigger conditions), then the
+  steps in order. No greetings, no apologies, no restating this conversation.
+- Be imperative and specific: exact commands, paths, formats, pitfalls. One line of "run X then check Y"
+  beats a paragraph of explanation.
+- description carries the matching burden: the future agent decides whether to read the body from it
+  alone, so name the situations it covers and excludes.
+- scope: default to "workspace" when this session belongs to one, else "global".
 </orbita-store-tools>`;
 
 /** 铸工具对。broker 由 runtime 持有并接回执；这里只包 execute 的翻译。 */

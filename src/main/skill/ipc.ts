@@ -16,12 +16,6 @@ export function registerSkillIpc(store: SkillStore): void {
     store.unlink(slug, scope),
   );
   ipcMain.handle(ipcChannels.skillClean, (_event, slug: string): Promise<void> => store.clean(slug));
-  /** 应用内新建（4-1）：表单在面板里，主进程只落盘 */
-  ipcMain.handle(
-    ipcChannels.skillCreate,
-    (_event, slug: string, name: string, scope: SkillScope | null): Promise<void> =>
-      store.create(slug, name, scope),
-  );
   /**
    * 导入用户已有目录（4-1）。目录选择框在主进程开（同 workspaceAdd 的纪律：
    * renderer 在 sandbox 里没有文件系统访问权）；取消返回 null，选完由 store

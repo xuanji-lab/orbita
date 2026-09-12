@@ -67,6 +67,7 @@ export function App() {
     void api.settings.set(patch).then(setSettings);
   }, []);
 
+
   /** 右侧面板宽度（4-0 拖宽）：拖动中只改本地，松手才落 settings */
   const [panelWidth, setPanelWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
   useEffect(() => {
@@ -74,6 +75,18 @@ export function App() {
   }, [settings.rightPanelWidth]);
 
   const session = useChatSession(providers);
+
+  /**
+   * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
+   * 创建走对话里的 create_skill 工具。**面板不关**（用户可能对着现有 skill 参考），
+   * 新会话落在当前 workspace（有的话，agent 的默认 scope 才对）。
+   */
+  const createSkillDraft = useCallback(() => {
+    const intent = session.workspaces.find((w) => w.id === session.workspaceId);
+    if (intent !== undefined) session.newTaskIn(intent);
+    else session.newTask();
+    session.setDraft("Describe the workflow you want to turn into a skill.");
+  }, [session]);
   const skills = useSkills(rightPanel === "skills");
   /** 会话动作只在有会话时出现——它承载的是「对这个会话做点什么」；
    * 顶部入口常驻，不随会话消失（首页也能开 Skills / MCP）。 */
@@ -122,6 +135,7 @@ export function App() {
           onWidthChange={setPanelWidth}
           onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
           defaultWorkspaceId={session.workspaceId}
+          onCreateSkill={createSkillDraft}
         />
       ) : rightPanel === "mcp" ? (
         <McpPanel
