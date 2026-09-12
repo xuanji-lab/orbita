@@ -84,6 +84,12 @@ export const ipcChannels = {
   mcpOpenConfig: "mcp:open-config",
   /** 重读 mcp.json 并重连全部 server（已开任务的工具集不变，新任务拿新集） */
   mcpReload: "mcp:reload",
+  /** 加一台 server（4-2）：写 mcp.json 后自动重连 */
+  mcpAdd: "mcp:add",
+  /** 删一台 server（4-2）：写盘后自动重连 */
+  mcpRemove: "mcp:remove",
+  /** 启停一台 server（4-2）：改 disabled 字段后自动重连 */
+  mcpSetDisabled: "mcp:set-disabled",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
