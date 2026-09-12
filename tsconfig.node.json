@@ -15,5 +15,5 @@
     "resolveJsonModule": true,
     "composite": true
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts"]
+  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "src/agent/**/*", "electron.vite.config.ts"]
 }

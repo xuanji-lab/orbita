@@ -310,7 +310,10 @@ describe("终态由 stopReason 决定", () => {
         { type: "message_start", message },
         { type: "message_end", message },
       ]);
-      assert.equal(transcript[0]?.status, status);
+      const item = transcript[0];
+      // user 变体没有 status，先窄化到 assistant 再读
+      assert.ok(item !== undefined && item.role === "assistant");
+      assert.equal(item.status, status);
     });
   }
 
@@ -329,6 +332,8 @@ describe("终态由 stopReason 决定", () => {
     assert.equal(seen("stop"), "stop");
     // pi 的 StopReason 比协议宽：pending / deferred 协议不认，落回 stop
     assert.equal(seen("deferred"), "stop");
+    // 协议把 error 变体绑死 stopReason: "error"（不能落 "stop"）——回归锚点
+    assert.equal(seen("error"), "error");
   });
 });
 

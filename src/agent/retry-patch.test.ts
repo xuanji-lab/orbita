@@ -16,9 +16,17 @@ function message(stopReason: AssistantMessage["stopReason"], errorMessage?: stri
     api: "openai-completions",
     provider: "test",
     model: "test-model",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason,
     errorMessage,
+    timestamp: 0,
   };
 }
 

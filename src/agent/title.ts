@@ -26,8 +26,10 @@ const TITLE_TAG_RE = /<\/?title\b[^>]*>/gi;
  */
 export function normalizeGeneratedTitle(raw: string): string | null {
   const marked = TITLE_MARKED_RE.exec(raw);
-  // 无闭合标记时剥掉残片再取正文——`<title>修复登录` 这种半截回答不该整行当标题
-  const text = marked !== null ? marked[1] : raw.replace(TITLE_TAG_RE, "");
+  // 无闭合标记时剥掉残片再取正文——`<title>修复登录` 这种半截回答不该整行当标题。
+  // exec 的捕获组在 noUncheckedIndexedAccess 下是 string | undefined，空串（`<title></title>`）合法保留
+  const markedText = marked?.[1];
+  const text = markedText !== undefined ? markedText : raw.replace(TITLE_TAG_RE, "");
   const firstLine = text.trim().split("\n")[0]?.trim() ?? "";
   // 模型爱把标题包进引号 / 补一句号，且两者互相包着（「标题」。）——交替剥到稳定
   let cleaned = firstLine;
