@@ -288,6 +288,24 @@ export type AgentCommand =
    * 已开会话的 customTools 在开机时已定格，不受影响；下一轮开机拿新工具集。
    */
   | { type: "mcpReload"; servers: Record<string, McpServer> }
+  /** 4-3：主进程对 skillWriteRequest 的回执（同 permissionAnswer 的 requestId 模式） */
+  | {
+      type: "skillWriteResult";
+      requestId: string;
+      ok: boolean;
+      /** 成功时的中心存储路径 */
+      path?: string;
+      error?: string;
+    }
+  /** 4-3：主进程对 mcpWriteRequest 的回执 */
+  | {
+      type: "mcpWriteResult";
+      requestId: string;
+      ok: boolean;
+      /** 重连后这台 server 的状态（ready / failed …），给模型看连接结果 */
+      status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string };
+      error?: string;
+    }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
@@ -322,6 +340,33 @@ export type AgentEvent =
    * 主进程接住它当缓存，管理面查的就是这份快照（连接状态是运行时事实，不落盘）。
    */
   | { type: "mcp"; servers: McpServerInfo[] }
+  /**
+   * 4-3：agent 工具 create_skill 的写盘请求。**写盘在主进程**（agent 进程
+   * 不碰 userData）——主进程调 SkillStore 后回 skillWriteResult。
+   * scope 的 workspace 一侧由主进程按会话归属解析（agent 不知道 workspaceId）。
+   */
+  | {
+      type: "skillWriteRequest";
+      requestId: string;
+      sessionId: string;
+      slug: string;
+      name: string;
+      description: string;
+      body: string;
+      scope: "global" | "workspace";
+    }
+  /** 4-3：agent 工具 add_mcp_server 的写盘请求（MCP 无 workspace 语义） */
+  | {
+      type: "mcpWriteRequest";
+      requestId: string;
+      name: string;
+      server: McpServer;
+    }
+  /**
+   * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
+   * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
+   */
+  | { type: "skillsChanged" }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
