@@ -448,10 +448,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     modelRuntime,
     resourceLoaderOptions: {
       /**
-       * Skills：把目录交给 pi，扫盘与拼 prompt 都是它的事。
+       * Skills：把集合目录交给 pi，扫盘与拼 prompt 都是它的事。
        *
        * **不自己调 `loadSkillsFromDir` / `formatSkillsForPrompt`**：用了那两个就得自己拼
        * system prompt，而 pi 的 ResourceLoader 本来就在做这件事——多一份就多一份会漂的格式。
+       *
+       * 2-1 起 skillsDirs 是数组（global 恒在 + 当前工作区），里面的 symlink 指向
+       * 中心存储，pi 的加载器跟符号链接（skills.js 对 isSymbolicLink 做 statSync，
+       * 断链自动跳过）。顺序由主进程定且稳定，我们不重排——重排会作废 prefix 缓存。
        *
        * `noSkills: true` 不是「不要 skills」，而是**不要自动发现的那些**（pi 0.84.3 的
        * `resource-loader.js:330`：它只把 `enabledSkills` 排掉，`additionalSkillPaths` 照常合并）。
@@ -461,7 +465,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
        * 隔离是可逆的：以后想共享全局 skill，加个设置项就行；反过来是破坏性变更。
        */
       noSkills: true,
-      additionalSkillPaths: [command.skillsDir],
+      additionalSkillPaths: command.skillsDirs,
       extensionFactories: [
         {
           name: "orbita-permission",
