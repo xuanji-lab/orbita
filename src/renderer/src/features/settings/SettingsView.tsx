@@ -31,8 +31,9 @@ export function SettingsView(props: {
         gridTemplateRows: "auto minmax(0,1fr)",
       }}
     >
-      {/* 与聊天页同一个页头形状——同一张卡，页头就该长一样 */}
+      {/* 与聊天页同一个页头形状——同一张卡，页头就该长一样，拖拽区也一样 */}
       <header
+        className="titlebar"
         style={{
           display: "flex",
           alignItems: "center",

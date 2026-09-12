@@ -233,6 +233,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         data-leaving={travel === "leaving" ? "true" : undefined}
         data-travel={travel === "prep" || travel === "entering" ? travel : undefined}
         style={{
+          position: "relative",
           height: "100%",
           display: "flex",
           alignItems: "center",
@@ -241,9 +242,20 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
           overflow: "hidden",
         }}
       >
+        {/*
+          首页没有页头，但顶部这一条同样要能拖窗口 / 双击缩放——不给的话用户从会话页
+          回到首页就会发现「刚才能拖的地方现在不能拖了」。高度与 Pane 页头对齐（30 + 12×2）。
+          压在内容下面（zIndex 0）：窗口矮到内容顶上来时，会话卡的点击优先，不被拖拽区吞掉。
+        */}
+        <div
+          className="titlebar"
+          style={{ position: "absolute", insetInlineStart: 0, insetInlineEnd: 0, top: 0, height: 54, zIndex: 0 }}
+        />
         <div
           ref={stageRef}
           style={{
+            position: "relative",
+            zIndex: 1,
             width: "min(100%, var(--content-max-width))",
             display: "flex",
             flexDirection: "column",
@@ -510,7 +522,9 @@ function Pane(props: {
         gridTemplateRows: "auto minmax(0,1fr) auto",
       }}
     >
+      {/* 页头兼窗口拖拽区：整行可拖可双击缩放，里面的铅笔与输入框由 `.titlebar button/input` 自动豁免 */}
       <header
+        className="titlebar"
         style={{
           display: "flex",
           alignItems: "center",
