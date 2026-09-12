@@ -15,6 +15,10 @@
  * 3. **收尾序**：退订 → dispose（未被外部直杀时）→ 出表 → settled 回调。
  *    settled（runtime 用它发 phase idle）一定晚于出表——renderer 收到 idle 时
  *    本轮已完全收尾，排队投递不会撞 already running。
+ *    **退订与 dispose 各自兜异常**：它们是 pi 对象上的清理动作，抛错是它们的自由；
+ *    不兜的话出表与 settled 都不会执行，这条会话就**永久报废**——界面永远转着
+ *    Responding、停止按钮找得到坑却停不下任何东西、下一次发送直接撞 already running。
+ *    清理失败只该丢掉清理本身，不该丢掉「这一轮结束了」这个事实。
  */
 
 /** 一轮要管的三个对象面：abort / dispose 是 pi session 的，unsubscribe 是退订闭包。 */
@@ -67,8 +71,17 @@ export function startCycle<P extends CycleParts>(
       if (slot.abortRequested) opened.abort();
       await run(opened);
     } finally {
-      slot.opened?.unsubscribe();
-      if (!slot.disposed && slot.opened !== null) slot.opened.dispose();
+      try {
+        slot.opened?.unsubscribe();
+      } catch (cause) {
+        console.error(`[turn-cycle] 退订失败（不影响收尾）session=${id}`, cause);
+      }
+      try {
+        if (!slot.disposed && slot.opened !== null) slot.opened.dispose();
+      } catch (cause) {
+        console.error(`[turn-cycle] dispose 失败（不影响收尾）session=${id}`, cause);
+      }
+      // 这两行无条件执行：轮结束这个事实不能被清理动作的失败吞掉
       running.delete(id);
       if (!slot.preempted) onSettled();
     }

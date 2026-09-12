@@ -220,4 +220,51 @@ describe("收尾不因 run 抛错而漏 —— finally 语义", () => {
     assert.equal(running.has("s1"), false);
     assert.equal(settled, true, "失败轮也要发 idle——renderer 的槽不能停在 turn");
   });
+
+  /**
+   * 清理动作自己抛错是另一回事：它们在 finally 里，不兜的话出表与 settled
+   * 都不会执行，这条会话就永久报废：界面永远转着 Responding、停止按钮找得到坑
+   * 却停不下任何东西、下一次发送直接撞 already running。
+   */
+  test("退订抛错：dispose / 出表 / settled 照走，不把会话卡死", async () => {
+    const running = newTable();
+    const parts = new FakeParts();
+    parts.unsubscribe = (): void => {
+      throw new Error("退订炋了");
+    };
+    let settled = false;
+    await startCycle(
+      running,
+      "s1",
+      async () => parts,
+      async () => undefined,
+      () => {
+        settled = true;
+      },
+    );
+    assert.deepEqual(parts.calls, ["dispose"], "退订炋了不影响 dispose");
+    assert.equal(running.has("s1"), false, "必须出表，否则下一次发送撞 already running");
+    assert.equal(settled, true, "必须发 idle，否则界面永远转着 Responding");
+  });
+
+  test("dispose 抛错：出表与 settled 照走，不把会话卡死", async () => {
+    const running = newTable();
+    const parts = new FakeParts();
+    parts.dispose = (): void => {
+      throw new Error("dispose 炋了");
+    };
+    let settled = false;
+    await startCycle(
+      running,
+      "s1",
+      async () => parts,
+      async () => undefined,
+      () => {
+        settled = true;
+      },
+    );
+    assert.deepEqual(parts.calls, ["unsubscribe"]);
+    assert.equal(running.has("s1"), false);
+    assert.equal(settled, true);
+  });
 });
