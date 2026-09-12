@@ -68,8 +68,6 @@ export const ipcChannels = {
   skillUnlink: "skill:unlink",
   /** 清掉一条 skill 的全部断链引用（missing 后的收尾动作） */
   skillClean: "skill:clean",
-  /** 应用内新建 skill：写骨架 SKILL.md + 按归属建链（4-1） */
-  skillCreate: "skill:create",
   /** 导入用户已有目录：主进程开目录选择框，store 条目做成指向真身的 symlink（4-1）。返回 slug，取消返回 null */
   skillImport: "skill:import",
   /** 读详情（已拆成 name / description / 正文）；不存在返回 null */
