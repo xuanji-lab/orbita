@@ -27,10 +27,9 @@ import type { DrawerSettings } from "@shared/settings";
  * 两层玻璃画同一个 `--glass-bg`，深度是合成出来的；两层都 `border: 0`。
  *
  * 侧栏 288px 没有自己的面，直接坐在边界卡上（设计系统 *Layout*：both sidebars are
- * unbounded）。右抽屉（right-drawer-X）是与 pane **并排的另一张浮卡**（2026-09-12
- * 裁决：分界参考主会话区的浮卡形态，与 Skills / MCP 分屏面板同款）——主会话区
- * 永远是一张完整的卡。转帧式窗口的窗口键在自绘标题栏（Titlebar）上；
- * 复制转录与抽屉开关住在右图标条（wafo 2026-09-12 裁决）。
+ * unbounded）。右抽屉（right-drawer-X）**是 pane 的子元素**——与会话列同一张卡，
+ * 中间只有一根竖线（2026-09-12 裁决：不要间隔，一条竖线）。转帧式窗口的窗口键
+ * 在自绘标题栏（Titlebar）上；复制转录与抽屉开关住在右图标条（wafo 2026-09-12 裁决）。
  */
 export function App() {
   usePlatform();
@@ -165,37 +164,38 @@ export function App() {
         />
 
         <main className="pane">
-          {overlay === "settings" ? (
-            <SettingsView
-              tab={settingsTab}
-              settings={settings}
-              onSettingsChange={changeSettings}
-              onProvidersChange={refresh}
+          <div className="pane-main">
+            {overlay === "settings" ? (
+              <SettingsView
+                tab={settingsTab}
+                settings={settings}
+                onSettingsChange={changeSettings}
+                onProvidersChange={refresh}
+              />
+            ) : (
+              <ChatView session={session} providersError={providersError} />
+            )}
+          </div>
+          {overlay === null && (
+            <Drawer
+              engine={engine}
+              view={drawerView}
+              mainSessionId={mainSessionId}
+              providersError={providersError}
+              open={drawerOpen}
+              width={drawerWidth}
+              onWidthChange={setDrawerWidth}
+              onWidthCommit={() => changeDrawer({ width: drawerWidth })}
+              docked={docked}
+              onDockedChange={(list) =>
+                changeDrawer({
+                  // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
+                  docked: [...list].filter((tab) => tab !== NEW_TASK_TAB),
+                })
+              }
             />
-          ) : (
-            <ChatView session={session} providersError={providersError} />
           )}
         </main>
-
-        {overlay === null && (
-          <Drawer
-            engine={engine}
-            view={drawerView}
-            mainSessionId={mainSessionId}
-            providersError={providersError}
-            open={drawerOpen}
-            width={drawerWidth}
-            onWidthChange={setDrawerWidth}
-            onWidthCommit={() => changeDrawer({ width: drawerWidth })}
-            docked={docked}
-            onDockedChange={(list) =>
-              changeDrawer({
-                // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
-                docked: [...list].filter((tab) => tab !== NEW_TASK_TAB),
-              })
-            }
-          />
-        )}
 
         {rightPanel === "skills" ? (
           <SkillsPanel

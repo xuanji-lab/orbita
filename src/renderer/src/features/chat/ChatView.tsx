@@ -274,6 +274,10 @@ export function ChatView(props: {
         data-travel={travel === "prep" || travel === "entering" ? travel : undefined}
         style={{
           position: "relative",
+          // pane 是 flex 行，首页根是它的子项——不撑满的话内容列会收缩靠左，
+          // 看起来像被右侧的抽屉挤过去（2026-09-12）
+          flex: 1,
+          minWidth: 0,
           height: "100%",
           display: "flex",
           alignItems: "center",
