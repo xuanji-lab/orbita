@@ -74,6 +74,8 @@ export const ipcChannels = {
   mcpList: "mcp:list",
   /** 用系统默认编辑器打开 mcp.json（加减 server 走文件，不做表单） */
   mcpOpenConfig: "mcp:open-config",
+  /** 重读 mcp.json 并重连全部 server（已开任务的工具集不变，新任务拿新集） */
+  mcpReload: "mcp:reload",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
@@ -268,6 +270,12 @@ export type AgentCommand =
       piSessionFile?: string;
     }
   | { type: "listBuiltins" }
+  /**
+   * 重读 mcp.json 后重连（1-1 热重载）。servers 由主进程读好传进来——读文件与
+   * 讲错误是主进程的事（与开轮命令里的 mcpServers 同一条纪律）。重连是进程级的：
+   * 已开会话的 customTools 在开机时已定格，不受影响；下一轮开机拿新工具集。
+   */
+  | { type: "mcpReload"; servers: Record<string, McpServer> }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
