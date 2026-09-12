@@ -4,7 +4,7 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { SkillContent, SkillMeta, SkillPatch, SkillScope } from "../../shared/skill.ts";
-import type { McpServerInfo } from "../../shared/mcp.ts";
+import type { McpServer, McpServerInfo } from "../../shared/mcp.ts";
 
 export const skillApi = {
   /** 中心存储 + 全部集合链接一起扫，按 slug 排序（含 missing 的断链条目） */
@@ -42,4 +42,12 @@ export const mcpApi = {
   openConfig: (): Promise<void> => ipcRenderer.invoke(ipcChannels.mcpOpenConfig),
   /** 重读 mcp.json 并重连（新配置对下一轮开学生效；进行中的任务工具集不变） */
   reload: (): Promise<void> => ipcRenderer.invoke(ipcChannels.mcpReload),
+  /** 加一台 server（4-2）：写盘后自动重连；重名由主进程抛错 */
+  add: (name: string, server: McpServer): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.mcpAdd, name, server),
+  /** 删一台 server（4-2） */
+  remove: (name: string): Promise<void> => ipcRenderer.invoke(ipcChannels.mcpRemove, name),
+  /** 启停一台 server（4-2） */
+  setDisabled: (name: string, disabled: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.mcpSetDisabled, name, disabled),
 } as const;

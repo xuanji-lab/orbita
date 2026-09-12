@@ -34,6 +34,7 @@ import panelRight from "../../../../Orbita Design System/assets/icons/lucide/pan
 import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off.svg?raw";
 import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?raw";
 import plug from "../../../../Orbita Design System/assets/icons/lucide/plug.svg?raw";
+import power from "../../../../Orbita Design System/assets/icons/lucide/power.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
@@ -94,6 +95,7 @@ const ICONS = {
   pin,
   "pin-off": pinOff,
   plug,
+  power,
   plus,
   "refresh-cw": refreshCw,
   settings,

@@ -6,7 +6,7 @@
  */
 import { ipcMain, shell } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import { describeServer, type McpServer, type McpServerInfo } from "../../shared/mcp.ts";
+import { describeServer, isMcpServerName, type McpServer, type McpServerInfo } from "../../shared/mcp.ts";
 import type { McpStore } from "./store.ts";
 
 export function registerMcpIpc(
@@ -51,6 +51,35 @@ export function registerMcpIpc(
   ipcMain.handle(ipcChannels.mcpReload, async (): Promise<void> => {
     await reload(await store.read());
   });
+
+  /**
+   * 加删启停（4-2）：写盘后自动重连，返回前新快照已缓存并广播。重连失败不视为
+   * 写盘失败（配置已经在了，连接是另一层的事）——打日志，让列表的刷新如实反映。
+   */
+  const writeThenReload = async (write: () => Promise<void>): Promise<void> => {
+    await write();
+    await reload(await store.read()).catch((cause: unknown) => {
+      console.error("[main] mcp.json 改了但重连失败（下次开轮会用新配置）", cause);
+    });
+  };
+
+  ipcMain.handle(
+    ipcChannels.mcpAdd,
+    async (_e, name: string, server: McpServer): Promise<void> => {
+      if (!isMcpServerName(name)) throw new Error(`非法 server 名：${name}`);
+      await writeThenReload(() => store.add(name, server));
+    },
+  );
+
+  ipcMain.handle(ipcChannels.mcpRemove, (_e, name: string): Promise<void> =>
+    writeThenReload(() => store.remove(name)),
+  );
+
+  ipcMain.handle(
+    ipcChannels.mcpSetDisabled,
+    (_e, name: string, disabled: boolean): Promise<void> =>
+      writeThenReload(() => store.setDisabled(name, disabled)),
+  );
 
   return {
     onAgentSnapshot: (servers) => {

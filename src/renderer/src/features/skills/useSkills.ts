@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { LOADING, READY, failed, type LoadState } from "../chat/load-state";
 import { api } from "../../api";
 import type { SkillMeta, SkillPatch, SkillScope } from "@shared/skill";
-import type { McpServerInfo } from "@shared/mcp";
+import type { McpServer, McpServerInfo } from "@shared/mcp";
 import type { Workspace } from "@shared/workspace";
 
 
@@ -22,6 +22,9 @@ export interface SkillsState {
   serversLoad: LoadState;
   openMcpConfig: () => void;
   reloadMcp: () => Promise<void>;
+  addServer: (name: string, server: McpServer) => Promise<void>;
+  removeServer: (name: string) => Promise<void>;
+  setServerDisabled: (name: string, disabled: boolean) => Promise<void>;
   /** 选中哪一条（slug）；null = 还没选 */
   selected: string | null;
   select: (slug: string | null) => void;
@@ -168,6 +171,23 @@ export function useSkills(active: boolean): SkillsState {
       });
   }, [refreshServers]);
 
+  /** 加一台 server（4-2）：主进程写盘 + 自动重连，回来后刷新列表 */
+  const addServer = useCallback(
+    (name: string, server: McpServer) => api.mcp.add(name, server).then(refreshServers),
+    [refreshServers],
+  );
+
+  /** 删一台 / 启停（4-2）：同上，写盘 + 重连后回读 */
+  const removeServer = useCallback(
+    (name: string) => api.mcp.remove(name).then(refreshServers),
+    [refreshServers],
+  );
+
+  const setServerDisabled = useCallback(
+    (name: string, disabled: boolean) => api.mcp.setDisabled(name, disabled).then(refreshServers),
+    [refreshServers],
+  );
+
   return {
     skills,
     load,
@@ -176,6 +196,9 @@ export function useSkills(active: boolean): SkillsState {
     serversLoad,
     openMcpConfig,
     reloadMcp,
+    addServer,
+    removeServer,
+    setServerDisabled,
     selected,
     select: setSelected,
     reload,
