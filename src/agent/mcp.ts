@@ -74,6 +74,35 @@ export class McpHub {
     return this.tools;
   }
 
+  /**
+   * 工具调用经 hub 查**当前** client（1-1 修复）：热重载会 close 全部旧 client，
+   * 而已开会话的工具闭包在开机时就定格了。查当前 client 的语义：同名 server
+   * 重连后无缝落到新连接；被移除的 server 报干净错误，不是撞死传输。
+   */
+  async callTool(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    publicName: string,
+  ) {
+    const client = this.clients.get(serverName);
+    if (client === undefined) {
+      throw new Error(
+        `${publicName}: server "${serverName}" is not connected (it may have been removed by a reload)`,
+      );
+    }
+    return withTimeout(
+      client.callTool(
+        { name: toolName, arguments: args },
+        undefined,
+        signal === undefined ? {} : { signal },
+      ),
+      CALL_TIMEOUT_MS,
+      `${publicName} 调用超时`,
+    );
+  }
+
   /** 管理面要看的状态。 */
   describe(): McpServerInfo[] {
     return Object.entries(this.servers)
@@ -136,7 +165,7 @@ export class McpHub {
         `列 ${name} 的工具超时`,
       );
       for (const tool of page.tools) {
-        tools.push(toPiTool(client, name, tool));
+        tools.push(toPiTool(this, name, tool));
       }
       cursor = page.nextCursor;
     } while (cursor !== undefined);
@@ -191,7 +220,13 @@ type McpResultContent = TextContent | ImageContent;
  * **错误靠 throw 表达**——pi 的 agent-loop 只在 execute 抛出时才把结果标成 isError，
  * 返回值上没有这个字段（pi-agent-core `agent-loop.js` 的 executePreparedToolCall）。
  */
-function toPiTool(client: Client, serverName: string, tool: McpToolShape): ToolDefinition {
+/**
+ * 调用经 hub 查**当前** client（1-1 修复）：热重载会 close 全部旧 client，而
+ * 已开会话的工具闭包在开机时已定格——捕获旧 client 的话，reload 后同一台
+ * server 的调用会落在死连接上直接报错。查当前 client 的语义：同名 server
+ * 重连后无缝落到新连接；被移除的 server 报干净错误，不是撞死传输。
+ */
+function toPiTool(hub: McpHub, serverName: string, tool: McpToolShape): ToolDefinition {
   const publicName = qualifiedToolName(serverName, tool.name);
   return {
     name: publicName,
@@ -200,14 +235,12 @@ function toPiTool(client: Client, serverName: string, tool: McpToolShape): ToolD
     // JSON Schema 与 TSchema 结构兼容，pi 不做 typebox 校验，直接透传
     parameters: (tool.inputSchema ?? { type: "object", properties: {} }) as never,
     async execute(_toolCallId, params, signal) {
-      const result = await withTimeout(
-        client.callTool(
-          { name: tool.name, arguments: (params ?? {}) as Record<string, unknown> },
-          undefined,
-          signal === undefined ? {} : { signal },
-        ),
-        CALL_TIMEOUT_MS,
-        `${publicName} 调用超时`,
+      const result = await hub.callTool(
+        serverName,
+        tool.name,
+        (params ?? {}) as Record<string, unknown>,
+        signal,
+        publicName,
       );
       const content = toResultContent(result.content);
       // MCP 的 isError 是业务级失败（不是传输失败），要如实告诉模型——

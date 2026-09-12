@@ -134,6 +134,32 @@ describe("McpHub.restart（热重载）", () => {
     await hub.dispose();
   });
 
+  // 1-1 修复的回归锚：工具闭包在开机时定格，restart 换新 client 后旧会话照样能用
+  test("跨 restart 的调用落到新 client——已开会话的工具在 reload 后照常工作", async () => {
+    const hub = new McpHub();
+    const server = { transport: "stdio" as const, command: process.execPath, args: [FIXTURE] };
+    await hub.start({ demo: server });
+    const echo = hub.currentTools().find((t) => t.name === "mcp__demo__echo");
+    assert.ok(echo);
+    await hub.restart({ demo: server }); // 同一台 server 拆掉重连
+    const result = await echo.execute("call-reload", { text: "重载后" }, undefined, undefined, undefined as never);
+    assert.deepEqual(result.content[0], { type: "text", text: "echo: 重载后" });
+    await hub.dispose();
+  });
+
+  test("server 被移除后，旧会话的调用报干净错误（不是撞死连接）", async () => {
+    const hub = new McpHub();
+    await hub.start({ demo: { transport: "stdio", command: process.execPath, args: [FIXTURE] } });
+    const echo = hub.currentTools().find((t) => t.name === "mcp__demo__echo");
+    assert.ok(echo);
+    await hub.restart({}); // 配置里不再有 demo
+    await assert.rejects(
+      echo.execute("call-gone", { text: "x" }, undefined, undefined, undefined as never),
+      /not connected.*removed by a reload/,
+    );
+    await hub.dispose();
+  });
+
   /** stdio 的子进程随 stdin 关闭而退出——旧 client close 后不许有孤儿 */
   test("旧 client 全部 close，子进程真的退了（无孤儿）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-mcp-reload-"));
