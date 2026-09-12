@@ -64,7 +64,7 @@ const TURN_FIELDS = {
   modelId: "m",
   mode: "manual" as const,
   piSessionDir: "C:/pi-sessions",
-  skillsDir: "C:/skills",
+  skillsDirs: ["C:/skills"],
   mcpServers: {},
 };
 

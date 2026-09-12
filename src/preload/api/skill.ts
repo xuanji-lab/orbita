@@ -3,15 +3,20 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { SkillContent, SkillMeta, SkillPatch } from "../../shared/skill.ts";
+import type { SkillContent, SkillMeta, SkillPatch, SkillScope } from "../../shared/skill.ts";
 import type { McpServerInfo } from "../../shared/mcp.ts";
 
 export const skillApi = {
-  /** 两个目录一起列，按 slug 排序 */
+  /** 中心存储 + 全部集合链接一起扫，按 slug 排序（含 missing 的断链条目） */
   list: (): Promise<SkillMeta[]> => ipcRenderer.invoke(ipcChannels.skillList),
-  /** 启停 = 在 skills/ 与 skills-inactive/ 之间搬目录 */
-  toggle: (slug: string, enabled: boolean): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.skillToggle, slug, enabled),
+  /** 链进一个集合（global 或某个 workspace）；互斥规则在主进程执行 */
+  link: (slug: string, scope: SkillScope): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.skillLink, slug, scope),
+  /** 从一个集合移出（只删链接，不碰中心存储） */
+  unlink: (slug: string, scope: SkillScope): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.skillUnlink, slug, scope),
+  /** 清掉一条 skill 的全部断链引用（missing 的收尾） */
+  clean: (slug: string): Promise<void> => ipcRenderer.invoke(ipcChannels.skillClean, slug),
   /** 读详情；不存在返回 null */
   read: (slug: string): Promise<SkillContent | null> =>
     ipcRenderer.invoke(ipcChannels.skillRead, slug),

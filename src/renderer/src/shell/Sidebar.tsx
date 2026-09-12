@@ -598,14 +598,14 @@ function WorkspaceGroup(props: {
 
 /** 分组标题：机器面的小字用 business/mono，字号 micro，大写加字距 */
 /**
- * Skills 列表（侧栏）。停用的也列，只是排在后面并标出来——
- * 看不见停用的就无从重新启用，那等于把它们藏进文件系统里。
+ * Skills 列表（侧栏）。没链任何集合的也列，只是排在后面并标出来——
+ * 看不见未链接的就无从重新链上，那等于把它们藏进文件系统里。
  */
 function SkillNodes(props: { skills: SkillsState }) {
   const { skills } = props;
   const list = describeList(skills.load, skills.skills.length);
-  const on = skills.skills.filter((s) => s.enabled);
-  const off = skills.skills.filter((s) => !s.enabled);
+  const on = skills.skills.filter((s) => s.global || s.workspaces.length > 0);
+  const off = skills.skills.filter((s) => !s.global && s.workspaces.length === 0);
   return (
     <>
       <NodeLabel>Skills</NodeLabel>
@@ -621,18 +621,18 @@ function SkillNodes(props: { skills: SkillsState }) {
               key={skill.slug}
               icon="brain"
               label={skill.name}
-              hint={skill.description === "" ? skill.slug : skill.description}
+              hint={hintOf(skill)}
               active={skills.selected === skill.slug}
               onClick={() => skills.select(skill.slug)}
             />
           ))}
-          {off.length > 0 && <NodeLabel>Disabled</NodeLabel>}
+          {off.length > 0 && <NodeLabel>Not linked</NodeLabel>}
           {off.map((skill) => (
             <NavRow
               key={skill.slug}
               icon="brain"
               label={skill.name}
-              hint={`Disabled · ${skill.description === "" ? skill.slug : skill.description}`}
+              hint={`Not linked · ${hintOf(skill)}`}
               active={skills.selected === skill.slug}
               onClick={() => skills.select(skill.slug)}
             />
@@ -641,6 +641,14 @@ function SkillNodes(props: { skills: SkillsState }) {
       )}
     </>
   );
+}
+
+/** 列表行的一句hint：断链优先说，否则是归属 + description */
+function hintOf(skill: { missing: boolean; global: boolean; workspaces: string[]; description: string; slug: string }): string {
+  if (skill.missing) return `Missing · links exist but the folder is gone`;
+  const sets = [skill.global ? "Global" : "", ...skill.workspaces].filter(Boolean).join(", ");
+  const desc = skill.description === "" ? skill.slug : skill.description;
+  return sets === "" ? desc : `${sets} · ${desc}`;
 }
 
 function NodeLabel(props: { children: React.ReactNode }) {

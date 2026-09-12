@@ -7,13 +7,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { LOADING, READY, failed, type LoadState } from "../chat/load-state";
 import { api } from "../../api";
-import type { SkillMeta, SkillPatch } from "@shared/skill";
+import type { SkillMeta, SkillPatch, SkillScope } from "@shared/skill";
 import type { McpServerInfo } from "@shared/mcp";
+import type { Workspace } from "@shared/workspace";
 
 
 export interface SkillsState {
   skills: SkillMeta[];
   load: LoadState;
+  /** 工作区列表——link 的目标集合从这来 */
+  workspaces: Workspace[];
   /** MCP server 与它们此刻的连接状态。**和 skills 同一个面**：两者都是「agent 会什么」。 */
   servers: McpServerInfo[];
   serversLoad: LoadState;
@@ -23,7 +26,10 @@ export interface SkillsState {
   selected: string | null;
   select: (slug: string | null) => void;
   reload: () => void;
-  toggle: (slug: string, enabled: boolean) => void;
+  link: (slug: string, scope: SkillScope) => void;
+  unlink: (slug: string, scope: SkillScope) => void;
+  /** 清一条 skill 的全部断链引用（missing 的收尾） */
+  clean: (slug: string) => void;
   save: (slug: string, patch: SkillPatch) => Promise<void>;
   reveal: (slug: string | null) => void;
 }
@@ -32,6 +38,7 @@ export function useSkills(active: boolean): SkillsState {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [load, setLoad] = useState<LoadState>(LOADING);
   const [selected, setSelected] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [serversLoad, setServersLoad] = useState<LoadState>(LOADING);
 
@@ -61,6 +68,10 @@ export function useSkills(active: boolean): SkillsState {
     if (!active) return;
     refresh();
     refreshServers();
+    void api.workspace
+      .list()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
   }, [active, refresh, refreshServers]);
 
   const reload = useCallback(() => {
@@ -69,13 +80,33 @@ export function useSkills(active: boolean): SkillsState {
   }, [refresh]);
 
   /**
-   * 启停。**先落盘再回读**，不做乐观更新：这一下是 rename，可能因为两边同名而失败，
-   * 乐观更新会让开关先动一下再弹回去。
+   * 链接 / 移链 / 清断链。**先落盘再回读**，不做乐观更新：互斥规则在主进程执行
+   * （链进 global 会静默删 workspace 链接），乐观更新会把被删的那条留在屏幕上。
    */
-  const toggle = useCallback(
-    (slug: string, enabled: boolean) => {
+  const link = useCallback(
+    (slug: string, scope: SkillScope) => {
       void api.skill
-        .toggle(slug, enabled)
+        .link(slug, scope)
+        .then(refresh)
+        .catch((cause: unknown) => setLoad(failed(cause)));
+    },
+    [refresh],
+  );
+
+  const unlink = useCallback(
+    (slug: string, scope: SkillScope) => {
+      void api.skill
+        .unlink(slug, scope)
+        .then(refresh)
+        .catch((cause: unknown) => setLoad(failed(cause)));
+    },
+    [refresh],
+  );
+
+  const clean = useCallback(
+    (slug: string) => {
+      void api.skill
+        .clean(slug)
         .then(refresh)
         .catch((cause: unknown) => setLoad(failed(cause)));
     },
@@ -113,6 +144,7 @@ export function useSkills(active: boolean): SkillsState {
   return {
     skills,
     load,
+    workspaces,
     servers,
     serversLoad,
     openMcpConfig,
@@ -120,7 +152,9 @@ export function useSkills(active: boolean): SkillsState {
     selected,
     select: setSelected,
     reload,
-    toggle,
+    link,
+    unlink,
+    clean,
     save,
     reveal,
   };

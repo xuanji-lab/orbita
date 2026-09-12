@@ -4,14 +4,18 @@
  */
 import { ipcMain, shell } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { SkillContent, SkillMeta, SkillPatch } from "../../shared/skill.ts";
+import type { SkillContent, SkillMeta, SkillPatch, SkillScope } from "../../shared/skill.ts";
 import type { SkillStore } from "./store.ts";
 
 export function registerSkillIpc(store: SkillStore): void {
   ipcMain.handle(ipcChannels.skillList, (): Promise<SkillMeta[]> => store.list());
-  ipcMain.handle(ipcChannels.skillToggle, (_event, slug: string, enabled: boolean): Promise<void> =>
-    store.setEnabled(slug, enabled),
+  ipcMain.handle(ipcChannels.skillLink, (_event, slug: string, scope: SkillScope): Promise<void> =>
+    store.link(slug, scope),
   );
+  ipcMain.handle(ipcChannels.skillUnlink, (_event, slug: string, scope: SkillScope): Promise<void> =>
+    store.unlink(slug, scope),
+  );
+  ipcMain.handle(ipcChannels.skillClean, (_event, slug: string): Promise<void> => store.clean(slug));
   ipcMain.handle(ipcChannels.skillRead, (_event, slug: string): Promise<SkillContent | null> =>
     store.read(slug),
   );
@@ -22,11 +26,11 @@ export function registerSkillIpc(store: SkillStore): void {
   /**
    * 在系统文件管理器里揭示这条 skill 的目录。
    * **新建与删除都走这里**：删除不可逆，而新建一个文件夹本来就是文件管理器最擅长的事，
-   * 我们没有理由为它做一套弱化的 UI。
+   * 我们没有理由为它做一套弱化的 UI。传 null 打开中心存储根目录。
    */
   ipcMain.handle(ipcChannels.skillReveal, async (_event, slug: string | null): Promise<void> => {
     if (slug === null) {
-      await shell.openPath(store.enabledDir());
+      await shell.openPath(store.storeRoot());
       return;
     }
     const dir = await store.locateDir(slug);

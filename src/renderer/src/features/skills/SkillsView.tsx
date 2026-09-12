@@ -4,7 +4,7 @@ import { Icon } from "../../shell/Icon";
 import { describeList } from "../chat/load-state";
 import type { SkillsState } from "./useSkills";
 import { api } from "../../api";
-import type { SkillContent } from "@shared/skill";
+import type { SkillContent, SkillMeta } from "@shared/skill";
 import type { McpStatus } from "@shared/mcp";
 
 
@@ -65,7 +65,7 @@ export function SkillsView(props: { skills: SkillsState }) {
             <Detail
               key={selected.slug}
               slug={selected.slug}
-              enabled={selected.enabled}
+              meta={selected}
               skills={skills}
             />
           )}
@@ -79,7 +79,8 @@ export function SkillsView(props: { skills: SkillsState }) {
 function Overview(props: { skills: SkillsState }) {
   const { skills } = props;
   const list = describeList(skills.load, skills.skills.length);
-  const on = skills.skills.filter((s) => s.enabled).length;
+  const on = skills.skills.filter((s) => s.global || s.workspaces.length > 0).length;
+  const missing = skills.skills.filter((s) => s.missing).length;
   return (
     <section style={{ display: "grid", gap: "var(--space-4)" }}>
       <p style={{ margin: 0, fontSize: "var(--font-size-body)", color: "var(--color-text-secondary)" }}>
@@ -93,7 +94,8 @@ function Overview(props: { skills: SkillsState }) {
         <Line tone="busy">No skill yet. Put a folder with a SKILL.md into the skills directory.</Line>
       ) : list.body === "list" ? (
         <Line tone="busy">
-          {on} of {skills.skills.length} enabled. Pick one on the left to read or edit it.
+          {on} of {skills.skills.length} linked to at least one set
+          {missing > 0 ? ` · ${missing} missing` : ""}. Pick one on the left to read or edit it.
         </Line>
       ) : null}
       <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
@@ -214,13 +216,13 @@ function ServerStatus(props: { status: McpStatus }) {
 }
 
 /**
- * 详情：启停 + 三段编辑。
+ * 详情：归属集合 + 三段编辑。
  *
  * **失焦保存，不做 700ms 自动保存那套状态机**——那套复杂度来自并发写入与冲突合并，
  * 而这里只有一个写入者。保存失败当场说出来，不静默重试（同 D-3 的纪律）。
  */
-function Detail(props: { slug: string; enabled: boolean; skills: SkillsState }) {
-  const { slug, enabled, skills } = props;
+function Detail(props: { slug: string; meta: SkillMeta; skills: SkillsState }) {
+  const { slug, meta, skills } = props;
   const [content, setContent] = useState<SkillContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -261,22 +263,57 @@ function Detail(props: { slug: string; enabled: boolean; skills: SkillsState }) 
       .finally(() => setSaving(false));
   };
 
+  if (meta.missing) {
+    // 断链：中心存储里的文件夹没了，只剩引用。列出来 + 提供清理，不能静默消失
+    return (
+      <section style={{ display: "grid", gap: "var(--space-4)" }}>
+        <Line tone="bad">
+          Missing: the skill folder is gone from the skills directory, but its links are still in:
+          {" "}
+          {[meta.global ? "Global" : "", ...meta.workspaces].filter(Boolean).join(", ") || "nowhere"}.
+          The agent cannot use it.
+        </Line>
+        <span>
+          <button type="button" onClick={() => skills.clean(slug)} style={buttonStyle}>
+            <Icon name="trash-2" size={14} /> Clean up references
+          </button>
+        </span>
+      </section>
+    );
+  }
+
   if (error !== null && content === null) return <Line tone="bad">{error}</Line>;
   if (content === null) return <Line tone="busy">Loading…</Line>;
 
   return (
     <section style={{ display: "grid", gap: "var(--space-5)" }}>
       <Field
-        label="Status"
-        hint="Enabling moves the folder into skills/; disabling moves it into skills-inactive/. Applies to the next new task."
+        label="Works in"
+        hint="Global applies to every task. A workspace applies to that workspace's tasks only; linking one clears Global. Applies to the next new task."
       >
-        <span style={{ display: "flex", gap: 2 }}>
-          <Chip active={enabled} onClick={() => !enabled && skills.toggle(slug, true)}>
-            Enabled
+        <span style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
+          <Chip
+            active={meta.global}
+            onClick={() => (meta.global ? skills.unlink(slug, { kind: "global" }) : skills.link(slug, { kind: "global" }))}
+          >
+            Global
           </Chip>
-          <Chip active={!enabled} onClick={() => enabled && skills.toggle(slug, false)}>
-            Disabled
-          </Chip>
+          {skills.workspaces.map((ws) => {
+            const linked = meta.workspaces.includes(ws.id);
+            return (
+              <Chip
+                key={ws.id}
+                active={linked}
+                onClick={() =>
+                  linked
+                    ? skills.unlink(slug, { kind: "workspace", workspaceId: ws.id })
+                    : skills.link(slug, { kind: "workspace", workspaceId: ws.id })
+                }
+              >
+                {ws.name}
+              </Chip>
+            );
+          })}
         </span>
       </Field>
 

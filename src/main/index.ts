@@ -115,7 +115,7 @@ void app.whenReady().then(() => {
   const configDir = app.getPath("userData");
   const providers = new ProviderStore(configDir, new SafeStorageSecrets(configDir));
   registerProviderIpc(providers);
-  registerWorkspaceIpc(new WorkspaceStore(configDir));
+  // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 
   // 主题先于窗口生效：晚一步的话第一帧会用系统外观画出 vibrancy，然后当着用户的面跳一下
   const settings = new SettingsStore(configDir);
@@ -148,9 +148,9 @@ void app.whenReady().then(() => {
   registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost);
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
-   * 两个 skills 目录先建出来：**空目录就是说明书**——用户打开 userData 看到
-   * `skills/` 与 `skills-inactive/` 并排，「放进去生效、移出去失效」不需要再解释。
-   * 建不出来不拦启动：没有 skills 目录是合法状态（一个都没装）。但要留日志——
+   * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
+   * `skills/` 与 `skill-links/global/` 并排，「放进去、链上就生效」不需要再解释。
+   * 建不出来不拦启动：没有目录是合法状态（一个都没装）。但要留日志——
    * 不打印的话，一个权限坏掉的目录会表现成「skill 放了但没生效」，那是最难查的一类。
    */
   const skills = new SkillStore(configDir);
@@ -158,12 +158,14 @@ void app.whenReady().then(() => {
     console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
   });
   registerSkillIpc(skills);
+  // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
+  registerWorkspaceIpc(new WorkspaceStore(configDir), (id) => skills.removeWorkspace(id));
   registerAgentIpc(
     agentHost,
     providers,
     sessions,
     join(configDir, "pi-sessions"),
-    skills.enabledDir(),
+    (workspaceId) => skills.linkDirs(workspaceId),
     mcp,
   );
   app.on("before-quit", () => agentHost.dispose());
