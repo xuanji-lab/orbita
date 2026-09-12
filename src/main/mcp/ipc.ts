@@ -13,7 +13,11 @@ export function registerMcpIpc(
   store: McpStore,
   /** 把新配置交给 agent 进程重连（host 注入；等 runtime 的 mcp 快照回来才返回） */
   reload: (servers: Record<string, McpServer>) => Promise<void>,
-): { onAgentSnapshot: (servers: McpServerInfo[]) => void } {
+): {
+  onAgentSnapshot: (servers: McpServerInfo[]) => void;
+  /** 缓存快照里一台 server 的状态（写盘回执给模型看连接结果用；没缓存过返回 undefined） */
+  statusOf: (name: string) => { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string } | undefined;
+} {
   /** agent 进程报上来的最后一次连接状态。null = 还没连过（没建过会话）。 */
   let snapshot: McpServerInfo[] | null = null;
 
@@ -84,6 +88,15 @@ export function registerMcpIpc(
   return {
     onAgentSnapshot: (servers) => {
       snapshot = servers;
+    },
+    statusOf: (name) => {
+      const found = snapshot?.find((s) => s.name === name);
+      if (found === undefined || found === null) return undefined;
+      const status = found.status;
+      if (status.kind === "ready") return { kind: "ready" };
+      if (status.kind === "failed") return { kind: "failed", message: status.message };
+      if (status.kind === "disabled") return { kind: "disabled" };
+      return { kind: "connecting" };
     },
   };
 }

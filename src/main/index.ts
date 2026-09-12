@@ -6,6 +6,7 @@ import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
@@ -130,6 +131,22 @@ void app.whenReady().then(() => {
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
+    // 4-3：agent 工具的写盘请求——主进程落盘、回执、广播刷新。
+    if (event.type === "skillWriteRequest") {
+      void applySkillWrite(skills, sessions, event).then((result) => {
+        agentHost.answerSkillWrite(event.requestId, result);
+        if (result.ok) broadcastAgentEvent({ type: "skillsChanged" });
+      });
+      return;
+    }
+    if (event.type === "mcpWriteRequest") {
+      void applyMcpWrite(mcp, (servers) => agentHost.mcpReload(servers), (name) => mcpIpc.statusOf(name), event).then(
+        (result) => {
+          agentHost.answerMcpWrite(event.requestId, result);
+        },
+      );
+      return;
+    }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
     // 真值校准回 meta——open 失败退回新建时 pi 会换文件，按轮自愈。
     // 首轮的 created 由 submit handler 等待并建 meta，不经过这里。

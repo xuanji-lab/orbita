@@ -226,6 +226,30 @@ export class AgentHostCore {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
   }
 
+  /** 写盘请求的回执（4-3）。同 answerPermission 的理由：不 ensure、发完即回。 */
+  answerSkillWrite(requestId: string, result: { ok: boolean; path?: string; error?: string }): void {
+    this.child?.postMessage({
+      type: "skillWriteResult",
+      requestId,
+      ok: result.ok,
+      ...(result.path === undefined ? {} : { path: result.path }),
+      ...(result.error === undefined ? {} : { error: result.error }),
+    } satisfies AgentCommand);
+  }
+
+  answerMcpWrite(
+    requestId: string,
+    result: { ok: boolean; status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string }; error?: string },
+  ): void {
+    this.child?.postMessage({
+      type: "mcpWriteResult",
+      requestId,
+      ok: result.ok,
+      ...(result.status === undefined ? {} : { status: result.status }),
+      ...(result.error === undefined ? {} : { error: result.error }),
+    } satisfies AgentCommand);
+  }
+
   /** 停下当前这一轮（含工具调用），把这句话作为新一轮发出去 */
   async interrupt(command: Extract<AgentCommand, { type: "interrupt" }>): Promise<string | null> {
     return this.postTurn(command);

@@ -174,7 +174,12 @@ export class SkillStore {
    * 不覆盖（吃掉一份用户文件比让用户改名严重）。scope 为 null = 先不启用
    * （只落存储，不建链，列表里落在 Disabled 组）。
    */
-  async create(slug: string, name: string, scope: SkillScope | null): Promise<void> {
+  async create(
+    slug: string,
+    name: string,
+    scope: SkillScope | null,
+    content?: { description?: string; body?: string },
+  ): Promise<void> {
     assertSlug(slug);
     if (scope !== null && scope.kind === "workspace") assertSetId(scope.workspaceId);
     const storeDir = join(this.storeDir, slug);
@@ -183,11 +188,11 @@ export class SkillStore {
       throw new Error(`已存在同名 skill：${slug}`);
     }
     await mkdir(storeDir, { recursive: true });
-    // 骨架：name 必有；description 空；正文一行占位。SKILL.md 是用户内容，原子写
-    await writeTextAtomic(
-      file,
-      `${rebuildSkillMd("", { name, description: "" })}\n(Write the instructions here.)\n`,
-    );
+    // 骨架：name 必有；description/body 给了就用（4-3：agent 工具带着全文来），
+    // 没给保持占位（面板表单先建再编辑）。SKILL.md 是用户内容，原子写
+    const description = content?.description ?? "";
+    const body = content?.body === undefined || content.body === "" ? "(Write the instructions here.)" : content.body;
+    await writeTextAtomic(file, `${rebuildSkillMd("", { name, description })}\n${body}\n`);
     if (scope === null) return;
     await this.link(slug, scope);
   }
