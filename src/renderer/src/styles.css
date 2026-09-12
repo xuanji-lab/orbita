@@ -195,8 +195,8 @@ body {
 }
 
 /*
- * 内容面的两列：左会话列（ChatView 自带 height:100% 的栅格根），右抽屉。
- * 抽屉是 pane 的子元素——**同一个面板**（2026-09-12 裁决：不要间隔，一条竖线）。
+ * 内容面：左会话列（ChatView 自带 height:100% 的栅格根）+ 右侧面板壳。
+ * 壳是 pane 的子元素——**同一个面板**（2026-09-12 裁决：不要间隔，一条竖线）。
  */
 .pane-main {
   flex: 1;
@@ -204,8 +204,11 @@ body {
   min-height: 0;
 }
 
-/* ===== 右抽屉 ===== */
-.drawer {
+/* ===== 右侧面板壳（Skills / MCP / 辅助对话三菜单共用，2026-09-13 裁决） =====
+ * 常驻挂载，宽度以 class 切换驱动过渡——展开、收起、切换因此只有一套动画机制，
+ * 不会再因「重挂丢过渡」出现面板间观感不一。宽度变量 --right-panel-w 由渲染层
+ * 按面板位唯一的宽度记忆注入。 */
+.right-panel-slot {
   flex: 0 0 auto;
   width: 0;
   transition:
@@ -216,26 +219,24 @@ body {
   border-left: 0 solid var(--color-border-default);
 }
 
-.drawer.open {
-  width: var(--drawer-w, 320px);
+.right-panel-slot.open {
+  width: var(--right-panel-w, 320px);
   border-left-width: 1px;
 }
 
 /* 拖拽过程中不要过渡——每一步都实时跟手，收起/展开的动画才保留 */
-.drawer.dragging {
+.right-panel-slot.dragging {
   transition: none;
 }
 
-.drawer-inner {
-  width: var(--drawer-w, 320px);
+/* 内容固定宽：壳的 width 动画期间它只被逐渐「拉开」，内容不 reflow */
+.right-panel-slot-inner {
+  width: var(--right-panel-w, 320px);
   height: 100%;
-  display: flex;
-  flex-direction: column;
-  min-width: 280px;
 }
 
-/* 竖线即分界；把手骑在竖线上（pane overflow:hidden 裁掉了向外伸的部分） */
-.drawer-resizer {
+/* 竖线即分界；把手骑在竖线上 */
+.right-panel-slot-resizer {
   position: absolute;
   left: 0;
   top: 0;
@@ -245,7 +246,7 @@ body {
   z-index: 5;
 }
 
-.drawer-resizer:hover {
+.right-panel-slot-resizer:hover {
   background: var(--color-border-subtle);
 }
 

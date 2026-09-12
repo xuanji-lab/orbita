@@ -6,8 +6,8 @@ import { Icon, type IconName } from "./Icon";
  * layer 1 上。wafo 2026-09-12 裁定保持 32px 不加宽到 48——「左右对称」不取字面
  * 同宽，只保留「都是无面的窄条」。
  *
- * 顶部：skills / mcp 两个入口（各开一个右侧分屏面板，互斥）+ 抽屉开关（right-drawer-X
- * 并入本条，2026-09-12 裁决：原标题栏上的两枚动作图标住进这里）。点亮 = 单层
+ * 顶部：三个入口（Skills / MCP / 辅助对话），**共用一个面板位**（2026-09-12 裁决）：
+ * 同一时刻至多点亮一个，再点已点亮的 = 收起。点亮 = 单层
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
@@ -16,16 +16,13 @@ import { Icon, type IconName } from "./Icon";
  * 底部：会话动作（复制转录等），**只在有会话时出现**——它承载的是「对这个会话
  * 做点什么」，首页没有会话可做。中间用弹性空隙隔开两组的语义。
  */
-export type RightPanelKind = "skills" | "mcp";
+export type RightPanelKind = "skills" | "mcp" | "drawer";
 
 export function RightRail(props: {
   panel: RightPanelKind | null;
   onPanel: (next: RightPanelKind | null) => void;
   /** 会话动作区：调用方塞什么就长什么；false = 没有会话，不渲染这一段 */
   sessionActions?: false | React.ReactNode;
-  /** 抽屉开关（辅助对话）：点亮 = 抽屉开着 */
-  drawerOpen: boolean;
-  onToggleDrawer: () => void;
 }) {
   const entry = (kind: RightPanelKind, icon: IconName, label: string) => {
     const lit = props.panel === kind;
@@ -95,37 +92,7 @@ export function RightRail(props: {
         {entry("skills", "book-open", "Skills")}
       </span>
       {entry("mcp", "plug", "MCP servers")}
-      {/* 抽屉开关（辅助对话）：点亮语义与面板入口一致——开着就亮 */}
-      <button
-        type="button"
-        title="辅助对话 Ctrl+Alt+D"
-        aria-pressed={props.drawerOpen}
-        onClick={props.onToggleDrawer}
-        style={{
-          width: 26,
-          height: 26,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 0,
-          border: 0,
-          cursor: "pointer",
-          borderRadius: "var(--radius-sm)",
-          background: props.drawerOpen ? "var(--glass-bg)" : "transparent",
-          boxShadow: props.drawerOpen ? "var(--shadow-composer)" : "none",
-          color: props.drawerOpen ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-        }}
-        onMouseEnter={(e) => {
-          if (props.drawerOpen) return;
-          e.currentTarget.style.background = "var(--color-bg-hover)";
-        }}
-        onMouseLeave={(e) => {
-          if (props.drawerOpen) return;
-          e.currentTarget.style.background = "transparent";
-        }}
-      >
-        <Icon name="panel-right" size={16} />
-      </button>
+      {entry("drawer", "panel-right", "辅助对话 Ctrl+Alt+D")}
       <span style={{ flex: 1 }} />
       {props.sessionActions !== false && props.sessionActions}
     </aside>

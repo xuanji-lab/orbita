@@ -10,14 +10,13 @@ import { SettingsView, type SettingsTab } from "./features/settings/SettingsView
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRail";
-import { RightPanelClosingContext, RightPanelEnteredContext } from "./shell/RightPanel";
+import { RightPanelSlot } from "./shell/RightPanel";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB } from "./shell/drawer-state";
-import type { DrawerSettings } from "@shared/settings";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -84,62 +83,56 @@ export function App() {
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
   const drawerView = useSessionView(engine, "drawer");
 
-  // 抽屉的宽度与停靠记忆在设置里；**开关不记**——每次启动默认收起
-  // （2026-09-12 wafo 裁决，设计系统 closed by default 按字面执行）。
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerWidth, setDrawerWidth] = useState(DEFAULT_SETTINGS.drawer.width);
+  // 停靠记忆在设置里（哪些 task 开在辅助对话的标签条上）；兼容存量文件：
+  // 旧版本可能把 "new" 占位写进了 docked，启动时一并洗掉。
+  // 抽屉并入统一面板壳后 drawer.width 不再有消费者——宽度共用 rightPanelWidth（Q3）。
   const [docked, setDocked] = useState<DockedTab[]>(DEFAULT_SETTINGS.drawer.docked);
   useEffect(() => {
-    setDrawerWidth(settings.drawer.width);
-    // 兼容存量文件：旧版本可能把 "new" 占位写进了 docked，启动时一并洗掉
     setDocked(settings.drawer.docked.filter((tab) => tab !== NEW_TASK_TAB));
   }, [settings.drawer]);
 
-  /** 抽屉偏好改动：只发改的键，主进程做 drawer 内部的键级合并
+  /** 停靠改动：只发改的键，主进程做 drawer 内部的键级合并
    *  （整块回写会拿到渲染层闭包里的旧值，先后覆盖有竞态——真机冒烟实测） */
-  const changeDrawer = useCallback(
-    (patch: Partial<DrawerSettings>) => {
-      if ("width" in patch) setDrawerWidth(patch.width ?? DEFAULT_SETTINGS.drawer.width);
-      if ("docked" in patch) setDocked(patch.docked ?? []);
-      changeSettings({ drawer: patch });
+  const changeDocked = useCallback(
+    (docked: DockedTab[]) => {
+      setDocked(docked);
+      changeSettings({ drawer: { docked } });
     },
     [changeSettings],
   );
 
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
-   *  没有「面板 + 面板」。开关互斥在这里收口：展开抽屉时 Skills / MCP 退场，
-   *  开 Skills / MCP 时抽屉退场。 */
-  const toggleDrawer = useCallback(() => {
-    if (!drawerOpen) setRightPanel(null);
-    setDrawerOpen(!drawerOpen);
-  }, [drawerOpen]);
+   *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
+  const handlePanel = useCallback((next: RightPanelKind | null) => {
+    setRightPanel(next);
+  }, []);
 
-  /**
-   * 这次面板挂载要不要播展开动画：只有「从收起状态展开」才播（2026-09-12 裁决）；
-   * 面板位已展开（面板间切换）时新面板直接就位，不重新走一遍折叠展开。
-   */
-  const [panelAnimated, setPanelAnimated] = useState(true);
+  // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && rightPanel !== null) setRightPanel(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rightPanel]);
 
-  const handlePanel = useCallback(
-    (next: RightPanelKind | null) => {
-      if (next !== null) {
-        setPanelAnimated(rightPanel === null);
-        setRightPanel(next);
-        setDrawerOpen(false);
-      } else {
-        setRightPanel(null);
+  // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.ctrlKey && event.altKey && (event.key === "d" || event.key === "D")) {
+        event.preventDefault();
+        setRightPanel((current) => (current === "drawer" ? null : "drawer"));
       }
-    },
-    [rightPanel],
-  );
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   /**
-   * 收起动画期间仍渲染原面板：rightPanel 置空后先保持挂载（RightPanelFrame 的
-   * width 过渡回 0，与抽屉收起同款 0.2s ease），动画走完再真正卸载。
-   * 期间再点同一图标（rightPanel 回到非空）则取消卸载、面板重新展开。
+   * 收起动画期间仍渲染原面板：active 置空后先保持挂载（壳的 width 过渡回 0，
+   * 与抽屉收起同款 0.2s ease），动画走完再真正卸载。
    */
   const [mountedPanel, setMountedPanel] = useState<RightPanelKind | null>(rightPanel);
-  const panelClosing = rightPanel === null && mountedPanel !== null;
   useEffect(() => {
     if (rightPanel !== null) {
       setMountedPanel(rightPanel);
@@ -152,17 +145,9 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rightPanel]);
 
-  // Ctrl+Alt+D 开关抽屉（与右图标条按钮、动作同源）
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.ctrlKey && event.altKey && (event.key === "d" || event.key === "D")) {
-        event.preventDefault();
-        toggleDrawer();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggleDrawer]);
+  /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
+  const shownPanel = rightPanel ?? mountedPanel;
+  const skills = useSkills(shownPanel === "skills");
 
   /**
    * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
@@ -175,9 +160,6 @@ export function App() {
     else session.newTask();
     session.setDraft("Describe the workflow you want to turn into a skill.");
   }, [session]);
-  // 用 mountedPanel 而不是 rightPanel：收起动画期间（rightPanel 已空）数据订阅保持，
-  // 面板收起时不会闪空态
-  const skills = useSkills(mountedPanel === "skills");
   /** 会话动作只在有会话时出现——它承载的是「对这个会话做点什么」；
    * 顶部入口常驻，不随会话消失（首页也能开 Skills / MCP）。 */
   const sessionActions =
@@ -221,88 +203,54 @@ export function App() {
               <ChatView session={session} providersError={providersError} />
             )}
           </div>
-          {overlay === null && (
-            <Drawer
-              engine={engine}
-              view={drawerView}
-              mainSessionId={mainSessionId}
-              providersError={providersError}
-              open={drawerOpen}
-              width={drawerWidth}
-              onWidthChange={setDrawerWidth}
-              onWidthCommit={() => changeDrawer({ width: drawerWidth })}
-              docked={docked}
-              onDockedChange={(list) =>
-                changeDrawer({
-                  // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
-                  docked: [...list].filter((tab) => tab !== NEW_TASK_TAB),
-                })
-              }
-            />
-          )}
-          {rightPanel !== null && (
-            /* entered=true = 跳过动画直接就位：面板间切换（panelAnimated=false）直接出现；
-               从收起状态展开（panelAnimated=true）才从 0 播动画 */
-            <RightPanelEnteredContext.Provider value={!panelAnimated}>
-              <RightPanelClosingContext.Provider value={false}>
-                {rightPanel === "skills" ? (
-                  <SkillsPanel
-                    narrow={narrow}
-                    skills={skills}
-                    onClose={() => setRightPanel(null)}
-                    width={panelWidth}
-                    onWidthChange={setPanelWidth}
-                    onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-                    defaultWorkspaceId={session.workspaceId}
-                    onCreateSkill={createSkillDraft}
-                  />
-                ) : (
-                  <McpPanel
-                    narrow={narrow}
-                    skills={skills}
-                    onClose={() => setRightPanel(null)}
-                    width={panelWidth}
-                    onWidthChange={setPanelWidth}
-                    onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-                  />
-                )}
-              </RightPanelClosingContext.Provider>
-            </RightPanelEnteredContext.Provider>
-          )}
-          {panelClosing && (
-            /* 收起动画窗口：面板保持挂载，宽度过渡回 0 后由上面的 effect 卸载 */
-            <RightPanelClosingContext.Provider value={true}>
-              {mountedPanel === "skills" ? (
+          {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
+          <RightPanelSlot
+            open={rightPanel !== null}
+            width={panelWidth}
+            narrow={narrow}
+            onWidthChange={setPanelWidth}
+            onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+          >
+            {/* 收起动画期间保持原内容；切换时 key 变化触发 120ms 内容淡入 */}
+            <div
+              key={shownPanel ?? "closed"}
+              style={{
+                height: "100%",
+                animation: "right-panel-fade 120ms var(--ease-out-quint)",
+              }}
+            >
+              {shownPanel === "skills" ? (
                 <SkillsPanel
-                  narrow={narrow}
                   skills={skills}
-                  onClose={() => setRightPanel(null)}
-                  width={panelWidth}
-                  onWidthChange={setPanelWidth}
-                  onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+                  onClose={() => handlePanel(null)}
                   defaultWorkspaceId={session.workspaceId}
                   onCreateSkill={createSkillDraft}
                 />
-              ) : (
-                <McpPanel
-                  narrow={narrow}
-                  skills={skills}
-                  onClose={() => setRightPanel(null)}
-                  width={panelWidth}
-                  onWidthChange={setPanelWidth}
-                  onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+              ) : shownPanel === "mcp" ? (
+                <McpPanel skills={skills} onClose={() => handlePanel(null)} />
+              ) : shownPanel === "drawer" ? (
+                <Drawer
+                  engine={engine}
+                  view={drawerView}
+                  mainSessionId={mainSessionId}
+                  providersError={providersError}
+                  docked={docked}
+                  onDockedChange={(list) =>
+                    changeDocked(
+                      // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
+                      list.filter((tab) => tab !== NEW_TASK_TAB),
+                    )
+                  }
                 />
-              )}
-            </RightPanelClosingContext.Provider>
-          )}
+              ) : null}
+            </div>
+          </RightPanelSlot>
         </main>
 
         <RightRail
           panel={rightPanel}
           onPanel={handlePanel}
           sessionActions={sessionActions}
-          drawerOpen={drawerOpen}
-          onToggleDrawer={toggleDrawer}
         />
       </div>
     </div>

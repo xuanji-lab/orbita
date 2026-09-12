@@ -22,12 +22,8 @@ import { SkillsMap } from "./SkillsMap";
  * 都出现**（行尾 N sets 说明它共享），不是对 skill 集合做划分。
  */
 export function SkillsPanel(props: {
-  narrow: boolean;
   skills: SkillsState;
   onClose: () => void;
-  width: number;
-  onWidthChange: (width: number) => void;
-  onWidthCommit: (width: number) => void;
   /** 表单默认归属的 workspace（会话当前所在）；null = 默认 Global */
   defaultWorkspaceId: string | null;
   /** Create skill…：新建会话并预填 composer，让 agent 用 create_skill 落盘 */
@@ -61,7 +57,6 @@ export function SkillsPanel(props: {
   if (view === "map") {
     return (
       <SkillMapView
-        narrow={props.narrow}
         skills={skills}
         onOpenDetail={(slug) => {
           setSelected(slug);
@@ -74,19 +69,12 @@ export function SkillsPanel(props: {
         onSwitchToList={() => setView("list")}
         onCreateSkill={props.onCreateSkill}
         onClose={props.onClose}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
       />
     );
   }
   if (meta !== null) {
     return (
       <SkillDetail
-        narrow={props.narrow}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
         skills={skills}
         meta={meta}
         workspaceName={workspaceName}
@@ -97,10 +85,6 @@ export function SkillsPanel(props: {
   }
   return (
     <SkillList
-      narrow={props.narrow}
-      width={props.width}
-      onWidthChange={props.onWidthChange}
-      onWidthCommit={props.onWidthCommit}
       skills={skills}
       workspaceName={workspaceName}
       onSelect={(slug) => {
@@ -135,16 +119,12 @@ function GroupLabel(props: { children: React.ReactNode; danger?: boolean }) {
 }
 
 function SkillList(props: {
-  narrow: boolean;
   skills: SkillsState;
   workspaceName: (id: string) => string;
   onSelect: (slug: string) => void;
   onCreateSkill: () => void;
   onSwitchToMap: () => void;
   onClose: () => void;
-  width: number;
-  onWidthChange: (width: number) => void;
-  onWidthCommit: (width: number) => void;
 }) {
   const { skills } = props;
   const load = skills.load;
@@ -170,10 +150,6 @@ function SkillList(props: {
   if (load.kind === "loading" && skills.skills.length === 0) {
     return (
       <RightPanelFrame
-        narrow={props.narrow}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
         header={header}
         contentKey="list"
         onClose={props.onClose}
@@ -187,10 +163,6 @@ function SkillList(props: {
   if (skills.skills.length === 0) {
     return (
       <RightPanelFrame
-        narrow={props.narrow}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
         header={header}
         contentKey="list"
         onClose={props.onClose}
@@ -284,10 +256,6 @@ function SkillList(props: {
 
   return (
     <RightPanelFrame
-      narrow={props.narrow}
-      width={props.width}
-      onWidthChange={props.onWidthChange}
-      onWidthCommit={props.onWidthCommit}
       header={header}
       contentKey="list"
       onClose={props.onClose}
@@ -414,15 +382,11 @@ function FooterReveal(props: { skills: SkillsState }) {
 }
 
 function SkillDetail(props: {
-  narrow: boolean;
   skills: SkillsState;
   meta: SkillMeta;
   workspaceName: (id: string) => string;
   onBack: () => void;
   onClose: () => void;
-  width: number;
-  onWidthChange: (width: number) => void;
-  onWidthCommit: (width: number) => void;
 }) {
   const { skills, meta } = props;
   const [content, setContent] = useState<SkillContent | null>(null);
@@ -480,10 +444,6 @@ function SkillDetail(props: {
 
   return (
     <RightPanelFrame
-      narrow={props.narrow}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
       contentKey={`detail:${meta.slug}`}
       onClose={props.onClose}
       header={
@@ -809,25 +769,17 @@ function MenuItemRow(props: { onClick: () => void; children: React.ReactNode }) 
  * 内容是韦恩图（≥4 workspace 自动退化矩阵）。
  */
 function SkillMapView(props: {
-  narrow: boolean;
   skills: SkillsState;
   onOpenDetail: (slug: string) => void;
   onJumpToGroup: (groupId: string) => void;
   onSwitchToList: () => void;
   onCreateSkill: () => void;
   onClose: () => void;
-  width: number;
-  onWidthChange: (width: number) => void;
-  onWidthCommit: (width: number) => void;
 }) {
   const { skills } = props;
   const error = skills.load.kind === "failed" ? skills.load.message : null;
   return (
     <RightPanelFrame
-      narrow={props.narrow}
-      width={props.width}
-      onWidthChange={props.onWidthChange}
-      onWidthCommit={props.onWidthCommit}
       contentKey="map"
       onClose={props.onClose}
       header={

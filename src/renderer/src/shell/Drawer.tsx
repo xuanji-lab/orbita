@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { Icon, type IconName } from "./Icon";
+import { useEffect, useState } from "react";
+import { Icon } from "./Icon";
 import { ChatView } from "../features/chat/ChatView";
 import type { ChatSession, SessionEngine } from "../features/chat/useChatSession";
 import type { SessionMeta } from "@shared/session";
 import {
   NEW_TASK_TAB,
-  clampDrawerWidth,
   closeTab,
   dockTab,
   neighborTab,
@@ -16,10 +15,10 @@ import {
 export type { DockedTab };
 
 /**
- * 右抽屉 —— 内容面卡片里的右侧一列（right-drawer-X）。
+ * 辅助对话 —— 右侧面板壳的三种内容之一（right-drawer-X，2026-09-13 并入统一壳）。
  *
- * **它不是独立面板**：作为 pane 的子元素，与会话列共用同一张玻璃卡、同一份阴影，
- * 中间只有一根 1px 竖线（2026-09-12 裁决：不要间隔，一条竖线）。
+ * 宽度、竖线分界与开合动画都在壳（RightPanelSlot）上；这里只出内容：
+ * 标签条多开、单关 + 会话视图。
  *
  * 内容 = 辅助对话，即**一个普通 task 的并排视图**（Q2 裁决）：渲染的就是主会话
  * 同一个 ChatView，不存在第二套 UI。空态选择卡列出四类标签——审查/终端/浏览器
@@ -32,19 +31,11 @@ export function Drawer(props: {
   /** 主槽正看着的会话：选择器里排除它（它已经在中间了） */
   mainSessionId: string | null;
   providersError: string | null;
-  open: boolean;
-  width: number;
-  /** 拖拽过程中的实时宽度（只改显示，不落盘） */
-  onWidthChange: (width: number) => void;
-  /** 拖拽结束 / 双击重置后落盘 */
-  onWidthCommit: () => void;
   docked: DockedTab[];
   onDockedChange: (docked: DockedTab[]) => void;
 }) {
   const [activeTab, setActiveTab] = useState<DockedTab | null>(props.docked[0] ?? null);
   const [picking, setPicking] = useState(false);
-  const [dragging, setDragging] = useState(false);
-  const draggingRef = useRef(false);
 
   // 新任务发出第一句话、拿到真 id：把 "new" 占位换成它，激活跟随
   useEffect(() => {
@@ -83,56 +74,22 @@ export function Drawer(props: {
     setPicking(false);
   };
 
-  // 抽屉开着且激活的是某条落盘会话：确保它真的在本槽打开（首启恢复 / 切换共用）
+  // 激活的是某条落盘会话：确保它真的在本槽打开（首启恢复 / 切换共用）
   useEffect(() => {
-    if (!props.open) return;
     if (activeTab === null || activeTab === NEW_TASK_TAB) return;
     if (props.view.sessionId === activeTab || props.view.opened?.id === activeTab) return;
     props.view.openSession(activeTab);
-    // 只在「打开状态 / 激活标签」变化时才需要补打开
+    // 只在「激活标签」变化时才需要补打开
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.open, activeTab]);
+  }, [activeTab]);
 
   // 新任务标签在抽屉视图里就是首页（干净的新 task）；切走再切回来也还是干净的
   const hasTabs = props.docked.length > 0;
   const showPicker = picking;
 
-  // 拖宽：pane 右缘 = 窗口右缘 - 12（层内边距）
-  const startDrag = (down: React.MouseEvent): void => {
-    down.preventDefault();
-    draggingRef.current = true;
-    setDragging(true);
-    const move = (moveEvent: MouseEvent): void => {
-      if (!draggingRef.current) return;
-      props.onWidthChange(clampDrawerWidth(window.innerWidth - 12 - moveEvent.clientX));
-    };
-    const up = (): void => {
-      draggingRef.current = false;
-      setDragging(false);
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-      props.onWidthCommit();
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-  };
-
   return (
-    <aside
-      className={`drawer${props.open ? " open" : ""}${dragging ? " dragging" : ""}`}
-      style={{ "--drawer-w": `${props.width}px` } as React.CSSProperties}
-    >
-      <div
-        className="drawer-resizer"
-        title="拖拽调宽 · 双击重置"
-        onMouseDown={startDrag}
-        onDoubleClick={() => {
-          props.onWidthChange(clampDrawerWidth(320));
-          props.onWidthCommit();
-        }}
-      />
-      <div className="drawer-inner">
-        {hasTabs && (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", minWidth: 0 }}>
+      {hasTabs && (
           <div className="drawer-tabs">
             <div className="drawer-tablist">
               {props.docked.map((tab) => {
@@ -190,8 +147,7 @@ export function Drawer(props: {
             />
           )}
         </div>
-      </div>
-    </aside>
+    </div>
   );
 }
 

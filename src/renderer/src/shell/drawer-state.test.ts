@@ -2,26 +2,11 @@ import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   NEW_TASK_TAB,
-  clampDrawerWidth,
   closeTab,
   dockTab,
   neighborTab,
   replaceNewTab,
 } from "./drawer-state.ts";
-
-describe("clampDrawerWidth", () => {
-  it("区间内取整保留", () => {
-    deepStrictEqual(clampDrawerWidth(380.4), 380);
-    deepStrictEqual(clampDrawerWidth(320), 320);
-  });
-  it("越界钳到 280 / 560", () => {
-    deepStrictEqual(clampDrawerWidth(99), 280);
-    deepStrictEqual(clampDrawerWidth(9999), 560);
-  });
-  it("非有限数退回默认 320", () => {
-    deepStrictEqual(clampDrawerWidth(Number.NaN), 320);
-  });
-});
 
 describe("停靠标签", () => {
   it("dock：追加，重复 dock 不动", () => {
