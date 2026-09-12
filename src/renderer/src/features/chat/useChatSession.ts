@@ -246,6 +246,29 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   }, [model, mode, cwd, workspaceId, defaultCwd]);
 
   /**
+   * **会话级意图**：用户在哪条会话上改的档位 / 模型，就记在哪条名下。
+   *
+   * 上面的 `intentRef` 是**单份全局**的，而它跟着「你正在看哪条会话」走
+   * （`openSession` 会把 mode / model 改成被查看会话的值）；而 `deliverNext` 是
+   * **不按「正看着谁」过滤**的，后台会话的队首照样会投递。两者合起来就是串台：
+   * A（plan）跑着且队列非空 → 切去看 B（skip）→ A 的轮结束 → A 的排队卡拿着
+   * **B 的权限档与 B 的模型**跑出去。档位决定 bash 能不能跑，这是安全边界上的串台。
+   *
+   * 所以意图必须按会话记账：你在 A 上选的就只给 A。它不需要清——这就是「用户对
+   * 这条会话的最新选择」，永远至少和 meta 一样新（闲着时两边会自行收敛）。
+   */
+  const sessionIntentRef = useRef<
+    Map<string, { mode?: PermissionMode; model?: { providerId: string; modelId: string } }>
+  >(new Map());
+  const rememberSessionIntent = useCallback(
+    (id: string, patch: { mode?: PermissionMode; model?: { providerId: string; modelId: string } }) => {
+      const map = sessionIntentRef.current;
+      map.set(id, { ...map.get(id), ...patch });
+    },
+    [],
+  );
+
+  /**
    * 组装无状态开工上下文（AgentTurnContext 的主体）：meta 真值（cwd / 归属 /
    * pi 本子）+ 当前意图（模型 / 档位）。新会话（meta 还没落盘）用当前选择。
    * 拿不出可用上下文时把错误写进红字并返回 null——调用方直接放弃这一跳。
@@ -263,13 +286,24 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setError("Choose a workspace folder first");
         return null;
       }
+      /**
+       * 档位与模型按**这条会话自己**的账算，不能拿全局意图（= 正看着的那条）：
+       *
+       *   会话级意图  → 用户在这条会话上改过但还没落进 meta（跑着时改的）
+       *   meta      → 落盘的真值
+       *   全局意图  → 全新会话（meta 还不存在），那时 UI 上的选择就是意图
+       *
+       * cwd / 归属 / pi 本子不走这套——它们是会话固定事实，meta 就是真值。
+       */
+      const own = sessionIntentRef.current.get(id);
+      const model = own?.model ?? (meta === null ? intent.model : { providerId: meta.providerId, modelId: meta.modelId });
       return {
         cwd: cwdTarget,
         workspaceId: meta?.workspaceId ?? intent.workspaceId ?? null,
         resume: meta?.piSessionFile != null ? { piSessionFile: meta.piSessionFile } : null,
-        providerId: intent.model.providerId,
-        modelId: intent.model.modelId,
-        mode: intent.mode,
+        providerId: model.providerId,
+        modelId: model.modelId,
+        mode: own?.mode ?? meta?.mode ?? intent.mode,
       };
     },
     [],
@@ -594,8 +628,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         setOpened(detail.meta);
         setCwd(detail.meta.cwd);
         setWorkspaceId(detail.meta.workspaceId);
-        setMode(detail.meta.mode);
-        setModel({ providerId: detail.meta.providerId, modelId: detail.meta.modelId });
+        // 会话级意图优先于 meta：这条会话跑着时改的档位 / 模型落不进 meta，
+        // 切走再切回时若拿 meta 重置 chip，chip 就会说 plan 而下一轮实际跑 skip
+        const own = sessionIntentRef.current.get(id);
+        setMode(own?.mode ?? detail.meta.mode);
+        setModel(own?.model ?? { providerId: detail.meta.providerId, modelId: detail.meta.modelId });
         // 无状态：没有「活会话集合」要重连——正在跑的会话它的槽本来就在 states
         // 里（事件一直实时进），不种盘上的快照（种盘等于把画面倒回去）；
         // 没在跑的才从盘上种，readOnly 与「说话时才续跑」（send 带 resume）语义照旧。
@@ -791,7 +828,11 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
        */
       setModel({ providerId, modelId });
       const id = sessionRef.current;
-      if (id !== null && currentPhase() === "idle") {
+      if (id === null) return; // 首页开新任务：全局意图就是意图
+      // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
+      // 拿到你刚才给别的会话选的模型
+      rememberSessionIntent(id, { model: { providerId, modelId } });
+      if (currentPhase() === "idle") {
         // 闲着就注入（校验 + 落 meta + model 事件回环）；跑着只改显示——
         // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账
         void api.agent
@@ -799,7 +840,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
       }
     },
-    [],
+    [rememberSessionIntent],
   );
 
   const renameWorkspace = useCallback(
@@ -830,12 +871,16 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     // 所以注入延迟（UI 即时），不是锁 chip；跑着时下一轮 submit 自带新档
     setMode(next);
     const id = sessionRef.current;
-    if (id !== null && currentPhase() === "idle") {
+    if (id === null) return; // 首页开新任务：还没有会话可记，全局意图就是意图
+    // **先记在这条会话名下**：跑着时改不进 meta，而它的排队卡可能在你已经切去
+    // 看别的会话之后才投递，那时全局意图已经是别人的了
+    rememberSessionIntent(id, { mode: next });
+    if (currentPhase() === "idle") {
       void api.agent
         .setMode(id, next)
         .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
     }
-  }, []);
+  }, [rememberSessionIntent]);
 
   const answerApproval = useCallback((requestId: string, answer: PermissionAnswer) => {
     applyStates((prev) => removeApproval(prev, requestId));
