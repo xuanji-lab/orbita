@@ -599,8 +599,19 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         // 无状态：没有「活会话集合」要重连——正在跑的会话它的槽本来就在 states
         // 里（事件一直实时进），不种盘上的快照（种盘等于把画面倒回去）；
         // 没在跑的才从盘上种，readOnly 与「说话时才续跑」（send 带 resume）语义照旧。
-        setSessionId(null);
-        sessionRef.current = null;
+        //
+        // **正在跑的会话要把控制面一起绑过来**（不变量 5）：sessionRef 是停止 /
+        // 立即发送 / 撤回 / 拖拽找会话的**唯一入口**，置空就等于把这整排按钮
+        // 变成静默 no-op（守卫都是 `sessionRef.current === null 就 return`，无报错）。
+        // 实测：发完消息后只要点过侧栏任一条会话（包括点回正在跑的这条），停止就
+        // 彻底失效，直到下一次发送——用户看到的是「打断时灵时不灵」。
+        // fc3e958 修过 send / compact 两条路径，漏了导航这一条。
+        //
+        // 空闲会话仍然置空：`readOnly` 用 `sessionId === null` 判「没 pi 本子且还没
+        // 唤醒」，绑上去会把只读的旧会话误判成可写。
+        const live = (statesRef.current.get(id)?.phase ?? "idle") !== "idle";
+        setSessionId(live ? id : null);
+        sessionRef.current = live ? id : null;
         if (!statesRef.current.has(id)) {
           applyStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
         }
