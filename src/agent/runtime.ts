@@ -858,6 +858,13 @@ async function handle(command: AgentCommand): Promise<void> {
     }
     return;
   }
+  if (command.type === "mcpReload") {
+    // 重连后把新快照报给主进程（缓存 + 广播给管理面）。
+    // 已在跑的轮不受影响：它们的 customTools 在开机时已定格。
+    await mcpHub.restart(command.servers);
+    send({ type: "mcp", servers: mcpHub.describe() });
+    return;
+  }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——
   // 曾经这里是无 if 的兜底（新命令会静默销毁会话），那是事故的形状
   command satisfies never;

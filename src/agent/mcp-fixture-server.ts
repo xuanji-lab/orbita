@@ -5,7 +5,10 @@
  * 而我们要验证的恰恰是**「server 给的是裸 JSON Schema，我们能原样转给 pi」**。
  *
  * 由 `mcp.test.ts` 以子进程方式拉起，不在应用调用路径上。
+ * 设了 ORBITA_MCP_FIXTURE_PID_FILE 就把 pid 写进去——热重载测试靠它断言
+ * 「旧 client close 后子进程真的退出」，不猜。
  */
+import { writeFileSync } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -50,5 +53,8 @@ server.setRequestHandler(CallToolRequestSchema, (request) => {
     ],
   };
 });
+
+const pidFile = process.env["ORBITA_MCP_FIXTURE_PID_FILE"];
+if (pidFile !== undefined) writeFileSync(pidFile, `${process.pid}\n`);
 
 await server.connect(new StdioServerTransport());

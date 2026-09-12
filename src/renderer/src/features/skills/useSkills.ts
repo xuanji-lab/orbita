@@ -18,6 +18,7 @@ export interface SkillsState {
   servers: McpServerInfo[];
   serversLoad: LoadState;
   openMcpConfig: () => void;
+  reloadMcp: () => void;
   /** 选中哪一条（slug）；null = 还没选 */
   selected: string | null;
   select: (slug: string | null) => void;
@@ -97,12 +98,25 @@ export function useSkills(active: boolean): SkillsState {
     void api.mcp.openConfig().catch((cause: unknown) => setServersLoad(failed(cause)));
   }, []);
 
+  /**
+   * 热重载（1-1）。invoke 在 agent 进程重连完、新快照已缓存时才返回，
+   * 回来后重拉列表拿到新状态。失败如实上屏（reload 是显式动作，用户在等结果）。
+   */
+  const reloadMcp = useCallback(() => {
+    setServersLoad(LOADING);
+    void api.mcp
+      .reload()
+      .then(refreshServers)
+      .catch((cause: unknown) => setServersLoad(failed(cause)));
+  }, [refreshServers]);
+
   return {
     skills,
     load,
     servers,
     serversLoad,
     openMcpConfig,
+    reloadMcp,
     selected,
     select: setSelected,
     reload,

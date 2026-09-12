@@ -7,6 +7,9 @@
 import { test, describe, after, before } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { McpHub } from "./mcp.ts";
 import { parseMcpConfig, qualifiedToolName } from "../shared/mcp.ts";
 
@@ -95,6 +98,74 @@ describe("McpHub", () => {
     const statuses = new Map(hub.describe().map((s) => [s.name, s.status.kind]));
     assert.equal(statuses.get("off"), "disabled");
     assert.equal(hub.currentTools().some((t) => t.name.startsWith("mcp__off__")), false);
+  });
+});
+
+/** 热重载（1-1）的专用 hub：不共享上面的全局实例，重连会改它的状态 */
+describe("McpHub.restart（热重载）", () => {
+  test("换新配置：旧工具消失、新 server 的工具进来", async () => {
+    const hub = new McpHub();
+    await hub.start({ demo: { transport: "stdio", command: process.execPath, args: [FIXTURE] } });
+    assert.ok(hub.currentTools().some((t) => t.name === "mcp__demo__echo"));
+
+    await hub.restart({ two: { transport: "stdio", command: process.execPath, args: [FIXTURE] } });
+    const names = hub.currentTools().map((t) => t.name).sort();
+    assert.deepEqual(names, ["mcp__two__boom", "mcp__two__echo"]);
+    const statuses = new Map(hub.describe().map((s) => [s.name, s.status.kind]));
+    assert.equal(statuses.get("two"), "ready");
+    await hub.dispose();
+  });
+
+  // 重连是拆掉重来的：一台坏的只脏它自己那格，别的照常服务
+  test("重载后一台变坏不影响其它台", async () => {
+    const hub = new McpHub();
+    await hub.start({ ok: { transport: "stdio", command: process.execPath, args: [FIXTURE] } });
+    await hub.restart({
+      ok: { transport: "stdio", command: process.execPath, args: [FIXTURE] },
+      bad: { transport: "stdio", command: "definitely-not-a-real-command-xyz", args: [] },
+    });
+    const statuses = new Map(hub.describe().map((s) => [s.name, s.status.kind]));
+    assert.equal(statuses.get("ok"), "ready");
+    assert.equal(statuses.get("bad"), "failed");
+    assert.deepEqual(hub.currentTools().map((t) => t.name).sort(), [
+      "mcp__ok__boom",
+      "mcp__ok__echo",
+    ]);
+    await hub.dispose();
+  });
+
+  /** stdio 的子进程随 stdin 关闭而退出——旧 client close 后不许有孤儿 */
+  test("旧 client 全部 close，子进程真的退了（无孤儿）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-mcp-reload-"));
+    const pidFile = join(dir, "child.pid");
+    const hub = new McpHub();
+    await hub.start({
+      demo: {
+        transport: "stdio",
+        command: process.execPath,
+        args: [FIXTURE],
+        env: { ORBITA_MCP_FIXTURE_PID_FILE: pidFile },
+      },
+    });
+    assert.ok(hub.currentTools().some((t) => t.name === "mcp__demo__echo"));
+    const pid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+    assert.ok(Number.isInteger(pid));
+
+    await hub.restart({});
+    // close 是异步的：子进程退出可能晚一点，轮询等它真死（最多 5 秒）
+    const deadline = Date.now() + 5_000;
+    let dead = false;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        dead = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(dead, `子进程 ${pid} 在 restart 后 5 秒内没有退出`);
+    await rm(dir, { recursive: true, force: true });
   });
 });
 

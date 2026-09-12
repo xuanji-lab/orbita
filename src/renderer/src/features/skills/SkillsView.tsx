@@ -175,6 +175,10 @@ function Servers(props: { skills: SkillsState }) {
         <button type="button" onClick={props.skills.openMcpConfig} style={buttonStyle}>
           <Icon name="wrench" size={14} /> Edit mcp.json
         </button>
+        {/* 临时接线（1-1 后端）：样式与文案在面板改版（1-1 renderer 层）时按设计稿重做 */}
+        <button type="button" onClick={props.skills.reloadMcp} style={buttonStyle}>
+          <Icon name="wrench" size={14} /> Reload
+        </button>
       </span>
       <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
         Changes apply the next time the agent process starts a task.

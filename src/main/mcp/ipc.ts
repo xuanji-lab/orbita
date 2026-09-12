@@ -6,10 +6,14 @@
  */
 import { ipcMain, shell } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import { describeServer, type McpServerInfo } from "../../shared/mcp.ts";
+import { describeServer, type McpServer, type McpServerInfo } from "../../shared/mcp.ts";
 import type { McpStore } from "./store.ts";
 
-export function registerMcpIpc(store: McpStore): { onAgentSnapshot: (servers: McpServerInfo[]) => void } {
+export function registerMcpIpc(
+  store: McpStore,
+  /** 把新配置交给 agent 进程重连（host 注入；等 runtime 的 mcp 快照回来才返回） */
+  reload: (servers: Record<string, McpServer>) => Promise<void>,
+): { onAgentSnapshot: (servers: McpServerInfo[]) => void } {
   /** agent 进程报上来的最后一次连接状态。null = 还没连过（没建过会话）。 */
   let snapshot: McpServerInfo[] | null = null;
 
@@ -37,6 +41,15 @@ export function registerMcpIpc(store: McpStore): { onAgentSnapshot: (servers: Mc
   ipcMain.handle(ipcChannels.mcpOpenConfig, async (): Promise<void> => {
     await store.ensureFile();
     await shell.openPath(store.path());
+  });
+
+  /**
+   * 热重载（1-1）：重读 mcp.json，让 agent 进程按新配置重连。读错如实抛——
+   * reload 是显式动作，用户在等结果；这比开轮路径上「读不了就静默空」的要求严。
+   * 生效范围：已在跑的轮工具集已定格，下一轮开机拿新集。
+   */
+  ipcMain.handle(ipcChannels.mcpReload, async (): Promise<void> => {
+    await reload(await store.read());
   });
 
   return {

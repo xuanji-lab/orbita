@@ -126,10 +126,9 @@ void app.whenReady().then(() => {
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
   const sessions = new SessionStore(join(configDir, "sessions"));
   const record = createSessionRecorder(sessions);
-  // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
   const mcp = new McpStore(configDir);
-  const mcpIpc = registerMcpIpc(mcp);
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
+    // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
     // 真值校准回 meta——open 失败退回新建时 pi 会换文件，按轮自愈。
@@ -141,6 +140,9 @@ void app.whenReady().then(() => {
     record(event);
     broadcastAgentEvent(event);
   });
+  // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
+  // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
+  const mcpIpc = registerMcpIpc(mcp, (servers) => agentHost.mcpReload(servers));
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost);

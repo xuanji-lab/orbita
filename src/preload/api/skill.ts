@@ -29,4 +29,6 @@ export const mcpApi = {
   list: (): Promise<McpServerInfo[]> => ipcRenderer.invoke(ipcChannels.mcpList),
   /** 用系统默认编辑器打开 mcp.json（加减 server 走文件） */
   openConfig: (): Promise<void> => ipcRenderer.invoke(ipcChannels.mcpOpenConfig),
+  /** 重读 mcp.json 并重连（新配置对下一轮开学生效；进行中的任务工具集不变） */
+  reload: (): Promise<void> => ipcRenderer.invoke(ipcChannels.mcpReload),
 } as const;

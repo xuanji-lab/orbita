@@ -42,13 +42,31 @@ export class McpHub {
 
   /**
    * 连上所有启用的 server。**只跑一次**——重复调用返回同一个 promise，
-   * 因为每条会话创建时都会调它。
+   * 因为每轮开机都会调它。
    */
   start(servers: Record<string, McpServer>): Promise<void> {
     if (this.started !== null) return this.started;
     this.servers = servers;
     this.started = this.connectAll(servers);
     return this.started;
+  }
+
+  /**
+   * 配置变更后的重连（1-1 热重载）。旧 client 全部 close（stdio 的子进程随 stdin
+   * 关闭而退出），再按新配置连一遍——同一台 server 也是先拆再连，不增量补。
+   *
+   * 先等在飞的 start 落定再拆：不等的话它会在拆完后把旧 tools 写回来。
+   * 拆完到 start 之间没有 await，同 tick 内不会插进别的 start。
+   */
+  async restart(servers: Record<string, McpServer>): Promise<void> {
+    await this.started?.catch(() => undefined);
+    const closing = [...this.clients.values()].map((client) => client.close().catch(() => undefined));
+    this.clients.clear();
+    this.tools = [];
+    this.statuses.clear();
+    await Promise.all(closing);
+    this.started = null;
+    return this.start(servers);
   }
 
   /** 当前可用的工具。会话创建时取一次，作为 `customTools` 交给 pi。 */
