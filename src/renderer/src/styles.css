@@ -195,9 +195,8 @@ body {
 }
 
 /*
- * 内容面的两列：左会话列（ChatView 自带 height:100% 的栅格根），右抽屉。
- * 抽屉是 pane 的子元素——**同一个面板**：同一份玻璃底、同一份阴影、四角一体的圆角，
- * 中间只有一根竖线（wafo v7/v8 裁决：不要「有间距的长方形」）。
+ * 内容面：左会话列（ChatView 自带 height:100% 的栅格根）。主会话区是
+ * **一张完整的浮卡**——抽屉不再嵌在卡里（2026-09-12 裁决：分界参考浮卡形态）。
  */
 .pane-main {
   flex: 1;
@@ -206,20 +205,29 @@ body {
 }
 
 /* ===== 右抽屉 ===== */
+/* 与 pane 并排的另一张浮卡：同款玻璃底、阴影与圆角，与主会话区之间是 layer 的缝
+ * （与 Skills / MCP 分屏面板同款分界）。收起时用负 margin 抵消 gap——不然
+ * width:0 仍占一个 flex 位，pane 到右图标条之间会出现 24px 的双倍缝。 */
 .drawer {
   flex: 0 0 auto;
   width: 0;
+  margin-inline-start: calc(-1 * var(--space-3));
   transition:
     width 0.2s ease,
-    border-left-width 0.2s ease;
+    margin-inline-start 0.2s ease;
   overflow: hidden;
   position: relative;
-  border-left: 0 solid var(--color-border-default);
+  background: var(--glass-bg);
+  border: 0;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-composer);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
 }
 
 .drawer.open {
   width: var(--drawer-w, 320px);
-  border-left-width: 1px;
+  margin-inline-start: 0;
 }
 
 /* 拖拽过程中不要过渡——每一步都实时跟手，收起/展开的动画才保留 */
@@ -235,7 +243,7 @@ body {
   min-width: 280px;
 }
 
-/* 竖线即分界；把手骑在竖线上（pane overflow:hidden 裁掉了向外伸的部分） */
+/* 把手骑在抽屉左缘：拖宽热区，hover 时亮出一条边 */
 .drawer-resizer {
   position: absolute;
   left: 0;
