@@ -105,8 +105,17 @@ export function App() {
     [changeSettings],
   );
 
+  /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
+   *  没有「面板 + 面板」。开关互斥在这里收口：展开抽屉时 Skills / MCP 退场，
+   *  开 Skills / MCP 时抽屉退场。 */
   const toggleDrawer = useCallback(() => {
-    setDrawerOpen((open) => !open);
+    if (!drawerOpen) setRightPanel(null);
+    setDrawerOpen(!drawerOpen);
+  }, [drawerOpen]);
+
+  const handlePanel = useCallback((next: RightPanelKind | null) => {
+    setRightPanel(next);
+    if (next !== null) setDrawerOpen(false);
   }, []);
 
   // Ctrl+Alt+D 开关抽屉（与右图标条按钮、动作同源）
@@ -195,33 +204,32 @@ export function App() {
               }
             />
           )}
+          {rightPanel === "skills" ? (
+            <SkillsPanel
+              narrow={narrow}
+              skills={skills}
+              onClose={() => setRightPanel(null)}
+              width={panelWidth}
+              onWidthChange={setPanelWidth}
+              onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+              defaultWorkspaceId={session.workspaceId}
+              onCreateSkill={createSkillDraft}
+            />
+          ) : rightPanel === "mcp" ? (
+            <McpPanel
+              narrow={narrow}
+              skills={skills}
+              onClose={() => setRightPanel(null)}
+              width={panelWidth}
+              onWidthChange={setPanelWidth}
+              onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+            />
+          ) : null}
         </main>
-
-        {rightPanel === "skills" ? (
-          <SkillsPanel
-            narrow={narrow}
-            skills={skills}
-            onClose={() => setRightPanel(null)}
-            width={panelWidth}
-            onWidthChange={setPanelWidth}
-            onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-            defaultWorkspaceId={session.workspaceId}
-            onCreateSkill={createSkillDraft}
-          />
-        ) : rightPanel === "mcp" ? (
-          <McpPanel
-            narrow={narrow}
-            skills={skills}
-            onClose={() => setRightPanel(null)}
-            width={panelWidth}
-            onWidthChange={setPanelWidth}
-            onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-          />
-        ) : null}
 
         <RightRail
           panel={rightPanel}
-          onPanel={setRightPanel}
+          onPanel={handlePanel}
           sessionActions={sessionActions}
           drawerOpen={drawerOpen}
           onToggleDrawer={toggleDrawer}

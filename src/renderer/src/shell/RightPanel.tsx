@@ -7,9 +7,10 @@ import { RIGHT_PANEL_WIDTH_MAX, RIGHT_PANEL_WIDTH_MIN } from "@shared/settings";
  * contentKey 换帧）、footer 动作区（发丝顶线分隔）。Skills / MCP 两个面板
  * 共用这一副骨架，各自把 header / 内容 / footer 塞进来。
  *
- * 两种容器形态（规格 §1.3）：分屏 320px；窄窗（<960px）转右侧锚定覆盖层，
- * 阴影升 --shadow-popover，无遮罩不是 modal。进入 220ms
- * --duration-enter --ease-out-quint 滑入。关闭三出口：再点图标 / x / Esc。
+ * 两种容器形态：宽窗是 **pane 内的一列**，左缘一条竖线与主会话区分界（2026-09-12
+ * 裁决：与辅助对话抽屉同款，不要间隔）；窄窗（<960px）转右侧锚定覆盖层，
+ * 那时才需要自己的面——玻璃底、圆角，阴影升 --shadow-popover，无遮罩不是 modal。
+ * 进入 220ms --duration-enter --ease-out-quint 滑入。关闭三出口：再点图标 / x / Esc。
  */
 export function RightPanelFrame(props: {
   narrow: boolean;
@@ -20,7 +21,7 @@ export function RightPanelFrame(props: {
   /** 页头右侧、x 左边的槽（添加按钮等） */
   headerExtra?: React.ReactNode;
   footer?: React.ReactNode;
-  /** 面板宽度（4-0 拖宽）。分屏态生效；窄窗覆盖层固定 320 不可拖 */
+  /** 面板宽度（4-0 拖宽）。分栏态生效；窄窗覆盖层固定 320 不可拖 */
   width: number;
   /** 拖动中每帧回调（只改本地状态，不落盘） */
   onWidthChange: (width: number) => void;
@@ -53,7 +54,8 @@ export function RightPanelFrame(props: {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = panel.getBoundingClientRect().width;
-    const pane = panel.parentElement?.querySelector("main.pane");
+    // 面板是 pane 的子元素（分栏形态），closest 拿它算 chat ≥480 的底线
+    const pane = panel.closest("main.pane");
     const paneWidth = pane?.getBoundingClientRect().width ?? startWidth + 480;
     const maxByChat = startWidth + Math.max(0, paneWidth - 480);
     const max = Math.min(RIGHT_PANEL_WIDTH_MAX, maxByChat);
@@ -80,7 +82,6 @@ export function RightPanelFrame(props: {
   return (
     <aside
       ref={asideRef}
-      className="pane"
       style={{
         position: narrow ? "absolute" : "relative",
         flex: narrow ? undefined : `0 0 ${props.width}px`,
@@ -88,18 +89,25 @@ export function RightPanelFrame(props: {
         display: "grid",
         gridTemplateRows: "auto minmax(0,1fr) auto",
         animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
+        // 窄窗覆盖层的定位基准是 .layer（pane 无 position）——右侧让过 rail 一条
         ...(narrow
           ? {
               top: "var(--space-3)",
               bottom: "var(--space-3)",
               right: "calc(var(--space-3) + 32px + var(--space-3))",
+              background: "var(--glass-bg)",
+              border: 0,
+              borderRadius: "var(--radius-xl)",
               boxShadow: "var(--shadow-popover)",
               zIndex: 20,
             }
-          : {}),
+          : {
+              // 与主会话区的分界：一条竖线，同卡无间隔（与抽屉一致）
+              borderLeft: "1px solid var(--color-border-default)",
+            }),
       }}
     >
-      {/* 拖宽热区：左缘 6px（骑缝 3px），只在分屏态存在；双击回 320 */}
+      {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320 */}
       {!narrow && (
         <span
           onPointerDown={startResize}
@@ -107,7 +115,7 @@ export function RightPanelFrame(props: {
           title="Drag to resize · double-click to reset"
           style={{
             position: "absolute",
-            left: -3,
+            left: 0,
             top: 0,
             bottom: 0,
             width: 6,
