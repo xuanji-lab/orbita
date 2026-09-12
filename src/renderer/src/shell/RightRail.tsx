@@ -74,13 +74,26 @@ export function RightRail(props: {
         flexDirection: "column",
         alignItems: "center",
         gap: "var(--space-2)",
-        padding: "3px 0",
+        // 顶行与侧栏字标行同行同高（padding-top 一致），第一个入口与左侧折叠图标对齐
+        padding: "var(--space-2) 0",
         background: "transparent",
         overflow: "hidden",
       }}
     >
-      <span className="titlebar" style={{ height: 34, width: "100%", flex: "0 0 auto" }} />
-      {entry("skills", "book-open", "Skills")}
+      {/* 顶部这行兼作拖拽区（.titlebar）；Skills 入口住在行内与折叠图标同行 */}
+      <span
+        className="titlebar"
+        style={{
+          height: 34,
+          width: "100%",
+          flex: "0 0 auto",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {entry("skills", "book-open", "Skills")}
+      </span>
       {entry("mcp", "plug", "MCP servers")}
       {/* 抽屉开关（辅助对话）：点亮语义与面板入口一致——开着就亮 */}
       <button
