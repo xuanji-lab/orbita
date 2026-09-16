@@ -156,7 +156,9 @@ function SkillList(props: {
         headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
-        <PanelLine>Loading…</PanelLine>
+        <div style={{ padding: "var(--space-4)" }}>
+          <PanelLine>Loading…</PanelLine>
+        </div>
       </RightPanelFrame>
     );
   }
@@ -169,9 +171,21 @@ function SkillList(props: {
         headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
-        {error !== null && <PanelLine danger>Couldn’t read skills. {error}</PanelLine>}
-        <p style={{ margin: 0, fontSize: "var(--font-size-body)" }}>No skill yet.</p>
-        <PanelLine>Create a folder with a SKILL.md in the skills directory.</PanelLine>
+        {/* 空态自己包一层内容版式（与 MCP 面板同款）：列表行的 hover 要通到面板
+            两个侧缘（行自带内边距），所以壳的内容区不能统一加 padding——
+            空态没有行，忘了这层就会整段贴着面板左缘 */}
+        <div
+          style={{
+            padding: "var(--space-4)",
+            display: "grid",
+            gap: "var(--space-2)",
+            alignContent: "start",
+          }}
+        >
+          {error !== null && <PanelLine danger>Couldn’t read skills. {error}</PanelLine>}
+          <p style={{ margin: 0, fontSize: "var(--font-size-body)" }}>No skill yet.</p>
+          <PanelLine>Create a folder with a SKILL.md in the skills directory.</PanelLine>
+        </div>
       </RightPanelFrame>
     );
   }
