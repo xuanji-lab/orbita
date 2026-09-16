@@ -112,6 +112,33 @@ describe("createSessionRecorder", () => {
     assert.equal(item !== undefined && "status" in item ? item.status : undefined, "aborted");
   });
 
+  // 重试的失败尾巴：auto_retry 每次失败尝试经 message_end 发一条 status=error、
+  // content 为空的终态帧。pi 自己的本子不收它（2026-09-01 实测的唯一系统性落账
+  // 差异），我们也不收——否则分支对账就得为它开口子（store.ts isEmptyErrorAssistant）。
+  const retryTail = {
+    id: "a2",
+    role: "assistant" as const,
+    content: [],
+    model: { provider: "zai", id: "glm-5.3" },
+    timestamp: 3000,
+    status: "error" as const,
+    stopReason: "error" as const,
+  };
+
+  test("重试的失败尾巴不落盘——status=error 且内容为空", async () => {
+    record(progress({ type: "item_finished", item: retryTail }));
+    await settle();
+    assert.deepEqual((await store.load(ID))?.transcript, []);
+  });
+
+  test("带内容的 error assistant 照样落盘——真失败要有尸体可查", async () => {
+    const halfSaid = { ...retryTail, id: "a3", content: [{ type: "text" as const, text: "说到一半断了" }] };
+    record(progress({ type: "item_finished", item: halfSaid }));
+    await settle();
+    const item = (await store.load(ID))?.transcript[0];
+    assert.equal(item !== undefined && "status" in item ? item.status : undefined, "error");
+  });
+
   test("非 progress 事件一概不管", async () => {
     record({ type: "ready" });
     record({ type: "phase", sessionId: ID, phase: "idle" });
