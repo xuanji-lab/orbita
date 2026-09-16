@@ -140,15 +140,7 @@ function SkillList(props: {
       <Chip onClick={props.onSwitchToMap} title="Set map">
         <Icon name="blend" size={13} />
       </Chip>
-      {/* 标题与前面两个视图 Chip 之间多让一步（--space-3）：Chip 是可交互的
-          控件组，标题不是它们的同伙——只靠壳的 gap(--space-2) 会贴成一行控件 */}
-      <strong
-        style={{
-          marginLeft: "var(--space-3)",
-          fontSize: "var(--font-size-title)",
-          fontWeight: "var(--weight-bold)",
-        }}
-      >
+      <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
         Skills
       </strong>
     </>
