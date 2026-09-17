@@ -146,27 +146,27 @@ describe("SkillStore.link / unlink —— 归属就是链接", () => {
 
   test("link 不存在的 skill 报错（断链走 clean，不造新链接）", async () => {
     await put("a", SKILL("a", "x"));
-    await assert.rejects(store.link("ghost", { kind: "global" }), /不存在/);
+    await assert.rejects(store.link("ghost", { kind: "global" }), /Skill not found/);
   });
 
   test("路径穿越的 slug 与集合 id 直接拒绝", async () => {
-    await assert.rejects(store.link("../../etc", { kind: "global" }), /非法/);
-    await assert.rejects(store.link("a", { kind: "workspace", workspaceId: "../skills" }), /非法/);
-    await assert.rejects(store.link("a", { kind: "workspace", workspaceId: "global" }), /非法/);
+    await assert.rejects(store.link("../../etc", { kind: "global" }), /Invalid/);
+    await assert.rejects(store.link("a", { kind: "workspace", workspaceId: "../skills" }), /Invalid/);
+    await assert.rejects(store.link("a", { kind: "workspace", workspaceId: "global" }), /Invalid/);
   });
 
   test("链接位置已有实体文件夹时拒绝，不覆盖用户文件", async () => {
     await put("a", SKILL("a", "x"));
     await mkdir(join(dir, "skill-links", "global", "a"), { recursive: true });
     await writeFile(join(dir, "skill-links", "global", "a", "SKILL.md"), "用户手放的", "utf8");
-    await assert.rejects(store.link("a", { kind: "global" }), /不覆盖/);
+    await assert.rejects(store.link("a", { kind: "global" }), /refusing to overwrite/);
     assert.equal(await readFile(join(dir, "skill-links", "global", "a", "SKILL.md"), "utf8"), "用户手放的");
   });
 
   test("unlink 遇到同名实体（不是链接）拒绝删——那可能是用户自己的文件夹", async () => {
     await mkdir(join(dir, "skill-links", "global", "a"), { recursive: true });
     await writeFile(join(dir, "skill-links", "global", "a", "keep.txt"), "珍贵文件", "utf8");
-    await assert.rejects(store.unlink("a", { kind: "global" }), /不是链接/);
+    await assert.rejects(store.unlink("a", { kind: "global" }), /not a link/);
     assert.equal(await readFile(join(dir, "skill-links", "global", "a", "keep.txt"), "utf8"), "珍贵文件");
   });
 
@@ -206,7 +206,7 @@ describe("断链（missing）与 clean", () => {
 
   test("missing 的 skill 不能 link（要先修文件夹或 clean）", async () => {
     await putBrokenLink("global", "gone");
-    await assert.rejects(store.link("gone", { kind: "global" }), /不存在/);
+    await assert.rejects(store.link("gone", { kind: "global" }), /Skill not found/);
   });
 });
 
@@ -216,7 +216,7 @@ describe("create / importFrom（4-1 应用内添加）", () => {
     const list = await store.list();
     assert.deepEqual(meta(list, "fresh").workspaces, ["ws-1"]);
     assert.match(await readFile(join(dir, "skills", "fresh", "SKILL.md"), "utf8"), /name: Fresh Skill/);
-    await assert.rejects(store.create("fresh", "叉子", null), /已存在同名/);
+    await assert.rejects(store.create("fresh", "叉子", null), /already exists/);
   });
 
   test("新建 scope=null：只落存储不建链（Disabled 组）", async () => {
@@ -247,7 +247,7 @@ describe("create / importFrom（4-1 应用内添加）", () => {
     const real = join(dir, "no-skill-md");
     await mkdir(real, { recursive: true });
     await writeFile(join(real, "别的.txt"), "x", "utf8");
-    await assert.rejects(store.importFrom(real, null), /没有 SKILL\.md/);
+    await assert.rejects(store.importFrom(real, null), /No SKILL\.md/);
     assert.equal((await store.list()).some((s) => s.slug === "no-skill-md"), false);
   });
 
@@ -255,7 +255,7 @@ describe("create / importFrom（4-1 应用内添加）", () => {
     const real = join(dir, "Bad Name!");
     await mkdir(real, { recursive: true });
     await writeFile(join(real, "SKILL.md"), SKILL("x", "y"), "utf8");
-    await assert.rejects(store.importFrom(real, null), /非法/);
+    await assert.rejects(store.importFrom(real, null), /Invalid/);
   });
 
   test("导入的两跳断链：真身被删后，scanStore 跳过 + skill-link 还在 → 落成 missing（回归钉）", async () => {
@@ -349,7 +349,7 @@ describe("SkillStore.read / write", () => {
   });
 
   test("写不存在的 skill 报错，不静默建一个", async () => {
-    await assert.rejects(store.write("nope", { description: "x" }), /不存在/);
+    await assert.rejects(store.write("nope", { description: "x" }), /Skill not found/);
   });
 });
 

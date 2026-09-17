@@ -44,23 +44,23 @@ export function planBranchCut(
   }
 
   if (roles.at(-1) !== "assistant") {
-    throw new Error(roles.length === 0 ? "分支点之前没有任何消息" : "分支点必须是 agent 的回答");
+    throw new Error(roles.length === 0 ? "No messages before the branch point" : "The branch point must be an agent reply");
   }
 
   // 对账只对前缀：pi 文件里还有锚点之后的后文（counted 更长是常态）。
   // pi 的消息比本地记录还少 = 账对不上；前 N 位任何一位不合也是。
   if (counted.length < roles.length) {
     throw new Error(
-      `两本账对不上：pi 有 ${counted.length} 条消息，本地记录 ${roles.length} 条，不能分支`,
+      `Ledger mismatch: pi has ${counted.length} messages, local records have ${roles.length} — cannot branch`,
     );
   }
   for (let i = 0; i < roles.length; i++) {
     if (counted[i]?.role !== roles[i]) {
-      throw new Error("两本账的消息顺序对不上，不能分支");
+      throw new Error("Message order mismatch between the two ledgers — cannot branch");
     }
   }
   const anchor = counted[roles.length - 1];
-  if (anchor === undefined) throw new Error("分支点之前没有任何消息");
+  if (anchor === undefined) throw new Error("No messages before the branch point");
 
   // 锚点条目向后连吃它的 toolResult——上下文要完整（有调用必须有结果，缺结果的
   // tool_use 会被 LLM API 拒收）。遇到别的（user / assistant / 压缩界碑 / 非消息
