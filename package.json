@@ -10,7 +10,8 @@
     "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\""
+    "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\"",
+    "ui:smoke": "bun scripts/ui-smoke.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.3",
