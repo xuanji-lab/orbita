@@ -389,7 +389,7 @@ function askPermission(sessionId: string) {
 function settlePendingPermissions(sessionId: string): void {
   for (const [key, resolve] of pendingPermissions) {
     if (!key.startsWith(`${sessionId}:`)) continue;
-    resolve({ behavior: "deny", message: "已停止" });
+    resolve({ behavior: "deny", message: "Stopped" });
     pendingPermissions.delete(key);
   }
 }
@@ -676,7 +676,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
         send({
           type: "failed",
           sessionId: command.sessionId,
-          message: `重试 ${event.attempt} 次后仍失败：${event.finalError ?? "未知"}`,
+          message: `Failed after ${event.attempt} retries: ${event.finalError ?? "unknown"}`,
           turn: true,
         });
       }
@@ -754,7 +754,7 @@ async function branchPiSession(command: Extract<AgentCommand, { type: "branch" }
   const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
   const targetId = planBranchCut(manager.getEntries(), command.roles);
   const branchFile = manager.createBranchedSession(targetId);
-  if (branchFile === undefined) throw new Error("pi 没有产出分支文件");
+  if (branchFile === undefined) throw new Error("pi produced no branch file");
   // 复用 created 事件通路：主进程对 branch 与开机用同一条等待逻辑
   send({ type: "created", sessionId: command.sessionId, piSessionFile: branchFile });
 }
@@ -925,7 +925,7 @@ async function handle(command: AgentCommand): Promise<void> {
       command.requestId,
       command.ok
         ? { ok: true, ...(command.path === undefined ? {} : { path: command.path }) }
-        : { ok: false, error: command.error ?? "写盘失败" },
+        : { ok: false, error: command.error ?? "Write failed" },
     );
     return;
   }
@@ -934,7 +934,7 @@ async function handle(command: AgentCommand): Promise<void> {
       command.requestId,
       command.ok
         ? { ok: true, ...(command.status === undefined ? {} : { status: command.status }) }
-        : { ok: false, error: command.error ?? "写盘失败" },
+        : { ok: false, error: command.error ?? "Write failed" },
     );
     return;
   }
@@ -976,10 +976,10 @@ function userText(content: unknown): string {
  */
 function compactionErrorText(raw: string): string {
   if (raw === "Already compacted") {
-    return "已经压缩过了，上次压缩之后还没有新对话——继续聊一轮再压";
+    return "Already compacted — nothing new since the last one. Continue the conversation, then compact again.";
   }
   if (raw === "Nothing to compact (session too small)") {
-    return "这个会话的内容还太少，没有值得压缩的上下文";
+    return "This conversation is too short — not enough context worth compacting.";
   }
   return raw;
 }

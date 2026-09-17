@@ -366,6 +366,54 @@ describe("SessionStore.branch", () => {
     assert.equal(plan.meta.pinned, false);
   });
 
+  test("prepareBranch：meta.stats 聚合前缀用量，contextUsage 如实为 null（A-2）", async () => {
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
+    const withUsage = (
+      id: string,
+      text: string,
+      output: number,
+      costTotal: number,
+    ): TranscriptItem => ({
+      id,
+      role: "assistant",
+      content: [{ type: "text", text }],
+      model: { provider: "zai", id: "glm-5.3" },
+      timestamp: 3000,
+      status: "complete",
+      stopReason: "stop",
+      usage: {
+        input: 100,
+        output,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 100 + output,
+        cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: costTotal },
+      },
+    });
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, withUsage("a1", "答一", 50, 0.3));
+    await store.record(ID, emptyError("e1"));
+    await store.record(ID, item("u2", "user", "再问"));
+    await store.record(ID, withUsage("a2", "答二", 70, 0.5));
+    const plan = await store.prepareBranch(ID, "a2");
+
+    // 累计是真历史：两条带 usage 的回答相加；error 尾巴（无 usage）自然不参与
+    assert.deepEqual(plan.meta.stats, {
+      tokens: { input: 200, output: 120, cacheRead: 0, cacheWrite: 0, total: 320 },
+      cost: 0.8,
+      // 余量取决于 pi 按裁剪后上下文现算，聚合不出来——如实 null，UI 显示未知
+      contextUsage: null,
+    });
+  });
+
+  test("prepareBranch：前缀没有任何 usage 就没有账本（stats: null）", async () => {
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, item("a1", "assistant", "答"));
+    const plan = await store.prepareBranch(ID, "a1");
+    assert.equal(plan.meta.stats, null);
+  });
+
   test("prepareBranch：锚点不存在 / 不是 assistant / 没有 pi 本子，都拒绝", async () => {
     await store.ensureSession(meta({ piSessionFile: PI_FILE }));
     await store.record(ID, item("u1", "user", "问题"));

@@ -63,20 +63,20 @@ describe("planBranchCut", () => {
           "assistant",
           "assistant",
         ] as const),
-      /对不上/,
+      /Ledger mismatch/,
     );
   });
 
   test("顺序对不上（漂移）：拒绝", () => {
     assert.throws(
       () => planBranchCut(TYPICAL, ["user", "user", "assistant", "assistant"] as const),
-      /顺序/,
+      /order mismatch/,
     );
   });
 
   test("roles 为空或末位不是 assistant：拒绝", () => {
-    assert.throws(() => planBranchCut(TYPICAL, []), /没有任何消息/);
-    assert.throws(() => planBranchCut(TYPICAL, ["user"] as const), /agent 的回答/);
+    assert.throws(() => planBranchCut(TYPICAL, []), /No messages before/);
+    assert.throws(() => planBranchCut(TYPICAL, ["user"] as const), /must be an agent reply/);
   });
 
   test("压缩界碑与非消息条目不入对账序列", () => {

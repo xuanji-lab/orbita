@@ -125,7 +125,7 @@ describe("applyMcpWrite（真 store）", () => {
     );
     assert.equal(result.ok, false);
     if (result.ok) return;
-    assert.match(result.error, /已存在同名/);
+    assert.match(result.error, /already exists/);
     assert.equal(reloads, 0);
   });
 });

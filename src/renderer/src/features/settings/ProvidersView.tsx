@@ -638,7 +638,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   <label>API format</label>
                   <div
                     className="pv-locked"
-                    title="协议由 provider 预设决定，没有协议选择框——换协议等于换条目"
+                    title="The API protocol is decided by the provider preset — there is no protocol selector; changing it means a new entry"
                   >
                     <Icon name="lock" size={13} strokeWidth={1.8} />
                     {known.api}
@@ -764,7 +764,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                               {tested !== undefined && tested.tone !== "busy" && (
                                 <span
                                   className={`pv-badge pv-test-${tested.tone}`}
-                                  title={tested.tone === "bad" ? "查看下方的失败原因" : tested.text}
+                                  title={tested.tone === "bad" ? "See the failure reason below" : tested.text}
                                 >
                                   {tested.tone === "ok" ? (
                                     <>
@@ -1131,7 +1131,7 @@ function ModelDialog(props: {
             ) : (
               <div
                 className="pv-locked"
-                title="模型 id 是身份，不可改——要换 id 请删除后重新添加"
+                title="Model id is its identity and cannot be edited — delete and re-add to change it"
               >
                 <Icon name="lock" size={13} strokeWidth={1.8} />
                 {props.decl?.id}

@@ -306,7 +306,7 @@ describe("transcriptToMarkdown 的压缩界碑", () => {
 
   it("界碑出标记行 + 引用块摘要，不冒充 User / Assistant", () => {
     const md = transcriptToMarkdown([compacted, user]);
-    match(md, /\*\*\[已压缩\]\*\*（此前上下文约 85,000 tokens）/);
+    match(md, /\*\*\[Compacted\]\*\* \(earlier context ≈ 85,000 tokens\)/);
     match(md, /> ## Goal\n> 重做外壳\n> ## Done\n> 一半/);
     match(md, /\*\*User\*\*\n\n继续/);
     doesNotMatch(md, /\*\*Assistant\*\*/);
@@ -343,14 +343,14 @@ describe("transcriptToMarkdown 的工具结果", () => {
     const md = transcriptToMarkdown([
       { ...tool, status: "error" as const, isError: true, content: [{ type: "text" as const, text: "command not found" }] },
     ]);
-    match(md, /\*\*Tool · bash\*\*（失败）/);
+    match(md, /\*\*Tool · bash\*\* \(failed\)/);
     match(md, /command not found/);
   });
 
   it("超长输出截断并标注真实行数", () => {
     const text = Array.from({ length: 120 }, (_, i) => `line-${i}`).join("\n");
     const md = transcriptToMarkdown([{ ...tool, content: [{ type: "text" as const, text }] }]);
-    match(md, /…（已截断，共 120 行）/);
+    match(md, /… \(truncated, 120 lines in total\)/);
     doesNotMatch(md, /line-119/);
   });
 
@@ -359,7 +359,7 @@ describe("transcriptToMarkdown 的工具结果", () => {
       { ...tool, content: [{ type: "image" as const, data: "xx", mimeType: "image/png" }] },
     ]);
     match(md, /\[image image\/png\]/);
-    match(transcriptToMarkdown([{ ...tool, content: [] }]), /（无输出）/);
+    match(transcriptToMarkdown([{ ...tool, content: [] }]), /\(no output\)/);
   });
 });
 
