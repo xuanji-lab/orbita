@@ -1,7 +1,13 @@
 import { Chip } from "../../shell/Chip";
 import type { IconName } from "../../shell/Icon";
 import { ProvidersView } from "./ProvidersView";
-import { THEME_PREFERENCES, type AppSettings, type ThemePreference } from "@shared/settings";
+import {
+  COMPACTION_DEFAULT,
+  THEME_PREFERENCES,
+  type AppSettings,
+  type CompactionSetting,
+  type ThemePreference,
+} from "@shared/settings";
 
 /**
  * 设置面。**它不是弹窗，是内容面的另一种内容**——tab 列表浮在侧栏上（透明、无面），
@@ -69,27 +75,60 @@ const THEME_LABELS: Record<ThemePreference, string> = {
   black: "Ink",
 };
 
+/** 自动压缩的档位（%）。与 shared 的合法区间 [5,50] 对齐，档距是「一眼分得清」的粒度 */
+const COMPACTION_CHOICES = [30, 25, 20, 15, 10, 5] as const;
+
 function General(props: { settings: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
+  // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
+  const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
+  const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
   return (
-    <Section label="Appearance">
-      <Row
-        name="Theme"
-        hint="System follows your desktop's light or dark appearance and lands on Ink; Warm and Ink are manual."
-        control={
-          <span style={{ display: "flex", gap: 2 }}>
-            {THEME_PREFERENCES.map((value) => (
+    <div style={{ display: "grid", gap: "var(--space-6)", alignContent: "start" }}>
+      <Section label="Appearance">
+        <Row
+          name="Theme"
+          hint="System follows your desktop's light or dark appearance and lands on Ink; Warm and Ink are manual."
+          control={
+            <span style={{ display: "flex", gap: 2 }}>
+              {THEME_PREFERENCES.map((value) => (
+                <Chip
+                  key={value}
+                  active={props.settings.theme === value}
+                  onClick={() => props.onChange({ theme: value })}
+                >
+                  {THEME_LABELS[value]}
+                </Chip>
+              ))}
+            </span>
+          }
+        />
+      </Section>
+      <Section label="Context">
+        <Row
+          name="Auto-compact"
+          hint="Fold older history into a summary once remaining context drops to this level. Off keeps manual /compact only. Applies from the next message."
+          control={
+            <span style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
               <Chip
-                key={value}
-                active={props.settings.theme === value}
-                onClick={() => props.onChange({ theme: value })}
+                active={compaction.enabled === false}
+                onClick={() => setCompaction({ ...compaction, enabled: false })}
               >
-                {THEME_LABELS[value]}
+                Off
               </Chip>
-            ))}
-          </span>
-        }
-      />
-    </Section>
+              {COMPACTION_CHOICES.map((value) => (
+                <Chip
+                  key={value}
+                  active={compaction.enabled !== false && compaction.reservePercent === value}
+                  onClick={() => setCompaction({ enabled: true, reservePercent: value })}
+                >
+                  {value}%
+                </Chip>
+              ))}
+            </span>
+          }
+        />
+      </Section>
+    </div>
   );
 }
 

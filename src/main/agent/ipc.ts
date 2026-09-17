@@ -11,8 +11,11 @@ import {
 } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
+import type { CompactionSetting } from "../../shared/settings.ts";
+import { COMPACTION_DEFAULT } from "../../shared/settings.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
+import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 import { AgentHost } from "./host.ts";
@@ -71,8 +74,12 @@ function turnFields(
   input: SubmitAgentInput | CompactAgentInput,
   provider: ProviderSecrets,
   piSessionDir: string,
-  /** 开轮环境（skill 集合目录 + MCP 配置）：无状态化后每轮命令都要带全 */
-  environment: { skillsDirs: string[]; mcpServers: Record<string, McpServer> },
+  /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好）：无状态化后每轮命令都要带全 */
+  environment: {
+    skillsDirs: string[];
+    mcpServers: Record<string, McpServer>;
+    compaction: CompactionSetting;
+  },
 ) {
   return {
     sessionId: input.sessionId,
@@ -96,6 +103,8 @@ export function registerAgentIpc(
   skillDirs: (workspaceId: string | null) => string[],
   /** MCP 配置。**主进程读文件**，agent 进程只收解析好的结果（同 skillDirs 的纪律） */
   mcp: McpStore,
+  /** 应用设置。压缩偏好（A-1）从这里装配进每轮开轮命令 */
+  settings: SettingsStore,
 ): void {
   /**
    * 读一份 mcp.json。读不出来不拦开轮：失败当场打日志、管理面会把读错原文显示出来；
@@ -107,6 +116,10 @@ export function registerAgentIpc(
       console.error("[main] mcp.json 读不了，这一轮没有 MCP 工具", error);
       return {};
     });
+
+  /** 每轮现读压缩偏好：设置改动下一轮即生效，无需重启会话 */
+  const readCompaction = async (): Promise<CompactionSetting> =>
+    (await settings.read()).compaction ?? COMPACTION_DEFAULT;
 
   ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
 
@@ -145,7 +158,7 @@ export function registerAgentIpc(
 
   ipcMain.handle(ipcChannels.agentSubmit, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers() }) });
+    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
     await settleFirstTurn(input, piSessionFile);
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
@@ -155,12 +168,12 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers() }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
