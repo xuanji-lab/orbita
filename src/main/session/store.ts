@@ -76,6 +76,39 @@ export function branchRoles(records: readonly SessionRecord[]): ("user" | "assis
   return roles;
 }
 
+/**
+ * A-2：从分支前缀聚合 tokens / cost。branch 出来的新会话，「这个任务此前花了多少」
+ * 是真实历史（终态帧都带 usage），该带就带。**只聚合累计值，contextUsage 恒为
+ * null**：余量取决于 pi 按裁剪后上下文的现算，聚合不出来——meta 里如实没有，
+ * UI 显示「未知」。前缀里没有任何带 usage 的回答（旧会话、纯提问、usage 缺席）
+ * 返回 null（meta.stats 无账本）。
+ */
+export function aggregatePrefixUsage(records: readonly SessionRecord[]): AgentStats | null {
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let total = 0;
+  let cost = 0;
+  let seen = false;
+  for (const record of records) {
+    if (record.role !== "assistant" || record.usage === undefined) continue;
+    seen = true;
+    input += record.usage.input ?? 0;
+    output += record.usage.output ?? 0;
+    cacheRead += record.usage.cacheRead ?? 0;
+    cacheWrite += record.usage.cacheWrite ?? 0;
+    total += record.usage.totalTokens ?? 0;
+    cost += record.usage.cost?.total ?? 0;
+  }
+  if (!seen) return null;
+  return {
+    tokens: { input, output, cacheRead, cacheWrite, total },
+    cost,
+    contextUsage: null,
+  };
+}
+
 export class SessionStore {
   private readonly dir: string;
 
@@ -318,8 +351,10 @@ export class SessionStore {
         archived: false,
         // 分支的新会话带着前缀里的最近提问——它的历史是真的，卡片不该显示空槽
         recentQueries: recentQueriesFromRecords(prefix),
-        // 分支的新会话不继承用量：pi 那本是裁过的，累计值对不上，等它自己跑一轮
-        stats: null,
+        // A-2（2026-09-17 裁决）：聚合前缀的 tokens/cost——「这条分支此前花了多少」
+        // 是真实历史。**contextUsage 恒为 null**：pi 那本是裁过的，余量算不出来，
+        // UI 如实显示「未知」，等它自己跑一轮就有真值
+        stats: aggregatePrefixUsage(prefix),
         createdAt: now,
         updatedAt: now,
       },
