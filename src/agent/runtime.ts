@@ -39,6 +39,15 @@ import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { McpHub } from "./mcp.ts";
 import { WriteRequestBroker, createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import {
+  COMPACTION_DEFAULT,
+} from "../shared/settings.ts";
+import {
+  compactionBoundaryTimestamp,
+  compactionKeepRecentTokens,
+  compactionReserveTokens,
+  type TurnTiming,
+} from "./compaction-settings.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
 
@@ -317,6 +326,8 @@ interface TurnParts {
   unsubscribe: () => void;
   session: AgentSession;
   adapter: TranscriptAdapter;
+  /** 本轮时间语义（A-1）：run 的回显处填 echoedAt，界碑盖戳读它 */
+  turn: TurnTiming;
 }
 
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
@@ -412,6 +423,8 @@ interface OpenedTurn {
   session: AgentSession;
   adapter: TranscriptAdapter;
   unsubscribe: () => void;
+  /** 本轮时间语义（A-1）：回显时间戳 + 出没出过 assistant 产物，界碑盖戳用 */
+  turn: TurnTiming;
 }
 
 /**
@@ -500,6 +513,23 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    */
   services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
   /**
+   * 压缩阈值（A-1）：用户设置走「剩余百分比」，按**本轮模型**的窗口换算成 pi 的
+   * reserveTokens——pi 的判定（agent-session 的 shouldCompact）拿当前模型窗口比，
+   * 这里必须同源。保留量不暴露、内部按窗口钳制（pi 出厂 2 万对 ≤16k 窗口的模型
+   * 大于整个上下文，是退化形态）。关掉 = pi 的 enabled:false，手动 /compact 不走
+   * 阈值、不受影响。applyOverrides 深合并、判定时现读——用户改设置，下一轮即生效。
+   */
+  services.settingsManager.applyOverrides({
+    compaction: {
+      enabled: command.compaction?.enabled ?? true,
+      reserveTokens: compactionReserveTokens(
+        command.compaction?.reservePercent ?? COMPACTION_DEFAULT.reservePercent,
+        model.contextWindow,
+      ),
+      keepRecentTokens: compactionKeepRecentTokens(model.contextWindow),
+    },
+  });
+  /**
    * **pi 存它自己的本子**（guideline §四，2026-08-26 修订）。
    * 续会话是把这份文件还给 pi，而不是我们把历史重讲一遍——
    * 被否决的反向适配方案与理由都写在那一节。
@@ -530,6 +560,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
   const echoed = note.echoed;
+  // 本轮时间语义（A-1）：echoedAt 由 submit / interrupt 的回显处填；sawAssistant 由
+  // 下面的订阅置位。预检压缩（prompt 前那一次）发生时 echoedAt 已有、sawAssistant
+  // 还是 false——compaction_end 据此盖回显的时间戳，界碑落到刚发那句之前。
+  const turn: TurnTiming = { echoedAt: null, sawAssistant: false };
   const unsubscribe = session.subscribe((event) => {
     const adaptable = asAdaptable(event);
     if (adaptable) {
@@ -545,6 +579,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             send({ type: "progress", sessionId: command.sessionId, progress });
           }
         }
+      }
+      if (adaptable.type === "message_start" && adaptable.message.role === "assistant") {
+        turn.sawAssistant = true;
       }
       for (const progress of adapter.apply(adaptable)) {
         send({ type: "progress", sessionId: command.sessionId, progress });
@@ -585,7 +622,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             summary: event.result.summary,
             tokensBefore: event.result.tokensBefore,
             tokensAfter: event.result.estimatedTokensAfter,
-            timestamp: Date.now(),
+            // A-1：预检压缩盖回显的时间戳（界碑落到刚发那句之前，mergeCompactions
+            // 同毫秒平局界碑排前）；轮内压缩照旧用当下时间
+            timestamp: compactionBoundaryTimestamp(turn, Date.now()),
           },
         });
       }
@@ -655,7 +694,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe };
+  return { session, adapter, unsubscribe, turn };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -694,9 +733,11 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         unsubscribe: opened.unsubscribe,
         session: opened.session,
         adapter: opened.adapter,
+        turn: opened.turn,
       };
     },
-    async (parts) => run({ session: parts.session, adapter: parts.adapter, unsubscribe: parts.unsubscribe }),
+    async (parts) =>
+      run({ session: parts.session, adapter: parts.adapter, unsubscribe: parts.unsubscribe, turn: parts.turn }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
     // idle 时本轮已完全收尾，排队投递不会撞 already running
     () => send({ type: "phase", sessionId: id, phase: "idle" }),
@@ -766,6 +807,8 @@ async function handle(command: AgentCommand): Promise<void> {
       // 且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
       note.echoed.add(command.text);
       for (const progress of opened.adapter.userPrompt(command.text)) {
+        // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
+        if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
         send({ type: "progress", sessionId: command.sessionId, progress });
       }
       await opened.session.prompt(command.text, { expandPromptTemplates: false });
@@ -788,6 +831,8 @@ async function handle(command: AgentCommand): Promise<void> {
         const note = ledgerNote(command.sessionId);
         note.echoed.add(command.text);
         for (const progress of opened.adapter.userPrompt(command.text)) {
+          // A-1：同 submit——预检压缩的界碑要盖这条回显的时间戳
+          if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
           send({ type: "progress", sessionId: command.sessionId, progress });
         }
         await opened.session.prompt(command.text, { expandPromptTemplates: false });

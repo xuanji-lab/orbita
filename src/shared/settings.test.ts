@@ -1,6 +1,13 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_SETTINGS, DRAWER_WIDTH, parseSettings, THEME_PREFERENCES } from "./settings.ts";
+import {
+  COMPACTION_DEFAULT,
+  COMPACTION_PERCENT,
+  DEFAULT_SETTINGS,
+  DRAWER_WIDTH,
+  parseSettings,
+  THEME_PREFERENCES,
+} from "./settings.ts";
 
 describe("parseSettings", () => {
   it("四档主题都认（含 black 手动档）", () => {
@@ -72,5 +79,59 @@ describe("parseSettings: drawer 字段", () => {
     const parsed = parseSettings({ theme: "light", drawer: "collapsed" });
     deepStrictEqual(parsed.theme, "light");
     deepStrictEqual(parsed.drawer, DEFAULT_SETTINGS.drawer);
+  });
+});
+
+describe("parseSettings 的 compaction（A-1）", () => {
+  it("出厂默认：剩余 20%、自动压缩开", () => {
+    deepStrictEqual(COMPACTION_DEFAULT, { reservePercent: 20, enabled: true });
+  });
+
+  it("缺席 = 用户从没动过它，不落这个键", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }), {
+      theme: "dark",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
+  });
+
+  it("合法值原样收下", () => {
+    deepStrictEqual(parseSettings({ compaction: { reservePercent: 10, enabled: false } }), {
+      theme: "system",
+      drawer: DEFAULT_SETTINGS.drawer,
+      compaction: { reservePercent: 10, enabled: false },
+    });
+  });
+
+  it("百分比越界回 20——手改出 200 等于上限的两倍才留余量，比坏主题更危险", () => {
+    deepStrictEqual(parseSettings({ compaction: { reservePercent: 200, enabled: true } }), {
+      theme: "system",
+      drawer: DEFAULT_SETTINGS.drawer,
+      compaction: { reservePercent: COMPACTION_DEFAULT.reservePercent, enabled: true },
+    });
+    deepStrictEqual(parseSettings({ compaction: { reservePercent: 0, enabled: true } }).compaction, {
+      reservePercent: COMPACTION_DEFAULT.reservePercent,
+      enabled: true,
+    });
+    // 区间端点是合法的
+    deepStrictEqual(parseSettings({ compaction: { reservePercent: COMPACTION_PERCENT.min, enabled: true } }).compaction?.reservePercent, COMPACTION_PERCENT.min);
+    deepStrictEqual(parseSettings({ compaction: { reservePercent: COMPACTION_PERCENT.max, enabled: true } }).compaction?.reservePercent, COMPACTION_PERCENT.max);
+  });
+
+  it("非数的百分比、非布尔的开关，逐字段回默认", () => {
+    deepStrictEqual(parseSettings({ compaction: { reservePercent: "很多", enabled: "yes" } }).compaction, {
+      reservePercent: COMPACTION_DEFAULT.reservePercent,
+      enabled: true,
+    });
+  });
+
+  it("整段不是对象 = 没动过", () => {
+    deepStrictEqual(parseSettings({ compaction: "off" }), {
+      theme: "system",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
+    deepStrictEqual(parseSettings({ compaction: 42 }), {
+      theme: "system",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
   });
 });

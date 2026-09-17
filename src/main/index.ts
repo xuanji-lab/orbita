@@ -188,6 +188,7 @@ void app.whenReady().then(() => {
     join(configDir, "pi-sessions"),
     (workspaceId) => skills.linkDirs(workspaceId),
     mcp,
+    settings,
   );
   app.on("before-quit", () => agentHost.dispose());
 

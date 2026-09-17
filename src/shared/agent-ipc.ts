@@ -14,6 +14,7 @@ import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
+import type { CompactionSetting } from "./settings.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -236,6 +237,12 @@ export type AgentCommand =
       mcpServers: Record<string, McpServer>;
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
+      /**
+       * 自动压缩偏好（A-1）。**主进程从设置装配**，renderer 的开轮载荷不携带；
+       * runtime 开轮时按本轮模型的窗口换算成 pi 的 reserveTokens / keepRecentTokens
+       * 覆盖进去。缺席（理论上不发生，主进程兜 COMPACTION_DEFAULT）= pi 出厂默认。
+       */
+      compaction?: CompactionSetting;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -259,6 +266,8 @@ export type AgentCommand =
       skillsDirs: string[];
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
+      /** 自动压缩偏好（A-1），语义同 submit */
+      compaction?: CompactionSetting;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
@@ -278,6 +287,8 @@ export type AgentCommand =
       skillsDirs: string[];
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
+      /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */
+      compaction?: CompactionSetting;
     }
   | { type: "listBuiltins" }
   /**
