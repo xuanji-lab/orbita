@@ -91,9 +91,10 @@ check(
   (await evaluate(`[...document.querySelectorAll("button")].some((b) => b.textContent.includes("New task"))`)) === true,
 );
 
-// 3. 设置面可打开：点侧栏的 Settings，主题档位行出现
+// 3. 设置面可打开：点侧栏的 Settings（展开态是文字 NavRow，收起态是 title 方块），
+//    主题档位行出现
 await evaluate(
-  `[...document.querySelectorAll("button")].find((b) => b.title === "Settings")?.click()`,
+  `[...document.querySelectorAll("button")].find((b) => b.title === "Settings" || b.textContent.trim() === "Settings")?.click()`,
 );
 await sleep(400);
 check(
