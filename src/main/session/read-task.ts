@@ -6,6 +6,11 @@
  * SessionStore——「正在跑读到什么」由存储层的既有语义回答：readLog 是快照、
  * 坏行跳过，meta 原子写，所以结果天然是一份干净前缀，头部如实标注快照时刻。
  *
+ * **恒只读是结构保证，不靠纪律**（2026-09-18 立规）：applyReadTask 只拿
+ * `SessionStoreReader`（最小只读视图，见下），这条路径上任何未来的写调用
+ * ——append、改 meta、删会话——tsc 当场拒绝。写通路的唯一所有者是
+ * recorder（那条会话自己跑出事件时）与用户的显式操作。
+ *
  * 给多少（2026-09-18 裁决）：一次调用 = 头部 + 全部界碑摘要 + 单行目录 +
  * 最近 10 轮全文；拿目录上的轮号再调 `rounds` 精准取旧的。摘要不算额外
  * 开销——界碑本来就是「此前一切」的压缩，正好补轮窗外的洞。
@@ -14,10 +19,10 @@ import type { AgentEvent, ReadTaskCard, ReadTaskOutcome } from "../../shared/age
 import {
   isCompactedRecord,
   transcriptToMarkdown,
+  type SessionDetail,
   type SessionMeta,
   type SessionRecord,
 } from "../../shared/session.ts";
-import type { SessionStore } from "./store.ts";
 
 /** 简报默认带全文的最近轮数（裁决：10，不设参数——多了用 rounds 精准取） */
 const BRIEFING_RECENT_ROUNDS = 10;
@@ -301,11 +306,22 @@ export function buildRoundsExcerpt(
 // ── IO 胶水 ──
 
 /**
+ * applyReadTask 对会话存储的全部所需——**最小只读视图**。
+ * 「read_task 恒只读」不靠纪律，靠这里：参数收窄成只有 list / load 两个读方法，
+ * 这条路径上将来任何写调用（append、改 meta、删会话）tsc 当场拒绝。
+ * SessionStore 结构化满足本接口（真 store 直接传入），测试与生产同型。
+ */
+export interface SessionStoreReader {
+  list(): Promise<SessionMeta[]>;
+  load(id: string): Promise<SessionDetail | null>;
+}
+
+/**
  * readTaskRequest 的落点：列表解析引用（meta 都是小文件，与侧栏同一条读取路径）
  * → 读目标整账 → 组简报或轮切片。回执经 host 的 answerReadTask 回 agent 进程。
  */
 export async function applyReadTask(
-  sessions: SessionStore,
+  sessions: SessionStoreReader,
   event: Extract<AgentEvent, { type: "readTaskRequest" }>,
 ): Promise<ReadTaskOutcome> {
   const metas = await sessions.list();
