@@ -7,6 +7,7 @@ import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
+import { applyReadTask } from "./session/read-task.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
@@ -149,6 +150,13 @@ void app.whenReady().then(() => {
           agentHost.answerMcpWrite(event.requestId, result);
         },
       );
+      return;
+    }
+    // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡
+    if (event.type === "readTaskRequest") {
+      void applyReadTask(sessions, event).then((result) => {
+        agentHost.answerReadTask(event.requestId, result);
+      });
       return;
     }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子

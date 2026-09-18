@@ -20,6 +20,7 @@ import {
   indexToolResults,
   mcpFailureLead,
   mcpInputSummary,
+  readTaskCard,
   summarizeMcpResult,
   liveTailLines,
   parseEditDiff,
@@ -405,6 +406,7 @@ export function ChatView(props: {
         turnError={session.turnError}
         loadingHistory={session.loadingHistory}
         onBranch={session.branchFrom}
+        onOpenTask={session.openSession}
       />
     </Pane>
   );
@@ -426,6 +428,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   turnError: string | null;
   loadingHistory: boolean;
   onBranch: (anchorItemId: string) => void;
+  /** B-1：read_task 的「Open」——引用稳定（openSession 只依赖 engine），不破 memo */
+  onOpenTask: (sessionId: string) => void;
 }) {
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
@@ -486,6 +490,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 group={entry}
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
+                onOpenTask={props.onOpenTask}
               />
             ) : (
               <EntryView
@@ -493,6 +498,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 toolResults={toolResults}
                 activeThinkingKey={activeThinkingKey}
                 turnActive={turnActive}
+                onOpenTask={props.onOpenTask}
               />
             )}
             {branchAfter !== undefined && (
@@ -982,6 +988,7 @@ function EntryView(props: {
   toolResults: ToolResultIndex;
   activeThinkingKey: string | null;
   turnActive: boolean;
+  onOpenTask?: (sessionId: string) => void;
 }) {
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
@@ -999,10 +1006,18 @@ function EntryView(props: {
         toolName={entry.toolName}
         input={entry.input}
         result={props.toolResults.get(entry.toolCallId)}
+        onOpenTask={props.onOpenTask}
       />
     );
   }
-  return <ToolGroupLine group={entry} toolResults={props.toolResults} turnActive={props.turnActive} />;
+  return (
+    <ToolGroupLine
+      group={entry}
+      toolResults={props.toolResults}
+      turnActive={props.turnActive}
+      onOpenTask={props.onOpenTask}
+    />
+  );
 }
 
 /**
@@ -1021,7 +1036,12 @@ function EntryView(props: {
  * 后面）才在行首亮红 triangle，图标与那行红字是一对。
  * 成员行与折叠头同左缘（不缩进），与 ToolGroupLine 的成员同一规矩。
  */
-function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex; turnFailed: boolean }) {
+function TurnRollupLine(props: {
+  group: TurnGroupUnit;
+  toolResults: ToolResultIndex;
+  turnFailed: boolean;
+  onOpenTask?: (sessionId: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const { group } = props;
   const stats = turnStats(group, props.toolResults);
@@ -1077,6 +1097,7 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
               toolResults={props.toolResults}
               activeThinkingKey={null}
               turnActive={false}
+              onOpenTask={props.onOpenTask}
             />
           ))}
         </div>
@@ -1419,6 +1440,8 @@ function toolIcon(toolName: string): IconName {
       return "search";
     case "ls":
       return "folder";
+    case "read_task":
+      return "book-open";
     default:
       return "wrench";
   }
@@ -1478,6 +1501,8 @@ function ToolLine(props: {
   toolName: string;
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  /** B-1：read_task 的「Open」跳到被读的 task（侧栏点击同语义）；别的工具不传 */
+  onOpenTask?: (sessionId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const { result } = props;
@@ -1500,6 +1525,8 @@ function ToolLine(props: {
   const expandable = toolExpandable(result, props.toolName);
   const live = expandable && active;
   const finished = result !== undefined && result.status !== "running";
+  // B-1：read_task 落定后 details 里带任务卡（running/error 帧没有）；别的工具不解析
+  const taskCard = props.toolName === "read_task" && finished ? readTaskCard(result) : null;
   const diff = finished ? editDiffText(result) : null;
   const stats = finished ? editDiffStats(result) : null;
   const rawBody = result !== undefined ? toolResultText(result) : "";
@@ -1572,6 +1599,30 @@ function ToolLine(props: {
         )}
         {/* shell 类的执行耗时——慢命令（install / typecheck）不展开也讲清楚花在哪 */}
         {shellDuration !== null && <span style={SLOT.status}>{shellDuration}</span>}
+        {/* B-1：read_task 的任务卡动作——「Open」跳到被读的 task（与侧栏点击同语义）。
+            stopPropagation：这个按钮不是折叠开关。card 走 details 通路，模型看不见。 */}
+        {taskCard !== null && (
+          <button
+            type="button"
+            title={`Open "${taskCard.title}"`}
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onOpenTask?.(taskCard.sessionId);
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              border: "none",
+              background: "none",
+              padding: 0,
+              cursor: "pointer",
+              ...SLOT.status,
+              color: "var(--color-chat-link)",
+            }}
+          >
+            Open
+          </button>
+        )}
       </CollapseRow>
       {open && expandable && diff !== null && <DiffView diff={diff} />}
       {open && expandable && diff === null && fileView !== null && (
@@ -1600,6 +1651,7 @@ function ToolGroupLine(props: {
   group: ToolGroupUnit;
   toolResults: ToolResultIndex;
   turnActive: boolean;
+  onOpenTask?: (sessionId: string) => void;
 }) {
   const { group } = props;
   // 挂载时的相态决定初始展开：活跃轮里长出来的组铺开，idle 会话（旧历史）收着
@@ -1644,6 +1696,7 @@ function ToolGroupLine(props: {
               toolName={call.toolName}
               input={call.input}
               result={props.toolResults.get(call.toolCallId)}
+              onOpenTask={props.onOpenTask}
             />
           ))}
         </div>

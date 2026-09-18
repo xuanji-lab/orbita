@@ -321,3 +321,41 @@ describe("setModel —— 会话内换模型的发送侧（C-4）", () => {
     });
   });
 });
+
+describe("answerReadTask —— 读 task 请求的发送侧（B-1）", () => {
+  test("成功回执带 card 与 text；失败回执只带 error；进程没了就静默（不 ensure）", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    // 没开机时静默：不为一条回执拉起整个 runtime（answerPermission 同款理由）
+    ctx.host.answerReadTask("r0", { ok: false, error: "gone" });
+    assert.equal(ctx.forks(), 0);
+    assert.equal(ctx.child(), undefined);
+
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    ctx.host.answerReadTask("r1", {
+      ok: true,
+      card: { sessionId: "t-1", title: "Demo", mode: "briefing", roundCount: 3 },
+      text: "Task \"Demo\"…",
+    });
+    ctx.host.answerReadTask("r2", { ok: false, error: "No task matches" });
+    assert.equal(ctx.forks(), 1); // 不二次 fork
+    assert.deepEqual(ctx.child().posted.at(-2), {
+      type: "readTaskResult",
+      requestId: "r1",
+      ok: true,
+      card: { sessionId: "t-1", title: "Demo", mode: "briefing", roundCount: 3 },
+      text: "Task \"Demo\"…",
+    });
+    assert.deepEqual(ctx.child().posted.at(-1), {
+      type: "readTaskResult",
+      requestId: "r2",
+      ok: false,
+      error: "No task matches",
+    });
+  });
+});
