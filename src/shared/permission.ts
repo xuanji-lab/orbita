@@ -14,8 +14,11 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
   skip: { label: "Skip", hint: "Run every tool without asking." },
 };
 
-/** pi 内建工具里不改变任何东西的那些。其余（write / edit / bash…）一律视为有副作用。 */
-export const READ_ONLY_TOOLS = ["read", "grep", "glob", "ls", "find"] as const;
+/**
+ * 不改变任何东西的工具：pi 内建五个，加我们自己的 read_task（B-1）——它经主进程
+ * 读别的 task 的落盘记录，不改任何盘。其余（write / edit / bash…）一律视为有副作用。
+ */
+export const READ_ONLY_TOOLS = ["read", "grep", "glob", "ls", "find", "read_task"] as const;
 
 export function isReadOnlyTool(toolName: string): boolean {
   return (READ_ONLY_TOOLS as readonly string[]).includes(toolName);

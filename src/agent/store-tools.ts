@@ -1,11 +1,12 @@
-import { randomUUID } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { RequestBroker } from "./request-broker.ts";
 
 /**
  * agent 的「自我配置」工具（4-3）：create_skill / add_mcp_server。
  * 与 MCP 工具同一条路（pi 的 customTools），但**写盘不在 agent 进程**——
  * agent 只发带 requestId 的请求事件，主进程调 store 后回命令（permission
- * 问答的同款模式）。agent 进程不碰 userData，这是架构边界，不是谦虚。
+ * 问答的同款模式，通道见 ./request-broker.ts）。agent 进程不碰 userData，
+ * 这是架构边界，不是谦虚。
  *
  * 两个工具天然走 ask：decidePermission 对非只读工具本来就 ask（plan 拒 /
  * manual 问 / skip 放），审批条里能看到完整参数，用户改了参数再放行也行。
@@ -16,43 +17,6 @@ export type WriteStatus = { kind: "ready" | "failed" | "disabled" | "connecting"
 export type WriteResult =
   | { ok: true; path?: string; status?: WriteStatus }
   | { ok: false; error: string };
-
-const WRITE_TIMEOUT_MS = 30_000;
-
-/**
- * 在途写盘请求表：requestId → 结算函数。runtime 持有一份（进程级），
- * 工具 execute 里创建等待，主进程回执到达时结掉。超时兜底——工具调用
- * 不悬死（主进程崩了的话，30 秒后模型拿到一句人话而不是永远转圈）。
- */
-export class WriteRequestBroker {
-  private readonly pending = new Map<string, { settle: (result: WriteResult) => void; timer: NodeJS.Timeout }>();
-  private readonly sendEvent: (event: object) => void;
-
-  constructor(sendEvent: (event: object) => void) {
-    this.sendEvent = sendEvent;
-  }
-
-  request(event: Record<string, unknown>): Promise<WriteResult> {
-    const requestId = randomUUID();
-    return new Promise<WriteResult>((resolve) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(requestId);
-        resolve({ ok: false, error: "主进程没有在 30 秒内回执（进程可能已退出）" });
-      }, WRITE_TIMEOUT_MS);
-      this.pending.set(requestId, { settle: resolve, timer });
-      this.sendEvent({ ...event, requestId });
-    });
-  }
-
-  /** runtime 收到 skillWriteResult / mcpWriteResult 命令时调这个 */
-  resolve(requestId: string, result: WriteResult): void {
-    const pending = this.pending.get(requestId);
-    if (pending === undefined) return; // 超时后到的回执：丢弃
-    clearTimeout(pending.timer);
-    this.pending.delete(requestId);
-    pending.settle(result);
-  }
-}
 
 /**
  * 讲给模型听的说明（拼进 system prompt，同 describePermissionMode 的注入方式）。
@@ -80,7 +44,7 @@ Writing a skill body (this matters — a skill is instructions for a future agen
 </orbita-store-tools>`;
 
 /** 铸工具对。broker 由 runtime 持有并接回执；这里只包 execute 的翻译。 */
-export function createStoreTools(broker: WriteRequestBroker, sessionId: string): ToolDefinition[] {
+export function createStoreTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
   const createSkill: ToolDefinition = {
     name: "create_skill",
     label: "create_skill",
@@ -100,7 +64,7 @@ export function createStoreTools(broker: WriteRequestBroker, sessionId: string):
     } as never,
     async execute(_toolCallId, params) {
       const args = (params ?? {}) as Record<string, unknown>;
-      const result = await broker.request({
+      const result = await broker.request<WriteResult>({
         type: "skillWriteRequest",
         sessionId,
         slug: String(args["slug"] ?? ""),
@@ -137,7 +101,7 @@ export function createStoreTools(broker: WriteRequestBroker, sessionId: string):
     } as never,
     async execute(_toolCallId, params) {
       const args = (params ?? {}) as Record<string, unknown>;
-      const result = await broker.request({
+      const result = await broker.request<WriteResult>({
         type: "mcpWriteRequest",
         name: String(args["name"] ?? ""),
         server: args["server"],

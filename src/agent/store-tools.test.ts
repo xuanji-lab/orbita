@@ -4,13 +4,14 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { WriteRequestBroker, createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import { RequestBroker } from "./request-broker.ts";
+import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
 
 /** 收走请求事件，稍后人工回执——模拟主进程 */
 class FakeMain {
   readonly sent: object[] = [];
-  private broker: WriteRequestBroker | null = null;
-  wire(broker: WriteRequestBroker): void {
+  private broker: RequestBroker | null = null;
+  wire(broker: RequestBroker): void {
     this.broker = broker;
   }
   answer(requestId: string, result: { ok: boolean; path?: string; status?: { kind: string; message?: string }; error?: string }): void {
@@ -24,7 +25,7 @@ class FakeMain {
 
 const setup = (): { tools: ReturnType<typeof createStoreTools>; fake: FakeMain } => {
   const fake = new FakeMain();
-  const broker = new WriteRequestBroker((event) => {
+  const broker = new RequestBroker((event) => {
     fake.sent.push(event);
   });
   fake.wire(broker);
@@ -68,12 +69,6 @@ describe("create_skill / add_mcp_server（4-3）", () => {
     fake.answer(fake.requestIdAt(0), { ok: true, status: { kind: "ready" } });
     const result = await pending;
     assert.match((result.content[0] as { text: string }).text, /connected/);
-  });
-
-  test("迟到的回执（未知 requestId）静默丢弃，不炸", () => {
-    const broker = new WriteRequestBroker(() => undefined);
-    broker.resolve("never-sent", { ok: true });
-    // 没抛就是过
   });
 
   test("prompt 注入：两个工具名、SKILL.md 格式与 scope 语义都讲了", () => {
