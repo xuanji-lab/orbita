@@ -463,8 +463,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
   // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
+  // **会话文件不可变**：protectedPaths 由主进程随每轮发，闸门在档位判定之前拦。
   const currentMode = () => ledgerNote(command.sessionId).mode;
-  const gate = createToolCallGate(currentMode, askPermission(command.sessionId));
+  const gate = createToolCallGate(
+    currentMode,
+    askPermission(command.sessionId),
+    command.protectedPaths,
+    command.cwd,
+  );
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,

@@ -11,6 +11,7 @@
  * 这层因此只剩一件事：把「模式 + 用户回答」翻成 pi 的 ToolCallEventResult。
  */
 import { decidePermission, type PermissionAnswer, type PermissionMode } from "../shared/permission.ts";
+import { isAbsolute, relative, resolve } from "node:path";
 
 /**
  * pi 内建、且我们全开的八个工具（guideline §五）。
@@ -58,6 +59,11 @@ export function describePermissionMode(mode: PermissionMode, extraToolNames: rea
         "change anything on disk — describe the change instead, and say that this mode cannot apply it.",
     );
   }
+  lines.push(
+    "Immutable in every mode: task session files (transcripts and their metadata) can never be " +
+      "written by any tool. Do not attempt it, including via shell commands — describe the change " +
+      "to the user instead; only the user can modify session data.",
+  );
   lines.push("</orbita-permission>");
   return lines.join("\n");
 }
@@ -77,6 +83,76 @@ export interface ToolCallGateResult {
 
 export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>;
 
+/** 拦截面：按路径改文件的（write/edit 的 input.path）与跑命令的（bash/powershell 的 input.command）。 */
+const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
+const COMMAND_TOOLS = new Set(["bash", "powershell"]);
+
+/**
+ * 会话文件不可变（2026-09-18 立规）：protectedPaths（sessions/ 与 pi-sessions/）
+ * 对工具面**全档只读**——这条检查在权限档判定**之前**跑，Skip 也抬不掉。
+ *
+ * 拦截力度如实说：write / edit 是**路径精确拦**（resolve 后判前缀）；bash /
+ * powershell 是**命令字面量拦**（受保护路径出现在命令串里就拒）——拦得住常规
+ * 引用，拦不住刻意混淆（变量间接、编码变换）。对「防误伤、防顺手」足够；
+ * 对蓄意对抗不是防线，那是 OS 级沙箱的活。MCP server 是用户显式安装的
+ * 可信组件，不在本闸管辖内。读不受限——「只能读」正是这里要保的状态。
+ *
+ * 命中返回讲给模型听的拒绝理由（改道指引），没命中返回 null。
+ */
+export function protectedPathRefusal(
+  toolName: string,
+  input: Record<string, unknown>,
+  protectedPaths: readonly string[],
+  cwd: string,
+): string | null {
+  if (protectedPaths.length === 0) return null;
+  // Windows 文件系统大小写不敏感，比较前折叠；posix 保持原样
+  const fold = (value: string): string =>
+    process.platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value;
+
+  if (PATH_MUTATING_TOOLS.has(toolName)) {
+    const target = input["path"];
+    if (typeof target !== "string" || target === "") return null;
+    const resolved = fold(resolve(cwd, target));
+    for (const dir of protectedPaths) {
+      const base = fold(resolve(dir));
+      const rel = relative(base, resolved);
+      if (!rel.startsWith("..") && !isAbsolute(rel)) {
+        return refusalMessage(dir);
+      }
+    }
+    return null;
+  }
+
+  if (COMMAND_TOOLS.has(toolName)) {
+    const command = input["command"];
+    if (typeof command !== "string" || command === "") return null;
+    const haystack = fold(command);
+    for (const dir of protectedPaths) {
+      const needle = fold(dir);
+      // 命中必须落在路径边界上：`.../sessions` 后面跟分隔符/引号/空白/结尾才算，
+      // `.../sessions-extra` 这种相邻前缀是另一个目录，不拦
+      let index = haystack.indexOf(needle);
+      while (index !== -1) {
+        const next = haystack[index + needle.length];
+        if (next === undefined || !/[a-z0-9_-]/i.test(next)) return refusalMessage(dir);
+        index = haystack.indexOf(needle, index + 1);
+      }
+    }
+    return null;
+  }
+
+  return null;
+}
+
+function refusalMessage(dir: string): string {
+  return (
+    `Session records are immutable: "${dir}" is protected — no tool may write there ` +
+    "in any permission mode. Reading stays available (read_task). " +
+    "Describe the change to the user instead; only the user can modify session data."
+  );
+}
+
 /** pi 扩展 API 里我们用到的两个钩子。上游类型没导出成可直接消费的形状，这里只声明用得着的部分。 */
 export interface PiExtensionApi {
   on(
@@ -92,10 +168,20 @@ export interface PiExtensionApi {
 /**
  * 生成 `tool_call` 处理器。纯逻辑 + 一个注入的询问函数，可被测试穷尽。
  *
+ * 会话文件不可变（2026-09-18）：protectedPaths 缺席（旧测试、或主进程没给）=
+ * 不做禁区检查；给了就在权限档判定**之前**拦——Skip 档也拦。
+ *
  * 改写入参走 pi 的约定：**原地改 `event.input`**（不是返回新对象）。
  */
-export function createToolCallGate(getMode: () => PermissionMode, ask: PermissionAsk) {
+export function createToolCallGate(
+  getMode: () => PermissionMode,
+  ask: PermissionAsk,
+  protectedPaths: readonly string[] = [],
+  cwd: string = process.cwd(),
+) {
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
+    const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
+    if (refusal !== null) return { block: true, reason: refusal };
     const decision = decidePermission(getMode(), event.toolName);
     if (decision.behavior === "allow") return {};
     if (decision.behavior === "deny") return { block: true, reason: decision.message };
