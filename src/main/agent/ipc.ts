@@ -74,6 +74,8 @@ function turnFields(
   input: SubmitAgentInput | CompactAgentInput,
   provider: ProviderSecrets,
   piSessionDir: string,
+  /** 工具禁区（sessions/ 与 pi-sessions/）：主进程定，随每轮发给闸门 */
+  protectedPaths: string[],
   /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好）：无状态化后每轮命令都要带全 */
   environment: {
     skillsDirs: string[];
@@ -88,6 +90,7 @@ function turnFields(
     modelId: input.modelId,
     mode: input.mode,
     piSessionDir,
+    protectedPaths,
     ...environment,
     ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
   };
@@ -99,6 +102,8 @@ export function registerAgentIpc(
   sessions: SessionStore,
   /** pi 把自己的 session 文件放在哪。**路径策略在主进程**，agent 进程只收数据 */
   piSessionDir: string,
+  /** 工具禁区（sessions/ 与 pi-sessions/）。**路径策略在主进程**，随每轮发给闸门 */
+  protectedPaths: string[],
   /** 某条会话该拿哪些 skill 集合目录（global 恒在 + 它的工作区）；路径策略在主进程 */
   skillDirs: (workspaceId: string | null) => string[],
   /** MCP 配置。**主进程读文件**，agent 进程只收解析好的结果（同 skillDirs 的纪律） */
@@ -158,7 +163,7 @@ export function registerAgentIpc(
 
   ipcMain.handle(ipcChannels.agentSubmit, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
+    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
     await settleFirstTurn(input, piSessionFile);
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
@@ -168,12 +173,12 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
