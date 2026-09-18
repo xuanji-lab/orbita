@@ -219,6 +219,12 @@ export type AgentCommand =
        */
       piSessionDir: string;
       /**
+       * 工具永不许写的目录（会话账本 sessions/ 与 pi 的本子 pi-sessions/）。
+       * **主进程定，agent 进程只收数据**（同 piSessionDir 的纪律）：tool_call 闸门
+       * 在权限档判定**之前**拦——「会话记录不可变」是全档不变量，Skip 也抬不掉。
+       */
+      protectedPaths: string[];
+      /**
        * skill 的链接集合目录（2-1 起是数组：global 恒在，当前工作区再加一条）。
        * **路径由主进程给**（同 `piSessionDir`）：哪个集合对该会话生效是主进程的策略，
        * agent 进程只收数据。目录里是指向中心存储的 symlink，pi 的加载器跟符号链接。
@@ -262,6 +268,8 @@ export type AgentCommand =
       modelId: string;
       mode: PermissionMode;
       piSessionDir: string;
+      /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
+      protectedPaths: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
       mcpServers: Record<string, McpServer>;
@@ -283,6 +291,8 @@ export type AgentCommand =
       modelId: string;
       mode: PermissionMode;
       piSessionDir: string;
+      /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
+      protectedPaths: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
       mcpServers: Record<string, McpServer>;
