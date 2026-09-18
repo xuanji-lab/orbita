@@ -7,6 +7,10 @@
  *   user       `item_started`   —— 用户消息出生即完成，adapter 不会再给它发 finished
  *   compacted  `compaction`     —— 压缩界碑，事件里就是完整的记录，直接落
  *
+ * **唯一不收的终态帧**：重试的失败尾巴（status=error 且内容为空的 assistant，
+ * 见 store.ts 的 isEmptyErrorAssistant）——pi 的本子不收它，我们多写一条，
+ * 分支对账就得跳一条。
+ *
  * **abort 的半截回答同样落盘**，这是刻意的。pi 的 agent-loop 在 abort 时先无条件发
  * `message_end`、之后才判 `stopReason === "aborted"`，所以它照样走终态帧。
  * 不落的话，重开会话看到的会**比当时屏幕上少一截**——用户已经读过那半句了，
@@ -17,7 +21,7 @@
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import type { SessionRecord } from "../../shared/session.ts";
-import type { SessionStore } from "./store.ts";
+import { isEmptyErrorAssistant, type SessionStore } from "./store.ts";
 
 export function createSessionRecorder(store: SessionStore): (event: AgentEvent) => void {
   // 写失败不该让对话中断——记一条到 stderr，界面照常
@@ -62,7 +66,7 @@ export function createSessionRecorder(store: SessionStore): (event: AgentEvent) 
         : progress.type === "item_started" && progress.item.role === "user"
           ? progress.item
           : null;
-    if (item === null) return;
+    if (item === null || isEmptyErrorAssistant(item)) return;
     persist(event.sessionId, item);
   };
 }

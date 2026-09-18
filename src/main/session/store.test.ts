@@ -70,17 +70,18 @@ describe("SessionStore", () => {
     await assert.rejects(() => blocked.list());
   });
 
-  /** root 无视权限位，Windows 没有 chmod——那两个环境里造不出 EACCES */
-  const skipChmod =
-    process.platform === "win32" || process.getuid?.() === 0
-      ? "chmod 在这个环境里拦不住读取"
-      : false;
-
   /**
    * D-3 的靶心：会话好端端躺在盘上，只因为目录权限坏了，
    * 侧栏以前会说「还没有任务」——用户据此去翻备份、去重装，而重装可能真把它们删了。
+   *
+   * 跳过用**注册期**写法（canChmodBlock ? test : test.skip），不用 options 的
+   * `{ skip }`——bun 的 node:test 兼容层无视 options.skip、也无视 t.skip()，
+   * 三种写法探针（2026-09-16）只有 test.skip() 真正亮 (skip)。root 无视权限位、
+   * Windows 没有 chmod——那两个环境造不出 EACCES，用例跑了必假红。
    */
-  test("目录读不出来时抛错，不谎报「一条都没有」", { skip: skipChmod }, async () => {
+  const canChmodBlock = process.platform !== "win32" && process.getuid?.() !== 0;
+  const chmodTest = canChmodBlock ? test : test.skip;
+  chmodTest("目录读不出来时抛错，不谎报「一条都没有」", async () => {
     await store.ensureSession(meta());
     const sessions = join(dir, "sessions");
     await chmod(sessions, 0o000);

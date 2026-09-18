@@ -991,12 +991,6 @@ function ListError(props: { message: string; onRetry: () => void }) {
   );
 }
 
-/** 只显示文件夹名，完整路径进 title——路径是机器事实，不该占掉一整行 */
-function basename(path: string): string {
-  const parts = path.split("/").filter((part) => part !== "");
-  return parts[parts.length - 1] ?? path;
-}
-
 /**
  * 折叠图标条上的按钮（设计系统 components/navigation/RailButton）：
  * 48px rail 里的 32px 方块，**tooltip 是它唯一的标签**。
