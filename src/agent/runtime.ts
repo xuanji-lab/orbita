@@ -38,7 +38,8 @@ import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { McpHub } from "./mcp.ts";
-import { WriteRequestBroker, createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import { RequestBroker } from "./request-broker.ts";
+import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
 import {
   COMPACTION_DEFAULT,
 } from "../shared/settings.ts";
@@ -339,10 +340,11 @@ const running = new Map<string, CycleSlot<TurnParts>>();
  */
 const mcpHub = new McpHub();
 /**
- * 写盘请求的在途表（4-3）：create_skill / add_mcp_server 的回执由 handle 的
- * 命令分支结掉。进程级一份——主进程是唯一的对端，不需要按会话分。
+ * 工具请求的在途表（4-3 立，B-1 泛化）：create_skill / add_mcp_server /
+ * read_task 的回执由 handle 的命令分支结掉。进程级一份——主进程是唯一的
+ * 对端，不需要按会话分。
  */
-const writeBroker = new WriteRequestBroker((event) => send(event as AgentEvent));
+const requestBroker = new RequestBroker((event) => send(event as AgentEvent));
 
 /** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
 const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
@@ -549,7 +551,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   send({ type: "mcp", servers: mcpHub.describe() });
   const customTools = [
     ...mcpHub.currentTools(),
-    ...createStoreTools(writeBroker, command.sessionId),
+    ...createStoreTools(requestBroker, command.sessionId),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
@@ -921,7 +923,7 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
   if (command.type === "skillWriteResult") {
-    writeBroker.resolve(
+    requestBroker.resolve(
       command.requestId,
       command.ok
         ? { ok: true, ...(command.path === undefined ? {} : { path: command.path }) }
@@ -930,11 +932,20 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
   if (command.type === "mcpWriteResult") {
-    writeBroker.resolve(
+    requestBroker.resolve(
       command.requestId,
       command.ok
         ? { ok: true, ...(command.status === undefined ? {} : { status: command.status }) }
         : { ok: false, error: command.error ?? "Write failed" },
+    );
+    return;
+  }
+  if (command.type === "readTaskResult") {
+    requestBroker.resolve(
+      command.requestId,
+      command.ok
+        ? { ok: true, card: command.card, text: command.text }
+        : { ok: false, error: command.error ?? "Read failed" },
     );
     return;
   }

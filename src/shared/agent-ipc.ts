@@ -315,6 +315,8 @@ export type AgentCommand =
       status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string };
       error?: string;
     }
+  /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
+  | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
@@ -339,6 +341,30 @@ export type AgentCommand =
   /** 用户对一次工具审批的回答，按 requestId 对回去 */
   | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   | { type: "dispose"; sessionId: string };
+
+/**
+ * B-1：read_task 读到的「这是一条什么 task」。**只给 UI、不入模型上下文**——
+ * 走 pi ToolResult 的 `details` 通路（adapter 对它明写「不入模型上下文，只给
+ * UI 与日志」，edit 的 diff 是同款先例）：模型拿 text 全文，renderer 拿它
+ * 渲染任务卡与点击跳转（openSession）。
+ */
+export interface ReadTaskCard {
+  /** 被读 task 的 session id。renderer 跳转就跳它 */
+  sessionId: string;
+  /** 被读 task 的标题；空标题（一条消息都没发过）由调用方填占位 */
+  title: string;
+  /** briefing = 头部 + 目录 + 最近轮全文；rounds = 指定轮全文 */
+  mode: "briefing" | "rounds";
+  /** rounds 模式下模型给的轮号串（原样回显，卡片副标用） */
+  rounds?: string;
+  /** 目标 task 的 user 轮总数 */
+  roundCount: number;
+}
+
+/** readTaskRequest 的回执载荷：主进程组装，agent 进程翻成工具结果。 */
+export type ReadTaskOutcome =
+  | { ok: true; card: ReadTaskCard; text: string }
+  | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
 export type AgentEvent =
@@ -372,10 +398,17 @@ export type AgentEvent =
       server: McpServer;
     }
   /**
-   * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
-   * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
+   * B-1：agent 工具 read_task 的读盘请求。**读在主进程**（agent 进程不碰
+   * userData，skillWriteRequest 的同一条边界）：主进程解析引用 → 读
+   * SessionStore → 组简报 → 回 readTaskResult。rounds 缺席 = 简报
+   * （目录 + 最近轮全文）；有值 = 只取目录里那些轮号的全文。
    */
-  | { type: "skillsChanged" }
+  | { type: "readTaskRequest"; requestId: string; sessionId: string; task: string; rounds?: string }
+/**
+ * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
+ * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
+ */
+| { type: "skillsChanged" }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
