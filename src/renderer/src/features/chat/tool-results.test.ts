@@ -20,6 +20,7 @@ import {
   parseDiffLines,
   parseEditDiff,
   parseGrepLine,
+  readTaskCard,
   formatToolDuration,
   recordToolFrame,
   splitPathTail,
@@ -1158,5 +1159,61 @@ describe("mcpInputSummary（4-5）", () => {
     assert.equal(mcpInputSummary({ text: "x".repeat(60) })?.endsWith("…"), true);
     assert.equal(mcpInputSummary({}), null);
     assert.equal(mcpInputSummary(null), null);
+  });
+});
+
+describe("readTaskCard（B-1）", () => {
+  // 协议把 status 与 isError 绑成变体，patch 只收 complete 变体的字段；running 走第二参
+  const toolItem = (
+    patch: Partial<Extract<ToolTranscriptItem, { status: "complete" }>> = {},
+    status: "complete" | "running" = "complete",
+  ): ToolTranscriptItem => ({
+    id: "i1",
+    role: "tool",
+    toolCallId: "c1",
+    toolName: "read_task",
+    input: { task: "demo" },
+    content: [{ type: "text", text: "Task \"Demo\"…" }],
+    timestamp: 1,
+    status,
+    isError: false,
+    ...patch,
+  });
+
+  test("终态帧的 details.readTask 逐字段校验后原样带回", () => {
+    const card = readTaskCard(
+      toolItem({ details: { readTask: { sessionId: "t-1", title: "Demo", mode: "briefing", roundCount: 4 } } }),
+    );
+    assert.deepEqual(card, { sessionId: "t-1", title: "Demo", mode: "briefing", roundCount: 4 });
+  });
+
+  test("rounds 模式带 rounds 回显；空标题给占位", () => {
+    const card = readTaskCard(
+      toolItem({ details: { readTask: { sessionId: "t-1", title: "", mode: "rounds", rounds: "2-5", roundCount: 6 } } }),
+    );
+    assert.deepEqual(card, {
+      sessionId: "t-1",
+      title: "(untitled)",
+      mode: "rounds",
+      rounds: "2-5",
+      roundCount: 6,
+    });
+  });
+
+  test("坏值判 null：running 帧、缺 details、缺字段、坏 mode、空 sessionId 都不给卡", () => {
+    assert.equal(readTaskCard(undefined), null);
+    assert.equal(readTaskCard(toolItem({}, "running")), null);
+    assert.equal(readTaskCard(toolItem({ details: undefined })), null);
+    assert.equal(readTaskCard(toolItem({ details: { other: 1 } })), null);
+    assert.equal(readTaskCard(toolItem({ details: { readTask: { title: "x", mode: "briefing", roundCount: 1 } } })), null);
+    assert.equal(readTaskCard(toolItem({ details: { readTask: { sessionId: "t", title: "x", mode: "weird", roundCount: 1 } } })), null);
+    assert.equal(readTaskCard(toolItem({ details: { readTask: { sessionId: "t", title: "x", mode: "briefing", roundCount: "many" } } })), null);
+  });
+});
+
+describe("toolCallSummary —— read_task（B-1）", () => {
+  test("行首参数摘要显示引用本身", () => {
+    assert.equal(toolCallSummary("read_task", { task: "fix sidebar", rounds: "1" }), "fix sidebar");
+    assert.equal(toolCallSummary("read_task", {}), null);
   });
 });

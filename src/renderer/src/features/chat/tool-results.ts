@@ -16,6 +16,7 @@
  */
 import { diffWords } from "diff";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ReadTaskCard } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 
 /** toolCallId → 那次调用的结果。同一个 id 出现多次时以最后一条为准（终态帧在增量帧之后）。 */
@@ -466,6 +467,35 @@ export function formatToolDuration(ms: number): string {
 }
 
 /** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。 */
+/**
+ * B-1：read_task 结果 `details` 里的任务卡。**逐字段校验，坏值判 null**——
+ * 卡片坏了不碍事（展开体还在），编造 sessionId 才碍事（点了跳错会话）。
+ * running 帧还没有 card（details 随终态帧来），一律 null。
+ */
+export function readTaskCard(result: ToolTranscriptItem | undefined): ReadTaskCard | null {
+  if (result === undefined || result.status === "running") return null;
+  const details = result.details;
+  if (typeof details !== "object" || details === null) return null;
+  const raw = (details as Record<string, unknown>)["readTask"];
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const sessionId = value["sessionId"];
+  if (typeof sessionId !== "string" || sessionId === "") return null;
+  const title = value["title"];
+  const mode = value["mode"];
+  const roundCount = value["roundCount"];
+  if (typeof title !== "string" || (mode !== "briefing" && mode !== "rounds")) return null;
+  if (typeof roundCount !== "number" || !Number.isFinite(roundCount)) return null;
+  const rounds = value["rounds"];
+  return {
+    sessionId,
+    title: title === "" ? "(untitled)" : title,
+    mode,
+    ...(typeof rounds === "string" ? { rounds } : {}),
+    roundCount,
+  };
+}
+
 export function summarizeToolResult(result: ToolTranscriptItem | undefined): string | null {
   if (result === undefined) return null;
   if (result.status === "running") return "Running";
@@ -691,6 +721,8 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     }
     case "ls":
       return str("path") ?? ".";
+    case "read_task":
+      return str("task");
     default:
       return null;
   }

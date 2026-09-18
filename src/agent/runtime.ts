@@ -40,6 +40,7 @@ import { planBranchCut } from "./branch-cut.ts";
 import { McpHub } from "./mcp.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import { createTaskTools } from "./task-tools.ts";
 import {
   COMPACTION_DEFAULT,
 } from "../shared/settings.ts";
@@ -499,7 +500,12 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             pi.on("before_agent_start", (event) => ({
               systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(
                 currentMode(),
-                [...mcpHub.currentTools().map((tool) => tool.name), "create_skill", "add_mcp_server"],
+                [
+                  ...mcpHub.currentTools().map((tool) => tool.name),
+                  "create_skill",
+                  "add_mcp_server",
+                  "read_task",
+                ],
               )}\n\n${STORE_TOOLS_GUIDELINES}\n\n${TOOL_GUIDELINES}`,
             }));
           },
@@ -552,6 +558,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const customTools = [
     ...mcpHub.currentTools(),
     ...createStoreTools(requestBroker, command.sessionId),
+    ...createTaskTools(requestBroker, command.sessionId),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
