@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { selectionStyle } from "./selection";
@@ -18,6 +18,7 @@ import {
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
+import { splitByParent } from "./sidebar-tree.ts";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
 export type Overlay = "settings" | null;
@@ -97,10 +98,13 @@ export function Sidebar(props: {
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   const sessionList = describeList(session.loads.sessions, session.sessions.length);
   const loose = live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
+  // B-2：派出来的子会话挂父行下（组内两层树）；父不在场的子升为顶层（sidebar-tree.ts）
+  const tasksTree = splitByParent(loose);
   const tasksFolded = groups.folds.has(TASKS_FOLD_KEY);
-  // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
+  // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」——截断只数顶层，
+  // 子会话跟着自己的父行走（父被截掉，子就整支不可见；数两层会让 Show more 对不上）
   const tasksFull = groups.full.has(TASKS_FOLD_KEY);
-  const looseVisible = tasksFull ? loose : loose.slice(0, SESSIONS_PREVIEW_LIMIT);
+  const tasksTopVisible = tasksFull ? tasksTree.top : tasksTree.top.slice(0, SESSIONS_PREVIEW_LIMIT);
   const open = (id: string) => {
     props.onOverlay(null);
     session.openSession(id);
@@ -354,14 +358,25 @@ export function Sidebar(props: {
                 <Empty>No task yet. The one you start lands here.</Empty>
               ) : tasksFolded ? null : (
                 <>
-                  {looseVisible.map((meta) => (
-                    <SessionRow
-                      key={meta.id}
-                      meta={meta}
-                      session={session}
-                      active={meta.id === openId}
-                      onClick={() => open(meta.id)}
-                    />
+                  {tasksTopVisible.map((meta) => (
+                    <Fragment key={meta.id}>
+                      <SessionRow
+                        meta={meta}
+                        session={session}
+                        active={meta.id === openId}
+                        onClick={() => open(meta.id)}
+                      />
+                      {tasksTree.childrenOf(meta.id).map((child) => (
+                        <SessionRow
+                          key={child.id}
+                          meta={child}
+                          session={session}
+                          active={child.id === openId}
+                          child
+                          onClick={() => open(child.id)}
+                        />
+                      ))}
+                    </Fragment>
                   ))}
                   {loose.length > SESSIONS_PREVIEW_LIMIT && (
                     <ShowAllRow
@@ -428,9 +443,11 @@ function WorkspaceGroup(props: {
   const [hover, setHover] = useState(false);
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  // 超过预览数只列前 N 条，其余收进「Show N more」；点了才全量铺开
+  // 超过预览数只列前 N 条，其余收进「Show N more」；点了才全量铺开。
+  // B-2：截断只数顶层，子会话跟着自己的父行走（同 TASKS 的口径）
+  const tree = splitByParent(props.sessions);
   const truncated = !props.full && props.sessions.length > SESSIONS_PREVIEW_LIMIT;
-  const visible = truncated ? props.sessions.slice(0, SESSIONS_PREVIEW_LIMIT) : props.sessions;
+  const visible = truncated ? tree.top.slice(0, SESSIONS_PREVIEW_LIMIT) : tree.top;
 
   const commit = () => {
     if (editing !== null) props.onRename(editing);
@@ -554,13 +571,24 @@ function WorkspaceGroup(props: {
       {!props.folded && (
         <>
           {visible.map((meta) => (
-            <SessionRow
-              key={meta.id}
-              meta={meta}
-              session={props.session}
-              active={meta.id === props.openId}
-              onClick={() => props.onOpen(meta.id)}
-            />
+            <Fragment key={meta.id}>
+              <SessionRow
+                meta={meta}
+                session={props.session}
+                active={meta.id === props.openId}
+                onClick={() => props.onOpen(meta.id)}
+              />
+              {tree.childrenOf(meta.id).map((child) => (
+                <SessionRow
+                  key={child.id}
+                  meta={child}
+                  session={props.session}
+                  active={child.id === props.openId}
+                  child
+                  onClick={() => props.onOpen(child.id)}
+                />
+              ))}
+            </Fragment>
           ))}
           {props.sessions.length > SESSIONS_PREVIEW_LIMIT && (
             <ShowAllRow
@@ -782,6 +810,8 @@ function SessionRow(props: {
   meta: SessionMeta;
   session: ChatSession;
   active: boolean;
+  /** B-2：派出来的子会话——整行缩进，行首带谱系标记（挂父下的第二层） */
+  child?: boolean;
   onClick: () => void;
 }) {
   const { meta, session } = props;
@@ -872,10 +902,30 @@ function SessionRow(props: {
 
   return (
     <div
-      style={{ display: "flex", alignItems: "center", gap: 2 }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 2,
+        ...(props.child ? { paddingLeft: 16 } : {}),
+      }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
+      {props.child && (
+        // 谱系标记（B-2）：与状态图标区分——它说的是「从哪来」，不是「跑没跑」
+        <span
+          title="Dispatched by the parent task"
+          style={{
+            display: "grid",
+            placeItems: "center",
+            width: 14,
+            flex: "0 0 auto",
+            color: "var(--color-text-tertiary)",
+          }}
+        >
+          <Icon name="git-branch" size={11} strokeWidth={1.8} />
+        </span>
+      )}
       {editing ? (
         <span style={{ flex: 1, minWidth: 0, padding: "var(--space-1)" }}>
           <InlineName

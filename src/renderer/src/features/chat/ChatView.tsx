@@ -21,6 +21,7 @@ import {
   mcpFailureLead,
   mcpInputSummary,
   readTaskCard,
+  startTaskCard,
   summarizeMcpResult,
   liveTailLines,
   parseEditDiff,
@@ -1442,6 +1443,9 @@ function toolIcon(toolName: string): IconName {
       return "folder";
     case "read_task":
       return "book-open";
+    // B-2：派发 = 从这条任务长出一条子任务
+    case "start_task":
+      return "git-branch";
     default:
       return "wrench";
   }
@@ -1525,8 +1529,14 @@ function ToolLine(props: {
   const expandable = toolExpandable(result, props.toolName);
   const live = expandable && active;
   const finished = result !== undefined && result.status !== "running";
-  // B-1：read_task 落定后 details 里带任务卡（running/error 帧没有）；别的工具不解析
-  const taskCard = props.toolName === "read_task" && finished ? readTaskCard(result) : null;
+  // B-1：read_task 落定后 details 里带任务卡（running/error 帧没有）；B-2：start_task 同款。
+  // 别的工具不解析
+  const taskCard =
+    props.toolName === "read_task" && finished
+      ? readTaskCard(result)
+      : props.toolName === "start_task" && finished
+        ? startTaskCard(result)
+        : null;
   const diff = finished ? editDiffText(result) : null;
   const stats = finished ? editDiffStats(result) : null;
   const rawBody = result !== undefined ? toolResultText(result) : "";

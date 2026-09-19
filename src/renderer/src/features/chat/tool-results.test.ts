@@ -24,6 +24,7 @@ import {
   formatToolDuration,
   recordToolFrame,
   splitPathTail,
+  startTaskCard,
   streamingThinkingKey,
   mcpFailureKind,
   mcpInputSummary,
@@ -1215,5 +1216,48 @@ describe("toolCallSummary —— read_task（B-1）", () => {
   test("行首参数摘要显示引用本身", () => {
     assert.equal(toolCallSummary("read_task", { task: "fix sidebar", rounds: "1" }), "fix sidebar");
     assert.equal(toolCallSummary("read_task", {}), null);
+  });
+});
+
+describe("startTaskCard（B-2）", () => {
+  const toolItem = (
+    patch: Partial<Extract<ToolTranscriptItem, { status: "complete" }>> = {},
+    status: "complete" | "running" = "complete",
+  ): ToolTranscriptItem => ({
+    id: "i1",
+    role: "tool",
+    toolCallId: "c1",
+    toolName: "start_task",
+    input: { title: "Demo", prompt: "p" },
+    content: [{ type: "text", text: "Task started…" }],
+    timestamp: 1,
+    status,
+    isError: false,
+    ...patch,
+  });
+
+  test("终态帧的 details.startTask 逐字段校验后原样带回", () => {
+    const card = startTaskCard(toolItem({ details: { startTask: { sessionId: "c-1", title: "Demo" } } }));
+    assert.deepEqual(card, { sessionId: "c-1", title: "Demo" });
+  });
+
+  test("空标题给占位；坏值判 null：running 帧、缺 details、坏 sessionId、非字符串 title", () => {
+    assert.deepEqual(startTaskCard(toolItem({ details: { startTask: { sessionId: "c-1", title: "" } } })), {
+      sessionId: "c-1",
+      title: "(untitled)",
+    });
+    assert.equal(startTaskCard(undefined), null);
+    assert.equal(startTaskCard(toolItem({}, "running")), null);
+    assert.equal(startTaskCard(toolItem({ details: undefined })), null);
+    assert.equal(startTaskCard(toolItem({ details: { other: 1 } })), null);
+    assert.equal(startTaskCard(toolItem({ details: { startTask: { title: "x" } } })), null);
+    assert.equal(startTaskCard(toolItem({ details: { startTask: { sessionId: "c", title: 42 } } })), null);
+  });
+});
+
+describe("toolCallSummary —— start_task（B-2）", () => {
+  test("行首参数摘要显示子任务标题", () => {
+    assert.equal(toolCallSummary("start_task", { title: "Fix login", prompt: "…" }), "Fix login");
+    assert.equal(toolCallSummary("start_task", { prompt: "…" }), null);
   });
 });
