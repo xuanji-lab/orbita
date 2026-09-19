@@ -46,10 +46,12 @@ describe("decidePermission", () => {
     assert.equal(decidePermission("manual", "some_new_tool").behavior, "ask");
   });
 
-  test("read_task（B-1）：真只读，plan 放行——「先看别的 task 再出方案」正是 plan 模式的场景", () => {
-    assert.deepEqual(decidePermission("plan", "read_task"), { behavior: "allow" });
-    // manual 的「全都问」对它不豁免；skip 本就全放（READ_ONLY_TOOLS 循环已盖）
+  test("read_task（B-1）：跨会话读桶——plan 也弹审批（2026-09-18 改写 Q4：串屉要过一次点头）", () => {
+    assert.deepEqual(decidePermission("plan", "read_task"), { behavior: "ask" });
     assert.deepEqual(decidePermission("manual", "read_task"), { behavior: "ask" });
+    assert.deepEqual(decidePermission("skip", "read_task"), { behavior: "allow" });
+    // 桶的移动不影响纯只读工具：plan 下照旧静默放行
+    assert.deepEqual(decidePermission("plan", "read"), { behavior: "allow" });
   });
 
   test("三档模式都有定义，没有落空的分支", () => {
