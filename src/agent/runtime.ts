@@ -962,6 +962,15 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
+  if (command.type === "startTaskResult") {
+    requestBroker.resolve(
+      command.requestId,
+      command.ok
+        ? { ok: true, card: command.card, text: command.text }
+        : { ok: false, error: command.error ?? "Failed to start the task" },
+    );
+    return;
+  }
   if (command.type === "mcpReload") {
     // 重连后把新快照报给主进程（缓存 + 广播给管理面）。
     // 已在跑的轮不受影响：它们的 customTools 在开机时已定格。

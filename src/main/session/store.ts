@@ -355,6 +355,8 @@ export class SessionStore {
         providerId: meta.providerId,
         modelId: meta.modelId,
         mode: meta.mode,
+        // 分支不是派发：它是用户从一条会话的半截里开出的另一条，仍是顶层
+        parentSessionId: null,
         piSessionFile: null,
         pinned: false,
         archived: false,

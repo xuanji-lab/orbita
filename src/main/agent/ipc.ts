@@ -156,6 +156,8 @@ export function registerAgentIpc(
       providerId: input.providerId,
       modelId: input.modelId,
       mode: input.mode,
+      // renderer 建的会话都是顶层；派出子会话（B-2）的 meta 由 startTask 另行装配
+      parentSessionId: null,
       createdAt: now,
       updatedAt: now,
     });
