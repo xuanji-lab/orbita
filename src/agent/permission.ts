@@ -88,6 +88,16 @@ const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 
 /**
+ * 路径折叠：Windows 文件系统大小写不敏感，比较前小写化、反斜杠转正斜杠、
+ * 收拢连续斜杠（JSON.stringify 会把 `\` 转义成 `\\`，不收拢就对不上）。
+ * posix 保持原样——文件系统大小写敏感，不折。
+ */
+function foldPath(value: string): string {
+  if (process.platform !== "win32") return value;
+  return value.replaceAll("\\", "/").replace(/\/{2,}/g, "/").toLowerCase();
+}
+
+/**
  * 会话文件不可变（2026-09-18 立规）：protectedPaths（sessions/ 与 pi-sessions/）
  * 对工具面**全档只读**——这条检查在权限档判定**之前**跑，Skip 也抬不掉。
  *
@@ -106,16 +116,13 @@ export function protectedPathRefusal(
   cwd: string,
 ): string | null {
   if (protectedPaths.length === 0) return null;
-  // Windows 文件系统大小写不敏感，比较前折叠；posix 保持原样
-  const fold = (value: string): string =>
-    process.platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value;
 
   if (PATH_MUTATING_TOOLS.has(toolName)) {
     const target = input["path"];
     if (typeof target !== "string" || target === "") return null;
-    const resolved = fold(resolve(cwd, target));
+    const resolved = foldPath(resolve(cwd, target));
     for (const dir of protectedPaths) {
-      const base = fold(resolve(dir));
+      const base = foldPath(resolve(dir));
       const rel = relative(base, resolved);
       if (!rel.startsWith("..") && !isAbsolute(rel)) {
         return refusalMessage(dir);
@@ -127,9 +134,9 @@ export function protectedPathRefusal(
   if (COMMAND_TOOLS.has(toolName)) {
     const command = input["command"];
     if (typeof command !== "string" || command === "") return null;
-    const haystack = fold(command);
+    const haystack = foldPath(command);
     for (const dir of protectedPaths) {
-      const needle = fold(dir);
+      const needle = foldPath(dir);
       // 命中必须落在路径边界上：`.../sessions` 后面跟分隔符/引号/空白/结尾才算，
       // `.../sessions-extra` 这种相邻前缀是另一个目录，不拦
       let index = haystack.indexOf(needle);
@@ -151,6 +158,36 @@ function refusalMessage(dir: string): string {
     "in any permission mode. Reading stays available (read_task). " +
     "Describe the change to the user instead; only the user can modify session data."
   );
+}
+
+/** 原始只读工具里带路径输入的：翻进禁区 = 在读别人的账本。 */
+const READ_PATH_TOOLS = new Set(["read", "grep", "glob", "ls"]);
+
+/**
+ * 跨会话读判定（输入级，闸门用）：read_task 恒为跨会话读；原始只读工具的
+ * 输入里出现禁区路径（sessions/、pi-sessions/）也是在读别人的账本——两条路
+ * 同归一个政策（plan/manual 弹审批，skip 放）。匹配复用禁区写的折叠与
+ * 路径边界规则（sessions-extra 不误伤）。
+ */
+export function isCrossSessionRead(
+  toolName: string,
+  input: Record<string, unknown>,
+  protectedPaths: readonly string[],
+  cwd: string,
+): boolean {
+  if (toolName === "read_task") return true;
+  if (protectedPaths.length === 0 || !READ_PATH_TOOLS.has(toolName)) return false;
+  const haystack = foldPath(JSON.stringify(input));
+  for (const dir of protectedPaths) {
+    const needle = foldPath(resolve(dir));
+    let index = haystack.indexOf(needle);
+    while (index !== -1) {
+      const next = haystack[index + needle.length];
+      if (next === undefined || !/[a-z0-9_-]/i.test(next)) return true;
+      index = haystack.indexOf(needle, index + 1);
+    }
+  }
+  return false;
 }
 
 /** pi 扩展 API 里我们用到的两个钩子。上游类型没导出成可直接消费的形状，这里只声明用得着的部分。 */
@@ -182,7 +219,16 @@ export function createToolCallGate(
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
     const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
     if (refusal !== null) return { block: true, reason: refusal };
-    const decision = decidePermission(getMode(), event.toolName);
+    let decision = decidePermission(getMode(), event.toolName);
+    // 跨会话读（2026-09-18）：只读桶的静默放行对它不适用——plan 档也过一次审批
+    // （审批条上看得见要读哪条）。manual 本就全问；skip 的全放保持不动。
+    if (
+      decision.behavior === "allow" &&
+      getMode() !== "skip" &&
+      isCrossSessionRead(event.toolName, event.input, protectedPaths, cwd)
+    ) {
+      decision = { behavior: "ask" };
+    }
     if (decision.behavior === "allow") return {};
     if (decision.behavior === "deny") return { block: true, reason: decision.message };
 

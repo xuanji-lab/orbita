@@ -6,7 +6,8 @@ import type { ReadTaskCard, ReadTaskOutcome } from "../shared/agent-ipc.ts";
  * agent 的「跨 task 只读」工具（B-1）：read_task。
  *
  * 读盘在主进程（agent 进程不碰 userData）——requestId 问答，见 ./request-broker.ts。
- * 只读：decidePermission 把它收进 READ_ONLY_TOOLS（plan 放行 / manual 问 / skip 放）。
+ * 权限：decidePermission 把它收进 CROSS_SESSION_READ_TOOLS（跨会话读桶，
+ * 2026-09-18）——plan/manual 弹审批，审批条上看得见要读哪条；skip 放。
  * 结果的 text 进模型上下文；card 挂 `details`——details 的明文语义是「只给 UI、
  * 不入模型上下文」（edit 的 diff 是先例），renderer 的任务卡与跳转吃它。
  */
