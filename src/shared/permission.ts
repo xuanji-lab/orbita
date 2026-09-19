@@ -15,10 +15,24 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
 };
 
 /**
- * 不改变任何东西的工具：pi 内建五个，加我们自己的 read_task（B-1）——它经主进程
- * 读别的 task 的落盘记录，不改任何盘。其余（write / edit / bash…）一律视为有副作用。
+ * 不改变任何东西的工具：pi 内建五个。其余（write / edit / bash…）一律视为有副作用。
  */
-export const READ_ONLY_TOOLS = ["read", "grep", "glob", "ls", "find", "read_task"] as const;
+export const READ_ONLY_TOOLS = ["read", "grep", "glob", "ls", "find"] as const;
+
+/**
+ * 跨会话读取（2026-09-18 立规，改写同日 grill 的 Q4 裁决）：读**别的 task** 的数据。
+ * read_task 恒属此类；原始 read/grep 等翻进会话账本目录的，由闸门按输入路径判定
+ * （在 agent 侧，shared 只认工具名）。
+ *
+ * 政策：plan / manual 档**弹审批**——跨会话读是唯一「把别处的数据拉进本会话
+ * 上下文」的动作（此后随本会话发给模型商、进导出与压缩摘要），值一次点击，
+ * 审批条上看得见要读哪条；skip 档照放（skip 的字面语义就是全信任）。
+ */
+export const CROSS_SESSION_READ_TOOLS = ["read_task"] as const;
+
+export function isCrossSessionReadTool(toolName: string): boolean {
+  return (CROSS_SESSION_READ_TOOLS as readonly string[]).includes(toolName);
+}
 
 export function isReadOnlyTool(toolName: string): boolean {
   return (READ_ONLY_TOOLS as readonly string[]).includes(toolName);
@@ -36,6 +50,8 @@ export type PermissionDecision =
  */
 export function decidePermission(mode: PermissionMode, toolName: string): PermissionDecision {
   if (mode === "skip") return { behavior: "allow" };
+  // 跨会话读优先于只读桶：它在 plan 档也要过一次审批（政策见 CROSS_SESSION_READ_TOOLS）
+  if (isCrossSessionReadTool(toolName)) return { behavior: "ask" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
     return mode === "plan" ? { behavior: "allow" } : { behavior: "ask" };
