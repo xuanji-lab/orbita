@@ -46,12 +46,10 @@ describe("decidePermission", () => {
     assert.equal(decidePermission("manual", "some_new_tool").behavior, "ask");
   });
 
-  test("read_task（B-1）：跨会话读桶——plan 也弹审批（2026-09-18 改写 Q4：串屉要过一次点头）", () => {
-    assert.deepEqual(decidePermission("plan", "read_task"), { behavior: "ask" });
+  test("read_task（B-1）：跨会话读按只读对待——plan 静默放行（2026-09-18 二次裁决：读取而已）", () => {
+    assert.deepEqual(decidePermission("plan", "read_task"), { behavior: "allow" });
     assert.deepEqual(decidePermission("manual", "read_task"), { behavior: "ask" });
     assert.deepEqual(decidePermission("skip", "read_task"), { behavior: "allow" });
-    // 桶的移动不影响纯只读工具：plan 下照旧静默放行
-    assert.deepEqual(decidePermission("plan", "read"), { behavior: "allow" });
   });
 
   test("三档模式都有定义，没有落空的分支", () => {
