@@ -26,6 +26,7 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   piSessionFile: patch.piSessionFile ?? null,
   pinned: patch.pinned ?? false,
   archived: patch.archived ?? false,
+  parentSessionId: patch.parentSessionId ?? null,
   recentQueries: patch.recentQueries ?? [],
 });
 

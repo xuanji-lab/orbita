@@ -249,6 +249,13 @@ export type AgentCommand =
        * 覆盖进去。缺席（理论上不发生，主进程兜 COMPACTION_DEFAULT）= pi 出厂默认。
        */
       compaction?: CompactionSetting;
+      /**
+       * B-2：这条会话能不能派子 task（注册 start_task 工具）。**主进程按 meta 的
+       * parentSessionId 派生**（null = 可派），renderer 载荷不携带。缺席 = false
+       * （保守：不给工具比多给安全）。深度恒为 1 的机制本体——子会话根本看不到
+       * 这个工具，而不是调了再被拒。
+       */
+      canDispatch?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -276,6 +283,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
       compaction?: CompactionSetting;
+      /** B-2：能不能派子 task，语义同 submit（每轮都由主进程按 meta 现算） */
+      canDispatch?: boolean;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
@@ -299,6 +308,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */
       compaction?: CompactionSetting;
+      /** B-2：能不能派子 task，语义同 submit（每轮都由主进程按 meta 现算） */
+      canDispatch?: boolean;
     }
   | { type: "listBuiltins" }
   /**
@@ -327,6 +338,8 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
+  /** B-2：主进程对 startTaskRequest 的回执（requestId 问答的第四对） */
+  | ({ type: "startTaskResult"; requestId: string } & StartTaskOutcome)
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
@@ -376,6 +389,23 @@ export type ReadTaskOutcome =
   | { ok: true; card: ReadTaskCard; text: string }
   | { ok: false; error: string };
 
+/**
+ * B-2：start_task 开出的「这是一条什么 task」。**只给 UI、不入模型上下文**
+ * （ReadTaskCard 的同一条 details 通路）：模型拿 text 回执，renderer 拿它渲染
+ * 「已开 task」卡与点击跳转（openSession）。
+ */
+export interface StartTaskCard {
+  /** 新开的子 task 的 session id。renderer 跳转就跳它 */
+  sessionId: string;
+  /** 子 task 的标题（模型起的，或 prompt 首行截断） */
+  title: string;
+}
+
+/** startTaskRequest 的回执载荷：主进程组装，agent 进程翻成工具结果。 */
+export type StartTaskOutcome =
+  | { ok: true; card: StartTaskCard; text: string }
+  | { ok: false; error: string };
+
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
 export type AgentEvent =
   | { type: "ready" }
@@ -414,6 +444,23 @@ export type AgentEvent =
    * （目录 + 最近轮全文）；有值 = 只取目录里那些轮号的全文。
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task: string; rounds?: string }
+  /**
+   * B-2：agent 工具 start_task 的派发请求。**开轮在主进程**（agent 进程不碰
+   * provider 密钥，也不做继承策略）：主进程按父会话 meta 解析继承（cwd /
+   * workspace / provider / model / mode 全继承，mode 没有覆盖入口）、做并发
+   * 上限与「子不能再派」两道门，然后代子会话装一轮 submit。**不等子跑完**：
+   * 回执只说开没开成，结果回传是 B-3（wait_task）的事。
+   */
+  | {
+      type: "startTaskRequest";
+      requestId: string;
+      /** 派发者（父会话）的 id。继承与「子不能再派」都以它为锚 */
+      sessionId: string;
+      title: string;
+      prompt: string;
+      /** 子会话跑哪个模型；缺席 = 继承父。provider 恒继承父，没有覆盖入口 */
+      model?: string;
+    }
 /**
  * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。

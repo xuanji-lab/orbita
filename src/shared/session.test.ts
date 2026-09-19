@@ -26,6 +26,7 @@ const valid = {
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "manual",
+  parentSessionId: null,
   recentQueries: [],
   stats: null,
   createdAt: 1000,
@@ -109,6 +110,16 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, workspaceId: undefined })?.workspaceId, null);
     strictEqual(parseSessionMeta({ ...valid, workspaceId: 42 })?.workspaceId, null);
     strictEqual(parseSessionMeta({ ...valid, workspaceId: "w1" })?.workspaceId, "w1");
+  });
+
+  // B-2 之前存的会话与用户自建会话都没有这个字段：都是顶层（不回填）
+  it("缺 parentSessionId 视为顶层会话；坏值同样当 null，不丢会话", () => {
+    strictEqual(parseSessionMeta({ ...valid, parentSessionId: undefined })?.parentSessionId, null);
+    strictEqual(parseSessionMeta({ ...valid, parentSessionId: 42 })?.parentSessionId, null);
+    strictEqual(
+      parseSessionMeta({ ...valid, parentSessionId: "a7f3c1d2" })?.parentSessionId,
+      "a7f3c1d2",
+    );
   });
 
   // auto-title（C-3）之前存的会话没有这个字段：它们是首句截断，允许模型再试

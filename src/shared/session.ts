@@ -104,6 +104,16 @@ export interface SessionMeta {
   /** 最后一次用的权限档。存下来是为了重开这条会话时不会静默换档。 */
   mode: PermissionMode;
   /**
+   * 派出这条会话的父会话 id（B-2，start_task）；**null = 顶层会话**（用户自己建的，
+   * 或字段落地之前存的所有旧会话——parse 缺省补 null，不回填）。
+   *
+   * 侧栏的挂父下两层树吃它；父被删后子仍在（派发不级联），此时子按自己的
+   * workspaceId 归组、升为顶层——renderer 对悬空引用按 null 处理。
+   * 深度恒为 1：子会话拿不到 start_task（开轮命令的 canDispatch 由主进程按
+   * 本字段派生），主进程的 startTask 处理里还有一道同因兜底。
+   */
+  parentSessionId: string | null;
+  /**
    * pi 自己那份 session 文件的路径；**null = 这条会话只能读不能续**。
    *
    * 续会话不是我们把历史重讲一遍，而是把 pi 自己的本子还给它
@@ -267,6 +277,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     stats: parseAgentStats(value["stats"]),
     // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
+    // 缺 parentSessionId 的是 B-2 之前存的会话与用户自建会话：都是顶层
+    parentSessionId: str(value["parentSessionId"]),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };

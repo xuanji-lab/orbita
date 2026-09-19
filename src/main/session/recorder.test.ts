@@ -68,6 +68,7 @@ beforeEach(async () => {
     providerId: "zai",
     modelId: "glm-5.3",
     mode: "plan",
+    parentSessionId: null,
     createdAt: 1,
     updatedAt: 1,
   });
