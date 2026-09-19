@@ -411,6 +411,14 @@ export class SessionStore {
   }
 
   /**
+   * 只读 meta、不带 transcript。B-2 的继承解析与 canDispatch 派生每轮开轮都要问
+   * 一次，不能为它连带读整本 transcript（load 的日志读取会随会话变长线性变贵）。
+   */
+  getMeta(id: string): Promise<SessionMeta | null> {
+    return this.readMeta(id);
+  }
+
+  /**
    * 删一条会话。**先删 transcript，后删 meta**——顺序不是随意的：
    * 两次 rm 之间崩了的话，
    *   先删 meta：留下一个**列不出来也删不掉**的 .jsonl，永远占着盘；

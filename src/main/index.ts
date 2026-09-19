@@ -9,6 +9,7 @@ import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
+import { createTurnAssembler } from "./agent/dispatch.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
@@ -134,6 +135,9 @@ void app.whenReady().then(() => {
   const record = createSessionRecorder(sessions);
   const mcp = new McpStore(configDir);
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
+    // B-2：phase 真值记账（start_task 并发上限的计数来源）。放在各分支之前——
+    // 将来有事件被分支吃掉也要计数
+    assembler.observe(event);
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
     // 4-3：agent 工具的写盘请求——主进程落盘、回执、广播刷新。
@@ -159,6 +163,14 @@ void app.whenReady().then(() => {
       });
       return;
     }
+    // B-2：agent 的 start_task——开轮在主进程（继承解析 + 两道门在 assembler），
+    // 回执只说开没开成；子会话从此像任何会话一样经 record / broadcast 流动
+    if (event.type === "startTaskRequest") {
+      void assembler.startTask(event).then((result) => {
+        agentHost.answerStartTask(event.requestId, result);
+      });
+      return;
+    }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
     // 真值校准回 meta——open 失败退回新建时 pi 会换文件，按轮自愈。
     // 首轮的 created 由 submit handler 等待并建 meta，不经过这里。
@@ -168,6 +180,19 @@ void app.whenReady().then(() => {
     }
     record(event);
     broadcastAgentEvent(event);
+  });
+  // 开轮装配器（submit / interrupt / compact / start_task 共用一套密钥解析与继承规则）。
+  // 事件回调闭包引用它——回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
+  const assembler = createTurnAssembler({
+    host: agentHost,
+    providers,
+    sessions,
+    piSessionDir: join(configDir, "pi-sessions"),
+    // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
+    protectedPaths: [join(configDir, "sessions"), join(configDir, "pi-sessions")],
+    skillDirs: (workspaceId) => skills.linkDirs(workspaceId),
+    mcp,
+    settings,
   });
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
@@ -189,17 +214,7 @@ void app.whenReady().then(() => {
   registerSkillIpc(skills);
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
   registerWorkspaceIpc(new WorkspaceStore(configDir), (id) => skills.removeWorkspace(id));
-  registerAgentIpc(
-    agentHost,
-    providers,
-    sessions,
-    join(configDir, "pi-sessions"),
-    // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
-    [join(configDir, "sessions"), join(configDir, "pi-sessions")],
-    (workspaceId) => skills.linkDirs(workspaceId),
-    mcp,
-    settings,
-  );
+  registerAgentIpc(agentHost, providers, sessions, assembler);
   app.on("before-quit", () => agentHost.dispose());
 
   createMainWindow();
