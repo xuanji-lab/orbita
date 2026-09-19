@@ -4,8 +4,8 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
-import { createToolCallGate, protectedPathRefusal } from "./permission.ts";
+import { join, resolve } from "node:path";
+import { createToolCallGate, isCrossSessionRead, protectedPathRefusal } from "./permission.ts";
 
 const SESSIONS = resolve("/app-data/orbita/sessions");
 const PI_SESSIONS = resolve("/app-data/orbita/pi-sessions");
@@ -80,5 +80,58 @@ describe("createToolCallGate 的禁区前置（2026-09-18）", () => {
     });
     assert.deepEqual(result, {});
     assert.equal(asked, 1); // 只因 manual 档「全都问」问了一次，不是禁区拦的
+  });
+});
+
+describe("isCrossSessionRead（2026-09-18）", () => {
+  test("read_task 恒为跨会话读，与禁区清单无关", () => {
+    assert.equal(isCrossSessionRead("read_task", { task: "x" }, [], CWD), true);
+    assert.equal(isCrossSessionRead("read_task", { task: "x" }, PROTECTED, CWD), true);
+  });
+
+  test("read/grep/ls 翻进禁区 → 是；相邻前缀与普通路径 → 否", () => {
+    assert.equal(isCrossSessionRead("read", { path: join(SESSIONS, "abc.jsonl") }, PROTECTED, CWD), true);
+    assert.equal(isCrossSessionRead("ls", { path: SESSIONS }, PROTECTED, CWD), true);
+    assert.equal(
+      isCrossSessionRead("grep", { pattern: "x", path: `${SESSIONS}-extra` }, PROTECTED, CWD),
+      false,
+    );
+    assert.equal(isCrossSessionRead("read", { path: "src/app.ts" }, PROTECTED, CWD), false);
+  });
+});
+
+describe("闸门的跨会话读条件（2026-09-18）", () => {
+  test("plan 档 read_task：弹审批——审批条上看得见要读哪条", async () => {
+    let asked = 0;
+    const g = createToolCallGate(() => "plan", async () => {
+      asked += 1;
+      return { behavior: "allow" };
+    }, PROTECTED, CWD);
+    const result = await g({ toolCallId: "c1", toolName: "read_task", input: { task: "素材task" } });
+    assert.deepEqual(result, {});
+    assert.equal(asked, 1);
+  });
+
+  test("plan 档 read 翻禁区也问；普通 read 静默放行不问", async () => {
+    let asked = 0;
+    const g = createToolCallGate(() => "plan", async () => {
+      asked += 1;
+      return { behavior: "allow" };
+    }, PROTECTED, CWD);
+    await g({ toolCallId: "c2", toolName: "read", input: { path: join(SESSIONS, "a.jsonl") } });
+    assert.equal(asked, 1);
+    await g({ toolCallId: "c3", toolName: "read", input: { path: "src/app.ts" } });
+    assert.equal(asked, 1); // 没有增加
+  });
+
+  test("skip 档 read_task 照放、不问——skip 的字面语义不被跨会话读破坏", async () => {
+    let asked = 0;
+    const g = createToolCallGate(() => "skip", async () => {
+      asked += 1;
+      return { behavior: "allow" };
+    }, PROTECTED, CWD);
+    const result = await g({ toolCallId: "c4", toolName: "read_task", input: { task: "x" } });
+    assert.deepEqual(result, {});
+    assert.equal(asked, 0);
   });
 });
