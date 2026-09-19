@@ -465,6 +465,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
   // **会话文件不可变**：protectedPaths 由主进程随每轮发，闸门在档位判定之前拦。
   const currentMode = () => ledgerNote(command.sessionId).mode;
+  // B-2：子会话（主进程按 meta 派生 canDispatch）根本看不到派发工具——深度恒为 1
+  const dispatchable = command.canDispatch === true;
   const gate = createToolCallGate(
     currentMode,
     askPermission(command.sessionId),
@@ -511,6 +513,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   "create_skill",
                   "add_mcp_server",
                   "read_task",
+                  ...(dispatchable ? ["start_task" as const] : []),
                 ],
               )}\n\n${STORE_TOOLS_GUIDELINES}\n\n${TOOL_GUIDELINES}`,
             }));
@@ -564,7 +567,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const customTools = [
     ...mcpHub.currentTools(),
     ...createStoreTools(requestBroker, command.sessionId),
-    ...createTaskTools(requestBroker, command.sessionId),
+    ...createTaskTools(requestBroker, command.sessionId, dispatchable),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
