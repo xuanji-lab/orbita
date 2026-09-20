@@ -221,7 +221,15 @@ describe("内建 provider 目录的到达时机（债务 B #2）", () => {
         name: "Z.ai",
         baseUrl: "https://api.z.ai",
         api: "openai-completions",
-        models: [{ id: "m", contextWindow: 200_000, maxTokens: 8_192, cost: { input: 0.6, output: 2.2, cacheRead: 0.05, cacheWrite: 0.6 } }],
+        models: [
+          {
+            id: "m",
+            contextWindow: 200_000,
+            maxTokens: 8_192,
+            input: ["text"] as ("text" | "image")[],
+            cost: { input: 0.6, output: 2.2, cacheRead: 0.05, cacheWrite: 0.6 },
+          },
+        ],
       },
     ];
     const pending = ctx.host.listBuiltins();

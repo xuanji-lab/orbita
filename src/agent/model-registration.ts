@@ -10,25 +10,13 @@
  */
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { BuiltinModel } from "../shared/agent-ipc.ts";
+import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 
 /** pi 注册表里的模型对象——从 ModelRuntime 的方法签名推出来，不另维护一份类型 */
 export type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 /** registerProvider 第二参的完整形状（同上，签名推导） */
 export type PiProviderRegistration = Parameters<ModelRuntime["registerProvider"]>[1];
-
-/**
- * 目录不认识的模型 id 的保守默认（Q2）：自建网关声明的 id、目录还没收录的新模型。
- * **只有目录 miss 后的补注册会用它**——目录认识的 id 走官方参数（窗口 / 单价），
- * 那才是「配置好的模型」的真实元数据。填错影响压缩时机与用量统计，不影响能不能跑。
- */
-export const FALLBACK_MODEL = {
-  reasoning: false,
-  input: ["text"] as ("text" | "image")[],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-};
 
 /** 注册的 auth 面：**不带 models**——带了会把目录的官方窗口 / 单价盖成兜底值 */
 export function toAuthConfig(provider: {
@@ -92,6 +80,8 @@ export function toBuiltinModel(model: PiModel): BuiltinModel {
     id: model.id,
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
+    // 图片能力跟着参数一起过 IPC：设置页要拿它下图片徽标与「Inherit」的实际含义
+    input: [...model.input],
     cost: {
       input: model.cost.input,
       output: model.cost.output,

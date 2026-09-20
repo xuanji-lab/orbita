@@ -749,7 +749,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                 ) : (
                   draft.models.map((model) => {
                     const meta = catalogMeta(known, model.id);
-                    const badge = modelContextText(model, meta, knownModelParams(known?.id ?? "", model.id));
+                    const badge = modelContextText(model, meta, knownModelParams(model.id));
                     const tested = modelTests[model.id];
                     const busy = tested?.tone === "busy";
                     return (

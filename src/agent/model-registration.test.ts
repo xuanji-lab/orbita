@@ -1,8 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
 import {
-  FALLBACK_MODEL,
   hasModelOverrides,
   registerAndResolveModel,
   toAuthConfig,
@@ -19,6 +19,8 @@ function catalogModel(id: string, contextWindow: number, inputCost: number): PiM
     id,
     name: id,
     contextWindow,
+    // 目录条目都带 input（pi 的 Model 必填）；默认纯文本，要图片的用例自己覆盖
+    input: ["text"],
     cost: { input: inputCost, output: 2, cacheRead: 0.1, cacheWrite: 0 },
   } as unknown as PiModel;
 }
@@ -162,6 +164,7 @@ describe("toBuiltinModel —— 目录条目瘦身给设置面", () => {
       id: "glm-4.7",
       contextWindow: 204_800,
       maxTokens: 8_192,
+      input: ["text"],
       cost: { input: 0.6, output: 2.2, cacheRead: 0.05, cacheWrite: 0.6 },
     });
     assert.equal("tiers" in model.cost, false);

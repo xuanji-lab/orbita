@@ -47,7 +47,7 @@ async function resolveProviderSecrets(
      * 白名单存在的理由：pi 目录只收录它已知的模型，厂商新上线的型号要等 1–2 周。
      */
     models: dto.models.declared.map((decl) => {
-      const patch = knownModelParams(dto.id, decl.id);
+      const patch = knownModelParams(decl.id);
       return {
         ...decl,
         ...(decl.contextWindow === undefined && patch.contextWindow !== undefined

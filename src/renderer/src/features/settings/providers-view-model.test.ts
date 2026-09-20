@@ -43,6 +43,7 @@ describe("mergeModelCost", () => {
     id: "m",
     contextWindow: 204_800,
     maxTokens: 8192,
+    input: ["text"] as ("text" | "image")[],
     cost: { input: 0.5, output: 1.5, cacheRead: 0.1, cacheWrite: 0.2 },
   };
 
@@ -87,7 +88,13 @@ describe("modelContextText —— 生效值 = 用户覆盖 > 目录 > 白名单 
     assert.equal(
       modelContextText(
         undefined,
-        { id: "m", contextWindow: 204_800, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        {
+          id: "m",
+          contextWindow: 204_800,
+          maxTokens: 8192,
+          input: ["text"] as ("text" | "image")[],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
       ).text,
       "205k",
     );

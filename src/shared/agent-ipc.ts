@@ -113,6 +113,11 @@ export interface BuiltinModel {
   id: string;
   contextWindow: number;
   maxTokens: number;
+  /**
+   * 目录声明的输入模态。**要过 IPC 到 renderer**：模型行的图片徽标与弹窗的
+   * 「Inherit」档位都得知道这个 id 到底能不能吃图，否则用户只能靠手动开关猜。
+   */
+  input: ("text" | "image")[];
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 

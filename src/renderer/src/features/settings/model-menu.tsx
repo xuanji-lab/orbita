@@ -64,11 +64,7 @@ export function modelMenuItems(options: {
       { id: `hdr:${provider.id}`, label: provider.displayName, header: true },
     ];
     for (const declared of provider.models.declared) {
-      const badge = modelContextText(
-        declared,
-        metaOf(declared.id),
-        knownModelParams(known?.id ?? "", declared.id),
-      );
+      const badge = modelContextText(declared, metaOf(declared.id), knownModelParams(declared.id));
       rows.push({
         id: `${provider.id}:${declared.id}`,
         label: declared.id,

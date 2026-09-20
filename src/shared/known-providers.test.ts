@@ -22,15 +22,21 @@ describe("isPlanBilling —— 两句话不能混", () => {
   });
 
   it("白名单补的参数能取到，且只含确知字段（stepfun 官方页没写输出上限）", () => {
-    const params = knownModelParams("stepfun", "step-3.7-flash");
+    const params = knownModelParams("step-3.7-flash");
     assert.equal(params.contextWindow, 256_000);
     assert.equal("maxTokens" in params, false);
     // deepseek 只有 vision-exp 走白名单（pi 目录没收它）；其余两个目录已有
-    assert.deepEqual(knownModelParams("deepseek", "deepseek-v4-flash"), {});
-    assert.deepEqual(knownModelParams("deepseek", "deepseek-v4-flash-vision-exp"), {
+    assert.deepEqual(knownModelParams("deepseek-v4-flash"), {});
+    assert.deepEqual(knownModelParams("deepseek-v4-flash-vision-exp"), {
       contextWindow: 1_000_000,
       maxTokens: 384_000,
     });
+  });
+
+  it("只按模型 id 查：自建网关接进来的同一型号照样吃得到白名单", () => {
+    // glm-5.3-flash 挂在 zhipu-coding 名下，但 anthropic 兼容网关也在用这个型号
+    assert.equal(knownModelParams("glm-5.3-flash").contextWindow, 1_000_000);
+    assert.deepEqual(knownModelParams("no-such-model"), {});
   });
 
   it("标准 API 按量计费", () => {
