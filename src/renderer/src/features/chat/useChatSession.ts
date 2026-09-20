@@ -691,6 +691,28 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, [sessionId]);
 
   /**
+   * 启动恢复（A-0 复验 bug A）：上次退出前用的档/模型存在 settings.lastUsed，
+   * 挂载后恢复一次——只影响「还没打开会话」的新任务槽；打开旧会话时
+   *  openSession 会以那条会话 meta 的值为准覆写，后者赢。
+   */
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    void api.settings
+      .get()
+      .then((settings) => {
+        const last = settings.lastUsed;
+        if (last === undefined) return;
+        if (last.mode !== undefined) setMode(last.mode);
+        if (last.providerId !== undefined && last.modelId !== undefined) {
+          setModel({ providerId: last.providerId, modelId: last.modelId });
+        }
+      })
+      .catch(() => undefined); // 读不出来就停在默认，不挡开工
+  }, []);
+
+  /**
    * 输入框草稿**按会话隔离**（含首页）：key = 当前查看的会话 id，首页用 "home"。
    * 以前是全局单份，切换 / 新开会话草稿跟着走（2026-09-10 用户裁决：新会话就是
    * 新的，旧会话的草稿留在原地等他回来）。纯内存，不落盘——与旧行为一致。
@@ -1022,6 +1044,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const chooseModel = useCallback(
     (providerId: string, modelId: string) => {
       setModel({ providerId, modelId });
+      // 启动恢复点跟随（bug A）：下次启动应用从这个模型开始
+      void api.settings.set({ lastUsed: { providerId, modelId } }).catch(() => undefined);
       const id = sessionRef.current;
       if (id === null) return; // 本槽开新任务：槽意图就是意图
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
@@ -1043,6 +1067,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 理由同 chooseModel：权限档决定 bash 能不能跑，轮内改是另一种串台——
       // 所以注入延迟（UI 即时），不是锁 chip；跑着时下一轮 submit 自带新档
       setMode(next);
+      // 启动恢复点跟随（bug A）：下次启动应用从这一档开始
+      void api.settings.set({ lastUsed: { mode: next } }).catch(() => undefined);
       const id = sessionRef.current;
       if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
       // **先记在这条会话名下**：跑着时改不进 meta，而它的排队卡可能在你已经切去

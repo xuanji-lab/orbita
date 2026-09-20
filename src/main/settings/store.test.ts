@@ -67,4 +67,15 @@ describe("SettingsStore", () => {
       '{\n  "theme": "light",\n  "drawer": {\n    "width": 320,\n    "docked": []\n  }\n}\n',
     );
   });
+
+  test("lastUsed 的部分更新按键合并——切档不抹已记的模型", async () => {
+    await store.write({ lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } });
+    await store.write({ lastUsed: { mode: "skip" } });
+    const read = await store.read();
+    assert.deepEqual(read.lastUsed, {
+      providerId: "zhipu-coding",
+      modelId: "glm-5.3-flash",
+      mode: "skip",
+    });
+  });
 });

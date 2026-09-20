@@ -41,7 +41,12 @@ export class SettingsStore {
         ? current.drawer
         : parseSettings({ theme: current.theme, drawer: { ...current.drawer, ...patch.drawer } })
             .drawer;
-    const next = parseSettings({ ...current, ...patch, drawer });
+    // lastUsed 同款按键合并：切档只写 mode，不该把已记的 providerId/modelId 抹掉
+    const lastUsed =
+      patch.lastUsed === undefined
+        ? current.lastUsed
+        : { ...current.lastUsed, ...patch.lastUsed };
+    const next = parseSettings({ ...current, ...patch, drawer, lastUsed });
     await writeJsonAtomic(this.filePath, next);
     this.cache = next;
     return next;
