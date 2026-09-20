@@ -149,15 +149,20 @@ export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
 // ── 大折叠（一轮一行）：已落定轮次的思考与工具收进一条统计行 ──
 
 /**
- * 大折叠单元：一个**已落定轮次**里全部思考行与工具行/组的收纳。
- * 正文（text）、用户气泡与界碑**永远不进**——中间正文留在外面各在原位，
- * 折叠只是把它的成员在原序列里**原地**替换掉，不重排任何东西。
+ * 大折叠单元：一个**已落定轮次**里「首成员到末成员之间全部内容」的收纳——
+ * 思考、工具行/组、以及它们之间穿插的正文。折叠外只剩两种正文：首成员之前的
+ * 开场白与末成员之后的结尾回复，各在原位。
+ *
+ * 为什么穿插正文要收进来（BUG-6 裁决，2026-09-20）：单点折叠只有一个位置，
+ * 「正文留在折叠外的原位」在实现上做不到——旧实现把首成员后的正文统统推到
+ * 折叠之后，穿插陈述与结尾回复混作一堆，读起来是一串缺上下文的碎片。
+ * 收进折叠后，展开即回到原相对位置；折叠外只剩有独立上下文的开场与结尾。
  */
 export interface TurnGroupUnit {
   kind: "turnGroup";
   /** `turn:${首成员 key}`：成员集合不变时 key 不变，折叠的展开状态得以保住 */
   key: string;
-  /** 收进的成员（thinking / toolCall / toolGroup），原时间序；展开后就是原有的行 */
+  /** 首末成员之间的全部 entry（thinking / toolCall / toolGroup / 穿插 text），原时间序；展开后就是原有的行 */
   members: readonly TurnMemberEntry[];
   /**
    * 轮时间跨度 = 段内全部渲染单元 timestamp 的极差。adapter 每帧落 now()，末条
@@ -169,14 +174,19 @@ export interface TurnGroupUnit {
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit;
 
-/** 折叠能收的成员：思考、单行工具调用、工具组。正文/气泡/界碑永远不在内。 */
+/** 折叠边界的锚点：思考、单行工具调用、工具组。正文不锚边界，但被区间收进。 */
 export type TurnMemberEntry = Extract<
   RenderEntry,
-  { kind: "thinking" } | { kind: "toolCall" } | { kind: "toolGroup" }
+  { kind: "thinking" } | { kind: "toolCall" } | { kind: "toolGroup" } | { kind: "text" }
 >;
 
 function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
   return entry.kind === "thinking" || entry.kind === "toolCall" || entry.kind === "toolGroup";
+}
+
+/** 段内内容：轮边界（user / 界碑）之外的全部——思考 / 工具 / 正文，折叠区间内只会有这些。 */
+function isTurnContent(entry: RenderEntry): entry is TurnMemberEntry {
+  return entry.kind !== "user" && entry.kind !== "compacted";
 }
 
 function entryTimestamp(entry: RenderEntry): number | null {
@@ -242,14 +252,24 @@ export function groupTurns(
       view.push(...segment);
       return;
     }
+    // 末成员（区间右端）：之后的内容（结尾回复）留在折叠外
+    let lastMember = -1;
+    for (let i = segment.length - 1; i > firstMember; i--) {
+      if (isTurnMember(segment[i]!)) {
+        lastMember = i;
+        break;
+      }
+    }
+    if (lastMember === -1) lastMember = firstMember;
     view.push(...segment.slice(0, firstMember));
     view.push({
       kind: "turnGroup",
       key: `turn:${segment[firstMember]?.key ?? ""}`,
-      members: segment.filter(isTurnMember),
+      // 首末成员之间的全部内容收进折叠——含穿插正文（BUG-6）：展开即回原位
+      members: segment.slice(firstMember, lastMember + 1).filter(isTurnContent),
       durationMs: segmentSpan(segment, results),
     });
-    view.push(...segment.slice(firstMember).filter((entry) => !isTurnMember(entry)));
+    view.push(...segment.slice(lastMember + 1));
   });
   return view;
 }
@@ -325,6 +345,8 @@ export function turnStats(
       }
       continue;
     }
+    // 穿插正文（BUG-6 起也在 members 里）不参与统计：它既不是思考也不是工具
+    if (member.kind === "text") continue;
     for (const call of member.kind === "toolGroup" ? member.calls : [member]) {
       calls++;
       const stat = tools.get(call.toolName) ?? { toolName: call.toolName, count: 0, failed: 0 };

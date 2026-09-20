@@ -161,6 +161,36 @@ describe("groupTurns", () => {
     assert.deepEqual(fold.members.map((member) => member.kind), ["thinking"]);
   });
 
+  test("两个成员之间的穿插正文收进折叠：折叠外只剩开场与结尾", () => {
+    // BUG-6 回归：旧实现把首成员后的所有正文推到折叠之后，穿插陈述与结尾回复
+    // 混作一堆（注释宣称「原位」，实现是挪位）。正确语义：穿插正文收进折叠，
+    // 展开时回到原相对位置；折叠外只剩首成员前的开场白与末成员后的结尾。
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "text", text: "开场白" }]),
+      assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "r1", toolName: "read", input: {} }]),
+      toolItem({ toolCallId: "r1", timestamp: 3500 }),
+      assistantItem("a3", 4000, [{ type: "text", text: "中间陈述" }]),
+      assistantItem("a4", 5000, [{ type: "toolCall", toolCallId: "r2", toolName: "bash", input: {} }]),
+      toolItem({ toolCallId: "r2", timestamp: 5500 }),
+      assistantItem("a5", 6000, [{ type: "text", text: "结尾回复" }]),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "text", "turnGroup", "text"],
+    );
+    const fold = foldUnits(view)[0];
+    assert.ok(fold !== undefined);
+    assert.deepEqual(
+      fold.members.map((member) => member.kind),
+      ["toolCall", "text", "toolCall"],
+    );
+    // 穿插正文不进统计：工具数只数真工具
+    const stats = turnStats(fold, indexToolResults(records));
+    assert.equal(stats.calls, 2);
+  });
+
   test("key 稳定：同一段重复分组 key 不变——展开状态靠它保住", () => {
     const records = [
       userItem("u1", 1000),
