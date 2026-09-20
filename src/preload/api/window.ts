@@ -9,6 +9,4 @@ export const windowApi = {
   minimize: (): Promise<void> => ipcRenderer.invoke(windowChannels.windowMinimize),
   toggleMaximize: (): Promise<void> => ipcRenderer.invoke(windowChannels.windowToggleMaximize),
   close: (): Promise<void> => ipcRenderer.invoke(windowChannels.windowClose),
-  /** 标题栏（拖拽区）被双击；主进程按系统偏好决定缩放 / 最小化 / 不动 */
-  titleDoubleClick: (): Promise<void> => ipcRenderer.invoke(windowChannels.windowTitleDoubleClick),
 };
