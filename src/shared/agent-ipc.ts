@@ -371,9 +371,12 @@ export interface ReadTaskCard {
   roundCount: number;
 }
 
-/** readTaskRequest 的回执载荷：主进程组装，agent 进程翻成工具结果。 */
+/**
+ * readTaskRequest 的回执载荷：主进程组装，agent 进程翻成工具结果。
+ * `task` 缺席 = 目录模式（列当前工作区的兄弟 task）：没有单一跳转目标，card 为 null。
+ */
 export type ReadTaskOutcome =
-  | { ok: true; card: ReadTaskCard; text: string }
+  | { ok: true; card: ReadTaskCard | null; text: string }
   | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
@@ -412,8 +415,12 @@ export type AgentEvent =
    * userData，skillWriteRequest 的同一条边界）：主进程解析引用 → 读
    * SessionStore → 组简报 → 回 readTaskResult。rounds 缺席 = 简报
    * （目录 + 最近轮全文）；有值 = 只取目录里那些轮号的全文。
+   * task 缺席 = **目录模式**：列当前会话所在工作区的兄弟 task（按更新时间倒序）。
+   * 范围是工作区而不是整仓——「之前两个会话」这类关系式指称只有拿着工作区
+   * 索引才能解析（2026-09-21 复验：模型没有索引就靠前缀探测摸标题，12 次调用
+   * 读错了组）。
    */
-  | { type: "readTaskRequest"; requestId: string; sessionId: string; task: string; rounds?: string }
+  | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
 /**
  * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
