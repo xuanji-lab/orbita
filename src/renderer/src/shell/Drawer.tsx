@@ -21,8 +21,8 @@ export type { DockedTab };
  * 标签条多开、单关 + 会话视图。
  *
  * 内容 = 辅助对话，即**一个普通 task 的并排视图**（Q2 裁决）：渲染的就是主会话
- * 同一个 ChatView，不存在第二套 UI。空态选择卡列出四类标签——审查/终端/浏览器
- * 在「明确不做」清单里，按仓库规矩「留着、禁用、标注 planned」，不藏也不假装。
+ * 同一个 ChatView，不存在第二套 UI。空态直接是 task 选择器（2026-09-21 方案 A）：
+ * rail 的「辅助对话」入口一点就到选择器，中间不再隔一层只有一个可点的卡。
  */
 export function Drawer(props: {
   engine: SessionEngine;
@@ -85,7 +85,8 @@ export function Drawer(props: {
 
   // 新任务标签在抽屉视图里就是首页（干净的新 task）；切走再切回来也还是干净的
   const hasTabs = props.docked.length > 0;
-  const showPicker = picking;
+  // 没有标签 = 空态，直接出选择器；picking 只服务于「已有标签时点 + 再开一个」
+  const showPicker = picking || activeTab === null;
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -133,10 +134,9 @@ export function Drawer(props: {
               excludeId={props.mainSessionId}
               onPick={(id) => dock(id)}
               onNew={() => dock(NEW_TASK_TAB)}
-              onBack={() => setPicking(false)}
+              // 空态时没有「回」的地方（身后无标签），返回键就不渲染
+              onBack={activeTab === null ? null : () => setPicking(false)}
             />
-          ) : activeTab === null ? (
-            <Chooser onAux={() => setPicking(true)} />
           ) : (
             // 辅助对话 = 主会话同一个 ChatView：标题头、消息列、输入卡全部同构（Q5/v9）。
             // 还没发过首条消息的新任务用极简首页——欢迎界面是主会话的仪式（wafo 2026-09-12）
@@ -155,57 +155,28 @@ function findMeta(engine: SessionEngine, id: string): SessionMeta | null {
   return engine.sessions.find((meta) => meta.id === id) ?? null;
 }
 
-/** 空态选择卡：辅助对话可用；审查/终端/浏览器按仓库规矩禁用 + 标 planned */
-function Chooser(props: { onAux: () => void }) {
-  return (
-    <div className="drawer-choose">
-      <div className="drawer-choose-card">
-        <div className="drawer-choose-title">打开标签页</div>
-        <div className="drawer-choose-sub">选择要在侧边面板中打开的标签。</div>
-        <div className="drawer-choose-grid">
-          <button className="drawer-typebtn" onClick={props.onAux}>
-            <Icon name="message-square" size={18} />
-            辅助对话
-          </button>
-          <button className="drawer-typebtn" disabled title="planned — 单独立项后再启用">
-            <span className="drawer-typebtn-plan">planned</span>
-            <Icon name="search-check" size={18} />
-            审查
-          </button>
-          <button className="drawer-typebtn" disabled title="planned — guideline「明确不做」">
-            <span className="drawer-typebtn-plan">planned</span>
-            <Icon name="terminal" size={18} />
-            终端
-          </button>
-          <button className="drawer-typebtn" disabled title="planned — guideline「明确不做」">
-            <span className="drawer-typebtn-plan">planned</span>
-            <Icon name="globe" size={18} />
-            浏览器
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /**
  * task 选择器（Q7=C）：把另一条 task 并排打开，或当场新建一条。
  * 中间正在看的那条不列——它已经在它该在的位置上。
+ * onBack 为 null = 身后没有标签可回（空态直达），返回键不渲染。
  */
 function Picker(props: {
   sessions: SessionMeta[];
   excludeId: string | null;
   onPick: (id: string) => void;
   onNew: () => void;
-  onBack: () => void;
+  onBack: (() => void) | null;
 }) {
   const candidates = props.sessions.filter((meta) => meta.id !== props.excludeId);
+  const onBack = props.onBack;
   return (
     <div className="drawer-picker">
       <div className="drawer-picker-head">
-        <button className="drawer-picker-back" title="返回" onClick={props.onBack}>
-          <Icon name="chevron-down" size={14} style={{ transform: "rotate(90deg)" }} />
-        </button>
+        {onBack !== null && (
+          <button className="drawer-picker-back" title="返回" onClick={onBack}>
+            <Icon name="chevron-down" size={14} style={{ transform: "rotate(90deg)" }} />
+          </button>
+        )}
         并排打开哪个 task？
       </div>
       <div className="drawer-picker-sub">
