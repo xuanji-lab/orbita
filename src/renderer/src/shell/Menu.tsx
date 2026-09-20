@@ -429,6 +429,9 @@ function MenuRow(props: {
               fontSize: "var(--font-size-micro)",
               letterSpacing: "0.06em",
               textTransform: "uppercase",
+              // 加粗：模型菜单里组头与模型行同色同高、只差字号和大小写，两家 provider 靠得近时
+              // 分不清哪行是头（2026-09-21 wafo）。仍用二级文字色，不抢模型行的主角位。
+              fontWeight: "var(--weight-bold)",
               color: "var(--color-text-secondary)",
             }
           : null),
