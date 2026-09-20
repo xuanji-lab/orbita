@@ -62,6 +62,16 @@ export interface LastUsedIntent {
   modelId?: string;
 }
 
+/**
+ * 给会话自动命名用的模型。标题是一次独立的小调用，用不着主力模型——
+ * 指一个小而快的，标题来得更快也更便宜。
+ * 两个 id 必须成对：光有 modelId 无法定位到哪家的密钥。
+ */
+export interface TitleModel {
+  providerId: string;
+  modelId: string;
+}
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -83,6 +93,12 @@ export interface AppSettings {
    * 改动下一轮对话即生效（主进程每轮现读，同 compaction）。
    */
   gitAttribution?: boolean;
+  /**
+   * 会话自动命名专用的模型。**缺席 = 用会话当前的模型**（原有行为）。
+   * 主进程在发标题命令前把它解成带密钥的 provider 载荷；指的 provider 被删了
+   * 不拦标题，退回会话模型。
+   */
+  titleModel?: TitleModel;
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
 }
@@ -96,9 +112,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * 写入补丁：顶层按键覆盖，`drawer` 内部再按键合并（见 SettingsStore.write）。
  * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
  */
-export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed">> & {
+export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed" | "titleModel">> & {
   drawer?: Partial<DrawerSettings>;
   lastUsed?: Partial<LastUsedIntent>;
+  /**
+   * `null` = 清除，退回「Same as session」。需要显式的 null 是因为 `undefined`
+   * 在补丁语义里是「这个键没改」；两者不分的话用户就选不回默认。
+   * store 的 `{...current, ...patch}` 经 parseSettings 自然丢掉 null。
+   */
+  titleModel?: TitleModel | null;
 };
 
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
@@ -135,11 +157,13 @@ export function parseSettings(raw: unknown): AppSettings {
     rightPanelWidth?: unknown;
     compaction?: unknown;
     gitAttribution?: unknown;
+    titleModel?: unknown;
     lastUsed?: unknown;
   };
   const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
   const width = record.rightPanelWidth;
   const compaction = parseCompaction(record.compaction);
+  const titleModel = parseTitleModel(record.titleModel);
   const lastUsed = parseLastUsed(record.lastUsed);
   return {
     theme,
@@ -156,8 +180,22 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.gitAttribution === "boolean"
       ? { gitAttribution: record.gitAttribution }
       : {}),
+    ...(titleModel === undefined ? {} : { titleModel }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
   };
+}
+
+/**
+ * 标题模型校验：**两个都是非空字符串才认**。存半截的没意义——光有 modelId
+ * 定位不到密钥，光有 providerId 不知道叫哪个模型，两种残形都只会让标题静默失败。
+ * 缺席或坏值 = 没指定（返回 undefined，消费侧退会话模型）。
+ */
+function parseTitleModel(raw: unknown): TitleModel | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as { providerId?: unknown; modelId?: unknown };
+  if (typeof record.providerId !== "string" || record.providerId === "") return undefined;
+  if (typeof record.modelId !== "string" || record.modelId === "") return undefined;
+  return { providerId: record.providerId, modelId: record.modelId };
 }
 
 /**

@@ -261,7 +261,18 @@ export type AgentCommand =
    * 生成是一次独立的小 LLM 调用，成功经 `title` 事件回传；失败/模型拒答不发事件，
    * 门禁（meta 的 titleSource 仍是 derived）不变，下一条用户消息自然重试。
    */
-  | { type: "generateTitle"; sessionId: string; text: string }
+  | {
+      type: "generateTitle";
+      sessionId: string;
+      text: string;
+      /**
+       * 命名专用模型（设置里的 titleModel）。**主进程解好密钥面再发**：
+       * runtime 不读设置也不读密钥库，只收数据（同开轮命令的 provider）。
+       * 缺席 = 用会话当前的模型（原有行为）；指的 provider 已删或解析失败时
+       * 主进程同样不带，标题不因此停掉。
+       */
+      model?: { provider: ProviderSecrets; modelId: string };
+    }
   | { type: "abort"; sessionId: string }
   | {
       /** 立即发送排队中的某一条：abort 当前轮（含正在跑的工具调用）→ 这条作为新一轮 submit */

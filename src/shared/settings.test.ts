@@ -156,6 +156,35 @@ describe("parseSettings 的 gitAttribution", () => {
   });
 });
 
+describe("parseSettings 的 titleModel", () => {
+  it("缺席 = 用会话当前的模型，不落这个键", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).titleModel, undefined);
+  });
+
+  it("两个 id 都在就原样收下", () => {
+    deepStrictEqual(
+      parseSettings({ titleModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } })
+        .titleModel,
+      { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
+    );
+  });
+
+  it("存半截的丢掉——光有 modelId 定位不到密钥，光有 providerId 不知道叫哪个模型", () => {
+    deepStrictEqual(parseSettings({ titleModel: { modelId: "glm-5.3-flash" } }).titleModel, undefined);
+    deepStrictEqual(parseSettings({ titleModel: { providerId: "zhipu-coding" } }).titleModel, undefined);
+    deepStrictEqual(
+      parseSettings({ titleModel: { providerId: "", modelId: "m" } }).titleModel,
+      undefined,
+    );
+  });
+
+  it("坏值与非对象一律当没指定", () => {
+    deepStrictEqual(parseSettings({ titleModel: { providerId: 1, modelId: 2 } }).titleModel, undefined);
+    deepStrictEqual(parseSettings({ titleModel: "fast" }).titleModel, undefined);
+    deepStrictEqual(parseSettings({ titleModel: null }).titleModel, undefined);
+  });
+});
+
 describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选择）", () => {
   it("完整 lastUsed 保留", () => {
     deepStrictEqual(

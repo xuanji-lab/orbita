@@ -68,6 +68,18 @@ describe("SettingsStore", () => {
     );
   });
 
+  test("titleModel 传 null = 清除，退回「Same as session」", async () => {
+    await store.write({ titleModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } });
+    assert.deepEqual((await store.read()).titleModel, {
+      providerId: "zhipu-coding",
+      modelId: "glm-5.3-flash",
+    });
+    // undefined 在补丁语义里是「这个键没改」，所以清除必须是显式的 null
+    await store.write({ titleModel: null });
+    assert.deepEqual((await store.read()).titleModel, undefined);
+    assert.deepEqual((await new SettingsStore(dir).read()).titleModel, undefined);
+  });
+
   test("lastUsed 的部分更新按键合并——切档不抹已记的模型", async () => {
     await store.write({ lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } });
     await store.write({ lastUsed: { mode: "skip" } });
