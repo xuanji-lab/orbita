@@ -116,6 +116,25 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [rightPanel]);
 
+  /**
+   * 标题栏双击缩放，自己发而不靠系统（理由见 shared/window.ts）。全局委托而不是逐个
+   * `.titlebar` 挂处理器：顶部行有五处（侧栏字标 / 页头 / 首页空条 / 右图标条 / 面板页头），
+   * 靠人记得每处都加是算不清的账（同 styles.css 里 no-drag 按元素类型兑的理由）。
+   * 拖拽区里的交互件（按钮 / 输入框，它们本就是 no-drag）上的双击不算——双击铅笔改名不该把窗口弹大。
+   */
+  useEffect(() => {
+    const onDoubleClick = (event: MouseEvent): void => {
+      if (event.button !== 0) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(".titlebar") === null) return;
+      if (target.closest("button, input, select, textarea, a, [role=button], .no-drag") !== null) return;
+      void api.window.titleDoubleClick();
+    };
+    window.addEventListener("dblclick", onDoubleClick);
+    return () => window.removeEventListener("dblclick", onDoubleClick);
+  }, []);
+
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
