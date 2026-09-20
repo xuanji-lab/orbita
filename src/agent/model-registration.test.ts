@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
+import type { ModelDecl } from "../shared/provider.ts";
 import {
   hasModelOverrides,
   registerAndResolveModel,
@@ -188,12 +189,18 @@ describe("toFallbackRegistration —— 补注册必须带完整 auth 面", () =
     assert.ok(registration.models !== undefined);
   });
 
-  test("models 里是声明 id 的兜底条目", () => {
+  test("models 里是声明 id 的条目：目录没收录也还有白名单这一层", () => {
     const registration = toFallbackRegistration(gateway, []);
     assert.deepEqual(
       registration.models?.map((model) => model.id),
       ["step-3.7-flash"],
     );
+    // pi 目录未收 stepfun，但我们的白名单有官方的 256k——按 id 查之后自建网关也吃得到
+    assert.equal(registration.models?.[0]?.contextWindow, 256_000);
+  });
+
+  test("白名单与目录都没有的 id：还是兜底条目", () => {
+    const registration = toFallbackRegistration({ ...gateway, models: [{ id: "house-model" }] }, []);
     assert.equal(registration.models?.[0]?.contextWindow, FALLBACK_MODEL.contextWindow);
   });
 });
@@ -336,5 +343,132 @@ describe("catalogId —— 我们的 id 与 pi 目录的 id 不是一回事", ()
       "m",
     );
     assert.equal(model, undefined);
+  });
+});
+
+// ── 自建网关按模型 id 跨目录借参数（wafo 2026-09-21 实测：7 个模型全显示 128k）──
+
+describe("跨目录借参数 —— 自建网关没有 catalogId，但它跑的是有官方口径的型号", () => {
+  /** 目录切片：claude-opus-5 在 anthropic 名下，glm-5.3 在 zai 名下（数值取自 pi-ai 实际条目） */
+  function catalogRuntime(api: string, declared: ModelDecl[]) {
+    const anthropic = {
+      id: "anthropic",
+      name: "Anthropic",
+      baseUrl: "https://api.anthropic.com",
+      getModels: () => [
+        {
+          id: "claude-opus-5",
+          name: "Claude Opus 5",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+          input: ["text", "image"],
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+      ] as unknown as PiModel[],
+    };
+    const zai = {
+      id: "zai",
+      name: "Z.AI",
+      baseUrl: "https://api.z.ai/api/coding/paas/v4",
+      getModels: () => [
+        {
+          id: "glm-5.3",
+          name: "GLM-5.3",
+          api: "openai-completions",
+          baseUrl: "https://api.z.ai/api/coding/paas/v4",
+          contextWindow: 1_000_000,
+          maxTokens: 131_072,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ] as unknown as PiModel[],
+    };
+    let registered: PiModel[] | undefined;
+    const runtime = {
+      registerProvider: (_id: string, registration: PiProviderRegistration) => {
+        if (registration.models !== undefined) registered = registration.models as PiModel[];
+      },
+      // 我们自己的 id（自建网关）在目录里当然查不到——只有补注册之后才解析得出来
+      getModel: (_id: string, modelId: string) => registered?.find((m) => m.id === modelId),
+      getProviders: () => [anthropic, zai],
+    } as unknown as Parameters<typeof registerAndResolveModel>[0];
+    return {
+      resolve: (modelId: string) =>
+        registerAndResolveModel(
+          runtime,
+          { id: "my-gw", apiKey: "k", baseUrl: "https://gw.example", api, models: declared },
+          modelId,
+        ),
+    };
+  }
+
+  const declared: ModelDecl[] = [{ id: "claude-opus-5" }, { id: "glm-5.3" }, { id: "house-model" }];
+
+  test("anthropic 兼容网关声明 claude-opus-5：拿到 anthropic 目录的 1M 与图片能力", () => {
+    const model = catalogRuntime("anthropic-messages", declared).resolve("claude-opus-5");
+    assert.equal(model?.contextWindow, 1_000_000);
+    assert.equal(model?.maxTokens, 128_000);
+    assert.deepEqual(model?.input, ["text", "image"]);
+  });
+
+  test("同一个网关的 glm-5.3：1M 但纯文本——图片能力照目录说的来，不一刀切", () => {
+    const model = catalogRuntime("anthropic-messages", declared).resolve("glm-5.3");
+    assert.equal(model?.contextWindow, 1_000_000);
+    assert.deepEqual(model?.input, ["text"]);
+  });
+
+  test("目录里真没有的自家模型仍落兜底，但默认能吃图（剥图是静默的，400 不是）", () => {
+    const model = catalogRuntime("anthropic-messages", declared).resolve("house-model");
+    assert.equal(model?.contextWindow, FALLBACK_MODEL.contextWindow);
+    assert.deepEqual(model?.input, ["text", "image"]);
+  });
+});
+
+describe("toFallbackModels —— 借来的基线仍在用户覆盖之下", () => {
+  const catalog = [
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      baseUrl: "https://api.anthropic.com",
+      api: "anthropic-messages",
+      models: [
+        {
+          id: "claude-opus-5",
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+          input: ["text", "image"] as ("text" | "image")[],
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+      ],
+    },
+  ];
+
+  test("本家目录没有这个 id：按 id 跨目录借窗口 / 输出 / 单价 / 图片", () => {
+    const result = toFallbackModels([], [{ id: "claude-opus-5" }], catalog, {
+      api: "anthropic-messages",
+    });
+    assert.equal(result[0]?.contextWindow, 1_000_000);
+    assert.equal(result[0]?.maxTokens, 128_000);
+    assert.equal(result[0]?.cost.input, 5);
+    assert.deepEqual(result[0]?.input, ["text", "image"]);
+  });
+
+  test("用户填了就以用户的为准——借参只是基线，不是结论", () => {
+    const result = toFallbackModels(
+      [],
+      [{ id: "claude-opus-5", contextWindow: 200_000, vision: false }],
+      catalog,
+      { api: "anthropic-messages" },
+    );
+    assert.equal(result[0]?.contextWindow, 200_000);
+    assert.deepEqual(result[0]?.input, ["text"]);
+    assert.equal(result[0]?.maxTokens, 128_000); // 没填的字段仍吃借来的值
+  });
+
+  test("不传目录（老调用点）行为不变：直接落兜底", () => {
+    const result = toFallbackModels([], [{ id: "claude-opus-5" }]);
+    assert.equal(result[0]?.contextWindow, FALLBACK_MODEL.contextWindow);
   });
 });

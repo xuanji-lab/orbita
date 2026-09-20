@@ -26,7 +26,7 @@ import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
-  toBuiltinModel,
+  toBuiltinProvider,
   type PiModel,
 } from "./model-registration.ts";
 import {
@@ -835,19 +835,9 @@ async function branchPiSession(command: Extract<AgentCommand, { type: "branch" }
  */
 async function listBuiltins(): Promise<void> {
   const runtime = await ModelRuntime.create({});
-  const providers = runtime.getProviders().map((provider) => {
-    // 注意：models 是方法 getModels() 不是属性；api / baseUrl 也长在 Model 上而非 Provider 上。
-    const models = provider.getModels();
-    const first = models[0];
-    return {
-      id: provider.id,
-      name: provider.name,
-      baseUrl: provider.baseUrl ?? first?.baseUrl ?? "",
-      api: String(first?.api ?? "openai-completions"),
-      models: models.map(toBuiltinModel),
-    };
-  });
-  send({ type: "builtins", providers });
+  // 映射跟注册时的跨目录推断共用一份（toBuiltinProvider）：设置页看到的目录快照
+  // 必须与 agent 借参数时用的是同一份，否则两边会对同一个模型说出两个窗口。
+  send({ type: "builtins", providers: runtime.getProviders().map(toBuiltinProvider) });
 }
 
 async function handle(command: AgentCommand): Promise<void> {
