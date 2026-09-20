@@ -7,7 +7,7 @@
  */
 import { ipcMain, nativeTheme } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { AppSettings } from "../../shared/settings.ts";
+import type { AppSettings, SettingsPatch } from "../../shared/settings.ts";
 import { resolveNativeThemeSource } from "./native-theme.ts";
 import type { SettingsStore } from "./store.ts";
 
@@ -20,7 +20,7 @@ export function registerSettingsIpc(store: SettingsStore): void {
 
   ipcMain.handle(
     ipcChannels.settingsSet,
-    async (_event, patch: Partial<AppSettings>): Promise<AppSettings> => {
+    async (_event, patch: SettingsPatch): Promise<AppSettings> => {
       const next = await store.write(patch);
       applyNativeTheme(next);
       return next;

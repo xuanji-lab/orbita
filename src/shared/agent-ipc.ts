@@ -14,6 +14,7 @@ import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
+import type { CompactionSetting } from "./settings.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -112,6 +113,11 @@ export interface BuiltinModel {
   id: string;
   contextWindow: number;
   maxTokens: number;
+  /**
+   * 目录声明的输入模态。**要过 IPC 到 renderer**：模型行的图片徽标与弹窗的
+   * 「Inherit」档位都得知道这个 id 到底能不能吃图，否则用户只能靠手动开关猜。
+   */
+  input: ("text" | "image")[];
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
@@ -218,6 +224,12 @@ export type AgentCommand =
        */
       piSessionDir: string;
       /**
+       * 工具永不许写的目录（会话账本 sessions/ 与 pi 的本子 pi-sessions/）。
+       * **主进程定，agent 进程只收数据**（同 piSessionDir 的纪律）：tool_call 闸门
+       * 在权限档判定**之前**拦——「会话记录不可变」是全档不变量，Skip 也抬不掉。
+       */
+      protectedPaths: string[];
+      /**
        * skill 的链接集合目录（2-1 起是数组：global 恒在，当前工作区再加一条）。
        * **路径由主进程给**（同 `piSessionDir`）：哪个集合对该会话生效是主进程的策略，
        * agent 进程只收数据。目录里是指向中心存储的 symlink，pi 的加载器跟符号链接。
@@ -236,13 +248,36 @@ export type AgentCommand =
       mcpServers: Record<string, McpServer>;
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
+      /**
+       * 自动压缩偏好（A-1）。**主进程从设置装配**，renderer 的开轮载荷不携带；
+       * runtime 开轮时按本轮模型的窗口换算成 pi 的 reserveTokens / keepRecentTokens
+       * 覆盖进去。缺席（理论上不发生，主进程兜 COMPACTION_DEFAULT）= pi 出厂默认。
+       */
+      compaction?: CompactionSetting;
+      /**
+       * commit / PR 的 Orbita 标识开关。**主进程从设置装配**（同 compaction）：
+       * runtime 不读设置文件，只收数据，每轮拼进 system prompt。
+       * 缺席 = 开启（与设置契约同一口径）。
+       */
+      gitAttribution?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
    * 生成是一次独立的小 LLM 调用，成功经 `title` 事件回传；失败/模型拒答不发事件，
    * 门禁（meta 的 titleSource 仍是 derived）不变，下一条用户消息自然重试。
    */
-  | { type: "generateTitle"; sessionId: string; text: string }
+  | {
+      type: "generateTitle";
+      sessionId: string;
+      text: string;
+      /**
+       * 命名专用模型（设置里的 titleModel）。**主进程解好密钥面再发**：
+       * runtime 不读设置也不读密钥库，只收数据（同开轮命令的 provider）。
+       * 缺席 = 用会话当前的模型（原有行为）；指的 provider 已删或解析失败时
+       * 主进程同样不带，标题不因此停掉。
+       */
+      model?: { provider: ProviderSecrets; modelId: string };
+    }
   | { type: "abort"; sessionId: string }
   | {
       /** 立即发送排队中的某一条：abort 当前轮（含正在跑的工具调用）→ 这条作为新一轮 submit */
@@ -255,10 +290,16 @@ export type AgentCommand =
       modelId: string;
       mode: PermissionMode;
       piSessionDir: string;
+      /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
+      protectedPaths: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
+      /** 自动压缩偏好（A-1），语义同 submit */
+      compaction?: CompactionSetting;
+      /** commit / PR 的 Orbita 标识开关，语义同 submit */
+      gitAttribution?: boolean;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
@@ -274,10 +315,16 @@ export type AgentCommand =
       modelId: string;
       mode: PermissionMode;
       piSessionDir: string;
+      /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
+      protectedPaths: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
+      /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */
+      compaction?: CompactionSetting;
+      /** 压缩轮自己不提交，但开轮装配是同一份（turnFields），语义同 submit */
+      gitAttribution?: boolean;
     }
   | { type: "listBuiltins" }
   /**
@@ -304,6 +351,8 @@ export type AgentCommand =
       status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string };
       error?: string;
     }
+  /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
+  | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
@@ -328,6 +377,33 @@ export type AgentCommand =
   /** 用户对一次工具审批的回答，按 requestId 对回去 */
   | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   | { type: "dispose"; sessionId: string };
+
+/**
+ * B-1：read_task 读到的「这是一条什么 task」。**只给 UI、不入模型上下文**——
+ * 走 pi ToolResult 的 `details` 通路（adapter 对它明写「不入模型上下文，只给
+ * UI 与日志」，edit 的 diff 是同款先例）：模型拿 text 全文，renderer 拿它
+ * 渲染任务卡与点击跳转（openSession）。
+ */
+export interface ReadTaskCard {
+  /** 被读 task 的 session id。renderer 跳转就跳它 */
+  sessionId: string;
+  /** 被读 task 的标题；空标题（一条消息都没发过）由调用方填占位 */
+  title: string;
+  /** briefing = 头部 + 目录 + 最近轮全文；rounds = 指定轮全文 */
+  mode: "briefing" | "rounds";
+  /** rounds 模式下模型给的轮号串（原样回显，卡片副标用） */
+  rounds?: string;
+  /** 目标 task 的 user 轮总数 */
+  roundCount: number;
+}
+
+/**
+ * readTaskRequest 的回执载荷：主进程组装，agent 进程翻成工具结果。
+ * `task` 缺席 = 目录模式（列当前工作区的兄弟 task）：没有单一跳转目标，card 为 null。
+ */
+export type ReadTaskOutcome =
+  | { ok: true; card: ReadTaskCard | null; text: string }
+  | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
 export type AgentEvent =
@@ -361,10 +437,21 @@ export type AgentEvent =
       server: McpServer;
     }
   /**
-   * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
-   * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
+   * B-1：agent 工具 read_task 的读盘请求。**读在主进程**（agent 进程不碰
+   * userData，skillWriteRequest 的同一条边界）：主进程解析引用 → 读
+   * SessionStore → 组简报 → 回 readTaskResult。rounds 缺席 = 简报
+   * （目录 + 最近轮全文）；有值 = 只取目录里那些轮号的全文。
+   * task 缺席 = **目录模式**：列当前会话所在工作区的兄弟 task（按更新时间倒序）。
+   * 范围是工作区而不是整仓——「之前两个会话」这类关系式指称只有拿着工作区
+   * 索引才能解析（2026-09-21 复验：模型没有索引就靠前缀探测摸标题，12 次调用
+   * 读错了组）。
    */
-  | { type: "skillsChanged" }
+  | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
+/**
+ * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
+ * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
+ */
+| { type: "skillsChanged" }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }

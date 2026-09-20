@@ -1,44 +1,28 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Icon } from "../shell/Icon";
 import { RIGHT_PANEL_WIDTH_MAX, RIGHT_PANEL_WIDTH_MIN } from "@shared/settings";
 
 /**
- * 右侧分屏面板的框架（规格 §3）：页头（标题区 + x）、内容区（120ms 淡入，
- * contentKey 换帧）、footer 动作区（发丝顶线分隔）。Skills / MCP 两个面板
- * 共用这一副骨架，各自把 header / 内容 / footer 塞进来。
+ * 右侧面板壳（2026-09-13 裁决）：Skills / MCP / 辅助对话三个菜单共用这**一个**
+ * 常驻挂载的分栏——宽度以 class 切换驱动过渡（与抽屉同一套机制），展开、收起
+ * 只有一条动画路径；面板间切换是同一个壳换内容，不存在「折叠再展开」。
  *
- * 两种容器形态（规格 §1.3）：分屏 320px；窄窗（<960px）转右侧锚定覆盖层，
- * 阴影升 --shadow-popover，无遮罩不是 modal。进入 220ms
- * --duration-enter --ease-out-quint 滑入。关闭三出口：再点图标 / x / Esc。
+ * 宽度变量 `--right-panel-w` 由调用方注入（面板位唯一的宽度记忆，Q3：共用）。
+ * 拖宽热区骑在左缘竖线上，拖动中禁过渡（同 .drawer.dragging 的纪律）实时跟手；
+ * 双击热区回 320。窄窗（<960px）转右侧锚定覆盖层，进入滑入 + 淡入（right-panel-in）。
  */
-export function RightPanelFrame(props: {
-  narrow: boolean;
-  /** 页头标题区（x 与拖拽区由框架出）；list/detail 换头就换这个 */
-  header: React.ReactNode;
-  /** 内容切换的 key（换帧触发 120ms fade） */
-  contentKey: string;
-  /** 页头右侧、x 左边的槽（添加按钮等） */
-  headerExtra?: React.ReactNode;
-  footer?: React.ReactNode;
-  /** 面板宽度（4-0 拖宽）。分屏态生效；窄窗覆盖层固定 320 不可拖 */
+export function RightPanelSlot(props: {
+  open: boolean;
   width: number;
-  /** 拖动中每帧回调（只改本地状态，不落盘） */
+  narrow: boolean;
   onWidthChange: (width: number) => void;
-  /** 松手 / 双击复位时回调（落盘） */
   onWidthCommit: (width: number) => void;
-  onClose: () => void;
   children: React.ReactNode;
 }) {
-  const { narrow } = props;
+  const { narrow, open } = props;
   const asideRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") props.onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [props]);
+  /** 拖宽中禁掉 width 过渡——实时跟手（同 .drawer.dragging 的纪律） */
+  const [resizing, setResizing] = useState(false);
 
   /**
    * 拖宽（4-0）：左移变宽。夹取两道：硬区间 280–560，以及 chat ≥ 480 的底线
@@ -51,9 +35,11 @@ export function RightPanelFrame(props: {
     const panel = asideRef.current;
     if (panel === null) return;
     event.preventDefault();
+    setResizing(true);
     const startX = event.clientX;
     const startWidth = panel.getBoundingClientRect().width;
-    const pane = panel.parentElement?.querySelector("main.pane");
+    // 壳是 pane 的子元素（分栏形态），closest 拿它算 chat ≥480 的底线
+    const pane = panel.closest("main.pane");
     const paneWidth = pane?.getBoundingClientRect().width ?? startWidth + 480;
     const maxByChat = startWidth + Math.max(0, paneWidth - 480);
     const max = Math.min(RIGHT_PANEL_WIDTH_MAX, maxByChat);
@@ -71,6 +57,7 @@ export function RightPanelFrame(props: {
       window.removeEventListener("pointermove", move);
       document.body.style.userSelect = previousSelect;
       document.body.style.cursor = previousCursor;
+      setResizing(false);
       props.onWidthCommit(clamp(startWidth - (ev.clientX - startX)));
     };
     window.addEventListener("pointermove", move);
@@ -80,26 +67,30 @@ export function RightPanelFrame(props: {
   return (
     <aside
       ref={asideRef}
-      className="pane"
-      style={{
-        position: narrow ? "absolute" : "relative",
-        flex: narrow ? undefined : `0 0 ${props.width}px`,
-        width: narrow ? 320 : undefined,
-        display: "grid",
-        gridTemplateRows: "auto minmax(0,1fr) auto",
-        animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
-        ...(narrow
-          ? {
-              top: "var(--space-3)",
-              bottom: "var(--space-3)",
-              right: "calc(var(--space-3) + 32px + var(--space-3))",
-              boxShadow: "var(--shadow-popover)",
-              zIndex: 20,
-            }
-          : {}),
-      }}
+      className={`right-panel-slot${open ? " open" : ""}${resizing ? " dragging" : ""}`}
+      style={
+        {
+          "--right-panel-w": `${narrow ? 320 : props.width}px`,
+          // 窄窗覆盖层的定位基准是 .layer（pane 无 position）——右侧让过 rail 一条；
+          // 那时壳需要自己的面：玻璃底、圆角，阴影升 popover
+          ...(narrow && open
+            ? {
+                position: "absolute",
+                top: "var(--space-3)",
+                bottom: "var(--space-3)",
+                right: "calc(var(--space-3) + 32px + var(--space-3))",
+                background: "var(--glass-bg)",
+                border: 0,
+                borderRadius: "var(--radius-xl)",
+                boxShadow: "var(--shadow-popover)",
+                zIndex: 20,
+                animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
+              }
+            : {}),
+        } as React.CSSProperties
+      }
     >
-      {/* 拖宽热区：左缘 6px（骑缝 3px），只在分屏态存在；双击回 320 */}
+      {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320 */}
       {!narrow && (
         <span
           onPointerDown={startResize}
@@ -107,7 +98,7 @@ export function RightPanelFrame(props: {
           title="Drag to resize · double-click to reset"
           style={{
             position: "absolute",
-            left: -3,
+            left: 0,
             top: 0,
             bottom: 0,
             width: 6,
@@ -116,6 +107,35 @@ export function RightPanelFrame(props: {
           }}
         />
       )}
+      <div className="right-panel-slot-inner">{props.children}</div>
+    </aside>
+  );
+}
+
+/**
+ * 面板内容的版式骨架：页头（标题区 + x）、内容区（120ms 淡入，contentKey 换帧）、
+ * footer 动作区（发丝顶线分隔）。Skills / MCP 两个面板共用这一副骨架。
+ * 宽度、竖线与开合动画都在 RightPanelSlot（壳）上，这里只管内容怎么排。
+ */
+export function RightPanelFrame(props: {
+  /** 页头标题区；x 按钮由框架按 onClose 出 */
+  header: React.ReactNode;
+  /** 内容切换的 key（换帧触发 120ms fade） */
+  contentKey: string;
+  /** 页头右侧、x 左边的槽（添加按钮等） */
+  headerExtra?: React.ReactNode;
+  footer?: React.ReactNode;
+  onClose?: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        height: "100%",
+        display: "grid",
+        gridTemplateRows: "auto minmax(0,1fr) auto",
+      }}
+    >
       <header
         className="titlebar"
         style={{
@@ -132,9 +152,11 @@ export function RightPanelFrame(props: {
         {props.header}
         <span style={{ flex: 1 }} />
         {props.headerExtra}
-        <PanelIconButton title="Close" onClick={props.onClose}>
-          <Icon name="x" size={16} />
-        </PanelIconButton>
+        {props.onClose && (
+          <PanelIconButton title="Close" onClick={props.onClose}>
+            <Icon name="x" size={16} />
+          </PanelIconButton>
+        )}
       </header>
 
       <div
@@ -158,7 +180,7 @@ export function RightPanelFrame(props: {
           {props.footer}
         </footer>
       )}
-    </aside>
+    </div>
   );
 }
 

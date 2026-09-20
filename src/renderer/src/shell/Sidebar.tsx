@@ -171,7 +171,7 @@ export function Sidebar(props: {
       }}
     >
       {/*
-        顶栏兼作标题栏：`titleBarStyle: "hidden"` 之后这是窗口唯一的可拖区域，
+        顶栏兼作标题栏：`titleBarStyle: "hiddenInset"` 之后这是窗口唯一的可拖区域，
         macOS 上还要给红黄绿三个键让净空——见 styles.css 的 `.titlebar`。
         没有 logo：品牌就是衬线体里的小写 orbita（设计系统 *No logo*）。
       */}
@@ -439,7 +439,9 @@ function WorkspaceGroup(props: {
 
   return (
     <div
-      style={{ padding: "var(--space-2) 0" }}
+      // 组本身不再垫 padding：之前上下各 8px 加 28 的行高 = 44，三个空组排在一起
+      // 比下方 32px 的任务行松一截，像三块各自为政的卡（2026-09-21 wafo）。
+      // 组头行高改成与 NavRow 同一个 token，两种行在同一张列表里等高。
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => {
         setHover(false);
@@ -452,7 +454,7 @@ function WorkspaceGroup(props: {
           gridTemplateColumns: "20px 24px minmax(0,1fr) auto 26px",
           alignItems: "center",
           gap: "var(--space-1)",
-          minHeight: 28,
+          minHeight: "var(--control-height-md)",
         }}
       >
         {/* 空组没有可折的东西，开关就不摆——一个点了什么都不发生的开关比没有更吵 */}
@@ -587,6 +589,7 @@ function NodeLabel(props: { children: React.ReactNode }) {
         fontSize: "var(--font-size-micro)",
         letterSpacing: "0.06em",
         textTransform: "uppercase",
+        fontWeight: "var(--weight-bold)",
         color: "var(--color-text-secondary)",
       }}
     >
@@ -989,12 +992,6 @@ function ListError(props: { message: string; onRetry: () => void }) {
       </button>
     </p>
   );
-}
-
-/** 只显示文件夹名，完整路径进 title——路径是机器事实，不该占掉一整行 */
-function basename(path: string): string {
-  const parts = path.split("/").filter((part) => part !== "");
-  return parts[parts.length - 1] ?? path;
 }
 
 /**

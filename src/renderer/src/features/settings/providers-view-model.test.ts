@@ -1,7 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import type { ModelDefaults } from "../../../../shared/model-defaults.ts";
 import {
   mergeModelCost,
+  modelAcceptsImage,
   modelIdIssue,
   modelContextText,
   nextCopyId,
@@ -43,6 +45,7 @@ describe("mergeModelCost", () => {
     id: "m",
     contextWindow: 204_800,
     maxTokens: 8192,
+    input: ["text"] as ("text" | "image")[],
     cost: { input: 0.5, output: 1.5, cacheRead: 0.1, cacheWrite: 0.2 },
   };
 
@@ -81,18 +84,53 @@ describe("nextCopyId", () => {
   });
 });
 
-describe("modelContextText —— 生效值 = 用户覆盖 > 目录 > 白名单 > 兜底", () => {
-  test("四级依次兜底", () => {
-    assert.equal(modelContextText({ id: "m", contextWindow: 1_000_000 }, undefined).text, "1M");
+describe("modelContextText —— 生效值 = 用户覆盖 > 推断出的基线", () => {
+  /** 推断基线的替身：真实排序由 shared/model-defaults 自己的测试盯 */
+  const defaults = (contextWindow: number, source: ModelDefaults["source"]): ModelDefaults => ({
+    contextWindow,
+    maxTokens: 8192,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    source,
+  });
+
+  test("用户填了就用用户的，没填用基线", () => {
     assert.equal(
-      modelContextText(
-        undefined,
-        { id: "m", contextWindow: 204_800, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
-      ).text,
-      "205k",
+      modelContextText({ id: "m", contextWindow: 1_000_000 }, defaults(204_800, "catalog")).text,
+      "1M",
     );
-    assert.equal(modelContextText(undefined, undefined, { contextWindow: 256_000 }).text, "256k");
-    assert.deepEqual(modelContextText(undefined, undefined), { text: "128k", fallback: true });
+    assert.equal(modelContextText(undefined, defaults(204_800, "catalog")).text, "205k");
+    assert.equal(modelContextText(undefined, defaults(256_000, "known")).text, "256k");
+  });
+
+  test("fallback 只在真的没人说话时为真——用户填过就不该再报兜底", () => {
+    assert.deepEqual(modelContextText(undefined, defaults(128_000, "fallback")), {
+      text: "128k",
+      fallback: true,
+    });
+    assert.equal(
+      modelContextText({ id: "m", contextWindow: 300_000 }, defaults(128_000, "fallback")).fallback,
+      false,
+    );
+    assert.equal(modelContextText(undefined, defaults(1_000_000, "catalog-family")).fallback, false);
+  });
+});
+
+describe("modelAcceptsImage —— 图片徽标与弹窗 Inherit 共用一个答案", () => {
+  const withInput = (input: ("text" | "image")[]): ModelDefaults => ({
+    contextWindow: 128_000,
+    maxTokens: 8192,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    source: "catalog",
+  });
+
+  test("用户开关优先；没填时看推断出的模态", () => {
+    assert.equal(modelAcceptsImage({ id: "m" }, withInput(["text", "image"])), true);
+    assert.equal(modelAcceptsImage({ id: "m" }, withInput(["text"])), false);
+    // 用户明确关掉：目录说能看图也不显示（他的网关可能真不支持）
+    assert.equal(modelAcceptsImage({ id: "m", vision: false }, withInput(["text", "image"])), false);
+    assert.equal(modelAcceptsImage({ id: "m", vision: true }, withInput(["text"])), true);
   });
 });
 

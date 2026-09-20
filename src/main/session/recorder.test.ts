@@ -112,6 +112,34 @@ describe("createSessionRecorder", () => {
     assert.equal(item !== undefined && "status" in item ? item.status : undefined, "aborted");
   });
 
+  // 空 error 回答：auto_retry 的失败尝试（以及非流式阶段被 interrupt 打断）经
+  // message_end 发一条 status=error、content 为空的终态帧。pi 自己的本子会收它，
+  // 我们刻意不收（空条目没有上下文价值）；由此产生的两本账差异，由分支对账侧
+  // 对 pi 条目施加同一谓词抵消（store.ts isEmptyErrorAssistant / branch-cut.ts 同名 entry 版）。
+  const retryTail = {
+    id: "a2",
+    role: "assistant" as const,
+    content: [],
+    model: { provider: "zai", id: "glm-5.3" },
+    timestamp: 3000,
+    status: "error" as const,
+    stopReason: "error" as const,
+  };
+
+  test("空 error 回答不落盘——status=error 且内容为空", async () => {
+    record(progress({ type: "item_finished", item: retryTail }));
+    await settle();
+    assert.deepEqual((await store.load(ID))?.transcript, []);
+  });
+
+  test("带内容的 error assistant 照样落盘——真失败要有尸体可查", async () => {
+    const halfSaid = { ...retryTail, id: "a3", content: [{ type: "text" as const, text: "说到一半断了" }] };
+    record(progress({ type: "item_finished", item: halfSaid }));
+    await settle();
+    const item = (await store.load(ID))?.transcript[0];
+    assert.equal(item !== undefined && "status" in item ? item.status : undefined, "error");
+  });
+
   test("非 progress 事件一概不管", async () => {
     record({ type: "ready" });
     record({ type: "phase", sessionId: ID, phase: "idle" });

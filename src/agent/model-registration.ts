@@ -9,26 +9,16 @@
  * 已认识的目录条目原样带回，用户声明的字段逐个盖上（用户 > 目录 > 兜底）。
  */
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { BuiltinModel } from "../shared/agent-ipc.ts";
+import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
+import { resolveModelDefaults, type CatalogPreference } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 
 /** pi 注册表里的模型对象——从 ModelRuntime 的方法签名推出来，不另维护一份类型 */
 export type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
+/** pi 注册表里的 provider 对象（同上，签名推导） */
+export type PiProvider = ReturnType<ModelRuntime["getProviders"]>[number];
 /** registerProvider 第二参的完整形状（同上，签名推导） */
 export type PiProviderRegistration = Parameters<ModelRuntime["registerProvider"]>[1];
-
-/**
- * 目录不认识的模型 id 的保守默认（Q2）：自建网关声明的 id、目录还没收录的新模型。
- * **只有目录 miss 后的补注册会用它**——目录认识的 id 走官方参数（窗口 / 单价），
- * 那才是「配置好的模型」的真实元数据。填错影响压缩时机与用量统计，不影响能不能跑。
- */
-export const FALLBACK_MODEL = {
-  reasoning: false,
-  input: ["text"] as ("text" | "image")[],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-};
 
 /** 注册的 auth 面：**不带 models**——带了会把目录的官方窗口 / 单价盖成兜底值 */
 export function toAuthConfig(provider: {
@@ -55,10 +45,33 @@ export function toAuthConfig(provider: {
 export function toFallbackModels(
   current: readonly PiModel[],
   declared: readonly ModelDecl[],
+  /**
+   * 全目录（`runtime.getProviders()` 的全部条目）。本家 `current` 里没有的 id 到这里
+   * 按**模型 id** 借官方参数——自建网关声明的 claude-opus-5 / k3 挂在别家名下，
+   * 不跨家借就只能落 128k 兜底（wafo 2026-09-21 实测）。
+   */
+  catalog: readonly BuiltinProvider[] = [],
+  prefer: CatalogPreference = {},
 ): NonNullable<PiProviderRegistration["models"]> {
   return declared.map((decl) => {
     const known = current.find((model) => model.id === decl.id);
-    const base = known === undefined ? { id: decl.id, name: decl.id, ...FALLBACK_MODEL } : { ...known };
+    /**
+     * 本家目录条目**整条保留**（带 thinkingLevelMap / compat 这些跨家借不得的字段）；
+     * 本家没有才退到跨目录推断，且只借参数四件套——别家的协议开关借过来会出错。
+     */
+    const borrowed = resolveModelDefaults(catalog, decl.id, prefer);
+    const base =
+      known === undefined
+        ? {
+            id: decl.id,
+            name: decl.id,
+            reasoning: false,
+            input: borrowed.input,
+            cost: borrowed.cost,
+            contextWindow: borrowed.contextWindow,
+            maxTokens: borrowed.maxTokens,
+          }
+        : { ...known };
     return {
       ...base,
       name: decl.name ?? base.name,
@@ -86,12 +99,33 @@ export function hasModelOverrides(models: readonly ModelDecl[]): boolean {
   );
 }
 
+/**
+ * pi 的 provider 对象 → 我们的 BuiltinProvider。**两个消费者共用**：设置面的内建目录
+ * （runtime 的 listBuiltins）与注册时的跨目录推断——两边必须看到同一份目录快照，
+ * 否则设置页显示 1M、真正建会话时按 128k 压缩。
+ *
+ * api / baseUrl 长在 Model 上而非 Provider 上，取第一条模型的值当这家的代表。
+ */
+export function toBuiltinProvider(provider: PiProvider): BuiltinProvider {
+  const models = provider.getModels();
+  const first = models[0];
+  return {
+    id: provider.id,
+    name: provider.name,
+    baseUrl: provider.baseUrl ?? first?.baseUrl ?? "",
+    api: String(first?.api ?? "openai-completions"),
+    models: models.map(toBuiltinModel),
+  };
+}
+
 /** 目录模型 → 设置面展示的瘦身形状：只留 id 与三组参数，剥掉 pi 的 tiers 等无消费者字段 */
 export function toBuiltinModel(model: PiModel): BuiltinModel {
   return {
     id: model.id,
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
+    // 图片能力跟着参数一起过 IPC：设置页要拿它下图片徽标与「Inherit」的实际含义
+    input: [...model.input],
     cost: {
       input: model.cost.input,
       output: model.cost.output,
@@ -124,10 +158,14 @@ interface ProviderWire {
 export function toFallbackRegistration(
   provider: ProviderWire,
   current: readonly PiModel[],
+  catalog: readonly BuiltinProvider[] = [],
 ): PiProviderRegistration {
   return {
     ...toAuthConfig(provider),
-    models: toFallbackModels(current, provider.models),
+    models: toFallbackModels(current, provider.models, catalog, {
+      catalogId: provider.catalogId,
+      api: provider.api,
+    }),
   };
 }
 
@@ -159,8 +197,18 @@ export function registerAndResolveModel(
      * 注册仍然用我们自己的 id：会话里 `model.provider` 要与 meta 对得上。
      */
     const source = provider.catalogId ?? provider.id;
-    const known = runtime.getProviders().find((p) => p.id === source);
-    runtime.registerProvider(provider.id, toFallbackRegistration(provider, known?.getModels() ?? []));
+    const providers = runtime.getProviders();
+    const known = providers.find((p) => p.id === source);
+    /**
+     * 本家查不到时还有第二跳：**按模型 id 跨整个目录借**（见 shared/model-defaults）。
+     * 自建网关本来就不属于哪一家，但它跑的 claude-opus-5 / k3 / glm-5.3 都是有官方
+     * 口径的型号——不借就全落 128k，1M 模型会提前 8 倍触发压缩，图片还会被 pi 剥掉。
+     */
+    const catalog = providers.map(toBuiltinProvider);
+    runtime.registerProvider(
+      provider.id,
+      toFallbackRegistration(provider, known?.getModels() ?? [], catalog),
+    );
     model = runtime.getModel(provider.id, modelId);
   }
   return model;

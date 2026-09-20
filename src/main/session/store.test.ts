@@ -70,17 +70,18 @@ describe("SessionStore", () => {
     await assert.rejects(() => blocked.list());
   });
 
-  /** root 无视权限位，Windows 没有 chmod——那两个环境里造不出 EACCES */
-  const skipChmod =
-    process.platform === "win32" || process.getuid?.() === 0
-      ? "chmod 在这个环境里拦不住读取"
-      : false;
-
   /**
    * D-3 的靶心：会话好端端躺在盘上，只因为目录权限坏了，
    * 侧栏以前会说「还没有任务」——用户据此去翻备份、去重装，而重装可能真把它们删了。
+   *
+   * 跳过用**注册期**写法（canChmodBlock ? test : test.skip），不用 options 的
+   * `{ skip }`——bun 的 node:test 兼容层无视 options.skip、也无视 t.skip()，
+   * 三种写法探针（2026-09-16）只有 test.skip() 真正亮 (skip)。root 无视权限位、
+   * Windows 没有 chmod——那两个环境造不出 EACCES，用例跑了必假红。
    */
-  test("目录读不出来时抛错，不谎报「一条都没有」", { skip: skipChmod }, async () => {
+  const canChmodBlock = process.platform !== "win32" && process.getuid?.() !== 0;
+  const chmodTest = canChmodBlock ? test : test.skip;
+  chmodTest("目录读不出来时抛错，不谎报「一条都没有」", async () => {
     await store.ensureSession(meta());
     const sessions = join(dir, "sessions");
     await chmod(sessions, 0o000);
@@ -330,7 +331,7 @@ describe("SessionStore.branch", () => {
           stopReason: "stop",
         };
 
-  /** pi 不落盘的失败尾巴：status=error 且内容为空 */
+  /** 我们不落盘的空 error 回答：status=error 且内容为空 */
   const emptyError = (id: string): TranscriptItem => ({
     id,
     role: "assistant",
@@ -364,6 +365,54 @@ describe("SessionStore.branch", () => {
     assert.equal(plan.meta.cwd, meta().cwd);
     assert.equal(plan.meta.piSessionFile, null);
     assert.equal(plan.meta.pinned, false);
+  });
+
+  test("prepareBranch：meta.stats 聚合前缀用量，contextUsage 如实为 null（A-2）", async () => {
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
+    const withUsage = (
+      id: string,
+      text: string,
+      output: number,
+      costTotal: number,
+    ): TranscriptItem => ({
+      id,
+      role: "assistant",
+      content: [{ type: "text", text }],
+      model: { provider: "zai", id: "glm-5.3" },
+      timestamp: 3000,
+      status: "complete",
+      stopReason: "stop",
+      usage: {
+        input: 100,
+        output,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 100 + output,
+        cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: costTotal },
+      },
+    });
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, withUsage("a1", "答一", 50, 0.3));
+    await store.record(ID, emptyError("e1"));
+    await store.record(ID, item("u2", "user", "再问"));
+    await store.record(ID, withUsage("a2", "答二", 70, 0.5));
+    const plan = await store.prepareBranch(ID, "a2");
+
+    // 累计是真历史：两条带 usage 的回答相加；error 尾巴（无 usage）自然不参与
+    assert.deepEqual(plan.meta.stats, {
+      tokens: { input: 200, output: 120, cacheRead: 0, cacheWrite: 0, total: 320 },
+      cost: 0.8,
+      // 余量取决于 pi 按裁剪后上下文现算，聚合不出来——如实 null，UI 显示未知
+      contextUsage: null,
+    });
+  });
+
+  test("prepareBranch：前缀没有任何 usage 就没有账本（stats: null）", async () => {
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, item("a1", "assistant", "答"));
+    const plan = await store.prepareBranch(ID, "a1");
+    assert.equal(plan.meta.stats, null);
   });
 
   test("prepareBranch：锚点不存在 / 不是 assistant / 没有 pi 本子，都拒绝", async () => {

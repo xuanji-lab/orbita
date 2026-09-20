@@ -118,7 +118,7 @@ export class SkillStore {
     if (scope.kind === "workspace") assertSetId(scope.workspaceId);
     const storeDir = join(this.storeDir, slug);
     if (!(await exists(join(storeDir, SKILL_FILE)))) {
-      throw new Error(`skill 不存在：${slug}（中心存储里没有这个文件夹，断链请用 clean）`);
+      throw new Error(`Skill not found: ${slug} (no such folder in central storage; use clean for broken links)`);
     }
     if (scope.kind === "global") {
       // global 是「对所有会话生效」，与任何 workspace 链接互斥
@@ -185,7 +185,7 @@ export class SkillStore {
     const storeDir = join(this.storeDir, slug);
     const file = join(storeDir, SKILL_FILE);
     if (await exists(file)) {
-      throw new Error(`已存在同名 skill：${slug}`);
+      throw new Error(`A skill named "${slug}" already exists`);
     }
     await mkdir(storeDir, { recursive: true });
     // 骨架：name 必有；description/body 给了就用（4-3：agent 工具带着全文来），
@@ -205,12 +205,12 @@ export class SkillStore {
   async importFrom(sourceDir: string, scope: SkillScope | null): Promise<string> {
     const slug = assertSlug(basename(sourceDir));
     if (!(await exists(join(sourceDir, SKILL_FILE)))) {
-      throw new Error(`选的目录里没有 SKILL.md：${sourceDir}`);
+      throw new Error(`No SKILL.md in the selected folder: ${sourceDir}`);
     }
     const entry = join(this.storeDir, slug);
     const existing = await lstat(entry).catch(() => null);
     if (existing !== null) {
-      throw new Error(`已存在同名 skill：${slug}`);
+      throw new Error(`A skill named "${slug}" already exists`);
     }
     await mkdir(this.storeDir, { recursive: true });
     await symlink(sourceDir, entry, process.platform === "win32" ? "junction" : undefined);
@@ -225,7 +225,7 @@ export class SkillStore {
    */
   async write(slug: string, patch: SkillPatch): Promise<void> {
     const file = await this.locate(assertSlug(slug));
-    if (file === null) throw new Error(`skill 不存在：${slug}`);
+    if (file === null) throw new Error(`Skill not found: ${slug}`);
     const raw = await readFile(file, "utf8");
     // 核验发现（4dda167 待补）：SKILL.md 是用户内容，写一半崩溃会毁文件——改原子写
     await writeTextAtomic(file, rebuildSkillMd(raw, patch));
@@ -329,7 +329,7 @@ export class SkillStore {
     const existing = await lstat(linkPath).catch(() => null);
     if (existing !== null) {
       if (existing.isSymbolicLink()) return; // 已链：幂等
-      throw new Error(`目标位置已有实体文件/文件夹，不覆盖：${linkPath}`);
+      throw new Error(`Target already has a real file/folder — refusing to overwrite: ${linkPath}`);
     }
     await mkdir(dirname(linkPath), { recursive: true });
     // 绝对目标：junction（Windows 的目录链接，不要特权）只认绝对路径，
@@ -342,7 +342,7 @@ export class SkillStore {
     const info = await lstat(linkPath).catch(() => null);
     if (info === null) return;
     if (!info.isSymbolicLink()) {
-      throw new Error(`这个位置不是链接而是实体，拒绝删除：${linkPath}`);
+      throw new Error(`Refusing to delete: this is a real folder, not a link: ${linkPath}`);
     }
     await unlink(linkPath);
   }
@@ -354,13 +354,13 @@ export class SkillStore {
  */
 function assertSetId(id: string): string {
   if (id === "" || id.includes("/") || id.includes("\\") || id.includes("..") || id === "." || id === GLOBAL_SET) {
-    throw new Error(`非法集合 id：${id}`);
+    throw new Error(`Invalid collection id: ${id}`);
   }
   return id;
 }
 
 function assertSlug(slug: string): string {
-  if (!isSkillSlug(slug)) throw new Error(`非法 skill slug：${slug}`);
+  if (!isSkillSlug(slug)) throw new Error(`Invalid skill slug: ${slug}`);
   return slug;
 }
 

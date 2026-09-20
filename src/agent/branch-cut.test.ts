@@ -9,6 +9,13 @@ const entry = (id: string, role: string, type = "message"): BranchCutEntry => ({
   message: { role },
 });
 
+/** 造一条 pi 本子里的「空 error 回答」（abort / auto_retry 产物，我们不落盘）。 */
+const emptyError = (id: string): BranchCutEntry => ({
+  id,
+  type: "message",
+  message: { role: "assistant", stopReason: "error", content: [] },
+});
+
 /** 一段典型对话的 pi 文件：头 + user + (assistant → toolResult)*2 + 最终 assistant。 */
 const TYPICAL: BranchCutEntry[] = [
   { id: "h", type: "session" },
@@ -63,20 +70,60 @@ describe("planBranchCut", () => {
           "assistant",
           "assistant",
         ] as const),
-      /对不上/,
+      /Ledger mismatch/,
     );
   });
 
   test("顺序对不上（漂移）：拒绝", () => {
     assert.throws(
       () => planBranchCut(TYPICAL, ["user", "user", "assistant", "assistant"] as const),
-      /顺序/,
+      /order mismatch/,
     );
   });
 
   test("roles 为空或末位不是 assistant：拒绝", () => {
-    assert.throws(() => planBranchCut(TYPICAL, []), /没有任何消息/);
-    assert.throws(() => planBranchCut(TYPICAL, ["user"] as const), /agent 的回答/);
+    assert.throws(() => planBranchCut(TYPICAL, []), /No messages before/);
+    assert.throws(() => planBranchCut(TYPICAL, ["user"] as const), /must be an agent reply/);
+  });
+
+  test("pi 序列里夹着空 error 回答：不入对账序列，后文照样对得上", () => {
+    // 被打断（工具执行中点「打断并发送」）时 pi 会落一条 stopReason:"error" 且
+    // content 为空的 assistant，我们不落盘——两侧同样排除才对得上
+    const file: BranchCutEntry[] = [
+      entry("u1", "user"),
+      entry("a1", "assistant"),
+      emptyError("e1"),
+      entry("u2", "user"),
+      entry("a2", "assistant"),
+    ];
+    assert.equal(planBranchCut(file, ["user", "assistant", "user", "assistant"]), "a2");
+  });
+
+  test("空 error 回答紧跟锢点之后：不被吃进裁点", () => {
+    const file: BranchCutEntry[] = [
+      entry("u1", "user"),
+      entry("a1", "assistant"),
+      emptyError("e1"),
+      entry("u2", "user"),
+    ];
+    assert.equal(planBranchCut(file, ["user", "assistant"]), "a1");
+  });
+
+  test("带内容的 error assistant 照常计入——真失败但说了话，我们也落盘", () => {
+    const file: BranchCutEntry[] = [
+      entry("u1", "user"),
+      { id: "a1", type: "message", message: { role: "assistant", stopReason: "error", content: [{ type: "text" }] } },
+    ];
+    assert.equal(planBranchCut(file, ["user", "assistant"]), "a1");
+    assert.throws(() => planBranchCut(file, ["user", "assistant", "assistant"]), /Ledger mismatch/);
+  });
+
+  test("stopReason:\"aborted\" 的空 assistant 不跳——半截回答我们是落盘的", () => {
+    const file: BranchCutEntry[] = [
+      entry("u1", "user"),
+      { id: "a1", type: "message", message: { role: "assistant", stopReason: "aborted", content: [] } },
+    ];
+    assert.equal(planBranchCut(file, ["user", "assistant"]), "a1");
   });
 
   test("压缩界碑与非消息条目不入对账序列", () => {

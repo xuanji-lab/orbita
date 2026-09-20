@@ -28,6 +28,7 @@ import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { AgentEvent, AgentStats, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
+import { usableProviders } from "../settings/model-menu";
 import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 
@@ -39,6 +40,20 @@ import type { Workspace } from "@shared/workspace";
  * transcript / phase / 审批**按会话分槽**（session-states.ts）：事件无条件进自己的槽，
  * 切走正在跑的会话不再丢更新——「看哪条」只是显示问题，不再决定「记不记」。
  * transcript 归约仍是 **pi 自带的归约器**，我们不写第二份归约逻辑（guideline §三）。
+ *
+ * ## 引擎 + 查看槽（right-drawer-X 拆分，2026-09-11）
+ *
+ * 右抽屉要**并排**看另一条会话，「正在看」从单份变成两份（主槽 + 抽屉槽）。
+ * 原来一只大 hook 里的状态按归属拆成两层：
+ *
+ * - **引擎**（`useChatSessionEngine`）：与「正在看哪条」无关的共享真源——事件泵、
+ *   分槽状态、会话/工作区列表、会话级意图账本。全应用只有一份。
+ * - **查看槽**（`useSessionView`）：某个「正在看」的全部——session id、草稿、
+ *   模型/权限档意图、绑住本槽的 send/stop/…。主槽与抽屉槽各一份，互不串。
+ *
+ * 拆分与无状态 runtime（submit 每轮带全套开工上下文）是一体的：引擎持有
+ * `buildTurn` 与会话级意图账本（它们按会话 id 记账，天然多槽安全）；
+ * 查看槽的每轮 submit 显式带上自己槽内的 model / mode / cwd。
  */
 export interface ChatSession {
   sessionId: string | null;
@@ -157,9 +172,84 @@ export interface ChatSession {
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
 }
 
-export function useChatSession(providers: ProviderDto[]): ChatSession {
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  /** 全部会话的槽；「当前看哪条」由 sessionId ?? opened?.id 推出，不另设状态 */
+/** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */
+interface ViewHandle {
+  readonly sessionRef: Readonly<{ current: string | null }>;
+  /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
+  alignModel(event: { providerId: string; modelId: string }): void;
+  /** 正在看/正打开的那条被删了：本槽退回首页 */
+  handleRemoved(id: string): void;
+  /** 正开着的那条换了归属工作区：meta 与作用域芯片跟着变 */
+  handleMoved(id: string, targetWorkspaceId: string | null): void;
+  /** 工作区被移出：本槽的新任务不再落在这个工作区 */
+  handleWorkspaceRemoved(id: string): void;
+  /** 会话列表刷新后同步「正开着的那条」的 meta（改名 / 模型标题要能换掉顶栏） */
+  syncOpened(list: readonly SessionMeta[]): void;
+}
+
+/**
+ * 引擎——与「正在看哪条」无关的共享真源。全应用一份，主槽与抽屉槽都从它读。
+ */
+export interface SessionEngine {
+  /** 分槽状态（渲染值）。查看槽从这里按自己的 session id 取 entry。 */
+  readonly states: SessionStates;
+  /** 已挂载的查看槽名册：model 事件路由 / 删除通知 / meta 同步按它来 */
+  readonly views: Set<ViewHandle>;
+  /** 与 states 同步的镜像（见 statesRef 的历史注释，引擎内即时写） */
+  readonly statesRef: Readonly<{ current: SessionStates }>;
+  /** 幂等应用一次状态变更（并同步镜像）——查看槽的队列操作走这里 */
+  applyStates(fn: (prev: SessionStates) => SessionStates): void;
+  /**
+   * 各槽把自己的 UI 选择推进引擎的投递兜底：deliverNext 对拿不到会话级意图
+   * 与 meta 的新会话（极少：排队首条发出时 meta 已落盘），只能拿「最近的 UI 选择」。
+   */
+  syncIntent(patch: {
+    model: { providerId: string; modelId: string } | null;
+    mode: PermissionMode;
+    cwd: string | null;
+    workspaceId: string | null;
+  }): void;
+  /** 会话级意图账本（按会话 id 记账）——查看槽写入，openSession 读 */
+  readonly sessionIntent: Readonly<{
+    current: ReadonlyMap<string, { mode?: PermissionMode; model?: { providerId: string; modelId: string } }>;
+  }>;
+  rememberSessionIntent(
+    id: string,
+    patch: { mode?: PermissionMode; model?: { providerId: string; modelId: string } },
+  ): void;
+  /**
+   * 组装无状态开工上下文（AgentTurnContext 的主体）：meta 真值（cwd / 归属 /
+   * pi 本子）+ 会话级意图。拿不出可用上下文时把错误写进引擎 error 并返回 null。
+   */
+  buildTurn(id: string): Omit<SubmitAgentInput, "sessionId" | "text"> | null;
+  readonly setError: (error: string | null) => void;
+  readonly error: string | null;
+  readonly refreshSessions: () => void;
+  readonly refreshWorkspaces: () => void;
+  readonly workspaceFailed: (cause: unknown) => void;
+  readonly sessions: SessionMeta[];
+  readonly loads: { sessions: LoadState; workspaces: LoadState };
+  readonly reloadSessions: () => void;
+  readonly reloadWorkspaces: () => void;
+  readonly sessionsLoaded: boolean;
+  readonly workspaces: Workspace[];
+  readonly renameWorkspace: (id: string, name: string) => void;
+  readonly removeWorkspace: (id: string) => void;
+  readonly defaultCwd: string;
+  readonly usable: ProviderDto[];
+  readonly phaseOf: (id: string) => SessionEntry["phase"];
+  readonly turnErrorOf: (id: string) => string | null;
+  readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
+  readonly renameSession: (id: string, title: string) => void;
+  readonly pinSession: (id: string, pinned: boolean) => void;
+  readonly archiveSession: (id: string, archived: boolean) => void;
+  readonly moveSession: (id: string, workspaceId: string | null) => void;
+  readonly exportSession: (id: string) => void;
+  readonly removeSession: (id: string) => void;
+}
+
+export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
+  /** 全部会话的槽；「当前看哪条」由各查看槽自己持有（sessionId ?? opened?.id） */
   const [states, setStates] = useState<SessionStates>(createSessionStates);
   /**
    * states 的同步镜像。事件回调（自动重发缓冲、send 查压缩态）要在 setStates 之外
@@ -169,17 +259,6 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
    */
   const statesRef = useRef<SessionStates>(states);
   const [error, setError] = useState<string | null>(null);
-  /**
-   * 输入框草稿**按会话隔离**（含首页）：key = 当前查看的会话 id，首页用 "home"。
-   * 以前是全局单份，切换 / 新开会话草稿跟着走（2026-09-10 用户裁决：新会话就是
-   * 新的，旧会话的草稿留在原地等他回来）。纯内存，不落盘——与旧行为一致。
-   */
-  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
-  const writeDraft = useCallback((key: string, value: string) => {
-    setDrafts((prev) => (prev.get(key) === value ? prev : new Map(prev).set(key, value)));
-  }, []);
-  /** 三档权限模式。默认 plan——**默认最保守**，开工具要用户自己往下调。 */
-  const [mode, setMode] = useState<PermissionMode>("plan");
   /** agent 能看到的文件夹。**session 的 cwd 在创建时固定**，所以换工作区 = 换会话。 */
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -189,24 +268,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   });
   /** 会话列表第一读是否已落定：从 loads 派生（首页骨架态用）。 */
   const sessionsLoaded = loads.sessions.kind !== "loading";
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [opened, setOpened] = useState<SessionMeta | null>(null);
-  const [cwd, setCwd] = useState<string | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
+  /** 已挂载的查看槽。事件泵按它路由 model 事件，删除/移动会话按它通知各槽。 */
+  const views = useRef<Set<ViewHandle>>(new Set());
   const [defaultCwd, setDefaultCwd] = useState<string>("");
-  const sessionRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    sessionRef.current = sessionId;
-  }, [sessionId]);
-
-  // ref 兜底同步：所有写入都应走 applyStates（它已即时写 ref），这里只是保险丝。
-  // **不得再新增裸 `setStates((prev) => …)`**：applyStates 写的是平译值，
-  // React 的更新队列遇到平译值会**丢掉先前排队的 updater**，不是合并。
-  useEffect(() => {
-    statesRef.current = states;
-  }, [states]);
 
   /**
    * **同步读-改-写**：先算 next、同步落 ref、再 setStates。不用
@@ -230,9 +294,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
   const sessionsRef = useRef<SessionMeta[]>([]);
 
   /**
-   * 无状态开工的「当前意图」：显示值即注入值——每轮 submit 显式带上 model / mode，
-   * 轮内改的只是显示，下一轮自然生效（一轮一模的保证在轮开始时的快照里）。
-   * 同上，事件路径闭包读不到 state，走 ref。
+   * 无状态开工的**投递兜底**：deliverNext 给后台会话投递排队项时，会话级意图与
+   * meta 通常已经够用；新会话（meta 还没落盘）只能拿「最近的 UI 选择」。
+   * 各查看槽把自己的选择推进来（`syncIntent`），双槽下它等于最近一次任一槽的选择
+   * ——与单槽时代「当前查看的 UI」语义同源。defaultCwd 由引擎自己同步。
    */
   const intentRef = useRef<{
     model: { providerId: string; modelId: string } | null;
@@ -242,17 +307,28 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     defaultCwd: string;
   }>({ model: null, mode: "plan", cwd: null, workspaceId: null, defaultCwd: "" });
   useEffect(() => {
-    intentRef.current = { model, mode, cwd, workspaceId, defaultCwd };
-  }, [model, mode, cwd, workspaceId, defaultCwd]);
+    intentRef.current.defaultCwd = defaultCwd;
+  }, [defaultCwd]);
+  const syncIntent = useCallback(
+    (patch: {
+      model: { providerId: string; modelId: string } | null;
+      mode: PermissionMode;
+      cwd: string | null;
+      workspaceId: string | null;
+    }): void => {
+      Object.assign(intentRef.current, patch);
+    },
+    [],
+  );
 
   /**
    * **会话级意图**：用户在哪条会话上改的档位 / 模型，就记在哪条名下。
    *
-   * 上面的 `intentRef` 是**单份全局**的，而它跟着「你正在看哪条会话」走
-   * （`openSession` 会把 mode / model 改成被查看会话的值）；而 `deliverNext` 是
-   * **不按「正看着谁」过滤**的，后台会话的队首照样会投递。两者合起来就是串台：
-   * A（plan）跑着且队列非空 → 切去看 B（skip）→ A 的轮结束 → A 的排队卡拿着
-   * **B 的权限档与 B 的模型**跑出去。档位决定 bash 能不能跑，这是安全边界上的串台。
+   * 查看槽的 UI 意图跟着「你正在看哪条」走（`openSession` 会把 mode / model 改成
+   * 被查看会话的值）；而 `deliverNext` 是**不按「正看着谁」过滤**的，后台会话的
+   * 队首照样会投递。两者合起来就是串台：A（plan）跑着且队列非空 → 切去看 B（skip）
+   * → A 的轮结束 → A 的排队卡拿着 **B 的权限档与 B 的模型**跑出去。档位决定
+   * bash 能不能跑，这是安全边界上的串台。
    *
    * 所以意图必须按会话记账：你在 A 上选的就只给 A。它不需要清——这就是「用户对
    * 这条会话的最新选择」，永远至少和 meta 一样新（闲着时两边会自行收敛）。
@@ -270,7 +346,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
 
   /**
    * 组装无状态开工上下文（AgentTurnContext 的主体）：meta 真值（cwd / 归属 /
-   * pi 本子）+ 当前意图（模型 / 档位）。新会话（meta 还没落盘）用当前选择。
+   * pi 本子）+ 当前意图（模型 / 档位）。新会话（meta 还没落盘）用投递兜底。
    * 拿不出可用上下文时把错误写进红字并返回 null——调用方直接放弃这一跳。
    */
   const buildTurn = useCallback(
@@ -291,7 +367,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
        *
        *   会话级意图  → 用户在这条会话上改过但还没落进 meta（跑着时改的）
        *   meta      → 落盘的真值
-       *   全局意图  → 全新会话（meta 还不存在），那时 UI 上的选择就是意图
+       *   投递兜底  → 全新会话（meta 还不存在），那时 UI 上的选择就是意图
        *
        * cwd / 归属 / pi 本子不走这套——它们是会话固定事实，meta 就是真值。
        */
@@ -309,10 +385,10 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     [],
   );
 
-
   /**
    * **读失败不清空。** 以前这里会 `.catch(() => setSessions([]))`，磁盘权限坏了就显示成
    * 「你的会话全没了」。现在失败只记到 `loads` 里，手里那份原样保留。
+   * 刷新完通知各查看槽同步「正开着的那条」的 meta——那份真值只在这里读得到。
    */
   const refreshSessions = useCallback(() => {
     void api.session.list().then((list) => {
@@ -322,12 +398,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
       // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
       // 改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
-      // 与 viewedId 同一条规则：盘上打开的优先，否则看活着的。
-      setOpened((current) => {
-        const id = current?.id ?? sessionRef.current ?? null;
-        if (id === null) return null;
-        return list.find((meta) => meta.id === id) ?? current;
-      });
+      for (const view of views.current) view.syncOpened(list);
     }).catch((cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })));
   }, []);
 
@@ -377,6 +448,35 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       );
   }, []);
 
+  /**
+   * 投递队首的一条。**一次只发一条**——发完这一轮结束会再来一次 phase 事件，
+   * 那时再取下一条。先出队再发：出队是同步的，避免同一拍被投递两次。
+   * 与「哪个槽在看」无关：队是按会话分的，事件带着 id 来。
+   */
+  const deliverNext = useCallback(
+    (id: string) => {
+      const entry = statesRef.current.get(id);
+      if (entry === undefined) return;
+      const head = nextDeliverable(entry);
+      if (head === null) return;
+      applyStates((prev) => dequeue(prev, id, head.id));
+      const fail = (cause: unknown): void =>
+        setError(cause instanceof Error ? cause.message : String(cause));
+      if (head.kind === "compact") {
+        const turn = buildTurn(id);
+        if (turn === null) return;
+        void api.agent
+          .compact({ sessionId: id, ...turn, ...(head.instructions !== undefined ? { instructions: head.instructions } : {}) })
+          .catch(fail);
+      } else {
+        const turn = buildTurn(id);
+        if (turn === null) return;
+        void api.agent.submit({ sessionId: id, text: head.text, ...turn }).catch(fail);
+      }
+    },
+    [applyStates, buildTurn],
+  );
+
   useEffect(() => {
     // 流式帧合帧：progress 的归约是纯函数（廉价），贵的是每次应用触发的渲染。
     // 回答期间 delta 可密到十几毫秒一帧，渲染把主线程挤满，点击与打字只能排在
@@ -403,11 +503,14 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
         if (event.type === "phase" && event.phase === "idle") refreshSessions();
         // 模型标题到了（C-3，主进程已落 meta）：可能早于整轮结束，不等 phase idle
         if (event.type === "title") refreshSessions();
-        // 会话内模型切换成功（C-4，主进程已落 meta）：对齐这份意图——
-        // 它既是新任务默认也是会话切换的目标，只认正看着的那条会话的回执
+        // 会话内模型切换成功（C-4，主进程已落 meta）：对齐**正看着那条**的槽——
+        // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽
         if (event.type === "model") {
-          if (event.sessionId === sessionRef.current) {
-            setModel({ providerId: event.providerId, modelId: event.modelId });
+          for (const view of views.current) {
+            if (event.sessionId === view.sessionRef.current) {
+              view.alignModel(event);
+              break;
+            }
           }
           refreshSessions();
         }
@@ -423,7 +526,7 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
           // 而归约器只留最后一帧的时间戳。真值不需要——真值在终态帧的 speed 上
           recordAssistantStart(event.progress.item);
         }
-        // **不按「正看着谁」过滤**：每个事件进自己会话的槽（本刀的根）
+        // **不按「正看着谁」过滤**：每个事件进自己会话的槽（分槽的根）
         // 流式帧进合帧器按节拍整批应用（见 effect 开头）；其余事件即时
         if (event.type === "progress") {
           coalescer.push(event);
@@ -439,225 +542,31 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
       off();
       coalescer.dispose();
     };
-  }, [refreshSessions]);
+  }, [applyStates, deliverNext, refreshSessions]);
 
-  /**
-   * 「配置好」= 设置里绿点的标准：api_key 已入库，或 env 档（密钥来自环境）。
-   * 没填 key 的厂商与复制出来的副本不该出现在模型芯片里——选了也发不出去。
-   */
-  const usable = useMemo(
-    () =>
-      providers.filter(
-        (p) =>
-          ((p.auth.scheme === "api_key" && p.auth.hasSecret) || p.auth.scheme === "env") &&
-          p.models.declared.length > 0,
-      ),
-    [providers],
+  /** 「配置好」的标准与设置面的命名模型菜单同源（model-menu），不各写一份 */
+  const usable = useMemo(() => usableProviders(providers), [providers]);
+
+  const answerApproval = useCallback(
+    (requestId: string, answer: PermissionAnswer) => {
+      applyStates((prev) => removeApproval(prev, requestId));
+      void api.agent.answerPermission(requestId, answer);
+    },
+    [applyStates],
   );
 
-  // provider 到位后先落一个默认模型：第一个 provider 的第一个模型。
-  // 用户没选过时界面上也该显示出到底会用哪个，而不是一片空白
-  useEffect(() => {
-    if (model !== null) return;
-    const first = usable[0];
-    const firstModel = first?.models.declared[0];
-    if (first === undefined || firstModel === undefined) return;
-    setModel({ providerId: first.id, modelId: firstModel.id });
-  }, [usable, model]);
-
-  // 会话 meta 里存的模型可能已随 provider 被删而失效——失效就清空，让上面的
-  // 默认播种兜住。真实事故（2026-09-04）：旧会话存着已删除的 openai-compatible，
-  // 打开后直接发送，主进程炸 unknown provider。providers 未加载完（usable 空）不判。
-  useEffect(() => {
-    if (model === null || usable.length === 0) return;
-    if (!usable.some((p) => p.id === model.providerId)) setModel(null);
-  }, [usable, model]);
-
-  // 草稿键 = 当前查看的会话；send 与收回都写自己的键，互不串
-  const draftKey = sessionId ?? opened?.id ?? "home";
-  const draft = drafts.get(draftKey) ?? "";
-  const setDraft = (value: string) => writeDraft(draftKey, value);
-
-  const send = useCallback(async () => {
-    const text = draft.trim();
-    if (text === "") return;
-    setError(null);
-    // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
-    // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
-    const compact = parseCompactCommand(text);
-    if (compact !== null) {
-      const busyId = sessionRef.current;
-      const busyPhase = busyId !== null ? statesRef.current.get(busyId)?.phase : undefined;
-      // 跑着或压缩中：/compact 也排队——不打断正在跑的轮，等完全空闲
-      // （前面排着的消息也发完）再压，压的才是完整对话。
-      if (busyId !== null && busyPhase !== undefined && busyPhase !== "idle") {
-        applyStates((prev) =>
-          enqueue(prev, busyId, {
-            id: crypto.randomUUID(),
-            kind: "compact",
-            ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
-          }),
-        );
-        writeDraft(draftKey, "");
-        return;
-      }
-      // 压缩要有可续的会话；**绝不为压缩新建会话**——对一条空会话压缩没有意义。
-      // 无状态：压缩也是一次开机（resume 带上 pi 本子），不需要先「唤醒」。
-      const active =
-        sessionId ?? (opened !== null && opened.piSessionFile !== null ? opened.id : null);
-      if (active === null) {
-        setError("No running task to compact");
-        return;
-      }
-      if (model === null) {
-        setError("Add a provider with at least one model first");
-        return;
-      }
-      // 压缩轮开起来的那一刻起它也是「当前活会话」——压缩期间按 stop 才能找到它
-      if (sessionRef.current !== active) {
-        setSessionId(active);
-        sessionRef.current = active;
-      }
-      writeDraft(draftKey, "");
-      // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
-      applyStates((prev) => setEntryPhase(prev, active, "turn"));
-      void api.agent.compact({
-        sessionId: active,
-        cwd: opened?.cwd ?? cwd ?? defaultCwd,
-        workspaceId: opened?.workspaceId ?? workspaceId ?? null,
-        resume: opened?.piSessionFile != null ? { piSessionFile: opened.piSessionFile } : null,
-        providerId: model.providerId,
-        modelId: model.modelId,
-        mode,
-        ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
+  const removeSession = useCallback(
+    (id: string) => {
+      void api.session.remove(id).then(() => {
+        // 正看着它的槽各自退回首页（主槽 / 抽屉槽都可能正看着）
+        for (const view of views.current) view.handleRemoved(id);
+        // 槽一并丢——runtime 那头由主进程删文件时同步释放（刀 0-4）
+        applyStates((current) => removeSessionEntry(current, id));
+        refreshSessions();
       });
-      return;
-    }
-    // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的
-    let id: string | null = sessionId ?? opened?.id ?? null;
-    // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
-    // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
-    const busy = id !== null && statesRef.current.get(id)?.phase !== "idle";
-    if (id !== null && busy) {
-      const queuedId = crypto.randomUUID();
-      applyStates((prev) => enqueue(prev, id as string, { id: queuedId, kind: "text", text }));
-      setDraft("");
-      return;
-    }
-    try {
-      if (model === null) throw new Error("Add a provider with at least one model first");
-      // 已有会话的 cwd / 归属 / 本子以 meta 真值为准（会话固定——用户切了工作区
-      // 再对旧会话发消息，工具目录不能跟着变）；新会话用当前选择。
-      const meta = id !== null ? sessions.find((entry) => entry.id === id) ?? null : null;
-      const resume = meta?.piSessionFile != null ? { piSessionFile: meta.piSessionFile } : null;
-      // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
-      const target = meta?.cwd ?? cwd ?? defaultCwd;
-      if (target === "") throw new Error("Choose a workspace folder first");
-      const workspace = meta?.workspaceId ?? workspaceId ?? null;
-      if (id === null) id = crypto.randomUUID();
-      // 无论新建还是从盘上重开：发出去的那一刻起它就是「当前活会话」——排队 /
-      // 停止 / 撤回都靠 sessionRef 找它，不设就全部静默 no-op（2026-09-11 B 验收复现）
-      if (sessionRef.current !== id) {
-        setSessionId(id);
-        sessionRef.current = id;
-      }
-      writeDraft(draftKey, "");
-      // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
-      // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
-      const active: string = id;
-      applyStates((prev) => setEntryPhase(prev, active, "turn"));
-      // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效，
-      // 轮内改显示、下一轮才注入的老冲账路径退场。
-      await api.agent.submit({
-        sessionId: active,
-        text,
-        cwd: target,
-        workspaceId: workspace,
-        resume,
-        providerId: model.providerId,
-        modelId: model.modelId,
-        mode,
-      });
-      // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
-      if (resume === null) refreshSessions();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位
-      if (id !== null) {
-        const failed: string = id;
-        applyStates((prev) => setEntryPhase(prev, failed, "idle"));
-      }
-    }
-  }, [draft, sessionId, model, mode, cwd, workspaceId, defaultCwd, opened, sessions, refreshSessions]);
-
-  const stop = useCallback(() => {
-    // 只停当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
-    // （含被停止的压缩）的 phase 事件里自动发出——停止不替用户放弃任何已说的话
-    if (sessionRef.current === null) return;
-    void api.agent.abort(sessionRef.current);
-  }, []);
-
-  /** 回到首页。会话在首条消息提交时才真正创建（R8-01 ①）。 */
-  const reset = useCallback(() => {
-    setSessionId(null);
-    sessionRef.current = null;
-    setError(null);
-    setOpened(null);
-    // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
-  }, []);
-
-  /**
-   * 打开一条会话：cwd / 归属 / 权限档一起恢复成它当时的样子。点的就是当前这条
-   * 活着的会话时什么都不用做。**还在 runtime 里跑的会话直接重连活槽**——
-   * 切回来就是最新画面，事件继续实时进。
-   *
-   * 没在跑的才从盘上把 transcript 种进槽；**续跑推迟到用户真的说话时**
-   * （send 里带 resume）——打开一条会话就起一个进程内的 session 太贵了，
-   * 翻记录是最常见的动作。
-   */
-  const openSession = useCallback((id: string) => {
-    if (id === sessionRef.current) return;
-    setError(null);
-    setLoadingHistory(true);
-    void api.session
-      .load(id)
-      .then((detail) => {
-        setLoadingHistory(false);
-        if (detail === null) return;
-        // meta（cwd / 归属 / 权限档 / 模型）两条路都要恢复
-        setOpened(detail.meta);
-        setCwd(detail.meta.cwd);
-        setWorkspaceId(detail.meta.workspaceId);
-        // 会话级意图优先于 meta：这条会话跑着时改的档位 / 模型落不进 meta，
-        // 切走再切回时若拿 meta 重置 chip，chip 就会说 plan 而下一轮实际跑 skip
-        const own = sessionIntentRef.current.get(id);
-        setMode(own?.mode ?? detail.meta.mode);
-        setModel(own?.model ?? { providerId: detail.meta.providerId, modelId: detail.meta.modelId });
-        // 无状态：没有「活会话集合」要重连——正在跑的会话它的槽本来就在 states
-        // 里（事件一直实时进），不种盘上的快照（种盘等于把画面倒回去）；
-        // 没在跑的才从盘上种，readOnly 与「说话时才续跑」（send 带 resume）语义照旧。
-        //
-        // **正在跑的会话要把控制面一起绑过来**（不变量 5）：sessionRef 是停止 /
-        // 立即发送 / 撤回 / 拖拽找会话的**唯一入口**，置空就等于把这整排按钮
-        // 变成静默 no-op（守卫都是 `sessionRef.current === null 就 return`，无报错）。
-        // 实测：发完消息后只要点过侧栏任一条会话（包括点回正在跑的这条），停止就
-        // 彻底失效，直到下一次发送——用户看到的是「打断时灵时不灵」。
-        // fc3e958 修过 send / compact 两条路径，漏了导航这一条。
-        //
-        // 空闲会话仍然置空：`readOnly` 用 `sessionId === null` 判「没 pi 本子且还没
-        // 唤醒」，绑上去会把只读的旧会话误判成可写。
-        const live = (statesRef.current.get(id)?.phase ?? "idle") !== "idle";
-        setSessionId(live ? id : null);
-        sessionRef.current = live ? id : null;
-        if (!statesRef.current.has(id)) {
-          applyStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
-        }
-      })
-      .catch((cause: unknown) => {
-        setLoadingHistory(false);
-        setError(cause instanceof Error ? cause.message : String(cause));
-      });
-  }, []);
+    },
+    [applyStates, refreshSessions],
+  );
 
   const renameSession = useCallback(
     (id: string, title: string) => {
@@ -686,11 +595,8 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     (id: string, targetWorkspaceId: string | null) => {
       void api.session.move(id, targetWorkspaceId).then(() => {
         refreshSessions();
-        // 正开着的就是这条：底栏那个作用域芯片也要跟着变
-        setOpened((current) =>
-          current?.id === id ? { ...current, workspaceId: targetWorkspaceId } : current,
-        );
-        if (id === sessionRef.current) setWorkspaceId(targetWorkspaceId);
+        // 正开着的就是这条：底栏那个作用域芯片也要跟着变（各查看槽自己认领）
+        for (const view of views.current) view.handleMoved(id, targetWorkspaceId);
       });
     },
     [refreshSessions],
@@ -700,34 +606,384 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     void api.session.exportMarkdown(id);
   }, []);
 
-  // 分支的源是「活着的或正打开的那条」——按钮就长在它的转录里
+  const renameWorkspace = useCallback(
+    (id: string, name: string) => {
+      void api.workspace.rename(id, name).then(refreshWorkspaces).catch(workspaceFailed);
+    },
+    [refreshWorkspaces, workspaceFailed],
+  );
+
+  /** 移出列表。**不动磁盘上的文件夹，也不删它的会话**——那些会话落回 TASKS 下。
+   *  各查看槽自己认领「新任务不再落在这个工作区」。 */
+  const removeWorkspace = useCallback(
+    (id: string) => {
+      void api.workspace
+        .remove(id)
+        .then(() => {
+          refreshWorkspaces();
+          for (const view of views.current) view.handleWorkspaceRemoved(id);
+        })
+        .catch(workspaceFailed);
+    },
+    [refreshWorkspaces, workspaceFailed],
+  );
+
+  return {
+    states,
+    statesRef,
+    views: views.current,
+    applyStates,
+    syncIntent,
+    sessionIntent: sessionIntentRef,
+    rememberSessionIntent,
+    buildTurn,
+    setError,
+    error,
+    refreshSessions,
+    refreshWorkspaces,
+    workspaceFailed,
+    sessions,
+    loads,
+    reloadSessions,
+    reloadWorkspaces,
+    sessionsLoaded,
+    workspaces,
+    renameWorkspace,
+    removeWorkspace,
+    defaultCwd,
+    usable,
+    phaseOf: (id: string): SessionEntry["phase"] => statesRef.current.get(id)?.phase ?? "idle",
+    turnErrorOf: (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
+    answerApproval,
+    renameSession,
+    pinSession,
+    archiveSession,
+    moveSession,
+    exportSession,
+    removeSession,
+  };
+}
+
+/**
+ * 查看槽——某个「正在看」的全部。主槽与抽屉槽各来一份，互不串：
+ * 草稿、模型/权限档意图、cwd 归属都是槽内的；每轮 submit 显式带上自己槽内的值。
+ */
+export function useSessionView(engine: SessionEngine, key: string): ChatSession {
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [opened, setOpened] = useState<SessionMeta | null>(null);
+  const [cwd, setCwd] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
+  const [mode, setMode] = useState<PermissionMode>("plan");
+  const sessionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    sessionRef.current = sessionId;
+  }, [sessionId]);
+
+  /**
+   * 启动恢复（A-0 复验 bug A）：上次退出前用的档/模型存在 settings.lastUsed，
+   * 挂载后恢复一次——只影响「还没打开会话」的新任务槽；打开旧会话时
+   *  openSession 会以那条会话 meta 的值为准覆写，后者赢。
+   */
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    void api.settings
+      .get()
+      .then((settings) => {
+        const last = settings.lastUsed;
+        if (last === undefined) return;
+        if (last.mode !== undefined) setMode(last.mode);
+        if (last.providerId !== undefined && last.modelId !== undefined) {
+          setModel({ providerId: last.providerId, modelId: last.modelId });
+        }
+      })
+      .catch(() => undefined); // 读不出来就停在默认，不挡开工
+  }, []);
+
+  /**
+   * 输入框草稿**按会话隔离**（含首页）：key = 当前查看的会话 id，首页用 "home"。
+   * 以前是全局单份，切换 / 新开会话草稿跟着走（2026-09-10 用户裁决：新会话就是
+   * 新的，旧会话的草稿留在原地等他回来）。纯内存，不落盘——与旧行为一致。
+   */
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
+  const writeDraft = useCallback(
+    (draftKey: string, value: string) => {
+      setDrafts((prev) => (prev.get(draftKey) === value ? prev : new Map(prev).set(draftKey, value)));
+    },
+    [],
+  );
+
+  // 会话 meta 里存的模型可能已随 provider 被删而失效——失效就清空，让上面的
+  // 默认播种兜住。真实事故（2026-09-04）：旧会话存着已删除的 openai-compatible，
+  // 打开后直接发送，主进程炸 unknown provider。providers 未加载完（usable 空）不判。
+  useEffect(() => {
+    if (model === null || engine.usable.length === 0) return;
+    if (!engine.usable.some((p) => p.id === model.providerId)) setModel(null);
+  }, [engine.usable, model]);
+
+  /** **正看着的会话的 meta 必须从引擎的列表刷新里拿真值**——活会话（首页直接开的那条）
+   *  opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
+   *  改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
+   *  与 viewedId 同一条规则：盘上打开的优先，否则看活着的。 */
+  const syncOpened = useCallback((list: readonly SessionMeta[]) => {
+    setOpened((current) => {
+      const id = current?.id ?? sessionRef.current ?? null;
+      if (id === null) return null;
+      return list.find((meta) => meta.id === id) ?? current;
+    });
+  }, []);
+
+  /** 注册进引擎：model 事件路由、删除/移动会话通知、meta 同步都按这份名册来 */
+  useEffect(() => {
+    const handle: ViewHandle = {
+      sessionRef,
+      alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
+      handleRemoved: (id) => {
+        setOpened((current) => (current?.id === id ? null : current));
+        // 删掉的正是本槽活着的那条：回到首页，别让界面停在一条已经没有记录的会话上
+        if (id === sessionRef.current) {
+          setSessionId(null);
+          sessionRef.current = null;
+          engine.setError(null);
+          setOpened(null);
+        }
+      },
+      handleMoved: (id, target) => {
+        setOpened((current) =>
+          current?.id === id ? { ...current, workspaceId: target } : current,
+        );
+        if (id === sessionRef.current) setWorkspaceId(target);
+      },
+      handleWorkspaceRemoved: (id) => {
+        setWorkspaceId((current) => (current === id ? null : current));
+        setCwd((current) => (workspaceIdRef.current === id ? null : current));
+      },
+      syncOpened,
+    };
+    engine.views.add(handle);
+    return () => {
+      engine.views.delete(handle);
+    };
+  }, [engine, syncOpened]);
+
+  // handleWorkspaceRemoved 读取「上一个 workspaceId」用的镜像：注册只发生一次，
+  // 闭包里的 workspaceId 会变陈旧，ref 永远新鲜
+  const workspaceIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    workspaceIdRef.current = workspaceId;
+  }, [workspaceId]);
+
+  // 本槽的 UI 选择推进引擎的投递兜底（见引擎 syncIntent 的注释）
+  useEffect(() => {
+    engine.syncIntent({ model, mode, cwd, workspaceId });
+  }, [engine, model, mode, cwd, workspaceId]);
+
+  // 草稿键 = 当前查看的会话；send 与收回都写自己的键，互不串。
+  // 兜底键带槽名：主槽与抽屉槽的「首页」是两份草稿
+  const draftKey = sessionId ?? opened?.id ?? `home:${key}`;
+  const draft = drafts.get(draftKey) ?? "";
+  const setDraft = (value: string) => writeDraft(draftKey, value);
+
+  const send = useCallback(async () => {
+    const text = draft.trim();
+    if (text === "") return;
+    engine.setError(null);
+    // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
+    // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
+    const compact = parseCompactCommand(text);
+    if (compact !== null) {
+      const busyId = sessionRef.current;
+      const busyPhase = busyId !== null ? engine.statesRef.current.get(busyId)?.phase : undefined;
+      // 跑着或压缩中：/compact 也排队——不打断正在跑的轮，等完全空闲
+      // （前面排着的消息也发完）再压，压的才是完整对话。
+      if (busyId !== null && busyPhase !== undefined && busyPhase !== "idle") {
+        engine.applyStates((prev) =>
+          enqueue(prev, busyId, {
+            id: crypto.randomUUID(),
+            kind: "compact",
+            ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
+          }),
+        );
+        writeDraft(draftKey, "");
+        return;
+      }
+      // 压缩要有可续的会话；**绝不为压缩新建会话**——对一条空会话压缩没有意义。
+      // 无状态：压缩也是一次开机（resume 带上 pi 本子），不需要先「唤醒」。
+      const active =
+        sessionId ?? (opened !== null && opened.piSessionFile !== null ? opened.id : null);
+      if (active === null) {
+        engine.setError("No running task to compact");
+        return;
+      }
+      if (model === null) {
+        engine.setError("Add a provider with at least one model first");
+        return;
+      }
+      // 压缩轮开起来的那一刻起它也是「本槽的活会话」——压缩期间按 stop 才能找到它
+      if (sessionRef.current !== active) {
+        setSessionId(active);
+        sessionRef.current = active;
+      }
+      writeDraft(draftKey, "");
+      // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
+      engine.applyStates((prev) => setEntryPhase(prev, active, "turn"));
+      void api.agent.compact({
+        sessionId: active,
+        cwd: opened?.cwd ?? cwd ?? engine.defaultCwd,
+        workspaceId: opened?.workspaceId ?? workspaceId ?? null,
+        resume: opened?.piSessionFile != null ? { piSessionFile: opened.piSessionFile } : null,
+        providerId: model.providerId,
+        modelId: model.modelId,
+        mode,
+        ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
+      });
+      return;
+    }
+    // 「本槽当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的
+    let id: string | null = sessionId ?? opened?.id ?? null;
+    // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
+    // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
+    const busy = id !== null && engine.statesRef.current.get(id)?.phase !== "idle";
+    if (id !== null && busy) {
+      const queuedId = crypto.randomUUID();
+      engine.applyStates((prev) => enqueue(prev, id as string, { id: queuedId, kind: "text", text }));
+      setDraft("");
+      return;
+    }
+    try {
+      if (model === null) throw new Error("Add a provider with at least one model first");
+      // 已有会话的 cwd / 归属 / 本子以 meta 真值为准（会话固定——用户切了工作区
+      // 再对旧会话发消息，工具目录不能跟着变）；新会话用本槽当前选择。
+      const meta = id !== null ? engine.sessions.find((entry) => entry.id === id) ?? null : null;
+      const resume = meta?.piSessionFile != null ? { piSessionFile: meta.piSessionFile } : null;
+      // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
+      const target = meta?.cwd ?? cwd ?? engine.defaultCwd;
+      if (target === "") throw new Error("Choose a workspace folder first");
+      const workspace = meta?.workspaceId ?? workspaceId ?? null;
+      if (id === null) id = crypto.randomUUID();
+      // 无论新建还是从盘上重开：发出去的那一刻起它就是「本槽的活会话」——排队 /
+      // 停止 / 撤回都靠 sessionRef 找它，不设就全部静默 no-op（2026-09-11 B 验收复现）
+      if (sessionRef.current !== id) {
+        setSessionId(id);
+        sessionRef.current = id;
+      }
+      writeDraft(draftKey, "");
+      // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
+      // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
+      const active: string = id;
+      engine.applyStates((prev) => setEntryPhase(prev, active, "turn"));
+      // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效
+      await api.agent.submit({
+        sessionId: active,
+        text,
+        cwd: target,
+        workspaceId: workspace,
+        resume,
+        providerId: model.providerId,
+        modelId: model.modelId,
+        mode,
+      });
+      // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
+      if (resume === null) engine.refreshSessions();
+    } catch (cause) {
+      engine.setError(cause instanceof Error ? cause.message : String(cause));
+      // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位
+      if (id !== null) {
+        const failedEntry: string = id;
+        engine.applyStates((prev) => setEntryPhase(prev, failedEntry, "idle"));
+      }
+    }
+  }, [engine, draft, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft]);
+
+  const stop = useCallback(() => {
+    // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
+    // （含被停止的压缩）的 phase 事件里自动发出——停止不替用户放弃任何已说的话
+    if (sessionRef.current === null) return;
+    void api.agent.abort(sessionRef.current);
+  }, []);
+
+  /** 回到首页（本槽）。会话在首条消息提交时才真正创建（R8-01 ①）。 */
+  const reset = useCallback(() => {
+    setSessionId(null);
+    sessionRef.current = null;
+    engine.setError(null);
+    setOpened(null);
+    // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
+  }, [engine]);
+
+  /**
+   * 打开一条会话（进本槽）：cwd / 归属 / 权限档一起恢复成它当时的样子。点的就是
+   * 当前这条活着的会话时什么都不用做。**还在跑的会话直接接上活槽**——
+   * 切回来就是最新画面，事件继续实时进。
+   *
+   * 没在跑的才从盘上把 transcript 种进槽；**续跑推迟到用户真的说话时**
+   * （send 里带 resume）——打开一条会话就起一个进程内的 session 太贵了，
+   * 翻记录是最常见的动作。
+   */
+  const openSession = useCallback(
+    (id: string) => {
+      if (id === sessionRef.current) return;
+      engine.setError(null);
+      setLoadingHistory(true);
+      void api.session
+        .load(id)
+        .then((detail) => {
+          setLoadingHistory(false);
+          if (detail === null) return;
+          // meta（cwd / 归属 / 权限档 / 模型）两条路都要恢复
+          setOpened(detail.meta);
+          setCwd(detail.meta.cwd);
+          setWorkspaceId(detail.meta.workspaceId);
+          // 会话级意图优先于 meta：这条会话跑着时改的档位 / 模型落不进 meta，
+          // 切走再切回时若拿 meta 重置 chip，chip 就会说 plan 而下一轮实际跑 skip
+          const own = engine.sessionIntent.current.get(id);
+          setMode(own?.mode ?? detail.meta.mode);
+          setModel(own?.model ?? { providerId: detail.meta.providerId, modelId: detail.meta.modelId });
+          // 无状态：没有「活会话集合」要重连——正在跑的会话它的槽本来就在 states
+          // 里（事件一直实时进），不种盘上的快照（种盘等于把画面倒回去）；
+          // 没在跑的才从盘上种，readOnly 与「说话时才续跑」（send 带 resume）语义照旧。
+          //
+          // **正在跑的会话要把控制面一起绑过来**（不变量 5）：sessionRef 是停止 /
+          // 立即发送 / 撤回 / 拖拽找会话的**唯一入口**，置空就等于把这整排按钮
+          // 变成静默 no-op（守卫都是 `sessionRef.current === null 就 return`，无报错）。
+          // 实测：发完消息后只要点过侧栏任一条会话（包括点回正在跑的这条），停止就
+          // 彻底失效，直到下一次发送——用户看到的是「打断时灵时不灵」。
+          //
+          // 空闲会话仍然置空：`readOnly` 用 `sessionId === null` 判「没 pi 本子且还没
+          // 唤醒」，绑上去会把只读的旧会话误判成可写。
+          const live = (engine.statesRef.current.get(id)?.phase ?? "idle") !== "idle";
+          setSessionId(live ? id : null);
+          sessionRef.current = live ? id : null;
+          if (!engine.statesRef.current.has(id)) {
+            engine.applyStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
+          }
+        })
+        .catch((cause: unknown) => {
+          setLoadingHistory(false);
+          engine.setError(cause instanceof Error ? cause.message : String(cause));
+        });
+    },
+    [engine],
+  );
+
   const branchFrom = useCallback(
     (anchorItemId: string) => {
+      // 分支的源是「活着的或正打开的那条」——按钮就长在它的转录里
       const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) return;
       void api.session
         .branch(id, anchorItemId)
         .then((newId) => {
-          refreshSessions();
+          engine.refreshSessions();
           openSession(newId);
         })
-        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
     },
-    [opened, openSession, refreshSessions],
-  );
-
-  const removeSession = useCallback(
-    (id: string) => {
-      void api.session.remove(id).then(() => {
-        setOpened((current) => (current?.id === id ? null : current));
-        // 删掉的正是当前活着的那条：回到首页，别让界面停在一条已经没有记录的会话上
-        if (id === sessionRef.current) reset();
-        // 槽一并丢——runtime 那头由主进程删文件时同步释放（刀 0-4）
-        setStates((current) => removeSessionEntry(current, id));
-        refreshSessions();
-      });
-    },
-    [reset, refreshSessions],
+    [engine, opened, openSession],
   );
 
   /** 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底 */
@@ -747,58 +1003,19 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     [reset],
   );
 
-  /** 换工作区：当前会话的 cwd 已经固定，只能开新会话——UI 上说清楚，不让用户以为切了目录对话还跟着走。 */
-  /** 加一个工作区，并把下一条任务直接落在它里面——加完就想用，别让人再点一次 */
+  /** 加一个工作区，并把本槽的下一条任务直接落在它里面——加完就想用，别让人再点一次 */
   const addWorkspace = useCallback(() => {
     void api.workspace
       .add()
       .then((added) => {
         if (added === null) return;
-        refreshWorkspaces();
+        engine.refreshWorkspaces();
         reset();
         setCwd(added.path);
         setWorkspaceId(added.id);
       })
-      .catch(workspaceFailed);
-  }, [reset, refreshWorkspaces, workspaceFailed]);
-
-  /**
-   * 换模型（C-4）。**有活会话就地切**：命令发过去，成功经 `model` 事件回环对齐
-   * model state（不乐观——切换会失败：无 key、未知模型；失败红字说明，chip 不动）；
-   * 没活的（首页 / 盘上打开未唤醒）只改意图，下一条消息 create 时生效——
-   * 换了却不发言就切走，会被 openSession 的 meta 播种冲掉，等于没换过（已裁决接受）。
-   * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
-   */
-  /**
-   * 立刻压一次上下文（A-1 用量菜单里那一项；A2-Q1 裁决：菜单项与 `/compact` 都要）。
-   *
-   * **只在闲着时给**——调用方（菜单项）已按 `phase !== "idle"` 禁用。
-   * pi 的 `compact()` 会先打断当前这一轮，跑着时点它等于把回答砍了。
-   *
-   * 从盘上打开、还没唤醒的会话先按 resume 唤醒再压；**绝不为压缩新建会话**
-   * ——对一条空会话压缩没有意义。进度不用单独回包：`compaction_start` /
-   * `compaction` 事件那条链已经通了。
-   */
-  const compact = useCallback((): void => {
-    setError(null);
-    // 压缩要有可续的会话；无状态下压缩也是一次开机（resume 带 pi 本子），
-    // 不需要先「唤醒」，更绝不为压缩新建会话。
-    const active = sessionId ?? (opened !== null && opened.piSessionFile !== null ? opened.id : null);
-    if (active === null) {
-      setError("没有正在运行的任务可压缩");
-      return;
-    }
-    const turn = buildTurn(active);
-    if (turn === null) return;
-    // 压缩轮开起来的那一刻起它也是「当前活会话」——压缩期间按 stop 才能找到它
-    if (sessionRef.current !== active) {
-      setSessionId(active);
-      sessionRef.current = active;
-    }
-    // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
-    applyStates((prev) => setEntryPhase(prev, active, "turn"));
-    void api.agent.compact({ sessionId: active, ...turn });
-  }, [sessionId, opened, buildTurn, applyStates]);
+      .catch(engine.workspaceFailed);
+  }, [engine, reset]);
 
   /**
    * 当前正在看的这条会话的相位。没有活会话（首页 / 盘上打开未唤醒）算 idle——
@@ -806,89 +1023,90 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
    */
   const currentPhase = useCallback((): SessionEntry["phase"] => {
     const id = sessionRef.current;
-    return id === null ? "idle" : (statesRef.current.get(id)?.phase ?? "idle");
-  }, []);
+    return id === null ? "idle" : (engine.statesRef.current.get(id)?.phase ?? "idle");
+  }, [engine]);
 
+  /**
+   * 换模型（C-4）。**有活会话就地切**：命令发过去，成功经 `model` 事件回环对齐
+   * model state（不乐观——切换会失败：无 key、未知模型；失败红字说明，chip 不动）；
+   * 没活的（首页 / 盘上打开未唤醒）只改意图，下一条消息 submit 时生效——
+   * 换了却不发言就切走，会被 openSession 的 meta 播种冲掉，等于没换过（已裁决接受）。
+   * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
+   */
   const chooseModel = useCallback(
     (providerId: string, modelId: string) => {
-      /**
-       * **UI 即时、注入延迟**（D0 修订，wafo 2026-09-03 晚间裁决）。
-       *
-       * 第一版是「跑着就锁死 chip」——与 D-4 要做的「悬浮告诉用户这是 model」
-       * 冲突（disabled 的语义先被占了），且拦的是用户而不是问题本身。
-       *
-       * 真正要防的是：pi 的 `setModel` 原地改 `agent.state.model`，重试循环的
-       * 下一次尝试（`_prepareRetry` 后的 `agent.continue()`）读的就是它——
-       * **一轮里既有失败记录又有成功回答**。所以只要保证注入不发生在轮内，
-       * chip 永远可以点、选了就换显示：
-       *
-       *   闲着 → 立即注入（原有路径，成功后 model 事件回环对齐）
-       *   跑着 → 只改本地显示，真正 IPC 挪到下一条消息发送前（见 send 里的
-       *         flushPendingInjection）
-       */
       setModel({ providerId, modelId });
+      // 启动恢复点跟随（bug A）：下次启动应用从这个模型开始
+      void api.settings.set({ lastUsed: { providerId, modelId } }).catch(() => undefined);
       const id = sessionRef.current;
-      if (id === null) return; // 首页开新任务：全局意图就是意图
+      if (id === null) return; // 本槽开新任务：槽意图就是意图
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
       // 拿到你刚才给别的会话选的模型
-      rememberSessionIntent(id, { model: { providerId, modelId } });
+      engine.rememberSessionIntent(id, { model: { providerId, modelId } });
       if (currentPhase() === "idle") {
         // 闲着就注入（校验 + 落 meta + model 事件回环）；跑着只改显示——
         // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账
         void api.agent
           .setModel(id, providerId, modelId)
-          .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+          .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
       }
     },
-    [rememberSessionIntent],
+    [engine, currentPhase],
   );
 
-  const renameWorkspace = useCallback(
-    (id: string, name: string) => {
-      void api.workspace.rename(id, name).then(refreshWorkspaces).catch(workspaceFailed);
+  const changeMode = useCallback(
+    (next: PermissionMode) => {
+      // 理由同 chooseModel：权限档决定 bash 能不能跑，轮内改是另一种串台——
+      // 所以注入延迟（UI 即时），不是锁 chip；跑着时下一轮 submit 自带新档
+      setMode(next);
+      // 启动恢复点跟随（bug A）：下次启动应用从这一档开始
+      void api.settings.set({ lastUsed: { mode: next } }).catch(() => undefined);
+      const id = sessionRef.current;
+      if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
+      // **先记在这条会话名下**：跑着时改不进 meta，而它的排队卡可能在你已经切去
+      // 看别的会话之后才投递，那时全局意图已经是别人的了
+      engine.rememberSessionIntent(id, { mode: next });
+      if (currentPhase() === "idle") {
+        void api.agent
+          .setMode(id, next)
+          .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
+      }
     },
-    [refreshWorkspaces, workspaceFailed],
+    [engine, currentPhase],
   );
 
-  /** 移出列表。**不动磁盘上的文件夹，也不删它的会话**——那些会话落回 TASKS 下 */
-  const removeWorkspace = useCallback(
-    (id: string) => {
-      void api.workspace
-        .remove(id)
-        .then(() => {
-          refreshWorkspaces();
-          // 正在往这个工作区里开新任务的话，退回「不属于任何工作区」
-          setWorkspaceId((current) => (current === id ? null : current));
-          setCwd((current) => (workspaceId === id ? null : current));
-        })
-        .catch(workspaceFailed);
-    },
-    [refreshWorkspaces, workspaceId, workspaceFailed],
-  );
-
-  const changeMode = useCallback((next: PermissionMode) => {
-    // 理由同 chooseModel：权限档决定 bash 能不能跑，轮内改是另一种串台——
-    // 所以注入延迟（UI 即时），不是锁 chip；跑着时下一轮 submit 自带新档
-    setMode(next);
-    const id = sessionRef.current;
-    if (id === null) return; // 首页开新任务：还没有会话可记，全局意图就是意图
-    // **先记在这条会话名下**：跑着时改不进 meta，而它的排队卡可能在你已经切去
-    // 看别的会话之后才投递，那时全局意图已经是别人的了
-    rememberSessionIntent(id, { mode: next });
-    if (currentPhase() === "idle") {
-      void api.agent
-        .setMode(id, next)
-        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  /**
+   * 立刻压一次上下文（A-1 用量菜单里那一项；A2-Q1 裁决：菜单项与 `/compact` 都要）。
+   *
+   * **只在闲着时给**——调用方（菜单项）已按 `phase !== "idle"` 禁用。
+   * pi 的 `compact()` 会先打断当前这一轮，跑着时点它等于把回答砍了。
+   *
+   * 无状态下压缩也是一次开机（resume 带 pi 本子），不需要先「唤醒」；
+   * **绝不为压缩新建会话**——对一条空会话压缩没有意义。进度不用单独回包：
+   * `compaction_start` / `compaction` 事件那条链已经通了。
+   */
+  const compact = useCallback((): void => {
+    engine.setError(null);
+    // 压缩要有可续的会话
+    const active = sessionId ?? (opened !== null && opened.piSessionFile !== null ? opened.id : null);
+    if (active === null) {
+      engine.setError("没有正在运行的任务可压缩");
+      return;
     }
-  }, [rememberSessionIntent]);
-
-  const answerApproval = useCallback((requestId: string, answer: PermissionAnswer) => {
-    applyStates((prev) => removeApproval(prev, requestId));
-    void api.agent.answerPermission(requestId, answer);
-  }, [applyStates]);
+    const turn = engine.buildTurn(active);
+    if (turn === null) return;
+    // 压缩轮开起来的那一刻起它也是「本槽的活会话」——压缩期间按 stop 才能找到它
+    if (sessionRef.current !== active) {
+      setSessionId(active);
+      sessionRef.current = active;
+    }
+    // 乐观置 turn：压缩是一次真实的 LLM 调用，输入框立刻进入忙碌
+    engine.applyStates((prev) => setEntryPhase(prev, active, "turn"));
+    void api.agent.compact({ sessionId: active, ...turn });
+  }, [engine, sessionId, opened]);
 
   /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。
-   *  目标是**当前会话**的草稿——草稿已按会话隔离，不再是一份全局 string。 */
+   *  目标是**本槽当前会话**的草稿——草稿已按会话隔离，不再是一份全局 string。 */
   const restoreToDraft = useCallback(
     (text: string) => {
       setDrafts((prev) =>
@@ -898,44 +1116,19 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     [draftKey],
   );
 
-  /**
-   * 投递队首的一条。**一次只发一条**——发完这一轮结束会再来一次 phase 事件，
-   * 那时再取下一条。先出队再发：出队是同步的，避免同一拍被投递两次。
-   */
-  const deliverNext = useCallback((id: string) => {
-    const entry = statesRef.current.get(id);
-    if (entry === undefined) return;
-    const head = nextDeliverable(entry);
-    if (head === null) return;
-    applyStates((prev) => dequeue(prev, id, head.id));
-    const fail = (cause: unknown): void =>
-      setError(cause instanceof Error ? cause.message : String(cause));
-    if (head.kind === "compact") {
-      const turn = buildTurn(id);
-      if (turn === null) return;
-      void api.agent
-        .compact({ sessionId: id, ...turn, ...(head.instructions !== undefined ? { instructions: head.instructions } : {}) })
-        .catch(fail);
-    } else {
-      const turn = buildTurn(id);
-      if (turn === null) return;
-      void api.agent.submit({ sessionId: id, text: head.text, ...turn }).catch(fail);
-    }
-  }, [applyStates, buildTurn]);
-
   /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。 */
   const withdrawQueued = useCallback(
     (queuedId: string) => {
       const id = sessionRef.current;
       if (id === null) return;
-      const item = statesRef.current.get(id)?.queued.find((entry) => entry.id === queuedId);
+      const item = engine.statesRef.current.get(id)?.queued.find((entry) => entry.id === queuedId);
       if (item === undefined) return;
-      applyStates((prev) => dequeue(prev, id, queuedId));
+      engine.applyStates((prev) => dequeue(prev, id, queuedId));
       // compact 项没有「用户的话」可拿回——本仓没有斜杠命令 UI，把 `/compact`
       // 塞进输入框只会变成一条普通消息。它的撤回就是单纯取消。
       if (item.kind === "text") restoreToDraft(item.text);
     },
-    [restoreToDraft],
+    [engine, restoreToDraft],
   );
 
   /** 拖拽排序：纯本地一次 splice，即时生效。 */
@@ -943,9 +1136,9 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     (sourceId: string, targetId: string, placement: "before" | "after") => {
       const id = sessionRef.current;
       if (id === null) return;
-      applyStates((prev) => moveQueuedIn(prev, id, sourceId, targetId, placement));
+      engine.applyStates((prev) => moveQueuedIn(prev, id, sourceId, targetId, placement));
     },
-    [applyStates],
+    [engine],
   );
 
   /**
@@ -953,39 +1146,50 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
    *
    * 空闲时没有「当前轮」可停，退化成直接发——对用户是同一件事：别等了，现在就办。
    */
-  const sendQueuedNow = useCallback((queuedId: string) => {
-    const id = sessionRef.current;
-    if (id === null) return;
-    const entry = statesRef.current.get(id);
-    const item = entry?.queued.find((queued) => queued.id === queuedId);
-    if (entry === undefined || item === undefined) return;
-    applyStates((prev) => dequeue(prev, id, queuedId));
-    const fail = (cause: unknown): void =>
-      setError(cause instanceof Error ? cause.message : String(cause));
-    // compact 的「立即」是另一回事：不打断，只是不等空闲马上压
-    if (item.kind === "compact") {
-      const turn = buildTurn(id);
+  const sendQueuedNow = useCallback(
+    (queuedId: string) => {
+      const id = sessionRef.current;
+      if (id === null) return;
+      const entry = engine.statesRef.current.get(id);
+      const item = entry?.queued.find((queued) => queued.id === queuedId);
+      if (entry === undefined || item === undefined) return;
+      engine.applyStates((prev) => dequeue(prev, id, queuedId));
+      const fail = (cause: unknown): void =>
+        engine.setError(cause instanceof Error ? cause.message : String(cause));
+      // compact 的「立即」是另一回事：不打断，只是不等空闲马上压
+      if (item.kind === "compact") {
+        const turn = engine.buildTurn(id);
+        if (turn === null) return;
+        void api.agent
+          .compact({ sessionId: id, ...turn, ...(item.instructions !== undefined ? { instructions: item.instructions } : {}) })
+          .catch(fail);
+        return;
+      }
+      const turn = engine.buildTurn(id);
       if (turn === null) return;
-      void api.agent
-        .compact({ sessionId: id, ...turn, ...(item.instructions !== undefined ? { instructions: item.instructions } : {}) })
-        .catch(fail);
-      return;
-    }
-    const turn = buildTurn(id);
-    if (turn === null) return;
-    if (entry.phase === "idle") {
-      void api.agent.submit({ sessionId: id, text: item.text, ...turn }).catch(fail);
-    } else {
-      void api.agent.interrupt({ sessionId: id, text: item.text, ...turn }).catch(fail);
-    }
-  }, [applyStates, buildTurn]);
+      if (entry.phase === "idle") {
+        void api.agent.submit({ sessionId: id, text: item.text, ...turn }).catch(fail);
+      } else {
+        void api.agent.interrupt({ sessionId: id, text: item.text, ...turn }).catch(fail);
+      }
+    },
+    [engine],
+  );
 
+  // provider 到位后先落一个默认模型：第一个 provider 的第一个模型。
+  // 用户没选过时界面上也该显示出到底会用哪个，而不是一片空白
+  useEffect(() => {
+    if (model !== null) return;
+    const first = engine.usable[0];
+    const firstModel = first?.models.declared[0];
+    if (first === undefined || firstModel === undefined) return;
+    setModel({ providerId: first.id, modelId: firstModel.id });
+  }, [engine.usable, model]);
 
-
-  // 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
-  // ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账
+  /** 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
+   *  ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账 */
   const viewedId = sessionId ?? opened?.id ?? null;
-  const entry = (viewedId !== null ? states.get(viewedId) : undefined) ?? EMPTY_ENTRY;
+  const entry = (viewedId !== null ? engine.states.get(viewedId) : undefined) ?? EMPTY_ENTRY;
 
   // selectTranscript 每次调用都造新数组（pi 的实现如此）——在这里按 entry 引用
   // 稳定化，否则 ChatView 的 memo 转录列每次渲染都被新引用击穿，隔离形同虚设
@@ -999,42 +1203,42 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     retry: entry.retry,
     turnError: entry.turnError,
     stats: entry.stats,
-    phaseOf: (id: string): SessionEntry["phase"] => states.get(id)?.phase ?? "idle",
-    turnErrorOf: (id: string): string | null => states.get(id)?.turnError ?? null,
-    error,
+    phaseOf: engine.phaseOf,
+    turnErrorOf: engine.turnErrorOf,
+    error: engine.error,
     draft,
     setDraft,
     mode,
     changeMode,
     approvals: entry.approvals,
-    workspaces,
+    workspaces: engine.workspaces,
     addWorkspace,
-    renameWorkspace,
-    removeWorkspace,
+    renameWorkspace: engine.renameWorkspace,
+    removeWorkspace: engine.removeWorkspace,
     cwd,
     workspaceId,
-    defaultCwd,
-    usable,
+    defaultCwd: engine.defaultCwd,
+    usable: engine.usable,
     model,
     chooseModel,
     compact,
-    sessions,
-    loads,
-    reloadSessions,
-    reloadWorkspaces,
-    sessionsLoaded,
+    sessions: engine.sessions,
+    loads: engine.loads,
+    reloadSessions: engine.reloadSessions,
+    reloadWorkspaces: engine.reloadWorkspaces,
+    sessionsLoaded: engine.sessionsLoaded,
     loadingHistory,
     opened,
     // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读
     readOnly: opened !== null && opened.piSessionFile === null && sessionId === null,
     openSession,
-    renameSession,
-    pinSession,
-    archiveSession,
-    moveSession,
+    renameSession: engine.renameSession,
+    pinSession: engine.pinSession,
+    archiveSession: engine.archiveSession,
+    moveSession: engine.moveSession,
     branchFrom,
-    exportSession,
-    removeSession,
+    exportSession: engine.exportSession,
+    removeSession: engine.removeSession,
     send: () => void send(),
     stop,
     queued: entry.queued,
@@ -1043,6 +1247,16 @@ export function useChatSession(providers: ProviderDto[]): ChatSession {
     moveQueuedTo,
     newTask,
     newTaskIn,
-    answerApproval,
+    answerApproval: engine.answerApproval,
   };
+}
+
+/** 主槽：侧栏与中间的聊天面用的那一份。返回引擎供抽屉槽共用。 */
+export function useChatSession(providers: ProviderDto[]): {
+  session: ChatSession;
+  engine: SessionEngine;
+} {
+  const engine = useChatSessionEngine(providers);
+  const session = useSessionView(engine, "main");
+  return { session, engine };
 }

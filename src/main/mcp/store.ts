@@ -78,7 +78,7 @@ export class McpStore {
       servers === null ||
       Array.isArray(servers)
     ) {
-      throw new Error("mcp.json 的形状不对（顶层对象里应有 mcpServers 对象），改不了");
+      throw new Error("mcp.json has the wrong shape (expected a top-level mcpServers object) — not written");
     }
     change(servers as Record<string, unknown>);
     await writeJsonAtomic(this.filePath, root);
@@ -88,7 +88,7 @@ export class McpStore {
   async add(name: string, server: McpServer): Promise<void> {
     await this.mutate((servers) => {
       if (Object.prototype.hasOwnProperty.call(servers, name)) {
-        throw new Error(`已存在同名 server：${name}`);
+        throw new Error(`A server named "${name}" already exists`);
       }
       servers[name] = server;
     });
@@ -98,7 +98,7 @@ export class McpStore {
   async remove(name: string): Promise<void> {
     await this.mutate((servers) => {
       if (!(name in servers)) {
-        throw new Error(`没有这台 server：${name}`);
+        throw new Error(`No such server: ${name}`);
       }
       delete servers[name];
     });
@@ -109,7 +109,7 @@ export class McpStore {
     await this.mutate((servers) => {
       const server = servers[name];
       if (typeof server !== "object" || server === null) {
-        throw new Error(`没有这台 server：${name}`);
+        throw new Error(`No such server: ${name}`);
       }
       const next = { ...(server as Record<string, unknown>) };
       if (disabled) next["disabled"] = true;

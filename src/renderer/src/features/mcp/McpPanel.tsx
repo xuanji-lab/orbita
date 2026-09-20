@@ -21,12 +21,8 @@ import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
  * （invoke 在 agent 重连完、新快照已缓存时才返回，见 host 的回执等待）。
  */
 export function McpPanel(props: {
-  narrow: boolean;
   skills: SkillsState;
   onClose: () => void;
-  width: number;
-  onWidthChange: (width: number) => void;
-  onWidthCommit: (width: number) => void;
 }) {
   const { servers, serversLoad, openMcpConfig, reloadMcp } = props.skills;
   const [reloading, setReloading] = useState(false);
@@ -51,27 +47,19 @@ export function McpPanel(props: {
   if (adding) {
     return (
       <AddServerForm
-        narrow={props.narrow}
         skills={props.skills}
         onCancel={() => setAdding(false)}
         onAdded={() => setAdding(false)}
         onClose={props.onClose}
-        width={props.width}
-        onWidthChange={props.onWidthChange}
-        onWidthCommit={props.onWidthCommit}
       />
     );
   }
 
   return (
     <RightPanelFrame
-      narrow={props.narrow}
       header={header}
       contentKey="mcp"
       onClose={props.onClose}
-      width={props.width}
-      onWidthChange={props.onWidthChange}
-      onWidthCommit={props.onWidthCommit}
       headerExtra={
         <PanelIconButton title="Add a server" onClick={() => setAdding(true)}>
           <Icon name="plus" size={16} />
@@ -206,14 +194,10 @@ export function McpPanel(props: {
  * 解析在渲染层用 shared 的 parseMcpConfig（纯函数），坏的当场报错。
  */
 function AddServerForm(props: {
-  narrow: boolean;
   skills: SkillsState;
   onCancel: () => void;
   onAdded: () => void;
   onClose: () => void;
-  width: number;
-  onWidthChange: (width: number) => void;
-  onWidthCommit: (width: number) => void;
 }) {
   const [mode, setMode] = useState<"form" | "json">("form");
   const [name, setName] = useState("");
@@ -337,10 +321,6 @@ function AddServerForm(props: {
 
   return (
     <RightPanelFrame
-      narrow={props.narrow}
-      width={props.width}
-      onWidthChange={props.onWidthChange}
-      onWidthCommit={props.onWidthCommit}
       contentKey="add-server"
       onClose={props.onClose}
       header={

@@ -43,7 +43,7 @@ describe("McpStore 读-改-写", () => {
 
   test("重名拒绝，不覆盖已有配置", async () => {
     await store.add("dup", { transport: "stdio", command: "a" });
-    await assert.rejects(store.add("dup", { transport: "stdio", command: "b" }), /已存在同名/);
+    await assert.rejects(store.add("dup", { transport: "stdio", command: "b" }), /already exists/);
     const after = (await store.read()).dup as { command?: string } | undefined;
     assert.equal(after?.command, "a");
   });
@@ -52,7 +52,7 @@ describe("McpStore 读-改-写", () => {
     await store.add("gone", { transport: "stdio", command: "x" });
     await store.remove("gone");
     assert.deepEqual(await store.read(), {});
-    await assert.rejects(store.remove("never"), /没有这台/);
+    await assert.rejects(store.remove("never"), /No such server/);
   });
 
   test("setDisabled：true 落 disabled 字段；false 删字段保持文件干净", async () => {
@@ -63,7 +63,7 @@ describe("McpStore 读-改-写", () => {
     await store.setDisabled("toggle", false);
     const off = (await store.read()).toggle as { disabled?: boolean } | undefined;
     assert.equal(off !== undefined && "disabled" in off, false);
-    await assert.rejects(store.setDisabled("ghost", true), /没有这台/);
+    await assert.rejects(store.setDisabled("ghost", true), /No such server/);
   });
 
   // 写路径上把坏 JSON 悄悄重置成空，等于替用户删配置——必须抛
@@ -74,6 +74,6 @@ describe("McpStore 读-改-写", () => {
 
   test("顶层没有 mcpServers 对象时报形状错，不瞎建", async () => {
     await writeFile(file(), JSON.stringify([1, 2, 3]), "utf8");
-    await assert.rejects(store.add("x", { transport: "stdio", command: "y" }), /形状不对/);
+    await assert.rejects(store.add("x", { transport: "stdio", command: "y" }), /wrong shape/);
   });
 });

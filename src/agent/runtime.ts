@@ -26,7 +26,8 @@ import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
-  toBuiltinModel,
+  toBuiltinProvider,
+  type PiModel,
 } from "./model-registration.ts";
 import {
   createToolCallGate,
@@ -37,8 +38,20 @@ import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts"
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { gitAttributionGuideline } from "./git-attribution.ts";
 import { McpHub } from "./mcp.ts";
-import { WriteRequestBroker, createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import { RequestBroker } from "./request-broker.ts";
+import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import { createTaskTools } from "./task-tools.ts";
+import {
+  COMPACTION_DEFAULT,
+} from "../shared/settings.ts";
+import {
+  compactionBoundaryTimestamp,
+  compactionKeepRecentTokens,
+  compactionReserveTokens,
+  type TurnTiming,
+} from "./compaction-settings.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
 
@@ -143,7 +156,46 @@ async function withManualCompactionTuning<T>(session: AgentSession, run: () => P
 }
 
 /**
- * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用，用会话当前模型。
+ * 标题专用模型的鉴权面。**密钥不能沿用账本里的**——账本里那把是会话当前
+ * provider 的，拿它去调另一家只会 401。
+ */
+interface ResolvedTitleModel {
+  model: PiModel;
+  apiKey: string;
+  headers?: Record<string, string>;
+}
+
+/**
+ * 解析标题专用模型（设置里的 titleModel，主进程已把密钥面装配好）。
+ * 自建一次性 ModelRuntime 走同一套「注册 + 解析」（同 setLedgerModel）：
+ * 「能不能用某个模型」在本仓只应该有一套真相。
+ * 解不出来返回 null，由调用方退回会话模型——用户删了那家 provider 不该
+ * 连带把标题停掉。
+ */
+async function resolveTitleModel(
+  payload: NonNullable<Extract<AgentCommand, { type: "generateTitle" }>["model"]>,
+): Promise<ResolvedTitleModel | null> {
+  try {
+    const runtime = await ModelRuntime.create({});
+    const model = registerAndResolveModel(runtime, payload.provider, payload.modelId);
+    if (model === undefined) {
+      console.warn(`[title] 指定的 ${payload.provider.id}/${payload.modelId} 解析不到，退回会话模型`);
+      return null;
+    }
+    return {
+      model,
+      apiKey: payload.provider.apiKey,
+      ...(payload.provider.headers ? { headers: payload.provider.headers } : {}),
+    };
+  } catch (cause) {
+    console.warn("[title] 指定模型装配失败，退回会话模型：", cause);
+    return null;
+  }
+}
+
+/**
+ * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用。默认用会话当前模型；
+ * 用户在设置里指了命名模型就用那一个（连同它自己的密钥与自定义头）。
  * 与当前轮并发跑（主进程在 submit 后立刻发本命令，轮还在 `running` 里），
  * 不阻塞对话；成功（且模型没答 none）才发 `title` 事件。
  * 失败一律静默——标题是易耗品，不该有任何一条报错通路；门禁（meta 的
@@ -161,12 +213,19 @@ async function generateSessionTitle(
   session: AgentSession,
   sessionId: string,
   text: string,
+  /** 命名专用模型；缺席或解析失败都退回会话模型 */
+  titleModel?: Extract<AgentCommand, { type: "generateTitle" }>["model"],
 ): Promise<void> {
   if (note.titleInFlight) return;
   note.titleInFlight = true;
   try {
-    const model = session.model;
+    const dedicated = titleModel === undefined ? null : await resolveTitleModel(titleModel);
+    const model = dedicated?.model ?? session.model;
     if (model === undefined) return;
+    // 鉴权面跟着模型走，**整个换不逐键兼**：专用模型没自定义头时继承账本里
+    // 那份（另一家的），往往正是鉴权失败的来源
+    const auth: { apiKey: string; headers?: Record<string, string> } =
+      dedicated ?? { apiKey: note.apiKey, ...(note.headers ? { headers: note.headers } : {}) };
     // **30 秒硬超时必须有**：标题与当前轮并发抢 provider，请求可能被网关挂住
     // 不返回——没有超时的话 titleInFlight 永远不放，这条会话之后的所有重试
     // 都被在途守卫吞掉（真实事故：一条会话 17 条消息一次标题都没成）。
@@ -177,11 +236,11 @@ async function generateSessionTitle(
         messages: [{ role: "user", content: text, timestamp: Date.now() }],
       },
       {
-        apiKey: note.apiKey,
+        apiKey: auth.apiKey,
         maxTokens: 1024,
         timeoutMs: TITLE_TIMEOUT_MS,
         signal: AbortSignal.timeout(TITLE_TIMEOUT_MS),
-        ...(note.headers ? { headers: note.headers } : {}),
+        ...(auth.headers ? { headers: auth.headers } : {}),
       },
     );
     if (response.stopReason === "error") {
@@ -317,6 +376,8 @@ interface TurnParts {
   unsubscribe: () => void;
   session: AgentSession;
   adapter: TranscriptAdapter;
+  /** 本轮时间语义（A-1）：run 的回显处填 echoedAt，界碑盖戳读它 */
+  turn: TurnTiming;
 }
 
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
@@ -328,10 +389,11 @@ const running = new Map<string, CycleSlot<TurnParts>>();
  */
 const mcpHub = new McpHub();
 /**
- * 写盘请求的在途表（4-3）：create_skill / add_mcp_server 的回执由 handle 的
- * 命令分支结掉。进程级一份——主进程是唯一的对端，不需要按会话分。
+ * 工具请求的在途表（4-3 立，B-1 泛化）：create_skill / add_mcp_server /
+ * read_task 的回执由 handle 的命令分支结掉。进程级一份——主进程是唯一的
+ * 对端，不需要按会话分。
  */
-const writeBroker = new WriteRequestBroker((event) => send(event as AgentEvent));
+const requestBroker = new RequestBroker((event) => send(event as AgentEvent));
 
 /** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
 const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
@@ -378,7 +440,7 @@ function askPermission(sessionId: string) {
 function settlePendingPermissions(sessionId: string): void {
   for (const [key, resolve] of pendingPermissions) {
     if (!key.startsWith(`${sessionId}:`)) continue;
-    resolve({ behavior: "deny", message: "已停止" });
+    resolve({ behavior: "deny", message: "Stopped" });
     pendingPermissions.delete(key);
   }
 }
@@ -412,6 +474,8 @@ interface OpenedTurn {
   session: AgentSession;
   adapter: TranscriptAdapter;
   unsubscribe: () => void;
+  /** 本轮时间语义（A-1）：回显时间戳 + 出没出过 assistant 产物，界碑盖戳用 */
+  turn: TurnTiming;
 }
 
 /**
@@ -447,8 +511,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
   // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
+  // **会话文件不可变**：protectedPaths 由主进程随每轮发，闸门在档位判定之前拦。
   const currentMode = () => ledgerNote(command.sessionId).mode;
-  const gate = createToolCallGate(currentMode, askPermission(command.sessionId));
+  const gate = createToolCallGate(
+    currentMode,
+    askPermission(command.sessionId),
+    command.protectedPaths,
+    command.cwd,
+  );
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -482,10 +552,22 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
             pi.on("before_agent_start", (event) => ({
-              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(
-                currentMode(),
-                [...mcpHub.currentTools().map((tool) => tool.name), "create_skill", "add_mcp_server"],
-              )}\n\n${STORE_TOOLS_GUIDELINES}\n\n${TOOL_GUIDELINES}`,
+              // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
+              systemPrompt: [
+                event.systemPrompt,
+                describePermissionMode(currentMode(), [
+                  ...mcpHub.currentTools().map((tool) => tool.name),
+                  "create_skill",
+                  "add_mcp_server",
+                  "read_task",
+                ]),
+                STORE_TOOLS_GUIDELINES,
+                TOOL_GUIDELINES,
+                // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
+                gitAttributionGuideline(command.gitAttribution ?? true),
+              ]
+                .filter((part) => part !== "")
+                .join("\n\n"),
             }));
           },
         },
@@ -499,6 +581,23 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * applyOverrides 只改内存、不落盘，不会写回用户的全局设置文件。
    */
   services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
+  /**
+   * 压缩阈值（A-1）：用户设置走「剩余百分比」，按**本轮模型**的窗口换算成 pi 的
+   * reserveTokens——pi 的判定（agent-session 的 shouldCompact）拿当前模型窗口比，
+   * 这里必须同源。保留量不暴露、内部按窗口钳制（pi 出厂 2 万对 ≤16k 窗口的模型
+   * 大于整个上下文，是退化形态）。关掉 = pi 的 enabled:false，手动 /compact 不走
+   * 阈值、不受影响。applyOverrides 深合并、判定时现读——用户改设置，下一轮即生效。
+   */
+  services.settingsManager.applyOverrides({
+    compaction: {
+      enabled: command.compaction?.enabled ?? true,
+      reserveTokens: compactionReserveTokens(
+        command.compaction?.reservePercent ?? COMPACTION_DEFAULT.reservePercent,
+        model.contextWindow,
+      ),
+      keepRecentTokens: compactionKeepRecentTokens(model.contextWindow),
+    },
+  });
   /**
    * **pi 存它自己的本子**（guideline §四，2026-08-26 修订）。
    * 续会话是把这份文件还给 pi，而不是我们把历史重讲一遍——
@@ -519,7 +618,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   send({ type: "mcp", servers: mcpHub.describe() });
   const customTools = [
     ...mcpHub.currentTools(),
-    ...createStoreTools(writeBroker, command.sessionId),
+    ...createStoreTools(requestBroker, command.sessionId),
+    ...createTaskTools(requestBroker, command.sessionId),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
@@ -530,6 +630,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
   const echoed = note.echoed;
+  // 本轮时间语义（A-1）：echoedAt 由 submit / interrupt 的回显处填；sawAssistant 由
+  // 下面的订阅置位。预检压缩（prompt 前那一次）发生时 echoedAt 已有、sawAssistant
+  // 还是 false——compaction_end 据此盖回显的时间戳，界碑落到刚发那句之前。
+  const turn: TurnTiming = { echoedAt: null, sawAssistant: false };
   const unsubscribe = session.subscribe((event) => {
     const adaptable = asAdaptable(event);
     if (adaptable) {
@@ -545,6 +649,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             send({ type: "progress", sessionId: command.sessionId, progress });
           }
         }
+      }
+      if (adaptable.type === "message_start" && adaptable.message.role === "assistant") {
+        turn.sawAssistant = true;
       }
       for (const progress of adapter.apply(adaptable)) {
         send({ type: "progress", sessionId: command.sessionId, progress });
@@ -585,7 +692,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             summary: event.result.summary,
             tokensBefore: event.result.tokensBefore,
             tokensAfter: event.result.estimatedTokensAfter,
-            timestamp: Date.now(),
+            // A-1：预检压缩盖回显的时间戳（界碑落到刚发那句之前，mergeCompactions
+            // 同毫秒平局界碑排前）；轮内压缩照旧用当下时间
+            timestamp: compactionBoundaryTimestamp(turn, Date.now()),
           },
         });
       }
@@ -637,7 +746,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
         send({
           type: "failed",
           sessionId: command.sessionId,
-          message: `重试 ${event.attempt} 次后仍失败：${event.finalError ?? "未知"}`,
+          message: `Failed after ${event.attempt} retries: ${event.finalError ?? "unknown"}`,
           turn: true,
         });
       }
@@ -655,7 +764,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe };
+  return { session, adapter, unsubscribe, turn };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -694,9 +803,11 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         unsubscribe: opened.unsubscribe,
         session: opened.session,
         adapter: opened.adapter,
+        turn: opened.turn,
       };
     },
-    async (parts) => run({ session: parts.session, adapter: parts.adapter, unsubscribe: parts.unsubscribe }),
+    async (parts) =>
+      run({ session: parts.session, adapter: parts.adapter, unsubscribe: parts.unsubscribe, turn: parts.turn }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
     // idle 时本轮已完全收尾，排队投递不会撞 already running
     () => send({ type: "phase", sessionId: id, phase: "idle" }),
@@ -713,7 +824,7 @@ async function branchPiSession(command: Extract<AgentCommand, { type: "branch" }
   const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
   const targetId = planBranchCut(manager.getEntries(), command.roles);
   const branchFile = manager.createBranchedSession(targetId);
-  if (branchFile === undefined) throw new Error("pi 没有产出分支文件");
+  if (branchFile === undefined) throw new Error("pi produced no branch file");
   // 复用 created 事件通路：主进程对 branch 与开机用同一条等待逻辑
   send({ type: "created", sessionId: command.sessionId, piSessionFile: branchFile });
 }
@@ -724,19 +835,9 @@ async function branchPiSession(command: Extract<AgentCommand, { type: "branch" }
  */
 async function listBuiltins(): Promise<void> {
   const runtime = await ModelRuntime.create({});
-  const providers = runtime.getProviders().map((provider) => {
-    // 注意：models 是方法 getModels() 不是属性；api / baseUrl 也长在 Model 上而非 Provider 上。
-    const models = provider.getModels();
-    const first = models[0];
-    return {
-      id: provider.id,
-      name: provider.name,
-      baseUrl: provider.baseUrl ?? first?.baseUrl ?? "",
-      api: String(first?.api ?? "openai-completions"),
-      models: models.map(toBuiltinModel),
-    };
-  });
-  send({ type: "builtins", providers });
+  // 映射跟注册时的跨目录推断共用一份（toBuiltinProvider）：设置页看到的目录快照
+  // 必须与 agent 借参数时用的是同一份，否则两边会对同一个模型说出两个窗口。
+  send({ type: "builtins", providers: runtime.getProviders().map(toBuiltinProvider) });
 }
 
 async function handle(command: AgentCommand): Promise<void> {
@@ -766,6 +867,8 @@ async function handle(command: AgentCommand): Promise<void> {
       // 且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
       note.echoed.add(command.text);
       for (const progress of opened.adapter.userPrompt(command.text)) {
+        // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
+        if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
         send({ type: "progress", sessionId: command.sessionId, progress });
       }
       await opened.session.prompt(command.text, { expandPromptTemplates: false });
@@ -788,6 +891,8 @@ async function handle(command: AgentCommand): Promise<void> {
         const note = ledgerNote(command.sessionId);
         note.echoed.add(command.text);
         for (const progress of opened.adapter.userPrompt(command.text)) {
+          // A-1：同 submit——预检压缩的界碑要盖这条回显的时间戳
+          if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
           send({ type: "progress", sessionId: command.sessionId, progress });
         }
         await opened.session.prompt(command.text, { expandPromptTemplates: false });
@@ -871,25 +976,40 @@ async function handle(command: AgentCommand): Promise<void> {
     const current = running.get(command.sessionId);
     const note = ledger.get(command.sessionId);
     if (current?.opened != null && note !== undefined) {
-      void generateSessionTitle(note, current.opened.session, command.sessionId, command.text);
+      void generateSessionTitle(
+        note,
+        current.opened.session,
+        command.sessionId,
+        command.text,
+        command.model,
+      );
     }
     return;
   }
   if (command.type === "skillWriteResult") {
-    writeBroker.resolve(
+    requestBroker.resolve(
       command.requestId,
       command.ok
         ? { ok: true, ...(command.path === undefined ? {} : { path: command.path }) }
-        : { ok: false, error: command.error ?? "写盘失败" },
+        : { ok: false, error: command.error ?? "Write failed" },
     );
     return;
   }
   if (command.type === "mcpWriteResult") {
-    writeBroker.resolve(
+    requestBroker.resolve(
       command.requestId,
       command.ok
         ? { ok: true, ...(command.status === undefined ? {} : { status: command.status }) }
-        : { ok: false, error: command.error ?? "写盘失败" },
+        : { ok: false, error: command.error ?? "Write failed" },
+    );
+    return;
+  }
+  if (command.type === "readTaskResult") {
+    requestBroker.resolve(
+      command.requestId,
+      command.ok
+        ? { ok: true, card: command.card, text: command.text }
+        : { ok: false, error: command.error ?? "Read failed" },
     );
     return;
   }
@@ -931,10 +1051,10 @@ function userText(content: unknown): string {
  */
 function compactionErrorText(raw: string): string {
   if (raw === "Already compacted") {
-    return "已经压缩过了，上次压缩之后还没有新对话——继续聊一轮再压";
+    return "Already compacted — nothing new since the last one. Continue the conversation, then compact again.";
   }
   if (raw === "Nothing to compact (session too small)") {
-    return "这个会话的内容还太少，没有值得压缩的上下文";
+    return "This conversation is too short — not enough context worth compacting.";
   }
   return raw;
 }

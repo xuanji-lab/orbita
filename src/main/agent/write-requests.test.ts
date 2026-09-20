@@ -55,7 +55,8 @@ describe("applySkillWrite（真 store）", () => {
     const result = await applySkillWrite(skills, sessions, skillEvent());
     assert.equal(result.ok, true);
     if (!result.ok) return;
-    assert.match(result.path ?? "", /skills\/from-agent$/);
+    // 回执路径的分隔符随平台（Windows 是 \）——断言只认「skills 目录 / slug」这一段结构
+    assert.match(result.path ?? "", /skills[/\\]from-agent$/);
     const meta = (await skills.list()).find((s) => s.slug === "from-agent");
     assert.equal(meta?.global, true);
     const content = await skills.read("from-agent");
@@ -124,7 +125,7 @@ describe("applyMcpWrite（真 store）", () => {
     );
     assert.equal(result.ok, false);
     if (result.ok) return;
-    assert.match(result.error, /已存在同名/);
+    assert.match(result.error, /already exists/);
     assert.equal(reloads, 0);
   });
 });

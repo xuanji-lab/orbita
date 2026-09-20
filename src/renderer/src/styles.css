@@ -83,14 +83,80 @@ body {
 }
 
 /*
- * 窗口拖拽区。`titleBarStyle: "hidden"` 之后窗口没有系统标题栏，顶部这一条必须
- * 自己声明 drag：不声明就拖不动窗口，而且 macOS 的「双击标题栏缩放」也没有落点
- * （双击行为由系统在 drag 区上提供，不需要我们写 JS）。
+ * 窗口拖拽区。隐性标题栏之后窗口没有系统标题栏，顶部这一条必须
+ * 自己声明 drag：不声明就拖不动窗口，而且 macOS 的「双击标题栏缩放」也没有落点。
+ * 双击不需要我们写 JS，但它是 **Electron ≥ 43 才有**的行为：38 下整条带能拖不能缩放。
  * macOS 上还要给红黄绿三个键让出净空——它们从 x=18 起算，约占到 70px。
  *
  * **所有顶部行都要挂 `.titlebar`**（侧栏字标、聊天页头、设置页头、首页的空条），
  * 否则用户会碰到「同一条横栏有的地方能拖、有的地方不能拖」这种隐形边界。
+ *
+ * 自绘标题栏（right-drawer-X）：转帧式窗口后窗口键自己画，整条 drag、
+ * 按钮逐个 no-drag；这里只管它的高度与右端动作簇。
  */
+.app-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell .layer {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.window-titlebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 8px 0 12px;
+}
+
+.window-titlebar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-btn {
+  width: 36px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.titlebar-btn:hover:enabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.titlebar-btn.active {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+.titlebar-btn.close:hover:enabled {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+}
+
+.window-titlebar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--color-border-default);
+  margin: 0 6px 0 8px;
+}
+
 .titlebar {
   -webkit-app-region: drag;
 }
@@ -118,12 +184,252 @@ body {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: row;
   background: var(--glass-bg);
   border: 0;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-composer);
   -webkit-backdrop-filter: blur(var(--glass-blur));
   backdrop-filter: blur(var(--glass-blur));
+}
+
+/*
+ * 内容面：左会话列（ChatView 自带 height:100% 的栅格根）+ 右侧面板壳。
+ * 壳是 pane 的子元素——**同一个面板**（2026-09-12 裁决：不要间隔，一条竖线）。
+ */
+.pane-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ===== 右侧面板壳（Skills / MCP / 辅助对话三菜单共用，2026-09-13 裁决） =====
+ * 常驻挂载，宽度以 class 切换驱动过渡——展开、收起、切换因此只有一套动画机制，
+ * 不会再因「重挂丢过渡」出现面板间观感不一。宽度变量 --right-panel-w 由渲染层
+ * 按面板位唯一的宽度记忆注入。 */
+.right-panel-slot {
+  flex: 0 0 auto;
+  width: 0;
+  transition:
+    width 0.2s ease,
+    border-left-width 0.2s ease;
+  overflow: hidden;
+  position: relative;
+  border-left: 0 solid var(--color-border-default);
+}
+
+.right-panel-slot.open {
+  width: var(--right-panel-w, 320px);
+  border-left-width: 1px;
+}
+
+/* 拖拽过程中不要过渡——每一步都实时跟手，收起/展开的动画才保留 */
+.right-panel-slot.dragging {
+  transition: none;
+}
+
+/* 内容固定宽：壳的 width 动画期间它只被逐渐「拉开」，内容不 reflow */
+.right-panel-slot-inner {
+  width: var(--right-panel-w, 320px);
+  height: 100%;
+}
+
+/* 竖线即分界；把手骑在竖线上 */
+.right-panel-slot-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.right-panel-slot-resizer:hover {
+  background: var(--color-border-subtle);
+}
+
+.drawer-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px 6px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.drawer-tablist {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.drawer-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 170px;
+  min-width: 0;
+  padding: 5px 8px 5px 10px;
+  border-radius: var(--radius-md);
+  border: 0;
+  cursor: pointer;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-control);
+  font-family: inherit;
+}
+
+.drawer-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.drawer-tab.on {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.drawer-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-tab-close {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+
+.drawer-tab-close:hover {
+  background: var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.drawer-tab-add {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+  font-family: inherit;
+}
+
+.drawer-tab-add:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* task 选择器 */
+.drawer-picker {
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+
+.drawer-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px var(--space-2);
+  font-size: var(--font-size-control);
+  font-weight: 600;
+}
+
+.drawer-picker-back {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.drawer-picker-back:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.drawer-picker-sub {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  padding: 0 4px var(--space-2);
+}
+
+.drawer-pickrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-control);
+  font-family: inherit;
+  min-width: 0;
+}
+
+.drawer-pickrow:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.drawer-pickrow.new {
+  color: var(--color-mode-active-fg);
+  font-weight: 600;
+}
+
+.drawer-pickrow-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-pickrow-meta {
+  margin-left: auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  flex: 0 0 auto;
+}
+
+.drawer-picksep {
+  height: 1px;
+  background: var(--color-border-subtle);
+  margin: var(--space-2) 4px;
 }
 
 .scroll {
@@ -242,6 +548,24 @@ body {
 
 .chat-md li > p {
   margin: 0;
+}
+
+/* 用户气泡内的 markdown（variant="bubble"）：行高走气泡规格，段落间距压小——
+   气泡是对话不是文档。标题已在组件层摊平成文本（BUBBLE_BANNED）。 */
+.chat-md.bubble-md {
+  line-height: var(--line-height-bubble);
+}
+
+.chat-md.bubble-md p {
+  margin: var(--space-1) 0;
+}
+
+.chat-md.bubble-md > :first-child {
+  margin-top: 0;
+}
+
+.chat-md.bubble-md > :last-child {
+  margin-bottom: 0;
 }
 
 .chat-md li::marker {

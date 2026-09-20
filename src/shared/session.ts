@@ -297,7 +297,7 @@ const TOOL_EXPORT_MAX_LINES = 50;
 function clipLines(text: string): string {
   const lines = text.split("\n");
   if (lines.length <= TOOL_EXPORT_MAX_LINES) return text;
-  return `${lines.slice(0, TOOL_EXPORT_MAX_LINES).join("\n")}\n…（已截断，共 ${lines.length} 行）`;
+  return `${lines.slice(0, TOOL_EXPORT_MAX_LINES).join("\n")}\n… (truncated, ${lines.length} lines in total)`;
 }
 
 /**
@@ -329,7 +329,7 @@ export function transcriptToMarkdown(
   for (const item of transcript) {
     if (isCompactedRecord(item)) {
       // 界碑在导出里同样站得住：标记 + 摘要进引用块，读起来是「此前发生过」而不是对话
-      parts.push(`**[已压缩]**（此前上下文约 ${item.tokensBefore.toLocaleString("en-US")} tokens）`);
+      parts.push(`**[Compacted]** (earlier context ≈ ${item.tokensBefore.toLocaleString("en-US")} tokens)`);
       parts.push(
         item.summary
           .trim()
@@ -346,8 +346,8 @@ export function transcriptToMarkdown(
         .map((block) => (block.type === "text" ? block.text : `[image ${block.mimeType}]`))
         .join("\n")
         .trim();
-      parts.push(`**Tool · ${item.toolName}**${item.isError ? "（失败）" : ""}`);
-      parts.push(`\`\`\`text\n${output === "" ? "（无输出）" : clipLines(output)}\n\`\`\``);
+      parts.push(`**Tool · ${item.toolName}**${item.isError ? " (failed)" : ""}`);
+      parts.push(`\`\`\`text\n${output === "" ? "(no output)" : clipLines(output)}\n\`\`\``);
       continue;
     }
     const body: string[] = [];

@@ -14,8 +14,16 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
   skip: { label: "Skip", hint: "Run every tool without asking." },
 };
 
-/** pi 内建工具里不改变任何东西的那些。其余（write / edit / bash…）一律视为有副作用。 */
-export const READ_ONLY_TOOLS = ["read", "grep", "glob", "ls", "find"] as const;
+/**
+ * 不改变任何东西的工具：pi 内建五个，加我们自己的 read_task（B-1）——它经主进程
+ * 读别的 task 的落盘记录，不改任何盘。其余（write / edit / bash…）一律视为有副作用。
+ *
+ * read_task 是「跨会话读」，曾在 2026-09-18 短暂立过「plan 档也弹审批」的桶
+ * （CROSS_SESSION_READ_TOOLS），同日二次裁决撤销：读取而已，每次点击不值；
+ * 会话文件的**写入**侧另有全档不变量兜着（tool_call 闸门的 protectedPaths），
+ * 读的敞开不影响那道锁。见 PR #31/#32（立）与本文件的现状（撤）。
+ */
+export const READ_ONLY_TOOLS = ["read", "grep", "glob", "ls", "find", "read_task"] as const;
 
 export function isReadOnlyTool(toolName: string): boolean {
   return (READ_ONLY_TOOLS as readonly string[]).includes(toolName);

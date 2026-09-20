@@ -4,7 +4,7 @@
  *
  * 只做三件事：懒启动进程、把命令发进去、把事件广播给窗口。业务判断全在两端，不在这里。
  */
-import type { AgentCommand, AgentEvent, BuiltinProvider } from "../../shared/agent-ipc.ts";
+import type { AgentCommand, AgentEvent, BuiltinProvider, ReadTaskOutcome } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -198,9 +198,14 @@ export class AgentHostCore {
    * ——它与当前轮并发，成败都不影响对话本身。门禁（titleSource 是否仍是 derived）
    * 在调用方查 meta，runtime 侧只做在途去重。
    */
-  generateTitle(sessionId: string, text: string): void {
+  generateTitle(
+    sessionId: string,
+    text: string,
+    /** 命名专用模型（已在调用方解好密钥面）；缺席 = 用会话当前的模型 */
+    model?: Extract<AgentCommand, { type: "generateTitle" }>["model"],
+  ): void {
     if (!this.child) return; // 进程没起：标题不重要，别为它拉起整个 runtime
-    this.post({ type: "generateTitle", sessionId, text });
+    this.post({ type: "generateTitle", sessionId, text, ...(model === undefined ? {} : { model }) });
   }
 
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
@@ -247,6 +252,17 @@ export class AgentHostCore {
       ok: result.ok,
       ...(result.status === undefined ? {} : { status: result.status }),
       ...(result.error === undefined ? {} : { error: result.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** B-1 读 task 请求的回执。同 answerSkillWrite 的理由：不 ensure、发完即回。 */
+  answerReadTask(requestId: string, result: ReadTaskOutcome): void {
+    this.child?.postMessage({
+      type: "readTaskResult",
+      requestId,
+      ...(result.ok
+        ? { ok: true as const, card: result.card, text: result.text }
+        : { ok: false as const, error: result.error }),
     } satisfies AgentCommand);
   }
 

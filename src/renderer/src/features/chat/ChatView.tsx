@@ -20,6 +20,7 @@ import {
   indexToolResults,
   mcpFailureLead,
   mcpInputSummary,
+  readTaskCard,
   summarizeMcpResult,
   liveTailLines,
   parseEditDiff,
@@ -57,10 +58,8 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
-import { isPlanBilling, KNOWN_PROVIDERS, knownModelParams } from "@shared/known-providers";
-import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
-import { api } from "../../api";
-import { kindOf, modelContextText } from "../settings/providers-view-model.ts";
+import { isPlanBilling } from "@shared/known-providers";
+import { modelMenuItems, useBuiltinCatalog } from "../settings/model-menu";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
@@ -100,8 +99,16 @@ function useFollowScroll(enabled: boolean) {
  * 这就是 R8-01 ②「输入框宽度跨页面保持一致」：两页的差别只有 slogan 消失、
  * 输入框从居中落到底部，别的都不动。
  */
-export function ChatView(props: { session: ChatSession; providersError?: string | null }) {
-  const { session, providersError } = props;
+export function ChatView(props: {
+  session: ChatSession;
+  providersError?: string | null;
+  /**
+   * 极简首页：只出输入卡，不出 slogan 与会话卡。右抽屉里「还没发过第一句话」的
+   * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
+   */
+  homeBare?: boolean;
+}) {
+  const { session, providersError, homeBare } = props;
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -228,6 +235,34 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
   // 首页 = 既没有活着的会话，也没有打开任何一条旧会话。
   // leaving 期间保持首页挂载（homeActive 已翻 false 也一样），动画走完再让位给聊天页
   if (homeActive || travel === "leaving") {
+    // 极简首页（右抽屉里还没发话的新任务）：slogan 与会话卡都不出现，
+    // notices + 输入卡贴底——辅助对话要的是直接开写，不是仪式（wafo 2026-09-12：输入卡在下）
+    if (homeBare) {
+      return (
+        <div
+          style={{
+            height: "100%",
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "center",
+            // 底距与聊天页 footer 同为 10px——两边输入卡的下沿齐平（wafo 2026-09-12）
+            padding: "var(--space-5) var(--space-5) 10px",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: "min(100%, var(--content-max-width))",
+              display: "grid",
+              gap: "var(--space-2)",
+            }}
+          >
+            {notices}
+            {composer}
+          </div>
+        </div>
+      );
+    }
     // 会话卡数据：全局最近活跃的前 3 条（list 已按 sortSessions 排序），
     // 排除已归档与从未发过消息的——后者连标题都没有，卡片无物可显
     const recents = session.sessions.filter((m) => !m.archived && m.title !== "").slice(0, 3);
@@ -238,6 +273,10 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         data-travel={travel === "prep" || travel === "entering" ? travel : undefined}
         style={{
           position: "relative",
+          // pane 是 flex 行，首页根是它的子项——不撑满的话内容列会收缩靠左，
+          // 看起来像被右侧的抽屉挤过去（2026-09-12）
+          flex: 1,
+          minWidth: 0,
           height: "100%",
           display: "flex",
           alignItems: "center",
@@ -365,6 +404,7 @@ export function ChatView(props: { session: ChatSession; providersError?: string 
         turnError={session.turnError}
         loadingHistory={session.loadingHistory}
         onBranch={session.branchFrom}
+        onOpenTask={session.openSession}
       />
     </Pane>
   );
@@ -386,6 +426,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   turnError: string | null;
   loadingHistory: boolean;
   onBranch: (anchorItemId: string) => void;
+  /** B-1：read_task 的「Open」——引用稳定（openSession 只依赖 engine），不破 memo */
+  onOpenTask: (sessionId: string) => void;
 }) {
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
@@ -446,6 +488,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 group={entry}
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
+                onOpenTask={props.onOpenTask}
               />
             ) : (
               <EntryView
@@ -453,6 +496,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 toolResults={toolResults}
                 activeThinkingKey={activeThinkingKey}
                 turnActive={turnActive}
+                onOpenTask={props.onOpenTask}
               />
             )}
             {branchAfter !== undefined && (
@@ -640,15 +684,8 @@ function ComposerBar(props: { session: ChatSession }) {
   const scopeSource = workspace?.name ?? session.cwd;
   const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
 
-  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
-  // 拉不到就空目录——徽标如实落到 fallback，不挡选模型
-  const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
-  useEffect(() => {
-    void api.provider
-      .builtins()
-      .then(setCatalog)
-      .catch(() => setCatalog([]));
-  }, []);
+  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）
+  const catalog = useBuiltinCatalog();
 
   const scopeItems: MenuItem[] = [
     {
@@ -677,44 +714,12 @@ function ComposerBar(props: { session: ChatSession }) {
     onSelect: () => session.changeMode(value),
   }));
 
-  // 按厂商分组：厂商名做组头行，模型行缩进其下只带参数徽标——参数口径与设置页
-  // 完全同源（用户覆盖 > pi 目录 > 白名单 > 兜底），两边讲同一个故事
-  const modelItems: MenuItem[] = session.usable.flatMap((provider) => {
-    const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-    const metaOf = (id: string): BuiltinModel | undefined =>
-      known?.catalogId === undefined
-        ? undefined
-        : catalog.find((c) => c.id === known.catalogId)?.models.find((m) => m.id === id);
-    const rows: MenuItem[] = [
-      { id: `hdr:${provider.id}`, label: provider.displayName, header: true },
-    ];
-    for (const declared of provider.models.declared) {
-      const badge = modelContextText(
-        declared,
-        metaOf(declared.id),
-        knownModelParams(known?.id ?? "", declared.id),
-      );
-      rows.push({
-        id: `${provider.id}:${declared.id}`,
-        label: declared.id,
-        badge: (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
-            <span className="pv-badge" title="Context window">
-              {badge.text}
-            </span>
-            {declared.vision === true && (
-              <span className="pv-badge" title="Accepts image input — multimodal">
-                <Icon name="image" size={11} strokeWidth={1.8} />
-              </span>
-            )}
-          </span>
-        ),
-        checked:
-          session.model?.providerId === provider.id && session.model.modelId === declared.id,
-        onSelect: () => session.chooseModel(provider.id, declared.id),
-      });
-    }
-    return rows;
+  // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
+  const modelItems: MenuItem[] = modelMenuItems({
+    providers: session.usable,
+    catalog,
+    selected: session.model,
+    onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
   });
 
   return (
@@ -942,6 +947,7 @@ function EntryView(props: {
   toolResults: ToolResultIndex;
   activeThinkingKey: string | null;
   turnActive: boolean;
+  onOpenTask?: (sessionId: string) => void;
 }) {
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
@@ -959,10 +965,18 @@ function EntryView(props: {
         toolName={entry.toolName}
         input={entry.input}
         result={props.toolResults.get(entry.toolCallId)}
+        onOpenTask={props.onOpenTask}
       />
     );
   }
-  return <ToolGroupLine group={entry} toolResults={props.toolResults} turnActive={props.turnActive} />;
+  return (
+    <ToolGroupLine
+      group={entry}
+      toolResults={props.toolResults}
+      turnActive={props.turnActive}
+      onOpenTask={props.onOpenTask}
+    />
+  );
 }
 
 /**
@@ -981,7 +995,12 @@ function EntryView(props: {
  * 后面）才在行首亮红 triangle，图标与那行红字是一对。
  * 成员行与折叠头同左缘（不缩进），与 ToolGroupLine 的成员同一规矩。
  */
-function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIndex; turnFailed: boolean }) {
+function TurnRollupLine(props: {
+  group: TurnGroupUnit;
+  toolResults: ToolResultIndex;
+  turnFailed: boolean;
+  onOpenTask?: (sessionId: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const { group } = props;
   const stats = turnStats(group, props.toolResults);
@@ -1037,6 +1056,7 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
               toolResults={props.toolResults}
               activeThinkingKey={null}
               turnActive={false}
+              onOpenTask={props.onOpenTask}
             />
           ))}
         </div>
@@ -1053,15 +1073,27 @@ function TurnRollupLine(props: { group: TurnGroupUnit; toolResults: ToolResultIn
  */
 function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
   const [copied, setCopied] = useState(false);
+  // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
+  // 渐变遮罩 + Show more/less 开合。overflowing 只在折叠态量——展开后
+  // scrollHeight == clientHeight，结论会丢，按钮就再也收不回了。
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1200);
     return () => window.clearTimeout(timer);
   }, [copied]);
-  const copyText = props.item.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
+  const textBlocks = props.item.content.filter((block) => block.type === "text");
+  const copyText = textBlocks.map((block) => block.text).join("\n");
+  // markdown 轻量渲染（表格/粗体/代码块/数学放行，标题摊平——wafo 2026-09-20：
+  // 「正文里渲染正确，user message 为什么不一并渲染」）。多块之间空行分段。
+  const text = textBlocks.map((block) => block.text).join("\n\n");
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const el = bubbleRef.current;
+    if (el !== null) setOverflowing(el.scrollHeight > el.clientHeight + 1);
+  }, [text, expanded]);
   return (
     <div
       style={{
@@ -1073,7 +1105,9 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
       }}
     >
       <div
+        ref={bubbleRef}
         style={{
+          position: "relative",
           width: "fit-content",
           maxWidth: "var(--bubble-max-width)",
           minWidth: 0,
@@ -1083,35 +1117,70 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           borderRadius: "var(--radius-bubble)",
           fontSize: "var(--font-size-chat)",
           lineHeight: "var(--line-height-bubble)",
-          whiteSpace: "pre-wrap",
           overflowWrap: "anywhere",
+          // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
+          ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
         }}
       >
-        {props.item.content.map((block, index) =>
-          block.type === "text" ? <MathText key={index} text={block.text} /> : null,
+        <MarkdownBlock text={text} variant="bubble" />
+        {!expanded && overflowing && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: "var(--space-8)",
+              background: "linear-gradient(transparent, var(--color-chat-card-bg))",
+              borderRadius: "0 0 var(--radius-bubble) var(--radius-bubble)",
+              pointerEvents: "none",
+            }}
+          />
         )}
       </div>
-      <button
-        type="button"
-        title={copied ? "Copied" : "Copy message"}
-        aria-label={copied ? "Copied" : "Copy message"}
-        disabled={copyText === ""}
-        onClick={() => {
-          void navigator.clipboard.writeText(copyText);
-          setCopied(true);
-        }}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          padding: 3,
-          border: "none",
-          background: "none",
-          color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
-          cursor: copyText === "" ? "default" : "pointer",
-        }}
-      >
-        <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+        {overflowing && (
+          <button
+            type="button"
+            title={expanded ? "Show less" : "Show more"}
+            aria-label={expanded ? "Show less" : "Show more"}
+            onClick={() => setExpanded((value) => !value)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: 3,
+              border: "none",
+              background: "none",
+              color: "var(--color-text-tertiary)",
+              cursor: "pointer",
+            }}
+          >
+            <Icon name={expanded ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} />
+          </button>
+        )}
+        <button
+          type="button"
+          title={copied ? "Copied" : "Copy message"}
+          aria-label={copied ? "Copied" : "Copy message"}
+          disabled={copyText === ""}
+          onClick={() => {
+            void navigator.clipboard.writeText(copyText);
+            setCopied(true);
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            padding: 3,
+            border: "none",
+            background: "none",
+            color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
+            cursor: copyText === "" ? "default" : "pointer",
+          }}
+        >
+          <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -1379,6 +1448,8 @@ function toolIcon(toolName: string): IconName {
       return "search";
     case "ls":
       return "folder";
+    case "read_task":
+      return "book-open";
     default:
       return "wrench";
   }
@@ -1438,6 +1509,8 @@ function ToolLine(props: {
   toolName: string;
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  /** B-1：read_task 的「Open」跳到被读的 task（侧栏点击同语义）；别的工具不传 */
+  onOpenTask?: (sessionId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const { result } = props;
@@ -1460,6 +1533,8 @@ function ToolLine(props: {
   const expandable = toolExpandable(result, props.toolName);
   const live = expandable && active;
   const finished = result !== undefined && result.status !== "running";
+  // B-1：read_task 落定后 details 里带任务卡（running/error 帧没有）；别的工具不解析
+  const taskCard = props.toolName === "read_task" && finished ? readTaskCard(result) : null;
   const diff = finished ? editDiffText(result) : null;
   const stats = finished ? editDiffStats(result) : null;
   const rawBody = result !== undefined ? toolResultText(result) : "";
@@ -1532,6 +1607,30 @@ function ToolLine(props: {
         )}
         {/* shell 类的执行耗时——慢命令（install / typecheck）不展开也讲清楚花在哪 */}
         {shellDuration !== null && <span style={SLOT.status}>{shellDuration}</span>}
+        {/* B-1：read_task 的任务卡动作——「Open」跳到被读的 task（与侧栏点击同语义）。
+            stopPropagation：这个按钮不是折叠开关。card 走 details 通路，模型看不见。 */}
+        {taskCard !== null && (
+          <button
+            type="button"
+            title={`Open "${taskCard.title}"`}
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onOpenTask?.(taskCard.sessionId);
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              border: "none",
+              background: "none",
+              padding: 0,
+              cursor: "pointer",
+              ...SLOT.status,
+              color: "var(--color-chat-link)",
+            }}
+          >
+            Open
+          </button>
+        )}
       </CollapseRow>
       {open && expandable && diff !== null && <DiffView diff={diff} />}
       {open && expandable && diff === null && fileView !== null && (
@@ -1560,6 +1659,7 @@ function ToolGroupLine(props: {
   group: ToolGroupUnit;
   toolResults: ToolResultIndex;
   turnActive: boolean;
+  onOpenTask?: (sessionId: string) => void;
 }) {
   const { group } = props;
   // 挂载时的相态决定初始展开：活跃轮里长出来的组铺开，idle 会话（旧历史）收着
@@ -1604,6 +1704,7 @@ function ToolGroupLine(props: {
               toolName={call.toolName}
               input={call.input}
               result={props.toolResults.get(call.toolCallId)}
+              onOpenTask={props.onOpenTask}
             />
           ))}
         </div>

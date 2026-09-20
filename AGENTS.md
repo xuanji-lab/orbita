@@ -82,6 +82,10 @@ token 规范与实现不一致时以设计系统为准。
 ## 分支 / PR / 版本
 
 - **一个功能一个 PR**。commit 前缀：`feat(scope):` / `fix(scope):` / `chore(scope):` / `docs(scope):`。
+- **commit 与 PR 标题只说功能与 bug，不说计划编号**。「A 线」「B-1」「M0/M1」是计划文档的坐标，
+  计划文档最终会被删，编号随之失去所指——半年后读 `git log` 的人看到「B-1 补强二」不知道那是什么。
+  标题写开发了什么 / 解决了什么（`feat(agent): read_task 给模型一份会话索引`，不是 `feat(agent): B-1 修复`）；
+  非要挂编号，只能放描述正文，且要同时写出编号指代的内容。
 - **不往仓里写 markdown**（硬规则）。唯一真相是**代码 + commit 历史 + commit 描述**：
   设计意图、被否决的方案与理由写进 commit message——它跟着 diff 走，不会和代码分家。
   计划、调研、progress 笔记一律留在 agent 自己的会话工作台，**不进仓**。

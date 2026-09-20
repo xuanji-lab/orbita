@@ -1,7 +1,18 @@
 import { Chip } from "../../shell/Chip";
 import type { IconName } from "../../shell/Icon";
+import { Menu } from "../../shell/Menu";
+import type { MenuItem } from "../../shell/Menu";
+import type { ProviderDto } from "@shared/provider";
 import { ProvidersView } from "./ProvidersView";
-import { THEME_PREFERENCES, type AppSettings, type ThemePreference } from "@shared/settings";
+import { modelMenuItems, useBuiltinCatalog, usableProviders } from "./model-menu";
+import {
+  COMPACTION_DEFAULT,
+  THEME_PREFERENCES,
+  type AppSettings,
+  type CompactionSetting,
+  type SettingsPatch,
+  type ThemePreference,
+} from "@shared/settings";
 
 /**
  * 设置面。**它不是弹窗，是内容面的另一种内容**——tab 列表浮在侧栏上（透明、无面），
@@ -18,7 +29,9 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 export function SettingsView(props: {
   tab: SettingsTab;
   settings: AppSettings;
-  onSettingsChange: (patch: Partial<AppSettings>) => void;
+  /** 全部厂商（含没填 key 的）；命名模型菜单自己过 usableProviders */
+  providers: readonly ProviderDto[];
+  onSettingsChange: (patch: SettingsPatch) => void;
   onProvidersChange: () => void;
 }) {
   const active = SETTINGS_TABS.find((t) => t.id === props.tab) ?? SETTINGS_TABS[0];
@@ -52,7 +65,11 @@ export function SettingsView(props: {
       <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
         <div style={{ width: "min(100%, var(--content-max-width))", height: "100%", margin: "0 auto" }}>
           {props.tab === "general" ? (
-            <General settings={props.settings} onChange={props.onSettingsChange} />
+            <General
+              settings={props.settings}
+              providers={props.providers}
+              onChange={props.onSettingsChange}
+            />
           ) : (
             <ProvidersView onChange={props.onProvidersChange} />
           )}
@@ -69,27 +86,132 @@ const THEME_LABELS: Record<ThemePreference, string> = {
   black: "Ink",
 };
 
-function General(props: { settings: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
+/** 自动压缩的档位（%）。与 shared 的合法区间 [5,50] 对齐，档距是「一眼分得清」的粒度 */
+const COMPACTION_CHOICES = [30, 25, 20, 15, 10, 5] as const;
+
+function General(props: {
+  settings: AppSettings;
+  providers: readonly ProviderDto[];
+  onChange: (patch: SettingsPatch) => void;
+}) {
+  // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
+  const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
+  const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
+  // 同理：缺席 = 开启，UI 要把这一层兜回来，否则新用户看到的是 Off、实际在签名
+  const gitAttribution = props.settings.gitAttribution ?? true;
+
+  const catalog = useBuiltinCatalog();
+  const titleModel = props.settings.titleModel;
+  const titleModelItems: MenuItem[] = [
+    {
+      id: "same-as-session",
+      label: "Same as session",
+      hint: "Use whichever model the task is running",
+      checked: titleModel === undefined,
+      // null 而不是 undefined：补丁里的 undefined 是「这个键没改」，选不回默认
+      onSelect: () => props.onChange({ titleModel: null }),
+    },
+    ...modelMenuItems({
+      providers: usableProviders(props.providers),
+      catalog,
+      selected: titleModel ?? null,
+      onSelect: (providerId, modelId) => props.onChange({ titleModel: { providerId, modelId } }),
+    }),
+  ];
   return (
-    <Section label="Appearance">
-      <Row
-        name="Theme"
-        hint="System follows your desktop's light or dark appearance and lands on Ink; Warm and Ink are manual."
-        control={
-          <span style={{ display: "flex", gap: 2 }}>
-            {THEME_PREFERENCES.map((value) => (
+    <div style={{ display: "grid", gap: "var(--space-6)", alignContent: "start" }}>
+      <Section label="Appearance">
+        <Row
+          name="Theme"
+          hint="System follows your desktop's light or dark appearance and lands on Ink; Warm and Ink are manual."
+          control={
+            <span style={{ display: "flex", gap: 2 }}>
+              {THEME_PREFERENCES.map((value) => (
+                <Chip
+                  key={value}
+                  active={props.settings.theme === value}
+                  onClick={() => props.onChange({ theme: value })}
+                >
+                  {THEME_LABELS[value]}
+                </Chip>
+              ))}
+            </span>
+          }
+        />
+      </Section>
+      <Section label="Context">
+        <Row
+          name="Auto-compact"
+          hint="Fold older history into a summary once remaining context drops to this level. Off keeps manual /compact only. Applies from the next message."
+          control={
+            <span style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
               <Chip
-                key={value}
-                active={props.settings.theme === value}
-                onClick={() => props.onChange({ theme: value })}
+                active={compaction.enabled === false}
+                onClick={() => setCompaction({ ...compaction, enabled: false })}
               >
-                {THEME_LABELS[value]}
+                Off
               </Chip>
-            ))}
-          </span>
-        }
-      />
-    </Section>
+              {COMPACTION_CHOICES.map((value) => (
+                <Chip
+                  key={value}
+                  active={compaction.enabled !== false && compaction.reservePercent === value}
+                  onClick={() => setCompaction({ enabled: true, reservePercent: value })}
+                >
+                  {value}%
+                </Chip>
+              ))}
+            </span>
+          }
+        />
+      </Section>
+      <Section label="Git">
+        <Row
+          name="Commit & PR attribution"
+          hint="Adds a Made-with: Orbita trailer to commits the agent writes for you, and a Made with Orbita line to pull request descriptions. Never sets Co-Authored-By or changes the author."
+          control={
+            /* 设计系统里没有 Switch，开关就用两个 Chip——与 Auto-compact 的 Off 同一个形状 */
+            <span style={{ display: "flex", gap: 2 }}>
+              <Chip active={gitAttribution} onClick={() => props.onChange({ gitAttribution: true })}>
+                On
+              </Chip>
+              <Chip
+                active={!gitAttribution}
+                onClick={() => props.onChange({ gitAttribution: false })}
+              >
+                Off
+              </Chip>
+            </span>
+          }
+        />
+      </Section>
+      <Section label="Sessions">
+        <Row
+          name="Title model"
+          hint="Names a task from its first message. It's one small call — a fast, cheap model does it well. Applies to tasks named from now on."
+          control={
+            /* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */
+            <Menu
+              items={titleModelItems}
+              searchable
+              trigger={({ open, toggle }) => (
+                <Chip
+                  active={open}
+                  title={
+                    titleModel === undefined
+                      ? "Titles use the model the task is running"
+                      : `${titleModel.providerId} · ${titleModel.modelId}`
+                  }
+                  onClick={toggle}
+                  chevron
+                >
+                  {titleModel?.modelId ?? "Same as session"}
+                </Chip>
+              )}
+            />
+          }
+        />
+      </Section>
+    </div>
   );
 }
 
@@ -103,6 +225,7 @@ function Section(props: { label: string; children: React.ReactNode }) {
           fontSize: "var(--font-size-micro)",
           letterSpacing: "0.06em",
           textTransform: "uppercase",
+          fontWeight: "var(--weight-bold)",
           color: "var(--color-text-secondary)",
         }}
       >

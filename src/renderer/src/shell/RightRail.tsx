@@ -6,7 +6,8 @@ import { Icon, type IconName } from "./Icon";
  * layer 1 上。wafo 2026-09-12 裁定保持 32px 不加宽到 48——「左右对称」不取字面
  * 同宽，只保留「都是无面的窄条」。
  *
- * 顶部：skills / mcp 两个入口（各开一个右侧分屏面板，互斥）。点亮 = 单层
+ * 顶部：三个入口（Skills / MCP / 辅助对话），**共用一个面板位**（2026-09-12 裁决）：
+ * 同一时刻至多点亮一个，再点已点亮的 = 收起。点亮 = 单层
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
@@ -15,7 +16,7 @@ import { Icon, type IconName } from "./Icon";
  * 底部：会话动作（复制转录等），**只在有会话时出现**——它承载的是「对这个会话
  * 做点什么」，首页没有会话可做。中间用弹性空隙隔开两组的语义。
  */
-export type RightPanelKind = "skills" | "mcp";
+export type RightPanelKind = "skills" | "mcp" | "drawer";
 
 export function RightRail(props: {
   panel: RightPanelKind | null;
@@ -70,14 +71,32 @@ export function RightRail(props: {
         flexDirection: "column",
         alignItems: "center",
         gap: "var(--space-2)",
-        padding: "3px 0",
+        // 顶行与侧栏字标行同行同高（padding-top 一致），第一个入口与左侧折叠图标对齐
+        padding: "var(--space-2) 0",
         background: "transparent",
         overflow: "hidden",
       }}
     >
-      <span className="titlebar" style={{ height: 34, width: "100%", flex: "0 0 auto" }} />
-      {entry("skills", "book-open", "Skills")}
+      {/* 顶部这行兼作拖拽区（.titlebar）；Skills 入口住在行内与折叠图标同行。
+          paddingInlineStart: 0——豁免 darwin 给 .titlebar 统一加的 66px 红绿灯净空：
+          红绿灯在窗口左上，这条 32px 窄条在最右，让净空会把 icon 推出可视区外
+          （overflow:hidden，A-0 复验 BUG-3）。 */}
+      <span
+        className="titlebar"
+        style={{
+          height: 34,
+          width: "100%",
+          flex: "0 0 auto",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          paddingInlineStart: 0,
+        }}
+      >
+        {entry("skills", "book-open", "Skills")}
+      </span>
       {entry("mcp", "plug", "MCP servers")}
+      {entry("drawer", "panel-right", "辅助对话 Ctrl+Alt+D")}
       <span style={{ flex: 1 }} />
       {props.sessionActions !== false && props.sessionActions}
     </aside>

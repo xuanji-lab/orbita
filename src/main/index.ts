@@ -7,6 +7,7 @@ import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
+import { applyReadTask } from "./session/read-task.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
@@ -18,6 +19,7 @@ import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
+import { registerWindowIpc } from "./window/ipc.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
@@ -37,22 +39,29 @@ const SECURITY_INVARIANTS = {
  * macOS 上的窗口形态。**边界卡就是窗口本身**——我们不画背景，背景是用户自己的桌面。
  *
  * 三个选项各有各的必须：
- *  - `titleBarStyle: "hidden"` —— 去掉标题栏但**留下红黄绿三个键**，让它们落进边界卡里。
+ *  - `titleBarStyle: "hiddenInset"` —— 去掉标题栏但**留下红黄绿三个键**，让它们落进边界卡里。
  *    渲染层给侧栏顶部留出净空并标 `-webkit-app-region: drag`，否则窗口就拖不动了。
  *  - `vibrancy` —— CSS 的 `backdrop-filter` **模糊不了窗口背后的桌面**（合成器里根本没有那块内容），
  *    真正的「透出桌面」只能由系统材质给。边界卡在它上面再画一层 `--glass-bg`，
  *    合出来就是设计系统要的 layer 1。
- *  - `backgroundColor` 全透明 —— 否则不透明底色会盖掉 vibrancy。
+ *  - **不设 `backgroundColor`** —— 设了 vibrancy 的窗口由 Electron 自己把底色清掉，额外给
+ *    `#00000000` 是多余的一笔。（它曾被怀疑与双击缩放有关，已排除，见 MAC_WINDOW 内注释。）
  *
  * 非 macOS 没有等价物，退回不透明底色；边界卡的圆角那时由渲染层自己画。
  */
 const MAC_WINDOW = {
-  titleBarStyle: "hidden",
+  /**
+   * hiddenInset 与 hidden 在这里等价：红绿灯位置由 trafficLightPosition 定死，
+   * 取 hiddenInset 只是与 Proma 保持一致。**它不是双击缩放那个 bug 的修复**——
+   * 那一刀在依赖里：拖拽区的双击缩放要 Electron ≥ 43（见 package.json 的 electron）。
+   * Electron 38 把双击交给 AppKit，而 AppKit 只认原生标题栏矩形（窗口顶部约 30px），
+   * `-webkit-app-region: drag` 只接管拖拽——于是拖拽带 y 12–66 全程能拖，y ≥ 34 却不缩放。
+   */
+  titleBarStyle: "hiddenInset",
   trafficLightPosition: { x: 18, y: 19 },
   vibrancy: "under-window",
   // 失焦不要把整面 UI 变灰——安静的工作台不该闪
   visualEffectState: "active",
-  backgroundColor: "#00000000",
 } as const;
 
 function createMainWindow(): BrowserWindow {
@@ -65,8 +74,10 @@ function createMainWindow(): BrowserWindow {
     autoHideMenuBar: true,
     ...(process.platform === "darwin"
       ? MAC_WINDOW
-      : // 首帧之前窗口是空的；给一个中性底色，避免白闪（深浅由渲染层接管）
-        { backgroundColor: "#f3f4f1" }),
+      : // Windows/Linux：转帧式窗口——最小化/最大化/关闭由渲染层标题栏自绘
+        // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
+        // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
+        { frame: false, backgroundColor: "#f3f4f1" }),
     webPreferences: {
       ...SECURITY_INVARIANTS,
       preload: join(__dirname, "../preload/index.js"),
@@ -121,6 +132,7 @@ void app.whenReady().then(() => {
   // 主题先于窗口生效：晚一步的话第一帧会用系统外观画出 vibrancy，然后当着用户的面跳一下
   const settings = new SettingsStore(configDir);
   registerSettingsIpc(settings);
+  registerWindowIpc();
   void settings.read().then(applyNativeTheme);
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
@@ -128,6 +140,8 @@ void app.whenReady().then(() => {
   const sessions = new SessionStore(join(configDir, "sessions"));
   const record = createSessionRecorder(sessions);
   const mcp = new McpStore(configDir);
+  // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
+  const workspaces = new WorkspaceStore(configDir);
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -145,6 +159,13 @@ void app.whenReady().then(() => {
           agentHost.answerMcpWrite(event.requestId, result);
         },
       );
+      return;
+    }
+    // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡
+    if (event.type === "readTaskRequest") {
+      void applyReadTask(sessions, event, workspaces).then((result) => {
+        agentHost.answerReadTask(event.requestId, result);
+      });
       return;
     }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
@@ -176,14 +197,17 @@ void app.whenReady().then(() => {
   });
   registerSkillIpc(skills);
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
-  registerWorkspaceIpc(new WorkspaceStore(configDir), (id) => skills.removeWorkspace(id));
+  registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   registerAgentIpc(
     agentHost,
     providers,
     sessions,
     join(configDir, "pi-sessions"),
+    // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
+    [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     (workspaceId) => skills.linkDirs(workspaceId),
     mcp,
+    settings,
   );
   app.on("before-quit", () => agentHost.dispose());
 

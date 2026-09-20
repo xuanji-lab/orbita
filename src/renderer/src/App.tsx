@@ -2,17 +2,21 @@ import { useCallback, useEffect, useState } from "react";
 import { useTheme } from "./useTheme";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, type AppSettings } from "@shared/settings";
-import { useChatSession } from "./features/chat/useChatSession";
+import { DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from "@shared/settings";
+import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
 import { transcriptToMarkdown } from "@shared/session";
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRail";
+import { RightPanelSlot } from "./shell/RightPanel";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
+import { Titlebar } from "./shell/Titlebar";
+import { Drawer, type DockedTab } from "./shell/Drawer";
+import { NEW_TASK_TAB } from "./shell/drawer-state";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -22,8 +26,10 @@ import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
  * 它的左边缘决定侧栏宽度）→ **输入卡**（layer 3）。
  * 两层玻璃画同一个 `--glass-bg`，深度是合成出来的；两层都 `border: 0`。
  *
- * 侧栏 288px 与动作条 32px 都没有自己的面，直接坐在边界卡上
- * （设计系统 *Layout*：both sidebars are unbounded）。
+ * 侧栏 288px 没有自己的面，直接坐在边界卡上（设计系统 *Layout*：both sidebars are
+ * unbounded）。右抽屉（right-drawer-X）**是 pane 的子元素**——与会话列同一张卡，
+ * 中间只有一根竖线（2026-09-12 裁决：不要间隔，一条竖线）。转帧式窗口的窗口键
+ * 在自绘标题栏（Titlebar）上；复制转录与抽屉开关住在右图标条（wafo 2026-09-12 裁决）。
  */
 export function App() {
   usePlatform();
@@ -63,10 +69,9 @@ export function App() {
   }, [refresh]);
 
   /** 先落盘再回填：写失败时 UI 不该显示一个其实没存下来的选择 */
-  const changeSettings = useCallback((patch: Partial<AppSettings>) => {
+  const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
-
 
   /** 右侧面板宽度（4-0 拖宽）：拖动中只改本地，松手才落 settings */
   const [panelWidth, setPanelWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
@@ -74,7 +79,77 @@ export function App() {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
 
-  const session = useChatSession(providers);
+  const { session, engine } = useChatSession(providers);
+  /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
+  const drawerView = useSessionView(engine, "drawer");
+
+  // 停靠记忆在设置里（哪些 task 开在辅助对话的标签条上）；兼容存量文件：
+  // 旧版本可能把 "new" 占位写进了 docked，启动时一并洗掉。
+  // 抽屉并入统一面板壳后 drawer.width 不再有消费者——宽度共用 rightPanelWidth（Q3）。
+  const [docked, setDocked] = useState<DockedTab[]>(DEFAULT_SETTINGS.drawer.docked);
+  useEffect(() => {
+    setDocked(settings.drawer.docked.filter((tab) => tab !== NEW_TASK_TAB));
+  }, [settings.drawer]);
+
+  /** 停靠改动：只发改的键，主进程做 drawer 内部的键级合并
+   *  （整块回写会拿到渲染层闭包里的旧值，先后覆盖有竞态——真机冒烟实测） */
+  const changeDocked = useCallback(
+    (docked: DockedTab[]) => {
+      setDocked(docked);
+      changeSettings({ drawer: { docked } });
+    },
+    [changeSettings],
+  );
+
+  /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
+   *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
+  const handlePanel = useCallback((next: RightPanelKind | null) => {
+    setRightPanel(next);
+  }, []);
+
+  // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && rightPanel !== null) setRightPanel(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rightPanel]);
+
+  // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.ctrlKey && event.altKey && (event.key === "d" || event.key === "D")) {
+        event.preventDefault();
+        setRightPanel((current) => (current === "drawer" ? null : "drawer"));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /**
+   * 收起动画期间仍渲染原面板：active 置空后先保持挂载（壳的 width 过渡回 0，
+   * 与抽屉收起同款 0.2s ease），动画走完再真正卸载。
+   */
+  const [mountedPanel, setMountedPanel] = useState<RightPanelKind | null>(rightPanel);
+  useEffect(() => {
+    if (rightPanel !== null) {
+      setMountedPanel(rightPanel);
+      return;
+    }
+    if (mountedPanel === null) return;
+    const timer = setTimeout(() => setMountedPanel(null), 220);
+    return () => clearTimeout(timer);
+    // mountedPanel 故意不进依赖：收起窗口里只需为这次置空排一次定时器
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rightPanel]);
+
+  /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
+  const shownPanel = rightPanel ?? mountedPanel;
+  // MCP 面板与 Skills 面板共用这个 hook（servers 也在里面）：只认 skills 的话，
+  // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
+  const skills = useSkills(shownPanel === "skills" || shownPanel === "mcp");
 
   /**
    * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
@@ -87,7 +162,6 @@ export function App() {
     else session.newTask();
     session.setDraft("Describe the workflow you want to turn into a skill.");
   }, [session]);
-  const skills = useSkills(rightPanel === "skills");
   /** 会话动作只在有会话时出现——它承载的是「对这个会话做点什么」；
    * 顶部入口常驻，不随会话消失（首页也能开 Skills / MCP）。 */
   const sessionActions =
@@ -103,52 +177,85 @@ export function App() {
       false
     );
 
+  /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
+  const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
+
   return (
-    <div className="layer">
-      <Sidebar
-        session={session}
-        overlay={overlay}
-        settingsTab={settingsTab}
-        onSettingsTab={setSettingsTab}
-        onOverlay={setOverlay}
-      />
-
-      <main className="pane">
-        {overlay === "settings" ? (
-          <SettingsView
-            tab={settingsTab}
-            settings={settings}
-            onSettingsChange={changeSettings}
-            onProvidersChange={refresh}
-          />
-        ) : (
-          <ChatView session={session} providersError={providersError} />
-        )}
-      </main>
-
-      {rightPanel === "skills" ? (
-        <SkillsPanel
-          narrow={narrow}
-          skills={skills}
-          onClose={() => setRightPanel(null)}
-          width={panelWidth}
-          onWidthChange={setPanelWidth}
-          onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-          defaultWorkspaceId={session.workspaceId}
-          onCreateSkill={createSkillDraft}
+    <div className="app-shell">
+      <Titlebar />
+      <div className="layer">
+        <Sidebar
+          session={session}
+          overlay={overlay}
+          settingsTab={settingsTab}
+          onSettingsTab={setSettingsTab}
+          onOverlay={setOverlay}
         />
-      ) : rightPanel === "mcp" ? (
-        <McpPanel
-          narrow={narrow}
-          skills={skills}
-          onClose={() => setRightPanel(null)}
-          width={panelWidth}
-          onWidthChange={setPanelWidth}
-          onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
-        />
-      ) : null}
 
-      <RightRail panel={rightPanel} onPanel={setRightPanel} sessionActions={sessionActions} />
+        <main className="pane">
+          <div className="pane-main">
+            {overlay === "settings" ? (
+              <SettingsView
+                tab={settingsTab}
+                settings={settings}
+                providers={providers}
+                onSettingsChange={changeSettings}
+                onProvidersChange={refresh}
+              />
+            ) : (
+              <ChatView session={session} providersError={providersError} />
+            )}
+          </div>
+          {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
+          <RightPanelSlot
+            open={rightPanel !== null}
+            width={panelWidth}
+            narrow={narrow}
+            onWidthChange={setPanelWidth}
+            onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+          >
+            {/* 收起动画期间保持原内容；切换时 key 变化触发 120ms 内容淡入 */}
+            <div
+              key={shownPanel ?? "closed"}
+              style={{
+                height: "100%",
+                animation: "right-panel-fade 120ms var(--ease-out-quint)",
+              }}
+            >
+              {shownPanel === "skills" ? (
+                <SkillsPanel
+                  skills={skills}
+                  onClose={() => handlePanel(null)}
+                  defaultWorkspaceId={session.workspaceId}
+                  onCreateSkill={createSkillDraft}
+                />
+              ) : shownPanel === "mcp" ? (
+                <McpPanel skills={skills} onClose={() => handlePanel(null)} />
+              ) : shownPanel === "drawer" ? (
+                <Drawer
+                  engine={engine}
+                  view={drawerView}
+                  mainSessionId={mainSessionId}
+                  providersError={providersError}
+                  docked={docked}
+                  onDockedChange={(list) =>
+                    changeDocked(
+                      // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
+                      list.filter((tab) => tab !== NEW_TASK_TAB),
+                    )
+                  }
+                />
+              ) : null}
+            </div>
+          </RightPanelSlot>
+        </main>
+
+        <RightRail
+          panel={rightPanel}
+          onPanel={handlePanel}
+          sessionActions={sessionActions}
+        />
+      </div>
     </div>
   );
 }

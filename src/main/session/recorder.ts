@@ -7,6 +7,13 @@
  *   user       `item_started`   —— 用户消息出生即完成，adapter 不会再给它发 finished
  *   compacted  `compaction`     —— 压缩界碑，事件里就是完整的记录，直接落
  *
+ * **唯一不收的终态帧**：空 error 回答（status=error 且内容为空的 assistant，见
+ * store.ts 的 isEmptyErrorAssistant）——auto_retry 的失败尝试会产生它，非流式阶段
+ * （工具执行中 / 两次模型调用之间）被 interrupt 打断时 pi 产出的也是这个形状。
+ * **pi 的本子会收它，我们刻意不收**：它不带任何上下文，存下来只是 UI 上一个空
+ * 错误气泡。两本账由此产生的差异，由分支对账侧对 pi 条目施加同一谓词来抵消
+ * （branch-cut.ts 的 isEmptyErrorAssistantEntry）。
+ *
  * **abort 的半截回答同样落盘**，这是刻意的。pi 的 agent-loop 在 abort 时先无条件发
  * `message_end`、之后才判 `stopReason === "aborted"`，所以它照样走终态帧。
  * 不落的话，重开会话看到的会**比当时屏幕上少一截**——用户已经读过那半句了，
@@ -17,7 +24,7 @@
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import type { SessionRecord } from "../../shared/session.ts";
-import type { SessionStore } from "./store.ts";
+import { isEmptyErrorAssistant, type SessionStore } from "./store.ts";
 
 export function createSessionRecorder(store: SessionStore): (event: AgentEvent) => void {
   // 写失败不该让对话中断——记一条到 stderr，界面照常
@@ -62,7 +69,7 @@ export function createSessionRecorder(store: SessionStore): (event: AgentEvent) 
         : progress.type === "item_started" && progress.item.role === "user"
           ? progress.item
           : null;
-    if (item === null) return;
+    if (item === null || isEmptyErrorAssistant(item)) return;
     persist(event.sessionId, item);
   };
 }

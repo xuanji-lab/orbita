@@ -28,6 +28,7 @@ import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/g
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
+import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import panelLeft from "../../../../Orbita Design System/assets/icons/lucide/panel-left.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
@@ -35,6 +36,7 @@ import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off
 import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?raw";
 import plug from "../../../../Orbita Design System/assets/icons/lucide/plug.svg?raw";
 import power from "../../../../Orbita Design System/assets/icons/lucide/power.svg?raw";
+import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
@@ -89,6 +91,8 @@ const ICONS = {
   "loader-circle": loaderCircle,
   list,
   lock,
+  "message-square": messageSquare,
+  minus,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,

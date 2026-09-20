@@ -180,11 +180,18 @@ export function isPlanBilling(providerId: string): boolean {
 
 /**
  * 我们自己补的模型参数。**优先于 pi 目录**（见 `modelParams` 的说明）。
- * 认不得的组合返回空对象——调用方据此原样走目录 / 兜底。
+ * 认不得的 id 返回空对象——调用方据此原样走目录 / 兜底。
+ *
+ * **只按模型 id 查，跨全部条目**：这张表记的是「这个型号的官方口径」，
+ * 与它从哪家网关接进来无关。按 (provider, model) 查的老签名会让自建网关
+ * （`anthropic-compatible`）吃不到任何补丁——glm-5.3-flash 的 1M 明明在表里，
+ * 却因为不是从 `zhipu-coding` 接进来的而显示 128k（wafo 2026-09-21 实测）。
+ * 代价是同名 id 只能有一份口径；表里都是确知的官方参数，本就不该分叉。
  */
-export function knownModelParams(
-  providerId: string,
-  modelId: string,
-): { contextWindow?: number; maxTokens?: number } {
-  return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.modelParams?.[modelId] ?? {};
+export function knownModelParams(modelId: string): { contextWindow?: number; maxTokens?: number } {
+  for (const item of KNOWN_PROVIDERS) {
+    const params = item.modelParams?.[modelId];
+    if (params !== undefined) return params;
+  }
+  return {};
 }

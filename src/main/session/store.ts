@@ -58,22 +58,67 @@ export interface BranchPlan {
 }
 
 /**
+ * 「空 error 回答」：status=error 且内容为空的 assistant 记录。auto_retry 的每次失败
+ * 尝试会发这样一条终态帧；在非流式阶段（工具执行中 / 两次模型调用之间）被
+ * interrupt 打断时，pi 产出的也是这个形状。**pi 自己的本子会收它**（message_end 上
+ * 无条件 appendMessage，_prepareRetry 只从 agent state 里摸掉、刷不掉会话文件），
+ * 而我们**刻意不收**——空条目不带任何上下文，不该出现在 transcript 里。两本账因此
+ * 天然不等长，对齐靠对账侧同样排除（branch-cut.ts 的 isEmptyErrorAssistantEntry 对 pi
+ * 条目用同一谓词）。谓词收敛在这里：落盘侧「不写」与对账侧（branchRoles）「照跳」
+ * 必须同一标准，各写一份迟早漂移。
+ */
+export function isEmptyErrorAssistant(record: SessionRecord): boolean {
+  return record.role === "assistant" && record.status === "error" && record.content.length === 0;
+}
+
+/**
  * 前缀的 user/assistant 角色序列——与 pi 文件里的消息条目按位对账用（两本账没有
- * id 映射，顺序是唯一桥梁）。跳过「status=error 且内容为空」的 assistant 记录：
- * pi 不把这种失败尾巴落进它的本子（2026-09-01 对 72 条真实会话实测的唯一系统性
- * 落账差异），带上它对账必炸。其余罕见漂移由 agent 进程的对账守卫兜底——
- * 拒绝分支优于切错位置。
+ * id 映射，顺序是唯一桥梁）。跳过「空 error 回答」（isEmptyErrorAssistant）：落盘侧
+ * 不写新记录，这里跳的是谓词收敛之前存的存量；pi 侧虽然收了这类条目，但
+ * branch-cut.ts 对它们施加同一个排除谓词，两侧因此对得上。其余罕见漂移由 agent
+ * 进程的对账守卫兜底——拒绝分支优于切错位置。
  */
 export function branchRoles(records: readonly SessionRecord[]): ("user" | "assistant")[] {
   const roles: ("user" | "assistant")[] = [];
   for (const record of records) {
     if (record.role !== "user" && record.role !== "assistant") continue;
-    if (record.role === "assistant" && record.status === "error" && record.content.length === 0) {
-      continue;
-    }
+    if (isEmptyErrorAssistant(record)) continue;
     roles.push(record.role);
   }
   return roles;
+}
+
+/**
+ * A-2：从分支前缀聚合 tokens / cost。branch 出来的新会话，「这个任务此前花了多少」
+ * 是真实历史（终态帧都带 usage），该带就带。**只聚合累计值，contextUsage 恒为
+ * null**：余量取决于 pi 按裁剪后上下文的现算，聚合不出来——meta 里如实没有，
+ * UI 显示「未知」。前缀里没有任何带 usage 的回答（旧会话、纯提问、usage 缺席）
+ * 返回 null（meta.stats 无账本）。
+ */
+export function aggregatePrefixUsage(records: readonly SessionRecord[]): AgentStats | null {
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let total = 0;
+  let cost = 0;
+  let seen = false;
+  for (const record of records) {
+    if (record.role !== "assistant" || record.usage === undefined) continue;
+    seen = true;
+    input += record.usage.input ?? 0;
+    output += record.usage.output ?? 0;
+    cacheRead += record.usage.cacheRead ?? 0;
+    cacheWrite += record.usage.cacheWrite ?? 0;
+    total += record.usage.totalTokens ?? 0;
+    cost += record.usage.cost?.total ?? 0;
+  }
+  if (!seen) return null;
+  return {
+    tokens: { input, output, cacheRead, cacheWrite, total },
+    cost,
+    contextUsage: null,
+  };
 }
 
 export class SessionStore {
@@ -318,8 +363,10 @@ export class SessionStore {
         archived: false,
         // 分支的新会话带着前缀里的最近提问——它的历史是真的，卡片不该显示空槽
         recentQueries: recentQueriesFromRecords(prefix),
-        // 分支的新会话不继承用量：pi 那本是裁过的，累计值对不上，等它自己跑一轮
-        stats: null,
+        // A-2（2026-09-17 裁决）：聚合前缀的 tokens/cost——「这条分支此前花了多少」
+        // 是真实历史。**contextUsage 恒为 null**：pi 那本是裁过的，余量算不出来，
+        // UI 如实显示「未知」，等它自己跑一轮就有真值
+        stats: aggregatePrefixUsage(prefix),
         createdAt: now,
         updatedAt: now,
       },

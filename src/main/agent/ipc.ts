@@ -11,8 +11,11 @@ import {
 } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
+import type { CompactionSetting } from "../../shared/settings.ts";
+import { COMPACTION_DEFAULT } from "../../shared/settings.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
+import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 import { AgentHost } from "./host.ts";
@@ -44,7 +47,7 @@ async function resolveProviderSecrets(
      * 白名单存在的理由：pi 目录只收录它已知的模型，厂商新上线的型号要等 1–2 周。
      */
     models: dto.models.declared.map((decl) => {
-      const patch = knownModelParams(dto.id, decl.id);
+      const patch = knownModelParams(decl.id);
       return {
         ...decl,
         ...(decl.contextWindow === undefined && patch.contextWindow !== undefined
@@ -71,8 +74,15 @@ function turnFields(
   input: SubmitAgentInput | CompactAgentInput,
   provider: ProviderSecrets,
   piSessionDir: string,
-  /** 开轮环境（skill 集合目录 + MCP 配置）：无状态化后每轮命令都要带全 */
-  environment: { skillsDirs: string[]; mcpServers: Record<string, McpServer> },
+  /** 工具禁区（sessions/ 与 pi-sessions/）：主进程定，随每轮发给闸门 */
+  protectedPaths: string[],
+  /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好 + Git 标识）：无状态化后每轮命令都要带全 */
+  environment: {
+    skillsDirs: string[];
+    mcpServers: Record<string, McpServer>;
+    compaction: CompactionSetting;
+    gitAttribution: boolean;
+  },
 ) {
   return {
     sessionId: input.sessionId,
@@ -81,6 +91,7 @@ function turnFields(
     modelId: input.modelId,
     mode: input.mode,
     piSessionDir,
+    protectedPaths,
     ...environment,
     ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
   };
@@ -92,10 +103,14 @@ export function registerAgentIpc(
   sessions: SessionStore,
   /** pi 把自己的 session 文件放在哪。**路径策略在主进程**，agent 进程只收数据 */
   piSessionDir: string,
+  /** 工具禁区（sessions/ 与 pi-sessions/）。**路径策略在主进程**，随每轮发给闸门 */
+  protectedPaths: string[],
   /** 某条会话该拿哪些 skill 集合目录（global 恒在 + 它的工作区）；路径策略在主进程 */
   skillDirs: (workspaceId: string | null) => string[],
   /** MCP 配置。**主进程读文件**，agent 进程只收解析好的结果（同 skillDirs 的纪律） */
   mcp: McpStore,
+  /** 应用设置。压缩偏好（A-1）从这里装配进每轮开轮命令 */
+  settings: SettingsStore,
 ): void {
   /**
    * 读一份 mcp.json。读不出来不拦开轮：失败当场打日志、管理面会把读错原文显示出来；
@@ -107,6 +122,39 @@ export function registerAgentIpc(
       console.error("[main] mcp.json 读不了，这一轮没有 MCP 工具", error);
       return {};
     });
+
+  /** 每轮现读压缩偏好：设置改动下一轮即生效，无需重启会话 */
+  const readCompaction = async (): Promise<CompactionSetting> =>
+    (await settings.read()).compaction ?? COMPACTION_DEFAULT;
+
+  /** Git 标识同款每轮现读；缺席 = 开启（兼容从没动过这个开关的旧设置文件） */
+  const readGitAttribution = async (): Promise<boolean> =>
+    (await settings.read()).gitAttribution ?? true;
+
+  /**
+   * 命名专用模型（设置里的 titleModel）装配成带密钥的载荷。没指定、指的
+   * provider 已删、或密钥取不到，一律返回 undefined 让 runtime 退回会话模型——
+   * 标题是易耗品，不该因为一个删掉的 provider 就停掉；但原因要落到 dev 终端，
+   * 否则「我选了模型为什么没生效」无从查起。
+   */
+  const readTitleModel = async (): Promise<
+    { provider: ProviderSecrets; modelId: string } | undefined
+  > => {
+    const choice = (await settings.read()).titleModel;
+    if (choice === undefined) return undefined;
+    try {
+      return {
+        provider: await resolveProviderSecrets(providers, choice.providerId),
+        modelId: choice.modelId,
+      };
+    } catch (error: unknown) {
+      console.error(
+        `[main] 标题模型 ${choice.providerId}/${choice.modelId} 装配失败，这条退回会话模型`,
+        error,
+      );
+      return undefined;
+    }
+  };
 
   ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
 
@@ -145,22 +193,24 @@ export function registerAgentIpc(
 
   ipcMain.handle(ipcChannels.agentSubmit, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers() }) });
+    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     await settleFirstTurn(input, piSessionFile);
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
-    if (await sessions.needsAutoTitle(input.sessionId)) host.generateTitle(input.sessionId, input.text);
+    if (await sessions.needsAutoTitle(input.sessionId)) {
+      host.generateTitle(input.sessionId, input.text, await readTitleModel());
+    }
   });
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers() }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
