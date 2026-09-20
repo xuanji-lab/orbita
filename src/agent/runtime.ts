@@ -37,6 +37,7 @@ import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts"
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { gitAttributionGuideline } from "./git-attribution.ts";
 import { McpHub } from "./mcp.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
@@ -504,15 +505,22 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
             pi.on("before_agent_start", (event) => ({
-              systemPrompt: `${event.systemPrompt}\n\n${describePermissionMode(
-                currentMode(),
-                [
+              // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
+              systemPrompt: [
+                event.systemPrompt,
+                describePermissionMode(currentMode(), [
                   ...mcpHub.currentTools().map((tool) => tool.name),
                   "create_skill",
                   "add_mcp_server",
                   "read_task",
-                ],
-              )}\n\n${STORE_TOOLS_GUIDELINES}\n\n${TOOL_GUIDELINES}`,
+                ]),
+                STORE_TOOLS_GUIDELINES,
+                TOOL_GUIDELINES,
+                // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
+                gitAttributionGuideline(command.gitAttribution ?? true),
+              ]
+                .filter((part) => part !== "")
+                .join("\n\n"),
             }));
           },
         },

@@ -83,6 +83,8 @@ function General(props: { settings: AppSettings; onChange: (patch: SettingsPatch
   // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
   const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
   const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
+  // 同理：缺席 = 开启，UI 要把这一层兜回来，否则新用户看到的是 Off、实际在签名
+  const gitAttribution = props.settings.gitAttribution ?? true;
   return (
     <div style={{ display: "grid", gap: "var(--space-6)", alignContent: "start" }}>
       <Section label="Appearance">
@@ -125,6 +127,26 @@ function General(props: { settings: AppSettings; onChange: (patch: SettingsPatch
                   {value}%
                 </Chip>
               ))}
+            </span>
+          }
+        />
+      </Section>
+      <Section label="Git">
+        <Row
+          name="Commit & PR attribution"
+          hint="Adds a Made-with: Orbita trailer to commits the agent writes for you, and a Made with Orbita line to pull request descriptions. Never sets Co-Authored-By or changes the author."
+          control={
+            /* 设计系统里没有 Switch，开关就用两个 Chip——与 Auto-compact 的 Off 同一个形状 */
+            <span style={{ display: "flex", gap: 2 }}>
+              <Chip active={gitAttribution} onClick={() => props.onChange({ gitAttribution: true })}>
+                On
+              </Chip>
+              <Chip
+                active={!gitAttribution}
+                onClick={() => props.onChange({ gitAttribution: false })}
+              >
+                Off
+              </Chip>
             </span>
           }
         />

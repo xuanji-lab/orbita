@@ -76,11 +76,12 @@ function turnFields(
   piSessionDir: string,
   /** 工具禁区（sessions/ 与 pi-sessions/）：主进程定，随每轮发给闸门 */
   protectedPaths: string[],
-  /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好）：无状态化后每轮命令都要带全 */
+  /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好 + Git 标识）：无状态化后每轮命令都要带全 */
   environment: {
     skillsDirs: string[];
     mcpServers: Record<string, McpServer>;
     compaction: CompactionSetting;
+    gitAttribution: boolean;
   },
 ) {
   return {
@@ -126,6 +127,10 @@ export function registerAgentIpc(
   const readCompaction = async (): Promise<CompactionSetting> =>
     (await settings.read()).compaction ?? COMPACTION_DEFAULT;
 
+  /** Git 标识同款每轮现读；缺席 = 开启（兼容从没动过这个开关的旧设置文件） */
+  const readGitAttribution = async (): Promise<boolean> =>
+    (await settings.read()).gitAttribution ?? true;
+
   ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
 
   /**
@@ -163,7 +168,7 @@ export function registerAgentIpc(
 
   ipcMain.handle(ipcChannels.agentSubmit, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
+    const piSessionFile = await host.submit({ type: "submit", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     await settleFirstTurn(input, piSessionFile);
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
@@ -173,12 +178,12 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction() }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
