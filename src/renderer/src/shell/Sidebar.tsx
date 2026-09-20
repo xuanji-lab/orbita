@@ -439,7 +439,9 @@ function WorkspaceGroup(props: {
 
   return (
     <div
-      style={{ padding: "var(--space-2) 0" }}
+      // 组本身不再垫 padding：之前上下各 8px 加 28 的行高 = 44，三个空组排在一起
+      // 比下方 32px 的任务行松一截，像三块各自为政的卡（2026-09-21 wafo）。
+      // 组头行高改成与 NavRow 同一个 token，两种行在同一张列表里等高。
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => {
         setHover(false);
@@ -452,7 +454,7 @@ function WorkspaceGroup(props: {
           gridTemplateColumns: "20px 24px minmax(0,1fr) auto 26px",
           alignItems: "center",
           gap: "var(--space-1)",
-          minHeight: 28,
+          minHeight: "var(--control-height-md)",
         }}
       >
         {/* 空组没有可折的东西，开关就不摆——一个点了什么都不发生的开关比没有更吵 */}
