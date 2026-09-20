@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import remarkBreaks from "remark-breaks";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -43,18 +44,35 @@ const SANITIZE_SCHEMA = {
  *   白名单剥离，其余标签仍是纯文本。白名单可审计，攻击面有界。
  * - 元素样式在 `styles.css` 的 `.chat-md` 作用域里，走设计系统 token。
  */
-export const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
+/**
+ * 气泡内禁掉的元素：标题摊平成文本——`#` 开头在气泡里变成大标题是事故。
+ * 其余照全量管线（表格 / 粗体 / 代码块 / 数学都放行——wafo 2026-09-20：
+ * 「正文里表格和加粗渲染正确，user message 为什么不一并渲染」）。
+ */
+const BUBBLE_BANNED = ["h1", "h2", "h3", "h4", "h5", "h6"];
+
+export const MarkdownBlock = memo(function MarkdownBlock({
+  text,
+  variant = "full",
+}: {
+  text: string;
+  /** "bubble"：用户气泡内的轻量渲染——标题摊平成文本；单个换行保留为 <br>
+   *（remark-breaks，用户消息里按 Enter 的换行不该被 markdown 吞掉）。 */
+  variant?: "full" | "bubble";
+}) {
+  const bubble = variant === "bubble";
   return (
-    <div className="chat-md">
+    <div className={bubble ? "chat-md bubble-md" : "chat-md"}>
       <MarkdownErrorBoundary>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, remarkDemoteBoundaryMath]}
+          remarkPlugins={bubble ? [remarkGfm, remarkMath, remarkBreaks, remarkDemoteBoundaryMath] : [remarkGfm, remarkMath, remarkDemoteBoundaryMath]}
           rehypePlugins={[
             rehypeRaw,
             [rehypeSanitize, SANITIZE_SCHEMA],
             [rehypeKatex, { throwOnError: false, strict: false, trust: false }],
           ]}
           components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre }}
+          {...(bubble ? { disallowedElements: BUBBLE_BANNED, unwrapDisallowed: true } : {})}
         >
           {closePendingMath(text)}
         </ReactMarkdown>

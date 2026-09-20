@@ -625,6 +625,24 @@ body {
   margin: 0;
 }
 
+/* 用户气泡内的 markdown（variant="bubble"）：行高走气泡规格，段落间距压小——
+   气泡是对话不是文档。标题已在组件层摊平成文本（BUBBLE_BANNED）。 */
+.chat-md.bubble-md {
+  line-height: var(--line-height-bubble);
+}
+
+.chat-md.bubble-md p {
+  margin: var(--space-1) 0;
+}
+
+.chat-md.bubble-md > :first-child {
+  margin-top: 0;
+}
+
+.chat-md.bubble-md > :last-child {
+  margin-bottom: 0;
+}
+
 .chat-md li::marker {
   color: var(--color-text-tertiary);
 }

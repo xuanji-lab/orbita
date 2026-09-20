@@ -1114,15 +1114,27 @@ function TurnRollupLine(props: {
  */
 function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
   const [copied, setCopied] = useState(false);
+  // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
+  // 渐变遮罩 + Show more/less 开合。overflowing 只在折叠态量——展开后
+  // scrollHeight == clientHeight，结论会丢，按钮就再也收不回了。
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1200);
     return () => window.clearTimeout(timer);
   }, [copied]);
-  const copyText = props.item.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
+  const textBlocks = props.item.content.filter((block) => block.type === "text");
+  const copyText = textBlocks.map((block) => block.text).join("\n");
+  // markdown 轻量渲染（表格/粗体/代码块/数学放行，标题摊平——wafo 2026-09-20：
+  // 「正文里渲染正确，user message 为什么不一并渲染」）。多块之间空行分段。
+  const text = textBlocks.map((block) => block.text).join("\n\n");
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const el = bubbleRef.current;
+    if (el !== null) setOverflowing(el.scrollHeight > el.clientHeight + 1);
+  }, [text, expanded]);
   return (
     <div
       style={{
@@ -1134,7 +1146,9 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
       }}
     >
       <div
+        ref={bubbleRef}
         style={{
+          position: "relative",
           width: "fit-content",
           maxWidth: "var(--bubble-max-width)",
           minWidth: 0,
@@ -1144,35 +1158,70 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           borderRadius: "var(--radius-bubble)",
           fontSize: "var(--font-size-chat)",
           lineHeight: "var(--line-height-bubble)",
-          whiteSpace: "pre-wrap",
           overflowWrap: "anywhere",
+          // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
+          ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
         }}
       >
-        {props.item.content.map((block, index) =>
-          block.type === "text" ? <MathText key={index} text={block.text} /> : null,
+        <MarkdownBlock text={text} variant="bubble" />
+        {!expanded && overflowing && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: "var(--space-8)",
+              background: "linear-gradient(transparent, var(--color-chat-card-bg))",
+              borderRadius: "0 0 var(--radius-bubble) var(--radius-bubble)",
+              pointerEvents: "none",
+            }}
+          />
         )}
       </div>
-      <button
-        type="button"
-        title={copied ? "Copied" : "Copy message"}
-        aria-label={copied ? "Copied" : "Copy message"}
-        disabled={copyText === ""}
-        onClick={() => {
-          void navigator.clipboard.writeText(copyText);
-          setCopied(true);
-        }}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          padding: 3,
-          border: "none",
-          background: "none",
-          color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
-          cursor: copyText === "" ? "default" : "pointer",
-        }}
-      >
-        <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+        {overflowing && (
+          <button
+            type="button"
+            title={expanded ? "Show less" : "Show more"}
+            aria-label={expanded ? "Show less" : "Show more"}
+            onClick={() => setExpanded((value) => !value)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: 3,
+              border: "none",
+              background: "none",
+              color: "var(--color-text-tertiary)",
+              cursor: "pointer",
+            }}
+          >
+            <Icon name={expanded ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} />
+          </button>
+        )}
+        <button
+          type="button"
+          title={copied ? "Copied" : "Copy message"}
+          aria-label={copied ? "Copied" : "Copy message"}
+          disabled={copyText === ""}
+          onClick={() => {
+            void navigator.clipboard.writeText(copyText);
+            setCopied(true);
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            padding: 3,
+            border: "none",
+            background: "none",
+            color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
+            cursor: copyText === "" ? "default" : "pointer",
+          }}
+        >
+          <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
+        </button>
+      </div>
     </div>
   );
 }
