@@ -1,25 +1,29 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Icon } from "./Icon";
 import { api } from "../api";
 
 /**
  * 窗口标题栏——转帧式窗口后自绘的那一条（right-drawer-X，wafo 2026-09-11 裁决）。
  *
- * 只住窗口键：Windows/Linux 画最小化/最大化/关闭三键（frame:false 之后系统不给了）；
- * macOS 的红绿灯是系统的，这里只剩拖拽区。**「复制 transcript」与「抽屉开关」
- * 不住这里**——它们在右图标条（RightRail，wafo 2026-09-12 裁决）。
+ * **只为 Windows/Linux 渲染**：转帧式（frame:false）后系统不给窗口键，这里自绘
+ * 最小化/最大化/关闭。macOS 不渲染本组件——红绿灯是系统的，拖拽区由各顶部行的
+ * `.titlebar` 兼任（隐性标题栏）；macOS 上渲染它只会多出一条 38px 空灰条，还弄丢
+ * 双击缩放（A-0 复验 BUG-1/BUG-2）。
+ *
+ * 「复制 transcript」与「抽屉开关」不住这里——它们在右图标条（RightRail，
+ * wafo 2026-09-12 裁决）。
  *
  * 整条 `-webkit-app-region: drag`（styles.css 的 .titlebar），按钮逐个 no-drag——
- * 不然点按钮等于拖窗口。macOS 上左端让出红绿灯净空，也是 .titlebar 的既有规则。
+ * 不然点按钮等于拖窗口。
  */
 export function Titlebar() {
   const [isMaximized, setIsMaximized] = useState(false);
 
+  if (api.platform === "darwin") return null;
+
   return (
     <div className="titlebar window-titlebar">
       <div className="window-titlebar-actions">
-        {api.platform !== "darwin" && (
-          <>
             <button className="titlebar-btn" title="最小化" onClick={() => void api.window.minimize()}>
               <Icon name="minus" size={14} />
             </button>
@@ -36,8 +40,6 @@ export function Titlebar() {
             <button className="titlebar-btn close" title="关闭" onClick={() => void api.window.close()}>
               <Icon name="x" size={14} />
             </button>
-          </>
-        )}
       </div>
     </div>
   );

@@ -77,7 +77,10 @@ export function RightRail(props: {
         overflow: "hidden",
       }}
     >
-      {/* 顶部这行兼作拖拽区（.titlebar）；Skills 入口住在行内与折叠图标同行 */}
+      {/* 顶部这行兼作拖拽区（.titlebar）；Skills 入口住在行内与折叠图标同行。
+          paddingInlineStart: 0——豁免 darwin 给 .titlebar 统一加的 66px 红绿灯净空：
+          红绿灯在窗口左上，这条 32px 窄条在最右，让净空会把 icon 推出可视区外
+          （overflow:hidden，A-0 复验 BUG-3）。 */}
       <span
         className="titlebar"
         style={{
@@ -87,6 +90,7 @@ export function RightRail(props: {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
+          paddingInlineStart: 0,
         }}
       >
         {entry("skills", "book-open", "Skills")}
