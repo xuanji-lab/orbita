@@ -589,6 +589,7 @@ function NodeLabel(props: { children: React.ReactNode }) {
         fontSize: "var(--font-size-micro)",
         letterSpacing: "0.06em",
         textTransform: "uppercase",
+        fontWeight: "var(--weight-bold)",
         color: "var(--color-text-secondary)",
       }}
     >
