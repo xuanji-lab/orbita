@@ -136,6 +136,26 @@ describe("parseSettings 的 compaction（A-1）", () => {
   });
 });
 
+describe("parseSettings 的 gitAttribution", () => {
+  it("缺席 = 开启，且不落这个键——默认值不写进用户的文件", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }), {
+      theme: "dark",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
+  });
+
+  it("true / false 都原样保留", () => {
+    deepStrictEqual(parseSettings({ gitAttribution: true }).gitAttribution, true);
+    deepStrictEqual(parseSettings({ gitAttribution: false }).gitAttribution, false);
+  });
+
+  it("非布尔一律丢掉，不当成真——手改出的 \"yes\" 不该变成一个开着的开关", () => {
+    deepStrictEqual(parseSettings({ gitAttribution: "yes" }).gitAttribution, undefined);
+    deepStrictEqual(parseSettings({ gitAttribution: 1 }).gitAttribution, undefined);
+    deepStrictEqual(parseSettings({ gitAttribution: null }).gitAttribution, undefined);
+  });
+});
+
 describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选择）", () => {
   it("完整 lastUsed 保留", () => {
     deepStrictEqual(

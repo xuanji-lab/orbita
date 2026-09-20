@@ -76,6 +76,13 @@ export interface AppSettings {
    * 改动**下一轮对话即生效**：pi 的压缩判定每次现读设置，runtime 每轮重新覆盖。
    */
   compaction?: CompactionSetting;
+  /**
+   * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
+   * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
+   * 只认布尔——这个文件手改得到，`"yes"` 该被丢掉而不是当成真。
+   * 改动下一轮对话即生效（主进程每轮现读，同 compaction）。
+   */
+  gitAttribution?: boolean;
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
 }
@@ -127,6 +134,7 @@ export function parseSettings(raw: unknown): AppSettings {
     drawer?: unknown;
     rightPanelWidth?: unknown;
     compaction?: unknown;
+    gitAttribution?: unknown;
     lastUsed?: unknown;
   };
   const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
@@ -143,6 +151,11 @@ export function parseSettings(raw: unknown): AppSettings {
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(compaction === undefined ? {} : { compaction }),
+    // 非布尔一律当作「没动过」丢掉：缺席与 true 是同一个行为，落一个坏值进来
+    // 只会让设置面显示的状态和实际行为对不上
+    ...(typeof record.gitAttribution === "boolean"
+      ? { gitAttribution: record.gitAttribution }
+      : {}),
     ...(lastUsed === undefined ? {} : { lastUsed }),
   };
 }

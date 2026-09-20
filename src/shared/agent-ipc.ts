@@ -249,6 +249,12 @@ export type AgentCommand =
        * 覆盖进去。缺席（理论上不发生，主进程兜 COMPACTION_DEFAULT）= pi 出厂默认。
        */
       compaction?: CompactionSetting;
+      /**
+       * commit / PR 的 Orbita 标识开关。**主进程从设置装配**（同 compaction）：
+       * runtime 不读设置文件，只收数据，每轮拼进 system prompt。
+       * 缺席 = 开启（与设置契约同一口径）。
+       */
+      gitAttribution?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -276,6 +282,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
       compaction?: CompactionSetting;
+      /** commit / PR 的 Orbita 标识开关，语义同 submit */
+      gitAttribution?: boolean;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
@@ -299,6 +307,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */
       compaction?: CompactionSetting;
+      /** 压缩轮自己不提交，但开轮装配是同一份（turnFields），语义同 submit */
+      gitAttribution?: boolean;
     }
   | { type: "listBuiltins" }
   /**
