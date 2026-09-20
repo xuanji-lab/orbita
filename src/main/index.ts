@@ -39,22 +39,23 @@ const SECURITY_INVARIANTS = {
  * macOS 上的窗口形态。**边界卡就是窗口本身**——我们不画背景，背景是用户自己的桌面。
  *
  * 三个选项各有各的必须：
- *  - `titleBarStyle: "hidden"` —— 去掉标题栏但**留下红黄绿三个键**，让它们落进边界卡里。
+ *  - `titleBarStyle: "hiddenInset"` —— 去掉标题栏但**留下红黄绿三个键**，让它们落进边界卡里。
  *    渲染层给侧栏顶部留出净空并标 `-webkit-app-region: drag`，否则窗口就拖不动了。
  *  - `vibrancy` —— CSS 的 `backdrop-filter` **模糊不了窗口背后的桌面**（合成器里根本没有那块内容），
  *    真正的「透出桌面」只能由系统材质给。边界卡在它上面再画一层 `--glass-bg`，
  *    合出来就是设计系统要的 layer 1。
- *  - **不设 `backgroundColor`** —— 设了 vibrancy 的窗口由 Electron 自己把底色清掉；以前额外给的
- *    `#00000000` 与双击缩放时灵时不灵同期存在，对齐 Proma 一并去掉（见 MAC_WINDOW 内注释）。
+ *  - **不设 `backgroundColor`** —— 设了 vibrancy 的窗口由 Electron 自己把底色清掉，额外给
+ *    `#00000000` 是多余的一笔。（它曾被怀疑与双击缩放有关，已排除，见 MAC_WINDOW 内注释。）
  *
  * 非 macOS 没有等价物，退回不透明底色；边界卡的圆角那时由渲染层自己画。
  */
 const MAC_WINDOW = {
   /**
-   * hiddenInset 而不是 hidden（2026-09-21）：双击拖拽区缩放在 hidden 下时灵时不灵，拖拽却次次都认。
-   * 自己收 dblclick 发 IPC 切换的方案试过并撤回（518ce2d）：与系统的双击识别打架。
-   * Proma 同样是隐性标题栏 + vibrancy，用 hiddenInset 且不设透明 backgroundColor，
-   * 没有任何自定义代码，双击稳定——窗口选项对齐过去。两者对红绿灯的定位同样听 trafficLightPosition。
+   * hiddenInset 与 hidden 在这里等价：红绿灯位置由 trafficLightPosition 定死，
+   * 取 hiddenInset 只是与 Proma 保持一致。**它不是双击缩放那个 bug 的修复**——
+   * 那一刀在依赖里：拖拽区的双击缩放要 Electron ≥ 43（见 package.json 的 electron）。
+   * Electron 38 把双击交给 AppKit，而 AppKit 只认原生标题栏矩形（窗口顶部约 30px），
+   * `-webkit-app-region: drag` 只接管拖拽——于是拖拽带 y 12–66 全程能拖，y ≥ 34 却不缩放。
    */
   titleBarStyle: "hiddenInset",
   trafficLightPosition: { x: 18, y: 19 },
