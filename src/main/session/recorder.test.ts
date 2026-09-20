@@ -112,9 +112,10 @@ describe("createSessionRecorder", () => {
     assert.equal(item !== undefined && "status" in item ? item.status : undefined, "aborted");
   });
 
-  // 重试的失败尾巴：auto_retry 每次失败尝试经 message_end 发一条 status=error、
-  // content 为空的终态帧。pi 自己的本子不收它（2026-09-01 实测的唯一系统性落账
-  // 差异），我们也不收——否则分支对账就得为它开口子（store.ts isEmptyErrorAssistant）。
+  // 空 error 回答：auto_retry 的失败尝试（以及非流式阶段被 interrupt 打断）经
+  // message_end 发一条 status=error、content 为空的终态帧。pi 自己的本子会收它，
+  // 我们刻意不收（空条目没有上下文价值）；由此产生的两本账差异，由分支对账侧
+  // 对 pi 条目施加同一谓词抵消（store.ts isEmptyErrorAssistant / branch-cut.ts 同名 entry 版）。
   const retryTail = {
     id: "a2",
     role: "assistant" as const,
@@ -125,7 +126,7 @@ describe("createSessionRecorder", () => {
     stopReason: "error" as const,
   };
 
-  test("重试的失败尾巴不落盘——status=error 且内容为空", async () => {
+  test("空 error 回答不落盘——status=error 且内容为空", async () => {
     record(progress({ type: "item_finished", item: retryTail }));
     await settle();
     assert.deepEqual((await store.load(ID))?.transcript, []);

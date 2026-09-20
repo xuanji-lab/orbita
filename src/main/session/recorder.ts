@@ -7,9 +7,12 @@
  *   user       `item_started`   —— 用户消息出生即完成，adapter 不会再给它发 finished
  *   compacted  `compaction`     —— 压缩界碑，事件里就是完整的记录，直接落
  *
- * **唯一不收的终态帧**：重试的失败尾巴（status=error 且内容为空的 assistant，
- * 见 store.ts 的 isEmptyErrorAssistant）——pi 的本子不收它，我们多写一条，
- * 分支对账就得跳一条。
+ * **唯一不收的终态帧**：空 error 回答（status=error 且内容为空的 assistant，见
+ * store.ts 的 isEmptyErrorAssistant）——auto_retry 的失败尝试会产生它，非流式阶段
+ * （工具执行中 / 两次模型调用之间）被 interrupt 打断时 pi 产出的也是这个形状。
+ * **pi 的本子会收它，我们刻意不收**：它不带任何上下文，存下来只是 UI 上一个空
+ * 错误气泡。两本账由此产生的差异，由分支对账侧对 pi 条目施加同一谓词来抵消
+ * （branch-cut.ts 的 isEmptyErrorAssistantEntry）。
  *
  * **abort 的半截回答同样落盘**，这是刻意的。pi 的 agent-loop 在 abort 时先无条件发
  * `message_end`、之后才判 `stopReason === "aborted"`，所以它照样走终态帧。

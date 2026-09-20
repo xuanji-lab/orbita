@@ -331,7 +331,7 @@ describe("SessionStore.branch", () => {
           stopReason: "stop",
         };
 
-  /** pi 不落盘的失败尾巴：status=error 且内容为空 */
+  /** 我们不落盘的空 error 回答：status=error 且内容为空 */
   const emptyError = (id: string): TranscriptItem => ({
     id,
     role: "assistant",

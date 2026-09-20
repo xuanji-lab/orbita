@@ -2,23 +2,43 @@
  * 分支裁点 —— C-2 会话分支的纯判定。
  *
  * 为什么需要对账：两本账没有 id 映射（pi-ai 的 Message 没有 id，我们的消息 id 是
- * adapter 自铸的 UUID），唯一桥梁是「user/assistant 按出现顺序一一对应」——
- * 2026-09-01 对磁盘上 72 条真实会话全量实证成立（含全部 16 条带压缩的）。
- * 罕见漂移（同毫秒排序、pi 不落盘的失败尾巴）会让对不上——**宁可拒绝分支，
- * 不可切错位置**：切错意味着用户以为带着 A 之前的前文，实际带的是 B 的。
+ * adapter 自铸的 UUID），唯一桥梁是「user/assistant 按出现顺序一一对应」。
+ *
+ * **两本账对「空 error 回答」的处理必须一致**：pi 在 abort（工具执行中 / 两次模型
+ * 调用之间被打断）与 auto_retry 的失败尝试上都会产出 `stopReason:"error"` 且
+ * content 为空的 assistant，并经 message_end 无条件落进自己的本子；我们刻意不落盘
+ * （空条目没有任何上下文价值，见 store.ts 的 isEmptyErrorAssistant）。所以这里对 pi
+ * 条目施加同一个排除谓词（isEmptyErrorAssistantEntry），否则被打断过的会话从漂移点
+ * 起就再也分支不了。
+ *
+ * 其余漂移（如同毫秒排序）仍然拒绝分支——**宁可拒绝分支，不可切错位置**：
+ * 切错意味着用户以为带着 A 之前的前文，实际带的是 B 的。
  *
  * 纯模块：不 import pi（纯判定逻辑纪律），entry 只声明用到的结构字段。
  */
 
 /**
  * pi session 文件里一条 entry 的结构化形状。
- * 只用到 `type`（"message" 才是对话消息；compaction / model_change 等都不是）与
- * `message.role`（user / assistant / toolResult）。
+ * 只用到 `type`（"message" 才是对话消息；compaction / model_change 等都不是）、
+ * `message.role`（user / assistant / toolResult），以及判定空 error 回答所需的
+ * `message.stopReason` 与 `message.content`。
  */
 export interface BranchCutEntry {
   type: string;
   id: string;
-  message?: { role?: unknown };
+  message?: { role?: unknown; stopReason?: unknown; content?: unknown };
+}
+
+/**
+ * 「空 error 回答」：pi 本子里 `stopReason:"error"` 且 content 为空的 assistant 条目。
+ * abort 与 auto_retry 的失败尝试都会产生它，pi 收、我们不收，所以对账时两侧同样排除。
+ * 带内容的 error 回答（真失败但说了话）不在此列——那条我们是落盘的，必须计入。
+ */
+export function isEmptyErrorAssistantEntry(entry: BranchCutEntry): boolean {
+  if (entry.type !== "message") return false;
+  const message = entry.message;
+  if (message?.role !== "assistant" || message.stopReason !== "error") return false;
+  return Array.isArray(message.content) && message.content.length === 0;
 }
 
 /**
@@ -39,6 +59,8 @@ export function planBranchCut(
     const entry = entries[i];
     // noUncheckedIndexedAccess：下标访问可能 undefined，跳过而非拿到再判
     if (entry === undefined || entry.type !== "message") continue;
+    // 空 error 回答两侧同样排除（我们不落盘，这里也不计）
+    if (isEmptyErrorAssistantEntry(entry)) continue;
     const role = entry.message?.role;
     if (role === "user" || role === "assistant") counted.push({ id: entry.id, role, fileIndex: i });
   }

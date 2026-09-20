@@ -58,11 +58,14 @@ export interface BranchPlan {
 }
 
 /**
- * 「重试的失败尾巴」：status=error 且内容为空的 assistant 记录。pi 的 auto_retry
- * 每次失败尝试都会发这样一条终态帧，但 pi 自己的本子**不收**它（2026-09-01 对
- * 72 条真实会话实测的唯一系统性落账差异）——所以我们的落盘闸口（recorder）同样
- * 不收，两本账天然对齐。谓词收敛在这里：落盘侧「不写」与对账侧（branchRoles）
- * 「照跳」必须同一标准，各写一份迟早漂移。
+ * 「空 error 回答」：status=error 且内容为空的 assistant 记录。auto_retry 的每次失败
+ * 尝试会发这样一条终态帧；在非流式阶段（工具执行中 / 两次模型调用之间）被
+ * interrupt 打断时，pi 产出的也是这个形状。**pi 自己的本子会收它**（message_end 上
+ * 无条件 appendMessage，_prepareRetry 只从 agent state 里摸掉、刷不掉会话文件），
+ * 而我们**刻意不收**——空条目不带任何上下文，不该出现在 transcript 里。两本账因此
+ * 天然不等长，对齐靠对账侧同样排除（branch-cut.ts 的 isEmptyErrorAssistantEntry 对 pi
+ * 条目用同一谓词）。谓词收敛在这里：落盘侧「不写」与对账侧（branchRoles）「照跳」
+ * 必须同一标准，各写一份迟早漂移。
  */
 export function isEmptyErrorAssistant(record: SessionRecord): boolean {
   return record.role === "assistant" && record.status === "error" && record.content.length === 0;
@@ -70,10 +73,10 @@ export function isEmptyErrorAssistant(record: SessionRecord): boolean {
 
 /**
  * 前缀的 user/assistant 角色序列——与 pi 文件里的消息条目按位对账用（两本账没有
- * id 映射，顺序是唯一桥梁）。跳过「重试的失败尾巴」（isEmptyErrorAssistant）：
- * pi 的本子里没有它，带上它对账必炸。落盘侧已不再写新记录，这里跳的是
- * 谓词收敛之前存的存量。其余罕见漂移由 agent 进程的对账守卫兜底——
- * 拒绝分支优于切错位置。
+ * id 映射，顺序是唯一桥梁）。跳过「空 error 回答」（isEmptyErrorAssistant）：落盘侧
+ * 不写新记录，这里跳的是谓词收敛之前存的存量；pi 侧虽然收了这类条目，但
+ * branch-cut.ts 对它们施加同一个排除谓词，两侧因此对得上。其余罕见漂移由 agent
+ * 进程的对账守卫兜底——拒绝分支优于切错位置。
  */
 export function branchRoles(records: readonly SessionRecord[]): ("user" | "assistant")[] {
   const roles: ("user" | "assistant")[] = [];
