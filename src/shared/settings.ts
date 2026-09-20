@@ -4,6 +4,7 @@
  * 范围刻意只有主题一项。设置面从极少的 tab 起步、但 UI 第一天就落（guideline §六）；
  * 字段等有真实消费者再加，不提前占位。
  */
+import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 
 /**
  * 主题偏好。**四态**——"system" 是真正的默认，不是「light 的别名」：
@@ -49,6 +50,18 @@ export const COMPACTION_DEFAULT: CompactionSetting = { reservePercent: 20, enabl
 /** reservePercent 的合法区间（解析钳制与设置面选项共用同一对数字）。 */
 export const COMPACTION_PERCENT = { min: 5, max: 50 } as const;
 
+/**
+ * 上次使用的权限档与模型（A-0 复验 bug A：重启后 composer 忘了上次的选择）。
+ * 会话各自的档/模型记在各条 meta 与内存 Map（按会话记账，cd0ee98）；这里是
+ * **启动恢复点**：新会话槽的初始值。切换时逐键写回（改档只写 mode）。
+ * 缺席 = 应用默认（第一档 plan、第一个可用模型）。
+ */
+export interface LastUsedIntent {
+  mode?: PermissionMode;
+  providerId?: string;
+  modelId?: string;
+}
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -63,6 +76,8 @@ export interface AppSettings {
    * 改动**下一轮对话即生效**：pi 的压缩判定每次现读设置，runtime 每轮重新覆盖。
    */
   compaction?: CompactionSetting;
+  /** 上次使用的权限档与模型；缺席 = 应用默认。 */
+  lastUsed?: LastUsedIntent;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -74,8 +89,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * 写入补丁：顶层按键覆盖，`drawer` 内部再按键合并（见 SettingsStore.write）。
  * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
  */
-export type SettingsPatch = Partial<Omit<AppSettings, "drawer">> & {
+export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed">> & {
   drawer?: Partial<DrawerSettings>;
+  lastUsed?: Partial<LastUsedIntent>;
 };
 
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
@@ -111,10 +127,12 @@ export function parseSettings(raw: unknown): AppSettings {
     drawer?: unknown;
     rightPanelWidth?: unknown;
     compaction?: unknown;
+    lastUsed?: unknown;
   };
   const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
   const width = record.rightPanelWidth;
   const compaction = parseCompaction(record.compaction);
+  const lastUsed = parseLastUsed(record.lastUsed);
   return {
     theme,
     ...(typeof width === "number" &&
@@ -125,7 +143,28 @@ export function parseSettings(raw: unknown): AppSettings {
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(compaction === undefined ? {} : { compaction }),
+    ...(lastUsed === undefined ? {} : { lastUsed }),
   };
+}
+
+/**
+ * lastUsed 逐字段校验：mode 必须在三档里，id 必须是非空字符串。
+ * 整段缺席或三个键全无效 = 用户从没动过它（返回 undefined，不落盘）。
+ */
+function parseLastUsed(raw: unknown): LastUsedIntent | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as { mode?: unknown; providerId?: unknown; modelId?: unknown };
+  const out: LastUsedIntent = {};
+  if ((PERMISSION_MODES as readonly unknown[]).includes(record.mode)) {
+    out.mode = record.mode as PermissionMode;
+  }
+  if (typeof record.providerId === "string" && record.providerId !== "") {
+    out.providerId = record.providerId;
+  }
+  if (typeof record.modelId === "string" && record.modelId !== "") {
+    out.modelId = record.modelId;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
 }
 
 function parseDrawer(raw: unknown): DrawerSettings {
