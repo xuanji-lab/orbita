@@ -58,10 +58,8 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
-import { isPlanBilling, KNOWN_PROVIDERS, knownModelParams } from "@shared/known-providers";
-import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
-import { api } from "../../api";
-import { kindOf, modelContextText } from "../settings/providers-view-model.ts";
+import { isPlanBilling } from "@shared/known-providers";
+import { modelMenuItems, useBuiltinCatalog } from "../settings/model-menu";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
@@ -686,15 +684,8 @@ function ComposerBar(props: { session: ChatSession }) {
   const scopeSource = workspace?.name ?? session.cwd;
   const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
 
-  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
-  // 拉不到就空目录——徽标如实落到 fallback，不挡选模型
-  const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
-  useEffect(() => {
-    void api.provider
-      .builtins()
-      .then(setCatalog)
-      .catch(() => setCatalog([]));
-  }, []);
+  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）
+  const catalog = useBuiltinCatalog();
 
   const scopeItems: MenuItem[] = [
     {
@@ -723,44 +714,12 @@ function ComposerBar(props: { session: ChatSession }) {
     onSelect: () => session.changeMode(value),
   }));
 
-  // 按厂商分组：厂商名做组头行，模型行缩进其下只带参数徽标——参数口径与设置页
-  // 完全同源（用户覆盖 > pi 目录 > 白名单 > 兜底），两边讲同一个故事
-  const modelItems: MenuItem[] = session.usable.flatMap((provider) => {
-    const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-    const metaOf = (id: string): BuiltinModel | undefined =>
-      known?.catalogId === undefined
-        ? undefined
-        : catalog.find((c) => c.id === known.catalogId)?.models.find((m) => m.id === id);
-    const rows: MenuItem[] = [
-      { id: `hdr:${provider.id}`, label: provider.displayName, header: true },
-    ];
-    for (const declared of provider.models.declared) {
-      const badge = modelContextText(
-        declared,
-        metaOf(declared.id),
-        knownModelParams(known?.id ?? "", declared.id),
-      );
-      rows.push({
-        id: `${provider.id}:${declared.id}`,
-        label: declared.id,
-        badge: (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
-            <span className="pv-badge" title="Context window">
-              {badge.text}
-            </span>
-            {declared.vision === true && (
-              <span className="pv-badge" title="Accepts image input — multimodal">
-                <Icon name="image" size={11} strokeWidth={1.8} />
-              </span>
-            )}
-          </span>
-        ),
-        checked:
-          session.model?.providerId === provider.id && session.model.modelId === declared.id,
-        onSelect: () => session.chooseModel(provider.id, declared.id),
-      });
-    }
-    return rows;
+  // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
+  const modelItems: MenuItem[] = modelMenuItems({
+    providers: session.usable,
+    catalog,
+    selected: session.model,
+    onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
   });
 
   return (

@@ -27,6 +27,7 @@ import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
   toBuiltinModel,
+  type PiModel,
 } from "./model-registration.ts";
 import {
   createToolCallGate,
@@ -155,7 +156,46 @@ async function withManualCompactionTuning<T>(session: AgentSession, run: () => P
 }
 
 /**
- * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用，用会话当前模型。
+ * 标题专用模型的鉴权面。**密钥不能沿用账本里的**——账本里那把是会话当前
+ * provider 的，拿它去调另一家只会 401。
+ */
+interface ResolvedTitleModel {
+  model: PiModel;
+  apiKey: string;
+  headers?: Record<string, string>;
+}
+
+/**
+ * 解析标题专用模型（设置里的 titleModel，主进程已把密钥面装配好）。
+ * 自建一次性 ModelRuntime 走同一套「注册 + 解析」（同 setLedgerModel）：
+ * 「能不能用某个模型」在本仓只应该有一套真相。
+ * 解不出来返回 null，由调用方退回会话模型——用户删了那家 provider 不该
+ * 连带把标题停掉。
+ */
+async function resolveTitleModel(
+  payload: NonNullable<Extract<AgentCommand, { type: "generateTitle" }>["model"]>,
+): Promise<ResolvedTitleModel | null> {
+  try {
+    const runtime = await ModelRuntime.create({});
+    const model = registerAndResolveModel(runtime, payload.provider, payload.modelId);
+    if (model === undefined) {
+      console.warn(`[title] 指定的 ${payload.provider.id}/${payload.modelId} 解析不到，退回会话模型`);
+      return null;
+    }
+    return {
+      model,
+      apiKey: payload.provider.apiKey,
+      ...(payload.provider.headers ? { headers: payload.provider.headers } : {}),
+    };
+  } catch (cause) {
+    console.warn("[title] 指定模型装配失败，退回会话模型：", cause);
+    return null;
+  }
+}
+
+/**
+ * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用。默认用会话当前模型；
+ * 用户在设置里指了命名模型就用那一个（连同它自己的密钥与自定义头）。
  * 与当前轮并发跑（主进程在 submit 后立刻发本命令，轮还在 `running` 里），
  * 不阻塞对话；成功（且模型没答 none）才发 `title` 事件。
  * 失败一律静默——标题是易耗品，不该有任何一条报错通路；门禁（meta 的
@@ -173,12 +213,19 @@ async function generateSessionTitle(
   session: AgentSession,
   sessionId: string,
   text: string,
+  /** 命名专用模型；缺席或解析失败都退回会话模型 */
+  titleModel?: Extract<AgentCommand, { type: "generateTitle" }>["model"],
 ): Promise<void> {
   if (note.titleInFlight) return;
   note.titleInFlight = true;
   try {
-    const model = session.model;
+    const dedicated = titleModel === undefined ? null : await resolveTitleModel(titleModel);
+    const model = dedicated?.model ?? session.model;
     if (model === undefined) return;
+    // 鉴权面跟着模型走，**整个换不逐键兼**：专用模型没自定义头时继承账本里
+    // 那份（另一家的），往往正是鉴权失败的来源
+    const auth: { apiKey: string; headers?: Record<string, string> } =
+      dedicated ?? { apiKey: note.apiKey, ...(note.headers ? { headers: note.headers } : {}) };
     // **30 秒硬超时必须有**：标题与当前轮并发抢 provider，请求可能被网关挂住
     // 不返回——没有超时的话 titleInFlight 永远不放，这条会话之后的所有重试
     // 都被在途守卫吞掉（真实事故：一条会话 17 条消息一次标题都没成）。
@@ -189,11 +236,11 @@ async function generateSessionTitle(
         messages: [{ role: "user", content: text, timestamp: Date.now() }],
       },
       {
-        apiKey: note.apiKey,
+        apiKey: auth.apiKey,
         maxTokens: 1024,
         timeoutMs: TITLE_TIMEOUT_MS,
         signal: AbortSignal.timeout(TITLE_TIMEOUT_MS),
-        ...(note.headers ? { headers: note.headers } : {}),
+        ...(auth.headers ? { headers: auth.headers } : {}),
       },
     );
     if (response.stopReason === "error") {
@@ -939,7 +986,13 @@ async function handle(command: AgentCommand): Promise<void> {
     const current = running.get(command.sessionId);
     const note = ledger.get(command.sessionId);
     if (current?.opened != null && note !== undefined) {
-      void generateSessionTitle(note, current.opened.session, command.sessionId, command.text);
+      void generateSessionTitle(
+        note,
+        current.opened.session,
+        command.sessionId,
+        command.text,
+        command.model,
+      );
     }
     return;
   }

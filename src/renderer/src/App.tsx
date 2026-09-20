@@ -196,6 +196,7 @@ export function App() {
               <SettingsView
                 tab={settingsTab}
                 settings={settings}
+                providers={providers}
                 onSettingsChange={changeSettings}
                 onProvidersChange={refresh}
               />

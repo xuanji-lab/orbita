@@ -28,6 +28,7 @@ import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { AgentEvent, AgentStats, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
+import { usableProviders } from "../settings/model-menu";
 import type { CompactedRecord, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 
@@ -543,17 +544,8 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     };
   }, [applyStates, deliverNext, refreshSessions]);
 
-  /** 「配置好」= 设置里绿点的标准：api_key 已入库，或 env 档（密钥来自环境）。
-   * 没填 key 的厂商与复制出来的副本不该出现在模型芯片里——选了也发不出去。 */
-  const usable = useMemo(
-    () =>
-      providers.filter(
-        (p) =>
-          ((p.auth.scheme === "api_key" && p.auth.hasSecret) || p.auth.scheme === "env") &&
-          p.models.declared.length > 0,
-      ),
-    [providers],
-  );
+  /** 「配置好」的标准与设置面的命名模型菜单同源（model-menu），不各写一份 */
+  const usable = useMemo(() => usableProviders(providers), [providers]);
 
   const answerApproval = useCallback(
     (requestId: string, answer: PermissionAnswer) => {
