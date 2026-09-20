@@ -133,6 +133,8 @@ void app.whenReady().then(() => {
   const sessions = new SessionStore(join(configDir, "sessions"));
   const record = createSessionRecorder(sessions);
   const mcp = new McpStore(configDir);
+  // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
+  const workspaces = new WorkspaceStore(configDir);
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -154,7 +156,7 @@ void app.whenReady().then(() => {
     }
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡
     if (event.type === "readTaskRequest") {
-      void applyReadTask(sessions, event).then((result) => {
+      void applyReadTask(sessions, event, workspaces).then((result) => {
         agentHost.answerReadTask(event.requestId, result);
       });
       return;
@@ -188,7 +190,7 @@ void app.whenReady().then(() => {
   });
   registerSkillIpc(skills);
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
-  registerWorkspaceIpc(new WorkspaceStore(configDir), (id) => skills.removeWorkspace(id));
+  registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   registerAgentIpc(
     agentHost,
     providers,

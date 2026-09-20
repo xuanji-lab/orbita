@@ -14,6 +14,10 @@
  * 给多少（2026-09-18 裁决）：一次调用 = 头部 + 全部界碑摘要 + 单行目录 +
  * 最近 10 轮全文；拿目录上的轮号再调 `rounds` 精准取旧的。摘要不算额外
  * 开销——界碑本来就是「此前一切」的压缩，正好补轮窗外的洞。
+ *
+ * 目录模式（2026-09-21）：`task` 缺席 = 列当前工作区的兄弟 task。模型之前没有
+ * 任何会话索引，只能靠 ambiguous 报错里的候选用前缀试探（实测 12 次调用、
+ * 2m12s，最后还读错了工作区）。引用匹配同时改成同工作区优先。
  */
 import type { AgentEvent, ReadTaskCard, ReadTaskOutcome } from "../../shared/agent-ipc.ts";
 import {
@@ -23,6 +27,7 @@ import {
   type SessionMeta,
   type SessionRecord,
 } from "../../shared/session.ts";
+import type { Workspace } from "../../shared/workspace.ts";
 
 /** 简报默认带全文的最近轮数（裁决：10，不设参数——多了用 rounds 精准取） */
 const BRIEFING_RECENT_ROUNDS = 10;
@@ -47,9 +52,31 @@ export type TaskRefMatch =
   | { kind: "ambiguous"; candidates: TaskCandidate[] };
 
 /**
- * 把模型的引用翻成 session id。顺序：精确 id → 精确标题（大小写不敏感，
- * 重名算歧义）→ 唯一前缀（标题或 id）。候选里剔除当前会话；只剩当前会话
- * = 读自己（没有信息增量，纯烧上下文，拒绝）。
+ * 当前会话所在工作区。metas 里找不到自己（新会话还没落盘）视为 null——
+ * 与侧栏 TASKS 组同一口径：`workspaceId === null` 的会话彼此算同一组。
+ */
+function workspaceOf(metas: readonly SessionMeta[], sessionId: string): string | null {
+  return metas.find((meta) => meta.id === sessionId)?.workspaceId ?? null;
+}
+
+/** 兄弟会话：同工作区、排除自己，按 updatedAt 倒序（最近的先看见）。 */
+function siblingsOf(metas: readonly SessionMeta[], sessionId: string): SessionMeta[] {
+  const workspaceId = workspaceOf(metas, sessionId);
+  return metas
+    .filter((meta) => meta.id !== sessionId && meta.workspaceId === workspaceId)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/**
+ * 把模型的引用翻成 session id。顺序：精确 id（全仓）→ 精确标题 → 唯一前缀
+ * （标题或 id）。
+ *
+ * **标题与前缀都是「同工作区优先」**（2026-09-21 复验后加）：用户说「之前那条
+ * task」指的几乎总是侧栏里并排的那条；跨工作区重名把它压成 ambiguous，模型就只能
+ * 靠前缀一条条试——实测 12 次调用 2m12s 还读错了人。工作区内有命中就在工作区内定
+ * 结论，工作区内一个都没有才退回全仓。`workspaceId === null` 的会话彼此算同一组。
+ *
+ * 候选里剔除当前会话；只剩当前会话 = 读自己（没有信息增量，纯烧上下文，拒绝）。
  */
 export function resolveTaskReference(
   ref: string,
@@ -62,7 +89,14 @@ export function resolveTaskReference(
   if (exactId !== undefined) {
     return exactId.id === excludeId ? { kind: "self" } : { kind: "found", id: exactId.id };
   }
-  const exactTitle = metas.filter((meta) => meta.title.trim().toLowerCase() === query);
+  const workspaceId = workspaceOf(metas, excludeId);
+  const scoped = metas.filter((meta) => meta.workspaceId === workspaceId);
+  // 同工作区先试，空了才退回全仓——两级都用同一个谓词
+  const narrow = <T>(pick: (pool: readonly SessionMeta[]) => T[]): T[] => {
+    const inScope = pick(scoped);
+    return inScope.length > 0 ? inScope : pick(metas);
+  };
+  const exactTitle = narrow((pool) => pool.filter((meta) => meta.title.trim().toLowerCase() === query));
   if (exactTitle.length === 1) {
     const meta = exactTitle[0];
     if (meta !== undefined) {
@@ -72,9 +106,11 @@ export function resolveTaskReference(
   if (exactTitle.length > 1) {
     return { kind: "ambiguous", candidates: candidatesOf(exactTitle, excludeId) };
   }
-  const prefixed = metas.filter(
-    (meta) =>
-      meta.title.trim().toLowerCase().startsWith(query) || meta.id.toLowerCase().startsWith(query),
+  const prefixed = narrow((pool) =>
+    pool.filter(
+      (meta) =>
+        meta.title.trim().toLowerCase().startsWith(query) || meta.id.toLowerCase().startsWith(query),
+    ),
   );
   if (prefixed.length === 0) return { kind: "notFound" };
   const visible = candidatesOf(prefixed, excludeId);
@@ -195,11 +231,59 @@ function lastAssistantLine(records: readonly SessionRecord[]): string {
   return "";
 }
 
-function taskHeader(meta: SessionMeta, roundCount: number): string {
+/** 工作区的人话：有名字就报名字，null = 侧栏那组不属于任何工作区的 task。 */
+function workspaceLabel(workspaceName: string | null): string {
+  return workspaceName === null ? "(outside any workspace)" : workspaceName;
+}
+
+/**
+ * 兄弟索引的唯一格式化器：目录模式与 notFound / ambiguous 报错共用同一份，
+ * 模型无论从哪条路径撞上都能一次改道，不用再拿前缀试探。
+ */
+function formatTaskIndex(
+  metas: readonly SessionMeta[],
+  sessionId: string,
+  workspaceName: string | null,
+): string {
+  const siblings = siblingsOf(metas, sessionId);
+  const where =
+    workspaceName === null ? "Tasks outside any workspace" : `Workspace "${workspaceName}"`;
+  if (siblings.length === 0) {
+    return `${where}: this is the only task here — there is no other task to read.`;
+  }
+  const lines = [
+    `${where}: ${siblings.length} other task${siblings.length === 1 ? "" : "s"}, most recently updated first:`,
+  ];
+  for (const meta of siblings) {
+    lines.push(
+      `- ${meta.title === "" ? "(untitled)" : meta.title} (id: ${meta.id}) · updated ${iso(meta.updatedAt)} · ${meta.providerId}/${meta.modelId}`,
+    );
+  }
+  lines.push("Call read_task again with `task` set to one exact title or id to read that task.");
+  return lines.join("\n");
+}
+
+/**
+ * 目录模式（`task` 缺席的那次调用）：列当前会话的兄弟 task。
+ * 没有读任何一条账，所以没有任务卡（`card: null`）——renderer 的卡是「跳到某条」，
+ * 目录没有那个「某条」。
+ */
+export function buildTaskIndex(
+  metas: readonly SessionMeta[],
+  sessionId: string,
+  workspaceName: string | null,
+): ReadTaskOutcome {
+  return { ok: true, card: null, text: formatTaskIndex(metas, sessionId, workspaceName) };
+}
+
+function taskHeader(meta: SessionMeta, roundCount: number, workspaceName?: string | null): string {
   const lines = [
     `Task "${meta.title === "" ? "(untitled)" : meta.title}" (id: ${meta.id})`,
-    `Folder: ${meta.cwd} · Model: ${meta.providerId}/${meta.modelId} · ${roundCount} rounds`,
   ];
+  if (workspaceName !== undefined) lines.push(`Workspace: ${workspaceLabel(workspaceName)}`);
+  lines.push(
+    `Folder: ${meta.cwd} · Model: ${meta.providerId}/${meta.modelId} · ${roundCount} rounds`,
+  );
   const stats = meta.stats;
   if (stats !== null) {
     lines.push(
@@ -250,17 +334,21 @@ function cardOf(meta: SessionMeta, mode: ReadTaskCard["mode"], roundCount: numbe
  * 全文轮数超预算就从一半往上减（保最后一轮——结论通常在那），并如实标注
  * 被减掉这件事：截断不能是悄悄的。
  */
-export function buildTaskBriefing(meta: SessionMeta, records: readonly SessionRecord[]): ReadTaskOutcome {
+export function buildTaskBriefing(
+  meta: SessionMeta,
+  records: readonly SessionRecord[],
+  workspaceName?: string | null,
+): ReadTaskOutcome {
   const rounds = numberRounds(records);
   const card = cardOf(meta, "briefing", rounds.length);
   if (rounds.length === 0) {
     return {
       ok: true,
       card,
-      text: `${taskHeader(meta, 0)}\n\nNo rounds yet — the task has no messages on disk.`,
+      text: `${taskHeader(meta, 0, workspaceName)}\n\nNo rounds yet — the task has no messages on disk.`,
     };
   }
-  const head = [taskHeader(meta, rounds.length), outlineSection(records, rounds)];
+  const head = [taskHeader(meta, rounds.length, workspaceName), outlineSection(records, rounds)];
   const compacted = compactedSection(records);
   if (compacted !== null) head.push(compacted);
   const wanted = Math.min(BRIEFING_RECENT_ROUNDS, rounds.length);
@@ -281,7 +369,7 @@ export function buildTaskBriefing(meta: SessionMeta, records: readonly SessionRe
   return {
     ok: true,
     card,
-    text: `${taskHeader(meta, rounds.length)}\n\nNo rounds could be read from disk.`,
+    text: `${taskHeader(meta, rounds.length, workspaceName)}\n\nNo rounds could be read from disk.`,
   };
 }
 
@@ -290,12 +378,13 @@ export function buildRoundsExcerpt(
   meta: SessionMeta,
   records: readonly SessionRecord[],
   spec: string,
+  workspaceName?: string | null,
 ): ReadTaskOutcome {
   const rounds = numberRounds(records);
   const selection = selectRounds(records, spec);
   if (selection.kind === "error") return { ok: false, error: selection.message };
   const card = cardOf(meta, "rounds", rounds.length, spec);
-  const parts = [taskHeader(meta, rounds.length)];
+  const parts = [taskHeader(meta, rounds.length, workspaceName)];
   for (const round of selection.rounds) {
     const slice = records.slice(round.startIndex, round.endIndex);
     parts.push(`--- Round ${round.number} ---\n\n${transcriptToMarkdown(slice)}`);
@@ -317,38 +406,58 @@ export interface SessionStoreReader {
 }
 
 /**
+ * 工作区的最小只读视图（同上）：只要名字，所以只要 list。
+ * WorkspaceStore 结构化满足本接口，测试给 stub。
+ */
+export interface WorkspaceStoreReader {
+  list(): Promise<Workspace[]>;
+}
+
+/**
  * readTaskRequest 的落点：列表解析引用（meta 都是小文件，与侧栏同一条读取路径）
  * → 读目标整账 → 组简报或轮切片。回执经 host 的 answerReadTask 回 agent 进程。
  */
 export async function applyReadTask(
   sessions: SessionStoreReader,
   event: Extract<AgentEvent, { type: "readTaskRequest" }>,
+  workspaces: WorkspaceStoreReader,
 ): Promise<ReadTaskOutcome> {
   const metas = await sessions.list();
-  const match = resolveTaskReference(event.task, metas, event.sessionId);
+  const named = new Map((await workspaces.list()).map((workspace) => [workspace.id, workspace.name]));
+  /** 工作区 id → 名字；null 与已删工作区同归「不属于任何工作区」 */
+  const nameOf = (workspaceId: string | null): string | null =>
+    workspaceId === null ? null : (named.get(workspaceId) ?? null);
+  const here = nameOf(workspaceOf(metas, event.sessionId));
+  const ref = event.task?.trim() ?? "";
+  // 目录模式：模型不拿引用就问，答「这个工作区里还有哪些 task」
+  if (ref === "") return buildTaskIndex(metas, event.sessionId, here);
+  const match = resolveTaskReference(ref, metas, event.sessionId);
   if (match.kind === "self") {
     return {
       ok: false,
-      error: `"${event.task}" is the current task — its content is already in this conversation.`,
+      error: `"${ref}" is the current task — its content is already in this conversation.`,
     };
   }
+  // 没命中 / 撞歧义都把兄弟索引附在后面：一次就能改道，不用再拿前缀试探
+  const index = formatTaskIndex(metas, event.sessionId, here);
   if (match.kind === "notFound") {
     return {
       ok: false,
-      error: `No task matches "${event.task}". Quote the task title (or its id) exactly, or ask the user which task they mean.`,
+      error: `No task matches "${ref}". Quote the task title (or its id) exactly.\n\n${index}`,
     };
   }
   if (match.kind === "ambiguous") {
     const list = match.candidates.map((candidate) => `- ${candidate.title} (id: ${candidate.id})`).join("\n");
     return {
       ok: false,
-      error: `"${event.task}" matches several tasks:\n${list}\nRetry with one exact title or id.`,
+      error: `"${ref}" matches several tasks:\n${list}\nRetry with one exact title or id.\n\n${index}`,
     };
   }
   const detail = await sessions.load(match.id);
   if (detail === null) {
-    return { ok: false, error: `The task matched by "${event.task}" no longer exists on disk.` };
+    return { ok: false, error: `The task matched by "${ref}" no longer exists on disk.` };
   }
-  if (event.rounds === undefined) return buildTaskBriefing(detail.meta, detail.transcript);
-  return buildRoundsExcerpt(detail.meta, detail.transcript, event.rounds);
+  const target = nameOf(detail.meta.workspaceId);
+  if (event.rounds === undefined) return buildTaskBriefing(detail.meta, detail.transcript, target);
+  return buildRoundsExcerpt(detail.meta, detail.transcript, event.rounds, target);
 }

@@ -23,7 +23,7 @@ describe("RequestBroker", () => {
     const result = await pending;
     assert.equal(result.ok, true);
     if (result.ok) {
-      assert.equal(result.card.title, "Demo");
+      assert.equal(result.card?.title, "Demo");
       assert.equal(result.text, "…body…");
     }
   });

@@ -69,6 +69,30 @@ describe("read_task（B-1）", () => {
     await second.catch(() => undefined);
   });
 
+  test("task 缺席 / 空白：不带该字段上船（目录模式），card 为 null 时不挂 details", async () => {
+    const { tool, fake } = setup();
+    assert.ok(tool !== undefined);
+    const pending = tool.execute("call-5", {}, undefined, undefined, undefined as never);
+    const sent = fake.sent[0] as Record<string, unknown>;
+    assert.equal(sent.type, "readTaskRequest");
+    assert.equal("task" in sent, false);
+    fake.answer(fake.requestIdAt(0), { ok: true, card: null, text: 'Workspace "orbita": 2 other tasks…' });
+    const result = await pending;
+    assert.deepEqual(result.content, [{ type: "text", text: 'Workspace "orbita": 2 other tasks…' }]);
+    assert.deepEqual(result.details, {});
+    const blank = tool.execute("call-6", { task: "  " }, undefined, undefined, undefined as never);
+    assert.equal("task" in (fake.sent[1] as Record<string, unknown>), false);
+    fake.answer(fake.requestIdAt(1), { ok: true, card: null, text: "…" });
+    await blank;
+  });
+
+  test("task 不在 required 里（无参调用是合法的第一步）", () => {
+    const { tool } = setup();
+    assert.ok(tool !== undefined);
+    const parameters = tool.parameters as unknown as { required?: string[] };
+    assert.deepEqual(parameters.required ?? [], []);
+  });
+
   test("回执失败翻成抛出（pi 只认 throw 为 isError），message 是主进程的错", async () => {
     const { tool, fake } = setup();
     assert.ok(tool !== undefined);
