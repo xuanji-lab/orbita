@@ -195,6 +195,27 @@ describe("buildTaskIndex", () => {
     assert.match(homeless.ok ? homeless.text : "", /- Sibling \(id: /);
   });
 
+  test("归档的排在活跃的后面、行尾标注；头部计数只数活跃的", () => {
+    const metas = [
+      meta(S1, "Current", { updatedAt: 9000 }),
+      meta(S2, "Archived but recent", { archived: true, updatedAt: 8000 }),
+      meta(S3, "Active older", { updatedAt: 1000 }),
+    ];
+    const result = buildTaskIndex(metas, S1, "orbita");
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    // 归档那条更新更新，但侧栏把它收在底部，索引也要排在后面
+    assert.ok(result.text.indexOf("Active older") < result.text.indexOf("Archived but recent"));
+    assert.match(result.text, /Workspace "orbita": 1 other task \(\+1 archived\), most recently updated first:/);
+    assert.match(result.text, new RegExp(`Archived but recent \\(id: ${S2}\\) · updated [^\n]+ · zai/glm-5\\.3 · archived`));
+    assert.match(result.text, new RegExp(`Active older \\(id: ${S3}\\) · updated [^\n]+ · zai/glm-5\\.3\n`));
+  });
+
+  test("一条归档都没有就不提 archived", () => {
+    const result = buildTaskIndex([meta(S1, "Current"), meta(S2, "Sibling")], S1, "orbita");
+    assert.doesNotMatch(result.ok ? result.text : "", /archived/);
+  });
+
   test("空标题给占位", () => {
     const result = buildTaskIndex([meta(S1, "Current"), meta(S2, "")], S1, null);
     assert.match(result.ok ? result.text : "", /- \(untitled\) \(id: /);

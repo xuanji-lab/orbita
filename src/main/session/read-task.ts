@@ -251,12 +251,17 @@ function formatTaskIndex(
   if (siblings.length === 0) {
     return `${where}: this is the only task here — there is no other task to read.`;
   }
+  // 归档的排在后面、另行标注——侧栏把它们收进底部 Archived 组，用户说「之前两个
+  // 会话」指的是主列表里那些；索引与侧栏同构，模型才不会把废弃的那条当成目标。
+  // （resolveTaskReference 不跟着分组：用户按名字点名归档会话，仍然读得到。）
+  const active = siblings.filter((meta) => !meta.archived);
+  const archived = siblings.filter((meta) => meta.archived);
   const lines = [
-    `${where}: ${siblings.length} other task${siblings.length === 1 ? "" : "s"}, most recently updated first:`,
+    `${where}: ${active.length} other task${active.length === 1 ? "" : "s"}${archived.length === 0 ? "" : ` (+${archived.length} archived)`}, most recently updated first:`,
   ];
-  for (const meta of siblings) {
+  for (const meta of [...active, ...archived]) {
     lines.push(
-      `- ${meta.title === "" ? "(untitled)" : meta.title} (id: ${meta.id}) · updated ${iso(meta.updatedAt)} · ${meta.providerId}/${meta.modelId}`,
+      `- ${meta.title === "" ? "(untitled)" : meta.title} (id: ${meta.id}) · updated ${iso(meta.updatedAt)} · ${meta.providerId}/${meta.modelId}${meta.archived ? " · archived" : ""}`,
     );
   }
   lines.push("Call read_task again with `task` set to one exact title or id to read that task.");
