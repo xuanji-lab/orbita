@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import "./providers-view.css";
-import { KNOWN_PROVIDERS, isPlanBilling, knownModelParams, type KnownProvider } from "@shared/known-providers";
+import { KNOWN_PROVIDERS, isPlanBilling, type KnownProvider } from "@shared/known-providers";
+import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
-import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
+import type { BuiltinProvider } from "@shared/agent-ipc";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import {
   kindOf,
   mergeModelCost,
+  modelAcceptsImage,
   modelContextText,
   modelIdIssue,
   nextCopyId,
@@ -113,11 +115,12 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const known = KNOWN_PROVIDERS.find((k) => k.id === draft.kind);
   const showForm = (view.kind === "detail" && editing !== undefined) || (isNew && known !== undefined);
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
-  /** 目录里这个模型 id 的官方参数（自建网关没有 catalogId，查不到——如实走兜底） */
-  const catalogMeta = (target: KnownProvider | undefined, id: string): BuiltinModel | undefined =>
-    target?.catalogId === undefined
-      ? undefined
-      : catalog.find((c) => c.id === target.catalogId)?.models.find((m) => m.id === id);
+  /**
+   * 这个模型 id 的生效参数基线（白名单 > pi 目录 > 兜底）。**按 id 跨目录查**：
+   * 自建网关没有 catalogId，但它跑的 claude-opus-5 / k3 / glm-5.3 都有官方口径。
+   */
+  const modelDefaults = (target: KnownProvider | undefined, id: string): ModelDefaults =>
+    resolveModelDefaults(catalog, id, { catalogId: target?.catalogId, api: target?.api });
   /** 某个已适配 provider 在 pi 目录里的模型 id 清单（Fetch 的兜底候选池） */
   const catalogIds = (target: KnownProvider | undefined): string[] =>
     target?.catalogId === undefined
@@ -748,8 +751,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   <div className="pv-mempty">No models yet — fetch the list, or add one by id.</div>
                 ) : (
                   draft.models.map((model) => {
-                    const meta = catalogMeta(known, model.id);
-                    const badge = modelContextText(model, meta, knownModelParams(model.id));
+                    const defaults = modelDefaults(known, model.id);
+                    const badge = modelContextText(model, defaults);
                     const tested = modelTests[model.id];
                     const busy = tested?.tone === "busy";
                     return (
@@ -787,7 +790,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                               >
                                 {badge.text}
                               </span>
-                              {model.vision === true && (
+                              {modelAcceptsImage(model, defaults) && (
                                 <span className="pv-badge" title="Accepts image input — multimodal">
                                   <Icon name="image" size={11} strokeWidth={1.8} />
                                 </span>
@@ -1033,10 +1036,12 @@ function ModelDialog(props: {
   onClose: () => void;
 }) {
   const isNew = props.decl === undefined;
-  const meta = (id: string): BuiltinModel | undefined =>
-    props.known.catalogId === undefined
-      ? undefined
-      : props.catalog.find((c) => c.id === props.known.catalogId)?.models.find((m) => m.id === id);
+  // 与模型行同一条推断（按 id 跨目录）：行上显示 1M、弹窗却写 Inherit (128000) 是说两句话
+  const defaultsOf = (id: string): ModelDefaults =>
+    resolveModelDefaults(props.catalog, id, {
+      catalogId: props.known.catalogId,
+      api: props.known.api,
+    });
   const [idValue, setIdValue] = useState(props.decl?.id ?? "");
   const [name, setName] = useState(props.decl?.name ?? "");
   const [ctxText, setCtxText] = useState(props.decl?.contextWindow?.toString() ?? "");
@@ -1049,10 +1054,18 @@ function ModelDialog(props: {
   const [idIssue, setIdIssue] = useState<string | null>(null);
   const [fieldIssue, setFieldIssue] = useState<string | null>(null);
 
-  // 新增：id 命中内置目录时，placeholder 处的继承值跟着换（不填输入框——填了就成了覆盖声明）
-  const activeMeta = meta(idValue.trim().toLowerCase());
-  const inheritCtx = props.decl?.contextWindow ?? activeMeta?.contextWindow;
-  const inheritOut = props.decl?.maxTokens ?? activeMeta?.maxTokens;
+  // 新增：id 命中目录时，placeholder 处的继承值跟着换（不填输入框——填了就成了覆盖声明）
+  const activeDefaults = defaultsOf(isNew ? idValue.trim().toLowerCase() : (props.decl?.id ?? ""));
+  /**
+   * 单价的继承占位只在**目录条目**上成立：白名单只补窗口 / 输出，兜底的零单价
+   * 不是报价而是「不知道」——写成 Inherit ($0/M) 就是把不知道说成免费。
+   */
+  const inheritedCost =
+    activeDefaults.source === "catalog" || activeDefaults.source === "catalog-family";
+  const inheritCtx = activeDefaults.contextWindow;
+  const inheritOut = activeDefaults.maxTokens;
+  // 三档里的 Inherit 到底继承了什么：不写出来的话用户只能靠猜，于是逐个手开
+  const inheritImage = activeDefaults.input.includes("image");
 
   const apply = () => {
     const finalId = isNew ? idValue.trim().toLowerCase() : (props.decl?.id ?? "");
@@ -1080,7 +1093,10 @@ function ModelDialog(props: {
     if (trimmedName !== "") decl.name = trimmedName;
     if (ctx !== undefined) decl.contextWindow = ctx;
     if (out !== undefined) decl.maxTokens = out;
-    const cost = mergeModelCost(props.decl?.cost, activeMeta, { input: cin, output: cout });
+    const cost = mergeModelCost(props.decl?.cost, inheritedCost ? activeDefaults : undefined, {
+      input: cin,
+      output: cout,
+    });
     if (cost !== undefined) decl.cost = cost;
     if (vision === "on") decl.vision = true;
     if (vision === "off") decl.vision = false;
@@ -1153,7 +1169,7 @@ function ModelDialog(props: {
             <div role="group" aria-label="Image input" style={{ display: "flex", gap: 2 }}>
               {(
                 [
-                  ["inherit", "Inherit"],
+                  ["inherit", inheritImage ? "Inherit (image)" : "Inherit (text only)"],
                   ["on", "On"],
                   ["off", "Off"],
                 ] as const
@@ -1168,8 +1184,8 @@ function ModelDialog(props: {
               ))}
             </div>
             <span className="pv-sub">
-              Multimodal image input — Inherit follows the catalog (unknown = text only). Vision models
-              show an image badge on the row.
+              Multimodal image input — Inherit follows the catalog (unknown = image, so pictures are
+              not dropped silently). Vision models show an image badge on the row.
             </span>
           </div>
           <div className="pv-grid2">
@@ -1179,7 +1195,7 @@ function ModelDialog(props: {
                 id="pv-model-ctx"
                 className="pv-input pv-mono"
                 value={ctxText}
-                placeholder={inheritCtx !== undefined ? `Inherit (${inheritCtx})` : "Inherit"}
+                placeholder={`Inherit (${inheritCtx})`}
                 onChange={(e) => setCtxText(e.target.value)}
               />
               <span className="pv-sub">tokens — accepts 128000 or 128k / 1M</span>
@@ -1190,7 +1206,7 @@ function ModelDialog(props: {
                 id="pv-model-out"
                 className="pv-input pv-mono"
                 value={outText}
-                placeholder={inheritOut !== undefined ? `Inherit (${inheritOut})` : "Inherit"}
+                placeholder={`Inherit (${inheritOut})`}
                 onChange={(e) => setOutText(e.target.value)}
               />
               <span className="pv-sub">tokens</span>
@@ -1201,7 +1217,7 @@ function ModelDialog(props: {
                 id="pv-model-cin"
                 className="pv-input pv-mono"
                 value={cinText}
-                placeholder={activeMeta !== undefined ? `Inherit ($${activeMeta.cost.input}/M)` : "Inherit"}
+                placeholder={inheritedCost ? `Inherit ($${activeDefaults.cost.input}/M)` : "Inherit"}
                 onChange={(e) => setCinText(e.target.value)}
               />
               <span className="pv-sub">$ per 1M tokens</span>
@@ -1212,18 +1228,20 @@ function ModelDialog(props: {
                 id="pv-model-cout"
                 className="pv-input pv-mono"
                 value={coutText}
-                placeholder={activeMeta !== undefined ? `Inherit ($${activeMeta.cost.output}/M)` : "Inherit"}
+                placeholder={inheritedCost ? `Inherit ($${activeDefaults.cost.output}/M)` : "Inherit"}
                 onChange={(e) => setCoutText(e.target.value)}
               />
               <span className="pv-sub">$ per 1M tokens</span>
             </div>
           </div>
           <span className="pv-sub">
-            {isNew
-              ? "Leave fields empty to inherit the built-in catalog when the id matches; otherwise 128k ctx / 8k out."
-              : activeMeta === undefined
-                ? "No catalog entry — leave empty to fall back to 128k ctx / 8k out."
-                : "Source: built-in catalog."}
+            {activeDefaults.source === "fallback"
+              ? "No catalog entry for this id — leave empty to fall back to 128k ctx / 8k out."
+              : activeDefaults.source === "known"
+                ? "Source: built-in parameters for this model id."
+                : activeDefaults.source === "catalog-family"
+                  ? "Source: the closest catalog entry in the same model family."
+                  : "Source: built-in catalog."}
             {props.plan ? " This provider bills by plan: cost estimates are not shown on rows." : ""}
           </span>
           {fieldIssue !== null && (

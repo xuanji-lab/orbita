@@ -2,7 +2,7 @@
  * ProvidersView 的纯函数层 —— 弹窗解析 / 费率合并 / 复制 id / 行简报。
  * UI 状态留在组件里，这里只放有边界要守的换算；node --test 可直接加载。
  */
-import type { BuiltinModel } from "@shared/agent-ipc";
+import type { ModelDefaults } from "@shared/model-defaults";
 import type { ModelCostDecl, ModelDecl, ProviderDto } from "@shared/provider";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
 import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
@@ -39,7 +39,7 @@ export function parseRateInput(text: string): ParsedInput {
  */
 export function mergeModelCost(
   existing: ModelCostDecl | undefined,
-  meta: BuiltinModel | undefined,
+  meta: { cost: ModelCostDecl } | undefined,
   patch: { input: number | undefined; output: number | undefined },
 ): ModelCostDecl | undefined {
   if (patch.input === undefined && patch.output === undefined) return undefined;
@@ -86,20 +86,31 @@ export function kindOf(provider: ProviderDto): string {
 }
 
 /**
- * 模型行的上下文简报。**生效值 = 用户覆盖 > pi 目录 > 白名单补丁 > 兜底**，与
- * model-registration 的装配顺序一致——显示与 runtime 讲同一个故事。
- * fallback: true = 目录与声明都没有窗口参数，走的兜底值——徽标上不写 "(fallback)"
- * 字样（用户要求干净），悬停 title 由调用方用这个标志给兜底说明。
+ * 模型行的上下文简报。**生效值 = 用户覆盖 > 推断出的基线**（基线内部已经是
+ * 白名单 > pi 目录 > 兜底，见 shared/model-defaults），与 agent 注册时的装配同源
+ * ——显示与 runtime 讲同一个故事。
+ *
+ * fallback: true = 这个数字是编出来的（目录、白名单、用户都没说话）。徽标上不写
+ * "(fallback)" 字样（用户要求干净），悬停 title 由调用方用这个标志给兜底说明。
  */
 export function modelContextText(
   decl: ModelDecl | undefined,
-  meta: BuiltinModel | undefined,
-  patch: { contextWindow?: number } = {},
+  defaults: ModelDefaults,
 ): { text: string; fallback: boolean } {
-  const ctx = decl?.contextWindow ?? meta?.contextWindow ?? patch.contextWindow;
-  if (ctx === undefined) return { text: "128k", fallback: true };
+  const ctx = decl?.contextWindow ?? defaults.contextWindow;
   // 徽标要 1M 不要 1.0M——底栏统计要小数，这里不要；只抹 .0，1.2M 原样
-  return { text: formatTokens(ctx).replace(/\.0(?=[kM]$)/, ""), fallback: false };
+  return {
+    text: formatTokens(ctx).replace(/\.0(?=[kM]$)/, ""),
+    fallback: decl?.contextWindow === undefined && defaults.source === "fallback",
+  };
+}
+
+/**
+ * 这个模型到底能不能吃图：用户的 vision 开关优先，没填就看推断出的模态。
+ * 行上的图片徽标与弹窗的 Inherit 档位共用它，两处不会说两个答案。
+ */
+export function modelAcceptsImage(decl: ModelDecl | undefined, defaults: ModelDefaults): boolean {
+  return decl?.vision ?? defaults.input.includes("image");
 }
 
 /**

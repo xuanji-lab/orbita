@@ -7,13 +7,14 @@
  * 白名单 > 兜底）。复制一份的话，两处迟早对同一个模型说出两个上下文窗口。
  */
 import { useEffect, useState } from "react";
-import type { BuiltinModel, BuiltinProvider } from "@shared/agent-ipc";
-import { KNOWN_PROVIDERS, knownModelParams } from "@shared/known-providers";
+import type { BuiltinProvider } from "@shared/agent-ipc";
+import { KNOWN_PROVIDERS } from "@shared/known-providers";
+import { resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import type { MenuItem } from "../../shell/Menu";
-import { kindOf, modelContextText } from "./providers-view-model.ts";
+import { kindOf, modelAcceptsImage, modelContextText } from "./providers-view-model.ts";
 
 /**
  * 「配置好」= 设置里绿点的标准：api_key 已入库，或 env 档（密钥来自环境）。
@@ -56,15 +57,15 @@ export function modelMenuItems(options: {
 }): MenuItem[] {
   return options.providers.flatMap((provider) => {
     const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-    const metaOf = (id: string): BuiltinModel | undefined =>
-      known?.catalogId === undefined
-        ? undefined
-        : options.catalog.find((c) => c.id === known.catalogId)?.models.find((m) => m.id === id);
+    // 按模型 id 跨目录推断：自建网关没有 catalogId，但它跑的型号在目录里多半有官方口径
+    const defaultsOf = (id: string) =>
+      resolveModelDefaults(options.catalog, id, { catalogId: known?.catalogId, api: known?.api });
     const rows: MenuItem[] = [
       { id: `hdr:${provider.id}`, label: provider.displayName, header: true },
     ];
     for (const declared of provider.models.declared) {
-      const badge = modelContextText(declared, metaOf(declared.id), knownModelParams(declared.id));
+      const defaults = defaultsOf(declared.id);
+      const badge = modelContextText(declared, defaults);
       rows.push({
         id: `${provider.id}:${declared.id}`,
         label: declared.id,
@@ -73,7 +74,7 @@ export function modelMenuItems(options: {
             <span className="pv-badge" title="Context window">
               {badge.text}
             </span>
-            {declared.vision === true && (
+            {modelAcceptsImage(declared, defaults) && (
               <span className="pv-badge" title="Accepts image input — multimodal">
                 <Icon name="image" size={11} strokeWidth={1.8} />
               </span>
