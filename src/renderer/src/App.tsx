@@ -147,7 +147,9 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
-  const skills = useSkills(shownPanel === "skills");
+  // MCP 面板与 Skills 面板共用这个 hook（servers 也在里面）：只认 skills 的话，
+  // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
+  const skills = useSkills(shownPanel === "skills" || shownPanel === "mcp");
 
   /**
    * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
