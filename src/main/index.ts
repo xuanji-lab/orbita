@@ -44,17 +44,23 @@ const SECURITY_INVARIANTS = {
  *  - `vibrancy` —— CSS 的 `backdrop-filter` **模糊不了窗口背后的桌面**（合成器里根本没有那块内容），
  *    真正的「透出桌面」只能由系统材质给。边界卡在它上面再画一层 `--glass-bg`，
  *    合出来就是设计系统要的 layer 1。
- *  - `backgroundColor` 全透明 —— 否则不透明底色会盖掉 vibrancy。
+ *  - **不设 `backgroundColor`** —— 设了 vibrancy 的窗口由 Electron 自己把底色清掉；以前额外给的
+ *    `#00000000` 与双击缩放时灵时不灵同期存在，对齐 Proma 一并去掉（见 MAC_WINDOW 内注释）。
  *
  * 非 macOS 没有等价物，退回不透明底色；边界卡的圆角那时由渲染层自己画。
  */
 const MAC_WINDOW = {
-  titleBarStyle: "hidden",
+  /**
+   * hiddenInset 而不是 hidden（2026-09-21）：双击拖拽区缩放在 hidden 下时灵时不灵，拖拽却次次都认。
+   * 自己收 dblclick 发 IPC 切换的方案试过并撤回（518ce2d）：与系统的双击识别打架。
+   * Proma 同样是隐性标题栏 + vibrancy，用 hiddenInset 且不设透明 backgroundColor，
+   * 没有任何自定义代码，双击稳定——窗口选项对齐过去。两者对红绿灯的定位同样听 trafficLightPosition。
+   */
+  titleBarStyle: "hiddenInset",
   trafficLightPosition: { x: 18, y: 19 },
   vibrancy: "under-window",
   // 失焦不要把整面 UI 变灰——安静的工作台不该闪
   visualEffectState: "active",
-  backgroundColor: "#00000000",
 } as const;
 
 function createMainWindow(): BrowserWindow {
