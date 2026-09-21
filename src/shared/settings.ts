@@ -5,6 +5,12 @@
  * 字段等有真实消费者再加，不提前占位。
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import { THINKING_LEVELS, type ThinkingLevel } from "./thinking.ts";
+
+/** lastUsed 里的思考档守卫：**不认识就丢，不兑 medium**——这份缺省的语义是「没有记录、退默认」，与 meta 那边「老会话实际跑 medium」不是一回事。 */
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return (THINKING_LEVELS as readonly unknown[]).includes(value);
+}
 
 /**
  * 主题偏好。**四态**——"system" 是真正的默认，不是「light 的别名」：
@@ -60,6 +66,8 @@ export interface LastUsedIntent {
   mode?: PermissionMode;
   providerId?: string;
   modelId?: string;
+  /** 上次用的思考档：新任务的起点（同 mode 的语义，可缺席 = 退 medium） */
+  thinkingLevel?: ThinkingLevel;
 }
 
 /**
@@ -204,7 +212,7 @@ function parseTitleModel(raw: unknown): TitleModel | undefined {
  */
 function parseLastUsed(raw: unknown): LastUsedIntent | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
-  const record = raw as { mode?: unknown; providerId?: unknown; modelId?: unknown };
+  const record = raw as { mode?: unknown; providerId?: unknown; modelId?: unknown; thinkingLevel?: unknown };
   const out: LastUsedIntent = {};
   if ((PERMISSION_MODES as readonly unknown[]).includes(record.mode)) {
     out.mode = record.mode as PermissionMode;
@@ -214,6 +222,9 @@ function parseLastUsed(raw: unknown): LastUsedIntent | undefined {
   }
   if (typeof record.modelId === "string" && record.modelId !== "") {
     out.modelId = record.modelId;
+  }
+  if (isThinkingLevel(record.thinkingLevel)) {
+    out.thinkingLevel = record.thinkingLevel;
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }

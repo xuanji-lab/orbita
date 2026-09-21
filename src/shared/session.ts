@@ -11,6 +11,7 @@
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -103,6 +104,11 @@ export interface SessionMeta {
   modelId: string;
   /** 最后一次用的权限档。存下来是为了重开这条会话时不会静默换档。 */
   mode: PermissionMode;
+  /**
+   * 最后一次用的思考档，同 mode 的理由：重开不静默换档。**缺省退 "medium"**——
+   * 这个字段落地之前存的会话，实际跑的就是 pi 的默认 medium，退 "off" 才是改写历史。
+   */
+  thinkingLevel: ThinkingLevel;
   /**
    * pi 自己那份 session 文件的路径；**null = 这条会话只能读不能续**。
    *
@@ -267,6 +273,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     stats: parseAgentStats(value["stats"]),
     // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
+    // 思考档坏值退 medium（老会话实际跑的那一档），理由见字段注释
+    thinkingLevel: parseThinkingLevel(value["thinkingLevel"]),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };

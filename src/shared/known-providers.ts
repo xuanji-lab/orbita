@@ -61,7 +61,7 @@ export interface KnownProvider {
    * 只写**确知**的字段（官方口径或实测），其余仍由目录 / 兑底补。
    * 编一个数进去，就是把「1M 显示成 128k」换成「128k 显示成 1M」，更坏。
    */
-  modelParams?: Record<string, { contextWindow?: number; maxTokens?: number }>;
+  modelParams?: Record<string, { contextWindow?: number; maxTokens?: number; reasoning?: boolean }>;
   /** 一句话说明这条什么时候该选 */
   note: string;
 }
@@ -106,7 +106,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
        * 而官方 `/models` 接口 fetch 得到。参数向 glm-5.3 看齐：
        * 同代同系，官方口径都是 1M 上下文。
        */
-      "glm-5.3-flash": { contextWindow: 1_000_000, maxTokens: 131_072 },
+      "glm-5.3-flash": { contextWindow: 1_000_000, maxTokens: 131_072, reasoning: true },
     },
     note: "Coding Plan 订阅，走 Anthropic 兼容端点",
   },
@@ -188,7 +188,11 @@ export function isPlanBilling(providerId: string): boolean {
  * 却因为不是从 `zhipu-coding` 接进来的而显示 128k（wafo 2026-09-21 实测）。
  * 代价是同名 id 只能有一份口径；表里都是确知的官方参数，本就不该分叉。
  */
-export function knownModelParams(modelId: string): { contextWindow?: number; maxTokens?: number } {
+export function knownModelParams(modelId: string): {
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+} {
   for (const item of KNOWN_PROVIDERS) {
     const params = item.modelParams?.[modelId];
     if (params !== undefined) return params;
