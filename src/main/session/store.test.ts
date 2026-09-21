@@ -19,6 +19,7 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "plan",
+  thinkingLevel: "medium",
   createdAt: 1000,
   updatedAt: 1000,
   ...patch,
@@ -182,6 +183,12 @@ describe("SessionStore", () => {
     await store.ensureSession(meta());
     await store.setMode(ID, "skip");
     assert.equal((await store.load(ID))?.meta.mode, "skip");
+  });
+
+  test("setThinkingLevel 落盘——重开与下一轮开机的装配都读它", async () => {
+    await store.ensureSession(meta());
+    await store.setThinkingLevel(ID, "high");
+    assert.equal((await store.load(ID))?.meta.thinkingLevel, "high");
   });
 
   test("setModel 落 meta——重开播种、分支继承读的就是它（C-4）", async () => {

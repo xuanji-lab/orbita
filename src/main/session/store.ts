@@ -17,6 +17,7 @@ import { writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
 import type { AgentStats } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
+import type { ThinkingLevel } from "../../shared/thinking.ts";
 import {
   deriveSessionTitle,
   isCompactedRecord,
@@ -301,6 +302,11 @@ export class SessionStore {
     return this.update(id, { mode });
   }
 
+  /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */
+  setThinkingLevel(id: string, thinkingLevel: ThinkingLevel): Promise<void> {
+    return this.update(id, { thinkingLevel });
+  }
+
   /** 会话内切换模型（C-4）成功后落 meta——重开播种、分支继承、resume 对齐全读它 */
   setModel(id: string, providerId: string, modelId: string): Promise<void> {
     return this.update(id, { providerId, modelId });
@@ -358,6 +364,7 @@ export class SessionStore {
         providerId: meta.providerId,
         modelId: meta.modelId,
         mode: meta.mode,
+        thinkingLevel: meta.thinkingLevel,
         piSessionFile: null,
         pinned: false,
         archived: false,

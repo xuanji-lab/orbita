@@ -41,5 +41,10 @@ export const THINKING_LEVEL_LABELS: Record<ThinkingLevel, { label: string; hint:
  * 就是 pi 的默认 medium——退 "off" 才是改写历史。
  */
 export function parseThinkingLevel(raw: unknown): ThinkingLevel {
-  return (THINKING_LEVELS as readonly unknown[]).includes(raw) ? (raw as ThinkingLevel) : "medium";
+  return isThinkingLevel(raw) ? raw : "medium";
+}
+
+/** 逐字校验：不认识就 false（不兑任何默认值——兑底是 parse 的事，守卫只回答「是不是」） */
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return (THINKING_LEVELS as readonly unknown[]).includes(value);
 }

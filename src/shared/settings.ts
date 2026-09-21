@@ -5,12 +5,7 @@
  * 字段等有真实消费者再加，不提前占位。
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
-import { THINKING_LEVELS, type ThinkingLevel } from "./thinking.ts";
-
-/** lastUsed 里的思考档守卫：**不认识就丢，不兑 medium**——这份缺省的语义是「没有记录、退默认」，与 meta 那边「老会话实际跑 medium」不是一回事。 */
-function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return (THINKING_LEVELS as readonly unknown[]).includes(value);
-}
+import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
  * 主题偏好。**四态**——"system" 是真正的默认，不是「light 的别名」：

@@ -65,7 +65,9 @@ export function toFallbackModels(
         ? {
             id: decl.id,
             name: decl.id,
-            reasoning: false,
+            // 跨目录借参的第五件：reasoning。借不到才落 false——「不确定就不发」
+            // （发不支持的档位当场 400）；借得到（如 glm-5.3-flash 在白名单）就是真值
+            reasoning: borrowed.reasoning,
             input: borrowed.input,
             cost: borrowed.cost,
             contextWindow: borrowed.contextWindow,
@@ -126,6 +128,9 @@ export function toBuiltinModel(model: PiModel): BuiltinModel {
     maxTokens: model.maxTokens,
     // 图片能力跟着参数一起过 IPC：设置页要拿它下图片徽标与「Inherit」的实际含义
     input: [...model.input],
+    // 思考能力同批过 IPC：跨目录借参（resolveModelDefaults）要读它，
+    // renderer 的思考档芯片也要靠它判断「这个模型只有 off」
+    reasoning: model.reasoning,
     cost: {
       input: model.cost.input,
       output: model.cost.output,

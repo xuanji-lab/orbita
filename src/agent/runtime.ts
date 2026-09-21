@@ -625,7 +625,19 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     services,
     sessionManager,
     model,
+    // 思考档每轮显式给：不传的话 pi 退到用户全局 ~/.pi/agent/settings.json，
+    // 那是另一个应用的配置——这一刀收归己有的就是它
+    thinkingLevel: command.thinkingLevel,
     ...(customTools.length > 0 ? { customTools } : {}),
+  });
+  // 开轮即推一次真值：模型可能把我们传的档 clamp 到就近支持档（静默），
+  // 芯片必须显示 clamp 后的事实而不是用户点的意图。每轮都推也兼容
+  // 「换模型后支持集变了」——芯片每次开轮自我纠真
+  send({
+    type: "thinking",
+    sessionId: command.sessionId,
+    level: session.thinkingLevel,
+    supported: session.getAvailableThinkingLevels(),
   });
 
   const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => Date.now() });
@@ -662,6 +674,16 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       return;
     }
     if (event.type === "agent_start") send({ type: "phase", sessionId: command.sessionId, phase: "turn" });
+    // pi 内部改档（目前只有我们自己的 setThinkingLevel 会触发，防御性放行）：
+    // 档位变了芯片必须跟着真——开轮那次推送之外的第二道保险
+    if (event.type === "thinking_level_changed") {
+      send({
+        type: "thinking",
+        sessionId: command.sessionId,
+        level: event.level,
+        supported: session.getAvailableThinkingLevels(),
+      });
+    }
     // 注意：agent_settled **不在这里发 idle**——idle 只由 startTurn 的 finally 发，
     // 保证它一定晚于 dispose 与 running.delete。早发的话 renderer 的投递会在
     // 清理完成前回流，撞上「already running」（prompt resolve 与事件发射的

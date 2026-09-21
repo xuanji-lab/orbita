@@ -166,6 +166,7 @@ describe("toBuiltinModel —— 目录条目瘦身给设置面", () => {
       contextWindow: 204_800,
       maxTokens: 8_192,
       input: ["text"],
+      reasoning: undefined,
       cost: { input: 0.6, output: 2.2, cacheRead: 0.05, cacheWrite: 0.6 },
     });
     assert.equal("tiers" in model.cost, false);

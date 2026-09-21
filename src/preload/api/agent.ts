@@ -11,6 +11,7 @@ import {
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { ThinkingLevel } from "../../shared/thinking.ts";
 
 export const agentApi = {
   /**
@@ -30,6 +31,9 @@ export const agentApi = {
     ipcRenderer.invoke(ipcChannels.agentCompact, input),
   setMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSetMode, sessionId, mode),
+  /** 会话内改思考档：下一轮生效，开轮时由 runtime 按 meta 装配 */
+  setThinkingLevel: (sessionId: string, level: ThinkingLevel): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentSetThinkingLevel, sessionId, level),
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   setModel: (sessionId: string, providerId: string, modelId: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSetModel, sessionId, providerId, modelId),

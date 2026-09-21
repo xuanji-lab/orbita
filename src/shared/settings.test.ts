@@ -196,6 +196,21 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
     );
   });
 
+  it("思考档跟着 lastUsed 走：合法保留，坏值（含 pi 的 xhigh/max）整键丢弃", () => {
+    deepStrictEqual(
+      parseSettings({ theme: "system", lastUsed: { thinkingLevel: "high" } }).lastUsed,
+      { thinkingLevel: "high" },
+    );
+    deepStrictEqual(
+      parseSettings({ theme: "system", lastUsed: { thinkingLevel: "xhigh" } }).lastUsed,
+      undefined,
+    );
+    deepStrictEqual(
+      parseSettings({ theme: "system", lastUsed: { thinkingLevel: "turbo" } }).lastUsed,
+      undefined,
+    );
+  });
+
   it("坏 mode 丢 mode 留 id；键全无效 = 整段不落盘", () => {
     deepStrictEqual(
       parseSettings({

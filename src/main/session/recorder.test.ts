@@ -68,6 +68,7 @@ beforeEach(async () => {
     providerId: "zai",
     modelId: "glm-5.3",
     mode: "plan",
+    thinkingLevel: "medium",
     createdAt: 1,
     updatedAt: 1,
   });

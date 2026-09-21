@@ -26,6 +26,7 @@ const valid = {
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "manual",
+  thinkingLevel: "medium" as const,
   recentQueries: [],
   stats: null,
   createdAt: 1000,
@@ -81,6 +82,13 @@ describe("parseSessionMeta", () => {
   it("不认识的权限档退回最保守的 plan，而不是丢掉整条会话", () => {
     strictEqual(parseSessionMeta({ ...valid, mode: "yolo" })?.mode, "plan");
     strictEqual(parseSessionMeta({ ...valid, mode: undefined })?.mode, "plan");
+  });
+
+  it("思考档：合法透传；缺省与坏值退 medium——字段落地前的老会话实际跑的就是它", () => {
+    strictEqual(parseSessionMeta({ ...valid, thinkingLevel: "off" })?.thinkingLevel, "off");
+    strictEqual(parseSessionMeta({ ...valid, thinkingLevel: undefined })?.thinkingLevel, "medium");
+    strictEqual(parseSessionMeta({ ...valid, thinkingLevel: "xhigh" })?.thinkingLevel, "medium");
+    strictEqual(parseSessionMeta({ ...valid, thinkingLevel: "turbo" })?.thinkingLevel, "medium");
   });
 
   it("缺 updatedAt 就用 createdAt 兜底", () => {

@@ -30,6 +30,8 @@ export const ipcChannels = {
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
   agentSetMode: "agent:set-mode",
+  /** 会话内改思考档：下一轮生效（同 setModel 的语义）。只落 meta，不经 agent 进程 */
+  agentSetThinkingLevel: "agent:set-thinking-level",
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   agentSetModel: "agent:set-model",
   agentAnswerPermission: "agent:answer-permission",
@@ -228,6 +230,8 @@ export type AgentCommand =
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
+      /** 这轮的思考档（同 AgentTurnContext.thinkingLevel；开轮命令必带，不退 pi 全局配置） */
+      thinkingLevel: ThinkingLevel;
       /**
        * pi 把自己的 session 文件放在哪。**由主进程给**——runtime 不做路径策略决定。
        */

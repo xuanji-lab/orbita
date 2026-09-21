@@ -90,6 +90,37 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.deepEqual(texts(states, "A"), ["甲一"]);
   });
 
+  test("thinking 事件进自己会话的槽：clamp 真值与支持集各归各", () => {
+    let states = applyAgentEvent(new Map(), {
+      type: "thinking",
+      sessionId: "A",
+      level: "low",
+      supported: ["minimal", "low", "medium", "high"],
+    });
+    states = applyAgentEvent(states, {
+      type: "thinking",
+      sessionId: "B",
+      level: "off",
+      supported: ["off"],
+    });
+    assert.deepEqual(states.get("A")?.thinking, {
+      level: "low",
+      supported: ["minimal", "low", "medium", "high"],
+    });
+    assert.deepEqual(states.get("B")?.thinking, { level: "off", supported: ["off"] });
+    // 后到的真值整体覆盖先到的（换模型后支持集变了）
+    states = applyAgentEvent(states, {
+      type: "thinking",
+      sessionId: "A",
+      level: "medium",
+      supported: ["off", "medium", "high"],
+    });
+    assert.deepEqual(states.get("A")?.thinking, {
+      level: "medium",
+      supported: ["off", "medium", "high"],
+    });
+  });
+
   test("phase 按槽独立：A turn 与 B idle 并存", () => {
     let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
     states = applyAgentEvent(states, { type: "phase", sessionId: "B", phase: "idle" });

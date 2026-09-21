@@ -64,6 +64,7 @@ import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
+import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
@@ -722,6 +723,22 @@ function ComposerBar(props: { session: ChatSession }) {
     onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
   });
 
+  // 思考档菜单：5 档。支持的档位由开轮事件回真值（thinkingSupported），
+  // 模型不支持思考（支持集只有 off）时其余档禁用——理由写在 hint 里
+  const thinkingLockedToOff =
+    session.thinkingSupported !== null && !session.thinkingSupported.includes("minimal");
+  const thinkingItems: MenuItem[] = THINKING_LEVELS.map((value) => ({
+    id: value,
+    label: THINKING_LEVEL_LABELS[value].label,
+    hint:
+      thinkingLockedToOff && value !== "off"
+        ? "This model does not think."
+        : THINKING_LEVEL_LABELS[value].hint,
+    checked: session.thinkingLevel === value,
+    disabled: thinkingLockedToOff && value !== "off",
+    onSelect: () => session.changeThinkingLevel(value),
+  }));
+
   return (
     <>
       <Menu
@@ -759,7 +776,8 @@ function ComposerBar(props: { session: ChatSession }) {
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
-                title="Model · applies from the next message"
+              italic
+              title="Model · applies from the next message"
               onClick={toggle}
               chevron
             >
@@ -768,6 +786,24 @@ function ComposerBar(props: { session: ChatSession }) {
           )}
         />
       )}
+      <Menu
+        items={thinkingItems}
+        trigger={({ open, toggle }) => (
+          <Chip
+            active={open}
+            italic
+            title={
+              thinkingLockedToOff
+                ? "Thinking · this model does not think"
+                : "Thinking · applies from the next message"
+            }
+            onClick={toggle}
+            chevron
+          >
+            {THINKING_LEVEL_LABELS[session.thinkingLevel].label}
+          </Chip>
+        )}
+      />
       <UsageRing session={session} />
     </>
   );
