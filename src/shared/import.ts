@@ -77,11 +77,14 @@ export interface ImportPlanItem {
 /** 扫描报告（dry-run 的全部产出）。 */
 export interface ImportScanReport {
   plan: ImportPlanItem[];
-  /** 要新建的工作区（merged=false）；merged=true 的不进这里，只进计数 */
+  /** 要新建的工作区（merged=false 的那些）；merged=true 的不进这里 */
   newWorkspaces: ImportWorkspacePlan[];
-  /** 同址合并挂上的既有工作区数（不是条数——一个工作区可能接 N 条会话） */
-  mergedWorkspaceCount: number;
+  /** 同址合并挂上的既有工作区 id（去重；UI 显示数量用 length） */
+  mergedWorkspaceIds: string[];
   skipped: ImportSkipItem[];
+  /** 没有 piSessionFile 的索引条数（Claude legacy / 旧扁平 / draft——PR-2/PR-3 的范围）。
+   * 不进 skipped 清单：它们不是失效，是另一条路的正常分母 */
+  withoutPiSession: number;
   /** plan 里全部源文件的字节总和 */
   totalBytes: number;
   /** 模型映射 miss（用默认兜底）的条数 */

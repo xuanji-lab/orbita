@@ -70,6 +70,24 @@ export class WorkspaceStore {
     return workspace;
   }
 
+  /**
+   * 导入落盘：扫描期铸好的 id 与名字，按它落（Proma pi 同构导入，importer.ts）。
+   * 同路径已存在（扫描与执行之间用户手动加了）→ 并入已有，返回已有的那条。
+   */
+  async addImported(workspace: { id: string; name: string; path: string }): Promise<Workspace> {
+    const workspaces = await this.list();
+    const existing = workspaces.find((w) => w.path === workspace.path);
+    if (existing !== undefined) return existing;
+    const next: Workspace = {
+      id: workspace.id,
+      name: normalizeWorkspaceName(workspace.name, workspace.path),
+      path: workspace.path,
+      createdAt: Date.now(),
+    };
+    await this.save([...workspaces, next]);
+    return next;
+  }
+
   async rename(id: string, name: string): Promise<void> {
     const workspaces = await this.list();
     await this.save(

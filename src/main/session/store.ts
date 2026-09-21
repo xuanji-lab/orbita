@@ -392,6 +392,24 @@ export class SessionStore {
     }
   }
 
+  /**
+   * 导入落盘：一份现成的 meta + 整份 transcript（Proma pi 同构导入，importer.ts）。
+   * 与 commitBranch 同形状（meta + 全量 JSONL 原子写），不复用它是因为 BranchPlan
+   * 的形状是分支语义（roles/piSessionFile 占位）；两处耦合会把「分支的落盘约束」
+   * 泄进导入。id 由导入器铸（randomUUID），此处不重复校验存在性——同 id 撞库
+   * 概率为零，导入是离线批处理，不值得为它排写入链。
+   */
+  async commitImported(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void> {
+    await mkdir(this.dir, { recursive: true });
+    await writeJsonAtomic(this.metaPath(meta.id), meta);
+    if (records.length > 0) {
+      await writeTextAtomic(
+        this.logPath(meta.id),
+        `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      );
+    }
+  }
+
   /** 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。 */
   async list(): Promise<SessionMeta[]> {
     let names: string[];
