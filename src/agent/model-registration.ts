@@ -9,6 +9,7 @@
  * 已认识的目录条目原样带回，用户声明的字段逐个盖上（用户 > 目录 > 兜底）。
  */
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
 import { resolveModelDefaults, type CatalogPreference } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
@@ -52,24 +53,32 @@ export function toFallbackModels(
    */
   catalog: readonly BuiltinProvider[] = [],
   prefer: CatalogPreference = {},
+  /**
+   * 目录的**原始**模型（未瘦身，带 thinkingLevelMap）。借参时按精确 id 抄档位表——
+   * 档位是模型能力（跟 id 走：glm 的 high / claude 的 xhigh），不是协议开关；
+   * 不抄的话 pi 对借参模型按「无表」规则算出伪支持集（minimal→high 五档），
+   * 档位菜单跟着撒谎。compat 仍然不抄：那是接入端点的协议怪癖，跟网关走。
+   */
+  catalogModels: readonly PiModel[] = [],
 ): NonNullable<PiProviderRegistration["models"]> {
   return declared.map((decl) => {
     const known = current.find((model) => model.id === decl.id);
-    /**
-     * 本家目录条目**整条保留**（带 thinkingLevelMap / compat 这些跨家借不得的字段）；
-     * 本家没有才退到跨目录推断，且只借参数四件套——别家的协议开关借过来会出错。
-     */
     const borrowed = resolveModelDefaults(catalog, decl.id, prefer);
+    // 同 id 的原始目录条目：借参路径从这里带 thinkingLevelMap（理由见参数注释）
+    const borrowedMap = catalogModels.find((model) => model.id === decl.id)?.thinkingLevelMap;
     const base =
       known === undefined
         ? {
             id: decl.id,
             name: decl.id,
-            reasoning: false,
+            // 跨目录借参的第五件：reasoning。借不到才落 false——「不确定就不发」
+            // （发不支持的档位当场 400）；借得到（如 glm-5.3-flash 在白名单）就是真值
+            reasoning: borrowed.reasoning,
             input: borrowed.input,
             cost: borrowed.cost,
             contextWindow: borrowed.contextWindow,
             maxTokens: borrowed.maxTokens,
+            ...(borrowedMap === undefined ? {} : { thinkingLevelMap: { ...borrowedMap } }),
           }
         : { ...known };
     return {
@@ -126,6 +135,13 @@ export function toBuiltinModel(model: PiModel): BuiltinModel {
     maxTokens: model.maxTokens,
     // 图片能力跟着参数一起过 IPC：设置页要拿它下图片徽标与「Inherit」的实际含义
     input: [...model.input],
+    // 思考能力同批过 IPC：跨目录借参（resolveModelDefaults）要读它，
+    // renderer 的思考档芯片也要靠它判断「这个模型只有 off」
+    reasoning: model.reasoning,
+    // 支持档在 pi 旁边算好再过线：不透出去 thinkingLevelMap 本身（它一进
+    // shared，就会有人在拿不到 pi 的进程里拿它再算一遍支持集——第二份真源）。
+    // 借参路径（无 map）也能算：pi 的规则是 reasoning:true 且非显式 null 即支持
+    supportedThinkingLevels: getSupportedThinkingLevels(model),
     cost: {
       input: model.cost.input,
       output: model.cost.output,
@@ -159,13 +175,14 @@ export function toFallbackRegistration(
   provider: ProviderWire,
   current: readonly PiModel[],
   catalog: readonly BuiltinProvider[] = [],
+  catalogModels: readonly PiModel[] = [],
 ): PiProviderRegistration {
   return {
     ...toAuthConfig(provider),
     models: toFallbackModels(current, provider.models, catalog, {
       catalogId: provider.catalogId,
       api: provider.api,
-    }),
+    }, catalogModels),
   };
 }
 
@@ -207,7 +224,7 @@ export function registerAndResolveModel(
     const catalog = providers.map(toBuiltinProvider);
     runtime.registerProvider(
       provider.id,
-      toFallbackRegistration(provider, known?.getModels() ?? [], catalog),
+      toFallbackRegistration(provider, known?.getModels() ?? [], catalog, providers.flatMap((item) => item.getModels())),
     );
     model = runtime.getModel(provider.id, modelId);
   }

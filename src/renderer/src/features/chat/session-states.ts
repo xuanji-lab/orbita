@@ -14,7 +14,7 @@ import {
   createTranscriptState,
   type TranscriptState,
 } from "@earendil-works/pi-coding-agent/client";
-import type { SessionSnapshot, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 
@@ -94,6 +94,11 @@ export interface SessionEntry {
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
    */
   stats: AgentStats | null;
+  /**
+   * 思考档真值（clamp 后的事实 + 模型支持集）。null = 还没开过轮——芯片显示
+   * meta 里的意图档，下一轮并跑时 runtime 的第一次推送会填上真值。ephemeral，不落盘。
+   */
+  thinking: { level: PiThinkingLevel; supported: readonly PiThinkingLevel[] } | null;
   approvals: PendingApproval[];
 }
 
@@ -113,6 +118,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   retry: null,
   turnError: null,
   stats: null,
+  thinking: null,
   approvals: [],
 };
 
@@ -156,6 +162,12 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   }
   if (event.type === "stats") {
     return update(states, event.sessionId, (entry) => ({ ...entry, stats: event.stats }));
+  }
+  if (event.type === "thinking") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      thinking: { level: event.level, supported: event.supported },
+    }));
   }
   if (event.type === "permission") {
     return update(states, event.sessionId, (entry) => ({
@@ -233,6 +245,8 @@ export function seedFromDisk(
     // 种盘就把它放回来——否则关掉应用再打开，底栏是空的，而账本明明还在。
     // 唤醒后 agent 会推真累计覆盖它（pi 的本子才是原始账本，这里只是上次看到的样子）。
     stats,
+    // 思考档真值不落盘（meta 里的意图档才是持久事实）：种盘即空，等下一次开轮的推送
+    thinking: null,
     approvals: [],
   });
   return next;
@@ -406,7 +420,7 @@ function seedSnapshot(transcript: readonly TranscriptItem[] = []): SessionSnapsh
     updatedAt: now,
     phase: "idle",
     model: { provider: "pending", id: "pending" },
-    thinkingLevel: "off",
+    thinkingLevel: "medium",
     attached: true,
     locked: false,
     revision: 0,

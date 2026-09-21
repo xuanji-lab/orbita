@@ -10,6 +10,7 @@ import {
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { COMPACTION_DEFAULT } from "../../shared/settings.ts";
@@ -90,6 +91,7 @@ function turnFields(
     provider,
     modelId: input.modelId,
     mode: input.mode,
+    thinkingLevel: input.thinkingLevel,
     piSessionDir,
     protectedPaths,
     ...environment,
@@ -186,6 +188,7 @@ export function registerAgentIpc(
       providerId: input.providerId,
       modelId: input.modelId,
       mode: input.mode,
+      thinkingLevel: input.thinkingLevel,
       createdAt: now,
       updatedAt: now,
     });
@@ -220,6 +223,15 @@ export function registerAgentIpc(
       await host.setMode(sessionId, mode);
       // 档位也落盘：重开这条会话时不该静默换档，而这一档决定 bash 能不能跑
       await sessions.setMode(sessionId, mode);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.agentSetThinkingLevel,
+    async (_e, sessionId: string, level: ThinkingLevel) => {
+      // 只落 meta，不经 agent 进程：无状态 runtime 每轮从 meta 装配开轮载荷，
+      // 改档即改下一轮。clamp 后的真值由开轮的 thinking 事件回来说
+      await sessions.setThinkingLevel(sessionId, level);
     },
   );
 

@@ -16,6 +16,12 @@ export function Chip(props: {
   chevron?: boolean;
   /** 模型与思考档的标签是斜体次级灰——UI 里唯一的斜体（设计系统 *Type*） */
   italic?: boolean;
+  /**
+   * 固定宽度（px），内容居中。给文字长度随选择变化的芯片用——宽度跟着词
+   * 长伸缩会显得轻浮（wafo 2026-09-22，思考档从 Off 到 Extra high 跨四个词宽）。
+   * 值按常见最宽词定，给未来更长的档名留余量；超出仍可撑开（maxWidth 仍在）。
+   */
+  fixedWidth?: number;
   onClick?: () => void;
   children: React.ReactNode;
 }) {
@@ -34,6 +40,8 @@ export function Chip(props: {
       style={{
         display: "inline-flex",
         alignItems: "center",
+        justifyContent: props.fixedWidth === undefined ? undefined : "center",
+        minWidth: props.fixedWidth,
         gap: 5,
         maxWidth: 260,
         padding: "3px 8px",

@@ -26,6 +26,8 @@ import { recordToolFrame } from "./tool-results.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
+import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
+import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import type { AgentEvent, AgentStats, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
 import { usableProviders } from "../settings/model-menu";
@@ -88,6 +90,11 @@ export interface ChatSession {
   setDraft: (value: string) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
+  /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
+  thinkingLevel: ThinkingLevel;
+  changeThinkingLevel: (next: ThinkingLevel) => void;
+  /** 模型支持的思考档（开轮事件回的真值）。null = 还没开过轮，未知 */
+  thinkingSupported: readonly PiThinkingLevel[] | null;
   approvals: PendingApproval[];
   /** 侧栏列的工作区（落盘、跨会话）。 */
   workspaces: Workspace[];
@@ -177,6 +184,7 @@ interface ViewHandle {
   readonly sessionRef: Readonly<{ current: string | null }>;
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
+  alignThinking(event: { level: PiThinkingLevel }): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
   /** 正开着的那条换了归属工作区：meta 与作用域芯片跟着变 */
@@ -206,16 +214,28 @@ export interface SessionEngine {
   syncIntent(patch: {
     model: { providerId: string; modelId: string } | null;
     mode: PermissionMode;
+    thinkingLevel: ThinkingLevel;
     cwd: string | null;
     workspaceId: string | null;
   }): void;
   /** 会话级意图账本（按会话 id 记账）——查看槽写入，openSession 读 */
   readonly sessionIntent: Readonly<{
-    current: ReadonlyMap<string, { mode?: PermissionMode; model?: { providerId: string; modelId: string } }>;
+    current: ReadonlyMap<
+      string,
+      {
+        mode?: PermissionMode;
+        model?: { providerId: string; modelId: string };
+        thinkingLevel?: ThinkingLevel;
+      }
+    >;
   }>;
   rememberSessionIntent(
     id: string,
-    patch: { mode?: PermissionMode; model?: { providerId: string; modelId: string } },
+    patch: {
+      mode?: PermissionMode;
+      model?: { providerId: string; modelId: string };
+      thinkingLevel?: ThinkingLevel;
+    },
   ): void;
   /**
    * 组装无状态开工上下文（AgentTurnContext 的主体）：meta 真值（cwd / 归属 /
@@ -302,10 +322,11 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
   const intentRef = useRef<{
     model: { providerId: string; modelId: string } | null;
     mode: PermissionMode;
+    thinkingLevel: ThinkingLevel;
     cwd: string | null;
     workspaceId: string | null;
     defaultCwd: string;
-  }>({ model: null, mode: "plan", cwd: null, workspaceId: null, defaultCwd: "" });
+  }>({ model: null, mode: "plan", thinkingLevel: "medium", cwd: null, workspaceId: null, defaultCwd: "" });
   useEffect(() => {
     intentRef.current.defaultCwd = defaultCwd;
   }, [defaultCwd]);
@@ -313,6 +334,7 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     (patch: {
       model: { providerId: string; modelId: string } | null;
       mode: PermissionMode;
+      thinkingLevel: ThinkingLevel;
       cwd: string | null;
       workspaceId: string | null;
     }): void => {
@@ -334,10 +356,24 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
    * 这条会话的最新选择」，永远至少和 meta 一样新（闲着时两边会自行收敛）。
    */
   const sessionIntentRef = useRef<
-    Map<string, { mode?: PermissionMode; model?: { providerId: string; modelId: string } }>
+    Map<
+      string,
+      {
+        mode?: PermissionMode;
+        model?: { providerId: string; modelId: string };
+        thinkingLevel?: ThinkingLevel;
+      }
+    >
   >(new Map());
   const rememberSessionIntent = useCallback(
-    (id: string, patch: { mode?: PermissionMode; model?: { providerId: string; modelId: string } }) => {
+    (
+      id: string,
+      patch: {
+        mode?: PermissionMode;
+        model?: { providerId: string; modelId: string };
+        thinkingLevel?: ThinkingLevel;
+      },
+    ) => {
       const map = sessionIntentRef.current;
       map.set(id, { ...map.get(id), ...patch });
     },
@@ -380,6 +416,8 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
         providerId: model.providerId,
         modelId: model.modelId,
         mode: own?.mode ?? meta?.mode ?? intent.mode,
+        // 思考档同一条三级链：会话级意图 → meta → 投递兑底（新会话的 UI 选择）
+        thinkingLevel: own?.thinkingLevel ?? meta?.thinkingLevel ?? intent.thinkingLevel,
       };
     },
     [],
@@ -513,6 +551,15 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
             }
           }
           refreshSessions();
+        }
+        // 思考档真值（clamp 后事实）到了：对齐正看着那条的槽，芯片自我纠真
+        if (event.type === "thinking") {
+          for (const view of views.current) {
+            if (event.sessionId === view.sessionRef.current) {
+              view.alignThinking(event);
+              break;
+            }
+          }
         }
         // 工具耗时在这里记账（事件必经之路）：组折叠时成员行不渲染，渲染驱动会漏
         if (
@@ -676,6 +723,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
   const [mode, setMode] = useState<PermissionMode>("plan");
+  // 思考档初始 medium：不是新拍的默认，是这些会话一直实际在跑的那一档（pi 出厂默认）
+  const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("medium");
   const sessionRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -697,6 +746,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         const last = settings.lastUsed;
         if (last === undefined) return;
         if (last.mode !== undefined) setMode(last.mode);
+        if (last.thinkingLevel !== undefined) setThinkingLevelState(last.thinkingLevel);
         if (last.providerId !== undefined && last.modelId !== undefined) {
           setModel({ providerId: last.providerId, modelId: last.modelId });
         }
@@ -742,6 +792,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const handle: ViewHandle = {
       sessionRef,
       alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
+      // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
+      // 不认识就保持原样——意图档继续显示，下一轮事件再纠
+      alignThinking: (event) => {
+        if (isThinkingLevel(event.level)) setThinkingLevelState(event.level);
+      },
       handleRemoved: (id) => {
         setOpened((current) => (current?.id === id ? null : current));
         // 删掉的正是本槽活着的那条：回到首页，别让界面停在一条已经没有记录的会话上
@@ -779,7 +834,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
 
   // 本槽的 UI 选择推进引擎的投递兜底（见引擎 syncIntent 的注释）
   useEffect(() => {
-    engine.syncIntent({ model, mode, cwd, workspaceId });
+    engine.syncIntent({ model, mode, thinkingLevel, cwd, workspaceId });
   }, [engine, model, mode, cwd, workspaceId]);
 
   // 草稿键 = 当前查看的会话；send 与收回都写自己的键，互不串。
@@ -839,6 +894,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         providerId: model.providerId,
         modelId: model.modelId,
         mode,
+        thinkingLevel,
         ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
       });
       return;
@@ -886,6 +942,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         providerId: model.providerId,
         modelId: model.modelId,
         mode,
+        thinkingLevel,
       });
       // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
       if (resume === null) engine.refreshSessions();
@@ -943,6 +1000,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           const own = engine.sessionIntent.current.get(id);
           setMode(own?.mode ?? detail.meta.mode);
           setModel(own?.model ?? { providerId: detail.meta.providerId, modelId: detail.meta.modelId });
+          setThinkingLevelState(own?.thinkingLevel ?? detail.meta.thinkingLevel);
           // 无状态：没有「活会话集合」要重连——正在跑的会话它的槽本来就在 states
           // 里（事件一直实时进），不种盘上的快照（种盘等于把画面倒回去）；
           // 没在跑的才从盘上种，readOnly 与「说话时才续跑」（send 带 resume）语义照旧。
@@ -1069,6 +1127,25 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (currentPhase() === "idle") {
         void api.agent
           .setMode(id, next)
+          .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
+      }
+    },
+    [engine, currentPhase],
+  );
+
+  const changeThinkingLevel = useCallback(
+    (next: ThinkingLevel) => {
+      // 同 changeMode 的整条规矩：本地即设（UI 即时）→ lastUsed 跟随 → 记在会话名下
+      // （跑着时改不进 meta，排队卡投递时要拿这一档）→ 闲着才落 meta。下一轮 submit
+      // 自带新档——轮中改不影响当前轮（pi 在轮启动时已快照档位，与换模型同一条语义）
+      setThinkingLevelState(next);
+      void api.settings.set({ lastUsed: { thinkingLevel: next } }).catch(() => undefined);
+      const id = sessionRef.current;
+      if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
+      engine.rememberSessionIntent(id, { thinkingLevel: next });
+      if (currentPhase() === "idle") {
+        void api.agent
+          .setThinkingLevel(id, next)
           .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
       }
     },
@@ -1210,6 +1287,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setDraft,
     mode,
     changeMode,
+    thinkingLevel,
+    changeThinkingLevel,
+    thinkingSupported: entry.thinking?.supported ?? null,
     approvals: entry.approvals,
     workspaces: engine.workspaces,
     addWorkspace,

@@ -63,6 +63,7 @@ const TURN_FIELDS = {
   provider: { id: "zai", api: "openai-completions", baseUrl: "", apiKey: "k", models: [{ id: "m" }] },
   modelId: "m",
   mode: "manual" as const,
+  thinkingLevel: "medium" as const,
   piSessionDir: "C:/pi-sessions",
   protectedPaths: ["C:/pi-sessions"],
   skillsDirs: ["C:/skills"],

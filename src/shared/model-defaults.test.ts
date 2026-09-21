@@ -124,6 +124,24 @@ describe("resolveModelDefaults —— 白名单 > 目录 > 兜底", () => {
     assert.equal(defaults.source, "known");
   });
 
+  test("reasoning 同一条链：白名单补丁 > 目录条目 > 兜底 false（不确定就不发）", () => {
+    // 白名单：glm-5.3-flash 在目录里查不到，reasoning: true 是唯一来源
+    assert.equal(resolveModelDefaults(CATALOG, "glm-5.3-flash", { api: "anthropic-messages" }).reasoning, true);
+    // 目录：条目带 reasoning 就透传（替身目录见文件头的 CATALOG）
+    const withReasoning: BuiltinProvider[] = [
+      {
+        id: "x",
+        name: "x",
+        baseUrl: "",
+        api: "anthropic-messages",
+        models: [{ id: "m1", contextWindow: 1000, maxTokens: 100, input: ["text"], reasoning: true, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+      },
+    ];
+    assert.equal(resolveModelDefaults(withReasoning, "m1", {}).reasoning, true);
+    // 兜底：谁都不认识 = false
+    assert.equal(resolveModelDefaults([], "ghost-model", {}).reasoning, false);
+  });
+
   test("白名单盖目录：它存在就是为了赶在目录前面纠错", () => {
     const stale: BuiltinProvider[] = [
       {

@@ -166,9 +166,39 @@ describe("toBuiltinModel —— 目录条目瘦身给设置面", () => {
       contextWindow: 204_800,
       maxTokens: 8_192,
       input: ["text"],
+      reasoning: undefined,
+      // 替身没设 reasoning → pi 规则判「只有 off」；真模型的档位表在这里算好过线
+      supportedThinkingLevels: ["off"],
       cost: { input: 0.6, output: 2.2, cacheRead: 0.05, cacheWrite: 0.6 },
     });
     assert.equal("tiers" in model.cost, false);
+  });
+});
+
+describe("toFallbackModels —— 借参抄档位表（thinkingLevelMap 是模型能力，跟 id 走）", () => {
+  test("目录原始条目带表：借参注册的模型拿到同款表，支持集不再是伪五档", () => {
+    const withMap = {
+      id: "glm-5.3",
+      name: "GLM-5.3",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl: "",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+      thinkingLevelMap: { off: null, minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
+    } as unknown as PiModel;
+    const registered = toFallbackModels([], [{ id: "glm-5.3" }], [], {}, [withMap])[0];
+    assert.notEqual(registered, undefined);
+    assert.deepEqual(registered?.thinkingLevelMap, withMap.thinkingLevelMap);
+  });
+
+  test("目录没有这个 id：不带表（白名单的 thinkingLevels 在 renderer 兜底显示）", () => {
+    const registered = toFallbackModels([], [{ id: "ghost-model" }], [], {}, [])[0];
+    assert.notEqual(registered, undefined);
+    assert.equal(registered !== undefined && "thinkingLevelMap" in registered, false);
   });
 });
 

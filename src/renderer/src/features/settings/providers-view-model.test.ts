@@ -90,6 +90,7 @@ describe("modelContextText —— 生效值 = 用户覆盖 > 推断出的基线"
     contextWindow,
     maxTokens: 8192,
     input: ["text"],
+    reasoning: false,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     source,
   });
@@ -121,6 +122,7 @@ describe("modelAcceptsImage —— 图片徽标与弹窗 Inherit 共用一个答
     contextWindow: 128_000,
     maxTokens: 8192,
     input,
+    reasoning: false,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     source: "catalog",
   });

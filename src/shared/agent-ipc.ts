@@ -9,8 +9,9 @@
  * sessionId 从第一天就贯穿所有消息：一个 agent runtime 进程要托管 N 个 session，
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
-import type { SessionPhase, TranscriptProgress } from "@earendil-works/pi-protocol";
+import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
+import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
@@ -29,6 +30,8 @@ export const ipcChannels = {
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
   agentSetMode: "agent:set-mode",
+  /** 会话内改思考档：下一轮生效（同 setModel 的语义）。只落 meta，不经 agent 进程 */
+  agentSetThinkingLevel: "agent:set-thinking-level",
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   agentSetModel: "agent:set-model",
   agentAnswerPermission: "agent:answer-permission",
@@ -118,6 +121,14 @@ export interface BuiltinModel {
    * 「Inherit」档位都得知道这个 id 到底能不能吃图，否则用户只能靠手动开关猜。
    */
   input: ("text" | "image")[];
+  /** 能不能思考（目录 / 白名单口径）。可选：不认识就缺席，消费方兑 false——「不确定就不发」 */
+  reasoning?: boolean;
+  /**
+   * 这个模型真实支持的思考档（pi 的 getSupportedThinkingLevels 在 agent 进程算好，
+   * 只以数据过 IPC——派生结论不建第二份真源）。缺席 = 未知：菜单按全量显示，
+   * 开轮后由 thinking 事件纠真。
+   */
+  supportedThinkingLevels?: ThinkingLevel[];
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
@@ -193,6 +204,12 @@ export interface AgentTurnContext {
   providerId: string;
   modelId: string;
   mode: PermissionMode;
+  /**
+   * 这轮跑在哪一档思考上。**必填**（同 mode 的理由）：可选就会静默退到
+   * pi 解析链的用户全局配置——正是这一刀要修的病。真源是 SessionMeta，
+   * 主进程与 renderer 都从它读；模型 clamp 后的真值经 `thinking` 事件回传。
+   */
+  thinkingLevel: ThinkingLevel;
 }
 
 /** 发一轮（renderer → 主进程的载荷） */
@@ -219,6 +236,8 @@ export type AgentCommand =
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
+      /** 这轮的思考档（同 AgentTurnContext.thinkingLevel；开轮命令必带，不退 pi 全局配置） */
+      thinkingLevel: ThinkingLevel;
       /**
        * pi 把自己的 session 文件放在哪。**由主进程给**——runtime 不做路径策略决定。
        */
@@ -289,6 +308,8 @@ export type AgentCommand =
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
+      /** 这轮的思考档，语义同 submit */
+      thinkingLevel: ThinkingLevel;
       piSessionDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
@@ -314,6 +335,8 @@ export type AgentCommand =
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
+      /** 这轮的思考档，语义同 submit（压缩轮内部照旧强制 off，这里传的是会话意图档） */
+      thinkingLevel: ThinkingLevel;
       piSessionDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
@@ -467,6 +490,18 @@ export type AgentEvent =
    * 模型显示与新任务默认。失败不发本事件（`failed` 事件说明原因），meta 不动。
    */
   | { type: "model"; sessionId: string; providerId: string; modelId: string }
+  /**
+   * 思考档真值（开轮时必推一次；pi 内部改档时再推）。**level 是 clamp 后的事实**：
+   * 我们传的意图档可能被模型能力裁剪（不支持的就近落档），芯片必须显示这个值
+   * 而不是用户点的那一档。supported 是 pi 算的支持集（可能含我们菜单外的 xhigh /
+   * max——菜单只放 5 档，这不矛盾：菜单管「能选什么」，supported 管「它支持什么」）。
+   */
+  | {
+      type: "thinking";
+      sessionId: string;
+      level: PiThinkingLevel;
+      supported: readonly PiThinkingLevel[];
+    }
   | { type: "phase"; sessionId: string; phase: SessionPhase }
   /**
    * 一份会话用量快照（token 分项 / 花费 / 上下文余量）。推送粒度与 pi 的数据粒度对齐

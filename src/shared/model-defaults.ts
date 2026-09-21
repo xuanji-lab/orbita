@@ -53,6 +53,8 @@ export interface ModelDefaults {
   contextWindow: number;
   maxTokens: number;
   input: ModelInput;
+  /** 能不能思考：**兑底语义与 contextWindow 相反**——那边是「猜一个能用的」，这边是「不确定就不发」（发出去不支持的档位会 400） */
+  reasoning: boolean;
   cost: BuiltinModel["cost"];
   source: "catalog" | "catalog-family" | "known" | "fallback";
 }
@@ -157,13 +159,16 @@ export function resolveModelDefaults(
       ? exact
         ? "catalog"
         : "catalog-family"
-      : patch.contextWindow !== undefined || patch.maxTokens !== undefined
+      : patch.contextWindow !== undefined ||
+          patch.maxTokens !== undefined ||
+          patch.reasoning !== undefined
         ? "known"
         : "fallback";
   return {
     contextWindow: patch.contextWindow ?? entry?.contextWindow ?? FALLBACK_MODEL.contextWindow,
     maxTokens: patch.maxTokens ?? entry?.maxTokens ?? FALLBACK_MODEL.maxTokens,
     input: [...(entry?.input ?? FALLBACK_MODEL.input)],
+    reasoning: patch.reasoning ?? entry?.reasoning ?? FALLBACK_MODEL.reasoning,
     cost: { ...(entry?.cost ?? FALLBACK_MODEL.cost) },
     source,
   };

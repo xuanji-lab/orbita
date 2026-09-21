@@ -99,6 +99,12 @@ export function Menu(props: {
   searchable?: boolean;
   /** 开合的回声。给调用方复位自己的两段式状态用（菜单关了，确认态不该留着） */
   onOpenChange?: (open: boolean) => void;
+  /**
+   * 面板最小宽度（px）。全局默认 180 是给带描述/徽标的菜单定的；短词菜单
+   * （思考档的 Low/High/Max）被它撑出一大截空白，显得轻浮。给**窄值**时面板
+   * 收窄到内容，maxWidth 320 仍兜底。
+   */
+  panelMinWidth?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
@@ -296,7 +302,7 @@ export function Menu(props: {
               // 量高度那一帧不可见，避免在错位置闪一下
               visibility: position === null ? "hidden" : "visible",
               zIndex: 40,
-              minWidth: 180,
+              minWidth: props.panelMinWidth ?? 180,
               maxWidth: 320,
               padding: "var(--space-1)",
               display: "flex",
