@@ -15,6 +15,7 @@ import { shouldExitSubview } from "./subview-exit.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
+import { canResumeInSource } from "../features/chat/carryover-resume.ts";
 import {
   SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
@@ -556,6 +557,26 @@ export function Sidebar(props: {
             sessions={session.sessions}
             onSetStatus={session.setCarryoverStatus}
             onBack={() => setShowCarryovers(false)}
+            onResumeNew={(item) => {
+              // 开工即回对话：退出面板（下次进重新开），新会话落在来源会话的组里
+              // （cwd / 归属跟随它）——不能落进一个收着的组里无声无息
+              setShowCarryovers(false);
+              props.onOverlay(null);
+              setCollapsed(false);
+              const source = session.sessions.find((m) => m.id === item.sourceSessionId);
+              setGroups((current) =>
+                source?.workspaceId != null
+                  ? unfoldGroup(current, foldKeyForWorkspace(source.workspaceId))
+                  : unfoldGroup(current, TASKS_FOLD_KEY),
+              );
+              session.startCarryoverTask(item);
+            }}
+            onResumeInSource={(item) => {
+              // 右键备选：续跑原会话——跳回去看它接着干（同 onOpenTask 的退场）
+              setShowCarryovers(false);
+              props.onOverlay(null);
+              session.continueCarryoverInSource(item);
+            }}
             onOpenTask={(id) => {
               // 看完事项跳回对话：退出面板、切到那条会话（面板下次进重新开）
               setShowCarryovers(false);
@@ -1472,15 +1493,20 @@ function SessionRow(props: {
 
 /**
  * 遗留事项面板（侧栏的 Carryovers 视图）：按来源会话分组，每条可勾办结、
- * 可跳回来源会话。**勾选即写盘**（carryoverSetStatus），角标与筛选跟着引擎缓存
- * 自动刷新；跳回原文今天只到「跳到那条会话」——滚动定位到 sourceMessageRange
- * 首条需要消息序号 → DOM 的定位基建，还没有第二处消费者，先不做（TODO：
+ * 可跳回来源会话、可带上下文开工（左键新开一单 / 右键续跑原会话）。
+ * **勾选即写盘**（carryoverSetStatus），角标与筛选跟着引擎缓存自动刷新；
+ * 跳回原文今天只到「跳到那条会话」——滚动定位到 sourceMessageRange 首条
+ * 需要消息序号 → DOM 的定位基建，还没有第二处消费者，先不做（TODO：
  * 「跳回原文」的滚动定位，等定位基建立项后接 sourceMessageRange[0]）。
  */
 function CarryoverPanel(props: {
   carryovers: readonly Carryover[];
   sessions: readonly SessionMeta[];
   onSetStatus: (id: string, status: Carryover["status"]) => void;
+  /** 方案 A：新开一单带上下文开工（面板主入口） */
+  onResumeNew: (item: Carryover) => void;
+  /** 方案 B：以遗留事项为用户消息续跑原会话（同一按钮的右键备选） */
+  onResumeInSource: (item: Carryover) => void;
   onOpenTask: (sessionId: string) => void;
   /** 显式出口：标题行左端的返回键 */
   onBack: () => void;
@@ -1572,7 +1598,10 @@ function CarryoverPanel(props: {
               key={item.id}
               item={item}
               canJump={group.session !== null}
+              canResume={canResumeInSource(item, props.sessions)}
               onSetStatus={props.onSetStatus}
+              onResumeNew={() => props.onResumeNew(item)}
+              onResumeInSource={() => props.onResumeInSource(item)}
               onJump={() => {
                 if (group.session !== null) props.onOpenTask(group.session.id);
               }}
@@ -1584,11 +1613,15 @@ function CarryoverPanel(props: {
   );
 }
 
-/** 面板里的一条遗留事项：勾选办结 / 标题 / 摘录 / 跳回原文。 */
+/** 面板里的一条遗留事项：勾选办结 / 标题 / 摘录 / 带上下文开工 / 跳回原文。 */
 function CarryoverRow(props: {
   item: Carryover;
   canJump: boolean;
+  /** 方案 B 可用：来源会话在且有 pi 本子（导入的只读会话没有，右键不拦截） */
+  canResume: boolean;
   onSetStatus: (id: string, status: Carryover["status"]) => void;
+  onResumeNew: () => void;
+  onResumeInSource: () => void;
   onJump: () => void;
 }) {
   const { item } = props;
@@ -1645,19 +1678,48 @@ function CarryoverRow(props: {
         )}
       </div>
       {/**
-        跳回原文：今天只到「跳到那条会话」——滚动定位到 sourceMessageRange 首条
-        需要消息序号→DOM 的定位基建，还没有第二处消费者（TODO，见 CarryoverPanel）。
+        带上下文开工：左键新开一单（主入口，键盘可达），右键续跑原会话（备选，
+        不可用时右键不拦截——原生菜单出来，诚实）。办结的行也能开工：勾了又想
+        跟进是合法场景。tooltip 把右键那半句讲出来（设计系统：tooltip 讲完句子
+        的另一半）。
       */}
-      <IconButton
-        label="Jump to the source task"
-        title={props.canJump ? "Open the task this came from" : "The source task was deleted"}
-        size={20}
-        disabled={!props.canJump}
-        onClick={props.onJump}
-        style={{ color: "var(--color-text-tertiary)" }}
-      >
-        <Icon name="corner-down-left" size={11} strokeWidth={1.8} />
-      </IconButton>
+      <span style={{ display: "inline-flex", alignItems: "center" }}>
+        <IconButton
+          label="Continue with context"
+          title={
+            props.canResume
+              ? "Start a new task with this item's context · right-click to continue in the original task"
+              : "Start a new task with this item's context"
+          }
+          size={20}
+          onClick={props.onResumeNew}
+          onContextMenu={
+            props.canResume
+              ? (event) => {
+                  event.preventDefault();
+                  props.onResumeInSource();
+                }
+              : undefined
+          }
+          style={{ color: "var(--color-text-secondary)" }}
+        >
+          <Icon name="corner-up-right" size={11} strokeWidth={1.8} />
+        </IconButton>
+        {/**
+          跳回原文：今天只到「跳到那条会话」——滚动定位到 sourceMessageRange 首条
+          需要消息序号→DOM 的定位基建，还没有第二处消费者（TODO，见 CarryoverPanel）。
+        */}
+        <IconButton
+          label="Jump to the source task"
+          title={props.canJump ? "Open the task this came from" : "The source task was deleted"}
+          size={20}
+          disabled={!props.canJump}
+          onClick={props.onJump}
+          style={{ color: "var(--color-text-tertiary)" }}
+        >
+          <Icon name="corner-down-left" size={11} strokeWidth={1.8} />
+        </IconButton>
+      </span>
     </div>
   );
 }

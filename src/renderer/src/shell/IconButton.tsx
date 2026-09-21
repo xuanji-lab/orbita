@@ -10,6 +10,8 @@ import { useState } from "react";
 export function IconButton(props: {
   label: string;
   onClick?: () => void;
+  /** 右键透传（同一个按钮挂备选手势时用，如遗留事项的「继续」：左键新开 / 右键续原会话） */
+  onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   size?: number;
   /** soft = 一层极轻的面（设计系统模板里右图标条用的就是它）；默认 ghost 完全透明 */
   variant?: "ghost" | "soft";
@@ -34,6 +36,7 @@ export function IconButton(props: {
       aria-expanded={props.ariaExpanded}
       disabled={disabled}
       onClick={props.onClick}
+      onContextMenu={props.onContextMenu}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{

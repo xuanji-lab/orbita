@@ -40,6 +40,7 @@ import {
   scanTurnModel,
   type CarryoverDraft,
 } from "./carryover-parse.ts";
+import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.ts";
 import type { Carryover, CompactedRecord, SessionCompletion, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 
@@ -154,7 +155,7 @@ export interface ChatSession {
    * 界面要如实说出来，不能让输入框看起来能打字（guideline §四写明的代价）。
    */
   readOnly: boolean;
-  openSession: (id: string) => void;
+  openSession: (id: string) => Promise<void>;
   /** 改名。空名字会退回从第一条用户消息推导——侧栏不留看不见的行 */
   renameSession: (id: string, title: string) => void;
   pinSession: (id: string, pinned: boolean) => void;
@@ -176,6 +177,16 @@ export interface ChatSession {
   refreshCarryovers: () => void;
   /** 翻转一条遗留事项的状态（面板勾选） */
   setCarryoverStatus: (id: string, status: Carryover["status"]) => void;
+  /**
+   * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
+   * context」）。cwd / 归属跟随来源会话；完成与否不回写——勾选办结留给用户手动。
+   */
+  startCarryoverTask: (item: Carryover) => void;
+  /**
+   * 方案 B：以遗留事项为用户消息**续跑原会话**（同一个按钮的右键备选；
+   * 来源会话无 pi 本子时面板不提供入口）。在跑就排队，闲着就无状态续跑。
+   */
+  continueCarryoverInSource: (item: Carryover) => void;
   /** 归档：从主列表移走，**不是删除** */
   archiveSession: (id: string, archived: boolean) => void;
   moveSession: (id: string, workspaceId: string | null) => void;
@@ -961,6 +972,59 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const draft = drafts.get(draftKey) ?? "";
   const setDraft = (value: string) => writeDraft(draftKey, value);
 
+  /**
+   * 绑定本槽 → 乐观置 turn → submit 全套开工上下文。send 的发送分支与遗留事项
+   * 开工（startCarryoverTask）共用：两条路径对「发出去那一刻起它就是本槽的活
+   * 会话」「失败归位并报错」「新本子首轮刷新侧栏」的要求完全一致，各写一份迟早漂移。
+   * 模型 / 权限档用本槽当前意图（两条共用路径都是「以用户当下选的档开新轮」；
+   * 按会话自己的账续跑另有 buildTurn 那条路，见 continueCarryoverInSource）。
+   * model 为 null 的检查不在这：send 要在清草稿**之前**拦，这里再拦一道只作
+   * 类型兑底（两处同文案，行为一致）。
+   */
+  const submitTurn = useCallback(
+    async (
+      id: string,
+      text: string,
+      target: string,
+      workspace: string | null,
+      resume: { piSessionFile: string } | null,
+    ): Promise<void> => {
+      if (model === null) {
+        engine.setError("Add a provider with at least one model first");
+        return;
+      }
+      // 无论新建还是从盘上重开：发出去的那一刻起它就是「本槽的活会话」——排队 /
+      // 停止 / 撤回都靠 sessionRef 找它，不设就全部静默 no-op（2026-09-11 B 验收复现）
+      if (sessionRef.current !== id) {
+        setSessionId(id);
+        sessionRef.current = id;
+      }
+      // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子
+      engine.applyStates((prev) => setEntryPhase(prev, id, "turn"));
+      try {
+        // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效
+        await api.agent.submit({
+          sessionId: id,
+          text,
+          cwd: target,
+          workspaceId: workspace,
+          resume,
+          providerId: model.providerId,
+          modelId: model.modelId,
+          mode,
+          thinkingLevel,
+        });
+        // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
+        if (resume === null) engine.refreshSessions();
+      } catch (cause) {
+        engine.setError(cause instanceof Error ? cause.message : String(cause));
+        // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位
+        engine.applyStates((prev) => setEntryPhase(prev, id, "idle"));
+      }
+    },
+    [engine, model, mode, thinkingLevel],
+  );
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (text === "") return;
@@ -1039,40 +1103,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (target === "") throw new Error("Choose a workspace folder first");
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
       if (id === null) id = crypto.randomUUID();
-      // 无论新建还是从盘上重开：发出去的那一刻起它就是「本槽的活会话」——排队 /
-      // 停止 / 撤回都靠 sessionRef 找它，不设就全部静默 no-op（2026-09-11 B 验收复现）
-      if (sessionRef.current !== id) {
-        setSessionId(id);
-        sessionRef.current = id;
-      }
       writeDraft(draftKey, "");
-      // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子。
-      // 钉进 const：回调与 catch 里 TS 不保留 try 内的窄化
-      const active: string = id;
-      engine.applyStates((prev) => setEntryPhase(prev, active, "turn"));
-      // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效
-      await api.agent.submit({
-        sessionId: active,
-        text,
-        cwd: target,
-        workspaceId: workspace,
-        resume,
-        providerId: model.providerId,
-        modelId: model.modelId,
-        mode,
-        thinkingLevel,
-      });
-      // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
-      if (resume === null) engine.refreshSessions();
+      await submitTurn(id, text, target, workspace, resume);
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
-      // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位
-      if (id !== null) {
-        const failedEntry: string = id;
-        engine.applyStates((prev) => setEntryPhase(prev, failedEntry, "idle"));
-      }
     }
-  }, [engine, draft, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft]);
+  }, [engine, draft, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, submitTurn]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -1097,14 +1133,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    *
    * 没在跑的才从盘上把 transcript 种进槽；**续跑推迟到用户真的说话时**
    * （send 里带 resume）——打开一条会话就起一个进程内的 session 太贵了，
-   * 翻记录是最常见的动作。
+   * 翻记录是最常见的动作。返回的 Promise 在历史种完（或读失败）时落定——
+   * 「打开后接着发消息」的编排（遗留事项续跑原会话）要等它，否则 submit 先行
+   * 会把槽建出来，openSession 的种子看到槽已存在就不种历史了。
    */
   const openSession = useCallback(
-    (id: string) => {
-      if (id === sessionRef.current) return;
+    (id: string): Promise<void> => {
+      if (id === sessionRef.current) return Promise.resolve();
       engine.setError(null);
       setLoadingHistory(true);
-      void api.session
+      return api.session
         .load(id)
         .then((detail) => {
           setLoadingHistory(false);
@@ -1144,6 +1182,82 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         });
     },
     [engine],
+  );
+
+  /**
+   * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
+   * context」）。种子是可见的结构化 user 消息（形态决策见 carryover-resume.ts）；
+   * cwd / 归属跟随来源会话——遗留事项是那单任务的未竟之事，新开工跑在同一个
+   * 目录才能接着干；来源已删时退到本槽当前选择再退兑底。完成与否不回写：
+   * 新单完成 ≠ 遗留办结，勾选留给用户（不猜）。
+   */
+  const startCarryoverTask = useCallback(
+    (item: Carryover): void => {
+      if (model === null) {
+        engine.setError("Add a provider with at least one model first");
+        return;
+      }
+      const source = engine.sessions.find((meta) => meta.id === item.sourceSessionId) ?? null;
+      // 空标题的会话不会有 carryover（收尾扫描要求 transcript 非空），防御性兑到
+      // Untitled task（transcriptToMarkdown 同款措辞），不谎称「已删除」
+      const sourceTitle =
+        source === null ? null : source.title === "" ? "Untitled task" : source.title;
+      const seed = buildCarryoverSeed(item, sourceTitle);
+      const target = source?.cwd ?? cwd ?? engine.defaultCwd;
+      if (target === "") {
+        engine.setError("Choose a workspace folder first");
+        return;
+      }
+      const workspace = source?.workspaceId ?? workspaceId ?? null;
+      // 回首页清槽，并把本槽落点切到来源目录：开工后的下一条新任务默认同目录
+      reset();
+      setCwd(source?.cwd ?? null);
+      setWorkspaceId(source?.workspaceId ?? null);
+      engine.setError(null);
+      void submitTurn(crypto.randomUUID(), seed, target, workspace, null);
+    },
+    [engine, model, cwd, workspaceId, reset, submitTurn],
+  );
+
+  /**
+   * 方案 B：以遗留事项为用户消息**续跑原会话**（同一个按钮的右键备选；
+   * 只读导入会话没有 pi 本子，面板已按 canResumeInSource 禁掉入口，这里再守一道）。
+   * **等 openSession 把历史种完再发**：submit 先行会把槽建出来，种子看到槽已存在
+   * 就不种历史，用户会看不到原对话。在跑就排队（不打断正在跑的轮，与 send
+   * 同一条纪律）；闲着就按会话自己的账续跑（buildTurn：cwd / 本子 / 档位都是
+   * 它当时的样子，不用本槽当前的）。
+   */
+  const continueCarryoverInSource = useCallback(
+    (item: Carryover): void => {
+      const id = item.sourceSessionId;
+      const meta = engine.sessions.find((entry) => entry.id === id) ?? null;
+      if (meta === null || meta.piSessionFile === null) return;
+      const text = buildCarryoverFollowUp(item);
+      void openSession(id).then(() => {
+        // 没有槽（undefined）也是没在跑：直接发，不排队——排了没人投递，成死队列
+        const entry = engine.statesRef.current.get(id);
+        if (entry !== undefined && entry.phase !== "idle") {
+          engine.applyStates((prev) =>
+            enqueue(prev, id, { id: crypto.randomUUID(), kind: "text", text }),
+          );
+          return;
+        }
+        const turn = engine.buildTurn(id);
+        if (turn === null) return;
+        // 这里不再清 error：openSession 读盘失败的红字要留着（链会继续走到这，
+        // 消息照发、历史没种上，用户得知道有错）；常规清理 openSession 开头已做
+        if (sessionRef.current !== id) {
+          setSessionId(id);
+          sessionRef.current = id;
+        }
+        engine.applyStates((prev) => setEntryPhase(prev, id, "turn"));
+        void api.agent.submit({ sessionId: id, text, ...turn }).catch((cause: unknown) => {
+          engine.setError(cause instanceof Error ? cause.message : String(cause));
+          engine.applyStates((prev) => setEntryPhase(prev, id, "idle"));
+        });
+      });
+    },
+    [engine, openSession],
   );
 
   const branchFrom = useCallback(
@@ -1666,6 +1780,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     carryovers: engine.carryovers,
     refreshCarryovers: engine.refreshCarryovers,
     setCarryoverStatus: engine.setCarryoverStatus,
+    startCarryoverTask,
+    continueCarryoverInSource,
     closingScan: closingScan !== null && closingScan.sessionId === viewedId,
     scanResult,
     startClosingRitual,

@@ -15,6 +15,7 @@ import chevronUp from "../../../../Orbita Design System/assets/icons/lucide/chev
 import clock from "../../../../Orbita Design System/assets/icons/lucide/clock.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
 import cornerDownLeft from "../../../../Orbita Design System/assets/icons/lucide/corner-down-left.svg?raw";
+import cornerUpRight from "../../../../Orbita Design System/assets/icons/lucide/corner-up-right.svg?raw";
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
 import download from "../../../../Orbita Design System/assets/icons/lucide/download.svg?raw";
 import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
@@ -84,6 +85,7 @@ const ICONS = {
   "circle-off": circleOff,
   copy,
   "corner-down-left": cornerDownLeft,
+  "corner-up-right": cornerUpRight,
   cpu,
   download,
   "ellipsis-vertical": ellipsisVertical,
