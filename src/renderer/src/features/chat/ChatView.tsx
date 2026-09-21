@@ -4,6 +4,11 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeCompactions } from "./session-states";
+import {
+  HOME_CARD_CARRYOVER_ROWS,
+  HOME_CARD_QUERY_ROWS,
+  selectHomeCards,
+} from "./home-cards";
 import { isAtBottom } from "./scroll";
 import {
   branchAnchorEntries,
@@ -295,9 +300,16 @@ export function ChatView(props: {
         </div>
       );
     }
-    // 会话卡数据：全局最近活跃的前 3 条（list 已按 sortSessions 排序），
-    // 排除已归档与从未发过消息的——后者连标题都没有，卡片无物可显
-    const recents = session.sessions.filter((m) => !m.archived && m.title !== "").slice(0, 3);
+    // 会话卡数据：有 open 遗留事项的会话优先占卡（行位换成遗留标题，最多 4 行），
+    // 剩余槽位按现状「最近活跃」补齐；选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），
+    // 这里只接线。遗留事项直接吃引擎缓存（PR-4 的 carryoverList 通道，写操作自动刷新），
+    // 卡不另建缓存、meta 不冗余计数。
+    // 点击：卡与行都进该会话（openSession）——滚动定位到 sourceMessageRange 的基建
+    // 还未立项（PR-4 面板同款 TODO），落定后行点击可升级为定位，卡保持进会话
+    const homeCards = useMemo(
+      () => selectHomeCards(session.sessions, session.carryovers),
+      [session.sessions, session.carryovers],
+    );
     return (
       <div
         className="home-stage"
@@ -370,17 +382,23 @@ export function ChatView(props: {
                 ))}
               </div>
             ) : (
-              recents.length > 0 && (
+              homeCards.length > 0 && (
                 <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
-                  {recents.map((meta) => (
+                  {homeCards.map((card) => (
                     <SessionCard
-                      key={meta.id}
-                      name={meta.title}
-                      queries={meta.recentQueries}
-                      running={session.phaseOf(meta.id) !== "idle"}
+                      key={card.sessionId}
+                      name={card.title}
+                      items={card.rows.map((row) => ({
+                        // 图标与遗留事项面板的跳转按钮同款（corner-down-left）：
+                        // 这行的动作就是「跳到那条会话」，视觉语言一致
+                        icon: row.kind === "carryover" ? ("corner-down-left" as const) : undefined,
+                        text: row.text,
+                      }))}
+                      slots={card.todo ? HOME_CARD_CARRYOVER_ROWS : HOME_CARD_QUERY_ROWS}
+                      running={session.phaseOf(card.sessionId) !== "idle"}
                       onClick={() => {
                         startLeave();
-                        session.openSession(meta.id);
+                        session.openSession(card.sessionId);
                       }}
                     />
                   ))}

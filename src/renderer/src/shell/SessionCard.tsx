@@ -1,16 +1,20 @@
 import { useState } from "react";
+import { Icon, type IconName } from "./Icon";
 
 /**
  * 首页的最近会话卡（设计系统 components/surfaces/SessionCard 的实现）：
- * layer-3 玻璃卡，**四行正好**——名字行 + 固定三个提问槽。槽位不足就留空、
- * 恒渲染三个：一排卡片才齐得平。hover 只从 composer 阴影抬到 popover 阴影，
- * 别的都不动（设计系统 *Hover, press, disabled*）。
+ * layer-3 玻璃卡，名字行 + 行位槽。槽位由 `slots` 定——普通卡恒 3（提问）、
+ * 待办卡恒 4（遗留事项）；槽位不足就留空、恒渲染：一排卡片才齐得平。
+ * hover 只从 composer 阴影抬到 popover 阴影，别的都不动
+ * （设计系统 *Hover, press, disabled*）。
  */
 export function SessionCard(props: {
   /** 会话名，单行截断 */
   name: string;
-  /** 最近 3 条用户提问（新→旧）；不足留空槽 */
-  queries?: string[];
+  /** 行位数据：icon 有值是遗留事项行，无值是用户提问行 */
+  items?: readonly { icon?: IconName; text: string }[];
+  /** 恒渲染槽位数；默认 3（普通卡的提问槽） */
+  slots?: number;
   /** 这条会话里有 agent 在跑：名字行尾一枚 accent 圆点 */
   running?: boolean;
   /** 列表还在读时的骨架态 */
@@ -19,7 +23,8 @@ export function SessionCard(props: {
   style?: React.CSSProperties;
 }) {
   const [hover, setHover] = useState(false);
-  const queries = props.queries ?? [];
+  const items = props.items ?? [];
+  const slots = props.slots ?? 3;
   return (
     <button
       type="button"
@@ -82,22 +87,47 @@ export function SessionCard(props: {
               />
             )}
           </span>
-          {[0, 1, 2].map((slot) => (
-            <span
-              key={slot}
-              style={{
-                minHeight: 16,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                fontSize: "var(--font-size-caption)",
-                lineHeight: "var(--line-height-caption)",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              {queries[slot] ?? ""}
-            </span>
-          ))}
+          {Array.from({ length: slots }, (_, slot) => {
+            const item = items[slot];
+            return (
+              <span
+                key={slot}
+                style={{
+                  minHeight: 16,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--space-1)",
+                  minWidth: 0,
+                }}
+              >
+                {item !== undefined && (
+                  <>
+                    {item.icon !== undefined && (
+                      <Icon
+                        name={item.icon}
+                        size={12}
+                        strokeWidth={1.8}
+                        style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}
+                      />
+                    )}
+                    <span
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        fontSize: "var(--font-size-caption)",
+                        lineHeight: "var(--line-height-caption)",
+                        color: "var(--color-text-secondary)",
+                      }}
+                    >
+                      {item.text}
+                    </span>
+                  </>
+                )}
+              </span>
+            );
+          })}
         </>
       )}
     </button>
