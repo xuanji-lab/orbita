@@ -47,6 +47,8 @@ import fileText from "../../../../Orbita Design System/assets/icons/lucide/file-
 import trash2 from "../../../../Orbita Design System/assets/icons/lucide/trash-2.svg?raw";
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
+import star from "../../../../Orbita Design System/assets/icons/lucide/star.svg?raw";
+import starOff from "../../../../Orbita Design System/assets/icons/lucide/star-off.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
 import undo2 from "../../../../Orbita Design System/assets/icons/lucide/undo-2.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
@@ -105,6 +107,8 @@ const ICONS = {
   settings,
   "shield-check": shieldCheck,
   sliders,
+  star,
+  "star-off": starOff,
   square,
   search,
   terminal,

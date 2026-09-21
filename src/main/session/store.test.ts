@@ -199,6 +199,27 @@ describe("SessionStore", () => {
     assert.equal(loaded?.modelId, "m2");
   });
 
+  // 星标是价值标记，与置顶（排序）正交：翻转只动自己这一个字段，
+  // 别把用户的置顶或归档悄悄带走
+  test("setStarred 翻转星标，pinned / archived 不被波及", async () => {
+    await store.ensureSession(meta({ pinned: true }));
+    await store.setStarred(ID, true);
+    let after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.starred, true);
+    assert.equal(after?.pinned, true);
+    assert.equal(after?.archived, false);
+    await store.setStarred(ID, false);
+    after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.starred, false);
+    assert.equal(after?.pinned, true);
+  });
+
+  // 与 update 的既有语义一致：meta 不在就悄悄不做，不为它抛错或重建文件
+  test("setStarred 对不存在的会话悄悄不做", async () => {
+    await store.setStarred(ID, true);
+    assert.deepEqual(await store.list(), []);
+  });
+
   // id 从 renderer 经 IPC 进来，直接拼路径的话一个 ../../ 就能写到别处
   test("非法 id 一律拒绝，不落在 sessions 目录之外", async () => {
     for (const bad of ["../../etc/passwd", "..", "a/b", "", "not-a-uuid", `${ID}/../x`]) {

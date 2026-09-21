@@ -53,6 +53,8 @@ export const ipcChannels = {
   sessionLoad: "session:load",
   sessionRename: "session:rename",
   sessionPin: "session:pin",
+  /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */
+  sessionStar: "session:star",
   sessionArchive: "session:archive",
   /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
   sessionMove: "session:move",

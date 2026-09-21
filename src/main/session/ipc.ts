@@ -28,6 +28,9 @@ export function registerSessionIpc(
   ipcMain.handle(ipcChannels.sessionPin, (_event, id: string, pinned: boolean) =>
     store.setPinned(id, pinned),
   );
+  ipcMain.handle(ipcChannels.sessionStar, (_event, id: string, starred: boolean) =>
+    store.setStarred(id, starred),
+  );
   ipcMain.handle(ipcChannels.sessionArchive, (_event, id: string, archived: boolean) =>
     store.setArchived(id, archived),
   );

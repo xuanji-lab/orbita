@@ -316,6 +316,14 @@ export class SessionStore {
     return this.update(id, { pinned });
   }
 
+  /**
+   * 星标：价值标记，与置顶（排序）正交——只动自己这一个字段，不参与排序，
+   * 消费者是侧栏的行内标识与「Starred」筛选。
+   */
+  setStarred(id: string, starred: boolean): Promise<void> {
+    return this.update(id, { starred });
+  }
+
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
   setArchived(id: string, archived: boolean): Promise<void> {
     return this.update(id, { archived });

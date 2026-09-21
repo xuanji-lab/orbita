@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
+import { Chip } from "./Chip";
 import { selectionStyle } from "./selection";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
@@ -52,6 +53,11 @@ export function Sidebar(props: {
   const settingsOpen = props.overlay === "settings";
   const [showArchived, setShowArchived] = useState(false);
   /**
+   * 「Starred」筛选 chip 的开合。**只作用于主浏览列表**（Workspaces + Tasks）：
+   * Archived 是存储位置视图、Settings 是另一块列表，都不受（也不该隐形地受）筛选。
+   */
+  const [starredOnly, setStarredOnly] = useState(false);
+  /**
    * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
    * **手动状态不持久化**——窗口宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
    */
@@ -96,7 +102,17 @@ export function Sidebar(props: {
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   const sessionList = describeList(session.loads.sessions, session.sessions.length);
-  const loose = live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
+  /**
+   * 主列表的筛选管线（筛选区 chips）。星标先落；后续 PR 的「进行中 / 已完成」
+   * 等 chip 仍是往这条管线加条件、往筛选区加 chip，结构不再动。
+   * **只作用于主浏览列表**——Archived 是存储位置视图，不受（也不该隐形地受）筛选。
+   */
+  const scoped = starredOnly ? live.filter((m) => m.starred === true) : live;
+  const loose = scoped.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
+  // 筛选开着时，没有命中会话的工作区组整个不显示——一排空组头比没有更吵
+  const workspaceMatches = starredOnly
+    ? session.workspaces.filter((workspace) => scoped.some((m) => m.workspaceId === workspace.id))
+    : session.workspaces;
   const tasksFolded = groups.folds.has(TASKS_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
   const tasksFull = groups.full.has(TASKS_FOLD_KEY);
@@ -237,6 +253,23 @@ export function Sidebar(props: {
         New task
       </button>
 
+      {/*
+        筛选区：会话浏览的过滤 chips。星标先落一个；后续 PR 的「进行中 / 已完成」
+        排进同一行。**只在主列表视图显示**，且没有任何会话时筛选无从谈起，不摆。
+      */}
+      {live.length > 0 && !settingsOpen && !showArchived && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <Chip
+            icon="star"
+            active={starredOnly}
+            title="Show starred tasks only"
+            onClick={() => setStarredOnly((value) => !value)}
+          >
+            Starred
+          </Chip>
+        </div>
+      )}
+
       <div
         className="scroll"
         style={{
@@ -272,107 +305,120 @@ export function Sidebar(props: {
               />
             ))}
           </>
+        ) : starredOnly && scoped.length === 0 ? (
+          /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
+          <Empty>No starred tasks yet. Star a task from its menu to find it here.</Empty>
         ) : (
           <>
-            <NodeHeader
-              label="Workspaces"
-              addLabel="Add a workspace folder"
-              addIcon="folder-plus"
-              onAdd={session.addWorkspace}
-            />
-            {/*
-              读失败时错误行贴在列表上方，旧列表照常列（失败不清空手里那份）；
-              只有从没读成功过才是空空的错误行 + 什么都不列（none）。
-            */}
-            {workspaceList.error !== null && (
-              <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />
-            )}
-            {workspaceList.body === "loading" ? (
-              <Empty>Loading workspaces…</Empty>
-            ) : workspaceList.body === "empty" ? (
-              <Empty>No workspace yet. Add the folder the agent may read.</Empty>
-            ) : workspaceList.body === "list" ? (
-              session.workspaces.map((workspace) => (
-                <WorkspaceGroup
-                  key={workspace.id}
-                  workspace={workspace}
-                  sessions={live.filter((m) => m.workspaceId === workspace.id)}
-                  session={session}
-                  openId={openId}
-                  folded={groups.folds.has(foldKeyForWorkspace(workspace.id))}
-                  onToggleFold={() =>
-                    setGroups((current) =>
-                      toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
-                    )
-                  }
-                  full={groups.full.has(foldKeyForWorkspace(workspace.id))}
-                  onToggleFull={() =>
-                    setGroups((current) =>
-                      toggleGroupFull(current, foldKeyForWorkspace(workspace.id)),
-                    )
-                  }
-                  onNewTask={() => {
-                    // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
-                    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(workspace.id)));
-                    session.newTaskIn(workspace);
-                  }}
-                  onRename={(name) => session.renameWorkspace(workspace.id, name)}
-                  onRemove={() => session.removeWorkspace(workspace.id)}
-                  onOpen={open}
+            {(!starredOnly || workspaceMatches.length > 0) && (
+              <>
+                <NodeHeader
+                  label="Workspaces"
+                  addLabel="Add a workspace folder"
+                  addIcon="folder-plus"
+                  onAdd={session.addWorkspace}
                 />
-              ))
-            ) : null}
-
-            {/*
-              TASKS 节点列的是**落盘的会话**。今天全部会话都挂在这里而不是挂到
-              **不属于任何工作区**的那些。这就是设计系统里 TASKS 与 WORKSPACES
-              两个节点的区别，也是「+ New task」与工作区那个「+」的区别。
-            */}
-            <div style={{ marginTop: "var(--space-3)" }}>
-              <NodeHeader
-                label="Tasks"
-                addLabel="New task"
-                addIcon="plus"
-                onAdd={() => {
-                  // 同上：新任务落 TASKS，先展开再建
-                  setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
-                  session.newTask();
-                }}
-                folded={tasksFolded}
-                onToggleFold={
-                  loose.length > 0
-                    ? () => setGroups((current) => toggleGroupFold(current, TASKS_FOLD_KEY))
-                    : undefined
-                }
-              />
-              {sessionList.error !== null && (
-                <ListError message={sessionList.error} onRetry={session.reloadSessions} />
-              )}
-              {sessionList.body === "loading" ? (
-                <Empty>Loading tasks…</Empty>
-              ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
-                <Empty>No task yet. The one you start lands here.</Empty>
-              ) : tasksFolded ? null : (
-                <>
-                  {looseVisible.map((meta) => (
-                    <SessionRow
-                      key={meta.id}
-                      meta={meta}
+                {/*
+                  读失败时错误行贴在列表上方，旧列表照常列（失败不清空手里那份）；
+                  只有从没读成功过才是空空的错误行 + 什么都不列（none）。
+                */}
+                {workspaceList.error !== null && (
+                  <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />
+                )}
+                {workspaceList.body === "loading" ? (
+                  <Empty>Loading workspaces…</Empty>
+                ) : workspaceList.body === "empty" ? (
+                  <Empty>No workspace yet. Add the folder the agent may read.</Empty>
+                ) : workspaceList.body === "list" ? (
+                  workspaceMatches.map((workspace) => (
+                    <WorkspaceGroup
+                      key={workspace.id}
+                      workspace={workspace}
+                      sessions={scoped.filter((m) => m.workspaceId === workspace.id)}
                       session={session}
-                      active={meta.id === openId}
-                      onClick={() => open(meta.id)}
+                      openId={openId}
+                      folded={groups.folds.has(foldKeyForWorkspace(workspace.id))}
+                      onToggleFold={() =>
+                        setGroups((current) =>
+                          toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
+                        )
+                      }
+                      full={groups.full.has(foldKeyForWorkspace(workspace.id))}
+                      onToggleFull={() =>
+                        setGroups((current) =>
+                          toggleGroupFull(current, foldKeyForWorkspace(workspace.id)),
+                        )
+                      }
+                      onNewTask={() => {
+                        // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
+                        setGroups((current) =>
+                          unfoldGroup(current, foldKeyForWorkspace(workspace.id)),
+                        );
+                        session.newTaskIn(workspace);
+                      }}
+                      onRename={(name) => session.renameWorkspace(workspace.id, name)}
+                      onRemove={() => session.removeWorkspace(workspace.id)}
+                      onOpen={open}
                     />
-                  ))}
-                  {loose.length > SESSIONS_PREVIEW_LIMIT && (
-                    <ShowAllRow
-                      full={tasksFull}
-                      hidden={loose.length - SESSIONS_PREVIEW_LIMIT}
-                      onClick={() => setGroups((current) => toggleGroupFull(current, TASKS_FOLD_KEY))}
-                    />
-                  )}
-                </>
-              )}
-            </div>
+                  ))
+                ) : null}
+              </>
+            )}
+
+            {(!starredOnly || loose.length > 0) && (
+              <div style={{ marginTop: "var(--space-3)" }}>
+                {/**
+                  TASKS 节点列的是**落盘的会话**。今天全部会话都挂在这里而不是挂到
+                  **不属于任何工作区**的那些。这就是设计系统里 TASKS 与 WORKSPACES
+                  两个节点的区别，也是「+ New task」与工作区那个「+」的区别。
+                */}
+                <NodeHeader
+                  label="Tasks"
+                  addLabel="New task"
+                  addIcon="plus"
+                  onAdd={() => {
+                    // 同上：新任务落 TASKS，先展开再建
+                    setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
+                    session.newTask();
+                  }}
+                  folded={tasksFolded}
+                  onToggleFold={
+                    loose.length > 0
+                      ? () => setGroups((current) => toggleGroupFold(current, TASKS_FOLD_KEY))
+                      : undefined
+                  }
+                />
+                {sessionList.error !== null && (
+                  <ListError message={sessionList.error} onRetry={session.reloadSessions} />
+                )}
+                {sessionList.body === "loading" ? (
+                  <Empty>Loading tasks…</Empty>
+                ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
+                  <Empty>No task yet. The one you start lands here.</Empty>
+                ) : tasksFolded ? null : (
+                  <>
+                    {looseVisible.map((meta) => (
+                      <SessionRow
+                        key={meta.id}
+                        meta={meta}
+                        session={session}
+                        active={meta.id === openId}
+                        onClick={() => open(meta.id)}
+                      />
+                    ))}
+                    {loose.length > SESSIONS_PREVIEW_LIMIT && (
+                      <ShowAllRow
+                        full={tasksFull}
+                        hidden={loose.length - SESSIONS_PREVIEW_LIMIT}
+                        onClick={() =>
+                          setGroups((current) => toggleGroupFull(current, TASKS_FOLD_KEY))
+                        }
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -845,6 +891,12 @@ function SessionRow(props: {
               onSelect: () => session.pinSession(meta.id, !meta.pinned),
             },
             {
+              id: "star",
+              label: meta.starred ? "Unstar" : "Star",
+              icon: meta.starred ? "star-off" : "star",
+              onSelect: () => session.starSession(meta.id, !meta.starred),
+            },
+            {
               id: "move",
               label: "Move to…",
               icon: "folder",
@@ -905,6 +957,25 @@ function SessionRow(props: {
           onClick={props.onClick}
           style={{ flex: 1, minWidth: 0 }}
         />
+      )}
+      {/**
+        星标的价值标识：独立小槽，不占状态位——状态位归运行态（running/failed/idle），
+        置顶已占了 idle 档，再挤进去就要三选一。星标不参与排序，也不随运行态消失，
+        所以常驻在行尾、动作键之前。tone 走 secondary（与置顶同档中性），
+        **不用 accent**——accent 是主操作的地盘，一屏一个。
+      */}
+      {meta.starred === true && (
+        <span
+          title="Starred"
+          style={{
+            display: "grid",
+            placeItems: "center",
+            flex: "0 0 auto",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          <Icon name="star" size={12} strokeWidth={1.8} />
+        </span>
       )}
       <Menu
         items={items}

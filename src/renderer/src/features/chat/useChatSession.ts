@@ -149,6 +149,8 @@ export interface ChatSession {
   /** 改名。空名字会退回从第一条用户消息推导——侧栏不留看不见的行 */
   renameSession: (id: string, title: string) => void;
   pinSession: (id: string, pinned: boolean) => void;
+  /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
+  starSession: (id: string, starred: boolean) => void;
   /** 归档：从主列表移走，**不是删除** */
   archiveSession: (id: string, archived: boolean) => void;
   moveSession: (id: string, workspaceId: string | null) => void;
@@ -262,6 +264,7 @@ export interface SessionEngine {
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   readonly renameSession: (id: string, title: string) => void;
   readonly pinSession: (id: string, pinned: boolean) => void;
+  readonly starSession: (id: string, starred: boolean) => void;
   readonly archiveSession: (id: string, archived: boolean) => void;
   readonly moveSession: (id: string, workspaceId: string | null) => void;
   readonly exportSession: (id: string) => void;
@@ -631,6 +634,13 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     [refreshSessions],
   );
 
+  const starSession = useCallback(
+    (id: string, starred: boolean) => {
+      void api.session.star(id, starred).then(refreshSessions);
+    },
+    [refreshSessions],
+  );
+
   const archiveSession = useCallback(
     (id: string, archived: boolean) => {
       void api.session.archive(id, archived).then(refreshSessions);
@@ -704,6 +714,7 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     answerApproval,
     renameSession,
     pinSession,
+    starSession,
     archiveSession,
     moveSession,
     exportSession,
@@ -1314,6 +1325,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     openSession,
     renameSession: engine.renameSession,
     pinSession: engine.pinSession,
+    starSession: engine.starSession,
     archiveSession: engine.archiveSession,
     moveSession: engine.moveSession,
     branchFrom,

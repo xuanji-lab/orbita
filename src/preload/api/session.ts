@@ -18,6 +18,9 @@ export const sessionApi = {
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.sessionDelete, id),
   pin: (id: string, pinned: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionPin, id, pinned),
+  /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
+  star: (id: string, starred: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionStar, id, starred),
   /** 归档：从主列表移走，**不是删除** */
   archive: (id: string, archived: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionArchive, id, archived),
