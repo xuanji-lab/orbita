@@ -23,6 +23,9 @@ const valid = {
   piSessionFile: null,
   pinned: false,
   archived: false,
+  starred: false,
+  completion: "open" as const,
+  closedAt: null,
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "manual",
@@ -135,6 +138,40 @@ describe("parseSessionMeta", () => {
       parseSessionMeta({ ...valid, recentQueries: ["a", 42, "b", "c", "d"] })?.recentQueries,
       ["a", "b", "c"],
     );
+  });
+
+  // 生命周期字段（星标 / 完成状态）之前存的会话没有这三个字段：星标默认关、
+  // 状态默认 open、没有关闭时刻——老会话不因加字段而变样
+  it("缺 starred / completion / closedAt 给默认值：false / open / null", () => {
+    const meta = parseSessionMeta({
+      ...valid,
+      starred: undefined,
+      completion: undefined,
+      closedAt: undefined,
+    });
+    strictEqual(meta?.starred, false);
+    strictEqual(meta?.completion, "open");
+    strictEqual(meta?.closedAt, null);
+  });
+
+  it("completion 只收合法枚举：合法透传，坏值回落 open，不丢整条会话", () => {
+    strictEqual(parseSessionMeta({ ...valid, completion: "done" })?.completion, "done");
+    strictEqual(
+      parseSessionMeta({ ...valid, completion: "done_with_todos" })?.completion,
+      "done_with_todos",
+    );
+    strictEqual(parseSessionMeta({ ...valid, completion: "banana" })?.completion, "open");
+    strictEqual(parseSessionMeta({ ...valid, completion: 42 })?.completion, "open");
+  });
+
+  it("closedAt 只收有限数字：NaN / Infinity / 非数字一律 null，合法数字透传", () => {
+    strictEqual(parseSessionMeta({ ...valid, closedAt: 5000 })?.closedAt, 5000);
+    strictEqual(parseSessionMeta({ ...valid, closedAt: Number.NaN })?.closedAt, null);
+    strictEqual(
+      parseSessionMeta({ ...valid, closedAt: Number.POSITIVE_INFINITY })?.closedAt,
+      null,
+    );
+    strictEqual(parseSessionMeta({ ...valid, closedAt: "yesterday" })?.closedAt, null);
   });
 });
 

@@ -85,6 +85,12 @@ export function recentQueriesFromRecords(records: readonly SessionRecord[]): str
   return queries;
 }
 
+/**
+ * 完成状态：会话作为「一单任务」的闭环三态。语义与可撤销性见
+ * `SessionMeta.completion` 的字段注释。
+ */
+export type SessionCompletion = "open" | "done" | "done_with_todos";
+
 export interface SessionMeta {
   id: string;
   /** 首条用户消息的第一行；模型生成成功后替换为概括（titleSource = auto） */
@@ -121,6 +127,26 @@ export interface SessionMeta {
   pinned: boolean;
   /** 归档。从主列表里移走，收进侧栏底部的 Archived——**不是删除** */
   archived: boolean;
+  /*
+   * 生命周期三字段（星标 / 完成状态 / 关闭时刻）是**可选**的：它们落地前构造的
+   * meta 字面量（importer、新建会话）不写这三个键，落盘即缺席，读回 parse 补
+   * 默认——与 importedFrom 的「缺席即否」同构。parse 出来的对象运行时恒有值。
+   */
+  /**
+   * 星标：用户的价值标记，**与任务状态正交**——星一个会话说的是「值得回来翻」，
+   * 不代表它做完了，也不参与排序（排序只认 pinned）。缺席即 false。
+   */
+  starred?: boolean;
+  /**
+   * 完成状态：open = 还在跑；done = 干完了；done_with_todos = 干完了但留了
+   * 遗留事项。**可撤销**——重开 done 的会话继续干活就回 open。缺席即 open。
+   */
+  completion?: SessionCompletion;
+  /**
+   * 关闭时刻（Unix ms）。completion 为 "open" 时恒为 null：翻到 done /
+   * done_with_todos 的那一刻写入，撤销（回 open）时清掉。缺席即 null。
+   */
+  closedAt?: number | null;
   /**
    * 最近 3 条用户提问（新→旧，每条首行、截断规则同 title）。
    * 首页会话卡的三个提问槽吃它；**旧会话没有这个字段，显示空槽**。
@@ -178,6 +204,12 @@ const TITLE_SOURCES: readonly TitleSource[] = ["derived", "auto", "user"];
 
 function isTitleSource(value: unknown): value is TitleSource {
   return (TITLE_SOURCES as readonly unknown[]).includes(value);
+}
+
+const SESSION_COMPLETIONS: readonly SessionCompletion[] = ["open", "done", "done_with_todos"];
+
+function isSessionCompletion(value: unknown): value is SessionCompletion {
+  return (SESSION_COMPLETIONS as readonly unknown[]).includes(value);
 }
 
 /** 磁盘上的 recentQueries 只收「字符串数组的前 3 个」，其余全部丢掉，不给坏值过路。 */
@@ -277,6 +309,11 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 两个开关都**默认关**：老会话不该因为加了字段就突然被置顶或藏起来
     pinned: value["pinned"] === true,
     archived: value["archived"] === true,
+    // 生命周期三字段的缺省即默认：老会话不因加字段而变样（星标关、open、无关闭时刻）；
+    // 坏值回落默认，不丢整条会话——与 mode / thinkingLevel 的坏值策略一致
+    starred: value["starred"] === true,
+    completion: isSessionCompletion(value["completion"]) ? value["completion"] : "open",
+    closedAt: num(value["closedAt"]),
     // 缺 recentQueries 的是会话卡之前存的会话：空槽显示，不补算（读日志太贵）
     recentQueries: parseRecentQueries(value["recentQueries"]),
     // 读不出用量就当没有——一份坏账本不该连带丢掉整条会话
