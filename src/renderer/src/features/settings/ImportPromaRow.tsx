@@ -78,7 +78,7 @@ export function ImportPromaRow(props: { onImported: () => void }) {
               color: "var(--color-text-secondary)",
             }}
           >
-            Copies this machine's Proma sessions that have a pi session file into orbita — resumable, self-contained, read-only on the Proma side.
+            Copies this machine's Proma sessions into orbita — pi-native ones as-is, Claude Code-era ones converted — resumable, self-contained, read-only on the Proma side.
           </span>
         </span>
         <span style={{ display: "flex", gap: "var(--space-2)", flexShrink: 0 }}>
@@ -148,7 +148,7 @@ function ScanSummary(props: { report: ImportScanReport }) {
       <SummaryLine>
         {report.skipped.some((s) => s.reason === "already-imported")
           ? "Everything importable is already imported."
-          : "No importable sessions found (sessions without a pi source — older formats — are out of scope here)."}
+          : "No importable sessions found (sessions in older formats without a convertible transcript are out of scope here)."}
       </SummaryLine>
     );
   }
@@ -165,12 +165,22 @@ function ScanSummary(props: { report: ImportScanReport }) {
   const alreadyImported = report.skipped.filter((s) => s.reason === "already-imported").length;
   const skippedParts = [
     alreadyImported > 0 ? `${alreadyImported} already imported` : null,
-    report.withoutPiSession > 0 ? `${report.withoutPiSession} without a pi source` : null,
+    report.withoutPiSession > 0 ? `${report.withoutPiSession} in older formats` : null,
     report.skipped.filter((s) => s.reason === "missing-file").length > 0
       ? `${report.skipped.filter((s) => s.reason === "missing-file").length} missing file`
       : null,
-    report.skipped.filter((s) => s.reason === "bad-session-file" || s.reason === "bad-index-entry").length > 0
-      ? `${report.skipped.filter((s) => s.reason === "bad-session-file" || s.reason === "bad-index-entry").length} unreadable`
+    report.skipped.filter(
+      (s) =>
+        s.reason === "bad-session-file" ||
+        s.reason === "bad-index-entry" ||
+        s.reason === "unsupported-format",
+    ).length > 0
+      ? `${report.skipped.filter(
+          (s) =>
+            s.reason === "bad-session-file" ||
+            s.reason === "bad-index-entry" ||
+            s.reason === "unsupported-format",
+        ).length} unconvertible`
       : null,
   ].filter((part): part is string => part !== null);
   return (

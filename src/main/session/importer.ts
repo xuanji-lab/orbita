@@ -28,6 +28,7 @@ import {
   buildContextEntries,
   parseSessionEntries,
   migrateSessionEntries,
+  SessionManager,
   CURRENT_SESSION_VERSION,
   type FileEntry,
   type SessionEntry,
@@ -44,6 +45,13 @@ import { isNotFound } from "../fs-errors.ts";
 import { isEmptyErrorAssistantEntry } from "../../agent/branch-cut.ts";
 import { parseThinkingLevel } from "../../shared/thinking.ts";
 import { deriveWorkspaceName, normalizeWorkspaceName, type Workspace } from "../../shared/workspace.ts";
+import {
+  claudeRowsToMessages,
+  hasAssistantRow,
+  lastModelFromRows,
+  parseClaudeRows,
+  type ClaudeMainRow,
+} from "./claude-legacy.ts";
 import { aggregatePrefixUsage } from "./store.ts";
 import {
   deriveSessionTitle,
@@ -108,6 +116,18 @@ interface PromaSessionIndexEntry {
   pinned: boolean;
 }
 
+/** claude legacy 索引条目（无 piSessionFile，源文件按 <promaRoot>/agent-sessions/<id>.jsonl 推导）。 */
+interface PromaClaudeIndexEntry {
+  id: string;
+  title: string;
+  workspaceId: string | null;
+  modelId: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  archived: boolean;
+  pinned: boolean;
+}
+
 /** Proma 工作区（agent-workspaces.json）里我们用得上的字段。 */
 interface PromaWorkspaceEntry {
   id: string;
@@ -130,11 +150,13 @@ function optionalNumber(value: unknown): number | null {
 
 /**
  * 解 agent-sessions.json。**逐条容错**：一条坏了标 bad-index-entry 进跳过清单，
- * 不挡其余 900 多条（与 readLog 的坏行纪律同源）。没有 piSessionFile 的条目
- * （Claude legacy / 旧扁平 / draft）是 PR-2/PR-3 的范围，这里只计数不进清单。
+ * 不挡其余 900 多条（与 readLog 的坏行纪律同源）。没有 piSessionFile 的条目分两路：
+ * legacyTranscript.sourceRuntime === "claude" 的进 claude 条目（渲染 JSONL 转换导入），
+ * 其余（旧扁平 / draft）只计数不进清单——PR-3 或明确放弃的范围。
  */
 export function parsePromaSessions(raw: string): {
   entries: PromaSessionIndexEntry[];
+  claudeEntries: PromaClaudeIndexEntry[];
   bad: ImportSkipItem[];
   withoutPiFile: number;
 } {
@@ -146,6 +168,7 @@ export function parsePromaSessions(raw: string): {
   }
   const list = isRecord(parsed) && Array.isArray(parsed["sessions"]) ? parsed["sessions"] : [];
   const entries: PromaSessionIndexEntry[] = [];
+  const claudeEntries: PromaClaudeIndexEntry[] = [];
   const bad: ImportSkipItem[] = [];
   let withoutPiFile = 0;
   list.forEach((item, index) => {
@@ -163,15 +186,9 @@ export function parsePromaSessions(raw: string): {
       });
       return;
     }
-    const piSessionFile = optionalString(item["piSessionFile"]);
-    if (piSessionFile === null) {
-      withoutPiFile += 1;
-      return;
-    }
-    entries.push({
+    const common = {
       id,
       title: optionalString(item["title"]) ?? "",
-      piSessionFile,
       workspaceId: optionalString(item["workspaceId"]),
       modelId: optionalString(item["modelId"]),
       createdAt: optionalNumber(item["createdAt"]),
@@ -179,9 +196,19 @@ export function parsePromaSessions(raw: string): {
       archived: item["archived"] === true,
       // 字段两代：早期 pinned，后来 starred（互斥出现），语义都是「置顶」
       pinned: item["pinned"] === true || item["starred"] === true,
-    });
+    };
+    const piSessionFile = optionalString(item["piSessionFile"]);
+    if (piSessionFile === null) {
+      const legacy = isRecord(item["legacyTranscript"])
+        ? optionalString(item["legacyTranscript"]["sourceRuntime"])
+        : null;
+      if (legacy === "claude") claudeEntries.push(common);
+      else withoutPiFile += 1;
+      return;
+    }
+    entries.push({ ...common, piSessionFile });
   });
-  return { entries, bad, withoutPiFile };
+  return { entries, claudeEntries, bad, withoutPiFile };
 }
 
 /** 解 agent-workspaces.json。坏条目跳过（它只是映射辅助，不值得拦整批）。 */
@@ -642,7 +669,6 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
       continue;
     }
     seenSources.add(entry.piSessionFile);
-
     let bytes: number;
     try {
       bytes = (await stat(entry.piSessionFile)).size;
@@ -688,7 +714,8 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     totalBytes += bytes;
     plan.push({
       sourceId: entry.id,
-      sourcePiFile: entry.piSessionFile,
+      sourceKind: "pi",
+      sourceFile: entry.piSessionFile,
       title: deriveSessionTitle(entry.title),
       workspaceId: resolution.workspaceId,
       cwd: resolution.cwd,
@@ -700,6 +727,90 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
       pinned: entry.pinned,
       createdAt: entry.createdAt ?? (source.headerTimestamp || Date.now()),
       updatedAt: entry.updatedAt ?? entry.createdAt ?? (source.headerTimestamp || Date.now()),
+      bytes,
+    });
+  }
+
+  // —— claude legacy 条目：渲染 JSONL 转换导入（源文件按 <promaRoot>/agent-sessions/<id>.jsonl 推导） ——
+  for (const entry of promaSessions.claudeEntries) {
+    const sourceFile = join(deps.promaRoot, "agent-sessions", `${entry.id}.jsonl`);
+    if (importedSources.has(sourceFile)) {
+      skip(entry.id, entry.title || null, "already-imported");
+      continue;
+    }
+    if (seenSources.has(sourceFile)) {
+      skip(
+        entry.id,
+        entry.title || null,
+        "already-imported",
+        "another index entry with the same source file is already in the plan",
+      );
+      continue;
+    }
+    seenSources.add(sourceFile);
+
+    let raw: string;
+    let bytes: number;
+    try {
+      bytes = (await stat(sourceFile)).size;
+      raw = await readFile(sourceFile, "utf8");
+    } catch {
+      skip(entry.id, entry.title || null, "missing-file", sourceFile);
+      continue;
+    }
+    // 扫描期做完整清洗（不是只看文件在不在）：转换不出 assistant 消息的文件
+    // （纯旧扁平 / 空 draft）现在就剔除，不留到执行时报 failed
+    const { rows } = parseClaudeRows(raw);
+    if (!hasAssistantRow(rows)) {
+      skip(
+        entry.id,
+        entry.title || null,
+        "unsupported-format",
+        "no assistant messages to convert (old flat format or empty)",
+      );
+      continue;
+    }
+
+    // claude legacy 没有 pi header：无归属时 cwd 直接落 defaultCwd（usableCwd 对空串的行为）
+    const resolution = await resolveWorkspaceTarget(
+      entry.workspaceId,
+      promaWorkspaces,
+      deps.workspaces,
+      "",
+      deps,
+    );
+    if (resolution.create !== null) {
+      const existing = newWorkspaceByKey.get(resolution.create.path);
+      if (existing === undefined) {
+        newWorkspaceByKey.set(resolution.create.path, resolution.create);
+      } else {
+        resolution.workspaceId = existing.id;
+      }
+    }
+    if (resolution.mergedInto !== null) mergedIds.add(resolution.mergedInto);
+
+    // 模型：索引的 modelId 优先（只有 30/257 条有），缺失时从清洗后的行取最后的 assistant model
+    const promaModelId = entry.modelId ?? lastModelFromRows(rows);
+    const mapped = mapModel(promaModelId, deps.registeredModels, deps.fallbackModel);
+    if (!mapped.matched) modelFallbackCount += 1;
+
+    const createdAt = entry.createdAt ?? firstTimestamp(rows) ?? Date.now();
+    totalBytes += bytes;
+    plan.push({
+      sourceId: entry.id,
+      sourceKind: "claude-legacy",
+      sourceFile,
+      title: deriveSessionTitle(entry.title),
+      workspaceId: resolution.workspaceId,
+      cwd: resolution.cwd,
+      providerId: mapped.providerId,
+      modelId: mapped.modelId,
+      importedModel: promaModelId,
+      modelMatched: mapped.matched,
+      archived: entry.archived,
+      pinned: entry.pinned,
+      createdAt,
+      updatedAt: entry.updatedAt ?? entry.createdAt ?? createdAt,
       bytes,
     });
   }
@@ -716,6 +827,14 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     totalBytes,
     modelFallbackCount,
   };
+}
+
+/** claude legacy 行里最早的时间戳（索引缺 createdAt 时的兜底；_createdAt 也在 rowTimestamp 里）。 */
+function firstTimestamp(rows: readonly ClaudeMainRow[]): number | null {
+  for (const row of rows) {
+    if (row.timestamp !== 0) return row.timestamp;
+  }
+  return null;
 }
 
 /** pi 文件里最后的思考档（thinking_level_change）；没有 = "medium"（meta 的缺省档）。 */
@@ -787,27 +906,11 @@ export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport>
 
   for (const item of report.plan) {
     try {
-      // 扫描报告只有计划，entries 不随报告走——执行时重读源文件（纯读、幂等）
-      const source = await readPiSource(item.sourcePiFile, deps.promaRoot, deps.extraSourceRoots ?? []);
-      const sessionEntries = source.entries.filter(
-        (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
-      );
-      const records = entriesToRecords(buildContextEntries(sessionEntries));
+      const sessionFile =
+        item.sourceKind === "pi" ? await runPiImport(item, deps) : await runClaudeLegacyImport(item, deps);
 
-      // ① pi 副本：v3 原字节复制（保真），v1/v2 用内存迁移后的内容重写。
-      // 同名副本已存在（极端：两个 Proma 索引共用同一 pi 文件，扫描已按同源去重，
-      // 这里只是防御）直接复用——文件名含 pi session id，同名即同 session
-      const destPath = join(deps.piSessionDir, basename(item.sourcePiFile));
-      await mkdir(deps.piSessionDir, { recursive: true });
-      if (source.needsRewrite) {
-        await writeTextAtomic(destPath, `${source.entries.map((line) => JSON.stringify(line)).join("\n")}\n`);
-      } else {
-        await copyPiFile(item.sourcePiFile, destPath);
-      }
-
-      // ② meta + transcript。
-      // mode 落 "plan"（最保守）：Proma 的 permissionMode（bypassPermissions 等）
-      // 与 orbita 三档不同构，导入的会话重开时用户自己再调档，不静默继承放权限
+      // meta + transcript：两条源路最终都汇到同一个形态——records 已由各路返给 meta
+      // 构造共用（records 的产出在 runPiImport/runClaudeLegacyImport 里，这里统一落盘）
       const meta: SessionMeta = {
         id: deps.newId(),
         title: item.title,
@@ -819,18 +922,20 @@ export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport>
         providerId: item.providerId,
         modelId: item.modelId,
         ...(item.importedModel === null ? null : { importedModel: item.importedModel }),
-        importedFrom: item.sourcePiFile,
+        importedFrom: item.sourceFile,
+        // mode 落 "plan"（最保守）：Proma 的 permissionMode（bypassPermissions 等）
+        // 与 orbita 三档不同构，导入的会话重开时用户自己再调档，不静默继承放权限
         mode: "plan",
-        thinkingLevel: parseThinkingLevel(lastThinkingLevel(sessionEntries)),
-        piSessionFile: destPath,
+        thinkingLevel: sessionFile.thinkingLevel,
+        piSessionFile: sessionFile.path,
         pinned: item.pinned,
         archived: item.archived,
-        recentQueries: recentQueriesFromRecords(records),
-        stats: aggregatePrefixUsage(records),
+        recentQueries: recentQueriesFromRecords(sessionFile.records),
+        stats: aggregatePrefixUsage(sessionFile.records),
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       };
-      await deps.persistSession(meta, records);
+      await deps.persistSession(meta, sessionFile.records);
       imported += 1;
     } catch (cause) {
       failed.push({
@@ -847,6 +952,64 @@ export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport>
     failed,
     createdWorkspaces,
     mergedWorkspaceIds: report.mergedWorkspaceIds,
+  };
+}
+
+/** 一条会话的灌入产物：orbita 自己的 pi 本子路径 + 从它派生的 transcript + 思考档。 */
+interface ImportedSession {
+  path: string;
+  records: SessionRecord[];
+  thinkingLevel: SessionMeta["thinkingLevel"];
+}
+
+/**
+ * pi 真源的灌入：v3 原字节复制（保真），v1/v2 用内存迁移后的内容重写。
+ * 同名副本已存在（极端：两个 Proma 索引共用同一 pi 文件，扫描已按同源去重，
+ * 这里只是防御）直接复用——文件名含 pi session id，同名即同 session。
+ */
+async function runPiImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+  const source = await readPiSource(item.sourceFile, deps.promaRoot, deps.extraSourceRoots ?? []);
+  const sessionEntries = source.entries.filter(
+    (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
+  );
+  const destPath = join(deps.piSessionDir, basename(item.sourceFile));
+  await mkdir(deps.piSessionDir, { recursive: true });
+  if (source.needsRewrite) {
+    await writeTextAtomic(destPath, `${source.entries.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  } else {
+    await copyPiFile(item.sourceFile, destPath);
+  }
+  return {
+    path: destPath,
+    records: entriesToRecords(buildContextEntries(sessionEntries)),
+    thinkingLevel: parseThinkingLevel(lastThinkingLevel(sessionEntries)),
+  };
+}
+
+/**
+ * claude legacy 的灌入：从零构造 pi 本子（与 pi 真源的「复制」不同路）。
+ * 清洗 → Message 构造 → SessionManager.create + appendMessage 逐条灌入；
+ * transcript 从灌出来的 pi entries 派生（与 pi 路同一条派生代码，两侧产物形状对齐）。
+ */
+async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+  const raw = await readFile(item.sourceFile, "utf8");
+  const { rows } = parseClaudeRows(raw);
+  const { messages } = claudeRowsToMessages(rows, item.providerId);
+  await mkdir(deps.piSessionDir, { recursive: true });
+  const manager = SessionManager.create(item.cwd, deps.piSessionDir);
+  for (const message of messages) {
+    manager.appendMessage(message);
+  }
+  const path = manager.getSessionFile();
+  if (path === undefined) {
+    // 扫描期已剔除无 assistant 消息的文件；这里防御扫描与执行之间文件被改坏
+    throw new Error("no assistant messages — nothing was persisted by pi");
+  }
+  return {
+    path,
+    records: entriesToRecords(manager.buildContextEntries()),
+    // claude legacy 没有思考档记录（当时的 Claude Code 无此概念），落缺省档
+    thinkingLevel: "medium",
   };
 }
 

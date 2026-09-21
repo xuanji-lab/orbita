@@ -13,16 +13,19 @@
 
 /** 一条会话为什么进不了导入计划。词汇进报告，UI 按它给文案。 */
 export type ImportSkipReason =
-  /** 索引条目没有 piSessionFile（Claude legacy / 旧扁平 / draft——PR-2/PR-3 的范围） */
+  /** 索引条目没有可识别的会话源（旧扁平格式 / draft——PR-3 或放弃） */
   | "no-pi-session"
   /** 幂等命中：这条源文件已经导入过（按 meta.importedFrom 判重） */
   | "already-imported"
-  /** piSessionFile 指向的文件不在盘上 */
+  /** 源文件指向的文件不在盘上 */
   | "missing-file"
-  /** 打不开/读不懂：header 缺失、version 不是 3、文件本身坏 */
+  /** 打不开/读不懂：header 缺失、version 超前、文件本身坏 */
   | "bad-session-file"
-  /** agent-sessions.json 里这条索引本身坏了（缺 id / piSessionFile 不是字符串等） */
-  | "bad-index-entry";
+  /** agent-sessions.json 里这条索引本身坏了（缺 id / 路径不是字符串等） */
+  | "bad-index-entry"
+  /** 能读但转不出可续聊内容：claude legacy 文件里没有 assistant 消息
+   *  （纯旧扁平 / 空 draft——pi 只在有 assistant 消息时才落盘文件） */
+  | "unsupported-format";
 
 export interface ImportSkipItem {
   /** Proma 索引里的会话 id；坏到连 id 都没有时用文件内序号顶上（报告要对得上数） */
@@ -47,12 +50,20 @@ export interface ImportWorkspacePlan {
   merged: boolean;
 }
 
+/** 源的形态：决定执行侧走哪条灌入通路。 */
+export type ImportSourceKind =
+  /** Proma 的 pi 真源（sdk-config/sessions/）：同构复制 + 派生 */
+  | "pi"
+  /** Claude Code 时代渲染 JSONL（agent-sessions/<id>.jsonl）：转换构造 pi 文件 */
+  | "claude-legacy";
+
 /** 一条待导入会话（扫描产出，执行按它落盘）。 */
 export interface ImportPlanItem {
   /** Proma 索引里的会话 id */
   sourceId: string;
-  /** 源 pi 文件绝对路径——同时是幂等键（meta.importedFrom 存它） */
-  sourcePiFile: string;
+  sourceKind: ImportSourceKind;
+  /** 源文件绝对路径（pi 真源或 claude 渲染 JSONL）——同时是幂等键（meta.importedFrom 存它） */
+  sourceFile: string;
   title: string;
   /** 适配后的目标工作区 id；null = TASKS（无归属 / 已删 / 收容区） */
   workspaceId: string | null;
@@ -82,7 +93,7 @@ export interface ImportScanReport {
   /** 同址合并挂上的既有工作区 id（去重；UI 显示数量用 length） */
   mergedWorkspaceIds: string[];
   skipped: ImportSkipItem[];
-  /** 没有 piSessionFile 的索引条数（Claude legacy / 旧扁平 / draft——PR-2/PR-3 的范围）。
+  /** 没有可识别会话源的索引条数（旧扁平 / draft——PR-3 或放弃的范围）。
    * 不进 skipped 清单：它们不是失效，是另一条路的正常分母 */
   withoutPiSession: number;
   /** plan 里全部源文件的字节总和 */
