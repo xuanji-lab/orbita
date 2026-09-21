@@ -123,6 +123,12 @@ export interface BuiltinModel {
   input: ("text" | "image")[];
   /** 能不能思考（目录 / 白名单口径）。可选：不认识就缺席，消费方兑 false——「不确定就不发」 */
   reasoning?: boolean;
+  /**
+   * 这个模型真实支持的思考档（pi 的 getSupportedThinkingLevels 在 agent 进程算好，
+   * 只以数据过 IPC——派生结论不建第二份真源）。缺席 = 未知：菜单按全量显示，
+   * 开轮后由 thinking 事件纠真。
+   */
+  supportedThinkingLevels?: ThinkingLevel[];
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 

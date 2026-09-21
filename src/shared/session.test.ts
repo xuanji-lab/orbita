@@ -84,10 +84,10 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, mode: undefined })?.mode, "plan");
   });
 
-  it("思考档：合法透传；缺省与坏值退 medium——字段落地前的老会话实际跑的就是它", () => {
+  it("思考档：合法透传（7 档全集）；缺省与坏值退 medium——字段落地前的老会话实际跑的就是它", () => {
     strictEqual(parseSessionMeta({ ...valid, thinkingLevel: "off" })?.thinkingLevel, "off");
+    strictEqual(parseSessionMeta({ ...valid, thinkingLevel: "xhigh" })?.thinkingLevel, "xhigh");
     strictEqual(parseSessionMeta({ ...valid, thinkingLevel: undefined })?.thinkingLevel, "medium");
-    strictEqual(parseSessionMeta({ ...valid, thinkingLevel: "xhigh" })?.thinkingLevel, "medium");
     strictEqual(parseSessionMeta({ ...valid, thinkingLevel: "turbo" })?.thinkingLevel, "medium");
   });
 

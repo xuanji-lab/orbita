@@ -58,13 +58,13 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
-import { isPlanBilling } from "@shared/known-providers";
+import { isPlanBilling, knownModelParams } from "@shared/known-providers";
 import { modelMenuItems, useBuiltinCatalog } from "../settings/model-menu";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
-import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
+import { thinkingLevelLabel, THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
@@ -707,10 +707,11 @@ function ComposerBar(props: { session: ChatSession }) {
     { id: "add", label: "Add a folder…", icon: "folder-plus", onSelect: session.addWorkspace },
   ];
 
+  // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
+  // 展开卡片里一行行小字只会让它显得吵；宽度也因此能固定）
   const modeItems: MenuItem[] = PERMISSION_MODES.map((value) => ({
     id: value,
     label: PERMISSION_MODE_LABELS[value].label,
-    hint: PERMISSION_MODE_LABELS[value].hint,
     checked: session.mode === value,
     onSelect: () => session.changeMode(value),
   }));
@@ -723,21 +724,40 @@ function ComposerBar(props: { session: ChatSession }) {
     onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
   });
 
-  // 思考档菜单：5 档。支持的档位由开轮事件回真值（thinkingSupported），
-  // 模型不支持思考（支持集只有 off）时其余档禁用——理由写在 hint 里
-  const thinkingLockedToOff =
-    session.thinkingSupported !== null && !session.thinkingSupported.includes("minimal");
-  const thinkingItems: MenuItem[] = THINKING_LEVELS.map((value) => ({
-    id: value,
-    label: THINKING_LEVEL_LABELS[value].label,
-    hint:
-      thinkingLockedToOff && value !== "off"
-        ? "This model does not think."
-        : THINKING_LEVEL_LABELS[value].hint,
-    checked: session.thinkingLevel === value,
-    disabled: thinkingLockedToOff && value !== "off",
-    onSelect: () => session.changeThinkingLevel(value),
-  }));
+  // 思考档菜单按模型真实支持集显示（目录实测：glm-5.3 只有 low/high/max，
+  // claude 系 minimal→max 而 off 关不掉——写死档位只会递增假选项）。
+  // 支持集来源三级：开轮事件回的真值（含 clamp 事实）> 目录（BuiltinModel，agent
+  // 进程在 pi 旁算好过线）> 白名单补丁（目录查不到的快速通道模型）。都没有 =
+  // 未知：按全量显示、不禁用，开轮后由 thinking 事件纠真——宁可待验证，不先撒谎
+  const thinkingCatalogEntry = session.model === null
+    ? undefined
+    : catalog
+        .flatMap((provider) => provider.models)
+        .find((model) => model.id === session.model?.modelId);
+  // 白名单最高：它是人工确证的口径，存在的意义就是赶在目录前面纠错（knownModelParams
+  // 同款理由）。对目录查不到的快速通道模型（glm-5.3-flash），注册链借不到原始档位表，
+  // 事件回的 supported 会是 pi 的「无表」伪值——白名单压过它，菜单才不撒谎
+  const knownThinkingLevels =
+    session.model === null ? undefined : knownModelParams(session.model.modelId).thinkingLevels;
+  const thinkingSupported =
+    knownThinkingLevels ??
+    session.thinkingSupported ??
+    thinkingCatalogEntry?.supportedThinkingLevels ??
+    null;
+  const thinkingMenuLevels = thinkingSupported ?? THINKING_LEVELS;
+  // 逐档判断，不是全局锁：glm-5.3 支持 low/high/max（不含 minimal），全局判
+  // 「不含 minimal」会把整个菜单错锁成全灰——那是 reasoning:false 模型（支持集
+  // 真只有 off）才有的形状。不支持的档单独禁用并说明，可用的照常可选
+  const thinkingItems: MenuItem[] = thinkingMenuLevels.map((value) => {
+    const unavailable = thinkingSupported !== null && !thinkingSupported.includes(value);
+    return {
+      id: value,
+      label: thinkingLevelLabel(value, session.model?.modelId),
+      checked: session.thinkingLevel === value,
+      disabled: unavailable,
+      onSelect: () => session.changeThinkingLevel(value),
+    };
+  });
 
   return (
     <>
@@ -757,10 +777,12 @@ function ComposerBar(props: { session: ChatSession }) {
       />
       <Menu
         items={modeItems}
+        panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
             icon="shield-check"
             active={open}
+            fixedWidth={84}
             title={PERMISSION_MODE_LABELS[session.mode].hint}
             onClick={toggle}
             chevron
@@ -776,7 +798,6 @@ function ComposerBar(props: { session: ChatSession }) {
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
-              italic
               title="Model · applies from the next message"
               onClick={toggle}
               chevron
@@ -788,19 +809,20 @@ function ComposerBar(props: { session: ChatSession }) {
       )}
       <Menu
         items={thinkingItems}
+        panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
             active={open}
-            italic
+            fixedWidth={84}
             title={
-              thinkingLockedToOff
+              thinkingSupported !== null && thinkingSupported.every((level) => level === "off")
                 ? "Thinking · this model does not think"
                 : "Thinking · applies from the next message"
             }
             onClick={toggle}
             chevron
           >
-            {THINKING_LEVEL_LABELS[session.thinkingLevel].label}
+            {thinkingLevelLabel(session.thinkingLevel, session.model?.modelId)}
           </Chip>
         )}
       />

@@ -49,3 +49,21 @@ describe("isPlanBilling —— 两句话不能混", () => {
     assert.equal(isPlanBilling(""), false);
   });
 });
+
+describe("claude 家族的思考档口径（白名单纠目录的「缺键默认支持」）", () => {
+  test("claude-opus-5：low→max 五档，无 off 无 minimal；xhigh 是用户认识的 Extra", () => {
+    const params = knownModelParams("claude-opus-5");
+    assert.deepEqual(params.thinkingLevels, ["low", "medium", "high", "xhigh", "max"]);
+    assert.equal(params.reasoning, undefined); // reasoning 归目录（true），白名单不重复声明
+  });
+
+  test("自建网关的 claude 同样吃到口径（knownModelParams 只按模型 id 查）", () => {
+    assert.deepEqual(knownModelParams("claude-fable-5-1").thinkingLevels, [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+});

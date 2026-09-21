@@ -5,10 +5,11 @@ import {
   THINKING_LEVEL_LABELS,
   isThinkingLevel,
   parseThinkingLevel,
+  thinkingLevelLabel,
 } from "./thinking.ts";
 
 describe("parseThinkingLevel", () => {
-  it("5 档原样透传", () => {
+  it("7 档（pi 全集）原样透传——档位词汇表不裁剪，菜单按模型真集显示", () => {
     for (const level of THINKING_LEVELS) {
       assert.equal(parseThinkingLevel(level), level);
     }
@@ -21,9 +22,9 @@ describe("parseThinkingLevel", () => {
     assert.equal(parseThinkingLevel(null), "medium");
   });
 
-  it("xhigh / max 是 pi 的档、不是我们的：按坏值退 medium（首刀没放出它们）", () => {
-    assert.equal(parseThinkingLevel("xhigh"), "medium");
-    assert.equal(parseThinkingLevel("max"), "medium");
+  it("真坏值退 medium（pi 认的 7 档之外才是坏值）", () => {
+    assert.equal(parseThinkingLevel("ultra"), "medium");
+    assert.equal(parseThinkingLevel("MED"), "medium");
   });
 });
 
@@ -31,20 +32,25 @@ describe("isThinkingLevel", () => {
   it("守卫只回答是不是，不兜任何默认", () => {
     assert.equal(isThinkingLevel("off"), true);
     assert.equal(isThinkingLevel("high"), true);
-    assert.equal(isThinkingLevel("xhigh"), false);
+    assert.equal(isThinkingLevel("xhigh"), true);
     assert.equal(isThinkingLevel(undefined), false);
     assert.equal(isThinkingLevel("medium "), false);
   });
 });
 
 describe("THINKING_LEVEL_LABELS", () => {
-  it("5 档每档都有 label 与 hint（芯片与菜单都读它）", () => {
+  it("显示名因模型家族而异：claude 的 xhigh 叫 Extra，其余档退通用名", () => {
+    assert.equal(thinkingLevelLabel("xhigh", "claude-opus-5"), "Extra");
+    assert.equal(thinkingLevelLabel("high", "claude-opus-5"), "High");
+    assert.equal(thinkingLevelLabel("xhigh", "glm-5.3"), "Extra high");
+    assert.equal(thinkingLevelLabel("xhigh", null), "Extra high");
+  });
+
+  it("7 档每档都有显示名；刻意没有描述——思考档不需要解释，宽度才能固定", () => {
     for (const level of THINKING_LEVELS) {
-      const entry = THINKING_LEVEL_LABELS[level];
-      assert.equal(typeof entry.label, "string");
-      assert.ok(entry.label.length > 0);
-      assert.equal(typeof entry.hint, "string");
-      assert.ok(entry.hint.length > 0);
+      assert.equal(typeof THINKING_LEVEL_LABELS[level].label, "string");
+      assert.ok(THINKING_LEVEL_LABELS[level].label.length > 0);
+      assert.equal("hint" in THINKING_LEVEL_LABELS[level], false);
     }
   });
 });

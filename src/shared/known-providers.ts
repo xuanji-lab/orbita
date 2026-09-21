@@ -1,3 +1,5 @@
+import type { ThinkingLevel } from "./thinking.ts";
+
 /**
  * 我们**适配过的** provider 清单 —— 设置面下拉框的真源。
  *
@@ -61,7 +63,16 @@ export interface KnownProvider {
    * 只写**确知**的字段（官方口径或实测），其余仍由目录 / 兑底补。
    * 编一个数进去，就是把「1M 显示成 128k」换成「128k 显示成 1M」，更坏。
    */
-  modelParams?: Record<string, { contextWindow?: number; maxTokens?: number; reasoning?: boolean }>;
+  modelParams?: Record<
+    string,
+    {
+      contextWindow?: number;
+      maxTokens?: number;
+      reasoning?: boolean;
+      /** 目录查不到时的档位补丁（同 contextWindow 的角色：主源是目录，这里只补缺） */
+      thinkingLevels?: ThinkingLevel[];
+    }
+  >;
   /** 一句话说明这条什么时候该选 */
   note: string;
 }
@@ -106,7 +117,13 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
        * 而官方 `/models` 接口 fetch 得到。参数向 glm-5.3 看齐：
        * 同代同系，官方口径都是 1M 上下文。
        */
-      "glm-5.3-flash": { contextWindow: 1_000_000, maxTokens: 131_072, reasoning: true },
+      "glm-5.3-flash": {
+        contextWindow: 1_000_000,
+        maxTokens: 131_072,
+        reasoning: true,
+        // 目录查不到这个 id（快速通道）：抄 glm-5.3 家族口径，支持集里连 medium 都没有
+        thinkingLevels: ["low", "high", "max"],
+      },
     },
     note: "Coding Plan 订阅，走 Anthropic 兼容端点",
   },
@@ -159,6 +176,15 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     label: "Anthropic 兼容",
     api: "anthropic-messages",
     baseUrl: "",
+    modelParams: {
+      // claude 家族的思考档口径（wafo 2026-09-22 确认）：没有 off（关不掉），
+      // 没有 minimal；xhigh 的显示名叫 Extra。目录按「非显式 null 即支持」会
+      // 多算出 minimal——这里按人的认知纠回来
+      "claude-opus-5": { thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+      "claude-fable-5": { thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+      "claude-fable-5-1": { thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+      "claude-opus-4-8": { thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+    },
     note: "自建网关 / 私有部署，客户端会在你填的地址后接 /v1/messages",
   },
   {
@@ -192,6 +218,7 @@ export function knownModelParams(modelId: string): {
   contextWindow?: number;
   maxTokens?: number;
   reasoning?: boolean;
+  thinkingLevels?: ThinkingLevel[];
 } {
   for (const item of KNOWN_PROVIDERS) {
     const params = item.modelParams?.[modelId];
