@@ -220,6 +220,48 @@ describe("SessionStore", () => {
     assert.deepEqual(await store.list(), []);
   });
 
+  // 完成状态机：翻到 done 的那一刻记下关闭时刻；reopen（回 open）清空——
+  // closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态
+  test("setCompletion：done 记关闭时刻，reopen 清空，done_with_todos 也可写", async () => {
+    await store.ensureSession(meta({ pinned: true }));
+    await store.setStarred(ID, true);
+    await store.setCompletion(ID, "done");
+    let after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.completion, "done");
+    assert.ok(typeof after?.closedAt === "number" && after.closedAt > 0);
+    // 完成只动自己这对字段：置顶/星标/归档原样
+    assert.equal(after?.pinned, true);
+    assert.equal(after?.starred, true);
+    assert.equal(after?.archived, false);
+
+    await store.setCompletion(ID, "open"); // reopen
+    after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.completion, "open");
+    assert.equal(after?.closedAt, null);
+
+    await store.setCompletion(ID, "done_with_todos");
+    after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.completion, "done_with_todos");
+    assert.ok(typeof after?.closedAt === "number" && after.closedAt > 0);
+  });
+
+  // 重复 Mark done 不该刷新关闭时刻——「什么时候干完的」是历史事实，不是最后一次点击
+  test("setCompletion 同态幂等：done 再 done 不改关闭时刻", async () => {
+    await store.ensureSession(meta());
+    await store.setCompletion(ID, "done");
+    const first = (await store.load(ID))?.meta.closedAt;
+    // 隔开毫秒：非幂等实现会在这里刷新出新的 Date.now()
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.setCompletion(ID, "done");
+    assert.equal((await store.load(ID))?.meta.closedAt, first);
+  });
+
+  // 与 setStarred 同一条语义：meta 不在就悄悄不做
+  test("setCompletion 对不存在的会话悄悄不做", async () => {
+    await store.setCompletion(ID, "done");
+    assert.deepEqual(await store.list(), []);
+  });
+
   // id 从 renderer 经 IPC 进来，直接拼路径的话一个 ../../ 就能写到别处
   test("非法 id 一律拒绝，不落在 sessions 目录之外", async () => {
     for (const bad of ["../../etc/passwd", "..", "a/b", "", "not-a-uuid", `${ID}/../x`]) {

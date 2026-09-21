@@ -31,7 +31,7 @@ import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import type { AgentEvent, AgentStats, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
 import type { ProviderDto } from "@shared/provider";
 import { usableProviders } from "../settings/model-menu";
-import type { CompactedRecord, SessionMeta } from "@shared/session";
+import type { CompactedRecord, SessionCompletion, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 
 /**
@@ -151,6 +151,13 @@ export interface ChatSession {
   pinSession: (id: string, pinned: boolean) => void;
   /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
   starSession: (id: string, starred: boolean) => void;
+  /**
+   * 完成状态：done / done_with_todos 记关闭时刻，reopen（回 open）清空。
+   * 纯 meta 操作——不碰 transcript、不起 runtime，只读会话同样可用。
+   */
+  setCompletionSession: (id: string, completion: SessionCompletion) => void;
+  /** 把所有已完成且未归档的会话批量归档（清理动作，一次计算目标、一次刷新） */
+  archiveDoneSessions: () => void;
   /** 归档：从主列表移走，**不是删除** */
   archiveSession: (id: string, archived: boolean) => void;
   moveSession: (id: string, workspaceId: string | null) => void;
@@ -265,6 +272,8 @@ export interface SessionEngine {
   readonly renameSession: (id: string, title: string) => void;
   readonly pinSession: (id: string, pinned: boolean) => void;
   readonly starSession: (id: string, starred: boolean) => void;
+  readonly setCompletionSession: (id: string, completion: SessionCompletion) => void;
+  readonly archiveDoneSessions: () => void;
   readonly archiveSession: (id: string, archived: boolean) => void;
   readonly moveSession: (id: string, workspaceId: string | null) => void;
   readonly exportSession: (id: string) => void;
@@ -641,6 +650,30 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     [refreshSessions],
   );
 
+  const setCompletionSession = useCallback(
+    (id: string, completion: SessionCompletion) => {
+      void api.session.setCompletion(id, completion).then(refreshSessions);
+    },
+    [refreshSessions],
+  );
+
+  /**
+   * 批量归档已完成的会话（会话菜单的清理动作）。**循环调既有 archive 通道**
+   * 而不是新开批量通道：归档是幂等的单字段写，N 次往返没有原子性问题
+   * （最坏部分成功，再点一次即收敛）；新通道要四层同步 + store 批量方法，
+   * 而它只有一个消费者，不值。目标从 sessionsRef 真值取（事件回调闭包里的
+   * 列表可能是旧的），全部落定后只刷新一次列表。
+   */
+  const archiveDoneSessions = useCallback(() => {
+    const targets = sessionsRef.current.filter(
+      (meta) => (meta.completion ?? "open") !== "open" && !meta.archived,
+    );
+    if (targets.length === 0) return;
+    void Promise.all(targets.map((meta) => api.session.archive(meta.id, true))).then(
+      refreshSessions,
+    );
+  }, [refreshSessions]);
+
   const archiveSession = useCallback(
     (id: string, archived: boolean) => {
       void api.session.archive(id, archived).then(refreshSessions);
@@ -715,6 +748,8 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     renameSession,
     pinSession,
     starSession,
+    setCompletionSession,
+    archiveDoneSessions,
     archiveSession,
     moveSession,
     exportSession,
@@ -1326,6 +1361,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     renameSession: engine.renameSession,
     pinSession: engine.pinSession,
     starSession: engine.starSession,
+    setCompletionSession: engine.setCompletionSession,
+    archiveDoneSessions: engine.archiveDoneSessions,
     archiveSession: engine.archiveSession,
     moveSession: engine.moveSession,
     branchFrom,

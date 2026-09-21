@@ -91,6 +91,16 @@ export function recentQueriesFromRecords(records: readonly SessionRecord[]): str
  */
 export type SessionCompletion = "open" | "done" | "done_with_todos";
 
+/**
+ * 是否已完成（done / done_with_todos）。parse 已补默认，运行时恒有值；
+ * `?? "open"` 只防构造点未写这三个键的 meta 字面量（构造点不写是既定决策）。
+ * 抽成函数是因为判断有两个消费者（侧栏筛选/行内标识、会话头部按钮），
+ * 各写一份 `completion !== "open"` 迟早漂移。
+ */
+export function isSessionDone(meta: SessionMeta): boolean {
+  return (meta.completion ?? "open") !== "open";
+}
+
 export interface SessionMeta {
   id: string;
   /** 首条用户消息的第一行；模型生成成功后替换为概括（titleSource = auto） */

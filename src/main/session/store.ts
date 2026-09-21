@@ -25,6 +25,7 @@ import {
   pushRecentQuery,
   recentQueriesFromRecords,
   sortSessions,
+  type SessionCompletion,
   type SessionDetail,
   type SessionMeta,
   type SessionRecord,
@@ -322,6 +323,21 @@ export class SessionStore {
    */
   setStarred(id: string, starred: boolean): Promise<void> {
     return this.update(id, { starred });
+  }
+
+  /**
+   * 完成状态：翻到 done / done_with_todos 的那一刻记下关闭时刻，reopen（回 open）
+   * 时清掉——closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态。
+   * **同态幂等**：已是 done 再设 done 不刷新关闭时刻，「什么时候干完的」是历史
+   * 事实，不是最后一次点击。非 open 两态之间切换（done → done_with_todos）算一次
+   * 真实的翻档，刷新；本 PR 的 UI 只产生 open ↔ done，这条分支为 carryover 留着。
+   */
+  setCompletion(id: string, completion: SessionCompletion): Promise<void> {
+    return this.update(id, (meta) =>
+      (meta.completion ?? "open") === completion
+        ? null
+        : { completion, closedAt: completion === "open" ? null : Date.now() },
+    );
   }
 
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */

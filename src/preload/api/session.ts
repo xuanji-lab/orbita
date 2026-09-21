@@ -4,7 +4,7 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { SessionDetail, SessionMeta } from "../../shared/session.ts";
+import type { SessionCompletion, SessionDetail, SessionMeta } from "../../shared/session.ts";
 
 export const sessionApi = {
   /** 会话列表，新的在前 */
@@ -21,6 +21,9 @@ export const sessionApi = {
   /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
   star: (id: string, starred: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionStar, id, starred),
+  /** 完成状态：done/done_with_todos 记关闭时刻；回 open（reopen）清空。纯 meta 操作，只读会话也可用 */
+  setCompletion: (id: string, completion: SessionCompletion): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionSetCompletion, id, completion),
   /** 归档：从主列表移走，**不是删除** */
   archive: (id: string, archived: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionArchive, id, archived),

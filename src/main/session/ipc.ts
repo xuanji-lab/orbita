@@ -5,7 +5,7 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import { writeFile } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import { transcriptToMarkdown } from "../../shared/session.ts";
+import { transcriptToMarkdown, type SessionCompletion } from "../../shared/session.ts";
 import type { AgentHost } from "../agent/host.ts";
 import type { SessionStore } from "./store.ts";
 
@@ -30,6 +30,10 @@ export function registerSessionIpc(
   );
   ipcMain.handle(ipcChannels.sessionStar, (_event, id: string, starred: boolean) =>
     store.setStarred(id, starred),
+  );
+  ipcMain.handle(
+    ipcChannels.sessionSetCompletion,
+    (_event, id: string, completion: SessionCompletion) => store.setCompletion(id, completion),
   );
   ipcMain.handle(ipcChannels.sessionArchive, (_event, id: string, archived: boolean) =>
     store.setArchived(id, archived),

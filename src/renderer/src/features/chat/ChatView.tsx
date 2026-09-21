@@ -65,7 +65,7 @@ import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { thinkingLevelLabel, THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
-import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
+import { deriveSessionTitle, type CompactedRecord, type SessionCompletion } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 
@@ -370,6 +370,9 @@ export function ChatView(props: {
     );
   }
 
+  // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
+  // 列表优先——活会话首条消息刚落盘时它先到
+  const openMeta = session.sessions.find((m) => m.id === openId) ?? session.opened;
   return (
     <Pane
       title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
@@ -377,6 +380,11 @@ export function ChatView(props: {
       badgeTitle={openId}
       scrollRef={scrollRef}
       onScroll={handleScroll}
+      // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用
+      completion={openId === "" ? null : (openMeta?.completion ?? "open")}
+      onSetCompletion={
+        openId === "" ? undefined : (next) => session.setCompletionSession(openId, next)
+      }
       // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
       onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
       footer={
@@ -553,6 +561,10 @@ function Pane(props: {
   title: string;
   badge: string;
   badgeTitle: string;
+  /** 当前会话的完成状态；null = 还没落盘（首条消息未发），完成入口不摆 */
+  completion: SessionCompletion | null;
+  /** 翻完成状态（纯 meta 操作，只读会话同样可用）；没落盘时不传 */
+  onSetCompletion?: ((next: SessionCompletion) => void) | undefined;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
@@ -616,6 +628,27 @@ function Pane(props: {
         {props.onRename !== undefined && !editing && (
           <IconButton label="Rename task" size={24} onClick={() => setEditing(true)}>
             <Icon name="pencil-line" size={13} />
+          </IconButton>
+        )}
+        {/*
+          完成入口（第二处，与侧栏菜单同源）：open → Mark done，非 open → Reopen。
+          纯 meta 操作——不碰 transcript、不起 runtime，只读会话（没有 pi 本子）
+          也能用。icon 随状态翻转，tooltip 讲完整句子。
+        */}
+        {props.completion !== null && props.onSetCompletion !== undefined && (
+          <IconButton
+            label={props.completion === "open" ? "Mark task done" : "Reopen task"}
+            title={
+              props.completion === "open"
+                ? "Mark this task done — it moves to the Done filter, reopen anytime"
+                : "Reopen this task — clears the done state"
+            }
+            size={24}
+            onClick={() =>
+              props.onSetCompletion?.(props.completion === "open" ? "done" : "open")
+            }
+          >
+            <Icon name={props.completion === "open" ? "circle-check" : "rotate-ccw"} size={13} />
           </IconButton>
         )}
         <span

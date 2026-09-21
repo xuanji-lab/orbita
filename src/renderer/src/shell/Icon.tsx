@@ -7,6 +7,7 @@ import bookOpen from "../../../../Orbita Design System/assets/icons/lucide/book-
 import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
+import circleCheck from "../../../../Orbita Design System/assets/icons/lucide/circle-check.svg?raw";
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import circleOff from "../../../../Orbita Design System/assets/icons/lucide/circle-off.svg?raw";
 import chevronLeft from "../../../../Orbita Design System/assets/icons/lucide/chevron-left.svg?raw";
@@ -30,6 +31,7 @@ import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
+import play from "../../../../Orbita Design System/assets/icons/lucide/play.svg?raw";
 import panelLeft from "../../../../Orbita Design System/assets/icons/lucide/panel-left.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
 import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off.svg?raw";
@@ -39,6 +41,7 @@ import power from "../../../../Orbita Design System/assets/icons/lucide/power.sv
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
+import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rotate-ccw.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
 import search from "../../../../Orbita Design System/assets/icons/lucide/search.svg?raw";
@@ -71,6 +74,7 @@ const ICONS = {
   bot,
   brain,
   check,
+  "circle-check": circleCheck,
   "chevron-down": chevronDown,
   "chevron-left": chevronLeft,
   "chevron-up": chevronUp,
@@ -97,12 +101,14 @@ const ICONS = {
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
+  play,
   pin,
   "pin-off": pinOff,
   plug,
   power,
   plus,
   "refresh-cw": refreshCw,
+  "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,
   sliders,

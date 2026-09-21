@@ -6,7 +6,7 @@ import { selectionStyle } from "./selection";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import type { ChatSession } from "../features/chat/useChatSession";
-import type { SessionMeta } from "@shared/session";
+import { isSessionDone, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
@@ -26,6 +26,33 @@ export type Overlay = "settings" | null;
 
 /** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
 const COLLAPSE_BREAKPOINT = 960;
+
+/**
+ * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
+ * 「Mark done?」。**纯派生不落盘**——建议只是当下的一句提醒，不是会话状态；
+ * 每次渲染按 updatedAt 现算，不弹通知、不加角标，hover 才出现。
+ */
+const IDLE_SUGGEST_DAYS = 7;
+const IDLE_SUGGEST_MS = IDLE_SUGGEST_DAYS * 24 * 60 * 60 * 1000;
+
+/** 完成状态筛选的单选组三档：全部 / 进行中 / 已完成（Starred 是叠加开关，正交） */
+type StatusFilter = "all" | "active" | "done";
+
+/**
+ * 筛选扑空的空态文案：按激活的组合说清「为什么什么都没有、怎么才有」，
+ * 不给一条对不上当前筛选的提示。
+ */
+function filterEmptyText(status: StatusFilter, starredOnly: boolean): string {
+  if (status === "active")
+    return starredOnly
+      ? "No active starred tasks. Clear the Starred filter to see the rest."
+      : "No active tasks right now — everything is done.";
+  if (status === "done")
+    return starredOnly
+      ? "No starred tasks done yet."
+      : "No done tasks yet. Mark a task done from its menu to find it here.";
+  return "No starred tasks yet. Hover a task and click its star to find it here.";
+}
 
 /**
  * 左栏，默认 288px，**可拖宽**（240–400，双击回 288）。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
@@ -61,10 +88,17 @@ export function Sidebar(props: {
   const settingsOpen = props.overlay === "settings";
   const [showArchived, setShowArchived] = useState(false);
   /**
-   * 「Starred」筛选 chip 的开合。**只作用于主浏览列表**（Workspaces + Tasks）：
-   * Archived 是存储位置视图、Settings 是另一块列表，都不受（也不该隐形地受）筛选。
+   * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
+   * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
+   * **只作用于主浏览列表**（Workspaces + Tasks）：Archived 是存储位置视图、
+   * Settings 是另一块列表，都不受（也不该隐形地受）筛选。
    */
   const [starredOnly, setStarredOnly] = useState(false);
+  /**
+   * 完成状态筛选：单选组（All / Active / Done 互斥，点一个顶掉另一个）。
+   * 默认 All = 无过滤；与 Starred 是两条独立的开关，叠加生效。
+   */
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   /**
    * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
    * **手动状态不持久化**——窗口宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
@@ -112,14 +146,21 @@ export function Sidebar(props: {
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   const sessionList = describeList(session.loads.sessions, session.sessions.length);
   /**
-   * 主列表的筛选管线（筛选区 chips）。星标先落；后续 PR 的「进行中 / 已完成」
-   * 等 chip 仍是往这条管线加条件、往筛选区加 chip，结构不再动。
-   * **只作用于主浏览列表**——Archived 是存储位置视图，不受（也不该隐形地受）筛选。
+   * 主列表的筛选管线（筛选区 chips）。状态（All/Active/Done，单选组）与星标
+   * （叠加开关）两条正交条件串在同一个 filter 里；组语义：状态三选一互斥，
+   * Starred 可与任一状态叠加（如「进行中且星标」）。**只作用于主浏览列表**
+   * ——Archived 是存储位置视图，不受（也不该隐形地受）筛选。
    */
-  const scoped = starredOnly ? live.filter((m) => m.starred === true) : live;
+  const filtered = statusFilter !== "all" || starredOnly;
+  const scoped = live.filter((m) => {
+    if (statusFilter === "active" && isSessionDone(m)) return false;
+    if (statusFilter === "done" && !isSessionDone(m)) return false;
+    if (starredOnly && m.starred !== true) return false;
+    return true;
+  });
   const loose = scoped.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
   // 筛选开着时，没有命中会话的工作区组整个不显示——一排空组头比没有更吵
-  const workspaceMatches = starredOnly
+  const workspaceMatches = filtered
     ? session.workspaces.filter((workspace) => scoped.some((m) => m.workspaceId === workspace.id))
     : session.workspaces;
   const tasksFolded = groups.folds.has(TASKS_FOLD_KEY);
@@ -301,12 +342,38 @@ export function Sidebar(props: {
         New task
       </button>
 
-      {/*
-        筛选区：会话浏览的过滤 chips。星标先落一个；后续 PR 的「进行中 / 已完成」
-        排进同一行。**只在主列表视图显示**，且没有任何会话时筛选无从谈起，不摆。
+      {/**
+        筛选区：会话浏览的过滤 chips。状态是单选组（All / Active / Done 互斥，
+        点一个顶掉另一个），Starred 是叠加开关——两者正交，可组合出
+        「进行中且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
+        筛选无从谈起，不摆。
       */}
       {live.length > 0 && !settingsOpen && !showArchived && (
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <Chip
+            icon="list"
+            active={statusFilter === "all"}
+            title="All tasks"
+            onClick={() => setStatusFilter("all")}
+          >
+            All
+          </Chip>
+          <Chip
+            icon="play"
+            active={statusFilter === "active"}
+            title="Tasks still in progress"
+            onClick={() => setStatusFilter("active")}
+          >
+            Active
+          </Chip>
+          <Chip
+            icon="circle-check"
+            active={statusFilter === "done"}
+            title="Completed tasks"
+            onClick={() => setStatusFilter("done")}
+          >
+            Done
+          </Chip>
           <Chip
             icon="star"
             active={starredOnly}
@@ -353,12 +420,12 @@ export function Sidebar(props: {
               />
             ))}
           </>
-        ) : starredOnly && scoped.length === 0 ? (
+        ) : filtered && scoped.length === 0 ? (
           /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
-          <Empty>No starred tasks yet. Hover a task and click its star to find it here.</Empty>
+          <Empty>{filterEmptyText(statusFilter, starredOnly)}</Empty>
         ) : (
           <>
-            {(!starredOnly || workspaceMatches.length > 0) && (
+            {(!filtered || workspaceMatches.length > 0) && (
               <>
                 <NodeHeader
                   label="Workspaces"
@@ -413,7 +480,7 @@ export function Sidebar(props: {
               </>
             )}
 
-            {(!starredOnly || loose.length > 0) && (
+            {(!filtered || loose.length > 0) && (
               <div style={{ marginTop: "var(--space-3)" }}>
                 {/**
                   TASKS 节点列的是**落盘的会话**。今天全部会话都挂在这里而不是挂到
@@ -916,7 +983,7 @@ function SessionRow(props: {
    */
   const [focused, setFocused] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [step, setStep] = useState<"main" | "move" | "delete">("main");
+  const [step, setStep] = useState<"main" | "move" | "delete" | "archive-done">("main");
   const live = meta.id === session.sessionId;
   // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
   const running = session.phaseOf(meta.id) !== "idle";
@@ -927,6 +994,16 @@ function SessionRow(props: {
    * 置顶是用户的偏好，运行中是正在发生的事，后者更该被看见。
    */
   const idle = !(running || failed);
+  const done = isSessionDone(meta);
+  // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）
+  const doneCount = session.sessions.filter(
+    (m) => isSessionDone(m) && !m.archived,
+  ).length;
+  /**
+   * 闲置建议：open 且未归档、最后一次活动超过 7 天——纯派生（每次渲染按
+   * updatedAt 现算，不落盘），hover 才出现的一个轻提示，不弹通知不加角标。
+   */
+  const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
   const status = running
     ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
     : failed
@@ -945,7 +1022,17 @@ function SessionRow(props: {
             onSelect: () => session.removeSession(meta.id),
           },
         ]
-      : step === "move"
+      : step === "archive-done"
+        ? [
+            { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+            {
+              id: "confirm",
+              label: `Archive ${doneCount} done task${doneCount === 1 ? "" : "s"}`,
+              icon: "archive",
+              onSelect: () => session.archiveDoneSessions(),
+            },
+          ]
+        : step === "move"
         ? [
             {
               id: "none",
@@ -973,6 +1060,13 @@ function SessionRow(props: {
             // Star / Unstar 不在这儿——它已经是行上的悬停键（一次点击，
             // 不必开菜单）。同一个动作留两个入口只会让菜单更长、更难扫
             {
+              id: "completion",
+              label: done ? "Reopen" : "Mark done",
+              icon: done ? "rotate-ccw" : "circle-check",
+              onSelect: () =>
+                session.setCompletionSession(meta.id, done ? "open" : "done"),
+            },
+            {
               id: "move",
               label: "Move to…",
               icon: "folder",
@@ -991,6 +1085,19 @@ function SessionRow(props: {
               icon: meta.archived ? "archive-restore" : "archive",
               onSelect: () => session.archiveSession(meta.id, !meta.archived),
             },
+            // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
+            // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动
+            ...(doneCount > 0
+              ? [
+                  {
+                    id: "archive-done",
+                    label: `Archive all done (${doneCount})…`,
+                    icon: "archive" as const,
+                    keepOpen: true,
+                    onSelect: () => setStep("archive-done"),
+                  },
+                ]
+              : []),
             {
               id: "delete",
               label: "Delete task…",
@@ -1058,6 +1165,46 @@ function SessionRow(props: {
       >
         <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
       </IconButton>
+      {/**
+        完成标识：与星标同构的行尾小槽，同样不占状态位、不随运行态消失。
+        done → circle-check（secondary 中性色，低饱和）；done_with_todos 的角标数字
+        （遗留事项数）数据源是 carryover 扫描（下一 PR），落地前这个态不会被写入，
+        渲染分支先留位。open 是默认态，不加标识——默认态不制造噪音。
+      */}
+      {done && (
+        <span
+          title={meta.completion === "done_with_todos" ? "Done with leftover todos" : "Done"}
+          style={{
+            display: "grid",
+            placeItems: "center",
+            flex: "0 0 auto",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          <Icon name="circle-check" size={12} strokeWidth={1.8} />
+        </span>
+      )}
+      {/**
+        闲置建议：open 且未归档、最后一次活动超过 7 天的会话，hover 时出现的
+        一个轻提示按钮——不弹通知、不打断、不加红点。点了就是普通 Mark done
+        （可从菜单或头部 Reopen）。纯派生：不落盘、不设状态，渲染时按 updatedAt 现算。
+      */}
+      {idleSuggested && (
+        <IconButton
+          label="Mark done?"
+          title={`No activity for ${IDLE_SUGGEST_DAYS}+ days — mark this task done?`}
+          size={20}
+          onClick={() => session.setCompletionSession(meta.id, "done")}
+          style={{
+            borderRadius: "var(--radius-xs)",
+            color: "var(--color-text-tertiary)",
+            opacity: hover || focused ? 1 : 0,
+            transition: "opacity var(--duration-instant) var(--ease-standard)",
+          }}
+        >
+          <Icon name="circle-check" size={12} strokeWidth={1.8} />
+        </IconButton>
+      )}
       <Menu
         items={items}
         align="end"
