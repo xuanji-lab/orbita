@@ -201,6 +201,10 @@ export function App() {
                 providers={providers}
                 onSettingsChange={changeSettings}
                 onProvidersChange={refresh}
+                onImported={() => {
+                  engine.refreshSessions();
+                  engine.refreshWorkspaces();
+                }}
               />
             ) : (
               <ChatView session={session} providersError={providersError} />

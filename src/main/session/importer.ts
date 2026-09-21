@@ -64,6 +64,9 @@ import type {
 export interface ImporterDeps {
   /** Proma 数据根（~/.proma-dev）。**只读** */
   promaRoot: string;
+  /** 额外合法源根（Proma 迁移史的旧根 ~/.proma：索引里仍有条目指向它，文件仍在）。
+   *  防御边界是「这几个根之内」，不传则只认 promaRoot */
+  extraSourceRoots?: readonly string[];
   /** orbita 的 pi 本子目录（pi-sessions/）：源 pi 文件的副本落这里 */
   piSessionDir: string;
   /** cwd 三级链的最后一环：无归属且源 cwd 不可用时用（= WorkspaceStore.defaultPath） */
@@ -542,13 +545,15 @@ interface PiSource {
  * migrateSessionEntries 在内存里迁移。
  * 抛错 = 这条进 bad-session-file（路径越界 / header 缺失 / version 超前 / 读不了）。
  */
-async function readPiSource(path: string, promaRoot: string): Promise<PiSource> {
-  // 防御：索引里的路径必须落在 Proma 数据根内（真源全在 sdk-config/sessions/ 下），
-  // 一份被手改过的索引不该让导入器去读任意文件
+async function readPiSource(path: string, promaRoot: string, extraRoots: readonly string[]): Promise<PiSource> {
+  // 防御：索引里的路径必须落在已知数据根内（真源在 <root>/sdk-config/sessions/ 下；
+  // 真实数据里 66 条仍指旧根 ~/.proma——Proma 从 .proma 迁到 .proma-dev 时索引没重写，
+  // 文件仍在），一份被手改过的索引不该让导入器去读任意文件
   const resolved = resolve(path);
-  const root = resolve(promaRoot);
-  if (resolved !== root && !resolved.startsWith(`${root}/`)) {
-    throw new Error(`session file outside the Proma data root: ${path}`);
+  const roots = [resolve(promaRoot), ...extraRoots.map((root) => resolve(root))];
+  const inAnyRoot = roots.some((root) => resolved === root || resolved.startsWith(`${root}/`));
+  if (!inAnyRoot) {
+    throw new Error(`session file outside the Proma data roots: ${path}`);
   }
   let raw: string;
   try {
@@ -648,7 +653,7 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
 
     let source: PiSource;
     try {
-      source = await readPiSource(entry.piSessionFile, deps.promaRoot);
+      source = await readPiSource(entry.piSessionFile, deps.promaRoot, deps.extraSourceRoots ?? []);
     } catch (cause) {
       skip(entry.id, entry.title || null, "bad-session-file", cause instanceof Error ? cause.message : String(cause));
       continue;
@@ -783,7 +788,7 @@ export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport>
   for (const item of report.plan) {
     try {
       // 扫描报告只有计划，entries 不随报告走——执行时重读源文件（纯读、幂等）
-      const source = await readPiSource(item.sourcePiFile, deps.promaRoot);
+      const source = await readPiSource(item.sourcePiFile, deps.promaRoot, deps.extraSourceRoots ?? []);
       const sessionEntries = source.entries.filter(
         (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
       );

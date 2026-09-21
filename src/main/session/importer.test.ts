@@ -489,13 +489,26 @@ describe("边界：索引与源文件的坏形态", () => {
     assert.match(bad.sourceId, /^#/);
   });
 
-  test("索引里的 piSessionFile 指向数据根外 → 拒绝（防御）", async () => {
+  test("索引里的 piSessionFile 指向数据根外 → 拒绝（防御）；指向旧根 → 接受", async () => {
     await writeIndex([{ id: "s-outside", title: "越界", piSessionFile: "/etc/passwd", createdAt: 1, updatedAt: 2 }]);
-    const report = await scanImport(deps());
+    const legacyRoot = join(root, "proma-old");
+    const legacyDir = join(legacyRoot, "sdk-config", "sessions");
+    await mkdir(legacyDir, { recursive: true });
+    const legacyFile = join(legacyDir, "2026-09-01T00-00-00-000Z_legacy-00000000001.jsonl");
+    const header = { type: "session", version: 3, id: "legacy", timestamp: "2026-09-01T00:00:00.000Z", cwd: "/tmp" };
+    await writeFile(legacyFile, JSON.stringify(header) + "\n");
+    await writeIndex([
+      { id: "s-outside", title: "越界", piSessionFile: "/etc/passwd", createdAt: 1, updatedAt: 2 },
+      { id: "s-legacy-root", title: "旧根", piSessionFile: legacyFile, createdAt: 3, updatedAt: 4 },
+    ]);
+    const report = await scanImport(deps({ extraSourceRoots: [legacyRoot] }));
     const skip = report.skipped.find((s) => s.sourceId === "s-outside");
     assert.ok(skip !== undefined);
     assert.equal(skip.reason, "bad-session-file");
-    assert.match(skip.detail ?? "", /outside the Proma data root/);
+    assert.match(skip.detail ?? "", /outside the Proma data roots/);
+    // 旧根在白名单里 → 正常进计划
+    assert.equal(report.plan.length, 1);
+    assert.equal(report.plan[0]?.sourceId, "s-legacy-root");
   });
 
   test("同一次扫描里两条索引指向同一源文件 → 第二条 already-imported", async () => {

@@ -3,6 +3,7 @@ import type { IconName } from "../../shell/Icon";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import type { ProviderDto } from "@shared/provider";
+import { ImportPromaRow } from "./ImportPromaRow";
 import { ProvidersView } from "./ProvidersView";
 import { modelMenuItems, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
@@ -33,6 +34,8 @@ export function SettingsView(props: {
   providers: readonly ProviderDto[];
   onSettingsChange: (patch: SettingsPatch) => void;
   onProvidersChange: () => void;
+  /** 导入落地后主界面两张列表（会话/工作区）要重读 */
+  onImported: () => void;
 }) {
   const active = SETTINGS_TABS.find((t) => t.id === props.tab) ?? SETTINGS_TABS[0];
   return (
@@ -69,6 +72,7 @@ export function SettingsView(props: {
               settings={props.settings}
               providers={props.providers}
               onChange={props.onSettingsChange}
+              onImported={props.onImported}
             />
           ) : (
             <ProvidersView onChange={props.onProvidersChange} />
@@ -93,6 +97,7 @@ function General(props: {
   settings: AppSettings;
   providers: readonly ProviderDto[];
   onChange: (patch: SettingsPatch) => void;
+  onImported: () => void;
 }) {
   // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
   const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
@@ -210,6 +215,10 @@ function General(props: {
             />
           }
         />
+      </Section>
+      <Section label="Data">
+        {/* 导入入口自带行卡样式（按钮组 + 汇总多行），不走通用 Row */}
+        <ImportPromaRow onImported={props.onImported} />
       </Section>
     </div>
   );

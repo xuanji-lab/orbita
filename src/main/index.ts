@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
+import { registerImportIpc } from "./session/import-ipc.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
@@ -184,6 +185,8 @@ void app.whenReady().then(() => {
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost);
+  // Proma 会话导入（设置页入口）：扫描/执行都在主进程，agent 进程不参与
+  registerImportIpc(sessions, workspaces, providers, settings, join(configDir, "pi-sessions"));
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
