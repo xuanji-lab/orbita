@@ -21,6 +21,7 @@ import type { ThinkingLevel } from "../../shared/thinking.ts";
 import {
   deriveSessionTitle,
   isCompactedRecord,
+  isInternalMessage,
   parseSessionMeta,
   pushRecentQuery,
   recentQueriesFromRecords,
@@ -189,16 +190,21 @@ export class SessionStore {
     // 写盘期间标题可能刚落、最近提问可能刚被别的消息推过
     await this.update(id, (current) => {
       const changes: Partial<SessionMeta> = { updatedAt: item.timestamp };
+      // 内部消息（收尾扫描的注入 prompt）不是用户说的话：不占标题、不进最近提问
+      // ——它是系统指令，混进会话卡的三槽就是噪音。日志照记（分支对账要），
+      // updatedAt 照新（扫描确实是这条会话最近一次真实活动）。
+      const internal = isInternalMessage(item);
       // 标题只认第一条用户消息，之后不再改——否则会话会在侧栏里改名。
       // 手动改过名的会话 title 不为空，因此这条守卫自动让位给它。
-      if (current.title === "" && item.role === "user") {
+      if (!internal && current.title === "" && item.role === "user") {
         const text = item.content.find((block) => block.type === "text");
         if (text !== undefined && text.type === "text") {
           changes.title = deriveSessionTitle(text.text);
         }
       }
-      // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致
-      if (item.role === "user") {
+      // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致。
+      // 同上，内部消息不算「提问」。
+      if (!internal && item.role === "user") {
         const text = item.content.find((block) => block.type === "text");
         if (text !== undefined && text.type === "text") {
           changes.recentQueries = pushRecentQuery(current.recentQueries, text.text);

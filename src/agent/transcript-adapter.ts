@@ -186,15 +186,25 @@ export class TranscriptAdapter {
     this.deps = deps;
   }
 
-  /** 用户提交的 prompt：本地立刻造一条 user item，不等模型回。 */
-  userPrompt(text: string): TranscriptProgress[] {
+  /**
+   * 用户提交的 prompt：本地立刻造一条 user item，不等模型回。
+   *
+   * `visibility: "internal"`（收尾仪式的扫描指令）：给 item 附加本仓的扩展字段——
+   * pi 的本子里它是普通 user 消息（prompt cache 的前提），落盘与渲染侧按这个
+   * 标记决定「存但不显示」。字段不在 pi schema 上，归约器实测对未知字段原样保留
+   * （genMs 同款探针，2026-09-06）。
+   */
+  userPrompt(text: string, visibility?: "internal"): TranscriptProgress[] {
     const content: UserContent[] = [{ type: "text", text }];
-    const item: TranscriptItem = {
+    // 断言的理由：visibility 是本仓对 pi item 的扩展字段（同 genMs 的挂法），
+    // pi 的类型上没有它——这里是我们自己造的 item，形状我们自己担保
+    const item = {
       id: this.deps.newId(),
       role: "user",
       content,
       timestamp: this.deps.now(),
-    };
+      ...(visibility !== undefined ? { visibility } : {}),
+    } as TranscriptItem;
     return [{ type: "item_started", item }];
   }
 

@@ -28,6 +28,7 @@ import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
+import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-todo.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
@@ -41,6 +42,7 @@ import power from "../../../../Orbita Design System/assets/icons/lucide/power.sv
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
+import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rotate-ccw.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
 import search from "../../../../Orbita Design System/assets/icons/lucide/search.svg?raw";
@@ -94,6 +96,7 @@ const ICONS = {
   image,
   "loader-circle": loaderCircle,
   list,
+  "list-todo": listTodo,
   lock,
   "message-square": messageSquare,
   minus,
@@ -107,6 +110,7 @@ const ICONS = {
   power,
   plus,
   "refresh-cw": refreshCw,
+  "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,
   sliders,

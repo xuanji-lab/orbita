@@ -18,6 +18,18 @@ import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem 
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 
+/**
+ * 内部消息判定。**不能直接 import shared 的 isInternalMessage**：本文件被
+ * node --test 加载，@shared 的**值**导入在那边解析不了（seedFromDisk 头部同款理由），
+ * 谓词在这里内联一份（isCompactedRecord 同款先例）。
+ */
+function isInternalUserItem(item: TranscriptItem): boolean {
+  return (
+    item.role === "user" &&
+    (item as TranscriptItem & { visibility?: unknown }).visibility === "internal"
+  );
+}
+
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
 export interface PendingApproval {
   requestId: string;
@@ -129,9 +141,16 @@ export const EMPTY_ENTRY: SessionEntry = {
  */
 export function applyAgentEvent(states: SessionStates, event: AgentEvent): SessionStates {
   if (event.type === "progress") {
+    // 内部消息（收尾扫描的注入 prompt）**存但不显示**：落盘在主进程的 recorder
+    // （它看到的是同一条事件，盘上带 visibility 标记），渲染槽在入口就拦下——
+    // pi 的归约器从头到尾不知道它，transcript 里自然没有。
+    const progress = event.progress;
+    if (progress.type === "item_started" && isInternalUserItem(progress.item)) {
+      return states;
+    }
     return update(states, event.sessionId, (entry) => ({
       ...entry,
-      transcript: applyTranscriptProgress(entry.transcript, event.progress),
+      transcript: applyTranscriptProgress(entry.transcript, progress),
     }));
   }
   if (event.type === "phase") {
@@ -227,7 +246,10 @@ export function seedFromDisk(
 ): SessionStates {
   // 界碑不进 pi 的归约器（它不是消息），分开记账；实时与历史从此是同一条显示路径。
   // 内联 role 谓词而非 isCompactedRecord()：本文件被 node --test 加载，@shared 的值导入解析不了。
-  const items = transcript.filter((item): item is TranscriptItem => item.role !== "compacted");
+  // 内部消息（visibility: internal）同样滤掉——盘上有它（分支对账要），屏幕上没有。
+  const items = transcript.filter(
+    (item): item is TranscriptItem => item.role !== "compacted" && !isInternalUserItem(item),
+  );
   const compactions = transcript.filter(
     (item): item is CompactedRecord => item.role === "compacted",
   );

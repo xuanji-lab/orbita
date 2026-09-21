@@ -57,6 +57,7 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { CarryoverChecklist } from "./CarryoverChecklist";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling, knownModelParams } from "@shared/known-providers";
 import { modelMenuItems, useBuiltinCatalog } from "../settings/model-menu";
@@ -65,7 +66,7 @@ import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { thinkingLevelLabel, THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
-import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
+import { deriveSessionTitle, type CompactedRecord, type SessionCompletion } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 
@@ -220,6 +221,8 @@ export function ChatView(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+      {/* 收尾仪式的降级 / 结果反馈：一句中性的话，不当错误报 */}
+      {session.scanNotice !== null && <Notice>{session.scanNotice}</Notice>}
       {/*
         只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
         （guideline §四把这条代价写明了）。
@@ -370,44 +373,67 @@ export function ChatView(props: {
     );
   }
 
+  // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
+  // 列表优先——活会话首条消息刚落盘时它先到
+  const openMeta = session.sessions.find((m) => m.id === openId) ?? session.opened;
   return (
-    <Pane
-      title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
-      badge={openId.slice(0, 6)}
-      badgeTitle={openId}
-      scrollRef={scrollRef}
-      onScroll={handleScroll}
-      // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
-      onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
-      footer={
-        <>
-          {notices}
-          {session.approvals[0] && (
-            <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
-          )}
-          {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
-          <QueueStrip
-            items={session.queued}
-            phase={session.phase}
-            onSendNow={session.sendQueuedNow}
-            onWithdraw={session.withdrawQueued}
-            onMove={session.moveQueuedTo}
-          />
-          {composer}
-        </>
-      }
-    >
-      <TranscriptColumn
-        transcript={session.transcript}
-        compactions={session.compactions}
-        phase={session.phase}
-        retry={session.retry}
-        turnError={session.turnError}
-        loadingHistory={session.loadingHistory}
-        onBranch={session.branchFrom}
-        onOpenTask={session.openSession}
-      />
-    </Pane>
+    <>
+      <Pane
+        title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
+        badge={openId.slice(0, 6)}
+        badgeTitle={openId}
+        scrollRef={scrollRef}
+        onScroll={handleScroll}
+        // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用
+        completion={openId === "" ? null : (openMeta?.completion ?? "open")}
+        onSetCompletion={
+          openId === "" ? undefined : (next) => session.setCompletionSession(openId, next)
+        }
+        // open 态点击走收尾仪式（降级矩阵在 hook）；Reopen 仍走 onSetCompletion
+        onMarkDone={openId === "" ? undefined : session.startClosingRitual}
+        closing={session.closingScan}
+        busy={session.phase !== "idle"}
+        scanless={openMeta?.piSessionFile == null}
+        // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
+        onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
+        footer={
+          <>
+            {notices}
+            {session.approvals[0] && (
+              <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
+            )}
+            {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
+            <QueueStrip
+              items={session.queued}
+              phase={session.phase}
+              onSendNow={session.sendQueuedNow}
+              onWithdraw={session.withdrawQueued}
+              onMove={session.moveQueuedTo}
+            />
+            {composer}
+          </>
+        }
+      >
+        <TranscriptColumn
+          transcript={session.transcript}
+          compactions={session.compactions}
+          phase={session.phase}
+          retry={session.retry}
+          turnError={session.turnError}
+          loadingHistory={session.loadingHistory}
+          onBranch={session.branchFrom}
+          onOpenTask={session.openSession}
+        />
+      </Pane>
+      {/* 收尾仪式的待确认清单：modal，挂哪都在最上层；确认 / 取消都按发起会话定向 */}
+      {session.scanResult !== null && (
+        <CarryoverChecklist
+          drafts={session.scanResult.drafts}
+          onConfirm={session.confirmCarryovers}
+          onCancel={session.cancelCarryovers}
+        />
+      )}
+    </>
   );
 }
 
@@ -553,6 +579,21 @@ function Pane(props: {
   title: string;
   badge: string;
   badgeTitle: string;
+  /** 当前会话的完成状态；null = 还没落盘（首条消息未发），完成入口不摆 */
+  completion: SessionCompletion | null;
+  /** 翻完成状态（Reopen 用）；没落盘时不传 */
+  onSetCompletion?: ((next: SessionCompletion) => void) | undefined;
+  /**
+   * open 态点击「Mark task done」的回调——收尾仪式（注入扫描、弹清单），
+   * 降级矩阵（在跑 / 只读 / 空对话）在 hook；不给则退回纯标记。
+   */
+  onMarkDone?: (() => void) | undefined;
+  /** 收尾扫描进行中：按钮转圈 */
+  closing?: boolean;
+  /** 会话在跑：open 态的完成按钮禁用（收尾要等话说完） */
+  busy?: boolean;
+  /** 只读（没有 pi 本子）：纯标记路径，tooltip 说明为什么没有扫描 */
+  scanless?: boolean;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
@@ -616,6 +657,51 @@ function Pane(props: {
         {props.onRename !== undefined && !editing && (
           <IconButton label="Rename task" size={24} onClick={() => setEditing(true)}>
             <Icon name="pencil-line" size={13} />
+          </IconButton>
+        )}
+        {/**
+          完成入口（第二处，与侧栏菜单同源）：open → Mark done（收尾仪式），非 open → Reopen。
+          降级矩阵在这里只做展示：扫描中转圈、在跑禁用、只读（无 pi 本子）在 tooltip
+          里说明是纯标记——真正的判定在 useChatSession.startClosingRitual。
+        */}
+        {props.completion !== null && props.onSetCompletion !== undefined && (
+          <IconButton
+            label={
+              props.completion === "open"
+                ? props.closing === true
+                  ? "Scanning for leftover items…"
+                  : "Mark task done"
+                : "Reopen task"
+            }
+            title={
+              props.completion === "open"
+                ? props.closing === true
+                  ? "Scanning this task for leftover items…"
+                  : props.busy === true
+                    ? "Wait for this task to finish before marking it done"
+                    : props.scanless === true
+                      ? "Mark done without a leftover scan (this task has no agent session)"
+                      : "Mark this task done — the agent scans for leftovers first, reopen anytime"
+                : "Reopen this task — clears the done state"
+            }
+            disabled={props.completion === "open" && (props.closing === true || props.busy === true)}
+            onClick={() =>
+              props.completion === "open"
+                ? (props.onMarkDone ?? (() => props.onSetCompletion?.("done")))()
+                : props.onSetCompletion?.("open")
+            }
+          >
+            <Icon
+              name={
+                props.completion === "open"
+                  ? props.closing === true
+                    ? "loader-circle"
+                    : "circle-check"
+                  : "rotate-ccw"
+              }
+              size={13}
+              spin={props.closing === true}
+            />
           </IconButton>
         )}
         <span

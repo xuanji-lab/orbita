@@ -675,3 +675,57 @@ describe("seedFromDisk 播种用量", () => {
     assert.equal(states.get("A")?.stats?.cost, 0.5);
   });
 });
+
+describe("内部消息（visibility: internal）——存但不显示", () => {
+  /** 收尾扫描的注入 prompt：user item 带 visibility 标记（agent 进程的 adapter 造的） */
+  const internalPrompt = (id: string) => ({
+    type: "item_started" as const,
+    item: {
+      id,
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "收尾扫描：回看本次对话……" }],
+      timestamp: 0,
+      visibility: "internal" as const,
+    },
+  });
+
+  test("事件入口就拦下：槽里的 transcript 从头到尾不知道它", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "旧回答")));
+    states = applyAgentEvent(states, { type: "progress", sessionId: "A", progress: internalPrompt("u1") });
+    const items = selectTranscript(states.get("A")?.transcript ?? EMPTY_ENTRY.transcript);
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.id, "a1");
+  });
+
+  test("扫描的回答照常进槽（internal 只拦注入的那条 user item）", () => {
+    let states = applyAgentEvent(new Map(), { type: "progress", sessionId: "A", progress: internalPrompt("u1") });
+    states = applyAgentEvent(states, progress("A", assistantDone("a1", "```json\n{\"carryovers\": []}\n```")));
+    const items = selectTranscript(states.get("A")?.transcript ?? EMPTY_ENTRY.transcript);
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.role, "assistant");
+  });
+
+  test("种盘同样滤掉：盘上有它（分支对账要），屏幕上没有", () => {
+    const transcript: SessionRecord[] = [
+      {
+        id: "u0",
+        role: "user",
+        content: [{ type: "text", text: "真说的话" }],
+        timestamp: 0,
+      },
+      {
+        id: "u1",
+        role: "user",
+        content: [{ type: "text", text: "收尾扫描：……" }],
+        timestamp: 1,
+        visibility: "internal",
+      },
+    ];
+    const states = seedFromDisk(new Map(), "A", transcript);
+    const items = selectTranscript(states.get("A")?.transcript ?? EMPTY_ENTRY.transcript);
+    assert.deepEqual(
+      items.map((item) => item.id),
+      ["u0"],
+    );
+  });
+});

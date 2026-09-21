@@ -18,6 +18,7 @@ import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
+import { CarryoverStore } from "./session/carryover-store.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
@@ -184,7 +185,9 @@ void app.whenReady().then(() => {
   const mcpIpc = registerMcpIpc(mcp, (servers) => agentHost.mcpReload(servers));
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
-  registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost);
+  // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
+  const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
+  registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost, carryovers);
   // Proma 会话导入（设置页入口）：扫描/执行都在主进程，agent 进程不参与
   registerImportIpc(sessions, workspaces, providers, settings, join(configDir, "pi-sessions"));
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）

@@ -1,0 +1,146 @@
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { locateMessageRange, parseCarryoverResponse } from "./carryover-parse.ts";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
+
+const msg = (id: string, role: "user" | "assistant", text: string): TranscriptItem =>
+  // 两种角色的必填形状不同（assistant 要 model/status/stopReason），这里只关心
+  // role 与 text 块——定位函数也只读它们，用断言免遭绑定变体的形状勒索
+  ({
+    id,
+    role,
+    content: [{ type: "text", text }],
+    timestamp: 0,
+  }) as TranscriptItem;
+
+describe("locateMessageRange", () => {
+  test("摘录命中消息文本 → 锚到那条的序号（区间 [i, i]）", () => {
+    const transcript = [
+      msg("u1", "user", "帮我把 README 补全"),
+      msg("a1", "assistant", "好的，我先看看现状"),
+      msg("u2", "user", "安装段也要补"),
+    ];
+    assert.deepEqual(locateMessageRange(transcript, "帮我把 README 补全"), [0, 0]);
+    // 摘录是原句的截断（模型只摘了开头）：探针（前 48 字）命中同一条消息
+    const long = [
+      msg("u1", "user", "帮我把 README 的安装段补全，特别是 Windows 下的构建步骤与依赖安装的坑都写进去"),
+    ];
+    assert.deepEqual(
+      locateMessageRange(long, "帮我把 README 的安装段补全"),
+      [0, 0],
+    );
+  });
+
+  test("摘录是概括、对话里搜不到 → null（缺省是常态）", () => {
+    const transcript = [msg("u1", "user", "随便聊了点别的")];
+    assert.equal(locateMessageRange(transcript, "用户曾要求重构配置模块"), null);
+  });
+
+  test("空摘录 / 空白摘录 → null", () => {
+    assert.equal(locateMessageRange([msg("u1", "user", "x")], ""), null);
+    assert.equal(locateMessageRange([msg("u1", "user", "x")], "   "), null);
+  });
+
+  test("tool 消息不参与匹配", () => {
+    const tool = {
+      id: "t1",
+      role: "tool",
+      toolCallId: "c1",
+      toolName: "bash",
+      input: {},
+      content: [{ type: "text", text: "帮我把 README 补全" }],
+      timestamp: 0,
+      status: "complete",
+      isError: false,
+    } as TranscriptItem;
+    const transcript: readonly TranscriptItem[] = [tool];
+    assert.equal(locateMessageRange(transcript, "帮我把 README 补全"), null);
+  });
+});
+
+describe("parseCarryoverResponse", () => {
+  test("正常块：一个 fenced json，两条事项字段齐全", () => {
+    const drafts = parseCarryoverResponse(
+      '```json\n{"carryovers": [{"title": "补 README 安装段", "detail": "第 3 轮答应补安装文档"}, {"title": "跑全量测试", "detail": ""}]}\n```',
+    );
+    assert.deepEqual(drafts, [
+      { title: "补 README 安装段", detail: "第 3 轮答应补安装文档" },
+      { title: "跑全量测试", detail: "" },
+    ]);
+  });
+
+  test("模型带了引导句也不怕：json 块前后有文字仍取块内", () => {
+    const drafts = parseCarryoverResponse(
+      '扫描完成，结果如下：\n\n```json\n{"carryovers": [{"title": "一件事", "detail": "上下文"}]}\n```\n\n以上。',
+    );
+    assert.deepEqual(drafts, [{ title: "一件事", detail: "上下文" }]);
+  });
+
+  test("无语言标注的 fenced 块也认（模型偶尔忘写 json 标注）", () => {
+    const drafts = parseCarryoverResponse(
+      '```\n{"carryovers": [{"title": "无标注块", "detail": ""}]}\n```',
+    );
+    assert.deepEqual(drafts, [{ title: "无标注块", detail: "" }]);
+  });
+
+  test("非 json 块跳过，继续找后面的 json 块", () => {
+    const drafts = parseCarryoverResponse(
+      '```text\n这是说明文字，不是结构化输出\n```\n\n```json\n{"carryovers": [{"title": "在后面", "detail": ""}]}\n```',
+    );
+    assert.deepEqual(drafts, [{ title: "在后面", detail: "" }]);
+  });
+
+  test("多个 json 块取第一个", () => {
+    const drafts = parseCarryoverResponse(
+      '```json\n{"carryovers": [{"title": "第一个", "detail": ""}]}\n```\n\n```json\n{"carryovers": [{"title": "第二个", "detail": ""}]}\n```',
+    );
+    assert.deepEqual(drafts, [{ title: "第一个", detail: "" }]);
+  });
+
+  test("空数组：合法结果，返回 []（没有遗留也是答案）", () => {
+    const drafts = parseCarryoverResponse('```json\n{"carryovers": []}\n```');
+    assert.deepEqual(drafts, []);
+  });
+
+  test("坏 JSON → null（降级路径）", () => {
+    assert.equal(parseCarryoverResponse('```json\n{"carryovers": [}\n```'), null);
+  });
+
+  test("没有 fenced 块 → null", () => {
+    assert.equal(parseCarryoverResponse("这次对话里没有未完成的事项。"), null);
+  });
+
+  test("结构不符：顶层不是对象 → null", () => {
+    assert.equal(parseCarryoverResponse('```json\n[{"title": "数组顶层"}]\n```'), null);
+  });
+
+  test("结构不符：没有 carryovers 键 → null", () => {
+    assert.equal(parseCarryoverResponse('```json\n{"items": []}\n```'), null);
+  });
+
+  test("结构不符：carryovers 不是数组 → null", () => {
+    assert.equal(parseCarryoverResponse('```json\n{"carryovers": "none"}\n```'), null);
+  });
+
+  test("结构不符：条目缺 title / title 不是字符串 → null（半残清单不进 UI）", () => {
+    assert.equal(
+      parseCarryoverResponse('```json\n{"carryovers": [{"detail": "没有标题"}]}\n```'),
+      null,
+    );
+    assert.equal(
+      parseCarryoverResponse('```json\n{"carryovers": [{"title": 42, "detail": ""}]}\n```'),
+      null,
+    );
+  });
+
+  test("结构不符：条目 detail 不是字符串 → null", () => {
+    assert.equal(
+      parseCarryoverResponse('```json\n{"carryovers": [{"title": "标题", "detail": 1}]}\n```'),
+      null,
+    );
+  });
+
+  test("尾围栏缺失（流被截断）→ null", () => {
+    assert.equal(parseCarryoverResponse('```json\n{"carryovers": [{"title": "截断'), null);
+  });
+});

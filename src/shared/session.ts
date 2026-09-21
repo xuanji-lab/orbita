@@ -33,8 +33,29 @@ export interface CompactedRecord {
   timestamp: number;
 }
 
-/** 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）或压缩界碑（我们的）。 */
-export type SessionRecord = TranscriptItem | CompactedRecord;
+/**
+ * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）或压缩界碑（我们的）。
+ *
+ * user 分支可能带可见性标记（交集扩展，非新 role）：`visibility: "internal"` =
+ * 系统注入的内部 prompt（收尾仪式的扫描指令）。**这是本仓对 pi 的
+ * TranscriptItem 的扩展**——pi-protocol 没有这个字段，AGENTS.md 架构边界里保留的
+ * visibility 字段在协议层就落在这里：internal = transcript 不渲染（renderer 进槽前
+ * 过滤），但**必须落盘**——pi 的本子里它是普通 user 消息，我们这边少一条会让
+ * 分支对账（branchRoles 按 user/assistant 计数）对不上。交集而非新 role 的理由：
+ * 新 role 要走 CompactedRecord 那套单独守卫，而 visibility 只需要一个可选字段，
+ * 现有窄化（`record.role === "user"`）全部不受影响。
+ */
+export type SessionRecord =
+  | (TranscriptItem & { visibility?: "internal" })
+  | CompactedRecord;
+
+/** 这条落盘记录是不是系统注入的内部消息（renderer 过滤与 store 记账共用同一判定）。 */
+export function isInternalMessage(record: SessionRecord): boolean {
+  return (
+    record.role === "user" &&
+    (record as TranscriptItem & { visibility?: unknown }).visibility === "internal"
+  );
+}
 
 /**
  * 逐字段校验，坏值判 false。readLog 靠它分流：**坏掉的 compacted 行按坏行跳过**，
@@ -99,6 +120,82 @@ export type SessionCompletion = "open" | "done" | "done_with_todos";
  */
 export function isSessionDone(meta: SessionMeta): boolean {
   return (meta.completion ?? "open") !== "open";
+}
+
+/**
+ * 收尾仪式（carryover）收割的一条遗留事项。真源是全局一份 `carryovers.jsonl`
+ * （会话侧只存 `completion` 状态、不内嵌正文——避免两处真源）；侧栏「待办 N」角标
+ * 与「Has todos」筛选都由 renderer 按 `sourceSessionId` 现算。reopen（回 open）
+ * **不删不改**这些记录：遗留事项是收尾时收割的事实，不随会话状态回滚。
+ */
+export interface Carryover {
+  id: string;
+  /** 一句话事项，清单 UI 里显示的就是它 */
+  title: string;
+  /** 上下文摘录（agent 从对话里摘的原句/概括），展开时看 */
+  detail: string;
+  /** 回链：从哪条会话收割的 */
+  sourceSessionId: string;
+  /** transcript 里的消息序号区间锚点；跳回原文定位用，算不出就 null */
+  sourceMessageRange: [number, number] | null;
+  status: "open" | "done";
+  createdAt: number;
+  doneAt: number | null;
+}
+
+/** carryover 的 status 取值（独立出来给 store 与 IPC 复用）。 */
+export type CarryoverStatus = Carryover["status"];
+
+/**
+ * 批量创建的载荷（renderer → 主进程）：内容与锚点；id / status / 时间戳由
+ * CarryoverStore 铸——落盘事实由写盘方定，renderer 不猜。
+ * 放在 shared（而非 store）是因为 preload 与 renderer 都要引用它，而它们不得
+ * import 主进程模块（preload 头部纪律）。
+ */
+export interface CarryoverDraft {
+  title: string;
+  detail: string;
+  sourceMessageRange: [number, number] | null;
+}
+
+/**
+ * 解析磁盘上的一条 carryover。**坏了返回 null，调用方跳过该行**（parseSessionMeta
+ * 的纪律）：一条字段残缺的遗留事项混进清单，比少列一条更误导——用户会去办一件
+ * 标题都没说清的事。
+ */
+export function parseCarryover(raw: unknown): Carryover | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const id = str(value["id"]);
+  const title = str(value["title"]);
+  const sourceSessionId = str(value["sourceSessionId"]);
+  if (id === null || title === null || sourceSessionId === null) return null;
+  if (typeof value["detail"] !== "string") return null;
+  const range = value["sourceMessageRange"];
+  if (
+    range !== null &&
+    (typeof range !== "object" ||
+      !Array.isArray(range) ||
+      typeof range[0] !== "number" ||
+      typeof range[1] !== "number" ||
+      !Number.isFinite(range[0]) ||
+      !Number.isFinite(range[1]))
+  ) {
+    return null;
+  }
+  const createdAt = num(value["createdAt"]);
+  if (createdAt === null) return null;
+  const doneAt = num(value["doneAt"]);
+  return {
+    id,
+    title,
+    detail: value["detail"],
+    sourceSessionId,
+    sourceMessageRange: range as [number, number] | null,
+    status: value["status"] === "done" ? "done" : "open",
+    createdAt,
+    doneAt,
+  };
 }
 
 export interface SessionMeta {

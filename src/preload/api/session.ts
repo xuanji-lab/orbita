@@ -4,7 +4,14 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { SessionCompletion, SessionDetail, SessionMeta } from "../../shared/session.ts";
+import type {
+  Carryover,
+  CarryoverDraft,
+  CarryoverStatus,
+  SessionCompletion,
+  SessionDetail,
+  SessionMeta,
+} from "../../shared/session.ts";
 
 export const sessionApi = {
   /** 会话列表，新的在前 */
@@ -39,4 +46,13 @@ export const sessionApi = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null，否则返回落盘路径 */
   exportMarkdown: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(ipcChannels.sessionExport, id),
+  // —— 遗留事项（收尾仪式）三通道 ——
+  /** 全部遗留事项，落盘顺序。角标与筛选按 sourceSessionId 在 renderer 现算 */
+  carryoverList: (): Promise<Carryover[]> => ipcRenderer.invoke(ipcChannels.carryoverList),
+  /** 批量落盘（收尾仪式确认的那一拨）；返回铸好 id/status/时间戳的完整记录 */
+  carryoverCreate: (sessionId: string, drafts: CarryoverDraft[]): Promise<Carryover[]> =>
+    ipcRenderer.invoke(ipcChannels.carryoverCreate, sessionId, drafts),
+  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
+  carryoverSetStatus: (id: string, status: CarryoverStatus): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.carryoverSetStatus, id, status),
 };

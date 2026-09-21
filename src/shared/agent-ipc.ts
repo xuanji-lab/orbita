@@ -68,6 +68,12 @@ export const ipcChannels = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
+  /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
+  carryoverList: "carryover:list",
+  /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
+  carryoverCreate: "carryover:create",
+  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
+  carryoverSetStatus: "carryover:set-status",
   /** 扫描 Proma 的 pi 会话真源（dry-run）：产出可导入计划与跳过明细 */
   importScan: "import:scan",
   /** 执行导入：主进程重新扫描后落盘（不接收 renderer 回传的计划，理由见 shared/import.ts） */
@@ -223,6 +229,12 @@ export interface AgentTurnContext {
 /** 发一轮（renderer → 主进程的载荷） */
 export interface SubmitAgentInput extends AgentTurnContext {
   text: string;
+  /**
+   * internal = 系统注入的内部 prompt（收尾仪式的扫描指令）：落盘带
+   * `visibility: "internal"`，transcript 不渲染，但 pi 本子里是普通 user 消息
+   * （复用对话 cache 的前提）。缺席 = 普通用户消息。
+   */
+  visibility?: "internal";
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -240,6 +252,8 @@ export type AgentCommand =
       type: "submit";
       sessionId: string;
       text: string;
+      /** internal = 系统注入的内部 prompt：回显的 user item 落盘带 visibility 标记（见 SubmitAgentInput）。 */
+      visibility?: "internal";
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;
