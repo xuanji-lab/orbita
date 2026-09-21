@@ -64,6 +64,10 @@ export const ipcChannels = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
+  /** 扫描 Proma 的 pi 会话真源（dry-run）：产出可导入计划与跳过明细 */
+  importScan: "import:scan",
+  /** 执行导入：主进程重新扫描后落盘（不接收 renderer 回传的计划，理由见 shared/import.ts） */
+  importRun: "import:run",
   /** 中心存储里的全部 skill（含没链进任何集合的） */
   skillList: "skill:list",
   /** 把 skill 链进一个集合（global 或某个 workspace）；互斥规则见 SkillScope */

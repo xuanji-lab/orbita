@@ -127,6 +127,15 @@ export interface SessionMeta {
    */
   recentQueries: string[];
   /**
+   * 从外部应用导入的会话才有的标记（Proma pi 同构导入，importer.ts）：
+   * `importedFrom` = 源 pi session 文件的绝对路径，**幂等键**——重复导入按它判重；
+   * `importedModel` = 源应用记录的原始模型 id（渠道名不可信，只有 id 值得留；
+   * 映射结果就在 providerId/modelId，miss 兜底时这里保住「原本跑的是谁」）。
+   * 非导入会话两个字段都缺省——不加 `imported: false` 这类反字段，缺席即否。
+   */
+  importedFrom?: string;
+  importedModel?: string;
+  /**
    * 上一次跑完时的用量快照（A1-Q1，2026-09-03 裁决）。
    * **null = 没有账本**（本字段之前存的会话，或还没跑过一轮）。
    *
@@ -233,7 +242,6 @@ export function parseAgentStats(raw: unknown): AgentStats | null {
 function str(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
-
 /**
  * 解析磁盘上的一份 meta。**坏了返回 null，调用方跳过这条**，而不是补一个默认值——
  * 一条 id 是编出来的会话比少列一条更糟：它会指向一个不存在的 transcript，
@@ -250,6 +258,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
 
   const createdAt = typeof value["createdAt"] === "number" ? value["createdAt"] : null;
   if (createdAt === null) return null;
+  const importedFrom = str(value["importedFrom"]);
+  const importedModel = str(value["importedModel"]);
 
   return {
     id,
@@ -275,6 +285,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
     // 思考档坏值退 medium（老会话实际跑的那一档），理由见字段注释
     thinkingLevel: parseThinkingLevel(value["thinkingLevel"]),
+    // 导入标记：非导入会话缺席（空串/null 都当没有，str 的规则）
+    ...(importedFrom === null ? null : { importedFrom }),
+    ...(importedModel === null ? null : { importedModel }),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
