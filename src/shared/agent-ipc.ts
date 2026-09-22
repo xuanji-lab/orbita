@@ -246,6 +246,21 @@ export interface CompactAgentInput extends AgentTurnContext {
   instructions?: string;
 }
 
+/**
+ * 开轮目录清单（文件系统 2026-09-22 裁决）。一个工作区就是一个用户能在 Finder 里打开的文件夹（cwd）；
+ * 附加目录挂在工作区上；工作台属于会话、住在 userData。三者都只是告知模型「可以去哪」。
+ */
+export interface TurnDirectories {
+  /** 工作区的附加目录（`Workspace.attachedDirs`），绝对路径，按用户挂上的顺序。Home 会话恒为空 */
+  attached: string[];
+  /**
+   * 本会话的工作台 `<userData>/workbenches/<sessionId>/`：plan / handoff / 草稿的落点。
+   * **目录可能还不存在**（首次写入才建，空会话不占目录），模型用时自己 mkdir。
+   * 不套在 sessions/ 里：protectedPaths 把整个 sessions/ 设为工具面只读，工作台必须可写。
+   */
+  workbench: string;
+}
+
 /** 主进程 → agent 进程 */
 export type AgentCommand =
   | {
@@ -280,6 +295,14 @@ export type AgentCommand =
        * 目录不存在不是错，当作一个 skill 都没链（pi 内部先 existsSync 拦一道）。
        */
       skillsDirs: string[];
+      /**
+       * 开轮目录清单（2026-09-22 裁决）：除 cwd 外这条会话的 agent 还能去哪。
+       * **只告知不硬拦**：runtime 把它拼进 systemPrompt，工具面仍是 cwd 加 protectedPaths 黑名单——
+       * pi 的 read/write 只把相对路径 resolve 到 cwd，不做包含性校验，白名单硬拦是新功能不是这个字段的事。
+       * **主进程装配**（同 skillsDirs / protectedPaths 的纪律）：附加目录来自工作区记录，
+       * 工作台路径由 session id 派生，agent 进程只收数据。缺席 = 不注入这段（旧测试夹具）。
+       */
+      directories?: TurnDirectories;
       /**
        * MCP server 配置。**传解析好的而不是文件路径**：读文件与讲错误是主进程的事
        * （跟 skillsDir 同一条纪律），而且 env 里往往有密钥，路径传过去等于让
@@ -337,8 +360,9 @@ export type AgentCommand =
       piSessionDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
-      /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
+      /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
+      directories?: TurnDirectories;
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
@@ -364,8 +388,9 @@ export type AgentCommand =
       piSessionDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
-      /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
+      /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
+      directories?: TurnDirectories;
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
       /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */
