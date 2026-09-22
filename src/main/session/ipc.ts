@@ -32,6 +32,11 @@ export function registerSessionIpc(
     onSessionRemoved?.(id);
     await store.remove(id);
   });
+  // 工作台现状：删除确认项要把「里面有几个文件」说出来（提示后删）。
+  // 按需现算，见 store.workbenchStat
+  ipcMain.handle(ipcChannels.sessionWorkbenchStat, (_event, id: string) =>
+    store.workbenchStat(id),
+  );
   ipcMain.handle(ipcChannels.sessionPin, (_event, id: string, pinned: boolean) =>
     store.setPinned(id, pinned),
   );

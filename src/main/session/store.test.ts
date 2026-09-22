@@ -529,6 +529,88 @@ describe("SessionStore.branch", () => {
   });
 });
 
+// ── 工作台生命周期：stat / 删除连带 / 分支拷贝（2026-09-22 裁决）──
+
+describe("SessionStore.workbench", () => {
+  const PI_FILE = "C:/pi-sessions/source.jsonl";
+
+  const item = (id: string, role: "user" | "assistant", text: string): TranscriptItem =>
+    role === "user"
+      ? { id, role: "user", content: [{ type: "text", text }], timestamp: 2000 }
+      : {
+          id,
+          role: "assistant",
+          content: [{ type: "text", text }],
+          model: { provider: "zai", id: "glm-5.3" },
+          timestamp: 3000,
+          status: "complete",
+          stopReason: "stop",
+        };
+
+  test("workbenchStat 三态：不存在 / 空目录 / 嵌套两个文件（目录不计）", async () => {
+    // 不存在：exists=false、fileCount=0，path 照给（renderer 不自己拼路径）
+    let stat = await store.workbenchStat(ID);
+    assert.deepEqual(stat, { path: join(dir, "workbenches", ID), exists: false, fileCount: 0 });
+
+    // 空目录：存在但没文件
+    await mkdir(join(dir, "workbenches", ID), { recursive: true });
+    stat = await store.workbenchStat(ID);
+    assert.deepEqual({ exists: stat.exists, fileCount: stat.fileCount }, { exists: true, fileCount: 0 });
+
+    // 嵌套：子目录里的文件也数，目录本身不数
+    await mkdir(join(dir, "workbenches", ID, "plan"), { recursive: true });
+    await writeFile(join(dir, "workbenches", ID, "a.txt"), "x", "utf8");
+    await writeFile(join(dir, "workbenches", ID, "plan", "p.md"), "y", "utf8");
+    stat = await store.workbenchStat(ID);
+    assert.equal(stat.fileCount, 2);
+  });
+
+  test("remove 连带删工作台（先删账本后删工作台）", async () => {
+    await store.ensureSession(meta());
+    await mkdir(join(dir, "workbenches", ID, "plan"), { recursive: true });
+    await writeFile(join(dir, "workbenches", ID, "plan", "p.md"), "y", "utf8");
+    await store.remove(ID);
+    assert.deepEqual(await readdir(join(dir, "sessions")), []);
+    assert.equal((await store.workbenchStat(ID)).exists, false);
+  });
+
+  test("remove 对没有工作台的会话也照常（rm force 吞 ENOENT）", async () => {
+    await store.ensureSession(meta());
+    await store.remove(ID);
+    assert.equal((await store.workbenchStat(ID)).exists, false);
+  });
+
+  test("branch 后新 id 的工作台是源的完整拷贝，源不动", async () => {
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, item("a1", "assistant", "答"));
+    await mkdir(join(dir, "workbenches", ID, "sub"), { recursive: true });
+    await writeFile(join(dir, "workbenches", ID, "root.txt"), "a", "utf8");
+    await writeFile(join(dir, "workbenches", ID, "sub", "b.txt"), "b", "utf8");
+
+    const plan = await store.prepareBranch(ID, "a1");
+    await store.commitBranch(plan, "C:/pi-sessions/branch.jsonl");
+
+    const stat = await store.workbenchStat(plan.newId);
+    assert.equal(stat.exists, true);
+    assert.equal(stat.fileCount, 2);
+    // 内容一致（不只是数量对）
+    assert.equal(await readFile(join(dir, "workbenches", plan.newId, "root.txt"), "utf8"), "a");
+    assert.equal(await readFile(join(dir, "workbenches", plan.newId, "sub", "b.txt"), "utf8"), "b");
+    // 源不动：拷贝不是移动
+    assert.equal((await store.workbenchStat(ID)).fileCount, 2);
+  });
+
+  test("branch 的源没有工作台时，新的也不存在（不预建）", async () => {
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, item("a1", "assistant", "答"));
+    const plan = await store.prepareBranch(ID, "a1");
+    await store.commitBranch(plan, "C:/pi-sessions/branch.jsonl");
+    assert.equal((await store.workbenchStat(plan.newId)).exists, false);
+  });
+});
+
 // ── A-1 回归：meta 的「读-改-写」必须串行（wafo 2026-09-03 实测）──
 
 describe("meta 并发写入", () => {

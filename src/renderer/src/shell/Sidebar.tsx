@@ -5,6 +5,7 @@ import { Chip } from "./Chip";
 import { selectionStyle } from "./selection";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
+import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { isSessionDone, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -1194,6 +1195,12 @@ function SessionRow(props: {
   const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
     "main",
   );
+  /**
+   * 删除确认步要说的「工作台里有几个文件」。删会话连带删工作台，确认项先把
+   * 后果说出来（提示后删，Proma 是不提示直接删，我们多这一句）。null = 没拉到
+   * 或里面没文件，文案退回光秃秃的 Delete permanently。
+   */
+  const [workbenchFiles, setWorkbenchFiles] = useState<number | null>(null);
   const live = meta.id === session.sessionId;
   // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
   const running = session.phaseOf(meta.id) !== "idle";
@@ -1217,13 +1224,39 @@ function SessionRow(props: {
    */
   const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
 
+  /**
+   * 进删除确认步：异步拉工作台文件数，到了再补进文案——拉取不阻塞菜单，
+   * 一次 stat 失败也不该堵住删除。
+   */
+  const enterDeleteStep = () => {
+    setStep("delete");
+    setWorkbenchFiles(null);
+    api.session
+      .workbenchStat(meta.id)
+      .then((stat) => {
+        if (stat.exists && stat.fileCount > 0) setWorkbenchFiles(stat.fileCount);
+      })
+      .catch(() => undefined);
+  };
+  /** 退出删除确认步（Cancel / 菜单重开）：文件数一并清掉，下次进重新拉 */
+  const exitDeleteStep = () => {
+    setStep("main");
+    setWorkbenchFiles(null);
+  };
+
   const items: MenuItem[] =
     step === "delete"
       ? [
-          { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+          { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: exitDeleteStep },
           {
             id: "confirm",
             label: "Delete permanently",
+            // 有文件就把数说出来（1 用单数），走 hint 而不是拼进 label：菜单最宽 200px，
+            // 拼进去会被 ellipsis 吃掉、只剩「Delete permanently · …」，等于没提示。
+            // 没拉到 / 没文件就不出 hint，不拿一句不确定的话吓用户
+            ...(workbenchFiles === null
+              ? {}
+              : { hint: `+${workbenchFiles} file${workbenchFiles === 1 ? "" : "s"}` }),
             icon: "trash-2",
             danger: true,
             onSelect: () => session.removeSession(meta.id),
@@ -1331,7 +1364,7 @@ function SessionRow(props: {
               icon: "trash-2",
               danger: true,
               keepOpen: true,
-              onSelect: () => setStep("delete"),
+              onSelect: enterDeleteStep,
             },
           ];
 
@@ -1456,16 +1489,17 @@ function SessionRow(props: {
         align="end"
         // 会话行的菜单开在**行的右侧**：开在下方会盖住紧挨着的下一条会话，
         // 想看别的会话就得先关菜单（2026-09-22 wafo）。窄窗右侧装不下时
-        // placeMenu 自己回落到下方。宽度按 Proma 的行动作菜单收到 160/200
+        // placeMenu 自己回落到下方。宽度按 Proma 的行动作菜单收到 160，上限 240：
+        // 200 装不下「Delete permanently」+ 工作台文件数 hint，label 会被截成半句
         placement="right"
         panelMinWidth={160}
-        panelMaxWidth={200}
+        panelMaxWidth={240}
         trigger={({ open, toggle }) => (
           <IconButton
             label="Task actions"
             size={20}
             onClick={() => {
-              setStep("main");
+              exitDeleteStep();
               toggle();
             }}
             style={{

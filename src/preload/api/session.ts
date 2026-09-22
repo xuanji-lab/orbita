@@ -3,7 +3,7 @@
  * 界面上叫 task，代码里叫 session（docs/ubiquitous-language.md）。
  */
 import { ipcRenderer } from "electron";
-import { ipcChannels } from "../../shared/agent-ipc.ts";
+import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type {
   Carryover,
   CarryoverDraft,
@@ -23,6 +23,9 @@ export const sessionApi = {
   rename: (id: string, title: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRename, id, title),
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.sessionDelete, id),
+  /** 工作台现状（路径 / 存不存在 / 递归文件数）。删除确认项吃它——先把后果说出来再删 */
+  workbenchStat: (id: string): Promise<SessionWorkbenchStat> =>
+    ipcRenderer.invoke(ipcChannels.sessionWorkbenchStat, id),
   pin: (id: string, pinned: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionPin, id, pinned),
   /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
