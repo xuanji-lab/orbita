@@ -378,7 +378,7 @@ describe("applyChannelSend", () => {
 });
 
 describe("applySpeak", () => {
-  test("author user，父侧写一条发送侧标记，投递发生", async () => {
+  test("author user，不写父侧标记（不变量：标记顶替 pi 本子里的 user 消息，代父发言没有对应的接收方），投递发生", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT }));
     await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
     const { deps, submitCalls } = fakeDeps();
@@ -392,9 +392,7 @@ describe("applySpeak", () => {
     const mark = parentDetail?.transcript.find(
       (record) => record.role === "channel-mark" && record.messageId === message.id,
     );
-    assert.equal(mark !== undefined, true);
-    assert.equal(mark !== undefined && "peerId" in mark ? mark.peerId : undefined, CHILD);
-    assert.equal(mark !== undefined && "from" in mark ? mark.from : undefined, "parent");
+    assert.equal(mark, undefined);
 
     // 子空闲：投递退化为普通开轮
     assert.equal(submitCalls.length, 1);

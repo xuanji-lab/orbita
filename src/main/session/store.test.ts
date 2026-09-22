@@ -4,9 +4,9 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { SessionStore } from "./store.ts";
+import { branchRoles, SessionStore } from "./store.ts";
 import { ChannelStore } from "../channel/store.ts";
-import type { SessionMeta } from "../../shared/session.ts";
+import type { ChannelMarkRecord, SessionMeta } from "../../shared/session.ts";
 import type { ChannelMessage } from "../../shared/channel.ts";
 
 const ID = "a7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c";
@@ -528,6 +528,46 @@ describe("SessionStore.branch", () => {
     const plan = await store.prepareBranch(ID, "a1");
     await assert.rejects(() => store.commitBranch(plan, null), /no branch session file/);
     assert.equal(await store.load(plan.newId), null);
+  });
+});
+
+describe("branchRoles —— channel-mark 计作 user（子会话 2026-09-23 不变量修正）", () => {
+  const mark = (id: string): ChannelMarkRecord => ({
+    role: "channel-mark",
+    id,
+    peerId: "child-1",
+    messageId: "msg-1",
+    from: "child",
+    kind: "question",
+    timestamp: 4000,
+  });
+
+  test("channel-mark 顶替的是 pi 本子里的一条 user 消息，按位对账要把它算作 user", () => {
+    const records = [
+      { id: "u1", role: "user", content: [{ type: "text", text: "问" }], timestamp: 1000 } as TranscriptItem,
+      { id: "a1", role: "assistant", content: [{ type: "text", text: "答" }], model: { provider: "zai", id: "glm-5.3" }, timestamp: 2000, status: "complete", stopReason: "stop" } as TranscriptItem,
+      mark("k1"),
+      { id: "a2", role: "assistant", content: [{ type: "text", text: "收到" }], model: { provider: "zai", id: "glm-5.3" }, timestamp: 5000, status: "complete", stopReason: "stop" } as TranscriptItem,
+    ];
+    assert.deepEqual(branchRoles(records), ["user", "assistant", "user", "assistant"]);
+  });
+
+  test("普通 user/assistant 与空 error 回答的既有规则不受影响", () => {
+    const emptyError = {
+      id: "e1",
+      role: "assistant",
+      content: [],
+      model: { provider: "zai", id: "glm-5.3" },
+      timestamp: 3000,
+      status: "error",
+      stopReason: "error",
+    } as TranscriptItem;
+    const records = [
+      { id: "u1", role: "user", content: [{ type: "text", text: "问" }], timestamp: 1000 } as TranscriptItem,
+      emptyError,
+      mark("k1"),
+    ];
+    assert.deepEqual(branchRoles(records), ["user", "user"]);
   });
 });
 

@@ -93,10 +93,20 @@ export function isEmptyErrorAssistant(record: SessionRecord): boolean {
  * 不写新记录，这里跳的是谓词收敛之前存的存量；pi 侧虽然收了这类条目，但
  * branch-cut.ts 对它们施加同一个排除谓词，两侧因此对得上。其余罕见漂移由 agent
  * 进程的对账守卫兜底——拒绝分支优于切错位置。
+ *
+ * **`channel-mark` 记为 `"user"`**（子会话 2026-09-23 不变量修正）：一条通道标记
+ * 顶替的正是 pi 本子里的一条 user 消息（`ChannelMarkRecord` 的接收侧标记，见
+ * `shared/session.ts`）——按位对账时这本账数的是「标记」而 pi 那本数的是「信封
+ * user 消息」，不把它算作 user 的话，带通道投递的会话在这两本账之间会错位一位，
+ * 之后的每一条都对不上，分支会被拒绝。
  */
 export function branchRoles(records: readonly SessionRecord[]): ("user" | "assistant")[] {
   const roles: ("user" | "assistant")[] = [];
   for (const record of records) {
+    if (record.role === "channel-mark") {
+      roles.push("user");
+      continue;
+    }
     if (record.role !== "user" && record.role !== "assistant") continue;
     if (isEmptyErrorAssistant(record)) continue;
     roles.push(record.role);

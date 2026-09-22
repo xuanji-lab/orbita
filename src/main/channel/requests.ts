@@ -318,17 +318,11 @@ export async function applySpeak(deps: ChannelDeps, input: ChannelSpeakInput): P
     createdAt: Date.now(),
   };
   await deps.channels.append(key, message);
-  // 发送侧标记：用户代父发言没有工具调用可投影，主进程显式给父会话写一条
-  // （模型经工具发的不需要——发送侧的对话流里已经有那次工具调用）。
-  await deps.sessions.record(parent.id, {
-    role: "channel-mark",
-    id: randomUUID(),
-    peerId: child.id,
-    messageId: message.id,
-    from: "parent",
-    kind: "reply",
-    timestamp: message.createdAt,
-  });
+  // 不写父侧标记（子会话 2026-09-23 不变量修正）：ChannelMarkRecord 顶替的是 pi
+  // 本子里的一条 user 消息（接收侧标记）——代父发言没有对应的接收方，父的 pi
+  // 本子里没有多出一条 user 消息，这里写一条标记就会破坏「每条标记都顶替一条
+  // user 消息」的不变量，按位对账（branchRoles）会失真。用户代父说的话在通道列
+  // 里可见（下一个 PR），父的对话流不需要它。
   await broadcastAfterAppend(deps, key, message);
   await deliverToChild(deps, child, parent, message);
   return message;
