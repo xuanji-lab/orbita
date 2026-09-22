@@ -1,21 +1,23 @@
 import { useEffect, useState, type RefObject } from "react";
 
 /**
- * 量出「本侧栏 + chat 主区」的总宽 T（px）——`clampSideWidth` 的第二个参数。
+ * 量出 pane 的总宽 P（px）——「chat 主区 + 右栏」之和，`clampRightPanelWidth` 的
+ * 第二个参数。**左侧栏不在其中**：它走固定像素区间，比例规则只约束 chat 与右栏
+ * 这一对（2026-09-22 wafo 澄清）。
  *
- * 为什么要量两个元素而不是只量 chat：T 必须是**不随本侧栏宽度变化的常量**，
- * 否则夹取会自激。chat 主区（`.pane-main`）是 `flex: 1`，侧栏拿多少它就让多少，
- * 两者之和恒等于这一侧可分配的空间——所以「自己的实际宽 + chat 的实际宽」既是
- * 正确的 T，也天然抗住「落盘值越界、渲染值被夹小」那一步（量的是渲染后的宽，
+ * 为什么要量两个元素而不是只量 chat：P 必须是**不随右栏宽度变化的常量**，
+ * 否则夹取会自激。chat 主区（`.pane-main`）是 `flex: 1`，右栏拿多少它就让多少，
+ * 两者之和恒等于 pane 可分配的空间——所以「自己的实际宽 + chat 的实际宽」既是
+ * 正确的 P，也天然抗住「落盘值越界、渲染值被夹小」那一步（量的是渲染后的宽，
  * 不是想要的宽；拿 state 去加 chat 会在夹取生效时来回震荡）。
  *
- * 用 ResizeObserver 而不是 window.resize：需要跟的不止窗口——右面板开合会改
- * chat 的宽（于是改左栏的 T）、左栏拖动会改 chat 的宽，这些都不发 resize 事件。
+ * 用 ResizeObserver 而不是 window.resize：需要跟的不止窗口——左侧栏拖宽会改 chat
+ * 的宽（于是改 P）、右栏自己拖动也会改 chat 的宽，这些都不发 resize 事件。
  *
- * `active` 为假（左栏折成图标条、右面板转窄窗覆盖层）时不量也不夹：那两种形态的
- * 宽度是写死的，量出来的 T 只会误导。返回 0 = 量不到，调用方应原样用未夹的宽度。
+ * `active` 为假（右栏转窄窗覆盖层）时不量也不夹：那种形态的宽度是写死的，
+ * 量出来的 P 只会误导。返回 0 = 量不到，调用方应原样用未夹的宽度。
  */
-export function useSideTotalWidth(ref: RefObject<HTMLElement | null>, active: boolean): number {
+export function usePaneTotalWidth(ref: RefObject<HTMLElement | null>, active: boolean): number {
   const [total, setTotal] = useState(0);
   useEffect(() => {
     if (!active) {

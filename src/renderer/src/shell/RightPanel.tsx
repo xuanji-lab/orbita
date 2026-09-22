@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Icon } from "../shell/Icon";
-import { clampSideWidth, RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
-import { useSideTotalWidth } from "./side-width.ts";
+import { clampRightPanelWidth, RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
+import { usePaneTotalWidth } from "./side-width.ts";
 
 /**
  * 右侧面板壳（2026-09-13 裁决）：Skills / MCP / 辅助对话三个菜单共用这**一个**
@@ -25,17 +25,18 @@ export function RightPanelSlot(props: {
   /** 拖宽中禁掉 width 过渡——实时跟手（同 .drawer.dragging 的纪律） */
   const [resizing, setResizing] = useState(false);
   /**
-   * 区间相对 chat 宽度（最小 1/3、最大 2/3），所以**渲染时也要夹一次**，不只拖动时：
+   * 区间是 pane（chat 主区 + 右栏）的 1/3–2/3，所以**渲染时也要夹一次**，不只拖动时：
    * 盘上那个宽度可能是在更宽的窗口（或另一台显示器）上存的。只夹渲染值、
    * 不回写 settings；窄窗转覆盖层时宽度写死 320，那时不量也不夹。
    */
-  const total = useSideTotalWidth(asideRef, !narrow);
-  const width = total > 0 ? clampSideWidth(props.width, total) : props.width;
+  const paneTotal = usePaneTotalWidth(asideRef, !narrow);
+  const width = paneTotal > 0 ? clampRightPanelWidth(props.width, paneTotal) : props.width;
 
   /**
-   * 拖宽（4-0）：左移变宽。区间**按 chat 宽度算**——最小 chat 的 1/3、最大 2/3
-   * （2026-09-22 wafo 裁决，左右同一条规则），换算与地板见 clampSideWidth。
-   * T（面板 + chat 主区）在拖动中恒定：pane 让出多少面板就长多少，所以不必每帧重测。
+   * 拖宽（4-0）：左移变宽。区间**按 pane 算**——右栏 ∈ [P/3, 2P/3]，
+   * P = chat 主区 + 右栏（2026-09-22 wafo 裁决：这一对只管 chat 与右栏，与左侧栏无关），
+   * 地板见 clampRightPanelWidth。
+   * P 在拖动中恒定：pane 让出多少面板就长多少，所以不必每帧重测。
    * 拖动中不做动画；松手不 snap；双击热区回 320（同样夹一次）。
    */
   const startResize = (event: React.PointerEvent): void => {
@@ -46,7 +47,7 @@ export function RightPanelSlot(props: {
     setResizing(true);
     const startX = event.clientX;
     const startWidth = panel.getBoundingClientRect().width;
-    const clamp = (value: number): number => clampSideWidth(value, total);
+    const clamp = (value: number): number => clampRightPanelWidth(value, paneTotal);
     // 拖动期间全文选择与光标都固定成拖拽语义，松手还原
     const previousSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
@@ -97,7 +98,7 @@ export function RightPanelSlot(props: {
         <span
           onPointerDown={startResize}
           onDoubleClick={() =>
-            props.onWidthCommit(clampSideWidth(RIGHT_PANEL_WIDTH_DEFAULT, total))
+            props.onWidthCommit(clampRightPanelWidth(RIGHT_PANEL_WIDTH_DEFAULT, paneTotal))
           }
           title="Drag to resize · double-click to reset"
           style={{
