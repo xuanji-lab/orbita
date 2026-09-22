@@ -838,8 +838,10 @@ function SessionRow(props: {
   const { meta, session } = props;
   const [hover, setHover] = useState(false);
   /**
-   * 行内有东西拿到焦点。**悬停出现的键必须也为键盘出现**——只认 hover 的话，
+   * 行内有东西拿到**键盘**焦点。悬停出现的键必须也为键盘出现——只认 hover 的话，
    * Tab 到星标键时它还是 opacity 0，焦点环落在一个看不见的方块上。
+   * **只认 :focus-visible**：鼠标点星也会让按钮拿到焦点，若认普通 focus，点过的那行会
+   * 一直挂着描边星直到焦点走开（wafo 2026-09-22 实测：「点了别的行，之前那个描边星才消失」）。
    * React 的 onFocus/onBlur 走 focusin/focusout，会从子节点冒上来。
    */
   const [focused, setFocused] = useState(false);
@@ -934,7 +936,7 @@ function SessionRow(props: {
       style={{ display: "flex", alignItems: "center", gap: 2 }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onFocus={() => setFocused(true)}
+      onFocus={(event) => setFocused(event.target.matches(":focus-visible"))}
       onBlur={() => setFocused(false)}
     >
       {editing ? (
@@ -967,9 +969,10 @@ function SessionRow(props: {
       {/**
         星标：**既是标识也是开关**，独立小槽，不占状态位——状态位归运行态
         （running/failed/idle），置顶已占了 idle 档，再挤进去就要三选一。
-        已星标常显（实心），未星标只在悬停/聚焦时浮出描边形——列表静止时
-        不摆一排灰星星。颜色中性（secondary/tertiary），**不用 accent**：
-        accent 是主操作的地盘，而星标是用户自己的标记，不是这一屏的主操作。
+        已星标常显（实心，**accent 色**），未星标只在悬停/键盘聚焦时浮出描边形（tertiary）——
+        列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
+        是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
+        与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
       */}
       <IconButton
         label={meta.starred === true ? "Unstar this task" : "Star this task"}
@@ -978,8 +981,7 @@ function SessionRow(props: {
         onClick={() => session.starSession(meta.id, meta.starred !== true)}
         style={{
           borderRadius: "var(--radius-xs)",
-          color:
-            meta.starred === true ? "var(--color-text-secondary)" : "var(--color-text-tertiary)",
+          color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
           opacity: meta.starred === true || hover || focused ? 1 : 0,
           transition: "opacity var(--duration-instant) var(--ease-standard)",
         }}
