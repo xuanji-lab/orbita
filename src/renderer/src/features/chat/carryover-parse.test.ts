@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   collectScanAnswer,
   locateMessageRange,
+  matchCarryoverMessage,
   parseCarryoverResponse,
   scanTurnModel,
 } from "./carryover-parse.ts";
@@ -147,6 +148,54 @@ describe("parseCarryoverResponse", () => {
 
   test("尾围栏缺失（流被截断）→ null", () => {
     assert.equal(parseCarryoverResponse('```json\n{"carryovers": [{"title": "截断'), null);
+  });
+});
+
+describe("matchCarryoverMessage", () => {
+  const SCAN = '{"carryovers": [{"title": "补 README", "detail": "摘录"}]}';
+
+  test("整条恰好一个 fenced json 块 → 命中", () => {
+    assert.deepEqual(matchCarryoverMessage(`\`\`\`json\n${SCAN}\n\`\`\``), [
+      { title: "补 README", detail: "摘录" },
+    ]);
+  });
+
+  test("空数组也命中（没有遗留也是答案，卡片显示无遗留）", () => {
+    assert.deepEqual(matchCarryoverMessage('```json\n{"carryovers": []}\n```'), []);
+  });
+
+  test("无语言标注的围栏也命中", () => {
+    assert.deepEqual(matchCarryoverMessage(`\`\`\`\n${SCAN}\n\`\`\``), [
+      { title: "补 README", detail: "摘录" },
+    ]);
+  });
+
+  test("夹杂引导文字 → null（卡片会整条替换原文，不能吞字）", () => {
+    assert.equal(matchCarryoverMessage(`扫描完成：\n\n\`\`\`json\n${SCAN}\n\`\`\``), null);
+    assert.equal(matchCarryoverMessage(`\`\`\`json\n${SCAN}\n\`\`\`\n以上。`), null);
+  });
+
+  test("多个 fenced 块 → null", () => {
+    assert.equal(
+      matchCarryoverMessage(
+        `\`\`\`json\n${SCAN}\n\`\`\`\n\n\`\`\`json\n{"carryovers": []}\n\`\`\``,
+      ),
+      null,
+    );
+  });
+
+  test("半截围栏（尾栏缺失 / 只有内容没有栏）→ null", () => {
+    assert.equal(matchCarryoverMessage(`\`\`\`json\n${SCAN}`), null);
+    assert.equal(matchCarryoverMessage(SCAN), null);
+  });
+
+  test("非 json 语言标注 → null（那是普通代码块，按 markdown 渲染）", () => {
+    assert.equal(matchCarryoverMessage(`\`\`\`ts\n${SCAN}\n\`\`\``), null);
+  });
+
+  test("围栏形状对但 JSON 坏 / 结构不符 → null", () => {
+    assert.equal(matchCarryoverMessage('```json\n{"carryovers": [}\n```'), null);
+    assert.equal(matchCarryoverMessage('```json\n{"items": []}\n```'), null);
   });
 });
 

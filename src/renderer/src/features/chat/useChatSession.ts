@@ -195,7 +195,7 @@ export interface ChatSession {
    */
   /** 当前查看会话的扫描进行态：按钮转圈与禁用的依据 */
   closingScan: boolean;
-  /** 扫描完成待确认的清单；非 null 时 ChatView 弹 CarryoverChecklist */
+  /** 扫描完成待确认的清单；正在查看发起会话时在 footer 显示确认卡 */
   scanResult: { sessionId: string; drafts: CarryoverDraft[] } | null;
   /** 点「Mark task done」：正常路径发扫描，只读（无 pi 本子）降级为纯标记 */
   startClosingRitual: () => void;
@@ -1397,7 +1397,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     sessionId: string;
     baseline: number;
   } | null>(null);
-  /** 扫描完成待确认的清单；非 null 时 ChatView 弹 CarryoverChecklist */
+  /** 扫描完成待确认的清单；非 null 且正在查看发起会话时，ChatView 在 footer 显示确认卡 */
   const [scanResult, setScanResult] = useState<{
     sessionId: string;
     drafts: CarryoverDraft[];
@@ -1409,8 +1409,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
 
   /** 打开另一条会话：上一轮的提示不是那条会话的事，不能跟过来。
    *  待确认的清单（scanResult）**不清**：它是发起会话的未完成动作，切走再切回
-   *  还在——静默丢弃会让「点了 Mark done 却什么都没发生」。弹层是 modal，用户
-   *  必须处理它，确认 / 取消都按 scanResult.sessionId 定向，不会错标当前会话。 */
+   *  还在——静默丢弃会让「点了 Mark done 却什么都没发生」。确认卡是 inline 浮层
+   *  （只挂在发起会话的 footer），切走时不显示但状态保留；确认 / 取消都按
+   *  scanResult.sessionId 定向，不会错标当前会话。 */
   useEffect(() => {
     setScanNotice(null);
     setScanFailed(null);

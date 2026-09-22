@@ -58,6 +58,8 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { CarryoverChecklist } from "./CarryoverChecklist";
+import { CarryoverScanCard } from "./CarryoverScanCard";
+import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling, knownModelParams } from "@shared/known-providers";
 import { modelMenuItems, useBuiltinCatalog } from "../settings/model-menu";
@@ -428,6 +430,15 @@ export function ChatView(props: {
             {session.approvals[0] && (
               <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
             )}
+            {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示
+                （scanResult 由 hook 查看槽持有，切走再切回还在） */}
+            {session.scanResult !== null && session.scanResult.sessionId === openId && (
+              <CarryoverChecklist
+                drafts={session.scanResult.drafts}
+                onConfirm={session.confirmCarryovers}
+                onCancel={session.cancelCarryovers}
+              />
+            )}
             {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
             <QueueStrip
               items={session.queued}
@@ -451,14 +462,6 @@ export function ChatView(props: {
           onOpenTask={session.openSession}
         />
       </Pane>
-      {/* 收尾仪式的待确认清单：modal，挂哪都在最上层；确认 / 取消都按发起会话定向 */}
-      {session.scanResult !== null && (
-        <CarryoverChecklist
-          drafts={session.scanResult.drafts}
-          onConfirm={session.confirmCarryovers}
-          onCancel={session.cancelCarryovers}
-        />
-      )}
     </>
   );
 }
@@ -513,6 +516,30 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     () => transcript.some((item) => item.role === "tool" && item.status === "running"),
     [transcript],
   );
+  // 收尾扫描回复卡片化：落定的 assistant 消息若整条恰好是一个可解析的 fenced
+  // json 块（扫描回答的 prompt 契约形状），用只读展示卡替代 markdown 渲染——
+  // 原始 json 占屏是噪音（2026-09-22 用户反馈）。streaming 中保持普通流式渲染，
+  // 落定后自然翻转为卡片。判定按整条消息的全部 text 块拼接（与 collectScanAnswer
+  // 同口径：围栏可能被拆在多个 text 块里）；命中后多个 text 单元只在第一个的位置
+  // 渲染一次卡片，其余跳过——整条消息已进卡。消息里命中与 user 关闭无关，
+  // 挂在 records 上（扫描历史会话的旧回答同样卡片化）。
+  const carryoverCards = useMemo(() => {
+    const cards = new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
+    for (const record of records) {
+      if (record.role !== "assistant" || record.status === "streaming") continue;
+      let firstKey: string | null = null;
+      const parts: string[] = [];
+      record.content.forEach((block, index) => {
+        if (block.type !== "text") return;
+        if (firstKey === null) firstKey = `${record.id}:${index}`;
+        parts.push(block.text);
+      });
+      if (firstKey === null) continue;
+      const drafts = matchCarryoverMessage(parts.join(""));
+      if (drafts !== null) cards.set(record.id, { drafts, firstKey });
+    }
+    return cards;
+  }, [records]);
   // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
   // 那轮没折叠就不挂，红字自带的图标是全部。
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
@@ -542,6 +569,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
                 onOpenTask={props.onOpenTask}
+                carryoverCards={carryoverCards}
               />
             ) : (
               <EntryView
@@ -550,6 +578,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 activeThinkingKey={activeThinkingKey}
                 turnActive={turnActive}
                 onOpenTask={props.onOpenTask}
+                carryoverCards={carryoverCards}
               />
             )}
             {branchAfter !== undefined && (
@@ -1118,11 +1147,20 @@ function EntryView(props: {
   activeThinkingKey: string | null;
   turnActive: boolean;
   onOpenTask?: (sessionId: string) => void;
+  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
 }) {
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") return <UserBubble item={entry.item} />;
-  if (entry.kind === "text") return <MarkdownBlock text={entry.text} />;
+  if (entry.kind === "text") {
+    const card = props.carryoverCards.get(entry.messageId);
+    if (card !== undefined) {
+      // 同一条消息的多个 text 块只渲染一张卡（第一个块的位置），其余已并进卡里
+      if (entry.key !== card.firstKey) return null;
+      return <CarryoverScanCard drafts={card.drafts} />;
+    }
+    return <MarkdownBlock text={entry.text} />;
+  }
   if (entry.kind === "thinking") {
     return (
       <ThinkingLine text={entry.text} active={entry.key === props.activeThinkingKey} blockKey={entry.key} />
@@ -1170,6 +1208,7 @@ function TurnRollupLine(props: {
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   onOpenTask?: (sessionId: string) => void;
+  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
 }) {
   const [open, setOpen] = useState(false);
   const { group } = props;
@@ -1227,6 +1266,7 @@ function TurnRollupLine(props: {
               activeThinkingKey={null}
               turnActive={false}
               onOpenTask={props.onOpenTask}
+              carryoverCards={props.carryoverCards}
             />
           ))}
         </div>

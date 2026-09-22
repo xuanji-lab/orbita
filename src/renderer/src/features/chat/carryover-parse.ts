@@ -116,6 +116,33 @@ export function parseCarryoverResponse(markdown: string): CarryoverDraft[] | nul
   return null;
 }
 
+/**
+ * 整条消息是否**恰好是**一个可解析的 fenced json 块：是 → 返回草稿数组（空数组
+ * 合法），否则 null。供消息流卡片化用——扫描回答按 prompt 契约就长这样，命中后
+ * 整条消息不再按 markdown 渲染，改用只读展示卡。
+ *
+ * 与 parseCarryoverResponse 的分工：后者是「从一段 markdown 里尽力捞」，容忍前后
+ * 杂文字（解析重试路径用）；这个是「整条消息就是答案」的严格形状判定。判定必须
+ * 严格：卡片会整条替换原文，多吞一个字都是丢内容——夹杂引导文字 / 多个块 /
+ * 围栏未闭合 / 语言标注不是 json，一律 null 走普通渲染，宁可不卡也不吞字。
+ */
+export function matchCarryoverMessage(text: string): CarryoverDraft[] | null {
+  const trimmed = text.trim();
+  const lines = trimmed.split("\n");
+  // 至少三行：开栏 / 内容 / 收栏
+  if (lines.length < 3) return null;
+  const open = FENCE_RE.exec(lines[0] ?? "");
+  if (open === null) return null;
+  const lang = open[2] ?? "";
+  if (!(lang === "" || lang.toLowerCase() === "json")) return null;
+  // 中间不许再出现围栏行（出现就是多块）；末行必须是收栏（缺了就是被截断）
+  for (let i = 1; i < lines.length - 1; i += 1) {
+    if (FENCE_RE.test(lines[i] ?? "")) return null;
+  }
+  if (FENCE_RE.exec(lines[lines.length - 1] ?? "") === null) return null;
+  return parseCarryoverResponse(trimmed);
+}
+
 /** 一个块的内容 → 草稿数组。形状差一点就 null（见文件头的容错口径）。 */
 function parseBlock(text: string): CarryoverDraft[] | null {
   let value: unknown;
