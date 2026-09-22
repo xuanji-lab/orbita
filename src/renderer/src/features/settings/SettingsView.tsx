@@ -14,6 +14,7 @@ import {
   type SettingsPatch,
   type ThemePreference,
 } from "@shared/settings";
+import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 
 /**
  * 设置面。**它不是弹窗，是内容面的另一种内容**——tab 列表浮在侧栏上（透明、无面），
@@ -93,6 +94,27 @@ const THEME_LABELS: Record<ThemePreference, string> = {
 /** 自动压缩的档位（%）。与 shared 的合法区间 [5,50] 对齐，档距是「一眼分得清」的粒度 */
 const COMPACTION_CHOICES = [30, 25, 20, 15, 10, 5] as const;
 
+/**
+ * 「退回继承」菜单的公共形状：Title model / Sub-session model / Sub-session thinking
+ * 三处菜单都是「第一项退回上游（session 或 parent）、其后是具体可选值」——集合与文案
+ * 各不相同，但「fallback 项 + 选中态 + null 清除」这段接线相同，抽出来避免三处重复。
+ */
+function withInheritedFirst(
+  fallback: { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void },
+  items: MenuItem[],
+): MenuItem[] {
+  return [
+    {
+      id: fallback.id,
+      label: fallback.label,
+      hint: fallback.hint,
+      checked: fallback.inherited,
+      onSelect: fallback.onSelect,
+    },
+    ...items,
+  ];
+}
+
 function General(props: {
   settings: AppSettings;
   providers: readonly ProviderDto[];
@@ -106,23 +128,63 @@ function General(props: {
   const gitAttribution = props.settings.gitAttribution ?? true;
 
   const catalog = useBuiltinCatalog();
+  const usable = usableProviders(props.providers);
+
   const titleModel = props.settings.titleModel;
-  const titleModelItems: MenuItem[] = [
+  const titleModelItems: MenuItem[] = withInheritedFirst(
     {
       id: "same-as-session",
       label: "Same as session",
       hint: "Use whichever model the task is running",
-      checked: titleModel === undefined,
+      inherited: titleModel === undefined,
       // null 而不是 undefined：补丁里的 undefined 是「这个键没改」，选不回默认
       onSelect: () => props.onChange({ titleModel: null }),
     },
-    ...modelMenuItems({
-      providers: usableProviders(props.providers),
+    modelMenuItems({
+      providers: usable,
       catalog,
       selected: titleModel ?? null,
       onSelect: (providerId, modelId) => props.onChange({ titleModel: { providerId, modelId } }),
     }),
-  ];
+  );
+
+  // 子会话的默认模型：同 titleModel 的「继承 + null 清除」语义，退回点是父会话而不是命名会话
+  const subSessionModel = props.settings.subSessionModel;
+  const subSessionModelItems: MenuItem[] = withInheritedFirst(
+    {
+      id: "same-as-parent",
+      label: "Same as parent",
+      hint: "Use the model the delegating task is running",
+      inherited: subSessionModel === undefined,
+      onSelect: () => props.onChange({ subSessionModel: null }),
+    },
+    modelMenuItems({
+      providers: usable,
+      catalog,
+      selected: subSessionModel ?? null,
+      onSelect: (providerId, modelId) => props.onChange({ subSessionModel: { providerId, modelId } }),
+    }),
+  );
+
+  // 子会话的默认思考档：菜单集合来自词汇表全量（THINKING_LEVELS），不按某个模型的
+  // 支持集裁剪——这里选的是「派出时的默认值」，还不知道子会话最终落在哪个模型上
+  const subSessionThinking = props.settings.subSessionThinking;
+  const subSessionThinkingItems: MenuItem[] = withInheritedFirst(
+    {
+      id: "same-as-parent",
+      label: "Same as parent",
+      hint: "Use the thinking level the delegating task is running",
+      inherited: subSessionThinking === undefined,
+      onSelect: () => props.onChange({ subSessionThinking: null }),
+    },
+    THINKING_LEVELS.map((level) => ({
+      id: level,
+      label: THINKING_LEVEL_LABELS[level].label,
+      checked: subSessionThinking === level,
+      onSelect: () => props.onChange({ subSessionThinking: level }),
+    })),
+  );
+
   return (
     <div style={{ display: "grid", gap: "var(--space-6)", alignContent: "start" }}>
       <Section label="Appearance">
@@ -210,6 +272,56 @@ function General(props: {
                   chevron
                 >
                   {titleModel?.modelId ?? "Same as session"}
+                </Chip>
+              )}
+            />
+          }
+        />
+        <Row
+          name="Sub-session model"
+          hint="Default model for sub-sessions a task delegates to. The agent can still pick a model per delegation."
+          control={
+            <Menu
+              items={subSessionModelItems}
+              searchable
+              trigger={({ open, toggle }) => (
+                <Chip
+                  active={open}
+                  title={
+                    subSessionModel === undefined
+                      ? "Sub-sessions use the model the delegating task is running"
+                      : `${subSessionModel.providerId} · ${subSessionModel.modelId}`
+                  }
+                  onClick={toggle}
+                  chevron
+                >
+                  {subSessionModel?.modelId ?? "Same as parent"}
+                </Chip>
+              )}
+            />
+          }
+        />
+        <Row
+          name="Sub-session thinking"
+          hint="Default thinking level for sub-sessions a task delegates to. The agent can still pick a level per delegation."
+          control={
+            <Menu
+              items={subSessionThinkingItems}
+              panelMinWidth={112}
+              trigger={({ open, toggle }) => (
+                <Chip
+                  active={open}
+                  title={
+                    subSessionThinking === undefined
+                      ? "Sub-sessions use the thinking level the delegating task is running"
+                      : THINKING_LEVEL_LABELS[subSessionThinking].label
+                  }
+                  onClick={toggle}
+                  chevron
+                >
+                  {subSessionThinking === undefined
+                    ? "Same as parent"
+                    : THINKING_LEVEL_LABELS[subSessionThinking].label}
                 </Chip>
               )}
             />
