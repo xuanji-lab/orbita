@@ -475,6 +475,9 @@ body {
   width: 100%;
   height: 100%;
   stroke-width: var(--icon-stroke, 2);
+  /* lucide 源串上是 fill="none"；CSS 优先级高于 presentation attribute，
+     所以填实只要翻这个变量（Icon 的 fill 属性），缺省与原来完全一致 */
+  fill: var(--icon-fill, none);
 }
 
 /*

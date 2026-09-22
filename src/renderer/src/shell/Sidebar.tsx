@@ -307,7 +307,7 @@ export function Sidebar(props: {
           </>
         ) : starredOnly && scoped.length === 0 ? (
           /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
-          <Empty>No starred tasks yet. Star a task from its menu to find it here.</Empty>
+          <Empty>No starred tasks yet. Hover a task and click its star to find it here.</Empty>
         ) : (
           <>
             {(!starredOnly || workspaceMatches.length > 0) && (
@@ -822,7 +822,9 @@ function NavRow(props: {
 /**
  * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**。
  *
- * 右边是三个点，不是一排图标：288px 的一行挂不下六个动作。
+ * 右边是**一个星标键加三个点**，不是一排图标：288px 的一行挂不下六个动作。
+ * 星标是唯一挂在行上的动作——它是一天里按得最多的那个（Proma 的悬停即星标，
+ * 2026-09-22 wafo 点名），走菜单等于「点两下菜单换一个布尔」。
  * **两处破坏性/有去处的动作在菜单里仍然是两段式**——删除要确认，
  * 转移要选目标——都靠 `keepOpen` 把菜单原地换成第二组项，
  * 「先讲后果再动作」不因为换了容器就省掉。
@@ -835,6 +837,12 @@ function SessionRow(props: {
 }) {
   const { meta, session } = props;
   const [hover, setHover] = useState(false);
+  /**
+   * 行内有东西拿到焦点。**悬停出现的键必须也为键盘出现**——只认 hover 的话，
+   * Tab 到星标键时它还是 opacity 0，焦点环落在一个看不见的方块上。
+   * React 的 onFocus/onBlur 走 focusin/focusout，会从子节点冒上来。
+   */
+  const [focused, setFocused] = useState(false);
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState<"main" | "move" | "delete">("main");
   const live = meta.id === session.sessionId;
@@ -890,12 +898,8 @@ function SessionRow(props: {
               icon: meta.pinned ? "pin-off" : "pin",
               onSelect: () => session.pinSession(meta.id, !meta.pinned),
             },
-            {
-              id: "star",
-              label: meta.starred ? "Unstar" : "Star",
-              icon: meta.starred ? "star-off" : "star",
-              onSelect: () => session.starSession(meta.id, !meta.starred),
-            },
+            // Star / Unstar 不在这儿——它已经是行上的悬停键（一次点击，
+            // 不必开菜单）。同一个动作留两个入口只会让菜单更长、更难扫
             {
               id: "move",
               label: "Move to…",
@@ -930,6 +934,8 @@ function SessionRow(props: {
       style={{ display: "flex", alignItems: "center", gap: 2 }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
     >
       {editing ? (
         <span style={{ flex: 1, minWidth: 0, padding: "var(--space-1)" }}>
@@ -959,27 +965,36 @@ function SessionRow(props: {
         />
       )}
       {/**
-        星标的价值标识：独立小槽，不占状态位——状态位归运行态（running/failed/idle），
-        置顶已占了 idle 档，再挤进去就要三选一。星标不参与排序，也不随运行态消失，
-        所以常驻在行尾、动作键之前。tone 走 secondary（与置顶同档中性），
-        **不用 accent**——accent 是主操作的地盘，一屏一个。
+        星标：**既是标识也是开关**，独立小槽，不占状态位——状态位归运行态
+        （running/failed/idle），置顶已占了 idle 档，再挤进去就要三选一。
+        已星标常显（实心），未星标只在悬停/聚焦时浮出描边形——列表静止时
+        不摆一排灰星星。颜色中性（secondary/tertiary），**不用 accent**：
+        accent 是主操作的地盘，而星标是用户自己的标记，不是这一屏的主操作。
       */}
-      {meta.starred === true && (
-        <span
-          title="Starred"
-          style={{
-            display: "grid",
-            placeItems: "center",
-            flex: "0 0 auto",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          <Icon name="star" size={12} strokeWidth={1.8} />
-        </span>
-      )}
+      <IconButton
+        label={meta.starred === true ? "Unstar this task" : "Star this task"}
+        title={meta.starred === true ? "Starred · click to unstar" : "Star this task"}
+        size={20}
+        onClick={() => session.starSession(meta.id, meta.starred !== true)}
+        style={{
+          borderRadius: "var(--radius-xs)",
+          color:
+            meta.starred === true ? "var(--color-text-secondary)" : "var(--color-text-tertiary)",
+          opacity: meta.starred === true || hover || focused ? 1 : 0,
+          transition: "opacity var(--duration-instant) var(--ease-standard)",
+        }}
+      >
+        <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
+      </IconButton>
       <Menu
         items={items}
         align="end"
+        // 会话行的菜单开在**行的右侧**：开在下方会盖住紧挨着的下一条会话，
+        // 想看别的会话就得先关菜单（2026-09-22 wafo）。窄窗右侧装不下时
+        // placeMenu 自己回落到下方。宽度按 Proma 的行动作菜单收到 160/200
+        placement="right"
+        panelMinWidth={160}
+        panelMaxWidth={200}
         trigger={({ open, toggle }) => (
           <IconButton
             label="Task actions"
@@ -991,7 +1006,7 @@ function SessionRow(props: {
             style={{
               borderRadius: "var(--radius-xs)",
               color: open ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
-              opacity: hover || open ? 1 : 0,
+              opacity: hover || open || focused ? 1 : 0,
               transition: "opacity var(--duration-instant) var(--ease-standard)",
             }}
           >

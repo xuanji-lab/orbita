@@ -62,6 +62,39 @@ describe("placeMenu —— 横向夹回", () => {
   });
 });
 
+describe("placeMenu —— 开在右侧（side=right）", () => {
+  test("右侧装得下：左缘贴锚点右缘 + GAP，顶边与行顶对齐", () => {
+    const placed = placeMenu(anchor({ top: 200, bottom: 232, left: 12, right: 280 }), menu, "end", viewport, "right");
+    assert.equal(placed.left, 286); // right 280 + GAP 6
+    assert.equal(placed.top, 200); // 与行顶齐平，不是行底
+    assert.equal(placed.visible, true);
+  });
+
+  test("右侧装不下：回落到下方那套（含 align 对齐与夹回）", () => {
+    // 视口 400 宽、锚点右缘 280：286 + 200 + 8 = 494 > 400
+    const narrow = { width: 400, height: 800 };
+    const placed = placeMenu(anchor({ top: 200, bottom: 232, left: 12, right: 280 }), menu, "end", narrow, "right");
+    assert.equal(placed.top, 238); // bottom 232 + GAP 6
+    assert.equal(placed.left, 80); // end 对齐：right 280 - width 200
+  });
+
+  test("贴着视口底的行：纵向夹回，菜单尾巴不出屏", () => {
+    const placed = placeMenu(anchor({ top: 760, bottom: 792, left: 12, right: 280 }), menu, "end", viewport, "right");
+    assert.equal(placed.left, 286);
+    assert.equal(placed.top, 800 - 120 - 8);
+  });
+
+  test("菜单比视口还高：保住顶边（宁可截尾，不截头）", () => {
+    const placed = placeMenu(anchor({ top: 40, bottom: 72, left: 12, right: 280 }), { width: 200, height: 900 }, "end", viewport, "right");
+    assert.equal(placed.top, 8);
+  });
+
+  test("缺省仍是下方——右侧是会话行点名要的，不是全局默认", () => {
+    const placed = placeMenu(anchor({ top: 200, bottom: 232, left: 12, right: 280 }), menu, "end", viewport);
+    assert.equal(placed.top, 238);
+  });
+});
+
 describe("placeMenu —— 锚点出视口就是关门信号", () => {
   test("锚点整个滚出上方（bottom ≤ 0）：visible=false", () => {
     const placed = placeMenu(anchor({ top: -80, bottom: -60 }), menu, "start", viewport);

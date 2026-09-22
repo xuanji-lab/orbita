@@ -48,7 +48,6 @@ import trash2 from "../../../../Orbita Design System/assets/icons/lucide/trash-2
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
 import star from "../../../../Orbita Design System/assets/icons/lucide/star.svg?raw";
-import starOff from "../../../../Orbita Design System/assets/icons/lucide/star-off.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
 import undo2 from "../../../../Orbita Design System/assets/icons/lucide/undo-2.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
@@ -108,7 +107,6 @@ const ICONS = {
   "shield-check": shieldCheck,
   sliders,
   star,
-  "star-off": starOff,
   square,
   search,
   terminal,
@@ -143,6 +141,13 @@ export function Icon(props: {
   size?: number;
   strokeWidth?: number;
   spin?: boolean;
+  /**
+   * 填实图标（用 currentColor 填内部）。lucide 是线性图标集，描边与填实在这里是
+   * **同一个图标的两种状态**（未星标 / 已星标），而不是两个图标——
+   * 用 `star` / `star-off` 表达开关会把「已星标」画成一个带斜杠的禁止符。
+   * 填色走 CSS 变量（同 `--icon-stroke`），不改写 SVG 源串。
+   */
+  fill?: boolean;
   style?: React.CSSProperties;
 }) {
   const size = props.size ?? 16;
@@ -150,6 +155,7 @@ export function Icon(props: {
     width: size,
     height: size,
     "--icon-stroke": props.strokeWidth ?? 2,
+    ...(props.fill === true ? { "--icon-fill": "currentColor" } : null),
     ...(props.spin === true ? { animation: "orbita-spin 1s linear infinite" } : null),
     ...props.style,
   } as React.CSSProperties;
