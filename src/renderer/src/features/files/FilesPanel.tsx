@@ -293,7 +293,7 @@ function LabelAction(props: { title: string; onClick: () => void; children: Reac
         width: 20,
         height: 20,
         flex: "0 0 auto",
-        display: "inline-flex",
+        // display 由 .file-hover-act 的 CSS 管（hover 才出现）；写在 inline 会压过 CSS 的 display:none
         alignItems: "center",
         justifyContent: "center",
         padding: 0,
@@ -340,7 +340,8 @@ function TreeRow(props: {
           width: "100%",
           height: 30,
           paddingLeft: `calc(var(--space-3) + ${props.depth} * 16px)`,
-          paddingRight: "var(--space-3)",
+          // 右侧给浮在行上的 Reveal（20px）留位：不留的话 AGENTS.md 的 rules 尾注会被它压住
+          paddingRight: "calc(var(--space-3) + 20px)",
           border: 0,
           background: "transparent",
           font: "inherit",
@@ -400,7 +401,7 @@ function TreeRow(props: {
           top: 5,
           width: 20,
           height: 20,
-          display: "inline-flex",
+          // display 由 .file-hover-act 的 CSS 管（hover 才出现）
           alignItems: "center",
           justifyContent: "center",
           padding: 0,
