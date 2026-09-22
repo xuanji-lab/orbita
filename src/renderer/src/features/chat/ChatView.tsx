@@ -194,6 +194,15 @@ export function ChatView(props: {
     if (el !== null) el.scrollTop = el.scrollHeight;
   }, [openId]);
 
+  // 首页会话卡：有 open 遗留事项的会话优先占卡，剩余槽位按「最近活跃」补齐；
+  // 选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），这里只接线。
+  // **必须在首页分支之外无条件调用**——hook 不能长在条件分支里，首页让位给聊天页时
+  // hooks 数量一变 React 直接卸载整棵树（灰屏）。纯函数毫秒级，恒算不亏。
+  const homeCards = useMemo(
+    () => selectHomeCards(session.sessions, session.carryovers),
+    [session.sessions, session.carryovers],
+  );
+
   const composer = (
     <Composer
       value={session.draft}
@@ -300,16 +309,10 @@ export function ChatView(props: {
         </div>
       );
     }
-    // 会话卡数据：有 open 遗留事项的会话优先占卡（行位换成遗留标题，最多 4 行），
-    // 剩余槽位按现状「最近活跃」补齐；选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），
-    // 这里只接线。遗留事项直接吃引擎缓存（PR-4 的 carryoverList 通道，写操作自动刷新），
-    // 卡不另建缓存、meta 不冗余计数。
+    // 行位换成遗留标题（最多 4 行）；遗留事项直接吃引擎缓存（PR-4 的 carryoverList
+    // 通道，写操作自动刷新），卡不另建缓存、meta 不冗余计数。
     // 点击：卡与行都进该会话（openSession）——滚动定位到 sourceMessageRange 的基建
     // 还未立项（PR-4 面板同款 TODO），落定后行点击可升级为定位，卡保持进会话
-    const homeCards = useMemo(
-      () => selectHomeCards(session.sessions, session.carryovers),
-      [session.sessions, session.carryovers],
-    );
     return (
       <div
         className="home-stage"
