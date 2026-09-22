@@ -102,6 +102,18 @@ describe("ChannelStore.listForParent", () => {
     assert.deepEqual(await store.listForParent(PARENT, async () => "x"), []);
   });
 
+  test("文件名不是会话 id 的 .jsonl（手放 / 残留）跳过，不拖垮整个列表", async () => {
+    await store.append({ parentId: PARENT, childId: CHILD }, message());
+    // 手放的一份非会话 id 的 .jsonl——load() 内部会因 assertSessionId 抛错，
+    // listForParent 必须在这之前就跳过它，否则这条父会话从此开不了轮
+    await writeFile(join(dir, "channels", PARENT, "notes.jsonl"), '{"not":"a channel message"}\n', "utf8");
+    const summaries = await store.listForParent(PARENT, async () => "x");
+    assert.deepEqual(
+      summaries.map((s) => s.childId),
+      [CHILD],
+    );
+  });
+
   test("非 .jsonl 文件忽略", async () => {
     await mkdir(join(dir, "channels", PARENT), { recursive: true });
     await writeFile(join(dir, "channels", PARENT, "stray.txt"), "junk", "utf8");

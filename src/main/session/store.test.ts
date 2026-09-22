@@ -673,6 +673,36 @@ describe("SessionStore.descendants / 级联删", () => {
     assert.deepEqual(await channels.load({ parentId: CHILD, childId: GRANDCHILD }), []);
   });
 
+  /**
+   * 删除顺序回归：`remove()` 必须后代先、自己最后（可见的残留优于隐形的
+   * 残留，同 removeOne 前的顺序纪律）。反过来先删自己的话，两条单条清理
+   * 之间崩溃会让没删完的后代变成「parentId 指向不存在的会话」的隐形残留。
+   *
+   * 用一个只在处理 ID（父）这一步才抛错的 ChannelStore 子类模拟「中途崩溃」：
+   * 若顺序是对的（子先于父），CHILD 在崩溃发生前已经被完整删掉；若顺序反了
+   * （父先于子，旧的 bug），错误会在最开始就抛出，CHILD 完全没被处理过——
+   * 下面对 CHILD 的断言会在那种情况下失败，从而把顺序钉住。
+   */
+  test("清理顺序是后代先、自己最后——中途失败时已处理的后代先于自己被删掉", async () => {
+    class FailOnParent extends ChannelStore {
+      async removeForParent(parentId: string): Promise<void> {
+        if (parentId === ID) throw new Error("模拟处理到父这一步时崩溃");
+        return super.removeForParent(parentId);
+      }
+    }
+    const failingChannels = new FailOnParent(join(dir, "channels"));
+    const storeWithFailure = new SessionStore(join(dir, "sessions"), join(dir, "workbenches"), failingChannels);
+    await storeWithFailure.ensureSession(meta({ id: ID }));
+    await storeWithFailure.ensureSession(meta({ id: CHILD, parentId: ID }));
+
+    await assert.rejects(() => storeWithFailure.remove(ID), /模拟处理到父这一步时崩溃/);
+
+    // 子已经被完整删掉（后代先处理完）；父的自身清理没跑到，还在——
+    // 中途崩溃后父依然可见，不是「parentId 指向不存在的会话」那种隐形残留
+    assert.equal(await storeWithFailure.load(CHILD), null);
+    assert.notEqual(await storeWithFailure.load(ID), null);
+  });
+
   test("只删子：父留着、兄弟不受影响，只删那一份通道文件", async () => {
     const channels = new ChannelStore(join(dir, "channels"));
     const withChannels = new SessionStore(join(dir, "sessions"), join(dir, "workbenches"), channels);
@@ -698,6 +728,23 @@ describe("SessionStore.descendants / 级联删", () => {
     await store.remove(ID);
     assert.equal(await store.load(ID), null);
     // 子的 meta 一起被级联删了（级联不依赖 channels 是否注入）
+    assert.equal(await store.load(CHILD), null);
+  });
+
+  // parentId 成环只可能来自手改 meta（正常生产者——delegate、导入器——都不会造出
+  // 环），但手改是真实存在的输入源：递归不能因此无限展开撑爆栈。
+  test("descendants 在成环的 meta 下也能返回且不挂（防环）", async () => {
+    await store.ensureSession(meta({ id: ID, parentId: CHILD }));
+    await store.ensureSession(meta({ id: CHILD, parentId: ID })); // 互指成环
+    const result = await store.descendants(ID);
+    assert.deepEqual([...result].sort(), [CHILD]); // 环上只收一次，不含自己
+  });
+
+  test("remove 在成环的 meta 下也能结束（防环），两条都被删掉", async () => {
+    await store.ensureSession(meta({ id: ID, parentId: CHILD }));
+    await store.ensureSession(meta({ id: CHILD, parentId: ID })); // 互指成环
+    await store.remove(ID);
+    assert.equal(await store.load(ID), null);
     assert.equal(await store.load(CHILD), null);
   });
 });

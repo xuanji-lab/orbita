@@ -552,16 +552,23 @@ export class SessionStore {
    * 某条会话的全部后代 id（不含自己），基于 `list()` 按 parentId 递归收集。
    * 消费者：`remove()` 的级联、`workbenchStat()` 的求和、`session:delete` 的
    * dispose（先释放全部后代 + 自己在 runtime 里的活跑轮，再删文件）。
+   *
+   * **防环**：parentId 成环只可能来自手改 meta 文件（正常路径——delegate、
+   * 导入器——都不会造出环），但手改是真实存在的输入源，递归不能因此无限展开
+   * 撑爆栈。`visited` 记的是「已经收进结果的 id」，撞到已收过的就跳过、不再
+   * 往下递归——环上的节点只会被收一次。
    */
   async descendants(id: string): Promise<string[]> {
-    return this.descendantsOf(id, await this.list());
+    return this.descendantsOf(id, await this.list(), new Set([id]));
   }
 
-  private descendantsOf(id: string, metas: readonly SessionMeta[]): string[] {
+  private descendantsOf(id: string, metas: readonly SessionMeta[], visited: Set<string>): string[] {
     const result: string[] = [];
     for (const child of childSessions(metas, id)) {
+      if (visited.has(child.id)) continue; // 环：已经收过，不重复收、不再递归
+      visited.add(child.id);
       result.push(child.id);
-      result.push(...this.descendantsOf(child.id, metas));
+      result.push(...this.descendantsOf(child.id, metas, visited));
     }
     return result;
   }
@@ -573,16 +580,33 @@ export class SessionStore {
    *   先删 transcript：留下一条打得开但空的会话，用户看得见、能自己再删一次。
    * 可见的残留优于隐形的残留。
    *
-   * **级联删**（子会话 2026-09-22 裁决）：子会话是母会话的附属物，删母连带删子——
-   * 先读自己的 meta（要拿 parentId 去找自己那条通道），递归删全部直接子，
-   * 删自己名下的全部通道（`channels/<id>/`），若自己有母会话则删自己在母通道
-   * 目录里的那一份，最后才是原有的「删自己」三步。
+   * **级联删**（子会话 2026-09-22 裁决）：子会话是母会话的附属物，删母连带删子。
+   * **基于 `descendants()` 的结果而不是自己递归**（自己递归会在成环的 meta 上
+   * 无限展开，descendants 已经把防环做掉了，不该有第二份递归逻辑）：先收集
+   * 「自己 + 全部后代」这份定死的清单，再逐个做单条清理。
+   *
+   * **清理顺序是后代先、自己最后**——这条和上面「先删 transcript 后删 meta」
+   * 是同一条纪律（可见的残留优于隐形的残留）。反过来先删自己的话：两条
+   * `removeOne` 之间崩溃，没删完的后代 meta 还在，但它们 parentId 链头指向的
+   * 会话已经不在了——从此既进不了左栏（rootSessions 按 parentId 过滤掉带
+   * parentId 的）也摸不到父的 Sub-sessions 入口，变成一份看不见也够不着的
+   * 隐形残留。先删后代、自己最后：中途崩溃时还没删到的那些后代，它们的父
+   * 依然还在，仍然摸得到、看得见——即便这一整套删除操作没跑完，用户至少
+   * 能在界面上发现并再删一次。`descendants()` 是 DFS 前序（自己在前、子孙
+   * 在后），`.reverse()` 换来的正是「子孙先于自己」的序：任一节点在反转后
+   * 的列表里，永远排在它自己的全部后代之后（孙先于子、子先于父），最后
+   * 再把 `id` 本身接到末尾。
    */
   async remove(id: string): Promise<void> {
-    const meta = await this.readMeta(id);
-    for (const child of childSessions(await this.list(), id)) {
-      await this.remove(child.id);
+    const order = [...(await this.descendants(id)).reverse(), id];
+    for (const targetId of order) {
+      await this.removeOne(targetId);
     }
+  }
+
+  /** `remove()` 对单条会话的清理：读自己的 meta（要拿 parentId 去找自己那条通道）→ 删通道 → 删自己三份文件。 */
+  private async removeOne(id: string): Promise<void> {
+    const meta = await this.readMeta(id);
     await this.channels?.removeForParent(id);
     if (meta?.parentId !== undefined) {
       await this.channels?.removeChannel({ parentId: meta.parentId, childId: id });

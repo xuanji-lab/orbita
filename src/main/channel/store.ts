@@ -103,6 +103,10 @@ export class ChannelStore {
     for (const name of names) {
       if (!name.endsWith(LOG_SUFFIX)) continue;
       const childId = name.slice(0, -LOG_SUFFIX.length);
+      // 手放 / 残留的非会话 id 文件（如 notes.jsonl）：跳过，不让它拖垮整个列表——
+      // 同「坏行跳过」纪律。这条父会话每轮开轮都调 listForParent（turn-directories.ts
+      // 的 related），一条坏文件让它抛错就等于这条父会话再也开不了轮。
+      if (!isSessionId(childId)) continue;
       const key: ChannelKey = { parentId, childId };
       const messages = await this.load(key);
       const childTitle = await titleOf(childId);
