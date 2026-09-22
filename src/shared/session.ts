@@ -34,9 +34,46 @@ export interface CompactedRecord {
 }
 
 /**
- * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）或压缩界碑（我们的）。
+ * 通道标记（子会话 2026-09-23 裁决）：父子往来的正文在通道账本里（`channel.ts`），
+ * 会话的 transcript 只落一条指向它的标记——「这一刻通道里发生了一条 X」，对话流里画成一行
+ * 虚线标记，点了跳通道。
+ *
+ * **为什么不是 `visibility: "internal"` 的消息**：标记不是一条被隐藏的消息，它不带正文——
+ * 正文只有一份，在通道里；模型看到的那份在 pi 的本子里（投递时嗂进去），不在这本账。
+ * 和 CompactedRecord 同一个做法：单独一个 role，逐字段校验，坏行跳过。
  */
-export type SessionRecord = TranscriptItem | CompactedRecord;
+export interface ChannelMarkRecord {
+  role: "channel-mark";
+  id: string;
+  /** 通道的另一头：在父的 transcript 里是 childId，在子的 transcript 里是 parentId */
+  peerId: string;
+  /** 指向的通道消息 id（`ChannelMessage.id`） */
+  messageId: string;
+  /** 冷数据，免得画一行标记还要先读通道：谁发的、什么类型 */
+  from: "parent" | "child";
+  kind: "task" | "reply" | "question" | "progress" | "done" | "failed";
+  timestamp: number;
+}
+
+export function isChannelMarkRecord(raw: unknown): raw is ChannelMarkRecord {
+  if (typeof raw !== "object" || raw === null) return false;
+  const value = raw as Record<string, unknown>;
+  return (
+    value["role"] === "channel-mark" &&
+    typeof value["id"] === "string" &&
+    typeof value["peerId"] === "string" &&
+    typeof value["messageId"] === "string" &&
+    (value["from"] === "parent" || value["from"] === "child") &&
+    typeof value["kind"] === "string" &&
+    ["task", "reply", "question", "progress", "done", "failed"].includes(value["kind"]) &&
+    typeof value["timestamp"] === "number"
+  );
+}
+
+/**
+ * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）、压缩界碑或通道标记（我们的）。
+ */
+export type SessionRecord = TranscriptItem | CompactedRecord | ChannelMarkRecord;
 
 /**
  * 逐字段校验，坏值判 false。readLog 靠它分流：**坏掉的 compacted 行按坏行跳过**，
@@ -519,6 +556,11 @@ export function transcriptToMarkdown(
           .map((line) => `> ${line}`)
           .join("\n"),
       );
+      continue;
+    }
+    if (isChannelMarkRecord(item)) {
+      // 通道标记暂不渲染（真正的标记 UI 是后续 PR）。正文只有一份、在通道账本里，
+      // 导出也不该在这里捏一行假的——要看通道往来，去读那份账本
       continue;
     }
     if (item.role === "tool") {

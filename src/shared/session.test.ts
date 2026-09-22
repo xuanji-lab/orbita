@@ -2,6 +2,7 @@ import { deepStrictEqual, doesNotMatch, match, notStrictEqual, strictEqual } fro
 import { describe, it } from "node:test";
 import {
   deriveSessionTitle,
+  isChannelMarkRecord,
   isCompactedRecord,
   parseAgentStats,
   parseSessionMeta,
@@ -233,6 +234,19 @@ describe("recentQueriesFromRecords", () => {
       ["再问", "问"],
     );
   });
+
+  it("通道标记不算可见用户消息——正文在通道账本里，标记不是提问", () => {
+    const mark: Parameters<typeof recentQueriesFromRecords>[0][number] = {
+      role: "channel-mark",
+      id: "k1",
+      peerId: "c1",
+      messageId: "m1",
+      from: "child",
+      kind: "question",
+      timestamp: 3,
+    };
+    deepStrictEqual(recentQueriesFromRecords([userItem("u1", "问"), mark]), ["问"]);
+  });
 });
 
 describe("sortSessions", () => {
@@ -339,6 +353,23 @@ describe("transcriptToMarkdown", () => {
     doesNotMatch(transcriptToMarkdown([empty]), /\*\*User\*\*/);
   });
 
+  it("通道标记暂不渲染——正文只有一份在通道里，导出不在这里捏一行假的", () => {
+    const mark = {
+      role: "channel-mark" as const,
+      id: "k1",
+      peerId: "c1",
+      messageId: "m1",
+      from: "parent" as const,
+      kind: "task" as const,
+      timestamp: 2,
+    };
+    const md = transcriptToMarkdown([user, mark, assistant]);
+    match(md, /重做外壳/);
+    match(md, /好的/);
+    doesNotMatch(md, /channel-mark/);
+    doesNotMatch(md, /k1/);
+  });
+
   it("结尾带换行——文本文件该以换行结束", () => {
     match(transcriptToMarkdown([user]), /\n$/);
   });
@@ -375,6 +406,45 @@ describe("isCompactedRecord", () => {
 
   it("role 冒充不算", () => {
     strictEqual(isCompactedRecord({ ...compacted, role: "assistant" }), false);
+  });
+});
+
+describe("isChannelMarkRecord", () => {
+  const mark = {
+    role: "channel-mark" as const,
+    id: "k1",
+    peerId: "c1",
+    messageId: "m9",
+    from: "child" as const,
+    kind: "question" as const,
+    timestamp: 3,
+  };
+
+  it("完整的一条原样认出；from / kind 两侧的合法值都认", () => {
+    strictEqual(isChannelMarkRecord(mark), true);
+    strictEqual(isChannelMarkRecord({ ...mark, from: "parent", kind: "task" }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "done" }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "failed" }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "reply" }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "progress" }), true);
+  });
+
+  it("缺任一字段都不算——半截标记不能当消息强转", () => {
+    for (const key of ["id", "peerId", "messageId", "from", "kind", "timestamp"]) {
+      strictEqual(isChannelMarkRecord({ ...mark, [key]: undefined }), false, `缺 ${key}`);
+    }
+    strictEqual(isChannelMarkRecord({ ...mark, timestamp: "soon" }), false);
+    strictEqual(isChannelMarkRecord(null), false);
+    strictEqual(isChannelMarkRecord("channel-mark"), false);
+  });
+
+  it("from 只认 parent / child；kind 只认六种——手改出来的其它值整行判坏", () => {
+    strictEqual(isChannelMarkRecord({ ...mark, from: "sibling" }), false);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "notice" }), false);
+  });
+
+  it("role 冒充不算", () => {
+    strictEqual(isChannelMarkRecord({ ...mark, role: "user" }), false);
   });
 });
 

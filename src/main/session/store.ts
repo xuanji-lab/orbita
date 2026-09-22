@@ -20,6 +20,7 @@ import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import {
   deriveSessionTitle,
+  isChannelMarkRecord,
   isCompactedRecord,
   parseSessionMeta,
   pushRecentQuery,
@@ -567,8 +568,15 @@ export class SessionStore {
           records.push(parsed);
           continue;
         }
+        // 通道标记同一条纪律：字段齐的收下，长着它的脸但不齐的跳过——
+        // 半截标记被当成消息强转，下游访问 content 就是 undefined
+        if (isChannelMarkRecord(parsed)) {
+          records.push(parsed);
+          continue;
+        }
         const suspect = parsed as { role?: unknown } | null;
         if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") continue;
+        if (suspect !== null && typeof suspect === "object" && suspect.role === "channel-mark") continue;
         records.push(parsed as TranscriptItem);
       } catch {
         // 半截行：跳过它，前面读到的照常返回

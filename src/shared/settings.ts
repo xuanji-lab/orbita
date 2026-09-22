@@ -110,6 +110,13 @@ export interface AppSettings {
    * 不拦标题，退回会话模型。
    */
   titleModel?: TitleModel;
+  /**
+   * 子会话（delegate）的默认模型。**缺席 = 同父**。优先级：delegate 参数 >
+   * 这里 > 同父。形状同 titleModel（两 id 成对：光有 modelId 定位不到哪家的密钥）。
+   */
+  subSessionModel?: TitleModel;
+  /** 子会话的默认思考档。**缺席 = 同父**；优先级同 subSessionModel（delegate 参数 > 这里 > 同父） */
+  subSessionThinking?: ThinkingLevel;
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
 }
@@ -123,7 +130,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * 写入补丁：顶层按键覆盖，`drawer` 内部再按键合并（见 SettingsStore.write）。
  * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
  */
-export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed" | "titleModel">> & {
+export type SettingsPatch = Partial<
+  Omit<AppSettings, "drawer" | "lastUsed" | "titleModel" | "subSessionModel" | "subSessionThinking">
+> & {
   drawer?: Partial<DrawerSettings>;
   lastUsed?: Partial<LastUsedIntent>;
   /**
@@ -132,6 +141,10 @@ export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed" | "t
    * store 的 `{...current, ...patch}` 经 parseSettings 自然丢掉 null。
    */
   titleModel?: TitleModel | null;
+  /** 同 titleModel 的 null 语义：清除后退回「Same as parent」（子会话跟父会话的模型走） */
+  subSessionModel?: TitleModel | null;
+  /** 同上：清除后退回「Same as parent」（子会话跟父会话的思考档走） */
+  subSessionThinking?: ThinkingLevel | null;
 };
 
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
@@ -206,13 +219,19 @@ export function parseSettings(raw: unknown): AppSettings {
     compaction?: unknown;
     gitAttribution?: unknown;
     titleModel?: unknown;
+    subSessionModel?: unknown;
+    subSessionThinking?: unknown;
     lastUsed?: unknown;
   };
   const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
   const compaction = parseCompaction(record.compaction);
-  const titleModel = parseTitleModel(record.titleModel);
+  const titleModel = parseModelPair(record.titleModel);
+  const subSessionModel = parseModelPair(record.subSessionModel);
+  const subSessionThinking = isThinkingLevel(record.subSessionThinking)
+    ? record.subSessionThinking
+    : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
   return {
     theme,
@@ -235,16 +254,19 @@ export function parseSettings(raw: unknown): AppSettings {
       ? { gitAttribution: record.gitAttribution }
       : {}),
     ...(titleModel === undefined ? {} : { titleModel }),
+    ...(subSessionModel === undefined ? {} : { subSessionModel }),
+    ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
   };
 }
 
 /**
- * 标题模型校验：**两个都是非空字符串才认**。存半截的没意义——光有 modelId
- * 定位不到密钥，光有 providerId 不知道叫哪个模型，两种残形都只会让标题静默失败。
- * 缺席或坏值 = 没指定（返回 undefined，消费侧退会话模型）。
+ * 成对模型 id 校验：**两个都是非空字符串才认**。存半截的没意义——光有 modelId
+ * 定位不到密钥，光有 providerId 不知道叫哪个模型，两种残形都只会让对应功能
+ * 静默失败（titleModel 退会话模型，subSessionModel 退同父）。
+ * 缺席或坏值 = 没指定（返回 undefined，消费侧各自兜底）。
  */
-function parseTitleModel(raw: unknown): TitleModel | undefined {
+function parseModelPair(raw: unknown): TitleModel | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const record = raw as { providerId?: unknown; modelId?: unknown };
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;

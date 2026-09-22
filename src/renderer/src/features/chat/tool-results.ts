@@ -79,6 +79,9 @@ export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUni
       units.push({ kind: "compacted", key: record.id, record });
       continue;
     }
+    // 通道标记暂不渲染（真正的虚线标记行是后续 PR）；它不是消息，
+    // 落进下面的 assistant 分支访问 content 会炸。内联谓词：本文件被 node --test 加载，@shared 只能进类型
+    if (record.role === "channel-mark") continue;
     if (record.role === "tool") continue;
     if (record.role === "user") {
       units.push({ kind: "user", key: record.id, item: record });
@@ -664,6 +667,9 @@ export function branchAnchorIds(
       continue;
     }
     if (record.role === "tool") continue; // 结果归位到调用行，不构成边界
+    // 通道标记既不是消息也不构成轮边界——穿过它不打断候选：
+    // 它前后的对话仍是同一轮，锚点集合不因标记出现而变
+    if (record.role === "channel-mark") continue;
     if (record.status === "streaming") {
       candidate = null; // 还没完整——这一轮没有可分支的「最终输出」
       continue;

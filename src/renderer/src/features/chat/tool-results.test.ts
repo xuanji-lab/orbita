@@ -84,6 +84,17 @@ const compacted: CompactedRecord = {
   timestamp: 5,
 };
 
+/** 通道标记（子会话契约）：不是消息也不构成轮边界——渲染与锚点判定都穿过它 */
+const channelMark = {
+  role: "channel-mark",
+  id: "k1",
+  peerId: "c1",
+  messageId: "m1",
+  from: "child",
+  kind: "question",
+  timestamp: 6,
+} as const;
+
 describe("indexToolResults", () => {
   test("按 toolCallId 建索引", () => {
     const index = indexToolResults([userItem, toolItem({ toolCallId: "a" }), toolItem({ toolCallId: "b" })]);
@@ -1011,6 +1022,20 @@ describe("branchAnchorIds", () => {
       [...branchAnchorIds(withBoundary, indexToolResults([]))],
       ["a1"],
     );
+  });
+
+  test("通道标记穿过不打断候选——它前后的对话仍是同一轮，锚点集合不因标记而变", () => {
+    // 标记落在末尾：末尾确认照旧
+    const withMark = [userItem, said("a1", [{ type: "text", text: "答" }]), channelMark];
+    assert.deepEqual([...branchAnchorIds(withMark, indexToolResults([]))], ["a1"]);
+    // 标记落在两答之间：后一个回答照旧顶替前一个（不把轮切开）
+    const midMark = [
+      userItem,
+      said("a1", [{ type: "text", text: "先说" }]),
+      channelMark,
+      said("a2", [{ type: "text", text: "结论" }]),
+    ];
+    assert.deepEqual([...branchAnchorIds(midMark, indexToolResults([]))], ["a2"]);
   });
 
   test("流式中的消息不是锚点；纯工具轮（无正文）没有锚点", () => {

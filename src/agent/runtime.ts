@@ -1039,6 +1039,47 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
+  if (command.type === "delegateResult") {
+    // requestBroker 的同款胶水：回执翻给 pending 的 delegate 工具调用
+    requestBroker.resolve(
+      command.requestId,
+      command.ok
+        ? { ok: true, childId: command.childId, title: command.title, card: command.card }
+        : { ok: false, error: command.error ?? "Delegate failed" },
+    );
+    return;
+  }
+  if (command.type === "channelSendResult") {
+    requestBroker.resolve(
+      command.requestId,
+      command.ok
+        ? { ok: true, messageId: command.messageId }
+        : { ok: false, error: command.error ?? "Send failed" },
+    );
+    return;
+  }
+  if (command.type === "steer") {
+    // 父→子注入（Q2'）：主进程只在目标在跑时发这条（空闲退化 submit），
+    // 到这里不在跑、或刚占坑还没 open 出对象面（opened 尚空），都是状态失步——
+    // 回 failed 说明，不静默丢（用户看得到注入没送进去，重发即可）
+    const session = running.get(command.sessionId)?.opened?.session;
+    if (session === undefined) {
+      send({
+        type: "failed",
+        sessionId: command.sessionId,
+        message: "steer 到达时这一轮已结束（或刚开机还没接上），注入没送进去——请重发",
+      });
+      return;
+    }
+    // 2026-09-06「不碰 steering」收回的是队列所有权（排队状态在 renderer 的槽），
+    // 不是否定 steer 本身：这里只把话交给 pi 的 steer 队列（下一个工具调用边界生效，
+    // 不断轮），不开新轮、不碰排队。expandPromptTemplates 关掉：同 submit 的理由。
+    await session.prompt(command.text, {
+      streamingBehavior: "steer",
+      expandPromptTemplates: false,
+    });
+    return;
+  }
   if (command.type === "mcpReload") {
     // 重连后把新快照报给主进程（缓存 + 广播给管理面）。
     // 已在跑的轮不受影响：它们的 customTools 在开机时已定格。

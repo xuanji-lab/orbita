@@ -226,9 +226,10 @@ export function seedFromDisk(
   stats: AgentStats | null = null,
 ): SessionStates {
   // 界碑不进 pi 的归约器（它不是消息），分开记账；实时与历史从此是同一条显示路径。
+  // 通道标记同理——不是消息也不进归约器，真正的标记 UI 是后续 PR，这里先整体跳过。
   // 内联 role 谓词而非 isCompactedRecord()：本文件被 node --test 加载，@shared 的值导入解析不了。
   const items = transcript.filter(
-    (item): item is TranscriptItem => item.role !== "compacted",
+    (item): item is TranscriptItem => item.role !== "compacted" && item.role !== "channel-mark",
   );
   const compactions = transcript.filter(
     (item): item is CompactedRecord => item.role === "compacted",

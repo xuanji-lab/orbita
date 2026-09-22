@@ -282,6 +282,37 @@ describe("parseSettings 的 titleModel", () => {
   });
 });
 
+describe("parseSettings 的 subSessionModel / subSessionThinking（子会话 2026-09-23）", () => {
+  it("缺席 = 同父（不落键）——默认就是跟着父会话走", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ theme: "dark" }).subSessionThinking, undefined);
+    deepStrictEqual(DEFAULT_SETTINGS.subSessionModel, undefined);
+    deepStrictEqual(DEFAULT_SETTINGS.subSessionThinking, undefined);
+  });
+
+  it("成对的模型 id 与合法思考档原样收下", () => {
+    deepStrictEqual(
+      parseSettings({ subSessionModel: { providerId: "zai", modelId: "glm-5.3-flash" } })
+        .subSessionModel,
+      { providerId: "zai", modelId: "glm-5.3-flash" },
+    );
+    deepStrictEqual(parseSettings({ subSessionThinking: "high" }).subSessionThinking, "high");
+  });
+
+  it("半截模型与坏档位丢弃——优先级链（delegate 参数 > 这里 > 同父）只会退到同父，不会拿半截值去解析", () => {
+    deepStrictEqual(parseSettings({ subSessionModel: { modelId: "glm-5.3-flash" } }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ subSessionModel: { providerId: "zai" } }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ subSessionModel: "fast" }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ subSessionThinking: "turbo" }).subSessionThinking, undefined);
+    deepStrictEqual(parseSettings({ subSessionThinking: 3 }).subSessionThinking, undefined);
+  });
+
+  it("null 清除：parseSettings 自然丢掉——设置页「Same as parent」就靠这个退回默认", () => {
+    deepStrictEqual(parseSettings({ subSessionModel: null }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ subSessionThinking: null }).subSessionThinking, undefined);
+  });
+});
+
 describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选择）", () => {
   it("完整 lastUsed 保留", () => {
     deepStrictEqual(
