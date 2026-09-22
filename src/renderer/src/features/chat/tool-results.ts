@@ -151,9 +151,31 @@ function channelEnvelopeOf(
 }
 
 /**
+ * 通道工具名单（子会话 PR4b 显示缺陷修正）：`delegate` / `reply_subsession` /
+ * `report_to_parent` 三个工具调用是父子之间的**通信**，不是「工作过程」——
+ * 不参与相邻合并、不算轮成员（见 `isTurnMember`）、不计入折叠统计（见 `turnStats`）。
+ * 只在 renderer 用，不进 shared（消费者只有这一份渲染逻辑，没有第二边要认它）。
+ */
+const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "delegate",
+  "reply_subsession",
+  "report_to_parent",
+]);
+
+// 故意不写成类型谓词（`entry is ToolCallUnit`）：只有「toolCall 且工具名在名单里」
+// 那一部分该被排除，谓词的假分支会让 TS 把整个 "toolCall" kind 都窄掉，
+// 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
+function isChannelToolCall(entry: RenderEntry): boolean {
+  return entry.kind === "toolCall" && CHANNEL_TOOL_NAMES.has(entry.toolName);
+}
+
+/**
  * 相邻同类 toolCall 合并成组。**只合相邻**：任何非同类单元（正文、思考、用户、
  * 界碑、别的工具）都断开 run——隔着东西合并等于撒谎（顺序即语义）。
  * 单数不成组，原样放行，走普通 ToolLine。
+ *
+ * 通道工具（见 `CHANNEL_TOOL_NAMES`）**永不参与合并**，哪怕同名连发两次：
+ * 它们是各自独立的一次通信，合并成组会把「发了两条」显示成「发了一条」。
  */
 export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
   const entries: RenderEntry[] = [];
@@ -175,7 +197,8 @@ export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
   };
   for (const unit of units) {
     const head = run[0];
-    if (unit.kind === "toolCall" && (head === undefined || head.toolName === unit.toolName)) {
+    const groupable = unit.kind === "toolCall" && !CHANNEL_TOOL_NAMES.has(unit.toolName);
+    if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
       continue;
     }
@@ -224,7 +247,13 @@ export type TurnMemberEntry = Extract<
   { kind: "thinking" } | { kind: "toolCall" } | { kind: "toolGroup" } | { kind: "text" }
 >;
 
+/**
+ * 通道工具（delegate / reply_subsession / report_to_parent）的 toolCall 不算轮成员：
+ * 它们是父子间的通信，不是「工作过程」，不该被折叠吞掉（子会话 PR4b 显示缺陷修正）。
+ * 它们也从不出现在 toolGroup 里（`groupToolUnits` 已挡），这里只需挡 toolCall 分支。
+ */
 function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
+  if (isChannelToolCall(entry)) return false;
   return entry.kind === "thinking" || entry.kind === "toolCall" || entry.kind === "toolGroup";
 }
 
@@ -297,30 +326,59 @@ export function groupTurns(
       view.push(...segment);
       return;
     }
-    const firstMember = segment.findIndex(isTurnMember);
-    if (firstMember === -1) {
-      view.push(...segment);
-      return;
-    }
-    // 末成员（区间右端）：之后的内容（结尾回复）留在折叠外
-    let lastMember = -1;
-    for (let i = segment.length - 1; i > firstMember; i--) {
-      if (isTurnMember(segment[i]!)) {
-        lastMember = i;
-        break;
-      }
-    }
-    if (lastMember === -1) lastMember = firstMember;
-    view.push(...segment.slice(0, firstMember));
-    view.push({
-      kind: "turnGroup",
-      key: `turn:${segment[firstMember]?.key ?? ""}`,
-      // 首末成员之间的全部内容收进折叠——含穿插正文（BUG-6）：展开即回原位
-      members: segment.slice(firstMember, lastMember + 1).filter(isTurnContent),
-      durationMs: segmentSpan(segment, results),
-    });
-    view.push(...segment.slice(lastMember + 1));
+    view.push(...foldSegment(segment, results));
   });
+  return view;
+}
+
+/**
+ * 折叠一个已落定的段。通道工具调用（delegate / reply_subsession / report_to_parent）
+ * 不算轮成员且必须原样留在流里、位置不变（子会话 PR4b）——按它们把段切成若干块，
+ * 每块各自套用「找首尾轮成员、中间收进折叠」的规则，通道工具本身穿插在块之间，
+ * 永不进任何一块的折叠。没有通道工具时退化成原来的单块行为。
+ */
+function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
+  const view: TurnViewEntry[] = [];
+  let chunk: RenderEntry[] = [];
+  const flushChunk = () => {
+    view.push(...foldChunk(chunk, results));
+    chunk = [];
+  };
+  for (const entry of segment) {
+    if (isChannelToolCall(entry)) {
+      flushChunk();
+      view.push(entry);
+      continue;
+    }
+    chunk.push(entry);
+  }
+  flushChunk();
+  return view;
+}
+
+/** 单块内「找首尾轮成员、中间收进折叠」——`foldSegment` 按通道工具切出的每一块都走它。 */
+function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
+  const firstMember = chunk.findIndex(isTurnMember);
+  if (firstMember === -1) return [...chunk];
+  // 末成员（区间右端）：之后的内容（结尾回复）留在折叠外
+  let lastMember = -1;
+  for (let i = chunk.length - 1; i > firstMember; i--) {
+    if (isTurnMember(chunk[i]!)) {
+      lastMember = i;
+      break;
+    }
+  }
+  if (lastMember === -1) lastMember = firstMember;
+  const view: TurnViewEntry[] = [];
+  view.push(...chunk.slice(0, firstMember));
+  view.push({
+    kind: "turnGroup",
+    key: `turn:${chunk[firstMember]?.key ?? ""}`,
+    // 首末成员之间的全部内容收进折叠——含穿插正文（BUG-6）：展开即回原位
+    members: chunk.slice(firstMember, lastMember + 1).filter(isTurnContent),
+    durationMs: segmentSpan(chunk, results),
+  });
+  view.push(...chunk.slice(lastMember + 1));
   return view;
 }
 

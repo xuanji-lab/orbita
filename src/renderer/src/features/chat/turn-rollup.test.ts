@@ -224,6 +224,67 @@ describe("groupTurns", () => {
     assert.ok(first !== undefined && second !== undefined);
     assert.equal(first.key, second.key);
   });
+
+  test("通道工具（delegate）不算轮成员：一轮里 thinking + read + delegate 落定后，delegate 在折叠外、read 在折叠内（子会话 PR4b 显示缺陷修正）", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "thinking", thinking: "先看看" },
+        { type: "toolCall", toolCallId: "r1", toolName: "read", input: { path: "a.ts" } },
+      ]),
+      toolItem({ toolCallId: "r1", timestamp: 2500 }),
+      assistantItem("a2", 3000, [
+        { type: "toolCall", toolCallId: "d1", toolName: "delegate", input: { task: "审一下" } },
+      ]),
+      toolItem({ toolCallId: "d1", toolName: "delegate", timestamp: 3500 }),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "toolCall"],
+    );
+    const fold = foldUnits(view)[0];
+    assert.ok(fold !== undefined);
+    // delegate 不在成员里——只有思考与 read 被收进折叠
+    assert.deepEqual(
+      fold.members.map((member) => member.kind),
+      ["thinking", "toolCall"],
+    );
+    // 折叠外那个 toolCall 就是 delegate 本身，位置不变（紧跟在折叠后面）
+    const trailing = view[2];
+    assert.ok(trailing !== undefined && trailing.kind === "toolCall");
+    assert.equal(trailing.kind === "toolCall" ? trailing.toolName : "", "delegate");
+  });
+
+  test("通道工具夹在两次真实工具调用中间时同样被抠出来，前后各自成一个折叠，位置不变", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "toolCall", toolCallId: "r1", toolName: "read", input: {} },
+      ]),
+      toolItem({ toolCallId: "r1", timestamp: 2500 }),
+      assistantItem("a2", 3000, [
+        { type: "toolCall", toolCallId: "s1", toolName: "reply_subsession", input: {} },
+      ]),
+      toolItem({ toolCallId: "s1", toolName: "reply_subsession", timestamp: 3500 }),
+      assistantItem("a3", 4000, [
+        { type: "toolCall", toolCallId: "e1", toolName: "edit", input: {} },
+      ]),
+      toolItem({ toolCallId: "e1", toolName: "edit", timestamp: 4500 }),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "toolCall", "turnGroup"],
+    );
+    const folds = foldUnits(view);
+    assert.equal(folds.length, 2);
+    assert.deepEqual(folds[0]?.members.map((m) => m.kind), ["toolCall"]);
+    assert.deepEqual(folds[1]?.members.map((m) => m.kind), ["toolCall"]);
+    const middle = view[2];
+    assert.ok(middle !== undefined && middle.kind === "toolCall");
+    assert.equal(middle.kind === "toolCall" ? middle.toolName : "", "reply_subsession");
+  });
 });
 
 describe("turnStats", () => {
@@ -256,6 +317,24 @@ describe("turnStats", () => {
       { toolName: "bash", count: 2, failed: 1 },
     ]);
     assert.equal(stats.durationMs, 3200 - 1000);
+  });
+
+  test("通道工具（report_to_parent）不进折叠统计——calls/byTool 里没有它（子会话 PR4b）", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "toolCall", toolCallId: "r1", toolName: "read", input: {} },
+        { type: "toolCall", toolCallId: "p1", toolName: "report_to_parent", input: {} },
+      ]),
+      toolItem({ toolCallId: "r1", timestamp: 2100 }),
+      toolItem({ toolCallId: "p1", toolName: "report_to_parent", timestamp: 2200 }),
+    ];
+    const view = turnView(records, false);
+    const fold = foldUnits(view)[0];
+    assert.ok(fold !== undefined);
+    const stats = turnStats(fold, indexToolResults(records), 5000);
+    assert.equal(stats.calls, 1);
+    assert.deepEqual(stats.byTool, [{ toolName: "read", count: 1, failed: 0 }]);
   });
 
   test("思考总时长 = 现场计时求和（冻结副作用），次数单独数块", () => {

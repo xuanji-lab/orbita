@@ -260,6 +260,25 @@ describe("groupToolUnits", () => {
       ["r1", "r2"],
     );
   });
+
+  test("连续两次 reply_subsession 不成组——通道工具各自是独立一次通信，合并会显示成一条", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [
+          { type: "toolCall", toolCallId: "s1", toolName: "reply_subsession", input: {} },
+        ]),
+        toolItem({ toolCallId: "s1", toolName: "reply_subsession" }),
+        assistantItem("a2", [
+          { type: "toolCall", toolCallId: "s2", toolName: "reply_subsession", input: {} },
+        ]),
+        toolItem({ toolCallId: "s2", toolName: "reply_subsession" }),
+      ]),
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.kind),
+      ["toolCall", "toolCall"],
+    );
+  });
 });
 
 describe("toolGroupStatus", () => {
