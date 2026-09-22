@@ -14,6 +14,7 @@ import { describeList } from "../features/chat/load-state.ts";
 import { shouldExitArchived } from "./archived-view.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
+import { nextFilterRowMode } from "./filter-row-compact.ts";
 import {
   SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
@@ -90,6 +91,34 @@ export function Sidebar(props: {
   const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
   const [showArchived, setShowArchived] = useState(false);
+  /**
+   * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
+   * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
+   */
+  const filterRowRef = useRef<HTMLDivElement | null>(null);
+  const [filterCompact, setFilterCompact] = useState(false);
+  const filterFullWidth = useRef<number | null>(null);
+  useEffect(() => {
+    const row = filterRowRef.current;
+    if (row === null) return;
+    const measure = (): void => {
+      const next = nextFilterRowMode({
+        compact: filterCompact,
+        fullWidth: filterFullWidth.current,
+        containerWidth: row.clientWidth,
+        contentWidth: row.scrollWidth,
+      });
+      filterFullWidth.current = next.fullWidth;
+      if (next.compact !== filterCompact) setFilterCompact(next.compact);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+    // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
+    // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterCompact, session.sessions.length, settingsOpen, showArchived]);
   /**
    * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
    * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
@@ -359,9 +388,13 @@ export function Sidebar(props: {
         筛选无从谈起，不摆。
       */}
       {live.length > 0 && !settingsOpen && !showArchived && (
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div
+          ref={filterRowRef}
+          style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
+        >
           <Chip
             icon="list"
+            compact={filterCompact}
             active={statusFilter === "all"}
             title="All tasks"
             onClick={() => setStatusFilter("all")}
@@ -370,6 +403,7 @@ export function Sidebar(props: {
           </Chip>
           <Chip
             icon="play"
+            compact={filterCompact}
             active={statusFilter === "active"}
             title="Tasks still in progress"
             onClick={() => setStatusFilter("active")}
@@ -377,7 +411,8 @@ export function Sidebar(props: {
             Active
           </Chip>
           <Chip
-            icon="circle-check"
+            icon="check"
+            compact={filterCompact}
             active={statusFilter === "done"}
             title="Completed tasks"
             onClick={() => setStatusFilter("done")}
@@ -386,6 +421,7 @@ export function Sidebar(props: {
           </Chip>
           <Chip
             icon="star"
+            compact={filterCompact}
             active={starredOnly}
             title="Show starred tasks only"
             onClick={() => setStarredOnly((value) => !value)}
@@ -1249,7 +1285,7 @@ function SessionRow(props: {
           transition: "opacity var(--duration-instant) var(--ease-standard)",
         }}
       >
-        <Icon name="check" size={13} strokeWidth={done ? 2.4 : 1.8} />
+        <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
       </IconButton>
       <Menu
         items={items}

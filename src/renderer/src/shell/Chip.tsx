@@ -22,6 +22,11 @@ export function Chip(props: {
    * 值按常见最宽词定，给未来更长的档名留余量；超出仍可撑开（maxWidth 仍在）。
    */
   fixedWidth?: number;
+  /**
+   * 紧凑态：只画图标，文字收进 title。侧栏筛选行在窄宽度下用——四个带字的 chip
+   * 在 288px 里本来就放不下（wafo 2026-09-22：「太窄的时候文字自动消失，只剩图标，往左 stack」）。
+   */
+  compact?: boolean;
   onClick?: () => void;
   children: React.ReactNode;
 }) {
@@ -42,9 +47,9 @@ export function Chip(props: {
         alignItems: "center",
         justifyContent: props.fixedWidth === undefined ? undefined : "center",
         minWidth: props.fixedWidth,
-        gap: 5,
+        gap: props.compact === true ? 0 : 5,
         maxWidth: 260,
-        padding: "3px 8px",
+        padding: props.compact === true ? "3px 6px" : "3px 8px",
         border: 0,
         borderRadius: "var(--radius-md)",
         background: active
@@ -69,9 +74,11 @@ export function Chip(props: {
       }}
     >
       {props.icon !== undefined && <Icon name={props.icon} size={12} />}
-      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-        {props.children}
-      </span>
+      {props.compact !== true && (
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+          {props.children}
+        </span>
+      )}
       {props.chevron === true && <Icon name="chevron-down" size={11} strokeWidth={2} />}
     </button>
   );
