@@ -28,7 +28,13 @@ export function registerSessionIpc(
   );
   ipcMain.handle(ipcChannels.sessionDelete, async (_event, id: string) => {
     // 先停事件源再删文件：顺序反了的话，runtime 里还活着的会话会继续喷事件，
-    // record() 虽有 meta 守卫不会重建文件，但那一轮里事件还是白跑
+    // record() 虽有 meta 守卫不会重建文件，但那一轮里事件还是白跑。
+    // 级联删（子会话 2026-09-22）：子会话是母会话的附属物，删母连带删子——
+    // 先停全部后代 + 自己在 runtime 里的活跑轮（onSessionRemoved = disposeSession，
+    // 它的 dispose 会 abort 在跑的轮），store.remove 自己再级联删文件。
+    for (const descendantId of await store.descendants(id)) {
+      onSessionRemoved?.(descendantId);
+    }
     onSessionRemoved?.(id);
     await store.remove(id);
   });

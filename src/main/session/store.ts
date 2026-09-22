@@ -19,6 +19,7 @@ import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import {
+  childSessions,
   deriveSessionTitle,
   isChannelMarkRecord,
   isCompactedRecord,
@@ -31,6 +32,7 @@ import {
   type SessionMeta,
   type SessionRecord,
 } from "../../shared/session.ts";
+import type { ChannelStore } from "../channel/store.ts";
 
 /**
  * 会话 id 必须长得像 `randomUUID()`。
@@ -39,6 +41,15 @@ import {
  * 一个 `../../` 就能读写 sessions 目录之外的文件。白名单比转义可靠。
  */
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * 会话 id 白名单，导出给 ChannelStore 用——通道账本的路径
+ * `channels/<parentId>/<childId>.jsonl` 同样把 renderer 传来的 id 拼进路径，
+ * 同一个安全等级，不重复这条正则。
+ */
+export function isSessionId(id: string): boolean {
+  return SESSION_ID.test(id);
+}
 
 const META_SUFFIX = ".meta.json";
 
@@ -137,9 +148,16 @@ export class SessionStore {
    */
   private readonly metaWrites = new Map<string, Promise<unknown>>();
 
-  constructor(dir: string, workbenchesDir?: string) {
+  /**
+   * 通道账本的持有者（子会话 2026-09-23）。**可选**——旧的调用点（测试、
+   * 未接线的场景）不传它，remove() 就只删会话本身，不级联通道文件。
+   */
+  private readonly channels: ChannelStore | undefined;
+
+  constructor(dir: string, workbenchesDir?: string, channels?: ChannelStore) {
     this.dir = dir;
     this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
+    this.channels = channels;
   }
 
   private metaPath(id: string): string {
@@ -168,6 +186,11 @@ export class SessionStore {
    * 目录存不存在是磁盘上的事实，会话不该背着它的快照。递归数文件不计目录；
    * 符号链接不跟（跟的话链接环转不出来），链接算一个文件。
    * 读不了 ≠ 没有：除 ENOENT 外照抛，与 `list()` 同一条规矩。
+   *
+   * **级联求和**（子会话 2026-09-22 裁决）：fileCount 是自己 + 全部后代工作台
+   * 文件数之和，exists 是自己或任一后代存在——唯一消费者是侧栏删除确认
+   * （`stat.exists && stat.fileCount > 0` 才出提示），级联删要把子的文件也说出来。
+   * path 仍是自己的：它是给「打开这个会话的工作台」用的，不该指向别人的目录。
    */
   async workbenchStat(id: string): Promise<SessionWorkbenchStat> {
     const path = this.workbenchPath(id);
@@ -179,12 +202,22 @@ export class SessionStore {
       }
       return total;
     };
-    try {
-      return { path, exists: true, fileCount: await countFiles(path) };
-    } catch (cause) {
-      if (isNotFound(cause)) return { path, exists: false, fileCount: 0 };
-      throw cause;
+    const statOne = async (targetId: string): Promise<{ exists: boolean; fileCount: number }> => {
+      try {
+        return { exists: true, fileCount: await countFiles(this.workbenchPath(targetId)) };
+      } catch (cause) {
+        if (isNotFound(cause)) return { exists: false, fileCount: 0 };
+        throw cause;
+      }
+    };
+    let exists = false;
+    let fileCount = 0;
+    for (const targetId of [id, ...(await this.descendants(id))]) {
+      const stat = await statOne(targetId);
+      exists = exists || stat.exists;
+      fileCount += stat.fileCount;
     }
+    return { path, exists, fileCount };
   }
 
   /**
@@ -516,13 +549,44 @@ export class SessionStore {
   }
 
   /**
+   * 某条会话的全部后代 id（不含自己），基于 `list()` 按 parentId 递归收集。
+   * 消费者：`remove()` 的级联、`workbenchStat()` 的求和、`session:delete` 的
+   * dispose（先释放全部后代 + 自己在 runtime 里的活跑轮，再删文件）。
+   */
+  async descendants(id: string): Promise<string[]> {
+    return this.descendantsOf(id, await this.list());
+  }
+
+  private descendantsOf(id: string, metas: readonly SessionMeta[]): string[] {
+    const result: string[] = [];
+    for (const child of childSessions(metas, id)) {
+      result.push(child.id);
+      result.push(...this.descendantsOf(child.id, metas));
+    }
+    return result;
+  }
+
+  /**
    * 删一条会话。**先删 transcript，后删 meta**——顺序不是随意的：
    * 两次 rm 之间崩了的话，
    *   先删 meta：留下一个**列不出来也删不掉**的 .jsonl，永远占着盘；
    *   先删 transcript：留下一条打得开但空的会话，用户看得见、能自己再删一次。
    * 可见的残留优于隐形的残留。
+   *
+   * **级联删**（子会话 2026-09-22 裁决）：子会话是母会话的附属物，删母连带删子——
+   * 先读自己的 meta（要拿 parentId 去找自己那条通道），递归删全部直接子，
+   * 删自己名下的全部通道（`channels/<id>/`），若自己有母会话则删自己在母通道
+   * 目录里的那一份，最后才是原有的「删自己」三步。
    */
   async remove(id: string): Promise<void> {
+    const meta = await this.readMeta(id);
+    for (const child of childSessions(await this.list(), id)) {
+      await this.remove(child.id);
+    }
+    await this.channels?.removeForParent(id);
+    if (meta?.parentId !== undefined) {
+      await this.channels?.removeChannel({ parentId: meta.parentId, childId: id });
+    }
     // 先等它自己那条写入链排完，再删——否则在途的 `update` 会在删完之后
     // 把 meta 文件又写回去（`update` 内部读不到才跳过，它已经读到了）。
     await this.queueMeta(id, async () => undefined);

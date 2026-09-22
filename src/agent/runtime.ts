@@ -1072,10 +1072,11 @@ async function handle(command: AgentCommand): Promise<void> {
       return;
     }
     // 2026-09-06「不碰 steering」收回的是队列所有权（排队状态在 renderer 的槽），
-    // 不是否定 steer 本身：这里只把话交给 pi 的 steer 队列（下一个工具调用边界生效，
-    // 不断轮），不开新轮、不碰排队。expandPromptTemplates 关掉：同 submit 的理由。
+    // 不是否定 steer 本身：这里只把话交给 pi 的 steer/followUp 队列（delivery 缺席 =
+    // steer：下一个工具调用边界生效，不断轮；followUp：等这轮本来要停时再处理，
+    // 同一个 run 里接着跑），不开新轮、不碰排队。expandPromptTemplates 关掉：同 submit 的理由。
     await session.prompt(command.text, {
-      streamingBehavior: "steer",
+      streamingBehavior: command.delivery ?? "steer",
       expandPromptTemplates: false,
     });
     return;

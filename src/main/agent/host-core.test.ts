@@ -369,3 +369,87 @@ describe("answerReadTask —— 读 task 请求的发送侧（B-1）", () => {
     });
   });
 });
+
+describe("steer —— 父→子注入的发送侧（子会话）", () => {
+  test("进程活着就发 steer 命令，delivery 原样带上", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    ctx.host.steer("s1", "先别改这个文件", "followUp");
+    assert.deepEqual(ctx.child().posted.at(-1), {
+      type: "steer",
+      sessionId: "s1",
+      text: "先别改这个文件",
+      delivery: "followUp",
+    });
+  });
+
+  test("进程没起（或已死）就抛——调用方（deliverToChild）据此按投递失败处理", async () => {
+    const ctx = await freshHost();
+    assert.throws(() => ctx.host.steer("s1", "x", "steer"), /agent runtime is not running/);
+  });
+});
+
+describe("answerDelegate / answerChannelSend —— 子会话请求的回执", () => {
+  test("answerDelegate：成功带 childId/title/card，失败只带 error；进程没了就静默", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    // 没开机时静默：不为一条回执拉起整个 runtime
+    ctx.host.answerDelegate("r0", { ok: false, error: "gone" });
+    assert.equal(ctx.forks(), 0);
+
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    const card = { childId: "c1", title: "调研分支", modelId: "m", thinkingLevel: "medium" as const, workbench: "/wb/c1" };
+    ctx.host.answerDelegate("r1", { ok: true, childId: "c1", title: "调研分支", card });
+    ctx.host.answerDelegate("r2", { ok: false, error: "empty task" });
+    assert.deepEqual(ctx.child().posted.at(-2), {
+      type: "delegateResult",
+      requestId: "r1",
+      ok: true,
+      childId: "c1",
+      title: "调研分支",
+      card,
+    });
+    assert.deepEqual(ctx.child().posted.at(-1), {
+      type: "delegateResult",
+      requestId: "r2",
+      ok: false,
+      error: "empty task",
+    });
+  });
+
+  test("answerChannelSend：成功带 messageId，失败只带 error", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    ctx.host.answerChannelSend("r1", { ok: true, messageId: "m1" });
+    ctx.host.answerChannelSend("r2", { ok: false, error: "kind not allowed" });
+    assert.deepEqual(ctx.child().posted.at(-2), {
+      type: "channelSendResult",
+      requestId: "r1",
+      ok: true,
+      messageId: "m1",
+    });
+    assert.deepEqual(ctx.child().posted.at(-1), {
+      type: "channelSendResult",
+      requestId: "r2",
+      ok: false,
+      error: "kind not allowed",
+    });
+  });
+});
