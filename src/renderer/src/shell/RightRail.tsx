@@ -10,7 +10,9 @@ import { Icon, type IconName } from "./Icon";
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
- * `--radius-sm`（md 太圆）。
+ * `--radius-sm`（md 太圆）。辅助对话之后再加一个通道列开关（子会话 PR4b，
+ * `channelColumn` prop 非 null 时才出现）——它不占面板位、与四个面板互斥入口
+ * 是两回事，点亮语义相同（列显示中 = 亮）但不走同一套 `panel` 状态。
  *
  * 底部：应用入口（Archived / Carryovers / Settings），**首页常驻**——它们是
  * 应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，覆盖 2026-09-12
@@ -35,6 +37,12 @@ export function RightRail(props: {
   onPanel: (next: RightPanelKind | null) => void;
   /** 底部应用入口组（Carryovers / Archived / Settings），调用方组装；顺序即堆叠顺序 */
   railEntries: RailEntry[];
+  /**
+   * 通道列的开关入口（子会话 PR4b）：只在当前根会话有可见通道时出现——
+   * null = 不出现（没在看根会话，或这条根会话没有可见通道）。它不占右栏面板位，
+   * 与 `panel` 不互斥，因此不走 `railEntries`（那组是"面板"的互斥语义），单独一个 prop。
+   */
+  channelColumn: { open: boolean; onToggle: () => void } | null;
 }) {
   return (
     <aside
@@ -94,6 +102,14 @@ export function RightRail(props: {
         lit={props.panel === "drawer"}
         onClick={() => props.onPanel(props.panel === "drawer" ? null : "drawer")}
       />
+      {props.channelColumn !== null && (
+        <RailEntryButton
+          icon="messages-square"
+          label="Sub-session channels"
+          lit={props.channelColumn.open}
+          onClick={props.channelColumn.onToggle}
+        />
+      )}
       <span style={{ flex: 1 }} />
       {props.railEntries.map((entry) => (
         <RailEntryButton

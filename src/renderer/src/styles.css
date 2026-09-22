@@ -250,6 +250,241 @@ body {
   background: var(--color-border-subtle);
 }
 
+/* ===== 通道列（子会话 PR4b）：主槽与右栏之间的一列，父子往来抽出来放在这里 =====
+ * 常驻挂载，同右侧面板壳一条纪律——宽度以 class 切换驱动过渡；不参与拖宽（固定
+ * 300px），窄窗下转右侧锚定覆盖层（组件自己叠加 inline style，见 ChannelColumn.tsx）。 */
+.channel-column {
+  flex: 0 0 auto;
+  width: 0;
+  transition:
+    width 0.2s ease,
+    border-left-width 0.2s ease;
+  overflow: hidden;
+  border-left: 0 solid var(--color-border-default);
+}
+
+.channel-column.open {
+  width: var(--channel-column-w, 300px);
+  border-left-width: 1px;
+}
+
+.channel-column-inner {
+  width: var(--channel-column-w, 300px);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  min-height: 0;
+  /* 正常情况下展开卡 flex:1 1 0 垂直等分、永远不溢出；很多张折叠卡（各自
+     flex: 0 0 auto）堆起来的固定高度总和仍可能超出可用高度——兜底可滚，
+     不让够不到的通道悄悄被裁掉 */
+  overflow-y: auto;
+}
+
+/* 通道卡：--glass-bg 同款玻璃卡（设计稿 .ch）。展开的垂直等分，折叠的只剩头部一行。 */
+.channel-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-composer);
+  overflow: hidden;
+}
+
+.channel-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+  flex: 0 0 auto;
+  text-align: left;
+}
+
+.channel-card-head:hover {
+  background: var(--color-bg-hover);
+}
+
+.channel-card-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 auto;
+  font-weight: var(--weight-strong);
+  color: var(--color-text-tertiary);
+}
+
+.channel-card-pair-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+
+.channel-card-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  white-space: nowrap;
+}
+
+.channel-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* 通道里谁说话谁靠哪边：父左子右——两个 agent 的对话，不是 user/assistant 气泡语义。
+ * `.channel-card-body` 是 flex 纵栏，横轴对齐用 align-self（不是 grid 的 justify-self）。 */
+.channel-message {
+  max-width: 92%;
+  padding: 6px 9px;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid transparent;
+  transition:
+    border-color 1.2s ease,
+    background-color 1.2s ease;
+}
+
+.channel-message.from-parent {
+  align-self: flex-start;
+  background: var(--color-bg-muted);
+  border-bottom-left-radius: 3px;
+}
+
+.channel-message.from-child {
+  align-self: flex-end;
+  background: var(--color-bg-panel);
+  border-color: var(--color-border-subtle);
+  border-bottom-right-radius: 3px;
+}
+
+.channel-message.highlight {
+  border-color: var(--color-accent);
+}
+
+.channel-message-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.channel-card-foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--color-border-subtle);
+  padding: var(--space-2) var(--space-3);
+}
+
+.channel-card-foot-closed {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+
+.channel-reopen {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+  padding: 0;
+}
+
+.channel-reopen:hover {
+  color: var(--color-accent-strong);
+}
+
+.channel-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.channel-delivery-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-accent);
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.channel-delivery-chip:hover {
+  background: var(--color-mode-active-bg);
+}
+
+.channel-composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  padding: 3px 0;
+}
+
+.channel-composer-send {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  cursor: pointer;
+}
+
+.channel-composer-send:disabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
 .drawer-tabs {
   flex: 0 0 auto;
   display: flex;

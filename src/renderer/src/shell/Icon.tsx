@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import archive from "../../../../Orbita Design System/assets/icons/lucide/archive.svg?raw";
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
+import arrowLeftRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-left-right.svg?raw";
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
 import blend from "../../../../Orbita Design System/assets/icons/lucide/blend.svg?raw";
 import book from "../../../../Orbita Design System/assets/icons/lucide/book.svg?raw";
@@ -46,6 +47,7 @@ import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?ra
 import plug from "../../../../Orbita Design System/assets/icons/lucide/plug.svg?raw";
 import power from "../../../../Orbita Design System/assets/icons/lucide/power.svg?raw";
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
+import messagesSquare from "../../../../Orbita Design System/assets/icons/lucide/messages-square.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
 import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rotate-ccw.svg?raw";
@@ -79,6 +81,7 @@ const ICONS = {
   book,
   "book-open": bookOpen,
   "archive-restore": archiveRestore,
+  "arrow-left-right": arrowLeftRight,
   "arrow-up": arrowUp,
   bot,
   brain,
@@ -112,6 +115,7 @@ const ICONS = {
   "list-todo": listTodo,
   lock,
   "message-square": messageSquare,
+  "messages-square": messagesSquare,
   minus,
   "panel-left": panelLeft,
   "panel-right": panelRight,

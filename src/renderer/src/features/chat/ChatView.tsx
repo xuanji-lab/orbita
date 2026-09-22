@@ -127,6 +127,12 @@ export function ChatView(props: {
    * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
    */
   homeBare?: boolean;
+  /**
+   * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
+   * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
+   * ChatView 不传（undefined），标记保持不可点——那里没有通道列可跳。
+   */
+  onOpenChannel?: (childId: string, messageId: string | null) => void;
 }) {
   const { session, providersError, homeBare } = props;
 
@@ -231,6 +237,11 @@ export function ChatView(props: {
     [session.sessions],
   );
   const channelSummaries = useChannelSummaries(openId === "" ? null : openId);
+  // 子会话 PR4b：只有 ownSide 为 "parent"（根会话）时标记才可点——子会话自己主流
+  // 里的标记本 PR 仍不可点，即便主槽的 ChatView 拿到了 onOpenChannel（用户直接点进
+  // 一条子会话查看时 ownSide 会是 "child"）。辅助对话抽屉不传 onOpenChannel，
+  // 这里恒 null，与 ownSide 无关。
+  const openChannel = ownSide === "parent" ? (props.onOpenChannel ?? null) : null;
   const channel = useMemo<ChannelViewContext>(
     () => ({
       ownSide,
@@ -238,8 +249,9 @@ export function ChatView(props: {
       titles,
       channelSummaries,
       childPhaseOf: session.phaseOf,
+      openChannel,
     }),
-    [ownSide, openMeta?.parentId, titles, channelSummaries, session.phaseOf],
+    [ownSide, openMeta?.parentId, titles, channelSummaries, session.phaseOf, openChannel],
   );
 
   const composer = (
@@ -1252,11 +1264,13 @@ function EntryView(props: {
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") return <UserBubble item={entry.item} />;
   if (entry.kind === "channelMark") {
+    const openChannel = props.channel.openChannel;
     return (
       <ChannelMarkLine
         mark={entry.mark}
         ownSide={props.channel.ownSide}
         peerTitle={peerTitleOf(props.channel, entry.mark.peerId)}
+        onClick={openChannel === null ? undefined : () => openChannel(entry.mark.peerId, entry.mark.messageId)}
       />
     );
   }
@@ -2038,7 +2052,18 @@ function ChannelSendToolLine(props: {
     const childTitle = peerTitleOf(props.channel, childId);
     const followUp = record["delivery"] === "followUp";
     const text = `replied to ${childTitle} · ${followUp ? "turn end" : "steer"}`;
-    return <ChannelToolMarkLine icon="undo-2" text={text} tone="reply" running={props.running} />;
+    // 子会话 PR4b：这条工具调用的入参没有携带投出去那条消息的 id（channel-tools.ts
+    // 的 reply_subsession 回执 details 恒 {}），点了只能滚到通道底部，不指定 messageId。
+    const openChannel = props.channel.openChannel;
+    return (
+      <ChannelToolMarkLine
+        icon="undo-2"
+        text={text}
+        tone="reply"
+        running={props.running}
+        onClick={openChannel === null || childId === "" ? undefined : () => openChannel(childId, null)}
+      />
+    );
   }
   // report_to_parent：对面恒是本会话自己的父——ownParentId 是这条会话固定的事实，
   // 不像 reply_subsession 那样按入参里的 id 变化。

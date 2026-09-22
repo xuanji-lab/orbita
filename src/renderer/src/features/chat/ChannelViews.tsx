@@ -14,11 +14,14 @@
  * 派出卡（`DelegateCardView`）是另一种语言：GlassCard 同款 1px 边框 + panel 底的
  * 小卡片，不是一行标记。
  *
- * 本 PR 标记与派出卡**均不可点**——打开通道 / 跳转子会话是后续 PR 的事。
+ * 派出卡仍不可点。标记行本刀接上通道列（子会话 PR4b）：`ownSide` 为 "parent"（根
+ * 会话）时，接收侧与 `reply_subsession` 发送侧标记可点，跳去通道列里那条消息；
+ * 子会话自己主流里的标记（`ownSide` 为 "child"）仍不可点。
  */
 import type { ChannelMessageKind, ChannelSummary } from "@shared/channel";
 import type { DelegateCard } from "@shared/agent-ipc";
 import { thinkingLevelLabel } from "@shared/thinking";
+import { useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
 import { channelMarkLabel, type ChannelMarkTone } from "./tool-results";
 import type { SessionEntry } from "./session-states";
@@ -40,6 +43,13 @@ export interface ChannelViewContext {
   channelSummaries: ReadonlyMap<string, ChannelSummary>;
   /** 派出卡状态的兜底——channelSummaries 没有终态时看子会话是否还在跑 */
   childPhaseOf: (id: string) => SessionEntry["phase"];
+  /**
+   * 点主流里的标记 → 显示通道列（若隐藏）、展开该通道（若折叠）、滚动到那条消息
+   * 并短暂高亮（子会话 PR4b）。null = 不可点（辅助对话抽屉里的 ChatView 不传，
+   * 或 `ownSide` 为 "child" 时调用方本就不该接这个 prop）。`messageId` 为 null 时
+   * （`reply_subsession` 送出的那条没有 id 可指）滚到通道底部。
+   */
+  openChannel: ((childId: string, messageId: string | null) => void) | null;
 }
 
 /**
@@ -110,26 +120,52 @@ const PILL_BASE = {
  * 通道标记胶囊：一行、宽度 fit-content、1px dashed 边框、mono micro、tertiary 底色，
  * tone 命中时描边与文字换色（颜色是第二信号，图标已经在说话）。
  * `breathing` 给 running 帧用（reply_subsession / report_to_parent 还没落定的结果）。
+ *
+ * `onClick` 给定时渲染成 `button`（键盘可达、hover 抬亮到 primary、
+ * `title="View in channel"`）——子会话 PR4b：根会话主流里的标记点了跳去通道列。
+ * 不给时原样是 `span`，行为与 PR4a 完全一致。
  */
 export function ChannelMarkPill(props: {
   icon: IconName;
   text: string;
   tone: ChannelMarkTone;
   breathing?: boolean;
+  onClick?: () => void;
 }) {
   const color = toneColor(props.tone);
-  return (
-    <span
-      className={props.breathing === true ? "orbita-breath" : undefined}
-      style={{
-        ...PILL_BASE,
-        border: `1px dashed ${color === "var(--color-text-tertiary)" ? "var(--color-border-default)" : color}`,
-        color,
-      }}
-    >
+  const [hover, setHover] = useState(false);
+  const clickable = props.onClick !== undefined;
+  const style: React.CSSProperties = {
+    ...PILL_BASE,
+    border: `1px dashed ${color === "var(--color-text-tertiary)" ? "var(--color-border-default)" : color}`,
+    color: clickable && hover ? "var(--color-text-primary)" : color,
+    ...(clickable ? { background: "transparent", cursor: "pointer" } : {}),
+  };
+  const content = (
+    <>
       <Icon name={props.icon} size={11} strokeWidth={1.8} />
       {props.text}
-    </span>
+    </>
+  );
+  if (!clickable) {
+    return (
+      <span className={props.breathing === true ? "orbita-breath" : undefined} style={style}>
+        {content}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title="View in channel"
+      className={props.breathing === true ? "orbita-breath" : undefined}
+      style={style}
+    >
+      {content}
+    </button>
   );
 }
 
@@ -138,9 +174,18 @@ export function ChannelMarkLine(props: {
   mark: { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind };
   ownSide: "parent" | "child";
   peerTitle: string;
+  /** 子会话 PR4b：`ownSide` 为 "parent" 且调用方传了 openChannel 时才可点 */
+  onClick?: () => void;
 }) {
   const label = channelMarkLabel(props.mark, props.ownSide, props.peerTitle);
-  return <ChannelMarkPill icon={channelKindIcon(props.mark.kind)} text={label.text} tone={label.tone} />;
+  return (
+    <ChannelMarkPill
+      icon={channelKindIcon(props.mark.kind)}
+      text={label.text}
+      tone={label.tone}
+      onClick={props.onClick}
+    />
+  );
 }
 
 /**
@@ -154,8 +199,18 @@ export function ChannelToolMarkLine(props: {
   text: string;
   tone: ChannelMarkTone;
   running: boolean;
+  /** 子会话 PR4b：只有根会话自己发的 reply_subsession 会传（report_to_parent 恒在子会话流里，不可点） */
+  onClick?: () => void;
 }) {
-  return <ChannelMarkPill icon={props.icon} text={props.text} tone={props.tone} breathing={props.running} />;
+  return (
+    <ChannelMarkPill
+      icon={props.icon}
+      text={props.text}
+      tone={props.tone}
+      breathing={props.running}
+      onClick={props.onClick}
+    />
+  );
 }
 
 export type DelegateCardStatus = "running" | "waiting" | "done" | "failed" | "idle";

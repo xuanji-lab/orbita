@@ -5,6 +5,7 @@ import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from "@shared/settings";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
+import { ChannelColumn, type ChannelOpenRequest } from "./features/chat/ChannelColumn";
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
@@ -97,6 +98,48 @@ export function App() {
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
   const drawerView = useSessionView(engine, "drawer");
 
+  /**
+   * 通道列（子会话 PR4b）：只在主槽正看着一条**根会话**（meta 没有 parentId）且
+   * 没盖着设置页时才有意义——同 ChatView.tsx 里 `ownSide` 的推导口径（meta 查不到
+   * 时缺省当根会话），两处必须一致，否则标记可点但通道列不出来。
+   */
+  const mainOpenId = session.sessionId ?? session.opened?.id ?? "";
+  const mainOpenMeta = session.sessions.find((m) => m.id === mainOpenId) ?? session.opened;
+  const channelParentId =
+    overlay === "settings" || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
+  const channelParentTitle = mainOpenMeta?.title ?? "";
+
+  /**
+   * 用户对每个父会话显隐通道列的**显式选择**（ephemeral，不落盘，按父会话 id 记
+   * ——3.2 裁决）。缺席 = 没有显式选择，走默认：宽窗有可见通道即显示，窄窗不
+   * 自动出现（ChannelColumn 内部按 `shown ?? !narrow` 解析，这里只存显式值）。
+   */
+  const [channelShown, setChannelShown] = useState<ReadonlyMap<string, boolean>>(new Map());
+  /** 当前根会话有没有可见通道——ChannelColumn 上报，右图标条入口的显隐 / 点亮靠它 */
+  const [hasVisibleChannels, setHasVisibleChannels] = useState(false);
+  const channelShownOverride = channelParentId !== null ? (channelShown.get(channelParentId) ?? null) : null;
+  const channelColumnOpen =
+    channelParentId !== null && hasVisibleChannels && (channelShownOverride ?? !narrow);
+  const setChannelShownOverride = useCallback(
+    (shown: boolean) => {
+      if (channelParentId === null) return;
+      setChannelShown((prev) => {
+        if (prev.get(channelParentId) === shown) return prev;
+        return new Map(prev).set(channelParentId, shown);
+      });
+    },
+    [channelParentId],
+  );
+  /** 点父流里的标记 → 通道列的一次性请求（token 每次自增，同一条消息再点一次也要能重新触发滚动与高亮） */
+  const [channelOpenRequest, setChannelOpenRequest] = useState<ChannelOpenRequest | null>(null);
+  const openChannel = useCallback(
+    (childId: string, messageId: string | null) => {
+      setChannelShownOverride(true);
+      setChannelOpenRequest((prev) => ({ childId, messageId, token: (prev?.token ?? 0) + 1 }));
+    },
+    [setChannelShownOverride],
+  );
+
   // 停靠记忆在设置里（哪些 task 开在辅助对话的标签条上）；兼容存量文件：
   // 旧版本可能把 "new" 占位写进了 docked，启动时一并洗掉。
   // 抽屉并入统一面板壳后 drawer.width 不再有消费者——宽度共用 rightPanelWidth（Q3）。
@@ -121,14 +164,17 @@ export function App() {
     setRightPanel(next);
   }, []);
 
-  // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）
+  // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）；窄窗下通道列是覆盖层，
+  // Esc 同样收起（3.2 裁决：Esc 或再点入口收起）
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && rightPanel !== null) setRightPanel(null);
+      if (event.key !== "Escape") return;
+      if (rightPanel !== null) setRightPanel(null);
+      if (narrow && channelColumnOpen) setChannelShownOverride(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightPanel]);
+  }, [rightPanel, narrow, channelColumnOpen, setChannelShownOverride]);
 
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
   useEffect(() => {
@@ -255,9 +301,21 @@ export function App() {
                 }}
               />
             ) : (
-              <ChatView session={session} providersError={providersError} />
+              <ChatView session={session} providersError={providersError} onOpenChannel={openChannel} />
             )}
           </div>
+          {/* 通道列（子会话 PR4b）：主槽与右栏之间，常驻挂载同 RightPanelSlot 的先例——
+              parentId 为 null 时组件自己不显示任何东西，宽度过渡才不会被条件卸载打断。 */}
+          <ChannelColumn
+            parentId={channelParentId}
+            parentTitle={channelParentTitle}
+            session={session}
+            narrow={narrow}
+            shown={channelShownOverride}
+            onShownChange={setChannelShownOverride}
+            onVisibilityChange={setHasVisibleChannels}
+            openRequest={channelOpenRequest}
+          />
           {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
           <RightPanelSlot
             open={rightPanel !== null}
@@ -304,7 +362,16 @@ export function App() {
           </RightPanelSlot>
         </main>
 
-        <RightRail panel={rightPanel} onPanel={handlePanel} railEntries={railEntries} />
+        <RightRail
+          panel={rightPanel}
+          onPanel={handlePanel}
+          railEntries={railEntries}
+          channelColumn={
+            channelParentId !== null && hasVisibleChannels
+              ? { open: channelColumnOpen, onToggle: () => setChannelShownOverride(!channelColumnOpen) }
+              : null
+          }
+        />
       </div>
     </div>
   );
