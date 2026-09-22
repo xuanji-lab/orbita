@@ -13,7 +13,7 @@ import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRai
 import { RightPanelSlot } from "./shell/RightPanel";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
-import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
+import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB } from "./shell/drawer-state";
@@ -78,6 +78,12 @@ export function App() {
   useEffect(() => {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
+
+  /** 左侧栏宽度：同一套口径——拖动中只改本地，松手才落 settings（避免写风暴） */
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
+  useEffect(() => {
+    if (settings.sidebarWidth !== undefined) setSidebarWidth(settings.sidebarWidth);
+  }, [settings.sidebarWidth]);
 
   const { session, engine } = useChatSession(providers);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
@@ -190,6 +196,12 @@ export function App() {
           settingsTab={settingsTab}
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
+          width={sidebarWidth}
+          onWidthChange={setSidebarWidth}
+          onWidthCommit={(width) => {
+            setSidebarWidth(width);
+            changeSettings({ sidebarWidth: width });
+          }}
         />
 
         <main className="pane">

@@ -83,6 +83,12 @@ export interface AppSettings {
    * 拖动中不落盘，松手才写（避免写风暴）。
    */
   rightPanelWidth?: number;
+  /**
+   * 左侧栏的宽度。缺席 = 默认 288（设计系统的出厂尺寸）；合法区间 240–400，
+   * 越界或非数丢掉——同 rightPanelWidth 的口径（这个文件用户手改得到）。
+   * 拖动中不落盘，松手才写。
+   */
+  sidebarWidth?: number;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -134,6 +140,14 @@ export const RIGHT_PANEL_WIDTH_MIN = 280;
 export const RIGHT_PANEL_WIDTH_MAX = 560;
 export const RIGHT_PANEL_WIDTH_DEFAULT = 320;
 
+/**
+ * 左侧栏宽度的合法区间与默认值（与拖拽热区的夹取同源）。
+ * 下界 240：再窄会话标题就只剩几个字；上界 400：再宽就在抢对话面的地方。
+ */
+export const SIDEBAR_WIDTH_MIN = 240;
+export const SIDEBAR_WIDTH_MAX = 400;
+export const SIDEBAR_WIDTH_DEFAULT = 288;
+
 function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
 }
@@ -158,6 +172,7 @@ export function parseSettings(raw: unknown): AppSettings {
     theme?: unknown;
     drawer?: unknown;
     rightPanelWidth?: unknown;
+    sidebarWidth?: unknown;
     compaction?: unknown;
     gitAttribution?: unknown;
     titleModel?: unknown;
@@ -165,6 +180,7 @@ export function parseSettings(raw: unknown): AppSettings {
   };
   const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
   const width = record.rightPanelWidth;
+  const sidebar = record.sidebarWidth;
   const compaction = parseCompaction(record.compaction);
   const titleModel = parseTitleModel(record.titleModel);
   const lastUsed = parseLastUsed(record.lastUsed);
@@ -175,6 +191,12 @@ export function parseSettings(raw: unknown): AppSettings {
     width >= RIGHT_PANEL_WIDTH_MIN &&
     width <= RIGHT_PANEL_WIDTH_MAX
       ? { rightPanelWidth: Math.round(width) }
+      : {}),
+    ...(typeof sidebar === "number" &&
+    Number.isFinite(sidebar) &&
+    sidebar >= SIDEBAR_WIDTH_MIN &&
+    sidebar <= SIDEBAR_WIDTH_MAX
+      ? { sidebarWidth: Math.round(sidebar) }
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(compaction === undefined ? {} : { compaction }),

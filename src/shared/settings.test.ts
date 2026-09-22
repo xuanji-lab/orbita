@@ -6,6 +6,8 @@ import {
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
 } from "./settings.ts";
 
@@ -79,6 +81,38 @@ describe("parseSettings: drawer 字段", () => {
     const parsed = parseSettings({ theme: "light", drawer: "collapsed" });
     deepStrictEqual(parsed.theme, "light");
     deepStrictEqual(parsed.drawer, DEFAULT_SETTINGS.drawer);
+  });
+});
+
+describe("parseSettings 的 sidebarWidth", () => {
+  it("缺席 = 没拖过，不落这个键（默认宽度不写进用户的文件）", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).sidebarWidth, undefined);
+  });
+
+  it("区间内的值收下并取整", () => {
+    deepStrictEqual(parseSettings({ sidebarWidth: 320 }).sidebarWidth, 320);
+    deepStrictEqual(parseSettings({ sidebarWidth: 301.6 }).sidebarWidth, 302);
+  });
+
+  it("区间端点合法", () => {
+    deepStrictEqual(parseSettings({ sidebarWidth: SIDEBAR_WIDTH_MIN }).sidebarWidth, SIDEBAR_WIDTH_MIN);
+    deepStrictEqual(parseSettings({ sidebarWidth: SIDEBAR_WIDTH_MAX }).sidebarWidth, SIDEBAR_WIDTH_MAX);
+  });
+
+  // 同 rightPanelWidth 的口径：这里不钳制、只丢弃——钳制是渲染层拖拽的事，
+  // 一个手改出来的 4000 不该被“猜”成 400
+  it("越界与非数一律丢掉，不把侧栏拖成一条线", () => {
+    deepStrictEqual(parseSettings({ sidebarWidth: 120 }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: 4000 }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: "wide" }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: Number.NaN }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: null }).sidebarWidth, undefined);
+  });
+
+  it("坐错位置的宽度不串台：两个宽度各记各的", () => {
+    const parsed = parseSettings({ sidebarWidth: 360, rightPanelWidth: 420 });
+    deepStrictEqual(parsed.sidebarWidth, 360);
+    deepStrictEqual(parsed.rightPanelWidth, 420);
   });
 });
 

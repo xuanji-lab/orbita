@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { Chip } from "./Chip";
@@ -8,6 +8,7 @@ import { Menu, type MenuItem } from "./Menu";
 import type { ChatSession } from "../features/chat/useChatSession";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
+import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
 import {
@@ -27,7 +28,7 @@ export type Overlay = "settings" | null;
 const COLLAPSE_BREAKPOINT = 960;
 
 /**
- * 左栏，288px。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
+ * 左栏，默认 288px，**可拖宽**（240–400，双击回 288）。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
  * 结构完全由中卡的边缘给出（设计系统 *Layout*：both sidebars are unbounded）。
  *
  * 只列真实存在的东西：本分支还没有会话存储，所以「会话列表」目前最多一条——
@@ -48,8 +49,15 @@ export function Sidebar(props: {
   settingsTab: SettingsTab;
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
+  /** 当前宽度（px）。拖动中由调用方只改本地 state，松手才落 settings */
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
 }) {
   const { session } = props;
+  const asideRef = useRef<HTMLElement | null>(null);
+  /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
+  const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
   const [showArchived, setShowArchived] = useState(false);
   /**
@@ -122,6 +130,40 @@ export function Sidebar(props: {
     session.openSession(id);
   };
 
+  /**
+   * 拖宽：右移变宽（与右侧面板同一套机制，只是方向相反）。区间 240–400；
+   * 拖动中不做动画、全文选择与光标固定成拖拽语义，松手还原；双击热区回 288。
+   * 对话面（`main.pane`）是 `flex: 1`，侧栏变宽它自己就让出来——用户要的正是
+   * 「靠右侧 chat view 的宽度来调节」（2026-09-22 wafo）。
+   */
+  const startResize = (event: React.PointerEvent): void => {
+    if (event.button !== 0) return;
+    const aside = asideRef.current;
+    if (aside === null) return;
+    event.preventDefault();
+    setResizing(true);
+    const startX = event.clientX;
+    const startWidth = aside.getBoundingClientRect().width;
+    const clamp = (value: number): number =>
+      Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(value)));
+    const previousSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    const move = (ev: PointerEvent): void => {
+      props.onWidthChange(clamp(startWidth + (ev.clientX - startX)));
+    };
+    const up = (ev: PointerEvent): void => {
+      window.removeEventListener("pointermove", move);
+      document.body.style.userSelect = previousSelect;
+      document.body.style.cursor = previousCursor;
+      setResizing(false);
+      props.onWidthCommit(clamp(startWidth + (ev.clientX - startX)));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  };
+
   // —— 折叠态：48px 图标条（RailButton 规格：32px 方块、tooltip 即标签、
   // 底部 archive + settings 簇）。折叠期间列表不可达，要切会话先展开。
   if (collapsed) {
@@ -173,17 +215,20 @@ export function Sidebar(props: {
   }
 
   return (
+    <>
     <aside
+      ref={asideRef}
       style={{
-        width: 288,
-        flex: "0 0 288px",
+        width: props.width,
+        flex: `0 0 ${props.width}px`,
         display: "flex",
         flexDirection: "column",
         gap: "var(--space-3)",
         padding: "var(--space-2) var(--space-3)",
         background: "transparent",
         overflow: "hidden",
-        transition: "width var(--duration-fast) var(--ease-standard)",
+        // 拖动中禁过渡：160ms 的宽度动画会让跟手变成拖一根皮筋
+        transition: resizing ? "none" : "width var(--duration-fast) var(--ease-standard)",
       }}
     >
       {/*
@@ -443,6 +488,28 @@ export function Sidebar(props: {
         onClick={() => props.onOverlay(settingsOpen ? null : "settings")}
       />
     </aside>
+    {/*
+      拖宽热区：侧栏与对话面之间那道缝里的 6px，紧贴面的左缘。
+      **不放在 aside 里**：aside 是 overflow:hidden 的，放里面会被裁；也不压在
+      面上（那会抢走对话面左缘那一条的点击）。定位基准是 `.layer`（唯一带
+      position 的祖先），所以 left = 左内边距 + 侧栏宽 + 缝−热区宽。
+      绝对定位不占 flex 位，不会给 .layer 多出一列。
+    */}
+    <span
+      onPointerDown={startResize}
+      onDoubleClick={() => props.onWidthCommit(SIDEBAR_WIDTH_DEFAULT)}
+      title="Drag to resize · double-click to reset"
+      style={{
+        position: "absolute",
+        left: `calc(var(--space-3) + ${props.width}px + var(--space-3) - 6px)`,
+        top: "var(--space-3)",
+        bottom: "var(--space-3)",
+        width: 6,
+        cursor: "col-resize",
+        zIndex: 5,
+      }}
+    />
+    </>
   );
 }
 
