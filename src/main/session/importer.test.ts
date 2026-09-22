@@ -43,6 +43,7 @@ const orbitaWorkspace = (path: string, id = "11111111-1111-4111-8111-11111111111
   name: path.split("/").pop() ?? path,
   path,
   createdAt: 1,
+  attachedDirs: [],
 });
 
 const REGISTERED = [

@@ -648,7 +648,7 @@ describe("真实样本快照（night-run fixtures）", async () => {
         pinned: item.pinned,
       })),
     );
-    const orbitaWorkspace: Workspace = { id: "w-1", name: "ws", path: "/tmp/anywhere", createdAt: 1 };
+    const orbitaWorkspace: Workspace = { id: "w-1", name: "ws", path: "/tmp/anywhere", createdAt: 1, attachedDirs: [] };
     const report = await runImport(deps({ workspaces: [orbitaWorkspace] }));
     const convertible = manifest.filter((item) => EXPECTED[item.id]?.convertible === true).length;
     assert.equal(report.imported, convertible);

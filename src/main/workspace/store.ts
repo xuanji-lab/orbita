@@ -65,6 +65,7 @@ export class WorkspaceStore {
       name: deriveWorkspaceName(path),
       path,
       createdAt: Date.now(),
+      attachedDirs: [],
     };
     await this.save([...workspaces, workspace]);
     return workspace;
@@ -83,6 +84,7 @@ export class WorkspaceStore {
       name: normalizeWorkspaceName(workspace.name, workspace.path),
       path: workspace.path,
       createdAt: Date.now(),
+      attachedDirs: [],
     };
     await this.save([...workspaces, next]);
     return next;
@@ -166,6 +168,7 @@ export class WorkspaceStore {
         name: deriveWorkspaceName(legacy.current),
         path: legacy.current,
         createdAt: Date.now(),
+        attachedDirs: [],
       },
     ];
     await this.save(workspaces);

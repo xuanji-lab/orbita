@@ -43,6 +43,16 @@ export const ipcChannels = {
   workspaceRemove: "workspace:remove",
   /** 没有选定工作区时 agent 落在哪儿。渲染层要如实告诉用户这个兜底，不能让它是个隐形默认 */
   workspaceDefault: "workspace:default",
+  /**
+   * 命名新建：在 `~/Orbita/<name>/` 建文件夹并加为工作区。建完就是普通工作区，
+   * 与「选已有文件夹」无差别——只有一种工作区，没有 Proma 那种「托管空白工作区」。
+   * 同名文件夹已存在就直接加它（不覆盖、不报错）。
+   */
+  workspaceCreate: "workspace:create",
+  /** 打开原生目录选择器，把选中目录加进工作区的 attachedDirs；重复加不报错、不重复 */
+  workspaceAttachDir: "workspace:attach-dir",
+  /** 从 attachedDirs 移除一条；不在列表里不报错 */
+  workspaceDetachDir: "workspace:detach-dir",
   providerBuiltins: "provider:builtins",
   providerDiscover: "provider:discover",
   providerTest: "provider:test",

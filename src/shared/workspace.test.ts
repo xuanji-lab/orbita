@@ -13,6 +13,7 @@ const valid: Workspace = {
   name: "orbita-lab",
   path: "/Users/wafo/Documents/repo/orbita-lab",
   createdAt: 1000,
+  attachedDirs: [],
 };
 
 describe("deriveWorkspaceName", () => {
@@ -68,6 +69,22 @@ describe("parseWorkspace", () => {
 
   it("缺 createdAt 给 0，不因为一个时间戳丢掉整条工作区", () => {
     strictEqual(parseWorkspace({ ...valid, createdAt: undefined })?.createdAt, 0);
+  });
+
+  it("缺 attachedDirs 解析为空数组——字段之前存的工作区不迁移", () => {
+    deepStrictEqual(parseWorkspace({ ...valid, attachedDirs: undefined })?.attachedDirs, []);
+  });
+
+  it("attachedDirs 不是数组时解析为空数组", () => {
+    deepStrictEqual(parseWorkspace({ ...valid, attachedDirs: "x" })?.attachedDirs, []);
+    deepStrictEqual(parseWorkspace({ ...valid, attachedDirs: {} })?.attachedDirs, []);
+  });
+
+  it("attachedDirs 混入空串、数字、重复项时只留合法且去重保序", () => {
+    deepStrictEqual(
+      parseWorkspace({ ...valid, attachedDirs: ["/a", "", 1, "/b", "/a"] })?.attachedDirs,
+      ["/a", "/b"],
+    );
   });
 
   it("不认识的字段丢掉", () => {

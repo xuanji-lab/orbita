@@ -42,6 +42,7 @@ const workspace = (id: string, name: string): Workspace => ({
   name,
   path: `/tmp/${name}`,
   createdAt: 0,
+  attachedDirs: [],
 });
 
 const meta = (id: string, title: string, patch: Partial<SessionMeta> = {}): SessionMeta => ({
