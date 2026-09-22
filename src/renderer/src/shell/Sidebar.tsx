@@ -8,7 +8,7 @@ import { Menu, type MenuItem } from "./Menu";
 import type { ChatSession } from "../features/chat/useChatSession";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
+import { clampSideWidth, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
 import {
@@ -20,6 +20,7 @@ import {
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
+import { useSideTotalWidth } from "./side-width.ts";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
 export type Overlay = "settings" | null;
@@ -28,7 +29,7 @@ export type Overlay = "settings" | null;
 const COLLAPSE_BREAKPOINT = 960;
 
 /**
- * 左栏，默认 288px，**可拖宽**（240–400，双击回 288）。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
+ * 左栏，默认 288px，**可拖宽**（chat 宽度的 1/3–2/3，双击回 288）。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
  * 结构完全由中卡的边缘给出（设计系统 *Layout*：both sidebars are unbounded）。
  *
  * 只列真实存在的东西：本分支还没有会话存储，所以「会话列表」目前最多一条——
@@ -85,6 +86,14 @@ export function Sidebar(props: {
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
+  /**
+   * 宽度的合法区间相对 chat 宽度，所以**渲染时也要夹一次**，不只拖动时：
+   * 盘上那个宽度可能是在更宽的窗口（或另一台显示器）上存的，右面板展开还会再把
+   * chat 挤窄。**只夹渲染值、不回写 settings**：用户拖出来的意愿留在盘上，
+   * 窗口回宽时它自己就回来了。
+   */
+  const total = useSideTotalWidth(asideRef, !collapsed);
+  const width = total > 0 ? clampSideWidth(props.width, total) : props.width;
   /** 高亮哪一条：盖着别的面时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.overlay !== null ? null : (session.sessionId ?? session.opened?.id ?? null);
 
@@ -131,8 +140,9 @@ export function Sidebar(props: {
   };
 
   /**
-   * 拖宽：右移变宽（与右侧面板同一套机制，只是方向相反）。区间 240–400；
-   * 拖动中不做动画、全文选择与光标固定成拖拽语义，松手还原；双击热区回 288。
+   * 拖宽：右移变宽（与右侧面板同一套机制，只是方向相反）。区间**按 chat 宽度算**
+   * ——最小 chat 的 1/3、最大 2/3（2026-09-22 wafo 裁决），换算见 clampSideWidth；
+   * 拖动中不做动画、全文选择与光标固定成拖拽语义，松手还原；双击热区回 288（同样夹一次）。
    * 对话面（`main.pane`）是 `flex: 1`，侧栏变宽它自己就让出来——用户要的正是
    * 「靠右侧 chat view 的宽度来调节」（2026-09-22 wafo）。
    */
@@ -144,8 +154,7 @@ export function Sidebar(props: {
     setResizing(true);
     const startX = event.clientX;
     const startWidth = aside.getBoundingClientRect().width;
-    const clamp = (value: number): number =>
-      Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(value)));
+    const clamp = (value: number): number => clampSideWidth(value, total);
     const previousSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = "none";
@@ -219,8 +228,8 @@ export function Sidebar(props: {
     <aside
       ref={asideRef}
       style={{
-        width: props.width,
-        flex: `0 0 ${props.width}px`,
+        width,
+        flex: `0 0 ${width}px`,
         display: "flex",
         flexDirection: "column",
         gap: "var(--space-3)",
@@ -497,11 +506,11 @@ export function Sidebar(props: {
     */}
     <span
       onPointerDown={startResize}
-      onDoubleClick={() => props.onWidthCommit(SIDEBAR_WIDTH_DEFAULT)}
+      onDoubleClick={() => props.onWidthCommit(clampSideWidth(SIDEBAR_WIDTH_DEFAULT, total))}
       title="Drag to resize · double-click to reset"
       style={{
         position: "absolute",
-        left: `calc(var(--space-3) + ${props.width}px + var(--space-3) - 6px)`,
+        left: `calc(var(--space-3) + ${width}px + var(--space-3) - 6px)`,
         top: "var(--space-3)",
         bottom: "var(--space-3)",
         width: 6,

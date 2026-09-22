@@ -78,14 +78,15 @@ export interface TitleModel {
 export interface AppSettings {
   theme: ThemePreference;
   /**
-   * 右侧分屏面板的宽度（4-0 拖宽）。缺席 = 默认 320；合法区间 280–560，
-   * 越界或非数丢掉——这个文件用户手改得到，一个坏值不该把面板拖成一条线。
+   * 右侧分屏面板的宽度（4-0 拖宽）。缺席 = 默认 320。**这里只做 ≥200 的硬校验**：
+   * 合法上界依赖当前窗口宽度（见 clampSideWidth），落盘的值换个显示器就可能越界，
+   * 所以真正的夹取在渲染层每次渲染时做，存储层只拦「把面板拖成一条线」的坏值。
    * 拖动中不落盘，松手才写（避免写风暴）。
    */
   rightPanelWidth?: number;
   /**
-   * 左侧栏的宽度。缺席 = 默认 288（设计系统的出厂尺寸）；合法区间 240–400，
-   * 越界或非数丢掉——同 rightPanelWidth 的口径（这个文件用户手改得到）。
+   * 左侧栏的宽度。缺席 = 默认 288（设计系统的出厂尺寸）；同 rightPanelWidth 的口径——
+   * 存储层只拦 <200 的坏值，区间由渲染层按当前 chat 宽度算（clampSideWidth）。
    * 拖动中不落盘，松手才写。
    */
   sidebarWidth?: number;
@@ -135,18 +136,39 @@ export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed" | "t
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
 export const DRAWER_WIDTH = { min: 280, max: 560, default: 320 } as const;
 
-/** 右侧面板宽度的合法区间与默认值（与拖拽热区的夹取同源）。 */
-export const RIGHT_PANEL_WIDTH_MIN = 280;
-export const RIGHT_PANEL_WIDTH_MAX = 560;
+/** 右侧面板宽度的默认值（双击热区复位的目标，会再按当前窗口夹一次）。 */
 export const RIGHT_PANEL_WIDTH_DEFAULT = 320;
 
-/**
- * 左侧栏宽度的合法区间与默认值（与拖拽热区的夹取同源）。
- * 下界 240：再窄会话标题就只剩几个字；上界 400：再宽就在抢对话面的地方。
- */
-export const SIDEBAR_WIDTH_MIN = 240;
-export const SIDEBAR_WIDTH_MAX = 400;
+/** 左侧栏宽度的默认值（设计系统出厂尺寸，同样会按当前窗口夹一次）。 */
 export const SIDEBAR_WIDTH_DEFAULT = 288;
+
+/**
+ * 侧栏宽度的硬地板（px）。小窗口保护：窗口再窄，侧栏也不能收成一条看不出内容的缝。
+ * 它会压过下面按比例算出的上限——挤到 chat 也比侧栏消失好。
+ */
+const SIDE_WIDTH_FLOOR = 200;
+
+/**
+ * 把一侧（左栏或右面板）的宽度夹进合法区间。**区间是相对 chat 宽度的，不是固定像素**
+ * ——2026-09-22 wafo 裁决：「左右两侧的最小宽度应该是 chat view 的 1/3，最大应该是 2/3」，
+ * 左右同一条规则。
+ *
+ * 换算：拖一侧时另一侧不动，所以「该侧栏 + chat」的总宽 `total`（记作 T）是常量。
+ * 设侧栏宽 w，则 chat = T − w：
+ *   w ≥ (T − w)/3    ⇔ 3w ≥ T − w    ⇔ w ≥ T/4
+ *   w ≤ 2(T − w)/3   ⇔ 3w ≤ 2T − 2w  ⇔ w ≤ 2T/5
+ * 于是区间就是 **[T/4, 2T/5]**，不需要第二套固定上下限（2T/5 本身就是上限）。
+ *
+ * 地板与上限撞车（T 小到 2T/5 < 200）时**地板胜出**，见 SIDE_WIDTH_FLOOR。
+ * `total` 量不到（元素未挂载，为 0 或非数）时只保地板——不要拿一个假的 T 去夹。
+ */
+export function clampSideWidth(width: number, total: number): number {
+  const wanted = Number.isFinite(width) ? Math.round(width) : SIDE_WIDTH_FLOOR;
+  if (!Number.isFinite(total) || total <= 0) return Math.max(SIDE_WIDTH_FLOOR, wanted);
+  const floor = Math.max(SIDE_WIDTH_FLOOR, Math.round(total / 4));
+  const ceiling = Math.round((total * 2) / 5);
+  return Math.max(floor, Math.min(ceiling, wanted));
+}
 
 function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
@@ -186,16 +208,11 @@ export function parseSettings(raw: unknown): AppSettings {
   const lastUsed = parseLastUsed(record.lastUsed);
   return {
     theme,
-    ...(typeof width === "number" &&
-    Number.isFinite(width) &&
-    width >= RIGHT_PANEL_WIDTH_MIN &&
-    width <= RIGHT_PANEL_WIDTH_MAX
+    // 两个宽度只做 ≥ 地板的硬校验：上界随窗口变，存储层判不了，渲染层每次夹
+    ...(typeof width === "number" && Number.isFinite(width) && width >= SIDE_WIDTH_FLOOR
       ? { rightPanelWidth: Math.round(width) }
       : {}),
-    ...(typeof sidebar === "number" &&
-    Number.isFinite(sidebar) &&
-    sidebar >= SIDEBAR_WIDTH_MIN &&
-    sidebar <= SIDEBAR_WIDTH_MAX
+    ...(typeof sidebar === "number" && Number.isFinite(sidebar) && sidebar >= SIDE_WIDTH_FLOOR
       ? { sidebarWidth: Math.round(sidebar) }
       : {}),
     drawer: parseDrawer(record.drawer),

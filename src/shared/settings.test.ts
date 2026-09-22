@@ -1,13 +1,12 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  clampSideWidth,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
-  SIDEBAR_WIDTH_MAX,
-  SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
 } from "./settings.ts";
 
@@ -84,26 +83,71 @@ describe("parseSettings: drawer 字段", () => {
   });
 });
 
+describe("clampSideWidth：区间相对 chat 宽度（最小 1/3、最大 2/3）", () => {
+  // T = 侧栏 + chat。w ≥ (T−w)/3 ⇔ w ≥ T/4；w ≤ 2(T−w)/3 ⇔ w ≤ 2T/5
+  it("区间两端就是 T/4 与 2T/5，且换回 chat 正好是 1/3 与 2/3", () => {
+    deepStrictEqual(clampSideWidth(300, 1200), 300);
+    deepStrictEqual(clampSideWidth(480, 1200), 480);
+    // 下端：chat = 1200 − 300 = 900，侧栏 300 = 900/3
+    deepStrictEqual(300, (1200 - 300) / 3);
+    // 上端：chat = 1200 − 480 = 720，侧栏 480 = 720 × 2/3
+    deepStrictEqual(480, ((1200 - 480) * 2) / 3);
+  });
+
+  it("区间内原样收下并取整", () => {
+    deepStrictEqual(clampSideWidth(320, 1200), 320);
+    deepStrictEqual(clampSideWidth(320.4, 1200), 320);
+  });
+
+  it("越界两头都夹回来", () => {
+    deepStrictEqual(clampSideWidth(100, 1200), 300);
+    deepStrictEqual(clampSideWidth(900, 1200), 480);
+  });
+
+  it("窗口小到 T/4 落在地板以下时地板接管（上限仍按 2T/5）", () => {
+    // T = 600：T/4 = 150 < 200 → 下界 200；上界 2T/5 = 240
+    deepStrictEqual(clampSideWidth(100, 600), 200);
+    deepStrictEqual(clampSideWidth(220, 600), 220);
+    deepStrictEqual(clampSideWidth(300, 600), 240);
+  });
+
+  it("地板压过上限的退化情况：返回地板，宁可挤 chat 也不把侧栏收成一条线", () => {
+    // T = 400：上界 2T/5 = 160 < 地板 200
+    deepStrictEqual(clampSideWidth(320, 400), 200);
+    deepStrictEqual(clampSideWidth(100, 400), 200);
+  });
+
+  it("量不到 T（元素未挂载）时只保地板，不拿假的 T 去夹", () => {
+    deepStrictEqual(clampSideWidth(320, 0), 320);
+    deepStrictEqual(clampSideWidth(100, 0), 200);
+    deepStrictEqual(clampSideWidth(320, Number.NaN), 320);
+  });
+
+  it("非数的宽度退到地板，不把 NaN 传进样式", () => {
+    deepStrictEqual(clampSideWidth(Number.NaN, 1200), 300);
+  });
+});
+
 describe("parseSettings 的 sidebarWidth", () => {
   it("缺席 = 没拖过，不落这个键（默认宽度不写进用户的文件）", () => {
     deepStrictEqual(parseSettings({ theme: "dark" }).sidebarWidth, undefined);
   });
 
-  it("区间内的值收下并取整", () => {
+  it("合法值收下并取整", () => {
     deepStrictEqual(parseSettings({ sidebarWidth: 320 }).sidebarWidth, 320);
     deepStrictEqual(parseSettings({ sidebarWidth: 301.6 }).sidebarWidth, 302);
   });
 
-  it("区间端点合法", () => {
-    deepStrictEqual(parseSettings({ sidebarWidth: SIDEBAR_WIDTH_MIN }).sidebarWidth, SIDEBAR_WIDTH_MIN);
-    deepStrictEqual(parseSettings({ sidebarWidth: SIDEBAR_WIDTH_MAX }).sidebarWidth, SIDEBAR_WIDTH_MAX);
+  // 上界依赖当前窗口宽度（clampSideWidth），存储层判不了：一个在 4K 屏上存下的
+  // 700 在笔记本上越界，但它不是坏值——夹取交给渲染层每次渲染时做
+  it("只拦 <200 的坏值，大值留着交给渲染层夹", () => {
+    deepStrictEqual(parseSettings({ sidebarWidth: 200 }).sidebarWidth, 200);
+    deepStrictEqual(parseSettings({ sidebarWidth: 199 }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: 120 }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: 4000 }).sidebarWidth, 4000);
   });
 
-  // 同 rightPanelWidth 的口径：这里不钳制、只丢弃——钳制是渲染层拖拽的事，
-  // 一个手改出来的 4000 不该被“猜”成 400
-  it("越界与非数一律丢掉，不把侧栏拖成一条线", () => {
-    deepStrictEqual(parseSettings({ sidebarWidth: 120 }).sidebarWidth, undefined);
-    deepStrictEqual(parseSettings({ sidebarWidth: 4000 }).sidebarWidth, undefined);
+  it("非数一律丢掉", () => {
     deepStrictEqual(parseSettings({ sidebarWidth: "wide" }).sidebarWidth, undefined);
     deepStrictEqual(parseSettings({ sidebarWidth: Number.NaN }).sidebarWidth, undefined);
     deepStrictEqual(parseSettings({ sidebarWidth: null }).sidebarWidth, undefined);
@@ -113,6 +157,20 @@ describe("parseSettings 的 sidebarWidth", () => {
     const parsed = parseSettings({ sidebarWidth: 360, rightPanelWidth: 420 });
     deepStrictEqual(parsed.sidebarWidth, 360);
     deepStrictEqual(parsed.rightPanelWidth, 420);
+  });
+});
+
+describe("parseSettings 的 rightPanelWidth", () => {
+  it("缺席 = 没拖过，不落这个键", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).rightPanelWidth, undefined);
+  });
+
+  it("同 sidebarWidth 的口径：只拦 <200，取整后收下", () => {
+    deepStrictEqual(parseSettings({ rightPanelWidth: 200 }).rightPanelWidth, 200);
+    deepStrictEqual(parseSettings({ rightPanelWidth: 411.4 }).rightPanelWidth, 411);
+    deepStrictEqual(parseSettings({ rightPanelWidth: 150 }).rightPanelWidth, undefined);
+    deepStrictEqual(parseSettings({ rightPanelWidth: 900 }).rightPanelWidth, 900);
+    deepStrictEqual(parseSettings({ rightPanelWidth: "wide" }).rightPanelWidth, undefined);
   });
 });
 
