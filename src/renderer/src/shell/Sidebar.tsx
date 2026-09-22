@@ -502,6 +502,7 @@ export function Sidebar(props: {
           {/* 灯泡 = 「这条会话还留着 idea / 没办完的事」（wafo 2026-09-22 裁决） */}
           <Chip
             icon="lightbulb"
+            compact={filterCompact}
             active={hasTodosOnly}
             title="Show tasks with open carryover items only"
             onClick={() => setHasTodosOnly((value) => !value)}
