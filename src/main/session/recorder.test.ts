@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
+import { composeChannelPrompt } from "../../shared/channel.ts";
 import { createSessionRecorder } from "./recorder.ts";
 import { SessionStore } from "./store.ts";
 
@@ -228,6 +229,78 @@ describe("createSessionRecorder", () => {
     record({ type: "compaction", sessionId: ID, record: compacted });
     await settle();
     assert.equal((await store.load(ID))?.meta.title, "");
+  });
+});
+
+describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描述 + recorder 无状态识别）", () => {
+  const envelopeUser = (text: string, id = "u-env", timestamp = 5000) => ({
+    id,
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    timestamp,
+  });
+
+  test("信封 user → 落一条 ChannelMarkRecord，不落 user 消息", async () => {
+    const prompt = composeChannelPrompt(
+      {
+        id: "m1",
+        from: "parent",
+        author: "model",
+        kind: "task",
+        text: "去把外壳重做",
+        delivery: "followUp",
+        createdAt: 1,
+      },
+      { id: "p1", title: "母任务" },
+    );
+    record(progress({ type: "item_started", item: envelopeUser(prompt) }));
+    await settle();
+    const detail = await store.load(ID);
+    assert.equal(detail?.transcript.length, 1);
+    assert.deepEqual(detail?.transcript[0], {
+      role: "channel-mark",
+      id: "u-env",
+      peerId: "p1",
+      messageId: "m1",
+      from: "parent",
+      kind: "task",
+      timestamp: 5000,
+    });
+  });
+
+  test("普通 user 消息照旧落成 user 记录——不是每条 user 消息都要过一遍解析开销地改变落盘形状", async () => {
+    record(progress({ type: "item_started", item: user }));
+    await settle();
+    const item = (await store.load(ID))?.transcript[0];
+    assert.equal(item?.role, "user");
+  });
+
+  test("assistant 里出现信封文本不受影响——只有 user 的 item_started 才检查", async () => {
+    const prompt = composeChannelPrompt(
+      {
+        id: "m2",
+        from: "child",
+        author: "model",
+        kind: "question",
+        text: "要不要继续",
+        delivery: "followUp",
+        createdAt: 2,
+      },
+      { id: "c1", title: "子任务" },
+    );
+    const assistantWithEnvelopeLikeText = {
+      id: "a-env",
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: prompt }],
+      model: { provider: "zai", id: "glm-5.3" },
+      timestamp: 6000,
+      status: "complete" as const,
+      stopReason: "stop" as const,
+    };
+    record(progress({ type: "item_finished", item: assistantWithEnvelopeLikeText }));
+    await settle();
+    const item = (await store.load(ID))?.transcript[0];
+    assert.equal(item?.role, "assistant");
   });
 });
 

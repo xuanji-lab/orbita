@@ -9,6 +9,7 @@ import {
   type ProviderSecrets,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
+import { parseChannelPrompt } from "../../shared/channel.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
@@ -119,7 +120,7 @@ export function registerAgentIpc(
   mcp: McpStore,
   /** 应用设置。压缩偏好（A-1）从这里装配进每轮开轮命令 */
   settings: SettingsStore,
-): void {
+): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
    * 读一份 mcp.json。读不出来不拦开轮：失败当场打日志、管理面会把读错原文显示出来；
    * 一份写坏的 mcp.json 不该让用户连对话都开不了（与 D-3 不矛盾：那条纪律是
@@ -207,7 +208,12 @@ export function registerAgentIpc(
     });
   }
 
-  ipcMain.handle(ipcChannels.agentSubmit, async (_e, input: SubmitAgentInput): Promise<void> => {
+  /**
+   * 发一轮（`agent:submit` handler 的函数体，抽出来是因为子会话的派出/投递
+   * 也要开同一种轮——`applyDelegate` / `deliverToChild`（channel/requests.ts）
+   * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
+   */
+  async function submitTurn(input: SubmitAgentInput): Promise<void> {
     const provider = await resolveProviderSecrets(providers, input.providerId);
     const piSessionFile = await host.submit({
       type: "submit",
@@ -224,10 +230,14 @@ export function registerAgentIpc(
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
-    if (await sessions.needsAutoTitle(input.sessionId)) {
+    // 子会话（2026-09-23）：input.text 是投递信封时不生成标题——信封不是用户说的话，
+    // 拿它起标题会把 `<channel from="parent" …>` 这类机器文本喂给标题模型。
+    if (parseChannelPrompt(input.text) === null && (await sessions.needsAutoTitle(input.sessionId))) {
       host.generateTitle(input.sessionId, input.text, await readTitleModel());
     }
-  });
+  }
+
+  ipcMain.handle(ipcChannels.agentSubmit, (_e, input: SubmitAgentInput): Promise<void> => submitTurn(input));
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
@@ -273,6 +283,8 @@ export function registerAgentIpc(
     ipcChannels.agentAnswerPermission,
     (_e, requestId: string, answer: PermissionAnswer) => host.answerPermission(requestId, answer),
   );
+
+  return { submitTurn };
 }
 
 /** agent 进程的事件 → 所有窗口 */
