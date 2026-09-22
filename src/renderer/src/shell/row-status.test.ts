@@ -2,7 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import { rowStatusIcon } from "./row-status.ts";
 
-const none = { running: false, failed: false, done: false, pinned: false };
+const none = { running: false, failed: false, pinned: false };
 
 describe("rowStatusIcon", () => {
   it("运行中转圈，颜色是 accent", () => {
@@ -19,15 +19,6 @@ describe("rowStatusIcon", () => {
     strictEqual(rowStatusIcon({ ...none, failed: true })?.tone, "var(--color-danger)");
   });
 
-  it("完成画 accent 勾", () => {
-    deepStrictEqual(rowStatusIcon({ ...none, done: true }), {
-      icon: "check",
-      tone: "var(--color-accent)",
-      label: "Done",
-      spin: false,
-    });
-  });
-
   it("置顶画 pin", () => {
     strictEqual(rowStatusIcon({ ...none, pinned: true })?.icon, "pin");
   });
@@ -36,18 +27,14 @@ describe("rowStatusIcon", () => {
     strictEqual(rowStatusIcon(none), null);
   });
 
-  it("又完成又置顶取完成：终局比排序偏好更该被看见", () => {
-    strictEqual(rowStatusIcon({ ...none, done: true, pinned: true })?.icon, "check");
-  });
-
-  it("正在跑压过完成与置顶：正在发生的事优先", () => {
+  it("正在跑压过置顶：正在发生的事优先", () => {
     strictEqual(
-      rowStatusIcon({ running: true, failed: false, done: true, pinned: true })?.icon,
+      rowStatusIcon({ running: true, failed: false, pinned: true })?.icon,
       "loader-circle",
     );
   });
 
-  it("失败压过完成：跑挂了比历史标记更该被看见", () => {
-    strictEqual(rowStatusIcon({ ...none, failed: true, done: true })?.icon, "triangle-alert");
+  it("失败压过置顶：跑挂了比排序偏好更该被看见", () => {
+    strictEqual(rowStatusIcon({ ...none, failed: true, pinned: true })?.icon, "triangle-alert");
   });
 });

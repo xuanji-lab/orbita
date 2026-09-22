@@ -1033,10 +1033,10 @@ function SessionRow(props: {
   const failed = !running && (session.turnErrorOf(meta.id) !== null || (live && session.error !== null));
   const done = isSessionDone(meta);
   /**
-   * 行首状态槽：running > failed > done > pinned > 空。优先级与理由在
+   * 行首状态槽：running > failed > pinned > 空。优先级与理由在
    * `row-status.ts`（纯函数 + 测试）。`null` = 这一行没什么可说，槽留空。
    */
-  const status = rowStatusIcon({ running, failed, done, pinned: meta.pinned === true });
+  const status = rowStatusIcon({ running, failed, pinned: meta.pinned === true });
   // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）
   const doneCount = session.sessions.filter(
     (m) => isSessionDone(m) && !m.archived,
@@ -1223,13 +1223,11 @@ function SessionRow(props: {
         <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
       </IconButton>
       {/**
-        完成开关：**只在 hover / 键盘聚焦时出现，done 也不常显**（wafo 2026-09-22）。
-        上一版落定后常显一个实心 accent 圈勾，而行首状态槽里已经有一个 accent 勾了——
-        一行两个勾，第二个不多说任何事。显示归状态槽，这里只留**入口**：
-        悬停才出，描边，点一下切换完成 / Reopen。
-        tooltip 兼任闲置建议：超过 7 天没动静的任务，建议就写在这个开关的 tooltip 里，
-        而不再多摆一个长得一模一样的建议按钮（同一个动作不该有两个按钮）。
-        done_with_todos 本分支写不出来（遗留事项扫描在后面的 PR），它的专用图标等那时再接。
+        完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
+        hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后常显、accent；再点 = Reopen。
+        图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
+        tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
+        不另摆一个建议按钮。done_with_todos 的专用图标（lightbulb）等遗留事项 PR 再接。
       */}
       <IconButton
         label={done ? "Reopen this task" : "Mark this task done"}
@@ -1246,12 +1244,12 @@ function SessionRow(props: {
         }
         style={{
           borderRadius: "var(--radius-xs)",
-          color: "var(--color-text-tertiary)",
-          opacity: hover || focused ? 1 : 0,
+          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
+          opacity: done || hover || focused ? 1 : 0,
           transition: "opacity var(--duration-instant) var(--ease-standard)",
         }}
       >
-        <Icon name="circle-check" size={13} strokeWidth={1.8} />
+        <Icon name="check" size={13} strokeWidth={done ? 2.4 : 1.8} />
       </IconButton>
       <Menu
         items={items}
