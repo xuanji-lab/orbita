@@ -4,6 +4,11 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeCompactions } from "./session-states";
+import {
+  HOME_CARD_CARRYOVER_ROWS,
+  HOME_CARD_QUERY_ROWS,
+  selectHomeCards,
+} from "./home-cards";
 import { isAtBottom } from "./scroll";
 import {
   branchAnchorEntries,
@@ -57,6 +62,9 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { CarryoverChecklist } from "./CarryoverChecklist";
+import { CarryoverScanCard } from "./CarryoverScanCard";
+import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling, knownModelParams } from "@shared/known-providers";
 import { modelMenuItems, useBuiltinCatalog } from "../settings/model-menu";
@@ -65,7 +73,7 @@ import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { thinkingLevelLabel, THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
-import { deriveSessionTitle, type CompactedRecord } from "@shared/session";
+import { deriveSessionTitle, type CompactedRecord, type SessionCompletion } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 
@@ -186,6 +194,15 @@ export function ChatView(props: {
     if (el !== null) el.scrollTop = el.scrollHeight;
   }, [openId]);
 
+  // 首页会话卡：有 open 遗留事项的会话优先占卡，剩余槽位按「最近活跃」补齐；
+  // 选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），这里只接线。
+  // **必须在首页分支之外无条件调用**——hook 不能长在条件分支里，首页让位给聊天页时
+  // hooks 数量一变 React 直接卸载整棵树（灰屏）。纯函数毫秒级，恒算不亏。
+  const homeCards = useMemo(
+    () => selectHomeCards(session.sessions, session.carryovers),
+    [session.sessions, session.carryovers],
+  );
+
   const composer = (
     <Composer
       value={session.draft}
@@ -220,6 +237,34 @@ export function ChatView(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+      {/*
+        收尾仪式的降级 / 结果反馈：一句中性的话，不当错误报。
+        读不懂扫描结果时这行带一个 Retry（重发同一条扫描消息）——失败不该只留一句
+        「已标完成」就无路可走。
+      */}
+      {session.scanNotice !== null && (
+        <Notice>
+          {session.scanNotice}
+          {session.retryClosingScan !== null && (
+            <button
+              type="button"
+              onClick={session.retryClosingScan}
+              style={{
+                border: 0,
+                background: "transparent",
+                padding: 0,
+                fontFamily: "var(--font-family-base)",
+                fontSize: "var(--font-size-control)",
+                color: "var(--color-text-primary)",
+                textDecoration: "underline",
+                cursor: "pointer",
+              }}
+            >
+              Retry
+            </button>
+          )}
+        </Notice>
+      )}
       {/*
         只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
         （guideline §四把这条代价写明了）。
@@ -264,9 +309,10 @@ export function ChatView(props: {
         </div>
       );
     }
-    // 会话卡数据：全局最近活跃的前 3 条（list 已按 sortSessions 排序），
-    // 排除已归档与从未发过消息的——后者连标题都没有，卡片无物可显
-    const recents = session.sessions.filter((m) => !m.archived && m.title !== "").slice(0, 3);
+    // 行位换成遗留标题（最多 4 行）；遗留事项直接吃引擎缓存（PR-4 的 carryoverList
+    // 通道，写操作自动刷新），卡不另建缓存、meta 不冗余计数。
+    // 点击：卡与行都进该会话（openSession）——滚动定位到 sourceMessageRange 的基建
+    // 还未立项（PR-4 面板同款 TODO），落定后行点击可升级为定位，卡保持进会话
     return (
       <div
         className="home-stage"
@@ -339,17 +385,23 @@ export function ChatView(props: {
                 ))}
               </div>
             ) : (
-              recents.length > 0 && (
+              homeCards.length > 0 && (
                 <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
-                  {recents.map((meta) => (
+                  {homeCards.map((card) => (
                     <SessionCard
-                      key={meta.id}
-                      name={meta.title}
-                      queries={meta.recentQueries}
-                      running={session.phaseOf(meta.id) !== "idle"}
+                      key={card.sessionId}
+                      name={card.title}
+                      items={card.rows.map((row) => ({
+                        // 图标与遗留事项面板的跳转按钮同款（corner-down-left）：
+                        // 这行的动作就是「跳到那条会话」，视觉语言一致
+                        icon: row.kind === "carryover" ? ("corner-down-left" as const) : undefined,
+                        text: row.text,
+                      }))}
+                      slots={card.todo ? HOME_CARD_CARRYOVER_ROWS : HOME_CARD_QUERY_ROWS}
+                      running={session.phaseOf(card.sessionId) !== "idle"}
                       onClick={() => {
                         startLeave();
-                        session.openSession(meta.id);
+                        session.openSession(card.sessionId);
                       }}
                     />
                   ))}
@@ -370,44 +422,68 @@ export function ChatView(props: {
     );
   }
 
+  // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
+  // 列表优先——活会话首条消息刚落盘时它先到
+  const openMeta = session.sessions.find((m) => m.id === openId) ?? session.opened;
   return (
-    <Pane
-      title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
-      badge={openId.slice(0, 6)}
-      badgeTitle={openId}
-      scrollRef={scrollRef}
-      onScroll={handleScroll}
-      // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
-      onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
-      footer={
-        <>
-          {notices}
-          {session.approvals[0] && (
-            <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
-          )}
-          {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
-          <QueueStrip
-            items={session.queued}
-            phase={session.phase}
-            onSendNow={session.sendQueuedNow}
-            onWithdraw={session.withdrawQueued}
-            onMove={session.moveQueuedTo}
-          />
-          {composer}
-        </>
-      }
-    >
-      <TranscriptColumn
-        transcript={session.transcript}
-        compactions={session.compactions}
-        phase={session.phase}
-        retry={session.retry}
-        turnError={session.turnError}
-        loadingHistory={session.loadingHistory}
-        onBranch={session.branchFrom}
-        onOpenTask={session.openSession}
-      />
-    </Pane>
+    <>
+      <Pane
+        title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
+        badge={openId.slice(0, 6)}
+        badgeTitle={openId}
+        scrollRef={scrollRef}
+        onScroll={handleScroll}
+        // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用
+        completion={openId === "" ? null : (openMeta?.completion ?? "open")}
+        onSetCompletion={
+          openId === "" ? undefined : (next) => session.setCompletionSession(openId, next)
+        }
+        // open 态点击走收尾仪式（降级矩阵在 hook）；Reopen 仍走 onSetCompletion
+        onMarkDone={openId === "" ? undefined : session.startClosingRitual}
+        closing={session.closingScan}
+        busy={session.phase !== "idle"}
+        scanless={openMeta?.piSessionFile == null}
+        // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
+        onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
+        footer={
+          <>
+            {notices}
+            {session.approvals[0] && (
+              <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
+            )}
+            {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示
+                （scanResult 由 hook 查看槽持有，切走再切回还在） */}
+            {session.scanResult !== null && session.scanResult.sessionId === openId && (
+              <CarryoverChecklist
+                drafts={session.scanResult.drafts}
+                onConfirm={session.confirmCarryovers}
+                onCancel={session.cancelCarryovers}
+              />
+            )}
+            {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
+            <QueueStrip
+              items={session.queued}
+              phase={session.phase}
+              onSendNow={session.sendQueuedNow}
+              onWithdraw={session.withdrawQueued}
+              onMove={session.moveQueuedTo}
+            />
+            {composer}
+          </>
+        }
+      >
+        <TranscriptColumn
+          transcript={session.transcript}
+          compactions={session.compactions}
+          phase={session.phase}
+          retry={session.retry}
+          turnError={session.turnError}
+          loadingHistory={session.loadingHistory}
+          onBranch={session.branchFrom}
+          onOpenTask={session.openSession}
+        />
+      </Pane>
+    </>
   );
 }
 
@@ -461,6 +537,30 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     () => transcript.some((item) => item.role === "tool" && item.status === "running"),
     [transcript],
   );
+  // 收尾扫描回复卡片化：落定的 assistant 消息若整条恰好是一个可解析的 fenced
+  // json 块（扫描回答的 prompt 契约形状），用只读展示卡替代 markdown 渲染——
+  // 原始 json 占屏是噪音（2026-09-22 用户反馈）。streaming 中保持普通流式渲染，
+  // 落定后自然翻转为卡片。判定按整条消息的全部 text 块拼接（与 collectScanAnswer
+  // 同口径：围栏可能被拆在多个 text 块里）；命中后多个 text 单元只在第一个的位置
+  // 渲染一次卡片，其余跳过——整条消息已进卡。消息里命中与 user 关闭无关，
+  // 挂在 records 上（扫描历史会话的旧回答同样卡片化）。
+  const carryoverCards = useMemo(() => {
+    const cards = new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
+    for (const record of records) {
+      if (record.role !== "assistant" || record.status === "streaming") continue;
+      let firstKey: string | null = null;
+      const parts: string[] = [];
+      record.content.forEach((block, index) => {
+        if (block.type !== "text") return;
+        if (firstKey === null) firstKey = `${record.id}:${index}`;
+        parts.push(block.text);
+      });
+      if (firstKey === null) continue;
+      const drafts = matchCarryoverMessage(parts.join(""));
+      if (drafts !== null) cards.set(record.id, { drafts, firstKey });
+    }
+    return cards;
+  }, [records]);
   // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
   // 那轮没折叠就不挂，红字自带的图标是全部。
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
@@ -490,6 +590,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
                 onOpenTask={props.onOpenTask}
+                carryoverCards={carryoverCards}
               />
             ) : (
               <EntryView
@@ -498,6 +599,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 activeThinkingKey={activeThinkingKey}
                 turnActive={turnActive}
                 onOpenTask={props.onOpenTask}
+                carryoverCards={carryoverCards}
               />
             )}
             {branchAfter !== undefined && (
@@ -553,6 +655,21 @@ function Pane(props: {
   title: string;
   badge: string;
   badgeTitle: string;
+  /** 当前会话的完成状态；null = 还没落盘（首条消息未发），完成入口不摆 */
+  completion: SessionCompletion | null;
+  /** 翻完成状态（Reopen 用）；没落盘时不传 */
+  onSetCompletion?: ((next: SessionCompletion) => void) | undefined;
+  /**
+   * open 态点击「Mark task done」的回调——收尾仪式（注入扫描、弹清单），
+   * 降级矩阵（在跑 / 只读 / 空对话）在 hook；不给则退回纯标记。
+   */
+  onMarkDone?: (() => void) | undefined;
+  /** 收尾扫描进行中：按钮转圈 */
+  closing?: boolean;
+  /** 会话在跑：open 态的完成按钮禁用（收尾要等话说完） */
+  busy?: boolean;
+  /** 只读（没有 pi 本子）：纯标记路径，tooltip 说明为什么没有扫描 */
+  scanless?: boolean;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
@@ -616,6 +733,51 @@ function Pane(props: {
         {props.onRename !== undefined && !editing && (
           <IconButton label="Rename task" size={24} onClick={() => setEditing(true)}>
             <Icon name="pencil-line" size={13} />
+          </IconButton>
+        )}
+        {/**
+          完成入口（第二处，与侧栏菜单同源）：open → Mark done（收尾仪式），非 open → Reopen。
+          降级矩阵在这里只做展示：扫描中转圈、在跑禁用、只读（无 pi 本子）在 tooltip
+          里说明是纯标记——真正的判定在 useChatSession.startClosingRitual。
+        */}
+        {props.completion !== null && props.onSetCompletion !== undefined && (
+          <IconButton
+            label={
+              props.completion === "open"
+                ? props.closing === true
+                  ? "Scanning for leftover items…"
+                  : "Mark task done"
+                : "Reopen task"
+            }
+            title={
+              props.completion === "open"
+                ? props.closing === true
+                  ? "Scanning this task for leftover items…"
+                  : props.busy === true
+                    ? "Wait for this task to finish before marking it done"
+                    : props.scanless === true
+                      ? "Mark done without a leftover scan (this task has no agent session)"
+                      : "Mark this task done — the agent scans for leftovers first, reopen anytime"
+                : "Reopen this task — clears the done state"
+            }
+            disabled={props.completion === "open" && (props.closing === true || props.busy === true)}
+            onClick={() =>
+              props.completion === "open"
+                ? (props.onMarkDone ?? (() => props.onSetCompletion?.("done")))()
+                : props.onSetCompletion?.("open")
+            }
+          >
+            <Icon
+              name={
+                props.completion === "open"
+                  ? props.closing === true
+                    ? "loader-circle"
+                    : "check"
+                  : "rotate-ccw"
+              }
+              size={13}
+              spin={props.closing === true}
+            />
           </IconButton>
         )}
         <span
@@ -684,6 +846,9 @@ function ComposerBar(props: { session: ChatSession }) {
   // 所以两个分支都要过 basename——显示层截尾，不动落库数据
   const scopeSource = workspace?.name ?? session.cwd;
   const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
+  // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
+  // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
+  const [namingWorkspace, setNamingWorkspace] = useState(false);
 
   // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）
   const catalog = useBuiltinCatalog();
@@ -704,6 +869,12 @@ function ComposerBar(props: { session: ChatSession }) {
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
     })),
+    {
+      id: "new-workspace",
+      label: "New workspace…",
+      icon: "plus",
+      onSelect: () => setNamingWorkspace(true),
+    },
     { id: "add", label: "Add a folder…", icon: "folder-plus", onSelect: session.addWorkspace },
   ];
 
@@ -763,17 +934,34 @@ function ComposerBar(props: { session: ChatSession }) {
     <>
       <Menu
         items={scopeItems}
-        trigger={({ open, toggle }) => (
-          <Chip
-            icon="folder"
-            active={open}
-            title={`${session.cwd ?? session.defaultCwd} · switching starts a new task`}
-            onClick={toggle}
-            chevron
-          >
-            {scope}
-          </Chip>
-        )}
+        trigger={({ open, toggle }) =>
+          namingWorkspace ? (
+            // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
+            // 与相邻芯片同一量级（scope 芯片 icon + 名字 + chevron ≈ 140px）
+            <InlineName
+              editing
+              value=""
+              placeholder="Workspace name"
+              onCommit={(name) => {
+                setNamingWorkspace(false);
+                const trimmed = name.trim();
+                if (trimmed !== "") session.createWorkspace(trimmed);
+              }}
+              onCancel={() => setNamingWorkspace(false)}
+              style={{ width: 140 }}
+            />
+          ) : (
+            <Chip
+              icon="folder"
+              active={open}
+              title={`${session.cwd ?? session.defaultCwd} · switching starts a new task`}
+              onClick={toggle}
+              chevron
+            >
+              {scope}
+            </Chip>
+          )
+        }
       />
       <Menu
         items={modeItems}
@@ -1006,11 +1194,20 @@ function EntryView(props: {
   activeThinkingKey: string | null;
   turnActive: boolean;
   onOpenTask?: (sessionId: string) => void;
+  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
 }) {
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") return <UserBubble item={entry.item} />;
-  if (entry.kind === "text") return <MarkdownBlock text={entry.text} />;
+  if (entry.kind === "text") {
+    const card = props.carryoverCards.get(entry.messageId);
+    if (card !== undefined) {
+      // 同一条消息的多个 text 块只渲染一张卡（第一个块的位置），其余已并进卡里
+      if (entry.key !== card.firstKey) return null;
+      return <CarryoverScanCard drafts={card.drafts} />;
+    }
+    return <MarkdownBlock text={entry.text} />;
+  }
   if (entry.kind === "thinking") {
     return (
       <ThinkingLine text={entry.text} active={entry.key === props.activeThinkingKey} blockKey={entry.key} />
@@ -1058,6 +1255,7 @@ function TurnRollupLine(props: {
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   onOpenTask?: (sessionId: string) => void;
+  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
 }) {
   const [open, setOpen] = useState(false);
   const { group } = props;
@@ -1115,6 +1313,7 @@ function TurnRollupLine(props: {
               activeThinkingKey={null}
               turnActive={false}
               onOpenTask={props.onOpenTask}
+              carryoverCards={props.carryoverCards}
             />
           ))}
         </div>

@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, rm, stat, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceStore } from "./store.ts";
@@ -147,7 +147,204 @@ describe("WorkspaceStore", () => {
     assert.deepEqual((await readdir(dir)).filter((n) => n.endsWith(".tmp")), []);
   });
 
-  test("默认路径是 home——UI 上那个「Home」和它必须是同一个值", async () => {
-    assert.equal(WorkspaceStore.defaultPath(), (await import("node:os")).homedir());
+  test("默认路径是 Orbita 根下的 Home——UI 上那个「Home」和它必须是同一个值", async () => {
+    const store2 = new WorkspaceStore(dir, join(dir, "Orbita"));
+    assert.equal(store2.defaultPath(), join(dir, "Orbita", "Home"));
+  });
+
+  test("ensureHome 幂等：调两次不炸，Home 目录真实存在", async () => {
+    const root = join(dir, "Orbita");
+    const home = new WorkspaceStore(dir, root);
+    await home.ensureHome();
+    await home.ensureHome();
+    assert.equal((await stat(join(root, "Home"))).isDirectory(), true);
+  });
+
+  // 命名新建（2026-09-22）：名字就是目录名，建在 ~/Orbita 根下
+  test("create 建目录并入列表，名字就是用户给的名字", async () => {
+    const root = join(dir, "Orbita");
+    const s = new WorkspaceStore(dir, root);
+    const created = await s.create("意图系统");
+    assert.equal(created.name, "意图系统");
+    assert.equal(created.path, join(root, "意图系统"));
+    assert.equal((await stat(join(root, "意图系统"))).isDirectory(), true);
+    assert.deepEqual((await s.list()).map((w) => w.path), [join(root, "意图系统")]);
+  });
+
+  test("名字先 trim 再当目录名，目录名与工作区名永远一致", async () => {
+    const root = join(dir, "Orbita");
+    const s = new WorkspaceStore(dir, root);
+    const created = await s.create("  我的项目  ");
+    assert.equal(created.name, "我的项目");
+    assert.equal(created.path, join(root, "我的项目"));
+  });
+
+  test("同名再 create 返回同一条，不重复", async () => {
+    const s = new WorkspaceStore(dir, join(dir, "Orbita"));
+    const first = await s.create("意图系统");
+    const second = await s.create("意图系统");
+    assert.equal(second.id, first.id);
+    assert.equal((await s.list()).length, 1);
+  });
+
+  test("同名文件夹已存在（用户手动建的）就直接加它，不覆盖不报错", async () => {
+    const root = join(dir, "Orbita");
+    await mkdir(join(root, "已有文件夹"), { recursive: true });
+    const s = new WorkspaceStore(dir, root);
+    const added = await s.create("已有文件夹");
+    assert.equal(added.path, join(root, "已有文件夹"));
+  });
+
+  test("非法名字抛错：空、纯空白、. 、.. 、含 / 或空字节，且不上磁盘", async () => {
+    const s = new WorkspaceStore(dir, join(dir, "Orbita"));
+    for (const bad of ["", "   ", ".", "..", "a/b", "a\0b"]) {
+      await assert.rejects(() => s.create(bad), Error);
+    }
+    assert.deepEqual(await s.list(), []);
+  });
+
+  test("超长名字截到 WORKSPACE_NAME_MAX，目录名跟着截后的走", async () => {
+    const root = join(dir, "Orbita");
+    const s = new WorkspaceStore(dir, root);
+    const created = await s.create("长".repeat(50));
+    assert.equal(created.name.length, 40);
+    assert.equal(created.path, join(root, "长".repeat(40)));
+  });
+
+  // ── 附加目录（文件面板与开轮目录清单共同的数据源）──
+
+  test("attachDir：挂真实目录落盘，返回更新后的 attachedDirs", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-attach-"));
+    try {
+      const ws = await store.add("/repo/x");
+      const updated = await store.attachDir(ws.id, real);
+      assert.deepEqual(updated, [await realpath(real)]);
+      assert.equal((await store.list()).find((w) => w.id === ws.id)?.attachedDirs.length, 1);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  test("attachDir：不存在的路径抛中文错", async () => {
+    const ws = await store.add("/repo/x");
+    await assert.rejects(
+      () => store.attachDir(ws.id, join(dir, "不在的目录")),
+      /附加目录不存在/,
+    );
+  });
+
+  test("attachDir：文件不是目录，抛中文错", async () => {
+    const file = join(dir, "a-file.txt");
+    await writeFile(file, "x", "utf8");
+    const ws = await store.add("/repo/x");
+    await assert.rejects(() => store.attachDir(ws.id, file), /不是文件夹/);
+  });
+
+  test("attachDir：存的是 realpath 后的真身，链接与真身不会攒成两条", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-real-"));
+    try {
+      const alias = join(dir, "alias");
+      await symlink(real, alias);
+      const ws = await store.add("/repo/x");
+      await store.attachDir(ws.id, alias);
+      const again = await store.attachDir(ws.id, real); // 用真身再挂一次也不重复
+      assert.deepEqual(again, [await realpath(real)]);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  test("detachDir：摘掉后落盘；摘不在列表里的不报错（幂等）", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-detach-"));
+    try {
+      const ws = await store.add("/repo/x");
+      const attached = await store.attachDir(ws.id, real);
+      const detached = await store.detachDir(ws.id, attached[0] ?? "");
+      assert.deepEqual(detached, []);
+      // 再摘一次（列表里已没有）：不报错，返回的仍是空清单
+      const again = await store.detachDir(ws.id, real);
+      assert.deepEqual(again, []);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  // ── Home 的附加目录（id null；放文件顶层，不造一条 Home 记录进列表）──
+
+  test("attachDir(null)：挂到 Home，落盘在顶层 homeAttachedDirs，工作区列表不动", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-home-attach-"));
+    try {
+      const before = await store.list();
+      const home = await store.attachDir(null, real);
+      assert.deepEqual(home, [await realpath(real)]);
+      // 列表里没多出 Home 记录：null 缺席即 Home 的纪律不动
+      assert.deepEqual(await store.list(), before);
+      const raw = JSON.parse(await readFile(join(dir, "workspaces.json"), "utf8")) as {
+        homeAttachedDirs?: string[];
+        workspaces: unknown[];
+      };
+      assert.deepEqual(raw.homeAttachedDirs, [await realpath(real)]);
+      assert.deepEqual(raw.workspaces, []);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  test("attachDir(null)：同目录重复挂不重复（realpath 归一后比）", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-home-dup-"));
+    try {
+      const alias = join(dir, "home-alias");
+      await symlink(real, alias);
+      await store.attachDir(null, alias);
+      const again = await store.attachDir(null, real); // 用真身再挂一次也不重复
+      assert.deepEqual(again, [await realpath(real)]);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  test("detachDir(null)：摘掉后清单为空且不落字段；再摘不报错（幂等）", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-home-detach-"));
+    try {
+      await store.attachDir(null, real);
+      const detached = await store.detachDir(null, await realpath(real));
+      assert.deepEqual(detached, []);
+      const again = await store.detachDir(null, real); // 幂等：不炸
+      assert.deepEqual(again, []);
+      const raw = JSON.parse(await readFile(join(dir, "workspaces.json"), "utf8")) as {
+        homeAttachedDirs?: string[];
+      };
+      assert.equal(raw.homeAttachedDirs, undefined); // 空 → 字段缺席（缺席即空）
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  test("attachedDirsOf：null → Home 清单；工作区 → 它的清单；不存在的 id → []；没挂过即空", async () => {
+    assert.deepEqual(await store.attachedDirsOf(null), []); // 字段缺席即空
+    const real = await mkdtemp(join(tmpdir(), "orbita-home-of-"));
+    try {
+      await store.attachDir(null, real);
+      assert.deepEqual(await store.attachedDirsOf(null), [await realpath(real)]);
+      const ws = await store.add("/repo/x");
+      assert.deepEqual(await store.attachedDirsOf(ws.id), []);
+      assert.deepEqual(await store.attachedDirsOf("00000000-0000-0000-0000-000000000000"), []);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  test("顶层 homeAttachedDirs 按 parseAttachedDirs 同套规则解析：非数组当空、空串丢、重复留一条", async () => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "workspaces.json"),
+      JSON.stringify({
+        version: 2,
+        workspaces: [],
+        homeAttachedDirs: ["", "/a", "/a", 3, "/b"],
+      }),
+      "utf8",
+    );
+    assert.deepEqual(await new WorkspaceStore(dir).attachedDirsOf(null), ["/a", "/b"]);
   });
 });

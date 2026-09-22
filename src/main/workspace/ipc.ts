@@ -13,13 +13,13 @@ export function registerWorkspaceIpc(
   onRemove: (id: string) => Promise<void> | void,
 ): void {
   ipcMain.handle(ipcChannels.workspaceList, () => store.list());
-  ipcMain.handle(ipcChannels.workspaceDefault, () => WorkspaceStore.defaultPath());
+  ipcMain.handle(ipcChannels.workspaceDefault, () => store.defaultPath());
 
   ipcMain.handle(ipcChannels.workspaceAdd, async (event): Promise<Workspace | null> => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const options = {
       properties: ["openDirectory", "createDirectory"] as const,
-      defaultPath: WorkspaceStore.defaultPath(),
+      defaultPath: store.defaultPath(),
     };
     const result = await (window
       ? dialog.showOpenDialog(window, { ...options, properties: [...options.properties] })
@@ -31,6 +31,27 @@ export function registerWorkspaceIpc(
 
   ipcMain.handle(ipcChannels.workspaceRename, (_event, id: string, name: string) =>
     store.rename(id, name),
+  );
+  // 命名新建：目录选择器帮不上忙——用户要的是「在 ~/Orbita 里开一个新家」而不是挑一个已有的
+  ipcMain.handle(ipcChannels.workspaceCreate, (_event, name: string) => store.create(name));
+  // 挂附加目录：选择器在主进程开（同 workspaceAdd 的纪律），校验（存在 / 是目录 / 去重）在 store。
+  // id null = Home（Home 也是工作区，同样能挂）；取消返回 null，成功返回更新后的 attachedDirs
+  ipcMain.handle(
+    ipcChannels.workspaceAttachDir,
+    async (event, id: string | null): Promise<string[] | null> => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const result = await (window
+        ? dialog.showOpenDialog(window, { properties: ["openDirectory", "createDirectory"] })
+        : dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] }));
+      const picked = result.canceled ? undefined : result.filePaths[0];
+      if (picked === undefined) return null;
+      return store.attachDir(id, picked);
+    },
+  );
+  // 摘附加目录：幂等（不在列表里不报错），返回更新后的 attachedDirs——面板拿它刷新根清单
+  ipcMain.handle(
+    ipcChannels.workspaceDetachDir,
+    (_event, id: string | null, dir: string): Promise<string[]> => store.detachDir(id, dir),
   );
   ipcMain.handle(ipcChannels.workspaceRemove, async (_event, id: string) => {
     await store.remove(id);

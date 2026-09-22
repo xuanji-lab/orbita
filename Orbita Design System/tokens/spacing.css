@@ -34,5 +34,5 @@
   --sidebar-rail-width: 48px;
   --content-max-width: 1000px;
   --app-card-max-width: 1080px;
-  --bubble-max-width: min(82%, 64ch); /* @kind spacing */
+  --bubble-max-width: min(66.7%, 80ch); /* @kind spacing */
 }

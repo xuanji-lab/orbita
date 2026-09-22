@@ -78,11 +78,19 @@ export interface TitleModel {
 export interface AppSettings {
   theme: ThemePreference;
   /**
-   * 右侧分屏面板的宽度（4-0 拖宽）。缺席 = 默认 320；合法区间 280–560，
-   * 越界或非数丢掉——这个文件用户手改得到，一个坏值不该把面板拖成一条线。
+   * 右侧分屏面板的宽度（4-0 拖宽）。缺席 = 默认 320。**这里只做 ≥200 的硬校验**：
+   * 合法上界依赖当前 pane 宽度（见 clampRightPanelWidth），落盘的值换个显示器就可能
+   * 越界，所以真正的夹取在渲染层每次渲染时做，存储层只拦「把面板拖成一条线」的坏值。
    * 拖动中不落盘，松手才写（避免写风暴）。
    */
   rightPanelWidth?: number;
+  /**
+   * 左侧栏的宽度。缺席 = 默认 288（设计系统的出厂尺寸）；**固定像素区间 240–400**，
+   * 越界或非数直接丢掉——左栏与「chat 的 1/3–2/3」无关（2026-09-22 wafo 澄清：
+   * 那条比例规则说的是 chat 被一分为二的左右，即 chat 主区与右栏）。
+   * 拖动中不落盘，松手才写。
+   */
+  sidebarWidth?: number;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -129,10 +137,46 @@ export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed" | "t
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
 export const DRAWER_WIDTH = { min: 280, max: 560, default: 320 } as const;
 
-/** 右侧面板宽度的合法区间与默认值（与拖拽热区的夹取同源）。 */
-export const RIGHT_PANEL_WIDTH_MIN = 280;
-export const RIGHT_PANEL_WIDTH_MAX = 560;
+/** 右侧面板宽度的默认值（双击热区复位的目标，会再按当前 pane 夹一次）。 */
 export const RIGHT_PANEL_WIDTH_DEFAULT = 320;
+
+/**
+ * 左侧栏宽度的合法区间与默认值（与拖拽热区的夹取同源）。
+ * 下界 240：再窄会话标题就只剩几个字；上界 400：再宽就在抢对话面的地方。
+ * **固定像素**：左栏不参与「chat 的 1/3–2/3」那条比例规则。
+ */
+export const SIDEBAR_WIDTH_MIN = 240;
+export const SIDEBAR_WIDTH_MAX = 400;
+export const SIDEBAR_WIDTH_DEFAULT = 288;
+
+/**
+ * 右栏宽度的硬地板（px）。小窗口保护：窗口再窄，右栏也不能收成一条看不出内容的缝。
+ * 它会压过下面按比例算出的上限——挤到 chat 也比右栏消失好。
+ */
+const RIGHT_PANEL_WIDTH_FLOOR = 200;
+
+/**
+ * 把右栏宽度夹进合法区间。**区间是相对 pane 的比例，不是固定像素**——
+ * 2026-09-22 wafo 裁决并于同日澄清：那条「1/3 与 2/3」说的是 **chat 主区与右栏**
+ * 这一对（「我的 1/3 和 2/3 apply to chat 和右栏，和左栏没有关系。我说的左栏指的是
+ * chat 被一分为二的左右」），左侧栏不在其内，仍走固定的 240–400。
+ *
+ * 设 P = `paneTotal` = chat 主区 + 右栏 的总宽（拖动中恒定：chat 主区是 flex:1，
+ * 右栏拿多少它就让多少）。区间直接就是 **[P/3, 2P/3]**——这一对本身各占 pane 的
+ * 三分之一到三分之二，不需要再换算。
+ *
+ * 地板与上限撞车（P 小到 2P/3 < 200）时**地板胜出**，见 RIGHT_PANEL_WIDTH_FLOOR。
+ * `paneTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 P 去夹。
+ */
+export function clampRightPanelWidth(width: number, paneTotal: number): number {
+  const wanted = Number.isFinite(width) ? Math.round(width) : RIGHT_PANEL_WIDTH_FLOOR;
+  if (!Number.isFinite(paneTotal) || paneTotal <= 0) {
+    return Math.max(RIGHT_PANEL_WIDTH_FLOOR, wanted);
+  }
+  const floor = Math.max(RIGHT_PANEL_WIDTH_FLOOR, Math.round(paneTotal / 3));
+  const ceiling = Math.round((paneTotal * 2) / 3);
+  return Math.max(floor, Math.min(ceiling, wanted));
+}
 
 function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
@@ -158,6 +202,7 @@ export function parseSettings(raw: unknown): AppSettings {
     theme?: unknown;
     drawer?: unknown;
     rightPanelWidth?: unknown;
+    sidebarWidth?: unknown;
     compaction?: unknown;
     gitAttribution?: unknown;
     titleModel?: unknown;
@@ -165,16 +210,22 @@ export function parseSettings(raw: unknown): AppSettings {
   };
   const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
   const width = record.rightPanelWidth;
+  const sidebar = record.sidebarWidth;
   const compaction = parseCompaction(record.compaction);
   const titleModel = parseTitleModel(record.titleModel);
   const lastUsed = parseLastUsed(record.lastUsed);
   return {
     theme,
-    ...(typeof width === "number" &&
-    Number.isFinite(width) &&
-    width >= RIGHT_PANEL_WIDTH_MIN &&
-    width <= RIGHT_PANEL_WIDTH_MAX
+    // 右栏只做 ≥ 地板的硬校验：上界随 pane 宽度变，存储层判不了，渲染层每次夹
+    ...(typeof width === "number" && Number.isFinite(width) && width >= RIGHT_PANEL_WIDTH_FLOOR
       ? { rightPanelWidth: Math.round(width) }
+      : {}),
+    // 左栏的区间是固定像素，存储层判得了：越界直接丢，不「猜」用户想要的宽度
+    ...(typeof sidebar === "number" &&
+    Number.isFinite(sidebar) &&
+    sidebar >= SIDEBAR_WIDTH_MIN &&
+    sidebar <= SIDEBAR_WIDTH_MAX
+      ? { sidebarWidth: Math.round(sidebar) }
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(compaction === undefined ? {} : { compaction }),

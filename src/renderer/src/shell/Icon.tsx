@@ -3,33 +3,42 @@ import archive from "../../../../Orbita Design System/assets/icons/lucide/archiv
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
 import blend from "../../../../Orbita Design System/assets/icons/lucide/blend.svg?raw";
+import book from "../../../../Orbita Design System/assets/icons/lucide/book.svg?raw";
 import bookOpen from "../../../../Orbita Design System/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
+import circleCheck from "../../../../Orbita Design System/assets/icons/lucide/circle-check.svg?raw";
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import circleOff from "../../../../Orbita Design System/assets/icons/lucide/circle-off.svg?raw";
 import chevronLeft from "../../../../Orbita Design System/assets/icons/lucide/chevron-left.svg?raw";
+import chevronRight from "../../../../Orbita Design System/assets/icons/lucide/chevron-right.svg?raw";
 import chevronUp from "../../../../Orbita Design System/assets/icons/lucide/chevron-up.svg?raw";
 import clock from "../../../../Orbita Design System/assets/icons/lucide/clock.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
 import cornerDownLeft from "../../../../Orbita Design System/assets/icons/lucide/corner-down-left.svg?raw";
+import cornerUpRight from "../../../../Orbita Design System/assets/icons/lucide/corner-up-right.svg?raw";
 import cpu from "../../../../Orbita Design System/assets/icons/lucide/cpu.svg?raw";
 import download from "../../../../Orbita Design System/assets/icons/lucide/download.svg?raw";
 import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
 import eye from "../../../../Orbita Design System/assets/icons/lucide/eye.svg?raw";
 import eyeOff from "../../../../Orbita Design System/assets/icons/lucide/eye-off.svg?raw";
+import externalLink from "../../../../Orbita Design System/assets/icons/lucide/external-link.svg?raw";
 import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
+import folderOpen from "../../../../Orbita Design System/assets/icons/lucide/folder-open.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
+import lightbulb from "../../../../Orbita Design System/assets/icons/lucide/lightbulb.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
+import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-todo.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
+import play from "../../../../Orbita Design System/assets/icons/lucide/play.svg?raw";
 import panelLeft from "../../../../Orbita Design System/assets/icons/lucide/panel-left.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
 import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off.svg?raw";
@@ -39,6 +48,7 @@ import power from "../../../../Orbita Design System/assets/icons/lucide/power.sv
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
+import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rotate-ccw.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
 import search from "../../../../Orbita Design System/assets/icons/lucide/search.svg?raw";
@@ -47,8 +57,10 @@ import fileText from "../../../../Orbita Design System/assets/icons/lucide/file-
 import trash2 from "../../../../Orbita Design System/assets/icons/lucide/trash-2.svg?raw";
 import shieldCheck from "../../../../Orbita Design System/assets/icons/lucide/shield-check.svg?raw";
 import sliders from "../../../../Orbita Design System/assets/icons/lucide/sliders.svg?raw";
+import star from "../../../../Orbita Design System/assets/icons/lucide/star.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
 import undo2 from "../../../../Orbita Design System/assets/icons/lucide/undo-2.svg?raw";
+import unlink from "../../../../Orbita Design System/assets/icons/lucide/unlink.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
 import x from "../../../../Orbita Design System/assets/icons/lucide/x.svg?raw";
 import wrench from "../../../../Orbita Design System/assets/icons/lucide/wrench.svg?raw";
@@ -64,47 +76,58 @@ import zap from "../../../../Orbita Design System/assets/icons/lucide/zap.svg?ra
 const ICONS = {
   archive,
   blend,
+  book,
   "book-open": bookOpen,
   "archive-restore": archiveRestore,
   "arrow-up": arrowUp,
   bot,
   brain,
   check,
+  "circle-check": circleCheck,
   "chevron-down": chevronDown,
   "chevron-left": chevronLeft,
+  "chevron-right": chevronRight,
   "chevron-up": chevronUp,
   clock,
   "circle-off": circleOff,
   copy,
   "corner-down-left": cornerDownLeft,
+  "corner-up-right": cornerUpRight,
   cpu,
   download,
   "ellipsis-vertical": ellipsisVertical,
   eye,
   "eye-off": eyeOff,
+  "external-link": externalLink,
   "fold-vertical": foldVertical,
   folder,
+  "folder-open": folderOpen,
   "folder-plus": folderPlus,
   "git-branch": gitBranch,
   "grip-vertical": gripVertical,
   image,
+  lightbulb,
   "loader-circle": loaderCircle,
   list,
+  "list-todo": listTodo,
   lock,
   "message-square": messageSquare,
   minus,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
+  play,
   pin,
   "pin-off": pinOff,
   plug,
   power,
   plus,
   "refresh-cw": refreshCw,
+  "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,
   sliders,
+  star,
   square,
   search,
   terminal,
@@ -112,6 +135,7 @@ const ICONS = {
   "trash-2": trash2,
   "triangle-alert": triangleAlert,
   "undo-2": undo2,
+  unlink,
   workflow,
   wrench,
   x,
@@ -139,6 +163,17 @@ export function Icon(props: {
   size?: number;
   strokeWidth?: number;
   spin?: boolean;
+  /**
+   * 填实图标（用 currentColor 填内部）。lucide 是线性图标集，描边与填实在这里是
+   * **同一个图标的两种状态**（未星标 / 已星标），而不是两个图标——
+   * 用 `star` / `star-off` 表达开关会把「已星标」画成一个带斜杠的禁止符。
+   * 填色走 CSS 变量（同 `--icon-stroke`），不改写 SVG 源串。
+   *
+   * 今天唯一的消费者是星标，而 star 是**单一形状**，填实一路继承下去就是对的。
+   * （多形状图标如 circle-check 还需要一个内部标记色才不至于把勾吃掉，等真有那么
+   * 一个消费者时再加——没有调用点的代码不留在分支里。）
+   */
+  fill?: boolean;
   style?: React.CSSProperties;
 }) {
   const size = props.size ?? 16;
@@ -146,6 +181,9 @@ export function Icon(props: {
     width: size,
     height: size,
     "--icon-stroke": props.strokeWidth ?? 2,
+    ...(props.fill === true
+      ? { "--icon-fill": "currentColor" }
+      : null),
     ...(props.spin === true ? { animation: "orbita-spin 1s linear infinite" } : null),
     ...props.style,
   } as React.CSSProperties;

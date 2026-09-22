@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
 import { selectionStyle } from "./selection";
-import { placeMenu, type MenuBox } from "./menu-position";
+import { placeMenu, type MenuBox, type MenuPlacementSide } from "./menu-position";
 
 export interface MenuItem {
   id: string;
@@ -105,6 +105,17 @@ export function Menu(props: {
    * 收窄到内容，maxWidth 320 仍兜底。
    */
   panelMinWidth?: number;
+  /**
+   * 面板最大宽度（px）。默认 320 是给模型名、工作区路径这类长文本留的；
+   * 侧栏会话行那种**动作清单**给窄值收住——它的每一项都是两三个词，
+   * 撑到 320 只是在会话列表旁边糊一大块玻璃（2026-09-22 wafo：「卡片太大」）。
+   */
+  panelMaxWidth?: number;
+  /**
+   * 菜单开在锚点的哪一边。默认下方；`right` 给侧栏会话行——
+   * 开在下方会盖住紧挨着的下一条会话，想看别的会话就得先关菜单。
+   */
+  placement?: MenuPlacementSide;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
@@ -166,6 +177,7 @@ export function Menu(props: {
       { width: menu.width, height: menu.height },
       props.align,
       { width: window.innerWidth, height: window.innerHeight },
+      props.placement,
     );
     if (!placed.visible) {
       close();
@@ -174,7 +186,7 @@ export function Menu(props: {
     setPosition((prev) =>
       prev !== null && prev.top === placed.top && prev.left === placed.left ? prev : { top: placed.top, left: placed.left },
     );
-  }, [props.align, close]);
+  }, [props.align, props.placement, close]);
 
   // 首次打开：先按旧位置渲染但不可见，量到真实高度之后再定位——菜单高度取决于
   // 内容，不先量就只能猜。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下。
@@ -303,11 +315,12 @@ export function Menu(props: {
               visibility: position === null ? "hidden" : "visible",
               zIndex: 40,
               minWidth: props.panelMinWidth ?? 180,
-              maxWidth: 320,
+              maxWidth: props.panelMaxWidth ?? 320,
               padding: "var(--space-1)",
               display: "flex",
               flexDirection: "column",
-              gap: 1,
+              // 行间不留缝：每行自己已有 minHeight 与 hover 底，1px 的缝只是
+              // 把清单又拉高一截（8 项就是 8px），并不帮人分行
               background: "var(--glass-bg)",
               border: "1px solid var(--glass-border)",
               borderRadius: "var(--radius-xl)",
@@ -408,7 +421,8 @@ function MenuRow(props: {
       onClick={props.onSelect}
       style={{
         display: "grid",
-        gridTemplateColumns: "16px minmax(0,1fr) auto auto",
+        // 图标槽 14px：里面的图标就是 13px，16 的槽只是每行白多一道缝
+        gridTemplateColumns: "14px minmax(0,1fr) auto auto",
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",

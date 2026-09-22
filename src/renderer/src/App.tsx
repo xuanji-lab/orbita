@@ -5,15 +5,15 @@ import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from "@shared/settings";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
-import { transcriptToMarkdown } from "@shared/session";
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
-import { RightRail, SessionActions, type RightPanelKind } from "./shell/RightRail";
+import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
-import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
+import { FilesPanel } from "./features/files/FilesPanel";
+import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB } from "./shell/drawer-state";
@@ -29,7 +29,9 @@ import { NEW_TASK_TAB } from "./shell/drawer-state";
  * 侧栏 288px 没有自己的面，直接坐在边界卡上（设计系统 *Layout*：both sidebars are
  * unbounded）。右抽屉（right-drawer-X）**是 pane 的子元素**——与会话列同一张卡，
  * 中间只有一根竖线（2026-09-12 裁决：不要间隔，一条竖线）。转帧式窗口的窗口键
- * 在自绘标题栏（Titlebar）上；复制转录与抽屉开关住在右图标条（wafo 2026-09-12 裁决）。
+ * 在自绘标题栏（Titlebar）上；抽屉开关住在右图标条顶部，底部是应用入口
+ * （Archived / Carryovers / Settings，wafo 2026-09-22 裁决，覆盖同日之前的
+ * 「底部只放会话动作」——复制按钮已并入会话行的「导出」）。
  */
 export function App() {
   usePlatform();
@@ -41,6 +43,12 @@ export function App() {
   const [overlay, setOverlay] = useState<Overlay>(null);
   /** 右侧分屏面板开哪个；两个面板互斥，同一时刻至多一个 */
   const [rightPanel, setRightPanel] = useState<RightPanelKind | null>(null);
+  /**
+   * Archived / Carryovers 两个子视图的开关（入口在右栏底部，2026-09-22 裁决）。
+   * 状态跟着入口住在 App，Sidebar 受控渲染子视图本体。两者互斥：点一个退另一个。
+   */
+  const [showArchived, setShowArchived] = useState(false);
+  const [showCarryovers, setShowCarryovers] = useState(false);
   /** 窄窗（<960px）：并排分屏守不住 chat ≥480px 的底线，面板转右侧锚定覆盖层 */
   const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 959px)").matches);
   useEffect(() => {
@@ -78,6 +86,12 @@ export function App() {
   useEffect(() => {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
+
+  /** 左侧栏宽度：同一套口径——拖动中只改本地，松手才落 settings（避免写风暴） */
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
+  useEffect(() => {
+    if (settings.sidebarWidth !== undefined) setSidebarWidth(settings.sidebarWidth);
+  }, [settings.sidebarWidth]);
 
   const { session, engine } = useChatSession(providers);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
@@ -162,23 +176,47 @@ export function App() {
     else session.newTask();
     session.setDraft("Describe the workflow you want to turn into a skill.");
   }, [session]);
-  /** 会话动作只在有会话时出现——它承载的是「对这个会话做点什么」；
-   * 顶部入口常驻，不随会话消失（首页也能开 Skills / MCP）。 */
-  const sessionActions =
-    session.sessionId !== null || session.opened !== null ? (
-      <SessionActions
-        canCopy={session.transcript.length > 0}
-        onCopyTranscript={() =>
-          // 与「导出」同一份实现：复制出来的和导出的必须长得一样
-          void navigator.clipboard.writeText(transcriptToMarkdown(session.transcript))
-        }
-      />
-    ) : (
-      false
-    );
-
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
+
+  /**
+   * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
+   * 首页常驻——它们是应用入口不是会话动作）。点亮判定与互斥规则沿用侧栏
+   * 底部行时代的行为：子视图互斥，设置盖着时谁也不亮。Carryovers 沿用折叠
+   * rail 时代的先例：0 条不渲染入口（Archived 恒渲染，同先例）。
+   */
+  const archivedCount = session.sessions.filter((m) => m.archived).length;
+  const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
+  const railEntries: RailEntry[] = [
+    ...(session.carryovers.length > 0
+      ? [
+          {
+            icon: "list-todo" as const,
+            label: `Carryovers (${openCarryoverCount} open)`,
+            lit: showCarryovers && overlay === null && !showArchived,
+            onClick: () => {
+              setShowArchived(false);
+              setShowCarryovers((value) => !value);
+            },
+          },
+        ]
+      : []),
+    {
+      icon: "archive" as const,
+      label: `Archived (${archivedCount})`,
+      lit: showArchived && overlay === null && !showCarryovers,
+      onClick: () => {
+        setShowCarryovers(false);
+        setShowArchived((value) => !value);
+      },
+    },
+    {
+      icon: "settings" as const,
+      label: "Settings",
+      lit: overlay === "settings",
+      onClick: () => setOverlay(overlay === "settings" ? null : "settings"),
+    },
+  ];
 
   return (
     <div className="app-shell">
@@ -190,6 +228,16 @@ export function App() {
           settingsTab={settingsTab}
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
+          showArchived={showArchived}
+          showCarryovers={showCarryovers}
+          onShowArchived={setShowArchived}
+          onShowCarryovers={setShowCarryovers}
+          width={sidebarWidth}
+          onWidthChange={setSidebarWidth}
+          onWidthCommit={(width) => {
+            setSidebarWidth(width);
+            changeSettings({ sidebarWidth: width });
+          }}
         />
 
         <main className="pane">
@@ -201,6 +249,10 @@ export function App() {
                 providers={providers}
                 onSettingsChange={changeSettings}
                 onProvidersChange={refresh}
+                onImported={() => {
+                  engine.refreshSessions();
+                  engine.refreshWorkspaces();
+                }}
               />
             ) : (
               <ChatView session={session} providersError={providersError} />
@@ -222,7 +274,9 @@ export function App() {
                 animation: "right-panel-fade 120ms var(--ease-out-quint)",
               }}
             >
-              {shownPanel === "skills" ? (
+              {shownPanel === "files" ? (
+                <FilesPanel session={session} onClose={() => handlePanel(null)} />
+              ) : shownPanel === "skills" ? (
                 <SkillsPanel
                   skills={skills}
                   onClose={() => handlePanel(null)}
@@ -250,11 +304,7 @@ export function App() {
           </RightPanelSlot>
         </main>
 
-        <RightRail
-          panel={rightPanel}
-          onPanel={handlePanel}
-          sessionActions={sessionActions}
-        />
+        <RightRail panel={rightPanel} onPanel={handlePanel} railEntries={railEntries} />
       </div>
     </div>
   );

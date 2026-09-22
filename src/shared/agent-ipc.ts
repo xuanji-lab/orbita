@@ -43,6 +43,16 @@ export const ipcChannels = {
   workspaceRemove: "workspace:remove",
   /** 没有选定工作区时 agent 落在哪儿。渲染层要如实告诉用户这个兜底，不能让它是个隐形默认 */
   workspaceDefault: "workspace:default",
+  /**
+   * 命名新建：在 `~/Orbita/<name>/` 建文件夹并加为工作区。建完就是普通工作区，
+   * 与「选已有文件夹」无差别——只有一种工作区，没有 Proma 那种「托管空白工作区」。
+   * 同名文件夹已存在就直接加它（不覆盖、不报错）。
+   */
+  workspaceCreate: "workspace:create",
+  /** 打开原生目录选择器，把选中目录加进工作区的 attachedDirs；重复加不报错、不重复 */
+  workspaceAttachDir: "workspace:attach-dir",
+  /** 从 attachedDirs 移除一条；不在列表里不报错 */
+  workspaceDetachDir: "workspace:detach-dir",
   providerBuiltins: "provider:builtins",
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
@@ -53,6 +63,10 @@ export const ipcChannels = {
   sessionLoad: "session:load",
   sessionRename: "session:rename",
   sessionPin: "session:pin",
+  /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */
+  sessionStar: "session:star",
+  /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
+  sessionSetCompletion: "session:set-completion",
   sessionArchive: "session:archive",
   /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
   sessionMove: "session:move",
@@ -64,6 +78,28 @@ export const ipcChannels = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
+  /**
+   * 会话工作台的现状（文件系统 2026-09-22）：路径、存不存在、里面有几个文件。
+   * 消费者是删除确认（「提示后删」：删会话连带删工作台，确认项要把文件数说出来）与文件面板的 Session 根。
+   * 按需现算，不进 meta——工作台存不存在是磁盘上的事实，不是会话的状态。
+   */
+  sessionWorkbenchStat: "session:workbench-stat",
+  /** 文件面板（契约在 `files.ts`）：这条会话的根清单（工作台 / 工作区 / 附加目录），主进程算 */
+  fsRoots: "fs:roots",
+  /** 列一层目录。root 必须是 fs:roots 回过的，dir 必须在 root 之内，否则拒绝——renderer 不是通用文件浏览器 */
+  fsList: "fs:list",
+  /** 在 Finder 里显示一个路径（同 root/dir 白名单） */
+  fsReveal: "fs:reveal",
+  /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
+  carryoverList: "carryover:list",
+  /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
+  carryoverCreate: "carryover:create",
+  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
+  carryoverSetStatus: "carryover:set-status",
+  /** 扫描 Proma 的 pi 会话真源（dry-run）：产出可导入计划与跳过明细 */
+  importScan: "import:scan",
+  /** 执行导入：主进程重新扫描后落盘（不接收 renderer 回传的计划，理由见 shared/import.ts） */
+  importRun: "import:run",
   /** 中心存储里的全部 skill（含没链进任何集合的） */
   skillList: "skill:list",
   /** 把 skill 链进一个集合（global 或某个 workspace）；互斥规则见 SkillScope */
@@ -222,6 +258,28 @@ export interface CompactAgentInput extends AgentTurnContext {
   instructions?: string;
 }
 
+/** `session:workbench-stat` 的回执。目录不存在时 exists=false、fileCount=0；fileCount 递归计文件不计目录 */
+export interface SessionWorkbenchStat {
+  path: string;
+  exists: boolean;
+  fileCount: number;
+}
+
+/**
+ * 开轮目录清单（文件系统 2026-09-22 裁决）。一个工作区就是一个用户能在 Finder 里打开的文件夹（cwd）；
+ * 附加目录挂在工作区上；工作台属于会话、住在 userData。三者都只是告知模型「可以去哪」。
+ */
+export interface TurnDirectories {
+  /** 工作区的附加目录（`Workspace.attachedDirs`），绝对路径，按用户挂上的顺序。Home 会话恒为空 */
+  attached: string[];
+  /**
+   * 本会话的工作台 `<userData>/workbenches/<sessionId>/`：plan / handoff / 草稿的落点。
+   * **目录可能还不存在**（首次写入才建，空会话不占目录），模型用时自己 mkdir。
+   * 不套在 sessions/ 里：protectedPaths 把整个 sessions/ 设为工具面只读，工作台必须可写。
+   */
+  workbench: string;
+}
+
 /** 主进程 → agent 进程 */
 export type AgentCommand =
   | {
@@ -256,6 +314,14 @@ export type AgentCommand =
        * 目录不存在不是错，当作一个 skill 都没链（pi 内部先 existsSync 拦一道）。
        */
       skillsDirs: string[];
+      /**
+       * 开轮目录清单（2026-09-22 裁决）：除 cwd 外这条会话的 agent 还能去哪。
+       * **只告知不硬拦**：runtime 把它拼进 systemPrompt，工具面仍是 cwd 加 protectedPaths 黑名单——
+       * pi 的 read/write 只把相对路径 resolve 到 cwd，不做包含性校验，白名单硬拦是新功能不是这个字段的事。
+       * **主进程装配**（同 skillsDirs / protectedPaths 的纪律）：附加目录来自工作区记录，
+       * 工作台路径由 session id 派生，agent 进程只收数据。缺席 = 不注入这段（旧测试夹具）。
+       */
+      directories?: TurnDirectories;
       /**
        * MCP server 配置。**传解析好的而不是文件路径**：读文件与讲错误是主进程的事
        * （跟 skillsDir 同一条纪律），而且 env 里往往有密钥，路径传过去等于让
@@ -313,8 +379,9 @@ export type AgentCommand =
       piSessionDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
-      /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
+      /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
+      directories?: TurnDirectories;
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
@@ -340,8 +407,9 @@ export type AgentCommand =
       piSessionDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
-      /** 开轮环境，语义同 submit（skill 集合目录 + MCP 配置）——无状态化后每轮开机都要带全 */
+      /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
+      directories?: TurnDirectories;
       mcpServers: Record<string, McpServer>;
       piSessionFile?: string;
       /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */

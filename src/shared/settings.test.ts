@@ -1,11 +1,14 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  clampRightPanelWidth,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
 } from "./settings.ts";
 
@@ -79,6 +82,100 @@ describe("parseSettings: drawer 字段", () => {
     const parsed = parseSettings({ theme: "light", drawer: "collapsed" });
     deepStrictEqual(parsed.theme, "light");
     deepStrictEqual(parsed.drawer, DEFAULT_SETTINGS.drawer);
+  });
+});
+
+describe("clampRightPanelWidth：区间是 pane 的 1/3–2/3（P = chat 主区 + 右栏）", () => {
+  // 2026-09-22 wafo 澄清：这条比例规则只管 chat 与右栏这一对，左侧栏不在其中
+  it("区间两端就是 P/3 与 2P/3", () => {
+    deepStrictEqual(clampRightPanelWidth(400, 1200), 400);
+    deepStrictEqual(clampRightPanelWidth(800, 1200), 800);
+    // 下端：右栏 400 = P/3，chat 拿走剩下的 800
+    deepStrictEqual(400, 1200 / 3);
+    // 上端：右栏 800 = 2P/3，chat 只剩 400
+    deepStrictEqual(800, (1200 * 2) / 3);
+  });
+
+  it("区间内原样收下并取整", () => {
+    deepStrictEqual(clampRightPanelWidth(500, 1200), 500);
+    deepStrictEqual(clampRightPanelWidth(500.4, 1200), 500);
+  });
+
+  it("越界两头都夹回来", () => {
+    deepStrictEqual(clampRightPanelWidth(320, 1200), 400);
+    deepStrictEqual(clampRightPanelWidth(1100, 1200), 800);
+  });
+
+  it("pane 小到 P/3 落在地板以下时地板接管（上限仍按 2P/3）", () => {
+    // P = 540：P/3 = 180 < 200 → 下界 200；上界 2P/3 = 360
+    deepStrictEqual(clampRightPanelWidth(100, 540), 200);
+    deepStrictEqual(clampRightPanelWidth(320, 540), 320);
+    deepStrictEqual(clampRightPanelWidth(500, 540), 360);
+  });
+
+  it("地板压过上限的退化情况：返回地板，宁可挤 chat 也不把右栏收成一条线", () => {
+    // P = 270：上界 2P/3 = 180 < 地板 200
+    deepStrictEqual(clampRightPanelWidth(320, 270), 200);
+    deepStrictEqual(clampRightPanelWidth(100, 270), 200);
+  });
+
+  it("量不到 P（元素未挂载）时只保地板，不拿假的 P 去夹", () => {
+    deepStrictEqual(clampRightPanelWidth(320, 0), 320);
+    deepStrictEqual(clampRightPanelWidth(100, 0), 200);
+    deepStrictEqual(clampRightPanelWidth(320, Number.NaN), 320);
+  });
+
+  it("非数的宽度退到地板，再按 P 夹", () => {
+    deepStrictEqual(clampRightPanelWidth(Number.NaN, 1200), 400);
+  });
+});
+
+describe("parseSettings 的 sidebarWidth", () => {
+  it("缺席 = 没拖过，不落这个键（默认宽度不写进用户的文件）", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).sidebarWidth, undefined);
+  });
+
+  it("合法值收下并取整", () => {
+    deepStrictEqual(parseSettings({ sidebarWidth: 320 }).sidebarWidth, 320);
+    deepStrictEqual(parseSettings({ sidebarWidth: 301.6 }).sidebarWidth, 302);
+  });
+
+  // 左栏的区间是固定像素，存储层判得了：这个文件用户手改得到，
+  // 一个 4000 该被丢掉，而不是被「猜」成 400
+  it("区间 240–400 之外一律丢掉，不钳制", () => {
+    deepStrictEqual(parseSettings({ sidebarWidth: SIDEBAR_WIDTH_MIN }).sidebarWidth, 240);
+    deepStrictEqual(parseSettings({ sidebarWidth: SIDEBAR_WIDTH_MAX }).sidebarWidth, 400);
+    deepStrictEqual(parseSettings({ sidebarWidth: 239 }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: 401 }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: 4000 }).sidebarWidth, undefined);
+  });
+
+  it("非数一律丢掉", () => {
+    deepStrictEqual(parseSettings({ sidebarWidth: "wide" }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: Number.NaN }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ sidebarWidth: null }).sidebarWidth, undefined);
+  });
+
+  it("坐错位置的宽度不串台：两个宽度各记各的（区间也各是各的）", () => {
+    const parsed = parseSettings({ sidebarWidth: 360, rightPanelWidth: 420 });
+    deepStrictEqual(parsed.sidebarWidth, 360);
+    deepStrictEqual(parsed.rightPanelWidth, 420);
+  });
+});
+
+describe("parseSettings 的 rightPanelWidth", () => {
+  it("缺席 = 没拖过，不落这个键", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).rightPanelWidth, undefined);
+  });
+
+  // 右栏的上界依赖当前 pane 宽度（clampRightPanelWidth），存储层判不了：
+  // 一个在 4K 屏上存下的 900 在笔记本上越界，但它不是坏值——夹取交给渲染层
+  it("只拦 <200 的坏值，大值留着交给渲染层夹", () => {
+    deepStrictEqual(parseSettings({ rightPanelWidth: 200 }).rightPanelWidth, 200);
+    deepStrictEqual(parseSettings({ rightPanelWidth: 411.4 }).rightPanelWidth, 411);
+    deepStrictEqual(parseSettings({ rightPanelWidth: 150 }).rightPanelWidth, undefined);
+    deepStrictEqual(parseSettings({ rightPanelWidth: 900 }).rightPanelWidth, 900);
+    deepStrictEqual(parseSettings({ rightPanelWidth: "wide" }).rightPanelWidth, undefined);
   });
 });
 

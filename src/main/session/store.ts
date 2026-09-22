@@ -9,13 +9,13 @@
  * 要么改个标题就重写全文，要么读取时全文扫描找最后一条 meta。分开之后
  * **列会话只需读 N 个小 meta 文件，完全不碰日志**。
  */
-import { appendFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { appendFile, cp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
-import type { AgentStats } from "../../shared/agent-ipc.ts";
+import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import {
@@ -25,6 +25,7 @@ import {
   pushRecentQuery,
   recentQueriesFromRecords,
   sortSessions,
+  type SessionCompletion,
   type SessionDetail,
   type SessionMeta,
   type SessionRecord,
@@ -48,6 +49,8 @@ const META_SUFFIX = ".meta.json";
 export interface BranchPlan {
   /** 新会话 id（新 meta 与新 JSONL 都用它） */
   newId: string;
+  /** 源会话 id：commitBranch 拷贝工作台要用（`workbenches/<sourceId>` → `<newId>`） */
+  sourceId: string;
   /** 源会话的 pi 本子——agent 进程要打开它裁分支 */
   sourcePiSessionFile: string;
   /** 前缀记录（含锚点回答）：新会话的初始 transcript */
@@ -124,6 +127,8 @@ export function aggregatePrefixUsage(records: readonly SessionRecord[]): AgentSt
 
 export class SessionStore {
   private readonly dir: string;
+  /** 会话工作台的根（<userData>/workbenches）。缺席时从 sessions 目录的父目录派生，测试临时目录因此天然隔离 */
+  private readonly workbenchesDir: string;
 
   /**
    * 每条会话的 meta 写入链（见 `queueMeta`）。会话删掉时清掉自己那条，
@@ -131,8 +136,9 @@ export class SessionStore {
    */
   private readonly metaWrites = new Map<string, Promise<unknown>>();
 
-  constructor(dir: string) {
+  constructor(dir: string, workbenchesDir?: string) {
     this.dir = dir;
+    this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
   }
 
   private metaPath(id: string): string {
@@ -143,6 +149,41 @@ export class SessionStore {
   private logPath(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
     return join(this.dir, `${id}.jsonl`);
+  }
+
+  /**
+   * 本会话的工作台目录 `<workbenches>/<id>/`：plan / handoff / 草稿的落点，随开轮
+   * 告诉模型。**目录不预建**（首次写入才由模型 mkdir，空会话不占目录）。
+   * 不套在 sessions/ 里：protectedPaths 把整个 sessions/ 设为工具面只读，工作台必须可写。
+   * id 同样过白名单——路径拼进开轮命令，和 metaPath/logPath 一个安全等级。
+   */
+  workbenchPath(id: string): string {
+    if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
+    return join(this.workbenchesDir, id);
+  }
+
+  /**
+   * 工作台的现状（`session:workbench-stat` 的回执）。按需现算、不进 meta——
+   * 目录存不存在是磁盘上的事实，会话不该背着它的快照。递归数文件不计目录；
+   * 符号链接不跟（跟的话链接环转不出来），链接算一个文件。
+   * 读不了 ≠ 没有：除 ENOENT 外照抛，与 `list()` 同一条规矩。
+   */
+  async workbenchStat(id: string): Promise<SessionWorkbenchStat> {
+    const path = this.workbenchPath(id);
+    const countFiles = async (dir: string): Promise<number> => {
+      let total = 0;
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        // Dirent 是 lstat 语义：符号链接 isDirectory() 恒 false，自然算一个文件
+        total += entry.isDirectory() ? await countFiles(join(dir, entry.name)) : 1;
+      }
+      return total;
+    };
+    try {
+      return { path, exists: true, fileCount: await countFiles(path) };
+    } catch (cause) {
+      if (isNotFound(cause)) return { path, exists: false, fileCount: 0 };
+      throw cause;
+    }
   }
 
   /**
@@ -196,7 +237,7 @@ export class SessionStore {
           changes.title = deriveSessionTitle(text.text);
         }
       }
-      // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致
+      // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致。
       if (item.role === "user") {
         const text = item.content.find((block) => block.type === "text");
         if (text !== undefined && text.type === "text") {
@@ -316,6 +357,29 @@ export class SessionStore {
     return this.update(id, { pinned });
   }
 
+  /**
+   * 星标：价值标记，与置顶（排序）正交——只动自己这一个字段，不参与排序，
+   * 消费者是侧栏的行内标识与「Starred」筛选。
+   */
+  setStarred(id: string, starred: boolean): Promise<void> {
+    return this.update(id, { starred });
+  }
+
+  /**
+   * 完成状态：翻到 done / done_with_todos 的那一刻记下关闭时刻，reopen（回 open）
+   * 时清掉——closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态。
+   * **同态幂等**：已是 done 再设 done 不刷新关闭时刻，「什么时候干完的」是历史
+   * 事实，不是最后一次点击。非 open 两态之间切换（done → done_with_todos）算一次
+   * 真实的翻档，刷新；本 PR 的 UI 只产生 open ↔ done，这条分支为 carryover 留着。
+   */
+  setCompletion(id: string, completion: SessionCompletion): Promise<void> {
+    return this.update(id, (meta) =>
+      (meta.completion ?? "open") === completion
+        ? null
+        : { completion, closedAt: completion === "open" ? null : Date.now() },
+    );
+  }
+
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
   setArchived(id: string, archived: boolean): Promise<void> {
     return this.update(id, { archived });
@@ -350,6 +414,7 @@ export class SessionStore {
     const now = Date.now();
     return {
       newId,
+      sourceId: id,
       sourcePiSessionFile: meta.piSessionFile,
       records: prefix,
       roles: branchRoles(prefix),
@@ -380,14 +445,45 @@ export class SessionStore {
     };
   }
 
-  /** 分支落盘：新 meta（补上 pi 分支文件）+ 前缀整写为初始 JSONL（原子写）。 */
+  /**
+   * 分支落盘：新 meta（补上 pi 分支文件）+ 前缀整写为初始 JSONL（原子写）
+   * + 工作台整体拷贝。
+   */
   async commitBranch(plan: BranchPlan, piSessionFile: string | null): Promise<void> {
     if (piSessionFile === null) throw new Error("pi produced no branch session file; branch was not persisted");
+    // 工作台拷贝放最前（meta 落盘之前）：拷贝失败时这里什么都不落，残留只是 pi
+    // 那头的孤儿文件；放最后则失败会留一条「看得见却没带文件」的半残分支。
+    // 源不存在就跳过（工作台不预建，空会话不占目录），新会话的也保持不存在。
+    try {
+      await cp(this.workbenchPath(plan.sourceId), this.workbenchPath(plan.newId), {
+        recursive: true,
+      });
+    } catch (cause) {
+      if (!isNotFound(cause)) throw cause;
+    }
     await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile });
     if (plan.records.length > 0) {
       await writeTextAtomic(
         this.logPath(plan.meta.id),
         `${plan.records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      );
+    }
+  }
+
+  /**
+   * 导入落盘：一份现成的 meta + 整份 transcript（Proma pi 同构导入，importer.ts）。
+   * 与 commitBranch 同形状（meta + 全量 JSONL 原子写），不复用它是因为 BranchPlan
+   * 的形状是分支语义（roles/piSessionFile 占位）；两处耦合会把「分支的落盘约束」
+   * 泄进导入。id 由导入器铸（randomUUID），此处不重复校验存在性——同 id 撞库
+   * 概率为零，导入是离线批处理，不值得为它排写入链。
+   */
+  async commitImported(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void> {
+    await mkdir(this.dir, { recursive: true });
+    await writeJsonAtomic(this.metaPath(meta.id), meta);
+    if (records.length > 0) {
+      await writeTextAtomic(
+        this.logPath(meta.id),
+        `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
       );
     }
   }
@@ -432,9 +528,16 @@ export class SessionStore {
     this.metaWrites.delete(id);
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
+    // 工作台最后删：它删失败最多残留一个无引用目录（不进列表、不吵任何人）；
+    // 若排在前头、账本还没删就崩，则留一条「有工作台却列不出来」的半残会话。
+    await rm(this.workbenchPath(id), { recursive: true, force: true });
   }
 
-  private async readMeta(id: string): Promise<SessionMeta | null> {
+  /**
+   * 读一条会话的 meta（逐字段校验）；null = 不存在。原是 private，文件面板的根
+   * 清单只需要标题——用 `load` 会连带把整份 transcript 读进来，为一个字段付全量读盘不划算。
+   */
+  async readMeta(id: string): Promise<SessionMeta | null> {
     try {
       return parseSessionMeta(JSON.parse(await readFile(this.metaPath(id), "utf8")));
     } catch {

@@ -39,6 +39,7 @@ import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
+import { describeDirectories } from "./directories-prompt.ts";
 import { McpHub } from "./mcp.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
@@ -561,6 +562,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   "add_mcp_server",
                   "read_task",
                 ]),
+                // 开轮目录清单（cwd / 附加目录 / 会话工作台）。同样逐轮重讲：工作区挂
+                // 新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
+                describeDirectories(command.cwd, command.directories),
                 STORE_TOOLS_GUIDELINES,
                 TOOL_GUIDELINES,
                 // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效

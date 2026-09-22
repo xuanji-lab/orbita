@@ -13,9 +13,11 @@ export function InlineName(props: {
   value: string;
   onCommit: (value: string) => void;
   onCancel: () => void;
-  /** 不在编辑态时显示什么 */
-  children: React.ReactNode;
+  /** 不在编辑态时显示什么。新建场景永远是编辑态，可以不传 */
+  children?: React.ReactNode;
   style?: React.CSSProperties;
+  /** 编辑态的占位提示（新建场景：还没有值可显示） */
+  placeholder?: string;
 }) {
   const [draft, setDraft] = useState(props.value);
 
@@ -31,6 +33,7 @@ export function InlineName(props: {
     <input
       autoFocus
       value={draft}
+      placeholder={props.placeholder}
       onFocus={(event) => event.currentTarget.select()}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}

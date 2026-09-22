@@ -37,6 +37,34 @@ describe("createProgressCoalescer", () => {
     assert.deepEqual(batches, []);
   });
 
+  test("flush() 立刻交付攒着的帧：后来的事件不会赶超排队中的 progress", async () => {
+    const order: string[] = [];
+    const coalescer = createProgressCoalescer<number>(
+      (batch) => order.push(`batch:${batch.join(",")}`),
+      30,
+    );
+    coalescer.push(1);
+    coalescer.push(2);
+    coalescer.flush();
+    order.push("phase:idle"); // 即时事件在 flush 之后应用
+    assert.deepEqual(order, ["batch:1,2", "phase:idle"]);
+    // flush 后定时器归零：下一帧重新起拍，不会把已交付的重发一遍
+    coalescer.push(3);
+    await sleep(80);
+    assert.deepEqual(order, ["batch:1,2", "phase:idle", "batch:3"]);
+    coalescer.dispose();
+  });
+
+  test("flush() 没攒着帧时不调 apply", () => {
+    let calls = 0;
+    const coalescer = createProgressCoalescer<number>(() => {
+      calls++;
+    }, 30);
+    coalescer.flush();
+    assert.equal(calls, 0);
+    coalescer.dispose();
+  });
+
   test("空批不触发 apply", async () => {
     let calls = 0;
     const coalescer = createProgressCoalescer<number>(() => {

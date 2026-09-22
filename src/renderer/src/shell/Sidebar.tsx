@@ -1,14 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
+import { Chip } from "./Chip";
 import { selectionStyle } from "./selection";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
+import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
-import type { SessionMeta } from "@shared/session";
+import { isSessionDone, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
+import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
+import { shouldExitSubview } from "./subview-exit.ts";
+import { nextCompletion } from "./completion-mark.ts";
+import { rowStatusIcon } from "./row-status.ts";
+import { nextFilterRowMode } from "./filter-row-compact.ts";
+import { canResumeInSource } from "../features/chat/carryover-resume.ts";
 import {
   SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
@@ -26,7 +34,75 @@ export type Overlay = "settings" | null;
 const COLLAPSE_BREAKPOINT = 960;
 
 /**
- * 左栏，288px。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
+ * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
+ * 「Mark done?」。**纯派生不落盘**——建议只是当下的一句提醒，不是会话状态；
+ * 每次渲染按 updatedAt 现算，不弹通知、不加角标，hover 才出现。
+ */
+const IDLE_SUGGEST_DAYS = 7;
+const IDLE_SUGGEST_MS = IDLE_SUGGEST_DAYS * 24 * 60 * 60 * 1000;
+
+/** 完成状态筛选的单选组三档：全部 / 进行中 / 已完成（Starred 是叠加开关，正交） */
+type StatusFilter = "all" | "active" | "done";
+
+/**
+ * 会话的未办遗留数（角标、Has todos 筛选共一口径）：按 sourceSessionId 现算。
+ * 抽出来是因为两个消费者（行内角标 / 筛选管线）用同一个「还有几件没办」的判定，
+ * 各写一份迟早漂移。
+ */
+function openTodoCount(carryovers: readonly Carryover[], sessionId: string): number {
+  return carryovers.filter((item) => item.sourceSessionId === sessionId && item.status === "open").length;
+}
+
+/**
+ * 遗留事项面板的分组：按来源会话归堆，组序跟会话列表（最近的在前）；
+ * 来源会话已删的堆到最后（标题换占位，跳转不可用）。
+ */
+function groupCarryovers(
+  carryovers: readonly Carryover[],
+  sessions: readonly SessionMeta[],
+): { session: SessionMeta | null; items: Carryover[] }[] {
+  const bySource = new Map<string, Carryover[]>();
+  for (const item of carryovers) {
+    const list = bySource.get(item.sourceSessionId) ?? [];
+    list.push(item);
+    bySource.set(item.sourceSessionId, list);
+  }
+  const groups: { session: SessionMeta | null; items: Carryover[] }[] = [];
+  for (const meta of sessions) {
+    const items = bySource.get(meta.id);
+    if (items !== undefined) groups.push({ session: meta, items });
+  }
+  for (const [source, items] of bySource) {
+    if (sessions.some((meta) => meta.id === source)) continue;
+    groups.push({ session: null, items });
+  }
+  return groups;
+}
+
+/**
+ * 筛选扑空的空态文案：按激活的组合说清「为什么什么都没有、怎么才有」，
+ * 不给一条对不上当前筛选的提示。
+ */
+function filterEmptyText(
+  status: StatusFilter,
+  starredOnly: boolean,
+  hasTodosOnly: boolean,
+): string {
+  if (hasTodosOnly)
+    return "No task has open carryover items. Wrap one up to collect them here.";
+  if (status === "active")
+    return starredOnly
+      ? "No active starred tasks. Clear the Starred filter to see the rest."
+      : "No active tasks right now — everything is done.";
+  if (status === "done")
+    return starredOnly
+      ? "No starred tasks done yet."
+      : "No done tasks yet. Mark a task done from its menu to find it here.";
+  return "No starred tasks yet. Hover a task and click its star to find it here.";
+}
+
+/**
+ * 左栏，默认 288px，**可拖宽**（240–400，双击回 288）。**它自己没有面**——不填色、不描边、不分割线，直接坐在 layer 1 上，
  * 结构完全由中卡的边缘给出（设计系统 *Layout*：both sidebars are unbounded）。
  *
  * 只列真实存在的东西：本分支还没有会话存储，所以「会话列表」目前最多一条——
@@ -47,10 +123,77 @@ export function Sidebar(props: {
   settingsTab: SettingsTab;
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
+  /**
+   * Archived / Carryovers 两个子视图的开关由 App 持有（2026-09-22：入口迁到右栏
+   * 底部，状态跟着入口走，侧栏只剩受控渲染）。**子视图本体仍在侧栏**：换掉
+   * 主列表区，不弹窗。
+   */
+  showArchived: boolean;
+  showCarryovers: boolean;
+  onShowArchived: (next: boolean) => void;
+  onShowCarryovers: (next: boolean) => void;
+  /** 当前宽度（px）。拖动中由调用方只改本地 state，松手才落 settings */
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
 }) {
   const { session } = props;
+  const asideRef = useRef<HTMLElement | null>(null);
+  /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
+  const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
-  const [showArchived, setShowArchived] = useState(false);
+  /**
+   * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
+   * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
+   */
+  const filterRowRef = useRef<HTMLDivElement | null>(null);
+  const [filterCompact, setFilterCompact] = useState(false);
+  const filterFullWidth = useRef<number | null>(null);
+  useEffect(() => {
+    const row = filterRowRef.current;
+    if (row === null) return;
+    const measure = (): void => {
+      const next = nextFilterRowMode({
+        compact: filterCompact,
+        fullWidth: filterFullWidth.current,
+        containerWidth: row.clientWidth,
+        contentWidth: row.scrollWidth,
+      });
+      filterFullWidth.current = next.fullWidth;
+      if (next.compact !== filterCompact) setFilterCompact(next.compact);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+    // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
+    // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterCompact, session.sessions.length, settingsOpen, props.showArchived, props.showCarryovers]);
+  /**
+   * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
+   * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
+   * **只作用于主浏览列表**（Workspaces + Tasks）：Archived 是存储位置视图、
+   * Settings 是另一块列表，都不受（也不该隐形地受）筛选。
+   */
+  const [starredOnly, setStarredOnly] = useState(false);
+  /**
+   * 完成状态筛选：单选组（All / Active / Done 互斥，点一个顶掉另一个）。
+   * 默认 All = 无过滤；与 Starred 是两条独立的开关，叠加生效。
+   */
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  /**
+   * 「Has todos」叠加开关（收尾仪式的数据源落地后启用）：筛出**还有未办遗留**
+   * 的会话——口径与角标同一份（open 数 > 0），事项全部办完的会话不再出现在
+   * 这个视图里（它已经没有要办的事了，找它去 Done）。
+   */
+  const [hasTodosOnly, setHasTodosOnly] = useState(false);
+  /**
+   * 命名新建工作区：Workspaces 列表顶部那行就地编辑（InlineName）开没开着。
+   * 「+」菜单里选「New workspace…」置 true；Enter / Esc / 点别处（失焦提交，
+   * 空名不提交）都会收掉。**不持久化**——一个没提交的名字不值得活过重启。
+   */
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   /**
    * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
    * **手动状态不持久化**——窗口宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
@@ -71,6 +214,7 @@ export function Sidebar(props: {
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
+  const width = props.width;
   /** 高亮哪一条：盖着别的面时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.overlay !== null ? null : (session.sessionId ?? session.opened?.id ?? null);
 
@@ -93,10 +237,37 @@ export function Sidebar(props: {
   /** 归档的从主列表里移走——**不是删除**，它们收在底部那一行后面 */
   const live = session.sessions.filter((m) => !m.archived);
   const archived = session.sessions.filter((m) => m.archived);
+  /**
+   * 子视图空了就自动退回主列表——否则停在一个空视图里，而唯一的出口（底部
+   * 那条行）正好因为 N 为 0 而禁用。判定与理由在 `subview-exit.ts`。
+   */
+  useEffect(() => {
+    if (shouldExitSubview(props.showArchived, archived.length)) props.onShowArchived(false);
+  }, [props.showArchived, props.onShowArchived, archived.length]);
+  useEffect(() => {
+    if (shouldExitSubview(props.showCarryovers, session.carryovers.length)) props.onShowCarryovers(false);
+  }, [props.showCarryovers, props.onShowCarryovers, session.carryovers.length]);
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   const sessionList = describeList(session.loads.sessions, session.sessions.length);
-  const loose = live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
+  /**
+   * 主列表的筛选管线（筛选区 chips）。状态（All/Active/Done，单选组）、星标与
+   * Has todos（两个叠加开关）三条正交条件串在同一个 filter 里。**只作用于主浏览
+   * 列表**——Archived / Carryovers 是存储与事项视图，不受（也不该隐形地受）筛选。
+   */
+  const filtered = statusFilter !== "all" || starredOnly || hasTodosOnly;
+  const scoped = live.filter((m) => {
+    if (statusFilter === "active" && isSessionDone(m)) return false;
+    if (statusFilter === "done" && !isSessionDone(m)) return false;
+    if (starredOnly && m.starred !== true) return false;
+    if (hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
+    return true;
+  });
+  const loose = scoped.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
+  // 筛选开着时，没有命中会话的工作区组整个不显示——一排空组头比没有更吵
+  const workspaceMatches = filtered
+    ? session.workspaces.filter((workspace) => scoped.some((m) => m.workspaceId === workspace.id))
+    : session.workspaces;
   const tasksFolded = groups.folds.has(TASKS_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
   const tasksFull = groups.full.has(TASKS_FOLD_KEY);
@@ -106,8 +277,46 @@ export function Sidebar(props: {
     session.openSession(id);
   };
 
-  // —— 折叠态：48px 图标条（RailButton 规格：32px 方块、tooltip 即标签、
-  // 底部 archive + settings 簇）。折叠期间列表不可达，要切会话先展开。
+  /**
+   * 拖宽：右移变宽（与右侧面板同一套机制，只是方向相反）。**区间是固定像素 240–400**
+   * ——右栏那条「pane 的 1/3–2/3」不管左栏（2026-09-22 wafo 澄清：那一对说的是
+   * chat 主区与右栏）；
+   * 拖动中不做动画、全文选择与光标固定成拖拽语义，松手还原；双击热区回 288。
+   * 对话面（`main.pane`）是 `flex: 1`，侧栏变宽它自己就让出来——用户要的正是
+   * 「靠右侧 chat view 的宽度来调节」（2026-09-22 wafo）。
+   */
+  const startResize = (event: React.PointerEvent): void => {
+    if (event.button !== 0) return;
+    const aside = asideRef.current;
+    if (aside === null) return;
+    event.preventDefault();
+    setResizing(true);
+    const startX = event.clientX;
+    const startWidth = aside.getBoundingClientRect().width;
+    const clamp = (value: number): number =>
+      Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(value)));
+    const previousSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    const move = (ev: PointerEvent): void => {
+      props.onWidthChange(clamp(startWidth + (ev.clientX - startX)));
+    };
+    const up = (ev: PointerEvent): void => {
+      window.removeEventListener("pointermove", move);
+      document.body.style.userSelect = previousSelect;
+      document.body.style.cursor = previousCursor;
+      setResizing(false);
+      props.onWidthCommit(clamp(startWidth + (ev.clientX - startX)));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  };
+
+  // —— 折叠态：48px 图标条（RailButton 规格：32px 方块、tooltip 即标签）。
+  // 折叠期间列表不可达，要切会话先展开。Archived / Carryovers / Settings
+  // 不在这里重复摆入口：它们的唯一入口在右栏底部（2026-09-22 裁决），
+  // 折叠态也能点到（右栏不折叠）。
   if (collapsed) {
     return (
       <aside
@@ -133,41 +342,25 @@ export function Sidebar(props: {
           accent
           onClick={startNewTask}
         />
-        <span style={{ flex: 1 }} />
-        <RailButton
-          icon="archive"
-          title={`Archived (${session.sessions.filter((m) => m.archived).length})`}
-          active={showArchived && !settingsOpen}
-          onClick={() => {
-            setCollapsed(false);
-            setShowArchived(true);
-          }}
-        />
-        <RailButton
-          icon="settings"
-          title="Settings"
-          active={settingsOpen}
-          onClick={() => {
-            setCollapsed(false);
-            props.onOverlay("settings");
-          }}
-        />
       </aside>
     );
   }
 
   return (
+    <>
     <aside
+      ref={asideRef}
       style={{
-        width: 288,
-        flex: "0 0 288px",
+        width,
+        flex: `0 0 ${width}px`,
         display: "flex",
         flexDirection: "column",
         gap: "var(--space-3)",
         padding: "var(--space-2) var(--space-3)",
         background: "transparent",
         overflow: "hidden",
-        transition: "width var(--duration-fast) var(--ease-standard)",
+        // 拖动中禁过渡：160ms 的宽度动画会让跟手变成拖一根皮筋
+        transition: resizing ? "none" : "width var(--duration-fast) var(--ease-standard)",
       }}
     >
       {/*
@@ -237,6 +430,66 @@ export function Sidebar(props: {
         New task
       </button>
 
+      {/**
+        筛选区：会话浏览的过滤 chips。状态是单选组（All / Active / Done 互斥，
+        点一个顶掉另一个），Starred 是叠加开关——两者正交，可组合出
+        「进行中且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
+        筛选无从谈起，不摆。
+      */}
+      {live.length > 0 && !settingsOpen && !props.showArchived && !props.showCarryovers && (
+        <div
+          ref={filterRowRef}
+          style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
+        >
+          <Chip
+            icon="list"
+            compact={filterCompact}
+            active={statusFilter === "all"}
+            title="All tasks"
+            onClick={() => setStatusFilter("all")}
+          >
+            All
+          </Chip>
+          <Chip
+            icon="play"
+            compact={filterCompact}
+            active={statusFilter === "active"}
+            title="Tasks still in progress"
+            onClick={() => setStatusFilter("active")}
+          >
+            Active
+          </Chip>
+          <Chip
+            icon="check"
+            compact={filterCompact}
+            active={statusFilter === "done"}
+            title="Completed tasks"
+            onClick={() => setStatusFilter("done")}
+          >
+            Done
+          </Chip>
+          <Chip
+            icon="star"
+            compact={filterCompact}
+            active={starredOnly}
+            title="Show starred tasks only"
+            onClick={() => setStarredOnly((value) => !value)}
+          >
+            Starred
+          </Chip>
+          {/* 灯泡 = 「这条会话还留着 idea / 没办完的事」（wafo 2026-09-22 裁决） */}
+          <Chip
+            icon="lightbulb"
+            compact={filterCompact}
+            active={hasTodosOnly}
+            title="Show tasks with open carryover items only"
+            onClick={() => setHasTodosOnly((value) => !value)}
+          >
+            Has todos
+          </Chip>
+        </div>
+      )}
+
       <div
         className="scroll"
         style={{
@@ -246,9 +499,25 @@ export function Sidebar(props: {
           paddingRight: "var(--space-3)",
         }}
       >
-        {showArchived && !settingsOpen ? (
+        {props.showArchived && !settingsOpen ? (
           <>
-            <NodeLabel>Archived</NodeLabel>
+            {/*
+              标题行左端的返回键是 Archived 视图的**显式出口**。以前出去只能再点一次
+              底部那条 toggle，而它既不像一个「返回」，又会在归档空了时禁用。
+              这是一个子视图，子视图就该在它自己的标题旁边带着回去的路。
+            */}
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+              <IconButton
+                label="Back to tasks"
+                title="Back to the task list"
+                size={20}
+                onClick={() => props.onShowArchived(false)}
+                style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
+              >
+                <Icon name="chevron-left" size={13} strokeWidth={1.8} />
+              </IconButton>
+              <NodeLabel>Archived</NodeLabel>
+            </div>
             {archived.map((meta) => (
               <SessionRow
                 key={meta.id}
@@ -259,6 +528,38 @@ export function Sidebar(props: {
               />
             ))}
           </>
+        ) : props.showCarryovers && !settingsOpen ? (
+          <CarryoverPanel
+            carryovers={session.carryovers}
+            sessions={session.sessions}
+            onSetStatus={session.setCarryoverStatus}
+            onBack={() => props.onShowCarryovers(false)}
+            onResumeNew={(item) => {
+              // 开工即回对话：退出面板（下次进重新开），新会话落在来源会话的组里
+              // （cwd / 归属跟随它）——不能落进一个收着的组里无声无息
+              props.onShowCarryovers(false);
+              props.onOverlay(null);
+              setCollapsed(false);
+              const source = session.sessions.find((m) => m.id === item.sourceSessionId);
+              setGroups((current) =>
+                source?.workspaceId != null
+                  ? unfoldGroup(current, foldKeyForWorkspace(source.workspaceId))
+                  : unfoldGroup(current, TASKS_FOLD_KEY),
+              );
+              session.startCarryoverTask(item);
+            }}
+            onResumeInSource={(item) => {
+              // 右键备选：续跑原会话——跳回去看它接着干（同 onOpenTask 的退场）
+              props.onShowCarryovers(false);
+              props.onOverlay(null);
+              session.continueCarryoverInSource(item);
+            }}
+            onOpenTask={(id) => {
+              // 看完事项跳回对话：退出面板、切到那条会话（面板下次进重新开）
+              props.onShowCarryovers(false);
+              open(id);
+            }}
+          />
         ) : settingsOpen ? (
           <>
             <NodeLabel>Settings</NodeLabel>
@@ -272,131 +573,198 @@ export function Sidebar(props: {
               />
             ))}
           </>
+        ) : filtered && scoped.length === 0 ? (
+          /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
+          <Empty>{filterEmptyText(statusFilter, starredOnly, hasTodosOnly)}</Empty>
         ) : (
           <>
-            <NodeHeader
-              label="Workspaces"
-              addLabel="Add a workspace folder"
-              addIcon="folder-plus"
-              onAdd={session.addWorkspace}
-            />
-            {/*
-              读失败时错误行贴在列表上方，旧列表照常列（失败不清空手里那份）；
-              只有从没读成功过才是空空的错误行 + 什么都不列（none）。
-            */}
-            {workspaceList.error !== null && (
-              <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />
-            )}
-            {workspaceList.body === "loading" ? (
-              <Empty>Loading workspaces…</Empty>
-            ) : workspaceList.body === "empty" ? (
-              <Empty>No workspace yet. Add the folder the agent may read.</Empty>
-            ) : workspaceList.body === "list" ? (
-              session.workspaces.map((workspace) => (
-                <WorkspaceGroup
-                  key={workspace.id}
-                  workspace={workspace}
-                  sessions={live.filter((m) => m.workspaceId === workspace.id)}
-                  session={session}
-                  openId={openId}
-                  folded={groups.folds.has(foldKeyForWorkspace(workspace.id))}
-                  onToggleFold={() =>
-                    setGroups((current) =>
-                      toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
-                    )
-                  }
-                  full={groups.full.has(foldKeyForWorkspace(workspace.id))}
-                  onToggleFull={() =>
-                    setGroups((current) =>
-                      toggleGroupFull(current, foldKeyForWorkspace(workspace.id)),
-                    )
-                  }
-                  onNewTask={() => {
-                    // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
-                    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(workspace.id)));
-                    session.newTaskIn(workspace);
-                  }}
-                  onRename={(name) => session.renameWorkspace(workspace.id, name)}
-                  onRemove={() => session.removeWorkspace(workspace.id)}
-                  onOpen={open}
+            {(!filtered || workspaceMatches.length > 0) && (
+              <>
+                <NodeHeader
+                  label="Workspaces"
+                  addLabel="Add a workspace"
+                  addIcon="folder-plus"
+                  addMenu={[
+                    // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
+                    // 两种添法在菜单里各占一个符号
+                    {
+                      id: "new-workspace",
+                      label: "New workspace…",
+                      icon: "plus",
+                      onSelect: () => setCreatingWorkspace(true),
+                    },
+                    {
+                      id: "add-folder",
+                      label: "Add a folder…",
+                      icon: "folder-plus",
+                      onSelect: session.addWorkspace,
+                    },
+                  ]}
                 />
-              ))
-            ) : null}
-
-            {/*
-              TASKS 节点列的是**落盘的会话**。今天全部会话都挂在这里而不是挂到
-              **不属于任何工作区**的那些。这就是设计系统里 TASKS 与 WORKSPACES
-              两个节点的区别，也是「+ New task」与工作区那个「+」的区别。
-            */}
-            <div style={{ marginTop: "var(--space-3)" }}>
-              <NodeHeader
-                label="Tasks"
-                addLabel="New task"
-                addIcon="plus"
-                onAdd={() => {
-                  // 同上：新任务落 TASKS，先展开再建
-                  setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
-                  session.newTask();
-                }}
-                folded={tasksFolded}
-                onToggleFold={
-                  loose.length > 0
-                    ? () => setGroups((current) => toggleGroupFold(current, TASKS_FOLD_KEY))
-                    : undefined
-                }
-              />
-              {sessionList.error !== null && (
-                <ListError message={sessionList.error} onRetry={session.reloadSessions} />
-              )}
-              {sessionList.body === "loading" ? (
-                <Empty>Loading tasks…</Empty>
-              ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
-                <Empty>No task yet. The one you start lands here.</Empty>
-              ) : tasksFolded ? null : (
-                <>
-                  {looseVisible.map((meta) => (
-                    <SessionRow
-                      key={meta.id}
-                      meta={meta}
+                {creatingWorkspace && (
+                  // 就地命名：与工作区组头同一套 icon 槽与行高，像「正在出生的那一行」。
+                  // Enter 提交、Esc 放弃；失焦即提交（InlineName 的死规矩），空名不提交
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "20px 24px minmax(0,1fr)",
+                      alignItems: "center",
+                      gap: "var(--space-1)",
+                      minHeight: "var(--control-height-md)",
+                    }}
+                  >
+                    <span />
+                    <span
+                      style={{
+                        display: "grid",
+                        placeItems: "center",
+                        width: 24,
+                        height: 24,
+                        color: "var(--color-text-secondary)",
+                      }}
+                    >
+                      <Icon name="folder" size={14} strokeWidth={1.8} />
+                    </span>
+                    <InlineName
+                      editing
+                      value=""
+                      placeholder="Workspace name"
+                      onCommit={(name) => {
+                        setCreatingWorkspace(false);
+                        const trimmed = name.trim();
+                        if (trimmed !== "") session.createWorkspace(trimmed);
+                      }}
+                      onCancel={() => setCreatingWorkspace(false)}
+                    />
+                  </div>
+                )}
+                {/*
+                  读失败时错误行贴在列表上方，旧列表照常列（失败不清空手里那份）；
+                  只有从没读成功过才是空空的错误行 + 什么都不列（none）。
+                */}
+                {workspaceList.error !== null && (
+                  <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />
+                )}
+                {workspaceList.body === "loading" ? (
+                  <Empty>Loading workspaces…</Empty>
+                ) : workspaceList.body === "empty" ? (
+                  <Empty>No workspace yet. Add the folder the agent may read.</Empty>
+                ) : workspaceList.body === "list" ? (
+                  workspaceMatches.map((workspace) => (
+                    <WorkspaceGroup
+                      key={workspace.id}
+                      workspace={workspace}
+                      sessions={scoped.filter((m) => m.workspaceId === workspace.id)}
                       session={session}
-                      active={meta.id === openId}
-                      onClick={() => open(meta.id)}
+                      openId={openId}
+                      folded={groups.folds.has(foldKeyForWorkspace(workspace.id))}
+                      onToggleFold={() =>
+                        setGroups((current) =>
+                          toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
+                        )
+                      }
+                      full={groups.full.has(foldKeyForWorkspace(workspace.id))}
+                      onToggleFull={() =>
+                        setGroups((current) =>
+                          toggleGroupFull(current, foldKeyForWorkspace(workspace.id)),
+                        )
+                      }
+                      onNewTask={() => {
+                        // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
+                        setGroups((current) =>
+                          unfoldGroup(current, foldKeyForWorkspace(workspace.id)),
+                        );
+                        session.newTaskIn(workspace);
+                      }}
+                      onRename={(name) => session.renameWorkspace(workspace.id, name)}
+                      onRemove={() => session.removeWorkspace(workspace.id)}
+                      onOpen={open}
                     />
-                  ))}
-                  {loose.length > SESSIONS_PREVIEW_LIMIT && (
-                    <ShowAllRow
-                      full={tasksFull}
-                      hidden={loose.length - SESSIONS_PREVIEW_LIMIT}
-                      onClick={() => setGroups((current) => toggleGroupFull(current, TASKS_FOLD_KEY))}
-                    />
-                  )}
-                </>
-              )}
-            </div>
+                  ))
+                ) : null}
+              </>
+            )}
+
+            {(!filtered || loose.length > 0) && (
+              <div style={{ marginTop: "var(--space-3)" }}>
+                {/**
+                  TASKS 节点列的是**落盘的会话**。今天全部会话都挂在这里而不是挂到
+                  **不属于任何工作区**的那些。这就是设计系统里 TASKS 与 WORKSPACES
+                  两个节点的区别，也是「+ New task」与工作区那个「+」的区别。
+                */}
+                <NodeHeader
+                  label="Tasks"
+                  addLabel="New task"
+                  addIcon="plus"
+                  onAdd={() => {
+                    // 同上：新任务落 TASKS，先展开再建
+                    setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
+                    session.newTask();
+                  }}
+                  folded={tasksFolded}
+                  onToggleFold={
+                    loose.length > 0
+                      ? () => setGroups((current) => toggleGroupFold(current, TASKS_FOLD_KEY))
+                      : undefined
+                  }
+                />
+                {sessionList.error !== null && (
+                  <ListError message={sessionList.error} onRetry={session.reloadSessions} />
+                )}
+                {sessionList.body === "loading" ? (
+                  <Empty>Loading tasks…</Empty>
+                ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
+                  <Empty>No task yet. The one you start lands here.</Empty>
+                ) : tasksFolded ? null : (
+                  <>
+                    {looseVisible.map((meta) => (
+                      <SessionRow
+                        key={meta.id}
+                        meta={meta}
+                        session={session}
+                        active={meta.id === openId}
+                        onClick={() => open(meta.id)}
+                      />
+                    ))}
+                    {loose.length > SESSIONS_PREVIEW_LIMIT && (
+                      <ShowAllRow
+                        full={tasksFull}
+                        hidden={loose.length - SESSIONS_PREVIEW_LIMIT}
+                        onClick={() =>
+                          setGroups((current) => toggleGroupFull(current, TASKS_FOLD_KEY))
+                        }
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
-
-      {/* 整条可点，不是只有图标可点——和 New task 一样是一整根横条 */}
-      {/*
-        归档不是删除：它把会话从主列表移走，收在这一行后面。
-        一条都没有时禁用——一个点了什么都不发生的入口比禁用更让人困惑。
-      */}
-      <NavRow
-        icon="archive"
-        label={`Archived (${archived.length})`}
-        hint={archived.length === 0 ? "Nothing archived yet" : "Archived tasks"}
-        active={showArchived && !settingsOpen}
-        disabled={archived.length === 0}
-        onClick={() => setShowArchived((value) => !value)}
-      />
-      <NavRow
-        icon="settings"
-        label="Settings"
-        active={settingsOpen}
-        onClick={() => props.onOverlay(settingsOpen ? null : "settings")}
-      />
     </aside>
+    {/*
+      拖宽热区：侧栏与对话面之间那道缝里的 6px，紧贴面的左缘。
+      **不放在 aside 里**：aside 是 overflow:hidden 的，放里面会被裁；也不压在
+      面上（那会抢走对话面左缘那一条的点击）。定位基准是 `.layer`（唯一带
+      position 的祖先），所以 left = 左内边距 + 侧栏宽 + 缝−热区宽。
+      绝对定位不占 flex 位，不会给 .layer 多出一列。
+    */}
+    <span
+      onPointerDown={startResize}
+      onDoubleClick={() => props.onWidthCommit(SIDEBAR_WIDTH_DEFAULT)}
+      title="Drag to resize · double-click to reset"
+      style={{
+        position: "absolute",
+        left: `calc(var(--space-3) + ${width}px + var(--space-3) - 6px)`,
+        top: "var(--space-3)",
+        bottom: "var(--space-3)",
+        width: 6,
+        cursor: "col-resize",
+        zIndex: 5,
+      }}
+    />
+    </>
   );
 }
 
@@ -602,11 +970,21 @@ function NodeHeader(props: {
   label: string;
   addLabel: string;
   addIcon: IconName;
-  onAdd: () => void;
+  /**
+   * 「+」点开的菜单：同一颗键给多种添法（Workspaces：命名新建 / 选已有文件夹）。
+   * 与 onAdd 二选一——传了它 onAdd 就不解析。
+   */
+  addMenu?: MenuItem[];
+  onAdd?: () => void;
   /** 传了 onToggleFold 就说明这个节点的孩子可折叠：label 变成开合按钮（chevron + 名字） */
   folded?: boolean;
   onToggleFold?: (() => void) | undefined;
 }) {
+  const addButton = (onClick: () => void, open: boolean): React.ReactNode => (
+    <IconButton label={props.addLabel} size={26} active={open} onClick={onClick}>
+      <Icon name={props.addIcon} size={14} />
+    </IconButton>
+  );
   return (
     <div
       style={{
@@ -626,9 +1004,17 @@ function NodeHeader(props: {
       ) : (
         <NodeLabel>{props.label}</NodeLabel>
       )}
-      <IconButton label={props.addLabel} size={26} onClick={props.onAdd}>
-        <Icon name={props.addIcon} size={14} />
-      </IconButton>
+      {props.addMenu !== undefined ? (
+        <Menu
+          items={props.addMenu}
+          // 「+」贴着侧栏右缘：菜单右缘对齐按钮，向左展开（窄侧栏放不下会回落）
+          align="end"
+          panelMinWidth={200}
+          trigger={({ open, toggle }) => addButton(toggle, open)}
+        />
+      ) : props.onAdd !== undefined ? (
+        addButton(props.onAdd, false)
+      ) : null}
     </div>
   );
 }
@@ -710,7 +1096,8 @@ function ShowAllRow(props: { full: boolean; hidden: number; onClick: () => void 
  * 里一处定义，选中态的两个候选与取舍也写在那儿。
  */
 function NavRow(props: {
-  icon: IconName;
+  /** `null` = 这一行没有图标可画（会话行的空状态槽）。槽仍然占位，标题才对得齐 */
+  icon: IconName | null;
   label: string;
   active: boolean;
   onClick?: (() => void) | undefined;
@@ -762,7 +1149,12 @@ function NavRow(props: {
           color: disabled ? "var(--color-text-tertiary)" : (props.tone ?? "var(--color-text-secondary)"),
         }}
       >
-        <Icon name={props.icon} size={13} strokeWidth={1.8} spin={props.spin ?? false} />
+        {props.icon === null ? (
+          // 空槽：不画任何东西，但占与图标等宽的位置——有标记的行和没标记的行标题对齐
+          <span style={{ width: 13, height: 13 }} />
+        ) : (
+          <Icon name={props.icon} size={13} strokeWidth={1.8} spin={props.spin ?? false} />
+        )}
       </span>
       <span
         style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
@@ -776,7 +1168,9 @@ function NavRow(props: {
 /**
  * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**。
  *
- * 右边是三个点，不是一排图标：288px 的一行挂不下六个动作。
+ * 右边是**一个星标键加三个点**，不是一排图标：288px 的一行挂不下六个动作。
+ * 星标是唯一挂在行上的动作——它是一天里按得最多的那个（Proma 的悬停即星标，
+ * 2026-09-22 wafo 点名），走菜单等于「点两下菜单换一个布尔」。
  * **两处破坏性/有去处的动作在菜单里仍然是两段式**——删除要确认，
  * 转移要选目标——都靠 `keepOpen` 把菜单原地换成第二组项，
  * 「先讲后果再动作」不因为换了容器就省掉。
@@ -789,37 +1183,113 @@ function SessionRow(props: {
 }) {
   const { meta, session } = props;
   const [hover, setHover] = useState(false);
+  /**
+   * 行内有东西拿到**键盘**焦点。悬停出现的键必须也为键盘出现——只认 hover 的话，
+   * Tab 到星标键时它还是 opacity 0，焦点环落在一个看不见的方块上。
+   * **只认 :focus-visible**：鼠标点星也会让按钮拿到焦点，若认普通 focus，点过的那行会
+   * 一直挂着描边星直到焦点走开（wafo 2026-09-22 实测：「点了别的行，之前那个描边星才消失」）。
+   * React 的 onFocus/onBlur 走 focusin/focusout，会从子节点冒上来。
+   */
+  const [focused, setFocused] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [step, setStep] = useState<"main" | "move" | "delete">("main");
+  const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
+    "main",
+  );
+  /**
+   * 删除确认步要说的「工作台里有几个文件」。删会话连带删工作台，确认项先把
+   * 后果说出来（提示后删，Proma 是不提示直接删，我们多这一句）。null = 没拉到
+   * 或里面没文件，文案退回光秃秃的 Delete permanently。
+   */
+  const [workbenchFiles, setWorkbenchFiles] = useState<number | null>(null);
   const live = meta.id === session.sessionId;
   // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
   const running = session.phaseOf(meta.id) !== "idle";
   // 失败同样查槽：后台会话重试耗尽（turnError）也亮 Failed，不止正看着的那条
   const failed = !running && (session.turnErrorOf(meta.id) !== null || (live && session.error !== null));
+  const done = isSessionDone(meta);
   /**
-   * 置顶图标**只顶替 idle 那一档**。正在跑或失败时状态优先——
-   * 置顶是用户的偏好，运行中是正在发生的事，后者更该被看见。
+   * 行首状态槽：running > failed > pinned > 空。优先级与理由在
+   * `row-status.ts`（纯函数 + 测试）。`null` = 这一行没什么可说，槽留空。
    */
-  const idle = !(running || failed);
-  const status = running
-    ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
-    : failed
-      ? { icon: "triangle-alert" as const, tone: "var(--color-danger)", label: "Failed", spin: false }
-      : { icon: "check" as const, tone: "var(--color-text-tertiary)", label: "Idle", spin: false };
+  const status = rowStatusIcon({ running, failed, pinned: meta.pinned === true });
+  // 这条会话的未办遗留数（行尾角标，与筛选同口径）
+  const openTodos = openTodoCount(session.carryovers, meta.id);
+  // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）
+  const doneCount = session.sessions.filter(
+    (m) => isSessionDone(m) && !m.archived,
+  ).length;
+  /**
+   * 闲置建议：open 且未归档、最后一次活动超过 7 天——纯派生（每次渲染按
+   * updatedAt 现算，不落盘），hover 才出现的一个轻提示，不弹通知不加角标。
+   */
+  const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
+
+  /**
+   * 进删除确认步：异步拉工作台文件数，到了再补进文案——拉取不阻塞菜单，
+   * 一次 stat 失败也不该堵住删除。
+   */
+  const enterDeleteStep = () => {
+    setStep("delete");
+    setWorkbenchFiles(null);
+    api.session
+      .workbenchStat(meta.id)
+      .then((stat) => {
+        if (stat.exists && stat.fileCount > 0) setWorkbenchFiles(stat.fileCount);
+      })
+      .catch(() => undefined);
+  };
+  /** 退出删除确认步（Cancel / 菜单重开）：文件数一并清掉，下次进重新拉 */
+  const exitDeleteStep = () => {
+    setStep("main");
+    setWorkbenchFiles(null);
+  };
 
   const items: MenuItem[] =
     step === "delete"
       ? [
-          { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+          { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: exitDeleteStep },
           {
             id: "confirm",
             label: "Delete permanently",
+            // 有文件就把数说出来（1 用单数），走 hint 而不是拼进 label：菜单最宽 200px，
+            // 拼进去会被 ellipsis 吃掉、只剩「Delete permanently · …」，等于没提示。
+            // 没拉到 / 没文件就不出 hint，不拿一句不确定的话吓用户
+            ...(workbenchFiles === null
+              ? {}
+              : { hint: `+${workbenchFiles} file${workbenchFiles === 1 ? "" : "s"}` }),
             icon: "trash-2",
             danger: true,
             onSelect: () => session.removeSession(meta.id),
           },
         ]
-      : step === "move"
+      : step === "archive"
+        ? [
+            /**
+             * 归档的**二次确认**（wafo 2026-09-22）。上一版这里是「先做，再给一条
+             * 撤销条」，用户用下来要的不是撤销而是确认：一条会自己走掉的提示把“没做对”
+             * 的补救窗口变成了限时题，而确认把判断放在动作发生之前，不计时。
+             * 与 Delete 同款：菜单内原地换第二组项，不开模态框。不带 danger——
+             * 归档不是破坏性动作，只是换个地方放。
+             */
+            { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+            {
+              id: "confirm",
+              label: "Archive task",
+              icon: "archive",
+              onSelect: () => session.archiveSession(meta.id, true),
+            },
+          ]
+      : step === "archive-done"
+        ? [
+            { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+            {
+              id: "confirm",
+              label: `Archive ${doneCount} done task${doneCount === 1 ? "" : "s"}`,
+              icon: "archive",
+              onSelect: () => session.archiveDoneSessions(),
+            },
+          ]
+        : step === "move"
         ? [
             {
               id: "none",
@@ -844,6 +1314,8 @@ function SessionRow(props: {
               icon: meta.pinned ? "pin-off" : "pin",
               onSelect: () => session.pinSession(meta.id, !meta.pinned),
             },
+            // Star / Unstar 与 Mark done / Reopen 都不在这儿——它们已经是行上的悬停标记
+            // （一次点击，不必开菜单）。同一个动作留两个入口只会让菜单更长、更难扫
             {
               id: "move",
               label: "Move to…",
@@ -857,19 +1329,42 @@ function SessionRow(props: {
               icon: "download",
               onSelect: () => session.exportSession(meta.id),
             },
-            {
-              id: "archive",
-              label: meta.archived ? "Unarchive" : "Archive",
-              icon: meta.archived ? "archive-restore" : "archive",
-              onSelect: () => session.archiveSession(meta.id, !meta.archived),
-            },
+            // Unarchive 不确认（一步）：它本身就是一次恢复，再问一遍是白收一道必答题。
+            // Archive 走两段式（同 Delete）：它把会话从主列表拿走，点错了不在原处。
+            meta.archived
+              ? {
+                  id: "archive",
+                  label: "Unarchive",
+                  icon: "archive-restore" as const,
+                  onSelect: () => session.archiveSession(meta.id, false),
+                }
+              : {
+                  id: "archive",
+                  label: "Archive…",
+                  icon: "archive" as const,
+                  keepOpen: true,
+                  onSelect: () => setStep("archive"),
+                },
+            // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
+            // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动
+            ...(doneCount > 0
+              ? [
+                  {
+                    id: "archive-done",
+                    label: `Archive all done (${doneCount})…`,
+                    icon: "archive" as const,
+                    keepOpen: true,
+                    onSelect: () => setStep("archive-done"),
+                  },
+                ]
+              : []),
             {
               id: "delete",
               label: "Delete task…",
               icon: "trash-2",
               danger: true,
               keepOpen: true,
-              onSelect: () => setStep("delete"),
+              onSelect: enterDeleteStep,
             },
           ];
 
@@ -878,6 +1373,8 @@ function SessionRow(props: {
       style={{ display: "flex", alignItems: "center", gap: 2 }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onFocus={(event) => setFocused(event.target.matches(":focus-visible"))}
+      onBlur={() => setFocused(false)}
     >
       {editing ? (
         <span style={{ flex: 1, minWidth: 0, padding: "var(--space-1)" }}>
@@ -896,31 +1393,119 @@ function SessionRow(props: {
         </span>
       ) : (
         <NavRow
-          icon={idle && meta.pinned ? "pin" : status.icon}
+          icon={status?.icon ?? null}
           label={meta.title === "" ? "New task" : meta.title}
-          tone={idle && meta.pinned ? "var(--color-text-secondary)" : status.tone}
-          spin={status.spin}
-          iconTitle={idle && meta.pinned ? "Pinned" : status.label}
+          tone={status?.tone}
+          spin={status?.spin ?? false}
+          iconTitle={status?.label}
           active={props.active}
           onClick={props.onClick}
           style={{ flex: 1, minWidth: 0 }}
         />
       )}
+      {/**
+        星标：**既是标识也是开关**，独立小槽，不占状态位——状态位归运行态
+        （running/failed/idle），置顶已占了 idle 档，再挤进去就要三选一。
+        已星标常显（实心，**accent 色**），未星标只在悬停/键盘聚焦时浮出描边形（tertiary）——
+        列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
+        是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
+        与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
+      */}
+      <IconButton
+        label={meta.starred === true ? "Unstar this task" : "Star this task"}
+        title={meta.starred === true ? "Starred · click to unstar" : "Star this task"}
+        size={20}
+        onClick={() => session.starSession(meta.id, meta.starred !== true)}
+        style={{
+          borderRadius: "var(--radius-xs)",
+          color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
+          opacity: meta.starred === true || hover || focused ? 1 : 0,
+          transition: "opacity var(--duration-instant) var(--ease-standard)",
+        }}
+      >
+        <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
+      </IconButton>
+      {/**
+        完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
+        hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后常显、accent；再点 = Reopen。
+        图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
+        tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
+        不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
+        「还差几件」由右边那个灯泡角标单独说。
+      */}
+      <IconButton
+        label={done ? "Reopen this task" : "Mark this task done"}
+        title={
+          done
+            ? openTodos > 0
+              ? `Done with ${openTodos} open carryover item${openTodos === 1 ? "" : "s"} · click to reopen`
+              : "Done · click to reopen"
+            : idleSuggested
+              ? `Idle for ${IDLE_SUGGEST_DAYS}+ days · mark done?`
+              : "Mark this task done"
+        }
+        size={20}
+        onClick={() =>
+          session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
+        }
+        style={{
+          borderRadius: "var(--radius-xs)",
+          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
+          opacity: done || hover || focused ? 1 : 0,
+          transition: "opacity var(--duration-instant) var(--ease-standard)",
+        }}
+      >
+        <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
+      </IconButton>
+      {/**
+        遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
+        （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
+        **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
+        角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
+      */}
+      {done && openTodos > 0 && (
+        <span
+          title={`${openTodos} open carryover item${openTodos === 1 ? "" : "s"} left`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 2,
+            flex: "0 0 auto",
+            marginInlineStart: -2,
+            fontFamily: "var(--font-family-business)",
+            fontSize: "var(--font-size-micro)",
+            fontWeight: "var(--weight-semibold)",
+            lineHeight: 1,
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {/* 灯泡与「Has todos」筛选同一个符号：光看数字读不出它数的是什么 */}
+          <Icon name="lightbulb" size={12} strokeWidth={1.8} />
+          {openTodos}
+        </span>
+      )}
       <Menu
         items={items}
         align="end"
+        // 会话行的菜单开在**行的右侧**：开在下方会盖住紧挨着的下一条会话，
+        // 想看别的会话就得先关菜单（2026-09-22 wafo）。窄窗右侧装不下时
+        // placeMenu 自己回落到下方。宽度按 Proma 的行动作菜单收到 160，上限 240：
+        // 200 装不下「Delete permanently」+ 工作台文件数 hint，label 会被截成半句
+        placement="right"
+        panelMinWidth={160}
+        panelMaxWidth={240}
         trigger={({ open, toggle }) => (
           <IconButton
             label="Task actions"
             size={20}
             onClick={() => {
-              setStep("main");
+              exitDeleteStep();
               toggle();
             }}
             style={{
               borderRadius: "var(--radius-xs)",
               color: open ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
-              opacity: hover || open ? 1 : 0,
+              opacity: hover || open || focused ? 1 : 0,
               transition: "opacity var(--duration-instant) var(--ease-standard)",
             }}
           >
@@ -928,6 +1513,239 @@ function SessionRow(props: {
           </IconButton>
         )}
       />
+    </div>
+  );
+}
+
+/**
+ * 遗留事项面板（侧栏的 Carryovers 视图）：按来源会话分组，每条可勾办结、
+ * 可跳回来源会话、可带上下文开工（左键新开一单 / 右键续跑原会话）。
+ * **勾选即写盘**（carryoverSetStatus），角标与筛选跟着引擎缓存自动刷新；
+ * 跳回原文今天只到「跳到那条会话」——滚动定位到 sourceMessageRange 首条
+ * 需要消息序号 → DOM 的定位基建，还没有第二处消费者，先不做（TODO：
+ * 「跳回原文」的滚动定位，等定位基建立项后接 sourceMessageRange[0]）。
+ */
+function CarryoverPanel(props: {
+  carryovers: readonly Carryover[];
+  sessions: readonly SessionMeta[];
+  onSetStatus: (id: string, status: Carryover["status"]) => void;
+  /** 方案 A：新开一单带上下文开工（面板主入口） */
+  onResumeNew: (item: Carryover) => void;
+  /** 方案 B：以遗留事项为用户消息续跑原会话（同一按钮的右键备选） */
+  onResumeInSource: (item: Carryover) => void;
+  onOpenTask: (sessionId: string) => void;
+  /** 显式出口：标题行左端的返回键 */
+  onBack: () => void;
+}) {
+  const groups = groupCarryovers(props.carryovers, props.sessions);
+  /**
+   * 标题行左端的返回键是本面板的**显式出口**（与 Archived 同款）：出去不该只能
+   * 再点一次底部那条 toggle——它既不像一个「返回」，又会在清单空了时禁用。
+   */
+  const header = (
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+      <IconButton
+        label="Back to tasks"
+        title="Back to the task list"
+        size={20}
+        onClick={props.onBack}
+        style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
+      >
+        <Icon name="chevron-left" size={13} strokeWidth={1.8} />
+      </IconButton>
+      <NodeLabel>Carryovers</NodeLabel>
+    </div>
+  );
+  if (groups.length === 0) {
+    return (
+      <>
+        {header}
+        <Empty>No carryover items yet. Wrap up a task to collect its loose ends.</Empty>
+      </>
+    );
+  }
+  return (
+    <>
+      {header}
+      {groups.map((group) => (
+        <div
+          key={group.session?.id ?? group.items[0]?.sourceSessionId}
+          style={{ marginBottom: "var(--space-3)" }}
+        >
+          {/**
+            组头就是来源会话：标题可点（跳回原文），来源已删的组换占位标题、
+            不可点。全组办结的组仍列出（办结的是历史，不是消失）。
+          */}
+          <button
+            type="button"
+            disabled={group.session === null}
+            onClick={() => {
+              if (group.session !== null) props.onOpenTask(group.session.id);
+            }}
+            title={group.session === null ? "The source task was deleted" : "Open the source task"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-1)",
+              width: "100%",
+              minHeight: 28,
+              padding: 0,
+              border: 0,
+              background: "transparent",
+              textAlign: "left",
+              cursor: group.session === null ? "default" : "pointer",
+              fontFamily: "var(--font-family-base)",
+              fontSize: "var(--font-size-control)",
+              fontWeight: "var(--weight-semibold)",
+              color:
+                group.session === null
+                  ? "var(--color-text-tertiary)"
+                  : "var(--color-text-primary)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {group.session === null ? (
+              <Icon name="circle-off" size={13} strokeWidth={1.8} />
+            ) : (
+              <Icon name="message-square" size={13} strokeWidth={1.8} />
+            )}
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+              {group.session === null
+                ? "Deleted task"
+                : group.session.title === ""
+                  ? "New task"
+                  : group.session.title}
+            </span>
+          </button>
+          {group.items.map((item) => (
+            <CarryoverRow
+              key={item.id}
+              item={item}
+              canJump={group.session !== null}
+              canResume={canResumeInSource(item, props.sessions)}
+              onSetStatus={props.onSetStatus}
+              onResumeNew={() => props.onResumeNew(item)}
+              onResumeInSource={() => props.onResumeInSource(item)}
+              onJump={() => {
+                if (group.session !== null) props.onOpenTask(group.session.id);
+              }}
+            />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** 面板里的一条遗留事项：勾选办结 / 标题 / 摘录 / 带上下文开工 / 跳回原文。 */
+function CarryoverRow(props: {
+  item: Carryover;
+  canJump: boolean;
+  /** 方案 B 可用：来源会话在且有 pi 本子（导入的只读会话没有，右键不拦截） */
+  canResume: boolean;
+  onSetStatus: (id: string, status: Carryover["status"]) => void;
+  onResumeNew: () => void;
+  onResumeInSource: () => void;
+  onJump: () => void;
+}) {
+  const { item } = props;
+  const done = item.status === "done";
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "auto minmax(0,1fr) auto",
+        gap: "var(--space-2)",
+        alignItems: "start",
+        padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)",
+        borderRadius: "var(--radius-sm)",
+        minHeight: "var(--control-height-md)",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={done}
+        aria-label={item.title}
+        title={done ? "Reopen this item" : "Mark this item done"}
+        onChange={(event) => props.onSetStatus(item.id, event.target.checked ? "done" : "open")}
+        style={{ marginTop: 3, accentColor: "var(--color-accent)" }}
+      />
+      <div style={{ minWidth: 0 }}>
+        <span
+          style={{
+            display: "block",
+            fontSize: "var(--font-size-control)",
+            color: done ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
+            textDecoration: done ? "line-through" : "none",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {item.title}
+        </span>
+        {item.detail !== "" && (
+          <span
+            title={item.detail}
+            style={{
+              display: "block",
+              fontSize: "var(--font-size-micro)",
+              lineHeight: "var(--line-height-caption)",
+              color: "var(--color-text-tertiary)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {item.detail}
+          </span>
+        )}
+      </div>
+      {/**
+        带上下文开工：左键新开一单（主入口，键盘可达），右键续跑原会话（备选，
+        不可用时右键不拦截——原生菜单出来，诚实）。办结的行也能开工：勾了又想
+        跟进是合法场景。tooltip 把右键那半句讲出来（设计系统：tooltip 讲完句子
+        的另一半）。
+      */}
+      <span style={{ display: "inline-flex", alignItems: "center" }}>
+        <IconButton
+          label="Continue with context"
+          title={
+            props.canResume
+              ? "Start a new task with this item's context · right-click to continue in the original task"
+              : "Start a new task with this item's context"
+          }
+          size={20}
+          onClick={props.onResumeNew}
+          onContextMenu={
+            props.canResume
+              ? (event) => {
+                  event.preventDefault();
+                  props.onResumeInSource();
+                }
+              : undefined
+          }
+          style={{ color: "var(--color-text-secondary)" }}
+        >
+          <Icon name="corner-up-right" size={11} strokeWidth={1.8} />
+        </IconButton>
+        {/**
+          跳回原文：今天只到「跳到那条会话」——滚动定位到 sourceMessageRange 首条
+          需要消息序号→DOM 的定位基建，还没有第二处消费者（TODO，见 CarryoverPanel）。
+        */}
+        <IconButton
+          label="Jump to the source task"
+          title={props.canJump ? "Open the task this came from" : "The source task was deleted"}
+          size={20}
+          disabled={!props.canJump}
+          onClick={props.onJump}
+          style={{ color: "var(--color-text-tertiary)" }}
+        >
+          <Icon name="corner-down-left" size={11} strokeWidth={1.8} />
+        </IconButton>
+      </span>
     </div>
   );
 }

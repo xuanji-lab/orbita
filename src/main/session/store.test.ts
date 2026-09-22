@@ -199,6 +199,69 @@ describe("SessionStore", () => {
     assert.equal(loaded?.modelId, "m2");
   });
 
+  // 星标是价值标记，与置顶（排序）正交：翻转只动自己这一个字段，
+  // 别把用户的置顶或归档悄悄带走
+  test("setStarred 翻转星标，pinned / archived 不被波及", async () => {
+    await store.ensureSession(meta({ pinned: true }));
+    await store.setStarred(ID, true);
+    let after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.starred, true);
+    assert.equal(after?.pinned, true);
+    assert.equal(after?.archived, false);
+    await store.setStarred(ID, false);
+    after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.starred, false);
+    assert.equal(after?.pinned, true);
+  });
+
+  // 与 update 的既有语义一致：meta 不在就悄悄不做，不为它抛错或重建文件
+  test("setStarred 对不存在的会话悄悄不做", async () => {
+    await store.setStarred(ID, true);
+    assert.deepEqual(await store.list(), []);
+  });
+
+  // 完成状态机：翻到 done 的那一刻记下关闭时刻；reopen（回 open）清空——
+  // closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态
+  test("setCompletion：done 记关闭时刻，reopen 清空，done_with_todos 也可写", async () => {
+    await store.ensureSession(meta({ pinned: true }));
+    await store.setStarred(ID, true);
+    await store.setCompletion(ID, "done");
+    let after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.completion, "done");
+    assert.ok(typeof after?.closedAt === "number" && after.closedAt > 0);
+    // 完成只动自己这对字段：置顶/星标/归档原样
+    assert.equal(after?.pinned, true);
+    assert.equal(after?.starred, true);
+    assert.equal(after?.archived, false);
+
+    await store.setCompletion(ID, "open"); // reopen
+    after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.completion, "open");
+    assert.equal(after?.closedAt, null);
+
+    await store.setCompletion(ID, "done_with_todos");
+    after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.completion, "done_with_todos");
+    assert.ok(typeof after?.closedAt === "number" && after.closedAt > 0);
+  });
+
+  // 重复 Mark done 不该刷新关闭时刻——「什么时候干完的」是历史事实，不是最后一次点击
+  test("setCompletion 同态幂等：done 再 done 不改关闭时刻", async () => {
+    await store.ensureSession(meta());
+    await store.setCompletion(ID, "done");
+    const first = (await store.load(ID))?.meta.closedAt;
+    // 隔开毫秒：非幂等实现会在这里刷新出新的 Date.now()
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.setCompletion(ID, "done");
+    assert.equal((await store.load(ID))?.meta.closedAt, first);
+  });
+
+  // 与 setStarred 同一条语义：meta 不在就悄悄不做
+  test("setCompletion 对不存在的会话悄悄不做", async () => {
+    await store.setCompletion(ID, "done");
+    assert.deepEqual(await store.list(), []);
+  });
+
   // id 从 renderer 经 IPC 进来，直接拼路径的话一个 ../../ 就能写到别处
   test("非法 id 一律拒绝，不落在 sessions 目录之外", async () => {
     for (const bad of ["../../etc/passwd", "..", "a/b", "", "not-a-uuid", `${ID}/../x`]) {
@@ -463,6 +526,88 @@ describe("SessionStore.branch", () => {
     const plan = await store.prepareBranch(ID, "a1");
     await assert.rejects(() => store.commitBranch(plan, null), /no branch session file/);
     assert.equal(await store.load(plan.newId), null);
+  });
+});
+
+// ── 工作台生命周期：stat / 删除连带 / 分支拷贝（2026-09-22 裁决）──
+
+describe("SessionStore.workbench", () => {
+  const PI_FILE = "C:/pi-sessions/source.jsonl";
+
+  const item = (id: string, role: "user" | "assistant", text: string): TranscriptItem =>
+    role === "user"
+      ? { id, role: "user", content: [{ type: "text", text }], timestamp: 2000 }
+      : {
+          id,
+          role: "assistant",
+          content: [{ type: "text", text }],
+          model: { provider: "zai", id: "glm-5.3" },
+          timestamp: 3000,
+          status: "complete",
+          stopReason: "stop",
+        };
+
+  test("workbenchStat 三态：不存在 / 空目录 / 嵌套两个文件（目录不计）", async () => {
+    // 不存在：exists=false、fileCount=0，path 照给（renderer 不自己拼路径）
+    let stat = await store.workbenchStat(ID);
+    assert.deepEqual(stat, { path: join(dir, "workbenches", ID), exists: false, fileCount: 0 });
+
+    // 空目录：存在但没文件
+    await mkdir(join(dir, "workbenches", ID), { recursive: true });
+    stat = await store.workbenchStat(ID);
+    assert.deepEqual({ exists: stat.exists, fileCount: stat.fileCount }, { exists: true, fileCount: 0 });
+
+    // 嵌套：子目录里的文件也数，目录本身不数
+    await mkdir(join(dir, "workbenches", ID, "plan"), { recursive: true });
+    await writeFile(join(dir, "workbenches", ID, "a.txt"), "x", "utf8");
+    await writeFile(join(dir, "workbenches", ID, "plan", "p.md"), "y", "utf8");
+    stat = await store.workbenchStat(ID);
+    assert.equal(stat.fileCount, 2);
+  });
+
+  test("remove 连带删工作台（先删账本后删工作台）", async () => {
+    await store.ensureSession(meta());
+    await mkdir(join(dir, "workbenches", ID, "plan"), { recursive: true });
+    await writeFile(join(dir, "workbenches", ID, "plan", "p.md"), "y", "utf8");
+    await store.remove(ID);
+    assert.deepEqual(await readdir(join(dir, "sessions")), []);
+    assert.equal((await store.workbenchStat(ID)).exists, false);
+  });
+
+  test("remove 对没有工作台的会话也照常（rm force 吞 ENOENT）", async () => {
+    await store.ensureSession(meta());
+    await store.remove(ID);
+    assert.equal((await store.workbenchStat(ID)).exists, false);
+  });
+
+  test("branch 后新 id 的工作台是源的完整拷贝，源不动", async () => {
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, item("a1", "assistant", "答"));
+    await mkdir(join(dir, "workbenches", ID, "sub"), { recursive: true });
+    await writeFile(join(dir, "workbenches", ID, "root.txt"), "a", "utf8");
+    await writeFile(join(dir, "workbenches", ID, "sub", "b.txt"), "b", "utf8");
+
+    const plan = await store.prepareBranch(ID, "a1");
+    await store.commitBranch(plan, "C:/pi-sessions/branch.jsonl");
+
+    const stat = await store.workbenchStat(plan.newId);
+    assert.equal(stat.exists, true);
+    assert.equal(stat.fileCount, 2);
+    // 内容一致（不只是数量对）
+    assert.equal(await readFile(join(dir, "workbenches", plan.newId, "root.txt"), "utf8"), "a");
+    assert.equal(await readFile(join(dir, "workbenches", plan.newId, "sub", "b.txt"), "utf8"), "b");
+    // 源不动：拷贝不是移动
+    assert.equal((await store.workbenchStat(ID)).fileCount, 2);
+  });
+
+  test("branch 的源没有工作台时，新的也不存在（不预建）", async () => {
+    await store.ensureSession(meta({ piSessionFile: PI_FILE }));
+    await store.record(ID, item("u1", "user", "问"));
+    await store.record(ID, item("a1", "assistant", "答"));
+    const plan = await store.prepareBranch(ID, "a1");
+    await store.commitBranch(plan, "C:/pi-sessions/branch.jsonl");
+    assert.equal((await store.workbenchStat(plan.newId)).exists, false);
   });
 });
 

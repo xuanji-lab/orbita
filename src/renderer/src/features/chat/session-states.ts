@@ -227,7 +227,9 @@ export function seedFromDisk(
 ): SessionStates {
   // 界碑不进 pi 的归约器（它不是消息），分开记账；实时与历史从此是同一条显示路径。
   // 内联 role 谓词而非 isCompactedRecord()：本文件被 node --test 加载，@shared 的值导入解析不了。
-  const items = transcript.filter((item): item is TranscriptItem => item.role !== "compacted");
+  const items = transcript.filter(
+    (item): item is TranscriptItem => item.role !== "compacted",
+  );
   const compactions = transcript.filter(
     (item): item is CompactedRecord => item.role === "compacted",
   );
