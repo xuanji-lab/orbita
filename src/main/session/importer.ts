@@ -716,6 +716,9 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
       sourceId: entry.id,
       sourceKind: "pi",
       sourceFile: entry.piSessionFile,
+      // 会话 id 在工作区解析**之后**铸：新建工作区的 id 也走 newId，消耗顺序是测试预铸队列的契约
+      sessionId: deps.newId(),
+      parentId: null,
       title: deriveSessionTitle(entry.title),
       workspaceId: resolution.workspaceId,
       cwd: resolution.cwd,
@@ -800,6 +803,9 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
       sourceId: entry.id,
       sourceKind: "claude-legacy",
       sourceFile,
+      sessionId: deps.newId(),
+      // claude legacy 时代没有子会话（delegation 是 pi 时代才有的）：一律根会话
+      parentId: null,
       title: deriveSessionTitle(entry.title),
       workspaceId: resolution.workspaceId,
       cwd: resolution.cwd,
@@ -826,6 +832,8 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     withoutPiSession: promaSessions.withoutPiFile,
     totalBytes,
     modelFallbackCount,
+    subSessionCount: 0,
+    orphanedSubSessions: 0,
   };
 }
 
@@ -912,7 +920,7 @@ export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport>
       // meta + transcript：两条源路最终都汇到同一个形态——records 已由各路返给 meta
       // 构造共用（records 的产出在 runPiImport/runClaudeLegacyImport 里，这里统一落盘）
       const meta: SessionMeta = {
-        id: deps.newId(),
+        id: item.sessionId,
         title: item.title,
         // titleSource = user：Proma 的标题分不清是模型起的还是用户改的，当用户名
         // 处理最安全——orbita 的 auto-title 永不覆盖它，名字进仓时什么样就什么样

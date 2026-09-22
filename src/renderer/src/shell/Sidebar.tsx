@@ -7,7 +7,7 @@ import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
-import { isSessionDone, type Carryover, type SessionMeta } from "@shared/session";
+import { isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
@@ -234,9 +234,14 @@ export function Sidebar(props: {
    * 移除工作区不该让它的会话从界面上消失，它们只是回到 TASKS 下。
    */
   const known = new Set(session.workspaces.map((w) => w.id));
+  /**
+   * 左栏只列**根会话**：子会话是母会话的附属物，从母会话的右栏 Sub-sessions
+   * 入口到达，永不进这里（也不进 Archived——它没有归档语义）。
+   */
+  const roots = rootSessions(session.sessions);
   /** 归档的从主列表里移走——**不是删除**，它们收在底部那一行后面 */
-  const live = session.sessions.filter((m) => !m.archived);
-  const archived = session.sessions.filter((m) => m.archived);
+  const live = roots.filter((m) => !m.archived);
+  const archived = roots.filter((m) => m.archived);
   /**
    * 子视图空了就自动退回主列表——否则停在一个空视图里，而唯一的出口（底部
    * 那条行）正好因为 N 为 0 而禁用。判定与理由在 `subview-exit.ts`。

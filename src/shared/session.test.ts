@@ -5,9 +5,11 @@ import {
   isCompactedRecord,
   parseAgentStats,
   parseSessionMeta,
+  childSessions,
   pushRecentQuery,
   recentQueriesFromRecords,
   RECENT_QUERIES_MAX,
+  rootSessions,
   SESSION_TITLE_MAX,
   sortSessions,
   transcriptToMarkdown,
@@ -120,6 +122,15 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, workspaceId: undefined })?.workspaceId, null);
     strictEqual(parseSessionMeta({ ...valid, workspaceId: 42 })?.workspaceId, null);
     strictEqual(parseSessionMeta({ ...valid, workspaceId: "w1" })?.workspaceId, "w1");
+  });
+
+  // 子会话之前存的会话没有这个字段：缺席即根，与 importedFrom 同一条纪律
+  it("缺 parentId 视为根会话；坏值同样按根会话读，不丢会话", () => {
+    strictEqual("parentId" in (parseSessionMeta(valid) ?? {}), false);
+    strictEqual(parseSessionMeta({ ...valid, parentId: "m1" })?.parentId, "m1");
+    // 坏值退回根：一条指向乌有的 parentId 会让会话从左栏消失又无处可达
+    strictEqual(parseSessionMeta({ ...valid, parentId: 42 })?.parentId, undefined);
+    strictEqual(parseSessionMeta({ ...valid, parentId: "" })?.parentId, undefined);
   });
 
   // auto-title（C-3）之前存的会话没有这个字段：它们是首句截断，允许模型再试
@@ -242,6 +253,39 @@ describe("sortSessions", () => {
     const input = [at("a", 1), at("b", 2)];
     sortSessions(input);
     deepStrictEqual(input.map((s) => s.id), ["a", "b"]);
+  });
+});
+
+describe("rootSessions / childSessions", () => {
+  const at = (id: string, createdAt: number, parentId?: string): SessionMeta => ({
+    ...valid,
+    mode: "manual",
+    id,
+    createdAt,
+    ...(parentId === undefined ? null : { parentId }),
+  });
+
+  it("rootSessions 只留没有母会话的——左栏/首页/picker 共用这一条规则", () => {
+    const list = [at("a", 1), at("b", 2, "a"), at("c", 3), at("d", 4, "c")];
+    deepStrictEqual(rootSessions(list).map((s) => s.id), ["a", "c"]);
+  });
+
+  it("rootSessions 不改原数组；全是子会话时给空", () => {
+    const input = [at("a", 1), at("b", 2, "a")];
+    rootSessions(input);
+    deepStrictEqual(input.map((s) => s.id), ["a", "b"]);
+    deepStrictEqual(rootSessions([at("b", 2, "a")]), []);
+  });
+
+  it("childSessions 按 createdAt 正序——子会话的自然顺序是派出顺序", () => {
+    const list = [at("x", 30, "m"), at("m", 1), at("y", 10, "m"), at("z", 20, "m")];
+    deepStrictEqual(childSessions(list, "m").map((s) => s.id), ["y", "z", "x"]);
+  });
+
+  it("childSessions 只取直接子会话，孙辈不进来", () => {
+    const list = [at("m", 1), at("c", 2, "m"), at("g", 3, "c")];
+    deepStrictEqual(childSessions(list, "m").map((s) => s.id), ["c"]);
+    deepStrictEqual(childSessions(list, "nobody"), []);
   });
 });
 

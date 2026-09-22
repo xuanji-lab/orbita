@@ -532,9 +532,11 @@ describe("边界：工作区三规则", () => {
     await writePromaWorkspaces([{ id: "pw-1", name: "orbita-lab", projectRootPath: "/tmp/other-place/orbita-lab" }]);
     const pi = await writePiSession("2026-09-01T00-00-00-000Z_ws-0000000000000001.jsonl", "/tmp/other-place/orbita-lab");
     await writeIndex([{ id: "s-ws", title: "挂工作区", piSessionFile: pi, workspaceId: "pw-1", createdAt: 1, updatedAt: 2 }]);
-    // scanImport 与 runImport 内部的重扫各消耗一次 newId：预铸两个同值 id，两次结果都稳定可断
+    // 每轮扫描消耗两个 newId：先工作区后会话（importer 里铸序的契约）。
+    // scanImport 与 runImport 内部的重扫各走一轮，预铸四个，两次结果都稳定可断
     const WS_ID = "aaaaaaaa-0000-4000-8000-000000000001";
-    idQueue = [WS_ID, WS_ID];
+    const SESSION_ID = "aaaaaaaa-0000-4000-8000-00000000000a";
+    idQueue = [WS_ID, SESSION_ID, WS_ID, SESSION_ID];
     const report = await scanImport(deps({ workspaces: [orbitaWorkspace("/Users/x/orbita-lab", "bbbbbbbb-0000-4000-8000-000000000002")] }));
     assert.equal(report.plan.length, 1);
     assert.equal(report.plan[0]?.workspaceId, WS_ID);
@@ -561,6 +563,7 @@ describe("边界：工作区三规则", () => {
       { id: "s-1", title: "一", piSessionFile: pi1, workspaceId: "pw-shared", createdAt: 1, updatedAt: 2 },
       { id: "s-2", title: "二", piSessionFile: pi2, workspaceId: "pw-shared", createdAt: 3, updatedAt: 4 },
     ]);
+    // 工作区 id 先铸（两条会话共享一次新建），其余两个是两条会话自己的 id
     idQueue = ["cccccccc-0000-4000-8000-000000000003"];
     const report = await scanImport(deps());
     assert.equal(report.plan.length, 2);

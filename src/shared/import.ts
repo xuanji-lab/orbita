@@ -74,6 +74,17 @@ export interface ImportPlanItem {
   modelId: string;
   /** 源应用记录的原始模型 id。渠道名不可信，只有 id 值得留 */
   importedModel: string | null;
+  /**
+   * 这条落盘时的 orbita 会话 id。**扫描期就铸好**（同 ImportWorkspacePlan.id 的理由）：
+   * 子会话的 parentId 要指向母会话的 orbita id，母会话可能就在同一份计划里——
+   * 执行时才铸就得在执行期维护一张映射表，扫描报告也说不出「谁挂在谁下」。
+   */
+  sessionId: string;
+  /**
+   * 母会话的 orbita id；null = 根会话。源里有父但父不可导（无 pi 文件 / 坏文件 /
+   * 索引里已不存在）时也是 null——按根会话导，数据不丢，计入 orphanedSubSessions。
+   */
+  parentId: string | null;
   /** false = 没有匹配到已注册模型，用了默认兜底 */
   modelMatched: boolean;
   /** Proma 侧的归档态照搬——归档过的会话导进来还是归档的 */
@@ -100,6 +111,10 @@ export interface ImportScanReport {
   totalBytes: number;
   /** 模型映射 miss（用默认兜底）的条数 */
   modelFallbackCount: number;
+  /** plan 里 parentId 非 null 的条数：导进来后折叠在母会话下、不进左栏的那些 */
+  subSessionCount: number;
+  /** 源里有父但父不可导、只好按根会话导的条数（不应该发生，发生了要让人看见） */
+  orphanedSubSessions: number;
 }
 
 /** 执行阶段一条会话的结果。 */

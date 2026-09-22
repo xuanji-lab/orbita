@@ -250,6 +250,19 @@ export interface SessionMeta {
   importedFrom?: string;
   importedModel?: string;
   /**
+   * 母会话 id；**缺席 = 根会话**（缺席即否，同 importedFrom 的纪律）。
+   *
+   * 子会话是母会话的附属物（2026-09-22 裁决）：**永不进左栏**，不参与 pin / 归档，
+   * 只从母会话的右栏「Sub-sessions」入口到达；母会话归档与否不影响这条路径；
+   * 删母会话级联删子。为什么不挂树在侧栏：子会话的数量级取决于产品给不给
+   * agent 一个「保护主上下文的搜索原语」——给了就是 zcode 那样一条会话二十几个，
+   * 侧栏挂树不可扩展。契约上允许多层，UI 只做一层。
+   *
+   * 今天唯一的生产者是导入器（Proma 的 delegation 子会话）。orbita 自己派子会话的
+   * 路径落地那天，创建时要与新会话同样走一次 auto-title——命名只发生在创建那一刻。
+   */
+  parentId?: string;
+  /**
    * 上一次跑完时的用量快照（A1-Q1，2026-09-03 裁决）。
    * **null = 没有账本**（本字段之前存的会话，或还没跑过一轮）。
    *
@@ -380,6 +393,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   if (createdAt === null) return null;
   const importedFrom = str(value["importedFrom"]);
   const importedModel = str(value["importedModel"]);
+  const parentId = str(value["parentId"]);
 
   return {
     id,
@@ -413,6 +427,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 导入标记：非导入会话缺席（空串/null 都当没有，str 的规则）
     ...(importedFrom === null ? null : { importedFrom }),
     ...(importedModel === null ? null : { importedModel }),
+    // 母会话 id：非字符串 / 空串一律当根会话——一条指向乌有的 parentId 会让会话
+    // 从左栏消失又无处可达，比多列一条根会话糟得多
+    ...(parentId === null ? null : { parentId }),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
@@ -429,6 +446,25 @@ export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
     return b.updatedAt - a.updatedAt;
   });
+}
+
+/**
+ * 根会话：没有母会话的那些。**左栏、首页最近、辅助对话选择器只列根会话**——
+ * 三处消费者各自调用同一个函数，不各写一遍 `parentId === undefined`。
+ */
+export function rootSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
+  return sessions.filter((meta) => meta.parentId === undefined);
+}
+
+/**
+ * 某条会话的直接子会话，**按创建时间正序**——子会话的自然顺序是派出顺序，
+ * 不是活跃倒序（sortSessions 是根列表的排法，不套用）。只取一层：契约允许多层，
+ * 但今天没有第二层的生产者。
+ */
+export function childSessions(sessions: readonly SessionMeta[], parentId: string): SessionMeta[] {
+  return sessions
+    .filter((meta) => meta.parentId === parentId)
+    .sort((a, b) => a.createdAt - b.createdAt);
 }
 
 /** 机器事实用 ISO 8601 UTC：无歧义、可测、与设计系统「mono for machine facts」一致。 */
