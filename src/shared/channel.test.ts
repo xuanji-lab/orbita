@@ -117,10 +117,10 @@ describe("channelStatus", () => {
     );
   });
 
-  it("done / failed 是终态——之后再来消息也不翻回", () => {
+  it("done / failed 是 closed——子自己再发消息（没有父 reply）不重开，状态不回头", () => {
     const done = message({ id: "m2", from: "child", kind: "done", text: "完成", createdAt: 2 });
     strictEqual(channelStatus([message(), done]), "done");
-    // done 之后子又报了一条 progress / question：状态不回头
+    // done 之后子又报了一条 progress / question（没有经过父 reopen）：状态不回头
     strictEqual(
       channelStatus([
         message(),
@@ -133,6 +133,52 @@ describe("channelStatus", () => {
     strictEqual(
       channelStatus([message(), message({ id: "m2", from: "child", kind: "failed", createdAt: 2 })]),
       "failed",
+    );
+  });
+
+  it("done → progress 仍 done——子多嘴一句不该让通道列悄悄又变回「等你处理」", () => {
+    strictEqual(
+      channelStatus([
+        message(),
+        message({ id: "m2", from: "child", kind: "done", createdAt: 2 }),
+        message({ id: "m3", from: "child", kind: "progress", createdAt: 3 }),
+      ]),
+      "done",
+    );
+  });
+
+  it("done → reply → running——用户 reopen 后代父回信，通道翻回 running", () => {
+    strictEqual(
+      channelStatus([
+        message(),
+        message({ id: "m2", from: "child", kind: "done", createdAt: 2 }),
+        message({ id: "m3", kind: "reply", createdAt: 3 }),
+      ]),
+      "running",
+    );
+  });
+
+  it("done → reply → question → waiting——reopen 之后照常推导，子接着干活再发问", () => {
+    strictEqual(
+      channelStatus([
+        message(),
+        message({ id: "m2", from: "child", kind: "done", createdAt: 2 }),
+        message({ id: "m3", kind: "reply", createdAt: 3 }),
+        message({ id: "m4", from: "child", kind: "question", createdAt: 4 }),
+      ]),
+      "waiting",
+    );
+  });
+
+  it("done → reply → done → done——reopen 之后子再次报完成，通道再次 closed", () => {
+    strictEqual(
+      channelStatus([
+        message(),
+        message({ id: "m2", from: "child", kind: "done", createdAt: 2 }),
+        message({ id: "m3", kind: "reply", createdAt: 3 }),
+        message({ id: "m4", from: "child", kind: "done", createdAt: 4 }),
+      ]),
+      "done",
     );
   });
 

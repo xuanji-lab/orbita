@@ -65,7 +65,9 @@ export interface ChannelKey {
 /**
  * 通道状态（纯派生，不落盘）：
  *   waiting = 最后一条是子的 question 且父还没 reply —— 用户此刻唯一需要动手的
- *   done / failed = 子发过 done / failed
+ *   done / failed = 子发过 done / failed 之后**父还没回过信**——通道 closed，
+ *     可 reopen：用户在通道里 reopen 后代父回信（一条 reply）就翻回 running，
+ *     不是永久终态（见 `channelStatus` 的 reopen 语义）
  *   running = 其余
  */
 export type ChannelStatus = "running" | "waiting" | "done" | "failed";
@@ -118,14 +120,27 @@ export function sortChannelMessages(messages: readonly ChannelMessage[]): Channe
   return [...messages].sort((a, b) => a.createdAt - b.createdAt);
 }
 
-/** 从消息序列派生状态。done / failed 是终态；之后再来消息也不翻回 running。 */
+/**
+ * 从消息序列派生状态。done / failed 是「closed，可 reopen」——不是永久终态：
+ * 用户 reopen 后代父回信是一条 `reply`，之后的推导照常继续（question → waiting、
+ * 再来一条 done → done）。**只有 `reply` 能重开**：done / failed 之后子自己又发的
+ * progress / question（没有经过父的 reopen）不重开——通道列该继续显示 closed，
+ * 不能因为子多嘴一句就悄悄又变回「等你处理」。
+ */
 export function channelStatus(messages: readonly ChannelMessage[]): ChannelStatus {
   let status: ChannelStatus = "running";
   for (const message of sortChannelMessages(messages)) {
-    if (message.kind === "done") return "done";
-    if (message.kind === "failed") return "failed";
-    if (message.kind === "question") status = "waiting";
-    else if (message.kind === "reply") status = "running";
+    // reply 恒重开：不管此刻是不是 closed，父回信了就翻回 running。
+    if (message.kind === "reply") {
+      status = "running";
+      continue;
+    }
+    // closed 期间，非 reply 的消息（子的 progress / question，理论上不该在没有
+    // reopen 的情况下出现）不改变状态——done / failed 只认 reply 一种解法。
+    if (status === "done" || status === "failed") continue;
+    if (message.kind === "done") status = "done";
+    else if (message.kind === "failed") status = "failed";
+    else if (message.kind === "question") status = "waiting";
   }
   return status;
 }
