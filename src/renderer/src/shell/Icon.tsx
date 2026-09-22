@@ -41,7 +41,6 @@ import power from "../../../../Orbita Design System/assets/icons/lucide/power.sv
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
-import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rotate-ccw.svg?raw";
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
 import search from "../../../../Orbita Design System/assets/icons/lucide/search.svg?raw";
@@ -108,7 +107,6 @@ const ICONS = {
   power,
   plus,
   "refresh-cw": refreshCw,
-  "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,
   sliders,
@@ -152,6 +150,10 @@ export function Icon(props: {
    * **同一个图标的两种状态**（未星标 / 已星标），而不是两个图标——
    * 用 `star` / `star-off` 表达开关会把「已星标」画成一个带斜杠的禁止符。
    * 填色走 CSS 变量（同 `--icon-stroke`），不改写 SVG 源串。
+   *
+   * 多形状图标（如 circle-check 的「外圈 + 勾」）还要一个内部标记色：全部同色的话
+   * 勾会被填实的外圈吃掉。行内标记的落定态恒是 accent（星标与完成标记同一条规则），
+   * 所以内部标记取 accent 的配对前景色；具体哪个形状用它写在 styles.css 里。
    */
   fill?: boolean;
   style?: React.CSSProperties;
@@ -161,7 +163,9 @@ export function Icon(props: {
     width: size,
     height: size,
     "--icon-stroke": props.strokeWidth ?? 2,
-    ...(props.fill === true ? { "--icon-fill": "currentColor" } : null),
+    ...(props.fill === true
+      ? { "--icon-fill": "currentColor", "--icon-mark": "var(--color-accent-fg)" }
+      : null),
     ...(props.spin === true ? { animation: "orbita-spin 1s linear infinite" } : null),
     ...props.style,
   } as React.CSSProperties;

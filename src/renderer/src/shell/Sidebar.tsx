@@ -12,6 +12,7 @@ import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@sh
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
 import { shouldExitArchived } from "./archived-view.ts";
+import { nextCompletion } from "./completion-mark.ts";
 import {
   SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
@@ -1138,15 +1139,8 @@ function SessionRow(props: {
               icon: meta.pinned ? "pin-off" : "pin",
               onSelect: () => session.pinSession(meta.id, !meta.pinned),
             },
-            // Star / Unstar 不在这儿——它已经是行上的悬停键（一次点击，
-            // 不必开菜单）。同一个动作留两个入口只会让菜单更长、更难扫
-            {
-              id: "completion",
-              label: done ? "Reopen" : "Mark done",
-              icon: done ? "rotate-ccw" : "circle-check",
-              onSelect: () =>
-                session.setCompletionSession(meta.id, done ? "open" : "done"),
-            },
+            // Star / Unstar 与 Mark done / Reopen 都不在这儿——它们已经是行上的悬停标记
+            // （一次点击，不必开菜单）。同一个动作留两个入口只会让菜单更长、更难扫
             {
               id: "move",
               label: "Move to…",
@@ -1247,24 +1241,29 @@ function SessionRow(props: {
         <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
       </IconButton>
       {/**
-        完成标识：与星标同构的行尾小槽，同样不占状态位、不随运行态消失。
-        done → circle-check（secondary 中性色，低饱和）；done_with_todos 的角标数字
-        （遗留事项数）数据源是 carryover 扫描（下一 PR），落地前这个态不会被写入，
-        渲染分支先留位。open 是默认态，不加标识——默认态不制造噪音。
+        完成标记：**与星标同一条行内标记规则**（星在前、完成在后，并列同一槽）：
+        行 hover / 键盘聚焦时浮出描边形（tertiary），点一下即落定；落定后常显、实心、accent，
+        再点一下就是 Reopen。行与行互不影响。这是 wafo 2026-09-22 定下的通用规则
+        （「之后的标也沿用这个逻辑」），不再为它单独发明一种交互。
+        不占状态位、不随运行态消失；未完成是默认态，静止时不显——默认态不制造噪音。
+        done_with_todos 本分支写不出来（遗留事项扫描在后面的 PR），它的专用图标等那时再接。
       */}
-      {done && (
-        <span
-          title={meta.completion === "done_with_todos" ? "Done with leftover todos" : "Done"}
-          style={{
-            display: "grid",
-            placeItems: "center",
-            flex: "0 0 auto",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          <Icon name="circle-check" size={12} strokeWidth={1.8} />
-        </span>
-      )}
+      <IconButton
+        label={done ? "Reopen this task" : "Mark this task done"}
+        title={done ? "Done · click to reopen" : "Mark this task done"}
+        size={20}
+        onClick={() =>
+          session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
+        }
+        style={{
+          borderRadius: "var(--radius-xs)",
+          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
+          opacity: done || hover || focused ? 1 : 0,
+          transition: "opacity var(--duration-instant) var(--ease-standard)",
+        }}
+      >
+        <Icon name="circle-check" size={13} strokeWidth={1.8} fill={done} />
+      </IconButton>
       {/**
         闲置建议：open 且未归档、最后一次活动超过 7 天的会话，hover 时出现的
         一个轻提示按钮——不弹通知、不打断、不加红点。点了就是普通 Mark done
