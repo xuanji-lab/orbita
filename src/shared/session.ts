@@ -41,6 +41,21 @@ export interface CompactedRecord {
  * **为什么不是 `visibility: "internal"` 的消息**：标记不是一条被隐藏的消息，它不带正文——
  * 正文只有一份，在通道里；模型看到的那份在 pi 的本子里（投递时嗂进去），不在这本账。
  * 和 CompactedRecord 同一个做法：单独一个 role，逐字段校验，坏行跳过。
+ *
+ * **不变量（子会话 2026-09-23 修正）：transcript 里的每一条 `ChannelMarkRecord`
+ * 都顶替了 pi 本子里的一条 user 消息**——它落在 recorder 识别信封的那个位置
+ * （`session/recorder.ts`），恰好是 pi 那本账原本会收一条 user item_started 的地方；
+ * 标记只是接收侧的投影，正文在通道账本里。这个不变量只在**接收侧**成立：发信一方
+ * 若是模型经工具发的，发送侧的对话流里已经有那次工具调用（不需要再写一条标记）；
+ * 若是用户代父发言（没有工具调用可投影），发送侧的 pi 本子里同样没有多出一条 user
+ * 消息，因此也不写标记（`main/channel/requests.ts` 的 `applySpeak`）——**标记只出现
+ * 在收到通道消息、真正喂给模型看的那一侧**。
+ *
+ * 因此它**是轮边界，与 user 同级**：`branchRoles`（分支按位对账）把它计作 `"user"`；
+ * renderer 的分组 / 折叠 / 分支锚点判定同样把它当边界处理（见 `tool-results.ts`）。
+ * 取代 ea3dcfa 时代「它不是消息也不构成轮边界」的说法——那时通道标记尚未接入
+ * 渲染流，穿过不打断候选；接上不变量后才发现它必须与 user 同级，否则带通道投递
+ * 的会话按位对账会错位一位，「从这里分支」会被拒绝。
  */
 export interface ChannelMarkRecord {
   role: "channel-mark";
