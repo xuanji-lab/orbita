@@ -4,6 +4,7 @@
  */
 import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
+import { channelApi } from "./api/channel.ts";
 import { filesApi } from "./api/files.ts";
 import { importApi } from "./api/import.ts";
 import { providerApi } from "./api/provider.ts";
@@ -15,6 +16,7 @@ import { workspaceApi } from "./api/workspace.ts";
 
 const api = {
   agent: agentApi,
+  channel: channelApi,
   provider: providerApi,
   session: sessionApi,
   settings: settingsApi,

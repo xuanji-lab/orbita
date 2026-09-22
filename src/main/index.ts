@@ -5,11 +5,15 @@
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
+import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
+import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
+import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
+import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
@@ -140,11 +144,16 @@ void app.whenReady().then(() => {
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
-  const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"));
+  // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
+  const channels = new ChannelStore(join(configDir, "channels"));
+  const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
   const record = createSessionRecorder(sessions);
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   const workspaces = new WorkspaceStore(configDir);
+  // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
+  // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
+  const phases = new Map<string, SessionPhase>();
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -164,6 +173,38 @@ void app.whenReady().then(() => {
       );
       return;
     }
+    // 子会话：delegate 工具 / 通道发信请求——照 readTaskRequest 的形态，任何路径
+    // 都必须回执，否则 agent 进程里的工具调用永远挂着。deps 声明在本文件靠后的
+    // 位置（拿 registerAgentIpc 返回的 submitTurn），这里引用它安全：onEvent 只在
+    // 事件到达时执行，那时已定义（同 mcpIpc 的 TDZ 说明）。不 record、不 broadcast
+    // 这两种请求事件本身——它们不是要落盘或转发给 renderer 的对话事件。
+    if (event.type === "delegateRequest") {
+      void applyDelegate(deps, event)
+        .then((outcome) => agentHost.answerDelegate(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerDelegate(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    if (event.type === "channelSendRequest") {
+      void applyChannelSend(deps, event)
+        .then((outcome) => agentHost.answerChannelSend(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerChannelSend(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 子会话：主进程按 phase 事件维护活会话状态；runtime 整个退出时全部会话的
+    // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
+    // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
+    if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    if (event.type === "failed" && event.sessionId === null) phases.clear();
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡
     if (event.type === "readTaskRequest") {
       void applyReadTask(sessions, event, workspaces).then((result) => {
@@ -213,11 +254,12 @@ void app.whenReady().then(() => {
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions);
-  registerAgentIpc(
+  const agentIpc = registerAgentIpc(
     agentHost,
     providers,
     sessions,
     workspaces,
+    channels,
     join(configDir, "pi-sessions"),
     // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
@@ -225,6 +267,20 @@ void app.whenReady().then(() => {
     mcp,
     settings,
   );
+  // 子会话：派出 / 发信 / 代父发言的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
+  // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
+  // turnFields/readDirectories 那一整套装配；steer 走 agentHost（AgentHostCore 的方法）。
+  const deps: ChannelDeps = {
+    sessions,
+    channels,
+    providers,
+    settings,
+    submitTurn: (input) => agentIpc.submitTurn(input),
+    steer: (sessionId, text, delivery) => agentHost.steer(sessionId, text, delivery),
+    phases,
+    broadcast: broadcastChannelEvent,
+  };
+  registerChannelIpc(deps);
   app.on("before-quit", () => agentHost.dispose());
 
   createMainWindow();

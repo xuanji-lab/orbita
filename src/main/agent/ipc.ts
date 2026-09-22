@@ -15,6 +15,7 @@ import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { COMPACTION_DEFAULT } from "../../shared/settings.ts";
+import type { ChannelStore } from "../channel/store.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
@@ -110,6 +111,8 @@ export function registerAgentIpc(
   sessions: SessionStore,
   /** 工作区存储：开轮目录清单的 attached 从这里查（turn-directories.ts） */
   workspaces: WorkspaceStore,
+  /** 通道账本：开轮目录清单的 related 从这里查子会话列表（turn-directories.ts） */
+  channels: ChannelStore,
   /** pi 把自己的 session 文件放在哪。**路径策略在主进程**，agent 进程只收数据 */
   piSessionDir: string,
   /** 工具禁区（sessions/ 与 pi-sessions/）。**路径策略在主进程**，随每轮发给闸门 */
@@ -145,7 +148,7 @@ export function registerAgentIpc(
    * 逻辑在 turn-directories.ts（纯模块，可直接测）；这里只做路由。
    */
   const readDirectories = (input: SubmitAgentInput | CompactAgentInput): Promise<TurnDirectories> =>
-    resolveTurnDirectories(workspaces, sessions, input);
+    resolveTurnDirectories(workspaces, sessions, channels, input);
 
   /**
    * 命名专用模型（设置里的 titleModel）装配成带密钥的载荷。没指定、指的
