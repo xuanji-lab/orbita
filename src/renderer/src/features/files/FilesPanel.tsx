@@ -23,10 +23,10 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
 
   /**
    * 挂目录。成功后 reloadWorkspaces——workspaces 引用一变，useFileTree 的 roots
-   * 跟着重拉，新根自然出现，不在这里手拉第二份。
+   * 跟着重拉，新根自然出现，不在这里手拉第二份。Home（workspaceId null）同一条路：
+   * 主进程把 Home 挂的目录也回在 roots 里，不需要单独的刷新逻辑。
    */
   const attach = (): void => {
-    if (workspaceId === null) return;
     void api.workspace
       .attachDir(workspaceId)
       .then((next) => {
@@ -36,9 +36,8 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
       .catch((cause: unknown) => setActionError(failMessage(cause)));
   };
 
-  /** 摘目录：直接摘（工作区级、可随时再挂回来），不做二次确认 */
+  /** 摘目录：直接摘（工作区级、可随时再挂回来），不做二次确认；Home 同样 */
   const detach = (dir: string): void => {
-    if (workspaceId === null) return;
     void api.workspace
       .detachDir(workspaceId, dir)
       .then(() => session.reloadWorkspaces())
@@ -130,15 +129,7 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
       contentKey="files"
       onClose={props.onClose}
       headerExtra={
-        <PanelIconButton
-          title={
-            workspaceId === null
-              ? "Home has no attached directories; create or pick a workspace first"
-              : "Attach a directory"
-          }
-          disabled={workspaceId === null}
-          onClick={attach}
-        >
+        <PanelIconButton title="Attach a directory" onClick={attach}>
           <Icon name="plus" size={16} />
         </PanelIconButton>
       }
@@ -179,7 +170,7 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
             </div>
           )}
           {tree.roots.map(rootGroup)}
-          <AttachRow disabled={workspaceId === null} onAttach={attach} />
+          <AttachRow onAttach={attach} />
         </div>
       </div>
     </RightPanelFrame>
@@ -477,17 +468,12 @@ function AgentsMdHint(props: { onReveal: () => void }) {
   );
 }
 
-/** 底部「挂一个目录」虚线按钮（与面板头 + 同一动作）。Home 会话没有可挂目录，禁用并说明 */
-function AttachRow(props: { disabled: boolean; onAttach: () => void }) {
+/** 底部「挂一个目录」虚线按钮（与面板头 + 同一动作）。Home 会话同样能挂，不禁用了 */
+function AttachRow(props: { onAttach: () => void }) {
   return (
     <button
       type="button"
-      disabled={props.disabled}
-      title={
-        props.disabled
-          ? "Home has no attached directories; create or pick a workspace first"
-          : "Attach a directory"
-      }
+      title="Attach a directory"
       onClick={props.onAttach}
       style={{
         display: "flex",
@@ -502,10 +488,9 @@ function AttachRow(props: { disabled: boolean; onAttach: () => void }) {
         color: "var(--color-text-tertiary)",
         font: "inherit",
         fontSize: "var(--font-size-control)",
-        cursor: props.disabled ? "default" : "pointer",
+        cursor: "pointer",
       }}
       onMouseEnter={(e) => {
-        if (props.disabled) return;
         e.currentTarget.style.background = "var(--color-bg-hover)";
         e.currentTarget.style.color = "var(--color-text-primary)";
       }}

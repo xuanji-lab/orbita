@@ -1,7 +1,7 @@
 /** resolveTurnDirectories 的账：有工作区带 attachedDirs、Home 恒空、workbench = workbenches/<id>。 */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveTurnDirectories } from "./turn-directories.ts";
@@ -66,13 +66,28 @@ describe("resolveTurnDirectories", () => {
     assert.deepEqual(dirs.attached, []);
   });
 
-  test("Home 会话（workspaceId null）：attached 恒空，不读工作区表，workbench 照常", async () => {
+  test("Home 没挂附加目录：attached 为空，workbench 照常", async () => {
     const dirs = await resolveTurnDirectories(workspaces, sessions, {
       sessionId: S1,
       workspaceId: null,
     });
     assert.deepEqual(dirs.attached, []);
     assert.equal(dirs.workbench, join(dir, "workbenches", S1));
+  });
+
+  test("Home 挂了附加目录：attached 清单照常出现（Home 也是一个工作区）", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-home-turn-"));
+    try {
+      await workspaces.attachDir(null, real);
+      const dirs = await resolveTurnDirectories(workspaces, sessions, {
+        sessionId: S1,
+        workspaceId: null,
+      });
+      assert.deepEqual(dirs.attached, [await realpath(real)]);
+      assert.equal(dirs.workbench, join(dir, "workbenches", S1));
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
   });
 
   test("workspaceId 指向已删的工作区：按没有附加目录处理，不拦开轮", async () => {

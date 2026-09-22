@@ -28,10 +28,13 @@ export async function resolveFileRoots(
   // 会话落到 TASKS 是既有语义（resolveTurnDirectories 同款处理），根清单不该
   // 因为一个悬空的 workspaceId 失败，面板要的是「agent 在哪」，Home 永远是真的。
   const homePath = workspaces.defaultPath();
+  // attached 走 attachedDirsOf（与开轮同一入口）：null → Home 挂的也出现；悬空 id → 空，
+  // 退 Home 的会话不带已经无处归属的附加根
+  const attachedDirs = await workspaces.attachedDirsOf(req.workspaceId);
+  // workspace 根的身份（名字 / 路径）还得查表；null 与悬空 id 都退 Home——Home 永远是真的
   const workspace = req.workspaceId === null
     ? undefined
     : (await workspaces.list()).find((w) => w.id === req.workspaceId);
-  // 工作区记录没了，attachedDirs 无从谈起——退 Home 的同时也不带附加根
 
   const roots: FileRoot[] = [
     ...(sessionRoot === null ? [] : [sessionRoot]),
@@ -43,7 +46,7 @@ export async function resolveFileRoots(
     },
   ];
 
-  for (const dir of workspace?.attachedDirs ?? []) {
+  for (const dir of attachedDirs) {
     roots.push({
       kind: "attached",
       // attached 的 label 就是路径末段（fileRootLabel 的 attached 分支，title 不参与）

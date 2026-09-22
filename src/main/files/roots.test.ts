@@ -1,7 +1,7 @@
 /** resolveFileRoots 的账：顺序 session → workspace → attached，label 与 exists 的来源。 */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveFileRoots } from "./roots.ts";
@@ -85,7 +85,7 @@ describe("resolveFileRoots", () => {
     await workspaces.rename(ws.id, "我的仓库");
     const withAttached = await workspaces.attachDir(ws.id, attached1);
     await workspaces.attachDir(ws.id, attached2);
-    assert.equal(withAttached.attachedDirs.length, 1);
+    assert.equal(withAttached.length, 1);
 
     const roots = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: ws.id });
     assert.deepEqual(
@@ -101,6 +101,23 @@ describe("resolveFileRoots", () => {
     assert.deepEqual(
       roots.map((root) => root.exists),
       [false, true, true, true], // session 工作台没建是 false，其余都是真目录
+    );
+  });
+
+  test("Home 挂了目录：workspace 根（Home）之后照常出现 attached 根", async () => {
+    await workspaces.ensureHome();
+    const attached = join(dir, "home-vault");
+    await mkdir(attached);
+    await workspaces.attachDir(null, attached);
+    const roots = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: null });
+    assert.deepEqual(
+      roots.map((root) => root.kind),
+      ["session", "workspace", "attached"],
+    );
+    assert.equal(roots[1]?.label, "Home");
+    assert.deepEqual(
+      roots.slice(2).map((root) => root.path),
+      [await realpath(attached)], // 存的是 realpath 后的真身
     );
   });
 

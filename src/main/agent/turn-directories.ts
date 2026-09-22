@@ -16,12 +16,8 @@ export async function resolveTurnDirectories(
   sessions: SessionStore,
   turn: { sessionId: string; workspaceId: string | null },
 ): Promise<TurnDirectories> {
-  // Home 会话（workspaceId null）不用查表——它没有附加目录，省一次读盘
-  const attached =
-    turn.workspaceId === null
-      ? []
-      : ((await workspaces.list()).find((w) => w.id === turn.workspaceId)?.attachedDirs ?? []);
-  // 工作区被删了（meta 还指着旧 id）按「没有附加目录」处理：会话落到 TASKS 是
-  // 已有语义，开轮不该因为一个不存在的 workspaceId 失败
+  // attachedDirsOf 是唯一入口：null → Home 的清单（Home 也能挂），悬空 id → []——
+  // 会话落到 TASKS 是既有语义，开轮不该因为一个不存在的 workspaceId 失败
+  const attached = await workspaces.attachedDirsOf(turn.workspaceId);
   return { attached, workbench: sessions.workbenchPath(turn.sessionId) };
 }
