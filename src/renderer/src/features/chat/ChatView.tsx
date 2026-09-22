@@ -722,7 +722,7 @@ function Pane(props: {
                 props.completion === "open"
                   ? props.closing === true
                     ? "loader-circle"
-                    : "circle-check"
+                    : "check"
                   : "rotate-ccw"
               }
               size={13}
