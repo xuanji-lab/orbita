@@ -151,3 +151,64 @@ export function summarizeChannel(
     hasExchange: hasExchange(sorted),
   };
 }
+
+/**
+ * 投递信封（子会话 2026-09-23 设计修订）：**信封自描述 + recorder 无状态识别**，
+ * 取代「SubmitAgentInput.channel + recorder 用 Set 标记下一条 user 消息」——
+ * 被否决方案的问题：steer 送达失败或 submit 失败时 Set 里的标记残留，会吞掉
+ * 之后一条真正的用户消息；标记写在「落账时刻」而不是「模型看到时刻」，父在跑时
+ * 标记会落进上一轮中间。
+ *
+ * 信封首行带 `from / kind / peer / message` 属性，恰好落在模型真正看到它的
+ * 位置——recorder 看到一条 user 的 `item_started`、首个 text 块能被
+ * `parseChannelPrompt` 解析，就知道这不是一句用户说的话，改落一条
+ * `ChannelMarkRecord`（见 session.ts）。
+ */
+function cleanEnvelopeTitle(title: string): string {
+  const cleaned = title.replace(/"/g, "'").replace(/\r?\n/g, " ").trim();
+  return cleaned === "" ? "Untitled" : cleaned;
+}
+
+/**
+ * 把一条通道消息包成投给模型看的信封。`peer` 是**接收方眼里的「对面」**：
+ * 投给子时 peer 是父，投给父时 peer 是子——不是消息的 `from`（消息发送方）。
+ */
+export function composeChannelPrompt(
+  message: ChannelMessage,
+  peer: { id: string; title: string },
+): string {
+  const title = cleanEnvelopeTitle(peer.title);
+  const notice =
+    message.from === "parent"
+      ? "This message came from your parent session through the sub-session channel. Report back with report_to_parent (kind: question / progress / done / failed); text in your normal reply is not delivered to the parent."
+      : `This message came from your sub-session "${title}" (id ${peer.id}) through its channel. To answer, call reply_subsession with that id; text in your normal reply is not delivered to the sub-session, so do not pretend to answer it here.`;
+  return [
+    `<channel from="${message.from}" kind="${message.kind}" peer="${peer.id}" message="${message.id}" title="${title}">`,
+    message.text,
+    "</channel>",
+    notice,
+  ].join("\n");
+}
+
+/** 信封首行的属性顺序固定（from / kind / peer / message），锚定在字符串开头——只认首行。 */
+const CHANNEL_PROMPT_HEADER =
+  /^<channel from="(parent|child)" kind="([a-z]+)" peer="([^"]+)" message="([^"]+)"/;
+
+/**
+ * 解出信封的首行属性。**只看首行**——正文（message.text）或首行之外的地方
+ * 出现类似信封的文本都不算。kind 必须是 `isChannelMessageKind` 认识的值，
+ * 且与 `from` 方向匹配（`allowedKinds`），否则 null——这两条只可能来自手改
+ * 文件或工具描述被无视，不该被静默接受。
+ */
+export function parseChannelPrompt(
+  text: string,
+): { from: ChannelSide; kind: ChannelMessageKind; peerId: string; messageId: string } | null {
+  const firstLine = text.split("\n")[0] ?? "";
+  const match = CHANNEL_PROMPT_HEADER.exec(firstLine);
+  if (match === null) return null;
+  const [, from, kind, peerId, messageId] = match;
+  if (from === undefined || peerId === undefined || messageId === undefined) return null;
+  if (!isChannelMessageKind(kind)) return null;
+  if (!allowedKinds(from as ChannelSide).includes(kind)) return null;
+  return { from: from as ChannelSide, kind, peerId, messageId };
+}

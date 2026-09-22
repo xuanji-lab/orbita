@@ -295,8 +295,10 @@ export interface SessionMeta {
    * agent 一个「保护主上下文的搜索原语」——给了就是 zcode 那样一条会话二十几个，
    * 侧栏挂树不可扩展。契约上允许多层，UI 只做一层。
    *
-   * 今天唯一的生产者是导入器（Proma 的 delegation 子会话）。orbita 自己派子会话的
-   * 路径落地那天，创建时要与新会话同样走一次 auto-title——命名只发生在创建那一刻。
+   * 生产者有两个：导入器（Proma 的 delegation 子会话）与 orbita 自己的 delegate 工具——
+   * 主进程派出子会话时标题由模型在派出那一刻给定，`titleSource` 直接是 `"user"`，
+   * 不走 auto-title（模型起的名就是最终名，不会被首句截断或后续生成覆盖；
+   * 命名只发生在派出那一刻）。
    */
   parentId?: string;
   /**

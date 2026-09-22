@@ -427,11 +427,16 @@ export type AgentCommand =
     }
   | {
       /**
-       * 父→子注入（Q2' 裁决）：目标会话正在跑时，把 text 以 pi 的
-       * `prompt(text, { streamingBehavior: "steer" })` 注入——下一个工具调用边界生效，
-       * **不断当前轮**（干活的线跟着调整而不断）。**目标空闲时主进程不发这条**
-       * （退化成普通 submit），所以 runtime 收到它会话却不在跑就是状态失步，
-       * 回 failed 事件说明、不静默丢。
+       * 父→子注入（Q2' 裁决）：目标会话正在跑时，把 text 注入进去。**目标空闲时
+       * 主进程不发这条**（退化成普通 submit），所以 runtime 收到它会话却不在跑
+       * 就是状态失步，回 failed 事件说明、不静默丢。
+       *
+       * `delivery`（缺席 = `"steer"`）决定注入方式，两者都是 pi 的
+       * `prompt(text, { streamingBehavior })` 原生行为：
+       *   `"steer"` —— 下一个工具调用边界生效，**不断当前轮**（干活的线跟着调整而不断）。
+       *   `"followUp"` —— 等目标这轮本来要停时再处理，**同一个 run 里接着跑**、不开新轮
+       *     （子会话通道 2026-09-23：`ChannelSpeakInput.delivery` / `reply_subsession`
+       *     允许「等这轮收尾」时用这个，pi 原生就有，不必在主进程另起队列）。
        *
        * 2026-09-06 的「不碰 steering」收回的是**队列所有权**——排队状态属于 renderer
        * 的会话槽，不是否定 steer 本身；队列所有权至今仍在 renderer。这条命令因此
@@ -441,6 +446,7 @@ export type AgentCommand =
       type: "steer";
       sessionId: string;
       text: string;
+      delivery?: ChannelDelivery;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，

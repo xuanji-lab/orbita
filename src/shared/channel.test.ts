@@ -3,8 +3,10 @@ import { describe, it } from "node:test";
 import {
   allowedKinds,
   channelStatus,
+  composeChannelPrompt,
   hasExchange,
   parseChannelMessage,
+  parseChannelPrompt,
   sortChannelMessages,
   summarizeChannel,
   type ChannelMessage,
@@ -202,5 +204,83 @@ describe("summarizeChannel", () => {
     const summary = summarizeChannel(key, "新派出", [message()]);
     strictEqual(summary.hasExchange, false);
     strictEqual(summary.status, "running");
+  });
+});
+
+describe("composeChannelPrompt / parseChannelPrompt", () => {
+  it("往返：compose 出来的信封能被 parse 还原出 from/kind/peer/message", () => {
+    const msg = message({ id: "m9", from: "parent", kind: "task" });
+    const prompt = composeChannelPrompt(msg, { id: "p1", title: "重做外壳" });
+    deepStrictEqual(parseChannelPrompt(prompt), {
+      from: "parent",
+      kind: "task",
+      peerId: "p1",
+      messageId: "m9",
+    });
+  });
+
+  it("子→父方向同样往返", () => {
+    const msg = message({ id: "m2", from: "child", kind: "question" });
+    const prompt = composeChannelPrompt(msg, { id: "c1", title: "调研分支" });
+    deepStrictEqual(parseChannelPrompt(prompt), {
+      from: "child",
+      kind: "question",
+      peerId: "c1",
+      messageId: "m2",
+    });
+  });
+
+  it("标题含引号与换行——清洗后不破坏首行属性，且仍能正常解析", () => {
+    const msg = message({ id: "m3", from: "parent", kind: "task" });
+    const prompt = composeChannelPrompt(msg, { id: "p2", title: 'A "quoted"\ntitle' });
+    strictEqual(prompt.split("\n")[0]?.includes('title="A \'quoted\' title"'), true);
+    deepStrictEqual(parseChannelPrompt(prompt), {
+      from: "parent",
+      kind: "task",
+      peerId: "p2",
+      messageId: "m3",
+    });
+  });
+
+  it("空标题落 Untitled", () => {
+    const msg = message({ id: "m4", from: "parent", kind: "task" });
+    const prompt = composeChannelPrompt(msg, { id: "p3", title: "" });
+    strictEqual(prompt.split("\n")[0]?.includes('title="Untitled"'), true);
+  });
+
+  it("英文说明按 from 分叉：parent 让子调 report_to_parent，child 让父调 reply_subsession 并带 id/标题", () => {
+    const toChild = composeChannelPrompt(message({ from: "parent", kind: "task" }), {
+      id: "p1",
+      title: "母任务",
+    });
+    strictEqual(toChild.includes("report_to_parent"), true);
+    const toParent = composeChannelPrompt(message({ from: "child", kind: "done" }), {
+      id: "c1",
+      title: "子任务",
+    });
+    strictEqual(toParent.includes("reply_subsession"), true);
+    strictEqual(toParent.includes("c1"), true);
+    strictEqual(toParent.includes("子任务"), true);
+  });
+
+  it("非信封文本 → null", () => {
+    strictEqual(parseChannelPrompt("just a normal message"), null);
+    strictEqual(parseChannelPrompt(""), null);
+  });
+
+  it("kind 与 from 不配 → null（child 发 task 只能来自手改文件）", () => {
+    const badPrompt = composeChannelPrompt(message({ from: "parent", kind: "task" }), {
+      id: "p1",
+      title: "x",
+    }).replace('from="parent" kind="task"', 'from="child" kind="task"');
+    strictEqual(parseChannelPrompt(badPrompt), null);
+  });
+
+  it("首行之外出现信封不算——只看第一行", () => {
+    const prompt = composeChannelPrompt(message({ from: "parent", kind: "task" }), {
+      id: "p1",
+      title: "x",
+    });
+    strictEqual(parseChannelPrompt(`Some preface\n${prompt}`), null);
   });
 });
