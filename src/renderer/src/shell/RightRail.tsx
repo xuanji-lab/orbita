@@ -5,7 +5,7 @@ import { Icon, type IconName } from "./Icon";
  * layer 1 上。wafo 2026-09-12 裁定保持 32px 不加宽到 48——「左右对称」不取字面
  * 同宽，只保留「都是无面的窄条」。
  *
- * 顶部：三个入口（Skills / MCP / 辅助对话），**共用一个面板位**（2026-09-12 裁决）：
+ * 顶部：四个入口（Files / Skills / MCP / 辅助对话），**共用一个面板位**（2026-09-12 裁决）：
  * 同一时刻至多点亮一个，再点已点亮的 = 收起。点亮 = 单层
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
@@ -18,7 +18,7 @@ import { Icon, type IconName } from "./Icon";
  * 中间用弹性空隙隔开两组的语义。
  */
 
-export type RightPanelKind = "skills" | "mcp" | "drawer";
+export type RightPanelKind = "files" | "skills" | "mcp" | "drawer";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -52,7 +52,8 @@ export function RightRail(props: {
         overflow: "hidden",
       }}
     >
-      {/* 顶部这行兼作拖拽区（.titlebar）；Skills 入口住在行内与折叠图标同行。
+      {/* 顶部这行兼作拖拽区（.titlebar）；行内住 Files 入口，与左侧折叠图标同行同高
+          （2026-09-22 文件面板加入：顶行让给最常用的 Files，Skills 顺延一格）。
           paddingInlineStart: 0——豁免 darwin 给 .titlebar 统一加的 66px 红绿灯净空：
           红绿灯在窗口左上，这条 32px 窄条在最右，让净空会把 icon 推出可视区外
           （overflow:hidden，A-0 复验 BUG-3）。 */}
@@ -69,12 +70,18 @@ export function RightRail(props: {
         }}
       >
         <RailEntryButton
-          icon="book-open"
-          label="Skills"
-          lit={props.panel === "skills"}
-          onClick={() => props.onPanel(props.panel === "skills" ? null : "skills")}
+          icon="folder"
+          label="Files"
+          lit={props.panel === "files"}
+          onClick={() => props.onPanel(props.panel === "files" ? null : "files")}
         />
       </span>
+      <RailEntryButton
+        icon="book-open"
+        label="Skills"
+        lit={props.panel === "skills"}
+        onClick={() => props.onPanel(props.panel === "skills" ? null : "skills")}
+      />
       <RailEntryButton
         icon="plug"
         label="MCP servers"

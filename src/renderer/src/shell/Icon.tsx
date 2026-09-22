@@ -3,6 +3,7 @@ import archive from "../../../../Orbita Design System/assets/icons/lucide/archiv
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
 import blend from "../../../../Orbita Design System/assets/icons/lucide/blend.svg?raw";
+import book from "../../../../Orbita Design System/assets/icons/lucide/book.svg?raw";
 import bookOpen from "../../../../Orbita Design System/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.svg?raw";
@@ -11,6 +12,7 @@ import circleCheck from "../../../../Orbita Design System/assets/icons/lucide/ci
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import circleOff from "../../../../Orbita Design System/assets/icons/lucide/circle-off.svg?raw";
 import chevronLeft from "../../../../Orbita Design System/assets/icons/lucide/chevron-left.svg?raw";
+import chevronRight from "../../../../Orbita Design System/assets/icons/lucide/chevron-right.svg?raw";
 import chevronUp from "../../../../Orbita Design System/assets/icons/lucide/chevron-up.svg?raw";
 import clock from "../../../../Orbita Design System/assets/icons/lucide/clock.svg?raw";
 import copy from "../../../../Orbita Design System/assets/icons/lucide/copy.svg?raw";
@@ -21,9 +23,11 @@ import download from "../../../../Orbita Design System/assets/icons/lucide/downl
 import ellipsisVertical from "../../../../Orbita Design System/assets/icons/lucide/ellipsis-vertical.svg?raw";
 import eye from "../../../../Orbita Design System/assets/icons/lucide/eye.svg?raw";
 import eyeOff from "../../../../Orbita Design System/assets/icons/lucide/eye-off.svg?raw";
+import externalLink from "../../../../Orbita Design System/assets/icons/lucide/external-link.svg?raw";
 import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
+import folderOpen from "../../../../Orbita Design System/assets/icons/lucide/folder-open.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
@@ -56,6 +60,7 @@ import sliders from "../../../../Orbita Design System/assets/icons/lucide/slider
 import star from "../../../../Orbita Design System/assets/icons/lucide/star.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
 import undo2 from "../../../../Orbita Design System/assets/icons/lucide/undo-2.svg?raw";
+import unlink from "../../../../Orbita Design System/assets/icons/lucide/unlink.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
 import x from "../../../../Orbita Design System/assets/icons/lucide/x.svg?raw";
 import wrench from "../../../../Orbita Design System/assets/icons/lucide/wrench.svg?raw";
@@ -71,6 +76,7 @@ import zap from "../../../../Orbita Design System/assets/icons/lucide/zap.svg?ra
 const ICONS = {
   archive,
   blend,
+  book,
   "book-open": bookOpen,
   "archive-restore": archiveRestore,
   "arrow-up": arrowUp,
@@ -80,6 +86,7 @@ const ICONS = {
   "circle-check": circleCheck,
   "chevron-down": chevronDown,
   "chevron-left": chevronLeft,
+  "chevron-right": chevronRight,
   "chevron-up": chevronUp,
   clock,
   "circle-off": circleOff,
@@ -91,8 +98,10 @@ const ICONS = {
   "ellipsis-vertical": ellipsisVertical,
   eye,
   "eye-off": eyeOff,
+  "external-link": externalLink,
   "fold-vertical": foldVertical,
   folder,
+  "folder-open": folderOpen,
   "folder-plus": folderPlus,
   "git-branch": gitBranch,
   "grip-vertical": gripVertical,
@@ -126,6 +135,7 @@ const ICONS = {
   "trash-2": trash2,
   "triangle-alert": triangleAlert,
   "undo-2": undo2,
+  unlink,
   workflow,
   wrench,
   x,

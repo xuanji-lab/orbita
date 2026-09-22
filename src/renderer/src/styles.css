@@ -893,3 +893,19 @@ body {
   stroke: var(--glass-bg);
   stroke-width: 3px;
 }
+
+/*
+ * 文件面板：树行与根分组标签的 hover 动作（Reveal / Detach）——hover 才浮现。
+ * 用 CSS 而不是逐行 state：树的行数随目录增长，逐行订阅 mouseenter 是浪费。
+ * 行背景的 hover 挂同一宿主：Reveal 按钮是行 button 的兄弟节点（button 不能套
+ * button），不在行内 hover 会让背景在手指移过去时先灭掉。
+ */
+.file-hover-host .file-hover-act {
+  display: none;
+}
+.file-hover-host:hover .file-hover-act {
+  display: inline-flex;
+}
+.file-hover-host:hover .file-row {
+  background: var(--color-bg-hover);
+}

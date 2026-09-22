@@ -12,6 +12,7 @@ import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRai
 import { RightPanelSlot } from "./shell/RightPanel";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
+import { FilesPanel } from "./features/files/FilesPanel";
 import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
@@ -273,7 +274,9 @@ export function App() {
                 animation: "right-panel-fade 120ms var(--ease-out-quint)",
               }}
             >
-              {shownPanel === "skills" ? (
+              {shownPanel === "files" ? (
+                <FilesPanel session={session} onClose={() => handlePanel(null)} />
+              ) : shownPanel === "skills" ? (
                 <SkillsPanel
                   skills={skills}
                   onClose={() => handlePanel(null)}
