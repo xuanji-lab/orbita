@@ -8,7 +8,7 @@
  * 记在自己的 meta 里（`src/shared/workspace.ts` 讲了为什么不按路径）。
  */
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
@@ -34,19 +34,39 @@ interface LegacyWorkspaceFile {
 export class WorkspaceStore {
   private readonly filePath: string;
   private readonly legacyPath: string;
+  /** Orbita 全部工作区文件夹的根（Home 也在它下面）。注入点：测试给临时目录，生产是 ~/Orbita */
+  private readonly rootDir: string;
   private cache: Workspace[] | null = null;
 
-  constructor(dir: string) {
+  constructor(dir: string, orbitaRoot?: string) {
     this.filePath = join(dir, "workspaces.json");
     this.legacyPath = join(dir, "workspace.json");
+    this.rootDir = orbitaRoot ?? join(homedir(), "Orbita");
+  }
+
+  /** ~/Orbita：Orbita 建的每个工作区文件夹（含 Home）都在它下面，Finder 打开就是全部地盘 */
+  orbitaRoot(): string {
+    return this.rootDir;
   }
 
   /**
    * 没有选定工作区时 agent 落在哪儿。**只在这里定义一次**——
    * 渲染层显示给用户的那个「Home」必须是同一个值。
+   *
+   * 不再是 homedir 本身（2026-09-22 裁决）：那会让 agent 的文件直接散在 ~ 里，
+   * 用户自己的家目录变成杂物堆。Home 与命名工作区一样，是 ~/Orbita 下的一个
+   * 普通文件夹——同一个根，没有第二种工作区。
    */
-  static defaultPath(): string {
-    return homedir();
+  defaultPath(): string {
+    return join(this.orbitaRoot(), "Home");
+  }
+
+  /**
+   * 启动时把 Home 建出来（skills.ensureDirs 的同款先例：空目录就是说明书）。
+   * 用户第一次打开 ~/Orbita 时它就该存在，而不是等 agent 第一次写文件才隐式出现。
+   */
+  async ensureHome(): Promise<void> {
+    await mkdir(this.defaultPath(), { recursive: true });
   }
 
   async list(): Promise<Workspace[]> {
@@ -69,6 +89,32 @@ export class WorkspaceStore {
     };
     await this.save([...workspaces, workspace]);
     return workspace;
+  }
+
+  /**
+   * 命名新建（2026-09-22 裁决：一个工作区就是一个用户能在 Finder 里打开的文件夹）：
+   * 在 ~/Orbita/<name>/ 建文件夹并加为工作区。名字先过 normalize（与 rename 同一套
+   * 规则：trim + 40 上限）——目录名就是工作区名，**一辈子不动**；之后改名只改列表里
+   * 的显示名，不动文件夹。非法名（空、. / ..、含 / 或空字节）当场抛错，不上磁盘。
+   * 同名文件夹已存在就直接加它：mkdir recursive 不炸、add 同路径幂等——不覆盖、不报错。
+   */
+  async create(name: string): Promise<Workspace> {
+    const normalized = normalizeWorkspaceName(name, "");
+    if (
+      normalized === "" ||
+      normalized === "." ||
+      normalized === ".." ||
+      normalized.includes("/") ||
+      normalized.includes("\0")
+    ) {
+      throw new Error(
+        `「${name}」不能用作工作区名字：不能为空，不能是 . 或 ..，也不能含 / 或空字节`,
+      );
+    }
+    const path = join(this.orbitaRoot(), normalized);
+    await mkdir(path, { recursive: true });
+    // add 的默认名取路径末段，而这里的目录名就是 normalize 后的名字——恰好是用户给的
+    return this.add(path);
   }
 
   /**

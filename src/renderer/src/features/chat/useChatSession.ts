@@ -109,6 +109,8 @@ export interface ChatSession {
   /** 侧栏列的工作区（落盘、跨会话）。 */
   workspaces: Workspace[];
   addWorkspace: () => void;
+  /** 命名新建：在 ~/Orbita/<name>/ 建文件夹并加进来。名字不合法由主进程拒（错误走列表那行） */
+  createWorkspace: (name: string) => void;
   renameWorkspace: (id: string, name: string) => void;
   removeWorkspace: (id: string) => void;
   /**
@@ -119,7 +121,7 @@ export interface ChatSession {
   cwd: string | null;
   /** 这个任务属于哪个工作区；与 cwd 永远同进同出 */
   workspaceId: string | null;
-  /** 没选工作区时的兜底（今天是 home）。UI 必须如实显示它，不能让它是个隐形默认。 */
+  /** 没选工作区时的兜底（今天是 ~/Orbita/Home）。UI 必须如实显示它，不能让它是个隐形默认。 */
   defaultCwd: string;
   /** 至少声明了一个模型且**配置好**（有密钥，能真正发起请求）的 provider——没有它就发不出消息 */
   usable: ProviderDto[];
@@ -1307,6 +1309,22 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       .catch(engine.workspaceFailed);
   }, [engine, reset]);
 
+  /** 命名新建工作区：落点与 addWorkspace 同一套（加完就切过去），名字由主进程校验 */
+  const createWorkspace = useCallback(
+    (name: string) => {
+      void api.workspace
+        .create(name)
+        .then((created) => {
+          engine.refreshWorkspaces();
+          reset();
+          setCwd(created.path);
+          setWorkspaceId(created.id);
+        })
+        .catch(engine.workspaceFailed);
+    },
+    [engine, reset],
+  );
+
   /**
    * 当前正在看的这条会话的相位。没有活会话（首页 / 盘上打开未唤醒）算 idle——
    * 那时根本没有「一轮」在跑，不该拦。
@@ -1748,6 +1766,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     approvals: entry.approvals,
     workspaces: engine.workspaces,
     addWorkspace,
+    createWorkspace,
     renameWorkspace: engine.renameWorkspace,
     removeWorkspace: engine.removeWorkspace,
     cwd,

@@ -13,13 +13,13 @@ export function registerWorkspaceIpc(
   onRemove: (id: string) => Promise<void> | void,
 ): void {
   ipcMain.handle(ipcChannels.workspaceList, () => store.list());
-  ipcMain.handle(ipcChannels.workspaceDefault, () => WorkspaceStore.defaultPath());
+  ipcMain.handle(ipcChannels.workspaceDefault, () => store.defaultPath());
 
   ipcMain.handle(ipcChannels.workspaceAdd, async (event): Promise<Workspace | null> => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const options = {
       properties: ["openDirectory", "createDirectory"] as const,
-      defaultPath: WorkspaceStore.defaultPath(),
+      defaultPath: store.defaultPath(),
     };
     const result = await (window
       ? dialog.showOpenDialog(window, { ...options, properties: [...options.properties] })
@@ -32,6 +32,8 @@ export function registerWorkspaceIpc(
   ipcMain.handle(ipcChannels.workspaceRename, (_event, id: string, name: string) =>
     store.rename(id, name),
   );
+  // 命名新建：目录选择器帮不上忙——用户要的是「在 ~/Orbita 里开一个新家」而不是挑一个已有的
+  ipcMain.handle(ipcChannels.workspaceCreate, (_event, name: string) => store.create(name));
   ipcMain.handle(ipcChannels.workspaceRemove, async (_event, id: string) => {
     await store.remove(id);
     // 连带清理失败不拦工作区移除（那是一件更主要的事），但必须留日志——

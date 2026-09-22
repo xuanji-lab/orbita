@@ -47,7 +47,7 @@ export function registerImportIpc(
       // 66 条），文件仍在且是同一格式——旧根也是合法源，同样只读
       extraSourceRoots: [`${homedir()}/.proma`],
       piSessionDir,
-      defaultCwd: WorkspaceStore.defaultPath(),
+      defaultCwd: workspaces.defaultPath(),
       workspaces: await workspaces.list(),
       existingMetas: await sessions.list(),
       registeredModels: registered,

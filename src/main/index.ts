@@ -202,6 +202,12 @@ void app.whenReady().then(() => {
     console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
   });
   registerSkillIpc(skills);
+  // Home（工作区缺席时 agent 的落脚点）先建出来，同 skills.ensureDirs 的处理：
+  // 建不出来不拦启动，但要留日志——不然一个权限坏掉的 ~/Orbita 会表现成
+  // 「Home 任务的文件写不进去」，那是最难查的一类
+  void workspaces.ensureHome().catch((error: unknown) => {
+    console.error("[main] 建不了 Home 目录，Home 任务的文件可能落不了盘", error);
+  });
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   registerAgentIpc(

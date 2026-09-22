@@ -188,6 +188,12 @@ export function Sidebar(props: {
    */
   const [hasTodosOnly, setHasTodosOnly] = useState(false);
   /**
+   * 命名新建工作区：Workspaces 列表顶部那行就地编辑（InlineName）开没开着。
+   * 「+」菜单里选「New workspace…」置 true；Enter / Esc / 点别处（失焦提交，
+   * 空名不提交）都会收掉。**不持久化**——一个没提交的名字不值得活过重启。
+   */
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  /**
    * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
    * **手动状态不持久化**——窗口宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
    */
@@ -575,10 +581,62 @@ export function Sidebar(props: {
               <>
                 <NodeHeader
                   label="Workspaces"
-                  addLabel="Add a workspace folder"
+                  addLabel="Add a workspace"
                   addIcon="folder-plus"
-                  onAdd={session.addWorkspace}
+                  addMenu={[
+                    // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
+                    // 两种添法在菜单里各占一个符号
+                    {
+                      id: "new-workspace",
+                      label: "New workspace…",
+                      icon: "plus",
+                      onSelect: () => setCreatingWorkspace(true),
+                    },
+                    {
+                      id: "add-folder",
+                      label: "Add a folder…",
+                      icon: "folder-plus",
+                      onSelect: session.addWorkspace,
+                    },
+                  ]}
                 />
+                {creatingWorkspace && (
+                  // 就地命名：与工作区组头同一套 icon 槽与行高，像「正在出生的那一行」。
+                  // Enter 提交、Esc 放弃；失焦即提交（InlineName 的死规矩），空名不提交
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "20px 24px minmax(0,1fr)",
+                      alignItems: "center",
+                      gap: "var(--space-1)",
+                      minHeight: "var(--control-height-md)",
+                    }}
+                  >
+                    <span />
+                    <span
+                      style={{
+                        display: "grid",
+                        placeItems: "center",
+                        width: 24,
+                        height: 24,
+                        color: "var(--color-text-secondary)",
+                      }}
+                    >
+                      <Icon name="folder" size={14} strokeWidth={1.8} />
+                    </span>
+                    <InlineName
+                      editing
+                      value=""
+                      placeholder="Workspace name"
+                      onCommit={(name) => {
+                        setCreatingWorkspace(false);
+                        const trimmed = name.trim();
+                        if (trimmed !== "") session.createWorkspace(trimmed);
+                      }}
+                      onCancel={() => setCreatingWorkspace(false)}
+                    />
+                  </div>
+                )}
                 {/*
                   读失败时错误行贴在列表上方，旧列表照常列（失败不清空手里那份）；
                   只有从没读成功过才是空空的错误行 + 什么都不列（none）。
@@ -911,11 +969,21 @@ function NodeHeader(props: {
   label: string;
   addLabel: string;
   addIcon: IconName;
-  onAdd: () => void;
+  /**
+   * 「+」点开的菜单：同一颗键给多种添法（Workspaces：命名新建 / 选已有文件夹）。
+   * 与 onAdd 二选一——传了它 onAdd 就不解析。
+   */
+  addMenu?: MenuItem[];
+  onAdd?: () => void;
   /** 传了 onToggleFold 就说明这个节点的孩子可折叠：label 变成开合按钮（chevron + 名字） */
   folded?: boolean;
   onToggleFold?: (() => void) | undefined;
 }) {
+  const addButton = (onClick: () => void, open: boolean): React.ReactNode => (
+    <IconButton label={props.addLabel} size={26} active={open} onClick={onClick}>
+      <Icon name={props.addIcon} size={14} />
+    </IconButton>
+  );
   return (
     <div
       style={{
@@ -935,9 +1003,17 @@ function NodeHeader(props: {
       ) : (
         <NodeLabel>{props.label}</NodeLabel>
       )}
-      <IconButton label={props.addLabel} size={26} onClick={props.onAdd}>
-        <Icon name={props.addIcon} size={14} />
-      </IconButton>
+      {props.addMenu !== undefined ? (
+        <Menu
+          items={props.addMenu}
+          // 「+」贴着侧栏右缘：菜单右缘对齐按钮，向左展开（窄侧栏放不下会回落）
+          align="end"
+          panelMinWidth={200}
+          trigger={({ open, toggle }) => addButton(toggle, open)}
+        />
+      ) : props.onAdd !== undefined ? (
+        addButton(props.onAdd, false)
+      ) : null}
     </div>
   );
 }

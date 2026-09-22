@@ -846,6 +846,9 @@ function ComposerBar(props: { session: ChatSession }) {
   // 所以两个分支都要过 basename——显示层截尾，不动落库数据
   const scopeSource = workspace?.name ?? session.cwd;
   const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
+  // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
+  // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
+  const [namingWorkspace, setNamingWorkspace] = useState(false);
 
   // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）
   const catalog = useBuiltinCatalog();
@@ -866,6 +869,12 @@ function ComposerBar(props: { session: ChatSession }) {
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
     })),
+    {
+      id: "new-workspace",
+      label: "New workspace…",
+      icon: "plus",
+      onSelect: () => setNamingWorkspace(true),
+    },
     { id: "add", label: "Add a folder…", icon: "folder-plus", onSelect: session.addWorkspace },
   ];
 
@@ -925,17 +934,34 @@ function ComposerBar(props: { session: ChatSession }) {
     <>
       <Menu
         items={scopeItems}
-        trigger={({ open, toggle }) => (
-          <Chip
-            icon="folder"
-            active={open}
-            title={`${session.cwd ?? session.defaultCwd} · switching starts a new task`}
-            onClick={toggle}
-            chevron
-          >
-            {scope}
-          </Chip>
-        )}
+        trigger={({ open, toggle }) =>
+          namingWorkspace ? (
+            // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
+            // 与相邻芯片同一量级（scope 芯片 icon + 名字 + chevron ≈ 140px）
+            <InlineName
+              editing
+              value=""
+              placeholder="Workspace name"
+              onCommit={(name) => {
+                setNamingWorkspace(false);
+                const trimmed = name.trim();
+                if (trimmed !== "") session.createWorkspace(trimmed);
+              }}
+              onCancel={() => setNamingWorkspace(false)}
+              style={{ width: 140 }}
+            />
+          ) : (
+            <Chip
+              icon="folder"
+              active={open}
+              title={`${session.cwd ?? session.defaultCwd} · switching starts a new task`}
+              onClick={toggle}
+              chevron
+            >
+              {scope}
+            </Chip>
+          )
+        }
       />
       <Menu
         items={modeItems}
