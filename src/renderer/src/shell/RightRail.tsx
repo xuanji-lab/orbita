@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 
 /**
@@ -13,54 +12,30 @@ import { Icon, type IconName } from "./Icon";
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
  * `--radius-sm`（md 太圆）。
  *
- * 底部：会话动作（复制转录等），**只在有会话时出现**——它承载的是「对这个会话
- * 做点什么」，首页没有会话可做。中间用弹性空隙隔开两组的语义。
+ * 底部：应用入口（Archived / Carryovers / Settings），**首页常驻**——它们是
+ * 应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，覆盖 2026-09-12
+ * 「底部只放会话动作」：复制转录已并入会话行的「导出」，右栏不再挂会话动作）。
+ * 中间用弹性空隙隔开两组的语义。
  */
+
 export type RightPanelKind = "skills" | "mcp" | "drawer";
+
+/** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
+export interface RailEntry {
+  icon: IconName;
+  /** tooltip 与读屏共用这一句 */
+  label: string;
+  /** 对应视图开着时点亮（aria-pressed） */
+  lit: boolean;
+  onClick: () => void;
+}
 
 export function RightRail(props: {
   panel: RightPanelKind | null;
   onPanel: (next: RightPanelKind | null) => void;
-  /** 会话动作区：调用方塞什么就长什么；false = 没有会话，不渲染这一段 */
-  sessionActions?: false | React.ReactNode;
+  /** 底部应用入口组（Carryovers / Archived / Settings），调用方组装；顺序即堆叠顺序 */
+  railEntries: RailEntry[];
 }) {
-  const entry = (kind: RightPanelKind, icon: IconName, label: string) => {
-    const lit = props.panel === kind;
-    return (
-      <button
-        key={kind}
-        type="button"
-        title={label}
-        aria-pressed={lit}
-        onClick={() => props.onPanel(lit ? null : kind)}
-        style={{
-          width: 26,
-          height: 26,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 0,
-          border: 0,
-          cursor: "pointer",
-          borderRadius: "var(--radius-sm)",
-          background: lit ? "var(--glass-bg)" : "transparent",
-          boxShadow: lit ? "var(--shadow-composer)" : "none",
-          color: lit ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-        }}
-        onMouseEnter={(e) => {
-          if (lit) return;
-          e.currentTarget.style.background = "var(--color-bg-hover)";
-        }}
-        onMouseLeave={(e) => {
-          if (lit) return;
-          e.currentTarget.style.background = "transparent";
-        }}
-      >
-        <Icon name={icon} size={16} />
-      </button>
-    );
-  };
-
   return (
     <aside
       style={{
@@ -93,54 +68,52 @@ export function RightRail(props: {
           paddingInlineStart: 0,
         }}
       >
-        {entry("skills", "book-open", "Skills")}
+        <RailEntryButton
+          icon="book-open"
+          label="Skills"
+          lit={props.panel === "skills"}
+          onClick={() => props.onPanel(props.panel === "skills" ? null : "skills")}
+        />
       </span>
-      {entry("mcp", "plug", "MCP servers")}
-      {entry("drawer", "panel-right", "辅助对话 Ctrl+Alt+D")}
+      <RailEntryButton
+        icon="plug"
+        label="MCP servers"
+        lit={props.panel === "mcp"}
+        onClick={() => props.onPanel(props.panel === "mcp" ? null : "mcp")}
+      />
+      <RailEntryButton
+        icon="panel-right"
+        label="辅助对话 Ctrl+Alt+D"
+        lit={props.panel === "drawer"}
+        onClick={() => props.onPanel(props.panel === "drawer" ? null : "drawer")}
+      />
       <span style={{ flex: 1 }} />
-      {props.sessionActions !== false && props.sessionActions}
+      {props.railEntries.map((entry) => (
+        <RailEntryButton
+          key={entry.label}
+          icon={entry.icon}
+          label={entry.label}
+          lit={entry.lit}
+          onClick={entry.onClick}
+        />
+      ))}
     </aside>
   );
 }
 
-/** 会话动作区（RightRail 底部）：复制转录。从旧 ActionRail 原样搬来。 */
-export function SessionActions(props: { onCopyTranscript: () => void; canCopy: boolean }) {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 1200);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
-  return (
-    <RailAction
-      label={copied ? "Transcript copied" : "Copy transcript"}
-      disabled={!props.canCopy}
-      onClick={() => {
-        props.onCopyTranscript();
-        setCopied(true);
-      }}
-    >
-      {/* 复制成功用图标换字形，不用颜色——颜色是第二信号 */}
-      <Icon name={copied ? "check" : "copy"} size={16} />
-    </RailAction>
-  );
-}
-
-/** 会话动作的 26px 方块（与顶部入口同规格，但永不点亮——它们不是开关）。 */
-function RailAction(props: {
-  label: string;
-  disabled?: boolean;
-  onClick?: () => void;
-  children: React.ReactNode;
-}) {
-  const disabled = props.disabled === true;
+/**
+ * 26px 入口方块：顶部三入口与底部应用入口**同规格同点亮配方**——点亮 =
+ * `--glass-bg` + `--shadow-composer`（与面板融合的单层 token，见头注释），
+ * 再点已点亮的由调用方表达成收起。
+ */
+function RailEntryButton(props: { icon: IconName; label: string; lit: boolean; onClick: () => void }) {
+  const lit = props.lit;
   return (
     <button
       type="button"
       title={props.label}
-      disabled={disabled}
+      aria-label={props.label}
+      aria-pressed={lit}
       onClick={props.onClick}
       style={{
         width: 26,
@@ -150,21 +123,22 @@ function RailAction(props: {
         justifyContent: "center",
         padding: 0,
         border: 0,
+        cursor: "pointer",
         borderRadius: "var(--radius-sm)",
-        background: "transparent",
-        // 玻璃上禁用不用 opacity：调暗的字在半透明面上既不是墨也不是壁纸，改用实色 tertiary
-        color: disabled ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
-        cursor: disabled ? "default" : "pointer",
+        background: lit ? "var(--glass-bg)" : "transparent",
+        boxShadow: lit ? "var(--shadow-composer)" : "none",
+        color: lit ? "var(--color-text-primary)" : "var(--color-text-secondary)",
       }}
       onMouseEnter={(e) => {
-        if (disabled) return;
+        if (lit) return;
         e.currentTarget.style.background = "var(--color-bg-hover)";
       }}
       onMouseLeave={(e) => {
+        if (lit) return;
         e.currentTarget.style.background = "transparent";
       }}
     >
-      {props.children}
+      <Icon name={props.icon} size={16} />
     </button>
   );
 }

@@ -122,6 +122,15 @@ export function Sidebar(props: {
   settingsTab: SettingsTab;
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
+  /**
+   * Archived / Carryovers 两个子视图的开关由 App 持有（2026-09-22：入口迁到右栏
+   * 底部，状态跟着入口走，侧栏只剩受控渲染）。**子视图本体仍在侧栏**：换掉
+   * 主列表区，不弹窗。
+   */
+  showArchived: boolean;
+  showCarryovers: boolean;
+  onShowArchived: (next: boolean) => void;
+  onShowCarryovers: (next: boolean) => void;
   /** 当前宽度（px）。拖动中由调用方只改本地 state，松手才落 settings */
   width: number;
   onWidthChange: (width: number) => void;
@@ -132,13 +141,6 @@ export function Sidebar(props: {
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
-  const [showArchived, setShowArchived] = useState(false);
-  /**
-   * 「遗留事项」面板（收尾仪式的收割面）：与 Archived 同构的视图切换——
-   * 换掉主列表区，不弹窗。收尾仪式的核心承诺是「没办完的不丢」，这个面板
-   * 就是兑现的地方；每次打开现读（carryovers 缓存在引擎里，随手是新的）。
-   */
-  const [showCarryovers, setShowCarryovers] = useState(false);
   /**
    * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
    * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
@@ -166,7 +168,7 @@ export function Sidebar(props: {
     // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
     // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCompact, session.sessions.length, settingsOpen, showArchived, showCarryovers]);
+  }, [filterCompact, session.sessions.length, settingsOpen, props.showArchived, props.showCarryovers]);
   /**
    * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
    * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
@@ -233,13 +235,11 @@ export function Sidebar(props: {
    * 那条行）正好因为 N 为 0 而禁用。判定与理由在 `subview-exit.ts`。
    */
   useEffect(() => {
-    if (shouldExitSubview(showArchived, archived.length)) setShowArchived(false);
-  }, [showArchived, archived.length]);
+    if (shouldExitSubview(props.showArchived, archived.length)) props.onShowArchived(false);
+  }, [props.showArchived, props.onShowArchived, archived.length]);
   useEffect(() => {
-    if (shouldExitSubview(showCarryovers, session.carryovers.length)) setShowCarryovers(false);
-  }, [showCarryovers, session.carryovers.length]);
-  /** 未办遗留总数（底部 Carryovers 行的角标只数未办的——办结的不算「还有事」） */
-  const openTodoTotal = session.carryovers.filter((item) => item.status === "open").length;
+    if (shouldExitSubview(props.showCarryovers, session.carryovers.length)) props.onShowCarryovers(false);
+  }, [props.showCarryovers, props.onShowCarryovers, session.carryovers.length]);
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   const sessionList = describeList(session.loads.sessions, session.sessions.length);
@@ -306,8 +306,10 @@ export function Sidebar(props: {
     window.addEventListener("pointerup", up, { once: true });
   };
 
-  // —— 折叠态：48px 图标条（RailButton 规格：32px 方块、tooltip 即标签、
-  // 底部 archive + settings 簇）。折叠期间列表不可达，要切会话先展开。
+  // —— 折叠态：48px 图标条（RailButton 规格：32px 方块、tooltip 即标签）。
+  // 折叠期间列表不可达，要切会话先展开。Archived / Carryovers / Settings
+  // 不在这里重复摆入口：它们的唯一入口在右栏底部（2026-09-22 裁决），
+  // 折叠态也能点到（右栏不折叠）。
   if (collapsed) {
     return (
       <aside
@@ -332,38 +334,6 @@ export function Sidebar(props: {
           title="New task"
           accent
           onClick={startNewTask}
-        />
-        <span style={{ flex: 1 }} />
-        <RailButton
-          icon="archive"
-          title={`Archived (${session.sessions.filter((m) => m.archived).length})`}
-          active={showArchived && !settingsOpen && !showCarryovers}
-          onClick={() => {
-            setCollapsed(false);
-            setShowCarryovers(false);
-            setShowArchived(true);
-          }}
-        />
-        {session.carryovers.length > 0 && (
-          <RailButton
-            icon="list-todo"
-            title={`Carryovers (${session.carryovers.filter((item) => item.status === "open").length} open)`}
-            active={showCarryovers && !settingsOpen && !showArchived}
-            onClick={() => {
-              setCollapsed(false);
-              setShowArchived(false);
-              setShowCarryovers(true);
-            }}
-          />
-        )}
-        <RailButton
-          icon="settings"
-          title="Settings"
-          active={settingsOpen}
-          onClick={() => {
-            setCollapsed(false);
-            props.onOverlay("settings");
-          }}
         />
       </aside>
     );
@@ -459,7 +429,7 @@ export function Sidebar(props: {
         「进行中且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
         筛选无从谈起，不摆。
       */}
-      {live.length > 0 && !settingsOpen && !showArchived && !showCarryovers && (
+      {live.length > 0 && !settingsOpen && !props.showArchived && !props.showCarryovers && (
         <div
           ref={filterRowRef}
           style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
@@ -522,7 +492,7 @@ export function Sidebar(props: {
           paddingRight: "var(--space-3)",
         }}
       >
-        {showArchived && !settingsOpen ? (
+        {props.showArchived && !settingsOpen ? (
           <>
             {/*
               标题行左端的返回键是 Archived 视图的**显式出口**。以前出去只能再点一次
@@ -534,7 +504,7 @@ export function Sidebar(props: {
                 label="Back to tasks"
                 title="Back to the task list"
                 size={20}
-                onClick={() => setShowArchived(false)}
+                onClick={() => props.onShowArchived(false)}
                 style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
               >
                 <Icon name="chevron-left" size={13} strokeWidth={1.8} />
@@ -551,16 +521,16 @@ export function Sidebar(props: {
               />
             ))}
           </>
-        ) : showCarryovers && !settingsOpen ? (
+        ) : props.showCarryovers && !settingsOpen ? (
           <CarryoverPanel
             carryovers={session.carryovers}
             sessions={session.sessions}
             onSetStatus={session.setCarryoverStatus}
-            onBack={() => setShowCarryovers(false)}
+            onBack={() => props.onShowCarryovers(false)}
             onResumeNew={(item) => {
               // 开工即回对话：退出面板（下次进重新开），新会话落在来源会话的组里
               // （cwd / 归属跟随它）——不能落进一个收着的组里无声无息
-              setShowCarryovers(false);
+              props.onShowCarryovers(false);
               props.onOverlay(null);
               setCollapsed(false);
               const source = session.sessions.find((m) => m.id === item.sourceSessionId);
@@ -573,13 +543,13 @@ export function Sidebar(props: {
             }}
             onResumeInSource={(item) => {
               // 右键备选：续跑原会话——跳回去看它接着干（同 onOpenTask 的退场）
-              setShowCarryovers(false);
+              props.onShowCarryovers(false);
               props.onOverlay(null);
               session.continueCarryoverInSource(item);
             }}
             onOpenTask={(id) => {
               // 看完事项跳回对话：退出面板、切到那条会话（面板下次进重新开）
-              setShowCarryovers(false);
+              props.onShowCarryovers(false);
               open(id);
             }}
           />
@@ -713,60 +683,6 @@ export function Sidebar(props: {
           </>
         )}
       </div>
-
-      {/* 整条可点，不是只有图标可点——和 New task 一样是一整根横条 */}
-      {/**
-        归档不是删除：它把会话从主列表移走，收在这一行后面。
-        一条都没有时禁用——一个点了什么都不发生的入口比禁用更让人困惑。
-        **但正在 Archived 视图里时永不禁用**：那时它不是「进去」而是「出来」，
-        把人关在里面的正是这一句禁用（main 上的 bug）。
-      */}
-      <NavRow
-        icon="archive"
-        label={`Archived (${archived.length})`}
-        hint={
-          showArchived
-            ? "Back to the task list"
-            : archived.length === 0
-              ? "Nothing archived yet"
-              : "Archived tasks"
-        }
-        active={showArchived && !settingsOpen && !showCarryovers}
-        disabled={archived.length === 0 && !showArchived}
-        onClick={() => {
-          setShowCarryovers(false);
-          setShowArchived((value) => !value);
-        }}
-      />
-      {/**
-        遗留事项（收尾仪式收割的清单）：按来源会话分组，勾选即办结。
-        一条都没有时禁用（同 Archived 的理由）；数量只数未办的。
-        **正在 Carryovers 视图里时永不禁用**：那时它是「出来」而不是「进去」，
-        禁用它就把人关在了面板里（Archived 上同款 bug）。
-      */}
-      <NavRow
-        icon="list-todo"
-        label={`Carryovers (${openTodoTotal})`}
-        hint={
-          showCarryovers
-            ? "Back to the task list"
-            : openTodoTotal === 0
-              ? "Nothing carried over yet"
-              : "Leftover items collected at wrap-up"
-        }
-        active={showCarryovers && !settingsOpen && !showArchived}
-        disabled={session.carryovers.length === 0 && !showCarryovers}
-        onClick={() => {
-          setShowArchived(false);
-          setShowCarryovers((value) => !value);
-        }}
-      />
-      <NavRow
-        icon="settings"
-        label="Settings"
-        active={settingsOpen}
-        onClick={() => props.onOverlay(settingsOpen ? null : "settings")}
-      />
     </aside>
     {/*
       拖宽热区：侧栏与对话面之间那道缝里的 6px，紧贴面的左缘。
