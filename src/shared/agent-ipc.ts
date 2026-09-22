@@ -84,6 +84,12 @@ export const ipcChannels = {
    * 按需现算，不进 meta——工作台存不存在是磁盘上的事实，不是会话的状态。
    */
   sessionWorkbenchStat: "session:workbench-stat",
+  /** 文件面板（契约在 `files.ts`）：这条会话的根清单（工作台 / 工作区 / 附加目录），主进程算 */
+  fsRoots: "fs:roots",
+  /** 列一层目录。root 必须是 fs:roots 回过的，dir 必须在 root 之内，否则拒绝——renderer 不是通用文件浏览器 */
+  fsList: "fs:list",
+  /** 在 Finder 里显示一个路径（同 root/dir 白名单） */
+  fsReveal: "fs:reveal",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
