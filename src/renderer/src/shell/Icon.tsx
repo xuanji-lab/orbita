@@ -151,9 +151,9 @@ export function Icon(props: {
    * 用 `star` / `star-off` 表达开关会把「已星标」画成一个带斜杠的禁止符。
    * 填色走 CSS 变量（同 `--icon-stroke`），不改写 SVG 源串。
    *
-   * 多形状图标（如 circle-check 的「外圈 + 勾」）还要一个内部标记色：全部同色的话
-   * 勾会被填实的外圈吃掉。行内标记的落定态恒是 accent（星标与完成标记同一条规则），
-   * 所以内部标记取 accent 的配对前景色；具体哪个形状用它写在 styles.css 里。
+   * 今天唯一的消费者是星标，而 star 是**单一形状**，填实一路继承下去就是对的。
+   * （多形状图标如 circle-check 还需要一个内部标记色才不至于把勾吃掉，等真有那么
+   * 一个消费者时再加——没有调用点的代码不留在分支里。）
    */
   fill?: boolean;
   style?: React.CSSProperties;
@@ -164,7 +164,7 @@ export function Icon(props: {
     height: size,
     "--icon-stroke": props.strokeWidth ?? 2,
     ...(props.fill === true
-      ? { "--icon-fill": "currentColor", "--icon-mark": "var(--color-accent-fg)" }
+      ? { "--icon-fill": "currentColor" }
       : null),
     ...(props.spin === true ? { animation: "orbita-spin 1s linear infinite" } : null),
     ...props.style,

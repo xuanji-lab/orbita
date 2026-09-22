@@ -481,18 +481,6 @@ body {
 }
 
 /*
- * 填实的 circle-check（完成标记的落定态）。它和 star 不同——star 是一个形状，
- * circle-check 是「外圈 + 勾」两个：fill 一路继承下去会把勾也涂成同色，勾随之
- * 整个消失，落定态变成一个看不出含义的实心圆点。勾因此改用 --icon-mark
- * （Icon 在 fill 时给成 accent 的配对前景色，即反白），外圈实心、勾反白。
- * 未填实时 --icon-mark 没有值，回落 currentColor，与原来逐像素相同。
- */
-.orbita-icon svg.lucide-circle-check > path {
-  fill: none;
-  stroke: var(--icon-mark, currentColor);
-}
-
-/*
  * 聊天 markdown（.chat-md）：assistant 文本块经 react-markdown 渲染后的元素样式。
  * 值全部取设计系统 token。
  *

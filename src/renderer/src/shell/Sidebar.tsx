@@ -13,6 +13,7 @@ import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsVi
 import { describeList } from "../features/chat/load-state.ts";
 import { shouldExitArchived } from "./archived-view.ts";
 import { nextCompletion } from "./completion-mark.ts";
+import { rowStatusIcon } from "./row-status.ts";
 import {
   SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
@@ -36,14 +37,6 @@ const COLLAPSE_BREAKPOINT = 960;
  */
 const IDLE_SUGGEST_DAYS = 7;
 const IDLE_SUGGEST_MS = IDLE_SUGGEST_DAYS * 24 * 60 * 60 * 1000;
-
-/**
- * 归档后那条撤销提示待多久。**归档走「先做、给一个撤销」而不是「先问再做」**：
- * 归档不是删除，数据一条不少，为它摆一个模态确认是拿一次必答题去换一次误操作；
- * 撤销把代价放在真的点错的那几秒里，而不是每一次归档上。
- * 6 秒是「看一眼列表发现不对」够用、又不至于在侧栏底部常驻一条的长度。
- */
-const ARCHIVE_UNDO_MS = 6000;
 
 /** 完成状态筛选的单选组三档：全部 / 进行中 / 已完成（Starred 是叠加开关，正交） */
 type StatusFilter = "all" | "active" | "done";
@@ -97,12 +90,6 @@ export function Sidebar(props: {
   const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
   const [showArchived, setShowArchived] = useState(false);
-  /**
-   * 刚归档的那一条（带标题，提示里要说清楚收走的是谁）。`null` = 没有待撤销的动作。
-   * 只记一条：连着归两条时后一条顶掉前一条的提示——堆栈式撤销要在侧栏底部堆一叠条，
-   * 而「刚手滑了一下」要撤的总是最后那一下。
-   */
-  const [undo, setUndo] = useState<{ id: string; title: string } | null>(null);
   /**
    * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
    * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
@@ -165,20 +152,6 @@ export function Sidebar(props: {
   useEffect(() => {
     if (shouldExitArchived(showArchived, archived.length)) setShowArchived(false);
   }, [showArchived, archived.length]);
-  /** 撤销提示自己会走：6 秒后消失，不需要用户关它。新的归档重置计时。 */
-  useEffect(() => {
-    if (undo === null) return;
-    const timer = window.setTimeout(() => setUndo(null), ARCHIVE_UNDO_MS);
-    return () => window.clearTimeout(timer);
-  }, [undo]);
-  /**
-   * 归档 / 取消归档都走这里，为的是归档那一下能顺手挂上撤销。
-   * 取消归档不需要撤销（它本身就是一次恢复），顺手清掉旧提示。
-   */
-  const setArchived = (meta: SessionMeta, next: boolean): void => {
-    session.archiveSession(meta.id, next);
-    setUndo(next ? { id: meta.id, title: meta.title } : null);
-  };
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   const sessionList = describeList(session.loads.sessions, session.sessions.length);
@@ -457,7 +430,6 @@ export function Sidebar(props: {
                 session={session}
                 active={meta.id === openId}
                 onClick={() => open(meta.id)}
-                onArchive={(next) => setArchived(meta, next)}
               />
             ))}
           </>
@@ -528,7 +500,6 @@ export function Sidebar(props: {
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
                       onRemove={() => session.removeWorkspace(workspace.id)}
                       onOpen={open}
-                      onArchive={setArchived}
                     />
                   ))
                 ) : null}
@@ -574,7 +545,6 @@ export function Sidebar(props: {
                         session={session}
                         active={meta.id === openId}
                         onClick={() => open(meta.id)}
-                        onArchive={(next) => setArchived(meta, next)}
                       />
                     ))}
                     {loose.length > SESSIONS_PREVIEW_LIMIT && (
@@ -594,19 +564,6 @@ export function Sidebar(props: {
         )}
       </div>
 
-      {/*
-        刚归档了什么的轻提示，压在 Archived 行上方——动作的去处就在它下面一行，
-        「收到哪了」不需要另外解释。只在主列表与 Archived 视图里出，不压到 Settings 上。
-      */}
-      {undo !== null && !settingsOpen && (
-        <UndoStrip
-          title={undo.title}
-          onUndo={() => {
-            session.archiveSession(undo.id, false);
-            setUndo(null);
-          }}
-        />
-      )}
       {/* 整条可点，不是只有图标可点——和 New task 一样是一整根横条 */}
       {/*
         归档不是删除：它把会话从主列表移走，收在这一行后面。
@@ -684,8 +641,6 @@ function WorkspaceGroup(props: {
   onRename: (name: string) => void;
   onRemove: () => void;
   onOpen: (id: string) => void;
-  /** 归档走侧栏那一层（它要顺手挂撤销提示），不在行里直接改存储 */
-  onArchive: (meta: SessionMeta, next: boolean) => void;
 }) {
   const [hover, setHover] = useState(false);
   const [armed, setArmed] = useState(false);
@@ -824,7 +779,6 @@ function WorkspaceGroup(props: {
               session={props.session}
               active={meta.id === props.openId}
               onClick={() => props.onOpen(meta.id)}
-              onArchive={(next) => props.onArchive(meta, next)}
             />
           ))}
           {props.sessions.length > SESSIONS_PREVIEW_LIMIT && (
@@ -973,7 +927,8 @@ function ShowAllRow(props: { full: boolean; hidden: number; onClick: () => void 
  * 里一处定义，选中态的两个候选与取舍也写在那儿。
  */
 function NavRow(props: {
-  icon: IconName;
+  /** `null` = 这一行没有图标可画（会话行的空状态槽）。槽仍然占位，标题才对得齐 */
+  icon: IconName | null;
   label: string;
   active: boolean;
   onClick?: (() => void) | undefined;
@@ -1025,7 +980,12 @@ function NavRow(props: {
           color: disabled ? "var(--color-text-tertiary)" : (props.tone ?? "var(--color-text-secondary)"),
         }}
       >
-        <Icon name={props.icon} size={13} strokeWidth={1.8} spin={props.spin ?? false} />
+        {props.icon === null ? (
+          // 空槽：不画任何东西，但占与图标等宽的位置——有标记的行和没标记的行标题对齐
+          <span style={{ width: 13, height: 13 }} />
+        ) : (
+          <Icon name={props.icon} size={13} strokeWidth={1.8} spin={props.spin ?? false} />
+        )}
       </span>
       <span
         style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
@@ -1051,8 +1011,6 @@ function SessionRow(props: {
   session: ChatSession;
   active: boolean;
   onClick: () => void;
-  /** 翻归档位。行里不直接调 store：归档要带出一条撤销提示，而那条提示住在侧栏底部 */
-  onArchive: (next: boolean) => void;
 }) {
   const { meta, session } = props;
   const [hover, setHover] = useState(false);
@@ -1065,18 +1023,20 @@ function SessionRow(props: {
    */
   const [focused, setFocused] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [step, setStep] = useState<"main" | "move" | "delete" | "archive-done">("main");
+  const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
+    "main",
+  );
   const live = meta.id === session.sessionId;
   // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
   const running = session.phaseOf(meta.id) !== "idle";
   // 失败同样查槽：后台会话重试耗尽（turnError）也亮 Failed，不止正看着的那条
   const failed = !running && (session.turnErrorOf(meta.id) !== null || (live && session.error !== null));
-  /**
-   * 置顶图标**只顶替 idle 那一档**。正在跑或失败时状态优先——
-   * 置顶是用户的偏好，运行中是正在发生的事，后者更该被看见。
-   */
-  const idle = !(running || failed);
   const done = isSessionDone(meta);
+  /**
+   * 行首状态槽：running > failed > done > pinned > 空。优先级与理由在
+   * `row-status.ts`（纯函数 + 测试）。`null` = 这一行没什么可说，槽留空。
+   */
+  const status = rowStatusIcon({ running, failed, done, pinned: meta.pinned === true });
   // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）
   const doneCount = session.sessions.filter(
     (m) => isSessionDone(m) && !m.archived,
@@ -1086,11 +1046,6 @@ function SessionRow(props: {
    * updatedAt 现算，不落盘），hover 才出现的一个轻提示，不弹通知不加角标。
    */
   const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
-  const status = running
-    ? { icon: "loader-circle" as const, tone: "var(--color-accent)", label: "Running", spin: true }
-    : failed
-      ? { icon: "triangle-alert" as const, tone: "var(--color-danger)", label: "Failed", spin: false }
-      : { icon: "check" as const, tone: "var(--color-text-tertiary)", label: "Idle", spin: false };
 
   const items: MenuItem[] =
     step === "delete"
@@ -1104,6 +1059,23 @@ function SessionRow(props: {
             onSelect: () => session.removeSession(meta.id),
           },
         ]
+      : step === "archive"
+        ? [
+            /**
+             * 归档的**二次确认**（wafo 2026-09-22）。上一版这里是「先做，再给一条
+             * 撤销条」，用户用下来要的不是撤销而是确认：一条会自己走掉的提示把“没做对”
+             * 的补救窗口变成了限时题，而确认把判断放在动作发生之前，不计时。
+             * 与 Delete 同款：菜单内原地换第二组项，不开模态框。不带 danger——
+             * 归档不是破坏性动作，只是换个地方放。
+             */
+            { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+            {
+              id: "confirm",
+              label: "Archive task",
+              icon: "archive",
+              onSelect: () => session.archiveSession(meta.id, true),
+            },
+          ]
       : step === "archive-done"
         ? [
             { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
@@ -1154,12 +1126,22 @@ function SessionRow(props: {
               icon: "download",
               onSelect: () => session.exportSession(meta.id),
             },
-            {
-              id: "archive",
-              label: meta.archived ? "Unarchive" : "Archive",
-              icon: meta.archived ? "archive-restore" : "archive",
-              onSelect: () => props.onArchive(meta.archived !== true),
-            },
+            // Unarchive 不确认（一步）：它本身就是一次恢复，再问一遍是白收一道必答题。
+            // Archive 走两段式（同 Delete）：它把会话从主列表拿走，点错了不在原处。
+            meta.archived
+              ? {
+                  id: "archive",
+                  label: "Unarchive",
+                  icon: "archive-restore" as const,
+                  onSelect: () => session.archiveSession(meta.id, false),
+                }
+              : {
+                  id: "archive",
+                  label: "Archive…",
+                  icon: "archive" as const,
+                  keepOpen: true,
+                  onSelect: () => setStep("archive"),
+                },
             // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
             // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动
             ...(doneCount > 0
@@ -1208,11 +1190,11 @@ function SessionRow(props: {
         </span>
       ) : (
         <NavRow
-          icon={idle && meta.pinned ? "pin" : status.icon}
+          icon={status?.icon ?? null}
           label={meta.title === "" ? "New task" : meta.title}
-          tone={idle && meta.pinned ? "var(--color-text-secondary)" : status.tone}
-          spin={status.spin}
-          iconTitle={idle && meta.pinned ? "Pinned" : status.label}
+          tone={status?.tone}
+          spin={status?.spin ?? false}
+          iconTitle={status?.label}
           active={props.active}
           onClick={props.onClick}
           style={{ flex: 1, minWidth: 0 }}
@@ -1241,50 +1223,36 @@ function SessionRow(props: {
         <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
       </IconButton>
       {/**
-        完成标记：**与星标同一条行内标记规则**（星在前、完成在后，并列同一槽）：
-        行 hover / 键盘聚焦时浮出描边形（tertiary），点一下即落定；落定后常显、实心、accent，
-        再点一下就是 Reopen。行与行互不影响。这是 wafo 2026-09-22 定下的通用规则
-        （「之后的标也沿用这个逻辑」），不再为它单独发明一种交互。
-        不占状态位、不随运行态消失；未完成是默认态，静止时不显——默认态不制造噪音。
+        完成开关：**只在 hover / 键盘聚焦时出现，done 也不常显**（wafo 2026-09-22）。
+        上一版落定后常显一个实心 accent 圈勾，而行首状态槽里已经有一个 accent 勾了——
+        一行两个勾，第二个不多说任何事。显示归状态槽，这里只留**入口**：
+        悬停才出，描边，点一下切换完成 / Reopen。
+        tooltip 兼任闲置建议：超过 7 天没动静的任务，建议就写在这个开关的 tooltip 里，
+        而不再多摆一个长得一模一样的建议按钮（同一个动作不该有两个按钮）。
         done_with_todos 本分支写不出来（遗留事项扫描在后面的 PR），它的专用图标等那时再接。
       */}
       <IconButton
         label={done ? "Reopen this task" : "Mark this task done"}
-        title={done ? "Done · click to reopen" : "Mark this task done"}
+        title={
+          done
+            ? "Done · click to reopen"
+            : idleSuggested
+              ? `Idle for ${IDLE_SUGGEST_DAYS}+ days · mark done?`
+              : "Mark this task done"
+        }
         size={20}
         onClick={() =>
           session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
         }
         style={{
           borderRadius: "var(--radius-xs)",
-          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          opacity: done || hover || focused ? 1 : 0,
+          color: "var(--color-text-tertiary)",
+          opacity: hover || focused ? 1 : 0,
           transition: "opacity var(--duration-instant) var(--ease-standard)",
         }}
       >
-        <Icon name="circle-check" size={13} strokeWidth={1.8} fill={done} />
+        <Icon name="circle-check" size={13} strokeWidth={1.8} />
       </IconButton>
-      {/**
-        闲置建议：open 且未归档、最后一次活动超过 7 天的会话，hover 时出现的
-        一个轻提示按钮——不弹通知、不打断、不加红点。点了就是普通 Mark done
-        （可从菜单或头部 Reopen）。纯派生：不落盘、不设状态，渲染时按 updatedAt 现算。
-      */}
-      {idleSuggested && (
-        <IconButton
-          label="Mark done?"
-          title={`No activity for ${IDLE_SUGGEST_DAYS}+ days — mark this task done?`}
-          size={20}
-          onClick={() => session.setCompletionSession(meta.id, "done")}
-          style={{
-            borderRadius: "var(--radius-xs)",
-            color: "var(--color-text-tertiary)",
-            opacity: hover || focused ? 1 : 0,
-            transition: "opacity var(--duration-instant) var(--ease-standard)",
-          }}
-        >
-          <Icon name="circle-check" size={12} strokeWidth={1.8} />
-        </IconButton>
-      )}
       <Menu
         items={items}
         align="end"
@@ -1330,61 +1298,6 @@ function Empty(props: { children: React.ReactNode }) {
     >
       {props.children}
     </p>
-  );
-}
-
-/**
- * 归档后的撤销提示。**归档不弹确认框**：它不是删除，数据一条不少，
- * 为它摆一个必答题是把代价摄在每一次正确操作上；撤销把代价只留给真点错的那几秒。
- * 6 秒后自己走，不在侧栏底部留一个要人动手关的东西。
- *
- * 就地做成本地组件而不是通用 toast：仓里今天只有这一处需要它，
- * 第二个消费者出现之前不建抽象。
- */
-function UndoStrip(props: { title: string; onUndo: () => void }) {
-  return (
-    <div
-      role="status"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        margin: "2px 0",
-        padding: "var(--space-1) var(--space-2)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--color-bg-muted)",
-        fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: "var(--line-height-caption)",
-        color: "var(--color-text-secondary)",
-      }}
-    >
-      <Icon name="archive" size={12} strokeWidth={1.8} />
-      {/* 收走的是哪一条写在 tooltip 里：288px 的一行装不下标题，而它又不能没人说 */}
-      <span
-        title={props.title === "" ? "Archived a task" : `Archived · ${props.title}`}
-        style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-      >
-        Archived
-      </span>
-      <button
-        type="button"
-        onClick={props.onUndo}
-        style={{
-          flex: "0 0 auto",
-          border: 0,
-          background: "transparent",
-          padding: 0,
-          fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-caption)",
-          color: "var(--color-text-primary)",
-          textDecoration: "underline",
-          cursor: "pointer",
-        }}
-      >
-        Undo
-      </button>
-    </div>
   );
 }
 
