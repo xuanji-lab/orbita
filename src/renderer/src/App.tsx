@@ -1,11 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from "@shared/settings";
+import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
 import { ChannelColumn, type ChannelOpenRequest } from "./features/chat/ChannelColumn";
+import { SubSessionsPanel } from "./features/chat/SubSessionsPanel";
+import {
+  SUB_SESSIONS_LIST,
+  escapeFrom,
+  openSubSession,
+  syncToMainSession,
+  type SubSessionsView,
+} from "./features/chat/sub-sessions-state";
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
@@ -140,6 +149,76 @@ export function App() {
     [setChannelShownOverride],
   );
 
+  /**
+   * Sub-sessions 面板（子会话 PR4c）：入口只在主槽正看着一条有子会话的根会话时出现，
+   * 复用上面 `channelParentId` 的「根会话 / 非设置页」口径——两处必须一致，否则
+   * 入口出现但点开是空的，或入口消失了通道数据还在算。
+   */
+  const subSessionChildren = channelParentId === null ? [] : childSessions(session.sessions, channelParentId);
+  const hasSubSessions = subSessionChildren.length > 0;
+
+  /**
+   * 面板两层状态机（`sub-sessions-state.ts`，原样搬自旧 wip）：App 持有，
+   * `SubSessionsPanel` 受控渲染——理由同 `channelShown`/`channelOpenRequest`：
+   * 派出卡点击（主槽的 `ChatView`）与面板本体分处两棵子树，accent 描边要在
+   * 主槽里知道「面板会话层现在开着哪条」，状态放子组件里够不到。
+   */
+  const [subSessionsNav, setSubSessionsNav] = useState<SubSessionsView>(SUB_SESSIONS_LIST);
+  /** 会话层的查看槽：与主槽/抽屉槽同一份引擎，互不串（同 drawerView 的先例） */
+  const subSessionsView = useSessionView(engine, "subsessions");
+
+  // 主槽换会话 → 面板回列表层（“面板里开着的那条挂错了母亲”，2.1 裁决）；
+  // 只在 mainOpenId 真的变化时才重置——见 syncToMainSession 本身的纯逻辑
+  const subSessionsMainIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const nextMainId = mainOpenId === "" ? null : mainOpenId;
+    setSubSessionsNav((prev) => syncToMainSession(prev, subSessionsMainIdRef.current, nextMainId));
+    subSessionsMainIdRef.current = nextMainId;
+  }, [mainOpenId]);
+
+  // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
+  // 面板本身也不该继续挂着一条够不到数据的内容）
+  useEffect(() => {
+    if (rightPanel === "subsessions" && !hasSubSessions) setRightPanel(null);
+  }, [rightPanel, hasSubSessions]);
+
+  // 会话层换了目标 id → 查看槽跟着 openSession；openSession 内部本身有「已经是
+  // 这条就不重复打开」的守卫，这里不必比对上一次的 id。subSessionsView 每次渲染
+  // 都是新对象（同 drawerView 的先例），依赖里只放 subSessionsNav 本身
+  useEffect(() => {
+    if (subSessionsNav.kind === "session") void subSessionsView.openSession(subSessionsNav.sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subSessionsNav]);
+
+  /** 派出卡点击（主槽 ChatView）与列表行点击（面板本体）共用同一个稳定回调 */
+  const openSubSessionInPanel = useCallback((childId: string) => {
+    setSubSessionsNav(openSubSession(childId));
+    setRightPanel("subsessions");
+  }, []);
+  /** 头部「N sub-sessions」芯片：强制回列表层（不是「resume 到上次的位置」） */
+  const openSubSessionsList = useCallback(() => {
+    setSubSessionsNav(SUB_SESSIONS_LIST);
+    setRightPanel("subsessions");
+  }, []);
+  /** Open as main：主槽换看这条子会话，面板关闭（2.1 裁决） */
+  const openAsMain = useCallback(
+    (childId: string) => {
+      void session.openSession(childId);
+      setRightPanel(null);
+    },
+    [session],
+  );
+  /** 子会话头部面包屑「↑ 父标题」：主槽回到父会话（2.2） */
+  const openParent = useCallback(
+    (parentId: string) => {
+      void session.openSession(parentId);
+    },
+    [session],
+  );
+  /** 右栏会话层正开着的那条子会话 id——只在面板真的开着时才算「点亮」，见派出卡描边 */
+  const litSubSessionId =
+    rightPanel === "subsessions" && subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
+
   // 停靠记忆在设置里（哪些 task 开在辅助对话的标签条上）；兼容存量文件：
   // 旧版本可能把 "new" 占位写进了 docked，启动时一并洗掉。
   // 抽屉并入统一面板壳后 drawer.width 不再有消费者——宽度共用 rightPanelWidth（Q3）。
@@ -165,16 +244,24 @@ export function App() {
   }, []);
 
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）；窄窗下通道列是覆盖层，
-  // Esc 同样收起（3.2 裁决：Esc 或再点入口收起）
+  // Esc 同样收起（3.2 裁决：Esc 或再点入口收起）。Sub-sessions 面板开着且在
+  // 会话层时，Esc 只退一层回列表（escapeFrom），不直接关掉整个面板——与面板
+  // 内部「返回」按钮同一个退出台阶（子会话 PR4c 2.1）
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
-      if (rightPanel !== null) setRightPanel(null);
+      if (rightPanel === "subsessions") {
+        const next = escapeFrom(subSessionsNav);
+        if (next === null) setRightPanel(null);
+        else setSubSessionsNav(next);
+      } else if (rightPanel !== null) {
+        setRightPanel(null);
+      }
       if (narrow && channelColumnOpen) setChannelShownOverride(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightPanel, narrow, channelColumnOpen, setChannelShownOverride]);
+  }, [rightPanel, subSessionsNav, narrow, channelColumnOpen, setChannelShownOverride]);
 
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
   useEffect(() => {
@@ -231,7 +318,8 @@ export function App() {
    * 底部行时代的行为：子视图互斥，设置盖着时谁也不亮。Carryovers 沿用折叠
    * rail 时代的先例：0 条不渲染入口（Archived 恒渲染，同先例）。
    */
-  const archivedCount = session.sessions.filter((m) => m.archived).length;
+  // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
+  const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const railEntries: RailEntry[] = [
     ...(session.carryovers.length > 0
@@ -301,7 +389,15 @@ export function App() {
                 }}
               />
             ) : (
-              <ChatView session={session} providersError={providersError} onOpenChannel={openChannel} />
+              <ChatView
+                session={session}
+                providersError={providersError}
+                onOpenChannel={openChannel}
+                onOpenSubSession={openSubSessionInPanel}
+                onOpenSubSessions={openSubSessionsList}
+                onOpenParent={openParent}
+                litSubSessionId={litSubSessionId}
+              />
             )}
           </div>
           {/* 通道列（子会话 PR4b）：主槽与右栏之间，常驻挂载同 RightPanelSlot 的先例——
@@ -357,6 +453,20 @@ export function App() {
                     )
                   }
                 />
+              ) : shownPanel === "subsessions" && channelParentId !== null ? (
+                <SubSessionsPanel
+                  parentId={channelParentId}
+                  parentTitle={channelParentTitle}
+                  session={session}
+                  engine={engine}
+                  view={subSessionsView}
+                  nav={subSessionsNav}
+                  onOpenChild={openSubSessionInPanel}
+                  onBackToList={() => setSubSessionsNav(SUB_SESSIONS_LIST)}
+                  onOpenAsMain={openAsMain}
+                  onClose={() => handlePanel(null)}
+                  providersError={providersError}
+                />
               ) : null}
             </div>
           </RightPanelSlot>
@@ -371,6 +481,7 @@ export function App() {
               ? { open: channelColumnOpen, onToggle: () => setChannelShownOverride(!channelColumnOpen) }
               : null
           }
+          subSessions={channelParentId !== null && hasSubSessions ? { count: subSessionChildren.length } : null}
         />
       </div>
     </div>

@@ -112,6 +112,22 @@ describe("selectHomeCards", () => {
     assert.equal(cards[1]!.todo, false);
   });
 
+  test("子会话不进首页卡，即使它最活跃、有 open carryover（子会话 PR4c 2.3）", () => {
+    const sessions = [
+      meta({ id: "child", updatedAt: 99, parentId: "root-a" }),
+      meta({ id: "root-a", updatedAt: 30 }),
+      meta({ id: "root-b", updatedAt: 20 }),
+    ];
+    const carryovers = [todo("t1", "child", "子会话的遗留")];
+    const cards = selectHomeCards(sessions, carryovers);
+    assert.deepEqual(
+      cards.map((card) => card.sessionId),
+      ["root-a", "root-b"],
+    );
+    // 子会话没进卡，它名下的 carryover 也就没让任何一张卡变成待办卡
+    assert.ok(cards.every((card) => card.todo === false));
+  });
+
   test("单卡超过 4 条 open carryover 截断到 4 行，不做「等 N 项」", () => {
     const sessions = [meta({ id: "a", updatedAt: 30 })];
     const carryovers = ["t1", "t2", "t3", "t4", "t5"].map((id, index) =>

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import { ChatView } from "../features/chat/ChatView";
 import type { ChatSession, SessionEngine } from "../features/chat/useChatSession";
-import type { SessionMeta } from "@shared/session";
+import { rootSessions, type SessionMeta } from "@shared/session";
 import {
   NEW_TASK_TAB,
   closeTab,
@@ -167,7 +167,9 @@ function Picker(props: {
   onNew: () => void;
   onBack: (() => void) | null;
 }) {
-  const candidates = props.sessions.filter((meta) => meta.id !== props.excludeId);
+  // 子会话不进选择器（子会话 PR4c 2.3）：它唯一的入口是母会话的右栏 Sub-sessions
+  // 面板，并排打开挑的是「另一条 task」，不该在这里意外把某条子会话拽出来单独开
+  const candidates = rootSessions(props.sessions).filter((meta) => meta.id !== props.excludeId);
   const onBack = props.onBack;
   return (
     <div className="drawer-picker">

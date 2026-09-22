@@ -7,7 +7,7 @@ import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
-import { isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
+import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
@@ -254,7 +254,9 @@ export function Sidebar(props: {
   }, [props.showCarryovers, props.onShowCarryovers, session.carryovers.length]);
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
-  const sessionList = describeList(session.loads.sessions, session.sessions.length);
+  // 用 roots.length 不用 session.sessions.length：这里描述的是左栏那份列表
+  // （只列根会话，子会话 PR4c 2.3），两个数字不一致会出现「读到 0 条」误报或反之
+  const sessionList = describeList(session.loads.sessions, roots.length);
   /**
    * 主列表的筛选管线（筛选区 chips）。状态（All/Active/Done，单选组）、星标与
    * Has todos（两个叠加开关）三条正交条件串在同一个 filter 里。**只作用于主浏览
@@ -1219,8 +1221,10 @@ function SessionRow(props: {
   const status = rowStatusIcon({ running, failed, pinned: meta.pinned === true });
   // 这条会话的未办遗留数（行尾角标，与筛选同口径）
   const openTodos = openTodoCount(session.carryovers, meta.id);
-  // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）
-  const doneCount = session.sessions.filter(
+  // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）。子会话不参与
+  // 归档（session.ts 的契约），`archiveDoneSessions` 的目标同样已过 rootSessions
+  // 过滤——这里的显示数必须与它的实际目标数一致，否则按钮上写的数比真做的多
+  const doneCount = rootSessions(session.sessions).filter(
     (m) => isSessionDone(m) && !m.archived,
   ).length;
   /**
@@ -1228,6 +1232,9 @@ function SessionRow(props: {
    * updatedAt 现算，不落盘），hover 才出现的一个轻提示，不弹通知不加角标。
    */
   const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
+  // 删父连带删子（session.ts 的级联契约）：删除确认要把这个后果说出来，不能只
+  // 提工作台文件数——子会话数是更容易被忽略、也更重的一条后果（子会话 PR4c 2.4）
+  const childCount = childSessions(session.sessions, meta.id).length;
 
   /**
    * 进删除确认步：异步拉工作台文件数，到了再补进文案——拉取不阻塞菜单，
@@ -1256,12 +1263,21 @@ function SessionRow(props: {
           {
             id: "confirm",
             label: "Delete permanently",
-            // 有文件就把数说出来（1 用单数），走 hint 而不是拼进 label：菜单最宽 200px，
-            // 拼进去会被 ellipsis 吃掉、只剩「Delete permanently · …」，等于没提示。
-            // 没拉到 / 没文件就不出 hint，不拿一句不确定的话吓用户
-            ...(workbenchFiles === null
+            // 后果说清楚才能删：子会话数摆在文件数前面——它更容易被忽略，也是
+            // 删除唯一会连带删掉别的会话的后果。走 hint 而不是拼进 label：菜单
+            // 最宽 200px，「N sub-sessions · M files」这类全称经常放不下（拼进去
+            // 会被 ellipsis 吃掉，等于没提示），改用更紧凑的「N sub · M files」
+            // （机器事实，允许省掉单复数语法糖）。都没有就不出 hint。
+            ...(childCount === 0 && workbenchFiles === null
               ? {}
-              : { hint: `+${workbenchFiles} file${workbenchFiles === 1 ? "" : "s"}` }),
+              : {
+                  hint: [
+                    childCount > 0 ? `+${childCount} sub` : null,
+                    workbenchFiles === null ? null : `+${workbenchFiles} file${workbenchFiles === 1 ? "" : "s"}`,
+                  ]
+                    .filter((part): part is string => part !== null)
+                    .join(" · "),
+                }),
             icon: "trash-2",
             danger: true,
             onSelect: () => session.removeSession(meta.id),

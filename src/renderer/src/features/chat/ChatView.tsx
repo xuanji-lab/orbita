@@ -84,7 +84,13 @@ import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { thinkingLevelLabel, THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
-import { deriveSessionTitle, type ChannelMarkRecord, type CompactedRecord, type SessionCompletion } from "@shared/session";
+import {
+  childSessions,
+  deriveSessionTitle,
+  type ChannelMarkRecord,
+  type CompactedRecord,
+  type SessionCompletion,
+} from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 
@@ -133,8 +139,36 @@ export function ChatView(props: {
    * ChatView 不传（undefined），标记保持不可点——那里没有通道列可跳。
    */
   onOpenChannel?: (childId: string, messageId: string | null) => void;
+  /**
+   * 点派出卡 → 打开右栏 Sub-sessions 面板并直接进入这条子会话的会话层（子会话
+   * PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与 Sub-sessions 面板自己
+   * 内部渲染的 ChatView（查看子会话）都不传，派出卡保持不可点，也符合「UI 只做
+   * 一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
+   */
+  onOpenSubSession?: (childId: string) => void;
+  /**
+   * 点头部「N sub-sessions」芯片 → 打开右栏 Sub-sessions 面板的**列表层**（子会话
+   * PR4c）。只有主槽的 ChatView 拿到它。
+   */
+  onOpenSubSessions?: () => void;
+  /**
+   * 子会话被 Open as main 之后：头部标题前的面包屑「↑ 父标题」点了回主槽的父会话
+   * （子会话 PR4c）。只有主槽的 ChatView 拿到它。
+   */
+  onOpenParent?: (parentId: string) => void;
+  /**
+   * 右栏 Sub-sessions 面板会话层正开着的子会话 id（子会话 PR4c）：派出卡按它描边。
+   * 只有主槽的 ChatView 拿到非 null 值。
+   */
+  litSubSessionId?: string | null;
+  /**
+   * 不渲染输入框与排队条（子会话 PR4c）：Sub-sessions 面板的会话层用它——那里是
+   * 只读查看 + 审批，不给用户直接对子会话说话的入口（说话走 Open as main）。
+   * 审批条不受影响，照常渲染——用户必须能在这里直接批子会话的工具调用。
+   */
+  hideComposer?: boolean;
 }) {
-  const { session, providersError, homeBare } = props;
+  const { session, providersError, homeBare, hideComposer } = props;
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -242,6 +276,9 @@ export function ChatView(props: {
   // 一条子会话查看时 ownSide 会是 "child"）。辅助对话抽屉不传 onOpenChannel，
   // 这里恒 null，与 ownSide 无关。
   const openChannel = ownSide === "parent" ? (props.onOpenChannel ?? null) : null;
+  // 子会话 PR4c：派出卡的点击与描边同一套「只有主槽才接」的门槛，openChannel 上面已有先例
+  const openSubSession = ownSide === "parent" ? (props.onOpenSubSession ?? null) : null;
+  const litSubSessionId = props.litSubSessionId ?? null;
   const channel = useMemo<ChannelViewContext>(
     () => ({
       ownSide,
@@ -250,9 +287,47 @@ export function ChatView(props: {
       channelSummaries,
       childPhaseOf: session.phaseOf,
       openChannel,
+      openSubSession,
+      litSubSessionId,
     }),
-    [ownSide, openMeta?.parentId, titles, channelSummaries, session.phaseOf, openChannel],
+    [
+      ownSide,
+      openMeta?.parentId,
+      titles,
+      channelSummaries,
+      session.phaseOf,
+      openChannel,
+      openSubSession,
+      litSubSessionId,
+    ],
   );
+
+  /**
+   * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）：只在
+   * `ownSide` 为 "parent" 且这条根会话确有子会话时才有内容——与派出卡同一条
+   * 「子会话没有自己的子会话（今天）」的现状一致。waiting 计通道状态 waiting
+   * 的子会话数；为 0 时芯片只显示前半（不拼出 "· 0 waiting"）。点击调用方按
+   * `onOpenSubSessions` 是否给了决定是否可点，同 `ChannelMarkPill` 的门槛。
+   */
+  const subSessionRows = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
+  const subSessionsChip =
+    subSessionRows.length === 0
+      ? null
+      : {
+          count: subSessionRows.length,
+          waiting: subSessionRows.filter((child) => channelSummaries.get(child.id)?.status === "waiting").length,
+        };
+  /**
+   * 子会话在主槽打开时的面包屑「↑ 父标题」（2.2）：只在 `onOpenParent` 给了
+   * （主槽专属，同 `onOpenSubSessions`）且这条会话确有 `parentId` 时出现。
+   * 父标题的查找/兜底复用 `peerTitleOf`——同一句「对面是谁」的口径不另写一份。
+   */
+  const parentId = openMeta?.parentId;
+  const onOpenParentProp = props.onOpenParent;
+  const parentCrumb =
+    onOpenParentProp !== undefined && parentId !== undefined
+      ? { title: peerTitleOf(channel, parentId), onClick: () => onOpenParentProp(parentId) }
+      : null;
 
   const composer = (
     <Composer
@@ -493,6 +568,9 @@ export function ChatView(props: {
         scanless={openMeta?.piSessionFile == null}
         // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
         onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
+        subSessionsChip={subSessionsChip}
+        onOpenSubSessions={props.onOpenSubSessions}
+        parentCrumb={parentCrumb}
         footer={
           <>
             {notices}
@@ -508,16 +586,25 @@ export function ChatView(props: {
                 onCancel={session.cancelCarryovers}
               />
             )}
-            {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
-            <QueueStrip
-              items={session.queued}
-              phase={session.phase}
-              onSendNow={session.sendQueuedNow}
-              onWithdraw={session.withdrawQueued}
-              onMove={session.moveQueuedTo}
-              titles={channel.titles}
-            />
-            {composer}
+            {/*
+              子会话 PR4c：Sub-sessions 面板的会话层不给输入框——那里是只读查看 +
+              审批（上面 ApprovalBar 不受影响，照常渲染）。排队条跟着composer一起
+              藏：排队是「等发出的下一句话」，没有输入框就没有下一句话可排。
+            */}
+            {hideComposer !== true && (
+              <>
+                {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
+                <QueueStrip
+                  items={session.queued}
+                  phase={session.phase}
+                  onSendNow={session.sendQueuedNow}
+                  onWithdraw={session.withdrawQueued}
+                  onMove={session.moveQueuedTo}
+                  titles={channel.titles}
+                />
+                {composer}
+              </>
+            )}
           </>
         }
       >
@@ -734,6 +821,18 @@ function Pane(props: {
   scanless?: boolean;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
+  /**
+   * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）。null = 不出现
+   * （没有子会话）。点击走 `onOpenSubSessions`——不给时芯片仍显示（信息性），
+   * 只是不可点，同 `ChannelMarkPill` 的门槛。
+   */
+  subSessionsChip?: { count: number; waiting: number } | null;
+  onOpenSubSessions?: (() => void) | undefined;
+  /**
+   * 子会话被 Open as main 后头部标题前的面包屑「↑ 父标题」（子会话 PR4c，2.2）。
+   * null = 不出现（本会话不是子会话，或调用方不是主槽）。
+   */
+  parentCrumb?: { title: string; onClick: () => void } | null;
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: (() => void) | undefined;
@@ -764,6 +863,40 @@ function Pane(props: {
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
+        {/* 面包屑「↑ 父标题」：子会话被 Open as main 后，标题前的一句「你是从哪来的」——
+            caption tertiary，不与标题抢重量；点击回主槽的父会话（子会话 PR4c，2.2） */}
+        {props.parentCrumb != null && (
+          <button
+            type="button"
+            onClick={props.parentCrumb.onClick}
+            title={`Back to "${props.parentCrumb.title}"`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--space-1)",
+              flex: "0 0 auto",
+              maxWidth: 160,
+              border: 0,
+              background: "transparent",
+              padding: 0,
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: "var(--font-size-caption)",
+              color: "var(--color-text-tertiary)",
+            }}
+          >
+            <Icon name="arrow-up" size={11} strokeWidth={1.8} />
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {props.parentCrumb.title}
+            </span>
+          </button>
+        )}
         <InlineName
           editing={editing}
           value={props.title}
@@ -842,6 +975,11 @@ function Pane(props: {
             />
           </IconButton>
         )}
+        {/* 次要芯片「N sub-sessions · M waiting」：信息性，onOpenSubSessions 给了才可点
+            （辅助对话里渲染的 ChatView 不传，芯片仍显示、只是不可点） */}
+        {props.subSessionsChip != null && (
+          <SubSessionsChip chip={props.subSessionsChip} onClick={props.onOpenSubSessions} />
+        )}
         <span
           title={props.badgeTitle}
           style={{
@@ -891,6 +1029,41 @@ function Pane(props: {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）。waiting 为 0
+ * 时只拼前半——不拼出一句「· 0 waiting」，那不是「有事要你做」，不值得占位。
+ * `onClick` 未给时渲染成 `span`（信息性、不可点），同 `ChannelMarkPill` 的做法。
+ */
+function SubSessionsChip(props: { chip: { count: number; waiting: number }; onClick?: () => void }) {
+  const { count, waiting } = props.chip;
+  const text = waiting > 0 ? `${count} sub-sessions · ${waiting} waiting` : `${count} sub-sessions`;
+  const style: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "var(--space-1)",
+    flex: "0 0 auto",
+    border: 0,
+    background: "transparent",
+    padding: 0,
+    font: "inherit",
+    fontSize: "var(--font-size-caption)",
+    color: waiting > 0 ? "var(--color-warning)" : "var(--color-text-tertiary)",
+    ...(props.onClick !== undefined ? { cursor: "pointer" } : {}),
+  };
+  const content = (
+    <>
+      <Icon name="git-fork" size={12} strokeWidth={1.8} />
+      {text}
+    </>
+  );
+  if (props.onClick === undefined) return <span style={style}>{content}</span>;
+  return (
+    <button type="button" onClick={props.onClick} title="Open sub-sessions" style={style}>
+      {content}
+    </button>
   );
 }
 
@@ -2031,7 +2204,16 @@ function DelegateToolLine(props: {
       : props.channel.childPhaseOf(card.childId) !== "idle"
         ? "running"
         : "idle";
-  return <DelegateCardView card={card} status={status} taskPreview={taskPreview} />;
+  const openSubSession = props.channel.openSubSession;
+  return (
+    <DelegateCardView
+      card={card}
+      status={status}
+      taskPreview={taskPreview}
+      onClick={openSubSession === null ? undefined : () => openSubSession(card.childId)}
+      lit={props.channel.litSubSessionId === card.childId}
+    />
+  );
 }
 
 /**

@@ -43,7 +43,14 @@ import {
   type CarryoverDraft,
 } from "./carryover-parse.ts";
 import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.ts";
-import type { Carryover, ChannelMarkRecord, CompactedRecord, SessionCompletion, SessionMeta } from "@shared/session";
+import {
+  rootSessions,
+  type Carryover,
+  type ChannelMarkRecord,
+  type CompactedRecord,
+  type SessionCompletion,
+  type SessionMeta,
+} from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 
 /**
@@ -792,7 +799,10 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
    * 列表可能是旧的），全部落定后只刷新一次列表。
    */
   const archiveDoneSessions = useCallback(() => {
-    const targets = sessionsRef.current.filter(
+    // 子会话不参与归档（session.ts 的契约：它们永不进左栏/Archived，母会话归档
+    // 与否也不影响它——子会话 PR4c 2.3）；rootSessions 过滤，不止是不显示它，
+    // 批量动作本身就不该碰它
+    const targets = rootSessions(sessionsRef.current).filter(
       (meta) => (meta.completion ?? "open") !== "open" && !meta.archived,
     );
     if (targets.length === 0) return;

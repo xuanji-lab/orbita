@@ -18,9 +18,14 @@ import { Icon, type IconName } from "./Icon";
  * 应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，覆盖 2026-09-12
  * 「底部只放会话动作」：复制转录已并入会话行的「导出」，右栏不再挂会话动作）。
  * 中间用弹性空隙隔开两组的语义。
+ *
+ * 顶部第五个入口 Sub-sessions（子会话 PR4c）：与 Files/Skills/MCP/辅助对话
+ * 共用同一个面板位（互斥），只在主槽正看着一条**有子会话的根会话**时出现——
+ * 入口数据（要不要出现、N 是多少）由 App 传入，本组件不自己算（同通道列开关
+ * `channelColumn` 先例）。
  */
 
-export type RightPanelKind = "files" | "skills" | "mcp" | "drawer";
+export type RightPanelKind = "files" | "skills" | "mcp" | "drawer" | "subsessions";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -43,6 +48,11 @@ export function RightRail(props: {
    * 与 `panel` 不互斥，因此不走 `railEntries`（那组是"面板"的互斥语义），单独一个 prop。
    */
   channelColumn: { open: boolean; onToggle: () => void } | null;
+  /**
+   * Sub-sessions 面板入口（子会话 PR4c）：null = 不出现（没在看根会话，或这条
+   * 根会话没有子会话）。与 `panel` 共用互斥语义，走 `onPanel` 同一条切换逻辑。
+   */
+  subSessions: { count: number } | null;
 }) {
   return (
     <aside
@@ -102,6 +112,14 @@ export function RightRail(props: {
         lit={props.panel === "drawer"}
         onClick={() => props.onPanel(props.panel === "drawer" ? null : "drawer")}
       />
+      {props.subSessions !== null && (
+        <RailEntryButton
+          icon="git-fork"
+          label={`Sub-sessions (${props.subSessions.count})`}
+          lit={props.panel === "subsessions"}
+          onClick={() => props.onPanel(props.panel === "subsessions" ? null : "subsessions")}
+        />
+      )}
       {props.channelColumn !== null && (
         <RailEntryButton
           icon="messages-square"

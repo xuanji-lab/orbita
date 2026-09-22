@@ -50,6 +50,16 @@ export interface ChannelViewContext {
    * （`reply_subsession` 送出的那条没有 id 可指）滚到通道底部。
    */
   openChannel: ((childId: string, messageId: string | null) => void) | null;
+  /**
+   * 点派出卡 → 打开右栏 Sub-sessions 面板并直接进入该子会话的会话层（子会话
+   * PR4c）。null = 不可点（同 `openChannel` 的门槛：辅助对话抽屉不传）。
+   */
+  openSubSession: ((childId: string) => void) | null;
+  /**
+   * 右栏 Sub-sessions 面板会话层正开着的那个子会话 id；派出卡按它加 accent 描边
+   * （设计稿 `.card.lit`）。null = 没有（面板没开，或开着的是别的父会话下的子会话）。
+   */
+  litSubSessionId: string | null;
 }
 
 /**
@@ -257,6 +267,12 @@ const CARD_KICKER = {
   color: "var(--color-text-tertiary)",
 } satisfies React.CSSProperties;
 
+/** `.card.lit`（设计稿）：accent 描边 + 3px `--color-bg-active` 外环——右栏会话层正开着这条子会话时。 */
+const CARD_LIT_STYLE = {
+  borderColor: "var(--color-accent)",
+  boxShadow: "0 0 0 3px var(--color-bg-active)",
+} satisfies React.CSSProperties;
+
 /**
  * 派出卡：`delegate` 工具的结果卡（第一行 DELEGATED + 标题 + 状态，第二行任务
  * 首行截断，第三行模型 id · 思考档）。`card` 为 null 是 running 帧（details 随
@@ -264,11 +280,18 @@ const CARD_KICKER = {
  *
  * `status` 由调用方解出（channel summary 优先，否则看子会话在 renderer 会话槽
  * 里的 phase）——本组件是纯展示，不知道通道摘要或会话槽的存在。
+ *
+ * `onClick` 给定时渲染成 `button`（键盘可达）：子会话 PR4c，点了打开右栏
+ * Sub-sessions 面板并直接进入这条子会话的会话层。不给（辅助对话抽屉 / running
+ * 帧还没有 childId）时原样是 `div`，不可点——PR4a/4b 的行为原样保留。
+ * `lit` 为 true 时加 accent 描边（该子会话正是会话层开着的那条）。
  */
 export function DelegateCardView(props: {
   card: DelegateCard | null;
   status: DelegateCardStatus;
   taskPreview: string;
+  onClick?: () => void;
+  lit?: boolean;
 }) {
   if (props.card === null) {
     return (
@@ -279,10 +302,15 @@ export function DelegateCardView(props: {
       </div>
     );
   }
-  const { card, status } = props;
+  const { card, status, onClick } = props;
   const color = delegateStatusColor(status);
-  return (
-    <div style={CARD_STYLE}>
+  const style: React.CSSProperties = {
+    ...CARD_STYLE,
+    ...(props.lit === true ? CARD_LIT_STYLE : {}),
+    ...(onClick !== undefined ? { width: "100%", textAlign: "left", cursor: "pointer", font: "inherit" } : {}),
+  };
+  const content = (
+    <>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
         <span style={CARD_KICKER}>DELEGATED</span>
         <span
@@ -333,6 +361,12 @@ export function DelegateCardView(props: {
       >
         {card.modelId} · {thinkingLevelLabel(card.thinkingLevel, card.modelId)}
       </span>
-    </div>
+    </>
+  );
+  if (onClick === undefined) return <div style={style}>{content}</div>;
+  return (
+    <button type="button" onClick={onClick} title={`Open "${card.title}"`} style={style}>
+      {content}
+    </button>
   );
 }
