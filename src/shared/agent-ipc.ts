@@ -296,9 +296,17 @@ export interface TurnDirectories {
    * 父子会话互见对方的工作台（子会话 2026-09-23 裁决）：父的清单列每个子会话的、
    * 子的列父的。**只告知不硬拦**（同 attached）：label 是对方会话的标题，path 是对方
    * 工作台的绝对路径——父子各自工作台独立，但「任务说明在那个目录里」这件事
-   * 对面的模型该知道。缺席 = 没有父子关系（绝大多数会话）。
+   * 对面的模型该知道。
+   *
+   * `sessionId` 是对方会话的 id——`reply_subsession` 要靠它定位子会话。
+   * `relation` 是**对方**相对本会话的角色（子会话清单里父那一项是 `"parent"`、
+   * 父会话清单里每个子是 `"child"`）：runtime 靠它判断本会话是不是子会话，
+   * 决定注册哪些通道工具、讲哪段提示词——仅凭 label/path 分不出「列的是父还是子」
+   * （父有子时 related 也非空）。
+   *
+   * 缺席 = 没有父子关系（绝大多数会话）。
    */
-  related?: { label: string; path: string }[];
+  related?: { sessionId: string; relation: "parent" | "child"; label: string; path: string }[];
 }
 
 /** `channel:speak` 的载荷：用户在通道 composer 里代父发的那句话 */

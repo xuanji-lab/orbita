@@ -140,7 +140,9 @@ describe("resolveTurnDirectories 的 related（子会话 2026-09-23 裁决：父
       sessionId: CHILD,
       workspaceId: null,
     });
-    assert.deepEqual(dirs.related, [{ label: "母任务", path: sessions.workbenchPath(PARENT) }]);
+    assert.deepEqual(dirs.related, [
+      { sessionId: PARENT, relation: "parent", label: "母任务", path: sessions.workbenchPath(PARENT) },
+    ]);
   });
 
   test("父标题为空时 label 退回 Parent session", async () => {
@@ -150,7 +152,9 @@ describe("resolveTurnDirectories 的 related（子会话 2026-09-23 裁决：父
       sessionId: CHILD,
       workspaceId: null,
     });
-    assert.deepEqual(dirs.related, [{ label: "Parent session", path: sessions.workbenchPath(PARENT) }]);
+    assert.deepEqual(dirs.related, [
+      { sessionId: PARENT, relation: "parent", label: "Parent session", path: sessions.workbenchPath(PARENT) },
+    ]);
   });
 
   test("父会话开轮：related 列出每个子会话，label 是子标题，path 是子的工作台", async () => {
@@ -173,8 +177,8 @@ describe("resolveTurnDirectories 的 related（子会话 2026-09-23 裁决：父
     assert.deepEqual(
       [...(dirs.related ?? [])].sort((a, b) => a.label.localeCompare(b.label)),
       [
-        { label: "Sub-session", path: sessions.workbenchPath(CHILD2) },
-        { label: "先派出的", path: sessions.workbenchPath(CHILD) },
+        { sessionId: CHILD2, relation: "child", label: "Sub-session", path: sessions.workbenchPath(CHILD2) },
+        { sessionId: CHILD, relation: "child", label: "先派出的", path: sessions.workbenchPath(CHILD) },
       ].sort((a, b) => a.label.localeCompare(b.label)),
     );
   });

@@ -29,6 +29,26 @@ export function isReadOnlyTool(toolName: string): boolean {
   return (READ_ONLY_TOOLS as readonly string[]).includes(toolName);
 }
 
+/**
+ * 通道三件套（子会话 2026-09-23 裁决）：delegate / reply_subsession / report_to_parent，
+ * 三档模式一律放行。
+ *
+ * 它们是**协调**而不是**动作**——只写我们自己的通道账本（`ChannelStore`），不碰用户的
+ * 文件与 shell；真正有副作用的动作发生在子会话自己的工具调用上，那些照子会话的档位
+ * 过闸。不放行的后果：plan 档下父派不出子（delegate 被拒）、子连 done 都报不回去，
+ * 永远卡在那一轮；manual 档下每次回报都弹一次审批，而子会话的审批用户往往根本没在看，
+ * 通道就此卡死。
+ *
+ * **否决「并进 READ_ONLY_TOOLS」**：那个名单的语义是「只读」，manual 档下用户明确要
+ * 「全都问」、只读也问——而这三个工具问了没有意义（它们不改用户能看到的任何东西）。
+ * 单独立一个桶，语义与 READ_ONLY_TOOLS 不同，不能共用同一张表。
+ */
+export const CHANNEL_TOOLS = ["delegate", "reply_subsession", "report_to_parent"] as const;
+
+export function isChannelTool(toolName: string): boolean {
+  return (CHANNEL_TOOLS as readonly string[]).includes(toolName);
+}
+
 export type PermissionDecision =
   | { behavior: "allow" }
   /** 需要问用户；调用方负责把问题送到 UI 并等回答 */
@@ -41,6 +61,8 @@ export type PermissionDecision =
  */
 export function decidePermission(mode: PermissionMode, toolName: string): PermissionDecision {
   if (mode === "skip") return { behavior: "allow" };
+  // 通道三件套：三档一律放行，理由见 CHANNEL_TOOLS 的注释
+  if (isChannelTool(toolName)) return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
     return mode === "plan" ? { behavior: "allow" } : { behavior: "ask" };

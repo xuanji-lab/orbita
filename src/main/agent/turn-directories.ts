@@ -24,14 +24,17 @@ export async function resolveTurnDirectories(
   const attached = await workspaces.attachedDirsOf(turn.workspaceId);
   const workbench = sessions.workbenchPath(turn.sessionId);
 
-  // 父子会话互见对方的工作台（子会话 2026-09-23 裁决）：只告知不硬拦，
-  // related 缺席 = 没有父子关系（绝大多数会话）。
-  const related: { label: string; path: string }[] = [];
+  // 父子会话互见对方的工作台（子会话 2026-09-23 裁决，2026-09-23 加 sessionId/relation）：
+  // 只告知不硬拦，related 缺席 = 没有父子关系（绝大多数会话）。relation 是**对方**相对
+  // 本会话的角色——runtime 靠它判断本会话是不是子会话（决定注册哪些通道工具）。
+  const related: { sessionId: string; relation: "parent" | "child"; label: string; path: string }[] = [];
   const meta = await sessions.readMeta(turn.sessionId);
   const parentId = meta?.parentId;
   if (parentId !== undefined) {
     const parent = await sessions.readMeta(parentId);
     related.push({
+      sessionId: parentId,
+      relation: "parent",
       label: parent === null || parent.title === "" ? "Parent session" : parent.title,
       path: sessions.workbenchPath(parentId),
     });
@@ -44,6 +47,8 @@ export async function resolveTurnDirectories(
   });
   for (const child of children) {
     related.push({
+      sessionId: child.childId,
+      relation: "child",
       label: child.childTitle === "" ? "Sub-session" : child.childTitle,
       path: sessions.workbenchPath(child.childId),
     });
