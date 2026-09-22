@@ -11,7 +11,7 @@ import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
-import { shouldExitArchived } from "./archived-view.ts";
+import { shouldExitSubview } from "./subview-exit.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
@@ -228,12 +228,15 @@ export function Sidebar(props: {
   const live = session.sessions.filter((m) => !m.archived);
   const archived = session.sessions.filter((m) => m.archived);
   /**
-   * 归档空了就自动退回主列表——否则停在一个空视图里，而唯一的出口（底部
-   * 「Archived (N)」）正好因为 N 为 0 而禁用。判定与理由在 `archived-view.ts`。
+   * 子视图空了就自动退回主列表——否则停在一个空视图里，而唯一的出口（底部
+   * 那条行）正好因为 N 为 0 而禁用。判定与理由在 `subview-exit.ts`。
    */
   useEffect(() => {
-    if (shouldExitArchived(showArchived, archived.length)) setShowArchived(false);
+    if (shouldExitSubview(showArchived, archived.length)) setShowArchived(false);
   }, [showArchived, archived.length]);
+  useEffect(() => {
+    if (shouldExitSubview(showCarryovers, session.carryovers.length)) setShowCarryovers(false);
+  }, [showCarryovers, session.carryovers.length]);
   /** 未办遗留总数（底部 Carryovers 行的角标只数未办的——办结的不算「还有事」） */
   const openTodoTotal = session.carryovers.filter((item) => item.status === "open").length;
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
@@ -496,8 +499,9 @@ export function Sidebar(props: {
           >
             Starred
           </Chip>
+          {/* 灯泡 = 「这条会话还留着 idea / 没办完的事」（wafo 2026-09-22 裁决） */}
           <Chip
-            icon="list-todo"
+            icon="lightbulb"
             active={hasTodosOnly}
             title="Show tasks with open carryover items only"
             onClick={() => setHasTodosOnly((value) => !value)}
@@ -550,6 +554,7 @@ export function Sidebar(props: {
             carryovers={session.carryovers}
             sessions={session.sessions}
             onSetStatus={session.setCarryoverStatus}
+            onBack={() => setShowCarryovers(false)}
             onOpenTask={(id) => {
               // 看完事项跳回对话：退出面板、切到那条会话（面板下次进重新开）
               setShowCarryovers(false);
@@ -714,13 +719,21 @@ export function Sidebar(props: {
       {/**
         遗留事项（收尾仪式收割的清单）：按来源会话分组，勾选即办结。
         一条都没有时禁用（同 Archived 的理由）；数量只数未办的。
+        **正在 Carryovers 视图里时永不禁用**：那时它是「出来」而不是「进去」，
+        禁用它就把人关在了面板里（Archived 上同款 bug）。
       */}
       <NavRow
         icon="list-todo"
         label={`Carryovers (${openTodoTotal})`}
-        hint={openTodoTotal === 0 ? "Nothing carried over yet" : "Leftover items collected at wrap-up"}
+        hint={
+          showCarryovers
+            ? "Back to the task list"
+            : openTodoTotal === 0
+              ? "Nothing carried over yet"
+              : "Leftover items collected at wrap-up"
+        }
         active={showCarryovers && !settingsOpen && !showArchived}
-        disabled={session.carryovers.length === 0}
+        disabled={session.carryovers.length === 0 && !showCarryovers}
         onClick={() => {
           setShowArchived(false);
           setShowCarryovers((value) => !value);
@@ -1370,7 +1383,8 @@ function SessionRow(props: {
         hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后常显、accent；再点 = Reopen。
         图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
         tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
-        不另摆一个建议按钮。done_with_todos 的专用图标（lightbulb）等遗留事项 PR 再接。
+        不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
+        「还差几件」由右边那个灯泡角标单独说。
       */}
       <IconButton
         label={done ? "Reopen this task" : "Mark this task done"}
@@ -1406,6 +1420,9 @@ function SessionRow(props: {
         <span
           title={`${openTodos} open carryover item${openTodos === 1 ? "" : "s"} left`}
           style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 2,
             flex: "0 0 auto",
             marginInlineStart: -2,
             fontFamily: "var(--font-family-business)",
@@ -1415,6 +1432,8 @@ function SessionRow(props: {
             color: "var(--color-text-secondary)",
           }}
         >
+          {/* 灯泡与「Has todos」筛选同一个符号：光看数字读不出它数的是什么 */}
+          <Icon name="lightbulb" size={12} strokeWidth={1.8} />
           {openTodos}
         </span>
       )}
@@ -1462,19 +1481,39 @@ function CarryoverPanel(props: {
   sessions: readonly SessionMeta[];
   onSetStatus: (id: string, status: Carryover["status"]) => void;
   onOpenTask: (sessionId: string) => void;
+  /** 显式出口：标题行左端的返回键 */
+  onBack: () => void;
 }) {
   const groups = groupCarryovers(props.carryovers, props.sessions);
+  /**
+   * 标题行左端的返回键是本面板的**显式出口**（与 Archived 同款）：出去不该只能
+   * 再点一次底部那条 toggle——它既不像一个「返回」，又会在清单空了时禁用。
+   */
+  const header = (
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+      <IconButton
+        label="Back to tasks"
+        title="Back to the task list"
+        size={20}
+        onClick={props.onBack}
+        style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
+      >
+        <Icon name="chevron-left" size={13} strokeWidth={1.8} />
+      </IconButton>
+      <NodeLabel>Carryovers</NodeLabel>
+    </div>
+  );
   if (groups.length === 0) {
     return (
       <>
-        <NodeLabel>Carryovers</NodeLabel>
+        {header}
         <Empty>No carryover items yet. Wrap up a task to collect its loose ends.</Empty>
       </>
     );
   }
   return (
     <>
-      <NodeLabel>Carryovers</NodeLabel>
+      {header}
       {groups.map((group) => (
         <div
           key={group.session?.id ?? group.items[0]?.sourceSessionId}
