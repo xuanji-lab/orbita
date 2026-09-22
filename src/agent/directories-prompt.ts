@@ -1,0 +1,38 @@
+/**
+ * 开轮目录清单 —— 讲给模型听的一段说明（拼进 system prompt，同 gitAttributionGuideline
+ * 的注入方式）。**纯模块**：不 import electron，可被 `node --test` 直接加载。
+ *
+ * 讲的是 2026-09-22 裁决的三层地盘：
+ *   cwd           工作区文件夹（工具面的家）
+ *   attached      工作区挂的附加目录（只告知——工具面仍是 cwd + protectedPaths 黑名单）
+ *   workbench     会话私有草稿区（<userData>/workbenches/<sessionId>/）
+ *
+ * **只告知不硬拦**：pi 的 read/write 只把相对路径 resolve 到 cwd，不做包含性校验；
+ * 白名单硬拦是新功能，不是这份 prompt 的事。模型读到绝对路径自然会去用。
+ */
+import type { TurnDirectories } from "../shared/agent-ipc.ts";
+
+/**
+ * directories 缺席 = 空串（调用方按空串跳过这一段，不留空行；旧测试夹具不带这个字段）。
+ *
+ * attached 为空时省略那一段——留一行 "- (none)" 只会教模型模仿这个格式。
+ * workbench 恒出现：哪怕没挂任何附加目录，会话也总有草稿要落。
+ */
+export function describeDirectories(cwd: string, directories: TurnDirectories | undefined): string {
+  if (directories === undefined) return "";
+  const lines: string[] = ["<directories>", `Working directory (cwd): ${cwd}`];
+  if (directories.attached.length > 0) {
+    lines.push(
+      "Attached directories (read and write as the user allows; use absolute paths):",
+      ...directories.attached.map((dir) => `- ${dir}`),
+    );
+  }
+  lines.push(
+    `Session workbench: ${directories.workbench}`,
+    "  Private scratch space for this session: plans, handoffs, drafts, research notes. " +
+      "It may not exist yet — create it with mkdir -p on first use. " +
+      "Do not put user-facing deliverables here unless asked; those belong in the working directory.",
+    "</directories>",
+  );
+  return lines.join("\n");
+}

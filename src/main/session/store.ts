@@ -11,7 +11,7 @@
  */
 import { appendFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
@@ -125,6 +125,8 @@ export function aggregatePrefixUsage(records: readonly SessionRecord[]): AgentSt
 
 export class SessionStore {
   private readonly dir: string;
+  /** 会话工作台的根（<userData>/workbenches）。缺席时从 sessions 目录的父目录派生，测试临时目录因此天然隔离 */
+  private readonly workbenchesDir: string;
 
   /**
    * 每条会话的 meta 写入链（见 `queueMeta`）。会话删掉时清掉自己那条，
@@ -132,8 +134,9 @@ export class SessionStore {
    */
   private readonly metaWrites = new Map<string, Promise<unknown>>();
 
-  constructor(dir: string) {
+  constructor(dir: string, workbenchesDir?: string) {
     this.dir = dir;
+    this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
   }
 
   private metaPath(id: string): string {
@@ -144,6 +147,17 @@ export class SessionStore {
   private logPath(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
     return join(this.dir, `${id}.jsonl`);
+  }
+
+  /**
+   * 本会话的工作台目录 `<workbenches>/<id>/`：plan / handoff / 草稿的落点，随开轮
+   * 告诉模型。**目录不预建**（首次写入才由模型 mkdir，空会话不占目录）。
+   * 不套在 sessions/ 里：protectedPaths 把整个 sessions/ 设为工具面只读，工作台必须可写。
+   * id 同样过白名单——路径拼进开轮命令，和 metaPath/logPath 一个安全等级。
+   */
+  workbenchPath(id: string): string {
+    if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
+    return join(this.workbenchesDir, id);
   }
 
   /**

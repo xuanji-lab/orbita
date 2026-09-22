@@ -139,7 +139,7 @@ void app.whenReady().then(() => {
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
-  const sessions = new SessionStore(join(configDir, "sessions"));
+  const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"));
   const record = createSessionRecorder(sessions);
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
@@ -214,6 +214,7 @@ void app.whenReady().then(() => {
     agentHost,
     providers,
     sessions,
+    workspaces,
     join(configDir, "pi-sessions"),
     // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],

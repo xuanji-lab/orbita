@@ -18,7 +18,10 @@ import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
+import type { WorkspaceStore } from "../workspace/store.ts";
 import type { McpServer } from "../../shared/mcp.ts";
+import type { TurnDirectories } from "../../shared/agent-ipc.ts";
+import { resolveTurnDirectories } from "./turn-directories.ts";
 import { AgentHost } from "./host.ts";
 
 /**
@@ -77,9 +80,10 @@ function turnFields(
   piSessionDir: string,
   /** 工具禁区（sessions/ 与 pi-sessions/）：主进程定，随每轮发给闸门 */
   protectedPaths: string[],
-  /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好 + Git 标识）：无状态化后每轮命令都要带全 */
+  /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好 + Git 标识 + 目录清单）：无状态化后每轮命令都要带全 */
   environment: {
     skillsDirs: string[];
+    directories: TurnDirectories;
     mcpServers: Record<string, McpServer>;
     compaction: CompactionSetting;
     gitAttribution: boolean;
@@ -103,6 +107,8 @@ export function registerAgentIpc(
   host: AgentHost,
   providers: ProviderStore,
   sessions: SessionStore,
+  /** 工作区存储：开轮目录清单的 attached 从这里查（turn-directories.ts） */
+  workspaces: WorkspaceStore,
   /** pi 把自己的 session 文件放在哪。**路径策略在主进程**，agent 进程只收数据 */
   piSessionDir: string,
   /** 工具禁区（sessions/ 与 pi-sessions/）。**路径策略在主进程**，随每轮发给闸门 */
@@ -132,6 +138,13 @@ export function registerAgentIpc(
   /** Git 标识同款每轮现读；缺席 = 开启（兼容从没动过这个开关的旧设置文件） */
   const readGitAttribution = async (): Promise<boolean> =>
     (await settings.read()).gitAttribution ?? true;
+
+  /**
+   * 开轮目录清单每轮现读现装配：工作区挂新目录、换工作区，下一轮即生效。
+   * 逻辑在 turn-directories.ts（纯模块，可直接测）；这里只做路由。
+   */
+  const readDirectories = (input: SubmitAgentInput | CompactAgentInput): Promise<TurnDirectories> =>
+    resolveTurnDirectories(workspaces, sessions, input);
 
   /**
    * 命名专用模型（设置里的 titleModel）装配成带密钥的载荷。没指定、指的
@@ -201,6 +214,7 @@ export function registerAgentIpc(
       text: input.text,
       ...turnFields(input, provider, piSessionDir, protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
+        directories: await readDirectories(input),
         mcpServers: await readMcpServers(),
         compaction: await readCompaction(),
         gitAttribution: await readGitAttribution(),
@@ -217,12 +231,12 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
