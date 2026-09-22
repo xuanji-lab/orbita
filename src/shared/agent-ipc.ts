@@ -229,12 +229,6 @@ export interface AgentTurnContext {
 /** 发一轮（renderer → 主进程的载荷） */
 export interface SubmitAgentInput extends AgentTurnContext {
   text: string;
-  /**
-   * internal = 系统注入的内部 prompt（收尾仪式的扫描指令）：落盘带
-   * `visibility: "internal"`，transcript 不渲染，但 pi 本子里是普通 user 消息
-   * （复用对话 cache 的前提）。缺席 = 普通用户消息。
-   */
-  visibility?: "internal";
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -252,8 +246,6 @@ export type AgentCommand =
       type: "submit";
       sessionId: string;
       text: string;
-      /** internal = 系统注入的内部 prompt：回显的 user item 落盘带 visibility 标记（见 SubmitAgentInput）。 */
-      visibility?: "internal";
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;

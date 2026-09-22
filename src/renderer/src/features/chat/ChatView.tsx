@@ -221,8 +221,34 @@ export function ChatView(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
-      {/* 收尾仪式的降级 / 结果反馈：一句中性的话，不当错误报 */}
-      {session.scanNotice !== null && <Notice>{session.scanNotice}</Notice>}
+      {/*
+        收尾仪式的降级 / 结果反馈：一句中性的话，不当错误报。
+        读不懂扫描结果时这行带一个 Retry（重发同一条扫描消息）——失败不该只留一句
+        「已标完成」就无路可走。
+      */}
+      {session.scanNotice !== null && (
+        <Notice>
+          {session.scanNotice}
+          {session.retryClosingScan !== null && (
+            <button
+              type="button"
+              onClick={session.retryClosingScan}
+              style={{
+                border: 0,
+                background: "transparent",
+                padding: 0,
+                fontFamily: "var(--font-family-base)",
+                fontSize: "var(--font-size-control)",
+                color: "var(--color-text-primary)",
+                textDecoration: "underline",
+                cursor: "pointer",
+              }}
+            >
+              Retry
+            </button>
+          )}
+        </Notice>
+      )}
       {/*
         只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
         （guideline §四把这条代价写明了）。

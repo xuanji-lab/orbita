@@ -20,16 +20,63 @@ export interface CarryoverDraft {
 }
 
 /**
- * 注入的内部 prompt（visibility: "internal"）。收尾仪式的扫描指令——措辞就是
- * 契约：解析器认的输出形状（一个 fenced json 块）在这里约定，两处一起改。
+ * 收尾扫描的 prompt。**它就是一条普通的用户消息**：点顶部的完成键 = 以当前
+ * 会话的身份发出这句话，正常进消息流、正常进 pi 历史。
+ *
+ * 上一版是注入的隐形消息（visibility: "internal"），实机上用户看到的是「正文被折叠
+ * 了、不知道它在干什么」，而一旦解析失败就静默丢失——发了什么、模型回了什么
+ * 都无处可查。改成可见消息后这两件事都在屏幕上（代价：它进历史）。
+ *
+ * 措辞就是契约：解析器认的输出形状（一个 fenced json 块）在这里约定，两处一起改。
  */
-export const CLOSING_SCAN_PROMPT = `收尾扫描：回看本次对话，列出所有「说了但没做完」的开放环——答应要做但还没做的、被岔开没继续的话题、明确延后未完成的任务。
-只输出一个 fenced json 代码块，不要输出任何其他内容，格式：
+export const CLOSING_SCAN_PROMPT = `这个会话已经完成了。回看整段对话，把还没做完的事（答应要做的、被岔开的、明确延后的）扫描出来。
+只输出一个 fenced json 代码块，不要输出任何其他内容：
 {"carryovers": [{"title": "一句话事项", "detail": "上下文摘录"}]}
-没有遗留事项就输出 {"carryovers": []}。`;
+没有就输出 {"carryovers": []}。`;
 
 /** 扫描轮的超时（ms）：超了就降级直接标完成，不让用户卡在等待里。 */
 export const CLOSING_SCAN_TIMEOUT_MS = 60_000;
+
+/**
+ * 扫描轮落定后，从转录里取**解析输入**：基线之后最后一条已完成的 assistant
+ * 消息的全部 text 块拼接。null = 这一轮根本没出现可用的回答。
+ *
+ * 三个口径各有来历：
+ *   - **只取 text 块**：thinking 块常常排在前面，它不是回答；
+ *   - **全部 text 块拼接**：围栏块可能被拆在多个 text 块里，只取最后一块会拿到半截围栏；
+ *   - **跳过 streaming**：半截的流不是答案，宁可当没回答也不拿半截的去解。
+ */
+export function collectScanAnswer(
+  transcript: readonly TranscriptItem[],
+  baseline: number,
+): string | null {
+  let answer: string | null = null;
+  for (const item of transcript.slice(baseline)) {
+    if (item.role !== "assistant" || item.status === "streaming") continue;
+    answer = item.content
+      .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+  }
+  return answer;
+}
+
+/**
+ * 扫描这**一轮**用哪个模型：设置里配了命名模型（`settings.titleModel`）就用它，
+ * 没配就用会话自己的模型。扫描是一次机械的总结活，与命名同类，没必要花主力
+ * 模型的钱。
+ *
+ * **只影响这一轮**：返回新对象、不改传入的轮次上下文；且 submit 携带的
+ * providerId / modelId 不会回写会话 meta——主进程只在首轮建 meta 时落它，跨轮的
+ * 模型真值由 `model` 事件写，而开轮不发这个事件。下一轮自然回到会话模型。
+ */
+export function scanTurnModel<T extends { providerId: string; modelId: string }>(
+  turn: T,
+  naming: { providerId: string; modelId: string } | undefined,
+): T {
+  if (naming === undefined) return turn;
+  return { ...turn, providerId: naming.providerId, modelId: naming.modelId };
+}
 
 const FENCE_RE = /^([ \t]*```)[ \t]*([A-Za-z0-9_-]*)[ \t]*$/;
 

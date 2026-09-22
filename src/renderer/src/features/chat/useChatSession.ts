@@ -34,8 +34,10 @@ import { usableProviders } from "../settings/model-menu";
 import {
   CLOSING_SCAN_PROMPT,
   CLOSING_SCAN_TIMEOUT_MS,
+  collectScanAnswer,
   locateMessageRange,
   parseCarryoverResponse,
+  scanTurnModel,
   type CarryoverDraft,
 } from "./carryover-parse.ts";
 import type { Carryover, CompactedRecord, SessionCompletion, SessionMeta } from "@shared/session";
@@ -203,6 +205,11 @@ export interface ChatSession {
   cancelCarryovers: () => void;
   /** 扫描降级 / 结果的一句反馈；下一次发起扫描或打开会话时清 */
   scanNotice: string | null;
+  /**
+   * 读不懂扫描结果时的重试（重发同一条扫描消息）。null = 没有可重试的失败。
+   * 解析失败不再只留一句「已标完成」就完事——那是把失败变成死胡同。
+   */
+  retryClosingScan: (() => void) | null;
   send: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
@@ -639,6 +646,12 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
           coalescer.push(event);
           return;
         }
+        // **先交付攒着的流式帧，再应用这条事件**：否则即时事件会赶超缓冲里的
+        // progress，最直接的后果是 phase idle 先于本轮最后一条回答的 item_finished 到达
+        // ——「轮结束了但回答还没落地」（收尾扫描解析失败的根因，2026-09-22）。
+        // 非 progress 事件本来就是低频的（phase / permission / stats / title / model），
+        // 流式期间几乎不出现，这一下 flush 不会把合帧抵消掉。
+        coalescer.flush();
         applyStates((prev) => applyAgentEvent(prev, event));
         // **投递节奏归我们**：phase 一变就看队首该不该发，一次只发一条。
         // 交给 pi 的 post-run 自动 drain 会把好几条一起吹出去——用户一条条点、
@@ -1374,11 +1387,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const entry = (viewedId !== null ? engine.states.get(viewedId) : undefined) ?? EMPTY_ENTRY;
 
   // —— 收尾仪式（closing ritual）——
-  // 点「Mark task done」→ 向当前会话注入一条 visibility: internal 的扫描 prompt →
+  // 点「Mark task done」→ 以当前会话的身份发一条**普通的用户消息**（扫描 prompt）→
   // agent 在同一条 session 里回看对话（复用对话 cache）、回一个 fenced json →
   // phase 回 idle 时解析、弹勾选清单 → 确认后落 carryovers + setCompletion。
   // 状态放查看槽而不是引擎：扫描只对「本槽正看着的会话」发起，切走不动它。
-  /** 扫描进行态。baseline = 注入时刻槽里的消息数——解析只看它之后新增的
+  /** 扫描进行态。baseline = 发出扫描消息前槽里的消息数——解析只看它之后新增的
    *  回答，防止扫描轮失败时误取上一轮的旧回答当扫描结果。 */
   const [closingScan, setClosingScan] = useState<{
     sessionId: string;
@@ -1391,6 +1404,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   } | null>(null);
   /** 降级 / 结果的一句反馈（中性，不是错误）；下一次发起或打开会话时清 */
   const [scanNotice, setScanNotice] = useState<string | null>(null);
+  /** 读不懂结果的那条会话（重试按它定向）。null = 没有可重试的失败。 */
+  const [scanFailed, setScanFailed] = useState<string | null>(null);
 
   /** 打开另一条会话：上一轮的提示不是那条会话的事，不能跟过来。
    *  待确认的清单（scanResult）**不清**：它是发起会话的未完成动作，切走再切回
@@ -1398,6 +1413,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    *  必须处理它，确认 / 取消都按 scanResult.sessionId 定向，不会错标当前会话。 */
   useEffect(() => {
     setScanNotice(null);
+    setScanFailed(null);
   }, [viewedId]);
 
   /** 扫描超时（默认 60s）：直接标完成并说清楚，不让用户卡在等待里。
@@ -1408,7 +1424,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (closingScan === null) return;
     const timer = window.setTimeout(() => {
       setCompletionSession(closingScan.sessionId, "done");
-      setScanNotice("The leftover scan did not finish in time — marked done without a checklist.");
+      setScanNotice("The leftover scan didn't finish in time — marked done without a checklist.");
+      setScanFailed(closingScan.sessionId);
       setClosingScan(null);
     }, CLOSING_SCAN_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
@@ -1427,26 +1444,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const items = selectTranscript(
       statesRef.current.get(closingScan.sessionId)?.transcript ?? EMPTY_ENTRY.transcript,
     );
-    const fresh = items.slice(closingScan.baseline);
-    let answer = "";
-    let seen = false;
-    for (const item of fresh) {
-      if (item.role !== "assistant" || item.status === "streaming") continue;
-      seen = true;
-      answer = item.content
-        .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
-        .map((block) => block.text)
-        .join("");
-    }
-    const drafts = seen ? parseCarryoverResponse(answer) : null;
+    const answer = collectScanAnswer(items, closingScan.baseline);
+    const drafts = answer === null ? null : parseCarryoverResponse(answer);
     setClosingScan(null);
-    if (drafts === null || drafts.length === 0) {
+    if (drafts === null) {
+      // **读不懂不等于没事**：会话照标完成（收尾的意愿已经表达），但提示里带上
+      // 重试——扫描消息就在对话里，模型回了什么用户看得见，重发一条就行。
       engine.setCompletionSession(closingScan.sessionId, "done");
-      setScanNotice(
-        drafts === null
-          ? "The leftover scan came back unreadable — marked done without a checklist."
-          : "The leftover scan found nothing — marked done.",
-      );
+      setScanNotice("Couldn't read the scan result — marked done without a checklist.");
+      setScanFailed(closingScan.sessionId);
+      return;
+    }
+    if (drafts.length === 0) {
+      engine.setCompletionSession(closingScan.sessionId, "done");
+      setScanNotice("The leftover scan found nothing — marked done.");
       return;
     }
     setScanResult({ sessionId: closingScan.sessionId, drafts });
@@ -1455,13 +1466,45 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, [closingScan, viewedId, entry.phase, engine.statesRef, engine.setCompletionSession]);
 
   /**
+   * 发出扫描消息（首次与重试共用）。**它是一条普通的用户消息**：走与
+   * `send` 同一条 submit 链，进消息流、进 pi 历史，标题门禁与最近提问按普通消息处理。
+   *
+   * 只有一处不同：这一轮优先用设置里的命名模型（`settings.titleModel`）——详 scanTurnModel。
+   * 设置读不出来不拦扫描，退回会话模型就是了。
+   */
+  const launchScan = useCallback(
+    (id: string, baseline: number, turn: Omit<SubmitAgentInput, "sessionId" | "text">): void => {
+      setClosingScan({ sessionId: id, baseline });
+      engine.applyStates((prev) => setEntryPhase(prev, id, "turn"));
+      void api.settings
+        .get()
+        .then((settings) => settings.titleModel)
+        .catch(() => undefined)
+        .then((naming) =>
+          api.agent.submit({
+            sessionId: id,
+            text: CLOSING_SCAN_PROMPT,
+            ...scanTurnModel(turn, naming),
+          }),
+        )
+        .catch((cause: unknown) => {
+          // 提交没送出去：扫描轮没开起来，归位并交代一句
+          setClosingScan(null);
+          engine.applyStates((prev) => setEntryPhase(prev, id, "idle"));
+          engine.setError(cause instanceof Error ? cause.message : String(cause));
+        });
+    },
+    [engine],
+  );
+
+  /**
    * 点「Mark task done」（头部按钮）：能扫就发起仪式，不能扫就地降级。
    * 降级矩阵（按序判定）：
    *   在跑 / 已在扫 → no-op（按钮本就该禁）；
    *   队列里还有没发完的 → 报错停下（收尾不能把排队的话变成永远发不出的哑弹）；
    *   没有 pi 本子（只读会话）→ 纯标记——没有前文可扫，扫描没有意义；
    *   transcript 是空的 → 纯标记——扫描无对象；
-   *   其余 → 注入扫描 prompt（乐观置 turn，按钮立刻进入扫描态）。
+   *   其余 → 发出扫描消息（乐观置 turn，按钮立刻进入扫描态）。
    */
   const startClosingRitual = useCallback((): void => {
     const id = sessionRef.current ?? opened?.id ?? null;
@@ -1495,17 +1538,27 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     }
     engine.setError(null);
     setScanNotice(null);
-    setClosingScan({ sessionId: id, baseline });
-    engine.applyStates((prev) => setEntryPhase(prev, id, "turn"));
-    void api.agent
-      .submit({ sessionId: id, text: CLOSING_SCAN_PROMPT, visibility: "internal", ...turn })
-      .catch((cause: unknown) => {
-        // 提交没送出去：扫描轮没开起来，归位并交代一句
-        setClosingScan(null);
-        engine.applyStates((prev) => setEntryPhase(prev, id, "idle"));
-        engine.setError(cause instanceof Error ? cause.message : String(cause));
-      });
-  }, [closingScan, engine, opened]);
+    setScanFailed(null);
+    launchScan(id, baseline, turn);
+  }, [closingScan, engine, launchScan, opened]);
+
+  /**
+   * 重试（提示行上的 Retry）：重发同一条扫描消息。会话已经是 done，
+   * 重扫出东西就走清单、确认后转 done_with_todos；又读不懂就再给一次 Retry。
+   * 基线重新取（上一轮的扫描消息与回答都已在转录里，不重新取会把旧回答再解一遍）。
+   */
+  const retryClosingScan = useCallback((): void => {
+    const id = scanFailed;
+    if (id === null || closingScan !== null) return;
+    const current = engine.statesRef.current.get(id);
+    if (current === undefined || current.phase !== "idle") return;
+    const turn = engine.buildTurn(id);
+    if (turn === null) return;
+    engine.setError(null);
+    setScanNotice(null);
+    setScanFailed(null);
+    launchScan(id, selectTranscript(current.transcript).length, turn);
+  }, [closingScan, engine, launchScan, scanFailed]);
 
   /**
    * 确认清单：勾选项落盘 + setCompletion(done_with_todos)；全不勾 = done
@@ -1618,6 +1671,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     confirmCarryovers,
     cancelCarryovers,
     scanNotice,
+    // 重试只在「本槽正看着那条失败的会话」时给出——提示行本身就是那条会话的
+    retryClosingScan: scanFailed !== null && scanFailed === viewedId ? retryClosingScan : null,
     send: () => void send(),
     stop,
     queued: entry.queued,

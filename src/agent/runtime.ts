@@ -888,7 +888,7 @@ async function handle(command: AgentCommand): Promise<void> {
       // expandPromptTemplates 关掉：展开会改写文本，破坏按文本做的回声对账；
       // 且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
       note.echoed.add(command.text);
-      for (const progress of opened.adapter.userPrompt(command.text, command.visibility)) {
+      for (const progress of opened.adapter.userPrompt(command.text)) {
         // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
         if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
         send({ type: "progress", sessionId: command.sessionId, progress });

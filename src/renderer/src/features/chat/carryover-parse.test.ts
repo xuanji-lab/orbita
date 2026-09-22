@@ -1,6 +1,11 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { locateMessageRange, parseCarryoverResponse } from "./carryover-parse.ts";
+import {
+  collectScanAnswer,
+  locateMessageRange,
+  parseCarryoverResponse,
+  scanTurnModel,
+} from "./carryover-parse.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 
 const msg = (id: string, role: "user" | "assistant", text: string): TranscriptItem =>
@@ -142,5 +147,96 @@ describe("parseCarryoverResponse", () => {
 
   test("尾围栏缺失（流被截断）→ null", () => {
     assert.equal(parseCarryoverResponse('```json\n{"carryovers": [{"title": "截断'), null);
+  });
+});
+
+/** 一条 assistant 消息：块序与 status 都可控——解析输入的口径全看这两样 */
+const assistant = (
+  id: string,
+  blocks: { type: "thinking" | "text"; text: string }[],
+  status: "complete" | "streaming" = "complete",
+): TranscriptItem =>
+  ({
+    id,
+    role: "assistant",
+    status,
+    model: { provider: "zai", id: "glm-5.3" },
+    stopReason: "stop",
+    content: blocks.map((block) =>
+      block.type === "thinking"
+        ? { type: "thinking", thinking: block.text }
+        : { type: "text", text: block.text },
+    ),
+    timestamp: 0,
+  }) as TranscriptItem;
+
+const FENCE = '```json\n{"carryovers": [{"title": "补 README", "detail": "摘录"}]}\n```';
+
+describe("collectScanAnswer", () => {
+  test("thinking 块排在前面也拿得到回答（只取 text 块）", () => {
+    const transcript = [
+      msg("u1", "user", "扫描"),
+      assistant("a1", [
+        { type: "thinking", text: "用户要我扫遗留……" },
+        { type: "text", text: FENCE },
+      ]),
+    ];
+    const drafts = parseCarryoverResponse(collectScanAnswer(transcript, 1) ?? "");
+    assert.deepEqual(drafts, [{ title: "补 README", detail: "摘录" }]);
+  });
+
+  test("围栏被拆在多个 text 块里：全部拼接才解得开", () => {
+    const transcript = [
+      assistant("a1", [
+        { type: "text", text: '```json\n{"carryovers": [' },
+        { type: "text", text: '{"title": "补 README", "detail": "摘录"}]}\n```' },
+      ]),
+    ];
+    const drafts = parseCarryoverResponse(collectScanAnswer(transcript, 0) ?? "");
+    assert.deepEqual(drafts, [{ title: "补 README", detail: "摘录" }]);
+  });
+
+  test("基线之前的旧回答不算数——扫描失败时不能误拿上一轮的", () => {
+    const transcript = [assistant("a0", [{ type: "text", text: FENCE }]), msg("u1", "user", "扫描")];
+    assert.equal(collectScanAnswer(transcript, 1), null);
+  });
+
+  test("取基线之后最后一条 assistant（工具轮里前面还有别的回答）", () => {
+    const transcript = [
+      msg("u1", "user", "扫描"),
+      assistant("a1", [{ type: "text", text: "我先看一眼对话" }]),
+      assistant("a2", [{ type: "text", text: FENCE }]),
+    ];
+    assert.equal(collectScanAnswer(transcript, 1)?.includes("carryovers"), true);
+  });
+
+  test("只有半截的流式回答 → null（宁可当没回答，也不拿半截去解）", () => {
+    const transcript = [
+      msg("u1", "user", "扫描"),
+      assistant("a1", [{ type: "text", text: '```json\n{"carry' }], "streaming"),
+    ];
+    assert.equal(collectScanAnswer(transcript, 1), null);
+  });
+
+  test("这一轮根本没有 assistant 消息 → null", () => {
+    assert.equal(collectScanAnswer([msg("u1", "user", "扫描")], 0), null);
+  });
+});
+
+describe("scanTurnModel", () => {
+  const turn = { providerId: "zai", modelId: "glm-5.3", mode: "plan" as const };
+
+  test("配了命名模型：这一轮换成它，其余开工上下文原样", () => {
+    const next = scanTurnModel(turn, { providerId: "zhipu", modelId: "glm-5.3-flash" });
+    assert.deepEqual(next, { providerId: "zhipu", modelId: "glm-5.3-flash", mode: "plan" });
+  });
+
+  test("没配（Same as session）：原样返回会话模型", () => {
+    assert.equal(scanTurnModel(turn, undefined), turn);
+  });
+
+  test("只影响这一轮：传入的轮次上下文不被改写", () => {
+    scanTurnModel(turn, { providerId: "zhipu", modelId: "glm-5.3-flash" });
+    assert.deepEqual(turn, { providerId: "zai", modelId: "glm-5.3", mode: "plan" });
   });
 });

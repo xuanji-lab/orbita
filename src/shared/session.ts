@@ -35,27 +35,8 @@ export interface CompactedRecord {
 
 /**
  * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）或压缩界碑（我们的）。
- *
- * user 分支可能带可见性标记（交集扩展，非新 role）：`visibility: "internal"` =
- * 系统注入的内部 prompt（收尾仪式的扫描指令）。**这是本仓对 pi 的
- * TranscriptItem 的扩展**——pi-protocol 没有这个字段，AGENTS.md 架构边界里保留的
- * visibility 字段在协议层就落在这里：internal = transcript 不渲染（renderer 进槽前
- * 过滤），但**必须落盘**——pi 的本子里它是普通 user 消息，我们这边少一条会让
- * 分支对账（branchRoles 按 user/assistant 计数）对不上。交集而非新 role 的理由：
- * 新 role 要走 CompactedRecord 那套单独守卫，而 visibility 只需要一个可选字段，
- * 现有窄化（`record.role === "user"`）全部不受影响。
  */
-export type SessionRecord =
-  | (TranscriptItem & { visibility?: "internal" })
-  | CompactedRecord;
-
-/** 这条落盘记录是不是系统注入的内部消息（renderer 过滤与 store 记账共用同一判定）。 */
-export function isInternalMessage(record: SessionRecord): boolean {
-  return (
-    record.role === "user" &&
-    (record as TranscriptItem & { visibility?: unknown }).visibility === "internal"
-  );
-}
+export type SessionRecord = TranscriptItem | CompactedRecord;
 
 /**
  * 逐字段校验，坏值判 false。readLog 靠它分流：**坏掉的 compacted 行按坏行跳过**，

@@ -199,7 +199,6 @@ export function registerAgentIpc(
     const piSessionFile = await host.submit({
       type: "submit",
       text: input.text,
-      ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
       ...turnFields(input, provider, piSessionDir, protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
         mcpServers: await readMcpServers(),
@@ -211,8 +210,7 @@ export function registerAgentIpc(
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
-    // 内部 prompt（收尾扫描）不当标题素材——它的内容是系统指令，不是这单任务的话。
-    if (input.visibility === undefined && (await sessions.needsAutoTitle(input.sessionId))) {
+    if (await sessions.needsAutoTitle(input.sessionId)) {
       host.generateTitle(input.sessionId, input.text, await readTitleModel());
     }
   });

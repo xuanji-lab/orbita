@@ -133,31 +133,6 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["第四问", "第三问", "第二问"]);
   });
 
-  // 收尾仪式的注入 prompt（visibility: internal）：日志照记（分支对账要与 pi 本子
-  // 对得上），但它不是用户说的话——不占标题、不进最近提问
-  test("内部消息落盘但不记标题与最近提问", async () => {
-    await store.ensureSession(meta());
-    await store.record(
-      ID,
-      ({
-        id: "u9",
-        role: "user",
-        content: [{ type: "text", text: "收尾扫描：回看本次对话……" }],
-        timestamp: 9000,
-        visibility: "internal",
-      }) as TranscriptItem,
-    );
-    const detail = await store.load(ID);
-    // 落盘了：transcript 里那条 internal 消息在
-    assert.equal(detail?.transcript.length, 1);
-    assert.equal(detail?.transcript[0]?.role, "user");
-    // 不占标题、不进最近提问
-    assert.equal(detail?.meta.title, "");
-    assert.deepEqual(detail?.meta.recentQueries, []);
-    // updatedAt 照新：扫描确实是这条会话最近一次真实活动
-    assert.equal(detail?.meta.updatedAt, 9000);
-  });
-
   test("列表按 updatedAt 倒序——新的在前", async () => {
     await store.ensureSession(meta({ id: ID, updatedAt: 1000 }));
     await store.ensureSession(meta({ id: OTHER, updatedAt: 5000 }));
