@@ -60,6 +60,15 @@ describe("resolveFileRoots", () => {
     assert.equal(workspaceRoot?.exists, true);
   });
 
+  test("sessionId null（新任务还没发首条消息）：不出 session 根，其余照常", async () => {
+    await workspaces.ensureHome();
+    const roots = await resolveFileRoots(workspaces, sessions, { sessionId: null, workspaceId: null });
+    assert.deepEqual(
+      roots.map((root) => root.kind),
+      ["workspace"],
+    );
+  });
+
   test("会话有标题：session 根的 label 就是标题", async () => {
     await sessions.ensureSession(meta({ title: "给文件面板起个名字" }));
     const [sessionRoot] = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: null });

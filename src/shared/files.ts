@@ -37,9 +37,12 @@ export interface FileEntry {
   modifiedAt: number;
 }
 
-/** `fs:roots` 的请求：主进程按 workspaceId 找工作区（null = Home）、按 sessionId 派生工作台 */
+/**
+ * `fs:roots` 的请求：主进程按 workspaceId 找工作区（null = Home）、按 sessionId 派生工作台。
+ * sessionId 为 null = 还没有会话（新任务没发首条消息，id 尚未铸）：不出 session 根，其余照常。
+ */
 export interface FileRootsRequest {
-  sessionId: string;
+  sessionId: string | null;
   workspaceId: string | null;
 }
 
@@ -48,7 +51,7 @@ export interface FileRootsRequest {
  * `root` 必须是 `fs:roots` 回过的路径之一——两道都在主进程，renderer 传什么都不信。
  */
 export interface FileListRequest {
-  sessionId: string;
+  sessionId: string | null;
   workspaceId: string | null;
   root: string;
   dir: string;

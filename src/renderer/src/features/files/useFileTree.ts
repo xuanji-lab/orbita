@@ -49,13 +49,6 @@ export function useFileTree(
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [actionError, setActionError] = useState<string | null>(null);
 
-  /**
-   * 契约（shared/files.ts）的 sessionId 是必填 string；还没有会话（新任务没发首条
-   * 消息）时传空串占位——主进程会照算出 workspace / attached 根，session 根那一条
-   * 由下面过滤掉不用。
-   */
-  const effectiveSessionId = sessionId ?? "";
-
   /** 在途目录请求（键 = dir），防连点重复拉 */
   const pendingRef = useRef<Set<string>>(new Set());
   /** dirs 的同步镜像（statesRef 同款先例）：loadDir 判断缓存要从 ref 读——依赖
@@ -70,7 +63,7 @@ export function useFileTree(
       if (dirsRef.current.has(dir) || pendingRef.current.has(dir)) return;
       pendingRef.current.add(dir);
       try {
-        const res = await api.files.list({ sessionId: effectiveSessionId, workspaceId, root, dir });
+        const res = await api.files.list({ sessionId, workspaceId, root, dir });
         const next = new Map(dirsRef.current);
         next.set(res.dir, res.entries);
         dirsRef.current = next;
@@ -81,7 +74,7 @@ export function useFileTree(
         pendingRef.current.delete(dir);
       }
     },
-    [effectiveSessionId, workspaceId],
+    [sessionId, workspaceId],
   );
 
   /**
@@ -93,8 +86,8 @@ export function useFileTree(
     setRootsLoading(true);
     setRootsError(null);
     try {
-      const list = await api.files.roots({ sessionId: effectiveSessionId, workspaceId });
-      const visible = sessionId === null ? list.filter((r) => r.kind !== "session") : list;
+      // sessionId null（新任务没发首条消息）时主进程不出 session 根，面板不用再过滤
+      const visible = await api.files.roots({ sessionId, workspaceId });
       setRoots(visible);
       // 每个在盘上的根默认展开第一层：直接拉根目录，缓存 / 在途去重
       for (const root of visible) {
@@ -105,7 +98,7 @@ export function useFileTree(
     } finally {
       setRootsLoading(false);
     }
-  }, [effectiveSessionId, sessionId, workspaceId, loadDir]);
+  }, [sessionId, workspaceId, loadDir]);
 
   useEffect(() => {
     // 切会话：清缓存与展开状态（新会话新树；也免得 Map 随会话数无限长）
@@ -134,11 +127,11 @@ export function useFileTree(
 
   const reveal = useCallback(
     (root: string, dir: string): void => {
-      api.files.reveal({ sessionId: effectiveSessionId, workspaceId, root, dir }).catch((cause: unknown) => {
+      api.files.reveal({ sessionId, workspaceId, root, dir }).catch((cause: unknown) => {
         setActionError(failMessage(cause));
       });
     },
-    [effectiveSessionId, workspaceId],
+    [sessionId, workspaceId],
   );
 
   return { roots, rootsLoading, rootsError, dirs, expanded, actionError, toggle, reveal };

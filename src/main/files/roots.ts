@@ -20,8 +20,9 @@ export async function resolveFileRoots(
 ): Promise<FileRoot[]> {
   // session 根：工作台路径由 id 派生，标题来自 meta。会话不存在（刚开还没落 meta）/
   // 标题还没生成 → fileRootLabel 退 "Untitled task"，不留空行。
-  const sessionPath = sessions.workbenchPath(req.sessionId);
-  const meta = await sessions.readMeta(req.sessionId);
+  // sessionId null = 会话 id 还没铸（新任务没发首条消息）：没有工作台可列，不出 session 根
+  const sessionRoot: FileRoot | null =
+    req.sessionId === null ? null : await sessionFileRoot(sessions, req.sessionId);
 
   // workspace 根：workspaceId null = Home 会话；指到已删的工作区也退 Home——
   // 会话落到 TASKS 是既有语义（resolveTurnDirectories 同款处理），根清单不该
@@ -33,12 +34,7 @@ export async function resolveFileRoots(
   // 工作区记录没了，attachedDirs 无从谈起——退 Home 的同时也不带附加根
 
   const roots: FileRoot[] = [
-    {
-      kind: "session",
-      label: fileRootLabel("session", sessionPath, meta?.title ?? "", "Untitled task"),
-      path: sessionPath,
-      exists: await pathExists(sessionPath),
-    },
+    ...(sessionRoot === null ? [] : [sessionRoot]),
     {
       kind: "workspace",
       label: workspace === undefined ? "Home" : fileRootLabel("workspace", workspace.path, workspace.name, "Home"),
@@ -68,4 +64,16 @@ async function pathExists(path: string): Promise<boolean> {
     if (isNotFound(cause)) return false;
     throw cause;
   }
+}
+
+/** session 根：工作台路径由 id 派生，标题来自 meta；会话不存在 / 标题未生成 → "Untitled task" */
+async function sessionFileRoot(sessions: SessionStore, sessionId: string): Promise<FileRoot> {
+  const path = sessions.workbenchPath(sessionId);
+  const meta = await sessions.readMeta(sessionId);
+  return {
+    kind: "session",
+    label: fileRootLabel("session", path, meta?.title ?? "", "Untitled task"),
+    path,
+    exists: await pathExists(path),
+  };
 }
