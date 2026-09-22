@@ -78,6 +78,12 @@ export const ipcChannels = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
+  /**
+   * 会话工作台的现状（文件系统 2026-09-22）：路径、存不存在、里面有几个文件。
+   * 消费者是删除确认（「提示后删」：删会话连带删工作台，确认项要把文件数说出来）与文件面板的 Session 根。
+   * 按需现算，不进 meta——工作台存不存在是磁盘上的事实，不是会话的状态。
+   */
+  sessionWorkbenchStat: "session:workbench-stat",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
@@ -244,6 +250,13 @@ export interface SubmitAgentInput extends AgentTurnContext {
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
 export interface CompactAgentInput extends AgentTurnContext {
   instructions?: string;
+}
+
+/** `session:workbench-stat` 的回执。目录不存在时 exists=false、fileCount=0；fileCount 递归计文件不计目录 */
+export interface SessionWorkbenchStat {
+  path: string;
+  exists: boolean;
+  fileCount: number;
 }
 
 /**
