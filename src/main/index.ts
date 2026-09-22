@@ -24,6 +24,7 @@ import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
+import { registerFilesIpc } from "./files/ipc.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { ProviderStore } from "./provider/store.ts";
 
@@ -210,6 +211,8 @@ void app.whenReady().then(() => {
   });
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
+  // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
+  registerFilesIpc(workspaces, sessions);
   registerAgentIpc(
     agentHost,
     providers,

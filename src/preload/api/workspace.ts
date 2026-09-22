@@ -17,4 +17,10 @@ export const workspaceApi = {
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.workspaceRemove, id),
   /** 没有选定工作区时 agent 落在哪儿（今天是 ~/Orbita/Home）——UI 要如实显示这个兜底 */
   default: (): Promise<string> => ipcRenderer.invoke(ipcChannels.workspaceDefault),
+  /** 打开原生目录选择器，把选中目录挂进工作区的 attachedDirs；取消返回 null，重复挂不重复 */
+  attachDir: (id: string): Promise<Workspace | null> =>
+    ipcRenderer.invoke(ipcChannels.workspaceAttachDir, id),
+  /** 从 attachedDirs 摘掉一条（幂等，不在列表里不报错），返回更新后的工作区 */
+  detachDir: (id: string, dir: string): Promise<Workspace> =>
+    ipcRenderer.invoke(ipcChannels.workspaceDetachDir, id, dir),
 };

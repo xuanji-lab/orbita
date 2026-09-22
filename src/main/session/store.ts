@@ -533,7 +533,11 @@ export class SessionStore {
     await rm(this.workbenchPath(id), { recursive: true, force: true });
   }
 
-  private async readMeta(id: string): Promise<SessionMeta | null> {
+  /**
+   * 读一条会话的 meta（逐字段校验）；null = 不存在。原是 private，文件面板的根
+   * 清单只需要标题——用 `load` 会连带把整份 transcript 读进来，为一个字段付全量读盘不划算。
+   */
+  async readMeta(id: string): Promise<SessionMeta | null> {
     try {
       return parseSessionMeta(JSON.parse(await readFile(this.metaPath(id), "utf8")));
     } catch {

@@ -8,7 +8,7 @@
  * 记在自己的 meta 里（`src/shared/workspace.ts` 讲了为什么不按路径）。
  */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
@@ -134,6 +134,45 @@ export class WorkspaceStore {
     };
     await this.save([...workspaces, next]);
     return next;
+  }
+
+  /**
+   * 挂一个附加目录（文件面板的根清单与开轮目录清单共同的数据源）。
+   * 先 realpath + 确认是目录：挂的瞬间它就得是真的——挂一个不存在的路径只会让
+   * 面板多一行 exists=false 的根，用户分不清是打错了还是目录被挪走了。
+   * realpath 顺带归一：`/tmp` 链接与它的真身不会攒成两条（去重按归一后的比）。
+   * 同一个目录重复挂不报错、不重复，返回更新后的工作区。
+   */
+  async attachDir(id: string, dir: string): Promise<Workspace> {
+    let resolved: string;
+    try {
+      resolved = await realpath(dir);
+    } catch {
+      throw new Error(`附加目录不存在：${dir}`);
+    }
+    if (!(await stat(resolved)).isDirectory()) {
+      throw new Error(`附加目录不是文件夹：${dir}`);
+    }
+    const workspaces = await this.list();
+    const target = workspaces.find((w) => w.id === id);
+    if (target === undefined) throw new Error(`工作区不存在：${id}`);
+    if (target.attachedDirs.includes(resolved)) return target;
+    const updated: Workspace = { ...target, attachedDirs: [...target.attachedDirs, resolved] };
+    await this.save(workspaces.map((w) => (w.id === id ? updated : w)));
+    return updated;
+  }
+
+  /**
+   * 摘掉一个附加目录。**不在列表里不报错**（幂等）：面板上那条根可能来自旧快照，
+   * 摘第二次不该炸。返回更新后的工作区。
+   */
+  async detachDir(id: string, dir: string): Promise<Workspace> {
+    const workspaces = await this.list();
+    const target = workspaces.find((w) => w.id === id);
+    if (target === undefined) throw new Error(`工作区不存在：${id}`);
+    const updated: Workspace = { ...target, attachedDirs: target.attachedDirs.filter((d) => d !== dir) };
+    await this.save(workspaces.map((w) => (w.id === id ? updated : w)));
+    return updated;
   }
 
   async rename(id: string, name: string): Promise<void> {

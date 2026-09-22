@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, rm, stat, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceStore } from "./store.ts";
@@ -209,5 +209,64 @@ describe("WorkspaceStore", () => {
     const created = await s.create("长".repeat(50));
     assert.equal(created.name.length, 40);
     assert.equal(created.path, join(root, "长".repeat(40)));
+  });
+
+  // ── 附加目录（文件面板与开轮目录清单共同的数据源）──
+
+  test("attachDir：挂真实目录落盘，返回更新后的工作区", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-attach-"));
+    try {
+      const ws = await store.add("/repo/x");
+      const updated = await store.attachDir(ws.id, real);
+      assert.deepEqual(updated.attachedDirs, [await realpath(real)]);
+      assert.equal((await store.list()).find((w) => w.id === ws.id)?.attachedDirs.length, 1);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  test("attachDir：不存在的路径抛中文错", async () => {
+    const ws = await store.add("/repo/x");
+    await assert.rejects(
+      () => store.attachDir(ws.id, join(dir, "不在的目录")),
+      /附加目录不存在/,
+    );
+  });
+
+  test("attachDir：文件不是目录，抛中文错", async () => {
+    const file = join(dir, "a-file.txt");
+    await writeFile(file, "x", "utf8");
+    const ws = await store.add("/repo/x");
+    await assert.rejects(() => store.attachDir(ws.id, file), /不是文件夹/);
+  });
+
+  test("attachDir：存的是 realpath 后的真身，链接与真身不会攒成两条", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-real-"));
+    try {
+      const alias = join(dir, "alias");
+      await symlink(real, alias);
+      const ws = await store.add("/repo/x");
+      await store.attachDir(ws.id, alias);
+      const again = await store.attachDir(ws.id, real); // 用真身再挂一次也不重复
+      assert.deepEqual(again.attachedDirs, [await realpath(real)]);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  test("detachDir：摘掉后落盘；摘不在列表里的不报错（幂等）", async () => {
+    const real = await mkdtemp(join(tmpdir(), "orbita-detach-"));
+    try {
+      const ws = await store.add("/repo/x");
+      const attached = await store.attachDir(ws.id, real);
+      const detached = await store.detachDir(ws.id, attached.attachedDirs[0] ?? "");
+      assert.deepEqual(detached.attachedDirs, []);
+      // 再摘一次（列表里已没有）：不报错，返回的仍是同一条工作区
+      const again = await store.detachDir(ws.id, real);
+      assert.deepEqual(again.attachedDirs, []);
+      assert.equal(again.id, ws.id);
+    } finally {
+      await rm(real, { recursive: true, force: true });
+    }
   });
 });

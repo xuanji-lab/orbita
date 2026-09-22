@@ -34,6 +34,20 @@ export function registerWorkspaceIpc(
   );
   // 命名新建：目录选择器帮不上忙——用户要的是「在 ~/Orbita 里开一个新家」而不是挑一个已有的
   ipcMain.handle(ipcChannels.workspaceCreate, (_event, name: string) => store.create(name));
+  // 挂附加目录：选择器在主进程开（同 workspaceAdd 的纪律），校验（存在 / 是目录 / 去重）在 store
+  ipcMain.handle(ipcChannels.workspaceAttachDir, async (event, id: string): Promise<Workspace | null> => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = await (window
+      ? dialog.showOpenDialog(window, { properties: ["openDirectory", "createDirectory"] })
+      : dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] }));
+    const picked = result.canceled ? undefined : result.filePaths[0];
+    if (picked === undefined) return null;
+    return store.attachDir(id, picked);
+  });
+  // 摘附加目录：幂等（不在列表里不报错），返回更新后的工作区——面板要拿它刷新根清单
+  ipcMain.handle(ipcChannels.workspaceDetachDir, (_event, id: string, dir: string): Promise<Workspace> =>
+    store.detachDir(id, dir),
+  );
   ipcMain.handle(ipcChannels.workspaceRemove, async (_event, id: string) => {
     await store.remove(id);
     // 连带清理失败不拦工作区移除（那是一件更主要的事），但必须留日志——

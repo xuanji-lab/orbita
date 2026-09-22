@@ -4,6 +4,7 @@
  */
 import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
+import { filesApi } from "./api/files.ts";
 import { importApi } from "./api/import.ts";
 import { providerApi } from "./api/provider.ts";
 import { sessionApi } from "./api/session.ts";
@@ -21,6 +22,7 @@ const api = {
   mcp: mcpApi,
   window: windowApi,
   workspace: workspaceApi,
+  files: filesApi,
   import: importApi,
   /**
    * 宿主平台。**不是 IPC 通道**，是个同步常量——渲染层需要它，因为
