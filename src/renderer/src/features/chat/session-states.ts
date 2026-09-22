@@ -16,7 +16,8 @@ import {
 } from "@earendil-works/pi-coding-agent/client";
 import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
-import type { CompactedRecord, SessionRecord } from "@shared/session";
+import type { ChannelMessage } from "@shared/channel";
+import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
 
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
 export interface PendingApproval {
@@ -34,11 +35,15 @@ export interface PendingApproval {
  * 不再用下标加文本对账——那套对账在连续操作时必然落空（2026-09-06 事故）。
  *
  * `kind`：text = 一条普通消息；compact = 排队的手动 `/compact`（它是命令不是消息，
- * 执行时机另受约束：必须等完全空闲）。
+ * 执行时机另受约束：必须等完全空闲）；channel = 子会话通道投给这条会话的一条消息
+ * （子会话 PR4a：子→父恒 followUp，进父的 renderer 队列，排队所有权与 text 同一套）。
+ * channel 条目的 `id` 用 `message.id`——通道账本铸的 id，天然全局唯一，也用它去重
+ * （同一条 `channel:event` 因订阅重连等原因重复到达时，队列里已有同 id 就不再入队）。
  */
 export type QueuedMessage =
   | { id: string; kind: "text"; text: string }
-  | { id: string; kind: "compact"; instructions?: string };
+  | { id: string; kind: "compact"; instructions?: string }
+  | { id: string; kind: "channel"; childId: string; message: ChannelMessage };
 
 /**
  * 输入框里的手动压缩指令：`/compact` 直接压缩，`/compact <要求>` 带自定义要求。
@@ -63,6 +68,12 @@ export interface SessionEntry {
    * 显示时由 `applyCompactionBoundary` 按时间插回往来流。
    */
   compactions: CompactedRecord[];
+  /**
+   * 通道标记单独记账（子会话 PR4a），与 compactions 同一条纪律：**不进 pi 的归约器**——
+   * 它顶替的是一条 user 消息，但正文只有一份、在通道账本里，归约器不认识它。
+   * 显示时由 `mergeSideRecords` 按时间插回往来流。
+   */
+  marks: readonly ChannelMarkRecord[];
   /** turn = 这一轮还在跑；compaction = 上下文压缩中（居中呼吸行）；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
   /**
@@ -113,6 +124,7 @@ export function createSessionStates(): SessionStates {
 export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
   compactions: [],
+  marks: [],
   phase: "idle",
   queued: [],
   retry: null,
@@ -225,19 +237,24 @@ export function seedFromDisk(
   transcript: readonly SessionRecord[],
   stats: AgentStats | null = null,
 ): SessionStates {
-  // 界碑不进 pi 的归约器（它不是消息），分开记账；实时与历史从此是同一条显示路径。
-  // 通道标记同理——不是消息也不进归约器，真正的标记 UI 是后续 PR，这里先整体跳过。
-  // 内联 role 谓词而非 isCompactedRecord()：本文件被 node --test 加载，@shared 的值导入解析不了。
+  // 界碑与通道标记都不进 pi 的归约器（它们不是模型消息，归约器不认识）——分开记账，
+  // 显示时由 mergeSideRecords 按时间插回往来流；实时与历史从此是同一条显示路径。
+  // 内联 role 谓词而非 isCompactedRecord()/isChannelMarkRecord()：本文件被 node --test
+  // 加载，@shared 的值导入解析不了（AGENTS.md 硬规则）。
   const items = transcript.filter(
     (item): item is TranscriptItem => item.role !== "compacted" && item.role !== "channel-mark",
   );
   const compactions = transcript.filter(
     (item): item is CompactedRecord => item.role === "compacted",
   );
+  const marks = transcript.filter(
+    (item): item is ChannelMarkRecord => item.role === "channel-mark",
+  );
   const next = new Map(states);
   next.set(sessionId, {
     transcript: createTranscriptState(seedSnapshot(items)),
     compactions,
+    marks,
     phase: "idle",
     // 排队是 ephemeral：盘上没有，也不该有（会话断了一次排队就物理消失了）
     queued: [],
@@ -256,22 +273,28 @@ export function seedFromDisk(
 }
 
 /**
- * 视图合成：界碑按发生位置插回往来流。**历史一条不少地保持可见**——
+ * 视图合成：界碑与通道标记都按发生位置插回往来流。**历史一条不少地保持可见**——
  * 被收进「已压缩」折叠行的是摘要本身（它才是混进对话的内部消息），
  * 不是压缩点之前的往来。pi 的「边界前隐藏」语义在这里被用户裁决否决：
  * 可追溯是产品底线，pi 的做法照搬错了对象。
+ *
+ * 原名 `mergeCompactions`（子会话 PR4a 推广）：通道标记与界碑同一处境——都不进
+ * pi 的归约器，都要按 timestamp 插回 transcript——没必要另开一份并行逻辑。
  */
-export function mergeCompactions(
+export function mergeSideRecords(
   compactions: readonly CompactedRecord[],
+  marks: readonly ChannelMarkRecord[],
   transcript: readonly TranscriptItem[],
 ): SessionRecord[] {
-  if (compactions.length === 0) return [...transcript];
-  const records: SessionRecord[] = [...transcript, ...compactions];
-  // 同毫秒时界碑排在前（两边都是界碑则保持原序）
+  if (compactions.length === 0 && marks.length === 0) return [...transcript];
+  const records: SessionRecord[] = [...transcript, ...compactions, ...marks];
+  // 同毫秒时非 transcript 的一侧记录（界碑 / 通道标记）排在前——界碑在前的老规则
+  // 原样保留，通道标记同一条纪律：两者都不是 pi 归约器认识的消息，混排靠落盘
+  // 时间戳定序，非 transcript 的一侧优先出现在同刻的前面。
+  const isSideRecord = (record: SessionRecord): boolean =>
+    record.role === "compacted" || record.role === "channel-mark";
   records.sort(
-    (a, b) =>
-      a.timestamp - b.timestamp ||
-      Number(b.role === "compacted") - Number(a.role === "compacted"),
+    (a, b) => a.timestamp - b.timestamp || Number(isSideRecord(b)) - Number(isSideRecord(a)),
   );
   return records;
 }
@@ -335,6 +358,24 @@ export function enqueue(
   item: QueuedMessage,
 ): SessionStates {
   return update(states, sessionId, (entry) => ({ ...entry, queued: [...entry.queued, item] }));
+}
+
+/**
+ * 子会话通道消息入队（子会话 PR4a）：同 `enqueue`，但先按 id 去重。
+ *
+ * 子→父投递靠 `channel:event` 广播，订阅重连 / 事件重放等场景可能让同一条
+ * `message.id` 到达不止一次——`enqueue` 本身不认识「重复」，重复入队会让同一句
+ * 子会话的话在队列 / QueueStrip 里出现两条。队首已有同 id 就原样返回（同一引用，
+ * 调用方据此判断没有变化）。
+ */
+export function enqueueChannelMessage(
+  states: SessionStates,
+  parentId: string,
+  item: Extract<QueuedMessage, { kind: "channel" }>,
+): SessionStates {
+  const entry = states.get(parentId);
+  if (entry !== undefined && entry.queued.some((queued) => queued.id === item.id)) return states;
+  return enqueue(states, parentId, item);
 }
 
 /** 按 id 移出一条（撤回 / 删除 / 投递后出队都走它）。找不到就原样返回。 */

@@ -144,6 +144,29 @@ describe("groupTurns", () => {
     );
   });
 
+  test("通道标记是轮边界（子会话 2026-09-23 不变量修正），同 user/界碑：开新段、不进折叠", () => {
+    const mark = {
+      role: "channel-mark",
+      id: "k1",
+      peerId: "child-1",
+      messageId: "m1",
+      from: "child",
+      kind: "question",
+      timestamp: 2500,
+    } as const;
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "thinking", thinking: "标记前" }]),
+      mark as unknown as TranscriptItem,
+      assistantItem("a2", 3000, [{ type: "thinking", thinking: "标记后" }]),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "channelMark", "turnGroup"],
+    );
+  });
+
   test("折叠位置跟着第一个成员走：正文①在折叠之前，正文②在折叠之后", () => {
     const records = [
       userItem("u1", 1000),
@@ -326,6 +349,20 @@ describe("failedFoldKey —— 回合级失败的图标只在失败轮里找折�
       groupToolUnits(flattenRenderUnits([...settledTurn, compacted as never])),
       false,
     );
+    assert.equal(failedFoldKey(view), null);
+  });
+
+  test("通道标记同样是轮边界（子会话 2026-09-23 不变量修正）：标记后没折叠就 null", () => {
+    const mark = {
+      role: "channel-mark",
+      id: "k1",
+      peerId: "child-1",
+      messageId: "m1",
+      from: "child",
+      kind: "question",
+      timestamp: 20,
+    } as const;
+    const view = groupTurns(groupToolUnits(flattenRenderUnits([...settledTurn, mark as never])), false);
     assert.equal(failedFoldKey(view), null);
   });
 

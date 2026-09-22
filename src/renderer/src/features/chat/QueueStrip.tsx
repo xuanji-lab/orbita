@@ -1,8 +1,11 @@
 import { useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Icon } from "../../shell/Icon";
+import { deriveSessionTitle } from "@shared/session";
+import { Icon, type IconName } from "../../shell/Icon";
 import type { QueuedMessage } from "./session-states.ts";
 import { dropPlacement } from "./queue-drop.ts";
+import { channelMarkLabel } from "./tool-results.ts";
+import { channelKindIcon } from "./ChannelViews.tsx";
 
 // ── 本模块全部用户可见文案（英文先行，中文化等真实需求出现再抽字典） ──
 const COPY = {
@@ -19,6 +22,8 @@ const COPY = {
   runNowCompact: "Compact now",
   withdraw: "Withdraw to the input box",
   withdrawCompact: "Withdraw this compaction",
+  /** 子会话 PR4a：channel 条目撤回不是拿回自己的草稿——消息仍在通道账本里，只是不再投给父模型 */
+  withdrawChannel: "Drop — it stays in the channel but won't reach the model",
   reorder: "Drag to reorder",
 };
 
@@ -43,6 +48,11 @@ export function QueueStrip(props: {
   onSendNow: (id: string) => void;
   onWithdraw: (id: string) => void;
   onMove: (sourceId: string, targetId: string, placement: "before" | "after") => void;
+  /**
+   * 子会话 PR4a：channel 条目按 childId 查子会话标题（父的队列里只会有子发来的
+   * 消息——子→父恒 followUp 进父的队列，父→子由主进程直接投递，不进这里）。
+   */
+  titles: ReadonlyMap<string, string>;
 }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   /** 正悬停在哪一行上（整行亮起）；悬在源自己身上不算 */
@@ -72,12 +82,19 @@ export function QueueStrip(props: {
       {props.items.map((item) => (
         <QueueRow
           key={item.id}
-          text={labelOf(item)}
+          icon={item.kind === "channel" ? channelKindIcon(item.message.kind) : "clock"}
+          text={labelOf(item, props.titles)}
           note={noteOf(item, props.phase)}
           runNowTitle={
             item.kind === "compact" ? COPY.runNowCompact : halted ? COPY.runNowIdle : COPY.runNow
           }
-          withdrawTitle={item.kind === "compact" ? COPY.withdrawCompact : COPY.withdraw}
+          withdrawTitle={
+            item.kind === "compact"
+              ? COPY.withdrawCompact
+              : item.kind === "channel"
+                ? COPY.withdrawChannel
+                : COPY.withdraw
+          }
           reorderTitle={COPY.reorder}
           // 单条时不给抓手：没有可交换的对象，一个拖不动的抓手只是误导
           draggable={props.items.length > 1}
@@ -105,8 +122,20 @@ export function QueueStrip(props: {
   );
 }
 
-function labelOf(item: QueuedMessage): string {
+/**
+ * channel 条目的正文首行：截断规则复用 `deriveSessionTitle`（会话标题同一套，
+ * 队列行同样要在一行里放得下）。
+ */
+function labelOf(item: QueuedMessage, titles: ReadonlyMap<string, string>): string {
   if (item.kind === "text") return item.text;
+  if (item.kind === "channel") {
+    const childTitle = titles.get(item.childId) ?? "Sub-session";
+    // 父的队列里只会有子发来的消息（question/progress/done/failed）——ownSide
+    // 恒 "parent"，复用 channelMarkLabel 的同一套文案，不另开一份重复的分支
+    const label = channelMarkLabel(item.message, "parent", childTitle);
+    const preview = deriveSessionTitle(item.message.text);
+    return preview === "" ? label.text : `${label.text} — ${preview}`;
+  }
   return item.instructions === undefined ? "/compact" : `/compact ${item.instructions}`;
 }
 
@@ -130,6 +159,8 @@ function noteOf(item: QueuedMessage, phase: "idle" | "turn" | "compaction"): str
  * 抓手自己做拖拽源之后，按钮与文本都不在 draggable 子树里，点击不可能再被吞。
  */
 function QueueRow(props: {
+  /** 行首图标：text/compact 恒 clock（等待发出的事），channel 条目换成它自己的 kind 图标 */
+  icon: IconName;
   text: string;
   note: string;
   runNowTitle: string;
@@ -203,7 +234,7 @@ function QueueRow(props: {
         <Icon name="grip-vertical" size={12} />
       </span>
       <span style={{ display: "inline-flex", color: "var(--color-text-secondary)", flex: "0 0 auto" }}>
-        <Icon name="clock" size={12} />
+        <Icon name={props.icon} size={12} />
       </span>
       <span
         title={props.text}

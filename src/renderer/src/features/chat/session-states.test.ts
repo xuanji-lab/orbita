@@ -3,15 +3,17 @@ import assert from "node:assert/strict";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
-import type { CompactedRecord, SessionRecord } from "@shared/session";
+import type { ChannelMessage } from "@shared/channel";
+import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
   dequeue,
   applyAgentEvent,
   compactionBoundaryStatus,
   enqueue,
+  enqueueChannelMessage,
   markAllIdle,
-  mergeCompactions,
+  mergeSideRecords,
   moveQueued,
   parseCompactCommand,
   removeApproval,
@@ -234,6 +236,7 @@ test("EMPTY_ENTRY 是稳定兜底：phase idle、无审批、无重试", () => {
   assert.equal(EMPTY_ENTRY.phase, "idle");
   assert.deepEqual(EMPTY_ENTRY.approvals, []);
   assert.deepEqual(EMPTY_ENTRY.compactions, []);
+  assert.deepEqual(EMPTY_ENTRY.marks, []);
   assert.equal(EMPTY_ENTRY.retry, null);
   assert.deepEqual(selectTranscript(EMPTY_ENTRY.transcript), []);
 });
@@ -251,6 +254,15 @@ const userItem = (id: string, timestamp: number): TranscriptItem => ({
   id,
   role: "user",
   content: [{ type: "text", text: id }],
+  timestamp,
+});
+const channelMark = (id: string, timestamp: number): ChannelMarkRecord => ({
+  role: "channel-mark",
+  id,
+  peerId: "child-1",
+  messageId: "msg-1",
+  from: "child",
+  kind: "question",
   timestamp,
 });
 const roles = (records: readonly SessionRecord[]) => records.map((r) => r.role);
@@ -274,20 +286,31 @@ describe("压缩界碑的进出槽", () => {
       ["u1", "u2"],
     );
   });
+
+  test("seedFromDisk 分流：通道标记进 marks（不再丢弃），往来仍进归约器", () => {
+    const disk = [userItem("u1", 1000), channelMark("k1", 2000), userItem("u2", 3000)];
+    const states = seedFromDisk(new Map(), "A", disk);
+
+    assert.deepEqual(states.get("A")?.marks, [channelMark("k1", 2000)]);
+    assert.deepEqual(
+      selectTranscript(states.get("A")!.transcript).map((item) => item.id),
+      ["u1", "u2"],
+    );
+  });
 });
 
-describe("mergeCompactions —— 界碑就地插回，历史一条不少", () => {
-  test("没有界碑时原样全显", () => {
+describe("mergeSideRecords —— 界碑与通道标记就地插回，历史一条不少", () => {
+  test("没有界碑也没有标记时原样全显", () => {
     const items = [userItem("u1", 1), userItem("u2", 2)];
-    assert.deepEqual(mergeCompactions([], items), items);
+    assert.deepEqual(mergeSideRecords([], [], items), items);
   });
 
   test("界碑按发生位置插回，此前的往来保持可见——被收起的是摘要，不是历史", () => {
-    const records = mergeCompactions([compacted("c1", 2000)], [
-      userItem("u1", 1000),
-      userItem("u2", 3000),
-      userItem("u3", 4000),
-    ]);
+    const records = mergeSideRecords(
+      [compacted("c1", 2000)],
+      [],
+      [userItem("u1", 1000), userItem("u2", 3000), userItem("u3", 4000)],
+    );
     assert.deepEqual(roles(records), ["user", "compacted", "user", "user"]);
     assert.deepEqual(
       records.map((r) => r.id),
@@ -296,18 +319,40 @@ describe("mergeCompactions —— 界碑就地插回，历史一条不少", () =
   });
 
   test("多次压缩各自就位，不吞掉任何一段", () => {
-    const records = mergeCompactions([compacted("c1", 2000), compacted("c2", 6000)], [
-      userItem("u1", 1000),
-      userItem("u2", 3000),
-      userItem("u3", 7000),
-    ]);
+    const records = mergeSideRecords(
+      [compacted("c1", 2000), compacted("c2", 6000)],
+      [],
+      [userItem("u1", 1000), userItem("u2", 3000), userItem("u3", 7000)],
+    );
     assert.deepEqual(roles(records), ["user", "compacted", "user", "compacted", "user"]);
     assert.deepEqual(records.map((r) => r.id), ["u1", "c1", "u2", "c2", "u3"]);
   });
 
   test("同毫秒时界碑在前——先立碑，后发生的消息排在碑后", () => {
-    const records = mergeCompactions([compacted("c1", 3000)], [userItem("u2", 3000)]);
+    const records = mergeSideRecords([compacted("c1", 3000)], [], [userItem("u2", 3000)]);
     assert.deepEqual(records.map((r) => r.id), ["c1", "u2"]);
+  });
+
+  test("通道标记同样按时间就位，与界碑同一条排序规则", () => {
+    const records = mergeSideRecords(
+      [],
+      [channelMark("k1", 2000)],
+      [userItem("u1", 1000), userItem("u2", 3000)],
+    );
+    assert.deepEqual(roles(records), ["user", "channel-mark", "user"]);
+    assert.deepEqual(records.map((r) => r.id), ["u1", "k1", "u2"]);
+  });
+
+  test("界碑与通道标记混排，各自按时间就位、互不吞没", () => {
+    const records = mergeSideRecords(
+      [compacted("c1", 4000)],
+      [channelMark("k1", 2000)],
+      [userItem("u1", 1000), userItem("u2", 3000), userItem("u3", 5000)],
+    );
+    assert.deepEqual(
+      records.map((r) => r.id),
+      ["u1", "k1", "u2", "c1", "u3"],
+    );
   });
 });
 
@@ -537,6 +582,54 @@ describe("排队队列 —— 唯一真源，操作一律按 id", () => {
     // 丙仍然是丙：拿它的 id 去挪，照样命中
     states = moveQueued(states, "A", "3", "1", "before");
     assert.deepEqual(ids(states), ["3", "1"]);
+  });
+});
+
+describe("子会话 PR4a：channel 队列条目", () => {
+  const channelMsg = (id: string, over: Partial<ChannelMessage> = {}): ChannelMessage => ({
+    id,
+    from: "child",
+    author: "model",
+    kind: "question",
+    text: "焦点描边用哪个 token？",
+    delivery: "followUp",
+    createdAt: 1000,
+    ...over,
+  });
+  const item = (id: string, childId = "child-1"): Extract<QueuedMessage, { kind: "channel" }> => ({
+    id,
+    kind: "channel",
+    childId,
+    message: channelMsg(id),
+  });
+
+  test("enqueue 落到队尾，与 text 同一套队列——channel 条目按 message.id 认身份", () => {
+    let states = enqueue(new Map(), "parent-1", item("m1"));
+    states = enqueue(states, "parent-1", item("m2"));
+    assert.deepEqual(
+      states.get("parent-1")?.queued.map((entry) => entry.id),
+      ["m1", "m2"],
+    );
+  });
+
+  test("enqueueChannelMessage 按 id 去重：同一条 message.id 重复到达不二次入队", () => {
+    let states = enqueueChannelMessage(new Map(), "parent-1", item("m1"));
+    const after = enqueueChannelMessage(states, "parent-1", item("m1"));
+    assert.equal(after, states); // 同一引用：判定「没有变化」的调用方据此短路
+    assert.deepEqual(after.get("parent-1")?.queued.map((entry) => entry.id), ["m1"]);
+
+    // 不同 id 正常入队
+    states = enqueueChannelMessage(after, "parent-1", item("m2"));
+    assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m1", "m2"]);
+  });
+
+  test("nextDeliverable 对 channel 条目的规则同 text：只认 phase idle", () => {
+    const idleStates = enqueue(new Map(), "parent-1", item("m1"));
+    const idleEntry = idleStates.get("parent-1")!;
+    assert.equal(nextDeliverable(idleEntry)?.id, "m1");
+
+    const turnEntry: SessionEntry = { ...idleEntry, phase: "turn" };
+    assert.equal(nextDeliverable(turnEntry), null);
   });
 });
 

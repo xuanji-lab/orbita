@@ -7,6 +7,7 @@ import {
   dequeue,
   applyAgentEvent,
   enqueue,
+  enqueueChannelMessage,
   createSessionStates,
   moveQueued as moveQueuedIn,
   parseCompactCommand,
@@ -29,6 +30,7 @@ import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import type { AgentEvent, AgentStats, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
+import { composeChannelPrompt } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { usableProviders } from "../settings/model-menu";
 import {
@@ -41,7 +43,7 @@ import {
   type CarryoverDraft,
 } from "./carryover-parse.ts";
 import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.ts";
-import type { Carryover, CompactedRecord, SessionCompletion, SessionMeta } from "@shared/session";
+import type { Carryover, ChannelMarkRecord, CompactedRecord, SessionCompletion, SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 
 /**
@@ -72,6 +74,11 @@ export interface ChatSession {
   transcript: readonly TranscriptItem[];
   /** 压缩界碑（与 transcript 分开记账）；显示时由 applyCompactionBoundary 合成 */
   compactions: readonly CompactedRecord[];
+  /**
+   * 通道标记（子会话 PR4a，与 compactions 分开记账，同一条纪律）：盘上读回的
+   * `ChannelMarkRecord`；显示时由 `mergeSideRecords` 按时间插回往来流。
+   */
+  marks: readonly ChannelMarkRecord[];
   /** turn = 这一轮还在跑；compaction = 上下文压缩中；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
   /** 自动重试等待态：非 null 时重试行替换 Responding（或补在压缩行下） */
@@ -586,6 +593,16 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
         void api.agent
           .compact({ sessionId: id, ...turn, ...(head.instructions !== undefined ? { instructions: head.instructions } : {}) })
           .catch(fail);
+      } else if (head.kind === "channel") {
+        // 子会话 PR4a：子→父投递就在这里发生——子标题从 sessionsRef 真值查
+        // （查不到用 ""，composeChannelPrompt 自己会写 Untitled，不是哨兵值）。
+        // buildTurn 已支持从 meta 装配从没在本窗口打开过的会话（新会话/新槽由
+        // dequeue/enqueue 就地建），父会话不必先被用户点开过才能收到子的消息。
+        const childTitle = sessionsRef.current.find((meta) => meta.id === head.childId)?.title ?? "";
+        const text = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
+        const turn = buildTurn(id);
+        if (turn === null) return;
+        void api.agent.submit({ sessionId: id, text, ...turn }).catch(fail);
       } else {
         const turn = buildTurn(id);
         if (turn === null) return;
@@ -676,6 +693,34 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
       coalescer.dispose();
     };
   }, [applyStates, deliverNext, refreshSessions]);
+
+  /**
+   * 子会话 PR4a：子→父投递。通道消息落账 + 广播是主进程的事（`applyChannelSend` /
+   * `applyDelegate`），**排队所有权在这里**——子→父恒 followUp，进父的 renderer
+   * 队列，父空闲立即开一轮、在跑等这轮结束（既有的 phase 事件 deliverNext 会
+   * 接手）。父→子由主进程直接投递（steer / 空闲开轮），renderer 不管，所以这里
+   * 只认 `message.from === "child"` 的事件。
+   */
+  useEffect(() => {
+    const off = api.channel.onEvent((event) => {
+      if (event.type !== "message" || event.message.from !== "child") return;
+      // enqueueChannelMessage 内建按 message.id 去重：订阅重连等场景同一条事件
+      // 重复到达不会让队列里出现两条一样的话。
+      applyStates((prev) =>
+        enqueueChannelMessage(prev, event.parentId, {
+          id: event.message.id,
+          kind: "channel",
+          childId: event.childId,
+          message: event.message,
+        }),
+      );
+      // 父此刻空闲就立即投；在跑的话 nextDeliverable 在这里会拿到 null，
+      // 是安全的 no-op——真正的投递等这一轮 phase 回 idle 时上面那个
+      // agent.onEvent 效果里的 deliverNext 调用点接手。
+      deliverNext(event.parentId);
+    });
+    return off;
+  }, [applyStates, deliverNext]);
 
   /** 「配置好」的标准与设置面的命名模型菜单同源（model-menu），不各写一份 */
   const usable = useMemo(() => usableProviders(providers), [providers]);
@@ -800,6 +845,18 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     [refreshWorkspaces, workspaceFailed],
   );
 
+  // 引用稳定的按 id 查询：都经 ref 读最新值，闭包不必每次渲染重建——
+  // PR4a 的派出卡（TranscriptColumn 的 memo）新引入了 childPhaseOf 这个消费者，
+  // 不稳定的话每次引擎渲染都会传一个新函数进去，直接打穿那层 memo（见 TranscriptColumn 的注释）。
+  const phaseOf = useCallback(
+    (id: string): SessionEntry["phase"] => statesRef.current.get(id)?.phase ?? "idle",
+    [],
+  );
+  const turnErrorOf = useCallback(
+    (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
+    [],
+  );
+
   return {
     states,
     statesRef,
@@ -824,8 +881,8 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     removeWorkspace,
     defaultCwd,
     usable,
-    phaseOf: (id: string): SessionEntry["phase"] => statesRef.current.get(id)?.phase ?? "idle",
-    turnErrorOf: (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
+    phaseOf,
+    turnErrorOf,
     answerApproval,
     renameSession,
     pinSession,
@@ -1453,6 +1510,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       engine.applyStates((prev) => dequeue(prev, id, queuedId));
       // compact 项没有「用户的话」可拿回——本仓没有斜杠命令 UI，把 `/compact`
       // 塞进输入框只会变成一条普通消息。它的撤回就是单纯取消。
+      // channel 项同样不进草稿（子会话 PR4a）：它不是用户自己的话，是子会话
+      // 发来的消息——撤回只是不再投给父模型，消息仍在通道账本里，不提供编辑。
       if (item.kind === "text") restoreToDraft(item.text);
     },
     [engine, restoreToDraft],
@@ -1494,10 +1553,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       }
       const turn = engine.buildTurn(id);
       if (turn === null) return;
+      // channel 条目同样组信封文本发出——「立即发送」对它是同一件事：别等父
+      // 空闲了，现在就把子的消息喂给模型看（子标题查不到就交给 compose 写
+      // Untitled，不是本地再造一个哨兵）。
+      const text =
+        item.kind === "channel"
+          ? composeChannelPrompt(item.message, {
+              id: item.childId,
+              title: engine.sessions.find((meta) => meta.id === item.childId)?.title ?? "",
+            })
+          : item.text;
       if (entry.phase === "idle") {
-        void api.agent.submit({ sessionId: id, text: item.text, ...turn }).catch(fail);
+        void api.agent.submit({ sessionId: id, text, ...turn }).catch(fail);
       } else {
-        void api.agent.interrupt({ sessionId: id, text: item.text, ...turn }).catch(fail);
+        void api.agent.interrupt({ sessionId: id, text, ...turn }).catch(fail);
       }
     },
     [engine],
@@ -1749,6 +1818,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     sessionId,
     transcript,
     compactions: entry.compactions,
+    marks: entry.marks,
     phase: entry.phase,
     retry: entry.retry,
     turnError: entry.turnError,
