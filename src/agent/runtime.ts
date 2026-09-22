@@ -39,6 +39,7 @@ import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
+import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { McpHub } from "./mcp.ts";
 import { RequestBroker } from "./request-broker.ts";
@@ -509,6 +510,17 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     throw new Error(`unknown model "${command.provider.id}/${command.modelId}"`);
   }
 
+  /**
+   * 子会话身份（2026-09-23）：related 里有 `relation === "parent"` 的一项 → 本会话
+   * 是被派出的子会话。决定注册哪些通道工具（createChannelTools）、讲哪段通道
+   * 提示词（describeChannelRole）——两处判定必须同源，不能分别猜。
+   */
+  const role: "root" | "child" = command.directories?.related?.some(
+    (entry) => entry.relation === "parent",
+  )
+    ? "child"
+    : "root";
+
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
   // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
@@ -561,10 +573,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   "create_skill",
                   "add_mcp_server",
                   "read_task",
+                  // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
+                  ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
                 ]),
-                // 开轮目录清单（cwd / 附加目录 / 会话工作台）。同样逐轮重讲：工作区挂
-                // 新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
+                // 开轮目录清单（cwd / 附加目录 / 会话工作台 / 父子互见）。同样逐轮重讲：
+                // 工作区挂新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
                 describeDirectories(command.cwd, command.directories),
+                // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
+                describeChannelRole(role),
                 STORE_TOOLS_GUIDELINES,
                 TOOL_GUIDELINES,
                 // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
@@ -624,6 +640,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...mcpHub.currentTools(),
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
+    ...createChannelTools(requestBroker, command.sessionId, role),
   ];
   const { session } = await createAgentSessionFromServices({
     services,

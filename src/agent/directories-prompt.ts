@@ -17,6 +17,7 @@ import type { TurnDirectories } from "../shared/agent-ipc.ts";
  *
  * attached 为空时省略那一段——留一行 "- (none)" 只会教模型模仿这个格式。
  * workbench 恒出现：哪怕没挂任何附加目录，会话也总有草稿要落。
+ * related 为空 / 缺席时省略那一段（同 attached 的纪律）——绝大多数会话没有父子关系。
  */
 export function describeDirectories(cwd: string, directories: TurnDirectories | undefined): string {
   if (directories === undefined) return "";
@@ -32,7 +33,18 @@ export function describeDirectories(cwd: string, directories: TurnDirectories | 
     "  Private scratch space for this session: plans, handoffs, drafts, research notes. " +
       "It may not exist yet — create it with mkdir -p on first use. " +
       "Do not put user-facing deliverables here unless asked; those belong in the working directory.",
-    "</directories>",
   );
+  if (directories.related !== undefined && directories.related.length > 0) {
+    lines.push(
+      ...directories.related.map((entry) =>
+        entry.relation === "parent"
+          ? `Parent session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`
+          : `Sub-session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`,
+      ),
+      "  These are other sessions' private workbenches: read them to hand off material. " +
+        "Do not modify files the other session is actively using unless the task calls for it.",
+    );
+  }
+  lines.push("</directories>");
   return lines.join("\n");
 }
