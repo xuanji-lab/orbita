@@ -874,7 +874,10 @@ function Pane(props: {
               display: "inline-flex",
               alignItems: "center",
               gap: "var(--space-1)",
-              flex: "0 0 auto",
+              // flex-shrink:1（非 0 0 auto）+ minWidth:0：主槽变窄时它也让路，
+              // maxWidth 只是宽松时的上限，不是「永远这么宽」（子会话 PR4c fix）
+              flex: "0 1 auto",
+              minWidth: 0,
               maxWidth: 160,
               border: 0,
               background: "transparent",
@@ -885,9 +888,10 @@ function Pane(props: {
               color: "var(--color-text-tertiary)",
             }}
           >
-            <Icon name="arrow-up" size={11} strokeWidth={1.8} />
+            <Icon name="arrow-up" size={11} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
             <span
               style={{
+                minWidth: 0,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -913,6 +917,13 @@ function Pane(props: {
         >
           <strong
             style={{
+              // 标题是头部唯一允许收缩的元素：主槽变窄时先吃掉标题的空间，铅笔/
+              // 完成入口/子会话芯片/id 徽标一律 flex-shrink:0，不给它们让路
+              // （子会话 PR4c fix：三者原先没有一个显式声明谁该先缩，窄到极致时
+              // 会挤到互相覆盖）。**只收缩不伸长**：flex-grow 给 0（不是 1）——
+              // 给 1 会在宽槽下把标题撑满剩余空间，铅笔/完成入口被推到最右，
+              // 与标题之间空出一大截（CDP 复验发现的回归，原来紧挨着的观感变了）。
+              flex: "0 1 auto",
               minWidth: 0,
               fontSize: "var(--font-size-title)",
               fontWeight: "var(--weight-bold)",
@@ -1039,12 +1050,19 @@ function Pane(props: {
  */
 function SubSessionsChip(props: { chip: { count: number; waiting: number }; onClick?: () => void }) {
   const { count, waiting } = props.chip;
-  const text = waiting > 0 ? `${count} sub-sessions · ${waiting} waiting` : `${count} sub-sessions`;
+  // N=1 用单数（子会话 PR4c fix：CDP 实测发现 "1 sub-sessions" 读着不对）
+  const noun = count === 1 ? "sub-session" : "sub-sessions";
+  const text = waiting > 0 ? `${count} ${noun} · ${waiting} waiting` : `${count} ${noun}`;
   const style: React.CSSProperties = {
     display: "inline-flex",
     alignItems: "center",
     gap: "var(--space-1)",
-    flex: "0 0 auto",
+    // flex-shrink:1 + minWidth:0（不是 0 0 auto）：主槽变窄到标题已经缩没了还不够时，
+    // 这个芯片的文字自己 ellipsis，不会顶着 id 徽标（flex-shrink:0）互相覆盖
+    // （子会话 PR4c fix，CDP 实测发现的重叠）
+    flex: "0 1 auto",
+    minWidth: 0,
+    maxWidth: 200,
     border: 0,
     background: "transparent",
     padding: 0,
@@ -1055,8 +1073,10 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
   };
   const content = (
     <>
-      <Icon name="git-fork" size={12} strokeWidth={1.8} />
-      {text}
+      <Icon name="git-fork" size={12} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {text}
+      </span>
     </>
   );
   if (props.onClick === undefined) return <span style={style}>{content}</span>;

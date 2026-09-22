@@ -120,15 +120,25 @@ export function App() {
 
   /**
    * 用户对每个父会话显隐通道列的**显式选择**（ephemeral，不落盘，按父会话 id 记
-   * ——3.2 裁决）。缺席 = 没有显式选择，走默认：宽窗有可见通道即显示，窄窗不
-   * 自动出现（ChannelColumn 内部按 `shown ?? !narrow` 解析，这里只存显式值）。
+   * ——3.2 裁决）。缺席 = 没有显式选择，走默认：放得下（inline）有可见通道即
+   * 显示，放不下（overlay）不自动出现（ChannelColumn 内部按 `shown ?? !overlay`
+   * 解析，这里只存显式值）。
    */
   const [channelShown, setChannelShown] = useState<ReadonlyMap<string, boolean>>(new Map());
   /** 当前根会话有没有可见通道——ChannelColumn 上报，右图标条入口的显隐 / 点亮靠它 */
   const [hasVisibleChannels, setHasVisibleChannels] = useState(false);
+  /**
+   * 通道列此刻是 inline 还是 overlay（子会话 PR4c fix：CDP 实测发现窗口 1200px、
+   * 右栏与通道列同开时主槽被挤到 ~200px）——不只是全局 `narrow`：右栏开着时挤占
+   * 的空间也要算进去，`ChannelColumn` 内部量好后经 `onLayoutChange` 上报。
+   * App 这里需要它做与 `ChannelColumn` 内部同款的默认显隐判定（下面
+   * `channelColumnOpen`）与 Esc 协调（见下方 Esc 的 useEffect），两处口径必须
+   * 一致，否则右图标条亮着的状态和 Esc 实际收起的行为对不上。
+   */
+  const [channelColumnOverlay, setChannelColumnOverlay] = useState(false);
   const channelShownOverride = channelParentId !== null ? (channelShown.get(channelParentId) ?? null) : null;
   const channelColumnOpen =
-    channelParentId !== null && hasVisibleChannels && (channelShownOverride ?? !narrow);
+    channelParentId !== null && hasVisibleChannels && (channelShownOverride ?? !channelColumnOverlay);
   const setChannelShownOverride = useCallback(
     (shown: boolean) => {
       if (channelParentId === null) return;
@@ -243,10 +253,11 @@ export function App() {
     setRightPanel(next);
   }, []);
 
-  // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）；窄窗下通道列是覆盖层，
-  // Esc 同样收起（3.2 裁决：Esc 或再点入口收起）。Sub-sessions 面板开着且在
-  // 会话层时，Esc 只退一层回列表（escapeFrom），不直接关掉整个面板——与面板
-  // 内部「返回」按钮同一个退出台阶（子会话 PR4c 2.1）
+  // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）；通道列是 overlay 时
+  // （全局窄窗，或非窄窗但放不下——子会话 PR4c fix），Esc 同样收起（3.2 裁决：
+  // Esc 或再点入口收起）。Sub-sessions 面板开着且在会话层时，Esc 只退一层回
+  // 列表（escapeFrom），不直接关掉整个面板——与面板内部「返回」按钮同一个退出
+  // 台阶（子会话 PR4c 2.1）
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
@@ -257,11 +268,11 @@ export function App() {
       } else if (rightPanel !== null) {
         setRightPanel(null);
       }
-      if (narrow && channelColumnOpen) setChannelShownOverride(false);
+      if (channelColumnOverlay && channelColumnOpen) setChannelShownOverride(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightPanel, subSessionsNav, narrow, channelColumnOpen, setChannelShownOverride]);
+  }, [rightPanel, subSessionsNav, channelColumnOverlay, channelColumnOpen, setChannelShownOverride]);
 
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
   useEffect(() => {
@@ -410,6 +421,7 @@ export function App() {
             shown={channelShownOverride}
             onShownChange={setChannelShownOverride}
             onVisibilityChange={setHasVisibleChannels}
+            onLayoutChange={setChannelColumnOverlay}
             openRequest={channelOpenRequest}
           />
           {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}

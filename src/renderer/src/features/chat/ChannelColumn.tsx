@@ -5,6 +5,16 @@
  * 布局：`App.tsx` 常驻挂载（同 `RightPanelSlot` 的先例——壳一直在，`open` 只是
  * class 切换驱动的宽度过渡），`parentId` 为 null（没在看根会话，或看的是子会话 /
  * 设置页）时不显示任何东西。宽 300px，不参与拖宽。
+ *
+ * **inline / overlay 由「放不放得下」决定，不只是全局窄窗**（子会话 PR4c fix，
+ * CDP 实测发现的挤压 bug：1200px 窗口下右栏 Sub-sessions 面板与通道列同时开着，
+ * 主槽被压到 ~200px）。`channelColumnLayout`（`channel-column.ts`，纯函数）按
+ * 「用户刚打开的右栏优先，通道列让位」的顺序判定：全局窄窗恒 overlay（那时右栏
+ * 也已经是覆盖层，不占 flex 空间，维持 PR4b 原行为）；非窄窗则量 `.pane` 与
+ * 右栏此刻的实际宽度，放不下（chat < 480px）就转 overlay——**内部**用同一套
+ * narrow-overlay 语言（不自动出现、右图标条入口/点标记以覆盖层出现、Esc 或再点
+ * 入口收起），调用方（App.tsx）关心的 Esc 协调与默认显隐判定所以也要知道这个
+ * 结果，经 `onLayoutChange` 上报（同 `onVisibilityChange` 先例）。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChannelKey, ChannelMessage, ChannelStatus, ChannelSummary } from "@shared/channel";
@@ -12,7 +22,8 @@ import { api } from "../../api";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { Icon, type IconName } from "../../shell/Icon";
-import { channelWhoLabel, visibleChannels } from "./channel-column.ts";
+import { usePaneAndRightPanelWidth } from "../../shell/side-width.ts";
+import { channelColumnLayout, channelWhoLabel, visibleChannels } from "./channel-column.ts";
 import { channelKindIcon } from "./ChannelViews";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { isAtBottom } from "./scroll.ts";
@@ -35,17 +46,27 @@ export function ChannelColumn(props: {
   parentId: string | null;
   parentTitle: string;
   session: ChatSession;
-  /** App 的 narrow（<960px）：不自动出现，改以右侧锚定覆盖层形式出现 */
+  /**
+   * App 的全局 narrow（<960px）：恒转覆盖层（`channelColumnLayout` 的短路项）。
+   * **不是「该不该 overlay」的唯一输入**（子会话 PR4c fix）——非窄窗时还要看
+   * `.pane` 与右栏的实际宽度放不放得下，那部分量算在组件内部做，这里只传全局信号。
+   */
   narrow: boolean;
   /**
    * 用户对这个父会话显隐的显式选择（App 按父会话 id 记，ephemeral）。
-   * null = 没有显式选择，走默认——宽窗有可见通道即显示，窄窗不自动出现。
+   * null = 没有显式选择，走默认——放得下（inline）有可见通道即显示，放不下
+   * （overlay，全局窄窗或单纯放不下）不自动出现。
    */
   shown: boolean | null;
   /** 只在「隐藏后出现新的可见通道」这一拍调用，让 App 把 shown 记成显式 true（3.2 裁决） */
   onShownChange: (shown: boolean) => void;
   /** 上报「此刻有没有可见通道」——App 的右图标条入口显隐 / 点亮靠它 */
   onVisibilityChange: (hasVisible: boolean) => void;
+  /**
+   * 上报「此刻该 inline 还是 overlay」（子会话 PR4c fix）——App 的默认显隐判定
+   * 与 Esc 协调都要知道这个结果，同 `onVisibilityChange` 先例：值真的变化才报。
+   */
+  onLayoutChange: (overlay: boolean) => void;
   openRequest: ChannelOpenRequest | null;
 }) {
   const { parentId } = props;
@@ -65,27 +86,48 @@ export function ChannelColumn(props: {
     }
   }, [visible.length, onVisibilityChange]);
 
-  // 已解析的显隐：没有显式选择时，宽窗默认显示、窄窗默认不自动出现（3.2 裁决）。
-  const open = parentId !== null && visible.length > 0 && (props.shown ?? !props.narrow);
+  // 根 div 的 ref：量 `.pane` 与右栏此刻的实际宽度（子会话 PR4c fix）
+  const columnRef = useRef<HTMLDivElement | null>(null);
+  const { paneWidth, rightPanelWidth } = usePaneAndRightPanelWidth(columnRef);
+  const layout = channelColumnLayout({
+    narrow: props.narrow,
+    paneWidth,
+    rightPanelWidth,
+    columnWidth: COLUMN_WIDTH,
+  });
+  // 「放不放得下」判定出的 overlay，取代下面所有原先直接读 `props.narrow` 的地方——
+  // 全局窄窗只是 overlay 的一种成因（channelColumnLayout 内部已经把 narrow 短路成
+  // overlay），非窄窗但放不下是另一种，两种成因走同一套「窄窗行为」
+  const overlay = layout === "overlay";
+  const overlayRef = useRef<boolean | null>(null);
+  const onLayoutChange = props.onLayoutChange;
+  useEffect(() => {
+    if (overlayRef.current !== overlay) {
+      overlayRef.current = overlay;
+      onLayoutChange(overlay);
+    }
+  }, [overlay, onLayoutChange]);
 
-  // 隐藏后出现新的可见通道自动重新显示——只在**宽窗**成立：窄窗的默认就是不出现，
-  // 新通道不该替用户做主弹出一个盖住聊天区的覆盖层。按父会话 id 记「见过」的
-  // childId 集合——这个 ref 活在 ChannelColumn 自己的生命周期（App 里常驻挂载，
-  // 不随切换根会话卸载），隐藏状态与「见过什么」都能跨会话切换记住。
+  // 已解析的显隐：没有显式选择时，放得下（inline）默认显示、放不下（overlay）默认不自动出现（3.2 裁决）。
+  const open = parentId !== null && visible.length > 0 && (props.shown ?? !overlay);
+
+  // 隐藏后出现新的可见通道自动重新显示——只在**放得下（inline）**成立：overlay 的
+  // 默认就是不出现，新通道不该替用户做主弹出一个盖住聊天区的覆盖层。按父会话 id
+  // 记「见过」的 childId 集合——这个 ref 活在 ChannelColumn 自己的生命周期（App
+  // 里常驻挂载，不随切换根会话卸载），隐藏状态与「见过什么」都能跨会话切换记住。
   const seenRef = useRef<Map<string, ReadonlySet<string>>>(new Map());
   const onShownChange = props.onShownChange;
-  const narrow = props.narrow;
   useEffect(() => {
     if (parentId === null) return;
     const seen = seenRef.current.get(parentId) ?? new Set<string>();
     const currentIds = new Set(visible.map((summary) => summary.childId));
     const hasNew = [...currentIds].some((id) => !seen.has(id));
     seenRef.current.set(parentId, currentIds);
-    if (hasNew && !open && !narrow) onShownChange(true);
+    if (hasNew && !open && !overlay) onShownChange(true);
     // open/onShownChange 故意不进依赖：只在「出现新可见通道」这一拍判一次要不要
     // 打开，不需要 open 变化本身触发重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentId, visible, narrow]);
+  }, [parentId, visible, overlay]);
 
   // 单个通道的折叠：ephemeral，按 childId 记。点标记 → 强制展开对应通道
   // （显隐本身已经由 App 的 openChannel 在同一次操作里设成 shown=true，这里只管折叠）。
@@ -109,8 +151,8 @@ export function ChannelColumn(props: {
     });
   }, [openRequest]);
 
-  const narrowOverlayStyle: React.CSSProperties =
-    props.narrow && open
+  const overlayStyle: React.CSSProperties =
+    overlay && open
       ? {
           position: "absolute",
           top: "var(--space-3)",
@@ -127,8 +169,9 @@ export function ChannelColumn(props: {
 
   return (
     <div
+      ref={columnRef}
       className={`channel-column${open ? " open" : ""}`}
-      style={{ "--channel-column-w": `${COLUMN_WIDTH}px`, ...narrowOverlayStyle } as React.CSSProperties}
+      style={{ "--channel-column-w": `${COLUMN_WIDTH}px`, ...overlayStyle } as React.CSSProperties}
     >
       <div className="channel-column-inner">
         {visible.map((summary) => (

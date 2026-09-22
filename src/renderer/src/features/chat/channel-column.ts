@@ -28,6 +28,46 @@ export function visibleChannels(
     .sort((a, b) => b.lastAt - a.lastAt);
 }
 
+/**
+ * 主槽的硬底线（子会话 PR4c fix，CDP 实测发现的挤压 bug）：`App.tsx` 的 narrow
+ * 注释与 `RightPanel.tsx` 的 `clampRightPanelWidth`/`usePaneTotalWidth` 都认这条
+ * 线——chat 主区不该被挤到 480px 以下。但通道列（300px，PR4b）当时没算进这套预算：
+ * 窗口 1200px、右栏与通道列同时开着时，主槽被压到 ~200px。
+ */
+export const MIN_CHAT_WIDTH_FOR_INLINE = 480;
+
+export type ChannelColumnLayout = "inline" | "overlay";
+
+/**
+ * 通道列该内联展示还是转成覆盖层（子会话 PR4c fix）。
+ *
+ * 全局窄窗（`narrow`，<960px）：维持 PR4b 已有行为，直接 overlay——那时右栏本身
+ * 也已经转成覆盖层，不占 flex 空间，不存在「挤主槽」的问题，不需要走下面的量算。
+ *
+ * 非窄窗：**用户刚打开的右栏优先，通道列让位**——右栏是用户这一刻主动点开的东西，
+ * 通道列是背景信息；`paneWidth − rightPanelWidth − columnWidth ≥ 480` 才内联，
+ * 否则转覆盖层（同 narrow 下的既有行为：不自动出现，右图标条入口 / 点标记时以
+ * 右侧锚定覆盖层出现，Esc 或再点入口收起）。
+ *
+ * `paneWidth` 必须是**不受通道列自己当前占不占空间影响**的那个数——调用方量的是
+ * `.pane` 本身（`.layer` 里的一个 flex 项，宽度由祖先决定，不被子级反向影响），
+ * 不是「chat 主区实际渲染宽 + 右栏」那种会随通道列当前状态自指变化的量法。
+ * `rightPanelWidth` 同理传「此刻实际渲染宽」（右栏关着或右栏自己也在窄窗覆盖层
+ * 模式时，这个数天然是 0，调用方不需要另外判断「右栏开没开」）。
+ * `paneWidth <= 0`（还没量到）时保守走 overlay，不擅自把主槽挤窄。
+ */
+export function channelColumnLayout(input: {
+  narrow: boolean;
+  paneWidth: number;
+  rightPanelWidth: number;
+  columnWidth: number;
+}): ChannelColumnLayout {
+  if (input.narrow) return "overlay";
+  if (input.paneWidth <= 0) return "overlay";
+  const chatWidthIfInline = input.paneWidth - input.rightPanelWidth - input.columnWidth;
+  return chatWidthIfInline >= MIN_CHAT_WIDTH_FOR_INLINE ? "inline" : "overlay";
+}
+
 /** who 行的语气：颜色是第二信号，与 tool-results.ts 的 ChannelMarkTone 同一套判定习惯。 */
 export type ChannelWhoTone = "neutral" | "question" | "reply" | "done" | "failed";
 

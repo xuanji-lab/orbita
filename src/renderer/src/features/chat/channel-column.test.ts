@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { channelWhoLabel, visibleChannels } from "./channel-column.ts";
+import { channelColumnLayout, channelWhoLabel, visibleChannels } from "./channel-column.ts";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 channel-column.ts 本身的纪律）
 import type { ChannelMessage, ChannelSummary } from "../../../../shared/channel.ts";
 
@@ -109,5 +109,51 @@ describe("channelWhoLabel", () => {
   it("author === user 时 you 为 true——调用方据此追加「· you」（primary 色单独渲染）", () => {
     strictEqual(channelWhoLabel(message({ kind: "reply", author: "user" })).you, true);
     strictEqual(channelWhoLabel(message({ kind: "task", author: "model" })).you, false);
+  });
+});
+
+describe("channelColumnLayout（子会话 PR4c fix：右栏+通道列同开时主槽被挤到 ~200px 的 CDP 实测 bug）", () => {
+  // paneWidth 是 `.pane`（chat + 通道列 + 右栏三者的和）本身的宽度，不是窗口宽度——
+  // 窗口减去侧栏 288 + 图标条 32 + 边距之后剩下的才是 pane，两者不能混用
+  const layout = (over: Partial<Parameters<typeof channelColumnLayout>[0]> = {}) =>
+    channelColumnLayout({ narrow: false, paneWidth: 900, rightPanelWidth: 0, columnWidth: 300, ...over });
+
+  it("全局窄窗恒 overlay——右栏那时也已经转覆盖层，不占 flex 空间，不需要量", () => {
+    // paneWidth 给一个「按数字算明明够」的值，narrow 仍然应该压过它
+    strictEqual(layout({ narrow: true, paneWidth: 2000, rightPanelWidth: 0 }), "overlay");
+  });
+
+  it("非窄窗、右栏关着、pane 够宽：chat = 900 - 0 - 300 = 600 ≥ 480，inline", () => {
+    strictEqual(layout({ rightPanelWidth: 0 }), "inline");
+  });
+
+  it("复现报告的 bug：pane 900、右栏开着占 500（比例上限允许它这么宽）——chat = 900-500-300=100，" +
+      "旧逻辑（不管右栏）会硬塞出一个 300px 通道列，主槽被压到 100px；新逻辑判 overlay", () => {
+    strictEqual(layout({ paneWidth: 900, rightPanelWidth: 500 }), "overlay");
+  });
+
+  it("右栏开着但不算太宽：chat = 900-200-300=400，仍不够 480，overlay", () => {
+    strictEqual(layout({ paneWidth: 900, rightPanelWidth: 200 }), "overlay");
+  });
+
+  it("用户刚打开的右栏优先，通道列让位——同一个 pane 宽度下，右栏越宽，通道列越容易被挤成 overlay", () => {
+    strictEqual(layout({ paneWidth: 1080, rightPanelWidth: 0 }), "inline"); // 1080-0-300=780
+    strictEqual(layout({ paneWidth: 1080, rightPanelWidth: 300 }), "inline"); // 1080-300-300=480，刚好够
+    strictEqual(layout({ paneWidth: 1080, rightPanelWidth: 301 }), "overlay"); // 多 1px 右栏就不够了
+  });
+
+  it("边界取等：chat 恰好剩 480 算够（inline），差一点点就不够（overlay）", () => {
+    strictEqual(layout({ paneWidth: 1080, rightPanelWidth: 300 }), "inline"); // 1080-300-300=480
+    strictEqual(layout({ paneWidth: 1079, rightPanelWidth: 300 }), "overlay"); // 差 1px
+  });
+
+  it("右栏关着（宽度 0）时不再重复减一次——300px 通道列本身够不够全看它自己", () => {
+    strictEqual(layout({ paneWidth: 780, rightPanelWidth: 0 }), "inline"); // 780-0-300=480
+    strictEqual(layout({ paneWidth: 779, rightPanelWidth: 0 }), "overlay");
+  });
+
+  it("paneWidth 量不到（<=0，还没挂载测出来）：保守走 overlay，不擅自挤主槽", () => {
+    strictEqual(layout({ paneWidth: 0 }), "overlay");
+    strictEqual(layout({ paneWidth: -1 }), "overlay");
   });
 });
