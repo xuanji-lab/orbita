@@ -1498,6 +1498,41 @@ body {
   }
 }
 
+/* ===== Skills 列表（过滤行、归属点阵、行 hover tooltip、missing 就地清理） ===== */
+
+/*
+ * 过滤行：page header 下一条 34px 工具行，透明底 + 底部发丝线（对稿）——
+ * 跟着列表一起滚动，不常驻贴顶（不 sticky）。左右内边距 14px，与组头、行内容
+ * 对齐同一条竖线。
+ */
+.skills-filter-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+}
+.skills-filter-row input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-control);
+  color: var(--color-text-primary);
+}
+.skills-filter-row input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.skills-filter-count {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  flex: 0 0 auto;
+}
+
 /*
  * 韦恩图圆的淡填充（4-4，值取自 skills-map-3circle-v2）：只服务这一个 feature，
  * 从 tokens/colors.css 搬到这里（Implementation rules：只服务一个 feature 的值

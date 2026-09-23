@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
+import { IconButton } from "../../shell/IconButton";
 import {
   PanelButton,
   PanelIconButton,
@@ -12,6 +13,7 @@ import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
 import { isSkillSlug } from "@shared/skill";
 import { SkillsMap } from "./SkillsMap";
+import { filterSkills } from "./skill-filter.ts";
 
 /**
  * Skills 面板（1-4 / 2-1d）：列表视图按集合分组 + 详情视图改归属与三段编辑。
@@ -131,6 +133,8 @@ function SkillList(props: {
   const error = load.kind === "failed" ? load.message : null;
   /** + 的两项菜单（4-1）：面板内展开不弹窗；再点 + 收起 */
   const [menuOpen, setMenuOpen] = useState(false);
+  /** 过滤行的查询词；分组仍在这个组件里做，过滤只决定哪些行留下（skill-filter.ts） */
+  const [query, setQuery] = useState("");
 
   const header = (
     <>
@@ -190,8 +194,12 @@ function SkillList(props: {
     );
   }
 
-  const linked = skills.skills.filter((s) => s.global || s.workspaces.length > 0);
-  const disabled = skills.skills.filter((s) => !s.global && s.workspaces.length === 0);
+  const total = skills.skills.length;
+  const filtered = filterSkills(skills.skills, query);
+  const filtering = query.trim() !== "";
+
+  const linked = filtered.filter((s) => s.global || s.workspaces.length > 0);
+  const disabled = filtered.filter((s) => !s.global && s.workspaces.length === 0);
 
   const row = (skill: SkillMeta, key: string) => {
     const sets = (skill.global ? 1 : 0) + skill.workspaces.length;
@@ -276,37 +284,70 @@ function SkillList(props: {
       headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
       footer={<FooterReveal skills={skills} />}
     >
-      <div style={{ display: "grid", alignContent: "start" }}>
-        {error !== null && (
-          <div style={{ padding: "var(--space-3)" }}>
-            <PanelLine danger>Couldn’t read skills. {error}</PanelLine>
-          </div>
-        )}
-        {skills.skills.some((s) => s.global) && (
-          <div id="skills-group-global">
-            <GroupLabel>Global</GroupLabel>
-            {skills.skills.filter((s) => s.global).map((s) => row(s, `g:${s.slug}`))}
-          </div>
-        )}
-        {skills.workspaces.map((ws) => {
-          const members = linked.filter((s) => !s.global && s.workspaces.includes(ws.id));
-          if (members.length === 0) return null;
-          return (
-            <div key={ws.id} id={`skills-group-${ws.id}`}>
-              <GroupLabel>{ws.name}</GroupLabel>
-              {members.map((s) => row(s, `${ws.id}:${s.slug}`))}
+      <>
+        <div className="skills-filter-row">
+          <Icon name="search" size={14} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Esc 清空输入；已经空了就不拦截——让它照旧冒泡去关面板（App.tsx 的
+              // 全局 Esc 处理），两次 Esc 才关面板的手感和大多数搜索框一致
+              if (e.key === "Escape" && query !== "") {
+                e.stopPropagation();
+                setQuery("");
+              }
+            }}
+            placeholder="Filter skills…"
+            aria-label="Filter skills"
+          />
+          <span className="skills-filter-count">{filtering ? `${filtered.length} / ${total}` : total}</span>
+          {query !== "" && (
+            <IconButton label="Clear" size={20} onClick={() => setQuery("")}>
+              <Icon name="x" size={12} />
+            </IconButton>
+          )}
+        </div>
+        <div style={{ display: "grid", alignContent: "start" }}>
+          {error !== null && (
+            <div style={{ padding: "var(--space-3)" }}>
+              <PanelLine danger>Couldn’t read skills. {error}</PanelLine>
             </div>
-          );
-        })}
-        {disabled.length > 0 && (
-          <div>
-            <GroupLabel>Disabled</GroupLabel>
-            {disabled.map((s) => (
-              <DisabledRow key={s.slug} skill={s} onSelect={props.onSelect} />
-            ))}
-          </div>
-        )}
-      </div>
+          )}
+          {filtering && filtered.length === 0 ? (
+            <div style={{ padding: "var(--space-4)" }}>
+              <PanelLine>No skill matches “{query.trim()}”.</PanelLine>
+            </div>
+          ) : (
+            <>
+              {filtered.some((s) => s.global) && (
+                <div id="skills-group-global">
+                  <GroupLabel>Global</GroupLabel>
+                  {filtered.filter((s) => s.global).map((s) => row(s, `g:${s.slug}`))}
+                </div>
+              )}
+              {skills.workspaces.map((ws) => {
+                const members = linked.filter((s) => !s.global && s.workspaces.includes(ws.id));
+                if (members.length === 0) return null;
+                return (
+                  <div key={ws.id} id={`skills-group-${ws.id}`}>
+                    <GroupLabel>{ws.name}</GroupLabel>
+                    {members.map((s) => row(s, `${ws.id}:${s.slug}`))}
+                  </div>
+                );
+              })}
+              {disabled.length > 0 && (
+                <div>
+                  <GroupLabel>Disabled</GroupLabel>
+                  {disabled.map((s) => (
+                    <DisabledRow key={s.slug} skill={s} onSelect={props.onSelect} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </>
     </RightPanelFrame>
   );
 }
