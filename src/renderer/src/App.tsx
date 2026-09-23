@@ -192,6 +192,8 @@ export function App() {
   // 主槽换会话 → 面板回列表层（“面板里开着的那条挂错了母亲”，2.1 裁决）；
   // 只在 mainOpenId 真的变化时才重置——见 syncToMainSession 本身的纯逻辑
   const subSessionsMainIdRef = useRef<string | null>(null);
+  /** 文件面板的「Esc 先退一层」：预览开着时由它关预览（FilesPanel 填，Esc 监听里先问它） */
+  const filesEscapeRef = useRef<(() => boolean) | null>(null);
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
     setSubSessionsNav((prev) => syncToMainSession(prev, subSessionsMainIdRef.current, nextMainId));
@@ -277,6 +279,8 @@ export function App() {
         const next = escapeFrom(subSessionsNav);
         if (next === null) setRightPanel(null);
         else setSubSessionsNav(next);
+      } else if (rightPanel === "files" && filesEscapeRef.current?.() === true) {
+        // 文件面板开着预览：这一下 Esc 只关预览（退一层），面板留着
       } else if (rightPanel !== null) {
         setRightPanel(null);
       }
@@ -458,7 +462,7 @@ export function App() {
               }}
             >
               {shownPanel === "files" ? (
-                <FilesPanel session={session} onClose={() => handlePanel(null)} />
+                <FilesPanel session={session} onClose={() => handlePanel(null)} escapeRef={filesEscapeRef} />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel
                   skills={skills}

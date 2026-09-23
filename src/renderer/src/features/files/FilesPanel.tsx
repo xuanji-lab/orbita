@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { api } from "../../api";
@@ -16,6 +16,7 @@ import {
   orderEntries,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
+import { FilePreviewPane } from "./FilePreviewPane";
 import type { FileEntryKind, FileRoot, FileRootKind } from "@shared/files";
 
 /**
@@ -23,14 +24,61 @@ import type { FileEntryKind, FileRoot, FileRootKind } from "@shared/files";
  * 会话变的根，用户最常来找 plan / handoff）→ Workspace → Attached，往下每层
  * 30px 树行懒加载。attach / detach 就地做（工作区级、可增可减，不进设置页）。
  */
-export function FilesPanel(props: { session: ChatSession; onClose: () => void }) {
+export function FilesPanel(props: {
+  session: ChatSession;
+  onClose: () => void;
+  /**
+   * App 的全局 Esc 先问这里：预览开着就只关预览、回报「处理掉了」，面板不关——
+   * 与子会话面板「Esc 先退一层」同一个台阶。不自己挂 window 监听：App 的监听注册
+   * 更早、先执行，两个都挂的话一下 Esc 会连预览带面板一起关掉。
+   */
+  escapeRef: { current: (() => boolean) | null };
+}) {
   const session = props.session;
   /** 与 App 的 mainSessionId 同口径：活会话优先，退盘上打开的那条 */
   const sessionId = session.sessionId ?? session.opened?.id ?? null;
   const workspaceId = session.workspaceId;
   const [query, setQuery] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  /** 选中的文件行（绝对路径）；目录行不参与选中 */
+  const [selected, setSelected] = useState<string | null>(null);
+  /** 打开的预览：root 是它所在分组的根路径，path 是文件绝对路径。null = 预览未打开 */
+  const [preview, setPreview] = useState<{ root: string; path: string } | null>(null);
   const tree = useFileTree(sessionId, workspaceId, session.workspaces);
+
+  // 会话 / 工作区切换 = 换一棵树，选中与预览跟着清掉——旧会话的文件路径在新树里
+  // 没有意义（同 useFileTree 清缓存 / 展开态的先例）
+  useEffect(() => {
+    setSelected(null);
+    setPreview(null);
+  }, [sessionId, workspaceId]);
+
+  // 预览打开时 Esc 关闭：窄屏「回到目录」与宽屏「关闭预览」是同一个动作
+  // （两者都只是 setPreview(null)，宽窄只影响头上按钮的图标与文案），所以
+  // 不需要按宽度分支。Esc 由 App 的全局监听派发过来（见 props.escapeRef）
+  const escapeRef = props.escapeRef;
+  useEffect(() => {
+    escapeRef.current = () => {
+      if (preview === null) return false;
+      setPreview(null);
+      return true;
+    };
+    return () => {
+      escapeRef.current = null;
+    };
+  }, [escapeRef, preview]);
+
+  /** 单击文件行：选中；预览已经打开时同时把预览换成这一个（分栏模式的「像访达」行为） */
+  const selectFile = (root: FileRoot, path: string): void => {
+    setSelected(path);
+    setPreview((prev) => (prev === null ? prev : { root: root.path, path }));
+  };
+
+  /** 双击 / Enter：选中并打开预览 */
+  const openPreview = (root: FileRoot, path: string): void => {
+    setSelected(path);
+    setPreview({ root: root.path, path });
+  };
 
   /**
    * 挂目录。成功后 reloadWorkspaces——workspaces 引用一变，useFileTree 的 roots
@@ -86,6 +134,9 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
             modifiedAt={entry.modifiedAt}
             onToggle={() => tree.toggle(root.path, child)}
             onReveal={() => tree.reveal(root.path, child)}
+            selected={!isDir && selected === child}
+            onSelect={() => selectFile(root, child)}
+            onOpenPreview={() => openPreview(root, child)}
           />
           {isDir && open && rowsOf(root, child, depth + 1)}
         </Fragment>
@@ -169,57 +220,69 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
       }
       footer={<PanelLine>{footerSummary(groupCount, missingAttached)}</PanelLine>}
     >
-      <div
-        style={{
-          height: "100%",
-          display: "grid",
-          gridTemplateRows: "auto minmax(0, 1fr)",
-        }}
-      >
-        {/* 过滤行钉在面板头顶部不随树滚动（设计稿的位置）：壳的内容区是一个滚动层，
-            这里在内部分「固定过滤行 + 滚动树」两块，不动 RightPanelFrame */}
-        <FilterRow
-          value={query}
-          onChange={setQuery}
-          countText={filterCountText(shownCount, loadedCount, filtering)}
-        />
-        {/* 列宽钉死在容器宽度（minmax(0,1fr)）：隐式列默认按内容撑开，一条很长的附加目录
-            路径（不换行）会把整列撑到几倍宽，整棵树横向溢出、居中的 Attach 文案与行尾的
-            Detach 都被推出视野——省略号只有在列宽受约束时才会出现 */}
-        <div
-          style={{
-            minHeight: 0,
-            overflowY: "auto",
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr)",
-            alignContent: "start",
-          }}
-        >
-          {error !== null && (
-            <div style={{ padding: "var(--space-3)" }}>
-              <PanelLine danger>{error}</PanelLine>
+      {/* container query 分栏：容器 ≥600px 且预览打开 → 左目录右预览；<600px 且
+          预览打开 → 只显示预览，目录用 CSS 隐藏（不卸载，展开态与滚动位置还在）；
+          预览未打开 → 目录占满，与分栏前的版式一样。断点与显隐规则全在 styles.css，
+          这里不量宽度（硬规则：container query 写，不用 JS 量）。
+          body 是查询容器、split 是网格：@container 查不到容器自己，两层不能合并 */}
+      <div className="files-panel-body">
+        <div className="files-panel-split" data-preview={preview === null ? undefined : "open"}>
+          <div className="files-panel-tree">
+            {/* 过滤行钉在面板头顶部不随树滚动（设计稿的位置）：壳的内容区是一个滚动层，
+                这里在内部分「固定过滤行 + 滚动树」两块，不动 RightPanelFrame */}
+            <FilterRow
+              value={query}
+              onChange={setQuery}
+              countText={filterCountText(shownCount, loadedCount, filtering)}
+            />
+            {/* 列宽钉死在容器宽度（minmax(0,1fr)）：隐式列默认按内容撑开，一条很长的附加目录
+                路径（不换行）会把整列撑到几倍宽，整棵树横向溢出、居中的 Attach 文案与行尾的
+                Detach 都被推出视野——省略号只有在列宽受约束时才会出现 */}
+            <div
+              style={{
+                minHeight: 0,
+                overflowY: "auto",
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr)",
+                alignContent: "start",
+              }}
+            >
+              {error !== null && (
+                <div style={{ padding: "var(--space-3)" }}>
+                  <PanelLine danger>{error}</PanelLine>
+                </div>
+              )}
+              {tree.rootsError !== null && (
+                <div style={{ padding: "var(--space-3)" }}>
+                  <PanelLine danger>Couldn’t read roots. {tree.rootsError}</PanelLine>
+                </div>
+              )}
+              {tree.rootsLoading && tree.roots.length === 0 && sessionId !== null && (
+                <div style={{ padding: "var(--space-3)" }}>
+                  <PanelLine>Loading…</PanelLine>
+                </div>
+              )}
+              {/* 还没有会话（新任务没发首条消息）：Session 分组留在最前，但只给一行灰字——
+                  此刻工作台既不该请求也不存在，roots 里的 session 根已被 useFileTree 过滤 */}
+              {sessionId === null && (
+                <div style={{ padding: "6px 0 4px" }}>
+                  <RootLabel kind="session" detail="" canReveal={false} />
+                  <DimRow>Send the first message to get a workbench</DimRow>
+                </div>
+              )}
+              {tree.roots.map(rootGroup)}
+              <AttachRow onAttach={attach} />
             </div>
+          </div>
+          {preview !== null && (
+            <FilePreviewPane
+              sessionId={sessionId}
+              workspaceId={workspaceId}
+              root={preview.root}
+              path={preview.path}
+              onClose={() => setPreview(null)}
+            />
           )}
-          {tree.rootsError !== null && (
-            <div style={{ padding: "var(--space-3)" }}>
-              <PanelLine danger>Couldn’t read roots. {tree.rootsError}</PanelLine>
-            </div>
-          )}
-          {tree.rootsLoading && tree.roots.length === 0 && sessionId !== null && (
-            <div style={{ padding: "var(--space-3)" }}>
-              <PanelLine>Loading…</PanelLine>
-            </div>
-          )}
-          {/* 还没有会话（新任务没发首条消息）：Session 分组留在最前，但只给一行灰字——
-              此刻工作台既不该请求也不存在，roots 里的 session 根已被 useFileTree 过滤 */}
-          {sessionId === null && (
-            <div style={{ padding: "6px 0 4px" }}>
-              <RootLabel kind="session" detail="" canReveal={false} />
-              <DimRow>Send the first message to get a workbench</DimRow>
-            </div>
-          )}
-          {tree.roots.map(rootGroup)}
-          <AttachRow onAttach={attach} />
         </div>
       </div>
     </RightPanelFrame>
@@ -322,7 +385,7 @@ function RootLabel(props: {
       </span>
       {props.canReveal && props.onReveal !== undefined && (
         <LabelAction title="Reveal in Finder" onClick={props.onReveal}>
-          <Icon name="external-link" size={12} />
+          <Icon name="folder-open" size={12} />
         </LabelAction>
       )}
       {props.onDetach !== undefined && (
@@ -362,7 +425,8 @@ function LabelAction(props: { title: string; onClick: () => void; children: Reac
 
 /**
  * 30px 树行：chevron + 类型图标 + 名字 +（hover 时的 size · mtime，仅文件行）+
- * （AGENTS.md 的 `rules` 尾注）。目录行点击展开收起，文件行点击直接 reveal；
+ * （AGENTS.md 的 `rules` 尾注）。目录行点击展开收起；非目录行单击选中
+ * （`aria-selected` + CSS 高亮），双击或 Enter 打开预览——不再单击 reveal，
  * Reveal 按钮是兄弟节点浮在行上（button 不能套 button），两个都 Tab 可达。
  */
 function TreeRow(props: {
@@ -375,6 +439,12 @@ function TreeRow(props: {
   modifiedAt: number;
   onToggle: () => void;
   onReveal: () => void;
+  /** 非目录行的选中态；目录行恒为 false，不参与选中（目录照旧单击展开收起） */
+  selected: boolean;
+  /** 单击非目录行：选中。若预览已打开，FilesPanel 会同时把预览换成这一个 */
+  onSelect: () => void;
+  /** 双击 / Enter 非目录行：选中并打开预览 */
+  onOpenPreview: () => void;
 }) {
   const isDir = props.kind === "directory";
   const isSymlink = props.kind === "symlink";
@@ -397,8 +467,21 @@ function TreeRow(props: {
         type="button"
         className="file-row"
         aria-expanded={isDir ? props.open : undefined}
+        aria-selected={isDir ? undefined : props.selected}
         title={title}
-        onClick={isDir ? props.onToggle : props.onReveal}
+        onClick={isDir ? props.onToggle : props.onSelect}
+        onDoubleClick={isDir ? undefined : props.onOpenPreview}
+        onKeyDown={
+          isDir
+            ? undefined
+            : (event) => {
+                if (event.key !== "Enter") return;
+                // button 的 Enter 默认会再触发一次合成 click（= onSelect）——
+                // preventDefault 掐掉那次合成 click，预览只由这里打开一次
+                event.preventDefault();
+                props.onOpenPreview();
+              }
+        }
         style={{
           display: "flex",
           alignItems: "center",
@@ -496,7 +579,7 @@ function TreeRow(props: {
           cursor: "pointer",
         }}
       >
-        <Icon name="external-link" size={12} />
+        <Icon name="folder-open" size={12} />
       </button>
     </div>
   );

@@ -5,7 +5,13 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { FileListRequest, FileListResponse, FileRoot, FileRootsRequest } from "../../shared/files.ts";
+import type {
+  FileListRequest,
+  FileListResponse,
+  FilePreview,
+  FileRoot,
+  FileRootsRequest,
+} from "../../shared/files.ts";
 
 export const filesApi = {
   /** 这条会话的根清单（工作台 / 工作区 / 附加目录），顺序固定、每次现算 */
@@ -14,4 +20,8 @@ export const filesApi = {
   list: (req: FileListRequest): Promise<FileListResponse> => ipcRenderer.invoke(ipcChannels.fsList, req),
   /** 在系统文件管理器里显示 dir（同 root/dir 白名单） */
   reveal: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsReveal, req),
+  /** 读一个文件给面板预览（同 root/dir 白名单，`dir` 就是文件路径） */
+  read: (req: FileListRequest): Promise<FilePreview> => ipcRenderer.invoke(ipcChannels.fsRead, req),
+  /** 用系统默认应用打开 dir（同白名单） */
+  open: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpen, req),
 } as const;
