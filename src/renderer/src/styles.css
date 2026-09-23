@@ -1839,6 +1839,187 @@ body {
 }
 
 /*
+ * ===== 文件预览（双击文件 / 分栏预览，2026-09-23 wafo 裁决） =====
+ * `.files-panel-body` 是唯一的 container query 根：容器宽 ≥600px 且预览打开时
+ * 两栏（目录 + 预览），<600px 且预览打开时只留预览、目录用 `display:none` 藏起来
+ * ——不卸载，展开态与滚动位置都在原地，回到目录时不用重新展开。断点全在这里，
+ * 不用 JS 量宽度（硬规则）。
+ *
+ * 容器与网格必须是两个元素：@container 只作用于容器的**后代**，查不到容器自己——
+ * 网格若就挂在 `.files-panel-body` 上，宽面板时两栏规则永远不命中，预览会掉进隐式
+ * 第二行、叠在目录下面（2026-09-23 实机验收抓到）。
+ */
+.files-panel-body {
+  container-type: inline-size;
+  height: 100%;
+  min-height: 0;
+}
+.files-panel-split {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.files-panel-tree {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+}
+@container (min-width: 600px) {
+  .files-panel-split[data-preview="open"] {
+    grid-template-columns: minmax(220px, 40%) minmax(0, 1fr);
+  }
+}
+/* 预览打开 + 窄容器：目录隐藏但不卸载；预览打开 + 宽容器：目录照常显示（两栏） */
+.files-panel-split[data-preview="open"] .files-panel-tree {
+  display: none;
+}
+@container (min-width: 600px) {
+  .files-panel-split[data-preview="open"] .files-panel-tree {
+    display: grid;
+  }
+}
+
+.files-panel-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+}
+@container (min-width: 600px) {
+  .files-panel-preview {
+    border-left: 1px solid var(--color-border-subtle);
+  }
+}
+
+/*
+ * 头：返回 / 关闭按钮用同一个 onClose（宽窄只差图标与文案），两个都渲染、用
+ * container query 切换显示——窄容器（<600px，此时预览独占整个面板宽度）显示
+ * 「Back to files」，宽容器（两栏时）显示「Close preview」。
+ */
+.file-preview-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.file-preview-back {
+  display: inline-flex;
+}
+.file-preview-close {
+  display: none;
+}
+@container (min-width: 600px) {
+  .file-preview-back {
+    display: none;
+  }
+  .file-preview-close {
+    display: inline-flex;
+  }
+}
+.file-preview-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.file-preview-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.file-preview-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.file-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.file-preview-mode-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.file-preview-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+.file-preview-truncated {
+  margin-bottom: var(--space-2);
+}
+.file-preview-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+.file-preview-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.file-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-4);
+  text-align: center;
+}
+.file-preview-image-wrap {
+  display: flex;
+  justify-content: center;
+}
+.file-preview-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}
+/* 等宽原文：txt / md 的 Source 段 / 超过 HIGHLIGHT_LIMIT 的代码 / 未预置语言的代码 */
+.file-preview-source {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
+/* 代码不折行：`.file-preview-body` 是双轴滚动层，横向滚动条落在视口底部 */
+.file-preview-source[data-wrap="off"] {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+/*
  * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
  * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
  * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边

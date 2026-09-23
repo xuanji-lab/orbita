@@ -201,6 +201,7 @@ export function PanelIconButton(props: {
     <button
       type="button"
       title={props.title}
+      aria-label={props.title}
       disabled={disabled}
       onClick={props.onClick}
       className="no-drag"

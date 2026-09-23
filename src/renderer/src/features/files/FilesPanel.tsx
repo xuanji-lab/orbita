@@ -16,6 +16,7 @@ import {
   orderEntries,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
+import { FilePreviewPane } from "./FilePreviewPane";
 import type { FileEntryKind, FileRoot, FileRootKind } from "@shared/files";
 
 /**
@@ -219,57 +220,69 @@ export function FilesPanel(props: {
       }
       footer={<PanelLine>{footerSummary(groupCount, missingAttached)}</PanelLine>}
     >
-      <div
-        style={{
-          height: "100%",
-          display: "grid",
-          gridTemplateRows: "auto minmax(0, 1fr)",
-        }}
-      >
-        {/* 过滤行钉在面板头顶部不随树滚动（设计稿的位置）：壳的内容区是一个滚动层，
-            这里在内部分「固定过滤行 + 滚动树」两块，不动 RightPanelFrame */}
-        <FilterRow
-          value={query}
-          onChange={setQuery}
-          countText={filterCountText(shownCount, loadedCount, filtering)}
-        />
-        {/* 列宽钉死在容器宽度（minmax(0,1fr)）：隐式列默认按内容撑开，一条很长的附加目录
-            路径（不换行）会把整列撑到几倍宽，整棵树横向溢出、居中的 Attach 文案与行尾的
-            Detach 都被推出视野——省略号只有在列宽受约束时才会出现 */}
-        <div
-          style={{
-            minHeight: 0,
-            overflowY: "auto",
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr)",
-            alignContent: "start",
-          }}
-        >
-          {error !== null && (
-            <div style={{ padding: "var(--space-3)" }}>
-              <PanelLine danger>{error}</PanelLine>
+      {/* container query 分栏：容器 ≥600px 且预览打开 → 左目录右预览；<600px 且
+          预览打开 → 只显示预览，目录用 CSS 隐藏（不卸载，展开态与滚动位置还在）；
+          预览未打开 → 目录占满，与分栏前的版式一样。断点与显隐规则全在 styles.css，
+          这里不量宽度（硬规则：container query 写，不用 JS 量）。
+          body 是查询容器、split 是网格：@container 查不到容器自己，两层不能合并 */}
+      <div className="files-panel-body">
+        <div className="files-panel-split" data-preview={preview === null ? undefined : "open"}>
+          <div className="files-panel-tree">
+            {/* 过滤行钉在面板头顶部不随树滚动（设计稿的位置）：壳的内容区是一个滚动层，
+                这里在内部分「固定过滤行 + 滚动树」两块，不动 RightPanelFrame */}
+            <FilterRow
+              value={query}
+              onChange={setQuery}
+              countText={filterCountText(shownCount, loadedCount, filtering)}
+            />
+            {/* 列宽钉死在容器宽度（minmax(0,1fr)）：隐式列默认按内容撑开，一条很长的附加目录
+                路径（不换行）会把整列撑到几倍宽，整棵树横向溢出、居中的 Attach 文案与行尾的
+                Detach 都被推出视野——省略号只有在列宽受约束时才会出现 */}
+            <div
+              style={{
+                minHeight: 0,
+                overflowY: "auto",
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr)",
+                alignContent: "start",
+              }}
+            >
+              {error !== null && (
+                <div style={{ padding: "var(--space-3)" }}>
+                  <PanelLine danger>{error}</PanelLine>
+                </div>
+              )}
+              {tree.rootsError !== null && (
+                <div style={{ padding: "var(--space-3)" }}>
+                  <PanelLine danger>Couldn’t read roots. {tree.rootsError}</PanelLine>
+                </div>
+              )}
+              {tree.rootsLoading && tree.roots.length === 0 && sessionId !== null && (
+                <div style={{ padding: "var(--space-3)" }}>
+                  <PanelLine>Loading…</PanelLine>
+                </div>
+              )}
+              {/* 还没有会话（新任务没发首条消息）：Session 分组留在最前，但只给一行灰字——
+                  此刻工作台既不该请求也不存在，roots 里的 session 根已被 useFileTree 过滤 */}
+              {sessionId === null && (
+                <div style={{ padding: "6px 0 4px" }}>
+                  <RootLabel kind="session" detail="" canReveal={false} />
+                  <DimRow>Send the first message to get a workbench</DimRow>
+                </div>
+              )}
+              {tree.roots.map(rootGroup)}
+              <AttachRow onAttach={attach} />
             </div>
+          </div>
+          {preview !== null && (
+            <FilePreviewPane
+              sessionId={sessionId}
+              workspaceId={workspaceId}
+              root={preview.root}
+              path={preview.path}
+              onClose={() => setPreview(null)}
+            />
           )}
-          {tree.rootsError !== null && (
-            <div style={{ padding: "var(--space-3)" }}>
-              <PanelLine danger>Couldn’t read roots. {tree.rootsError}</PanelLine>
-            </div>
-          )}
-          {tree.rootsLoading && tree.roots.length === 0 && sessionId !== null && (
-            <div style={{ padding: "var(--space-3)" }}>
-              <PanelLine>Loading…</PanelLine>
-            </div>
-          )}
-          {/* 还没有会话（新任务没发首条消息）：Session 分组留在最前，但只给一行灰字——
-              此刻工作台既不该请求也不存在，roots 里的 session 根已被 useFileTree 过滤 */}
-          {sessionId === null && (
-            <div style={{ padding: "6px 0 4px" }}>
-              <RootLabel kind="session" detail="" canReveal={false} />
-              <DimRow>Send the first message to get a workbench</DimRow>
-            </div>
-          )}
-          {tree.roots.map(rootGroup)}
-          <AttachRow onAttach={attach} />
         </div>
       </div>
     </RightPanelFrame>
@@ -372,7 +385,7 @@ function RootLabel(props: {
       </span>
       {props.canReveal && props.onReveal !== undefined && (
         <LabelAction title="Reveal in Finder" onClick={props.onReveal}>
-          <Icon name="external-link" size={12} />
+          <Icon name="folder-open" size={12} />
         </LabelAction>
       )}
       {props.onDetach !== undefined && (
@@ -566,7 +579,7 @@ function TreeRow(props: {
           cursor: "pointer",
         }}
       >
-        <Icon name="external-link" size={12} />
+        <Icon name="folder-open" size={12} />
       </button>
     </div>
   );
