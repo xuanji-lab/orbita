@@ -10,7 +10,9 @@ import {
   formatAge,
   formatSize,
   hasAgentsMd,
+  mergeRefresh,
   orderEntries,
+  refreshTargets,
 } from "./tree-view.ts";
 import type { FileEntry, FileRoot } from "../../../../shared/files.ts";
 
@@ -273,5 +275,128 @@ describe("countVisibleEntries / countLoadedEntries", () => {
     ]);
     deepStrictEqual(countVisibleEntries([root, rootB], dirs, new Set(), ""), 3);
     deepStrictEqual(countLoadedEntries(dirs), 3);
+  });
+});
+
+describe("refreshTargets", () => {
+  const ws: FileRoot = { kind: "workspace", label: "orbita", path: "/ws", exists: true };
+  const session: FileRoot = { kind: "session", label: "task", path: "/wb/s1", exists: false };
+
+  it("在盘的根 + 全部展开目录（含祖先收起的），各自带上所属根", () => {
+    // /ws/src 收起但 /ws/src/lib 还在展开表里：祖先再展开时它要有新数据
+    deepStrictEqual(refreshTargets([session, ws], new Set(["/ws/docs", "/ws/src/lib"])), [
+      { root: "/ws", dir: "/ws" },
+      { root: "/ws", dir: "/ws/docs" },
+      { root: "/ws", dir: "/ws/src/lib" },
+    ]);
+  });
+
+  it("不在盘的根不拉；落不进任何在盘根的展开目录（根被摘）不拉", () => {
+    deepStrictEqual(refreshTargets([ws], new Set(["/vault/notes"])), [{ root: "/ws", dir: "/ws" }]);
+  });
+
+  it("按路径段判归属：/ws2 下的目录不归 /ws", () => {
+    deepStrictEqual(refreshTargets([ws], new Set(["/ws2/a"])), [{ root: "/ws", dir: "/ws" }]);
+  });
+
+  it("嵌套的根（附加目录在工作区里）按目录去重", () => {
+    const vendor: FileRoot = { kind: "attached", label: "vendor", path: "/ws/vendor", exists: true };
+    deepStrictEqual(refreshTargets([ws, vendor], new Set(["/ws/vendor"])), [
+      { root: "/ws", dir: "/ws" },
+      { root: "/ws/vendor", dir: "/ws/vendor" },
+    ]);
+  });
+});
+
+describe("mergeRefresh", () => {
+  it("展开目录换新快照，展开态原样保留（复现：展开着的目录里新建文件）", () => {
+    const current = {
+      dirs: new Map<string, readonly FileEntry[]>([
+        ["/ws", [dir("src")]],
+        ["/ws/src", [file("a.ts")]],
+      ]),
+      expanded: new Set(["/ws/src"]),
+    };
+    const next = mergeRefresh(current, ["/ws"], new Map([
+      ["/ws", [dir("src")]],
+      ["/ws/src", [file("a.ts"), file("b.ts")]],
+    ]));
+    deepStrictEqual(next.dirs.get("/ws/src"), [file("a.ts"), file("b.ts")]);
+    deepStrictEqual(next.expanded, new Set(["/ws/src"]));
+  });
+
+  it("收起目录的旧缓存丢掉——下次展开缓存未命中、现拉（复现：收起再展开还是旧列表）", () => {
+    const current = {
+      dirs: new Map<string, readonly FileEntry[]>([
+        ["/ws", [dir("src")]],
+        ["/ws/src", [file("a.ts")]],
+      ]),
+      expanded: new Set<string>(),
+    };
+    const next = mergeRefresh(current, ["/ws"], new Map([["/ws", [dir("src")]]]));
+    deepStrictEqual(next.dirs.has("/ws/src"), false);
+    deepStrictEqual(next.dirs.get("/ws"), [dir("src")]);
+  });
+
+  it("非根目录拉失败（被删 / 挪走）：连同子孙一起丢缓存、剪出展开态", () => {
+    const current = {
+      dirs: new Map<string, readonly FileEntry[]>([
+        ["/ws", [dir("build"), dir("build-cache")]],
+        ["/ws/build", [dir("out")]],
+        ["/ws/build/out", [file("x.js")]],
+        ["/ws/build-cache", [file("y")]],
+      ]),
+      expanded: new Set(["/ws/build", "/ws/build/out", "/ws/build-cache"]),
+    };
+    const next = mergeRefresh(current, ["/ws"], new Map<string, readonly FileEntry[] | null>([
+      ["/ws", [dir("build-cache")]],
+      ["/ws/build", null],
+      ["/ws/build/out", null],
+      ["/ws/build-cache", [file("y")]],
+    ]));
+    deepStrictEqual([...next.dirs.keys()], ["/ws", "/ws/build-cache"]); // 按段判，build-cache 不陪葬
+    deepStrictEqual(next.expanded, new Set(["/ws/build-cache"]));
+  });
+
+  it("根拉失败保留旧快照（读失败 ≠ 空），展开态不动", () => {
+    const current = {
+      dirs: new Map<string, readonly FileEntry[]>([["/ws", [file("a.md")]]]),
+      expanded: new Set<string>(),
+    };
+    const next = mergeRefresh(current, ["/ws"], new Map([["/ws", null]]));
+    deepStrictEqual(next.dirs.get("/ws"), [file("a.md")]);
+  });
+
+  it("刷新在途时新点开的目录（不在结果里但展开着）原样保留，不被冲掉", () => {
+    const current = {
+      dirs: new Map<string, readonly FileEntry[]>([
+        ["/ws", [dir("docs")]],
+        ["/ws/docs", [file("guide.md")]], // 刷新发起后才由懒加载拉到
+      ]),
+      expanded: new Set(["/ws/docs"]),
+    };
+    const next = mergeRefresh(current, ["/ws"], new Map([["/ws", [dir("docs")]]]));
+    deepStrictEqual(next.dirs.get("/ws/docs"), [file("guide.md")]);
+    deepStrictEqual(next.expanded, new Set(["/ws/docs"]));
+  });
+
+  it("之前没缓存的根（工作台首次写入后才出现）直接收下", () => {
+    const current = { dirs: new Map<string, readonly FileEntry[]>(), expanded: new Set<string>() };
+    const next = mergeRefresh(current, ["/wb/s1"], new Map([["/wb/s1", [file("plan.md")]]]));
+    deepStrictEqual(next.dirs.get("/wb/s1"), [file("plan.md")]);
+  });
+
+  it("根被摘 / 不在盘了：它名下的缓存与展开态一起清掉", () => {
+    const current = {
+      dirs: new Map<string, readonly FileEntry[]>([
+        ["/ws", [file("a.md")]],
+        ["/vault", [dir("notes")]],
+        ["/vault/notes", [file("n.md")]],
+      ]),
+      expanded: new Set(["/vault/notes"]),
+    };
+    const next = mergeRefresh(current, ["/ws"], new Map([["/ws", [file("a.md")]]]));
+    deepStrictEqual([...next.dirs.keys()], ["/ws"]);
+    deepStrictEqual(next.expanded, new Set());
   });
 });

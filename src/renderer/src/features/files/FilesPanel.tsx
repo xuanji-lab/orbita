@@ -214,9 +214,22 @@ export function FilesPanel(props: {
       contentKey="files"
       onClose={props.onClose}
       headerExtra={
-        <PanelIconButton title="Attach a directory" onClick={attach}>
-          <Icon name="plus" size={16} />
-        </PanelIconButton>
+        <>
+          {/* 面板是快照：agent 写了文件、外部改了盘，点这里重拉根与所有展开目录，
+              展开态与滚动位置不动。图标用 folder-sync 而不是 refresh-cw：文件预览头上
+              的 refresh-cw 是「重读这一个文件」，分栏时两者同屏，同一个图标不能干两件事。
+              在途时换成面板里通用的 loader-circle——转一个文件夹不像在加载 */}
+          <PanelIconButton
+            title={tree.refreshing ? "Refreshing file tree…" : "Refresh file tree"}
+            onClick={tree.refresh}
+            disabled={tree.refreshing}
+          >
+            <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={16} spin={tree.refreshing} />
+          </PanelIconButton>
+          <PanelIconButton title="Attach a directory" onClick={attach}>
+            <Icon name="plus" size={16} />
+          </PanelIconButton>
+        </>
       }
       footer={<PanelLine>{footerSummary(groupCount, missingAttached)}</PanelLine>}
     >

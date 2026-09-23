@@ -182,3 +182,86 @@ export function countLoadedEntries(dirs: ReadonlyMap<string, readonly FileEntry[
   for (const entries of dirs.values()) total += entries.length;
   return total;
 }
+
+/** `dir` 是不是 `ancestor` 本身或其子孙（按路径段判，`/ws/a` 不算 `/ws/ab` 的祖先）。 */
+function isWithin(ancestor: string, dir: string): boolean {
+  return dir === ancestor || dir.startsWith(`${ancestor}/`);
+}
+
+/** 刷新要重拉的一个目录：`root` 是它所属根的路径（`fs:list` 白名单要它）。 */
+export interface RefreshTarget {
+  root: string;
+  dir: string;
+}
+
+/**
+ * 刷新要重拉哪些目录：每个在盘上的根 + 每个仍落在某个在盘上的根之内的展开目录。
+ * **祖先收起的展开目录也拉**——祖先再展开时它直接以展开态出现，得有新数据可画，
+ * 而那时没有人会再为它单独触发加载。落不进任何在盘根的展开目录（根被摘 / 挪走）
+ * 不拉，交给 mergeRefresh 剪掉。根可能互相嵌套（附加目录挂在工作区里面），按目录去重。
+ */
+export function refreshTargets(roots: readonly FileRoot[], expanded: ReadonlySet<string>): RefreshTarget[] {
+  const live = roots.filter((root) => root.exists);
+  const seen = new Set<string>();
+  const targets: RefreshTarget[] = [];
+  for (const root of live) {
+    if (seen.has(root.path)) continue;
+    seen.add(root.path);
+    targets.push({ root: root.path, dir: root.path });
+  }
+  for (const dir of expanded) {
+    if (seen.has(dir)) continue;
+    const owner = live.find((root) => isWithin(root.path, dir));
+    if (owner === undefined) continue;
+    seen.add(dir);
+    targets.push({ root: owner.path, dir });
+  }
+  return targets;
+}
+
+/** 树的可变半边：目录快照缓存 + 展开态。刷新并回时两者一起算，免得一半新一半旧。 */
+export interface TreeSnapshot {
+  dirs: ReadonlyMap<string, readonly FileEntry[]>;
+  expanded: ReadonlySet<string>;
+}
+
+/**
+ * 把一轮刷新的结果并回树。`current` 取**并回那一刻**的缓存与展开态，不是发起刷新时的：
+ * 刷新在途时用户新点开的目录已由懒加载拉好，不能被这里冲掉。
+ *
+ * - 拉成功（`results` 里是数组）：换成新快照
+ * - 拉失败（`null`）的非根目录：多半是被删 / 被挪走（agent 的 `rm -rf`、`mv` 是常态）
+ *   ——连同子孙一起丢缓存、剪出展开态；父目录的新快照里它已经不在，面板上自然消失。
+ *   根拉失败保留旧快照（读失败 ≠ 空，报错由调用方负责）
+ * - 不在任何在盘根之内的（根被摘 / 挪走）：丢缓存、剪展开态
+ * - 没在这轮结果里、也没展开的缓存（收起的目录）：丢——下次展开缓存未命中自然重拉；
+ *   「收起再展开还是旧列表」就出在这类缓存上
+ * - 没在这轮结果里但展开着的（刷新在途时新点开的）：原样保留
+ */
+export function mergeRefresh(
+  current: TreeSnapshot,
+  liveRoots: readonly string[],
+  results: ReadonlyMap<string, readonly FileEntry[] | null>,
+): TreeSnapshot {
+  const gone: string[] = [];
+  for (const [dir, entries] of results) {
+    if (entries === null && !liveRoots.includes(dir)) gone.push(dir);
+  }
+  const keepPath = (dir: string): boolean =>
+    liveRoots.some((root) => isWithin(root, dir)) && !gone.some((g) => isWithin(g, dir));
+
+  const dirs = new Map<string, readonly FileEntry[]>();
+  for (const [dir, entries] of current.dirs) {
+    if (!keepPath(dir)) continue;
+    const fresh = results.get(dir);
+    if (fresh !== undefined && fresh !== null) dirs.set(dir, fresh);
+    // fresh === null 走到这里只可能是根（非根的失败已在 gone 里）：保留旧快照
+    else if (fresh === null || current.expanded.has(dir) || liveRoots.includes(dir)) dirs.set(dir, entries);
+  }
+  // 之前没有缓存的（工作台首次写入后刚出现的 session 根、祖先收起时失败过的展开目录）
+  for (const [dir, entries] of results) {
+    if (entries !== null && !dirs.has(dir) && keepPath(dir)) dirs.set(dir, entries);
+  }
+  const expanded = new Set([...current.expanded].filter(keepPath));
+  return { dirs, expanded };
+}
