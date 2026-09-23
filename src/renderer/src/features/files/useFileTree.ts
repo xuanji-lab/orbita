@@ -10,7 +10,8 @@ import { mergeRefresh, refreshTargets } from "./tree-view";
  * 根由主进程现算（`fs:roots`），顺序固定 session → workspace → attached；目录按需
  * 懒加载（`fs:list`），**缓存按目录绝对路径键，再次展开不重拉**——面板是快照视图，
  * 与主进程 list.ts 同一条纪律：列表与 lstat 之间条目被删就跳过，不为一条已经
- * 不在的东西废掉整层。要看新内容走 `refresh`：重拉根与所有展开目录，展开态保留。
+ * 不在的东西废掉整层。要看新内容走 `refresh`：重拉根与所有展开目录，展开态保留；
+ * agent 每跑完一轮自动走一次。
  *
  * 纯视图函数（排序 / 过滤 / AGENTS.md 判定 / footer 文案 / 刷新的计划与合并）在同目录
  * tree-view.ts——那里不连带 api（模块加载就摸 window），`node --test` 直接可测。
@@ -38,6 +39,7 @@ export interface FileTreeState {
   /**
    * 重拉根清单与所有展开目录，展开态保留、收起目录的旧缓存丢掉（下次展开现拉）。
    * 旧快照一直显示到新结果一次性换上——不清空、不出 Loading 行，滚动位置不跳。
+   * 面板头的按钮手动调；agent 一轮结束（任何会话回 idle）时 hook 自己也调一次。
    */
   refresh: () => void;
 }
@@ -69,6 +71,8 @@ export function useFileTree(
   const expandedRef = useRef<ReadonlySet<string>>(new Set());
   /** 刷新在途标记（state 给渲染，ref 给同步判断：连点两下时 state 还没落定） */
   const refreshingRef = useRef(false);
+  /** 刷新在途时又来了触发：落定后补跑一轮（见 refresh） */
+  const rerunRef = useRef(false);
   /** 树的代次：会话 / 工作区 / 工作区列表一变就 +1。在途的 refresh 落定时代次
    *  变了就整轮作废——否则旧会话的根与目录会盖掉新树 */
   const generationRef = useRef(0);
@@ -158,13 +162,20 @@ export function useFileTree(
    * 根清单也重拉：session 根在 agent 第一次写入前 exists 为 false，只重拉目录的话
    * 工作台建好了面板也还是「工作台为空」。各目录并发拉、全部落定后一次并回
    * （mergeRefresh），中途不动 state——换上之前一直显示旧快照。
+   *
+   * 在途时再被调（agent 一轮结束、另一条会话也跑完）：不吞掉，落定后补跑一轮——
+   * 在途那轮可能在最后几次写盘之前就读过目录了。连点进不来这条路：按钮在途时禁用。
    */
   const refresh = useCallback((): void => {
-    if (refreshingRef.current) return;
+    if (refreshingRef.current) {
+      rerunRef.current = true;
+      return;
+    }
     refreshingRef.current = true;
     setRefreshing(true);
     const generation = generationRef.current;
-    void (async () => {
+    /** 一轮刷新；代次变了（会话 / 工作区换了）整轮作废 */
+    const once = async (): Promise<void> => {
       try {
         const visible = await api.files.roots({ sessionId, workspaceId });
         if (generationRef.current !== generation) return;
@@ -201,12 +212,38 @@ export function useFileTree(
       } catch (cause) {
         // fs:roots 失败：保留手里的根与快照（读失败 ≠ 空）
         if (generationRef.current === generation) setRootsError(failMessage(cause));
+      }
+    };
+    void (async () => {
+      try {
+        do {
+          rerunRef.current = false;
+          await once();
+          // 代次变了就不补跑：这个闭包的 sessionId / workspaceId 已经是旧树的
+        } while (rerunRef.current && generationRef.current === generation);
       } finally {
+        rerunRef.current = false;
         refreshingRef.current = false;
         setRefreshing(false);
       }
     })();
   }, [sessionId, workspaceId]);
+
+  /**
+   * agent 一轮跑完自动刷新：agent 写盘是面板过期的头号来源。**任何会话**的 phase
+   * 回 idle 都算，不只正看着的这条——子会话、后台会话写的是同一个工作区 / 附加目录
+   * （侧栏「哪条会话跑完都刷」同一个口径），多刷一次只是几次 fs:list。runtime 的
+   * idle 晚于本轮所有工具调用收尾，这时读盘已经能看到最后一次写入。
+   * 直接订事件而不是看 ChatSession.phase：面板只挂着时才订，关着不白拉；也不必
+   * 分辨「切会话导致 phase 从 turn 变 idle」这种假的一轮结束。
+   */
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type === "phase" && event.phase === "idle") refresh();
+      }),
+    [refresh],
+  );
 
   return {
     roots,
