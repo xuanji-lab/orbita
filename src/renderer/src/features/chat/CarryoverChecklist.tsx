@@ -36,8 +36,6 @@ export function CarryoverChecklist(props: {
   const [cancelArmed, setCancelArmed] = useState(false);
   /** 自由输入行的草稿；Enter 或加号追加，空输入不加 */
   const [draft, setDraft] = useState("");
-  /** hover 提示：哪一行的 title 正被指着（浮出铅笔） */
-  const [hovered, setHovered] = useState(-1);
 
   const allDrafts = useMemo<readonly CarryoverDraft[]>(
     () => [...props.drafts, ...extraDrafts],
@@ -70,17 +68,12 @@ export function CarryoverChecklist(props: {
         if (cancelArmed) props.onCancel();
         else setCancelArmed(true);
       }}
+      // 与 ApprovalBar 同级：它是当前唯一挡路的东西，但不遮消息流与 composer
+      className="glass-card glass-float"
       style={{
         display: "grid",
         gap: "var(--space-3)",
         padding: "var(--space-4)",
-        background: "var(--glass-bg)",
-        border: "1px solid var(--glass-border)",
-        borderRadius: "var(--radius-xl)",
-        // 与 ApprovalBar 同级：它是当前唯一挡路的东西，但不遮消息流与 composer
-        boxShadow: "var(--shadow-popover)",
-        WebkitBackdropFilter: "blur(var(--glass-blur))",
-        backdropFilter: "blur(var(--glass-blur))",
         color: "var(--color-text-primary)",
       }}
     >
@@ -117,8 +110,7 @@ export function CarryoverChecklist(props: {
           return (
             <div
               key={index}
-              onMouseEnter={() => setHovered(index)}
-              onMouseLeave={() => setHovered(-1)}
+              className="carryover-row"
               style={{
                 display: "grid",
                 gridTemplateColumns: "auto minmax(0,1fr)",
@@ -198,19 +190,19 @@ export function CarryoverChecklist(props: {
                       {titles[index] ?? ""}
                     </button>
                     {/* 可编辑的发现性提示：hover 时行尾浮出铅笔（modal 时代没有这个提示，
-                        改成 inline 卡后不再有「点开看详情」的暗示，只能靠 hover 说出来） */}
-                    {hovered === index && (
-                      <span
-                        aria-hidden
-                        style={{
-                          display: "inline-flex",
-                          flex: "0 0 auto",
-                          color: "var(--color-text-tertiary)",
-                        }}
-                      >
-                        <Icon name="pencil-line" size={12} />
-                      </span>
-                    )}
+                        改成 inline 卡后不再有「点开看详情」的暗示，只能靠 hover 说出来）。
+                        恒渲染 + CSS 控制显示——用 display 而不是 opacity/visibility，
+                        免得静止态被快照工具当成占位的可见元素 */}
+                    <span
+                      aria-hidden
+                      className="carryover-pencil"
+                      style={{
+                        flex: "0 0 auto",
+                        color: "var(--color-text-tertiary)",
+                      }}
+                    >
+                      <Icon name="pencil-line" size={12} />
+                    </span>
                   </div>
                 )}
                 {item.detail !== "" && (

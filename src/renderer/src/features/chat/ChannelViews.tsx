@@ -156,13 +156,10 @@ export function ChannelMarkPill(props: {
   onClick?: () => void;
 }) {
   const color = toneColor(props.tone);
-  const [hover, setHover] = useState(false);
   const clickable = props.onClick !== undefined;
-  const style: React.CSSProperties = {
+  const base: React.CSSProperties = {
     ...PILL_BASE,
     border: `1px dashed ${color === "var(--color-text-tertiary)" ? "var(--color-border-default)" : color}`,
-    color: clickable && hover ? "var(--color-text-primary)" : color,
-    ...(clickable ? { background: "transparent", cursor: "pointer" } : {}),
   };
   const content = (
     <>
@@ -172,7 +169,7 @@ export function ChannelMarkPill(props: {
   );
   if (!clickable) {
     return (
-      <span className={props.breathing === true ? "orbita-breath" : undefined} style={style}>
+      <span className={props.breathing === true ? "orbita-breath" : undefined} style={{ ...base, color }}>
         {content}
       </span>
     );
@@ -181,11 +178,18 @@ export function ChannelMarkPill(props: {
     <button
       type="button"
       onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       title="View in channel"
-      className={props.breathing === true ? "orbita-breath" : undefined}
-      style={style}
+      className={`channel-mark-pill${props.breathing === true ? " orbita-breath" : ""}`}
+      style={
+        {
+          ...base,
+          background: "transparent",
+          cursor: "pointer",
+          // 静止态的字色是按 tone 算出来的，个例值——过 CSS 变量转交给 .channel-mark-pill，
+          // hover 时样式表里的规则才盖得过它（inline color 会盖过任何 stylesheet 规则）
+          "--pill-fg": color,
+        } as React.CSSProperties
+      }
     >
       {content}
     </button>

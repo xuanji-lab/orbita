@@ -10,7 +10,6 @@
  * 一条瘦头部（返回 / 状态 / Open as main）+ `ChatView`（自带标题头 + transcript
  * + 审批条，`hideComposer` 关掉输入框与排队条）。
  */
-import { useState } from "react";
 import { childSessions, type SessionMeta } from "@shared/session";
 import type { ChannelSummary } from "@shared/channel";
 import { Icon, type IconName } from "../../shell/Icon";
@@ -209,21 +208,18 @@ function statusOf(
 }
 
 function SubSessionRow(props: { meta: SessionMeta; status: SubSessionRowStatus; onClick: () => void }) {
-  const [hover, setHover] = useState(false);
   const status = props.status;
   return (
     <button
       type="button"
       onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className="sub-session-row"
       style={{
         display: "grid",
         gap: 2,
         width: "100%",
         padding: "var(--space-2) var(--space-4)",
         border: 0,
-        background: hover ? "var(--color-bg-hover)" : "transparent",
         font: "inherit",
         textAlign: "left",
         cursor: "pointer",

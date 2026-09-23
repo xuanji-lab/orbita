@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
-import { selectionStyle } from "./selection";
 import { placeMenu, type MenuBox, type MenuPlacementSide } from "./menu-position";
 
 export interface MenuItem {
@@ -284,6 +283,7 @@ export function Menu(props: {
             ref={menuRef}
             role="menu"
             tabIndex={-1}
+            className="glass-card glass-float"
             onPointerEnter={props.hoverOpen === true ? cancelLeave : undefined}
             onPointerLeave={props.hoverOpen === true ? scheduleLeave : undefined}
             onKeyDown={(event) => {
@@ -321,12 +321,6 @@ export function Menu(props: {
               flexDirection: "column",
               // 行间不留缝：每行自己已有 minHeight 与 hover 底，1px 的缝只是
               // 把清单又拉高一截（8 项就是 8px），并不帮人分行
-              background: "var(--glass-bg)",
-              border: "1px solid var(--glass-border)",
-              borderRadius: "var(--radius-xl)",
-              boxShadow: "var(--shadow-popover)",
-              WebkitBackdropFilter: "blur(var(--glass-blur))",
-              backdropFilter: "blur(var(--glass-blur))",
               outline: "none",
             }}
           >
@@ -403,7 +397,7 @@ export function Menu(props: {
 
 function MenuRow(props: {
   item: MenuItem;
-  /** 键盘 / 鼠标的停留位置。与「选中」是两件事——见 selection.ts */
+  /** 键盘 / 鼠标的停留位置。与「选中」是两件事——见 styles.css 的 `.option-row` */
   cursor: boolean;
   onHover: () => void;
   onSelect: () => void;
@@ -416,6 +410,12 @@ function MenuRow(props: {
     <button
       type="button"
       role={fact || header ? "presentation" : "menuitem"}
+      className="option-row"
+      // 光标是键盘 / 鼠标共用的高亮位置，不是 :hover——鼠标进入只是把光标移过来
+      // （onHover），键盘上下也移它，两者不能叠加成分别的高亮（否则键盘挪走后鼠标
+      // 停的那行会跟着一起亮）
+      data-cursor={props.cursor}
+      aria-selected={item.checked === true || undefined}
       disabled={disabled}
       onMouseEnter={props.onHover}
       onClick={props.onSelect}
@@ -430,8 +430,7 @@ function MenuRow(props: {
         padding: "var(--space-1) var(--space-2)",
         border: 0,
         borderRadius: "var(--radius-sm)",
-        ...selectionStyle({ selected: item.checked, hover: props.cursor, disabled }),
-        // danger 只改文字色，不染底——底是选择态的地盘（selection.ts）
+        // danger 只改文字色，不染底——底是选择态的地盘（.option-row）
         ...(item.danger === true && !disabled ? { color: "var(--color-danger)" } : null),
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",

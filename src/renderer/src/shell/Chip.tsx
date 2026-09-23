@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Icon, type IconName } from "./Icon";
 
 /**
@@ -30,18 +29,20 @@ export function Chip(props: {
   onClick?: () => void;
   children: React.ReactNode;
 }) {
-  const [hover, setHover] = useState(false);
   const disabled = props.disabled === true;
   const active = props.active === true;
   return (
     <button
       type="button"
+      className="quiet-control chip"
       title={props.title}
       aria-pressed={props.onClick === undefined ? undefined : active}
+      // 视觉上的「选中」与是否可点无关（不可点的 Chip 也可能是恒亮的当前态，如
+      // SkillsPanel 的 List/Map 视图切换）；aria-pressed 只在可点时才挂，是 a11y
+      // 语义（不可点的不该读成「按钮，已按下」），两者故意分开，样式只认 data-active
+      data-active={active || undefined}
       disabled={disabled}
       onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -52,25 +53,12 @@ export function Chip(props: {
         padding: props.compact === true ? "3px 6px" : "3px 8px",
         border: 0,
         borderRadius: "var(--radius-md)",
-        background: active
-          ? "var(--color-mode-active-bg)"
-          : hover && !disabled
-            ? "var(--option-hover-bg)"
-            : "transparent",
-        color: active
-          ? "var(--color-mode-active-fg)"
-          : disabled
-            ? "var(--color-text-tertiary)"
-            : hover
-              ? "var(--color-text-primary)"
-              : "var(--color-text-secondary)",
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         fontStyle: props.italic === true ? "italic" : "normal",
         letterSpacing: props.italic === true ? "var(--tracking-model)" : "normal",
         whiteSpace: "nowrap",
         cursor: disabled ? "not-allowed" : props.onClick === undefined ? "default" : "pointer",
-        transition: "var(--transition-hover)",
       }}
     >
       {props.icon !== undefined && <Icon name={props.icon} size={12} />}

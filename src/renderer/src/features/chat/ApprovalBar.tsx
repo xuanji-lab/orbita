@@ -47,17 +47,12 @@ export function ApprovalBar(props: {
         event.preventDefault();
         answer({ behavior: "deny", message: "Denied by the user." });
       }}
+      // 比 composer 再抬一级的阴影：它是当前唯一挡路的东西
+      className="glass-card glass-float"
       style={{
         display: "grid",
         gap: "var(--space-3)",
         padding: "var(--space-4)",
-        background: "var(--glass-bg)",
-        border: "1px solid var(--glass-border)",
-        borderRadius: "var(--radius-xl)",
-        // 比 composer 再抬一级的阴影：它是当前唯一挡路的东西
-        boxShadow: "var(--shadow-popover)",
-        WebkitBackdropFilter: "blur(var(--glass-blur))",
-        backdropFilter: "blur(var(--glass-blur))",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>

@@ -6,8 +6,8 @@
 
 /*
  * 「选择项」的 hover 与选中底色：侧栏会话行、设置 tab、菜单项共用——**它们是同一件事**。
- * 规则本身（三个状态各自的底 / 文字 / 字重）在 `shell/selection.ts`，那里是唯一的实现；
- * 这里只定值。
+ * 规则本身（三个状态各自的底 / 文字 / 字重）在下面「控件配方」节的 `.option-row`，
+ * 那里是唯一的实现；这里只定值。
  *
  * 选中态有两个候选，各有取舍：
  *   A `var(--color-bg-active)`
@@ -23,6 +23,225 @@
 :root {
   --option-hover-bg: var(--color-bg-hover);
   --option-active-bg: var(--color-bg-active);
+}
+
+/*
+ * ===== 控件配方 =====
+ * 设计系统 readme *Implementation rules*：有状态的样式一律写 CSS class，inline style
+ * 只留一次性布局值。这里收的是原本被多个组件各抄一份 inline 三元表达式的配方——
+ * 迁移前长什么样，迁移后还是什么样，只是换了个写法。
+ */
+
+/*
+ * 玻璃卡的浮层修饰：`.glass-card`（Orbita Design System `tokens/glass.css`）默认阴影是
+ * --shadow-composer；菜单 / 排队条 / 收尾确认卡 / 审批条这四处浮层要的是再抬一级的
+ * --shadow-popover，加这个修饰类而不是覆盖 `.glass-card` 本身——composer 与 session
+ * 卡仍然要用默认的 --shadow-composer。
+ */
+.glass-float {
+  box-shadow: var(--shadow-popover);
+}
+
+/*
+ * SessionCard 不属于「浮层」——静止态就是 --shadow-composer，hover 才抬一级到
+ * --shadow-popover（设计系统 *Hover, press, disabled*：卡片 hover 只抬阴影，不挪位置、
+ * 不变色），所以不用 `.glass-float`，单独一条 hover 规则。
+ */
+.session-card:hover {
+  box-shadow: var(--shadow-popover);
+}
+
+/*
+ * 安静控件：透明底、secondary 字；hover 填 --option-hover-bg、字升 primary；
+ * pressed / selected（aria-pressed 或 aria-selected）用 --color-mode-active-bg/fg；
+ * disabled（原生 :disabled 或 aria-disabled）实色 tertiary、无 hover 底、not-allowed。
+ * Chip、IconButton、Sidebar 的 RailButton 与模式 tab（ModeChip）、ImportPromaRow 的
+ * 次按钮共用这套底子；各自的偏差在紧跟的小节里用局部覆盖表达。
+ *
+ * 默认优先级是 **disabled 压过 pressed/selected**（IconButton 原有顺序：它的文字色
+ * 三元表达式先判 disabled）。Chip 与 ModeChip 原本是反过来的「pressed/selected 压过
+ * disabled」，各自在下面补一条更高优先级的局部覆盖——两者在当前代码里从未同时成立，
+ * 但迁移要求原样保留判定顺序，不能因为「反正碰不到」就顺手统一掉。
+ */
+.quiet-control {
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.quiet-control:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.quiet-control[aria-pressed="true"],
+.quiet-control[aria-selected="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+.quiet-control:disabled,
+.quiet-control[aria-disabled="true"] {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/* IconButton 的 variant="soft"：静止态填 --color-bg-muted；hover / pressed / disabled
+   仍按上面的顺序盖过它——这条规则必须排在它们前面，只补 rest 态的底色 */
+.icon-btn-soft {
+  background: var(--color-bg-muted);
+}
+
+/*
+ * RailButton 的常显 accent 态（图标条的 New task）：不随 hover / pressed 变化——
+ * 原三元表达式里 accent 排在 hover 前面判；它与「active」还共用同一个 aria-pressed
+ * （两者都会让 aria-pressed=true），所以这条要排在 [aria-pressed] 规则之后才能盖过它。
+ */
+.rail-btn[data-accent="true"] {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+/* Chip：选中优先于禁用，与安静控件的默认顺序相反（原三元表达式里 active 先判） */
+.chip[aria-pressed="true"]:disabled,
+.chip[data-active="true"]:disabled {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+/*
+ * Chip 的「选中」与是否可点无关（原三元表达式只看 props.active）；aria-pressed
+ * 只在有 onClick 时才挂（a11y 语义），不可点的选中 Chip（如 SkillsPanel 的
+ * List/Map 视图切换）靠 data-active 兜底，与 aria-pressed 同效
+ * （2026-09-23 验收发现的真回归）。
+ */
+.chip[data-active="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+/*
+ * ModeChip（Sidebar 的模式 tab，role="tab"）：静止态就是主字色，不必等 hover 才升级——
+ * 不走安静控件默认的「secondary 起步」。选中同样优先于禁用（同 Chip）。
+ */
+.mode-tab {
+  color: var(--color-text-primary);
+}
+
+.mode-tab[aria-selected="true"]:disabled {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+/*
+ * ImportPromaRow 的次按钮：安静控件配方少一味——hover 时底色照常抬升，但字色不跟着
+ * 升 primary，原样保留这条局部覆盖。
+ */
+.import-secondary-btn:hover {
+  color: var(--color-text-secondary);
+}
+
+/*
+ * accent 按钮：accent 底、accent-fg 字，hover 升 --color-accent-strong。disabled 默认退
+ * 实色中性底——玻璃上的禁用态不能用 opacity（设计系统 *Hover, press, disabled*），
+ * Composer 发送键走这条默认值。
+ */
+.btn-accent {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.btn-accent:hover {
+  background: var(--color-accent-strong);
+}
+
+.btn-accent:disabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/*
+ * Composer 发送键的第三态：没字 + 跑着时按钮变「停止」，danger 语义，但按钮仍是
+ * enabled（排队中还点得下去）。没有现成的 aria 状态可挂，用 data-tone。
+ */
+.btn-accent[data-tone="danger"] {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+/*
+ * ImportPromaRow 的主按钮不在玻璃层上——禁用退回设计系统给普通面板定的 opacity 规则，
+ * 而不是 `.btn-accent` 默认给玻璃面写的实色底。
+ */
+.import-primary-btn:disabled {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  opacity: 0.6;
+  cursor: default;
+}
+
+/*
+ * 选择行（原 `shell/selection.ts` 的 `selectionStyle()`）：侧栏会话行、设置 tab、菜单项
+ * 共用——它们是同一件事。Menu 用 `data-cursor` 表达「键盘 / 鼠标共用的光标」，不叠
+ * `:hover`——否则键盘挪光标、鼠标停在别的项上时会同时亮两行；NavRow 用真实 `:hover`。
+ *
+ * | 状态 | 底 | 文字 | 字重 |
+ * |---|---|---|---|
+ * | 未选中 | 透明 | primary | regular |
+ * | hover / cursor | `--option-hover-bg` | primary | regular |
+ * | 选中 | `--option-active-bg` | primary | **semibold** |
+ * | 选中 + hover | 同「选中」 | primary | semibold |
+ * | 禁用 | 透明 | **tertiary（实色）** | regular |
+ *
+ * 两条取舍：
+ * - **选中盖过 hover。** 选中是持久事实，hover 是临时的；让临时状态盖掉持久状态，
+ *   会让人以为自己把选中弄丢了。
+ * - **禁用用实色 tertiary 而不是 opacity。** 玻璃上调暗的字既不是墨也不是壁纸
+ *   （设计系统 *Hover, press, disabled*）。
+ */
+.option-row {
+  background: transparent;
+  color: var(--color-text-primary);
+  font-weight: var(--weight-regular);
+  transition: var(--transition-hover);
+}
+
+/*
+ * NavRow 用真实 :hover；Menu 用 data-cursor。两条都要排在下面的选中 / 禁用规则
+ * 之前——选中盖过 hover 靠的是选中规则在源码顺序里更靠后（同等特异度下后者赢），
+ * 不能给 hover 这条加额外的属性选择器提特异度，否则「选中 + 真的被鼠标悬停」时
+ * hover 反而会赢过选中，这是本 PR 唯一的真实可达场景（NavRow 的可点闸门在当前
+ * 代码里从未关闭过，不需要靠选择器去圈——见 NavRow 三处调用点，onClick 恒有值、
+ * disabled 恒为 false）。
+ */
+.option-row:hover,
+.option-row[data-cursor="true"] {
+  background: var(--option-hover-bg);
+}
+
+/*
+ * `[data-active="true"]` 补的是 NavRow 不可点时的选中态——原 selectionStyle 的
+ * `selected` 只看 props.active，不管 clickable；aria-pressed 只在可点时才挂
+ * （a11y 语义），样式不能只认 aria-pressed，否则不可点的选中行会丢底
+ * （2026-09-23 验收发现的真回归，与 Chip 的同款问题一起修）。
+ */
+.option-row[aria-pressed="true"],
+.option-row[aria-selected="true"],
+.option-row[data-active="true"] {
+  background: var(--option-active-bg);
+  font-weight: var(--weight-semibold);
+}
+
+.option-row:disabled,
+.option-row[aria-disabled="true"] {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-weight: var(--weight-regular);
 }
 
 *,
@@ -49,11 +268,18 @@ body {
   font-family: var(--font-family-base);
   font-size: var(--font-size-body);
   line-height: var(--line-height-body);
-  -webkit-font-smoothing: antialiased;
+  font-weight: var(--weight-regular);
 }
 
 :root[data-platform="darwin"] body {
   background: transparent;
+}
+
+/* 键盘焦点：全局一条，组件不各自模拟 :focus-visible。
+   向内描（offset 负值）——滚动容器与 overflow:hidden 的父级不会把它裁掉，也不覆盖组件自己的 box-shadow */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 /*
@@ -248,6 +474,93 @@ body {
 
 .right-panel-slot-resizer:hover {
   background: var(--color-border-subtle);
+}
+
+/* ===== 侧栏 ===== */
+
+/*
+ * 悬停 / 键盘聚焦才浮出的次要动作（工作区组头的删除键、任务行的星标 / 完成 / 更多键）：
+ * 共同点是默认 opacity: 0、父级给了信号才现形——父级信号各不相同，见各自紧跟的
+ * :hover / :has(:focus-visible) 规则，这里只定公共的默认态与过渡。
+ */
+.reveal {
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+
+/*
+ * 工作区组头：hover 到组内任意位置（含下方的会话行）就浮出删除键，原 onMouseEnter
+ * 挂在组的外层 div 上，:hover 的命中范围原样对应。**只点名 `.workspace-group-remove`，
+ * 不用通用的 `.reveal`**——组头与它下面的会话行是同一个 `.workspace-group` 的
+ * DOM 兄弟，任务行自己的星标/完成/更多也叫 `.reveal`；用后代选择器裸配 `.reveal`
+ * 会连带点亮全组每一行的这些键（2026-09-23 验收发现的真回归）。
+ */
+.workspace-group:hover .workspace-group-remove {
+  opacity: 1;
+}
+
+/* FoldHeaderButton（TASKS 节的整块折叠键）：只有底色跟着 hover，字色由 NodeLabel 自己定 */
+.fold-header-btn {
+  background: transparent;
+}
+
+.fold-header-btn:hover {
+  background: var(--option-hover-bg);
+}
+
+/*
+ * 任务行的星标 / 完成 / 更多键：悬停，或行内任意一处（含标题本身）拿到键盘焦点
+ * 才浮出——原来是 onFocus/onBlur 手动判 :matches(":focus-visible") 模拟的
+ * （Proma 遗留写法），Chromium 原生 :has() 直接表达同一件事，不再需要 JS 影子状态。
+ */
+.task-row:hover .reveal,
+.task-row:has(:focus-visible) .reveal {
+  opacity: 1;
+}
+
+/* ===== 聊天面板：行级 hover / 悬停浮现 ===== */
+
+/* CarryoverChecklist 的行内编辑提示：铅笔恒渲染，hover 到那一行才现形——
+   用 display 不用 opacity/visibility，静止态不占「可见元素」的位置 */
+.carryover-pencil {
+  display: none;
+}
+
+.carryover-row:hover .carryover-pencil {
+  display: inline-flex;
+}
+
+/* 折叠行共用骨架（CollapseRow：ToolCard / ThinkingCard）：hover 淡底，disabled 时
+   原生 :disabled 天然不触发 :hover，不用另外判 interactive */
+.collapse-row-btn {
+  background: transparent;
+  transition: var(--transition-hover);
+}
+
+.collapse-row-btn:hover {
+  background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
+}
+
+/* 子会话面板的一行 */
+.sub-session-row {
+  background: transparent;
+}
+
+.sub-session-row:hover {
+  background: var(--color-bg-hover);
+}
+
+/*
+ * 通道标记胶囊（可点变体）：静止态字色按 tone 算，是个例值，过 --pill-fg 这个
+ * CSS 变量从 inline 转交进来——不能直接把 color 写在 inline 上，那样 hover 规则
+ * 再高优先级也盖不过它（inline style 永远赢过样式表）。
+ */
+.channel-mark-pill {
+  color: var(--pill-fg);
+}
+
+.channel-mark-pill:hover {
+  color: var(--color-text-primary);
 }
 
 /* ===== 通道列（子会话 PR4b）：主槽与右栏之间的一列，父子往来抽出来放在这里 =====
@@ -1081,6 +1394,22 @@ body {
 }
 
 /*
+ * 韦恩图圆的淡填充（4-4，值取自 skills-map-3circle-v2）：只服务这一个 feature，
+ * 从 tokens/colors.css 搬到这里（Implementation rules：只服务一个 feature 的值
+ * 不进 tokens/，落在渲染层那个 feature 自己的 CSS 旁边）——三个选择器与三个值原样
+ * 未改，纯搬家。
+ */
+:root {
+  --venn-fill: rgba(31, 35, 40, 0.045);
+}
+:root[data-theme="dark"] {
+  --venn-fill: rgba(214, 213, 207, 0.06);
+}
+:root[data-theme="black"] {
+  --venn-fill: rgba(237, 237, 237, 0.06);
+}
+
+/*
  * Skills 韦恩图（4-4，几何取自 skills-map-3circle-v2）：圆淡填充 --venn-fill +
  * 描边；点/环只用位置与形状表达集合，不用颜色区分；名字 10px 带 paint-order
  * 玻璃底描边（压在圆边上也能读）；missing 三角 + danger。
@@ -1151,4 +1480,42 @@ body {
 }
 .file-hover-host:hover .file-row {
   background: var(--color-bg-hover);
+}
+
+/*
+ * ===== 表单输入框（Skills / MCP 面板） =====
+ * McpPanel 与 SkillsPanel 各抄一份逐字节相同的 `inputStyle`（单行 `<input>` 与多行
+ * `<textarea>` 只差 height/padding/resize），收成一个 class；等宽字体、
+ * line-height、`cursor: not-allowed` 这类只在个别处出现的差异留在各自的 inline
+ * style 里，不进这个共用配方。
+ *
+ * 聚焦态是本 PR 唯一申明的视觉变化：这些框此前只有上一个 PR 加的全局
+ * `:focus-visible` 描边，现在补上与 `features/settings/providers-view.css` 的
+ * `.pv-input:focus` 同款的 accent 聚焦态（设计系统 *Shadows*：focus 是 2px accent
+ * ring）。`.pv-input` 本身不并进来——Providers 的美化是另一个 PR。
+ */
+.text-field {
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-input);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.text-field:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+
+/* 多行变体：<textarea className="text-field"> 自动吃这条，不用另造修饰 class */
+textarea.text-field {
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
 }

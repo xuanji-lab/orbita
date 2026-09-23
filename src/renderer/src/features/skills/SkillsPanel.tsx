@@ -616,7 +616,8 @@ function SkillDetail(props: {
                 rows={3}
                 onChange={(e) => setContent({ ...content, description: e.target.value })}
                 onBlur={commit("description")}
-                style={{ ...inputStyle, height: "auto", padding: "var(--space-2) var(--space-3)", resize: "vertical", cursor: disabled ? "not-allowed" : undefined }}
+                className="text-field"
+                style={{ cursor: disabled ? "not-allowed" : undefined }}
               />
             </Field>
             <Field label="Instructions" hint="Read only when a task matches the description.">
@@ -627,11 +628,8 @@ function SkillDetail(props: {
                 rows={14}
                 onChange={(e) => setContent({ ...content, body: e.target.value })}
                 onBlur={commit("body")}
+                className="text-field"
                 style={{
-                  ...inputStyle,
-                  height: "auto",
-                  padding: "var(--space-2) var(--space-3)",
-                  resize: "vertical",
                   fontFamily: "var(--font-family-mono)",
                   lineHeight: 1.6,
                   cursor: disabled ? "not-allowed" : undefined,
@@ -648,7 +646,7 @@ function SkillDetail(props: {
 function Field(props: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label style={{ display: "grid", gap: "var(--space-2)" }}>
-      <span style={{ fontSize: "var(--font-size-label)", fontWeight: "var(--weight-medium)" }}>
+      <span style={{ fontSize: "var(--font-size-caption)", fontWeight: "var(--weight-medium)" }}>
         {props.label}
       </span>
       {props.children}
@@ -677,24 +675,11 @@ function PanelInput(props: {
       placeholder={props.placeholder}
       onChange={(e) => props.onChange(e.target.value)}
       onBlur={props.onBlur}
-      style={{ ...inputStyle, cursor: props.disabled ? "not-allowed" : undefined }}
+      className="text-field"
+      style={{ cursor: props.disabled ? "not-allowed" : undefined }}
     />
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  height: "var(--control-height-md)",
-  padding: "0 var(--space-3)",
-  background: "var(--color-bg-panel)",
-  color: "var(--color-text-primary)",
-  border: "1px solid var(--color-border-subtle)",
-  borderRadius: "var(--radius-md)",
-  font: "inherit",
-  fontSize: "var(--font-size-input)",
-  width: "100%",
-  boxSizing: "border-box",
-};
-
 
 /** + 菜单：Create skill… / Link existing folder…。列表、空态、加载态三处共用。 */
 function AddMenu(props: { skills: SkillsState; onCreateSkill: () => void }) {

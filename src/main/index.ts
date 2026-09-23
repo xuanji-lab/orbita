@@ -6,6 +6,7 @@ import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, shell } from "electron";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
+import type { ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
@@ -71,7 +72,15 @@ const MAC_WINDOW = {
   visualEffectState: "active",
 } as const;
 
-function createMainWindow(): BrowserWindow {
+/**
+ * `theme` 是这次启动（或这次 `activate` 重开）读到的设置里的主题偏好，原样塞进
+ * `--orbita-theme=` 命令行参数（`webPreferences.additionalArguments`）——preload
+ * 的 `initial-theme.ts` 原样读出来，渲染层 `main.tsx` 用它在 `createRoot` 之前
+ * 同步写好 `data-theme`，不必等 `settings:get` 那趟 IPC 跑完再套一层交叉淡入。
+ * 不走 IPC / localStorage：这是窗口创建时刻就同步可得的值，硬塞一条通道或另存
+ * 一份缓存反而多造一个真源（同 preload 里 `platform` 的先例）。
+ */
+function createMainWindow(theme: ThemePreference): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -88,6 +97,7 @@ function createMainWindow(): BrowserWindow {
     webPreferences: {
       ...SECURITY_INVARIANTS,
       preload: join(__dirname, "../preload/index.js"),
+      additionalArguments: [`--orbita-theme=${theme}`],
     },
   });
 
@@ -128,7 +138,7 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   // 配置落在 Electron 的 userData 目录，不再依赖 pi 的 ~/.pi/agent。
   // 从旧 models.json / auth.json 的迁移等到真有旧数据的用户时再单独立项（落库纪律：没有消费者不写）。
   const configDir = app.getPath("userData");
@@ -136,11 +146,19 @@ void app.whenReady().then(() => {
   registerProviderIpc(providers);
   // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 
-  // 主题先于窗口生效：晚一步的话第一帧会用系统外观画出 vibrancy，然后当着用户的面跳一下
+  /*
+   * 主题先于窗口生效——这里真的等它生效，不再是「先发个 promise 就当数」：
+   * 改动前 `void settings.read().then(applyNativeTheme)` 不 await，窗口在下面
+   * 同步创建，两条路径实际在赛跑，vibrancy 材质的第一帧仍可能按系统外观画。
+   * 现在 await 出这次启动要用的设置，applyNativeTheme 定下 nativeTheme 之后，
+   * 同一份 initialSettings.theme 再传给 createMainWindow（塞进
+   * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
+   */
   const settings = new SettingsStore(configDir);
   registerSettingsIpc(settings);
   registerWindowIpc();
-  void settings.read().then(applyNativeTheme);
+  const initialSettings = await settings.read();
+  applyNativeTheme(initialSettings);
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
@@ -283,11 +301,14 @@ void app.whenReady().then(() => {
   registerChannelIpc(deps);
   app.on("before-quit", () => agentHost.dispose());
 
-  createMainWindow();
+  createMainWindow(initialSettings.theme);
 
-  // macOS：点 dock 图标且无窗口时重开
+  // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
+  // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void settings.read().then((current) => createMainWindow(current.theme));
+    }
   });
 });
 

@@ -235,15 +235,13 @@ function PrimaryButton(props: {
   onClick?: () => void;
   children: React.ReactNode;
 }) {
-  const [hover, setHover] = useState(false);
   const disabled = props.disabled === true;
   return (
     <button
       type="button"
+      className="btn-accent import-primary-btn"
       disabled={disabled}
       onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -251,14 +249,9 @@ function PrimaryButton(props: {
         padding: "5px 12px",
         border: 0,
         borderRadius: "var(--radius-md)",
-        background: disabled ? "var(--color-accent)" : hover ? "var(--color-accent-strong)" : "var(--color-accent)",
-        color: "var(--color-accent-fg)",
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         whiteSpace: "nowrap",
-        cursor: disabled ? "default" : "pointer",
-        opacity: disabled ? 0.6 : 1,
-        transition: "var(--transition-hover)",
       }}
     >
       <Icon name={props.icon} size={12} spin={props.spin} />
@@ -269,15 +262,13 @@ function PrimaryButton(props: {
 
 /** 次要动作（Rescan / Scan again / Retry）：中性，不与主操作抢色。 */
 function SecondaryButton(props: { icon: IconName; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
-  const [hover, setHover] = useState(false);
   const disabled = props.disabled === true;
   return (
     <button
       type="button"
+      className="quiet-control import-secondary-btn"
       disabled={disabled}
       onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -285,14 +276,12 @@ function SecondaryButton(props: { icon: IconName; disabled?: boolean; onClick: (
         padding: "5px 12px",
         border: 0,
         borderRadius: "var(--radius-md)",
-        background: hover && !disabled ? "var(--option-hover-bg)" : "transparent",
         boxShadow: "inset 0 0 0 1px var(--color-border-subtle)",
-        color: disabled ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         whiteSpace: "nowrap",
+        // 局部覆盖：这里禁用是 default 光标，不是安静控件默认的 not-allowed
         cursor: disabled ? "default" : "pointer",
-        transition: "var(--transition-hover)",
       }}
     >
       <Icon name={props.icon} size={12} />
