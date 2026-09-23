@@ -80,7 +80,7 @@ import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
-import { modelMenuItems, useBuiltinCatalog } from "../settings/model-menu";
+import { modelMenuItems } from "../settings/model-menu";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
@@ -1133,8 +1133,9 @@ function ComposerBar(props: { session: ChatSession }) {
   // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
   const [namingWorkspace, setNamingWorkspace] = useState(false);
 
-  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）
-  const catalog = useBuiltinCatalog();
+  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
+  // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
+  const catalog = session.catalog;
 
   const scopeItems: MenuItem[] = [
     {

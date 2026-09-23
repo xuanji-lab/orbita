@@ -29,10 +29,12 @@ import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
-import type { AgentEvent, AgentStats, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
+import { defaultThinkingLevel } from "@shared/model-defaults";
+import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
 import { composeChannelPrompt } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
-import { usableProviders } from "../settings/model-menu";
+import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
+import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
 import {
   CLOSING_SCAN_PROMPT,
   CLOSING_SCAN_TIMEOUT_MS,
@@ -119,6 +121,8 @@ export interface ChatSession {
   changeThinkingLevel: (next: ThinkingLevel) => void;
   /** 模型支持的思考档（开轮事件回的真值）。null = 还没开过轮，未知 */
   thinkingSupported: readonly PiThinkingLevel[] | null;
+  /** pi 内建目录（引擎一份 fetch 的透传，见 SessionEngine.catalog）——ComposerBar 从这读 */
+  catalog: readonly BuiltinProvider[];
   approvals: PendingApproval[];
   /** 侧栏列的工作区（落盘、跨会话）。 */
   workspaces: Workspace[];
@@ -275,6 +279,19 @@ interface ViewHandle {
  * 引擎——与「正在看哪条」无关的共享真源。全应用一份，主槽与抽屉槽都从它读。
  */
 export interface SessionEngine {
+  /**
+   * pi 内建目录：模型项的 ctx 徽标、思考档支持集都要从这里查官方参数——
+   * 一个 app 一次 fetch（此前 ComposerBar 与设置面各自 `useBuiltinCatalog()`，
+   * 移到引擎后 ComposerBar 改读这一份）。拉不到就空数组，不挡开工。
+   */
+  readonly catalog: readonly BuiltinProvider[];
+  /**
+   * 用户在**本次运行内**手选的思考档，跨会话/跨模型全局共用（两个查看槽共用
+   * 同一份——「用户上一次手选」本来就是全局的）。null = 这次运行还没手选过。
+   * **不落盘**：彻底重启就丢，新任务槽落回模型默认档（wafo 2026-09-23 裁决）。
+   * changeThinkingLevel 直接写它；程序性改档（换模型时的自动调整）不写。
+   */
+  readonly pickedThinkingRef: { current: ThinkingLevel | null };
   /** 分槽状态（渲染值）。查看槽从这里按自己的 session id 取 entry。 */
   readonly states: SessionStates;
   /** 已挂载的查看槽名册：model 事件路由 / 删除通知 / meta 同步按它来 */
@@ -351,6 +368,10 @@ export interface SessionEngine {
 }
 
 export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
+  // pi 内建目录：全应用一份，ComposerBar 与查看槽的新任务起档都从这里读
+  const catalog = useBuiltinCatalog();
+  // 本次运行内的手选思考档：纯内存 ref，不落盘（见 SessionEngine.pickedThinkingRef 注释）
+  const pickedThinkingRef = useRef<ThinkingLevel | null>(null);
   /** 全部会话的槽；「当前看哪条」由各查看槽自己持有（sessionId ?? opened?.id） */
   const [states, setStates] = useState<SessionStates>(createSessionStates);
   /**
@@ -868,6 +889,8 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
   );
 
   return {
+    catalog,
+    pickedThinkingRef,
     states,
     statesRef,
     views: views.current,
@@ -930,6 +953,24 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, [sessionId]);
 
   /**
+   * **新任务槽**起档：按「手选（若这个型号仍支持）> 这个型号的默认档」重算并
+   * 置本地状态（thinking-choice.ts 的 resolveThinkingLevel）——用户裁决
+   * （wafo 2026-09-23）的落点。只用于「本槽还没有会话」的时机（启动恢复 /
+   * 默认播种 / 回首页开新任务 / 换模型且本槽无会话）；有会话时档位跟着
+   * 会话账走，是另一条路（changeThinkingLevel / chooseModel 换模型分支）。
+   */
+  const { catalog, pickedThinkingRef } = engine;
+  const applyNewTaskThinking = useCallback(
+    (modelId: string) => {
+      const supported = modelThinkingLevels(modelId, catalog);
+      setThinkingLevelState(resolveThinkingLevel({ modelId, supported, picked: pickedThinkingRef.current }));
+    },
+    // 只依赖 catalog 与 ref：engine 是每次渲染新建的对象，依赖它会让下面依赖本函数的
+    // effect 每次渲染都跑一遍
+    [catalog, pickedThinkingRef],
+  );
+
+  /**
    * 启动恢复（A-0 复验 bug A）：上次退出前用的权限档/模型存在 settings.lastUsed，
    * 挂载后恢复一次（思考档不在其列：重启落回模型默认档，wafo 2026-09-23）——
    * 只影响「还没打开会话」的新任务槽；打开旧会话时
@@ -947,6 +988,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         if (last.mode !== undefined) setMode(last.mode);
         if (last.providerId !== undefined && last.modelId !== undefined) {
           setModel({ providerId: last.providerId, modelId: last.modelId });
+          // 恢复了模型之后，思考档按规则起（手选 > 这个模型的默认档）——
+          // 不是巧合地停在初始 medium
+          applyNewTaskThinking(last.modelId);
         }
       })
       .catch(() => undefined); // 读不出来就停在默认，不挡开工
@@ -1193,7 +1237,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     engine.setError(null);
     setOpened(null);
     // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
-  }, [engine]);
+    // 思考档按规则重算：模型不变，但档位不能沿用刚才打开的那条旧会话的账——
+    // 否则「回首页开新任务」看起来会像是继承了上一条会话的思考档
+    if (model !== null) applyNewTaskThinking(model.modelId);
+  }, [engine, model, applyNewTaskThinking]);
 
   /**
    * 打开一条会话（进本槽）：cwd / 归属 / 权限档一起恢复成它当时的样子。点的就是
@@ -1402,19 +1449,53 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, [engine]);
 
   /**
+   * 落一档到**这条会话**名下：本地即设（UI 即时）→ 记在会话名下（跑着时改不进
+   * meta，排队卡投递时要拿这一档）→ 闲着才落 meta。changeThinkingLevel（用户
+   * 手选）与 chooseModel 的「换模型时自动调整」共用同一条路径，差别只在
+   * 要不要写 pickedThinkingRef——两处都要这条路，不能各写一份。
+   */
+  const applySessionThinking = useCallback(
+    (id: string, next: ThinkingLevel) => {
+      setThinkingLevelState(next);
+      engine.rememberSessionIntent(id, { thinkingLevel: next });
+      if (currentPhase() === "idle") {
+        void api.agent
+          .setThinkingLevel(id, next)
+          .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
+      }
+    },
+    [engine, currentPhase],
+  );
+
+  /**
    * 换模型（C-4）。**有活会话就地切**：命令发过去，成功经 `model` 事件回环对齐
    * model state（不乐观——切换会失败：无 key、未知模型；失败红字说明，chip 不动）；
    * 没活的（首页 / 盘上打开未唤醒）只改意图，下一条消息 submit 时生效——
    * 换了却不发言就切走，会被 openSession 的 meta 播种冲掉，等于没换过（已裁决接受）。
    * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
+   *
+   * 思考档跟着模型走（用户裁决 wafo 2026-09-23）：本槽没有会话（新任务槽）按
+   * 「手选 > 新模型的默认档」重算；有会话则当前档新模型仍支持就保留，不支持
+   * 才落新模型默认档——且**不写** pickedThinkingRef，这不是用户直接选的档。
    */
   const chooseModel = useCallback(
     (providerId: string, modelId: string) => {
       setModel({ providerId, modelId });
       // 启动恢复点跟随（bug A）：下次启动应用从这个模型开始
       void api.settings.set({ lastUsed: { providerId, modelId } }).catch(() => undefined);
+      // 这条会话的档要不要跟着动：新模型仍支持当前档（或支持集未知）就不动，
+      // 不支持才落新模型的默认档——换模型不该顺手改掉会话自己的设定
+      const supported = modelThinkingLevels(modelId, catalog);
+      const switched =
+        supported !== null && !supported.includes(thinkingLevel) ? defaultThinkingLevel(modelId, supported) : null;
       const id = sessionRef.current;
-      if (id === null) return; // 本槽开新任务：槽意图就是意图
+      if (id === null) {
+        // sessionRef 为 null 有两种：首页新任务槽（按「手选 > 默认」起档），与盘上打开
+        // 还没唤醒的旧会话（opened 不为 null——它有自己的档，按上面的规则只在不支持时改）
+        if (opened === null) applyNewTaskThinking(modelId);
+        else if (switched !== null) setThinkingLevelState(switched);
+        return;
+      }
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
       // 拿到你刚才给别的会话选的模型
       engine.rememberSessionIntent(id, { model: { providerId, modelId } });
@@ -1425,8 +1506,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           .setModel(id, providerId, modelId)
           .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
       }
+      if (switched !== null) applySessionThinking(id, switched);
     },
-    [engine, currentPhase],
+    [engine, catalog, opened, currentPhase, thinkingLevel, applyNewTaskThinking, applySessionThinking],
   );
 
   const changeMode = useCallback(
@@ -1455,18 +1537,18 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 同 changeMode 的整条规矩：本地即设（UI 即时）→ 记在会话名下（跑着时改不进
       // meta，排队卡投递时要拿这一档）→ 闲着才落 meta。下一轮 submit 自带新档——轮中
       // 改不影响当前轮（pi 在轮启动时已快照档位，与换模型同一条语义）。
-      // **不写 lastUsed**：思考档不跨重启，重启落回模型默认档（wafo 2026-09-23）
-      setThinkingLevelState(next);
+      // **不写 lastUsed**：思考档不跨重启，重启落回模型默认档（wafo 2026-09-23）。
+      // **这是用户手选**：记进本次运行的手选记忆——重启前的新任务槽起档都从它
+      // 开始，双查看槽共用（用户上一次手选是全局的，不按槽分）
+      engine.pickedThinkingRef.current = next;
       const id = sessionRef.current;
-      if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
-      engine.rememberSessionIntent(id, { thinkingLevel: next });
-      if (currentPhase() === "idle") {
-        void api.agent
-          .setThinkingLevel(id, next)
-          .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
+      if (id === null) {
+        setThinkingLevelState(next); // 本槽开新任务：还没有会话可记，槽意图就是意图
+        return;
       }
+      applySessionThinking(id, next);
     },
-    [engine, currentPhase],
+    [engine, applySessionThinking],
   );
 
   /**
@@ -1590,7 +1672,23 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const firstModel = first?.models.declared[0];
     if (first === undefined || firstModel === undefined) return;
     setModel({ providerId: first.id, modelId: firstModel.id });
-  }, [engine.usable, model]);
+    // 这个默认模型也要有一个真实的起档，不是停在初始 medium——只限新任务槽：打开的旧会话
+    // 因 provider 被删而落到这里时，它的档仍是它自己的（发送前 pi 按支持集夹）
+    if (opened === null) applyNewTaskThinking(firstModel.id);
+  }, [engine.usable, model, opened, applyNewTaskThinking]);
+
+  // 目录是异步到的：上面几处起档发生时 engine.catalog 可能还是空数组，算出来的
+  // 支持集是 null（未夹，接受——pi 发送前按同规则夹）。目录到位后，**本槽还没
+  // 起会话**就按真实支持集再起一次——不会踩用户刚手选的档：picked 就是手选值，
+  // 重算结果要么等于它（仍支持，原样返回）要么是这个模型的默认档（确实不支持，
+  // 该纠），都不是「覆盖用户意图」。有会话的槽不归这条管，档位已经跟着会话账走——
+  // **包括盘上打开、还没唤醒的旧会话**：它的 sessionRef 同样是 null（见 openSession
+  // 「空闲会话仍然置空」），只看 sessionRef 会把它当成新任务槽，打开即把会话自己记的
+  // 档覆盖成默认档（2026-09-23 实机复现：会话记 high，打开显示 Max）。
+  useEffect(() => {
+    if (sessionRef.current !== null || opened !== null || model === null) return;
+    applyNewTaskThinking(model.modelId);
+  }, [catalog, model, opened, applyNewTaskThinking]);
 
   /** 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
    *  ChatView 本来就用 sessionId ?? opened?.id 推标题里的会话，这里不另设第二份账 */
@@ -1843,6 +1941,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     thinkingLevel,
     changeThinkingLevel,
     thinkingSupported: entry.thinking?.supported ?? null,
+    catalog: engine.catalog,
     approvals: entry.approvals,
     workspaces: engine.workspaces,
     addWorkspace,
