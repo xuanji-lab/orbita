@@ -670,8 +670,6 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3);
   min-height: 0;
   /* 正常情况下展开卡 flex:1 1 0 垂直等分、永远不溢出；很多张折叠卡（各自
      flex: 0 0 auto）堆起来的固定高度总和仍可能超出可用高度——兜底可滚，
@@ -679,23 +677,39 @@ body {
   overflow-y: auto;
 }
 
-/* 通道卡：--glass-bg 同款玻璃卡（设计稿 .ch）。展开的垂直等分，折叠的只剩头部一行。 */
+/* 通道卡：**平铺在 pane 里**，与两侧的 chat 主区、右栏是同一个面（wafo 2026-09-23：
+ * 「不想要悬浮在上面的感觉，要和两边统一对齐」）——不再是浮起的玻璃卡（原设计稿 .ch：
+ * 自带底色、描边、圆角、阴影，列内再留 12px 间隙），卡与卡之间只有一条 hairline。
+ * 展开的垂直等分，折叠的只剩头部一行。窄窗 / 放不下时整列转覆盖层，那时浮起的是
+ * 整列（ChannelColumn.tsx 的 overlayStyle），卡片仍平铺在覆盖层里。 */
 .channel-card {
   display: flex;
   flex-direction: column;
+  flex: 1 1 0;
   min-height: 0;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-composer);
   overflow: hidden;
 }
 
+.channel-card.collapsed {
+  flex: 0 0 auto;
+}
+
+/* 分隔线：头部自带下边线，折叠卡靠它就与下一张隔开；展开卡的末行是 foot，
+ * 要自己补一条——只补在非末张上，否则折叠卡会叠出 2px */
+.channel-card:not(.collapsed):not(:last-child) {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* 头部行与两侧页头同一个盒子：30px 内容高 + 上下 12px + 1px 下边线 = 55px
+ * （ChatView / RightPanel 的 header 同一组数），第一张卡的头因此与左右页头
+ * 同高、下边线连成一条横线。 */
 .channel-card-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  box-sizing: content-box;
+  height: 30px;
+  padding: 12px var(--space-3);
   border: 0;
   border-bottom: 1px solid var(--color-border-subtle);
   background: transparent;
