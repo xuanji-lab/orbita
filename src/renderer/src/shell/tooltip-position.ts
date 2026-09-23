@@ -30,28 +30,56 @@ export interface TooltipPlacement {
   visible: boolean;
 }
 
+export interface PlaceTooltipOptions {
+  /**
+   * 优先摆在锚点哪一侧，另一侧放不下才翻过去。默认 `"above"`——IconButton 的
+   * 既有行为：优先上方，上方距视口顶不足时翻转到下方。skill 行传 `"below"`：
+   * 优先下方（不挡住上面可能紧挨着的过滤框），下方放不下才翻上去。两侧都放
+   * 不下时，落在「翻转后」的那一侧——首选方向失败也失败在翻转后的位置上。
+   */
+  side?: "above" | "below";
+  /**
+   * 水平对齐。默认 `"center"`——水平居中对齐锚点（IconButton 的既有行为）。
+   * `"start"` 贴锚点左缘，再加 `alignOffset`（skill 行：左缘 + 10px）。
+   * 两种对齐算出来的位置都还要夹回视口 8px 边距。
+   */
+  align?: "center" | "start";
+  /** `align: "start"` 时，锚点左缘到 tooltip 左缘的偏移量。默认 0。 */
+  alignOffset?: number;
+}
+
 /**
- * tooltip 优先开在锚点**上方**（水平居中对齐按钮）；上方距视口顶不足（顶缘会
- * 压过 8px 边距）时翻转到**下方**。两边都放不下时走下方——上方是首选方向，
- * 但下方是「翻转」的落点，失败也失败在翻转后的位置上。水平方向居中后夹回
- * 视口 8px 边距：宁可不对齐，也不要有一半在屏幕外。
+ * tooltip 优先开在锚点某一侧（`side`，默认上方）；那一侧放不下时翻转到另一侧。
+ * 两侧都放不下时落在翻转后的位置——首选方向失败也失败在翻转后的位置上。
+ * 水平方向按 `align` 算出对齐位置后夹回视口 8px 边距：宁可不对齐，也不要有
+ * 一半在屏幕外。
  */
 export function placeTooltip(
   anchor: TooltipAnchorBox,
   tooltip: { width: number; height: number },
   viewport: { width: number; height: number },
+  options: PlaceTooltipOptions = {},
 ): TooltipPlacement {
+  const side = options.side ?? "above";
+  const align = options.align ?? "center";
+  const alignOffset = options.alignOffset ?? 0;
+
   if (anchor.bottom <= 0 || anchor.top >= viewport.height) {
     return { top: 0, left: 0, visible: false };
   }
-  const fitsAbove = anchor.top - TOOLTIP_GAP - tooltip.height >= TOOLTIP_EDGE;
-  const top = fitsAbove
-    ? anchor.top - TOOLTIP_GAP - tooltip.height
-    : anchor.bottom + TOOLTIP_GAP;
+
+  const above = anchor.top - TOOLTIP_GAP - tooltip.height;
+  const below = anchor.bottom + TOOLTIP_GAP;
+  const fitsAbove = above >= TOOLTIP_EDGE;
+  const fitsBelow = below + tooltip.height <= viewport.height - TOOLTIP_EDGE;
+  const top =
+    side === "below" ? (fitsBelow ? below : above) : fitsAbove ? above : below;
+
   const centered = anchor.left + (anchor.right - anchor.left - tooltip.width) / 2;
+  const aligned = align === "start" ? anchor.left + alignOffset : centered;
   // 下界保护：tooltip 比视口还宽时，max 会算出负数——夹回 8px 而不是负值
   const maxLeft = Math.max(TOOLTIP_EDGE, viewport.width - tooltip.width - TOOLTIP_EDGE);
-  const left = Math.min(Math.max(TOOLTIP_EDGE, centered), maxLeft);
+  const left = Math.min(Math.max(TOOLTIP_EDGE, aligned), maxLeft);
   return { top, left, visible: true };
 }
 

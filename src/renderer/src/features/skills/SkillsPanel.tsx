@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { IconButton } from "../../shell/IconButton";
 import { SetDots } from "../../shell/SetDots";
+import { useHoverTooltip } from "../../shell/useHoverTooltip.ts";
 import {
   PanelButton,
   PanelIconButton,
@@ -15,6 +17,9 @@ import type { SkillContent, SkillMeta } from "@shared/skill";
 import { isSkillSlug } from "@shared/skill";
 import { SkillsMap } from "./SkillsMap";
 import { filterSkills } from "./skill-filter.ts";
+
+/** 行 hover tooltip 出现的延迟——比 IconButton 的 200ms 更慢，快速划过列表不惊扰 */
+const ROW_TOOLTIP_DELAY_MS = 350;
 
 /**
  * Skills 面板（1-4 / 2-1d）：列表视图按集合分组 + 详情视图改归属与三段编辑。
@@ -320,6 +325,14 @@ function SkillList(props: {
  * 归属点阵（SetDots）只在「非 missing、非 disabled」时画：disabled 组的成员按
  * 定义 global=false 且 workspaces=[]（这就是它被分进 Disabled 组的原因），点阵
  * 本来也是空的；missing 走行首红三角 + 红名，两套符号不共存。
+ *
+ * **hover tooltip**：`useHoverTooltip` 的第二个消费者（第一个是 IconButton，
+ * 200ms）。行内容够长——全名、一行描述、mono 的 slug · 集合名——单行 36px 装不下，
+ * 描述仍然不进列表行本身（单行纪律不破），但要看得够得着。350ms 比 IconButton
+ * 的 200ms 更慢：快速划过整个列表找一行不该处处弹牌子。视觉走实色面板 + 发丝边
+ * + popover 阴影（现行 *Transparency* 规则：浮在内容之上的层不用 blur、不用
+ * 半透明——设计稿画的是玻璃 tooltip，那是 2026-09-23 去 blur 之前的稿）。
+ * `role="tooltip"` + 行按钮 `aria-describedby` 指回它，打开时才挂 id。
  */
 function SkillRow(props: {
   skill: SkillMeta;
@@ -333,12 +346,30 @@ function SkillRow(props: {
   const setNames = [skill.global ? "Global" : null, ...skill.workspaces.map(props.workspaceName)].filter(
     (name): name is string => name !== null,
   );
+  // 下方、左对齐行左缘 + 10px（对稿 row-tip：top:34 相对行顶即「行下方」、left:10）；
+  // IconButton 的默认值（上方、居中）不受影响——只有这个调用点传了 place
+  const tooltip = useHoverTooltip<HTMLButtonElement>(ROW_TOOLTIP_DELAY_MS, true, {
+    side: "below",
+    align: "start",
+    alignOffset: 10,
+  });
+  const tipId = `skill-tip-${skill.slug}`;
 
   return (
     <div
       className={`skill-row${skill.missing ? " skill-row-missing" : dim ? " skill-row-dim" : ""}`}
     >
-      <button type="button" className="skill-row-main" onClick={() => props.onSelect(skill.slug)}>
+      <button
+        ref={tooltip.anchorRef}
+        type="button"
+        className="skill-row-main"
+        onClick={() => props.onSelect(skill.slug)}
+        onMouseEnter={tooltip.handlers.onMouseEnter}
+        onMouseLeave={tooltip.handlers.onMouseLeave}
+        onFocus={tooltip.handlers.onFocus}
+        onBlur={tooltip.handlers.onBlur}
+        aria-describedby={tooltip.open ? tipId : undefined}
+      >
         {skill.missing && (
           <Icon name="triangle-alert" size={13} style={{ color: "var(--color-danger)" }} />
         )}
@@ -347,6 +378,29 @@ function SkillRow(props: {
       {!skill.missing && !dim && (
         <SetDots global={skill.global} workspaces={skill.workspaces.length} title={setNames.join(", ")} />
       )}
+      {tooltip.open &&
+        createPortal(
+          <div
+            ref={tooltip.tooltipRef}
+            id={tipId}
+            role="tooltip"
+            className="skill-row-tip"
+            style={{
+              top: tooltip.placement?.top ?? 0,
+              left: tooltip.placement?.left ?? 0,
+              // 未落位前不显形，落位后从透明过渡进来——同 IconButton 的首帧处理
+              opacity: tooltip.placement === null ? 0 : 1,
+            }}
+          >
+            <span className="skill-row-tip-name">{skill.name}</span>
+            {skill.description !== "" && <span className="skill-row-tip-desc">{skill.description}</span>}
+            <span className="skill-row-tip-sets">
+              {skill.slug}
+              {setNames.length > 0 ? ` · ${setNames.join(", ")}` : ""}
+            </span>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

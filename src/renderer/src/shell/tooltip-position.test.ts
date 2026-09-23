@@ -1,7 +1,8 @@
 /**
- * IconButton 自绘 tooltip 定位口径的边界。这些规则会被争论，所以钉住：
- * 优先上方、上方距视口顶不足翻转到下方、水平居中但夹回视口 8px 边距、
- * 锚点整个出视口就不显示（关门信号）。
+ * tooltip 定位口径的边界（IconButton 与 skill 行共用）。这些规则会被争论，所以钉住：
+ * 默认（IconButton）优先上方、上方距视口顶不足翻转到下方、水平居中但夹回视口 8px
+ * 边距、锚点整个出视口就不显示（关门信号）；`side: "below"`（skill 行）镜像同一套
+ * 规则、`align: "start"` 贴锚点左缘 + 偏移量，两者都还要夹回视口边距。
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -78,6 +79,41 @@ describe("placeTooltip —— 锚点出视口就关门", () => {
       viewport,
     );
     assert.equal(placed.visible, false);
+  });
+});
+
+describe("placeTooltip —— side/align（skill 行：below + start，IconButton 默认不传）", () => {
+  test("side: below，下方放得下：贴着锚点下方展开", () => {
+    const placed = placeTooltip(anchor(), tooltip, viewport, { side: "below" });
+    assert.equal(placed.top, 620 + TOOLTIP_GAP); // anchor.bottom + GAP
+    assert.equal(placed.visible, true);
+  });
+
+  test("side: below，下方放不下：翻转到上方", () => {
+    // 锚点贴视口底：below = 780+6=786，786+24=810 超过视口高 800 减 8px 边距（792）
+    const placed = placeTooltip(anchor({ top: 760, bottom: 780 }), tooltip, viewport, {
+      side: "below",
+    });
+    assert.equal(placed.top, 760 - TOOLTIP_GAP - 24); // 翻转后的位置：anchor.top - GAP - 高
+  });
+
+  test("align: start，贴锚点左缘 + alignOffset（不居中）", () => {
+    const placed = placeTooltip(anchor(), tooltip, viewport, { align: "start", alignOffset: 10 });
+    assert.equal(placed.left, 300 + 10); // anchor.left + alignOffset，不是居中的 270
+  });
+
+  test("align: start，贴锚点右侧会出视口：仍夹回 8px 边距", () => {
+    const placed = placeTooltip(anchor({ left: 1150, right: 1210 }), tooltip, viewport, {
+      align: "start",
+      alignOffset: 10,
+    });
+    assert.equal(placed.left, 1200 - 120 - TOOLTIP_EDGE); // 1160 超出，夹回视口右缘 8px
+  });
+
+  test("不传 side/align：IconButton 的既有行为（上方、居中）不变", () => {
+    const placed = placeTooltip(anchor(), tooltip, viewport);
+    assert.equal(placed.top, 600 - TOOLTIP_GAP - 24);
+    assert.equal(placed.left, 270);
   });
 });
 

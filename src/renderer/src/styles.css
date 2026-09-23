@@ -1629,6 +1629,46 @@ body {
 }
 
 /*
+ * 行 hover tooltip：实色 --color-bg-panel + 发丝边 + --shadow-popover（现行
+ * *Transparency* 规则——浮在内容之上的层不用 blur、不用半透明；设计稿画的是
+ * 玻璃 tooltip，那是去 blur 之前的稿，这里按现行规则实色）。`top`/`left`/
+ * `opacity` 由 useHoverTooltip 算出后内联——那是运行时才知道的一次性布局值。
+ */
+.skill-row-tip {
+  position: fixed;
+  z-index: 70;
+  max-width: 260px;
+  padding: 9px 11px;
+  display: grid;
+  gap: 3px;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  pointer-events: none;
+  transition: opacity var(--duration-instant) ease;
+}
+.skill-row-tip-name {
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.skill-row-tip-desc {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-row-tip-sets {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+}
+
+/*
  * 韦恩图圆的淡填充（4-4，值取自 skills-map-3circle-v2）：只服务这一个 feature，
  * 从 tokens/colors.css 搬到这里（Implementation rules：只服务一个 feature 的值
  * 不进 tokens/，落在渲染层那个 feature 自己的 CSS 旁边）——三个选择器与三个值原样
