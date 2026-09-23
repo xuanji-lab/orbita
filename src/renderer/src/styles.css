@@ -1596,6 +1596,17 @@ body {
   color: var(--color-danger);
 }
 
+/* missing 就地清理的两段式确认：替换整行内容，不额外占空间（单行 36px 不破） */
+.skill-row-confirm-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
 /*
  * 归属点阵：环点 = Global、实心点 = 一个 workspace，与韦恩图共用的符号学
  * （SetDots 组件注释）。**颜色只用中性灰阶**（secondary），不用 accent——

@@ -270,6 +270,7 @@ function SkillList(props: {
                       skill={s}
                       onSelect={props.onSelect}
                       workspaceName={props.workspaceName}
+                      onClean={skills.clean}
                     />
                   ))}
                 </div>
@@ -286,6 +287,7 @@ function SkillList(props: {
                         skill={s}
                         onSelect={props.onSelect}
                         workspaceName={props.workspaceName}
+                        onClean={skills.clean}
                       />
                     ))}
                   </div>
@@ -301,6 +303,7 @@ function SkillList(props: {
                       dim
                       onSelect={props.onSelect}
                       workspaceName={props.workspaceName}
+                      onClean={skills.clean}
                     />
                   ))}
                 </div>
@@ -333,6 +336,11 @@ function SkillList(props: {
  * + popover 阴影（现行 *Transparency* 规则：浮在内容之上的层不用 blur、不用
  * 半透明——设计稿画的是玻璃 tooltip，那是 2026-09-23 去 blur 之前的稿）。
  * `role="tooltip"` + 行按钮 `aria-describedby` 指回它，打开时才挂 id。
+ *
+ * **missing 就地清理**：断链是列表里唯一需要「处理」的状态，处理入口长在现场——
+ * hover（或键盘聚焦到行内）浮出红色 trash（`.reveal`，同一套 hover 浮现机制），
+ * 点击进入两段式确认（与 McpPanel 删除同款：一句后果说明 + 确认 / 取消），确认
+ * 后才调 `onClean`。确认态替换整行内容而不是另起一行——单行 36px 的纪律不破。
  */
 function SkillRow(props: {
   skill: SkillMeta;
@@ -340,6 +348,7 @@ function SkillRow(props: {
   dim?: boolean;
   onSelect: (slug: string) => void;
   workspaceName: (id: string) => string;
+  onClean: (slug: string) => void;
 }) {
   const { skill } = props;
   const dim = props.dim === true;
@@ -354,6 +363,25 @@ function SkillRow(props: {
     alignOffset: 10,
   });
   const tipId = `skill-tip-${skill.slug}`;
+  const [confirming, setConfirming] = useState(false);
+
+  if (skill.missing && confirming) {
+    return (
+      <div className="skill-row skill-row-missing">
+        <span className="skill-row-confirm-text">Clean up this missing reference?</span>
+        <PanelButton
+          danger
+          onClick={() => {
+            setConfirming(false);
+            props.onClean(skill.slug);
+          }}
+        >
+          Clean up
+        </PanelButton>
+        <PanelButton onClick={() => setConfirming(false)}>Cancel</PanelButton>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -375,6 +403,21 @@ function SkillRow(props: {
         )}
         <span className="skill-row-name">{skill.name}</span>
       </button>
+      {skill.missing && (
+        <IconButton
+          label="Clean up references"
+          size={22}
+          className="reveal"
+          onClick={() => {
+            // 打开确认前先收掉 tooltip：确认态整个换掉行内容，锚点按钮会被卸载，
+            // 不关的话 tooltip 状态会挂在一个已经不存在的锚点上
+            tooltip.handlers.onMouseLeave();
+            setConfirming(true);
+          }}
+        >
+          <Icon name="trash-2" size={14} style={{ color: "var(--color-danger)" }} />
+        </IconButton>
+      )}
       {!skill.missing && !dim && (
         <SetDots global={skill.global} workspaces={skill.workspaces.length} title={setNames.join(", ")} />
       )}
