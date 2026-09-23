@@ -1,18 +1,23 @@
+import "./settings-view.css";
+import { useEffect, useState } from "react";
+import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
-import type { IconName } from "../../shell/Icon";
+import { Icon, type IconName } from "../../shell/Icon";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
+import { PanelButton } from "../../shell/RightPanel";
 import type { ProviderDto } from "@shared/provider";
+import { CompactViz } from "./CompactViz";
+import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { ImportPromaRow } from "./ImportPromaRow";
 import { ProvidersView } from "./ProvidersView";
+import { ThemePicker } from "./ThemeCard";
 import { modelMenuItems, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
-  THEME_PREFERENCES,
   type AppSettings,
   type CompactionSetting,
   type SettingsPatch,
-  type ThemePreference,
 } from "@shared/settings";
 import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 
@@ -83,16 +88,6 @@ export function SettingsView(props: {
     </div>
   );
 }
-
-const THEME_LABELS: Record<ThemePreference, string> = {
-  system: "System",
-  light: "Light",
-  dark: "Warm",
-  black: "Ink",
-};
-
-/** 自动压缩的档位（%）。与 shared 的合法区间 [5,50] 对齐，档距是「一眼分得清」的粒度 */
-const COMPACTION_CHOICES = [30, 25, 20, 15, 10, 5] as const;
 
 /**
  * 「退回继承」菜单的公共形状：Title model / Sub-session model / Sub-session thinking
@@ -191,19 +186,8 @@ function General(props: {
         <Row
           name="Theme"
           hint="System follows your desktop's light or dark appearance and lands on Ink; Warm and Ink are manual."
-          control={
-            <span style={{ display: "flex", gap: 2 }}>
-              {THEME_PREFERENCES.map((value) => (
-                <Chip
-                  key={value}
-                  active={props.settings.theme === value}
-                  onClick={() => props.onChange({ theme: value })}
-                >
-                  {THEME_LABELS[value]}
-                </Chip>
-              ))}
-            </span>
-          }
+          layout="stack"
+          control={<ThemePicker value={props.settings.theme} onChange={props.onChange} />}
         />
       </Section>
       <Section label="Context">
@@ -211,22 +195,26 @@ function General(props: {
           name="Auto-compact"
           hint="Fold older history into a summary once remaining context drops to this level. Off keeps manual /compact only. Applies from the next message."
           control={
-            <span style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-              <Chip
-                active={compaction.enabled === false}
-                onClick={() => setCompaction({ ...compaction, enabled: false })}
-              >
-                Off
-              </Chip>
-              {COMPACTION_CHOICES.map((value) => (
+            <span style={{ display: "grid", gap: "var(--space-2)" }}>
+              <span style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
                 <Chip
-                  key={value}
-                  active={compaction.enabled !== false && compaction.reservePercent === value}
-                  onClick={() => setCompaction({ enabled: true, reservePercent: value })}
+                  active={compaction.enabled === false}
+                  onClick={() => setCompaction({ ...compaction, enabled: false })}
                 >
-                  {value}%
+                  Off
                 </Chip>
-              ))}
+                {COMPACTION_CHOICES.map((value) => (
+                  <Chip
+                    key={value}
+                    active={compaction.enabled !== false && compaction.reservePercent === value}
+                    onClick={() => setCompaction({ enabled: true, reservePercent: value })}
+                  >
+                    {value}%
+                  </Chip>
+                ))}
+              </span>
+              {/* Off 时整条可视化不渲染（条件渲染，不是隐藏）——没有数值可画 */}
+              {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
             </span>
           }
         />
@@ -331,6 +319,7 @@ function General(props: {
       <Section label="Data">
         {/* 导入入口自带行卡样式（按钮组 + 汇总多行），不走通用 Row */}
         <ImportPromaRow onImported={props.onImported} />
+        <DataDirectoryRow />
       </Section>
     </div>
   );
@@ -360,35 +349,138 @@ function Section(props: { label: string; children: React.ReactNode }) {
 /**
  * 一条设置。**直接坐在内容面上，靠发丝线分隔，不套第二张卡**——
  * 玻璃已经分了三层，再加一层只会把层级讲糊。
+ *
+ * `layout="stack"`：name+hint 在上、control 独占下面一整行（Theme 预览卡组用）——
+ * 单列 grid 天然让两个直接子项上下排，不用给 control 单独开分支。默认 `"row"`
+ * 还是原来的左右两栏。只加这一个可选项，别把整个组件改成只适配某一行。
  */
-function Row(props: { name: string; hint: string; control: React.ReactNode }) {
+function Row(props: {
+  name: string;
+  hint: string;
+  control: React.ReactNode;
+  layout?: "row" | "stack";
+}) {
+  const stack = props.layout === "stack";
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) auto",
-        alignItems: "center",
-        gap: "var(--space-4)",
+        gridTemplateColumns: stack ? "1fr" : "minmax(0,1fr) auto",
+        alignItems: stack ? "start" : "center",
+        gap: stack ? "var(--space-3)" : "var(--space-4)",
         minHeight: "var(--list-item-rich)",
         padding: "var(--space-3) 0",
         borderBottom: "1px solid var(--color-border-subtle)",
       }}
     >
-      <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
-        <span style={{ fontSize: "var(--font-size-control)", fontWeight: "var(--weight-medium)" }}>
-          {props.name}
-        </span>
-        <span
-          style={{
-            fontSize: "var(--font-size-caption)",
-            lineHeight: "var(--line-height-caption)",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {props.hint}
-        </span>
-      </span>
+      <RowCopy name={props.name} hint={props.hint} />
       {props.control}
+    </div>
+  );
+}
+
+/** 行的左半：名字 + 说明，`note` 是说明下方可选的一行状态。Row 与 DataDirectoryRow 共用 */
+function RowCopy(props: { name: string; hint: string; note?: React.ReactNode }) {
+  return (
+    <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
+      <span style={{ fontSize: "var(--font-size-control)", fontWeight: "var(--weight-medium)" }}>
+        {props.name}
+      </span>
+      <span
+        style={{
+          fontSize: "var(--font-size-caption)",
+          lineHeight: "var(--line-height-caption)",
+          color: "var(--color-text-secondary)",
+        }}
+      >
+        {props.hint}
+      </span>
+      {props.note}
+    </span>
+  );
+}
+
+/**
+ * Data section 的最后一行：数据目录的绝对路径 + Reveal。不走通用 Row：
+ * 路径是全页唯一可能比说明还宽的 control——Row 的 control 列是 `auto`，
+ * 放进去窗口一窄就先把说明挤没。这里说明列保底 240px，窄了先截路径。
+ * 是 Data section 最后一行，照设计稿去掉底部发丝线。
+ */
+function DataDirectoryRow() {
+  const [dir, setDir] = useState<
+    { kind: "loading" } | { kind: "ready"; path: string } | { kind: "error" }
+  >({ kind: "loading" });
+  // Reveal 失败原因；成功一次就清掉，不用「上一次失败」压住这一次成功
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.settings
+      .dataDir()
+      .then((path) => {
+        if (!cancelled) setDir({ kind: "ready", path });
+      })
+      .catch(() => {
+        if (!cancelled) setDir({ kind: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const reveal = () => {
+    void api.settings
+      .revealDataDir()
+      .then(() => setRevealError(null))
+      .catch((cause: unknown) =>
+        setRevealError(cause instanceof Error ? cause.message : String(cause)),
+      );
+  };
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        // 控件列最小是 0：列宽不够时路径（overflow:hidden，自动最小宽为 0）跟着收窄
+        gridTemplateColumns: "minmax(240px,1fr) minmax(0,auto)",
+        alignItems: "center",
+        gap: "var(--space-4)",
+        minHeight: "var(--list-item-rich)",
+        padding: "var(--space-3) 0",
+      }}
+    >
+      <RowCopy
+        name="Data directory"
+        hint="Sessions, workspaces, skills and mcp.json live here as plain files."
+        note={
+          revealError !== null && (
+            <span role="alert" style={{ fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+              {revealError}
+            </span>
+          )
+        }
+      />
+      <span
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-end",
+          gap: "var(--space-2)",
+          minWidth: 0,
+        }}
+      >
+        {dir.kind === "ready" && (
+          // 路径很长，从左边截断让末段（真正区分不同机器的那一截）留在视野里；
+          // 取到之前不渲染，免得先闪一下 "undefined"。bdi 见 .data-dir-path 的注释
+          <code className="data-dir-path" title={dir.path}>
+            <bdi dir="ltr">{dir.path}</bdi>
+          </code>
+        )}
+        {dir.kind === "error" && <code className="data-dir-path-unavailable">Unavailable</code>}
+        <PanelButton onClick={reveal} title="Open the data directory">
+          <Icon name="folder" size={14} /> Reveal
+        </PanelButton>
+      </span>
     </div>
   );
 }

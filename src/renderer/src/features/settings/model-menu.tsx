@@ -14,18 +14,15 @@ import type { ProviderDto } from "@shared/provider";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import type { MenuItem } from "../../shell/Menu";
-import { kindOf, modelAcceptsImage, modelContextText } from "./providers-view-model.ts";
+import { hasCredentials, kindOf, modelAcceptsImage, modelContextText } from "./providers-view-model.ts";
 
 /**
- * 「配置好」= 设置里绿点的标准：api_key 已入库，或 env 档（密钥来自环境）。
+ * 「配置好」= 设置里绿点的标准：api_key 已入库，或 env 档（密钥来自环境）——与 nav
+ * 状态点共用 `hasCredentials`，两处不该对同一个厂商说两个答案。
  * 没填 key 的厂商与复制出来的副本不该出现在任何模型菜单里——选了也发不出去。
  */
 export function usableProviders(providers: readonly ProviderDto[]): ProviderDto[] {
-  return providers.filter(
-    (p) =>
-      ((p.auth.scheme === "api_key" && p.auth.hasSecret) || p.auth.scheme === "env") &&
-      p.models.declared.length > 0,
-  );
+  return providers.filter((p) => hasCredentials(p.auth) && p.models.declared.length > 0);
 }
 
 /**

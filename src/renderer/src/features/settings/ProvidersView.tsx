@@ -8,6 +8,7 @@ import type { BuiltinProvider } from "@shared/agent-ipc";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import {
+  hasCredentials,
   kindOf,
   mergeModelCost,
   modelAcceptsImage,
@@ -42,6 +43,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [draft, setDraft] = useState(emptyDraft());
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
+  /** 正在跑的 guard 动作是不是 Test——按钮的转圈 / disabled 只认这个，不比对 status 文案 */
+  const [testing, setTesting] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   /** 正等待二次确认删除的模型 id；一次只有一条，点别的行的 trash 就换成那条 */
@@ -266,17 +269,23 @@ export function ProvidersView(props: { onChange?: () => void }) {
       };
     });
 
-  const test = () =>
-    guard("Testing connection…", async () => {
-      const result = await api.provider.test({
-        api: known?.api ?? "openai-completions",
-        baseUrl: draft.baseUrl.trim(),
-        modelId: draft.models[0]?.id ?? "",
-        ...withKey(),
-        ...withHeaders(),
+  const test = async (): Promise<void> => {
+    setTesting(true);
+    try {
+      await guard("Testing connection…", async () => {
+        const result = await api.provider.test({
+          api: known?.api ?? "openai-completions",
+          baseUrl: draft.baseUrl.trim(),
+          modelId: draft.models[0]?.id ?? "",
+          ...withKey(),
+          ...withHeaders(),
+        });
+        return { tone: result.ok ? ("ok" as const) : ("bad" as const), text: result.message };
       });
-      return { tone: result.ok ? ("ok" as const) : ("bad" as const), text: result.message };
-    });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   /** 行内单模型测试：状态收在行内（图标转圈 / 结果徽标），不动布局。
    * 按模型 id 独立——连续点多个模型就是并行测试，谁也不顶谁。
@@ -517,11 +526,13 @@ export function ProvidersView(props: { onChange?: () => void }) {
               onClick={() => selectProvider(provider.id)}
             >
               <span
-                className={`pv-dot ${provider.auth.scheme === "api_key" && provider.auth.hasSecret ? "ok" : "none"}`}
+                className={`pv-dot ${hasCredentials(provider.auth) ? "ok" : "none"}`}
                 title={
                   provider.auth.scheme === "api_key" && provider.auth.hasSecret
-                    ? "API key configured"
-                    : "No API key yet"
+                    ? "API key saved"
+                    : provider.auth.scheme === "env"
+                      ? `Key from environment (${provider.auth.envKeys.join(", ")})`
+                      : "No API key yet"
                 }
               />
               <span className="pv-row-main">
@@ -694,11 +705,20 @@ export function ProvidersView(props: { onChange?: () => void }) {
                     >
                       <Icon name={revealed ? "eye-off" : "eye"} size={15} strokeWidth={1.8} />
                     </button>
-                    <button type="button" className="pv-btn" onClick={() => void test()}>
-                      <Icon name="zap" size={14} /> Test
+                    <button
+                      type="button"
+                      className="pv-btn"
+                      disabled={testing}
+                      onClick={() => void test()}
+                    >
+                      <Icon name={testing ? "loader-circle" : "zap"} size={14} spin={testing} />{" "}
+                      {testing ? "Testing…" : "Test"}
                     </button>
                   </div>
-                  {status !== null && <Line tone={status.tone}>{status.text}</Line>}
+                  {/* testing 时按钮本身已经说明「在跑」，busy 行不用再重复一遍 */}
+                  {status !== null && !(testing && status.tone === "busy") && (
+                    <Line tone={status.tone}>{status.text}</Line>
+                  )}
                 </div>
               </div>
 
@@ -1132,7 +1152,7 @@ function ModelDialog(props: {
                     setIdValue(e.target.value);
                     setIdIssue(null);
                   }}
-                  style={idIssue !== null ? { borderColor: "var(--color-danger)" } : undefined}
+                  aria-invalid={idIssue !== null}
                 />
                 <span className="pv-sub">
                   Lowercase letters, digits, dots and dashes. Matching a built-in catalog entry inherits
@@ -1278,15 +1298,27 @@ function ModelDialog(props: {
   );
 }
 
+/**
+ * key 测试状态行：三态各自的视觉分量不同，不是一行小字换个颜色。
+ * ok / busy 仍是单行文字（busy 前可挂转圈，呼应 Test 按钮同一个白名单动效）；
+ * bad 升级成 danger-soft 软底块，与模型行的 pv-mreason 同规格——失败原因通常
+ * 是一整句服务端错误，需要能换行、能悬停选中复制，一行小字装不下。
+ * role 二选一：bad 用 alert（主动打断朗读，错误需要立刻被听到），
+ * 其余保留 status（礼貌通知，busy/ok 不该打断用户正在做的事）。
+ */
 function Line(props: { tone: "ok" | "bad" | "busy"; children: React.ReactNode }) {
-  const color =
-    props.tone === "ok"
-      ? "var(--color-success)"
-      : props.tone === "bad"
-        ? "var(--color-danger)"
-        : "var(--color-text-tertiary)";
+  if (props.tone === "bad") {
+    return (
+      <div className="pv-line bad" role="alert">
+        <Icon name="triangle-alert" size={12} />
+        <span>{props.children}</span>
+      </div>
+    );
+  }
   return (
-    <p role="status" style={{ margin: 0, fontSize: "var(--font-size-control)", color }}>
+    <p className={`pv-line ${props.tone}`} role="status">
+      {props.tone === "busy" && <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />}
+      {props.tone === "ok" && <Icon name="check" size={13} strokeWidth={1.8} />}
       {props.children}
     </p>
   );

@@ -86,6 +86,17 @@ export function kindOf(provider: ProviderDto): string {
 }
 
 /**
+ * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或密钥来自环境变量
+ * （env 档没有 hasSecret 可查，scheme 本身就是「已配置」的声明）；none 恒为假。
+ * nav 状态点与模型菜单的 usableProviders 是两个真实消费者——此前各写各的判定，
+ * env 档厂商在模型菜单里能选、nav 却挂空心环，同一个问题给出两个答案。
+ */
+export function hasCredentials(auth: ProviderDto["auth"]): boolean {
+  if (auth.scheme === "api_key") return auth.hasSecret;
+  return auth.scheme === "env";
+}
+
+/**
  * 模型行的上下文简报。**生效值 = 用户覆盖 > 推断出的基线**（基线内部已经是
  * 白名单 > pi 目录 > 兜底，见 shared/model-defaults），与 agent 注册时的装配同源
  * ——显示与 runtime 讲同一个故事。

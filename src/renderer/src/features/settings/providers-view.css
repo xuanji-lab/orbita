@@ -232,10 +232,11 @@
   gap: var(--space-1);
   min-width: 0;
 }
+/* label 是次级信息，输入框里的值才是主角（设计系统字段层级：小字 label + 发丝框 input） */
 .pv-field > label {
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-caption);
   font-weight: var(--weight-medium);
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
 }
 .pv-sub {
   font-size: var(--font-size-caption);
@@ -367,6 +368,10 @@
 .pv-input::placeholder {
   color: var(--color-text-tertiary);
 }
+/* 校验不过的字段（如模型弹窗的 id）：边框换 danger 色，不再靠 inline style 三元 */
+.pv-input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
 
 /* 状态行：图标 + 文字在前，颜色第二信号（设计系统） */
 .pv-status {
@@ -385,6 +390,41 @@
 }
 .pv-status.busy {
   color: var(--color-text-secondary);
+}
+
+/* key 测试状态行（Line 组件）：ok / busy 是一行文字，bad 升级成软底块——
+   与 .pv-mreason 同规格，失败原因是服务端整句错误，需要能换行能选中复制。 */
+.pv-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-control);
+  line-height: var(--line-height-control);
+}
+.pv-line.ok {
+  color: var(--color-success);
+}
+.pv-line.busy {
+  color: var(--color-text-tertiary);
+}
+.pv-line.bad {
+  display: flex;
+  align-items: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.pv-line.bad svg {
+  flex: none;
+  margin-top: 2px;
 }
 
 /* ---------- 模型区：区头一行（Add / Fetch），行简报右对齐 ---------- */

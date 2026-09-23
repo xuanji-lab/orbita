@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelDefaults } from "../../../../shared/model-defaults.ts";
 import {
+  hasCredentials,
   mergeModelCost,
   modelAcceptsImage,
   modelIdIssue,
@@ -133,6 +134,19 @@ describe("modelAcceptsImage —— 图片徽标与弹窗 Inherit 共用一个答
     // 用户明确关掉：目录说能看图也不显示（他的网关可能真不支持）
     assert.equal(modelAcceptsImage({ id: "m", vision: false }, withInput(["text", "image"])), false);
     assert.equal(modelAcceptsImage({ id: "m", vision: true }, withInput(["text"])), true);
+  });
+});
+
+describe("hasCredentials —— nav 状态点与模型菜单共用同一个判定", () => {
+  test("api_key 且已存密钥 = true；已存字段为 false 时不能显示已配置", () => {
+    assert.equal(hasCredentials({ scheme: "api_key", hasSecret: true, masked: "sk-***" }), true);
+    assert.equal(hasCredentials({ scheme: "api_key", hasSecret: false, masked: null }), false);
+  });
+  test("env 档密钥来自环境变量，恒为 true", () => {
+    assert.equal(hasCredentials({ scheme: "env", envKeys: ["OPENAI_API_KEY"] }), true);
+  });
+  test("none 恒为 false", () => {
+    assert.equal(hasCredentials({ scheme: "none" }), false);
   });
 });
 

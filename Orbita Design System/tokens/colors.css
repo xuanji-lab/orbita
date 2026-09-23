@@ -1,4 +1,10 @@
-:root {
+/* `[data-theme-preview="light"]` 是设置页 Theme 预览卡专用的选择器（ThemeCard.tsx）：
+   卡片要在「当前主题不是 light」时仍然画出 light 档的真实颜色，而 token 平时挂在
+   `:root` / `:root[data-theme="…"]` 上，子树拿不到别的主题的值——`data-theme-preview`
+   子树因此单独复述同一批声明。三块顺序（light 在前、dark/black 在后）保证在 light
+   根下渲染 dark/black 预览时，后面的块能覆盖前面的声明。 */
+:root,
+[data-theme-preview="light"] {
   color-scheme: light;
 
   /* surfaces */
@@ -78,7 +84,9 @@
    （app #191c1d、panel #232525），黄 accent 的 wash 压到 .05——选中态靠
    字重与文字色兜底（readme：active is marked by weight），不靠色块。
    设置里叫 Warm；system 不落这档（落 Ink），是纯手动档。 */
-:root[data-theme="dark"] {
+/* `[data-theme-preview="dark"]` 同上，给 Theme 预览卡的 Warm 缩略窗用。 */
+:root[data-theme="dark"],
+[data-theme-preview="dark"] {
   color-scheme: dark;
   --color-bg-app: #191c1d;
   --color-bg-sidebar: #1e2223;
@@ -123,7 +131,9 @@
    唯一留给品牌的是黄 accent。历史：真黑 #000「太黑了」→ GitHub default「有点蓝」→
    中性灰 #121212「有点泛黄」→ 定这版更暗的中性。若仍泛黄，退手是地加一丝冷偏
    （#0a0b0c）或降 accent-soft 透明度。black 是手动档，system 跟随系统只落 light/dark。 */
-:root[data-theme="black"] {
+/* `[data-theme-preview="black"]` 同上，给 Theme 预览卡的 Ink 缩略窗（与 System 卡右半）用。 */
+:root[data-theme="black"],
+[data-theme-preview="black"] {
   color-scheme: dark;
   --color-bg-app: #0a0a0a;
   --color-bg-sidebar: #0e0e0e;

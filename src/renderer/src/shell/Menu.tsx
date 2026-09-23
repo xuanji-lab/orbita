@@ -423,8 +423,10 @@ function MenuRow(props: {
       onClick={props.onSelect}
       style={{
         display: "grid",
-        // 图标槽 14px：里面的图标就是 13px，16 的槽只是每行白多一道缝
-        gridTemplateColumns: "14px minmax(0,1fr) auto auto",
+        // 图标槽 14px：里面的图标就是 13px，16 的槽只是每行白多一道缝。
+        // label 和 hint 合用中间这一列（见下面的内层 flex）：hint 太长会把
+        // label 挤没，就是这一行的宽度分配方式（2026-09-23 修复）。
+        gridTemplateColumns: "14px minmax(0,1fr) auto",
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
@@ -471,27 +473,41 @@ function MenuRow(props: {
           <Icon name={item.icon} size={13} strokeWidth={1.8} />
         ) : null}
       </span>
-      <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {item.label}
-      </span>
-      {item.hint !== undefined && (
-        <span
-          style={{
-            color: "var(--color-text-tertiary)",
-            fontSize: "var(--font-size-micro)",
-            whiteSpace: "nowrap",
-            ...(fact
-              ? {
-                  fontFamily: "var(--font-family-business)",
-                  fontVariantNumeric: "tabular-nums",
-                  color: "var(--color-text-secondary)",
-                }
-              : null),
-          }}
-        >
-          {item.hint}
+      {/*
+        label 优先、hint 收缩：两者以前各占一个 grid 列（label 是 fr、会被挤到 0；
+        hint 是 auto、按满字宽占位，长 hint 因此把短 label 挤没——Title model 菜单
+        首项「Same as session」显示成「Same ...」就是这样来的）。改成同一列内的
+        flex：label `flex:"none"` 永远按内容宽度显示，`justify-content:"space-between"`
+        在两者之间留白（没有多余空间时退化成紧贴），hint 才是那个会被压缩、
+        用 ellipsis 截断的一方。
+      */}
+      <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-2)", minWidth: 0 }}>
+        <span style={{ flex: "none", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {item.label}
         </span>
-      )}
+        {item.hint !== undefined && (
+          <span
+            style={{
+              flex: "0 1 auto",
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              color: "var(--color-text-tertiary)",
+              fontSize: "var(--font-size-micro)",
+              whiteSpace: "nowrap",
+              ...(fact
+                ? {
+                    fontFamily: "var(--font-family-business)",
+                    fontVariantNumeric: "tabular-nums",
+                    color: "var(--color-text-secondary)",
+                  }
+                : null),
+            }}
+          >
+            {item.hint}
+          </span>
+        )}
+      </span>
       {item.badge}
     </button>
   );
