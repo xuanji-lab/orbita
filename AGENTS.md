@@ -54,7 +54,7 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 3. `src/preload/api/<域>.ts` 的 contextBridge 暴露
 4. renderer 调用 + 错误处理 + 状态更新
 
-**`src/shared/` 的改动单独成一个 PR**，不与实现混在一起。
+**契约与实现同一个 PR**：`src/shared/` 的改动放在 PR 的第一个 commit，审的人能先单看契约；只有契约、没有功能落地的改动不单独成 PR——它过不了上面的消费者纪律，也还没有被用来约束任何东西。
 
 ## 命令
 
