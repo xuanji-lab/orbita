@@ -108,7 +108,7 @@ describe("resolveSubSessionModel", () => {
     const providers = [provider("zai", ["glm-5.3", "glm-5.3-flash"]), provider("other", ["special"])];
     assert.deepEqual(
       resolveSubSessionModel({ requested: "glm-5.3-flash", setting: undefined, parent, providers }),
-      { ok: true, providerId: "zai", modelId: "glm-5.3-flash" },
+      { ok: true, providerId: "zai", modelId: "glm-5.3-flash", source: "requested" },
     );
   });
 
@@ -116,7 +116,7 @@ describe("resolveSubSessionModel", () => {
     const providers = [provider("zai", ["glm-5.3"]), provider("other", ["special"])];
     assert.deepEqual(
       resolveSubSessionModel({ requested: "special", setting: undefined, parent, providers }),
-      { ok: true, providerId: "other", modelId: "special" },
+      { ok: true, providerId: "other", modelId: "special", source: "requested" },
     );
   });
 
@@ -142,11 +142,11 @@ describe("resolveSubSessionModel", () => {
         parent,
         providers,
       }),
-      { ok: true, providerId: "fast", modelId: "turbo" },
+      { ok: true, providerId: "fast", modelId: "turbo", source: "setting" },
     );
   });
 
-  test("setting 的 provider 已删——退回同父（易耗品处理）", () => {
+  test("setting 的 provider 已删——退回同父（易耗品处理），source 是 parent 不是 setting", () => {
     const providers = [provider("zai", ["glm-5.3"])];
     assert.deepEqual(
       resolveSubSessionModel({
@@ -155,14 +155,14 @@ describe("resolveSubSessionModel", () => {
         parent,
         providers,
       }),
-      { ok: true, providerId: "zai", modelId: "glm-5.3" },
+      { ok: true, providerId: "zai", modelId: "glm-5.3", source: "parent" },
     );
   });
 
   test("requested 与 setting 都没有——同父", () => {
     assert.deepEqual(
       resolveSubSessionModel({ requested: undefined, setting: undefined, parent, providers: [] }),
-      { ok: true, providerId: "zai", modelId: "glm-5.3" },
+      { ok: true, providerId: "zai", modelId: "glm-5.3", source: "parent" },
     );
   });
 });
@@ -212,21 +212,53 @@ describe("applyDelegate", () => {
     assert.equal(outcome.card.workbench, sessions.workbenchPath(outcome.childId));
   });
 
-  test("思考档三级：delegate 参数 > settings.subSessionThinking > 同父", async () => {
+  test("思考档跟着模型走：delegate 显式档 > 模型来自哪（requested/setting → 该模型默认档；parent → 父的档）", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT, thinkingLevel: "low" }));
+    // zai 声明 glm-5.3-flash：白名单里它的默认思考档是 max（known-providers.ts）
+    const providers = [provider("zai", ["glm-5.3", "glm-5.3-flash"]), provider("fast", ["turbo"])];
 
-    // 三者都缺席：同父
-    const { deps: depsParentOnly } = fakeDeps();
+    // 三者都缺席：同父的档
+    const { deps: depsParentOnly } = fakeDeps({ providers });
     const parentOnly = await applyDelegate(depsParentOnly, delegateEvent());
     assert.equal(parentOnly.ok && parentOnly.card.thinkingLevel, "low");
 
-    // settings 有值、事件没有：用 settings
-    const { deps: depsWithSetting } = fakeDeps({ settings: { ...DEFAULT_SETTINGS, subSessionThinking: "high" } });
-    const withSetting = await applyDelegate(depsWithSetting, delegateEvent());
-    assert.equal(withSetting.ok && withSetting.card.thinkingLevel, "high");
+    // delegate 参数指定了模型、没给档：落这个模型的默认档——不是父的档，父可能
+    // 跑着完全不同的型号
+    const { deps: depsRequested } = fakeDeps({ providers });
+    const requested = await applyDelegate(depsRequested, delegateEvent({ modelId: "glm-5.3-flash" }));
+    assert.equal(requested.ok && requested.card.modelId, "glm-5.3-flash");
+    assert.equal(requested.ok && requested.card.thinkingLevel, "max");
 
-    // 事件有值：优先事件
-    const { deps: depsWithEvent } = fakeDeps({ settings: { ...DEFAULT_SETTINGS, subSessionThinking: "high" } });
+    // 设置指定了子会话模型、没给档（settings.subSessionThinking 缺席）：落这个
+    // 模型的默认档
+    const { deps: depsSettingNoThinking } = fakeDeps({
+      providers,
+      settings: { ...DEFAULT_SETTINGS, subSessionModel: { providerId: "zai", modelId: "glm-5.3-flash" } },
+    });
+    const settingNoThinking = await applyDelegate(depsSettingNoThinking, delegateEvent());
+    assert.equal(settingNoThinking.ok && settingNoThinking.card.thinkingLevel, "max");
+
+    // 设置指定了子会话模型、也给了子会话思考档：用设置里的档，不是模型默认档
+    const { deps: depsSettingWithThinking } = fakeDeps({
+      providers,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        subSessionModel: { providerId: "fast", modelId: "turbo" },
+        subSessionThinking: "high",
+      },
+    });
+    const settingWithThinking = await applyDelegate(depsSettingWithThinking, delegateEvent());
+    assert.equal(settingWithThinking.ok && settingWithThinking.card.thinkingLevel, "high");
+
+    // delegate 显式档最优先：即使模型来自设置且设置也给了档，事件的档压过一切
+    const { deps: depsWithEvent } = fakeDeps({
+      providers,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        subSessionModel: { providerId: "fast", modelId: "turbo" },
+        subSessionThinking: "high",
+      },
+    });
     const withEvent = await applyDelegate(depsWithEvent, delegateEvent({ thinkingLevel: "max" }));
     assert.equal(withEvent.ok && withEvent.card.thinkingLevel, "max");
   });
