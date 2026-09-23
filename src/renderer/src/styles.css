@@ -56,6 +56,13 @@ body {
   background: transparent;
 }
 
+/* 键盘焦点：全局一条，组件不各自模拟 :focus-visible。
+   向内描（offset 负值）——滚动容器与 overflow:hidden 的父级不会把它裁掉，也不覆盖组件自己的 box-shadow */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
 /*
  * **一共三层，不是四层**：用户自己的桌面 → 边界卡(layer 1) → 内容面(layer 2) → 输入卡(layer 3)。
  * 我们不画背景——设计系统里那张壁纸的类名就叫 `.desk`，它从头到尾是**桌面的替身**，

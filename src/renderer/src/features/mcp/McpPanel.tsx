@@ -438,7 +438,7 @@ function AddServerForm(props: {
 function FormRow(props: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label style={{ display: "grid", gap: "var(--space-2)" }}>
-      <span style={{ fontSize: "var(--font-size-label)", fontWeight: "var(--weight-medium)" }}>
+      <span style={{ fontSize: "var(--font-size-caption)", fontWeight: "var(--weight-medium)" }}>
         {props.label}
       </span>
       {props.children}
