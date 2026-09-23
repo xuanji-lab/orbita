@@ -12,7 +12,10 @@
   --color-bg-sidebar: #f7f7f3;
   --color-bg-panel: #ffffff;
   --color-bg-muted: #f8f8f5;
-  --color-bg-hover: #f0f1ed;
+  /* hover 是**半透明**的一层，不是一块实色（wafo 2026-09-23）：实色 #f0f1ed 叠在白面板上
+     看得清，叠在侧栏的米白壳底（#f3f4f1）上几乎同色、等于没有 hover。半透明压暗的量
+     与底色无关，面板与侧栏一样清楚。取次级文字色（#5f6368，略带冷）12%：冷灰与蓝 accent 相配 */
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
   --color-bg-active: #e7eefd;
 
   /* text */
@@ -92,7 +95,9 @@
   --color-bg-sidebar: #1e2223;
   --color-bg-panel: #232525;
   --color-bg-muted: #1b1f20;
-  --color-bg-hover: #2a2d2c;
+  /* 同浅色的理由改成半透明；暗底上次级文字色是浅灰，混入即提亮。8% 与原实色 #2a2d2c 在
+     面板上的明显程度相当，但侧栏与面板上一样清楚 */
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
   --color-bg-active: rgba(214, 194, 69, 0.05);
   --color-text-primary: #d6d5cf;
   --color-text-secondary: #a3a29b;
@@ -139,7 +144,7 @@
   --color-bg-sidebar: #0e0e0e;
   --color-bg-panel: #111111;
   --color-bg-muted: #0d0d0d;
-  --color-bg-hover: #1b1b1b;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
   --color-bg-active: rgba(214, 194, 69, 0.18);
   --color-text-primary: #ededed;
   --color-text-secondary: #a1a1a1;
