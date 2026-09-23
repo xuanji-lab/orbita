@@ -1,3 +1,4 @@
+import "./settings-view.css";
 import { Chip } from "../../shell/Chip";
 import type { IconName } from "../../shell/Icon";
 import { Menu } from "../../shell/Menu";
@@ -5,14 +6,13 @@ import type { MenuItem } from "../../shell/Menu";
 import type { ProviderDto } from "@shared/provider";
 import { ImportPromaRow } from "./ImportPromaRow";
 import { ProvidersView } from "./ProvidersView";
+import { ThemePicker } from "./ThemeCard";
 import { modelMenuItems, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
-  THEME_PREFERENCES,
   type AppSettings,
   type CompactionSetting,
   type SettingsPatch,
-  type ThemePreference,
 } from "@shared/settings";
 import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 
@@ -83,13 +83,6 @@ export function SettingsView(props: {
     </div>
   );
 }
-
-const THEME_LABELS: Record<ThemePreference, string> = {
-  system: "System",
-  light: "Light",
-  dark: "Warm",
-  black: "Ink",
-};
 
 /** 自动压缩的档位（%）。与 shared 的合法区间 [5,50] 对齐，档距是「一眼分得清」的粒度 */
 const COMPACTION_CHOICES = [30, 25, 20, 15, 10, 5] as const;
@@ -191,19 +184,8 @@ function General(props: {
         <Row
           name="Theme"
           hint="System follows your desktop's light or dark appearance and lands on Ink; Warm and Ink are manual."
-          control={
-            <span style={{ display: "flex", gap: 2 }}>
-              {THEME_PREFERENCES.map((value) => (
-                <Chip
-                  key={value}
-                  active={props.settings.theme === value}
-                  onClick={() => props.onChange({ theme: value })}
-                >
-                  {THEME_LABELS[value]}
-                </Chip>
-              ))}
-            </span>
-          }
+          layout="stack"
+          control={<ThemePicker value={props.settings.theme} onChange={props.onChange} />}
         />
       </Section>
       <Section label="Context">
@@ -360,15 +342,25 @@ function Section(props: { label: string; children: React.ReactNode }) {
 /**
  * 一条设置。**直接坐在内容面上，靠发丝线分隔，不套第二张卡**——
  * 玻璃已经分了三层，再加一层只会把层级讲糊。
+ *
+ * `layout="stack"`：name+hint 在上、control 独占下面一整行（Theme 预览卡组用）——
+ * 单列 grid 天然让两个直接子项上下排，不用给 control 单独开分支。默认 `"row"`
+ * 还是原来的左右两栏。只加这一个可选项，别把整个组件改成只适配某一行。
  */
-function Row(props: { name: string; hint: string; control: React.ReactNode }) {
+function Row(props: {
+  name: string;
+  hint: string;
+  control: React.ReactNode;
+  layout?: "row" | "stack";
+}) {
+  const stack = props.layout === "stack";
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) auto",
-        alignItems: "center",
-        gap: "var(--space-4)",
+        gridTemplateColumns: stack ? "1fr" : "minmax(0,1fr) auto",
+        alignItems: stack ? "start" : "center",
+        gap: stack ? "var(--space-3)" : "var(--space-4)",
         minHeight: "var(--list-item-rich)",
         padding: "var(--space-3) 0",
         borderBottom: "1px solid var(--color-border-subtle)",

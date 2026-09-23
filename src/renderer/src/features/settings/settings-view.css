@@ -1,0 +1,149 @@
+/*
+ * SettingsView（General 页）专用样式。有状态 / 主题相关的样式收在这里，
+ * SettingsView.tsx 顶部 `import "./settings-view.css"`（照 providers-view.css 的先例）。
+ */
+
+/* ===== Theme 预览卡（ThemeCard.tsx） ===== */
+
+.theme-grid {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.theme-card {
+  position: relative;
+  width: 128px;
+  display: grid;
+  gap: var(--space-2);
+  justify-items: center;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.theme-card-thumb {
+  position: relative;
+  width: 128px;
+  height: 84px;
+  display: flex;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-default);
+  /* 静止态就是卡片的默认阴影，hover 才抬一级——同 SessionCard 的纪律 */
+  box-shadow: var(--shadow-composer);
+  transition:
+    box-shadow var(--duration-instant) var(--ease-standard),
+    border-color var(--duration-instant) var(--ease-standard);
+}
+
+.theme-card:hover .theme-card-thumb {
+  box-shadow: var(--shadow-popover);
+}
+
+/* 选中态：accent 细环叠在卡片阴影上——两条 box-shadow 分别管边框感与浮起感 */
+.theme-card[aria-pressed="true"] .theme-card-thumb {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 0 0 1px var(--color-accent),
+    var(--shadow-composer);
+}
+
+.theme-card[aria-pressed="true"]:hover .theme-card-thumb {
+  box-shadow:
+    0 0 0 1px var(--color-accent),
+    var(--shadow-popover);
+}
+
+.theme-card-check {
+  display: none;
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  box-shadow: var(--shadow-popover);
+}
+
+.theme-card[aria-pressed="true"] .theme-card-check {
+  display: inline-flex;
+}
+
+.theme-card-name {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+.theme-card[aria-pressed="true"] .theme-card-name {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+/* 缩略窗内部：壳色底（.theme-thumb 自身） + 侧栏 + 面板（两条灰线 + accent 发送点）。
+   颜色全部来自 `[data-theme-preview]` 子树（tokens/colors.css），不是当前主题的。 */
+.theme-thumb {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  background: var(--color-bg-app);
+}
+
+/* System 卡：左右两个 .theme-thumb 对半拼，各自挂 light / black 的 data-theme-preview */
+.theme-thumb-half {
+  width: 50%;
+}
+
+.theme-thumb-side {
+  width: 26%;
+  height: 100%;
+  background: var(--color-bg-sidebar);
+}
+
+.theme-thumb-main {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.theme-thumb-panel {
+  position: relative;
+  width: 100%;
+  height: 72%;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 6px 7px;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.theme-thumb-line {
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-default);
+}
+
+.theme-thumb-line-short {
+  width: 56%;
+}
+
+.theme-thumb-dot {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+}
