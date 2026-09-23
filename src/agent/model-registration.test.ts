@@ -1,6 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 import {
@@ -500,5 +502,147 @@ describe("toFallbackModels —— 借来的基线仍在用户覆盖之下", () =
   test("不传目录（老调用点）行为不变：直接落兜底", () => {
     const result = toFallbackModels([], [{ id: "claude-opus-5" }]);
     assert.equal(result[0]?.contextWindow, FALLBACK_MODEL.contextWindow);
+  });
+});
+
+describe("自适应思考 —— 新 Claude 只收 adaptive + effort，网关注册要带上 forceAdaptiveThinking", () => {
+  /** 原始目录条目：compat / 档位表取自 pi-ai 0.84.3 实际条目（其余字段只为让 pi 能构造请求） */
+  function rawModel(id: string, api: string, extra: Record<string, unknown>): PiModel {
+    return {
+      id,
+      name: id,
+      api,
+      baseUrl: "",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      ...extra,
+    } as unknown as PiModel;
+  }
+  const fableMap = { off: null, xhigh: "xhigh", max: "max" };
+  // 排在前面的 copilot 同 id 条目走 openai-completions、不带这一项：协议不对的条目不能说了算
+  const copilot = {
+    id: "github-copilot",
+    name: "GitHub Copilot",
+    baseUrl: "https://api.githubcopilot.com",
+    getModels: () => [rawModel("claude-fable-5", "openai-completions", { thinkingLevelMap: fableMap })],
+  };
+  const anthropic = {
+    id: "anthropic",
+    name: "Anthropic",
+    baseUrl: "https://api.anthropic.com",
+    getModels: () => [
+      rawModel("claude-opus-5", "anthropic-messages", {
+        compat: {
+          forceAdaptiveThinking: true,
+          supportsTemperature: false,
+          supportsStrictTools: true,
+          allowedFallbackModels: [{ provider: "anthropic", model: "claude-opus-4-8" }],
+        },
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      }),
+      rawModel("claude-fable-5", "anthropic-messages", {
+        compat: { forceAdaptiveThinking: true, supportsStrictTools: true },
+        thinkingLevelMap: fableMap,
+      }),
+      rawModel("claude-sonnet-4-5", "anthropic-messages", { compat: { supportsStrictTools: true } }),
+    ],
+  };
+  const cloudflare = {
+    id: "cloudflare-ai-gateway",
+    name: "Cloudflare AI Gateway",
+    baseUrl: "https://gateway.ai.cloudflare.com",
+    getModels: () => [
+      rawModel("claude-opus-5", "anthropic-messages", {
+        compat: { sendSessionAffinityHeaders: true, forceAdaptiveThinking: true, supportsTemperature: false },
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      }),
+    ],
+  };
+
+  function resolveOnGateway(api: string, modelId: string): PiModel | undefined {
+    let registered: PiModel[] | undefined;
+    const runtime = {
+      registerProvider: (_id: string, registration: PiProviderRegistration) => {
+        if (registration.models !== undefined) registered = registration.models as PiModel[];
+      },
+      getModel: (_id: string, id: string) => registered?.find((m) => m.id === id),
+      getProviders: () => [copilot, anthropic, cloudflare],
+    } as unknown as Parameters<typeof registerAndResolveModel>[0];
+    const declared = ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-4-5"].map((id) => ({ id }));
+    const model = registerAndResolveModel(
+      runtime,
+      { id: "my-gw", apiKey: "k", baseUrl: "https://gw.example", api, models: declared },
+      modelId,
+    );
+    // pi 的注册会把 provider 级的 api / baseUrl 并进每个模型；替身只存 models，这里补齐
+    return model === undefined ? undefined : ({ ...model, api, provider: "my-gw", baseUrl: "https://gw.example" } as PiModel);
+  }
+
+  /** pi 真正要发出去的请求体：onPayload 里截下后抛错，请求不出进程 */
+  async function outgoingParams(model: PiModel, reasoning: ThinkingLevel): Promise<Record<string, unknown>> {
+    let captured: Record<string, unknown> | undefined;
+    const events = streamSimple(
+      model as Model<"anthropic-messages">,
+      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      {
+        apiKey: "sk-test",
+        reasoning,
+        onPayload: (payload) => {
+          captured = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    for await (const _event of events) {
+      // 抛错后流以 error 事件收尾，排干即可
+    }
+    assert.ok(captured !== undefined, "pi 没有走到构造请求体那一步");
+    return captured;
+  }
+
+  test("精确 id 命中：compat 只带 forceAdaptiveThinking，其余端点怪癖一个不抄", () => {
+    const model = resolveOnGateway("anthropic-messages", "claude-opus-5");
+    assert.deepEqual(model?.compat, { forceAdaptiveThinking: true });
+  });
+
+  test("家族借参（claude-fable-5-1 → claude-fable-5）：思考协议与档位表跟着参数同源", () => {
+    const model = resolveOnGateway("anthropic-messages", "claude-fable-5-1");
+    assert.deepEqual(model?.compat, { forceAdaptiveThinking: true });
+    assert.deepEqual(model?.thinkingLevelMap, fableMap);
+  });
+
+  test("老的 budget 模型不带：claude-sonnet-4-5 仍走 budget_tokens", () => {
+    const model = resolveOnGateway("anthropic-messages", "claude-sonnet-4-5");
+    assert.equal(model !== undefined && "compat" in model, false);
+  });
+
+  test("OpenAI 兼容网关上的同名模型不带：这一项只属于 anthropic-messages 协议", () => {
+    const model = resolveOnGateway("openai-completions", "claude-opus-5");
+    assert.equal(model !== undefined && "compat" in model, false);
+  });
+
+  test("pi 据此发 adaptive + effort：xhigh / max 原样送到，不再换算成 budget_tokens", async () => {
+    const opus = resolveOnGateway("anthropic-messages", "claude-opus-5");
+    const fable = resolveOnGateway("anthropic-messages", "claude-fable-5-1");
+    assert.ok(opus !== undefined && fable !== undefined);
+    const xhigh = await outgoingParams(opus, "xhigh");
+    assert.deepEqual(xhigh.thinking, { type: "adaptive", display: "summarized" });
+    assert.deepEqual(xhigh.output_config, { effort: "xhigh" });
+    const medium = await outgoingParams(opus, "medium");
+    assert.deepEqual(medium.output_config, { effort: "medium" });
+    const max = await outgoingParams(fable, "max");
+    assert.deepEqual(max.thinking, { type: "adaptive", display: "summarized" });
+    assert.deepEqual(max.output_config, { effort: "max" });
+  });
+
+  test("对照：不带这一项的模型 pi 仍发 budget_tokens（证明上一条断言的是这一项的效果）", async () => {
+    const sonnet = resolveOnGateway("anthropic-messages", "claude-sonnet-4-5");
+    assert.ok(sonnet !== undefined);
+    const params = await outgoingParams(sonnet, "medium");
+    assert.equal((params.thinking as { type?: string } | undefined)?.type, "enabled");
+    assert.equal("output_config" in params, false);
   });
 });

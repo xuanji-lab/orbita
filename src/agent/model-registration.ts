@@ -11,7 +11,7 @@
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
-import { resolveModelDefaults, type CatalogPreference } from "../shared/model-defaults.ts";
+import { lookupCatalogModel, resolveModelDefaults, type CatalogPreference } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 
 /** pi 注册表里的模型对象——从 ModelRuntime 的方法签名推出来，不另维护一份类型 */
@@ -54,18 +54,38 @@ export function toFallbackModels(
   catalog: readonly BuiltinProvider[] = [],
   prefer: CatalogPreference = {},
   /**
-   * 目录的**原始**模型（未瘦身，带 thinkingLevelMap）。借参时按精确 id 抄档位表——
+   * 目录的**原始**模型（未瘦身，带 thinkingLevelMap / compat）。借参时从**借参数的
+   * 那一条**（精确 id，否则 Claude 家族：claude-fable-5-1 借 claude-fable-5）抄档位表——
    * 档位是模型能力（跟 id 走：glm 的 high / claude 的 xhigh），不是协议开关；
    * 不抄的话 pi 对借参模型按「无表」规则算出伪支持集（minimal→high 五档），
-   * 档位菜单跟着撒谎。compat 仍然不抄：那是接入端点的协议怪癖，跟网关走。
+   * 档位菜单跟着撒谎。
+   *
+   * compat 只抄 `forceAdaptiveThinking` 一项，其余仍然不抄：那是接入端点的协议怪癖，
+   * 跟网关走（sendSessionAffinityHeaders 只有 cloudflare 有、supportsStrictTools /
+   * allowedFallbackModels 只有 anthropic 官方有）。这一项不同，它是**模型**接受的思考
+   * 格式：新 Claude 只收 `thinking: adaptive` + `output_config.effort`，不认
+   * budget_tokens；pi 目录里 claude-opus-5 在 anthropic / opencode / cloudflare /
+   * copilot / vercel 五家 anthropic-messages 条目上一律带它。且档位表的 xhigh / max
+   * 本身就是 effort 值，只在 adaptive 下被读——只抄表不抄它，用户选的档会被 pi 换算成
+   * budget_tokens 发出去，effort 一个都送不到（2026-09-23 实测）。
    */
   catalogModels: readonly PiModel[] = [],
 ): NonNullable<PiProviderRegistration["models"]> {
   return declared.map((decl) => {
     const known = current.find((model) => model.id === decl.id);
     const borrowed = resolveModelDefaults(catalog, decl.id, prefer);
-    // 同 id 的原始目录条目：借参路径从这里带 thinkingLevelMap（理由见参数注释）
-    const borrowedMap = catalogModels.find((model) => model.id === decl.id)?.thinkingLevelMap;
+    // 借参来源的原始目录条目（理由见参数注释）。目录缺席时退回精确 id
+    const sourceId = lookupCatalogModel(catalog, decl.id, prefer)?.id ?? decl.id;
+    const sources = catalogModels.filter((model) => model.id === sourceId);
+    const borrowedMap = sources[0]?.thinkingLevelMap;
+    // 只认同协议的条目：copilot 的 openai-completions 版 claude-fable-5 就不带这一项
+    const adaptive = sources.some(
+      (model) =>
+        model.api === prefer.api &&
+        model.compat !== undefined &&
+        "forceAdaptiveThinking" in model.compat &&
+        model.compat.forceAdaptiveThinking === true,
+    );
     const base =
       known === undefined
         ? {
@@ -79,6 +99,7 @@ export function toFallbackModels(
             contextWindow: borrowed.contextWindow,
             maxTokens: borrowed.maxTokens,
             ...(borrowedMap === undefined ? {} : { thinkingLevelMap: { ...borrowedMap } }),
+            ...(adaptive ? { compat: { forceAdaptiveThinking: true } } : {}),
           }
         : { ...known };
     return {
