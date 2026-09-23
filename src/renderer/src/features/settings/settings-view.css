@@ -147,3 +147,67 @@
   border-radius: var(--radius-pill);
   background: var(--color-accent);
 }
+
+/* ===== Auto-compact 刻度条（CompactViz.tsx） ===== */
+
+/* 宽度不写死：这个 grid 只有一列，宽度由同列里的 chip 组（它的兄弟节点）撑开——
+   两者因此自然同宽，不需要量 chip 组的实际像素再传下来。 */
+.compact-viz {
+  /* 槽与刻度点共用一色。不用 --color-border-*：暗主题下它们和面板只差一两档亮度
+     （Warm 实测槽 #343534 对面板 #232525），刻度点等于看不见；按 tertiary 文字色
+     45% 混入透明，亮主题约 #cfd1d2（接近设计稿），暗主题也分得出来。 */
+  --compact-rail: color-mix(in srgb, var(--color-text-tertiary) 45%, transparent);
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.compact-track {
+  position: relative;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--compact-rail);
+  margin-top: 18px;
+}
+
+.compact-tick {
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--compact-rail);
+  transform: translate(-50%, -50%);
+}
+
+.compact-pos {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  border: 2px solid var(--color-bg-panel);
+  box-shadow: 0 0 0 1px var(--color-accent-soft);
+  transform: translate(-50%, -50%);
+}
+
+.compact-pos-label {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  margin-bottom: 4px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  color: var(--color-accent);
+}
+
+.compact-ends {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}

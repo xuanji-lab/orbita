@@ -4,6 +4,8 @@ import type { IconName } from "../../shell/Icon";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import type { ProviderDto } from "@shared/provider";
+import { CompactViz } from "./CompactViz";
+import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { ImportPromaRow } from "./ImportPromaRow";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
@@ -83,9 +85,6 @@ export function SettingsView(props: {
     </div>
   );
 }
-
-/** 自动压缩的档位（%）。与 shared 的合法区间 [5,50] 对齐，档距是「一眼分得清」的粒度 */
-const COMPACTION_CHOICES = [30, 25, 20, 15, 10, 5] as const;
 
 /**
  * 「退回继承」菜单的公共形状：Title model / Sub-session model / Sub-session thinking
@@ -193,22 +192,26 @@ function General(props: {
           name="Auto-compact"
           hint="Fold older history into a summary once remaining context drops to this level. Off keeps manual /compact only. Applies from the next message."
           control={
-            <span style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-              <Chip
-                active={compaction.enabled === false}
-                onClick={() => setCompaction({ ...compaction, enabled: false })}
-              >
-                Off
-              </Chip>
-              {COMPACTION_CHOICES.map((value) => (
+            <span style={{ display: "grid", gap: "var(--space-2)" }}>
+              <span style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
                 <Chip
-                  key={value}
-                  active={compaction.enabled !== false && compaction.reservePercent === value}
-                  onClick={() => setCompaction({ enabled: true, reservePercent: value })}
+                  active={compaction.enabled === false}
+                  onClick={() => setCompaction({ ...compaction, enabled: false })}
                 >
-                  {value}%
+                  Off
                 </Chip>
-              ))}
+                {COMPACTION_CHOICES.map((value) => (
+                  <Chip
+                    key={value}
+                    active={compaction.enabled !== false && compaction.reservePercent === value}
+                    onClick={() => setCompaction({ enabled: true, reservePercent: value })}
+                  >
+                    {value}%
+                  </Chip>
+                ))}
+              </span>
+              {/* Off 时整条可视化不渲染（条件渲染，不是隐藏）——没有数值可画 */}
+              {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
             </span>
           }
         />
