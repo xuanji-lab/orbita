@@ -7,6 +7,7 @@ import {
   PanelLine,
   RightPanelFrame,
 } from "../../shell/RightPanel";
+import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
 import type { SkillsState } from "../skills/useSkills";
 import type { McpServer, McpStatus } from "@shared/mcp";
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
@@ -29,11 +30,19 @@ export function McpPanel(props: {
   const [adding, setAdding] = useState(false);
   /** 删除二次确认：正要删哪一台（面板内一行确认，不弹窗） */
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** 工具 chips 已展开的 server 名字集合（简报 1，一次展开不再收回） */
+  const [expandedTools, setExpandedTools] = useState<ReadonlySet<string>>(new Set());
   const error = serversLoad.kind === "failed" ? serversLoad.message : null;
 
   // Reload 期间：非 disabled 行都转 connecting（实时状态还没回来，不装作不变）
   const statusOf = (status: McpStatus): McpStatus =>
     reloading && status.kind !== "disabled" ? { kind: "connecting" } : status;
+
+  /** Retry 与页头 Reload 同一路（简报 2：不新增契约），忙的时候两处按钮一起禁用 */
+  const runReload = (): void => {
+    setReloading(true);
+    void Promise.resolve(reloadMcp()).finally(() => setReloading(false));
+  };
 
   const header = (
     <>
@@ -70,14 +79,7 @@ export function McpPanel(props: {
           <PanelButton onClick={openMcpConfig}>
             <Icon name="pencil-line" size={14} /> Edit mcp.json
           </PanelButton>
-          <PanelButton
-            disabled={reloading}
-            onClick={() => {
-              setReloading(true);
-              // reloadMcp 落定后重拉列表；busy 只由这里管，失败也要复位
-              void Promise.resolve(reloadMcp()).finally(() => setReloading(false));
-            }}
-          >
+          <PanelButton disabled={reloading} onClick={runReload}>
             <Icon
               name="refresh-cw"
               size={14}
@@ -99,92 +101,101 @@ export function McpPanel(props: {
         }}
       >
         {error !== null && <PanelLine danger>{error}</PanelLine>}
-        {serversLoad.kind === "loading" && servers.length === 0 && (
+        {serversLoad.kind === "loading" && servers.length === 0 ? (
           <PanelLine>Loading servers…</PanelLine>
-        )}
-        {servers.length === 0 && serversLoad.kind !== "loading" && (
+        ) : servers.length === 0 ? (
+          <McpEmptyState onAdd={() => setAdding(true)} onEditConfig={openMcpConfig} />
+        ) : (
           <>
-            <p style={{ margin: 0, fontSize: "var(--font-size-body)" }}>
-              No MCP server configured.
-            </p>
-            <PanelLine>Edit mcp.json to add one.</PanelLine>
-          </>
-        )}
-        {servers.map((server) => (
-          <div
-            key={server.name}
-            style={{
-              display: "grid",
-              gap: "var(--space-2)",
-              padding: "var(--space-3)",
-              background: "var(--color-bg-panel)",
-              border: "1px solid var(--color-border-subtle)",
-              borderRadius: "var(--radius-md)",
-            }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-              <StatusIcon status={statusOf(server.status)} />
-              <strong style={{ fontSize: "var(--font-size-body)" }}>{server.name}</strong>
-              <StatusText status={statusOf(server.status)} />
-              <span style={{ flex: 1 }} />
-              <PanelIconButton
-                title={server.status.kind === "disabled" ? "Enable this server" : "Disable this server"}
-                onClick={() => props.skills.setServerDisabled(server.name, server.status.kind !== "disabled")}
-              >
-                <Icon name="power" size={14} />
-              </PanelIconButton>
-              <PanelIconButton title="Remove this server" onClick={() => setConfirming(server.name)}>
-                <Icon name="trash-2" size={14} />
-              </PanelIconButton>
-            </span>
-            <code
-              style={{
-                fontSize: "var(--font-size-caption)",
-                color: "var(--color-text-tertiary)",
-                overflowWrap: "anywhere",
-              }}
-            >
-              {server.detail}
-            </code>
-            {server.status.kind === "ready" && server.status.tools.length > 0 && (
-              <PanelLine>{server.status.tools.join(" · ")}</PanelLine>
-            )}
-            {server.status.kind === "failed" && (
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: "var(--font-size-caption)",
-                  color: "var(--color-danger)",
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                }}
-              >
-                {server.status.message}
-              </p>
-            )}
-            {confirming === server.name && (
-              <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
-                <PanelLine>Remove {server.name}?</PanelLine>
-                <PanelButton
-                  danger
-                  onClick={() => {
-                    setConfirming(null);
-                    void props.skills.removeServer(server.name).catch(() => undefined);
+            {servers.map((server) => (
+              <div key={server.name} className="mcp-card glass-card">
+                <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                  <StatusIcon status={statusOf(server.status)} />
+                  <strong className="mcp-name">{server.name}</strong>
+                  <StatusText status={statusOf(server.status)} />
+                  {/* 悬停/键盘聚焦浮现（简报 3）；删除确认行出现时强制常显，见 .reveal 注释 */}
+                  <span
+                    className="mcp-actions reveal"
+                    style={{ opacity: confirming === server.name ? 1 : undefined }}
+                  >
+                    <PanelIconButton
+                      title={server.status.kind === "disabled" ? "Enable this server" : "Disable this server"}
+                      onClick={() => props.skills.setServerDisabled(server.name, server.status.kind !== "disabled")}
+                    >
+                      <Icon name="power" size={14} />
+                    </PanelIconButton>
+                    <PanelIconButton title="Remove this server" onClick={() => setConfirming(server.name)}>
+                      <Icon name="trash-2" size={14} />
+                    </PanelIconButton>
+                  </span>
+                </span>
+                <code
+                  style={{
+                    fontSize: "var(--font-size-caption)",
+                    color: "var(--color-text-tertiary)",
+                    overflowWrap: "anywhere",
                   }}
                 >
-                  Remove
-                </PanelButton>
-                <PanelButton onClick={() => setConfirming(null)}>Cancel</PanelButton>
-              </span>
-            )}
-          </div>
-        ))}
-        <span style={{ marginTop: "var(--space-2)" }}>
-          <PanelLine>
-            Reload reads mcp.json and reconnects. Running tasks keep their current tools; new
-            tasks get the new set.
-          </PanelLine>
-        </span>
+                  {server.detail}
+                </code>
+                {server.status.kind === "ready" && server.status.tools.length > 0 && (
+                  <ToolChips
+                    tools={server.status.tools}
+                    expanded={expandedTools.has(server.name)}
+                    onExpand={() =>
+                      setExpandedTools((prev) => {
+                        const next = new Set(prev);
+                        next.add(server.name);
+                        return next;
+                      })
+                    }
+                  />
+                )}
+                {server.status.kind === "failed" && (
+                  <div className="mcp-error">
+                    <p className="mcp-error-text">{server.status.message}</p>
+                    <span className="mcp-error-actions">
+                      <button type="button" className="mcp-retry-btn" disabled={reloading} onClick={runReload}>
+                        <Icon
+                          name="refresh-cw"
+                          size={11}
+                          // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
+                          className={reloading ? "anim-continuous" : undefined}
+                          style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
+                        />
+                        Retry
+                      </button>
+                    </span>
+                  </div>
+                )}
+                {confirming === server.name && (
+                  <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                    <PanelLine>Remove {server.name}?</PanelLine>
+                    <PanelButton
+                      danger
+                      onClick={() => {
+                        setConfirming(null);
+                        void props.skills.removeServer(server.name).catch(() => undefined);
+                      }}
+                    >
+                      Remove
+                    </PanelButton>
+                    <PanelButton onClick={() => setConfirming(null)}>Cancel</PanelButton>
+                  </span>
+                )}
+              </div>
+            ))}
+            <button type="button" className="mcp-add-card" onClick={() => setAdding(true)}>
+              <Icon name="plus" size={14} /> Add a server
+            </button>
+            <span style={{ marginTop: "var(--space-2)" }}>
+              <PanelLine>
+                Reload reads mcp.json and reconnects. Running tasks keep their current tools; new
+                tasks get the new set.
+              </PanelLine>
+            </span>
+          </>
+        )}
       </div>
     </RightPanelFrame>
   );
@@ -516,5 +527,50 @@ function StatusText(props: { status: McpStatus }) {
     >
       {text}
     </span>
+  );
+}
+
+/**
+ * ready 卡的工具列表（简报 1）：纯函数 `visibleTools` 算出这一刻该显示哪些、
+ * 折起来几个，这里只管渲染。展示用的 chip 是 `<span>`，「+N more」是
+ * `<button>`（键盘可达，点击后在卡片内展开全部、不再收回）。
+ */
+function ToolChips(props: { tools: string[]; expanded: boolean; onExpand: () => void }) {
+  const { shown, hidden } = visibleTools(props.tools, TOOL_CHIP_LIMIT, props.expanded);
+  return (
+    <div className="mcp-tool-chips">
+      {shown.map((tool) => (
+        <span key={tool} className="mcp-tool-chip">
+          {tool}
+        </span>
+      ))}
+      {hidden.length > 0 && (
+        <button type="button" className="mcp-tool-chip mcp-tool-chip-more" onClick={props.onExpand}>
+          +{hidden.length} more
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 空态（简报 4）：一台 server 都没有时的主画面，两个出口都是现成动作，不新增契约 */
+function McpEmptyState(props: { onAdd: () => void; onEditConfig: () => void }) {
+  return (
+    <div className="mcp-empty">
+      <Icon name="plug" size={26} strokeWidth={1.5} className="mcp-empty-icon" />
+      <p className="mcp-empty-title">No MCP server yet</p>
+      <p className="mcp-empty-desc">
+        Without a server the agent only has its built-in tools. Add one, or edit mcp.json
+        directly.
+      </p>
+      <span className="mcp-empty-actions">
+        <PanelButton onClick={props.onAdd}>
+          <Icon name="plus" size={14} /> Add a server
+        </PanelButton>
+        <PanelButton onClick={props.onEditConfig}>
+          <Icon name="pencil-line" size={14} /> Edit mcp.json
+        </PanelButton>
+      </span>
+    </div>
   );
 }

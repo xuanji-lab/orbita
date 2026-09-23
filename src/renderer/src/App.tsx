@@ -319,7 +319,9 @@ export function App() {
   const shownPanel = rightPanel ?? mountedPanel;
   // MCP 面板与 Skills 面板共用这个 hook（servers 也在里面）：只认 skills 的话，
   // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
-  const skills = useSkills(shownPanel === "skills" || shownPanel === "mcp");
+  // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
+  // 两份列表不同步会导致侧栏删了工作区、面板还显示旧的（2026-09-23 真机复现的 bug）
+  const skills = useSkills(shownPanel === "skills" || shownPanel === "mcp", session.workspaces);
 
   /**
    * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，

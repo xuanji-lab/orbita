@@ -4,9 +4,10 @@
  * **只在打开这个面时才读盘**：skills 不参与聊天路径，没有理由在启动时占一次 IO。
  * 读失败不谎报成「一个都没有」——沿用 load-state 的三态（同 D-3）。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LOADING, READY, failed, type LoadState } from "../chat/load-state";
 import { api } from "../../api";
+import { sameWorkspaceIds } from "./workspace-ids.ts";
 import type { SkillMeta, SkillPatch, SkillScope } from "@shared/skill";
 import type { McpServer, McpServerInfo } from "@shared/mcp";
 import type { Workspace } from "@shared/workspace";
@@ -15,7 +16,7 @@ import type { Workspace } from "@shared/workspace";
 export interface SkillsState {
   skills: SkillMeta[];
   load: LoadState;
-  /** 工作区列表——link 的目标集合从这来 */
+  /** 工作区列表——link 的目标集合从这来。**透传自调用方**，不是这个 hook 自己读的 */
   workspaces: Workspace[];
   /** MCP server 与它们此刻的连接状态。**和 skills 同一个面**：两者都是「agent 会什么」。 */
   servers: McpServerInfo[];
@@ -38,11 +39,16 @@ export interface SkillsState {
   reveal: (slug: string | null) => void;
 }
 
-export function useSkills(active: boolean): SkillsState {
+/**
+ * `workspaces`：侧栏渲染用的那一份（`session.workspaces`，即会话引擎的
+ * `engine.workspaces`）。**不在这个 hook 里另起一份 state**——两份列表各自
+ * 刷新会不同步：侧栏删工作区时这里的旧副本还在，Skills 列表 / 韦恩图 / 矩阵
+ * 都会显示已经被删掉的工作区（2026-09-23 真机复现的 bug）。
+ */
+export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [load, setLoad] = useState<LoadState>(LOADING);
   const [selected, setSelected] = useState<string | null>(null);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [serversLoad, setServersLoad] = useState<LoadState>(LOADING);
 
@@ -72,11 +78,22 @@ export function useSkills(active: boolean): SkillsState {
     if (!active) return;
     refresh();
     refreshServers();
-    void api.workspace
-      .list()
-      .then(setWorkspaces)
-      .catch(() => setWorkspaces([]));
   }, [active, refresh, refreshServers]);
+
+  /**
+   * 工作区集合变了就重读 skill 列表：侧栏删一个工作区时，主进程会连带清掉
+   * 它下面的 skill 链接（`registerWorkspaceIpc` 注入的清理），面板还开着的话
+   * skill 列表本身也过期了——不能只等用户下次开关面板才刷新。只比较 **id 集合**
+   * （`sameWorkspaceIds`）：改名、换路径、顺序变化都不影响 link 的目标集合，
+   * 不必触发重读。用 ref 记上一次看到的列表，初值就是当次 `workspaces`，
+   * 挂载时不会误判成「变了」。
+   */
+  const seenWorkspacesRef = useRef<Workspace[]>(workspaces);
+  useEffect(() => {
+    const changed = !sameWorkspaceIds(seenWorkspacesRef.current, workspaces);
+    seenWorkspacesRef.current = workspaces;
+    if (active && changed) refresh();
+  }, [active, workspaces, refresh]);
 
   const reload = useCallback(() => {
     setLoad(LOADING);

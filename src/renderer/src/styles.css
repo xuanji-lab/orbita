@@ -1498,77 +1498,185 @@ body {
   }
 }
 
+/* ===== Skills 列表（过滤行、归属点阵、行 hover tooltip、missing 就地清理） ===== */
+
 /*
- * 韦恩图圆的淡填充（4-4，值取自 skills-map-3circle-v2）：只服务这一个 feature，
- * 从 tokens/colors.css 搬到这里（Implementation rules：只服务一个 feature 的值
- * 不进 tokens/，落在渲染层那个 feature 自己的 CSS 旁边）——三个选择器与三个值原样
- * 未改，纯搬家。
+ * 过滤行：page header 下一条 34px 工具行，透明底 + 底部发丝线（对稿）——
+ * 跟着列表一起滚动，不常驻贴顶（不 sticky）。左右内边距 14px，与组头、行内容
+ * 对齐同一条竖线。
  */
-:root {
-  --venn-fill: rgba(31, 35, 40, 0.045);
+.skills-filter-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
 }
-:root[data-theme="dark"] {
-  --venn-fill: rgba(214, 213, 207, 0.06);
+.skills-filter-row input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-control);
+  color: var(--color-text-primary);
 }
-:root[data-theme="black"] {
-  --venn-fill: rgba(237, 237, 237, 0.06);
+.skills-filter-row input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.skills-filter-count {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  flex: 0 0 auto;
+}
+
+/* 组间发丝线：组与组之间 1px 分隔，代替纯间距——长列表扫读时组边界更清楚 */
+.skill-group + .skill-group {
+  border-top: 1px solid var(--color-border-subtle);
+  margin-top: 2px;
+  padding-top: var(--space-1);
 }
 
 /*
- * Skills 韦恩图（4-4，几何取自 skills-map-3circle-v2）：圆淡填充 --venn-fill +
- * 描边；点/环只用位置与形状表达集合，不用颜色区分；名字 10px 带 paint-order
- * 玻璃底描边（压在圆边上也能读）；missing 三角 + danger。
+ * 一行 skill：外层 div 只管 hover 背景与布局，真正可点的是里面的
+ * `.skill-row-main`（见 SkillsPanel.tsx 的 SkillRow 注释——missing 行要在行内
+ * 浮出真正的清理键，`<button>` 不能嵌 `<button>`，点击语义拆成两层）。
+ * `:has(:focus-visible)` 让键盘 Tab 到行内任意控件（主按钮或浮现的清理键）都点亮
+ * 同一背景，同 `.task-row` 的先例。
  */
-.venn-ws {
-  fill: var(--venn-fill);
-  stroke: var(--color-border-strong);
-  stroke-width: 1;
+.skill-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--list-item-default);
+  /* 14px 不是 --space-3（12px）——对齐过滤行与组头同一条左缘竖线 */
+  padding: 0 14px;
 }
-.venn-ws-label {
-  font-family: var(--font-family-mono);
-  font-size: 9px;
-  letter-spacing: 1.1px;
-  fill: var(--color-text-tertiary);
-  text-transform: uppercase;
+.skill-row:hover,
+.skill-row:has(:focus-visible) {
+  background: var(--color-bg-hover);
 }
-.venn-skill {
+.skill-row:hover .reveal,
+.skill-row:has(:focus-visible) .reveal {
+  opacity: 1;
+}
+.skill-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+  text-align: left;
   cursor: pointer;
 }
-.venn-dot {
-  fill: var(--color-text-primary);
+.skill-row-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.venn-ring {
-  fill: none;
-  stroke: var(--color-text-primary);
-  stroke-width: 1.2;
+.skill-row-dim .skill-row-name {
+  color: var(--color-text-tertiary);
 }
-.venn-nm {
-  font-size: 10px;
-  fill: var(--color-text-primary);
-  paint-order: stroke;
-  stroke: var(--glass-bg);
-  stroke-width: 3px;
-  stroke-linejoin: round;
+.skill-row-missing .skill-row-name {
+  color: var(--color-danger);
 }
-.venn-skill:hover .venn-nm {
-  text-decoration: underline;
+
+/* missing 就地清理的两段式确认：替换整行内容，不额外占空间（单行 36px 不破） */
+.skill-row-confirm-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
 }
-.venn-missing .venn-nm {
-  fill: var(--color-danger);
+
+/*
+ * 归属点阵：环点 = Global、实心点 = 一个 workspace，与韦恩图共用的符号学
+ * （SetDots 组件注释）。**颜色只用中性灰阶**（secondary），不用 accent——
+ * accent 已经有自己的职责（主操作 + 当前模式），颜色各有职责。
+ */
+.set-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
 }
-.venn-tri {
-  fill: none;
-  stroke: var(--color-danger);
-  stroke-width: 1.3;
-  stroke-linejoin: round;
+.set-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
 }
-.venn-more {
-  font-size: 10px;
-  fill: var(--color-text-tertiary);
-  cursor: pointer;
-  paint-order: stroke;
-  stroke: var(--glass-bg);
-  stroke-width: 3px;
+.set-dot-ring {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.3px solid var(--color-text-secondary);
+}
+.set-dot-ring::after {
+  content: "";
+  position: absolute;
+  inset: 2.4px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
+}
+
+/*
+ * 行 hover tooltip：实色 --color-bg-panel + 发丝边 + --shadow-popover（现行
+ * *Transparency* 规则——浮在内容之上的层不用 blur、不用半透明；设计稿画的是
+ * 玻璃 tooltip，那是去 blur 之前的稿，这里按现行规则实色）。`top`/`left`/
+ * `opacity` 由 useHoverTooltip 算出后内联——那是运行时才知道的一次性布局值。
+ */
+.skill-row-tip {
+  position: fixed;
+  z-index: 70;
+  max-width: 260px;
+  padding: 9px 11px;
+  display: grid;
+  gap: 3px;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  pointer-events: none;
+  transition: opacity var(--duration-instant) ease;
+}
+.skill-row-tip-name {
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.skill-row-tip-desc {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-row-tip-sets {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
 }
 
 /*
@@ -1585,6 +1693,188 @@ body {
 }
 .file-hover-host:hover .file-row {
   background: var(--color-bg-hover);
+}
+
+/*
+ * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
+ * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
+ * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边
+ * 加深，呼应稿子的「filesystem 卡演示 hover」帧。
+ */
+.mcp-card {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+.mcp-card:hover,
+.mcp-card:focus-within {
+  border-color: var(--color-border-strong);
+}
+.mcp-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: var(--weight-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/*
+ * power / trash 悬停浮现（简报 3）：与 `.task-row` / `.skill-row` 同一套
+ * `.reveal` 机制（styles.css 顶部），只多挂一个 `.mcp-card` 宿主。删除二次
+ * 确认行出现时强制常显——由 McpPanel.tsx 内联 `opacity: 1` 覆盖（同侧栏星标
+ * 「已星标常显」的先例），不靠这里的选择器兜底。
+ */
+.mcp-card:hover .reveal,
+.mcp-card:focus-within .reveal {
+  opacity: 1;
+}
+.mcp-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/*
+ * 工具 chips（简报 1）：mono 小胶囊横排换行，纯函数 `visibleTools`
+ * （tool-chips.ts）算出 shown/hidden，这里只管展示。「+N more」是
+ * `<button>`（键盘可达），其余 chip 是纯展示 `<span>`。
+ */
+.mcp-tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mcp-tool-chip {
+  display: inline-flex;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  padding: 1.5px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+button.mcp-tool-chip {
+  font: inherit;
+  cursor: pointer;
+}
+.mcp-tool-chip-more {
+  background: transparent;
+  border-style: dashed;
+  color: var(--color-text-tertiary);
+  transition: var(--transition-hover);
+}
+.mcp-tool-chip-more:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-tertiary);
+}
+
+/*
+ * 错误软底块 + Retry（简报 2）：danger-soft 圆角块，块内右下角就地重试——
+ * 走 reloadMcp() 同一条路，不新增契约。限高滚动而不是折行：401 一类的
+ * 长错误信息折行会把卡片撑得很高，滚动把高度还给列表。
+ */
+.mcp-error {
+  display: grid;
+  gap: var(--space-2);
+  padding: 8px 10px;
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-md);
+}
+.mcp-error-text {
+  margin: 0;
+  max-height: 110px;
+  overflow-y: auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-danger);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mcp-error-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.mcp-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  color: var(--color-danger);
+  font: inherit;
+  font-size: var(--font-size-micro);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.mcp-retry-btn:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+.mcp-retry-btn:disabled {
+  color: var(--color-text-tertiary);
+  border-color: var(--color-border-subtle);
+  cursor: default;
+}
+
+/*
+ * 虚线「Add a server」卡（简报 4）：列表尾的第二入口，与页头 `+` 同一个
+ * onClick（进添加表单）。
+ */
+.mcp-add-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-control);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.mcp-add-card:hover,
+.mcp-add-card:focus-visible {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  border-color: var(--color-text-tertiary);
+}
+
+/* 空态（简报 4）：一台都没有时的主画面，两个出口都是现成动作 */
+.mcp-empty {
+  padding: 40px var(--space-5) 32px;
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+.mcp-empty-icon {
+  color: var(--color-text-tertiary);
+  margin-bottom: 2px;
+}
+.mcp-empty-title {
+  margin: 0;
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+}
+.mcp-empty-desc {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  max-width: 220px;
+  line-height: 1.6;
+}
+.mcp-empty-actions {
+  margin-top: var(--space-2);
+  display: flex;
+  gap: var(--space-2);
 }
 
 /*
