@@ -1533,6 +1533,101 @@ body {
   flex: 0 0 auto;
 }
 
+/* 组间发丝线：组与组之间 1px 分隔，代替纯间距——长列表扫读时组边界更清楚 */
+.skill-group + .skill-group {
+  border-top: 1px solid var(--color-border-subtle);
+  margin-top: 2px;
+  padding-top: var(--space-1);
+}
+
+/*
+ * 一行 skill：外层 div 只管 hover 背景与布局，真正可点的是里面的
+ * `.skill-row-main`（见 SkillsPanel.tsx 的 SkillRow 注释——missing 行要在行内
+ * 浮出真正的清理键，`<button>` 不能嵌 `<button>`，点击语义拆成两层）。
+ * `:has(:focus-visible)` 让键盘 Tab 到行内任意控件（主按钮或浮现的清理键）都点亮
+ * 同一背景，同 `.task-row` 的先例。
+ */
+.skill-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--list-item-default);
+  /* 14px 不是 --space-3（12px）——对齐过滤行与组头同一条左缘竖线 */
+  padding: 0 14px;
+}
+.skill-row:hover,
+.skill-row:has(:focus-visible) {
+  background: var(--color-bg-hover);
+}
+.skill-row:hover .reveal,
+.skill-row:has(:focus-visible) .reveal {
+  opacity: 1;
+}
+.skill-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.skill-row-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-row-dim .skill-row-name {
+  color: var(--color-text-tertiary);
+}
+.skill-row-missing .skill-row-name {
+  color: var(--color-danger);
+}
+
+/*
+ * 归属点阵：环点 = Global、实心点 = 一个 workspace，与韦恩图共用的符号学
+ * （SetDots 组件注释）。**颜色只用中性灰阶**（secondary），不用 accent——
+ * accent 已经有自己的职责（主操作 + 当前模式），颜色各有职责。
+ */
+.set-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.set-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
+}
+.set-dot-ring {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.3px solid var(--color-text-secondary);
+}
+.set-dot-ring::after {
+  content: "";
+  position: absolute;
+  inset: 2.4px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
+}
+
 /*
  * 韦恩图圆的淡填充（4-4，值取自 skills-map-3circle-v2）：只服务这一个 feature，
  * 从 tokens/colors.css 搬到这里（Implementation rules：只服务一个 feature 的值

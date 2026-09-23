@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { IconButton } from "../../shell/IconButton";
+import { SetDots } from "../../shell/SetDots";
 import {
   PanelButton,
   PanelIconButton,
@@ -21,7 +22,7 @@ import { filterSkills } from "./skill-filter.ts";
  * 届时页头加 [list|blend] 两枚 Chip——现在只有一档，不放假的切换器。
  *
  * 列表的分组本职是回答「这个集合现在有哪些 skill」，所以**多集合的行在每组
- * 都出现**（行尾 N sets 说明它共享），不是对 skill 集合做划分。
+ * 都出现**（行尾的归属点阵说明它共享，见 SkillRow），不是对 skill 集合做划分。
  */
 export function SkillsPanel(props: {
   skills: SkillsState;
@@ -100,14 +101,22 @@ export function SkillsPanel(props: {
   );
 }
 
-/** 组标题：mono/micro/大写/secondary（与侧栏 NodeLabel 同款字学）。 */
-function GroupLabel(props: { children: React.ReactNode; danger?: boolean }) {
+/**
+ * 组标题：mono/micro/大写/secondary（与侧栏 NodeLabel 同款字学）+ 计数。
+ * 计数是**该组当前显示的行数**——搜索过滤时跟着变，不是集合里的总数。
+ *
+ * **自己带 `padding: 0 14px`**（不是外层 `.skill-group` 容器）：组间发丝线
+ * （`.skill-group + .skill-group`）要通栏，缩进只能落在标题自己身上，不能
+ * 落在包住发丝线的容器上——否则线也跟着缩进，两侧留白，不贴边。
+ */
+function GroupLabel(props: { children: React.ReactNode; count: number; danger?: boolean }) {
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
         minHeight: 26,
+        padding: "0 14px",
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-micro)",
         letterSpacing: "0.06em",
@@ -116,6 +125,7 @@ function GroupLabel(props: { children: React.ReactNode; danger?: boolean }) {
       }}
     >
       {props.children}
+      <span style={{ color: "var(--color-text-tertiary)" }}>&nbsp;· {props.count}</span>
     </span>
   );
 }
@@ -200,81 +210,7 @@ function SkillList(props: {
 
   const linked = filtered.filter((s) => s.global || s.workspaces.length > 0);
   const disabled = filtered.filter((s) => !s.global && s.workspaces.length === 0);
-
-  const row = (skill: SkillMeta, key: string) => {
-    const sets = (skill.global ? 1 : 0) + skill.workspaces.length;
-    const setNames = [
-      skill.global ? "Global" : "",
-      ...skill.workspaces.map(props.workspaceName),
-    ].filter(Boolean);
-    return (
-      <button
-        key={key}
-        type="button"
-        onClick={() => props.onSelect(skill.slug)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          width: "100%",
-          height: "var(--list-item-default)",
-          padding: "0 var(--space-3)",
-          border: 0,
-          background: "transparent",
-          font: "inherit",
-          fontSize: "var(--font-size-control)",
-          fontWeight: "var(--weight-medium)",
-          textAlign: "left",
-          cursor: "pointer",
-          color: "var(--color-text-primary)",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = "var(--color-bg-hover)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
-      >
-        {skill.missing && (
-          <Icon name="triangle-alert" size={13} style={{ color: "var(--color-danger)" }} />
-        )}
-        <span
-          style={{
-            minWidth: 0,
-            flex: 1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {skill.name}
-        </span>
-        {skill.missing ? (
-          <span
-            style={{
-              fontFamily: "var(--font-family-business)",
-              fontSize: "var(--font-size-micro)",
-              color: "var(--color-danger)",
-            }}
-          >
-            missing
-          </span>
-        ) : sets > 1 ? (
-          <span
-            title={setNames.join(", ")}
-            style={{
-              fontFamily: "var(--font-family-business)",
-              fontSize: "var(--font-size-micro)",
-              color: "var(--color-text-tertiary)",
-              flex: "0 0 auto",
-            }}
-          >
-            {sets} sets
-          </span>
-        ) : null}
-      </button>
-    );
-  };
+  const globalMembers = filtered.filter((s) => s.global);
 
   return (
     <RightPanelFrame
@@ -320,27 +256,47 @@ function SkillList(props: {
             </div>
           ) : (
             <>
-              {filtered.some((s) => s.global) && (
-                <div id="skills-group-global">
-                  <GroupLabel>Global</GroupLabel>
-                  {filtered.filter((s) => s.global).map((s) => row(s, `g:${s.slug}`))}
+              {globalMembers.length > 0 && (
+                <div className="skill-group" id="skills-group-global">
+                  <GroupLabel count={globalMembers.length}>Global</GroupLabel>
+                  {globalMembers.map((s) => (
+                    <SkillRow
+                      key={`g:${s.slug}`}
+                      skill={s}
+                      onSelect={props.onSelect}
+                      workspaceName={props.workspaceName}
+                    />
+                  ))}
                 </div>
               )}
               {skills.workspaces.map((ws) => {
                 const members = linked.filter((s) => !s.global && s.workspaces.includes(ws.id));
                 if (members.length === 0) return null;
                 return (
-                  <div key={ws.id} id={`skills-group-${ws.id}`}>
-                    <GroupLabel>{ws.name}</GroupLabel>
-                    {members.map((s) => row(s, `${ws.id}:${s.slug}`))}
+                  <div className="skill-group" key={ws.id} id={`skills-group-${ws.id}`}>
+                    <GroupLabel count={members.length}>{ws.name}</GroupLabel>
+                    {members.map((s) => (
+                      <SkillRow
+                        key={`${ws.id}:${s.slug}`}
+                        skill={s}
+                        onSelect={props.onSelect}
+                        workspaceName={props.workspaceName}
+                      />
+                    ))}
                   </div>
                 );
               })}
               {disabled.length > 0 && (
-                <div>
-                  <GroupLabel>Disabled</GroupLabel>
+                <div className="skill-group">
+                  <GroupLabel count={disabled.length}>Disabled</GroupLabel>
                   {disabled.map((s) => (
-                    <DisabledRow key={s.slug} skill={s} onSelect={props.onSelect} />
+                    <SkillRow
+                      key={s.slug}
+                      skill={s}
+                      dim
+                      onSelect={props.onSelect}
+                      workspaceName={props.workspaceName}
+                    />
                   ))}
                 </div>
               )}
@@ -352,62 +308,46 @@ function SkillList(props: {
   );
 }
 
-/** Disabled 组的行：name 实色 tertiary，其余同普通行。 */
-function DisabledRow(props: { skill: SkillMeta; onSelect: (slug: string) => void }) {
+/**
+ * 一行 skill（Global / workspace 成员 / Disabled 三处共用，原先 `row()` 闭包与
+ * `DisabledRow` 是同一份骨架抄了两遍，收成一个组件）。
+ *
+ * 外层是 `<div>` 不是 `<button>`：missing 行要在行内浮出一个真正可点的清理键
+ * （trash IconButton），`<button>` 不能嵌 `<button>`（HTML 语义 + 浏览器会把
+ * 内层按钮拆出去，点击语义直接坏掉）。点击语义因此拆成两层——`.skill-row-main`
+ * 是「点这行开详情」的唯一入口，外层 `.skill-row` 只管 hover 背景与布局。
+ *
+ * 归属点阵（SetDots）只在「非 missing、非 disabled」时画：disabled 组的成员按
+ * 定义 global=false 且 workspaces=[]（这就是它被分进 Disabled 组的原因），点阵
+ * 本来也是空的；missing 走行首红三角 + 红名，两套符号不共存。
+ */
+function SkillRow(props: {
+  skill: SkillMeta;
+  /** Disabled 组：name 降到 tertiary，其余同普通行 */
+  dim?: boolean;
+  onSelect: (slug: string) => void;
+  workspaceName: (id: string) => string;
+}) {
+  const { skill } = props;
+  const dim = props.dim === true;
+  const setNames = [skill.global ? "Global" : null, ...skill.workspaces.map(props.workspaceName)].filter(
+    (name): name is string => name !== null,
+  );
+
   return (
-    <button
-      type="button"
-      onClick={() => props.onSelect(props.skill.slug)}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        width: "100%",
-        height: "var(--list-item-default)",
-        padding: "0 var(--space-3)",
-        border: 0,
-        background: "transparent",
-        font: "inherit",
-        fontSize: "var(--font-size-control)",
-        fontWeight: "var(--weight-medium)",
-        textAlign: "left",
-        cursor: "pointer",
-        color: "var(--color-text-primary)",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--color-bg-hover)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-      }}
+    <div
+      className={`skill-row${skill.missing ? " skill-row-missing" : dim ? " skill-row-dim" : ""}`}
     >
-      {props.skill.missing && (
-        <Icon name="triangle-alert" size={13} style={{ color: "var(--color-danger)" }} />
+      <button type="button" className="skill-row-main" onClick={() => props.onSelect(skill.slug)}>
+        {skill.missing && (
+          <Icon name="triangle-alert" size={13} style={{ color: "var(--color-danger)" }} />
+        )}
+        <span className="skill-row-name">{skill.name}</span>
+      </button>
+      {!skill.missing && !dim && (
+        <SetDots global={skill.global} workspaces={skill.workspaces.length} title={setNames.join(", ")} />
       )}
-      <span
-        style={{
-          minWidth: 0,
-          flex: 1,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: "var(--color-text-tertiary)",
-        }}
-      >
-        {props.skill.name}
-      </span>
-      {props.skill.missing && (
-        <span
-          style={{
-            fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-micro)",
-            color: "var(--color-danger)",
-          }}
-        >
-          missing
-        </span>
-      )}
-    </button>
+    </div>
   );
 }
 
