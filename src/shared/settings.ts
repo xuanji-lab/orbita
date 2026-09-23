@@ -119,6 +119,13 @@ export interface AppSettings {
   subSessionThinking?: ThinkingLevel;
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
+  /**
+   * 通道列的宽度（子会话 2026-09-23 用户裁决：通道列可拖宽）。缺席 = 默认 300。
+   * **这里只做 ≥ 地板的硬校验**：合法上界依赖当前 chat 区宽度（见
+   * `clampChannelColumnWidth`），落盘的值换个窗口大小就可能越界，真正的夹取在
+   * 渲染层每次渲染时做，同 `rightPanelWidth` 的纪律。拖动中不落盘，松手才写。
+   */
+  channelColumnWidth?: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -191,6 +198,39 @@ export function clampRightPanelWidth(width: number, paneTotal: number): number {
   return Math.max(floor, Math.min(ceiling, wanted));
 }
 
+/** 通道列宽度的默认值（双击热区复位的目标，会再按当前 chat 区宽度夹一次）。 */
+export const CHANNEL_COLUMN_WIDTH_DEFAULT = 300;
+
+/**
+ * 通道列宽度的硬地板（px）。再窄消息正文每行只剩几个字——比右栏的地板（200）更紧，
+ * 因为通道卡内部还要留出父左子右两栏气泡的横向余量，180 是两栏对话仍读得下去的下限。
+ */
+const CHANNEL_COLUMN_WIDTH_FLOOR = 180;
+
+/**
+ * 把通道列宽度夹进合法区间（用户 2026-09-23 裁决：通道列可拖宽，最小 = chat 区的
+ * 1/6，最大 = chat 区的 1/3——「现在固定 300px，子会话 session 里只剩工具调用，
+ * 反倒像陪衬」）。
+ *
+ * 设 C = `chatTotal` = **主槽（chat 主区）+ 通道列**的总宽（拖动中恒定：主槽是
+ * flex:1，通道列拿多少它就让多少）——**不包含右栏**：右栏是另一块独立空间，
+ * 用户说的「chatview」指的是主槽与通道列这一对，同 `clampRightPanelWidth` 只管
+ * 「chat 主区与右栏」那一对、不含左侧栏的先例，这里对称地不含右栏。
+ * 区间就是 **[C/6, C/3]**。
+ *
+ * 地板与上限撞车（C 小到 C/3 < 180）时**地板胜出**，见 `CHANNEL_COLUMN_WIDTH_FLOOR`。
+ * `chatTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 C 去夹。
+ */
+export function clampChannelColumnWidth(width: number, chatTotal: number): number {
+  const wanted = Number.isFinite(width) ? Math.round(width) : CHANNEL_COLUMN_WIDTH_FLOOR;
+  if (!Number.isFinite(chatTotal) || chatTotal <= 0) {
+    return Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, wanted);
+  }
+  const floor = Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, Math.round(chatTotal / 6));
+  const ceiling = Math.round(chatTotal / 3);
+  return Math.max(floor, Math.min(ceiling, wanted));
+}
+
 function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
 }
@@ -222,10 +262,12 @@ export function parseSettings(raw: unknown): AppSettings {
     subSessionModel?: unknown;
     subSessionThinking?: unknown;
     lastUsed?: unknown;
+    channelColumnWidth?: unknown;
   };
   const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
+  const channelColumnWidth = record.channelColumnWidth;
   const compaction = parseCompaction(record.compaction);
   const titleModel = parseModelPair(record.titleModel);
   const subSessionModel = parseModelPair(record.subSessionModel);
@@ -245,6 +287,12 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebar >= SIDEBAR_WIDTH_MIN &&
     sidebar <= SIDEBAR_WIDTH_MAX
       ? { sidebarWidth: Math.round(sidebar) }
+      : {}),
+    // 通道列同右栏的纪律：只做 ≥ 地板的硬校验，上界随 chat 区宽度变，渲染层每次夹
+    ...(typeof channelColumnWidth === "number" &&
+    Number.isFinite(channelColumnWidth) &&
+    channelColumnWidth >= CHANNEL_COLUMN_WIDTH_FLOOR
+      ? { channelColumnWidth: Math.round(channelColumnWidth) }
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(compaction === undefined ? {} : { compaction }),
