@@ -799,7 +799,6 @@ function WorkspaceGroup(props: {
   onRemove: () => void;
   onOpen: (id: string) => void;
 }) {
-  const [hover, setHover] = useState(false);
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   // 超过预览数只列前 N 条，其余收进「Show N more」；点了才全量铺开
@@ -816,11 +815,8 @@ function WorkspaceGroup(props: {
       // 组本身不再垫 padding：之前上下各 8px 加 28 的行高 = 44，三个空组排在一起
       // 比下方 32px 的任务行松一截，像三块各自为政的卡（2026-09-21 wafo）。
       // 组头行高改成与 NavRow 同一个 token，两种行在同一张列表里等高。
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => {
-        setHover(false);
-        setArmed(false);
-      }}
+      className="workspace-group"
+      onMouseLeave={() => setArmed(false)}
     >
       <div
         style={{
@@ -912,11 +908,12 @@ function WorkspaceGroup(props: {
           }
           size={20}
           onClick={() => (armed ? props.onRemove() : setArmed(true))}
+          className="reveal workspace-group-remove"
           style={{
             borderRadius: "var(--radius-xs)",
             color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
-            opacity: hover || armed ? 1 : 0,
-            transition: "opacity var(--duration-instant) var(--ease-standard)",
+            // armed（二次确认已按下）常显，不等 hover——armed 只有 mouseleave 才清
+            opacity: armed ? 1 : undefined,
           }}
         >
           <Icon name="trash-2" size={11} />
@@ -1048,14 +1045,12 @@ function FoldChevron(props: { folded: boolean }) {
  * 单个 chevron 大——它折的是整个 loose 列表，是最常用的那一刀。
  */
 function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () => void }) {
-  const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
       aria-expanded={!props.folded}
       onClick={props.onToggle}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className="fold-header-btn"
       style={{
         display: "flex",
         alignItems: "center",
@@ -1065,10 +1060,8 @@ function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () 
         padding: 0,
         border: 0,
         borderRadius: "var(--radius-xs)",
-        background: hover ? "var(--option-hover-bg)" : "transparent",
         cursor: "pointer",
         textAlign: "left",
-        transition: "var(--transition-hover)",
       }}
     >
       <FoldChevron folded={props.folded} />
@@ -1188,15 +1181,6 @@ function SessionRow(props: {
   onClick: () => void;
 }) {
   const { meta, session } = props;
-  const [hover, setHover] = useState(false);
-  /**
-   * 行内有东西拿到**键盘**焦点。悬停出现的键必须也为键盘出现——只认 hover 的话，
-   * Tab 到星标键时它还是 opacity 0，焦点环落在一个看不见的方块上。
-   * **只认 :focus-visible**：鼠标点星也会让按钮拿到焦点，若认普通 focus，点过的那行会
-   * 一直挂着描边星直到焦点走开（wafo 2026-09-22 实测：「点了别的行，之前那个描边星才消失」）。
-   * React 的 onFocus/onBlur 走 focusin/focusout，会从子节点冒上来。
-   */
-  const [focused, setFocused] = useState(false);
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
     "main",
@@ -1389,13 +1373,7 @@ function SessionRow(props: {
           ];
 
   return (
-    <div
-      style={{ display: "flex", alignItems: "center", gap: 2 }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onFocus={(event) => setFocused(event.target.matches(":focus-visible"))}
-      onBlur={() => setFocused(false)}
-    >
+    <div className="task-row" style={{ display: "flex", alignItems: "center", gap: 2 }}>
       {editing ? (
         <span style={{ flex: 1, minWidth: 0, padding: "var(--space-1)" }}>
           <InlineName
@@ -1436,11 +1414,12 @@ function SessionRow(props: {
         title={meta.starred === true ? "Starred · click to unstar" : "Star this task"}
         size={20}
         onClick={() => session.starSession(meta.id, meta.starred !== true)}
+        className="reveal"
         style={{
           borderRadius: "var(--radius-xs)",
           color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          opacity: meta.starred === true || hover || focused ? 1 : 0,
-          transition: "opacity var(--duration-instant) var(--ease-standard)",
+          // 已星标常显，不等 hover / 键盘聚焦
+          opacity: meta.starred === true ? 1 : undefined,
         }}
       >
         <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
@@ -1468,11 +1447,12 @@ function SessionRow(props: {
         onClick={() =>
           session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
         }
+        className="reveal"
         style={{
           borderRadius: "var(--radius-xs)",
           color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          opacity: done || hover || focused ? 1 : 0,
-          transition: "opacity var(--duration-instant) var(--ease-standard)",
+          // 已完成常显，不等 hover / 键盘聚焦
+          opacity: done ? 1 : undefined,
         }}
       >
         <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
@@ -1522,11 +1502,12 @@ function SessionRow(props: {
               exitDeleteStep();
               toggle();
             }}
+            className="reveal"
             style={{
               borderRadius: "var(--radius-xs)",
               color: open ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
-              opacity: hover || open || focused ? 1 : 0,
-              transition: "opacity var(--duration-instant) var(--ease-standard)",
+              // 菜单开着时常显，不等 hover / 键盘聚焦
+              opacity: open ? 1 : undefined,
             }}
           >
             <Icon name="ellipsis-vertical" size={13} />

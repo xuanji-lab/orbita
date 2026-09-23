@@ -476,6 +476,93 @@ body {
   background: var(--color-border-subtle);
 }
 
+/* ===== 侧栏 ===== */
+
+/*
+ * 悬停 / 键盘聚焦才浮出的次要动作（工作区组头的删除键、任务行的星标 / 完成 / 更多键）：
+ * 共同点是默认 opacity: 0、父级给了信号才现形——父级信号各不相同，见各自紧跟的
+ * :hover / :has(:focus-visible) 规则，这里只定公共的默认态与过渡。
+ */
+.reveal {
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+
+/*
+ * 工作区组头：hover 到组内任意位置（含下方的会话行）就浮出删除键，原 onMouseEnter
+ * 挂在组的外层 div 上，:hover 的命中范围原样对应。**只点名 `.workspace-group-remove`，
+ * 不用通用的 `.reveal`**——组头与它下面的会话行是同一个 `.workspace-group` 的
+ * DOM 兄弟，任务行自己的星标/完成/更多也叫 `.reveal`；用后代选择器裸配 `.reveal`
+ * 会连带点亮全组每一行的这些键（2026-09-23 验收发现的真回归）。
+ */
+.workspace-group:hover .workspace-group-remove {
+  opacity: 1;
+}
+
+/* FoldHeaderButton（TASKS 节的整块折叠键）：只有底色跟着 hover，字色由 NodeLabel 自己定 */
+.fold-header-btn {
+  background: transparent;
+}
+
+.fold-header-btn:hover {
+  background: var(--option-hover-bg);
+}
+
+/*
+ * 任务行的星标 / 完成 / 更多键：悬停，或行内任意一处（含标题本身）拿到键盘焦点
+ * 才浮出——原来是 onFocus/onBlur 手动判 :matches(":focus-visible") 模拟的
+ * （Proma 遗留写法），Chromium 原生 :has() 直接表达同一件事，不再需要 JS 影子状态。
+ */
+.task-row:hover .reveal,
+.task-row:has(:focus-visible) .reveal {
+  opacity: 1;
+}
+
+/* ===== 聊天面板：行级 hover / 悬停浮现 ===== */
+
+/* CarryoverChecklist 的行内编辑提示：铅笔恒渲染，hover 到那一行才现形——
+   用 display 不用 opacity/visibility，静止态不占「可见元素」的位置 */
+.carryover-pencil {
+  display: none;
+}
+
+.carryover-row:hover .carryover-pencil {
+  display: inline-flex;
+}
+
+/* 折叠行共用骨架（CollapseRow：ToolCard / ThinkingCard）：hover 淡底，disabled 时
+   原生 :disabled 天然不触发 :hover，不用另外判 interactive */
+.collapse-row-btn {
+  background: transparent;
+  transition: var(--transition-hover);
+}
+
+.collapse-row-btn:hover {
+  background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
+}
+
+/* 子会话面板的一行 */
+.sub-session-row {
+  background: transparent;
+}
+
+.sub-session-row:hover {
+  background: var(--color-bg-hover);
+}
+
+/*
+ * 通道标记胶囊（可点变体）：静止态字色按 tone 算，是个例值，过 --pill-fg 这个
+ * CSS 变量从 inline 转交进来——不能直接把 color 写在 inline 上，那样 hover 规则
+ * 再高优先级也盖不过它（inline style 永远赢过样式表）。
+ */
+.channel-mark-pill {
+  color: var(--pill-fg);
+}
+
+.channel-mark-pill:hover {
+  color: var(--color-text-primary);
+}
+
 /* ===== 通道列（子会话 PR4b）：主槽与右栏之间的一列，父子往来抽出来放在这里 =====
  * 常驻挂载，同右侧面板壳一条纪律——宽度以 class 切换驱动过渡；**可拖宽**（用户
  * 2026-09-23 裁决，区间 chat 区的 1/6–1/3，见 ChannelColumn.tsx 的 startResize），

@@ -1837,7 +1837,6 @@ function CollapseRow(props: {
   onToggle: () => void;
   children: React.ReactNode;
 }) {
-  const [hover, setHover] = useState(false);
   const interactive = props.disabled !== true;
   return (
     <div style={{ minWidth: 0, borderRadius: "var(--radius-sm)", overflow: "hidden" }}>
@@ -1846,8 +1845,7 @@ function CollapseRow(props: {
         aria-expanded={interactive ? props.open : undefined}
         disabled={!interactive}
         onClick={props.onToggle}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
+        className="collapse-row-btn"
         style={{
           display: "flex",
           alignItems: "center",
@@ -1856,10 +1854,6 @@ function CollapseRow(props: {
           minHeight: 32,
           padding: "6px 10px",
           border: "none",
-          background: hover && interactive
-            ? "color-mix(in srgb, var(--color-bg-hover) 50%, transparent)"
-            : "transparent",
-          transition: "var(--transition-hover)",
           color: "var(--color-text-secondary)",
           fontFamily: "var(--font-family-base)",
           fontSize: "var(--font-size-control)",
