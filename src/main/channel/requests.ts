@@ -28,6 +28,7 @@ import {
   type ChannelKey,
   type ChannelMessage,
 } from "../../shared/channel.ts";
+import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
 import type { ProviderDto } from "../../shared/provider.ts";
 import { deriveSessionTitle, type SessionMeta } from "../../shared/session.ts";
 import type { AppSettings, TitleModel } from "../../shared/settings.ts";
@@ -58,7 +59,18 @@ function errorMessage(cause: unknown): string {
 // ── 子会话模型解析 ──
 
 export type SubSessionModelResult =
-  | { ok: true; providerId: string; modelId: string }
+  | {
+      ok: true;
+      providerId: string;
+      modelId: string;
+      /**
+       * 这个模型是怎么定下来的——applyDelegate 按它决定思考档的解析路（同一刀
+       * 「思考档跟着模型走」）：`requested` = delegate 参数指名；`setting` =
+       * `AppSettings.subSessionModel`；`parent` = 同父（含两条都没给、或
+       * setting 指的 provider 已删退回同父）。
+       */
+      source: "requested" | "setting" | "parent";
+    }
   | { ok: false; error: string };
 
 /**
@@ -79,12 +91,12 @@ export function resolveSubSessionModel(input: {
     const requestedId = input.requested;
     const parentProvider = input.providers.find((provider) => provider.id === input.parent.providerId);
     if (parentProvider?.models.declared.some((model) => model.id === requestedId) === true) {
-      return { ok: true, providerId: parentProvider.id, modelId: requestedId };
+      return { ok: true, providerId: parentProvider.id, modelId: requestedId, source: "requested" };
     }
     const owner = input.providers.find((provider) =>
       provider.models.declared.some((model) => model.id === requestedId),
     );
-    if (owner !== undefined) return { ok: true, providerId: owner.id, modelId: requestedId };
+    if (owner !== undefined) return { ok: true, providerId: owner.id, modelId: requestedId, source: "requested" };
     const available = [
       ...new Set(input.providers.flatMap((provider) => provider.models.declared.map((model) => model.id))),
     ];
@@ -97,14 +109,16 @@ export function resolveSubSessionModel(input: {
   }
   if (input.setting !== undefined) {
     const provider = input.providers.find((candidate) => candidate.id === input.setting?.providerId);
-    if (provider !== undefined) return { ok: true, providerId: provider.id, modelId: input.setting.modelId };
+    if (provider !== undefined) {
+      return { ok: true, providerId: provider.id, modelId: input.setting.modelId, source: "setting" };
+    }
     // 易耗品处理，同 readTitleModel（agent/ipc.ts）：设置指的 provider 被删了不该
     // 拦住派出，退回同父；但原因要落到 dev 终端，否则「为什么没用我设的模型」无从查起。
     console.error(
       `[main] 子会话默认模型 ${input.setting.providerId}/${input.setting.modelId} 的 provider 已删，退回同父`,
     );
   }
-  return { ok: true, providerId: input.parent.providerId, modelId: input.parent.modelId };
+  return { ok: true, providerId: input.parent.providerId, modelId: input.parent.modelId, source: "parent" };
 }
 
 // ── 派出（delegate）──
@@ -140,7 +154,19 @@ export async function applyDelegate(
     providers,
   });
   if (!resolved.ok) return resolved;
-  const thinkingLevel: ThinkingLevel = event.thinkingLevel ?? settings.subSessionThinking ?? parent.thinkingLevel;
+  // 思考档跟着模型走（用户裁决 wafo 2026-09-23）：delegate 显式给的档最优先；
+  // 否则按模型是怎么定下来的（resolved.source）分流——模型来自 delegate 参数
+  // 就落它的默认档（不是父的档，父可能跑着完全不同的型号）；模型来自设置就
+  // 用设置里的子会话思考档，缺席也是落它的默认档；同父才真正继承父的档。
+  // 主进程拿不到目录，defaultThinkingLevel 不传 supported——pi 发送前按同一
+  // 规则夹，结果与 renderer 算的一致（见 defaultThinkingLevel 的注释）。
+  const thinkingLevel: ThinkingLevel =
+    event.thinkingLevel ??
+    (resolved.source === "requested"
+      ? defaultThinkingLevel(resolved.modelId)
+      : resolved.source === "setting"
+        ? (settings.subSessionThinking ?? defaultThinkingLevel(resolved.modelId))
+        : parent.thinkingLevel);
 
   const childId = randomUUID();
   const taskMessage: ChannelMessage = {
