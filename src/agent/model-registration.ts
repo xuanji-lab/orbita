@@ -11,8 +11,10 @@
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
+import { knownModelParams } from "../shared/known-providers.ts";
 import { lookupCatalogModel, resolveModelDefaults, type CatalogPreference } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
+import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 
 /** pi 注册表里的模型对象——从 ModelRuntime 的方法签名推出来，不另维护一份类型 */
 export type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
@@ -68,6 +70,9 @@ export function toFallbackModels(
    * copilot / vercel 五家 anthropic-messages 条目上一律带它。且档位表的 xhigh / max
    * 本身就是 effort 值，只在 adaptive 下被读——只抄表不抄它，用户选的档会被 pi 换算成
    * budget_tokens 发出去，effort 一个都送不到（2026-09-23 实测）。
+   *
+   * 目录没收录、家族也借不到的型号（claude-opus-5-5）没有条目可借：由白名单
+   * `adaptiveThinking` 声明，档位表按白名单 thinkingLevels 生成（见 effortLevelMap）。
    */
   catalogModels: readonly PiModel[] = [],
 ): NonNullable<PiProviderRegistration["models"]> {
@@ -78,14 +83,25 @@ export function toFallbackModels(
     const sourceId = lookupCatalogModel(catalog, decl.id, prefer)?.id ?? decl.id;
     const sources = catalogModels.filter((model) => model.id === sourceId);
     const borrowedMap = sources[0]?.thinkingLevelMap;
+    // 目录没收录、也借不到家族参数的新 Claude（claude-opus-5-5）：白名单声明它只收
+    // adaptive。同样只对 anthropic-messages 协议的接入生效
+    const patch = knownModelParams(decl.id);
+    const declaredAdaptive = prefer.api === "anthropic-messages" && patch.adaptiveThinking === true;
     // 只认同协议的条目：copilot 的 openai-completions 版 claude-fable-5 就不带这一项
-    const adaptive = sources.some(
-      (model) =>
-        model.api === prefer.api &&
-        model.compat !== undefined &&
-        "forceAdaptiveThinking" in model.compat &&
-        model.compat.forceAdaptiveThinking === true,
-    );
+    const adaptive =
+      declaredAdaptive ||
+      sources.some(
+        (model) =>
+          model.api === prefer.api &&
+          model.compat !== undefined &&
+          "forceAdaptiveThinking" in model.compat &&
+          model.compat.forceAdaptiveThinking === true,
+      );
+    // 档位表：目录的优先；目录没有而白名单声明了 adaptive，就按白名单档位生成——
+    // 否则 pi 按「无表」规则不认 xhigh / max，用户选的这两档会被夹成 high
+    const levelMap =
+      borrowedMap ??
+      (declaredAdaptive && patch.thinkingLevels !== undefined ? effortLevelMap(patch.thinkingLevels) : undefined);
     const base =
       known === undefined
         ? {
@@ -98,7 +114,7 @@ export function toFallbackModels(
             cost: borrowed.cost,
             contextWindow: borrowed.contextWindow,
             maxTokens: borrowed.maxTokens,
-            ...(borrowedMap === undefined ? {} : { thinkingLevelMap: { ...borrowedMap } }),
+            ...(levelMap === undefined ? {} : { thinkingLevelMap: { ...levelMap } }),
             ...(adaptive ? { compat: { forceAdaptiveThinking: true } } : {}),
           }
         : { ...known };
@@ -113,6 +129,21 @@ export function toFallbackModels(
       ...(decl.vision === undefined ? {} : { input: decl.vision ? ["text", "image"] : ["text"] }),
     };
   });
+}
+
+/**
+ * 白名单档位 → pi 的 thinkingLevelMap（目录外的 adaptive 型号用）：不在档位表里的档
+ * 标 null（pi 视为不支持，发送前夹走——例如 opus-5-5 关不掉思考，off 就是 null）；
+ * xhigh / max 映射成同名 effort（pi 只在表里有字符串时才把这两档当 effort 原样送出，
+ * 否则按「无表」规则直接不认）；其余档留空 = pi 的默认映射（low / medium / high 同名）。
+ */
+function effortLevelMap(levels: readonly ThinkingLevel[]): NonNullable<PiModel["thinkingLevelMap"]> {
+  const map: NonNullable<PiModel["thinkingLevelMap"]> = {};
+  for (const level of THINKING_LEVELS) {
+    if (!levels.includes(level)) map[level] = null;
+    else if (level === "xhigh" || level === "max") map[level] = level;
+  }
+  return map;
 }
 
 /**

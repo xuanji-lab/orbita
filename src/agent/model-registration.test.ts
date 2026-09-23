@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
@@ -571,7 +571,7 @@ describe("自适应思考 —— 新 Claude 只收 adaptive + effort，网关注
       getModel: (_id: string, id: string) => registered?.find((m) => m.id === id),
       getProviders: () => [copilot, anthropic, cloudflare],
     } as unknown as Parameters<typeof registerAndResolveModel>[0];
-    const declared = ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-4-5"].map((id) => ({ id }));
+    const declared = ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-4-5", "claude-opus-5-5"].map((id) => ({ id }));
     const model = registerAndResolveModel(
       runtime,
       { id: "my-gw", apiKey: "k", baseUrl: "https://gw.example", api, models: declared },
@@ -636,6 +636,32 @@ describe("自适应思考 —— 新 Claude 只收 adaptive + effort，网关注
     const max = await outgoingParams(fable, "max");
     assert.deepEqual(max.thinking, { type: "adaptive", display: "summarized" });
     assert.deepEqual(max.output_config, { effort: "max" });
+  });
+
+  test("目录外的型号（claude-opus-5-5，家族也借不到）：白名单声明 adaptiveThinking 即带上，档位表按白名单生成", () => {
+    const model = resolveOnGateway("anthropic-messages", "claude-opus-5-5");
+    assert.deepEqual(model?.compat, { forceAdaptiveThinking: true });
+    // 关不掉思考：off 为 null；没有 minimal；xhigh / max 映射成同名 effort
+    assert.deepEqual(model?.thinkingLevelMap, { off: null, minimal: null, xhigh: "xhigh", max: "max" });
+    assert.equal(model?.contextWindow, 1_000_000); // 窗口同样来自白名单，不落 128k 兜底
+    // pi 发送前按这个支持集夹档：正好是白名单的 low→max，xhigh / max 不会被夹走
+    assert.ok(model !== undefined);
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("白名单的 adaptive 声明只对 anthropic-messages 生效：openai 兼容网关上的 opus-5-5 不带", () => {
+    const model = resolveOnGateway("openai-completions", "claude-opus-5-5");
+    assert.equal(model !== undefined && "compat" in model, false);
+  });
+
+  test("opus-5-5 发出去的是 adaptive + effort：xhigh 原样送到（不被当成无表模型夹成 high），medium 是它的默认档", async () => {
+    const model = resolveOnGateway("anthropic-messages", "claude-opus-5-5");
+    assert.ok(model !== undefined);
+    const xhigh = await outgoingParams(model, "xhigh");
+    assert.deepEqual(xhigh.thinking, { type: "adaptive", display: "summarized" });
+    assert.deepEqual(xhigh.output_config, { effort: "xhigh" });
+    const medium = await outgoingParams(model, "medium");
+    assert.deepEqual(medium.output_config, { effort: "medium" });
   });
 
   test("对照：不带这一项的模型 pi 仍发 budget_tokens（证明上一条断言的是这一项的效果）", async () => {
