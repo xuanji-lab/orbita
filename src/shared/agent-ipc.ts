@@ -115,6 +115,14 @@ export const ipcChannels = {
   fsList: "fs:list",
   /** 在 Finder 里显示一个路径（同 root/dir 白名单） */
   fsReveal: "fs:reveal",
+  /**
+   * 读一个文件给面板预览（同 root/dir 白名单，`dir` 就是文件路径，同 fs:reveal）。
+   * 回 `FilePreview`（files.ts）：文本截断到 PREVIEW_TEXT_LIMIT、图片过大不读，由主进程判——
+   * renderer 在 sandbox 里没有文件系统访问权，也不该自己决定读多少。
+   */
+  fsRead: "fs:read",
+  /** 用系统默认应用打开一个文件（同 root/dir 白名单）；预览不了或想编辑时的出口 */
+  fsOpen: "fs:open",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */

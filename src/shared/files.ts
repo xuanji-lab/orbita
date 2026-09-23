@@ -83,3 +83,28 @@ export function fileRootLabel(kind: FileRootKind, path: string, title: string, f
   }
   return title.trim() === "" ? fallback : title.trim();
 }
+
+/**
+ * 文件预览（`fs:read` 的回执）。**读成什么由主进程判**：扩展名是图片 → 读成 base64；
+ * 否则看开头有没有 NUL 字节——没有就当文本（`LICENSE`、`Makefile`、`.env` 这类没有
+ * 扩展名的文本也能看），有就是二进制、不读内容。怎么排版（markdown 渲染 / 代码高亮 /
+ * 等宽原文）是 renderer 按文件名决定的事，不在契约里。
+ *
+ * 与 fs:list 同一道白名单：root 必须是 fs:roots 回过的、路径 realpath 后必须在 root 之内——
+ * 指向根外的 symlink 同样被拒，预览通道不能变成读任意文件的后门。
+ */
+export type FilePreview =
+  /** `truncated`：文件比 PREVIEW_TEXT_LIMIT 大，只读了开头那一段（面板要如实标出） */
+  | { kind: "text"; text: string; truncated: boolean; size: number; modifiedAt: number }
+  /** 图片：`mime` 由扩展名定（Chromium 的 <img> 画得了的那几种），`base64` 不带 data: 前缀 */
+  | { kind: "image"; mime: string; base64: string; size: number; modifiedAt: number }
+  /** 二进制（开头有 NUL 字节，或是 Chromium 画不了的图片格式）：不读内容，面板给「用默认应用打开」 */
+  | { kind: "binary"; size: number; modifiedAt: number }
+  /** 图片比 PREVIEW_IMAGE_LIMIT 大：不读，同样给「用默认应用打开」 */
+  | { kind: "too-large"; limit: number; size: number; modifiedAt: number };
+
+/** 文本预览最多读的字节数（2 MB）：再大的日志 / 数据文件只读开头，截断如实标出 */
+export const PREVIEW_TEXT_LIMIT = 2 * 1024 * 1024;
+
+/** 图片预览上限（20 MB）：base64 过 IPC 再进 <img>，再大就不读 */
+export const PREVIEW_IMAGE_LIMIT = 20 * 1024 * 1024;
