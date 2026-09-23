@@ -123,7 +123,9 @@ rounds.)
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
 (variable, with Source Han Sans SC) runs the whole interface on a tight 11 → 20px scale, with a
 separate 15px/1.68 track for transcript prose and a mono/tabular face for machine facts. Weights:
-400 body, 500 controls, 600 titles, 650 for tool and card names, 700 for the chat header. Model and
+450 body, 500 controls, 600 titles, 650 for tool and card names, 700 for the chat header. Manrope's
+400 skeleton reads thin without subpixel antialiasing (off since this system doesn't force greyscale
+smoothing), so body sits at 450 — still one step below the 500 controls weight. Model and
 thinking-level labels in the composer bar are set *italic* at secondary grey — the only italic in
 the UI.
 

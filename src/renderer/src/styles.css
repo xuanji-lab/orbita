@@ -268,7 +268,7 @@ body {
   font-family: var(--font-family-base);
   font-size: var(--font-size-body);
   line-height: var(--line-height-body);
-  -webkit-font-smoothing: antialiased;
+  font-weight: var(--weight-regular);
 }
 
 :root[data-platform="darwin"] body {
