@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { iconMarkup } from "./icon-markup.ts";
 import archive from "../../../../Orbita Design System/assets/icons/lucide/archive.svg?raw";
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
 import arrowLeft from "../../../../Orbita Design System/assets/icons/lucide/arrow-left.svg?raw";
@@ -12,6 +13,7 @@ import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.sv
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
 import circleCheck from "../../../../Orbita Design System/assets/icons/lucide/circle-check.svg?raw";
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
+import circleDot from "../../../../Orbita Design System/assets/icons/lucide/circle-dot.svg?raw";
 import circleOff from "../../../../Orbita Design System/assets/icons/lucide/circle-off.svg?raw";
 import chevronLeft from "../../../../Orbita Design System/assets/icons/lucide/chevron-left.svg?raw";
 import chevronRight from "../../../../Orbita Design System/assets/icons/lucide/chevron-right.svg?raw";
@@ -95,6 +97,7 @@ const ICONS = {
   "chevron-right": chevronRight,
   "chevron-up": chevronUp,
   clock,
+  "circle-dot": circleDot,
   "circle-off": circleOff,
   copy,
   "corner-down-left": cornerDownLeft,
@@ -183,6 +186,11 @@ export function Icon(props: {
    */
   fill?: boolean;
   style?: React.CSSProperties;
+  /**
+   * 调用方追加的 class（如 MCP 面板自己的 mcp-spin：那两处不是 `spin` 支持的
+   * orbita-spin 动画，仍要挂 anim-continuous 才能被窗口失焦时暂停）。
+   */
+  className?: string;
 }) {
   const size = props.size ?? 16;
   const style = {
@@ -195,12 +203,22 @@ export function Icon(props: {
     ...(props.spin === true ? { animation: "orbita-spin 1s linear infinite" } : null),
     ...props.style,
   } as React.CSSProperties;
+  // spin 是持续动效（orbita-spin infinite）：anim-continuous 标记它，好让窗口
+  // 失焦时 styles.css 能把它暂停（不用全局 `*`，见那条规则的注释）
+  const classes = ["orbita-icon", props.spin === true ? "anim-continuous" : null, props.className]
+    .filter((value) => value !== null && value !== undefined)
+    .join(" ");
   return (
     <span
-      className="orbita-icon"
+      className={classes}
       aria-hidden="true"
       style={style}
-      dangerouslySetInnerHTML={{ __html: inline(ICONS[props.name]) }}
+      // iconMarkup 按图标名缓存同一个 { __html } 对象：字面量在每次渲染新建对象，
+      // React 19 按对象身份（不是字符串内容）判断要不要重写 innerHTML，流式时
+      // 每个增量都会重渲染侧栏 / 右图标条，字面量写法会让整棵 SVG 每次都被拆了
+      // 重建——用户点在图标上时 pointerdown 落的节点在松手前已经被摘掉，浏览器
+      // 收不到 click（详见 icon-markup.ts 顶部注释）。
+      dangerouslySetInnerHTML={iconMarkup(props.name, () => inline(ICONS[props.name]))}
     />
   );
 }

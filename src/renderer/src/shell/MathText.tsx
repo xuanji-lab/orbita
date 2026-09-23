@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import katex from "katex";
 import { splitMathSegments } from "./math-text.ts";
 
@@ -24,23 +25,34 @@ export function MathText(props: { text: string }) {
           trust: false,
           strict: false,
         });
-        return seg.kind === "blockMath" ? (
-          // 块级公式自成一行居中；宽公式横向滚动，不把气泡撑破
-          <span
-            key={index}
-            style={{
-              display: "block",
-              textAlign: "center",
-              margin: "4px 0",
-              overflowX: "auto",
-              overflowY: "hidden",
-            }}
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
-        ) : (
-          <span key={index} dangerouslySetInnerHTML={{ __html: html }} />
-        );
+        return <MathSegment key={index} html={html} display={seg.kind === "blockMath"} />;
       })}
     </>
+  );
+}
+
+/**
+ * 抽成独立组件是为了能在这里调 `useMemo`——`MathText` 是在 `.map()` 里逐段拼出
+ * 公式，不能在循环体内直接调 Hook（违反 Hooks 规则）；每个 segment 是它自己的
+ * 组件实例，`useMemo` 才能合法地按段稳定 `{ __html }` 对象引用。字面量在每次
+ * 渲染新建对象，React 19 按对象身份判断要不要重写 innerHTML，用户输入流式追加
+ * 文本时已经渲染好的公式会被反复拆了重建，见 `icon-markup.ts` 顶部注释的同款根因。
+ */
+function MathSegment(props: { html: string; display: boolean }) {
+  const markup = useMemo(() => ({ __html: props.html }), [props.html]);
+  return props.display ? (
+    // 块级公式自成一行居中；宽公式横向滚动，不把气泡撑破
+    <span
+      style={{
+        display: "block",
+        textAlign: "center",
+        margin: "4px 0",
+        overflowX: "auto",
+        overflowY: "hidden",
+      }}
+      dangerouslySetInnerHTML={markup}
+    />
+  ) : (
+    <span dangerouslySetInnerHTML={markup} />
   );
 }

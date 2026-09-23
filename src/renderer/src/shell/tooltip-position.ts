@@ -54,3 +54,18 @@ export function placeTooltip(
   const left = Math.min(Math.max(TOOLTIP_EDGE, centered), maxLeft);
   return { top, left, visible: true };
 }
+
+/**
+ * tooltip 打开期间，指针是否已经离开触发它的按钮——用于兜住 `mouseleave` 收不到
+ * 的场景（指针从按钮直接滑进 `-webkit-app-region: drag` 区，或快速甩出窗口）。
+ * 边界算「在框内」（`<=`/`>=`），不是「严格小于」：指针停在按钮边缘像素上不该
+ * 被判成已经离开。
+ */
+export function isPointerOutsideAnchor(
+  point: { x: number; y: number },
+  anchor: TooltipAnchorBox,
+): boolean {
+  return (
+    point.x < anchor.left || point.x > anchor.right || point.y < anchor.top || point.y > anchor.bottom
+  );
+}

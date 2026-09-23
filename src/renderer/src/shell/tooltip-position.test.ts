@@ -5,7 +5,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { TOOLTIP_EDGE, TOOLTIP_GAP, placeTooltip } from "./tooltip-position.ts";
+import { TOOLTIP_EDGE, TOOLTIP_GAP, isPointerOutsideAnchor, placeTooltip } from "./tooltip-position.ts";
 
 const anchor = (
   over: Partial<{ top: number; bottom: number; left: number; right: number }> = {},
@@ -78,5 +78,25 @@ describe("placeTooltip —— 锚点出视口就关门", () => {
       viewport,
     );
     assert.equal(placed.visible, false);
+  });
+});
+
+describe("isPointerOutsideAnchor —— IconButton tooltip 的 pointermove 出界兜底", () => {
+  const box = anchor(); // top 600 / bottom 620 / left 300 / right 360
+
+  test("框内：不算离开", () => {
+    assert.equal(isPointerOutsideAnchor({ x: 330, y: 610 }, box), false);
+  });
+
+  test("边缘像素算框内，不算离开（<=/>= 而不是严格小于）", () => {
+    assert.equal(isPointerOutsideAnchor({ x: 300, y: 600 }, box), false);
+    assert.equal(isPointerOutsideAnchor({ x: 360, y: 620 }, box), false);
+  });
+
+  test("左右上下越界都算离开", () => {
+    assert.equal(isPointerOutsideAnchor({ x: 299, y: 610 }, box), true);
+    assert.equal(isPointerOutsideAnchor({ x: 361, y: 610 }, box), true);
+    assert.equal(isPointerOutsideAnchor({ x: 330, y: 599 }, box), true);
+    assert.equal(isPointerOutsideAnchor({ x: 330, y: 621 }, box), true);
   });
 });

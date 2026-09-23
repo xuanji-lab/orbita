@@ -10,7 +10,7 @@
  * `highlighterReady` resolve 后 setState 触发一次重渲上色；就绪之后
  * `highlightBlock` 同步返回（缓存命中），流式增长不再闪无色帧。
  */
-import { useEffect, useState, isValidElement } from "react";
+import { useEffect, useMemo, useState, isValidElement } from "react";
 import type { ReactNode } from "react";
 import { highlightBlock, highlighterReady } from "./highlight";
 
@@ -35,8 +35,13 @@ function FenceBlock(props: { lang: string; text: string }) {
     void highlighterReady.then(() => setWarm(true));
   }, []);
   const html = highlightBlock(props.text, props.lang);
-  if (html === null) return <PlainFence text={props.text} />;
-  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+  // useMemo 按 html 字符串稳定 { __html } 对象引用：字面量在每次渲染新建对象，
+  // React 19 按对象身份判断要不要重写 innerHTML，流式追加文本时同一段已经高亮完的
+  // 代码块会被反复拆了重建（选不中、复制中断），见 icon-markup.ts 顶部注释的同款根因。
+  // useMemo 必须无条件调用（Hooks 规则），所以放在提前 return 之前。
+  const markup = useMemo(() => (html === null ? null : { __html: html }), [html]);
+  if (markup === null) return <PlainFence text={props.text} />;
+  return <div dangerouslySetInnerHTML={markup} />;
 }
 
 /** 无色兜底：语言未预置 / 引擎未就绪。结构与 shiki 输出对齐（pre > code），

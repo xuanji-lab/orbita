@@ -3,7 +3,12 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { api } from "./api.ts";
 import { resolveTheme } from "./theme-resolve.ts";
+import { watchWindowActivity } from "./shell/window-activity.ts";
 import "./styles.css";
+
+// 窗口不在前台（失焦 / 标签页隐藏）时暂停持续动效（styles.css 的
+// `[data-window-inactive="true"]` 规则）——见 window-activity.ts 的理由。
+watchWindowActivity();
 
 /*
  * 冷启动第一帧：主进程已经把用户选的主题塞进 --orbita-theme=（preload 的

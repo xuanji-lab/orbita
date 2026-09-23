@@ -6,7 +6,7 @@ not a dashboard, not a cockpit. Opening the app lands directly in Agent mode, wh
 slogan and one input box carry the entire home screen. Multi-agent complexity is deliberately
 hidden inside the (not yet shipped) orchestration mode.
 
-The interface is built from **frosted-glass cards with unified, stacking translucency**. The whole
+The interface is built from **translucent cards with a unified, stacking alpha ladder**. The whole
 app is one large semi-transparent card — the boundary of the application, sidebar included. The
 content pane floats inside it with an even gap on all four sides, and its left edge is what sets the
 sidebar's width; the sidebar itself has no surface, sitting directly on the boundary. The input box
@@ -144,8 +144,10 @@ off-white wash) plus two functional gradients in the app (a radial accent glow o
 and the mark gradient on the legacy logo block). Depth comes from translucency and hairlines, not
 from colour.
 
-**Transparency and blur.** Blur is *only* for surfaces: `blur(20px)` over a single `--glass-bg`.
-One alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
+**Transparency.** No blur (2026-09-23): translucency comes from a single `--glass-bg` alpha, stacked
+by nesting rather than blurred behind — a moving pixel anywhere on screen used to force the GPU to
+recomposite the whole window every frame, so the depth cue now comes from compositing alone. One
+alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
 `.60 / .84 / .936` and dark and black `.70 / .91 / .973`. The themes are deliberately unequal —
 **dark and black block more than light** — because light text needs a settled ground and a bleeding
 wallpaper costs a dark ground its whole promise. Dark and black share one glass recipe: **the tint
@@ -154,6 +156,10 @@ ladder always climbs from the page ground toward the panel colour.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
+**Floating layers** (menus, popovers — the ones that portal on top of arbitrary content) are the one
+exception: they skip the glass ladder for a solid `--color-bg-panel` fill, a hairline `--glass-border`,
+and `--shadow-popover` — without blur behind them, a translucent float would let whatever text sits
+under it bleed straight through and become unreadable.
 
 **Corners and borders.** 8px base radius: 4/6/8/10px steps, a literal 14px for the user bubble, and
 `999px` only for true circles (dots, spinners, the round send button). **Radius follows the surface**:
@@ -176,7 +182,7 @@ one flat grey, with failure red as the only exception. Body text never competes 
 A run of same-type tool calls gathers under a plain verb header (`读取 · × 4`): it lives expanded
 while the turn runs, and folds itself away — every group, every time, without memory — the moment
 the turn settles; a failed run keeps a red glyph on the header so failure never folds away silently.
-Solid panels (dialogs, drawers) are white with a hairline and a heavier shadow.
+Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a heavier shadow.
 
 **Shadows.** Four steps, all cool-grey and soft: `--shadow-border` (a 1px inner hairline),
 `--shadow-composer` (cards and the input box), `--shadow-popover` (menus, card hover),
@@ -200,6 +206,11 @@ one travel. Continuous motion exists only for states in progress, and only in tw
 (thinking, tool, tool group) whose state is still in progress: the head breathes at secondary,
 and stops the moment the state settles. Beyond those two there is no idle
 animation, no bounce, no parallax; `prefers-reduced-motion` collapses everything to 0.01ms.
+Continuous motion also pauses whenever the window is not in front (unfocused or hidden) — a moving
+pixel anywhere forces the whole window to recomposite every frame, so a spinner nobody is looking at
+still costs GPU. The task row's "running" mark is a static `circle-dot`, not a spinner: it is the one
+continuous animation that would otherwise sit on screen unattended, for a background session the user
+isn't currently watching.
 
 ## Implementation rules
 
@@ -230,7 +241,7 @@ component instead of duplicating it.
 - **Lucide, and only Lucide.** No runtime package: `assets/icons/lucide/*.svg` are imported at build
   time with Vite's `?raw` and inlined by `src/renderer/src/shell/Icon.tsx`. `design/icons/lucide/`
   holds the full upstream set (2,034 SVGs, `lucide-static@1.33.0`, ISC licence); this system copies a
-  working subset into `assets/icons/lucide/` (84 files), of which `Icon.tsx` currently registers 70 —
+  working subset into `assets/icons/lucide/` (85 files), of which `Icon.tsx` currently registers 71 —
   no CDN, no substitution, no hand-drawn SVG.
 - **Sizes**: 16px in the rail, headers and dialogs; 13–14px in chips, list rows and card headers;
   11–12px for inline affordances (locks, filters, counts). **Stroke weight** 1.8 in lists and trees,
@@ -239,7 +250,7 @@ component instead of duplicating it.
   thinking glyph, the accent inside the send button. The `Icon` component inlines the SVG so this works.
 - **Recurring vocabulary**: `bot` = agent mode, `workflow` = orchestration, `folder` = a workspace,
   `plus` = new task, `folder-plus` = new workspace, `gauge` = usage, `archive` = archived tasks,
-  `git-branch` = a worktree, and the task-row status slot — `loader-circle` running,
+  `git-branch` = a worktree, and the task-row status slot — `circle-dot` running,
   `check` finished, `triangle-alert` failed, empty when idle,
   `lock`/`lock-open` = read-only, `brain` = thinking, `terminal`/`wrench`/`file-text` = tool calls,
   `hat-glasses` = anonymous chat, `panel-left`/`panel-right` = the two sidebars, `arrow-up` = send.
@@ -257,7 +268,7 @@ component instead of duplicating it.
 | `tokens/fonts.css` | `@font-face` for Literata, Manrope, Source Han Serif/Sans SC. |
 | `tokens/spacing.css` | Space scale, radii, control and row heights, layout widths. |
 | `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (all three themes). |
-| `tokens/glass.css` | The single glass alpha, blur, border, and the `.glass-card` recipe. |
+| `tokens/glass.css` | The single glass alpha, border, and the `.glass-card` recipe. |
 | `tokens/motion.css` | Durations, easings, the three composed transitions. |
 | `guidelines/*.card.html` | 18 foundation specimen cards (Colors, Type, Spacing, Brand). |
 | `components/core/` | `Button`, `IconButton`, `Badge`, `TextField`, `SelectField`, `Modal`, `Icon`. |
@@ -267,7 +278,7 @@ component instead of duplicating it.
 | `components/composer/` | `Composer` — one glass box, identical on both pages. |
 | `ui_kits/orbita-desktop/` | Click-through recreation of the desktop app. See its `README.md`. |
 | `assets/fonts/` | Literata, Manrope, Source Han Serif SC Medium, Source Han Sans SC Regular (+ OFL). |
-| `assets/icons/lucide/` | The 84 Lucide glyphs copied in (`Icon.tsx` currently registers 70), plus the ISC licence. |
+| `assets/icons/lucide/` | The 85 Lucide glyphs copied in (`Icon.tsx` currently registers 71), plus the ISC licence. |
 | `SKILL.md` | Agent Skills front matter, for use outside this project. |
 
 `components/**/*.jsx` — together with each one's `.d.ts`, `.prompt.md` and `@dsCard` html — are
@@ -298,7 +309,7 @@ source does not define them.
 
 | 用途 | 库 | 状态 |
 | --- | --- | --- |
-| 通用操作图标（按钮/菜单/状态） | 无运行时依赖——`Orbita Design System/assets/icons/lucide/*.svg` 经 Vite `?raw` 静态导入，`src/renderer/src/shell/Icon.tsx` 内联注入 | 在用：70 个图标登记在 `Icon.tsx` 的 `ICONS` 表（`assets/icons/lucide/` 目录本身拷了 84 个，未登记的不进产物） |
+| 通用操作图标（按钮/菜单/状态） | 无运行时依赖——`Orbita Design System/assets/icons/lucide/*.svg` 经 Vite `?raw` 静态导入，`src/renderer/src/shell/Icon.tsx` 内联注入 | 在用：71 个图标登记在 `Icon.tsx` 的 `ICONS` 表（`assets/icons/lucide/` 目录本身拷了 85 个，未登记的不进产物） |
 | 文件、文件夹类型图标（文件树/diff/tab） | [@react-symbols/icons](https://react-symbols.pheralb.dev)（开源文件类型图标 400+，Miguel Solorio） | 已调研入册，**待右栏文件系统 slice 引入**（先调研再新增依赖，调研结论 2026-08-22） |
 
 ### UI 组件体系

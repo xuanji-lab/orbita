@@ -43,6 +43,20 @@
 }
 
 /*
+ * Menu 弹层额外改实色面板（去 blur 的连带改动）：Menu.tsx 是这四处浮层里唯一真正
+ * 压在任意内容之上的——它 portal 到 body、`position: fixed` 按锚点定位，随时可能
+ * 浮在聊天正文、侧栏或任何东西上方。没有 blur 时半透明浮层会让背后的字直接漏出来、
+ * 不可读，所以单独给它一层实色底。排队条 / 收尾确认卡 / 审批条不用这条：它们渲染在
+ * Pane 的 footer 网格行里，与 transcript 的滚动区是不重叠的两个 grid track——
+ * transcript 会让位缩短而不是被它们盖住，背后本来就没有正文，维持原来的纯玻璃即可。
+ * `--color-bg-panel` 三个主题都已定义，边框仍是 `--glass-border`，保持与玻璃卡同一圈
+ * 发丝描边。
+ */
+.menu-panel {
+  background: var(--color-bg-panel);
+}
+
+/*
  * SessionCard 不属于「浮层」——静止态就是 --shadow-composer，hover 才抬一级到
  * --shadow-popover（设计系统 *Hover, press, disabled*：卡片 hover 只抬阴影，不挪位置、
  * 不变色），所以不用 `.glass-float`，单独一条 hover 规则。
@@ -120,6 +134,72 @@
 .chip[data-active="true"] {
   background: var(--color-mode-active-bg);
   color: var(--color-mode-active-fg);
+}
+
+/*
+ * composer 底栏芯片群（窄槽修复）：复现——宽侧栏 + 右栏都打开时主槽被压到
+ * ~240px，四个芯片（工作区/权限/模型/思考档）+ 用量环互相挤压重叠。
+ *
+ * 结构：这一层只管「能不能缩」，不管缩到多窄——`flex: 1 1 auto` 让它先于
+ * Composer.tsx 里紧跟着的发送键让路（发送键 `flex: 0 0 auto` 不缩），
+ * `overflow: hidden` 兜底：真缩不下时裁掉多出来的部分，而不是把发送键挤出可见区。
+ *
+ * `.composer-bottom-bar .chip` 的 `min-width: 0`**只能局部生效，不能写成全局
+ * `.chip`**（2026-09-23 验收发现的真回归）：Chip 作为 flex 子项默认拿浏览器给的
+ * 隐式 `min-width: auto`（撑住内容宽度，装不下就让容器溢出而不是自己收缩）；
+ * 侧栏筛选行（`Sidebar.tsx` 的 `filterRowRef`）靠的正是这个「宁可溢出也不缩」的
+ * 默认行为——`nextFilterRowMode`（`filter-row-compact.ts`）用 `row.scrollWidth`
+ * 在**展开态**量「四个带字 chip 的真实自然宽度」，`scrollWidth` 之所以可信，是因为
+ * chip 此时不会被 flex-shrink 偷偷压小、也不会被 `overflow: hidden` 吃掉真实尺寸
+ * （它只裁视觉，不裁量出来的 scrollWidth）。一旦全局给 `.chip` 松了 `min-width: 0`，
+ * 侧栏筛选行的 chip 在还没到「真的很窄」时就已经被 flex-shrink 悄悄压小、文字提前走
+ * 省略号，`scrollWidth` 测出来的「自然宽度」被压低成一个偏小的数——于是同样
+ * 400px 的侧栏宽度，判定基准变小，比较 `containerWidth < fullWidth` 提前触发，
+ * 筛选行过早整体切成纯图标态，即使宽度明明还够显示文字。composer 底栏没有这类
+ * JS 量宽度的逻辑（全走 CSS 容器查询 + overflow:hidden 兜底），允许它的 chip 收缩
+ * 正是这里要的效果，只是不能外溢到别的消费者。
+ *
+ * 断点用实际内容量出来（都按 13px control 字号 + 现有 padding/gap 估算）：
+ *   - 展开态：工作区芯片（图标12+gap5+文字~40+gap5+chevron11+padding16）≈89px、
+ *     权限芯片固定 84px、模型芯片（无图标，文字~90+chevron11+padding16）≈120px
+ *     起步（还会随模型名变长）、思考档固定 84px、用量环 ≈30px、4 个 gap ≈24px——
+ *     全展开至少要 ~430px，装不下就已经开始互相挤。
+ *   - 紧凑态（只留图标）：图标 12 + gap 5 + chevron 11 + padding 16 ≈ 44px 一个，
+ *     工作区与权限各省 ~40–45px，留给模型名与思考档。
+ * 取 420px 做断点——比展开态最小需求（~430px）略窄一点，容器一旦装不下当前展开
+ * 内容就立刻收，不留一段「即将重叠」的中间态。
+ */
+.composer-bottom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.composer-bottom-bar .chip {
+  min-width: 0;
+}
+
+@container (max-width: 420px) {
+  /* 工作区与权限芯片只留图标，文字仍在 title 里（Chip 本来就总是设 title） */
+  .composer-bottom-bar .chip-scope .chip-label,
+  .composer-bottom-bar .chip-mode .chip-label {
+    display: none;
+  }
+  /* 权限芯片的 fixedWidth 是内联 min-width（84px），紧凑态不再需要留这么宽，
+     要盖过内联样式只能 !important */
+  .composer-bottom-bar .chip-mode {
+    min-width: 0 !important;
+  }
+}
+
+/* 模型芯片：名字可能很长，随时都允许省略号截断，不等断点（compact 无关，随时生效） */
+.composer-bottom-bar .chip-model {
+  flex: 1 1 auto;
+  min-width: 32px;
 }
 
 /*
@@ -303,8 +383,6 @@ body {
   background: var(--glass-bg);
   border: 0;
   border-radius: 0;
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  backdrop-filter: blur(var(--glass-blur));
   overflow: hidden;
 }
 
@@ -416,8 +494,6 @@ body {
   border: 0;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-composer);
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  backdrop-filter: blur(var(--glass-blur));
 }
 
 /*
@@ -1020,11 +1096,23 @@ body {
   background: transparent;
 }
 
-/* lucide SVG 内联后由外层 span 决定尺寸与描边；CSS 覆盖 SVG 的 presentation attribute */
+/*
+ * lucide SVG 内联后由外层 span 决定尺寸与描边；CSS 覆盖 SVG 的 presentation attribute。
+ *
+ * pointer-events: none（保险）：图标是装饰（span 恒 aria-hidden），Icon 组件没有
+ * onClick，需要点击语义的地方都是把 Icon 放进父级按钮（IconButton / Chip 等）—
+ * 点在图标上时按下的目标理应始终是那个按钮本身，不是图标自己的 svg/path 节点。
+ * grep 确认过 `.orbita-icon`/`svg` 在渲染层没有任何依赖它接收指针事件的地方
+ * （`.pv-fetch-search .orbita-icon` 只是绝对定位一个装饰性搜索图标，本身也不该挡
+ * 输入框的点击——这条规则顺带修掉那个潜在的小回归）。这样即使 iconMarkup 的缓存
+ * 将来又被绕开、SVG 又被替换，点击也不会再丢：pointerdown 落在按钮上而不是会被
+ * 摘掉重建的图标节点上。
+ */
 .orbita-icon {
   display: inline-flex;
   flex: 0 0 auto;
   line-height: 0;
+  pointer-events: none;
 }
 
 .orbita-icon svg {
@@ -1357,6 +1445,23 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/*
+ * 窗口不在前台（失焦 / 标签页隐藏，`window-activity.ts` 判定并写在
+ * `document.documentElement` 上）时暂停持续动效——去 blur 之后 GPU 数字降了一截，
+ * 但只要屏上还有一处在动，窗口每帧仍要整窗重新合成（vibrancy）。
+ *
+ * 只点名持续动效（`.anim-continuous` 是 orbita-spin / mcp-spin 的标记类，
+ * `.orbita-breath` 已经是自己的类），不写成全局 `*` 选择器：`right-panel-in` /
+ * `right-panel-fade` 是一次性 `animation`（入场用，120–220ms），失焦这一刻正好
+ * 播放到一半的话，`animation-play-state: paused` 会把它定在半途，抬手就是一处
+ * 错位的面板；`home-travel` 那类是 `transition` 不是 `animation`，
+ * `animation-play-state` 本来就管不到它，不需要额外排除。
+ */
+[data-window-inactive="true"] .anim-continuous,
+[data-window-inactive="true"] .orbita-breath {
+  animation-play-state: paused !important;
 }
 
 /*

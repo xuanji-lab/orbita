@@ -1,9 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { placeTooltip } from "./tooltip-position.ts";
+import { isPointerOutsideAnchor, placeTooltip } from "./tooltip-position.ts";
 
 /** 悬停到 tooltip 出现的延迟（150–250ms 的中值）：太快手抖就闪，太慢感知等于没有 */
 const TOOLTIP_DELAY_MS = 200;
+/**
+ * 打开后的最长存活时间，超时自动收——最后一道兜底。指针滑进侧栏顶 / 右栏顶行
+ * 这类 `-webkit-app-region: drag` 区时，连 `pointermove` 都收不到（拖拽区不派发
+ * 给页面），`mouseleave`/`blur` 也可能因为窗口本身没失焦而不触发；不给一个绝对
+ * 上限的话 tooltip 就会一直挂在那（用户反馈过「Mark this task done」卡住不走）。
+ */
+const TOOLTIP_AUTO_CLOSE_MS = 5000;
 
 /**
  * 纯图标控件（设计系统 `components/core/IconButton.jsx` 的移植）。
@@ -17,6 +24,12 @@ const TOOLTIP_DELAY_MS = 200;
  * 定位走 portal + fixed——侧栏和面板是 overflow:hidden，::after 方案会被裁掉。
  * 这是对设计系统的一处偏离：readme 说「不发明 Tooltip 组件，icons get their meaning
  * from `title`」，但原生延迟不可调；IconButton 是所有纯图标控件的收口，改一处处处生效。
+ *
+ * **收的兜底（2026-09-23）**：只认 `mouseleave`/`blur`/Esc 收不住——指针从按钮直接
+ * 滑进拖拽区（侧栏顶、右栏顶行 `.titlebar`）或快速甩出窗口时收不到 `mouseleave`，
+ * tooltip 会一直挂着。打开期间再挂三层：document 级 `pointermove` 判出界即收（只对
+ * hover 打开的生效，见 `openedByPointerRef`）、`window` 的 `blur` 收、
+ * `TOOLTIP_AUTO_CLOSE_MS` 超时自收。三者只在 `tooltipOpen` 为真时挂，关掉就摘。
  */
 export function IconButton(props: {
   label: string;
@@ -42,6 +55,13 @@ export function IconButton(props: {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const delayRef = useRef<number | null>(null);
+  /**
+   * 这次打开是 hover 触发还是键盘 `:focus-visible` 触发——pointermove 出界规则
+   * 只对前者生效（键盘用户的指针可能停在屏幕任何地方，出界判定对它没有意义）。
+   * hover 路径在 `openTooltipWithDelay` 里置 true，键盘路径在 `onFocus` 里置 false，
+   * 各自在自己触发时点亮，不需要在 close 时复位。
+   */
+  const openedByPointerRef = useRef(false);
   const box = props.size ?? 32;
   const disabled = props.disabled === true;
   const active = props.active === true;
@@ -57,6 +77,7 @@ export function IconButton(props: {
   };
   const openTooltipWithDelay = (): void => {
     if (!tooltipEnabled) return;
+    openedByPointerRef.current = true;
     if (delayRef.current !== null) window.clearTimeout(delayRef.current);
     delayRef.current = window.setTimeout(() => setTooltipOpen(true), TOOLTIP_DELAY_MS);
   };
@@ -75,6 +96,33 @@ export function IconButton(props: {
       if (delayRef.current !== null) window.clearTimeout(delayRef.current);
     };
   }, []);
+
+  // 三道兜底，只在打开期间挂、关掉就摘（不常驻）：
+  //  - document 级 pointermove：指针出了按钮的框就收，但只认 hover 打开的
+  //    （openedByPointerRef）——键盘聚焦打开时指针可能根本不在按钮附近
+  //  - window blur：窗口整体失焦，不管是怎么打开的都收
+  //  - 定时器：TOOLTIP_AUTO_CLOSE_MS 后强制收，拖拽区里连 pointermove 都收不到，
+  //    这是最后一道
+  useEffect(() => {
+    if (!tooltipOpen) return;
+    const onPointerMove = (event: PointerEvent): void => {
+      if (!openedByPointerRef.current) return;
+      const button = buttonRef.current;
+      if (button === null) return;
+      if (isPointerOutsideAnchor({ x: event.clientX, y: event.clientY }, button.getBoundingClientRect())) {
+        closeTooltip();
+      }
+    };
+    const onWindowBlur = (): void => closeTooltip();
+    document.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("blur", onWindowBlur);
+    const autoCloseTimer = window.setTimeout(closeTooltip, TOOLTIP_AUTO_CLOSE_MS);
+    return () => {
+      document.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("blur", onWindowBlur);
+      window.clearTimeout(autoCloseTimer);
+    };
+  }, [tooltipOpen]);
 
   // 打开后先以透明渲染一帧，量出按钮与 tooltip 的实际几何再落位——避免先出现在左上角再跳
   useLayoutEffect(() => {
@@ -116,7 +164,11 @@ export function IconButton(props: {
         onFocus={(event) => {
           // 键盘聚焦立即显示（不等 200ms）：Tab 路过就该听得到这颗键是什么。
           // 只认 :focus-visible——鼠标点下也会给焦点，不认的话点过的按钮一直挂着 tooltip
-          if (tooltipEnabled && event.target.matches(":focus-visible")) setTooltipOpen(true);
+          if (tooltipEnabled && event.target.matches(":focus-visible")) {
+            // 键盘打开：pointermove 出界规则不认这次打开（见 openedByPointerRef 的注释）
+            openedByPointerRef.current = false;
+            setTooltipOpen(true);
+          }
         }}
         onBlur={closeTooltip}
         className={`quiet-control${props.variant === "soft" ? " icon-btn-soft" : ""}${props.className === undefined ? "" : ` ${props.className}`}`}

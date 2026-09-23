@@ -28,13 +28,18 @@ export function Chip(props: {
   compact?: boolean;
   onClick?: () => void;
   children: React.ReactNode;
+  /**
+   * 调用方追加的 class（如 composer 底栏窄槽下用容器查询收起文字的芯片，
+   * 见 styles.css 的 `.composer-bottom-bar`），与内建的安静控件配方叠加。
+   */
+  className?: string;
 }) {
   const disabled = props.disabled === true;
   const active = props.active === true;
   return (
     <button
       type="button"
-      className="quiet-control chip"
+      className={`quiet-control chip${props.className === undefined ? "" : ` ${props.className}`}`}
       title={props.title}
       aria-pressed={props.onClick === undefined ? undefined : active}
       // 视觉上的「选中」与是否可点无关（不可点的 Chip 也可能是恒亮的当前态，如
@@ -63,7 +68,9 @@ export function Chip(props: {
     >
       {props.icon !== undefined && <Icon name={props.icon} size={12} />}
       {props.compact !== true && (
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+        // chip-label：composer 底栏窄槽下按容器查询隐藏（styles.css），文字退到上面
+        // 的 title 里；这里的 minWidth:0 与省略号截断本身与宽窄无关，一直生效
+        <span className="chip-label" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
           {props.children}
         </span>
       )}

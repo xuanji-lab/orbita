@@ -97,7 +97,12 @@ export function Composer(props: {
         }}
       />
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        {props.bottomSlot}
+        {/*
+          芯片群包一层：flex:1 1 auto + min-width:0 让它先于发送键让路，
+          overflow:hidden 兜底——窄到连图标态都装不下时裁掉多出来的，而不是把
+          发送键挤出可见区（`.composer-bottom-bar` 的容器查询规则见 styles.css）。
+        */}
+        <div className="composer-bottom-bar">{props.bottomSlot}</div>
         <button
           type="button"
           className="btn-accent"

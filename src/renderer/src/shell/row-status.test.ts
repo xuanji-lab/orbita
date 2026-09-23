@@ -5,12 +5,12 @@ import { rowStatusIcon } from "./row-status.ts";
 const none = { running: false, failed: false, pinned: false };
 
 describe("rowStatusIcon", () => {
-  it("运行中转圈，颜色是 accent", () => {
+  it("运行中画静态实心点，颜色是 accent，不转圈", () => {
     deepStrictEqual(rowStatusIcon({ ...none, running: true }), {
-      icon: "loader-circle",
+      icon: "circle-dot",
       tone: "var(--color-accent)",
       label: "Running",
-      spin: true,
+      spin: false,
     });
   });
 
@@ -30,7 +30,7 @@ describe("rowStatusIcon", () => {
   it("正在跑压过置顶：正在发生的事优先", () => {
     strictEqual(
       rowStatusIcon({ running: true, failed: false, pinned: true })?.icon,
-      "loader-circle",
+      "circle-dot",
     );
   });
 
