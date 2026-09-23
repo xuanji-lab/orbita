@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   THINKING_LEVELS,
   THINKING_LEVEL_LABELS,
+  clampThinkingLevel,
   isThinkingLevel,
   parseThinkingLevel,
   thinkingLevelLabel,
@@ -52,5 +53,26 @@ describe("THINKING_LEVEL_LABELS", () => {
       assert.ok(THINKING_LEVEL_LABELS[level].label.length > 0);
       assert.equal("hint" in THINKING_LEVEL_LABELS[level], false);
     }
+  });
+});
+
+describe("clampThinkingLevel —— 与 pi 的 clampThinkingLevel 同规则（先往深、再往浅）", () => {
+  it("支持就原样", () => {
+    assert.equal(clampThinkingLevel("high", ["low", "high", "max"]), "high");
+  });
+
+  it("不支持先往深找：glm 家族没有 medium，medium 落 high 而不是 low", () => {
+    assert.equal(clampThinkingLevel("medium", ["low", "high", "max"]), "high");
+    assert.equal(clampThinkingLevel("minimal", ["low", "high", "max"]), "low");
+  });
+
+  it("更深处没有才往浅找：只到 high 的模型要 max，落 high", () => {
+    assert.equal(clampThinkingLevel("max", ["off", "minimal", "low", "medium", "high"]), "high");
+  });
+
+  it("支持集未知（缺席 / 空）不替 pi 做主，原样返回", () => {
+    assert.equal(clampThinkingLevel("xhigh", undefined), "xhigh");
+    assert.equal(clampThinkingLevel("xhigh", null), "xhigh");
+    assert.equal(clampThinkingLevel("xhigh", []), "xhigh");
   });
 });

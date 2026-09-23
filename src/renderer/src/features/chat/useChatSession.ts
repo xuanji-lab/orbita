@@ -930,8 +930,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, [sessionId]);
 
   /**
-   * 启动恢复（A-0 复验 bug A）：上次退出前用的档/模型存在 settings.lastUsed，
-   * 挂载后恢复一次——只影响「还没打开会话」的新任务槽；打开旧会话时
+   * 启动恢复（A-0 复验 bug A）：上次退出前用的权限档/模型存在 settings.lastUsed，
+   * 挂载后恢复一次（思考档不在其列：重启落回模型默认档，wafo 2026-09-23）——
+   * 只影响「还没打开会话」的新任务槽；打开旧会话时
    *  openSession 会以那条会话 meta 的值为准覆写，后者赢。
    */
   const restoredRef = useRef(false);
@@ -944,7 +945,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         const last = settings.lastUsed;
         if (last === undefined) return;
         if (last.mode !== undefined) setMode(last.mode);
-        if (last.thinkingLevel !== undefined) setThinkingLevelState(last.thinkingLevel);
         if (last.providerId !== undefined && last.modelId !== undefined) {
           setModel({ providerId: last.providerId, modelId: last.modelId });
         }
@@ -1452,11 +1452,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
 
   const changeThinkingLevel = useCallback(
     (next: ThinkingLevel) => {
-      // 同 changeMode 的整条规矩：本地即设（UI 即时）→ lastUsed 跟随 → 记在会话名下
-      // （跑着时改不进 meta，排队卡投递时要拿这一档）→ 闲着才落 meta。下一轮 submit
-      // 自带新档——轮中改不影响当前轮（pi 在轮启动时已快照档位，与换模型同一条语义）
+      // 同 changeMode 的整条规矩：本地即设（UI 即时）→ 记在会话名下（跑着时改不进
+      // meta，排队卡投递时要拿这一档）→ 闲着才落 meta。下一轮 submit 自带新档——轮中
+      // 改不影响当前轮（pi 在轮启动时已快照档位，与换模型同一条语义）。
+      // **不写 lastUsed**：思考档不跨重启，重启落回模型默认档（wafo 2026-09-23）
       setThinkingLevelState(next);
-      void api.settings.set({ lastUsed: { thinkingLevel: next } }).catch(() => undefined);
       const id = sessionRef.current;
       if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
       engine.rememberSessionIntent(id, { thinkingLevel: next });

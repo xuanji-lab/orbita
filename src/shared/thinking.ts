@@ -8,15 +8,15 @@
  * 深度、耗时与 token 曲线。这一刀把它变成 orbita 自己的一等旋钮（与 mode /
  * model 同类：会话里选、meta 里存、开轮载荷里带）。
  *
- * 档位因模型而异（目录实测：glm-5.3 只有 low/high/max，claude 系 minimal→max
- * 而 off 关不掉）——词汇表不裁剪、菜单按模型真实支持集显示，见
+ * 档位因模型而异（官方档位表：glm-5.3 只有 low/high/max；claude 按型号——fable 系
+ * 关不掉思考，opus-4-6 没有 xhigh）——词汇表不裁剪、菜单按模型真实支持集显示，见
  * BuiltinModel.supportedThinkingLevels。
  */
 
 /** 思考档词汇表与 pi 同源：pi 认几档我们认几档（7 档，off…max）。 */
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 
-/** pi 全集（不收窄——曾被收窄到 5 档，后被目录数据推翻：glm-5.3 只有 low/high/max，claude 系有 xhigh/max 而 off 关不掉，档位本来就因模型而异，裁剪词汇表只会递增假选项） */
+/** pi 全集（不收窄——曾被收窄到 5 档，后被目录数据推翻：glm-5.3 只有 low/high/max，claude 各型号的 off / xhigh 有无各不相同，档位本来就因模型而异，裁剪词汇表只会递增假选项） */
 export type ThinkingLevel = PiThinkingLevel;
 
 /** 词汇表顺序（浅 → 深）。菜单不直接用它写死，而是按模型的 supportedThinkingLevels 显示真集；这里只作「完全未知时的全量兑底」与顺序真源。 */
@@ -75,6 +75,28 @@ export function thinkingLevelLabel(level: ThinkingLevel, modelId: string | null 
  */
 export function parseThinkingLevel(raw: unknown): ThinkingLevel {
   return isThinkingLevel(raw) ? raw : "medium";
+}
+
+/**
+ * 把档位夹进某模型的支持集。**与 pi 的 `clampThinkingLevel`（pi-ai `models.ts`）同一条
+ * 规则**：支持就原样；否则先往深找、再往浅找——界面上算出的档与 pi 真正发出去的档
+ * 因此是同一档（例：glm-5.3 只有 low/high/max，medium 落 high 而不是 low）。
+ *
+ * `supported` 缺席或为空 = 支持集未知：原样返回，不替 pi 做主（开轮后由 thinking
+ * 事件纠真，同思考档菜单「未知就全量显示」的纪律）。
+ */
+export function clampThinkingLevel(
+  level: ThinkingLevel,
+  supported: readonly ThinkingLevel[] | null | undefined,
+): ThinkingLevel {
+  if (supported == null || supported.length === 0 || supported.includes(level)) return level;
+  const at = THINKING_LEVELS.indexOf(level);
+  const deeper = THINKING_LEVELS.slice(at).find((candidate) => supported.includes(candidate));
+  if (deeper !== undefined) return deeper;
+  const shallower = THINKING_LEVELS.slice(0, at)
+    .reverse()
+    .find((candidate) => supported.includes(candidate));
+  return shallower ?? supported[0] ?? level;
 }
 
 /** 逐字校验：不认识就 false（不兑任何默认值——兑底是 parse 的事，守卫只回答「是不是」） */
