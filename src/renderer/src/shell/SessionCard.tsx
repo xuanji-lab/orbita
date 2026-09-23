@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Icon, type IconName } from "./Icon";
 
 /**
@@ -22,15 +21,13 @@ export function SessionCard(props: {
   onClick?: () => void;
   style?: React.CSSProperties;
 }) {
-  const [hover, setHover] = useState(false);
   const items = props.items ?? [];
   const slots = props.slots ?? 3;
   return (
     <button
       type="button"
+      className="glass-card session-card"
       onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -38,12 +35,6 @@ export function SessionCard(props: {
         flex: 1,
         minWidth: 0,
         padding: "var(--space-3)",
-        border: "1px solid var(--glass-border)",
-        borderRadius: "var(--radius-xl)",
-        background: "var(--glass-bg)",
-        boxShadow: hover ? "var(--shadow-popover)" : "var(--shadow-composer)",
-        WebkitBackdropFilter: "blur(var(--glass-blur))",
-        backdropFilter: "blur(var(--glass-blur))",
         fontFamily: "var(--font-family-base)",
         textAlign: "left",
         cursor: "pointer",

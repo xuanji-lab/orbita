@@ -6,8 +6,8 @@
 
 /*
  * 「选择项」的 hover 与选中底色：侧栏会话行、设置 tab、菜单项共用——**它们是同一件事**。
- * 规则本身（三个状态各自的底 / 文字 / 字重）在 `shell/selection.ts`，那里是唯一的实现；
- * 这里只定值。
+ * 规则本身（三个状态各自的底 / 文字 / 字重）在下面「控件配方」节的 `.option-row`，
+ * 那里是唯一的实现；这里只定值。
  *
  * 选中态有两个候选，各有取舍：
  *   A `var(--color-bg-active)`
@@ -23,6 +23,225 @@
 :root {
   --option-hover-bg: var(--color-bg-hover);
   --option-active-bg: var(--color-bg-active);
+}
+
+/*
+ * ===== 控件配方 =====
+ * 设计系统 readme *Implementation rules*：有状态的样式一律写 CSS class，inline style
+ * 只留一次性布局值。这里收的是原本被多个组件各抄一份 inline 三元表达式的配方——
+ * 迁移前长什么样，迁移后还是什么样，只是换了个写法。
+ */
+
+/*
+ * 玻璃卡的浮层修饰：`.glass-card`（Orbita Design System `tokens/glass.css`）默认阴影是
+ * --shadow-composer；菜单 / 排队条 / 收尾确认卡 / 审批条这四处浮层要的是再抬一级的
+ * --shadow-popover，加这个修饰类而不是覆盖 `.glass-card` 本身——composer 与 session
+ * 卡仍然要用默认的 --shadow-composer。
+ */
+.glass-float {
+  box-shadow: var(--shadow-popover);
+}
+
+/*
+ * SessionCard 不属于「浮层」——静止态就是 --shadow-composer，hover 才抬一级到
+ * --shadow-popover（设计系统 *Hover, press, disabled*：卡片 hover 只抬阴影，不挪位置、
+ * 不变色），所以不用 `.glass-float`，单独一条 hover 规则。
+ */
+.session-card:hover {
+  box-shadow: var(--shadow-popover);
+}
+
+/*
+ * 安静控件：透明底、secondary 字；hover 填 --option-hover-bg、字升 primary；
+ * pressed / selected（aria-pressed 或 aria-selected）用 --color-mode-active-bg/fg；
+ * disabled（原生 :disabled 或 aria-disabled）实色 tertiary、无 hover 底、not-allowed。
+ * Chip、IconButton、Sidebar 的 RailButton 与模式 tab（ModeChip）、ImportPromaRow 的
+ * 次按钮共用这套底子；各自的偏差在紧跟的小节里用局部覆盖表达。
+ *
+ * 默认优先级是 **disabled 压过 pressed/selected**（IconButton 原有顺序：它的文字色
+ * 三元表达式先判 disabled）。Chip 与 ModeChip 原本是反过来的「pressed/selected 压过
+ * disabled」，各自在下面补一条更高优先级的局部覆盖——两者在当前代码里从未同时成立，
+ * 但迁移要求原样保留判定顺序，不能因为「反正碰不到」就顺手统一掉。
+ */
+.quiet-control {
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.quiet-control:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.quiet-control[aria-pressed="true"],
+.quiet-control[aria-selected="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+.quiet-control:disabled,
+.quiet-control[aria-disabled="true"] {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/* IconButton 的 variant="soft"：静止态填 --color-bg-muted；hover / pressed / disabled
+   仍按上面的顺序盖过它——这条规则必须排在它们前面，只补 rest 态的底色 */
+.icon-btn-soft {
+  background: var(--color-bg-muted);
+}
+
+/*
+ * RailButton 的常显 accent 态（图标条的 New task）：不随 hover / pressed 变化——
+ * 原三元表达式里 accent 排在 hover 前面判；它与「active」还共用同一个 aria-pressed
+ * （两者都会让 aria-pressed=true），所以这条要排在 [aria-pressed] 规则之后才能盖过它。
+ */
+.rail-btn[data-accent="true"] {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+/* Chip：选中优先于禁用，与安静控件的默认顺序相反（原三元表达式里 active 先判） */
+.chip[aria-pressed="true"]:disabled,
+.chip[data-active="true"]:disabled {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+/*
+ * Chip 的「选中」与是否可点无关（原三元表达式只看 props.active）；aria-pressed
+ * 只在有 onClick 时才挂（a11y 语义），不可点的选中 Chip（如 SkillsPanel 的
+ * List/Map 视图切换）靠 data-active 兜底，与 aria-pressed 同效
+ * （2026-09-23 验收发现的真回归）。
+ */
+.chip[data-active="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+/*
+ * ModeChip（Sidebar 的模式 tab，role="tab"）：静止态就是主字色，不必等 hover 才升级——
+ * 不走安静控件默认的「secondary 起步」。选中同样优先于禁用（同 Chip）。
+ */
+.mode-tab {
+  color: var(--color-text-primary);
+}
+
+.mode-tab[aria-selected="true"]:disabled {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+
+/*
+ * ImportPromaRow 的次按钮：安静控件配方少一味——hover 时底色照常抬升，但字色不跟着
+ * 升 primary，原样保留这条局部覆盖。
+ */
+.import-secondary-btn:hover {
+  color: var(--color-text-secondary);
+}
+
+/*
+ * accent 按钮：accent 底、accent-fg 字，hover 升 --color-accent-strong。disabled 默认退
+ * 实色中性底——玻璃上的禁用态不能用 opacity（设计系统 *Hover, press, disabled*），
+ * Composer 发送键走这条默认值。
+ */
+.btn-accent {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.btn-accent:hover {
+  background: var(--color-accent-strong);
+}
+
+.btn-accent:disabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/*
+ * Composer 发送键的第三态：没字 + 跑着时按钮变「停止」，danger 语义，但按钮仍是
+ * enabled（排队中还点得下去）。没有现成的 aria 状态可挂，用 data-tone。
+ */
+.btn-accent[data-tone="danger"] {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+/*
+ * ImportPromaRow 的主按钮不在玻璃层上——禁用退回设计系统给普通面板定的 opacity 规则，
+ * 而不是 `.btn-accent` 默认给玻璃面写的实色底。
+ */
+.import-primary-btn:disabled {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  opacity: 0.6;
+  cursor: default;
+}
+
+/*
+ * 选择行（原 `shell/selection.ts` 的 `selectionStyle()`）：侧栏会话行、设置 tab、菜单项
+ * 共用——它们是同一件事。Menu 用 `data-cursor` 表达「键盘 / 鼠标共用的光标」，不叠
+ * `:hover`——否则键盘挪光标、鼠标停在别的项上时会同时亮两行；NavRow 用真实 `:hover`。
+ *
+ * | 状态 | 底 | 文字 | 字重 |
+ * |---|---|---|---|
+ * | 未选中 | 透明 | primary | regular |
+ * | hover / cursor | `--option-hover-bg` | primary | regular |
+ * | 选中 | `--option-active-bg` | primary | **semibold** |
+ * | 选中 + hover | 同「选中」 | primary | semibold |
+ * | 禁用 | 透明 | **tertiary（实色）** | regular |
+ *
+ * 两条取舍：
+ * - **选中盖过 hover。** 选中是持久事实，hover 是临时的；让临时状态盖掉持久状态，
+ *   会让人以为自己把选中弄丢了。
+ * - **禁用用实色 tertiary 而不是 opacity。** 玻璃上调暗的字既不是墨也不是壁纸
+ *   （设计系统 *Hover, press, disabled*）。
+ */
+.option-row {
+  background: transparent;
+  color: var(--color-text-primary);
+  font-weight: var(--weight-regular);
+  transition: var(--transition-hover);
+}
+
+/*
+ * NavRow 用真实 :hover；Menu 用 data-cursor。两条都要排在下面的选中 / 禁用规则
+ * 之前——选中盖过 hover 靠的是选中规则在源码顺序里更靠后（同等特异度下后者赢），
+ * 不能给 hover 这条加额外的属性选择器提特异度，否则「选中 + 真的被鼠标悬停」时
+ * hover 反而会赢过选中，这是本 PR 唯一的真实可达场景（NavRow 的可点闸门在当前
+ * 代码里从未关闭过，不需要靠选择器去圈——见 NavRow 三处调用点，onClick 恒有值、
+ * disabled 恒为 false）。
+ */
+.option-row:hover,
+.option-row[data-cursor="true"] {
+  background: var(--option-hover-bg);
+}
+
+/*
+ * `[data-active="true"]` 补的是 NavRow 不可点时的选中态——原 selectionStyle 的
+ * `selected` 只看 props.active，不管 clickable；aria-pressed 只在可点时才挂
+ * （a11y 语义），样式不能只认 aria-pressed，否则不可点的选中行会丢底
+ * （2026-09-23 验收发现的真回归，与 Chip 的同款问题一起修）。
+ */
+.option-row[aria-pressed="true"],
+.option-row[aria-selected="true"],
+.option-row[data-active="true"] {
+  background: var(--option-active-bg);
+  font-weight: var(--weight-semibold);
+}
+
+.option-row:disabled,
+.option-row[aria-disabled="true"] {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-weight: var(--weight-regular);
 }
 
 *,

@@ -34,8 +34,9 @@ export function IconButton(props: {
   ariaExpanded?: boolean;
   children: React.ReactNode;
   style?: React.CSSProperties;
+  /** 调用方追加的 class（如任务行星标/更多键的 hover 浮现钩子），与内建的安静控件配方叠加 */
+  className?: string;
 }) {
-  const [hover, setHover] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const [placement, setPlacement] = useState<{ top: number; left: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -110,20 +111,15 @@ export function IconButton(props: {
         aria-disabled={disabled || undefined}
         onClick={disabled ? undefined : props.onClick}
         onContextMenu={props.onContextMenu}
-        onMouseEnter={() => {
-          setHover(true);
-          openTooltipWithDelay();
-        }}
-        onMouseLeave={() => {
-          setHover(false);
-          closeTooltip();
-        }}
+        onMouseEnter={openTooltipWithDelay}
+        onMouseLeave={closeTooltip}
         onFocus={(event) => {
           // 键盘聚焦立即显示（不等 200ms）：Tab 路过就该听得到这颗键是什么。
           // 只认 :focus-visible——鼠标点下也会给焦点，不认的话点过的按钮一直挂着 tooltip
           if (tooltipEnabled && event.target.matches(":focus-visible")) setTooltipOpen(true);
         }}
         onBlur={closeTooltip}
+        className={`quiet-control${props.variant === "soft" ? " icon-btn-soft" : ""}${props.className === undefined ? "" : ` ${props.className}`}`}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -134,22 +130,6 @@ export function IconButton(props: {
           padding: 0,
           border: 0,
           borderRadius: "var(--radius-md)",
-          background: active
-            ? "var(--color-mode-active-bg)"
-            : hover && !disabled
-              ? "var(--option-hover-bg)"
-              : props.variant === "soft"
-                ? "var(--color-bg-muted)"
-                : "transparent",
-          color: disabled
-            ? "var(--color-text-tertiary)"
-            : active
-              ? "var(--color-mode-active-fg)"
-              : hover
-                ? "var(--color-text-primary)"
-                : "var(--color-text-secondary)",
-          cursor: disabled ? "not-allowed" : "pointer",
-          transition: "var(--transition-hover)",
           ...props.style,
         }}
       >

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { Chip } from "./Chip";
-import { selectionStyle } from "./selection";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { api } from "../api";
@@ -1100,7 +1099,7 @@ function ShowAllRow(props: { full: boolean; hidden: number; onClick: () => void 
  * 它们本来就是一回事：前导 13px 图标槽 + 一行文字，整条可点（不是只有图标可点）。
  *
  * hover 与选中都走 `--option-hover-bg` / `--option-active-bg`，两个值在 styles.css
- * 里一处定义，选中态的两个候选与取舍也写在那儿。
+ * 里一处定义；`.option-row` 的三态配方与取舍也写在那儿。
  */
 function NavRow(props: {
   /** `null` = 这一行没有图标可画（会话行的空状态槽）。槽仍然占位，标题才对得齐 */
@@ -1117,18 +1116,19 @@ function NavRow(props: {
   hint?: string;
   style?: React.CSSProperties;
 }) {
-  const [hover, setHover] = useState(false);
   const disabled = props.disabled === true;
   const clickable = !disabled && props.onClick !== undefined;
   return (
     <button
       type="button"
+      className="option-row"
       title={props.hint}
       disabled={disabled}
       aria-pressed={clickable ? props.active : undefined}
+      // 选中的视觉与是否可点无关（原 selectionStyle({ selected: props.active, … })
+      // 不看 clickable）；aria-pressed 只在可点时才挂——两者分开，样式只认 data-active
+      data-active={props.active || undefined}
       onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       style={{
         display: "flex",
         alignItems: "center",
@@ -1139,7 +1139,6 @@ function NavRow(props: {
         padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)",
         border: 0,
         borderRadius: "var(--radius-sm)",
-        ...selectionStyle({ selected: props.active, hover: hover && clickable, disabled }),
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         textAlign: "left",
@@ -1846,18 +1845,17 @@ function RailButton(props: {
   accent?: boolean;
   onClick?: () => void;
 }) {
-  const [hover, setHover] = useState(false);
   const active = props.active === true;
   const accent = props.accent === true;
   return (
     <button
       type="button"
+      className="quiet-control rail-btn"
       title={props.title}
       aria-label={props.title}
       aria-pressed={active || accent ? true : undefined}
+      data-accent={accent || undefined}
       onClick={props.onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       style={{
         display: "grid",
         placeItems: "center",
@@ -1866,22 +1864,7 @@ function RailButton(props: {
         flex: "0 0 auto",
         border: 0,
         borderRadius: "var(--radius-md)",
-        background: active
-          ? "var(--color-mode-active-bg)"
-          : accent
-            ? "var(--color-accent)"
-            : hover
-              ? "var(--option-hover-bg)"
-              : "transparent",
-        color: active
-          ? "var(--color-mode-active-fg)"
-          : accent
-            ? "var(--color-accent-fg)"
-            : hover
-              ? "var(--color-text-primary)"
-              : "var(--color-text-secondary)",
         cursor: "pointer",
-        transition: "var(--transition-hover)",
       }}
     >
       <Icon name={props.icon} size={16} />
@@ -1901,7 +1884,6 @@ function ModeChip(props: {
   title?: string;
   children: React.ReactNode;
 }) {
-  const [hover, setHover] = useState(false);
   const disabled = props.disabled === true;
   const active = props.active === true;
   return (
@@ -1911,8 +1893,7 @@ function ModeChip(props: {
       aria-selected={active}
       disabled={disabled}
       title={props.title}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className="quiet-control mode-tab"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -1923,23 +1904,10 @@ function ModeChip(props: {
         padding: "4px 8px",
         border: 0,
         borderRadius: "var(--radius-md)",
-        background: active
-          ? "var(--color-mode-active-bg)"
-          : hover && !disabled
-            ? "var(--option-hover-bg)"
-            : "transparent",
-        // 玻璃上的禁用态用实色 tertiary，不用 opacity
-        color: active
-          ? "var(--color-mode-active-fg)"
-          : disabled
-            ? "var(--color-text-tertiary)"
-            : "var(--color-text-primary)",
         fontFamily: "var(--font-family-base)",
         fontSize: "var(--font-size-control)",
         fontWeight: "var(--weight-medium)",
         whiteSpace: "nowrap",
-        cursor: disabled ? "not-allowed" : "pointer",
-        transition: "var(--transition-hover)",
       }}
     >
       <Icon name={props.icon} size={14} />

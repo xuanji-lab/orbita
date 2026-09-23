@@ -70,17 +70,12 @@ export function CarryoverChecklist(props: {
         if (cancelArmed) props.onCancel();
         else setCancelArmed(true);
       }}
+      // 与 ApprovalBar 同级：它是当前唯一挡路的东西，但不遮消息流与 composer
+      className="glass-card glass-float"
       style={{
         display: "grid",
         gap: "var(--space-3)",
         padding: "var(--space-4)",
-        background: "var(--glass-bg)",
-        border: "1px solid var(--glass-border)",
-        borderRadius: "var(--radius-xl)",
-        // 与 ApprovalBar 同级：它是当前唯一挡路的东西，但不遮消息流与 composer
-        boxShadow: "var(--shadow-popover)",
-        WebkitBackdropFilter: "blur(var(--glass-blur))",
-        backdropFilter: "blur(var(--glass-blur))",
         color: "var(--color-text-primary)",
       }}
     >

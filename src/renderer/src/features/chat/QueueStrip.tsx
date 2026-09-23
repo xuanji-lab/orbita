@@ -67,16 +67,11 @@ export function QueueStrip(props: {
   return (
     <section
       aria-label={COPY.queued}
+      className="glass-card glass-float"
       style={{
         display: "grid",
         gap: "var(--space-1)",
         padding: "var(--space-3)",
-        background: "var(--glass-bg)",
-        border: "1px solid var(--glass-border)",
-        borderRadius: "var(--radius-xl)",
-        boxShadow: "var(--shadow-popover)",
-        WebkitBackdropFilter: "blur(var(--glass-blur))",
-        backdropFilter: "blur(var(--glass-blur))",
       }}
     >
       {props.items.map((item) => (

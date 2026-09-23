@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { Icon } from "./Icon";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
@@ -25,7 +25,6 @@ export function Composer(props: {
   running?: boolean;
   bottomSlot?: React.ReactNode;
 }) {
-  const [hover, setHover] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 随内容长高：撤回能把好几条排队消息堆进来，写死两行就只能盲着改。
   // useLayoutEffect 而非 useEffect——量完就改高度，放到绘制后会闪一帧。
@@ -54,6 +53,7 @@ export function Composer(props: {
   const stopping = running && !sendable;
   return (
     <div
+      className="glass-card"
       style={{
         width: "100%",
         minWidth: 0,
@@ -61,12 +61,6 @@ export function Composer(props: {
         flexDirection: "column",
         gap: 6,
         padding: "10px 12px 8px",
-        background: "var(--glass-bg)",
-        border: "1px solid var(--glass-border)",
-        borderRadius: "var(--radius-xl)",
-        boxShadow: "var(--shadow-composer)",
-        WebkitBackdropFilter: "blur(var(--glass-blur))",
-        backdropFilter: "blur(var(--glass-blur))",
       }}
     >
       <textarea
@@ -106,12 +100,12 @@ export function Composer(props: {
         {props.bottomSlot}
         <button
           type="button"
+          className="btn-accent"
+          data-tone={stopping ? "danger" : undefined}
           aria-label={sendable ? "Send" : stopping ? "Stop" : "Send"}
           title={sendable ? "Send" : stopping ? "Stop this turn" : "Send"}
           disabled={!sendable && !stopping}
           onClick={() => (sendable ? props.onSubmit() : props.onStop())}
-          onMouseEnter={() => setHover(true)}
-          onMouseLeave={() => setHover(false)}
           style={{
             marginInlineStart: "auto",
             display: "inline-flex",
@@ -123,21 +117,6 @@ export function Composer(props: {
             padding: 0,
             border: 0,
             borderRadius: "var(--radius-pill)",
-            // 玻璃上的禁用态用实色，不用 opacity（设计系统 *Hover, press, disabled*）
-            background: sendable
-              ? hover
-                ? "var(--color-accent-strong)"
-                : "var(--color-accent)"
-              : stopping
-                ? "var(--color-danger-soft)"
-                : "var(--color-bg-hover)",
-            color: sendable
-              ? "var(--color-accent-fg)"
-              : stopping
-                ? "var(--color-danger)"
-                : "var(--color-text-tertiary)",
-            cursor: sendable || stopping ? "pointer" : "not-allowed",
-            transition: "var(--transition-hover)",
           }}
         >
           <Icon name={sendable ? "arrow-up" : "square"} size={sendable ? 16 : 12} />
