@@ -1096,11 +1096,23 @@ body {
   background: transparent;
 }
 
-/* lucide SVG 内联后由外层 span 决定尺寸与描边；CSS 覆盖 SVG 的 presentation attribute */
+/*
+ * lucide SVG 内联后由外层 span 决定尺寸与描边；CSS 覆盖 SVG 的 presentation attribute。
+ *
+ * pointer-events: none（保险）：图标是装饰（span 恒 aria-hidden），Icon 组件没有
+ * onClick，需要点击语义的地方都是把 Icon 放进父级按钮（IconButton / Chip 等）—
+ * 点在图标上时按下的目标理应始终是那个按钮本身，不是图标自己的 svg/path 节点。
+ * grep 确认过 `.orbita-icon`/`svg` 在渲染层没有任何依赖它接收指针事件的地方
+ * （`.pv-fetch-search .orbita-icon` 只是绝对定位一个装饰性搜索图标，本身也不该挡
+ * 输入框的点击——这条规则顺带修掉那个潜在的小回归）。这样即使 iconMarkup 的缓存
+ * 将来又被绕开、SVG 又被替换，点击也不会再丢：pointerdown 落在按钮上而不是会被
+ * 摘掉重建的图标节点上。
+ */
 .orbita-icon {
   display: inline-flex;
   flex: 0 0 auto;
   line-height: 0;
+  pointer-events: none;
 }
 
 .orbita-icon svg {

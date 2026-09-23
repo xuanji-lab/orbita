@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { iconMarkup } from "./icon-markup.ts";
 import archive from "../../../../Orbita Design System/assets/icons/lucide/archive.svg?raw";
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
 import arrowLeft from "../../../../Orbita Design System/assets/icons/lucide/arrow-left.svg?raw";
@@ -212,7 +213,12 @@ export function Icon(props: {
       className={classes}
       aria-hidden="true"
       style={style}
-      dangerouslySetInnerHTML={{ __html: inline(ICONS[props.name]) }}
+      // iconMarkup 按图标名缓存同一个 { __html } 对象：字面量在每次渲染新建对象，
+      // React 19 按对象身份（不是字符串内容）判断要不要重写 innerHTML，流式时
+      // 每个增量都会重渲染侧栏 / 右图标条，字面量写法会让整棵 SVG 每次都被拆了
+      // 重建——用户点在图标上时 pointerdown 落的节点在松手前已经被摘掉，浏览器
+      // 收不到 click（详见 icon-markup.ts 顶部注释）。
+      dangerouslySetInnerHTML={iconMarkup(props.name, () => inline(ICONS[props.name]))}
     />
   );
 }
