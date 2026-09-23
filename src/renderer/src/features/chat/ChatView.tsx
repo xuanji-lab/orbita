@@ -79,8 +79,9 @@ import { CarryoverChecklist } from "./CarryoverChecklist";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
-import { isPlanBilling, knownModelParams } from "@shared/known-providers";
+import { isPlanBilling } from "@shared/known-providers";
 import { modelMenuItems, useBuiltinCatalog } from "../settings/model-menu";
+import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
@@ -1177,26 +1178,14 @@ function ComposerBar(props: { session: ChatSession }) {
     onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
   });
 
-  // 思考档菜单按模型真实支持集显示（目录实测：glm-5.3 只有 low/high/max，
-  // claude 系 minimal→max 而 off 关不掉——写死档位只会递增假选项）。
-  // 支持集来源三级：开轮事件回的真值（含 clamp 事实）> 目录（BuiltinModel，agent
-  // 进程在 pi 旁算好过线）> 白名单补丁（目录查不到的快速通道模型）。都没有 =
-  // 未知：按全量显示、不禁用，开轮后由 thinking 事件纠真——宁可待验证，不先撒谎
-  const thinkingCatalogEntry = session.model === null
-    ? undefined
-    : catalog
-        .flatMap((provider) => provider.models)
-        .find((model) => model.id === session.model?.modelId);
-  // 白名单最高：它是人工确证的口径，存在的意义就是赶在目录前面纠错（knownModelParams
-  // 同款理由）。对目录查不到的快速通道模型（glm-5.3-flash），注册链借不到原始档位表，
-  // 事件回的 supported 会是 pi 的「无表」伪值——白名单压过它，菜单才不撒谎
-  const knownThinkingLevels =
-    session.model === null ? undefined : knownModelParams(session.model.modelId).thinkingLevels;
+  // 思考档菜单按模型真实支持集显示（官方档位表：glm-5.3 只有 low/high/max，
+  // claude 按型号——fable 系关不掉思考、opus-4-6 没有 xhigh——写死档位只会递增假选项）。来源三级
+  // （modelThinkingLevels，与 useChatSession 的新任务槽起档共用同一份判定）：
+  // 白名单 > 开轮事件回的真值（含 clamp 事实）> 目录（BuiltinModel，agent 进程在
+  // pi 旁算好过线）。都没有 = 未知：按全量显示、不禁用，开轮后由 thinking 事件
+  // 纠真——宁可待验证，不先撒谎
   const thinkingSupported =
-    knownThinkingLevels ??
-    session.thinkingSupported ??
-    thinkingCatalogEntry?.supportedThinkingLevels ??
-    null;
+    session.model === null ? null : modelThinkingLevels(session.model.modelId, catalog, session.thinkingSupported);
   const thinkingMenuLevels = thinkingSupported ?? THINKING_LEVELS;
   // 逐档判断，不是全局锁：glm-5.3 支持 low/high/max（不含 minimal），全局判
   // 「不含 minimal」会把整个菜单错锁成全灰——那是 reasoning:false 模型（支持集
