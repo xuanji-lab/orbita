@@ -1727,6 +1727,21 @@ body {
 }
 
 /*
+ * 选中态（双击文件预览、分栏切文件的语义真源，2026-09-23 wafo）：非目录行单击
+ * 选中，`aria-selected` + `--option-active-bg`——List rows never tint 的唯一
+ * 例外，照侧栏 `.option-row` 的选中配方（底色 + semibold）。选中要盖过 hover，
+ * 所以下面这条挂在 `.file-hover-host:hover` 之后、且选择器更具体，源码顺序与
+ * 特异度都保证选中赢（同 `.option-row` 顶部注释「选中盖过 hover」的取舍）。
+ */
+.file-row[aria-selected="true"] {
+  background: var(--option-active-bg);
+  font-weight: var(--weight-semibold);
+}
+.file-hover-host:hover .file-row[aria-selected="true"] {
+  background: var(--option-active-bg);
+}
+
+/*
  * hover 行尾的 size · mtime（`48 KB · 12m`）：只在 hover 时出现，不 hover 不占
  * 视觉——它们是「看一眼就够」的机器事实，常驻会让每行都背着两个数字（裁决见
  * 设计稿「待裁决」章节）。挂同一个 .file-hover-host 宿主，与 Reveal 同一套

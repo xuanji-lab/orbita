@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { api } from "../../api";
@@ -23,14 +23,61 @@ import type { FileEntryKind, FileRoot, FileRootKind } from "@shared/files";
  * 会话变的根，用户最常来找 plan / handoff）→ Workspace → Attached，往下每层
  * 30px 树行懒加载。attach / detach 就地做（工作区级、可增可减，不进设置页）。
  */
-export function FilesPanel(props: { session: ChatSession; onClose: () => void }) {
+export function FilesPanel(props: {
+  session: ChatSession;
+  onClose: () => void;
+  /**
+   * App 的全局 Esc 先问这里：预览开着就只关预览、回报「处理掉了」，面板不关——
+   * 与子会话面板「Esc 先退一层」同一个台阶。不自己挂 window 监听：App 的监听注册
+   * 更早、先执行，两个都挂的话一下 Esc 会连预览带面板一起关掉。
+   */
+  escapeRef: { current: (() => boolean) | null };
+}) {
   const session = props.session;
   /** 与 App 的 mainSessionId 同口径：活会话优先，退盘上打开的那条 */
   const sessionId = session.sessionId ?? session.opened?.id ?? null;
   const workspaceId = session.workspaceId;
   const [query, setQuery] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  /** 选中的文件行（绝对路径）；目录行不参与选中 */
+  const [selected, setSelected] = useState<string | null>(null);
+  /** 打开的预览：root 是它所在分组的根路径，path 是文件绝对路径。null = 预览未打开 */
+  const [preview, setPreview] = useState<{ root: string; path: string } | null>(null);
   const tree = useFileTree(sessionId, workspaceId, session.workspaces);
+
+  // 会话 / 工作区切换 = 换一棵树，选中与预览跟着清掉——旧会话的文件路径在新树里
+  // 没有意义（同 useFileTree 清缓存 / 展开态的先例）
+  useEffect(() => {
+    setSelected(null);
+    setPreview(null);
+  }, [sessionId, workspaceId]);
+
+  // 预览打开时 Esc 关闭：窄屏「回到目录」与宽屏「关闭预览」是同一个动作
+  // （两者都只是 setPreview(null)，宽窄只影响头上按钮的图标与文案），所以
+  // 不需要按宽度分支。Esc 由 App 的全局监听派发过来（见 props.escapeRef）
+  const escapeRef = props.escapeRef;
+  useEffect(() => {
+    escapeRef.current = () => {
+      if (preview === null) return false;
+      setPreview(null);
+      return true;
+    };
+    return () => {
+      escapeRef.current = null;
+    };
+  }, [escapeRef, preview]);
+
+  /** 单击文件行：选中；预览已经打开时同时把预览换成这一个（分栏模式的「像访达」行为） */
+  const selectFile = (root: FileRoot, path: string): void => {
+    setSelected(path);
+    setPreview((prev) => (prev === null ? prev : { root: root.path, path }));
+  };
+
+  /** 双击 / Enter：选中并打开预览 */
+  const openPreview = (root: FileRoot, path: string): void => {
+    setSelected(path);
+    setPreview({ root: root.path, path });
+  };
 
   /**
    * 挂目录。成功后 reloadWorkspaces——workspaces 引用一变，useFileTree 的 roots
@@ -86,6 +133,9 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
             modifiedAt={entry.modifiedAt}
             onToggle={() => tree.toggle(root.path, child)}
             onReveal={() => tree.reveal(root.path, child)}
+            selected={!isDir && selected === child}
+            onSelect={() => selectFile(root, child)}
+            onOpenPreview={() => openPreview(root, child)}
           />
           {isDir && open && rowsOf(root, child, depth + 1)}
         </Fragment>
@@ -362,7 +412,8 @@ function LabelAction(props: { title: string; onClick: () => void; children: Reac
 
 /**
  * 30px 树行：chevron + 类型图标 + 名字 +（hover 时的 size · mtime，仅文件行）+
- * （AGENTS.md 的 `rules` 尾注）。目录行点击展开收起，文件行点击直接 reveal；
+ * （AGENTS.md 的 `rules` 尾注）。目录行点击展开收起；非目录行单击选中
+ * （`aria-selected` + CSS 高亮），双击或 Enter 打开预览——不再单击 reveal，
  * Reveal 按钮是兄弟节点浮在行上（button 不能套 button），两个都 Tab 可达。
  */
 function TreeRow(props: {
@@ -375,6 +426,12 @@ function TreeRow(props: {
   modifiedAt: number;
   onToggle: () => void;
   onReveal: () => void;
+  /** 非目录行的选中态；目录行恒为 false，不参与选中（目录照旧单击展开收起） */
+  selected: boolean;
+  /** 单击非目录行：选中。若预览已打开，FilesPanel 会同时把预览换成这一个 */
+  onSelect: () => void;
+  /** 双击 / Enter 非目录行：选中并打开预览 */
+  onOpenPreview: () => void;
 }) {
   const isDir = props.kind === "directory";
   const isSymlink = props.kind === "symlink";
@@ -397,8 +454,21 @@ function TreeRow(props: {
         type="button"
         className="file-row"
         aria-expanded={isDir ? props.open : undefined}
+        aria-selected={isDir ? undefined : props.selected}
         title={title}
-        onClick={isDir ? props.onToggle : props.onReveal}
+        onClick={isDir ? props.onToggle : props.onSelect}
+        onDoubleClick={isDir ? undefined : props.onOpenPreview}
+        onKeyDown={
+          isDir
+            ? undefined
+            : (event) => {
+                if (event.key !== "Enter") return;
+                // button 的 Enter 默认会再触发一次合成 click（= onSelect）——
+                // preventDefault 掐掉那次合成 click，预览只由这里打开一次
+                event.preventDefault();
+                props.onOpenPreview();
+              }
+        }
         style={{
           display: "flex",
           alignItems: "center",
