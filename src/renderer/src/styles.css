@@ -1730,6 +1730,25 @@ body {
 }
 
 /*
+ * 根分组头 sticky：树很长时 Session / Workspace / Attached 组头钉在滚动容器顶部，
+ * 盖住底下滚过去的树行——「现在滚在哪个根里」永远有答案。
+ *
+ * 背景选 --color-bg-panel（实色）而不是设计稿画的 --glass-bg-solid：那个 token
+ * 在这套系统里不存在。读 RightPanel.tsx：右侧面板停靠态下 .right-panel-slot 本身
+ * 不画背景，内容直接坐在 .pane 的 --glass-bg 玻璃层上（narrow 悬浮态才会再叠一层
+ * --glass-bg 变实）——面板本体没有一个专门的「不透明」层可以照搬。这正是
+ * Transparency 规则给 floating layers（菜单、popover）的处理：跳过玻璃阶梯，
+ * 改用实色 --color-bg-panel + 发丝——sticky 头钉在滚动内容之上，是同一种「浮在
+ * 任意内容之上、背后不能透字」的场景，用同一个 token。
+ */
+.file-root-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg-panel);
+}
+
+/*
  * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
  * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
  * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边

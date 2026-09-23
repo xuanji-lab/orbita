@@ -4,7 +4,10 @@ import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPa
 import { api } from "../../api";
 import type { ChatSession } from "../chat/useChatSession";
 import {
+  countLoadedEntries,
+  countVisibleEntries,
   fileIcon,
+  filterCountText,
   filterEntries,
   footerSummary,
   formatAge,
@@ -90,6 +93,14 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
   const groupCount = tree.roots.length + (sessionId === null ? 1 : 0);
   const error = actionError ?? tree.actionError;
 
+  /**
+   * 过滤行计数：shown 只数当前实际展开会渲染的行（与上面 rowsOf 同一条规则），
+   * loaded 是已加载目录的条目总数——过滤不递归拉取，这个口径写进 title。
+   */
+  const filtering = query.trim() !== "";
+  const shownCount = countVisibleEntries(tree.roots, tree.dirs, tree.expanded, query);
+  const loadedCount = countLoadedEntries(tree.dirs);
+
   const rootGroup = (root: FileRoot, index: number): React.ReactNode => {
     return (
       <div
@@ -154,7 +165,11 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
       >
         {/* 过滤行钉在面板头顶部不随树滚动（设计稿的位置）：壳的内容区是一个滚动层，
             这里在内部分「固定过滤行 + 滚动树」两块，不动 RightPanelFrame */}
-        <FilterRow value={query} onChange={setQuery} />
+        <FilterRow
+          value={query}
+          onChange={setQuery}
+          countText={filterCountText(shownCount, loadedCount, filtering)}
+        />
         <div style={{ minHeight: 0, overflowY: "auto", display: "grid", alignContent: "start" }}>
           {error !== null && (
             <div style={{ padding: "var(--space-3)" }}>
@@ -190,8 +205,8 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
 const failMessage = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
-/** 过滤行：本地过滤已加载的条目名（不递归拉取） */
-function FilterRow(props: { value: string; onChange: (value: string) => void }) {
+/** 过滤行：本地过滤已加载的条目名（不递归拉取），右侧计数「命中 / 已加载总数」 */
+function FilterRow(props: { value: string; onChange: (value: string) => void; countText: string }) {
   return (
     <div
       style={{
@@ -221,6 +236,17 @@ function FilterRow(props: { value: string; onChange: (value: string) => void }) 
           color: "var(--color-text-primary)",
         }}
       />
+      <span
+        title="Counts loaded entries only — the filter doesn't fetch collapsed folders"
+        style={{
+          flex: "0 0 auto",
+          fontFamily: "var(--font-family-mono)",
+          fontSize: "var(--font-size-micro)",
+          color: "var(--color-text-tertiary)",
+        }}
+      >
+        {props.countText}
+      </span>
     </div>
   );
 }
@@ -235,7 +261,7 @@ function RootLabel(props: {
 }) {
   return (
     <div
-      className="file-hover-host"
+      className="file-hover-host file-root-label"
       style={{
         display: "flex",
         alignItems: "center",
