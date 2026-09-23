@@ -58,7 +58,17 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
   /** 一个分组里的整棵子树（递归渲染已展开的层） */
   const rowsOf = (root: FileRoot, dir: string, depth: number): React.ReactNode => {
     const entries = tree.dirs.get(dir);
-    if (entries === undefined) return <DimRow key={`pending:${dir}`}>Loading…</DimRow>;
+    if (entries === undefined) {
+      // 只有 workspace 根的第一层加载态给 spinner：它是用户打开面板后第一眼
+      // 等的那一条，别的嵌套目录 Loading… 不加——加了到处转，反而没有重点。
+      const showSpinner = depth === 0 && root.kind === "workspace";
+      return (
+        <DimRow key={`pending:${dir}`}>
+          {showSpinner && <Icon name="loader-circle" size={12} spin style={{ marginRight: 6 }} />}
+          Loading…
+        </DimRow>
+      );
+    }
     const shown = filterEntries(orderEntries(entries), query);
     if (shown.length === 0) return null; // 空目录 / 全被过滤：安静，不出空文件夹
     return shown.map((entry) => {
@@ -115,8 +125,11 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
           kind={root.kind}
           detail={root.kind === "session" ? root.label : root.path}
           canReveal={root.exists}
+          missing={root.kind === "attached" && !root.exists}
           onReveal={root.exists ? () => tree.reveal(root.path, root.path) : undefined}
-          onDetach={root.kind === "attached" ? () => detach(root.path) : undefined}
+          // missing 的 attached 根下面有常驻 Detach（见 MissingAttachedRow）——组头
+          // 不再重复一个 hover 才出的 Detach，一个状态只留一个处理入口
+          onDetach={root.kind === "attached" && root.exists ? () => detach(root.path) : undefined}
         />
         {/* 「在 Proma 里找不到规则文件」的痛点落点：工作区没有 AGENTS.md 时给一条
             虚线提示行。点击只 reveal 工作区根（打开文件夹让用户手建）——创建动作
@@ -130,7 +143,7 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
           <DimRow>工作台为空 — agent 第一次写入时创建</DimRow>
         )}
         {!root.exists && root.kind === "attached" && (
-          <DimRow>Directory not found — detach or move it back</DimRow>
+          <MissingAttachedRow onDetach={() => detach(root.path)} />
         )}
         {root.exists && rowsOf(root, root.path, 0)}
       </div>
@@ -256,6 +269,8 @@ function RootLabel(props: {
   kind: FileRootKind;
   detail: string;
   canReveal: boolean;
+  /** 挂了但盘上找不到了：路径用 warning 色而不是 tertiary——颜色不是唯一信号，DimRow 那行的文字还在 */
+  missing?: boolean;
   onReveal?: () => void;
   onDetach?: () => void;
 }) {
@@ -282,7 +297,7 @@ function RootLabel(props: {
       <span
         title={props.detail}
         style={{
-          color: "var(--color-text-tertiary)",
+          color: props.missing === true ? "var(--color-warning)" : "var(--color-text-tertiary)",
           letterSpacing: 0,
           textTransform: "none",
           minWidth: 0,
@@ -482,9 +497,10 @@ function TreeRow(props: {
 }
 
 /** 灰字占位行（工作台为空 / 目录没了 / 还没有会话 / 加载中）——只占一行，不出空文件夹 */
-function DimRow(props: { children: React.ReactNode }) {
+function DimRow(props: { children: React.ReactNode; title?: string }) {
   return (
     <p
+      title={props.title}
       style={{
         margin: 0,
         height: 30,
@@ -493,10 +509,39 @@ function DimRow(props: { children: React.ReactNode }) {
         paddingLeft: "var(--space-3)",
         fontSize: "var(--font-size-caption)",
         color: "var(--color-text-tertiary)",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
       }}
     >
       {props.children}
     </p>
+  );
+}
+
+/**
+ * missing attached 根那一行：DimRow 文字 + 常驻 Detach 按钮同一行。与别处 hover
+ * 才浮现的 Detach 不同——这个状态需要用户处理，入口常驻现场（同 Skills 列表
+ * missing 行的原则）。颜色（组头路径的 warning）不是唯一信号，这里的文字照旧。
+ */
+function MissingAttachedRow(props: { onDetach: () => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 12 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <DimRow title="Directory not found — moved or renamed outside orbita">
+          Directory not found — moved or renamed
+        </DimRow>
+      </div>
+      <button
+        type="button"
+        className="file-detach-btn"
+        title="Detach this directory"
+        onClick={props.onDetach}
+      >
+        <Icon name="unlink" size={10} />
+        Detach
+      </button>
+    </div>
   );
 }
 
@@ -508,6 +553,7 @@ function AgentsMdHint(props: { onReveal: () => void }) {
   return (
     <button
       type="button"
+      className="file-hint-row"
       title="Create AGENTS.md in the workspace folder"
       onClick={props.onReveal}
       style={{
@@ -518,20 +564,10 @@ function AgentsMdHint(props: { onReveal: () => void }) {
         padding: "8px 10px",
         border: "1px dashed var(--color-border-strong)",
         borderRadius: "var(--radius-md)",
-        background: "transparent",
-        color: "var(--color-text-tertiary)",
         font: "inherit",
         fontSize: "var(--font-size-caption)",
         textAlign: "left",
         cursor: "pointer",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--color-bg-hover)";
-        e.currentTarget.style.color = "var(--color-text-primary)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--color-text-tertiary)";
       }}
     >
       <Icon name="book" size={13} style={{ flex: "0 0 auto" }} />
@@ -545,6 +581,7 @@ function AttachRow(props: { onAttach: () => void }) {
   return (
     <button
       type="button"
+      className="file-attach-row"
       title="Attach a directory"
       onClick={props.onAttach}
       style={{
@@ -556,19 +593,9 @@ function AttachRow(props: { onAttach: () => void }) {
         minHeight: 36,
         border: "1px dashed var(--color-border-strong)",
         borderRadius: "var(--radius-lg)",
-        background: "transparent",
-        color: "var(--color-text-tertiary)",
         font: "inherit",
         fontSize: "var(--font-size-control)",
         cursor: "pointer",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--color-bg-hover)";
-        e.currentTarget.style.color = "var(--color-text-primary)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--color-text-tertiary)";
       }}
     >
       <Icon name="plus" size={14} style={{ flex: "0 0 auto" }} /> Attach a directory

@@ -1749,6 +1749,50 @@ body {
 }
 
 /*
+ * missing attached 根的常驻 Detach（与 hover 才浮现的 .file-hover-act 不同：
+ * 这个状态需要处理，入口常驻现场，同 Skills 列表 missing 行的原则）。
+ */
+.file-detach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-micro);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.file-detach-btn:hover {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+/*
+ * AgentsMdHint（虚线提示行）与 AttachRow（底部 Attach 按钮）的 hover：改成 CSS
+ * class 而不是 onMouseEnter/onMouseLeave 手改 inline style（Implementation
+ * rules 硬规则：有状态样式写 CSS class，不用 useState + onMouseEnter/Leave 画
+ * hover）。**会随 hover 变的属性（底色、字色）只能写在这里**：留在 inline style
+ * 里的话 inline 优先级压过 `:hover`，hover 就静默失效了。
+ */
+.file-hint-row,
+.file-attach-row {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  transition: var(--transition-hover);
+}
+.file-hint-row:hover,
+.file-attach-row:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/*
  * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
  * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
  * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边
