@@ -1152,7 +1152,7 @@ function ModelDialog(props: {
                     setIdValue(e.target.value);
                     setIdIssue(null);
                   }}
-                  style={idIssue !== null ? { borderColor: "var(--color-danger)" } : undefined}
+                  aria-invalid={idIssue !== null}
                 />
                 <span className="pv-sub">
                   Lowercase letters, digits, dots and dashes. Matching a built-in catalog entry inherits

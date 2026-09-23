@@ -232,10 +232,11 @@
   gap: var(--space-1);
   min-width: 0;
 }
+/* label 是次级信息，输入框里的值才是主角（设计系统字段层级：小字 label + 发丝框 input） */
 .pv-field > label {
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-caption);
   font-weight: var(--weight-medium);
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
 }
 .pv-sub {
   font-size: var(--font-size-caption);
@@ -366,6 +367,10 @@
 }
 .pv-input::placeholder {
   color: var(--color-text-tertiary);
+}
+/* 校验不过的字段（如模型弹窗的 id）：边框换 danger 色，不再靠 inline style 三元 */
+.pv-input[aria-invalid="true"] {
+  border-color: var(--color-danger);
 }
 
 /* 状态行：图标 + 文字在前，颜色第二信号（设计系统） */
