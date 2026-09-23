@@ -7,8 +7,8 @@
  * （见 SkillsPanel 的 skill-row-missing），与「属于哪些集合」是两件事。
  *
  * 放在 `shell/` 而不是 `features/skills/`：Skills 列表是第一个消费者，
- * 韦恩图视图（`SkillsMap.tsx`）的图例是下一个——两个视图共用同一套符号，
- * 用户才能把行尾的点阵和圆图上的点/环认成同一件事。
+ * 韦恩图视图（已撤下，之后再议）的图例曾是第二个消费者——留在 `shell/`
+ * 是为了下次有别的视图要用同一套符号时，用户能把行尾的点阵认成同一件事。
  */
 export function SetDots(props: {
   /** 链在 global：对所有会话生效 */

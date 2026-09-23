@@ -15,7 +15,6 @@ import { api } from "../../api";
 import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
 import { isSkillSlug } from "@shared/skill";
-import { SkillsMap } from "./SkillsMap";
 import { filterSkills } from "./skill-filter.ts";
 
 /** 行 hover tooltip 出现的延迟——比 IconButton 的 200ms 更慢，快速划过列表不惊扰 */
@@ -23,8 +22,9 @@ const ROW_TOOLTIP_DELAY_MS = 350;
 
 /**
  * Skills 面板（1-4 / 2-1d）：列表视图按集合分组 + 详情视图改归属与三段编辑。
- * 长在 S-0 的面板框架上；韦恩图视图（2-1e）在 wafo 看过 3 圆静态稿后接进来，
- * 届时页头加 [list|blend] 两枚 Chip——现在只有一档，不放假的切换器。
+ * 长在 S-0 的面板框架上。韦恩图视图（2-1e）曾接进来过，用户决定先撤下——
+ * 4 个工作区起就退化成归属矩阵，空工作区也占一个圆，实际几乎看不到图；
+ * 之后再议，面板现在只有列表这一档，不放假的切换器。
  *
  * 列表的分组本职是回答「这个集合现在有哪些 skill」，所以**多集合的行在每组
  * 都出现**（行尾的归属点阵说明它共享，见 SkillRow），不是对 skill 集合做划分。
@@ -39,9 +39,7 @@ export function SkillsPanel(props: {
 }) {
   const { skills } = props;
   /** 当前面板视图：列表 / 详情 / 新建表单（4-1） */
-  const [view, setView] = useState<"list" | "detail" | "map">("list");
-  /** +N more 跳列表后要滚到的组（global 或 workspaceId）；一次性的 */
-  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const [view, setView] = useState<"list" | "detail">("list");
   /** 当前详情的 slug；null = 列表。面板内状态，不进 useSkills（侧栏列表已删） */
   const [selected, setSelected] = useState<string | null>(null);
   const meta = selected === null ? null : (skills.skills.find((s) => s.slug === selected) ?? null);
@@ -54,32 +52,6 @@ export function SkillsPanel(props: {
   const workspaceName = (id: string): string =>
     skills.workspaces.find((w) => w.id === id)?.name ?? id;
 
-  // +N more 的落点：回到列表后滚到对应组（组容器挂了 id），滚完清掉一次性意图
-  useEffect(() => {
-    if (view !== "list" || scrollTo === null) return;
-    const target = document.getElementById(`skills-group-${scrollTo}`);
-    target?.scrollIntoView({ block: "start" });
-    setScrollTo(null);
-  }, [view, scrollTo]);
-
-  if (view === "map") {
-    return (
-      <SkillMapView
-        skills={skills}
-        onOpenDetail={(slug) => {
-          setSelected(slug);
-          setView("detail");
-        }}
-        onJumpToGroup={(group) => {
-          setScrollTo(group);
-          setView("list");
-        }}
-        onSwitchToList={() => setView("list")}
-        onCreateSkill={props.onCreateSkill}
-        onClose={props.onClose}
-      />
-    );
-  }
   if (meta !== null) {
     return (
       <SkillDetail
@@ -100,7 +72,6 @@ export function SkillsPanel(props: {
         setView("detail");
       }}
       onCreateSkill={props.onCreateSkill}
-      onSwitchToMap={() => setView("map")}
       onClose={props.onClose}
     />
   );
@@ -140,7 +111,6 @@ function SkillList(props: {
   workspaceName: (id: string) => string;
   onSelect: (slug: string) => void;
   onCreateSkill: () => void;
-  onSwitchToMap: () => void;
   onClose: () => void;
 }) {
   const { skills } = props;
@@ -152,17 +122,9 @@ function SkillList(props: {
   const [query, setQuery] = useState("");
 
   const header = (
-    <>
-      <Chip active title="List view">
-        <Icon name="list" size={13} />
-      </Chip>
-      <Chip onClick={props.onSwitchToMap} title="Set map">
-        <Icon name="blend" size={13} />
-      </Chip>
-      <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-        Skills
-      </strong>
-    </>
+    <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
+      Skills
+    </strong>
   );
 
   // 空态与加载：footer 的 reveal 行照常（新建的路一直在）
@@ -262,7 +224,7 @@ function SkillList(props: {
           ) : (
             <>
               {globalMembers.length > 0 && (
-                <div className="skill-group" id="skills-group-global">
+                <div className="skill-group">
                   <GroupLabel count={globalMembers.length}>Global</GroupLabel>
                   {globalMembers.map((s) => (
                     <SkillRow
@@ -279,7 +241,7 @@ function SkillList(props: {
                 const members = linked.filter((s) => !s.global && s.workspaces.includes(ws.id));
                 if (members.length === 0) return null;
                 return (
-                  <div className="skill-group" key={ws.id} id={`skills-group-${ws.id}`}>
+                  <div className="skill-group" key={ws.id}>
                     <GroupLabel count={members.length}>{ws.name}</GroupLabel>
                     {members.map((s) => (
                       <SkillRow
@@ -837,56 +799,5 @@ function MenuItemRow(props: { onClick: () => void; children: React.ReactNode }) 
     >
       {props.children}
     </button>
-  );
-}
-
-
-/**
- * map 视图（4-4）：页头 [list][blend] 两枚 Chip + 标题 + AddMenu + x；
- * 内容是韦恩图（≥4 workspace 自动退化矩阵）。
- */
-function SkillMapView(props: {
-  skills: SkillsState;
-  onOpenDetail: (slug: string) => void;
-  onJumpToGroup: (groupId: string) => void;
-  onSwitchToList: () => void;
-  onCreateSkill: () => void;
-  onClose: () => void;
-}) {
-  const { skills } = props;
-  const error = skills.load.kind === "failed" ? skills.load.message : null;
-  return (
-    <RightPanelFrame
-      contentKey="map"
-      onClose={props.onClose}
-      header={
-        <>
-          <Chip onClick={props.onSwitchToList} title="List view">
-            <Icon name="list" size={13} />
-          </Chip>
-          <Chip active title="Set map">
-            <Icon name="blend" size={13} />
-          </Chip>
-          <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-            Skills
-          </strong>
-        </>
-      }
-      headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
-      footer={<FooterReveal skills={skills} />}
-    >
-      <div style={{ padding: "var(--space-3) var(--space-3) var(--space-4)" }}>
-        {error !== null && <PanelLine danger>Couldn’t read skills. {error}</PanelLine>}
-        {skills.load.kind === "loading" && skills.skills.length === 0 ? (
-          <PanelLine>Loading…</PanelLine>
-        ) : (
-          <SkillsMap
-            skills={skills}
-            onOpenDetail={props.onOpenDetail}
-            onJumpToGroup={props.onJumpToGroup}
-          />
-        )}
-      </div>
-    </RightPanelFrame>
   );
 }

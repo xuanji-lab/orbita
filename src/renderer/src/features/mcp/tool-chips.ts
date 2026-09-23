@@ -1,7 +1,7 @@
 /**
  * `McpPanel.tsx` 用到的纯函数：ready 卡的工具列表默认只显示前 `limit` 个，
  * 超出的折进一个「+N more」提示，点击后在卡片内展开全部。不 import React，
- * 可被 `node --test` 直接加载（同 `skill-filter.ts` / `venn-focus.ts` 的先例）。
+ * 可被 `node --test` 直接加载（同 `skill-filter.ts` 的先例）。
  */
 
 /** 默认展示的工具数——超过这个数才折叠（4-3 简报裁决）。 */
