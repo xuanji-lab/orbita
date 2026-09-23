@@ -8,15 +8,15 @@
  * 深度、耗时与 token 曲线。这一刀把它变成 orbita 自己的一等旋钮（与 mode /
  * model 同类：会话里选、meta 里存、开轮载荷里带）。
  *
- * 档位因模型而异（目录实测：glm-5.3 只有 low/high/max，claude 系 minimal→max
- * 而 off 关不掉）——词汇表不裁剪、菜单按模型真实支持集显示，见
+ * 档位因模型而异（官方档位表：glm-5.3 只有 low/high/max；claude 按型号——fable 系
+ * 关不掉思考，opus-4-6 没有 xhigh）——词汇表不裁剪、菜单按模型真实支持集显示，见
  * BuiltinModel.supportedThinkingLevels。
  */
 
 /** 思考档词汇表与 pi 同源：pi 认几档我们认几档（7 档，off…max）。 */
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 
-/** pi 全集（不收窄——曾被收窄到 5 档，后被目录数据推翻：glm-5.3 只有 low/high/max，claude 系有 xhigh/max 而 off 关不掉，档位本来就因模型而异，裁剪词汇表只会递增假选项） */
+/** pi 全集（不收窄——曾被收窄到 5 档，后被目录数据推翻：glm-5.3 只有 low/high/max，claude 各型号的 off / xhigh 有无各不相同，档位本来就因模型而异，裁剪词汇表只会递增假选项） */
 export type ThinkingLevel = PiThinkingLevel;
 
 /** 词汇表顺序（浅 → 深）。菜单不直接用它写死，而是按模型的 supportedThinkingLevels 显示真集；这里只作「完全未知时的全量兑底」与顺序真源。 */
