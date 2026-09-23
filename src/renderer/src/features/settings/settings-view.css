@@ -211,3 +211,28 @@
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
 }
+
+/* ===== Data directory 行（SettingsView.tsx 的 DataDirectoryRow） ===== */
+
+/* 从左边截断：`direction: rtl` 让溢出与省略号落在左边；路径本身包在
+   `<bdi dir="ltr">` 里，保住从左到右的阅读顺序（开头的 `/` 不会被挪到末尾）。
+   不能改用本元素上的 `unicode-bidi: plaintext`——它按首个强字符把整段判回 ltr，
+   省略号跟着回到右边，截掉的恰好是末段（2026-09-23 实测）。 */
+.data-dir-path {
+  min-width: 0;
+  max-width: 380px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.data-dir-path-unavailable {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}

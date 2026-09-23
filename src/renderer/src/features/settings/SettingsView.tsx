@@ -1,8 +1,11 @@
 import "./settings-view.css";
+import { useEffect, useState } from "react";
+import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
-import type { IconName } from "../../shell/Icon";
+import { Icon, type IconName } from "../../shell/Icon";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
+import { PanelButton } from "../../shell/RightPanel";
 import type { ProviderDto } from "@shared/provider";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
@@ -316,6 +319,7 @@ function General(props: {
       <Section label="Data">
         {/* 导入入口自带行卡样式（按钮组 + 汇总多行），不走通用 Row */}
         <ImportPromaRow onImported={props.onImported} />
+        <DataDirectoryRow />
       </Section>
     </div>
   );
@@ -369,21 +373,114 @@ function Row(props: {
         borderBottom: "1px solid var(--color-border-subtle)",
       }}
     >
-      <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
-        <span style={{ fontSize: "var(--font-size-control)", fontWeight: "var(--weight-medium)" }}>
-          {props.name}
-        </span>
-        <span
-          style={{
-            fontSize: "var(--font-size-caption)",
-            lineHeight: "var(--line-height-caption)",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {props.hint}
-        </span>
-      </span>
+      <RowCopy name={props.name} hint={props.hint} />
       {props.control}
+    </div>
+  );
+}
+
+/** 行的左半：名字 + 说明，`note` 是说明下方可选的一行状态。Row 与 DataDirectoryRow 共用 */
+function RowCopy(props: { name: string; hint: string; note?: React.ReactNode }) {
+  return (
+    <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
+      <span style={{ fontSize: "var(--font-size-control)", fontWeight: "var(--weight-medium)" }}>
+        {props.name}
+      </span>
+      <span
+        style={{
+          fontSize: "var(--font-size-caption)",
+          lineHeight: "var(--line-height-caption)",
+          color: "var(--color-text-secondary)",
+        }}
+      >
+        {props.hint}
+      </span>
+      {props.note}
+    </span>
+  );
+}
+
+/**
+ * Data section 的最后一行：数据目录的绝对路径 + Reveal。不走通用 Row：
+ * 路径是全页唯一可能比说明还宽的 control——Row 的 control 列是 `auto`，
+ * 放进去窗口一窄就先把说明挤没。这里说明列保底 240px，窄了先截路径。
+ * 是 Data section 最后一行，照设计稿去掉底部发丝线。
+ */
+function DataDirectoryRow() {
+  const [dir, setDir] = useState<
+    { kind: "loading" } | { kind: "ready"; path: string } | { kind: "error" }
+  >({ kind: "loading" });
+  // Reveal 失败原因；成功一次就清掉，不用「上一次失败」压住这一次成功
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.settings
+      .dataDir()
+      .then((path) => {
+        if (!cancelled) setDir({ kind: "ready", path });
+      })
+      .catch(() => {
+        if (!cancelled) setDir({ kind: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const reveal = () => {
+    void api.settings
+      .revealDataDir()
+      .then(() => setRevealError(null))
+      .catch((cause: unknown) =>
+        setRevealError(cause instanceof Error ? cause.message : String(cause)),
+      );
+  };
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        // 控件列最小是 0：列宽不够时路径（overflow:hidden，自动最小宽为 0）跟着收窄
+        gridTemplateColumns: "minmax(240px,1fr) minmax(0,auto)",
+        alignItems: "center",
+        gap: "var(--space-4)",
+        minHeight: "var(--list-item-rich)",
+        padding: "var(--space-3) 0",
+      }}
+    >
+      <RowCopy
+        name="Data directory"
+        hint="Sessions, workspaces, skills and mcp.json live here as plain files."
+        note={
+          revealError !== null && (
+            <span role="alert" style={{ fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+              {revealError}
+            </span>
+          )
+        }
+      />
+      <span
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-end",
+          gap: "var(--space-2)",
+          minWidth: 0,
+        }}
+      >
+        {dir.kind === "ready" && (
+          // 路径很长，从左边截断让末段（真正区分不同机器的那一截）留在视野里；
+          // 取到之前不渲染，免得先闪一下 "undefined"。bdi 见 .data-dir-path 的注释
+          <code className="data-dir-path" title={dir.path}>
+            <bdi dir="ltr">{dir.path}</bdi>
+          </code>
+        )}
+        {dir.kind === "error" && <code className="data-dir-path-unavailable">Unavailable</code>}
+        <PanelButton onClick={reveal} title="Open the data directory">
+          <Icon name="folder" size={14} /> Reveal
+        </PanelButton>
+      </span>
     </div>
   );
 }

@@ -5,7 +5,7 @@
  * 不同步的话，用户在应用里选了暗色，窗口的 vibrancy 材质、原生目录选择器
  * 仍然按系统外观走——暗色 UI 底下压着一层亮材质，一眼就露馅。
  */
-import { ipcMain, nativeTheme } from "electron";
+import { app, ipcMain, nativeTheme, shell } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { AppSettings, SettingsPatch } from "../../shared/settings.ts";
 import { resolveNativeThemeSource } from "./native-theme.ts";
@@ -26,4 +26,21 @@ export function registerSettingsIpc(store: SettingsStore): void {
       return next;
     },
   );
+
+  /**
+   * 数据目录的绝对路径。消费者是设置 General 页的 Data directory 行——
+   * 本地优先的应用，数据住哪要能一行说清。
+   */
+  ipcMain.handle(ipcChannels.settingsDataDir, (): string => app.getPath("userData"));
+
+  /**
+   * 在 Finder 里打开数据目录本身（同 skill/ipc.ts 的 skillReveal 一个写法与
+   * 注释风格）。`shell.openPath` 失败时回一个非空字符串而不是抛错——这里要
+   * throw 出去让 renderer 知道，不能吞。
+   */
+  ipcMain.handle(ipcChannels.settingsRevealDataDir, async (): Promise<void> => {
+    const failure = await shell.openPath(app.getPath("userData"));
+    // 这条消息会原样显示在设置页（英文界面），所以用英文
+    if (failure !== "") throw new Error(`Couldn't open the data directory: ${failure}`);
+  });
 }
