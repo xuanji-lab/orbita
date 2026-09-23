@@ -1,9 +1,6 @@
 :root {
   color-scheme: light;
 
-  /* 韦恩图圆的淡填充（4-4，值取自 skills-map-3circle-v2） */
-  --venn-fill: rgba(31, 35, 40, 0.045);
-
   /* surfaces */
   --color-bg-app: #f3f4f1;
   --color-bg-sidebar: #f7f7f3;
@@ -82,8 +79,6 @@
    字重与文字色兜底（readme：active is marked by weight），不靠色块。
    设置里叫 Warm；system 不落这档（落 Ink），是纯手动档。 */
 :root[data-theme="dark"] {
-  --venn-fill: rgba(214, 213, 207, 0.06);
-
   color-scheme: dark;
   --color-bg-app: #191c1d;
   --color-bg-sidebar: #1e2223;
@@ -129,8 +124,6 @@
    中性灰 #121212「有点泛黄」→ 定这版更暗的中性。若仍泛黄，退手是地加一丝冷偏
    （#0a0b0c）或降 accent-soft 透明度。black 是手动档，system 跟随系统只落 light/dark。 */
 :root[data-theme="black"] {
-  --venn-fill: rgba(237, 237, 237, 0.06);
-
   color-scheme: dark;
   --color-bg-app: #0a0a0a;
   --color-bg-sidebar: #0e0e0e;

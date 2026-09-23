@@ -1088,6 +1088,22 @@ body {
 }
 
 /*
+ * 韦恩图圆的淡填充（4-4，值取自 skills-map-3circle-v2）：只服务这一个 feature，
+ * 从 tokens/colors.css 搬到这里（Implementation rules：只服务一个 feature 的值
+ * 不进 tokens/，落在渲染层那个 feature 自己的 CSS 旁边）——三个选择器与三个值原样
+ * 未改，纯搬家。
+ */
+:root {
+  --venn-fill: rgba(31, 35, 40, 0.045);
+}
+:root[data-theme="dark"] {
+  --venn-fill: rgba(214, 213, 207, 0.06);
+}
+:root[data-theme="black"] {
+  --venn-fill: rgba(237, 237, 237, 0.06);
+}
+
+/*
  * Skills 韦恩图（4-4，几何取自 skills-map-3circle-v2）：圆淡填充 --venn-fill +
  * 描边；点/环只用位置与形状表达集合，不用颜色区分；名字 10px 带 paint-order
  * 玻璃底描边（压在圆边上也能读）；missing 三角 + danger。
