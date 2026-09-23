@@ -1769,6 +1769,43 @@ body {
 }
 
 /*
+ * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
+ * 工具 chips（简报 1）：mono 小胶囊横排换行，纯函数 `visibleTools`
+ * （tool-chips.ts）算出 shown/hidden，这里只管展示。「+N more」是
+ * `<button>`（键盘可达），其余 chip 是纯展示 `<span>`。
+ */
+.mcp-tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mcp-tool-chip {
+  display: inline-flex;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  padding: 1.5px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+button.mcp-tool-chip {
+  font: inherit;
+  cursor: pointer;
+}
+.mcp-tool-chip-more {
+  background: transparent;
+  border-style: dashed;
+  color: var(--color-text-tertiary);
+  transition: var(--transition-hover);
+}
+.mcp-tool-chip-more:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-tertiary);
+}
+
+/*
  * ===== 表单输入框（Skills / MCP 面板） =====
  * McpPanel 与 SkillsPanel 各抄一份逐字节相同的 `inputStyle`（单行 `<input>` 与多行
  * `<textarea>` 只差 height/padding/resize），收成一个 class；等宽字体、

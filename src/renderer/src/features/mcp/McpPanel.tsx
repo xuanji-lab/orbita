@@ -7,6 +7,7 @@ import {
   PanelLine,
   RightPanelFrame,
 } from "../../shell/RightPanel";
+import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
 import type { SkillsState } from "../skills/useSkills";
 import type { McpServer, McpStatus } from "@shared/mcp";
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
@@ -29,6 +30,8 @@ export function McpPanel(props: {
   const [adding, setAdding] = useState(false);
   /** 删除二次确认：正要删哪一台（面板内一行确认，不弹窗） */
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** 工具 chips 已展开的 server 名字集合（简报 1，一次展开不再收回） */
+  const [expandedTools, setExpandedTools] = useState<ReadonlySet<string>>(new Set());
   const error = serversLoad.kind === "failed" ? serversLoad.message : null;
 
   // Reload 期间：非 disabled 行都转 connecting（实时状态还没回来，不装作不变）
@@ -147,7 +150,17 @@ export function McpPanel(props: {
               {server.detail}
             </code>
             {server.status.kind === "ready" && server.status.tools.length > 0 && (
-              <PanelLine>{server.status.tools.join(" · ")}</PanelLine>
+              <ToolChips
+                tools={server.status.tools}
+                expanded={expandedTools.has(server.name)}
+                onExpand={() =>
+                  setExpandedTools((prev) => {
+                    const next = new Set(prev);
+                    next.add(server.name);
+                    return next;
+                  })
+                }
+              />
             )}
             {server.status.kind === "failed" && (
               <p
@@ -516,5 +529,28 @@ function StatusText(props: { status: McpStatus }) {
     >
       {text}
     </span>
+  );
+}
+
+/**
+ * ready 卡的工具列表（简报 1）：纯函数 `visibleTools` 算出这一刻该显示哪些、
+ * 折起来几个，这里只管渲染。展示用的 chip 是 `<span>`，「+N more」是
+ * `<button>`（键盘可达，点击后在卡片内展开全部、不再收回）。
+ */
+function ToolChips(props: { tools: string[]; expanded: boolean; onExpand: () => void }) {
+  const { shown, hidden } = visibleTools(props.tools, TOOL_CHIP_LIMIT, props.expanded);
+  return (
+    <div className="mcp-tool-chips">
+      {shown.map((tool) => (
+        <span key={tool} className="mcp-tool-chip">
+          {tool}
+        </span>
+      ))}
+      {hidden.length > 0 && (
+        <button type="button" className="mcp-tool-chip mcp-tool-chip-more" onClick={props.onExpand}>
+          +{hidden.length} more
+        </button>
+      )}
+    </div>
   );
 }
