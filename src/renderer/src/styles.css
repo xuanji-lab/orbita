@@ -1770,6 +1770,44 @@ body {
 
 /*
  * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
+ * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
+ * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边
+ * 加深，呼应稿子的「filesystem 卡演示 hover」帧。
+ */
+.mcp-card {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+.mcp-card:hover,
+.mcp-card:focus-within {
+  border-color: var(--color-border-strong);
+}
+.mcp-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: var(--weight-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/*
+ * power / trash 悬停浮现（简报 3）：与 `.task-row` / `.skill-row` 同一套
+ * `.reveal` 机制（styles.css 顶部），只多挂一个 `.mcp-card` 宿主。删除二次
+ * 确认行出现时强制常显——由 McpPanel.tsx 内联 `opacity: 1` 覆盖（同侧栏星标
+ * 「已星标常显」的先例），不靠这里的选择器兜底。
+ */
+.mcp-card:hover .reveal,
+.mcp-card:focus-within .reveal {
+  opacity: 1;
+}
+.mcp-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/*
  * 工具 chips（简报 1）：mono 小胶囊横排换行，纯函数 `visibleTools`
  * （tool-chips.ts）算出 shown/hidden，这里只管展示。「+N more」是
  * `<button>`（键盘可达），其余 chip 是纯展示 `<span>`。
@@ -1807,8 +1845,8 @@ button.mcp-tool-chip {
 
 /*
  * 错误软底块 + Retry（简报 2）：danger-soft 圆角块，块内右下角就地重试——
- * 走 reloadMcp() 同一条路（runReload），不新增契约。限高滚动而不是折行：
- * 401 一类的长错误信息折行会把卡片撑得很高，滚动把高度还给列表。
+ * 走 reloadMcp() 同一条路，不新增契约。限高滚动而不是折行：401 一类的
+ * 长错误信息折行会把卡片撑得很高，滚动把高度还给列表。
  */
 .mcp-error {
   display: grid;
@@ -1854,6 +1892,62 @@ button.mcp-tool-chip {
   color: var(--color-text-tertiary);
   border-color: var(--color-border-subtle);
   cursor: default;
+}
+
+/*
+ * 虚线「Add a server」卡（简报 4）：列表尾的第二入口，与页头 `+` 同一个
+ * onClick（进添加表单）。
+ */
+.mcp-add-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-control);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.mcp-add-card:hover,
+.mcp-add-card:focus-visible {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  border-color: var(--color-text-tertiary);
+}
+
+/* 空态（简报 4）：一台都没有时的主画面，两个出口都是现成动作 */
+.mcp-empty {
+  padding: 40px var(--space-5) 32px;
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+.mcp-empty-icon {
+  color: var(--color-text-tertiary);
+  margin-bottom: 2px;
+}
+.mcp-empty-title {
+  margin: 0;
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+}
+.mcp-empty-desc {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  max-width: 220px;
+  line-height: 1.6;
+}
+.mcp-empty-actions {
+  margin-top: var(--space-2);
+  display: flex;
+  gap: var(--space-2);
 }
 
 /*
