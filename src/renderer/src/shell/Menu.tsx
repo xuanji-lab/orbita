@@ -283,7 +283,9 @@ export function Menu(props: {
             ref={menuRef}
             role="menu"
             tabIndex={-1}
-            className="glass-card glass-float"
+            // menu-panel：Menu 是唯一真正浮在任意内容之上的（position: fixed portal），
+            // 实色面板见 styles.css 的注释
+            className="glass-card glass-float menu-panel"
             onPointerEnter={props.hoverOpen === true ? cancelLeave : undefined}
             onPointerLeave={props.hoverOpen === true ? scheduleLeave : undefined}
             onKeyDown={(event) => {

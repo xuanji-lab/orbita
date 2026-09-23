@@ -4,19 +4,22 @@
    keep in sync. Glass is for SURFACES only — text is always a solid
    --color-text-* value.
 
+   No blur (2026-09-23): the CSS blur-behind-a-surface property turned any
+   moving pixel on screen into a full-window GPU recomposite every frame
+   (numbers in the commit that removed it). Translucency now comes from the
+   alpha ladder alone — stacking, not blurring.
+
    Dark is the MORE opaque theme (.70 vs .60). Light text needs a dark, settled
    ground: at a low alpha the wallpaper bleeds through and light-on-grey loses
    its contrast. Dark glass therefore blocks more, not less. */
 :root {
   --glass-alpha: 0.6; /* @kind other */
-  --glass-blur: 20px;
   --glass-border: rgba(255, 255, 255, 0.55);
   --glass-bg: rgba(255, 255, 255, 0.6);
 }
 
 :root[data-theme="dark"] {
   --glass-alpha: 0.7; /* @kind other */
-  --glass-blur: 20px;
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-bg: rgba(35, 37, 37, 0.7);
 }
@@ -27,7 +30,6 @@
    2026-09-03 修订二教训：tint 不能用 app 色，层叠会塌成一块平色。 */
 :root[data-theme="black"] {
   --glass-alpha: 0.7; /* @kind other */
-  --glass-blur: 20px;
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-bg: rgba(17, 17, 17, 0.7);
 }
@@ -38,6 +40,4 @@
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-composer);
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  backdrop-filter: blur(var(--glass-blur));
 }

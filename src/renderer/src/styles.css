@@ -43,6 +43,20 @@
 }
 
 /*
+ * Menu 弹层额外改实色面板（去 blur 的连带改动）：Menu.tsx 是这四处浮层里唯一真正
+ * 压在任意内容之上的——它 portal 到 body、`position: fixed` 按锚点定位，随时可能
+ * 浮在聊天正文、侧栏或任何东西上方。没有 blur 时半透明浮层会让背后的字直接漏出来、
+ * 不可读，所以单独给它一层实色底。排队条 / 收尾确认卡 / 审批条不用这条：它们渲染在
+ * Pane 的 footer 网格行里，与 transcript 的滚动区是不重叠的两个 grid track——
+ * transcript 会让位缩短而不是被它们盖住，背后本来就没有正文，维持原来的纯玻璃即可。
+ * `--color-bg-panel` 三个主题都已定义，边框仍是 `--glass-border`，保持与玻璃卡同一圈
+ * 发丝描边。
+ */
+.menu-panel {
+  background: var(--color-bg-panel);
+}
+
+/*
  * SessionCard 不属于「浮层」——静止态就是 --shadow-composer，hover 才抬一级到
  * --shadow-popover（设计系统 *Hover, press, disabled*：卡片 hover 只抬阴影，不挪位置、
  * 不变色），所以不用 `.glass-float`，单独一条 hover 规则。
@@ -303,8 +317,6 @@ body {
   background: var(--glass-bg);
   border: 0;
   border-radius: 0;
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  backdrop-filter: blur(var(--glass-blur));
   overflow: hidden;
 }
 
@@ -416,8 +428,6 @@ body {
   border: 0;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-composer);
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  backdrop-filter: blur(var(--glass-blur));
 }
 
 /*

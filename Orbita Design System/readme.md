@@ -6,7 +6,7 @@ not a dashboard, not a cockpit. Opening the app lands directly in Agent mode, wh
 slogan and one input box carry the entire home screen. Multi-agent complexity is deliberately
 hidden inside the (not yet shipped) orchestration mode.
 
-The interface is built from **frosted-glass cards with unified, stacking translucency**. The whole
+The interface is built from **translucent cards with a unified, stacking alpha ladder**. The whole
 app is one large semi-transparent card — the boundary of the application, sidebar included. The
 content pane floats inside it with an even gap on all four sides, and its left edge is what sets the
 sidebar's width; the sidebar itself has no surface, sitting directly on the boundary. The input box
@@ -144,8 +144,10 @@ off-white wash) plus two functional gradients in the app (a radial accent glow o
 and the mark gradient on the legacy logo block). Depth comes from translucency and hairlines, not
 from colour.
 
-**Transparency and blur.** Blur is *only* for surfaces: `blur(20px)` over a single `--glass-bg`.
-One alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
+**Transparency.** No blur (2026-09-23): translucency comes from a single `--glass-bg` alpha, stacked
+by nesting rather than blurred behind — a moving pixel anywhere on screen used to force the GPU to
+recomposite the whole window every frame, so the depth cue now comes from compositing alone. One
+alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
 `.60 / .84 / .936` and dark and black `.70 / .91 / .973`. The themes are deliberately unequal —
 **dark and black block more than light** — because light text needs a settled ground and a bleeding
 wallpaper costs a dark ground its whole promise. Dark and black share one glass recipe: **the tint
@@ -154,6 +156,10 @@ ladder always climbs from the page ground toward the panel colour.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
+**Floating layers** (menus, popovers — the ones that portal on top of arbitrary content) are the one
+exception: they skip the glass ladder for a solid `--color-bg-panel` fill, a hairline `--glass-border`,
+and `--shadow-popover` — without blur behind them, a translucent float would let whatever text sits
+under it bleed straight through and become unreadable.
 
 **Corners and borders.** 8px base radius: 4/6/8/10px steps, a literal 14px for the user bubble, and
 `999px` only for true circles (dots, spinners, the round send button). **Radius follows the surface**:
@@ -176,7 +182,7 @@ one flat grey, with failure red as the only exception. Body text never competes 
 A run of same-type tool calls gathers under a plain verb header (`读取 · × 4`): it lives expanded
 while the turn runs, and folds itself away — every group, every time, without memory — the moment
 the turn settles; a failed run keeps a red glyph on the header so failure never folds away silently.
-Solid panels (dialogs, drawers) are white with a hairline and a heavier shadow.
+Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a heavier shadow.
 
 **Shadows.** Four steps, all cool-grey and soft: `--shadow-border` (a 1px inner hairline),
 `--shadow-composer` (cards and the input box), `--shadow-popover` (menus, card hover),
@@ -257,7 +263,7 @@ component instead of duplicating it.
 | `tokens/fonts.css` | `@font-face` for Literata, Manrope, Source Han Serif/Sans SC. |
 | `tokens/spacing.css` | Space scale, radii, control and row heights, layout widths. |
 | `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (all three themes). |
-| `tokens/glass.css` | The single glass alpha, blur, border, and the `.glass-card` recipe. |
+| `tokens/glass.css` | The single glass alpha, border, and the `.glass-card` recipe. |
 | `tokens/motion.css` | Durations, easings, the three composed transitions. |
 | `guidelines/*.card.html` | 18 foundation specimen cards (Colors, Type, Spacing, Brand). |
 | `components/core/` | `Button`, `IconButton`, `Badge`, `TextField`, `SelectField`, `Modal`, `Icon`. |
