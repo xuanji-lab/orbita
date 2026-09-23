@@ -38,6 +38,12 @@ export function McpPanel(props: {
   const statusOf = (status: McpStatus): McpStatus =>
     reloading && status.kind !== "disabled" ? { kind: "connecting" } : status;
 
+  /** Retry 与页头 Reload 同一路（简报 2：不新增契约），忙的时候两处按钮一起禁用 */
+  const runReload = (): void => {
+    setReloading(true);
+    void Promise.resolve(reloadMcp()).finally(() => setReloading(false));
+  };
+
   const header = (
     <>
       <Icon name="plug" size={16} style={{ color: "var(--color-text-secondary)" }} />
@@ -73,14 +79,7 @@ export function McpPanel(props: {
           <PanelButton onClick={openMcpConfig}>
             <Icon name="pencil-line" size={14} /> Edit mcp.json
           </PanelButton>
-          <PanelButton
-            disabled={reloading}
-            onClick={() => {
-              setReloading(true);
-              // reloadMcp 落定后重拉列表；busy 只由这里管，失败也要复位
-              void Promise.resolve(reloadMcp()).finally(() => setReloading(false));
-            }}
-          >
+          <PanelButton disabled={reloading} onClick={runReload}>
             <Icon
               name="refresh-cw"
               size={14}
@@ -163,17 +162,21 @@ export function McpPanel(props: {
               />
             )}
             {server.status.kind === "failed" && (
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: "var(--font-size-caption)",
-                  color: "var(--color-danger)",
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                }}
-              >
-                {server.status.message}
-              </p>
+              <div className="mcp-error">
+                <p className="mcp-error-text">{server.status.message}</p>
+                <span className="mcp-error-actions">
+                  <button type="button" className="mcp-retry-btn" disabled={reloading} onClick={runReload}>
+                    <Icon
+                      name="refresh-cw"
+                      size={11}
+                      // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
+                      className={reloading ? "anim-continuous" : undefined}
+                      style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
+                    />
+                    Retry
+                  </button>
+                </span>
+              </div>
             )}
             {confirming === server.name && (
               <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>

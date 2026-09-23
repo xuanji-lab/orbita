@@ -1806,6 +1806,57 @@ button.mcp-tool-chip {
 }
 
 /*
+ * 错误软底块 + Retry（简报 2）：danger-soft 圆角块，块内右下角就地重试——
+ * 走 reloadMcp() 同一条路（runReload），不新增契约。限高滚动而不是折行：
+ * 401 一类的长错误信息折行会把卡片撑得很高，滚动把高度还给列表。
+ */
+.mcp-error {
+  display: grid;
+  gap: var(--space-2);
+  padding: 8px 10px;
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-md);
+}
+.mcp-error-text {
+  margin: 0;
+  max-height: 110px;
+  overflow-y: auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-danger);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mcp-error-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.mcp-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  color: var(--color-danger);
+  font: inherit;
+  font-size: var(--font-size-micro);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.mcp-retry-btn:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+.mcp-retry-btn:disabled {
+  color: var(--color-text-tertiary);
+  border-color: var(--color-border-subtle);
+  cursor: default;
+}
+
+/*
  * ===== 表单输入框（Skills / MCP 面板） =====
  * McpPanel 与 SkillsPanel 各抄一份逐字节相同的 `inputStyle`（单行 `<input>` 与多行
  * `<textarea>` 只差 height/padding/resize），收成一个 class；等宽字体、
