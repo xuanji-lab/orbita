@@ -1,7 +1,18 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { filterEntries, footerSummary, hasAgentsMd, orderEntries } from "./tree-view.ts";
-import type { FileEntry } from "../../../../shared/files.ts";
+import {
+  countLoadedEntries,
+  countVisibleEntries,
+  fileIcon,
+  filterCountText,
+  filterEntries,
+  footerSummary,
+  formatAge,
+  formatSize,
+  hasAgentsMd,
+  orderEntries,
+} from "./tree-view.ts";
+import type { FileEntry, FileRoot } from "../../../../shared/files.ts";
 
 const dir = (name: string): FileEntry => ({ name, kind: "directory", modifiedAt: 0 });
 const file = (name: string): FileEntry => ({ name, kind: "file", size: 1, modifiedAt: 0 });
@@ -76,5 +87,191 @@ describe("footerSummary", () => {
   it("attached 在盘上缺席：如实追加 missing，不静默", () => {
     deepStrictEqual(footerSummary(4, 1), "4 roots · 1 missing");
     deepStrictEqual(footerSummary(5, 2), "5 roots · 2 missing");
+  });
+});
+
+describe("fileIcon", () => {
+  it("目录按展开态选 folder / folder-open，忽略名字", () => {
+    deepStrictEqual(fileIcon("src", "directory", false), "folder");
+    deepStrictEqual(fileIcon("src", "directory", true), "folder-open");
+    deepStrictEqual(fileIcon("src", "directory"), "folder"); // 不传 open 默认收起
+  });
+
+  it("AGENTS.md 保持 book（精确名，先于扩展名判定）", () => {
+    deepStrictEqual(fileIcon("AGENTS.md", "file"), "book");
+  });
+
+  it("symlink 一律 file——契约里没有目标路径，也不知道目标是文件还是目录", () => {
+    deepStrictEqual(fileIcon("docs-archive", "symlink"), "file");
+    deepStrictEqual(fileIcon("readme.md", "symlink"), "file"); // 扩展名不影响，仍是中性 file
+  });
+
+  it("代码扩展名 → file-code-2", () => {
+    deepStrictEqual(fileIcon("index.ts", "file"), "file-code-2");
+    deepStrictEqual(fileIcon("App.tsx", "file"), "file-code-2");
+    deepStrictEqual(fileIcon("main.py", "file"), "file-code-2");
+    deepStrictEqual(fileIcon("styles.CSS", "file"), "file-code-2"); // 大小写不敏感
+  });
+
+  it("配置扩展名 → file-json-2", () => {
+    deepStrictEqual(fileIcon("package.json", "file"), "file-json-2");
+    deepStrictEqual(fileIcon("tsconfig.YAML", "file"), "file-json-2");
+    deepStrictEqual(fileIcon("bun.lock", "file"), "file-json-2");
+  });
+
+  it("常见无扩展名配置文件与点文件 → file-json-2", () => {
+    deepStrictEqual(fileIcon(".gitignore", "file"), "file-json-2");
+    deepStrictEqual(fileIcon(".gitattributes", "file"), "file-json-2");
+    deepStrictEqual(fileIcon(".editorconfig", "file"), "file-json-2");
+    deepStrictEqual(fileIcon(".npmrc", "file"), "file-json-2");
+    deepStrictEqual(fileIcon(".nvmrc", "file"), "file-json-2");
+    deepStrictEqual(fileIcon(".env", "file"), "file-json-2");
+    deepStrictEqual(fileIcon(".env.local", "file"), "file-json-2");
+    deepStrictEqual(fileIcon(".env.production", "file"), "file-json-2");
+    deepStrictEqual(fileIcon("Dockerfile", "file"), "file-json-2");
+    deepStrictEqual(fileIcon("Makefile", "file"), "file-json-2");
+    deepStrictEqual(fileIcon("makefile", "file"), "file-json-2"); // 大小写不敏感
+  });
+
+  it("图片扩展名 → image", () => {
+    deepStrictEqual(fileIcon("shot.PNG", "file"), "image");
+    deepStrictEqual(fileIcon("logo.svg", "file"), "image");
+  });
+
+  it("文本扩展名 → file-text", () => {
+    deepStrictEqual(fileIcon("README.md", "file"), "file-text");
+    deepStrictEqual(fileIcon("notes.txt", "file"), "file-text");
+  });
+
+  it("无扩展名、不在任何配置名单里、其它未知扩展名 → file（兜底）", () => {
+    deepStrictEqual(fileIcon("LICENSE", "file"), "file");
+    deepStrictEqual(fileIcon("binary.out", "file"), "file");
+    deepStrictEqual(fileIcon(".mystery", "file"), "file"); // 点文件但不在配置名单
+  });
+});
+
+describe("formatSize", () => {
+  it("0 字节", () => {
+    deepStrictEqual(formatSize(0), "0 B");
+  });
+
+  it("小于 1024：原样报字节数", () => {
+    deepStrictEqual(formatSize(812), "812 B");
+  });
+
+  it("刚好 1024：进 KB 档，不是 1024 B", () => {
+    deepStrictEqual(formatSize(1024), "1 KB");
+  });
+
+  it("KB 取整", () => {
+    deepStrictEqual(formatSize(49_152), "48 KB"); // 48 * 1024，整除
+    deepStrictEqual(formatSize(49_700), "49 KB"); // 48.53 KB，四舍五入进位
+  });
+
+  it("MB 一位小数，去掉多余的 .0", () => {
+    deepStrictEqual(formatSize(Math.round(1.9 * 1024 * 1024)), "1.9 MB");
+    deepStrictEqual(formatSize(2 * 1024 * 1024), "2 MB");
+  });
+
+  it("GB 一位小数，去掉多余的 .0", () => {
+    deepStrictEqual(formatSize(Math.round(2.3 * 1024 * 1024 * 1024)), "2.3 GB");
+    deepStrictEqual(formatSize(4 * 1024 * 1024 * 1024), "4 GB");
+  });
+});
+
+describe("formatAge", () => {
+  const NOW = 1_700_000_000_000;
+
+  it("1 分钟以内：now", () => {
+    deepStrictEqual(formatAge(NOW, NOW), "now");
+    deepStrictEqual(formatAge(NOW - 59_000, NOW), "now");
+  });
+
+  it("未来时间戳（主进程与本机时钟不同步）也当 now，不显示负数", () => {
+    deepStrictEqual(formatAge(NOW + 60_000, NOW), "now");
+  });
+
+  it("分钟档", () => {
+    deepStrictEqual(formatAge(NOW - 60_000, NOW), "1m");
+    deepStrictEqual(formatAge(NOW - 12 * 60_000, NOW), "12m");
+  });
+
+  it("小时档", () => {
+    deepStrictEqual(formatAge(NOW - 60 * 60_000, NOW), "1h");
+  });
+
+  it("天档", () => {
+    deepStrictEqual(formatAge(NOW - 24 * 60 * 60_000, NOW), "1d");
+    deepStrictEqual(formatAge(NOW - 3 * 24 * 60 * 60_000, NOW), "3d");
+  });
+
+  it("周档", () => {
+    deepStrictEqual(formatAge(NOW - 7 * 24 * 60 * 60_000, NOW), "1w");
+    deepStrictEqual(formatAge(NOW - 35 * 24 * 60 * 60_000, NOW), "5w");
+  });
+
+  it("月档", () => {
+    deepStrictEqual(formatAge(NOW - 60 * 24 * 60 * 60_000, NOW), "2mo");
+    deepStrictEqual(formatAge(NOW - 240 * 24 * 60 * 60_000, NOW), "8mo");
+  });
+
+  it("年档", () => {
+    deepStrictEqual(formatAge(NOW - 365 * 24 * 60 * 60_000, NOW), "1y");
+    deepStrictEqual(formatAge(NOW - 2 * 365 * 24 * 60 * 60_000, NOW), "2y");
+  });
+});
+
+describe("filterCountText", () => {
+  it("不过滤：只报已加载总数", () => {
+    deepStrictEqual(filterCountText(41, 41, false), "41");
+  });
+
+  it("过滤中：命中 / 总数", () => {
+    deepStrictEqual(filterCountText(2, 41, true), "2 / 41");
+  });
+
+  it("过滤后 0 命中：0 / 总数（不是空字符串）", () => {
+    deepStrictEqual(filterCountText(0, 41, true), "0 / 41");
+  });
+});
+
+describe("countVisibleEntries / countLoadedEntries", () => {
+  const root: FileRoot = { kind: "workspace", label: "orbita", path: "/ws", exists: true };
+
+  it("只数已展开层，折叠的子树哪怕已加载也不计入 shown", () => {
+    const dirs = new Map<string, readonly FileEntry[]>([
+      ["/ws", [dir("src"), file("README.md")]],
+      ["/ws/src", [file("index.ts"), file("index.test.ts")]], // 已加载但父目录没展开
+    ]);
+    deepStrictEqual(countVisibleEntries([root], dirs, new Set(), ""), 2);
+    deepStrictEqual(countLoadedEntries(dirs), 4);
+  });
+
+  it("展开后子树的条目计入 shown，且每一层都受同一条过滤词约束（父层不匹配，子层再匹配也不下探——与 rowsOf 的渲染规则一致）", () => {
+    const dirs = new Map<string, readonly FileEntry[]>([
+      ["/ws", [dir("src"), file("README.md")]],
+      ["/ws/src", [file("index.ts"), file("styles.css")]],
+    ]);
+    const expanded = new Set(["/ws/src"]);
+    deepStrictEqual(countVisibleEntries([root], dirs, expanded, ""), 4);
+    // "s"：顶层命中 src（不命中 README.md），下探后子层两个文件名都带 s
+    deepStrictEqual(countVisibleEntries([root], dirs, expanded, "s"), 3);
+  });
+
+  it("根不存在（exists: false）时不下探——即便 dirs 里有残留缓存也不计入", () => {
+    const missingRoot: FileRoot = { ...root, exists: false };
+    const dirs = new Map<string, readonly FileEntry[]>([["/ws", [file("stale.md")]]]);
+    deepStrictEqual(countVisibleEntries([missingRoot], dirs, new Set(), ""), 0);
+    deepStrictEqual(countLoadedEntries(dirs), 1); // loaded 口径不管根是否还存在，如实数已加载的
+  });
+
+  it("跨多个根累加", () => {
+    const rootB: FileRoot = { kind: "attached", label: "vault", path: "/vault", exists: true };
+    const dirs = new Map<string, readonly FileEntry[]>([
+      ["/ws", [file("a.md")]],
+      ["/vault", [file("b.md"), file("c.md")]],
+    ]);
+    deepStrictEqual(countVisibleEntries([root, rootB], dirs, new Set(), ""), 3);
+    deepStrictEqual(countLoadedEntries(dirs), 3);
   });
 });

@@ -1685,6 +1685,23 @@ body {
  * 行背景的 hover 挂同一宿主：Reveal 按钮是行 button 的兄弟节点（button 不能套
  * button），不在行内 hover 会让背景在手指移过去时先灭掉。
  */
+/* 会随 hover 变的底色 / 字色只写在 CSS 里：留在 inline style 会压过下面的 :hover，
+   行 hover 底色此前就因为 inline 的 `background: transparent` 一直没生效（2026-09-23 实测） */
+.file-row {
+  background: transparent;
+  transition: var(--transition-hover);
+}
+.file-hover-act {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+/* 行尾 Reveal 浮在行上：实色底盖住行尾的名字 / size·mtime（设计稿 .row-act） */
+.file-row-reveal {
+  background: var(--color-bg-panel);
+}
+.file-hover-act:hover {
+  color: var(--color-text-primary);
+}
 .file-hover-host .file-hover-act {
   display: none;
 }
@@ -1693,6 +1710,103 @@ body {
 }
 .file-hover-host:hover .file-row {
   background: var(--color-bg-hover);
+}
+
+/*
+ * hover 行尾的 size · mtime（`48 KB · 12m`）：只在 hover 时出现，不 hover 不占
+ * 视觉——它们是「看一眼就够」的机器事实，常驻会让每行都背着两个数字（裁决见
+ * 设计稿「待裁决」章节）。挂同一个 .file-hover-host 宿主，与 Reveal 同一套
+ * 浮现机制。
+ */
+.file-row-meta {
+  display: none;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.file-hover-host:hover .file-row-meta {
+  display: inline;
+}
+
+/*
+ * symlink 的右下角角标：契约里的 `symlink` kind 没有目标路径、也不知道目标是
+ * 文件还是目录，图标本体用中性的 file，角标只说「这是一条链接」。8px 叠在
+ * 14px 图标的右下角，与图标共享同一个相对定位的小容器。
+ */
+.file-icon-badge-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.file-symlink-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+}
+
+/*
+ * 根分组头 sticky：树很长时 Session / Workspace / Attached 组头钉在滚动容器顶部，
+ * 盖住底下滚过去的树行——「现在滚在哪个根里」永远有答案。
+ *
+ * 背景选 --color-bg-panel（实色）而不是设计稿画的 --glass-bg-solid：那个 token
+ * 在这套系统里不存在。读 RightPanel.tsx：右侧面板停靠态下 .right-panel-slot 本身
+ * 不画背景，内容直接坐在 .pane 的 --glass-bg 玻璃层上（narrow 悬浮态才会再叠一层
+ * --glass-bg 变实）——面板本体没有一个专门的「不透明」层可以照搬。这正是
+ * Transparency 规则给 floating layers（菜单、popover）的处理：跳过玻璃阶梯，
+ * 改用实色 --color-bg-panel + 发丝——sticky 头钉在滚动内容之上，是同一种「浮在
+ * 任意内容之上、背后不能透字」的场景，用同一个 token。
+ */
+.file-root-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg-panel);
+}
+
+/*
+ * missing attached 根的常驻 Detach（与 hover 才浮现的 .file-hover-act 不同：
+ * 这个状态需要处理，入口常驻现场，同 Skills 列表 missing 行的原则）。
+ */
+.file-detach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-micro);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.file-detach-btn:hover {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+/*
+ * AgentsMdHint（虚线提示行）与 AttachRow（底部 Attach 按钮）的 hover：改成 CSS
+ * class 而不是 onMouseEnter/onMouseLeave 手改 inline style（Implementation
+ * rules 硬规则：有状态样式写 CSS class，不用 useState + onMouseEnter/Leave 画
+ * hover）。**会随 hover 变的属性（底色、字色）只能写在这里**：留在 inline style
+ * 里的话 inline 优先级压过 `:hover`，hover 就静默失效了。
+ */
+.file-hint-row,
+.file-attach-row {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  transition: var(--transition-hover);
+}
+.file-hint-row:hover,
+.file-attach-row:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 /*

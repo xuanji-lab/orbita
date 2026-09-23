@@ -5,6 +5,7 @@ import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide
 import arrowLeft from "../../../../Orbita Design System/assets/icons/lucide/arrow-left.svg?raw";
 import arrowLeftRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-left-right.svg?raw";
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
+import arrowUpRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-up-right.svg?raw";
 import blend from "../../../../Orbita Design System/assets/icons/lucide/blend.svg?raw";
 import book from "../../../../Orbita Design System/assets/icons/lucide/book.svg?raw";
 import bookOpen from "../../../../Orbita Design System/assets/icons/lucide/book-open.svg?raw";
@@ -28,6 +29,9 @@ import ellipsisVertical from "../../../../Orbita Design System/assets/icons/luci
 import eye from "../../../../Orbita Design System/assets/icons/lucide/eye.svg?raw";
 import eyeOff from "../../../../Orbita Design System/assets/icons/lucide/eye-off.svg?raw";
 import externalLink from "../../../../Orbita Design System/assets/icons/lucide/external-link.svg?raw";
+import file from "../../../../Orbita Design System/assets/icons/lucide/file.svg?raw";
+import fileCode2 from "../../../../Orbita Design System/assets/icons/lucide/file-code-2.svg?raw";
+import fileJson2 from "../../../../Orbita Design System/assets/icons/lucide/file-json-2.svg?raw";
 import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
@@ -88,6 +92,7 @@ const ICONS = {
   "arrow-left": arrowLeft,
   "arrow-left-right": arrowLeftRight,
   "arrow-up": arrowUp,
+  "arrow-up-right": arrowUpRight,
   bot,
   brain,
   check,
@@ -108,6 +113,9 @@ const ICONS = {
   eye,
   "eye-off": eyeOff,
   "external-link": externalLink,
+  file,
+  "file-code-2": fileCode2,
+  "file-json-2": fileJson2,
   "fold-vertical": foldVertical,
   folder,
   "folder-open": folderOpen,

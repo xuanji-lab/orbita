@@ -3,7 +3,18 @@ import { Icon } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { api } from "../../api";
 import type { ChatSession } from "../chat/useChatSession";
-import { filterEntries, footerSummary, hasAgentsMd, orderEntries } from "./tree-view";
+import {
+  countLoadedEntries,
+  countVisibleEntries,
+  fileIcon,
+  filterCountText,
+  filterEntries,
+  footerSummary,
+  formatAge,
+  formatSize,
+  hasAgentsMd,
+  orderEntries,
+} from "./tree-view";
 import { useFileTree } from "./useFileTree";
 import type { FileEntryKind, FileRoot, FileRootKind } from "@shared/files";
 
@@ -47,7 +58,17 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
   /** 一个分组里的整棵子树（递归渲染已展开的层） */
   const rowsOf = (root: FileRoot, dir: string, depth: number): React.ReactNode => {
     const entries = tree.dirs.get(dir);
-    if (entries === undefined) return <DimRow key={`pending:${dir}`}>Loading…</DimRow>;
+    if (entries === undefined) {
+      // 只有 workspace 根的第一层加载态给 spinner：它是用户打开面板后第一眼
+      // 等的那一条，别的嵌套目录 Loading… 不加——加了到处转，反而没有重点。
+      const showSpinner = depth === 0 && root.kind === "workspace";
+      return (
+        <DimRow key={`pending:${dir}`}>
+          {showSpinner && <Icon name="loader-circle" size={12} spin style={{ marginRight: 6 }} />}
+          Loading…
+        </DimRow>
+      );
+    }
     const shown = filterEntries(orderEntries(entries), query);
     if (shown.length === 0) return null; // 空目录 / 全被过滤：安静，不出空文件夹
     return shown.map((entry) => {
@@ -61,6 +82,8 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
             kind={entry.kind}
             depth={depth}
             open={open}
+            size={entry.size}
+            modifiedAt={entry.modifiedAt}
             onToggle={() => tree.toggle(root.path, child)}
             onReveal={() => tree.reveal(root.path, child)}
           />
@@ -80,6 +103,14 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
   const groupCount = tree.roots.length + (sessionId === null ? 1 : 0);
   const error = actionError ?? tree.actionError;
 
+  /**
+   * 过滤行计数：shown 只数当前实际展开会渲染的行（与上面 rowsOf 同一条规则），
+   * loaded 是已加载目录的条目总数——过滤不递归拉取，这个口径写进 title。
+   */
+  const filtering = query.trim() !== "";
+  const shownCount = countVisibleEntries(tree.roots, tree.dirs, tree.expanded, query);
+  const loadedCount = countLoadedEntries(tree.dirs);
+
   const rootGroup = (root: FileRoot, index: number): React.ReactNode => {
     return (
       <div
@@ -94,8 +125,11 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
           kind={root.kind}
           detail={root.kind === "session" ? root.label : root.path}
           canReveal={root.exists}
+          missing={root.kind === "attached" && !root.exists}
           onReveal={root.exists ? () => tree.reveal(root.path, root.path) : undefined}
-          onDetach={root.kind === "attached" ? () => detach(root.path) : undefined}
+          // missing 的 attached 根下面有常驻 Detach（见 MissingAttachedRow）——组头
+          // 不再重复一个 hover 才出的 Detach，一个状态只留一个处理入口
+          onDetach={root.kind === "attached" && root.exists ? () => detach(root.path) : undefined}
         />
         {/* 「在 Proma 里找不到规则文件」的痛点落点：工作区没有 AGENTS.md 时给一条
             虚线提示行。点击只 reveal 工作区根（打开文件夹让用户手建）——创建动作
@@ -109,7 +143,7 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
           <DimRow>工作台为空 — agent 第一次写入时创建</DimRow>
         )}
         {!root.exists && root.kind === "attached" && (
-          <DimRow>Directory not found — detach or move it back</DimRow>
+          <MissingAttachedRow onDetach={() => detach(root.path)} />
         )}
         {root.exists && rowsOf(root, root.path, 0)}
       </div>
@@ -144,8 +178,23 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
       >
         {/* 过滤行钉在面板头顶部不随树滚动（设计稿的位置）：壳的内容区是一个滚动层，
             这里在内部分「固定过滤行 + 滚动树」两块，不动 RightPanelFrame */}
-        <FilterRow value={query} onChange={setQuery} />
-        <div style={{ minHeight: 0, overflowY: "auto", display: "grid", alignContent: "start" }}>
+        <FilterRow
+          value={query}
+          onChange={setQuery}
+          countText={filterCountText(shownCount, loadedCount, filtering)}
+        />
+        {/* 列宽钉死在容器宽度（minmax(0,1fr)）：隐式列默认按内容撑开，一条很长的附加目录
+            路径（不换行）会把整列撑到几倍宽，整棵树横向溢出、居中的 Attach 文案与行尾的
+            Detach 都被推出视野——省略号只有在列宽受约束时才会出现 */}
+        <div
+          style={{
+            minHeight: 0,
+            overflowY: "auto",
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr)",
+            alignContent: "start",
+          }}
+        >
           {error !== null && (
             <div style={{ padding: "var(--space-3)" }}>
               <PanelLine danger>{error}</PanelLine>
@@ -180,8 +229,8 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
 const failMessage = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
-/** 过滤行：本地过滤已加载的条目名（不递归拉取） */
-function FilterRow(props: { value: string; onChange: (value: string) => void }) {
+/** 过滤行：本地过滤已加载的条目名（不递归拉取），右侧计数「命中 / 已加载总数」 */
+function FilterRow(props: { value: string; onChange: (value: string) => void; countText: string }) {
   return (
     <div
       style={{
@@ -211,6 +260,17 @@ function FilterRow(props: { value: string; onChange: (value: string) => void }) 
           color: "var(--color-text-primary)",
         }}
       />
+      <span
+        title="Counts loaded entries only — the filter doesn't fetch collapsed folders"
+        style={{
+          flex: "0 0 auto",
+          fontFamily: "var(--font-family-mono)",
+          fontSize: "var(--font-size-micro)",
+          color: "var(--color-text-tertiary)",
+        }}
+      >
+        {props.countText}
+      </span>
     </div>
   );
 }
@@ -220,12 +280,14 @@ function RootLabel(props: {
   kind: FileRootKind;
   detail: string;
   canReveal: boolean;
+  /** 挂了但盘上找不到了：路径用 warning 色而不是 tertiary——颜色不是唯一信号，DimRow 那行的文字还在 */
+  missing?: boolean;
   onReveal?: () => void;
   onDetach?: () => void;
 }) {
   return (
     <div
-      className="file-hover-host"
+      className="file-hover-host file-root-label"
       style={{
         display: "flex",
         alignItems: "center",
@@ -246,7 +308,7 @@ function RootLabel(props: {
       <span
         title={props.detail}
         style={{
-          color: "var(--color-text-tertiary)",
+          color: props.missing === true ? "var(--color-warning)" : "var(--color-text-tertiary)",
           letterSpacing: 0,
           textTransform: "none",
           minWidth: 0,
@@ -290,8 +352,6 @@ function LabelAction(props: { title: string; onClick: () => void; children: Reac
         padding: 0,
         border: 0,
         borderRadius: "var(--radius-sm)",
-        background: "transparent",
-        color: "var(--color-text-secondary)",
         cursor: "pointer",
       }}
     >
@@ -301,28 +361,43 @@ function LabelAction(props: { title: string; onClick: () => void; children: Reac
 }
 
 /**
- * 30px 树行：chevron + 类型图标 + 名字 +（AGENTS.md 的 `rules` 尾注）。目录行点击
- * 展开收起，文件行点击直接 reveal；Reveal 按钮是兄弟节点浮在行上（button 不能套
- * button），两个都 Tab 可达。
+ * 30px 树行：chevron + 类型图标 + 名字 +（hover 时的 size · mtime，仅文件行）+
+ * （AGENTS.md 的 `rules` 尾注）。目录行点击展开收起，文件行点击直接 reveal；
+ * Reveal 按钮是兄弟节点浮在行上（button 不能套 button），两个都 Tab 可达。
  */
 function TreeRow(props: {
   name: string;
   kind: FileEntryKind;
   depth: number;
   open: boolean;
+  /** 字节数；只有文件行带（目录 / symlink 不带），hover 行尾的 size 就靠它判定要不要出 */
+  size?: number;
+  modifiedAt: number;
   onToggle: () => void;
   onReveal: () => void;
 }) {
   const isDir = props.kind === "directory";
+  const isSymlink = props.kind === "symlink";
   // dotfile：照列，但排在同层最后（orderEntries）且名字退灰——见 tree-view 的注释
   const dotted = props.name.startsWith(".");
   const isRules = props.name === "AGENTS.md";
+  const iconName = fileIcon(props.name, props.kind, props.open);
+  const hasMeta = props.size !== undefined;
+  // hover 行尾把 size·mtime 缩成 `48 KB · 12m`，省略的完整信息（名字、完整时间戳）
+  // 放回 title 里；symlink 没有 size，但契约里连目标路径都没有，title 只能如实说
+  // 「这是一条符号链接」，不假装知道更多
+  const title = isSymlink
+    ? "Symbolic link"
+    : hasMeta
+      ? `${props.name} · ${new Date(props.modifiedAt).toLocaleString()}`
+      : undefined;
   return (
     <div className="file-hover-host" style={{ position: "relative" }}>
       <button
         type="button"
         className="file-row"
         aria-expanded={isDir ? props.open : undefined}
+        title={title}
         onClick={isDir ? props.onToggle : props.onReveal}
         style={{
           display: "flex",
@@ -334,7 +409,6 @@ function TreeRow(props: {
           // 右侧给浮在行上的 Reveal（20px）留位：不留的话 AGENTS.md 的 rules 尾注会被它压住
           paddingRight: "calc(var(--space-3) + 20px)",
           border: 0,
-          background: "transparent",
           font: "inherit",
           fontSize: "var(--font-size-control)",
           textAlign: "left",
@@ -351,11 +425,27 @@ function TreeRow(props: {
         ) : (
           <span style={{ width: 12, flex: "0 0 auto" }} />
         )}
-        <Icon
-          name={isRules ? "book" : isDir ? (props.open ? "folder-open" : "folder") : "file-text"}
-          size={14}
-          style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-        />
+        {isSymlink ? (
+          // symlink：契约里没有目标路径、也不知道目标是文件还是目录——中性 file
+          // 图标 + 右下角 8px arrow-up-right 角标（真身路径需要 FileEntry 加
+          // target 字段，另开 shared PR，这里点到为止）
+          <span className="file-icon-badge-wrap">
+            <Icon name={iconName} size={14} style={{ color: "var(--color-text-tertiary)" }} />
+            <Icon
+              name="arrow-up-right"
+              size={8}
+              strokeWidth={2.6}
+              className="file-symlink-badge"
+              style={{ color: "var(--color-text-tertiary)" }}
+            />
+          </span>
+        ) : (
+          <Icon
+            name={iconName}
+            size={14}
+            style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
+          />
+        )}
         <span
           style={{
             flex: 1,
@@ -368,6 +458,11 @@ function TreeRow(props: {
         >
           {props.name}
         </span>
+        {props.size !== undefined && (
+          <span className="file-row-meta">
+            {formatSize(props.size)} · {formatAge(props.modifiedAt, Date.now())}
+          </span>
+        )}
         {isRules && (
           <span
             style={{
@@ -383,7 +478,7 @@ function TreeRow(props: {
       </button>
       <button
         type="button"
-        className="file-hover-act"
+        className="file-hover-act file-row-reveal"
         title="Reveal in Finder"
         onClick={props.onReveal}
         style={{
@@ -398,8 +493,6 @@ function TreeRow(props: {
           padding: 0,
           border: 0,
           borderRadius: "var(--radius-sm)",
-          background: "var(--color-bg-panel)",
-          color: "var(--color-text-secondary)",
           cursor: "pointer",
         }}
       >
@@ -410,9 +503,10 @@ function TreeRow(props: {
 }
 
 /** 灰字占位行（工作台为空 / 目录没了 / 还没有会话 / 加载中）——只占一行，不出空文件夹 */
-function DimRow(props: { children: React.ReactNode }) {
+function DimRow(props: { children: React.ReactNode; title?: string }) {
   return (
     <p
+      title={props.title}
       style={{
         margin: 0,
         height: 30,
@@ -421,10 +515,39 @@ function DimRow(props: { children: React.ReactNode }) {
         paddingLeft: "var(--space-3)",
         fontSize: "var(--font-size-caption)",
         color: "var(--color-text-tertiary)",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
       }}
     >
       {props.children}
     </p>
+  );
+}
+
+/**
+ * missing attached 根那一行：DimRow 文字 + 常驻 Detach 按钮同一行。与别处 hover
+ * 才浮现的 Detach 不同——这个状态需要用户处理，入口常驻现场（同 Skills 列表
+ * missing 行的原则）。颜色（组头路径的 warning）不是唯一信号，这里的文字照旧。
+ */
+function MissingAttachedRow(props: { onDetach: () => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 12 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <DimRow title="Directory not found — moved or renamed outside orbita">
+          Directory not found — moved or renamed
+        </DimRow>
+      </div>
+      <button
+        type="button"
+        className="file-detach-btn"
+        title="Detach this directory"
+        onClick={props.onDetach}
+      >
+        <Icon name="unlink" size={10} />
+        Detach
+      </button>
+    </div>
   );
 }
 
@@ -436,6 +559,7 @@ function AgentsMdHint(props: { onReveal: () => void }) {
   return (
     <button
       type="button"
+      className="file-hint-row"
       title="Create AGENTS.md in the workspace folder"
       onClick={props.onReveal}
       style={{
@@ -446,20 +570,10 @@ function AgentsMdHint(props: { onReveal: () => void }) {
         padding: "8px 10px",
         border: "1px dashed var(--color-border-strong)",
         borderRadius: "var(--radius-md)",
-        background: "transparent",
-        color: "var(--color-text-tertiary)",
         font: "inherit",
         fontSize: "var(--font-size-caption)",
         textAlign: "left",
         cursor: "pointer",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--color-bg-hover)";
-        e.currentTarget.style.color = "var(--color-text-primary)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--color-text-tertiary)";
       }}
     >
       <Icon name="book" size={13} style={{ flex: "0 0 auto" }} />
@@ -473,6 +587,7 @@ function AttachRow(props: { onAttach: () => void }) {
   return (
     <button
       type="button"
+      className="file-attach-row"
       title="Attach a directory"
       onClick={props.onAttach}
       style={{
@@ -484,19 +599,9 @@ function AttachRow(props: { onAttach: () => void }) {
         minHeight: 36,
         border: "1px dashed var(--color-border-strong)",
         borderRadius: "var(--radius-lg)",
-        background: "transparent",
-        color: "var(--color-text-tertiary)",
         font: "inherit",
         fontSize: "var(--font-size-control)",
         cursor: "pointer",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--color-bg-hover)";
-        e.currentTarget.style.color = "var(--color-text-primary)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--color-text-tertiary)";
       }}
     >
       <Icon name="plus" size={14} style={{ flex: "0 0 auto" }} /> Attach a directory
