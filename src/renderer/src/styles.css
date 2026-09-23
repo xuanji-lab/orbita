@@ -137,6 +137,72 @@
 }
 
 /*
+ * composer 底栏芯片群（窄槽修复）：复现——宽侧栏 + 右栏都打开时主槽被压到
+ * ~240px，四个芯片（工作区/权限/模型/思考档）+ 用量环互相挤压重叠。
+ *
+ * 结构：这一层只管「能不能缩」，不管缩到多窄——`flex: 1 1 auto` 让它先于
+ * Composer.tsx 里紧跟着的发送键让路（发送键 `flex: 0 0 auto` 不缩），
+ * `overflow: hidden` 兜底：真缩不下时裁掉多出来的部分，而不是把发送键挤出可见区。
+ *
+ * `.composer-bottom-bar .chip` 的 `min-width: 0`**只能局部生效，不能写成全局
+ * `.chip`**（2026-09-23 验收发现的真回归）：Chip 作为 flex 子项默认拿浏览器给的
+ * 隐式 `min-width: auto`（撑住内容宽度，装不下就让容器溢出而不是自己收缩）；
+ * 侧栏筛选行（`Sidebar.tsx` 的 `filterRowRef`）靠的正是这个「宁可溢出也不缩」的
+ * 默认行为——`nextFilterRowMode`（`filter-row-compact.ts`）用 `row.scrollWidth`
+ * 在**展开态**量「四个带字 chip 的真实自然宽度」，`scrollWidth` 之所以可信，是因为
+ * chip 此时不会被 flex-shrink 偷偷压小、也不会被 `overflow: hidden` 吃掉真实尺寸
+ * （它只裁视觉，不裁量出来的 scrollWidth）。一旦全局给 `.chip` 松了 `min-width: 0`，
+ * 侧栏筛选行的 chip 在还没到「真的很窄」时就已经被 flex-shrink 悄悄压小、文字提前走
+ * 省略号，`scrollWidth` 测出来的「自然宽度」被压低成一个偏小的数——于是同样
+ * 400px 的侧栏宽度，判定基准变小，比较 `containerWidth < fullWidth` 提前触发，
+ * 筛选行过早整体切成纯图标态，即使宽度明明还够显示文字。composer 底栏没有这类
+ * JS 量宽度的逻辑（全走 CSS 容器查询 + overflow:hidden 兜底），允许它的 chip 收缩
+ * 正是这里要的效果，只是不能外溢到别的消费者。
+ *
+ * 断点用实际内容量出来（都按 13px control 字号 + 现有 padding/gap 估算）：
+ *   - 展开态：工作区芯片（图标12+gap5+文字~40+gap5+chevron11+padding16）≈89px、
+ *     权限芯片固定 84px、模型芯片（无图标，文字~90+chevron11+padding16）≈120px
+ *     起步（还会随模型名变长）、思考档固定 84px、用量环 ≈30px、4 个 gap ≈24px——
+ *     全展开至少要 ~430px，装不下就已经开始互相挤。
+ *   - 紧凑态（只留图标）：图标 12 + gap 5 + chevron 11 + padding 16 ≈ 44px 一个，
+ *     工作区与权限各省 ~40–45px，留给模型名与思考档。
+ * 取 420px 做断点——比展开态最小需求（~430px）略窄一点，容器一旦装不下当前展开
+ * 内容就立刻收，不留一段「即将重叠」的中间态。
+ */
+.composer-bottom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.composer-bottom-bar .chip {
+  min-width: 0;
+}
+
+@container (max-width: 420px) {
+  /* 工作区与权限芯片只留图标，文字仍在 title 里（Chip 本来就总是设 title） */
+  .composer-bottom-bar .chip-scope .chip-label,
+  .composer-bottom-bar .chip-mode .chip-label {
+    display: none;
+  }
+  /* 权限芯片的 fixedWidth 是内联 min-width（84px），紧凑态不再需要留这么宽，
+     要盖过内联样式只能 !important */
+  .composer-bottom-bar .chip-mode {
+    min-width: 0 !important;
+  }
+}
+
+/* 模型芯片：名字可能很长，随时都允许省略号截断，不等断点（compact 无关，随时生效） */
+.composer-bottom-bar .chip-model {
+  flex: 1 1 auto;
+  min-width: 32px;
+}
+
+/*
  * ModeChip（Sidebar 的模式 tab，role="tab"）：静止态就是主字色，不必等 hover 才升级——
  * 不走安静控件默认的「secondary 起步」。选中同样优先于禁用（同 Chip）。
  */

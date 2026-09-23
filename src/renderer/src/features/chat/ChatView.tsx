@@ -509,15 +509,23 @@ export function ChatView(props: {
               gap: "var(--space-5)",
             }}
           >
-            {/* 全产品唯一一句抒情的话，也是唯一保持中文的界面文案 */}
+            {/*
+              全产品唯一一句抒情的话，也是唯一保持中文的界面文案。窄槽（侧栏 + 右栏
+              都展开时主槽变窄）会把它挤断成两行——没设 line-height 时继承正文的
+              22px（--line-height-body），36px 的字一断行两行几乎叠在一起。给大字号
+              自己的行高（1.25，比正文更紧但留得出两行的呼吸），text-wrap: balance
+              让断行落在匀称的位置，不是「一长一短」。
+            */}
             <h1
               style={{
                 margin: "0 0 var(--space-1)",
                 fontFamily: "var(--font-family-brand)",
                 fontSize: "var(--font-size-logo)",
+                lineHeight: 1.25,
                 fontWeight: 600,
                 letterSpacing: "var(--tracking-slogan)",
                 textAlign: "center",
+                textWrap: "balance",
               }}
             >
               璇玑运转，诸事得序
@@ -1231,6 +1239,8 @@ function ComposerBar(props: { session: ChatSession }) {
               title={`${session.cwd ?? session.defaultCwd} · switching starts a new task`}
               onClick={toggle}
               chevron
+              // 窄槽下只留图标（styles.css 的 .composer-bottom-bar 容器查询）
+              className="chip-scope"
             >
               {scope}
             </Chip>
@@ -1248,6 +1258,8 @@ function ComposerBar(props: { session: ChatSession }) {
             title={PERMISSION_MODE_LABELS[session.mode].hint}
             onClick={toggle}
             chevron
+            // 窄槽下只留图标，fixedWidth 也在同一断点被覆盖掉（见 styles.css）
+            className="chip-mode"
           >
             {PERMISSION_MODE_LABELS[session.mode].label}
           </Chip>
@@ -1263,6 +1275,8 @@ function ComposerBar(props: { session: ChatSession }) {
               title="Model · applies from the next message"
               onClick={toggle}
               chevron
+              // 名字随时可省略号截断（styles.css），不等断点
+              className="chip-model"
             >
               {session.model?.modelId ?? "No model"}
             </Chip>
