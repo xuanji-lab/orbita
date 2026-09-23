@@ -68,7 +68,13 @@ export function App() {
     return () => query.removeEventListener("change", sync);
   }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  // 初始 state 的主题跟 main.tsx 首帧写的 data-theme 对齐（api.initialTheme），
+  // 否则这里先落 DEFAULT_SETTINGS 的 "system"，useTheme 首次 apply 会把主题切到
+  // 系统色，api.settings.get() 读回真设置后再切回来——当着用户的面闪两次。
+  const [settings, setSettings] = useState<AppSettings>({
+    ...DEFAULT_SETTINGS,
+    theme: api.initialTheme ?? DEFAULT_SETTINGS.theme,
+  });
   useTheme(settings.theme);
   const refresh = useCallback(async () => {
     try {

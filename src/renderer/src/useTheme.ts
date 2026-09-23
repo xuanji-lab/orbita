@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { ThemePreference } from "@shared/settings";
+import { resolveTheme } from "./theme-resolve.ts";
 
 /**
  * 主题落地。**设置优先、系统兜底**——设计系统的 token 只认 `data-theme`
@@ -18,8 +19,7 @@ export function useTheme(preference: ThemePreference): void {
     const query = window.matchMedia("(prefers-color-scheme: dark)");
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => {
-      const resolved =
-        preference === "system" ? (query.matches ? "black" : "light") : preference;
+      const resolved = resolveTheme(preference, query.matches);
       const root = document.documentElement;
       const current = root.dataset["theme"];
       if (current === resolved) return;
