@@ -65,6 +65,17 @@ export const ipcChannels = {
   providerReveal: "provider:reveal",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
+  /**
+   * 数据目录的绝对路径（`app.getPath("userData")`），无参，回 `string`。
+   * 会话、工作区、skills、mcp.json 都以明文文件住在这里——本地优先的应用，数据住哪要能一行说清。
+   * 消费者是设置 General 页的 Data directory 行。
+   */
+  settingsDataDir: "settings:data-dir",
+  /**
+   * 在 Finder 里打开数据目录本身（`shell.openPath`，同 Skills 面板 footer 的 Reveal），无参，回 `void`。
+   * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
+   */
+  settingsRevealDataDir: "settings:reveal-data-dir",
   sessionList: "session:list",
   sessionLoad: "session:load",
   sessionRename: "session:rename",
