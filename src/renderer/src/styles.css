@@ -1685,6 +1685,23 @@ body {
  * 行背景的 hover 挂同一宿主：Reveal 按钮是行 button 的兄弟节点（button 不能套
  * button），不在行内 hover 会让背景在手指移过去时先灭掉。
  */
+/* 会随 hover 变的底色 / 字色只写在 CSS 里：留在 inline style 会压过下面的 :hover，
+   行 hover 底色此前就因为 inline 的 `background: transparent` 一直没生效（2026-09-23 实测） */
+.file-row {
+  background: transparent;
+  transition: var(--transition-hover);
+}
+.file-hover-act {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+/* 行尾 Reveal 浮在行上：实色底盖住行尾的名字 / size·mtime（设计稿 .row-act） */
+.file-row-reveal {
+  background: var(--color-bg-panel);
+}
+.file-hover-act:hover {
+  color: var(--color-text-primary);
+}
 .file-hover-host .file-hover-act {
   display: none;
 }

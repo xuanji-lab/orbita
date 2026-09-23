@@ -183,7 +183,18 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
           onChange={setQuery}
           countText={filterCountText(shownCount, loadedCount, filtering)}
         />
-        <div style={{ minHeight: 0, overflowY: "auto", display: "grid", alignContent: "start" }}>
+        {/* 列宽钉死在容器宽度（minmax(0,1fr)）：隐式列默认按内容撑开，一条很长的附加目录
+            路径（不换行）会把整列撑到几倍宽，整棵树横向溢出、居中的 Attach 文案与行尾的
+            Detach 都被推出视野——省略号只有在列宽受约束时才会出现 */}
+        <div
+          style={{
+            minHeight: 0,
+            overflowY: "auto",
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr)",
+            alignContent: "start",
+          }}
+        >
           {error !== null && (
             <div style={{ padding: "var(--space-3)" }}>
               <PanelLine danger>{error}</PanelLine>
@@ -341,8 +352,6 @@ function LabelAction(props: { title: string; onClick: () => void; children: Reac
         padding: 0,
         border: 0,
         borderRadius: "var(--radius-sm)",
-        background: "transparent",
-        color: "var(--color-text-secondary)",
         cursor: "pointer",
       }}
     >
@@ -400,7 +409,6 @@ function TreeRow(props: {
           // 右侧给浮在行上的 Reveal（20px）留位：不留的话 AGENTS.md 的 rules 尾注会被它压住
           paddingRight: "calc(var(--space-3) + 20px)",
           border: 0,
-          background: "transparent",
           font: "inherit",
           fontSize: "var(--font-size-control)",
           textAlign: "left",
@@ -470,7 +478,7 @@ function TreeRow(props: {
       </button>
       <button
         type="button"
-        className="file-hover-act"
+        className="file-hover-act file-row-reveal"
         title="Reveal in Finder"
         onClick={props.onReveal}
         style={{
@@ -485,8 +493,6 @@ function TreeRow(props: {
           padding: 0,
           border: 0,
           borderRadius: "var(--radius-sm)",
-          background: "var(--color-bg-panel)",
-          color: "var(--color-text-secondary)",
           cursor: "pointer",
         }}
       >
