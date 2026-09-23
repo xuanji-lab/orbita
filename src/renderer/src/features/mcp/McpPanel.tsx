@@ -361,7 +361,7 @@ function AddServerForm(props: {
         </span>
 
         <FormRow label="Name" hint="Tool names look like mcp__name__tool.">
-          <input value={name} onChange={(e) => setName(e.target.value.trim())} style={inputStyle} />
+          <input value={name} onChange={(e) => setName(e.target.value.trim())} className="text-field" />
           {nameError !== null && <FieldError>{nameError}</FieldError>}
         </FormRow>
 
@@ -380,14 +380,15 @@ function AddServerForm(props: {
             {transport === "stdio" ? (
               <>
                 <FormRow label="Command" hint="The executable to run, e.g. node or npx.">
-                  <input value={command} onChange={(e) => setCommand(e.target.value)} style={inputStyle} />
+                  <input value={command} onChange={(e) => setCommand(e.target.value)} className="text-field" />
                 </FormRow>
                 <FormRow label="Arguments" hint="One per line.">
                   <textarea
                     value={argsText}
                     onChange={(e) => setArgsText(e.target.value)}
                     rows={3}
-                    style={{ ...inputStyle, height: "auto", padding: "var(--space-2) var(--space-3)", resize: "vertical", fontFamily: "var(--font-family-mono)" }}
+                    className="text-field"
+                    style={{ fontFamily: "var(--font-family-mono)" }}
                   />
                 </FormRow>
                 <FormRow label="Environment" hint="One KEY=VALUE per line.">
@@ -395,21 +396,23 @@ function AddServerForm(props: {
                     value={envText}
                     onChange={(e) => setEnvText(e.target.value)}
                     rows={3}
-                    style={{ ...inputStyle, height: "auto", padding: "var(--space-2) var(--space-3)", resize: "vertical", fontFamily: "var(--font-family-mono)" }}
+                    className="text-field"
+                    style={{ fontFamily: "var(--font-family-mono)" }}
                   />
                 </FormRow>
               </>
             ) : (
               <>
                 <FormRow label="URL" hint="Streamable HTTP endpoint.">
-                  <input value={url} onChange={(e) => setUrl(e.target.value)} style={inputStyle} placeholder="https://example.com/mcp" />
+                  <input value={url} onChange={(e) => setUrl(e.target.value)} className="text-field" placeholder="https://example.com/mcp" />
                 </FormRow>
                 <FormRow label="Headers" hint="One KEY=VALUE per line.">
                   <textarea
                     value={headersText}
                     onChange={(e) => setHeadersText(e.target.value)}
                     rows={3}
-                    style={{ ...inputStyle, height: "auto", padding: "var(--space-2) var(--space-3)", resize: "vertical", fontFamily: "var(--font-family-mono)" }}
+                    className="text-field"
+                    style={{ fontFamily: "var(--font-family-mono)" }}
                   />
                 </FormRow>
               </>
@@ -424,7 +427,8 @@ function AddServerForm(props: {
               value={jsonText}
               onChange={(e) => setJsonText(e.target.value)}
               rows={10}
-              style={{ ...inputStyle, height: "auto", padding: "var(--space-2) var(--space-3)", resize: "vertical", fontFamily: "var(--font-family-mono)", lineHeight: 1.6 }}
+              className="text-field"
+              style={{ fontFamily: "var(--font-family-mono)", lineHeight: 1.6 }}
               placeholder={'{\n  "mcpServers": {\n    "demo": { "command": "node", "args": ["server.js"] }\n  }\n}'}
             />
           </FormRow>
@@ -458,19 +462,6 @@ function FieldError(props: { children: React.ReactNode }) {
     </span>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  height: "var(--control-height-md)",
-  padding: "0 var(--space-3)",
-  background: "var(--color-bg-panel)",
-  color: "var(--color-text-primary)",
-  border: "1px solid var(--color-border-subtle)",
-  borderRadius: "var(--radius-md)",
-  font: "inherit",
-  fontSize: "var(--font-size-input)",
-  width: "100%",
-  boxSizing: "border-box",
-};
 
 /** 四状态图标对（§7）：ready=check / connecting=loader-circle 旋转 / failed=triangle-alert / disabled=circle-off。 */
 function StatusIcon(props: { status: McpStatus }) {

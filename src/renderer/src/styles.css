@@ -1481,3 +1481,41 @@ body {
 .file-hover-host:hover .file-row {
   background: var(--color-bg-hover);
 }
+
+/*
+ * ===== 表单输入框（Skills / MCP 面板） =====
+ * McpPanel 与 SkillsPanel 各抄一份逐字节相同的 `inputStyle`（单行 `<input>` 与多行
+ * `<textarea>` 只差 height/padding/resize），收成一个 class；等宽字体、
+ * line-height、`cursor: not-allowed` 这类只在个别处出现的差异留在各自的 inline
+ * style 里，不进这个共用配方。
+ *
+ * 聚焦态是本 PR 唯一申明的视觉变化：这些框此前只有上一个 PR 加的全局
+ * `:focus-visible` 描边，现在补上与 `features/settings/providers-view.css` 的
+ * `.pv-input:focus` 同款的 accent 聚焦态（设计系统 *Shadows*：focus 是 2px accent
+ * ring）。`.pv-input` 本身不并进来——Providers 的美化是另一个 PR。
+ */
+.text-field {
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-input);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.text-field:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+
+/* 多行变体：<textarea className="text-field"> 自动吃这条，不用另造修饰 class */
+textarea.text-field {
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+}
