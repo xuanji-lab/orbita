@@ -1696,6 +1696,40 @@ body {
 }
 
 /*
+ * hover 行尾的 size · mtime（`48 KB · 12m`）：只在 hover 时出现，不 hover 不占
+ * 视觉——它们是「看一眼就够」的机器事实，常驻会让每行都背着两个数字（裁决见
+ * 设计稿「待裁决」章节）。挂同一个 .file-hover-host 宿主，与 Reveal 同一套
+ * 浮现机制。
+ */
+.file-row-meta {
+  display: none;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.file-hover-host:hover .file-row-meta {
+  display: inline;
+}
+
+/*
+ * symlink 的右下角角标：契约里的 `symlink` kind 没有目标路径、也不知道目标是
+ * 文件还是目录，图标本体用中性的 file，角标只说「这是一条链接」。8px 叠在
+ * 14px 图标的右下角，与图标共享同一个相对定位的小容器。
+ */
+.file-icon-badge-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.file-symlink-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+}
+
+/*
  * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
  * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
  * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边

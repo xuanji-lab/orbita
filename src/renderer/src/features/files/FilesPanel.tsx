@@ -3,7 +3,15 @@ import { Icon } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { api } from "../../api";
 import type { ChatSession } from "../chat/useChatSession";
-import { filterEntries, footerSummary, hasAgentsMd, orderEntries } from "./tree-view";
+import {
+  fileIcon,
+  filterEntries,
+  footerSummary,
+  formatAge,
+  formatSize,
+  hasAgentsMd,
+  orderEntries,
+} from "./tree-view";
 import { useFileTree } from "./useFileTree";
 import type { FileEntryKind, FileRoot, FileRootKind } from "@shared/files";
 
@@ -61,6 +69,8 @@ export function FilesPanel(props: { session: ChatSession; onClose: () => void })
             kind={entry.kind}
             depth={depth}
             open={open}
+            size={entry.size}
+            modifiedAt={entry.modifiedAt}
             onToggle={() => tree.toggle(root.path, child)}
             onReveal={() => tree.reveal(root.path, child)}
           />
@@ -301,28 +311,43 @@ function LabelAction(props: { title: string; onClick: () => void; children: Reac
 }
 
 /**
- * 30px 树行：chevron + 类型图标 + 名字 +（AGENTS.md 的 `rules` 尾注）。目录行点击
- * 展开收起，文件行点击直接 reveal；Reveal 按钮是兄弟节点浮在行上（button 不能套
- * button），两个都 Tab 可达。
+ * 30px 树行：chevron + 类型图标 + 名字 +（hover 时的 size · mtime，仅文件行）+
+ * （AGENTS.md 的 `rules` 尾注）。目录行点击展开收起，文件行点击直接 reveal；
+ * Reveal 按钮是兄弟节点浮在行上（button 不能套 button），两个都 Tab 可达。
  */
 function TreeRow(props: {
   name: string;
   kind: FileEntryKind;
   depth: number;
   open: boolean;
+  /** 字节数；只有文件行带（目录 / symlink 不带），hover 行尾的 size 就靠它判定要不要出 */
+  size?: number;
+  modifiedAt: number;
   onToggle: () => void;
   onReveal: () => void;
 }) {
   const isDir = props.kind === "directory";
+  const isSymlink = props.kind === "symlink";
   // dotfile：照列，但排在同层最后（orderEntries）且名字退灰——见 tree-view 的注释
   const dotted = props.name.startsWith(".");
   const isRules = props.name === "AGENTS.md";
+  const iconName = fileIcon(props.name, props.kind, props.open);
+  const hasMeta = props.size !== undefined;
+  // hover 行尾把 size·mtime 缩成 `48 KB · 12m`，省略的完整信息（名字、完整时间戳）
+  // 放回 title 里；symlink 没有 size，但契约里连目标路径都没有，title 只能如实说
+  // 「这是一条符号链接」，不假装知道更多
+  const title = isSymlink
+    ? "Symbolic link"
+    : hasMeta
+      ? `${props.name} · ${new Date(props.modifiedAt).toLocaleString()}`
+      : undefined;
   return (
     <div className="file-hover-host" style={{ position: "relative" }}>
       <button
         type="button"
         className="file-row"
         aria-expanded={isDir ? props.open : undefined}
+        title={title}
         onClick={isDir ? props.onToggle : props.onReveal}
         style={{
           display: "flex",
@@ -351,11 +376,27 @@ function TreeRow(props: {
         ) : (
           <span style={{ width: 12, flex: "0 0 auto" }} />
         )}
-        <Icon
-          name={isRules ? "book" : isDir ? (props.open ? "folder-open" : "folder") : "file-text"}
-          size={14}
-          style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-        />
+        {isSymlink ? (
+          // symlink：契约里没有目标路径、也不知道目标是文件还是目录——中性 file
+          // 图标 + 右下角 8px arrow-up-right 角标（真身路径需要 FileEntry 加
+          // target 字段，另开 shared PR，这里点到为止）
+          <span className="file-icon-badge-wrap">
+            <Icon name={iconName} size={14} style={{ color: "var(--color-text-tertiary)" }} />
+            <Icon
+              name="arrow-up-right"
+              size={8}
+              strokeWidth={2.6}
+              className="file-symlink-badge"
+              style={{ color: "var(--color-text-tertiary)" }}
+            />
+          </span>
+        ) : (
+          <Icon
+            name={iconName}
+            size={14}
+            style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
+          />
+        )}
         <span
           style={{
             flex: 1,
@@ -368,6 +409,11 @@ function TreeRow(props: {
         >
           {props.name}
         </span>
+        {props.size !== undefined && (
+          <span className="file-row-meta">
+            {formatSize(props.size)} · {formatAge(props.modifiedAt, Date.now())}
+          </span>
+        )}
         {isRules && (
           <span
             style={{
