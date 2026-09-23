@@ -23,7 +23,7 @@ import { RightPanelSlot } from "./shell/RightPanel";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
-import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { CHANNEL_COLUMN_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB } from "./shell/drawer-state";
@@ -102,6 +102,12 @@ export function App() {
   useEffect(() => {
     if (settings.sidebarWidth !== undefined) setSidebarWidth(settings.sidebarWidth);
   }, [settings.sidebarWidth]);
+
+  /** 通道列宽度（子会话 2026-09-23 裁决：可拖宽）：同一套口径——拖动中只改本地，松手才落 settings */
+  const [channelColumnWidth, setChannelColumnWidth] = useState(CHANNEL_COLUMN_WIDTH_DEFAULT);
+  useEffect(() => {
+    if (settings.channelColumnWidth !== undefined) setChannelColumnWidth(settings.channelColumnWidth);
+  }, [settings.channelColumnWidth]);
 
   const { session, engine } = useChatSession(providers);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
@@ -418,6 +424,9 @@ export function App() {
             parentTitle={channelParentTitle}
             session={session}
             narrow={narrow}
+            width={channelColumnWidth}
+            onWidthChange={setChannelColumnWidth}
+            onWidthCommit={(width) => changeSettings({ channelColumnWidth: width })}
             shown={channelShownOverride}
             onShownChange={setChannelShownOverride}
             onVisibilityChange={setHasVisibleChannels}

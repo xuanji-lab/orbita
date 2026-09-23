@@ -8,10 +8,34 @@
  */
 import type { ChannelMessage, ChannelSummary } from "@shared/channel";
 
+/** 通道列一行的显示规则：`defaultCollapsed` 没有用户手动切换过时的初始折叠态。 */
+export interface ChannelColumnEntry {
+  summary: ChannelSummary;
+  /**
+   * 默认折叠：只派出、还没说过话的通道折叠成一行头部（标题 + 状态），不占用
+   * 垂直空间——用户展开后是空态 + Speak as parent composer，是「插嘴」的入口，
+   * 不是自动占位。有往来的通道默认展开，正文才是用户真正要看的东西。
+   */
+  defaultCollapsed: boolean;
+}
+
+export interface ChannelColumnRule {
+  entries: ChannelColumnEntry[];
+  /**
+   * 整列该不该自动出现（App 拿它做「没有显式选择时」的默认显隐输入）。**只有
+   * 有往来的通道能触发**——用户裁决原话：「子会话和父会话的通信应该始于子会话
+   * 对父会话有提问需求的时候」。只派出还没说话的子会话不该替用户弹出一整列，
+   * 那只是「领了任务」，不是「需要你看」。
+   */
+  autoShow: boolean;
+}
+
 /**
- * 通道列显示哪些通道（交接裁决）：有 task 之外的往来才出现——只派出没说话的不占位
- * （父流里的派出卡已经说了这件事）；有活跃子会话时自动出现——子在跑时它的通道就
- * 该在，用户可以看它领了什么任务、可以插话，跑完没说过话的不占位。
+ * 通道列显示哪些通道、每条的默认折叠态、整列该不该自动出现（用户 2026-09-23
+ * 裁决，取代旧的「有 task 之外往来才出现」单一规则）：
+ *   - 有往来（`hasExchange`）的通道：显示，默认展开。
+ *   - 只派出、子还在跑但没说过话的通道：显示，但默认折叠成一行头部——用户可以
+ *     手动展开代父插嘴，不自动占位、不自动触发整列出现。
  *
  * 按 `lastAt` 倒序：最近有动静的通道排在最上面。
  *
@@ -22,10 +46,37 @@ import type { ChannelMessage, ChannelSummary } from "@shared/channel";
 export function visibleChannels(
   summaries: ReadonlyMap<string, ChannelSummary>,
   liveRunning: (childId: string) => boolean,
-): ChannelSummary[] {
-  return [...summaries.values()]
+): ChannelColumnRule {
+  const entries = [...summaries.values()]
     .filter((summary) => summary.hasExchange || liveRunning(summary.childId))
-    .sort((a, b) => b.lastAt - a.lastAt);
+    .sort((a, b) => b.lastAt - a.lastAt)
+    .map((summary) => ({ summary, defaultCollapsed: !summary.hasExchange }));
+  return { entries, autoShow: entries.some((entry) => entry.summary.hasExchange) };
+}
+
+/**
+ * 通道消息列表过滤掉 kind === "task"（用户 2026-09-23 裁决①：任务回到子会话
+ * 自己的 session 里渲染成一张完整的任务卡，通道列不再重复显示它——通道从第一条
+ * 非 task 消息开始，「通信始于子会话对父会话有提问需求的时候」）。
+ */
+export function nonTaskMessages(messages: readonly ChannelMessage[]): ChannelMessage[] {
+  return messages.filter((message) => message.kind !== "task");
+}
+
+/** 子会话流里任务卡正文默认展示的行数——够看清任务在做什么，长任务不占满整个首屏。 */
+export const TASK_CARD_PREVIEW_LINES = 12;
+
+/**
+ * 任务卡正文的展开 / 折叠取值（纯函数化，组件本身按仓库惯例不测）。`expanded`
+ * 为 false 且正文超过预览行数时截断到前 `TASK_CARD_PREVIEW_LINES` 行；`hasMore`
+ * 告诉调用方要不要渲染 "Show full task" / "Collapse" 切换按钮（超过预览行数时
+ * 展开态也要显示，好让用户收回去）。
+ */
+export function taskCardBody(text: string, expanded: boolean): { body: string; hasMore: boolean } {
+  const lines = text.split("\n");
+  const hasMore = lines.length > TASK_CARD_PREVIEW_LINES;
+  const body = !expanded && hasMore ? lines.slice(0, TASK_CARD_PREVIEW_LINES).join("\n") : text;
+  return { body, hasMore };
 }
 
 /**

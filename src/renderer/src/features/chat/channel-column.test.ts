@@ -1,6 +1,13 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { channelColumnLayout, channelWhoLabel, visibleChannels } from "./channel-column.ts";
+import {
+  channelColumnLayout,
+  channelWhoLabel,
+  nonTaskMessages,
+  taskCardBody,
+  TASK_CARD_PREVIEW_LINES,
+  visibleChannels,
+} from "./channel-column.ts";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 channel-column.ts 本身的纪律）
 import type { ChannelMessage, ChannelSummary } from "../../../../shared/channel.ts";
 
@@ -24,13 +31,13 @@ describe("visibleChannels", () => {
       ["c2", summary({ childId: "c2", hasExchange: false })],
     ]);
     const result = visibleChannels(summaries, () => false);
-    deepStrictEqual(result.map((s) => s.childId), ["c1"]);
+    deepStrictEqual(result.entries.map((e) => e.summary.childId), ["c1"]);
   });
 
   it("只派出没说话、但子还在跑的通道也显示——liveRunning 是第二个放行条件", () => {
     const summaries = new Map([["c1", summary({ childId: "c1", hasExchange: false })]]);
-    strictEqual(visibleChannels(summaries, () => true).length, 1);
-    strictEqual(visibleChannels(summaries, () => false).length, 0);
+    strictEqual(visibleChannels(summaries, () => true).entries.length, 1);
+    strictEqual(visibleChannels(summaries, () => false).entries.length, 0);
   });
 
   it("按 lastAt 倒序——最近有动静的排最上面", () => {
@@ -40,7 +47,7 @@ describe("visibleChannels", () => {
       ["mid", summary({ childId: "mid", hasExchange: true, lastAt: 5 })],
     ]);
     deepStrictEqual(
-      visibleChannels(summaries, () => false).map((s) => s.childId),
+      visibleChannels(summaries, () => false).entries.map((e) => e.summary.childId),
       ["new", "mid", "old"],
     );
   });
@@ -51,7 +58,78 @@ describe("visibleChannels", () => {
       ["idle", summary({ childId: "idle", hasExchange: false })],
     ]);
     const result = visibleChannels(summaries, (childId) => childId === "running");
-    deepStrictEqual(result.map((s) => s.childId), ["running"]);
+    deepStrictEqual(result.entries.map((e) => e.summary.childId), ["running"]);
+  });
+
+  it("有往来的通道 defaultCollapsed=false（默认展开）；只派出没说话的 defaultCollapsed=true（默认折叠成一行头部）", () => {
+    const summaries = new Map([
+      ["talked", summary({ childId: "talked", hasExchange: true })],
+      ["silent", summary({ childId: "silent", hasExchange: false })],
+    ]);
+    const { entries } = visibleChannels(summaries, () => true);
+    deepStrictEqual(
+      entries.map((e) => [e.summary.childId, e.defaultCollapsed]),
+      [
+        ["talked", false],
+        ["silent", true],
+      ],
+    );
+  });
+
+  it("autoShow 只由有往来的通道触发——用户裁决：通信始于子会话有提问需求的时候", () => {
+    const onlySilent = new Map([["c1", summary({ childId: "c1", hasExchange: false })]]);
+    strictEqual(visibleChannels(onlySilent, () => true).autoShow, false);
+    const withExchange = new Map([
+      ["c1", summary({ childId: "c1", hasExchange: false })],
+      ["c2", summary({ childId: "c2", hasExchange: true })],
+    ]);
+    strictEqual(visibleChannels(withExchange, () => true).autoShow, true);
+    strictEqual(visibleChannels(new Map(), () => true).autoShow, false);
+  });
+});
+
+describe("nonTaskMessages", () => {
+  it("过滤掉 kind === task，保留其余顺序不变", () => {
+    const messages = [
+      message({ id: "m1", kind: "task" }),
+      message({ id: "m2", from: "child", kind: "question" }),
+      message({ id: "m3", kind: "reply" }),
+    ];
+    deepStrictEqual(nonTaskMessages(messages).map((m) => m.id), ["m2", "m3"]);
+  });
+
+  it("只有 task 的通道过滤后是空数组——通道列该显示空态而不是那条 task", () => {
+    deepStrictEqual(nonTaskMessages([message({ kind: "task" })]), []);
+  });
+});
+
+describe("taskCardBody", () => {
+  it("行数不超过预览行数：hasMore 恒 false，body 原样返回", () => {
+    const text = "line1\nline2\nline3";
+    deepStrictEqual(taskCardBody(text, false), { body: text, hasMore: false });
+    deepStrictEqual(taskCardBody(text, true), { body: text, hasMore: false });
+  });
+
+  it("超过预览行数、未展开：截断到前 N 行，hasMore=true", () => {
+    const lines = Array.from({ length: TASK_CARD_PREVIEW_LINES + 5 }, (_, i) => `line${i}`);
+    const text = lines.join("\n");
+    const result = taskCardBody(text, false);
+    strictEqual(result.hasMore, true);
+    deepStrictEqual(result.body, lines.slice(0, TASK_CARD_PREVIEW_LINES).join("\n"));
+  });
+
+  it("超过预览行数、已展开：body 是全文，hasMore 仍 true（好让用户收回去）", () => {
+    const lines = Array.from({ length: TASK_CARD_PREVIEW_LINES + 5 }, (_, i) => `line${i}`);
+    const text = lines.join("\n");
+    const result = taskCardBody(text, true);
+    strictEqual(result.hasMore, true);
+    deepStrictEqual(result.body, text);
+  });
+
+  it("边界：恰好等于预览行数不算超过", () => {
+    const lines = Array.from({ length: TASK_CARD_PREVIEW_LINES }, (_, i) => `line${i}`);
+    const text = lines.join("\n");
+    strictEqual(taskCardBody(text, false).hasMore, false);
   });
 });
 

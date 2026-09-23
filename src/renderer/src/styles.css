@@ -251,8 +251,10 @@ body {
 }
 
 /* ===== 通道列（子会话 PR4b）：主槽与右栏之间的一列，父子往来抽出来放在这里 =====
- * 常驻挂载，同右侧面板壳一条纪律——宽度以 class 切换驱动过渡；不参与拖宽（固定
- * 300px），窄窗下转右侧锚定覆盖层（组件自己叠加 inline style，见 ChannelColumn.tsx）。 */
+ * 常驻挂载，同右侧面板壳一条纪律——宽度以 class 切换驱动过渡；**可拖宽**（用户
+ * 2026-09-23 裁决，区间 chat 区的 1/6–1/3，见 ChannelColumn.tsx 的 startResize），
+ * 窄窗下转右侧锚定覆盖层（组件自己叠加 inline style，见 ChannelColumn.tsx）。
+ * position: relative——拖宽热区（组件内绝对定位的 6px 竖条）以本元素为基准。 */
 .channel-column {
   flex: 0 0 auto;
   width: 0;
@@ -260,12 +262,18 @@ body {
     width 0.2s ease,
     border-left-width 0.2s ease;
   overflow: hidden;
+  position: relative;
   border-left: 0 solid var(--color-border-default);
 }
 
 .channel-column.open {
   width: var(--channel-column-w, 300px);
   border-left-width: 1px;
+}
+
+/* 拖拽过程中不要过渡——每一步都实时跟手，同 .right-panel-slot.dragging 的纪律 */
+.channel-column.dragging {
+  transition: none;
 }
 
 .channel-column-inner {

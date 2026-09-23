@@ -18,11 +18,13 @@
  * 会话）时，接收侧与 `reply_subsession` 发送侧标记可点，跳去通道列里那条消息；
  * 子会话自己主流里的标记（`ownSide` 为 "child"）仍不可点。
  */
-import type { ChannelMessageKind, ChannelSummary } from "@shared/channel";
+import type { ChannelMessage, ChannelMessageKind, ChannelSummary } from "@shared/channel";
 import type { DelegateCard } from "@shared/agent-ipc";
 import { thinkingLevelLabel } from "@shared/thinking";
 import { useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
+import { taskCardBody } from "./channel-column.ts";
+import { MarkdownBlock } from "./MarkdownBlock";
 import { channelMarkLabel, type ChannelMarkTone } from "./tool-results";
 import type { SessionEntry } from "./session-states";
 
@@ -60,6 +62,17 @@ export interface ChannelViewContext {
    * （设计稿 `.card.lit`）。null = 没有（面板没开，或开着的是别的父会话下的子会话）。
    */
   litSubSessionId: string | null;
+  /**
+   * 子会话自己 session 里的任务卡要用的通道账本（子会话 2026-09-23 裁决①：父给
+   * 子的第一条任务要渲染在子会话自己的对话流里，不再是一行「task from … · view
+   * in channel」胶囊）。对话流里的标记只有 messageId，正文在通道账本——
+   * `ChatView.tsx` 用 `useChannelMessages` 拉这条会话自己父子通道的全文，按
+   * messageId 建索引传下来。**根会话视图（`ownSide` 为 "parent"）不拉**：它没有
+   * task 标记要渲染，这里恒是空 Map / 不在加载 / 无错误。
+   */
+  channelMessages: ReadonlyMap<string, ChannelMessage>;
+  channelMessagesLoading: boolean;
+  channelMessagesError: string | null;
 }
 
 /**
@@ -368,5 +381,67 @@ export function DelegateCardView(props: {
     <button type="button" onClick={onClick} title={`Open "${card.title}"`} style={style}>
       {content}
     </button>
+  );
+}
+
+const TASK_CARD_TOGGLE_STYLE = {
+  width: "fit-content",
+  border: 0,
+  background: "transparent",
+  color: "var(--color-accent)",
+  font: "inherit",
+  fontSize: "var(--font-size-caption)",
+  cursor: "pointer",
+  padding: 0,
+  textAlign: "left",
+} satisfies React.CSSProperties;
+
+/**
+ * 子会话自己 session 里的完整任务卡（子会话 2026-09-23 裁决①：父给子的第一条
+ * 任务应该渲染在子会话自己的对话流里，不再是一行「task from … · view in
+ * channel」胶囊）。样式照抄派出卡（`DelegateCardView`）：1px subtle 边框、lg
+ * 圆角、panel 底。
+ *
+ * `message` 是 undefined 时说明通道账本还没拉到（`loading`）或拉失败
+ * （`error`，不吞错，原样显示）；两者都只画卡头 + 一行状态，不假装有正文。
+ * 正文超过 `TASK_CARD_PREVIEW_LINES` 行时默认截断，`Show full task` / `Collapse`
+ * 切换（原生 `<button>`，键盘可达）。
+ */
+export function ChannelTaskCard(props: {
+  peerTitle: string;
+  message: ChannelMessage | undefined;
+  loading: boolean;
+  error: string | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { message } = props;
+  const { body, hasMore } = taskCardBody(message?.text ?? "", expanded);
+  return (
+    <div style={CARD_STYLE}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+        <span style={CARD_KICKER}>TASK</span>
+        <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
+          from {props.peerTitle}
+        </span>
+      </div>
+      {message !== undefined ? (
+        <>
+          <MarkdownBlock text={body} />
+          {hasMore && (
+            <button type="button" style={TASK_CARD_TOGGLE_STYLE} onClick={() => setExpanded((value) => !value)}>
+              {expanded ? "Collapse" : "Show full task"}
+            </button>
+          )}
+        </>
+      ) : props.error !== null ? (
+        <p role="alert" style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+          {props.error}
+        </p>
+      ) : (
+        <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+          {props.loading ? "Loading…" : "Task message not found in the channel."}
+        </p>
+      )}
+    </div>
   );
 }

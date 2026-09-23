@@ -6,12 +6,14 @@ import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
   ChannelMarkLine,
+  ChannelTaskCard,
   ChannelToolMarkLine,
   DelegateCardView,
   peerTitleOf,
   type ChannelViewContext,
   type DelegateCardStatus,
 } from "./ChannelViews";
+import { useChannelMessages } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
 import {
   HOME_CARD_CARRYOVER_ROWS,
@@ -266,6 +268,7 @@ export function ChatView(props: {
   // 空 Map，派出卡也就没有消费者。**channel 对象本身也必须 useMemo**：
   // TranscriptColumn 是 memo 组件，散装对象每次渲染都新建会直接打穿它。
   const ownSide: "parent" | "child" = openMeta?.parentId !== undefined ? "child" : "parent";
+  const ownParentId = openMeta?.parentId ?? null;
   const titles = useMemo(
     () => new Map(session.sessions.map((meta) => [meta.id, meta.title])),
     [session.sessions],
@@ -279,26 +282,42 @@ export function ChatView(props: {
   // 子会话 PR4c：派出卡的点击与描边同一套「只有主槽才接」的门槛，openChannel 上面已有先例
   const openSubSession = ownSide === "parent" ? (props.onOpenSubSession ?? null) : null;
   const litSubSessionId = props.litSubSessionId ?? null;
+  // 子会话 2026-09-23 裁决①：任务卡的正文来自自己父子这条通道的账本——只有
+  // `ownSide` 为 "child" 时才有意义（根会话没有 task 标记要渲染），key 为 null
+  // 时 `useChannelMessages` 内部直接短路成空态，不发请求（同它自己的既有语义）。
+  const taskChannelKey =
+    ownSide === "child" && ownParentId !== null && openId !== "" ? { parentId: ownParentId, childId: openId } : null;
+  const taskChannel = useChannelMessages(taskChannelKey);
+  const channelMessages = useMemo(
+    () => new Map(taskChannel.messages.map((message) => [message.id, message])),
+    [taskChannel.messages],
+  );
   const channel = useMemo<ChannelViewContext>(
     () => ({
       ownSide,
-      ownParentId: openMeta?.parentId ?? null,
+      ownParentId,
       titles,
       channelSummaries,
       childPhaseOf: session.phaseOf,
       openChannel,
       openSubSession,
       litSubSessionId,
+      channelMessages,
+      channelMessagesLoading: taskChannel.loading,
+      channelMessagesError: taskChannel.error,
     }),
     [
       ownSide,
-      openMeta?.parentId,
+      ownParentId,
       titles,
       channelSummaries,
       session.phaseOf,
       openChannel,
       openSubSession,
       litSubSessionId,
+      channelMessages,
+      taskChannel.loading,
+      taskChannel.error,
     ],
   );
 
@@ -1457,6 +1476,19 @@ function EntryView(props: {
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") return <UserBubble item={entry.item} />;
   if (entry.kind === "channelMark") {
+    // 子会话自己流里的 task 标记：渲染成完整任务卡而不是一行胶囊（子会话
+    // 2026-09-23 裁决①）——父给子的第一条任务是这条会话最该显眼的内容。
+    // 其它标记（reply 等）与根会话视图仍走下面的胶囊，行为不变。
+    if (props.channel.ownSide === "child" && entry.mark.kind === "task") {
+      return (
+        <ChannelTaskCard
+          peerTitle={peerTitleOf(props.channel, entry.mark.peerId)}
+          message={props.channel.channelMessages.get(entry.mark.messageId)}
+          loading={props.channel.channelMessagesLoading}
+          error={props.channel.channelMessagesError}
+        />
+      );
+    }
     const openChannel = props.channel.openChannel;
     return (
       <ChannelMarkLine
