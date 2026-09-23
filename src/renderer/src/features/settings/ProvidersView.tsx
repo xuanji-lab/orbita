@@ -8,6 +8,7 @@ import type { BuiltinProvider } from "@shared/agent-ipc";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import {
+  hasCredentials,
   kindOf,
   mergeModelCost,
   modelAcceptsImage,
@@ -517,11 +518,13 @@ export function ProvidersView(props: { onChange?: () => void }) {
               onClick={() => selectProvider(provider.id)}
             >
               <span
-                className={`pv-dot ${provider.auth.scheme === "api_key" && provider.auth.hasSecret ? "ok" : "none"}`}
+                className={`pv-dot ${hasCredentials(provider.auth) ? "ok" : "none"}`}
                 title={
                   provider.auth.scheme === "api_key" && provider.auth.hasSecret
-                    ? "API key configured"
-                    : "No API key yet"
+                    ? "API key saved"
+                    : provider.auth.scheme === "env"
+                      ? `Key from environment (${provider.auth.envKeys.join(", ")})`
+                      : "No API key yet"
                 }
               />
               <span className="pv-row-main">
