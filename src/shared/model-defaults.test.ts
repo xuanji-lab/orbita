@@ -1,7 +1,13 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { BuiltinProvider } from "./agent-ipc.ts";
-import { FALLBACK_MODEL, lookupCatalogModel, resolveModelDefaults } from "./model-defaults.ts";
+import {
+  FALLBACK_MODEL,
+  FALLBACK_THINKING_LEVEL,
+  defaultThinkingLevel,
+  lookupCatalogModel,
+  resolveModelDefaults,
+} from "./model-defaults.ts";
 
 /** 目录条目替身：数值照 pi 的 `providers/data/*.json` 实录，别编数 */
 function entry(id: string, contextWindow: number, maxTokens: number, image: boolean) {
@@ -177,5 +183,20 @@ describe("resolveModelDefaults —— 白名单 > 目录 > 兜底", () => {
     const again = resolveModelDefaults(CATALOG, "claude-opus-5", { api: "anthropic-messages" });
     assert.deepEqual(again.input, ["text", "image"]);
     assert.equal(again.cost.input, 1);
+  });
+});
+
+describe("defaultThinkingLevel —— 白名单默认档 > medium，再按支持集夹", () => {
+  test("白名单没有的型号退 medium（与 pi 的全局默认同值）", () => {
+    assert.equal(FALLBACK_THINKING_LEVEL, "medium");
+    assert.equal(defaultThinkingLevel("no-such-model"), "medium");
+  });
+
+  test("退 medium 后按支持集夹：只有 low/high/max 的型号落 high", () => {
+    assert.equal(defaultThinkingLevel("no-such-model", ["low", "high", "max"]), "high");
+  });
+
+  test("支持集未知时不夹——主进程派子会话拿不到目录，交给 pi 发送前按同规则夹", () => {
+    assert.equal(defaultThinkingLevel("no-such-model", undefined), "medium");
   });
 });

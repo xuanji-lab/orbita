@@ -77,6 +77,28 @@ export function parseThinkingLevel(raw: unknown): ThinkingLevel {
   return isThinkingLevel(raw) ? raw : "medium";
 }
 
+/**
+ * 把档位夹进某模型的支持集。**与 pi 的 `clampThinkingLevel`（pi-ai `models.ts`）同一条
+ * 规则**：支持就原样；否则先往深找、再往浅找——界面上算出的档与 pi 真正发出去的档
+ * 因此是同一档（例：glm-5.3 只有 low/high/max，medium 落 high 而不是 low）。
+ *
+ * `supported` 缺席或为空 = 支持集未知：原样返回，不替 pi 做主（开轮后由 thinking
+ * 事件纠真，同思考档菜单「未知就全量显示」的纪律）。
+ */
+export function clampThinkingLevel(
+  level: ThinkingLevel,
+  supported: readonly ThinkingLevel[] | null | undefined,
+): ThinkingLevel {
+  if (supported == null || supported.length === 0 || supported.includes(level)) return level;
+  const at = THINKING_LEVELS.indexOf(level);
+  const deeper = THINKING_LEVELS.slice(at).find((candidate) => supported.includes(candidate));
+  if (deeper !== undefined) return deeper;
+  const shallower = THINKING_LEVELS.slice(0, at)
+    .reverse()
+    .find((candidate) => supported.includes(candidate));
+  return shallower ?? supported[0] ?? level;
+}
+
 /** 逐字校验：不认识就 false（不兑任何默认值——兑底是 parse 的事，守卫只回答「是不是」） */
 export function isThinkingLevel(value: unknown): value is ThinkingLevel {
   return (THINKING_LEVELS as readonly unknown[]).includes(value);

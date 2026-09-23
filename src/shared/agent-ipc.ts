@@ -651,8 +651,10 @@ export type AgentEvent =
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
-   * cwd / workspaceId 同父）、解析模型与思考档（delegate 参数 > settings 的
-   * subSessionModel / subSessionThinking > 同父）、把 task 写进通道（通道的第一条
+   * cwd / workspaceId 同父）、解析模型（delegate 参数 > settings.subSessionModel > 同父）
+   * 与思考档（**跟着模型走**：delegate 显式给的档最优先；否则模型来自 delegate 参数 →
+   * 该模型默认档，来自设置 → subSessionThinking ?? 该模型默认档，同父 → 父的档）、
+   * 把 task 写进通道（通道的第一条
    * 消息，from parent · kind task）、submit 子的首轮，然后回 delegateResult。
    * 只有模型能开子会话（Q1 裁决）：用户手开的「多条互通会话」是 multi-agent 的
    * 概念，等 composer 引用系统落地后再看。
@@ -667,7 +669,7 @@ export type AgentEvent =
       task: string;
       /** 可选的模型指定（裸 id，主进程在已装配的 provider 里解析）；缺席走 settings > 同父 */
       modelId?: string;
-      /** 可选的思考档；缺席走 settings > 同父 */
+      /** 可选的思考档；缺席时跟着解析出的模型走（见上方 delegateRequest 的说明） */
       thinkingLevel?: ThinkingLevel;
     }
   /**

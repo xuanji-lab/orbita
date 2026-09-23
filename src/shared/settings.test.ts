@@ -355,20 +355,30 @@ describe("parseSettings 的 subSessionModel / subSessionThinking（子会话 202
   });
 
   it("成对的模型 id 与合法思考档原样收下", () => {
+    const model = { providerId: "zai", modelId: "glm-5.3-flash" };
+    deepStrictEqual(parseSettings({ subSessionModel: model }).subSessionModel, model);
     deepStrictEqual(
-      parseSettings({ subSessionModel: { providerId: "zai", modelId: "glm-5.3-flash" } })
-        .subSessionModel,
-      { providerId: "zai", modelId: "glm-5.3-flash" },
+      parseSettings({ subSessionModel: model, subSessionThinking: "high" }).subSessionThinking,
+      "high",
     );
-    deepStrictEqual(parseSettings({ subSessionThinking: "high" }).subSessionThinking, "high");
+  });
+
+  it("思考档绑定模型：模型是同父（缺席或半截）时单独一档思考丢掉——档位因模型而异，脱离模型就是假选项", () => {
+    deepStrictEqual(parseSettings({ subSessionThinking: "high" }).subSessionThinking, undefined);
+    deepStrictEqual(
+      parseSettings({ subSessionModel: { modelId: "glm-5.3-flash" }, subSessionThinking: "high" })
+        .subSessionThinking,
+      undefined,
+    );
   });
 
   it("半截模型与坏档位丢弃——优先级链（delegate 参数 > 这里 > 同父）只会退到同父，不会拿半截值去解析", () => {
     deepStrictEqual(parseSettings({ subSessionModel: { modelId: "glm-5.3-flash" } }).subSessionModel, undefined);
     deepStrictEqual(parseSettings({ subSessionModel: { providerId: "zai" } }).subSessionModel, undefined);
     deepStrictEqual(parseSettings({ subSessionModel: "fast" }).subSessionModel, undefined);
-    deepStrictEqual(parseSettings({ subSessionThinking: "turbo" }).subSessionThinking, undefined);
-    deepStrictEqual(parseSettings({ subSessionThinking: 3 }).subSessionThinking, undefined);
+    const model = { providerId: "zai", modelId: "glm-5.3-flash" };
+    deepStrictEqual(parseSettings({ subSessionModel: model, subSessionThinking: "turbo" }).subSessionThinking, undefined);
+    deepStrictEqual(parseSettings({ subSessionModel: model, subSessionThinking: 3 }).subSessionThinking, undefined);
   });
 
   it("null 清除：parseSettings 自然丢掉——设置页「Same as parent」就靠这个退回默认", () => {
@@ -388,18 +398,14 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
     );
   });
 
-  it("思考档跟着 lastUsed 走：合法保留（7 档全集），坏值整键丢弃", () => {
+  it("思考档不跨重启：旧文件里的 lastUsed.thinkingLevel 读进来就丢（重启落模型默认档，wafo 2026-09-23）", () => {
     deepStrictEqual(
       parseSettings({ theme: "system", lastUsed: { thinkingLevel: "high" } }).lastUsed,
-      { thinkingLevel: "high" },
-    );
-    deepStrictEqual(
-      parseSettings({ theme: "system", lastUsed: { thinkingLevel: "xhigh" } }).lastUsed,
-      { thinkingLevel: "xhigh" },
-    );
-    deepStrictEqual(
-      parseSettings({ theme: "system", lastUsed: { thinkingLevel: "turbo" } }).lastUsed,
       undefined,
+    );
+    deepStrictEqual(
+      parseSettings({ theme: "system", lastUsed: { mode: "skip", thinkingLevel: "xhigh" } }).lastUsed,
+      { mode: "skip" },
     );
   });
 

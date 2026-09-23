@@ -71,6 +71,23 @@ export interface KnownProvider {
       reasoning?: boolean;
       /** 目录查不到时的档位补丁（同 contextWindow 的角色：主源是目录，这里只补缺） */
       thinkingLevels?: ThinkingLevel[];
+      /**
+       * 这个型号的**默认思考档**：新任务、换模型、派子会话时，用户没手选（或手选的档
+       * 这个型号不支持）就从这一档起。pi 目录没有这个概念（pi 只有一个全局默认
+       * medium），所以它只能住在白名单里。只填官方口径（厂商文档写明的 API 默认 /
+       * 自家 CLI 默认）；没填的型号退 medium，再按支持集夹取（见 `defaultThinkingLevel`）。
+       * 同时填了 thinkingLevels 时必须落在其中（测试守着）。
+       */
+      defaultThinkingLevel?: ThinkingLevel;
+      /**
+       * 这个型号**只收 adaptive 思考**（`thinking: adaptive` + `output_config.effort`，不认
+       * budget_tokens）——新 Claude 都是。目录收录的型号，注册链从目录条目的
+       * `compat.forceAdaptiveThinking` 借；**目录没收录**（也借不到家族参数）的型号只能在
+       * 这里声明，否则 pi 按老规矩发 budget_tokens，官方 API 不接受。只对 anthropic-messages
+       * 协议的接入有意义；同时要写 thinkingLevels（注册链据此生成档位表，xhigh / max 才能
+       * 作为 effort 原样送到）。
+       */
+      adaptiveThinking?: boolean;
     }
   >;
   /** 一句话说明这条什么时候该选 */
@@ -219,6 +236,8 @@ export function knownModelParams(modelId: string): {
   maxTokens?: number;
   reasoning?: boolean;
   thinkingLevels?: ThinkingLevel[];
+  defaultThinkingLevel?: ThinkingLevel;
+  adaptiveThinking?: boolean;
 } {
   for (const item of KNOWN_PROVIDERS) {
     const params = item.modelParams?.[modelId];

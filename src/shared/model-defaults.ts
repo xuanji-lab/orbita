@@ -16,6 +16,7 @@
  */
 import type { BuiltinModel, BuiltinProvider } from "./agent-ipc.ts";
 import { knownModelParams } from "./known-providers.ts";
+import { clampThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /** 模型接受的输入模态。与 pi `Model["input"]` 同形（pi 只有这两档）。 */
 export type ModelInput = ("text" | "image")[];
@@ -172,4 +173,27 @@ export function resolveModelDefaults(
     cost: { ...(entry?.cost ?? FALLBACK_MODEL.cost) },
     source,
   };
+}
+
+/** 白名单没写默认档的型号从这一档起步（与 pi 的全局 DEFAULT_THINKING_LEVEL 同值），再夹进支持集 */
+export const FALLBACK_THINKING_LEVEL: ThinkingLevel = "medium";
+
+/**
+ * 一个型号的**默认思考档**：白名单 `defaultThinkingLevel`（官方口径）> medium，
+ * 再按支持集夹取（`clampThinkingLevel`，与 pi 同规则：先往深、再往浅）。
+ *
+ * 语义（wafo 2026-09-23）：彻底重启后落回这一档；没重启就记住用户上一次手选，
+ * 换到的型号不支持那一档时才回到这里。子会话按模型解析时同样用它。
+ *
+ * `supported` 缺席 = 支持集未知：不夹，原样交给 pi（pi 发送前按同一规则夹）——
+ * 主进程派子会话时拿不到目录，走的就是这条路，结果与 renderer 算的一致。
+ */
+export function defaultThinkingLevel(
+  modelId: string,
+  supported?: readonly ThinkingLevel[] | null,
+): ThinkingLevel {
+  return clampThinkingLevel(
+    knownModelParams(modelId).defaultThinkingLevel ?? FALLBACK_THINKING_LEVEL,
+    supported,
+  );
 }

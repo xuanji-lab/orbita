@@ -61,8 +61,9 @@ export interface LastUsedIntent {
   mode?: PermissionMode;
   providerId?: string;
   modelId?: string;
-  /** 上次用的思考档：新任务的起点（同 mode 的语义，可缺席 = 退 medium） */
-  thinkingLevel?: ThinkingLevel;
+  // 思考档**不在这里**（wafo 2026-09-23）：彻底重启才落回模型的默认档，没重启就
+  // 记住用户上一次手选——那份记忆只活在 renderer 内存里，跨重启持久化正是要去掉的行为。
+  // 默认档见 model-defaults 的 `defaultThinkingLevel`。
 }
 
 /**
@@ -115,7 +116,13 @@ export interface AppSettings {
    * 这里 > 同父。形状同 titleModel（两 id 成对：光有 modelId 定位不到哪家的密钥）。
    */
   subSessionModel?: TitleModel;
-  /** 子会话的默认思考档。**缺席 = 同父**；优先级同 subSessionModel（delegate 参数 > 这里 > 同父） */
+  /**
+   * 子会话的思考档。**绑定 subSessionModel**（wafo 2026-09-23）：档位因模型而异，
+   * 脱离模型单独存一档，派到不支持它的模型上就是一个假选项。所以：
+   * - 没指定 subSessionModel（同父）时它没有意义，解析时丢掉——思考档跟父走；
+   * - 指定了模型、这里缺席 = 那个模型的默认档（`defaultThinkingLevel`）。
+   * delegate 参数显式给的档仍然最优先。
+   */
   subSessionThinking?: ThinkingLevel;
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
@@ -150,7 +157,7 @@ export type SettingsPatch = Partial<
   titleModel?: TitleModel | null;
   /** 同 titleModel 的 null 语义：清除后退回「Same as parent」（子会话跟父会话的模型走） */
   subSessionModel?: TitleModel | null;
-  /** 同上：清除后退回「Same as parent」（子会话跟父会话的思考档走） */
+  /** 清除后退回所选子会话模型的默认档；subSessionModel 被清除时它随之失效（见 AppSettings） */
   subSessionThinking?: ThinkingLevel | null;
 };
 
@@ -271,9 +278,11 @@ export function parseSettings(raw: unknown): AppSettings {
   const compaction = parseCompaction(record.compaction);
   const titleModel = parseModelPair(record.titleModel);
   const subSessionModel = parseModelPair(record.subSessionModel);
-  const subSessionThinking = isThinkingLevel(record.subSessionThinking)
-    ? record.subSessionThinking
-    : undefined;
+  // 绑定 subSessionModel：模型是「同父」时单独一档思考没有意义，丢掉（见 AppSettings）
+  const subSessionThinking =
+    subSessionModel !== undefined && isThinkingLevel(record.subSessionThinking)
+      ? record.subSessionThinking
+      : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
   return {
     theme,
@@ -328,7 +337,7 @@ function parseModelPair(raw: unknown): TitleModel | undefined {
  */
 function parseLastUsed(raw: unknown): LastUsedIntent | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
-  const record = raw as { mode?: unknown; providerId?: unknown; modelId?: unknown; thinkingLevel?: unknown };
+  const record = raw as { mode?: unknown; providerId?: unknown; modelId?: unknown };
   const out: LastUsedIntent = {};
   if ((PERMISSION_MODES as readonly unknown[]).includes(record.mode)) {
     out.mode = record.mode as PermissionMode;
@@ -338,9 +347,6 @@ function parseLastUsed(raw: unknown): LastUsedIntent | undefined {
   }
   if (typeof record.modelId === "string" && record.modelId !== "") {
     out.modelId = record.modelId;
-  }
-  if (isThinkingLevel(record.thinkingLevel)) {
-    out.thinkingLevel = record.thinkingLevel;
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }
