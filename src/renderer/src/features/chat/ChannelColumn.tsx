@@ -293,10 +293,7 @@ function ChannelCard(props: {
   const tone = statusTone(summary.status);
 
   return (
-    <div
-      className="channel-card"
-      style={{ flex: props.collapsed ? "0 0 auto" : "1 1 0", minHeight: props.collapsed ? undefined : 0 }}
-    >
+    <div className={props.collapsed ? "channel-card collapsed" : "channel-card"}>
       <button
         type="button"
         className="channel-card-head"
