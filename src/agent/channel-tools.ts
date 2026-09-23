@@ -55,11 +55,15 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
     description:
       "Hand off a self-contained, parallelizable, well-bounded chunk of work to a new sub-session. " +
       "The sub-session gets its own context and workbench (same cwd as you). It cannot see this " +
-      "conversation, so task must be self-contained: state the goal, constraints, done criteria, and " +
-      "where the output should go. After calling this, end your turn unless you have unrelated work to " +
-      "do right now — do not poll or wait for it. The sub-session's question / progress / done / failed " +
-      'reports arrive as <channel from="child" …> blocks in a later turn; answer a question with ' +
-      "reply_subsession. Do not delegate for small things.",
+      "conversation, so task must be self-contained: state what the user actually wants and why — quote " +
+      "their own words where you can, and explain the reasoning behind any constraint — so the " +
+      "sub-session can tell when it is drifting off course. Also state the goal, constraints, done " +
+      "criteria, and where the output should go. After calling this, end your turn unless you have " +
+      "unrelated work to do right now — do not poll or wait for it. The sub-session's question / " +
+      'progress / done / failed reports arrive as <channel from="child" …> blocks in a later turn. If ' +
+      "it asks something the user has not actually answered, do not guess on the user's behalf — end " +
+      "this turn and ask the user first, then answer with reply_subsession once you know. Do not " +
+      "delegate for small things.",
     parameters: {
       type: "object",
       properties: {
@@ -239,23 +243,28 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
 const ROOT_CHANNEL_GUIDELINES = `<orbita-sub-sessions>
 You can hand off self-contained, parallelizable, well-bounded work to a sub-session with delegate. It
 runs with its own context and workbench (same cwd as you). Because it cannot see this conversation, the
-task must be self-contained: state the goal, constraints, done criteria, and where the output should go.
-After delegating, end this turn unless you have unrelated work to do — do not poll or wait for it. Its
-messages (question / progress / done / failed) arrive as <channel from="child" …> blocks in a later
-turn. Answer a question with reply_subsession — text in a normal reply is not delivered to it; progress
-needs no reply. When you see done, check its workbench / cwd for the actual output before reporting to
-the user. Do not delegate for small things.
+task must state what the user actually wants and why — quote their own words where you can, and explain
+the reasoning behind any constraint, so the sub-session can judge when it is drifting off course — plus
+the goal, constraints, done criteria, and where the output should go. After delegating, end this turn
+unless you have unrelated work to do — do not poll or wait for it. Its messages (question / progress /
+done / failed) arrive as <channel from="child" …> blocks in a later turn. If it asks something the
+user's own words do not answer, do not decide on the user's behalf — end this turn and ask the user
+first; only once you have their answer, reply with reply_subsession. Progress needs no reply. When you
+see done, check its workbench / cwd for the actual output before reporting to the user. Do not delegate
+for small things.
 </orbita-sub-sessions>`;
 
 const CHILD_CHANNEL_GUIDELINES = `<orbita-sub-sessions>
 You are a sub-session delegated by a parent session. Your task is in the first
 <channel from="parent" kind="task"> block. Your normal replies are not visible to the parent — only
-report_to_parent is delivered. If you are blocked and need a decision, send a question and proceed on
-your best guess while you wait (or end this turn if you truly cannot continue). You may send occasional
-progress updates — sparingly, only when useful. When you finish, you MUST send one done report with your
-conclusion, what you changed, and where the output is. If you cannot complete the task, send failed with
-the reason. The parent's replies arrive as <channel from="parent" kind="reply"> blocks, possibly
-mid-task — adjust accordingly.
+report_to_parent is delivered. If the task is unclear, or looks like it may conflict with what the user
+actually wants, send a question early — before you sink real work into a guess — stating what is
+unclear and what you would default to; do not ask about things that are already obvious just to look
+proactive. Otherwise proceed on your best guess while you wait for a reply (or end this turn if you
+truly cannot continue without one). You may send occasional progress updates — sparingly, only when
+useful. When you finish, you MUST send one done report with your conclusion, what you changed, and where
+the output is. If you cannot complete the task, send failed with the reason. The parent's replies arrive
+as <channel from="parent" kind="reply"> blocks, possibly mid-task — adjust accordingly.
 </orbita-sub-sessions>`;
 
 /** 按角色选一段通道使用说明；root/child 各自固定，不随 related 内容变化。 */
