@@ -189,8 +189,11 @@ Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a
 `--shadow-modal` (dialogs). Focus is a 2px accent ring at 16% opacity, plus a solid accent outline
 on `:focus-visible`.
 
-**Hover, press, disabled.** Hover fills with the next grey up (`--color-bg-hover`) and lifts text
-from secondary to primary — never a colour change, never a transform. Cards lift their shadow from
+**Hover, press, disabled.** Hover lays a translucent grey over whatever is underneath
+(`--color-bg-hover`: secondary ink at 12% on light — a cool grey that sits with the blue accent —
+and 8% on dark) and lifts text from secondary to primary — never a colour change, never a transform.
+It is translucent on purpose: a solid "next grey up" was visible on white panels but vanished on the
+off-white shell behind the sidebar, so the same hover now reads equally on every ground. Cards lift their shadow from
 composer to popover, and nothing moves. Press deepens the fill (`--color-bg-active`); accent buttons
 go to `--color-accent-strong` (`#16379c`). Disabled is `opacity: .45–.55` with `cursor: not-allowed`
 — and for planned features, a `title` explaining why. **On glass, disable with a solid theme colour
