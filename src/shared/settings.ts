@@ -128,7 +128,7 @@ export interface AppSettings {
   lastUsed?: LastUsedIntent;
   /**
    * 通道列的宽度（子会话 2026-09-23 用户裁决：通道列可拖宽）。缺席 = 默认 300。
-   * **这里只做 ≥ 地板的硬校验**：合法上界依赖当前 chat 区宽度（见
+   * **这里只做 ≥ 地板的硬校验**：合法上界依赖当前 pane 宽度（见
    * `clampChannelColumnWidth`），落盘的值换个窗口大小就可能越界，真正的夹取在
    * 渲染层每次渲染时做，同 `rightPanelWidth` 的纪律。拖动中不落盘，松手才写。
    */
@@ -188,9 +188,13 @@ const RIGHT_PANEL_WIDTH_FLOOR = 200;
  * 这一对（「我的 1/3 和 2/3 apply to chat 和右栏，和左栏没有关系。我说的左栏指的是
  * chat 被一分为二的左右」），左侧栏不在其内，仍走固定的 240–400。
  *
- * 设 P = `paneTotal` = chat 主区 + 右栏 的总宽（拖动中恒定：chat 主区是 flex:1，
- * 右栏拿多少它就让多少）。区间直接就是 **[P/3, 2P/3]**——这一对本身各占 pane 的
- * 三分之一到三分之二，不需要再换算。
+ * 设 P = `paneTotal` = **`.pane` 的全宽**：左侧栏右边、右图标条左边的整块，
+ * 即 chat 主区 + 通道列 + 右栏（拖动中恒定：`.pane` 的宽由祖先决定，子级怎么分
+ * 都不改它）。区间就是 **[P/3, 2P/3]**。
+ *
+ * **通道列算在 P 里**（2026-09-23 wafo 指认）：裁决那天 pane 里只有 chat 与右栏，
+ * 「chat + 右栏」就是整块 pane；第二天通道列插进两者之间，旧量法（chat 主区渲染宽
+ * + 右栏）没跟上，通道列一开 P 就悄悄少了一个通道列宽，右栏的上下界跟着缩水。
  *
  * 地板与上限撞车（P 小到 2P/3 < 200）时**地板胜出**，见 RIGHT_PANEL_WIDTH_FLOOR。
  * `paneTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 P 去夹。
@@ -215,26 +219,25 @@ export const CHANNEL_COLUMN_WIDTH_DEFAULT = 300;
 const CHANNEL_COLUMN_WIDTH_FLOOR = 180;
 
 /**
- * 把通道列宽度夹进合法区间（用户 2026-09-23 裁决：通道列可拖宽，最小 = chat 区的
- * 1/6，最大 = chat 区的 1/3——「现在固定 300px，子会话 session 里只剩工具调用，
+ * 把通道列宽度夹进合法区间（用户 2026-09-23 裁决：通道列可拖宽，最小 = pane 的
+ * 1/6，最大 = pane 的 1/3——「现在固定 300px，子会话 session 里只剩工具调用，
  * 反倒像陪衬」）。
  *
- * 设 C = `chatTotal` = **主槽（chat 主区）+ 通道列**的总宽（拖动中恒定：主槽是
- * flex:1，通道列拿多少它就让多少）——**不包含右栏**：右栏是另一块独立空间，
- * 用户说的「chatview」指的是主槽与通道列这一对，同 `clampRightPanelWidth` 只管
- * 「chat 主区与右栏」那一对、不含左侧栏的先例，这里对称地不含右栏。
- * 区间就是 **[C/6, C/3]**。
+ * 设 P = `paneTotal` = **`.pane` 的全宽**（chat 主区 + 通道列 + 右栏，与
+ * `clampRightPanelWidth` 同一个分母）。区间就是 **[P/6, P/3]**。
+ * 初版把分母取成「主槽 + 通道列」、不含右栏（2026-09-23 wafo 指认量错了：
+ * 右栏开着时通道列拖到头也只有 pane 的 1/4 上下）——比例说的一律是整块 pane。
  *
- * 地板与上限撞车（C 小到 C/3 < 180）时**地板胜出**，见 `CHANNEL_COLUMN_WIDTH_FLOOR`。
- * `chatTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 C 去夹。
+ * 地板与上限撞车（P 小到 P/3 < 180）时**地板胜出**，见 `CHANNEL_COLUMN_WIDTH_FLOOR`。
+ * `paneTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 P 去夹。
  */
-export function clampChannelColumnWidth(width: number, chatTotal: number): number {
+export function clampChannelColumnWidth(width: number, paneTotal: number): number {
   const wanted = Number.isFinite(width) ? Math.round(width) : CHANNEL_COLUMN_WIDTH_FLOOR;
-  if (!Number.isFinite(chatTotal) || chatTotal <= 0) {
+  if (!Number.isFinite(paneTotal) || paneTotal <= 0) {
     return Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, wanted);
   }
-  const floor = Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, Math.round(chatTotal / 6));
-  const ceiling = Math.round(chatTotal / 3);
+  const floor = Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, Math.round(paneTotal / 6));
+  const ceiling = Math.round(paneTotal / 3);
   return Math.max(floor, Math.min(ceiling, wanted));
 }
 

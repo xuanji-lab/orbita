@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   channelColumnLayout,
   channelWhoLabel,
+  fitChannelColumnWidth,
   nonTaskMessages,
   taskCardBody,
   TASK_CARD_PREVIEW_LINES,
@@ -233,5 +234,46 @@ describe("channelColumnLayout（子会话 PR4c fix：右栏+通道列同开时�
   it("paneWidth 量不到（<=0，还没挂载测出来）：保守走 overlay，不擅自挤主槽", () => {
     strictEqual(layout({ paneWidth: 0 }), "overlay");
     strictEqual(layout({ paneWidth: -1 }), "overlay");
+  });
+});
+
+describe("fitChannelColumnWidth：区间是 pane 的 1/6–1/3，内联时再给主槽留够 480", () => {
+  const drag = (wanted: number, over: Partial<Parameters<typeof fitChannelColumnWidth>[1]> = {}) =>
+    fitChannelColumnWidth(wanted, { paneWidth: 1800, rightPanelWidth: 600, overlay: false, ...over });
+
+  it("分母是整块 pane（右栏算在内）：pane 1800 → 上限 600、下限 300，右栏开不开都一样", () => {
+    strictEqual(drag(900), 600);
+    strictEqual(drag(100), 300);
+    strictEqual(drag(900, { rightPanelWidth: 0 }), 600);
+    // 旧分母（pane − 右栏 = 1200）下上限只有 400——wafo 截图里「拉到头还是窄」的那个数
+    strictEqual(drag(450), 450);
+  });
+
+  it("pane 不够宽时上限停在「主槽刚好剩 480」：1330 − 443 − 480 = 407 < pane/3 = 443", () => {
+    strictEqual(drag(900, { paneWidth: 1330, rightPanelWidth: 443 }), 407);
+    // 停下来的那一格正好让 channelColumnLayout 仍判 inline：拖动中不会翻成 overlay，
+    // 渲染时右栏一开也只是缩窄、不会整列消失
+    strictEqual(
+      channelColumnLayout({ narrow: false, paneWidth: 1330, rightPanelWidth: 443, columnWidth: 407 }),
+      "inline",
+    );
+  });
+
+  it("主槽底线之内的宽度原样收下", () => {
+    strictEqual(drag(300, { paneWidth: 1330, rightPanelWidth: 443 }), 300);
+  });
+
+  it("overlay 浮在主槽之上，不受 480 的限制，只按 pane/3 夹", () => {
+    strictEqual(drag(900, { paneWidth: 1330, rightPanelWidth: 443, overlay: true }), 443);
+  });
+
+  it("地板压过主槽底线（连 pane/6 都放不下）时地板胜出", () => {
+    // pane 1000、右栏 600：留给通道列的只有 -80；下限 max(180, 167) = 180
+    strictEqual(drag(300, { paneWidth: 1000 }), 180);
+  });
+
+  it("paneWidth 量不到时不拿 480 去减，只保地板", () => {
+    strictEqual(drag(300, { paneWidth: 0 }), 300);
+    strictEqual(drag(100, { paneWidth: 0 }), 180);
   });
 });

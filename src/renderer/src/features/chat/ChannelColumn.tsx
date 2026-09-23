@@ -4,8 +4,8 @@
  *
  * 布局：`App.tsx` 常驻挂载（同 `RightPanelSlot` 的先例——壳一直在，`open` 只是
  * class 切换驱动的宽度过渡），`parentId` 为 null（没在看根会话，或看的是子会话 /
- * 设置页）时不显示任何东西。**可拖宽**（用户 2026-09-23 裁决）：区间是 chat 区
- * （主槽 + 本列）的 1/6–1/3（`clampChannelColumnWidth`，`@shared/settings`），
+ * 设置页）时不显示任何东西。**可拖宽**（用户 2026-09-23 裁决）：区间是 pane
+ * （主槽 + 本列 + 右栏）的 1/6–1/3（`clampChannelColumnWidth`，`@shared/settings`），
  * 宽度由 App 持有并落盘（同 `rightPanelWidth` 的 App 写法），拖动中只改本地，
  * 松手才 commit。
  *
@@ -25,13 +25,19 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChannelKey, ChannelMessage, ChannelStatus, ChannelSummary } from "@shared/channel";
-import { CHANNEL_COLUMN_WIDTH_DEFAULT, clampChannelColumnWidth } from "@shared/settings";
+import { CHANNEL_COLUMN_WIDTH_DEFAULT } from "@shared/settings";
 import { api } from "../../api";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { Icon, type IconName } from "../../shell/Icon";
 import { usePaneAndRightPanelWidth } from "../../shell/side-width.ts";
-import { channelColumnLayout, channelWhoLabel, nonTaskMessages, visibleChannels } from "./channel-column.ts";
+import {
+  channelColumnLayout,
+  channelWhoLabel,
+  fitChannelColumnWidth,
+  nonTaskMessages,
+  visibleChannels,
+} from "./channel-column.ts";
 import { channelKindIcon } from "./ChannelViews";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { isAtBottom } from "./scroll.ts";
@@ -96,24 +102,27 @@ export function ChannelColumn(props: {
     }
   }, [entries.length, onVisibilityChange]);
 
-  // 根 div 的 ref：量 `.pane` 与右栏此刻的实际宽度（子会话 PR4c fix；本刀顺带
-  // 给拖宽用——C = paneWidth − rightPanelWidth 恰好就是「主槽 + 通道列」的总宽，
-  // 不管通道列此刻是 inline 还是 overlay：inline 时它是三者之和减右栏，overlay
-  // 时通道列不占 flex 空间，chat 主区独吞这部分，两种情况算出来是同一个数）。
+  // 根 div 的 ref：量 `.pane` 与右栏此刻的实际宽度（子会话 PR4c fix）。拖宽的
+  // 比例分母就是 paneWidth 本身——整块 pane，右栏开不开都算在内（2026-09-23 wafo
+  // 指认：初版用 paneWidth − rightPanelWidth，右栏一开上限就缩水）。
   const columnRef = useRef<HTMLDivElement | null>(null);
   const { paneWidth, rightPanelWidth } = usePaneAndRightPanelWidth(columnRef);
-  const chatTotal = paneWidth - rightPanelWidth;
-  const width = chatTotal > 0 ? clampChannelColumnWidth(props.width, chatTotal) : props.width;
+  // 先按内联算（放不下时缩到给主槽留够 480，见 fitChannelColumnWidth），缩到地板
+  // 还放不下才判 overlay；overlay 浮在主槽之上，宽度不受主槽底线限制
+  const inlineWidth = fitChannelColumnWidth(props.width, { paneWidth, rightPanelWidth, overlay: false });
   const layout = channelColumnLayout({
     narrow: props.narrow,
     paneWidth,
     rightPanelWidth,
-    columnWidth: width,
+    columnWidth: inlineWidth,
   });
   // 「放不放得下」判定出的 overlay，取代下面所有原先直接读 `props.narrow` 的地方——
   // 全局窄窗只是 overlay 的一种成因（channelColumnLayout 内部已经把 narrow 短路成
   // overlay），非窄窗但放不下是另一种，两种成因走同一套「窄窗行为」
   const overlay = layout === "overlay";
+  const width = overlay
+    ? fitChannelColumnWidth(props.width, { paneWidth, rightPanelWidth, overlay: true })
+    : inlineWidth;
   const overlayRef = useRef<boolean | null>(null);
   const onLayoutChange = props.onLayoutChange;
   useEffect(() => {
@@ -168,8 +177,11 @@ export function ChannelColumn(props: {
 
   // 拖宽（用户 2026-09-23 裁决）：左移变宽——同 RightPanel.tsx 的 startResize，
   // 通道列的左缘挨着主槽（chat 主区），主槽 flex:1 让出的正是通道列多拿的。
-  // 拖动中只改本地宽度，松手才落盘；chatTotal 拖动中恒定（量的是 `.pane` 与
-  // 右栏各自的实际渲染宽，不受通道列自己宽度变化的影响），闭包捕获一次够用。
+  // 拖动中只改本地宽度，松手才落盘；paneWidth / rightPanelWidth 拖动中恒定（量的是
+  // `.pane` 与右栏各自的实际渲染宽，不受通道列自己宽度变化的影响），闭包捕获一次够用。
+  // 上限除了 pane/3 还要给主槽留够 480，见 fitChannelColumnWidth。
+  const dragWidth = (value: number): number =>
+    fitChannelColumnWidth(value, { paneWidth, rightPanelWidth, overlay });
   const [resizing, setResizing] = useState(false);
   const startResize = (event: React.PointerEvent): void => {
     if (event.button !== 0) return;
@@ -179,20 +191,19 @@ export function ChannelColumn(props: {
     setResizing(true);
     const startX = event.clientX;
     const startWidth = el.getBoundingClientRect().width;
-    const clamp = (value: number): number => clampChannelColumnWidth(value, chatTotal);
     const previousSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
     const move = (ev: PointerEvent): void => {
-      props.onWidthChange(clamp(startWidth - (ev.clientX - startX)));
+      props.onWidthChange(dragWidth(startWidth - (ev.clientX - startX)));
     };
     const up = (ev: PointerEvent): void => {
       window.removeEventListener("pointermove", move);
       document.body.style.userSelect = previousSelect;
       document.body.style.cursor = previousCursor;
       setResizing(false);
-      props.onWidthCommit(clamp(startWidth - (ev.clientX - startX)));
+      props.onWidthCommit(dragWidth(startWidth - (ev.clientX - startX)));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
@@ -229,7 +240,7 @@ export function ChannelColumn(props: {
       {!props.narrow && (
         <span
           onPointerDown={startResize}
-          onDoubleClick={() => props.onWidthCommit(clampChannelColumnWidth(CHANNEL_COLUMN_WIDTH_DEFAULT, chatTotal))}
+          onDoubleClick={() => props.onWidthCommit(dragWidth(CHANNEL_COLUMN_WIDTH_DEFAULT))}
           title="Drag to resize · double-click to reset"
           style={{
             position: "absolute",

@@ -87,7 +87,7 @@ describe("parseSettings: drawer 字段", () => {
   });
 });
 
-describe("clampRightPanelWidth：区间是 pane 的 1/3–2/3（P = chat 主区 + 右栏）", () => {
+describe("clampRightPanelWidth：区间是 pane 的 1/3–2/3（P = chat 主区 + 通道列 + 右栏）", () => {
   // 2026-09-22 wafo 澄清：这条比例规则只管 chat 与右栏这一对，左侧栏不在其中
   it("区间两端就是 P/3 与 2P/3", () => {
     deepStrictEqual(clampRightPanelWidth(400, 1200), 400);
@@ -186,7 +186,7 @@ describe("parseSettings 的 channelColumnWidth（子会话 2026-09-23：通道�
     deepStrictEqual(parseSettings({ theme: "dark" }).channelColumnWidth, undefined);
   });
 
-  // 上界依赖当前 chat 区宽度（clampChannelColumnWidth），存储层判不了：同 rightPanelWidth 的纪律
+  // 上界依赖当前 pane 宽度（clampChannelColumnWidth），存储层判不了：同 rightPanelWidth 的纪律
   it("只拦 <180 的坏值，大值留着交给渲染层夹", () => {
     deepStrictEqual(parseSettings({ channelColumnWidth: 180 }).channelColumnWidth, 180);
     deepStrictEqual(parseSettings({ channelColumnWidth: 240.4 }).channelColumnWidth, 240);
@@ -197,12 +197,12 @@ describe("parseSettings 的 channelColumnWidth（子会话 2026-09-23：通道�
   });
 });
 
-describe("clampChannelColumnWidth：区间是 chat 区（主槽 + 通道列）的 1/6–1/3", () => {
+describe("clampChannelColumnWidth：区间是 pane（主槽 + 通道列 + 右栏）的 1/6–1/3", () => {
   it("默认值是 300", () => {
     deepStrictEqual(CHANNEL_COLUMN_WIDTH_DEFAULT, 300);
   });
 
-  it("区间两端就是 C/6 与 C/3", () => {
+  it("区间两端就是 P/6 与 P/3", () => {
     deepStrictEqual(clampChannelColumnWidth(200, 1200), 200);
     deepStrictEqual(clampChannelColumnWidth(400, 1200), 400);
     deepStrictEqual(200, 1200 / 6);
@@ -219,26 +219,26 @@ describe("clampChannelColumnWidth：区间是 chat 区（主槽 + 通道列）�
     deepStrictEqual(clampChannelColumnWidth(500, 1200), 400);
   });
 
-  it("chat 区小到 C/6 落在地板以下时地板接管（上限仍按 C/3）", () => {
-    // C = 900：C/6 = 150 < 180 → 下界 180；上界 C/3 = 300
+  it("pane 小到 P/6 落在地板以下时地板接管（上限仍按 P/3）", () => {
+    // P = 900：P/6 = 150 < 180 → 下界 180；上界 P/3 = 300
     deepStrictEqual(clampChannelColumnWidth(100, 900), 180);
     deepStrictEqual(clampChannelColumnWidth(250, 900), 250);
     deepStrictEqual(clampChannelColumnWidth(500, 900), 300);
   });
 
   it("地板压过上限的退化情况：返回地板，宁可挤主槽也不把通道列收成一条线", () => {
-    // C = 480：上界 C/3 = 160 < 地板 180
+    // P = 480：上界 P/3 = 160 < 地板 180
     deepStrictEqual(clampChannelColumnWidth(300, 480), 180);
     deepStrictEqual(clampChannelColumnWidth(100, 480), 180);
   });
 
-  it("量不到 C（元素未挂载）时只保地板，不拿假的 C 去夹", () => {
+  it("量不到 P（元素未挂载）时只保地板，不拿假的 P 去夹", () => {
     deepStrictEqual(clampChannelColumnWidth(300, 0), 300);
     deepStrictEqual(clampChannelColumnWidth(100, 0), 180);
     deepStrictEqual(clampChannelColumnWidth(300, Number.NaN), 300);
   });
 
-  it("非数的宽度退到地板，再按 C 夹", () => {
+  it("非数的宽度退到地板，再按 P 夹", () => {
     deepStrictEqual(clampChannelColumnWidth(Number.NaN, 1200), 200);
   });
 });

@@ -3,10 +3,11 @@
  * 组件不测（仓库 renderer 组件无测试框架先例），逻辑抽出来落在这里测。
  *
  * 纯模块：不 import React，可被 `node --test` 直接加载——值导入必须走相对路径带
- * `.ts` 后缀（AGENTS.md 硬规则，先例 `stats-format.ts:13`）；本文件目前不需要
- * shared 的任何值，只用类型，`import type` 走 `@shared/...` 别名即可。
+ * `.ts` 后缀（AGENTS.md 硬规则，先例 `stats-format.ts:13`）；只用类型的
+ * `import type` 走 `@shared/...` 别名即可。
  */
 import type { ChannelMessage, ChannelSummary } from "@shared/channel";
+import { clampChannelColumnWidth } from "../../../../shared/settings.ts";
 
 /** 通道列一行的显示规则：`defaultCollapsed` 没有用户手动切换过时的初始折叠态。 */
 export interface ChannelColumnEntry {
@@ -81,8 +82,7 @@ export function taskCardBody(text: string, expanded: boolean): { body: string; h
 
 /**
  * 主槽的硬底线（子会话 PR4c fix，CDP 实测发现的挤压 bug）：`App.tsx` 的 narrow
- * 注释与 `RightPanel.tsx` 的 `clampRightPanelWidth`/`usePaneTotalWidth` 都认这条
- * 线——chat 主区不该被挤到 480px 以下。但通道列（300px，PR4b）当时没算进这套预算：
+ * 注释认这条线——chat 主区不该被挤到 480px 以下。但通道列（300px，PR4b）当时没算进这套预算：
  * 窗口 1200px、右栏与通道列同时开着时，主槽被压到 ~200px。
  */
 export const MIN_CHAT_WIDTH_FOR_INLINE = 480;
@@ -117,6 +117,31 @@ export function channelColumnLayout(input: {
   if (input.paneWidth <= 0) return "overlay";
   const chatWidthIfInline = input.paneWidth - input.rightPanelWidth - input.columnWidth;
   return chatWidthIfInline >= MIN_CHAT_WIDTH_FOR_INLINE ? "inline" : "overlay";
+}
+
+/**
+ * 通道列的实际宽度（渲染、拖宽、双击复位共用）：区间照 `clampChannelColumnWidth`
+ * 的 [pane/6, pane/3]；**内联时上限再让出主槽的硬底线**——pane 不够宽时（右栏开着、
+ * pane 1300px 上下），pane/3 的通道列会把主槽挤到 480 以下，`channelColumnLayout`
+ * 就把整列翻成 overlay（默认显隐下整列直接消失）。所以先缩到「主槽刚好剩 480」
+ * 那一格，缩到 pane/6 的地板仍放不下才让位成 overlay（右栏优先不变）。
+ *
+ * - 渲染时：只缩渲染值、不回写 settings（同 `clampChannelColumnWidth` 的纪律）——
+ *   右栏一关，通道列回到用户拖好的宽度。
+ * - 拖宽时：拖到那一格就停，拖动中途不会翻成 overlay、手底下的热区不会消失。
+ *
+ * overlay 浮在主槽之上、不占 flex 空间，不受这条限制；`paneWidth` 量不到时同样
+ * 不限（交给 clamp 只保地板）。地板压过这条线时地板胜出——那种 pane 只能 overlay。
+ */
+export function fitChannelColumnWidth(
+  wanted: number,
+  input: { paneWidth: number; rightPanelWidth: number; overlay: boolean },
+): number {
+  const room =
+    input.overlay || input.paneWidth <= 0
+      ? wanted
+      : input.paneWidth - input.rightPanelWidth - MIN_CHAT_WIDTH_FOR_INLINE;
+  return clampChannelColumnWidth(Math.min(wanted, room), input.paneWidth);
 }
 
 /** who 行的语气：颜色是第二信号，与 tool-results.ts 的 ChannelMarkTone 同一套判定习惯。 */
