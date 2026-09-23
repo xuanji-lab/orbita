@@ -37,6 +37,7 @@ import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/f
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderOpen from "../../../../Orbita Design System/assets/icons/lucide/folder-open.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
+import folderSync from "../../../../Orbita Design System/assets/icons/lucide/folder-sync.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
 import gitFork from "../../../../Orbita Design System/assets/icons/lucide/git-fork.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
@@ -120,6 +121,7 @@ const ICONS = {
   folder,
   "folder-open": folderOpen,
   "folder-plus": folderPlus,
+  "folder-sync": folderSync,
   "git-branch": gitBranch,
   "git-fork": gitFork,
   "grip-vertical": gripVertical,
