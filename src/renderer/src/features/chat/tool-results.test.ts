@@ -2,10 +2,14 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
+// 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 tool-results.ts 本身的纪律）
+import { composeChannelPrompt } from "../../../../shared/channel.ts";
 import {
   answerText,
   branchAnchorEntries,
   branchAnchorIds,
+  channelMarkLabel,
+  delegateCard,
   editDiffEntries,
   editDiffStats,
   editDiffText,
@@ -84,6 +88,17 @@ const compacted: CompactedRecord = {
   timestamp: 5,
 };
 
+/** 通道标记（子会话契约）：不是消息也不构成轮边界——渲染与锚点判定都穿过它 */
+const channelMark = {
+  role: "channel-mark",
+  id: "k1",
+  peerId: "c1",
+  messageId: "m1",
+  from: "child",
+  kind: "question",
+  timestamp: 6,
+} as const;
+
 describe("indexToolResults", () => {
   test("按 toolCallId 建索引", () => {
     const index = indexToolResults([userItem, toolItem({ toolCallId: "a" }), toolItem({ toolCallId: "b" })]);
@@ -133,6 +148,46 @@ describe("flattenRenderUnits", () => {
       ["a1:0", "a1:1", "c1"],
     );
     assert.equal(units[2]?.kind, "compacted");
+  });
+
+  test("盘上读回的 channel-mark 记录产 channelMark 单元，key = record.id", () => {
+    const units = flattenRenderUnits([channelMark]);
+    assert.deepEqual(units, [
+      {
+        kind: "channelMark",
+        key: "k1",
+        mark: { peerId: "c1", messageId: "m1", from: "child", kind: "question" },
+        timestamp: 6,
+      },
+    ]);
+  });
+
+  test("实时流里首个 text 块是信封的 user item 同样产 channelMark，不产 user 单元——两条路 key 相同", () => {
+    const envelope = composeChannelPrompt(
+      { id: "m1", from: "child", author: "model", kind: "question", text: "问一下", delivery: "followUp", createdAt: 6 },
+      { id: "c1", title: "子会话" },
+    );
+    const liveItem: TranscriptItem = {
+      id: "k1",
+      role: "user",
+      content: [{ type: "text", text: envelope }],
+      timestamp: 6,
+    };
+    const units = flattenRenderUnits([liveItem]);
+    assert.equal(units.length, 1);
+    assert.equal(units[0]?.kind, "channelMark");
+    // key 与盘上读回的 channel-mark 记录相同（都是这条 user item 的 id）——
+    // 重载会话（从「实时信封」翻成「落盘标记」）前后 React key 不跳变
+    assert.equal(units[0]?.key, "k1");
+    assert.deepEqual(
+      units[0]?.kind === "channelMark" ? units[0].mark : null,
+      { peerId: "c1", messageId: "m1", from: "child", kind: "question" },
+    );
+  });
+
+  test("普通 user 消息不受影响——首个 text 块解不出信封就照常产 user 单元", () => {
+    const units = flattenRenderUnits([userItem]);
+    assert.deepEqual(units, [{ kind: "user", key: "u1", item: userItem }]);
   });
 });
 
@@ -203,6 +258,25 @@ describe("groupToolUnits", () => {
     assert.deepEqual(
       group.kind === "toolGroup" ? group.calls.map((call) => call.toolCallId) : [],
       ["r1", "r2"],
+    );
+  });
+
+  test("连续两次 reply_subsession 不成组——通道工具各自是独立一次通信，合并会显示成一条", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [
+          { type: "toolCall", toolCallId: "s1", toolName: "reply_subsession", input: {} },
+        ]),
+        toolItem({ toolCallId: "s1", toolName: "reply_subsession" }),
+        assistantItem("a2", [
+          { type: "toolCall", toolCallId: "s2", toolName: "reply_subsession", input: {} },
+        ]),
+        toolItem({ toolCallId: "s2", toolName: "reply_subsession" }),
+      ]),
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.kind),
+      ["toolCall", "toolCall"],
     );
   });
 });
@@ -1013,6 +1087,21 @@ describe("branchAnchorIds", () => {
     );
   });
 
+  test("通道标记是轮边界（子会话 2026-09-23 不变量修正）：像 user 一样确认候选并开新段", () => {
+    // 标记落在末尾：末尾确认照旧（与界碑收尾同一结果）
+    const withMark = [userItem, said("a1", [{ type: "text", text: "答" }]), channelMark];
+    assert.deepEqual([...branchAnchorIds(withMark, indexToolResults([]))], ["a1"]);
+    // 标记落在两答之间：它是轮边界，把前一个回答确认成它那一段的锚点，
+    // 后一个回答另起一段——两个都锚，不再是「后者顶替前者」（旧语义已废弃）
+    const midMark = [
+      userItem,
+      said("a1", [{ type: "text", text: "先说" }]),
+      channelMark,
+      said("a2", [{ type: "text", text: "结论" }]),
+    ];
+    assert.deepEqual([...branchAnchorIds(midMark, indexToolResults([]))], ["a1", "a2"]);
+  });
+
   test("流式中的消息不是锚点；纯工具轮（无正文）没有锚点", () => {
     const records = [
       userItem,
@@ -1215,5 +1304,116 @@ describe("toolCallSummary —— read_task（B-1）", () => {
   test("行首参数摘要显示引用本身", () => {
     assert.equal(toolCallSummary("read_task", { task: "fix sidebar", rounds: "1" }), "fix sidebar");
     assert.equal(toolCallSummary("read_task", {}), null);
+  });
+});
+
+describe("toolCallSummary —— delegate（子会话 PR4a）", () => {
+  test("派出卡任务预览复用同一条摘要（同 read_task 的 task 字段）", () => {
+    assert.equal(toolCallSummary("delegate", { title: "x", task: "审查分支 3" }), "审查分支 3");
+    assert.equal(toolCallSummary("delegate", { title: "x" }), null);
+  });
+});
+
+describe("delegateCard（子会话 PR4a）", () => {
+  const toolItem = (
+    patch: Partial<Extract<ToolTranscriptItem, { status: "complete" }>> = {},
+    status: "complete" | "running" = "complete",
+  ): ToolTranscriptItem => ({
+    id: "i1",
+    role: "tool",
+    toolCallId: "c1",
+    toolName: "delegate",
+    input: { title: "审查分支 3", task: "审查 f67bd28" },
+    content: [{ type: "text", text: "Sub-session started…" }],
+    timestamp: 1,
+    status,
+    isError: false,
+    ...patch,
+  });
+  // 不显式标注 DelegateCard：details 字段要求结构满足 JsonValue（索引签名），
+  // 具名接口的变量没有索引签名，赋值会被拒——保持推断出的字面量类型即可
+  const validCard = {
+    childId: "child-1",
+    title: "审查分支 3",
+    modelId: "glm-5.3",
+    thinkingLevel: "medium" as const,
+    workbench: "/workbenches/child-1",
+  };
+
+  test("终态帧的 details.delegate 逐字段校验后原样带回", () => {
+    const card = delegateCard(toolItem({ details: { delegate: validCard } }));
+    assert.deepEqual(card, validCard);
+  });
+
+  test("坏值判 null：running 帧、缺 details、缺字段、坏思考档、空 childId 都不给卡", () => {
+    assert.equal(delegateCard(undefined), null);
+    assert.equal(delegateCard(toolItem({}, "running")), null);
+    assert.equal(delegateCard(toolItem({ details: undefined })), null);
+    assert.equal(delegateCard(toolItem({ details: { other: 1 } })), null);
+    assert.equal(
+      delegateCard(toolItem({ details: { delegate: { ...validCard, childId: "" } } })),
+      null,
+    );
+    assert.equal(
+      delegateCard(toolItem({ details: { delegate: { ...validCard, title: "" } } })),
+      null,
+    );
+    assert.equal(
+      delegateCard(toolItem({ details: { delegate: { ...validCard, modelId: "" } } })),
+      null,
+    );
+    assert.equal(
+      delegateCard(toolItem({ details: { delegate: { ...validCard, workbench: "" } } })),
+      null,
+    );
+    assert.equal(
+      delegateCard(toolItem({ details: { delegate: { ...validCard, thinkingLevel: "extreme" } } })),
+      null,
+    );
+  });
+});
+
+describe("channelMarkLabel（子会话 PR4a）", () => {
+  test("本会话是父（ownSide parent，mark.from child）：question/progress/done/failed 各自的文案与 tone", () => {
+    const parentSide = (kind: "question" | "progress" | "done" | "failed") =>
+      channelMarkLabel({ from: "child", kind }, "parent", "审查 session/star");
+    assert.deepEqual(parentSide("question"), {
+      text: "审查 session/star asked · view in channel",
+      tone: "question",
+    });
+    assert.deepEqual(parentSide("progress"), {
+      text: "审查 session/star · progress · view in channel",
+      tone: "neutral",
+    });
+    assert.deepEqual(parentSide("done"), {
+      text: "审查 session/star done · view in channel",
+      tone: "done",
+    });
+    assert.deepEqual(parentSide("failed"), {
+      text: "审查 session/star failed · view in channel",
+      tone: "failed",
+    });
+  });
+
+  test("本会话是子（ownSide child，mark.from parent）：task/reply 的文案与 tone", () => {
+    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "task" }, "child", "审查栈"), {
+      text: "task from 审查栈 · view in channel",
+      tone: "neutral",
+    });
+    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "reply" }, "child", "审查栈"), {
+      text: "reply from 审查栈 · view in channel",
+      tone: "reply",
+    });
+  });
+
+  test("其余组合（理论上不出现）兜底成 <peer> · <kind>，tone 中性", () => {
+    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "task" }, "parent", "谁"), {
+      text: "谁 · task · view in channel",
+      tone: "neutral",
+    });
+    assert.deepEqual(channelMarkLabel({ from: "child", kind: "question" }, "child", "谁"), {
+      text: "谁 · question · view in channel",
+      tone: "neutral",
+    });
   });
 });

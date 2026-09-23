@@ -19,7 +19,9 @@ import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import {
+  childSessions,
   deriveSessionTitle,
+  isChannelMarkRecord,
   isCompactedRecord,
   parseSessionMeta,
   pushRecentQuery,
@@ -30,6 +32,7 @@ import {
   type SessionMeta,
   type SessionRecord,
 } from "../../shared/session.ts";
+import type { ChannelStore } from "../channel/store.ts";
 
 /**
  * 会话 id 必须长得像 `randomUUID()`。
@@ -38,6 +41,15 @@ import {
  * 一个 `../../` 就能读写 sessions 目录之外的文件。白名单比转义可靠。
  */
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * 会话 id 白名单，导出给 ChannelStore 用——通道账本的路径
+ * `channels/<parentId>/<childId>.jsonl` 同样把 renderer 传来的 id 拼进路径，
+ * 同一个安全等级，不重复这条正则。
+ */
+export function isSessionId(id: string): boolean {
+  return SESSION_ID.test(id);
+}
 
 const META_SUFFIX = ".meta.json";
 
@@ -81,10 +93,20 @@ export function isEmptyErrorAssistant(record: SessionRecord): boolean {
  * 不写新记录，这里跳的是谓词收敛之前存的存量；pi 侧虽然收了这类条目，但
  * branch-cut.ts 对它们施加同一个排除谓词，两侧因此对得上。其余罕见漂移由 agent
  * 进程的对账守卫兜底——拒绝分支优于切错位置。
+ *
+ * **`channel-mark` 记为 `"user"`**（子会话 2026-09-23 不变量修正）：一条通道标记
+ * 顶替的正是 pi 本子里的一条 user 消息（`ChannelMarkRecord` 的接收侧标记，见
+ * `shared/session.ts`）——按位对账时这本账数的是「标记」而 pi 那本数的是「信封
+ * user 消息」，不把它算作 user 的话，带通道投递的会话在这两本账之间会错位一位，
+ * 之后的每一条都对不上，分支会被拒绝。
  */
 export function branchRoles(records: readonly SessionRecord[]): ("user" | "assistant")[] {
   const roles: ("user" | "assistant")[] = [];
   for (const record of records) {
+    if (record.role === "channel-mark") {
+      roles.push("user");
+      continue;
+    }
     if (record.role !== "user" && record.role !== "assistant") continue;
     if (isEmptyErrorAssistant(record)) continue;
     roles.push(record.role);
@@ -136,9 +158,16 @@ export class SessionStore {
    */
   private readonly metaWrites = new Map<string, Promise<unknown>>();
 
-  constructor(dir: string, workbenchesDir?: string) {
+  /**
+   * 通道账本的持有者（子会话 2026-09-23）。**可选**——旧的调用点（测试、
+   * 未接线的场景）不传它，remove() 就只删会话本身，不级联通道文件。
+   */
+  private readonly channels: ChannelStore | undefined;
+
+  constructor(dir: string, workbenchesDir?: string, channels?: ChannelStore) {
     this.dir = dir;
     this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
+    this.channels = channels;
   }
 
   private metaPath(id: string): string {
@@ -167,6 +196,11 @@ export class SessionStore {
    * 目录存不存在是磁盘上的事实，会话不该背着它的快照。递归数文件不计目录；
    * 符号链接不跟（跟的话链接环转不出来），链接算一个文件。
    * 读不了 ≠ 没有：除 ENOENT 外照抛，与 `list()` 同一条规矩。
+   *
+   * **级联求和**（子会话 2026-09-22 裁决）：fileCount 是自己 + 全部后代工作台
+   * 文件数之和，exists 是自己或任一后代存在——唯一消费者是侧栏删除确认
+   * （`stat.exists && stat.fileCount > 0` 才出提示），级联删要把子的文件也说出来。
+   * path 仍是自己的：它是给「打开这个会话的工作台」用的，不该指向别人的目录。
    */
   async workbenchStat(id: string): Promise<SessionWorkbenchStat> {
     const path = this.workbenchPath(id);
@@ -178,12 +212,22 @@ export class SessionStore {
       }
       return total;
     };
-    try {
-      return { path, exists: true, fileCount: await countFiles(path) };
-    } catch (cause) {
-      if (isNotFound(cause)) return { path, exists: false, fileCount: 0 };
-      throw cause;
+    const statOne = async (targetId: string): Promise<{ exists: boolean; fileCount: number }> => {
+      try {
+        return { exists: true, fileCount: await countFiles(this.workbenchPath(targetId)) };
+      } catch (cause) {
+        if (isNotFound(cause)) return { exists: false, fileCount: 0 };
+        throw cause;
+      }
+    };
+    let exists = false;
+    let fileCount = 0;
+    for (const targetId of [id, ...(await this.descendants(id))]) {
+      const stat = await statOne(targetId);
+      exists = exists || stat.exists;
+      fileCount += stat.fileCount;
     }
+    return { path, exists, fileCount };
   }
 
   /**
@@ -515,13 +559,68 @@ export class SessionStore {
   }
 
   /**
+   * 某条会话的全部后代 id（不含自己），基于 `list()` 按 parentId 递归收集。
+   * 消费者：`remove()` 的级联、`workbenchStat()` 的求和、`session:delete` 的
+   * dispose（先释放全部后代 + 自己在 runtime 里的活跑轮，再删文件）。
+   *
+   * **防环**：parentId 成环只可能来自手改 meta 文件（正常路径——delegate、
+   * 导入器——都不会造出环），但手改是真实存在的输入源，递归不能因此无限展开
+   * 撑爆栈。`visited` 记的是「已经收进结果的 id」，撞到已收过的就跳过、不再
+   * 往下递归——环上的节点只会被收一次。
+   */
+  async descendants(id: string): Promise<string[]> {
+    return this.descendantsOf(id, await this.list(), new Set([id]));
+  }
+
+  private descendantsOf(id: string, metas: readonly SessionMeta[], visited: Set<string>): string[] {
+    const result: string[] = [];
+    for (const child of childSessions(metas, id)) {
+      if (visited.has(child.id)) continue; // 环：已经收过，不重复收、不再递归
+      visited.add(child.id);
+      result.push(child.id);
+      result.push(...this.descendantsOf(child.id, metas, visited));
+    }
+    return result;
+  }
+
+  /**
    * 删一条会话。**先删 transcript，后删 meta**——顺序不是随意的：
    * 两次 rm 之间崩了的话，
    *   先删 meta：留下一个**列不出来也删不掉**的 .jsonl，永远占着盘；
    *   先删 transcript：留下一条打得开但空的会话，用户看得见、能自己再删一次。
    * 可见的残留优于隐形的残留。
+   *
+   * **级联删**（子会话 2026-09-22 裁决）：子会话是母会话的附属物，删母连带删子。
+   * **基于 `descendants()` 的结果而不是自己递归**（自己递归会在成环的 meta 上
+   * 无限展开，descendants 已经把防环做掉了，不该有第二份递归逻辑）：先收集
+   * 「自己 + 全部后代」这份定死的清单，再逐个做单条清理。
+   *
+   * **清理顺序是后代先、自己最后**——这条和上面「先删 transcript 后删 meta」
+   * 是同一条纪律（可见的残留优于隐形的残留）。反过来先删自己的话：两条
+   * `removeOne` 之间崩溃，没删完的后代 meta 还在，但它们 parentId 链头指向的
+   * 会话已经不在了——从此既进不了左栏（rootSessions 按 parentId 过滤掉带
+   * parentId 的）也摸不到父的 Sub-sessions 入口，变成一份看不见也够不着的
+   * 隐形残留。先删后代、自己最后：中途崩溃时还没删到的那些后代，它们的父
+   * 依然还在，仍然摸得到、看得见——即便这一整套删除操作没跑完，用户至少
+   * 能在界面上发现并再删一次。`descendants()` 是 DFS 前序（自己在前、子孙
+   * 在后），`.reverse()` 换来的正是「子孙先于自己」的序：任一节点在反转后
+   * 的列表里，永远排在它自己的全部后代之后（孙先于子、子先于父），最后
+   * 再把 `id` 本身接到末尾。
    */
   async remove(id: string): Promise<void> {
+    const order = [...(await this.descendants(id)).reverse(), id];
+    for (const targetId of order) {
+      await this.removeOne(targetId);
+    }
+  }
+
+  /** `remove()` 对单条会话的清理：读自己的 meta（要拿 parentId 去找自己那条通道）→ 删通道 → 删自己三份文件。 */
+  private async removeOne(id: string): Promise<void> {
+    const meta = await this.readMeta(id);
+    await this.channels?.removeForParent(id);
+    if (meta?.parentId !== undefined) {
+      await this.channels?.removeChannel({ parentId: meta.parentId, childId: id });
+    }
     // 先等它自己那条写入链排完，再删——否则在途的 `update` 会在删完之后
     // 把 meta 文件又写回去（`update` 内部读不到才跳过，它已经读到了）。
     await this.queueMeta(id, async () => undefined);
@@ -567,8 +666,15 @@ export class SessionStore {
           records.push(parsed);
           continue;
         }
+        // 通道标记同一条纪律：字段齐的收下，长着它的脸但不齐的跳过——
+        // 半截标记被当成消息强转，下游访问 content 就是 undefined
+        if (isChannelMarkRecord(parsed)) {
+          records.push(parsed);
+          continue;
+        }
         const suspect = parsed as { role?: unknown } | null;
         if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") continue;
+        if (suspect !== null && typeof suspect === "object" && suspect.role === "channel-mark") continue;
         records.push(parsed as TranscriptItem);
       } catch {
         // 半截行：跳过它，前面读到的照常返回

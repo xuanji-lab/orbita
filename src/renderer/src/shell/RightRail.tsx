@@ -10,15 +10,22 @@ import { Icon, type IconName } from "./Icon";
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
- * `--radius-sm`（md 太圆）。
+ * `--radius-sm`（md 太圆）。辅助对话之后再加一个通道列开关（子会话 PR4b，
+ * `channelColumn` prop 非 null 时才出现）——它不占面板位、与四个面板互斥入口
+ * 是两回事，点亮语义相同（列显示中 = 亮）但不走同一套 `panel` 状态。
  *
  * 底部：应用入口（Archived / Carryovers / Settings），**首页常驻**——它们是
  * 应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，覆盖 2026-09-12
  * 「底部只放会话动作」：复制转录已并入会话行的「导出」，右栏不再挂会话动作）。
  * 中间用弹性空隙隔开两组的语义。
+ *
+ * 顶部第五个入口 Sub-sessions（子会话 PR4c）：与 Files/Skills/MCP/辅助对话
+ * 共用同一个面板位（互斥），只在主槽正看着一条**有子会话的根会话**时出现——
+ * 入口数据（要不要出现、N 是多少）由 App 传入，本组件不自己算（同通道列开关
+ * `channelColumn` 先例）。
  */
 
-export type RightPanelKind = "files" | "skills" | "mcp" | "drawer";
+export type RightPanelKind = "files" | "skills" | "mcp" | "drawer" | "subsessions";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -35,6 +42,17 @@ export function RightRail(props: {
   onPanel: (next: RightPanelKind | null) => void;
   /** 底部应用入口组（Carryovers / Archived / Settings），调用方组装；顺序即堆叠顺序 */
   railEntries: RailEntry[];
+  /**
+   * 通道列的开关入口（子会话 PR4b）：只在当前根会话有可见通道时出现——
+   * null = 不出现（没在看根会话，或这条根会话没有可见通道）。它不占右栏面板位，
+   * 与 `panel` 不互斥，因此不走 `railEntries`（那组是"面板"的互斥语义），单独一个 prop。
+   */
+  channelColumn: { open: boolean; onToggle: () => void } | null;
+  /**
+   * Sub-sessions 面板入口（子会话 PR4c）：null = 不出现（没在看根会话，或这条
+   * 根会话没有子会话）。与 `panel` 共用互斥语义，走 `onPanel` 同一条切换逻辑。
+   */
+  subSessions: { count: number } | null;
 }) {
   return (
     <aside
@@ -94,6 +112,22 @@ export function RightRail(props: {
         lit={props.panel === "drawer"}
         onClick={() => props.onPanel(props.panel === "drawer" ? null : "drawer")}
       />
+      {props.subSessions !== null && (
+        <RailEntryButton
+          icon="git-fork"
+          label={`Sub-sessions (${props.subSessions.count})`}
+          lit={props.panel === "subsessions"}
+          onClick={() => props.onPanel(props.panel === "subsessions" ? null : "subsessions")}
+        />
+      )}
+      {props.channelColumn !== null && (
+        <RailEntryButton
+          icon="messages-square"
+          label="Sub-session channels"
+          lit={props.channelColumn.open}
+          onClick={props.channelColumn.onToggle}
+        />
+      )}
       <span style={{ flex: 1 }} />
       {props.railEntries.map((entry) => (
         <RailEntryButton

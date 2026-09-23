@@ -1,7 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CHANNEL_TOOLS,
   decidePermission,
+  isChannelTool,
   isReadOnlyTool,
   PERMISSION_MODES,
   READ_ONLY_TOOLS,
@@ -57,6 +59,31 @@ describe("decidePermission", () => {
       assert.ok(["allow", "ask", "deny"].includes(decidePermission(mode, "bash").behavior));
       assert.ok(["allow", "ask", "deny"].includes(decidePermission(mode, "read").behavior));
     }
+  });
+
+  test("通道三件套（子会话 2026-09-23）：delegate / reply_subsession / report_to_parent 三档全放行", () => {
+    for (const mode of PERMISSION_MODES) {
+      for (const tool of CHANNEL_TOOLS) {
+        assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode}/${tool}`);
+      }
+    }
+  });
+
+  test("通道工具放行不影响其它工具的既有行为", () => {
+    assert.deepEqual(decidePermission("plan", "read"), { behavior: "allow" });
+    assert.equal(decidePermission("plan", "bash").behavior, "deny");
+    assert.deepEqual(decidePermission("manual", "read"), { behavior: "ask" });
+    assert.deepEqual(decidePermission("manual", "bash"), { behavior: "ask" });
+    assert.deepEqual(decidePermission("skip", "bash"), { behavior: "allow" });
+  });
+});
+
+describe("isChannelTool", () => {
+  test("通道三件套精确命中，其它工具（包括名字相似的）不命中", () => {
+    for (const tool of CHANNEL_TOOLS) assert.equal(isChannelTool(tool), true, tool);
+    assert.equal(isChannelTool("read_task"), false);
+    assert.equal(isChannelTool("bash"), false);
+    assert.equal(isChannelTool("delegate_extra"), false);
   });
 });
 

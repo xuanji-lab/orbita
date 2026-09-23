@@ -1,6 +1,8 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  CHANNEL_COLUMN_WIDTH_DEFAULT,
+  clampChannelColumnWidth,
   clampRightPanelWidth,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
@@ -179,6 +181,68 @@ describe("parseSettings 的 rightPanelWidth", () => {
   });
 });
 
+describe("parseSettings 的 channelColumnWidth（子会话 2026-09-23：通道列可拖宽）", () => {
+  it("缺席 = 没拖过，不落这个键", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).channelColumnWidth, undefined);
+  });
+
+  // 上界依赖当前 chat 区宽度（clampChannelColumnWidth），存储层判不了：同 rightPanelWidth 的纪律
+  it("只拦 <180 的坏值，大值留着交给渲染层夹", () => {
+    deepStrictEqual(parseSettings({ channelColumnWidth: 180 }).channelColumnWidth, 180);
+    deepStrictEqual(parseSettings({ channelColumnWidth: 240.4 }).channelColumnWidth, 240);
+    deepStrictEqual(parseSettings({ channelColumnWidth: 179 }).channelColumnWidth, undefined);
+    deepStrictEqual(parseSettings({ channelColumnWidth: 900 }).channelColumnWidth, 900);
+    deepStrictEqual(parseSettings({ channelColumnWidth: "wide" }).channelColumnWidth, undefined);
+    deepStrictEqual(parseSettings({ channelColumnWidth: Number.NaN }).channelColumnWidth, undefined);
+  });
+});
+
+describe("clampChannelColumnWidth：区间是 chat 区（主槽 + 通道列）的 1/6–1/3", () => {
+  it("默认值是 300", () => {
+    deepStrictEqual(CHANNEL_COLUMN_WIDTH_DEFAULT, 300);
+  });
+
+  it("区间两端就是 C/6 与 C/3", () => {
+    deepStrictEqual(clampChannelColumnWidth(200, 1200), 200);
+    deepStrictEqual(clampChannelColumnWidth(400, 1200), 400);
+    deepStrictEqual(200, 1200 / 6);
+    deepStrictEqual(400, 1200 / 3);
+  });
+
+  it("区间内原样收下并取整", () => {
+    deepStrictEqual(clampChannelColumnWidth(300, 1200), 300);
+    deepStrictEqual(clampChannelColumnWidth(300.6, 1200), 301);
+  });
+
+  it("越界两头都夹回来", () => {
+    deepStrictEqual(clampChannelColumnWidth(100, 1200), 200);
+    deepStrictEqual(clampChannelColumnWidth(500, 1200), 400);
+  });
+
+  it("chat 区小到 C/6 落在地板以下时地板接管（上限仍按 C/3）", () => {
+    // C = 900：C/6 = 150 < 180 → 下界 180；上界 C/3 = 300
+    deepStrictEqual(clampChannelColumnWidth(100, 900), 180);
+    deepStrictEqual(clampChannelColumnWidth(250, 900), 250);
+    deepStrictEqual(clampChannelColumnWidth(500, 900), 300);
+  });
+
+  it("地板压过上限的退化情况：返回地板，宁可挤主槽也不把通道列收成一条线", () => {
+    // C = 480：上界 C/3 = 160 < 地板 180
+    deepStrictEqual(clampChannelColumnWidth(300, 480), 180);
+    deepStrictEqual(clampChannelColumnWidth(100, 480), 180);
+  });
+
+  it("量不到 C（元素未挂载）时只保地板，不拿假的 C 去夹", () => {
+    deepStrictEqual(clampChannelColumnWidth(300, 0), 300);
+    deepStrictEqual(clampChannelColumnWidth(100, 0), 180);
+    deepStrictEqual(clampChannelColumnWidth(300, Number.NaN), 300);
+  });
+
+  it("非数的宽度退到地板，再按 C 夹", () => {
+    deepStrictEqual(clampChannelColumnWidth(Number.NaN, 1200), 200);
+  });
+});
+
 describe("parseSettings 的 compaction（A-1）", () => {
   it("出厂默认：剩余 20%、自动压缩开", () => {
     deepStrictEqual(COMPACTION_DEFAULT, { reservePercent: 20, enabled: true });
@@ -279,6 +343,37 @@ describe("parseSettings 的 titleModel", () => {
     deepStrictEqual(parseSettings({ titleModel: { providerId: 1, modelId: 2 } }).titleModel, undefined);
     deepStrictEqual(parseSettings({ titleModel: "fast" }).titleModel, undefined);
     deepStrictEqual(parseSettings({ titleModel: null }).titleModel, undefined);
+  });
+});
+
+describe("parseSettings 的 subSessionModel / subSessionThinking（子会话 2026-09-23）", () => {
+  it("缺席 = 同父（不落键）——默认就是跟着父会话走", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ theme: "dark" }).subSessionThinking, undefined);
+    deepStrictEqual(DEFAULT_SETTINGS.subSessionModel, undefined);
+    deepStrictEqual(DEFAULT_SETTINGS.subSessionThinking, undefined);
+  });
+
+  it("成对的模型 id 与合法思考档原样收下", () => {
+    deepStrictEqual(
+      parseSettings({ subSessionModel: { providerId: "zai", modelId: "glm-5.3-flash" } })
+        .subSessionModel,
+      { providerId: "zai", modelId: "glm-5.3-flash" },
+    );
+    deepStrictEqual(parseSettings({ subSessionThinking: "high" }).subSessionThinking, "high");
+  });
+
+  it("半截模型与坏档位丢弃——优先级链（delegate 参数 > 这里 > 同父）只会退到同父，不会拿半截值去解析", () => {
+    deepStrictEqual(parseSettings({ subSessionModel: { modelId: "glm-5.3-flash" } }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ subSessionModel: { providerId: "zai" } }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ subSessionModel: "fast" }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ subSessionThinking: "turbo" }).subSessionThinking, undefined);
+    deepStrictEqual(parseSettings({ subSessionThinking: 3 }).subSessionThinking, undefined);
+  });
+
+  it("null 清除：parseSettings 自然丢掉——设置页「Same as parent」就靠这个退回默认", () => {
+    deepStrictEqual(parseSettings({ subSessionModel: null }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ subSessionThinking: null }).subSessionThinking, undefined);
   });
 });
 

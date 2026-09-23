@@ -4,8 +4,10 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { SessionStore } from "./store.ts";
-import type { SessionMeta } from "../../shared/session.ts";
+import { branchRoles, SessionStore } from "./store.ts";
+import { ChannelStore } from "../channel/store.ts";
+import type { ChannelMarkRecord, SessionMeta } from "../../shared/session.ts";
+import type { ChannelMessage } from "../../shared/channel.ts";
 
 const ID = "a7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c";
 const OTHER = "b1c2d3e4-5f60-4a71-8b92-0c1d2e3f4a5b";
@@ -529,6 +531,46 @@ describe("SessionStore.branch", () => {
   });
 });
 
+describe("branchRoles —— channel-mark 计作 user（子会话 2026-09-23 不变量修正）", () => {
+  const mark = (id: string): ChannelMarkRecord => ({
+    role: "channel-mark",
+    id,
+    peerId: "child-1",
+    messageId: "msg-1",
+    from: "child",
+    kind: "question",
+    timestamp: 4000,
+  });
+
+  test("channel-mark 顶替的是 pi 本子里的一条 user 消息，按位对账要把它算作 user", () => {
+    const records = [
+      { id: "u1", role: "user", content: [{ type: "text", text: "问" }], timestamp: 1000 } as TranscriptItem,
+      { id: "a1", role: "assistant", content: [{ type: "text", text: "答" }], model: { provider: "zai", id: "glm-5.3" }, timestamp: 2000, status: "complete", stopReason: "stop" } as TranscriptItem,
+      mark("k1"),
+      { id: "a2", role: "assistant", content: [{ type: "text", text: "收到" }], model: { provider: "zai", id: "glm-5.3" }, timestamp: 5000, status: "complete", stopReason: "stop" } as TranscriptItem,
+    ];
+    assert.deepEqual(branchRoles(records), ["user", "assistant", "user", "assistant"]);
+  });
+
+  test("普通 user/assistant 与空 error 回答的既有规则不受影响", () => {
+    const emptyError = {
+      id: "e1",
+      role: "assistant",
+      content: [],
+      model: { provider: "zai", id: "glm-5.3" },
+      timestamp: 3000,
+      status: "error",
+      stopReason: "error",
+    } as TranscriptItem;
+    const records = [
+      { id: "u1", role: "user", content: [{ type: "text", text: "问" }], timestamp: 1000 } as TranscriptItem,
+      emptyError,
+      mark("k1"),
+    ];
+    assert.deepEqual(branchRoles(records), ["user", "user"]);
+  });
+});
+
 // ── 工作台生命周期：stat / 删除连带 / 分支拷贝（2026-09-22 裁决）──
 
 describe("SessionStore.workbench", () => {
@@ -608,6 +650,142 @@ describe("SessionStore.workbench", () => {
     const plan = await store.prepareBranch(ID, "a1");
     await store.commitBranch(plan, "C:/pi-sessions/branch.jsonl");
     assert.equal((await store.workbenchStat(plan.newId)).exists, false);
+  });
+});
+
+// ── 子会话：后代收集与级联删（2026-09-22/23 裁决）──
+
+describe("SessionStore.descendants / 级联删", () => {
+  const CHILD = "d1e2f3a4-5b6c-4d7e-8f90-1a2b3c4d5e6f";
+  const SIBLING = "f3a4b5c6-7d8e-4f90-a123-3c4d5e6f7081";
+  const GRANDCHILD = "e2f3a4b5-6c7d-4e8f-9012-2b3c4d5e6f70";
+
+  const taskMessage = (overrides: Partial<ChannelMessage> = {}): ChannelMessage => ({
+    id: "m1",
+    from: "parent",
+    author: "model",
+    kind: "task",
+    text: "去把外壳重做",
+    delivery: "followUp",
+    createdAt: 1,
+    ...overrides,
+  });
+
+  test("descendants：递归收集子与孙，不含自己", async () => {
+    await store.ensureSession(meta({ id: ID }));
+    await store.ensureSession(meta({ id: CHILD, parentId: ID }));
+    await store.ensureSession(meta({ id: GRANDCHILD, parentId: CHILD }));
+    assert.deepEqual([...(await store.descendants(ID))].sort(), [CHILD, GRANDCHILD].sort());
+    assert.deepEqual(await store.descendants(CHILD), [GRANDCHILD]);
+    assert.deepEqual(await store.descendants(GRANDCHILD), []);
+  });
+
+  test("workbenchStat 求和：自己 + 全部后代的工作台文件数；exists 是任一存在，path 仍是自己的", async () => {
+    await store.ensureSession(meta({ id: ID }));
+    await store.ensureSession(meta({ id: CHILD, parentId: ID }));
+    // 自己没有工作台，子有——exists 仍该是 true
+    await mkdir(join(dir, "workbenches", CHILD), { recursive: true });
+    await writeFile(join(dir, "workbenches", CHILD, "a.txt"), "x", "utf8");
+    const stat = await store.workbenchStat(ID);
+    assert.equal(stat.exists, true);
+    assert.equal(stat.fileCount, 1);
+    assert.equal(stat.path, join(dir, "workbenches", ID));
+  });
+
+  test("remove 级联：删父连带删子、孙，各自的工作台与通道文件都没了", async () => {
+    const channels = new ChannelStore(join(dir, "channels"));
+    const withChannels = new SessionStore(join(dir, "sessions"), join(dir, "workbenches"), channels);
+    await withChannels.ensureSession(meta({ id: ID }));
+    await withChannels.ensureSession(meta({ id: CHILD, parentId: ID }));
+    await withChannels.ensureSession(meta({ id: GRANDCHILD, parentId: CHILD }));
+    await mkdir(join(dir, "workbenches", CHILD), { recursive: true });
+    await writeFile(join(dir, "workbenches", CHILD, "a.txt"), "x", "utf8");
+    await channels.append({ parentId: ID, childId: CHILD }, taskMessage());
+    await channels.append({ parentId: CHILD, childId: GRANDCHILD }, taskMessage({ id: "m2" }));
+
+    await withChannels.remove(ID);
+
+    assert.equal(await withChannels.load(ID), null);
+    assert.equal(await withChannels.load(CHILD), null);
+    assert.equal(await withChannels.load(GRANDCHILD), null);
+    assert.equal((await withChannels.workbenchStat(CHILD)).exists, false);
+    assert.deepEqual(await channels.load({ parentId: ID, childId: CHILD }), []);
+    assert.deepEqual(await channels.load({ parentId: CHILD, childId: GRANDCHILD }), []);
+  });
+
+  /**
+   * 删除顺序回归：`remove()` 必须后代先、自己最后（可见的残留优于隐形的
+   * 残留，同 removeOne 前的顺序纪律）。反过来先删自己的话，两条单条清理
+   * 之间崩溃会让没删完的后代变成「parentId 指向不存在的会话」的隐形残留。
+   *
+   * 用一个只在处理 ID（父）这一步才抛错的 ChannelStore 子类模拟「中途崩溃」：
+   * 若顺序是对的（子先于父），CHILD 在崩溃发生前已经被完整删掉；若顺序反了
+   * （父先于子，旧的 bug），错误会在最开始就抛出，CHILD 完全没被处理过——
+   * 下面对 CHILD 的断言会在那种情况下失败，从而把顺序钉住。
+   */
+  test("清理顺序是后代先、自己最后——中途失败时已处理的后代先于自己被删掉", async () => {
+    class FailOnParent extends ChannelStore {
+      async removeForParent(parentId: string): Promise<void> {
+        if (parentId === ID) throw new Error("模拟处理到父这一步时崩溃");
+        return super.removeForParent(parentId);
+      }
+    }
+    const failingChannels = new FailOnParent(join(dir, "channels"));
+    const storeWithFailure = new SessionStore(join(dir, "sessions"), join(dir, "workbenches"), failingChannels);
+    await storeWithFailure.ensureSession(meta({ id: ID }));
+    await storeWithFailure.ensureSession(meta({ id: CHILD, parentId: ID }));
+
+    await assert.rejects(() => storeWithFailure.remove(ID), /模拟处理到父这一步时崩溃/);
+
+    // 子已经被完整删掉（后代先处理完）；父的自身清理没跑到，还在——
+    // 中途崩溃后父依然可见，不是「parentId 指向不存在的会话」那种隐形残留
+    assert.equal(await storeWithFailure.load(CHILD), null);
+    assert.notEqual(await storeWithFailure.load(ID), null);
+  });
+
+  test("只删子：父留着、兄弟不受影响，只删那一份通道文件", async () => {
+    const channels = new ChannelStore(join(dir, "channels"));
+    const withChannels = new SessionStore(join(dir, "sessions"), join(dir, "workbenches"), channels);
+    await withChannels.ensureSession(meta({ id: ID }));
+    await withChannels.ensureSession(meta({ id: CHILD, parentId: ID }));
+    await withChannels.ensureSession(meta({ id: SIBLING, parentId: ID }));
+    await channels.append({ parentId: ID, childId: CHILD }, taskMessage());
+    await channels.append({ parentId: ID, childId: SIBLING }, taskMessage({ id: "m2" }));
+
+    await withChannels.remove(CHILD);
+
+    assert.notEqual(await withChannels.load(ID), null);
+    assert.equal(await withChannels.load(CHILD), null);
+    assert.notEqual(await withChannels.load(SIBLING), null);
+    assert.deepEqual(await channels.load({ parentId: ID, childId: CHILD }), []);
+    assert.equal((await channels.load({ parentId: ID, childId: SIBLING })).length, 1);
+  });
+
+  test("remove 不传 channels 时（旧调用点）只删会话本身，不碰通道文件", async () => {
+    // 顶层 store（beforeEach 建的）没有注入 channels——remove 应静默跳过级联那两步
+    await store.ensureSession(meta({ id: ID }));
+    await store.ensureSession(meta({ id: CHILD, parentId: ID }));
+    await store.remove(ID);
+    assert.equal(await store.load(ID), null);
+    // 子的 meta 一起被级联删了（级联不依赖 channels 是否注入）
+    assert.equal(await store.load(CHILD), null);
+  });
+
+  // parentId 成环只可能来自手改 meta（正常生产者——delegate、导入器——都不会造出
+  // 环），但手改是真实存在的输入源：递归不能因此无限展开撑爆栈。
+  test("descendants 在成环的 meta 下也能返回且不挂（防环）", async () => {
+    await store.ensureSession(meta({ id: ID, parentId: CHILD }));
+    await store.ensureSession(meta({ id: CHILD, parentId: ID })); // 互指成环
+    const result = await store.descendants(ID);
+    assert.deepEqual([...result].sort(), [CHILD]); // 环上只收一次，不含自己
+  });
+
+  test("remove 在成环的 meta 下也能结束（防环），两条都被删掉", async () => {
+    await store.ensureSession(meta({ id: ID, parentId: CHILD }));
+    await store.ensureSession(meta({ id: CHILD, parentId: ID })); // 互指成环
+    await store.remove(ID);
+    assert.equal(await store.load(ID), null);
+    assert.equal(await store.load(CHILD), null);
   });
 });
 

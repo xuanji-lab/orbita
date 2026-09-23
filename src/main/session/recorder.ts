@@ -22,8 +22,10 @@
  *
  * **不做归约。** 归约是渲染层的事（用 pi 自带的归约器），这里只挑终态帧。
  */
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import type { SessionRecord } from "../../shared/session.ts";
+import { parseChannelPrompt } from "../../shared/channel.ts";
+import type { ChannelMarkRecord, SessionRecord } from "../../shared/session.ts";
 import { isEmptyErrorAssistant, type SessionStore } from "./store.ts";
 
 export function createSessionRecorder(store: SessionStore): (event: AgentEvent) => void {
@@ -70,6 +72,34 @@ export function createSessionRecorder(store: SessionStore): (event: AgentEvent) 
           ? progress.item
           : null;
     if (item === null || isEmptyErrorAssistant(item)) return;
+    // 通道投递信封的接收侧标记（子会话 2026-09-23 设计修订）：一条 user 的
+    // item_started，首个 text 块能被 parseChannelPrompt 解析，说明这不是用户
+    // 说的话，是主进程投给这条会话的通道消息——落一条 ChannelMarkRecord，
+    // 不落 user 消息（正文只有一份，在通道账本里）。
+    if (item.role === "user") {
+      const mark = channelMarkOf(item);
+      if (mark !== null) {
+        persist(event.sessionId, mark);
+        return;
+      }
+    }
     persist(event.sessionId, item);
+  };
+}
+
+/** user 记录的首个 text 块能否解出信封；不能（普通用户消息）返回 null。 */
+function channelMarkOf(item: Extract<TranscriptItem, { role: "user" }>): ChannelMarkRecord | null {
+  const text = item.content.find((block) => block.type === "text");
+  if (text === undefined || text.type !== "text") return null;
+  const parsed = parseChannelPrompt(text.text);
+  if (parsed === null) return null;
+  return {
+    role: "channel-mark",
+    id: item.id,
+    peerId: parsed.peerId,
+    messageId: parsed.messageId,
+    from: parsed.from,
+    kind: parsed.kind,
+    timestamp: item.timestamp,
   };
 }

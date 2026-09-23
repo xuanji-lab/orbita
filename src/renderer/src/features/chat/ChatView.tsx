@@ -3,7 +3,18 @@ import type { ReactNode } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
-import { compactionBoundaryStatus, mergeCompactions } from "./session-states";
+import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
+import {
+  ChannelMarkLine,
+  ChannelTaskCard,
+  ChannelToolMarkLine,
+  DelegateCardView,
+  peerTitleOf,
+  type ChannelViewContext,
+  type DelegateCardStatus,
+} from "./ChannelViews";
+import { useChannelMessages } from "./useChannelMessages";
+import { useChannelSummaries } from "./useChannelSummaries";
 import {
   HOME_CARD_CARRYOVER_ROWS,
   HOME_CARD_QUERY_ROWS,
@@ -14,6 +25,7 @@ import {
   branchAnchorEntries,
   branchAnchorIds,
   answerText,
+  delegateCard,
   editDiffText,
   failedFoldKey,
   fileViewFor,
@@ -46,6 +58,7 @@ import {
   turnAssistantRecords,
   turnStats,
   writeLineCount,
+  type ChannelMarkTone,
   type IntraToken,
   type RenderEntry,
   type ToolGroupUnit,
@@ -73,7 +86,13 @@ import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
 import { thinkingLevelLabel, THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
-import { deriveSessionTitle, type CompactedRecord, type SessionCompletion } from "@shared/session";
+import {
+  childSessions,
+  deriveSessionTitle,
+  type ChannelMarkRecord,
+  type CompactedRecord,
+  type SessionCompletion,
+} from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 
@@ -116,8 +135,42 @@ export function ChatView(props: {
    * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
    */
   homeBare?: boolean;
+  /**
+   * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
+   * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
+   * ChatView 不传（undefined），标记保持不可点——那里没有通道列可跳。
+   */
+  onOpenChannel?: (childId: string, messageId: string | null) => void;
+  /**
+   * 点派出卡 → 打开右栏 Sub-sessions 面板并直接进入这条子会话的会话层（子会话
+   * PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与 Sub-sessions 面板自己
+   * 内部渲染的 ChatView（查看子会话）都不传，派出卡保持不可点，也符合「UI 只做
+   * 一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
+   */
+  onOpenSubSession?: (childId: string) => void;
+  /**
+   * 点头部「N sub-sessions」芯片 → 打开右栏 Sub-sessions 面板的**列表层**（子会话
+   * PR4c）。只有主槽的 ChatView 拿到它。
+   */
+  onOpenSubSessions?: () => void;
+  /**
+   * 子会话被 Open as main 之后：头部标题前的面包屑「↑ 父标题」点了回主槽的父会话
+   * （子会话 PR4c）。只有主槽的 ChatView 拿到它。
+   */
+  onOpenParent?: (parentId: string) => void;
+  /**
+   * 右栏 Sub-sessions 面板会话层正开着的子会话 id（子会话 PR4c）：派出卡按它描边。
+   * 只有主槽的 ChatView 拿到非 null 值。
+   */
+  litSubSessionId?: string | null;
+  /**
+   * 不渲染输入框与排队条（子会话 PR4c）：Sub-sessions 面板的会话层用它——那里是
+   * 只读查看 + 审批，不给用户直接对子会话说话的入口（说话走 Open as main）。
+   * 审批条不受影响，照常渲染——用户必须能在这里直接批子会话的工具调用。
+   */
+  hideComposer?: boolean;
 }) {
-  const { session, providersError, homeBare } = props;
+  const { session, providersError, homeBare, hideComposer } = props;
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -202,6 +255,98 @@ export function ChatView(props: {
     () => selectHomeCards(session.sessions, session.carryovers),
     [session.sessions, session.carryovers],
   );
+
+  // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
+  // 列表优先——活会话首条消息刚落盘时它先到
+  const openMeta = session.sessions.find((m) => m.id === openId) ?? session.opened;
+
+  // 子会话 PR4a：标记行 / 派出卡的上下文，**必须在首页分支之外无条件建**（同
+  // homeCards 上面那条纪律——下面都是 hook，首页让位给聊天页时 hooks 数量一变
+  // React 直接卸载整棵树）。ownSide 由被查看会话的 meta 有没有 parentId 定；
+  // titles 是 id → 标题的稳定 Map（按 session.sessions 建，只有列表真的变化才
+  // 重建）；channelSummaries 把这条会话当父去拉通道摘要——没有子会话时它恒是
+  // 空 Map，派出卡也就没有消费者。**channel 对象本身也必须 useMemo**：
+  // TranscriptColumn 是 memo 组件，散装对象每次渲染都新建会直接打穿它。
+  const ownSide: "parent" | "child" = openMeta?.parentId !== undefined ? "child" : "parent";
+  const ownParentId = openMeta?.parentId ?? null;
+  const titles = useMemo(
+    () => new Map(session.sessions.map((meta) => [meta.id, meta.title])),
+    [session.sessions],
+  );
+  const channelSummaries = useChannelSummaries(openId === "" ? null : openId);
+  // 子会话 PR4b：只有 ownSide 为 "parent"（根会话）时标记才可点——子会话自己主流
+  // 里的标记本 PR 仍不可点，即便主槽的 ChatView 拿到了 onOpenChannel（用户直接点进
+  // 一条子会话查看时 ownSide 会是 "child"）。辅助对话抽屉不传 onOpenChannel，
+  // 这里恒 null，与 ownSide 无关。
+  const openChannel = ownSide === "parent" ? (props.onOpenChannel ?? null) : null;
+  // 子会话 PR4c：派出卡的点击与描边同一套「只有主槽才接」的门槛，openChannel 上面已有先例
+  const openSubSession = ownSide === "parent" ? (props.onOpenSubSession ?? null) : null;
+  const litSubSessionId = props.litSubSessionId ?? null;
+  // 子会话 2026-09-23 裁决①：任务卡的正文来自自己父子这条通道的账本——只有
+  // `ownSide` 为 "child" 时才有意义（根会话没有 task 标记要渲染），key 为 null
+  // 时 `useChannelMessages` 内部直接短路成空态，不发请求（同它自己的既有语义）。
+  const taskChannelKey =
+    ownSide === "child" && ownParentId !== null && openId !== "" ? { parentId: ownParentId, childId: openId } : null;
+  const taskChannel = useChannelMessages(taskChannelKey);
+  const channelMessages = useMemo(
+    () => new Map(taskChannel.messages.map((message) => [message.id, message])),
+    [taskChannel.messages],
+  );
+  const channel = useMemo<ChannelViewContext>(
+    () => ({
+      ownSide,
+      ownParentId,
+      titles,
+      channelSummaries,
+      childPhaseOf: session.phaseOf,
+      openChannel,
+      openSubSession,
+      litSubSessionId,
+      channelMessages,
+      channelMessagesLoading: taskChannel.loading,
+      channelMessagesError: taskChannel.error,
+    }),
+    [
+      ownSide,
+      ownParentId,
+      titles,
+      channelSummaries,
+      session.phaseOf,
+      openChannel,
+      openSubSession,
+      litSubSessionId,
+      channelMessages,
+      taskChannel.loading,
+      taskChannel.error,
+    ],
+  );
+
+  /**
+   * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）：只在
+   * `ownSide` 为 "parent" 且这条根会话确有子会话时才有内容——与派出卡同一条
+   * 「子会话没有自己的子会话（今天）」的现状一致。waiting 计通道状态 waiting
+   * 的子会话数；为 0 时芯片只显示前半（不拼出 "· 0 waiting"）。点击调用方按
+   * `onOpenSubSessions` 是否给了决定是否可点，同 `ChannelMarkPill` 的门槛。
+   */
+  const subSessionRows = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
+  const subSessionsChip =
+    subSessionRows.length === 0
+      ? null
+      : {
+          count: subSessionRows.length,
+          waiting: subSessionRows.filter((child) => channelSummaries.get(child.id)?.status === "waiting").length,
+        };
+  /**
+   * 子会话在主槽打开时的面包屑「↑ 父标题」（2.2）：只在 `onOpenParent` 给了
+   * （主槽专属，同 `onOpenSubSessions`）且这条会话确有 `parentId` 时出现。
+   * 父标题的查找/兜底复用 `peerTitleOf`——同一句「对面是谁」的口径不另写一份。
+   */
+  const parentId = openMeta?.parentId;
+  const onOpenParentProp = props.onOpenParent;
+  const parentCrumb =
+    onOpenParentProp !== undefined && parentId !== undefined
+      ? { title: peerTitleOf(channel, parentId), onClick: () => onOpenParentProp(parentId) }
+      : null;
 
   const composer = (
     <Composer
@@ -422,9 +567,6 @@ export function ChatView(props: {
     );
   }
 
-  // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
-  // 列表优先——活会话首条消息刚落盘时它先到
-  const openMeta = session.sessions.find((m) => m.id === openId) ?? session.opened;
   return (
     <>
       <Pane
@@ -445,6 +587,9 @@ export function ChatView(props: {
         scanless={openMeta?.piSessionFile == null}
         // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
         onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
+        subSessionsChip={subSessionsChip}
+        onOpenSubSessions={props.onOpenSubSessions}
+        parentCrumb={parentCrumb}
         footer={
           <>
             {notices}
@@ -460,27 +605,39 @@ export function ChatView(props: {
                 onCancel={session.cancelCarryovers}
               />
             )}
-            {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
-            <QueueStrip
-              items={session.queued}
-              phase={session.phase}
-              onSendNow={session.sendQueuedNow}
-              onWithdraw={session.withdrawQueued}
-              onMove={session.moveQueuedTo}
-            />
-            {composer}
+            {/*
+              子会话 PR4c：Sub-sessions 面板的会话层不给输入框——那里是只读查看 +
+              审批（上面 ApprovalBar 不受影响，照常渲染）。排队条跟着composer一起
+              藏：排队是「等发出的下一句话」，没有输入框就没有下一句话可排。
+            */}
+            {hideComposer !== true && (
+              <>
+                {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
+                <QueueStrip
+                  items={session.queued}
+                  phase={session.phase}
+                  onSendNow={session.sendQueuedNow}
+                  onWithdraw={session.withdrawQueued}
+                  onMove={session.moveQueuedTo}
+                  titles={channel.titles}
+                />
+                {composer}
+              </>
+            )}
           </>
         }
       >
         <TranscriptColumn
           transcript={session.transcript}
           compactions={session.compactions}
+          marks={session.marks}
           phase={session.phase}
           retry={session.retry}
           turnError={session.turnError}
           loadingHistory={session.loadingHistory}
           onBranch={session.branchFrom}
           onOpenTask={session.openSession}
+          channel={channel}
         />
       </Pane>
     </>
@@ -498,6 +655,8 @@ export function ChatView(props: {
 const TranscriptColumn = memo(function TranscriptColumn(props: {
   transcript: readonly TranscriptItem[];
   compactions: readonly CompactedRecord[];
+  /** 子会话 PR4a：盘上读回的通道标记，与 compactions 同一条纪律（见 mergeSideRecords） */
+  marks: readonly ChannelMarkRecord[];
   phase: "idle" | "turn" | "compaction";
   retry: RetryStatus | null;
   turnError: string | null;
@@ -505,14 +664,21 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   onBranch: (anchorItemId: string) => void;
   /** B-1：read_task 的「Open」——引用稳定（openSession 只依赖 engine），不破 memo */
   onOpenTask: (sessionId: string) => void;
+  /**
+   * 子会话 PR4a：channelMark 标记行与 delegate / reply_subsession / report_to_parent
+   * 工具行要用的一切。**必须引用稳定**（ChatView 用 useMemo 建）——这层是 memo，
+   * 每次渲染新建对象会打穿它（同 onOpenTask 的纪律）。
+   */
+  channel: ChannelViewContext;
 }) {
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
   const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
-  // 界碑按发生位置插回往来流：压缩摘要收进「已压缩」折叠行，历史一条不少
+  // 界碑与通道标记按发生位置插回往来流：压缩摘要收进「已压缩」折叠行、通道标记
+  // 画成一行虚线标记，历史一条不少
   const records = useMemo(
-    () => mergeCompactions(props.compactions, transcript),
-    [props.compactions, transcript],
+    () => mergeSideRecords(props.compactions, props.marks, transcript),
+    [props.compactions, props.marks, transcript],
   );
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = useMemo(() => flattenRenderUnits(records), [records]);
@@ -591,6 +757,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 turnFailed={entry.key === failedFold}
                 onOpenTask={props.onOpenTask}
                 carryoverCards={carryoverCards}
+                channel={props.channel}
               />
             ) : (
               <EntryView
@@ -600,6 +767,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 turnActive={turnActive}
                 onOpenTask={props.onOpenTask}
                 carryoverCards={carryoverCards}
+                channel={props.channel}
               />
             )}
             {branchAfter !== undefined && (
@@ -672,6 +840,18 @@ function Pane(props: {
   scanless?: boolean;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
+  /**
+   * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）。null = 不出现
+   * （没有子会话）。点击走 `onOpenSubSessions`——不给时芯片仍显示（信息性），
+   * 只是不可点，同 `ChannelMarkPill` 的门槛。
+   */
+  subSessionsChip?: { count: number; waiting: number } | null;
+  onOpenSubSessions?: (() => void) | undefined;
+  /**
+   * 子会话被 Open as main 后头部标题前的面包屑「↑ 父标题」（子会话 PR4c，2.2）。
+   * null = 不出现（本会话不是子会话，或调用方不是主槽）。
+   */
+  parentCrumb?: { title: string; onClick: () => void } | null;
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: (() => void) | undefined;
@@ -702,6 +882,44 @@ function Pane(props: {
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
+        {/* 面包屑「↑ 父标题」：子会话被 Open as main 后，标题前的一句「你是从哪来的」——
+            caption tertiary，不与标题抢重量；点击回主槽的父会话（子会话 PR4c，2.2） */}
+        {props.parentCrumb != null && (
+          <button
+            type="button"
+            onClick={props.parentCrumb.onClick}
+            title={`Back to "${props.parentCrumb.title}"`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--space-1)",
+              // flex-shrink:1（非 0 0 auto）+ minWidth:0：主槽变窄时它也让路，
+              // maxWidth 只是宽松时的上限，不是「永远这么宽」（子会话 PR4c fix）
+              flex: "0 1 auto",
+              minWidth: 0,
+              maxWidth: 160,
+              border: 0,
+              background: "transparent",
+              padding: 0,
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: "var(--font-size-caption)",
+              color: "var(--color-text-tertiary)",
+            }}
+          >
+            <Icon name="arrow-up" size={11} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+            <span
+              style={{
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {props.parentCrumb.title}
+            </span>
+          </button>
+        )}
         <InlineName
           editing={editing}
           value={props.title}
@@ -718,6 +936,13 @@ function Pane(props: {
         >
           <strong
             style={{
+              // 标题是头部唯一允许收缩的元素：主槽变窄时先吃掉标题的空间，铅笔/
+              // 完成入口/子会话芯片/id 徽标一律 flex-shrink:0，不给它们让路
+              // （子会话 PR4c fix：三者原先没有一个显式声明谁该先缩，窄到极致时
+              // 会挤到互相覆盖）。**只收缩不伸长**：flex-grow 给 0（不是 1）——
+              // 给 1 会在宽槽下把标题撑满剩余空间，铅笔/完成入口被推到最右，
+              // 与标题之间空出一大截（CDP 复验发现的回归，原来紧挨着的观感变了）。
+              flex: "0 1 auto",
               minWidth: 0,
               fontSize: "var(--font-size-title)",
               fontWeight: "var(--weight-bold)",
@@ -780,6 +1005,11 @@ function Pane(props: {
             />
           </IconButton>
         )}
+        {/* 次要芯片「N sub-sessions · M waiting」：信息性，onOpenSubSessions 给了才可点
+            （辅助对话里渲染的 ChatView 不传，芯片仍显示、只是不可点） */}
+        {props.subSessionsChip != null && (
+          <SubSessionsChip chip={props.subSessionsChip} onClick={props.onOpenSubSessions} />
+        )}
         <span
           title={props.badgeTitle}
           style={{
@@ -829,6 +1059,50 @@ function Pane(props: {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）。waiting 为 0
+ * 时只拼前半——不拼出一句「· 0 waiting」，那不是「有事要你做」，不值得占位。
+ * `onClick` 未给时渲染成 `span`（信息性、不可点），同 `ChannelMarkPill` 的做法。
+ */
+function SubSessionsChip(props: { chip: { count: number; waiting: number }; onClick?: () => void }) {
+  const { count, waiting } = props.chip;
+  // N=1 用单数（子会话 PR4c fix：CDP 实测发现 "1 sub-sessions" 读着不对）
+  const noun = count === 1 ? "sub-session" : "sub-sessions";
+  const text = waiting > 0 ? `${count} ${noun} · ${waiting} waiting` : `${count} ${noun}`;
+  const style: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "var(--space-1)",
+    // flex-shrink:1 + minWidth:0（不是 0 0 auto）：主槽变窄到标题已经缩没了还不够时，
+    // 这个芯片的文字自己 ellipsis，不会顶着 id 徽标（flex-shrink:0）互相覆盖
+    // （子会话 PR4c fix，CDP 实测发现的重叠）
+    flex: "0 1 auto",
+    minWidth: 0,
+    maxWidth: 200,
+    border: 0,
+    background: "transparent",
+    padding: 0,
+    font: "inherit",
+    fontSize: "var(--font-size-caption)",
+    color: waiting > 0 ? "var(--color-warning)" : "var(--color-text-tertiary)",
+    ...(props.onClick !== undefined ? { cursor: "pointer" } : {}),
+  };
+  const content = (
+    <>
+      <Icon name="git-fork" size={12} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {text}
+      </span>
+    </>
+  );
+  if (props.onClick === undefined) return <span style={style}>{content}</span>;
+  return (
+    <button type="button" onClick={props.onClick} title="Open sub-sessions" style={style}>
+      {content}
+    </button>
   );
 }
 
@@ -1195,10 +1469,36 @@ function EntryView(props: {
   turnActive: boolean;
   onOpenTask?: (sessionId: string) => void;
   carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
+  /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
+  channel: ChannelViewContext;
 }) {
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") return <UserBubble item={entry.item} />;
+  if (entry.kind === "channelMark") {
+    // 子会话自己流里的 task 标记：渲染成完整任务卡而不是一行胶囊（子会话
+    // 2026-09-23 裁决①）——父给子的第一条任务是这条会话最该显眼的内容。
+    // 其它标记（reply 等）与根会话视图仍走下面的胶囊，行为不变。
+    if (props.channel.ownSide === "child" && entry.mark.kind === "task") {
+      return (
+        <ChannelTaskCard
+          peerTitle={peerTitleOf(props.channel, entry.mark.peerId)}
+          message={props.channel.channelMessages.get(entry.mark.messageId)}
+          loading={props.channel.channelMessagesLoading}
+          error={props.channel.channelMessagesError}
+        />
+      );
+    }
+    const openChannel = props.channel.openChannel;
+    return (
+      <ChannelMarkLine
+        mark={entry.mark}
+        ownSide={props.channel.ownSide}
+        peerTitle={peerTitleOf(props.channel, entry.mark.peerId)}
+        onClick={openChannel === null ? undefined : () => openChannel(entry.mark.peerId, entry.mark.messageId)}
+      />
+    );
+  }
   if (entry.kind === "text") {
     const card = props.carryoverCards.get(entry.messageId);
     if (card !== undefined) {
@@ -1221,6 +1521,7 @@ function EntryView(props: {
         input={entry.input}
         result={props.toolResults.get(entry.toolCallId)}
         onOpenTask={props.onOpenTask}
+        channel={props.channel}
       />
     );
   }
@@ -1230,6 +1531,7 @@ function EntryView(props: {
       toolResults={props.toolResults}
       turnActive={props.turnActive}
       onOpenTask={props.onOpenTask}
+      channel={props.channel}
     />
   );
 }
@@ -1256,6 +1558,8 @@ function TurnRollupLine(props: {
   turnFailed: boolean;
   onOpenTask?: (sessionId: string) => void;
   carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
+  /** 子会话 PR4a：折叠展开后的成员行仍走 EntryView，需要同一份上下文原样转发 */
+  channel: ChannelViewContext;
 }) {
   const [open, setOpen] = useState(false);
   const { group } = props;
@@ -1314,6 +1618,7 @@ function TurnRollupLine(props: {
               turnActive={false}
               onOpenTask={props.onOpenTask}
               carryoverCards={props.carryoverCards}
+              channel={props.channel}
             />
           ))}
         </div>
@@ -1768,11 +2073,33 @@ function ToolLine(props: {
   result: ToolTranscriptItem | undefined;
   /** B-1：read_task 的「Open」跳到被读的 task（侧栏点击同语义）；别的工具不传 */
   onOpenTask?: (sessionId: string) => void;
+  /** 子会话 PR4a：delegate / reply_subsession / report_to_parent 三个通道工具要用 */
+  channel: ChannelViewContext;
 }) {
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
   const active = result === undefined || result.status === "running";
+
+  // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
+  // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败
+  // 样式走（红色 triangle-alert + 可展开看错误），不能被派出卡/标记行的「成功
+  // 语气」盖过去。delegate 若在此早退，一次真实失败会被 DelegateCardView 的
+  // running 帧（`card === null` 时的「delegating…」呼吸）悄悄吞掉，永远显示
+  // 「派出中」而不是「失败了」。
+  if (props.toolName === "delegate" && !failed) {
+    return <DelegateToolLine input={props.input} result={result} channel={props.channel} />;
+  }
+  if ((props.toolName === "reply_subsession" || props.toolName === "report_to_parent") && !failed) {
+    return (
+      <ChannelSendToolLine
+        toolName={props.toolName}
+        input={props.input}
+        running={active}
+        channel={props.channel}
+      />
+    );
+  }
   /** MCP 工具（4-5）：行首只说 tool 名，server 进副标；量词与失败分型另有规格 */
   const mcp = parseQualifiedToolName(props.toolName);
   const summary = mcp === null ? summarizeToolResult(result) : summarizeMcpResult(result);
@@ -1904,6 +2231,90 @@ function ToolLine(props: {
 }
 
 /**
+ * `delegate` 工具的折叠展示：派出卡而不是「调用 + 摘要」的通用骨架。
+ * `taskPreview` 从 toolCall 的 input.task 取（running 帧也有——task 是入参，
+ * 不必等结果），首行截断复用 `deriveSessionTitle` 的规则（会话标题同一套）。
+ * `card` 为 null（running 帧，details 随终态帧来）时 `DelegateCardView` 自己
+ * 显示「delegating…」，这里不用猜状态。
+ */
+function DelegateToolLine(props: {
+  input: unknown;
+  result: ToolTranscriptItem | undefined;
+  channel: ChannelViewContext;
+}) {
+  const card = delegateCard(props.result);
+  const taskPreview = deriveSessionTitle(toolCallSummary("delegate", props.input) ?? "");
+  if (card === null) {
+    return <DelegateCardView card={null} status="running" taskPreview={taskPreview} />;
+  }
+  const summary = props.channel.channelSummaries.get(card.childId);
+  // 状态优先读通道摘要的终态（done/failed/waiting）；否则看子会话在 renderer
+  // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
+  const status: DelegateCardStatus =
+    summary?.status === "done" || summary?.status === "failed" || summary?.status === "waiting"
+      ? summary.status
+      : props.channel.childPhaseOf(card.childId) !== "idle"
+        ? "running"
+        : "idle";
+  const openSubSession = props.channel.openSubSession;
+  return (
+    <DelegateCardView
+      card={card}
+      status={status}
+      taskPreview={taskPreview}
+      onClick={openSubSession === null ? undefined : () => openSubSession(card.childId)}
+      lit={props.channel.litSubSessionId === card.childId}
+    />
+  );
+}
+
+/**
+ * `reply_subsession` / `report_to_parent` 的发送侧标记行——与 `ChannelMarkLine`
+ * 同一套胶囊语言，只是文案来源是这次工具调用的入参而不是一条 `ChannelMarkRecord`。
+ * 入参不逐字段深校验（同 `toolCallSummary` 的纪律）：字段缺失就退回通用兜底文案，
+ * 不抛错——折叠行画错一个词不碍事，编造字段才碍事。
+ */
+function ChannelSendToolLine(props: {
+  toolName: "reply_subsession" | "report_to_parent";
+  input: unknown;
+  running: boolean;
+  channel: ChannelViewContext;
+}) {
+  const record = typeof props.input === "object" && props.input !== null ? (props.input as Record<string, unknown>) : {};
+  if (props.toolName === "reply_subsession") {
+    const childId = typeof record["childId"] === "string" ? record["childId"] : "";
+    const childTitle = peerTitleOf(props.channel, childId);
+    const followUp = record["delivery"] === "followUp";
+    const text = `replied to ${childTitle} · ${followUp ? "turn end" : "steer"}`;
+    // 子会话 PR4b：这条工具调用的入参没有携带投出去那条消息的 id（channel-tools.ts
+    // 的 reply_subsession 回执 details 恒 {}），点了只能滚到通道底部，不指定 messageId。
+    const openChannel = props.channel.openChannel;
+    return (
+      <ChannelToolMarkLine
+        icon="undo-2"
+        text={text}
+        tone="reply"
+        running={props.running}
+        onClick={openChannel === null || childId === "" ? undefined : () => openChannel(childId, null)}
+      />
+    );
+  }
+  // report_to_parent：对面恒是本会话自己的父——ownParentId 是这条会话固定的事实，
+  // 不像 reply_subsession 那样按入参里的 id 变化。
+  const parentTitle = peerTitleOf(props.channel, props.channel.ownParentId ?? "");
+  const kind = record["kind"];
+  const label: { text: string; icon: IconName; tone: ChannelMarkTone } =
+    kind === "question"
+      ? { text: `asked ${parentTitle}`, icon: "message-square", tone: "question" }
+      : kind === "done"
+        ? { text: "reported done", icon: "circle-check", tone: "done" }
+        : kind === "failed"
+          ? { text: "reported failed", icon: "triangle-alert", tone: "failed" }
+          : { text: "reported progress", icon: "refresh-cw", tone: "neutral" };
+  return <ChannelToolMarkLine icon={label.icon} text={label.text} tone={label.tone} running={props.running} />;
+}
+
+/**
  * 同类工具的组：agent 连续做同类事（连读 N 个文件）时，组头「读取」声明在做什么。
  * **展开是时间态**：活跃期间成员常驻铺开（用户正看着的东西不能在眼前消失）；
  * 整轮落定**一次性收纳全部组**——无记忆（Q17b），手动展开的也折，用户可再点开。
@@ -1917,6 +2328,8 @@ function ToolGroupLine(props: {
   toolResults: ToolResultIndex;
   turnActive: boolean;
   onOpenTask?: (sessionId: string) => void;
+  /** 子会话 PR4a：展开后的成员行仍是 ToolLine，同一份上下文原样转发 */
+  channel: ChannelViewContext;
 }) {
   const { group } = props;
   // 挂载时的相态决定初始展开：活跃轮里长出来的组铺开，idle 会话（旧历史）收着
@@ -1962,6 +2375,7 @@ function ToolGroupLine(props: {
               input={call.input}
               result={props.toolResults.get(call.toolCallId)}
               onOpenTask={props.onOpenTask}
+              channel={props.channel}
             />
           ))}
         </div>

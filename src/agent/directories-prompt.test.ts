@@ -35,4 +35,37 @@ describe("describeDirectories", () => {
     assert.ok(text.includes("Session workbench:"));
     assert.ok(text.includes("mkdir -p"));
   });
+
+  test("related 缺席：不含 Parent / Sub-session 段", () => {
+    const text = describeDirectories("/repo/orbita", dirs());
+    assert.ok(!text.includes("Parent session"));
+    assert.ok(!text.includes("Sub-session"));
+  });
+
+  test("related 有父：一行 Parent session，带 id 与工作台路径", () => {
+    const text = describeDirectories(
+      "/repo/orbita",
+      dirs({
+        related: [{ sessionId: "parent-1", relation: "parent", label: "母任务", path: "/workbenches/parent-1" }],
+      }),
+    );
+    assert.ok(text.includes('Parent session "母任务" (id parent-1) workbench: /workbenches/parent-1'));
+    assert.ok(text.includes("private workbenches"));
+    assert.ok(text.startsWith("<directories>"));
+    assert.ok(text.endsWith("</directories>"));
+  });
+
+  test("related 有子：每个子会话各一行 Sub-session", () => {
+    const text = describeDirectories(
+      "/repo/orbita",
+      dirs({
+        related: [
+          { sessionId: "child-1", relation: "child", label: "先派出的", path: "/workbenches/child-1" },
+          { sessionId: "child-2", relation: "child", label: "Sub-session", path: "/workbenches/child-2" },
+        ],
+      }),
+    );
+    assert.ok(text.includes('Sub-session "先派出的" (id child-1) workbench: /workbenches/child-1'));
+    assert.ok(text.includes('Sub-session "Sub-session" (id child-2) workbench: /workbenches/child-2'));
+  });
 });

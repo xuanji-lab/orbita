@@ -4,7 +4,15 @@
  *
  * 只做三件事：懒启动进程、把命令发进去、把事件广播给窗口。业务判断全在两端，不在这里。
  */
-import type { AgentCommand, AgentEvent, BuiltinProvider, ReadTaskOutcome } from "../../shared/agent-ipc.ts";
+import type {
+  AgentCommand,
+  AgentEvent,
+  BuiltinProvider,
+  ChannelSendOutcome,
+  DelegateOutcome,
+  ReadTaskOutcome,
+} from "../../shared/agent-ipc.ts";
+import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -263,6 +271,37 @@ export class AgentHostCore {
       ...(result.ok
         ? { ok: true as const, card: result.card, text: result.text }
         : { ok: false as const, error: result.error }),
+    } satisfies AgentCommand);
+  }
+
+  /**
+   * 子会话：父→子注入（Q2' 裁决）。**走 `post`，不 `ensure`**——调用方（requests.ts
+   * 的 deliverToChild）只在目标 phase 不是 idle 时才发这条，进程没起说明状态已经
+   * 失步，`post` 会抛，调用方据此按「已记入通道但没送达」处理，不静默丢。
+   */
+  steer(sessionId: string, text: string, delivery: ChannelDelivery): void {
+    this.post({ type: "steer", sessionId, text, delivery });
+  }
+
+  /** 子会话：delegateRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerDelegate(requestId: string, outcome: DelegateOutcome): void {
+    this.child?.postMessage({
+      type: "delegateResult",
+      requestId,
+      ...(outcome.ok
+        ? { ok: true as const, childId: outcome.childId, title: outcome.title, card: outcome.card }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 子会话：channelSendRequest 的回执。同上。 */
+  answerChannelSend(requestId: string, outcome: ChannelSendOutcome): void {
+    this.child?.postMessage({
+      type: "channelSendResult",
+      requestId,
+      ...(outcome.ok
+        ? { ok: true as const, messageId: outcome.messageId }
+        : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }
 

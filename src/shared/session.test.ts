@@ -2,12 +2,15 @@ import { deepStrictEqual, doesNotMatch, match, notStrictEqual, strictEqual } fro
 import { describe, it } from "node:test";
 import {
   deriveSessionTitle,
+  isChannelMarkRecord,
   isCompactedRecord,
   parseAgentStats,
   parseSessionMeta,
+  childSessions,
   pushRecentQuery,
   recentQueriesFromRecords,
   RECENT_QUERIES_MAX,
+  rootSessions,
   SESSION_TITLE_MAX,
   sortSessions,
   transcriptToMarkdown,
@@ -122,6 +125,15 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, workspaceId: "w1" })?.workspaceId, "w1");
   });
 
+  // 子会话之前存的会话没有这个字段：缺席即根，与 importedFrom 同一条纪律
+  it("缺 parentId 视为根会话；坏值同样按根会话读，不丢会话", () => {
+    strictEqual("parentId" in (parseSessionMeta(valid) ?? {}), false);
+    strictEqual(parseSessionMeta({ ...valid, parentId: "m1" })?.parentId, "m1");
+    // 坏值退回根：一条指向乌有的 parentId 会让会话从左栏消失又无处可达
+    strictEqual(parseSessionMeta({ ...valid, parentId: 42 })?.parentId, undefined);
+    strictEqual(parseSessionMeta({ ...valid, parentId: "" })?.parentId, undefined);
+  });
+
   // auto-title（C-3）之前存的会话没有这个字段：它们是首句截断，允许模型再试
   it("缺 titleSource 视为 derived；坏值同样退回 derived，不丢会话", () => {
     strictEqual(parseSessionMeta({ ...valid, titleSource: undefined })?.titleSource, "derived");
@@ -222,6 +234,19 @@ describe("recentQueriesFromRecords", () => {
       ["再问", "问"],
     );
   });
+
+  it("通道标记不算可见用户消息——正文在通道账本里，标记不是提问", () => {
+    const mark: Parameters<typeof recentQueriesFromRecords>[0][number] = {
+      role: "channel-mark",
+      id: "k1",
+      peerId: "c1",
+      messageId: "m1",
+      from: "child",
+      kind: "question",
+      timestamp: 3,
+    };
+    deepStrictEqual(recentQueriesFromRecords([userItem("u1", "问"), mark]), ["问"]);
+  });
 });
 
 describe("sortSessions", () => {
@@ -242,6 +267,39 @@ describe("sortSessions", () => {
     const input = [at("a", 1), at("b", 2)];
     sortSessions(input);
     deepStrictEqual(input.map((s) => s.id), ["a", "b"]);
+  });
+});
+
+describe("rootSessions / childSessions", () => {
+  const at = (id: string, createdAt: number, parentId?: string): SessionMeta => ({
+    ...valid,
+    mode: "manual",
+    id,
+    createdAt,
+    ...(parentId === undefined ? null : { parentId }),
+  });
+
+  it("rootSessions 只留没有母会话的——左栏/首页/picker 共用这一条规则", () => {
+    const list = [at("a", 1), at("b", 2, "a"), at("c", 3), at("d", 4, "c")];
+    deepStrictEqual(rootSessions(list).map((s) => s.id), ["a", "c"]);
+  });
+
+  it("rootSessions 不改原数组；全是子会话时给空", () => {
+    const input = [at("a", 1), at("b", 2, "a")];
+    rootSessions(input);
+    deepStrictEqual(input.map((s) => s.id), ["a", "b"]);
+    deepStrictEqual(rootSessions([at("b", 2, "a")]), []);
+  });
+
+  it("childSessions 按 createdAt 正序——子会话的自然顺序是派出顺序", () => {
+    const list = [at("x", 30, "m"), at("m", 1), at("y", 10, "m"), at("z", 20, "m")];
+    deepStrictEqual(childSessions(list, "m").map((s) => s.id), ["y", "z", "x"]);
+  });
+
+  it("childSessions 只取直接子会话，孙辈不进来", () => {
+    const list = [at("m", 1), at("c", 2, "m"), at("g", 3, "c")];
+    deepStrictEqual(childSessions(list, "m").map((s) => s.id), ["c"]);
+    deepStrictEqual(childSessions(list, "nobody"), []);
   });
 });
 
@@ -295,6 +353,23 @@ describe("transcriptToMarkdown", () => {
     doesNotMatch(transcriptToMarkdown([empty]), /\*\*User\*\*/);
   });
 
+  it("通道标记暂不渲染——正文只有一份在通道里，导出不在这里捏一行假的", () => {
+    const mark = {
+      role: "channel-mark" as const,
+      id: "k1",
+      peerId: "c1",
+      messageId: "m1",
+      from: "parent" as const,
+      kind: "task" as const,
+      timestamp: 2,
+    };
+    const md = transcriptToMarkdown([user, mark, assistant]);
+    match(md, /重做外壳/);
+    match(md, /好的/);
+    doesNotMatch(md, /channel-mark/);
+    doesNotMatch(md, /k1/);
+  });
+
   it("结尾带换行——文本文件该以换行结束", () => {
     match(transcriptToMarkdown([user]), /\n$/);
   });
@@ -331,6 +406,45 @@ describe("isCompactedRecord", () => {
 
   it("role 冒充不算", () => {
     strictEqual(isCompactedRecord({ ...compacted, role: "assistant" }), false);
+  });
+});
+
+describe("isChannelMarkRecord", () => {
+  const mark = {
+    role: "channel-mark" as const,
+    id: "k1",
+    peerId: "c1",
+    messageId: "m9",
+    from: "child" as const,
+    kind: "question" as const,
+    timestamp: 3,
+  };
+
+  it("完整的一条原样认出；from / kind 两侧的合法值都认", () => {
+    strictEqual(isChannelMarkRecord(mark), true);
+    strictEqual(isChannelMarkRecord({ ...mark, from: "parent", kind: "task" }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "done" }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "failed" }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "reply" }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "progress" }), true);
+  });
+
+  it("缺任一字段都不算——半截标记不能当消息强转", () => {
+    for (const key of ["id", "peerId", "messageId", "from", "kind", "timestamp"]) {
+      strictEqual(isChannelMarkRecord({ ...mark, [key]: undefined }), false, `缺 ${key}`);
+    }
+    strictEqual(isChannelMarkRecord({ ...mark, timestamp: "soon" }), false);
+    strictEqual(isChannelMarkRecord(null), false);
+    strictEqual(isChannelMarkRecord("channel-mark"), false);
+  });
+
+  it("from 只认 parent / child；kind 只认六种——手改出来的其它值整行判坏", () => {
+    strictEqual(isChannelMarkRecord({ ...mark, from: "sibling" }), false);
+    strictEqual(isChannelMarkRecord({ ...mark, kind: "notice" }), false);
+  });
+
+  it("role 冒充不算", () => {
+    strictEqual(isChannelMarkRecord({ ...mark, role: "user" }), false);
   });
 });
 

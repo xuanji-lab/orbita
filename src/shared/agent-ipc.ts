@@ -16,6 +16,12 @@ import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { CompactionSetting } from "./settings.ts";
+import type {
+  ChannelDelivery,
+  ChannelMessage,
+  ChannelMessageKind,
+  ChannelStatus,
+} from "./channel.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -84,6 +90,14 @@ export const ipcChannels = {
    * 按需现算，不进 meta——工作台存不存在是磁盘上的事实，不是会话的状态。
    */
   sessionWorkbenchStat: "session:workbench-stat",
+  /** 父会话的通道列表：载荷父 id，回 `ChannelSummary[]`（只含 hasExchange 或 running 的，主进程按账本现算——通道列与右栏 Sub-sessions 面板列表层共用它） */
+  channelList: "channel:list",
+  /** 读一份通道账本：载荷 `ChannelKey`，回时间正序的 `ChannelMessage[]`（打开通道看全文时拉取） */
+  channelLoad: "channel:load",
+  /** 用户在通道里代父发言（Speak as parent）：载荷 `ChannelSpeakInput`，回主进程铸好的 `ChannelMessage` */
+  channelSpeak: "channel:speak",
+  /** 主进程 → renderer 推送（`ChannelEvent`）：新消息落账或通道状态变化 */
+  channelEvent: "channel:event",
   /** 文件面板（契约在 `files.ts`）：这条会话的根清单（工作台 / 工作区 / 附加目录），主进程算 */
   fsRoots: "fs:roots",
   /** 列一层目录。root 必须是 fs:roots 回过的，dir 必须在 root 之内，否则拒绝——renderer 不是通用文件浏览器 */
@@ -278,7 +292,37 @@ export interface TurnDirectories {
    * 不套在 sessions/ 里：protectedPaths 把整个 sessions/ 设为工具面只读，工作台必须可写。
    */
   workbench: string;
+  /**
+   * 父子会话互见对方的工作台（子会话 2026-09-23 裁决）：父的清单列每个子会话的、
+   * 子的列父的。**只告知不硬拦**（同 attached）：label 是对方会话的标题，path 是对方
+   * 工作台的绝对路径——父子各自工作台独立，但「任务说明在那个目录里」这件事
+   * 对面的模型该知道。
+   *
+   * `sessionId` 是对方会话的 id——`reply_subsession` 要靠它定位子会话。
+   * `relation` 是**对方**相对本会话的角色（子会话清单里父那一项是 `"parent"`、
+   * 父会话清单里每个子是 `"child"`）：runtime 靠它判断本会话是不是子会话，
+   * 决定注册哪些通道工具、讲哪段提示词——仅凭 label/path 分不出「列的是父还是子」
+   * （父有子时 related 也非空）。
+   *
+   * 缺席 = 没有父子关系（绝大多数会话）。
+   */
+  related?: { sessionId: string; relation: "parent" | "child"; label: string; path: string }[];
 }
+
+/** `channel:speak` 的载荷：用户在通道 composer 里代父发的那句话 */
+export interface ChannelSpeakInput {
+  parentId: string;
+  childId: string;
+  text: string;
+  /** 投递方式（默认 steer，可切 turn end = followUp）：子在跑时注入不断轮，子空闲退化普通开轮 */
+  delivery: ChannelDelivery;
+}
+
+/** `channel:event` 的推送载荷。status 是派生值（channelStatus），主进程算好推——
+renderer 不必为更新通道列的状态徽标拉一份全量账本 */
+export type ChannelEvent =
+  | { type: "message"; parentId: string; childId: string; message: ChannelMessage }
+  | { type: "status"; parentId: string; childId: string; status: ChannelStatus };
 
 /** 主进程 → agent 进程 */
 export type AgentCommand =
@@ -389,6 +433,29 @@ export type AgentCommand =
       /** commit / PR 的 Orbita 标识开关，语义同 submit */
       gitAttribution?: boolean;
     }
+  | {
+      /**
+       * 父→子注入（Q2' 裁决）：目标会话正在跑时，把 text 注入进去。**目标空闲时
+       * 主进程不发这条**（退化成普通 submit），所以 runtime 收到它会话却不在跑
+       * 就是状态失步，回 failed 事件说明、不静默丢。
+       *
+       * `delivery`（缺席 = `"steer"`）决定注入方式，两者都是 pi 的
+       * `prompt(text, { streamingBehavior })` 原生行为：
+       *   `"steer"` —— 下一个工具调用边界生效，**不断当前轮**（干活的线跟着调整而不断）。
+       *   `"followUp"` —— 等目标这轮本来要停时再处理，**同一个 run 里接着跑**、不开新轮
+       *     （子会话通道 2026-09-23：`ChannelSpeakInput.delivery` / `reply_subsession`
+       *     允许「等这轮收尾」时用这个，pi 原生就有，不必在主进程另起队列）。
+       *
+       * 2026-09-06 的「不碰 steering」收回的是**队列所有权**——排队状态属于 renderer
+       * 的会话槽，不是否定 steer 本身；队列所有权至今仍在 renderer。这条命令因此
+       * 不带开轮上下文（provider / directories 等）：它不开新轮，只是往正在跑的
+       * 那一轮里加话。
+       */
+      type: "steer";
+      sessionId: string;
+      text: string;
+      delivery?: ChannelDelivery;
+    }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
    * 忙碌态与界碑都走 `compaction_start` / `compaction` 事件那一条链。
@@ -444,6 +511,10 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
+  /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
+  | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
+  /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
+  | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
@@ -496,6 +567,34 @@ export type ReadTaskOutcome =
   | { ok: true; card: ReadTaskCard | null; text: string }
   | { ok: false; error: string };
 
+/**
+ * 派出卡（delegate 工具的结果卡，同 ReadTaskCard 通路：走 pi ToolResult 的
+ * `details` 给 UI 画「DELEGATED · 标题 · 状态」、**不进模型上下文**）。
+ * 活状态不在这里——跟子会话的 phase 事件走，卡只是「派出去那一刻」的快照。
+ */
+export interface DelegateCard {
+  /** 新建子会话的 id：右栏 Sub-sessions 面板 / 通道列都以它对账 */
+  childId: string;
+  /** 模型起的子会话标题（用户可改，同会话标题的 rename 通路） */
+  title: string;
+  /** 子会话落在哪个模型上（解析顺序：delegate 参数 > settings.subSessionModel > 同父） */
+  modelId: string;
+  /** 子会话的思考档（解析顺序同上：delegate 参数 > settings.subSessionThinking > 同父） */
+  thinkingLevel: ThinkingLevel;
+  /** 子会话的工作台路径——从派出卡跳到子会话的产出目录 */
+  workbench: string;
+}
+
+/** delegateRequest 的回执载荷：childId / title 供 runtime 拼给模型看的正文，card 给 UI */
+export type DelegateOutcome =
+  | { ok: true; childId: string; title: string; card: DelegateCard }
+  | { ok: false; error: string };
+
+/** channelSendRequest 的回执载荷：成功回落进通道的那条消息 id（供对账与测试断言） */
+export type ChannelSendOutcome =
+  | { ok: true; messageId: string }
+  | { ok: false; error: string };
+
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
 export type AgentEvent =
   | { type: "ready" }
@@ -538,6 +637,45 @@ export type AgentEvent =
    * 读错了组）。
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
+  /**
+   * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
+   * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
+   * cwd / workspaceId 同父）、解析模型与思考档（delegate 参数 > settings 的
+   * subSessionModel / subSessionThinking > 同父）、把 task 写进通道（通道的第一条
+   * 消息，from parent · kind task）、submit 子的首轮，然后回 delegateResult。
+   * 只有模型能开子会话（Q1 裁决）：用户手开的「多条互通会话」是 multi-agent 的
+   * 概念，等 composer 引用系统落地后再看。
+   */
+  | {
+      type: "delegateRequest";
+      requestId: string;
+      sessionId: string;
+      /** 子会话标题：模型起的 */
+      title: string;
+      /** 任务说明：写进通道的第一条消息，也是子会话首轮的输入 */
+      task: string;
+      /** 可选的模型指定（裸 id，主进程在已装配的 provider 里解析）；缺席走 settings > 同父 */
+      modelId?: string;
+      /** 可选的思考档；缺席走 settings > 同父 */
+      thinkingLevel?: ThinkingLevel;
+    }
+  /**
+   * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
+   * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，
+   * kind ∈ question / progress / done / failed）共用这一条。**kind 与方向不匹配
+   * 主进程拒**（allowedKinds 是硬约束，不是建议）——它只能来自工具描述被无视或
+   * 手改文件，两种都不该被静默容忍。delivery 缺席按方向定：父→子 steer（子空闲
+   * 退化 submit）、子→父恒 followUp。
+   */
+  | {
+      type: "channelSendRequest";
+      requestId: string;
+      sessionId: string;
+      to: { childId: string } | "parent";
+      kind: ChannelMessageKind;
+      text: string;
+      delivery?: ChannelDelivery;
+    }
 /**
  * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。

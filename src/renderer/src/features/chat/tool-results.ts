@@ -16,8 +16,12 @@
  */
 import { diffWords } from "diff";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { ReadTaskCard } from "@shared/agent-ipc";
+import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
+import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
+// 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
+import { parseChannelPrompt } from "../../../../shared/channel.ts";
+import { isThinkingLevel } from "../../../../shared/thinking.ts";
 
 /** toolCallId → 那次调用的结果。同一个 id 出现多次时以最后一条为准（终态帧在增量帧之后）。 */
 export type ToolResultIndex = ReadonlyMap<string, ToolTranscriptItem>;
@@ -50,7 +54,13 @@ export type RenderUnit =
       input: unknown;
       timestamp: number;
     }
-  | { kind: "compacted"; key: string; record: CompactedRecord };
+  | { kind: "compacted"; key: string; record: CompactedRecord }
+  | {
+      kind: "channelMark";
+      key: string;
+      mark: { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind };
+      timestamp: number;
+    };
 
 /** toolCall 单元的别名：分组函数的输入输出都说它。 */
 export type ToolCallUnit = Extract<RenderUnit, { kind: "toolCall" }>;
@@ -79,8 +89,27 @@ export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUni
       units.push({ kind: "compacted", key: record.id, record });
       continue;
     }
+    // 盘上读回的通道标记：画一行标记单元，正文只有一份、在通道账本里。
+    if (record.role === "channel-mark") {
+      units.push({
+        kind: "channelMark",
+        key: record.id,
+        mark: { peerId: record.peerId, messageId: record.messageId, from: record.from, kind: record.kind },
+        timestamp: record.timestamp,
+      });
+      continue;
+    }
     if (record.role === "tool") continue;
     if (record.role === "user") {
+      // 实时流里的通道消息：重载前 recorder 还没来得及把它落成 channel-mark 记录，
+      // 首个 text 块能解出信封就按同一条判定画成标记行、不产 user 单元——
+      // key 与落盘后的 channel-mark 记录相同（都是这条 user item 的 id），
+      // 重载前后 React key 保持稳定。
+      const envelope = channelEnvelopeOf(record);
+      if (envelope !== null) {
+        units.push({ kind: "channelMark", key: record.id, mark: envelope, timestamp: record.timestamp });
+        continue;
+      }
       units.push({ kind: "user", key: record.id, item: record });
       continue;
     }
@@ -107,9 +136,46 @@ export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUni
 }
 
 /**
+ * user 记录的首个 text 块能否解出通道信封——同 `main/session/recorder.ts` 的
+ * `channelMarkOf` 判定，只是画在渲染层而不是落盘层（重载前的活会话还没走过
+ * recorder，实时流里它仍是一条带信封文本的 user item）。
+ */
+function channelEnvelopeOf(
+  item: Extract<TranscriptItem, { role: "user" }>,
+): { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind } | null {
+  const text = item.content.find((block) => block.type === "text");
+  if (text === undefined || text.type !== "text") return null;
+  const parsed = parseChannelPrompt(text.text);
+  if (parsed === null) return null;
+  return { peerId: parsed.peerId, messageId: parsed.messageId, from: parsed.from, kind: parsed.kind };
+}
+
+/**
+ * 通道工具名单（子会话 PR4b 显示缺陷修正）：`delegate` / `reply_subsession` /
+ * `report_to_parent` 三个工具调用是父子之间的**通信**，不是「工作过程」——
+ * 不参与相邻合并、不算轮成员（见 `isTurnMember`）、不计入折叠统计（见 `turnStats`）。
+ * 只在 renderer 用，不进 shared（消费者只有这一份渲染逻辑，没有第二边要认它）。
+ */
+const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "delegate",
+  "reply_subsession",
+  "report_to_parent",
+]);
+
+// 故意不写成类型谓词（`entry is ToolCallUnit`）：只有「toolCall 且工具名在名单里」
+// 那一部分该被排除，谓词的假分支会让 TS 把整个 "toolCall" kind 都窄掉，
+// 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
+function isChannelToolCall(entry: RenderEntry): boolean {
+  return entry.kind === "toolCall" && CHANNEL_TOOL_NAMES.has(entry.toolName);
+}
+
+/**
  * 相邻同类 toolCall 合并成组。**只合相邻**：任何非同类单元（正文、思考、用户、
  * 界碑、别的工具）都断开 run——隔着东西合并等于撒谎（顺序即语义）。
  * 单数不成组，原样放行，走普通 ToolLine。
+ *
+ * 通道工具（见 `CHANNEL_TOOL_NAMES`）**永不参与合并**，哪怕同名连发两次：
+ * 它们是各自独立的一次通信，合并成组会把「发了两条」显示成「发了一条」。
  */
 export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
   const entries: RenderEntry[] = [];
@@ -131,7 +197,8 @@ export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
   };
   for (const unit of units) {
     const head = run[0];
-    if (unit.kind === "toolCall" && (head === undefined || head.toolName === unit.toolName)) {
+    const groupable = unit.kind === "toolCall" && !CHANNEL_TOOL_NAMES.has(unit.toolName);
+    if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
       continue;
     }
@@ -180,13 +247,23 @@ export type TurnMemberEntry = Extract<
   { kind: "thinking" } | { kind: "toolCall" } | { kind: "toolGroup" } | { kind: "text" }
 >;
 
+/**
+ * 通道工具（delegate / reply_subsession / report_to_parent）的 toolCall 不算轮成员：
+ * 它们是父子间的通信，不是「工作过程」，不该被折叠吞掉（子会话 PR4b 显示缺陷修正）。
+ * 它们也从不出现在 toolGroup 里（`groupToolUnits` 已挡），这里只需挡 toolCall 分支。
+ */
 function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
+  if (isChannelToolCall(entry)) return false;
   return entry.kind === "thinking" || entry.kind === "toolCall" || entry.kind === "toolGroup";
 }
 
-/** 段内内容：轮边界（user / 界碑）之外的全部——思考 / 工具 / 正文，折叠区间内只会有这些。 */
+/**
+ * 段内内容：轮边界（user / 界碑 / 通道标记）之外的全部——思考 / 工具 / 正文，
+ * 折叠区间内只会有这些。通道标记与 user 同级（子会话 2026-09-23 不变量）：
+ * 它顶替的正是 pi 本子里的一条 user 消息，不该被收进折叠。
+ */
 function isTurnContent(entry: RenderEntry): entry is TurnMemberEntry {
-  return entry.kind !== "user" && entry.kind !== "compacted";
+  return entry.kind !== "user" && entry.kind !== "compacted" && entry.kind !== "channelMark";
 }
 
 function entryTimestamp(entry: RenderEntry): number | null {
@@ -219,8 +296,8 @@ function segmentSpan(segment: readonly RenderEntry[], results?: ToolResultIndex)
 }
 
 /**
- * 大折叠分组：把渲染单元流按轮边界（user / 界碑）切段，**已落定的段**把成员收进
- * 一个 TurnGroupUnit，位置在第一个成员处。
+ * 大折叠分组：把渲染单元流按轮边界（user / 界碑 / 通道标记）切段，**已落定的段**
+ * 把成员收进一个 TurnGroupUnit，位置在第一个成员处。
  *
  * 时机（用户裁决）：折叠只在整轮回答落定后发生——活跃轮（turnActive 时的最后一段）
  * 原样铺开什么都不收；落定即一次性收进，无记忆（ToolGroupLine 同款裁决，用户可再
@@ -234,7 +311,9 @@ export function groupTurns(
 ): TurnViewEntry[] {
   const segments: RenderEntry[][] = [];
   for (const entry of entries) {
-    if (entry.kind === "user" || entry.kind === "compacted" || segments.length === 0) {
+    // 通道标记与 user 同级：它顶替的正是 pi 本子里的一条 user 消息（子会话
+    // 2026-09-23 不变量），因此同样开新段、不进折叠。
+    if (entry.kind === "user" || entry.kind === "compacted" || entry.kind === "channelMark" || segments.length === 0) {
       segments.push([entry]);
     } else {
       segments[segments.length - 1]?.push(entry);
@@ -247,46 +326,79 @@ export function groupTurns(
       view.push(...segment);
       return;
     }
-    const firstMember = segment.findIndex(isTurnMember);
-    if (firstMember === -1) {
-      view.push(...segment);
-      return;
-    }
-    // 末成员（区间右端）：之后的内容（结尾回复）留在折叠外
-    let lastMember = -1;
-    for (let i = segment.length - 1; i > firstMember; i--) {
-      if (isTurnMember(segment[i]!)) {
-        lastMember = i;
-        break;
-      }
-    }
-    if (lastMember === -1) lastMember = firstMember;
-    view.push(...segment.slice(0, firstMember));
-    view.push({
-      kind: "turnGroup",
-      key: `turn:${segment[firstMember]?.key ?? ""}`,
-      // 首末成员之间的全部内容收进折叠——含穿插正文（BUG-6）：展开即回原位
-      members: segment.slice(firstMember, lastMember + 1).filter(isTurnContent),
-      durationMs: segmentSpan(segment, results),
-    });
-    view.push(...segment.slice(lastMember + 1));
+    view.push(...foldSegment(segment, results));
   });
+  return view;
+}
+
+/**
+ * 折叠一个已落定的段。通道工具调用（delegate / reply_subsession / report_to_parent）
+ * 不算轮成员且必须原样留在流里、位置不变（子会话 PR4b）——按它们把段切成若干块，
+ * 每块各自套用「找首尾轮成员、中间收进折叠」的规则，通道工具本身穿插在块之间，
+ * 永不进任何一块的折叠。没有通道工具时退化成原来的单块行为。
+ */
+function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
+  const view: TurnViewEntry[] = [];
+  let chunk: RenderEntry[] = [];
+  const flushChunk = () => {
+    view.push(...foldChunk(chunk, results));
+    chunk = [];
+  };
+  for (const entry of segment) {
+    if (isChannelToolCall(entry)) {
+      flushChunk();
+      view.push(entry);
+      continue;
+    }
+    chunk.push(entry);
+  }
+  flushChunk();
+  return view;
+}
+
+/** 单块内「找首尾轮成员、中间收进折叠」——`foldSegment` 按通道工具切出的每一块都走它。 */
+function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
+  const firstMember = chunk.findIndex(isTurnMember);
+  if (firstMember === -1) return [...chunk];
+  // 末成员（区间右端）：之后的内容（结尾回复）留在折叠外
+  let lastMember = -1;
+  for (let i = chunk.length - 1; i > firstMember; i--) {
+    if (isTurnMember(chunk[i]!)) {
+      lastMember = i;
+      break;
+    }
+  }
+  if (lastMember === -1) lastMember = firstMember;
+  const view: TurnViewEntry[] = [];
+  view.push(...chunk.slice(0, firstMember));
+  view.push({
+    kind: "turnGroup",
+    key: `turn:${chunk[firstMember]?.key ?? ""}`,
+    // 首末成员之间的全部内容收进折叠——含穿插正文（BUG-6）：展开即回原位
+    members: chunk.slice(firstMember, lastMember + 1).filter(isTurnContent),
+    durationMs: segmentSpan(chunk, results),
+  });
+  view.push(...chunk.slice(lastMember + 1));
   return view;
 }
 
 /**
  * 回合级失败（重试耗尽）该亮红警示的折叠：**只在失败那一轮里找**。
  *
- * 失败归属于转录末尾那轮（最后一条 user / 界碑之后）。那轮若有折叠（工具跑了几个才断），
- * 图标亮在它头上、与后面的红字成对；若没有（模型开口前就断，重试耗尽的常态），红字自带的
- * 图标就是全部——**上一轮的折叠不能背锅**。旧写法取「整个视图里最后一个折叠」，
- * 失败轮没折叠时就拿到上一轮的，图标和红字隔着一条用户消息（2026-09-11 验收复现）。
+ * 失败归属于转录末尾那轮（最后一条 user / 界碑 / 通道标记之后）。那轮若有折叠
+ * （工具跑了几个才断），图标亮在它头上、与后面的红字成对；若没有（模型开口前就断，
+ * 重试耗尽的常态），红字自带的图标就是全部——**上一轮的折叠不能背锅**。旧写法取
+ * 「整个视图里最后一个折叠」，失败轮没折叠时就拿到上一轮的，图标和红字隔着一条
+ * 用户消息（2026-09-11 验收复现）。
  */
 export function failedFoldKey(view: readonly TurnViewEntry[]): string | null {
   let start = 0;
   for (let i = view.length - 1; i >= 0; i -= 1) {
     const entry = view[i];
-    if (entry !== undefined && (entry.kind === "user" || entry.kind === "compacted")) {
+    if (
+      entry !== undefined &&
+      (entry.kind === "user" || entry.kind === "compacted" || entry.kind === "channelMark")
+    ) {
       start = i + 1;
       break;
     }
@@ -518,6 +630,83 @@ export function readTaskCard(result: ToolTranscriptItem | undefined): ReadTaskCa
   };
 }
 
+/**
+ * 子会话：`delegate` 结果 `details` 里的派出卡。**逐字段校验，坏值判 null**——
+ * 同 readTaskCard 的纪律，键名 `"delegate"` 对应 `channel-tools.ts` 落的
+ * `details: { delegate: card satisfies DelegateCard }`。running 帧还没有卡
+ * （details 随终态帧来），一律 null。
+ */
+export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCard | null {
+  if (result === undefined || result.status === "running") return null;
+  const details = result.details;
+  if (typeof details !== "object" || details === null) return null;
+  const raw = (details as Record<string, unknown>)["delegate"];
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const childId = value["childId"];
+  const title = value["title"];
+  const modelId = value["modelId"];
+  const workbench = value["workbench"];
+  const thinkingLevel = value["thinkingLevel"];
+  if (typeof childId !== "string" || childId === "") return null;
+  if (typeof title !== "string" || title === "") return null;
+  if (typeof modelId !== "string" || modelId === "") return null;
+  if (typeof workbench !== "string" || workbench === "") return null;
+  if (!isThinkingLevel(thinkingLevel)) return null;
+  return { childId, title, modelId, workbench, thinkingLevel };
+}
+
+/** channelMarkLabel 的 tone：颜色是第二信号，与 ChannelMarkLine 的取色一一对应。 */
+export type ChannelMarkTone = "question" | "reply" | "neutral" | "done" | "failed";
+
+/**
+ * 通道标记行的文案与语气（纯函数，`ChannelMarkLine` 消费）。`ownSide` 是被查看
+ * 会话相对通道的身份（父还是子），`peerTitle` 是对面会话的标题（查不到时调用方
+ * 传 "Sub-session" / "Parent session" 兜底）。
+ *
+ * 方向由 `mark.from` 与 `ownSide` 的组合定：本会话是父时看到的是子发来的
+ * question/progress/done/failed（allowedKinds("child")）；本会话是子时看到的是
+ * 父发来的 task/reply（allowedKinds("parent")）——两个方向的 kind 空间天然不交叠，
+ * "其余组合" 分支理论上不会命中，只是防御性兜底。
+ *
+ * 标记本 PR 不可点（打开通道是下一个 PR 的事），但行尾仍统一带 ` · view in
+ * channel` 次要文字——文案先把「这是可以点开看全文的东西」的期待立住。
+ */
+export function channelMarkLabel(
+  mark: { from: "parent" | "child"; kind: ChannelMessageKind },
+  ownSide: "parent" | "child",
+  peerTitle: string,
+): { text: string; tone: ChannelMarkTone } {
+  const label = ((): { text: string; tone: ChannelMarkTone } => {
+    if (ownSide === "parent" && mark.from === "child") {
+      switch (mark.kind) {
+        case "question":
+          return { text: `${peerTitle} asked`, tone: "question" };
+        case "progress":
+          return { text: `${peerTitle} · progress`, tone: "neutral" };
+        case "done":
+          return { text: `${peerTitle} done`, tone: "done" };
+        case "failed":
+          return { text: `${peerTitle} failed`, tone: "failed" };
+        default:
+          return { text: `${peerTitle} · ${mark.kind}`, tone: "neutral" };
+      }
+    }
+    if (ownSide === "child" && mark.from === "parent") {
+      switch (mark.kind) {
+        case "task":
+          return { text: `task from ${peerTitle}`, tone: "neutral" };
+        case "reply":
+          return { text: `reply from ${peerTitle}`, tone: "reply" };
+        default:
+          return { text: `${peerTitle} · ${mark.kind}`, tone: "neutral" };
+      }
+    }
+    return { text: `${peerTitle} · ${mark.kind}`, tone: "neutral" };
+  })();
+  return { text: `${label.text} · view in channel`, tone: label.tone };
+}
+
 export function summarizeToolResult(result: ToolTranscriptItem | undefined): string | null {
   if (result === undefined) return null;
   if (result.status === "running") return "Running";
@@ -639,7 +828,12 @@ export function liveTailLines(text: string, keep = 200): string {
  * 判据——assistant 记录已终态（非 streaming）、带 ≥1 个非空 text 块、它的每个
  * toolCall 都有落定的结果（complete / error：有调用没结果的上下文是畸形的，
  * 切出去就是一条坏分支），且后面跟的不再是本轮的 tool / assistant（轮边界 =
- * user 记录、界碑或转录末尾；轮里的中间回答会被后面的回答顶替）。
+ * user 记录、界碑、通道标记或转录末尾；轮里的中间回答会被后面的回答顶替）。
+ *
+ * **通道标记是轮边界**（子会话 2026-09-23 不变量修正）：它顶替的正是 pi 本子里的
+ * 一条 user 消息，按位对账（`branchRoles`）把它计作 user——展示层的边界判定必须
+ * 与主进程的对账口径一致，否则界面判对而账对不上，分支会被主进程拒绝。取代
+ * ea3dcfa 时代「穿过不打断候选」的旧语义。
  *
  * 这是**展示层**判定（决定按钮出不出），最终裁决在 agent 进程的对账守卫——
  * 界面判对而账对不上时，分支会被拒绝并报错，不会切错。
@@ -659,7 +853,7 @@ export function branchAnchorIds(
     candidate = null;
   };
   for (const record of records) {
-    if (record.role === "user" || record.role === "compacted") {
+    if (record.role === "user" || record.role === "compacted" || record.role === "channel-mark") {
       confirm();
       continue;
     }
@@ -744,6 +938,8 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     case "ls":
       return str("path") ?? ".";
     case "read_task":
+    // 子会话：delegate 的入参同样有 task 字段——派出卡的任务预览复用这条摘要
+    case "delegate":
       return str("task");
     default:
       return null;
@@ -1100,7 +1296,10 @@ interface TurnRecordLike {
 }
 
 /**
- * 锚点消息所在那一轮的全部 assistant 记录（原序）。轮边界 = user / 界碑。
+ * 锚点消息所在那一轮的全部 assistant 记录（原序）。轮边界 = user / 界碑 / 通道标记
+ * （子会话 2026-09-23 不变量：通道标记顶替的正是一条 user 消息，与 branchAnchorIds
+ * 的边界口径一致——否则锚点紧跟在通道标记后面时，会把标记之前那一轮的 assistant
+ * 记录也一并拷进来）。
  *
  * pi 每次 toolCall 都结束当前消息：「说一句 → 跑工具 → 再说一句」是两三条记录。
  * 只读锚点（末条）会丢前面那句——复制漏前半段、速度只算末条那几百毫秒（2026-09-11 验收复现）。
@@ -1115,7 +1314,7 @@ export function turnAssistantRecords<T extends TurnRecordLike>(
   let start = 0;
   for (let i = end; i >= 0; i -= 1) {
     const role = records[i]?.role;
-    if (role === "user" || role === "compacted") {
+    if (role === "user" || role === "compacted" || role === "channel-mark") {
       start = i + 1;
       break;
     }

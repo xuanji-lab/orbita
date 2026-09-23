@@ -34,9 +34,61 @@ export interface CompactedRecord {
 }
 
 /**
- * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）或压缩界碑（我们的）。
+ * 通道标记（子会话 2026-09-23 裁决）：父子往来的正文在通道账本里（`channel.ts`），
+ * 会话的 transcript 只落一条指向它的标记——「这一刻通道里发生了一条 X」，对话流里画成一行
+ * 虚线标记，点了跳通道。
+ *
+ * **为什么不是 `visibility: "internal"` 的消息**：标记不是一条被隐藏的消息，它不带正文——
+ * 正文只有一份，在通道里；模型看到的那份在 pi 的本子里（投递时嗂进去），不在这本账。
+ * 和 CompactedRecord 同一个做法：单独一个 role，逐字段校验，坏行跳过。
+ *
+ * **不变量（子会话 2026-09-23 修正）：transcript 里的每一条 `ChannelMarkRecord`
+ * 都顶替了 pi 本子里的一条 user 消息**——它落在 recorder 识别信封的那个位置
+ * （`session/recorder.ts`），恰好是 pi 那本账原本会收一条 user item_started 的地方；
+ * 标记只是接收侧的投影，正文在通道账本里。这个不变量只在**接收侧**成立：发信一方
+ * 若是模型经工具发的，发送侧的对话流里已经有那次工具调用（不需要再写一条标记）；
+ * 若是用户代父发言（没有工具调用可投影），发送侧的 pi 本子里同样没有多出一条 user
+ * 消息，因此也不写标记（`main/channel/requests.ts` 的 `applySpeak`）——**标记只出现
+ * 在收到通道消息、真正喂给模型看的那一侧**。
+ *
+ * 因此它**是轮边界，与 user 同级**：`branchRoles`（分支按位对账）把它计作 `"user"`；
+ * renderer 的分组 / 折叠 / 分支锚点判定同样把它当边界处理（见 `tool-results.ts`）。
+ * 取代 ea3dcfa 时代「它不是消息也不构成轮边界」的说法——那时通道标记尚未接入
+ * 渲染流，穿过不打断候选；接上不变量后才发现它必须与 user 同级，否则带通道投递
+ * 的会话按位对账会错位一位，「从这里分支」会被拒绝。
  */
-export type SessionRecord = TranscriptItem | CompactedRecord;
+export interface ChannelMarkRecord {
+  role: "channel-mark";
+  id: string;
+  /** 通道的另一头：在父的 transcript 里是 childId，在子的 transcript 里是 parentId */
+  peerId: string;
+  /** 指向的通道消息 id（`ChannelMessage.id`） */
+  messageId: string;
+  /** 冷数据，免得画一行标记还要先读通道：谁发的、什么类型 */
+  from: "parent" | "child";
+  kind: "task" | "reply" | "question" | "progress" | "done" | "failed";
+  timestamp: number;
+}
+
+export function isChannelMarkRecord(raw: unknown): raw is ChannelMarkRecord {
+  if (typeof raw !== "object" || raw === null) return false;
+  const value = raw as Record<string, unknown>;
+  return (
+    value["role"] === "channel-mark" &&
+    typeof value["id"] === "string" &&
+    typeof value["peerId"] === "string" &&
+    typeof value["messageId"] === "string" &&
+    (value["from"] === "parent" || value["from"] === "child") &&
+    typeof value["kind"] === "string" &&
+    ["task", "reply", "question", "progress", "done", "failed"].includes(value["kind"]) &&
+    typeof value["timestamp"] === "number"
+  );
+}
+
+/**
+ * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）、压缩界碑或通道标记（我们的）。
+ */
+export type SessionRecord = TranscriptItem | CompactedRecord | ChannelMarkRecord;
 
 /**
  * 逐字段校验，坏值判 false。readLog 靠它分流：**坏掉的 compacted 行按坏行跳过**，
@@ -250,6 +302,21 @@ export interface SessionMeta {
   importedFrom?: string;
   importedModel?: string;
   /**
+   * 母会话 id；**缺席 = 根会话**（缺席即否，同 importedFrom 的纪律）。
+   *
+   * 子会话是母会话的附属物（2026-09-22 裁决）：**永不进左栏**，不参与 pin / 归档，
+   * 只从母会话的右栏「Sub-sessions」入口到达；母会话归档与否不影响这条路径；
+   * 删母会话级联删子。为什么不挂树在侧栏：子会话的数量级取决于产品给不给
+   * agent 一个「保护主上下文的搜索原语」——给了就是 zcode 那样一条会话二十几个，
+   * 侧栏挂树不可扩展。契约上允许多层，UI 只做一层。
+   *
+   * 生产者有两个：导入器（Proma 的 delegation 子会话）与 orbita 自己的 delegate 工具——
+   * 主进程派出子会话时标题由模型在派出那一刻给定，`titleSource` 直接是 `"user"`，
+   * 不走 auto-title（模型起的名就是最终名，不会被首句截断或后续生成覆盖；
+   * 命名只发生在派出那一刻）。
+   */
+  parentId?: string;
+  /**
    * 上一次跑完时的用量快照（A1-Q1，2026-09-03 裁决）。
    * **null = 没有账本**（本字段之前存的会话，或还没跑过一轮）。
    *
@@ -380,6 +447,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   if (createdAt === null) return null;
   const importedFrom = str(value["importedFrom"]);
   const importedModel = str(value["importedModel"]);
+  const parentId = str(value["parentId"]);
 
   return {
     id,
@@ -413,6 +481,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 导入标记：非导入会话缺席（空串/null 都当没有，str 的规则）
     ...(importedFrom === null ? null : { importedFrom }),
     ...(importedModel === null ? null : { importedModel }),
+    // 母会话 id：非字符串 / 空串一律当根会话——一条指向乌有的 parentId 会让会话
+    // 从左栏消失又无处可达，比多列一条根会话糟得多
+    ...(parentId === null ? null : { parentId }),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
@@ -429,6 +500,25 @@ export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
     return b.updatedAt - a.updatedAt;
   });
+}
+
+/**
+ * 根会话：没有母会话的那些。**左栏、首页最近、辅助对话选择器只列根会话**——
+ * 三处消费者各自调用同一个函数，不各写一遍 `parentId === undefined`。
+ */
+export function rootSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
+  return sessions.filter((meta) => meta.parentId === undefined);
+}
+
+/**
+ * 某条会话的直接子会话，**按创建时间正序**——子会话的自然顺序是派出顺序，
+ * 不是活跃倒序（sortSessions 是根列表的排法，不套用）。只取一层：契约允许多层，
+ * 但今天没有第二层的生产者。
+ */
+export function childSessions(sessions: readonly SessionMeta[], parentId: string): SessionMeta[] {
+  return sessions
+    .filter((meta) => meta.parentId === parentId)
+    .sort((a, b) => a.createdAt - b.createdAt);
 }
 
 /** 机器事实用 ISO 8601 UTC：无歧义、可测、与设计系统「mono for machine facts」一致。 */
@@ -483,6 +573,11 @@ export function transcriptToMarkdown(
           .map((line) => `> ${line}`)
           .join("\n"),
       );
+      continue;
+    }
+    if (isChannelMarkRecord(item)) {
+      // 通道标记暂不渲染（真正的标记 UI 是后续 PR）。正文只有一份、在通道账本里，
+      // 导出也不该在这里捏一行假的——要看通道往来，去读那份账本
       continue;
     }
     if (item.role === "tool") {

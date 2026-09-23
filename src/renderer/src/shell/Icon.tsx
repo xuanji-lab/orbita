@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 import archive from "../../../../Orbita Design System/assets/icons/lucide/archive.svg?raw";
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
+import arrowLeft from "../../../../Orbita Design System/assets/icons/lucide/arrow-left.svg?raw";
+import arrowLeftRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-left-right.svg?raw";
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
 import blend from "../../../../Orbita Design System/assets/icons/lucide/blend.svg?raw";
 import book from "../../../../Orbita Design System/assets/icons/lucide/book.svg?raw";
@@ -30,6 +32,7 @@ import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.
 import folderOpen from "../../../../Orbita Design System/assets/icons/lucide/folder-open.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
+import gitFork from "../../../../Orbita Design System/assets/icons/lucide/git-fork.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import lightbulb from "../../../../Orbita Design System/assets/icons/lucide/lightbulb.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
@@ -46,6 +49,7 @@ import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?ra
 import plug from "../../../../Orbita Design System/assets/icons/lucide/plug.svg?raw";
 import power from "../../../../Orbita Design System/assets/icons/lucide/power.svg?raw";
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
+import messagesSquare from "../../../../Orbita Design System/assets/icons/lucide/messages-square.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
 import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rotate-ccw.svg?raw";
@@ -79,6 +83,8 @@ const ICONS = {
   book,
   "book-open": bookOpen,
   "archive-restore": archiveRestore,
+  "arrow-left": arrowLeft,
+  "arrow-left-right": arrowLeftRight,
   "arrow-up": arrowUp,
   bot,
   brain,
@@ -104,6 +110,7 @@ const ICONS = {
   "folder-open": folderOpen,
   "folder-plus": folderPlus,
   "git-branch": gitBranch,
+  "git-fork": gitFork,
   "grip-vertical": gripVertical,
   image,
   lightbulb,
@@ -112,6 +119,7 @@ const ICONS = {
   "list-todo": listTodo,
   lock,
   "message-square": messageSquare,
+  "messages-square": messagesSquare,
   minus,
   "panel-left": panelLeft,
   "panel-right": panelRight,

@@ -110,8 +110,22 @@ export interface AppSettings {
    * 不拦标题，退回会话模型。
    */
   titleModel?: TitleModel;
+  /**
+   * 子会话（delegate）的默认模型。**缺席 = 同父**。优先级：delegate 参数 >
+   * 这里 > 同父。形状同 titleModel（两 id 成对：光有 modelId 定位不到哪家的密钥）。
+   */
+  subSessionModel?: TitleModel;
+  /** 子会话的默认思考档。**缺席 = 同父**；优先级同 subSessionModel（delegate 参数 > 这里 > 同父） */
+  subSessionThinking?: ThinkingLevel;
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
+  /**
+   * 通道列的宽度（子会话 2026-09-23 用户裁决：通道列可拖宽）。缺席 = 默认 300。
+   * **这里只做 ≥ 地板的硬校验**：合法上界依赖当前 chat 区宽度（见
+   * `clampChannelColumnWidth`），落盘的值换个窗口大小就可能越界，真正的夹取在
+   * 渲染层每次渲染时做，同 `rightPanelWidth` 的纪律。拖动中不落盘，松手才写。
+   */
+  channelColumnWidth?: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -123,7 +137,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * 写入补丁：顶层按键覆盖，`drawer` 内部再按键合并（见 SettingsStore.write）。
  * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
  */
-export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed" | "titleModel">> & {
+export type SettingsPatch = Partial<
+  Omit<AppSettings, "drawer" | "lastUsed" | "titleModel" | "subSessionModel" | "subSessionThinking">
+> & {
   drawer?: Partial<DrawerSettings>;
   lastUsed?: Partial<LastUsedIntent>;
   /**
@@ -132,6 +148,10 @@ export type SettingsPatch = Partial<Omit<AppSettings, "drawer" | "lastUsed" | "t
    * store 的 `{...current, ...patch}` 经 parseSettings 自然丢掉 null。
    */
   titleModel?: TitleModel | null;
+  /** 同 titleModel 的 null 语义：清除后退回「Same as parent」（子会话跟父会话的模型走） */
+  subSessionModel?: TitleModel | null;
+  /** 同上：清除后退回「Same as parent」（子会话跟父会话的思考档走） */
+  subSessionThinking?: ThinkingLevel | null;
 };
 
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
@@ -178,6 +198,39 @@ export function clampRightPanelWidth(width: number, paneTotal: number): number {
   return Math.max(floor, Math.min(ceiling, wanted));
 }
 
+/** 通道列宽度的默认值（双击热区复位的目标，会再按当前 chat 区宽度夹一次）。 */
+export const CHANNEL_COLUMN_WIDTH_DEFAULT = 300;
+
+/**
+ * 通道列宽度的硬地板（px）。再窄消息正文每行只剩几个字——比右栏的地板（200）更紧，
+ * 因为通道卡内部还要留出父左子右两栏气泡的横向余量，180 是两栏对话仍读得下去的下限。
+ */
+const CHANNEL_COLUMN_WIDTH_FLOOR = 180;
+
+/**
+ * 把通道列宽度夹进合法区间（用户 2026-09-23 裁决：通道列可拖宽，最小 = chat 区的
+ * 1/6，最大 = chat 区的 1/3——「现在固定 300px，子会话 session 里只剩工具调用，
+ * 反倒像陪衬」）。
+ *
+ * 设 C = `chatTotal` = **主槽（chat 主区）+ 通道列**的总宽（拖动中恒定：主槽是
+ * flex:1，通道列拿多少它就让多少）——**不包含右栏**：右栏是另一块独立空间，
+ * 用户说的「chatview」指的是主槽与通道列这一对，同 `clampRightPanelWidth` 只管
+ * 「chat 主区与右栏」那一对、不含左侧栏的先例，这里对称地不含右栏。
+ * 区间就是 **[C/6, C/3]**。
+ *
+ * 地板与上限撞车（C 小到 C/3 < 180）时**地板胜出**，见 `CHANNEL_COLUMN_WIDTH_FLOOR`。
+ * `chatTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 C 去夹。
+ */
+export function clampChannelColumnWidth(width: number, chatTotal: number): number {
+  const wanted = Number.isFinite(width) ? Math.round(width) : CHANNEL_COLUMN_WIDTH_FLOOR;
+  if (!Number.isFinite(chatTotal) || chatTotal <= 0) {
+    return Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, wanted);
+  }
+  const floor = Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, Math.round(chatTotal / 6));
+  const ceiling = Math.round(chatTotal / 3);
+  return Math.max(floor, Math.min(ceiling, wanted));
+}
+
 function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
 }
@@ -206,13 +259,21 @@ export function parseSettings(raw: unknown): AppSettings {
     compaction?: unknown;
     gitAttribution?: unknown;
     titleModel?: unknown;
+    subSessionModel?: unknown;
+    subSessionThinking?: unknown;
     lastUsed?: unknown;
+    channelColumnWidth?: unknown;
   };
   const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
+  const channelColumnWidth = record.channelColumnWidth;
   const compaction = parseCompaction(record.compaction);
-  const titleModel = parseTitleModel(record.titleModel);
+  const titleModel = parseModelPair(record.titleModel);
+  const subSessionModel = parseModelPair(record.subSessionModel);
+  const subSessionThinking = isThinkingLevel(record.subSessionThinking)
+    ? record.subSessionThinking
+    : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
   return {
     theme,
@@ -227,6 +288,12 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebar <= SIDEBAR_WIDTH_MAX
       ? { sidebarWidth: Math.round(sidebar) }
       : {}),
+    // 通道列同右栏的纪律：只做 ≥ 地板的硬校验，上界随 chat 区宽度变，渲染层每次夹
+    ...(typeof channelColumnWidth === "number" &&
+    Number.isFinite(channelColumnWidth) &&
+    channelColumnWidth >= CHANNEL_COLUMN_WIDTH_FLOOR
+      ? { channelColumnWidth: Math.round(channelColumnWidth) }
+      : {}),
     drawer: parseDrawer(record.drawer),
     ...(compaction === undefined ? {} : { compaction }),
     // 非布尔一律当作「没动过」丢掉：缺席与 true 是同一个行为，落一个坏值进来
@@ -235,16 +302,19 @@ export function parseSettings(raw: unknown): AppSettings {
       ? { gitAttribution: record.gitAttribution }
       : {}),
     ...(titleModel === undefined ? {} : { titleModel }),
+    ...(subSessionModel === undefined ? {} : { subSessionModel }),
+    ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
   };
 }
 
 /**
- * 标题模型校验：**两个都是非空字符串才认**。存半截的没意义——光有 modelId
- * 定位不到密钥，光有 providerId 不知道叫哪个模型，两种残形都只会让标题静默失败。
- * 缺席或坏值 = 没指定（返回 undefined，消费侧退会话模型）。
+ * 成对模型 id 校验：**两个都是非空字符串才认**。存半截的没意义——光有 modelId
+ * 定位不到密钥，光有 providerId 不知道叫哪个模型，两种残形都只会让对应功能
+ * 静默失败（titleModel 退会话模型，subSessionModel 退同父）。
+ * 缺席或坏值 = 没指定（返回 undefined，消费侧各自兜底）。
  */
-function parseTitleModel(raw: unknown): TitleModel | undefined {
+function parseModelPair(raw: unknown): TitleModel | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const record = raw as { providerId?: unknown; modelId?: unknown };
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;

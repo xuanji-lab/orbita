@@ -1,4 +1,7 @@
 import type { Carryover, SessionMeta } from "@shared/session";
+// 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名
+// 只在构建期由 electron-vite 解析（同 stats-format.ts:13 的先例）
+import { rootSessions } from "../../../../shared/session.ts";
 
 /**
  * 首页会话卡的选卡与行位规则（纯函数，ChatView 首页唯一消费者）。
@@ -16,8 +19,11 @@ import type { Carryover, SessionMeta } from "@shared/session";
  * `session.sessions` 由主进程 `list()` 排好）。函数不再排一次——排法必须
  * 只有 `sortSessions` 一份，这里重排迟早漂移。
  *
- * 只做 type import（无运行时依赖）：node --test 直接加载本文件，
- * `@shared` 别名只在构建期由 electron-vite 解析。
+ * **子会话不进首页会话卡**（子会话 PR4c，2.3）：`session.sessions` 是全量列表
+ * （含子会话），首页卡与左栏、辅助对话选择器一样只列根会话——子会话唯一的入口
+ * 是母会话的右栏 Sub-sessions 面板。node --test 直接加载本文件，`rootSessions`
+ * 这个值导入因此走相对路径带 `.ts` 后缀（`@shared` 别名只在构建期由
+ * electron-vite 解析），其余仍是 type import。
  */
 
 /** 待办卡的行位上限（用户拍板：超过直接截断，不显示「等 N 项」） */
@@ -61,9 +67,9 @@ export function selectHomeCards(
     else list.push(item);
   }
 
-  // 候选与现状同一排除：归档、无标题。列表已按 sortSessions 排序，
-  // 相对顺序即「置顶优先 + 最近活跃」，两个轮次直接按序扫
-  const eligible = sessions.filter((m) => !m.archived && m.title !== "");
+  // 候选与现状同一排除：子会话（子会话 PR4c 2.3）、归档、无标题。列表已按
+  // sortSessions 排序，相对顺序即「置顶优先 + 最近活跃」，两个轮次直接按序扫
+  const eligible = rootSessions(sessions).filter((m) => !m.archived && m.title !== "");
 
   const cards: HomeCard[] = [];
   // 第一轮：有 open 遗留的会话优先占卡

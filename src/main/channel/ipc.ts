@@ -1,0 +1,24 @@
+/**
+ * 通道的 IPC —— 四层契约的第 2 层。
+ * `channel:speak` 落到 `applySpeak`（requests.ts）；list/load 直接读 ChannelStore，
+ * 不经过 requests.ts 的三个入口（它们是模型/用户发消息的路径，list/load 只读）。
+ */
+import { BrowserWindow, ipcMain } from "electron";
+import { ipcChannels, type ChannelEvent, type ChannelSpeakInput } from "../../shared/agent-ipc.ts";
+import type { ChannelKey } from "../../shared/channel.ts";
+import { applySpeak, type ChannelDeps } from "./requests.ts";
+
+export function registerChannelIpc(deps: ChannelDeps): void {
+  ipcMain.handle(ipcChannels.channelList, (_e, parentId: string) =>
+    deps.channels.listForParent(parentId, async (childId) => (await deps.sessions.readMeta(childId))?.title ?? ""),
+  );
+  ipcMain.handle(ipcChannels.channelLoad, (_e, key: ChannelKey) => deps.channels.load(key));
+  ipcMain.handle(ipcChannels.channelSpeak, (_e, input: ChannelSpeakInput) => applySpeak(deps, input));
+}
+
+/** 主进程 → 所有窗口，同 agent/ipc.ts 的 broadcastAgentEvent 形态 */
+export function broadcastChannelEvent(event: ChannelEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(ipcChannels.channelEvent, event);
+  }
+}
