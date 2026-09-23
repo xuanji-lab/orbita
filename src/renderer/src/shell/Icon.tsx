@@ -12,6 +12,7 @@ import brain from "../../../../Orbita Design System/assets/icons/lucide/brain.sv
 import check from "../../../../Orbita Design System/assets/icons/lucide/check.svg?raw";
 import circleCheck from "../../../../Orbita Design System/assets/icons/lucide/circle-check.svg?raw";
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
+import circleDot from "../../../../Orbita Design System/assets/icons/lucide/circle-dot.svg?raw";
 import circleOff from "../../../../Orbita Design System/assets/icons/lucide/circle-off.svg?raw";
 import chevronLeft from "../../../../Orbita Design System/assets/icons/lucide/chevron-left.svg?raw";
 import chevronRight from "../../../../Orbita Design System/assets/icons/lucide/chevron-right.svg?raw";
@@ -95,6 +96,7 @@ const ICONS = {
   "chevron-right": chevronRight,
   "chevron-up": chevronUp,
   clock,
+  "circle-dot": circleDot,
   "circle-off": circleOff,
   copy,
   "corner-down-left": cornerDownLeft,
@@ -183,6 +185,11 @@ export function Icon(props: {
    */
   fill?: boolean;
   style?: React.CSSProperties;
+  /**
+   * 调用方追加的 class（如 MCP 面板自己的 mcp-spin：那两处不是 `spin` 支持的
+   * orbita-spin 动画，仍要挂 anim-continuous 才能被窗口失焦时暂停）。
+   */
+  className?: string;
 }) {
   const size = props.size ?? 16;
   const style = {
@@ -195,9 +202,14 @@ export function Icon(props: {
     ...(props.spin === true ? { animation: "orbita-spin 1s linear infinite" } : null),
     ...props.style,
   } as React.CSSProperties;
+  // spin 是持续动效（orbita-spin infinite）：anim-continuous 标记它，好让窗口
+  // 失焦时 styles.css 能把它暂停（不用全局 `*`，见那条规则的注释）
+  const classes = ["orbita-icon", props.spin === true ? "anim-continuous" : null, props.className]
+    .filter((value) => value !== null && value !== undefined)
+    .join(" ");
   return (
     <span
-      className="orbita-icon"
+      className={classes}
       aria-hidden="true"
       style={style}
       dangerouslySetInnerHTML={{ __html: inline(ICONS[props.name]) }}

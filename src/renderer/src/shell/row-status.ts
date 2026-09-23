@@ -29,8 +29,11 @@ export function rowStatusIcon(state: {
   failed: boolean;
   pinned: boolean;
 }): RowStatus | null {
+  // 静态标记，不转圈（2026-09-23，去 blur 的连带改动）：侧栏行是后台会话运行时
+  // 屏上唯一常驻的动效，窗口在前台但没人盯着这一行时它仍在转，GPU 每帧整窗重新
+  // 合成——停在会话页看得到「Responding」转圈，这里换成实心点，颜色仍是 accent。
   if (state.running)
-    return { icon: "loader-circle", tone: "var(--color-accent)", label: "Running", spin: true };
+    return { icon: "circle-dot", tone: "var(--color-accent)", label: "Running", spin: false };
   if (state.failed)
     return { icon: "triangle-alert", tone: "var(--color-danger)", label: "Failed", spin: false };
   if (state.pinned)

@@ -81,6 +81,8 @@ export function McpPanel(props: {
             <Icon
               name="refresh-cw"
               size={14}
+              // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
+              className={reloading ? "anim-continuous" : undefined}
               style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
             />{" "}
             {reloading ? "Reloading…" : "Reload"}
@@ -484,6 +486,8 @@ function StatusIcon(props: { status: McpStatus }) {
     <Icon
       name={icon}
       size={14}
+      // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
+      className={status.kind === "connecting" ? "anim-continuous" : undefined}
       style={{
         color,
         flex: "0 0 auto",

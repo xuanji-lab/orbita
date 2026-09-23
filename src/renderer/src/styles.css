@@ -1370,6 +1370,23 @@ body {
 }
 
 /*
+ * 窗口不在前台（失焦 / 标签页隐藏，`window-activity.ts` 判定并写在
+ * `document.documentElement` 上）时暂停持续动效——去 blur 之后 GPU 数字降了一截，
+ * 但只要屏上还有一处在动，窗口每帧仍要整窗重新合成（vibrancy）。
+ *
+ * 只点名持续动效（`.anim-continuous` 是 orbita-spin / mcp-spin 的标记类，
+ * `.orbita-breath` 已经是自己的类），不写成全局 `*` 选择器：`right-panel-in` /
+ * `right-panel-fade` 是一次性 `animation`（入场用，120–220ms），失焦这一刻正好
+ * 播放到一半的话，`animation-play-state: paused` 会把它定在半途，抬手就是一处
+ * 错位的面板；`home-travel` 那类是 `transition` 不是 `animation`，
+ * `animation-play-state` 本来就管不到它，不需要额外排除。
+ */
+[data-window-inactive="true"] .anim-continuous,
+[data-window-inactive="true"] .orbita-breath {
+  animation-play-state: paused !important;
+}
+
+/*
  * 右侧分屏面板（S-0）：进入向右滑入 + 淡入，220ms（--duration-enter --ease-out-quint）；
  * 两个面板之间原地切内容时 120ms 淡入。动效只解释「东西去哪了」。
  */
