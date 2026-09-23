@@ -20,8 +20,7 @@ of colour and counters, every colour with exactly one job.
 
 ## 设计品味导言 / Design Taste Statement
 
-> 自用户口述提炼（2026-08-22）。本节自 `docs/orbita-design.md` 迁入（2026-08-23 真源交接），
-> 是整份设计系统的意图源头；下文所有具体规则都应能回溯到这段话。
+> 自用户口述提炼（2026-08-22），是整份设计系统的意图源头；下文所有具体规则都应能回溯到这段话。
 
 **中文**：Orbita 的界面应该是一个**安静的、有品牌质感的编辑工作台**，而不是仪表盘或驾驶舱。核心视觉语言是"毛玻璃卡片的透明度叠加"：整个应用是一张半透明的大卡（app 的边界），聊天面是浮在其上的中卡，输入框和会话卡是再浮一层的小卡——统一透明度，层级越高越实，最里层刚好近纯白；同一个卡片配方改宽高即可复用到侧栏图标等一切表面。打开软件即进入 Agent 模式：品牌衬线体的 slogan「璇玑运转，诸事得序」与输入框构成首页的全部重心，新建会话永远先落在这个页面，首条消息发出时 slogan 与会话卡淡出、输入框丝滑滑落到窗口底部成为聊天页的输入框——输入框宽度跨页面保持一致，动效只用来解释"东西去哪了"，绝不做装饰。信息呈现的总原则是**简洁为默认、细节可展开**：agent 的思考、工具调用、文件阅读都折叠成一行、点击才展开，用户需要的是"知道 agent 在干嘛"与可追溯，而不是被过程淹没。克制是这个界面的纪律：**不用 emoji、不堆彩色和计数器**（那是幼稚和噪音），颜色各有明确职责——accent 只给主操作，模式选中明主题用蓝、暗主题用黄，状态优先用图标和文字；密度 balanced，不做 IDE 式拥挤。结构上左右双栏对称、可折叠成纯图标条；右侧永远默认收起，不自动弹出抢注意力。主工作面是单 agent 对话，多 agent 的复杂性要藏进编排模式而不是铺成驾驶舱。整体气质是**极简的 composer 首页 + 编辑器级的秩序感：安静、透亮、层级分明，让用户的注意力只落在"下一步要做什么"上**。
 
@@ -29,47 +28,34 @@ of colour and counters, every colour with exactly one job.
 
 ## Status: this file is the 真源
 
-**As of 2026-08-23 this document is the single source of truth for the Orbita design language.**
-`docs/orbita-design.md` — which previously held that role — is now a forwarding stub pointing here,
-mirroring the repo's existing `CLAUDE.md` → `AGENTS.md` pattern. Everything the old spec carried that
-this file did not already cover has been migrated verbatim into *附：中文规范* below.
+This file plus `tokens/*.css` are the design language 真源. The renderer does not hold a second copy
+of token values: `src/renderer/src/styles.css:5` `@import`s this system's `styles.css` directly, so
+there is no "spec vs. shipped" drift to reconcile — a token either exists here and renders, or it
+does not exist and the renderer is missing a declaration.
 
-What did **not** move, and must not be duplicated here:
+Values that serve a single feature live next to that feature's CSS in the renderer
+(`src/renderer/src/styles.css`, or that feature's own `.css`); they do not get promoted into
+`tokens/`.
 
 | Concern | Where it lives | Rule |
 | --- | --- | --- |
-| Why a decision was made, and when | `docs/orbita-ui-decision-interview.md` → Decision Record | A design change is recorded there **first**, then synced into this file. Never the reverse. |
-| Raw brand assets | `design/` at the repo root | `design/` is the asset 真源: 2,034 Lucide SVGs in `design/icons/lucide/svg/`, five font files in `design/fonts/`. This system's `assets/` is a working **subset** (46 glyphs, 4 faces) — copy from `design/`, never the other way. |
-| Live token values | `orbita-desktop/src/renderer/src/styles.css` | `tokens/*.css` here is the authored spec; the renderer is where it ships. When they diverge, this file wins and the renderer is the bug. |
+| Why a decision was made, and when | The commit that changes this file or a token file | AGENTS.md 规定仓里不写别的 markdown, so the decision record is the commit message, not a separate document. |
+| Raw brand assets | `design/` at the repo root | `design/` is the asset 真源: 2,034 Lucide SVGs in `design/icons/lucide/svg/`, 6 font files across `design/fonts/`'s four family folders. This system's `assets/` is a working **subset** (84 glyphs, 5 faces) — copy from `design/`, never the other way. |
 
-Adding or removing a first-class design concept (a new card language, a new component system) still
-requires going through the decision record first — see `AGENTS.md` 铁律 5.
+Adding or removing a first-class design concept (a new card language, a new component system level)
+means editing this file and the relevant tokens directly; the why and when goes in that commit's
+message — see *附：中文规范 › 硬规则* below.
 
-## Sources this system was built from
+## No logo
 
-Both were attached as read-only local codebases; paths are as they were mounted.
-
-| Source | What was read |
-| --- | --- |
-| `renderer/` — the app's React renderer (Electron + Vite + Tailwind v4 + shadcn primitives) | `src/styles.css` (23,470 lines: all tokens, the glass system, home/chat/composer/sidebar/tool-card CSS), `src/components/ui/*` (Button, IconButton, Badge, TextField, SelectField, Modal), `src/components/app/HomeView.tsx`, `AppParts.tsx`, `src/features/agent/components/AgentSidebar.tsx`, `src/i18n/enUS.ts` |
-| `design/` — the brand asset source folder | `README.md` (font inventory and licence status), `fonts/*`, `icons/lucide/*` (2,034 static SVGs, `lucide-static@1.33.0`, ISC), `logos/` (**empty**) |
-
-`docs/orbita-design.md` was **not** mounted when this system was first built, which is why the
-original draft deferred to it. That gap is now closed: the spec was read on 2026-08-23, reconciled
-against this file, and folded in — see *Status* above and *附：中文规范* below. The decision IDs the
-codebase cites (`R1-01`, `R2-05`, `R5-02`, `R5-06`, `R8-01`, `R8-02`, and the 2026-08-23 `R9-*` rows)
-resolve in `docs/orbita-ui-decision-interview.md`.
-
-No Figma file, no slide deck and no marketing site were provided, so this system covers exactly one
-product surface: **the desktop app**.
-
-### No logo
-
-`design/logos/` is empty and the codebase's only mark is a leftover π glyph from an earlier
-Pi-inspired theme, plus a text wordmark. **Orbita has no finalised logo.** Wherever a mark would go,
-the product renders the name in plain type: lowercase `orbita` in the brand serif (`BrandLockup`).
-Nothing in this system draws or approximates a mark. When a logo is finalised, drop
-`SVG + PNG + usage rules` into `assets/` and update `BrandLockup`.
+`design/logos/` does not exist in this checkout — git does not track empty directories, and the
+folder has never held an asset. **Orbita has no finalised logo.** Wherever a mark would go, the
+product renders the name as plain type: lowercase `orbita` set in the brand serif
+(`var(--font-family-brand)`), written directly where it's used — the sidebar titlebar
+(`src/renderer/src/shell/Sidebar.tsx`) and the home slogan
+(`src/renderer/src/features/chat/ChatView.tsx`). There is no `BrandLockup` component and no leftover
+mark glyph anywhere in the renderer. When a logo is finalised, drop `SVG + PNG + usage rules` into
+`assets/` and wire it in where the plain wordmark sits today.
 
 ## Content fundamentals
 
@@ -213,11 +199,37 @@ one travel. Continuous motion exists only for states in progress, and only in tw
 and stops the moment the state settles. Beyond those two there is no idle
 animation, no bounce, no parallax; `prefers-reduced-motion` collapses everything to 0.01ms.
 
+## Implementation rules
+
+**Stateful styling lives in CSS classes.** Hover, `:focus-visible`, `:active`, `:disabled`,
+`[aria-selected]` / `[aria-expanded]`, `:focus-within`, container queries, `prefers-reduced-motion`,
+and per-theme differences all belong in CSS (`src/renderer/src/styles.css` or a feature's own
+`.css`). Inline `style` carries only one-off layout values — a specific width, a specific position, a
+value computed at runtime. Do not paint hover with `useState` + `onMouseEnter`/`onMouseLeave`, and do
+not simulate `:focus-visible` in JS. Inline styles cannot express pseudo-classes, so every state turns
+into a React re-render, and keyboard focus ends up needing its own JS shim to compensate.
+
+**Keyboard focus is drawn once.** A single global `:focus-visible` rule in `styles.css` paints an
+accent outline on every focusable control. Components do not reset their own `outline` unless they
+draw their own focus expression (a card's own text field, say, expresses focus for the card).
+
+**Tokens are checked.** `src/renderer/src/design-tokens.test.ts` fails on any `var(--x)` that is
+never declared, and on any hex colour outside `tokens/`. A value that serves one feature only lives
+next to that feature's CSS, not in `tokens/`. The hex check exempts exactly one file by path,
+`src/renderer/src/features/chat/highlight.ts`: it holds shiki's TextMate theme data, which shiki only
+accepts as literal colours and converts to inline styles itself — a CSS custom property can't reach
+it. The token check does not exempt it.
+
+**Two consumers, one component.** The moment a style object gets copied into a second file, extract a
+component instead of duplicating it.
+
 ## Iconography
 
-- **Lucide, and only Lucide.** The app uses `lucide-react` at runtime; `design/icons/lucide/` holds
-  the matching static set (2,034 SVGs, `lucide-static@1.33.0`, ISC licence). The 46 glyphs this
-  system uses are copied into `assets/icons/lucide/` — no CDN, no substitution, no hand-drawn SVG.
+- **Lucide, and only Lucide.** No runtime package: `assets/icons/lucide/*.svg` are imported at build
+  time with Vite's `?raw` and inlined by `src/renderer/src/shell/Icon.tsx`. `design/icons/lucide/`
+  holds the full upstream set (2,034 SVGs, `lucide-static@1.33.0`, ISC licence); this system copies a
+  working subset into `assets/icons/lucide/` (84 files), of which `Icon.tsx` currently registers 70 —
+  no CDN, no substitution, no hand-drawn SVG.
 - **Sizes**: 16px in the rail, headers and dialogs; 13–14px in chips, list rows and card headers;
   11–12px for inline affordances (locks, filters, counts). **Stroke weight** 1.8 in lists and trees,
   2 for controls, 2.2 for the modal close.
@@ -253,8 +265,14 @@ animation, no bounce, no parallax; `prefers-reduced-motion` collapses everything
 | `components/composer/` | `Composer` — one glass box, identical on both pages. |
 | `ui_kits/orbita-desktop/` | Click-through recreation of the desktop app. See its `README.md`. |
 | `assets/fonts/` | Literata, Manrope, Source Han Serif SC Medium, Source Han Sans SC Regular (+ OFL). |
-| `assets/icons/lucide/` | The 46 Lucide glyphs used, plus the ISC licence. |
+| `assets/icons/lucide/` | The 84 Lucide glyphs copied in (`Icon.tsx` currently registers 70), plus the ISC licence. |
 | `SKILL.md` | Agent Skills front matter, for use outside this project. |
+
+`components/**/*.jsx` — together with each one's `.d.ts`, `.prompt.md` and `@dsCard` html — are
+**frozen specimens produced by the design tool**: reference pictures, not code. The real components
+are the renderer's `.tsx` files under `src/renderer/src/shell/` and `src/renderer/src/features/`.
+Where the two disagree, the renderer is right and the specimen is simply stale — **do not port a
+specimen's writing style (inline `style`, JS-simulated hover) into the app.**
 
 Each component directory has one `@dsCard`-tagged HTML showing its states, and every component ships
 `<Name>.d.ts` (props) and `<Name>.prompt.md` (what & when, with a usage example).
@@ -262,39 +280,32 @@ Each component directory has one `@dsCard`-tagged HTML showing its states, and e
 ### Intentional additions
 
 - **`Icon`** — a thin wrapper that inlines the copied Lucide SVGs so they inherit `currentColor`.
-  The app gets this from `lucide-react`, which is not available here; the wrapper is the closest
-  equivalent, not a new design decision.
+  The app does the same thing with its own `src/renderer/src/shell/Icon.tsx` (no `lucide-react`
+  dependency there either); this specimen mirrors that, not a new design decision.
 - **`AssistantText`** and **`Chip`** are extracted from CSS classes in the source
   (`.assistant-text`, `.home-chip` / `.composer .input-chip`) that had no standalone component.
 
 Nothing else was invented: there is no Toast, Tabs, Avatar, Tooltip or Switch here because the
 source does not define them.
 
-## 附：中文规范（自 docs/orbita-design.md 迁入）
+## 附：中文规范
 
-> 2026-08-23 真源交接：`docs/orbita-design.md` 已降为指向本文件的转发 stub（沿用 CLAUDE.md → AGENTS.md
-> 的既有模式）。原文中**本文件未覆盖的**章节整体迁入此处，一字未删。
->
-> **已被上文取代、故未迁入的部分**：原 §3 的毛玻璃层级表（明 0.60 / 暗 0.50）——暗色单层透明度已于
-> 2026-08-23 改为 **0.70**（阶梯 .70 / .91 / .973），理由见上文 *Transparency and blur*，决策行 R9-02。
-> 原 §2.1 字体栈已随 §2 一并迁入（与上文 *Type* 及 `tokens/fonts.css` 一致，无冲突）。
->
-> 决策的产生与理由仍记录在 `docs/orbita-ui-decision-interview.md` 的 Decision Record 表；
-> 维护规则不变：**任何设计决策变更 → 先在访谈文档决策记录加行/改状态 → 再同步本档**。
+> 本节是中文补充规范；设计决策的理由写在改动它的 commit 正文里。
 
 ### 图标体系（依赖与状态）
 
 | 用途 | 库 | 状态 |
 | --- | --- | --- |
-| 通用操作图标（按钮/菜单/状态） | [lucide-react](https://lucide.dev) | 在用（`lucide-react@^1`） |
+| 通用操作图标（按钮/菜单/状态） | 无运行时依赖——`Orbita Design System/assets/icons/lucide/*.svg` 经 Vite `?raw` 静态导入，`src/renderer/src/shell/Icon.tsx` 内联注入 | 在用：70 个图标登记在 `Icon.tsx` 的 `ICONS` 表（`assets/icons/lucide/` 目录本身拷了 84 个，未登记的不进产物） |
 | 文件、文件夹类型图标（文件树/diff/tab） | [@react-symbols/icons](https://react-symbols.pheralb.dev)（开源文件类型图标 400+，Miguel Solorio） | 已调研入册，**待右栏文件系统 slice 引入**（先调研再新增依赖，调研结论 2026-08-22） |
 
-### UI 组件体系（Radix + shadcn 基座）
+### UI 组件体系
 
-**Radix UI + shadcn/ui 风格**，叠加本产品的磨砂玻璃卡片式风格。依据：`@radix-ui/react-dialog`、
-`@radix-ui/react-select`、`class-variance-authority`、`tailwind-merge` 已在 `orbita-desktop/package.json`；
-`src/renderer/src/components/ui/` 下已有 Button / Badge / Modal / SelectField / IconButton 等件。
-新组件优先复用该体系（cva 变体 + token 消费），不自造平行组件。
+没有 Radix、没有 shadcn、没有 cva、没有 tailwind——`package.json` 里没有这些依赖。真组件是渲染层的
+`.tsx`：可复用的壳层件在 `src/renderer/src/shell/`（`IconButton`、`Menu`、`Icon`、`Chip`、`InlineName`、
+`SessionCard`、`RightPanel`、`Drawer`、`Composer`、`Titlebar` 等），feature 专属件在各自的
+`src/renderer/src/features/*/` 下。样式写法见上文 *Implementation rules*。新组件先去 `shell/` 找有没有
+能复用的件，不新造一套平行组件体系。
 
 #### 字体栈（2026-08-22 定稿；资产收纳于仓库根 `design/fonts/`，全部开源）
 
@@ -303,11 +314,14 @@ source does not define them.
 | 标题 / slogan / 品牌 | Literata（可变体，OFL，Google Fonts） | Source Han Serif SC Medium（思源宋体，OFL） |
 | 界面 UI | Manrope（可变体，OFL，Google Fonts） | Source Han Sans SC Regular / Medium（思源黑体，OFL） |
 
-- 字体已下载入库 `design/fonts/`；**尚未接入应用**（应用仍用系统栈 + 既有品牌衬线），接入时机与加载策略（打包 vs 子集化）另行决定。
+- 字体已下载入库 `design/fonts/`，并**已接入应用**：`tokens/fonts.css` 的 `@font-face` 指向
+  `assets/fonts/*`（文件均已入库），经 `styles.css` 依次 `@import` 后，`body { font-family:
+  var(--font-family-base) }`（Manrope/思源黑体）与两处 `var(--font-family-brand)`（侧栏 titlebar、
+  聊天页 slogan，Literata/思源宋体）都在实际加载这些字重。
 - 代码等宽与既有 fallback 不变（`--font-family-mono`）。
 - （历史：商业字体方案 Galaxie Copernicus / Styrene A 已作废，以本平替定稿。）
 
-### 首页交互（R8-01，2026-08-22 验收定案）
+### 首页交互（2026-08-22 验收定案）
 
 - **新会话一律先进首页**：全局/工作区内/图标条/新建菜单的「会话、单 agent」入口都先呈现三卡首页（不立即创建 agent），**首条消息提交才 createAgent + prompt**；编排入口除外（保持原子创建）。
 - **输入框宽度连续性**：首页中卡宽度 = 聊天页内容区宽度（`settings.contentMaxWidth`，默认 1000px）——首页与聊天页的差别只有 slogan/会话卡消失 + 输入框滑落。
@@ -315,53 +329,30 @@ source does not define them.
 - **slogan 规格**：标题字体（见 §2.1 字体栈）+ `--font-size-logo`（36px）品牌级字号。
 - **模式选中色**（修正 R4-03 的"绿底"）：明主题蓝、暗主题黄——`--color-mode-active-bg` / `--color-mode-active-fg`，用于模式按钮与图标条当前项。
 
-### 从决策记录同步的生效规范（摘要）
+### 生效规范（摘要）
 
-| 主题 | 规范 | 决策行 |
-| --- | --- | --- |
-| 密度 | Balanced：默认折叠、按需展开；用户气泡长 prompt 与 agent 消息同宽，短 prompt 自适应 | R4-01 |
-| 按钮 | 卡片式语言下 2-3 类：ghost（icon+text，hover 出边框）/ 黑线边框（设置类）/ 纯图标（ghost 或带边框）；卡片本身可为按钮 | R4-02 |
-| 选中态 | 近乎无额外信号，界面自然切换即上下文；仅最轻量文字加重 | R4-03 |
-| 长信息 | 默认折叠单行摘要，点击展开（tool 输出 / 文档阅读 / 日志统一） | R4-04 |
-| 消息形态 | Hybrid：用户指令独立气泡；agent 输出全宽文档式、默认折叠一行 | R4-05 |
-| 强调色 | 仅选中 + 主操作，辅以有限语义色；颜色绝不作唯一状态信号 | R5-02 |
-| 文字 | 按角色分规则（导航/正文/代码/元数据）；UI 无衬线 + 代码等宽；表达性字体仅品牌标 | R5-04 |
-| 动效 | 白名单制：仅解释来源（面板开合/消息到达），无 idle 装饰 | R5-05 |
+| 主题 | 规范 |
+| --- | --- |
+| 密度 | Balanced：默认折叠、按需展开；用户气泡长 prompt 与 agent 消息同宽，短 prompt 自适应 |
+| 按钮 | 卡片式语言下 2-3 类：ghost（icon+text，hover 出边框）/ 黑线边框（设置类）/ 纯图标（ghost 或带边框）；卡片本身可为按钮 |
+| 选中态 | 近乎无额外信号，界面自然切换即上下文；仅最轻量文字加重 |
+| 长信息 | 默认折叠单行摘要，点击展开（tool 输出 / 文档阅读 / 日志统一） |
+| 消息形态 | Hybrid：用户指令独立气泡；agent 输出全宽文档式、默认折叠一行 |
+| 强调色 | 仅选中 + 主操作，辅以有限语义色；颜色绝不作唯一状态信号 |
+| 文字 | 按角色分规则（导航/正文/代码/元数据）；UI 无衬线 + 代码等宽；表达性字体仅品牌标 |
+| 动效 | 白名单制：仅解释来源（面板开合/消息到达），无 idle 装饰 |
 
 ### 硬规则
 
 - **禁用 emoji**：界面文案与图标一律不用 emoji（含 `⚡` `☰` 等符号字符）——一律 lucide 图标或纯文字。
 - 禁裸 hex / 未定义 CSS 变量（ChatPane 死 token 事故教训）。
-- 一等设计概念（新卡片语言 / 新组件体系级别）变更需先过访谈决策记录。
+- 一等设计概念（新卡片语言 / 新组件体系级别）的变更，先改本档与 token，理由写进该 commit 正文里。
 
 ## Caveats
 
-- **`--color-text-inverse` now actually inverts** (dark `#1b1a15`, was `#ffffff` in both themes).
-  It means "the opposite of `--color-text-primary`", and a dark-theme `primary` fill is itself
-  near-white, so white text on it was invisible — the Button `primary` specimen showed the bug.
-  Text that must stay white on a permanently dark ground (overlays, toasts, the logo) uses
-  `--color-text-on-dark`; text on a coloured fill uses that fill's `-fg` token.
-- **The renderer has not fully caught up with this file.** Reconciled on 2026-08-23: the accent
-  (`#238636` / `#35c45a` green) and the dark glass alpha (0.50) were updated in
-  `renderer/src/styles.css` to match this system. Still outstanding: the renderer authors three glass
-  values (`--glass-bg-l1/l2/l3`) where this system authors **one** `--glass-bg` and lets DOM nesting
-  produce the ladder. The two are equivalent only where those surfaces are genuinely nested, so
-  collapsing them is a refactor with visual risk, not a rename — it has not been done.
-- **Token coverage is partial by design.** This system defines 124 custom properties; the renderer
-  defines 197. The ~114 it does not model are shadcn bridge variables and feature-local families
-  (git panel, right drawer, image preview, file tree, terminal, logo gradients). Those are
-  implementation surface, not brand — do not treat their absence here as a deletion.
-- **One light theme, one dark theme, one black theme.** The shipping app also offers five
-  light-background variants (`data-light-background`: white / warm / paper / blue / green) and
-  `data-ui-font-size` / `data-chat-font-size` / `data-font-base` scales. This system models all
-  three theme sets (black added 2026-09-03, `docs/plans/2026-09-03-黑色皮肤.md`); a new variant
-  must not break the token contract, but its values are not specified here.
-- The webfonts are shipped **not yet wired into the app**: `renderer/src/styles.css` still runs a
-  system font stack and still declares an older commercial-substitute set (`PlantinNowVariable`,
-  `CommitMono`, `DepartureMono`) left over from a previous theme. This system follows
-  `design/README.md`, which supersedes those with Literata + Manrope + Source Han.
+- **`--color-text-inverse` actually inverts**: light `#ffffff`, dark `#191c1d`, black `#0a0a0a`
+  (`tokens/colors.css:19,98,144`) — each is that theme's own shell ground, the opposite of
+  `--color-text-primary`. Text that must stay white on a permanently dark ground (overlays, toasts)
+  uses `--color-text-on-dark`; text on a coloured fill uses that fill's `-fg` token.
 - No monospace **brand** face was specified, so the mono token falls back to the system mono stack
   (`ui-monospace, SFMono-Regular, Menlo, …`). If Orbita picks a mono, it belongs in `tokens/fonts.css`.
-- The renderer contains large unshipped or legacy areas — orchestration (`atom`), Feishu, the browser
-  panel, the terminal dock, the desktop pet, the Monaco editor and the config tabs. They are named
-  here but not recreated, because their current visuals are explicitly in flux.

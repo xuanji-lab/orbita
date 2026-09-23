@@ -1,6 +1,6 @@
 /* Orbita webfonts. Source: design/fonts/ (all SIL OFL 1.1).
-   Note: the shipping app still runs the system font stack; these are the
-   canonical brand faces chosen in design/README.md. */
+   Note: the renderer loads these faces — styles.css @imports this file, and
+   `body`/`--font-family-brand` consume them (readme.md § Type). */
 @font-face {
   font-family: "Literata";
   src: url("../assets/fonts/Literata-Variable.ttf") format("truetype-variations");
