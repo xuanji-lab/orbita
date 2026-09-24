@@ -87,6 +87,8 @@ export interface ImportRunInput {
   skillMode: ImportSkillMode;
   /** 改过作用域的组；没列的组对所有会话生效（global） */
   skillScopes: ImportSkillScopeChoice[];
+  /** 勾选的 MCP server 名。只有 new 的会被导，导进来一律停用 */
+  mcp: string[];
 }
 
 /** 一条会话为什么进不了导入计划。词汇进报告，UI 按它给文案。 */
@@ -242,6 +244,8 @@ export interface ImportScanReport {
   lastImportAt: number | null;
   /** 勾选来源里的 skills 目录，按页面显示顺序（重名先到先得就是按这个顺序） */
   skills: ImportSkillGroup[];
+  /** 勾选来源里的 MCP server，一个名字一行，按名字排 */
+  mcp: ImportMcpItem[];
 }
 
 /** 执行阶段一条会话的结果。 */
@@ -308,6 +312,45 @@ export interface ImportSkillScopeChoice {
   scope: ImportSkillScope;
 }
 
+// ---------------------------------------------------------------------------
+// MCP servers
+// ---------------------------------------------------------------------------
+
+/**
+ * 一台源 MCP server 相对 orbita 的状态。按名字认（orbita 的 mcp.json 以名字为键）。
+ */
+export type ImportMcpStatus =
+  /** 可导，默认勾；导进来是停用的 */
+  | "new"
+  /** orbita 里已有同名的，不动它 */
+  | "in-orbita"
+  /** orbita 接不了的形态（SSE 传输、名字里有 orbita 不认的字符……），列出来说明原因 */
+  | "unsupported";
+
+/** 这台 server 在源里出现在哪（同名的在几个来源都有时，页面把出处都列上）。 */
+export interface ImportMcpOrigin {
+  source: ImportSourceId;
+  /** 源里的位置：Proma 的工作区名、Claude Code 的项目目录；全局配置为 null */
+  where: string | null;
+}
+
+/**
+ * 页面上的一行。**不带配置本体**：headers / env 里常有密钥，渲染层不需要它们；执行时主进程
+ * 按名字重扫取配置。同名的多份按来源顺序取第一份，其余只进 origins。
+ */
+export interface ImportMcpItem {
+  name: string;
+  transport: "stdio" | "http";
+  /** 给人看的一行：stdio 是命令，http 是 URL */
+  detail: string;
+  /** 配置里有 headers 或 env：会原样带过来（含密钥），页面标出来 */
+  carriesSecrets: boolean;
+  origins: ImportMcpOrigin[];
+  status: ImportMcpStatus;
+  /** unsupported 的原因（给人看） */
+  reason: string | null;
+}
+
 /** 执行报告。skipped 是执行时重扫得到的（与扫描报告可能差在 already-imported）。 */
 export interface ImportRunReport {
   /** 新落盘的会话：new、deleted 的重新导入、diverged 的另导一份 */
@@ -324,6 +367,9 @@ export interface ImportRunReport {
   skillsImported: number;
   /** 没落进去的 skill（同名刚被别处占了、复制失败……） */
   skillsFailed: { slug: string; error: string }[];
+  /** 加进 orbita mcp.json 的 server 数（都是停用的） */
+  mcpImported: number;
+  mcpFailed: { name: string; error: string }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -412,11 +458,16 @@ export function parseImportRunInput(raw: unknown): ImportRunInput {
   if (skillMode !== "copy" && skillMode !== "link") throw new Error("skillMode must be copy or link");
   const skillScopes = raw["skillScopes"];
   if (!Array.isArray(skillScopes)) throw new Error("skillScopes must be an array");
+  const mcp = raw["mcp"];
+  if (!Array.isArray(mcp) || !mcp.every((name) => typeof name === "string")) {
+    throw new Error("mcp must be an array of server names");
+  }
   return {
     sources: parseSources(raw["sources"]),
     sessions: [...new Set(sessions as string[])],
     skills: [...new Set(skills as string[])],
     skillMode,
+    mcp: [...new Set(mcp as string[])],
     skillScopes: skillScopes.map((choice) => {
       if (!isRecord(choice) || typeof choice["dir"] !== "string" || choice["dir"] === "") {
         throw new Error("skill scope choice must name a folder");

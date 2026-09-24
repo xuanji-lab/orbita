@@ -223,6 +223,7 @@ export function MigrationView(props: {
         skills: selectedSkillDirs(scan.report.skills, skillSelected),
         skillMode,
         skillScopes: skillScopeChoices(skillScopes),
+        mcp: [],
       })
       .then((result) => {
         setRun({ kind: "done", result });

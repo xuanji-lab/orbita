@@ -62,6 +62,7 @@ function report(plan: ImportPlanItem[], newWorkspaceIds: string[] = []): ImportS
     orphanedSubSessions: 0,
     lastImportAt: null,
     skills: [],
+    mcp: [],
   };
 }
 

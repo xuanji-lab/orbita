@@ -1207,6 +1207,7 @@ export async function scanImport(
       null,
     ),
     skills,
+    mcp: [],
   };
 }
 
@@ -1224,6 +1225,7 @@ export function emptyScanReport(): ImportScanReport {
     orphanedSubSessions: 0,
     lastImportAt: null,
     skills: [],
+    mcp: [],
   };
 }
 
@@ -1963,6 +1965,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
     mergedWorkspaceIds: report.mergedWorkspaceIds,
     skillsImported: skillResult.imported,
     skillsFailed: skillResult.failed,
+    mcpImported: 0,
+    mcpFailed: [],
   };
 }
 
