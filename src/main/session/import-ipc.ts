@@ -7,6 +7,7 @@
  */
 import { ipcMain } from "electron";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
@@ -20,7 +21,15 @@ import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
-import { emptyScanReport, probeProma, runImport, scanImport, type ImporterDeps } from "./importer.ts";
+import {
+  emptyScanReport,
+  probeClaudeCode,
+  probeProma,
+  runImport,
+  scanImport,
+  type ClaudeCodePaths,
+  type ImporterDeps,
+} from "./importer.ts";
 
 export function registerImportIpc(
   sessions: SessionStore,
@@ -54,6 +63,7 @@ export function registerImportIpc(
       // Proma 数据根迁移史：.proma → .proma-dev，索引里仍有条目指向旧根（本机实测
       // 66 条），文件仍在且是同一格式——旧根也是合法源，同样只读
       extraSourceRoots: legacyPromaRoots(),
+      claudeCode: claudeCodePaths(),
       piSessionDir,
       defaultCwd: workspaces.defaultPath(),
       workspaces: await workspaces.list(),
@@ -68,17 +78,17 @@ export function registerImportIpc(
   // 探测只 stat，不装配 deps：没配 provider 的新用户也该看得到本机有哪些来源
   ipcMain.handle(ipcChannels.importDetect, async (): Promise<ImportDetectResult> => ({
     home: homedir(),
-    sources: [await probeProma(joinPromaRoot(), legacyPromaRoots())],
+    sources: [await probeProma(joinPromaRoot(), legacyPromaRoots()), await probeClaudeCode(claudeCodePaths())],
   }));
   ipcMain.handle(ipcChannels.importScan, async (_event, raw: unknown): Promise<ImportScanReport> => {
     const input = parseImportScanInput(raw);
-    // 没勾 Proma = 一个字节都不读（它是本刀唯一的来源）
-    if (!input.sources.includes("proma")) return emptyScanReport();
-    return scanImport(await deps());
+    // 一个来源都没勾 = 一个字节都不读；勾了的才读（scanImport 按 sources 分来源读）
+    if (input.sources.length === 0) return emptyScanReport();
+    return scanImport(await deps(), [], input.sources);
   });
   ipcMain.handle(ipcChannels.importRun, async (_event, raw: unknown): Promise<ImportRunReport> => {
     const input = parseImportRunInput(raw);
-    if (!input.sources.includes("proma")) return { imported: 0, updated: 0, skipped: 0, failed: [], createdWorkspaces: [], mergedWorkspaceIds: [] };
+    if (input.sources.length === 0) return { imported: 0, updated: 0, skipped: 0, failed: [], createdWorkspaces: [], mergedWorkspaceIds: [] };
     const environment = await deps();
     return runImport(
       {
@@ -93,7 +103,7 @@ export function registerImportIpc(
           await sessions.commitImportUpdate(id, records, patch);
         },
       },
-      { sessions: new Set(input.sessions), destinations: input.destinations },
+      { sources: input.sources, sessions: new Set(input.sessions), destinations: input.destinations },
     );
   });
 }
@@ -106,4 +116,17 @@ function joinPromaRoot(): string {
 /** Proma 的旧数据根：索引里仍有条目指向它（见 deps 里的注释）。探测与扫描同一份清单 */
 function legacyPromaRoots(): string[] {
   return [`${homedir()}/.proma`];
+}
+
+/**
+ * Claude Code 的会话在 ~/.claude/projects（命令行与桌面应用共用）；桌面应用的会话清单在它自己的
+ * 应用数据目录（macOS 路径，别的系统上不存在，扫描照常）。探测与扫描同一份。
+ */
+function claudeCodePaths(): ClaudeCodePaths {
+  const home = homedir();
+  return {
+    projectsDir: join(home, ".claude", "projects"),
+    desktopSessionsDir: join(home, "Library", "Application Support", "Claude", "claude-code-sessions"),
+    home,
+  };
 }

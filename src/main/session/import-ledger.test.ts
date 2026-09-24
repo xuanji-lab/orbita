@@ -46,4 +46,14 @@ describe("导入清单", () => {
     await appendImportLedger(empty, []);
     await assert.rejects(readFile(empty, "utf8"));
   });
+
+  test("每个来源的行都读得回来；不认识的来源跳过", async () => {
+    const path = join(dir, "imports.jsonl");
+    const claude: ImportLedgerLine = { ...line("cc", 7), source: "claude-code", sourceFile: "/claude/projects/p/cc.jsonl" };
+    await writeFile(
+      path,
+      [JSON.stringify(line("a", 1)), JSON.stringify(claude), JSON.stringify({ ...line("x", 8), source: "cursor" })].join("\n"),
+    );
+    assert.deepEqual(await readImportLedger(path), [line("a", 1), claude]);
+  });
 });

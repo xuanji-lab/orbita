@@ -24,7 +24,7 @@
  * 两份按 entry id 对齐（reimportState），源里多出新消息的列为 updated / diverged；
  * 导过、后来在 orbita 删掉的靠导入清单认出（import-ledger.ts），列为 deleted。
  */
-import { copyFile, mkdir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
+import { copyFile, mkdir, open, readdir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -54,6 +54,12 @@ import {
   parseClaudeRows,
   type ClaudeMainRow,
 } from "./claude-legacy.ts";
+import {
+  claudeCodeRootUuid,
+  parseClaudeCodeSession,
+  parseClaudeDesktopSession,
+  type ClaudeDesktopSession,
+} from "./claude-code.ts";
 import { aggregatePrefixUsage } from "./store.ts";
 import { promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
 import { appendImportLedger, readImportLedger, type ImportLedgerLine } from "./import-ledger.ts";
@@ -73,14 +79,27 @@ import {
   type ImportScanReport,
   type ImportSkipItem,
   type ImportSkipReason,
+  type ImportSourceId,
   type ImportSourceProbe,
   type ImportWorkspacePlan,
 } from "../../shared/import.ts";
+
+/** Claude Code 来源要读的位置。全部**只读**。 */
+export interface ClaudeCodePaths {
+  /** 会话文件根（~/.claude/projects）：每个项目一个子目录，目录里是 <会话 id>.jsonl */
+  projectsDir: string;
+  /** Claude 桌面应用的会话清单目录。不存在（只用命令行、非 macOS）照常扫，只是认不出续接关系 */
+  desktopSessionsDir: string;
+  /** 家目录：在家目录里跑的会话不算有文件夹（不为它建工作区） */
+  home: string;
+}
 
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
 export interface ImporterDeps {
   /** Proma 数据根（~/.proma-dev）。**只读** */
   promaRoot: string;
+  /** Claude Code 来源的位置。不传 = 扫描勾了它也不读 */
+  claudeCode?: ClaudeCodePaths;
   /** 额外合法源根（Proma 迁移史的旧根 ~/.proma：索引里仍有条目指向它，文件仍在）。
    *  防御边界是「这几个根之内」，不传则只认 promaRoot */
   extraSourceRoots?: readonly string[];
@@ -145,6 +164,26 @@ export async function probeProma(promaRoot: string, extraRoots: readonly string[
       join(promaRoot, "agent-sessions"),
       ...extraRoots.map((root) => join(root, "sdk-config", "sessions")),
     ],
+    found,
+  };
+}
+
+/**
+ * Claude Code 来源的探测：只 stat 会话根目录。paths 是扫描会读的全部位置——会话文件，
+ * 以及 Claude 桌面应用的会话清单（只用来认出被续接取代的旧文件、取它显示的标题）。
+ */
+export async function probeClaudeCode(paths: ClaudeCodePaths): Promise<ImportSourceProbe> {
+  let found = false;
+  try {
+    found = (await stat(paths.projectsDir)).isDirectory();
+  } catch {
+    found = false;
+  }
+  return {
+    id: "claude-code",
+    label: "Claude Code",
+    kind: "cli",
+    paths: [paths.projectsDir, paths.desktopSessionsDir],
     found,
   };
 }
@@ -760,10 +799,12 @@ async function readPiSource(path: string, promaRoot: string, extraRoots: readonl
 /**
  * 扫描（dry-run）。`destinations` 是用户按文件夹改过的去向：页面扫描时不传（报告给的是
  * 默认去向），执行时 runImport 带着用户的选择重扫，同一条解析路径算出实际落点。
+ * `sources` 是勾选的来源：没勾的一个字节都不读。缺省只扫 Proma（它是第一个来源，旧调用方与测试的默认）。
  */
 export async function scanImport(
   deps: ImporterDeps,
   destinations: readonly ImportDestinationChoice[] = [],
+  sources: readonly ImportSourceId[] = ["proma"],
 ): Promise<ImportScanReport> {
   const overrides = new Map<string | null, ImportDestination>(
     destinations.map((choice) => [choice.folder, choice.destination]),
@@ -791,13 +832,16 @@ export async function scanImport(
   const everImported = new Set(ledger.map((line) => line.sourceFile));
   const freshChange = (sourceFile: string): ImportChange => (everImported.has(sourceFile) ? "deleted" : "new");
 
-  let promaSessions: ReturnType<typeof parsePromaSessions>;
-  try {
-    promaSessions = parsePromaSessions(await readFile(join(deps.promaRoot, "agent-sessions.json"), "utf8"));
-  } catch (cause) {
-    throw new Error(
-      `读不了 Proma 会话索引（${join(deps.promaRoot, "agent-sessions.json")}）：${cause instanceof Error ? cause.message : String(cause)}`,
-    );
+  // 没勾 Proma：索引与工作区表都不读，下面两个 Proma 循环跑空
+  let promaSessions: ReturnType<typeof parsePromaSessions> = { entries: [], claudeEntries: [], bad: [], withoutPiFile: 0 };
+  if (sources.includes("proma")) {
+    try {
+      promaSessions = parsePromaSessions(await readFile(join(deps.promaRoot, "agent-sessions.json"), "utf8"));
+    } catch (cause) {
+      throw new Error(
+        `读不了 Proma 会话索引（${join(deps.promaRoot, "agent-sessions.json")}）：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
   }
   skipped.push(...promaSessions.bad);
 
@@ -814,11 +858,13 @@ export async function scanImport(
   }
 
   let promaWorkspaces: PromaWorkspaceEntry[] = [];
-  try {
-    promaWorkspaces = parsePromaWorkspaces(await readFile(join(deps.promaRoot, "agent-workspaces.json"), "utf8"));
-  } catch {
-    // 工作区表读不到 ≠ 导不了：全部按无归属走规则 ②（TASKS）。旧版 Proma 可能
-    // 没有这份文件，会话照导，只是没有工作区归属
+  if (sources.includes("proma")) {
+    try {
+      promaWorkspaces = parsePromaWorkspaces(await readFile(join(deps.promaRoot, "agent-workspaces.json"), "utf8"));
+    } catch {
+      // 工作区表读不到 ≠ 导不了：全部按无归属走规则 ②（TASKS）。旧版 Proma 可能
+      // 没有这份文件，会话照导，只是没有工作区归属
+    }
   }
 
   for (const entry of promaSessions.entries) {
@@ -1038,6 +1084,52 @@ export async function scanImport(
     });
   }
 
+  // —— Claude Code：在 Proma 之后扫，同一文件夹复用 Proma 已计划新建的工作区 ——
+  if (sources.includes("claude-code") && deps.claudeCode !== undefined) {
+    const found = await scanClaudeCode(deps.claudeCode, deps, importedBySource, newWorkspaceByKey);
+    skipped.push(...found.skipped);
+    for (const candidate of found.candidates) {
+      const resolution = applyDestination(candidate.resolution, overrides, deps);
+      if (resolution.create !== null) {
+        const existing = newWorkspaceByKey.get(resolution.create.path);
+        if (existing === undefined) {
+          newWorkspaceByKey.set(resolution.create.path, resolution.create);
+        } else {
+          resolution.workspaceId = existing.id;
+        }
+      }
+      if (resolution.mergedInto !== null) mergedIds.add(resolution.mergedInto);
+      const mapped = mapModel(candidate.model, deps.registeredModels, deps.fallbackModel);
+      if (!mapped.matched) modelFallbackCount += 1;
+      totalBytes += candidate.bytes;
+      plan.push({
+        sourceId: candidate.sourceId,
+        source: "claude-code",
+        sourceKind: "claude-code",
+        change: freshChange(candidate.sourceFile),
+        newMessages: 0,
+        folder: resolution.folder,
+        sourceFile: candidate.sourceFile,
+        sessionId: deps.newId(),
+        parentId: null,
+        title: candidate.title,
+        workspaceId: resolution.workspaceId,
+        cwd: resolution.cwd,
+        providerId: mapped.providerId,
+        modelId: mapped.modelId,
+        importedModel: candidate.model,
+        modelMatched: mapped.matched,
+        // 迁移边界（2026-09-24）：不适配源应用的会话管理功能（桌面应用的归档也不跟）
+        archived: false,
+        pinned: false,
+        starred: false,
+        createdAt: candidate.createdAt,
+        updatedAt: candidate.updatedAt,
+        bytes: candidate.bytes,
+      });
+    }
+  }
+
   const { subSessionCount, orphanedSubSessions } = linkSubSessions(
     plan,
     parentSourceById,
@@ -1087,6 +1179,236 @@ export function emptyScanReport(): ImportScanReport {
 /** claude legacy 条目的源文件路径（索引里没有，按 Proma 的目录惯例推导）。 */
 function claudeSourceFile(promaRoot: string, id: string): string {
   return join(promaRoot, "agent-sessions", `${id}.jsonl`);
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code 来源
+// ---------------------------------------------------------------------------
+
+/** 一条待导入的 Claude Code 会话：计划条目除去模型映射与去向覆盖之外的全部原料。 */
+interface ClaudeCodeCandidate {
+  sourceId: string;
+  sourceFile: string;
+  title: string;
+  /** 最后一条 assistant 的模型 id（合成的 `<synthetic>` 已去掉） */
+  model: string | null;
+  createdAt: number;
+  updatedAt: number;
+  bytes: number;
+  /** 默认去向（还没盖用户的覆盖） */
+  resolution: WorkspaceResolution;
+}
+
+/**
+ * 扫 Claude Code 的会话文件，产出候选与跳过项。
+ *
+ * **哪些文件是一条会话**：Claude 桌面应用每次续接旧会话都另起一个文件、把历史整段复制过去
+ * （本机「Handoff UI」一条会话 4 个文件）。按桌面应用的会话清单归并：
+ * - 清单里 priorCliSessionIds 列出的旧文件不列（内容已在最新的文件里）；
+ * - 没被清单引用、首条消息却与某个清单文件相同的，是桌面应用里已经不在的分叉（本机 4 个），
+ *   同样不列。
+ * 两类都不进跳过清单：在源应用里它们就不是一条会话。命令行的会话不在清单里，一个文件一条。
+ *
+ * **去向**（文件夹 = 桌面清单的 originCwd，其次会话文件里的 cwd）：与 orbita 工作区同址 → 挂上去；
+ * Proma 这次要建同路径的工作区 → 共用；这次有两条及以上 → 新建工作区；只有一条 → Tasks，
+ * cwd 仍是那个文件夹（裁决 #9）。家目录、已不在盘上的文件夹不算文件夹。
+ *
+ * 导过的一律 already-imported：再次导入（追加 Claude Code 里的新消息）没做——副本是转换
+ * 构造的，entry id 与源对不上，Proma 那套按 id 对齐的判法用不了。
+ */
+async function scanClaudeCode(
+  paths: ClaudeCodePaths,
+  deps: ImporterDeps,
+  importedBySource: ReadonlyMap<string, readonly SessionMeta[]>,
+  plannedWorkspaces: ReadonlyMap<string, ImportWorkspacePlan>,
+): Promise<{ candidates: ClaudeCodeCandidate[]; skipped: ImportSkipItem[] }> {
+  const files = await listClaudeCodeFiles(paths.projectsDir);
+  const desktop = await readClaudeDesktopSessions(paths.desktopSessionsDir);
+  const listed = new Map(desktop.map((entry) => [entry.cliSessionId, entry]));
+  const superseded = new Set(desktop.flatMap((entry) => entry.priorCliSessionIds));
+  const listedRoots = new Set<string>();
+  for (const file of files) {
+    if (!listed.has(claudeCodeSessionId(file))) continue;
+    const root = await readClaudeCodeRootUuid(file);
+    if (root !== null) listedRoots.add(root);
+  }
+
+  const skipped: ImportSkipItem[] = [];
+  const found: (Omit<ClaudeCodeCandidate, "resolution"> & { folder: string | null; cwd: string })[] = [];
+  for (const file of files) {
+    const sourceId = claudeCodeSessionId(file);
+    if (superseded.has(sourceId)) continue;
+    const entry = listed.get(sourceId);
+    if (importedBySource.has(file)) {
+      skipped.push({ sourceId, title: entry?.title ?? null, reason: "already-imported" });
+      continue;
+    }
+    let raw: string;
+    let bytes: number;
+    try {
+      bytes = (await stat(file)).size;
+      raw = await readFile(file, "utf8");
+    } catch {
+      skipped.push({ sourceId, title: entry?.title ?? null, reason: "missing-file", detail: file });
+      continue;
+    }
+    const session = parseClaudeCodeSession(raw);
+    if (entry === undefined && session.rootUuid !== null && listedRoots.has(session.rootUuid)) continue;
+    const title = deriveSessionTitle(entry?.title ?? session.title ?? session.firstPrompt ?? "") || "Claude Code session";
+    // 按执行时同一条转换判断：没有 assistant 消息 pi 不落盘（只发了一句就断掉的会话）
+    if (!claudeRowsToMessages(session.rows, "scan").messages.some((message) => message.role === "assistant")) {
+      skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+      continue;
+    }
+    const place = await claudeCodeFolder(entry?.folder ?? session.cwd, paths.home, deps.defaultCwd);
+    const createdAt = entry?.createdAt ?? firstTimestamp(session.rows) ?? Date.now();
+    found.push({
+      sourceId,
+      sourceFile: file,
+      title,
+      model: lastModelFromRows(session.rows),
+      createdAt,
+      updatedAt: qaTime(lastRowTimestamp(session.rows), createdAt, createdAt),
+      bytes,
+      ...place,
+    });
+  }
+
+  const perFolder = new Map<string, number>();
+  for (const item of found) {
+    if (item.folder !== null) perFolder.set(item.folder, (perFolder.get(item.folder) ?? 0) + 1);
+  }
+  const orbitaPaths = await Promise.all(
+    deps.workspaces.map(async (workspace) => ({ workspace, path: await normalizeForMatch(workspace.path) })),
+  );
+  const minted = new Map<string, ImportWorkspacePlan>();
+  const candidates: ClaudeCodeCandidate[] = [];
+  for (const { folder, cwd, ...item } of found) {
+    let resolution: WorkspaceResolution;
+    if (folder === null) {
+      resolution = { workspaceId: null, cwd, folder: null, create: null, mergedInto: null };
+    } else {
+      const wanted = await normalizeForMatch(folder);
+      const same = orbitaPaths.find((candidate) => candidate.path === wanted)?.workspace;
+      const planned = plannedWorkspaces.get(folder) ?? minted.get(folder);
+      if (same !== undefined) {
+        resolution = { workspaceId: same.id, cwd: same.path, folder, create: null, mergedInto: same.id };
+      } else if (planned !== undefined) {
+        resolution = { workspaceId: planned.id, cwd: folder, folder, create: planned, mergedInto: null };
+      } else if ((perFolder.get(folder) ?? 0) >= 2) {
+        const create: ImportWorkspacePlan = { id: deps.newId(), name: deriveWorkspaceName(folder), path: folder, merged: false };
+        minted.set(folder, create);
+        resolution = { workspaceId: create.id, cwd: folder, folder, create, mergedInto: null };
+      } else {
+        resolution = { workspaceId: null, cwd: folder, folder, create: null, mergedInto: null };
+      }
+    }
+    candidates.push({ ...item, resolution });
+  }
+  return { candidates, skipped };
+}
+
+function claudeCodeSessionId(file: string): string {
+  return basename(file, ".jsonl");
+}
+
+/**
+ * 会话的文件夹与续聊用的 cwd。家目录不算文件夹（cwd 仍是它）；不在盘上的文件夹
+ * （删掉的 worktree、别的应用的临时工作目录）既不算文件夹也不能当 cwd，退 defaultCwd。
+ */
+async function claudeCodeFolder(
+  path: string | null,
+  home: string,
+  defaultCwd: string,
+): Promise<{ folder: string | null; cwd: string }> {
+  if (path === null) return { folder: null, cwd: defaultCwd };
+  const resolved = resolve(path);
+  let isDirectory = false;
+  try {
+    isDirectory = (await stat(resolved)).isDirectory();
+  } catch {
+    isDirectory = false;
+  }
+  if (!isDirectory) return { folder: null, cwd: defaultCwd };
+  if (resolved === resolve(home)) return { folder: null, cwd: resolved };
+  return { folder: resolved, cwd: resolved };
+}
+
+/** projects 下每个项目目录里的顶层 .jsonl（子代理文件在更深一层，不列）。根目录不在 = 没有会话。 */
+async function listClaudeCodeFiles(projectsDir: string): Promise<string[]> {
+  let projects;
+  try {
+    projects = await readdir(projectsDir, { withFileTypes: true });
+  } catch (cause) {
+    if (isNotFound(cause)) return [];
+    throw cause;
+  }
+  const files: string[] = [];
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    const dir = join(projectsDir, project.name);
+    for (const file of await readdir(dir, { withFileTypes: true })) {
+      if (file.isFile() && file.name.endsWith(".jsonl")) files.push(join(dir, file.name));
+    }
+  }
+  return files.sort();
+}
+
+/** 桌面应用的会话清单：<目录>/<账户>/<组织>/local_*.json。目录不在、单条坏了都跳过。 */
+async function readClaudeDesktopSessions(dir: string): Promise<ClaudeDesktopSession[]> {
+  const out: ClaudeDesktopSession[] = [];
+  const subdirs = async (path: string): Promise<string[]> => {
+    try {
+      return (await readdir(path, { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => join(path, entry.name));
+    } catch {
+      return [];
+    }
+  };
+  for (const account of await subdirs(dir)) {
+    for (const org of await subdirs(account)) {
+      let names: string[];
+      try {
+        names = await readdir(org);
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        if (!name.startsWith("local_") || !name.endsWith(".json")) continue;
+        try {
+          const parsed = parseClaudeDesktopSession(await readFile(join(org, name), "utf8"));
+          if (parsed !== null) out.push(parsed);
+        } catch {
+          // 读不了的一条：它指向的文件按命令行会话处理
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** 首条消息的 uuid：先读文件开头 512KB，没找到再读整份（开头可能是大段附件行）。 */
+async function readClaudeCodeRootUuid(file: string): Promise<string | null> {
+  const HEAD = 512 * 1024;
+  try {
+    const handle = await open(file, "r");
+    let head: string;
+    let size: number;
+    try {
+      size = (await handle.stat()).size;
+      const buffer = Buffer.alloc(Math.min(HEAD, size));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      head = buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+    const root = claudeCodeRootUuid(head);
+    if (root !== null || size <= HEAD) return root;
+    return claudeCodeRootUuid(await readFile(file, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1423,6 +1745,8 @@ async function copyPiFile(source: string, dest: string): Promise<void> {
  * 不传 = 计划全部导入（旧入口与测试的默认）。
  */
 export interface ImportSelection {
+  /** 勾选的来源（重扫只读这些）；不传 = 只有 Proma */
+  sources?: readonly ImportSourceId[];
   /** 勾选的可选条目，按 sourceFile（见 isSelectablePlanItem） */
   sessions: ReadonlySet<string>;
   destinations: readonly ImportDestinationChoice[];
@@ -1444,7 +1768,7 @@ export function selectPlan(plan: readonly ImportPlanItem[], chosen: ReadonlySet<
 }
 
 export async function runImport(deps: RunImporterDeps, selection?: ImportSelection): Promise<ImportRunReport> {
-  const scanned = await scanImport(deps, selection?.destinations ?? []);
+  const scanned = await scanImport(deps, selection?.destinations ?? [], selection?.sources);
   const plan = selection === undefined ? scanned.plan : selectPlan(scanned.plan, selection.sessions);
   // 没被勾的会话不落，它们要新建的工作区也不建
   const usedWorkspaceIds = new Set(plan.map((item) => item.workspaceId));
@@ -1515,7 +1839,9 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
       const sessionFile =
         item.sourceKind === "claude-legacy"
           ? await runClaudeLegacyImport(item, deps)
-          : await runPiImport(
+          : item.sourceKind === "claude-code"
+            ? await runClaudeCodeImport(item, deps)
+            : await runPiImport(
               item,
               deps,
               // 另导一份：不能落在原会话副本的文件名上（会盖掉 orbita 接着聊的那份），换一个
@@ -1606,7 +1932,7 @@ async function writeLedger(deps: RunImporterDeps, lines: readonly ImportLedgerLi
       .map((meta) => ({
         at: null,
         action: "backfill",
-        source: "proma",
+        source: sourceOfImported(deps, meta.importedFrom ?? ""),
         sourceId: null,
         sourceFile: meta.importedFrom ?? "",
         sessionId: meta.id,
@@ -1702,6 +2028,51 @@ async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps
     path,
     records: withUserTexts(entriesToRecords(contextEntries), userTexts),
     // claude legacy 没有思考档记录（当时的 Claude Code 无此概念），落缺省档
+    thinkingLevel: "medium",
+  };
+}
+
+/** 补记行的来源：meta 只存了源文件，按它落在哪个来源的根下判断。 */
+function sourceOfImported(deps: ImporterDeps, sourceFile: string): ImportSourceId {
+  const claudeCode = deps.claudeCode?.projectsDir;
+  return claudeCode !== undefined && sourceFile.startsWith(`${resolve(claudeCode)}/`) ? "claude-code" : "proma";
+}
+
+/**
+ * Claude Code 会话的灌入：清洗（claude-code.ts）→ 与 claude legacy 同一条 Message 构造 →
+ * SessionManager.create + appendMessage。清洗给出每条用户行在 transcript 里的原文：
+ * 按 appendMessage 返回的 entry id 配上，null（模型读到、用户没写的）的用户记录不进 transcript。
+ * pi 副本里它们照留——续聊时模型看到的上下文与当时一致。
+ */
+async function runClaudeCodeImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+  const session = parseClaudeCodeSession(await readFile(item.sourceFile, "utf8"));
+  const { messages, userRowIndexes } = claudeRowsToMessages(session.rows, item.providerId);
+  await mkdir(deps.piSessionDir, { recursive: true });
+  const manager = SessionManager.create(item.cwd, deps.piSessionDir);
+  const texts = new Map<string, string>();
+  const hidden = new Set<string>();
+  let userIndex = 0;
+  for (const message of messages) {
+    const id = manager.appendMessage(message);
+    if (message.role !== "user") continue;
+    const row = userRowIndexes[userIndex];
+    userIndex += 1;
+    const display = row === undefined ? null : (session.displays[row] ?? null);
+    if (display === null) hidden.add(id);
+    else texts.set(id, display);
+  }
+  const path = manager.getSessionFile();
+  if (path === undefined) {
+    // 扫描期已剔除转不出 assistant 消息的文件；这里防御扫描与执行之间文件被改
+    throw new Error("no assistant messages — nothing was persisted by pi");
+  }
+  const records = entriesToRecords(branchEntries(manager.getEntries())).filter(
+    (record) => record.role !== "user" || !hidden.has(record.id),
+  );
+  return {
+    path,
+    records: withUserTexts(records, texts),
+    // Claude Code 的思考档位（effort）记在桌面清单与行上，与 orbita 的档位不同构，落缺省档
     thinkingLevel: "medium",
   };
 }

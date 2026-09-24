@@ -11,7 +11,7 @@
  */
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ImportSourceId } from "../../shared/import.ts";
+import { isImportSourceId, type ImportSourceId } from "../../shared/import.ts";
 import { isNotFound } from "../fs-errors.ts";
 
 export interface ImportLedgerLine {
@@ -37,15 +37,16 @@ function parseLine(value: unknown): ImportLedgerLine | null {
   const at = line["at"];
   const action = line["action"];
   const sourceId = line["sourceId"];
+  const source = line["source"];
   if (at !== null && (typeof at !== "number" || !Number.isFinite(at))) return null;
   if (typeof action !== "string" || !ACTIONS.includes(action)) return null;
-  if (line["source"] !== "proma") return null;
+  if (!isImportSourceId(source)) return null;
   if (sourceId !== null && typeof sourceId !== "string") return null;
   if (typeof line["sourceFile"] !== "string" || typeof line["sessionId"] !== "string") return null;
   return {
     at,
     action: action as ImportLedgerLine["action"],
-    source: "proma",
+    source,
     sourceId,
     sourceFile: line["sourceFile"],
     sessionId: line["sessionId"],

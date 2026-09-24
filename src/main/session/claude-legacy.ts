@@ -19,7 +19,8 @@
  * - `server_tool_use` 块：兼容渠道的服务端工具（268 个），pi 无对应概念，跳过。
  * - thinking 块带 Anthropic signature → 保留为 pi 的 thinkingSignature（续聊发回原渠道时有效，
  *   其他渠道无害）。
- * - 图片只在 tool_result 的 content 数组里（`source.type === "base64"`）；url 形态拿不到数据，跳过。
+ * - 图片在 tool_result 的 content 数组里（`source.type === "base64"`）；url 形态拿不到数据，跳过。
+ *   Claude Code 自己的会话文件（claude-code.ts 清洗后也走这里）的用户行还有用户粘贴的图，同样收。
  * - usage：消息级（每行都带该消息的 usage）。result 行是 turn 级聚合——与消息级重复计
  *   cache，不用它（pi 语义是消息级，meta.stats 从派生 records 聚合，与 PR-1 同源）。
  *
@@ -237,6 +238,12 @@ export interface ClaudeMessageStats {
 export interface ClaudeMessageParse {
   messages: Message[];
   stats: ClaudeMessageStats;
+  /**
+   * 每条 user 消息来自 rows 里的哪一行（按 messages 里 user 消息的顺序）。调用方按它把行上的
+   * 导入侧信息（显示文本、是否隐藏）配到灌出来的 entry 上——哪些行产出消息由这里决定，
+   * 不让调用方再写一遍会漂的判定
+   */
+  userRowIndexes: number[];
 }
 
 /**
@@ -253,10 +260,11 @@ export function claudeRowsToMessages(rows: readonly ClaudeMainRow[], providerId:
     emptyMessages: 0,
   };
   const messages: Message[] = [];
+  const userRowIndexes: number[] = [];
 
   // 组切分：assistant 行按相邻同 groupId 归组（流序保证相邻）；user 行天然一行一组
-  const groups: (AssistantGroup | { row: ClaudeMainRow })[] = [];
-  for (const row of rows) {
+  const groups: (AssistantGroup | { row: ClaudeMainRow; index: number })[] = [];
+  rows.forEach((row, index) => {
     if (row.type === "assistant") {
       const last = groups[groups.length - 1];
       if (last !== undefined && "rows" in last && last.rows[0]!.groupId === row.groupId) {
@@ -265,9 +273,9 @@ export function claudeRowsToMessages(rows: readonly ClaudeMainRow[], providerId:
         groups.push({ rows: [row] });
       }
     } else {
-      groups.push({ row });
+      groups.push({ row, index });
     }
-  }
+  });
 
   // 配对审计状态：还没等到结果的 toolCall（按 toolCallId → 工具名）
   const pending = new Map<string, string>();
@@ -359,12 +367,18 @@ export function claudeRowsToMessages(rows: readonly ClaudeMainRow[], providerId:
       stats.emptyMessages += 1;
       continue;
     }
-    const texts: string[] = [];
+    // 文字与图片按原顺序收（用户粘贴的图在文字前还是后，模型当时就是这么读的）
+    const parts: UserMessage["content"] = [];
     const toolResults: { toolUseId: string; isError: boolean; content: ToolResultMessage["content"] }[] = [];
     for (const block of row.blocks) {
       if (!isRecord(block)) continue;
       if (block["type"] === "text" && typeof block["text"] === "string") {
-        if (block["text"] !== "") texts.push(block["text"]);
+        if (block["text"] !== "") parts.push({ type: "text", text: block["text"] });
+      } else if (block["type"] === "image") {
+        // 用户粘贴的图（Claude Code 的用户行里有；Proma 界面日志里没有）
+        const image = toImageBlock(block);
+        if (image === null) stats.droppedBlocks += 1;
+        else parts.push(image);
       } else if (block["type"] === "tool_result" && typeof block["tool_use_id"] === "string") {
         toolResults.push({
           toolUseId: block["tool_use_id"],
@@ -395,19 +409,33 @@ export function claudeRowsToMessages(rows: readonly ClaudeMainRow[], providerId:
         timestamp,
       });
     }
-    if (texts.length > 0) {
+    if (parts.length > 0) {
       patchPending();
       const timestamp = row.timestamp || lastTimestamp;
       lastTimestamp = timestamp;
-      const content: UserMessage["content"] = texts.map((text) => ({ type: "text", text }));
-      messages.push({ role: "user", content, timestamp });
+      messages.push({ role: "user", content: parts, timestamp });
+      userRowIndexes.push(group.index);
     } else if (toolResults.length === 0) {
       // 空行（无有效块）
       stats.emptyMessages += 1;
     }
   }
   patchPending();
-  return { messages, stats };
+  return { messages, stats, userRowIndexes };
+}
+
+/** Anthropic 的 base64 图片块 → pi 图片块；url 形态拿不到数据本体，返回 null。 */
+function toImageBlock(block: Record<string, unknown>): { type: "image"; data: string; mimeType: string } | null {
+  const source = isRecord(block["source"]) ? block["source"] : null;
+  if (
+    source !== null &&
+    source["type"] === "base64" &&
+    typeof source["data"] === "string" &&
+    typeof source["media_type"] === "string"
+  ) {
+    return { type: "image", data: source["data"], mimeType: source["media_type"] };
+  }
+  return null;
 }
 
 /** tool_result 的 content：string → 单 text 块；数组 → text/image 块翻译（url 图像跳过）。 */
@@ -422,18 +450,10 @@ function toToolResultContent(raw: unknown, stats: ClaudeMessageStats): ToolResul
     if (element["type"] === "text" && typeof element["text"] === "string") {
       if (element["text"] !== "") content.push({ type: "text", text: element["text"] });
     } else if (element["type"] === "image") {
-      const source = isRecord(element["source"]) ? element["source"] : null;
-      if (
-        source !== null &&
-        source["type"] === "base64" &&
-        typeof source["data"] === "string" &&
-        typeof source["media_type"] === "string"
-      ) {
-        content.push({ type: "image", data: source["data"], mimeType: source["media_type"] });
-      } else {
-        // url 形态的图像拿不到数据本体
-        stats.droppedBlocks += 1;
-      }
+      const image = toImageBlock(element);
+      // url 形态的图像拿不到数据本体
+      if (image === null) stats.droppedBlocks += 1;
+      else content.push(image);
     } else {
       stats.droppedBlocks += 1;
     }
