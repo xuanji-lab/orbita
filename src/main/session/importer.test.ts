@@ -308,7 +308,8 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.equal(m1.importedModel, "qwen3.7-max");
     assert.equal(m1.importedFrom, join(promaRoot, "sdk-config", "sessions", REAL[0]!.file));
     assert.equal(m1.createdAt, 1784521400025);
-    assert.equal(m1.updatedAt, 1784522308322);
+    // updatedAt = 最后一条问答的时刻（索引写的是 1784522308322，晚 36 秒——Proma 的非消息操作推的）
+    assert.equal(m1.updatedAt, 1784522272190);
     assert.equal(m1.archived, true);
     assert.equal(m1.pinned, false);
     // pi 副本落在 orbita 自己的目录（自包含），且原字节等长
@@ -1087,6 +1088,30 @@ describe("Proma 的置顶与星标是两个字段", () => {
     assert.equal(pinnedMeta?.starred, false);
     assert.equal(starredMeta?.pinned, false);
     assert.equal(starredMeta?.starred, true);
+  });
+});
+
+describe("会话时间按问答时间算", () => {
+  test("索引的 updatedAt 被非消息操作推高 → 用最后一条问答的时刻；没有消息才退回索引", async () => {
+    // writePiSession 的两条消息时间是 1780000001000 / 1780000002000
+    const withMessages = await writePiSession("2026-09-01T00-00-00-000Z_qat-000000000000001.jsonl", "/tmp/q");
+    const empty = join(promaRoot, "sdk-config", "sessions", "2026-09-01T00-00-00-000Z_emp-000000000000002.jsonl");
+    await writeFile(empty, `${JSON.stringify({ type: "session", version: 3, id: "emp", timestamp: "2026-09-01T00:00:00.000Z", cwd: "/tmp/q" })}\n`);
+    await writeIndex([
+      { id: "archived-later", title: "归档推高", piSessionFile: withMessages, createdAt: 1779999999000, updatedAt: 1790000000000 },
+      { id: "no-messages", title: "空会话", piSessionFile: empty, createdAt: 1779000000000, updatedAt: 1779500000000 },
+    ]);
+    const report = await scanImport(deps());
+    const by = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.equal(by.get("archived-later")?.updatedAt, 1780000002000);
+    assert.equal(by.get("no-messages")?.updatedAt, 1779500000000);
+  });
+
+  test("分叉会话带着源会话的旧消息：不早于它被创建的时刻", async () => {
+    const forked = await writePiSession("2026-09-01T00-00-00-000Z_frk-000000000000003.jsonl", "/tmp/q");
+    await writeIndex([{ id: "fork", title: "分叉", piSessionFile: forked, createdAt: 1785000000000, updatedAt: 1785000000500 }]);
+    const report = await scanImport(deps());
+    assert.equal(report.plan[0]?.updatedAt, 1785000000000);
   });
 });
 

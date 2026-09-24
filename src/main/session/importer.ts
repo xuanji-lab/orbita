@@ -855,7 +855,11 @@ export async function scanImport(
       pinned: entry.pinned,
       starred: entry.starred,
       createdAt: entry.createdAt ?? (source.headerTimestamp || Date.now()),
-      updatedAt: entry.updatedAt ?? entry.createdAt ?? (source.headerTimestamp || Date.now()),
+      updatedAt: qaTime(
+        lastQaTimestamp(sessionEntries),
+        entry.createdAt,
+        entry.updatedAt ?? entry.createdAt ?? (source.headerTimestamp || Date.now()),
+      ),
       bytes,
     });
   }
@@ -943,7 +947,7 @@ export async function scanImport(
       pinned: entry.pinned,
       starred: entry.starred,
       createdAt,
-      updatedAt: entry.updatedAt ?? entry.createdAt ?? createdAt,
+      updatedAt: qaTime(lastRowTimestamp(rows), entry.createdAt, entry.updatedAt ?? entry.createdAt ?? createdAt),
       bytes,
     });
   }
@@ -1084,6 +1088,45 @@ function linkSubSessions(
     subSessionCount += 1;
   }
   return { subSessionCount, orphanedSubSessions };
+}
+
+/**
+ * 会话的 updatedAt 取**问答时间**：最后一条 user / assistant 消息的时刻（wafo 2026-09-24：
+ * 进 orbita 后按会话内部的问答时间排，不按导入时间，也不按 Proma 索引的 updatedAt）。
+ *
+ * 为什么不信索引：Proma 的归档、置顶这类不发消息的操作也会推高它。本机 423 条可比的根会话
+ * 里 53 条比最后一条消息晚 1 小时以上，52 条是成批归档的（时间扎堆在 07-25 22:03、08-17 13:33、
+ * 09-05 12:43），导进来会按归档那一刻排。orbita 自己也只在追加消息时推 updatedAt，
+ * 置顶、改名都不动它——导入的会话与原生会话由此同一口径。
+ *
+ * 不早于 createdAt：Proma 的分叉会话带着源会话的旧消息，没发新消息时「最后一条问答」早于
+ * 它被创建的时刻；建分叉是用户真做过的事，按创建时刻排。没有任何消息时退回索引值。
+ */
+function qaTime(lastQa: number | null, createdAt: number | null, fallback: number): number {
+  if (lastQa === null) return fallback;
+  return createdAt === null ? lastQa : Math.max(lastQa, createdAt);
+}
+
+/** pi 文件里最后一条 user / assistant 消息的时刻；一条都没有返回 null。 */
+function lastQaTimestamp(entries: readonly SessionEntry[]): number | null {
+  let last: number | null = null;
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    const message = asRecord(entry.message);
+    if (message === null || (message["role"] !== "user" && message["role"] !== "assistant")) continue;
+    const timestamp = messageTimestamp(entry, message);
+    if (timestamp !== 0 && (last === null || timestamp > last)) last = timestamp;
+  }
+  return last;
+}
+
+/** claude legacy 行里最晚的时间戳（行里只有主对话的 user / assistant）。 */
+function lastRowTimestamp(rows: readonly ClaudeMainRow[]): number | null {
+  let last: number | null = null;
+  for (const row of rows) {
+    if (row.timestamp !== 0 && (last === null || row.timestamp > last)) last = row.timestamp;
+  }
+  return last;
 }
 
 /** claude legacy 行里最早的时间戳（索引缺 createdAt 时的兜底；_createdAt 也在 rowTimestamp 里）。 */
