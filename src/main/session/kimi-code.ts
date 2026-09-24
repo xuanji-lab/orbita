@@ -30,8 +30,8 @@
  *   inputCacheCreation→cacheWrite。
  * - 工具结果里的图是 `blobref:<mime>;<sha256>`，本体在 `agents/main/blobs/<sha256>`（原始字节）。
  *   调用方先用 kimiBlobRefs 列出引用、读成 base64 传进来；读不到的换一行文字说明。
- * - 配对审计同 claude-legacy：孤儿结果丢弃，悬空的 toolCall 在下一条 user / assistant / 文件尾
- *   前补合成结果（续聊时 API 要求严格配对）。
+ * - 配对审计（tool-pairing.ts，与 opencode 共用）：孤儿结果丢弃，悬空的 toolCall 在下一条
+ *   user / assistant / 文件尾前补合成结果（续聊时 API 要求严格配对）。
  * - 用户消息在 transcript 里的原文：用户写的原样；用户敲的 /技能 写成「/名字 参数」；
  *   其余（注入、技能正文、任务通知）为 null——pi 副本里照留，transcript 不显示。
  */
@@ -45,6 +45,7 @@ import type {
   Usage,
   UserMessage,
 } from "@earendil-works/pi-ai";
+import { auditToolPairs } from "./tool-pairing.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -139,7 +140,7 @@ interface WireLine {
 
 type Entry =
   | { kind: "user"; message: UserMessage; display: string | null; anchor: boolean; id: string | null; owner: string | null }
-  | { kind: "assistant"; message: AssistantMessage; calls: { id: string; name: string }[] }
+  | { kind: "assistant"; message: AssistantMessage }
   | { kind: "result"; message: ToolResultMessage };
 
 /** 一个还没 step.end 的 step：块按到达顺序收，结果等 assistant 落定后再放。 */
@@ -302,7 +303,6 @@ export function parseKimiWire(raw: string, providerId: string, blobs: ReadonlyMa
           stopReason: toStopReason(finishReason, step.calls.length > 0),
           timestamp: step.time,
         },
-        calls: step.calls,
       });
       for (const result of step.results) entries.push({ kind: "result", message: result });
     }
@@ -417,52 +417,16 @@ export function parseKimiWire(raw: string, providerId: string, blobs: ReadonlyMa
   }
   closeStep("interrupted", null);
 
-  // 配对审计：孤儿结果丢弃，悬空 toolCall 在下一条 user / assistant / 文件尾前补结果
-  const messages: Message[] = [];
-  const userDisplays: (string | null)[] = [];
-  const pending = new Map<string, string>();
-  let patchTime = 0;
-  const patch = (): void => {
-    for (const [toolCallId, toolName] of pending) {
-      stats.patchedToolCalls += 1;
-      messages.push({
-        role: "toolResult",
-        toolCallId,
-        toolName,
-        content: [{ type: "text", text: "[kimi-code import] 原会话在此处被打断，工具结果缺失，导入时补此占位。" }],
-        isError: true,
-        timestamp: patchTime,
-      });
-    }
-    pending.clear();
+  const audited = auditToolPairs(entries, "kimi-code");
+  stats.orphanToolResults = audited.orphanToolResults;
+  stats.patchedToolCalls = audited.patchedToolCalls;
+  return {
+    messages: audited.messages,
+    userDisplays: audited.userDisplays,
+    model,
+    firstPrompt: audited.firstPrompt,
+    firstAt: audited.firstAt,
+    lastAt: audited.lastAt,
+    stats,
   };
-  let firstPrompt: string | null = null;
-  let firstAt: number | null = null;
-  let lastAt: number | null = null;
-  for (const entry of entries) {
-    if (entry.kind === "result") {
-      const name = pending.get(entry.message.toolCallId);
-      if (name === undefined) {
-        stats.orphanToolResults += 1;
-        continue;
-      }
-      pending.delete(entry.message.toolCallId);
-      messages.push({ ...entry.message, toolName: name });
-      patchTime = entry.message.timestamp;
-      continue;
-    }
-    patch();
-    messages.push(entry.message);
-    patchTime = entry.message.timestamp;
-    firstAt ??= entry.message.timestamp;
-    lastAt = entry.message.timestamp;
-    if (entry.kind === "assistant") {
-      for (const call of entry.calls) pending.set(call.id, call.name);
-    } else {
-      userDisplays.push(entry.display);
-      if (firstPrompt === null && entry.display !== null && entry.display.trim() !== "") firstPrompt = entry.display;
-    }
-  }
-  patch();
-  return { messages, userDisplays, model, firstPrompt, firstAt, lastAt, stats };
 }

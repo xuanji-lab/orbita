@@ -61,6 +61,13 @@ import {
   type ClaudeDesktopSession,
 } from "./claude-code.ts";
 import { kimiBlobRefs, parseKimiSessionState, parseKimiWire } from "./kimi-code.ts";
+import {
+  opencodeSessionBytes,
+  opencodeToMessages,
+  readOpencodeMessages,
+  readOpencodeSessions,
+  withOpencodeDb,
+} from "./opencode.ts";
 import { aggregatePrefixUsage } from "./store.ts";
 import {
   claudeCodeSkillDirs,
@@ -78,6 +85,7 @@ import {
   mergeMcpEntries,
   readClaudeCodeMcp,
   readKimiCodeMcp,
+  readOpencodeMcp,
   readPromaMcp,
   type McpSourceEntry,
 } from "../mcp/import.ts";
@@ -132,6 +140,16 @@ export interface KimiCodePaths {
   home: string;
 }
 
+/** opencode 来源要读的位置。全部**只读**（库按只读方式打开）。 */
+export interface OpencodePaths {
+  /** 会话库（~/.local/share/opencode/opencode.db） */
+  dbFile: string;
+  /** 用户配置（~/.config/opencode/opencode.json）：只读其中的 mcp */
+  configFile: string;
+  /** 家目录：在家目录里开的会话不算有文件夹 */
+  home: string;
+}
+
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
 export interface ImporterDeps {
   /** Proma 数据根（~/.proma-dev）。**只读** */
@@ -140,6 +158,8 @@ export interface ImporterDeps {
   claudeCode?: ClaudeCodePaths;
   /** Kimi Code 来源的位置。不传 = 扫描勾了它也不读 */
   kimiCode?: KimiCodePaths;
+  /** opencode 来源的位置。不传 = 扫描勾了它也不读 */
+  opencode?: OpencodePaths;
   /** 多家共用的 skills 目录（~/.agents/skills，来源 agent-skills）。不传 = 勾了也不读 */
   agentSkillsDir?: string;
   /** orbita 已有的 skill slug（含只剩断链的）：skills 重名判断的底 */
@@ -256,6 +276,17 @@ export async function probeKimiCode(paths: KimiCodePaths): Promise<ImportSourceP
     paths: [paths.sessionsDir, paths.workspacesFile, paths.mcpFile],
     found,
   };
+}
+
+/** opencode 来源的探测：只 stat 会话库。paths 是扫描会读的全部位置。 */
+export async function probeOpencode(paths: OpencodePaths): Promise<ImportSourceProbe> {
+  let found = false;
+  try {
+    found = (await stat(paths.dbFile)).isFile();
+  } catch {
+    found = false;
+  }
+  return { id: "opencode", label: "opencode", kind: "cli", paths: [paths.dbFile, paths.configFile], found };
 }
 
 /** 多家共用的 skills 目录（~/.agents/skills）：只 stat 这一个目录。 */
@@ -1176,7 +1207,7 @@ async function scanWithConfigs(
     });
   }
 
-  // —— 转换类来源（Claude Code、Kimi Code）：在 Proma 之后扫，同一文件夹复用 Proma 已计划新建的
+  // —— 转换类来源（Claude Code、Kimi Code、opencode）：在 Proma 之后扫，同一文件夹复用 Proma 已计划新建的
   //    工作区；「这次有两条及以上就新建工作区」跨来源计数 ——
   const converted: ConvertedCandidate[] = [];
   if (sources.includes("claude-code") && deps.claudeCode !== undefined) {
@@ -1186,6 +1217,11 @@ async function scanWithConfigs(
   }
   if (sources.includes("kimi-code") && deps.kimiCode !== undefined) {
     const found = await scanKimiCode(deps.kimiCode, deps, importedBySource);
+    skipped.push(...found.skipped);
+    converted.push(...found.candidates);
+  }
+  if (sources.includes("opencode") && deps.opencode !== undefined) {
+    const found = await scanOpencode(deps.opencode, deps, importedBySource);
     skipped.push(...found.skipped);
     converted.push(...found.candidates);
   }
@@ -1261,13 +1297,16 @@ async function scanWithConfigs(
           sources.includes("proma") ? await promaBuiltInSkills(deps.promaRoot) : new Set<string>(),
         );
 
-  // MCP：同名取先到的配置——Proma（按工作区顺序）→ Claude Code（全局 → 各项目）→ Kimi Code
+  // MCP：同名取先到的配置——Proma（按工作区顺序）→ Claude Code（全局 → 各项目）→ Kimi Code → opencode
   const mcpEntries: McpSourceEntry[] = await readPromaMcp(deps.promaRoot, promaFolders);
   if (sources.includes("claude-code") && deps.claudeCode !== undefined) {
     mcpEntries.push(...(await readClaudeCodeMcp(deps.claudeCode.claudeJson)));
   }
   if (sources.includes("kimi-code") && deps.kimiCode !== undefined) {
     mcpEntries.push(...(await readKimiCodeMcp(deps.kimiCode.mcpFile)));
+  }
+  if (sources.includes("opencode") && deps.opencode !== undefined) {
+    mcpEntries.push(...(await readOpencodeMcp(deps.opencode.configFile)));
   }
   const mcp = mergeMcpEntries(mcpEntries, new Set(deps.existingMcp ?? []));
 
@@ -1669,6 +1708,76 @@ async function scanKimiCode(
         ...place,
       });
     }
+  }
+  return { candidates, skipped };
+}
+
+// ---------------------------------------------------------------------------
+// opencode 来源
+// ---------------------------------------------------------------------------
+
+/** opencode 会话的幂等键：库里没有会话文件，写成「库路径#会话 id」。 */
+function opencodeSourceKey(dbFile: string, sessionId: string): string {
+  return `${resolve(dbFile)}#${sessionId}`;
+}
+
+/**
+ * 扫 opencode 的库：根会话一条一条（子会话是 task 工具派出去的子 agent，不列）。与执行同一条
+ * 转换判断能不能导（整库 70 条会话的读取与转换本机约 200ms）。
+ *
+ * 标题：opencode 的标题（默认的「New session - 时间」不算）> 第一句用户写的话 > 「opencode session」。
+ * 文件夹：会话的 directory；去向由 placeConverted 统一定。导过的一律 already-imported（副本是
+ * 转换构造的，再次导入没做）。库打不开（格式不认识、被锁）整次扫描报错，不静默当成没有会话。
+ */
+async function scanOpencode(
+  paths: OpencodePaths,
+  deps: ImporterDeps,
+  importedBySource: ReadonlyMap<string, readonly SessionMeta[]>,
+): Promise<{ candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] }> {
+  const candidates: ConvertedCandidate[] = [];
+  const skipped: ImportSkipItem[] = [];
+  try {
+    await stat(paths.dbFile);
+  } catch (cause) {
+    if (isNotFound(cause)) return { candidates, skipped };
+    throw cause;
+  }
+  const found = withOpencodeDb(paths.dbFile, (db) =>
+    readOpencodeSessions(db).map((session) => {
+      const sourceFile = opencodeSourceKey(paths.dbFile, session.id);
+      if (importedBySource.has(sourceFile)) return { session, sourceFile, parsed: null, bytes: 0 };
+      return {
+        session,
+        sourceFile,
+        parsed: opencodeToMessages(readOpencodeMessages(db, session.id), "scan", session.revert),
+        bytes: opencodeSessionBytes(db, session.id),
+      };
+    }),
+  );
+  for (const { session, sourceFile, parsed, bytes } of found) {
+    if (parsed === null) {
+      skipped.push({ sourceId: session.id, title: session.title, reason: "already-imported" });
+      continue;
+    }
+    const title = deriveSessionTitle(session.title ?? parsed.firstPrompt ?? "") || "opencode session";
+    if (!parsed.messages.some((message) => message.role === "assistant")) {
+      skipped.push({ sourceId: session.id, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+      continue;
+    }
+    const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd);
+    const createdAt = session.createdAt || parsed.firstAt || Date.now();
+    candidates.push({
+      source: "opencode",
+      sourceKind: "opencode",
+      sourceId: session.id,
+      sourceFile,
+      title,
+      model: parsed.model,
+      createdAt,
+      updatedAt: qaTime(parsed.lastAt, createdAt, session.updatedAt || createdAt),
+      bytes,
+      ...place,
+    });
   }
   return { candidates, skipped };
 }
@@ -2109,7 +2218,9 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
             ? await runClaudeCodeImport(item, deps)
             : item.sourceKind === "kimi-code"
               ? await runKimiCodeImport(item, deps)
-              : await runPiImport(
+              : item.sourceKind === "opencode"
+                ? await runOpencodeImport(item, deps)
+                : await runPiImport(
               item,
               deps,
               // 另导一份：不能落在原会话副本的文件名上（会盖掉 orbita 接着聊的那份），换一个
@@ -2317,6 +2428,7 @@ function sourceOfImported(deps: ImporterDeps, sourceFile: string): ImportSourceI
   const under = (root: string | undefined): boolean => root !== undefined && sourceFile.startsWith(`${resolve(root)}/`);
   if (under(deps.claudeCode?.projectsDir)) return "claude-code";
   if (under(deps.kimiCode?.sessionsDir)) return "kimi-code";
+  if (deps.opencode !== undefined && sourceFile.startsWith(`${resolve(deps.opencode.dbFile)}#`)) return "opencode";
   return "proma";
 }
 
@@ -2352,6 +2464,23 @@ async function runKimiCodeImport(item: ImportPlanItem, deps: RunImporterDeps): P
   }
   const wire = parseKimiWire(raw, item.providerId, blobs);
   return persistConverted(item, deps, wire.messages, wire.userDisplays);
+}
+
+/**
+ * opencode 会话的灌入：按幂等键拆出库路径与会话 id，只读打开库取这条会话的消息 →
+ * opencode.ts 转换 → persistConverted。
+ */
+async function runOpencodeImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+  const cut = item.sourceFile.lastIndexOf("#");
+  if (cut === -1) throw new Error(`not an opencode session key: ${item.sourceFile}`);
+  const dbFile = item.sourceFile.slice(0, cut);
+  const sessionId = item.sourceFile.slice(cut + 1);
+  const parsed = withOpencodeDb(dbFile, (db) => {
+    const session = readOpencodeSessions(db).find((candidate) => candidate.id === sessionId);
+    if (session === undefined) throw new Error("the session is no longer in opencode's database");
+    return opencodeToMessages(readOpencodeMessages(db, sessionId), item.providerId, session.revert);
+  });
+  return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
 }
 
 /**

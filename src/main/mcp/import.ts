@@ -8,6 +8,8 @@
  * - Claude Code：`~/.claude.json` 顶层 `mcpServers`（全局）与 `projects[目录].mcpServers`（只对那个项目），
  *   `{ type: stdio|http|sse, command, args, env, url, headers }`，缺 type 的按 stdio。
  * - Kimi Code：`~/.kimi-code/mcp.json` → `{ mcpServers: {…} }`，与 Claude Code 同形。
+ * - opencode：`~/.config/opencode/opencode.json` 的 `mcp` → `{ 名: { type: local, command: [命令, …参数],
+ *   environment } | { type: remote, url, headers } }`（另有 enabled），形状不同，单独转。
  *
  * 转成 orbita 的形状（McpServer）：stdio → command / args / env / cwd；http → url / headers。
  * **SSE 传输 orbita 不支持**（只有 stdio 与 streamable HTTP），列出来标 unsupported，不硬转成 http——
@@ -73,10 +75,39 @@ export function toOrbitaServer(raw: unknown): McpServer | string {
   };
 }
 
-function entriesOf(servers: unknown, origin: ImportMcpOrigin): McpSourceEntry[] {
+/**
+ * opencode 的一条配置 → orbita 的 McpServer。local 的 command 是数组（命令 + 参数）；remote 是
+ * streamable HTTP（opencode 自己连不上时退 SSE，orbita 只走前者）。
+ */
+export function opencodeToOrbitaServer(raw: unknown): McpServer | string {
+  if (!isRecord(raw)) return "not a server entry";
+  const type = raw["type"];
+  if (type === "remote") {
+    const url = typeof raw["url"] === "string" && raw["url"] !== "" ? raw["url"] : null;
+    if (url === null) return "no URL";
+    const headers = stringRecord(raw["headers"]);
+    return { transport: "http", url, ...(headers === null ? null : { headers }) };
+  }
+  if (type !== "local") return `unknown transport: ${String(type)}`;
+  const [command, ...args] = stringList(raw["command"]) ?? [];
+  if (command === undefined || command === "") return "no command";
+  const env = stringRecord(raw["environment"]);
+  return {
+    transport: "stdio",
+    command,
+    ...(args.length === 0 ? null : { args }),
+    ...(env === null ? null : { env }),
+  };
+}
+
+function entriesOf(
+  servers: unknown,
+  origin: ImportMcpOrigin,
+  convert: (raw: unknown) => McpServer | string = toOrbitaServer,
+): McpSourceEntry[] {
   if (!isRecord(servers)) return [];
   return Object.entries(servers).map(([name, raw]) => {
-    const converted = toOrbitaServer(raw);
+    const converted = convert(raw);
     return typeof converted === "string"
       ? { origin, name, server: null, reason: converted }
       : { origin, name, server: converted, reason: null };
@@ -121,6 +152,12 @@ export async function readClaudeCodeMcp(claudeJson: string): Promise<McpSourceEn
 export async function readKimiCodeMcp(file: string): Promise<McpSourceEntry[]> {
   const parsed = await readJson(file);
   return isRecord(parsed) ? entriesOf(parsed["mcpServers"], { source: "kimi-code", where: null }) : [];
+}
+
+/** opencode：~/.config/opencode/opencode.json 的 mcp（全局配置，没有按项目的）。 */
+export async function readOpencodeMcp(file: string): Promise<McpSourceEntry[]> {
+  const parsed = await readJson(file);
+  return isRecord(parsed) ? entriesOf(parsed["mcp"], { source: "opencode", where: null }, opencodeToOrbitaServer) : [];
 }
 
 /**
