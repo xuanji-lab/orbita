@@ -39,7 +39,7 @@ export const RANGE_LABEL: Record<RangeFilter, string> = {
   "90d": "Last 90 days",
 };
 
-export const SOURCE_LABEL: Record<ImportSourceId, string> = { proma: "Proma" };
+export const SOURCE_LABEL: Record<ImportSourceId, string> = { proma: "Proma", "claude-code": "Claude Code" };
 
 export interface SessionRow {
   item: ImportPlanItem;

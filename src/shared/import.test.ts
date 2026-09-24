@@ -1,10 +1,20 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { parseImportRunInput, parseImportScanInput } from "./import.ts";
+import { isImportSourceId, parseImportRunInput, parseImportScanInput } from "./import.ts";
 
 describe("parseImportScanInput", () => {
   test("认识的来源原样通过，重复的去重", () => {
     assert.deepEqual(parseImportScanInput({ sources: ["proma", "proma"] }), { sources: ["proma"] });
+    assert.deepEqual(parseImportScanInput({ sources: ["claude-code", "proma"] }), {
+      sources: ["claude-code", "proma"],
+    });
+  });
+
+  test("isImportSourceId 只认契约里的来源", () => {
+    assert.equal(isImportSourceId("claude-code"), true);
+    assert.equal(isImportSourceId("proma"), true);
+    assert.equal(isImportSourceId("codex"), false);
+    assert.equal(isImportSourceId(1), false);
   });
 
   test("空来源合法（什么都不读）", () => {

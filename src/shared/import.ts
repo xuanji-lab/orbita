@@ -13,10 +13,14 @@
  */
 
 /**
- * 迁移来源。本刀只有 Proma；Claude Code / Kimi Code / opencode 各自一刀再加进来
+ * 迁移来源。Kimi Code / opencode 各自一刀再加进来
  * （2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
+ *
+ * - proma：Proma 桌面应用（~/.proma-dev）
+ * - claude-code：Claude Code 的会话存储（~/.claude/projects），命令行与 Claude 桌面应用共用；
+ *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题
  */
-export type ImportSourceId = "proma";
+export type ImportSourceId = "proma" | "claude-code";
 
 /**
  * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
@@ -91,12 +95,12 @@ export type ImportSkipReason =
   | "bad-session-file"
   /** agent-sessions.json 里这条索引本身坏了（缺 id / 路径不是字符串等） */
   | "bad-index-entry"
-  /** 能读但转不出可续聊内容：claude legacy 文件里没有 assistant 消息
-   *  （纯旧扁平 / 空 draft——pi 只在有 assistant 消息时才落盘文件） */
+  /** 能读但转不出可续聊内容：claude legacy / Claude Code 文件里没有 assistant 消息
+   *  （纯旧扁平 / 空 draft / 只开了个头——pi 只在有 assistant 消息时才落盘文件） */
   | "unsupported-format";
 
 export interface ImportSkipItem {
-  /** Proma 索引里的会话 id；坏到连 id 都没有时用文件内序号顶上（报告要对得上数） */
+  /** 源侧的会话 id；Proma 索引坏到连 id 都没有时用文件内序号顶上（报告要对得上数） */
   sourceId: string;
   /** 会话标题（报告里给人看是哪条；坏条目可能没有） */
   title: string | null;
@@ -123,7 +127,10 @@ export type ImportSourceKind =
   /** Proma 的 pi 真源（sdk-config/sessions/）：同构复制 + 派生 */
   | "pi"
   /** Claude Code 时代渲染 JSONL（agent-sessions/<id>.jsonl）：转换构造 pi 文件 */
-  | "claude-legacy";
+  | "claude-legacy"
+  /** Claude Code 自己的会话文件（~/.claude/projects/<目录>/<id>.jsonl）：同一套消息形状，
+   *  行上多了 parentUuid 树与各种非消息行，清洗后走同一条转换 */
+  | "claude-code";
 
 /**
  * 一条计划条目相对 orbita 的状态（再次导入，wafo 2026-09-24 23:55 裁决）。
@@ -150,7 +157,7 @@ export interface ImportPlanItem {
   change: ImportChange;
   /** updated / diverged：导入之后 Proma 里新增的 user + assistant 消息数；其余为 0 */
   newMessages: number;
-  /** Proma 索引里的会话 id */
+  /** 源侧的会话 id（Proma 索引 id / Claude Code 会话文件名） */
   sourceId: string;
   /** 来自哪个来源（页面按它给组内的来源分项计数） */
   source: ImportSourceId;
@@ -158,7 +165,8 @@ export interface ImportPlanItem {
   /**
    * 源侧的文件夹，也是页面的分组键与去向的覆盖键。Proma = 所属工作区的
    * projectRootPath；没有（默认工作区 / 无归属 / 工作区已删）= null。母会话在计划里的
-   * 子会话取母会话的。以后的来源按各自的 cwd 填，同一文件夹的不同来源并成一组
+   * 子会话取母会话的。Claude Code = 会话的工作目录（家目录、已不在盘上的目录 = null）。
+   * 同一文件夹的不同来源并成一组
    */
   folder: string | null;
   /** 源文件绝对路径（pi 真源或 claude 渲染 JSONL）——同时是幂等键（meta.importedFrom 存它） */
@@ -186,7 +194,11 @@ export interface ImportPlanItem {
   parentId: string | null;
   /** false = 没有匹配到已注册模型，用了默认兜底 */
   modelMatched: boolean;
-  /** Proma 侧的归档态照搬——归档过的会话导进来还是归档的 */
+  /**
+   * Proma 侧的归档态照搬——归档过的会话导进来还是归档的。以下三个状态只有 Proma 映射；
+   * 其余来源一律 false（2026-09-24 迁移边界：只迁聊天记录与最少的组织信息，不适配
+   * 源应用自己的会话管理功能）
+   */
   archived: boolean;
   /** Proma 的置顶（`pinned`）→ orbita 的置顶 */
   pinned: boolean;
@@ -266,7 +278,12 @@ export function isSelectablePlanItem(item: ImportPlanItem, planSessionIds: Reado
 // IPC 边界的入参校验
 // ---------------------------------------------------------------------------
 
-const SOURCE_IDS: readonly string[] = ["proma"] satisfies readonly ImportSourceId[];
+const SOURCE_IDS: readonly string[] = ["proma", "claude-code"] satisfies readonly ImportSourceId[];
+
+/** 来源 id 的运行时判定：IPC 入参与导入清单（imports.jsonl）读回时共用。 */
+export function isImportSourceId(value: unknown): value is ImportSourceId {
+  return typeof value === "string" && SOURCE_IDS.includes(value);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -277,8 +294,8 @@ function parseSources(raw: unknown): ImportSourceId[] {
   const out: ImportSourceId[] = [];
   for (const id of raw) {
     // 不认识的来源整体拒绝：静默丢掉会让「勾了但没扫」看起来像「扫了但是空的」
-    if (typeof id !== "string" || !SOURCE_IDS.includes(id)) throw new Error(`unknown import source: ${String(id)}`);
-    if (!out.includes(id as ImportSourceId)) out.push(id as ImportSourceId);
+    if (!isImportSourceId(id)) throw new Error(`unknown import source: ${String(id)}`);
+    if (!out.includes(id)) out.push(id);
   }
   return out;
 }
