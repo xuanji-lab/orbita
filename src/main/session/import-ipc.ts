@@ -27,11 +27,13 @@ import {
   emptyScanReport,
   probeAgentSkills,
   probeClaudeCode,
+  probeKimiCode,
   probeProma,
   runImport,
   scanImport,
   type ClaudeCodePaths,
   type ImporterDeps,
+  type KimiCodePaths,
 } from "./importer.ts";
 
 export function registerImportIpc(
@@ -71,6 +73,7 @@ export function registerImportIpc(
       // 66 条），文件仍在且是同一格式——旧根也是合法源，同样只读
       extraSourceRoots: legacyPromaRoots(),
       claudeCode: claudeCodePaths(),
+      kimiCode: kimiCodePaths(),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
       // mcp.json 坏了不挡扫描：会话与 skills 照导，MCP 写入时会各自报错
@@ -92,6 +95,7 @@ export function registerImportIpc(
     sources: [
       await probeProma(joinPromaRoot(), legacyPromaRoots()),
       await probeClaudeCode(claudeCodePaths()),
+      await probeKimiCode(kimiCodePaths()),
       await probeAgentSkills(agentSkillsDir()),
     ],
   }));
@@ -155,6 +159,18 @@ function claudeCodePaths(): ClaudeCodePaths {
     home,
     skillsDir: join(home, ".claude", "skills"),
     claudeJson: join(home, ".claude.json"),
+  };
+}
+
+/** Kimi Code 的数据都在 ~/.kimi-code 下（命令行，各平台同一位置）。探测与扫描同一份。 */
+function kimiCodePaths(): KimiCodePaths {
+  const home = homedir();
+  const root = join(home, ".kimi-code");
+  return {
+    sessionsDir: join(root, "sessions"),
+    workspacesFile: join(root, "workspaces.json"),
+    mcpFile: join(root, "mcp.json"),
+    home,
   };
 }
 
