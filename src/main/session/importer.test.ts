@@ -63,8 +63,10 @@ function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
     registeredModels: REGISTERED,
     fallbackModel: FALLBACK,
     newId: takeId,
+    ledgerFile: join(root, "imports.jsonl"),
     createWorkspace: async () => undefined,
     persistSession: async (meta, records) => store.commitImported(meta, records),
+    refreshSession: async (id, records, patch) => store.commitImportUpdate(id, records, patch),
     ...overrides,
   };
   return base;
@@ -1188,6 +1190,203 @@ describe("用户消息还原成原文（Proma 的 prompt builder 拼进去的东
     await seed([userRow("只有一条")]);
     await runImport(deps());
     assert.deepEqual(await userTexts(), ["第一条用户消息", "@/Users/me/plan.html 这个计划太描述性了"]);
+  });
+});
+
+describe("再次导入：对照 orbita 的副本与导入清单", () => {
+  /** Proma 里又聊了一轮：user + assistant 两条消息接在 e2 后面 */
+  const moreTurn = (suffix: string): unknown[] => [
+    {
+      type: "message",
+      id: `p-${suffix}-u`,
+      parentId: "e2",
+      timestamp: "2026-09-02T00:00:01.000Z",
+      message: { role: "user", content: [{ type: "text", text: `Proma 里的追问 ${suffix}` }], timestamp: 1780100001000 },
+    },
+    {
+      type: "message",
+      id: `p-${suffix}-a`,
+      parentId: `p-${suffix}-u`,
+      timestamp: "2026-09-02T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Proma 里的回答" }],
+        provider: "proma-x",
+        model: "glm-5.3",
+        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: 1780100002000,
+      },
+    },
+  ];
+
+  /** 在 orbita 接着聊：往 orbita 的副本里追加一条 Proma 没有的 entry */
+  async function continueInOrbita(meta: SessionMeta): Promise<void> {
+    const line = {
+      type: "message",
+      id: "orbita-only",
+      parentId: "e2",
+      timestamp: "2026-09-03T00:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text: "在 orbita 问的" }], timestamp: 1780200000000 },
+    };
+    await writeFile(meta.piSessionFile ?? "", `${await readFile(meta.piSessionFile ?? "", "utf8")}${JSON.stringify(line)}\n`);
+  }
+
+  async function appendToSource(path: string, lines: unknown[]): Promise<void> {
+    await writeFile(path, `${await readFile(path, "utf8")}${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  }
+
+  async function importAll(): Promise<void> {
+    await runImport(deps({ existingMetas: await store.list() }));
+  }
+
+  test("Proma 有新消息、orbita 没接着聊 → updated：追加进同一条会话，orbita 这边的标题与星标不被盖掉", async () => {
+    const pi = await writePiSession("2026-09-01T00-00-00-000Z_upd-000000000000001.jsonl", "/tmp/r");
+    await writeIndex([{ id: "a", title: "原标题", piSessionFile: pi, createdAt: 1, updatedAt: 2 }]);
+    await importAll();
+    const [before] = await store.list();
+    assert.ok(before !== undefined);
+    await store.rename(before.id, "在 orbita 改的名");
+    await store.setStarred(before.id, true);
+
+    await appendToSource(pi, moreTurn("1"));
+    // Proma 侧改标题、归档：不跟
+    await writeIndex([{ id: "a", title: "Proma 后来改的名", piSessionFile: pi, createdAt: 1, updatedAt: 9, archived: true }]);
+
+    const report = await scanImport(deps({ existingMetas: await store.list() }));
+    assert.equal(report.plan.length, 1);
+    const item = report.plan[0];
+    assert.ok(item !== undefined);
+    assert.deepEqual([item.change, item.newMessages, item.sessionId], ["updated", 2, before.id]);
+    assert.equal(report.newWorkspaces.length, 0);
+
+    const run = await runImport(deps({ existingMetas: await store.list() }));
+    assert.deepEqual([run.imported, run.updated, run.failed.length], [0, 1, 0]);
+    const metas = await store.list();
+    assert.equal(metas.length, 1);
+    const after = metas[0];
+    assert.ok(after !== undefined);
+    assert.equal(after.id, before.id);
+    assert.equal(after.title, "在 orbita 改的名");
+    assert.equal(after.starred, true);
+    assert.equal(after.archived, false);
+    assert.equal(after.updatedAt, 1780100002000);
+    assert.equal(after.recentQueries[0], "Proma 里的追问 1");
+    const detail = await store.load(after.id);
+    assert.equal(detail?.transcript.length, 4);
+    // 副本与源再次一致；重扫不再列出
+    assert.equal(await readFile(after.piSessionFile ?? "", "utf8"), await readFile(pi, "utf8"));
+    const again = await scanImport(deps({ existingMetas: await store.list() }));
+    assert.equal(again.plan.length, 0);
+    assert.equal(again.skipped.filter((skip) => skip.reason === "already-imported").length, 1);
+  });
+
+  test("两边都接着聊了 → diverged：另导一份放在原会话旁边，原会话与它的副本不动", async () => {
+    const pi = await writePiSession("2026-09-01T00-00-00-000Z_div-000000000000002.jsonl", "/tmp/r");
+    await writeIndex([{ id: "b", title: "两边都聊", piSessionFile: pi, createdAt: 1, updatedAt: 2 }]);
+    await importAll();
+    const [original] = await store.list();
+    assert.ok(original !== undefined);
+    await continueInOrbita(original);
+    const originalCopy = await readFile(original.piSessionFile ?? "", "utf8");
+    await appendToSource(pi, moreTurn("2"));
+
+    const report = await scanImport(deps({ existingMetas: await store.list() }));
+    const item = report.plan[0];
+    assert.ok(item !== undefined);
+    assert.deepEqual([item.change, item.newMessages], ["diverged", 2]);
+    assert.notEqual(item.sessionId, original.id);
+    assert.deepEqual([item.workspaceId, item.cwd, item.folder], [original.workspaceId, original.cwd, null]);
+
+    const run = await runImport(deps({ existingMetas: await store.list() }));
+    assert.deepEqual([run.imported, run.updated], [1, 0]);
+    assert.equal(await readFile(original.piSessionFile ?? "", "utf8"), originalCopy);
+    const copy = (await store.list()).find((meta) => meta.id !== original.id);
+    assert.ok(copy !== undefined && copy.piSessionFile !== null);
+    assert.notEqual(copy.piSessionFile, original.piSessionFile);
+    assert.equal(copy.importedFrom, pi);
+    // 另起的 pi 文件换了 session id（= 新会话的 orbita id），entries 原样
+    const header = JSON.parse((await readFile(copy.piSessionFile, "utf8")).split("\n")[0] ?? "{}") as { id?: string };
+    assert.equal(header.id, copy.id);
+    assert.equal((await store.load(copy.id))?.transcript.length, 4);
+    // 另导的那份跟上了源：再扫不列
+    assert.equal((await scanImport(deps({ existingMetas: await store.list() }))).plan.length, 0);
+  });
+
+  test("orbita 接着聊了、Proma 没动；或 Proma 只多了换模型这类非消息 entry → 都不列", async () => {
+    const a = await writePiSession("2026-09-01T00-00-00-000Z_orb-000000000000003.jsonl", "/tmp/r");
+    const b = await writePiSession("2026-09-01T00-00-00-000Z_mdl-000000000000004.jsonl", "/tmp/r");
+    await writeIndex([
+      { id: "c", title: "只在 orbita 聊", piSessionFile: a, createdAt: 1, updatedAt: 2 },
+      { id: "d", title: "只换了模型", piSessionFile: b, createdAt: 1, updatedAt: 2 },
+    ]);
+    await importAll();
+    const metas = await store.list();
+    const inOrbita = metas.find((meta) => meta.title === "只在 orbita 聊");
+    assert.ok(inOrbita !== undefined);
+    await continueInOrbita(inOrbita);
+    await appendToSource(b, [
+      { type: "model_change", id: "mc", parentId: "e2", timestamp: "2026-09-02T00:00:00.000Z", provider: "x", modelId: "kimi-k3" },
+    ]);
+    const report = await scanImport(deps({ existingMetas: await store.list() }));
+    assert.equal(report.plan.length, 0);
+    assert.equal(report.skipped.filter((skip) => skip.reason === "already-imported").length, 2);
+  });
+
+  test("导过、在 orbita 删了 → deleted；清单第一次写时补记此前导入的会话", async () => {
+    const a = await writePiSession("2026-09-01T00-00-00-000Z_del-000000000000005.jsonl", "/tmp/r");
+    await writeIndex([{ id: "e", title: "清单之前导的", piSessionFile: a, createdAt: 1, updatedAt: 2 }]);
+    // 清单出现之前的导入：写到别处，imports.jsonl 里没有它
+    await runImport(deps({ ledgerFile: join(root, "elsewhere.jsonl") }));
+    const b = await writePiSession("2026-09-01T00-00-00-000Z_new-000000000000006.jsonl", "/tmp/r");
+    await writeIndex([
+      { id: "e", title: "清单之前导的", piSessionFile: a, createdAt: 1, updatedAt: 2 },
+      { id: "f", title: "这次导的", piSessionFile: b, createdAt: 3, updatedAt: 4 },
+    ]);
+    await importAll();
+    const ledger = (await readFile(join(root, "imports.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { action: string; at: number | null; sourceFile: string });
+    assert.deepEqual(
+      ledger.map((line) => [line.action, line.at === null, line.sourceFile]),
+      [
+        ["backfill", true, a],
+        ["import", false, b],
+      ],
+    );
+
+    for (const meta of await store.list()) await store.remove(meta.id);
+    const report = await scanImport(deps({ existingMetas: await store.list() }));
+    assert.deepEqual(
+      report.plan.map((item) => [item.sourceId, item.change]).sort(),
+      [
+        ["e", "deleted"],
+        ["f", "deleted"],
+      ],
+    );
+    assert.equal(typeof report.lastImportAt, "number");
+  });
+
+  test("母会话有新消息、Proma 里又派了子会话 → 子会话挂到既有的母会话上", async () => {
+    const parentPi = await writePiSession("2026-09-01T00-00-00-000Z_pp-000000000000007.jsonl", "/tmp/r");
+    await writeIndex([{ id: "p", title: "母", piSessionFile: parentPi, createdAt: 1, updatedAt: 2 }]);
+    await importAll();
+    const [parent] = await store.list();
+    assert.ok(parent !== undefined);
+    await appendToSource(parentPi, moreTurn("3"));
+    const childPi = await writePiSession("2026-09-01T00-01-00-000Z_cc-000000000000008.jsonl", "/tmp/r");
+    await writeIndex([
+      { id: "p", title: "母", piSessionFile: parentPi, createdAt: 1, updatedAt: 2 },
+      { id: "c", title: "子", piSessionFile: childPi, createdAt: 3, updatedAt: 4, parentSessionId: "p" },
+    ]);
+    const report = await scanImport(deps({ existingMetas: await store.list() }));
+    const sub = report.plan.find((item) => item.sourceId === "c");
+    assert.deepEqual([sub?.change, sub?.parentId], ["new", parent.id]);
+    await runImport(deps({ existingMetas: await store.list() }));
+    const metas = await store.list();
+    assert.equal(metas.length, 2);
+    assert.equal(metas.find((meta) => meta.title === "子")?.parentId, parent.id);
   });
 });
 

@@ -18,13 +18,15 @@ import {
   RANGE_LABEL,
   SOURCE_LABEL,
   abbreviateHome,
-  allSelectable,
+  allRows,
+  defaultSelection,
   destinationChoices,
   destinationLabel,
   destinationOptions,
   effectiveDestination,
   formatBytes,
   formatDay,
+  formatMoment,
   groupName,
   groupSessions,
   sameDestination,
@@ -45,6 +47,9 @@ import {
  *              点 Scan 才读。打开页面只跑 import:detect（只 stat）。
  *   2 Sessions 按源侧文件夹分组、跨来源合并；每组一个去向菜单，可展开到单条会话逐条取舍；
  *              筛选默认全部（不限时间、含归档）。子会话不单列，跟着母会话走。
+ *              再次导入时，已导入、Proma 里又有新消息的会话单独成一块排在最前（ChangedBlock）：
+ *              追加进原会话的默认勾，两边都聊过、要另导一份的默认不勾；在 orbita 删过的留在
+ *              文件夹组里、默认不勾。
  *   底栏       汇总 + 唯一的主操作 Import。执行在主进程：按同样的来源重扫，再按勾选与去向落盘。
  *
  * Skills / MCP 两段等各自那一刀落地再出现（暂不支持的东西不列，同来源的裁决）。
@@ -88,6 +93,8 @@ export function MigrationView(props: {
   const [overrides, setOverrides] = useState<ReadonlyMap<string | null, ImportDestination>>(new Map());
   const [expanded, setExpanded] = useState<ReadonlySet<string | null>>(new Set());
   const [showAll, setShowAll] = useState<ReadonlySet<string | null>>(new Set());
+  /** 「有新消息」那一块默认展开：再次导入时用户要对照的就是它 */
+  const [changedOpen, setChangedOpen] = useState(true);
   const [run, setRun] = useState<RunState>({ kind: "idle" });
 
   useEffect(() => {
@@ -116,7 +123,8 @@ export function MigrationView(props: {
       .scan({ sources })
       .then((report) => {
         setScan({ kind: "ready", report, sources, scannedAt: Date.now() });
-        setSelected(allSelectable(report));
+        setSelected(defaultSelection(report));
+        setChangedOpen(true);
         setOverrides(new Map());
         setExpanded(new Set());
         setShowAll(new Set());
@@ -165,9 +173,9 @@ export function MigrationView(props: {
   };
 
   const startRun = () => {
-    if (scan.kind !== "ready" || grouped === null || summary === null || summary.sessions === 0) return;
+    if (scan.kind !== "ready" || grouped === null || summary === null || summary.sessions + summary.updates === 0) return;
     const sources = scan.sources;
-    setRun({ kind: "running", sessions: summary.sessions + summary.subSessions });
+    setRun({ kind: "running", sessions: summary.sessions + summary.updates + summary.subSessions });
     void api.import
       .run({
         sources,
@@ -300,12 +308,23 @@ export function MigrationView(props: {
             {scan.kind === "error" && <p className="mg-placeholder mg-error">Scan failed: {scan.message}</p>}
             {scan.kind === "ready" && grouped !== null && (
               <>
-                {grouped.groups.length === 0 ? (
+                {grouped.groups.length === 0 && grouped.changed.length === 0 ? (
                   <p className="mg-placeholder">
                     {grouped.total === 0 ? "Nothing new to import." : "No sessions match the filters."}
                   </p>
                 ) : (
                   <div className="mg-list">
+                    {grouped.changed.length > 0 && (
+                      <ChangedBlock
+                        rows={grouped.changed}
+                        now={scan.scannedAt}
+                        selected={selected}
+                        expanded={changedOpen}
+                        disabled={busy}
+                        onToggleExpand={() => setChangedOpen((open) => !open)}
+                        onSetRows={setRows}
+                      />
+                    )}
                     {grouped.groups.map((group) => (
                       <GroupBlock
                         key={group.folder ?? ""}
@@ -337,6 +356,7 @@ export function MigrationView(props: {
                 <SessionNotes
                   report={scan.report}
                   grouped={grouped}
+                  now={scan.scannedAt}
                   fallback={summary?.fallback ?? null}
                   onOpenProviders={props.onOpenProviders}
                 />
@@ -350,7 +370,7 @@ export function MigrationView(props: {
         <ImportFooter
           run={run}
           summary={summary}
-          disabled={busy || summary === null || summary.sessions === 0}
+          disabled={busy || summary === null || summary.sessions + summary.updates === 0}
           onImport={startRun}
         />
       )}
@@ -420,7 +440,7 @@ function SelectAllButton(props: {
   disabled: boolean;
   onSet: (rows: readonly SessionRow[], on: boolean) => void;
 }) {
-  const rows = props.grouped.groups.flatMap((group) => group.rows);
+  const rows = allRows(props.grouped);
   const all = rows.length > 0 && rows.every((row) => props.selected.has(row.item.sourceFile));
   return (
     <button type="button" className="mg-textbtn" disabled={props.disabled} onClick={() => props.onSet(rows, !all)}>
@@ -433,6 +453,102 @@ function sourceBreakdown(group: SessionGroup): string {
   return (Object.entries(group.bySource) as [ImportSourceId, number][])
     .map(([source, count]) => `${SOURCE_LABEL[source]} ${count}`)
     .join(" · ");
+}
+
+/**
+ * 已导入、Proma 里又有新消息的会话。没有去向菜单：追加的留在原会话里，另导的一份放在
+ * 原会话旁边——两者的落点都由既有的那条会话定。尾部第三列放一句说明占住去向列的位置，
+ * 与下面各文件夹组的列对齐。
+ */
+function ChangedBlock(props: {
+  rows: readonly SessionRow[];
+  now: number;
+  selected: ReadonlySet<string>;
+  expanded: boolean;
+  disabled: boolean;
+  onToggleExpand: () => void;
+  onSetRows: (rows: readonly SessionRow[], on: boolean) => void;
+}) {
+  const picked = props.rows.filter((row) => props.selected.has(row.item.sourceFile)).length;
+  const all = picked === props.rows.length;
+  const bySource = new Map<ImportSourceId, number>();
+  for (const row of props.rows) bySource.set(row.item.source, (bySource.get(row.item.source) ?? 0) + 1);
+  return (
+    <div className="mg-group">
+      <div className="mg-row mg-row-group" onClick={props.onToggleExpand}>
+        <span className="mg-lead">
+          <input
+            type="checkbox"
+            aria-label="Bring over new messages in sessions imported before"
+            checked={picked > 0}
+            ref={(element) => {
+              if (element !== null) element.indeterminate = picked > 0 && !all;
+            }}
+            disabled={props.disabled}
+            onClick={(event) => event.stopPropagation()}
+            onChange={() => props.onSetRows(props.rows, !all)}
+          />
+          <button
+            type="button"
+            className="mg-chev"
+            aria-expanded={props.expanded}
+            aria-label={props.expanded ? "Collapse" : "Expand"}
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onToggleExpand();
+            }}
+          >
+            <Icon name="chevron-right" size={12} />
+          </button>
+          <span className="mg-glyph">
+            <Icon name="refresh-cw" size={14} strokeWidth={1.8} />
+          </span>
+        </span>
+        <span className="mg-copy">
+          <span className="mg-line1">
+            <span className="mg-name">Updated since import</span>
+            <span className="mg-meta">
+              {[...bySource.entries()].map(([source, count]) => `${SOURCE_LABEL[source]} ${count}`).join(" · ")}
+            </span>
+          </span>
+          <span className="mg-where">New messages go into the same session here.</span>
+        </span>
+        <span className="mg-trail mg-cols" onClick={(event) => event.stopPropagation()}>
+          <span className="mg-count">
+            <b>{picked}</b>
+            {all ? "" : ` of ${props.rows.length}`}
+          </span>
+          <span className="mg-sub" />
+          <span className="mg-status">Stays where it is</span>
+        </span>
+      </div>
+      {props.expanded && (
+        <div className="mg-children">
+          {props.rows.map((row) => (
+            <SessionLine
+              key={row.item.sourceFile}
+              row={row}
+              now={props.now}
+              checked={props.selected.has(row.item.sourceFile)}
+              disabled={props.disabled}
+              onToggle={(on) => props.onSetRows([row], on)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 行上「相对 orbita 的状态」那一截；没导过的不说。 */
+function changeNote(row: SessionRow): string | null {
+  const { change, newMessages } = row.item;
+  const messages = `+${newMessages} ${newMessages === 1 ? "message" : "messages"}`;
+  if (change === "updated") return messages;
+  // 说明要短：它和标题挤在同一行，长了标题先被截断
+  if (change === "diverged") return `${messages} · also continued here · comes in as a copy`;
+  if (change === "deleted") return "deleted here";
+  return null;
 }
 
 function GroupBlock(props: {
@@ -588,8 +704,9 @@ function SessionLine(props: {
           {item.title}
         </span>
         <span className="mg-meta">
-          {SOURCE_LABEL[item.source]} · {formatDay(item.updatedAt, props.now)}
-          {item.archived ? " · archived" : ""}
+          {[SOURCE_LABEL[item.source], formatDay(item.updatedAt, props.now), item.archived ? "archived" : null, changeNote(props.row)]
+            .filter((part): part is string => part !== null)
+            .join(" · ")}
         </span>
       </span>
       <span className="mg-trail">
@@ -621,6 +738,7 @@ function SessionLine(props: {
 function SessionNotes(props: {
   report: ImportScanReport;
   grouped: GroupedSessions;
+  now: number;
   fallback: { count: number; models: string[]; fallbackModel: string | null } | null;
   onOpenProviders: () => void;
 }) {
@@ -662,7 +780,10 @@ function SessionNotes(props: {
       {alreadyImported > 0 && (
         <span className="mg-noteline">
           <Icon name="circle-check" size={12} />
-          <span>{alreadyImported} already imported earlier, not listed.</span>
+          <span>
+            {alreadyImported} already imported and unchanged since, not listed.
+            {props.report.lastImportAt !== null ? ` Last import ${formatMoment(props.report.lastImportAt, props.now)}.` : ""}
+          </span>
         </span>
       )}
       {cannot > 0 && (
@@ -730,14 +851,25 @@ function ImportFooter(props: {
             <span className="mg-ok">
               <Icon name="circle-check" size={14} />
             </span>
-            Imported {result.imported} {result.imported === 1 ? "session" : "sessions"}
-            {result.createdWorkspaces.length > 0
-              ? ` · ${result.createdWorkspaces.length} new ${result.createdWorkspaces.length === 1 ? "workspace" : "workspaces"}`
-              : ""}
+            {[
+              result.imported > 0 || result.updated === 0
+                ? `Imported ${result.imported} ${result.imported === 1 ? "session" : "sessions"}`
+                : null,
+              result.updated > 0
+                ? `${result.imported > 0 ? "updated" : "Updated"} ${result.updated} ${result.updated === 1 ? "session" : "sessions"}`
+                : null,
+              result.createdWorkspaces.length > 0
+                ? `${result.createdWorkspaces.length} new ${result.createdWorkspaces.length === 1 ? "workspace" : "workspaces"}`
+                : null,
+            ]
+              .filter((part): part is string => part !== null)
+              .join(" · ")}
           </span>
           <span className="mg-foot-sub" title={result.failed.map((item) => `${item.sourceId}: ${item.error ?? ""}`).join("\n")}>
             {first === undefined
-              ? "They're in the sidebar now. Anything left below wasn't ticked."
+              ? result.imported === 0
+                ? "The new messages are in those sessions now. Anything left below wasn't ticked."
+                : "They're in the sidebar now. Anything left below wasn't ticked."
               : `${result.failed.length} failed — ${first.error ?? "unknown error"}. Import again to retry.`}
           </span>
         </span>
@@ -755,12 +887,19 @@ function ImportFooter(props: {
             </span>
             <span className="mg-foot-sub">{run.message}</span>
           </>
-        ) : summary === null || summary.sessions === 0 ? (
+        ) : summary === null || summary.sessions + summary.updates === 0 ? (
           <span className="mg-foot-sub">Tick the sessions you want to bring over.</span>
         ) : (
           <>
             <span className="mg-foot-main">
-              Import {summary.sessions} {summary.sessions === 1 ? "session" : "sessions"}
+              {[
+                summary.sessions > 0 ? `Import ${summary.sessions} ${summary.sessions === 1 ? "session" : "sessions"}` : null,
+                summary.updates > 0
+                  ? `${summary.sessions > 0 ? "update" : "Update"} ${summary.updates} ${summary.updates === 1 ? "session" : "sessions"}`
+                  : null,
+              ]
+                .filter((part): part is string => part !== null)
+                .join(" · ")}
             </span>
             <span className="mg-foot-sub">
               {[

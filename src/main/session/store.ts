@@ -532,6 +532,29 @@ export class SessionStore {
     }
   }
 
+  /**
+   * 再次导入的追加落盘（importer.ts 的 updated 条目）：Proma 里有新消息、orbita 这边没接着聊的
+   * 会话，整份 transcript 换成从新源派生的（旧记录 id 由 entry id 派生，换完仍是同一批 id），
+   * meta 只动派生字段——标题、置顶、星标、归档、工作区、模型都是 orbita 这边的，不被源覆盖。
+   *
+   * **排进这条会话的写入链**：同一时刻 record() 可能在往日志里追加，不排队就会互相覆盖。
+   * 链内先确认 meta 还在：扫描与执行之间会话可能刚被删掉，这时不该把它写回来。
+   * transcript 先写、meta 后写：中间崩了留下的是「内容新、列表时间旧」，下次重扫它已与源
+   * 一致（pi 副本在调用方就换好了），只是卡片的最近提问晚一拍——可见且无害。
+   */
+  commitImportUpdate(
+    id: string,
+    records: readonly SessionRecord[],
+    patch: Pick<SessionMeta, "recentQueries" | "stats" | "updatedAt">,
+  ): Promise<void> {
+    return this.queueMeta(id, async () => {
+      const current = await this.readMeta(id);
+      if (current === null) throw new Error("the session was deleted before the update landed");
+      await writeTextAtomic(this.logPath(id), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+      await writeJsonAtomic(this.metaPath(id), { ...current, ...patch });
+    });
+  }
+
   /** 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。 */
   async list(): Promise<SessionMeta[]> {
     let names: string[];

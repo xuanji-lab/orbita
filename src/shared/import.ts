@@ -125,8 +125,31 @@ export type ImportSourceKind =
   /** Claude Code 时代渲染 JSONL（agent-sessions/<id>.jsonl）：转换构造 pi 文件 */
   | "claude-legacy";
 
+/**
+ * 一条计划条目相对 orbita 的状态（再次导入，wafo 2026-09-24 23:55 裁决）。
+ *
+ * 「导过没有、后来谁动过」不另存快照：orbita 的 pi 副本就是导入那一刻的源文件，
+ * 两份按 entry id 对齐，公共部分之后源里多出来的是 Proma 的新消息、副本里多出来的是在
+ * orbita 接着聊的。只有「导过、后来在 orbita 删了」要靠导入清单（imports.jsonl）才认得出。
+ *
+ * 导入之后 Proma 侧的标题、归档、星标变化一律不跟（迁移的边界是聊天记录，
+ * 会话进了 orbita 由 orbita 自己管生命周期）。
+ */
+export type ImportChange =
+  /** 从没导过 */
+  | "new"
+  /** 导过；Proma 里有新消息，orbita 这边没接着聊 → 新消息追加进同一条 orbita 会话（默认勾） */
+  | "updated"
+  /** 导过；两边都接着聊了 → 合不了，勾上就把 Proma 那一份另导成一条新会话（默认不勾） */
+  | "diverged"
+  /** 导过、后来在 orbita 里删了 → 勾上就重新导入（默认不勾） */
+  | "deleted";
+
 /** 一条待导入会话（扫描产出，执行按它落盘）。 */
 export interface ImportPlanItem {
+  change: ImportChange;
+  /** updated / diverged：导入之后 Proma 里新增的 user + assistant 消息数；其余为 0 */
+  newMessages: number;
   /** Proma 索引里的会话 id */
   sourceId: string;
   /** 来自哪个来源（页面按它给组内的来源分项计数） */
@@ -151,7 +174,7 @@ export interface ImportPlanItem {
   /** 源应用记录的原始模型 id。渠道名不可信，只有 id 值得留 */
   importedModel: string | null;
   /**
-   * 这条落盘时的 orbita 会话 id。**扫描期就铸好**（同 ImportWorkspacePlan.id 的理由）：
+   * 这条落盘时的 orbita 会话 id；updated = 被追加的那条既有会话的 id。**扫描期就铸好**（同 ImportWorkspacePlan.id 的理由）：
    * 子会话的 parentId 要指向母会话的 orbita id，母会话可能就在同一份计划里——
    * 执行时才铸就得在执行期维护一张映射表，扫描报告也说不出「谁挂在谁下」。
    */
@@ -197,6 +220,8 @@ export interface ImportScanReport {
   subSessionCount: number;
   /** 源里有父但父不可导、只好按根会话导的条数（不应该发生，发生了要让人看见） */
   orphanedSubSessions: number;
+  /** 导入清单里最近一次导入的时刻；从没导过（或只有清单出现之前的补记）为 null */
+  lastImportAt: number | null;
 }
 
 /** 执行阶段一条会话的结果。 */
@@ -210,7 +235,10 @@ export interface ImportRunItemResult {
 
 /** 执行报告。skipped 是执行时重扫得到的（与扫描报告可能差在 already-imported）。 */
 export interface ImportRunReport {
+  /** 新落盘的会话：new、deleted 的重新导入、diverged 的另导一份 */
   imported: number;
+  /** 追加了新消息的既有会话（updated） */
+  updated: number;
   skipped: number;
   /** 只有失败的条目进这里（成功的计数就够了，明细是给排障的） */
   failed: ImportRunItemResult[];

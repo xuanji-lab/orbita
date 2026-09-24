@@ -81,8 +81,10 @@ function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
     registeredModels: REGISTERED,
     fallbackModel: FALLBACK,
     newId: takeId,
+    ledgerFile: join(root, "imports.jsonl"),
     createWorkspace: async () => undefined,
     persistSession: async (meta, records) => store.commitImported(meta, records),
+    refreshSession: async (id, records, patch) => store.commitImportUpdate(id, records, patch),
     ...overrides,
   };
 }

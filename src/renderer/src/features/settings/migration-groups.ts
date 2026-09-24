@@ -4,6 +4,10 @@
  *
  * 选择的单位与主进程同一条规则（isSelectablePlanItem）：页面列出、能勾的只有可选条目；
  * 母会话在计划里的子会话不单列，计进母会话那一行的子会话数，导入时跟着母会话走。
+ *
+ * 再次导入（ImportChange）：new / deleted 是「搬一条会话进来」，按文件夹分组、跟组的去向；
+ * updated / diverged 是已导入会话在 Proma 里有了新消息，单独成一块（changed）——追加的留在
+ * 原会话里、另导的放在原会话旁边，都没有去向可选。
  */
 import type {
   ImportDestination,
@@ -58,6 +62,8 @@ export interface SessionGroup {
 
 export interface GroupedSessions {
   groups: SessionGroup[];
+  /** 已导入、Proma 里有新消息的（updated 在前、diverged 在后，各自最近更新的在前；过滤后） */
+  changed: SessionRow[];
   /** 被筛选藏起来的可选条目数（它们不导入） */
   hidden: number;
   /** 全部可选条目数（不看筛选） */
@@ -93,6 +99,7 @@ export function groupSessions(report: ImportScanReport, filters: SessionFilters,
   }
 
   const byFolder = new Map<string | null, SessionGroup>();
+  const changed: SessionRow[] = [];
   let total = 0;
   let hidden = 0;
   for (const item of report.plan) {
@@ -103,6 +110,10 @@ export function groupSessions(report: ImportScanReport, filters: SessionFilters,
       continue;
     }
     const kids = children.get(item.sessionId);
+    if (item.change === "updated" || item.change === "diverged") {
+      changed.push({ item, subSessions: kids?.count ?? 0, bytes: item.bytes + (kids?.bytes ?? 0) });
+      continue;
+    }
     let group = byFolder.get(item.folder);
     if (group === undefined) {
       group = { folder: item.folder, rows: [], bySource: {}, defaultDestination: defaultDestinationOf(item, report) };
@@ -114,18 +125,37 @@ export function groupSessions(report: ImportScanReport, filters: SessionFilters,
 
   const groups = [...byFolder.values()];
   for (const group of groups) group.rows.sort((a, b) => b.item.updatedAt - a.item.updatedAt);
+  changed.sort(
+    (a, b) =>
+      Number(a.item.change === "diverged") - Number(b.item.change === "diverged") || b.item.updatedAt - a.item.updatedAt,
+  );
   groups.sort((a, b) => {
     if (a.folder === null) return 1;
     if (b.folder === null) return -1;
     return b.rows.length - a.rows.length || a.folder.localeCompare(b.folder);
   });
-  return { groups, hidden, total };
+  return { groups, changed, hidden, total };
 }
 
-/** 扫描后的默认勾选：全部可选条目。 */
-export function allSelectable(report: ImportScanReport): Set<string> {
+/** 页面上列出的全部行：changed 块在前，其后各文件夹组。 */
+export function allRows(grouped: GroupedSessions): SessionRow[] {
+  return [...grouped.changed, ...grouped.groups.flatMap((group) => group.rows)];
+}
+
+/**
+ * 扫描后的默认勾选：没导过的与 Proma 有新消息的（updated）。两边都聊过的（diverged）与
+ * 在 orbita 删过的（deleted）默认不勾——前者勾上会多出一条会话，后者是用户自己删的
+ * （wafo 2026-09-24 裁决）。
+ */
+export function defaultSelection(report: ImportScanReport): Set<string> {
   const planIds = new Set(report.plan.map((item) => item.sessionId));
-  return new Set(report.plan.filter((item) => isSelectablePlanItem(item, planIds)).map((item) => item.sourceFile));
+  return new Set(
+    report.plan
+      .filter(
+        (item) => isSelectablePlanItem(item, planIds) && (item.change === "new" || item.change === "updated"),
+      )
+      .map((item) => item.sourceFile),
+  );
 }
 
 export function sameDestination(a: ImportDestination, b: ImportDestination): boolean {
@@ -184,8 +214,10 @@ export function destinationOptions(group: SessionGroup, workspaces: readonly Wor
 }
 
 export interface ImportSummary {
-  /** 勾选且可见的可选条目 */
+  /** 勾选且可见、会新落一条会话的可选条目（new / deleted / diverged） */
   sessions: number;
+  /** 勾选且可见、追加新消息的既有会话（updated） */
+  updates: number;
   /** 跟着它们的子会话 */
   subSessions: number;
   bytes: number;
@@ -201,36 +233,49 @@ export function summarize(
   overrides: ReadonlyMap<string | null, ImportDestination>,
 ): ImportSummary {
   let sessions = 0;
+  let updates = 0;
   let subSessions = 0;
   let bytes = 0;
   let newWorkspaces = 0;
   const models = new Set<string>();
   let fallbackCount = 0;
   let fallbackModel: string | null = null;
+  const count = (row: SessionRow): boolean => {
+    if (!selected.has(row.item.sourceFile)) return false;
+    if (row.item.change === "updated") updates += 1;
+    else sessions += 1;
+    subSessions += row.subSessions;
+    bytes += row.bytes;
+    if (!row.item.modelMatched) {
+      fallbackCount += 1;
+      fallbackModel = row.item.modelId;
+      if (row.item.importedModel !== null) models.add(row.item.importedModel);
+    }
+    return true;
+  };
+  for (const row of grouped.changed) count(row);
   for (const group of grouped.groups) {
     let picked = 0;
     for (const row of group.rows) {
-      if (!selected.has(row.item.sourceFile)) continue;
-      picked += 1;
-      sessions += 1;
-      subSessions += row.subSessions;
-      bytes += row.bytes;
-      if (!row.item.modelMatched) {
-        fallbackCount += 1;
-        fallbackModel = row.item.modelId;
-        if (row.item.importedModel !== null) models.add(row.item.importedModel);
-      }
+      if (count(row)) picked += 1;
     }
     if (picked > 0 && effectiveDestination(group, overrides).kind === "new-workspace") newWorkspaces += 1;
   }
-  return { sessions, subSessions, bytes, newWorkspaces, fallback: { count: fallbackCount, models: [...models], fallbackModel } };
+  return {
+    sessions,
+    updates,
+    subSessions,
+    bytes,
+    newWorkspaces,
+    fallback: { count: fallbackCount, models: [...models], fallbackModel },
+  };
 }
 
 /** 执行入参里的 sessions：只交勾选**且可见**的——被筛选藏起来的不导（所见即所导）。 */
 export function selectedSourceFiles(grouped: GroupedSessions, selected: ReadonlySet<string>): string[] {
-  return grouped.groups.flatMap((group) =>
-    group.rows.filter((row) => selected.has(row.item.sourceFile)).map((row) => row.item.sourceFile),
-  );
+  return allRows(grouped)
+    .filter((row) => selected.has(row.item.sourceFile))
+    .map((row) => row.item.sourceFile);
 }
 
 /** 执行入参里的 destinations：只交改过且与默认不同的组。 */
@@ -260,6 +305,13 @@ export function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** 上次导入的时刻：日期同 formatDay，再带上时:分（同一天可能导好几次）。 */
+export function formatMoment(timestamp: number, now: number): string {
+  const date = new Date(timestamp);
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  return `${formatDay(timestamp, now)} ${time}`;
 }
 
 /** 行上的日期：今年的只写月-日，往年的带年份。 */
