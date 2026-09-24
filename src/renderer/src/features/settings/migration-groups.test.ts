@@ -25,6 +25,8 @@ function item(overrides: Partial<ImportPlanItem>): ImportPlanItem {
     sourceId: `s-${seq}`,
     source: "proma",
     sourceKind: "pi",
+    change: "new",
+    newMessages: 0,
     folder: null,
     sourceFile: `/proma/${seq}.jsonl`,
     title: `session ${seq}`,
@@ -57,6 +59,7 @@ function report(plan: ImportPlanItem[], newWorkspaceIds: string[] = []): ImportS
     modelFallbackCount: 0,
     subSessionCount: 0,
     orphanedSubSessions: 0,
+    lastImportAt: null,
   };
 }
 

@@ -839,6 +839,8 @@ export async function scanImport(
       sourceId: entry.id,
       source: "proma",
       sourceKind: "pi",
+      change: "new",
+      newMessages: 0,
       folder: resolution.folder,
       sourceFile: entry.piSessionFile,
       // 会话 id 在工作区解析**之后**铸：新建工作区的 id 也走 newId，消耗顺序是测试预铸队列的契约
@@ -932,6 +934,8 @@ export async function scanImport(
       sourceId: entry.id,
       source: "proma",
       sourceKind: "claude-legacy",
+      change: "new",
+      newMessages: 0,
       folder: resolution.folder,
       sourceFile,
       sessionId: deps.newId(),
@@ -976,6 +980,7 @@ export async function scanImport(
     modelFallbackCount,
     subSessionCount,
     orphanedSubSessions,
+    lastImportAt: null,
   };
 }
 
@@ -991,6 +996,7 @@ export function emptyScanReport(): ImportScanReport {
     modelFallbackCount: 0,
     subSessionCount: 0,
     orphanedSubSessions: 0,
+    lastImportAt: null,
   };
 }
 
@@ -1308,6 +1314,7 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
 
   return {
     imported,
+    updated: 0,
     skipped: skippedCount(report),
     failed,
     createdWorkspaces,
