@@ -4,7 +4,14 @@ import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SkillScope } from "../../shared/skill.ts";
-import { claudeCodeSkillDirs, importSkills, promaSkillDirs, scanSkillDirs, type SkillSourceDir } from "./import.ts";
+import {
+  claudeCodeSkillDirs,
+  importSkills,
+  promaSkillDirs,
+  promaWorkspaceFolders,
+  scanSkillDirs,
+  type SkillSourceDir,
+} from "./import.ts";
 import { SkillStore } from "./store.ts";
 
 let root = "";
@@ -71,7 +78,7 @@ describe("来源目录", () => {
       JSON.stringify({ workspaces: [{ slug: "orbita", name: "orbita" }, { slug: "default", name: "默认工作区" }] }),
     );
     assert.deepEqual(
-      (await promaSkillDirs(promaRoot)).map((dir) => [dir.name, dir.dir]),
+      promaSkillDirs(promaRoot, await promaWorkspaceFolders(promaRoot)).map((dir) => [dir.name, dir.dir]),
       [
         ["默认工作区", join(promaRoot, "agent-workspaces", "default", "skills")],
         ["orbita", join(promaRoot, "agent-workspaces", "orbita", "skills")],

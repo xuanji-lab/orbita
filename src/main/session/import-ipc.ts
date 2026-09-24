@@ -21,6 +21,7 @@ import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { SkillStore } from "../skill/store.ts";
+import type { McpStore } from "../mcp/store.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
 import {
   emptyScanReport,
@@ -43,6 +44,9 @@ export function registerImportIpc(
   /** 导入清单 imports.jsonl（import-ledger.ts），与会话数据同在 userData 下 */
   ledgerFile: string,
   skills: SkillStore,
+  mcp: McpStore,
+  /** mcp.json 改完之后让运行时重读（与 MCP 面板加 server 同一个回调） */
+  reloadMcp: () => Promise<void>,
 ): void {
   async function deps(): Promise<ImporterDeps> {
     const [providerList, appSettings] = await Promise.all([providers.list(), settings.read()]);
@@ -69,6 +73,8 @@ export function registerImportIpc(
       claudeCode: claudeCodePaths(),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
+      // mcp.json 坏了不挡扫描：会话与 skills 照导，MCP 写入时会各自报错
+      existingMcp: await mcp.read().then(Object.keys, () => []),
       piSessionDir,
       defaultCwd: workspaces.defaultPath(),
       workspaces: await workspaces.list(),
@@ -114,12 +120,14 @@ export function registerImportIpc(
           await sessions.commitImportUpdate(id, records, patch);
         },
         skillTarget: skills,
+        mcpTarget: { add: (name, server) => mcp.add(name, server), reload: reloadMcp },
       },
       {
         sources: input.sources,
         sessions: new Set(input.sessions),
         destinations: input.destinations,
         skills: { skills: new Set(input.skills), mode: input.skillMode, scopes: input.skillScopes },
+        mcp: new Set(input.mcp),
       },
     );
   });
@@ -146,6 +154,7 @@ function claudeCodePaths(): ClaudeCodePaths {
     desktopSessionsDir: join(home, "Library", "Application Support", "Claude", "claude-code-sessions"),
     home,
     skillsDir: join(home, ".claude", "skills"),
+    claudeJson: join(home, ".claude.json"),
   };
 }
 

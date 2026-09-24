@@ -42,6 +42,8 @@ import {
   type SessionRow,
 } from "./migration-groups.ts";
 import { SkillsSection } from "./MigrationSkills.tsx";
+import { McpSection } from "./MigrationMcp.tsx";
+import { defaultMcpSelection, selectedMcpNames } from "./migration-mcp.ts";
 import {
   countSelectedSkills,
   defaultSkillSelection,
@@ -64,9 +66,8 @@ import {
  *              追加进原会话的默认勾，两边都聊过、要另导一份的默认不勾；在 orbita 删过的留在
  *              文件夹组里、默认不勾。
  *   3 Skills   按源 skills 目录分组，重名先到先得；段头 Copy / Link（默认 Copy），每组一个作用域。
+ *   4 MCP      一个名字一行，导进来一律停用。
  *   底栏       汇总 + 唯一的主操作 Import。执行在主进程：按同样的来源重扫，再按勾选与去向落盘。
- *
- * MCP 一段等它那一刀落地再出现（暂不支持的东西不列，同来源的裁决）。
  */
 
 type DetectState =
@@ -83,7 +84,7 @@ type ScanState =
 
 type RunState =
   | { kind: "idle" }
-  | { kind: "running"; sessions: number; skills: number }
+  | { kind: "running"; sessions: number; skills: number; mcp: number }
   | { kind: "done"; result: ImportRunReport }
   | { kind: "error"; message: string };
 
@@ -122,6 +123,7 @@ export function MigrationView(props: {
   const [skillScopes, setSkillScopes] = useState<ReadonlyMap<string, ImportSkillScope>>(new Map());
   const [skillExpanded, setSkillExpanded] = useState<ReadonlySet<string>>(new Set());
   const [skillShowAll, setSkillShowAll] = useState<ReadonlySet<string>>(new Set());
+  const [mcpSelected, setMcpSelected] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -158,6 +160,7 @@ export function MigrationView(props: {
         setSkillScopes(new Map());
         setSkillExpanded(new Set());
         setSkillShowAll(new Set());
+        setMcpSelected(defaultMcpSelection(report.mcp));
       })
       .catch((cause: unknown) => setScan({ kind: "error", message: errorText(cause) }));
   }, []);
@@ -171,7 +174,8 @@ export function MigrationView(props: {
     [grouped, selected, overrides],
   );
   const skillCount = scan.kind === "ready" ? countSelectedSkills(scan.report.skills, skillSelected) : 0;
-  const nothingTicked = summary === null || summary.sessions + summary.updates + skillCount === 0;
+  const mcpCount = scan.kind === "ready" ? selectedMcpNames(scan.report.mcp, mcpSelected).length : 0;
+  const nothingTicked = summary === null || summary.sessions + summary.updates + skillCount + mcpCount === 0;
 
   // 任何改选择的动作都让「Imported …」退场：那是上一次的结果，不是眼前这份勾选的
   const touch = useCallback(() => setRun((current) => (current.kind === "done" ? { kind: "idle" } : current)), []);
@@ -214,7 +218,12 @@ export function MigrationView(props: {
   const startRun = () => {
     if (scan.kind !== "ready" || grouped === null || summary === null || nothingTicked) return;
     const sources = scan.sources;
-    setRun({ kind: "running", sessions: summary.sessions + summary.updates + summary.subSessions, skills: skillCount });
+    setRun({
+      kind: "running",
+      sessions: summary.sessions + summary.updates + summary.subSessions,
+      skills: skillCount,
+      mcp: mcpCount,
+    });
     void api.import
       .run({
         sources,
@@ -223,7 +232,7 @@ export function MigrationView(props: {
         skills: selectedSkillDirs(scan.report.skills, skillSelected),
         skillMode,
         skillScopes: skillScopeChoices(skillScopes),
-        mcp: [],
+        mcp: selectedMcpNames(scan.report.mcp, mcpSelected),
       })
       .then((result) => {
         setRun({ kind: "done", result });
@@ -236,9 +245,13 @@ export function MigrationView(props: {
 
   const probes = detect.kind === "ready" ? detect.result.sources : [];
   const skillsBySource = useMemo(() => (scan.kind === "ready" ? skillCountBySource(scan.report.skills) : {}), [scan]);
-  const scannedCount = (id: ImportSourceId): { sessions: number; skills: number } | null => {
+  const scannedCount = (id: ImportSourceId): { sessions: number; skills: number; mcp: number } | null => {
     if (scan.kind !== "ready" || !scan.sources.includes(id) || grouped === null) return null;
-    return { sessions: grouped.totalBySource[id] ?? 0, skills: skillsBySource[id] ?? 0 };
+    return {
+      sessions: grouped.totalBySource[id] ?? 0,
+      skills: skillsBySource[id] ?? 0,
+      mcp: scan.report.mcp.filter((item) => item.status === "new" && item.origins.some((origin) => origin.source === id)).length,
+    };
   };
 
   return (
@@ -246,8 +259,8 @@ export function MigrationView(props: {
       <div className="mg-scroll scroll">
         <div className="mg-col">
           <p className="mg-intro">
-            Bring sessions and skills over from other agents on this Mac. Nothing is read until you tick a source and
-            scan, and the other apps' files are never changed.
+            Bring sessions, skills and MCP servers over from other agents on this Mac. Nothing is read until you tick a
+            source and scan, and the other apps' files are never changed.
           </p>
 
           {/* ================= 1 Sources ================= */}
@@ -436,6 +449,25 @@ export function MigrationView(props: {
             onToggleExpand={(dir) => setSkillExpanded((current) => toggled(current, dir))}
             onShowAll={(dir) => setSkillShowAll((current) => toggled(current, dir))}
           />
+
+          {/* ================= 4 MCP servers ================= */}
+          <McpSection
+            items={scan.kind === "ready" ? scan.report.mcp : null}
+            home={home}
+            selected={mcpSelected}
+            disabled={busy}
+            onSet={(names, on) => {
+              touch();
+              setMcpSelected((current) => {
+                const next = new Set(current);
+                for (const name of names) {
+                  if (on) next.add(name);
+                  else next.delete(name);
+                }
+                return next;
+              });
+            }}
+          />
         </div>
       </div>
 
@@ -444,6 +476,7 @@ export function MigrationView(props: {
           run={run}
           summary={summary}
           skills={skillCount}
+          mcp={mcpCount}
           skillMode={skillMode}
           disabled={busy || nothingTicked}
           onImport={startRun}
@@ -469,7 +502,7 @@ function SourceRow(props: {
   checked: boolean;
   disabled: boolean;
   /** 扫过的来源给出能导的会话数与 skill 数；没扫过为 null */
-  scanned: { sessions: number; skills: number } | null;
+  scanned: { sessions: number; skills: number; mcp: number } | null;
   onToggle: () => void;
 }) {
   const { probe } = props;
@@ -496,18 +529,19 @@ function SourceRow(props: {
         {status !== null ? (
           <span className="mg-status">{status}</span>
         ) : (
-          <ScannedCount sessions={props.scanned?.sessions ?? 0} skills={props.scanned?.skills ?? 0} />
+          <ScannedCount sessions={props.scanned?.sessions ?? 0} skills={props.scanned?.skills ?? 0} mcp={props.scanned?.mcp ?? 0} />
         )}
       </span>
     </label>
   );
 }
 
-/** 来源行尾：「28 sessions · 4 skills」，是 0 的那项不写；都是 0 写 Nothing new。 */
-function ScannedCount(props: { sessions: number; skills: number }) {
+/** 来源行尾：「28 sessions · 4 skills · 1 MCP」，是 0 的那项不写；都是 0 写 Nothing new。 */
+function ScannedCount(props: { sessions: number; skills: number; mcp: number }) {
   const parts = [
     { count: props.sessions, one: "session", many: "sessions" },
     { count: props.skills, one: "skill", many: "skills" },
+    { count: props.mcp, one: "MCP", many: "MCP" },
   ].filter((part) => part.count > 0);
   if (parts.length === 0) return <span className="mg-status">Nothing new</span>;
   return (
@@ -920,8 +954,12 @@ function joined(parts: readonly (string | null)[]): string {
 }
 
 /** 底栏主句：「Import 3 sessions · 5 skills · update 1 session」；只有追加时「Update 1 session」。 */
-function headline(sessions: number, updates: number, skills: number): string {
-  const imports = joined([counted(sessions, "session", "sessions"), counted(skills, "skill", "skills")]);
+function headline(sessions: number, updates: number, skills: number, mcp: number): string {
+  const imports = joined([
+    counted(sessions, "session", "sessions"),
+    counted(skills, "skill", "skills"),
+    counted(mcp, "MCP server", "MCP servers"),
+  ]);
   const update = counted(updates, "session", "sessions");
   if (imports === "") return `Update ${update ?? ""}`;
   return update === null ? `Import ${imports}` : `Import ${imports} · update ${update}`;
@@ -932,6 +970,8 @@ function ImportFooter(props: {
   summary: ReturnType<typeof summarize> | null;
   /** 勾选的 skill 数 */
   skills: number;
+  /** 勾选的 MCP server 数 */
+  mcp: number;
   skillMode: ImportSkillMode;
   disabled: boolean;
   onImport: () => void;
@@ -943,7 +983,11 @@ function ImportFooter(props: {
         <span className="mg-foot-copy">
           <span className="mg-foot-main">
             <Icon name="loader-circle" size={13} spin />
-            Importing {[counted(run.sessions, "session", "sessions"), counted(run.skills, "skill", "skills")].filter((part) => part !== null).join(" and ")}…
+            Importing{" "}
+            {[counted(run.sessions, "session", "sessions"), counted(run.skills, "skill", "skills"), counted(run.mcp, "MCP server", "MCP servers")]
+              .filter((part) => part !== null)
+              .join(", ")}
+            …
           </span>
           <span className="mg-foot-sub">Copying session files into orbita. Large histories take a minute.</span>
         </span>
@@ -957,6 +1001,7 @@ function ImportFooter(props: {
     const { result } = run;
     const first = result.failed[0];
     const firstSkill = result.skillsFailed[0];
+    const firstMcp = result.mcpFailed[0];
     return (
       <footer className="mg-foot">
         <span className="mg-foot-copy">
@@ -975,6 +1020,7 @@ function ImportFooter(props: {
                 ? `${result.createdWorkspaces.length} new ${result.createdWorkspaces.length === 1 ? "workspace" : "workspaces"}`
                 : null,
               counted(result.skillsImported, "skill", "skills"),
+              result.mcpImported > 0 ? `${counted(result.mcpImported, "MCP server", "MCP servers") ?? ""} (off)` : null,
             ]
               .filter((part): part is string => part !== null)
               .join(" · ")}
@@ -984,13 +1030,16 @@ function ImportFooter(props: {
             title={[
               ...result.failed.map((item) => `${item.sourceId}: ${item.error ?? ""}`),
               ...result.skillsFailed.map((item) => `${item.slug}: ${item.error}`),
+              ...result.mcpFailed.map((item) => `${item.name}: ${item.error}`),
             ].join("\n")}
           >
             {first !== undefined
               ? `${result.failed.length} failed — ${first.error ?? "unknown error"}. Import again to retry.`
               : firstSkill !== undefined
                 ? `${result.skillsFailed.length} ${result.skillsFailed.length === 1 ? "skill" : "skills"} didn't come over — ${firstSkill.slug}: ${firstSkill.error}`
-                : result.imported === 0 && result.updated > 0
+                : firstMcp !== undefined
+                  ? `${result.mcpFailed.length} MCP ${result.mcpFailed.length === 1 ? "server" : "servers"} didn't come over — ${firstMcp.name}: ${firstMcp.error}`
+                  : result.imported === 0 && result.updated > 0
                   ? "The new messages are in those sessions now. Anything left below wasn't ticked."
                   : "Anything left below wasn't ticked."}
           </span>
@@ -1009,12 +1058,12 @@ function ImportFooter(props: {
             </span>
             <span className="mg-foot-sub">{run.message}</span>
           </>
-        ) : summary === null || summary.sessions + summary.updates + props.skills === 0 ? (
+        ) : summary === null || summary.sessions + summary.updates + props.skills + props.mcp === 0 ? (
           <span className="mg-foot-sub">Tick what you want to bring over.</span>
         ) : (
           <>
             <span className="mg-foot-main">
-              {headline(summary.sessions, summary.updates, props.skills)}
+              {headline(summary.sessions, summary.updates, props.skills, props.mcp)}
             </span>
             <span className="mg-foot-sub">
               {joined([
@@ -1026,6 +1075,7 @@ function ImportFooter(props: {
                   : null,
                 summary.sessions + summary.updates > 0 ? `about ${formatBytes(summary.bytes)} copied` : null,
                 props.skills > 0 ? `skills ${props.skillMode === "copy" ? "copied" : "linked"}` : null,
+                props.mcp > 0 ? "MCP servers added switched off" : null,
               ])}
             </span>
           </>

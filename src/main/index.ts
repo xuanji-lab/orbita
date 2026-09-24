@@ -269,6 +269,8 @@ void app.whenReady().then(async () => {
     join(configDir, "pi-sessions"),
     join(configDir, "imports.jsonl"),
     skills,
+    mcp,
+    async () => agentHost.mcpReload(await mcp.read()),
   );
   // Home（工作区缺席时 agent 的落脚点）先建出来，同 skills.ensureDirs 的处理：
   // 建不出来不拦启动，但要留日志——不然一个权限坏掉的 ~/Orbita 会表现成

@@ -86,6 +86,7 @@ function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
     persistSession: async (meta, records) => store.commitImported(meta, records),
     refreshSession: async (id, records, patch) => store.commitImportUpdate(id, records, patch),
     skillTarget: { copyFrom: async () => "", importFrom: async () => "" },
+    mcpTarget: { add: async () => undefined, reload: async () => undefined },
     ...overrides,
   };
 }
