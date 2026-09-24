@@ -87,15 +87,12 @@ export function SettingsView(props: {
           onImported={props.onImported}
           onOpenProviders={() => props.onTab("providers")}
         />
+      ) : props.tab === "providers" ? (
+        // Providers 是主从两栏，铺满内容面：厂商列表贴着面板左缘，两栏各自内部滚动
+        <ProvidersView onChange={props.onProvidersChange} />
       ) : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-          {props.tab === "general" ? (
-            <General settings={props.settings} providers={props.providers} onChange={props.onSettingsChange} />
-          ) : (
-            <div style={{ width: "min(100%, var(--content-max-width))", height: "100%", margin: "0 auto" }}>
-              <ProvidersView onChange={props.onProvidersChange} />
-            </div>
-          )}
+          <General settings={props.settings} providers={props.providers} onChange={props.onSettingsChange} />
         </div>
       )}
     </div>

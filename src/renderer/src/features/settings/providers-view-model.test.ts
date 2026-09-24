@@ -2,6 +2,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelDefaults } from "../../../../shared/model-defaults.ts";
 import {
+  compactTokens,
+  connectionDirty,
   hasCredentials,
   mergeModelCost,
   modelAcceptsImage,
@@ -11,6 +13,7 @@ import {
   parseRateInput,
   parseTokenInput,
   reorderIds,
+  urlSuffix,
 } from "./providers-view-model.ts";
 import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
 
@@ -191,5 +194,43 @@ describe("modelIdIssue —— 手填模型 id 的形状", () => {
     assert.notEqual(modelIdIssue("a".repeat(65)), null);
     assert.notEqual(modelIdIssue("a b"), null);
     assert.notEqual(modelIdIssue("a_b"), null);
+  });
+});
+
+describe("compactTokens", () => {
+  test("整数档抹掉 .0：128000 → 128k，1000000 → 1M，且能原样填回输入框", () => {
+    assert.equal(compactTokens(128_000), "128k");
+    assert.equal(compactTokens(1_000_000), "1M");
+    assert.equal(parseTokenInput(compactTokens(200_000)), 200_000);
+  });
+});
+
+describe("urlSuffix", () => {
+  test("anthropic 协议接 /v1/messages，其余接 /chat/completions", () => {
+    assert.equal(urlSuffix("anthropic-messages"), "/v1/messages");
+    assert.equal(urlSuffix("openai-completions"), "/chat/completions");
+  });
+});
+
+describe("connectionDirty", () => {
+  const saved = { displayName: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4" };
+  const draft = { ...saved, apiKey: "" };
+
+  test("原样未动、key 留空：没有改动", () => {
+    assert.equal(connectionDirty(draft, saved, null), false);
+  });
+
+  test("名称或 URL 改了：有改动", () => {
+    assert.equal(connectionDirty({ ...draft, displayName: "GLM" }, saved, null), true);
+    assert.equal(connectionDirty({ ...draft, baseUrl: `${saved.baseUrl}/` }, saved, null), true);
+  });
+
+  test("粘了新 key：有改动", () => {
+    assert.equal(connectionDirty({ ...draft, apiKey: "sk-new" }, saved, null), true);
+  });
+
+  test("Show 拉出的已存 key 原样不动不算改动，改一个字才算", () => {
+    assert.equal(connectionDirty({ ...draft, apiKey: "sk-old" }, saved, "sk-old"), false);
+    assert.equal(connectionDirty({ ...draft, apiKey: "sk-old2" }, saved, "sk-old"), true);
   });
 });
