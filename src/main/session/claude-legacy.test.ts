@@ -97,6 +97,8 @@ interface ClaudeIndexEntry {
   updatedAt: number;
   archived?: boolean;
   pinned?: boolean;
+  /** Proma delegation 子会话指向母会话的 id（claude 时代也有，本机 20 条） */
+  parentSessionId?: string;
 }
 
 async function writeIndex(entries: unknown[]): Promise<void> {
@@ -559,6 +561,23 @@ describe("importer 集成：claude 条目", () => {
     assert.equal(report.plan[0]?.title, "甲");
     assert.equal(report.skipped.length, 1);
     assert.equal(report.skipped[0]?.reason, "already-imported");
+  });
+
+  test("子会话：claude 时代的 delegation 子会话同样挂回母会话，落盘带 parentId", async () => {
+    await writeClaudeSession("c-parent", [userTextRow("派一个调研"), assistantBlockRow("m1", { type: "text", text: "已派出" })]);
+    await writeClaudeSession("c-child", [userTextRow("调研 X"), assistantBlockRow("m2", { type: "text", text: "X 的结论" })]);
+    await writeClaudeIndex([
+      { id: "c-parent", title: "母", createdAt: 1, updatedAt: 2 },
+      { id: "c-child", title: "子", createdAt: 3, updatedAt: 4, parentSessionId: "c-parent" },
+    ]);
+    const report = await scanImport(deps());
+    assert.equal(report.subSessionCount, 1);
+    const run = await runImport(deps());
+    assert.equal(run.imported, 2);
+    const metas = await store.list();
+    const parent = metas.find((meta) => meta.title === "母");
+    assert.ok(parent !== undefined);
+    assert.equal(metas.find((meta) => meta.title === "子")?.parentId, parent.id);
   });
 });
 

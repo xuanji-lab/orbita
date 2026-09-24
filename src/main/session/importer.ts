@@ -114,6 +114,8 @@ interface PromaSessionIndexEntry {
   updatedAt: number | null;
   archived: boolean;
   pinned: boolean;
+  /** Proma 的 `parentSessionId`：delegation 派出的子会话指向母会话的 Proma id；null = 根会话 */
+  parentSourceId: string | null;
 }
 
 /** claude legacy 索引条目（无 piSessionFile，源文件按 <promaRoot>/agent-sessions/<id>.jsonl 推导）。 */
@@ -126,6 +128,7 @@ interface PromaClaudeIndexEntry {
   updatedAt: number | null;
   archived: boolean;
   pinned: boolean;
+  parentSourceId: string | null;
 }
 
 /** Proma 工作区（agent-workspaces.json）里我们用得上的字段。 */
@@ -196,6 +199,9 @@ export function parsePromaSessions(raw: string): {
       archived: item["archived"] === true,
       // 字段两代：早期 pinned，后来 starred（互斥出现），语义都是「置顶」
       pinned: item["pinned"] === true || item["starred"] === true,
+      // 只认 delegation 的 parentSessionId。explorationParentSessionId（Proma 的探索分叉）
+      // 是从某条消息岔出去的独立会话，不是子会话，照根会话导
+      parentSourceId: optionalString(item["parentSessionId"]),
     };
     const piSessionFile = optionalString(item["piSessionFile"]);
     if (piSessionFile === null) {
@@ -646,6 +652,18 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
   }
   skipped.push(...promaSessions.bad);
 
+  // 子会话回填的两张表（全部索引条目，不只是进了计划的）：父链，与找「此前已导入」的母会话用的源文件
+  const parentSourceById = new Map<string, string>();
+  const sourceFileById = new Map<string, string>();
+  for (const entry of promaSessions.entries) {
+    sourceFileById.set(entry.id, entry.piSessionFile);
+    if (entry.parentSourceId !== null) parentSourceById.set(entry.id, entry.parentSourceId);
+  }
+  for (const entry of promaSessions.claudeEntries) {
+    sourceFileById.set(entry.id, claudeSourceFile(deps.promaRoot, entry.id));
+    if (entry.parentSourceId !== null) parentSourceById.set(entry.id, entry.parentSourceId);
+  }
+
   let promaWorkspaces: PromaWorkspaceEntry[] = [];
   try {
     promaWorkspaces = parsePromaWorkspaces(await readFile(join(deps.promaRoot, "agent-workspaces.json"), "utf8"));
@@ -718,6 +736,7 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
       sourceFile: entry.piSessionFile,
       // 会话 id 在工作区解析**之后**铸：新建工作区的 id 也走 newId，消耗顺序是测试预铸队列的契约
       sessionId: deps.newId(),
+      // 子会话在计划成形后统一回填（linkSubSessions）：母会话可能排在后面、还没铸 id
       parentId: null,
       title: deriveSessionTitle(entry.title),
       workspaceId: resolution.workspaceId,
@@ -736,7 +755,7 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
 
   // —— claude legacy 条目：渲染 JSONL 转换导入（源文件按 <promaRoot>/agent-sessions/<id>.jsonl 推导） ——
   for (const entry of promaSessions.claudeEntries) {
-    const sourceFile = join(deps.promaRoot, "agent-sessions", `${entry.id}.jsonl`);
+    const sourceFile = claudeSourceFile(deps.promaRoot, entry.id);
     if (importedSources.has(sourceFile)) {
       skip(entry.id, entry.title || null, "already-imported");
       continue;
@@ -804,7 +823,7 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
       sourceKind: "claude-legacy",
       sourceFile,
       sessionId: deps.newId(),
-      // claude legacy 时代没有子会话（delegation 是 pi 时代才有的）：一律根会话
+      // claude legacy 时代也有 delegation 子会话（本机 20 条），同样由 linkSubSessions 回填
       parentId: null,
       title: deriveSessionTitle(entry.title),
       workspaceId: resolution.workspaceId,
@@ -821,20 +840,123 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     });
   }
 
+  const { subSessionCount, orphanedSubSessions } = linkSubSessions(
+    plan,
+    parentSourceById,
+    sourceFileById,
+    deps.existingMetas,
+  );
+  // 子会话对齐母会话的工作区之后，它自己解析出的新建 / 合并工作区可能已无人引用——
+  // 只留被引用的，否则执行会建出一个空工作区
+  const referenced = new Set(plan.map((item) => item.workspaceId));
+
   // 创建时间升序：执行按这个顺序落盘，时间线自然有序
   plan.sort((a, b) => a.createdAt - b.createdAt || a.sourceId.localeCompare(b.sourceId));
 
   return {
     plan,
-    newWorkspaces: [...newWorkspaceByKey.values()],
-    mergedWorkspaceIds: [...mergedIds],
+    newWorkspaces: [...newWorkspaceByKey.values()].filter((workspace) => referenced.has(workspace.id)),
+    mergedWorkspaceIds: [...mergedIds].filter((id) => referenced.has(id)),
     skipped,
     withoutPiSession: promaSessions.withoutPiFile,
     totalBytes,
     modelFallbackCount,
-    subSessionCount: 0,
-    orphanedSubSessions: 0,
+    subSessionCount,
+    orphanedSubSessions,
   };
+}
+
+/** claude legacy 条目的源文件路径（索引里没有，按 Proma 的目录惯例推导）。 */
+function claudeSourceFile(promaRoot: string, id: string): string {
+  return join(promaRoot, "agent-sessions", `${id}.jsonl`);
+}
+
+// ---------------------------------------------------------------------------
+// 子会话挂回母会话
+// ---------------------------------------------------------------------------
+
+/** 母会话在 orbita 这边的坐标：子会话按它挂 parentId、对齐工作区与 cwd。 */
+interface ParentTarget {
+  sessionId: string;
+  workspaceId: string | null;
+  cwd: string;
+}
+
+/**
+ * 把 Proma 的 delegation 父子关系（索引的 `parentSessionId`）翻成 orbita 的 parentId。
+ * 扫描期就定，执行照计划落——报告才说得出「谁挂在谁下」。**就地改 plan 条目**。
+ *
+ * 母会话按序找：① 在本次计划里 → 它扫描期铸好的 sessionId；② 此前已导入（existing meta
+ * 的 importedFrom == 母会话的源文件）→ 那条 orbita 会话——分两次导、或母会话上次失败这次重导，
+ * 子会话照样挂得回去；③ 都不是（母会话无可导文件 / 坏文件 / 索引里已没有）→ 按根会话导、
+ * 计入 orphanedSubSessions，数据不丢。
+ *
+ * **多层拍平到根祖先**：orbita 的 UI 只做一层（SessionMeta.parentId 的裁决），孙会话挂在
+ * 子会话下就得先打开子会话才找得到；Proma 自己也不让子会话再派（本机 284 条
+ * delegationDepth 全是 1）。沿源里的父链走到没有父的那条为止；链里成环 → 按孤儿处理
+ * （成环的一组 parentId 互指，rootSessions 会把它们全部滤出左栏，等于数据丢了）。
+ *
+ * 子会话**对齐母会话的工作区与 cwd**（同一工作区是 orbita 子会话的契约；本机 284/284
+ * 本来就同工作区，对齐是防御），pinned / archived 置 false——子会话没有生命周期，
+ * 只从母会话的右栏到达。
+ */
+function linkSubSessions(
+  plan: ImportPlanItem[],
+  parentSourceById: ReadonlyMap<string, string>,
+  sourceFileById: ReadonlyMap<string, string>,
+  existingMetas: readonly SessionMeta[],
+): { subSessionCount: number; orphanedSubSessions: number } {
+  const planBySourceId = new Map(plan.map((item) => [item.sourceId, item]));
+  const importedByFile = new Map<string, SessionMeta>();
+  for (const meta of existingMetas) {
+    if (meta.importedFrom !== undefined) importedByFile.set(meta.importedFrom, meta);
+  }
+
+  /** 沿父链走到根祖先的 Proma id；成环返回 null。调用方保证 sourceId 有父。 */
+  const rootAncestor = (sourceId: string): string | null => {
+    const seen = new Set([sourceId]);
+    let current = parentSourceById.get(sourceId);
+    while (current !== undefined) {
+      const next = parentSourceById.get(current);
+      if (next === undefined) return current;
+      if (seen.has(current)) return null;
+      seen.add(current);
+      current = next;
+    }
+    return null;
+  };
+
+  const findParent = (rootSourceId: string): ParentTarget | null => {
+    const inPlan = planBySourceId.get(rootSourceId);
+    if (inPlan !== undefined) {
+      return { sessionId: inPlan.sessionId, workspaceId: inPlan.workspaceId, cwd: inPlan.cwd };
+    }
+    const sourceFile = sourceFileById.get(rootSourceId);
+    const imported = sourceFile === undefined ? undefined : importedByFile.get(sourceFile);
+    if (imported !== undefined) {
+      return { sessionId: imported.id, workspaceId: imported.workspaceId, cwd: imported.cwd };
+    }
+    return null;
+  };
+
+  let subSessionCount = 0;
+  let orphanedSubSessions = 0;
+  for (const item of plan) {
+    if (!parentSourceById.has(item.sourceId)) continue;
+    const rootSourceId = rootAncestor(item.sourceId);
+    const target = rootSourceId === null ? null : findParent(rootSourceId);
+    if (target === null) {
+      orphanedSubSessions += 1;
+      continue;
+    }
+    item.parentId = target.sessionId;
+    item.workspaceId = target.workspaceId;
+    item.cwd = target.cwd;
+    item.pinned = false;
+    item.archived = false;
+    subSessionCount += 1;
+  }
+  return { subSessionCount, orphanedSubSessions };
 }
 
 /** claude legacy 行里最早的时间戳（索引缺 createdAt 时的兜底；_createdAt 也在 rowTimestamp 里）。 */
@@ -912,7 +1034,28 @@ export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport>
     }
   }
 
-  for (const item of report.plan) {
+  // 母会话先落，同批母会话落盘失败的子会话不落：否则 parentId 悬空，子会话从左栏（它不是根）
+  // 与右栏（母会话不存在）同时消失。它记进 failed 而不是降为根会话导入——降根之后它就是
+  // already-imported，永远挂不回去；不落的话，重导时母会话成功了它按规则 ① / ② 挂回去
+  const planSessionIds = new Set(report.plan.map((item) => item.sessionId));
+  const parentInPlan = (item: ImportPlanItem): boolean =>
+    item.parentId !== null && planSessionIds.has(item.parentId);
+  const ordered = [
+    ...report.plan.filter((item) => !parentInPlan(item)),
+    ...report.plan.filter((item) => parentInPlan(item)),
+  ];
+  const failedSessionIds = new Set<string>();
+
+  for (const item of ordered) {
+    if (item.parentId !== null && failedSessionIds.has(item.parentId)) {
+      failed.push({
+        sourceId: item.sourceId,
+        sessionId: null,
+        error: "parent session failed to import — import again once it succeeds",
+      });
+      failedSessionIds.add(item.sessionId);
+      continue;
+    }
     try {
       const sessionFile =
         item.sourceKind === "pi" ? await runPiImport(item, deps) : await runClaudeLegacyImport(item, deps);
@@ -931,6 +1074,7 @@ export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport>
         modelId: item.modelId,
         ...(item.importedModel === null ? null : { importedModel: item.importedModel }),
         importedFrom: item.sourceFile,
+        ...(item.parentId === null ? null : { parentId: item.parentId }),
         // mode 落 "plan"（最保守）：Proma 的 permissionMode（bypassPermissions 等）
         // 与 orbita 三档不同构，导入的会话重开时用户自己再调档，不静默继承放权限
         mode: "plan",
@@ -946,6 +1090,7 @@ export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport>
       await deps.persistSession(meta, sessionFile.records);
       imported += 1;
     } catch (cause) {
+      failedSessionIds.add(item.sessionId);
       failed.push({
         sourceId: item.sourceId,
         sessionId: null,

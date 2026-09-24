@@ -152,9 +152,17 @@ function ScanSummary(props: { report: ImportScanReport }) {
       </SummaryLine>
     );
   }
-  const tasks = report.plan.filter((item) => item.workspaceId === null).length;
+  // TASKS 只数根会话：子会话跟着母会话走，不进左栏，数进来会把 TASKS 说大
+  const tasks = report.plan.filter((item) => item.workspaceId === null && item.parentId === null).length;
   const parts = [
     `${tasks} to TASKS`,
+    report.subSessionCount > 0
+      ? `${report.subSessionCount} ${report.subSessionCount === 1 ? "sub-session" : "sub-sessions"} nested under ${report.subSessionCount === 1 ? "its parent" : "their parents"}`
+      : null,
+    // 母会话导不了、只好按根会话导的子会话：不该发生，发生了要让人看见（它们会出现在左栏）
+    report.orphanedSubSessions > 0
+      ? `${report.orphanedSubSessions} ${report.orphanedSubSessions === 1 ? "sub-session" : "sub-sessions"} without an importable parent, imported as top-level`
+      : null,
     report.mergedWorkspaceIds.length > 0
       ? `${report.mergedWorkspaceIds.length} existing ${report.mergedWorkspaceIds.length === 1 ? "workspace" : "workspaces"} matched by path`
       : null,

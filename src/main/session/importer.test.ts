@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { buildContextEntries } from "@earendil-works/pi-coding-agent";
 import type { Workspace } from "../../shared/workspace.ts";
-import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
+import { rootSessions, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ImportPlanItem } from "../../shared/import.ts";
 import { SessionStore } from "./store.ts";
 import { entriesToRecords, mapModel, runImport, scanImport, type RunImporterDeps } from "./importer.ts";
@@ -742,6 +742,186 @@ describe("边界：entries → records 的翻译规则", () => {
       assert.ok(text !== undefined && text.type === "text");
       assert.equal(text.text, "保留的新问题");
     }
+  });
+});
+
+describe("子会话挂回母会话（Proma 的 parentSessionId → parentId）", () => {
+  /** 一对父子的索引条目。子会话的源字段照 Proma 真实形态：delegation 一组字段里只有 parentSessionId 进映射 */
+  const child = (entry: Record<string, unknown>, parent: string): Record<string, unknown> => ({
+    ...entry,
+    parentSessionId: parent,
+    rootSessionId: parent,
+    delegationRole: "research",
+    delegationStatus: "completed",
+    delegationDepth: 1,
+  });
+
+  test("父子同批：子挂上母会话扫描期铸的 id，落盘后不进左栏；子会话不带生命周期", async () => {
+    const parentPi = await writePiSession("2026-09-01T00-00-00-000Z_par-000000000000001.jsonl", "/tmp/proj");
+    const childPi = await writePiSession(
+      "2026-09-01T00-01-00-000Z_chi-000000000000002.jsonl",
+      join(promaRoot, "agent-workspaces", "default", "child-workbench"),
+    );
+    await writeIndex([
+      { id: "p-1", title: "母", piSessionFile: parentPi, createdAt: 1, updatedAt: 2 },
+      child({ id: "c-1", title: "子", piSessionFile: childPi, createdAt: 3, updatedAt: 4, archived: true, starred: true }, "p-1"),
+    ]);
+    const report = await scanImport(deps());
+    assert.equal(report.plan.length, 2);
+    assert.equal(report.subSessionCount, 1);
+    assert.equal(report.orphanedSubSessions, 0);
+    const parent = report.plan.find((item) => item.sourceId === "p-1");
+    const sub = report.plan.find((item) => item.sourceId === "c-1");
+    assert.ok(parent !== undefined && sub !== undefined);
+    assert.equal(parent.parentId, null);
+    assert.equal(sub.parentId, parent.sessionId);
+    // cwd 对齐母会话（子自己的 header cwd 是 Proma 工作台路径，本来要退 defaultCwd）
+    assert.equal(sub.cwd, "/tmp/proj");
+    assert.equal(sub.archived, false);
+    assert.equal(sub.pinned, false);
+
+    const run = await runImport(deps());
+    assert.equal(run.imported, 2);
+    const metas = await store.list();
+    const parentMeta = metas.find((meta) => meta.title === "母");
+    const childMeta = metas.find((meta) => meta.title === "子");
+    assert.ok(parentMeta !== undefined && childMeta !== undefined);
+    assert.equal(parentMeta.parentId, undefined);
+    assert.equal(childMeta.parentId, parentMeta.id);
+    assert.deepEqual(
+      rootSessions(metas).map((meta) => meta.title),
+      ["母"],
+    );
+  });
+
+  test("母会话此前已导入：重扫时子会话挂到那条已存在的 orbita 会话", async () => {
+    const parentPi = await writePiSession("2026-09-01T00-00-00-000Z_par-000000000000001.jsonl", "/tmp/proj");
+    await writeIndex([{ id: "p-1", title: "母", piSessionFile: parentPi, createdAt: 1, updatedAt: 2 }]);
+    const first = await runImport(deps());
+    assert.equal(first.imported, 1);
+    const [parentMeta] = await store.list();
+    assert.ok(parentMeta !== undefined);
+
+    // Proma 这边后来派出了子会话
+    const childPi = await writePiSession("2026-09-01T00-01-00-000Z_chi-000000000000002.jsonl", "/tmp/proj");
+    await writeIndex([
+      { id: "p-1", title: "母", piSessionFile: parentPi, createdAt: 1, updatedAt: 2 },
+      child({ id: "c-1", title: "子", piSessionFile: childPi, createdAt: 3, updatedAt: 4 }, "p-1"),
+    ]);
+    const report = await scanImport(deps({ existingMetas: await store.list() }));
+    assert.equal(report.plan.length, 1);
+    assert.equal(report.plan[0]?.parentId, parentMeta.id);
+    assert.equal(report.subSessionCount, 1);
+    assert.equal(report.skipped[0]?.reason, "already-imported");
+  });
+
+  test("母会话导不了（文件不在）→ 子按根会话导，计入 orphanedSubSessions", async () => {
+    const childPi = await writePiSession("2026-09-01T00-01-00-000Z_chi-000000000000002.jsonl", "/tmp/proj");
+    await writeIndex([
+      { id: "p-gone", title: "母", piSessionFile: join(promaRoot, "sdk-config", "sessions", "gone.jsonl"), createdAt: 1, updatedAt: 2 },
+      child({ id: "c-1", title: "子", piSessionFile: childPi, createdAt: 3, updatedAt: 4 }, "p-gone"),
+      child({ id: "c-2", title: "索引里没有母会话", piSessionFile: childPi.replace("chi-", "chj-"), createdAt: 5, updatedAt: 6 }, "p-never"),
+    ]);
+    await writePiSession("2026-09-01T00-01-00-000Z_chj-000000000000002.jsonl", "/tmp/proj");
+    const report = await scanImport(deps());
+    assert.equal(report.plan.length, 2);
+    for (const item of report.plan) assert.equal(item.parentId, null);
+    assert.equal(report.subSessionCount, 0);
+    assert.equal(report.orphanedSubSessions, 2);
+  });
+
+  test("同批母会话落盘失败 → 子记 failed 不落；母会话先于子执行（哪怕子的 createdAt 更早）；重导挂回", async () => {
+    const parentPi = await writePiSession("2026-09-01T00-00-00-000Z_par-000000000000001.jsonl", "/tmp/proj");
+    const childPi = await writePiSession("2026-09-01T00-01-00-000Z_chi-000000000000002.jsonl", "/tmp/proj");
+    await writeIndex([
+      { id: "p-1", title: "母", piSessionFile: parentPi, createdAt: 10, updatedAt: 20 },
+      // 时钟偏差：子比母“早”——按 createdAt 排会先落子
+      child({ id: "c-1", title: "子", piSessionFile: childPi, createdAt: 5, updatedAt: 6 }, "p-1"),
+    ]);
+    const calls: string[] = [];
+    const first = await runImport(
+      deps({
+        persistSession: async (meta) => {
+          calls.push(meta.title);
+          throw new Error("disk on fire");
+        },
+      }),
+    );
+    assert.deepEqual(calls, ["母"]);
+    assert.equal(first.imported, 0);
+    assert.deepEqual(
+      first.failed.map((item) => item.sourceId),
+      ["p-1", "c-1"],
+    );
+    assert.match(first.failed[1]?.error ?? "", /parent session failed/);
+    assert.equal((await store.list()).length, 0);
+
+    const second = await runImport(deps({ existingMetas: await store.list() }));
+    assert.equal(second.imported, 2);
+    const metas = await store.list();
+    const parentMeta = metas.find((meta) => meta.title === "母");
+    assert.ok(parentMeta !== undefined);
+    assert.equal(metas.find((meta) => meta.title === "子")?.parentId, parentMeta.id);
+  });
+
+  test("工作区对齐：子在另一个 Proma 工作区 → 跟母会话走，它自己那个工作区不再新建", async () => {
+    await writePromaWorkspaces([
+      { id: "pw-a", name: "alpha", projectRootPath: "/tmp/alpha" },
+      { id: "pw-b", name: "beta", projectRootPath: "/tmp/beta" },
+    ]);
+    const parentPi = await writePiSession("2026-09-01T00-00-00-000Z_par-000000000000001.jsonl", "/tmp/alpha");
+    const childPi = await writePiSession("2026-09-01T00-01-00-000Z_chi-000000000000002.jsonl", "/tmp/beta");
+    await writeIndex([
+      { id: "p-1", title: "母", piSessionFile: parentPi, workspaceId: "pw-a", createdAt: 1, updatedAt: 2 },
+      child({ id: "c-1", title: "子", piSessionFile: childPi, workspaceId: "pw-b", createdAt: 3, updatedAt: 4 }, "p-1"),
+    ]);
+    const report = await scanImport(deps());
+    const parent = report.plan.find((item) => item.sourceId === "p-1");
+    const sub = report.plan.find((item) => item.sourceId === "c-1");
+    assert.ok(parent !== undefined && sub !== undefined);
+    assert.equal(sub.workspaceId, parent.workspaceId);
+    assert.equal(sub.cwd, "/tmp/alpha");
+    assert.deepEqual(
+      report.newWorkspaces.map((workspace) => workspace.path),
+      ["/tmp/alpha"],
+    );
+  });
+
+  test("多层拍平到根祖先；父链成环 → 两条都按孤儿导（不让它们互指后一起从左栏消失）", async () => {
+    const files = await Promise.all(
+      ["r", "c", "g", "x", "y"].map((tag, index) =>
+        writePiSession(`2026-09-01T00-0${index}-00-000Z_${tag}-00000000000000${index}.jsonl`, "/tmp/proj"),
+      ),
+    );
+    await writeIndex([
+      { id: "root", title: "根", piSessionFile: files[0], createdAt: 1, updatedAt: 1 },
+      child({ id: "kid", title: "子", piSessionFile: files[1], createdAt: 2, updatedAt: 2 }, "root"),
+      child({ id: "grandkid", title: "孙", piSessionFile: files[2], createdAt: 3, updatedAt: 3 }, "kid"),
+      child({ id: "loop-x", title: "环 x", piSessionFile: files[3], createdAt: 4, updatedAt: 4 }, "loop-y"),
+      child({ id: "loop-y", title: "环 y", piSessionFile: files[4], createdAt: 5, updatedAt: 5 }, "loop-x"),
+    ]);
+    const report = await scanImport(deps());
+    const bySource = new Map(report.plan.map((item) => [item.sourceId, item]));
+    const rootId = bySource.get("root")?.sessionId;
+    assert.equal(bySource.get("kid")?.parentId, rootId);
+    assert.equal(bySource.get("grandkid")?.parentId, rootId);
+    assert.equal(bySource.get("loop-x")?.parentId, null);
+    assert.equal(bySource.get("loop-y")?.parentId, null);
+    assert.equal(report.subSessionCount, 2);
+    assert.equal(report.orphanedSubSessions, 2);
+  });
+
+  test("explorationParentSessionId（探索分叉）不是子会话，照根会话导", async () => {
+    const parentPi = await writePiSession("2026-09-01T00-00-00-000Z_par-000000000000001.jsonl", "/tmp/proj");
+    const forkPi = await writePiSession("2026-09-01T00-01-00-000Z_frk-000000000000002.jsonl", "/tmp/proj");
+    await writeIndex([
+      { id: "p-1", title: "母", piSessionFile: parentPi, createdAt: 1, updatedAt: 2 },
+      { id: "f-1", title: "分叉", piSessionFile: forkPi, explorationParentSessionId: "p-1", createdAt: 3, updatedAt: 4 },
+    ]);
+    const report = await scanImport(deps());
+    assert.equal(report.plan.find((item) => item.sourceId === "f-1")?.parentId, null);
+    assert.equal(report.subSessionCount, 0);
+    assert.equal(report.orphanedSubSessions, 0);
   });
 });
 
