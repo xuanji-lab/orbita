@@ -40,7 +40,7 @@ Values that serve a single feature live next to that feature's CSS in the render
 | Concern | Where it lives | Rule |
 | --- | --- | --- |
 | Why a decision was made, and when | The commit that changes this file or a token file | AGENTS.md 规定仓里不写别的 markdown, so the decision record is the commit message, not a separate document. |
-| Raw brand assets | `design/` at the repo root | `design/` is the asset 真源: 2,034 Lucide SVGs in `design/icons/lucide/svg/`, 6 font files across `design/fonts/`'s four family folders. This system's `assets/` is a working **subset** (84 glyphs, 5 faces) — copy from `design/`, never the other way. |
+| Raw brand assets | `design/` at the repo root | `design/` is the asset 真源: 2,034 Lucide SVGs in `design/icons/lucide/svg/`, 6 font files across `design/fonts/`'s four family folders. This system's `assets/` is a working **subset** (the glyphs in use, 5 font files) — copy from `design/`, never the other way. |
 
 Adding or removing a first-class design concept (a new card language, a new component system level)
 means editing this file and the relevant tokens directly; the why and when goes in that commit's
@@ -59,8 +59,8 @@ mark glyph anywhere in the renderer. When a logo is finalised, drop `SVG + PNG +
 
 ## Content fundamentals
 
-The product ships bilingual (`src/i18n/enUS.ts` / `zhCN.ts`). English UI copy is the reference below;
-brand copy — the slogan — stays in Chinese and is deliberately **not** run through i18n.
+UI copy is English, written as literals in the components — there is no i18n layer in this checkout.
+Brand copy — the slogan — stays in Chinese.
 
 - **Voice: flat, mechanical, unhurried.** Labels are nouns or bare verbs: "New Session", "Search",
   "Start Agent", "Model", "Files", "Confirm". Toasts state what happened, nothing more:
@@ -68,6 +68,11 @@ brand copy — the slogan — stays in Chinese and is deliberately **not** run t
 - **Sentence case everywhere.** "New workspace name", "Remove workspace", "Main workspace". No
   Title Case, no ALL CAPS except acronyms. `ORBITA` appears capitalised only inside prose that names
   the app ("It may have been removed outside ORBITA."); the wordmark itself is lowercase.
+- **Group labels are the one uppercase.** Sidebar node titles, settings section labels, menu group
+  headers, panel group headers and card kickers are written in sentence case in the source and set
+  uppercase by CSS (`text-transform: uppercase`): mono, `--font-size-micro`, `0.06em` tracking,
+  secondary grey (tertiary for card kickers). They name a group; they never stand in for a heading
+  or a button.
 - **Second person, only when the user must act.** "You can retry this view or reload the app." Never
   first person, never "we". The agent does not speak about itself in the UI chrome.
 - **Consequences before actions.** "Remove this workspace? Its branch and directory will be deleted.
@@ -98,15 +103,19 @@ brand copy — the slogan — stays in Chinese and is deliberately **not** run t
 **neutral black + yellow** (black). A warm off-white shell (`#f3f4f1`) with
 pure-white panels, three text greys, three hairline greys. Every colour has exactly one job: the
 accent is blue `#1d4ed8` on light and yellow `#d6c245` on dark, and it means the single primary
-action (the send button, "New task", "Start Agent") plus the selected mode — nothing else; amber
+action (the send button, "New task", "Start Agent"), the selected mode, and a checked checkbox
+(native `accent-color`, settled 2026-09-24 on the migration page, which lists many) — nothing else; amber
 `#b7791f` means running; info blue `#2563eb` marks the thinking glyph; red `#b42318` is failure;
 green `#1a7f37` (dark `#56d364`) is success — git additions, passed validation, editor badges.
 **A filled status surface carries its own foreground token** (`--color-danger-fg`, `--color-info-fg`,
 `--color-accent-fg`): the plain `--color-danger` / `--color-info` values are tuned to read as *text*
 on the theme ground, and as a fill they leave white text at 2.5:1. Filled danger therefore uses
 `--color-danger-solid`, which is darker.
-Status prefers icons and words over colour — a spinner, a check, a lock glyph. List rows never tint:
-hover and active share one neutral fill and active is marked by weight. Max two
+Status prefers icons and words over colour — a spinner, a check, a lock glyph. List rows (sidebar
+sessions, settings tabs, menu items — one recipe, `.option-row`) hover with the neutral translucent
+fill; the selected row takes `--color-bg-active`, the same soft wash as the selected mode (light
+`#e7eefd`, Warm `.05` yellow, Ink `.18` yellow), plus semibold weight — chosen 2026-08-25 over a
+neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen. The dark theme — **Warm** in settings — is a barely-warm
 near-black (`#191c1d` shell, `#232525` panel, ink `#d6d5cf / #a3a29b / #82817b` with only a
 whisper of warmth, yellow washes at `.05` — selection is carried by weight and ink, not fill):
@@ -239,27 +248,44 @@ it. The token check does not exempt it.
 **Two consumers, one component.** The moment a style object gets copied into a second file, extract a
 component instead of duplicating it.
 
+**Control recipes come before new styles.** The shared recipes are CSS classes, not components; a new
+control starts from one of them, and a deviation is a local override written right after the recipe
+(as Chip and ModeChip do), not a copy:
+
+| Class | Where | What it is |
+| --- | --- | --- |
+| `.glass-card` | `tokens/glass.css` | The one card: `--glass-bg`, hairline `--glass-border`, `--radius-xl`, `--shadow-composer`. |
+| `.glass-float` | `src/renderer/src/styles.css` | Modifier for floating glass (queue strip, approval bar, closing card, menu): lifts the shadow to `--shadow-popover`. The menu also takes `.menu-panel`, a solid `--color-bg-panel`. |
+| `.quiet-control` | `styles.css` | Transparent, secondary ink; hover lays `--option-hover-bg` and lifts ink to primary; `aria-pressed` / `aria-selected` take the mode wash (`--color-mode-active-bg` / `-fg`); disabled is solid tertiary. Chip, IconButton, RailButton, ModeChip. |
+| `.btn-accent` | `styles.css` | The primary action: accent fill, `--color-accent-fg`, hover `--color-accent-strong`; disabled drops to `--color-bg-hover` + tertiary (the glass rule, no opacity). |
+| `.option-row` | `styles.css` | Selection rows (sidebar sessions, settings tabs, menu items): hover `--option-hover-bg`; selected `--option-active-bg` + semibold and wins over hover; disabled solid tertiary. |
+| `.text-field` | `styles.css` | Inputs and textareas: panel fill, hairline border, `--radius-md`; focus is an accent border + `--focus-ring`. |
+
+Checkboxes have no recipe: the three in use (Sidebar carryover list, CarryoverChecklist, the Providers
+model list) are native `<input type="checkbox">` tinted with `accent-color: var(--color-accent)`.
+
 ## Iconography
 
 - **Lucide, and only Lucide.** No runtime package: `assets/icons/lucide/*.svg` are imported at build
   time with Vite's `?raw` and inlined by `src/renderer/src/shell/Icon.tsx`. `design/icons/lucide/`
   holds the full upstream set (2,034 SVGs, `lucide-static@1.33.0`, ISC licence); this system copies a
-  working subset into `assets/icons/lucide/` (85 files), of which `Icon.tsx` currently registers 71 —
-  no CDN, no substitution, no hand-drawn SVG.
+  working subset into `assets/icons/lucide/`, and only the glyphs registered in `Icon.tsx`'s `ICONS`
+  table ship — no CDN, no substitution, no hand-drawn SVG. (No count is kept here: it changes with
+  almost every feature and went stale twice; `ls` and the `ICONS` table are the answer.)
 - **Sizes**: 16px in the rail, headers and dialogs; 13–14px in chips, list rows and card headers;
   11–12px for inline affordances (locks, filters, counts). **Stroke weight** 1.8 in lists and trees,
   2 for controls, 2.2 for the modal close.
 - Icons inherit `currentColor` — tertiary grey at rest, primary on hover, `--color-info` for the
   thinking glyph, the accent inside the send button. The `Icon` component inlines the SVG so this works.
 - **Recurring vocabulary**: `bot` = agent mode, `workflow` = orchestration, `folder` = a workspace,
-  `plus` = new task, `folder-plus` = new workspace, `gauge` = usage, `archive` = archived tasks,
+  `plus` = new task, `folder-plus` = new workspace, `archive` = archived tasks,
   `git-branch` = a worktree, and the task-row status slot — `circle-dot` running,
   `check` finished, `triangle-alert` failed, empty when idle,
-  `lock`/`lock-open` = read-only, `brain` = thinking, `terminal`/`wrench`/`file-text` = tool calls,
-  `hat-glasses` = anonymous chat, `panel-left`/`panel-right` = the two sidebars, `arrow-up` = send.
-- **No emoji, no Unicode glyphs as icons, no icon font, no PNG icons.** The only raster assets in the
-  source are third-party editor logos (VS Code, Cursor, Zed, JetBrains) used in the editor picker;
-  they are not part of the brand and are not copied here.
+  `lock` = a field fixed by its preset or identity (Providers), `brain` = thinking,
+  `terminal`/`wrench`/`file-text` = tool calls, `panel-left`/`panel-right` = the two sidebars,
+  `arrow-up` = send.
+- **No emoji, no Unicode glyphs as icons, no icon font, no PNG icons.** The renderer source ships no
+  raster images at all.
 
 ## Index
 
@@ -281,7 +307,7 @@ component instead of duplicating it.
 | `components/composer/` | `Composer` — one glass box, identical on both pages. |
 | `ui_kits/orbita-desktop/` | Click-through recreation of the desktop app. See its `README.md`. |
 | `assets/fonts/` | Literata, Manrope, Source Han Serif SC Medium, Source Han Sans SC Regular (+ OFL). |
-| `assets/icons/lucide/` | The 85 Lucide glyphs copied in (`Icon.tsx` currently registers 71), plus the ISC licence. |
+| `assets/icons/lucide/` | The Lucide glyphs copied in from `design/`; only those registered in `Icon.tsx` ship. The ISC licence sits beside it, `assets/icons/LICENSE-lucide.txt`. |
 | `SKILL.md` | Agent Skills front matter, for use outside this project. |
 
 `components/**/*.jsx` — together with each one's `.d.ts`, `.prompt.md` and `@dsCard` html — are
@@ -312,8 +338,8 @@ source does not define them.
 
 | 用途 | 库 | 状态 |
 | --- | --- | --- |
-| 通用操作图标（按钮/菜单/状态） | 无运行时依赖——`Orbita Design System/assets/icons/lucide/*.svg` 经 Vite `?raw` 静态导入，`src/renderer/src/shell/Icon.tsx` 内联注入 | 在用：71 个图标登记在 `Icon.tsx` 的 `ICONS` 表（`assets/icons/lucide/` 目录本身拷了 85 个，未登记的不进产物） |
-| 文件、文件夹类型图标（文件树/diff/tab） | [@react-symbols/icons](https://react-symbols.pheralb.dev)（开源文件类型图标 400+，Miguel Solorio） | 已调研入册，**待右栏文件系统 slice 引入**（先调研再新增依赖，调研结论 2026-08-22） |
+| 通用操作图标（按钮/菜单/状态） | 无运行时依赖——`Orbita Design System/assets/icons/lucide/*.svg` 经 Vite `?raw` 静态导入，`src/renderer/src/shell/Icon.tsx` 内联注入 | 在用：以 `Icon.tsx` 的 `ICONS` 表登记为准（`assets/icons/lucide/` 拷进来但未登记的不进产物；不在此记数量，它随功能增减） |
+| 文件、文件夹类型图标（文件树/diff/tab） | 同上，仍是 lucide：`src/renderer/src/features/files/tree-view.ts` 的 `fileIcon` 按扩展名分代码 / 配置 / 图片 / 文本四类给形状，不分颜色 | 在用（文件面板 2026-09-23）。曾调研的 [@react-symbols/icons](https://react-symbols.pheralb.dev) 未引入：文件面板设计稿给的理由是彩色库与「颜色各有明确职责」相冲，树的信息密度真不够时再议 |
 
 ### UI 组件体系
 
@@ -350,8 +376,8 @@ source does not define them.
 | 主题 | 规范 |
 | --- | --- |
 | 密度 | Balanced：默认折叠、按需展开；用户气泡长 prompt 与 agent 消息同宽，短 prompt 自适应 |
-| 按钮 | 卡片式语言下 2-3 类：ghost（icon+text，hover 出边框）/ 黑线边框（设置类）/ 纯图标（ghost 或带边框）；卡片本身可为按钮 |
-| 选中态 | 近乎无额外信号，界面自然切换即上下文；仅最轻量文字加重 |
+| 按钮 | 主操作 accent 实底（`.btn-accent`，一屏一个）；安静控件透明底、hover 铺半透明冷灰、不出边框（`.quiet-control`）；纯图标用 IconButton；危险红字、hover `--color-danger-soft`；卡片本身可为按钮（SessionCard、ThemeCard）。设置页次按钮现有两种写法：Providers 的 `.pv-btn` hover 加 `--color-border-strong` 描边，设置页导入入口（Import 行，其后的 Migration 页沿用）常驻 1px 发丝内描边——尚未统一 |
+| 选中态 | 列表选中行铺 `--color-bg-active` 淡底 + semibold（2026-08-25 选定）；模式按钮与安静控件的 pressed 用 `--color-mode-active-*`；hover 只铺中性半透明底 |
 | 长信息 | 默认折叠单行摘要，点击展开（tool 输出 / 文档阅读 / 日志统一） |
 | 消息形态 | Hybrid：用户指令独立气泡；agent 输出全宽文档式、默认折叠一行 |
 | 强调色 | 仅选中 + 主操作，辅以有限语义色；颜色绝不作唯一状态信号 |
@@ -367,8 +393,11 @@ source does not define them.
 ## Caveats
 
 - **`--color-text-inverse` actually inverts**: light `#ffffff`, dark `#191c1d`, black `#0a0a0a`
-  (`tokens/colors.css:19,98,144`) — each is that theme's own shell ground, the opposite of
+  (`tokens/colors.css`, one per theme block) — each is that theme's own shell ground, the opposite of
   `--color-text-primary`. Text that must stay white on a permanently dark ground (overlays, toasts)
   uses `--color-text-on-dark`; text on a coloured fill uses that fill's `-fg` token.
 - No monospace **brand** face was specified, so the mono token falls back to the system mono stack
   (`ui-monospace, SFMono-Regular, Menlo, …`). If Orbita picks a mono, it belongs in `tokens/fonts.css`.
+- **Settings secondary buttons come in two spellings** (see *生效规范 › 按钮*): `.pv-btn` borders on
+  hover, the import entry's secondary button (the Import row, and the Migration page after it) carries a
+  resting hairline. Not yet unified.
