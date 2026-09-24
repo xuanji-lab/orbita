@@ -53,6 +53,7 @@ import {
   type ClaudeMainRow,
 } from "./claude-legacy.ts";
 import { aggregatePrefixUsage } from "./store.ts";
+import { promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
 import {
   deriveSessionTitle,
   recentQueriesFromRecords,
@@ -1338,11 +1339,27 @@ async function runPiImport(item: ImportPlanItem, deps: RunImporterDeps): Promise
   } else {
     await copyPiFile(item.sourceFile, destPath);
   }
+  // transcript 里的用户消息还原成用户写的原文（proma-user-text.ts）：主路是 Proma 的界面日志，
+  // 读不到就按 Proma 的拼接格式剥。**pi 副本上面已原样落盘**——那是模型当时读到的，不改
+  const renderLog = await readRenderLog(deps.promaRoot, item.sourceId);
+  const userTexts = promaUserTextMap(sessionEntries, renderLog === null ? null : promaUserTexts(renderLog));
   return {
     path: destPath,
-    records: entriesToRecords(buildContextEntries(sessionEntries)),
+    records: withUserTexts(entriesToRecords(buildContextEntries(sessionEntries)), userTexts),
     thinkingLevel: parseThinkingLevel(lastThinkingLevel(sessionEntries)),
   };
+}
+
+/**
+ * Proma 的界面日志（与 claude legacy 源同一个目录、同一种格式）。只用来取用户原文，读不到
+ * 不算失败——transcript 退回按格式剥，导入照常。
+ */
+async function readRenderLog(promaRoot: string, sourceId: string): Promise<string | null> {
+  try {
+    return await readFile(claudeSourceFile(promaRoot, sourceId), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1364,9 +1381,13 @@ async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps
     // 扫描期已剔除无 assistant 消息的文件；这里防御扫描与执行之间文件被改坏
     throw new Error("no assistant messages — nothing was persisted by pi");
   }
+  // 源本身就是界面日志：用户行已是原文，这一步实际只解码 @file: 链接（条数对不上时按格式剥，
+  // 对原文是空操作）
+  const contextEntries = manager.buildContextEntries();
+  const userTexts = promaUserTextMap(contextEntries, promaUserTexts(raw));
   return {
     path,
-    records: entriesToRecords(manager.buildContextEntries()),
+    records: withUserTexts(entriesToRecords(contextEntries), userTexts),
     // claude legacy 没有思考档记录（当时的 Claude Code 无此概念），落缺省档
     thinkingLevel: "medium",
   };

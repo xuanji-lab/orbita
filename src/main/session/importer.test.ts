@@ -324,12 +324,14 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.equal(roleCount("user"), 2);
     assert.equal(roleCount("assistant"), 14);
     assert.equal(roleCount("tool"), 22);
-    // 首条 user 是那段时间戳系统注入 + 附件请求
+    // 首条 user：pi 里是 Proma 拼的时间 / 工作区 / 工作目录 + 原文；testdata 没有界面日志，
+    // 走按格式剥的兜底，transcript 里只剩用户那句话（pi 副本上面已断言原字节不变）
     const first = detail1.transcript[0];
     assert.ok(first !== undefined && first.role === "user");
     const text = first.content.find((b) => b.type === "text");
     assert.ok(text !== undefined && text.type === "text");
-    assert.ok(text.text.startsWith("**当前时间: Monday, July 20, 2026"));
+    assert.ok(text.text.startsWith("会话里有三个附加文件夹，帮我看看里面的哪个文件有提及architecture"));
+    assert.ok(!text.text.includes("<workspace_state>"));
     // assistant 都带终态（无 streaming）、model 是当时的真源 provider
     for (const record of detail1.transcript) {
       if (record.role !== "assistant") continue;
@@ -1112,6 +1114,80 @@ describe("会话时间按问答时间算", () => {
     await writeIndex([{ id: "fork", title: "分叉", piSessionFile: forked, createdAt: 1785000000000, updatedAt: 1785000000500 }]);
     const report = await scanImport(deps());
     assert.equal(report.plan[0]?.updatedAt, 1785000000000);
+  });
+});
+
+describe("用户消息还原成原文（Proma 的 prompt builder 拼进去的东西不进 transcript）", () => {
+  /** 第二条用户消息：Proma 拼好的整段（时间 + 工作区 + 工作目录 + 原文） */
+  const enveloped = {
+    type: "message",
+    id: "e3",
+    parentId: "e2",
+    timestamp: "2026-09-01T00:00:03.000Z",
+    message: {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "**当前时间: Tuesday, September 1, 2026 at 08:00 AM GMT+8**\n\n<workspace_state>\n项目: 默认工作区\n</workspace_state>\n\n<working_directory>/Users/me/.proma-dev/w</working_directory>\n\n@file:/Users/me/plan.html 这个计划太描述性了",
+        },
+      ],
+      timestamp: 1780000003000,
+    },
+  };
+
+  async function seed(renderLog: unknown[] | null): Promise<void> {
+    const pi = await writePiSession("2026-09-01T00-00-00-000Z_env-000000000000001.jsonl", "/tmp/e", [enveloped]);
+    await writeIndex([{ id: "s-env", title: "带信封", piSessionFile: pi, createdAt: 1, updatedAt: 2 }]);
+    if (renderLog !== null) {
+      await mkdir(join(promaRoot, "agent-sessions"), { recursive: true });
+      await writeFile(
+        join(promaRoot, "agent-sessions", "s-env.jsonl"),
+        renderLog.map((row) => JSON.stringify(row)).join("\n") + "\n",
+      );
+    }
+  }
+
+  const userRow = (text: string): Record<string, unknown> => ({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text }] },
+    parent_tool_use_id: null,
+  });
+
+  async function userTexts(): Promise<string[]> {
+    const [meta] = await store.list();
+    assert.ok(meta !== undefined);
+    const detail = await store.load(meta.id);
+    assert.ok(detail !== null);
+    return detail.transcript.flatMap((record) =>
+      record.role === "user" ? record.content.flatMap((block) => (block.type === "text" ? [block.text] : [])) : [],
+    );
+  }
+
+  test("有界面日志且条数对得上：用界面日志里的原文，@file 解码；最近提问也是原文；pi 副本原样", async () => {
+    await seed([
+      userRow("第一条用户消息"),
+      { type: "assistant", message: { id: "m1", role: "assistant", content: [{ type: "text", text: "回答" }] }, parent_tool_use_id: null },
+      userRow("@file:%2FUsers%2Fme%2Fplan.html 这个计划太描述性了"),
+    ]);
+    await runImport(deps());
+    assert.deepEqual(await userTexts(), ["第一条用户消息", "@/Users/me/plan.html 这个计划太描述性了"]);
+    const [meta] = await store.list();
+    assert.equal(meta?.recentQueries[0], "@/Users/me/plan.html 这个计划太描述性了");
+    const copy = await readFile(meta?.piSessionFile ?? "", "utf8");
+    assert.match(copy, /当前时间/);
+  });
+
+  test("没有界面日志：按 Proma 的拼接格式剥", async () => {
+    await seed(null);
+    await runImport(deps());
+    assert.deepEqual(await userTexts(), ["第一条用户消息", "@/Users/me/plan.html 这个计划太描述性了"]);
+  });
+
+  test("界面日志条数对不上：不硬配，同样按格式剥", async () => {
+    await seed([userRow("只有一条")]);
+    await runImport(deps());
+    assert.deepEqual(await userTexts(), ["第一条用户消息", "@/Users/me/plan.html 这个计划太描述性了"]);
   });
 });
 
