@@ -34,13 +34,16 @@ import file from "../../../../Orbita Design System/assets/icons/lucide/file.svg?
 import fileCode2 from "../../../../Orbita Design System/assets/icons/lucide/file-code-2.svg?raw";
 import fileJson2 from "../../../../Orbita Design System/assets/icons/lucide/file-json-2.svg?raw";
 import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
+import info from "../../../../Orbita Design System/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderOpen from "../../../../Orbita Design System/assets/icons/lucide/folder-open.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import folderSync from "../../../../Orbita Design System/assets/icons/lucide/folder-sync.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
+import gitCommitHorizontal from "../../../../Orbita Design System/assets/icons/lucide/git-commit-horizontal.svg?raw";
 import gitFork from "../../../../Orbita Design System/assets/icons/lucide/git-fork.svg?raw";
+import gitPullRequest from "../../../../Orbita Design System/assets/icons/lucide/git-pull-request.svg?raw";
 import globe from "../../../../Orbita Design System/assets/icons/lucide/globe.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import key from "../../../../Orbita Design System/assets/icons/lucide/key.svg?raw";
@@ -127,10 +130,13 @@ const ICONS = {
   "folder-plus": folderPlus,
   "folder-sync": folderSync,
   "git-branch": gitBranch,
+  "git-commit-horizontal": gitCommitHorizontal,
   "git-fork": gitFork,
+  "git-pull-request": gitPullRequest,
   globe,
   "grip-vertical": gripVertical,
   image,
+  info,
   key,
   lightbulb,
   "loader-circle": loaderCircle,

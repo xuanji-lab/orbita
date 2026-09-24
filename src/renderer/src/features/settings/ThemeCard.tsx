@@ -1,5 +1,6 @@
 import { THEME_PREFERENCES, type SettingsPatch, type ThemePreference } from "@shared/settings";
 import { Icon } from "../../shell/Icon";
+import { useSettingTip } from "./InfoTip";
 
 const THEME_LABELS: Record<ThemePreference, string> = {
   system: "System",
@@ -8,12 +9,20 @@ const THEME_LABELS: Record<ThemePreference, string> = {
   black: "Ink",
 };
 
+/**
+ * 只有 System 需要说明：它是唯一「选了不知道会落在哪」的一档。说明挂在卡片自己身上
+ * （悬停 / 键盘聚焦），不另放 info 图标——卡片的对半缩略窗已经说了一半。
+ */
+const THEME_TIPS: Partial<Record<ThemePreference, string>> = {
+  system: "Follows your desktop's light or dark appearance · dark lands on Ink",
+};
+
 /** `data-theme-preview` 只认三个真实主题；System 卡的缩略窗对半拼 light + black */
 type PreviewTheme = "light" | "dark" | "black";
 
 /**
- * Theme 行的预览卡组：替换原来的四个 Chip。每张卡画一份缩略窗（壳色 + 侧栏 + 面板 +
- * accent 发送点），用**各自主题**的 token 画——不是当前主题的（见 ThemeThumb 与
+ * Theme 行的预览卡组：每张卡画一份缩略窗（壳色 + 侧栏 + 面板 + accent 发送点），
+ * 用**各自主题**的 token 画——不是当前主题的（见 ThemeThumb 与
  * `Orbita Design System/tokens/colors.css` 的 `[data-theme-preview]` 选择器）。
  * 只有 Theme 这一行用它，不拆成多个导出。
  */
@@ -23,35 +32,49 @@ export function ThemePicker(props: {
 }) {
   return (
     <div className="theme-grid" role="group" aria-label="Theme">
-      {THEME_PREFERENCES.map((value) => {
-        const selected = props.value === value;
-        return (
-          <button
-            key={value}
-            type="button"
-            className="theme-card"
-            aria-pressed={selected}
-            title={THEME_LABELS[value]}
-            onClick={() => props.onChange({ theme: value })}
-          >
-            <span className="theme-card-check" aria-hidden="true">
-              <Icon name="check" size={11} strokeWidth={2.5} />
-            </span>
-            <span className="theme-card-thumb">
-              {value === "system" ? (
-                <>
-                  <ThemeThumb theme="light" half />
-                  <ThemeThumb theme="black" half />
-                </>
-              ) : (
-                <ThemeThumb theme={value} />
-              )}
-            </span>
-            <span className="theme-card-name">{THEME_LABELS[value]}</span>
-          </button>
-        );
-      })}
+      {THEME_PREFERENCES.map((value) => (
+        <ThemeCard
+          key={value}
+          value={value}
+          selected={props.value === value}
+          onSelect={() => props.onChange({ theme: value })}
+        />
+      ))}
     </div>
+  );
+}
+
+/** 一张卡。单独成组件是因为 System 卡要挂悬停说明（hook 不能在 map 里调） */
+function ThemeCard(props: { value: ThemePreference; selected: boolean; onSelect: () => void }) {
+  const tipText = THEME_TIPS[props.value];
+  const tip = useSettingTip<HTMLButtonElement>(tipText);
+  const anchor = tipText === undefined ? {} : tip.anchor;
+  return (
+    <>
+      <button
+        type="button"
+        className="theme-card"
+        aria-pressed={props.selected}
+        onClick={props.onSelect}
+        {...anchor}
+      >
+        <span className="theme-card-check" aria-hidden="true">
+          <Icon name="check" size={11} strokeWidth={2.5} />
+        </span>
+        <span className="theme-card-thumb">
+          {props.value === "system" ? (
+            <>
+              <ThemeThumb theme="light" half />
+              <ThemeThumb theme="black" half />
+            </>
+          ) : (
+            <ThemeThumb theme={props.value} />
+          )}
+        </span>
+        <span className="theme-card-name">{THEME_LABELS[props.value]}</span>
+      </button>
+      {tipText !== undefined && tip.layer}
+    </>
   );
 }
 

@@ -1,19 +1,20 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { compactPosition } from "./compact-viz.ts";
+import { compactMark } from "./compact-viz.ts";
 
-describe("compactPosition", () => {
-  test("两端：50%（上界，最早压缩）落左端 0，5%（下界，最晚压缩）落右端 1", () => {
-    assert.equal(compactPosition(50), 0);
-    assert.equal(compactPosition(5), 1);
+describe("compactMark", () => {
+  test("剩 20% 折叠：折叠点在条的 80% 处，标签居中", () => {
+    assert.deepEqual(compactMark(20), { at: 80, labelAlign: "center" });
   });
 
-  test("中间一档：20% 落在 30/45", () => {
-    assert.equal(compactPosition(20), 30 / 45);
+  test("贴近右端（剩 10% / 5%）：标签改右对齐，不伸出条外", () => {
+    assert.equal(compactMark(10).labelAlign, "end");
+    assert.equal(compactMark(5).labelAlign, "end");
+    assert.equal(compactMark(15).labelAlign, "center");
   });
 
-  test("越界夹紧：小于下界按下界算，大于上界按上界算", () => {
-    assert.equal(compactPosition(0), 1);
-    assert.equal(compactPosition(100), 0);
+  test("越界夹紧到 [5,50]：小于下界按 5% 算，大于上界按 50% 算", () => {
+    assert.equal(compactMark(0).at, 95);
+    assert.equal(compactMark(100).at, 50);
   });
 });

@@ -1,0 +1,55 @@
+/*
+ * 设置页悬停说明（InfoTip.tsx）。General 与 Providers 共用。
+ */
+
+/* 名字旁的 info 图标：静止是 tertiary，悬停 / 键盘聚焦抬到 primary——不铺底、不位移 */
+.info-tip {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: help;
+  transition: color var(--duration-instant) var(--ease-standard);
+}
+
+.info-tip:hover,
+.info-tip:focus-visible {
+  color: var(--color-text-primary);
+}
+
+/* 浮层：实色面板 + 发丝线 + popover 阴影（设计系统 *Transparency › Floating layers*）。
+   比 IconButton 的单行牌子宽，说明是一两句话，要能换行。
+   z-index 与 IconButton 的 tooltip 同档（70），高于 Menu 的 portal（40）。 */
+.setting-tip {
+  position: fixed;
+  z-index: 70;
+  max-width: 300px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* 首帧定位前不显形，免得先闪在左上角再跳 */
+.setting-tip[data-placed="false"] {
+  opacity: 0;
+}
+
+/* 说明里点名的命令 / 字段用 primary 提一档 */
+.setting-tip b {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-medium);
+}

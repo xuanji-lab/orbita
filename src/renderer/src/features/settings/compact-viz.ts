@@ -9,14 +9,20 @@ import { COMPACTION_PERCENT } from "../../../../shared/settings.ts";
 /** 自动压缩的档位（%）。与 COMPACTION_PERCENT 的合法区间 [5,50] 对齐，档距是「一眼分得清」的粒度 */
 export const COMPACTION_CHOICES = [30, 25, 20, 15, 10, 5] as const;
 
+/** 标签离右端多近就改成右对齐：再往右居中放，「5% left」会伸出条外 */
+const LABEL_END_AT = 88;
+
 /**
- * 百分比 → 刻度槽上的位置，0 = 左端、1 = 右端。**方向是反的**：左端对应区间
- * 上界（50%，保留量最大，最早触发压缩），右端对应下界（5%，最晚触发）——
- * 槽画的是「什么时候压缩」这件事的时间线，不是百分比数值本身的大小顺序。
- * 越界夹紧，不假设调用方已经按 COMPACTION_PERCENT 校验过。
+ * 上下文条上的折叠点。整条 = 一个上下文窗口，从左往右是对话在累积；
+ * 剩余 `percent`% 时折叠，所以折叠点在 `100 - percent` 处。越界夹紧，不假设调用方
+ * 已经按 COMPACTION_PERCENT 校验过（导入的旧设置可能是档位之外的值）。
+ *
+ * `labelAlign`：折叠点的「N% left」标签默认居中压在竖线上；竖线贴近右端时改成
+ * 右边对齐竖线，标签整个留在条内。
  */
-export function compactPosition(percent: number): number {
+export function compactMark(percent: number): { at: number; labelAlign: "center" | "end" } {
   const { min, max } = COMPACTION_PERCENT;
   const clamped = Math.min(max, Math.max(min, percent));
-  return (max - clamped) / (max - min);
+  const at = 100 - clamped;
+  return { at, labelAlign: at > LABEL_END_AT ? "end" : "center" };
 }
