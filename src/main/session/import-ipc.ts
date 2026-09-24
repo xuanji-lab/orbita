@@ -29,6 +29,8 @@ export function registerImportIpc(
   settings: SettingsStore,
   /** orbita 的 pi 本子目录——与 registerAgentIpc 传的是同一个值，路径策略在 main/index.ts */
   piSessionDir: string,
+  /** 导入清单 imports.jsonl（import-ledger.ts），与会话数据同在 userData 下 */
+  ledgerFile: string,
 ): void {
   async function deps(): Promise<ImporterDeps> {
     const [providerList, appSettings] = await Promise.all([providers.list(), settings.read()]);
@@ -56,6 +58,7 @@ export function registerImportIpc(
       defaultCwd: workspaces.defaultPath(),
       workspaces: await workspaces.list(),
       existingMetas: await sessions.list(),
+      ledgerFile,
       registeredModels: registered,
       fallbackModel: fallback,
       newId: randomUUID,
@@ -85,6 +88,9 @@ export function registerImportIpc(
         },
         persistSession: async (meta, records) => {
           await sessions.commitImported(meta, records);
+        },
+        refreshSession: async (id, records, patch) => {
+          await sessions.commitImportUpdate(id, records, patch);
         },
       },
       { sessions: new Set(input.sessions), destinations: input.destinations },

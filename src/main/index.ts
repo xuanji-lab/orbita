@@ -249,7 +249,14 @@ void app.whenReady().then(async () => {
   const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
   registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost, carryovers);
   // Proma 会话导入（设置页入口）：扫描/执行都在主进程，agent 进程不参与
-  registerImportIpc(sessions, workspaces, providers, settings, join(configDir, "pi-sessions"));
+  registerImportIpc(
+    sessions,
+    workspaces,
+    providers,
+    settings,
+    join(configDir, "pi-sessions"),
+    join(configDir, "imports.jsonl"),
+  );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到

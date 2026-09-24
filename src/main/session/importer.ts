@@ -14,12 +14,15 @@
  * （`parseSessionEntries` / `migrateSessionEntries` / `buildContextEntries`），
  * 版本迁移在内存里做完、写到 orbita 自己的副本上，源文件一个字节都不动。
  *
- * ## 幂等
+ * ## 幂等与再次导入
  *
  * 幂等键 = 源 pi 文件绝对路径，存在新会话 meta 的 `importedFrom` 里（契约层 commit
- * 讲了为什么不另立 state 文件）。执行前重新扫描，`already-imported` 与本次扫描内
- * 的同源重复都按跳过处理。解析外部 JSONL 一律坏行跳过（pi 的 `parseSessionEntries`
- * 就是这么做的），一条坏行不炸整批。
+ * 讲了为什么不另立 state 文件）。执行前重新扫描，本次扫描内的同源重复按跳过处理。
+ * 解析外部 JSONL 一律坏行跳过（pi 的 `parseSessionEntries` 就是这么做的），一条坏行不炸整批。
+ *
+ * 导过的会话不再一律跳过（2026-09-24 再次导入）：orbita 的 pi 副本就是导入那一刻的源文件，
+ * 两份按 entry id 对齐（reimportState），源里多出新消息的列为 updated / diverged；
+ * 导过、后来在 orbita 删掉的靠导入清单认出（import-ledger.ts），列为 deleted。
  */
 import { copyFile, mkdir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -54,6 +57,7 @@ import {
 } from "./claude-legacy.ts";
 import { aggregatePrefixUsage } from "./store.ts";
 import { promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
+import { appendImportLedger, readImportLedger, type ImportLedgerLine } from "./import-ledger.ts";
 import {
   deriveSessionTitle,
   recentQueriesFromRecords,
@@ -62,6 +66,7 @@ import {
 } from "../../shared/session.ts";
 import {
   isSelectablePlanItem,
+  type ImportChange,
   type ImportDestination,
   type ImportDestinationChoice,
   type ImportPlanItem,
@@ -88,6 +93,8 @@ export interface ImporterDeps {
   workspaces: Workspace[];
   /** orbita 现有会话 meta（幂等判重底） */
   existingMetas: SessionMeta[];
+  /** 导入清单 imports.jsonl 的路径（import-ledger.ts）：扫描读它认出「在 orbita 删过」的，执行往里追加 */
+  ledgerFile: string;
   /** 已注册模型全集（模型映射的候选） */
   registeredModels: readonly { providerId: string; modelId: string }[];
   /** 模型映射 miss 的兜底（orbita 当前默认 provider/model） */
@@ -102,6 +109,12 @@ export interface RunImporterDeps extends ImporterDeps {
   createWorkspace(workspace: { id: string; name: string; path: string }): Promise<void>;
   /** 单条会话落盘（meta + transcript 原子写；路径规则在 SessionStore） */
   persistSession(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void>;
+  /** 既有会话追加新消息后的落盘：整份 transcript + meta 的派生字段（SessionStore.commitImportUpdate） */
+  refreshSession(
+    id: string,
+    records: readonly SessionRecord[],
+    patch: Pick<SessionMeta, "recentQueries" | "stats" | "updatedAt">,
+  ): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -742,12 +755,17 @@ export async function scanImport(
   let modelFallbackCount = 0;
   let totalBytes = 0;
 
-  // 幂等底：已导入过的源路径（meta.importedFrom）+ 本次扫描内的同源去重
-  const importedSources = new Set<string>();
+  // 幂等底：已导入过的源路径 → 对应的 orbita 会话（另导过一份的有两条），+ 本次扫描内的同源去重
+  const importedBySource = new Map<string, SessionMeta[]>();
   for (const meta of deps.existingMetas) {
-    if (meta.importedFrom !== undefined) importedSources.add(meta.importedFrom);
+    if (meta.importedFrom === undefined) continue;
+    importedBySource.set(meta.importedFrom, [...(importedBySource.get(meta.importedFrom) ?? []), meta]);
   }
   const seenSources = new Set<string>();
+  // 导入清单：清单里有、meta 里没有 = 导过、后来在 orbita 删了
+  const ledger = await readImportLedger(deps.ledgerFile);
+  const everImported = new Set(ledger.map((line) => line.sourceFile));
+  const freshChange = (sourceFile: string): ImportChange => (everImported.has(sourceFile) ? "deleted" : "new");
 
   let promaSessions: ReturnType<typeof parsePromaSessions>;
   try {
@@ -780,10 +798,6 @@ export async function scanImport(
   }
 
   for (const entry of promaSessions.entries) {
-    if (importedSources.has(entry.piSessionFile)) {
-      skip(entry.id, entry.title || null, "already-imported");
-      continue;
-    }
     if (seenSources.has(entry.piSessionFile)) {
       skip(
         entry.id,
@@ -794,10 +808,20 @@ export async function scanImport(
       continue;
     }
     seenSources.add(entry.piSessionFile);
-    let bytes: number;
+    const copies = importedBySource.get(entry.piSessionFile) ?? [];
+    let bytes: number | null;
     try {
       bytes = (await stat(entry.piSessionFile)).size;
     } catch {
+      bytes = null;
+    }
+    // 导过的先走快路：源文件没了（orbita 里的照留）、或与某份副本等长（pi 文件只追加，
+    // 等长即没变）——都不用读内容。本机 686 条已导入的 pi 会话，重扫时绝大多数停在这里
+    if (copies.length > 0 && (bytes === null || (await someCopyHasSize(copies, bytes)))) {
+      skip(entry.id, entry.title || null, "already-imported");
+      continue;
+    }
+    if (bytes === null) {
       skip(entry.id, entry.title || null, "missing-file", entry.piSessionFile);
       continue;
     }
@@ -806,28 +830,59 @@ export async function scanImport(
     try {
       source = await readPiSource(entry.piSessionFile, deps.promaRoot, deps.extraSourceRoots ?? []);
     } catch (cause) {
-      skip(entry.id, entry.title || null, "bad-session-file", cause instanceof Error ? cause.message : String(cause));
+      if (copies.length > 0) {
+        // 导过、现在源读不了：orbita 里那份照留，这次不动它
+        skip(entry.id, entry.title || null, "already-imported");
+      } else {
+        skip(entry.id, entry.title || null, "bad-session-file", cause instanceof Error ? cause.message : String(cause));
+      }
       continue;
     }
     const sessionEntries = source.entries.filter(
       (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
     );
 
-    const resolution = applyDestination(
-      await resolveWorkspaceTarget(entry.workspaceId, promaWorkspaces, deps.workspaces, source.headerCwd, deps),
-      overrides,
-      deps,
-    );
-    if (resolution.create !== null) {
-      // 同一个 Proma 工作区的多条会话共享一次新建（path 为键），id 对齐到第一份计划
-      const existing = newWorkspaceByKey.get(resolution.create.path);
-      if (existing === undefined) {
-        newWorkspaceByKey.set(resolution.create.path, resolution.create);
-      } else {
-        resolution.workspaceId = existing.id;
+    let change: ImportChange = freshChange(entry.piSessionFile);
+    let newMessages = 0;
+    /** diverged：另导的一份落在原会话旁边（同工作区、同 cwd），不走去向解析 */
+    let besideOriginal: SessionMeta | null = null;
+    if (copies.length > 0) {
+      const state = reimportState(sessionEntries, await readCopies(copies));
+      if (state.kind === "unchanged") {
+        skip(entry.id, entry.title || null, "already-imported");
+        continue;
       }
+      if (state.kind === "updated") {
+        totalBytes += bytes;
+        plan.push(updatedPlanItem(entry, state.meta, state.newMessages, sessionEntries, bytes));
+        continue;
+      }
+      change = "diverged";
+      newMessages = state.newMessages;
+      besideOriginal = state.meta;
     }
-    if (resolution.mergedInto !== null) mergedIds.add(resolution.mergedInto);
+
+    let resolution: { folder: string | null; workspaceId: string | null; cwd: string };
+    if (besideOriginal !== null) {
+      resolution = { folder: null, workspaceId: besideOriginal.workspaceId, cwd: besideOriginal.cwd };
+    } else {
+      const resolved = applyDestination(
+        await resolveWorkspaceTarget(entry.workspaceId, promaWorkspaces, deps.workspaces, source.headerCwd, deps),
+        overrides,
+        deps,
+      );
+      if (resolved.create !== null) {
+        // 同一个 Proma 工作区的多条会话共享一次新建（path 为键），id 对齐到第一份计划
+        const existing = newWorkspaceByKey.get(resolved.create.path);
+        if (existing === undefined) {
+          newWorkspaceByKey.set(resolved.create.path, resolved.create);
+        } else {
+          resolved.workspaceId = existing.id;
+        }
+      }
+      if (resolved.mergedInto !== null) mergedIds.add(resolved.mergedInto);
+      resolution = resolved;
+    }
 
     // 模型：索引的 modelId 优先，缺失时从 pi 文件补（最后的 model_change / assistant model）
     const promaModelId = entry.modelId ?? modelFromEntries(sessionEntries);
@@ -839,8 +894,8 @@ export async function scanImport(
       sourceId: entry.id,
       source: "proma",
       sourceKind: "pi",
-      change: "new",
-      newMessages: 0,
+      change,
+      newMessages,
       folder: resolution.folder,
       sourceFile: entry.piSessionFile,
       // 会话 id 在工作区解析**之后**铸：新建工作区的 id 也走 newId，消耗顺序是测试预铸队列的契约
@@ -870,7 +925,9 @@ export async function scanImport(
   // —— claude legacy 条目：渲染 JSONL 转换导入（源文件按 <promaRoot>/agent-sessions/<id>.jsonl 推导） ——
   for (const entry of promaSessions.claudeEntries) {
     const sourceFile = claudeSourceFile(deps.promaRoot, entry.id);
-    if (importedSources.has(sourceFile)) {
+    // 导过就不会再变：Proma 的 Claude 时代会话是只读历史，不能续聊也不能回退
+    // （Proma agent-orchestrator.ts 的 legacyTranscript.continuationRequired 拦截）
+    if (importedBySource.has(sourceFile)) {
       skip(entry.id, entry.title || null, "already-imported");
       continue;
     }
@@ -934,7 +991,7 @@ export async function scanImport(
       sourceId: entry.id,
       source: "proma",
       sourceKind: "claude-legacy",
-      change: "new",
+      change: freshChange(sourceFile),
       newMessages: 0,
       folder: resolution.folder,
       sourceFile,
@@ -980,7 +1037,10 @@ export async function scanImport(
     modelFallbackCount,
     subSessionCount,
     orphanedSubSessions,
-    lastImportAt: null,
+    lastImportAt: ledger.reduce<number | null>(
+      (latest, line) => (line.at !== null && (latest === null || line.at > latest) ? line.at : latest),
+      null,
+    ),
   };
 }
 
@@ -1078,7 +1138,8 @@ function linkSubSessions(
   let subSessionCount = 0;
   let orphanedSubSessions = 0;
   for (const item of plan) {
-    if (!parentSourceById.has(item.sourceId)) continue;
+    // 追加的既有会话已经挂在该挂的地方（parentId 取自它自己的 meta），不重新挂
+    if (item.change === "updated" || !parentSourceById.has(item.sourceId)) continue;
     const rootSourceId = rootAncestor(item.sourceId);
     const target = rootSourceId === null ? null : findParent(rootSourceId);
     if (target === null) {
@@ -1095,6 +1156,147 @@ function linkSubSessions(
     subSessionCount += 1;
   }
   return { subSessionCount, orphanedSubSessions };
+}
+
+// ---------------------------------------------------------------------------
+// 再次导入：与 orbita 的副本对齐
+// ---------------------------------------------------------------------------
+
+/** 源文件与某份 orbita 副本等长 = 没变（pi 文件只追加；导入时是原字节复制）。 */
+async function someCopyHasSize(copies: readonly SessionMeta[], bytes: number): Promise<boolean> {
+  for (const meta of copies) {
+    if (meta.piSessionFile === null) continue;
+    try {
+      if ((await stat(meta.piSessionFile)).size === bytes) return true;
+    } catch {
+      // 副本不在：交给 reimportState 按「判断不了」处理
+    }
+  }
+  return false;
+}
+
+interface CopyEntries {
+  meta: SessionMeta;
+  /** null = 副本读不了（不在 / 坏了） */
+  entries: SessionEntry[] | null;
+}
+
+/** 读 orbita 自己的副本。是自家文件，直接 parseSessionEntries，不做版本迁移（导入时已迁好）。 */
+async function readCopies(copies: readonly SessionMeta[]): Promise<CopyEntries[]> {
+  const out: CopyEntries[] = [];
+  for (const meta of copies) {
+    if (meta.piSessionFile === null) {
+      out.push({ meta, entries: null });
+      continue;
+    }
+    try {
+      const entries = parseSessionEntries(await readFile(meta.piSessionFile, "utf8")).filter(
+        (entry): entry is SessionEntry => entry.type !== "session",
+      );
+      out.push({ meta, entries });
+    } catch {
+      out.push({ meta, entries: null });
+    }
+  }
+  return out;
+}
+
+/**
+ * 源与一份副本的差异。pi 文件只追加、entry id 随机，导入是原字节复制——两份共有的 entry
+ * 就是导入那一刻的内容；**副本里最后一条也在源里的 entry** 就是导入点：
+ * 源里导入点之后的 user / assistant 消息 = Proma 的新消息；副本里导入点之后还有 entry =
+ * 在 orbita 接着聊过（任何类型都算：压缩、换模型都是在 orbita 跑过轮次才会写）。
+ *
+ * 导入点之后源里只多了非消息 entry（换模型、改思考档）不算有新消息——边界是聊天记录。
+ * Proma 回退重答也照样成立：回退是在树上从旧节点长出新枝，文件照旧只追加，新枝就是新消息。
+ *
+ * null = 一条共有的 entry 都没有，判断不了。只在源是 v1 格式时发生（迁移时 id 现铸，
+ * 每次读出来都不一样；本机 0 条），调用方按「没变」处理。
+ */
+export function compareToCopy(
+  source: readonly SessionEntry[],
+  copy: readonly SessionEntry[],
+): { newMessages: number; continuedHere: boolean } | null {
+  const position = new Map(source.map((entry, index) => [entry.id, index]));
+  for (let index = copy.length - 1; index >= 0; index -= 1) {
+    const at = position.get(copy[index]?.id ?? "");
+    if (at === undefined) continue;
+    let newMessages = 0;
+    for (const entry of source.slice(at + 1)) {
+      if (entry.type !== "message") continue;
+      const role = asRecord(entry.message)?.["role"];
+      if (role === "user" || role === "assistant") newMessages += 1;
+    }
+    return { newMessages, continuedHere: index < copy.length - 1 };
+  }
+  return null;
+}
+
+type ReimportState =
+  | { kind: "unchanged" }
+  | { kind: "updated"; meta: SessionMeta; newMessages: number }
+  | { kind: "diverged"; meta: SessionMeta; newMessages: number };
+
+/**
+ * 一个已导入的源对照它在 orbita 的全部副本（另导过一份的有两份）：
+ * - 有一份已经跟上源（导入点之后源里没有新消息），或有一份判断不了 → 没变
+ * - 否则有 orbita 没接着聊的那份 → updated，新消息追加进它（多份时取最近导入的，即新消息最少的）
+ * - 都接着聊了 → diverged，另导一份放在新消息最少的那份旁边
+ */
+export function reimportState(source: readonly SessionEntry[], copies: readonly CopyEntries[]): ReimportState {
+  let updated: { meta: SessionMeta; newMessages: number } | null = null;
+  let diverged: { meta: SessionMeta; newMessages: number } | null = null;
+  for (const copy of copies) {
+    const diff = copy.entries === null ? null : compareToCopy(source, copy.entries);
+    if (diff === null || diff.newMessages === 0) return { kind: "unchanged" };
+    const candidate = { meta: copy.meta, newMessages: diff.newMessages };
+    if (!diff.continuedHere) {
+      if (updated === null || candidate.newMessages < updated.newMessages) updated = candidate;
+    } else if (diverged === null || candidate.newMessages < diverged.newMessages) {
+      diverged = candidate;
+    }
+  }
+  if (updated !== null) return { kind: "updated", ...updated };
+  if (diverged !== null) return { kind: "diverged", ...diverged };
+  return { kind: "unchanged" };
+}
+
+/**
+ * updated 条目：落点、标题、模型、生命周期全取 orbita 这边的 meta（会话进了 orbita 就归 orbita
+ * 管，Proma 侧后来改的标题 / 归档 / 星标不跟）；只有问答时间按新的源重算。
+ * folder 为 null：它不进文件夹分组，也没有去向可选。
+ */
+function updatedPlanItem(
+  entry: PromaSessionIndexEntry,
+  meta: SessionMeta,
+  newMessages: number,
+  sessionEntries: readonly SessionEntry[],
+  bytes: number,
+): ImportPlanItem {
+  return {
+    sourceId: entry.id,
+    source: "proma",
+    sourceKind: "pi",
+    change: "updated",
+    newMessages,
+    folder: null,
+    sourceFile: entry.piSessionFile,
+    sessionId: meta.id,
+    parentId: meta.parentId ?? null,
+    title: meta.title,
+    workspaceId: meta.workspaceId,
+    cwd: meta.cwd,
+    providerId: meta.providerId,
+    modelId: meta.modelId,
+    importedModel: meta.importedModel ?? null,
+    modelMatched: true,
+    archived: meta.archived,
+    pinned: meta.pinned,
+    starred: meta.starred === true,
+    createdAt: meta.createdAt,
+    updatedAt: qaTime(lastQaTimestamp(sessionEntries), meta.createdAt, meta.updatedAt),
+    bytes,
+  };
 }
 
 /**
@@ -1230,6 +1432,9 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
   };
   const failed: ImportRunReport["failed"] = [];
   let imported = 0;
+  let updated = 0;
+  const runAt = Date.now();
+  const ledgerLines: ImportLedgerLine[] = [];
 
   // 工作区先落。扫描与执行之间用户可能手动加了同路径工作区——回调侧按 path 去重
   // （WorkspaceStore.addImported 语义），挂它的会话依旧成立（按 id 挂）
@@ -1247,7 +1452,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
 
   // 母会话先落，同批母会话落盘失败的子会话不落：否则 parentId 悬空，子会话从左栏（它不是根）
   // 与右栏（母会话不存在）同时消失。它记进 failed 而不是降为根会话导入——降根之后它就是
-  // already-imported，永远挂不回去；不落的话，重导时母会话成功了它按规则 ① / ② 挂回去
+  // already-imported，永远挂不回去；不落的话，重导时母会话成功了它按规则 ① / ② 挂回去。
+  // 追加（updated）失败的母会话不算：它本来就在 orbita 里，子会话照样挂得上
   const planSessionIds = new Set(report.plan.map((item) => item.sessionId));
   const parentInPlan = (item: ImportPlanItem): boolean =>
     item.parentId !== null && planSessionIds.has(item.parentId);
@@ -1268,8 +1474,32 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
       continue;
     }
     try {
+      if (item.change === "updated") {
+        // 追加：副本换成新的源（副本是源的前缀，整份换 = 追加），transcript 整份重派生
+        const target = deps.existingMetas.find((meta) => meta.id === item.sessionId)?.piSessionFile ?? null;
+        if (target === null) throw new Error("the imported session has no pi session file to update");
+        const session = await runPiImport(item, deps, { path: target });
+        await deps.refreshSession(item.sessionId, session.records, {
+          recentQueries: recentQueriesFromRecords(session.records),
+          stats: aggregatePrefixUsage(session.records),
+          updatedAt: item.updatedAt,
+        });
+        updated += 1;
+        ledgerLines.push(ledgerLine(item, "update", runAt));
+        continue;
+      }
       const sessionFile =
-        item.sourceKind === "pi" ? await runPiImport(item, deps) : await runClaudeLegacyImport(item, deps);
+        item.sourceKind === "claude-legacy"
+          ? await runClaudeLegacyImport(item, deps)
+          : await runPiImport(
+              item,
+              deps,
+              // 另导一份：不能落在原会话副本的文件名上（会盖掉 orbita 接着聊的那份），换一个
+              // pi session id（= 新会话的 orbita id）另起文件
+              item.change === "diverged"
+                ? { path: join(deps.piSessionDir, `${basename(item.sourceFile, ".jsonl").split("_")[0]}_${item.sessionId}.jsonl`), headerId: item.sessionId }
+                : { path: join(deps.piSessionDir, basename(item.sourceFile)) },
+            );
 
       // meta + transcript：两条源路最终都汇到同一个形态——records 已由各路返给 meta
       // 构造共用（records 的产出在 runPiImport/runClaudeLegacyImport 里，这里统一落盘）
@@ -1302,8 +1532,9 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
       };
       await deps.persistSession(meta, sessionFile.records);
       imported += 1;
+      ledgerLines.push(ledgerLine(item, item.change === "diverged" ? "copy" : "import", runAt));
     } catch (cause) {
-      failedSessionIds.add(item.sessionId);
+      if (item.change !== "updated") failedSessionIds.add(item.sessionId);
       failed.push({
         sourceId: item.sourceId,
         sessionId: null,
@@ -1312,14 +1543,55 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
     }
   }
 
+  await writeLedger(deps, ledgerLines);
+
   return {
     imported,
-    updated: 0,
+    updated,
     skipped: skippedCount(report),
     failed,
     createdWorkspaces,
     mergedWorkspaceIds: report.mergedWorkspaceIds,
   };
+}
+
+function ledgerLine(item: ImportPlanItem, action: ImportLedgerLine["action"], at: number): ImportLedgerLine {
+  return {
+    at,
+    action,
+    source: item.source,
+    sourceId: item.sourceId,
+    sourceFile: item.sourceFile,
+    sessionId: item.sessionId,
+    title: item.title,
+  };
+}
+
+/**
+ * 本次导入追加进清单。清单第一次写的时候，把此前导入、清单里还没有的会话补记进去
+ * （at 为 null：当时的时刻不可考）——不补的话，它们以后在 orbita 删了会被当成新会话列出。
+ *
+ * 写失败不让整次导入报错：会话都已落盘，报错会让人以为没导进来。代价只是清单缺这几行
+ * （删过的会被当成新的列出），记日志。
+ */
+async function writeLedger(deps: RunImporterDeps, lines: readonly ImportLedgerLine[]): Promise<void> {
+  try {
+    const recorded = new Set((await readImportLedger(deps.ledgerFile)).map((line) => line.sessionId));
+    const backfill: ImportLedgerLine[] = deps.existingMetas
+      .filter((meta) => meta.importedFrom !== undefined && !recorded.has(meta.id))
+      .map((meta) => ({
+        at: null,
+        action: "backfill",
+        source: "proma",
+        sourceId: null,
+        sourceFile: meta.importedFrom ?? "",
+        sessionId: meta.id,
+        title: meta.title,
+      }));
+    await appendImportLedger(deps.ledgerFile, [...backfill, ...lines]);
+  } catch (cause) {
+    console.error("[import] 导入清单写入失败，会话已落盘；在 orbita 删过的会话下次可能被当成新的列出", cause);
+  }
 }
 
 /** 一条会话的灌入产物：orbita 自己的 pi 本子路径 + 从它派生的 transcript + 思考档。 */
@@ -1331,18 +1603,26 @@ interface ImportedSession {
 
 /**
  * pi 真源的灌入：v3 原字节复制（保真），v1/v2 用内存迁移后的内容重写。
- * 同名副本已存在（极端：两个 Proma 索引共用同一 pi 文件，扫描已按同源去重，
- * 这里只是防御）直接复用——文件名含 pi session id，同名即同 session。
+ * dest.path 由调用方定：新导入落在源文件同名处（文件名含 pi session id，同名即同 session）；
+ * 追加落在既有副本上；另导一份换一个 headerId 另起文件（header 改写，entries 原样）。
  */
-async function runPiImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+async function runPiImport(
+  item: ImportPlanItem,
+  deps: RunImporterDeps,
+  dest: { path: string; headerId?: string },
+): Promise<ImportedSession> {
   const source = await readPiSource(item.sourceFile, deps.promaRoot, deps.extraSourceRoots ?? []);
   const sessionEntries = source.entries.filter(
     (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
   );
-  const destPath = join(deps.piSessionDir, basename(item.sourceFile));
-  await mkdir(deps.piSessionDir, { recursive: true });
-  if (source.needsRewrite) {
-    await writeTextAtomic(destPath, `${source.entries.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  const destPath = dest.path;
+  await mkdir(dirname(destPath), { recursive: true });
+  if (source.needsRewrite || dest.headerId !== undefined) {
+    const headerId = dest.headerId;
+    const lines = source.entries.map((line) =>
+      line.type === "session" && headerId !== undefined ? { ...line, id: headerId } : line,
+    );
+    await writeTextAtomic(destPath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
   } else {
     await copyPiFile(item.sourceFile, destPath);
   }
