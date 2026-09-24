@@ -178,7 +178,7 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
       },
     },
     {
-      // cwd = 数据根内的 workspace-files；starred → pinned；glm-5.3 精确命中
+      // cwd = 数据根内的 workspace-files；starred → 星标（不是置顶）；glm-5.3 精确命中
       file: "2026-08-17T12-39-41-391Z_01a00fbc-1c4f-775b-a194-6b141831a363.jsonl",
       entry: {
         id: "bd8e2a4b-6559-4a48-8d23-5d38d21edb5e",
@@ -252,10 +252,11 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.equal(defaultBin.providerId, "zai-coding");
     assert.equal(defaultBin.importedModel, "qwen3.7-max");
     assert.equal(defaultBin.archived, true);
-    // ② 同上收容区，但 starred → pinned；glm-5.3 精确命中
+    // ② 同上收容区，starred → 星标、不置顶；glm-5.3 精确命中
     const starred = bySource.get("bd8e2a4b-6559-4a48-8d23-5d38d21edb5e");
     assert.ok(starred !== undefined);
-    assert.equal(starred.pinned, true);
+    assert.equal(starred.pinned, false);
+    assert.equal(starred.starred, true);
     assert.equal(starred.modelMatched, true);
     assert.equal(starred.modelId, "glm-5.3");
     // ③ 同址合并 → 挂 orbita 既有工作区，cwd 取其 path
@@ -307,7 +308,8 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.equal(m1.importedModel, "qwen3.7-max");
     assert.equal(m1.importedFrom, join(promaRoot, "sdk-config", "sessions", REAL[0]!.file));
     assert.equal(m1.createdAt, 1784521400025);
-    assert.equal(m1.updatedAt, 1784522308322);
+    // updatedAt = 最后一条问答的时刻（索引写的是 1784522308322，晚 36 秒——Proma 的非消息操作推的）
+    assert.equal(m1.updatedAt, 1784522272190);
     assert.equal(m1.archived, true);
     assert.equal(m1.pinned, false);
     // pi 副本落在 orbita 自己的目录（自包含），且原字节等长
@@ -322,12 +324,14 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.equal(roleCount("user"), 2);
     assert.equal(roleCount("assistant"), 14);
     assert.equal(roleCount("tool"), 22);
-    // 首条 user 是那段时间戳系统注入 + 附件请求
+    // 首条 user：pi 里是 Proma 拼的时间 / 工作区 / 工作目录 + 原文；testdata 没有界面日志，
+    // 走按格式剥的兜底，transcript 里只剩用户那句话（pi 副本上面已断言原字节不变）
     const first = detail1.transcript[0];
     assert.ok(first !== undefined && first.role === "user");
     const text = first.content.find((b) => b.type === "text");
     assert.ok(text !== undefined && text.type === "text");
-    assert.ok(text.text.startsWith("**当前时间: Monday, July 20, 2026"));
+    assert.ok(text.text.startsWith("会话里有三个附加文件夹，帮我看看里面的哪个文件有提及architecture"));
+    assert.ok(!text.text.includes("<workspace_state>"));
     // assistant 都带终态（无 streaming）、model 是当时的真源 provider
     for (const record of detail1.transcript) {
       if (record.role !== "assistant") continue;
@@ -345,10 +349,11 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.ok(m1.stats !== null);
     assert.ok(m1.stats.tokens.total > 0);
 
-    // 样本 2：36 条 message；recentQueries 从 user 消息派生；starred → pinned
+    // 样本 2：36 条 message；recentQueries 从 user 消息派生；starred → 星标
     const m2 = byTitle.get("肖志锋新分支功能解析");
     assert.ok(m2 !== undefined);
-    assert.equal(m2.pinned, true);
+    assert.equal(m2.pinned, false);
+    assert.equal(m2.starred, true);
     assert.equal(m2.providerId, "zai-coding");
     assert.equal(m2.modelId, "glm-5.3");
     const detail2 = await store.load(m2.id);
@@ -782,6 +787,7 @@ describe("子会话挂回母会话（Proma 的 parentSessionId → parentId）",
     assert.equal(sub.cwd, "/tmp/proj");
     assert.equal(sub.archived, false);
     assert.equal(sub.pinned, false);
+    assert.equal(sub.starred, false);
 
     const run = await runImport(deps());
     assert.equal(run.imported, 2);
@@ -1061,6 +1067,127 @@ describe("Migration 页的选择：去向覆盖、勾选过滤、探测", () => 
     assert.ok(missing.paths.includes(join("/tmp/old-root", "sdk-config", "sessions")));
     await writeIndex([]);
     assert.equal((await probeProma(promaRoot)).found, true);
+  });
+});
+
+describe("Proma 的置顶与星标是两个字段", () => {
+  test("pinned → 置顶；starred → 星标、不置顶；落盘时没星标就不写 starred 键", async () => {
+    const a = await writePiSession("2026-09-01T00-00-00-000Z_pin-000000000000001.jsonl", "/tmp/p");
+    const b = await writePiSession("2026-09-01T00-01-00-000Z_sta-000000000000002.jsonl", "/tmp/p");
+    await writeIndex([
+      { id: "pinned", title: "置顶的", piSessionFile: a, pinned: true, createdAt: 1, updatedAt: 2 },
+      { id: "starred", title: "星标的", piSessionFile: b, starred: true, createdAt: 3, updatedAt: 4 },
+    ]);
+    const report = await scanImport(deps());
+    const by = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([by.get("pinned")?.pinned, by.get("pinned")?.starred], [true, false]);
+    assert.deepEqual([by.get("starred")?.pinned, by.get("starred")?.starred], [false, true]);
+    await runImport(deps());
+    const metas = await store.list();
+    const pinnedMeta = metas.find((meta) => meta.title === "置顶的");
+    const starredMeta = metas.find((meta) => meta.title === "星标的");
+    assert.equal(pinnedMeta?.pinned, true);
+    assert.equal(pinnedMeta?.starred, false);
+    assert.equal(starredMeta?.pinned, false);
+    assert.equal(starredMeta?.starred, true);
+  });
+});
+
+describe("会话时间按问答时间算", () => {
+  test("索引的 updatedAt 被非消息操作推高 → 用最后一条问答的时刻；没有消息才退回索引", async () => {
+    // writePiSession 的两条消息时间是 1780000001000 / 1780000002000
+    const withMessages = await writePiSession("2026-09-01T00-00-00-000Z_qat-000000000000001.jsonl", "/tmp/q");
+    const empty = join(promaRoot, "sdk-config", "sessions", "2026-09-01T00-00-00-000Z_emp-000000000000002.jsonl");
+    await writeFile(empty, `${JSON.stringify({ type: "session", version: 3, id: "emp", timestamp: "2026-09-01T00:00:00.000Z", cwd: "/tmp/q" })}\n`);
+    await writeIndex([
+      { id: "archived-later", title: "归档推高", piSessionFile: withMessages, createdAt: 1779999999000, updatedAt: 1790000000000 },
+      { id: "no-messages", title: "空会话", piSessionFile: empty, createdAt: 1779000000000, updatedAt: 1779500000000 },
+    ]);
+    const report = await scanImport(deps());
+    const by = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.equal(by.get("archived-later")?.updatedAt, 1780000002000);
+    assert.equal(by.get("no-messages")?.updatedAt, 1779500000000);
+  });
+
+  test("分叉会话带着源会话的旧消息：不早于它被创建的时刻", async () => {
+    const forked = await writePiSession("2026-09-01T00-00-00-000Z_frk-000000000000003.jsonl", "/tmp/q");
+    await writeIndex([{ id: "fork", title: "分叉", piSessionFile: forked, createdAt: 1785000000000, updatedAt: 1785000000500 }]);
+    const report = await scanImport(deps());
+    assert.equal(report.plan[0]?.updatedAt, 1785000000000);
+  });
+});
+
+describe("用户消息还原成原文（Proma 的 prompt builder 拼进去的东西不进 transcript）", () => {
+  /** 第二条用户消息：Proma 拼好的整段（时间 + 工作区 + 工作目录 + 原文） */
+  const enveloped = {
+    type: "message",
+    id: "e3",
+    parentId: "e2",
+    timestamp: "2026-09-01T00:00:03.000Z",
+    message: {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "**当前时间: Tuesday, September 1, 2026 at 08:00 AM GMT+8**\n\n<workspace_state>\n项目: 默认工作区\n</workspace_state>\n\n<working_directory>/Users/me/.proma-dev/w</working_directory>\n\n@file:/Users/me/plan.html 这个计划太描述性了",
+        },
+      ],
+      timestamp: 1780000003000,
+    },
+  };
+
+  async function seed(renderLog: unknown[] | null): Promise<void> {
+    const pi = await writePiSession("2026-09-01T00-00-00-000Z_env-000000000000001.jsonl", "/tmp/e", [enveloped]);
+    await writeIndex([{ id: "s-env", title: "带信封", piSessionFile: pi, createdAt: 1, updatedAt: 2 }]);
+    if (renderLog !== null) {
+      await mkdir(join(promaRoot, "agent-sessions"), { recursive: true });
+      await writeFile(
+        join(promaRoot, "agent-sessions", "s-env.jsonl"),
+        renderLog.map((row) => JSON.stringify(row)).join("\n") + "\n",
+      );
+    }
+  }
+
+  const userRow = (text: string): Record<string, unknown> => ({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text }] },
+    parent_tool_use_id: null,
+  });
+
+  async function userTexts(): Promise<string[]> {
+    const [meta] = await store.list();
+    assert.ok(meta !== undefined);
+    const detail = await store.load(meta.id);
+    assert.ok(detail !== null);
+    return detail.transcript.flatMap((record) =>
+      record.role === "user" ? record.content.flatMap((block) => (block.type === "text" ? [block.text] : [])) : [],
+    );
+  }
+
+  test("有界面日志且条数对得上：用界面日志里的原文，@file 解码；最近提问也是原文；pi 副本原样", async () => {
+    await seed([
+      userRow("第一条用户消息"),
+      { type: "assistant", message: { id: "m1", role: "assistant", content: [{ type: "text", text: "回答" }] }, parent_tool_use_id: null },
+      userRow("@file:%2FUsers%2Fme%2Fplan.html 这个计划太描述性了"),
+    ]);
+    await runImport(deps());
+    assert.deepEqual(await userTexts(), ["第一条用户消息", "@/Users/me/plan.html 这个计划太描述性了"]);
+    const [meta] = await store.list();
+    assert.equal(meta?.recentQueries[0], "@/Users/me/plan.html 这个计划太描述性了");
+    const copy = await readFile(meta?.piSessionFile ?? "", "utf8");
+    assert.match(copy, /当前时间/);
+  });
+
+  test("没有界面日志：按 Proma 的拼接格式剥", async () => {
+    await seed(null);
+    await runImport(deps());
+    assert.deepEqual(await userTexts(), ["第一条用户消息", "@/Users/me/plan.html 这个计划太描述性了"]);
+  });
+
+  test("界面日志条数对不上：不硬配，同样按格式剥", async () => {
+    await seed([userRow("只有一条")]);
+    await runImport(deps());
+    assert.deepEqual(await userTexts(), ["第一条用户消息", "@/Users/me/plan.html 这个计划太描述性了"]);
   });
 });
 

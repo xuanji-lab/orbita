@@ -165,7 +165,13 @@ export interface ImportPlanItem {
   modelMatched: boolean;
   /** Proma 侧的归档态照搬——归档过的会话导进来还是归档的 */
   archived: boolean;
+  /** Proma 的置顶（`pinned`）→ orbita 的置顶 */
   pinned: boolean;
+  /**
+   * Proma 的星标（`starred`）→ orbita 的星标。两个是独立字段：Proma 07-21 加的星标
+   * 「仅用于侧栏快速识别，不影响排序或置顶」，不能当置顶导（2026-09-24 全量导入时发现）
+   */
+  starred: boolean;
   createdAt: number;
   updatedAt: number;
   /** 源 pi 文件字节数（体量估算的原料） */

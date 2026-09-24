@@ -53,6 +53,7 @@ import {
   type ClaudeMainRow,
 } from "./claude-legacy.ts";
 import { aggregatePrefixUsage } from "./store.ts";
+import { promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
 import {
   deriveSessionTitle,
   recentQueriesFromRecords,
@@ -151,6 +152,7 @@ interface PromaSessionIndexEntry {
   updatedAt: number | null;
   archived: boolean;
   pinned: boolean;
+  starred: boolean;
   /** Proma 的 `parentSessionId`：delegation 派出的子会话指向母会话的 Proma id；null = 根会话 */
   parentSourceId: string | null;
 }
@@ -165,6 +167,7 @@ interface PromaClaudeIndexEntry {
   updatedAt: number | null;
   archived: boolean;
   pinned: boolean;
+  starred: boolean;
   parentSourceId: string | null;
 }
 
@@ -234,8 +237,11 @@ export function parsePromaSessions(raw: string): {
       createdAt: optionalNumber(item["createdAt"]),
       updatedAt: optionalNumber(item["updatedAt"]),
       archived: item["archived"] === true,
-      // 字段两代：早期 pinned，后来 starred（互斥出现），语义都是「置顶」
-      pinned: item["pinned"] === true || item["starred"] === true,
+      // 两个独立字段：pinned = 置顶；starred = 星标（Proma 07-21 加，「不影响排序或置顶」）。
+      // 早先把 starred 也当置顶导，是把它误读成了 pinned 的新名字（本机 pinned=true 0 条、
+      // starred=true 55 条，导进来一片置顶）
+      pinned: item["pinned"] === true,
+      starred: item["starred"] === true,
       // 只认 delegation 的 parentSessionId。explorationParentSessionId（Proma 的探索分叉）
       // 是从某条消息岔出去的独立会话，不是子会话，照根会话导
       parentSourceId: optionalString(item["parentSessionId"]),
@@ -848,8 +854,13 @@ export async function scanImport(
       modelMatched: mapped.matched,
       archived: entry.archived,
       pinned: entry.pinned,
+      starred: entry.starred,
       createdAt: entry.createdAt ?? (source.headerTimestamp || Date.now()),
-      updatedAt: entry.updatedAt ?? entry.createdAt ?? (source.headerTimestamp || Date.now()),
+      updatedAt: qaTime(
+        lastQaTimestamp(sessionEntries),
+        entry.createdAt,
+        entry.updatedAt ?? entry.createdAt ?? (source.headerTimestamp || Date.now()),
+      ),
       bytes,
     });
   }
@@ -935,8 +946,9 @@ export async function scanImport(
       modelMatched: mapped.matched,
       archived: entry.archived,
       pinned: entry.pinned,
+      starred: entry.starred,
       createdAt,
-      updatedAt: entry.updatedAt ?? entry.createdAt ?? createdAt,
+      updatedAt: qaTime(lastRowTimestamp(rows), entry.createdAt, entry.updatedAt ?? entry.createdAt ?? createdAt),
       bytes,
     });
   }
@@ -1015,7 +1027,7 @@ interface ParentTarget {
  * （成环的一组 parentId 互指，rootSessions 会把它们全部滤出左栏，等于数据丢了）。
  *
  * 子会话**对齐母会话的工作区与 cwd**（同一工作区是 orbita 子会话的契约；本机 284/284
- * 本来就同工作区，对齐是防御），pinned / archived 置 false——子会话没有生命周期，
+ * 本来就同工作区，对齐是防御），pinned / starred / archived 置 false——子会话没有生命周期，
  * 只从母会话的右栏到达。
  */
 function linkSubSessions(
@@ -1072,10 +1084,50 @@ function linkSubSessions(
     item.cwd = target.cwd;
     if (target.folder !== undefined) item.folder = target.folder;
     item.pinned = false;
+    item.starred = false;
     item.archived = false;
     subSessionCount += 1;
   }
   return { subSessionCount, orphanedSubSessions };
+}
+
+/**
+ * 会话的 updatedAt 取**问答时间**：最后一条 user / assistant 消息的时刻（wafo 2026-09-24：
+ * 进 orbita 后按会话内部的问答时间排，不按导入时间，也不按 Proma 索引的 updatedAt）。
+ *
+ * 为什么不信索引：Proma 的归档、置顶这类不发消息的操作也会推高它。本机 423 条可比的根会话
+ * 里 53 条比最后一条消息晚 1 小时以上，52 条是成批归档的（时间扎堆在 07-25 22:03、08-17 13:33、
+ * 09-05 12:43），导进来会按归档那一刻排。orbita 自己也只在追加消息时推 updatedAt，
+ * 置顶、改名都不动它——导入的会话与原生会话由此同一口径。
+ *
+ * 不早于 createdAt：Proma 的分叉会话带着源会话的旧消息，没发新消息时「最后一条问答」早于
+ * 它被创建的时刻；建分叉是用户真做过的事，按创建时刻排。没有任何消息时退回索引值。
+ */
+function qaTime(lastQa: number | null, createdAt: number | null, fallback: number): number {
+  if (lastQa === null) return fallback;
+  return createdAt === null ? lastQa : Math.max(lastQa, createdAt);
+}
+
+/** pi 文件里最后一条 user / assistant 消息的时刻；一条都没有返回 null。 */
+function lastQaTimestamp(entries: readonly SessionEntry[]): number | null {
+  let last: number | null = null;
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    const message = asRecord(entry.message);
+    if (message === null || (message["role"] !== "user" && message["role"] !== "assistant")) continue;
+    const timestamp = messageTimestamp(entry, message);
+    if (timestamp !== 0 && (last === null || timestamp > last)) last = timestamp;
+  }
+  return last;
+}
+
+/** claude legacy 行里最晚的时间戳（行里只有主对话的 user / assistant）。 */
+function lastRowTimestamp(rows: readonly ClaudeMainRow[]): number | null {
+  let last: number | null = null;
+  for (const row of rows) {
+    if (row.timestamp !== 0 && (last === null || row.timestamp > last)) last = row.timestamp;
+  }
+  return last;
 }
 
 /** claude legacy 行里最早的时间戳（索引缺 createdAt 时的兜底；_createdAt 也在 rowTimestamp 里）。 */
@@ -1234,6 +1286,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
         thinkingLevel: sessionFile.thinkingLevel,
         piSessionFile: sessionFile.path,
         pinned: item.pinned,
+        // 星标缺席即否（SessionMeta 的纪律）：没星标就不写这个键
+        ...(item.starred ? { starred: true } : null),
         archived: item.archived,
         recentQueries: recentQueriesFromRecords(sessionFile.records),
         stats: aggregatePrefixUsage(sessionFile.records),
@@ -1285,11 +1339,27 @@ async function runPiImport(item: ImportPlanItem, deps: RunImporterDeps): Promise
   } else {
     await copyPiFile(item.sourceFile, destPath);
   }
+  // transcript 里的用户消息还原成用户写的原文（proma-user-text.ts）：主路是 Proma 的界面日志，
+  // 读不到就按 Proma 的拼接格式剥。**pi 副本上面已原样落盘**——那是模型当时读到的，不改
+  const renderLog = await readRenderLog(deps.promaRoot, item.sourceId);
+  const userTexts = promaUserTextMap(sessionEntries, renderLog === null ? null : promaUserTexts(renderLog));
   return {
     path: destPath,
-    records: entriesToRecords(buildContextEntries(sessionEntries)),
+    records: withUserTexts(entriesToRecords(buildContextEntries(sessionEntries)), userTexts),
     thinkingLevel: parseThinkingLevel(lastThinkingLevel(sessionEntries)),
   };
+}
+
+/**
+ * Proma 的界面日志（与 claude legacy 源同一个目录、同一种格式）。只用来取用户原文，读不到
+ * 不算失败——transcript 退回按格式剥，导入照常。
+ */
+async function readRenderLog(promaRoot: string, sourceId: string): Promise<string | null> {
+  try {
+    return await readFile(claudeSourceFile(promaRoot, sourceId), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1311,9 +1381,13 @@ async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps
     // 扫描期已剔除无 assistant 消息的文件；这里防御扫描与执行之间文件被改坏
     throw new Error("no assistant messages — nothing was persisted by pi");
   }
+  // 源本身就是界面日志：用户行已是原文，这一步实际只解码 @file: 链接（条数对不上时按格式剥，
+  // 对原文是空操作）
+  const contextEntries = manager.buildContextEntries();
+  const userTexts = promaUserTextMap(contextEntries, promaUserTexts(raw));
   return {
     path,
-    records: entriesToRecords(manager.buildContextEntries()),
+    records: withUserTexts(entriesToRecords(contextEntries), userTexts),
     // claude legacy 没有思考档记录（当时的 Claude Code 无此概念），落缺省档
     thinkingLevel: "medium",
   };
