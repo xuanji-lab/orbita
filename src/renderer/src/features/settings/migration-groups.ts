@@ -42,6 +42,7 @@ export const RANGE_LABEL: Record<RangeFilter, string> = {
 export const SOURCE_LABEL: Record<ImportSourceId, string> = {
   proma: "Proma",
   "claude-code": "Claude Code",
+  "kimi-code": "Kimi Code",
   "agent-skills": "Shared agent skills",
 };
 

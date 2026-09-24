@@ -13,15 +13,17 @@
  */
 
 /**
- * 迁移来源。Kimi Code / opencode 各自一刀再加进来
+ * 迁移来源。opencode 那一刀再加进来
  * （2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
  *
  * - proma：Proma 桌面应用（~/.proma-dev）
  * - claude-code：Claude Code 的会话存储（~/.claude/projects），命令行与 Claude 桌面应用共用；
  *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题；另有 ~/.claude/skills
+ * - kimi-code：Kimi Code 命令行（~/.kimi-code）：会话在 sessions/<工作区>/<会话>/ 下，对话是
+ *   agents/main/wire.jsonl 这份事件流；另有 mcp.json。skills 用的是共用目录（归 agent-skills）
  * - agent-skills：多家 agent 共用的 skills 目录（~/.agents/skills），只有 skills，没有会话
  */
-export type ImportSourceId = "proma" | "claude-code" | "agent-skills";
+export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "agent-skills";
 
 /**
  * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
@@ -103,7 +105,7 @@ export type ImportSkipReason =
   | "bad-session-file"
   /** agent-sessions.json 里这条索引本身坏了（缺 id / 路径不是字符串等） */
   | "bad-index-entry"
-  /** 能读但转不出可续聊内容：claude legacy / Claude Code 文件里没有 assistant 消息
+  /** 能读但转不出可续聊内容：claude legacy / Claude Code / Kimi Code 的会话里没有 assistant 消息
    *  （纯旧扁平 / 空 draft / 只开了个头——pi 只在有 assistant 消息时才落盘文件） */
   | "unsupported-format";
 
@@ -138,7 +140,10 @@ export type ImportSourceKind =
   | "claude-legacy"
   /** Claude Code 自己的会话文件（~/.claude/projects/<目录>/<id>.jsonl）：同一套消息形状，
    *  行上多了 parentUuid 树与各种非消息行，清洗后走同一条转换 */
-  | "claude-code";
+  | "claude-code"
+  /** Kimi Code 的事件流（sessions/…/agents/main/wire.jsonl）：用户消息是整条记录，助手消息由
+   *  step / content.part / tool.call / tool.result 事件拼出来，转换构造 pi 文件 */
+  | "kimi-code";
 
 /**
  * 一条计划条目相对 orbita 的状态（再次导入，wafo 2026-09-24 23:55 裁决）。
@@ -391,7 +396,7 @@ export function isSelectablePlanItem(item: ImportPlanItem, planSessionIds: Reado
 // IPC 边界的入参校验
 // ---------------------------------------------------------------------------
 
-const SOURCE_IDS: readonly string[] = ["proma", "claude-code", "agent-skills"] satisfies readonly ImportSourceId[];
+const SOURCE_IDS: readonly string[] = ["proma", "claude-code", "kimi-code", "agent-skills"] satisfies readonly ImportSourceId[];
 
 /** 来源 id 的运行时判定：IPC 入参与导入清单（imports.jsonl）读回时共用。 */
 export function isImportSourceId(value: unknown): value is ImportSourceId {
