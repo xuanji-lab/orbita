@@ -61,6 +61,7 @@ function report(plan: ImportPlanItem[], newWorkspaceIds: string[] = []): ImportS
     subSessionCount: 0,
     orphanedSubSessions: 0,
     lastImportAt: null,
+    skills: [],
   };
 }
 

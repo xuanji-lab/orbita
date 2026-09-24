@@ -1157,6 +1157,7 @@ export async function scanImport(
       (latest, line) => (line.at !== null && (latest === null || line.at > latest) ? line.at : latest),
       null,
     ),
+    skills: [],
   };
 }
 
@@ -1173,6 +1174,7 @@ export function emptyScanReport(): ImportScanReport {
     subSessionCount: 0,
     orphanedSubSessions: 0,
     lastImportAt: null,
+    skills: [],
   };
 }
 
@@ -1902,6 +1904,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
     failed,
     createdWorkspaces,
     mergedWorkspaceIds: report.mergedWorkspaceIds,
+    skillsImported: 0,
+    skillsFailed: [],
   };
 }
 

@@ -88,7 +88,9 @@ export function registerImportIpc(
   });
   ipcMain.handle(ipcChannels.importRun, async (_event, raw: unknown): Promise<ImportRunReport> => {
     const input = parseImportRunInput(raw);
-    if (input.sources.length === 0) return { imported: 0, updated: 0, skipped: 0, failed: [], createdWorkspaces: [], mergedWorkspaceIds: [] };
+    if (input.sources.length === 0) {
+      return { imported: 0, updated: 0, skipped: 0, failed: [], createdWorkspaces: [], mergedWorkspaceIds: [], skillsImported: 0, skillsFailed: [] };
+    }
     const environment = await deps();
     return runImport(
       {

@@ -181,6 +181,9 @@ export function MigrationView(props: {
         sources,
         sessions: selectedSourceFiles(grouped, selected),
         destinations: destinationChoices(grouped, overrides),
+        skills: [],
+        skillMode: "copy",
+        skillScopes: [],
       })
       .then((result) => {
         setRun({ kind: "done", result });
