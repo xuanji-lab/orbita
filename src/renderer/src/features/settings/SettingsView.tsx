@@ -7,9 +7,10 @@ import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
 import type { ProviderDto } from "@shared/provider";
+import type { Workspace } from "@shared/workspace";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
-import { ImportPromaRow } from "./ImportPromaRow";
+import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
 import { modelMenuItems, useBuiltinCatalog, usableProviders } from "./model-menu";
@@ -31,6 +32,7 @@ import { modelThinkingLevels } from "../chat/thinking-choice.ts";
 export const SETTINGS_TABS = [
   { id: "general", label: "General", icon: "sliders" },
   { id: "providers", label: "Providers", icon: "cpu" },
+  { id: "migration", label: "Migration", icon: "download" },
 ] as const satisfies readonly { id: string; label: string; icon: IconName }[];
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
@@ -44,6 +46,10 @@ export function SettingsView(props: {
   onProvidersChange: () => void;
   /** 导入落地后主界面两张列表（会话/工作区）要重读 */
   onImported: () => void;
+  /** 既有工作区（Migration 的去向菜单列它们） */
+  workspaces: readonly Workspace[];
+  /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
+  onTab: (tab: SettingsTab) => void;
 }) {
   const active = SETTINGS_TABS.find((t) => t.id === props.tab) ?? SETTINGS_TABS[0];
   return (
@@ -73,20 +79,24 @@ export function SettingsView(props: {
         </strong>
       </header>
 
-      <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-        <div style={{ width: "min(100%, var(--content-max-width))", height: "100%", margin: "0 auto" }}>
-          {props.tab === "general" ? (
-            <General
-              settings={props.settings}
-              providers={props.providers}
-              onChange={props.onSettingsChange}
-              onImported={props.onImported}
-            />
-          ) : (
-            <ProvidersView onChange={props.onProvidersChange} />
-          )}
+      {props.tab === "migration" ? (
+        // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格
+        <MigrationView
+          workspaces={props.workspaces}
+          onImported={props.onImported}
+          onOpenProviders={() => props.onTab("providers")}
+        />
+      ) : (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <div style={{ width: "min(100%, var(--content-max-width))", height: "100%", margin: "0 auto" }}>
+            {props.tab === "general" ? (
+              <General settings={props.settings} providers={props.providers} onChange={props.onSettingsChange} />
+            ) : (
+              <ProvidersView onChange={props.onProvidersChange} />
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -116,7 +126,6 @@ function General(props: {
   settings: AppSettings;
   providers: readonly ProviderDto[];
   onChange: (patch: SettingsPatch) => void;
-  onImported: () => void;
 }) {
   // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
   const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
@@ -334,30 +343,17 @@ function General(props: {
         />
       </Section>
       <Section label="Data">
-        {/* 导入入口自带行卡样式（按钮组 + 汇总多行），不走通用 Row */}
-        <ImportPromaRow onImported={props.onImported} />
         <DataDirectoryRow />
       </Section>
     </div>
   );
 }
 
-/** 分组标题与侧栏的节点标题同一个处理：mono、micro、大写加字距 */
+/** 分组标题与侧栏的节点标题同一个处理：mono、micro、大写加字距（`.section-label`，Migration 同用） */
 function Section(props: { label: string; children: React.ReactNode }) {
   return (
     <section style={{ display: "grid", gap: "var(--space-1)" }}>
-      <span
-        style={{
-          fontFamily: "var(--font-family-business)",
-          fontSize: "var(--font-size-micro)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          fontWeight: "var(--weight-bold)",
-          color: "var(--color-text-secondary)",
-        }}
-      >
-        {props.label}
-      </span>
+      <span className="section-label">{props.label}</span>
       {props.children}
     </section>
   );

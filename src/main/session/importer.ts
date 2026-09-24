@@ -59,13 +59,17 @@ import {
   type SessionMeta,
   type SessionRecord,
 } from "../../shared/session.ts";
-import type {
-  ImportPlanItem,
-  ImportRunReport,
-  ImportScanReport,
-  ImportSkipItem,
-  ImportSkipReason,
-  ImportWorkspacePlan,
+import {
+  isSelectablePlanItem,
+  type ImportDestination,
+  type ImportDestinationChoice,
+  type ImportPlanItem,
+  type ImportRunReport,
+  type ImportScanReport,
+  type ImportSkipItem,
+  type ImportSkipReason,
+  type ImportSourceProbe,
+  type ImportWorkspacePlan,
 } from "../../shared/import.ts";
 
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
@@ -97,6 +101,39 @@ export interface RunImporterDeps extends ImporterDeps {
   createWorkspace(workspace: { id: string; name: string; path: string }): Promise<void>;
   /** 单条会话落盘（meta + transcript 原子写；路径规则在 SessionStore） */
   persistSession(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// 探测（只 stat）
+// ---------------------------------------------------------------------------
+
+/**
+ * Proma 来源的探测：列出扫描会读的全部路径，只 stat 索引文件判断在不在。**不读内容**——
+ * 页面一打开就跑它，用户还没勾任何东西。paths 与扫描的实际读取范围一一对应：
+ * 会话索引、工作区表、pi 真源目录、claude legacy 渲染目录，以及旧根的 pi 真源（索引里
+ * 有条目仍指向那里）。
+ */
+export async function probeProma(promaRoot: string, extraRoots: readonly string[] = []): Promise<ImportSourceProbe> {
+  const index = join(promaRoot, "agent-sessions.json");
+  let found = false;
+  try {
+    found = (await stat(index)).isFile();
+  } catch {
+    found = false;
+  }
+  return {
+    id: "proma",
+    label: "Proma",
+    kind: "app",
+    paths: [
+      index,
+      join(promaRoot, "agent-workspaces.json"),
+      join(promaRoot, "sdk-config", "sessions"),
+      join(promaRoot, "agent-sessions"),
+      ...extraRoots.map((root) => join(root, "sdk-config", "sessions")),
+    ],
+    found,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +500,8 @@ async function normalizeForMatch(path: string): Promise<string> {
 interface WorkspaceResolution {
   workspaceId: string | null;
   cwd: string;
+  /** 源侧文件夹（Proma 工作区的 projectRootPath）；规则 ② 的三个分支都是 null。页面的分组键 */
+  folder: string | null;
   /** 要新建的工作区计划（id 即 workspaceId）；挂既有 / 无归属时为 null */
   create: ImportWorkspacePlan | null;
   /** 命中了哪个既有工作区（同址合并），未命中为 null */
@@ -495,6 +534,7 @@ async function resolveWorkspaceTarget(
     return {
       workspaceId: null,
       cwd: usableCwd(headerCwd, deps.promaRoot, deps.defaultCwd),
+      folder: null,
       create: null,
       mergedInto: null,
     };
@@ -504,7 +544,13 @@ async function resolveWorkspaceTarget(
   const wanted = await normalizeForMatch(promaWorkspace.projectRootPath);
   for (const orbita of orbitaWorkspaces) {
     if ((await normalizeForMatch(orbita.path)) === wanted) {
-      return { workspaceId: orbita.id, cwd: orbita.path, create: null, mergedInto: orbita.id };
+      return {
+        workspaceId: orbita.id,
+        cwd: orbita.path,
+        folder: promaWorkspace.projectRootPath,
+        create: null,
+        mergedInto: orbita.id,
+      };
     }
   }
 
@@ -514,6 +560,7 @@ async function resolveWorkspaceTarget(
   return {
     workspaceId: id,
     cwd: promaWorkspace.projectRootPath,
+    folder: promaWorkspace.projectRootPath,
     create: {
       id,
       name: normalizeWorkspaceName(promaWorkspace.name, promaWorkspace.projectRootPath),
@@ -522,6 +569,50 @@ async function resolveWorkspaceTarget(
     },
     mergedInto: null,
   };
+}
+
+/**
+ * 用户按文件夹改的去向（Migration 页每组的去向菜单）盖到默认解析上。没改的组原样返回。
+ *
+ * - tasks：不挂工作区；cwd 取文件夹本身（会话当初就在那儿跑），没有文件夹的组本来就是 Tasks
+ * - workspace(id)：挂到这个既有工作区，cwd 取它的 path。**id 不存在就抛错**——页面打开到
+ *   点 Import 之间工作区可能被删了，静默退回默认去向等于替用户换了目的地
+ * - new-workspace：只在默认解析本来就要新建时成立（文件夹为 null 或已是某个工作区时，
+ *   页面不给这个选项）；否则同样抛错，不猜
+ */
+function applyDestination(
+  resolution: WorkspaceResolution,
+  overrides: ReadonlyMap<string | null, ImportDestination>,
+  deps: ImporterDeps,
+): WorkspaceResolution {
+  const destination = overrides.get(resolution.folder);
+  if (destination === undefined) return resolution;
+  if (destination.kind === "tasks") {
+    return {
+      workspaceId: null,
+      cwd: resolution.folder ?? resolution.cwd,
+      folder: resolution.folder,
+      create: null,
+      mergedInto: null,
+    };
+  }
+  if (destination.kind === "workspace") {
+    const target = deps.workspaces.find((workspace) => workspace.id === destination.workspaceId);
+    if (target === undefined) {
+      throw new Error(`The workspace chosen for ${resolution.folder ?? "sessions without a folder"} no longer exists`);
+    }
+    return {
+      workspaceId: target.id,
+      cwd: target.path,
+      folder: resolution.folder,
+      create: null,
+      mergedInto: target.id,
+    };
+  }
+  if (resolution.create === null) {
+    throw new Error(`${resolution.folder ?? "Sessions without a folder"} can't become a new workspace`);
+  }
+  return resolution;
 }
 
 /** header cwd 可用性：空串或落在 Proma 数据根内 → 不可用，退 defaultCwd。 */
@@ -623,7 +714,17 @@ async function readPiSource(path: string, promaRoot: string, extraRoots: readonl
 // 扫描（dry-run）
 // ---------------------------------------------------------------------------
 
-export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> {
+/**
+ * 扫描（dry-run）。`destinations` 是用户按文件夹改过的去向：页面扫描时不传（报告给的是
+ * 默认去向），执行时 runImport 带着用户的选择重扫，同一条解析路径算出实际落点。
+ */
+export async function scanImport(
+  deps: ImporterDeps,
+  destinations: readonly ImportDestinationChoice[] = [],
+): Promise<ImportScanReport> {
+  const overrides = new Map<string | null, ImportDestination>(
+    destinations.map((choice) => [choice.folder, choice.destination]),
+  );
   const skipped: ImportSkipItem[] = [];
   const skip = (sourceId: string, title: string | null, reason: ImportSkipReason, detail?: string): void => {
     skipped.push(detail === undefined ? { sourceId, title, reason } : { sourceId, title, reason, detail });
@@ -706,11 +807,9 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
       (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
     );
 
-    const resolution = await resolveWorkspaceTarget(
-      entry.workspaceId,
-      promaWorkspaces,
-      deps.workspaces,
-      source.headerCwd,
+    const resolution = applyDestination(
+      await resolveWorkspaceTarget(entry.workspaceId, promaWorkspaces, deps.workspaces, source.headerCwd, deps),
+      overrides,
       deps,
     );
     if (resolution.create !== null) {
@@ -732,7 +831,9 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     totalBytes += bytes;
     plan.push({
       sourceId: entry.id,
+      source: "proma",
       sourceKind: "pi",
+      folder: resolution.folder,
       sourceFile: entry.piSessionFile,
       // 会话 id 在工作区解析**之后**铸：新建工作区的 id 也走 newId，消耗顺序是测试预铸队列的契约
       sessionId: deps.newId(),
@@ -794,11 +895,9 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     }
 
     // claude legacy 没有 pi header：无归属时 cwd 直接落 defaultCwd（usableCwd 对空串的行为）
-    const resolution = await resolveWorkspaceTarget(
-      entry.workspaceId,
-      promaWorkspaces,
-      deps.workspaces,
-      "",
+    const resolution = applyDestination(
+      await resolveWorkspaceTarget(entry.workspaceId, promaWorkspaces, deps.workspaces, "", deps),
+      overrides,
       deps,
     );
     if (resolution.create !== null) {
@@ -820,7 +919,9 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     totalBytes += bytes;
     plan.push({
       sourceId: entry.id,
+      source: "proma",
       sourceKind: "claude-legacy",
+      folder: resolution.folder,
       sourceFile,
       sessionId: deps.newId(),
       // claude legacy 时代也有 delegation 子会话（本机 20 条），同样由 linkSubSessions 回填
@@ -866,6 +967,21 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
   };
 }
 
+/** 一个来源都没勾时的扫描结果：什么都没读，也就什么都没有。 */
+export function emptyScanReport(): ImportScanReport {
+  return {
+    plan: [],
+    newWorkspaces: [],
+    mergedWorkspaceIds: [],
+    skipped: [],
+    withoutPiSession: 0,
+    totalBytes: 0,
+    modelFallbackCount: 0,
+    subSessionCount: 0,
+    orphanedSubSessions: 0,
+  };
+}
+
 /** claude legacy 条目的源文件路径（索引里没有，按 Proma 的目录惯例推导）。 */
 function claudeSourceFile(promaRoot: string, id: string): string {
   return join(promaRoot, "agent-sessions", `${id}.jsonl`);
@@ -880,6 +996,8 @@ interface ParentTarget {
   sessionId: string;
   workspaceId: string | null;
   cwd: string;
+  /** 母会话在本次计划里时是它的分组键；已导入的母会话没有（子会话保留自己的） */
+  folder?: string | null;
 }
 
 /**
@@ -929,7 +1047,7 @@ function linkSubSessions(
   const findParent = (rootSourceId: string): ParentTarget | null => {
     const inPlan = planBySourceId.get(rootSourceId);
     if (inPlan !== undefined) {
-      return { sessionId: inPlan.sessionId, workspaceId: inPlan.workspaceId, cwd: inPlan.cwd };
+      return { sessionId: inPlan.sessionId, workspaceId: inPlan.workspaceId, cwd: inPlan.cwd, folder: inPlan.folder };
     }
     const sourceFile = sourceFileById.get(rootSourceId);
     const imported = sourceFile === undefined ? undefined : importedByFile.get(sourceFile);
@@ -952,6 +1070,7 @@ function linkSubSessions(
     item.parentId = target.sessionId;
     item.workspaceId = target.workspaceId;
     item.cwd = target.cwd;
+    if (target.folder !== undefined) item.folder = target.folder;
     item.pinned = false;
     item.archived = false;
     subSessionCount += 1;
@@ -1015,8 +1134,42 @@ async function copyPiFile(source: string, dest: string): Promise<void> {
  * 工作区（会话要挂上去），再逐条复制 pi 副本 + 写 meta/transcript。单条失败记进
  * failed 继续——批处理不因一条炸掉，报告里说得清。
  */
-export async function runImport(deps: RunImporterDeps): Promise<ImportRunReport> {
-  const report = await scanImport(deps);
+/**
+ * 执行时的用户选择（ImportRunInput 去掉 sources 的部分；形状在 IPC 边界已校验）。
+ * 不传 = 计划全部导入（旧入口与测试的默认）。
+ */
+export interface ImportSelection {
+  /** 勾选的可选条目，按 sourceFile（见 isSelectablePlanItem） */
+  sessions: ReadonlySet<string>;
+  destinations: readonly ImportDestinationChoice[];
+}
+
+/**
+ * 按勾选裁计划：留下被勾的可选条目，以及母会话被留下的子会话。勾了但重扫时已不在计划里
+ * 的（比如刚被别处导入）自然落空——不报错，报告里本来就数得出实际导入了几条。
+ */
+export function selectPlan(plan: readonly ImportPlanItem[], chosen: ReadonlySet<string>): ImportPlanItem[] {
+  const planSessionIds = new Set(plan.map((item) => item.sessionId));
+  const kept = new Set<string>();
+  for (const item of plan) {
+    if (isSelectablePlanItem(item, planSessionIds) && chosen.has(item.sourceFile)) kept.add(item.sessionId);
+  }
+  return plan.filter((item) =>
+    isSelectablePlanItem(item, planSessionIds) ? kept.has(item.sessionId) : kept.has(item.parentId ?? ""),
+  );
+}
+
+export async function runImport(deps: RunImporterDeps, selection?: ImportSelection): Promise<ImportRunReport> {
+  const scanned = await scanImport(deps, selection?.destinations ?? []);
+  const plan = selection === undefined ? scanned.plan : selectPlan(scanned.plan, selection.sessions);
+  // 没被勾的会话不落，它们要新建的工作区也不建
+  const usedWorkspaceIds = new Set(plan.map((item) => item.workspaceId));
+  const report: ImportScanReport = {
+    ...scanned,
+    plan,
+    newWorkspaces: scanned.newWorkspaces.filter((workspace) => usedWorkspaceIds.has(workspace.id)),
+    mergedWorkspaceIds: scanned.mergedWorkspaceIds.filter((id) => usedWorkspaceIds.has(id)),
+  };
   const failed: ImportRunReport["failed"] = [];
   let imported = 0;
 

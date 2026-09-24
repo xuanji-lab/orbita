@@ -69,7 +69,7 @@
  * 安静控件：透明底、secondary 字；hover 填 --option-hover-bg、字升 primary；
  * pressed / selected（aria-pressed 或 aria-selected）用 --color-mode-active-bg/fg；
  * disabled（原生 :disabled 或 aria-disabled）实色 tertiary、无 hover 底、not-allowed。
- * Chip、IconButton、Sidebar 的 RailButton 与模式 tab（ModeChip）、ImportPromaRow 的
+ * Chip、IconButton、Sidebar 的 RailButton 与模式 tab（ModeChip）、Migration 页的
  * 次按钮共用这套底子；各自的偏差在紧跟的小节里用局部覆盖表达。
  *
  * 默认优先级是 **disabled 压过 pressed/selected**（IconButton 原有顺序：它的文字色
@@ -216,14 +216,6 @@
 }
 
 /*
- * ImportPromaRow 的次按钮：安静控件配方少一味——hover 时底色照常抬升，但字色不跟着
- * 升 primary，原样保留这条局部覆盖。
- */
-.import-secondary-btn:hover {
-  color: var(--color-text-secondary);
-}
-
-/*
  * accent 按钮：accent 底、accent-fg 字，hover 升 --color-accent-strong。disabled 默认退
  * 实色中性底——玻璃上的禁用态不能用 opacity（设计系统 *Hover, press, disabled*），
  * Composer 发送键走这条默认值。
@@ -252,17 +244,6 @@
 .btn-accent[data-tone="danger"] {
   background: var(--color-danger-soft);
   color: var(--color-danger);
-}
-
-/*
- * ImportPromaRow 的主按钮不在玻璃层上——禁用退回设计系统给普通面板定的 opacity 规则，
- * 而不是 `.btn-accent` 默认给玻璃面写的实色底。
- */
-.import-primary-btn:disabled {
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
-  opacity: 0.6;
-  cursor: default;
 }
 
 /*

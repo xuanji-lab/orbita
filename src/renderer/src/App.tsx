@@ -416,6 +416,8 @@ export function App() {
                   engine.refreshSessions();
                   engine.refreshWorkspaces();
                 }}
+                workspaces={session.workspaces}
+                onTab={setSettingsTab}
               />
             ) : (
               <ChatView

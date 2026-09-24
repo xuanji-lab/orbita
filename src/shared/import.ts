@@ -1,5 +1,6 @@
 /**
- * Proma pi 会话导入的契约 —— IPC 四层的第 1 层（与引擎同 PR 落地，消费者纪律）。
+ * 迁移（设置 › Migration）的契约 —— IPC 四层的第 1 层（与引擎同 PR 落地，消费者纪律）。
+ * 三个通道：探测（只 stat）→ 扫描（dry-run，只读勾选的来源）→ 执行（按用户的选择落盘）。
  *
  * 通路背景（调研 2026-09-21）：Proma 的 pi 真源（`~/.proma-dev/sdk-config/sessions/`，
  * header version 3）与 orbita 锁定的 pi 0.84.3 同版本同格式——这层导入是**同构复制 +
@@ -10,6 +11,73 @@
  * （不接收 renderer 回传的计划——载荷可过期可篡改，重扫的两次结果在数据没变时一致，
  * 数据变了就该以新的为准）。
  */
+
+/**
+ * 迁移来源。本刀只有 Proma；Claude Code / Kimi Code / opencode 各自一刀再加进来
+ * （2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
+ */
+export type ImportSourceId = "proma";
+
+/**
+ * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
+ *
+ * `paths` 是扫描时会读的全部路径，页面原样列出——这张清单就是隐私声明：
+ * 用户看得到 orbita 会碰哪些文件，没勾的来源一个字节都不读。
+ */
+export interface ImportSourceProbe {
+  id: ImportSourceId;
+  /** 给人看的名字 */
+  label: string;
+  /** 产品形态：桌面应用 / 命令行工具 / 多家共用的目录（Sources 行的副标题） */
+  kind: "app" | "cli" | "folder";
+  /** 扫描会读的路径（绝对路径；显示时用 ImportDetectResult.home 缩成 ~） */
+  paths: string[];
+  /** 主数据文件在不在（stat 成功即 true）。false 的来源不可勾 */
+  found: boolean;
+}
+
+/** `import:detect` 的返回。home 随行：页面把路径里的家目录缩成 ~，渲染层自己拿不到它。 */
+export interface ImportDetectResult {
+  home: string;
+  sources: ImportSourceProbe[];
+}
+
+/** 扫描请求：只扫勾选的来源。空数组 = 什么都不读，返回空报告。 */
+export interface ImportScanInput {
+  sources: ImportSourceId[];
+}
+
+/**
+ * 一组会话的去向，按源侧文件夹整组改（2026-09-24 裁决：每组一个去向菜单）。
+ * 子会话永远跟着母会话走，不单独设去向。
+ */
+export type ImportDestination =
+  | { kind: "tasks" }
+  | { kind: "workspace"; workspaceId: string }
+  /** 按文件夹新建工作区。文件夹为 null、或文件夹已经是某个工作区时没有这个选项 */
+  | { kind: "new-workspace" };
+
+export interface ImportDestinationChoice {
+  /** 组键：ImportPlanItem.folder（null = 没有文件夹的那一组） */
+  folder: string | null;
+  destination: ImportDestination;
+}
+
+/**
+ * 执行请求。**仍然不接收计划**：主进程按同样的来源重扫，再用这里的选择过滤——
+ * 选择是用户意图（勾了哪些、改了哪组的去向），计划是数据，数据以执行时的盘为准。
+ * 选中但重扫时已不在计划里的条目（比如刚被别处导入）静默不导。
+ */
+export interface ImportRunInput {
+  sources: ImportSourceId[];
+  /**
+   * 勾选的会话，按 sourceFile（幂等键）列。只列**可选条目**：根会话，以及母会话不在
+   * 本次计划里的子会话（母会话此前已导入）。母会话在计划里的子会话跟着母会话走
+   */
+  sessions: string[];
+  /** 改过去向的组；没列的组走扫描给的默认去向 */
+  destinations: ImportDestinationChoice[];
+}
 
 /** 一条会话为什么进不了导入计划。词汇进报告，UI 按它给文案。 */
 export type ImportSkipReason =
@@ -61,7 +129,15 @@ export type ImportSourceKind =
 export interface ImportPlanItem {
   /** Proma 索引里的会话 id */
   sourceId: string;
+  /** 来自哪个来源（页面按它给组内的来源分项计数） */
+  source: ImportSourceId;
   sourceKind: ImportSourceKind;
+  /**
+   * 源侧的文件夹，也是页面的分组键与去向的覆盖键。Proma = 所属工作区的
+   * projectRootPath；没有（默认工作区 / 无归属 / 工作区已删）= null。母会话在计划里的
+   * 子会话取母会话的。以后的来源按各自的 cwd 填，同一文件夹的不同来源并成一组
+   */
+  folder: string | null;
   /** 源文件绝对路径（pi 真源或 claude 渲染 JSONL）——同时是幂等键（meta.importedFrom 存它） */
   sourceFile: string;
   title: string;
@@ -135,4 +211,79 @@ export interface ImportRunReport {
   createdWorkspaces: { id: string; name: string; path: string }[];
   /** 合并挂上的既有工作区 id（去重） */
   mergedWorkspaceIds: string[];
+}
+
+// ---------------------------------------------------------------------------
+// 选择的单位
+// ---------------------------------------------------------------------------
+
+/**
+ * 计划里**用户能勾的条目**：根会话，以及母会话不在本次计划里的子会话（母会话此前已
+ * 导入——它没法跟着谁走，只能自己被勾）。母会话在计划里的子会话不可单独勾，跟着母会话。
+ *
+ * 主进程按它过滤执行（ImportRunInput.sessions 只认这些），页面按它列行——两边必须是
+ * 同一条规则，所以放在契约层。
+ */
+export function isSelectablePlanItem(item: ImportPlanItem, planSessionIds: ReadonlySet<string>): boolean {
+  return item.parentId === null || !planSessionIds.has(item.parentId);
+}
+
+// ---------------------------------------------------------------------------
+// IPC 边界的入参校验
+// ---------------------------------------------------------------------------
+
+const SOURCE_IDS: readonly string[] = ["proma"] satisfies readonly ImportSourceId[];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseSources(raw: unknown): ImportSourceId[] {
+  if (!Array.isArray(raw)) throw new Error("sources must be an array");
+  const out: ImportSourceId[] = [];
+  for (const id of raw) {
+    // 不认识的来源整体拒绝：静默丢掉会让「勾了但没扫」看起来像「扫了但是空的」
+    if (typeof id !== "string" || !SOURCE_IDS.includes(id)) throw new Error(`unknown import source: ${String(id)}`);
+    if (!out.includes(id as ImportSourceId)) out.push(id as ImportSourceId);
+  }
+  return out;
+}
+
+function parseDestination(raw: unknown): ImportDestination {
+  if (!isRecord(raw)) throw new Error("destination must be an object");
+  if (raw["kind"] === "tasks") return { kind: "tasks" };
+  if (raw["kind"] === "new-workspace") return { kind: "new-workspace" };
+  if (raw["kind"] === "workspace" && typeof raw["workspaceId"] === "string" && raw["workspaceId"] !== "") {
+    return { kind: "workspace", workspaceId: raw["workspaceId"] };
+  }
+  throw new Error("bad destination");
+}
+
+/**
+ * renderer 传来的是 unknown。**坏形状整体拒绝（抛错）**，不挑能用的部分凑合——
+ * 这是一次会落盘的操作，改写用户意图比报错更糟。
+ */
+export function parseImportScanInput(raw: unknown): ImportScanInput {
+  if (!isRecord(raw)) throw new Error("scan input must be an object");
+  return { sources: parseSources(raw["sources"]) };
+}
+
+export function parseImportRunInput(raw: unknown): ImportRunInput {
+  if (!isRecord(raw)) throw new Error("run input must be an object");
+  const sessions = raw["sessions"];
+  if (!Array.isArray(sessions) || !sessions.every((file) => typeof file === "string")) {
+    throw new Error("sessions must be an array of source files");
+  }
+  const destinations = raw["destinations"];
+  if (!Array.isArray(destinations)) throw new Error("destinations must be an array");
+  return {
+    sources: parseSources(raw["sources"]),
+    sessions: [...new Set(sessions as string[])],
+    destinations: destinations.map((choice) => {
+      if (!isRecord(choice)) throw new Error("destination choice must be an object");
+      const folder = choice["folder"];
+      if (folder !== null && (typeof folder !== "string" || folder === "")) throw new Error("bad folder");
+      return { folder, destination: parseDestination(choice["destination"]) };
+    }),
+  };
 }

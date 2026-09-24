@@ -19,7 +19,7 @@ import type { Workspace } from "../../shared/workspace.ts";
 import { rootSessions, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ImportPlanItem } from "../../shared/import.ts";
 import { SessionStore } from "./store.ts";
-import { entriesToRecords, mapModel, runImport, scanImport, type RunImporterDeps } from "./importer.ts";
+import { entriesToRecords, mapModel, probeProma, runImport, scanImport, selectPlan, type RunImporterDeps } from "./importer.ts";
 
 const TESTDATA = join(dirname(fileURLToPath(import.meta.url)), "testdata");
 
@@ -775,6 +775,9 @@ describe("子会话挂回母会话（Proma 的 parentSessionId → parentId）",
     assert.ok(parent !== undefined && sub !== undefined);
     assert.equal(parent.parentId, null);
     assert.equal(sub.parentId, parent.sessionId);
+    // 没有 Proma 工作区归属 → 没有文件夹（页面的「No folder」组）
+    assert.equal(parent.folder, null);
+    assert.equal(sub.folder, null);
     // cwd 对齐母会话（子自己的 header cwd 是 Proma 工作台路径，本来要退 defaultCwd）
     assert.equal(sub.cwd, "/tmp/proj");
     assert.equal(sub.archived, false);
@@ -881,6 +884,10 @@ describe("子会话挂回母会话（Proma 的 parentSessionId → parentId）",
     assert.ok(parent !== undefined && sub !== undefined);
     assert.equal(sub.workspaceId, parent.workspaceId);
     assert.equal(sub.cwd, "/tmp/alpha");
+    // 分组键：母会话取 Proma 工作区的 projectRootPath，子会话跟母会话（而不是它自己的 /tmp/beta）
+    assert.equal(parent.folder, "/tmp/alpha");
+    assert.equal(sub.folder, "/tmp/alpha");
+    assert.equal(parent.source, "proma");
     assert.deepEqual(
       report.newWorkspaces.map((workspace) => workspace.path),
       ["/tmp/alpha"],
@@ -922,6 +929,138 @@ describe("子会话挂回母会话（Proma 的 parentSessionId → parentId）",
     assert.equal(report.plan.find((item) => item.sourceId === "f-1")?.parentId, null);
     assert.equal(report.subSessionCount, 0);
     assert.equal(report.orphanedSubSessions, 0);
+  });
+});
+
+describe("Migration 页的选择：去向覆盖、勾选过滤、探测", () => {
+  const sub = (entry: Record<string, unknown>, parent: string): Record<string, unknown> => ({
+    ...entry,
+    parentSessionId: parent,
+  });
+
+  /** 两个 Proma 工作区（alpha 已在 orbita、beta 是新文件夹）+ 一个无归属，各一条根会话；alpha 带一条子会话 */
+  async function seed(): Promise<{ alphaWs: Workspace }> {
+    await writePromaWorkspaces([
+      { id: "pw-a", name: "alpha", projectRootPath: "/tmp/alpha" },
+      { id: "pw-b", name: "beta", projectRootPath: "/tmp/beta" },
+    ]);
+    const a = await writePiSession("2026-09-01T00-00-00-000Z_aaa-000000000000001.jsonl", "/tmp/alpha");
+    const aChild = await writePiSession("2026-09-01T00-01-00-000Z_aac-000000000000002.jsonl", "/tmp/alpha");
+    const b = await writePiSession("2026-09-01T00-02-00-000Z_bbb-000000000000003.jsonl", "/tmp/beta");
+    const loose = await writePiSession("2026-09-01T00-03-00-000Z_lll-000000000000004.jsonl", "/tmp/loose");
+    await writeIndex([
+      { id: "a", title: "阿", piSessionFile: a, workspaceId: "pw-a", createdAt: 1, updatedAt: 1 },
+      sub({ id: "a-kid", title: "阿的子", piSessionFile: aChild, workspaceId: "pw-a", createdAt: 2, updatedAt: 2 }, "a"),
+      { id: "b", title: "贝", piSessionFile: b, workspaceId: "pw-b", createdAt: 3, updatedAt: 3 },
+      { id: "loose", title: "散", piSessionFile: loose, createdAt: 4, updatedAt: 4 },
+    ]);
+    return { alphaWs: orbitaWorkspace("/tmp/alpha", "11111111-0000-4000-8000-00000000000a") };
+  }
+
+  test("默认去向：同址工作区合并、新文件夹新建、无文件夹进 Tasks；folder 就是分组键", async () => {
+    const { alphaWs } = await seed();
+    const report = await scanImport(deps({ workspaces: [alphaWs] }));
+    const by = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.equal(by.get("a")?.workspaceId, alphaWs.id);
+    assert.equal(by.get("a-kid")?.folder, "/tmp/alpha");
+    assert.equal(by.get("b")?.folder, "/tmp/beta");
+    assert.equal(report.newWorkspaces.length, 1);
+    assert.equal(by.get("b")?.workspaceId, report.newWorkspaces[0]?.id);
+    assert.equal(by.get("loose")?.folder, null);
+    assert.equal(by.get("loose")?.workspaceId, null);
+  });
+
+  test("改成 Tasks：不挂工作区、cwd 取文件夹、该组的新建工作区不再出现", async () => {
+    const { alphaWs } = await seed();
+    const report = await scanImport(deps({ workspaces: [alphaWs] }), [
+      { folder: "/tmp/beta", destination: { kind: "tasks" } },
+    ]);
+    const b = report.plan.find((item) => item.sourceId === "b");
+    assert.equal(b?.workspaceId, null);
+    assert.equal(b?.cwd, "/tmp/beta");
+    assert.deepEqual(report.newWorkspaces, []);
+  });
+
+  test("改成另一个既有工作区：子会话跟着母会话过去", async () => {
+    const { alphaWs } = await seed();
+    const other = orbitaWorkspace("/tmp/elsewhere", "22222222-0000-4000-8000-00000000000b");
+    const report = await scanImport(deps({ workspaces: [alphaWs, other] }), [
+      { folder: "/tmp/alpha", destination: { kind: "workspace", workspaceId: other.id } },
+    ]);
+    const by = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.equal(by.get("a")?.workspaceId, other.id);
+    assert.equal(by.get("a")?.cwd, "/tmp/elsewhere");
+    assert.equal(by.get("a-kid")?.workspaceId, other.id);
+    assert.equal(by.get("a-kid")?.parentId, by.get("a")?.sessionId);
+    assert.ok(report.mergedWorkspaceIds.includes(other.id));
+  });
+
+  test("去向指向已不存在的工作区 / 给已是工作区的文件夹要新建 → 抛错，不替用户换目的地", async () => {
+    const { alphaWs } = await seed();
+    await assert.rejects(
+      scanImport(deps({ workspaces: [alphaWs] }), [
+        { folder: "/tmp/alpha", destination: { kind: "workspace", workspaceId: "gone" } },
+      ]),
+      /no longer exists/,
+    );
+    await assert.rejects(
+      scanImport(deps({ workspaces: [alphaWs] }), [{ folder: "/tmp/alpha", destination: { kind: "new-workspace" } }]),
+      /can't become a new workspace/,
+    );
+    await assert.rejects(
+      scanImport(deps({ workspaces: [alphaWs] }), [{ folder: null, destination: { kind: "new-workspace" } }]),
+      /can't become a new workspace/,
+    );
+  });
+
+  test("只勾一条根会话：它和它的子会话落盘，没勾的不落、它要新建的工作区也不建", async () => {
+    const { alphaWs } = await seed();
+    const scan = await scanImport(deps({ workspaces: [alphaWs] }));
+    const aFile = scan.plan.find((item) => item.sourceId === "a")?.sourceFile ?? "";
+    const created: string[] = [];
+    const run = await runImport(
+      deps({ workspaces: [alphaWs], createWorkspace: async (workspace) => void created.push(workspace.path) }),
+      { sessions: new Set([aFile]), destinations: [] },
+    );
+    assert.equal(run.imported, 2);
+    assert.deepEqual(created, []);
+    assert.deepEqual(
+      (await store.list()).map((meta) => meta.title).sort(),
+      ["阿", "阿的子"].sort(),
+    );
+  });
+
+  test("selectPlan：母会话已导入过的子会话自己可勾；母会话在计划里的子会话不能单独勾", async () => {
+    const { alphaWs } = await seed();
+    const scan = await scanImport(deps({ workspaces: [alphaWs] }));
+    const kid = scan.plan.find((item) => item.sourceId === "a-kid");
+    assert.ok(kid !== undefined);
+    // 单独勾子会话（母会话在计划里）→ 不算数
+    assert.deepEqual(selectPlan(scan.plan, new Set([kid.sourceFile])), []);
+
+    // 母会话先导入（那时 Proma 还没派出这条子会话），之后子会话出现：它的母会话不在
+    // 这次计划里，于是它自己成了可勾条目，勾它就挂回已导入的母会话
+    const aFile = scan.plan.find((item) => item.sourceId === "a")?.sourceFile ?? "";
+    const index = JSON.parse(await readFile(join(promaRoot, "agent-sessions.json"), "utf8")) as { sessions: { id: string }[] };
+    await writeIndex(index.sessions.filter((entry) => entry.id !== "a-kid"));
+    await runImport(deps({ workspaces: [alphaWs] }), { sessions: new Set([aFile]), destinations: [] });
+    await writeIndex(index.sessions);
+    const later = await scanImport(deps({ workspaces: [alphaWs], existingMetas: await store.list() }));
+    const lateKid = later.plan.find((item) => item.sourceId === "a-kid");
+    assert.ok(lateKid !== undefined);
+    const picked = selectPlan(later.plan, new Set([lateKid.sourceFile]));
+    assert.deepEqual(picked.map((item) => item.sourceId), ["a-kid"]);
+    const parentMeta = (await store.list()).find((meta) => meta.title === "阿");
+    assert.equal(picked[0]?.parentId, parentMeta?.id);
+  });
+
+  test("probeProma：只 stat 索引；paths 列出扫描会读的全部位置（含旧根）", async () => {
+    const missing = await probeProma(promaRoot, ["/tmp/old-root"]);
+    assert.equal(missing.found, false);
+    assert.ok(missing.paths.includes(join(promaRoot, "agent-sessions.json")));
+    assert.ok(missing.paths.includes(join("/tmp/old-root", "sdk-config", "sessions")));
+    await writeIndex([]);
+    assert.equal((await probeProma(promaRoot)).found, true);
   });
 });
 
