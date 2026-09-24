@@ -33,7 +33,7 @@ export function ImportPromaRow(props: { onImported: () => void }) {
   const scan = useCallback(() => {
     setState({ kind: "scanning" });
     void api.import
-      .scan()
+      .scan({ sources: ["proma"] })
       .then((report) => setState({ kind: "report", report }))
       .catch((cause: unknown) =>
         setState({ kind: "error", message: cause instanceof Error ? cause.message : String(cause) }),
@@ -43,8 +43,13 @@ export function ImportPromaRow(props: { onImported: () => void }) {
   const run = useCallback(
     (report: ImportScanReport) => {
       setState({ kind: "importing", report });
+      // 这一行是「全部导入」的旧入口：勾选全部可选条目、去向全用默认（Migration 页替代它之前的过渡）
+      const ids = new Set(report.plan.map((item) => item.sessionId));
+      const sessions = report.plan
+        .filter((item) => item.parentId === null || !ids.has(item.parentId))
+        .map((item) => item.sourceFile);
       void api.import
-        .run()
+        .run({ sources: ["proma"], sessions, destinations: [] })
         .then((result) => {
           setState({ kind: "done", result });
           // 落了新会话 / 新工作区：主界面两张列表都要重读
