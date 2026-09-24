@@ -70,6 +70,8 @@ export interface GroupedSessions {
   changed: SessionRow[];
   /** 被筛选藏起来的可选条目数（它们不导入） */
   hidden: number;
+  /** 各来源可选的会话数（不看筛选）：来源行上的计数 */
+  totalBySource: Partial<Record<ImportSourceId, number>>;
   /** 全部可选条目数（不看筛选） */
   total: number;
 }
@@ -106,9 +108,11 @@ export function groupSessions(report: ImportScanReport, filters: SessionFilters,
   const changed: SessionRow[] = [];
   let total = 0;
   let hidden = 0;
+  const totalBySource: Partial<Record<ImportSourceId, number>> = {};
   for (const item of report.plan) {
     if (!isSelectablePlanItem(item, planIds)) continue;
     total += 1;
+    totalBySource[item.source] = (totalBySource[item.source] ?? 0) + 1;
     if (!passes(item, filters, now)) {
       hidden += 1;
       continue;
@@ -138,7 +142,7 @@ export function groupSessions(report: ImportScanReport, filters: SessionFilters,
     if (b.folder === null) return -1;
     return b.rows.length - a.rows.length || a.folder.localeCompare(b.folder);
   });
-  return { groups, changed, hidden, total };
+  return { groups, changed, hidden, total, totalBySource };
 }
 
 /** 页面上列出的全部行：changed 块在前，其后各文件夹组。 */

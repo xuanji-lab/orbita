@@ -5,6 +5,9 @@ import type {
   ImportDetectResult,
   ImportRunReport,
   ImportScanReport,
+  ImportSkillItem,
+  ImportSkillMode,
+  ImportSkillScope,
   ImportSourceId,
   ImportSourceProbe,
 } from "@shared/import";
@@ -38,6 +41,16 @@ import {
   type SessionGroup,
   type SessionRow,
 } from "./migration-groups.ts";
+import { SkillsSection } from "./MigrationSkills.tsx";
+import {
+  countSelectedSkills,
+  defaultSkillSelection,
+  sameSkillScope,
+  DEFAULT_SKILL_SCOPE,
+  selectedSkillDirs,
+  skillCountBySource,
+  skillScopeChoices,
+} from "./migration-skills.ts";
 
 /**
  * 设置 › Migration：把本机其他 agent 的会话迁进来。步骤铺在同一页（wafo 2026-09-24：
@@ -50,9 +63,10 @@ import {
  *              再次导入时，已导入、Proma 里又有新消息的会话单独成一块排在最前（ChangedBlock）：
  *              追加进原会话的默认勾，两边都聊过、要另导一份的默认不勾；在 orbita 删过的留在
  *              文件夹组里、默认不勾。
+ *   3 Skills   按源 skills 目录分组，重名先到先得；段头 Copy / Link（默认 Copy），每组一个作用域。
  *   底栏       汇总 + 唯一的主操作 Import。执行在主进程：按同样的来源重扫，再按勾选与去向落盘。
  *
- * Skills / MCP 两段等各自那一刀落地再出现（暂不支持的东西不列，同来源的裁决）。
+ * MCP 一段等它那一刀落地再出现（暂不支持的东西不列，同来源的裁决）。
  */
 
 type DetectState =
@@ -69,12 +83,19 @@ type ScanState =
 
 type RunState =
   | { kind: "idle" }
-  | { kind: "running"; sessions: number }
+  | { kind: "running"; sessions: number; skills: number }
   | { kind: "done"; result: ImportRunReport }
   | { kind: "error"; message: string };
 
 /** 展开的组里先列这么多条，其余收进「Show N more」 */
 const ROWS_BEFORE_MORE = 8;
+
+function toggled<T>(set: ReadonlySet<T>, key: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
 
 function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -96,6 +117,11 @@ export function MigrationView(props: {
   /** 「有新消息」那一块默认展开：再次导入时用户要对照的就是它 */
   const [changedOpen, setChangedOpen] = useState(true);
   const [run, setRun] = useState<RunState>({ kind: "idle" });
+  const [skillSelected, setSkillSelected] = useState<ReadonlySet<string>>(new Set());
+  const [skillMode, setSkillMode] = useState<ImportSkillMode>("copy");
+  const [skillScopes, setSkillScopes] = useState<ReadonlyMap<string, ImportSkillScope>>(new Map());
+  const [skillExpanded, setSkillExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [skillShowAll, setSkillShowAll] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +154,10 @@ export function MigrationView(props: {
         setOverrides(new Map());
         setExpanded(new Set());
         setShowAll(new Set());
+        setSkillSelected(defaultSkillSelection(report.skills));
+        setSkillScopes(new Map());
+        setSkillExpanded(new Set());
+        setSkillShowAll(new Set());
       })
       .catch((cause: unknown) => setScan({ kind: "error", message: errorText(cause) }));
   }, []);
@@ -140,6 +170,8 @@ export function MigrationView(props: {
     () => (grouped === null ? null : summarize(grouped, selected, overrides)),
     [grouped, selected, overrides],
   );
+  const skillCount = scan.kind === "ready" ? countSelectedSkills(scan.report.skills, skillSelected) : 0;
+  const nothingTicked = summary === null || summary.sessions + summary.updates + skillCount === 0;
 
   // 任何改选择的动作都让「Imported …」退场：那是上一次的结果，不是眼前这份勾选的
   const touch = useCallback(() => setRun((current) => (current.kind === "done" ? { kind: "idle" } : current)), []);
@@ -165,25 +197,32 @@ export function MigrationView(props: {
     });
   };
 
-  const toggleIn = (set: ReadonlySet<string | null>, key: string | null): Set<string | null> => {
-    const next = new Set(set);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    return next;
+  const toggleIn = (set: ReadonlySet<string | null>, key: string | null): Set<string | null> => toggled(set, key);
+
+  const setSkills = (skills: readonly ImportSkillItem[], on: boolean) => {
+    touch();
+    setSkillSelected((current) => {
+      const next = new Set(current);
+      for (const skill of skills) {
+        if (on) next.add(skill.dir);
+        else next.delete(skill.dir);
+      }
+      return next;
+    });
   };
 
   const startRun = () => {
-    if (scan.kind !== "ready" || grouped === null || summary === null || summary.sessions + summary.updates === 0) return;
+    if (scan.kind !== "ready" || grouped === null || summary === null || nothingTicked) return;
     const sources = scan.sources;
-    setRun({ kind: "running", sessions: summary.sessions + summary.updates + summary.subSessions });
+    setRun({ kind: "running", sessions: summary.sessions + summary.updates + summary.subSessions, skills: skillCount });
     void api.import
       .run({
         sources,
         sessions: selectedSourceFiles(grouped, selected),
         destinations: destinationChoices(grouped, overrides),
-        skills: [],
-        skillMode: "copy",
-        skillScopes: [],
+        skills: selectedSkillDirs(scan.report.skills, skillSelected),
+        skillMode,
+        skillScopes: skillScopeChoices(skillScopes),
       })
       .then((result) => {
         setRun({ kind: "done", result });
@@ -195,9 +234,10 @@ export function MigrationView(props: {
   };
 
   const probes = detect.kind === "ready" ? detect.result.sources : [];
-  const scannedCount = (id: ImportSourceId): number | null => {
+  const skillsBySource = useMemo(() => (scan.kind === "ready" ? skillCountBySource(scan.report.skills) : {}), [scan]);
+  const scannedCount = (id: ImportSourceId): { sessions: number; skills: number } | null => {
     if (scan.kind !== "ready" || !scan.sources.includes(id) || grouped === null) return null;
-    return grouped.total;
+    return { sessions: grouped.totalBySource[id] ?? 0, skills: skillsBySource[id] ?? 0 };
   };
 
   return (
@@ -205,8 +245,8 @@ export function MigrationView(props: {
       <div className="mg-scroll scroll">
         <div className="mg-col">
           <p className="mg-intro">
-            Bring sessions over from other agents on this Mac. Nothing is read until you tick a source and scan,
-            and the other apps' files are never changed.
+            Bring sessions and skills over from other agents on this Mac. Nothing is read until you tick a source and
+            scan, and the other apps' files are never changed.
           </p>
 
           {/* ================= 1 Sources ================= */}
@@ -366,6 +406,35 @@ export function MigrationView(props: {
               </>
             )}
           </section>
+
+          {/* ================= 3 Skills ================= */}
+          <SkillsSection
+            groups={scan.kind === "ready" ? scan.report.skills : null}
+            home={home}
+            workspaces={props.workspaces}
+            selected={skillSelected}
+            mode={skillMode}
+            scopes={skillScopes}
+            expanded={skillExpanded}
+            showAll={skillShowAll}
+            disabled={busy}
+            onMode={(mode) => {
+              touch();
+              setSkillMode(mode);
+            }}
+            onSet={setSkills}
+            onScope={(dir, scope) => {
+              touch();
+              setSkillScopes((current) => {
+                const next = new Map(current);
+                if (sameSkillScope(scope, DEFAULT_SKILL_SCOPE)) next.delete(dir);
+                else next.set(dir, scope);
+                return next;
+              });
+            }}
+            onToggleExpand={(dir) => setSkillExpanded((current) => toggled(current, dir))}
+            onShowAll={(dir) => setSkillShowAll((current) => toggled(current, dir))}
+          />
         </div>
       </div>
 
@@ -373,7 +442,9 @@ export function MigrationView(props: {
         <ImportFooter
           run={run}
           summary={summary}
-          disabled={busy || summary === null || summary.sessions + summary.updates === 0}
+          skills={skillCount}
+          skillMode={skillMode}
+          disabled={busy || nothingTicked}
           onImport={startRun}
         />
       )}
@@ -396,8 +467,8 @@ function SourceRow(props: {
   home: string;
   checked: boolean;
   disabled: boolean;
-  /** 扫过的来源给出会话数；没扫过为 null */
-  scanned: number | null;
+  /** 扫过的来源给出能导的会话数与 skill 数；没扫过为 null */
+  scanned: { sessions: number; skills: number } | null;
   onToggle: () => void;
 }) {
   const { probe } = props;
@@ -424,12 +495,29 @@ function SourceRow(props: {
         {status !== null ? (
           <span className="mg-status">{status}</span>
         ) : (
-          <span className="mg-count">
-            <b>{props.scanned}</b> {props.scanned === 1 ? "session" : "sessions"}
-          </span>
+          <ScannedCount sessions={props.scanned?.sessions ?? 0} skills={props.scanned?.skills ?? 0} />
         )}
       </span>
     </label>
+  );
+}
+
+/** 来源行尾：「28 sessions · 4 skills」，是 0 的那项不写；都是 0 写 Nothing new。 */
+function ScannedCount(props: { sessions: number; skills: number }) {
+  const parts = [
+    { count: props.sessions, one: "session", many: "sessions" },
+    { count: props.skills, one: "skill", many: "skills" },
+  ].filter((part) => part.count > 0);
+  if (parts.length === 0) return <span className="mg-status">Nothing new</span>;
+  return (
+    <span className="mg-count">
+      {parts.map((part, index) => (
+        <span key={part.one}>
+          {index > 0 && " · "}
+          <b>{part.count}</b> {part.count === 1 ? part.one : part.many}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -821,9 +909,29 @@ function SessionNotes(props: {
 // 底栏
 // ---------------------------------------------------------------------------
 
+/** 「3 sessions」「1 skill」；数量为 0 返回 null，给 filter 掉 */
+function counted(count: number, one: string, many: string): string | null {
+  return count > 0 ? `${count} ${count === 1 ? one : many}` : null;
+}
+
+function joined(parts: readonly (string | null)[]): string {
+  return parts.filter((part): part is string => part !== null).join(" · ");
+}
+
+/** 底栏主句：「Import 3 sessions · 5 skills · update 1 session」；只有追加时「Update 1 session」。 */
+function headline(sessions: number, updates: number, skills: number): string {
+  const imports = joined([counted(sessions, "session", "sessions"), counted(skills, "skill", "skills")]);
+  const update = counted(updates, "session", "sessions");
+  if (imports === "") return `Update ${update ?? ""}`;
+  return update === null ? `Import ${imports}` : `Import ${imports} · update ${update}`;
+}
+
 function ImportFooter(props: {
   run: RunState;
   summary: ReturnType<typeof summarize> | null;
+  /** 勾选的 skill 数 */
+  skills: number;
+  skillMode: ImportSkillMode;
   disabled: boolean;
   onImport: () => void;
 }) {
@@ -834,7 +942,7 @@ function ImportFooter(props: {
         <span className="mg-foot-copy">
           <span className="mg-foot-main">
             <Icon name="loader-circle" size={13} spin />
-            Importing {run.sessions} {run.sessions === 1 ? "session" : "sessions"}…
+            Importing {[counted(run.sessions, "session", "sessions"), counted(run.skills, "skill", "skills")].filter((part) => part !== null).join(" and ")}…
           </span>
           <span className="mg-foot-sub">Copying session files into orbita. Large histories take a minute.</span>
         </span>
@@ -847,6 +955,7 @@ function ImportFooter(props: {
   if (run.kind === "done") {
     const { result } = run;
     const first = result.failed[0];
+    const firstSkill = result.skillsFailed[0];
     return (
       <footer className="mg-foot">
         <span className="mg-foot-copy">
@@ -864,16 +973,25 @@ function ImportFooter(props: {
               result.createdWorkspaces.length > 0
                 ? `${result.createdWorkspaces.length} new ${result.createdWorkspaces.length === 1 ? "workspace" : "workspaces"}`
                 : null,
+              counted(result.skillsImported, "skill", "skills"),
             ]
               .filter((part): part is string => part !== null)
               .join(" · ")}
           </span>
-          <span className="mg-foot-sub" title={result.failed.map((item) => `${item.sourceId}: ${item.error ?? ""}`).join("\n")}>
-            {first === undefined
-              ? result.imported === 0
-                ? "The new messages are in those sessions now. Anything left below wasn't ticked."
-                : "They're in the sidebar now. Anything left below wasn't ticked."
-              : `${result.failed.length} failed — ${first.error ?? "unknown error"}. Import again to retry.`}
+          <span
+            className="mg-foot-sub"
+            title={[
+              ...result.failed.map((item) => `${item.sourceId}: ${item.error ?? ""}`),
+              ...result.skillsFailed.map((item) => `${item.slug}: ${item.error}`),
+            ].join("\n")}
+          >
+            {first !== undefined
+              ? `${result.failed.length} failed — ${first.error ?? "unknown error"}. Import again to retry.`
+              : firstSkill !== undefined
+                ? `${result.skillsFailed.length} ${result.skillsFailed.length === 1 ? "skill" : "skills"} didn't come over — ${firstSkill.slug}: ${firstSkill.error}`
+                : result.imported === 0 && result.updated > 0
+                  ? "The new messages are in those sessions now. Anything left below wasn't ticked."
+                  : "Anything left below wasn't ticked."}
           </span>
         </span>
       </footer>
@@ -890,32 +1008,24 @@ function ImportFooter(props: {
             </span>
             <span className="mg-foot-sub">{run.message}</span>
           </>
-        ) : summary === null || summary.sessions + summary.updates === 0 ? (
-          <span className="mg-foot-sub">Tick the sessions you want to bring over.</span>
+        ) : summary === null || summary.sessions + summary.updates + props.skills === 0 ? (
+          <span className="mg-foot-sub">Tick what you want to bring over.</span>
         ) : (
           <>
             <span className="mg-foot-main">
-              {[
-                summary.sessions > 0 ? `Import ${summary.sessions} ${summary.sessions === 1 ? "session" : "sessions"}` : null,
-                summary.updates > 0
-                  ? `${summary.sessions > 0 ? "update" : "Update"} ${summary.updates} ${summary.updates === 1 ? "session" : "sessions"}`
-                  : null,
-              ]
-                .filter((part): part is string => part !== null)
-                .join(" · ")}
+              {headline(summary.sessions, summary.updates, props.skills)}
             </span>
             <span className="mg-foot-sub">
-              {[
+              {joined([
                 summary.subSessions > 0
                   ? `${summary.subSessions} ${summary.subSessions === 1 ? "sub-session comes" : "sub-sessions come"} with ${summary.subSessions === 1 ? "its parent" : "their parents"}`
                   : null,
                 summary.newWorkspaces > 0
                   ? `${summary.newWorkspaces} new ${summary.newWorkspaces === 1 ? "workspace" : "workspaces"}`
                   : null,
-                `about ${formatBytes(summary.bytes)} copied`,
-              ]
-                .filter((part): part is string => part !== null)
-                .join(" · ")}
+                summary.sessions + summary.updates > 0 ? `about ${formatBytes(summary.bytes)} copied` : null,
+                props.skills > 0 ? `skills ${props.skillMode === "copy" ? "copied" : "linked"}` : null,
+              ])}
             </span>
           </>
         )}

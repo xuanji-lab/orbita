@@ -61,6 +61,16 @@ import {
   type ClaudeDesktopSession,
 } from "./claude-code.ts";
 import { aggregatePrefixUsage } from "./store.ts";
+import {
+  claudeCodeSkillDirs,
+  importSkills,
+  promaBuiltInSkills,
+  promaSkillDirs,
+  scanSkillDirs,
+  type SkillImportTarget,
+  type SkillSelection,
+  type SkillSourceDir,
+} from "../skill/import.ts";
 import { promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
 import { appendImportLedger, readImportLedger, type ImportLedgerLine } from "./import-ledger.ts";
 import {
@@ -92,6 +102,8 @@ export interface ClaudeCodePaths {
   desktopSessionsDir: string;
   /** 家目录：在家目录里跑的会话不算有文件夹（不为它建工作区） */
   home: string;
+  /** Claude Code 的 skills 目录（~/.claude/skills；桌面应用同步下来的在它的 synced/ 下） */
+  skillsDir: string;
 }
 
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
@@ -100,6 +112,10 @@ export interface ImporterDeps {
   promaRoot: string;
   /** Claude Code 来源的位置。不传 = 扫描勾了它也不读 */
   claudeCode?: ClaudeCodePaths;
+  /** 多家共用的 skills 目录（~/.agents/skills，来源 agent-skills）。不传 = 勾了也不读 */
+  agentSkillsDir?: string;
+  /** orbita 已有的 skill slug（含只剩断链的）：skills 重名判断的底 */
+  existingSkills?: readonly string[];
   /** 额外合法源根（Proma 迁移史的旧根 ~/.proma：索引里仍有条目指向它，文件仍在）。
    *  防御边界是「这几个根之内」，不传则只认 promaRoot */
   extraSourceRoots?: readonly string[];
@@ -127,6 +143,8 @@ export interface RunImporterDeps extends ImporterDeps {
   createWorkspace(workspace: { id: string; name: string; path: string }): Promise<void>;
   /** 单条会话落盘（meta + transcript 原子写；路径规则在 SessionStore） */
   persistSession(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void>;
+  /** skill 落进中心存储（生产接 SkillStore） */
+  skillTarget: SkillImportTarget;
   /** 既有会话追加新消息后的落盘：整份 transcript + meta 的派生字段（SessionStore.commitImportUpdate） */
   refreshSession(
     id: string,
@@ -163,6 +181,8 @@ export async function probeProma(promaRoot: string, extraRoots: readonly string[
       join(promaRoot, "sdk-config", "sessions"),
       join(promaRoot, "agent-sessions"),
       ...extraRoots.map((root) => join(root, "sdk-config", "sessions")),
+      join(promaRoot, "agent-workspaces", "*", "skills"),
+      join(promaRoot, "default-skills"),
     ],
     found,
   };
@@ -183,9 +203,20 @@ export async function probeClaudeCode(paths: ClaudeCodePaths): Promise<ImportSou
     id: "claude-code",
     label: "Claude Code",
     kind: "cli",
-    paths: [paths.projectsDir, paths.desktopSessionsDir],
+    paths: [paths.projectsDir, paths.desktopSessionsDir, paths.skillsDir],
     found,
   };
+}
+
+/** 多家共用的 skills 目录（~/.agents/skills）：只 stat 这一个目录。 */
+export async function probeAgentSkills(dir: string): Promise<ImportSourceProbe> {
+  let found = false;
+  try {
+    found = (await stat(dir)).isDirectory();
+  } catch {
+    found = false;
+  }
+  return { id: "agent-skills", label: "Shared agent skills", kind: "folder", paths: [dir], found };
 }
 
 // ---------------------------------------------------------------------------
@@ -1143,6 +1174,24 @@ export async function scanImport(
   // 创建时间升序：执行按这个顺序落盘，时间线自然有序
   plan.sort((a, b) => a.createdAt - b.createdAt || a.sourceId.localeCompare(b.sourceId));
 
+  // skills：组的顺序就是重名先到先得的顺序——Proma 各工作区 → 共用目录 → Claude Code
+  const skillDirs: SkillSourceDir[] = [];
+  if (sources.includes("proma")) skillDirs.push(...(await promaSkillDirs(deps.promaRoot)));
+  if (sources.includes("agent-skills") && deps.agentSkillsDir !== undefined) {
+    skillDirs.push({ source: "agent-skills", name: null, dir: deps.agentSkillsDir });
+  }
+  if (sources.includes("claude-code") && deps.claudeCode !== undefined) {
+    skillDirs.push(...(await claudeCodeSkillDirs(deps.claudeCode.skillsDir)));
+  }
+  const skills =
+    skillDirs.length === 0
+      ? []
+      : await scanSkillDirs(
+          skillDirs,
+          new Set(deps.existingSkills ?? []),
+          sources.includes("proma") ? await promaBuiltInSkills(deps.promaRoot) : new Set<string>(),
+        );
+
   return {
     plan,
     newWorkspaces: [...newWorkspaceByKey.values()].filter((workspace) => referenced.has(workspace.id)),
@@ -1157,7 +1206,7 @@ export async function scanImport(
       (latest, line) => (line.at !== null && (latest === null || line.at > latest) ? line.at : latest),
       null,
     ),
-    skills: [],
+    skills,
   };
 }
 
@@ -1752,6 +1801,8 @@ export interface ImportSelection {
   /** 勾选的可选条目，按 sourceFile（见 isSelectablePlanItem） */
   sessions: ReadonlySet<string>;
   destinations: readonly ImportDestinationChoice[];
+  /** 勾选的 skills；不传 = 不导 skills */
+  skills?: SkillSelection;
 }
 
 /**
@@ -1897,6 +1948,12 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
 
   await writeLedger(deps, ledgerLines);
 
+  // skills 在会话之后：两者互不依赖，会话是这一页的主体，先落
+  const skillResult =
+    selection?.skills === undefined
+      ? { imported: 0, failed: [] }
+      : await importSkills(scanned.skills, selection.skills, deps.skillTarget, new Set(deps.workspaces.map((workspace) => workspace.id)));
+
   return {
     imported,
     updated,
@@ -1904,8 +1961,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
     failed,
     createdWorkspaces,
     mergedWorkspaceIds: report.mergedWorkspaceIds,
-    skillsImported: 0,
-    skillsFailed: [],
+    skillsImported: skillResult.imported,
+    skillsFailed: skillResult.failed,
   };
 }
 

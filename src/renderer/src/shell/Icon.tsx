@@ -41,6 +41,7 @@ import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/fol
 import folderSync from "../../../../Orbita Design System/assets/icons/lucide/folder-sync.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
 import gitFork from "../../../../Orbita Design System/assets/icons/lucide/git-fork.svg?raw";
+import globe from "../../../../Orbita Design System/assets/icons/lucide/globe.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import lightbulb from "../../../../Orbita Design System/assets/icons/lucide/lightbulb.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
@@ -126,6 +127,7 @@ const ICONS = {
   "folder-sync": folderSync,
   "git-branch": gitBranch,
   "git-fork": gitFork,
+  globe,
   "grip-vertical": gripVertical,
   image,
   lightbulb,

@@ -20,9 +20,11 @@ import {
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
 import type { SettingsStore } from "../settings/store.ts";
+import type { SkillStore } from "../skill/store.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
 import {
   emptyScanReport,
+  probeAgentSkills,
   probeClaudeCode,
   probeProma,
   runImport,
@@ -40,6 +42,7 @@ export function registerImportIpc(
   piSessionDir: string,
   /** 导入清单 imports.jsonl（import-ledger.ts），与会话数据同在 userData 下 */
   ledgerFile: string,
+  skills: SkillStore,
 ): void {
   async function deps(): Promise<ImporterDeps> {
     const [providerList, appSettings] = await Promise.all([providers.list(), settings.read()]);
@@ -64,6 +67,8 @@ export function registerImportIpc(
       // 66 条），文件仍在且是同一格式——旧根也是合法源，同样只读
       extraSourceRoots: legacyPromaRoots(),
       claudeCode: claudeCodePaths(),
+      agentSkillsDir: agentSkillsDir(),
+      existingSkills: (await skills.list()).map((skill) => skill.slug),
       piSessionDir,
       defaultCwd: workspaces.defaultPath(),
       workspaces: await workspaces.list(),
@@ -78,7 +83,11 @@ export function registerImportIpc(
   // 探测只 stat，不装配 deps：没配 provider 的新用户也该看得到本机有哪些来源
   ipcMain.handle(ipcChannels.importDetect, async (): Promise<ImportDetectResult> => ({
     home: homedir(),
-    sources: [await probeProma(joinPromaRoot(), legacyPromaRoots()), await probeClaudeCode(claudeCodePaths())],
+    sources: [
+      await probeProma(joinPromaRoot(), legacyPromaRoots()),
+      await probeClaudeCode(claudeCodePaths()),
+      await probeAgentSkills(agentSkillsDir()),
+    ],
   }));
   ipcMain.handle(ipcChannels.importScan, async (_event, raw: unknown): Promise<ImportScanReport> => {
     const input = parseImportScanInput(raw);
@@ -104,8 +113,14 @@ export function registerImportIpc(
         refreshSession: async (id, records, patch) => {
           await sessions.commitImportUpdate(id, records, patch);
         },
+        skillTarget: skills,
       },
-      { sources: input.sources, sessions: new Set(input.sessions), destinations: input.destinations },
+      {
+        sources: input.sources,
+        sessions: new Set(input.sessions),
+        destinations: input.destinations,
+        skills: { skills: new Set(input.skills), mode: input.skillMode, scopes: input.skillScopes },
+      },
     );
   });
 }
@@ -130,5 +145,11 @@ function claudeCodePaths(): ClaudeCodePaths {
     projectsDir: join(home, ".claude", "projects"),
     desktopSessionsDir: join(home, "Library", "Application Support", "Claude", "claude-code-sessions"),
     home,
+    skillsDir: join(home, ".claude", "skills"),
   };
+}
+
+/** 多家 agent 共用的 skills 目录（agent-skills 来源）。探测与扫描同一个。 */
+function agentSkillsDir(): string {
+  return join(homedir(), ".agents", "skills");
 }

@@ -165,15 +165,18 @@
   background: var(--color-bg-hover);
 }
 
-.mg-row-source[data-disabled] {
+.mg-row-source[data-disabled],
+.mg-row-group[data-disabled] {
   cursor: default;
 }
 
-.mg-row-source[data-disabled]:hover {
+.mg-row-source[data-disabled]:hover,
+.mg-row-group[data-disabled]:hover {
   background: transparent;
 }
 
-.mg-row-source[data-disabled] .mg-name {
+.mg-row-source[data-disabled] .mg-name,
+.mg-row-group[data-disabled] .mg-name {
   color: var(--color-text-tertiary);
 }
 
@@ -482,4 +485,61 @@
   display: inline-grid;
   place-items: center;
   color: var(--color-success);
+}
+
+/* ---- Skills 段 ---- */
+
+/* 组行尾部：计数 / 作用域（没有子会话列） */
+.mg-cols-skills {
+  display: grid;
+  grid-template-columns: 72px 176px;
+  column-gap: var(--space-2);
+  justify-items: end;
+  cursor: default;
+}
+
+.mg-cols-skills > :last-child {
+  justify-self: start;
+}
+
+/* 段头的 Copy / Link：两个安静按钮并排，按下的那个用 mode-active 底 */
+.mg-seg {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.mg-seg-btn {
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
+}
+
+/* 单条 skill：名字不让位给描述（描述先截断），太长的名字最多占四成宽 */
+.mg-skill .mg-title {
+  flex: none;
+  max-width: 40%;
+}
+
+/* 单条 skill 的描述：跟在名字后面，一行截断 */
+.mg-desc {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mg-child[data-disabled] {
+  cursor: default;
+}
+
+.mg-child[data-disabled]:hover {
+  background: transparent;
+}
+
+.mg-child[data-disabled] .mg-title {
+  color: var(--color-text-tertiary);
 }

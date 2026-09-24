@@ -16,7 +16,8 @@
  * symlink 目标一律绝对路径：Windows 目录链接要走 junction（要特权才能建真
  * symlink），而 junction 只认绝对路径——统一用绝对目标，一条代码路径两平台通吃。
  */
-import { lstat, mkdir, readFile, readdir, readlink, rm, symlink, unlink } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { isNotFound } from "../fs-errors.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
@@ -214,6 +215,37 @@ export class SkillStore {
     }
     await mkdir(this.storeDir, { recursive: true });
     await symlink(sourceDir, entry, process.platform === "win32" ? "junction" : undefined);
+    if (scope !== null) await this.link(slug, scope);
+    return slug;
+  }
+
+  /**
+   * 复制一个外部 skill 目录进中心存储（迁移页的默认方式）：源应用删了也还在，那边之后的修改
+   * 不跟过来。与 importFrom 同样的前置检查（有 SKILL.md、slug 合法、同名已存在就拒绝）。
+   *
+   * 先复制到存储里的隐藏临时目录再 rename：复制到一半失败不会留下一条半截的 skill
+   * （临时名以 . 开头，scanStore 的 slug 校验不认它）。源本身是 symlink 时复制它指向的真身；
+   * 目录里的 symlink 也按真身复制——复制的意义就是与源脱钩。
+   */
+  async copyFrom(sourceDir: string, scope: SkillScope | null): Promise<string> {
+    const slug = assertSlug(basename(sourceDir));
+    if (scope !== null && scope.kind === "workspace") assertSetId(scope.workspaceId);
+    if (!(await exists(join(sourceDir, SKILL_FILE)))) {
+      throw new Error(`No SKILL.md in the selected folder: ${sourceDir}`);
+    }
+    const entry = join(this.storeDir, slug);
+    if ((await lstat(entry).catch(() => null)) !== null) {
+      throw new Error(`A skill named "${slug}" already exists`);
+    }
+    await mkdir(this.storeDir, { recursive: true });
+    const temp = join(this.storeDir, `.${slug}.${randomUUID().slice(0, 8)}.tmp`);
+    try {
+      await cp(await realpath(sourceDir), temp, { recursive: true, dereference: true, errorOnExist: true, force: false });
+      await rename(temp, entry);
+    } catch (cause) {
+      await rm(temp, { recursive: true, force: true });
+      throw cause;
+    }
     if (scope !== null) await this.link(slug, scope);
     return slug;
   }
