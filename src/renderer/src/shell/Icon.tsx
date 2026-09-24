@@ -45,6 +45,7 @@ import gitCommitHorizontal from "../../../../Orbita Design System/assets/icons/l
 import gitFork from "../../../../Orbita Design System/assets/icons/lucide/git-fork.svg?raw";
 import gitPullRequest from "../../../../Orbita Design System/assets/icons/lucide/git-pull-request.svg?raw";
 import globe from "../../../../Orbita Design System/assets/icons/lucide/globe.svg?raw";
+import hardDrive from "../../../../Orbita Design System/assets/icons/lucide/hard-drive.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import key from "../../../../Orbita Design System/assets/icons/lucide/key.svg?raw";
 import lightbulb from "../../../../Orbita Design System/assets/icons/lucide/lightbulb.svg?raw";
@@ -134,6 +135,7 @@ const ICONS = {
   "git-fork": gitFork,
   "git-pull-request": gitPullRequest,
   globe,
+  "hard-drive": hardDrive,
   "grip-vertical": gripVertical,
   image,
   info,

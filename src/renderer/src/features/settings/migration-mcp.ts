@@ -1,7 +1,7 @@
 /**
  * Migration 页 MCP 一段的纯逻辑：默认勾选与出处的写法。`node --test` 直接测。
  */
-import type { ImportMcpItem, ImportMcpOrigin } from "@shared/import";
+import type { ImportMcpItem, ImportMcpOrigin, ImportSourceId } from "@shared/import";
 import { SOURCE_LABEL, abbreviateHome } from "./migration-groups.ts";
 
 /** 能勾的：只有 new。 */
@@ -12,6 +12,18 @@ export function isSelectableMcp(item: ImportMcpItem): boolean {
 /** 默认勾选：new 全勾（导进来是停用的，勾上不会让任何东西开始运行）。 */
 export function defaultMcpSelection(items: readonly ImportMcpItem[]): Set<string> {
   return new Set(items.filter((item) => item.status === "new").map((item) => item.name));
+}
+
+/** 各来源能导的 server 数（来源行上的计数）：同名的多份在每个出处来源各计一次。 */
+export function mcpCountBySource(items: readonly ImportMcpItem[]): Partial<Record<ImportSourceId, number>> {
+  const counts: Partial<Record<ImportSourceId, number>> = {};
+  for (const item of items) {
+    if (!isSelectableMcp(item)) continue;
+    for (const source of new Set(item.origins.map((origin) => origin.source))) {
+      counts[source] = (counts[source] ?? 0) + 1;
+    }
+  }
+  return counts;
 }
 
 export function selectedMcpNames(items: readonly ImportMcpItem[], selected: ReadonlySet<string>): string[] {

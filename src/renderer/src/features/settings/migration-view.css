@@ -1,10 +1,10 @@
 /*
- * 设置 › Migration 专用样式（MigrationView.tsx 顶部 import）。
- * 有状态的样式（hover、disabled、展开、选中）都写在这里，inline 只留一次性布局。
- * 行直接坐在内容面上、发丝线分隔、不套第二张卡——同设置页 Row 的纪律。
+ * 设置 › Migration 专用样式（MigrationView.tsx 顶部 import；MigrationStep / Skills / Mcp 同用）。
+ * 有状态的样式（hover、disabled、展开、选中、步骤状态）都写在这里，inline 只留一次性布局。
+ * 列表装在一块实底 + 发丝框里（.mg-block），与 Providers 的 .pv-block 同一个配方。
  */
 
-/* 页面骨架：滚动区 + 底栏（底栏是第三条 grid 轨道，不浮在内容上，所以不需要实色浮层底） */
+/* 页面骨架：滚动区 + 底栏（底栏是第二条 grid 轨道，不浮在内容上，所以不需要实色浮层底） */
 .mg {
   min-height: 0;
   display: grid;
@@ -13,14 +13,14 @@
 
 .mg-scroll {
   min-height: 0;
-  padding: var(--space-6) var(--space-5);
+  padding: var(--space-5) var(--space-5) var(--space-6);
 }
 
 .mg-col {
   width: min(100%, var(--content-max-width));
   margin: 0 auto;
   display: grid;
-  gap: var(--space-6);
+  gap: var(--space-5);
   align-content: start;
 }
 
@@ -38,34 +38,98 @@
   cursor: not-allowed;
 }
 
-.mg-intro {
-  margin: 0;
-  max-width: 640px;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
-  color: var(--color-text-secondary);
-}
+/* ===== 编号步骤 ===== */
 
-/* ===== 段落 ===== */
-
-.mg-sec {
+.mg-step {
+  position: relative;
   display: grid;
-  gap: var(--space-1);
+  grid-template-columns: 26px minmax(0, 1fr);
+  column-gap: var(--space-3);
 }
 
-.mg-sec-head {
+/* 步与步之间的竖线：从圆点下沿接到下一步的圆点上沿 */
+.mg-step::before {
+  content: "";
+  position: absolute;
+  left: 12.5px;
+  top: 30px;
+  bottom: calc(-1 * var(--space-5) + 4px);
+  width: 1px;
+  background: var(--color-border-default);
+}
+
+.mg-step:last-child::before {
+  display: none;
+}
+
+.mg-dot {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-bold);
+  color: var(--color-text-tertiary);
+}
+
+.mg-dot[data-state="current"] {
+  border-color: var(--color-text-primary);
+  background: var(--color-text-primary);
+  color: var(--color-text-inverse);
+}
+
+.mg-dot[data-state="done"] {
+  border-color: var(--color-border-default);
+  color: var(--color-success);
+}
+
+.mg-step-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 28px;
+  min-width: 0;
+  min-height: 26px;
 }
 
-.mg-sec-head .section-label {
-  margin-right: auto;
+.mg-step-title {
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
 }
 
-.mg-sec-actions {
+.mg-step[data-state="pending"] .mg-step-title {
+  color: var(--color-text-tertiary);
+}
+
+/* 标题后面的摘要（扫了哪些来源 + Read-only） */
+.mg-step-sum {
   display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.mg-spacer {
+  flex: 1;
+}
+
+.mg-step-body {
+  grid-column: 2;
+  min-width: 0;
+  margin-top: var(--space-2);
+}
+
+.mg-tools {
+  display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 2px;
 }
@@ -77,37 +141,117 @@
   background: var(--color-border-default);
 }
 
-.mg-placeholder {
-  display: flex;
+/* ===== 徽标 / 事实 / 说明行 ===== */
+
+/* 小徽标：与 Providers 的协议徽标（.pv-format）同一个长相——淡底胶囊、micro 字 */
+.mg-badge {
+  display: inline-flex;
+  flex: none;
   align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-micro);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  cursor: help;
+}
+
+.mg-badge[data-mono] {
+  font-family: var(--font-family-mono);
+}
+
+.mg-badge .orbita-icon {
+  color: var(--color-text-tertiary);
+}
+
+/* 列表下面一行图标事实：描边胶囊，数字 primary，整句在悬停里 */
+.mg-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.mg-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  cursor: help;
+}
+
+.mg-fact > .orbita-icon {
+  color: var(--color-text-tertiary);
+}
+
+.mg-fact b {
+  font-family: var(--font-family-mono);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.mg-fact .mg-link {
+  margin-left: 2px;
+}
+
+/* 一行带图标的说明：占位、隐私声明、错误 */
+.mg-caption {
+  display: flex;
+  align-items: flex-start;
   gap: 6px;
-  margin: 0;
-  padding: var(--space-3) 0;
-  border-bottom: 1px solid var(--color-border-subtle);
+  margin: var(--space-2) 0 0;
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
   color: var(--color-text-tertiary);
+}
+
+.mg-step-body > .mg-caption:first-child {
+  margin-top: 0;
+}
+
+/* 列表之前的那一行（Sources 的隐私声明）：secondary，与列表隔一档 */
+.mg-caption-lead {
+  margin-bottom: var(--space-2);
+  color: var(--color-text-secondary);
+}
+
+.mg-caption-lead > .orbita-icon {
+  color: var(--color-text-tertiary);
+}
+
+.mg-caption > .orbita-icon {
+  flex: none;
+  margin-top: 2px;
 }
 
 .mg-error {
   color: var(--color-danger);
 }
 
-.mg-note {
-  margin: 0;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
-  color: var(--color-text-secondary);
+.mg-dim {
+  color: var(--color-text-tertiary);
 }
 
 .mg-textbtn {
-  padding: 2px 6px;
+  height: 26px;
+  padding: 0 var(--space-2);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: none;
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-control);
   color: var(--color-text-secondary);
+  white-space: nowrap;
   cursor: pointer;
   transition: var(--transition-hover);
 }
@@ -138,64 +282,112 @@
   text-decoration-color: currentColor;
 }
 
-/* ===== 行 ===== */
-
-.mg-list {
+/* 悬停里竖排的路径（「N paths」） */
+.mg-tip-paths {
   display: grid;
+  gap: 1px;
+  margin-bottom: 6px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  line-height: 16px;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
 }
 
-.mg-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+/* ===== 列表块 ===== */
+
+.mg-block {
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-panel);
+}
+
+/* 空态：块里一行图标 + 结论 */
+.mg-empty {
+  display: flex;
   align-items: center;
-  column-gap: var(--space-3);
-  min-height: var(--list-item-rich);
-  padding: var(--space-2);
-  border-bottom: 1px solid var(--color-border-subtle);
+  gap: var(--space-2);
+  padding: var(--space-4);
+  font-size: var(--font-size-control);
+  color: var(--color-text-secondary);
 }
 
-.mg-row-source,
-.mg-row-group,
-.mg-row-mcp {
+.mg-empty > .orbita-icon {
+  color: var(--color-success);
+}
+
+/* 列头与组行共用的列：左端 / 名字 / 计数 / 子会话 / 去向 */
+.mg-grid-sessions,
+.mg-grid-skills {
+  display: grid;
+  align-items: center;
+  column-gap: var(--space-2);
+}
+
+.mg-grid-sessions {
+  grid-template-columns: 40px minmax(0, 1fr) 72px 44px 176px;
+}
+
+.mg-grid-skills {
+  grid-template-columns: 40px minmax(0, 1fr) 72px 176px;
+}
+
+.mg-colhead {
+  height: 22px;
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+.mg-colhead > :nth-child(n + 3) {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mg-colhead > :last-child {
+  justify-content: flex-start;
+  padding-left: 8px;
+}
+
+.mg-group + .mg-group {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.mg-grow {
+  min-height: 48px;
+  padding: 6px var(--space-3);
   cursor: pointer;
   transition: var(--transition-hover);
 }
 
-.mg-row-source:hover,
-.mg-row-group:hover,
-.mg-row-mcp:hover {
+.mg-grow:hover {
   background: var(--color-bg-hover);
 }
 
-.mg-row-source[data-disabled],
-.mg-row-group[data-disabled],
-.mg-row-mcp[data-disabled] {
+.mg-grow[data-disabled] {
   cursor: default;
 }
 
-.mg-row-source[data-disabled]:hover,
-.mg-row-group[data-disabled]:hover,
-.mg-row-mcp[data-disabled]:hover {
+.mg-grow[data-disabled]:hover {
   background: transparent;
 }
 
-.mg-row-source[data-disabled] .mg-name,
-.mg-row-group[data-disabled] .mg-name,
-.mg-row-mcp[data-disabled] .mg-name {
+.mg-grow[data-disabled] .mg-name {
   color: var(--color-text-tertiary);
 }
 
 .mg-lead {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 4px;
 }
 
 .mg-chev {
   display: inline-grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -204,51 +396,39 @@
   cursor: pointer;
 }
 
+.mg-chev:disabled {
+  cursor: default;
+}
+
 .mg-chev .orbita-icon {
-  transition: transform var(--duration-fast) var(--ease-standard);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
 }
 
 .mg-chev[aria-expanded="true"] .orbita-icon {
   transform: rotate(90deg);
 }
 
-.mg-glyph {
-  display: inline-grid;
-  place-items: center;
+.mg-gcopy {
+  display: grid;
+  min-width: 0;
+}
+
+.mg-gname {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mg-gname > .orbita-icon {
+  flex: none;
   color: var(--color-text-secondary);
 }
 
-.mg-copy {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.mg-line1 {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.mg-name {
-  font-size: var(--font-size-control);
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-}
-
-.mg-meta,
-.mg-where {
-  min-width: 0;
+/* 路径缩进到名字下（让开 14px 图标 + 6px 间距） */
+.mg-gpath {
   overflow: hidden;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.mg-path {
-  overflow: hidden;
+  padding-left: 20px;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   line-height: var(--line-height-micro);
@@ -257,30 +437,51 @@
   text-overflow: ellipsis;
 }
 
+/* MCP 行名字前没有图标，路径不缩进 */
+.mg-gpath-flush {
+  padding-left: 0;
+}
+
+.mg-line1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mg-name {
+  flex: none;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.mg-meta {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .mg-trail {
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
-}
-
-/* 组行的尾部三列对齐：计数 / 子会话 / 去向 */
-.mg-cols {
-  display: grid;
-  grid-template-columns: 72px 44px 176px;
-  column-gap: var(--space-2);
-  justify-items: end;
-  cursor: default;
-}
-
-.mg-cols > :last-child {
-  justify-self: start;
 }
 
 .mg-count {
   font-size: var(--font-size-caption);
   color: var(--color-text-secondary);
   white-space: nowrap;
+}
+
+.mg-num {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
 }
 
 .mg-count b {
@@ -292,48 +493,77 @@
 .mg-sub {
   display: inline-flex;
   align-items: center;
+  justify-self: end;
   gap: 3px;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
   white-space: nowrap;
+  cursor: help;
 }
 
 .mg-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
   white-space: nowrap;
 }
 
-/* 展开的单条会话：缩进到名字列，行高收一档 */
-.mg-children {
-  display: grid;
-  padding-left: 38px;
-  border-bottom: 1px solid var(--color-border-subtle);
+.mg-found {
+  color: var(--color-text-secondary);
+  cursor: help;
 }
 
-.mg-child {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+.mg-found > .orbita-icon {
+  color: var(--color-success);
+}
+
+/* 去向列：芯片左对齐，与列头 Goes to 对齐 */
+.mg-dest {
+  display: flex;
+  min-width: 0;
+  cursor: default;
+}
+
+/* 「有新消息」那一块的去向：不是菜单，是一句固定的事实 */
+.mg-fixed-dest {
+  display: inline-flex;
   align-items: center;
-  column-gap: var(--space-3);
-  min-height: 34px;
-  padding: 4px var(--space-2);
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: var(--font-size-control);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* ===== 展开的单条（会话 / skill） ===== */
+
+.mg-kids {
   border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+}
+
+.mg-kid {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  min-height: 34px;
+  padding: 0 var(--space-3) 0 40px;
   cursor: pointer;
   transition: var(--transition-hover);
 }
 
-.mg-child:first-child {
-  border-top: 0;
+.mg-kid + .mg-kid {
+  border-top: 1px solid var(--color-border-subtle);
 }
 
-.mg-child:hover {
+.mg-kid:hover {
   background: var(--color-bg-hover);
-}
-
-.mg-child .mg-line1 {
-  align-items: center;
 }
 
 .mg-title {
@@ -344,6 +574,27 @@
   text-overflow: ellipsis;
 }
 
+/* 没勾的那条退一档：一眼看出哪些不导 */
+.mg-kid[data-off] .mg-title {
+  color: var(--color-text-secondary);
+}
+
+/* 混合来源的块里，单条行写出来源名（正文字体；日期才是机器事实、走 mono） */
+.mg-kid-source {
+  flex: none;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.mg-day {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
 .mg-model {
   display: inline-flex;
   align-items: center;
@@ -352,6 +603,7 @@
   font-size: var(--font-size-micro);
   color: var(--color-text-secondary);
   white-space: nowrap;
+  cursor: help;
 }
 
 .mg-model-was {
@@ -359,37 +611,44 @@
 }
 
 .mg-more {
-  padding: 6px var(--space-2);
+  padding: 4px 0 6px 34px;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
-/* ===== 说明行 ===== */
-
-.mg-notes {
-  display: grid;
-  gap: 6px;
-  padding-top: var(--space-2);
+.mg-kid[data-disabled] {
+  cursor: default;
 }
 
-.mg-noteline {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
-  color: var(--color-text-secondary);
+.mg-kid[data-disabled]:hover {
+  background: transparent;
 }
 
-.mg-noteline > .orbita-icon {
-  flex: 0 0 auto;
-  margin-top: 3px;
+.mg-kid[data-disabled] .mg-title {
   color: var(--color-text-tertiary);
+}
+
+/* 单条 skill：名字不让位给描述（描述先截断），太长的名字最多占四成宽 */
+.mg-skill .mg-title {
+  flex: none;
+  max-width: 40%;
+}
+
+.mg-desc {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .mg-skips {
   display: grid;
   gap: 2px;
-  margin: 0;
-  padding: 0 0 0 18px;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
   list-style: none;
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
@@ -397,7 +656,7 @@
 
 .mg-skips li {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -417,24 +676,166 @@
   color: var(--color-text-tertiary);
 }
 
-/* ===== 按钮 ===== */
+/* ===== 1 Sources ===== */
 
-.mg-scanrow {
+.mg-src + .mg-src {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.mg-src {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.mg-src-head {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  cursor: pointer;
+}
+
+.mg-src[data-disabled] .mg-src-head {
+  cursor: default;
+}
+
+.mg-src[data-disabled] .mg-name {
+  color: var(--color-text-tertiary);
+}
+
+/* 竖排路径清单：让开复选框那一列，淡底块，一行一条 */
+.mg-paths {
+  display: grid;
+  gap: 1px;
+  margin: 0 0 0 calc(14px + var(--space-3));
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  list-style: none;
+}
+
+.mg-path-line {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding-top: var(--space-3);
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  line-height: 18px;
+  color: var(--color-text-tertiary);
 }
 
-.mg-scanrow .mg-note {
-  margin-right: auto;
+.mg-path-line > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
+
+.mg-path-line > .orbita-icon {
+  flex: none;
+}
+
+/* ===== 2 Sessions：扫描前 / 中的骨架 ===== */
+
+.mg-skel-list {
+  overflow: hidden;
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-xl);
+}
+
+.mg-skel {
+  display: grid;
+  grid-template-columns: 14px 14px minmax(0, 1fr) 140px;
+  align-items: center;
+  gap: var(--space-3);
+  height: 42px;
+  padding: 0 var(--space-4);
+  color: var(--color-text-tertiary);
+}
+
+.mg-skel + .mg-skel {
+  border-top: 1px dashed var(--color-border-subtle);
+}
+
+.mg-skel-bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-text-tertiary) 20%, transparent);
+}
+
+/* 三条长度不一，读作「几个文件夹」而不是一张表 */
+.mg-skel-bar[data-w="0"] {
+  width: 34%;
+}
+
+.mg-skel-bar[data-w="1"] {
+  width: 22%;
+}
+
+.mg-skel-bar[data-w="2"] {
+  width: 28%;
+}
+
+.mg-skel-box {
+  width: 13px;
+  height: 13px;
+  border: 1px solid color-mix(in srgb, var(--color-text-tertiary) 50%, transparent);
+  border-radius: 3px;
+}
+
+/* 扫描中：骨架呼吸（设计系统 Motion：进行中的状态只许旋转与呼吸两种） */
+.mg-skel-list[data-scanning] .mg-skel-bar {
+  animation: orbita-breath 1.6s ease-in-out infinite;
+}
+
+/* ===== 4 MCP ===== */
+
+.mg-mrow {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  min-height: 48px;
+  padding: 6px var(--space-3);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.mg-mrow + .mg-mrow {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.mg-mrow:hover {
+  background: var(--color-bg-hover);
+}
+
+.mg-mrow[data-disabled] {
+  cursor: default;
+}
+
+.mg-mrow[data-disabled]:hover {
+  background: transparent;
+}
+
+.mg-mrow[data-disabled] .mg-name {
+  color: var(--color-text-tertiary);
+}
+
+/* server 名是配置里的键，按代码字体显示（与 MCP 面板一致） */
+.mg-mono {
+  font-family: var(--font-family-mono);
+}
+
+/* ===== 按钮 ===== */
 
 .mg-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 12px;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
   border: 0;
   border-radius: var(--radius-md);
   font-family: var(--font-family-base);
@@ -447,67 +848,18 @@
   box-shadow: inset 0 0 0 1px var(--color-border-subtle);
 }
 
+/* 「N paths」：不描边，只在悬停时铺底（它主要是一个看路径的入口） */
+.mg-btn.mg-btn-ghost {
+  box-shadow: none;
+}
+
 .mg-btn-primary {
-  padding: 6px 16px;
+  height: var(--control-height-md);
+  padding: 0 var(--space-4);
   font-weight: var(--weight-semibold);
 }
 
-/* ===== 底栏 ===== */
-
-.mg-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  min-height: 56px;
-  padding: 10px var(--space-5);
-  border-top: 1px solid var(--color-border-subtle);
-}
-
-.mg-foot-copy {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-  margin-right: auto;
-}
-
-.mg-foot-main {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-size-control);
-  font-weight: var(--weight-medium);
-}
-
-.mg-foot-sub {
-  overflow: hidden;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.mg-ok {
-  display: inline-grid;
-  place-items: center;
-  color: var(--color-success);
-}
-
-/* ---- Skills 段 ---- */
-
-/* 组行尾部：计数 / 作用域（没有子会话列） */
-.mg-cols-skills {
-  display: grid;
-  grid-template-columns: 72px 176px;
-  column-gap: var(--space-2);
-  justify-items: end;
-  cursor: default;
-}
-
-.mg-cols-skills > :last-child {
-  justify-self: start;
-}
-
-/* 段头的 Copy / Link：两个安静按钮并排，按下的那个用 mode-active 底 */
+/* Skills 段头的 Copy / Link：两个安静按钮并排，按下的那个用 mode-active 底 */
 .mg-seg {
   display: inline-flex;
   gap: 2px;
@@ -521,42 +873,68 @@
   font-size: var(--font-size-caption);
 }
 
-/* 单条 skill：名字不让位给描述（描述先截断），太长的名字最多占四成宽 */
-.mg-skill .mg-title {
-  flex: none;
-  max-width: 40%;
+/* ===== 5 Import（底栏） ===== */
+
+.mg-foot {
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
 }
 
-/* 单条 skill 的描述：跟在名字后面，一行截断 */
-.mg-desc {
+/* 与上面的步骤同一个测量与左列：圆点对齐圆点 */
+.mg-foot-inner {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  min-height: 36px;
+}
+
+.mg-foot-copy {
+  display: grid;
+  gap: 2px;
   min-width: 0;
-  overflow: hidden;
+}
+
+.mg-foot-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-medium);
+}
+
+.mg-foot-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
+}
+
+.mg-foot-msg {
+  overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.mg-child[data-disabled] {
-  cursor: default;
+.mg-foot-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: help;
 }
 
-.mg-child[data-disabled]:hover {
-  background: transparent;
+.mg-foot-fact[data-tone="danger"] {
+  color: var(--color-danger);
 }
 
-.mg-child[data-disabled] .mg-title {
-  color: var(--color-text-tertiary);
-}
-
-/* ---- MCP 段 ---- */
-
-/* server 名是配置里的键，按代码字体显示（与 MCP 面板一致） */
-.mg-mono {
-  font-family: var(--font-family-mono);
-}
-
-/* 段头下面那一句「导进来是停用的」 */
-.mg-note-lead {
-  padding-bottom: var(--space-1);
+.mg-ok {
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-success);
 }
