@@ -38,6 +38,7 @@ function item(overrides: Partial<ImportPlanItem>): ImportPlanItem {
     modelMatched: true,
     archived: false,
     pinned: false,
+    starred: false,
     createdAt: NOW - DAY,
     updatedAt: NOW - DAY,
     bytes: 100,

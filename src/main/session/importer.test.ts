@@ -178,7 +178,7 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
       },
     },
     {
-      // cwd = 数据根内的 workspace-files；starred → pinned；glm-5.3 精确命中
+      // cwd = 数据根内的 workspace-files；starred → 星标（不是置顶）；glm-5.3 精确命中
       file: "2026-08-17T12-39-41-391Z_01a00fbc-1c4f-775b-a194-6b141831a363.jsonl",
       entry: {
         id: "bd8e2a4b-6559-4a48-8d23-5d38d21edb5e",
@@ -252,10 +252,11 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.equal(defaultBin.providerId, "zai-coding");
     assert.equal(defaultBin.importedModel, "qwen3.7-max");
     assert.equal(defaultBin.archived, true);
-    // ② 同上收容区，但 starred → pinned；glm-5.3 精确命中
+    // ② 同上收容区，starred → 星标、不置顶；glm-5.3 精确命中
     const starred = bySource.get("bd8e2a4b-6559-4a48-8d23-5d38d21edb5e");
     assert.ok(starred !== undefined);
-    assert.equal(starred.pinned, true);
+    assert.equal(starred.pinned, false);
+    assert.equal(starred.starred, true);
     assert.equal(starred.modelMatched, true);
     assert.equal(starred.modelId, "glm-5.3");
     // ③ 同址合并 → 挂 orbita 既有工作区，cwd 取其 path
@@ -345,10 +346,11 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.ok(m1.stats !== null);
     assert.ok(m1.stats.tokens.total > 0);
 
-    // 样本 2：36 条 message；recentQueries 从 user 消息派生；starred → pinned
+    // 样本 2：36 条 message；recentQueries 从 user 消息派生；starred → 星标
     const m2 = byTitle.get("肖志锋新分支功能解析");
     assert.ok(m2 !== undefined);
-    assert.equal(m2.pinned, true);
+    assert.equal(m2.pinned, false);
+    assert.equal(m2.starred, true);
     assert.equal(m2.providerId, "zai-coding");
     assert.equal(m2.modelId, "glm-5.3");
     const detail2 = await store.load(m2.id);
@@ -782,6 +784,7 @@ describe("子会话挂回母会话（Proma 的 parentSessionId → parentId）",
     assert.equal(sub.cwd, "/tmp/proj");
     assert.equal(sub.archived, false);
     assert.equal(sub.pinned, false);
+    assert.equal(sub.starred, false);
 
     const run = await runImport(deps());
     assert.equal(run.imported, 2);
@@ -1061,6 +1064,29 @@ describe("Migration 页的选择：去向覆盖、勾选过滤、探测", () => 
     assert.ok(missing.paths.includes(join("/tmp/old-root", "sdk-config", "sessions")));
     await writeIndex([]);
     assert.equal((await probeProma(promaRoot)).found, true);
+  });
+});
+
+describe("Proma 的置顶与星标是两个字段", () => {
+  test("pinned → 置顶；starred → 星标、不置顶；落盘时没星标就不写 starred 键", async () => {
+    const a = await writePiSession("2026-09-01T00-00-00-000Z_pin-000000000000001.jsonl", "/tmp/p");
+    const b = await writePiSession("2026-09-01T00-01-00-000Z_sta-000000000000002.jsonl", "/tmp/p");
+    await writeIndex([
+      { id: "pinned", title: "置顶的", piSessionFile: a, pinned: true, createdAt: 1, updatedAt: 2 },
+      { id: "starred", title: "星标的", piSessionFile: b, starred: true, createdAt: 3, updatedAt: 4 },
+    ]);
+    const report = await scanImport(deps());
+    const by = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([by.get("pinned")?.pinned, by.get("pinned")?.starred], [true, false]);
+    assert.deepEqual([by.get("starred")?.pinned, by.get("starred")?.starred], [false, true]);
+    await runImport(deps());
+    const metas = await store.list();
+    const pinnedMeta = metas.find((meta) => meta.title === "置顶的");
+    const starredMeta = metas.find((meta) => meta.title === "星标的");
+    assert.equal(pinnedMeta?.pinned, true);
+    assert.equal(pinnedMeta?.starred, false);
+    assert.equal(starredMeta?.pinned, false);
+    assert.equal(starredMeta?.starred, true);
   });
 });
 

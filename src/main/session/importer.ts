@@ -151,6 +151,7 @@ interface PromaSessionIndexEntry {
   updatedAt: number | null;
   archived: boolean;
   pinned: boolean;
+  starred: boolean;
   /** Proma 的 `parentSessionId`：delegation 派出的子会话指向母会话的 Proma id；null = 根会话 */
   parentSourceId: string | null;
 }
@@ -165,6 +166,7 @@ interface PromaClaudeIndexEntry {
   updatedAt: number | null;
   archived: boolean;
   pinned: boolean;
+  starred: boolean;
   parentSourceId: string | null;
 }
 
@@ -234,8 +236,11 @@ export function parsePromaSessions(raw: string): {
       createdAt: optionalNumber(item["createdAt"]),
       updatedAt: optionalNumber(item["updatedAt"]),
       archived: item["archived"] === true,
-      // 字段两代：早期 pinned，后来 starred（互斥出现），语义都是「置顶」
-      pinned: item["pinned"] === true || item["starred"] === true,
+      // 两个独立字段：pinned = 置顶；starred = 星标（Proma 07-21 加，「不影响排序或置顶」）。
+      // 早先把 starred 也当置顶导，是把它误读成了 pinned 的新名字（本机 pinned=true 0 条、
+      // starred=true 55 条，导进来一片置顶）
+      pinned: item["pinned"] === true,
+      starred: item["starred"] === true,
       // 只认 delegation 的 parentSessionId。explorationParentSessionId（Proma 的探索分叉）
       // 是从某条消息岔出去的独立会话，不是子会话，照根会话导
       parentSourceId: optionalString(item["parentSessionId"]),
@@ -848,6 +853,7 @@ export async function scanImport(
       modelMatched: mapped.matched,
       archived: entry.archived,
       pinned: entry.pinned,
+      starred: entry.starred,
       createdAt: entry.createdAt ?? (source.headerTimestamp || Date.now()),
       updatedAt: entry.updatedAt ?? entry.createdAt ?? (source.headerTimestamp || Date.now()),
       bytes,
@@ -935,6 +941,7 @@ export async function scanImport(
       modelMatched: mapped.matched,
       archived: entry.archived,
       pinned: entry.pinned,
+      starred: entry.starred,
       createdAt,
       updatedAt: entry.updatedAt ?? entry.createdAt ?? createdAt,
       bytes,
@@ -1015,7 +1022,7 @@ interface ParentTarget {
  * （成环的一组 parentId 互指，rootSessions 会把它们全部滤出左栏，等于数据丢了）。
  *
  * 子会话**对齐母会话的工作区与 cwd**（同一工作区是 orbita 子会话的契约；本机 284/284
- * 本来就同工作区，对齐是防御），pinned / archived 置 false——子会话没有生命周期，
+ * 本来就同工作区，对齐是防御），pinned / starred / archived 置 false——子会话没有生命周期，
  * 只从母会话的右栏到达。
  */
 function linkSubSessions(
@@ -1072,6 +1079,7 @@ function linkSubSessions(
     item.cwd = target.cwd;
     if (target.folder !== undefined) item.folder = target.folder;
     item.pinned = false;
+    item.starred = false;
     item.archived = false;
     subSessionCount += 1;
   }
@@ -1234,6 +1242,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
         thinkingLevel: sessionFile.thinkingLevel,
         piSessionFile: sessionFile.path,
         pinned: item.pinned,
+        // 星标缺席即否（SessionMeta 的纪律）：没星标就不写这个键
+        ...(item.starred ? { starred: true } : null),
         archived: item.archived,
         recentQueries: recentQueriesFromRecords(sessionFile.records),
         stats: aggregatePrefixUsage(sessionFile.records),
