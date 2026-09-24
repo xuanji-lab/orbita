@@ -1,0 +1,485 @@
+/*
+ * 设置 › Migration 专用样式（MigrationView.tsx 顶部 import）。
+ * 有状态的样式（hover、disabled、展开、选中）都写在这里，inline 只留一次性布局。
+ * 行直接坐在内容面上、发丝线分隔、不套第二张卡——同设置页 Row 的纪律。
+ */
+
+/* 页面骨架：滚动区 + 底栏（底栏是第三条 grid 轨道，不浮在内容上，所以不需要实色浮层底） */
+.mg {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.mg-scroll {
+  min-height: 0;
+  padding: var(--space-6) var(--space-5);
+}
+
+.mg-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+  display: grid;
+  gap: var(--space-6);
+  align-content: start;
+}
+
+.mg input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  /* 复选框着 accent（wafo 2026-09-24，设计系统 Colour 一段的 accent 用途清单） */
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.mg input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.mg-intro {
+  margin: 0;
+  max-width: 640px;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}
+
+/* ===== 段落 ===== */
+
+.mg-sec {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.mg-sec-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+}
+
+.mg-sec-head .section-label {
+  margin-right: auto;
+}
+
+.mg-sec-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mg-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 var(--space-1);
+  background: var(--color-border-default);
+}
+
+.mg-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-tertiary);
+}
+
+.mg-error {
+  color: var(--color-danger);
+}
+
+.mg-note {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}
+
+.mg-textbtn {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.mg-textbtn:hover:enabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.mg-textbtn:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+.mg-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-strong);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.mg-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ===== 行 ===== */
+
+.mg-list {
+  display: grid;
+}
+
+.mg-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  min-height: var(--list-item-rich);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.mg-row-source,
+.mg-row-group {
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.mg-row-source:hover,
+.mg-row-group:hover {
+  background: var(--color-bg-hover);
+}
+
+.mg-row-source[data-disabled] {
+  cursor: default;
+}
+
+.mg-row-source[data-disabled]:hover {
+  background: transparent;
+}
+
+.mg-row-source[data-disabled] .mg-name {
+  color: var(--color-text-tertiary);
+}
+
+.mg-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mg-chev {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.mg-chev .orbita-icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.mg-chev[aria-expanded="true"] .orbita-icon {
+  transform: rotate(90deg);
+}
+
+.mg-glyph {
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-secondary);
+}
+
+.mg-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.mg-line1 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mg-name {
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.mg-meta,
+.mg-where {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mg-path {
+  overflow: hidden;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  line-height: var(--line-height-micro);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mg-trail {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+/* 组行的尾部三列对齐：计数 / 子会话 / 去向 */
+.mg-cols {
+  display: grid;
+  grid-template-columns: 72px 44px 176px;
+  column-gap: var(--space-2);
+  justify-items: end;
+  cursor: default;
+}
+
+.mg-cols > :last-child {
+  justify-self: start;
+}
+
+.mg-count {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.mg-count b {
+  font-family: var(--font-family-mono);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.mg-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.mg-status {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* 展开的单条会话：缩进到名字列，行高收一档 */
+.mg-children {
+  display: grid;
+  padding-left: 38px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.mg-child {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  min-height: 34px;
+  padding: 4px var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.mg-child:first-child {
+  border-top: 0;
+}
+
+.mg-child:hover {
+  background: var(--color-bg-hover);
+}
+
+.mg-child .mg-line1 {
+  align-items: center;
+}
+
+.mg-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-control);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mg-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.mg-model-was {
+  color: var(--color-text-tertiary);
+}
+
+.mg-more {
+  padding: 6px var(--space-2);
+}
+
+/* ===== 说明行 ===== */
+
+.mg-notes {
+  display: grid;
+  gap: 6px;
+  padding-top: var(--space-2);
+}
+
+.mg-noteline {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}
+
+.mg-noteline > .orbita-icon {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  color: var(--color-text-tertiary);
+}
+
+.mg-skips {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  list-style: none;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+}
+
+.mg-skips li {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mg-skip-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-secondary);
+}
+
+.mg-skip-why {
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* ===== 按钮 ===== */
+
+.mg-scanrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.mg-scanrow .mg-note {
+  margin-right: auto;
+}
+
+.mg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-control);
+  white-space: nowrap;
+}
+
+/* 次按钮 = 安静控件 + 常驻发丝内描边（设置页次按钮的现行写法之一，见设计系统 Caveats） */
+.mg-btn.quiet-control {
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+}
+
+.mg-btn-primary {
+  padding: 6px 16px;
+  font-weight: var(--weight-semibold);
+}
+
+/* ===== 底栏 ===== */
+
+.mg-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 56px;
+  padding: 10px var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.mg-foot-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.mg-foot-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
+}
+
+.mg-foot-sub {
+  overflow: hidden;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mg-ok {
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-success);
+}

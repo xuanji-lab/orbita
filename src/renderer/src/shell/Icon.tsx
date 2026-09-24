@@ -4,6 +4,7 @@ import archive from "../../../../Orbita Design System/assets/icons/lucide/archiv
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
 import arrowLeft from "../../../../Orbita Design System/assets/icons/lucide/arrow-left.svg?raw";
 import arrowLeftRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-left-right.svg?raw";
+import arrowRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-right.svg?raw";
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
 import arrowUpRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-up-right.svg?raw";
 import blend from "../../../../Orbita Design System/assets/icons/lucide/blend.svg?raw";
@@ -92,6 +93,7 @@ const ICONS = {
   "archive-restore": archiveRestore,
   "arrow-left": arrowLeft,
   "arrow-left-right": arrowLeftRight,
+  "arrow-right": arrowRight,
   "arrow-up": arrowUp,
   "arrow-up-right": arrowUpRight,
   bot,

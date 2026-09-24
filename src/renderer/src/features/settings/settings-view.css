@@ -3,6 +3,18 @@
  * SettingsView.tsx 顶部 `import "./settings-view.css"`（照 providers-view.css 的先例）。
  */
 
+/* ===== 分组标题（General 的 Section 与 Migration 的段落共用）=====
+ * 与侧栏节点标题同一个处理：源码写 sentence case，这里转大写；mono、micro、0.06em。
+ * 设计系统 *Content fundamentals › Group labels*。 */
+.section-label {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: var(--weight-bold);
+  color: var(--color-text-secondary);
+}
+
 /* ===== Theme 预览卡（ThemeCard.tsx） ===== */
 
 .theme-grid {
