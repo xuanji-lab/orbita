@@ -19,7 +19,7 @@ import type { Workspace } from "../../shared/workspace.ts";
 import { rootSessions, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ImportPlanItem } from "../../shared/import.ts";
 import { SessionStore } from "./store.ts";
-import { entriesToRecords, mapModel, probeProma, runImport, scanImport, selectPlan, type RunImporterDeps } from "./importer.ts";
+import { branchEntries, entriesToRecords, mapModel, probeProma, runImport, scanImport, selectPlan, type RunImporterDeps } from "./importer.ts";
 
 const TESTDATA = join(dirname(fileURLToPath(import.meta.url)), "testdata");
 
@@ -730,25 +730,32 @@ describe("边界：entries → records 的翻译规则", () => {
     if (records[1]?.role === "assistant") assert.equal("usage" in records[1], false);
   });
 
-  test("压缩感知：compaction 之后的派生走 buildContextEntries 的路径（快照对齐 pi 行为）", async () => {
-    // 用真实 pi 的 buildContextEntries 驱动（与引擎同一路径），验证 compaction 前的
-    // entry 被折叠掉、界碑 + 保留段进入 records
+  test("压缩过的会话：transcript 是全量历史，界碑落在压缩的原位（不是发给模型的压缩上下文）", () => {
     const entries: SessionEntry[] = [
-      entry({ type: "message", id: "m1", parentId: null, timestamp: "2026-09-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "被折叠的旧问题" }], timestamp: 1 } }),
+      entry({ type: "message", id: "m1", parentId: null, timestamp: "2026-09-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "压缩前的旧问题" }], timestamp: 1 } }),
       entry({ type: "compaction", id: "c", parentId: "m1", timestamp: "2026-09-01T00:00:02.000Z", summary: "折叠摘要", firstKeptEntryId: "m2", tokensBefore: 100 }),
-      entry({ type: "message", id: "m2", parentId: "c", timestamp: "2026-09-01T00:00:03.000Z", message: { role: "user", content: [{ type: "text", text: "保留的新问题" }], timestamp: 3 } }),
+      entry({ type: "message", id: "m2", parentId: "c", timestamp: "2026-09-01T00:00:03.000Z", message: { role: "user", content: [{ type: "text", text: "压缩后的新问题" }], timestamp: 3 } }),
     ];
-    const context = buildContextEntries(entries);
-    const records = entriesToRecords(context);
-    // pi 的规则：界碑 + firstKept 起的条目；旧消息 m1 不在
-    assert.equal(records.length, 2);
-    assert.equal(records[0]?.role, "compacted");
-    assert.equal(records[1]?.role, "user");
-    if (records[1]?.role === "user") {
-      const text = records[1].content[0];
-      assert.ok(text !== undefined && text.type === "text");
-      assert.equal(text.text, "保留的新问题");
-    }
+    // 对照：pi 发给模型的上下文里没有 m1
+    assert.deepEqual(buildContextEntries(entries).map((e) => e.id), ["c", "m2"]);
+    const records = entriesToRecords(branchEntries(entries));
+    assert.deepEqual(
+      records.map((record) => record.role),
+      ["user", "compacted", "user"],
+    );
+    const first = records[0];
+    assert.ok(first?.role === "user" && first.content[0]?.type === "text");
+    assert.equal(first.content[0].text, "压缩前的旧问题");
+  });
+
+  test("回退重答：旧枝不在当前分支上，与 Proma 界面一致；成环不死循环", () => {
+    const user = (id: string, parentId: string | null, text: string): SessionEntry =>
+      entry({ type: "message", id, parentId, timestamp: "2026-09-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text }], timestamp: 1 } });
+    const rewound = [user("a", null, "一"), user("b", "a", "旧枝"), user("c", "a", "新枝")];
+    assert.deepEqual(branchEntries(rewound).map((e) => e.id), ["a", "c"]);
+    const looped = [user("x", "y", "x"), user("y", "x", "y")];
+    assert.deepEqual(branchEntries(looped).map((e) => e.id), ["x", "y"]);
+    assert.deepEqual(branchEntries([]), []);
   });
 });
 
