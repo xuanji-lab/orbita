@@ -13,17 +13,18 @@
  */
 
 /**
- * 迁移来源。opencode 那一刀再加进来
- * （2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
+ * 迁移来源（2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
  *
  * - proma：Proma 桌面应用（~/.proma-dev）
  * - claude-code：Claude Code 的会话存储（~/.claude/projects），命令行与 Claude 桌面应用共用；
  *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题；另有 ~/.claude/skills
  * - kimi-code：Kimi Code 命令行（~/.kimi-code）：会话在 sessions/<工作区>/<会话>/ 下，对话是
  *   agents/main/wire.jsonl 这份事件流；另有 mcp.json。skills 用的是共用目录（归 agent-skills）
+ * - opencode：opencode 命令行：会话在它的 SQLite 库（~/.local/share/opencode/opencode.db，只读打开），
+ *   MCP 在 ~/.config/opencode/opencode.json
  * - agent-skills：多家 agent 共用的 skills 目录（~/.agents/skills），只有 skills，没有会话
  */
-export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "agent-skills";
+export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "agent-skills";
 
 /**
  * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
@@ -105,7 +106,7 @@ export type ImportSkipReason =
   | "bad-session-file"
   /** agent-sessions.json 里这条索引本身坏了（缺 id / 路径不是字符串等） */
   | "bad-index-entry"
-  /** 能读但转不出可续聊内容：claude legacy / Claude Code / Kimi Code 的会话里没有 assistant 消息
+  /** 能读但转不出可续聊内容：claude legacy / Claude Code / Kimi Code / opencode 的会话里没有 assistant 消息
    *  （纯旧扁平 / 空 draft / 只开了个头——pi 只在有 assistant 消息时才落盘文件） */
   | "unsupported-format";
 
@@ -143,7 +144,11 @@ export type ImportSourceKind =
   | "claude-code"
   /** Kimi Code 的事件流（sessions/…/agents/main/wire.jsonl）：用户消息是整条记录，助手消息由
    *  step / content.part / tool.call / tool.result 事件拼出来，转换构造 pi 文件 */
-  | "kimi-code";
+  | "kimi-code"
+  /** opencode 的 SQLite 库：一条会话是 message 表的若干行，每行的内容在 part 表（文字、思考、
+   *  工具调用连同结果、附件），按 step 拆成 pi 的 assistant 消息与工具结果，转换构造 pi 文件。
+   *  库里没有「会话文件」，sourceFile 写成「库路径#会话 id」（幂等键） */
+  | "opencode";
 
 /**
  * 一条计划条目相对 orbita 的状态（再次导入，wafo 2026-09-24 23:55 裁决）。
@@ -182,7 +187,8 @@ export interface ImportPlanItem {
    * 同一文件夹的不同来源并成一组
    */
   folder: string | null;
-  /** 源文件绝对路径（pi 真源或 claude 渲染 JSONL）——同时是幂等键（meta.importedFrom 存它） */
+  /** 源文件绝对路径（pi 真源或 claude 渲染 JSONL）——同时是幂等键（meta.importedFrom 存它）。
+   *  opencode 没有会话文件，是「库路径#会话 id」 */
   sourceFile: string;
   title: string;
   /** 适配后的目标工作区 id；null = TASKS（无归属 / 已删 / 收容区） */
@@ -396,7 +402,13 @@ export function isSelectablePlanItem(item: ImportPlanItem, planSessionIds: Reado
 // IPC 边界的入参校验
 // ---------------------------------------------------------------------------
 
-const SOURCE_IDS: readonly string[] = ["proma", "claude-code", "kimi-code", "agent-skills"] satisfies readonly ImportSourceId[];
+const SOURCE_IDS: readonly string[] = [
+  "proma",
+  "claude-code",
+  "kimi-code",
+  "opencode",
+  "agent-skills",
+] satisfies readonly ImportSourceId[];
 
 /** 来源 id 的运行时判定：IPC 入参与导入清单（imports.jsonl）读回时共用。 */
 export function isImportSourceId(value: unknown): value is ImportSourceId {
