@@ -11,7 +11,9 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\"",
-    "ui:smoke": "bun scripts/ui-smoke.mjs"
+    "ui:smoke": "bun scripts/ui-smoke.mjs",
+    "dist": "electron-vite build && electron-builder --mac --arm64 --publish never",
+    "icon": "bash scripts/make-icon.sh"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.3",
@@ -39,6 +41,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^43.2.0",
+    "electron-builder": "26.16.1",
     "electron-vite": "^4.0.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.6"
@@ -46,5 +49,37 @@
   "patchedDependencies": {
     "@earendil-works/pi-ai@0.84.3": "patches/@earendil-works%2Fpi-ai@0.84.3.patch",
     "@earendil-works/pi-coding-agent@0.84.3": "patches/@earendil-works%2Fpi-coding-agent@0.84.3.patch"
+  },
+  "build": {
+    "appId": "com.orbita.desktop",
+    "productName": "orbita",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "identity": "-",
+      "hardenedRuntime": false
+    }
   }
 }
