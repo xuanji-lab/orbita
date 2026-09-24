@@ -11,7 +11,7 @@
  * `~/.proma-dev` 是用户另一个应用的数据，引擎对它只做 `readFile`。**刻意不用
  * `SessionManager.open()` 读源文件**——它的构造器会 mkdir、`_setSessionFile` 会就地
  * 重写 v1/v2 文件（迁移副作用）；这里全走包导出的纯函数
- * （`parseSessionEntries` / `migrateSessionEntries` / `buildContextEntries`），
+ * （`parseSessionEntries` / `migrateSessionEntries`），
  * 版本迁移在内存里做完、写到 orbita 自己的副本上，源文件一个字节都不动。
  *
  * ## 幂等与再次导入
@@ -28,7 +28,6 @@ import { copyFile, mkdir, readFile, realpath, rename, stat, unlink } from "node:
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import {
-  buildContextEntries,
   parseSessionEntries,
   migrateSessionEntries,
   SessionManager,
@@ -434,11 +433,36 @@ function collectToolInputs(content: unknown, into: Map<string, unknown>): void {
 }
 
 /**
- * pi 的压缩感知 entry 列表 → orbita 的 SessionRecord[]。
+ * 会话当前分支上的全部 entry，按时间顺序：从文件最后一条沿 parentId 走到根再反转——与 pi
+ * 自己的 buildSessionPath 同一条规则（它没导出）。Proma 回退重答留下的旧枝不在路径上，
+ * 与 Proma 界面显示的一致。
+ *
+ * **不用 buildContextEntries**：那是发给模型的上下文，压缩过的会话只留压缩点之后的条目。
+ * transcript 是给人看的全量历史——orbita 原生会话压缩时 recorder 只是在原位追加一条界碑，
+ * 之前的记录都还在。早先导入用了前者，本机 17 条压缩过的会话丢了约 141 条用户消息
+ * （例：一条会话 pi 里 14 条用户消息，transcript 只剩 2 条）。
+ *
+ * 成环（只可能来自手改的文件）走到重复节点即停，不无限展开。
+ */
+export function branchEntries(entries: readonly SessionEntry[]): SessionEntry[] {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const path: SessionEntry[] = [];
+  const seen = new Set<string>();
+  let current = entries[entries.length - 1];
+  while (current !== undefined && !seen.has(current.id)) {
+    seen.add(current.id);
+    path.push(current);
+    current = current.parentId === null ? undefined : byId.get(current.parentId);
+  }
+  return path.reverse();
+}
+
+/**
+ * 当前分支的 entry 列表（branchEntries）→ orbita 的 SessionRecord[]。
  *
  * - message：user / assistant / toolResult 翻译成 TranscriptItem；**空 error 回答不进**
  *   （isEmptyErrorAssistantEntry——与落盘侧、分支对账侧同一个谓词，三处共享）。
- * - compaction → CompactedRecord 界碑（tokensAfter pi 不给，缺省——展示时回退）。
+ * - compaction → CompactedRecord 界碑，落在它在历史里的原位（tokensAfter pi 不给，缺省——展示时回退）。
  * - model_change / thinking_level_change / custom / label / session_info / branch_summary
  *   不进 transcript：transcript 是渲染投影，不是发给模型的上下文（那是 pi 副本的事，
  *   续聊时 runtime 从副本重建）。branch_summary 在本机 Proma 数据里不存在。
@@ -1632,7 +1656,7 @@ async function runPiImport(
   const userTexts = promaUserTextMap(sessionEntries, renderLog === null ? null : promaUserTexts(renderLog));
   return {
     path: destPath,
-    records: withUserTexts(entriesToRecords(buildContextEntries(sessionEntries)), userTexts),
+    records: withUserTexts(entriesToRecords(branchEntries(sessionEntries)), userTexts),
     thinkingLevel: parseThinkingLevel(lastThinkingLevel(sessionEntries)),
   };
 }
@@ -1670,7 +1694,9 @@ async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps
   }
   // 源本身就是界面日志：用户行已是原文，这一步实际只解码 @file: 链接（条数对不上时按格式剥，
   // 对原文是空操作）
-  const contextEntries = manager.buildContextEntries();
+  // 与 pi 路同一条派生（branchEntries）：灌出来的是一条直链、没有压缩，两者结果相同，
+  // 用同一个入口是为了不让「上下文 vs 全量历史」的分叉再长回来
+  const contextEntries = branchEntries(manager.getEntries());
   const userTexts = promaUserTextMap(contextEntries, promaUserTexts(raw));
   return {
     path,
