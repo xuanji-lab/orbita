@@ -463,6 +463,8 @@ async function normalizeForMatch(path: string): Promise<string> {
 interface WorkspaceResolution {
   workspaceId: string | null;
   cwd: string;
+  /** 源侧文件夹（Proma 工作区的 projectRootPath）；规则 ② 的三个分支都是 null。页面的分组键 */
+  folder: string | null;
   /** 要新建的工作区计划（id 即 workspaceId）；挂既有 / 无归属时为 null */
   create: ImportWorkspacePlan | null;
   /** 命中了哪个既有工作区（同址合并），未命中为 null */
@@ -495,6 +497,7 @@ async function resolveWorkspaceTarget(
     return {
       workspaceId: null,
       cwd: usableCwd(headerCwd, deps.promaRoot, deps.defaultCwd),
+      folder: null,
       create: null,
       mergedInto: null,
     };
@@ -504,7 +507,13 @@ async function resolveWorkspaceTarget(
   const wanted = await normalizeForMatch(promaWorkspace.projectRootPath);
   for (const orbita of orbitaWorkspaces) {
     if ((await normalizeForMatch(orbita.path)) === wanted) {
-      return { workspaceId: orbita.id, cwd: orbita.path, create: null, mergedInto: orbita.id };
+      return {
+        workspaceId: orbita.id,
+        cwd: orbita.path,
+        folder: promaWorkspace.projectRootPath,
+        create: null,
+        mergedInto: orbita.id,
+      };
     }
   }
 
@@ -514,6 +523,7 @@ async function resolveWorkspaceTarget(
   return {
     workspaceId: id,
     cwd: promaWorkspace.projectRootPath,
+    folder: promaWorkspace.projectRootPath,
     create: {
       id,
       name: normalizeWorkspaceName(promaWorkspace.name, promaWorkspace.projectRootPath),
@@ -732,7 +742,9 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     totalBytes += bytes;
     plan.push({
       sourceId: entry.id,
+      source: "proma",
       sourceKind: "pi",
+      folder: resolution.folder,
       sourceFile: entry.piSessionFile,
       // 会话 id 在工作区解析**之后**铸：新建工作区的 id 也走 newId，消耗顺序是测试预铸队列的契约
       sessionId: deps.newId(),
@@ -820,7 +832,9 @@ export async function scanImport(deps: ImporterDeps): Promise<ImportScanReport> 
     totalBytes += bytes;
     plan.push({
       sourceId: entry.id,
+      source: "proma",
       sourceKind: "claude-legacy",
+      folder: resolution.folder,
       sourceFile,
       sessionId: deps.newId(),
       // claude legacy 时代也有 delegation 子会话（本机 20 条），同样由 linkSubSessions 回填
@@ -880,6 +894,8 @@ interface ParentTarget {
   sessionId: string;
   workspaceId: string | null;
   cwd: string;
+  /** 母会话在本次计划里时是它的分组键；已导入的母会话没有（子会话保留自己的） */
+  folder?: string | null;
 }
 
 /**
@@ -929,7 +945,7 @@ function linkSubSessions(
   const findParent = (rootSourceId: string): ParentTarget | null => {
     const inPlan = planBySourceId.get(rootSourceId);
     if (inPlan !== undefined) {
-      return { sessionId: inPlan.sessionId, workspaceId: inPlan.workspaceId, cwd: inPlan.cwd };
+      return { sessionId: inPlan.sessionId, workspaceId: inPlan.workspaceId, cwd: inPlan.cwd, folder: inPlan.folder };
     }
     const sourceFile = sourceFileById.get(rootSourceId);
     const imported = sourceFile === undefined ? undefined : importedByFile.get(sourceFile);
@@ -952,6 +968,7 @@ function linkSubSessions(
     item.parentId = target.sessionId;
     item.workspaceId = target.workspaceId;
     item.cwd = target.cwd;
+    if (target.folder !== undefined) item.folder = target.folder;
     item.pinned = false;
     item.archived = false;
     subSessionCount += 1;

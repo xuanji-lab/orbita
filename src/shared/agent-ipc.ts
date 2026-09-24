@@ -129,9 +129,11 @@ export const ipcChannels = {
   carryoverCreate: "carryover:create",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
   carryoverSetStatus: "carryover:set-status",
-  /** 扫描 Proma 的 pi 会话真源（dry-run）：产出可导入计划与跳过明细 */
+  /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
+  importDetect: "import:detect",
+  /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */
   importScan: "import:scan",
-  /** 执行导入：主进程重新扫描后落盘（不接收 renderer 回传的计划，理由见 shared/import.ts） */
+  /** 执行导入（入参 ImportRunInput）：主进程重新扫描，按用户的选择与去向落盘（不接收计划，理由见 shared/import.ts） */
   importRun: "import:run",
   /** 中心存储里的全部 skill（含没链进任何集合的） */
   skillList: "skill:list",

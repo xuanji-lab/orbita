@@ -775,6 +775,9 @@ describe("子会话挂回母会话（Proma 的 parentSessionId → parentId）",
     assert.ok(parent !== undefined && sub !== undefined);
     assert.equal(parent.parentId, null);
     assert.equal(sub.parentId, parent.sessionId);
+    // 没有 Proma 工作区归属 → 没有文件夹（页面的「No folder」组）
+    assert.equal(parent.folder, null);
+    assert.equal(sub.folder, null);
     // cwd 对齐母会话（子自己的 header cwd 是 Proma 工作台路径，本来要退 defaultCwd）
     assert.equal(sub.cwd, "/tmp/proj");
     assert.equal(sub.archived, false);
@@ -881,6 +884,10 @@ describe("子会话挂回母会话（Proma 的 parentSessionId → parentId）",
     assert.ok(parent !== undefined && sub !== undefined);
     assert.equal(sub.workspaceId, parent.workspaceId);
     assert.equal(sub.cwd, "/tmp/alpha");
+    // 分组键：母会话取 Proma 工作区的 projectRootPath，子会话跟母会话（而不是它自己的 /tmp/beta）
+    assert.equal(parent.folder, "/tmp/alpha");
+    assert.equal(sub.folder, "/tmp/alpha");
+    assert.equal(parent.source, "proma");
     assert.deepEqual(
       report.newWorkspaces.map((workspace) => workspace.path),
       ["/tmp/alpha"],
