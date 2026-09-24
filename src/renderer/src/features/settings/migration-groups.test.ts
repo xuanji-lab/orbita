@@ -5,10 +5,11 @@ import type { Workspace } from "../../../../shared/workspace.ts";
 import {
   DEFAULT_FILTERS,
   abbreviateHome,
-  allSelectable,
+  defaultSelection,
   destinationChoices,
   destinationLabel,
   destinationOptions,
+  formatMoment,
   groupName,
   groupSessions,
   selectedSourceFiles,
@@ -117,7 +118,7 @@ describe("选择与汇总", () => {
     const a = item({ folder: "/repo/a", workspaceId: "w-new" });
     const b = item({ folder: "/repo/b", archived: true });
     const r = report([a, b], ["w-new"]);
-    const selected = allSelectable(r);
+    const selected = defaultSelection(r);
     assert.equal(selected.size, 2);
     const visible = groupSessions(r, { range: "all", includeArchived: false }, NOW);
     assert.deepEqual(selectedSourceFiles(visible, selected), [a.sourceFile]);
@@ -146,6 +147,49 @@ describe("选择与汇总", () => {
     assert.equal(summary.newWorkspaces, 1);
     assert.deepEqual(summary.fallback, { count: 1, models: ["claude-opus-5-5"], fallbackModel: "glm-5.3" });
     assert.equal(summarize(grouped, selected, new Map([["/repo/a", { kind: "tasks" as const }]])).newWorkspaces, 0);
+  });
+});
+
+describe("再次导入：已导入会话的变化", () => {
+  test("updated / diverged 单独成块、不进文件夹组；deleted 留在文件夹组里", () => {
+    const updated = item({ change: "updated", newMessages: 31, folder: null, updatedAt: NOW - 2 * DAY });
+    const diverged = item({ change: "diverged", newMessages: 4, folder: null, updatedAt: NOW });
+    const updatedLater = item({ change: "updated", newMessages: 1, folder: null, updatedAt: NOW - DAY });
+    const deleted = item({ change: "deleted", folder: "/repo/a" });
+    const fresh = item({ folder: "/repo/a" });
+    const grouped = groupSessions(report([updated, diverged, updatedLater, deleted, fresh]), DEFAULT_FILTERS, NOW);
+    assert.deepEqual(
+      grouped.changed.map((row) => row.item.sourceFile),
+      [updatedLater.sourceFile, updated.sourceFile, diverged.sourceFile],
+    );
+    assert.deepEqual(
+      grouped.groups.map((group) => [group.folder, group.rows.length]),
+      [["/repo/a", 2]],
+    );
+    assert.equal(grouped.total, 5);
+  });
+
+  test("默认勾没导过的与有新消息的；两边都聊过的、删过的不勾。汇总把追加与新导分开数", () => {
+    const updated = item({ change: "updated", newMessages: 3, folder: null });
+    const diverged = item({ change: "diverged", newMessages: 2, folder: null });
+    const deleted = item({ change: "deleted", folder: "/repo/a" });
+    const fresh = item({ folder: "/repo/a" });
+    const r = report([updated, diverged, deleted, fresh]);
+    const selected = defaultSelection(r);
+    assert.deepEqual([...selected].sort(), [fresh.sourceFile, updated.sourceFile].sort());
+    const grouped = groupSessions(r, DEFAULT_FILTERS, NOW);
+    const summary = summarize(grouped, new Set([...selected, diverged.sourceFile]), new Map());
+    assert.deepEqual([summary.sessions, summary.updates], [2, 1]);
+    // 执行入参带上 changed 块里勾的
+    assert.deepEqual(
+      selectedSourceFiles(grouped, selected).sort(),
+      [fresh.sourceFile, updated.sourceFile].sort(),
+    );
+  });
+
+  test("上次导入的时刻带时:分", () => {
+    const at = new Date(2026, 8, 24, 23, 5).getTime();
+    assert.equal(formatMoment(at, at), "09-24 23:05");
   });
 });
 
