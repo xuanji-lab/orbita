@@ -1,7 +1,7 @@
 /**
  * CompactViz 的纯计算层。单独一个文件是因为它要被 `node --test` 直接加载
  * （`.tsx` 不行，见 AGENTS.md 「相对 import 必须带 .ts 后缀」那条的同一个理由），
- * 也不进 `src/shared/`——那里的改动要单独成 PR，这份计算只服务设置页这一个消费者。
+ * 也不进 `src/shared/`——那里放两端（主进程与 renderer）共用的契约，这份计算只服务设置页这一个消费者。
  */
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名
 import { COMPACTION_PERCENT } from "../../../../shared/settings.ts";
