@@ -48,10 +48,11 @@ export interface ChannelViewContext {
   /** 派出卡状态的兜底——channelSummaries 没有终态时看子会话是否还在跑 */
   childPhaseOf: (id: string) => SessionEntry["phase"];
   /**
-   * 点主流里的标记 → 显示通道列（若隐藏）、展开该通道（若折叠）、滚动到那条消息
-   * 并短暂高亮（子会话 PR4b）。null = 不可点（辅助对话抽屉里的 ChatView 不传，
-   * 或 `ownSide` 为 "child" 时调用方本就不该接这个 prop）。`messageId` 为 null 时
-   * （`reply_subsession` 送出的那条没有 id 可指）滚到通道底部。
+   * 点主流里的标记 → 显示父子会话面板（够宽开内联列，不够宽换进右栏槽）、展开该通道
+   * （若折叠）、滚动到那条消息并短暂高亮（子会话 PR4b）。null = 不可点：辅助对话抽屉
+   * 里的 ChatView、主槽里打开的子会话（那时没有父子会话面板）。子会话视图（Sub-sessions
+   * 面板里）的这个函数不看 childId——通道的 childId 就是它自己。`messageId` 为 null 时
+   * （这一刀之前的旧记录，发送侧回执里没有 id）滚到通道底部。
    */
   openChannel: ((childId: string, messageId: string | null) => void) | null;
   /**
@@ -204,7 +205,10 @@ export function ChannelMarkLine(props: {
   mark: { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind };
   ownSide: "parent" | "child";
   peerTitle: string;
-  /** 子会话 PR4b：`ownSide` 为 "parent" 且调用方传了 openChannel 时才可点 */
+  /**
+   * 调用方的 openChannel 不为 null 时可点：根会话视图，或 Sub-sessions 面板里查看的子会话
+   * （母会话发来的回复同样点了就定位到父子会话面板里的那一条，2026-09-25）
+   */
   onClick?: () => void;
 }) {
   const t = useT();
@@ -230,7 +234,10 @@ export function ChannelToolMarkLine(props: {
   text: string;
   tone: ChannelMarkTone;
   running: boolean;
-  /** 子会话 PR4b：只有根会话自己发的 reply_subsession 会传（report_to_parent 恒在子会话流里，不可点） */
+  /**
+   * 点了打开父子会话面板定位到这一条：根会话的 reply_subsession，与 Sub-sessions 面板里
+   * 查看的子会话的 report_to_parent（用户 2026-09-25）。不传 = 不可点
+   */
   onClick?: () => void;
 }) {
   return (

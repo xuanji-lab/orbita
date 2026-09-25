@@ -37,6 +37,7 @@ import {
   groupTurns,
   indexToolResults,
   mcpFailureLead,
+  channelSendMessageId,
   mcpInputSummary,
   readTaskCard,
   summarizeMcpResult,
@@ -393,6 +394,14 @@ function ChatViewBody(props: {
    */
   onOpenChannel?: (childId: string, messageId: string | null) => void;
   /**
+   * 子会话视图里点标记 → 打开父子会话面板并跳到那条消息（用户 2026-09-25：子会话
+   * 工作记录里看到它发给母会话的标记，自己点进去）。只有 Sub-sessions 面板里查看
+   * 子会话的 ChatView 拿到它——那时主槽正看着母会话，父子会话面板打得开。子会话
+   * 在主槽打开（Open as main）时主槽没有母会话、也就没有父子会话面板，不传，标记
+   * 保持不可点，不给一个点了没反应的东西。
+   */
+  onOpenOwnChannel?: (messageId: string | null) => void;
+  /**
    * 点派出卡 → 打开右栏 Sub-sessions 面板并直接进入这条子会话的会话层（子会话
    * PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与 Sub-sessions 面板自己
    * 内部渲染的 ChatView（查看子会话）都不传，派出卡保持不可点，也符合「UI 只做
@@ -532,11 +541,18 @@ function ChatViewBody(props: {
     [session.sessions],
   );
   const channelSummaries = useChannelSummaries(openId === "" ? null : openId);
-  // 子会话 PR4b：只有 ownSide 为 "parent"（根会话）时标记才可点——子会话自己主流
-  // 里的标记本 PR 仍不可点，即便主槽的 ChatView 拿到了 onOpenChannel（用户直接点进
-  // 一条子会话查看时 ownSide 会是 "child"）。辅助对话抽屉不传 onOpenChannel，
-  // 这里恒 null，与 ownSide 无关。
-  const openChannel = ownSide === "parent" ? (props.onOpenChannel ?? null) : null;
+  // 标记点了打开父子会话面板：根会话（ownSide "parent"）走 onOpenChannel，按对面的
+  // childId 定位；子会话走 onOpenOwnChannel——通道的 childId 就是它自己，标记里的
+  // peerId 是母会话，所以不透传、只要 messageId。主槽的 ChatView 看子会话时两个都
+  // 接不上（onOpenChannel 只认根会话，onOpenOwnChannel 只有 Sub-sessions 面板给），
+  // 标记不可点；辅助对话抽屉两个都不传。
+  const onOpenOwnChannel = props.onOpenOwnChannel;
+  const onOpenParentChannel = props.onOpenChannel;
+  const openChannel = useMemo<((childId: string, messageId: string | null) => void) | null>(() => {
+    if (ownSide === "parent") return onOpenParentChannel ?? null;
+    if (onOpenOwnChannel === undefined) return null;
+    return (_peerId, messageId) => onOpenOwnChannel(messageId);
+  }, [ownSide, onOpenParentChannel, onOpenOwnChannel]);
   // 子会话 PR4c：派出卡的点击与描边同一套「只有主槽才接」的门槛，openChannel 上面已有先例
   const openSubSession = ownSide === "parent" ? (props.onOpenSubSession ?? null) : null;
   const litSubSessionId = props.litSubSessionId ?? null;
@@ -2461,6 +2477,7 @@ function ToolLine(props: {
       <ChannelSendToolLine
         toolName={props.toolName}
         input={props.input}
+        result={result}
         running={active}
         channel={props.channel}
       />
@@ -2643,26 +2660,28 @@ function DelegateToolLine(props: {
 function ChannelSendToolLine(props: {
   toolName: "reply_subsession" | "report_to_parent";
   input: unknown;
+  result: ToolTranscriptItem | undefined;
   running: boolean;
   channel: ChannelViewContext;
 }) {
   const t = useT();
   const record = typeof props.input === "object" && props.input !== null ? (props.input as Record<string, unknown>) : {};
+  // 落账那条通道消息的 id（回执 details 里，channel-tools.ts）：点了滚到父子会话面板里
+  // 的这一条并高亮。还在跑、或这一刀之前的旧记录没有 → null，退回滚到通道底部
+  const messageId = channelSendMessageId(props.result);
+  const openChannel = props.channel.openChannel;
   if (props.toolName === "reply_subsession") {
     const childId = typeof record["childId"] === "string" ? record["childId"] : "";
     const childTitle = peerTitleOf(props.channel, childId, t);
     const followUp = record["delivery"] === "followUp";
     const text = followUp ? t.chat.repliedTurnEnd(childTitle) : t.chat.repliedSteer(childTitle);
-    // 子会话 PR4b：这条工具调用的入参没有携带投出去那条消息的 id（channel-tools.ts
-    // 的 reply_subsession 回执 details 恒 {}），点了只能滚到通道底部，不指定 messageId。
-    const openChannel = props.channel.openChannel;
     return (
       <ChannelToolMarkLine
         icon="undo-2"
         text={text}
         tone="reply"
         running={props.running}
-        onClick={openChannel === null || childId === "" ? undefined : () => openChannel(childId, null)}
+        onClick={openChannel === null || childId === "" ? undefined : () => openChannel(childId, messageId)}
       />
     );
   }
@@ -2678,7 +2697,19 @@ function ChannelSendToolLine(props: {
         : kind === "failed"
           ? { text: t.chat.reportedFailed, icon: "triangle-alert", tone: "failed" }
           : { text: t.chat.reportedProgress, icon: "refresh-cw", tone: "neutral" };
-  return <ChannelToolMarkLine icon={label.icon} text={label.text} tone={label.tone} running={props.running} />;
+  // 子会话工作记录里的这一行（用户 2026-09-25：看到它发给母会话的消息，自己点进去）。
+  // 子会话视图的 openChannel 不看第一个参数（通道的 childId 就是它自己），传对面的 id 只为
+  // 与 reply_subsession 同一个签名
+  const parentId = props.channel.ownParentId ?? "";
+  return (
+    <ChannelToolMarkLine
+      icon={label.icon}
+      text={label.text}
+      tone={label.tone}
+      running={props.running}
+      onClick={openChannel === null ? undefined : () => openChannel(parentId, messageId)}
+    />
+  );
 }
 
 /**
