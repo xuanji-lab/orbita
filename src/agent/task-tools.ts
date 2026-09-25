@@ -23,6 +23,9 @@ export function createTaskTools(broker: RequestBroker, sessionId: string): ToolD
       'Then call again with "task" set to an exact title or id to read one: you get the header, ' +
       "a table of contents (one line per round) and the most recent rounds in full. " +
       'To read specific older rounds, add "rounds" using the numbers from the contents, e.g. "3", "2-5" or "1,4". ' +
+      "If the task is a sub-session (delegated with delegate), the overview gives only its status and its reports " +
+      "to its parent, not the process — reading the process back would spend the context the sub-session exists " +
+      'to save. It names the record file; read that, or use "rounds", only if you really need the process. ' +
       "Prefix matching is scoped to the current workspace.",
     parameters: {
       type: "object",

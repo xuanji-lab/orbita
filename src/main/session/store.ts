@@ -188,6 +188,14 @@ export class SessionStore {
   }
 
   /**
+   * 本会话记录文件（transcript JSONL）的路径，只算路径、不读不写。read_task 读子会话
+   * 只给输出时拿它给模型指路：真要看过程就读这个文件（工具面对 sessions/ 只读可读）。
+   */
+  recordPath(id: string): string {
+    return this.logPath(id);
+  }
+
+  /**
    * 本会话的工作台目录 `<workbenches>/<id>/`：plan / handoff / 草稿的落点，随开轮
    * 告诉模型。**目录不预建**（首次写入才由模型 mkdir，空会话不占目录）。
    * 不套在 sessions/ 里：protectedPaths 把整个 sessions/ 设为工具面只读，工作台必须可写。
