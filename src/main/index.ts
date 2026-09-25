@@ -4,6 +4,7 @@
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, shell } from "electron";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import type { ThemePreference } from "../shared/settings.ts";
@@ -31,10 +32,17 @@ import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
+import { devDataDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
 
 // 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
 preferIPv4();
+
+// 开发版与正式版各用各的数据（理由见 data-dirs.ts）。**必须在任何人读 userData 之前**：
+// 放在模块顶层、whenReady 之前——Chromium 的 Local Storage / 缓存也在 ready 时按它定位
+const devDirs = devDataDirs({ packaged: app.isPackaged, appData: app.getPath("appData"), home: homedir() });
+// 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
+if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
 
 /** 26-entry-layer §9.2 安全不变量：三条都不许放松。 */
 const SECURITY_INVARIANTS = {
@@ -170,7 +178,8 @@ void app.whenReady().then(async () => {
   const record = createSessionRecorder(sessions);
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
-  const workspaces = new WorkspaceStore(configDir);
+  // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
+  const workspaces = new WorkspaceStore(configDir, devDirs?.orbitaRoot);
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
