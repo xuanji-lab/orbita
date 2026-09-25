@@ -248,15 +248,6 @@ void app.whenReady().then(async () => {
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
   const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
   registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost, carryovers);
-  // Proma 会话导入（设置页入口）：扫描/执行都在主进程，agent 进程不参与
-  registerImportIpc(
-    sessions,
-    workspaces,
-    providers,
-    settings,
-    join(configDir, "pi-sessions"),
-    join(configDir, "imports.jsonl"),
-  );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
@@ -269,6 +260,16 @@ void app.whenReady().then(async () => {
     console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
   });
   registerSkillIpc(skills);
+  // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
+  registerImportIpc(
+    sessions,
+    workspaces,
+    providers,
+    settings,
+    join(configDir, "pi-sessions"),
+    join(configDir, "imports.jsonl"),
+    skills,
+  );
   // Home（工作区缺席时 agent 的落脚点）先建出来，同 skills.ensureDirs 的处理：
   // 建不出来不拦启动，但要留日志——不然一个权限坏掉的 ~/Orbita 会表现成
   // 「Home 任务的文件写不进去」，那是最难查的一类

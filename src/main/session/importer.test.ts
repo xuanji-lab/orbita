@@ -19,6 +19,7 @@ import type { Workspace } from "../../shared/workspace.ts";
 import { rootSessions, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ImportPlanItem } from "../../shared/import.ts";
 import { SessionStore } from "./store.ts";
+import { SkillStore } from "../skill/store.ts";
 import {
   branchEntries,
   entriesToRecords,
@@ -77,6 +78,7 @@ function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
     createWorkspace: async () => undefined,
     persistSession: async (meta, records) => store.commitImported(meta, records),
     refreshSession: async (id, records, patch) => store.commitImportUpdate(id, records, patch),
+    skillTarget: { copyFrom: async () => "", importFrom: async () => "" },
     ...overrides,
   };
   return base;
@@ -1447,7 +1449,7 @@ describe("Claude Code 来源", () => {
   });
 
   const ccDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps =>
-    deps({ claudeCode: { projectsDir, desktopSessionsDir: desktopDir, home }, ...overrides });
+    deps({ claudeCode: { projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills") }, ...overrides });
 
   /** 一份 Claude Code 会话文件：rootUuid 决定分叉关系；prompts 是用户每轮说的话 */
   async function writeClaudeCodeSession(
@@ -1619,10 +1621,39 @@ describe("Claude Code 来源", () => {
   });
 
   test("探测：会话根目录在不在；paths 列出扫描会读的两处", async () => {
-    const found = await probeClaudeCode({ projectsDir, desktopSessionsDir: desktopDir, home });
+    const found = await probeClaudeCode({ projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills") });
     assert.equal(found.found, true);
-    assert.deepEqual(found.paths, [projectsDir, desktopDir]);
-    const missing = await probeClaudeCode({ projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home });
+    assert.deepEqual(found.paths, [projectsDir, desktopDir, join(root, "claude", "skills")]);
+    const missing = await probeClaudeCode({ projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills") });
     assert.equal(missing.found, false);
+  });
+});
+
+describe("Skills 随扫描与执行走", () => {
+  test("只勾共用 skills 目录：不读 Proma；扫描列出组，执行按勾选复制进中心存储，报告计数", async () => {
+    const agentSkillsDir = join(root, "agents-skills");
+    await mkdir(join(agentSkillsDir, "archify"), { recursive: true });
+    await writeFile(join(agentSkillsDir, "archify", "SKILL.md"), "---\nname: archify\ndescription: diagrams\n---\nbody\n");
+    await mkdir(join(agentSkillsDir, "tdd"), { recursive: true });
+    await writeFile(join(agentSkillsDir, "tdd", "SKILL.md"), "---\nname: tdd\n---\nbody\n");
+    const skillStore = new SkillStore(join(root, "orbita"));
+    const env = deps({ agentSkillsDir, existingSkills: ["tdd"], skillTarget: skillStore });
+
+    const report = await scanImport(env, [], ["agent-skills"]);
+    assert.equal(report.plan.length, 0);
+    assert.deepEqual(
+      report.skills.map((group) => [group.source, group.skills.map((skill) => `${skill.slug}:${skill.status}`)]),
+      [["agent-skills", ["archify:new", "tdd:in-orbita"]]],
+    );
+
+    const run = await runImport(env, {
+      sources: ["agent-skills"],
+      sessions: new Set(),
+      destinations: [],
+      skills: { skills: new Set([join(agentSkillsDir, "archify"), join(agentSkillsDir, "tdd")]), mode: "copy", scopes: [] },
+    });
+    assert.equal(run.skillsImported, 1);
+    assert.deepEqual(run.skillsFailed, []);
+    assert.deepEqual((await skillStore.list()).map((skill) => [skill.slug, skill.global]), [["archify", true]]);
   });
 });

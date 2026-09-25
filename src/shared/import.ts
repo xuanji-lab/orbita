@@ -18,9 +18,10 @@
  *
  * - proma：Proma 桌面应用（~/.proma-dev）
  * - claude-code：Claude Code 的会话存储（~/.claude/projects），命令行与 Claude 桌面应用共用；
- *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题
+ *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题；另有 ~/.claude/skills
+ * - agent-skills：多家 agent 共用的 skills 目录（~/.agents/skills），只有 skills，没有会话
  */
-export type ImportSourceId = "proma" | "claude-code";
+export type ImportSourceId = "proma" | "claude-code" | "agent-skills";
 
 /**
  * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
@@ -81,6 +82,11 @@ export interface ImportRunInput {
   sessions: string[];
   /** 改过去向的组；没列的组走扫描给的默认去向 */
   destinations: ImportDestinationChoice[];
+  /** 勾选的 skill，按 ImportSkillItem.dir。只有 new / built-in 的会被导，其余静默不导 */
+  skills: string[];
+  skillMode: ImportSkillMode;
+  /** 改过作用域的组；没列的组对所有会话生效（global） */
+  skillScopes: ImportSkillScopeChoice[];
 }
 
 /** 一条会话为什么进不了导入计划。词汇进报告，UI 按它给文案。 */
@@ -234,6 +240,8 @@ export interface ImportScanReport {
   orphanedSubSessions: number;
   /** 导入清单里最近一次导入的时刻；从没导过（或只有清单出现之前的补记）为 null */
   lastImportAt: number | null;
+  /** 勾选来源里的 skills 目录，按页面显示顺序（重名先到先得就是按这个顺序） */
+  skills: ImportSkillGroup[];
 }
 
 /** 执行阶段一条会话的结果。 */
@@ -243,6 +251,61 @@ export interface ImportRunItemResult {
   sessionId: string | null;
   /** 失败原因（ok=false 时必有） */
   error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Skills
+// ---------------------------------------------------------------------------
+
+/**
+ * 一条源 skill 相对 orbita 的状态。重名按 slug（目录名）认——orbita 的中心存储按它落目录。
+ */
+export type ImportSkillStatus =
+  /** 可导，默认勾 */
+  | "new"
+  /** 可导，默认不勾：源应用自带的（Proma 的 default-skills），多半调的是那个应用自己的工具 */
+  | "built-in"
+  /** orbita 里已有同名的，不动它 */
+  | "in-orbita"
+  /** 前面哪一组已经列过同名的（先到先得） */
+  | "duplicate";
+
+export interface ImportSkillItem {
+  /** 目录名，落进 orbita 后的 slug */
+  slug: string;
+  /** SKILL.md frontmatter 的 name，没有就是 slug */
+  name: string;
+  description: string;
+  /** 源目录绝对路径——也是勾选的键 */
+  dir: string;
+  status: ImportSkillStatus;
+  /** duplicate：先列出它的那一组的 dir；其余为 null */
+  duplicateOf: string | null;
+}
+
+/** 一个源 skills 目录（页面的一组）。 */
+export interface ImportSkillGroup {
+  source: ImportSourceId;
+  /** 来源内的名字（Proma 的工作区名、「synced」之类）；来源只有一个目录时为 null */
+  name: string | null;
+  /** 源目录绝对路径——也是作用域覆盖的键 */
+  dir: string;
+  skills: ImportSkillItem[];
+}
+
+/** skill 落进 orbita 的方式。copy（默认）：源应用删了也还在；link：跟着源目录的后续修改 */
+export type ImportSkillMode = "copy" | "link";
+
+/**
+ * 一组 skill 的作用域。global = 对所有会话生效；workspace = 只对该工作区；off = 只放进存储、先不启用。
+ * 与 SkillScope 同形再加 off：这是导入页的选择，不是 skill 的状态。
+ */
+export type ImportSkillScope = { kind: "global" } | { kind: "workspace"; workspaceId: string } | { kind: "off" };
+
+export interface ImportSkillScopeChoice {
+  /** ImportSkillGroup.dir */
+  dir: string;
+  scope: ImportSkillScope;
 }
 
 /** 执行报告。skipped 是执行时重扫得到的（与扫描报告可能差在 already-imported）。 */
@@ -257,6 +320,10 @@ export interface ImportRunReport {
   createdWorkspaces: { id: string; name: string; path: string }[];
   /** 合并挂上的既有工作区 id（去重） */
   mergedWorkspaceIds: string[];
+  /** 落进 orbita 的 skill 数 */
+  skillsImported: number;
+  /** 没落进去的 skill（同名刚被别处占了、复制失败……） */
+  skillsFailed: { slug: string; error: string }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +345,7 @@ export function isSelectablePlanItem(item: ImportPlanItem, planSessionIds: Reado
 // IPC 边界的入参校验
 // ---------------------------------------------------------------------------
 
-const SOURCE_IDS: readonly string[] = ["proma", "claude-code"] satisfies readonly ImportSourceId[];
+const SOURCE_IDS: readonly string[] = ["proma", "claude-code", "agent-skills"] satisfies readonly ImportSourceId[];
 
 /** 来源 id 的运行时判定：IPC 入参与导入清单（imports.jsonl）读回时共用。 */
 export function isImportSourceId(value: unknown): value is ImportSourceId {
@@ -298,6 +365,16 @@ function parseSources(raw: unknown): ImportSourceId[] {
     if (!out.includes(id)) out.push(id);
   }
   return out;
+}
+
+function parseSkillScope(raw: unknown): ImportSkillScope {
+  if (!isRecord(raw)) throw new Error("skill scope must be an object");
+  if (raw["kind"] === "global") return { kind: "global" };
+  if (raw["kind"] === "off") return { kind: "off" };
+  if (raw["kind"] === "workspace" && typeof raw["workspaceId"] === "string" && raw["workspaceId"] !== "") {
+    return { kind: "workspace", workspaceId: raw["workspaceId"] };
+  }
+  throw new Error("bad skill scope");
 }
 
 function parseDestination(raw: unknown): ImportDestination {
@@ -327,9 +404,25 @@ export function parseImportRunInput(raw: unknown): ImportRunInput {
   }
   const destinations = raw["destinations"];
   if (!Array.isArray(destinations)) throw new Error("destinations must be an array");
+  const skills = raw["skills"];
+  if (!Array.isArray(skills) || !skills.every((dir) => typeof dir === "string")) {
+    throw new Error("skills must be an array of folders");
+  }
+  const skillMode = raw["skillMode"];
+  if (skillMode !== "copy" && skillMode !== "link") throw new Error("skillMode must be copy or link");
+  const skillScopes = raw["skillScopes"];
+  if (!Array.isArray(skillScopes)) throw new Error("skillScopes must be an array");
   return {
     sources: parseSources(raw["sources"]),
     sessions: [...new Set(sessions as string[])],
+    skills: [...new Set(skills as string[])],
+    skillMode,
+    skillScopes: skillScopes.map((choice) => {
+      if (!isRecord(choice) || typeof choice["dir"] !== "string" || choice["dir"] === "") {
+        throw new Error("skill scope choice must name a folder");
+      }
+      return { dir: choice["dir"], scope: parseSkillScope(choice["scope"]) };
+    }),
     destinations: destinations.map((choice) => {
       if (!isRecord(choice)) throw new Error("destination choice must be an object");
       const folder = choice["folder"];

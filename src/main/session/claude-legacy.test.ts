@@ -85,6 +85,7 @@ function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
     createWorkspace: async () => undefined,
     persistSession: async (meta, records) => store.commitImported(meta, records),
     refreshSession: async (id, records, patch) => store.commitImportUpdate(id, records, patch),
+    skillTarget: { copyFrom: async () => "", importFrom: async () => "" },
     ...overrides,
   };
 }
