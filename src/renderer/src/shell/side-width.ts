@@ -46,8 +46,9 @@ export function usePaneTotalWidth(ref: RefObject<HTMLElement | null>, active: bo
 }
 
 /**
- * 通道列（子会话 PR4b/PR4c fix）判断「放不放得下」要用的两个数：`.pane` 本身
- * 的宽度、与右栏此刻实际渲染的宽度。
+ * 父子会话面板（通道列）判断「够不够宽」与内联列拖宽夹取要用的两个数：`.pane`
+ * 本身的宽度、与右栏此刻实际渲染的宽度（App 量，见 `channel-column.ts` 的
+ * `channelPanelWide`）。
  *
  * **不能复用上面 `usePaneTotalWidth` 的量法**：那个函数量的是「chat 主区实际
  * 渲染宽 + 右栏」，chat 主区的渲染宽本身会因为通道列当前占不占空间而变化——
@@ -60,9 +61,8 @@ export function usePaneTotalWidth(ref: RefObject<HTMLElement | null>, active: bo
  * `position: absolute`（不占 flex 空间），两种情况这里量出来天然都是「不该被
  * 减去的量」，调用方不需要再额外判断「右栏开没开 / 是不是覆盖层」。
  *
- * `ref` 传调用方自己树上的任一节点（通道列的根 div 即可）：用它找最近的 `.pane`
- * 祖先，再在其中找 `.right-panel-slot`——同 `usePaneTotalWidth` 的 `closest` /
- * `querySelector` 套路，不需要 App 往下传第二份 ref。
+ * `ref` 传 `.pane` 本身或它里面的任一节点：用它找最近的 `.pane`（`closest` 含自己），
+ * 再在其中找 `.right-panel-slot`——同 `usePaneTotalWidth` 的 `closest` / `querySelector` 套路。
  */
 export function usePaneAndRightPanelWidth(ref: RefObject<HTMLElement | null>): {
   paneWidth: number;

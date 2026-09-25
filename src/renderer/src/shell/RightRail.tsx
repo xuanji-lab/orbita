@@ -11,9 +11,10 @@ import { useT } from "../locale.ts";
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
- * `--radius-sm`（md 太圆）。辅助对话之后再加一个通道列开关（子会话 PR4b，
- * `channelColumn` prop 非 null 时才出现）——它不占面板位、与四个面板互斥入口
- * 是两回事，点亮语义相同（列显示中 = 亮）但不走同一套 `panel` 状态。
+ * `--radius-sm`（md 太圆）。辅助对话之后再加一个父子会话面板入口（子会话 PR4b，
+ * `channelColumn` prop 非 null 时才出现）——够宽时它是独立的一列、不占面板位；
+ * 不够宽时住进面板位（`"channels"`），与其它入口互斥（用户 2026-09-25 裁决，
+ * 规则见 `channel-column.ts` 的 `channelPanelWide`）。点亮与开关由 App 按模式算好传入。
  *
  * 底部：应用入口（Archived / Carryovers / Settings），**首页常驻**——它们是
  * 应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，覆盖 2026-09-12
@@ -26,7 +27,8 @@ import { useT } from "../locale.ts";
  * `channelColumn` 先例）。
  */
 
-export type RightPanelKind = "files" | "skills" | "mcp" | "drawer" | "subsessions";
+/** 右栏面板位里放什么。`"channels"` 只在不够宽时出现：够宽时父子会话面板是独立的一列 */
+export type RightPanelKind = "files" | "skills" | "mcp" | "drawer" | "subsessions" | "channels";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -44,9 +46,10 @@ export function RightRail(props: {
   /** 底部应用入口组（Carryovers / Archived / Settings），调用方组装；顺序即堆叠顺序 */
   railEntries: RailEntry[];
   /**
-   * 通道列的开关入口（子会话 PR4b）：只在当前根会话有可见通道时出现——
-   * null = 不出现（没在看根会话，或这条根会话没有可见通道）。它不占右栏面板位，
-   * 与 `panel` 不互斥，因此不走 `railEntries`（那组是"面板"的互斥语义），单独一个 prop。
+   * 父子会话面板的入口（子会话 PR4b）：只在当前根会话有可见通道时出现——
+   * null = 不出现（没在看根会话，或这条根会话没有可见通道）。够宽时它与 `panel`
+   * 不互斥、不占面板位，所以不走 `railEntries`；不够宽时它是面板位里的 `"channels"`。
+   * 两种模式下的「亮不亮」与「点了做什么」都由 App 算好（`toggleChannelPanel`）。
    */
   channelColumn: { open: boolean; onToggle: () => void } | null;
   /**
