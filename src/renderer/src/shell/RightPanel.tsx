@@ -77,15 +77,16 @@ export function RightPanelSlot(props: {
         {
           "--right-panel-w": `${narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width}px`,
           // 窄窗覆盖层的定位基准是 .layer（pane 无 position）——右侧让过 rail 一条；
-          // 那时壳需要自己的面：玻璃底、圆角，阴影升 popover
+          // 那时壳需要自己的面：设计系统「Floating layers」的实色底 + 发丝边 + popover
+          // 阴影。不用玻璃：没有 blur，半透明的它压在聊天正文上，底下的字会直接漏上来
           ...(narrow && open
             ? {
                 position: "absolute",
                 top: "var(--space-3)",
                 bottom: "var(--space-3)",
                 right: "calc(var(--space-3) + 32px + var(--space-3))",
-                background: "var(--glass-bg)",
-                border: 0,
+                background: "var(--color-bg-panel)",
+                border: "1px solid var(--glass-border)",
                 borderRadius: "var(--radius-xl)",
                 boxShadow: "var(--shadow-popover)",
                 zIndex: 20,
