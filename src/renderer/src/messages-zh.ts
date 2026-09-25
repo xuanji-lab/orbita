@@ -72,6 +72,38 @@ export const zh: Messages = {
     send: "发送",
     stop: "停止",
     stopTurn: "停止这一轮",
+    attachImage: "添加图片（也可以粘贴或拖进来）",
+    removeImage: "移除图片",
+    imageUnsupported: (name) => `${name}：只能发送 PNG、JPEG、GIF、WebP，请先转换格式。`,
+    imageTooLarge: (name, mb) => `${name} 超过 ${mb} MB。`,
+    tooManyImages: (max) => `一条消息最多 ${max} 张图片。`,
+    imageReadFailed: (name) => `读不出 ${name}。`,
+    noVision: "这个模型不能看图，图片不会发给它。换一个带图片标记的模型。",
+  },
+
+  quote: {
+    add: "引用",
+    replyPlaceholder: (n) => (n === 1 ? "回复引用 1…" : `按编号逐条回复——1. … ${n}. …`),
+    number: (n) => `引用 ${n}`,
+    addTitle: "在下一条消息里引用这段",
+    remove: "移除引用",
+    jump: "跳到被引用的原文",
+    notFound: "原文已经不在这条会话里了。",
+    turn: (n) => `第 ${n} 轮`,
+    agentReply: "智能体回复",
+    userMessage: "你的消息",
+    chars: (n) => `${n} 字`,
+    truncated: (n) => `只引了前 ${n} 字`,
+    count: (n) => `${n} 段引用`,
+    expand: "展开引用全文",
+    collapse: "收起引用",
+  },
+
+  lightbox: {
+    aria: "看图",
+    open: "查看大图",
+    prev: "上一张",
+    next: "下一张",
   },
 
   rowStatus: {

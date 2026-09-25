@@ -232,6 +232,38 @@ describe("TranscriptAdapter", () => {
     assert.equal(transcript[1]?.role, "assistant");
   });
 
+  test("带图的用户消息：文字在前、图片在后（同 pi 拼的块序）", () => {
+    const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+    const [frame] = new TranscriptAdapter(deps).userPrompt("看这张", [image]);
+    assert.equal(frame?.type, "item_started");
+    assert.deepEqual(frame?.type === "item_started" ? frame.item.content : null, [
+      { type: "text", text: "看这张" },
+      image,
+    ]);
+  });
+
+  test("图块上自挂的 original 引用经 pi 的归约器原样保留——看大图靠它找原图", () => {
+    const image = {
+      type: "image" as const,
+      data: "AAAA",
+      mimeType: "image/png",
+      original: "01a0c4fd-9ee5-73fc-82a8-78c43b90d20d/5b0d1a52-8c7e-4c52-9d0b-3f6a2b1c9e10.png",
+    };
+    let state: TranscriptState = createTranscriptState(emptySnapshot());
+    for (const frame of new TranscriptAdapter(deps).userPrompt("", [image])) {
+      state = applyTranscriptProgress(state, frame);
+    }
+    assert.deepEqual(selectTranscript(state)[0]?.content, [image]);
+  });
+
+  test("只发图：不造空 text 块；什么都没有时仍保留一个空 text 块（原行为）", () => {
+    const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+    const [onlyImage] = new TranscriptAdapter(deps).userPrompt("", [image]);
+    assert.deepEqual(onlyImage?.type === "item_started" ? onlyImage.item.content : null, [image]);
+    const [empty] = new TranscriptAdapter(deps).userPrompt("");
+    assert.deepEqual(empty?.type === "item_started" ? empty.item.content : null, [{ type: "text", text: "" }]);
+  });
+
   test("非增量的流式帧（text_start / text_end）走整条重发，不丢结构变化", () => {
     const { frames } = replay([
       { type: "message_start", message: assistant([{ type: "text", text: "" }]) },

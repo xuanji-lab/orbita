@@ -13,7 +13,14 @@ import { appendFile, cp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
+import { writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
+import {
+  isOriginalRef,
+  mimeOfExtension,
+  originalExtension,
+  type PromptImage,
+  type SentImage,
+} from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
@@ -189,6 +196,64 @@ export class SessionStore {
   workbenchPath(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
     return join(this.workbenchesDir, id);
+  }
+
+  /**
+   * 附图原图目录 `sessions/<id>.attachments/`。**放在 sessions/ 里**：原图是会话记录的一部分，
+   * 跟着它一起对工具面只读（protectedPaths 已覆盖整个 sessions/）、一起删。
+   * 不放工作台：那里模型可写，原图不该被工具改掉。目录不预建，首次存图才建。
+   * list() 只认 `.meta.json`，这个子目录不会被当成会话。
+   */
+  private attachmentsPath(id: string): string {
+    if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
+    return join(this.dir, `${id}.attachments`);
+  }
+
+  /**
+   * 存下一批附图的原图，返回挂上 `original` 引用的同一批图（发给 agent 进程的那份）。
+   *
+   * **存不下不拦发送**：原图只是给人放大看的，模型收到的是缩放图——磁盘满了就不带引用，
+   * 看大图退回缩放图，原因落到 dev 终端。renderer 载荷里带来的 `original` 一律丢掉重铸：
+   * 引用是路径，只能由主进程定。
+   *
+   * 存在发送之前，所以这一轮如果没跑起来，文件会留在会话目录里——删会话时一并清掉。
+   */
+  async saveOriginals(id: string, images: readonly PromptImage[]): Promise<SentImage[]> {
+    const dir = this.attachmentsPath(id);
+    const saved: SentImage[] = [];
+    for (const image of images) {
+      const bare: SentImage = { type: "image", data: image.data, mimeType: image.mimeType };
+      const extension = originalExtension(image.mimeType);
+      if (extension === null) {
+        // 格式不对的图 agent 进程会拒掉整条；这里不存、不抢着报错
+        saved.push(bare);
+        continue;
+      }
+      const name = `${randomUUID()}.${extension}`;
+      try {
+        await writeBytesAtomic(join(dir, name), Buffer.from(image.data, "base64"));
+        saved.push({ ...bare, original: `${id}/${name}` });
+      } catch (error) {
+        console.error("[session] 附图原图没存下，这张看大图时只有缩放图", error);
+        saved.push(bare);
+      }
+    }
+    return saved;
+  }
+
+  /** 按引用读原图。引用不合格、文件不在（如分支的源会话已删）都是 null；其它读盘错照抛 */
+  async readOriginal(ref: unknown): Promise<PromptImage | null> {
+    if (!isOriginalRef(ref)) return null;
+    const [sessionId = "", name = ""] = ref.split("/");
+    const mimeType = mimeOfExtension(name.slice(name.lastIndexOf(".") + 1));
+    if (mimeType === null) return null;
+    try {
+      const bytes = await readFile(join(this.attachmentsPath(sessionId), name));
+      return { type: "image", data: bytes.toString("base64"), mimeType };
+    } catch (cause) {
+      if (isNotFound(cause)) return null;
+      throw cause;
+    }
   }
 
   /**
@@ -650,6 +715,8 @@ export class SessionStore {
     this.metaWrites.delete(id);
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
+    // 原图在 meta 之后删：删失败最多残留一个没人引用的目录，不会出现「会话还在、图没了」
+    await rm(this.attachmentsPath(id), { recursive: true, force: true });
     // 工作台最后删：它删失败最多残留一个无引用目录（不进列表、不吵任何人）；
     // 若排在前头、账本还没删就崩，则留一条「有工作台却列不出来」的半残会话。
     await rm(this.workbenchPath(id), { recursive: true, force: true });

@@ -25,6 +25,9 @@ import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
+import { admitImages, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
+import { PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
+import { composeQuotedMessage, parseQuotedMessage, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
@@ -115,6 +118,16 @@ export interface ChatSession {
   draft: string;
   /** 写当前查看会话的草稿 */
   setDraft: (value: string) => void;
+  /** 当前查看会话输入框里的附图——与草稿同一把键隔离，发送 / 排队时一起带走 */
+  attachments: readonly ComposerImage[];
+  /** 挑选 / 粘贴 / 拖进来的文件：分拣→读成 base64→追加；被拒的点名报在 error 上 */
+  attachImages: (files: readonly File[]) => void;
+  removeAttachment: (id: string) => void;
+  /** 当前查看会话输入框里的文字引用（同一把键隔离）；发送时展开成引用块拼在文字前面 */
+  quotes: readonly TextQuote[];
+  /** 加一条引用。同一条消息里的同一段重复加不重复记 */
+  addQuote: (quote: TextQuote) => void;
+  removeQuote: (index: number) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
   /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
@@ -640,7 +653,9 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       } else {
         const turn = buildTurn(id);
         if (turn === null) return;
-        void api.agent.submit({ sessionId: id, text: head.text, ...turn }).catch(fail);
+        void api.agent
+          .submit({ sessionId: id, text: head.text, ...imagesField(head.images), ...turn })
+          .catch(fail);
       }
     },
     [applyStates, buildTurn],
@@ -943,6 +958,15 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
  * 查看槽——某个「正在看」的全部。主槽与抽屉槽各来一份，互不串：
  * 草稿、模型/权限档意图、cwd 归属都是槽内的；每轮 submit 显式带上自己槽内的值。
  */
+/** 没有附图时的稳定引用——每次渲染一个新 [] 会让 send 的依赖每帧都变 */
+const NO_ATTACHMENTS: readonly ComposerImage[] = [];
+const NO_QUOTES: readonly TextQuote[] = [];
+
+/** 附图载荷：空就不带字段，纯文字消息的 IPC 载荷与以前一字不差 */
+function imagesField(images: readonly PromptImage[] | undefined): { images?: PromptImage[] } {
+  return images !== undefined && images.length > 0 ? { images: [...images] } : {};
+}
+
 export function useSessionView(engine: SessionEngine, key: string): ChatSession {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -1012,6 +1036,38 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const writeDraft = useCallback(
     (draftKey: string, value: string) => {
       setDrafts((prev) => (prev.get(draftKey) === value ? prev : new Map(prev).set(draftKey, value)));
+    },
+    [],
+  );
+  /** 文字引用：同附图的规矩（按会话隔离，纯内存）。发送 / 排队时展开进正文，撤回时解析回来 */
+  const [quoteMap, setQuoteMap] = useState<ReadonlyMap<string, readonly TextQuote[]>>(new Map());
+  const writeQuotes = useCallback(
+    (draftKey: string, update: (current: readonly TextQuote[]) => readonly TextQuote[]) => {
+      setQuoteMap((prev) => {
+        const current = prev.get(draftKey) ?? [];
+        const next = update(current);
+        if (next === current) return prev;
+        const map = new Map(prev);
+        if (next.length === 0) map.delete(draftKey);
+        else map.set(draftKey, next);
+        return map;
+      });
+    },
+    [],
+  );
+  /** 附图与草稿同一把键、同一条规矩：按会话隔离，纯内存，不落盘 */
+  const [attachmentMap, setAttachmentMap] = useState<ReadonlyMap<string, readonly ComposerImage[]>>(new Map());
+  const writeAttachments = useCallback(
+    (draftKey: string, update: (current: readonly ComposerImage[]) => readonly ComposerImage[]) => {
+      setAttachmentMap((prev) => {
+        const current = prev.get(draftKey) ?? [];
+        const next = update(current);
+        if (next === current) return prev;
+        const map = new Map(prev);
+        if (next.length === 0) map.delete(draftKey);
+        else map.set(draftKey, next);
+        return map;
+      });
     },
     [],
   );
@@ -1091,6 +1147,56 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const draftKey = sessionId ?? opened?.id ?? `home:${key}`;
   const draft = drafts.get(draftKey) ?? "";
   const setDraft = (value: string) => writeDraft(draftKey, value);
+  const attachments = attachmentMap.get(draftKey) ?? NO_ATTACHMENTS;
+  const quotes = quoteMap.get(draftKey) ?? NO_QUOTES;
+
+  const addQuote = useCallback(
+    (quote: TextQuote) =>
+      writeQuotes(draftKey, (current) =>
+        current.some((item) => item.messageId === quote.messageId && item.text === quote.text)
+          ? current
+          : [...current, quote],
+      ),
+    [draftKey, writeQuotes],
+  );
+  const removeQuote = useCallback(
+    (index: number) => writeQuotes(draftKey, (current) => current.filter((_, i) => i !== index)),
+    [draftKey, writeQuotes],
+  );
+
+  /**
+   * 收图。分拣是同步的（被拒的当场点名），读文件是异步的——**键在进来那一刻定下**，
+   * 读完时用户就算切到别的会话，图也落回它被拖进来的那个输入框。
+   * 名额在追加时再截一次：两批并发拖进来，各自分拣时都以为还有位子。
+   */
+  const attachImages = useCallback(
+    (files: readonly File[]) => {
+      if (files.length === 0) return;
+      const key = draftKey;
+      const t = engine.messagesRef.current;
+      const { accepted, rejected } = admitImages(files, attachmentMap.get(key)?.length ?? 0);
+      const notice = rejectionText(rejected, t);
+      engine.setError(notice);
+      if (accepted.length === 0) return;
+      void Promise.allSettled(accepted.map((file) => readAsPromptImage(file))).then((results) => {
+        const read: ComposerImage[] = [];
+        const failures: string[] = [];
+        results.forEach((result, index) => {
+          const name = accepted[index]?.name ?? "";
+          if (result.status === "fulfilled") read.push({ id: crypto.randomUUID(), name, image: result.value });
+          else failures.push(t.composer.imageReadFailed(name));
+        });
+        if (failures.length > 0) engine.setError([notice, ...failures].filter((line) => line !== null).join(" "));
+        writeAttachments(key, (current) => [...current, ...read].slice(0, PROMPT_IMAGE_MAX_COUNT));
+      });
+    },
+    [engine, draftKey, attachmentMap, writeAttachments],
+  );
+
+  const removeAttachment = useCallback(
+    (id: string) => writeAttachments(draftKey, (current) => current.filter((item) => item.id !== id)),
+    [draftKey, writeAttachments],
+  );
 
   /**
    * 绑定本槽 → 乐观置 turn → submit 全套开工上下文。send 的发送分支与遗留事项
@@ -1108,6 +1214,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       target: string,
       workspace: string | null,
       resume: { piSessionFile: string } | null,
+      images?: readonly PromptImage[],
     ): Promise<void> => {
       if (model === null) {
         engine.setError(engine.messagesRef.current.session.noProvider);
@@ -1126,6 +1233,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         await api.agent.submit({
           sessionId: id,
           text,
+          ...imagesField(images),
           cwd: target,
           workspaceId: workspace,
           resume,
@@ -1146,12 +1254,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   const send = useCallback(async () => {
-    const text = draft.trim();
-    if (text === "") return;
+    const own = draft.trim();
+    const images = attachments.map((item) => item.image);
+    if (own === "" && images.length === 0 && quotes.length === 0) return;
+    // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）
+    const text = composeQuotedMessage(quotes, own);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
-    const compact = parseCompactCommand(text);
+    // 带图时不认压缩指令：压缩吃不了图，当命令拦下会把图悉悉丢掉——按普通消息发。
+    const compact = images.length === 0 && quotes.length === 0 ? parseCompactCommand(text) : null;
     if (compact !== null) {
       const busyId = sessionRef.current;
       const busyPhase = busyId !== null ? engine.statesRef.current.get(busyId)?.phase : undefined;
@@ -1208,8 +1320,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const busy = id !== null && engine.statesRef.current.get(id)?.phase !== "idle";
     if (id !== null && busy) {
       const queuedId = crypto.randomUUID();
-      engine.applyStates((prev) => enqueue(prev, id as string, { id: queuedId, kind: "text", text }));
+      engine.applyStates((prev) =>
+        enqueue(prev, id as string, { id: queuedId, kind: "text", text, ...imagesField(images) }),
+      );
       setDraft("");
+      writeAttachments(draftKey, () => []);
+      writeQuotes(draftKey, () => []);
       return;
     }
     try {
@@ -1224,11 +1340,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
       if (id === null) id = crypto.randomUUID();
       writeDraft(draftKey, "");
-      await submitTurn(id, text, target, workspace, resume);
+      writeAttachments(draftKey, () => []);
+      writeQuotes(draftKey, () => []);
+      await submitTurn(id, text, target, workspace, resume, images);
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [engine, draft, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, submitTurn]);
+  }, [engine, draft, attachments, quotes, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeQuotes, submitTurn]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -1591,12 +1709,27 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。
    *  目标是**本槽当前会话**的草稿——草稿已按会话隔离，不再是一份全局 string。 */
   const restoreToDraft = useCallback(
-    (text: string) => {
-      setDrafts((prev) =>
-        new Map(prev).set(draftKey, appendWithdrawn(prev.get(draftKey) ?? "", text)),
-      );
+    (message: string, images: readonly PromptImage[] = []) => {
+      // 排队项的正文里引用已展开：解析回 chip，只把用户自己的话退回文字框
+      const { quotes: withdrawn, text } = parseQuotedMessage(message);
+      if (text !== "") {
+        setDrafts((prev) =>
+          new Map(prev).set(draftKey, appendWithdrawn(prev.get(draftKey) ?? "", text)),
+        );
+      }
+      if (withdrawn.length > 0) writeQuotes(draftKey, (current) => [...current, ...withdrawn]);
+      // 附图一起退回输入框（接在已有的后面）——撤回是「这条我要改」，图是这条的一部分。
+      // 超出名额的截掉：输入框里多于上限的图发不出去，留着只会让发送卡住
+      if (images.length > 0) {
+        writeAttachments(draftKey, (current) =>
+          [...current, ...images.map((image) => ({ id: crypto.randomUUID(), name: "", image }))].slice(
+            0,
+            PROMPT_IMAGE_MAX_COUNT,
+          ),
+        );
+      }
     },
-    [draftKey],
+    [draftKey, writeAttachments, writeQuotes],
   );
 
   /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。 */
@@ -1611,7 +1744,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 塞进输入框只会变成一条普通消息。它的撤回就是单纯取消。
       // channel 项同样不进草稿（子会话 PR4a）：它不是用户自己的话，是子会话
       // 发来的消息——撤回只是不再投给父模型，消息仍在通道账本里，不提供编辑。
-      if (item.kind === "text") restoreToDraft(item.text);
+      if (item.kind === "text") restoreToDraft(item.text, item.images);
     },
     [engine, restoreToDraft],
   );
@@ -1662,10 +1795,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
               title: engine.sessions.find((meta) => meta.id === item.childId)?.title ?? "",
             })
           : item.text;
+      const images = imagesField(item.kind === "text" ? item.images : undefined);
       if (entry.phase === "idle") {
-        void api.agent.submit({ sessionId: id, text, ...turn }).catch(fail);
+        void api.agent.submit({ sessionId: id, text, ...images, ...turn }).catch(fail);
       } else {
-        void api.agent.interrupt({ sessionId: id, text, ...turn }).catch(fail);
+        void api.agent.interrupt({ sessionId: id, text, ...images, ...turn }).catch(fail);
       }
     },
     [engine],
@@ -1943,6 +2077,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     error: engine.error,
     draft,
     setDraft,
+    attachments,
+    attachImages,
+    removeAttachment,
+    quotes,
+    addQuote,
+    removeQuote,
     mode,
     changeMode,
     thinkingLevel,

@@ -1,4 +1,5 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
@@ -81,7 +82,14 @@ import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
-import { modelMenuItems } from "../settings/model-menu";
+import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
+import { filesOf, imageSrc } from "../../shell/composer-images.ts";
+import { ImageLightbox } from "../../shell/ImageLightbox";
+import { PaperclipMark } from "../../shell/PaperclipMark";
+import { QuoteChip } from "../../shell/QuoteChip";
+import { parseQuotedMessage, type TextQuote } from "@shared/quote";
+import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
+import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
@@ -132,7 +140,245 @@ function useFollowScroll(enabled: boolean) {
  * 这就是 R8-01 ②「输入框宽度跨页面保持一致」：两页的差别只有 slogan 消失、
  * 输入框从居中落到底部，别的都不动。
  */
-export function ChatView(props: {
+type ChatViewProps = Parameters<typeof ChatViewBody>[0];
+
+/**
+ * 拖图进来的落点是**整个聊天面板**，不只是输入框卡片——用户拖文件时眼睛看的是
+ * 聊天区，松手在转录上是最常见的落点；只认输入框的话，落在别处什么都不发生
+ * （窗口级守卫只拦导航），看起来就是「拖不进去」。
+ *
+ * 包一层 `display: contents`：不改任何布局，DOM 上仍是祖先，拖放事件照常冒泡到这里。
+ * 每个 ChatView 各包各的——主槽与右抽屉并排时，落在哪边就进哪边的输入框。
+ * 输入框不可用（没 provider / 只读 / 子会话面板不出输入框）时不接，文件落下即被窗口守卫吞掉。
+ */
+export function ChatView(props: ChatViewProps) {
+  const { session } = props;
+  const [dropActive, setDropActive] = useState(false);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const accepts = props.hideComposer !== true && session.usable.length > 0 && !session.readOnly;
+  const carriesFiles = (event: React.DragEvent) => accepts && event.dataTransfer.types.includes("Files");
+  // 引用跳转：原文在本转录里找得到才给得出（发出去的引用不带 id，按轮号 + 角色 + 原文找；
+  // 迁移来的引用、被压缩掉的历史找不到就不可点）
+  const jumpToQuote = useCallback(
+    (quote: TextQuote): (() => void) | undefined => {
+      const sourceId = findQuoteSource(session.transcript, quote);
+      if (sourceId === null) return undefined;
+      return () => {
+        const pane = paneRef.current;
+        if (pane !== null) highlightQuote(pane, sourceId, quote.text);
+      };
+    },
+    [session.transcript],
+  );
+  return (
+    <div
+      ref={paneRef}
+      style={{ display: "contents" }}
+      onDragOver={(event) => {
+        if (!carriesFiles(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        if (!dropActive) setDropActive(true);
+      }}
+      onDragLeave={(event) => {
+        // 在面板内部元素之间移动也会触发 leave；只有真离开面板才收
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDropActive(false);
+      }}
+      onDrop={(event) => {
+        setDropActive(false);
+        if (!carriesFiles(event)) return;
+        event.preventDefault();
+        session.attachImages(filesOf(event.dataTransfer));
+      }}
+    >
+      <QuoteJumpContext.Provider value={jumpToQuote}>
+        <ChatViewBody {...props} dropActive={dropActive} />
+      </QuoteJumpContext.Provider>
+      {accepts && (
+        <QuoteSelectionLayer
+          paneRef={paneRef}
+          transcript={session.transcript}
+          onQuote={(quote) => {
+            session.addQuote(quote);
+            // 引完回到输入框接着写——引用就是为了下一句话
+            paneRef.current?.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 引用 → 跳回原文的处理器（undefined = 原文不在本转录里）。ChatView 外层提供，chip 们各自取 */
+const QuoteJumpContext = createContext<(quote: TextQuote) => (() => void) | undefined>(() => undefined);
+
+/**
+ * 把一处（引用的那段文字，或整块）滚到转录区**顶部**，留一点边距。不用
+ * `scrollIntoView({ block: "center" })`：一条长回复整块居中时，被引用的那句常落在
+ * 下半截，正好压在输入框上方叠起来的卡片（排队条、审批条、附图与引用）后面。
+ */
+function scrollToTop(target: Element, rect: DOMRect): void {
+  const container = target.closest<HTMLElement>(".scroll");
+  if (container === null) {
+    target.scrollIntoView({ block: "start", behavior: "smooth" });
+    return;
+  }
+  const top = container.scrollTop + rect.top - container.getBoundingClientRect().top - 24;
+  container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+}
+
+/**
+ * 跳回被引用的原文：把那一段滚到转录区顶部、高亮 2.4 秒。一条助手消息可能拆成
+ * 几个文本块（都带同一个 data-quote-id），挑包含这段原文的那块；逐字定位不到
+ * （原文被 markdown 渲染改写得太多）就整块闪一下——至少把人带到对的地方。
+ */
+function highlightQuote(pane: HTMLElement, messageId: string, text: string): void {
+  const blocks = Array.from(pane.querySelectorAll<HTMLElement>(`[data-quote-id="${CSS.escape(messageId)}"]`));
+  for (const block of blocks) {
+    const nodes: Text[] = [];
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) nodes.push(node as Text);
+    const at = locateQuote(nodes.map((node) => node.data), text);
+    const startNode = at === null ? undefined : nodes[at.start.node];
+    const endNode = at === null ? undefined : nodes[at.end.node];
+    if (at === null || startNode === undefined || endNode === undefined) continue;
+    const range = document.createRange();
+    range.setStart(startNode, at.start.offset);
+    range.setEnd(endNode, at.end.offset);
+    scrollToTop(block, range.getBoundingClientRect());
+    CSS.highlights.set("orbita-quote", new Highlight(range));
+    window.setTimeout(() => CSS.highlights.delete("orbita-quote"), 2400);
+    return;
+  }
+  const fallback = blocks[0];
+  if (fallback === undefined) return;
+  scrollToTop(fallback, fallback.getBoundingClientRect());
+  fallback.classList.remove("quote-flash");
+  // 强制回流，让同一块连点两次时动画能重新开始
+  void fallback.offsetWidth;
+  fallback.classList.add("quote-flash");
+}
+
+/**
+ * 划选引用的入口（Proma 的 AgentHistorySelectionLayer 同款交互）：在转录里划选一段文字，
+ * 松手后选区上方浮出「引用」，点了就进输入框的引用 chip。
+ *
+ * - 只认**单条消息内**的选区（起止落在同一个 `[data-quote-id]` 块里）：跨消息的一段
+ *   说不清出处，跳不回去。
+ * - 监听挂在 document 上、判断时再看是不是本面板：首页没有转录容器，挂在转录根上的话
+ *   从首页进聊天页之后监听就不在了。主槽与抽屉各自只认落在自己面板里的选区。
+ * - 按下浮层时 preventDefault，选区不丢；在别处按下、滚动都收起浮层。
+ */
+function QuoteSelectionLayer(props: {
+  paneRef: React.RefObject<HTMLDivElement | null>;
+  transcript: readonly TranscriptItem[];
+  onQuote: (quote: TextQuote) => void;
+}) {
+  const t = useT();
+  const [candidate, setCandidate] = useState<{ quote: TextQuote; x: number; top: number; bottom: number } | null>(null);
+  const transcriptRef = useRef(props.transcript);
+  transcriptRef.current = props.transcript;
+  const { paneRef } = props;
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const capture = (): void => {
+      const pane = paneRef.current;
+      const selection = window.getSelection();
+      if (pane === null || selection === null || selection.rangeCount === 0 || selection.isCollapsed) {
+        setCandidate(null);
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      const blockOf = (node: Node): HTMLElement | null =>
+        (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>("[data-quote-id]") ?? null;
+      const block = blockOf(range.startContainer);
+      if (block === null || block !== blockOf(range.endContainer) || !pane.contains(block)) {
+        setCandidate(null);
+        return;
+      }
+      const role = block.dataset["quoteRole"] === "user" ? "user" : "assistant";
+      const quote = quoteFromSelection(transcriptRef.current, block.dataset["quoteId"] ?? "", role, selection.toString());
+      if (quote === null) {
+        setCandidate(null);
+        return;
+      }
+      const rect = range.getBoundingClientRect();
+      setCandidate({ quote, x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom });
+    };
+    const schedule = (): void => {
+      window.clearTimeout(timer);
+      // 等浏览器把选区落定（双击选词、三击选段的 selection 在 pointerup 之后才定）
+      timer = window.setTimeout(capture, 60);
+    };
+    const onKeyUp = (event: KeyboardEvent): void => {
+      if (event.shiftKey || event.key.startsWith("Arrow")) schedule();
+    };
+    const onPointerDown = (event: PointerEvent): void => {
+      if (event.target instanceof Element && event.target.closest("[data-quote-popover]") !== null) return;
+      setCandidate(null);
+    };
+    const onScroll = (): void => setCandidate(null);
+    document.addEventListener("pointerup", schedule);
+    document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    // 滚动不冒泡：捕获阶段才收得到转录容器的滚动
+    document.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerup", schedule);
+      document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("scroll", onScroll, true);
+    };
+  }, [paneRef]);
+
+  if (candidate === null) return null;
+  // 贴着窗口顶的选区往上弹会被裁掉，改弹到选区下方
+  const below = candidate.top < 56;
+  return createPortal(
+    <button
+      type="button"
+      data-quote-popover
+      title={t.quote.addTitle}
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={() => {
+        props.onQuote(candidate.quote);
+        window.getSelection()?.removeAllRanges();
+        setCandidate(null);
+      }}
+      style={{
+        position: "fixed",
+        left: candidate.x,
+        top: below ? candidate.bottom + 8 : candidate.top - 8,
+        transform: below ? "translateX(-50%)" : "translate(-50%, -100%)",
+        zIndex: 40,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "var(--space-1)",
+        height: 30,
+        padding: "0 var(--space-3)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--color-bg-panel)",
+        boxShadow: "var(--shadow-popover)",
+        color: "var(--color-text-primary)",
+        fontSize: "var(--font-size-control)",
+        whiteSpace: "nowrap",
+        cursor: "pointer",
+      }}
+    >
+      <Icon name="quote" size={13} strokeWidth={1.8} />
+      {t.quote.add}
+    </button>,
+    document.body,
+  );
+}
+
+function ChatViewBody(props: {
+  /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
+  dropActive?: boolean;
   session: ChatSession;
   providersError?: string | null;
   /**
@@ -182,6 +428,7 @@ export function ChatView(props: {
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
+  const jumpToQuote = useContext(QuoteJumpContext);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -373,10 +620,25 @@ export function ChatView(props: {
       onStop={session.stop}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
-      placeholder={homeActive ? t.chat.placeholderNew : t.chat.placeholderReply}
+      // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
+      placeholder={
+        session.quotes.length > 0
+          ? t.quote.replyPlaceholder(session.quotes.length)
+          : homeActive
+            ? t.chat.placeholderNew
+            : t.chat.placeholderReply
+      }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
       bottomSlot={<ComposerBar session={session} />}
+      dropActive={props.dropActive === true}
+      quotes={session.quotes}
+      onRemoveQuote={session.removeQuote}
+      jumpToQuote={jumpToQuote}
+      attachments={session.attachments}
+      onAttach={session.attachImages}
+      onRemoveAttachment={session.removeAttachment}
+      imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
     />
   );
 
@@ -1503,7 +1765,12 @@ function EntryView(props: {
       if (entry.key !== card.firstKey) return null;
       return <CarryoverScanCard drafts={card.drafts} />;
     }
-    return <MarkdownBlock text={entry.text} />;
+    // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找
+    return (
+      <div data-quote-id={entry.messageId} data-quote-role="assistant">
+        <MarkdownBlock text={entry.text} />
+      </div>
+    );
   }
   if (entry.kind === "thinking") {
     return (
@@ -1646,10 +1913,21 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
     return () => window.clearTimeout(timer);
   }, [copied]);
   const textBlocks = props.item.content.filter((block) => block.type === "text");
-  const copyText = textBlocks.map((block) => block.text).join("\n");
+  // 正文里展开过的引用块解析回 chip：气泡只放用户自己的话，复制也只拷这部分
+  const parsed = parseQuotedMessage(textBlocks.map((block) => block.text).join("\n\n"));
+  const quotes = parsed.quotes;
+  const copyText = parsed.text;
   // markdown 轻量渲染（表格/粗体/代码块/数学放行，标题摊平——wafo 2026-09-20：
   // 「正文里渲染正确，user message 为什么不一并渲染」）。多块之间空行分段。
-  const text = textBlocks.map((block) => block.text).join("\n\n");
+  const text = parsed.text;
+  const jumpToQuote = useContext(QuoteJumpContext);
+  // 引用默认收成一行摘要，复制键旁的眼睛切全文（Proma 同款：发出去之后引用是背景，不该占满屏）
+  const [quotesExpanded, setQuotesExpanded] = useState(false);
+  const images = props.item.content.filter(
+    (block): block is Extract<typeof block, { type: "image" }> => block.type === "image",
+  );
+  // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
+  const hasText = text.trim() !== "";
   useLayoutEffect(() => {
     if (expanded) return;
     const el = bubbleRef.current;
@@ -1665,41 +1943,67 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         gap: 2,
       }}
     >
-      <div
-        ref={bubbleRef}
-        style={{
-          position: "relative",
-          width: "fit-content",
-          maxWidth: "var(--bubble-max-width)",
-          minWidth: 0,
-          padding: "9px 13px",
-          background: "var(--color-chat-card-bg)",
-          border: "1px solid var(--color-border-subtle)",
-          borderRadius: "var(--radius-bubble)",
-          fontSize: "var(--font-size-chat)",
-          lineHeight: "var(--line-height-bubble)",
-          overflowWrap: "anywhere",
-          // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
-          ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
-        }}
-      >
-        <MarkdownBlock text={text} variant="bubble" />
-        {!expanded && overflowing && (
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: "var(--space-8)",
-              background: "linear-gradient(transparent, var(--color-chat-card-bg))",
-              borderRadius: "0 0 var(--radius-bubble) var(--radius-bubble)",
-              pointerEvents: "none",
-            }}
-          />
-        )}
-      </div>
+      {images.length > 0 && <UserImages images={images} />}
+      {quotes.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            justifyItems: "end",
+            gap: "var(--space-1)",
+            maxWidth: "var(--bubble-max-width)",
+            marginBottom: "var(--space-1)",
+          }}
+        >
+          {quotes.map((quote, index) => (
+            <QuoteChip
+              key={index}
+              index={index + 1}
+              quote={quote}
+              expanded={quotesExpanded}
+              onJump={jumpToQuote(quote)}
+            />
+          ))}
+        </div>
+      )}
+      {hasText && (
+        <div
+          ref={bubbleRef}
+          data-quote-id={props.item.id}
+          data-quote-role="user"
+          style={{
+            position: "relative",
+            width: "fit-content",
+            maxWidth: "var(--bubble-max-width)",
+            minWidth: 0,
+            padding: "9px 13px",
+            background: "var(--color-chat-card-bg)",
+            border: "1px solid var(--color-border-subtle)",
+            borderRadius: "var(--radius-bubble)",
+            fontSize: "var(--font-size-chat)",
+            lineHeight: "var(--line-height-bubble)",
+            overflowWrap: "anywhere",
+            // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
+            ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
+          }}
+        >
+          <MarkdownBlock text={text} variant="bubble" />
+          {!expanded && overflowing && (
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: "var(--space-8)",
+                background: "linear-gradient(transparent, var(--color-chat-card-bg))",
+                borderRadius: "0 0 var(--radius-bubble) var(--radius-bubble)",
+                pointerEvents: "none",
+              }}
+            />
+          )}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
         {overflowing && (
           <button
@@ -1720,6 +2024,28 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
             <Icon name={expanded ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} />
           </button>
         )}
+        {quotes.length > 0 && (
+          <button
+            type="button"
+            title={quotesExpanded ? t.quote.collapse : t.quote.expand}
+            aria-label={quotesExpanded ? t.quote.collapse : t.quote.expand}
+            aria-pressed={quotesExpanded}
+            onClick={() => setQuotesExpanded((value) => !value)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: 3,
+              border: "none",
+              background: "none",
+              color: "var(--color-text-tertiary)",
+              cursor: "pointer",
+            }}
+          >
+            <Icon name={quotesExpanded ? "eye-off" : "eye"} size={12} strokeWidth={1.8} />
+          </button>
+        )}
+        {/* 只发图的消息没有可拷的文字，复制键不出现（置灰的键只是噪音） */}
+        {hasText && (
         <button
           type="button"
           title={copied ? t.chat.copied : t.chat.copyMessage}
@@ -1741,10 +2067,73 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         >
           <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
         </button>
+        )}
       </div>
     </div>
   );
 }
+
+/**
+ * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
+ * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
+ */
+function UserImages(props: { images: readonly PromptImage[] }) {
+  const t = useT();
+  const [viewing, setViewing] = useState<number | null>(null);
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        justifyContent: "flex-end",
+        // 回形针半露在每张图左上角外面，图间距留出它的位置
+        gap: "var(--space-3)",
+        maxWidth: "var(--bubble-max-width)",
+        marginBottom: "var(--space-1)",
+      }}
+    >
+      {viewing !== null && (
+        <ImageLightbox images={props.images} startIndex={viewing} onClose={() => setViewing(null)} />
+      )}
+      {props.images.map((image, index) => (
+        <button
+          key={index}
+          type="button"
+          aria-label={t.lightbox.open}
+          onClick={() => setViewing(index)}
+          style={{ ...ZOOM_BUTTON_STYLE, position: "relative" }}
+        >
+          <PaperclipMark size={22} />
+          <img
+            src={imageSrc(image)}
+            alt=""
+            draggable={false}
+            style={{
+              display: "block",
+              maxWidth: 240,
+              maxHeight: 240,
+              objectFit: "contain",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--color-border-subtle)",
+              background: "var(--color-bg-muted)",
+            }}
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 内联图外面那层「点了看大图」的按钮：去掉按钮自己的盒子，只留图；圆角跟图走，焦点环才贴合 */
+const ZOOM_BUTTON_STYLE: React.CSSProperties = {
+  display: "block",
+  padding: 0,
+  border: 0,
+  background: "none",
+  borderRadius: "var(--radius-md)",
+  cursor: "zoom-in",
+  maxWidth: "100%",
+};
 
 /**
  * 分支按钮行（C-2）：挂在每轮 agent 最终完整输出的下面，回答落定即**常驻显示**
@@ -2559,6 +2948,8 @@ function tokenSpans(line: readonly TokenSpan[]) {
  */
 function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
   const t = useT();
+  // 看大图：放在提前 return 之前（hook 顺序不能随 result 有无变）
+  const [viewing, setViewing] = useState<number | null>(null);
   const { result } = props;
   if (result === undefined) return null;
   const isFailure = result.status === "error";
@@ -2597,19 +2988,27 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
           {block.text}
         </pre>
       ))}
+      {viewing !== null && <ImageLightbox images={images} startIndex={viewing} onClose={() => setViewing(null)} />}
       {images.map((block, i) => (
         <figure key={`img-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
-          <img
-            src={`data:${block.mimeType};base64,${block.data}`}
-            alt=""
-            style={{
-              display: "block",
-              maxWidth: "100%",
-              maxHeight: 240,
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--color-border-subtle)",
-            }}
-          />
+          <button
+            type="button"
+            aria-label={t.lightbox.open}
+            onClick={() => setViewing(i)}
+            style={{ ...ZOOM_BUTTON_STYLE, justifySelf: "start" }}
+          >
+            <img
+              src={imageSrc(block)}
+              alt=""
+              style={{
+                display: "block",
+                maxWidth: "100%",
+                maxHeight: 240,
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--color-border-subtle)",
+              }}
+            />
+          </button>
           <figcaption
             style={{
               fontSize: "var(--font-size-micro)",

@@ -880,3 +880,47 @@ describe("meta 并发写入", () => {
     assert.deepEqual(await store.list(), []);
   });
 });
+
+describe("SessionStore · 附图原图", () => {
+  const png = { type: "image" as const, data: Buffer.from("png-bytes").toString("base64"), mimeType: "image/png" };
+
+  test("存下原图并铸引用，按引用读回同一份字节", async () => {
+    await store.ensureSession(meta());
+    const [sent] = await store.saveOriginals(ID, [png]);
+    assert.match(sent?.original ?? "", new RegExp(`^${ID}/[0-9a-f-]{36}\\.png$`));
+    assert.equal(sent?.data, png.data);
+    assert.deepEqual(await store.readOriginal(sent?.original), png);
+  });
+
+  test("renderer 带来的 original 不认，一律重铸", async () => {
+    const [sent] = await store.saveOriginals(ID, [{ ...png, original: "../../etc/passwd" } as typeof png]);
+    assert.notEqual(sent?.original, "../../etc/passwd");
+    assert.match(sent?.original ?? "", new RegExp(`^${ID}/`));
+  });
+
+  test("原图在会话目录下，list 不把它当会话", async () => {
+    await store.ensureSession(meta());
+    await store.saveOriginals(ID, [png]);
+    assert.ok((await readdir(join(dir, "sessions"))).includes(`${ID}.attachments`));
+    assert.deepEqual((await store.list()).map((m) => m.id), [ID]);
+  });
+
+  test("不合格的引用与不存在的文件都读成 null", async () => {
+    assert.equal(await store.readOriginal("../x.png"), null);
+    assert.equal(await store.readOriginal(42), null);
+    assert.equal(await store.readOriginal(`${ID}/5b0d1a52-8c7e-4c52-9d0b-3f6a2b1c9e10.png`), null);
+  });
+
+  test("准入之外的格式不存盘、不带引用（agent 进程会整条拒掉）", async () => {
+    const [sent] = await store.saveOriginals(ID, [{ ...png, mimeType: "image/heic" }]);
+    assert.equal(sent?.original, undefined);
+  });
+
+  test("删会话连带删原图", async () => {
+    await store.ensureSession(meta());
+    const [sent] = await store.saveOriginals(ID, [png]);
+    await store.remove(ID);
+    assert.equal(await store.readOriginal(sent?.original), null);
+    assert.equal((await readdir(join(dir, "sessions"))).includes(`${ID}.attachments`), false);
+  });
+});

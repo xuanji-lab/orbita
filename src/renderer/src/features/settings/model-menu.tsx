@@ -41,6 +41,29 @@ export function useBuiltinCatalog(): BuiltinProvider[] {
   return catalog;
 }
 
+/** 某厂商下某个模型的参数兜底（按模型 id 跨目录推断：自建网关没有 catalogId，但它跑的型号在目录里多半有官方口径） */
+function defaultsFor(provider: ProviderDto, catalog: readonly BuiltinProvider[], modelId: string) {
+  const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
+  return resolveModelDefaults(catalog, modelId, { catalogId: known?.catalogId, api: known?.api });
+}
+
+/**
+ * 选中的模型能不能看图——与菜单里的图片徽标同一套口径（用户覆盖 > 目录 > 兜底）。
+ * 输入框靠它在有附图时提醒「这个模型看不到」。找不到厂商 / 模型就当能看：
+ * 不确定时不吓人，发出去 pi 也只是换成占位文字。
+ */
+export function selectedModelAcceptsImage(
+  providers: readonly ProviderDto[],
+  catalog: readonly BuiltinProvider[],
+  selected: { providerId: string; modelId: string } | null,
+): boolean {
+  if (selected === null) return true;
+  const provider = providers.find((p) => p.id === selected.providerId);
+  const declared = provider?.models.declared.find((m) => m.id === selected.modelId);
+  if (provider === undefined || declared === undefined) return true;
+  return modelAcceptsImage(declared, defaultsFor(provider, catalog, declared.id));
+}
+
 /**
  * 按厂商分组的模型菜单项：厂商名做组头行，模型行缩进其下只带参数徽标。
  *
@@ -56,10 +79,7 @@ export function modelMenuItems(options: {
   onSelect: (providerId: string, modelId: string) => void;
 }): MenuItem[] {
   return options.providers.flatMap((provider) => {
-    const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-    // 按模型 id 跨目录推断：自建网关没有 catalogId，但它跑的型号在目录里多半有官方口径
-    const defaultsOf = (id: string) =>
-      resolveModelDefaults(options.catalog, id, { catalogId: known?.catalogId, api: known?.api });
+    const defaultsOf = (id: string) => defaultsFor(provider, options.catalog, id);
     const rows: MenuItem[] = [
       { id: `hdr:${provider.id}`, label: provider.displayName, header: true },
     ];

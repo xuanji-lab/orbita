@@ -10,6 +10,7 @@ import {
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
+import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
@@ -22,6 +23,7 @@ import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import type { McpServer } from "../../shared/mcp.ts";
+import type { SentImage } from "../../shared/prompt-images.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
 import { AgentHost } from "./host.ts";
@@ -175,6 +177,15 @@ export function registerAgentIpc(
     }
   };
 
+  /**
+   * 附图装配：原图先落进会话目录（看大图用），带着引用发给 agent 进程（它缩放后发模型）。
+   * 没图就不带字段——纯文字消息的命令与以前一字不差。
+   */
+  const sentImages = async (input: SubmitAgentInput): Promise<{ images?: SentImage[] }> =>
+    input.images !== undefined && input.images.length > 0
+      ? { images: await sessions.saveOriginals(input.sessionId, input.images) }
+      : {};
+
   ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
 
   /**
@@ -221,6 +232,7 @@ export function registerAgentIpc(
     const piSessionFile = await host.submit({
       type: "submit",
       text: input.text,
+      ...(await sentImages(input)),
       ...turnFields(input, provider, piSessionDir, protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
         directories: await readDirectories(input),
@@ -235,8 +247,15 @@ export function registerAgentIpc(
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
     // 子会话（2026-09-23）：input.text 是投递信封时不生成标题——信封不是用户说的话，
     // 拿它起标题会把 `<channel from="parent" …>` 这类机器文本喂给标题模型。
-    if (parseChannelPrompt(input.text) === null && (await sessions.needsAutoTitle(input.sessionId))) {
-      host.generateTitle(input.sessionId, input.text, await readTitleModel());
+    // 只发图、没有字的消息同样不生成——标题模型拿不到图，对着空串只会编；门禁不动，下一条带字的消息再试。
+    // 引用块剥掉再判：标题要概括的是用户这句话，不是被引用的那段（只发引用同理不生成）。
+    const ownWords = withoutQuotes(input.text);
+    if (
+      ownWords.trim() !== "" &&
+      parseChannelPrompt(input.text) === null &&
+      (await sessions.needsAutoTitle(input.sessionId))
+    ) {
+      host.generateTitle(input.sessionId, ownWords, await readTitleModel());
     }
   }
 
@@ -244,7 +263,7 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...(await sentImages(input)), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

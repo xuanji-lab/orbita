@@ -17,6 +17,7 @@ import {
 import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
+import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
 
@@ -42,7 +43,8 @@ export interface PendingApproval {
  * （同一条 `channel:event` 因订阅重连等原因重复到达时，队列里已有同 id 就不再入队）。
  */
 export type QueuedMessage =
-  | { id: string; kind: "text"; text: string }
+  /** images：随这条排队的附图（缺席 = 纯文字）。排队时就读成 base64，投递时原样交出去 */
+  | { id: string; kind: "text"; text: string; images?: readonly PromptImage[] }
   | { id: string; kind: "compact"; instructions?: string }
   | { id: string; kind: "channel"; childId: string; message: ChannelMessage };
 

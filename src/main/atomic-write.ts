@@ -32,12 +32,21 @@ export async function writeJsonAtomic(filePath: string, value: unknown): Promise
 }
 
 export async function writeTextAtomic(filePath: string, text: string): Promise<void> {
+  await writeAtomic(filePath, text);
+}
+
+/** 二进制版（附图原图）：同一套临时文件 + rename——半张图比没有图更难排查 */
+export async function writeBytesAtomic(filePath: string, bytes: Uint8Array): Promise<void> {
+  await writeAtomic(filePath, bytes);
+}
+
+async function writeAtomic(filePath: string, data: string | Uint8Array): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   for (let attempt = 0; ; attempt += 1) {
     // 随机后缀：同一目标被并发写时两个临时文件不会互相踩
     const tempPath = `${filePath}.${randomBytes(4).toString("hex")}.tmp`;
     try {
-      await writeFile(tempPath, text, "utf8");
+      await (typeof data === "string" ? writeFile(tempPath, data, "utf8") : writeFile(tempPath, data));
       await rename(tempPath, filePath);
       return;
     } catch (error) {

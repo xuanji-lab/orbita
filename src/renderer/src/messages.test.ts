@@ -25,6 +25,12 @@ const ALLOWED_LATIN = new Set([
   "stdio",
   "http",
   "https",
+  // 图片格式名（附图的准入提示）
+  "PNG",
+  "JPEG",
+  "GIF",
+  "WebP",
+  "MB",
   // 格式记号（环境变量 / 请求头一行的写法，原样照填）
   "KEY",
   "VALUE",

@@ -1475,6 +1475,29 @@ body {
   transform: translateY(var(--travel-dy, 320px));
 }
 
+/*
+ * 点引用 chip 跳回原文：被引用的那段用 CSS Custom Highlight 标出来（不改 DOM，
+ * 不会打断 markdown 渲染），找不到逐字位置时整块闪一下。颜色取 info——这是
+ * 「告诉你在哪」，不是主操作，不用 accent。闪一下就退，动效在解释「引用来自这里」。
+ */
+::highlight(orbita-quote) {
+  background-color: color-mix(in srgb, var(--color-info) 26%, transparent);
+}
+
+.quote-flash {
+  animation: quote-flash 1.6s cubic-bezier(0.4, 0, 0.6, 1);
+  border-radius: var(--radius-md);
+}
+
+@keyframes quote-flash {
+  from {
+    background-color: color-mix(in srgb, var(--color-info) 18%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
 /* 动效只解释「东西去哪了」；用户要求减少动效时全部塌成 0（设计系统 *Motion*） */
 @media (prefers-reduced-motion: reduce) {
   *,

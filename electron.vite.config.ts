@@ -1,6 +1,45 @@
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, posix, resolve } from "node:path";
 import { defineConfig } from "electron-vite";
+import type { Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+
+/**
+ * pi 的图片缩放（read 工具读图、用户附图）靠 photon（Rust/WASM）。photon-node 的加载写法是
+ * `readFileSync(path.join(__dirname, "photon_rs_bg.wasm"))`——被打进 `out/main/chunks/` 之后
+ * __dirname 指向 chunk 所在目录，而 wasm 不会被 rollup 带过来。结果：photon 加载失败、
+ * `resizeImage` 恒返 null，**连一张尺寸达标的小图也读不了**（它要先解码才知道尺寸）。
+ *
+ * 这里把 wasm 作为资源发到「含 photon 的那个 chunk」旁边。不写死 chunks/ 目录：按
+ * chunk 实际包含的模块找，分块策略变了也跟得上。**找不到就让构建失败**——这次的病就是
+ * 静默坏掉的；哪天 pi 不再用 photon，让构建当场说出来，再删这个插件。
+ *
+ * worker 那条路（`image-resize-worker.js`）同样因打包而找不到文件，pi 会退回进程内缩放——
+ * 缩放跑在 agent utility 进程，不占主进程，不值得为它再拷一份 worker 入口。
+ */
+function photonWasmNextToChunk(): Plugin {
+  const marker = "/@silvia-odwyer/photon-node/";
+  return {
+    name: "orbita:photon-wasm",
+    generateBundle(_options, bundle) {
+      const emitted = new Set<string>();
+      for (const output of Object.values(bundle)) {
+        if (output.type !== "chunk") continue;
+        const photonModule = Object.keys(output.modules).find((id) => id.replaceAll("\\", "/").includes(marker));
+        if (photonModule === undefined) continue;
+        const fileName = posix.join(posix.dirname(output.fileName), "photon_rs_bg.wasm");
+        if (emitted.has(fileName)) continue;
+        emitted.add(fileName);
+        this.emitFile({
+          type: "asset",
+          fileName,
+          source: readFileSync(resolve(dirname(photonModule.replace(/^\0/, "").split("?")[0] ?? ""), "photon_rs_bg.wasm")),
+        });
+      }
+      if (emitted.size === 0) this.error("没有找到打包了 photon-node 的 chunk——pi 的图片缩放路径变了，先核对再删掉这个插件");
+    },
+  };
+}
 
 /**
  * electron-vite 三段构建：main / preload / renderer。
@@ -20,6 +59,7 @@ export default defineConfig({
         output: { entryFileNames: "[name].js" },
       },
     },
+    plugins: [photonWasmNextToChunk()],
   },
   preload: {
     build: { rollupOptions: { input: resolve(__dirname, "src/preload/index.ts") } },

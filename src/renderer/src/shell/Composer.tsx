@@ -1,5 +1,12 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
+import { IconButton } from "./IconButton";
+import { ImageLightbox } from "./ImageLightbox";
+import { PaperclipMark } from "./PaperclipMark";
+import { QuoteChip } from "./QuoteChip";
+import type { TextQuote } from "@shared/quote";
+import { PROMPT_IMAGE_MIME_TYPES } from "@shared/prompt-images";
+import { filesOf, imageSrc, type ComposerImage } from "./composer-images.ts";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
@@ -61,6 +68,20 @@ export function Composer(props: {
   disabled?: boolean;
   running?: boolean;
   bottomSlot?: React.ReactNode;
+  /** 有文件正拖在聊天面板上方：亮起落点虚线。拖放由外层 ChatView 接（整个面板都是落点） */
+  dropActive?: boolean;
+  /** 输入框里待发的文字引用（按会话隔离，状态在 useChatSession）；展开显示全文 */
+  quotes: readonly TextQuote[];
+  onRemoveQuote: (index: number) => void;
+  /** 跳回被引用的原文；返回 null 表示这条引用的原文不在当前转录里（不画成可点） */
+  jumpToQuote: (quote: TextQuote) => (() => void) | undefined;
+  /** 输入框里待发的附图（按会话隔离，状态在 useChatSession） */
+  attachments: readonly ComposerImage[];
+  /** 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收 */
+  onAttach: (files: readonly File[]) => void;
+  onRemoveAttachment: (id: string) => void;
+  /** 当前模型看不了图：有附图时在缩略图下说一句（pi 会把图换成占位文字，不报错） */
+  imageUnsupported?: boolean;
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -106,8 +127,12 @@ export function Composer(props: {
   const running = props.running === true;
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
   // 同一个位置的两面，按输入态切换。想停止时清掉草稿即可，排队是高频动作、停止是少数。
-  const sendable = !disabled && props.value.trim() !== "";
+  // 有图没字也能发——一张截图本身就是一句完整的话
+  const sendable =
+    !disabled && (props.value.trim() !== "" || props.attachments.length > 0 || props.quotes.length > 0);
   const stopping = running && !sendable;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragging = props.dropActive === true;
   return (
     <div
       className="glass-card"
@@ -118,8 +143,49 @@ export function Composer(props: {
         flexDirection: "column",
         gap: 6,
         padding: "10px 12px 8px",
+        // 拖进来时的落点提示：中性虚线，不染 accent（accent 只给主操作）
+        outline: dragging ? "1.5px dashed var(--color-border-strong)" : undefined,
+        outlineOffset: -5,
       }}
     >
+      {/* 截图叠在引用上面：图是一眼能认出来的，放在最上面当锚点；引用是一段段文字，贴着输入框 */}
+      {props.attachments.length > 0 && (
+        <AttachmentStrip
+          items={props.attachments}
+          onRemove={props.onRemoveAttachment}
+          removeLabel={t.composer.removeImage}
+          openLabel={t.lightbox.open}
+        />
+      )}
+      {props.attachments.length > 0 && props.imageUnsupported === true && (
+        <div
+          role="status"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-1)",
+            fontSize: "var(--font-size-caption)",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          <Icon name="triangle-alert" size={12} strokeWidth={1.8} style={{ color: "var(--color-warning)", flex: "0 0 auto" }} />
+          <span>{t.composer.noVision}</span>
+        </div>
+      )}
+      {props.quotes.length > 0 && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          {props.quotes.map((quote, index) => (
+            <QuoteChip
+              key={`${quote.messageId}:${index}`}
+              index={index + 1}
+              quote={quote}
+              expanded
+              onJump={props.jumpToQuote(quote)}
+              onRemove={() => props.onRemoveQuote(index)}
+            />
+          ))}
+        </div>
+      )}
       <div className="composer-field">
         {whiteout && (
           // 镜像：与 textarea 同字体、同字距、同宽，字是透明的，只有英文段的白底看得见。
@@ -146,6 +212,14 @@ export function Composer(props: {
           disabled={disabled}
           placeholder={props.placeholder}
           onChange={(event) => props.onChange(event.target.value)}
+          onPaste={(event) => {
+            // 剪贴板里有文件（截图、从别处复制的图）才拦；纯文字粘贴照常进输入框。
+            // 浏览器复制图片常常同时带一份 HTML/URL 文本——有文件时以文件为准，文本不贴
+            const files = filesOf(event.clipboardData);
+            if (files.length === 0) return;
+            event.preventDefault();
+            props.onAttach(files);
+          }}
           onKeyDown={(event) => {
             // 组词中的 Enter 是「确认候选词」，不是发送——规则与用例在 composer-keys.ts
             if (!isSubmitKey({
@@ -186,6 +260,27 @@ export function Composer(props: {
           overflow:hidden 兜底——窄到连图标态都装不下时裁掉多出来的，而不是把
           发送键挤出可见区（`.composer-bottom-bar` 的容器查询规则见 styles.css）。
         */}
+        <IconButton
+          label={t.composer.attachImage}
+          size={28}
+          disabled={disabled}
+          onClick={() => fileInputRef.current?.click()}
+          style={{ flex: "0 0 auto" }}
+        >
+          <Icon name="image" size={15} strokeWidth={1.8} />
+        </IconButton>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={PROMPT_IMAGE_MIME_TYPES.join(",")}
+          multiple
+          hidden
+          onChange={(event) => {
+            props.onAttach(Array.from(event.target.files ?? []));
+            // 清掉选择：同一张图移除后再选一次，change 才会再触发
+            event.target.value = "";
+          }}
+        />
         <div className="composer-bottom-bar">{props.bottomSlot}</div>
         <button
           type="button"
@@ -211,6 +306,93 @@ export function Composer(props: {
           <Icon name={sendable ? "arrow-up" : "square"} size={sendable ? 16 : 12} />
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 待发附图的缩略图条。方形裁切（object-fit: cover）只为排得齐——原图完整地
+ * 发出去，点缩略图看大图。移除键常显而不是悬停才出：键盘用户要能 Tab 到它。
+ * 缩略图与移除键是兄弟不是嵌套：button 里不能再套 button。
+ */
+function AttachmentStrip(props: {
+  items: readonly ComposerImage[];
+  onRemove: (id: string) => void;
+  removeLabel: string;
+  openLabel: string;
+}) {
+  const [viewing, setViewing] = useState<number | null>(null);
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+      {viewing !== null && (
+        <ImageLightbox
+          images={props.items.map((item) => item.image)}
+          startIndex={viewing}
+          onClose={() => setViewing(null)}
+        />
+      )}
+      {props.items.map((item, index) => (
+        <div
+          key={item.id}
+          title={item.name === "" ? undefined : item.name}
+          style={{
+            // 外层不裁切：回形针要半露在缩略图外面；裁切放在里面的按钮上
+            position: "relative",
+            width: 56,
+            height: 56,
+            flex: "0 0 auto",
+          }}
+        >
+          <PaperclipMark size={18} />
+          <button
+            type="button"
+            aria-label={props.openLabel}
+            onClick={() => setViewing(index)}
+            style={{
+              display: "block",
+              width: "100%",
+              height: "100%",
+              padding: 0,
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--color-border-subtle)",
+              overflow: "hidden",
+              background: "var(--color-bg-muted)",
+              cursor: "zoom-in",
+            }}
+          >
+            <img
+              src={imageSrc(item.image)}
+              alt={item.name}
+              draggable={false}
+              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+            />
+          </button>
+          <button
+            type="button"
+            aria-label={props.removeLabel}
+            title={props.removeLabel}
+            onClick={() => props.onRemove(item.id)}
+            style={{
+              position: "absolute",
+              top: 3,
+              right: 3,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 18,
+              height: 18,
+              padding: 0,
+              border: "1px solid var(--color-border-subtle)",
+              borderRadius: "var(--radius-pill)",
+              background: "var(--color-bg-panel)",
+              color: "var(--color-text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <Icon name="x" size={11} strokeWidth={2} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

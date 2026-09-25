@@ -90,6 +90,38 @@ export const en = {
     send: "Send",
     stop: "Stop",
     stopTurn: "Stop this turn",
+    attachImage: "Attach images (or paste / drop them)",
+    removeImage: "Remove image",
+    imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
+    imageTooLarge: (name: string, mb: number) => `${name} is over ${mb} MB.`,
+    tooManyImages: (max: number) => `Up to ${max} images per message.`,
+    imageReadFailed: (name: string) => `Couldn't read ${name}.`,
+    noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
+  },
+
+  quote: {
+    add: "Quote",
+    replyPlaceholder: (n: number) => (n === 1 ? "Reply to quote 1…" : `Reply by number — 1. … ${n}. …`),
+    number: (n: number) => `Quote ${n}`,
+    addTitle: "Quote this in your next message",
+    remove: "Remove quote",
+    jump: "Jump to the quoted text",
+    notFound: "The quoted text isn't in this task anymore.",
+    turn: (n: number) => `Turn ${n}`,
+    agentReply: "Agent reply",
+    userMessage: "Your message",
+    chars: (n: number) => plural(n, "char"),
+    truncated: (n: number) => `first ${n} chars only`,
+    count: (n: number) => plural(n, "quote"),
+    expand: "Show quoted text in full",
+    collapse: "Collapse quotes",
+  },
+
+  lightbox: {
+    aria: "Image viewer",
+    open: "View larger",
+    prev: "Previous image",
+    next: "Next image",
   },
 
   rowStatus: {

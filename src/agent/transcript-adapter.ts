@@ -186,9 +186,16 @@ export class TranscriptAdapter {
     this.deps = deps;
   }
 
-  /** 用户提交的 prompt：本地立刻造一条 user item，不等模型回。 */
-  userPrompt(text: string): TranscriptProgress[] {
-    const content: UserContent[] = [{ type: "text", text }];
+  /**
+   * 用户提交的 prompt：本地立刻造一条 user item，不等模型回。
+   * 块序同 pi 自己拼的那条（文字在前、图片在后）；只发图时不造空 text 块——
+   * pi 那边会带一个空串块（各 provider 发送前自己滤掉），我们这本账不记这种残影。
+   */
+  userPrompt(text: string, images: readonly Extract<UserContent, { type: "image" }>[] = []): TranscriptProgress[] {
+    const content: UserContent[] = [
+      ...(text !== "" || images.length === 0 ? [{ type: "text" as const, text }] : []),
+      ...images,
+    ];
     const item: TranscriptItem = {
       id: this.deps.newId(),
       role: "user",
