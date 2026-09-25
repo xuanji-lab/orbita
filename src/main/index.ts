@@ -11,7 +11,7 @@ import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
-import { broadcastAgentEvent, registerAgentIpc } from "./agent/ipc.ts";
+import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
@@ -273,6 +273,8 @@ void app.whenReady().then(async () => {
     skills,
     mcp,
     async () => agentHost.mcpReload(await mcp.read()),
+    async (model, messages) =>
+      agentHost.classifyGreetings(await resolveProviderSecrets(providers, model.providerId), model.modelId, messages),
   );
   // Home（工作区缺席时 agent 的落脚点）先建出来，同 skills.ensureDirs 的处理：
   // 建不出来不拦启动，但要留日志——不然一个权限坏掉的 ~/Orbita 会表现成

@@ -61,6 +61,7 @@ import {
   type ClaudeDesktopSession,
 } from "./claude-code.ts";
 import { kimiBlobRefs, parseKimiSessionState, parseKimiWire } from "./kimi-code.ts";
+import { onlyWrittenMessage } from "./greeting-only.ts";
 import {
   opencodeSessionBytes,
   opencodeToMessages,
@@ -103,6 +104,7 @@ import {
   type ImportChange,
   type ImportDestination,
   type ImportDestinationChoice,
+  type ImportGreetingCheckPlan,
   type ImportPlanItem,
   type ImportRunReport,
   type ImportScanReport,
@@ -166,6 +168,8 @@ export interface ImporterDeps {
   existingSkills?: readonly string[];
   /** orbita mcp.json 里已有的 server 名：MCP 重名判断的底 */
   existingMcp?: readonly string[];
+  /** 「只随手发了一句」检查会用的模型（页面据此写提醒）；不传 = 没有可用模型 */
+  greetingModel?: ImportGreetingCheckPlan["model"];
   /** 额外合法源根（Proma 迁移史的旧根 ~/.proma：索引里仍有条目指向它，文件仍在）。
    *  防御边界是「这几个根之内」，不传则只认 promaRoot */
   extraSourceRoots?: readonly string[];
@@ -922,17 +926,30 @@ export async function scanImport(
 }
 
 /**
+ * 「只随手发了一句」检查的候选（import:check-greetings）：与扫描同一条路按同样的来源重扫，
+ * sourceFile → 用户唯一写过的那条。不收渲染层传来的文字（同执行不收计划的理由）。
+ */
+export async function scanGreetingCandidates(
+  deps: ImporterDeps,
+  sources: readonly ImportSourceId[],
+): Promise<Map<string, string>> {
+  return (await scanWithConfigs(deps, [], sources)).greetingCandidates;
+}
+
+/**
  * 扫描的全部产出：报告，加上要导的 MCP 配置本体（报告里只有名字与出处——配置带密钥，不出主进程）。
  */
 async function scanWithConfigs(
   deps: ImporterDeps,
   destinations: readonly ImportDestinationChoice[],
   sources: readonly ImportSourceId[],
-): Promise<{ report: ImportScanReport; mcpServers: Map<string, McpServer> }> {
+): Promise<{ report: ImportScanReport; mcpServers: Map<string, McpServer>; greetingCandidates: Map<string, string> }> {
   const overrides = new Map<string | null, ImportDestination>(
     destinations.map((choice) => [choice.folder, choice.destination]),
   );
   const skipped: ImportSkipItem[] = [];
+  /** 新会话里用户只写过一条的：sourceFile → 那一条（「只随手发了一句」检查的候选，计划成形后再筛） */
+  const singleMessages = new Map<string, string>();
   const skip = (sourceId: string, title: string | null, reason: ImportSkipReason, detail?: string): void => {
     skipped.push(detail === undefined ? { sourceId, title, reason } : { sourceId, title, reason, detail });
   };
@@ -1053,6 +1070,10 @@ async function scanWithConfigs(
       change = "diverged";
       newMessages = state.newMessages;
       besideOriginal = state.meta;
+    } else {
+      // 「只随手发了一句」检查的候选：只看没导过的（导过的怎么变都走上面的再次导入）
+      const only = await promaOnlyMessage(sessionEntries, deps.promaRoot, entry.id);
+      if (only !== null) singleMessages.set(entry.piSessionFile, only);
     }
 
     let resolution: { folder: string | null; workspaceId: string | null; cwd: string };
@@ -1147,6 +1168,9 @@ async function scanWithConfigs(
     // 扫描期做完整清洗（不是只看文件在不在）：转换不出 assistant 消息的文件
     // （纯旧扁平 / 空 draft）现在就剔除，不留到执行时报 failed
     const { rows } = parseClaudeRows(raw);
+    // 「只随手发了一句」检查的候选。源就是界面日志，用户行即原文
+    const only = onlyWrittenMessage(promaUserTexts(raw));
+    if (only !== null) singleMessages.set(sourceFile, only);
     if (!hasAssistantRow(rows)) {
       skip(
         entry.id,
@@ -1239,6 +1263,7 @@ async function scanWithConfigs(
     const mapped = mapModel(candidate.model, deps.registeredModels, deps.fallbackModel);
     if (!mapped.matched) modelFallbackCount += 1;
     totalBytes += candidate.bytes;
+    if (candidate.onlyMessage !== null) singleMessages.set(candidate.sourceFile, candidate.onlyMessage);
     plan.push({
       sourceId: candidate.sourceId,
       source: candidate.source,
@@ -1278,6 +1303,15 @@ async function scanWithConfigs(
 
   // 创建时间升序：执行按这个顺序落盘，时间线自然有序
   plan.sort((a, b) => a.createdAt - b.createdAt || a.sourceId.localeCompare(b.sourceId));
+
+  // 「只随手发了一句」检查的候选：页面上能单独勾的新会话（跟着母会话走的子会话不算）
+  const planIds = new Set(plan.map((item) => item.sessionId));
+  const greetingCandidates = new Map<string, string>();
+  for (const item of plan) {
+    const only = singleMessages.get(item.sourceFile);
+    if (only === undefined || item.change === "updated" || item.change === "diverged") continue;
+    if (isSelectablePlanItem(item, planIds)) greetingCandidates.set(item.sourceFile, only);
+  }
 
   // skills：组的顺序就是重名先到先得的顺序——Proma 各工作区 → 共用目录 → Claude Code
   const promaFolders = sources.includes("proma") ? await promaWorkspaceFolders(deps.promaRoot) : [];
@@ -1326,8 +1360,9 @@ async function scanWithConfigs(
     ),
     skills,
     mcp: mcp.items,
+    greetingCheck: { candidates: greetingCandidates.size, model: deps.greetingModel ?? null },
   };
-  return { report, mcpServers: mcp.servers };
+  return { report, mcpServers: mcp.servers, greetingCandidates };
 }
 
 /** 一个来源都没勾时的扫描结果：什么都没读，也就什么都没有。 */
@@ -1345,6 +1380,7 @@ export function emptyScanReport(): ImportScanReport {
     lastImportAt: null,
     skills: [],
     mcp: [],
+    greetingCheck: { candidates: 0, model: null },
   };
 }
 
@@ -1359,6 +1395,8 @@ function claudeSourceFile(promaRoot: string, id: string): string {
 
 /** 一条待导入的转换类会话：计划条目除去模型映射与去向之外的全部原料。 */
 interface ConvertedCandidate {
+  /** 用户唯一写过的那条（「只随手发了一句」检查的候选）；写过零条或不止一条为 null */
+  onlyMessage: string | null;
   source: ImportSourceId;
   sourceKind: ImportSourceKind;
   sourceId: string;
@@ -1498,14 +1536,16 @@ async function scanClaudeCode(
     const session = parseClaudeCodeSession(raw);
     if (entry === undefined && session.rootUuid !== null && listedRoots.has(session.rootUuid)) continue;
     const title = deriveSessionTitle(entry?.title ?? session.title ?? session.firstPrompt ?? "") || "Claude Code session";
+    const converted = claudeRowsToMessages(session.rows, "scan");
     // 按执行时同一条转换判断：没有 assistant 消息 pi 不落盘（只发了一句就断掉的会话）
-    if (!claudeRowsToMessages(session.rows, "scan").messages.some((message) => message.role === "assistant")) {
+    if (!converted.messages.some((message) => message.role === "assistant")) {
       skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
       continue;
     }
     const place = await sessionFolder(entry?.folder ?? session.cwd, paths.home, deps.defaultCwd);
     const createdAt = entry?.createdAt ?? firstTimestamp(session.rows) ?? Date.now();
     candidates.push({
+      onlyMessage: onlyWrittenMessage(converted.userRowIndexes.map((row) => session.displays[row] ?? null)),
       source: "claude-code",
       sourceKind: "claude-code",
       sourceId,
@@ -1696,6 +1736,7 @@ async function scanKimiCode(
       const place = await sessionFolder(state?.cwd ?? workspaces.roots.get(workspace.name) ?? null, paths.home, deps.defaultCwd);
       const createdAt = state?.createdAt ?? wire.firstAt ?? Date.now();
       candidates.push({
+        onlyMessage: onlyWrittenMessage(wire.userDisplays),
         source: "kimi-code",
         sourceKind: "kimi-code",
         sourceId,
@@ -1767,6 +1808,7 @@ async function scanOpencode(
     const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd);
     const createdAt = session.createdAt || parsed.firstAt || Date.now();
     candidates.push({
+      onlyMessage: onlyWrittenMessage(parsed.userDisplays),
       source: "opencode",
       sourceKind: "opencode",
       sourceId: session.id,
@@ -2388,6 +2430,18 @@ async function readRenderLog(promaRoot: string, sourceId: string): Promise<strin
   } catch {
     return null;
   }
+}
+
+/**
+ * Proma 会话里用户唯一写过的那条（greeting-only.ts 的候选）。当前分支上恰好一条用户消息时才去读
+ * 界面日志取原文——绝大多数会话在数用户消息这一步就返回，不多读文件。
+ */
+async function promaOnlyMessage(entries: readonly SessionEntry[], promaRoot: string, sourceId: string): Promise<string | null> {
+  const branch = branchEntries(entries);
+  const users = branch.filter((entry) => entry.type === "message" && asRecord(entry.message)?.["role"] === "user");
+  if (users.length !== 1) return null;
+  const renderLog = await readRenderLog(promaRoot, sourceId);
+  return onlyWrittenMessage([...promaUserTextMap(branch, renderLog === null ? null : promaUserTexts(renderLog)).values()]);
 }
 
 /**

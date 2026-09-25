@@ -257,6 +257,45 @@ export interface ImportScanReport {
   skills: ImportSkillGroup[];
   /** 勾选来源里的 MCP server，一个名字一行，按名字排 */
   mcp: ImportMcpItem[];
+  /** 「只说了句 hi / test」检查的准备情况：页面据此写勾选框旁的提醒（查几条、用哪个模型） */
+  greetingCheck: ImportGreetingCheckPlan;
+}
+
+/** 一个 provider 下的一个模型。 */
+export interface ImportModelRef {
+  providerId: string;
+  modelId: string;
+}
+
+/**
+ * 可选的「不导只说了句招呼的会话」（wafo 2026-09-25）：Claude 的 5 小时额度窗口从第一条消息
+ * 开始计时，很多人先随手发一句 hi / test 把窗口开起来，之后不再回这个会话。用户在页面上勾选后，
+ * 主进程把**用户只写过一条消息的新会话**的那一条交给模型判断是不是这种随手一句；判中的在页面上
+ * 不列、不勾（与筛选藏起来的一样不导）。接着聊过的会话不送去判。
+ *
+ * 默认不勾：它要调模型，花的是用户的额度。
+ */
+export interface ImportGreetingCheckPlan {
+  /** 会被送去判的会话数（新会话里用户只写过一条消息的） */
+  candidates: number;
+  /**
+   * 会用的模型：设置里的子会话模型（from = sub-session），没设就是导入的兜底模型
+   * （from = default）；null = 一个可用模型都没有
+   */
+  model: (ImportModelRef & { from: "sub-session" | "default" }) | null;
+}
+
+/** `import:check-greetings` 的请求与扫描同形：只带来源，候选由主进程按同样的来源重扫得出。 */
+export type ImportGreetingCheckInput = ImportScanInput;
+
+export interface ImportGreetingCheckResult {
+  /** 判为「只是随手一句」的会话，按 sourceFile（与执行请求的勾选同一个键） */
+  greetingOnly: string[];
+  /** 判了的条数（候选数） */
+  checked: number;
+  /** 其中问了模型的条数：整条就是 hi / test 这类明摆着的直接判中，不问模型 */
+  asked: number;
+  model: ImportModelRef;
 }
 
 /** 执行阶段一条会话的结果。 */

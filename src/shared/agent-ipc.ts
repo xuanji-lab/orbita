@@ -135,6 +135,11 @@ export const ipcChannels = {
   importScan: "import:scan",
   /** 执行导入（入参 ImportRunInput）：主进程重新扫描，按用户的选择与去向落盘（不接收计划，理由见 shared/import.ts） */
   importRun: "import:run",
+  /**
+   * 迁移的可选检查（入参 ImportGreetingCheckInput）：用子会话模型判断哪些新会话只是随手发的一句
+   * hi / test（返回 ImportGreetingCheckResult）。只判断、不落盘
+   */
+  importCheckGreetings: "import:check-greetings",
   /** 中心存储里的全部 skill（含没链进任何集合的） */
   skillList: "skill:list",
   /** 把 skill 链进一个集合（global 或某个 workspace）；互斥规则见 SkillScope */
@@ -428,6 +433,18 @@ export type AgentCommand =
        */
       model?: { provider: ProviderSecrets; modelId: string };
     }
+  | {
+      /**
+       * 迁移的「只说了句 hi / test」检查：messages 是一批会话各自唯一的那条用户消息（主进程已截短），
+       * 结果经 `greetingsClassified` 事件按 requestId 回传。独立的小调用，不开会话、不落盘。
+       * 模型与密钥面由主进程解好再发（同 generateTitle 的 model）。
+       */
+      type: "classifyGreetings";
+      requestId: string;
+      provider: ProviderSecrets;
+      modelId: string;
+      messages: string[];
+    }
   | { type: "abort"; sessionId: string }
   | {
       /** 立即发送排队中的某一条：abort 当前轮（含正在跑的工具调用）→ 这条作为新一轮 submit */
@@ -713,6 +730,11 @@ export type AgentEvent =
    * 侧栏保留首句截断。
    */
   | { type: "title"; sessionId: string; title: string }
+  /**
+   * `classifyGreetings` 的回执：throwaway 是判为随手一句的消息下标（对应命令里的 messages）；
+   * 调用失败或回复读不懂时 throwaway 为 null、error 写原因。
+   */
+  | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   /**
    * 会话内模型切换成功（C-4 的 `setModel` 命令翻译而来）。主进程落 meta
    * （providerId / modelId——分支继承与重开恢复都读它）并转给 renderer 对齐

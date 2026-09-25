@@ -30,6 +30,7 @@ import {
   probeOpencode,
   probeProma,
   runImport,
+  scanGreetingCandidates,
   scanImport,
   selectPlan,
   type RunImporterDeps,
@@ -1624,6 +1625,22 @@ describe("Claude Code 来源", () => {
     assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["lonely", "unsupported-format"]]);
   });
 
+  test("「只随手发了一句」检查的候选：用户只写过一条的；接着聊过的不算；扫描本身照常列出", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeClaudeCodeSession("c-hi", repo, ["hi"]);
+    await writeClaudeCodeSession("c-test", repo, ["Test."]);
+    await writeClaudeCodeSession("c-hi-then-work", repo, ["hi", "帮我看下构建为什么挂了"]);
+    const model = { providerId: "kimi", modelId: "kimi-k3", from: "sub-session" as const };
+    const env = ccDeps({ greetingModel: model });
+    const report = await scanImport(env, [], ["claude-code"]);
+    assert.equal(report.plan.length, 3);
+    assert.deepEqual(report.greetingCheck, { candidates: 2, model });
+    const candidates = await scanGreetingCandidates(env, ["claude-code"]);
+    assert.deepEqual([...candidates.values()].sort(), ["Test.", "hi"]);
+    assert.ok([...candidates.keys()].every((file) => file.endsWith("c-hi.jsonl") || file.endsWith("c-test.jsonl")));
+  });
+
   test("探测：会话根目录在不在；paths 列出扫描会读的两处", async () => {
     const found = await probeClaudeCode({ projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") });
     assert.equal(found.found, true);
@@ -1776,6 +1793,15 @@ describe("Kimi Code 来源", () => {
     assert.deepEqual(again.skipped.map((item) => item.reason), ["already-imported"]);
   });
 
+  test("「只随手发了一句」的候选：注入不算用户说的话", async () => {
+    const wire = await writeKimiSession("wd_home", "session_t", { title: "New Session", cwd: home, createdAt: 1000 }, [
+      userLine("<system-reminder>date</system-reminder>", { kind: "injection", variant: "date_change" }),
+      ...exchange("test", "Test received."),
+    ]);
+    const candidates = await scanGreetingCandidates(kimiDeps(), ["kimi-code"]);
+    assert.deepEqual([...candidates], [[wire, "test"]]);
+  });
+
   test("探测：会话根目录在不在；paths 列出扫描会读的三处", async () => {
     const found = await probeKimiCode(kimiPaths());
     assert.equal(found.found, true);
@@ -1887,6 +1913,12 @@ describe("opencode 来源", () => {
     );
   });
 
+  test("「只随手发了一句」的候选：synthetic 文字不算用户说的话", async () => {
+    writeSession("ses_hi", home, "New session - 2026-01-17T07:10:22.607Z", ["你好！"]);
+    const candidates = await scanGreetingCandidates(ocDeps(), ["opencode"]);
+    assert.deepEqual([...candidates], [[`${dbFile}#ses_hi`, "你好！"]]);
+  });
+
   test("探测：库在不在；paths 列出库与配置", async () => {
     const found = await probeOpencode(paths());
     assert.equal(found.found, true);
@@ -1965,5 +1997,30 @@ describe("MCP servers 随扫描与执行走", () => {
     const run = await runImport(env, { sources: ["claude-code"], sessions: new Set(), destinations: [], mcp: new Set(["search", "mine"]) });
     assert.equal(run.mcpImported, 1);
     assert.deepEqual(added, ["search:off"]);
+  });
+});
+
+describe("Proma：「只随手发了一句」检查的候选", () => {
+  test("pi 会话：只有一句 hi 的是候选；hi 之后接着聊的不是；导过的不是", async () => {
+    const hi = await writePiSession("2026-09-01T00-00-00-000Z_hi0-000000000000001.jsonl", "/tmp/p");
+    await writeFile(hi, (await readFile(hi, "utf8")).replace("第一条用户消息", "hi"));
+    const more = await writePiSession("2026-09-01T00-01-00-000Z_hi1-000000000000002.jsonl", "/tmp/p", [
+      {
+        type: "message",
+        id: "e3",
+        parentId: "e2",
+        timestamp: "2026-09-01T00:00:03.000Z",
+        message: { role: "user", content: [{ type: "text", text: "帮我整理一下这周的笔记" }], timestamp: 1780000003000 },
+      },
+    ]);
+    await writeFile(more, (await readFile(more, "utf8")).replace("第一条用户消息", "hi"));
+    await writeIndex([
+      { id: "only-hi", title: "hi", piSessionFile: hi, createdAt: 1, updatedAt: 2 },
+      { id: "hi-then-more", title: "整理笔记", piSessionFile: more, createdAt: 3, updatedAt: 4 },
+    ]);
+    const report = await scanImport(deps());
+    assert.deepEqual(report.plan.map((item) => item.sourceId).sort(), ["hi-then-more", "only-hi"]);
+    assert.equal(report.greetingCheck.candidates, 1);
+    assert.deepEqual([...(await scanGreetingCandidates(deps(), ["proma"]))], [[hi, "hi"]]);
   });
 });

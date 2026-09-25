@@ -30,7 +30,7 @@ import { AgentHost } from "./host.ts";
  * 按 id 取 provider 并装配成给 agent 进程的完整载荷（含明文 key）。
  * create 与 setModel 共用——「能不能用某个 provider」两条路必须同一套校验与报错。
  */
-async function resolveProviderSecrets(
+export async function resolveProviderSecrets(
   providers: ProviderStore,
   providerId: string,
 ): Promise<ProviderSecrets> {

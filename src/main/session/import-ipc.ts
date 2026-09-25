@@ -14,6 +14,8 @@ import {
   parseImportRunInput,
   parseImportScanInput,
   type ImportDetectResult,
+  type ImportGreetingCheckResult,
+  type ImportModelRef,
   type ImportRunReport,
   type ImportScanReport,
 } from "../../shared/import.ts";
@@ -22,6 +24,7 @@ import type { SessionStore } from "./store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { McpStore } from "../mcp/store.ts";
+import { findGreetingOnly } from "./greeting-only.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
 import {
   emptyScanReport,
@@ -31,6 +34,7 @@ import {
   probeOpencode,
   probeProma,
   runImport,
+  scanGreetingCandidates,
   scanImport,
   type ClaudeCodePaths,
   type ImporterDeps,
@@ -51,6 +55,8 @@ export function registerImportIpc(
   mcp: McpStore,
   /** mcp.json 改完之后让运行时重读（与 MCP 面板加 server 同一个回调） */
   reloadMcp: () => Promise<void>,
+  /** 用指定模型判一批消息哪些是随手一句（agent 进程的 classifyGreetings），回判中的下标 */
+  classifyGreetings: (model: ImportModelRef, messages: string[]) => Promise<number[]>,
 ): void {
   async function deps(): Promise<ImporterDeps> {
     const [providerList, appSettings] = await Promise.all([providers.list(), settings.read()]);
@@ -69,6 +75,13 @@ export function registerImportIpc(
     if (fallback === undefined) {
       throw new Error("No registered model — configure a provider before importing");
     }
+    // 「只随手发了一句」检查用子会话模型（它就是给这类后台小活的）；没设或它的 provider 已删，
+    // 用上面的兜底模型——页面上写明用的是哪一个
+    const sub = appSettings.subSessionModel;
+    const greetingModel =
+      sub !== undefined && registered.some((m) => m.providerId === sub.providerId && m.modelId === sub.modelId)
+        ? { ...sub, from: "sub-session" as const }
+        : { ...fallback, from: "default" as const };
     return {
       promaRoot: joinPromaRoot(),
       // Proma 数据根迁移史：.proma → .proma-dev，索引里仍有条目指向旧根（本机实测
@@ -88,6 +101,7 @@ export function registerImportIpc(
       ledgerFile,
       registeredModels: registered,
       fallbackModel: fallback,
+      greetingModel,
       newId: randomUUID,
     };
   }
@@ -109,6 +123,20 @@ export function registerImportIpc(
     if (input.sources.length === 0) return emptyScanReport();
     return scanImport(await deps(), [], input.sources);
   });
+  ipcMain.handle(
+    ipcChannels.importCheckGreetings,
+    async (_event, raw: unknown): Promise<ImportGreetingCheckResult> => {
+      const input = parseImportScanInput(raw);
+      const environment = await deps();
+      const model = environment.greetingModel;
+      if (model === undefined || model === null) throw new Error("No model to run the check with");
+      const ref = { providerId: model.providerId, modelId: model.modelId };
+      if (input.sources.length === 0) return { greetingOnly: [], checked: 0, asked: 0, model: ref };
+      const candidates = await scanGreetingCandidates(environment, input.sources);
+      const found = await findGreetingOnly(candidates, (messages) => classifyGreetings(ref, messages));
+      return { greetingOnly: found.greetingOnly, checked: candidates.size, asked: found.asked, model: ref };
+    },
+  );
   ipcMain.handle(ipcChannels.importRun, async (_event, raw: unknown): Promise<ImportRunReport> => {
     const input = parseImportRunInput(raw);
     if (input.sources.length === 0) {

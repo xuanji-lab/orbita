@@ -68,11 +68,12 @@ function report(overrides: Partial<ImportScanReport>): ImportScanReport {
     lastImportAt: null,
     skills: [],
     mcp: [],
+    greetingCheck: { candidates: 0, model: null },
     ...overrides,
   };
 }
 
-const EMPTY_GROUPED: GroupedSessions = { groups: [], changed: [], hidden: 0, totalBySource: {}, total: 0 };
+const EMPTY_GROUPED: GroupedSessions = { groups: [], changed: [], hidden: 0, leftOut: 0, totalBySource: {}, total: 0 };
 
 function summary(overrides: Partial<ImportSummary>): ImportSummary {
   return {
@@ -208,7 +209,7 @@ describe("migration-page · Sessions", () => {
         orphanedSubSessions: 1,
         lastImportAt: new Date(2026, 8, 25, 0, 9).getTime(),
       }),
-      { ...EMPTY_GROUPED, hidden: 9 },
+      { ...EMPTY_GROUPED, hidden: 9, leftOut: 3 },
       { count: 5, models: ["a", "b", "c", "d"], fallbackModel: "glm-5.3" },
       NOW,
     );
@@ -216,14 +217,15 @@ describe("migration-page · Sessions", () => {
       facts.map((fact) => [fact.kind, fact.count, fact.label]),
       [
         ["hidden", 9, "hidden"],
+        ["greeting", 3, "only said hi"],
         ["fallback", 5, "open on glm-5.3"],
         ["orphaned", 1, "listed on their own"],
         ["already", 2, "already imported"],
         ["cannot", 5, "can't import"],
       ],
     );
-    assert.match(facts[1]!.tip, /\(a, b, c, …\)/);
-    assert.match(facts[3]!.tip, /last import 09-25 00:09$/);
+    assert.match(facts[2]!.tip, /\(a, b, c, …\)/);
+    assert.match(facts[4]!.tip, /last import 09-25 00:09$/);
   });
 });
 

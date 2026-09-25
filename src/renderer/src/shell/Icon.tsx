@@ -62,6 +62,7 @@ import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off
 import pin from "../../../../Orbita Design System/assets/icons/lucide/pin.svg?raw";
 import plug from "../../../../Orbita Design System/assets/icons/lucide/plug.svg?raw";
 import power from "../../../../Orbita Design System/assets/icons/lucide/power.svg?raw";
+import messageSquareDashed from "../../../../Orbita Design System/assets/icons/lucide/message-square-dashed.svg?raw";
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
 import messagesSquare from "../../../../Orbita Design System/assets/icons/lucide/messages-square.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
@@ -146,6 +147,7 @@ const ICONS = {
   "list-todo": listTodo,
   lock,
   "message-square": messageSquare,
+  "message-square-dashed": messageSquareDashed,
   "messages-square": messagesSquare,
   minus,
   "panel-left": panelLeft,

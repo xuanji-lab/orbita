@@ -63,6 +63,7 @@ function report(plan: ImportPlanItem[], newWorkspaceIds: string[] = []): ImportS
     lastImportAt: null,
     skills: [],
     mcp: [],
+    greetingCheck: { candidates: 0, model: null },
   };
 }
 
@@ -112,6 +113,16 @@ describe("groupSessions", () => {
       narrowed.groups.map((group) => group.folder),
       ["/repo/b"],
     );
+  });
+
+  test("「只随手发了一句」判中的：不列、不算进 hidden，单独计数；执行勾选里自然没有它们", () => {
+    const hi = item({ folder: "/repo/a", sourceFile: "/src/hi.jsonl" });
+    const real = item({ folder: "/repo/a", sourceFile: "/src/real.jsonl" });
+    const grouped = groupSessions(report([hi, real]), DEFAULT_FILTERS, NOW, new Set(["/src/hi.jsonl"]));
+    assert.equal(grouped.leftOut, 1);
+    assert.equal(grouped.hidden, 0);
+    assert.deepEqual(grouped.groups[0]?.rows.map((row) => row.item.sourceFile), ["/src/real.jsonl"]);
+    assert.deepEqual(selectedSourceFiles(grouped, new Set(["/src/hi.jsonl", "/src/real.jsonl"])), ["/src/real.jsonl"]);
   });
 });
 
