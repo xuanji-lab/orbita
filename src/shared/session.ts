@@ -12,6 +12,7 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -346,7 +347,9 @@ export interface SessionDetail {
  * 否则同一条会话在侧栏和标题栏会显示两个名字。
  */
 export function deriveSessionTitle(text: string): string {
-  const line = text.trim().split("\n")[0]?.trim() ?? "";
+  // 引用块不是用户自己说的话：剥掉再取首行，否则标题是一行 `<quoted_context …>`。
+  // 标题 / 最近提问 / 渲染层给当前会话算标题都走这里，一处剥全处生效
+  const line = withoutQuotes(text).trim().split("\n")[0]?.trim() ?? "";
   if (line === "") return "";
   return line.length > SESSION_TITLE_MAX ? `${line.slice(0, SESSION_TITLE_MAX)}…` : line;
 }
@@ -593,7 +596,20 @@ export function transcriptToMarkdown(
     }
     const body: string[] = [];
     for (const block of item.content) {
-      if (block.type === "text") body.push(block.text.trim());
+      if (block.type === "text" && item.role === "user") {
+        // 用户消息里的引用块导成引用段落：存档给人读，XML 标签是给模型的
+        const { quotes, text } = parseQuotedMessage(block.text);
+        for (const quote of quotes) {
+          body.push(
+            quote.text
+              .trim()
+              .split("\n")
+              .map((line) => `> ${line}`)
+              .join("\n"),
+          );
+        }
+        if (text.trim() !== "") body.push(text.trim());
+      } else if (block.type === "text") body.push(block.text.trim());
       else if (block.type === "thinking") {
         // 用引用块：读起来是「旁白」，而不是它说出口的话
         body.push(

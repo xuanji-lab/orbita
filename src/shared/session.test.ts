@@ -584,3 +584,19 @@ describe("parseSessionMeta 的 stats 字段", () => {
     strictEqual(meta?.stats, null);
   });
 });
+
+describe("引用块不进标题与导出正文", () => {
+  const quoted =
+    '<quoted_context source="agent-history" label="x" message_id="m" role="assistant" turn="1">\n被引用的话\n</quoted_context>\n\n我的问题';
+
+  it("标题取用户自己的话，不是引用标签", () => {
+    strictEqual(deriveSessionTitle(quoted), "我的问题");
+    deepStrictEqual(pushRecentQuery([], quoted), ["我的问题"]);
+  });
+
+  it("导出时引用成为引用段落", () => {
+    const md = transcriptToMarkdown([{ id: "u", role: "user", content: [{ type: "text", text: quoted }], timestamp: 1 }]);
+    match(md, /> 被引用的话\n\n我的问题/);
+    doesNotMatch(md, /quoted_context/);
+  });
+});
