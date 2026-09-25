@@ -1,4 +1,5 @@
 import { Icon, type IconName } from "./Icon";
+import { useT } from "../locale.ts";
 
 /**
  * 右图标条，32px，**常驻**（首页也可达）。与左栏同款「无自己的面」：直接坐在
@@ -54,6 +55,7 @@ export function RightRail(props: {
    */
   subSessions: { count: number } | null;
 }) {
+  const t = useT();
   return (
     <aside
       style={{
@@ -89,33 +91,33 @@ export function RightRail(props: {
       >
         <RailEntryButton
           icon="folder"
-          label="Files"
+          label={t.rail.files}
           lit={props.panel === "files"}
           onClick={() => props.onPanel(props.panel === "files" ? null : "files")}
         />
       </span>
       <RailEntryButton
         icon="book-open"
-        label="Skills"
+        label={t.rail.skills}
         lit={props.panel === "skills"}
         onClick={() => props.onPanel(props.panel === "skills" ? null : "skills")}
       />
       <RailEntryButton
         icon="plug"
-        label="MCP servers"
+        label={t.rail.mcp}
         lit={props.panel === "mcp"}
         onClick={() => props.onPanel(props.panel === "mcp" ? null : "mcp")}
       />
       <RailEntryButton
         icon="panel-right"
-        label="辅助对话 Ctrl+Alt+D"
+        label={t.rail.sideChat}
         lit={props.panel === "drawer"}
         onClick={() => props.onPanel(props.panel === "drawer" ? null : "drawer")}
       />
       {props.subSessions !== null && (
         <RailEntryButton
           icon="git-fork"
-          label={`Sub-sessions (${props.subSessions.count})`}
+          label={t.rail.subSessions(props.subSessions.count)}
           lit={props.panel === "subsessions"}
           onClick={() => props.onPanel(props.panel === "subsessions" ? null : "subsessions")}
         />
@@ -123,7 +125,7 @@ export function RightRail(props: {
       {props.channelColumn !== null && (
         <RailEntryButton
           icon="messages-square"
-          label="Sub-session channels"
+          label={t.rail.channels}
           lit={props.channelColumn.open}
           onClick={props.channelColumn.onToggle}
         />

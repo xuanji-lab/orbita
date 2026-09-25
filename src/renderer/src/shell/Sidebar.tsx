@@ -25,6 +25,8 @@ import {
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
+import { useT } from "../locale.ts";
+import type { Messages } from "../messages-en.ts";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
 export type Overlay = "settings" | null;
@@ -86,18 +88,12 @@ function filterEmptyText(
   status: StatusFilter,
   starredOnly: boolean,
   hasTodosOnly: boolean,
+  t: Messages,
 ): string {
-  if (hasTodosOnly)
-    return "No task has open carryover items. Wrap one up to collect them here.";
-  if (status === "active")
-    return starredOnly
-      ? "No active starred tasks. Clear the Starred filter to see the rest."
-      : "No active tasks right now — everything is done.";
-  if (status === "done")
-    return starredOnly
-      ? "No starred tasks done yet."
-      : "No done tasks yet. Mark a task done from its menu to find it here.";
-  return "No starred tasks yet. Hover a task and click its star to find it here.";
+  if (hasTodosOnly) return t.sidebar.emptyHasTodos;
+  if (status === "active") return starredOnly ? t.sidebar.emptyActiveStarred : t.sidebar.emptyActive;
+  if (status === "done") return starredOnly ? t.sidebar.emptyDoneStarred : t.sidebar.emptyDone;
+  return t.sidebar.emptyStarred;
 }
 
 /**
@@ -136,6 +132,7 @@ export function Sidebar(props: {
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
 }) {
+  const t = useT();
   const { session } = props;
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
@@ -341,10 +338,10 @@ export function Sidebar(props: {
       >
         {/* 顶栏仍兼窗口拖拽区：48px 里没有 logo 的位置 */}
         <div className="titlebar" style={{ height: 34, width: "100%" }} />
-        <RailButton icon="panel-left" title="Expand sidebar" onClick={() => setCollapsed(false)} />
+        <RailButton icon="panel-left" title={t.sidebar.expand} onClick={() => setCollapsed(false)} />
         <RailButton
           icon="plus"
-          title="New task"
+          title={t.common.newTask}
           accent
           onClick={startNewTask}
         />
@@ -390,8 +387,8 @@ export function Sidebar(props: {
       >
         orbita
         <IconButton
-          label="Collapse sidebar"
-          title="Collapse to the icon rail"
+          label={t.sidebar.collapse}
+          title={t.sidebar.collapseTip}
           size={24}
           onClick={() => setCollapsed(true)}
           style={{ marginInlineStart: "auto", color: "var(--color-text-tertiary)" }}
@@ -402,10 +399,10 @@ export function Sidebar(props: {
 
       <div role="tablist" style={{ display: "flex", gap: 4 }}>
         <ModeChip icon="bot" active>
-          Agent mode
+          {t.sidebar.agentMode}
         </ModeChip>
-        <ModeChip icon="workflow" disabled title="Orchestration mode (planned)">
-          Orchestrate
+        <ModeChip icon="workflow" disabled title={t.sidebar.orchestratePlanned}>
+          {t.sidebar.orchestrate}
         </ModeChip>
       </div>
 
@@ -433,7 +430,7 @@ export function Sidebar(props: {
         }}
       >
         <Icon name="plus" size={16} />
-        New task
+        {t.common.newTask}
       </button>
 
       {/**
@@ -451,47 +448,47 @@ export function Sidebar(props: {
             icon="list"
             compact={filterCompact}
             active={statusFilter === "all"}
-            title="All tasks"
+            title={t.sidebar.filterAllTip}
             onClick={() => setStatusFilter("all")}
           >
-            All
+            {t.sidebar.filterAll}
           </Chip>
           <Chip
             icon="play"
             compact={filterCompact}
             active={statusFilter === "active"}
-            title="Tasks still in progress"
+            title={t.sidebar.filterActiveTip}
             onClick={() => setStatusFilter("active")}
           >
-            Active
+            {t.sidebar.filterActive}
           </Chip>
           <Chip
             icon="check"
             compact={filterCompact}
             active={statusFilter === "done"}
-            title="Completed tasks"
+            title={t.sidebar.filterDoneTip}
             onClick={() => setStatusFilter("done")}
           >
-            Done
+            {t.sidebar.filterDone}
           </Chip>
           <Chip
             icon="star"
             compact={filterCompact}
             active={starredOnly}
-            title="Show starred tasks only"
+            title={t.sidebar.filterStarredTip}
             onClick={() => setStarredOnly((value) => !value)}
           >
-            Starred
+            {t.sidebar.filterStarred}
           </Chip>
           {/* 灯泡 = 「这条会话还留着 idea / 没办完的事」（wafo 2026-09-22 裁决） */}
           <Chip
             icon="lightbulb"
             compact={filterCompact}
             active={hasTodosOnly}
-            title="Show tasks with open carryover items only"
+            title={t.sidebar.filterTodosTip}
             onClick={() => setHasTodosOnly((value) => !value)}
           >
-            Has todos
+            {t.sidebar.filterTodos}
           </Chip>
         </div>
       )}
@@ -514,15 +511,15 @@ export function Sidebar(props: {
             */}
             <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
               <IconButton
-                label="Back to tasks"
-                title="Back to the task list"
+                label={t.sidebar.backToTasks}
+                title={t.sidebar.backToTasksTip}
                 size={20}
                 onClick={() => props.onShowArchived(false)}
                 style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
               >
                 <Icon name="chevron-left" size={13} strokeWidth={1.8} />
               </IconButton>
-              <NodeLabel>Archived</NodeLabel>
+              <NodeLabel>{t.sidebar.archived}</NodeLabel>
             </div>
             {archived.map((meta) => (
               <SessionRow
@@ -568,12 +565,12 @@ export function Sidebar(props: {
           />
         ) : settingsOpen ? (
           <>
-            <NodeLabel>Settings</NodeLabel>
+            <NodeLabel>{t.common.settings}</NodeLabel>
             {SETTINGS_TABS.map((tab) => (
               <NavRow
                 key={tab.id}
                 icon={tab.icon}
-                label={tab.label}
+                label={t.settings.tabs[tab.id]}
                 active={props.settingsTab === tab.id}
                 onClick={() => props.onSettingsTab(tab.id)}
               />
@@ -581,27 +578,27 @@ export function Sidebar(props: {
           </>
         ) : filtered && scoped.length === 0 ? (
           /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
-          <Empty>{filterEmptyText(statusFilter, starredOnly, hasTodosOnly)}</Empty>
+          <Empty>{filterEmptyText(statusFilter, starredOnly, hasTodosOnly, t)}</Empty>
         ) : (
           <>
             {(!filtered || workspaceMatches.length > 0) && (
               <>
                 <NodeHeader
-                  label="Workspaces"
-                  addLabel="Add a workspace"
+                  label={t.sidebar.workspaces}
+                  addLabel={t.sidebar.addWorkspace}
                   addIcon="folder-plus"
                   addMenu={[
                     // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
                     // 两种添法在菜单里各占一个符号
                     {
                       id: "new-workspace",
-                      label: "New workspace…",
+                      label: t.sidebar.newWorkspace,
                       icon: "plus",
                       onSelect: () => setCreatingWorkspace(true),
                     },
                     {
                       id: "add-folder",
-                      label: "Add a folder…",
+                      label: t.sidebar.addFolder,
                       icon: "folder-plus",
                       onSelect: session.addWorkspace,
                     },
@@ -634,7 +631,7 @@ export function Sidebar(props: {
                     <InlineName
                       editing
                       value=""
-                      placeholder="Workspace name"
+                      placeholder={t.sidebar.workspaceName}
                       onCommit={(name) => {
                         setCreatingWorkspace(false);
                         const trimmed = name.trim();
@@ -652,9 +649,9 @@ export function Sidebar(props: {
                   <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />
                 )}
                 {workspaceList.body === "loading" ? (
-                  <Empty>Loading workspaces…</Empty>
+                  <Empty>{t.sidebar.loadingWorkspaces}</Empty>
                 ) : workspaceList.body === "empty" ? (
-                  <Empty>No workspace yet. Add the folder the agent may read.</Empty>
+                  <Empty>{t.sidebar.noWorkspace}</Empty>
                 ) : workspaceList.body === "list" ? (
                   workspaceMatches.map((workspace) => (
                     <WorkspaceGroup
@@ -699,8 +696,8 @@ export function Sidebar(props: {
                   两个节点的区别，也是「+ New task」与工作区那个「+」的区别。
                 */}
                 <NodeHeader
-                  label="Tasks"
-                  addLabel="New task"
+                  label={t.sidebar.tasks}
+                  addLabel={t.common.newTask}
                   addIcon="plus"
                   onAdd={() => {
                     // 同上：新任务落 TASKS，先展开再建
@@ -718,9 +715,9 @@ export function Sidebar(props: {
                   <ListError message={sessionList.error} onRetry={session.reloadSessions} />
                 )}
                 {sessionList.body === "loading" ? (
-                  <Empty>Loading tasks…</Empty>
+                  <Empty>{t.sidebar.loadingTasks}</Empty>
                 ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
-                  <Empty>No task yet. The one you start lands here.</Empty>
+                  <Empty>{t.sidebar.noTask}</Empty>
                 ) : tasksFolded ? null : (
                   <>
                     {looseVisible.map((meta) => (
@@ -759,7 +756,7 @@ export function Sidebar(props: {
     <span
       onPointerDown={startResize}
       onDoubleClick={() => props.onWidthCommit(SIDEBAR_WIDTH_DEFAULT)}
-      title="Drag to resize · double-click to reset"
+      title={t.common.dragResize}
       style={{
         position: "absolute",
         left: `calc(var(--space-3) + ${width}px + var(--space-3) - 6px)`,
@@ -799,6 +796,7 @@ function WorkspaceGroup(props: {
   onRemove: () => void;
   onOpen: (id: string) => void;
 }) {
+  const t = useT();
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   // 超过预览数只列前 N 条，其余收进「Show N more」；点了才全量铺开
@@ -830,7 +828,7 @@ function WorkspaceGroup(props: {
         {/* 空组没有可折的东西，开关就不摆——一个点了什么都不发生的开关比没有更吵 */}
         {props.sessions.length > 0 ? (
           <IconButton
-            label={props.folded ? "Expand group" : "Collapse group"}
+            label={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
             ariaExpanded={!props.folded}
             size={20}
             onClick={props.onToggleFold}
@@ -856,7 +854,7 @@ function WorkspaceGroup(props: {
 
         {editing === null ? (
           <strong
-            title={`${props.workspace.path} · double-click to rename`}
+            title={t.sidebar.workspacePathTip(props.workspace.path)}
             onDoubleClick={() => setEditing(props.workspace.name)}
             style={{
               minWidth: 0,
@@ -900,11 +898,11 @@ function WorkspaceGroup(props: {
         )}
 
         <IconButton
-          label={armed ? "Remove from the list? Click again." : "Remove from the list"}
+          label={armed ? t.sidebar.removeArmed : t.sidebar.remove}
           title={
             armed
-              ? "Click again to remove. The folder and its tasks stay — the tasks move to Tasks."
-              : "Remove from the list. The folder on disk is not touched."
+              ? t.sidebar.removeArmedTip
+              : t.sidebar.removeTip
           }
           size={20}
           onClick={() => (armed ? props.onRemove() : setArmed(true))}
@@ -919,7 +917,7 @@ function WorkspaceGroup(props: {
           <Icon name="trash-2" size={11} />
         </IconButton>
 
-        <IconButton label="New task in this workspace" size={26} onClick={props.onNewTask}>
+        <IconButton label={t.sidebar.newTaskInWorkspace} size={26} onClick={props.onNewTask}>
           <Icon name="plus" size={14} />
         </IconButton>
       </div>
@@ -1076,10 +1074,11 @@ function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () 
  * 点一下收回最近的 N 条（排序保证前 N 条就是最近 N 条，置顶恒在最前）。
  */
 function ShowAllRow(props: { full: boolean; hidden: number; onClick: () => void }) {
+  const t = useT();
   return (
     <NavRow
       icon={props.full ? "chevron-up" : "chevron-down"}
-      label={props.full ? "Show less" : `Show ${props.hidden} more`}
+      label={props.full ? t.sidebar.showLess : t.sidebar.showMore(props.hidden)}
       active={false}
       tone="var(--color-text-tertiary)"
       onClick={props.onClick}
@@ -1180,6 +1179,7 @@ function SessionRow(props: {
   active: boolean;
   onClick: () => void;
 }) {
+  const t = useT();
   const { meta, session } = props;
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
@@ -1201,7 +1201,7 @@ function SessionRow(props: {
    * 行首状态槽：running > failed > pinned > 空。优先级与理由在
    * `row-status.ts`（纯函数 + 测试）。`null` = 这一行没什么可说，槽留空。
    */
-  const status = rowStatusIcon({ running, failed, pinned: meta.pinned === true });
+  const status = rowStatusIcon({ running, failed, pinned: meta.pinned === true }, t);
   // 这条会话的未办遗留数（行尾角标，与筛选同口径）
   const openTodos = openTodoCount(session.carryovers, meta.id);
   // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）。子会话不参与
@@ -1242,10 +1242,10 @@ function SessionRow(props: {
   const items: MenuItem[] =
     step === "delete"
       ? [
-          { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: exitDeleteStep },
+          { id: "cancel", label: t.common.cancel, icon: "x", keepOpen: true, onSelect: exitDeleteStep },
           {
             id: "confirm",
-            label: "Delete permanently",
+            label: t.sidebar.deletePermanently,
             // 后果说清楚才能删：子会话数摆在文件数前面——它更容易被忽略，也是
             // 删除唯一会连带删掉别的会话的后果。走 hint 而不是拼进 label：菜单
             // 最宽 200px，「N sub-sessions · M files」这类全称经常放不下（拼进去
@@ -1255,8 +1255,8 @@ function SessionRow(props: {
               ? {}
               : {
                   hint: [
-                    childCount > 0 ? `+${childCount} sub` : null,
-                    workbenchFiles === null ? null : `+${workbenchFiles} file${workbenchFiles === 1 ? "" : "s"}`,
+                    childCount > 0 ? t.sidebar.deleteHintSub(childCount) : null,
+                    workbenchFiles === null ? null : t.sidebar.deleteHintFiles(workbenchFiles),
                   ]
                     .filter((part): part is string => part !== null)
                     .join(" · "),
@@ -1275,20 +1275,20 @@ function SessionRow(props: {
              * 与 Delete 同款：菜单内原地换第二组项，不开模态框。不带 danger——
              * 归档不是破坏性动作，只是换个地方放。
              */
-            { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+            { id: "cancel", label: t.common.cancel, icon: "x", keepOpen: true, onSelect: () => setStep("main") },
             {
               id: "confirm",
-              label: "Archive task",
+              label: t.sidebar.archiveTask,
               icon: "archive",
               onSelect: () => session.archiveSession(meta.id, true),
             },
           ]
       : step === "archive-done"
         ? [
-            { id: "cancel", label: "Cancel", icon: "x", keepOpen: true, onSelect: () => setStep("main") },
+            { id: "cancel", label: t.common.cancel, icon: "x", keepOpen: true, onSelect: () => setStep("main") },
             {
               id: "confirm",
-              label: `Archive ${doneCount} done task${doneCount === 1 ? "" : "s"}`,
+              label: t.sidebar.archiveDoneTasks(doneCount),
               icon: "archive",
               onSelect: () => session.archiveDoneSessions(),
             },
@@ -1297,7 +1297,7 @@ function SessionRow(props: {
         ? [
             {
               id: "none",
-              label: "No workspace",
+              label: t.sidebar.noWorkspaceTarget,
               icon: "folder",
               checked: meta.workspaceId === null,
               onSelect: () => session.moveSession(meta.id, null),
@@ -1311,10 +1311,10 @@ function SessionRow(props: {
             })),
           ]
         : [
-            { id: "rename", label: "Rename", icon: "pencil-line", onSelect: () => setEditing(true) },
+            { id: "rename", label: t.common.rename, icon: "pencil-line", onSelect: () => setEditing(true) },
             {
               id: "pin",
-              label: meta.pinned ? "Unpin" : "Pin to top",
+              label: meta.pinned ? t.sidebar.unpin : t.sidebar.pin,
               icon: meta.pinned ? "pin-off" : "pin",
               onSelect: () => session.pinSession(meta.id, !meta.pinned),
             },
@@ -1322,14 +1322,14 @@ function SessionRow(props: {
             // （一次点击，不必开菜单）。同一个动作留两个入口只会让菜单更长、更难扫
             {
               id: "move",
-              label: "Move to…",
+              label: t.sidebar.moveTo,
               icon: "folder",
               keepOpen: true,
               onSelect: () => setStep("move"),
             },
             {
               id: "export",
-              label: "Export as Markdown…",
+              label: t.sidebar.exportMarkdown,
               icon: "download",
               onSelect: () => session.exportSession(meta.id),
             },
@@ -1338,13 +1338,13 @@ function SessionRow(props: {
             meta.archived
               ? {
                   id: "archive",
-                  label: "Unarchive",
+                  label: t.sidebar.unarchive,
                   icon: "archive-restore" as const,
                   onSelect: () => session.archiveSession(meta.id, false),
                 }
               : {
                   id: "archive",
-                  label: "Archive…",
+                  label: t.sidebar.archive,
                   icon: "archive" as const,
                   keepOpen: true,
                   onSelect: () => setStep("archive"),
@@ -1355,7 +1355,7 @@ function SessionRow(props: {
               ? [
                   {
                     id: "archive-done",
-                    label: `Archive all done (${doneCount})…`,
+                    label: t.sidebar.archiveAllDone(doneCount),
                     icon: "archive" as const,
                     keepOpen: true,
                     onSelect: () => setStep("archive-done"),
@@ -1364,7 +1364,7 @@ function SessionRow(props: {
               : []),
             {
               id: "delete",
-              label: "Delete task…",
+              label: t.sidebar.deleteTask,
               icon: "trash-2",
               danger: true,
               keepOpen: true,
@@ -1392,7 +1392,7 @@ function SessionRow(props: {
       ) : (
         <NavRow
           icon={status?.icon ?? null}
-          label={meta.title === "" ? "New task" : meta.title}
+          label={meta.title === "" ? t.common.newTask : meta.title}
           tone={status?.tone}
           spin={status?.spin ?? false}
           iconTitle={status?.label}
@@ -1410,8 +1410,8 @@ function SessionRow(props: {
         与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
       */}
       <IconButton
-        label={meta.starred === true ? "Unstar this task" : "Star this task"}
-        title={meta.starred === true ? "Starred · click to unstar" : "Star this task"}
+        label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
+        title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
         size={20}
         onClick={() => session.starSession(meta.id, meta.starred !== true)}
         className="reveal"
@@ -1433,15 +1433,15 @@ function SessionRow(props: {
         「还差几件」由右边那个灯泡角标单独说。
       */}
       <IconButton
-        label={done ? "Reopen this task" : "Mark this task done"}
+        label={done ? t.sidebar.reopen : t.sidebar.markDone}
         title={
           done
             ? openTodos > 0
-              ? `Done with ${openTodos} open carryover item${openTodos === 1 ? "" : "s"} · click to reopen`
-              : "Done · click to reopen"
+              ? t.sidebar.doneWithTodos(openTodos)
+              : t.sidebar.doneTip
             : idleSuggested
-              ? `Idle for ${IDLE_SUGGEST_DAYS}+ days · mark done?`
-              : "Mark this task done"
+              ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
+              : t.sidebar.markDone
         }
         size={20}
         onClick={() =>
@@ -1465,7 +1465,7 @@ function SessionRow(props: {
       */}
       {done && openTodos > 0 && (
         <span
-          title={`${openTodos} open carryover item${openTodos === 1 ? "" : "s"} left`}
+          title={t.sidebar.openTodosLeft(openTodos)}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -1496,7 +1496,7 @@ function SessionRow(props: {
         panelMaxWidth={240}
         trigger={({ open, toggle }) => (
           <IconButton
-            label="Task actions"
+            label={t.sidebar.taskActions}
             size={20}
             onClick={() => {
               exitDeleteStep();
@@ -1538,6 +1538,7 @@ function CarryoverPanel(props: {
   /** 显式出口：标题行左端的返回键 */
   onBack: () => void;
 }) {
+  const t = useT();
   const groups = groupCarryovers(props.carryovers, props.sessions);
   /**
    * 标题行左端的返回键是本面板的**显式出口**（与 Archived 同款）：出去不该只能
@@ -1546,22 +1547,22 @@ function CarryoverPanel(props: {
   const header = (
     <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
       <IconButton
-        label="Back to tasks"
-        title="Back to the task list"
+        label={t.sidebar.backToTasks}
+        title={t.sidebar.backToTasksTip}
         size={20}
         onClick={props.onBack}
         style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
       >
         <Icon name="chevron-left" size={13} strokeWidth={1.8} />
       </IconButton>
-      <NodeLabel>Carryovers</NodeLabel>
+      <NodeLabel>{t.sidebar.carryovers}</NodeLabel>
     </div>
   );
   if (groups.length === 0) {
     return (
       <>
         {header}
-        <Empty>No carryover items yet. Wrap up a task to collect its loose ends.</Empty>
+        <Empty>{t.sidebar.noCarryovers}</Empty>
       </>
     );
   }
@@ -1583,7 +1584,7 @@ function CarryoverPanel(props: {
             onClick={() => {
               if (group.session !== null) props.onOpenTask(group.session.id);
             }}
-            title={group.session === null ? "The source task was deleted" : "Open the source task"}
+            title={group.session === null ? t.sidebar.sourceDeleted : t.sidebar.openSource}
             style={{
               display: "flex",
               alignItems: "center",
@@ -1614,9 +1615,9 @@ function CarryoverPanel(props: {
             )}
             <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
               {group.session === null
-                ? "Deleted task"
+                ? t.sidebar.deletedTask
                 : group.session.title === ""
-                  ? "New task"
+                  ? t.common.newTask
                   : group.session.title}
             </span>
           </button>
@@ -1651,6 +1652,7 @@ function CarryoverRow(props: {
   onResumeInSource: () => void;
   onJump: () => void;
 }) {
+  const t = useT();
   const { item } = props;
   const done = item.status === "done";
   return (
@@ -1669,7 +1671,7 @@ function CarryoverRow(props: {
         type="checkbox"
         checked={done}
         aria-label={item.title}
-        title={done ? "Reopen this item" : "Mark this item done"}
+        title={done ? t.sidebar.reopenItem : t.sidebar.markItemDone}
         onChange={(event) => props.onSetStatus(item.id, event.target.checked ? "done" : "open")}
         style={{ marginTop: 3, accentColor: "var(--color-accent)" }}
       />
@@ -1712,11 +1714,11 @@ function CarryoverRow(props: {
       */}
       <span style={{ display: "inline-flex", alignItems: "center" }}>
         <IconButton
-          label="Continue with context"
+          label={t.sidebar.continueWithContext}
           title={
             props.canResume
-              ? "Start a new task with this item's context · right-click to continue in the original task"
-              : "Start a new task with this item's context"
+              ? t.sidebar.continueTipResumable
+              : t.sidebar.continueTip
           }
           size={20}
           onClick={props.onResumeNew}
@@ -1737,8 +1739,8 @@ function CarryoverRow(props: {
           需要消息序号→DOM 的定位基建，还没有第二处消费者（TODO，见 CarryoverPanel）。
         */}
         <IconButton
-          label="Jump to the source task"
-          title={props.canJump ? "Open the task this came from" : "The source task was deleted"}
+          label={t.sidebar.jumpToSource}
+          title={props.canJump ? t.sidebar.jumpToSourceTip : t.sidebar.sourceDeleted}
           size={20}
           disabled={!props.canJump}
           onClick={props.onJump}
@@ -1772,6 +1774,7 @@ function Empty(props: { children: React.ReactNode }) {
  * 以为记录丢了；这一行给出原因和一个重试入口，恢复不需要重新找路。
  */
 function ListError(props: { message: string; onRetry: () => void }) {
+  const t = useT();
   return (
     <p
       style={{
@@ -1807,7 +1810,7 @@ function ListError(props: { message: string; onRetry: () => void }) {
           cursor: "pointer",
         }}
       >
-        Retry
+        {t.common.retry}
       </button>
     </p>
   );

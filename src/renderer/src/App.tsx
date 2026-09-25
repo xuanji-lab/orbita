@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
+import { LocaleContext, localeOfTheme, messagesOf } from "./locale.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from "@shared/settings";
@@ -75,7 +76,9 @@ export function App() {
     ...DEFAULT_SETTINGS,
     theme: api.initialTheme ?? DEFAULT_SETTINGS.theme,
   });
-  useTheme(settings.theme);
+  // 界面语言跟主题走（locale.ts）：Manuscript 全中文，其余英文
+  const locale = localeOfTheme(useTheme(settings.theme));
+  const t = messagesOf(locale);
   const refresh = useCallback(async () => {
     try {
       setProviders(await api.provider.list());
@@ -336,8 +339,8 @@ export function App() {
     const intent = session.workspaces.find((w) => w.id === session.workspaceId);
     if (intent !== undefined) session.newTaskIn(intent);
     else session.newTask();
-    session.setDraft("Describe the workflow you want to turn into a skill.");
-  }, [session]);
+    session.setDraft(t.app.skillDraft);
+  }, [session, t]);
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
 
@@ -355,7 +358,7 @@ export function App() {
       ? [
           {
             icon: "list-todo" as const,
-            label: `Carryovers (${openCarryoverCount} open)`,
+            label: t.app.carryoversEntry(openCarryoverCount),
             lit: showCarryovers && overlay === null && !showArchived,
             onClick: () => {
               setShowArchived(false);
@@ -366,7 +369,7 @@ export function App() {
       : []),
     {
       icon: "archive" as const,
-      label: `Archived (${archivedCount})`,
+      label: t.app.archivedEntry(archivedCount),
       lit: showArchived && overlay === null && !showCarryovers,
       onClick: () => {
         setShowCarryovers(false);
@@ -375,13 +378,14 @@ export function App() {
     },
     {
       icon: "settings" as const,
-      label: "Settings",
+      label: t.common.settings,
       lit: overlay === "settings",
       onClick: () => setOverlay(overlay === "settings" ? null : "settings"),
     },
   ];
 
   return (
+    <LocaleContext.Provider value={locale}>
     <div className="app-shell">
       <Titlebar />
       <div className="layer">
@@ -520,6 +524,7 @@ export function App() {
         />
       </div>
     </div>
+    </LocaleContext.Provider>
   );
 }
 

@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from "react";
 import { Icon } from "./Icon";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
+import { useT } from "../locale.ts";
 
 /**
  * 输入框。**跨首页与聊天页是同一个组件、同一个宽度**（R8-01 ②：宽度连续性）——
@@ -42,6 +43,7 @@ export function Composer(props: {
   running?: boolean;
   bottomSlot?: React.ReactNode;
 }) {
+  const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 随内容长高：撤回能把好几条排队消息堆进来，写死两行就只能盲着改。
   // useLayoutEffect 而非 useEffect——量完就改高度，放到绘制后会闪一帧。
@@ -119,8 +121,8 @@ export function Composer(props: {
           type="button"
           className="btn-accent"
           data-tone={stopping ? "danger" : undefined}
-          aria-label={sendable ? "Send" : stopping ? "Stop" : "Send"}
-          title={sendable ? "Send" : stopping ? "Stop this turn" : "Send"}
+          aria-label={sendable ? t.composer.send : stopping ? t.composer.stop : t.composer.send}
+          title={sendable ? t.composer.send : stopping ? t.composer.stopTurn : t.composer.send}
           disabled={!sendable && !stopping}
           onClick={() => (sendable ? props.onSubmit() : props.onStop())}
           style={{
