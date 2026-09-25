@@ -12,6 +12,7 @@ import { Component, memo } from "react";
 import { MdPre } from "./CodeBlock";
 import { closePendingMath } from "./pending-math";
 import { remarkDemoteBoundaryMath } from "./math-guard";
+import { dominantScript } from "./dominant-script";
 
 /**
  * sanitize 白名单：defaultSchema 之上只放行 `<details>`/`<summary>`，其余标签
@@ -62,7 +63,8 @@ export const MarkdownBlock = memo(function MarkdownBlock({
 }) {
   const bubble = variant === "bubble";
   return (
-    <div className={bubble ? "chat-md bubble-md" : "chat-md"}>
+    // data-script：以中文为主还是拉丁为主（dominant-script.ts），Typescript 主题按它换阅读字
+    <div className={bubble ? "chat-md bubble-md" : "chat-md"} data-script={dominantScript(text)}>
       <MarkdownErrorBoundary>
         <ReactMarkdown
           remarkPlugins={bubble ? [remarkGfm, remarkMath, remarkBreaks, remarkDemoteBoundaryMath] : [remarkGfm, remarkMath, remarkDemoteBoundaryMath]}

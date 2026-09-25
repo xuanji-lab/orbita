@@ -14,6 +14,23 @@ import { isSubmitKey } from "./composer-keys.ts";
  * `spacing.css` 的注释说「它首先是玻璃卡，所以吃 --radius-xl」。取后者：
  * 玻璃卡就该有统一标准，一个例外换不来任何东西（2026-08-25 wafo 定）。
  */
+/** 按内容把输入框的高度量好、设上。行高与 padding 从实际样式来（主题会换它们）。 */
+function fitComposerHeight(el: HTMLTextAreaElement): void {
+  // 先塌回 auto 才能量到真实内容高度，否则只涨不落
+  el.style.height = "auto";
+  const computed = getComputedStyle(el);
+  const lineHeight = Number.parseFloat(computed.lineHeight);
+  const padding =
+    Number.parseFloat(computed.paddingTop) + Number.parseFloat(computed.paddingBottom);
+  const { height, scrollable } = composerBoxHeight(
+    el.scrollHeight,
+    Number.isFinite(lineHeight) ? lineHeight : 22,
+    Number.isFinite(padding) ? padding : 0,
+  );
+  el.style.height = `${height}px`;
+  el.style.overflowY = scrollable ? "auto" : "hidden";
+}
+
 export function Composer(props: {
   value: string;
   onChange: (value: string) => void;
@@ -31,20 +48,17 @@ export function Composer(props: {
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (el === null) return;
-    // 先塌回 auto 才能量到真实内容高度，否则只涨不落
-    el.style.height = "auto";
-    const computed = getComputedStyle(el);
-    const lineHeight = Number.parseFloat(computed.lineHeight);
-    const padding =
-      Number.parseFloat(computed.paddingTop) + Number.parseFloat(computed.paddingBottom);
-    const { height, scrollable } = composerBoxHeight(
-      el.scrollHeight,
-      Number.isFinite(lineHeight) ? lineHeight : 22,
-      Number.isFinite(padding) ? padding : 0,
-    );
-    el.style.height = `${height}px`;
-    el.style.overflowY = scrollable ? "auto" : "hidden";
+    fitComposerHeight(el);
   }, [props.value]);
+  // 换主题也要重量：稿纸两档的行高是 24px，浅 / 暗是 22px——只跟着 value 量，切主题后高度
+  // 停在上一档，稿纸的格子会被切掉半行（2026-09-25 实测）。
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (el === null) return;
+    const observer = new MutationObserver(() => fitComposerHeight(el));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
   const disabled = props.disabled === true;
   const running = props.running === true;
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
@@ -65,6 +79,7 @@ export function Composer(props: {
     >
       <textarea
         ref={textareaRef}
+        className="composer-input"
         rows={COMPOSER_MIN_ROWS}
         value={props.value}
         disabled={disabled}
@@ -83,16 +98,13 @@ export function Composer(props: {
         }}
         style={{
           width: "100%",
-          padding: "2px 4px",
           border: 0,
-          background: "transparent",
           // 高度由上面的 layout effect 接管；把手会和自增高打架
           resize: "none",
           overflowY: "hidden",
           outline: "none",
           fontFamily: "var(--font-family-base)",
           fontSize: "var(--font-size-input)",
-          lineHeight: "var(--line-height-input)",
           color: "var(--color-text-primary)",
         }}
       />
