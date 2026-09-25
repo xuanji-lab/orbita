@@ -7,10 +7,6 @@ describe("shouldExitSubview", () => {
     strictEqual(shouldExitSubview(true, 0), true);
   });
 
-  it("Carryovers 面板清空后同样退回主列表（第二个消费者，同一口径）", () => {
-    strictEqual(shouldExitSubview(true, 0), true);
-  });
-
   it("还有内容就留在视图里", () => {
     strictEqual(shouldExitSubview(true, 3), false);
   });

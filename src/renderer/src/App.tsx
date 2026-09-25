@@ -347,26 +347,25 @@ export function App() {
   /**
    * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
    * 首页常驻——它们是应用入口不是会话动作）。点亮判定与互斥规则沿用侧栏
-   * 底部行时代的行为：子视图互斥，设置盖着时谁也不亮。Carryovers 沿用折叠
-   * rail 时代的先例：0 条不渲染入口（Archived 恒渲染，同先例）。
+   * 底部行时代的行为：子视图互斥，设置盖着时谁也不亮。
+   *
+   * 遗留事项入口**常驻**，0 条也在（wafo 2026-09-25）：以前 0 条不渲染，导入的会话
+   * 没走过收尾、一条遗留都没有，这个入口就整个不见了——用户不知道有这个功能，
+   * 也没法确认「现在确实没有遗留」。点进去是面板自己的空态。
    */
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const railEntries: RailEntry[] = [
-    ...(session.carryovers.length > 0
-      ? [
-          {
-            icon: "list-todo" as const,
-            label: t.app.carryoversEntry(openCarryoverCount),
-            lit: showCarryovers && overlay === null && !showArchived,
-            onClick: () => {
-              setShowArchived(false);
-              setShowCarryovers((value) => !value);
-            },
-          },
-        ]
-      : []),
+    {
+      icon: "list-todo" as const,
+      label: t.app.carryoversEntry(openCarryoverCount),
+      lit: showCarryovers && overlay === null && !showArchived,
+      onClick: () => {
+        setShowArchived(false);
+        setShowCarryovers((value) => !value);
+      },
+    },
     {
       icon: "archive" as const,
       label: t.app.archivedEntry(archivedCount),

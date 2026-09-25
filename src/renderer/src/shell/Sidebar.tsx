@@ -239,15 +239,13 @@ export function Sidebar(props: {
   const live = roots.filter((m) => !m.archived);
   const archived = roots.filter((m) => m.archived);
   /**
-   * 子视图空了就自动退回主列表——否则停在一个空视图里，而唯一的出口（底部
-   * 那条行）正好因为 N 为 0 而禁用。判定与理由在 `subview-exit.ts`。
+   * Archived 空了就自动退回主列表——否则停在一个空视图里。判定与理由在
+   * `subview-exit.ts`。遗留事项面板**不**这样：0 条也要能进来看空态（入口常驻，
+   * 见 App.tsx 的 railEntries），它标题旁有自己的返回键。
    */
   useEffect(() => {
     if (shouldExitSubview(props.showArchived, archived.length)) props.onShowArchived(false);
   }, [props.showArchived, props.onShowArchived, archived.length]);
-  useEffect(() => {
-    if (shouldExitSubview(props.showCarryovers, session.carryovers.length)) props.onShowCarryovers(false);
-  }, [props.showCarryovers, props.onShowCarryovers, session.carryovers.length]);
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   // 用 roots.length 不用 session.sessions.length：这里描述的是左栏那份列表

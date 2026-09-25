@@ -1,5 +1,5 @@
 /**
- * 侧栏子视图（Archived / Carryovers）的自动退出判定。
+ * 侧栏 Archived 子视图的自动退出判定。
  *
  * 单独成文件只为**可测**：`node --test` 只加载 `.ts`，判定写在 Sidebar.tsx 里就没法
  * 直接跑——而这条判定正是那个死胡同的所在，它必须有测试守着。
@@ -16,7 +16,8 @@
  * 视图本身就没有停留的理由**：归档为空时该看到的是主列表，不是一句「Nothing archived」。
  * （出口那一侧也一并修了：正在视图里时那条行永不禁用——那时它是「出来」不是「进去」。）
  *
- * 泛化自 Archived 专用的版本：Carryovers 面板是第二个消费者，两处同一个口径。
+ * 遗留事项面板曾是第二个消费者，2026-09-25 起不再自动退出：它的入口改成常驻，
+ * 0 条时点进去就该看到空态（「确实没有遗留」本身是有用的信息），不是被弹回去。
  */
 export function shouldExitSubview(showing: boolean, count: number): boolean {
   return showing && count === 0;
