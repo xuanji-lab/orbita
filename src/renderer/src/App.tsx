@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
-import { LocaleContext, localeOfTheme, messagesOf } from "./locale.ts";
+import { LocaleContext, messagesOf } from "./locale.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from "@shared/settings";
+import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
@@ -75,10 +75,12 @@ export function App() {
   const [settings, setSettings] = useState<AppSettings>({
     ...DEFAULT_SETTINGS,
     theme: api.initialTheme ?? DEFAULT_SETTINGS.theme,
+    // 语言同理（main.tsx 首帧的 <html lang> 也是按它写的）：不对齐的话选了中文的人先看一帧英文
+    ...(api.initialLanguage === null ? {} : { language: api.initialLanguage }),
   });
-  // 界面语言跟主题走（locale.ts）：小学作业全中文，其余英文
-  const resolvedTheme = useTheme(settings.theme);
-  const locale = localeOfTheme(resolvedTheme);
+  // 界面语言：单语主题说了算，双语主题听语言设置（shared 的 effectiveLanguage）
+  const resolvedTheme = useTheme(settings.theme, settings.language);
+  const locale = effectiveLanguage(resolvedTheme, settings.language);
   const t = messagesOf(locale);
   const refresh = useCallback(async () => {
     try {

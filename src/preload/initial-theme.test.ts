@@ -1,6 +1,6 @@
 import { strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { readInitialTheme } from "./initial-theme.ts";
+import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
 
 describe("readInitialTheme", () => {
   it("正常：--orbita-theme= 前缀 + 合法值原样解出", () => {
@@ -20,5 +20,15 @@ describe("readInitialTheme", () => {
 
   it("多个 --orbita-theme= 只取第一个", () => {
     strictEqual(readInitialTheme(["--orbita-theme=light", "--orbita-theme=black"]), "light");
+  });
+});
+
+describe("readInitialLanguage", () => {
+  it("合法值原样解出；缺参数、非法值、空值回 null；多个只取第一个", () => {
+    strictEqual(readInitialLanguage(["/electron", "--orbita-theme=light", "--orbita-language=zh"]), "zh");
+    strictEqual(readInitialLanguage(["--orbita-theme=light"]), null);
+    strictEqual(readInitialLanguage(["--orbita-language=fr"]), null);
+    strictEqual(readInitialLanguage(["--orbita-language="]), null);
+    strictEqual(readInitialLanguage(["--orbita-language=en", "--orbita-language=zh"]), "en");
   });
 });

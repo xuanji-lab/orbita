@@ -30,4 +30,23 @@ describe("gitAttributionGuideline", () => {
     ok(text.startsWith("<orbita-git-attribution>"));
     ok(text.endsWith("</orbita-git-attribution>"));
   });
+
+  it("中文界面：PR 那一行写中文；commit trailer 仍是 git 认得的英文键", () => {
+    const text = gitAttributionGuideline(true, "zh");
+    match(text, /append a single `使用 \[Orbita\]\(https:\/\/github\.com\/XIAOZF99\/orbita\) 制作` line/);
+    match(text, /`Made-with: Orbita` trailer/);
+    match(text, /git only parses ASCII trailer keys/);
+  });
+
+  it("去重认两种写法：中英切换过的仓库里不会一英一中各一行", () => {
+    for (const language of ["en", "zh"] as const) {
+      const text = gitAttributionGuideline(true, language);
+      match(text, /either `Made with \[Orbita\]/);
+      match(text, /`使用 \[Orbita\]/);
+    }
+  });
+
+  it("不传语言就是英文（语言设置之前的行为）", () => {
+    equal(gitAttributionGuideline(true), gitAttributionGuideline(true, "en"));
+  });
 });

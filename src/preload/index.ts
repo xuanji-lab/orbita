@@ -13,7 +13,7 @@ import { settingsApi } from "./api/settings.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
 import { windowApi } from "./api/window.ts";
 import { workspaceApi } from "./api/workspace.ts";
-import { readInitialTheme } from "./initial-theme.ts";
+import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
 
 const api = {
   agent: agentApi,
@@ -39,6 +39,8 @@ const api = {
    * 交叉淡入。参数缺席或非法都是 null，退回旧路径。
    */
   initialTheme: readInitialTheme(process.argv),
+  /** 冷启动第一帧的语言偏好（`--orbita-language=`），同 initialTheme；没选过语言是 null */
+  initialLanguage: readInitialLanguage(process.argv),
 } as const;
 
 export type OrbitaApi = typeof api;

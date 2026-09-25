@@ -16,7 +16,7 @@ import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
-import type { CompactionSetting } from "./settings.ts";
+import type { CompactionSetting, Language } from "./settings.ts";
 import type {
   ChannelDelivery,
   ChannelMessage,
@@ -428,6 +428,11 @@ export type AgentCommand =
        * 缺席 = 开启（与设置契约同一口径）。
        */
       gitAttribution?: boolean;
+      /**
+       * 署名用哪门语言（PR 描述里那一行）。**主进程按设置算好**（`effectiveLanguage`：
+       * 单语主题说了算，双语主题听语言设置），runtime 只收数据。缺席 = "en"。
+       */
+      attributionLanguage?: Language;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -485,6 +490,8 @@ export type AgentCommand =
       compaction?: CompactionSetting;
       /** commit / PR 的 Orbita 标识开关，语义同 submit */
       gitAttribution?: boolean;
+      /** 署名语言，语义同 submit */
+      attributionLanguage?: Language;
     }
   | {
       /**
@@ -536,6 +543,8 @@ export type AgentCommand =
       compaction?: CompactionSetting;
       /** 压缩轮自己不提交，但开轮装配是同一份（turnFields），语义同 submit */
       gitAttribution?: boolean;
+      /** 署名语言，语义同 submit */
+      attributionLanguage?: Language;
     }
   | { type: "listBuiltins" }
   /**

@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { api } from "./api.ts";
 import { resolveTheme } from "./theme-resolve.ts";
-import { htmlLang, localeOfTheme } from "./locale.ts";
+import { htmlLang } from "./locale.ts";
+import { effectiveLanguage } from "@shared/settings";
 import { watchWindowActivity } from "./shell/window-activity.ts";
 import "./styles.css";
 import "./paper-themes.css";
@@ -34,7 +35,7 @@ if (api.initialTheme !== null) {
   const resolved = resolveTheme(api.initialTheme, prefersDark);
   document.documentElement.dataset["theme"] = resolved;
   // 语言跟主题走（locale.ts）：lang 与 data-theme 同一帧写对，首帧中文不按英文字形排
-  document.documentElement.lang = htmlLang(localeOfTheme(resolved));
+  document.documentElement.lang = htmlLang(effectiveLanguage(resolved, api.initialLanguage ?? undefined));
 }
 
 const container = document.getElementById("root");

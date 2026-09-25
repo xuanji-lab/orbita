@@ -1,21 +1,13 @@
 import { createContext, useContext } from "react";
-import type { ThemePreference } from "@shared/settings";
+import type { Language } from "@shared/settings";
 import { en, type Messages } from "./messages-en.ts";
 import { zh } from "./messages-zh.ts";
 
-/** 界面语言。orbita 没有语言设置——语言由主题派生，见 `localeOfTheme` */
-export type Locale = "zh" | "en";
-
 /**
- * 解析后的主题 → 界面语言。**纯函数**。
- *
- * 只有 Copybook（小学作业）是中文：这一档本来就是中文版，Typescript 是它的
- * 英文对照；其余各档（含 system 落到的 light / black）照旧英文。不另加语言设置——
- * 多一个开关就多一种「绿格子配英文」的组合，而那正是用户说对不上格子的那一种。
+ * 界面语言。**规则在 shared 的 `effectiveLanguage`**：稿纸一档单语（小学作业恒中文、
+ * 打字稿恒英文），其余主题跟语言设置走。主进程的署名语言也走同一条，这里不另写一份。
  */
-export function localeOfTheme(resolved: Exclude<ThemePreference, "system">): Locale {
-  return resolved === "copybook" ? "zh" : "en";
-}
+export type Locale = Language;
 
 /** `<html lang>` 的取值：CJK 字形选择（同一码位的中 / 日字形）与换行规则靠它 */
 export function htmlLang(locale: Locale): string {
