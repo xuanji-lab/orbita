@@ -88,7 +88,7 @@ import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
 import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
-import { locateQuote, quoteFromSelection } from "./quote-select.ts";
+import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
@@ -157,17 +157,18 @@ export function ChatView(props: ChatViewProps) {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const accepts = props.hideComposer !== true && session.usable.length > 0 && !session.readOnly;
   const carriesFiles = (event: React.DragEvent) => accepts && event.dataTransfer.types.includes("Files");
-  // 引用跳转：原文在本转录里才给得出（迁移来的引用、别的会话的 id 找不到就不可点）
-  const transcriptIds = useMemo(() => new Set(session.transcript.map((item) => item.id)), [session.transcript]);
+  // 引用跳转：原文在本转录里找得到才给得出（发出去的引用不带 id，按轮号 + 角色 + 原文找；
+  // 迁移来的引用、被压缩掉的历史找不到就不可点）
   const jumpToQuote = useCallback(
     (quote: TextQuote): (() => void) | undefined => {
-      if (!transcriptIds.has(quote.messageId)) return undefined;
+      const sourceId = findQuoteSource(session.transcript, quote);
+      if (sourceId === null) return undefined;
       return () => {
         const pane = paneRef.current;
-        if (pane !== null) highlightQuote(pane, quote);
+        if (pane !== null) highlightQuote(pane, sourceId, quote.text);
       };
     },
-    [transcriptIds],
+    [session.transcript],
   );
   return (
     <div
@@ -217,13 +218,13 @@ const QuoteJumpContext = createContext<(quote: TextQuote) => (() => void) | unde
  * 几个文本块（都带同一个 data-quote-id），挑包含这段原文的那块；逐字定位不到
  * （原文被 markdown 渲染改写得太多）就整块闪一下——至少把人带到对的地方。
  */
-function highlightQuote(pane: HTMLElement, quote: TextQuote): void {
-  const blocks = Array.from(pane.querySelectorAll<HTMLElement>(`[data-quote-id="${CSS.escape(quote.messageId)}"]`));
+function highlightQuote(pane: HTMLElement, messageId: string, text: string): void {
+  const blocks = Array.from(pane.querySelectorAll<HTMLElement>(`[data-quote-id="${CSS.escape(messageId)}"]`));
   for (const block of blocks) {
     const nodes: Text[] = [];
     const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) nodes.push(node as Text);
-    const at = locateQuote(nodes.map((node) => node.data), quote.text);
+    const at = locateQuote(nodes.map((node) => node.data), text);
     const startNode = at === null ? undefined : nodes[at.start.node];
     const endNode = at === null ? undefined : nodes[at.end.node];
     if (at === null || startNode === undefined || endNode === undefined) continue;
@@ -604,7 +605,14 @@ function ChatViewBody(props: {
       onStop={session.stop}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
-      placeholder={homeActive ? t.chat.placeholderNew : t.chat.placeholderReply}
+      // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
+      placeholder={
+        session.quotes.length > 0
+          ? t.quote.replyPlaceholder(session.quotes.length)
+          : homeActive
+            ? t.chat.placeholderNew
+            : t.chat.placeholderReply
+      }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
       bottomSlot={<ComposerBar session={session} />}
@@ -1931,7 +1939,13 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           }}
         >
           {quotes.map((quote, index) => (
-            <QuoteChip key={index} quote={quote} expanded={quotesExpanded} onJump={jumpToQuote(quote)} />
+            <QuoteChip
+              key={index}
+              index={index + 1}
+              quote={quote}
+              expanded={quotesExpanded}
+              onJump={jumpToQuote(quote)}
+            />
           ))}
         </div>
       )}

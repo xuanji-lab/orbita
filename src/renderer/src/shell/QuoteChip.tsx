@@ -14,8 +14,12 @@ import { useT } from "../locale.ts";
  * 可跳（`onJump`）时 meta 行 / 收起的整行是按钮：跳回原文并高亮。原文不在这条会话里
  * （迁移来的引用、被压缩掉的历史）就不给 onJump，不画成可点的样子。
  * 颜色全用中性 token：引用是上下文，不是主操作，不染 accent。
+ *
+ * **编号角标**（`index`，1 起）：用户按编号逐条回复（「1. …」「2. …」），角标就是
+ * 发给模型的 `<quoted_context index="n">` 那个 n——删掉一条，后面的跟着前移。
  */
 export function QuoteChip(props: {
+  index: number;
   quote: TextQuote;
   expanded: boolean;
   onJump?: () => void;
@@ -40,6 +44,27 @@ export function QuoteChip(props: {
   };
   const headInner = (
     <>
+      <span
+        aria-label={t.quote.number(props.index)}
+        style={{
+          flex: "0 0 auto",
+          minWidth: 16,
+          height: 16,
+          padding: "0 4px",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: "var(--radius-pill)",
+          background: "var(--color-bg-panel)",
+          border: "1px solid var(--color-border-default)",
+          color: "var(--color-text-primary)",
+          fontFamily: "var(--font-family-mono)",
+          fontSize: "var(--font-size-micro)",
+          lineHeight: 1,
+        }}
+      >
+        {props.index}
+      </span>
       <Icon name="quote" size={12} strokeWidth={1.8} style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }} />
       <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{head}</span>
     </>

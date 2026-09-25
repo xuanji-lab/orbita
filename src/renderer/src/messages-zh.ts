@@ -83,6 +83,8 @@ export const zh: Messages = {
 
   quote: {
     add: "引用",
+    replyPlaceholder: (n) => (n === 1 ? "回复引用 1…" : `按编号逐条回复——1. … ${n}. …`),
+    number: (n) => `引用 ${n}`,
     addTitle: "在下一条消息里引用这段",
     remove: "移除引用",
     jump: "跳到被引用的原文",

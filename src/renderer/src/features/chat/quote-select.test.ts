@@ -1,7 +1,8 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { locateQuote, quoteFromSelection } from "./quote-select.ts";
+import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
+import { composeQuotedMessage } from "../../../../shared/quote.ts";
 import { QUOTE_MAX_CHARS } from "../../../../shared/quote.ts";
 
 const user = (id: string): TranscriptItem => ({ id, role: "user", content: [{ type: "text", text: "q" }], timestamp: 1 });
@@ -51,5 +52,45 @@ describe("locateQuote", () => {
   test("找不到或引用全是空白时返回 null", () => {
     assert.equal(locateQuote(["abc"], "xyz"), null);
     assert.equal(locateQuote(["abc"], "  "), null);
+  });
+});
+
+describe("findQuoteSource", () => {
+  const u = (id: string, text: string): TranscriptItem => ({ id, role: "user", content: [{ type: "text", text }], timestamp: 1 });
+  const a = (id: string, text: string): TranscriptItem =>
+    ({
+      id,
+      role: "assistant",
+      content: [{ type: "text", text }],
+      model: { provider: "p", id: "m" },
+      timestamp: 2,
+      status: "complete",
+      stopReason: "stop",
+    }) as TranscriptItem;
+  const log = [
+    u("u1", "第一问"),
+    a("a1", "同一句话 出现在第一轮"),
+    u("u2", composeQuotedMessage([{ text: "同一句话", messageId: "", role: "assistant", turn: 1 }], "1. 为什么")),
+    a("a2", "同一句话 也出现在第二轮"),
+  ];
+
+  test("输入框里带着的 id 在转录里就直接用", () => {
+    assert.equal(findQuoteSource(log, { text: "随便", messageId: "a2", role: "assistant", turn: 2 }), "a2");
+  });
+
+  test("没有 id 按轮号 + 角色 + 原文找；同一句话出现在两轮时，轮号决定是哪条", () => {
+    assert.equal(findQuoteSource(log, { text: "同一句话", messageId: "", role: "assistant", turn: 2 }), "a2");
+    assert.equal(findQuoteSource(log, { text: "同一句话", messageId: "", role: "assistant", turn: 1 }), "a1");
+  });
+
+  test("空白差异不影响；用户消息只比用户自己的话，不把引用的引用当出处", () => {
+    assert.equal(findQuoteSource(log, { text: "出现在\n第一轮", messageId: "", role: "assistant", turn: 1 }), "a1");
+    assert.equal(findQuoteSource(log, { text: "同一句话", messageId: "", role: "user", turn: 2 }), null);
+    assert.equal(findQuoteSource(log, { text: "为什么", messageId: "", role: "user", turn: 2 }), "u2");
+  });
+
+  test("找不到、文件引用都返回 null", () => {
+    assert.equal(findQuoteSource(log, { text: "没说过", messageId: "", role: "assistant" }), null);
+    assert.equal(findQuoteSource(log, { text: "同一句话", messageId: "", role: "user", filePath: "/a.md" }), null);
   });
 });

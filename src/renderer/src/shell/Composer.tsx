@@ -153,6 +153,7 @@ export function Composer(props: {
           {props.quotes.map((quote, index) => (
             <QuoteChip
               key={`${quote.messageId}:${index}`}
+              index={index + 1}
               quote={quote}
               expanded
               onJump={props.jumpToQuote(quote)}

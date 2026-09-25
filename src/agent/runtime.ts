@@ -36,6 +36,7 @@ import {
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
+import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -638,6 +639,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 describeChannelRole(role),
                 STORE_TOOLS_GUIDELINES,
                 TOOL_GUIDELINES,
+                // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
+                // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
+                QUOTE_GUIDELINE,
                 // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
                 gitAttributionGuideline(command.gitAttribution ?? true),
               ]

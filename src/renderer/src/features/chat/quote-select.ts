@@ -3,7 +3,13 @@
  * ChatView 的 QuoteSelectionLayer / jumpToQuote 里，这里只做能测的判断。
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { clampQuote, normalizeSelectedText, type QuoteRole, type TextQuote } from "../../../../shared/quote.ts";
+import {
+  clampQuote,
+  normalizeSelectedText,
+  parseQuotedMessage,
+  type QuoteRole,
+  type TextQuote,
+} from "../../../../shared/quote.ts";
 
 /**
  * 一段划选能不能成为引用、成为什么样的引用。null = 不能：
@@ -65,4 +71,31 @@ export function locateQuote(segments: readonly string[], quote: string): { start
   const first = points[at] as TextPoint;
   const last = points[at + needle.length - 1] as TextPoint;
   return { start: first, end: { node: last.node, offset: last.offset + 1 } };
+}
+
+/**
+ * 引用出自转录里的哪条消息。发出去的引用不带 id（模型用不上，不进正文），靠
+ * 「谁说的 + 第几轮 + 原文」找回来：
+ * - 输入框里的引用还带着划选时的 id，在转录里就直接用；
+ * - 否则在同一轮、同一角色的消息里找包含这段原文的（按非空白字符比，同 locateQuote）；
+ *   用户消息只比用户自己的话——它自己也可能带着引用块，别把引用的引用当出处；
+ * - 找不到（迁移来的引用、被压缩掉的历史）返回 null，chip 不画成可点。
+ */
+export function findQuoteSource(transcript: readonly TranscriptItem[], quote: TextQuote): string | null {
+  if (quote.messageId !== "" && transcript.some((item) => item.id === quote.messageId)) return quote.messageId;
+  if (quote.filePath !== undefined) return null;
+  const needle = quote.text.replace(/\s+/g, "");
+  if (needle === "") return null;
+  let turn = 0;
+  for (const item of transcript) {
+    if (item.role === "user") turn += 1;
+    if (item.role !== quote.role) continue;
+    if (quote.turn !== undefined && turn !== quote.turn) continue;
+    const raw = item.content
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("\n");
+    const own = item.role === "user" ? parseQuotedMessage(raw).text : raw;
+    if (own.replace(/\s+/g, "").includes(needle)) return item.id;
+  }
+  return null;
 }
