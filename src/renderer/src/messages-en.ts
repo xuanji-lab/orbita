@@ -32,6 +32,9 @@ const KNOWN_LABELS: Record<string, string> = {
   "openai-compatible": "OpenAI-compatible",
 };
 
+/** 批语日期的月份写法（AP 缩写：Sept，不写 Sep；March–July 写全） */
+const MARK_MONTHS = ["Jan", "Feb", "March", "April", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec"];
+
 const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
@@ -575,8 +578,11 @@ export const en = {
   permissionModes: PERMISSION_MODE_LABELS,
 
   chat: {
-    /** 稿纸两档首页 slogan 下的红笔批语（老师在作文纸上写的那一行）；只在稿纸两档出现 */
-    homeMark: "Neat.",
+    /**
+     * 稿纸两档首页 slogan 下的红笔批语（老师在作文纸上写的那一行），落当天日期；只在稿纸
+     * 两档出现。月份照美式批改的缩写（原型写「Sept 25」）：五个字母以内的月份写全
+     */
+    homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,

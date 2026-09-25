@@ -120,6 +120,13 @@ describe("messages —— 中英两张表", () => {
     deepStrictEqual(offenders, []);
   });
 
+  test("首页批语落当天日期：中文「阅 月.日」，英文照美式缩写（Sept，不写 Sep）", () => {
+    deepStrictEqual(
+      [zh.chat.homeMark(9, 25), en.chat.homeMark(9, 25), en.chat.homeMark(3, 1), en.chat.homeMark(12, 31)],
+      ["字迹工整　阅 9.25", "Neat. — Sept 25", "Neat. — March 1", "Neat. — Dec 31"],
+    );
+  });
+
   test("zh 的相对时间与数量：量词齐全，数字与汉字之间一个空格", () => {
     deepStrictEqual(
       [zh.time.minutesAgo(5), zh.time.hoursAgo(2), zh.time.daysAgo(3), zh.chat.subSessionCount(2)],
