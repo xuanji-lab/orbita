@@ -161,7 +161,9 @@ panels (glass `.92` — paper, not glass), ink `#1f1f1d / #52524e / #6e6e68` (th
 `#e2e0d8` desk and `#8a8a84` third ink fell to 2.6:1 on the desk; raised for WCAG). Copybook takes the
 grid's green as its accent (`#3b7a55`), the teacher's red pen (`#cc3a2e`) as danger and as the
 wavy underline on bold transcript text, a double green frame round the main pane, a green square
-grid in the composer, and serif text (Literata + Source Han Serif SC). Typescript takes typewriter
+grid in the composer (one Chinese character per cell; every Latin run sits on a white
+correction-fluid strip, `--color-paper-whiteout`, and a mostly-English draft drops the per-cell
+tracking), and serif text (Literata + Source Han Serif SC). Typescript takes typewriter
 ribbon blue (`#2f4f7f`), Courier Prime for text and Special Elite for the wordmark and slogan,
 ruled lines plus a red margin line in the composer only, and upper-cased transcript headings.
 On the home page Copybook sets the slogan one character per red 田字格 cell in Ma Shan Zheng,

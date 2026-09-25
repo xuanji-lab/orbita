@@ -220,10 +220,12 @@
   --color-chat-control-bg: #ffffff;
   --color-chat-table-bg: #ffffff;
   --color-chat-link: #22345a;
-  /* 纸面：绿格线、红笔、首页 slogan 的红田字格（装饰层 src/renderer/src/paper-themes.css 用） */
+  /* 纸面：绿格线、红笔、首页 slogan 的红田字格、输入框里垫在英文下的修正液
+     （装饰层 src/renderer/src/paper-themes.css 用）。修正液是纯白，比米白的纸面更白 */
   --color-paper-grid: rgba(59, 122, 85, 0.42);
   --color-paper-pen: #cc3a2e;
   --color-paper-tian: #cf4a3c;
+  --color-paper-whiteout: #ffffff;
 }
 
 /* typescript — 打字稿（英文）：同一档的英文版。同一张米白纸，不画格也不满屏画线，

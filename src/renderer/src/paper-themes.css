@@ -3,7 +3,8 @@
  * （Orbita Design System/tokens：colors.css 的 --color-paper-*、typography.css 的换字）；这里只放
  * 每档一两层装饰，DOM 不动。
  *
- * - copybook（小学作业）：面板一圈双线绿框；输入框是绿方格；正文里的加粗是老师的红笔波浪线。
+ * - copybook（小学作业）：面板一圈双线绿框；输入框是绿方格，英文垫修正液；正文里的加粗是老师的
+ *   红笔波浪线。修正液要一层镜像 DOM（Composer.tsx），是这里唯一动了 DOM 的装饰。
  * - typescript（英文打字稿）：不画格也不满屏画线——只有输入框有横线和一条红页边线；
  *   对话里的标题按打字稿的习惯全大写；以中文为主的消息换中英同源的阅读字。
  */
@@ -19,14 +20,13 @@
     var(--shadow-composer);
 }
 
-/* 一个汉字一格（针对中文排，wafo 2026-09-25）：格子 24px，字号 14px，字距补足 10px，左边
-   先空半个差值——每个汉字（与全角标点）正好落在格子正中。拉丁字母是半角，对不上格；
-   中文里夹几个英文词可以接受，以英文为主时见下一条 */
-:root[data-theme="copybook"] .composer-input {
+/* 方格画在输入框外层（.composer-field），不在 textarea 上：层次要是 方格 < 修正液 < 字。
+   修正液在 textarea 下面的镜像里，格子要是画在 textarea 自己的底上，会压在修正液上面。
+   外层与 textarea 同宽同高，格线位置不变 */
+:root[data-theme="copybook"] .composer-field {
   --paper-cell: 24px;
-  padding: 0 0 0 calc((var(--paper-cell) - var(--font-size-input)) / 2);
-  letter-spacing: calc(var(--paper-cell) - var(--font-size-input));
-  line-height: var(--paper-cell);
+  /* 汉字字形距格线的左空：格子与字号差值的一半 */
+  --paper-lead: calc((var(--paper-cell) - var(--font-size-input)) / 2);
   background-image:
     linear-gradient(to right, var(--color-paper-grid) 1px, transparent 1px),
     linear-gradient(to bottom, var(--color-paper-grid) 1px, transparent 1px);
@@ -35,11 +35,47 @@
   box-shadow: inset 0 -1px 0 var(--color-paper-grid);
 }
 
+/* 一个汉字一格（针对中文排，wafo 2026-09-25）：格子 24px，字号 14px，字距补足 10px，左边
+   先空半个差值——每个汉字（与全角标点）正好落在格子正中。拉丁字母是半角，对不上格，
+   垫修正液（见下）。textarea 与镜像都吃这条规则，排版才一致 */
+:root[data-theme="copybook"] .composer-input {
+  padding: 0 0 0 var(--paper-lead);
+  letter-spacing: calc(var(--paper-cell) - var(--font-size-input));
+  line-height: var(--paper-cell);
+}
+
 /* 以英文为主时（Composer 的 data-script，判法见 composer-script.ts）取消字距：一整段英文每个
    字母后面都空 10px，词间的空格和字母间距差不多宽，词形散了。方格、行高与左边距都不动
    （wafo 2026-09-25 选定），字母不再对格 */
 :root[data-theme="copybook"] .composer-input[data-script="latin"] {
   letter-spacing: normal;
+}
+
+/* 镜像：与 textarea 叠在同一格、在它下面（styles.css 的 .composer-field）。字透明，只有修正液
+   看得见；换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步） */
+:root[data-theme="copybook"] .composer-mirror {
+  color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* 修正液（wafo 2026-09-25 选定）：一段英文一条白底，盖住竖格线。白底只有字体内容区高
+   （Literata 14px 约 21px），24px 的格子上下各露一点横线，像一条条涂改带。
+   左边往外伸一个 --paper-lead 贴到格线；margin 与 padding 一负一正净增 0，排版与 textarea
+   逐像素一致。clone：换行后的每一截各自是一条 */
+:root[data-theme="copybook"] .composer-whiteout {
+  margin-left: calc(-1 * var(--paper-lead));
+  padding-left: var(--paper-lead);
+  border-radius: 2px;
+  background: var(--color-paper-whiteout);
+  box-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent),
+    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 :root[data-theme="copybook"] .chat-md strong {
