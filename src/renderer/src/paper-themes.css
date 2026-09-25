@@ -31,6 +31,8 @@
     linear-gradient(to right, var(--color-paper-grid) 1px, transparent 1px),
     linear-gradient(to bottom, var(--color-paper-grid) 1px, transparent 1px);
   background-size: var(--paper-cell) var(--paper-cell);
+  /* 格线画在每格的上沿和左沿，最后一行的下沿要补一条，不然末行是开口的 */
+  box-shadow: inset 0 -1px 0 var(--color-paper-grid);
 }
 
 :root[data-theme="manuscript"] .chat-md strong {
