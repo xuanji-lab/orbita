@@ -530,7 +530,8 @@ export const zh: Messages = {
   },
 
   chat: {
-    homeMark: "字迹工整",
+    // 批改的落款：全角空格隔开评语与「阅 月.日」（原型「字迹工整　阅 9.25」）
+    homeMark: (month, day) => `字迹工整　阅 ${month}.${day}`,
     placeholderNew: "问点什么，或交办一件事",
     placeholderReply: "回一句，或调整方向",
     providersFailed: (error) => `服务商载入失败：${error}——打开设置重试。`,
