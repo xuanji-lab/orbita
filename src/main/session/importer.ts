@@ -1326,6 +1326,7 @@ async function scanWithConfigs(
     ),
     skills,
     mcp: mcp.items,
+    greetingCheck: { candidates: 0, model: null },
   };
   return { report, mcpServers: mcp.servers };
 }
@@ -1345,6 +1346,7 @@ export function emptyScanReport(): ImportScanReport {
     lastImportAt: null,
     skills: [],
     mcp: [],
+    greetingCheck: { candidates: 0, model: null },
   };
 }
 

@@ -68,6 +68,7 @@ function report(overrides: Partial<ImportScanReport>): ImportScanReport {
     lastImportAt: null,
     skills: [],
     mcp: [],
+    greetingCheck: { candidates: 0, model: null },
     ...overrides,
   };
 }

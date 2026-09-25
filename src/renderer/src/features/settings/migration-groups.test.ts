@@ -63,6 +63,7 @@ function report(plan: ImportPlanItem[], newWorkspaceIds: string[] = []): ImportS
     lastImportAt: null,
     skills: [],
     mcp: [],
+    greetingCheck: { candidates: 0, model: null },
   };
 }
 

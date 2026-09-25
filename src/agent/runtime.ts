@@ -1105,6 +1105,11 @@ async function handle(command: AgentCommand): Promise<void> {
     send({ type: "mcp", servers: mcpHub.describe() });
     return;
   }
+  if (command.type === "classifyGreetings") {
+    // 判定在下一个 commit 接上；先按「判不了」回执，调用方把它当失败处理
+    send({ type: "greetingsClassified", requestId: command.requestId, throwaway: null, error: "not implemented yet" });
+    return;
+  }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——
   // 曾经这里是无 if 的兜底（新命令会静默销毁会话），那是事故的形状
   command satisfies never;
