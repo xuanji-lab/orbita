@@ -575,6 +575,8 @@ export const en = {
   permissionModes: PERMISSION_MODE_LABELS,
 
   chat: {
+    /** 稿纸两档首页 slogan 下的红笔批语（老师在作文纸上写的那一行）；只在稿纸两档出现 */
+    homeMark: "Neat.",
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,

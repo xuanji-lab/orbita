@@ -77,7 +77,8 @@ export function App() {
     theme: api.initialTheme ?? DEFAULT_SETTINGS.theme,
   });
   // 界面语言跟主题走（locale.ts）：Manuscript 全中文，其余英文
-  const locale = localeOfTheme(useTheme(settings.theme));
+  const resolvedTheme = useTheme(settings.theme);
+  const locale = localeOfTheme(resolvedTheme);
   const t = messagesOf(locale);
   const refresh = useCallback(async () => {
     try {
@@ -431,6 +432,7 @@ export function App() {
                 onOpenSubSessions={openSubSessionsList}
                 onOpenParent={openParent}
                 litSubSessionId={litSubSessionId}
+                theme={resolvedTheme}
               />
             )}
           </div>

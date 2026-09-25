@@ -530,6 +530,7 @@ export const zh: Messages = {
   },
 
   chat: {
+    homeMark: "字迹工整",
     placeholderNew: "问点什么，或交办一件事",
     placeholderReply: "回一句，或调整方向",
     providersFailed: (error) => `服务商载入失败：${error}——打开设置重试。`,

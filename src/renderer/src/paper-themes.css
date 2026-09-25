@@ -74,6 +74,77 @@
   letter-spacing: normal;
 }
 
+/* ===== 首页门面（HomeHero.tsx）：照璇玑载体谱原型「稿纸」一档的首页 ===== */
+
+/* 稿纸：slogan 一字一格落进红田字格——54px 见方，相邻格共用一条边（margin-left: -1px），
+   格心一横一竖两条红虚线是田字格的「十」。字是马善政（只含这 9 个字的子集，见 fonts.css）。
+   窄槽放不下九格时整格换行，不把一个字劈开 */
+:root[data-theme="manuscript"] .home-slogan {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 0;
+  font-family: "Ma Shan Zheng", var(--font-family-brand);
+  font-weight: 400;
+  font-size: 36px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+:root[data-theme="manuscript"] .home-slogan-cell {
+  display: inline-grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin: -1px 0 0 -1px;
+  border: 1px solid var(--color-paper-tian);
+  background:
+    repeating-linear-gradient(to bottom, var(--color-paper-tian) 0 3px, transparent 3px 6px) center / 1px 100% no-repeat,
+    repeating-linear-gradient(to right, var(--color-paper-tian) 0 3px, transparent 3px 6px) center / 100% 1px no-repeat;
+}
+
+/* 标点在格子里靠左下，手写稿纸的规矩 */
+:root[data-theme="manuscript"] .home-slogan-cell.punct {
+  place-items: end start;
+  padding: 0 0 6px 8px;
+}
+
+/* 打字稿：英文 slogan 打在一页打字纸上——左边一条整高的红页边线，底下一条蓝横线；
+   字是 Special Elite（色带不匀的打字机字，只有常规体，所以不加粗） */
+:root[data-theme="typescript"] .home-hero {
+  position: relative;
+  padding: 0 20px 8px 44px;
+  border-bottom: 1px solid var(--color-paper-rule);
+}
+
+:root[data-theme="typescript"] .home-hero::before {
+  content: "";
+  position: absolute;
+  left: 26px;
+  top: -30px;
+  bottom: -40px;
+  width: 1px;
+  background: var(--color-paper-margin);
+}
+
+:root[data-theme="typescript"] .home-slogan {
+  font-family: "Special Elite", var(--font-family-base);
+  font-weight: 400;
+  font-size: 30px;
+  letter-spacing: 0;
+}
+
+/* 两档共用：slogan 下老师的红笔批语，手写（龙藏体子集），微微歪着 */
+:root:is([data-theme="manuscript"], [data-theme="typescript"]) .home-mark {
+  margin: 10px 0 0;
+  font-family: "Long Cang", "Bradley Hand", cursive;
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: 0.05em;
+  color: var(--color-paper-pen);
+  transform: rotate(-3deg);
+}
+
 /* ===== Theme 预览卡：缩略窗的面板里画一点纸面，认得出是哪张纸 ===== */
 
 [data-theme-preview="manuscript"] .theme-thumb-panel {

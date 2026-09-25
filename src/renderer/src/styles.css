@@ -1405,6 +1405,28 @@ body {
   animation: orbita-breath 1.6s ease-in-out infinite;
 }
 
+/* 首页门面（HomeHero.tsx）。slogan 是全产品唯一一句抒情的话。窄槽（侧栏 + 右栏都展开时
+   主槽变窄）会把它挤断成两行——没设 line-height 时继承正文的 22px，36px 的字一断行两行
+   几乎叠在一起。给大字号自己的行高（1.25），text-wrap: balance 让断行落在匀称的位置。
+   从 inline style 挪成 class：稿纸两档要改它的字体、字号与排法（paper-themes.css），
+   inline 压得过任何主题规则。 */
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.home-slogan {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-logo);
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: var(--tracking-slogan);
+  text-align: center;
+  text-wrap: balance;
+}
+
 /* 首页首发过渡（R5-05，动效白名单）：slogan 与会话卡 220ms 向上淡出（--transition-layer），
    composer 240ms 滑向窗口底部（--transition-composer-exit）。leaving 是离场；
    prep/entering 是回场的两拍——prep 先无过渡摆到起点，entering 过渡回原位 */
