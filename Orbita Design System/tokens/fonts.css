@@ -40,25 +40,29 @@
   font-display: swap;
   unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF;
 }
-/* Typescript 主题（稿纸英文版）的打字机字：正文 Courier Prime，标题 Special Elite */
+/* Typescript 主题（稿纸英文版）的打字机字：正文 Courier Prime，标题 Special Elite。
+   Courier Prime 只有 400 / 700 两个静态字面，字重要**按区间**声明：orbita 的正文字重是 450
+   （--weight-regular），CSS 字重匹配对 400–500 之间的目标会先往上找到 500——Bold 若声明成
+   500–800，整个界面就全落成粗体（2026-09-25 截图对比时发现：侧栏每一行都是粗的）。
+   所以 Regular 管到 550（450 / 500 都算常规），Bold 从 551 起（semibold 600 起才加粗）。 */
 @font-face {
   font-family: "Courier Prime";
   src: url("../assets/fonts/CourierPrime-Regular.ttf") format("truetype");
-  font-weight: 400;
+  font-weight: 100 550;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "Courier Prime";
   src: url("../assets/fonts/CourierPrime-Bold.ttf") format("truetype");
-  font-weight: 500 800;
+  font-weight: 551 900;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "Courier Prime";
   src: url("../assets/fonts/CourierPrime-Italic.ttf") format("truetype");
-  font-weight: 400;
+  font-weight: 100 550;
   font-style: italic;
   font-display: swap;
 }
