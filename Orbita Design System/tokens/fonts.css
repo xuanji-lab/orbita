@@ -40,8 +40,8 @@
   font-display: swap;
   unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF;
 }
-/* 稿纸两档首页门面的手写字，都是**子集**（只含用得到的字，几 KB 到二十来 KB）：
-   马善政只有 slogan「璇玑运转，诸事得序」9 个字（Manuscript 的田字格）；
+/* 纸面两档首页门面的手写字，都是**子集**（只含用得到的字，几 KB 到二十来 KB）：
+   马善政只有 slogan「璇玑运转，诸事得序」9 个字（小学作业的田字格）；
    龙藏体只有批语用字「字迹工整阅」、全角空格、破折号与 ASCII 可打印区（英文批语与日期）。
    整套各 5–6MB，只为首页一行字不值得。SIL OFL 1.1，无保留字体名，子集化与再分发都允许；
    许可证 OFL-MaShanZheng.txt / OFL-LongCang.txt。源文件 github.com/google/fonts
@@ -62,7 +62,7 @@
   font-style: normal;
   font-display: swap;
 }
-/* Typescript 主题（稿纸英文版）的打字机字：正文 Courier Prime，标题 Special Elite。
+/* Typescript 主题（纸面两档的英文版）的打字机字：正文 Courier Prime，标题 Special Elite。
    Courier Prime 只有 400 / 700 两个静态字面，字重要**按区间**声明：orbita 的正文字重是 450
    （--weight-regular），CSS 字重匹配对 400–500 之间的目标会先往上找到 500——Bold 若声明成
    500–800，整个界面就全落成粗体（2026-09-25 截图对比时发现：侧栏每一行都是粗的）。

@@ -1,16 +1,16 @@
 /*
- * 稿纸两档的纸面装饰（璇玑载体谱「稿纸」一档，wafo 2026-09-25 载入）。颜色与字体全部是 token
+ * 纸面两档的装饰（璇玑载体谱「稿纸」一档，wafo 2026-09-25 载入）。颜色与字体全部是 token
  * （Orbita Design System/tokens：colors.css 的 --color-paper-*、typography.css 的换字）；这里只放
  * 每档一两层装饰，DOM 不动。
  *
- * - manuscript（中文稿纸）：面板一圈双线绿框；输入框是绿方格；正文里的加粗是老师的红笔波浪线。
+ * - copybook（小学作业）：面板一圈双线绿框；输入框是绿方格；正文里的加粗是老师的红笔波浪线。
  * - typescript（英文打字稿）：不画格也不满屏画线——只有输入框有横线和一条红页边线；
  *   对话里的标题按打字稿的习惯全大写；以中文为主的消息换中英同源的阅读字。
  */
 
-/* ===== manuscript ===== */
+/* ===== copybook ===== */
 
-:root[data-theme="manuscript"] .pane {
+:root[data-theme="copybook"] .pane {
   box-shadow:
     inset 0 0 0 5px var(--glass-bg),
     inset 0 0 0 6px var(--color-paper-grid),
@@ -21,8 +21,8 @@
 
 /* 一个汉字一格（针对中文排，wafo 2026-09-25）：格子 24px，字号 14px，字距补足 10px，左边
    先空半个差值——每个汉字（与全角标点）正好落在格子正中。拉丁字母是半角，对不上格，
-   Manuscript 本来就是中文界面 */
-:root[data-theme="manuscript"] .composer-input {
+   小学作业本来就是中文界面 */
+:root[data-theme="copybook"] .composer-input {
   --paper-cell: 24px;
   padding: 0 0 0 calc((var(--paper-cell) - var(--font-size-input)) / 2);
   letter-spacing: calc(var(--paper-cell) - var(--font-size-input));
@@ -35,7 +35,7 @@
   box-shadow: inset 0 -1px 0 var(--color-paper-grid);
 }
 
-:root[data-theme="manuscript"] .chat-md strong {
+:root[data-theme="copybook"] .chat-md strong {
   text-decoration: underline wavy var(--color-paper-pen);
   text-decoration-thickness: 1px;
   text-underline-offset: 5px;
@@ -76,10 +76,10 @@
 
 /* ===== 首页门面（HomeHero.tsx）：照璇玑载体谱原型「稿纸」一档的首页 ===== */
 
-/* 稿纸：slogan 一字一格落进红田字格——54px 见方，相邻格共用一条边（margin-left: -1px），
+/* 小学作业：slogan 一字一格落进红田字格——54px 见方，相邻格共用一条边（margin-left: -1px），
    格心一横一竖两条红虚线是田字格的「十」。字是马善政（只含这 9 个字的子集，见 fonts.css）。
    窄槽放不下九格时整格换行，不把一个字劈开 */
-:root[data-theme="manuscript"] .home-slogan {
+:root[data-theme="copybook"] .home-slogan {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -91,7 +91,7 @@
   letter-spacing: 0;
 }
 
-:root[data-theme="manuscript"] .home-slogan-cell {
+:root[data-theme="copybook"] .home-slogan-cell {
   display: inline-grid;
   place-items: center;
   width: 54px;
@@ -103,8 +103,8 @@
     repeating-linear-gradient(to right, var(--color-paper-tian) 0 3px, transparent 3px 6px) center / 100% 1px no-repeat;
 }
 
-/* 标点在格子里靠左下，手写稿纸的规矩 */
-:root[data-theme="manuscript"] .home-slogan-cell.punct {
+/* 标点在格子里靠左下，手写进格子的规矩 */
+:root[data-theme="copybook"] .home-slogan-cell.punct {
   place-items: end start;
   padding: 0 0 6px 8px;
 }
@@ -135,7 +135,7 @@
 }
 
 /* 两档共用：slogan 下老师的红笔批语，手写（龙藏体子集），微微歪着 */
-:root:is([data-theme="manuscript"], [data-theme="typescript"]) .home-mark {
+:root:is([data-theme="copybook"], [data-theme="typescript"]) .home-mark {
   margin: 10px 0 0;
   font-family: "Long Cang", "Bradley Hand", cursive;
   font-size: 20px;
@@ -147,7 +147,7 @@
 
 /* ===== Theme 预览卡：缩略窗的面板里画一点纸面，认得出是哪张纸 ===== */
 
-[data-theme-preview="manuscript"] .theme-thumb-panel {
+[data-theme-preview="copybook"] .theme-thumb-panel {
   background-image:
     linear-gradient(to right, var(--color-paper-grid) 1px, transparent 1px),
     linear-gradient(to bottom, var(--color-paper-grid) 1px, transparent 1px);

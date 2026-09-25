@@ -177,12 +177,13 @@
   --color-chat-link: #52a8ff;
 }
 
-/* manuscript — 稿纸（中文）：璇玑载体谱「稿纸」一档的中文版（2026-09-25 载入）。90 年代的作文
-   稿纸：米白纸、绿格、老师的红笔。accent 取格线的绿（主操作、选中、勾选）；红笔色给 danger
+/* copybook — 小学作业（中文）：璇玑载体谱「稿纸」一档的中文版（2026-09-25 载入，同日由
+   Manuscript / 稿纸改名——那个年代小学生写字用的是绿格作业本，不是稿纸）。米白纸、绿格、
+   老师的红笔。accent 取格线的绿（主操作、选中、勾选）；红笔色给 danger
    与纸面批注（--color-paper-pen）。只有明，system 不落这档。
-   `[data-theme-preview="manuscript"]` 同上，给 Theme 预览卡用。 */
-:root[data-theme="manuscript"],
-[data-theme-preview="manuscript"] {
+   `[data-theme-preview="copybook"]` 同上，给 Theme 预览卡用。 */
+:root[data-theme="copybook"],
+[data-theme-preview="copybook"] {
   color-scheme: light;
   --color-bg-app: #e6e4dc;
   --color-bg-sidebar: #e8e6df;
@@ -225,7 +226,7 @@
   --color-paper-tian: #cf4a3c;
 }
 
-/* typescript — 稿纸（英文）：同一档的英文版，打字稿。同一张米白纸，不画格也不满屏画线，
+/* typescript — 打字稿（英文）：同一档的英文版。同一张米白纸，不画格也不满屏画线，
    只留红色页边线，横线只在输入框；墨是打字机色带的蓝黑。只有明，system 不落这档。 */
 :root[data-theme="typescript"],
 [data-theme-preview="typescript"] {

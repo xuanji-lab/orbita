@@ -52,8 +52,8 @@ export function Composer(props: {
     if (el === null) return;
     fitComposerHeight(el);
   }, [props.value]);
-  // 换主题也要重量：稿纸两档的行高是 24px，浅 / 暗是 22px——只跟着 value 量，切主题后高度
-  // 停在上一档，稿纸的格子会被切掉半行（2026-09-25 实测）。
+  // 换主题也要重量：纸面两档的行高是 24px，浅 / 暗是 22px——只跟着 value 量，切主题后高度
+  // 停在上一档，方格的末行会被切掉半行（2026-09-25 实测）。
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (el === null) return;

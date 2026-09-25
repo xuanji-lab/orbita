@@ -3,8 +3,8 @@ import { describe, test } from "node:test";
 import { heroFace, SLOGAN_EN, SLOGAN_ZH, sloganCells, sloganOf } from "./home-hero.ts";
 
 describe("heroFace / sloganOf —— 门面按主题分，不按界面语言分", () => {
-  test("稿纸两档各有自己的门面，其余主题是普通一行", () => {
-    assert.equal(heroFace("manuscript"), "manuscript");
+  test("纸面两档各有自己的门面，其余主题是普通一行", () => {
+    assert.equal(heroFace("copybook"), "copybook");
     assert.equal(heroFace("typescript"), "typescript");
     assert.equal(heroFace("light"), "plain");
     assert.equal(heroFace("black"), "plain");
@@ -13,7 +13,7 @@ describe("heroFace / sloganOf —— 门面按主题分，不按界面语言分"
 
   test("只有打字稿换英文 slogan；英文界面的 Light 仍是中文 slogan", () => {
     assert.equal(sloganOf("typescript"), SLOGAN_EN);
-    assert.equal(sloganOf("manuscript"), SLOGAN_ZH);
+    assert.equal(sloganOf("copybook"), SLOGAN_ZH);
     assert.equal(sloganOf("plain"), SLOGAN_ZH);
   });
 });

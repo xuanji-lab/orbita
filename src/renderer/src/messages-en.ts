@@ -7,7 +7,7 @@ import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
  * 值是字符串，或 `(…) => string`（数量、插值、单复数）。函数参数只用原始类型
  * （number / string），守卫测试（messages.test.ts）要能拿样例参数把每一条都调一遍。
  *
- * 语言不是设置项，由主题派生（locale.ts 的 `localeOfTheme`）：Manuscript 全中文，其余英文。
+ * 语言不是设置项，由主题派生（locale.ts 的 `localeOfTheme`）：Copybook（小学作业）全中文，其余英文。
  * 组件里用 `useT()` 取表；纯函数不读全局，由调用方把表传进去。
  *
  * 分组按界面区域，不按文件——同一句话在两处出现时放 `common`。
@@ -254,11 +254,11 @@ export const en = {
     light: "Light",
     dark: "Warm",
     black: "Ink",
-    manuscript: "Manuscript",
+    copybook: "Copybook",
     typescript: "Typescript",
     systemTip: "Follows your desktop's light or dark appearance · dark lands on Ink",
-    manuscriptTip: "Green-grid Chinese manuscript paper with red pen marks · light only",
-    typescriptTip: "A typewritten page with a red margin line, the English counterpart of Manuscript · light only",
+    copybookTip: "A green-grid Chinese school exercise book with red pen marks · light only",
+    typescriptTip: "A typewritten page with a red margin line, the English counterpart of Copybook · light only",
   },
 
   modelMenu: {
@@ -579,7 +579,7 @@ export const en = {
 
   chat: {
     /**
-     * 稿纸两档首页 slogan 下的红笔批语（老师在作文纸上写的那一行），落当天日期；只在稿纸
+     * 纸面两档首页 slogan 下的红笔批语（老师在作业本上写的那一行），落当天日期；只在纸面
      * 两档出现。月份照美式批改的缩写（原型写「Sept 25」）：五个字母以内的月份写全
      */
     homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,

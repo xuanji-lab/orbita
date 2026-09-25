@@ -76,7 +76,7 @@ export function App() {
     ...DEFAULT_SETTINGS,
     theme: api.initialTheme ?? DEFAULT_SETTINGS.theme,
   });
-  // 界面语言跟主题走（locale.ts）：Manuscript 全中文，其余英文
+  // 界面语言跟主题走（locale.ts）：小学作业全中文，其余英文
   const resolvedTheme = useTheme(settings.theme);
   const locale = localeOfTheme(resolvedTheme);
   const t = messagesOf(locale);

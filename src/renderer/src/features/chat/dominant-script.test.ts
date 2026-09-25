@@ -11,7 +11,7 @@ describe("dominantScript", () => {
 
   test("英文、英文里偶尔一两个汉字、没有字母的都算拉丁", () => {
     assert.equal(dominantScript("Set in motion, kept in order."), "latin");
-    assert.equal(dominantScript("The 稿纸 theme is a green-grid manuscript page with red pen marks for bold text."), "latin");
+    assert.equal(dominantScript("The 小学作业 theme is a green-grid exercise book with red pen marks for bold text."), "latin");
     assert.equal(dominantScript("12345 · —"), "latin");
     assert.equal(dominantScript(""), "latin");
   });

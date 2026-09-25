@@ -52,7 +52,7 @@ describe("retryCauseText —— 失败原因行内截断", () => {
   });
 });
 
-describe("retryLineText —— 中文（Manuscript）", () => {
+describe("retryLineText —— 中文（小学作业）", () => {
   it("次数与倒数都说中文", () => {
     assert.equal(retryLineText(status(), 11_000, zh), "第 2/3 次重试 · 3 秒后");
     assert.equal(retryLineText(status(), 14_000, zh), "第 2/3 次重试 · 正在重试…");

@@ -289,7 +289,7 @@ describe("migration-page · 底栏", () => {
   });
 });
 
-describe("migration-page · 中文（Manuscript）", () => {
+describe("migration-page · 中文（小学作业）", () => {
   test("计数用量词，0 项不写", () => {
     assert.equal(countLine({ sessions: 28, skills: 1, mcp: 2 }, zh), "28 个会话 · 1 个技能 · 2 个 MCP");
     assert.equal(countLine({ sessions: 0, skills: 0, mcp: 0 }, zh), "");

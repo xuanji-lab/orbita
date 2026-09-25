@@ -34,6 +34,10 @@ describe("parseSettings", () => {
     deepStrictEqual(parseSettings({ theme: null }), DEFAULT_SETTINGS);
   });
 
+  it("改名前的旧 id manuscript 落回 copybook，不退回 system", () => {
+    deepStrictEqual(parseSettings({ theme: "manuscript" }), { theme: "copybook", drawer: DEFAULT_SETTINGS.drawer });
+  });
+
   it("整个文件坏掉也退回默认", () => {
     deepStrictEqual(parseSettings(null), DEFAULT_SETTINGS);
     deepStrictEqual(parseSettings("dark"), DEFAULT_SETTINGS);

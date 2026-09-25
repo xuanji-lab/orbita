@@ -34,8 +34,8 @@
   --glass-bg: rgba(17, 17, 17, 0.7);
 }
 
-/* 稿纸两档（manuscript / typescript）是纸，不是玻璃：面板几乎不透，桌面不从纸底下透出来。 */
-:root[data-theme="manuscript"],
+/* 纸面两档（copybook / typescript）是纸，不是玻璃：面板几乎不透，桌面不从纸底下透出来。 */
+:root[data-theme="copybook"],
 :root[data-theme="typescript"] {
   --glass-alpha: 0.92; /* @kind other */
   --glass-border: rgba(255, 255, 255, 0.7);
