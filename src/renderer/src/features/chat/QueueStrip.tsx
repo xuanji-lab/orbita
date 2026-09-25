@@ -106,7 +106,12 @@ export function QueueStrip(props: {
  * 队列行同样要在一行里放得下）。
  */
 function labelOf(item: QueuedMessage, titles: ReadonlyMap<string, string>, t: Messages): string {
-  if (item.kind === "text") return item.text;
+  if (item.kind === "text") {
+    // 带图的排队项把张数说出来：只发图的那条没有字，不写就是一行空白
+    const count = item.images?.length ?? 0;
+    if (count === 0) return item.text;
+    return item.text === "" ? t.chat.images(count) : `${item.text} · ${t.chat.images(count)}`;
+  }
   if (item.kind === "channel") {
     const childTitle = titles.get(item.childId) ?? t.channel.subSession;
     // 父的队列里只会有子发来的消息（question/progress/done/failed）——ownSide

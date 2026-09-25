@@ -90,6 +90,13 @@ export const en = {
     send: "Send",
     stop: "Stop",
     stopTurn: "Stop this turn",
+    attachImage: "Attach images (or paste / drop them)",
+    removeImage: "Remove image",
+    imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
+    imageTooLarge: (name: string, mb: number) => `${name} is over ${mb} MB.`,
+    tooManyImages: (max: number) => `Up to ${max} images per message.`,
+    imageReadFailed: (name: string) => `Couldn't read ${name}.`,
+    noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
   },
 
   rowStatus: {

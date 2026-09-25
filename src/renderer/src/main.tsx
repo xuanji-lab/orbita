@@ -12,6 +12,15 @@ import "./paper-themes.css";
 // `[data-window-inactive="true"]` 规则）——见 window-activity.ts 的理由。
 watchWindowActivity();
 
+// 文件落在输入框以外的地方：Chromium 默认把窗口导航到那个 file://——整个应用被换成
+// 一张图，草稿与排队全丢。输入框自己的 drop 在冒泡到这里之前已经处理完；这里只拦默认行为。
+// 只认带文件的拖拽：队列行的拖拽排序不受影响。
+for (const type of ["dragover", "drop"] as const) {
+  window.addEventListener(type, (event) => {
+    if (event.dataTransfer?.types.includes("Files") === true) event.preventDefault();
+  });
+}
+
 /*
  * 冷启动第一帧：主进程已经把用户选的主题塞进 --orbita-theme=（preload 的
  * api.initialTheme），这里在 createRoot 之前直接把 data-theme 写对——

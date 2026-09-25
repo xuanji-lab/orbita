@@ -221,6 +221,7 @@ export function registerAgentIpc(
     const piSessionFile = await host.submit({
       type: "submit",
       text: input.text,
+      ...(input.images !== undefined && input.images.length > 0 ? { images: input.images } : {}),
       ...turnFields(input, provider, piSessionDir, protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
         directories: await readDirectories(input),
@@ -235,7 +236,12 @@ export function registerAgentIpc(
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
     // 子会话（2026-09-23）：input.text 是投递信封时不生成标题——信封不是用户说的话，
     // 拿它起标题会把 `<channel from="parent" …>` 这类机器文本喂给标题模型。
-    if (parseChannelPrompt(input.text) === null && (await sessions.needsAutoTitle(input.sessionId))) {
+    // 只发图、没有字的消息同样不生成——标题模型拿不到图，对着空串只会编；门禁不动，下一条带字的消息再试。
+    if (
+      input.text.trim() !== "" &&
+      parseChannelPrompt(input.text) === null &&
+      (await sessions.needsAutoTitle(input.sessionId))
+    ) {
       host.generateTitle(input.sessionId, input.text, await readTitleModel());
     }
   }
@@ -244,7 +250,7 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...(input.images !== undefined && input.images.length > 0 ? { images: input.images } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

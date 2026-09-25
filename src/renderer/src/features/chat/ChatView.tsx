@@ -81,7 +81,9 @@ import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
-import { modelMenuItems } from "../settings/model-menu";
+import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
+import { imageSrc } from "../../shell/composer-images.ts";
+import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
@@ -377,6 +379,10 @@ export function ChatView(props: {
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
       bottomSlot={<ComposerBar session={session} />}
+      attachments={session.attachments}
+      onAttach={session.attachImages}
+      onRemoveAttachment={session.removeAttachment}
+      imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
     />
   );
 
@@ -1650,6 +1656,11 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
   // markdown 轻量渲染（表格/粗体/代码块/数学放行，标题摊平——wafo 2026-09-20：
   // 「正文里渲染正确，user message 为什么不一并渲染」）。多块之间空行分段。
   const text = textBlocks.map((block) => block.text).join("\n\n");
+  const images = props.item.content.filter(
+    (block): block is Extract<typeof block, { type: "image" }> => block.type === "image",
+  );
+  // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
+  const hasText = text.trim() !== "";
   useLayoutEffect(() => {
     if (expanded) return;
     const el = bubbleRef.current;
@@ -1665,41 +1676,44 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         gap: 2,
       }}
     >
-      <div
-        ref={bubbleRef}
-        style={{
-          position: "relative",
-          width: "fit-content",
-          maxWidth: "var(--bubble-max-width)",
-          minWidth: 0,
-          padding: "9px 13px",
-          background: "var(--color-chat-card-bg)",
-          border: "1px solid var(--color-border-subtle)",
-          borderRadius: "var(--radius-bubble)",
-          fontSize: "var(--font-size-chat)",
-          lineHeight: "var(--line-height-bubble)",
-          overflowWrap: "anywhere",
-          // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
-          ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
-        }}
-      >
-        <MarkdownBlock text={text} variant="bubble" />
-        {!expanded && overflowing && (
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: "var(--space-8)",
-              background: "linear-gradient(transparent, var(--color-chat-card-bg))",
-              borderRadius: "0 0 var(--radius-bubble) var(--radius-bubble)",
-              pointerEvents: "none",
-            }}
-          />
-        )}
-      </div>
+      {images.length > 0 && <UserImages images={images} />}
+      {hasText && (
+        <div
+          ref={bubbleRef}
+          style={{
+            position: "relative",
+            width: "fit-content",
+            maxWidth: "var(--bubble-max-width)",
+            minWidth: 0,
+            padding: "9px 13px",
+            background: "var(--color-chat-card-bg)",
+            border: "1px solid var(--color-border-subtle)",
+            borderRadius: "var(--radius-bubble)",
+            fontSize: "var(--font-size-chat)",
+            lineHeight: "var(--line-height-bubble)",
+            overflowWrap: "anywhere",
+            // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
+            ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
+          }}
+        >
+          <MarkdownBlock text={text} variant="bubble" />
+          {!expanded && overflowing && (
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: "var(--space-8)",
+                background: "linear-gradient(transparent, var(--color-chat-card-bg))",
+                borderRadius: "0 0 var(--radius-bubble) var(--radius-bubble)",
+                pointerEvents: "none",
+              }}
+            />
+          )}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
         {overflowing && (
           <button
@@ -1720,6 +1734,8 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
             <Icon name={expanded ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} />
           </button>
         )}
+        {/* 只发图的消息没有可拷的文字，复制键不出现（置灰的键只是噪音） */}
+        {hasText && (
         <button
           type="button"
           title={copied ? t.chat.copied : t.chat.copyMessage}
@@ -1741,7 +1757,45 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         >
           <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
         </button>
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
+ * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
+ */
+function UserImages(props: { images: readonly PromptImage[] }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        justifyContent: "flex-end",
+        gap: "var(--space-2)",
+        maxWidth: "var(--bubble-max-width)",
+        marginBottom: "var(--space-1)",
+      }}
+    >
+      {props.images.map((image, index) => (
+        <img
+          key={index}
+          src={imageSrc(image)}
+          alt=""
+          draggable={false}
+          style={{
+            display: "block",
+            maxWidth: 240,
+            maxHeight: 240,
+            objectFit: "contain",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--color-border-subtle)",
+            background: "var(--color-bg-muted)",
+          }}
+        />
+      ))}
     </div>
   );
 }

@@ -35,6 +35,7 @@ import {
   type PiExtensionApi,
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
+import { preparePromptImages } from "./prompt-images.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -962,13 +963,19 @@ async function handle(command: AgentCommand): Promise<void> {
       // echoed 记一笔：pi 随后 emit 的 message_start 是这条的回声，别重复显示。
       // expandPromptTemplates 关掉：展开会改写文本，破坏按文本做的回声对账；
       // 且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
+      // 附图先缩好再回显：落盘与送给模型的是同一份。缩不了就在这里抛——
+      // 回显之前，转录里不会留下一条没发出去的消息。
+      const images = await preparePromptImages(command.images);
       note.echoed.add(command.text);
-      for (const progress of opened.adapter.userPrompt(command.text)) {
+      for (const progress of opened.adapter.userPrompt(command.text, images)) {
         // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
         if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
         send({ type: "progress", sessionId: command.sessionId, progress });
       }
-      await opened.session.prompt(command.text, { expandPromptTemplates: false });
+      await opened.session.prompt(command.text, {
+        expandPromptTemplates: false,
+        ...(images.length > 0 ? { images } : {}),
+      });
     });
     return;
   }
@@ -986,13 +993,17 @@ async function handle(command: AgentCommand): Promise<void> {
     try {
       await startTurn(command, async (opened) => {
         const note = ledgerNote(command.sessionId);
+        const images = await preparePromptImages(command.images);
         note.echoed.add(command.text);
-        for (const progress of opened.adapter.userPrompt(command.text)) {
+        for (const progress of opened.adapter.userPrompt(command.text, images)) {
           // A-1：同 submit——预检压缩的界碑要盖这条回显的时间戳
           if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
           send({ type: "progress", sessionId: command.sessionId, progress });
         }
-        await opened.session.prompt(command.text, { expandPromptTemplates: false });
+        await opened.session.prompt(command.text, {
+          expandPromptTemplates: false,
+          ...(images.length > 0 ? { images } : {}),
+        });
       });
     } catch (cause) {
       // 抢跑的旧轮没发 idle，新轮又没开起来——renderer 会卡在 turn。这里兑底。

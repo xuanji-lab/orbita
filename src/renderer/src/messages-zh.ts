@@ -72,6 +72,13 @@ export const zh: Messages = {
     send: "发送",
     stop: "停止",
     stopTurn: "停止这一轮",
+    attachImage: "添加图片（也可以粘贴或拖进来）",
+    removeImage: "移除图片",
+    imageUnsupported: (name) => `${name}：只能发送 PNG、JPEG、GIF、WebP，请先转换格式。`,
+    imageTooLarge: (name, mb) => `${name} 超过 ${mb} MB。`,
+    tooManyImages: (max) => `一条消息最多 ${max} 张图片。`,
+    imageReadFailed: (name) => `读不出 ${name}。`,
+    noVision: "这个模型不能看图，图片不会发给它。换一个带图片标记的模型。",
   },
 
   rowStatus: {
