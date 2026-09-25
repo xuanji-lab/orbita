@@ -632,6 +632,7 @@ export function App() {
                   onOpenChild={openSubSessionInPanel}
                   onBackToList={() => setSubSessionsNav(SUB_SESSIONS_LIST)}
                   onOpenAsMain={openAsMain}
+                  onOpenChannel={openChannel}
                   onClose={() => handlePanel(null)}
                   providersError={providersError}
                 />
