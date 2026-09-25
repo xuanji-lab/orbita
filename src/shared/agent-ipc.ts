@@ -613,7 +613,10 @@ export interface ReadTaskCard {
   sessionId: string;
   /** 被读 task 的标题；空标题（一条消息都没发过）由调用方填占位 */
   title: string;
-  /** briefing = 头部 + 目录 + 最近轮全文；rounds = 指定轮全文 */
+  /**
+   * briefing = 默认那次调用：头部 + 目录 + 最近轮全文；读子会话时是它的状态与回报
+   * （不给过程，见 read-task.ts 的 buildSubSessionOutput）。rounds = 指定轮全文
+   */
   mode: "briefing" | "rounds";
   /** rounds 模式下模型给的轮号串（原样回显，卡片副标用） */
   rounds?: string;

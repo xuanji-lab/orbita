@@ -23,9 +23,14 @@
  * 后来的回复），会话账本里落的是 `channel-mark`，正文在通道账本。以前轮号只认
  * `user` 记录，读子会话恒是「0 rounds / No rounds yet」——母会话拿 read_task 看
  * 子会话在干什么，只看到一条空账。现在标记也开一轮，正文从通道账本补回来。
+ *
+ * 子会话只给输出（2026-09-25 用户裁决）：子会话存在的意义是替母会话省上下文，
+ * 默认那次调用读子会话只给状态与它发给母会话的回报，不给过程——一条子会话常常
+ * 只有一两轮、一轮十几万字符，整轮灌回去等于白派。真要看过程：`rounds` 照旧取
+ * 指定轮，或直接读回执里给的记录文件。
  */
 import type { AgentEvent, ReadTaskCard, ReadTaskOutcome } from "../../shared/agent-ipc.ts";
-import type { ChannelKey, ChannelMessage } from "../../shared/channel.ts";
+import { channelStatus, sortChannelMessages, type ChannelKey, type ChannelMessage } from "../../shared/channel.ts";
 import {
   isChannelMarkRecord,
   isCompactedRecord,
@@ -484,17 +489,67 @@ export function buildRoundsExcerpt(
   return { ok: true, card, text: parts.join("\n\n") };
 }
 
+// ── 子会话：只给输出 ──
+
+/**
+ * 子会话的输出（默认那次调用读子会话时）：头部 + 母会话与状态 + 它发给母会话的
+ * 每条回报全文 + 记录文件路径。**不给过程**：子会话的意义是替母会话省上下文，
+ * 过程灌回去等于白派；回报本来也已经作为 `<channel from="child">` 送进过母会话。
+ *
+ * `ledger` = 这条子会话与母会话之间的通道账本；null = 读失败（状态与回报都不可知，
+ * 如实说，**不退回全文**——读失败不该变成一次把过程全灌回去的理由）。
+ */
+export function buildSubSessionOutput(input: {
+  meta: SessionMeta;
+  records: readonly SessionRecord[];
+  ledger: readonly ChannelMessage[] | null;
+  parentTitle: string | undefined;
+  recordPath: string;
+  workspaceName?: string | null;
+}): ReadTaskOutcome {
+  const { meta, ledger } = input;
+  const rounds = numberRounds(input.records);
+  const parent =
+    input.parentTitle === undefined
+      ? `(id: ${meta.parentId ?? "?"})`
+      : `"${input.parentTitle === "" ? "(untitled)" : input.parentTitle}" (id: ${meta.parentId ?? "?"})`;
+  const status = ledger === null ? "unknown (the channel ledger could not be read)" : channelStatus(ledger);
+  const lines = [
+    taskHeader(meta, rounds.length, input.workspaceName),
+    `Sub-session of ${parent} · status: ${status} · last activity ${iso(meta.updatedAt)} · ${input.records.length} records`,
+  ];
+  const reports = ledger === null ? null : sortChannelMessages(ledger).filter((message) => message.from === "child");
+  if (reports === null) {
+    lines.push("Reports to the parent: unavailable — the channel ledger could not be read.");
+  } else if (reports.length === 0) {
+    lines.push("Reports to the parent: none yet.");
+  } else {
+    lines.push(`Reports to the parent (${reports.length}):`);
+    reports.forEach((report, index) => {
+      lines.push(`--- Report ${index + 1} · ${report.kind} · ${iso(report.createdAt)} ---\n\n${report.text.trim()}`);
+    });
+  }
+  lines.push(
+    "Only the sub-session's status and its reports are shown. The process is left out on purpose — " +
+      "reading it back would spend the context the sub-session exists to save. If you really need it, " +
+      `read its record file (read-only JSONL): ${input.recordPath}, or fetch specific rounds with the \`rounds\` parameter.`,
+  );
+  return { ok: true, card: cardOf(meta, "briefing", rounds.length), text: lines.join("\n\n") };
+}
+
 // ── IO 胶水 ──
 
 /**
  * applyReadTask 对会话存储的全部所需——**最小只读视图**。
- * 「read_task 恒只读」不靠纪律，靠这里：参数收窄成只有 list / load 两个读方法，
- * 这条路径上将来任何写调用（append、改 meta、删会话）tsc 当场拒绝。
+ * 「read_task 恒只读」不靠纪律，靠这里：参数收窄成只有 list / load 两个读方法
+ * 与一个纯路径计算，这条路径上将来任何写调用（append、改 meta、删会话）tsc 当场拒绝。
  * SessionStore 结构化满足本接口（真 store 直接传入），测试与生产同型。
  */
 export interface SessionStoreReader {
   list(): Promise<SessionMeta[]>;
   load(id: string): Promise<SessionDetail | null>;
+  /** 记录文件的路径（不读不写）：子会话的输出里给模型指路 */
+  recordPath(id: string): string;
 }
 
 /**
@@ -504,36 +559,44 @@ export interface ChannelStoreReader {
   load(key: ChannelKey): Promise<ChannelMessage[]>;
 }
 
+const channelKeyId = (key: ChannelKey): string => `${key.parentId}/${key.childId}`;
+
 /**
- * 这条会话里出现过的通道消息正文：按标记里的对面拼出通道键（标记在子会话里 =
- * 母会话发来的，在母会话里 = 子会话发来的），每条通道读一次。**读失败不拦 read_task**：
- * 会话本身读得到，那一条通道的正文如实写「读不到」，原因落 dev 终端。
+ * 这条会话涉及的通道账本：标记里出现过的对面（标记在子会话里 = 母会话发来的，在
+ * 母会话里 = 子会话发来的），加上子会话与自己母会话的那一条（回报是发送侧，子会话
+ * 自己的账里没有标记）。每条通道读一次，按 `channelKeyId` 索引。
+ * **读失败不拦 read_task**：那一条记成 null，调用方如实写「读不到」，原因落 dev 终端。
  */
-async function loadChannelMessages(
+async function loadChannels(
   channels: ChannelStoreReader,
   meta: SessionMeta,
   records: readonly SessionRecord[],
-): Promise<Map<string, ChannelMessage>> {
+): Promise<Map<string, readonly ChannelMessage[] | null>> {
   const keys = new Map<string, ChannelKey>();
+  if (meta.parentId !== undefined) {
+    const own: ChannelKey = { parentId: meta.parentId, childId: meta.id };
+    keys.set(channelKeyId(own), own);
+  }
   for (const record of records) {
     if (!isChannelMarkRecord(record)) continue;
     const key: ChannelKey =
       record.from === "parent"
         ? { parentId: record.peerId, childId: meta.id }
         : { parentId: meta.id, childId: record.peerId };
-    keys.set(`${key.parentId}/${key.childId}`, key);
+    keys.set(channelKeyId(key), key);
   }
-  const messages = new Map<string, ChannelMessage>();
+  const ledgers = new Map<string, readonly ChannelMessage[] | null>();
   await Promise.all(
-    [...keys.values()].map(async (key) => {
+    [...keys.entries()].map(async ([id, key]) => {
       try {
-        for (const message of await channels.load(key)) messages.set(message.id, message);
+        ledgers.set(id, await channels.load(key));
       } catch (cause) {
         console.error("[main] read_task 读不了通道账本，这条通道的消息正文缺席", key, cause);
+        ledgers.set(id, null);
       }
     }),
   );
-  return messages;
+  return ledgers;
 }
 
 /**
@@ -590,10 +653,31 @@ export async function applyReadTask(
     return { ok: false, error: `The task matched by "${ref}" no longer exists on disk.` };
   }
   const target = nameOf(detail.meta.workspaceId);
+  const ledgers = await loadChannels(channels, detail.meta, detail.transcript);
+  const titles = new Map(metas.map((meta) => [meta.id, meta.title]));
   const channel: RoundChannelContext = {
-    messages: await loadChannelMessages(channels, detail.meta, detail.transcript),
-    titles: new Map(metas.map((meta) => [meta.id, meta.title])),
+    messages: new Map(
+      [...ledgers.values()].flatMap((ledger) => (ledger ?? []).map((message) => [message.id, message] as const)),
+    ),
+    titles,
   };
+  // 子会话只给输出（默认那次调用）。**没有通道账本（读回空）的子会话退回普通简报**：
+  // 从 Proma 导入的子会话有 parentId 却没有通道往来，没有回报可给，只给输出等于读到空。
+  // orbita 自己派出的子会话账本至少有派出时那条 task（applyDelegate 先落账再开轮）。
+  const parentId = detail.meta.parentId;
+  if (event.rounds === undefined && parentId !== undefined) {
+    const ledger = ledgers.get(channelKeyId({ parentId, childId: detail.meta.id })) ?? null;
+    if (ledger === null || ledger.length > 0) {
+      return buildSubSessionOutput({
+        meta: detail.meta,
+        records: detail.transcript,
+        ledger,
+        parentTitle: titles.get(parentId),
+        recordPath: sessions.recordPath(detail.meta.id),
+        workspaceName: target,
+      });
+    }
+  }
   if (event.rounds === undefined) return buildTaskBriefing(detail.meta, detail.transcript, target, channel);
   return buildRoundsExcerpt(detail.meta, detail.transcript, event.rounds, target, channel);
 }

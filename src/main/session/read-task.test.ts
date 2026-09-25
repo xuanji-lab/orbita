@@ -460,6 +460,7 @@ describe("applyReadTask（真 store）", () => {
         meta(S3, "Elsewhere", { workspaceId: W2 }),
       ],
       load: async (): Promise<null> => null,
+      recordPath: (id: string): string => `/tmp/sessions/${id}.jsonl`,
     };
     const result = await applyReadTask(
       scoped,
@@ -617,15 +618,79 @@ describe("applyReadTask：真 SessionStore + 真 ChannelStore 读子会话", () 
     task: CHILD,
   };
 
-  // 这一条是这刀的由来：2026-09-25 母会话读正在跑的子会话，拿到「0 rounds / No rounds yet」
-  test("母会话读子会话：2 轮，任务与回复的正文都在", async () => {
+  const report = (id: string, kind: ChannelMessage["kind"], text: string, createdAt: number): Promise<void> =>
+    channels.append({ parentId: PARENT, childId: CHILD }, channelMessage(id, "child", kind, text, createdAt));
+
+  // 这一条是这刀的由来：子会话的意义是替母会话省上下文，默认那次调用只给输出
+  test("母会话读子会话（不带 rounds）：只给状态与回报全文，不给过程", async () => {
+    await report("msg-q", "question", "Session group only, or both groups?", 1800);
+    await report("msg-done", "done", "Fixed on fix/copybook-files-band.\nSee paper-themes.css.", 2600);
     const result = await applyReadTask(sessions, readChild, workspacesStub(), channels);
     assert.equal(result.ok, true);
-    if (!result.ok || result.card === null) return assert.fail("简报应该有任务卡");
+    if (!result.ok || result.card === null) return assert.fail("应该有任务卡");
+    assert.equal(result.card.sessionId, CHILD);
     assert.equal(result.card.roundCount, 2);
+    assert.match(result.text, /Sub-session of "Image input branch" \(id: aaaaaaaa-[^)]+\) · status: done/);
+    assert.match(result.text, /Reports to the parent \(2\):/);
+    assert.match(result.text, /--- Report 1 · question · [^\n]+ ---\n\nSession group only, or both groups\?/);
+    assert.match(result.text, /--- Report 2 · done · [^\n]+ ---\n\nFixed on fix\/copybook-files-band\.\nSee paper-themes\.css\./);
+    // 过程与母会话自己发的东西都不给
+    assert.doesNotMatch(result.text, /Looking at FilesPanel first/);
+    assert.doesNotMatch(result.text, /Fixed the band in paper-themes\.css/);
+    assert.doesNotMatch(result.text, /Find the white band/);
+    assert.doesNotMatch(result.text, /Last \d+ rounds? in full/);
+    // 真要看过程：给记录文件路径，并提示 rounds
+    assert.ok(result.text.includes(sessions.recordPath(CHILD)), "要给记录文件路径");
+    assert.match(result.text, /`rounds` parameter/);
+  });
+
+  test("还没回报：写 none yet，状态 running，照样给路径", async () => {
+    const result = await applyReadTask(sessions, readChild, workspacesStub(), channels);
+    assert.match(result.ok ? result.text : "", /status: running/);
+    assert.match(result.ok ? result.text : "", /Reports to the parent: none yet\./);
+    assert.ok(result.ok && result.text.includes(sessions.recordPath(CHILD)));
+  });
+
+  test("提问后在等回复：状态 waiting", async () => {
+    await channels.append(
+      { parentId: PARENT, childId: CHILD },
+      channelMessage("msg-q2", "child", "question", "Which group?", 3000),
+    );
+    const result = await applyReadTask(sessions, readChild, workspacesStub(), channels);
+    assert.match(result.ok ? result.text : "", /status: waiting/);
+  });
+
+  test("带 rounds：照旧给那几轮全文，母会话的任务与回复正文从通道账本补回", async () => {
+    const result = await applyReadTask(sessions, { ...readChild, rounds: "1-2" }, workspacesStub(), channels);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.match(result.text, /--- Round 1 ---/);
     assert.match(result.text, /Find the white band in the copybook Files panel\./);
     assert.match(result.text, /Only the session group, not the workspace one\./);
-    assert.match(result.text, /\[task from the parent session "Image input branch"\]/);
+    assert.match(result.text, /Looking at FilesPanel first\./);
+  });
+
+  test("没有通道账本的子会话（从 Proma 导入）：没有回报可给，退回普通简报", async () => {
+    const IMPORTED = "cccccccc-0000-0000-0000-000000000003";
+    await sessions.ensureSession(meta(IMPORTED, "Imported child", { parentId: PARENT }));
+    for (const record of roundsFixture(2)) await sessions.record(IMPORTED, record);
+    const result = await applyReadTask(sessions, { ...readChild, task: IMPORTED }, workspacesStub(), channels);
+    assert.equal(result.ok, true);
+    assert.match(result.ok ? result.text : "", /--- Last 2 rounds in full ---/);
+    assert.doesNotMatch(result.ok ? result.text : "", /Sub-session of/);
+  });
+
+  test("普通 task（不是子会话）不受影响：照旧是简报", async () => {
+    await sessions.record(PARENT, userItem("pu1", "investigate", 500));
+    await sessions.record(PARENT, assistantItem("pa1", "Delegated it.", 600));
+    const result = await applyReadTask(
+      sessions,
+      { ...readChild, sessionId: CHILD, task: PARENT },
+      workspacesStub(),
+      channels,
+    );
+    assert.match(result.ok ? result.text : "", /--- Last 1 round in full ---/);
+    assert.match(result.ok ? result.text : "", /Delegated it\./);
   });
 
   test("通道账本读失败不拦 read_task：会话照读，正文如实写读不到", async () => {
@@ -644,9 +709,14 @@ describe("applyReadTask：真 SessionStore + 真 ChannelStore 读子会话", () 
       assert.equal(result.ok, true);
       assert.match(result.ok ? result.text : "", /\(message text not found in the channel ledger\)/);
       assert.match(result.ok ? result.text : "", /Looking at FilesPanel first\./);
+      // 不带 rounds：仍是只给输出的形状，如实说读不到——读失败不能变成把过程全灌回去的理由
+      const overview = await applyReadTask(sessions, readChild, workspacesStub(), broken);
+      assert.match(overview.ok ? overview.text : "", /status: unknown/);
+      assert.match(overview.ok ? overview.text : "", /Reports to the parent: unavailable/);
+      assert.doesNotMatch(overview.ok ? overview.text : "", /Looking at FilesPanel first/);
     } finally {
       console.error = originalError;
     }
-    assert.equal(logged.length, 1, "读失败要落日志，不能静默");
+    assert.equal(logged.length, 2, "读失败要落日志，不能静默");
   });
 });
