@@ -241,7 +241,8 @@ export function App() {
     },
     [applyChannelChange, channelWide],
   );
-  // 两处都不显示了 → 请求作废：槽里的卡片列表是按需挂载的，下次挂上时不该再滚一遍旧请求
+  // 请求只发给此刻看得见的那一处（内联列常驻挂载，隐藏时宽 0——不该在看不见的地方
+  // 展开、滚动、高亮一遍）。两处都不显示了 → 请求作废：下次打开时不该再滚一遍旧请求
   const channelPanelVisible = channelInlineOpen || rightPanel === "channels";
   useEffect(() => {
     if (!channelPanelVisible) setChannelOpenRequest(null);
@@ -571,7 +572,7 @@ export function App() {
             onWidthChange={setChannelColumnWidth}
             onWidthCommit={(width) => changeSettings({ channelColumnWidth: width })}
             onShownChange={setChannelShownOverride}
-            openRequest={channelOpenRequest}
+            openRequest={channelInlineOpen ? channelOpenRequest : null}
           />
           {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
           <RightPanelSlot
