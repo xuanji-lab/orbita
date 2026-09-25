@@ -3,6 +3,9 @@ import type { Workspace } from "@shared/workspace";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
 import { Menu, type MenuItem } from "../../shell/Menu";
+import { InfoTip, useSettingTip } from "./InfoTip";
+import { Step } from "./MigrationStep.tsx";
+import type { StepState } from "./migration-page.ts";
 import { abbreviateHome } from "./migration-groups.ts";
 import {
   DEFAULT_SKILL_SCOPE,
@@ -20,11 +23,12 @@ import {
 const SKILLS_BEFORE_MORE = 8;
 
 /**
- * Migration 页第 3 段：Skills。按源目录分组（Proma 一个工作区一组），重名先到先得。
- * 段头一个 Copy / Link 开关管全部（默认 Copy，设计稿裁决 #6）；每组一个作用域菜单
- * （默认 All sessions）。没有可导的组整行置灰，写明原因。
+ * Migration 页第 3 步：Skills。按源目录分组（Proma 一个工作区一组），重名先到先得。
+ * 段头一个 Copy / Link 开关管全部（默认 Copy，设计稿裁决 #6），两者的后果进悬停；
+ * 每组一个作用域菜单（默认 All sessions，列头 Available in）。没有可导的组整行置灰，写明原因。
  */
 export function SkillsSection(props: {
+  state: StepState;
   /** null = 还没扫描 */
   groups: readonly ImportSkillGroup[] | null;
   home: string;
@@ -46,28 +50,27 @@ export function SkillsSection(props: {
   const selectable = groups.flatMap(selectableSkills);
   const all = selectable.length > 0 && selectable.every((skill) => props.selected.has(skill.dir));
   return (
-    <section className="mg-sec">
-      <div className="mg-sec-head">
-        <span className="section-label">3 · Skills</span>
-        {selectable.length > 0 && (
-          <span className="mg-sec-actions">
+    <Step
+      n={3}
+      title="Skills"
+      state={props.state}
+      summary={
+        <InfoTip label="About importing skills">
+          Names already in orbita are left alone · a name found in two folders comes from the first one listed
+        </InfoTip>
+      }
+      tools={
+        selectable.length > 0 && (
+          <span className="mg-tools">
             <span className="mg-seg" role="group" aria-label="How skills come over">
               {(["copy", "link"] as const).map((mode) => (
-                <button
+                <ModeButton
                   key={mode}
-                  type="button"
-                  className="quiet-control mg-seg-btn"
-                  aria-pressed={props.mode === mode}
+                  mode={mode}
+                  pressed={props.mode === mode}
                   disabled={props.disabled}
-                  title={
-                    mode === "copy"
-                      ? "Copied into orbita: they keep working if the other app is removed; later edits there don't carry over"
-                      : "Linked to the other app's folder: edits there show up here; removing the app breaks them"
-                  }
                   onClick={() => props.onMode(mode)}
-                >
-                  {mode === "copy" ? "Copy" : "Link"}
-                </button>
+                />
               ))}
             </span>
             <span className="mg-sep" />
@@ -75,36 +78,74 @@ export function SkillsSection(props: {
               {all ? "Clear all" : "Select all"}
             </button>
           </span>
-        )}
-      </div>
-
+        )
+      }
+    >
       {props.groups === null ? (
-        <p className="mg-placeholder">Scan to list skills. Names already in orbita are left alone.</p>
+        <p className="mg-caption">
+          <Icon name="book-open" size={12} strokeWidth={1.8} />
+          Grouped by skills folder · one scope per folder
+        </p>
       ) : groups.length === 0 ? (
-        <p className="mg-placeholder">No skills in the ticked sources.</p>
-      ) : (
-        <div className="mg-list">
-          {groups.map((group) => (
-            <SkillGroupBlock
-              key={group.dir}
-              group={group}
-              groups={groups}
-              home={props.home}
-              workspaces={props.workspaces}
-              selected={props.selected}
-              scope={props.scopes.get(group.dir) ?? DEFAULT_SKILL_SCOPE}
-              expanded={props.expanded.has(group.dir)}
-              showAll={props.showAll.has(group.dir)}
-              disabled={props.disabled}
-              onSet={props.onSet}
-              onScope={(scope) => props.onScope(group.dir, scope)}
-              onToggleExpand={() => props.onToggleExpand(group.dir)}
-              onShowAll={() => props.onShowAll(group.dir)}
-            />
-          ))}
+        <div className="mg-block mg-empty">
+          <Icon name="circle-check" size={15} />
+          No skills in the ticked sources
         </div>
+      ) : (
+        <>
+          <div className="mg-colhead mg-grid-skills" aria-hidden="true">
+            <span />
+            <span>Folder</span>
+            <span>Selected</span>
+            <span>Available in</span>
+          </div>
+          <div className="mg-block">
+            {groups.map((group) => (
+              <SkillGroupBlock
+                key={group.dir}
+                group={group}
+                groups={groups}
+                home={props.home}
+                workspaces={props.workspaces}
+                selected={props.selected}
+                scope={props.scopes.get(group.dir) ?? DEFAULT_SKILL_SCOPE}
+                expanded={props.expanded.has(group.dir)}
+                showAll={props.showAll.has(group.dir)}
+                disabled={props.disabled}
+                onSet={props.onSet}
+                onScope={(scope) => props.onScope(group.dir, scope)}
+                onToggleExpand={() => props.onToggleExpand(group.dir)}
+                onShowAll={() => props.onShowAll(group.dir)}
+              />
+            ))}
+          </div>
+        </>
       )}
-    </section>
+    </Step>
+  );
+}
+
+/** Copy / Link 两个按钮：各自的后果进悬停（原来是 title）。 */
+function ModeButton(props: { mode: ImportSkillMode; pressed: boolean; disabled: boolean; onClick: () => void }) {
+  const tip = useSettingTip<HTMLButtonElement>(
+    props.mode === "copy"
+      ? "Copied into orbita · they keep working if the other app is removed · later edits there don't carry over"
+      : "Linked to the other app's folder · edits there show up here · removing the app breaks them",
+  );
+  return (
+    <>
+      <button
+        type="button"
+        className="quiet-control mg-seg-btn"
+        aria-pressed={props.pressed}
+        disabled={props.disabled}
+        onClick={props.onClick}
+        {...tip.anchor}
+      >
+        {props.mode === "copy" ? "Copy" : "Link"}
+      </button>
+      {tip.layer}
+    </>
   );
 }
 
@@ -141,7 +182,7 @@ function SkillGroupBlock(props: {
 
   return (
     <div className="mg-group">
-      <div className="mg-row mg-row-group" data-disabled={empty || undefined} onClick={empty ? undefined : props.onToggleExpand}>
+      <div className="mg-grow mg-grid-skills" data-disabled={empty || undefined} onClick={empty ? undefined : props.onToggleExpand}>
         <span className="mg-lead">
           <input
             type="checkbox"
@@ -167,50 +208,50 @@ function SkillGroupBlock(props: {
           >
             <Icon name="chevron-right" size={12} />
           </button>
-          <span className="mg-glyph">
-            <Icon name="book-open" size={14} strokeWidth={1.8} />
-          </span>
         </span>
-        <span className="mg-copy">
-          <span className="mg-line1">
+        <span className="mg-gcopy">
+          <span className="mg-gname">
+            <Icon name="book-open" size={14} strokeWidth={1.8} />
             <span className="mg-name">{label}</span>
             <span className="mg-meta">{skillGroupNote(group)}</span>
           </span>
-          <span className="mg-path" title={group.dir}>
+          <span className="mg-gpath" title={group.dir}>
             {abbreviateHome(group.dir, props.home)}
           </span>
         </span>
-        <span className="mg-trail mg-cols-skills" onClick={(event) => event.stopPropagation()}>
+        {empty ? (
+          <span />
+        ) : (
+          <span className="mg-count mg-num">
+            <b>{picked}</b>
+            {all ? "" : ` of ${selectable.length}`}
+          </span>
+        )}
+        <span className="mg-dest" onClick={(event) => event.stopPropagation()}>
           {empty ? (
             <span className="mg-status">Nothing new</span>
           ) : (
-            <>
-              <span className="mg-count">
-                <b>{picked}</b>
-                {all ? "" : ` of ${selectable.length}`}
-              </span>
-              <Menu
-                items={scopeItems}
-                align="end"
-                panelMinWidth={200}
-                trigger={({ open, toggle }) => (
-                  <Chip active={open} chevron disabled={props.disabled} title="Which sessions can use these skills" onClick={toggle}>
-                    {skillScopeLabel(props.scope, props.workspaces)}
-                  </Chip>
-                )}
-              />
-            </>
+            <Menu
+              items={scopeItems}
+              align="end"
+              panelMinWidth={200}
+              trigger={({ open, toggle }) => (
+                <Chip active={open} chevron disabled={props.disabled} title="Which sessions can use these skills" onClick={toggle}>
+                  {skillScopeLabel(props.scope, props.workspaces)}
+                </Chip>
+              )}
+            />
           )}
         </span>
       </div>
 
       {props.expanded && !empty && (
-        <div className="mg-children">
+        <div className="mg-kids">
           {visible.map((skill) => {
             const status = skillStatusLabel(skill, props.groups);
             const can = isSelectableSkill(skill);
             return (
-              <label key={skill.dir} className="mg-child mg-skill" data-disabled={!can || undefined}>
+              <label key={skill.dir} className="mg-kid mg-skill" data-disabled={!can || undefined}>
                 <input
                   type="checkbox"
                   checked={can && props.selected.has(skill.dir)}
