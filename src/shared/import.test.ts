@@ -13,6 +13,7 @@ describe("parseImportScanInput", () => {
   test("isImportSourceId 只认契约里的来源", () => {
     assert.equal(isImportSourceId("claude-code"), true);
     assert.equal(isImportSourceId("kimi-code"), true);
+    assert.equal(isImportSourceId("opencode"), true);
     assert.equal(isImportSourceId("proma"), true);
     assert.equal(isImportSourceId("codex"), false);
     assert.equal(isImportSourceId(1), false);

@@ -43,6 +43,7 @@ export const SOURCE_LABEL: Record<ImportSourceId, string> = {
   proma: "Proma",
   "claude-code": "Claude Code",
   "kimi-code": "Kimi Code",
+  opencode: "opencode",
   "agent-skills": "Shared agent skills",
 };
 

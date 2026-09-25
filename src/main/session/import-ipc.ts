@@ -28,12 +28,14 @@ import {
   probeAgentSkills,
   probeClaudeCode,
   probeKimiCode,
+  probeOpencode,
   probeProma,
   runImport,
   scanImport,
   type ClaudeCodePaths,
   type ImporterDeps,
   type KimiCodePaths,
+  type OpencodePaths,
 } from "./importer.ts";
 
 export function registerImportIpc(
@@ -74,6 +76,7 @@ export function registerImportIpc(
       extraSourceRoots: legacyPromaRoots(),
       claudeCode: claudeCodePaths(),
       kimiCode: kimiCodePaths(),
+      opencode: opencodePaths(),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
       // mcp.json 坏了不挡扫描：会话与 skills 照导，MCP 写入时会各自报错
@@ -96,6 +99,7 @@ export function registerImportIpc(
       await probeProma(joinPromaRoot(), legacyPromaRoots()),
       await probeClaudeCode(claudeCodePaths()),
       await probeKimiCode(kimiCodePaths()),
+      await probeOpencode(opencodePaths()),
       await probeAgentSkills(agentSkillsDir()),
     ],
   }));
@@ -170,6 +174,19 @@ function kimiCodePaths(): KimiCodePaths {
     sessionsDir: join(root, "sessions"),
     workspacesFile: join(root, "workspaces.json"),
     mcpFile: join(root, "mcp.json"),
+    home,
+  };
+}
+
+/**
+ * opencode 按 XDG 目录放数据：会话库在 ~/.local/share/opencode，配置在 ~/.config/opencode
+ * （macOS 上也是这两处，不在 Library 下）。探测与扫描同一份。
+ */
+function opencodePaths(): OpencodePaths {
+  const home = homedir();
+  return {
+    dbFile: join(home, ".local", "share", "opencode", "opencode.db"),
+    configFile: join(home, ".config", "opencode", "opencode.json"),
     home,
   };
 }

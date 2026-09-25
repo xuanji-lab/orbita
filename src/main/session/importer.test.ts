@@ -13,6 +13,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { buildContextEntries } from "@earendil-works/pi-coding-agent";
 import type { Workspace } from "../../shared/workspace.ts";
@@ -26,6 +27,7 @@ import {
   mapModel,
   probeClaudeCode,
   probeKimiCode,
+  probeOpencode,
   probeProma,
   runImport,
   scanImport,
@@ -1779,6 +1781,117 @@ describe("Kimi Code 来源", () => {
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [join(kimiRoot, "sessions"), join(kimiRoot, "workspaces.json"), join(kimiRoot, "mcp.json")]);
     assert.equal((await probeKimiCode({ ...kimiPaths(), sessionsDir: join(root, "nope") })).found, false);
+  });
+});
+
+describe("opencode 来源", () => {
+  let dbFile = "";
+  let home = "";
+
+  beforeEach(async () => {
+    dbFile = join(root, "opencode", "opencode.db");
+    home = join(root, "home");
+    await mkdir(dirname(dbFile), { recursive: true });
+    await mkdir(home, { recursive: true });
+    const db = new DatabaseSync(dbFile);
+    db.exec(`
+      create table session (id text primary key, project_id text, parent_id text, directory text, title text, time_created integer, time_updated integer, revert text);
+      create table message (id text primary key, session_id text, time_created integer, time_updated integer, data text);
+      create table part (id text primary key, message_id text, session_id text, time_created integer, time_updated integer, data text);
+    `);
+    db.close();
+  });
+
+  const paths = () => ({ dbFile, configFile: join(root, "opencode", "opencode.json"), home });
+  const ocDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ opencode: paths(), ...overrides });
+
+  let seq = 0;
+  /** 一条根会话（或子会话）：每个 prompt 一问一答 */
+  function writeSession(id: string, directory: string, title: string, prompts: string[], parent: string | null = null): void {
+    const db = new DatabaseSync(dbFile);
+    db.prepare("insert into session values (?, 'p', ?, ?, ?, ?, ?, null)").run(id, parent, directory, title, 1000 + seq, 2000 + seq);
+    const insertMessage = db.prepare("insert into message values (?, ?, ?, ?, ?)");
+    const insertPart = db.prepare("insert into part values (?, ?, ?, 0, 0, ?)");
+    for (const prompt of prompts) {
+      seq += 1;
+      const userId = `msg_${String(seq).padStart(4, "0")}u`;
+      const replyId = `msg_${String(seq).padStart(4, "0")}v`;
+      insertMessage.run(userId, id, 10_000 + seq * 10, 0, JSON.stringify({ role: "user", time: { created: 10_000 + seq * 10 } }));
+      insertPart.run(`prt_${seq}a`, userId, id, JSON.stringify({ type: "text", text: prompt }));
+      insertPart.run(`prt_${seq}b`, userId, id, JSON.stringify({ type: "text", text: "<system-reminder>mode</system-reminder>", synthetic: true }));
+      insertMessage.run(replyId, id, 10_000 + seq * 10 + 1, 0, JSON.stringify({ role: "assistant", time: { created: 10_000 + seq * 10 + 1 }, providerID: "zhipuai", modelID: "glm-5.1" }));
+      insertPart.run(`prt_${seq}c`, replyId, id, JSON.stringify({ type: "step-start" }));
+      insertPart.run(`prt_${seq}d`, replyId, id, JSON.stringify({ type: "text", text: `答：${prompt}` }));
+      insertPart.run(`prt_${seq}e`, replyId, id, JSON.stringify({ type: "step-finish", reason: "stop", tokens: { input: 1, output: 1, cache: { read: 0, write: 0 } } }));
+    }
+    db.close();
+  }
+
+  test("扫描：只列根会话；默认标题取第一句用户写的话；同文件夹两条建工作区；执行后 transcript 只有用户写的话、清单记 opencode、重扫即已导入", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    writeSession("ses_a", repo, "New session - 2026-01-17T07:10:22.607Z", ["修测试", "再跑一次"]);
+    writeSession("ses_b", repo, "发版检查", ["检查一下"]);
+    writeSession("ses_child", repo, "子任务", ["子 agent 的活"], "ses_a");
+    writeSession("ses_home", home, "闲聊", ["你好"]);
+    const db = new DatabaseSync(dbFile);
+    db.prepare("insert into session values ('ses_empty', 'p', null, ?, 'x', 9, 9, null)").run(repo);
+    db.prepare("insert into message values ('msg_x', 'ses_empty', 1, 1, ?)").run(JSON.stringify({ role: "user", time: { created: 1 } }));
+    db.prepare("insert into part values ('prt_x', 'msg_x', 'ses_empty', 0, 0, ?)").run(JSON.stringify({ type: "text", text: "hi" }));
+    db.close();
+
+    const report = await scanImport(ocDeps(), [], ["opencode"]);
+    const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([...byId.keys()].sort(), ["ses_a", "ses_b", "ses_home"]);
+    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["ses_empty", "unsupported-format"]]);
+    assert.equal(byId.get("ses_a")?.title, "修测试");
+    assert.equal(byId.get("ses_a")?.sourceFile, `${dbFile}#ses_a`);
+    assert.deepEqual([byId.get("ses_a")?.source, byId.get("ses_a")?.sourceKind, byId.get("ses_a")?.importedModel], ["opencode", "opencode", "glm-5.1"]);
+    assert.equal(report.newWorkspaces.length, 1);
+    assert.equal(byId.get("ses_b")?.workspaceId, report.newWorkspaces[0]?.id);
+    assert.deepEqual({ folder: byId.get("ses_home")?.folder, cwd: byId.get("ses_home")?.cwd }, { folder: null, cwd: home });
+
+    const run = await runImport(ocDeps(), { sources: ["opencode"], sessions: new Set([`${dbFile}#ses_a`]), destinations: [] });
+    assert.equal(run.imported, 1);
+    assert.deepEqual(run.failed, []);
+    const [meta] = await store.list();
+    const records = (await store.load(meta?.id ?? ""))?.transcript ?? [];
+    const userTexts = records
+      .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
+      .map((record) => record.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
+    assert.deepEqual(userTexts, ["修测试", "再跑一次"]);
+    assert.match(await readFile(meta?.piSessionFile ?? "", "utf8"), /system-reminder/);
+    const ledger = (await readFile(join(root, "imports.jsonl"), "utf8")).trim().split("\n").map((item) => JSON.parse(item) as Record<string, unknown>);
+    assert.deepEqual(ledger.map((item) => [item["source"], item["sourceFile"]]), [["opencode", `${dbFile}#ses_a`]]);
+    const again = await scanImport(ocDeps({ existingMetas: await store.list() }), [], ["opencode"]);
+    assert.equal(again.skipped.find((item) => item.sourceId === "ses_a")?.reason, "already-imported");
+  });
+
+  test("MCP 从 opencode.json 的 mcp 读：local 的命令数组拆成命令与参数，remote 走 http", async () => {
+    await writeFile(
+      join(root, "opencode", "opencode.json"),
+      JSON.stringify({
+        mcp: {
+          vision: { type: "local", command: ["npx", "-y", "vision-mcp"], environment: { KEY: "k" }, enabled: true },
+          reader: { type: "remote", url: "https://r/mcp", headers: { Authorization: "Bearer k" }, enabled: false },
+        },
+      }),
+    );
+    const report = await scanImport(ocDeps(), [], ["opencode"]);
+    assert.deepEqual(
+      report.mcp.map((item) => [item.name, item.transport, item.detail, item.carriesSecrets]),
+      [
+        ["reader", "http", "https://r/mcp", true],
+        ["vision", "stdio", "npx -y vision-mcp", true],
+      ],
+    );
+  });
+
+  test("探测：库在不在；paths 列出库与配置", async () => {
+    const found = await probeOpencode(paths());
+    assert.equal(found.found, true);
+    assert.deepEqual(found.paths, [dbFile, join(root, "opencode", "opencode.json")]);
+    assert.equal((await probeOpencode({ ...paths(), dbFile: join(root, "nope.db") })).found, false);
   });
 });
 
