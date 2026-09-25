@@ -57,6 +57,12 @@ product renders the name as plain type: lowercase `orbita` set in the brand seri
 mark glyph anywhere in the renderer. When a logo is finalised, drop `SVG + PNG + usage rules` into
 `assets/` and wire it in where the plain wordmark sits today.
 
+The **app icon** is a separate thing and does exist: `assets/app-icon.svg` — 稿纸, a green manuscript
+grid with a red circle seal reading 璇玑 (the product's Chinese name). It only appears outside the
+renderer (Dock, Finder, the packaged `.app`); `bun run icon` renders it into `build/icon.icns`
+(`scripts/make-icon.sh`). Don't use it as an in-app mark — inside the window the plain wordmark rule
+above still holds.
+
 ## Content fundamentals
 
 UI copy is English, written as literals in the components — there is no i18n layer in this checkout.

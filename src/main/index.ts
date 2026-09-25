@@ -110,7 +110,9 @@ function createMainWindow(theme: ThemePreference): BrowserWindow {
     return { action: "deny" };
   });
 
-  const devServerUrl = process.env["ELECTRON_RENDERER_URL"];
+  // 打包产物一律读包内 renderer，不认这个环境变量：在 dev 版 orbita 的 agent 终端里
+  // 直接启动打包产物时，这个变量会从 electron-vite dev 一路继承下来，不拦就会连到 dev server
+  const devServerUrl = app.isPackaged ? undefined : process.env["ELECTRON_RENDERER_URL"];
   if (devServerUrl) {
     // 两类 dev 首载故障都会把窗口留在底色上（真实事故 2026-09-10：白屏只能手动 Ctrl+R）：
     // ① server 未就绪 loadURL 拒绝——退避重试；ready-to-show 没到窗口不可见，重试无感。
