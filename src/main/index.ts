@@ -235,11 +235,19 @@ void app.whenReady().then(async () => {
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
     if (event.type === "failed" && event.sessionId === null) phases.clear();
-    // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡
+    // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡。
+    // 通道账本一并传进去：子会话每一轮的开头是通道消息，正文在那里。
+    // 任何路径都必须回执（同 delegateRequest）：读盘抛错没有 catch 的话，agent 进程里的
+    // read_task 调用永远挂着
     if (event.type === "readTaskRequest") {
-      void applyReadTask(sessions, event, workspaces).then((result) => {
-        agentHost.answerReadTask(event.requestId, result);
-      });
+      void applyReadTask(sessions, event, workspaces, channels)
+        .then((result) => agentHost.answerReadTask(event.requestId, result))
+        .catch((cause: unknown) =>
+          agentHost.answerReadTask(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
       return;
     }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
