@@ -219,9 +219,10 @@
   --color-chat-control-bg: #ffffff;
   --color-chat-table-bg: #ffffff;
   --color-chat-link: #22345a;
-  /* 纸面：绿格线与红笔（装饰层 src/renderer/src/paper-themes.css 用） */
+  /* 纸面：绿格线、红笔、首页 slogan 的红田字格（装饰层 src/renderer/src/paper-themes.css 用） */
   --color-paper-grid: rgba(59, 122, 85, 0.42);
   --color-paper-pen: #cc3a2e;
+  --color-paper-tian: #cf4a3c;
 }
 
 /* typescript — 稿纸（英文）：同一档的英文版，打字稿。同一张米白纸，不画格也不满屏画线，
@@ -264,7 +265,8 @@
   --color-chat-control-bg: #ffffff;
   --color-chat-table-bg: #ffffff;
   --color-chat-link: #2f4f7f;
-  /* 纸面：输入框的蓝横线与红页边线 */
+  /* 纸面：输入框的蓝横线与红页边线；首页批语的红笔 */
   --color-paper-rule: #a9c6e2;
   --color-paper-margin: #e38f86;
+  --color-paper-pen: #cc3a2e;
 }

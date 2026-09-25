@@ -80,7 +80,8 @@ Latin words are allowed only for the brand (orbita), protocol / format names (MC
 model and provider names, file names and paths, and key names; `messages.test.ts` enforces this with
 a whitelist. Chinese copy uses full-width punctuation, one space between CJK and digits / Latin
 (「2 个子会话」「编辑 mcp.json」), and a single `…` for menu items and in-flight states. Brand copy —
-the slogan 璇玑运转，诸事得序 — stays in Chinese under every theme. The rules below are written for
+the slogan 璇玑运转，诸事得序 — stays in Chinese under every theme except Typescript, whose home
+page is the English face of the manuscript page: "Set in motion, kept in order."  The rules below are written for
 the English copy; the Chinese copy follows the same voice.
 
 - **Voice: flat, mechanical, unhurried.** Labels are nouns or bare verbs: "New Session", "Search",
@@ -116,7 +117,9 @@ the English copy; the Chinese copy follows the same voice.
 - **Mono for machine facts.** Paths, ids, branch names, durations, model names and counts are set in
   the mono/tabular face so a number never re-flows a row.
 - **The slogan is the one lyrical line in the product**: 璇玑运转，诸事得序 — set in the brand
-  serif at 36px, letter-spaced, centred. Nothing else on the home screen competes with it.
+  serif at 36px, letter-spaced, centred. Nothing else on the home screen competes with it. The two
+  paper themes restage it (see *Paper themes*) and add one teacher's mark beneath it in red pen
+  (「字迹工整」/ "Neat."); that mark is decoration, not copy — screen readers skip it.
 
 ## Visual foundations
 
@@ -161,6 +164,11 @@ wavy underline on bold transcript text, a double green frame round the main pane
 grid in the composer, and serif text (Literata + Source Han Serif SC). Typescript takes typewriter
 ribbon blue (`#2f4f7f`), Courier Prime for text and Special Elite for the wordmark and slogan,
 ruled lines plus a red margin line in the composer only, and upper-cased transcript headings.
+On the home page Manuscript sets the slogan one character per red 田字格 cell in Ma Shan Zheng,
+Typescript types the English slogan in Special Elite on a ruled line with a red margin, and both
+add the teacher's red-pen mark in Long Cang. The two hand faces ship as **subsets** — only the
+nine slogan characters (7 KB) and the mark's characters plus printable ASCII (20 KB) — so changing
+either line means re-subsetting (command in `tokens/fonts.css`).
 Tokens live in `tokens/colors.css` (the `--color-paper-*` group), `glass.css` and
 `typography.css`; the decoration layer is `src/renderer/src/paper-themes.css`. They are the only
 themes that change type, and the only place the accent is not blue or yellow.

@@ -75,6 +75,7 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { HomeHero } from "./HomeHero";
 import { CarryoverChecklist } from "./CarryoverChecklist";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
@@ -96,6 +97,7 @@ import {
 } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
+import type { ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -161,6 +163,11 @@ export function ChatView(props: {
    * （子会话 PR4c）。只有主槽的 ChatView 拿到它。
    */
   onOpenParent?: (parentId: string) => void;
+  /**
+   * 解析后的主题：只给首页门面用（稿纸两档的 slogan 与批语，HomeHero.tsx）。
+   * 只有主槽的 ChatView 拿到它；辅助对话是 homeBare，本来就不出门面。
+   */
+  theme?: Exclude<ThemePreference, "system">;
   /**
    * 右栏 Sub-sessions 面板会话层正开着的子会话 id（子会话 PR4c）：派出卡按它描边。
    * 只有主槽的 ChatView 拿到非 null 值。
@@ -508,27 +515,8 @@ export function ChatView(props: {
               gap: "var(--space-5)",
             }}
           >
-            {/*
-              全产品唯一一句抒情的话，也是唯一保持中文的界面文案。窄槽（侧栏 + 右栏
-              都展开时主槽变窄）会把它挤断成两行——没设 line-height 时继承正文的
-              22px（--line-height-body），36px 的字一断行两行几乎叠在一起。给大字号
-              自己的行高（1.25，比正文更紧但留得出两行的呼吸），text-wrap: balance
-              让断行落在匀称的位置，不是「一长一短」。
-            */}
-            <h1
-              style={{
-                margin: "0 0 var(--space-1)",
-                fontFamily: "var(--font-family-brand)",
-                fontSize: "var(--font-size-logo)",
-                lineHeight: 1.25,
-                fontWeight: 600,
-                letterSpacing: "var(--tracking-slogan)",
-                textAlign: "center",
-                textWrap: "balance",
-              }}
-            >
-              璇玑运转，诸事得序
-            </h1>
+            {/* 门面：slogan（稿纸两档再加红笔批语），样子与理由在 HomeHero.tsx */}
+            <HomeHero theme={props.theme} />
             {/* 一排最近会话卡（SessionCard 规格：恒三槽、等高、hover 只抬阴影） */}
             {!session.sessionsLoaded ? (
               <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
