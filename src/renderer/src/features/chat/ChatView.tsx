@@ -364,9 +364,9 @@ export function ChatView(props: {
         session.send();
       }}
       onStop={session.stop}
-      placeholder={
-        session.sessionId === null ? t.chat.placeholderNew : t.chat.placeholderReply
-      }
+      // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
+      // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
+      placeholder={homeActive ? t.chat.placeholderNew : t.chat.placeholderReply}
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
       bottomSlot={<ComposerBar session={session} />}
