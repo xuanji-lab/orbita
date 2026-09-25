@@ -43,6 +43,7 @@ import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-
 import gitFork from "../../../../Orbita Design System/assets/icons/lucide/git-fork.svg?raw";
 import globe from "../../../../Orbita Design System/assets/icons/lucide/globe.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
+import key from "../../../../Orbita Design System/assets/icons/lucide/key.svg?raw";
 import lightbulb from "../../../../Orbita Design System/assets/icons/lucide/lightbulb.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
@@ -130,6 +131,7 @@ const ICONS = {
   globe,
   "grip-vertical": gripVertical,
   image,
+  key,
   lightbulb,
   "loader-circle": loaderCircle,
   list,

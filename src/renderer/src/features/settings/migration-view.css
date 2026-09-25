@@ -155,28 +155,33 @@
 }
 
 .mg-row-source,
-.mg-row-group {
+.mg-row-group,
+.mg-row-mcp {
   cursor: pointer;
   transition: var(--transition-hover);
 }
 
 .mg-row-source:hover,
-.mg-row-group:hover {
+.mg-row-group:hover,
+.mg-row-mcp:hover {
   background: var(--color-bg-hover);
 }
 
 .mg-row-source[data-disabled],
-.mg-row-group[data-disabled] {
+.mg-row-group[data-disabled],
+.mg-row-mcp[data-disabled] {
   cursor: default;
 }
 
 .mg-row-source[data-disabled]:hover,
-.mg-row-group[data-disabled]:hover {
+.mg-row-group[data-disabled]:hover,
+.mg-row-mcp[data-disabled]:hover {
   background: transparent;
 }
 
 .mg-row-source[data-disabled] .mg-name,
-.mg-row-group[data-disabled] .mg-name {
+.mg-row-group[data-disabled] .mg-name,
+.mg-row-mcp[data-disabled] .mg-name {
   color: var(--color-text-tertiary);
 }
 
@@ -542,4 +547,16 @@
 
 .mg-child[data-disabled] .mg-title {
   color: var(--color-text-tertiary);
+}
+
+/* ---- MCP 段 ---- */
+
+/* server 名是配置里的键，按代码字体显示（与 MCP 面板一致） */
+.mg-mono {
+  font-family: var(--font-family-mono);
+}
+
+/* 段头下面那一句「导进来是停用的」 */
+.mg-note-lead {
+  padding-bottom: var(--space-1);
 }

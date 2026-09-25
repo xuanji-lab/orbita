@@ -79,6 +79,7 @@ function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
     persistSession: async (meta, records) => store.commitImported(meta, records),
     refreshSession: async (id, records, patch) => store.commitImportUpdate(id, records, patch),
     skillTarget: { copyFrom: async () => "", importFrom: async () => "" },
+    mcpTarget: { add: async () => undefined, reload: async () => undefined },
     ...overrides,
   };
   return base;
@@ -1449,7 +1450,7 @@ describe("Claude Code 来源", () => {
   });
 
   const ccDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps =>
-    deps({ claudeCode: { projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills") }, ...overrides });
+    deps({ claudeCode: { projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }, ...overrides });
 
   /** 一份 Claude Code 会话文件：rootUuid 决定分叉关系；prompts 是用户每轮说的话 */
   async function writeClaudeCodeSession(
@@ -1621,10 +1622,10 @@ describe("Claude Code 来源", () => {
   });
 
   test("探测：会话根目录在不在；paths 列出扫描会读的两处", async () => {
-    const found = await probeClaudeCode({ projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills") });
+    const found = await probeClaudeCode({ projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") });
     assert.equal(found.found, true);
-    assert.deepEqual(found.paths, [projectsDir, desktopDir, join(root, "claude", "skills")]);
-    const missing = await probeClaudeCode({ projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills") });
+    assert.deepEqual(found.paths, [projectsDir, desktopDir, join(root, "claude", "skills"), join(root, "claude.json")]);
+    const missing = await probeClaudeCode({ projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") });
     assert.equal(missing.found, false);
   });
 });
@@ -1655,5 +1656,49 @@ describe("Skills 随扫描与执行走", () => {
     assert.equal(run.skillsImported, 1);
     assert.deepEqual(run.skillsFailed, []);
     assert.deepEqual((await skillStore.list()).map((skill) => [skill.slug, skill.global]), [["archify", true]]);
+  });
+});
+
+describe("MCP servers 随扫描与执行走", () => {
+  test("只勾 Claude Code：扫描列出 ~/.claude.json 的 server；执行把勾选的停用写入，已有同名的不动", async () => {
+    const claudeJson = join(root, "claude.json");
+    await writeFile(
+      claudeJson,
+      JSON.stringify({
+        mcpServers: {
+          search: { type: "http", url: "https://s/mcp", headers: { Authorization: "Bearer k" } },
+          mine: { type: "stdio", command: "mine" },
+        },
+      }),
+    );
+    const added: string[] = [];
+    const env = deps({
+      claudeCode: {
+        projectsDir: join(root, "none"),
+        desktopSessionsDir: join(root, "none-desktop"),
+        home: root,
+        skillsDir: join(root, "none-skills"),
+        claudeJson,
+      },
+      existingMcp: ["mine"],
+      mcpTarget: {
+        add: async (name, server) => {
+          added.push(`${name}:${server.disabled === true ? "off" : "on"}`);
+        },
+        reload: async () => undefined,
+      },
+    });
+    const report = await scanImport(env, [], ["claude-code"]);
+    assert.deepEqual(
+      report.mcp.map((item) => [item.name, item.status, item.carriesSecrets]),
+      [
+        ["mine", "in-orbita", false],
+        ["search", "new", true],
+      ],
+    );
+    assert.equal(JSON.stringify(report).includes("Bearer k"), false);
+    const run = await runImport(env, { sources: ["claude-code"], sessions: new Set(), destinations: [], mcp: new Set(["search", "mine"]) });
+    assert.equal(run.mcpImported, 1);
+    assert.deepEqual(added, ["search:off"]);
   });
 });

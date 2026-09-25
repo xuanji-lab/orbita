@@ -40,6 +40,7 @@ describe("parseImportRunInput", () => {
       ],
       skills: ["/s/a", "/s/a"],
       skillMode: "link",
+      mcp: ["miyo", "miyo"],
       skillScopes: [
         { dir: "/s", scope: { kind: "off" } },
         { dir: "/t", scope: { kind: "workspace", workspaceId: "w-1" } },
@@ -48,13 +49,14 @@ describe("parseImportRunInput", () => {
     assert.deepEqual(input.sessions, ["/a.jsonl", "/b.jsonl"]);
     assert.deepEqual(input.skills, ["/s/a"]);
     assert.equal(input.skillMode, "link");
+    assert.deepEqual(input.mcp, ["miyo"]);
     assert.deepEqual(input.skillScopes[1], { dir: "/t", scope: { kind: "workspace", workspaceId: "w-1" } });
     assert.equal(input.destinations.length, 3);
     assert.deepEqual(input.destinations[1], { folder: "/repo/x", destination: { kind: "workspace", workspaceId: "w-1" } });
   });
 
   test("坏去向、空文件夹串、非字符串会话都整体拒绝", () => {
-    const base = { sources: ["proma"], sessions: [], destinations: [], skills: [], skillMode: "copy", skillScopes: [] };
+    const base = { sources: ["proma"], sessions: [], destinations: [], skills: [], skillMode: "copy", skillScopes: [], mcp: [] };
     assert.throws(() => parseImportRunInput({ ...base, destinations: [{ folder: "/x", destination: { kind: "workspace" } }] }), /bad destination/);
     assert.throws(() => parseImportRunInput({ ...base, destinations: [{ folder: "", destination: { kind: "tasks" } }] }), /bad folder/);
     assert.throws(() => parseImportRunInput({ ...base, sessions: [1] }), /source files/);
@@ -62,9 +64,10 @@ describe("parseImportRunInput", () => {
   });
 
   test("skills 的坏形状整体拒绝", () => {
-    const base = { sources: ["agent-skills"], sessions: [], destinations: [], skills: [], skillMode: "copy", skillScopes: [] };
+    const base = { sources: ["agent-skills"], sessions: [], destinations: [], skills: [], skillMode: "copy", skillScopes: [], mcp: [] };
     assert.doesNotThrow(() => parseImportRunInput(base));
     assert.throws(() => parseImportRunInput({ ...base, skillMode: "move" }), /copy or link/);
+    assert.throws(() => parseImportRunInput({ ...base, mcp: [{}] }), /server names/);
     assert.throws(() => parseImportRunInput({ ...base, skills: [1] }), /array of folders/);
     assert.throws(() => parseImportRunInput({ ...base, skillScopes: [{ dir: "/s", scope: { kind: "workspace" } }] }), /bad skill scope/);
     assert.throws(() => parseImportRunInput({ ...base, skillScopes: [{ dir: "", scope: { kind: "off" } }] }), /name a folder/);

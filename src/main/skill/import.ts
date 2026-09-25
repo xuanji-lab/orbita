@@ -48,10 +48,11 @@ async function readSkillMd(dir: string): Promise<string | null> {
 }
 
 /**
- * Proma 的 skills：每个工作区一个目录（`agent-workspaces/<slug>/skills`，停用的在 skills-inactive，
- * 不导）。默认工作区排最前（它通常最全），其余按名字。名字取工作区表里的 name。
+ * Proma 的工作区目录（`agent-workspaces/<slug>`），名字取工作区表里的 name。默认工作区排最前
+ * （它通常最全），其余按名字。skills 与 MCP 都按工作区放，两处共用这一份顺序——重名先到先得
+ * 在两段里是同一个优先级。
  */
-export async function promaSkillDirs(promaRoot: string): Promise<SkillSourceDir[]> {
+export async function promaWorkspaceFolders(promaRoot: string): Promise<{ slug: string; name: string }[]> {
   let workspaces: { slug: string; name: string }[] = [];
   try {
     const parsed: unknown = JSON.parse(await readFile(join(promaRoot, "agent-workspaces.json"), "utf8"));
@@ -72,6 +73,11 @@ export async function promaSkillDirs(promaRoot: string): Promise<SkillSourceDir[
   const slugs = (await childNames(join(promaRoot, "agent-workspaces"))).filter((slug) => !slug.startsWith("."));
   workspaces = slugs.map((slug) => ({ slug, name: known.get(slug) ?? slug }));
   workspaces.sort((a, b) => (a.slug === "default" ? -1 : b.slug === "default" ? 1 : a.name.localeCompare(b.name)));
+  return workspaces;
+}
+
+/** Proma 的 skills：每个工作区一个目录（停用的在 skills-inactive，不导）。 */
+export function promaSkillDirs(promaRoot: string, workspaces: readonly { slug: string; name: string }[]): SkillSourceDir[] {
   return workspaces.map((workspace) => ({
     source: "proma",
     name: workspace.name,

@@ -66,11 +66,14 @@ import {
   importSkills,
   promaBuiltInSkills,
   promaSkillDirs,
+  promaWorkspaceFolders,
   scanSkillDirs,
   type SkillImportTarget,
   type SkillSelection,
   type SkillSourceDir,
 } from "../skill/import.ts";
+import { importMcpServers, mergeMcpEntries, readClaudeCodeMcp, readPromaMcp, type McpSourceEntry } from "../mcp/import.ts";
+import type { McpServer } from "../../shared/mcp.ts";
 import { promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
 import { appendImportLedger, readImportLedger, type ImportLedgerLine } from "./import-ledger.ts";
 import {
@@ -104,6 +107,8 @@ export interface ClaudeCodePaths {
   home: string;
   /** Claude Code 的 skills 目录（~/.claude/skills；桌面应用同步下来的在它的 synced/ 下） */
   skillsDir: string;
+  /** Claude Code 的用户配置（~/.claude.json）：只读其中的 mcpServers（全局与各项目） */
+  claudeJson: string;
 }
 
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
@@ -116,6 +121,8 @@ export interface ImporterDeps {
   agentSkillsDir?: string;
   /** orbita 已有的 skill slug（含只剩断链的）：skills 重名判断的底 */
   existingSkills?: readonly string[];
+  /** orbita mcp.json 里已有的 server 名：MCP 重名判断的底 */
+  existingMcp?: readonly string[];
   /** 额外合法源根（Proma 迁移史的旧根 ~/.proma：索引里仍有条目指向它，文件仍在）。
    *  防御边界是「这几个根之内」，不传则只认 promaRoot */
   extraSourceRoots?: readonly string[];
@@ -145,6 +152,8 @@ export interface RunImporterDeps extends ImporterDeps {
   persistSession(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void>;
   /** skill 落进中心存储（生产接 SkillStore） */
   skillTarget: SkillImportTarget;
+  /** MCP server 加进 orbita 的 mcp.json（生产接 McpStore.add + 运行时 reload） */
+  mcpTarget: { add(name: string, server: McpServer): Promise<void>; reload(): Promise<void> };
   /** 既有会话追加新消息后的落盘：整份 transcript + meta 的派生字段（SessionStore.commitImportUpdate） */
   refreshSession(
     id: string,
@@ -183,6 +192,7 @@ export async function probeProma(promaRoot: string, extraRoots: readonly string[
       ...extraRoots.map((root) => join(root, "sdk-config", "sessions")),
       join(promaRoot, "agent-workspaces", "*", "skills"),
       join(promaRoot, "default-skills"),
+      join(promaRoot, "agent-workspaces", "*", "mcp.json"),
     ],
     found,
   };
@@ -203,7 +213,7 @@ export async function probeClaudeCode(paths: ClaudeCodePaths): Promise<ImportSou
     id: "claude-code",
     label: "Claude Code",
     kind: "cli",
-    paths: [paths.projectsDir, paths.desktopSessionsDir, paths.skillsDir],
+    paths: [paths.projectsDir, paths.desktopSessionsDir, paths.skillsDir, paths.claudeJson],
     found,
   };
 }
@@ -837,6 +847,17 @@ export async function scanImport(
   destinations: readonly ImportDestinationChoice[] = [],
   sources: readonly ImportSourceId[] = ["proma"],
 ): Promise<ImportScanReport> {
+  return (await scanWithConfigs(deps, destinations, sources)).report;
+}
+
+/**
+ * 扫描的全部产出：报告，加上要导的 MCP 配置本体（报告里只有名字与出处——配置带密钥，不出主进程）。
+ */
+async function scanWithConfigs(
+  deps: ImporterDeps,
+  destinations: readonly ImportDestinationChoice[],
+  sources: readonly ImportSourceId[],
+): Promise<{ report: ImportScanReport; mcpServers: Map<string, McpServer> }> {
   const overrides = new Map<string | null, ImportDestination>(
     destinations.map((choice) => [choice.folder, choice.destination]),
   );
@@ -1175,8 +1196,8 @@ export async function scanImport(
   plan.sort((a, b) => a.createdAt - b.createdAt || a.sourceId.localeCompare(b.sourceId));
 
   // skills：组的顺序就是重名先到先得的顺序——Proma 各工作区 → 共用目录 → Claude Code
-  const skillDirs: SkillSourceDir[] = [];
-  if (sources.includes("proma")) skillDirs.push(...(await promaSkillDirs(deps.promaRoot)));
+  const promaFolders = sources.includes("proma") ? await promaWorkspaceFolders(deps.promaRoot) : [];
+  const skillDirs: SkillSourceDir[] = promaSkillDirs(deps.promaRoot, promaFolders);
   if (sources.includes("agent-skills") && deps.agentSkillsDir !== undefined) {
     skillDirs.push({ source: "agent-skills", name: null, dir: deps.agentSkillsDir });
   }
@@ -1192,7 +1213,14 @@ export async function scanImport(
           sources.includes("proma") ? await promaBuiltInSkills(deps.promaRoot) : new Set<string>(),
         );
 
-  return {
+  // MCP：同名取先到的配置——Proma（按工作区顺序）→ Claude Code（全局 → 各项目）
+  const mcpEntries: McpSourceEntry[] = await readPromaMcp(deps.promaRoot, promaFolders);
+  if (sources.includes("claude-code") && deps.claudeCode !== undefined) {
+    mcpEntries.push(...(await readClaudeCodeMcp(deps.claudeCode.claudeJson)));
+  }
+  const mcp = mergeMcpEntries(mcpEntries, new Set(deps.existingMcp ?? []));
+
+  const report: ImportScanReport = {
     plan,
     newWorkspaces: [...newWorkspaceByKey.values()].filter((workspace) => referenced.has(workspace.id)),
     mergedWorkspaceIds: [...mergedIds].filter((id) => referenced.has(id)),
@@ -1207,7 +1235,9 @@ export async function scanImport(
       null,
     ),
     skills,
+    mcp: mcp.items,
   };
+  return { report, mcpServers: mcp.servers };
 }
 
 /** 一个来源都没勾时的扫描结果：什么都没读，也就什么都没有。 */
@@ -1224,6 +1254,7 @@ export function emptyScanReport(): ImportScanReport {
     orphanedSubSessions: 0,
     lastImportAt: null,
     skills: [],
+    mcp: [],
   };
 }
 
@@ -1803,6 +1834,8 @@ export interface ImportSelection {
   destinations: readonly ImportDestinationChoice[];
   /** 勾选的 skills；不传 = 不导 skills */
   skills?: SkillSelection;
+  /** 勾选的 MCP server 名；不传 = 不导 */
+  mcp?: ReadonlySet<string>;
 }
 
 /**
@@ -1821,7 +1854,7 @@ export function selectPlan(plan: readonly ImportPlanItem[], chosen: ReadonlySet<
 }
 
 export async function runImport(deps: RunImporterDeps, selection?: ImportSelection): Promise<ImportRunReport> {
-  const scanned = await scanImport(deps, selection?.destinations ?? [], selection?.sources);
+  const { report: scanned, mcpServers } = await scanWithConfigs(deps, selection?.destinations ?? [], selection?.sources ?? ["proma"]);
   const plan = selection === undefined ? scanned.plan : selectPlan(scanned.plan, selection.sessions);
   // 没被勾的会话不落，它们要新建的工作区也不建
   const usedWorkspaceIds = new Set(plan.map((item) => item.workspaceId));
@@ -1953,6 +1986,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
     selection?.skills === undefined
       ? { imported: 0, failed: [] }
       : await importSkills(scanned.skills, selection.skills, deps.skillTarget, new Set(deps.workspaces.map((workspace) => workspace.id)));
+  const mcpResult =
+    selection?.mcp === undefined ? { imported: 0, failed: [] } : await importMcpServers(mcpServers, selection.mcp, deps.mcpTarget);
 
   return {
     imported,
@@ -1963,6 +1998,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
     mergedWorkspaceIds: report.mergedWorkspaceIds,
     skillsImported: skillResult.imported,
     skillsFailed: skillResult.failed,
+    mcpImported: mcpResult.imported,
+    mcpFailed: mcpResult.failed,
   };
 }
 
