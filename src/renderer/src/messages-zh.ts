@@ -81,6 +81,13 @@ export const zh: Messages = {
     noVision: "这个模型不能看图，图片不会发给它。换一个带图片标记的模型。",
   },
 
+  lightbox: {
+    aria: "看图",
+    open: "查看大图",
+    prev: "上一张",
+    next: "下一张",
+  },
+
   rowStatus: {
     pinned: "已置顶",
   },

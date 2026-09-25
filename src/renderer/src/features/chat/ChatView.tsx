@@ -83,6 +83,7 @@ import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, t
 import { isPlanBilling } from "@shared/known-providers";
 import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
 import { imageSrc } from "../../shell/composer-images.ts";
+import { ImageLightbox } from "../../shell/ImageLightbox";
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
@@ -1768,6 +1769,8 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
  * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
  */
 function UserImages(props: { images: readonly PromptImage[] }) {
+  const t = useT();
+  const [viewing, setViewing] = useState<number | null>(null);
   return (
     <div
       style={{
@@ -1779,26 +1782,47 @@ function UserImages(props: { images: readonly PromptImage[] }) {
         marginBottom: "var(--space-1)",
       }}
     >
+      {viewing !== null && (
+        <ImageLightbox images={props.images} startIndex={viewing} onClose={() => setViewing(null)} />
+      )}
       {props.images.map((image, index) => (
-        <img
+        <button
           key={index}
-          src={imageSrc(image)}
-          alt=""
-          draggable={false}
-          style={{
-            display: "block",
-            maxWidth: 240,
-            maxHeight: 240,
-            objectFit: "contain",
-            borderRadius: "var(--radius-md)",
-            border: "1px solid var(--color-border-subtle)",
-            background: "var(--color-bg-muted)",
-          }}
-        />
+          type="button"
+          aria-label={t.lightbox.open}
+          onClick={() => setViewing(index)}
+          style={ZOOM_BUTTON_STYLE}
+        >
+          <img
+            src={imageSrc(image)}
+            alt=""
+            draggable={false}
+            style={{
+              display: "block",
+              maxWidth: 240,
+              maxHeight: 240,
+              objectFit: "contain",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--color-border-subtle)",
+              background: "var(--color-bg-muted)",
+            }}
+          />
+        </button>
       ))}
     </div>
   );
 }
+
+/** 内联图外面那层「点了看大图」的按钮：去掉按钮自己的盒子，只留图；圆角跟图走，焦点环才贴合 */
+const ZOOM_BUTTON_STYLE: React.CSSProperties = {
+  display: "block",
+  padding: 0,
+  border: 0,
+  background: "none",
+  borderRadius: "var(--radius-md)",
+  cursor: "zoom-in",
+  maxWidth: "100%",
+};
 
 /**
  * 分支按钮行（C-2）：挂在每轮 agent 最终完整输出的下面，回答落定即**常驻显示**
@@ -2613,6 +2637,8 @@ function tokenSpans(line: readonly TokenSpan[]) {
  */
 function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
   const t = useT();
+  // 看大图：放在提前 return 之前（hook 顺序不能随 result 有无变）
+  const [viewing, setViewing] = useState<number | null>(null);
   const { result } = props;
   if (result === undefined) return null;
   const isFailure = result.status === "error";
@@ -2651,19 +2677,27 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
           {block.text}
         </pre>
       ))}
+      {viewing !== null && <ImageLightbox images={images} startIndex={viewing} onClose={() => setViewing(null)} />}
       {images.map((block, i) => (
         <figure key={`img-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
-          <img
-            src={`data:${block.mimeType};base64,${block.data}`}
-            alt=""
-            style={{
-              display: "block",
-              maxWidth: "100%",
-              maxHeight: 240,
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--color-border-subtle)",
-            }}
-          />
+          <button
+            type="button"
+            aria-label={t.lightbox.open}
+            onClick={() => setViewing(i)}
+            style={{ ...ZOOM_BUTTON_STYLE, justifySelf: "start" }}
+          >
+            <img
+              src={imageSrc(block)}
+              alt=""
+              style={{
+                display: "block",
+                maxWidth: "100%",
+                maxHeight: 240,
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--color-border-subtle)",
+              }}
+            />
+          </button>
           <figcaption
             style={{
               fontSize: "var(--font-size-micro)",

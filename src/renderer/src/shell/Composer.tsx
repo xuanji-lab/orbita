@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
+import { ImageLightbox } from "./ImageLightbox";
 import { PROMPT_IMAGE_MIME_TYPES } from "@shared/prompt-images";
 import { filesOf, imageSrc, type ComposerImage } from "./composer-images.ts";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
@@ -160,6 +161,7 @@ export function Composer(props: {
           items={props.attachments}
           onRemove={props.onRemoveAttachment}
           removeLabel={t.composer.removeImage}
+          openLabel={t.lightbox.open}
         />
       )}
       {props.attachments.length > 0 && props.imageUnsupported === true && (
@@ -303,16 +305,26 @@ export function Composer(props: {
 
 /**
  * 待发附图的缩略图条。方形裁切（object-fit: cover）只为排得齐——原图完整地
- * 发出去，发出后在转录里按原比例显示。移除键常显而不是悬停才出：键盘用户要能 Tab 到它。
+ * 发出去，点缩略图看大图。移除键常显而不是悬停才出：键盘用户要能 Tab 到它。
+ * 缩略图与移除键是兄弟不是嵌套：button 里不能再套 button。
  */
 function AttachmentStrip(props: {
   items: readonly ComposerImage[];
   onRemove: (id: string) => void;
   removeLabel: string;
+  openLabel: string;
 }) {
+  const [viewing, setViewing] = useState<number | null>(null);
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
-      {props.items.map((item) => (
+      {viewing !== null && (
+        <ImageLightbox
+          images={props.items.map((item) => item.image)}
+          startIndex={viewing}
+          onClose={() => setViewing(null)}
+        />
+      )}
+      {props.items.map((item, index) => (
         <div
           key={item.id}
           title={item.name === "" ? undefined : item.name}
@@ -327,12 +339,19 @@ function AttachmentStrip(props: {
             background: "var(--color-bg-muted)",
           }}
         >
-          <img
-            src={imageSrc(item.image)}
-            alt={item.name}
-            draggable={false}
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-          />
+          <button
+            type="button"
+            aria-label={props.openLabel}
+            onClick={() => setViewing(index)}
+            style={{ display: "block", width: "100%", height: "100%", padding: 0, border: 0, cursor: "zoom-in" }}
+          >
+            <img
+              src={imageSrc(item.image)}
+              alt={item.name}
+              draggable={false}
+              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+            />
+          </button>
           <button
             type="button"
             aria-label={props.removeLabel}

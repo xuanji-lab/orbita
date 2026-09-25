@@ -99,6 +99,13 @@ export const en = {
     noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
   },
 
+  lightbox: {
+    aria: "Image viewer",
+    open: "View larger",
+    prev: "Previous image",
+    next: "Next image",
+  },
+
   rowStatus: {
     pinned: "Pinned",
   },
