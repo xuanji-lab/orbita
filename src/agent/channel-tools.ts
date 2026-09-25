@@ -177,7 +177,9 @@ function replySubsessionTool(broker: RequestBroker, sessionId: string): ToolDefi
       if (!result.ok) throw new Error(result.error);
       return {
         content: [{ type: "text", text: "Reply sent to the sub-session." }],
-        details: {},
+        // 落账那条通道消息的 id：renderer 的发送侧标记凭它点了能定位到这一条
+        // （tool-results.ts 的 channelSendMessageId）；给模型看的正文不带
+        details: { messageId: result.messageId },
       };
     },
   };
@@ -226,7 +228,8 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
       const suffix = kindRaw === "done" || kindRaw === "failed" ? " Task handed back — end this turn." : "";
       return {
         content: [{ type: "text", text: `Reported to parent.${suffix}` }],
-        details: {},
+        // 同 reply_subsession：子会话工作记录里的标记凭它定位到父子会话面板里的这一条
+        details: { messageId: result.messageId },
       };
     },
   };

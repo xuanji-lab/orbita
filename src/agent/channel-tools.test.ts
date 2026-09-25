@@ -187,7 +187,8 @@ describe("reply_subsession", () => {
     fake.answer(fake.requestIdAt(0), { ok: true, messageId: "m-1" });
     const result = await pending;
     assert.deepEqual(result.content, [{ type: "text", text: "Reply sent to the sub-session." }]);
-    assert.deepEqual(result.details, {});
+    // 落账那条通道消息的 id 进 details（给 renderer 的标记定位），不进给模型看的正文
+    assert.deepEqual(result.details, { messageId: "m-1" });
   });
 
   test("delivery 给了就原样上船（steer / followUp 都合法）", async () => {
@@ -265,7 +266,8 @@ describe("report_to_parent", () => {
     const result = await pending;
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /end this turn/i);
-    assert.deepEqual(result.details, {});
+    assert.doesNotMatch(text, /m-1/);
+    assert.deepEqual(result.details, { messageId: "m-1" });
   });
 
   test("kind 为 question/progress 时确认文案不带「结束这一轮」", async () => {
