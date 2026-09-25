@@ -7,7 +7,8 @@ import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
  * 值是字符串，或 `(…) => string`（数量、插值、单复数）。函数参数只用原始类型
  * （number / string），守卫测试（messages.test.ts）要能拿样例参数把每一条都调一遍。
  *
- * 语言不是设置项，由主题派生（locale.ts 的 `localeOfTheme`）：Copybook（小学作业）全中文，其余英文。
+ * 用哪张表由 shared 的 `effectiveLanguage` 定：Copybook（小学作业）恒中文、Typescript 恒英文，
+ * 其余主题跟设置里的语言走。
  * 组件里用 `useT()` 取表；纯函数不读全局，由调用方把表传进去。
  *
  * 分组按界面区域，不按文件——同一句话在两处出现时放 `common`。
@@ -244,6 +245,11 @@ export const en = {
     },
     appearance: "Appearance",
     theme: "Theme",
+    language: "Language",
+    languageInfo:
+      "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
+    languageLockedZh: "This theme is Chinese-only",
+    languageLockedEn: "This theme is English-only",
     agent: "Agent",
     autoCompact: "Auto-compact",
     /** 说明中间夹着一个 <b>/compact</b>，拆成前后两段 */

@@ -7,7 +7,7 @@ import { app, BrowserWindow, shell } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
-import type { ThemePreference } from "../shared/settings.ts";
+import type { Language, ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
@@ -88,7 +88,7 @@ const MAC_WINDOW = {
  * 不走 IPC / localStorage：这是窗口创建时刻就同步可得的值，硬塞一条通道或另存
  * 一份缓存反而多造一个真源（同 preload 里 `platform` 的先例）。
  */
-function createMainWindow(theme: ThemePreference): BrowserWindow {
+function createMainWindow(theme: ThemePreference, language: Language | undefined): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -105,7 +105,8 @@ function createMainWindow(theme: ThemePreference): BrowserWindow {
     webPreferences: {
       ...SECURITY_INVARIANTS,
       preload: join(__dirname, "../preload/index.js"),
-      additionalArguments: [`--orbita-theme=${theme}`],
+      // 语言同理（`--orbita-language=`，preload 的 readInitialLanguage）：没选过就不传
+      additionalArguments: [`--orbita-theme=${theme}`, ...(language === undefined ? [] : [`--orbita-language=${language}`])],
     },
   });
 
@@ -324,13 +325,13 @@ void app.whenReady().then(async () => {
   registerChannelIpc(deps);
   app.on("before-quit", () => agentHost.dispose());
 
-  createMainWindow(initialSettings.theme);
+  createMainWindow(initialSettings.theme, initialSettings.language);
 
   // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
   // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      void settings.read().then((current) => createMainWindow(current.theme));
+      void settings.read().then((current) => createMainWindow(current.theme, current.language));
     }
   });
 });

@@ -63,6 +63,12 @@
   font-weight: var(--weight-medium);
 }
 
+/* 控件旁的一句说明（如单语主题下语言芯片为何置灰）：状态用文字讲，颜色退到次要 */
+.set-row-hint {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
 .set-row-error {
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);

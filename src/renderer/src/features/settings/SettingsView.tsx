@@ -22,6 +22,11 @@ import {
   type SettingsPatch,
 } from "@shared/settings";
 import { THINKING_LEVELS } from "@shared/thinking";
+import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
+import { effectiveLanguage, LANGUAGES, themeLanguage, type Language } from "@shared/settings";
+
+/** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
+const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
 import { defaultThinkingLevel } from "@shared/model-defaults";
 import { modelThinkingLevels } from "../chat/thinking-choice.ts";
 import { useT } from "../../locale.ts";
@@ -212,11 +217,36 @@ function General(props: {
           })),
         );
 
+  // 单语主题定死的语言（null = 双语主题，听设置）；芯片亮的是实际生效的那一门
+  const lockedLanguage = themeLanguage(props.settings.theme);
+  const shownLanguage = effectiveLanguage(props.settings.theme, props.settings.language);
+
   return (
     <div className="set-page">
       <SettingGroup label={t.settings.appearance}>
         <SettingRow name={t.settings.theme}>
           <ThemePicker value={props.settings.theme} onChange={props.onChange} />
+        </SettingRow>
+        <SettingRow name={t.settings.language} info={t.settings.languageInfo}>
+          {/* 单语主题下两个芯片都置灰、亮的是主题定的那门语言，旁边说清为什么——
+              设置里存的值不动，切回双语主题就恢复 */}
+          <span className="set-chips" role="group" aria-label={t.settings.language}>
+            {LANGUAGES.map((language) => (
+              <Chip
+                key={language}
+                active={shownLanguage === language}
+                disabled={lockedLanguage !== null}
+                onClick={() => props.onChange({ language })}
+              >
+                {LANGUAGE_NAMES[language]}
+              </Chip>
+            ))}
+          </span>
+          {lockedLanguage !== null && (
+            <span className="set-row-hint">
+              {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
+            </span>
+          )}
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
@@ -337,7 +367,7 @@ function General(props: {
               {t.common.off}
             </Chip>
           </span>
-          <AttributionPreview enabled={gitAttribution} />
+          <AttributionPreview enabled={gitAttribution} language={shownLanguage} />
         </SettingRow>
       </SettingGroup>
       <SettingGroup label={t.settings.data}>
@@ -391,18 +421,21 @@ function SettingRow(props: {
 /**
  * 提交署名的效果预览：直接写出会追加的那两行（commit trailer、PR 描述行），
  * 代替原来那句「Adds a Made-with: Orbita trailer…」。Off 时同样两行划掉，
- * 用户看得出「关掉的是什么」。文案与 `src/agent/git-attribution.ts` 讲给模型的口径一致。
+ * 用户看得出「关掉的是什么」。字面量与讲给模型的说明同源（shared/attribution.ts），
+ * PR 那一行跟着界面语言走；commit trailer 的键恒为英文（git 只认 ASCII 键）。
  */
-function AttributionPreview(props: { enabled: boolean }) {
+function AttributionPreview(props: { enabled: boolean; language: Language }) {
+  // 预览只写链接文字，不写 URL：这一行在设置页里是示意，完整的 markdown 在 PR 描述里
+  const prLine = prAttributionLine(props.language).replace(/\[(.+?)\]\([^)]*\)/, "$1");
   return (
     <span className="set-trailer" data-off={!props.enabled || undefined} aria-hidden="true">
       <span className="set-trailer-line">
         <Icon name="git-commit-horizontal" size={11} />
-        <span className="set-trailer-text">Made-with: Orbita</span>
+        <span className="set-trailer-text">{COMMIT_TRAILER}</span>
       </span>
       <span className="set-trailer-line">
         <Icon name="git-pull-request" size={11} />
-        <span className="set-trailer-text">Made with Orbita</span>
+        <span className="set-trailer-text">{prLine}</span>
       </span>
     </span>
   );

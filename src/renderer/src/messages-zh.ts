@@ -224,6 +224,11 @@ export const zh: Messages = {
     },
     appearance: "外观",
     theme: "主题",
+    language: "语言",
+    languageInfo:
+      "浅色、暗色、黑色主题中英都有；小学作业只有中文、打字稿只有英文——格子是照着那门文字画的。提交与 PR 署名跟着界面语言走。",
+    languageLockedZh: "这个主题只有中文",
+    languageLockedEn: "这个主题只有英文",
     agent: "智能体",
     autoCompact: "自动压缩",
     autoCompactInfoLead: "剩余上下文降到这一档时，把较早的历史折成摘要 · 关闭则只能手动 ",

@@ -643,7 +643,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
                 QUOTE_GUIDELINE,
                 // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
-                gitAttributionGuideline(command.gitAttribution ?? true),
+                gitAttributionGuideline(command.gitAttribution ?? true, command.attributionLanguage ?? "en"),
               ]
                 .filter((part) => part !== "")
                 .join("\n\n"),

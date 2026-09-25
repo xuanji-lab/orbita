@@ -8,8 +8,8 @@
  * 重得多的副作用，而且用户当次说「这条别加」时钩子拦不住，模型能。
  */
 
-/** 标识落在哪。写死成常量是为了让「链接改了要改哪」只有一个答案。 */
-const ORBITA_URL = "https://github.com/XIAOZF99/orbita";
+import { COMMIT_TRAILER, prAttributionLine } from "../shared/attribution.ts";
+import type { Language } from "../shared/settings.ts";
 
 /**
  * 关 = 空串（调用方按空串跳过这一段，不留空行）。
@@ -20,18 +20,25 @@ const ORBITA_URL = "https://github.com/XIAOZF99/orbita";
  * - **不用 Co-Authored-By、不改 author/committer**：那会把 agent 记成贡献者，
  *   污染 `git shortlog` 与仓库的贡献统计；trailer 只是一行元数据，不参与计数。
  * - **用户当次拒绝优先**：这是偏好不是规则，用户说「这条别加」就不加。
+ *
+ * **署名跟着界面语言走**（`language`，主进程按 effectiveLanguage 算好）：
+ * - PR / MR 描述里那一行是给人读的，中文界面就写中文。
+ * - commit trailer **键永远是英文**（理由见 shared/attribution.ts 的 COMMIT_TRAILER）。
+ * - 去重认两种写法：中英切换过的仓库里，已有的英文行不该再补一行中文。
  */
-export function gitAttributionGuideline(enabled: boolean): string {
+export function gitAttributionGuideline(enabled: boolean, language: Language = "en"): string {
   if (!enabled) return "";
+  const prLine = prAttributionLine(language);
   return [
     "<orbita-git-attribution>",
-    "When you create a commit on the user's behalf, append a single `Made-with: Orbita` trailer at " +
+    `When you create a commit on the user's behalf, append a single \`${COMMIT_TRAILER}\` trailer at ` +
       "the end of the commit message. Do not use `Co-Authored-By`, and do not change the author or " +
-      "committer — the trailer is metadata, not a contribution record.",
-    `When you open a pull request or merge request, append a single \`Made with [Orbita](${ORBITA_URL})\` ` +
-      "line at the end of its description.",
-    "Both are once per commit and per description: if the text already carries the line, leave it as is " +
-      "instead of adding a second one. If the user says not to add it this time, don't.",
+      "committer — the trailer is metadata, not a contribution record. Keep the trailer exactly as " +
+      "written even when the rest of the message is in another language: git only parses ASCII trailer keys.",
+    `When you open a pull request or merge request, append a single \`${prLine}\` line at the end of its description.`,
+    "Both are once per commit and per description: if the text already carries the line (in either " +
+      `\`${prAttributionLine("en")}\` or \`${prAttributionLine("zh")}\` form), leave it as is instead of adding a second one. ` +
+      "If the user says not to add it this time, don't.",
     "</orbita-git-attribution>",
   ].join("\n");
 }

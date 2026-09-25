@@ -28,14 +28,14 @@ function bridgeless(): OrbitaApi {
           : () => Promise.reject(new Error(BRIDGE_MISSING)),
     },
   );
-  // platform / initialTheme 是标量而不是一个域，替身也得如实返回标量
+  // platform / initialTheme / initialLanguage 是标量而不是一个域，替身也得如实返回标量
   // （不能落进 domain 代理——那会把它们当成一堆待 reject 的方法拿去调用）
   return new Proxy(
     {},
     {
       get: (_target, key) => {
         if (key === "platform") return "";
-        if (key === "initialTheme") return null;
+        if (key === "initialTheme" || key === "initialLanguage") return null;
         return domain;
       },
     },
