@@ -7,6 +7,7 @@
  *   url, headers, enabled } } }`，一个工作区一份。
  * - Claude Code：`~/.claude.json` 顶层 `mcpServers`（全局）与 `projects[目录].mcpServers`（只对那个项目），
  *   `{ type: stdio|http|sse, command, args, env, url, headers }`，缺 type 的按 stdio。
+ * - Kimi Code：`~/.kimi-code/mcp.json` → `{ mcpServers: {…} }`，与 Claude Code 同形。
  *
  * 转成 orbita 的形状（McpServer）：stdio → command / args / env / cwd；http → url / headers。
  * **SSE 传输 orbita 不支持**（只有 stdio 与 streamable HTTP），列出来标 unsupported，不硬转成 http——
@@ -114,6 +115,12 @@ export async function readClaudeCodeMcp(claudeJson: string): Promise<McpSourceEn
     }
   }
   return entries;
+}
+
+/** Kimi Code：~/.kimi-code/mcp.json 的 mcpServers（没有按项目的配置）。 */
+export async function readKimiCodeMcp(file: string): Promise<McpSourceEntry[]> {
+  const parsed = await readJson(file);
+  return isRecord(parsed) ? entriesOf(parsed["mcpServers"], { source: "kimi-code", where: null }) : [];
 }
 
 /**

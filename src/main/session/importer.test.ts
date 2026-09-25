@@ -25,6 +25,7 @@ import {
   entriesToRecords,
   mapModel,
   probeClaudeCode,
+  probeKimiCode,
   probeProma,
   runImport,
   scanImport,
@@ -1627,6 +1628,157 @@ describe("Claude Code 来源", () => {
     assert.deepEqual(found.paths, [projectsDir, desktopDir, join(root, "claude", "skills"), join(root, "claude.json")]);
     const missing = await probeClaudeCode({ projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") });
     assert.equal(missing.found, false);
+  });
+});
+
+describe("Kimi Code 来源", () => {
+  let kimiRoot = "";
+  let home = "";
+
+  beforeEach(async () => {
+    kimiRoot = join(root, "kimi");
+    home = join(root, "home");
+    await mkdir(join(kimiRoot, "sessions", ".index-cache"), { recursive: true });
+    await mkdir(home, { recursive: true });
+  });
+
+  const kimiPaths = () => ({
+    sessionsDir: join(kimiRoot, "sessions"),
+    workspacesFile: join(kimiRoot, "workspaces.json"),
+    mcpFile: join(kimiRoot, "mcp.json"),
+    home,
+  });
+  const kimiDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ kimiCode: kimiPaths(), ...overrides });
+
+  let clock = Date.UTC(2026, 8, 21, 2);
+  const line = (record: Record<string, unknown>): Record<string, unknown> => ({ ...record, time: (clock += 1000) });
+  const userLine = (text: string, origin: Record<string, unknown> = { kind: "user" }) =>
+    line({ type: "context.append_message", message: { role: "user", content: [{ type: "text", text }], toolCalls: [], origin } });
+  const loopLine = (event: Record<string, unknown>) => line({ type: "context.append_loop_event", agentId: "main", event });
+  /** 一问一答（可带一次工具调用，结果里一张图） */
+  const exchange = (prompt: string, reply: string, image?: string): Record<string, unknown>[] => [
+    userLine(prompt),
+    line({ type: "llm.request", model: "k3" }),
+    loopLine({ type: "step.begin", uuid: `${prompt}-1` }),
+    ...(image === undefined
+      ? []
+      : [
+          loopLine({ type: "tool.call", toolCallId: `${prompt}-t`, name: "ReadMediaFile", args: { path: "/f.png" } }),
+          loopLine({ type: "tool.result", toolCallId: `${prompt}-t`, result: { output: [{ type: "image_url", imageUrl: { url: `blobref:image/png;${image}` } }] } }),
+          loopLine({ type: "step.end", uuid: `${prompt}-1`, finishReason: "tool_use", usage: {} }),
+          loopLine({ type: "step.begin", uuid: `${prompt}-2` }),
+        ]),
+    loopLine({ type: "content.part", part: { type: "text", text: reply } }),
+    loopLine({ type: "step.end", uuid: `${prompt}-2`, finishReason: "end_turn", usage: { inputOther: 3, output: 4 } }),
+  ];
+
+  async function writeKimiSession(
+    workspace: string,
+    id: string,
+    state: Record<string, unknown> | null,
+    lines: Record<string, unknown>[],
+    blobs: Record<string, string> = {},
+  ): Promise<string> {
+    const dir = join(kimiRoot, "sessions", workspace, id);
+    await mkdir(join(dir, "agents", "main", "blobs"), { recursive: true });
+    if (state !== null) await writeFile(join(dir, "state.json"), JSON.stringify({ id, version: 2, ...state }));
+    const wire = join(dir, "agents", "main", "wire.jsonl");
+    await writeFile(wire, [{ type: "metadata", protocol_version: "1.5" }, ...lines].map((item) => JSON.stringify(item)).join("\n") + "\n");
+    for (const [sha, body] of Object.entries(blobs)) await writeFile(join(dir, "agents", "main", "blobs", sha), body);
+    return wire;
+  }
+
+  test("扫描：一个会话目录一条；旧版没记 cwd 取工作区 root；源里删掉的工作区不列；只开了个头的进跳过清单", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeFile(
+      join(kimiRoot, "workspaces.json"),
+      JSON.stringify({
+        version: 1,
+        workspaces: { wd_repo: { root: repo, name: "repo" }, wd_home: { root: home, name: "home" }, wd_gone: { root: "/gone" } },
+        deleted_workspace_ids: ["wd_gone"],
+      }),
+    );
+    await writeKimiSession("wd_repo", "session_a", { title: "New Session", isCustomTitle: false, cwd: repo, createdAt: 1000, updatedAt: 2000 }, exchange("修一下构建", "好了"));
+    await writeKimiSession("wd_repo", "session_b", { title: "发版前检查", createdAt: "2026-06-23T11:32:27.132Z" }, exchange("检查一下", "都过了"));
+    await writeKimiSession("wd_home", "session_c", { title: "闲聊", cwd: home, createdAt: 3000 }, exchange("你能看视频吗", "能读帧"));
+    await writeKimiSession("wd_home", "session_empty", { title: "New Session", createdAt: 4000 }, [userLine("hi")]);
+    await writeKimiSession("wd_gone", "session_gone", { title: "删掉的", cwd: "/gone", createdAt: 5000 }, exchange("x", "y"));
+
+    const report = await scanImport(kimiDeps(), [], ["kimi-code"]);
+    const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([...byId.keys()].sort(), ["session_a", "session_b", "session_c"]);
+    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["session_empty", "unsupported-format"]]);
+    // 同一文件夹两条 → 新建工作区；标题「New Session」不算，取第一句用户写的话
+    assert.equal(report.newWorkspaces.length, 1);
+    assert.equal(byId.get("session_a")?.workspaceId, report.newWorkspaces[0]?.id);
+    assert.equal(byId.get("session_b")?.workspaceId, report.newWorkspaces[0]?.id);
+    assert.equal(byId.get("session_a")?.title, "修一下构建");
+    assert.equal(byId.get("session_b")?.title, "发版前检查");
+    assert.equal(byId.get("session_b")?.createdAt, Date.parse("2026-06-23T11:32:27.132Z"));
+    assert.deepEqual({ folder: byId.get("session_c")?.folder, cwd: byId.get("session_c")?.cwd }, { folder: null, cwd: home });
+    const first = byId.get("session_a");
+    assert.deepEqual([first?.source, first?.sourceKind, first?.importedModel], ["kimi-code", "kimi-code", "k3"]);
+    assert.deepEqual([first?.archived, first?.pinned, first?.starred], [false, false, false]);
+  });
+
+  test("与 Claude Code 同一文件夹各一条：跨来源计数，一起进新建的工作区", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeKimiSession("wd_repo", "session_k", { title: "Kimi 这边", cwd: repo, createdAt: 1000 }, exchange("一", "二"));
+    const projectDir = join(root, "claude", "projects", "repo");
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "cc.jsonl"),
+      [
+        { type: "user", uuid: "u", parentUuid: null, cwd: repo, timestamp: "2026-09-20T10:00:00.000Z", message: { role: "user", content: "hi" } },
+        { type: "assistant", uuid: "a", parentUuid: "u", cwd: repo, timestamp: "2026-09-20T10:01:00.000Z", message: { id: "m", role: "assistant", model: "x", content: [{ type: "text", text: "yo" }], usage: {} } },
+      ].map((item) => JSON.stringify(item)).join("\n") + "\n",
+    );
+    const claudeCode = { projectsDir: join(root, "claude", "projects"), desktopSessionsDir: join(root, "none"), home, skillsDir: join(root, "none"), claudeJson: join(root, "none.json") };
+    const report = await scanImport(kimiDeps({ claudeCode }), [], ["claude-code", "kimi-code"]);
+    assert.equal(report.plan.length, 2);
+    assert.equal(report.newWorkspaces.length, 1);
+    assert.deepEqual(new Set(report.plan.map((item) => item.workspaceId)), new Set([report.newWorkspaces[0]?.id]));
+  });
+
+  test("执行：图从会话的 blobs 读进 pi 副本；transcript 只有用户写的话；清单记 kimi-code；重扫即已导入；MCP 一并列出", async () => {
+    const sha = "c".repeat(64);
+    const wire = await writeKimiSession("wd_home", "session_x", { title: "看图", cwd: home, createdAt: 1000 }, [
+      userLine("<system-reminder>date</system-reminder>", { kind: "injection", variant: "date_change" }),
+      ...exchange("看看这张图", "是个图标", sha),
+    ], { [sha]: "PNG" });
+    await writeFile(join(kimiRoot, "mcp.json"), JSON.stringify({ mcpServers: { "kimi-cu": { command: "/bin/cu", args: ["mcp"] } } }));
+
+    const scanned = await scanImport(kimiDeps(), [], ["kimi-code"]);
+    assert.deepEqual(scanned.mcp.map((item) => [item.name, item.status, item.origins[0]?.source]), [["kimi-cu", "new", "kimi-code"]]);
+
+    const report = await runImport(kimiDeps(), { sources: ["kimi-code"], sessions: new Set([wire]), destinations: [] });
+    assert.equal(report.imported, 1);
+    assert.deepEqual(report.failed, []);
+    const [meta] = await store.list();
+    assert.equal(meta?.importedFrom, wire);
+    const records = (await store.load(meta?.id ?? ""))?.transcript ?? [];
+    const userTexts = records
+      .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
+      .map((record) => record.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
+    assert.deepEqual(userTexts, ["看看这张图"]);
+    const pi = await readFile(meta?.piSessionFile ?? "", "utf8");
+    assert.match(pi, /system-reminder/);
+    assert.match(pi, new RegExp(Buffer.from("PNG").toString("base64")));
+
+    const ledger = (await readFile(join(root, "imports.jsonl"), "utf8")).trim().split("\n").map((item) => JSON.parse(item) as Record<string, unknown>);
+    assert.deepEqual(ledger.map((item) => [item["source"], item["action"]]), [["kimi-code", "import"]]);
+    const again = await scanImport(kimiDeps({ existingMetas: await store.list() }), [], ["kimi-code"]);
+    assert.equal(again.plan.length, 0);
+    assert.deepEqual(again.skipped.map((item) => item.reason), ["already-imported"]);
+  });
+
+  test("探测：会话根目录在不在；paths 列出扫描会读的三处", async () => {
+    const found = await probeKimiCode(kimiPaths());
+    assert.equal(found.found, true);
+    assert.deepEqual(found.paths, [join(kimiRoot, "sessions"), join(kimiRoot, "workspaces.json"), join(kimiRoot, "mcp.json")]);
+    assert.equal((await probeKimiCode({ ...kimiPaths(), sessionsDir: join(root, "nope") })).found, false);
   });
 });
 

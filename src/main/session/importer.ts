@@ -36,7 +36,7 @@ import {
   type SessionEntry,
   type SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
-import type { Usage } from "@earendil-works/pi-ai";
+import type { Message, Usage } from "@earendil-works/pi-ai";
 import type {
   AssistantTranscriptItem,
   ToolTranscriptItem,
@@ -60,6 +60,7 @@ import {
   parseClaudeDesktopSession,
   type ClaudeDesktopSession,
 } from "./claude-code.ts";
+import { kimiBlobRefs, parseKimiSessionState, parseKimiWire } from "./kimi-code.ts";
 import { aggregatePrefixUsage } from "./store.ts";
 import {
   claudeCodeSkillDirs,
@@ -72,7 +73,14 @@ import {
   type SkillSelection,
   type SkillSourceDir,
 } from "../skill/import.ts";
-import { importMcpServers, mergeMcpEntries, readClaudeCodeMcp, readPromaMcp, type McpSourceEntry } from "../mcp/import.ts";
+import {
+  importMcpServers,
+  mergeMcpEntries,
+  readClaudeCodeMcp,
+  readKimiCodeMcp,
+  readPromaMcp,
+  type McpSourceEntry,
+} from "../mcp/import.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 import { promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
 import { appendImportLedger, readImportLedger, type ImportLedgerLine } from "./import-ledger.ts";
@@ -93,6 +101,7 @@ import {
   type ImportSkipItem,
   type ImportSkipReason,
   type ImportSourceId,
+  type ImportSourceKind,
   type ImportSourceProbe,
   type ImportWorkspacePlan,
 } from "../../shared/import.ts";
@@ -111,12 +120,26 @@ export interface ClaudeCodePaths {
   claudeJson: string;
 }
 
+/** Kimi Code 来源要读的位置（都在 ~/.kimi-code 下）。全部**只读**。 */
+export interface KimiCodePaths {
+  /** 会话根：sessions/<工作区 id>/<会话 id>/（state.json + agents/main/wire.jsonl + 图片 blobs） */
+  sessionsDir: string;
+  /** 工作区表：会话自己没记 cwd（旧版 state.json）时取工作区的 root，另认出源里删掉的工作区 */
+  workspacesFile: string;
+  /** MCP 配置（{ mcpServers }，Claude Desktop 同形） */
+  mcpFile: string;
+  /** 家目录：在家目录里跑的会话不算有文件夹 */
+  home: string;
+}
+
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
 export interface ImporterDeps {
   /** Proma 数据根（~/.proma-dev）。**只读** */
   promaRoot: string;
   /** Claude Code 来源的位置。不传 = 扫描勾了它也不读 */
   claudeCode?: ClaudeCodePaths;
+  /** Kimi Code 来源的位置。不传 = 扫描勾了它也不读 */
+  kimiCode?: KimiCodePaths;
   /** 多家共用的 skills 目录（~/.agents/skills，来源 agent-skills）。不传 = 勾了也不读 */
   agentSkillsDir?: string;
   /** orbita 已有的 skill slug（含只剩断链的）：skills 重名判断的底 */
@@ -214,6 +237,23 @@ export async function probeClaudeCode(paths: ClaudeCodePaths): Promise<ImportSou
     label: "Claude Code",
     kind: "cli",
     paths: [paths.projectsDir, paths.desktopSessionsDir, paths.skillsDir, paths.claudeJson],
+    found,
+  };
+}
+
+/** Kimi Code 来源的探测：只 stat 会话根目录。paths 是扫描会读的全部位置。 */
+export async function probeKimiCode(paths: KimiCodePaths): Promise<ImportSourceProbe> {
+  let found = false;
+  try {
+    found = (await stat(paths.sessionsDir)).isDirectory();
+  } catch {
+    found = false;
+  }
+  return {
+    id: "kimi-code",
+    label: "Kimi Code",
+    kind: "cli",
+    paths: [paths.sessionsDir, paths.workspacesFile, paths.mcpFile],
     found,
   };
 }
@@ -1136,50 +1176,58 @@ async function scanWithConfigs(
     });
   }
 
-  // —— Claude Code：在 Proma 之后扫，同一文件夹复用 Proma 已计划新建的工作区 ——
+  // —— 转换类来源（Claude Code、Kimi Code）：在 Proma 之后扫，同一文件夹复用 Proma 已计划新建的
+  //    工作区；「这次有两条及以上就新建工作区」跨来源计数 ——
+  const converted: ConvertedCandidate[] = [];
   if (sources.includes("claude-code") && deps.claudeCode !== undefined) {
-    const found = await scanClaudeCode(deps.claudeCode, deps, importedBySource, newWorkspaceByKey);
+    const found = await scanClaudeCode(deps.claudeCode, deps, importedBySource);
     skipped.push(...found.skipped);
-    for (const candidate of found.candidates) {
-      const resolution = applyDestination(candidate.resolution, overrides, deps);
-      if (resolution.create !== null) {
-        const existing = newWorkspaceByKey.get(resolution.create.path);
-        if (existing === undefined) {
-          newWorkspaceByKey.set(resolution.create.path, resolution.create);
-        } else {
-          resolution.workspaceId = existing.id;
-        }
+    converted.push(...found.candidates);
+  }
+  if (sources.includes("kimi-code") && deps.kimiCode !== undefined) {
+    const found = await scanKimiCode(deps.kimiCode, deps, importedBySource);
+    skipped.push(...found.skipped);
+    converted.push(...found.candidates);
+  }
+  for (const candidate of await placeConverted(converted, deps, newWorkspaceByKey)) {
+    const resolution = applyDestination(candidate.resolution, overrides, deps);
+    if (resolution.create !== null) {
+      const existing = newWorkspaceByKey.get(resolution.create.path);
+      if (existing === undefined) {
+        newWorkspaceByKey.set(resolution.create.path, resolution.create);
+      } else {
+        resolution.workspaceId = existing.id;
       }
-      if (resolution.mergedInto !== null) mergedIds.add(resolution.mergedInto);
-      const mapped = mapModel(candidate.model, deps.registeredModels, deps.fallbackModel);
-      if (!mapped.matched) modelFallbackCount += 1;
-      totalBytes += candidate.bytes;
-      plan.push({
-        sourceId: candidate.sourceId,
-        source: "claude-code",
-        sourceKind: "claude-code",
-        change: freshChange(candidate.sourceFile),
-        newMessages: 0,
-        folder: resolution.folder,
-        sourceFile: candidate.sourceFile,
-        sessionId: deps.newId(),
-        parentId: null,
-        title: candidate.title,
-        workspaceId: resolution.workspaceId,
-        cwd: resolution.cwd,
-        providerId: mapped.providerId,
-        modelId: mapped.modelId,
-        importedModel: candidate.model,
-        modelMatched: mapped.matched,
-        // 迁移边界（2026-09-24）：不适配源应用的会话管理功能（桌面应用的归档也不跟）
-        archived: false,
-        pinned: false,
-        starred: false,
-        createdAt: candidate.createdAt,
-        updatedAt: candidate.updatedAt,
-        bytes: candidate.bytes,
-      });
     }
+    if (resolution.mergedInto !== null) mergedIds.add(resolution.mergedInto);
+    const mapped = mapModel(candidate.model, deps.registeredModels, deps.fallbackModel);
+    if (!mapped.matched) modelFallbackCount += 1;
+    totalBytes += candidate.bytes;
+    plan.push({
+      sourceId: candidate.sourceId,
+      source: candidate.source,
+      sourceKind: candidate.sourceKind,
+      change: freshChange(candidate.sourceFile),
+      newMessages: 0,
+      folder: resolution.folder,
+      sourceFile: candidate.sourceFile,
+      sessionId: deps.newId(),
+      parentId: null,
+      title: candidate.title,
+      workspaceId: resolution.workspaceId,
+      cwd: resolution.cwd,
+      providerId: mapped.providerId,
+      modelId: mapped.modelId,
+      importedModel: candidate.model,
+      modelMatched: mapped.matched,
+      // 迁移边界（2026-09-24）：不适配源应用的会话管理功能（桌面应用的归档也不跟）
+      archived: false,
+      pinned: false,
+      starred: false,
+      createdAt: candidate.createdAt,
+      updatedAt: candidate.updatedAt,
+      bytes: candidate.bytes,
+    });
   }
 
   const { subSessionCount, orphanedSubSessions } = linkSubSessions(
@@ -1213,10 +1261,13 @@ async function scanWithConfigs(
           sources.includes("proma") ? await promaBuiltInSkills(deps.promaRoot) : new Set<string>(),
         );
 
-  // MCP：同名取先到的配置——Proma（按工作区顺序）→ Claude Code（全局 → 各项目）
+  // MCP：同名取先到的配置——Proma（按工作区顺序）→ Claude Code（全局 → 各项目）→ Kimi Code
   const mcpEntries: McpSourceEntry[] = await readPromaMcp(deps.promaRoot, promaFolders);
   if (sources.includes("claude-code") && deps.claudeCode !== undefined) {
     mcpEntries.push(...(await readClaudeCodeMcp(deps.claudeCode.claudeJson)));
+  }
+  if (sources.includes("kimi-code") && deps.kimiCode !== undefined) {
+    mcpEntries.push(...(await readKimiCodeMcp(deps.kimiCode.mcpFile)));
   }
   const mcp = mergeMcpEntries(mcpEntries, new Set(deps.existingMcp ?? []));
 
@@ -1264,22 +1315,96 @@ function claudeSourceFile(promaRoot: string, id: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code 来源
+// 转换类来源（Claude Code、Kimi Code）共用：候选与默认去向
 // ---------------------------------------------------------------------------
 
-/** 一条待导入的 Claude Code 会话：计划条目除去模型映射与去向覆盖之外的全部原料。 */
-interface ClaudeCodeCandidate {
+/** 一条待导入的转换类会话：计划条目除去模型映射与去向之外的全部原料。 */
+interface ConvertedCandidate {
+  source: ImportSourceId;
+  sourceKind: ImportSourceKind;
   sourceId: string;
   sourceFile: string;
   title: string;
-  /** 最后一条 assistant 的模型 id（合成的 `<synthetic>` 已去掉） */
+  /** 最后一条 assistant 的模型 id */
   model: string | null;
   createdAt: number;
   updatedAt: number;
   bytes: number;
-  /** 默认去向（还没盖用户的覆盖） */
-  resolution: WorkspaceResolution;
+  /** 源侧文件夹（sessionFolder 的产物：家目录、不在盘上的为 null）与续聊用的 cwd */
+  folder: string | null;
+  cwd: string;
 }
+
+/**
+ * 默认去向（还没盖用户的覆盖）。文件夹与 orbita 工作区同址 → 挂上去；Proma 这次要建同路径的
+ * 工作区 → 共用；这次有两条及以上（跨来源计）→ 新建工作区；只有一条 → Tasks，cwd 仍是那个
+ * 文件夹（裁决 #9）。
+ */
+async function placeConverted(
+  found: readonly ConvertedCandidate[],
+  deps: ImporterDeps,
+  plannedWorkspaces: ReadonlyMap<string, ImportWorkspacePlan>,
+): Promise<(ConvertedCandidate & { resolution: WorkspaceResolution })[]> {
+  const perFolder = new Map<string, number>();
+  for (const item of found) {
+    if (item.folder !== null) perFolder.set(item.folder, (perFolder.get(item.folder) ?? 0) + 1);
+  }
+  const orbitaPaths = await Promise.all(
+    deps.workspaces.map(async (workspace) => ({ workspace, path: await normalizeForMatch(workspace.path) })),
+  );
+  const minted = new Map<string, ImportWorkspacePlan>();
+  const placed: (ConvertedCandidate & { resolution: WorkspaceResolution })[] = [];
+  for (const item of found) {
+    const { folder, cwd } = item;
+    let resolution: WorkspaceResolution;
+    if (folder === null) {
+      resolution = { workspaceId: null, cwd, folder: null, create: null, mergedInto: null };
+    } else {
+      const wanted = await normalizeForMatch(folder);
+      const same = orbitaPaths.find((candidate) => candidate.path === wanted)?.workspace;
+      const planned = plannedWorkspaces.get(folder) ?? minted.get(folder);
+      if (same !== undefined) {
+        resolution = { workspaceId: same.id, cwd: same.path, folder, create: null, mergedInto: same.id };
+      } else if (planned !== undefined) {
+        resolution = { workspaceId: planned.id, cwd: folder, folder, create: planned, mergedInto: null };
+      } else if ((perFolder.get(folder) ?? 0) >= 2) {
+        const create: ImportWorkspacePlan = { id: deps.newId(), name: deriveWorkspaceName(folder), path: folder, merged: false };
+        minted.set(folder, create);
+        resolution = { workspaceId: create.id, cwd: folder, folder, create, mergedInto: null };
+      } else {
+        resolution = { workspaceId: null, cwd: folder, folder, create: null, mergedInto: null };
+      }
+    }
+    placed.push({ ...item, resolution });
+  }
+  return placed;
+}
+
+/**
+ * 会话的文件夹与续聊用的 cwd。家目录不算文件夹（cwd 仍是它）；不在盘上的文件夹
+ * （删掉的 worktree、别的应用的临时工作目录）既不算文件夹也不能当 cwd，退 defaultCwd。
+ */
+async function sessionFolder(
+  path: string | null,
+  home: string,
+  defaultCwd: string,
+): Promise<{ folder: string | null; cwd: string }> {
+  if (path === null) return { folder: null, cwd: defaultCwd };
+  const resolved = resolve(path);
+  let isDirectory = false;
+  try {
+    isDirectory = (await stat(resolved)).isDirectory();
+  } catch {
+    isDirectory = false;
+  }
+  if (!isDirectory) return { folder: null, cwd: defaultCwd };
+  if (resolved === resolve(home)) return { folder: null, cwd: resolved };
+  return { folder: resolved, cwd: resolved };
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code 来源
+// ---------------------------------------------------------------------------
 
 /**
  * 扫 Claude Code 的会话文件，产出候选与跳过项。
@@ -1291,9 +1416,7 @@ interface ClaudeCodeCandidate {
  *   同样不列。
  * 两类都不进跳过清单：在源应用里它们就不是一条会话。命令行的会话不在清单里，一个文件一条。
  *
- * **去向**（文件夹 = 桌面清单的 originCwd，其次会话文件里的 cwd）：与 orbita 工作区同址 → 挂上去；
- * Proma 这次要建同路径的工作区 → 共用；这次有两条及以上 → 新建工作区；只有一条 → Tasks，
- * cwd 仍是那个文件夹（裁决 #9）。家目录、已不在盘上的文件夹不算文件夹。
+ * **文件夹** = 桌面清单的 originCwd，其次会话文件里的 cwd；去向由 placeConverted 统一定。
  *
  * 导过的一律 already-imported：再次导入（追加 Claude Code 里的新消息）没做——副本是转换
  * 构造的，entry id 与源对不上，Proma 那套按 id 对齐的判法用不了。
@@ -1302,8 +1425,7 @@ async function scanClaudeCode(
   paths: ClaudeCodePaths,
   deps: ImporterDeps,
   importedBySource: ReadonlyMap<string, readonly SessionMeta[]>,
-  plannedWorkspaces: ReadonlyMap<string, ImportWorkspacePlan>,
-): Promise<{ candidates: ClaudeCodeCandidate[]; skipped: ImportSkipItem[] }> {
+): Promise<{ candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] }> {
   const files = await listClaudeCodeFiles(paths.projectsDir);
   const desktop = await readClaudeDesktopSessions(paths.desktopSessionsDir);
   const listed = new Map(desktop.map((entry) => [entry.cliSessionId, entry]));
@@ -1316,7 +1438,7 @@ async function scanClaudeCode(
   }
 
   const skipped: ImportSkipItem[] = [];
-  const found: (Omit<ClaudeCodeCandidate, "resolution"> & { folder: string | null; cwd: string })[] = [];
+  const candidates: ConvertedCandidate[] = [];
   for (const file of files) {
     const sourceId = claudeCodeSessionId(file);
     if (superseded.has(sourceId)) continue;
@@ -1342,9 +1464,11 @@ async function scanClaudeCode(
       skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
       continue;
     }
-    const place = await claudeCodeFolder(entry?.folder ?? session.cwd, paths.home, deps.defaultCwd);
+    const place = await sessionFolder(entry?.folder ?? session.cwd, paths.home, deps.defaultCwd);
     const createdAt = entry?.createdAt ?? firstTimestamp(session.rows) ?? Date.now();
-    found.push({
+    candidates.push({
+      source: "claude-code",
+      sourceKind: "claude-code",
       sourceId,
       sourceFile: file,
       title,
@@ -1356,64 +1480,11 @@ async function scanClaudeCode(
     });
   }
 
-  const perFolder = new Map<string, number>();
-  for (const item of found) {
-    if (item.folder !== null) perFolder.set(item.folder, (perFolder.get(item.folder) ?? 0) + 1);
-  }
-  const orbitaPaths = await Promise.all(
-    deps.workspaces.map(async (workspace) => ({ workspace, path: await normalizeForMatch(workspace.path) })),
-  );
-  const minted = new Map<string, ImportWorkspacePlan>();
-  const candidates: ClaudeCodeCandidate[] = [];
-  for (const { folder, cwd, ...item } of found) {
-    let resolution: WorkspaceResolution;
-    if (folder === null) {
-      resolution = { workspaceId: null, cwd, folder: null, create: null, mergedInto: null };
-    } else {
-      const wanted = await normalizeForMatch(folder);
-      const same = orbitaPaths.find((candidate) => candidate.path === wanted)?.workspace;
-      const planned = plannedWorkspaces.get(folder) ?? minted.get(folder);
-      if (same !== undefined) {
-        resolution = { workspaceId: same.id, cwd: same.path, folder, create: null, mergedInto: same.id };
-      } else if (planned !== undefined) {
-        resolution = { workspaceId: planned.id, cwd: folder, folder, create: planned, mergedInto: null };
-      } else if ((perFolder.get(folder) ?? 0) >= 2) {
-        const create: ImportWorkspacePlan = { id: deps.newId(), name: deriveWorkspaceName(folder), path: folder, merged: false };
-        minted.set(folder, create);
-        resolution = { workspaceId: create.id, cwd: folder, folder, create, mergedInto: null };
-      } else {
-        resolution = { workspaceId: null, cwd: folder, folder, create: null, mergedInto: null };
-      }
-    }
-    candidates.push({ ...item, resolution });
-  }
   return { candidates, skipped };
 }
 
 function claudeCodeSessionId(file: string): string {
   return basename(file, ".jsonl");
-}
-
-/**
- * 会话的文件夹与续聊用的 cwd。家目录不算文件夹（cwd 仍是它）；不在盘上的文件夹
- * （删掉的 worktree、别的应用的临时工作目录）既不算文件夹也不能当 cwd，退 defaultCwd。
- */
-async function claudeCodeFolder(
-  path: string | null,
-  home: string,
-  defaultCwd: string,
-): Promise<{ folder: string | null; cwd: string }> {
-  if (path === null) return { folder: null, cwd: defaultCwd };
-  const resolved = resolve(path);
-  let isDirectory = false;
-  try {
-    isDirectory = (await stat(resolved)).isDirectory();
-  } catch {
-    isDirectory = false;
-  }
-  if (!isDirectory) return { folder: null, cwd: defaultCwd };
-  if (resolved === resolve(home)) return { folder: null, cwd: resolved };
-  return { folder: resolved, cwd: resolved };
 }
 
 /** projects 下每个项目目录里的顶层 .jsonl（子代理文件在更深一层，不列）。根目录不在 = 没有会话。 */
@@ -1491,6 +1562,115 @@ async function readClaudeCodeRootUuid(file: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Kimi Code 来源
+// ---------------------------------------------------------------------------
+
+/** 一条 Kimi Code 会话的对话文件（会话目录下 agents/main/wire.jsonl）：也是幂等键。 */
+function kimiWireFile(sessionDir: string): string {
+  return join(sessionDir, "agents", "main", "wire.jsonl");
+}
+
+/** Kimi Code 的工作区表：工作区 id → root，以及在源里删掉的工作区。读不了 = 都没有。 */
+async function readKimiWorkspaces(file: string): Promise<{ roots: Map<string, string>; deleted: Set<string> }> {
+  const roots = new Map<string, string>();
+  const deleted = new Set<string>();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    return { roots, deleted };
+  }
+  const record = asRecord(parsed);
+  const workspaces = asRecord(record?.["workspaces"]);
+  for (const [id, value] of Object.entries(workspaces ?? {})) {
+    const root = optionalString(asRecord(value)?.["root"]);
+    if (root !== null) roots.set(id, root);
+  }
+  const removed = record?.["deleted_workspace_ids"];
+  if (Array.isArray(removed)) {
+    for (const id of removed) if (typeof id === "string") deleted.add(id);
+  }
+  return { roots, deleted };
+}
+
+/**
+ * 扫 Kimi Code 的会话：`sessions/<工作区 id>/<会话 id>/` 一个目录一条（点开头的是 Kimi 自己的
+ * 索引缓存）。源里删掉的工作区（workspaces.json 的 deleted_workspace_ids）下的会话不列。
+ *
+ * 标题：Kimi 显示的标题（新建未命名的「New Session」不算）> 第一句用户写的话 > 「Kimi Code session」。
+ * 文件夹：state.json 的 cwd，旧版没记的取所属工作区的 root；去向由 placeConverted 统一定。
+ * 导过的一律 already-imported：与 Claude Code 同理，副本是转换构造的，再次导入没做。
+ */
+async function scanKimiCode(
+  paths: KimiCodePaths,
+  deps: ImporterDeps,
+  importedBySource: ReadonlyMap<string, readonly SessionMeta[]>,
+): Promise<{ candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] }> {
+  const candidates: ConvertedCandidate[] = [];
+  const skipped: ImportSkipItem[] = [];
+  let workspaceDirs;
+  try {
+    workspaceDirs = await readdir(paths.sessionsDir, { withFileTypes: true });
+  } catch (cause) {
+    if (isNotFound(cause)) return { candidates, skipped };
+    throw cause;
+  }
+  const workspaces = await readKimiWorkspaces(paths.workspacesFile);
+  for (const workspace of workspaceDirs.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!workspace.isDirectory() || workspace.name.startsWith(".") || workspaces.deleted.has(workspace.name)) continue;
+    const workspaceDir = join(paths.sessionsDir, workspace.name);
+    const sessions = (await readdir(workspaceDir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+    for (const session of sessions) {
+      if (!session.isDirectory() || session.name.startsWith(".")) continue;
+      const dir = join(workspaceDir, session.name);
+      const sourceId = session.name;
+      const sourceFile = kimiWireFile(dir);
+      let state = null;
+      try {
+        state = parseKimiSessionState(await readFile(join(dir, "state.json"), "utf8"));
+      } catch {
+        // 没有 state.json：标题与时间从对话里取
+      }
+      if (importedBySource.has(sourceFile)) {
+        skipped.push({ sourceId, title: state?.title ?? null, reason: "already-imported" });
+        continue;
+      }
+      let raw: string;
+      let bytes: number;
+      try {
+        bytes = (await stat(sourceFile)).size;
+        raw = await readFile(sourceFile, "utf8");
+      } catch {
+        skipped.push({ sourceId, title: state?.title ?? null, reason: "missing-file", detail: sourceFile });
+        continue;
+      }
+      // 扫描不读图片（只判能不能转、取标题与模型）；执行时再读 blobs
+      const wire = parseKimiWire(raw, "scan", new Map());
+      const title = deriveSessionTitle(state?.title ?? wire.firstPrompt ?? "") || "Kimi Code session";
+      if (!wire.messages.some((message) => message.role === "assistant")) {
+        skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+        continue;
+      }
+      const place = await sessionFolder(state?.cwd ?? workspaces.roots.get(workspace.name) ?? null, paths.home, deps.defaultCwd);
+      const createdAt = state?.createdAt ?? wire.firstAt ?? Date.now();
+      candidates.push({
+        source: "kimi-code",
+        sourceKind: "kimi-code",
+        sourceId,
+        sourceFile,
+        title,
+        model: wire.model,
+        createdAt,
+        updatedAt: qaTime(wire.lastAt, createdAt, createdAt),
+        bytes,
+        ...place,
+      });
+    }
+  }
+  return { candidates, skipped };
 }
 
 // ---------------------------------------------------------------------------
@@ -1927,7 +2107,9 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
           ? await runClaudeLegacyImport(item, deps)
           : item.sourceKind === "claude-code"
             ? await runClaudeCodeImport(item, deps)
-            : await runPiImport(
+            : item.sourceKind === "kimi-code"
+              ? await runKimiCodeImport(item, deps)
+              : await runPiImport(
               item,
               deps,
               // 另导一份：不能落在原会话副本的文件名上（会盖掉 orbita 接着聊的那份），换一个
@@ -2132,19 +2314,58 @@ async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps
 
 /** 补记行的来源：meta 只存了源文件，按它落在哪个来源的根下判断。 */
 function sourceOfImported(deps: ImporterDeps, sourceFile: string): ImportSourceId {
-  const claudeCode = deps.claudeCode?.projectsDir;
-  return claudeCode !== undefined && sourceFile.startsWith(`${resolve(claudeCode)}/`) ? "claude-code" : "proma";
+  const under = (root: string | undefined): boolean => root !== undefined && sourceFile.startsWith(`${resolve(root)}/`);
+  if (under(deps.claudeCode?.projectsDir)) return "claude-code";
+  if (under(deps.kimiCode?.sessionsDir)) return "kimi-code";
+  return "proma";
 }
 
 /**
  * Claude Code 会话的灌入：清洗（claude-code.ts）→ 与 claude legacy 同一条 Message 构造 →
- * SessionManager.create + appendMessage。清洗给出每条用户行在 transcript 里的原文：
- * 按 appendMessage 返回的 entry id 配上，null（模型读到、用户没写的）的用户记录不进 transcript。
- * pi 副本里它们照留——续聊时模型看到的上下文与当时一致。
+ * persistConverted。清洗给出每条用户行在 transcript 里的原文。
  */
 async function runClaudeCodeImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
   const session = parseClaudeCodeSession(await readFile(item.sourceFile, "utf8"));
   const { messages, userRowIndexes } = claudeRowsToMessages(session.rows, item.providerId);
+  return persistConverted(
+    item,
+    deps,
+    messages,
+    userRowIndexes.map((row) => session.displays[row] ?? null),
+  );
+}
+
+/**
+ * Kimi Code 会话的灌入：事件流拼成 Message（kimi-code.ts）→ persistConverted。工具结果里引用的图
+ * 从会话自己的 blobs 目录读（与 wire.jsonl 同在 agents/main/ 下，扫描清单里的会话根之内）；
+ * 读不到的由转换换成一行文字说明。
+ */
+async function runKimiCodeImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+  const raw = await readFile(item.sourceFile, "utf8");
+  const blobs = new Map<string, string>();
+  for (const sha of kimiBlobRefs(raw)) {
+    try {
+      blobs.set(sha, (await readFile(join(dirname(item.sourceFile), "blobs", sha))).toString("base64"));
+    } catch {
+      // 缺席即可：转换写文字说明
+    }
+  }
+  const wire = parseKimiWire(raw, item.providerId, blobs);
+  return persistConverted(item, deps, wire.messages, wire.userDisplays);
+}
+
+/**
+ * 转换类来源的共同落盘：SessionManager.create + appendMessage 逐条灌入。userDisplays 是每条
+ * user 消息在 transcript 里的原文（按 messages 里 user 消息的顺序），按 appendMessage 返回的
+ * entry id 配上；null（模型读到、用户没写的）的用户记录不进 transcript。pi 副本里它们照留——
+ * 续聊时模型看到的上下文与当时一致。
+ */
+async function persistConverted(
+  item: ImportPlanItem,
+  deps: RunImporterDeps,
+  messages: readonly Message[],
+  userDisplays: readonly (string | null)[],
+): Promise<ImportedSession> {
   await mkdir(deps.piSessionDir, { recursive: true });
   const manager = SessionManager.create(item.cwd, deps.piSessionDir);
   const texts = new Map<string, string>();
@@ -2153,9 +2374,8 @@ async function runClaudeCodeImport(item: ImportPlanItem, deps: RunImporterDeps):
   for (const message of messages) {
     const id = manager.appendMessage(message);
     if (message.role !== "user") continue;
-    const row = userRowIndexes[userIndex];
+    const display = userDisplays[userIndex] ?? null;
     userIndex += 1;
-    const display = row === undefined ? null : (session.displays[row] ?? null);
     if (display === null) hidden.add(id);
     else texts.set(id, display);
   }
@@ -2170,7 +2390,7 @@ async function runClaudeCodeImport(item: ImportPlanItem, deps: RunImporterDeps):
   return {
     path,
     records: withUserTexts(records, texts),
-    // Claude Code 的思考档位（effort）记在桌面清单与行上，与 orbita 的档位不同构，落缺省档
+    // 源的思考档位（Claude Code 的 effort、Kimi 的 thinkingEffort）与 orbita 的档位不同构，落缺省档
     thinkingLevel: "medium",
   };
 }
