@@ -18,12 +18,19 @@
  * 目录模式（2026-09-21）：`task` 缺席 = 列当前工作区的兄弟 task。模型之前没有
  * 任何会话索引，只能靠 ambiguous 报错里的候选用前缀试探（实测 12 次调用、
  * 2m12s，最后还读错了工作区）。引用匹配同时改成同工作区优先。
+ *
+ * 通道消息（2026-09-25）：子会话的每一轮都由一条通道消息开头（母会话派的任务、
+ * 后来的回复），会话账本里落的是 `channel-mark`，正文在通道账本。以前轮号只认
+ * `user` 记录，读子会话恒是「0 rounds / No rounds yet」——母会话拿 read_task 看
+ * 子会话在干什么，只看到一条空账。现在标记也开一轮，正文从通道账本补回来。
  */
 import type { AgentEvent, ReadTaskCard, ReadTaskOutcome } from "../../shared/agent-ipc.ts";
+import type { ChannelKey, ChannelMessage } from "../../shared/channel.ts";
 import {
   isChannelMarkRecord,
   isCompactedRecord,
   transcriptToMarkdown,
+  type ChannelMarkRecord,
   type SessionDetail,
   type SessionMeta,
   type SessionRecord,
@@ -132,7 +139,14 @@ function candidatesOf(metas: readonly SessionMeta[], excludeId: string): TaskCan
 
 // ── 轮号 ──
 
-/** 一轮 = 一条 user 记录到下一条 user 记录之前（含界碑、工具、回答）。轮号 1 起。 */
+/**
+ * 一轮 = 一条进来的消息到下一条进来的消息之前（含界碑、工具、回答）。轮号 1 起。
+ *
+ * 「进来的消息」= `user` 记录，**或通道标记**：通道标记顶替的正是 pi 本子里的一条
+ * user 消息（通道消息的信封），与 `store.ts` 的 `branchRoles` 同一条不变量（2026-09-23
+ * 修正时 read_task 没跟上）。子会话的每一轮都以通道标记开头，只认 `user` 就是 0 轮；
+ * 母会话收到子会话回报的那几轮也会并进上一轮，轮号错位。
+ */
 export interface TaskRound {
   number: number;
   startIndex: number;
@@ -142,7 +156,8 @@ export interface TaskRound {
 export function numberRounds(records: readonly SessionRecord[]): TaskRound[] {
   const starts: number[] = [];
   for (let index = 0; index < records.length; index++) {
-    if (records[index]?.role === "user") starts.push(index);
+    const role = records[index]?.role;
+    if (role === "user" || role === "channel-mark") starts.push(index);
   }
   return starts.map((startIndex, ordinal) => {
     const next = starts[ordinal + 1];
@@ -190,6 +205,62 @@ export function selectRounds(records: readonly SessionRecord[], spec: string): R
   }
   const ordered = [...picked.values()].sort((a, b) => a.number - b.number);
   return { kind: "ok", rounds: ordered };
+}
+
+// ── 通道消息 ──
+
+/**
+ * 渲染通道标记要用的两份冷数据：通道消息正文（按 messageId）与会话标题（按 id，
+ * 标记里只有对面的 id）。applyReadTask 按这条会话里出现过的对面读通道账本装好；
+ * 缺省 = 空——标记仍然开轮、仍然有标题行，正文如实写「读不到」，不编。
+ */
+export interface RoundChannelContext {
+  messages: ReadonlyMap<string, ChannelMessage>;
+  titles: ReadonlyMap<string, string>;
+}
+
+const NO_CHANNEL_CONTEXT: RoundChannelContext = { messages: new Map(), titles: new Map() };
+
+/** 标记这一行给模型看的标题：谁发来的、什么类型、对面是哪条会话。 */
+function channelMarkHeading(mark: ChannelMarkRecord, channel: RoundChannelContext): string {
+  const title = channel.titles.get(mark.peerId);
+  const peer = title === undefined ? `(id: ${mark.peerId})` : `"${title === "" ? "(untitled)" : title}"`;
+  return mark.from === "parent"
+    ? `${mark.kind} from the parent session ${peer}`
+    : `${mark.kind} from sub-session ${peer}`;
+}
+
+/** 通道消息正文；账本里没有（读失败、旧数据）= null */
+function channelMarkText(mark: ChannelMarkRecord, channel: RoundChannelContext): string | null {
+  return channel.messages.get(mark.messageId)?.text ?? null;
+}
+
+/**
+ * 一段记录的全文：普通记录走 `transcriptToMarkdown`（与导出同一个格式化器），通道
+ * 标记换成「标题行 + 通道账本里的正文」。导出不渲染标记是它自己的决定（正文只有
+ * 一份、在通道账本里）；read_task 读得到账本，模型要看的恰恰是这条消息说了什么。
+ */
+function recordsMarkdown(records: readonly SessionRecord[], channel: RoundChannelContext): string {
+  const parts: string[] = [];
+  let pending: SessionRecord[] = [];
+  const flush = (): void => {
+    if (pending.length === 0) return;
+    const text = transcriptToMarkdown(pending).trim();
+    if (text !== "") parts.push(text);
+    pending = [];
+  };
+  for (const record of records) {
+    if (!isChannelMarkRecord(record)) {
+      pending.push(record);
+      continue;
+    }
+    flush();
+    const text = channelMarkText(record, channel);
+    parts.push(`**Channel · ${channelMarkHeading(record, channel)}**`);
+    parts.push(text === null ? "(message text not found in the channel ledger)" : text.trim());
+  }
+  flush();
+  return `${parts.join("\n\n")}\n`;
 }
 
 // ── 简报构建 ──
@@ -300,12 +371,25 @@ function taskHeader(meta: SessionMeta, roundCount: number, workspaceName?: strin
   return lines.join("\n");
 }
 
-function outlineSection(records: readonly SessionRecord[], rounds: readonly TaskRound[]): string {
+/** 目录行的开头：用户消息取首行；通道标记是「[类型 from 谁] 正文首行」 */
+function roundOpeningLine(record: SessionRecord | undefined, channel: RoundChannelContext): string {
+  if (record !== undefined && isChannelMarkRecord(record)) {
+    const text = firstLine(channelMarkText(record, channel) ?? "");
+    return `[${channelMarkHeading(record, channel)}] ${text === "" ? "(no text)" : text}`;
+  }
+  const userLine = firstLine(firstTextOf(record));
+  return userLine === "" ? "(no text)" : userLine;
+}
+
+function outlineSection(
+  records: readonly SessionRecord[],
+  rounds: readonly TaskRound[],
+  channel: RoundChannelContext,
+): string {
   const lines = ["Contents (round numbers are for the `rounds` parameter):"];
   for (const round of rounds) {
     const slice = records.slice(round.startIndex, round.endIndex);
-    const userLine = firstLine(firstTextOf(slice[0]));
-    lines.push(`${round.number}. ${userLine === "" ? "(no text)" : userLine}`);
+    lines.push(`${round.number}. ${roundOpeningLine(slice[0], channel)}`);
     const answerLine = lastAssistantLine(slice);
     if (answerLine !== "") lines.push(`   → ${answerLine}`);
   }
@@ -344,6 +428,7 @@ export function buildTaskBriefing(
   meta: SessionMeta,
   records: readonly SessionRecord[],
   workspaceName?: string | null,
+  channel: RoundChannelContext = NO_CHANNEL_CONTEXT,
 ): ReadTaskOutcome {
   const rounds = numberRounds(records);
   const card = cardOf(meta, "briefing", rounds.length);
@@ -354,7 +439,7 @@ export function buildTaskBriefing(
       text: `${taskHeader(meta, 0, workspaceName)}\n\nNo rounds yet — the task has no messages on disk.`,
     };
   }
-  const head = [taskHeader(meta, rounds.length, workspaceName), outlineSection(records, rounds)];
+  const head = [taskHeader(meta, rounds.length, workspaceName), outlineSection(records, rounds, channel)];
   const compacted = compactedSection(records);
   if (compacted !== null) head.push(compacted);
   const wanted = Math.min(BRIEFING_RECENT_ROUNDS, rounds.length);
@@ -362,7 +447,7 @@ export function buildTaskBriefing(
   for (;;) {
     const start = rounds[rounds.length - taken]?.startIndex;
     if (start === undefined) break;
-    const recentBody = transcriptToMarkdown(records.slice(start));
+    const recentBody = recordsMarkdown(records.slice(start), channel);
     const trimmed =
       taken < wanted
         ? `\n(only the last ${taken} of ${wanted} rounds shown in full to stay under the size budget; fetch earlier rounds with the \`rounds\` parameter)`
@@ -385,6 +470,7 @@ export function buildRoundsExcerpt(
   records: readonly SessionRecord[],
   spec: string,
   workspaceName?: string | null,
+  channel: RoundChannelContext = NO_CHANNEL_CONTEXT,
 ): ReadTaskOutcome {
   const rounds = numberRounds(records);
   const selection = selectRounds(records, spec);
@@ -393,7 +479,7 @@ export function buildRoundsExcerpt(
   const parts = [taskHeader(meta, rounds.length, workspaceName)];
   for (const round of selection.rounds) {
     const slice = records.slice(round.startIndex, round.endIndex);
-    parts.push(`--- Round ${round.number} ---\n\n${transcriptToMarkdown(slice)}`);
+    parts.push(`--- Round ${round.number} ---\n\n${recordsMarkdown(slice, channel)}`);
   }
   return { ok: true, card, text: parts.join("\n\n") };
 }
@@ -412,6 +498,45 @@ export interface SessionStoreReader {
 }
 
 /**
+ * 通道账本的最小只读视图（同上）：只要按父子对读一份。ChannelStore 结构化满足本接口。
+ */
+export interface ChannelStoreReader {
+  load(key: ChannelKey): Promise<ChannelMessage[]>;
+}
+
+/**
+ * 这条会话里出现过的通道消息正文：按标记里的对面拼出通道键（标记在子会话里 =
+ * 母会话发来的，在母会话里 = 子会话发来的），每条通道读一次。**读失败不拦 read_task**：
+ * 会话本身读得到，那一条通道的正文如实写「读不到」，原因落 dev 终端。
+ */
+async function loadChannelMessages(
+  channels: ChannelStoreReader,
+  meta: SessionMeta,
+  records: readonly SessionRecord[],
+): Promise<Map<string, ChannelMessage>> {
+  const keys = new Map<string, ChannelKey>();
+  for (const record of records) {
+    if (!isChannelMarkRecord(record)) continue;
+    const key: ChannelKey =
+      record.from === "parent"
+        ? { parentId: record.peerId, childId: meta.id }
+        : { parentId: meta.id, childId: record.peerId };
+    keys.set(`${key.parentId}/${key.childId}`, key);
+  }
+  const messages = new Map<string, ChannelMessage>();
+  await Promise.all(
+    [...keys.values()].map(async (key) => {
+      try {
+        for (const message of await channels.load(key)) messages.set(message.id, message);
+      } catch (cause) {
+        console.error("[main] read_task 读不了通道账本，这条通道的消息正文缺席", key, cause);
+      }
+    }),
+  );
+  return messages;
+}
+
+/**
  * 工作区的最小只读视图（同上）：只要名字，所以只要 list。
  * WorkspaceStore 结构化满足本接口，测试给 stub。
  */
@@ -427,6 +552,7 @@ export async function applyReadTask(
   sessions: SessionStoreReader,
   event: Extract<AgentEvent, { type: "readTaskRequest" }>,
   workspaces: WorkspaceStoreReader,
+  channels: ChannelStoreReader,
 ): Promise<ReadTaskOutcome> {
   const metas = await sessions.list();
   const named = new Map((await workspaces.list()).map((workspace) => [workspace.id, workspace.name]));
@@ -464,6 +590,10 @@ export async function applyReadTask(
     return { ok: false, error: `The task matched by "${ref}" no longer exists on disk.` };
   }
   const target = nameOf(detail.meta.workspaceId);
-  if (event.rounds === undefined) return buildTaskBriefing(detail.meta, detail.transcript, target);
-  return buildRoundsExcerpt(detail.meta, detail.transcript, event.rounds, target);
+  const channel: RoundChannelContext = {
+    messages: await loadChannelMessages(channels, detail.meta, detail.transcript),
+    titles: new Map(metas.map((meta) => [meta.id, meta.title])),
+  };
+  if (event.rounds === undefined) return buildTaskBriefing(detail.meta, detail.transcript, target, channel);
+  return buildRoundsExcerpt(detail.meta, detail.transcript, event.rounds, target, channel);
 }
