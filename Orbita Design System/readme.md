@@ -134,6 +134,20 @@ neutral gray each bounced; the user picked warm for dark and darkest-neutral for
 rendered comparison page, then softened, renamed, darkened and de-yellowed Warm across two more
 rounds.)
 
+**Paper themes** (added 2026-09-25): **Manuscript** and **Typescript** are the two faces of the
+稿纸 (manuscript-paper) era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
+as two manual themes because the UI copy is English-only. Both are **light only** (`system` never
+lands on them; the native layer runs light) and share one paper: `#e2e0d8` desk, near-opaque
+panels (glass `.92` — paper, not glass), ink `#1f1f1d / #52524e / #8a8a84`. Manuscript takes the
+grid's green as its accent (`#3b7a55`), the teacher's red pen (`#cc3a2e`) as danger and as the
+wavy underline on bold transcript text, a double green frame round the main pane, a green square
+grid in the composer, and serif text (Literata + Source Han Serif SC). Typescript takes typewriter
+ribbon blue (`#2f4f7f`), Courier Prime for text and Special Elite for the wordmark and slogan,
+ruled lines plus a red margin line in the composer only, and upper-cased transcript headings.
+Tokens live in `tokens/colors.css` (the `--color-paper-*` group), `glass.css` and
+`typography.css`; the decoration layer is `src/renderer/src/paper-themes.css`. They are the only
+themes that change type, and the only place the accent is not blue or yellow.
+
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
 (variable, with Source Han Sans SC) runs the whole interface on a tight 11 → 20px scale, with a

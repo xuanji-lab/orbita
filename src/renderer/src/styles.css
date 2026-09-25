@@ -169,6 +169,14 @@
  * 取 420px 做断点——比展开态最小需求（~430px）略窄一点，容器一旦装不下当前展开
  * 内容就立刻收，不留一段「即将重叠」的中间态。
  */
+/* 输入框本体。底、内边距与行高放在 class 上（不在 Composer.tsx 的 inline style 里）：
+   稿纸两档要在这里画格子与横线（paper-themes.css），inline 的 background 会把它们盖掉 */
+.composer-input {
+  padding: 2px 4px;
+  background: transparent;
+  line-height: var(--line-height-input);
+}
+
 .composer-bottom-bar {
   display: flex;
   align-items: center;

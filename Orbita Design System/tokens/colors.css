@@ -176,3 +176,95 @@
   --color-chat-table-bg: #111111;
   --color-chat-link: #52a8ff;
 }
+
+/* manuscript — 稿纸（中文）：璇玑载体谱「稿纸」一档的中文版（2026-09-25 载入）。90 年代的作文
+   稿纸：米白纸、绿格、老师的红笔。accent 取格线的绿（主操作、选中、勾选）；红笔色给 danger
+   与纸面批注（--color-paper-pen）。只有明，system 不落这档。
+   `[data-theme-preview="manuscript"]` 同上，给 Theme 预览卡用。 */
+:root[data-theme="manuscript"],
+[data-theme-preview="manuscript"] {
+  color-scheme: light;
+  --color-bg-app: #e2e0d8;
+  --color-bg-sidebar: #e8e6df;
+  --color-bg-panel: #ffffff;
+  --color-bg-muted: #f4f4ef;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+  --color-bg-active: rgba(59, 122, 85, 0.1);
+  --color-text-primary: #1f1f1d;
+  --color-text-secondary: #52524e;
+  --color-text-tertiary: #8a8a84;
+  --color-text-inverse: #ffffff;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: #e4e3dc;
+  --color-border-default: #d6d5cd;
+  --color-border-strong: #c9c8bf;
+  --color-accent: #3b7a55;
+  --color-accent-strong: #2f6444;
+  --color-accent-soft: rgba(59, 122, 85, 0.1);
+  --color-accent-fg: #ffffff;
+  --color-mode-active-bg: rgba(59, 122, 85, 0.1);
+  --color-mode-active-fg: #2f6a47;
+  --color-danger: #cc3a2e;
+  --color-danger-solid: #b3322a;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #fbeae8;
+  --color-warning: #b0761c;
+  --color-info: #22345a;
+  --color-info-fg: #ffffff;
+  --color-success: #2e7d4f;
+  --color-success-bg: #eef7f0;
+  --color-success-border: #bfe0c9;
+  --color-chat-card-bg: #ffffff;
+  --color-chat-muted-bg: #f4f4ef;
+  --color-chat-control-bg: #ffffff;
+  --color-chat-table-bg: #ffffff;
+  --color-chat-link: #22345a;
+  /* 纸面：绿格线与红笔（装饰层 src/renderer/src/paper-themes.css 用） */
+  --color-paper-grid: rgba(59, 122, 85, 0.42);
+  --color-paper-pen: #cc3a2e;
+}
+
+/* typescript — 稿纸（英文）：同一档的英文版，打字稿。同一张米白纸，不画格也不满屏画线，
+   只留红色页边线，横线只在输入框；墨是打字机色带的蓝黑。只有明，system 不落这档。 */
+:root[data-theme="typescript"],
+[data-theme-preview="typescript"] {
+  color-scheme: light;
+  --color-bg-app: #e2e0d8;
+  --color-bg-sidebar: #e8e6df;
+  --color-bg-panel: #ffffff;
+  --color-bg-muted: #f4f4ef;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+  --color-bg-active: rgba(47, 79, 127, 0.1);
+  --color-text-primary: #1f1f1d;
+  --color-text-secondary: #52524e;
+  --color-text-tertiary: #8a8a84;
+  --color-text-inverse: #ffffff;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: #e4e3dc;
+  --color-border-default: #d6d5cd;
+  --color-border-strong: #c9c8bf;
+  --color-accent: #2f4f7f;
+  --color-accent-strong: #243d63;
+  --color-accent-soft: rgba(47, 79, 127, 0.1);
+  --color-accent-fg: #ffffff;
+  --color-mode-active-bg: rgba(47, 79, 127, 0.1);
+  --color-mode-active-fg: #2f4f7f;
+  --color-danger: #cc3a2e;
+  --color-danger-solid: #b3322a;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #fbeae8;
+  --color-warning: #b0761c;
+  --color-info: #2f4f7f;
+  --color-info-fg: #ffffff;
+  --color-success: #2e7d4f;
+  --color-success-bg: #eef7f0;
+  --color-success-border: #bfe0c9;
+  --color-chat-card-bg: #ffffff;
+  --color-chat-muted-bg: #f4f4ef;
+  --color-chat-control-bg: #ffffff;
+  --color-chat-table-bg: #ffffff;
+  --color-chat-link: #2f4f7f;
+  /* 纸面：输入框的蓝横线与红页边线 */
+  --color-paper-rule: #a9c6e2;
+  --color-paper-margin: #e38f86;
+}

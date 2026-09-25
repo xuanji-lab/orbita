@@ -34,6 +34,14 @@
   --glass-bg: rgba(17, 17, 17, 0.7);
 }
 
+/* 稿纸两档（manuscript / typescript）是纸，不是玻璃：面板几乎不透，桌面不从纸底下透出来。 */
+:root[data-theme="manuscript"],
+:root[data-theme="typescript"] {
+  --glass-alpha: 0.92; /* @kind other */
+  --glass-border: rgba(255, 255, 255, 0.7);
+  --glass-bg: rgba(253, 252, 248, 0.92);
+}
+
 /* The single card recipe. Reused everywhere by changing only width/height. */
 .glass-card {
   background: var(--glass-bg);

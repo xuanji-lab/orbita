@@ -65,6 +65,7 @@ export function Composer(props: {
     >
       <textarea
         ref={textareaRef}
+        className="composer-input"
         rows={COMPOSER_MIN_ROWS}
         value={props.value}
         disabled={disabled}
@@ -83,16 +84,13 @@ export function Composer(props: {
         }}
         style={{
           width: "100%",
-          padding: "2px 4px",
           border: 0,
-          background: "transparent",
           // 高度由上面的 layout effect 接管；把手会和自增高打架
           resize: "none",
           overflowY: "hidden",
           outline: "none",
           fontFamily: "var(--font-family-base)",
           fontSize: "var(--font-size-input)",
-          lineHeight: "var(--line-height-input)",
           color: "var(--color-text-primary)",
         }}
       />

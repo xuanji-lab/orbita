@@ -45,3 +45,14 @@
   --text-body-family: var(--font-family-base);
   --text-code-family: var(--font-family-mono);
 }
+
+/* 稿纸两档换字：中文稿纸是手写的纸面，正文用衬线（Literata + 思源宋体）；打字稿是打字机，
+   正文 Courier Prime，标题与 slogan 用 Special Elite（色带不匀的打字机字）。mono 不变。 */
+:root[data-theme="manuscript"] {
+  --font-family-base: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
+}
+
+:root[data-theme="typescript"] {
+  --font-family-base: "Courier Prime", "Courier New", "Source Han Sans SC", monospace;
+  --font-family-brand: "Special Elite", "Courier Prime", "Source Han Serif SC", monospace;
+}

@@ -1,0 +1,70 @@
+/*
+ * 稿纸两档的纸面装饰（璇玑载体谱「稿纸」一档，wafo 2026-09-25 载入）。颜色与字体全部是 token
+ * （Orbita Design System/tokens：colors.css 的 --color-paper-*、typography.css 的换字）；这里只放
+ * 每档一两层装饰，DOM 不动。
+ *
+ * - manuscript（中文稿纸）：面板一圈双线绿框；输入框是绿方格；正文里的加粗是老师的红笔波浪线。
+ * - typescript（英文打字稿）：不画格也不满屏画线——只有输入框有横线和一条红页边线；
+ *   对话里的标题按打字稿的习惯全大写。
+ */
+
+/* ===== manuscript ===== */
+
+:root[data-theme="manuscript"] .pane {
+  box-shadow:
+    inset 0 0 0 5px var(--glass-bg),
+    inset 0 0 0 6px var(--color-paper-grid),
+    inset 0 0 0 8px var(--glass-bg),
+    inset 0 0 0 9px var(--color-paper-grid),
+    var(--shadow-composer);
+}
+
+/* 方格与行高同为 24px：一行字落在一行格子里 */
+:root[data-theme="manuscript"] .composer-input {
+  line-height: 24px;
+  background-image:
+    linear-gradient(to right, var(--color-paper-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-paper-grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: 0 -1px;
+}
+
+:root[data-theme="manuscript"] .chat-md strong {
+  text-decoration: underline wavy var(--color-paper-pen);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 5px;
+}
+
+/* ===== typescript ===== */
+
+/* 横线每 24px 一条，页边线在第 28px；字从页边线右边开始打 */
+:root[data-theme="typescript"] .composer-input {
+  padding-left: 40px;
+  line-height: 24px;
+  background-image:
+    linear-gradient(to bottom, transparent 23px, var(--color-paper-rule) 23px 24px),
+    linear-gradient(to right, transparent 28px, var(--color-paper-margin) 28px 29px, transparent 29px);
+  background-size:
+    100% 24px,
+    100% 100%;
+}
+
+:root[data-theme="typescript"] .chat-md :is(h1, h2, h3, h4) {
+  font-family: var(--font-family-base);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* ===== Theme 预览卡：缩略窗的面板里画一点纸面，认得出是哪张纸 ===== */
+
+[data-theme-preview="manuscript"] .theme-thumb-panel {
+  background-image:
+    linear-gradient(to right, var(--color-paper-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-paper-grid) 1px, transparent 1px);
+  background-size: 8px 8px;
+}
+
+[data-theme-preview="typescript"] .theme-thumb-panel {
+  background-image: linear-gradient(to right, transparent 6px, var(--color-paper-margin) 6px 7px, transparent 7px);
+}

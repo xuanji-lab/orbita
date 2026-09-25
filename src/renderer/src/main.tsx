@@ -5,6 +5,7 @@ import { api } from "./api.ts";
 import { resolveTheme } from "./theme-resolve.ts";
 import { watchWindowActivity } from "./shell/window-activity.ts";
 import "./styles.css";
+import "./paper-themes.css";
 
 // 窗口不在前台（失焦 / 标签页隐藏）时暂停持续动效（styles.css 的
 // `[data-window-inactive="true"]` 规则）——见 window-activity.ts 的理由。

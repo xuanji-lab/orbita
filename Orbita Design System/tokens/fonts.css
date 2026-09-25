@@ -1,4 +1,6 @@
-/* Orbita webfonts. Source: design/fonts/ (all SIL OFL 1.1).
+/* Orbita webfonts. Source: design/fonts/ (all SIL OFL 1.1), except the Typescript theme's two
+   typewriter faces, taken from google/fonts: Courier Prime (SIL OFL 1.1, OFL-CourierPrime.txt)
+   and Special Elite (Apache 2.0, LICENSE-SpecialElite.txt).
    Note: the renderer loads these faces — styles.css @imports this file, and
    `body`/`--font-family-brand` consume them (readme.md § Type). */
 @font-face {
@@ -37,4 +39,33 @@
   font-style: normal;
   font-display: swap;
   unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF;
+}
+/* Typescript 主题（稿纸英文版）的打字机字：正文 Courier Prime，标题 Special Elite */
+@font-face {
+  font-family: "Courier Prime";
+  src: url("../assets/fonts/CourierPrime-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Courier Prime";
+  src: url("../assets/fonts/CourierPrime-Bold.ttf") format("truetype");
+  font-weight: 500 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Courier Prime";
+  src: url("../assets/fonts/CourierPrime-Italic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Special Elite";
+  src: url("../assets/fonts/SpecialElite-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
