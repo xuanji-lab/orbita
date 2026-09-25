@@ -9,12 +9,12 @@ export type Locale = "zh" | "en";
 /**
  * 解析后的主题 → 界面语言。**纯函数**。
  *
- * 只有 Manuscript（中文稿纸）是中文：稿纸这一档本来就是中文版，Typescript 是它的
+ * 只有 Copybook（小学作业）是中文：这一档本来就是中文版，Typescript 是它的
  * 英文对照；其余各档（含 system 落到的 light / black）照旧英文。不另加语言设置——
  * 多一个开关就多一种「绿格子配英文」的组合，而那正是用户说对不上格子的那一种。
  */
 export function localeOfTheme(resolved: Exclude<ThemePreference, "system">): Locale {
-  return resolved === "manuscript" ? "zh" : "en";
+  return resolved === "copybook" ? "zh" : "en";
 }
 
 /** `<html lang>` 的取值：CJK 字形选择（同一码位的中 / 日字形）与换行规则靠它 */

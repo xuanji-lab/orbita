@@ -1420,7 +1420,7 @@ describe("channelMarkLabel（子会话 PR4a）", () => {
   });
 });
 
-describe("时长与结果摘要 —— 中文（Manuscript）", () => {
+describe("时长与结果摘要 —— 中文（小学作业）", () => {
   test("工具时长：不足一分钟带小数秒，满一分钟分秒", () => {
     assert.equal(formatToolDuration(12_345, zh), "12.3 秒");
     assert.equal(formatToolDuration(64_000, zh), "1 分 04 秒");

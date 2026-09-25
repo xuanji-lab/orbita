@@ -14,7 +14,7 @@ const THINKING_ZH: Record<ThinkingLevel, string> = {
 const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录" };
 
 /**
- * 界面文案表——中文，Manuscript（稿纸）主题下使用。类型由英文真源推出。
+ * 界面文案表——中文，Copybook（小学作业）主题下使用。类型由英文真源推出。
  *
  * 写法（全表统一）：
  * - 用语优先照皮肤原型「稿纸」一档的中文版；原型没有的，用平实的现代中文产品说法。
@@ -229,11 +229,11 @@ export const zh: Messages = {
     light: "浅色",
     dark: "暖色",
     black: "墨",
-    manuscript: "稿纸",
+    copybook: "小学作业",
     typescript: "打字稿",
     systemTip: "按桌面的明暗切换 · 暗色落到「墨」",
-    manuscriptTip: "绿格稿纸，红笔批改 · 只有浅色",
-    typescriptTip: "打字机打出的纸页，一道红色页边线，稿纸的英文版 · 只有浅色",
+    copybookTip: "绿格作业本，红笔批改 · 只有浅色",
+    typescriptTip: "打字机打出的纸页，一道红色页边线，小学作业的英文版 · 只有浅色",
   },
 
   modelMenu: {

@@ -164,7 +164,7 @@ export function ChatView(props: {
    */
   onOpenParent?: (parentId: string) => void;
   /**
-   * 解析后的主题：只给首页门面用（稿纸两档的 slogan 与批语，HomeHero.tsx）。
+   * 解析后的主题：只给首页门面用（纸面两档的 slogan 与批语，HomeHero.tsx）。
    * 只有主槽的 ChatView 拿到它；辅助对话是 homeBare，本来就不出门面。
    */
   theme?: Exclude<ThemePreference, "system">;
@@ -515,7 +515,7 @@ export function ChatView(props: {
               gap: "var(--space-5)",
             }}
           >
-            {/* 门面：slogan（稿纸两档再加红笔批语），样子与理由在 HomeHero.tsx */}
+            {/* 门面：slogan（纸面两档再加红笔批语），样子与理由在 HomeHero.tsx */}
             <HomeHero theme={props.theme} />
             {/* 一排最近会话卡（SessionCard 规格：恒三槽、等高、hover 只抬阴影） */}
             {!session.sessionsLoaded ? (

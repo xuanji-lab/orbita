@@ -8,8 +8,8 @@ describe("resolveNativeThemeSource", () => {
     deepStrictEqual(resolveNativeThemeSource("black"), "dark");
   });
 
-  it("稿纸两档映射成 light——它们只有明", () => {
-    deepStrictEqual(resolveNativeThemeSource("manuscript"), "light");
+  it("纸面两档映射成 light——它们只有明", () => {
+    deepStrictEqual(resolveNativeThemeSource("copybook"), "light");
     deepStrictEqual(resolveNativeThemeSource("typescript"), "light");
   });
 

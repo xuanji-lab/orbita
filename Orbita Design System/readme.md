@@ -65,10 +65,10 @@ above still holds.
 
 ## Content fundamentals
 
-UI copy is English first, and **all Chinese under the Manuscript theme**. There is no language
+UI copy is English first, and **all Chinese under the Copybook theme** (小学作业). There is no language
 setting: the language follows the resolved theme (`localeOfTheme` in `src/renderer/src/locale.ts` —
-`manuscript` → Chinese, every other theme, including what `system` lands on, → English). The
-reason is that orbita has no language picker and the 稿纸 era is the Chinese edition by design;
+`copybook` → Chinese, every other theme, including what `system` lands on, → English). The
+reason is that orbita has no language picker and Copybook is the Chinese edition by design;
 Typescript is its English counterpart. A separate switch would only add the one combination users
 asked to remove — green grid, English letters that don't sit in the squares. `<html lang>` follows
 too (`zh-CN` / `en`), which drives CJK glyph selection and line breaking.
@@ -81,7 +81,7 @@ model and provider names, file names and paths, and key names; `messages.test.ts
 a whitelist. Chinese copy uses full-width punctuation, one space between CJK and digits / Latin
 (「2 个子会话」「编辑 mcp.json」), and a single `…` for menu items and in-flight states. Brand copy —
 the slogan 璇玑运转，诸事得序 — stays in Chinese under every theme except Typescript, whose home
-page is the English face of the manuscript page: "Set in motion, kept in order."  The rules below are written for
+page is the English face of the Copybook page: "Set in motion, kept in order."  The rules below are written for
 the English copy; the Chinese copy follows the same voice.
 
 - **Voice: flat, mechanical, unhurried.** Labels are nouns or bare verbs: "New Session", "Search",
@@ -152,19 +152,21 @@ neutral gray each bounced; the user picked warm for dark and darkest-neutral for
 rendered comparison page, then softened, renamed, darkened and de-yellowed Warm across two more
 rounds.)
 
-**Paper themes** (added 2026-09-25): **Manuscript** and **Typescript** are the two faces of the
-稿纸 (manuscript-paper) era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
-as two manual themes, and the interface language follows them: Manuscript shows all-Chinese copy,
+**Paper themes** (added 2026-09-25): **Copybook** (小学作业) and **Typescript** (打字稿) are the two
+faces of the 稿纸 era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
+as two manual themes, and the interface language follows them: Copybook shows all-Chinese copy,
 Typescript English (see *Content fundamentals*). Both are **light only** (`system` never
 lands on them; the native layer runs light) and share one paper: `#e6e4dc` desk, near-opaque
 panels (glass `.92` — paper, not glass), ink `#1f1f1d / #52524e / #6e6e68` (the prototype's
-`#e2e0d8` desk and `#8a8a84` third ink fell to 2.6:1 on the desk; raised for WCAG). Manuscript takes the
+`#e2e0d8` desk and `#8a8a84` third ink fell to 2.6:1 on the desk; raised for WCAG). Copybook takes the
 grid's green as its accent (`#3b7a55`), the teacher's red pen (`#cc3a2e`) as danger and as the
 wavy underline on bold transcript text, a double green frame round the main pane, a green square
-grid in the composer, and serif text (Literata + Source Han Serif SC). Typescript takes typewriter
+grid in the composer (one Chinese character per cell; every Latin run sits on a white
+correction-fluid strip, `--color-paper-whiteout`, and a mostly-English draft drops the per-cell
+tracking), and serif text (Literata + Source Han Serif SC). Typescript takes typewriter
 ribbon blue (`#2f4f7f`), Courier Prime for text and Special Elite for the wordmark and slogan,
 ruled lines plus a red margin line in the composer only, and upper-cased transcript headings.
-On the home page Manuscript sets the slogan one character per red 田字格 cell in Ma Shan Zheng,
+On the home page Copybook sets the slogan one character per red 田字格 cell in Ma Shan Zheng,
 Typescript types the English slogan in Special Elite on a ruled line with a red margin, and both
 add the teacher's red-pen mark in Long Cang. The two hand faces ship as **subsets** — only the
 nine slogan characters (7 KB) and the mark's characters plus printable ASCII (20 KB) — so changing
@@ -172,6 +174,10 @@ either line means re-subsetting (command in `tokens/fonts.css`).
 Tokens live in `tokens/colors.css` (the `--color-paper-*` group), `glass.css` and
 `typography.css`; the decoration layer is `src/renderer/src/paper-themes.css`. They are the only
 themes that change type, and the only place the accent is not blue or yellow.
+Copybook was named Manuscript / 稿纸 on the day it landed and renamed the same day: the green grid
+with the teacher's red pen is a primary-school exercise book (作业本) of that era, not manuscript
+paper. Its theme id is `copybook`; a stored `"manuscript"` still parses to it (`parseTheme` in
+`src/shared/settings.ts`).
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
@@ -428,7 +434,7 @@ source does not define them.
 | 强调色 | 仅选中 + 主操作，辅以有限语义色；颜色绝不作唯一状态信号 |
 | 文字 | 按角色分规则（导航/正文/代码/元数据）；UI 无衬线 + 代码等宽；表达性字体仅品牌标 |
 | 动效 | 白名单制：仅解释来源（面板开合/消息到达），无 idle 装饰 |
-| 界面语言 | 跟主题走，不设语言开关：Manuscript（稿纸）全中文，其余主题英文。文案只在 `messages-en.ts` / `messages-zh.ts` 两张表里；中文表纯中文，拉丁字母词只允许白名单（`messages.test.ts` 把关） |
+| 界面语言 | 跟主题走，不设语言开关：Copybook（小学作业）全中文，其余主题英文。文案只在 `messages-en.ts` / `messages-zh.ts` 两张表里；中文表纯中文，拉丁字母词只允许白名单（`messages.test.ts` 把关） |
 
 ### 硬规则
 

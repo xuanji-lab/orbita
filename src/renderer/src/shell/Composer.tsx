@@ -1,7 +1,10 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
+import { composerScript } from "./composer-script.ts";
+import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
+import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useT } from "../locale.ts";
 
 /**
@@ -32,6 +35,22 @@ function fitComposerHeight(el: HTMLTextAreaElement): void {
   el.style.overflowY = scrollable ? "auto" : "hidden";
 }
 
+/**
+ * 镜像层跟着 textarea：滚动条占掉的宽度补成右内边距（换行位置才一致；镜像自己不出滚动条），
+ * 滚动位置对齐。输入框长到上限、开始滚动时才有区别。
+ */
+function syncMirror(textarea: HTMLTextAreaElement, mirror: HTMLDivElement): void {
+  const gutter = textarea.offsetWidth - textarea.clientWidth;
+  const padding = Number.parseFloat(getComputedStyle(textarea).paddingRight);
+  mirror.style.paddingRight = `${(Number.isFinite(padding) ? padding : 0) + gutter}px`;
+  mirror.scrollTop = textarea.scrollTop;
+}
+
+/** 修正液只在小学作业主题下画。主题落在 <html data-theme> 上（useTheme.ts / main.tsx 写） */
+function isCopybook(): boolean {
+  return document.documentElement.dataset.theme === "copybook";
+}
+
 export function Composer(props: {
   value: string;
   onChange: (value: string) => void;
@@ -45,19 +64,41 @@ export function Composer(props: {
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
+  // 输入法组词中的范围（没在组词是 null）。拼音字母会先进 value：字距判法在组词期间沿用
+  // 上一次的结果，修正液不涂这一截
+  const [composition, setComposition] = useState<CompositionRange | null>(null);
+  // 以中文还是英文为主（composer-script.ts）：小学作业主题按它切字距。要记住上一次的结果——
+  // 渲染中按新输入调整 state，React 会在提交前重渲一遍
+  const [script, setScript] = useState<DominantScript>("cjk");
+  const nextScript = composerScript(script, props.value, composition !== null);
+  if (nextScript !== script) setScript(nextScript);
+  // 修正液：小学作业主题下，textarea 下面垫一层同样排版的镜像，只给英文段画白底
+  // （whiteout-segments.ts）。别的主题不渲染镜像，每次按键不白白分段
+  const [whiteout, setWhiteout] = useState(isCopybook);
+  const segments = useMemo(
+    () => (whiteout ? whiteoutSegments(props.value, composition ?? undefined) : []),
+    [whiteout, props.value, composition],
+  );
   // 随内容长高：撤回能把好几条排队消息堆进来，写死两行就只能盲着改。
   // useLayoutEffect 而非 useEffect——量完就改高度，放到绘制后会闪一帧。
+  // script 变了也要重量：字距一换行数就变，而组词结束时切换的那一下 value 没有变。
+  // 高度一变可能出现或收起滚动条，镜像跟着同步；镜像刚挂上（whiteout 变 true）时也要同步一次
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (el === null) return;
     fitComposerHeight(el);
-  }, [props.value]);
-  // 换主题也要重量：稿纸两档的行高是 24px，浅 / 暗是 22px——只跟着 value 量，切主题后高度
-  // 停在上一档，稿纸的格子会被切掉半行（2026-09-25 实测）。
+    if (mirrorRef.current !== null) syncMirror(el, mirrorRef.current);
+  }, [props.value, script, whiteout]);
+  // 换主题也要重量：纸面两档的行高是 24px，浅 / 暗是 22px——只跟着 value 量，切主题后高度
+  // 停在上一档，方格的末行会被切掉半行（2026-09-25 实测）。同一个信号决定画不画修正液
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (el === null) return;
-    const observer = new MutationObserver(() => fitComposerHeight(el));
+    const observer = new MutationObserver(() => {
+      fitComposerHeight(el);
+      setWhiteout(isCopybook());
+    });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
   }, []);
@@ -79,37 +120,66 @@ export function Composer(props: {
         padding: "10px 12px 8px",
       }}
     >
-      <textarea
-        ref={textareaRef}
-        className="composer-input"
-        rows={COMPOSER_MIN_ROWS}
-        value={props.value}
-        disabled={disabled}
-        placeholder={props.placeholder}
-        onChange={(event) => props.onChange(event.target.value)}
-        onKeyDown={(event) => {
-          // 组词中的 Enter 是「确认候选词」，不是发送——规则与用例在 composer-keys.ts
-          if (!isSubmitKey({
-            key: event.key,
-            shiftKey: event.shiftKey,
-            isComposing: event.nativeEvent.isComposing,
-            keyCode: event.keyCode,
-          })) return;
-          event.preventDefault();
-          if (sendable) props.onSubmit();
-        }}
-        style={{
-          width: "100%",
-          border: 0,
-          // 高度由上面的 layout effect 接管；把手会和自增高打架
-          resize: "none",
-          overflowY: "hidden",
-          outline: "none",
-          fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-input)",
-          color: "var(--color-text-primary)",
-        }}
-      />
+      <div className="composer-field">
+        {whiteout && (
+          // 镜像：与 textarea 同字体、同字距、同宽，字是透明的，只有英文段的白底看得见。
+          // 末尾补一个零宽字符：textarea 末尾的换行会多出一行，div 里不会，滚动范围就对不上
+          <div ref={mirrorRef} className="composer-input composer-mirror" data-script={script} aria-hidden="true">
+            {segments.map((segment, index) =>
+              segment.whiteout ? (
+                <span key={index} className="composer-whiteout">
+                  {segment.text}
+                </span>
+              ) : (
+                segment.text
+              ),
+            )}
+            {"\u200b"}
+          </div>
+        )}
+        <textarea
+          ref={textareaRef}
+          className="composer-input"
+          data-script={script}
+          rows={COMPOSER_MIN_ROWS}
+          value={props.value}
+          disabled={disabled}
+          placeholder={props.placeholder}
+          onChange={(event) => props.onChange(event.target.value)}
+          onKeyDown={(event) => {
+            // 组词中的 Enter 是「确认候选词」，不是发送——规则与用例在 composer-keys.ts
+            if (!isSubmitKey({
+              key: event.key,
+              shiftKey: event.shiftKey,
+              isComposing: event.nativeEvent.isComposing,
+              keyCode: event.keyCode,
+            })) return;
+            event.preventDefault();
+            if (sendable) props.onSubmit();
+          }}
+          onCompositionStart={(event) => {
+            const start = event.currentTarget.selectionStart;
+            setComposition({ start, end: start });
+          }}
+          onCompositionUpdate={(event) => {
+            const length = event.data.length;
+            setComposition((current) => (current === null ? null : { start: current.start, end: current.start + length }));
+          }}
+          onCompositionEnd={() => setComposition(null)}
+          onScroll={(event) => {
+            if (mirrorRef.current !== null) mirrorRef.current.scrollTop = event.currentTarget.scrollTop;
+          }}
+          style={{
+            width: "100%",
+            border: 0,
+            // 高度由上面的 layout effect 接管；把手会和自增高打架
+            resize: "none",
+            overflowY: "hidden",
+            outline: "none",
+            color: "var(--color-text-primary)",
+          }}
+        />
+      </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {/*
           芯片群包一层：flex:1 1 auto + min-width:0 让它先于发送键让路，

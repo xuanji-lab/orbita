@@ -170,11 +170,25 @@
  * 内容就立刻收，不留一段「即将重叠」的中间态。
  */
 /* 输入框本体。底、内边距与行高放在 class 上（不在 Composer.tsx 的 inline style 里）：
-   稿纸两档要在这里画格子与横线（paper-themes.css），inline 的 background 会把它们盖掉 */
+   纸面两档要在这里画格子与横线（paper-themes.css），inline 的 background 会把它们盖掉。
+   字体与字号也在这里：小学作业主题的镜像层（.composer-mirror）同用这个 class，排版才和 textarea 一致 */
 .composer-input {
   padding: 2px 4px;
   background: transparent;
   line-height: var(--line-height-input);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-input);
+}
+
+/* 输入框外层：textarea 与小学作业主题的镜像层叠在同一格里，镜像在下、textarea 在上
+   （修正液，Composer.tsx）。只有 textarea 时就是一层普通包裹 */
+.composer-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.composer-field > * {
+  grid-area: 1 / 1;
 }
 
 .composer-bottom-bar {
@@ -1408,7 +1422,7 @@ body {
 /* 首页门面（HomeHero.tsx）。slogan 是全产品唯一一句抒情的话。窄槽（侧栏 + 右栏都展开时
    主槽变窄）会把它挤断成两行——没设 line-height 时继承正文的 22px，36px 的字一断行两行
    几乎叠在一起。给大字号自己的行高（1.25），text-wrap: balance 让断行落在匀称的位置。
-   从 inline style 挪成 class：稿纸两档要改它的字体、字号与排法（paper-themes.css），
+   从 inline style 挪成 class：纸面两档要改它的字体、字号与排法（paper-themes.css），
    inline 压得过任何主题规则。 */
 .home-hero {
   display: flex;

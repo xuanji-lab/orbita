@@ -12,11 +12,12 @@ import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
  * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（Ink，
  * 2026-09-03 用户指定）；"dark"（Warm）与 "black" 从此都是手动档。
  *
- * "manuscript" 与 "typescript" 是璇玑载体谱「稿纸」一档的中文与英文两版（wafo 2026-09-25
- * 要求载入）：绿格稿纸 + 红笔，与打字稿 + 红色页边线。**只有明**，system 不落这两档，
- * 都是手动档。
+ * "copybook"（小学作业）与 "typescript"（打字稿）是璇玑载体谱「稿纸」一档的中文与英文
+ * 两版（wafo 2026-09-25 要求载入）：绿格作业本 + 红笔，与打字稿 + 红色页边线。**只有明**，
+ * system 不落这两档，都是手动档。copybook 载入当天由 "manuscript"（稿纸）改名：那个年代
+ * 小学生写字用的是绿格作业本，不是稿纸。旧 id 的兼容见 `parseTheme`。
  */
-export const THEME_PREFERENCES = ["system", "light", "dark", "black", "manuscript", "typescript"] as const;
+export const THEME_PREFERENCES = ["system", "light", "dark", "black", "copybook", "typescript"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 /**
@@ -246,6 +247,16 @@ function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
 }
 
+/**
+ * "manuscript" 是 copybook 改名前的 id（同一档）：settings.json 里存着旧值的落回这一档，
+ * 不退回 system。下次写设置时磁盘上就是新 id 了。
+ */
+function parseTheme(value: unknown): ThemePreference {
+  if (isThemePreference(value)) return value;
+  if (value === "manuscript") return "copybook";
+  return DEFAULT_SETTINGS.theme;
+}
+
 /** 只在区间内才认；钳制交给渲染层，这里不「猜」用户想要的宽度 */
 function parseWidth(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DRAWER_WIDTH.default;
@@ -275,7 +286,7 @@ export function parseSettings(raw: unknown): AppSettings {
     lastUsed?: unknown;
     channelColumnWidth?: unknown;
   };
-  const theme = isThemePreference(record.theme) ? record.theme : DEFAULT_SETTINGS.theme;
+  const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
   const channelColumnWidth = record.channelColumnWidth;

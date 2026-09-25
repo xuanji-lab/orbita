@@ -5,7 +5,7 @@
  * 会在启动时抛错——`applyNativeTheme` 先于窗口创建跑。black 在原生层没有对应物，
  * **映射成 dark**：vibrancy 材质、原生对话框按深色走；纯黑的部分由 renderer 的
  * `data-theme="black"` 自己画（docs/plans/2026-09-03-黑色皮肤.md 决定 5）。
- * 稿纸两档（manuscript / typescript）同理映射成 light。
+ * 纸面两档（copybook / typescript）同理映射成 light。
  */
 import type { ThemePreference } from "../../shared/settings.ts";
 
@@ -13,7 +13,7 @@ export type NativeThemeSource = "system" | "light" | "dark";
 
 export function resolveNativeThemeSource(theme: ThemePreference): NativeThemeSource {
   if (theme === "black") return "dark";
-  // 稿纸两档都是纸面、只有明：原生层按浅色走
-  if (theme === "manuscript" || theme === "typescript") return "light";
+  // 纸面两档只有明：原生层按浅色走
+  if (theme === "copybook" || theme === "typescript") return "light";
   return theme;
 }
