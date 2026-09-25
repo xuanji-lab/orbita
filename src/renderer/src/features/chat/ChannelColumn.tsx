@@ -419,7 +419,10 @@ function ChannelComposer(props: { parentId: string; childId: string }) {
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  useLayoutEffect(() => {
+  // 按内容定高（1–6 行）。**文字变了要重算，宽度变了也要**：内联列隐藏时宽 0，
+  // 这时挂上的输入框按逐字换行算出一个撑满 6 行的高度；列展开、拖宽都不改文字，
+  // 只听文字就一直顶着那个高度（2026-09-25 CDP 实测：不够宽→够宽后 114px，正常 24px）
+  const fitHeight = useCallback(() => {
     const el = textareaRef.current;
     if (el === null) return;
     el.style.height = "auto";
@@ -435,7 +438,22 @@ function ChannelComposer(props: { parentId: string; childId: string }) {
     );
     el.style.height = `${height}px`;
     el.style.overflowY = scrollable ? "auto" : "hidden";
-  }, [text]);
+  }, []);
+  useLayoutEffect(fitHeight, [text, fitHeight]);
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el === null) return;
+    let lastWidth = el.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const width = el.getBoundingClientRect().width;
+      // 只认宽度：fitHeight 自己改高度也会触发回调，认高度就是自己触发自己
+      if (width === lastWidth) return;
+      lastWidth = width;
+      fitHeight();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fitHeight]);
 
   const send = (): void => {
     const value = text.trim();
