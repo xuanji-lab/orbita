@@ -1,30 +1,31 @@
-import { COMPACTION_PERCENT } from "@shared/settings";
-import { COMPACTION_CHOICES, compactPosition } from "./compact-viz.ts";
+import { Icon } from "../../shell/Icon";
+import { compactMark } from "./compact-viz.ts";
 
 /**
- * Auto-compact 刻度条：chips 已经是精确输入，这条只是把当前百分比翻译成
- * 「槽上的哪个位置」——纯展示，不可拖拽也不可点击（`aria-hidden`，数值已经由
- * chips 表达过一遍）。`compaction.enabled === false` 时调用方直接不渲染这个
- * 组件（SettingsView.tsx 的条件渲染），不是这里隐藏。
+ * Auto-compact 的效果预览：整条 = 一个上下文窗口，竖线 = 折叠点（剩 N% 时折叠），
+ * 竖线右边的斜纹是折叠时还剩的那一截。它代替了原来那句「remaining context drops to
+ * this level」——看条就知道百分比指的是「剩多少」而不是「用了多少」。
+ *
+ * 纯展示（`aria-hidden`，数值已经由 chips 表达过一遍）；`compaction.enabled === false`
+ * 时调用方直接不渲染（SettingsView.tsx 的条件渲染），Off 没有折叠点可画。
  */
 export function CompactViz(props: { percent: number }) {
+  const mark = compactMark(props.percent);
   return (
     <div className="compact-viz" aria-hidden="true">
       <div className="compact-track">
-        {COMPACTION_CHOICES.map((choice) => (
-          <span
-            key={choice}
-            className="compact-tick"
-            style={{ left: `${compactPosition(choice) * 100}%` }}
-          />
-        ))}
-        <span className="compact-pos" style={{ left: `${compactPosition(props.percent) * 100}%` }}>
-          <span className="compact-pos-label">{props.percent}%</span>
+        <span className="compact-used" style={{ width: `${mark.at}%` }} />
+        <span className="compact-rest" style={{ width: `${100 - mark.at}%` }} />
+        <span className="compact-mark" style={{ left: `${mark.at}%` }}>
+          <span className="compact-mark-label" data-align={mark.labelAlign}>
+            <Icon name="fold-vertical" size={10} />
+            {props.percent}% left
+          </span>
         </span>
       </div>
       <div className="compact-ends">
-        <span>{COMPACTION_PERCENT.max}% · compact early</span>
-        <span>{COMPACTION_PERCENT.min}% · compact late</span>
+        <span>history</span>
+        <span>folds into a summary</span>
       </div>
     </div>
   );

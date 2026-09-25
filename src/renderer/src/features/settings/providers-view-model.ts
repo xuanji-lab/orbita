@@ -3,7 +3,7 @@
  * UI 状态留在组件里，这里只放有边界要守的换算；node --test 可直接加载。
  */
 import type { ModelDefaults } from "@shared/model-defaults";
-import type { ModelCostDecl, ModelDecl, ProviderDto } from "@shared/provider";
+import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared/provider";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
 import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
 import { formatTokens } from "../../utils/format-tokens.ts";
@@ -109,9 +109,8 @@ export function modelContextText(
   defaults: ModelDefaults,
 ): { text: string; fallback: boolean } {
   const ctx = decl?.contextWindow ?? defaults.contextWindow;
-  // 徽标要 1M 不要 1.0M——底栏统计要小数，这里不要；只抹 .0，1.2M 原样
   return {
-    text: formatTokens(ctx).replace(/\.0(?=[kM]$)/, ""),
+    text: compactTokens(ctx),
     fallback: decl?.contextWindow === undefined && defaults.source === "fallback",
   };
 }
@@ -138,4 +137,37 @@ export function modelIdIssue(id: string): string | null {
   return MODEL_ID_PATTERN.test(id)
     ? null
     : "Lowercase letters, digits, dots and dashes; 1–64 chars, no leading dot or dash.";
+}
+
+/**
+ * token 数的短写：128000 → 128k、1000000 → 1M。模型行的上下文徽标与模型弹窗的继承
+ * 占位共用——两处写法不一，用户会以为是两个数。徽标要 1M 不要 1.0M（底栏统计要小数，
+ * 这里不要），只抹 .0，1.2M 原样。短写能原样填回输入框（parseTokenInput 认 k / M）。
+ */
+export function compactTokens(n: number): string {
+  return formatTokens(n).replace(/\.0(?=[kM]$)/, "");
+}
+
+/**
+ * 客户端会接在 Base URL 后面的路径——显示成 URL 框尾的灰字，代替原来那句
+ * 「The client appends /chat/completions」。两种协议各一个口径，与 pi 的请求路径一致。
+ */
+export function urlSuffix(api: ProviderApi): string {
+  return api === "anthropic-messages" ? "/v1/messages" : "/chat/completions";
+}
+
+/**
+ * 连接区有没有没存的改动——决定 Save 条出不出现（只在有改动时出现）。
+ *
+ * key 输入框空着 = 沿用已存的 key，不算改动；点「Show」会把已存明文拉进输入框当可编辑
+ * 草稿（`revealedKey`），原样未动也不算改动，改了一个字才算。
+ */
+export function connectionDirty(
+  draft: { displayName: string; baseUrl: string; apiKey: string },
+  saved: { displayName: string; baseUrl: string },
+  revealedKey: string | null,
+): boolean {
+  if (draft.displayName !== saved.displayName) return true;
+  if (draft.baseUrl !== saved.baseUrl) return true;
+  return draft.apiKey !== "" && draft.apiKey !== revealedKey;
 }

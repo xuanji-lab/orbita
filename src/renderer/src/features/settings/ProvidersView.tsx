@@ -7,7 +7,10 @@ import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinProvider } from "@shared/agent-ipc";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
+import { InfoTip, useSettingTip } from "./InfoTip";
 import {
+  compactTokens,
+  connectionDirty,
   hasCredentials,
   kindOf,
   mergeModelCost,
@@ -18,11 +21,13 @@ import {
   parseRateInput,
   parseTokenInput,
   reorderIds,
+  urlSuffix,
 } from "./providers-view-model.ts";
 
 /**
- * Provider 设置面 —— 主从两栏：左栏厂商列表（可拖动排序、可复制），右栏唯一编辑区。
- * 布局按已验收小样（docs/plans/2026-09-10-providers-view-mockup.html）重排。
+ * Provider 设置面 —— 主从两栏铺满内容面：左栏厂商列表（可拖动排序、可复制），右栏唯一编辑区。
+ * 说明文字能换成效果的都换了：协议是标题旁的锁形徽标、客户端要接的路径是 URL 框尾的灰字、
+ * Save 条只在连接区有改动时出现，其余整句进悬停（InfoTip / useSettingTip）。
  *
  * 保留旧版的四条刻意约束（都是为了不重蹈 proma 那条路）：
  *  1. **没有协议选择框**——协议由「选哪个 provider」完全决定，让用户选第二次只会选错；
@@ -30,7 +35,7 @@ import {
  *  2. **目录只列适配过的**（KNOWN_PROVIDERS），不是 pi 的 41 个。
  *  3. **发现的模型要用户提升才算数**：Fetch 结果进多选清单，勾选 Apply 才启用。
  *  4. **保存语义就近分层**：模型启用 / 删除 / 参数编辑立即落盘（mutateModels），
- *     Save 只管身份字段（名称 / URL / key）。
+ *     Save 只管身份字段（名称 / URL / key），所以它收在连接区里，而不是整页底栏。
  */
 export function ProvidersView(props: { onChange?: () => void }) {
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
@@ -49,9 +54,10 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [confirmRemove, setConfirmRemove] = useState(false);
   /** 正等待二次确认删除的模型 id；一次只有一条，点别的行的 trash 就换成那条 */
   const [confirmRemoveModel, setConfirmRemoveModel] = useState<string | null>(null);
-  const [savedAt, setSavedAt] = useState(0);
+  /** 「Show」从盘上拉进输入框的已存 key：原样未动时不算连接区的改动（connectionDirty） */
+  const [revealedKey, setRevealedKey] = useState<string | null>(null);
   /** Fetch 多选清单：null = 收起。ids 已过滤掉已启用项 */
-  const [discovered, setDiscovered] = useState<{ ok: boolean; ids: string[]; message: string } | null>(null);
+  const [discovered, setDiscovered] = useState<{ ids: string[] } | null>(null);
   /** 行内单模型测试：按模型 id 各自独立——可以同时测多个模型，互不顶掉 */
   const [modelTests, setModelTests] = useState<Record<string, { tone: "ok" | "bad" | "busy"; text: string }>>({});
   /** 模型弹窗：isNew = 新增（弹窗内填 id），否则编辑 id 指向的已启用模型 */
@@ -152,10 +158,12 @@ export function ProvidersView(props: { onChange?: () => void }) {
       models: provider.models.declared.map((m) => ({ ...m })),
       apiKey: "",
     });
+    setRevealedKey(null);
   };
 
   const resetTransient = () => {
     setIssues([]);
+    setRevealedKey(null);
     setStatus(null);
     setRevealed(false);
     setDiscovered(null);
@@ -250,18 +258,14 @@ export function ProvidersView(props: { onChange?: () => void }) {
       });
       if (result.ok) {
         setDiscovered({
-          ok: true,
           ids: result.models.filter((m) => !draft.models.some((d) => d.id === m)),
-          message: result.message,
         });
         return { tone: "ok" as const, text: result.message };
       }
       const fromCatalog = catalogIds(known);
       if (fromCatalog.length === 0) return { tone: "bad" as const, text: result.message };
       setDiscovered({
-        ok: false,
         ids: fromCatalog.filter((m) => !draft.models.some((d) => d.id === m)),
-        message: result.message,
       });
       return {
         tone: "bad" as const,
@@ -329,6 +333,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
     if (stored === null) return;
     // 已存 key 的「Show」= 把明文拉进输入框当**可编辑草稿**（wafo 2026-09-03）
     setDraft((d) => ({ ...d, apiKey: stored }));
+    setRevealedKey(stored);
     setRevealed(true);
   };
 
@@ -390,7 +395,6 @@ export function ProvidersView(props: { onChange?: () => void }) {
       setIssues(result.issues);
       return;
     }
-    setSavedAt(Date.now());
     setIssues([]);
     if (editingId === null) {
       // 新建落盘：切到它的详情
@@ -402,6 +406,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
     const fresh = await api.provider.list();
     const updated = fresh.find((p) => p.id === draft.id.trim());
     if (updated !== undefined) loadDraft(updated);
+    // Save 条随改动清零一起收起；这一行状态告诉用户「刚才那一下落盘了」
+    setStatus({ tone: "ok", text: "Saved" });
   };
 
   /**
@@ -482,12 +488,23 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const sorted = providers ?? [];
   const editorDecl =
     editor === null || editor.isNew ? undefined : draft.models.find((m) => m.id === editor.id);
+  /**
+   * Save 条只在连接区有没存的改动时出现——它的出现本身就说明「这里要点 Save」，
+   * 模型区没有 Save 也就说明了「模型的改动即时生效」，代替原来底部那句双语说明。
+   * 新建时还没落盘，条常驻（Add provider 就在上面）。
+   */
+  const dirty =
+    isNew ||
+    (editing !== undefined &&
+      connectionDirty(
+        draft,
+        { displayName: editing.displayName, baseUrl: editing.endpoint.baseUrl },
+        revealedKey,
+      ));
 
   return (
     <section className="pv-root">
-      <div className="pv-master">
-        <nav className="pv-nav">
-        <span className="pv-sec-label">Providers</span>
+      <nav className="pv-nav" aria-label="Providers">
         <div
           className="pv-list"
           onDragLeave={(e) => {
@@ -495,81 +512,90 @@ export function ProvidersView(props: { onChange?: () => void }) {
             if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null);
           }}
         >
-          {sorted.length === 0 && <div className="pv-nav-empty">No providers yet.</div>}
-          {sorted.map((provider) => (
-            <button
-              key={provider.id}
-              type="button"
-              className={`pv-row${view.kind === "detail" && provider.id === selectedId ? " on" : ""}${provider.id === dragId ? " dragging" : ""}${dropTarget === provider.id ? " drop-on" : ""}`}
-              title={provider.displayName}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData("text/plain", provider.id);
-                e.dataTransfer.effectAllowed = "move";
-                setDragId(provider.id);
-              }}
-              onDragEnd={() => {
-                setDragId(null);
-                setDropTarget(null);
-              }}
-              onDragOver={(e) => {
-                if (dragId === null || dragId === provider.id) return;
-                e.preventDefault();
-                // 同值返回让 React 跳过无谓的重渲——dragover 事件是高频的
-                setDropTarget((cur) => (cur === provider.id ? cur : provider.id));
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                void reorderProviders(dragId, provider.id);
-                setDropTarget(null);
-              }}
-              onClick={() => selectProvider(provider.id)}
-            >
-              <span
-                className={`pv-dot ${hasCredentials(provider.auth) ? "ok" : "none"}`}
+          {sorted.map((provider) => {
+            const keyed = hasCredentials(provider.auth);
+            return (
+              <button
+                key={provider.id}
+                type="button"
+                className={`pv-row${view.kind === "detail" && provider.id === selectedId ? " on" : ""}${provider.id === dragId ? " dragging" : ""}${dropTarget === provider.id ? " drop-on" : ""}`}
                 title={
-                  provider.auth.scheme === "api_key" && provider.auth.hasSecret
-                    ? "API key saved"
-                    : provider.auth.scheme === "env"
-                      ? `Key from environment (${provider.auth.envKeys.join(", ")})`
-                      : "No API key yet"
+                  provider.auth.scheme === "env"
+                    ? `${provider.displayName} · key from environment (${provider.auth.envKeys.join(", ")})`
+                    : provider.displayName
                 }
-              />
-              <span className="pv-row-main">
-                <span className="pv-row-name">{provider.displayName}</span>
-                <span className="pv-row-sub">{hostOf(provider.endpoint.baseUrl)}</span>
-              </span>
-              <span className="pv-row-count" title={`${provider.models.declared.length} models`}>
-                {provider.models.declared.length}
-              </span>
-            </button>
-          ))}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("text/plain", provider.id);
+                  e.dataTransfer.effectAllowed = "move";
+                  setDragId(provider.id);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setDropTarget(null);
+                }}
+                onDragOver={(e) => {
+                  if (dragId === null || dragId === provider.id) return;
+                  e.preventDefault();
+                  // 同值返回让 React 跳过无谓的重渲——dragover 事件是高频的
+                  setDropTarget((cur) => (cur === provider.id ? cur : provider.id));
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  void reorderProviders(dragId, provider.id);
+                  setDropTarget(null);
+                }}
+                onClick={() => selectProvider(provider.id)}
+              >
+                {/* 拖拽把手：悬停才浮现，告诉用户这一行能拖（原来靠用户自己发现） */}
+                <span className="pv-grip" aria-hidden="true">
+                  <Icon name="grip-vertical" size={12} />
+                </span>
+                <span className="pv-row-main">
+                  <span className="pv-row-name">{provider.displayName}</span>
+                  {/* 没填 key 直接写出来，不再靠一个空心圆点 + 悬停去猜 */}
+                  {keyed ? (
+                    <span className="pv-row-sub">{hostOf(provider.endpoint.baseUrl)}</span>
+                  ) : (
+                    <span className="pv-row-sub nokey">No API key</span>
+                  )}
+                </span>
+                <span className="pv-row-count" title={`${provider.models.declared.length} models`}>
+                  {provider.models.declared.length}
+                </span>
+              </button>
+            );
+          })}
         </div>
-        <button type="button" className="pv-btn pv-add" onClick={openCatalog}>
+        <button
+          type="button"
+          className="pv-add"
+          aria-pressed={view.kind !== "detail"}
+          onClick={openCatalog}
+        >
           <Icon name="plus" size={14} /> Add provider
         </button>
       </nav>
 
       <div className="pv-detail">
         {error !== null && (
-          <div className="pv-head">
-            <span className="pv-status bad">
-              {error}{" "}
-              <button type="button" className="pv-btn sm" onClick={() => void refresh()}>
-                Retry
-              </button>
-            </span>
+          <div className="pv-banner">
+            <Line tone="bad">{error}</Line>
+            <button type="button" className="pv-btn sm" onClick={() => void refresh()}>
+              Retry
+            </button>
           </div>
         )}
         {error === null && providers === null && (
-          <div className="pv-head">
-            <span className="pv-status busy">Loading providers…</span>
+          <div className="pv-banner">
+            <Line tone="busy">Loading providers…</Line>
           </div>
         )}
         {error === null && providers !== null && sorted.length === 0 && view.kind === "detail" && (
           <div className="pv-empty">
-            <p style={{ margin: 0 }}>No provider yet.</p>
-            <button type="button" className="pv-btn" onClick={openCatalog}>
+            <Icon name="cpu" size={24} strokeWidth={1.8} />
+            <span>No providers</span>
+            <button type="button" className="pv-btn accent lg" onClick={openCatalog}>
               <Icon name="plus" size={14} /> Add provider
             </button>
           </div>
@@ -577,29 +603,23 @@ export function ProvidersView(props: { onChange?: () => void }) {
 
         {view.kind === "catalog" && <CatalogView onCancel={cancelSide} onPick={pickKnown} />}
 
-        {isNew && (
-          <div className="pv-head">
-            <span className="pv-title">{draft.displayName || "New provider"}</span>
-            <span className="pv-headend">
-              <button type="button" className="pv-btn" onClick={cancelSide}>
-                Cancel
-              </button>
-            </span>
-          </div>
-        )}
-
         {showForm && known !== undefined && (
-          <>
-            {!isNew && (
+          <div className="pv-scroll">
+            <div className="pv-content">
               <div className="pv-head">
-                <span className="pv-title">{draft.displayName || editing?.displayName}</span>
+                <span className="pv-title">
+                  {draft.displayName || (isNew ? "New provider" : editing?.displayName)}
+                </span>
+                {/* 协议是锁定的事实，不是一个要填的字段：从整行降成标题旁的徽标 */}
+                <ApiFormatBadge api={known.api} />
                 <span className="pv-headend">
-                  {confirmRemove ? (
+                  {isNew ? null : confirmRemove ? (
                     <>
                       <button
                         type="button"
                         className="pv-btn icon danger-solid"
-                        title="Click again to confirm remove"
+                        aria-label="Confirm remove"
+                        title="Click again to remove this provider"
                         onClick={() => void removeProvider()}
                       >
                         <Icon name="trash-2" size={15} />
@@ -607,6 +627,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       <button
                         type="button"
                         className="pv-btn icon"
+                        aria-label="Cancel remove"
                         title="Cancel remove"
                         onClick={() => setConfirmRemove(false)}
                       >
@@ -618,7 +639,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       <button
                         type="button"
                         className="pv-btn icon"
-                        title="Duplicate this provider with its current settings — then fill a different API key"
+                        aria-label="Duplicate"
+                        title="Duplicate with current settings · then fill a different API key"
                         onClick={() => void copyProvider()}
                       >
                         <Icon name="copy" size={15} />
@@ -626,6 +648,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       <button
                         type="button"
                         className="pv-btn icon danger"
+                        aria-label="Remove provider"
                         title="Remove this provider"
                         onClick={() => setConfirmRemove(true)}
                       >
@@ -635,95 +658,94 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   )}
                 </span>
               </div>
-            )}
-            <div className="pv-body">
-              <span className="pv-sec-label">Connection</span>
-              <div className="pv-fields" style={{ marginTop: 0 }}>
-                <div className="pv-field">
-                  <label htmlFor="pv-name">Name</label>
-                  <input
-                    id="pv-name"
-                    className="pv-input"
-                    value={draft.displayName}
-                    onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
-                  />
-                </div>
-                <div className="pv-field">
-                  <label>API format</label>
-                  <div
-                    className="pv-locked"
-                    title="The API protocol is decided by the provider preset — there is no protocol selector; changing it means a new entry"
-                  >
-                    <Icon name="lock" size={13} strokeWidth={1.8} />
-                    {known.api}
-                  </div>
-                  <span className="pv-sub">
-                    Decided by the provider preset — switch protocol by switching the entry.
-                  </span>
-                </div>
-                <div className="pv-field">
-                  <label htmlFor="pv-url">Base URL</label>
-                  <input
-                    id="pv-url"
-                    className="pv-input"
-                    value={draft.baseUrl}
-                    placeholder="https://…"
-                    onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
-                  />
-                  <span className="pv-sub">
-                    {known.api === "anthropic-messages"
-                      ? "The client appends /v1/messages."
-                      : "The client appends /chat/completions."}
-                  </span>
-                  {issueFor("endpoint.baseUrl") !== undefined && (
-                    <span className="pv-sub" style={{ color: "var(--color-danger)" }}>
-                      {issueFor("endpoint.baseUrl")}
-                    </span>
-                  )}
-                </div>
-                <div className="pv-field">
-                  <label htmlFor="pv-key">API key</label>
-                  <div className="pv-krow">
+
+              <section className="pv-block" aria-label="Connection">
+                <div className="pv-form">
+                  <div className="pv-fld">
+                    <label htmlFor="pv-name">Name</label>
                     <input
-                      id="pv-key"
+                      id="pv-name"
                       className="pv-input"
-                      type={revealed ? "text" : "password"}
-                      value={draft.apiKey}
-                      placeholder={
-                        !isNew && editing?.auth.scheme === "api_key" && editing.auth.masked !== null
-                          ? `Saved — ${editing.auth.masked}`
-                          : "Paste your API key"
-                      }
-                      onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
+                      value={draft.displayName}
+                      onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
                     />
-                    <button
-                      type="button"
-                      className="pv-btn icon"
-                      aria-label={revealed ? "Hide key" : "Show key"}
-                      title={revealed ? "Hide key" : "Show key"}
-                      onClick={() => void toggleReveal()}
-                    >
-                      <Icon name={revealed ? "eye-off" : "eye"} size={15} strokeWidth={1.8} />
-                    </button>
-                    <button
-                      type="button"
-                      className="pv-btn"
-                      disabled={testing}
-                      onClick={() => void test()}
-                    >
-                      <Icon name={testing ? "loader-circle" : "zap"} size={14} spin={testing} />{" "}
-                      {testing ? "Testing…" : "Test"}
-                    </button>
+                  </div>
+                  <div className="pv-fld">
+                    <label htmlFor="pv-url">Base URL</label>
+                    <span className="pv-fld-stack">
+                      <UrlField
+                        value={draft.baseUrl}
+                        suffix={urlSuffix(known.api)}
+                        invalid={issueFor("endpoint.baseUrl") !== undefined}
+                        onChange={(baseUrl) => setDraft({ ...draft, baseUrl })}
+                      />
+                      {issueFor("endpoint.baseUrl") !== undefined && (
+                        <span className="pv-issue">{issueFor("endpoint.baseUrl")}</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="pv-fld">
+                    <label htmlFor="pv-key">API key</label>
+                    <div className="pv-krow">
+                      <input
+                        id="pv-key"
+                        className="pv-input pv-mono"
+                        type={revealed ? "text" : "password"}
+                        value={draft.apiKey}
+                        placeholder={
+                          !isNew && editing?.auth.scheme === "api_key" && editing.auth.masked !== null
+                            ? `Saved — ${editing.auth.masked}`
+                            : "Paste your API key"
+                        }
+                        onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
+                      />
+                      <button
+                        type="button"
+                        className="pv-btn icon"
+                        aria-label={revealed ? "Hide key" : "Show key"}
+                        title={revealed ? "Hide key" : "Show key"}
+                        onClick={() => void toggleReveal()}
+                      >
+                        <Icon name={revealed ? "eye-off" : "eye"} size={15} strokeWidth={1.8} />
+                      </button>
+                      <button
+                        type="button"
+                        className="pv-btn line"
+                        disabled={testing}
+                        onClick={() => void test()}
+                      >
+                        <Icon name={testing ? "loader-circle" : "zap"} size={13} spin={testing} />
+                        {testing ? "Testing…" : "Test"}
+                      </button>
+                    </div>
                   </div>
                   {/* testing 时按钮本身已经说明「在跑」，busy 行不用再重复一遍 */}
                   {status !== null && !(testing && status.tone === "busy") && (
-                    <Line tone={status.tone}>{status.text}</Line>
+                    <div className="pv-fld">
+                      <span />
+                      <Line tone={status.tone}>{status.text}</Line>
+                    </div>
                   )}
                 </div>
-              </div>
+                {dirty && (
+                  <div className="pv-savebar">
+                    <span className="pv-savebar-note">
+                      <Icon name="pencil-line" size={12} strokeWidth={1.8} /> Unsaved
+                    </span>
+                    <button type="button" className="pv-btn" onClick={cancelSide}>
+                      Cancel
+                    </button>
+                    <button type="button" className="pv-btn accent" onClick={() => void save()}>
+                      {isNew ? "Add provider" : "Save"}
+                    </button>
+                  </div>
+                )}
+              </section>
 
               <div className="pv-mhead">
-                <span className="pv-sec-label">Models · {draft.models.length}</span>
+                <span className="section-label">Models</span>
+                <span className="pv-count">{draft.models.length}</span>
+                <span className="pv-spacer" />
                 <button
                   type="button"
                   className="pv-btn sm"
@@ -745,9 +767,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                 )}
               </div>
               {issueFor("models.declared") !== undefined && (
-                <span className="pv-sub" style={{ color: "var(--color-danger)" }}>
-                  {issueFor("models.declared")}
-                </span>
+                <span className="pv-issue">{issueFor("models.declared")}</span>
               )}
               {discovered !== null && (
                 <FetchPanel
@@ -766,80 +786,82 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   onCancel={() => setDiscovered(null)}
                 />
               )}
-              <div className="pv-mlist">
+              <div className="pv-block">
                 {draft.models.length === 0 ? (
-                  <div className="pv-mempty">No models yet — fetch the list, or add one by id.</div>
+                  // 空态用两个按钮说话，代替「No models yet — fetch the list, or add one by id.」
+                  <div className="pv-mempty">
+                    <Icon name="cpu" size={20} strokeWidth={1.8} />
+                    <span>No models</span>
+                    <span className="pv-inline">
+                      <button
+                        type="button"
+                        className="pv-btn line"
+                        disabled={draft.baseUrl.trim() === "" || discovered !== null}
+                        onClick={() => void fetchModels()}
+                      >
+                        <Icon name="refresh-cw" size={13} strokeWidth={1.8} /> Fetch list
+                      </button>
+                      <button
+                        type="button"
+                        className="pv-btn line"
+                        onClick={() => setEditor({ isNew: true, id: null })}
+                      >
+                        <Icon name="plus" size={13} strokeWidth={1.8} /> Add by id
+                      </button>
+                    </span>
+                  </div>
                 ) : (
                   draft.models.map((model) => {
                     const defaults = modelDefaults(known, model.id);
                     const badge = modelContextText(model, defaults);
                     const tested = modelTests[model.id];
                     const busy = tested?.tone === "busy";
+                    const confirming = confirmRemoveModel === model.id;
                     return (
-                      <div className="pv-mitem" key={model.id}>
+                      <div
+                        className={`pv-mitem${confirming || busy ? " pinned" : ""}`}
+                        key={model.id}
+                      >
                         <div className="pv-mrow">
                           <span className="pv-grow">
                             {model.name !== undefined && <span className="pv-mname">{model.name}</span>}
                             <span className={`pv-mid${model.name !== undefined ? " dim" : ""}`} title={model.id}>
                               {model.id}
                             </span>
-                            <span className="pv-badges">
-                              {tested !== undefined && tested.tone !== "busy" && (
-                                <span
-                                  className={`pv-badge pv-test-${tested.tone}`}
-                                  title={tested.tone === "bad" ? "See the failure reason below" : tested.text}
-                                >
-                                  {tested.tone === "ok" ? (
-                                    <>
-                                      <Icon name="check" size={11} /> Success
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Icon name="triangle-alert" size={11} /> Failed
-                                    </>
-                                  )}
-                                </span>
-                              )}
-                              <span
-                                className="pv-badge"
-                                title={
-                                  badge.fallback
-                                    ? "Not in the catalog — showing the 128k / 8k fallback"
-                                    : "Context window"
-                                }
-                              >
-                                {badge.text}
-                              </span>
-                              {modelAcceptsImage(model, defaults) && (
-                                <span className="pv-badge" title="Accepts image input — multimodal">
-                                  <Icon name="image" size={11} strokeWidth={1.8} />
-                                </span>
-                              )}
+                            <span
+                              className="pv-badge"
+                              title={
+                                badge.fallback
+                                  ? "Not in the catalog · showing the 128k / 8k fallback"
+                                  : "Context window"
+                              }
+                            >
+                              {badge.fallback && <Icon name="triangle-alert" size={10} strokeWidth={1.8} />}
+                              {badge.text}
                             </span>
+                            {modelAcceptsImage(model, defaults) && (
+                              <span className="pv-badge" title="Accepts image input">
+                                <Icon name="image" size={11} strokeWidth={1.8} />
+                              </span>
+                            )}
+                            {tested !== undefined && tested.tone !== "busy" && (
+                              <span
+                                className={`pv-badge pv-test-${tested.tone}`}
+                                title={tested.tone === "bad" ? "See the failure reason below" : tested.text}
+                              >
+                                <Icon name={tested.tone === "ok" ? "check" : "triangle-alert"} size={11} />
+                                {tested.tone === "ok" ? "Success" : "Failed"}
+                              </span>
+                            )}
                           </span>
                           <span className="pv-acts">
-                            <button
-                              type="button"
-                              className="pv-btn icon sm"
-                              title={busy ? "Testing…" : `Test ${model.id}`}
-                              onClick={() => testModel(model.id)}
-                            >
-                              <Icon name={busy ? "loader-circle" : "zap"} size={13} strokeWidth={1.8} spin={busy} />
-                            </button>
-                            <button
-                              type="button"
-                              className="pv-btn icon sm"
-                              title={`Edit ${model.id}`}
-                              onClick={() => setEditor({ isNew: false, id: model.id })}
-                            >
-                              <Icon name="pencil-line" size={13} strokeWidth={1.8} />
-                            </button>
-                            {confirmRemoveModel === model.id ? (
+                            {confirming ? (
                               <>
                                 {/* 与 provider 删除同款的两段式：一点就没是破坏性动作的禁忌（2026-09-11 验收发现） */}
                                 <button
                                   type="button"
                                   className="pv-btn icon sm danger-solid"
+                                  aria-label="Confirm remove"
                                   title={`Click again to remove ${model.id}`}
                                   onClick={() => {
                                     setConfirmRemoveModel(null);
@@ -851,6 +873,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                                 <button
                                   type="button"
                                   className="pv-btn icon sm"
+                                  aria-label="Cancel remove"
                                   title="Cancel remove"
                                   onClick={() => setConfirmRemoveModel(null)}
                                 >
@@ -858,14 +881,35 @@ export function ProvidersView(props: { onChange?: () => void }) {
                                 </button>
                               </>
                             ) : (
-                              <button
-                                type="button"
-                                className="pv-btn icon sm danger"
-                                title={`Remove ${model.id}`}
-                                onClick={() => setConfirmRemoveModel(model.id)}
-                              >
-                                <Icon name="trash-2" size={13} strokeWidth={1.8} />
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  className="pv-btn icon sm"
+                                  aria-label={`Test ${model.id}`}
+                                  title={busy ? "Testing…" : `Test ${model.id}`}
+                                  onClick={() => testModel(model.id)}
+                                >
+                                  <Icon name={busy ? "loader-circle" : "zap"} size={13} strokeWidth={1.8} spin={busy} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="pv-btn icon sm"
+                                  aria-label={`Edit ${model.id}`}
+                                  title={`Edit ${model.id}`}
+                                  onClick={() => setEditor({ isNew: false, id: model.id })}
+                                >
+                                  <Icon name="pencil-line" size={13} strokeWidth={1.8} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="pv-btn icon sm danger"
+                                  aria-label={`Remove ${model.id}`}
+                                  title={`Remove ${model.id}`}
+                                  onClick={() => setConfirmRemoveModel(model.id)}
+                                >
+                                  <Icon name="trash-2" size={13} strokeWidth={1.8} />
+                                </button>
+                              </>
                             )}
                           </span>
                         </div>
@@ -881,25 +925,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                 )}
               </div>
             </div>
-            <div className="pv-foot">
-              <span className="pv-hint">
-                Save applies name, base URL and key. Model changes apply immediately.
-              </span>
-              {Date.now() - savedAt < 1800 && (
-                <span className="pv-saved">
-                  <Icon name="check" size={12} /> Saved
-                </span>
-              )}
-              <button type="button" className="pv-btn" onClick={cancelSide}>
-                Cancel
-              </button>
-              <button type="button" className="pv-btn accent" onClick={() => void save()}>
-                {isNew ? "Add provider" : "Save changes"}
-              </button>
-            </div>
-          </>
+          </div>
         )}
-      </div>
       </div>
 
       {editor !== null && known !== undefined && (
@@ -929,46 +956,110 @@ function hostOf(url: string): string {
   }
 }
 
-/** 目录视图：KNOWN_PROVIDERS 的轻量清单——协议跟随条目，没有协议选择框 */
-function CatalogView(props: { onCancel: () => void; onPick: (kindId: string) => void }) {
+/**
+ * 协议徽标：原来的「API format」整行 + 一句说明，收成标题旁一枚锁形徽标，说明进悬停。
+ * 可聚焦（tabIndex）——键盘用户也要能读到「为什么锁着」。
+ */
+function ApiFormatBadge(props: { api: string }) {
+  const tip = useSettingTip<HTMLSpanElement>(
+    "API format · set by the provider preset · to switch protocol, add a different entry",
+  );
   return (
     <>
-      <div className="pv-head">
-        <span className="pv-title">Add provider</span>
-        <span className="pv-headend">
-          <button type="button" className="pv-btn" onClick={props.onCancel}>
-            Cancel
-          </button>
-        </span>
-      </div>
-      <div className="pv-body">
-        <span className="pv-sec-label">Choose a provider</span>
-        <p className="pv-note" style={{ marginTop: "var(--space-2)" }}>
-          Only adapters verified against real endpoints are listed. The protocol follows the entry you
-          pick — there is no protocol selector.
-        </p>
+      <span className="pv-format" tabIndex={0} {...tip.anchor}>
+        <Icon name="lock" size={11} strokeWidth={1.8} />
+        {props.api}
+      </span>
+      {tip.layer}
+    </>
+  );
+}
+
+/**
+ * Base URL 输入框：框尾灰字是客户端会接上的路径（`/chat/completions` 或 `/v1/messages`），
+ * 代替原来框下那句「The client appends …」——看得见完整请求地址长什么样。
+ * 输入框按内容定宽（`field-sizing: content`），后缀因此紧贴在用户输入的末尾；
+ * 整个框是一个 label，点后缀也聚焦到输入框。
+ */
+function UrlField(props: {
+  value: string;
+  suffix: string;
+  invalid: boolean;
+  onChange: (value: string) => void;
+}) {
+  const tip = useSettingTip<HTMLSpanElement>("The client appends this path");
+  return (
+    <label className="pv-url" data-invalid={props.invalid || undefined}>
+      <input
+        id="pv-url"
+        value={props.value}
+        placeholder="https://…"
+        spellCheck={false}
+        aria-invalid={props.invalid}
+        onChange={(e) => props.onChange(e.target.value)}
+      />
+      <span className="pv-url-suffix" {...tip.anchor}>
+        {props.suffix}
+      </span>
+      {tip.layer}
+    </label>
+  );
+}
+
+/** 目录视图：KNOWN_PROVIDERS 的卡片网格——协议跟随条目，没有协议选择框 */
+function CatalogView(props: { onCancel: () => void; onPick: (kindId: string) => void }) {
+  return (
+    <div className="pv-scroll">
+      <div className="pv-content">
+        <div className="pv-head">
+          <span className="pv-title">Add provider</span>
+          <InfoTip label="About this list">
+            Only adapters verified against real endpoints · the protocol follows the entry you pick
+          </InfoTip>
+          <span className="pv-headend">
+            <button type="button" className="pv-btn" onClick={props.onCancel}>
+              Cancel
+            </button>
+          </span>
+        </div>
         <div className="pv-catalog">
           {KNOWN_PROVIDERS.map((k) => (
-            <button key={k.id} type="button" className="pv-crow" onClick={() => props.onPick(k.id)}>
-              <span className="pv-crow-main">
-                <span className="pv-crow-name">{k.label}</span>
-                <span className="pv-crow-note">{k.note}</span>
-              </span>
-              <span className="pv-badge">{k.api}</span>
-            </button>
+            <CatalogCard key={k.id} known={k} onPick={() => props.onPick(k.id)} />
           ))}
         </div>
       </div>
-      <div className="pv-foot">
-        <span className="pv-hint">Model parameters come from the built-in catalog when the entry has one.</span>
-      </div>
-    </>
+    </div>
+  );
+}
+
+/** 一张目录卡。`catalog` 徽标 = 模型参数有官方目录可继承（原来是页脚一句说明） */
+function CatalogCard(props: { known: KnownProvider; onPick: () => void }) {
+  const tip = useSettingTip<HTMLSpanElement>("Model parameters come from the built-in catalog");
+  return (
+    <button type="button" className="pv-card" onClick={props.onPick}>
+      <span className="pv-card-name">
+        {props.known.label}
+        <Icon name="chevron-right" size={13} />
+      </span>
+      <span className="pv-card-note">{props.known.note}</span>
+      <span className="pv-card-meta">
+        <span className="pv-badge">{props.known.api}</span>
+        {props.known.catalogId !== undefined && (
+          <>
+            <span className="pv-badge pv-badge-plain" {...tip.anchor}>
+              <Icon name="book-open" size={11} strokeWidth={1.8} /> catalog
+            </span>
+            {tip.layer}
+          </>
+        )}
+      </span>
+    </button>
   );
 }
 
 /** Fetch 多选清单：搜索过滤、已启用项标 Added 并锁住、勾选批量启用 */
 function FetchPanel(props: {
-  discovered: { ok: boolean; ids: string[]; message: string };
+  discovered: { ids: string[] };
   existing: readonly string[];
   onApply: (picked: string[]) => void;
   onCancel: () => void;
@@ -985,19 +1076,19 @@ function FetchPanel(props: {
     setPicked(next);
   };
   return (
-    <div className="pv-fetch">
+    <div className="pv-block pv-fetch">
       <div className="pv-fetch-search">
         <Icon name="search" size={14} />
         <input
-          className="pv-input"
           placeholder="Filter models"
+          aria-label="Filter models"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
       <div className="pv-fetch-list">
         {ids.length === 0 ? (
-          <div className="pv-mempty">No models match.</div>
+          <div className="pv-fetch-none">No models match</div>
         ) : (
           ids.map((id) => {
             const has = props.existing.includes(id);
@@ -1033,13 +1124,26 @@ function FetchPanel(props: {
           disabled={picked.size === 0}
           onClick={() => props.onApply([...picked])}
         >
-          Add {picked.size > 0 ? picked.size : ""} selected
+          {picked.size > 0 ? `Add ${picked.size} selected` : "Add selected"}
         </button>
       </div>
-      <span className="pv-sub">{d.message}</span>
     </div>
   );
 }
+
+/** 模型弹窗头上的来源徽标：原来弹窗底部那句「Source: …」收成一枚徽标，整句进悬停 */
+const SOURCE_BADGES: Record<ModelDefaults["source"], { label: string; tip: string }> = {
+  catalog: { label: "catalog", tip: "Source: built-in catalog · blank fields inherit its values" },
+  "catalog-family": {
+    label: "catalog family",
+    tip: "Source: the closest catalog entry in the same model family · blank fields inherit its values",
+  },
+  known: { label: "built-in", tip: "Source: built-in parameters for this model id · blank fields inherit them" },
+  fallback: {
+    label: "fallback",
+    tip: "No catalog entry for this id · blank fields fall back to 128k context / 8k output",
+  },
+};
 
 /**
  * 模型弹窗（Add / Edit 同一件）。**输入框只装用户覆盖值**：留空 = 继承目录 / 兜底，
@@ -1078,14 +1182,19 @@ function ModelDialog(props: {
   const activeDefaults = defaultsOf(isNew ? idValue.trim().toLowerCase() : (props.decl?.id ?? ""));
   /**
    * 单价的继承占位只在**目录条目**上成立：白名单只补窗口 / 输出，兜底的零单价
-   * 不是报价而是「不知道」——写成 Inherit ($0/M) 就是把不知道说成免费。
+   * 不是报价而是「不知道」——写成 $0 就是把不知道说成免费，所以占位留一道横线。
    */
   const inheritedCost =
     activeDefaults.source === "catalog" || activeDefaults.source === "catalog-family";
-  const inheritCtx = activeDefaults.contextWindow;
-  const inheritOut = activeDefaults.maxTokens;
-  // 三档里的 Inherit 到底继承了什么：不写出来的话用户只能靠猜，于是逐个手开
+  // 三档里的 Inherit 到底继承了什么：图标 + 悬停写出来，不然用户只能靠猜
   const inheritImage = activeDefaults.input.includes("image");
+  const source = SOURCE_BADGES[activeDefaults.source];
+  const sourceTip = useSettingTip<HTMLSpanElement>(
+    props.plan ? `${source.tip} · this provider bills by plan: cost estimates are not shown on rows` : source.tip,
+  );
+  const lockedTip = useSettingTip<HTMLSpanElement>(
+    "The id is the model's identity · remove and re-add to change it",
+  );
 
   const apply = () => {
     const finalId = isNew ? idValue.trim().toLowerCase() : (props.decl?.id ?? "");
@@ -1133,15 +1242,33 @@ function ModelDialog(props: {
       <div className="pv-modal" role="dialog" aria-modal="true" aria-label={isNew ? "Add model" : "Edit model"}>
         <div className="pv-modal-head">
           <strong>{isNew ? "Add model" : "Edit model"}</strong>
-          <button type="button" className="pv-btn icon" title="Close" onClick={props.onClose}>
+          <span className="pv-badge pv-badge-plain" tabIndex={0} {...sourceTip.anchor}>
+            <Icon
+              name={activeDefaults.source === "fallback" ? "triangle-alert" : "book-open"}
+              size={11}
+              strokeWidth={1.8}
+            />
+            {source.label}
+          </span>
+          {sourceTip.layer}
+          <span className="pv-spacer" />
+          <button type="button" className="pv-btn icon" aria-label="Close" title="Close" onClick={props.onClose}>
             <Icon name="x" size={15} />
           </button>
         </div>
         <div className="pv-modal-body">
-          <div className="pv-field">
-            <label htmlFor="pv-model-id">Model id</label>
+          <div className="pv-fld wide">
+            <span className="pv-lab">
+              <label htmlFor="pv-model-id">Model id</label>
+              {isNew && (
+                <InfoTip label="About model id">
+                  Lowercase letters, digits, dots and dashes · an id in the built-in catalog inherits its
+                  official parameters
+                </InfoTip>
+              )}
+            </span>
             {isNew ? (
-              <>
+              <span className="pv-fld-stack">
                 <input
                   id="pv-model-id"
                   className="pv-input pv-mono"
@@ -1154,127 +1281,94 @@ function ModelDialog(props: {
                   }}
                   aria-invalid={idIssue !== null}
                 />
-                <span className="pv-sub">
-                  Lowercase letters, digits, dots and dashes. Matching a built-in catalog entry inherits
-                  its official parameters — leave fields empty to use them.
-                </span>
-                {idIssue !== null && (
-                  <span className="pv-sub" style={{ color: "var(--color-danger)" }}>
-                    {idIssue}
-                  </span>
-                )}
-              </>
+                {idIssue !== null && <span className="pv-issue">{idIssue}</span>}
+              </span>
             ) : (
-              <div
-                className="pv-locked"
-                title="Model id is its identity and cannot be edited — delete and re-add to change it"
-              >
-                <Icon name="lock" size={13} strokeWidth={1.8} />
-                {props.decl?.id}
-              </div>
+              <>
+                <span className="pv-locked" tabIndex={0} {...lockedTip.anchor}>
+                  <Icon name="lock" size={13} strokeWidth={1.8} />
+                  {props.decl?.id}
+                </span>
+                {lockedTip.layer}
+              </>
             )}
           </div>
-          <div className="pv-field">
+          <div className="pv-fld wide">
             <label htmlFor="pv-model-name">Display name</label>
             <input
               id="pv-model-name"
               className="pv-input"
               value={name}
-              placeholder="Optional — shown before the id on the row"
+              placeholder="Optional"
               onChange={(e) => setName(e.target.value)}
             />
           </div>
-          <div className="pv-field">
-            <label>Image input</label>
-            <div role="group" aria-label="Image input" style={{ display: "flex", gap: 2 }}>
-              {(
-                [
-                  ["inherit", inheritImage ? "Inherit (image)" : "Inherit (text only)"],
-                  ["on", "On"],
-                  ["off", "Off"],
-                ] as const
-              ).map(([value, label]) => (
-                <Chip
-                  key={value}
-                  active={vision === value}
-                  onClick={() => setVision(value)}
-                >
-                  {label}
-                </Chip>
-              ))}
+          <div className="pv-fld wide">
+            <span className="pv-lab">Image input</span>
+            <div role="group" aria-label="Image input" className="pv-inline tight">
+              <Chip
+                icon={inheritImage ? "image" : undefined}
+                active={vision === "inherit"}
+                title={
+                  inheritImage
+                    ? "Follows the catalog · this model takes images"
+                    : "Follows the catalog · this model takes text only"
+                }
+                onClick={() => setVision("inherit")}
+              >
+                Inherit
+              </Chip>
+              <Chip active={vision === "on"} onClick={() => setVision("on")}>
+                On
+              </Chip>
+              <Chip active={vision === "off"} onClick={() => setVision("off")}>
+                Off
+              </Chip>
             </div>
-            <span className="pv-sub">
-              Multimodal image input — Inherit follows the catalog (unknown = image, so pictures are
-              not dropped silently). Vision models show an image badge on the row.
-            </span>
           </div>
           <div className="pv-grid2">
-            <div className="pv-field">
-              <label htmlFor="pv-model-ctx">Context window</label>
-              <input
-                id="pv-model-ctx"
-                className="pv-input pv-mono"
-                value={ctxText}
-                placeholder={`Inherit (${inheritCtx})`}
-                onChange={(e) => setCtxText(e.target.value)}
-              />
-              <span className="pv-sub">tokens — accepts 128000 or 128k / 1M</span>
-            </div>
-            <div className="pv-field">
-              <label htmlFor="pv-model-out">Max output</label>
-              <input
-                id="pv-model-out"
-                className="pv-input pv-mono"
-                value={outText}
-                placeholder={`Inherit (${inheritOut})`}
-                onChange={(e) => setOutText(e.target.value)}
-              />
-              <span className="pv-sub">tokens</span>
-            </div>
-            <div className="pv-field">
-              <label htmlFor="pv-model-cin">Input cost</label>
-              <input
-                id="pv-model-cin"
-                className="pv-input pv-mono"
-                value={cinText}
-                placeholder={inheritedCost ? `Inherit ($${activeDefaults.cost.input}/M)` : "Inherit"}
-                onChange={(e) => setCinText(e.target.value)}
-              />
-              <span className="pv-sub">$ per 1M tokens</span>
-            </div>
-            <div className="pv-field">
-              <label htmlFor="pv-model-cout">Output cost</label>
-              <input
-                id="pv-model-cout"
-                className="pv-input pv-mono"
-                value={coutText}
-                placeholder={inheritedCost ? `Inherit ($${activeDefaults.cost.output}/M)` : "Inherit"}
-                onChange={(e) => setCoutText(e.target.value)}
-              />
-              <span className="pv-sub">$ per 1M tokens</span>
-            </div>
+            <UnitField
+              id="pv-model-ctx"
+              label="Context window"
+              value={ctxText}
+              placeholder={compactTokens(activeDefaults.contextWindow)}
+              post="tokens"
+              onChange={setCtxText}
+            />
+            <UnitField
+              id="pv-model-out"
+              label="Max output"
+              value={outText}
+              placeholder={compactTokens(activeDefaults.maxTokens)}
+              post="tokens"
+              onChange={setOutText}
+            />
+            <UnitField
+              id="pv-model-cin"
+              label="Input cost"
+              value={cinText}
+              placeholder={inheritedCost ? String(activeDefaults.cost.input) : "—"}
+              pre="$"
+              post="/ 1M"
+              onChange={setCinText}
+            />
+            <UnitField
+              id="pv-model-cout"
+              label="Output cost"
+              value={coutText}
+              placeholder={inheritedCost ? String(activeDefaults.cost.output) : "—"}
+              pre="$"
+              post="/ 1M"
+              onChange={setCoutText}
+            />
           </div>
-          <span className="pv-sub">
-            {activeDefaults.source === "fallback"
-              ? "No catalog entry for this id — leave empty to fall back to 128k ctx / 8k out."
-              : activeDefaults.source === "known"
-                ? "Source: built-in parameters for this model id."
-                : activeDefaults.source === "catalog-family"
-                  ? "Source: the closest catalog entry in the same model family."
-                  : "Source: built-in catalog."}
-            {props.plan ? " This provider bills by plan: cost estimates are not shown on rows." : ""}
-          </span>
-          {fieldIssue !== null && (
-            <span className="pv-sub" style={{ color: "var(--color-danger)" }}>
-              {fieldIssue}
-            </span>
-          )}
+          {fieldIssue !== null && <span className="pv-issue">{fieldIssue}</span>}
         </div>
         <div className="pv-modal-foot">
           <button
             type="button"
             className="pv-btn"
-            title="Clear overrides — values fall back to the catalog / built-in defaults"
+            title="Clear overrides · values fall back to the catalog / built-in defaults"
             onClick={() => {
               setCtxText("");
               setOutText("");
@@ -1283,7 +1377,7 @@ function ModelDialog(props: {
               setVision("inherit");
             }}
           >
-            <Icon name="refresh-cw" size={13} strokeWidth={1.8} /> Reset to inherited
+            <Icon name="rotate-ccw" size={13} strokeWidth={1.8} /> Reset
           </button>
           <span className="pv-spacer" />
           <button type="button" className="pv-btn" onClick={props.onClose}>
@@ -1294,6 +1388,37 @@ function ModelDialog(props: {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 带单位的数值框：单位（tokens、$、/ 1M）写在框里，代替原来每个框下面一行
+ * 「tokens — accepts 128000 or 128k / 1M」「$ per 1M tokens」。占位是继承来的值。
+ */
+function UnitField(props: {
+  id: string;
+  label: string;
+  value: string;
+  placeholder: string;
+  pre?: string;
+  post: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="pv-fld stacked">
+      <label htmlFor={props.id}>{props.label}</label>
+      <span className="pv-unit">
+        {props.pre !== undefined && <span className="pv-unit-mark pre">{props.pre}</span>}
+        <input
+          id={props.id}
+          value={props.value}
+          placeholder={props.placeholder}
+          spellCheck={false}
+          onChange={(e) => props.onChange(e.target.value)}
+        />
+        <span className="pv-unit-mark">{props.post}</span>
+      </span>
     </div>
   );
 }

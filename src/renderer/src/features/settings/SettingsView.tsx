@@ -10,6 +10,7 @@ import type { ProviderDto } from "@shared/provider";
 import type { Workspace } from "@shared/workspace";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
+import { InfoTip } from "./InfoTip";
 import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
@@ -86,15 +87,12 @@ export function SettingsView(props: {
           onImported={props.onImported}
           onOpenProviders={() => props.onTab("providers")}
         />
+      ) : props.tab === "providers" ? (
+        // Providers 是主从两栏，铺满内容面：厂商列表贴着面板左缘，两栏各自内部滚动
+        <ProvidersView onChange={props.onProvidersChange} />
       ) : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-          <div style={{ width: "min(100%, var(--content-max-width))", height: "100%", margin: "0 auto" }}>
-            {props.tab === "general" ? (
-              <General settings={props.settings} providers={props.providers} onChange={props.onSettingsChange} />
-            ) : (
-              <ProvidersView onChange={props.onProvidersChange} />
-            )}
-          </div>
+          <General settings={props.settings} providers={props.providers} onChange={props.onSettingsChange} />
         </div>
       )}
     </div>
@@ -102,7 +100,7 @@ export function SettingsView(props: {
 }
 
 /**
- * 「退回继承」菜单的公共形状：Title model / Sub-session model 的模型与思考档
+ * 「退回继承」菜单的公共形状：Task title model / Sub-session model 的模型与思考档
  * 三处菜单都是「第一项退回上游（session 或 parent）、其后是具体可选值」——集合与文案
  * 各不相同，但「fallback 项 + 选中态 + null 清除」这段接线相同，抽出来避免三处重复。
  */
@@ -210,149 +208,144 @@ function General(props: {
         );
 
   return (
-    <div style={{ display: "grid", gap: "var(--space-6)", alignContent: "start" }}>
-      <Section label="Appearance">
-        <Row
-          name="Theme"
-          hint="System follows your desktop's light or dark appearance and lands on Ink; Warm and Ink are manual."
-          layout="stack"
-          control={<ThemePicker value={props.settings.theme} onChange={props.onChange} />}
-        />
-      </Section>
-      <Section label="Context">
-        <Row
+    <div className="set-page">
+      <SettingGroup label="Appearance">
+        <SettingRow name="Theme">
+          <ThemePicker value={props.settings.theme} onChange={props.onChange} />
+        </SettingRow>
+      </SettingGroup>
+      {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
+          它们调的都是「agent 怎么干活」，并成一组 */}
+      <SettingGroup label="Agent">
+        <SettingRow
           name="Auto-compact"
-          hint="Fold older history into a summary once remaining context drops to this level. Off keeps manual /compact only. Applies from the next message."
-          control={
-            <span style={{ display: "grid", gap: "var(--space-2)" }}>
-              <span style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                <Chip
-                  active={compaction.enabled === false}
-                  onClick={() => setCompaction({ ...compaction, enabled: false })}
-                >
-                  Off
-                </Chip>
-                {COMPACTION_CHOICES.map((value) => (
-                  <Chip
-                    key={value}
-                    active={compaction.enabled !== false && compaction.reservePercent === value}
-                    onClick={() => setCompaction({ enabled: true, reservePercent: value })}
-                  >
-                    {value}%
-                  </Chip>
-                ))}
-              </span>
-              {/* Off 时整条可视化不渲染（条件渲染，不是隐藏）——没有数值可画 */}
-              {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
-            </span>
+          info={
+            <>
+              Folds older history into a summary once remaining context drops to this level · Off
+              keeps manual <b>/compact</b> only · applies from the next message
+            </>
           }
-        />
-      </Section>
-      <Section label="Git">
-        <Row
-          name="Commit & PR attribution"
-          hint="Adds a Made-with: Orbita trailer to commits the agent writes for you, and a Made with Orbita line to pull request descriptions. Never sets Co-Authored-By or changes the author."
-          control={
-            /* 设计系统里没有 Switch，开关就用两个 Chip——与 Auto-compact 的 Off 同一个形状 */
-            <span style={{ display: "flex", gap: 2 }}>
-              <Chip active={gitAttribution} onClick={() => props.onChange({ gitAttribution: true })}>
-                On
-              </Chip>
+        >
+          <span className="set-chips" role="group" aria-label="Auto-compact">
+            <Chip
+              active={compaction.enabled === false}
+              onClick={() => setCompaction({ ...compaction, enabled: false })}
+            >
+              Off
+            </Chip>
+            {COMPACTION_CHOICES.map((value) => (
               <Chip
-                active={!gitAttribution}
-                onClick={() => props.onChange({ gitAttribution: false })}
+                key={value}
+                active={compaction.enabled !== false && compaction.reservePercent === value}
+                onClick={() => setCompaction({ enabled: true, reservePercent: value })}
               >
-                Off
+                {value}%
               </Chip>
-            </span>
-          }
-        />
-      </Section>
-      <Section label="Sessions">
-        <Row
-          name="Title model"
-          hint="Names a task from its first message. It's one small call — a fast, cheap model does it well. Applies to tasks named from now on."
-          control={
-            /* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */
+            ))}
+          </span>
+          {/* Off 时整条可视化不渲染（条件渲染，不是隐藏）——没有折叠点可画 */}
+          {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
+        </SettingRow>
+        <SettingRow
+          name="Task title model"
+          info="Names a task from its first message · one small call, a fast model does it well · applies to tasks named from now on"
+        >
+          {/* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */}
+          <Menu
+            items={titleModelItems}
+            searchable
+            trigger={({ open, toggle }) => (
+              <Chip
+                active={open}
+                title={
+                  titleModel === undefined
+                    ? "Titles use the model the task is running"
+                    : `${titleModel.providerId} · ${titleModel.modelId}`
+                }
+                onClick={toggle}
+                chevron
+              >
+                {titleModel?.modelId ?? "Same as session"}
+              </Chip>
+            )}
+          />
+        </SettingRow>
+        <SettingRow
+          name="Sub-session model"
+          info="Model and thinking level for sub-sessions a task delegates to · thinking appears once a model is picked · the agent can still choose per delegation"
+        >
+          {/* 模型与思考档一行：思考档是模型的属性（档位集与默认档都随型号变），所以先有
+              模型芯片、选了具体模型才长出思考档芯片。Same as parent 时思考档跟父走，
+              不放一个置灰的芯片占位——没有可选的东西就不画控件 */}
+          <span className="set-chips">
             <Menu
-              items={titleModelItems}
+              items={subSessionModelItems}
               searchable
               trigger={({ open, toggle }) => (
                 <Chip
                   active={open}
                   title={
-                    titleModel === undefined
-                      ? "Titles use the model the task is running"
-                      : `${titleModel.providerId} · ${titleModel.modelId}`
+                    subSessionModel === undefined
+                      ? "Sub-sessions use the model and thinking level of the delegating task"
+                      : `${subSessionModel.providerId} · ${subSessionModel.modelId}`
                   }
                   onClick={toggle}
                   chevron
                 >
-                  {titleModel?.modelId ?? "Same as session"}
+                  {subSessionModel?.modelId ?? "Same as parent"}
                 </Chip>
               )}
             />
-          }
-        />
-        <Row
-          name="Sub-session model"
-          hint="Model and thinking level for sub-sessions a task delegates to. Thinking follows the model: Default is the level its vendor recommends. The agent can still pick either per delegation."
-          control={
-            /* 模型与思考档一行：思考档是模型的属性（档位集与默认档都随型号变），所以先有
-               模型芯片、选了具体模型才长出思考档芯片。Same as parent 时思考档跟父走，
-               不放一个置灰的芯片占位——没有可选的东西就不画控件 */
-            <span style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            {subSessionThinkingModel !== null && (
               <Menu
-                items={subSessionModelItems}
-                searchable
+                items={subSessionThinkingItems}
+                panelMinWidth={112}
                 trigger={({ open, toggle }) => (
                   <Chip
                     active={open}
-                    title={
-                      subSessionModel === undefined
-                        ? "Sub-sessions use the model and thinking level of the delegating task"
-                        : `${subSessionModel.providerId} · ${subSessionModel.modelId}`
-                    }
+                    title={`Thinking level for ${subSessionThinkingModel.modelId}`}
                     onClick={toggle}
                     chevron
                   >
-                    {subSessionModel?.modelId ?? "Same as parent"}
+                    {subSessionThinking === undefined
+                      ? `Default · ${thinkingLevelLabel(subSessionThinkingModel.fallback, subSessionThinkingModel.modelId)}`
+                      : thinkingLevelLabel(subSessionThinking, subSessionThinkingModel.modelId)}
                   </Chip>
                 )}
               />
-              {subSessionThinkingModel !== null && (
-                <Menu
-                  items={subSessionThinkingItems}
-                  panelMinWidth={112}
-                  trigger={({ open, toggle }) => (
-                    <Chip
-                      active={open}
-                      title={`Thinking level for ${subSessionThinkingModel.modelId}`}
-                      onClick={toggle}
-                      chevron
-                    >
-                      {subSessionThinking === undefined
-                        ? `Default · ${thinkingLevelLabel(subSessionThinkingModel.fallback, subSessionThinkingModel.modelId)}`
-                        : thinkingLevelLabel(subSessionThinking, subSessionThinkingModel.modelId)}
-                    </Chip>
-                  )}
-                />
-              )}
-            </span>
-          }
-        />
-      </Section>
-      <Section label="Data">
+            )}
+          </span>
+        </SettingRow>
+        <SettingRow
+          name="Commit & PR attribution"
+          info="Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author"
+        >
+          {/* 设计系统里没有 Switch，开关就用两个 Chip——与 Auto-compact 的 Off 同一个形状 */}
+          <span className="set-chips" role="group" aria-label="Commit and PR attribution">
+            <Chip active={gitAttribution} onClick={() => props.onChange({ gitAttribution: true })}>
+              On
+            </Chip>
+            <Chip active={!gitAttribution} onClick={() => props.onChange({ gitAttribution: false })}>
+              Off
+            </Chip>
+          </span>
+          <AttributionPreview enabled={gitAttribution} />
+        </SettingRow>
+      </SettingGroup>
+      <SettingGroup label="Data">
         <DataDirectoryRow />
-      </Section>
+      </SettingGroup>
     </div>
   );
 }
 
-/** 分组标题与侧栏的节点标题同一个处理：mono、micro、大写加字距（`.section-label`，Migration 同用） */
-function Section(props: { label: string; children: React.ReactNode }) {
+/**
+ * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，mono、micro、大写加字距，
+ * Migration 同用）。最后一组的最后一行不画底线（`.set-group:last-child` 那条 CSS）。
+ */
+function SettingGroup(props: { label: string; children: React.ReactNode }) {
   return (
-    <section style={{ display: "grid", gap: "var(--space-1)" }}>
+    <section className="set-group">
       <span className="section-label">{props.label}</span>
       {props.children}
     </section>
@@ -360,64 +353,55 @@ function Section(props: { label: string; children: React.ReactNode }) {
 }
 
 /**
- * 一条设置。**直接坐在内容面上，靠发丝线分隔，不套第二张卡**——
- * 玻璃已经分了三层，再加一层只会把层级讲糊。
+ * 一条设置：左边只有名字（说明收进旁边的 info 悬停），右边是控件与它的效果预览。
+ * **直接坐在内容面上，靠发丝线分隔，不套第二张卡**——玻璃已经分了三层，再加一层只会把层级讲糊。
  *
- * `layout="stack"`：name+hint 在上、control 独占下面一整行（Theme 预览卡组用）——
- * 单列 grid 天然让两个直接子项上下排，不用给 control 单独开分支。默认 `"row"`
- * 还是原来的左右两栏。只加这一个可选项，别把整个组件改成只适配某一行。
+ * `note` 是名字下方可选的一行状态（Data directory 的 Reveal 失败原因）——它不是说明，
+ * 是这一次操作的结果，所以常驻、不进悬停。
  */
-function Row(props: {
+function SettingRow(props: {
   name: string;
-  hint: string;
-  control: React.ReactNode;
-  layout?: "row" | "stack";
+  info?: React.ReactNode;
+  note?: React.ReactNode;
+  children: React.ReactNode;
 }) {
-  const stack = props.layout === "stack";
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: stack ? "1fr" : "minmax(0,1fr) auto",
-        alignItems: stack ? "start" : "center",
-        gap: stack ? "var(--space-3)" : "var(--space-4)",
-        minHeight: "var(--list-item-rich)",
-        padding: "var(--space-3) 0",
-        borderBottom: "1px solid var(--color-border-subtle)",
-      }}
-    >
-      <RowCopy name={props.name} hint={props.hint} />
-      {props.control}
+    <div className="set-row">
+      <span className="set-row-head">
+        <span className="set-row-name">
+          {props.name}
+          {props.info !== undefined && <InfoTip label={`About ${props.name}`}>{props.info}</InfoTip>}
+        </span>
+        {props.note}
+      </span>
+      <div className="set-row-ctl">{props.children}</div>
     </div>
   );
 }
 
-/** 行的左半：名字 + 说明，`note` 是说明下方可选的一行状态。Row 与 DataDirectoryRow 共用 */
-function RowCopy(props: { name: string; hint: string; note?: React.ReactNode }) {
+/**
+ * 提交署名的效果预览：直接写出会追加的那两行（commit trailer、PR 描述行），
+ * 代替原来那句「Adds a Made-with: Orbita trailer…」。Off 时同样两行划掉，
+ * 用户看得出「关掉的是什么」。文案与 `src/agent/git-attribution.ts` 讲给模型的口径一致。
+ */
+function AttributionPreview(props: { enabled: boolean }) {
   return (
-    <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
-      <span style={{ fontSize: "var(--font-size-control)", fontWeight: "var(--weight-medium)" }}>
-        {props.name}
+    <span className="set-trailer" data-off={!props.enabled || undefined} aria-hidden="true">
+      <span className="set-trailer-line">
+        <Icon name="git-commit-horizontal" size={11} />
+        <span className="set-trailer-text">Made-with: Orbita</span>
       </span>
-      <span
-        style={{
-          fontSize: "var(--font-size-caption)",
-          lineHeight: "var(--line-height-caption)",
-          color: "var(--color-text-secondary)",
-        }}
-      >
-        {props.hint}
+      <span className="set-trailer-line">
+        <Icon name="git-pull-request" size={11} />
+        <span className="set-trailer-text">Made with Orbita</span>
       </span>
-      {props.note}
     </span>
   );
 }
 
 /**
- * Data section 的最后一行：数据目录的绝对路径 + Reveal。不走通用 Row：
- * 路径是全页唯一可能比说明还宽的 control——Row 的 control 列是 `auto`，
- * 放进去窗口一窄就先把说明挤没。这里说明列保底 240px，窄了先截路径。
- * 是 Data section 最后一行，照设计稿去掉底部发丝线。
+ * Data 组的唯一一行：数据目录的绝对路径 + Reveal。路径是全页唯一可能很长的控件，
+ * 名字列保底 150px（`.set-row` 的列定义），窗口窄了先从左截路径（`.data-dir-path`）。
  */
 function DataDirectoryRow() {
   const [dir, setDir] = useState<
@@ -451,37 +435,18 @@ function DataDirectoryRow() {
   };
 
   return (
-    <div
-      style={{
-        display: "grid",
-        // 控件列最小是 0：列宽不够时路径（overflow:hidden，自动最小宽为 0）跟着收窄
-        gridTemplateColumns: "minmax(240px,1fr) minmax(0,auto)",
-        alignItems: "center",
-        gap: "var(--space-4)",
-        minHeight: "var(--list-item-rich)",
-        padding: "var(--space-3) 0",
-      }}
+    <SettingRow
+      name="Data directory"
+      info="Sessions, workspaces, skills and mcp.json live here as plain files"
+      note={
+        revealError !== null && (
+          <span role="alert" className="set-row-error">
+            {revealError}
+          </span>
+        )
+      }
     >
-      <RowCopy
-        name="Data directory"
-        hint="Sessions, workspaces, skills and mcp.json live here as plain files."
-        note={
-          revealError !== null && (
-            <span role="alert" style={{ fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
-              {revealError}
-            </span>
-          )
-        }
-      />
-      <span
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "flex-end",
-          gap: "var(--space-2)",
-          minWidth: 0,
-        }}
-      >
+      <span className="set-inline">
         {dir.kind === "ready" && (
           // 路径很长，从左边截断让末段（真正区分不同机器的那一截）留在视野里；
           // 取到之前不渲染，免得先闪一下 "undefined"。bdi 见 .data-dir-path 的注释
@@ -494,6 +459,6 @@ function DataDirectoryRow() {
           <Icon name="folder" size={14} /> Reveal
         </PanelButton>
       </span>
-    </div>
+    </SettingRow>
   );
 }
