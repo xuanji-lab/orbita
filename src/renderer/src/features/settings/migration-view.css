@@ -669,6 +669,12 @@
   color: var(--color-text-secondary);
 }
 
+/* 「只随手发了一句」判中的那几条：行尾一个 Keep，单条放回列表 */
+.mg-skips li > .mg-textbtn {
+  margin-left: auto;
+  font-size: var(--font-size-caption);
+}
+
 .mg-skip-why {
   flex: 0 0 auto;
   font-family: var(--font-family-mono);
@@ -937,4 +943,47 @@
   display: inline-grid;
   place-items: center;
   color: var(--color-success);
+}
+
+/* ---- 「只随手发了一句」检查：列表上方一个勾选框，副行写明用哪个模型、问几条 ---- */
+
+.mg-greet {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  cursor: pointer;
+}
+
+.mg-greet[data-disabled] {
+  cursor: default;
+}
+
+.mg-greet > input {
+  margin-top: 3px;
+}
+
+.mg-greet-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mg-greet-title {
+  font-size: var(--font-size-body);
+  color: var(--color-text-primary);
+}
+
+.mg-greet[data-disabled] .mg-greet-title {
+  color: var(--color-text-tertiary);
+}
+
+.mg-greet-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-tertiary);
 }

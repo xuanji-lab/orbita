@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   ImportDestination,
   ImportDetectResult,
+  ImportGreetingCheckPlan,
+  ImportPlanItem,
   ImportRunReport,
   ImportScanReport,
   ImportSkillItem,
@@ -155,6 +157,7 @@ export function MigrationView(props: {
   const [skillExpanded, setSkillExpanded] = useState<ReadonlySet<string>>(new Set());
   const [skillShowAll, setSkillShowAll] = useState<ReadonlySet<string>>(new Set());
   const [mcpSelected, setMcpSelected] = useState<ReadonlySet<string>>(new Set());
+  const [greetings, setGreetings] = useState<GreetingState>({ kind: "off" });
 
   useEffect(() => {
     let cancelled = false;
@@ -171,7 +174,8 @@ export function MigrationView(props: {
     };
   }, []);
 
-  const busy = scan.kind === "scanning" || run.kind === "running";
+  // 检查进行中也不能导：判中的还没从勾选里拿掉
+  const busy = scan.kind === "scanning" || run.kind === "running" || greetings.kind === "checking";
   const home = detect.kind === "ready" ? detect.result.home : "";
 
   /** keepRun：执行完自动重扫时保住「Imported …」那一行，列表刷新成还剩下的 */
@@ -198,8 +202,11 @@ export function MigrationView(props: {
   }, []);
 
   const grouped = useMemo<GroupedSessions | null>(
-    () => (scan.kind === "ready" ? groupSessions(scan.report, filters, scan.scannedAt) : null),
-    [scan, filters],
+    () =>
+      scan.kind === "ready"
+        ? groupSessions(scan.report, filters, scan.scannedAt, greetings.kind === "on" ? greetings.leaveOut : undefined)
+        : null,
+    [scan, filters, greetings],
   );
   const summary = useMemo(
     () => (grouped === null ? null : summarize(grouped, selected, overrides)),
@@ -219,6 +226,37 @@ export function MigrationView(props: {
 
   // 任何改选择的动作都让「Imported …」退场：那是上一次的结果，不是眼前这份勾选的
   const touch = useCallback(() => setRun((current) => (current.kind === "done" ? { kind: "idle" } : current)), []);
+
+  /**
+   * 「只随手发了一句」检查：勾上才调模型（花的是用户的额度），取消就把判中的放回列表。
+   * 判的结果按 sourceFile 记，重扫之后仍然有效（执行完自动重扫时不用再花一次）。
+   */
+  const setGreetingCheck = (on: boolean): void => {
+    touch();
+    if (!on || scan.kind !== "ready") {
+      setGreetings({ kind: "off" });
+      return;
+    }
+    setGreetings({ kind: "checking" });
+    void api.import
+      .checkGreetings({ sources: scan.sources })
+      .then((result) =>
+        setGreetings((current) =>
+          current.kind === "checking"
+            ? {
+                kind: "on",
+                leaveOut: new Set(result.greetingOnly),
+                checked: result.checked,
+                asked: result.asked,
+                model: result.model.modelId,
+              }
+            : current,
+        ),
+      )
+      .catch((cause: unknown) =>
+        setGreetings((current) => (current.kind === "checking" ? { kind: "error", message: errorText(cause) } : current)),
+      );
+  };
 
   const setRows = (rows: readonly SessionRow[], on: boolean) => {
     touch();
@@ -372,6 +410,12 @@ export function MigrationView(props: {
                   </div>
                 ) : (
                   <>
+                    <GreetingCheck
+                      plan={scan.report.greetingCheck}
+                      state={greetings}
+                      disabled={scan.kind !== "ready" || run.kind === "running"}
+                      onToggle={setGreetingCheck}
+                    />
                     <div className="mg-colhead mg-grid-sessions" aria-hidden="true">
                       <span />
                       <span>Folder</span>
@@ -427,7 +471,19 @@ export function MigrationView(props: {
                   grouped={grouped}
                   now={scan.scannedAt}
                   fallback={summary?.fallback ?? null}
+                  leftOut={
+                    greetings.kind === "on" ? scan.report.plan.filter((item) => greetings.leaveOut.has(item.sourceFile)) : []
+                  }
                   onOpenProviders={props.onOpenProviders}
+                  onKeep={(sourceFile) => {
+                    touch();
+                    setGreetings((current) => {
+                      if (current.kind !== "on") return current;
+                      const leaveOut = new Set(current.leaveOut);
+                      leaveOut.delete(sourceFile);
+                      return { ...current, leaveOut };
+                    });
+                  }}
                 />
               </>
             )}
@@ -1050,8 +1106,65 @@ function SessionLine(props: {
   );
 }
 
+/** 「只随手发了一句」检查的状态：没开 / 在问模型 / 判完（判中的不列、不导）/ 失败 */
+type GreetingState =
+  | { kind: "off" }
+  | { kind: "checking" }
+  | { kind: "on"; leaveOut: ReadonlySet<string>; checked: number; asked: number; model: string }
+  | { kind: "error"; message: string };
+
+/**
+ * 列表上方一个勾选框：「不导只随手发了一句 hi / test 的会话」。默认不勾——它要调模型，副行事先写明
+ * 用哪个模型（子会话模型，没设就是默认模型）、要问几条，花的是用户的额度（wafo 2026-09-25）。
+ */
+function GreetingCheck(props: {
+  plan: ImportGreetingCheckPlan;
+  state: GreetingState;
+  disabled: boolean;
+  onToggle: (on: boolean) => void;
+}) {
+  const { plan, state } = props;
+  const model = plan.model;
+  const unavailable = model === null || plan.candidates === 0;
+  const sessions = `${plan.candidates} ${plan.candidates === 1 ? "session" : "sessions"}`;
+  let sub: React.ReactNode;
+  if (state.kind === "checking") {
+    sub = (
+      <>
+        <Icon name="loader-circle" size={11} spin />
+        Asking {model?.modelId ?? "the model"} about {sessions}…
+      </>
+    );
+  } else if (state.kind === "on") {
+    sub = `${state.checked} checked · ${state.asked} read by ${state.model} · ${state.leaveOut.size} left out`;
+  } else if (state.kind === "error") {
+    sub = <span className="mg-error">The check failed: {state.message}</span>;
+  } else if (model === null) {
+    sub = "Needs a model — set up a provider first";
+  } else if (plan.candidates === 0) {
+    sub = "No session has just one message from you, so there's nothing to check";
+  } else {
+    sub = `Looks at the ${sessions} where you sent one message · uses ${model.modelId} (${model.from === "sub-session" ? "your sub-session model" : "your default model — no sub-session model is set"}) and your quota`;
+  }
+  return (
+    <label className="mg-greet" data-disabled={unavailable || undefined}>
+      <input
+        type="checkbox"
+        checked={state.kind === "checking" || state.kind === "on"}
+        disabled={props.disabled || unavailable || state.kind === "checking"}
+        onChange={(event) => props.onToggle(event.target.checked)}
+      />
+      <span className="mg-greet-copy">
+        <span className="mg-greet-title">Leave out sessions that only say hi or test</span>
+        <span className="mg-greet-sub">{sub}</span>
+      </span>
+    </label>
+  );
+}
+
 const FACT_ICON: Record<SessionFactKind, IconName> = {
   hidden: "eye-off",
+  greeting: "message-square-dashed",
   fallback: "cpu",
   orphaned: "git-fork",
   already: "circle-check",
@@ -1064,11 +1177,15 @@ function SessionFacts(props: {
   grouped: GroupedSessions;
   now: number;
   fallback: { count: number; models: string[]; fallbackModel: string | null } | null;
+  /** 「只随手发了一句」检查判中、不列的会话（Details 里逐条列出，可以单条放回） */
+  leftOut: readonly ImportPlanItem[];
   onOpenProviders: () => void;
+  onKeep: (sourceFile: string) => void;
 }) {
-  const [details, setDetails] = useState(false);
+  const [details, setDetails] = useState<"cannot" | "greeting" | null>(null);
   const facts = sessionFacts(props.report, props.grouped, props.fallback, props.now);
   const unconvertible = unconvertibleSkips(props.report);
+  const toggle = (which: "cannot" | "greeting"): void => setDetails((open) => (open === which ? null : which));
   if (facts.length === 0) return null;
   return (
     <>
@@ -1083,14 +1200,32 @@ function SessionFacts(props: {
               </button>
             )}
             {fact.kind === "cannot" && unconvertible.length > 0 && (
-              <button type="button" className="mg-link" aria-expanded={details} onClick={() => setDetails((open) => !open)}>
-                {details ? "Hide" : "Details"}
+              <button type="button" className="mg-link" aria-expanded={details === "cannot"} onClick={() => toggle("cannot")}>
+                {details === "cannot" ? "Hide" : "Details"}
+              </button>
+            )}
+            {fact.kind === "greeting" && props.leftOut.length > 0 && (
+              <button type="button" className="mg-link" aria-expanded={details === "greeting"} onClick={() => toggle("greeting")}>
+                {details === "greeting" ? "Hide" : "Review"}
               </button>
             )}
           </Fact>
         ))}
       </div>
-      {details && (
+      {details === "greeting" && props.leftOut.length > 0 && (
+        <ul className="mg-skips">
+          {props.leftOut.map((item) => (
+            <li key={item.sourceFile}>
+              <span className="mg-skip-title">{item.title}</span>
+              <span className="mg-skip-why">{SOURCE_LABEL[item.source]}</span>
+              <button type="button" className="mg-textbtn" onClick={() => props.onKeep(item.sourceFile)}>
+                Keep
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {details === "cannot" && (
         <ul className="mg-skips">
           {unconvertible.slice(0, 30).map((skip) => (
             <li key={skip.sourceId}>

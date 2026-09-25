@@ -197,7 +197,7 @@ export function unconvertibleSkips(report: ImportScanReport): ImportSkipItem[] {
   return report.skipped.filter((skip) => skip.reason !== "already-imported");
 }
 
-export type SessionFactKind = "hidden" | "fallback" | "orphaned" | "already" | "cannot";
+export type SessionFactKind = "hidden" | "greeting" | "fallback" | "orphaned" | "already" | "cannot";
 
 /** 列表下面那一行图标事实：一个数字 + 一个短语常驻，整句进悬停。 */
 export interface SessionFact {
@@ -227,6 +227,14 @@ export function sessionFacts(
       count: grouped.hidden,
       label: "hidden",
       tip: "Hidden by the filters · only listed sessions are imported",
+    });
+  }
+  if (grouped.leftOut > 0) {
+    facts.push({
+      kind: "greeting",
+      count: grouped.leftOut,
+      label: "only said hi",
+      tip: 'Only a greeting or a test like "hi" or "test", never continued · left out of this import',
     });
   }
   if (fallback !== null && fallback.count > 0) {

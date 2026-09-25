@@ -48,6 +48,12 @@ export class AgentHostCore {
    * 进程退出要 reject：那量重启后状态未知，不能装作重载成功。
    */
   private pendingMcpReload: { resolve: () => void; reject: (error: Error) => void } | null = null;
+  /** 在等的 classifyGreetings 回执（迁移的「只随手发了一句」检查），按 requestId；进程退出全部 reject */
+  private readonly pendingGreetings = new Map<
+    string,
+    { resolve: (throwaway: number[]) => void; reject: (error: Error) => void }
+  >();
+  private greetingSeq = 0;
 
   constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
     this.forkRuntime = forkRuntime;
@@ -76,6 +82,14 @@ export class AgentHostCore {
           // reload 的回执到了：事件照常往下走（缓存 + 广播），这里只结 promise
           this.pendingMcpReload?.resolve();
           this.pendingMcpReload = null;
+        }
+        if (message.type === "greetingsClassified") {
+          // 只回给发起的那次检查，不广播：窗口不认这个事件
+          const pending = this.pendingGreetings.get(message.requestId);
+          this.pendingGreetings.delete(message.requestId);
+          if (message.throwaway === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
+          else pending?.resolve(message.throwaway);
+          return;
         }
         if (message.type === "created") {
           const pending = this.pendingCreates.get(message.sessionId);
@@ -113,6 +127,8 @@ export class AgentHostCore {
         this.pendingCreates.clear();
         this.pendingMcpReload?.reject(new Error(message));
         this.pendingMcpReload = null;
+        for (const pending of this.pendingGreetings.values()) pending.reject(new Error(message));
+        this.pendingGreetings.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -214,6 +230,40 @@ export class AgentHostCore {
   ): void {
     if (!this.child) return; // 进程没起：标题不重要，别为它拉起整个 runtime
     this.post({ type: "generateTitle", sessionId, text, ...(model === undefined ? {} : { model }) });
+  }
+
+  /**
+   * 迁移的「只随手发了一句」检查：一批消息交给 agent 进程判，等回执（判中的下标）。与标题不同，
+   * 这是用户点出来、等着看结果的动作——进程没起就拉起来，失败要让调用方知道。
+   * 一批几十条的一次小调用，2 分钟没回就当失败（网关挂住时不让页面一直转）。
+   */
+  async classifyGreetings(
+    provider: Extract<AgentCommand, { type: "classifyGreetings" }>["provider"],
+    modelId: string,
+    messages: string[],
+  ): Promise<number[]> {
+    await this.ensure();
+    this.greetingSeq += 1;
+    const requestId = `greetings-${this.greetingSeq}`;
+    return new Promise<number[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingGreetings.has(requestId)) return;
+        this.pendingGreetings.delete(requestId);
+        reject(new Error("the model didn't answer in time"));
+      }, 120_000);
+      // 结了就撤掉计时器：不然一个早已结掉的检查还拖着进程两分钟
+      this.pendingGreetings.set(requestId, {
+        resolve: (throwaway) => {
+          clearTimeout(timer);
+          resolve(throwaway);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.post({ type: "classifyGreetings", requestId, provider, modelId, messages });
+    });
   }
 
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {

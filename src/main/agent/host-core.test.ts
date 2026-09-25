@@ -453,3 +453,35 @@ describe("answerDelegate / answerChannelSend —— 子会话请求的回执", (
     });
   });
 });
+
+describe("classifyGreetings（迁移的「只随手发了一句」检查）", () => {
+  test("按 requestId 结回执：判中的下标 resolve；判不了 reject 带原因；回执不广播给窗口", async () => {
+    const child = new FakeChild();
+    const events: AgentEvent[] = [];
+    const host = new AgentHostCore(() => child, (event) => events.push(event));
+    const first = host.classifyGreetings(TURN_FIELDS.provider, "m", ["hi", "fix the build"]);
+    child.emit({ type: "ready" });
+    await flush();
+    const second = host.classifyGreetings(TURN_FIELDS.provider, "m", ["test"]);
+    await flush();
+    const commands = child.posted.filter(
+      (command): command is Extract<AgentCommand, { type: "classifyGreetings" }> => command.type === "classifyGreetings",
+    );
+    assert.deepEqual(commands.map((command) => command.messages), [["hi", "fix the build"], ["test"]]);
+    child.emit({ type: "greetingsClassified", requestId: commands[1]!.requestId, throwaway: null, error: "rate limited" });
+    child.emit({ type: "greetingsClassified", requestId: commands[0]!.requestId, throwaway: [0] });
+    assert.deepEqual(await first, [0]);
+    await assert.rejects(second, /rate limited/);
+    assert.equal(events.length, 0);
+  });
+
+  test("进程退出：在等的检查 reject", async () => {
+    const child = new FakeChild();
+    const host = new AgentHostCore(() => child, () => undefined);
+    const pending = host.classifyGreetings(TURN_FIELDS.provider, "m", ["hi"]);
+    child.emit({ type: "ready" });
+    await flush();
+    child.exitWith(1);
+    await assert.rejects(pending, /exited/);
+  });
+});
