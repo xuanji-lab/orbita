@@ -5,7 +5,7 @@
  *
  * - manuscript（中文稿纸）：面板一圈双线绿框；输入框是绿方格；正文里的加粗是老师的红笔波浪线。
  * - typescript（英文打字稿）：不画格也不满屏画线——只有输入框有横线和一条红页边线；
- *   对话里的标题按打字稿的习惯全大写。
+ *   对话里的标题按打字稿的习惯全大写；以中文为主的消息换中英同源的阅读字。
  */
 
 /* ===== manuscript ===== */
@@ -19,14 +19,18 @@
     var(--shadow-composer);
 }
 
-/* 方格与行高同为 24px：一行字落在一行格子里 */
+/* 一个汉字一格（针对中文排，wafo 2026-09-25）：格子 24px，字号 14px，字距补足 10px，左边
+   先空半个差值——每个汉字（与全角标点）正好落在格子正中。拉丁字母是半角，对不上格，
+   Manuscript 本来就是中文界面 */
 :root[data-theme="manuscript"] .composer-input {
-  line-height: 24px;
+  --paper-cell: 24px;
+  padding: 0 0 0 calc((var(--paper-cell) - var(--font-size-input)) / 2);
+  letter-spacing: calc(var(--paper-cell) - var(--font-size-input));
+  line-height: var(--paper-cell);
   background-image:
     linear-gradient(to right, var(--color-paper-grid) 1px, transparent 1px),
     linear-gradient(to bottom, var(--color-paper-grid) 1px, transparent 1px);
-  background-size: 24px 24px;
-  background-position: 0 -1px;
+  background-size: var(--paper-cell) var(--paper-cell);
 }
 
 :root[data-theme="manuscript"] .chat-md strong {
@@ -54,6 +58,18 @@
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.02em;
+}
+
+/* 以中文为主的消息（MarkdownBlock 的 data-script，见 dominant-script.ts）：整段换中英同源的
+   阅读字，标题跟着换、不再全大写。英文消息照旧是打字机字。代码块仍是 mono */
+:root[data-theme="typescript"] .chat-md[data-script="cjk"],
+:root[data-theme="typescript"] .chat-md[data-script="cjk"] :is(h1, h2, h3, h4) {
+  font-family: var(--font-family-reading-cjk);
+}
+
+:root[data-theme="typescript"] .chat-md[data-script="cjk"] :is(h1, h2, h3, h4) {
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 /* ===== Theme 预览卡：缩略窗的面板里画一点纸面，认得出是哪张纸 ===== */

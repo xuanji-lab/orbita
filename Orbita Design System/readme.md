@@ -137,8 +137,9 @@ rounds.)
 **Paper themes** (added 2026-09-25): **Manuscript** and **Typescript** are the two faces of the
 稿纸 (manuscript-paper) era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
 as two manual themes because the UI copy is English-only. Both are **light only** (`system` never
-lands on them; the native layer runs light) and share one paper: `#e2e0d8` desk, near-opaque
-panels (glass `.92` — paper, not glass), ink `#1f1f1d / #52524e / #8a8a84`. Manuscript takes the
+lands on them; the native layer runs light) and share one paper: `#e6e4dc` desk, near-opaque
+panels (glass `.92` — paper, not glass), ink `#1f1f1d / #52524e / #6e6e68` (the prototype's
+`#e2e0d8` desk and `#8a8a84` third ink fell to 2.6:1 on the desk; raised for WCAG). Manuscript takes the
 grid's green as its accent (`#3b7a55`), the teacher's red pen (`#cc3a2e`) as danger and as the
 wavy underline on bold transcript text, a double green frame round the main pane, a green square
 grid in the composer, and serif text (Literata + Source Han Serif SC). Typescript takes typewriter

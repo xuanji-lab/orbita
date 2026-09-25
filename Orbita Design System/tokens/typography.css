@@ -47,12 +47,16 @@
 }
 
 /* 稿纸两档换字：中文稿纸是手写的纸面，正文用衬线（Literata + 思源宋体）；打字稿是打字机，
-   正文 Courier Prime，标题与 slogan 用 Special Elite（色带不匀的打字机字）。mono 不变。 */
+   正文 Courier Prime，标题与 slogan 用 Special Elite（色带不匀的打字机字）。mono 不变。
+   打字稿里的中文落思源宋体（不是黑体）：Courier 是带衬线的打字机字，配宋体比配黑体顺。
+   以中文为主的消息整段换 --font-family-reading-cjk（中英同源的衬线）：等宽的数字、英文夹在
+   比例宽的中文里，两套字节奏打架（wafo 2026-09-25：「读起来不舒服」）。 */
 :root[data-theme="manuscript"] {
   --font-family-base: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
 }
 
 :root[data-theme="typescript"] {
-  --font-family-base: "Courier Prime", "Courier New", "Source Han Sans SC", monospace;
+  --font-family-base: "Courier Prime", "Courier New", "Source Han Serif SC", monospace;
   --font-family-brand: "Special Elite", "Courier Prime", "Source Han Serif SC", monospace;
+  --font-family-reading-cjk: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
 }
