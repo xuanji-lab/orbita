@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
 import { api } from "./api";
@@ -7,7 +7,18 @@ import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type SettingsPat
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
-import { ChannelColumn, type ChannelOpenRequest } from "./features/chat/ChannelColumn";
+import { ChannelCards, ChannelColumn, type ChannelOpenRequest } from "./features/chat/ChannelColumn";
+import {
+  channelInlineMaxWidth,
+  channelPanelWide,
+  delegateAutoOpen,
+  reconcileChannelPanel,
+  revealChannelPanel,
+  toggleChannelPanel,
+  visibleChannels,
+  type ChannelPanelChange,
+} from "./features/chat/channel-column.ts";
+import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { SubSessionsPanel } from "./features/chat/SubSessionsPanel";
 import {
   SUB_SESSIONS_LIST,
@@ -21,6 +32,7 @@ import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { RightPanelSlot } from "./shell/RightPanel";
+import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
@@ -137,26 +149,12 @@ export function App() {
   const channelParentTitle = mainOpenMeta?.title ?? "";
 
   /**
-   * 用户对每个父会话显隐通道列的**显式选择**（ephemeral，不落盘，按父会话 id 记
-   * ——3.2 裁决）。缺席 = 没有显式选择，走默认：放得下（inline）有可见通道即
-   * 显示，放不下（overlay）不自动出现（ChannelColumn 内部按 `shown ?? !overlay`
-   * 解析，这里只存显式值）。
+   * 用户对每个父会话显隐**内联列**的显式选择（ephemeral，不落盘，按父会话 id 记——
+   * 3.2 裁决）。缺席 = 没有显式选择，走默认：够宽且有「有往来」的通道时显示。
+   * 不够宽时父子会话面板住在右栏槽里（`rightPanel === "channels"`），不看这份选择。
    */
   const [channelShown, setChannelShown] = useState<ReadonlyMap<string, boolean>>(new Map());
-  /** 当前根会话有没有可见通道——ChannelColumn 上报，右图标条入口的显隐 / 点亮靠它 */
-  const [hasVisibleChannels, setHasVisibleChannels] = useState(false);
-  /**
-   * 通道列此刻是 inline 还是 overlay（子会话 PR4c fix：CDP 实测发现窗口 1200px、
-   * 右栏与通道列同开时主槽被挤到 ~200px）——不只是全局 `narrow`：右栏开着时挤占
-   * 的空间也要算进去，`ChannelColumn` 内部量好后经 `onLayoutChange` 上报。
-   * App 这里需要它做与 `ChannelColumn` 内部同款的默认显隐判定（下面
-   * `channelColumnOpen`）与 Esc 协调（见下方 Esc 的 useEffect），两处口径必须
-   * 一致，否则右图标条亮着的状态和 Esc 实际收起的行为对不上。
-   */
-  const [channelColumnOverlay, setChannelColumnOverlay] = useState(false);
   const channelShownOverride = channelParentId !== null ? (channelShown.get(channelParentId) ?? null) : null;
-  const channelColumnOpen =
-    channelParentId !== null && hasVisibleChannels && (channelShownOverride ?? !channelColumnOverlay);
   const setChannelShownOverride = useCallback(
     (shown: boolean) => {
       if (channelParentId === null) return;
@@ -167,14 +165,92 @@ export function App() {
     },
     [channelParentId],
   );
-  /** 点父流里的标记 → 通道列的一次性请求（token 每次自增，同一条消息再点一次也要能重新触发滚动与高亮） */
-  const [channelOpenRequest, setChannelOpenRequest] = useState<ChannelOpenRequest | null>(null);
-  const openChannel = useCallback(
-    (childId: string, messageId: string | null) => {
-      setChannelShownOverride(true);
-      setChannelOpenRequest((prev) => ({ childId, messageId, token: (prev?.token ?? 0) + 1 }));
+
+  // 通道清单：内联列与右栏槽两处都要，在这里拉一次（以前 ChannelColumn 自己拉、再把
+  // 可见性上报上来）。只派出没说话的通道要看子会话此刻在不在跑
+  const channelSummaries = useChannelSummaries(channelParentId);
+  const phaseOf = session.phaseOf;
+  const channelLiveRunning = useCallback((childId: string) => phaseOf(childId) !== "idle", [phaseOf]);
+  const { entries: channelEntries, autoShow: channelAutoShow } = useMemo(
+    () => visibleChannels(channelSummaries, channelLiveRunning),
+    [channelSummaries, channelLiveRunning],
+  );
+  const hasVisibleChannels = channelParentId !== null && channelEntries.length > 0;
+
+  /**
+   * 够宽 / 不够宽（`channelPanelWide`，用户 2026-09-25 裁决）：够宽时父子会话面板是
+   * 主槽与右栏之间独立的一列；不够宽时它住进右栏槽，与其它入口互斥、继承槽宽。
+   * 量 `.pane` 本身——它的宽由窗口与左栏决定，不受自己的子级影响；右栏量出来的实际
+   * 宽只给内联列的拖宽夹取用。
+   */
+  const paneRef = useRef<HTMLElement | null>(null);
+  const { paneWidth, rightPanelWidth: rightPanelRendered } = usePaneAndRightPanelWidth(paneRef);
+  const channelWide = channelPanelWide({
+    narrow,
+    paneWidth,
+    rightPanelWidth: panelWidth,
+    channelWidth: channelColumnWidth,
+  });
+  const channelInlineOpen = channelWide && hasVisibleChannels && (channelShownOverride ?? channelAutoShow);
+
+  /** 一次父子会话面板的状态改动（channel-column.ts 的纯函数算好的）落到 state 上 */
+  const applyChannelChange = useCallback(
+    (change: ChannelPanelChange | null) => {
+      if (change === null) return;
+      if (change.rightPanel !== undefined) setRightPanel(change.rightPanel);
+      if (change.shown !== undefined) setChannelShownOverride(change.shown);
     },
     [setChannelShownOverride],
+  );
+
+  // 宽窄切换的调和（reconcileChannelPanel）：够宽时它不占槽；够宽 → 不够宽那一拍，
+  // 正显示的内联列在槽空着时进槽，槽里有别的就收起、等拖回够宽再回来。
+  // 两个 ref 记「上一拍」：effect 每次跑完才更新，切换那一拍读到的是切换前的值
+  const channelWideRef = useRef(channelWide);
+  const channelInlineOpenRef = useRef(channelInlineOpen);
+  useEffect(() => {
+    const change = reconcileChannelPanel({
+      wide: channelWide,
+      wasWide: channelWideRef.current,
+      inlineWasOpen: channelInlineOpenRef.current,
+      rightPanel,
+    });
+    channelWideRef.current = channelWide;
+    channelInlineOpenRef.current = channelInlineOpen;
+    applyChannelChange(change);
+  }, [channelWide, channelInlineOpen, rightPanel, applyChannelChange]);
+
+  // 槽里是父子会话面板，但主槽已不在看根会话、或这条根会话没有可见通道了 → 收起
+  // （同下面 Sub-sessions 面板的守卫：不继续挂着一份够不到数据的内容）
+  useEffect(() => {
+    if (rightPanel === "channels" && !hasVisibleChannels) setRightPanel(null);
+  }, [rightPanel, hasVisibleChannels]);
+
+  /**
+   * 点标记 → 父子会话面板的一次性请求：够宽开内联列、不够宽换进槽，再展开对应通道、
+   * 滚到那条消息并高亮。token 用单调递增的计数器——请求作废（置 null）之后再来的
+   * 请求不能撞上旧 token（`ChannelMessageList` 按 token 判「处理过没有」）。
+   */
+  const [channelOpenRequest, setChannelOpenRequest] = useState<ChannelOpenRequest | null>(null);
+  const channelOpenTokenRef = useRef(0);
+  const openChannel = useCallback(
+    (childId: string, messageId: string | null) => {
+      applyChannelChange(revealChannelPanel(channelWide));
+      channelOpenTokenRef.current += 1;
+      setChannelOpenRequest({ childId, messageId, token: channelOpenTokenRef.current });
+    },
+    [applyChannelChange, channelWide],
+  );
+  // 请求只发给此刻看得见的那一处（内联列常驻挂载，隐藏时宽 0——不该在看不见的地方
+  // 展开、滚动、高亮一遍）。两处都不显示了 → 请求作废：下次打开时不该再滚一遍旧请求
+  const channelPanelVisible = channelInlineOpen || rightPanel === "channels";
+  useEffect(() => {
+    if (!channelPanelVisible) setChannelOpenRequest(null);
+  }, [channelPanelVisible]);
+  /** 右图标条入口的点击（与 Esc 同一个出口）：够宽开关内联列，不够宽同其它入口互斥 */
+  const toggleChannel = useCallback(
+    () => applyChannelChange(toggleChannelPanel({ wide: channelWide, inlineOpen: channelInlineOpen, rightPanel })),
+    [applyChannelChange, channelWide, channelInlineOpen, rightPanel],
   );
 
   /**
@@ -249,6 +325,49 @@ export function App() {
   const litSubSessionId =
     rightPanel === "subsessions" && subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
 
+  /**
+   * 母会话刚派出子会话 → 自动弹出（`delegateAutoOpen`，用户 2026-09-25 裁决：派出后要
+   * 让人感知到子会话在干活。不够宽弹子会话工作记录；够宽连父子会话面板一起，三分屏）。
+   * 信号是主进程 applyDelegate 广播的那条 task 消息。**等子会话出现在会话列表里再开**：
+   * Sub-sessions 面板按列表找子会话，开早了会被上面「没有子会话就关面板」的守卫当场
+   * 关掉；子会话首轮开跑的 phase 会触发列表重拉（session-list-refresh.ts），通常派出后
+   * 几十毫秒就到。只认主槽正看着的那条母会话：后台会话派出的只出现入口，不弹。
+   */
+  const [pendingDelegate, setPendingDelegate] = useState<{ parentId: string; childId: string } | null>(null);
+  const channelParentIdRef = useRef(channelParentId);
+  useEffect(() => {
+    channelParentIdRef.current = channelParentId;
+  }, [channelParentId]);
+  useEffect(
+    () =>
+      api.channel.onEvent((event) => {
+        if (event.type !== "message" || event.message.kind !== "task" || event.message.from !== "parent") return;
+        if (event.parentId !== channelParentIdRef.current) return;
+        setPendingDelegate({ parentId: event.parentId, childId: event.childId });
+      }),
+    [],
+  );
+  useEffect(() => {
+    if (pendingDelegate === null) return;
+    if (channelParentId !== pendingDelegate.parentId) {
+      setPendingDelegate(null);
+      return;
+    }
+    if (!session.sessions.some((meta) => meta.id === pendingDelegate.childId)) return;
+    const plan = delegateAutoOpen({ wide: channelWide, rightPanel });
+    if (plan.openSubSession) openSubSessionInPanel(pendingDelegate.childId);
+    if (plan.showChannel) setChannelShownOverride(true);
+    setPendingDelegate(null);
+  }, [
+    pendingDelegate,
+    channelParentId,
+    session.sessions,
+    channelWide,
+    rightPanel,
+    openSubSessionInPanel,
+    setChannelShownOverride,
+  ]);
+
   // 停靠记忆在设置里（哪些 task 开在辅助对话的标签条上）；兼容存量文件：
   // 旧版本可能把 "new" 占位写进了 docked，启动时一并洗掉。
   // 抽屉并入统一面板壳后 drawer.width 不再有消费者——宽度共用 rightPanelWidth（Q3）。
@@ -273,11 +392,10 @@ export function App() {
     setRightPanel(next);
   }, []);
 
-  // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）；通道列是 overlay 时
-  // （全局窄窗，或非窄窗但放不下——子会话 PR4c fix），Esc 同样收起（3.2 裁决：
-  // Esc 或再点入口收起）。Sub-sessions 面板开着且在会话层时，Esc 只退一层回
-  // 列表（escapeFrom），不直接关掉整个面板——与面板内部「返回」按钮同一个退出
-  // 台阶（子会话 PR4c 2.1）
+  // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
+  // 会话层时，Esc 只退一层回列表（escapeFrom），不直接关掉整个面板——与面板内部
+  // 「返回」按钮同一个退出台阶（子会话 PR4c 2.1）。槽里是父子会话面板（不够宽）时
+  // 走与再点入口同一个出口（记成显式收起）；够宽时的内联列不归 Esc 管，同 PR4b
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
@@ -287,14 +405,15 @@ export function App() {
         else setSubSessionsNav(next);
       } else if (rightPanel === "files" && filesEscapeRef.current?.() === true) {
         // 文件面板开着预览：这一下 Esc 只关预览（退一层），面板留着
+      } else if (rightPanel === "channels") {
+        toggleChannel();
       } else if (rightPanel !== null) {
         setRightPanel(null);
       }
-      if (channelColumnOverlay && channelColumnOpen) setChannelShownOverride(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightPanel, subSessionsNav, channelColumnOverlay, channelColumnOpen, setChannelShownOverride]);
+  }, [rightPanel, subSessionsNav, toggleChannel]);
 
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
   useEffect(() => {
@@ -409,7 +528,7 @@ export function App() {
           }}
         />
 
-        <main className="pane">
+        <main className="pane" ref={paneRef}>
           <div className="pane-main">
             {overlay === "settings" ? (
               <SettingsView
@@ -438,21 +557,22 @@ export function App() {
               />
             )}
           </div>
-          {/* 通道列（子会话 PR4b）：主槽与右栏之间，常驻挂载同 RightPanelSlot 的先例——
-              parentId 为 null 时组件自己不显示任何东西，宽度过渡才不会被条件卸载打断。 */}
+          {/* 父子会话面板的内联列（够宽时）：主槽与右栏之间，常驻挂载同 RightPanelSlot 的先例——
+              不显示时宽度为 0，宽度过渡才不会被条件卸载打断。不够宽时同一份卡片在右栏槽里 */}
           <ChannelColumn
             parentId={channelParentId}
             parentTitle={channelParentTitle}
-            session={session}
-            narrow={narrow}
+            entries={channelEntries}
+            open={channelInlineOpen}
+            wide={channelWide}
+            paneWidth={paneWidth}
+            rightPanelWidth={rightPanelRendered}
+            maxWidth={channelInlineMaxWidth({ paneWidth, rightPanelWidth: panelWidth })}
             width={channelColumnWidth}
             onWidthChange={setChannelColumnWidth}
             onWidthCommit={(width) => changeSettings({ channelColumnWidth: width })}
-            shown={channelShownOverride}
             onShownChange={setChannelShownOverride}
-            onVisibilityChange={setHasVisibleChannels}
-            onLayoutChange={setChannelColumnOverlay}
-            openRequest={channelOpenRequest}
+            openRequest={channelInlineOpen ? channelOpenRequest : null}
           />
           {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
           <RightPanelSlot
@@ -495,6 +615,12 @@ export function App() {
                     )
                   }
                 />
+              ) : shownPanel === "channels" && channelParentId !== null ? (
+                <ChannelCards
+                  parentTitle={channelParentTitle}
+                  entries={channelEntries}
+                  openRequest={channelOpenRequest}
+                />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel
                   parentId={channelParentId}
@@ -519,8 +645,8 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           channelColumn={
-            channelParentId !== null && hasVisibleChannels
-              ? { open: channelColumnOpen, onToggle: () => setChannelShownOverride(!channelColumnOpen) }
+            hasVisibleChannels
+              ? { open: channelWide ? channelInlineOpen : rightPanel === "channels", onToggle: toggleChannel }
               : null
           }
           subSessions={channelParentId !== null && hasSubSessions ? { count: subSessionChildren.length } : null}

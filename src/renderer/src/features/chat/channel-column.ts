@@ -1,13 +1,16 @@
 /**
- * 通道列（子会话 PR4b）的纯函数：哪些通道显示、消息 who 行的文案与语气。
- * 组件不测（仓库 renderer 组件无测试框架先例），逻辑抽出来落在这里测。
+ * 父子会话面板（通道列，子会话 PR4b）的纯函数：哪些通道显示、消息 who 行的文案与
+ * 语气、面板放在哪（内联一列还是右栏槽）。组件不测（仓库 renderer 组件无测试框架
+ * 先例），逻辑抽出来落在这里测。
  *
  * 纯模块：不 import React，可被 `node --test` 直接加载——值导入必须走相对路径带
- * `.ts` 后缀（AGENTS.md 硬规则，先例 `stats-format.ts:13`）；本文件目前不需要
- * shared 的任何值，只用类型，`import type` 走 `@shared/...` 别名即可。
+ * `.ts` 后缀（AGENTS.md 硬规则，先例 `stats-format.ts:13`）；只用类型的 `import type`
+ * 走 `@shared/...` 别名即可。
  */
 import type { ChannelMessage, ChannelSummary } from "@shared/channel";
+import { clampChannelColumnWidth, clampRightPanelWidth } from "../../../../shared/settings.ts";
 import type { Messages } from "../../messages-en.ts";
+import type { RightPanelKind } from "../../shell/RightRail.tsx";
 
 /** 通道列一行的显示规则：`defaultCollapsed` 没有用户手动切换过时的初始折叠态。 */
 export interface ChannelColumnEntry {
@@ -83,41 +86,123 @@ export function taskCardBody(text: string, expanded: boolean): { body: string; h
 /**
  * 主槽的硬底线（子会话 PR4c fix，CDP 实测发现的挤压 bug）：`App.tsx` 的 narrow
  * 注释与 `RightPanel.tsx` 的 `clampRightPanelWidth`/`usePaneTotalWidth` 都认这条
- * 线——chat 主区不该被挤到 480px 以下。但通道列（300px，PR4b）当时没算进这套预算：
- * 窗口 1200px、右栏与通道列同时开着时，主槽被压到 ~200px。
+ * 线——chat 主区不该被挤到 480px 以下。
  */
 export const MIN_CHAT_WIDTH_FOR_INLINE = 480;
 
-export type ChannelColumnLayout = "inline" | "overlay";
+/**
+ * 「够宽」：chat | 父子会话面板 | 右栏 三栏都放得下（用户 2026-09-25 裁决）。
+ *
+ * - **够宽**：父子会话面板是 chat 与右栏之间独立的一列，**只有它**能把页面变成
+ *   二分屏甚至三分屏；右栏其余入口（Files / Skills / MCP / 辅助对话 / 子会话）照旧
+ *   共用一个槽、互相替换。
+ * - **不够宽**：父子会话面板不再悬浮（覆盖层压在别的面板上、底下的字漏上来，
+ *   2026-09-25 实测），和其它入口一样**住进右栏槽**：点它替换槽里的东西、继承槽宽。
+ *
+ * **只看窗口，不看此刻开了什么**：右栏的宽度取设置值（按 pane 夹过的），关着也算——
+ * 模式因此只随窗口宽、左栏宽、两个宽度设置变化，点开 / 关掉某个面板不会让它翻转，
+ * 不会出现「点开父子会话面板进了槽、槽里只剩它于是又够宽、又挪回内联」的自激。
+ * 全局窄窗（<960px）一律不够宽；pane 还没量到（<=0）保守当不够宽，不擅自挤主槽。
+ */
+export function channelPanelWide(input: {
+  narrow: boolean;
+  /** `.pane` 的实际渲染宽（不受它自己的子级影响，见 `usePaneAndRightPanelWidth`） */
+  paneWidth: number;
+  /** 右栏宽度**设置**（App 持有的那份，未夹） */
+  rightPanelWidth: number;
+  /** 父子会话面板内联列的宽度**设置**（未夹） */
+  channelWidth: number;
+}): boolean {
+  if (input.narrow || !(input.paneWidth > 0)) return false;
+  const panel = clampRightPanelWidth(input.rightPanelWidth, input.paneWidth);
+  const column = clampChannelColumnWidth(input.channelWidth, input.paneWidth - panel);
+  return input.paneWidth - panel - column >= MIN_CHAT_WIDTH_FOR_INLINE;
+}
 
 /**
- * 通道列该内联展示还是转成覆盖层（子会话 PR4c fix）。
- *
- * 全局窄窗（`narrow`，<960px）：维持 PR4b 已有行为，直接 overlay——那时右栏本身
- * 也已经转成覆盖层，不占 flex 空间，不存在「挤主槽」的问题，不需要走下面的量算。
- *
- * 非窄窗：**用户刚打开的右栏优先，通道列让位**——右栏是用户这一刻主动点开的东西，
- * 通道列是背景信息；`paneWidth − rightPanelWidth − columnWidth ≥ 480` 才内联，
- * 否则转覆盖层（同 narrow 下的既有行为：不自动出现，右图标条入口 / 点标记时以
- * 右侧锚定覆盖层出现，Esc 或再点入口收起）。
- *
- * `paneWidth` 必须是**不受通道列自己当前占不占空间影响**的那个数——调用方量的是
- * `.pane` 本身（`.layer` 里的一个 flex 项，宽度由祖先决定，不被子级反向影响），
- * 不是「chat 主区实际渲染宽 + 右栏」那种会随通道列当前状态自指变化的量法。
- * `rightPanelWidth` 同理传「此刻实际渲染宽」（右栏关着或右栏自己也在窄窗覆盖层
- * 模式时，这个数天然是 0，调用方不需要另外判断「右栏开没开」）。
- * `paneWidth <= 0`（还没量到）时保守走 overlay，不擅自把主槽挤窄。
+ * 内联列拖宽的上限：再宽三栏就放不下，`channelPanelWide` 会翻成「不够宽」——
+ * 拖着拖着手里的列消失进槽里。与 `channelPanelWide` 同一套算法、同一个右栏宽，
+ * 拖到这个值时那边算出来的 chat 恰好 480。
  */
-export function channelColumnLayout(input: {
-  narrow: boolean;
-  paneWidth: number;
-  rightPanelWidth: number;
-  columnWidth: number;
-}): ChannelColumnLayout {
-  if (input.narrow) return "overlay";
-  if (input.paneWidth <= 0) return "overlay";
-  const chatWidthIfInline = input.paneWidth - input.rightPanelWidth - input.columnWidth;
-  return chatWidthIfInline >= MIN_CHAT_WIDTH_FOR_INLINE ? "inline" : "overlay";
+export function channelInlineMaxWidth(input: { paneWidth: number; rightPanelWidth: number }): number {
+  const panel = clampRightPanelWidth(input.rightPanelWidth, input.paneWidth);
+  return input.paneWidth - panel - MIN_CHAT_WIDTH_FOR_INLINE;
+}
+
+/**
+ * 父子会话面板与右栏槽的一次状态改动：`rightPanel` = 槽里放什么（缺席 = 不动），
+ * `shown` = 用户对这条母会话内联列显隐的显式选择（缺席 = 不动）。
+ */
+export interface ChannelPanelChange {
+  rightPanel?: RightPanelKind | null;
+  shown?: boolean;
+}
+
+/**
+ * 宽 / 窄模式切换时的调和（纯函数；null = 不用动）：
+ *
+ * - 够宽时槽里是父子会话面板（窄时放进去的）→ 挪回内联，槽空出来。这一条是电平
+ *   触发的——任何时刻够宽都不该让它占槽。
+ * - 够宽 → 不够宽，且内联列正显示：槽空着 → 它进槽、继承槽宽；槽里有别的 →
+ *   **那个留下**，父子会话面板收起（用户 2026-09-25：你正在右栏里看的东西不会因为
+ *   拖了下窗口就被换掉）。`shown` 不动，拖回够宽时它自己回到三栏里的位置。
+ *   这一条只在切换那一拍生效：之后用户关掉槽里的面板，不该冒出父子会话面板。
+ */
+export function reconcileChannelPanel(input: {
+  wide: boolean;
+  /** 上一拍的模式 */
+  wasWide: boolean;
+  /** 上一拍内联列是不是正显示着 */
+  inlineWasOpen: boolean;
+  rightPanel: RightPanelKind | null;
+}): ChannelPanelChange | null {
+  if (input.wide && input.rightPanel === "channels") return { rightPanel: null, shown: true };
+  if (!input.wide && input.wasWide && input.inlineWasOpen && input.rightPanel === null) {
+    return { rightPanel: "channels" };
+  }
+  return null;
+}
+
+/**
+ * 右图标条上父子会话面板入口的点击。够宽：开关内联列（与槽无关）；不够宽：同其它
+ * 入口的互斥语义——不在槽里就替换进去，已在槽里就收起。收起记成显式 `shown: false`：
+ * 用户关掉的，拖回够宽时不该自己冒出来。
+ */
+export function toggleChannelPanel(input: {
+  wide: boolean;
+  inlineOpen: boolean;
+  rightPanel: RightPanelKind | null;
+}): ChannelPanelChange {
+  if (input.wide) return { shown: !input.inlineOpen };
+  return input.rightPanel === "channels" ? { rightPanel: null, shown: false } : { rightPanel: "channels" };
+}
+
+/** 点标记定位到某条通道（「打开并看这里」，不是开关）：够宽开内联列，不够宽换进槽。 */
+export function revealChannelPanel(wide: boolean): ChannelPanelChange {
+  return wide ? { shown: true } : { rightPanel: "channels" };
+}
+
+/**
+ * 母会话刚派出子会话时自动弹出什么（用户 2026-09-25 裁决：派出后要让人**感知到
+ * 子会话在干活**）。调用方只在主槽正看着这条母会话时问。
+ *
+ * - `openSubSession`：右栏槽打开这条子会话的工作记录（Sub-sessions 面板的会话层）。
+ *   只在槽空着、或本来就显示着子会话面板时（一轮里连派几条，停在最新那条）；
+ *   槽里是 Files / Skills / MCP / 辅助对话 / 父子会话面板 → 不换，用户正看着它。
+ * - `showChannel`：够宽时父子会话面板一起出来，与工作记录并排成三分屏；不够宽时
+ *   不出——它只能进槽，会和工作记录抢同一个位置。
+ *
+ * 这是设计系统「右侧从不自己弹开抢注意力」的有意例外：派出是用户让母会话去做的事，
+ * 弹出的是这个请求的结果；上面的「不换正在看的面板」守住了「不抢」那一半。
+ */
+export function delegateAutoOpen(input: { wide: boolean; rightPanel: RightPanelKind | null }): {
+  openSubSession: boolean;
+  showChannel: boolean;
+} {
+  return {
+    openSubSession: input.rightPanel === null || input.rightPanel === "subsessions",
+    showChannel: input.wide,
+  };
 }
 
 /** who 行的语气：颜色是第二信号，与 tool-results.ts 的 ChannelMarkTone 同一套判定习惯。 */

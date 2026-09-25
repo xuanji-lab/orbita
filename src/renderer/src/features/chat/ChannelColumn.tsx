@@ -1,27 +1,25 @@
 /**
- * 通道列（子会话 PR4b）——主槽与右栏之间的一列，一个通道一张卡，父子之间的往来
- * 抽出来放在这里，两边主流里只留一行标记指向它（`ChannelViews.tsx`）。
+ * 父子会话面板（通道列，子会话 PR4b）——一个通道一张卡，父子之间的往来抽出来放在
+ * 这里，两边主流里只留一行标记指向它（`ChannelViews.tsx`）。
  *
- * 布局：`App.tsx` 常驻挂载（同 `RightPanelSlot` 的先例——壳一直在，`open` 只是
- * class 切换驱动的宽度过渡），`parentId` 为 null（没在看根会话，或看的是子会话 /
- * 设置页）时不显示任何东西。**可拖宽**（用户 2026-09-23 裁决）：区间是 chat 区
- * （主槽 + 本列）的 1/6–1/3（`clampChannelColumnWidth`，`@shared/settings`），
- * 宽度由 App 持有并落盘（同 `rightPanelWidth` 的 App 写法），拖动中只改本地，
- * 松手才 commit。
+ * **放在哪由宽窄决定**（用户 2026-09-25 裁决，判定见 `channel-column.ts` 的
+ * `channelPanelWide`）：
+ *   - 够宽：`ChannelColumn`——主槽与右栏之间独立的一列，**只有它**能把页面变成
+ *     二分屏 / 三分屏。`App.tsx` 常驻挂载（同 `RightPanelSlot` 的先例——壳一直在，
+ *     `open` 只是 class 切换驱动的宽度过渡）。**可拖宽**（用户 2026-09-23 裁决）：
+ *     区间是 chat 区（主槽 + 本列）的 1/6–1/3，且不越过「三栏放得下」的上限；宽度由
+ *     App 持有并落盘，拖动中只改本地，松手才 commit。
+ *   - 不够宽：同一份卡片（`ChannelCards`）住进右栏槽（`RightPanelKind` 的
+ *     `"channels"`），与其它入口互斥、继承槽宽。**不再有覆盖层**：以前放不下时整列
+ *     浮起、压在右栏上，底下的字漏上来（2026-09-25 实测）。
  *
- * **inline / overlay 由「放不放得下」决定，不只是全局窄窗**（子会话 PR4c fix，
- * CDP 实测发现的挤压 bug：1200px 窗口下右栏 Sub-sessions 面板与通道列同时开着，
- * 主槽被压到 ~200px）。`channelColumnLayout`（`channel-column.ts`，纯函数）按
- * 「用户刚打开的右栏优先，通道列让位」的顺序判定：全局窄窗恒 overlay（那时右栏
- * 也已经是覆盖层，不占 flex 空间，维持 PR4b 原行为）；非窄窗则量 `.pane` 与
- * 右栏此刻的实际宽度，放不下（chat < 480px）就转 overlay——**内部**用同一套
- * narrow-overlay 语言（不自动出现、右图标条入口/点标记以覆盖层出现、Esc 或再点
- * 入口收起），调用方（App.tsx）关心的 Esc 协调与默认显隐判定所以也要知道这个
- * 结果，经 `onLayoutChange` 上报（同 `onVisibilityChange` 先例）。
+ * 卡片不带自己的面板框：第一张卡的头部就是这一列 / 这个槽的页头，与两侧页头同高
+ * （styles.css `.channel-card-head`）——两种位置长得一样，只是宽度来源不同。
  *
  * **通道的出现规则**（用户 2026-09-23 裁决，`visibleChannels`）：只派出、子还在
  * 跑但没说过话的通道不再占一整张卡——折叠成一行头部，展开才是「代父插嘴」的入口；
- * 整列的自动出现（没有显式 `shown` 选择时的默认值）只由**有往来**的通道触发。
+ * 整列的自动出现（没有显式 `shown` 选择时的默认值）只由**有往来**的通道触发，且只在
+ * 够宽时——不够宽时它只能进槽，不替用户换掉槽里的东西。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChannelKey, ChannelMessage, ChannelStatus, ChannelSummary } from "@shared/channel";
@@ -30,18 +28,15 @@ import { api } from "../../api";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { Icon, type IconName } from "../../shell/Icon";
-import { usePaneAndRightPanelWidth } from "../../shell/side-width.ts";
-import { channelColumnLayout, channelWhoLabel, nonTaskMessages, visibleChannels } from "./channel-column.ts";
+import { channelWhoLabel, nonTaskMessages, type ChannelColumnEntry } from "./channel-column.ts";
 import { channelKindIcon } from "./ChannelViews";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { isAtBottom } from "./scroll.ts";
 import { useChannelMessages } from "./useChannelMessages";
-import { useChannelSummaries } from "./useChannelSummaries";
-import type { ChatSession } from "./useChatSession";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
-/** 点父流里的标记 → 通道列的一次性请求：展开该通道、滚到那条消息（或底部）并高亮。 */
+/** 点父流里的标记 → 父子会话面板的一次性请求：展开该通道、滚到那条消息（或底部）并高亮。 */
 export interface ChannelOpenRequest {
   childId: string;
   messageId: string | null;
@@ -49,113 +44,19 @@ export interface ChannelOpenRequest {
   token: number;
 }
 
-export function ChannelColumn(props: {
-  /** 主槽此刻看的根会话 id；null = 没在看根会话（子会话 / 设置页 / 首页） */
-  parentId: string | null;
+/**
+ * 卡片列表：内联列与右栏槽共用。单卡的折叠是 ephemeral 的，按 childId 记**用户的
+ * 显式选择**（没有 = 走 `defaultCollapsed`）——只派出没说话的通道默认折叠，一旦子
+ * 说话或用户手动展开过，交回用户手里，不会被「默认值」重新盖掉。点标记 → 强制展开
+ * 对应通道（显隐本身已经由 App 在同一次操作里定好，这里只管折叠）。
+ */
+export function ChannelCards(props: {
   parentTitle: string;
-  session: ChatSession;
-  /**
-   * App 的全局 narrow（<960px）：恒转覆盖层（`channelColumnLayout` 的短路项）。
-   * **不是「该不该 overlay」的唯一输入**（子会话 PR4c fix）——非窄窗时还要看
-   * `.pane` 与右栏的实际宽度放不放得下，那部分量算在组件内部做，这里只传全局信号。
-   */
-  narrow: boolean;
-  /** 通道列宽度（App 持有，同 `rightPanelWidth` 的宽度记忆）。拖动中只改本地，松手才落盘。 */
-  width: number;
-  onWidthChange: (width: number) => void;
-  onWidthCommit: (width: number) => void;
-  /**
-   * 用户对这个父会话显隐的显式选择（App 按父会话 id 记，ephemeral）。
-   * null = 没有显式选择，走默认——放得下（inline）有可见通道即显示，放不下
-   * （overlay，全局窄窗或单纯放不下）不自动出现。
-   */
-  shown: boolean | null;
-  /** 只在「隐藏后出现新的可见通道」这一拍调用，让 App 把 shown 记成显式 true（3.2 裁决） */
-  onShownChange: (shown: boolean) => void;
-  /** 上报「此刻有没有可见通道」——App 的右图标条入口显隐 / 点亮靠它 */
-  onVisibilityChange: (hasVisible: boolean) => void;
-  /**
-   * 上报「此刻该 inline 还是 overlay」（子会话 PR4c fix）——App 的默认显隐判定
-   * 与 Esc 协调都要知道这个结果，同 `onVisibilityChange` 先例：值真的变化才报。
-   */
-  onLayoutChange: (overlay: boolean) => void;
+  entries: readonly ChannelColumnEntry[];
   openRequest: ChannelOpenRequest | null;
+  /** 容器的 class：内联列要 `channel-column-inner`（定宽），槽里不要 */
+  className?: string;
 }) {
-  const t = useT();
-  const { parentId } = props;
-  const summaries = useChannelSummaries(parentId);
-  const phaseOf = props.session.phaseOf;
-  const liveRunning = useCallback((childId: string) => phaseOf(childId) !== "idle", [phaseOf]);
-  const { entries, autoShow } = useMemo(() => visibleChannels(summaries, liveRunning), [summaries, liveRunning]);
-
-  // 上报可见性：值真的变化才报，避免每次渲染都推一次相同的布尔值上去
-  const hasVisibleRef = useRef<boolean | null>(null);
-  const onVisibilityChange = props.onVisibilityChange;
-  useEffect(() => {
-    const has = entries.length > 0;
-    if (hasVisibleRef.current !== has) {
-      hasVisibleRef.current = has;
-      onVisibilityChange(has);
-    }
-  }, [entries.length, onVisibilityChange]);
-
-  // 根 div 的 ref：量 `.pane` 与右栏此刻的实际宽度（子会话 PR4c fix；本刀顺带
-  // 给拖宽用——C = paneWidth − rightPanelWidth 恰好就是「主槽 + 通道列」的总宽，
-  // 不管通道列此刻是 inline 还是 overlay：inline 时它是三者之和减右栏，overlay
-  // 时通道列不占 flex 空间，chat 主区独吞这部分，两种情况算出来是同一个数）。
-  const columnRef = useRef<HTMLDivElement | null>(null);
-  const { paneWidth, rightPanelWidth } = usePaneAndRightPanelWidth(columnRef);
-  const chatTotal = paneWidth - rightPanelWidth;
-  const width = chatTotal > 0 ? clampChannelColumnWidth(props.width, chatTotal) : props.width;
-  const layout = channelColumnLayout({
-    narrow: props.narrow,
-    paneWidth,
-    rightPanelWidth,
-    columnWidth: width,
-  });
-  // 「放不放得下」判定出的 overlay，取代下面所有原先直接读 `props.narrow` 的地方——
-  // 全局窄窗只是 overlay 的一种成因（channelColumnLayout 内部已经把 narrow 短路成
-  // overlay），非窄窗但放不下是另一种，两种成因走同一套「窄窗行为」
-  const overlay = layout === "overlay";
-  const overlayRef = useRef<boolean | null>(null);
-  const onLayoutChange = props.onLayoutChange;
-  useEffect(() => {
-    if (overlayRef.current !== overlay) {
-      overlayRef.current = overlay;
-      onLayoutChange(overlay);
-    }
-  }, [overlay, onLayoutChange]);
-
-  // 已解析的显隐：没有显式选择时，放得下（inline）且**有往来的通道**触发才默认
-  // 显示（用户 2026-09-23 裁决：通信始于子会话有提问需求的时候）；只派出没说话
-  // 的通道不该替用户弹出整列，即便此刻放得下。
-  const open = parentId !== null && entries.length > 0 && (props.shown ?? (autoShow && !overlay));
-
-  // 隐藏后出现新的「有往来」通道自动重新显示——只认 hasExchange 这一类（同上，
-  // 整列的自动出现只由它们触发）；只在**放得下（inline）**成立：overlay 的
-  // 默认就是不出现，新通道不该替用户做主弹出一个盖住聊天区的覆盖层。按父会话 id
-  // 记「见过」的 childId 集合——这个 ref 活在 ChannelColumn 自己的生命周期（App
-  // 里常驻挂载，不随切换根会话卸载），隐藏状态与「见过什么」都能跨会话切换记住。
-  const seenRef = useRef<Map<string, ReadonlySet<string>>>(new Map());
-  const onShownChange = props.onShownChange;
-  useEffect(() => {
-    if (parentId === null) return;
-    const seen = seenRef.current.get(parentId) ?? new Set<string>();
-    const currentExchanging = new Set(
-      entries.filter((entry) => entry.summary.hasExchange).map((entry) => entry.summary.childId),
-    );
-    const hasNew = [...currentExchanging].some((id) => !seen.has(id));
-    seenRef.current.set(parentId, currentExchanging);
-    if (hasNew && !open && !overlay) onShownChange(true);
-    // open/onShownChange 故意不进依赖：只在「出现新可见通道」这一拍判一次要不要
-    // 打开，不需要 open 变化本身触发重跑
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentId, entries, overlay]);
-
-  // 单个通道的折叠：ephemeral，按 childId 记**用户的显式选择**（没有 = 走
-  // `defaultCollapsed`）——只派出没说话的通道默认折叠，一旦子说话或用户手动
-  // 展开过，交回用户手里，不会被「默认值」重新盖掉。点标记 → 强制展开对应通道
-  // （显隐本身已经由 App 的 openChannel 在同一次操作里设成 shown=true，这里只管折叠）。
   const [collapsedOverride, setCollapsedOverride] = useState<ReadonlyMap<string, boolean>>(new Map());
   const toggleCollapsed = useCallback((childId: string, current: boolean) => {
     setCollapsedOverride((prev) => new Map(prev).set(childId, !current));
@@ -169,10 +70,85 @@ export function ChannelColumn(props: {
     });
   }, [openRequest]);
 
+  return (
+    <div className={props.className === undefined ? "channel-cards" : `channel-cards ${props.className}`}>
+      {props.entries.map((entry) => {
+        const collapsed = collapsedOverride.get(entry.summary.childId) ?? entry.defaultCollapsed;
+        return (
+          <ChannelCard
+            key={entry.summary.childId}
+            summary={entry.summary}
+            parentTitle={props.parentTitle}
+            collapsed={collapsed}
+            onToggleCollapsed={() => toggleCollapsed(entry.summary.childId, collapsed)}
+            pendingScroll={openRequest !== null && openRequest.childId === entry.summary.childId ? openRequest : null}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/** 够宽时的内联列：宽度过渡、拖宽热区、「隐藏后出现新的有往来通道自动重新显示」。 */
+export function ChannelColumn(props: {
+  /** 主槽此刻看的根会话 id；null = 没在看根会话（子会话 / 设置页 / 首页） */
+  parentId: string | null;
+  parentTitle: string;
+  entries: readonly ChannelColumnEntry[];
+  /** 内联列此刻是否展开（App 按模式、显式选择与默认值算好，`channelInlineOpen`） */
+  open: boolean;
+  /** 够宽与否：不够宽时这一列不出现，新通道也不替用户弹出（那时它只能进槽） */
+  wide: boolean;
+  /** `.pane` 与右栏此刻的实际渲染宽（App 量好传下来，`usePaneAndRightPanelWidth`） */
+  paneWidth: number;
+  rightPanelWidth: number;
+  /** 拖宽上限（`channelInlineMaxWidth`）：再宽三栏放不下，列会被挤进槽里 */
+  maxWidth: number;
+  /** 通道列宽度（App 持有，同 `rightPanelWidth` 的宽度记忆）。拖动中只改本地，松手才落盘。 */
+  width: number;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
+  /** 只在「隐藏后出现新的有往来通道」这一拍调用，让 App 把 shown 记成显式 true（3.2 裁决） */
+  onShownChange: (shown: boolean) => void;
+  openRequest: ChannelOpenRequest | null;
+}) {
+  const t = useT();
+  const { parentId, entries, open, wide } = props;
+
+  // C = paneWidth − rightPanelWidth 恰好是「主槽 + 通道列」的总宽：主槽 flex:1，
+  // 通道列拿多少它就让多少，拖动中恒定
+  const chatTotal = props.paneWidth - props.rightPanelWidth;
+  const clamp = (value: number): number => {
+    const clamped = chatTotal > 0 ? clampChannelColumnWidth(value, chatTotal) : value;
+    // pane 还没量到时上限是负数：那时列本来就不显示（不够宽），不拿它夹出负宽度
+    return props.maxWidth > 0 ? Math.min(clamped, props.maxWidth) : clamped;
+  };
+  const width = clamp(props.width);
+
+  // 隐藏后出现新的「有往来」通道自动重新显示——只认 hasExchange 这一类（整列的自动
+  // 出现只由它们触发）；只在够宽时成立：不够宽时它只能进槽，不替用户换掉槽里的东西。
+  // 按父会话 id 记「见过」的 childId 集合——这个 ref 活在 ChannelColumn 自己的生命
+  // 周期（App 里常驻挂载，不随切换根会话卸载），隐藏状态与「见过什么」都能跨会话切换记住。
+  const seenRef = useRef<Map<string, ReadonlySet<string>>>(new Map());
+  const onShownChange = props.onShownChange;
+  useEffect(() => {
+    if (parentId === null) return;
+    const seen = seenRef.current.get(parentId) ?? new Set<string>();
+    const currentExchanging = new Set(
+      entries.filter((entry) => entry.summary.hasExchange).map((entry) => entry.summary.childId),
+    );
+    const hasNew = [...currentExchanging].some((id) => !seen.has(id));
+    seenRef.current.set(parentId, currentExchanging);
+    if (hasNew && !open && wide) onShownChange(true);
+    // open/onShownChange 故意不进依赖：只在「出现新可见通道」这一拍判一次要不要
+    // 打开，不需要 open 变化本身触发重跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentId, entries, wide]);
+
   // 拖宽（用户 2026-09-23 裁决）：左移变宽——同 RightPanel.tsx 的 startResize，
   // 通道列的左缘挨着主槽（chat 主区），主槽 flex:1 让出的正是通道列多拿的。
-  // 拖动中只改本地宽度，松手才落盘；chatTotal 拖动中恒定（量的是 `.pane` 与
-  // 右栏各自的实际渲染宽，不受通道列自己宽度变化的影响），闭包捕获一次够用。
+  // 拖动中只改本地宽度，松手才落盘；chatTotal 拖动中恒定，闭包捕获一次够用。
+  const columnRef = useRef<HTMLDivElement | null>(null);
   const [resizing, setResizing] = useState(false);
   const startResize = (event: React.PointerEvent): void => {
     if (event.button !== 0) return;
@@ -182,7 +158,6 @@ export function ChannelColumn(props: {
     setResizing(true);
     const startX = event.clientX;
     const startWidth = el.getBoundingClientRect().width;
-    const clamp = (value: number): number => clampChannelColumnWidth(value, chatTotal);
     const previousSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = "none";
@@ -201,67 +176,33 @@ export function ChannelColumn(props: {
     window.addEventListener("pointerup", up, { once: true });
   };
 
-  const overlayStyle: React.CSSProperties =
-    overlay && open
-      ? {
-          position: "absolute",
-          top: "var(--space-3)",
-          bottom: "var(--space-3)",
-          right: "calc(var(--space-3) + 32px + var(--space-3))",
-          background: "var(--glass-bg)",
-          border: "1px solid var(--glass-border)",
-          borderRadius: "var(--radius-xl)",
-          boxShadow: "var(--shadow-popover)",
-          zIndex: 20,
-          animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
-        }
-      : {};
-
   return (
     <div
       ref={columnRef}
       className={`channel-column${open ? " open" : ""}${resizing ? " dragging" : ""}`}
-      style={
-        {
-          "--channel-column-w": `${props.narrow ? CHANNEL_COLUMN_WIDTH_DEFAULT : width}px`,
-          ...overlayStyle,
-        } as React.CSSProperties
-      }
+      style={{ "--channel-column-w": `${width}px` } as React.CSSProperties}
     >
       {/* 拖宽热区：左缘 6px，骑在与主槽的分界线上；双击回默认（照 RightPanel.tsx 先例） */}
-      {!props.narrow && (
-        <span
-          onPointerDown={startResize}
-          onDoubleClick={() => props.onWidthCommit(clampChannelColumnWidth(CHANNEL_COLUMN_WIDTH_DEFAULT, chatTotal))}
-          title={t.common.dragResize}
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 6,
-            cursor: "col-resize",
-            zIndex: 5,
-          }}
-        />
-      )}
-      <div className="channel-column-inner">
-        {entries.map((entry) => {
-          const collapsed = collapsedOverride.get(entry.summary.childId) ?? entry.defaultCollapsed;
-          return (
-            <ChannelCard
-              key={entry.summary.childId}
-              summary={entry.summary}
-              parentTitle={props.parentTitle}
-              collapsed={collapsed}
-              onToggleCollapsed={() => toggleCollapsed(entry.summary.childId, collapsed)}
-              pendingScroll={
-                openRequest !== null && openRequest.childId === entry.summary.childId ? openRequest : null
-              }
-            />
-          );
-        })}
-      </div>
+      <span
+        onPointerDown={startResize}
+        onDoubleClick={() => props.onWidthCommit(clamp(CHANNEL_COLUMN_WIDTH_DEFAULT))}
+        title={t.common.dragResize}
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 6,
+          cursor: "col-resize",
+          zIndex: 5,
+        }}
+      />
+      <ChannelCards
+        className="channel-column-inner"
+        parentTitle={props.parentTitle}
+        entries={entries}
+        openRequest={props.openRequest}
+      />
     </div>
   );
 }
@@ -478,7 +419,10 @@ function ChannelComposer(props: { parentId: string; childId: string }) {
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  useLayoutEffect(() => {
+  // 按内容定高（1–6 行）。**文字变了要重算，宽度变了也要**：内联列隐藏时宽 0，
+  // 这时挂上的输入框按逐字换行算出一个撑满 6 行的高度；列展开、拖宽都不改文字，
+  // 只听文字就一直顶着那个高度（2026-09-25 CDP 实测：不够宽→够宽后 114px，正常 24px）
+  const fitHeight = useCallback(() => {
     const el = textareaRef.current;
     if (el === null) return;
     el.style.height = "auto";
@@ -494,7 +438,22 @@ function ChannelComposer(props: { parentId: string; childId: string }) {
     );
     el.style.height = `${height}px`;
     el.style.overflowY = scrollable ? "auto" : "hidden";
-  }, [text]);
+  }, []);
+  useLayoutEffect(fitHeight, [text, fitHeight]);
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el === null) return;
+    let lastWidth = el.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const width = el.getBoundingClientRect().width;
+      // 只认宽度：fitHeight 自己改高度也会触发回调，认高度就是自己触发自己
+      if (width === lastWidth) return;
+      lastWidth = width;
+      fitHeight();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fitHeight]);
 
   const send = (): void => {
     const value = text.trim();
