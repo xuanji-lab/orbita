@@ -21,9 +21,8 @@ export function quoteMeta(quote: TextQuote, t: Messages): string {
   return `${quoteSource(quote, t)} · ${size}`;
 }
 
-/** 收起态的一行：来源 · 字数 · 前 20 字… */
-export function quoteSummary(quote: TextQuote, t: Messages): string {
+/** 收起态的正文：前 20 字，超出才加省略号，空白压成一格（meta 由 chip 排在它前面） */
+export function quotePreview(quote: TextQuote): string {
   const flat = Array.from(quote.text.replace(/\s+/g, " ").trim());
-  const preview = flat.slice(0, SUMMARY_CHARS).join("") + (flat.length > SUMMARY_CHARS ? "…" : "");
-  return `${quoteMeta(quote, t)} · ${preview}`;
+  return flat.slice(0, SUMMARY_CHARS).join("") + (flat.length > SUMMARY_CHARS ? "…" : "");
 }

@@ -214,7 +214,22 @@ export function ChatView(props: ChatViewProps) {
 const QuoteJumpContext = createContext<(quote: TextQuote) => (() => void) | undefined>(() => undefined);
 
 /**
- * 跳回被引用的原文：滚到那条消息，把引用的那一段高亮 2.4 秒。一条助手消息可能拆成
+ * 把一处（引用的那段文字，或整块）滚到转录区**顶部**，留一点边距。不用
+ * `scrollIntoView({ block: "center" })`：一条长回复整块居中时，被引用的那句常落在
+ * 下半截，正好压在输入框上方叠起来的卡片（排队条、审批条、附图与引用）后面。
+ */
+function scrollToTop(target: Element, rect: DOMRect): void {
+  const container = target.closest<HTMLElement>(".scroll");
+  if (container === null) {
+    target.scrollIntoView({ block: "start", behavior: "smooth" });
+    return;
+  }
+  const top = container.scrollTop + rect.top - container.getBoundingClientRect().top - 24;
+  container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+}
+
+/**
+ * 跳回被引用的原文：把那一段滚到转录区顶部、高亮 2.4 秒。一条助手消息可能拆成
  * 几个文本块（都带同一个 data-quote-id），挑包含这段原文的那块；逐字定位不到
  * （原文被 markdown 渲染改写得太多）就整块闪一下——至少把人带到对的地方。
  */
@@ -231,14 +246,14 @@ function highlightQuote(pane: HTMLElement, messageId: string, text: string): voi
     const range = document.createRange();
     range.setStart(startNode, at.start.offset);
     range.setEnd(endNode, at.end.offset);
-    block.scrollIntoView({ block: "center", behavior: "smooth" });
+    scrollToTop(block, range.getBoundingClientRect());
     CSS.highlights.set("orbita-quote", new Highlight(range));
     window.setTimeout(() => CSS.highlights.delete("orbita-quote"), 2400);
     return;
   }
   const fallback = blocks[0];
   if (fallback === undefined) return;
-  fallback.scrollIntoView({ block: "center", behavior: "smooth" });
+  scrollToTop(fallback, fallback.getBoundingClientRect());
   fallback.classList.remove("quote-flash");
   // 强制回流，让同一块连点两次时动画能重新开始
   void fallback.offsetWidth;
@@ -1928,6 +1943,7 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         gap: 2,
       }}
     >
+      {images.length > 0 && <UserImages images={images} />}
       {quotes.length > 0 && (
         <div
           style={{
@@ -1949,7 +1965,6 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           ))}
         </div>
       )}
-      {images.length > 0 && <UserImages images={images} />}
       {hasText && (
         <div
           ref={bubbleRef}

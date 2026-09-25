@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { quoteMeta, quoteSource, quoteSummary } from "./quote-label.ts";
+import { quoteMeta, quotePreview, quoteSource } from "./quote-label.ts";
 import { en } from "../messages-en.ts";
 import { zh } from "../messages-zh.ts";
 
@@ -19,10 +19,9 @@ describe("引用 chip 文案", () => {
     );
   });
 
-  test("摘要取前 20 字，超出才加省略号，空白压成一格", () => {
+  test("收起态正文取前 20 字，超出才加省略号，空白压成一格", () => {
     const long = { text: "一二三四五六七八九十\n一二三四五六七八九十多", messageId: "m", role: "assistant" as const, turn: 2 };
-    assert.equal(quoteSummary(long, zh), "第 2 轮 · 智能体回复 · 22 字 · 一二三四五六七八九十 一二三四五六七八九…");
-    const short = { text: "短句", messageId: "m", role: "assistant" as const, turn: 2 };
-    assert.equal(quoteSummary(short, zh), "第 2 轮 · 智能体回复 · 2 字 · 短句");
+    assert.equal(quotePreview(long), "一二三四五六七八九十 一二三四五六七八九…");
+    assert.equal(quotePreview({ text: "短句", messageId: "m", role: "assistant", turn: 2 }), "短句");
   });
 });

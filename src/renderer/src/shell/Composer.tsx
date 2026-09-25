@@ -148,20 +148,7 @@ export function Composer(props: {
         outlineOffset: -5,
       }}
     >
-      {props.quotes.length > 0 && (
-        <div style={{ display: "grid", gap: "var(--space-1)" }}>
-          {props.quotes.map((quote, index) => (
-            <QuoteChip
-              key={`${quote.messageId}:${index}`}
-              index={index + 1}
-              quote={quote}
-              expanded
-              onJump={props.jumpToQuote(quote)}
-              onRemove={() => props.onRemoveQuote(index)}
-            />
-          ))}
-        </div>
-      )}
+      {/* 截图叠在引用上面：图是一眼能认出来的，放在最上面当锚点；引用是一段段文字，贴着输入框 */}
       {props.attachments.length > 0 && (
         <AttachmentStrip
           items={props.attachments}
@@ -183,6 +170,20 @@ export function Composer(props: {
         >
           <Icon name="triangle-alert" size={12} strokeWidth={1.8} style={{ color: "var(--color-warning)", flex: "0 0 auto" }} />
           <span>{t.composer.noVision}</span>
+        </div>
+      )}
+      {props.quotes.length > 0 && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          {props.quotes.map((quote, index) => (
+            <QuoteChip
+              key={`${quote.messageId}:${index}`}
+              index={index + 1}
+              quote={quote}
+              expanded
+              onJump={props.jumpToQuote(quote)}
+              onRemove={() => props.onRemoveQuote(index)}
+            />
+          ))}
         </div>
       )}
       <div className="composer-field">
