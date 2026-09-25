@@ -226,7 +226,7 @@ export function sessionFacts(
   if (fallback !== null && fallback.count > 0) {
     const models = fallback.models.slice(0, FALLBACK_MODELS_SHOWN);
     const shown = fallback.models.length > models.length ? [...models, "…"] : models;
-    const named = models.length === 0 ? "" : t.migration.parenthesized(shown.join(t.migration.listSeparator));
+    const named = models.length === 0 ? "" : t.migration.parenthesized(shown.join(t.common.listSeparator));
     const target = fallback.fallbackModel ?? t.migration.defaultModel;
     facts.push({
       kind: "fallback",
@@ -292,7 +292,7 @@ export function headline(sessions: number, updates: number, skills: number, mcp:
 export function runningHeadline(sessions: number, skills: number, mcp: number, t: Messages): string {
   const m = t.migration;
   return m.importingList(
-    joined([counted(sessions, m.sessions), counted(skills, m.skills), counted(mcp, m.mcpServers)], m.listSeparator),
+    joined([counted(sessions, m.sessions), counted(skills, m.skills), counted(mcp, m.mcpServers)], t.common.listSeparator),
   );
 }
 

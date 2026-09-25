@@ -15,6 +15,7 @@ import {
   refreshTargets,
 } from "./tree-view.ts";
 import type { FileEntry, FileRoot } from "../../../../shared/files.ts";
+import { en } from "../../messages-en.ts";
 
 const dir = (name: string): FileEntry => ({ name, kind: "directory", modifiedAt: 0 });
 const file = (name: string): FileEntry => ({ name, kind: "file", size: 1, modifiedAt: 0 });
@@ -79,16 +80,16 @@ describe("hasAgentsMd", () => {
 
 describe("footerSummary", () => {
   it("单数 root", () => {
-    deepStrictEqual(footerSummary(1, 0), "1 root");
+    deepStrictEqual(footerSummary(1, 0, en), "1 root");
   });
 
   it("复数 roots", () => {
-    deepStrictEqual(footerSummary(3, 0), "3 roots");
+    deepStrictEqual(footerSummary(3, 0, en), "3 roots");
   });
 
   it("attached 在盘上缺席：如实追加 missing，不静默", () => {
-    deepStrictEqual(footerSummary(4, 1), "4 roots · 1 missing");
-    deepStrictEqual(footerSummary(5, 2), "5 roots · 2 missing");
+    deepStrictEqual(footerSummary(4, 1, en), "4 roots · 1 missing");
+    deepStrictEqual(footerSummary(5, 2, en), "5 roots · 2 missing");
   });
 });
 
@@ -185,41 +186,41 @@ describe("formatAge", () => {
   const NOW = 1_700_000_000_000;
 
   it("1 分钟以内：now", () => {
-    deepStrictEqual(formatAge(NOW, NOW), "now");
-    deepStrictEqual(formatAge(NOW - 59_000, NOW), "now");
+    deepStrictEqual(formatAge(NOW, NOW, en), "now");
+    deepStrictEqual(formatAge(NOW - 59_000, NOW, en), "now");
   });
 
   it("未来时间戳（主进程与本机时钟不同步）也当 now，不显示负数", () => {
-    deepStrictEqual(formatAge(NOW + 60_000, NOW), "now");
+    deepStrictEqual(formatAge(NOW + 60_000, NOW, en), "now");
   });
 
   it("分钟档", () => {
-    deepStrictEqual(formatAge(NOW - 60_000, NOW), "1m");
-    deepStrictEqual(formatAge(NOW - 12 * 60_000, NOW), "12m");
+    deepStrictEqual(formatAge(NOW - 60_000, NOW, en), "1m");
+    deepStrictEqual(formatAge(NOW - 12 * 60_000, NOW, en), "12m");
   });
 
   it("小时档", () => {
-    deepStrictEqual(formatAge(NOW - 60 * 60_000, NOW), "1h");
+    deepStrictEqual(formatAge(NOW - 60 * 60_000, NOW, en), "1h");
   });
 
   it("天档", () => {
-    deepStrictEqual(formatAge(NOW - 24 * 60 * 60_000, NOW), "1d");
-    deepStrictEqual(formatAge(NOW - 3 * 24 * 60 * 60_000, NOW), "3d");
+    deepStrictEqual(formatAge(NOW - 24 * 60 * 60_000, NOW, en), "1d");
+    deepStrictEqual(formatAge(NOW - 3 * 24 * 60 * 60_000, NOW, en), "3d");
   });
 
   it("周档", () => {
-    deepStrictEqual(formatAge(NOW - 7 * 24 * 60 * 60_000, NOW), "1w");
-    deepStrictEqual(formatAge(NOW - 35 * 24 * 60 * 60_000, NOW), "5w");
+    deepStrictEqual(formatAge(NOW - 7 * 24 * 60 * 60_000, NOW, en), "1w");
+    deepStrictEqual(formatAge(NOW - 35 * 24 * 60 * 60_000, NOW, en), "5w");
   });
 
   it("月档", () => {
-    deepStrictEqual(formatAge(NOW - 60 * 24 * 60 * 60_000, NOW), "2mo");
-    deepStrictEqual(formatAge(NOW - 240 * 24 * 60 * 60_000, NOW), "8mo");
+    deepStrictEqual(formatAge(NOW - 60 * 24 * 60 * 60_000, NOW, en), "2mo");
+    deepStrictEqual(formatAge(NOW - 240 * 24 * 60 * 60_000, NOW, en), "8mo");
   });
 
   it("年档", () => {
-    deepStrictEqual(formatAge(NOW - 365 * 24 * 60 * 60_000, NOW), "1y");
-    deepStrictEqual(formatAge(NOW - 2 * 365 * 24 * 60 * 60_000, NOW), "2y");
+    deepStrictEqual(formatAge(NOW - 365 * 24 * 60 * 60_000, NOW, en), "1y");
+    deepStrictEqual(formatAge(NOW - 2 * 365 * 24 * 60 * 60_000, NOW, en), "2y");
   });
 });
 

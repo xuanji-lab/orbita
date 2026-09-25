@@ -18,6 +18,7 @@ import {
 import { useFileTree } from "./useFileTree";
 import { FilePreviewPane } from "./FilePreviewPane";
 import type { FileEntryKind, FileRoot, FileRootKind } from "@shared/files";
+import { useT } from "../../locale.ts";
 
 /**
  * 文件面板（设计稿 files-panel (b) 形态）：三组根——Session（本会话工作台，唯一随
@@ -34,6 +35,7 @@ export function FilesPanel(props: {
    */
   escapeRef: { current: (() => boolean) | null };
 }) {
+  const t = useT();
   const session = props.session;
   /** 与 App 的 mainSessionId 同口径：活会话优先，退盘上打开的那条 */
   const sessionId = session.sessionId ?? session.opened?.id ?? null;
@@ -113,7 +115,7 @@ export function FilesPanel(props: {
       return (
         <DimRow key={`pending:${dir}`}>
           {showSpinner && <Icon name="loader-circle" size={12} spin style={{ marginRight: 6 }} />}
-          Loading…
+          {t.common.loading}
         </DimRow>
       );
     }
@@ -191,7 +193,7 @@ export function FilesPanel(props: {
             <AgentsMdHint onReveal={() => tree.reveal(root.path, root.path)} />
           )}
         {!root.exists && root.kind === "session" && (
-          <DimRow>工作台为空 — agent 第一次写入时创建</DimRow>
+          <DimRow>{t.files.emptyWorkbench}</DimRow>
         )}
         {!root.exists && root.kind === "attached" && (
           <MissingAttachedRow onDetach={() => detach(root.path)} />
@@ -207,7 +209,7 @@ export function FilesPanel(props: {
         <>
           <Icon name="folder" size={16} style={{ color: "var(--color-text-secondary)" }} />
           <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-            Files
+            {t.files.title}
           </strong>
         </>
       }
@@ -220,18 +222,18 @@ export function FilesPanel(props: {
               的 refresh-cw 是「重读这一个文件」，分栏时两者同屏，同一个图标不能干两件事。
               在途时换成面板里通用的 loader-circle——转一个文件夹不像在加载 */}
           <PanelIconButton
-            title={tree.refreshing ? "Refreshing file tree…" : "Refresh file tree"}
+            title={tree.refreshing ? t.files.refreshing : t.files.refresh}
             onClick={tree.refresh}
             disabled={tree.refreshing}
           >
             <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={16} spin={tree.refreshing} />
           </PanelIconButton>
-          <PanelIconButton title="Attach a directory" onClick={attach}>
+          <PanelIconButton title={t.files.attach} onClick={attach}>
             <Icon name="plus" size={16} />
           </PanelIconButton>
         </>
       }
-      footer={<PanelLine>{footerSummary(groupCount, missingAttached)}</PanelLine>}
+      footer={<PanelLine>{footerSummary(groupCount, missingAttached, t)}</PanelLine>}
     >
       {/* container query 分栏：容器 ≥600px 且预览打开 → 左目录右预览；<600px 且
           预览打开 → 只显示预览，目录用 CSS 隐藏（不卸载，展开态与滚动位置还在）；
@@ -267,12 +269,12 @@ export function FilesPanel(props: {
               )}
               {tree.rootsError !== null && (
                 <div style={{ padding: "var(--space-3)" }}>
-                  <PanelLine danger>Couldn’t read roots. {tree.rootsError}</PanelLine>
+                  <PanelLine danger>{t.files.rootsFailed} {tree.rootsError}</PanelLine>
                 </div>
               )}
               {tree.rootsLoading && tree.roots.length === 0 && sessionId !== null && (
                 <div style={{ padding: "var(--space-3)" }}>
-                  <PanelLine>Loading…</PanelLine>
+                  <PanelLine>{t.common.loading}</PanelLine>
                 </div>
               )}
               {/* 还没有会话（新任务没发首条消息）：Session 分组留在最前，但只给一行灰字——
@@ -280,7 +282,7 @@ export function FilesPanel(props: {
               {sessionId === null && (
                 <div style={{ padding: "6px 0 4px" }}>
                   <RootLabel kind="session" detail="" canReveal={false} />
-                  <DimRow>Send the first message to get a workbench</DimRow>
+                  <DimRow>{t.files.noWorkbench}</DimRow>
                 </div>
               )}
               {tree.roots.map(rootGroup)}
@@ -307,6 +309,7 @@ const failMessage = (cause: unknown): string =>
 
 /** 过滤行：本地过滤已加载的条目名（不递归拉取），右侧计数「命中 / 已加载总数」 */
 function FilterRow(props: { value: string; onChange: (value: string) => void; countText: string }) {
+  const t = useT();
   return (
     <div
       style={{
@@ -323,8 +326,8 @@ function FilterRow(props: { value: string; onChange: (value: string) => void; co
       <input
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
-        placeholder="Filter files…"
-        aria-label="Filter files"
+        placeholder={t.files.filter}
+        aria-label={t.files.filterAria}
         style={{
           flex: 1,
           minWidth: 0,
@@ -337,7 +340,7 @@ function FilterRow(props: { value: string; onChange: (value: string) => void; co
         }}
       />
       <span
-        title="Counts loaded entries only — the filter doesn't fetch collapsed folders"
+        title={t.files.countTip}
         style={{
           flex: "0 0 auto",
           fontFamily: "var(--font-family-mono)",
@@ -361,6 +364,7 @@ function RootLabel(props: {
   onReveal?: () => void;
   onDetach?: () => void;
 }) {
+  const t = useT();
   return (
     <div
       className="file-hover-host file-root-label"
@@ -379,7 +383,7 @@ function RootLabel(props: {
     >
       {props.kind === "session" && <Icon name="message-square" size={11} style={{ flex: "0 0 auto" }} />}
       <span style={{ flex: "0 0 auto" }}>
-        {props.kind === "session" ? "Session" : props.kind === "workspace" ? "Workspace" : "Attached"}
+        {props.kind === "session" ? t.files.session : props.kind === "workspace" ? t.files.workspace : t.files.attached}
       </span>
       <span
         title={props.detail}
@@ -397,12 +401,12 @@ function RootLabel(props: {
         {props.detail}
       </span>
       {props.canReveal && props.onReveal !== undefined && (
-        <LabelAction title="Reveal in Finder" onClick={props.onReveal}>
+        <LabelAction title={t.files.revealInFinder} onClick={props.onReveal}>
           <Icon name="folder-open" size={12} />
         </LabelAction>
       )}
       {props.onDetach !== undefined && (
-        <LabelAction title="Detach this directory" onClick={props.onDetach}>
+        <LabelAction title={t.files.detachTip} onClick={props.onDetach}>
           <Icon name="unlink" size={12} />
         </LabelAction>
       )}
@@ -459,6 +463,7 @@ function TreeRow(props: {
   /** 双击 / Enter 非目录行：选中并打开预览 */
   onOpenPreview: () => void;
 }) {
+  const t = useT();
   const isDir = props.kind === "directory";
   const isSymlink = props.kind === "symlink";
   // dotfile：照列，但排在同层最后（orderEntries）且名字退灰——见 tree-view 的注释
@@ -470,9 +475,9 @@ function TreeRow(props: {
   // 放回 title 里；symlink 没有 size，但契约里连目标路径都没有，title 只能如实说
   // 「这是一条符号链接」，不假装知道更多
   const title = isSymlink
-    ? "Symbolic link"
+    ? t.files.symlink
     : hasMeta
-      ? `${props.name} · ${new Date(props.modifiedAt).toLocaleString()}`
+      ? `${props.name} · ${t.time.dateTime(props.modifiedAt)}`
       : undefined;
   return (
     <div className="file-hover-host" style={{ position: "relative" }}>
@@ -556,7 +561,7 @@ function TreeRow(props: {
         </span>
         {props.size !== undefined && (
           <span className="file-row-meta">
-            {formatSize(props.size)} · {formatAge(props.modifiedAt, Date.now())}
+            {formatSize(props.size)} · {formatAge(props.modifiedAt, Date.now(), t)}
           </span>
         )}
         {isRules && (
@@ -568,14 +573,14 @@ function TreeRow(props: {
               flex: "0 0 auto",
             }}
           >
-            rules
+            {t.files.rules}
           </span>
         )}
       </button>
       <button
         type="button"
         className="file-hover-act file-row-reveal"
-        title="Reveal in Finder"
+        title={t.files.revealInFinder}
         onClick={props.onReveal}
         style={{
           position: "absolute",
@@ -627,21 +632,20 @@ function DimRow(props: { children: React.ReactNode; title?: string }) {
  * missing 行的原则）。颜色（组头路径的 warning）不是唯一信号，这里的文字照旧。
  */
 function MissingAttachedRow(props: { onDetach: () => void }) {
+  const t = useT();
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 12 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <DimRow title="Directory not found — moved or renamed outside orbita">
-          Directory not found — moved or renamed
-        </DimRow>
+        <DimRow title={t.files.missingTip}>{t.files.missing}</DimRow>
       </div>
       <button
         type="button"
         className="file-detach-btn"
-        title="Detach this directory"
+        title={t.files.detachTip}
         onClick={props.onDetach}
       >
         <Icon name="unlink" size={10} />
-        Detach
+        {t.files.detach}
       </button>
     </div>
   );
@@ -652,11 +656,12 @@ function MissingAttachedRow(props: { onDetach: () => void }) {
  * 创建动作等写文件 IPC 落地，这一版不替用户碰盘。
  */
 function AgentsMdHint(props: { onReveal: () => void }) {
+  const t = useT();
   return (
     <button
       type="button"
       className="file-hint-row"
-      title="Create AGENTS.md in the workspace folder"
+      title={t.files.createAgentsMdTip}
       onClick={props.onReveal}
       style={{
         display: "flex",
@@ -673,18 +678,19 @@ function AgentsMdHint(props: { onReveal: () => void }) {
       }}
     >
       <Icon name="book" size={13} style={{ flex: "0 0 auto" }} />
-      这个工作区还没有 AGENTS.md — 创建规则文件
+      {t.files.createAgentsMd}
     </button>
   );
 }
 
 /** 底部「挂一个目录」虚线按钮（与面板头 + 同一动作）。Home 会话同样能挂，不禁用了 */
 function AttachRow(props: { onAttach: () => void }) {
+  const t = useT();
   return (
     <button
       type="button"
       className="file-attach-row"
-      title="Attach a directory"
+      title={t.files.attach}
       onClick={props.onAttach}
       style={{
         display: "flex",
@@ -700,7 +706,7 @@ function AttachRow(props: { onAttach: () => void }) {
         cursor: "pointer",
       }}
     >
-      <Icon name="plus" size={14} style={{ flex: "0 0 auto" }} /> Attach a directory
+      <Icon name="plus" size={14} style={{ flex: "0 0 auto" }} /> {t.files.attach}
     </button>
   );
 }

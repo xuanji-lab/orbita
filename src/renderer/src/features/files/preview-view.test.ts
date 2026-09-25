@@ -7,6 +7,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { highlighterReady } from "../chat/highlight.ts";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view.ts";
+import { en } from "../../messages-en.ts";
 
 await highlighterReady;
 
@@ -33,7 +34,7 @@ describe("textPreviewMode", () => {
 describe("truncatedNotice", () => {
   test("拼出 Showing the first … of … 文案，复用 formatSize 的单位格式", () => {
     assert.equal(
-      truncatedNotice(2 * 1024 * 1024, 5 * 1024 * 1024),
+      truncatedNotice(2 * 1024 * 1024, 5 * 1024 * 1024, en),
       "Showing the first 2 MB of 5 MB",
     );
   });

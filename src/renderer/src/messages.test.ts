@@ -23,6 +23,15 @@ const ALLOWED_LATIN = new Set([
   "HTTP",
   "Markdown",
   "stdio",
+  "http",
+  "https",
+  // 格式记号（环境变量 / 请求头一行的写法，原样照填）
+  "KEY",
+  "VALUE",
+  // 命令名与工具名前缀（用户照抄的字面量）
+  "node",
+  "npx",
+  "mcp",
   // 计量单位（与原型「42 tok/s」一致）
   "token",
   "tok",
@@ -37,9 +46,11 @@ const ALLOWED_LATIN = new Set([
   "Code",
   "Kimi",
   "opencode",
+  "Desktop",
   // 文件名
   "mcp.json",
   "SKILL.md",
+  "AGENTS.md",
   // 按键名
   "Ctrl",
   "Alt",
@@ -107,5 +118,17 @@ describe("messages —— 中英两张表", () => {
       .filter(({ text }) => /[\u4e00-\u9fff][,?:!;()]|[,?:!;()][\u4e00-\u9fff]/.test(text))
       .map(({ path, text }) => `${path}: ${text}`);
     deepStrictEqual(offenders, []);
+  });
+
+  test("zh 的相对时间与数量：量词齐全，数字与汉字之间一个空格", () => {
+    deepStrictEqual(
+      [zh.time.minutesAgo(5), zh.time.hoursAgo(2), zh.time.daysAgo(3), zh.chat.subSessionCount(2)],
+      ["5 分钟前", "2 小时前", "3 天前", "2 个子会话"],
+    );
+    deepStrictEqual([en.time.hoursAgo(2), en.chat.subSessionCount(1), en.chat.subSessionCount(2)], [
+      "2h ago",
+      "1 sub-session",
+      "2 sub-sessions",
+    ]);
   });
 });
