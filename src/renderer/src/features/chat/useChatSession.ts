@@ -24,6 +24,7 @@ import {
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
+import { shouldRefreshSessions } from "./session-list-refresh.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
 import { admitImages, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
@@ -682,11 +683,10 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 新一轮真的跑起来了（重试成功 / 用户重发 / 压缩开始）：上一次的失败已成
         // 过去，红字不再挂着——只有最后状态是失败时才该看到失败提示
         if (event.type === "phase" && event.phase !== "idle") setError(null);
-        // 一轮跑完标题与 updatedAt 都变了，刷一次侧栏——**哪条会话跑完都刷**，
-        // 后台完成的会话侧栏也该亮起来
-        if (event.type === "phase" && event.phase === "idle") refreshSessions();
-        // 模型标题到了（C-3，主进程已落 meta）：可能早于整轮结束，不等 phase idle
-        if (event.type === "title") refreshSessions();
+        // 会话列表何时重拉（一轮跑完 / 模型标题 / 换模型 / 列表里没有的会话开轮）：
+        // 规则与理由在 session-list-refresh.ts。refreshSessions 是异步的（IPC 回来才
+        // 回填），排在下面 model 的 alignModel 前面调用不改变先后
+        if (shouldRefreshSessions(event, sessionsRef.current)) refreshSessions();
         // 会话内模型切换成功（C-4，主进程已落 meta）：对齐**正看着那条**的槽——
         // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽
         if (event.type === "model") {
@@ -696,7 +696,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
               break;
             }
           }
-          refreshSessions();
         }
         // 思考档真值（clamp 后事实）到了：对齐正看着那条的槽，芯片自我纠真
         if (event.type === "thinking") {
