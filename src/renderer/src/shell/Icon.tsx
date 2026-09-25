@@ -56,6 +56,8 @@ import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import play from "../../../../Orbita Design System/assets/icons/lucide/play.svg?raw";
+import paperclip from "../../../../Orbita Design System/assets/icons/lucide/paperclip.svg?raw";
+import quote from "../../../../Orbita Design System/assets/icons/lucide/quote.svg?raw";
 import panelLeft from "../../../../Orbita Design System/assets/icons/lucide/panel-left.svg?raw";
 import panelRight from "../../../../Orbita Design System/assets/icons/lucide/panel-right.svg?raw";
 import pinOff from "../../../../Orbita Design System/assets/icons/lucide/pin-off.svg?raw";
@@ -154,10 +156,12 @@ const ICONS = {
   "panel-right": panelRight,
   "pencil-line": pencilLine,
   play,
+  paperclip,
   pin,
   "pin-off": pinOff,
   plug,
   power,
+  quote,
   plus,
   "refresh-cw": refreshCw,
   "rotate-ccw": rotateCcw,

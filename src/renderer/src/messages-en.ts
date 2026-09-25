@@ -99,6 +99,22 @@ export const en = {
     noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
   },
 
+  quote: {
+    add: "Quote",
+    addTitle: "Quote this in your next message",
+    remove: "Remove quote",
+    jump: "Jump to the quoted text",
+    notFound: "The quoted text isn't in this task anymore.",
+    turn: (n: number) => `Turn ${n}`,
+    agentReply: "Agent reply",
+    userMessage: "Your message",
+    chars: (n: number) => plural(n, "char"),
+    truncated: (n: number) => `first ${n} chars only`,
+    count: (n: number) => plural(n, "quote"),
+    expand: "Show quoted text in full",
+    collapse: "Collapse quotes",
+  },
+
   lightbox: {
     aria: "Image viewer",
     open: "View larger",

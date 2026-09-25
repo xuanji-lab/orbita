@@ -10,6 +10,7 @@ import {
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
+import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
@@ -247,12 +248,14 @@ export function registerAgentIpc(
     // 子会话（2026-09-23）：input.text 是投递信封时不生成标题——信封不是用户说的话，
     // 拿它起标题会把 `<channel from="parent" …>` 这类机器文本喂给标题模型。
     // 只发图、没有字的消息同样不生成——标题模型拿不到图，对着空串只会编；门禁不动，下一条带字的消息再试。
+    // 引用块剥掉再判：标题要概括的是用户这句话，不是被引用的那段（只发引用同理不生成）。
+    const ownWords = withoutQuotes(input.text);
     if (
-      input.text.trim() !== "" &&
+      ownWords.trim() !== "" &&
       parseChannelPrompt(input.text) === null &&
       (await sessions.needsAutoTitle(input.sessionId))
     ) {
-      host.generateTitle(input.sessionId, input.text, await readTitleModel());
+      host.generateTitle(input.sessionId, ownWords, await readTitleModel());
     }
   }
 

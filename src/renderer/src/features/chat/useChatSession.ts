@@ -27,6 +27,7 @@ import { recordToolFrame } from "./tool-results.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
 import { admitImages, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
+import { composeQuotedMessage, parseQuotedMessage, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
@@ -122,6 +123,11 @@ export interface ChatSession {
   /** 挑选 / 粘贴 / 拖进来的文件：分拣→读成 base64→追加；被拒的点名报在 error 上 */
   attachImages: (files: readonly File[]) => void;
   removeAttachment: (id: string) => void;
+  /** 当前查看会话输入框里的文字引用（同一把键隔离）；发送时展开成引用块拼在文字前面 */
+  quotes: readonly TextQuote[];
+  /** 加一条引用。同一条消息里的同一段重复加不重复记 */
+  addQuote: (quote: TextQuote) => void;
+  removeQuote: (index: number) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
   /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
@@ -954,6 +960,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
  */
 /** 没有附图时的稳定引用——每次渲染一个新 [] 会让 send 的依赖每帧都变 */
 const NO_ATTACHMENTS: readonly ComposerImage[] = [];
+const NO_QUOTES: readonly TextQuote[] = [];
 
 /** 附图载荷：空就不带字段，纯文字消息的 IPC 载荷与以前一字不差 */
 function imagesField(images: readonly PromptImage[] | undefined): { images?: PromptImage[] } {
@@ -1029,6 +1036,22 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const writeDraft = useCallback(
     (draftKey: string, value: string) => {
       setDrafts((prev) => (prev.get(draftKey) === value ? prev : new Map(prev).set(draftKey, value)));
+    },
+    [],
+  );
+  /** 文字引用：同附图的规矩（按会话隔离，纯内存）。发送 / 排队时展开进正文，撤回时解析回来 */
+  const [quoteMap, setQuoteMap] = useState<ReadonlyMap<string, readonly TextQuote[]>>(new Map());
+  const writeQuotes = useCallback(
+    (draftKey: string, update: (current: readonly TextQuote[]) => readonly TextQuote[]) => {
+      setQuoteMap((prev) => {
+        const current = prev.get(draftKey) ?? [];
+        const next = update(current);
+        if (next === current) return prev;
+        const map = new Map(prev);
+        if (next.length === 0) map.delete(draftKey);
+        else map.set(draftKey, next);
+        return map;
+      });
     },
     [],
   );
@@ -1125,6 +1148,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const draft = drafts.get(draftKey) ?? "";
   const setDraft = (value: string) => writeDraft(draftKey, value);
   const attachments = attachmentMap.get(draftKey) ?? NO_ATTACHMENTS;
+  const quotes = quoteMap.get(draftKey) ?? NO_QUOTES;
+
+  const addQuote = useCallback(
+    (quote: TextQuote) =>
+      writeQuotes(draftKey, (current) =>
+        current.some((item) => item.messageId === quote.messageId && item.text === quote.text)
+          ? current
+          : [...current, quote],
+      ),
+    [draftKey, writeQuotes],
+  );
+  const removeQuote = useCallback(
+    (index: number) => writeQuotes(draftKey, (current) => current.filter((_, i) => i !== index)),
+    [draftKey, writeQuotes],
+  );
 
   /**
    * 收图。分拣是同步的（被拒的当场点名），读文件是异步的——**键在进来那一刻定下**，
@@ -1216,14 +1254,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   const send = useCallback(async () => {
-    const text = draft.trim();
+    const own = draft.trim();
     const images = attachments.map((item) => item.image);
-    if (text === "" && images.length === 0) return;
+    if (own === "" && images.length === 0 && quotes.length === 0) return;
+    // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）
+    const text = composeQuotedMessage(quotes, own);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
     // 带图时不认压缩指令：压缩吃不了图，当命令拦下会把图悉悉丢掉——按普通消息发。
-    const compact = images.length === 0 ? parseCompactCommand(text) : null;
+    const compact = images.length === 0 && quotes.length === 0 ? parseCompactCommand(text) : null;
     if (compact !== null) {
       const busyId = sessionRef.current;
       const busyPhase = busyId !== null ? engine.statesRef.current.get(busyId)?.phase : undefined;
@@ -1285,6 +1325,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       );
       setDraft("");
       writeAttachments(draftKey, () => []);
+      writeQuotes(draftKey, () => []);
       return;
     }
     try {
@@ -1300,11 +1341,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (id === null) id = crypto.randomUUID();
       writeDraft(draftKey, "");
       writeAttachments(draftKey, () => []);
+      writeQuotes(draftKey, () => []);
       await submitTurn(id, text, target, workspace, resume, images);
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [engine, draft, attachments, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, submitTurn]);
+  }, [engine, draft, attachments, quotes, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeQuotes, submitTurn]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -1667,10 +1709,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   /** 排队项的文字退回草稿（拼接规则在 withdraw-draft.ts，那里有测试）。
    *  目标是**本槽当前会话**的草稿——草稿已按会话隔离，不再是一份全局 string。 */
   const restoreToDraft = useCallback(
-    (text: string, images: readonly PromptImage[] = []) => {
-      setDrafts((prev) =>
-        new Map(prev).set(draftKey, appendWithdrawn(prev.get(draftKey) ?? "", text)),
-      );
+    (message: string, images: readonly PromptImage[] = []) => {
+      // 排队项的正文里引用已展开：解析回 chip，只把用户自己的话退回文字框
+      const { quotes: withdrawn, text } = parseQuotedMessage(message);
+      if (text !== "") {
+        setDrafts((prev) =>
+          new Map(prev).set(draftKey, appendWithdrawn(prev.get(draftKey) ?? "", text)),
+        );
+      }
+      if (withdrawn.length > 0) writeQuotes(draftKey, (current) => [...current, ...withdrawn]);
       // 附图一起退回输入框（接在已有的后面）——撤回是「这条我要改」，图是这条的一部分。
       // 超出名额的截掉：输入框里多于上限的图发不出去，留着只会让发送卡住
       if (images.length > 0) {
@@ -1682,7 +1729,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         );
       }
     },
-    [draftKey, writeAttachments],
+    [draftKey, writeAttachments, writeQuotes],
   );
 
   /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。 */
@@ -2033,6 +2080,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     attachments,
     attachImages,
     removeAttachment,
+    quotes,
+    addQuote,
+    removeQuote,
     mode,
     changeMode,
     thinkingLevel,

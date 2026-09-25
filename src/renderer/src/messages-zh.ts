@@ -81,6 +81,22 @@ export const zh: Messages = {
     noVision: "这个模型不能看图，图片不会发给它。换一个带图片标记的模型。",
   },
 
+  quote: {
+    add: "引用",
+    addTitle: "在下一条消息里引用这段",
+    remove: "移除引用",
+    jump: "跳到被引用的原文",
+    notFound: "原文已经不在这条会话里了。",
+    turn: (n) => `第 ${n} 轮`,
+    agentReply: "智能体回复",
+    userMessage: "你的消息",
+    chars: (n) => `${n} 字`,
+    truncated: (n) => `只引了前 ${n} 字`,
+    count: (n) => `${n} 段引用`,
+    expand: "展开引用全文",
+    collapse: "收起引用",
+  },
+
   lightbox: {
     aria: "看图",
     open: "查看大图",

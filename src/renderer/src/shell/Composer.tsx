@@ -2,6 +2,9 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { ImageLightbox } from "./ImageLightbox";
+import { PaperclipMark } from "./PaperclipMark";
+import { QuoteChip } from "./QuoteChip";
+import type { TextQuote } from "@shared/quote";
 import { PROMPT_IMAGE_MIME_TYPES } from "@shared/prompt-images";
 import { filesOf, imageSrc, type ComposerImage } from "./composer-images.ts";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
@@ -65,6 +68,13 @@ export function Composer(props: {
   disabled?: boolean;
   running?: boolean;
   bottomSlot?: React.ReactNode;
+  /** 有文件正拖在聊天面板上方：亮起落点虚线。拖放由外层 ChatView 接（整个面板都是落点） */
+  dropActive?: boolean;
+  /** 输入框里待发的文字引用（按会话隔离，状态在 useChatSession）；展开显示全文 */
+  quotes: readonly TextQuote[];
+  onRemoveQuote: (index: number) => void;
+  /** 跳回被引用的原文；返回 null 表示这条引用的原文不在当前转录里（不画成可点） */
+  jumpToQuote: (quote: TextQuote) => (() => void) | undefined;
   /** 输入框里待发的附图（按会话隔离，状态在 useChatSession） */
   attachments: readonly ComposerImage[];
   /** 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收 */
@@ -118,32 +128,14 @@ export function Composer(props: {
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
   // 同一个位置的两面，按输入态切换。想停止时清掉草稿即可，排队是高频动作、停止是少数。
   // 有图没字也能发——一张截图本身就是一句完整的话
-  const sendable = !disabled && (props.value.trim() !== "" || props.attachments.length > 0);
+  const sendable =
+    !disabled && (props.value.trim() !== "" || props.attachments.length > 0 || props.quotes.length > 0);
   const stopping = running && !sendable;
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // 拖拽悬停态：只对带文件的拖拽亮起来（队列行的拖拽排序不该让输入框有反应）
-  const [dragging, setDragging] = useState(false);
-  const carriesFiles = (event: React.DragEvent) => event.dataTransfer.types.includes("Files");
+  const dragging = props.dropActive === true;
   return (
     <div
       className="glass-card"
-      onDragOver={(event) => {
-        if (disabled || !carriesFiles(event)) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
-        if (!dragging) setDragging(true);
-      }}
-      onDragLeave={(event) => {
-        // 在卡片内部元素之间移动也会触发 leave；只有真离开卡片才收
-        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-        setDragging(false);
-      }}
-      onDrop={(event) => {
-        if (disabled || !carriesFiles(event)) return;
-        event.preventDefault();
-        setDragging(false);
-        props.onAttach(filesOf(event.dataTransfer));
-      }}
       style={{
         width: "100%",
         minWidth: 0,
@@ -156,6 +148,19 @@ export function Composer(props: {
         outlineOffset: -5,
       }}
     >
+      {props.quotes.length > 0 && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          {props.quotes.map((quote, index) => (
+            <QuoteChip
+              key={`${quote.messageId}:${index}`}
+              quote={quote}
+              expanded
+              onJump={props.jumpToQuote(quote)}
+              onRemove={() => props.onRemoveQuote(index)}
+            />
+          ))}
+        </div>
+      )}
       {props.attachments.length > 0 && (
         <AttachmentStrip
           items={props.attachments}
@@ -329,21 +334,29 @@ function AttachmentStrip(props: {
           key={item.id}
           title={item.name === "" ? undefined : item.name}
           style={{
+            // 外层不裁切：回形针要半露在缩略图外面；裁切放在里面的按钮上
             position: "relative",
             width: 56,
             height: 56,
             flex: "0 0 auto",
-            borderRadius: "var(--radius-md)",
-            border: "1px solid var(--color-border-subtle)",
-            overflow: "hidden",
-            background: "var(--color-bg-muted)",
           }}
         >
+          <PaperclipMark size={18} />
           <button
             type="button"
             aria-label={props.openLabel}
             onClick={() => setViewing(index)}
-            style={{ display: "block", width: "100%", height: "100%", padding: 0, border: 0, cursor: "zoom-in" }}
+            style={{
+              display: "block",
+              width: "100%",
+              height: "100%",
+              padding: 0,
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--color-border-subtle)",
+              overflow: "hidden",
+              background: "var(--color-bg-muted)",
+              cursor: "zoom-in",
+            }}
           >
             <img
               src={imageSrc(item.image)}
