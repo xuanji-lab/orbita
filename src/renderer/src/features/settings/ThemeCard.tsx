@@ -7,6 +7,8 @@ const THEME_LABELS: Record<ThemePreference, string> = {
   light: "Light",
   dark: "Warm",
   black: "Ink",
+  manuscript: "Manuscript",
+  typescript: "Typescript",
 };
 
 /**
@@ -15,10 +17,12 @@ const THEME_LABELS: Record<ThemePreference, string> = {
  */
 const THEME_TIPS: Partial<Record<ThemePreference, string>> = {
   system: "Follows your desktop's light or dark appearance · dark lands on Ink",
+  manuscript: "Green-grid manuscript paper (稿纸) with red pen marks · light only",
+  typescript: "A typewritten page with a red margin line, the English 稿纸 · light only",
 };
 
-/** `data-theme-preview` 只认三个真实主题；System 卡的缩略窗对半拼 light + black */
-type PreviewTheme = "light" | "dark" | "black";
+/** `data-theme-preview` 认除 system 之外的每个真实主题；System 卡的缩略窗对半拼 light + black */
+type PreviewTheme = Exclude<ThemePreference, "system">;
 
 /**
  * Theme 行的预览卡组：每张卡画一份缩略窗（壳色 + 侧栏 + 面板 + accent 发送点），

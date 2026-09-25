@@ -8,8 +8,13 @@ describe("resolveNativeThemeSource", () => {
     deepStrictEqual(resolveNativeThemeSource("black"), "dark");
   });
 
+  it("稿纸两档映射成 light——它们只有明", () => {
+    deepStrictEqual(resolveNativeThemeSource("manuscript"), "light");
+    deepStrictEqual(resolveNativeThemeSource("typescript"), "light");
+  });
+
   it("其余档原样透传", () => {
-    for (const theme of THEME_PREFERENCES.filter((t) => t !== "black")) {
+    for (const theme of ["system", "light", "dark"] as const) {
       deepStrictEqual(resolveNativeThemeSource(theme), theme);
     }
   });

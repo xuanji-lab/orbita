@@ -8,11 +8,15 @@ import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
- * 主题偏好。**四态**——"system" 是真正的默认，不是「light 的别名」：
+ * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
  * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（Ink，
  * 2026-09-03 用户指定）；"dark"（Warm）与 "black" 从此都是手动档。
+ *
+ * "manuscript" 与 "typescript" 是璇玑载体谱「稿纸」一档的中文与英文两版（wafo 2026-09-25
+ * 要求载入）：绿格稿纸 + 红笔，与打字稿 + 红色页边线。**只有明**，system 不落这两档，
+ * 都是手动档。
  */
-export const THEME_PREFERENCES = ["system", "light", "dark", "black"] as const;
+export const THEME_PREFERENCES = ["system", "light", "dark", "black", "manuscript", "typescript"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 /**
