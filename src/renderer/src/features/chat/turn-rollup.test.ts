@@ -16,6 +16,7 @@ import {
   type TurnGroupUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
+import { en } from "../../messages-en.ts";
 
 function userItem(id: string, timestamp: number): TranscriptItem {
   return { id, role: "user", content: [{ type: "text", text: "hi" }], timestamp } as TranscriptItem;
@@ -350,14 +351,14 @@ describe("turnStats", () => {
     assert.ok(fold !== undefined);
     // 真实交接序列：第一块流式起表，第二块接管时第一块冻结（交接渲染），
     // 第二块起表——落定后 turnStats 把还没冻的第二块冻在 now
-    thinkingDurationText("a1:0", true, 1000);
-    thinkingDurationText("a1:0", false, 2000);
-    thinkingDurationText("a1:1", true, 2000);
+    thinkingDurationText("a1:0", true, en, 1000);
+    thinkingDurationText("a1:0", false, en, 2000);
+    thinkingDurationText("a1:1", true, en, 2000);
     const stats = turnStats(fold, indexToolResults([]), 5000);
     assert.equal(stats.thinkingMs, 4000);
     assert.equal(stats.thinkingCount, 2);
     // 冻结之后成员行展开也能读到同一份落定时长
-    assert.equal(thinkingDurationText("a1:1", false, 9999), "3s");
+    assert.equal(thinkingDurationText("a1:1", false, en, 9999), "3s");
   });
 
   test("任一思考块没见过现场（旧会话）→ 整个 thinkingMs 为 null，不显示部分和", () => {
@@ -369,7 +370,7 @@ describe("turnStats", () => {
     const view = turnView(records, false);
     const fold = foldUnits(view)[0];
     assert.ok(fold !== undefined);
-    thinkingDurationText("a1:0", true, 1500);
+    thinkingDurationText("a1:0", true, en, 1500);
     const stats = turnStats(fold, indexToolResults([]), 5000);
     assert.equal(stats.thinkingMs, null);
     assert.equal(stats.thinkingCount, 2);

@@ -38,6 +38,8 @@ import { isAtBottom } from "./scroll.ts";
 import { useChannelMessages } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
 import type { ChatSession } from "./useChatSession";
+import { useT } from "../../locale.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /** 点父流里的标记 → 通道列的一次性请求：展开该通道、滚到那条消息（或底部）并高亮。 */
 export interface ChannelOpenRequest {
@@ -79,6 +81,7 @@ export function ChannelColumn(props: {
   onLayoutChange: (overlay: boolean) => void;
   openRequest: ChannelOpenRequest | null;
 }) {
+  const t = useT();
   const { parentId } = props;
   const summaries = useChannelSummaries(parentId);
   const phaseOf = props.session.phaseOf;
@@ -230,7 +233,7 @@ export function ChannelColumn(props: {
         <span
           onPointerDown={startResize}
           onDoubleClick={() => props.onWidthCommit(clampChannelColumnWidth(CHANNEL_COLUMN_WIDTH_DEFAULT, chatTotal))}
-          title="Drag to resize · double-click to reset"
+          title={t.common.dragResize}
           style={{
             position: "absolute",
             left: 0,
@@ -263,16 +266,20 @@ export function ChannelColumn(props: {
   );
 }
 
-function statusTone(status: ChannelStatus): { color: string; text: string; icon: IconName; breathing: boolean } {
+function statusTone(
+  status: ChannelStatus,
+  t: Messages,
+): { color: string; text: string; icon: IconName; breathing: boolean } {
+  const text = t.channel.status[status];
   switch (status) {
     case "running":
-      return { color: "var(--color-accent)", text: "running", icon: "loader-circle", breathing: true };
+      return { color: "var(--color-accent)", text, icon: "loader-circle", breathing: true };
     case "waiting":
-      return { color: "var(--color-warning)", text: "waiting", icon: "message-square", breathing: false };
+      return { color: "var(--color-warning)", text, icon: "message-square", breathing: false };
     case "done":
-      return { color: "var(--color-success)", text: "done", icon: "circle-check", breathing: false };
+      return { color: "var(--color-success)", text, icon: "circle-check", breathing: false };
     case "failed":
-      return { color: "var(--color-danger)", text: "failed", icon: "triangle-alert", breathing: false };
+      return { color: "var(--color-danger)", text, icon: "triangle-alert", breathing: false };
   }
 }
 
@@ -284,13 +291,14 @@ function ChannelCard(props: {
   onToggleCollapsed: () => void;
   pendingScroll: ChannelOpenRequest | null;
 }) {
+  const t = useT();
   const { summary } = props;
   const key: ChannelKey = useMemo(
     () => ({ parentId: summary.parentId, childId: summary.childId }),
     [summary.parentId, summary.childId],
   );
   const channelMessages = useChannelMessages(key);
-  const tone = statusTone(summary.status);
+  const tone = statusTone(summary.status, t);
 
   return (
     <div className={props.collapsed ? "channel-card collapsed" : "channel-card"}>
@@ -325,6 +333,7 @@ function ChannelMessageList(props: {
   state: ReturnType<typeof useChannelMessages>;
   pendingScroll: ChannelOpenRequest | null;
 }) {
+  const t = useT();
   const listRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
   const [highlightId, setHighlightId] = useState<string | null>(null);
@@ -368,10 +377,10 @@ function ChannelMessageList(props: {
 
   return (
     <div className="channel-card-body" ref={listRef} onScroll={handleScroll}>
-      {props.state.loading && <ChannelStatusLine>Loading…</ChannelStatusLine>}
+      {props.state.loading && <ChannelStatusLine>{t.common.loading}</ChannelStatusLine>}
       {props.state.error !== null && <ChannelStatusLine danger>{props.state.error}</ChannelStatusLine>}
       {!props.state.loading && props.state.error === null && messages.length === 0 && (
-        <ChannelStatusLine>No messages yet — speak as parent to steer it.</ChannelStatusLine>
+        <ChannelStatusLine>{t.channel.empty}</ChannelStatusLine>
       )}
       {messages.map((message) => (
         <ChannelMessageRow key={message.id} message={message} highlighted={message.id === highlightId} />
@@ -412,9 +421,10 @@ function whoToneColor(tone: ReturnType<typeof channelWhoLabel>["tone"]): string 
 
 /** 单条通道消息：父左子右（谁说话靠哪边——两个 agent 的对话，不是 user/assistant）。 */
 function ChannelMessageRow(props: { message: ChannelMessage; highlighted: boolean }) {
+  const t = useT();
   const { message } = props;
   const side = message.from === "parent" ? "from-parent" : "from-child";
-  const label = channelWhoLabel(message);
+  const label = channelWhoLabel(message, t);
   return (
     <div
       data-message-id={message.id}
@@ -423,18 +433,17 @@ function ChannelMessageRow(props: { message: ChannelMessage; highlighted: boolea
       <span className="channel-message-who" style={{ color: whoToneColor(label.tone) }}>
         <Icon name={channelKindIcon(message.kind)} size={10} strokeWidth={1.8} />
         {label.text}
-        {label.you && <span style={{ color: "var(--color-text-primary)" }}> · you</span>}
+        {label.you && <span style={{ color: "var(--color-text-primary)" }}> · {t.channel.you}</span>}
       </span>
       <MarkdownBlock text={message.text} variant="bubble" />
     </div>
   );
 }
 
-const DELIVERY_TITLE =
-  "steer: injects at the next tool call without stopping it · turn end: waits until its current turn ends";
 
 /** running / waiting 状态的 composer，或 done / failed 的 closed 行（reopen 后换成同一个 composer）。 */
 function ChannelFoot(props: { summary: ChannelSummary }) {
+  const t = useT();
   const { summary } = props;
   const closed = summary.status === "done" || summary.status === "failed";
   const [reopened, setReopened] = useState(false);
@@ -450,10 +459,10 @@ function ChannelFoot(props: { summary: ChannelSummary }) {
   if (closed && !reopened) {
     return (
       <div className="channel-card-foot channel-card-foot-closed">
-        <span>closed ·</span>
+        <span>{t.channel.closed}</span>
         <button type="button" className="channel-reopen" onClick={() => setReopened(true)}>
           <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
-          reopen to speak
+          {t.channel.reopenToSpeak}
         </button>
       </div>
     );
@@ -462,6 +471,7 @@ function ChannelFoot(props: { summary: ChannelSummary }) {
 }
 
 function ChannelComposer(props: { parentId: string; childId: string }) {
+  const t = useT();
   const [text, setText] = useState("");
   const [delivery, setDelivery] = useState<"steer" | "followUp">("steer");
   const [sending, setSending] = useState(false);
@@ -505,16 +515,16 @@ function ChannelComposer(props: { parentId: string; childId: string }) {
         <button
           type="button"
           className="channel-delivery-chip"
-          title={DELIVERY_TITLE}
+          title={t.channel.deliveryTip}
           onClick={() => setDelivery((prev) => (prev === "steer" ? "followUp" : "steer"))}
         >
-          {delivery === "steer" ? "steer" : "turn end"}
+          {delivery === "steer" ? t.channel.steer : t.channel.turnEnd}
         </button>
         <textarea
           ref={textareaRef}
           rows={1}
           className="channel-composer-input"
-          placeholder="Speak as parent…"
+          placeholder={t.channel.speakAsParent}
           value={text}
           disabled={sending}
           onChange={(event) => setText(event.target.value)}
@@ -536,8 +546,8 @@ function ChannelComposer(props: { parentId: string; childId: string }) {
         <button
           type="button"
           className="channel-composer-send"
-          aria-label="Send"
-          title="Send"
+          aria-label={t.composer.send}
+          title={t.composer.send}
           disabled={sending || text.trim() === ""}
           onClick={send}
         >

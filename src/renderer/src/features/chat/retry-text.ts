@@ -4,6 +4,7 @@
  * 组件只负责每秒喂一个新 now，切走再切回、事件重放都不会把倒数重算回起点。
  */
 import type { RetryStatus } from "@shared/agent-ipc";
+import type { Messages } from "../../messages-en.ts";
 
 /** 距下一次重试还有几秒（向上取整）。已到期 → null：等待结束、下一次尝试还没接上。 */
 export function retryRemainingSeconds(status: RetryStatus, nowMs: number): number | null {
@@ -17,10 +18,10 @@ export function retryRemainingSeconds(status: RetryStatus, nowMs: number): numbe
  * 倒数到 0 与下一次尝试开跑（agent_start 翻回 Responding）之间可能有零点几秒的缝，
  * 卡在「in 0s」比如实说「Retrying…」更让人慌。
  */
-export function retryLineText(status: RetryStatus, nowMs: number): string {
+export function retryLineText(status: RetryStatus, nowMs: number, t: Messages): string {
   const seconds = retryRemainingSeconds(status, nowMs);
-  const wait = seconds === null ? "Retrying…" : `in ${seconds}s`;
-  return `Retry ${status.attempt}/${status.maxAttempts} · ${wait}`;
+  const wait = seconds === null ? t.chat.retrying : t.chat.retryIn(seconds);
+  return t.chat.retryLine(status.attempt, status.maxAttempts, wait);
 }
 
 /**

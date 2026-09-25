@@ -6,26 +6,9 @@ import type { QueuedMessage } from "./session-states.ts";
 import { dropPlacement } from "./queue-drop.ts";
 import { channelMarkLabel } from "./tool-results.ts";
 import { channelKindIcon } from "./ChannelViews.tsx";
+import type { Messages } from "../../messages-en.ts";
+import { useT } from "../../locale.ts";
 
-// ── 本模块全部用户可见文案（英文先行，中文化等真实需求出现再抽字典） ──
-const COPY = {
-  queued: "Queued messages",
-  /** idle 时队列是「停止后滞留」态：下一轮开跑时才轮到它 */
-  haltedNote: "Sends with your next message",
-  waitsTurnEnd: "Sends after this turn",
-  waitsCompaction: "Sends when compaction finishes",
-  compactsWhenIdle: "Compacts when idle (queued items go first)",
-  /** 纯图标按钮必须有 title：图标自己说不出「会打断当前这一轮」 */
-  runNow: "Send now — interrupts this turn",
-  /** 空闲时没有当前轮可打断，同一个键退化成「直接发」 */
-  runNowIdle: "Send now",
-  runNowCompact: "Compact now",
-  withdraw: "Withdraw to the input box",
-  withdrawCompact: "Withdraw this compaction",
-  /** 子会话 PR4a：channel 条目撤回不是拿回自己的草稿——消息仍在通道账本里，只是不再投给父模型 */
-  withdrawChannel: "Drop — it stays in the channel but won't reach the model",
-  reorder: "Drag to reorder",
-};
 
 /**
  * 排队卡片：输入框上方、逐条一行，**顺序即投递顺序**。
@@ -54,6 +37,7 @@ export function QueueStrip(props: {
    */
   titles: ReadonlyMap<string, string>;
 }) {
+  const t = useT();
   const [draggingId, setDraggingId] = useState<string | null>(null);
   /** 正悬停在哪一行上（整行亮起）；悬在源自己身上不算 */
   const [dropOn, setDropOn] = useState<string | null>(null);
@@ -66,7 +50,7 @@ export function QueueStrip(props: {
   const indexOf = (id: string): number => props.items.findIndex((item) => item.id === id);
   return (
     <section
-      aria-label={COPY.queued}
+      aria-label={t.queue.queued}
       className="glass-card glass-float"
       style={{
         display: "grid",
@@ -78,19 +62,19 @@ export function QueueStrip(props: {
         <QueueRow
           key={item.id}
           icon={item.kind === "channel" ? channelKindIcon(item.message.kind) : "clock"}
-          text={labelOf(item, props.titles)}
-          note={noteOf(item, props.phase)}
+          text={labelOf(item, props.titles, t)}
+          note={noteOf(item, props.phase, t)}
           runNowTitle={
-            item.kind === "compact" ? COPY.runNowCompact : halted ? COPY.runNowIdle : COPY.runNow
+            item.kind === "compact" ? t.queue.runNowCompact : halted ? t.queue.runNowIdle : t.queue.runNow
           }
           withdrawTitle={
             item.kind === "compact"
-              ? COPY.withdrawCompact
+              ? t.queue.withdrawCompact
               : item.kind === "channel"
-                ? COPY.withdrawChannel
-                : COPY.withdraw
+                ? t.queue.withdrawChannel
+                : t.queue.withdraw
           }
-          reorderTitle={COPY.reorder}
+          reorderTitle={t.queue.reorder}
           // 单条时不给抓手：没有可交换的对象，一个拖不动的抓手只是误导
           draggable={props.items.length > 1}
           dragging={draggingId === item.id}
@@ -121,13 +105,13 @@ export function QueueStrip(props: {
  * channel 条目的正文首行：截断规则复用 `deriveSessionTitle`（会话标题同一套，
  * 队列行同样要在一行里放得下）。
  */
-function labelOf(item: QueuedMessage, titles: ReadonlyMap<string, string>): string {
+function labelOf(item: QueuedMessage, titles: ReadonlyMap<string, string>, t: Messages): string {
   if (item.kind === "text") return item.text;
   if (item.kind === "channel") {
-    const childTitle = titles.get(item.childId) ?? "Sub-session";
+    const childTitle = titles.get(item.childId) ?? t.channel.subSession;
     // 父的队列里只会有子发来的消息（question/progress/done/failed）——ownSide
     // 恒 "parent"，复用 channelMarkLabel 的同一套文案，不另开一份重复的分支
-    const label = channelMarkLabel(item.message, "parent", childTitle);
+    const label = channelMarkLabel(item.message, "parent", childTitle, t);
     const preview = deriveSessionTitle(item.message.text);
     return preview === "" ? label.text : `${label.text} — ${preview}`;
   }
@@ -135,11 +119,11 @@ function labelOf(item: QueuedMessage, titles: ReadonlyMap<string, string>): stri
 }
 
 /** 注脚：如实写清「这条什么时候会发出去」，机制约束不粉饰。 */
-function noteOf(item: QueuedMessage, phase: "idle" | "turn" | "compaction"): string {
-  if (item.kind === "compact") return COPY.compactsWhenIdle;
-  if (phase === "compaction") return COPY.waitsCompaction;
-  if (phase === "idle") return COPY.haltedNote;
-  return COPY.waitsTurnEnd;
+function noteOf(item: QueuedMessage, phase: "idle" | "turn" | "compaction", t: Messages): string {
+  if (item.kind === "compact") return t.queue.compactsWhenIdle;
+  if (phase === "compaction") return t.queue.waitsCompaction;
+  if (phase === "idle") return t.queue.haltedNote;
+  return t.queue.waitsTurnEnd;
 }
 
 /**

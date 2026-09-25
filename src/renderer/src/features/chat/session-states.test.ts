@@ -25,6 +25,7 @@ import {
   type SessionEntry,
   type SessionStates,
 } from "./session-states.ts";
+import { en } from "../../messages-en.ts";
 
 const assistantDone = (id: string, text: string) => ({
   type: "item_finished" as const,
@@ -518,13 +519,13 @@ describe("compactionBoundaryStatus —— 界碑折叠行 status 槽文案", () 
 
   it("有估算的 tokensAfter：N → M，压缩效果摆出来", () => {
     assert.equal(
-      compactionBoundaryStatus({ ...base, tokensAfter: 8200 }),
+      compactionBoundaryStatus({ ...base, tokensAfter: 8200 }, en),
       "128,000 → 8,200 tokens",
     );
   });
 
   it("旧记录没有 tokensAfter：只说压之前多大（~ 前缀声明是估算前的量级）", () => {
-    assert.equal(compactionBoundaryStatus(base), "~128,000 tokens");
+    assert.equal(compactionBoundaryStatus(base, en), "~128,000 tokens");
   });
 });
 

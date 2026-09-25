@@ -7,6 +7,7 @@
  * shared 的任何值，只用类型，`import type` 走 `@shared/...` 别名即可。
  */
 import type { ChannelMessage, ChannelSummary } from "@shared/channel";
+import type { Messages } from "../../messages-en.ts";
 
 /** 通道列一行的显示规则：`defaultCollapsed` 没有用户手动切换过时的初始折叠态。 */
 export interface ChannelColumnEntry {
@@ -136,14 +137,15 @@ export interface ChannelWhoLabel {
  * 换色（question 暖黄、reply·steer 强调色、done 绿、failed 红）——task / progress /
  * reply·turn end 保持中性 tertiary，没有列进需要用户特别留意的那一档。
  */
-export function channelWhoLabel(message: ChannelMessage): ChannelWhoLabel {
+export function channelWhoLabel(message: ChannelMessage, t: Messages): ChannelWhoLabel {
   const you = message.author === "user";
+  const c = t.channel;
   if (message.kind === "reply") {
     const steer = message.delivery === "steer";
-    return { text: steer ? "reply · steer" : "reply · turn end", tone: steer ? "reply" : "neutral", you };
+    return { text: steer ? c.whoReplySteer : c.whoReplyTurnEnd, tone: steer ? "reply" : "neutral", you };
   }
-  if (message.kind === "question") return { text: "question", tone: "question", you };
-  if (message.kind === "done") return { text: "done", tone: "done", you };
-  if (message.kind === "failed") return { text: "failed", tone: "failed", you };
-  return { text: message.kind, tone: "neutral", you };
+  if (message.kind === "question") return { text: c.kinds.question, tone: "question", you };
+  if (message.kind === "done") return { text: c.kinds.done, tone: "done", you };
+  if (message.kind === "failed") return { text: c.kinds.failed, tone: "failed", you };
+  return { text: c.kinds[message.kind], tone: "neutral", you };
 }

@@ -118,7 +118,7 @@ export function App() {
     if (settings.channelColumnWidth !== undefined) setChannelColumnWidth(settings.channelColumnWidth);
   }, [settings.channelColumnWidth]);
 
-  const { session, engine } = useChatSession(providers);
+  const { session, engine } = useChatSession(providers, t);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
   const drawerView = useSessionView(engine, "drawer");
 

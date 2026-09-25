@@ -19,15 +19,8 @@ import { sortSubSessionRows, subSessionRowStatus, type SubSessionRowStatus } fro
 import type { SubSessionsView } from "./sub-sessions-state";
 import { ChatView } from "./ChatView";
 import type { ChatSession, SessionEngine } from "./useChatSession";
+import { useT } from "../../locale.ts";
 
-const STATUS_COPY: Record<SubSessionRowStatus, string> = {
-  running: "running",
-  waiting: "waiting for you",
-  approval: "needs approval",
-  done: "done",
-  failed: "failed",
-  idle: "idle",
-};
 
 const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
   running: "var(--color-accent)",
@@ -66,6 +59,7 @@ export function SubSessionsPanel(props: {
   onClose: () => void;
   providersError: string | null;
 }) {
+  const t = useT();
   const children = childSessions(props.session.sessions, props.parentId);
   const summaries = useChannelSummaries(props.parentId);
 
@@ -88,7 +82,7 @@ export function SubSessionsPanel(props: {
             borderBottom: "1px solid var(--color-border-subtle)",
           }}
         >
-          <PanelIconButton title="Back to sub-sessions" onClick={props.onBackToList}>
+          <PanelIconButton title={t.subSessions.back} onClick={props.onBackToList}>
             <Icon name="arrow-left" size={16} />
           </PanelIconButton>
           <span
@@ -107,13 +101,13 @@ export function SubSessionsPanel(props: {
               strokeWidth={1.8}
               spin={status === "running"}
             />
-            {STATUS_COPY[status]}
+            {t.subSessions.rowStatus[status]}
           </span>
           <span style={{ flex: 1 }} />
           <button
             type="button"
             onClick={() => props.onOpenAsMain(childId)}
-            title="Switch the main pane to this sub-session"
+            title={t.subSessions.openAsMainTip}
             style={{
               flex: "0 0 auto",
               height: 24,
@@ -127,9 +121,9 @@ export function SubSessionsPanel(props: {
               cursor: "pointer",
             }}
           >
-            Open as main
+            {t.subSessions.openAsMain}
           </button>
-          <PanelIconButton title="Close" onClick={props.onClose}>
+          <PanelIconButton title={t.common.close} onClick={props.onClose}>
             <Icon name="x" size={16} />
           </PanelIconButton>
         </div>
@@ -142,7 +136,7 @@ export function SubSessionsPanel(props: {
           // 极少见：子会话在面板开着时被删了。ChatView 会走它自己的「这条会话不存在」
           // 降级，这里只补一行说明面板为什么显示得空落落的
           <div style={{ padding: "var(--space-3)" }}>
-            <PanelLine>This sub-session is gone.</PanelLine>
+            <PanelLine>{t.subSessions.gone}</PanelLine>
           </div>
         )}
       </div>
@@ -163,10 +157,10 @@ export function SubSessionsPanel(props: {
         <>
           <Icon name="git-fork" size={16} style={{ color: "var(--color-text-secondary)" }} />
           <strong
-            title={`Sub-sessions of "${props.parentTitle}"`}
+            title={t.subSessions.of(props.parentTitle)}
             style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}
           >
-            Sub-sessions ({children.length})
+            {t.rail.subSessions(children.length)}
           </strong>
         </>
       }
@@ -175,7 +169,7 @@ export function SubSessionsPanel(props: {
     >
       {rows.length === 0 ? (
         <div style={{ padding: "var(--space-3)" }}>
-          <PanelLine>No sub-sessions yet.</PanelLine>
+          <PanelLine>{t.subSessions.none}</PanelLine>
         </div>
       ) : (
         <div style={{ display: "grid", padding: "var(--space-2) 0" }}>
@@ -208,6 +202,7 @@ function statusOf(
 }
 
 function SubSessionRow(props: { meta: SessionMeta; status: SubSessionRowStatus; onClick: () => void }) {
+  const t = useT();
   const status = props.status;
   return (
     <button
@@ -244,7 +239,7 @@ function SubSessionRow(props: { meta: SessionMeta; status: SubSessionRowStatus; 
             color: "var(--color-text-primary)",
           }}
         >
-          {props.meta.title === "" ? "Untitled" : props.meta.title}
+          {props.meta.title === "" ? t.subSessions.untitled : props.meta.title}
         </span>
         <span
           style={{
@@ -253,7 +248,7 @@ function SubSessionRow(props: { meta: SessionMeta; status: SubSessionRowStatus; 
             color: STATUS_COLOR[status],
           }}
         >
-          {STATUS_COPY[status]}
+          {t.subSessions.rowStatus[status]}
         </span>
       </span>
       <span

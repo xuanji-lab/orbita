@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PermissionAnswer } from "@shared/permission";
 import { Icon } from "../../shell/Icon";
 import type { PendingApproval } from "./session-states.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * 工具审批条（R6-04 五屏之一）。设计系统的相关硬规则都落在这里：
@@ -17,6 +18,7 @@ export function ApprovalBar(props: {
   approval: PendingApproval;
   onAnswer: (requestId: string, answer: PermissionAnswer) => void;
 }) {
+  const t = useT();
   const [edited, setEdited] = useState(() => stringify(props.approval.input));
   const [editing, setEditing] = useState(false);
   const allowRef = useRef<HTMLButtonElement>(null);
@@ -41,7 +43,7 @@ export function ApprovalBar(props: {
 
   return (
     <section
-      aria-label="Tool approval"
+      aria-label={t.approval.aria}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
@@ -60,7 +62,7 @@ export function ApprovalBar(props: {
           <Icon name="shield-check" size={14} />
         </span>
         <strong style={{ fontSize: "var(--font-size-control)", fontWeight: 600 }}>
-          Run {props.approval.toolName}?
+          {t.approval.run(props.approval.toolName)}
         </strong>
         <span
           style={{
@@ -70,7 +72,7 @@ export function ApprovalBar(props: {
             marginInlineStart: "auto",
           }}
         >
-          Enter to allow · Esc to deny
+          {t.approval.keys}
         </span>
       </div>
 
@@ -93,17 +95,17 @@ export function ApprovalBar(props: {
 
       <div style={{ display: "flex", gap: "var(--space-2)" }}>
         <button ref={allowRef} type="button" onClick={allow} style={{ ...buttonStyle, ...primaryStyle }}>
-          Allow
+          {t.approval.allow}
         </button>
         <button
           type="button"
           onClick={() => answer({ behavior: "deny", message: "Denied by the user." })}
           style={buttonStyle}
         >
-          Deny
+          {t.approval.deny}
         </button>
         <button type="button" onClick={() => setEditing(!editing)} style={buttonStyle}>
-          {editing ? "Stop editing" : "Edit input"}
+          {editing ? t.approval.stopEditing : t.approval.editInput}
         </button>
       </div>
     </section>
