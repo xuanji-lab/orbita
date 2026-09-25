@@ -20,8 +20,8 @@
 }
 
 /* 一个汉字一格（针对中文排，wafo 2026-09-25）：格子 24px，字号 14px，字距补足 10px，左边
-   先空半个差值——每个汉字（与全角标点）正好落在格子正中。拉丁字母是半角，对不上格，
-   小学作业本来就是中文界面 */
+   先空半个差值——每个汉字（与全角标点）正好落在格子正中。拉丁字母是半角，对不上格；
+   中文里夹几个英文词可以接受，以英文为主时见下一条 */
 :root[data-theme="copybook"] .composer-input {
   --paper-cell: 24px;
   padding: 0 0 0 calc((var(--paper-cell) - var(--font-size-input)) / 2);
@@ -33,6 +33,13 @@
   background-size: var(--paper-cell) var(--paper-cell);
   /* 格线画在每格的上沿和左沿，最后一行的下沿要补一条，不然末行是开口的 */
   box-shadow: inset 0 -1px 0 var(--color-paper-grid);
+}
+
+/* 以英文为主时（Composer 的 data-script，判法见 composer-script.ts）取消字距：一整段英文每个
+   字母后面都空 10px，词间的空格和字母间距差不多宽，词形散了。方格、行高与左边距都不动
+   （wafo 2026-09-25 选定），字母不再对格 */
+:root[data-theme="copybook"] .composer-input[data-script="latin"] {
+  letter-spacing: normal;
 }
 
 :root[data-theme="copybook"] .chat-md strong {

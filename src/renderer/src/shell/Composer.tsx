@@ -1,7 +1,9 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
+import { composerScript } from "./composer-script.ts";
+import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useT } from "../locale.ts";
 
 /**
@@ -45,13 +47,20 @@ export function Composer(props: {
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 以中文还是英文为主（composer-script.ts）：小学作业主题按它切字距。组词期间沿用上一次的
+  // 结果，所以要记住上一次——渲染中按新输入调整 state，React 会在提交前重渲一遍
+  const [composing, setComposing] = useState(false);
+  const [script, setScript] = useState<DominantScript>("cjk");
+  const nextScript = composerScript(script, props.value, composing);
+  if (nextScript !== script) setScript(nextScript);
   // 随内容长高：撤回能把好几条排队消息堆进来，写死两行就只能盲着改。
   // useLayoutEffect 而非 useEffect——量完就改高度，放到绘制后会闪一帧。
+  // script 变了也要重量：字距一换行数就变，而组词结束时切换的那一下 value 没有变
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (el === null) return;
     fitComposerHeight(el);
-  }, [props.value]);
+  }, [props.value, script]);
   // 换主题也要重量：纸面两档的行高是 24px，浅 / 暗是 22px——只跟着 value 量，切主题后高度
   // 停在上一档，方格的末行会被切掉半行（2026-09-25 实测）。
   useLayoutEffect(() => {
@@ -82,6 +91,7 @@ export function Composer(props: {
       <textarea
         ref={textareaRef}
         className="composer-input"
+        data-script={script}
         rows={COMPOSER_MIN_ROWS}
         value={props.value}
         disabled={disabled}
@@ -98,6 +108,8 @@ export function Composer(props: {
           event.preventDefault();
           if (sendable) props.onSubmit();
         }}
+        onCompositionStart={() => setComposing(true)}
+        onCompositionEnd={() => setComposing(false)}
         style={{
           width: "100%",
           border: 0,
