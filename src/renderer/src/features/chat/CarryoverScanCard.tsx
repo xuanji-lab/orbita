@@ -1,5 +1,6 @@
 import { Icon } from "../../shell/Icon";
 import type { CarryoverDraft } from "./carryover-parse.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * 收尾扫描回复的只读展示卡 —— 消息流内替代那条 fenced json 的 markdown 渲染。
@@ -14,10 +15,11 @@ import type { CarryoverDraft } from "./carryover-parse.ts";
  * 浮层配方（ApprovalBar 一类要求回答才继续的卡），这条卡只是流内内容。
  */
 export function CarryoverScanCard(props: { drafts: readonly CarryoverDraft[] }) {
+  const t = useT();
   const count = props.drafts.length;
   return (
     <section
-      aria-label="Closing scan result"
+      aria-label={t.carryover.scanResult}
       style={{
         width: "100%",
         minWidth: 0,
@@ -35,8 +37,8 @@ export function CarryoverScanCard(props: { drafts: readonly CarryoverDraft[] }) 
         </span>
         <strong style={{ fontSize: "var(--font-size-control)", fontWeight: 600 }}>
           {count > 0
-            ? `${count} item${count === 1 ? "" : "s"} to carry over`
-            : "Nothing to carry over"}
+            ? t.carryover.itemsToCarry(count)
+            : t.carryover.nothingToCarry}
         </strong>
       </div>
       {count > 0 && (

@@ -15,6 +15,7 @@ import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import type { MenuItem } from "../../shell/Menu";
 import { hasCredentials, kindOf, modelAcceptsImage, modelContextText } from "./providers-view-model.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /**
  * 「配置好」= 设置里绿点的标准：api_key 已入库，或 env 档（密钥来自环境）——与 nav
@@ -47,6 +48,8 @@ export function useBuiltinCatalog(): BuiltinProvider[] {
  * @param selected 当前选中的模型；null = 一个都没选（如设置面选了「Same as session」）
  */
 export function modelMenuItems(options: {
+  /** 文案表：徽标的悬停说明跟界面语言走 */
+  t: Messages;
   providers: readonly ProviderDto[];
   catalog: readonly BuiltinProvider[];
   selected: { providerId: string; modelId: string } | null;
@@ -68,11 +71,11 @@ export function modelMenuItems(options: {
         label: declared.id,
         badge: (
           <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
-            <span className="pv-badge" title="Context window">
+            <span className="pv-badge" title={options.t.modelMenu.contextWindow}>
               {badge.text}
             </span>
             {modelAcceptsImage(declared, defaults) && (
-              <span className="pv-badge" title="Accepts image input — multimodal">
+              <span className="pv-badge" title={options.t.modelMenu.acceptsImage}>
                 <Icon name="image" size={11} strokeWidth={1.8} />
               </span>
             )}

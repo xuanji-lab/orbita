@@ -54,6 +54,7 @@ import {
   type SessionMeta,
 } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
+import type { Messages } from "../../messages-en.ts";
 
 /**
  * 会话状态。**逻辑原样自 ChatView 上提**，一行未改语义——上提的唯一理由是
@@ -292,6 +293,8 @@ export interface SessionEngine {
    * changeThinkingLevel 直接写它；程序性改档（换模型时的自动调整）不写。
    */
   readonly pickedThinkingRef: { current: ThinkingLevel | null };
+  /** 当前界面语言的文案表（useChatSession 由 App 传入，每次渲染同步）——引擎与查看槽报给界面的句子从这里取 */
+  readonly messagesRef: Readonly<{ current: Messages }>;
   /** 分槽状态（渲染值）。查看槽从这里按自己的 session id 取 entry。 */
   readonly states: SessionStates;
   /** 已挂载的查看槽名册：model 事件路由 / 删除通知 / meta 同步按它来 */
@@ -367,7 +370,10 @@ export interface SessionEngine {
   readonly removeSession: (id: string) => void;
 }
 
-export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
+export function useChatSessionEngine(providers: ProviderDto[], t: Messages): SessionEngine {
+  // 文案表的同步镜像：报错与收尾提示在异步回调里产生，要读产生那一刻的界面语言
+  const messagesRef = useRef(t);
+  messagesRef.current = t;
   // pi 内建目录：全应用一份，ComposerBar 与查看槽的新任务起档都从这里读
   const catalog = useBuiltinCatalog();
   // 本次运行内的手选思考档：纯内存 ref，不落盘（见 SessionEngine.pickedThinkingRef 注释）
@@ -504,13 +510,13 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
     (id: string): Omit<SubmitAgentInput, "sessionId" | "text"> | null => {
       const intent = intentRef.current;
       if (intent.model === null) {
-        setError("Add a provider with at least one model first");
+        setError(messagesRef.current.session.noProvider);
         return null;
       }
       const meta = sessionsRef.current.find((entry) => entry.id === id) ?? null;
       const cwdTarget = meta?.cwd ?? intent.cwd ?? intent.defaultCwd;
       if (cwdTarget === "") {
-        setError("Choose a workspace folder first");
+        setError(messagesRef.current.session.noWorkspaceFolder);
         return null;
       }
       /**
@@ -890,6 +896,7 @@ export function useChatSessionEngine(providers: ProviderDto[]): SessionEngine {
 
   return {
     catalog,
+    messagesRef,
     pickedThinkingRef,
     states,
     statesRef,
@@ -1103,7 +1110,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       resume: { piSessionFile: string } | null,
     ): Promise<void> => {
       if (model === null) {
-        engine.setError("Add a provider with at least one model first");
+        engine.setError(engine.messagesRef.current.session.noProvider);
         return;
       }
       // 无论新建还是从盘上重开：发出去的那一刻起它就是「本槽的活会话」——排队 /
@@ -1166,11 +1173,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const active =
         sessionId ?? (opened !== null && opened.piSessionFile !== null ? opened.id : null);
       if (active === null) {
-        engine.setError("No running task to compact");
+        engine.setError(engine.messagesRef.current.session.noRunningToCompact);
         return;
       }
       if (model === null) {
-        engine.setError("Add a provider with at least one model first");
+        engine.setError(engine.messagesRef.current.session.noProvider);
         return;
       }
       // 压缩轮开起来的那一刻起它也是「本槽的活会话」——压缩期间按 stop 才能找到它
@@ -1206,14 +1213,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       return;
     }
     try {
-      if (model === null) throw new Error("Add a provider with at least one model first");
+      if (model === null) throw new Error(engine.messagesRef.current.session.noProvider);
       // 已有会话的 cwd / 归属 / 本子以 meta 真值为准（会话固定——用户切了工作区
       // 再对旧会话发消息，工具目录不能跟着变）；新会话用本槽当前选择。
       const meta = id !== null ? engine.sessions.find((entry) => entry.id === id) ?? null : null;
       const resume = meta?.piSessionFile != null ? { piSessionFile: meta.piSessionFile } : null;
       // 没选就落兜底——输入卡上写着「Home」，不是一个用户看不见的默认
       const target = meta?.cwd ?? cwd ?? engine.defaultCwd;
-      if (target === "") throw new Error("Choose a workspace folder first");
+      if (target === "") throw new Error(engine.messagesRef.current.session.noWorkspaceFolder);
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
       if (id === null) id = crypto.randomUUID();
       writeDraft(draftKey, "");
@@ -1310,7 +1317,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const startCarryoverTask = useCallback(
     (item: Carryover): void => {
       if (model === null) {
-        engine.setError("Add a provider with at least one model first");
+        engine.setError(engine.messagesRef.current.session.noProvider);
         return;
       }
       const source = engine.sessions.find((meta) => meta.id === item.sourceSessionId) ?? null;
@@ -1321,7 +1328,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const seed = buildCarryoverSeed(item, sourceTitle);
       const target = source?.cwd ?? cwd ?? engine.defaultCwd;
       if (target === "") {
-        engine.setError("Choose a workspace folder first");
+        engine.setError(engine.messagesRef.current.session.noWorkspaceFolder);
         return;
       }
       const workspace = source?.workspaceId ?? workspaceId ?? null;
@@ -1566,7 +1573,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 压缩要有可续的会话
     const active = sessionId ?? (opened !== null && opened.piSessionFile !== null ? opened.id : null);
     if (active === null) {
-      engine.setError("没有正在运行的任务可压缩");
+      engine.setError(engine.messagesRef.current.session.noRunningToCompact);
       return;
     }
     const turn = engine.buildTurn(active);
@@ -1734,7 +1741,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (closingScan === null) return;
     const timer = window.setTimeout(() => {
       setCompletionSession(closingScan.sessionId, "done");
-      setScanNotice("The leftover scan didn't finish in time — marked done without a checklist.");
+      setScanNotice(engine.messagesRef.current.session.scanTimeout);
       setScanFailed(closingScan.sessionId);
       setClosingScan(null);
     }, CLOSING_SCAN_TIMEOUT_MS);
@@ -1761,13 +1768,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // **读不懂不等于没事**：会话照标完成（收尾的意愿已经表达），但提示里带上
       // 重试——扫描消息就在对话里，模型回了什么用户看得见，重发一条就行。
       engine.setCompletionSession(closingScan.sessionId, "done");
-      setScanNotice("Couldn't read the scan result — marked done without a checklist.");
+      setScanNotice(engine.messagesRef.current.session.scanUnreadable);
       setScanFailed(closingScan.sessionId);
       return;
     }
     if (drafts.length === 0) {
       engine.setCompletionSession(closingScan.sessionId, "done");
-      setScanNotice("The leftover scan found nothing — marked done.");
+      setScanNotice(engine.messagesRef.current.session.scanNothing);
       return;
     }
     setScanResult({ sessionId: closingScan.sessionId, drafts });
@@ -1823,20 +1830,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const current = engine.statesRef.current.get(id);
     if (current === undefined || current.phase !== "idle") return;
     if (current.queued.length > 0) {
-      engine.setError("There are queued messages in this task — send or withdraw them before wrapping up.");
+      engine.setError(engine.messagesRef.current.session.queuedBeforeWrapUp);
       return;
     }
     const meta = engine.sessions.find((item) => item.id === id) ?? opened;
     // 只读 / 空对话：没有可扫的前文，扫描没有意义，直接纯标记
     if (meta === null || meta.piSessionFile === null) {
       engine.setCompletionSession(id, "done");
-      setScanNotice("This task cannot be scanned (no agent session) — marked done directly.");
+      setScanNotice(engine.messagesRef.current.session.noAgentSession);
       return;
     }
     const baseline = selectTranscript(current.transcript).length;
     if (baseline === 0) {
       engine.setCompletionSession(id, "done");
-      setScanNotice("Nothing was ever said in this task — marked done directly.");
+      setScanNotice(engine.messagesRef.current.session.nothingSaid);
       return;
     }
     const turn = engine.buildTurn(id);
@@ -1881,7 +1888,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setScanResult(null);
       if (picked.length === 0) {
         engine.setCompletionSession(id, "done");
-        setScanNotice("Marked done — no carryover items were kept.");
+        setScanNotice(engine.messagesRef.current.session.doneNoCarryovers);
         return;
       }
       const items = selectTranscript(
@@ -1898,7 +1905,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           engine.setCompletionSession(id, "done_with_todos");
           engine.refreshCarryovers();
           setScanNotice(
-            `Marked done with ${drafts.length} carryover item${drafts.length === 1 ? "" : "s"}.`,
+            engine.messagesRef.current.session.doneWithCarryovers(drafts.length),
           );
         })
         .catch((cause: unknown) => {
@@ -1915,7 +1922,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const id = scanResult.sessionId;
     setScanResult(null);
     engine.setCompletionSession(id, "done");
-    setScanNotice("Marked done — the checklist was discarded.");
+    setScanNotice(engine.messagesRef.current.session.checklistDiscarded);
   }, [scanResult, engine]);
 
   // selectTranscript 每次调用都造新数组（pi 的实现如此）——在这里按 entry 引用
@@ -2001,11 +2008,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
 }
 
 /** 主槽：侧栏与中间的聊天面用的那一份。返回引擎供抽屉槽共用。 */
-export function useChatSession(providers: ProviderDto[]): {
+export function useChatSession(
+  providers: ProviderDto[],
+  t: Messages,
+): {
   session: ChatSession;
   engine: SessionEngine;
 } {
-  const engine = useChatSessionEngine(providers);
+  const engine = useChatSessionEngine(providers, t);
   const session = useSessionView(engine, "main");
   return { session, engine };
 }

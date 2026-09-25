@@ -11,6 +11,7 @@ import type { AgentStats } from "../../../../shared/agent-ipc.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import { messageSpeed } from "../../../../shared/message-speed.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /** 用量环的一帧：`fill` 是 0–1 的弧长，null = 只画底环 */
 export interface ContextRing {
@@ -31,17 +32,17 @@ export interface ContextRing {
  *
  * 配色阈值 70 / 90 沿用 pi TUI footer 的惯例（`>70% warning`、`>90% danger`）。
  */
-export function contextRing(stats: AgentStats | null): ContextRing {
+export function contextRing(stats: AgentStats | null, t: Messages): ContextRing {
   const usage = stats?.contextUsage ?? null;
   if (usage === null || usage.tokens === null || usage.contextWindow <= 0) {
-    return { fill: null, tone: "neutral", label: "Context usage · unknown until next reply" };
+    return { fill: null, tone: "neutral", label: t.stats.contextUnknown };
   }
   const ratio = Math.min(1, Math.max(0, usage.tokens / usage.contextWindow));
   const percent = usage.percent ?? Math.round(ratio * 100);
   return {
     fill: ratio,
     tone: percent > 90 ? "danger" : percent > 70 ? "warning" : "neutral",
-    label: `Context ${formatTokens(usage.tokens)} / ${formatTokens(usage.contextWindow)} · ${Math.round(percent)}%`,
+    label: t.stats.contextRing(formatTokens(usage.tokens), formatTokens(usage.contextWindow), Math.round(percent)),
   };
 }
 
@@ -67,28 +68,32 @@ export interface UsageRow {
  * 不是删掉而是条件显示：按量计费的 provider 上它仍然是最该被看见的一行。
  * 四位小数——展开看的人要的正是底栏那几位被舍入掉的。
  */
-export function usageBreakdown(stats: AgentStats | null, billing: "metered" | "plan" = "metered"): UsageRow[] {
+export function usageBreakdown(
+  stats: AgentStats | null,
+  t: Messages,
+  billing: "metered" | "plan" = "metered",
+): UsageRow[] {
   if (stats === null) return [];
   const rows: UsageRow[] = [
-    { label: "Input", value: formatTokens(stats.tokens.input) },
-    { label: "Output", value: formatTokens(stats.tokens.output) },
-    { label: "Cache read", value: formatTokens(stats.tokens.cacheRead) },
-    { label: "Cache write", value: formatTokens(stats.tokens.cacheWrite) },
-    { label: "Total tokens", value: formatTokens(stats.tokens.total) },
+    { label: t.stats.input, value: formatTokens(stats.tokens.input) },
+    { label: t.stats.output, value: formatTokens(stats.tokens.output) },
+    { label: t.stats.cacheRead, value: formatTokens(stats.tokens.cacheRead) },
+    { label: t.stats.cacheWrite, value: formatTokens(stats.tokens.cacheWrite) },
+    { label: t.stats.totalTokens, value: formatTokens(stats.tokens.total) },
   ];
   const usage = stats.contextUsage;
   if (usage !== null) {
     rows.push({
-      label: "Context",
+      label: t.stats.context,
       value:
         usage.tokens === null
-          ? "unknown until next reply"
+          ? t.stats.unknownUntilReply
           : `${formatTokens(usage.tokens)} / ${formatTokens(usage.contextWindow)}` +
             (usage.percent === null ? "" : ` · ${Math.round(usage.percent)}%`),
     });
   }
   if (billing !== "plan" && stats.cost > 0) {
-    rows.push({ label: "Cost", value: `$${stats.cost.toFixed(4)}` });
+    rows.push({ label: t.stats.cost, value: `$${stats.cost.toFixed(4)}` });
   }
   return rows;
 }
@@ -98,8 +103,8 @@ export function usageBreakdown(stats: AgentStats | null, billing: "metered" | "p
 // 落盘、重开即回（归约器实测原样保留）。这里只有两样展示支援。
 
 /** `42 tok/s`——整数，tok/s 是 agent 工具界的通用写法，不翻译 */
-export function formatSpeed(speed: number): string {
-  return `${Math.round(speed)} tok/s`;
+export function formatSpeed(speed: number, t: Messages): string {
+  return t.stats.speed(Math.round(speed));
 }
 
 /** messageId → 生成起点（首个 streaming 帧的 adapter 时间戳）。Responding 行的估算分母。 */

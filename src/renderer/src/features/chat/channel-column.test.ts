@@ -10,6 +10,7 @@ import {
 } from "./channel-column.ts";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 channel-column.ts 本身的纪律）
 import type { ChannelMessage, ChannelSummary } from "../../../../shared/channel.ts";
+import { en } from "../../messages-en.ts";
 
 function summary(overrides: Partial<ChannelSummary> = {}): ChannelSummary {
   return {
@@ -148,45 +149,45 @@ function message(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
 
 describe("channelWhoLabel", () => {
   it("task / progress 文案原样、语气中性", () => {
-    deepStrictEqual(channelWhoLabel(message({ kind: "task" })), { text: "task", tone: "neutral", you: false });
+    deepStrictEqual(channelWhoLabel(message({ kind: "task" }), en), { text: "task", tone: "neutral", you: false });
     deepStrictEqual(
-      channelWhoLabel(message({ from: "child", kind: "progress" })),
+      channelWhoLabel(message({ from: "child", kind: "progress" }), en),
       { text: "progress", tone: "neutral", you: false },
     );
   });
 
   it("question 暖黄语气", () => {
     deepStrictEqual(
-      channelWhoLabel(message({ from: "child", kind: "question" })),
+      channelWhoLabel(message({ from: "child", kind: "question" }), en),
       { text: "question", tone: "question", you: false },
     );
   });
 
   it("reply · steer 强调色；reply · turn end 中性——只有 steer 是需要用户特别留意的那一档", () => {
     deepStrictEqual(
-      channelWhoLabel(message({ kind: "reply", delivery: "steer" })),
+      channelWhoLabel(message({ kind: "reply", delivery: "steer" }), en),
       { text: "reply · steer", tone: "reply", you: false },
     );
     deepStrictEqual(
-      channelWhoLabel(message({ kind: "reply", delivery: "followUp" })),
+      channelWhoLabel(message({ kind: "reply", delivery: "followUp" }), en),
       { text: "reply · turn end", tone: "neutral", you: false },
     );
   });
 
   it("done 绿、failed 红", () => {
     deepStrictEqual(
-      channelWhoLabel(message({ from: "child", kind: "done" })),
+      channelWhoLabel(message({ from: "child", kind: "done" }), en),
       { text: "done", tone: "done", you: false },
     );
     deepStrictEqual(
-      channelWhoLabel(message({ from: "child", kind: "failed" })),
+      channelWhoLabel(message({ from: "child", kind: "failed" }), en),
       { text: "failed", tone: "failed", you: false },
     );
   });
 
   it("author === user 时 you 为 true——调用方据此追加「· you」（primary 色单独渲染）", () => {
-    strictEqual(channelWhoLabel(message({ kind: "reply", author: "user" })).you, true);
-    strictEqual(channelWhoLabel(message({ kind: "task", author: "model" })).you, false);
+    strictEqual(channelWhoLabel(message({ kind: "reply", author: "user" }), en).you, true);
+    strictEqual(channelWhoLabel(message({ kind: "task", author: "model" }), en).you, false);
   });
 });
 

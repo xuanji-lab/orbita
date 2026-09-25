@@ -1,4 +1,5 @@
 import { Icon, type IconName } from "./Icon";
+import { useT } from "../locale.ts";
 
 /**
  * 首页的最近会话卡（设计系统 components/surfaces/SessionCard 的实现）：
@@ -21,6 +22,7 @@ export function SessionCard(props: {
   onClick?: () => void;
   style?: React.CSSProperties;
 }) {
+  const t = useT();
   const items = props.items ?? [];
   const slots = props.slots ?? 3;
   return (
@@ -66,7 +68,7 @@ export function SessionCard(props: {
             </span>
             {props.running === true && (
               <span
-                title="Running"
+                title={t.common.running}
                 className="orbita-breath"
                 style={{
                   flex: "0 0 auto",

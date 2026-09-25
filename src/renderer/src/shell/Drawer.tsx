@@ -11,6 +11,8 @@ import {
   replaceNewTab,
   type DockedTab,
 } from "./drawer-state";
+import { useT } from "../locale.ts";
+import type { Messages } from "../messages-en.ts";
 
 export type { DockedTab };
 
@@ -34,6 +36,7 @@ export function Drawer(props: {
   docked: DockedTab[];
   onDockedChange: (docked: DockedTab[]) => void;
 }) {
+  const t = useT();
   const [activeTab, setActiveTab] = useState<DockedTab | null>(props.docked[0] ?? null);
   const [picking, setPicking] = useState(false);
 
@@ -97,7 +100,7 @@ export function Drawer(props: {
                 const meta = tab === NEW_TASK_TAB ? null : findMeta(props.engine, tab);
                 const title =
                   tab === NEW_TASK_TAB
-                    ? "新任务"
+                    ? t.common.newTask
                     : (meta?.title ?? tab.slice(0, 6) + "…");
                 return (
                   <button
@@ -109,7 +112,7 @@ export function Drawer(props: {
                     <span className="drawer-tab-name">{title}</span>
                     <span
                       className="drawer-tab-close"
-                      title="关闭标签"
+                      title={t.drawer.closeTab}
                       onClick={(click) => {
                         click.stopPropagation();
                         close(tab);
@@ -121,7 +124,7 @@ export function Drawer(props: {
                 );
               })}
             </div>
-            <button className="drawer-tab-add" title="新开标签" onClick={() => setPicking(true)}>
+            <button className="drawer-tab-add" title={t.drawer.newTab} onClick={() => setPicking(true)}>
               <Icon name="plus" size={14} />
             </button>
           </div>
@@ -167,6 +170,7 @@ function Picker(props: {
   onNew: () => void;
   onBack: (() => void) | null;
 }) {
+  const t = useT();
   // 子会话不进选择器（子会话 PR4c 2.3）：它唯一的入口是母会话的右栏 Sub-sessions
   // 面板，并排打开挑的是「另一条 task」，不该在这里意外把某条子会话拽出来单独开
   const candidates = rootSessions(props.sessions).filter((meta) => meta.id !== props.excludeId);
@@ -175,40 +179,40 @@ function Picker(props: {
     <div className="drawer-picker">
       <div className="drawer-picker-head">
         {onBack !== null && (
-          <button className="drawer-picker-back" title="返回" onClick={onBack}>
+          <button className="drawer-picker-back" title={t.common.back} onClick={onBack}>
             <Icon name="chevron-down" size={14} style={{ transform: "rotate(90deg)" }} />
           </button>
         )}
-        并排打开哪个 task？
+        {t.drawer.pickTitle}
       </div>
       <div className="drawer-picker-sub">
-        辅助对话就是一个普通 task：并排显示、侧栏可见、随时切回。中间正开着的那条不列在这里。
+        {t.drawer.pickSub}
       </div>
       <button className="drawer-pickrow new" onClick={props.onNew}>
         <Icon name="plus" size={15} />
-        新建 task
+        {t.common.newTask}
       </button>
       <div className="drawer-picksep" />
       {candidates.map((meta) => (
         <button key={meta.id} className="drawer-pickrow" onClick={() => props.onPick(meta.id)}>
           <Icon name="message-square" size={15} />
           <span className="drawer-pickrow-name">{meta.title}</span>
-          <span className="drawer-pickrow-meta">{formatWhen(meta.updatedAt)}</span>
+          <span className="drawer-pickrow-meta">{formatWhen(meta.updatedAt, t)}</span>
         </button>
       ))}
       {candidates.length === 0 && (
-        <div className="drawer-picker-sub">还没有别的 task——新建一条吧。</div>
+        <div className="drawer-picker-sub">{t.drawer.noOther}</div>
       )}
     </div>
   );
 }
 
 /** 相对时间的最简口径：侧栏的同款信息，不引入第二个日期库 */
-function formatWhen(updatedAt: number): string {
+function formatWhen(updatedAt: number, t: Messages): string {
   const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60000));
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes}分钟`;
+  if (minutes < 1) return t.time.justNow;
+  if (minutes < 60) return t.time.minutesAgo(minutes);
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}小时`;
-  return `${Math.round(hours / 24)}天`;
+  if (hours < 24) return t.time.hoursAgo(hours);
+  return t.time.daysAgo(Math.round(hours / 24));
 }

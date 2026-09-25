@@ -17,8 +17,8 @@ import type {
   ImportSourceId,
   ImportSourceProbe,
 } from "@shared/import";
+import type { Messages } from "../../messages-en.ts";
 import {
-  SOURCE_LABEL,
   formatBytes,
   formatMoment,
   type GroupedSessions,
@@ -129,21 +129,13 @@ export function sourceStatus(
 }
 
 /** 「28 sessions · 4 skills · 1 MCP」：是 0 的那项不写；全是 0 返回空串（行尾写 Nothing new）。 */
-export function countLine(counts: SourceCounts): string {
+export function countLine(counts: SourceCounts, t: Messages): string {
   return joined([
-    counted(counts.sessions, "session", "sessions"),
-    counted(counts.skills, "skill", "skills"),
-    counted(counts.mcp, "MCP", "MCP"),
+    counted(counts.sessions, t.migration.sessions),
+    counted(counts.skills, t.migration.skills),
+    counted(counts.mcp, t.migration.mcpShort),
   ]);
 }
-
-/**
- * 路径清单的隐私声明。事实要全：扫描除了读清单里的路径，还会 stat / realpath 每条会话
- * 记录的项目文件夹——判断它是否还在、是否与 orbita 已有工作区同址，决定这条会话的去向；
- * 只看在不在，不读里面的东西。
- */
-export const PATHS_NOTE =
-  "Scan reads only these paths. It also checks whether each session's project folder still exists, to decide where the session goes.";
 
 // ---------------------------------------------------------------------------
 // Sessions：行内徽标与事实条
@@ -156,41 +148,34 @@ export interface ChangeBadge {
   tip: string;
 }
 
-export function changeBadge(item: ImportPlanItem): ChangeBadge | null {
-  const source = SOURCE_LABEL[item.source];
+export function changeBadge(item: ImportPlanItem, t: Messages): ChangeBadge | null {
+  const source = t.migration.sources[item.source];
   if (item.change === "updated") {
     return {
       kind: "updated",
       text: `+${item.newMessages}`,
-      tip: `${item.newMessages} new ${item.newMessages === 1 ? "message" : "messages"} in ${source} since the last import · they go into the same session here`,
+      tip: t.migration.updatedBadgeTip(item.newMessages, source),
     };
   }
   if (item.change === "diverged") {
-    return {
-      kind: "diverged",
-      text: `+${item.newMessages} · copy`,
-      tip: `Also continued in orbita · the ${source} side comes in as a separate copy next to it · not ticked by default`,
-    };
+    return { kind: "diverged", text: t.migration.divergedBadge(item.newMessages), tip: t.migration.divergedTip(source) };
   }
   if (item.change === "deleted") {
-    return { kind: "deleted", text: "Deleted here", tip: "You deleted it in orbita · not ticked by default" };
+    return { kind: "deleted", text: t.migration.deletedBadge, tip: t.migration.deletedTip };
   }
   return null;
 }
 
 /** 行尾模型格的悬停：原模型没配时说清会用哪个打开、原模型记在哪。 */
-export function modelTip(item: ImportPlanItem): string {
-  if (item.modelMatched) return "Continues on this model";
-  return `${item.importedModel ?? "The original model"} isn't set up here · opens on ${item.modelId} and keeps a record of the original`;
+export function modelTip(item: ImportPlanItem, t: Messages): string {
+  if (item.modelMatched) return t.migration.modelContinues;
+  return t.migration.modelFallbackTip(item.importedModel ?? t.migration.originalModel, item.modelId);
 }
 
 /** 一块里有不止一个来源时，单条会话行才写来源名（只有一个来源时组名旁已经写了）。 */
 export function mixedSources(items: readonly ImportPlanItem[]): boolean {
   return new Set(items.map((item) => item.source)).size > 1;
 }
-
-/** 已导入、又有新消息那一块的去向格悬停（它没有去向菜单：落点由既有的那条会话定）。 */
-export const SAME_SESSION_TIP = "New messages go into the same session here · a copy lands next to the original";
 
 /** 转换不了的跳过项（已导入的不算：它们是「不用导」，不是「导不了」）。 */
 export function unconvertibleSkips(report: ImportScanReport): ImportSkipItem[] {
@@ -219,41 +204,43 @@ export function sessionFacts(
   grouped: GroupedSessions,
   fallback: ImportSummary["fallback"] | null,
   now: number,
+  t: Messages,
 ): SessionFact[] {
   const facts: SessionFact[] = [];
   if (grouped.hidden > 0) {
     facts.push({
       kind: "hidden",
       count: grouped.hidden,
-      label: "hidden",
-      tip: "Hidden by the filters · only listed sessions are imported",
+      label: t.migration.factHidden,
+      tip: t.migration.factHiddenTip,
     });
   }
   if (grouped.leftOut > 0) {
     facts.push({
       kind: "greeting",
       count: grouped.leftOut,
-      label: "only said hi",
-      tip: 'Only a greeting or a test like "hi" or "test", never continued · left out of this import',
+      label: t.migration.factGreeting,
+      tip: t.migration.factGreetingTip,
     });
   }
   if (fallback !== null && fallback.count > 0) {
     const models = fallback.models.slice(0, FALLBACK_MODELS_SHOWN);
-    const named =
-      models.length === 0 ? "" : ` (${models.join(", ")}${fallback.models.length > models.length ? ", …" : ""})`;
+    const shown = fallback.models.length > models.length ? [...models, "…"] : models;
+    const named = models.length === 0 ? "" : t.migration.parenthesized(shown.join(t.common.listSeparator));
+    const target = fallback.fallbackModel ?? t.migration.defaultModel;
     facts.push({
       kind: "fallback",
       count: fallback.count,
-      label: `open on ${fallback.fallbackModel ?? "the default model"}`,
-      tip: `${fallback.count} of the ticked sessions ran models you haven't set up here${named} · they open on ${fallback.fallbackModel ?? "the default model"} and keep a record of the original`,
+      label: t.migration.factFallback(target),
+      tip: t.migration.factFallbackTip(fallback.count, named, target),
     });
   }
   if (report.orphanedSubSessions > 0) {
     facts.push({
       kind: "orphaned",
       count: report.orphanedSubSessions,
-      label: "listed on their own",
-      tip: "Sub-sessions whose parent can't be imported · they come in as sessions of their own",
+      label: t.migration.factOrphaned,
+      tip: t.migration.factOrphanedTip,
     });
   }
   const already = report.skipped.length - unconvertibleSkips(report).length;
@@ -261,8 +248,10 @@ export function sessionFacts(
     facts.push({
       kind: "already",
       count: already,
-      label: "already imported",
-      tip: `Already imported and unchanged since · not listed${report.lastImportAt === null ? "" : ` · last import ${formatMoment(report.lastImportAt, now)}`}`,
+      label: t.migration.factAlready,
+      tip:
+        t.migration.factAlreadyTip +
+        (report.lastImportAt === null ? "" : t.migration.lastImport(formatMoment(report.lastImportAt, now))),
     });
   }
   const cannot = unconvertibleSkips(report).length + report.withoutPiSession;
@@ -270,8 +259,8 @@ export function sessionFacts(
     facts.push({
       kind: "cannot",
       count: cannot,
-      label: "can't import",
-      tip: "An older format with no transcript, or a file that's missing or unreadable",
+      label: t.migration.factCannot,
+      tip: t.migration.factCannotTip,
     });
   }
   return facts;
@@ -281,9 +270,9 @@ export function sessionFacts(
 // 底栏
 // ---------------------------------------------------------------------------
 
-/** 「3 sessions」「1 skill」；数量为 0 返回 null，给 joined 滤掉 */
-export function counted(count: number, one: string, many: string): string | null {
-  return count > 0 ? `${count} ${count === 1 ? one : many}` : null;
+/** 「3 sessions」「1 skill」；数量为 0 返回 null，给 joined 滤掉。单复数 / 量词在文案表里 */
+export function counted(count: number, format: (count: number) => string): string | null {
+  return count > 0 ? format(count) : null;
 }
 
 export function joined(parts: readonly (string | null)[], separator = " · "): string {
@@ -291,23 +280,20 @@ export function joined(parts: readonly (string | null)[], separator = " · "): s
 }
 
 /** 底栏主句：「Import 3 sessions · 5 skills · update 1 session」；只有追加时「Update 1 session」。 */
-export function headline(sessions: number, updates: number, skills: number, mcp: number): string {
-  const imports = joined([
-    counted(sessions, "session", "sessions"),
-    counted(skills, "skill", "skills"),
-    counted(mcp, "MCP server", "MCP servers"),
-  ]);
-  const update = counted(updates, "session", "sessions");
-  if (imports === "") return update === null ? "Nothing ticked" : `Update ${update}`;
-  return update === null ? `Import ${imports}` : `Import ${imports} · update ${update}`;
+export function headline(sessions: number, updates: number, skills: number, mcp: number, t: Messages): string {
+  const m = t.migration;
+  const imports = joined([counted(sessions, m.sessions), counted(skills, m.skills), counted(mcp, m.mcpServers)]);
+  const update = counted(updates, m.sessions);
+  if (imports === "") return update === null ? m.nothingTicked : m.updateOnly(update);
+  return update === null ? m.importOnly(imports) : m.importAndUpdate(imports, update);
 }
 
 /** 执行中的主句：「Importing 3 sessions, 5 skills…」 */
-export function runningHeadline(sessions: number, skills: number, mcp: number): string {
-  return `Importing ${joined(
-    [counted(sessions, "session", "sessions"), counted(skills, "skill", "skills"), counted(mcp, "MCP server", "MCP servers")],
-    ", ",
-  )}…`;
+export function runningHeadline(sessions: number, skills: number, mcp: number, t: Messages): string {
+  const m = t.migration;
+  return m.importingList(
+    joined([counted(sessions, m.sessions), counted(skills, m.skills), counted(mcp, m.mcpServers)], t.common.listSeparator),
+  );
 }
 
 export type FootFactKind = "sub" | "workspaces" | "bytes" | "skills" | "mcp";
@@ -320,52 +306,48 @@ export interface FootFact {
 }
 
 /** 导入前的副行：跟着来的子会话、要新建的工作区、要复制的体量、skill 的方式、MCP 停用。 */
-export function footFacts(summary: ImportSummary, skills: number, skillMode: ImportSkillMode, mcp: number): FootFact[] {
+export function footFacts(
+  summary: ImportSummary,
+  skills: number,
+  skillMode: ImportSkillMode,
+  mcp: number,
+  t: Messages,
+): FootFact[] {
+  const m = t.migration;
   const facts: FootFact[] = [];
   if (summary.subSessions > 0) {
     facts.push({
       kind: "sub",
       text: `${summary.subSessions}`,
-      tip:
-        summary.subSessions === 1
-          ? "1 sub-session comes with its parent"
-          : `${summary.subSessions} sub-sessions come with their parents`,
+      tip: m.subSessionsTip(summary.subSessions),
     });
   }
   if (summary.newWorkspaces > 0) {
     facts.push({
       kind: "workspaces",
-      text: counted(summary.newWorkspaces, "new workspace", "new workspaces") ?? "",
-      tip: "Folders that aren't a workspace here yet become new workspaces",
+      text: counted(summary.newWorkspaces, m.newWorkspaces) ?? "",
+      tip: m.newWorkspacesTip,
     });
   }
   if (summary.sessions + summary.updates > 0) {
     facts.push({
       kind: "bytes",
       text: formatBytes(summary.bytes),
-      tip: "About this much is copied into orbita · the source files stay untouched",
+      tip: m.bytesTip,
     });
   }
   if (skills > 0) {
     facts.push(
       skillMode === "copy"
-        ? {
-            kind: "skills",
-            text: "skills copied",
-            tip: "Copied into orbita · they keep working if the other app is removed · later edits there don't carry over",
-          }
-        : {
-            kind: "skills",
-            text: "skills linked",
-            tip: "Linked to the other app's folder · edits there show up here · removing the app breaks them",
-          },
+        ? { kind: "skills", text: m.skillsCopied, tip: m.skillsCopiedTip }
+        : { kind: "skills", text: m.skillsLinked, tip: m.skillsLinkedTip },
     );
   }
   if (mcp > 0) {
     facts.push({
       kind: "mcp",
-      text: "MCP off",
-      tip: "MCP servers are added switched off · turn each on in MCP servers when you need it",
+      text: m.mcpOff,
+      tip: m.mcpOffTip,
     });
   }
   return facts;
@@ -375,20 +357,23 @@ export function footFacts(summary: ImportSummary, skills: number, skillMode: Imp
  * 完成态主句：「Imported 34 sessions · 5 skills · 1 MCP server (off) · updated 1 session · 1 new workspace」。
  * 只有追加时「Updated 1 session」；什么都没落进来（全失败）时「Nothing imported」。
  */
-export function doneHeadline(result: ImportRunReport): string {
+export function doneHeadline(result: ImportRunReport, t: Messages): string {
+  const m = t.migration;
   const imports = joined([
-    counted(result.imported, "session", "sessions"),
-    counted(result.skillsImported, "skill", "skills"),
-    result.mcpImported > 0 ? `${counted(result.mcpImported, "MCP server", "MCP servers") ?? ""} (off)` : null,
+    counted(result.imported, m.sessions),
+    counted(result.skillsImported, m.skills),
+    counted(result.mcpImported, m.mcpImportedOff),
   ]);
-  const update = counted(result.updated, "session", "sessions");
+  const update = counted(result.updated, m.sessions);
   const main =
     imports === ""
       ? update === null
-        ? "Nothing imported"
-        : `Updated ${update}`
-      : `Imported ${imports}${update === null ? "" : ` · updated ${update}`}`;
-  return joined([main, counted(result.createdWorkspaces.length, "new workspace", "new workspaces")]);
+        ? m.nothingImported
+        : m.updatedOnly(update)
+      : update === null
+        ? m.importedOnly(imports)
+        : m.importedAndUpdated(imports, update);
+  return joined([main, counted(result.createdWorkspaces.length, m.newWorkspaces)]);
 }
 
 export type DoneFactKind = "sidebar" | "failed";
@@ -403,28 +388,25 @@ export interface DoneFact {
  * 完成态副行：有会话落进来就指一下在哪（In the sidebar now）；失败的会话 / skill / MCP
  * 各一项，悬停写第一条原因与怎么办。
  */
-export function doneFacts(result: ImportRunReport): DoneFact[] {
+export function doneFacts(result: ImportRunReport, t: Messages): DoneFact[] {
+  const m = t.migration;
   const facts: DoneFact[] = [];
   if (result.imported + result.updated > 0) {
-    facts.push({
-      kind: "sidebar",
-      text: "In the sidebar now",
-      tip: "Imported sessions are in the sidebar · anything still listed wasn't ticked",
-    });
+    facts.push({ kind: "sidebar", text: m.inSidebar, tip: m.inSidebarTip });
   }
   const first = result.failed[0];
   if (first !== undefined) {
     facts.push({
       kind: "failed",
-      text: `${result.failed.length} ${result.failed.length === 1 ? "session" : "sessions"} failed`,
-      tip: `${first.error ?? "Unknown error"} · import again to retry`,
+      text: m.sessionsFailed(result.failed.length),
+      tip: m.retryTip(first.error ?? m.unknownError),
     });
   }
   const skill = result.skillsFailed[0];
   if (skill !== undefined) {
     facts.push({
       kind: "failed",
-      text: `${result.skillsFailed.length} ${result.skillsFailed.length === 1 ? "skill" : "skills"} didn't come over`,
+      text: m.skillsFailed(result.skillsFailed.length),
       tip: `${skill.slug}: ${skill.error}`,
     });
   }
@@ -432,7 +414,7 @@ export function doneFacts(result: ImportRunReport): DoneFact[] {
   if (mcp !== undefined) {
     facts.push({
       kind: "failed",
-      text: `${result.mcpFailed.length} MCP ${result.mcpFailed.length === 1 ? "server" : "servers"} didn't come over`,
+      text: m.mcpFailed(result.mcpFailed.length),
       tip: `${mcp.name}: ${mcp.error}`,
     });
   }

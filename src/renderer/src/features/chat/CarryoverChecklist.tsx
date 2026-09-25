@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import type { CarryoverDraft } from "./carryover-parse.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * 收尾仪式的确认卡 —— 扫描成功后的确认面，inline 浮层挂在 composer 上方。
@@ -25,6 +26,7 @@ export function CarryoverChecklist(props: {
   onConfirm: (picked: readonly CarryoverDraft[]) => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   /** 用户新加的条目：与扫描项同待遇（可勾选、可编辑），确认时并入 picked */
   const [extraDrafts, setExtraDrafts] = useState<readonly CarryoverDraft[]>([]);
   /** 勾选态与 title 编辑都按合并列表的下标记——下标就是这份本地清单的身份 */
@@ -62,7 +64,7 @@ export function CarryoverChecklist(props: {
   return (
     <section
       role="region"
-      aria-label="Wrap up this task"
+      aria-label={t.carryover.wrapUp}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || editing !== -1) return; // 编辑中的 Esc 先归编辑框
         if (cancelArmed) props.onCancel();
@@ -80,7 +82,7 @@ export function CarryoverChecklist(props: {
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
         <Icon name="list-todo" size={16} style={{ color: "var(--color-text-secondary)" }} />
         <strong style={{ fontSize: "var(--font-size-body)", fontWeight: "var(--weight-bold)" }}>
-          Wrap up this task
+          {t.carryover.wrapUp}
         </strong>
       </div>
       <p
@@ -91,8 +93,7 @@ export function CarryoverChecklist(props: {
           color: "var(--color-text-secondary)",
         }}
       >
-        The agent scanned this task for loose ends. Uncheck what you don't want to carry over;
-        titles can be edited in place.
+        {t.carryover.intro}
       </p>
 
       <div
@@ -168,7 +169,7 @@ export function CarryoverChecklist(props: {
                     <button
                       type="button"
                       onClick={() => setEditing(index)}
-                      title="Click to edit"
+                      title={t.carryover.clickToEdit}
                       style={{
                         display: "block",
                         flex: 1,
@@ -232,8 +233,8 @@ export function CarryoverChecklist(props: {
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
         <input
           value={draft}
-          placeholder="Add your own item…"
-          aria-label="Add your own item"
+          placeholder={t.carryover.addOwnPlaceholder}
+          aria-label={t.carryover.addOwn}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -256,7 +257,7 @@ export function CarryoverChecklist(props: {
             boxShadow: "var(--focus-ring)",
           }}
         />
-        <IconButton label="Add item" size={28} onClick={addItem}>
+        <IconButton label={t.carryover.addItem} size={28} onClick={addItem}>
           <Icon name="plus" size={14} />
         </IconButton>
       </div>
@@ -279,14 +280,14 @@ export function CarryoverChecklist(props: {
                 color: "var(--color-text-primary)",
               }}
             >
-              Discard &amp; mark done
+              {t.carryover.discardAndDone}
             </button>
             <button
               type="button"
               onClick={() => setCancelArmed(false)}
               style={{ ...footerButtonStyle, color: "var(--color-text-secondary)" }}
             >
-              Keep open
+              {t.carryover.keepOpen}
             </button>
           </>
         ) : (
@@ -295,7 +296,7 @@ export function CarryoverChecklist(props: {
             onClick={() => setCancelArmed(true)}
             style={{ ...footerButtonStyle, color: "var(--color-text-secondary)" }}
           >
-            Cancel
+            {t.common.cancel}
           </button>
         )}
         <span style={{ flex: 1 }} />
@@ -309,7 +310,7 @@ export function CarryoverChecklist(props: {
             fontWeight: "var(--weight-semibold)",
           }}
         >
-          {pickedCount > 0 ? `Keep ${pickedCount} & mark done` : "Mark done"}
+          {t.carryover.keepAndDone(pickedCount)}
         </button>
       </div>
     </section>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Icon } from "./Icon";
 import { api } from "../api";
+import { useT } from "../locale.ts";
 
 /**
  * 窗口标题栏——转帧式窗口后自绘的那一条（right-drawer-X，wafo 2026-09-11 裁决）。
@@ -17,6 +18,7 @@ import { api } from "../api";
  * 不然点按钮等于拖窗口。
  */
 export function Titlebar() {
+  const t = useT();
   const [isMaximized, setIsMaximized] = useState(false);
 
   if (api.platform === "darwin") return null;
@@ -24,12 +26,12 @@ export function Titlebar() {
   return (
     <div className="titlebar window-titlebar">
       <div className="window-titlebar-actions">
-            <button className="titlebar-btn" title="最小化" onClick={() => void api.window.minimize()}>
+            <button className="titlebar-btn" title={t.titlebar.minimize} onClick={() => void api.window.minimize()}>
               <Icon name="minus" size={14} />
             </button>
             <button
               className="titlebar-btn"
-              title="最大化"
+              title={isMaximized ? t.titlebar.restore : t.titlebar.maximize}
               onClick={() => {
                 setIsMaximized((maximized) => !maximized);
                 void api.window.toggleMaximize();
@@ -37,7 +39,7 @@ export function Titlebar() {
             >
               <Icon name={isMaximized ? "copy" : "square"} size={13} />
             </button>
-            <button className="titlebar-btn close" title="关闭" onClick={() => void api.window.close()}>
+            <button className="titlebar-btn close" title={t.common.close} onClick={() => void api.window.close()}>
               <Icon name="x" size={14} />
             </button>
       </div>

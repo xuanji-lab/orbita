@@ -1,6 +1,7 @@
 import { Icon, type IconName } from "../../shell/Icon";
 import { useSettingTip } from "./InfoTip";
 import type { StepState } from "./migration-page.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * Migration 页四段与底栏共用的件：编号步骤、带悬停说明的徽标与事实、列头。
@@ -12,12 +13,13 @@ import type { StepState } from "./migration-page.ts";
 
 /** 左侧编号圆点：未轮到是描边数字，当前步实心，做完了换成绿色的勾。 */
 export function StepDot(props: { n: number; state: StepState }) {
+  const t = useT();
   return (
     <span
       className="mg-dot"
       data-state={props.state}
       role="img"
-      aria-label={props.state === "done" ? `Step ${props.n}, done` : `Step ${props.n}`}
+      aria-label={props.state === "done" ? t.migration.stepDone(props.n) : t.migration.step(props.n)}
     >
       {props.state === "done" ? <Icon name="check" size={13} strokeWidth={2.2} /> : props.n}
     </span>

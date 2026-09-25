@@ -47,6 +47,8 @@ import {
   writeLineCount,
   type RenderUnit,
 } from "./tool-results.ts";
+import { en } from "../../messages-en.ts";
+import { zh } from "../../messages-zh.ts";
 
 function toolItem(
   overrides: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCallId">,
@@ -341,36 +343,36 @@ describe("streamingThinkingKey", () => {
 
 describe("summarizeToolResult", () => {
   test("还没有结果时不显示摘要", () => {
-    assert.equal(summarizeToolResult(undefined), null);
+    assert.equal(summarizeToolResult(undefined, en), null);
   });
 
   test("状态优先用文字表达，不靠颜色", () => {
     const running = indexToolResults([
       toolItem({ toolCallId: "a", status: "running", isError: false }),
     ]).get("a");
-    assert.equal(summarizeToolResult(running), "Running");
+    assert.equal(summarizeToolResult(running, en), "Running");
 
     const failed = indexToolResults([
       toolItem({ toolCallId: "a", status: "error", isError: true }),
     ]).get("a");
-    assert.equal(summarizeToolResult(failed), "Failed");
+    assert.equal(summarizeToolResult(failed, en), "Failed");
   });
 
   test("多行数行数，单行数字符数", () => {
     const multi = indexToolResults([
       toolItem({ toolCallId: "a", content: [{ type: "text", text: "1\n2\n3" }] }),
     ]).get("a");
-    assert.equal(summarizeToolResult(multi), "3 lines");
+    assert.equal(summarizeToolResult(multi, en), "3 lines");
 
     const single = indexToolResults([
       toolItem({ toolCallId: "a", content: [{ type: "text", text: "hello" }] }),
     ]).get("a");
-    assert.equal(summarizeToolResult(single), "5 chars");
+    assert.equal(summarizeToolResult(single, en), "5 chars");
   });
 
   test("空产出说无输出，而不是显示成 0 字符", () => {
     const empty = indexToolResults([toolItem({ toolCallId: "a", content: [] })]).get("a");
-    assert.equal(summarizeToolResult(empty), "No output");
+    assert.equal(summarizeToolResult(empty, en), "No output");
   });
 });
 
@@ -385,7 +387,7 @@ describe("toolResultText", () => {
         ],
       }),
     ]).get("a");
-    assert.equal(item === undefined ? "" : toolResultText(item), "line 1\nline 2");
+    assert.equal(item === undefined ? "" : toolResultText(item, en), "line 1\nline 2");
   });
 
   test("answerText —— 复制按钮拷的正文：只取 text 块，thinking 与 toolCall 不进", () => {
@@ -447,7 +449,7 @@ describe("toolResultText", () => {
         content: [{ type: "image", data: "base64…", mimeType: "image/png" }],
       }),
     ]).get("a");
-    assert.equal(item === undefined ? "" : toolResultText(item), "[image image/png]");
+    assert.equal(item === undefined ? "" : toolResultText(item, en), "[image image/png]");
   });
 });
 
@@ -486,63 +488,63 @@ describe("toolCallSummary", () => {
 
 describe("formatThinkingDuration", () => {
   test("不足 1 秒按 1 秒，秒数取整", () => {
-    assert.equal(formatThinkingDuration(0), "1s");
-    assert.equal(formatThinkingDuration(300), "1s");
-    assert.equal(formatThinkingDuration(12_400), "12s");
+    assert.equal(formatThinkingDuration(0, en), "1s");
+    assert.equal(formatThinkingDuration(300, en), "1s");
+    assert.equal(formatThinkingDuration(12_400, en), "12s");
   });
 
   test("满一分钟「1m 05s」，秒两位补零", () => {
-    assert.equal(formatThinkingDuration(60_000), "1m 00s");
-    assert.equal(formatThinkingDuration(61_000), "1m 01s");
-    assert.equal(formatThinkingDuration(125_000), "2m 05s");
+    assert.equal(formatThinkingDuration(60_000, en), "1m 00s");
+    assert.equal(formatThinkingDuration(61_000, en), "1m 01s");
+    assert.equal(formatThinkingDuration(125_000, en), "2m 05s");
   });
 });
 
 describe("thinkingDurationText", () => {
   test("active 起表但不显示；落定冻结时长，之后不再变", () => {
-    assert.equal(thinkingDurationText("k1", true, 1_000), null);
-    assert.equal(thinkingDurationText("k1", false, 6_400), "5s");
+    assert.equal(thinkingDurationText("k1", true, en, 1_000), null);
+    assert.equal(thinkingDurationText("k1", false, en, 6_400), "5s");
     // 再过多久都还是落定那一刻的值
-    assert.equal(thinkingDurationText("k1", false, 60_000), "5s");
+    assert.equal(thinkingDurationText("k1", false, en, 60_000), "5s");
   });
 
   test("没赶上开始的旧会话（没见过的 key 直接落定）——量不到，不显示", () => {
-    assert.equal(thinkingDurationText("k-unknown", false, 5_000), null);
+    assert.equal(thinkingDurationText("k-unknown", false, en, 5_000), null);
   });
 });
 
 describe("recordToolFrame / toolDurationText", () => {
   test("running 帧记起点、终态帧记终点；增量帧重复到达不覆盖", () => {
-    assert.equal(toolDurationText("t1"), null);
+    assert.equal(toolDurationText("t1", en), null);
     recordToolFrame(toolItem({ toolCallId: "t1", status: "running", timestamp: 1_000 }));
     // 后到的 running 帧不改起点（adapter 的增量 item_updated 也是 running 态）
     recordToolFrame(toolItem({ toolCallId: "t1", status: "running", timestamp: 9_000 }));
-    assert.equal(toolDurationText("t1"), null, "进行中不显示");
+    assert.equal(toolDurationText("t1", en), null, "进行中不显示");
     recordToolFrame(toolItem({ toolCallId: "t1", timestamp: 13_300 }));
-    assert.equal(toolDurationText("t1"), "12.3s");
+    assert.equal(toolDurationText("t1", en), "12.3s");
     // 重复终态帧不改终点
     recordToolFrame(toolItem({ toolCallId: "t1", timestamp: 99_000 }));
-    assert.equal(toolDurationText("t1"), "12.3s");
+    assert.equal(toolDurationText("t1", en), "12.3s");
   });
 
   test("旧会话只有终态帧（没见过 running）——量不到，返回 null", () => {
     recordToolFrame(toolItem({ toolCallId: "t2", timestamp: 5_000 }));
-    assert.equal(toolDurationText("t2"), null);
+    assert.equal(toolDurationText("t2", en), null);
   });
 
   test("非 tool 记录不记（user/assistant 帧直接忽略）", () => {
     recordToolFrame(userItem);
-    assert.equal(toolDurationText("item-undefined"), null);
+    assert.equal(toolDurationText("item-undefined", en), null);
   });
 });
 
 describe("formatToolDuration", () => {
   test("不足一分钟带一位小数；满一分钟「1m 04s」且秒两位补零", () => {
-    assert.equal(formatToolDuration(80), "0.1s");
-    assert.equal(formatToolDuration(12_340), "12.3s");
-    assert.equal(formatToolDuration(59_940), "59.9s");
-    assert.equal(formatToolDuration(61_000), "1m 01s");
-    assert.equal(formatToolDuration(125_000), "2m 05s");
+    assert.equal(formatToolDuration(80, en), "0.1s");
+    assert.equal(formatToolDuration(12_340, en), "12.3s");
+    assert.equal(formatToolDuration(59_940, en), "59.9s");
+    assert.equal(formatToolDuration(61_000, en), "1m 01s");
+    assert.equal(formatToolDuration(125_000, en), "2m 05s");
   });
 });
 
@@ -1209,13 +1211,13 @@ const mcpItem = (
 
 describe("summarizeMcpResult / mcpFailureKind（4-5）", () => {
   test("成功：纯文本说 chars，含图说 images · chars（规格原文量词）", () => {
-    assert.equal(summarizeMcpResult(mcpItem("complete", [{ type: "text", text: "echo: hello" }])), "11 chars");
+    assert.equal(summarizeMcpResult(mcpItem("complete", [{ type: "text", text: "echo: hello" }]), en), "11 chars");
     assert.equal(
       summarizeMcpResult(
         mcpItem("complete", [
           { type: "text", text: "echo: hi" },
           { type: "image", data: "AAAA", mimeType: "image/png" },
-        ]),
+        ]), en,
       ),
       "1 image · 8 chars",
     );
@@ -1223,22 +1225,22 @@ describe("summarizeMcpResult / mcpFailureKind（4-5）", () => {
 
   test("业务失败 = Failed（server 的话在正文里）", () => {
     const failed = mcpItem("error", [{ type: "text", text: "炸了" }]);
-    assert.equal(summarizeMcpResult(failed), "Failed");
+    assert.equal(summarizeMcpResult(failed, en), "Failed");
     assert.equal(mcpFailureKind(failed), "business");
-    assert.equal(mcpFailureLead(failed), "The server reported an error.");
+    assert.equal(mcpFailureLead(failed, en), "The server reported an error.");
   });
 
   test("超时与不可达分得开：Timed out / Unreachable，各自的展开首行", () => {
     const timedOut = mcpItem("error", [{ type: "text", text: "mcp__demo__echo 调用超时" }]);
     assert.equal(mcpFailureKind(timedOut), "timedOut");
-    assert.equal(mcpFailureLabel(timedOut), "Timed out");
-    assert.match(mcpFailureLead(timedOut), /Timed out/);
+    assert.equal(mcpFailureLabel(timedOut, en), "Timed out");
+    assert.match(mcpFailureLead(timedOut, en), /Timed out/);
     const gone = mcpItem("error", [
       { type: "text", text: 'mcp__demo__echo: server "demo" is not connected (it may have been removed by a reload)' },
     ]);
     assert.equal(mcpFailureKind(gone), "unreachable");
-    assert.equal(mcpFailureLabel(gone), "Unreachable");
-    assert.match(mcpFailureLead(gone), /no response from the server/i);
+    assert.equal(mcpFailureLabel(gone, en), "Unreachable");
+    assert.match(mcpFailureLead(gone, en), /no response from the server/i);
   });
 });
 
@@ -1376,7 +1378,7 @@ describe("delegateCard（子会话 PR4a）", () => {
 describe("channelMarkLabel（子会话 PR4a）", () => {
   test("本会话是父（ownSide parent，mark.from child）：question/progress/done/failed 各自的文案与 tone", () => {
     const parentSide = (kind: "question" | "progress" | "done" | "failed") =>
-      channelMarkLabel({ from: "child", kind }, "parent", "审查 session/star");
+      channelMarkLabel({ from: "child", kind }, "parent", "审查 session/star", en);
     assert.deepEqual(parentSide("question"), {
       text: "审查 session/star asked · view in channel",
       tone: "question",
@@ -1396,24 +1398,32 @@ describe("channelMarkLabel（子会话 PR4a）", () => {
   });
 
   test("本会话是子（ownSide child，mark.from parent）：task/reply 的文案与 tone", () => {
-    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "task" }, "child", "审查栈"), {
+    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "task" }, "child", "审查栈", en), {
       text: "task from 审查栈 · view in channel",
       tone: "neutral",
     });
-    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "reply" }, "child", "审查栈"), {
+    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "reply" }, "child", "审查栈", en), {
       text: "reply from 审查栈 · view in channel",
       tone: "reply",
     });
   });
 
   test("其余组合（理论上不出现）兜底成 <peer> · <kind>，tone 中性", () => {
-    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "task" }, "parent", "谁"), {
+    assert.deepEqual(channelMarkLabel({ from: "parent", kind: "task" }, "parent", "谁", en), {
       text: "谁 · task · view in channel",
       tone: "neutral",
     });
-    assert.deepEqual(channelMarkLabel({ from: "child", kind: "question" }, "child", "谁"), {
+    assert.deepEqual(channelMarkLabel({ from: "child", kind: "question" }, "child", "谁", en), {
       text: "谁 · question · view in channel",
       tone: "neutral",
     });
+  });
+});
+
+describe("时长与结果摘要 —— 中文（Manuscript）", () => {
+  test("工具时长：不足一分钟带小数秒，满一分钟分秒", () => {
+    assert.equal(formatToolDuration(12_345, zh), "12.3 秒");
+    assert.equal(formatToolDuration(64_000, zh), "1 分 04 秒");
+    assert.equal(formatThinkingDuration(400, zh), "1 秒");
   });
 });

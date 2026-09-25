@@ -22,6 +22,7 @@ import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
 import { isThinkingLevel } from "../../../../shared/thinking.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /** toolCallId → 那次调用的结果。同一个 id 出现多次时以最后一条为准（终态帧在增量帧之后）。 */
 export type ToolResultIndex = ReadonlyMap<string, ToolTranscriptItem>;
@@ -533,10 +534,10 @@ export function streamingThinkingKey(
 }
 
 /** 思考时长格式：不足 1 秒按 1 秒；满一分钟「1m 05s」（秒两位补零，与 formatToolDuration 同款）。 */
-export function formatThinkingDuration(ms: number): string {
+export function formatThinkingDuration(ms: number, t: Messages): string {
   const seconds = Math.max(1, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+  if (seconds < 60) return t.chat.seconds(String(seconds));
+  return t.chat.minutesSeconds(Math.floor(seconds / 60), String(seconds % 60).padStart(2, "0"));
 }
 
 /**
@@ -549,6 +550,7 @@ const thinkingTimers = new Map<string, { start: number; end: number | null }>();
 export function thinkingDurationText(
   key: string,
   active: boolean,
+  t: Messages,
   now: number = Date.now(),
 ): string | null {
   let entry = thinkingTimers.get(key);
@@ -561,7 +563,7 @@ export function thinkingDurationText(
   }
   if (entry === undefined) return null;
   if (entry.end === null) entry.end = now;
-  return formatThinkingDuration(entry.end - entry.start);
+  return formatThinkingDuration(entry.end - entry.start, t);
 }
 
 /**
@@ -586,18 +588,18 @@ export function recordToolFrame(item: TranscriptItem): void {
 }
 
 /** 执行时长文案（如「12.3 秒」）；没记到起点（旧会话）或还在跑返回 null。 */
-export function toolDurationText(toolCallId: string): string | null {
+export function toolDurationText(toolCallId: string, t: Messages): string | null {
   const entry = toolTimers.get(toolCallId);
   if (entry === undefined || entry.end === null) return null;
-  return formatToolDuration(entry.end - entry.start);
+  return formatToolDuration(entry.end - entry.start, t);
 }
 
 /** 工具时长格式：不足一分钟带一位小数（毫秒级工具是噪音，只有慢命令值得看），满一分钟「1m 04s」（秒两位补零）。 */
-export function formatToolDuration(ms: number): string {
+export function formatToolDuration(ms: number, t: Messages): string {
   const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return t.chat.seconds(seconds.toFixed(1));
   const whole = Math.round(seconds);
-  return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
+  return t.chat.minutesSeconds(Math.floor(whole / 60), String(whole % 60).padStart(2, "0"));
 }
 
 /** 折叠态那一行右侧的摘要：让人不展开也能大致知道发生了什么。 */
@@ -676,48 +678,50 @@ export function channelMarkLabel(
   mark: { from: "parent" | "child"; kind: ChannelMessageKind },
   ownSide: "parent" | "child",
   peerTitle: string,
+  t: Messages,
 ): { text: string; tone: ChannelMarkTone } {
+  const c = t.channel;
   const label = ((): { text: string; tone: ChannelMarkTone } => {
     if (ownSide === "parent" && mark.from === "child") {
       switch (mark.kind) {
         case "question":
-          return { text: `${peerTitle} asked`, tone: "question" };
+          return { text: c.markAsked(peerTitle), tone: "question" };
         case "progress":
-          return { text: `${peerTitle} · progress`, tone: "neutral" };
+          return { text: c.markProgress(peerTitle), tone: "neutral" };
         case "done":
-          return { text: `${peerTitle} done`, tone: "done" };
+          return { text: c.markDone(peerTitle), tone: "done" };
         case "failed":
-          return { text: `${peerTitle} failed`, tone: "failed" };
+          return { text: c.markFailed(peerTitle), tone: "failed" };
         default:
-          return { text: `${peerTitle} · ${mark.kind}`, tone: "neutral" };
+          return { text: c.markOther(peerTitle, c.kinds[mark.kind]), tone: "neutral" };
       }
     }
     if (ownSide === "child" && mark.from === "parent") {
       switch (mark.kind) {
         case "task":
-          return { text: `task from ${peerTitle}`, tone: "neutral" };
+          return { text: c.taskFrom(peerTitle), tone: "neutral" };
         case "reply":
-          return { text: `reply from ${peerTitle}`, tone: "reply" };
+          return { text: c.replyFrom(peerTitle), tone: "reply" };
         default:
-          return { text: `${peerTitle} · ${mark.kind}`, tone: "neutral" };
+          return { text: c.markOther(peerTitle, c.kinds[mark.kind]), tone: "neutral" };
       }
     }
-    return { text: `${peerTitle} · ${mark.kind}`, tone: "neutral" };
+    return { text: c.markOther(peerTitle, c.kinds[mark.kind]), tone: "neutral" };
   })();
-  return { text: `${label.text} · view in channel`, tone: label.tone };
+  return { text: c.viewInChannel(label.text), tone: label.tone };
 }
 
-export function summarizeToolResult(result: ToolTranscriptItem | undefined): string | null {
+export function summarizeToolResult(result: ToolTranscriptItem | undefined, t: Messages): string | null {
   if (result === undefined) return null;
-  if (result.status === "running") return "Running";
-  if (result.status === "error") return "Failed";
+  if (result.status === "running") return t.common.running;
+  if (result.status === "error") return t.common.failed;
   const text = result.content
     .map((block) => (block.type === "text" ? block.text : "[image]"))
     .join("\n")
     .trim();
-  if (text === "") return "No output";
+  if (text === "") return t.chat.noOutputShort;
   const lines = text.split("\n").length;
-  return lines > 1 ? `${lines} lines` : `${text.length} chars`;
+  return lines > 1 ? t.chat.lines(lines) : t.chat.chars(text.length);
 }
 
 /** MCP 工具的入参摘要（4-5）：不认识的工具没有专用摘要器，退回 JSON 一行
@@ -740,19 +744,19 @@ export function mcpInputSummary(input: unknown, max = 40): string | null {
  * 含图 `{n} images · {n} chars`（图片张数在前，因为它是这类 server 的主产出）。
  * 失败不在这里分型（见 mcpFailureKind）。
  */
-export function summarizeMcpResult(result: ToolTranscriptItem | undefined): string | null {
+export function summarizeMcpResult(result: ToolTranscriptItem | undefined, t: Messages): string | null {
   if (result === undefined) return null;
-  if (result.status === "running") return "Running";
-  if (result.status === "error") return mcpFailureKind(result) === "business" ? "Failed" : mcpFailureLabel(result);
+  if (result.status === "running") return t.common.running;
+  if (result.status === "error") return mcpFailureKind(result) === "business" ? t.common.failed : mcpFailureLabel(result, t);
   const images = result.content.filter((block) => block.type === "image").length;
   const chars = result.content
     .filter((block) => block.type === "text")
     .map((block) => (block.type === "text" ? block.text : ""))
     .join("")
     .trim().length;
-  if (images === 0 && chars === 0) return "No output";
-  if (images === 0) return `${chars} chars`;
-  return `${images} image${images === 1 ? "" : "s"} · ${chars} chars`;
+  if (images === 0 && chars === 0) return t.chat.noOutputShort;
+  if (images === 0) return t.chat.chars(chars);
+  return `${t.chat.images(images)} · ${t.chat.chars(chars)}`;
 }
 
 /**
@@ -776,25 +780,25 @@ export function mcpFailureKind(
 }
 
 /** 折叠行的失败词（分型驱动）：Timed out / Unreachable；业务失败是 Failed。 */
-export function mcpFailureLabel(result: ToolTranscriptItem): string {
+export function mcpFailureLabel(result: ToolTranscriptItem, t: Messages): string {
   const kind = mcpFailureKind(result);
-  if (kind === "timedOut") return "Timed out";
-  if (kind === "unreachable") return "Unreachable";
-  return "Failed";
+  if (kind === "timedOut") return t.chat.timedOut;
+  if (kind === "unreachable") return t.chat.unreachable;
+  return t.common.failed;
 }
 
 /** 展开体的首行（分型驱动）：讲清「错在哪一层」。 */
-export function mcpFailureLead(result: ToolTranscriptItem): string {
+export function mcpFailureLead(result: ToolTranscriptItem, t: Messages): string {
   const kind = mcpFailureKind(result);
-  if (kind === "business") return "The server reported an error.";
-  if (kind === "timedOut") return "Timed out — no response from the server within the call limit.";
-  return "Unreachable — no response from the server. Check the command or URL in mcp.json.";
+  if (kind === "business") return t.chat.serverError;
+  if (kind === "timedOut") return t.chat.timedOutLead;
+  return t.chat.unreachableLead;
 }
 
 /** 展开后要显示的正文。图片暂不渲染，只标记它存在——真正的图片渲染是后面的事。 */
-export function toolResultText(result: ToolTranscriptItem): string {
+export function toolResultText(result: ToolTranscriptItem, t: Messages): string {
   return result.content
-    .map((block) => (block.type === "text" ? block.text : `[image ${block.mimeType}]`))
+    .map((block) => (block.type === "text" ? block.text : t.chat.imageMarker(block.mimeType)))
     .join("\n");
 }
 
@@ -1282,7 +1286,8 @@ export function fileViewFor(
     // 图片读取（content 混着 image 块）不进文件视图——行号列对图片标记没有意义；
     // 截断尾注（`[N more lines in file...]`）留在正文里跟 pi 一致
     if (result.content.some((block) => block.type !== "text")) return null;
-    const text = toolResultText(result);
+    // 上一行已排除非文本块，这里没有图片标记要写——不经 toolResultText，也就不需要文案表
+    const text = result.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
     return text === "" ? null : { text, startLine: readStartLine(input) };
   }
   return null;

@@ -11,6 +11,7 @@ import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
 import type { SkillsState } from "../skills/useSkills";
 import type { McpServer, McpStatus } from "@shared/mcp";
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
+import { useT } from "../../locale.ts";
 
 /**
  * MCP 面板（1-1 renderer / §7 + 4-2）：套共享模板，页头无 view toggle——MCP 不分
@@ -25,6 +26,7 @@ export function McpPanel(props: {
   skills: SkillsState;
   onClose: () => void;
 }) {
+  const t = useT();
   const { servers, serversLoad, openMcpConfig, reloadMcp } = props.skills;
   const [reloading, setReloading] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -48,7 +50,7 @@ export function McpPanel(props: {
     <>
       <Icon name="plug" size={16} style={{ color: "var(--color-text-secondary)" }} />
       <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-        MCP servers
+        {t.mcp.title}
       </strong>
     </>
   );
@@ -70,14 +72,14 @@ export function McpPanel(props: {
       contentKey="mcp"
       onClose={props.onClose}
       headerExtra={
-        <PanelIconButton title="Add a server" onClick={() => setAdding(true)}>
+        <PanelIconButton title={t.mcp.addServer} onClick={() => setAdding(true)}>
           <Icon name="plus" size={16} />
         </PanelIconButton>
       }
       footer={
         <>
           <PanelButton onClick={openMcpConfig}>
-            <Icon name="pencil-line" size={14} /> Edit mcp.json
+            <Icon name="pencil-line" size={14} /> {t.mcp.editConfig}
           </PanelButton>
           <PanelButton disabled={reloading} onClick={runReload}>
             <Icon
@@ -87,7 +89,7 @@ export function McpPanel(props: {
               className={reloading ? "anim-continuous" : undefined}
               style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
             />{" "}
-            {reloading ? "Reloading…" : "Reload"}
+            {reloading ? t.mcp.reloading : t.mcp.reload}
           </PanelButton>
         </>
       }
@@ -102,7 +104,7 @@ export function McpPanel(props: {
       >
         {error !== null && <PanelLine danger>{error}</PanelLine>}
         {serversLoad.kind === "loading" && servers.length === 0 ? (
-          <PanelLine>Loading servers…</PanelLine>
+          <PanelLine>{t.mcp.loadingServers}</PanelLine>
         ) : servers.length === 0 ? (
           <McpEmptyState onAdd={() => setAdding(true)} onEditConfig={openMcpConfig} />
         ) : (
@@ -119,12 +121,12 @@ export function McpPanel(props: {
                     style={{ opacity: confirming === server.name ? 1 : undefined }}
                   >
                     <PanelIconButton
-                      title={server.status.kind === "disabled" ? "Enable this server" : "Disable this server"}
+                      title={server.status.kind === "disabled" ? t.mcp.enable : t.mcp.disable}
                       onClick={() => props.skills.setServerDisabled(server.name, server.status.kind !== "disabled")}
                     >
                       <Icon name="power" size={14} />
                     </PanelIconButton>
-                    <PanelIconButton title="Remove this server" onClick={() => setConfirming(server.name)}>
+                    <PanelIconButton title={t.mcp.removeTip} onClick={() => setConfirming(server.name)}>
                       <Icon name="trash-2" size={14} />
                     </PanelIconButton>
                   </span>
@@ -163,14 +165,14 @@ export function McpPanel(props: {
                           className={reloading ? "anim-continuous" : undefined}
                           style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
                         />
-                        Retry
+                        {t.common.retry}
                       </button>
                     </span>
                   </div>
                 )}
                 {confirming === server.name && (
                   <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
-                    <PanelLine>Remove {server.name}?</PanelLine>
+                    <PanelLine>{t.mcp.removeConfirm(server.name)}</PanelLine>
                     <PanelButton
                       danger
                       onClick={() => {
@@ -178,20 +180,19 @@ export function McpPanel(props: {
                         void props.skills.removeServer(server.name).catch(() => undefined);
                       }}
                     >
-                      Remove
+                      {t.mcp.remove}
                     </PanelButton>
-                    <PanelButton onClick={() => setConfirming(null)}>Cancel</PanelButton>
+                    <PanelButton onClick={() => setConfirming(null)}>{t.common.cancel}</PanelButton>
                   </span>
                 )}
               </div>
             ))}
             <button type="button" className="mcp-add-card" onClick={() => setAdding(true)}>
-              <Icon name="plus" size={14} /> Add a server
+              <Icon name="plus" size={14} /> {t.mcp.addServer}
             </button>
             <span style={{ marginTop: "var(--space-2)" }}>
               <PanelLine>
-                Reload reads mcp.json and reconnects. Running tasks keep their current tools; new
-                tasks get the new set.
+                {t.mcp.reloadNote}
               </PanelLine>
             </span>
           </>
@@ -212,6 +213,7 @@ function AddServerForm(props: {
   onAdded: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [mode, setMode] = useState<"form" | "json">("form");
   const [name, setName] = useState("");
   const [transport, setTransport] = useState<"stdio" | "http">("stdio");
@@ -230,9 +232,9 @@ function AddServerForm(props: {
       ? null
       : isMcpServerName(name)
         ? existing.has(name)
-          ? "A server with this name already exists."
+          ? t.mcp.nameTaken
           : null
-        : "Use letters, digits, dashes or underscores.";
+        : t.mcp.nameShape;
 
   /** KEY=VALUE 一行一个（# 开头的行是注释，空行跳过） */
   const parseKeyValueLines = (text: string): Record<string, string> | null => {
@@ -255,11 +257,11 @@ function AddServerForm(props: {
       try {
         parsed = JSON.parse(jsonText);
       } catch {
-        setError("That’s not valid JSON.");
+        setError(t.mcp.invalidJson);
         return null;
       }
       if (typeof parsed !== "object" || parsed === null) {
-        setError("Expected a JSON object.");
+        setError(t.mcp.expectedObject);
         return null;
       }
       // Claude Desktop 整份配置，或单个 {"name":{...}} 映射
@@ -268,25 +270,25 @@ function AddServerForm(props: {
         : parseMcpConfig({ mcpServers: parsed });
       const entries = Object.entries(servers);
       if (entries.length !== 1) {
-        setError(entries.length === 0 ? "No valid server in that JSON." : "Paste one server at a time.");
+        setError(entries.length === 0 ? t.mcp.noValidServer : t.mcp.oneAtATime);
         return null;
       }
       const [jsonName, jsonServer] = entries[0] ?? [null, null];
       if (jsonName === null || jsonServer === undefined) return null;
       if (name !== jsonName && existing.has(jsonName)) {
-        setError(`A server named “${jsonName}” already exists.`);
+        setError(t.mcp.jsonNameTaken(jsonName));
         return null;
       }
       return { name: name === "" ? jsonName : name, server: jsonServer };
     }
     if (transport === "stdio") {
       if (command.trim() === "") {
-        setError("Command is required for a stdio server.");
+        setError(t.mcp.commandRequired);
         return null;
       }
       const env = parseKeyValueLines(envText);
       if (env === null) {
-        setError("Env lines must look like KEY=VALUE.");
+        setError(t.mcp.envShape);
         return null;
       }
       return {
@@ -300,12 +302,12 @@ function AddServerForm(props: {
       };
     }
     if (url.trim() === "" || !/^https?:\/\//.test(url.trim())) {
-      setError("URL must start with http:// or https://.");
+      setError(t.mcp.urlShape);
       return null;
     }
     const headers = parseKeyValueLines(headersText);
     if (headers === null) {
-      setError("Header lines must look like KEY=VALUE.");
+      setError(t.mcp.headerShape);
       return null;
     }
     return {
@@ -338,20 +340,20 @@ function AddServerForm(props: {
       onClose={props.onClose}
       header={
         <>
-          <PanelIconButton title="Back to the list" onClick={props.onCancel}>
+          <PanelIconButton title={t.mcp.backToList} onClick={props.onCancel}>
             <Icon name="chevron-left" size={16} />
           </PanelIconButton>
           <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-            Add a server
+            {t.mcp.addServer}
           </strong>
         </>
       }
       footer={
         <>
-          <PanelButton onClick={props.onCancel}>Cancel</PanelButton>
+          <PanelButton onClick={props.onCancel}>{t.common.cancel}</PanelButton>
           <span style={{ flex: 1 }} />
           <PanelButton onClick={submit} disabled={busy || (mode === "form" && name === "")}>
-            {busy ? "Adding…" : "Add"}
+            {busy ? t.mcp.adding : t.common.add}
           </PanelButton>
         </>
       }
@@ -366,21 +368,21 @@ function AddServerForm(props: {
       >
         <span style={{ display: "flex", gap: 4 }}>
           <Chip active={mode === "form"} onClick={() => setMode("form")}>
-            Form
+            {t.mcp.form}
           </Chip>
           <Chip active={mode === "json"} onClick={() => setMode("json")}>
-            Paste JSON
+            {t.mcp.pasteJson}
           </Chip>
         </span>
 
-        <FormRow label="Name" hint="Tool names look like mcp__name__tool.">
+        <FormRow label={t.mcp.name} hint={t.mcp.nameHint}>
           <input value={name} onChange={(e) => setName(e.target.value.trim())} className="text-field" />
           {nameError !== null && <FieldError>{nameError}</FieldError>}
         </FormRow>
 
         {mode === "form" ? (
           <>
-            <FormRow label="Transport">
+            <FormRow label={t.mcp.transport}>
               <span style={{ display: "flex", gap: 4 }}>
                 <Chip active={transport === "stdio"} onClick={() => setTransport("stdio")}>
                   stdio
@@ -392,10 +394,10 @@ function AddServerForm(props: {
             </FormRow>
             {transport === "stdio" ? (
               <>
-                <FormRow label="Command" hint="The executable to run, e.g. node or npx.">
+                <FormRow label={t.mcp.command} hint={t.mcp.commandHint}>
                   <input value={command} onChange={(e) => setCommand(e.target.value)} className="text-field" />
                 </FormRow>
-                <FormRow label="Arguments" hint="One per line.">
+                <FormRow label={t.mcp.args} hint={t.mcp.argsHint}>
                   <textarea
                     value={argsText}
                     onChange={(e) => setArgsText(e.target.value)}
@@ -404,7 +406,7 @@ function AddServerForm(props: {
                     style={{ fontFamily: "var(--font-family-mono)" }}
                   />
                 </FormRow>
-                <FormRow label="Environment" hint="One KEY=VALUE per line.">
+                <FormRow label={t.mcp.env} hint={t.mcp.keyValueHint}>
                   <textarea
                     value={envText}
                     onChange={(e) => setEnvText(e.target.value)}
@@ -416,10 +418,10 @@ function AddServerForm(props: {
               </>
             ) : (
               <>
-                <FormRow label="URL" hint="Streamable HTTP endpoint.">
+                <FormRow label={t.mcp.url} hint={t.mcp.urlHint}>
                   <input value={url} onChange={(e) => setUrl(e.target.value)} className="text-field" placeholder="https://example.com/mcp" />
                 </FormRow>
-                <FormRow label="Headers" hint="One KEY=VALUE per line.">
+                <FormRow label={t.mcp.headers} hint={t.mcp.keyValueHint}>
                   <textarea
                     value={headersText}
                     onChange={(e) => setHeadersText(e.target.value)}
@@ -433,8 +435,8 @@ function AddServerForm(props: {
           </>
         ) : (
           <FormRow
-            label="Server JSON"
-            hint={'Claude Desktop format {"mcpServers":{…}} or a single {"name":{…}}.'}
+            label={t.mcp.serverJson}
+            hint={t.mcp.serverJsonHint}
           >
             <textarea
               value={jsonText}
@@ -509,15 +511,16 @@ function StatusIcon(props: { status: McpStatus }) {
 }
 
 function StatusText(props: { status: McpStatus }) {
+  const t = useT();
   const { status } = props;
   const text =
     status.kind === "ready"
-      ? `${status.tools.length} tool${status.tools.length === 1 ? "" : "s"}`
+      ? t.mcp.tools(status.tools.length)
       : status.kind === "failed"
-        ? "Failed"
+        ? t.common.failed
         : status.kind === "disabled"
-          ? "Disabled"
-          : "Not connected yet";
+          ? t.mcp.disabled
+          : t.mcp.notConnected;
   return (
     <span
       style={{
@@ -536,6 +539,7 @@ function StatusText(props: { status: McpStatus }) {
  * `<button>`（键盘可达，点击后在卡片内展开全部、不再收回）。
  */
 function ToolChips(props: { tools: string[]; expanded: boolean; onExpand: () => void }) {
+  const t = useT();
   const { shown, hidden } = visibleTools(props.tools, TOOL_CHIP_LIMIT, props.expanded);
   return (
     <div className="mcp-tool-chips">
@@ -546,7 +550,7 @@ function ToolChips(props: { tools: string[]; expanded: boolean; onExpand: () => 
       ))}
       {hidden.length > 0 && (
         <button type="button" className="mcp-tool-chip mcp-tool-chip-more" onClick={props.onExpand}>
-          +{hidden.length} more
+          {t.mcp.more(hidden.length)}
         </button>
       )}
     </div>
@@ -555,20 +559,20 @@ function ToolChips(props: { tools: string[]; expanded: boolean; onExpand: () => 
 
 /** 空态（简报 4）：一台 server 都没有时的主画面，两个出口都是现成动作，不新增契约 */
 function McpEmptyState(props: { onAdd: () => void; onEditConfig: () => void }) {
+  const t = useT();
   return (
     <div className="mcp-empty">
       <Icon name="plug" size={26} strokeWidth={1.5} className="mcp-empty-icon" />
-      <p className="mcp-empty-title">No MCP server yet</p>
+      <p className="mcp-empty-title">{t.mcp.emptyTitle}</p>
       <p className="mcp-empty-desc">
-        Without a server the agent only has its built-in tools. Add one, or edit mcp.json
-        directly.
+        {t.mcp.emptyDesc}
       </p>
       <span className="mcp-empty-actions">
         <PanelButton onClick={props.onAdd}>
-          <Icon name="plus" size={14} /> Add a server
+          <Icon name="plus" size={14} /> {t.mcp.addServer}
         </PanelButton>
         <PanelButton onClick={props.onEditConfig}>
-          <Icon name="pencil-line" size={14} /> Edit mcp.json
+          <Icon name="pencil-line" size={14} /> {t.mcp.editConfig}
         </PanelButton>
       </span>
     </div>

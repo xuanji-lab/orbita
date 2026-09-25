@@ -1,5 +1,6 @@
 import { Icon } from "../../shell/Icon";
 import { compactMark } from "./compact-viz.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * Auto-compact 的效果预览：整条 = 一个上下文窗口，竖线 = 折叠点（剩 N% 时折叠），
@@ -10,6 +11,7 @@ import { compactMark } from "./compact-viz.ts";
  * 时调用方直接不渲染（SettingsView.tsx 的条件渲染），Off 没有折叠点可画。
  */
 export function CompactViz(props: { percent: number }) {
+  const t = useT();
   const mark = compactMark(props.percent);
   return (
     <div className="compact-viz" aria-hidden="true">
@@ -19,13 +21,13 @@ export function CompactViz(props: { percent: number }) {
         <span className="compact-mark" style={{ left: `${mark.at}%` }}>
           <span className="compact-mark-label" data-align={mark.labelAlign}>
             <Icon name="fold-vertical" size={10} />
-            {props.percent}% left
+            {t.settings.compactLeft(props.percent)}
           </span>
         </span>
       </div>
       <div className="compact-ends">
-        <span>history</span>
-        <span>folds into a summary</span>
+        <span>{t.settings.compactHistory}</span>
+        <span>{t.settings.compactSummary}</span>
       </div>
     </div>
   );

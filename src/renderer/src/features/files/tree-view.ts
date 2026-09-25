@@ -2,6 +2,7 @@ import type { FileEntry, FileEntryKind, FileRoot } from "@shared/files";
 // 只要类型：IconName 是纯类型别名，`node --test` 的原生剥离会把整条 import 连同
 // 这一行一起删掉，不会真的去加载 Icon.tsx（那份文件带 JSX，Node 的类型剥离不认）。
 import type { IconName } from "../../shell/Icon.tsx";
+import type { Messages } from "../../messages-en.ts";
 
 /**
  * 文件面板的**纯视图函数**（排序 / 过滤 / 判定 / footer 文案 / 图标与机器事实格式化）。
@@ -40,9 +41,9 @@ export function hasAgentsMd(entries: readonly FileEntry[]): boolean {
 }
 
 /** footer 文案：`N roots`；attached 根在盘上缺席时追 `· N missing`（如实标出，不静默）。 */
-export function footerSummary(groupCount: number, missingAttached: number): string {
-  const roots = `${groupCount} root${groupCount === 1 ? "" : "s"}`;
-  return missingAttached > 0 ? `${roots} · ${missingAttached} missing` : roots;
+export function footerSummary(groupCount: number, missingAttached: number, t: Messages): string {
+  const roots = t.files.roots(groupCount);
+  return missingAttached > 0 ? t.files.rootsMissing(roots, missingAttached) : roots;
 }
 
 /** 按扩展名归到「代码」形状的图标（file-code-2）。 */
@@ -128,18 +129,19 @@ export function formatSize(bytes: number): string {
  * 时间戳（`modifiedAt > now`，主进程与本机时钟不同步时会发生）与 1 分钟以内一样
  * 显示 `now`——diff 是负数时天然落进 `< 60` 分支，不用单独分支处理。
  */
-export function formatAge(modifiedAt: number, now: number): string {
+export function formatAge(modifiedAt: number, now: number, t: Messages): string {
+  const f = t.files;
   const diffSec = Math.floor((now - modifiedAt) / 1000);
-  if (diffSec < 60) return "now";
+  if (diffSec < 60) return f.ageNow;
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m`;
+  if (diffMin < 60) return f.ageMinutes(diffMin);
   const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return `${diffHour}h`;
+  if (diffHour < 24) return f.ageHours(diffHour);
   const diffDay = Math.floor(diffHour / 24);
-  if (diffDay < 7) return `${diffDay}d`;
-  if (diffDay < 60) return `${Math.floor(diffDay / 7)}w`;
-  if (diffDay < 365) return `${Math.floor(diffDay / 30)}mo`;
-  return `${Math.floor(diffDay / 365)}y`;
+  if (diffDay < 7) return f.ageDays(diffDay);
+  if (diffDay < 60) return f.ageWeeks(Math.floor(diffDay / 7));
+  if (diffDay < 365) return f.ageMonths(Math.floor(diffDay / 30));
+  return f.ageYears(Math.floor(diffDay / 365));
 }
 
 /** 过滤行右侧的计数文案：不过滤时只报总数，过滤时报「命中 / 总数」。 */

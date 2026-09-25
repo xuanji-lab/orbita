@@ -27,6 +27,8 @@ import { taskCardBody } from "./channel-column.ts";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { channelMarkLabel, type ChannelMarkTone } from "./tool-results";
 import type { SessionEntry } from "./session-states";
+import type { Messages } from "../../messages-en.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * 通道渲染面共用的上下文（子会话 PR4a）：`TranscriptColumn` 往下经 `EntryView` /
@@ -80,10 +82,10 @@ export interface ChannelViewContext {
  * ownSide 是**我方**，兜底词说的是「对面是谁」：我方是父，对面（查不到时）就叫
  * Sub-session；我方是子，对面就叫 Parent session。
  */
-export function peerTitleOf(context: ChannelViewContext, peerId: string): string {
+export function peerTitleOf(context: ChannelViewContext, peerId: string, t: Messages): string {
   const known = context.titles.get(peerId);
   if (known !== undefined && known !== "") return known;
-  return context.ownSide === "parent" ? "Sub-session" : "Parent session";
+  return context.ownSide === "parent" ? t.channel.subSession : t.channel.parentSession;
 }
 
 /** tone → 颜色 token。颜色是第二信号——行首图标已经说清楚是什么事，这里只补一眼。 */
@@ -155,6 +157,7 @@ export function ChannelMarkPill(props: {
   breathing?: boolean;
   onClick?: () => void;
 }) {
+  const t = useT();
   const color = toneColor(props.tone);
   const clickable = props.onClick !== undefined;
   const base: React.CSSProperties = {
@@ -178,7 +181,7 @@ export function ChannelMarkPill(props: {
     <button
       type="button"
       onClick={props.onClick}
-      title="View in channel"
+      title={t.channel.viewInChannelTip}
       className={`channel-mark-pill${props.breathing === true ? " orbita-breath" : ""}`}
       style={
         {
@@ -204,7 +207,8 @@ export function ChannelMarkLine(props: {
   /** 子会话 PR4b：`ownSide` 为 "parent" 且调用方传了 openChannel 时才可点 */
   onClick?: () => void;
 }) {
-  const label = channelMarkLabel(props.mark, props.ownSide, props.peerTitle);
+  const t = useT();
+  const label = channelMarkLabel(props.mark, props.ownSide, props.peerTitle, t);
   return (
     <ChannelMarkPill
       icon={channelKindIcon(props.mark.kind)}
@@ -242,13 +246,6 @@ export function ChannelToolMarkLine(props: {
 
 export type DelegateCardStatus = "running" | "waiting" | "done" | "failed" | "idle";
 
-const DELEGATE_STATUS_COPY: Record<DelegateCardStatus, string> = {
-  running: "running",
-  waiting: "waiting for reply",
-  done: "done",
-  failed: "failed",
-  idle: "idle",
-};
 
 function delegateStatusColor(status: DelegateCardStatus): string {
   switch (status) {
@@ -310,11 +307,12 @@ export function DelegateCardView(props: {
   onClick?: () => void;
   lit?: boolean;
 }) {
+  const t = useT();
   if (props.card === null) {
     return (
       <div style={CARD_STYLE}>
         <span className="orbita-breath" style={{ ...CARD_KICKER, color: "var(--color-accent)" }}>
-          delegating…
+          {t.channel.delegating}
         </span>
       </div>
     );
@@ -329,7 +327,7 @@ export function DelegateCardView(props: {
   const content = (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
-        <span style={CARD_KICKER}>DELEGATED</span>
+        <span style={CARD_KICKER}>{t.channel.delegated}</span>
         <span
           style={{
             fontWeight: "var(--weight-strong)",
@@ -352,7 +350,7 @@ export function DelegateCardView(props: {
             color,
           }}
         >
-          {DELEGATE_STATUS_COPY[status]}
+          {t.channel.delegateStatus[status]}
         </span>
       </div>
       {props.taskPreview !== "" && (
@@ -382,7 +380,7 @@ export function DelegateCardView(props: {
   );
   if (onClick === undefined) return <div style={style}>{content}</div>;
   return (
-    <button type="button" onClick={onClick} title={`Open "${card.title}"`} style={style}>
+    <button type="button" onClick={onClick} title={t.chat.openTaskCard(card.title)} style={style}>
       {content}
     </button>
   );
@@ -417,15 +415,16 @@ export function ChannelTaskCard(props: {
   loading: boolean;
   error: string | null;
 }) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const { message } = props;
   const { body, hasMore } = taskCardBody(message?.text ?? "", expanded);
   return (
     <div style={CARD_STYLE}>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <span style={CARD_KICKER}>TASK</span>
+        <span style={CARD_KICKER}>{t.channel.taskKicker}</span>
         <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
-          from {props.peerTitle}
+          {t.channel.from(props.peerTitle)}
         </span>
       </div>
       {message !== undefined ? (
@@ -433,7 +432,7 @@ export function ChannelTaskCard(props: {
           <MarkdownBlock text={body} />
           {hasMore && (
             <button type="button" style={TASK_CARD_TOGGLE_STYLE} onClick={() => setExpanded((value) => !value)}>
-              {expanded ? "Collapse" : "Show full task"}
+              {expanded ? t.channel.collapse : t.channel.showFullTask}
             </button>
           )}
         </>
@@ -443,7 +442,7 @@ export function ChannelTaskCard(props: {
         </p>
       ) : (
         <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
-          {props.loading ? "Loading…" : "Task message not found in the channel."}
+          {props.loading ? t.common.loading : t.channel.taskNotFound}
         </p>
       )}
     </div>

@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import type { ThemePreference } from "@shared/settings";
 import { resolveTheme } from "./theme-resolve.ts";
+import { htmlLang, localeOfTheme } from "./locale.ts";
 
 /**
  * 主题落地。**设置优先、系统兜底**——设计系统的 token 只认 `data-theme`
@@ -13,8 +15,16 @@ import { resolveTheme } from "./theme-resolve.ts";
  * 切换本身包一层 View Transitions 整窗交叉淡入——直接换属性，深→浅是瞬跳、
  * 浅→深会闪一帧（2026-09-04 用户实测）。首帧应用不加动画；系统开了
  * 「减少动态效果」时也不加。
+ *
+ * 返回解析后的主题：界面语言由它派生（`localeOfTheme`）。`<html lang>` 与
+ * `data-theme` 在同一处、同一次提交里写——文案表的切换也包进同一次交叉淡入
+ * （transition 回调里 flushSync），换到 Manuscript 时颜色和中文一起淡入，
+ * 不是先换色、淡入完了文字再跳一下。
  */
-export function useTheme(preference: ThemePreference): void {
+export function useTheme(preference: ThemePreference): Exclude<ThemePreference, "system"> {
+  const [resolvedTheme, setResolvedTheme] = useState(() =>
+    resolveTheme(preference, window.matchMedia("(prefers-color-scheme: dark)").matches),
+  );
   useEffect(() => {
     const query = window.matchMedia("(prefers-color-scheme: dark)");
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -22,16 +32,27 @@ export function useTheme(preference: ThemePreference): void {
       const resolved = resolveTheme(preference, query.matches);
       const root = document.documentElement;
       const current = root.dataset["theme"];
-      if (current === resolved) return;
+      const commit = () => {
+        root.dataset["theme"] = resolved;
+        root.lang = htmlLang(localeOfTheme(resolved));
+      };
+      if (current === resolved) {
+        commit();
+        setResolvedTheme(resolved);
+        return;
+      }
       const doc = document as Document & {
         startViewTransition?: (update: () => void) => void;
       };
       if (current !== undefined && !reduceMotion.matches && doc.startViewTransition) {
         doc.startViewTransition(() => {
-          root.dataset["theme"] = resolved;
+          // 回调在快照之后异步执行，不在 effect 里——flushSync 让新文案与新颜色进同一帧
+          flushSync(() => setResolvedTheme(resolved));
+          commit();
         });
       } else {
-        root.dataset["theme"] = resolved;
+        commit();
+        setResolvedTheme(resolved);
       }
     };
     apply();
@@ -39,4 +60,5 @@ export function useTheme(preference: ThemePreference): void {
     query.addEventListener("change", apply);
     return () => query.removeEventListener("change", apply);
   }, [preference]);
+  return resolvedTheme;
 }

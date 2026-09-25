@@ -10,7 +10,7 @@ import type {
   ImportSourceId,
 } from "@shared/import";
 import type { Workspace } from "@shared/workspace";
-import { SOURCE_LABEL } from "./migration-groups.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /** 能勾的：new 与 built-in。in-orbita / duplicate 列出来但不可勾（主进程也只导前两种）。 */
 export function isSelectableSkill(skill: ImportSkillItem): boolean {
@@ -51,41 +51,47 @@ export function skillCountBySource(groups: readonly ImportSkillGroup[]): Partial
 }
 
 /** 组名：「Proma · 默认工作区」「Claude Code · synced」；来源只有一个目录时就是来源名。 */
-export function skillGroupLabel(group: ImportSkillGroup): string {
-  return group.name === null ? SOURCE_LABEL[group.source] : `${SOURCE_LABEL[group.source]} · ${group.name}`;
+export function skillGroupLabel(group: ImportSkillGroup, t: Messages): string {
+  const source = t.migration.sources[group.source];
+  return group.name === null ? source : `${source} · ${group.name}`;
 }
 
 /**
  * 组名后面那行小字：能导几个、其余为什么不导。「listed above」指向先列出同名的组。
  */
-export function skillGroupNote(group: ImportSkillGroup): string {
+export function skillGroupNote(group: ImportSkillGroup, t: Messages): string {
+  const m = t.migration;
   const count = (status: ImportSkillItem["status"]): number => group.skills.filter((skill) => skill.status === status).length;
   const fresh = count("new");
   const builtIn = count("built-in");
   const inOrbita = count("in-orbita");
   const duplicate = count("duplicate");
   if (fresh + builtIn === 0) {
-    if (group.skills.length === 0) return "No skills here";
-    if (duplicate === group.skills.length) return "All listed above";
-    if (inOrbita === group.skills.length) return "All already in orbita";
+    if (group.skills.length === 0) return m.noSkillsHere;
+    if (duplicate === group.skills.length) return m.allListedAbove;
+    if (inOrbita === group.skills.length) return m.allInOrbita;
   }
   return [
-    fresh > 0 ? `${fresh} new` : null,
-    builtIn > 0 ? `${builtIn} came with ${SOURCE_LABEL[group.source]}` : null,
-    inOrbita > 0 ? `${inOrbita} already in orbita` : null,
-    duplicate > 0 ? `${duplicate} listed above` : null,
+    fresh > 0 ? m.skillsNew(fresh) : null,
+    builtIn > 0 ? m.skillsCameWith(builtIn, m.sources[group.source]) : null,
+    inOrbita > 0 ? m.skillsInOrbita(inOrbita) : null,
+    duplicate > 0 ? m.skillsListedAbove(duplicate) : null,
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");
 }
 
 /** 单条 skill 行尾的状态字；可导的 new 没有。 */
-export function skillStatusLabel(skill: ImportSkillItem, groups: readonly ImportSkillGroup[]): string | null {
-  if (skill.status === "in-orbita") return "Already in orbita";
-  if (skill.status === "built-in") return "Came with the app";
+export function skillStatusLabel(
+  skill: ImportSkillItem,
+  groups: readonly ImportSkillGroup[],
+  t: Messages,
+): string | null {
+  if (skill.status === "in-orbita") return t.migration.alreadyInOrbita;
+  if (skill.status === "built-in") return t.migration.cameWithApp;
   if (skill.status === "duplicate") {
     const first = groups.find((group) => group.dir === skill.duplicateOf);
-    return first === undefined ? "Listed above" : `Same name in ${skillGroupLabel(first)}`;
+    return first === undefined ? t.migration.listedAbove : t.migration.sameNameIn(skillGroupLabel(first, t));
   }
   return null;
 }
@@ -97,22 +103,25 @@ export function sameSkillScope(a: ImportSkillScope, b: ImportSkillScope): boolea
   return a.kind !== "workspace" || (b.kind === "workspace" && a.workspaceId === b.workspaceId);
 }
 
-export function skillScopeLabel(scope: ImportSkillScope, workspaces: readonly Workspace[]): string {
-  if (scope.kind === "global") return "All sessions";
-  if (scope.kind === "off") return "Turned off";
-  return workspaces.find((workspace) => workspace.id === scope.workspaceId)?.name ?? "Missing workspace";
+export function skillScopeLabel(scope: ImportSkillScope, workspaces: readonly Workspace[], t: Messages): string {
+  if (scope.kind === "global") return t.migration.scopeAllSessions;
+  if (scope.kind === "off") return t.migration.scopeOff;
+  return workspaces.find((workspace) => workspace.id === scope.workspaceId)?.name ?? t.migration.missingWorkspace;
 }
 
 /** 作用域菜单：All sessions、各工作区、先不启用。 */
-export function skillScopeOptions(workspaces: readonly Workspace[]): { scope: ImportSkillScope; label: string; hint?: string }[] {
+export function skillScopeOptions(
+  workspaces: readonly Workspace[],
+  t: Messages,
+): { scope: ImportSkillScope; label: string; hint?: string }[] {
   return [
-    { scope: { kind: "global" }, label: "All sessions" },
+    { scope: { kind: "global" }, label: t.migration.scopeAllSessions },
     ...workspaces.map((workspace) => ({
       scope: { kind: "workspace", workspaceId: workspace.id } as const,
       label: workspace.name,
-      hint: "Only this workspace",
+      hint: t.migration.scopeOnlyWorkspace,
     })),
-    { scope: { kind: "off" }, label: "Turned off", hint: "Added, enable later in Skills" },
+    { scope: { kind: "off" }, label: t.migration.scopeOff, hint: t.migration.scopeOffHint },
   ];
 }
 

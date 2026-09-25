@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
 import { placeMenu, type MenuBox, type MenuPlacementSide } from "./menu-position";
+import { useT } from "../locale.ts";
 
 export interface MenuItem {
   id: string;
@@ -116,6 +117,7 @@ export function Menu(props: {
    */
   placement?: MenuPlacementSide;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const [active, setActive] = useState(0);
@@ -344,7 +346,7 @@ export function Menu(props: {
                 <input
                   ref={searchRef}
                   value={query}
-                  placeholder="Search models…"
+                  placeholder={t.menu.searchModels}
                   spellCheck={false}
                   onChange={(e) => {
                     setQuery(e.target.value);
@@ -375,7 +377,7 @@ export function Menu(props: {
                   color: "var(--color-text-tertiary)",
                 }}
               >
-                No models match.
+                {t.menu.noModels}
               </div>
             )}
             {visible.map((item) => (

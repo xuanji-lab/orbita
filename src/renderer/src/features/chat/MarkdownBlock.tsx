@@ -13,6 +13,7 @@ import { MdPre } from "./CodeBlock";
 import { closePendingMath } from "./pending-math";
 import { remarkDemoteBoundaryMath } from "./math-guard";
 import { dominantScript } from "./dominant-script";
+import { useT } from "../../locale.ts";
 
 /**
  * sanitize 白名单：defaultSchema 之上只放行 `<details>`/`<summary>`，其余标签
@@ -97,17 +98,23 @@ class MarkdownErrorBoundary extends Component<{ children: ReactNode }, { error: 
 
   render() {
     if (this.state.error !== null) {
-      return (
-        <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-caption)" }}>
-          This message failed to render: {this.state.error.message}
-        </p>
-      );
+      return <RenderFailed message={this.state.error.message} />;
     }
     return this.props.children;
   }
 }
 
 /** 只放行 http(s) 与 mailto；其余协议一律吞掉——绝对不给 javascript: 这类 href 留门。 */
+/** 错误边界是类组件，拿不到 hook——失败提示单独成一个函数组件，好取当前语言的文案 */
+function RenderFailed(props: { message: string }) {
+  const t = useT();
+  return (
+    <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-caption)" }}>
+      {t.chat.messageRenderFailed} {props.message}
+    </p>
+  );
+}
+
 function ExternalAnchor(props: AnchorProps) {
   const { href, children, node: _node, ...rest } = props;
   const external = href !== undefined && /^(https?:|mailto:)/i.test(href);

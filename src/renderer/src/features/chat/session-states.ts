@@ -18,6 +18,7 @@ import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem 
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
+import type { Messages } from "../../messages-en.ts";
 
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
 export interface PendingApproval {
@@ -305,12 +306,12 @@ export function mergeSideRecords(
  * label 是静态词（`Compacted`），归 ChatView 的文案区。数字用千分位精确值、
  * 不走底栏的紧凑写法（formatTokens）——界碑是把压缩效果摆出来给人看一次的，不是常显。
  */
-export function compactionBoundaryStatus(record: CompactedRecord): string {
+export function compactionBoundaryStatus(record: CompactedRecord, t: Messages): string {
   const before = record.tokensBefore.toLocaleString("en-US");
   if (record.tokensAfter === undefined) {
-    return `~${before} tokens`;
+    return t.chat.tokensApprox(before);
   }
-  return `${before} → ${record.tokensAfter.toLocaleString("en-US")} tokens`;
+  return t.chat.tokensArrow(before, record.tokensAfter.toLocaleString("en-US"));
 }
 
 /** 按 requestId 跨槽摘除一条审批。没有匹配就原样返回（同一引用）。 */export function removeApproval(states: SessionStates, requestId: string): SessionStates {

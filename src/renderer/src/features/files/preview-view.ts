@@ -10,6 +10,7 @@
  */
 import { langFromPath } from "../chat/highlight.ts";
 import { formatSize } from "./tree-view.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /** md 系扩展名：默认渲染（MarkdownBlock），不进 highlight.ts 的代码语言判定 */
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
@@ -37,6 +38,6 @@ export function textPreviewMode(name: string): "markdown" | "code" | "plain" {
 export const HIGHLIGHT_LIMIT = 200 * 1024;
 
 /** 截断提示：`Showing the first 2 MB of 14.3 MB`。 */
-export function truncatedNotice(shownBytes: number, totalBytes: number): string {
-  return `Showing the first ${formatSize(shownBytes)} of ${formatSize(totalBytes)}`;
+export function truncatedNotice(shownBytes: number, totalBytes: number, t: Messages): string {
+  return t.files.truncated(formatSize(shownBytes), formatSize(totalBytes));
 }

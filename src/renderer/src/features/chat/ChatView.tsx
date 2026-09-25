@@ -85,8 +85,8 @@ import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
 import { retryCauseText, retryLineText } from "./retry-text";
-import { PERMISSION_MODES, PERMISSION_MODE_LABELS } from "@shared/permission";
-import { thinkingLevelLabel, THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
+import { PERMISSION_MODES } from "@shared/permission";
+import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 import {
   childSessions,
   deriveSessionTitle,
@@ -96,6 +96,8 @@ import {
 } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
+import { useT } from "../../locale.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /**
  * 展开体的贴底跟随：chat 级滚动（上方 ChatView）同款语义的缩小版——内容增长
@@ -171,6 +173,7 @@ export function ChatView(props: {
    */
   hideComposer?: boolean;
 }) {
+  const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
@@ -346,7 +349,7 @@ export function ChatView(props: {
   const onOpenParentProp = props.onOpenParent;
   const parentCrumb =
     onOpenParentProp !== undefined && parentId !== undefined
-      ? { title: peerTitleOf(channel, parentId), onClick: () => onOpenParentProp(parentId) }
+      ? { title: peerTitleOf(channel, parentId, t), onClick: () => onOpenParentProp(parentId) }
       : null;
 
   const composer = (
@@ -362,7 +365,7 @@ export function ChatView(props: {
       }}
       onStop={session.stop}
       placeholder={
-        session.sessionId === null ? "Ask anything, or start a task" : "Reply, or steer the agent"
+        session.sessionId === null ? t.chat.placeholderNew : t.chat.placeholderReply
       }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
@@ -374,12 +377,10 @@ export function ChatView(props: {
     <>
       {providersError != null ? (
         // 加载失败 ≠ 没有 provider：原因说清楚，去设置面重试（打开设置会重新拉取）
-        <Notice tone="bad">
-          Providers failed to load: {providersError} — open Settings to retry.
-        </Notice>
+        <Notice tone="bad">{t.chat.providersFailed(providersError)}</Notice>
       ) : (
         session.usable.length === 0 && (
-          <Notice>Add a provider with at least one model in Settings, then send a message.</Notice>
+          <Notice>{t.chat.noProvider}</Notice>
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
@@ -406,7 +407,7 @@ export function ChatView(props: {
                 cursor: "pointer",
               }}
             >
-              Retry
+              {t.common.retry}
             </button>
           )}
         </Notice>
@@ -416,10 +417,7 @@ export function ChatView(props: {
         （guideline §四把这条代价写明了）。
       */}
       {session.readOnly && (
-        <Notice>
-          This task was recorded before tasks could be resumed, so it can be read but not
-          continued. Start a new task to keep working.
-        </Notice>
+        <Notice>{t.chat.readOnlyTask}</Notice>
       )}
     </>
   );
@@ -579,7 +577,7 @@ export function ChatView(props: {
   return (
     <>
       <Pane
-        title={session.opened?.title || (sessionTitle(session.transcript) ?? "New task")}
+        title={session.opened?.title || (sessionTitle(session.transcript) ?? t.common.newTask)}
         badge={openId.slice(0, 6)}
         badgeTitle={openId}
         scrollRef={scrollRef}
@@ -680,6 +678,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
    */
   channel: ChannelViewContext;
 }) {
+  const t = useT();
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
   const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
@@ -745,13 +744,13 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   return (
     <>
       {/* 历史恢复在途：一行安静的加载指示，正文区不再是一片无解释的空白 */}
-      {props.loadingHistory && entries.length === 0 && <StatusLine spin>Loading…</StatusLine>}
+      {props.loadingHistory && entries.length === 0 && <StatusLine spin>{t.common.loading}</StatusLine>}
       {/* 空会话（没发过消息）：一行 tertiary 交代「这里为什么是空的」 */}
       {entries.length === 0 &&
         !props.loadingHistory &&
         props.phase === "idle" &&
         props.turnError === null && (
-          <StatusLine>No messages yet. Send the first one to start.</StatusLine>
+          <StatusLine>{t.chat.noMessages}</StatusLine>
         )}
       {turnView.map((entry, index) => {
         const branchAfter = branchRows.get(index);
@@ -867,6 +866,7 @@ function Pane(props: {
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   return (
     <div
@@ -897,7 +897,7 @@ function Pane(props: {
           <button
             type="button"
             onClick={props.parentCrumb.onClick}
-            title={`Back to "${props.parentCrumb.title}"`}
+            title={t.chat.backToParent(props.parentCrumb.title)}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -965,7 +965,7 @@ function Pane(props: {
         </InlineName>
         {/* 铅笔夹在名字与 id 之间：它属于名字，不属于这条会话的其它动作 */}
         {props.onRename !== undefined && !editing && (
-          <IconButton label="Rename task" size={24} onClick={() => setEditing(true)}>
+          <IconButton label={t.chat.renameTask} size={24} onClick={() => setEditing(true)}>
             <Icon name="pencil-line" size={13} />
           </IconButton>
         )}
@@ -979,20 +979,20 @@ function Pane(props: {
             label={
               props.completion === "open"
                 ? props.closing === true
-                  ? "Scanning for leftover items…"
-                  : "Mark task done"
-                : "Reopen task"
+                  ? t.chat.scanningLabel
+                  : t.chat.markTaskDone
+                : t.chat.reopenTask
             }
             title={
               props.completion === "open"
                 ? props.closing === true
-                  ? "Scanning this task for leftover items…"
+                  ? t.chat.scanningTip
                   : props.busy === true
-                    ? "Wait for this task to finish before marking it done"
+                    ? t.chat.waitBeforeDone
                     : props.scanless === true
-                      ? "Mark done without a leftover scan (this task has no agent session)"
-                      : "Mark this task done — the agent scans for leftovers first, reopen anytime"
-                : "Reopen this task — clears the done state"
+                      ? t.chat.doneScanlessTip
+                      : t.chat.doneTip
+                : t.chat.reopenTip
             }
             disabled={props.completion === "open" && (props.closing === true || props.busy === true)}
             onClick={() =>
@@ -1077,10 +1077,11 @@ function Pane(props: {
  * `onClick` 未给时渲染成 `span`（信息性、不可点），同 `ChannelMarkPill` 的做法。
  */
 function SubSessionsChip(props: { chip: { count: number; waiting: number }; onClick?: () => void }) {
+  const t = useT();
   const { count, waiting } = props.chip;
-  // N=1 用单数（子会话 PR4c fix：CDP 实测发现 "1 sub-sessions" 读着不对）
-  const noun = count === 1 ? "sub-session" : "sub-sessions";
-  const text = waiting > 0 ? `${count} ${noun} · ${waiting} waiting` : `${count} ${noun}`;
+  // N=1 用单数（子会话 PR4c fix：CDP 实测发现 "1 sub-sessions" 读着不对）——单复数在文案表里
+  const noun = t.chat.subSessionCount(count);
+  const text = waiting > 0 ? `${noun} · ${t.chat.subSessionWaiting(waiting)}` : noun;
   const style: React.CSSProperties = {
     display: "inline-flex",
     alignItems: "center",
@@ -1109,7 +1110,7 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
   );
   if (props.onClick === undefined) return <span style={style}>{content}</span>;
   return (
-    <button type="button" onClick={props.onClick} title="Open sub-sessions" style={style}>
+    <button type="button" onClick={props.onClick} title={t.chat.openSubSessions} style={style}>
       {content}
     </button>
   );
@@ -1123,12 +1124,13 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
  * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
  */
 function ComposerBar(props: { session: ChatSession }) {
+  const t = useT();
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
   // 作用域显示**目录名**。老工作区落库的名可能是完整路径（早期创建没截尾），
   // 所以两个分支都要过 basename——显示层截尾，不动落库数据
   const scopeSource = workspace?.name ?? session.cwd;
-  const scope = scopeSource === null ? "Home" : basename(scopeSource) || "Home";
+  const scope = scopeSource === null ? t.chat.home : basename(scopeSource) || t.chat.home;
   // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
   // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
   const [namingWorkspace, setNamingWorkspace] = useState(false);
@@ -1140,7 +1142,7 @@ function ComposerBar(props: { session: ChatSession }) {
   const scopeItems: MenuItem[] = [
     {
       id: "home",
-      label: "Home",
+      label: t.chat.home,
       icon: "folder",
       hint: session.defaultCwd,
       checked: session.workspaceId === null && session.cwd === null,
@@ -1155,24 +1157,25 @@ function ComposerBar(props: { session: ChatSession }) {
     })),
     {
       id: "new-workspace",
-      label: "New workspace…",
+      label: t.sidebar.newWorkspace,
       icon: "plus",
       onSelect: () => setNamingWorkspace(true),
     },
-    { id: "add", label: "Add a folder…", icon: "folder-plus", onSelect: session.addWorkspace },
+    { id: "add", label: t.sidebar.addFolder, icon: "folder-plus", onSelect: session.addWorkspace },
   ];
 
   // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
   // 展开卡片里一行行小字只会让它显得吵；宽度也因此能固定）
   const modeItems: MenuItem[] = PERMISSION_MODES.map((value) => ({
     id: value,
-    label: PERMISSION_MODE_LABELS[value].label,
+    label: t.permissionModes[value].label,
     checked: session.mode === value,
     onSelect: () => session.changeMode(value),
   }));
 
   // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
   const modelItems: MenuItem[] = modelMenuItems({
+    t,
     providers: session.usable,
     catalog,
     selected: session.model,
@@ -1195,7 +1198,7 @@ function ComposerBar(props: { session: ChatSession }) {
     const unavailable = thinkingSupported !== null && !thinkingSupported.includes(value);
     return {
       id: value,
-      label: thinkingLevelLabel(value, session.model?.modelId),
+      label: t.thinkingLevel(value, session.model?.modelId),
       checked: session.thinkingLevel === value,
       disabled: unavailable,
       onSelect: () => session.changeThinkingLevel(value),
@@ -1213,7 +1216,7 @@ function ComposerBar(props: { session: ChatSession }) {
             <InlineName
               editing
               value=""
-              placeholder="Workspace name"
+              placeholder={t.sidebar.workspaceName}
               onCommit={(name) => {
                 setNamingWorkspace(false);
                 const trimmed = name.trim();
@@ -1226,7 +1229,7 @@ function ComposerBar(props: { session: ChatSession }) {
             <Chip
               icon="folder"
               active={open}
-              title={`${session.cwd ?? session.defaultCwd} · switching starts a new task`}
+              title={t.chat.scopeTip(session.cwd ?? session.defaultCwd)}
               onClick={toggle}
               chevron
               // 窄槽下只留图标（styles.css 的 .composer-bottom-bar 容器查询）
@@ -1245,13 +1248,13 @@ function ComposerBar(props: { session: ChatSession }) {
             icon="shield-check"
             active={open}
             fixedWidth={84}
-            title={PERMISSION_MODE_LABELS[session.mode].hint}
+            title={t.permissionModes[session.mode].hint}
             onClick={toggle}
             chevron
             // 窄槽下只留图标，fixedWidth 也在同一断点被覆盖掉（见 styles.css）
             className="chip-mode"
           >
-            {PERMISSION_MODE_LABELS[session.mode].label}
+            {t.permissionModes[session.mode].label}
           </Chip>
         )}
       />
@@ -1262,13 +1265,13 @@ function ComposerBar(props: { session: ChatSession }) {
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
-              title="Model · applies from the next message"
+              title={t.chat.modelTip}
               onClick={toggle}
               chevron
               // 名字随时可省略号截断（styles.css），不等断点
               className="chip-model"
             >
-              {session.model?.modelId ?? "No model"}
+              {session.model?.modelId ?? t.chat.noModel}
             </Chip>
           )}
         />
@@ -1282,13 +1285,13 @@ function ComposerBar(props: { session: ChatSession }) {
             fixedWidth={84}
             title={
               thinkingSupported !== null && thinkingSupported.every((level) => level === "off")
-                ? "Thinking · this model does not think"
-                : "Thinking · applies from the next message"
+                ? t.chat.thinkingOffTip
+                : t.chat.thinkingTip
             }
             onClick={toggle}
             chevron
           >
-            {thinkingLevelLabel(session.thinkingLevel, session.model?.modelId)}
+            {t.thinkingLevel(session.thinkingLevel, session.model?.modelId)}
           </Chip>
         )}
       />
@@ -1310,9 +1313,10 @@ function ComposerBar(props: { session: ChatSession }) {
  * 他以为只是整理一下，实际把回答砍了。**禁用的理由写在 hint 里**，不让它只是变灰。
  */
 function UsageRing(props: { session: ChatSession }) {
+  const t = useT();
   const { session } = props;
   const stats = session.stats;
-  const ring = contextRing(stats);
+  const ring = contextRing(stats, t);
   const busy = session.phase !== "idle";
   // 包月制的 provider 不显示花费——那个数字是拿 API 价目表算的估价，不是他的账单。
   // 认不得的 id（自建网关）一律当按量算：藏起真实花费比多一行估价更坏。
@@ -1342,7 +1346,7 @@ function UsageRing(props: { session: ChatSession }) {
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
   const items: MenuItem[] = [
-    ...usageBreakdown(stats, billing).map((row) => ({
+    ...usageBreakdown(stats, t, billing).map((row) => ({
       id: row.label,
       label: row.label,
       hint: row.value,
@@ -1353,13 +1357,13 @@ function UsageRing(props: { session: ChatSession }) {
           {
             id: "compact-confirm-hint",
             label: worthIt
-              ? "Compress the conversation so far into a summary?"
-              : "This conversation is still short — compacting now saves little. Compact anyway?",
+              ? t.chat.compactConfirm
+              : t.chat.compactShort,
             fact: true,
           } satisfies MenuItem,
           {
             id: "compact-confirm",
-            label: "Compact anyway",
+            label: t.chat.compactAnyway,
             icon: "fold-vertical" as const,
             onSelect: () => {
               setConfirming(false);
@@ -1368,7 +1372,7 @@ function UsageRing(props: { session: ChatSession }) {
           },
           {
             id: "compact-cancel",
-            label: "Cancel",
+            label: t.common.cancel,
             icon: "x" as const,
             keepOpen: false,
             onSelect: () => setConfirming(false),
@@ -1377,12 +1381,12 @@ function UsageRing(props: { session: ChatSession }) {
       : [
           {
             id: "compact",
-            label: "Compact context now",
+            label: t.chat.compactNow,
             icon: "fold-vertical" as const,
             hint: session.readOnly
-              ? "this task can't be continued"
+              ? t.chat.compactReadOnly
               : busy
-                ? "wait for this turn"
+                ? t.chat.compactWait
                 : undefined,
             disabled: session.readOnly || busy,
             keepOpen: true,
@@ -1476,6 +1480,7 @@ function EntryView(props: {
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
   channel: ChannelViewContext;
 }) {
+  const t = useT();
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") return <UserBubble item={entry.item} />;
@@ -1486,7 +1491,7 @@ function EntryView(props: {
     if (props.channel.ownSide === "child" && entry.mark.kind === "task") {
       return (
         <ChannelTaskCard
-          peerTitle={peerTitleOf(props.channel, entry.mark.peerId)}
+          peerTitle={peerTitleOf(props.channel, entry.mark.peerId, t)}
           message={props.channel.channelMessages.get(entry.mark.messageId)}
           loading={props.channel.channelMessagesLoading}
           error={props.channel.channelMessagesError}
@@ -1498,7 +1503,7 @@ function EntryView(props: {
       <ChannelMarkLine
         mark={entry.mark}
         ownSide={props.channel.ownSide}
-        peerTitle={peerTitleOf(props.channel, entry.mark.peerId)}
+        peerTitle={peerTitleOf(props.channel, entry.mark.peerId, t)}
         onClick={openChannel === null ? undefined : () => openChannel(entry.mark.peerId, entry.mark.messageId)}
       />
     );
@@ -1565,6 +1570,7 @@ function TurnRollupLine(props: {
   /** 子会话 PR4a：折叠展开后的成员行仍走 EntryView，需要同一份上下文原样转发 */
   channel: ChannelViewContext;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const { group } = props;
   const stats = turnStats(group, props.toolResults);
@@ -1574,23 +1580,23 @@ function TurnRollupLine(props: {
   if (stats.durationMs !== null) {
     segments.push(
       <span style={headLabel(false)}>
-        {COPY.worked} {formatToolDuration(stats.durationMs)}
+        {t.chat.worked} {formatToolDuration(stats.durationMs, t)}
       </span>,
     );
   }
   if (stats.thinkingCount > 0) {
     segments.push(
       <span style={SLOT.status}>
-        {COPY.thought} {stats.thinkingCount}
+        {t.chat.thought} {stats.thinkingCount}
       </span>,
     );
   }
   if (stats.calls > 0) {
-    segments.push(<span style={SLOT.status}>{COPY.tools(stats.calls)}</span>);
+    segments.push(<span style={SLOT.status}>{t.chat.tools(stats.calls)}</span>);
   }  for (const { toolName, count, failed } of stats.byTool) {
     segments.push(
       <span style={SLOT.status}>
-        {toolName} {count}
+        {t.chat.rollupTool(toolName)} {count}
         {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
         {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
       </span>,
@@ -1638,6 +1644,7 @@ function TurnRollupLine(props: {
  * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
  */
 function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
   // 渐变遮罩 + Show more/less 开合。overflowing 只在折叠态量——展开后
@@ -1709,8 +1716,8 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         {overflowing && (
           <button
             type="button"
-            title={expanded ? "Show less" : "Show more"}
-            aria-label={expanded ? "Show less" : "Show more"}
+            title={expanded ? t.chat.showLess : t.chat.showMore}
+            aria-label={expanded ? t.chat.showLess : t.chat.showMore}
             onClick={() => setExpanded((value) => !value)}
             style={{
               display: "inline-flex",
@@ -1727,8 +1734,8 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         )}
         <button
           type="button"
-          title={copied ? "Copied" : "Copy message"}
-          aria-label={copied ? "Copied" : "Copy message"}
+          title={copied ? t.chat.copied : t.chat.copyMessage}
+          aria-label={copied ? t.chat.copied : t.chat.copyMessage}
           disabled={copyText === ""}
           onClick={() => {
             void navigator.clipboard.writeText(copyText);
@@ -1768,6 +1775,7 @@ function BranchRow(props: {
   disabled: boolean;
   onBranch: (anchorItemId: string) => void;
 }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -1778,8 +1786,8 @@ function BranchRow(props: {
     <div style={{ display: "flex", width: "100%", alignItems: "center", gap: "calc(var(--space-3) / 2)" }}>
       <button
         type="button"
-        title={copied ? "Copied" : "Copy answer"}
-        aria-label={copied ? "Copied" : "Copy answer"}
+        title={copied ? t.chat.copied : t.chat.copyAnswer}
+        aria-label={copied ? t.chat.copied : t.chat.copyAnswer}
         onClick={() => {
           void navigator.clipboard.writeText(props.copyText);
           setCopied(true);
@@ -1800,8 +1808,8 @@ function BranchRow(props: {
         type="button"
         disabled={props.disabled}
         onClick={() => props.onBranch(props.anchorItemId)}
-        title={COPY.branchFromHere}
-        aria-label={COPY.branchFromHere}
+        title={t.chat.branchFromHere}
+        aria-label={t.chat.branchFromHere}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -1823,7 +1831,7 @@ function BranchRow(props: {
             fontSize: "var(--font-size-micro)",
           }}
         >
-          {formatSpeed(props.speed)}
+          {formatSpeed(props.speed, t)}
         </span>
       )}
     </div>
@@ -1973,24 +1981,6 @@ const MARKDOWN_EXPANDED_BODY = {
 } satisfies React.CSSProperties;
 
 // ── 信息区文案（本模块全部用户可见字符串集中在此；英文先行，中文化等真实需求出现再抽字典） ──
-const COPY = {
-  thinking: "Thinking",
-  compacted: "Compacted",
-  compacting: "Compacting context…",
-  waitingOutput: "(waiting for output…)",
-  noOutput: "(no output)",
-  branchFromHere: "Branch from here",
-  worked: "Worked",
-  thought: "thought",
-  lines: (n: number): string => `${n} lines`,
-  files: (n: number): string => `${n} files`,
-  commands: (n: number): string => `${n} commands`,
-  matches: (n: number): string => `${n} matches`,
-  directories: (n: number): string => `${n} directories`,
-  calls: (n: number): string => `${n} calls`,
-  tools: (n: number): string => `tools ${n}`,
-  failed: (n: number): string => `${n} failed`,
-};
 
 /** 工具的类型图标：图标只说「哪一类事」，具体哪个工具由旁边的名字说。 */
 function toolIcon(toolName: string): IconName {
@@ -2020,39 +2010,39 @@ function toolIcon(toolName: string): IconName {
  * Run 是编造的动词，还把两个不同的工具混为一谈；其余保留动词标签（Read/Search…，
  * 与「N files」量词配套），不认识的工具本就回落真名。
  */
-function toolGroupLabel(toolName: string): string {
+function toolGroupLabel(toolName: string, t: Messages): string {
   switch (toolName) {
     case "read":
-      return "Read";
+      return t.chat.toolRead;
     case "grep":
     case "find":
-      return "Search";
+      return t.chat.toolSearch;
     case "write":
-      return "Write";
+      return t.chat.toolWrite;
     case "edit":
-      return "Edit";
+      return t.chat.toolEdit;
     case "ls":
-      return "List";
+      return t.chat.toolList;
     default:
       return toolName;
   }
 }
 
 /** 组头折叠态的量词——跟着动词说量级：「Read 3 files / Run 3 commands」。 */
-function toolGroupCountLabel(toolName: string, count: number): string {
+function toolGroupCountLabel(toolName: string, count: number, t: Messages): string {
   switch (toolName) {
     case "read":
     case "write":
-      return COPY.files(count);
+      return t.chat.files(count);
     case "bash":
     case "powershell":
-      return COPY.commands(count);
+      return t.chat.commands(count);
     case "edit":
-      return COPY.matches(count);
+      return t.chat.matches(count);
     case "ls":
-      return COPY.directories(count);
+      return t.chat.directories(count);
     default:
-      return COPY.calls(count);
+      return t.chat.calls(count);
   }
 }
 
@@ -2074,6 +2064,7 @@ function ToolLine(props: {
   /** 子会话 PR4a：delegate / reply_subsession / report_to_parent 三个通道工具要用 */
   channel: ChannelViewContext;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
@@ -2100,7 +2091,7 @@ function ToolLine(props: {
   }
   /** MCP 工具（4-5）：行首只说 tool 名，server 进副标；量词与失败分型另有规格 */
   const mcp = parseQualifiedToolName(props.toolName);
-  const summary = mcp === null ? summarizeToolResult(result) : summarizeMcpResult(result);
+  const summary = mcp === null ? summarizeToolResult(result, t) : summarizeMcpResult(result, t);
   const callSummary = toolCallSummary(props.toolName, props.input);
   // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
   // 完整路径进 tooltip。toolCallSummary 本身保持原始 path 语义（editGroupFileCount 靠它去重）
@@ -2119,7 +2110,7 @@ function ToolLine(props: {
   const taskCard = props.toolName === "read_task" && finished ? readTaskCard(result) : null;
   const diff = finished ? editDiffText(result) : null;
   const stats = finished ? editDiffStats(result) : null;
-  const rawBody = result !== undefined ? toolResultText(result) : "";
+  const rawBody = result !== undefined ? toolResultText(result, t) : "";
   // 跑着时只渲染尾部：partial 是累积快照、每帧整条重渲染，万行输出会拖垮 DOM
   const body = live ? liveTailLines(rawBody) : rawBody;
   // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
@@ -2130,7 +2121,7 @@ function ToolLine(props: {
   // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有
   const shellDuration =
     (props.toolName === "bash" || props.toolName === "powershell") && !active
-      ? toolDurationText(props.toolCallId)
+      ? toolDurationText(props.toolCallId, t)
       : null;
 
   return (
@@ -2177,7 +2168,7 @@ function ToolLine(props: {
         )}
         {/* write 的量词是行数（无增删语义，不染色）；有了它「N chars」是统计句的长度，让位 */}
         {!open && stats === null && writeLines !== null && (
-          <span style={SLOT.status}>{COPY.lines(writeLines)}</span>
+          <span style={SLOT.status}>{t.chat.lines(writeLines)}</span>
         )}
         {/* 有统计时「N lines」是同一量级的第二遍，让位 */}
         {summary !== null && !active && stats === null && writeLines === null && (
@@ -2194,7 +2185,7 @@ function ToolLine(props: {
         {taskCard !== null && (
           <button
             type="button"
-            title={`Open "${taskCard.title}"`}
+            title={t.chat.openTaskCard(taskCard.title)}
             onClick={(event) => {
               event.stopPropagation();
               props.onOpenTask?.(taskCard.sessionId);
@@ -2210,7 +2201,7 @@ function ToolLine(props: {
               color: "var(--color-chat-link)",
             }}
           >
-            Open
+            {t.chat.open}
           </button>
         )}
       </CollapseRow>
@@ -2278,12 +2269,13 @@ function ChannelSendToolLine(props: {
   running: boolean;
   channel: ChannelViewContext;
 }) {
+  const t = useT();
   const record = typeof props.input === "object" && props.input !== null ? (props.input as Record<string, unknown>) : {};
   if (props.toolName === "reply_subsession") {
     const childId = typeof record["childId"] === "string" ? record["childId"] : "";
-    const childTitle = peerTitleOf(props.channel, childId);
+    const childTitle = peerTitleOf(props.channel, childId, t);
     const followUp = record["delivery"] === "followUp";
-    const text = `replied to ${childTitle} · ${followUp ? "turn end" : "steer"}`;
+    const text = followUp ? t.chat.repliedTurnEnd(childTitle) : t.chat.repliedSteer(childTitle);
     // 子会话 PR4b：这条工具调用的入参没有携带投出去那条消息的 id（channel-tools.ts
     // 的 reply_subsession 回执 details 恒 {}），点了只能滚到通道底部，不指定 messageId。
     const openChannel = props.channel.openChannel;
@@ -2299,16 +2291,16 @@ function ChannelSendToolLine(props: {
   }
   // report_to_parent：对面恒是本会话自己的父——ownParentId 是这条会话固定的事实，
   // 不像 reply_subsession 那样按入参里的 id 变化。
-  const parentTitle = peerTitleOf(props.channel, props.channel.ownParentId ?? "");
+  const parentTitle = peerTitleOf(props.channel, props.channel.ownParentId ?? "", t);
   const kind = record["kind"];
   const label: { text: string; icon: IconName; tone: ChannelMarkTone } =
     kind === "question"
-      ? { text: `asked ${parentTitle}`, icon: "message-square", tone: "question" }
+      ? { text: t.chat.askedParent(parentTitle), icon: "message-square", tone: "question" }
       : kind === "done"
-        ? { text: "reported done", icon: "circle-check", tone: "done" }
+        ? { text: t.chat.reportedDone, icon: "circle-check", tone: "done" }
         : kind === "failed"
-          ? { text: "reported failed", icon: "triangle-alert", tone: "failed" }
-          : { text: "reported progress", icon: "refresh-cw", tone: "neutral" };
+          ? { text: t.chat.reportedFailed, icon: "triangle-alert", tone: "failed" }
+          : { text: t.chat.reportedProgress, icon: "refresh-cw", tone: "neutral" };
   return <ChannelToolMarkLine icon={label.icon} text={label.text} tone={label.tone} running={props.running} />;
 }
 
@@ -2329,6 +2321,7 @@ function ToolGroupLine(props: {
   /** 子会话 PR4a：展开后的成员行仍是 ToolLine，同一份上下文原样转发 */
   channel: ChannelViewContext;
 }) {
+  const t = useT();
   const { group } = props;
   // 挂载时的相态决定初始展开：活跃轮里长出来的组铺开，idle 会话（旧历史）收着
   const [open, setOpen] = useState(props.turnActive);
@@ -2351,15 +2344,15 @@ function ToolGroupLine(props: {
               strokeWidth={1.8}
             />
           </span>
-          <span style={headLabel(active)}>{toolGroupLabel(group.toolName)}</span>
+          <span style={headLabel(active)}>{toolGroupLabel(group.toolName, t)}</span>
         </span>
-        {!open && <span style={SLOT.status}>{toolGroupCountLabel(group.toolName, status.total)}</span>}
+        {!open && <span style={SLOT.status}>{toolGroupCountLabel(group.toolName, status.total, t)}</span>}
         {!open && group.toolName === "edit" && fileCount !== null && (
-          <span style={SLOT.status}>{COPY.files(fileCount)}</span>
+          <span style={SLOT.status}>{t.chat.files(fileCount)}</span>
         )}
         {!open && failed && (
           <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>
-            {COPY.failed(status.failed)}
+            {t.chat.failedCount(status.failed)}
           </span>
         )}
       </CollapseRow>
@@ -2577,6 +2570,7 @@ function tokenSpans(line: readonly TokenSpan[]) {
  * 相邻同名照常组折叠（组行不在这里，flatten 阶段已按 toolName 归组）。
  */
 function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
+  const t = useT();
   const { result } = props;
   if (result === undefined) return null;
   const isFailure = result.status === "error";
@@ -2596,7 +2590,7 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
     >
       {isFailure && (
         <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
-          {mcpFailureLead(result)}
+          {mcpFailureLead(result, t)}
         </p>
       )}
       {texts.map((block, i) => (
@@ -2649,6 +2643,7 @@ function PlainToolBody(props: {
   failed: boolean;
   live?: boolean;
 }) {
+  const t = useT();
   const follow = useFollowScroll(props.live === true);
   if (props.text === "") {
     return (
@@ -2656,7 +2651,7 @@ function PlainToolBody(props: {
         className="scroll"
         style={{ ...PLAIN_BODY, color: "var(--color-text-secondary)", padding: "0 var(--space-2)" }}
       >
-        {props.live === true ? COPY.waitingOutput : COPY.noOutput}
+        {props.live === true ? t.chat.waitingOutput : t.chat.noOutput}
       </div>
     );
   }
@@ -2749,11 +2744,12 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
  * 回底恢复），落定后内容定格，跟随停止。
  */
 function ThinkingLine(props: { text: string; active: boolean; blockKey: string }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const { active } = props;
   const body = props.text.trim();
   const follow = useFollowScroll(active);
-  const duration = thinkingDurationText(props.blockKey, active);
+  const duration = thinkingDurationText(props.blockKey, active, t);
   const preview = active ? thinkingPreview(body) : "";
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
@@ -2762,7 +2758,7 @@ function ThinkingLine(props: { text: string; active: boolean; blockKey: string }
           <span style={{ color: active ? "var(--color-info)" : headIconColor(active) }}>
             <Icon name="brain" size={14} strokeWidth={1.8} />
           </span>
-          <span style={headLabel(active)}>{COPY.thinking}</span>
+          <span style={headLabel(active)}>{t.chat.thinking}</span>
         </span>
         {/* 展开时预览让位——正文已经是更全的信息，同一行不必再放一遍尾巴 */}
         {active && !open && preview !== "" && <span style={SLOT.sub}>{preview}</span>}
@@ -2797,6 +2793,7 @@ function ThinkingLine(props: { text: string; active: boolean; blockKey: string }
  * 走 MarkdownBlock 与 agent 回复同一套渲染，容器用 MARKDOWN_EXPANDED_BODY。
  */
 function CompactedLine(props: { record: CompactedRecord }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   return (
     <div
@@ -2811,9 +2808,9 @@ function CompactedLine(props: { record: CompactedRecord }) {
     >
       <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
         <span style={HEAD_WRAP}>
-          <span style={headLabel(false)}>{COPY.compacted}</span>
+          <span style={headLabel(false)}>{t.chat.compacted}</span>
         </span>
-        <span style={SLOT.status}>{compactionBoundaryStatus(props.record)}</span>
+        <span style={SLOT.status}>{compactionBoundaryStatus(props.record, t)}</span>
       </CollapseRow>
       {open && (
         <div className="scroll" style={MARKDOWN_EXPANDED_BODY}>
@@ -2825,6 +2822,7 @@ function CompactedLine(props: { record: CompactedRecord }) {
 }
 
 function Responding(props: { transcript: readonly TranscriptItem[] }) {
+  const t = useT();
   const { transcript } = props;
   // 秒针：Responding 只在回答期间挂载，一秒一跳不白算（Retrying 同款）
   const [now, setNow] = useState(() => Date.now());
@@ -2837,7 +2835,7 @@ function Responding(props: { transcript: readonly TranscriptItem[] }) {
   for (const item of transcript) {
     if (item.role === "user") userTs = item.timestamp;
   }
-  const elapsed = userTs !== null ? formatThinkingDuration(Math.max(0, now - userTs)) : null;
+  const elapsed = userTs !== null ? formatThinkingDuration(Math.max(0, now - userTs), t) : null;
   // 流式速度：in-flight 的字符估算（estimateStreamingTokens，英文校准的粗账——
   // 中文会低估数倍，落定即被回答旁的真值顶替）÷ 本条消息已生成的秒数
   let speedText: string | null = null;
@@ -2850,7 +2848,7 @@ function Responding(props: { transcript: readonly TranscriptItem[] }) {
     );
     const start = streamingStart(streaming.id);
     const speed = start !== null ? messageSpeed(now - start, estimateStreamingTokens(chars)) : null;
-    if (speed !== null) speedText = formatSpeed(speed);
+    if (speed !== null) speedText = formatSpeed(speed, t);
   }
   return (
     <p
@@ -2868,7 +2866,7 @@ function Responding(props: { transcript: readonly TranscriptItem[] }) {
       <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
-      Responding
+      {t.chat.responding}
       {elapsed !== null && <span>· {elapsed}</span>}
       {speedText !== null && (
         <span
@@ -2890,6 +2888,7 @@ function Responding(props: { transcript: readonly TranscriptItem[] }) {
  * （旋转与呼吸都是设计系统 Motion 段认可的持续动效）。完成后本行卸载，界碑按时间落进流里。
  */
 function Compacting() {
+  const t = useT();
   return (
     <p
       className="orbita-breath"
@@ -2906,7 +2905,7 @@ function Compacting() {
       <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
-      {COPY.compacting}
+      {t.chat.compacting}
     </p>
   );
 }
@@ -2918,6 +2917,7 @@ function Compacting() {
  * warning 图标），失败原因是最淡一档的注脚、悬停看全文——断网还是限流一眼可辨。
  */
 function Retrying(props: { status: RetryStatus }) {
+  const t = useT();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -2941,7 +2941,7 @@ function Retrying(props: { status: RetryStatus }) {
       <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
         <Icon name="loader-circle" size={13} strokeWidth={1.8} spin />
       </span>
-      {retryLineText(props.status, now)}
+      {retryLineText(props.status, now, t)}
       {cause !== null && (
         <span
           title={props.status.errorMessage}

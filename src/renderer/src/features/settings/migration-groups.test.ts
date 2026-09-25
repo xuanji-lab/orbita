@@ -15,6 +15,7 @@ import {
   selectedSourceFiles,
   summarize,
 } from "./migration-groups.ts";
+import { en } from "../../messages-en.ts";
 
 const NOW = Date.UTC(2026, 8, 24);
 const DAY = 24 * 60 * 60 * 1000;
@@ -217,19 +218,19 @@ describe("去向选项与文案", () => {
     const fresh = grouped.groups.find((group) => group.folder === "/repo/fresh");
     assert.ok(merged !== undefined && fresh !== undefined);
     assert.deepEqual(
-      destinationOptions(merged, [orbita, lab]).map((option) => option.label),
+      destinationOptions(merged, [orbita, lab], en).map((option) => option.label),
       ["Into orbita", "Into Tasks", "Into orbita-lab"],
     );
     assert.deepEqual(
-      destinationOptions(fresh, [orbita, lab]).map((option) => option.label),
+      destinationOptions(fresh, [orbita, lab], en).map((option) => option.label),
       ["New workspace", "Into Tasks", "Into orbita", "Into orbita-lab"],
     );
-    assert.equal(destinationLabel({ kind: "workspace", workspaceId: "gone" }, [orbita]), "Missing workspace");
+    assert.equal(destinationLabel({ kind: "workspace", workspaceId: "gone" }, [orbita], en), "Missing workspace");
   });
 
   test("组名取文件夹末段；家目录缩成 ~", () => {
-    assert.equal(groupName("/Users/me/Documents/repo/orbita/"), "orbita");
-    assert.equal(groupName(null), "No folder");
+    assert.equal(groupName("/Users/me/Documents/repo/orbita/", en), "orbita");
+    assert.equal(groupName(null, en), "No folder");
     assert.equal(abbreviateHome("/Users/me/.proma-dev/agent-sessions.json", "/Users/me"), "~/.proma-dev/agent-sessions.json");
     assert.equal(abbreviateHome("/Users/meta/x", "/Users/me"), "/Users/meta/x");
   });

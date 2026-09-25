@@ -7,6 +7,7 @@ import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
 import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
 import { formatTokens } from "../../utils/format-tokens.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /** 弹窗数值输入的解析结果：undefined = 留空继承，"invalid" = 不是合法数字 */
 export type ParsedInput = number | undefined | "invalid";
@@ -133,10 +134,8 @@ export function modelAcceptsImage(decl: ModelDecl | undefined, defaults: ModelDe
 export const MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 
 /** 校验不过时给用户看的话；过了返回 null。 */
-export function modelIdIssue(id: string): string | null {
-  return MODEL_ID_PATTERN.test(id)
-    ? null
-    : "Lowercase letters, digits, dots and dashes; 1–64 chars, no leading dot or dash.";
+export function modelIdIssue(id: string, t: Messages): string | null {
+  return MODEL_ID_PATTERN.test(id) ? null : t.providers.modelIdIssue;
 }
 
 /**

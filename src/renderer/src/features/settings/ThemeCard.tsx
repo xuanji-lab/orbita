@@ -1,25 +1,20 @@
 import { THEME_PREFERENCES, type SettingsPatch, type ThemePreference } from "@shared/settings";
 import { Icon } from "../../shell/Icon";
 import { useSettingTip } from "./InfoTip";
-
-const THEME_LABELS: Record<ThemePreference, string> = {
-  system: "System",
-  light: "Light",
-  dark: "Warm",
-  black: "Ink",
-  manuscript: "Manuscript",
-  typescript: "Typescript",
-};
+import { useT } from "../../locale.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /**
- * 只有 System 需要说明：它是唯一「选了不知道会落在哪」的一档。说明挂在卡片自己身上
- * （悬停 / 键盘聚焦），不另放 info 图标——卡片的对半缩略窗已经说了一半。
+ * 需要说明的只有三档：System 是唯一「选了不知道会落在哪」的一档，稿纸两档要说清
+ * 只有浅色。说明挂在卡片自己身上（悬停 / 键盘聚焦），不另放 info 图标——卡片的
+ * 对半缩略窗已经说了一半。名字与说明都跟界面语言走（messages-*.ts 的 themes）。
  */
-const THEME_TIPS: Partial<Record<ThemePreference, string>> = {
-  system: "Follows your desktop's light or dark appearance · dark lands on Ink",
-  manuscript: "Green-grid manuscript paper (稿纸) with red pen marks · light only",
-  typescript: "A typewritten page with a red margin line, the English 稿纸 · light only",
-};
+function themeTip(value: ThemePreference, t: Messages): string | undefined {
+  if (value === "system") return t.themes.systemTip;
+  if (value === "manuscript") return t.themes.manuscriptTip;
+  if (value === "typescript") return t.themes.typescriptTip;
+  return undefined;
+}
 
 /** `data-theme-preview` 认除 system 之外的每个真实主题；System 卡的缩略窗对半拼 light + black */
 type PreviewTheme = Exclude<ThemePreference, "system">;
@@ -34,8 +29,9 @@ export function ThemePicker(props: {
   value: ThemePreference;
   onChange: (patch: SettingsPatch) => void;
 }) {
+  const t = useT();
   return (
-    <div className="theme-grid" role="group" aria-label="Theme">
+    <div className="theme-grid" role="group" aria-label={t.settings.theme}>
       {THEME_PREFERENCES.map((value) => (
         <ThemeCard
           key={value}
@@ -50,7 +46,8 @@ export function ThemePicker(props: {
 
 /** 一张卡。单独成组件是因为 System 卡要挂悬停说明（hook 不能在 map 里调） */
 function ThemeCard(props: { value: ThemePreference; selected: boolean; onSelect: () => void }) {
-  const tipText = THEME_TIPS[props.value];
+  const t = useT();
+  const tipText = themeTip(props.value, t);
   const tip = useSettingTip<HTMLButtonElement>(tipText);
   const anchor = tipText === undefined ? {} : tip.anchor;
   return (
@@ -75,7 +72,7 @@ function ThemeCard(props: { value: ThemePreference; selected: boolean; onSelect:
             <ThemeThumb theme={props.value} />
           )}
         </span>
-        <span className="theme-card-name">{THEME_LABELS[props.value]}</span>
+        <span className="theme-card-name">{t.themes[props.value]}</span>
       </button>
       {tipText !== undefined && tip.layer}
     </>

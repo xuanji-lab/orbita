@@ -18,6 +18,7 @@ import type {
 } from "@shared/import";
 import type { Workspace } from "@shared/workspace";
 import { isSelectablePlanItem } from "../../../../shared/import.ts";
+import type { Messages } from "../../messages-en.ts";
 
 export type RangeFilter = "all" | "7d" | "30d" | "90d";
 
@@ -32,20 +33,6 @@ export const DEFAULT_FILTERS: SessionFilters = { range: "all", includeArchived: 
 const DAY = 24 * 60 * 60 * 1000;
 const RANGE_MS: Record<Exclude<RangeFilter, "all">, number> = { "7d": 7 * DAY, "30d": 30 * DAY, "90d": 90 * DAY };
 
-export const RANGE_LABEL: Record<RangeFilter, string> = {
-  all: "All time",
-  "7d": "Last 7 days",
-  "30d": "Last 30 days",
-  "90d": "Last 90 days",
-};
-
-export const SOURCE_LABEL: Record<ImportSourceId, string> = {
-  proma: "Proma",
-  "claude-code": "Claude Code",
-  "kimi-code": "Kimi Code",
-  opencode: "opencode",
-  "agent-skills": "Shared agent skills",
-};
 
 export interface SessionRow {
   item: ImportPlanItem;
@@ -195,18 +182,22 @@ export function effectiveDestination(
 }
 
 /** 文件夹末段；没有文件夹的组叫 No folder。 */
-export function groupName(folder: string | null): string {
-  if (folder === null) return "No folder";
+export function groupName(folder: string | null, t: Messages): string {
+  if (folder === null) return t.migration.noFolder;
   const parts = folder.split("/").filter((part) => part !== "");
   return parts[parts.length - 1] ?? folder;
 }
 
 /** 去向在菜单与芯片上的说法。找不到的工作区（刚被删）如实说 missing，不猜。 */
-export function destinationLabel(destination: ImportDestination, workspaces: readonly Workspace[]): string {
-  if (destination.kind === "tasks") return "Into Tasks";
-  if (destination.kind === "new-workspace") return "New workspace";
+export function destinationLabel(
+  destination: ImportDestination,
+  workspaces: readonly Workspace[],
+  t: Messages,
+): string {
+  if (destination.kind === "tasks") return t.migration.intoTasks;
+  if (destination.kind === "new-workspace") return t.migration.newWorkspace;
   const workspace = workspaces.find((candidate) => candidate.id === destination.workspaceId);
-  return workspace === undefined ? "Missing workspace" : `Into ${workspace.name}`;
+  return workspace === undefined ? t.migration.missingWorkspace : t.migration.intoWorkspace(workspace.name);
 }
 
 export interface DestinationOption {
@@ -220,18 +211,25 @@ export interface DestinationOption {
  * 「新建工作区」只在默认就是新建时出现——没有文件夹的组建不了，已是工作区的文件夹
  * 再建一个会撞同一路径（主进程也会拒绝）。
  */
-export function destinationOptions(group: SessionGroup, workspaces: readonly Workspace[]): DestinationOption[] {
+export function destinationOptions(
+  group: SessionGroup,
+  workspaces: readonly Workspace[],
+  t: Messages,
+): DestinationOption[] {
   const options: DestinationOption[] = [];
   const first = group.defaultDestination;
   if (first.kind === "new-workspace") {
-    options.push({ destination: first, label: "New workspace", hint: groupName(group.folder) });
+    options.push({ destination: first, label: t.migration.newWorkspace, hint: groupName(group.folder, t) });
   } else if (first.kind === "workspace") {
-    options.push({ destination: first, label: destinationLabel(first, workspaces), hint: "Same folder" });
+    options.push({ destination: first, label: destinationLabel(first, workspaces, t), hint: t.migration.sameFolder });
   }
-  options.push({ destination: { kind: "tasks" }, label: "Into Tasks", hint: "No workspace" });
+  options.push({ destination: { kind: "tasks" }, label: t.migration.intoTasks, hint: t.migration.noWorkspace });
   for (const workspace of workspaces) {
     if (first.kind === "workspace" && first.workspaceId === workspace.id) continue;
-    options.push({ destination: { kind: "workspace", workspaceId: workspace.id }, label: `Into ${workspace.name}` });
+    options.push({
+      destination: { kind: "workspace", workspaceId: workspace.id },
+      label: t.migration.intoWorkspace(workspace.name),
+    });
   }
   return options;
 }

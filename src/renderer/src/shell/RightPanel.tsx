@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Icon } from "../shell/Icon";
 import { clampRightPanelWidth, RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 import { usePaneTotalWidth } from "./side-width.ts";
+import { useT } from "../locale.ts";
 
 /**
  * 右侧面板壳（2026-09-13 裁决）：Skills / MCP / 辅助对话三个菜单共用这**一个**
@@ -20,6 +21,7 @@ export function RightPanelSlot(props: {
   onWidthCommit: (width: number) => void;
   children: React.ReactNode;
 }) {
+  const t = useT();
   const { narrow, open } = props;
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同 .drawer.dragging 的纪律） */
@@ -100,7 +102,7 @@ export function RightPanelSlot(props: {
           onDoubleClick={() =>
             props.onWidthCommit(clampRightPanelWidth(RIGHT_PANEL_WIDTH_DEFAULT, paneTotal))
           }
-          title="Drag to resize · double-click to reset"
+          title={t.common.dragResize}
           style={{
             position: "absolute",
             left: 0,
@@ -133,6 +135,7 @@ export function RightPanelFrame(props: {
   onClose?: () => void;
   children: React.ReactNode;
 }) {
+  const t = useT();
   return (
     <div
       style={{
@@ -158,7 +161,7 @@ export function RightPanelFrame(props: {
         <span style={{ flex: 1 }} />
         {props.headerExtra}
         {props.onClose && (
-          <PanelIconButton title="Close" onClick={props.onClose}>
+          <PanelIconButton title={t.common.close} onClick={props.onClose}>
             <Icon name="x" size={16} />
           </PanelIconButton>
         )}

@@ -16,6 +16,7 @@ import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
 import { isSkillSlug } from "@shared/skill";
 import { filterSkills } from "./skill-filter.ts";
+import { useT } from "../../locale.ts";
 
 /** 行 hover tooltip 出现的延迟——比 IconButton 的 200ms 更慢，快速划过列表不惊扰 */
 const ROW_TOOLTIP_DELAY_MS = 350;
@@ -113,6 +114,7 @@ function SkillList(props: {
   onCreateSkill: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const { skills } = props;
   const load = skills.load;
   const error = load.kind === "failed" ? load.message : null;
@@ -123,7 +125,7 @@ function SkillList(props: {
 
   const header = (
     <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-      Skills
+      {t.skills.title}
     </strong>
   );
 
@@ -138,7 +140,7 @@ function SkillList(props: {
         footer={<FooterReveal skills={skills} />}
       >
         <div style={{ padding: "var(--space-4)" }}>
-          <PanelLine>Loading…</PanelLine>
+          <PanelLine>{t.common.loading}</PanelLine>
         </div>
       </RightPanelFrame>
     );
@@ -163,9 +165,9 @@ function SkillList(props: {
             alignContent: "start",
           }}
         >
-          {error !== null && <PanelLine danger>Couldn’t read skills. {error}</PanelLine>}
-          <p style={{ margin: 0, fontSize: "var(--font-size-body)" }}>No skill yet.</p>
-          <PanelLine>Create a folder with a SKILL.md in the skills directory.</PanelLine>
+          {error !== null && <PanelLine danger>{t.skills.readFailed} {error}</PanelLine>}
+          <p style={{ margin: 0, fontSize: "var(--font-size-body)" }}>{t.skills.none}</p>
+          <PanelLine>{t.skills.noneHint}</PanelLine>
         </div>
       </RightPanelFrame>
     );
@@ -201,12 +203,12 @@ function SkillList(props: {
                 setQuery("");
               }
             }}
-            placeholder="Filter skills…"
-            aria-label="Filter skills"
+            placeholder={t.skills.filter}
+            aria-label={t.skills.filterAria}
           />
           <span className="skills-filter-count">{filtering ? `${filtered.length} / ${total}` : total}</span>
           {query !== "" && (
-            <IconButton label="Clear" size={20} onClick={() => setQuery("")}>
+            <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
               <Icon name="x" size={12} />
             </IconButton>
           )}
@@ -214,18 +216,18 @@ function SkillList(props: {
         <div style={{ display: "grid", alignContent: "start" }}>
           {error !== null && (
             <div style={{ padding: "var(--space-3)" }}>
-              <PanelLine danger>Couldn’t read skills. {error}</PanelLine>
+              <PanelLine danger>{t.skills.readFailed} {error}</PanelLine>
             </div>
           )}
           {filtering && filtered.length === 0 ? (
             <div style={{ padding: "var(--space-4)" }}>
-              <PanelLine>No skill matches “{query.trim()}”.</PanelLine>
+              <PanelLine>{t.skills.noMatch(query.trim())}</PanelLine>
             </div>
           ) : (
             <>
               {globalMembers.length > 0 && (
                 <div className="skill-group">
-                  <GroupLabel count={globalMembers.length}>Global</GroupLabel>
+                  <GroupLabel count={globalMembers.length}>{t.skills.global}</GroupLabel>
                   {globalMembers.map((s) => (
                     <SkillRow
                       key={`g:${s.slug}`}
@@ -257,7 +259,7 @@ function SkillList(props: {
               })}
               {disabled.length > 0 && (
                 <div className="skill-group">
-                  <GroupLabel count={disabled.length}>Disabled</GroupLabel>
+                  <GroupLabel count={disabled.length}>{t.skills.disabled}</GroupLabel>
                   {disabled.map((s) => (
                     <SkillRow
                       key={s.slug}
@@ -312,9 +314,10 @@ function SkillRow(props: {
   workspaceName: (id: string) => string;
   onClean: (slug: string) => void;
 }) {
+  const t = useT();
   const { skill } = props;
   const dim = props.dim === true;
-  const setNames = [skill.global ? "Global" : null, ...skill.workspaces.map(props.workspaceName)].filter(
+  const setNames = [skill.global ? t.skills.global : null, ...skill.workspaces.map(props.workspaceName)].filter(
     (name): name is string => name !== null,
   );
   // 下方、左对齐行左缘 + 10px（对稿 row-tip：top:34 相对行顶即「行下方」、left:10）；
@@ -330,7 +333,7 @@ function SkillRow(props: {
   if (skill.missing && confirming) {
     return (
       <div className="skill-row skill-row-missing">
-        <span className="skill-row-confirm-text">Clean up this missing reference?</span>
+        <span className="skill-row-confirm-text">{t.skills.cleanUpConfirm}</span>
         <PanelButton
           danger
           onClick={() => {
@@ -338,9 +341,9 @@ function SkillRow(props: {
             props.onClean(skill.slug);
           }}
         >
-          Clean up
+          {t.skills.cleanUp}
         </PanelButton>
-        <PanelButton onClick={() => setConfirming(false)}>Cancel</PanelButton>
+        <PanelButton onClick={() => setConfirming(false)}>{t.common.cancel}</PanelButton>
       </div>
     );
   }
@@ -367,7 +370,7 @@ function SkillRow(props: {
       </button>
       {skill.missing && (
         <IconButton
-          label="Clean up references"
+          label={t.skills.cleanUpReferences}
           size={22}
           className="reveal"
           onClick={() => {
@@ -401,7 +404,7 @@ function SkillRow(props: {
             {skill.description !== "" && <span className="skill-row-tip-desc">{skill.description}</span>}
             <span className="skill-row-tip-sets">
               {skill.slug}
-              {setNames.length > 0 ? ` · ${setNames.join(", ")}` : ""}
+              {setNames.length > 0 ? ` · ${setNames.join(t.common.listSeparator)}` : ""}
             </span>
           </div>,
           document.body,
@@ -412,6 +415,7 @@ function SkillRow(props: {
 
 /** footer：中央目录 reveal（新建 / 删除仍走访达——它们是文件管理器最擅长的事）。 */
 function FooterReveal(props: { skills: SkillsState }) {
+  const t = useT();
   return (
     <>
       <code
@@ -424,12 +428,12 @@ function FooterReveal(props: { skills: SkillsState }) {
           whiteSpace: "nowrap",
           flex: 1,
         }}
-        title="The central skills directory"
+        title={t.skills.centralDir}
       >
         skills/
       </code>
-      <PanelButton onClick={() => props.skills.reveal(null)} title="Open the skills directory">
-        <Icon name="folder" size={14} /> Reveal
+      <PanelButton onClick={() => props.skills.reveal(null)} title={t.skills.openDir}>
+        <Icon name="folder" size={14} /> {t.skills.reveal}
       </PanelButton>
     </>
   );
@@ -442,6 +446,7 @@ function SkillDetail(props: {
   onBack: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const { skills, meta } = props;
   const [content, setContent] = useState<SkillContent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -484,17 +489,16 @@ function SkillDetail(props: {
   };
 
   const badge = meta.missing
-    ? "Missing"
+    ? t.skills.missing
     : meta.linkedPath !== null
-      ? "Linked"
+      ? t.skills.linked
       : meta.global
-        ? "Global"
+        ? t.skills.global
         : meta.workspaces.length > 0
-          ? "Workspace"
-          : "Disabled";
+          ? t.skills.workspace
+          : t.skills.disabled;
   const disabled = meta.missing;
-  const disabledTitle =
-    "The file is gone — clean up the references or restore the folder.";
+  const disabledTitle = t.skills.missingTip;
 
   return (
     <RightPanelFrame
@@ -502,7 +506,7 @@ function SkillDetail(props: {
       onClose={props.onClose}
       header={
         <>
-          <PanelIconButton title="Back to list" onClick={props.onBack}>
+          <PanelIconButton title={t.skills.backToList} onClick={props.onBack}>
             <Icon name="chevron-left" size={16} />
           </PanelIconButton>
           <strong
@@ -524,16 +528,16 @@ function SkillDetail(props: {
           <>
             <span style={{ flex: 1 }} />
             <PanelButton danger onClick={() => skills.clean(meta.slug)}>
-              <Icon name="trash-2" size={14} /> Clean up references
+              <Icon name="trash-2" size={14} /> {t.skills.cleanUpReferences}
             </PanelButton>
           </>
         ) : (
           <>
             <PanelButton onClick={() => skills.reveal(meta.slug)}>
-              <Icon name="folder" size={14} /> Show in Finder
+              <Icon name="folder" size={14} /> {t.skills.showInFinder}
             </PanelButton>
             <span style={{ flex: 1 }} />
-            <PanelLine>{saving ? "Saving…" : "Saved when you leave a field"}</PanelLine>
+            <PanelLine>{saving ? t.skills.saving : t.skills.savedOnBlur}</PanelLine>
           </>
         )
       }
@@ -547,7 +551,7 @@ function SkillDetail(props: {
         }}
       >
         {meta.missing && (
-          <PanelLine danger>The folder for this skill is missing on disk.</PanelLine>
+          <PanelLine danger>{t.skills.folderMissing}</PanelLine>
         )}
         <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
           <code
@@ -556,7 +560,7 @@ function SkillDetail(props: {
               color: "var(--color-text-tertiary)",
               fontFamily: "var(--font-family-mono)",
             }}
-            title="Folder name. Renaming the skill does not rename this."
+            title={t.skills.folderNameTip}
           >
             {meta.slug}
           </code>
@@ -591,18 +595,18 @@ function SkillDetail(props: {
 
         {!meta.missing && (
           <>
-            <Field label="Works in">
+            <Field label={t.skills.worksIn}>
               <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                 <Chip
                   active={meta.global}
-                  title="Every task, in every workspace"
+                  title={t.skills.everyTask}
                   onClick={() =>
                     meta.global
                       ? skills.unlink(meta.slug, { kind: "global" })
                       : skills.link(meta.slug, { kind: "global" })
                   }
                 >
-                  Global
+                  {t.skills.global}
                 </Chip>
                 {skills.workspaces.map((ws) => {
                   const linked = meta.workspaces.includes(ws.id);
@@ -624,22 +628,22 @@ function SkillDetail(props: {
               {/* ★ 生效范围贴着动作常驻——用户改完可能很久才开新会话，toast 早没了 */}
               <span style={{ display: "block", marginTop: "var(--space-2)" }}>
                 <PanelLine>
-                  Changes apply to the next new session. Sessions already open keep their set.
+                  {t.skills.appliesNext}
                 </PanelLine>
               </span>
             </Field>
           </>
         )}
 
-        {error !== null && <PanelLine danger>Couldn’t save. {error}</PanelLine>}
+        {error !== null && <PanelLine danger>{t.skills.saveFailed} {error}</PanelLine>}
 
-        {content === null && !meta.missing && <PanelLine>Loading…</PanelLine>}
+        {content === null && !meta.missing && <PanelLine>{t.common.loading}</PanelLine>}
         {content !== null && (
           <div
             style={{ display: "grid", gap: "var(--space-4)", pointerEvents: disabled ? "none" : undefined }}
             title={disabled ? disabledTitle : undefined}
           >
-            <Field label="Name" hint="How the agent refers to this skill. The folder name does not change.">
+            <Field label={t.skills.name} hint={t.skills.nameHint}>
               <PanelInput
                 value={content.name}
                 disabled={disabled}
@@ -648,7 +652,7 @@ function SkillDetail(props: {
                 onBlur={commit("name")}
               />
             </Field>
-            <Field label="Description" hint="The agent sees this in every task and uses it to decide whether to read the skill.">
+            <Field label={t.skills.description} hint={t.skills.descriptionHint}>
               <textarea
                 value={content.description}
                 disabled={disabled}
@@ -660,7 +664,7 @@ function SkillDetail(props: {
                 style={{ cursor: disabled ? "not-allowed" : undefined }}
               />
             </Field>
-            <Field label="Instructions" hint="Read only when a task matches the description.">
+            <Field label={t.skills.instructions} hint={t.skills.instructionsHint}>
               <textarea
                 value={content.body}
                 disabled={disabled}
@@ -723,10 +727,11 @@ function PanelInput(props: {
 
 /** + 菜单：Create skill… / Link existing folder…。列表、空态、加载态三处共用。 */
 function AddMenu(props: { skills: SkillsState; onCreateSkill: () => void }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   return (
     <span style={{ position: "relative", display: "inline-flex" }}>
-      <PanelIconButton title="Add a skill" onClick={() => setOpen((v) => !v)}>
+      <PanelIconButton title={t.skills.add} onClick={() => setOpen((v) => !v)}>
         <Icon name="plus" size={16} />
       </PanelIconButton>
       {open && (
@@ -752,7 +757,7 @@ function AddMenu(props: { skills: SkillsState; onCreateSkill: () => void }) {
               props.onCreateSkill();
             }}
           >
-            <Icon name="plus" size={14} /> Create skill…
+            <Icon name="plus" size={14} /> {t.skills.create}
           </MenuItemRow>
           <MenuItemRow
             onClick={() => {
@@ -760,7 +765,7 @@ function AddMenu(props: { skills: SkillsState; onCreateSkill: () => void }) {
               props.skills.importFolder(null);
             }}
           >
-            <Icon name="folder-plus" size={14} /> Link existing folder…
+            <Icon name="folder-plus" size={14} /> {t.skills.linkFolder}
           </MenuItemRow>
         </span>
       )}

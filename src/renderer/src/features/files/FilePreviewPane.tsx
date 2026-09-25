@@ -8,6 +8,7 @@ import { highlightBlock, highlighterReady, langFromPath } from "../chat/highligh
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
+import { useT } from "../../locale.ts";
 
 /**
  * 预览面板（分栏模式的右半边，窄屏下独占整个面板宽度——见 FilesPanel.tsx 的
@@ -28,6 +29,7 @@ export function FilePreviewPane(props: {
   /** 窄屏「Back to files」与宽屏「Close preview」是同一个动作——见 FilesPanel 的 Esc 处理 */
   onClose: () => void;
 }) {
+  const t = useT();
   const { sessionId, workspaceId, root, path, onClose } = props;
   const name = baseName(path);
   const previewMode = textPreviewMode(name);
@@ -76,12 +78,12 @@ export function FilePreviewPane(props: {
     <div className="files-panel-preview">
       <header className="file-preview-header">
         <span className="file-preview-back">
-          <PanelIconButton title="Back to files" onClick={onClose}>
+          <PanelIconButton title={t.files.backToFiles} onClick={onClose}>
             <Icon name="arrow-left" size={16} />
           </PanelIconButton>
         </span>
         <span className="file-preview-close">
-          <PanelIconButton title="Close preview" onClick={onClose}>
+          <PanelIconButton title={t.files.closePreview} onClick={onClose}>
             <Icon name="x" size={16} />
           </PanelIconButton>
         </span>
@@ -97,24 +99,24 @@ export function FilePreviewPane(props: {
           {state.status === "ready" && (
             <span
               className="file-preview-meta"
-              title={new Date(state.data.modifiedAt).toLocaleString()}
+              title={t.time.dateTime(state.data.modifiedAt)}
             >
-              {formatSize(state.data.size)} · {formatAge(state.data.modifiedAt, Date.now())}
+              {formatSize(state.data.size)} · {formatAge(state.data.modifiedAt, Date.now(), t)}
             </span>
           )}
         </div>
         <span style={{ flex: 1 }} />
         <div className="file-preview-actions">
-          <PanelIconButton title="Open with default app" onClick={openDefault}>
+          <PanelIconButton title={t.files.openDefault} onClick={openDefault}>
             <Icon name="external-link" size={16} />
           </PanelIconButton>
-          <PanelIconButton title="Reveal in Finder" onClick={reveal}>
+          <PanelIconButton title={t.files.revealInFinder} onClick={reveal}>
             <Icon name="folder-open" size={16} />
           </PanelIconButton>
-          <PanelIconButton title={copied ? "Copied" : "Copy path"} onClick={copyPath}>
+          <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
             <Icon name={copied ? "check" : "copy"} size={16} />
           </PanelIconButton>
-          <PanelIconButton title="Refresh" onClick={refresh}>
+          <PanelIconButton title={t.files.refreshPreview} onClick={refresh}>
             <Icon name="refresh-cw" size={16} spin={loading} />
           </PanelIconButton>
         </div>
@@ -122,10 +124,10 @@ export function FilePreviewPane(props: {
       {showModeToggle && (
         <div className="file-preview-mode-row">
           <Chip active={mode === "rendered"} onClick={() => setMode("rendered")}>
-            Rendered
+            {t.files.rendered}
           </Chip>
           <Chip active={mode === "source"} onClick={() => setMode("source")}>
-            Source
+            {t.files.source}
           </Chip>
         </div>
       )}
@@ -212,12 +214,13 @@ function PreviewBody(props: {
   onRetry: () => void;
   onOpenDefault: () => void;
 }) {
+  const t = useT();
   const { state } = props;
   if (state.status === "loading") {
     return (
       <div className="file-preview-loading">
         <Icon name="loader-circle" size={14} spin />
-        Loading…
+        {t.common.loading}
       </div>
     );
   }
@@ -225,19 +228,19 @@ function PreviewBody(props: {
     return (
       <div className="file-preview-error">
         <PanelLine danger>{state.message}</PanelLine>
-        <PanelButton onClick={props.onRetry}>Retry</PanelButton>
+        <PanelButton onClick={props.onRetry}>{t.common.retry}</PanelButton>
       </div>
     );
   }
 
   const data = state.data;
   if (data.kind === "binary") {
-    return <EmptyPreview message="No preview for this file type" onOpenDefault={props.onOpenDefault} />;
+    return <EmptyPreview message={t.files.noPreview} onOpenDefault={props.onOpenDefault} />;
   }
   if (data.kind === "too-large") {
     return (
       <EmptyPreview
-        message={`Too large to preview (${formatSize(data.size)} — the limit is ${formatSize(data.limit)})`}
+        message={t.files.tooLarge(formatSize(data.size), formatSize(data.limit))}
         onOpenDefault={props.onOpenDefault}
       />
     );
@@ -257,13 +260,13 @@ function PreviewBody(props: {
   // kind === "text"。空文件（`__init__.py` 这类）不进正文：高亮会画出一张空代码卡，
   // 像是没加载出来——给一句明确的空态
   if (data.text === "") {
-    return <EmptyPreview message="Empty file" onOpenDefault={props.onOpenDefault} />;
+    return <EmptyPreview message={t.files.emptyFile} onOpenDefault={props.onOpenDefault} />;
   }
   return (
     <>
       {data.truncated && (
         <div className="file-preview-truncated">
-          <PanelLine>{truncatedNotice(PREVIEW_TEXT_LIMIT, data.size)}</PanelLine>
+          <PanelLine>{truncatedNotice(PREVIEW_TEXT_LIMIT, data.size, t)}</PanelLine>
         </div>
       )}
       <TextBody name={props.name} mode={props.mode} previewMode={props.previewMode} text={data.text} />
@@ -323,13 +326,14 @@ function HighlightedCode(props: { name: string; text: string }) {
 
 /** binary / too-large / 空文件的空态：一句说明 + 用默认应用打开 */
 function EmptyPreview(props: { message: string; onOpenDefault: () => void }) {
+  const t = useT();
   return (
     <div className="file-preview-empty">
       <Icon name="file" size={24} style={{ color: "var(--color-text-tertiary)" }} />
       <PanelLine>{props.message}</PanelLine>
       <PanelButton onClick={props.onOpenDefault}>
         <Icon name="external-link" size={14} />
-        Open with default app
+        {t.files.openDefault}
       </PanelButton>
     </div>
   );
