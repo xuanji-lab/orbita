@@ -15,6 +15,7 @@ import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
+import type { PromptImage } from "./prompt-images.ts";
 import type { CompactionSetting } from "./settings.ts";
 import type {
   ChannelDelivery,
@@ -291,6 +292,11 @@ export interface AgentTurnContext {
 /** 发一轮（renderer → 主进程的载荷） */
 export interface SubmitAgentInput extends AgentTurnContext {
   text: string;
+  /**
+   * 随这条消息发的图片（原图 base64，缩放在 agent 进程做）。缺席 / 空 = 纯文本。
+   * 有图时 text 可以为空串——只发一张截图也是一句完整的话。
+   */
+  images?: PromptImage[];
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -360,6 +366,8 @@ export type AgentCommand =
       type: "submit";
       sessionId: string;
       text: string;
+      /** 随消息发的图片，语义同 SubmitAgentInput.images */
+      images?: PromptImage[];
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;
@@ -452,6 +460,8 @@ export type AgentCommand =
       sessionId: string;
       /** 要发的文本。**队列在 renderer 一侧**，这里只负责「停下当前这一轮、发这句话」 */
       text: string;
+      /** 随消息发的图片，语义同 submit */
+      images?: PromptImage[];
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;
