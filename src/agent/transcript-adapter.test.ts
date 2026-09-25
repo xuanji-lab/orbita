@@ -242,6 +242,20 @@ describe("TranscriptAdapter", () => {
     ]);
   });
 
+  test("图块上自挂的 original 引用经 pi 的归约器原样保留——看大图靠它找原图", () => {
+    const image = {
+      type: "image" as const,
+      data: "AAAA",
+      mimeType: "image/png",
+      original: "01a0c4fd-9ee5-73fc-82a8-78c43b90d20d/5b0d1a52-8c7e-4c52-9d0b-3f6a2b1c9e10.png",
+    };
+    let state: TranscriptState = createTranscriptState(emptySnapshot());
+    for (const frame of new TranscriptAdapter(deps).userPrompt("", [image])) {
+      state = applyTranscriptProgress(state, frame);
+    }
+    assert.deepEqual(selectTranscript(state)[0]?.content, [image]);
+  });
+
   test("只发图：不造空 text 块；什么都没有时仍保留一个空 text 块（原行为）", () => {
     const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
     const [onlyImage] = new TranscriptAdapter(deps).userPrompt("", [image]);

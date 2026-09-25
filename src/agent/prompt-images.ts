@@ -9,19 +9,20 @@
  * **为什么在 agent 进程做**：缩放是 CPU 活（pi 把它放进 worker 线程），
  * 主进程要留给窗口与 IPC；renderer 做的话缩放策略就得在浏览器里再实现一遍。
  *
- * 缩放后的图也是落盘的那份（transcript 回显用的就是它）——会话记录不存原图。
+ * 缩放后的图是转录里的那份（模型看到什么，记录就是什么）；原图主进程已存进会话目录，
+ * `original` 引用原样带过来挂在图块上，看大图时按它读原图。
  */
 import { resizeImage } from "@earendil-works/pi-coding-agent";
-import { PROMPT_IMAGE_MIME_TYPES, type PromptImage } from "../shared/prompt-images.ts";
+import { PROMPT_IMAGE_MIME_TYPES, type PromptImage, type SentImage } from "../shared/prompt-images.ts";
 
 export type ResizeImage = typeof resizeImage;
 
 export async function preparePromptImages(
-  images: readonly PromptImage[] | undefined,
+  images: readonly SentImage[] | undefined,
   resize: ResizeImage = resizeImage,
-): Promise<PromptImage[]> {
+): Promise<SentImage[]> {
   if (images === undefined || images.length === 0) return [];
-  const prepared: PromptImage[] = [];
+  const prepared: SentImage[] = [];
   for (const [index, image] of images.entries()) {
     const label = `第 ${index + 1} 张图片`;
     // renderer 已拦过；这里再拦是因为载荷穿过两跳 IPC，renderer 不是唯一的信任边界
@@ -32,7 +33,20 @@ export async function preparePromptImages(
     if (resized === null) {
       throw new Error(`${label}无法解码或压缩到上传上限以内，没有发送`);
     }
-    prepared.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+    prepared.push({
+      type: "image",
+      data: resized.data,
+      mimeType: resized.mimeType,
+      ...(image.original !== undefined ? { original: image.original } : {}),
+    });
   }
   return prepared;
+}
+
+/**
+ * 交给 pi 的那份：去掉我们自挂的 `original`。pi 与 provider 适配层不认识它，
+ * 不保证每一家都忽略未知字段——路径也不该出现在发往外部的请求里。
+ */
+export function forModel(images: readonly SentImage[]): PromptImage[] {
+  return images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }));
 }

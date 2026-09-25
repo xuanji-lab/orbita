@@ -4,6 +4,7 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
+import type { PromptImage } from "../../shared/prompt-images.ts";
 import type {
   Carryover,
   CarryoverDraft,
@@ -26,6 +27,9 @@ export const sessionApi = {
   /** 工作台现状（路径 / 存不存在 / 递归文件数）。删除确认项吃它——先把后果说出来再删 */
   workbenchStat: (id: string): Promise<SessionWorkbenchStat> =>
     ipcRenderer.invoke(ipcChannels.sessionWorkbenchStat, id),
+  /** 按转录图块上的 original 引用读原图；null = 没有原图可看，退回缩放图 */
+  attachment: (ref: string): Promise<PromptImage | null> =>
+    ipcRenderer.invoke(ipcChannels.sessionAttachment, ref),
   pin: (id: string, pinned: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionPin, id, pinned),
   /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */

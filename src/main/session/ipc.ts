@@ -40,6 +40,8 @@ export function registerSessionIpc(
   });
   // 工作台现状：删除确认项要把「里面有几个文件」说出来（提示后删）。
   // 按需现算，见 store.workbenchStat
+  // 看大图读原图：引用的格式校验在 store.readOriginal（它拼路径，校验挨着拼的地方）
+  ipcMain.handle(ipcChannels.sessionAttachment, (_event, ref: unknown) => store.readOriginal(ref));
   ipcMain.handle(ipcChannels.sessionWorkbenchStat, (_event, id: string) =>
     store.workbenchStat(id),
   );

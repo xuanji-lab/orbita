@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { PromptImage } from "@shared/prompt-images";
+import { originalRefOf, type PromptImage } from "@shared/prompt-images";
+import { api } from "../api";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { imageSrc } from "./composer-images.ts";
@@ -13,6 +14,10 @@ import { useT } from "../locale.ts";
  *
  * 消费者三个：输入框里的待发缩略图、转录里用户发的图、MCP 工具产出的图——
  * 都是「内联只给得出 240px，看清要放大」的同一件事。
+ *
+ * **显示原图**：转录里的图块是缩到 2000px 的那份（模型看到的），带着 `original` 引用的就按引用
+ * 读回原图展示——否则一张 5K 截图放大出来是糊的。原图到之前先显示缩放图，读不到（源会话
+ * 已删、引用之前发的图）就一直是缩放图。输入框里的待发图本来就是原图，没有引用。
  *
  * 退出：Esc、点遮罩、右上角 ×。**Esc 在捕获阶段接住并截停**——App 在 window 上
  * 监听 Esc 关右栏，冒泡到那里就会连带把面板也关掉，一下 Esc 退两层。
@@ -27,8 +32,23 @@ export function ImageLightbox(props: {
   const [index, setIndex] = useState(props.startIndex);
   const closeRef = useRef<HTMLButtonElement>(null);
   const count = props.images.length;
-  const image = props.images[Math.min(index, count - 1)];
+  const shown = props.images[Math.min(index, count - 1)];
   const { onClose } = props;
+  // 引用 → 原图（null = 读不到，别再试）。随看随读：原图动辄几 MB，不在打开时把一组全拉过来
+  const [originals, setOriginals] = useState<ReadonlyMap<string, PromptImage | null>>(new Map());
+  const ref = shown === undefined ? null : originalRefOf(shown);
+  useEffect(() => {
+    if (ref === null || originals.has(ref)) return;
+    let live = true;
+    const settle = (value: PromptImage | null): void => {
+      if (live) setOriginals((prev) => new Map(prev).set(ref, value));
+    };
+    void api.session.attachment(ref).then(settle, () => settle(null));
+    return () => {
+      live = false;
+    };
+  }, [ref, originals]);
+  const image = (ref === null ? undefined : originals.get(ref)) ?? shown;
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;

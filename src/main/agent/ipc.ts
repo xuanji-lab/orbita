@@ -22,6 +22,7 @@ import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import type { McpServer } from "../../shared/mcp.ts";
+import type { SentImage } from "../../shared/prompt-images.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
 import { AgentHost } from "./host.ts";
@@ -175,6 +176,15 @@ export function registerAgentIpc(
     }
   };
 
+  /**
+   * 附图装配：原图先落进会话目录（看大图用），带着引用发给 agent 进程（它缩放后发模型）。
+   * 没图就不带字段——纯文字消息的命令与以前一字不差。
+   */
+  const sentImages = async (input: SubmitAgentInput): Promise<{ images?: SentImage[] }> =>
+    input.images !== undefined && input.images.length > 0
+      ? { images: await sessions.saveOriginals(input.sessionId, input.images) }
+      : {};
+
   ipcMain.handle(ipcChannels.providerBuiltins, () => host.listBuiltins());
 
   /**
@@ -221,7 +231,7 @@ export function registerAgentIpc(
     const piSessionFile = await host.submit({
       type: "submit",
       text: input.text,
-      ...(input.images !== undefined && input.images.length > 0 ? { images: input.images } : {}),
+      ...(await sentImages(input)),
       ...turnFields(input, provider, piSessionDir, protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
         directories: await readDirectories(input),
@@ -250,7 +260,7 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...(input.images !== undefined && input.images.length > 0 ? { images: input.images } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...(await sentImages(input)), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

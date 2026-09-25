@@ -35,7 +35,7 @@ import {
   type PiExtensionApi,
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
-import { preparePromptImages } from "./prompt-images.ts";
+import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -974,7 +974,7 @@ async function handle(command: AgentCommand): Promise<void> {
       }
       await opened.session.prompt(command.text, {
         expandPromptTemplates: false,
-        ...(images.length > 0 ? { images } : {}),
+        ...(images.length > 0 ? { images: forModel(images) } : {}),
       });
     });
     return;
@@ -1002,7 +1002,7 @@ async function handle(command: AgentCommand): Promise<void> {
         }
         await opened.session.prompt(command.text, {
           expandPromptTemplates: false,
-          ...(images.length > 0 ? { images } : {}),
+          ...(images.length > 0 ? { images: forModel(images) } : {}),
         });
       });
     } catch (cause) {
