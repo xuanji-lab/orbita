@@ -26,6 +26,20 @@ const ALLOWED_LATIN = new Set([
   // 计量单位（与原型「42 tok/s」一致）
   "token",
   "tok",
+  // 通用缩写：代码托管与模型的 ID
+  "PR",
+  "ID",
+  // git 尾注名（原样写进提交，不能翻）
+  "Co-Authored-By",
+  // 迁移来源（其他应用的名字）
+  "Proma",
+  "Claude",
+  "Code",
+  "Kimi",
+  "opencode",
+  // 文件名
+  "mcp.json",
+  "SKILL.md",
   // 按键名
   "Ctrl",
   "Alt",
@@ -37,6 +51,15 @@ const ALLOWED_LATIN = new Set([
 
 type Entry = { path: string; text: string };
 
+/**
+ * 函数条目默认拿数字样例（1 与 3）调用；参数不是「任意数 / 任意串」的在这里给样例。
+ * 值取英文——zh 函数把它原样拼进句子时，守卫要能看出来这是参数不是文案，
+ * 所以样例都用白名单里的词或纯数字。
+ */
+const SAMPLE_ARGS: Record<string, unknown[][]> = {
+  thinkingLevel: [["xhigh", "claude-opus-4-6"], ["medium", null]],
+};
+
 /** 把表摊平成 (键路径, 文本)；函数按参数个数塞样例参数 */
 function flatten(table: object, prefix = ""): Entry[] {
   const out: Entry[] = [];
@@ -46,9 +69,8 @@ function flatten(table: object, prefix = ""): Entry[] {
     else if (typeof value === "function") {
       const fn = value as (...args: unknown[]) => unknown;
       // 数量取 1 和 3 各调一次：单复数、量词分支都走到
-      for (const sample of [1, 3]) {
-        out.push({ path: `${path}(${sample})`, text: String(fn(...Array.from({ length: fn.length }, () => sample))) });
-      }
+      const samples = SAMPLE_ARGS[path] ?? [1, 3].map((n) => Array.from({ length: fn.length }, () => n));
+      for (const args of samples) out.push({ path: `${path}(${args.join(", ")})`, text: String(fn(...args)) });
     } else if (typeof value === "object" && value !== null) out.push(...flatten(value, path));
   }
   return out;
@@ -70,8 +92,10 @@ describe("messages —— 中英两张表", () => {
   test("zh 是纯中文：拉丁字母词只能是白名单里的专名", () => {
     const offenders: string[] = [];
     for (const { path, text } of flatten(zh)) {
+      // 路径（/v1/messages、/compact）与带单位的数（128k、1M）先剔掉：它们是字面量不是词
+      const bare = text.replace(/\/[\w./-]+/g, " ").replace(/\d+(?:\.\d+)?[kKM]\b/g, " ");
       // 带点、连字符的算一个词（mcp.json、SKILL.md）；单个大写字母是按键（Ctrl+Alt+D）
-      const words = text.match(/[A-Za-z][A-Za-z0-9]*(?:[.-][A-Za-z0-9]+)*/g) ?? [];
+      const words = bare.match(/[A-Za-z][A-Za-z0-9]*(?:[.-][A-Za-z0-9]+)*/g) ?? [];
       const bad = words.filter((word) => !ALLOWED_LATIN.has(word) && !/^[A-Z]$/.test(word));
       if (bad.length > 0) offenders.push(`${path}: ${bad.join(", ")}  ←  ${text}`);
     }

@@ -21,8 +21,6 @@ import { Menu, type MenuItem } from "../../shell/Menu";
 import { useSettingTip } from "./InfoTip";
 import {
   DEFAULT_FILTERS,
-  RANGE_LABEL,
-  SOURCE_LABEL,
   abbreviateHome,
   allRows,
   defaultSelection,
@@ -43,8 +41,6 @@ import {
   type SessionRow,
 } from "./migration-groups.ts";
 import {
-  PATHS_NOTE,
-  SAME_SESSION_TIP,
   changeBadge,
   countLine,
   doneFacts,
@@ -81,6 +77,8 @@ import {
   skillCountBySource,
   skillScopeChoices,
 } from "./migration-skills.ts";
+import type { Messages } from "../../messages-en.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * 设置 › Migration：把本机其他 agent 的会话、skills 与 MCP servers 迁进来。步骤铺在同一页
@@ -138,6 +136,7 @@ export function MigrationView(props: {
   onImported: () => void;
   onOpenProviders: () => void;
 }) {
+  const t = useT();
   const [detect, setDetect] = useState<DetectState>({ kind: "loading" });
   const [ticked, setTicked] = useState<ReadonlySet<ImportSourceId>>(new Set());
   const [scan, setScan] = useState<ScanState>({ kind: "idle" });
@@ -349,16 +348,16 @@ export function MigrationView(props: {
           {/* ================= 2 Sessions ================= */}
           <Step
             n={2}
-            title="Sessions"
+            title={t.migration.stepSessions}
             state={steps.sessions}
             tools={
               grouped !== null &&
               grouped.total > 0 && (
                 <span className="mg-tools">
                   <Menu
-                    items={(Object.keys(RANGE_LABEL) as RangeFilter[]).map((range) => ({
+                    items={(Object.keys(t.migration.ranges) as RangeFilter[]).map((range) => ({
                       id: range,
-                      label: RANGE_LABEL[range],
+                      label: t.migration.ranges[range],
                       checked: filters.range === range,
                       onSelect: () => {
                         touch();
@@ -367,8 +366,8 @@ export function MigrationView(props: {
                     }))}
                     panelMinWidth={140}
                     trigger={({ open, toggle }) => (
-                      <Chip icon="clock" active={open} chevron onClick={toggle} title="Show sessions updated within">
-                        {RANGE_LABEL[filters.range]}
+                      <Chip icon="clock" active={open} chevron onClick={toggle} title={t.migration.rangeTip}>
+                        {t.migration.ranges[filters.range]}
                       </Chip>
                     )}
                   />
@@ -377,15 +376,15 @@ export function MigrationView(props: {
                     active={filters.includeArchived}
                     title={
                       filters.includeArchived
-                        ? "Archived sessions are listed · click to hide them"
-                        : "Archived sessions are hidden · click to list them"
+                        ? t.migration.archivedListedTip
+                        : t.migration.archivedHiddenTip
                     }
                     onClick={() => {
                       touch();
                       setFilters((current) => ({ ...current, includeArchived: !current.includeArchived }));
                     }}
                   >
-                    Include archived
+                    {t.migration.includeArchived}
                   </Chip>
                   <span className="mg-sep" />
                   <SelectAllButton grouped={grouped} selected={selected} disabled={busy} onSet={setRows} />
@@ -393,12 +392,12 @@ export function MigrationView(props: {
               )
             }
           >
-            {scan.kind === "idle" && <SkeletonList scanning={false} caption="Grouped by folder · one destination per folder" />}
-            {scan.kind === "scanning" && <SkeletonList scanning caption="Reading session lists…" />}
+            {scan.kind === "idle" && <SkeletonList scanning={false} caption={t.migration.sessionsCaption} />}
+            {scan.kind === "scanning" && <SkeletonList scanning caption={t.migration.readingSessions} />}
             {scan.kind === "error" && (
               <p className="mg-caption mg-error">
                 <Icon name="triangle-alert" size={12} />
-                Scan failed: {scan.message}
+                {t.migration.scanFailed} {scan.message}
               </p>
             )}
             {scan.kind === "ready" && grouped !== null && (
@@ -406,7 +405,7 @@ export function MigrationView(props: {
                 {grouped.groups.length === 0 && grouped.changed.length === 0 ? (
                   <div className="mg-block mg-empty">
                     <Icon name={grouped.total === 0 ? "circle-check" : "eye-off"} size={15} />
-                    {grouped.total === 0 ? "Nothing new to import" : "No sessions match the filters"}
+                    {grouped.total === 0 ? t.migration.nothingToImport : t.migration.noSessionsMatch}
                   </div>
                 ) : (
                   <>
@@ -418,12 +417,12 @@ export function MigrationView(props: {
                     />
                     <div className="mg-colhead mg-grid-sessions" aria-hidden="true">
                       <span />
-                      <span>Folder</span>
-                      <span>Selected</span>
+                      <span>{t.migration.colFolder}</span>
+                      <span>{t.migration.colSelected}</span>
                       <span>
                         <Icon name="git-fork" size={11} strokeWidth={1.8} />
                       </span>
-                      <span>Goes to</span>
+                      <span>{t.migration.colGoesTo}</span>
                     </div>
                     <div className="mg-block">
                       {grouped.changed.length > 0 && (
@@ -561,19 +560,15 @@ export function MigrationView(props: {
 // 1 Sources
 // ---------------------------------------------------------------------------
 
-const KIND_LABEL: Record<ImportSourceProbe["kind"], string> = {
-  app: "Desktop app",
-  cli: "CLI",
-  folder: "Folder used by several agents",
-};
 
 const PATH_ICON: Record<PathGlyph, IconName> = { json: "file-json-2", file: "file", folder: "folder" };
 
 /** 段头的 Read-only 徽标：代替原来导语里那句「the other apps' files are never changed」 */
 function ReadOnlyBadge() {
+  const t = useT();
   return (
-    <TipBadge icon="lock" tip="Other apps' files are never changed · orbita only reads them" focusable>
-      Read-only
+    <TipBadge icon="lock" tip={t.migration.readOnlyTip} focusable>
+      {t.migration.readOnly}
     </TipBadge>
   );
 }
@@ -596,6 +591,7 @@ function SourcesStep(props: {
   onTickAll: () => void;
   onScan: () => void;
 }) {
+  const t = useT();
   const { probes } = props;
   const canTickMore = probes.some((probe) => probe.found && !props.ticked.has(probe.id));
   const scanButton = (
@@ -603,7 +599,7 @@ function SourcesStep(props: {
       type="button"
       className="quiet-control mg-btn"
       disabled={props.busy || props.ticked.size === 0}
-      title={props.ticked.size === 0 ? "Tick a source to scan it" : undefined}
+      title={props.ticked.size === 0 ? t.migration.tickToScan : undefined}
       onClick={props.onScan}
     >
       <Icon
@@ -611,23 +607,23 @@ function SourcesStep(props: {
         size={12}
         spin={props.scanning}
       />
-      {props.scanning ? "Scanning…" : props.scanned !== null ? "Rescan" : "Scan"}
+      {props.scanning ? t.migration.scanning : props.scanned !== null ? t.migration.rescan : t.migration.scan}
     </button>
   );
   const tickAll = props.open && canTickMore && (
     <button type="button" className="mg-textbtn" disabled={props.busy} onClick={props.onTickAll}>
-      Tick all found
+      {t.migration.tickAllFound}
     </button>
   );
 
   return (
     <Step
       n={1}
-      title="Sources"
+      title={t.migration.stepSources}
       state={props.state}
       summary={
         <span className="mg-step-sum">
-          {props.scanned !== null && <span>{props.scanned.map((id) => SOURCE_LABEL[id]).join(" · ")}</span>}
+          {props.scanned !== null && <span>{props.scanned.map((id) => t.migration.sources[id]).join(" · ")}</span>}
           <ReadOnlyBadge />
         </span>
       }
@@ -650,13 +646,13 @@ function SourcesStep(props: {
         <>
           {props.detect.kind === "loading" && (
             <p className="mg-caption">
-              <Icon name="loader-circle" size={12} spin /> Checking this Mac…
+              <Icon name="loader-circle" size={12} spin /> {t.migration.checkingSources}
             </p>
           )}
           {props.detect.kind === "error" && (
             <p className="mg-caption mg-error">
               <Icon name="triangle-alert" size={12} />
-              Couldn't check for sources: {props.detect.message}
+              {t.migration.checkSourcesFailed} {props.detect.message}
             </p>
           )}
           {props.detect.kind === "ready" && (
@@ -664,7 +660,7 @@ function SourcesStep(props: {
               {/* 隐私声明常驻、不进悬停：它和下面的路径清单一起，说清扫描读什么、还碰什么 */}
               <p className="mg-caption mg-caption-lead">
                 <Icon name="eye" size={12} strokeWidth={1.8} />
-                {PATHS_NOTE}
+                {t.migration.pathsNote}
               </p>
               <div className="mg-block">
                 {probes.map((probe) => (
@@ -693,6 +689,7 @@ function SourcesStep(props: {
  * （改勾选、看每个来源各自的路径）。
  */
 function PathsButton(props: { paths: readonly string[]; home: string; open: boolean; onClick: () => void }) {
+  const t = useT();
   const tip = useSettingTip<HTMLButtonElement>(
     <>
       <span className="mg-tip-paths">
@@ -700,7 +697,7 @@ function PathsButton(props: { paths: readonly string[]; home: string; open: bool
           <span key={path}>{abbreviateHome(path, props.home)}</span>
         ))}
       </span>
-      {PATHS_NOTE}
+      {t.migration.pathsNote}
     </>,
   );
   return (
@@ -713,7 +710,7 @@ function PathsButton(props: { paths: readonly string[]; home: string; open: bool
         {...tip.anchor}
       >
         <Icon name="eye" size={13} strokeWidth={1.8} />
-        {props.paths.length} {props.paths.length === 1 ? "path" : "paths"}
+        {t.migration.paths(props.paths.length)}
       </button>
       {tip.layer}
     </>
@@ -730,6 +727,7 @@ function SourceRow(props: {
   counts: SourceCounts | null;
   onToggle: () => void;
 }) {
+  const t = useT();
   const { probe } = props;
   const status = sourceStatus(probe, props.checked, props.scanReady, props.counts);
   return (
@@ -737,33 +735,33 @@ function SourceRow(props: {
       <label className="mg-src-head">
         <input type="checkbox" checked={props.checked} disabled={props.disabled} onChange={props.onToggle} />
         <span className="mg-line1">
-          <span className="mg-name">{probe.label}</span>
-          <span className="mg-meta">{KIND_LABEL[probe.kind]}</span>
+          <span className="mg-name">{t.migration.sources[probe.id]}</span>
+          <span className="mg-meta">{t.migration.kinds[probe.kind]}</span>
         </span>
         <span className="mg-trail">
           {status.kind === "not-found" && (
             <span className="mg-status">
               <Icon name="circle-off" size={12} strokeWidth={1.8} />
-              Not found
+              {t.migration.notFound}
             </span>
           )}
           {status.kind === "found" && (
-            <Tipped className="mg-status mg-found" tip="Only checked that it exists · nothing read yet">
+            <Tipped className="mg-status mg-found" tip={t.migration.foundTip}>
               <Icon name="circle-check" size={12} strokeWidth={1.8} />
-              Found
+              {t.migration.found}
             </Tipped>
           )}
-          {status.kind === "not-scanned" && <span className="mg-status">Not scanned</span>}
+          {status.kind === "not-scanned" && <span className="mg-status">{t.migration.notScanned}</span>}
           {status.kind === "scanned" &&
-            (countLine(status.counts) === "" ? (
-              <span className="mg-status">Nothing new</span>
+            (countLine(status.counts, t) === "" ? (
+              <span className="mg-status">{t.migration.nothingNew}</span>
             ) : (
-              <span className="mg-count">{countLine(status.counts)}</span>
+              <span className="mg-count">{countLine(status.counts, t)}</span>
             ))}
         </span>
       </label>
       {/* 路径清单竖排、常驻：这就是隐私声明，不收进悬停 */}
-      <ul className="mg-paths" aria-label={`Paths read for ${probe.label}`}>
+      <ul className="mg-paths" aria-label={t.migration.pathsReadFor(t.migration.sources[probe.id])}>
         {probe.paths.map((path) => (
           <li key={path} className="mg-path-line" title={path}>
             <Icon name={PATH_ICON[pathGlyph(path)]} size={11} strokeWidth={1.8} />
@@ -807,18 +805,19 @@ function SelectAllButton(props: {
   disabled: boolean;
   onSet: (rows: readonly SessionRow[], on: boolean) => void;
 }) {
+  const t = useT();
   const rows = allRows(props.grouped);
   const all = rows.length > 0 && rows.every((row) => props.selected.has(row.item.sourceFile));
   return (
     <button type="button" className="mg-textbtn" disabled={props.disabled} onClick={() => props.onSet(rows, !all)}>
-      {all ? "Clear all" : "Select all"}
+      {all ? t.migration.clearAll : t.migration.selectAll}
     </button>
   );
 }
 
-function sourceBreakdown(bySource: Partial<Record<ImportSourceId, number>>): string {
+function sourceBreakdown(bySource: Partial<Record<ImportSourceId, number>>, t: Messages): string {
   return (Object.entries(bySource) as [ImportSourceId, number][])
-    .map(([source, count]) => `${SOURCE_LABEL[source]} ${count}`)
+    .map(([source, count]) => `${t.migration.sources[source]} ${count}`)
     .join(" · ");
 }
 
@@ -832,6 +831,7 @@ function GroupLead(props: {
   onSet: (on: boolean) => void;
   onToggleExpand: () => void;
 }) {
+  const t = useT();
   const all = props.picked === props.total;
   return (
     <span className="mg-lead">
@@ -850,7 +850,7 @@ function GroupLead(props: {
         type="button"
         className="mg-chev"
         aria-expanded={props.expanded}
-        aria-label={props.expanded ? "Collapse" : "Expand"}
+        aria-label={props.expanded ? t.migration.collapse : t.migration.expand}
         onClick={(event) => {
           event.stopPropagation();
           props.onToggleExpand();
@@ -863,10 +863,11 @@ function GroupLead(props: {
 }
 
 function PickedCount(props: { picked: number; total: number }) {
+  const t = useT();
   return (
     <span className="mg-count mg-num">
       <b>{props.picked}</b>
-      {props.picked === props.total ? "" : ` of ${props.total}`}
+      {props.picked === props.total ? "" : t.migration.ofTotal(props.total)}
     </span>
   );
 }
@@ -884,6 +885,7 @@ function ChangedBlock(props: {
   onToggleExpand: () => void;
   onSetRows: (rows: readonly SessionRow[], on: boolean) => void;
 }) {
+  const t = useT();
   const picked = props.rows.filter((row) => props.selected.has(row.item.sourceFile)).length;
   const bySource: Partial<Record<ImportSourceId, number>> = {};
   for (const row of props.rows) bySource[row.item.source] = (bySource[row.item.source] ?? 0) + 1;
@@ -892,7 +894,7 @@ function ChangedBlock(props: {
     <div className="mg-group">
       <div className="mg-grow mg-grid-sessions" onClick={props.onToggleExpand}>
         <GroupLead
-          label="Bring over new messages in sessions imported before"
+          label={t.migration.changedLabel}
           picked={picked}
           total={props.rows.length}
           expanded={props.expanded}
@@ -903,16 +905,16 @@ function ChangedBlock(props: {
         <span className="mg-gcopy">
           <span className="mg-gname">
             <Icon name="refresh-cw" size={14} strokeWidth={1.8} />
-            <span className="mg-name">Updated since import</span>
-            <span className="mg-meta">{sourceBreakdown(bySource)}</span>
+            <span className="mg-name">{t.migration.updatedSinceImport}</span>
+            <span className="mg-meta">{sourceBreakdown(bySource, t)}</span>
           </span>
         </span>
         <PickedCount picked={picked} total={props.rows.length} />
         <span />
         <span className="mg-dest" onClick={(event) => event.stopPropagation()}>
-          <Tipped className="mg-fixed-dest" tip={SAME_SESSION_TIP} focusable>
+          <Tipped className="mg-fixed-dest" tip={t.migration.sameSessionTip} focusable>
             <Icon name="corner-down-left" size={12} />
-            Same session
+            {t.migration.sameSession}
           </Tipped>
         </span>
       </div>
@@ -950,10 +952,11 @@ function GroupBlock(props: {
   onSetRows: (rows: readonly SessionRow[], on: boolean) => void;
   onDestination: (destination: ImportDestination) => void;
 }) {
+  const t = useT();
   const { group } = props;
   const picked = group.rows.filter((row) => props.selected.has(row.item.sourceFile)).length;
   const subSessions = group.rows.reduce((sum, row) => sum + row.subSessions, 0);
-  const destinationItems: MenuItem[] = destinationOptions(group, props.workspaces).map((option, index) => ({
+  const destinationItems: MenuItem[] = destinationOptions(group, props.workspaces, t).map((option, index) => ({
     id: `${index}`,
     label: option.label,
     ...(option.hint === undefined ? null : { hint: option.hint }),
@@ -969,7 +972,7 @@ function GroupBlock(props: {
       {/* 整行点开 / 收起；复选框与去向菜单各管各的，不冒泡到这里 */}
       <div className="mg-grow mg-grid-sessions" onClick={props.onToggleExpand}>
         <GroupLead
-          label={`Import sessions from ${groupName(group.folder)}`}
+          label={t.migration.importSessionsFrom(groupName(group.folder, t))}
           picked={picked}
           total={group.rows.length}
           expanded={props.expanded}
@@ -980,8 +983,8 @@ function GroupBlock(props: {
         <span className="mg-gcopy">
           <span className="mg-gname">
             <Icon name={group.folder === null ? "list" : "folder"} size={14} strokeWidth={1.8} />
-            <span className="mg-name">{groupName(group.folder)}</span>
-            <span className="mg-meta">{sourceBreakdown(group.bySource)}</span>
+            <span className="mg-name">{groupName(group.folder, t)}</span>
+            <span className="mg-meta">{sourceBreakdown(group.bySource, t)}</span>
           </span>
           {group.folder !== null && (
             <span className="mg-gpath" title={group.folder}>
@@ -991,7 +994,7 @@ function GroupBlock(props: {
         </span>
         <PickedCount picked={picked} total={group.rows.length} />
         {subSessions > 0 ? (
-          <Tipped className="mg-sub" tip="Sub-sessions come with their parents">
+          <Tipped className="mg-sub" tip={t.migration.subSessionsComeWithParents}>
             <Icon name="git-fork" size={11} strokeWidth={1.8} />
             {subSessions}
           </Tipped>
@@ -1009,10 +1012,10 @@ function GroupBlock(props: {
                 active={open}
                 chevron
                 disabled={props.disabled}
-                title="Where these sessions go"
+                title={t.migration.destinationTip}
                 onClick={toggle}
               >
-                {destinationLabel(props.destination, props.workspaces)}
+                {destinationLabel(props.destination, props.workspaces, t)}
               </Chip>
             )}
           />
@@ -1035,7 +1038,7 @@ function GroupBlock(props: {
           {group.rows.length > ROWS_BEFORE_MORE && (
             <div className="mg-more">
               <button type="button" className="mg-textbtn" onClick={props.onShowAll}>
-                {props.showAll ? "Show fewer" : `Show ${group.rows.length - ROWS_BEFORE_MORE} more`}
+                {props.showAll ? t.migration.showFewer : t.migration.showMore(group.rows.length - ROWS_BEFORE_MORE)}
               </button>
             </div>
           )}
@@ -1060,8 +1063,9 @@ function SessionLine(props: {
   disabled: boolean;
   onToggle: (on: boolean) => void;
 }) {
+  const t = useT();
   const { item, subSessions } = props.row;
-  const badge = changeBadge(item);
+  const badge = changeBadge(item, t);
   return (
     <label className="mg-kid" data-off={!props.checked || undefined}>
       <input
@@ -1074,28 +1078,28 @@ function SessionLine(props: {
         <span className="mg-title" title={item.title}>
           {item.title}
         </span>
-        {props.showSource && <span className="mg-kid-source">{SOURCE_LABEL[item.source]}</span>}
+        {props.showSource && <span className="mg-kid-source">{t.migration.sources[item.source]}</span>}
         <span className="mg-day">{formatDay(item.updatedAt, props.now)}</span>
         {badge !== null && (
           <TipBadge icon={BADGE_ICON[badge.kind]} tip={badge.tip} mono={badge.kind !== "deleted"}>
             {badge.text}
           </TipBadge>
         )}
-        {item.archived && <TipBadge icon="archive" tip={`Archived in ${SOURCE_LABEL[item.source]}`} label="Archived" />}
+        {item.archived && <TipBadge icon="archive" tip={t.migration.archivedIn(t.migration.sources[item.source])} label={t.migration.archived} />}
       </span>
       <span className="mg-trail">
         {subSessions > 0 && (
-          <Tipped className="mg-sub" tip="Sub-sessions come with it">
+          <Tipped className="mg-sub" tip={t.migration.subSessionsComeWithIt}>
             <Icon name="git-fork" size={11} strokeWidth={1.8} />
             {subSessions}
           </Tipped>
         )}
-        <Tipped className="mg-model" tip={modelTip(item)}>
+        <Tipped className="mg-model" tip={modelTip(item, t)}>
           {item.modelMatched ? (
             item.modelId
           ) : (
             <>
-              <span className="mg-model-was">{item.importedModel ?? "unknown model"}</span>
+              <span className="mg-model-was">{item.importedModel ?? t.migration.unknownModel}</span>
               <Icon name="arrow-right" size={10} />
               {item.modelId}
             </>
@@ -1123,28 +1127,36 @@ function GreetingCheck(props: {
   disabled: boolean;
   onToggle: (on: boolean) => void;
 }) {
+  const t = useT();
   const { plan, state } = props;
   const model = plan.model;
   const unavailable = model === null || plan.candidates === 0;
-  const sessions = `${plan.candidates} ${plan.candidates === 1 ? "session" : "sessions"}`;
+  const sessions = t.migration.sessions(plan.candidates);
   let sub: React.ReactNode;
   if (state.kind === "checking") {
     sub = (
       <>
         <Icon name="loader-circle" size={11} spin />
-        Asking {model?.modelId ?? "the model"} about {sessions}…
+        {t.migration.greetingAsking(model?.modelId ?? t.migration.theModel, sessions)}
       </>
     );
   } else if (state.kind === "on") {
-    sub = `${state.checked} checked · ${state.asked} read by ${state.model} · ${state.leaveOut.size} left out`;
+    sub = t.migration.greetingResult(state.checked, state.asked, state.model, state.leaveOut.size);
   } else if (state.kind === "error") {
-    sub = <span className="mg-error">The check failed: {state.message}</span>;
+    sub = (
+      <span className="mg-error">
+        {t.migration.greetingFailed} {state.message}
+      </span>
+    );
   } else if (model === null) {
-    sub = "Needs a model — set up a provider first";
+    sub = t.migration.greetingNeedsModel;
   } else if (plan.candidates === 0) {
-    sub = "No session has just one message from you, so there's nothing to check";
+    sub = t.migration.greetingNothing;
   } else {
-    sub = `Looks at the ${sessions} where you sent one message · uses ${model.modelId} (${model.from === "sub-session" ? "your sub-session model" : "your default model — no sub-session model is set"}) and your quota`;
+    sub =
+      model.from === "sub-session"
+        ? t.migration.greetingUsesSubSession(sessions, model.modelId)
+        : t.migration.greetingUsesDefault(sessions, model.modelId);
   }
   return (
     <label className="mg-greet" data-disabled={unavailable || undefined}>
@@ -1155,7 +1167,7 @@ function GreetingCheck(props: {
         onChange={(event) => props.onToggle(event.target.checked)}
       />
       <span className="mg-greet-copy">
-        <span className="mg-greet-title">Leave out sessions that only say hi or test</span>
+        <span className="mg-greet-title">{t.migration.greetingTitle}</span>
         <span className="mg-greet-sub">{sub}</span>
       </span>
     </label>
@@ -1182,8 +1194,9 @@ function SessionFacts(props: {
   onOpenProviders: () => void;
   onKeep: (sourceFile: string) => void;
 }) {
+  const t = useT();
   const [details, setDetails] = useState<"cannot" | "greeting" | null>(null);
-  const facts = sessionFacts(props.report, props.grouped, props.fallback, props.now);
+  const facts = sessionFacts(props.report, props.grouped, props.fallback, props.now, t);
   const unconvertible = unconvertibleSkips(props.report);
   const toggle = (which: "cannot" | "greeting"): void => setDetails((open) => (open === which ? null : which));
   if (facts.length === 0) return null;
@@ -1196,17 +1209,17 @@ function SessionFacts(props: {
             {fact.label}
             {fact.kind === "fallback" && (
               <button type="button" className="mg-link" onClick={props.onOpenProviders}>
-                Set up providers
+                {t.migration.setUpProviders}
               </button>
             )}
             {fact.kind === "cannot" && unconvertible.length > 0 && (
               <button type="button" className="mg-link" aria-expanded={details === "cannot"} onClick={() => toggle("cannot")}>
-                {details === "cannot" ? "Hide" : "Details"}
+                {details === "cannot" ? t.migration.hide : t.migration.details}
               </button>
             )}
             {fact.kind === "greeting" && props.leftOut.length > 0 && (
               <button type="button" className="mg-link" aria-expanded={details === "greeting"} onClick={() => toggle("greeting")}>
-                {details === "greeting" ? "Hide" : "Review"}
+                {details === "greeting" ? t.migration.hide : t.migration.review}
               </button>
             )}
           </Fact>
@@ -1217,9 +1230,9 @@ function SessionFacts(props: {
           {props.leftOut.map((item) => (
             <li key={item.sourceFile}>
               <span className="mg-skip-title">{item.title}</span>
-              <span className="mg-skip-why">{SOURCE_LABEL[item.source]}</span>
+              <span className="mg-skip-why">{t.migration.sources[item.source]}</span>
               <button type="button" className="mg-textbtn" onClick={() => props.onKeep(item.sourceFile)}>
-                Keep
+                {t.migration.keep}
               </button>
             </li>
           ))}
@@ -1233,7 +1246,7 @@ function SessionFacts(props: {
               <span className="mg-skip-why">{skip.detail ?? skip.reason}</span>
             </li>
           ))}
-          {unconvertible.length > 30 && <li className="mg-skip-why">… and {unconvertible.length - 30} more</li>}
+          {unconvertible.length > 30 && <li className="mg-skip-why">{t.migration.andMore(unconvertible.length - 30)}</li>}
         </ul>
       )}
     </>
@@ -1265,6 +1278,7 @@ function ImportFooter(props: {
   disabled: boolean;
   onImport: () => void;
 }) {
+  const t = useT();
   const { run, summary } = props;
   const importButton = (label: string, busy: boolean) => (
     <button type="button" className="btn-accent mg-btn mg-btn-primary" disabled={props.disabled || busy} onClick={props.onImport}>
@@ -1274,28 +1288,28 @@ function ImportFooter(props: {
   );
 
   let copy: React.ReactNode;
-  let action: React.ReactNode = importButton("Import", false);
+  let action: React.ReactNode = importButton(t.migration.import, false);
   if (run.kind === "running") {
     copy = (
       <>
-        <span className="mg-foot-main">{runningHeadline(run.sessions, run.skills, run.mcp)}</span>
+        <span className="mg-foot-main">{runningHeadline(run.sessions, run.skills, run.mcp, t)}</span>
         <span className="mg-foot-sub">
-          <FootFact icon="hard-drive" tip="Copying session files into orbita · large histories take a minute">
-            Copying
+          <FootFact icon="hard-drive" tip={t.migration.copyingTip}>
+            {t.migration.copying}
           </FootFact>
         </span>
       </>
     );
-    action = importButton("Importing…", true);
+    action = importButton(t.migration.importing, true);
   } else if (run.kind === "done") {
-    const facts = doneFacts(run.result);
+    const facts = doneFacts(run.result, t);
     copy = (
       <>
         <span className="mg-foot-main" role="status">
           <span className="mg-ok">
             <Icon name="circle-check" size={15} />
           </span>
-          {doneHeadline(run.result)}
+          {doneHeadline(run.result, t)}
         </span>
         {facts.length > 0 && (
           <span className="mg-foot-sub">
@@ -1319,20 +1333,20 @@ function ImportFooter(props: {
       <>
         <span className="mg-foot-main mg-error">
           <Icon name="triangle-alert" size={13} />
-          Import failed
+          {t.migration.importFailed}
         </span>
         <span className="mg-foot-sub mg-foot-msg">{run.message}</span>
       </>
     );
   } else if (!props.scanned || summary === null) {
-    copy = <span className="mg-foot-main mg-dim">Import</span>;
+    copy = <span className="mg-foot-main mg-dim">{t.migration.import}</span>;
   } else {
     const total = summary.sessions + summary.updates + props.skills + props.mcp;
-    const facts = footFacts(summary, props.skills, props.skillMode, props.mcp);
+    const facts = footFacts(summary, props.skills, props.skillMode, props.mcp, t);
     copy = (
       <>
         <span className={total === 0 ? "mg-foot-main mg-dim" : "mg-foot-main"}>
-          {headline(summary.sessions, summary.updates, props.skills, props.mcp)}
+          {headline(summary.sessions, summary.updates, props.skills, props.mcp, t)}
         </span>
         {facts.length > 0 && (
           <span className="mg-foot-sub">

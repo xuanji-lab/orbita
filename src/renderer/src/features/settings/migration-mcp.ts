@@ -2,7 +2,8 @@
  * Migration 页 MCP 一段的纯逻辑：默认勾选与出处的写法。`node --test` 直接测。
  */
 import type { ImportMcpItem, ImportMcpOrigin, ImportSourceId } from "@shared/import";
-import { SOURCE_LABEL, abbreviateHome } from "./migration-groups.ts";
+import { abbreviateHome } from "./migration-groups.ts";
+import type { Messages } from "../../messages-en.ts";
 
 /** 能勾的：只有 new。 */
 export function isSelectableMcp(item: ImportMcpItem): boolean {
@@ -34,21 +35,22 @@ export function selectedMcpNames(items: readonly ImportMcpItem[], selected: Read
  * 出处：「Proma · Claude Code」；只在某个项目里配的写出项目（「Claude Code, only in ~/repo/app」）。
  * 同一来源出现多次（Proma 的几个工作区都配了）只写一次来源名。
  */
-export function mcpOriginLabel(origins: readonly ImportMcpOrigin[], home: string): string {
+export function mcpOriginLabel(origins: readonly ImportMcpOrigin[], home: string, t: Messages): string {
   const parts: string[] = [];
   for (const origin of origins) {
+    const source = t.migration.sources[origin.source];
     const label =
       origin.source === "claude-code" && origin.where !== null
-        ? `${SOURCE_LABEL[origin.source]}, only in ${abbreviateHome(origin.where, home)}`
-        : SOURCE_LABEL[origin.source];
+        ? t.migration.onlyIn(source, abbreviateHome(origin.where, home))
+        : source;
     if (!parts.includes(label)) parts.push(label);
   }
   return parts.join(" · ");
 }
 
 /** 行尾的状态字；可导的 new 没有。 */
-export function mcpStatusLabel(item: ImportMcpItem): string | null {
-  if (item.status === "in-orbita") return "Already in orbita";
-  if (item.status === "unsupported") return item.reason ?? "Can't be imported";
+export function mcpStatusLabel(item: ImportMcpItem, t: Messages): string | null {
+  if (item.status === "in-orbita") return t.migration.alreadyInOrbita;
+  if (item.status === "unsupported") return item.reason ?? t.migration.cantImport;
   return null;
 }

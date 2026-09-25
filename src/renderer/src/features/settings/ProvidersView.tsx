@@ -23,6 +23,7 @@ import {
   reorderIds,
   urlSuffix,
 } from "./providers-view-model.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * Provider 设置面 —— 主从两栏铺满内容面：左栏厂商列表（可拖动排序、可复制），右栏唯一编辑区。
@@ -38,6 +39,7 @@ import {
  *     Save 只管身份字段（名称 / URL / key），所以它收在连接区里，而不是整页底栏。
  */
 export function ProvidersView(props: { onChange?: () => void }) {
+  const t = useT();
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** 右栏三态：详情 / 选厂商目录 / 新建表单 */
@@ -249,7 +251,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
    * （实测 zhipu 的目录有 glm-5.3，而 anthropic 兼容端点的 /models 返回 200 包着 404）。
    */
   const fetchModels = () =>
-    guard("Fetching models…", async () => {
+    guard(t.providers.fetchingModels, async () => {
       const result = await api.provider.discover({
         baseUrl: draft.baseUrl.trim(),
         api: known?.api ?? "openai-completions",
@@ -269,14 +271,14 @@ export function ProvidersView(props: { onChange?: () => void }) {
       });
       return {
         tone: "bad" as const,
-        text: `${result.message} Showing ${fromCatalog.length} from pi's catalog instead — these may not all be on your plan.`,
+        text: t.providers.fetchFallback(result.message, fromCatalog.length),
       };
     });
 
   const test = async (): Promise<void> => {
     setTesting(true);
     try {
-      await guard("Testing connection…", async () => {
+      await guard(t.providers.testingConnection, async () => {
         const result = await api.provider.test({
           api: known?.api ?? "openai-completions",
           baseUrl: draft.baseUrl.trim(),
@@ -295,7 +297,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
    * 按模型 id 独立——连续点多个模型就是并行测试，谁也不顶谁。
    * 成功徽标 2.5s 后自动消失；失败原因留在行下，直到重测或切换。 */
   const testModel = (id: string) => {
-    setModelTests((prev) => ({ ...prev, [id]: { tone: "busy", text: "Testing…" } }));
+    setModelTests((prev) => ({ ...prev, [id]: { tone: "busy", text: t.providers.testing } }));
     api.provider
       .test({ api: known?.api ?? "openai-completions", baseUrl: draft.baseUrl.trim(), modelId: id, ...withKey(), ...withHeaders() })
       .then((result) => {
@@ -407,7 +409,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
     const updated = fresh.find((p) => p.id === draft.id.trim());
     if (updated !== undefined) loadDraft(updated);
     // Save 条随改动清零一起收起；这一行状态告诉用户「刚才那一下落盘了」
-    setStatus({ tone: "ok", text: "Saved" });
+    setStatus({ tone: "ok", text: t.providers.saved });
   };
 
   /**
@@ -504,7 +506,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
 
   return (
     <section className="pv-root">
-      <nav className="pv-nav" aria-label="Providers">
+      <nav className="pv-nav" aria-label={t.settings.tabs.providers}>
         <div
           className="pv-list"
           onDragLeave={(e) => {
@@ -521,7 +523,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                 className={`pv-row${view.kind === "detail" && provider.id === selectedId ? " on" : ""}${provider.id === dragId ? " dragging" : ""}${dropTarget === provider.id ? " drop-on" : ""}`}
                 title={
                   provider.auth.scheme === "env"
-                    ? `${provider.displayName} · key from environment (${provider.auth.envKeys.join(", ")})`
+                    ? t.providers.keyFromEnv(provider.displayName, provider.auth.envKeys.join(", "))
                     : provider.displayName
                 }
                 draggable
@@ -557,7 +559,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   {keyed ? (
                     <span className="pv-row-sub">{hostOf(provider.endpoint.baseUrl)}</span>
                   ) : (
-                    <span className="pv-row-sub nokey">No API key</span>
+                    <span className="pv-row-sub nokey">{t.providers.noApiKey}</span>
                   )}
                 </span>
                 <span className="pv-row-count" title={`${provider.models.declared.length} models`}>
@@ -573,7 +575,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
           aria-pressed={view.kind !== "detail"}
           onClick={openCatalog}
         >
-          <Icon name="plus" size={14} /> Add provider
+          <Icon name="plus" size={14} /> {t.providers.addProvider}
         </button>
       </nav>
 
@@ -582,21 +584,21 @@ export function ProvidersView(props: { onChange?: () => void }) {
           <div className="pv-banner">
             <Line tone="bad">{error}</Line>
             <button type="button" className="pv-btn sm" onClick={() => void refresh()}>
-              Retry
+              {t.common.retry}
             </button>
           </div>
         )}
         {error === null && providers === null && (
           <div className="pv-banner">
-            <Line tone="busy">Loading providers…</Line>
+            <Line tone="busy">{t.providers.loadingProviders}</Line>
           </div>
         )}
         {error === null && providers !== null && sorted.length === 0 && view.kind === "detail" && (
           <div className="pv-empty">
             <Icon name="cpu" size={24} strokeWidth={1.8} />
-            <span>No providers</span>
+            <span>{t.providers.noProviders}</span>
             <button type="button" className="pv-btn accent lg" onClick={openCatalog}>
-              <Icon name="plus" size={14} /> Add provider
+              <Icon name="plus" size={14} /> {t.providers.addProvider}
             </button>
           </div>
         )}
@@ -608,7 +610,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
             <div className="pv-content">
               <div className="pv-head">
                 <span className="pv-title">
-                  {draft.displayName || (isNew ? "New provider" : editing?.displayName)}
+                  {draft.displayName || (isNew ? t.providers.newProvider : editing?.displayName)}
                 </span>
                 {/* 协议是锁定的事实，不是一个要填的字段：从整行降成标题旁的徽标 */}
                 <ApiFormatBadge api={known.api} />
@@ -618,8 +620,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       <button
                         type="button"
                         className="pv-btn icon danger-solid"
-                        aria-label="Confirm remove"
-                        title="Click again to remove this provider"
+                        aria-label={t.providers.confirmRemove}
+                        title={t.providers.confirmRemoveProviderTip}
                         onClick={() => void removeProvider()}
                       >
                         <Icon name="trash-2" size={15} />
@@ -627,8 +629,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       <button
                         type="button"
                         className="pv-btn icon"
-                        aria-label="Cancel remove"
-                        title="Cancel remove"
+                        aria-label={t.providers.cancelRemove}
+                        title={t.providers.cancelRemove}
                         onClick={() => setConfirmRemove(false)}
                       >
                         <Icon name="x" size={15} />
@@ -639,8 +641,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       <button
                         type="button"
                         className="pv-btn icon"
-                        aria-label="Duplicate"
-                        title="Duplicate with current settings · then fill a different API key"
+                        aria-label={t.providers.duplicate}
+                        title={t.providers.duplicateTip}
                         onClick={() => void copyProvider()}
                       >
                         <Icon name="copy" size={15} />
@@ -648,8 +650,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                       <button
                         type="button"
                         className="pv-btn icon danger"
-                        aria-label="Remove provider"
-                        title="Remove this provider"
+                        aria-label={t.providers.removeProvider}
+                        title={t.providers.removeProviderTip}
                         onClick={() => setConfirmRemove(true)}
                       >
                         <Icon name="trash-2" size={15} />
@@ -659,10 +661,10 @@ export function ProvidersView(props: { onChange?: () => void }) {
                 </span>
               </div>
 
-              <section className="pv-block" aria-label="Connection">
+              <section className="pv-block" aria-label={t.providers.connection}>
                 <div className="pv-form">
                   <div className="pv-fld">
-                    <label htmlFor="pv-name">Name</label>
+                    <label htmlFor="pv-name">{t.providers.name}</label>
                     <input
                       id="pv-name"
                       className="pv-input"
@@ -671,7 +673,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                     />
                   </div>
                   <div className="pv-fld">
-                    <label htmlFor="pv-url">Base URL</label>
+                    <label htmlFor="pv-url">{t.providers.baseUrl}</label>
                     <span className="pv-fld-stack">
                       <UrlField
                         value={draft.baseUrl}
@@ -685,7 +687,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                     </span>
                   </div>
                   <div className="pv-fld">
-                    <label htmlFor="pv-key">API key</label>
+                    <label htmlFor="pv-key">{t.providers.apiKey}</label>
                     <div className="pv-krow">
                       <input
                         id="pv-key"
@@ -694,16 +696,16 @@ export function ProvidersView(props: { onChange?: () => void }) {
                         value={draft.apiKey}
                         placeholder={
                           !isNew && editing?.auth.scheme === "api_key" && editing.auth.masked !== null
-                            ? `Saved — ${editing.auth.masked}`
-                            : "Paste your API key"
+                            ? t.providers.savedKey(editing.auth.masked)
+                            : t.providers.pasteKey
                         }
                         onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
                       />
                       <button
                         type="button"
                         className="pv-btn icon"
-                        aria-label={revealed ? "Hide key" : "Show key"}
-                        title={revealed ? "Hide key" : "Show key"}
+                        aria-label={revealed ? t.providers.hideKey : t.providers.showKey}
+                        title={revealed ? t.providers.hideKey : t.providers.showKey}
                         onClick={() => void toggleReveal()}
                       >
                         <Icon name={revealed ? "eye-off" : "eye"} size={15} strokeWidth={1.8} />
@@ -715,7 +717,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                         onClick={() => void test()}
                       >
                         <Icon name={testing ? "loader-circle" : "zap"} size={13} spin={testing} />
-                        {testing ? "Testing…" : "Test"}
+                        {testing ? t.providers.testing : t.providers.test}
                       </button>
                     </div>
                   </div>
@@ -730,39 +732,39 @@ export function ProvidersView(props: { onChange?: () => void }) {
                 {dirty && (
                   <div className="pv-savebar">
                     <span className="pv-savebar-note">
-                      <Icon name="pencil-line" size={12} strokeWidth={1.8} /> Unsaved
+                      <Icon name="pencil-line" size={12} strokeWidth={1.8} /> {t.providers.unsaved}
                     </span>
                     <button type="button" className="pv-btn" onClick={cancelSide}>
-                      Cancel
+                      {t.common.cancel}
                     </button>
                     <button type="button" className="pv-btn accent" onClick={() => void save()}>
-                      {isNew ? "Add provider" : "Save"}
+                      {isNew ? t.providers.addProvider : t.common.save}
                     </button>
                   </div>
                 )}
               </section>
 
               <div className="pv-mhead">
-                <span className="section-label">Models</span>
+                <span className="section-label">{t.providers.models}</span>
                 <span className="pv-count">{draft.models.length}</span>
                 <span className="pv-spacer" />
                 <button
                   type="button"
                   className="pv-btn sm"
-                  title="Add a model by id"
+                  title={t.providers.addModelByIdTip}
                   onClick={() => setEditor({ isNew: true, id: null })}
                 >
-                  <Icon name="plus" size={13} strokeWidth={1.8} /> Add
+                  <Icon name="plus" size={13} strokeWidth={1.8} /> {t.common.add}
                 </button>
                 {discovered === null && (
                   <button
                     type="button"
                     className="pv-btn sm"
                     disabled={draft.baseUrl.trim() === ""}
-                    title="Fetch the model list from the provider"
+                    title={t.providers.fetchListTip}
                     onClick={() => void fetchModels()}
                   >
-                    <Icon name="refresh-cw" size={13} strokeWidth={1.8} /> Fetch list
+                    <Icon name="refresh-cw" size={13} strokeWidth={1.8} /> {t.providers.fetchList}
                   </button>
                 )}
               </div>
@@ -791,7 +793,7 @@ export function ProvidersView(props: { onChange?: () => void }) {
                   // 空态用两个按钮说话，代替「No models yet — fetch the list, or add one by id.」
                   <div className="pv-mempty">
                     <Icon name="cpu" size={20} strokeWidth={1.8} />
-                    <span>No models</span>
+                    <span>{t.providers.noModels}</span>
                     <span className="pv-inline">
                       <button
                         type="button"
@@ -799,14 +801,14 @@ export function ProvidersView(props: { onChange?: () => void }) {
                         disabled={draft.baseUrl.trim() === "" || discovered !== null}
                         onClick={() => void fetchModels()}
                       >
-                        <Icon name="refresh-cw" size={13} strokeWidth={1.8} /> Fetch list
+                        <Icon name="refresh-cw" size={13} strokeWidth={1.8} /> {t.providers.fetchList}
                       </button>
                       <button
                         type="button"
                         className="pv-btn line"
                         onClick={() => setEditor({ isNew: true, id: null })}
                       >
-                        <Icon name="plus" size={13} strokeWidth={1.8} /> Add by id
+                        <Icon name="plus" size={13} strokeWidth={1.8} /> {t.providers.addById}
                       </button>
                     </span>
                   </div>
@@ -832,25 +834,25 @@ export function ProvidersView(props: { onChange?: () => void }) {
                               className="pv-badge"
                               title={
                                 badge.fallback
-                                  ? "Not in the catalog · showing the 128k / 8k fallback"
-                                  : "Context window"
+                                  ? t.providers.ctxFallbackTip
+                                  : t.providers.contextWindow
                               }
                             >
                               {badge.fallback && <Icon name="triangle-alert" size={10} strokeWidth={1.8} />}
                               {badge.text}
                             </span>
                             {modelAcceptsImage(model, defaults) && (
-                              <span className="pv-badge" title="Accepts image input">
+                              <span className="pv-badge" title={t.providers.acceptsImage}>
                                 <Icon name="image" size={11} strokeWidth={1.8} />
                               </span>
                             )}
                             {tested !== undefined && tested.tone !== "busy" && (
                               <span
                                 className={`pv-badge pv-test-${tested.tone}`}
-                                title={tested.tone === "bad" ? "See the failure reason below" : tested.text}
+                                title={tested.tone === "bad" ? t.providers.seeFailureBelow : tested.text}
                               >
                                 <Icon name={tested.tone === "ok" ? "check" : "triangle-alert"} size={11} />
-                                {tested.tone === "ok" ? "Success" : "Failed"}
+                                {tested.tone === "ok" ? t.providers.success : t.common.failed}
                               </span>
                             )}
                           </span>
@@ -861,8 +863,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                                 <button
                                   type="button"
                                   className="pv-btn icon sm danger-solid"
-                                  aria-label="Confirm remove"
-                                  title={`Click again to remove ${model.id}`}
+                                  aria-label={t.providers.confirmRemove}
+                                  title={t.providers.confirmRemoveModelTip(model.id)}
                                   onClick={() => {
                                     setConfirmRemoveModel(null);
                                     void mutateModels((models) => models.filter((m) => m.id !== model.id));
@@ -873,8 +875,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                                 <button
                                   type="button"
                                   className="pv-btn icon sm"
-                                  aria-label="Cancel remove"
-                                  title="Cancel remove"
+                                  aria-label={t.providers.cancelRemove}
+                                  title={t.providers.cancelRemove}
                                   onClick={() => setConfirmRemoveModel(null)}
                                 >
                                   <Icon name="x" size={13} strokeWidth={1.8} />
@@ -885,8 +887,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                                 <button
                                   type="button"
                                   className="pv-btn icon sm"
-                                  aria-label={`Test ${model.id}`}
-                                  title={busy ? "Testing…" : `Test ${model.id}`}
+                                  aria-label={t.providers.testModel(model.id)}
+                                  title={busy ? t.providers.testing : t.providers.testModel(model.id)}
                                   onClick={() => testModel(model.id)}
                                 >
                                   <Icon name={busy ? "loader-circle" : "zap"} size={13} strokeWidth={1.8} spin={busy} />
@@ -894,8 +896,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                                 <button
                                   type="button"
                                   className="pv-btn icon sm"
-                                  aria-label={`Edit ${model.id}`}
-                                  title={`Edit ${model.id}`}
+                                  aria-label={t.providers.editModel(model.id)}
+                                  title={t.providers.editModel(model.id)}
                                   onClick={() => setEditor({ isNew: false, id: model.id })}
                                 >
                                   <Icon name="pencil-line" size={13} strokeWidth={1.8} />
@@ -903,8 +905,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
                                 <button
                                   type="button"
                                   className="pv-btn icon sm danger"
-                                  aria-label={`Remove ${model.id}`}
-                                  title={`Remove ${model.id}`}
+                                  aria-label={t.providers.removeModel(model.id)}
+                                  title={t.providers.removeModel(model.id)}
                                   onClick={() => setConfirmRemoveModel(model.id)}
                                 >
                                   <Icon name="trash-2" size={13} strokeWidth={1.8} />
@@ -961,9 +963,8 @@ function hostOf(url: string): string {
  * 可聚焦（tabIndex）——键盘用户也要能读到「为什么锁着」。
  */
 function ApiFormatBadge(props: { api: string }) {
-  const tip = useSettingTip<HTMLSpanElement>(
-    "API format · set by the provider preset · to switch protocol, add a different entry",
-  );
+  const t = useT();
+  const tip = useSettingTip<HTMLSpanElement>(t.providers.apiFormatTip);
   return (
     <>
       <span className="pv-format" tabIndex={0} {...tip.anchor}>
@@ -987,7 +988,8 @@ function UrlField(props: {
   invalid: boolean;
   onChange: (value: string) => void;
 }) {
-  const tip = useSettingTip<HTMLSpanElement>("The client appends this path");
+  const t = useT();
+  const tip = useSettingTip<HTMLSpanElement>(t.providers.urlSuffixTip);
   return (
     <label className="pv-url" data-invalid={props.invalid || undefined}>
       <input
@@ -1008,17 +1010,16 @@ function UrlField(props: {
 
 /** 目录视图：KNOWN_PROVIDERS 的卡片网格——协议跟随条目，没有协议选择框 */
 function CatalogView(props: { onCancel: () => void; onPick: (kindId: string) => void }) {
+  const t = useT();
   return (
     <div className="pv-scroll">
       <div className="pv-content">
         <div className="pv-head">
-          <span className="pv-title">Add provider</span>
-          <InfoTip label="About this list">
-            Only adapters verified against real endpoints · the protocol follows the entry you pick
-          </InfoTip>
+          <span className="pv-title">{t.providers.addProvider}</span>
+          <InfoTip label={t.providers.aboutList}>{t.providers.aboutListBody}</InfoTip>
           <span className="pv-headend">
             <button type="button" className="pv-btn" onClick={props.onCancel}>
-              Cancel
+              {t.common.cancel}
             </button>
           </span>
         </div>
@@ -1034,20 +1035,21 @@ function CatalogView(props: { onCancel: () => void; onPick: (kindId: string) => 
 
 /** 一张目录卡。`catalog` 徽标 = 模型参数有官方目录可继承（原来是页脚一句说明） */
 function CatalogCard(props: { known: KnownProvider; onPick: () => void }) {
-  const tip = useSettingTip<HTMLSpanElement>("Model parameters come from the built-in catalog");
+  const t = useT();
+  const tip = useSettingTip<HTMLSpanElement>(t.providers.catalogTip);
   return (
     <button type="button" className="pv-card" onClick={props.onPick}>
       <span className="pv-card-name">
-        {props.known.label}
+        {t.providers.knownLabel(props.known.id, props.known.label)}
         <Icon name="chevron-right" size={13} />
       </span>
-      <span className="pv-card-note">{props.known.note}</span>
+      <span className="pv-card-note">{t.providers.knownNote(props.known.id, props.known.note)}</span>
       <span className="pv-card-meta">
         <span className="pv-badge">{props.known.api}</span>
         {props.known.catalogId !== undefined && (
           <>
             <span className="pv-badge pv-badge-plain" {...tip.anchor}>
-              <Icon name="book-open" size={11} strokeWidth={1.8} /> catalog
+              <Icon name="book-open" size={11} strokeWidth={1.8} /> {t.providers.catalogBadge}
             </span>
             {tip.layer}
           </>
@@ -1064,6 +1066,7 @@ function FetchPanel(props: {
   onApply: (picked: string[]) => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const d = props.discovered;
@@ -1080,15 +1083,15 @@ function FetchPanel(props: {
       <div className="pv-fetch-search">
         <Icon name="search" size={14} />
         <input
-          placeholder="Filter models"
-          aria-label="Filter models"
+          placeholder={t.providers.filterModels}
+          aria-label={t.providers.filterModels}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
       <div className="pv-fetch-list">
         {ids.length === 0 ? (
-          <div className="pv-fetch-none">No models match</div>
+          <div className="pv-fetch-none">{t.providers.noModelsMatch}</div>
         ) : (
           ids.map((id) => {
             const has = props.existing.includes(id);
@@ -1103,7 +1106,7 @@ function FetchPanel(props: {
                 <span className="pv-mid">{id}</span>
                 {has && (
                   <span className="pv-added">
-                    <Icon name="check" size={11} /> Added
+                    <Icon name="check" size={11} /> {t.providers.added}
                   </span>
                 )}
               </label>
@@ -1113,10 +1116,10 @@ function FetchPanel(props: {
       </div>
       <div className="pv-fetch-foot">
         <span className="pv-fetch-count">
-          {picked.size} selected · {d.ids.length} found
+          {t.providers.selectedFound(picked.size, d.ids.length)}
         </span>
         <button type="button" className="pv-btn sm" onClick={props.onCancel}>
-          Cancel
+          {t.common.cancel}
         </button>
         <button
           type="button"
@@ -1124,26 +1127,12 @@ function FetchPanel(props: {
           disabled={picked.size === 0}
           onClick={() => props.onApply([...picked])}
         >
-          {picked.size > 0 ? `Add ${picked.size} selected` : "Add selected"}
+          {t.providers.addSelected(picked.size)}
         </button>
       </div>
     </div>
   );
 }
-
-/** 模型弹窗头上的来源徽标：原来弹窗底部那句「Source: …」收成一枚徽标，整句进悬停 */
-const SOURCE_BADGES: Record<ModelDefaults["source"], { label: string; tip: string }> = {
-  catalog: { label: "catalog", tip: "Source: built-in catalog · blank fields inherit its values" },
-  "catalog-family": {
-    label: "catalog family",
-    tip: "Source: the closest catalog entry in the same model family · blank fields inherit its values",
-  },
-  known: { label: "built-in", tip: "Source: built-in parameters for this model id · blank fields inherit them" },
-  fallback: {
-    label: "fallback",
-    tip: "No catalog entry for this id · blank fields fall back to 128k context / 8k output",
-  },
-};
 
 /**
  * 模型弹窗（Add / Edit 同一件）。**输入框只装用户覆盖值**：留空 = 继承目录 / 兜底，
@@ -1159,6 +1148,7 @@ function ModelDialog(props: {
   onApply: (decl: ModelDecl) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const isNew = props.decl === undefined;
   // 与模型行同一条推断（按 id 跨目录）：行上显示 1M、弹窗却写 Inherit (128000) 是说两句话
   const defaultsOf = (id: string): ModelDefaults =>
@@ -1188,24 +1178,23 @@ function ModelDialog(props: {
     activeDefaults.source === "catalog" || activeDefaults.source === "catalog-family";
   // 三档里的 Inherit 到底继承了什么：图标 + 悬停写出来，不然用户只能靠猜
   const inheritImage = activeDefaults.input.includes("image");
-  const source = SOURCE_BADGES[activeDefaults.source];
+  // 模型弹窗头上的来源徽标：原来弹窗底部那句「Source: …」收成一枚徽标，整句进悬停
+  const source = t.providers.sourceBadges[activeDefaults.source];
   const sourceTip = useSettingTip<HTMLSpanElement>(
-    props.plan ? `${source.tip} · this provider bills by plan: cost estimates are not shown on rows` : source.tip,
+    props.plan ? t.providers.planBillingTip(source.tip) : source.tip,
   );
-  const lockedTip = useSettingTip<HTMLSpanElement>(
-    "The id is the model's identity · remove and re-add to change it",
-  );
+  const lockedTip = useSettingTip<HTMLSpanElement>(t.providers.idImmutableTip);
 
   const apply = () => {
     const finalId = isNew ? idValue.trim().toLowerCase() : (props.decl?.id ?? "");
     if (isNew) {
-      const shapeIssue = modelIdIssue(finalId);
+      const shapeIssue = modelIdIssue(finalId, t);
       if (shapeIssue !== null) {
         setIdIssue(shapeIssue);
         return;
       }
       if (props.existingIds.includes(finalId)) {
-        setIdIssue(`"${finalId}" is already enabled.`);
+        setIdIssue(t.providers.idAlreadyEnabled(finalId));
         return;
       }
     }
@@ -1214,7 +1203,7 @@ function ModelDialog(props: {
     const cin = parseRateInput(cinText);
     const cout = parseRateInput(coutText);
     if (ctx === "invalid" || out === "invalid" || cin === "invalid" || cout === "invalid") {
-      setFieldIssue("Context, output and rates must be numbers (tokens accept 128k / 1M; rates ≥ 0).");
+      setFieldIssue(t.providers.fieldsMustBeNumbers);
       return;
     }
     const decl: ModelDecl = { id: finalId };
@@ -1239,9 +1228,9 @@ function ModelDialog(props: {
         if (e.target === e.currentTarget) props.onClose();
       }}
     >
-      <div className="pv-modal" role="dialog" aria-modal="true" aria-label={isNew ? "Add model" : "Edit model"}>
+      <div className="pv-modal" role="dialog" aria-modal="true" aria-label={isNew ? t.providers.addModel : t.providers.editModelTitle}>
         <div className="pv-modal-head">
-          <strong>{isNew ? "Add model" : "Edit model"}</strong>
+          <strong>{isNew ? t.providers.addModel : t.providers.editModelTitle}</strong>
           <span className="pv-badge pv-badge-plain" tabIndex={0} {...sourceTip.anchor}>
             <Icon
               name={activeDefaults.source === "fallback" ? "triangle-alert" : "book-open"}
@@ -1252,19 +1241,16 @@ function ModelDialog(props: {
           </span>
           {sourceTip.layer}
           <span className="pv-spacer" />
-          <button type="button" className="pv-btn icon" aria-label="Close" title="Close" onClick={props.onClose}>
+          <button type="button" className="pv-btn icon" aria-label={t.common.close} title={t.common.close} onClick={props.onClose}>
             <Icon name="x" size={15} />
           </button>
         </div>
         <div className="pv-modal-body">
           <div className="pv-fld wide">
             <span className="pv-lab">
-              <label htmlFor="pv-model-id">Model id</label>
+              <label htmlFor="pv-model-id">{t.providers.modelId}</label>
               {isNew && (
-                <InfoTip label="About model id">
-                  Lowercase letters, digits, dots and dashes · an id in the built-in catalog inherits its
-                  official parameters
-                </InfoTip>
+                <InfoTip label={t.providers.aboutModelId}>{t.providers.modelIdInfo}</InfoTip>
               )}
             </span>
             {isNew ? (
@@ -1294,58 +1280,58 @@ function ModelDialog(props: {
             )}
           </div>
           <div className="pv-fld wide">
-            <label htmlFor="pv-model-name">Display name</label>
+            <label htmlFor="pv-model-name">{t.providers.displayName}</label>
             <input
               id="pv-model-name"
               className="pv-input"
               value={name}
-              placeholder="Optional"
+              placeholder={t.providers.optional}
               onChange={(e) => setName(e.target.value)}
             />
           </div>
           <div className="pv-fld wide">
-            <span className="pv-lab">Image input</span>
-            <div role="group" aria-label="Image input" className="pv-inline tight">
+            <span className="pv-lab">{t.providers.imageInput}</span>
+            <div role="group" aria-label={t.providers.imageInput} className="pv-inline tight">
               <Chip
                 icon={inheritImage ? "image" : undefined}
                 active={vision === "inherit"}
                 title={
                   inheritImage
-                    ? "Follows the catalog · this model takes images"
-                    : "Follows the catalog · this model takes text only"
+                    ? t.providers.inheritImageTip
+                    : t.providers.inheritTextTip
                 }
                 onClick={() => setVision("inherit")}
               >
-                Inherit
+                {t.providers.inherit}
               </Chip>
               <Chip active={vision === "on"} onClick={() => setVision("on")}>
-                On
+                {t.common.on}
               </Chip>
               <Chip active={vision === "off"} onClick={() => setVision("off")}>
-                Off
+                {t.common.off}
               </Chip>
             </div>
           </div>
           <div className="pv-grid2">
             <UnitField
               id="pv-model-ctx"
-              label="Context window"
+              label={t.providers.contextWindow}
               value={ctxText}
               placeholder={compactTokens(activeDefaults.contextWindow)}
-              post="tokens"
+              post={t.providers.unitTokens}
               onChange={setCtxText}
             />
             <UnitField
               id="pv-model-out"
-              label="Max output"
+              label={t.providers.maxOutput}
               value={outText}
               placeholder={compactTokens(activeDefaults.maxTokens)}
-              post="tokens"
+              post={t.providers.unitTokens}
               onChange={setOutText}
             />
             <UnitField
               id="pv-model-cin"
-              label="Input cost"
+              label={t.providers.inputCost}
               value={cinText}
               placeholder={inheritedCost ? String(activeDefaults.cost.input) : "—"}
               pre="$"
@@ -1354,7 +1340,7 @@ function ModelDialog(props: {
             />
             <UnitField
               id="pv-model-cout"
-              label="Output cost"
+              label={t.providers.outputCost}
               value={coutText}
               placeholder={inheritedCost ? String(activeDefaults.cost.output) : "—"}
               pre="$"
@@ -1368,7 +1354,7 @@ function ModelDialog(props: {
           <button
             type="button"
             className="pv-btn"
-            title="Clear overrides · values fall back to the catalog / built-in defaults"
+            title={t.providers.resetTip}
             onClick={() => {
               setCtxText("");
               setOutText("");
@@ -1377,14 +1363,14 @@ function ModelDialog(props: {
               setVision("inherit");
             }}
           >
-            <Icon name="rotate-ccw" size={13} strokeWidth={1.8} /> Reset
+            <Icon name="rotate-ccw" size={13} strokeWidth={1.8} /> {t.common.reset}
           </button>
           <span className="pv-spacer" />
           <button type="button" className="pv-btn" onClick={props.onClose}>
-            Cancel
+            {t.common.cancel}
           </button>
           <button type="button" className="pv-btn accent" onClick={apply}>
-            Apply
+            {t.common.apply}
           </button>
         </div>
       </div>

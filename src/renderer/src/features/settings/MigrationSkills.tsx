@@ -18,6 +18,7 @@ import {
   skillScopeOptions,
   skillStatusLabel,
 } from "./migration-skills.ts";
+import { useT } from "../../locale.ts";
 
 /** 展开的组里先列这么多条，其余收进「Show N more」（与会话段同一个数） */
 const SKILLS_BEFORE_MORE = 8;
@@ -45,6 +46,7 @@ export function SkillsSection(props: {
   onToggleExpand: (dir: string) => void;
   onShowAll: (dir: string) => void;
 }) {
+  const t = useT();
   // 一个 skill 都没有的目录不列：它既没有可导的，也没有要解释的重名
   const groups = (props.groups ?? []).filter((group) => group.skills.length > 0);
   const selectable = groups.flatMap(selectableSkills);
@@ -52,17 +54,15 @@ export function SkillsSection(props: {
   return (
     <Step
       n={3}
-      title="Skills"
+      title={t.migration.stepSkills}
       state={props.state}
       summary={
-        <InfoTip label="About importing skills">
-          Names already in orbita are left alone · a name found in two folders comes from the first one listed
-        </InfoTip>
+        <InfoTip label={t.migration.aboutSkills}>{t.migration.aboutSkillsBody}</InfoTip>
       }
       tools={
         selectable.length > 0 && (
           <span className="mg-tools">
-            <span className="mg-seg" role="group" aria-label="How skills come over">
+            <span className="mg-seg" role="group" aria-label={t.migration.skillModeAria}>
               {(["copy", "link"] as const).map((mode) => (
                 <ModeButton
                   key={mode}
@@ -75,7 +75,7 @@ export function SkillsSection(props: {
             </span>
             <span className="mg-sep" />
             <button type="button" className="mg-textbtn" disabled={props.disabled} onClick={() => props.onSet(selectable, !all)}>
-              {all ? "Clear all" : "Select all"}
+              {all ? t.migration.clearAll : t.migration.selectAll}
             </button>
           </span>
         )
@@ -84,20 +84,20 @@ export function SkillsSection(props: {
       {props.groups === null ? (
         <p className="mg-caption">
           <Icon name="book-open" size={12} strokeWidth={1.8} />
-          Grouped by skills folder · one scope per folder
+          {t.migration.skillsCaption}
         </p>
       ) : groups.length === 0 ? (
         <div className="mg-block mg-empty">
           <Icon name="circle-check" size={15} />
-          No skills in the ticked sources
+          {t.migration.noSkillsInSources}
         </div>
       ) : (
         <>
           <div className="mg-colhead mg-grid-skills" aria-hidden="true">
             <span />
-            <span>Folder</span>
-            <span>Selected</span>
-            <span>Available in</span>
+            <span>{t.migration.colFolder}</span>
+            <span>{t.migration.colSelected}</span>
+            <span>{t.migration.colAvailableIn}</span>
           </div>
           <div className="mg-block">
             {groups.map((group) => (
@@ -127,10 +127,11 @@ export function SkillsSection(props: {
 
 /** Copy / Link 两个按钮：各自的后果进悬停（原来是 title）。 */
 function ModeButton(props: { mode: ImportSkillMode; pressed: boolean; disabled: boolean; onClick: () => void }) {
+  const t = useT();
   const tip = useSettingTip<HTMLButtonElement>(
     props.mode === "copy"
-      ? "Copied into orbita · they keep working if the other app is removed · later edits there don't carry over"
-      : "Linked to the other app's folder · edits there show up here · removing the app breaks them",
+      ? t.migration.skillsCopiedTip
+      : t.migration.skillsLinkedTip,
   );
   return (
     <>
@@ -142,7 +143,7 @@ function ModeButton(props: { mode: ImportSkillMode; pressed: boolean; disabled: 
         onClick={props.onClick}
         {...tip.anchor}
       >
-        {props.mode === "copy" ? "Copy" : "Link"}
+        {props.mode === "copy" ? t.migration.copy : t.migration.link}
       </button>
       {tip.layer}
     </>
@@ -164,12 +165,13 @@ function SkillGroupBlock(props: {
   onToggleExpand: () => void;
   onShowAll: () => void;
 }) {
+  const t = useT();
   const { group } = props;
   const selectable = selectableSkills(group);
   const picked = selectable.filter((skill) => props.selected.has(skill.dir)).length;
   const all = selectable.length > 0 && picked === selectable.length;
   const empty = selectable.length === 0;
-  const scopeItems: MenuItem[] = skillScopeOptions(props.workspaces).map((option, index) => ({
+  const scopeItems: MenuItem[] = skillScopeOptions(props.workspaces, t).map((option, index) => ({
     id: `${index}`,
     label: option.label,
     ...(option.hint === undefined ? null : { hint: option.hint }),
@@ -178,7 +180,7 @@ function SkillGroupBlock(props: {
     onSelect: () => props.onScope(option.scope),
   }));
   const visible = props.showAll ? group.skills : group.skills.slice(0, SKILLS_BEFORE_MORE);
-  const label = skillGroupLabel(group);
+  const label = skillGroupLabel(group, t);
 
   return (
     <div className="mg-group">
@@ -186,7 +188,7 @@ function SkillGroupBlock(props: {
         <span className="mg-lead">
           <input
             type="checkbox"
-            aria-label={`Import skills from ${label}`}
+            aria-label={t.migration.importSkillsFrom(label)}
             checked={picked > 0}
             ref={(element) => {
               if (element !== null) element.indeterminate = picked > 0 && !all;
@@ -199,7 +201,7 @@ function SkillGroupBlock(props: {
             type="button"
             className="mg-chev"
             aria-expanded={props.expanded}
-            aria-label={props.expanded ? "Collapse" : "Expand"}
+            aria-label={props.expanded ? t.migration.collapse : t.migration.expand}
             disabled={empty}
             onClick={(event) => {
               event.stopPropagation();
@@ -213,7 +215,7 @@ function SkillGroupBlock(props: {
           <span className="mg-gname">
             <Icon name="book-open" size={14} strokeWidth={1.8} />
             <span className="mg-name">{label}</span>
-            <span className="mg-meta">{skillGroupNote(group)}</span>
+            <span className="mg-meta">{skillGroupNote(group, t)}</span>
           </span>
           <span className="mg-gpath" title={group.dir}>
             {abbreviateHome(group.dir, props.home)}
@@ -224,20 +226,20 @@ function SkillGroupBlock(props: {
         ) : (
           <span className="mg-count mg-num">
             <b>{picked}</b>
-            {all ? "" : ` of ${selectable.length}`}
+            {all ? "" : t.migration.ofTotal(selectable.length)}
           </span>
         )}
         <span className="mg-dest" onClick={(event) => event.stopPropagation()}>
           {empty ? (
-            <span className="mg-status">Nothing new</span>
+            <span className="mg-status">{t.migration.nothingNew}</span>
           ) : (
             <Menu
               items={scopeItems}
               align="end"
               panelMinWidth={200}
               trigger={({ open, toggle }) => (
-                <Chip active={open} chevron disabled={props.disabled} title="Which sessions can use these skills" onClick={toggle}>
-                  {skillScopeLabel(props.scope, props.workspaces)}
+                <Chip active={open} chevron disabled={props.disabled} title={t.migration.scopeTip} onClick={toggle}>
+                  {skillScopeLabel(props.scope, props.workspaces, t)}
                 </Chip>
               )}
             />
@@ -248,7 +250,7 @@ function SkillGroupBlock(props: {
       {props.expanded && !empty && (
         <div className="mg-kids">
           {visible.map((skill) => {
-            const status = skillStatusLabel(skill, props.groups);
+            const status = skillStatusLabel(skill, props.groups, t);
             const can = isSelectableSkill(skill);
             return (
               <label key={skill.dir} className="mg-kid mg-skill" data-disabled={!can || undefined}>
@@ -273,7 +275,7 @@ function SkillGroupBlock(props: {
           {group.skills.length > SKILLS_BEFORE_MORE && (
             <div className="mg-more">
               <button type="button" className="mg-textbtn" onClick={props.onShowAll}>
-                {props.showAll ? "Show fewer" : `Show ${group.skills.length - SKILLS_BEFORE_MORE} more`}
+                {props.showAll ? t.migration.showFewer : t.migration.showMore(group.skills.length - SKILLS_BEFORE_MORE)}
               </button>
             </div>
           )}

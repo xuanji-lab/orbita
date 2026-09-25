@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import type { ImportPlanItem, ImportRunReport, ImportScanReport, ImportSourceProbe } from "../../../../shared/import.ts";
 import type { GroupedSessions, ImportSummary } from "./migration-groups.ts";
 import {
-  PATHS_NOTE,
   changeBadge,
   countLine,
   doneFacts,
@@ -19,6 +18,8 @@ import {
   sourceStatus,
   stepStates,
 } from "./migration-page.ts";
+import { en } from "../../messages-en.ts";
+import { zh } from "../../messages-zh.ts";
 
 const NOW = new Date(2026, 8, 25, 12, 0).getTime();
 
@@ -158,37 +159,37 @@ describe("migration-page · Sources", () => {
   });
 
   test("计数行：是 0 的不写，全 0 为空串", () => {
-    assert.equal(countLine({ sessions: 28, skills: 1, mcp: 2 }), "28 sessions · 1 skill · 2 MCP");
-    assert.equal(countLine({ sessions: 1, skills: 0, mcp: 0 }), "1 session");
-    assert.equal(countLine({ sessions: 0, skills: 0, mcp: 0 }), "");
+    assert.equal(countLine({ sessions: 28, skills: 1, mcp: 2 }, en), "28 sessions · 1 skill · 2 MCP");
+    assert.equal(countLine({ sessions: 1, skills: 0, mcp: 0 }, en), "1 session");
+    assert.equal(countLine({ sessions: 0, skills: 0, mcp: 0 }, en), "");
   });
 
   test("隐私声明如实写出项目文件夹的存在检查", () => {
-    assert.match(PATHS_NOTE, /only these paths/);
-    assert.match(PATHS_NOTE, /project folder still exists/);
+    assert.match(en.migration.pathsNote, /only these paths/);
+    assert.match(en.migration.pathsNote, /project folder still exists/);
   });
 });
 
 describe("migration-page · Sessions", () => {
   test("行内徽标：+N / +N · copy / Deleted here；没导过的没有", () => {
     assert.deepEqual(
-      { ...changeBadge(item({ change: "updated", newMessages: 16 })), tip: undefined },
+      { ...changeBadge(item({ change: "updated", newMessages: 16 }), en), tip: undefined },
       { kind: "updated", text: "+16", tip: undefined },
     );
-    assert.match(changeBadge(item({ change: "updated", newMessages: 1, source: "claude-code" }))?.tip ?? "", /^1 new message in Claude Code/);
-    assert.equal(changeBadge(item({ change: "diverged", newMessages: 3 }))?.text, "+3 · copy");
-    assert.match(changeBadge(item({ change: "diverged", newMessages: 3 }))?.tip ?? "", /not ticked by default/);
-    assert.equal(changeBadge(item({ change: "deleted" }))?.text, "Deleted here");
-    assert.equal(changeBadge(item({ change: "new" })), null);
+    assert.match(changeBadge(item({ change: "updated", newMessages: 1, source: "claude-code" }), en)?.tip ?? "", /^1 new message in Claude Code/);
+    assert.equal(changeBadge(item({ change: "diverged", newMessages: 3 }), en)?.text, "+3 · copy");
+    assert.match(changeBadge(item({ change: "diverged", newMessages: 3 }), en)?.tip ?? "", /not ticked by default/);
+    assert.equal(changeBadge(item({ change: "deleted" }), en)?.text, "Deleted here");
+    assert.equal(changeBadge(item({ change: "new" }), en), null);
   });
 
   test("模型悬停：配了的续用；没配的写原模型与兜底模型", () => {
-    assert.equal(modelTip(item({})), "Continues on this model");
+    assert.equal(modelTip(item({}), en), "Continues on this model");
     assert.equal(
-      modelTip(item({ modelMatched: false, importedModel: "k3", modelId: "glm-5.3" })),
+      modelTip(item({ modelMatched: false, importedModel: "k3", modelId: "glm-5.3" }), en),
       "k3 isn't set up here · opens on glm-5.3 and keeps a record of the original",
     );
-    assert.match(modelTip(item({ modelMatched: false, importedModel: null })), /^The original model/);
+    assert.match(modelTip(item({ modelMatched: false, importedModel: null }), en), /^The original model/);
   });
 
   test("混合来源才在单条行上写来源名", () => {
@@ -197,7 +198,7 @@ describe("migration-page · Sessions", () => {
   });
 
   test("事实条：数是 0 的不出现；已导入与导不了分开数", () => {
-    assert.deepEqual(sessionFacts(report({}), EMPTY_GROUPED, null, NOW), []);
+    assert.deepEqual(sessionFacts(report({}), EMPTY_GROUPED, null, NOW, en), []);
     const facts = sessionFacts(
       report({
         skipped: [
@@ -211,7 +212,7 @@ describe("migration-page · Sessions", () => {
       }),
       { ...EMPTY_GROUPED, hidden: 9, leftOut: 3 },
       { count: 5, models: ["a", "b", "c", "d"], fallbackModel: "glm-5.3" },
-      NOW,
+      NOW, en,
     );
     assert.deepEqual(
       facts.map((fact) => [fact.kind, fact.count, fact.label]),
@@ -231,16 +232,16 @@ describe("migration-page · Sessions", () => {
 
 describe("migration-page · 底栏", () => {
   test("主句", () => {
-    assert.equal(headline(3, 1, 5, 0), "Import 3 sessions · 5 skills · update 1 session");
-    assert.equal(headline(0, 2, 0, 0), "Update 2 sessions");
-    assert.equal(headline(0, 0, 0, 1), "Import 1 MCP server");
-    assert.equal(headline(0, 0, 0, 0), "Nothing ticked");
-    assert.equal(runningHeadline(3, 1, 0), "Importing 3 sessions, 1 skill…");
+    assert.equal(headline(3, 1, 5, 0, en), "Import 3 sessions · 5 skills · update 1 session");
+    assert.equal(headline(0, 2, 0, 0, en), "Update 2 sessions");
+    assert.equal(headline(0, 0, 0, 1, en), "Import 1 MCP server");
+    assert.equal(headline(0, 0, 0, 0, en), "Nothing ticked");
+    assert.equal(runningHeadline(3, 1, 0, en), "Importing 3 sessions, 1 skill…");
   });
 
   test("副行事实：只列有的，skill 方式跟着 Copy / Link", () => {
-    assert.deepEqual(footFacts(summary({}), 0, "copy", 0), []);
-    const facts = footFacts(summary({ sessions: 2, subSessions: 80, newWorkspaces: 1, bytes: 3 * 1024 * 1024 }), 4, "link", 1);
+    assert.deepEqual(footFacts(summary({}), 0, "copy", 0, en), []);
+    const facts = footFacts(summary({ sessions: 2, subSessions: 80, newWorkspaces: 1, bytes: 3 * 1024 * 1024 }), 4, "link", 1, en);
     assert.deepEqual(
       facts.map((fact) => [fact.kind, fact.text]),
       [
@@ -251,29 +252,29 @@ describe("migration-page · 底栏", () => {
         ["mcp", "MCP off"],
       ],
     );
-    assert.equal(footFacts(summary({ subSessions: 1 }), 0, "copy", 0)[0]?.tip, "1 sub-session comes with its parent");
-    assert.equal(footFacts(summary({}), 2, "copy", 0)[0]?.text, "skills copied");
+    assert.equal(footFacts(summary({ subSessions: 1 }), 0, "copy", 0, en)[0]?.tip, "1 sub-session comes with its parent");
+    assert.equal(footFacts(summary({}), 2, "copy", 0, en)[0]?.text, "skills copied");
   });
 
   test("完成态主句", () => {
     assert.equal(
-      doneHeadline(run({ imported: 34, updated: 1, createdWorkspaces: [{ id: "w", name: "w", path: "/w" }], skillsImported: 5, mcpImported: 1 })),
+      doneHeadline(run({ imported: 34, updated: 1, createdWorkspaces: [{ id: "w", name: "w", path: "/w" }], skillsImported: 5, mcpImported: 1 }), en),
       "Imported 34 sessions · 5 skills · 1 MCP server (off) · updated 1 session · 1 new workspace",
     );
-    assert.equal(doneHeadline(run({ updated: 2 })), "Updated 2 sessions");
-    assert.equal(doneHeadline(run({ skillsImported: 1 })), "Imported 1 skill");
-    assert.equal(doneHeadline(run({})), "Nothing imported");
+    assert.equal(doneHeadline(run({ updated: 2 }), en), "Updated 2 sessions");
+    assert.equal(doneHeadline(run({ skillsImported: 1 }), en), "Imported 1 skill");
+    assert.equal(doneHeadline(run({}), en), "Nothing imported");
   });
 
   test("完成态副行：有会话落进来才指侧栏；失败各一项", () => {
-    assert.deepEqual(doneFacts(run({ skillsImported: 2 })), []);
+    assert.deepEqual(doneFacts(run({ skillsImported: 2 }), en), []);
     const facts = doneFacts(
       run({
         imported: 1,
         failed: [{ sourceId: "x", sessionId: null, error: "EACCES" }],
         skillsFailed: [{ slug: "pdf", error: "taken" }],
         mcpFailed: [{ name: "gh", error: "exists" }],
-      }),
+      }), en,
     );
     assert.deepEqual(
       facts.map((fact) => [fact.kind, fact.text]),
@@ -287,3 +288,40 @@ describe("migration-page · 底栏", () => {
     assert.equal(facts[1]!.tip, "EACCES · import again to retry");
   });
 });
+
+describe("migration-page · 中文（Manuscript）", () => {
+  test("计数用量词，0 项不写", () => {
+    assert.equal(countLine({ sessions: 28, skills: 1, mcp: 2 }, zh), "28 个会话 · 1 个技能 · 2 个 MCP");
+    assert.equal(countLine({ sessions: 0, skills: 0, mcp: 0 }, zh), "");
+  });
+
+  test("底栏主句与执行中：列举用顿号", () => {
+    assert.equal(headline(3, 1, 5, 0, zh), "导入 3 个会话 · 5 个技能 · 更新 1 个会话");
+    assert.equal(headline(0, 0, 0, 0, zh), "什么都没勾");
+    assert.equal(runningHeadline(3, 5, 0, zh), "正在导入 3 个会话、5 个技能…");
+  });
+
+  test("完成态主句", () => {
+    assert.equal(
+      doneHeadline(run({ imported: 34, updated: 1, createdWorkspaces: [{ id: "w", name: "w", path: "/w" }], skillsImported: 5, mcpImported: 1 }), zh),
+      "已导入 34 个会话 · 5 个技能 · 1 个 MCP 服务（已关闭） · 已更新 1 个会话 · 1 个新工作区",
+    );
+  });
+
+  test("行内徽标与模型悬停", () => {
+    assert.equal(changeBadge(item({ change: "diverged", newMessages: 3 }), zh)?.text, "+3 · 副本");
+    assert.equal(
+      changeBadge(item({ change: "updated", newMessages: 2, source: "claude-code" }), zh)?.tip,
+      "上次导入后 Claude Code 里又有 2 条新消息 · 追加进这里的同一个会话",
+    );
+  });
+
+  test("事实条：数字在前、量词跟着 label", () => {
+    const facts = sessionFacts(report({ orphanedSubSessions: 2 }), EMPTY_GROUPED, null, NOW, zh);
+    assert.deepEqual(
+      facts.map((fact) => `${fact.count} ${fact.label}`),
+      ["2 个单独列出"],
+    );
+  });
+});
+

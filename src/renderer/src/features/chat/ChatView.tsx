@@ -96,6 +96,7 @@ import {
 } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
+import { useT } from "../../locale.ts";
 
 /**
  * 展开体的贴底跟随：chat 级滚动（上方 ChatView）同款语义的缩小版——内容增长
@@ -1123,6 +1124,7 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
  * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
  */
 function ComposerBar(props: { session: ChatSession }) {
+  const t = useT();
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
   // 作用域显示**目录名**。老工作区落库的名可能是完整路径（早期创建没截尾），
@@ -1173,6 +1175,7 @@ function ComposerBar(props: { session: ChatSession }) {
 
   // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
   const modelItems: MenuItem[] = modelMenuItems({
+    t,
     providers: session.usable,
     catalog,
     selected: session.model,

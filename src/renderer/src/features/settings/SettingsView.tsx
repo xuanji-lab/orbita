@@ -21,9 +21,10 @@ import {
   type CompactionSetting,
   type SettingsPatch,
 } from "@shared/settings";
-import { THINKING_LEVELS, thinkingLevelLabel } from "@shared/thinking";
+import { THINKING_LEVELS } from "@shared/thinking";
 import { defaultThinkingLevel } from "@shared/model-defaults";
 import { modelThinkingLevels } from "../chat/thinking-choice.ts";
+import { useT } from "../../locale.ts";
 
 /**
  * 设置面。**它不是弹窗，是内容面的另一种内容**——tab 列表浮在侧栏上（透明、无面），
@@ -31,10 +32,10 @@ import { modelThinkingLevels } from "../chat/thinking-choice.ts";
  * 不是叠在壳上的另一层。
  */
 export const SETTINGS_TABS = [
-  { id: "general", label: "General", icon: "sliders" },
-  { id: "providers", label: "Providers", icon: "cpu" },
-  { id: "migration", label: "Migration", icon: "download" },
-] as const satisfies readonly { id: string; label: string; icon: IconName }[];
+  { id: "general", icon: "sliders" },
+  { id: "providers", icon: "cpu" },
+  { id: "migration", icon: "download" },
+] as const satisfies readonly { id: string; icon: IconName }[];
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 
@@ -52,7 +53,8 @@ export function SettingsView(props: {
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
 }) {
-  const active = SETTINGS_TABS.find((t) => t.id === props.tab) ?? SETTINGS_TABS[0];
+  const t = useT();
+  const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
   return (
     <div
       style={{
@@ -76,7 +78,7 @@ export function SettingsView(props: {
         }}
       >
         <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-          {active.label}
+          {t.settings.tabs[active.id]}
         </strong>
       </header>
 
@@ -125,6 +127,7 @@ function General(props: {
   providers: readonly ProviderDto[];
   onChange: (patch: SettingsPatch) => void;
 }) {
+  const t = useT();
   // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
   const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
   const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
@@ -138,13 +141,14 @@ function General(props: {
   const titleModelItems: MenuItem[] = withInheritedFirst(
     {
       id: "same-as-session",
-      label: "Same as session",
-      hint: "Use whichever model the task is running",
+      label: t.settings.sameAsSession,
+      hint: t.settings.sameAsSessionHint,
       inherited: titleModel === undefined,
       // null 而不是 undefined：补丁里的 undefined 是「这个键没改」，选不回默认
       onSelect: () => props.onChange({ titleModel: null }),
     },
     modelMenuItems({
+      t,
       providers: usable,
       catalog,
       selected: titleModel ?? null,
@@ -159,12 +163,13 @@ function General(props: {
   const subSessionModelItems: MenuItem[] = withInheritedFirst(
     {
       id: "same-as-parent",
-      label: "Same as parent",
-      hint: "Use the model the delegating task is running",
+      label: t.settings.sameAsParent,
+      hint: t.settings.sameAsParentHint,
       inherited: subSessionModel === undefined,
       onSelect: () => props.onChange({ subSessionModel: null, subSessionThinking: null }),
     },
     modelMenuItems({
+      t,
       providers: usable,
       catalog,
       selected: subSessionModel ?? null,
@@ -194,14 +199,14 @@ function General(props: {
       : withInheritedFirst(
           {
             id: "model-default",
-            label: "Model default",
-            hint: thinkingLevelLabel(subSessionThinkingModel.fallback, subSessionThinkingModel.modelId),
+            label: t.settings.modelDefault,
+            hint: t.thinkingLevel(subSessionThinkingModel.fallback, subSessionThinkingModel.modelId),
             inherited: subSessionThinking === undefined,
             onSelect: () => props.onChange({ subSessionThinking: null }),
           },
           (subSessionThinkingModel.supported ?? THINKING_LEVELS).map((level) => ({
             id: level,
-            label: thinkingLevelLabel(level, subSessionThinkingModel.modelId),
+            label: t.thinkingLevel(level, subSessionThinkingModel.modelId),
             checked: subSessionThinking === level,
             onSelect: () => props.onChange({ subSessionThinking: level }),
           })),
@@ -209,29 +214,30 @@ function General(props: {
 
   return (
     <div className="set-page">
-      <SettingGroup label="Appearance">
-        <SettingRow name="Theme">
+      <SettingGroup label={t.settings.appearance}>
+        <SettingRow name={t.settings.theme}>
           <ThemePicker value={props.settings.theme} onChange={props.onChange} />
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
           它们调的都是「agent 怎么干活」，并成一组 */}
-      <SettingGroup label="Agent">
+      <SettingGroup label={t.settings.agent}>
         <SettingRow
-          name="Auto-compact"
+          name={t.settings.autoCompact}
           info={
             <>
-              Folds older history into a summary once remaining context drops to this level · Off
-              keeps manual <b>/compact</b> only · applies from the next message
+              {t.settings.autoCompactInfoLead}
+              <b>/compact</b>
+              {t.settings.autoCompactInfoTail}
             </>
           }
         >
-          <span className="set-chips" role="group" aria-label="Auto-compact">
+          <span className="set-chips" role="group" aria-label={t.settings.autoCompact}>
             <Chip
               active={compaction.enabled === false}
               onClick={() => setCompaction({ ...compaction, enabled: false })}
             >
-              Off
+              {t.common.off}
             </Chip>
             {COMPACTION_CHOICES.map((value) => (
               <Chip
@@ -247,8 +253,8 @@ function General(props: {
           {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
         </SettingRow>
         <SettingRow
-          name="Task title model"
-          info="Names a task from its first message · one small call, a fast model does it well · applies to tasks named from now on"
+          name={t.settings.titleModel}
+          info={t.settings.titleModelInfo}
         >
           {/* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */}
           <Menu
@@ -259,20 +265,20 @@ function General(props: {
                 active={open}
                 title={
                   titleModel === undefined
-                    ? "Titles use the model the task is running"
+                    ? t.settings.titleModelTip
                     : `${titleModel.providerId} · ${titleModel.modelId}`
                 }
                 onClick={toggle}
                 chevron
               >
-                {titleModel?.modelId ?? "Same as session"}
+                {titleModel?.modelId ?? t.settings.sameAsSession}
               </Chip>
             )}
           />
         </SettingRow>
         <SettingRow
-          name="Sub-session model"
-          info="Model and thinking level for sub-sessions a task delegates to · thinking appears once a model is picked · the agent can still choose per delegation"
+          name={t.settings.subSessionModel}
+          info={t.settings.subSessionModelInfo}
         >
           {/* 模型与思考档一行：思考档是模型的属性（档位集与默认档都随型号变），所以先有
               模型芯片、选了具体模型才长出思考档芯片。Same as parent 时思考档跟父走，
@@ -286,13 +292,13 @@ function General(props: {
                   active={open}
                   title={
                     subSessionModel === undefined
-                      ? "Sub-sessions use the model and thinking level of the delegating task"
+                      ? t.settings.subSessionModelTip
                       : `${subSessionModel.providerId} · ${subSessionModel.modelId}`
                   }
                   onClick={toggle}
                   chevron
                 >
-                  {subSessionModel?.modelId ?? "Same as parent"}
+                  {subSessionModel?.modelId ?? t.settings.sameAsParent}
                 </Chip>
               )}
             />
@@ -303,13 +309,15 @@ function General(props: {
                 trigger={({ open, toggle }) => (
                   <Chip
                     active={open}
-                    title={`Thinking level for ${subSessionThinkingModel.modelId}`}
+                    title={t.settings.thinkingLevelFor(subSessionThinkingModel.modelId)}
                     onClick={toggle}
                     chevron
                   >
                     {subSessionThinking === undefined
-                      ? `Default · ${thinkingLevelLabel(subSessionThinkingModel.fallback, subSessionThinkingModel.modelId)}`
-                      : thinkingLevelLabel(subSessionThinking, subSessionThinkingModel.modelId)}
+                      ? t.settings.defaultThinking(
+                          t.thinkingLevel(subSessionThinkingModel.fallback, subSessionThinkingModel.modelId),
+                        )
+                      : t.thinkingLevel(subSessionThinking, subSessionThinkingModel.modelId)}
                   </Chip>
                 )}
               />
@@ -317,22 +325,22 @@ function General(props: {
           </span>
         </SettingRow>
         <SettingRow
-          name="Commit & PR attribution"
-          info="Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author"
+          name={t.settings.attribution}
+          info={t.settings.attributionInfo}
         >
           {/* 设计系统里没有 Switch，开关就用两个 Chip——与 Auto-compact 的 Off 同一个形状 */}
-          <span className="set-chips" role="group" aria-label="Commit and PR attribution">
+          <span className="set-chips" role="group" aria-label={t.settings.attributionAria}>
             <Chip active={gitAttribution} onClick={() => props.onChange({ gitAttribution: true })}>
-              On
+              {t.common.on}
             </Chip>
             <Chip active={!gitAttribution} onClick={() => props.onChange({ gitAttribution: false })}>
-              Off
+              {t.common.off}
             </Chip>
           </span>
           <AttributionPreview enabled={gitAttribution} />
         </SettingRow>
       </SettingGroup>
-      <SettingGroup label="Data">
+      <SettingGroup label={t.settings.data}>
         <DataDirectoryRow />
       </SettingGroup>
     </div>
@@ -365,12 +373,13 @@ function SettingRow(props: {
   note?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const t = useT();
   return (
     <div className="set-row">
       <span className="set-row-head">
         <span className="set-row-name">
           {props.name}
-          {props.info !== undefined && <InfoTip label={`About ${props.name}`}>{props.info}</InfoTip>}
+          {props.info !== undefined && <InfoTip label={t.settings.aboutSetting(props.name)}>{props.info}</InfoTip>}
         </span>
         {props.note}
       </span>
@@ -404,6 +413,7 @@ function AttributionPreview(props: { enabled: boolean }) {
  * 名字列保底 150px（`.set-row` 的列定义），窗口窄了先从左截路径（`.data-dir-path`）。
  */
 function DataDirectoryRow() {
+  const t = useT();
   const [dir, setDir] = useState<
     { kind: "loading" } | { kind: "ready"; path: string } | { kind: "error" }
   >({ kind: "loading" });
@@ -436,8 +446,8 @@ function DataDirectoryRow() {
 
   return (
     <SettingRow
-      name="Data directory"
-      info="Sessions, workspaces, skills and mcp.json live here as plain files"
+      name={t.settings.dataDirectory}
+      info={t.settings.dataDirectoryInfo}
       note={
         revealError !== null && (
           <span role="alert" className="set-row-error">
@@ -454,9 +464,9 @@ function DataDirectoryRow() {
             <bdi dir="ltr">{dir.path}</bdi>
           </code>
         )}
-        {dir.kind === "error" && <code className="data-dir-path-unavailable">Unavailable</code>}
-        <PanelButton onClick={reveal} title="Open the data directory">
-          <Icon name="folder" size={14} /> Reveal
+        {dir.kind === "error" && <code className="data-dir-path-unavailable">{t.settings.unavailable}</code>}
+        <PanelButton onClick={reveal} title={t.settings.openDataDirectory}>
+          <Icon name="folder" size={14} /> {t.settings.reveal}
         </PanelButton>
       </span>
     </SettingRow>
