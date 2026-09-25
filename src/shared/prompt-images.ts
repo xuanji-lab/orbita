@@ -13,6 +13,55 @@ import type { ImageContent } from "@earendil-works/pi-protocol";
 export type PromptImage = ImageContent;
 
 /**
+ * 主进程→agent 进程的图：原图数据 + 原图在磁盘上的引用。
+ *
+ * **原图给人看、缩放图发模型**：agent 进程把 data 缩到 pi 的上限再发给模型、写进转录，
+ * `original` 原样挂在转录的图块上——看大图时按它读回原图。转录不存原图：
+ * 一张 5K 截图几 MB，写进 JSONL 的话打开会话就要整份读进来。
+ *
+ * 引用由主进程铸（renderer 的载荷是裸 `PromptImage`，它指不了路径）。
+ * 缺席 = 没有原图可看（落盘失败、或这条引用落地之前发的图）。
+ */
+export interface SentImage extends PromptImage {
+  original?: string;
+}
+
+/**
+ * 原图引用：`<会话 id>/<uuid>.<扩展名>`。**带会话 id** 是为了读的一侧不必知道
+ * 「这张图在哪条会话里」——分支出来的会话沿用源会话的引用，不拷原图；源会话删了
+ * 就读不到，退回转录里的缩放图。
+ * 格式死定是安全边界：它会被拼进路径，过不了这条正则的一律不读。
+ */
+const ORIGINAL_REF =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|gif|webp)$/;
+
+export function isOriginalRef(value: unknown): value is string {
+  return typeof value === "string" && ORIGINAL_REF.test(value);
+}
+
+/** 转录图块上的原图引用。这是我们自挂的字段（不在 pi 的 schema 里），按未知形状读 */
+export function originalRefOf(block: object): string | null {
+  const value = (block as { original?: unknown }).original;
+  return isOriginalRef(value) ? value : null;
+}
+
+/** 原图文件的扩展名。只有准入的四种，其余返回 null */
+export function originalExtension(mimeType: string): string | null {
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/gif") return "gif";
+  if (mimeType === "image/webp") return "webp";
+  return null;
+}
+
+/** 扩展名→MIME，读原图时用（originalExtension 的逆） */
+export function mimeOfExtension(extension: string): string | null {
+  return (
+    { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp" } as Record<string, string>
+  )[extension] ?? null;
+}
+
+/**
  * 能直接发给模型的格式。**与 pi 的 `processImage` 认的那四种一致**：各家 API
  * 都只收这几种，别的（HEIC、TIFF、SVG）要先转码——转码不在这一刀的范围里，
  * 与其发出去被上游拒掉整条对话，不如在门口说清楚。

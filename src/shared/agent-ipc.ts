@@ -15,7 +15,7 @@ import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
-import type { PromptImage } from "./prompt-images.ts";
+import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { CompactionSetting } from "./settings.ts";
 import type {
   ChannelDelivery,
@@ -93,6 +93,11 @@ export const ipcChannels = {
    * 返回新会话 id；对不上账（罕见落账漂移）时以错误拒绝——宁可不分支，不切错位置。
    */
   sessionBranch: "session:branch",
+  /**
+   * 读一张附图的原图（看大图时用）。载荷是转录图块上的 `original` 引用（`SentImage`），
+   * 回 `PromptImage`；引用不合格或文件不在（源会话已删）回 null，调用方退回缩放图。
+   */
+  sessionAttachment: "session:attachment",
   /** 导出成 Markdown，走原生保存对话框；取消返回 null */
   sessionExport: "session:export",
   sessionDelete: "session:delete",
@@ -366,8 +371,8 @@ export type AgentCommand =
       type: "submit";
       sessionId: string;
       text: string;
-      /** 随消息发的图片，语义同 SubmitAgentInput.images */
-      images?: PromptImage[];
+      /** 随消息发的图片（原图 + 主进程铸的原图引用），语义见 SentImage */
+      images?: SentImage[];
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;
@@ -461,7 +466,7 @@ export type AgentCommand =
       /** 要发的文本。**队列在 renderer 一侧**，这里只负责「停下当前这一轮、发这句话」 */
       text: string;
       /** 随消息发的图片，语义同 submit */
-      images?: PromptImage[];
+      images?: SentImage[];
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;
