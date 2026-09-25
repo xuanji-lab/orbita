@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  QUOTE_GUIDELINE,
   QUOTE_MAX_CHARS,
   clampQuote,
   composeQuotedMessage,
@@ -19,20 +20,29 @@ describe("composeQuotedMessage / parseQuotedMessage", () => {
     assert.deepEqual(parseQuotedMessage("你好"), { quotes: [], text: "你好" });
   });
 
-  it("往返：组出去的正文解析回来是同一批引用与同一句话", () => {
+  it("往返：同一批引用（按顺序）与同一句话；messageId 不进正文，解析回来是空串", () => {
     const quotes: TextQuote[] = [reply, { text: "我上一句", messageId: "u-2", role: "user", turn: 2 }];
-    const message = composeQuotedMessage(quotes, "这两段矛盾吗？");
-    assert.deepEqual(parseQuotedMessage(message), { quotes, text: "这两段矛盾吗？" });
+    const message = composeQuotedMessage(quotes, "1. 对\n2. 不对");
+    assert.deepEqual(parseQuotedMessage(message), {
+      quotes: quotes.map((quote) => ({ ...quote, messageId: "" })),
+      text: "1. 对\n2. 不对",
+    });
   });
 
-  it("格式与 Proma 一致：块在前、source=agent-history、带 message_id / role / turn", () => {
-    const message = composeQuotedMessage([reply], "解释一下");
-    assert.match(message, /^<quoted_context source="agent-history" label="[^"]+" message_id="m-1" role="assistant" turn="3">\n第一行\n第二行\n<\/quoted_context>\n\n解释一下$/);
+  it("编号引用在前、回复在后；只发模型用得上的属性（编号 / 谁 / 轮），不发 id", () => {
+    const message = composeQuotedMessage([reply, { text: "二", messageId: "u-2", role: "user", turn: 2 }], "1. 好\n2. 再说");
+    assert.equal(
+      message,
+      '<quoted_context index="1" role="assistant" turn="3">\n第一行\n第二行\n</quoted_context>\n\n' +
+        '<quoted_context index="2" role="user" turn="2">\n二\n</quoted_context>\n\n' +
+        "1. 好\n2. 再说",
+    );
+    assert.doesNotMatch(message, /m-1|u-2|message_id/);
   });
 
   it("只发引用、没有自己的话也成立", () => {
     const message = composeQuotedMessage([reply], "");
-    assert.deepEqual(parseQuotedMessage(message), { quotes: [reply], text: "" });
+    assert.deepEqual(parseQuotedMessage(message), { quotes: [{ ...reply, messageId: "" }], text: "" });
   });
 
   it("正文里的闭合标签被改写，不会把块提前截断", () => {
@@ -42,9 +52,9 @@ describe("composeQuotedMessage / parseQuotedMessage", () => {
     assert.equal(parsed.text, "q");
   });
 
-  it("属性里的引号与尖括号转义后能读回", () => {
-    const odd: TextQuote = { ...reply, messageId: 'x"<y>' };
-    assert.equal(parseQuotedMessage(composeQuotedMessage([odd], "q")).quotes[0]?.messageId, 'x"<y>');
+  it("Proma 旧块属性里的转义能读回", () => {
+    const message = '<quoted_context source="agent-history" label="a &quot;b&quot;" message_id="x&lt;y&gt;" role="user">\n正文\n</quoted_context>\n\nq';
+    assert.equal(parseQuotedMessage(message).quotes[0]?.messageId, "x<y>");
   });
 
   it("认 Proma 迁移来的块：quoted_file 带路径，旧的 quoted_context 缺 turn", () => {
@@ -86,5 +96,14 @@ describe("划选文本", () => {
 
   it("规整：块元素之间带出的行首尾空白收掉", () => {
     assert.equal(normalizeSelectedText("  标题  \n    正文\t\n  "), "标题\n正文");
+  });
+});
+
+describe("QUOTE_GUIDELINE", () => {
+  it("讲到的属性就是正文里真实出现的属性——格式改了说明没跟上时这里红", () => {
+    const block = composeQuotedMessage([reply], "q");
+    const attrs = [...block.matchAll(/ (\w+)="/g)].map((match) => match[1]);
+    assert.deepEqual(attrs, ["index", "role", "turn"]);
+    for (const attr of attrs) assert.match(QUOTE_GUIDELINE, new RegExp(`${attr}=`));
   });
 });

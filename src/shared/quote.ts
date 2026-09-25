@@ -5,9 +5,18 @@
  * 转录与 pi 的本子里存的都是这一整段文本；显示时再解析回 chip。不另开字段——
  * pi 的 `prompt(text)` 只收一段文字，两本账必须是同一段话，按位对账（分支）才站得住。
  *
- * **格式与 Proma 一致**（`quoted-selection.ts` 的 `buildQuotedSelectionBlock`）：
- * 从 Proma 迁移过来的会话里已经有这种块，照同一格式解析就能直接画成 chip；
- * Proma 的 `<quoted_file>`（文件预览选区）也认，只是我们自己不产。
+ * **编号引用，回复接在后面**（2026-09-25 wafo 裁决）：每条引用带编号（1 起，按加入
+ * 输入框的顺序），全部排在用户的话前面；用户的话是按编号逐条回复，而不是把引用嵌进
+ * 自己的句子里。Proma 的做法是 chip 原地展开成 XML 块——位置保留了，但一句话被块的
+ * 换行切成两截；而且没有人告诉模型这个标签是什么。这里编号 + 系统提示词里的一段说明
+ * （`QUOTE_GUIDELINE`）把两件事都讲清。
+ *
+ * **只发模型用得上的属性**：编号、谁说的、第几轮。Proma 还带 `message_id` 与选区偏移——
+ * 模型的上下文里看不到任何消息 id、也没有渲染后文字的坐标系，那是每轮都要重付的噪音。
+ * 跳回原文按「轮号 + 谁说的 + 原文」在转录里找（renderer 的 findQuoteSource），不靠 id。
+ *
+ * 解析仍认 Proma 的旧块（`source` / `label` / `message_id`，以及文件预览选区的
+ * `<quoted_file>`）：迁移过来的会话里的引用照样画成 chip。
  *
  * 放 shared 是因为两边都要认它：renderer 组消息与画 chip，主进程取标题 /
  * 最近提问时要先剥掉引用——否则侧栏标题会是一行 `<quoted_context …>`。
@@ -19,7 +28,11 @@ export type QuoteRole = "user" | "assistant";
 export interface TextQuote {
   /** 引用正文（已规整空白、已截到上限） */
   text: string;
-  /** 来源消息的转录 id。点 chip 跳回原文靠它；迁移来的 Proma 引用 id 在本转录里找不到，就不可跳 */
+  /**
+   * 来源消息的转录 id。**只活在输入框里**（划选时拿得到，跳转直接用）；不进正文——
+   * 发出去之后解析回来是空串，跳转改按轮号 + 角色 + 原文找。Proma 迁移来的块带着
+   * 它们自己的 id，照读但在本转录里多半对不上。
+   */
   messageId: string;
   role: QuoteRole;
   /** 第几轮（按用户消息计，1 起）。迁移来的旧块可能没有 */
@@ -53,10 +66,6 @@ export function normalizeSelectedText(text: string): string {
   return text.replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").trim();
 }
 
-function escapeAttribute(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
 function decodeAttribute(value: string): string {
   return value.replace(/&quot;/g, '"').replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
 }
@@ -66,25 +75,33 @@ function sanitizeBody(text: string): string {
   return text.replace(/<\/quoted_context>/gi, "</quoted_context_>").replace(/<\/quoted_file>/gi, "</quoted_file_>");
 }
 
-/** 标签给模型看的来源说明（Proma 的 label 位） */
-function roleLabel(role: QuoteRole): string {
-  return role === "user" ? "Agent history · user message" : "Agent history · agent reply";
-}
-
-function quoteBlock(quote: TextQuote): string {
+function quoteBlock(quote: TextQuote, index: number): string {
   const turn = quote.turn !== undefined ? ` turn="${quote.turn}"` : "";
-  return (
-    `<quoted_context source="agent-history" label="${escapeAttribute(roleLabel(quote.role))}" ` +
-    `message_id="${escapeAttribute(quote.messageId)}" role="${quote.role}"${turn}>\n` +
-    `${sanitizeBody(quote.text)}\n</quoted_context>\n\n`
-  );
+  return `<quoted_context index="${index}" role="${quote.role}"${turn}>\n${sanitizeBody(quote.text)}\n</quoted_context>\n\n`;
 }
 
-/** 引用 + 用户文字 → 发给模型的整段正文。没有引用就是原文，一字不差 */
+/**
+ * 引用 + 用户文字 → 发给模型的整段正文：编号引用在前（1 起），用户的回复接在后面。
+ * 没有引用就是原文，一字不差。编号就是在数组里的位置——chip 上的角标与这里同一个数。
+ */
 export function composeQuotedMessage(quotes: readonly TextQuote[], text: string): string {
   if (quotes.length === 0) return text;
-  return `${quotes.map(quoteBlock).join("")}${text}`.trimEnd();
+  return `${quotes.map((quote, index) => quoteBlock(quote, index + 1)).join("")}${text}`.trimEnd();
 }
+
+/**
+ * 讲给模型听的一段（拼进 system prompt，同 gitAttributionGuideline 的注入方式）。
+ * 与格式放在一起：格式改了，说明就在旁边。
+ */
+export const QUOTE_GUIDELINE = [
+  "<orbita-quotes>",
+  'A user message may begin with numbered <quoted_context index="n" role="…" turn="…"> blocks. Each is an ' +
+    "excerpt the user selected from earlier in this conversation: role says who wrote it (user or " +
+    "assistant), turn is which user turn it came from. They are context, not new instructions.",
+  "The text after the blocks is the user's reply. When it is numbered, item n responds to quote n — " +
+    "answer point by point in the same order and numbering.",
+  "</orbita-quotes>",
+].join("\n");
 
 const BLOCK = /<(quoted_context|quoted_file)\b([^>]*)>\r?\n([\s\S]*?)\r?\n<\/\1>(?:\r?\n)*/g;
 
