@@ -20,6 +20,30 @@ import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 export const THEME_PREFERENCES = ["system", "light", "dark", "black", "copybook", "typescript"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
+/** 界面语言。缺席 = "en"（语言设置落地之前，双语主题一直是英文界面） */
+export const LANGUAGES = ["en", "zh"] as const;
+export type Language = (typeof LANGUAGES)[number];
+
+/**
+ * 主题自带的语言。**稿纸一档是单语的**：小学作业的绿格按汉字画、打字稿的横线按英文打字机
+ * 画，换一门文字格子就对不上（wafo 2026-09-25 当初不加语言开关的理由，正是这种组合）；
+ * 其余各档（system 与它落到的 light / black，以及 dark）中英都成立，跟 `language` 走。
+ * null = 这个主题不定语言。
+ */
+export function themeLanguage(theme: ThemePreference): Language | null {
+  if (theme === "copybook") return "zh";
+  if (theme === "typescript") return "en";
+  return null;
+}
+
+/**
+ * 实际生效的语言：单语主题说了算，双语主题听设置。**渲染层（文案表、`<html lang>`）
+ * 与主进程（commit / PR 署名）都走这一条**——两边各判一次的话，界面是中文、署名是英文。
+ */
+export function effectiveLanguage(theme: ThemePreference, language: Language | undefined): Language {
+  return themeLanguage(theme) ?? language ?? "en";
+}
+
 /**
  * 右抽屉的记忆。**开关不记**：每次启动默认收起（2026-09-12 wafo 裁决，
  * 设计系统 closed by default 按字面执行）；只有宽度和停靠的记忆值得跨启动。
@@ -83,6 +107,11 @@ export interface TitleModel {
 
 export interface AppSettings {
   theme: ThemePreference;
+  /**
+   * 界面语言偏好。**只在双语主题下生效**（见 `effectiveLanguage`）：选了小学作业 / 打字稿时
+   * 这个值留着不动，切回双语主题就恢复。缺席 = "en"。
+   */
+  language?: Language;
   /**
    * 右侧分屏面板的宽度（4-0 拖宽）。缺席 = 默认 320。**这里只做 ≥200 的硬校验**：
    * 合法上界依赖当前 pane 宽度（见 clampRightPanelWidth），落盘的值换个显示器就可能
@@ -275,6 +304,7 @@ export function parseSettings(raw: unknown): AppSettings {
   if (typeof raw !== "object" || raw === null) return DEFAULT_SETTINGS;
   const record = raw as {
     theme?: unknown;
+    language?: unknown;
     drawer?: unknown;
     rightPanelWidth?: unknown;
     sidebarWidth?: unknown;
@@ -301,6 +331,8 @@ export function parseSettings(raw: unknown): AppSettings {
   const lastUsed = parseLastUsed(record.lastUsed);
   return {
     theme,
+    // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
+    ...((LANGUAGES as readonly unknown[]).includes(record.language) ? { language: record.language as Language } : {}),
     // 右栏只做 ≥ 地板的硬校验：上界随 pane 宽度变，存储层判不了，渲染层每次夹
     ...(typeof width === "number" && Number.isFinite(width) && width >= RIGHT_PANEL_WIDTH_FLOOR
       ? { rightPanelWidth: Math.round(width) }

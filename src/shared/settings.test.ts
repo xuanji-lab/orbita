@@ -1,6 +1,8 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  effectiveLanguage,
+  themeLanguage,
   CHANNEL_COLUMN_WIDTH_DEFAULT,
   clampChannelColumnWidth,
   clampRightPanelWidth,
@@ -426,5 +428,28 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
       undefined,
     );
     deepStrictEqual(parseSettings({ theme: "system", lastUsed: {} }).lastUsed, undefined);
+  });
+});
+
+describe("界面语言", () => {
+  it("单语主题说了算：小学作业恒中文、打字稿恒英文，不管设置", () => {
+    deepStrictEqual(effectiveLanguage("copybook", "en"), "zh");
+    deepStrictEqual(effectiveLanguage("typescript", "zh"), "en");
+    deepStrictEqual(themeLanguage("copybook"), "zh");
+    deepStrictEqual(themeLanguage("typescript"), "en");
+  });
+
+  it("双语主题听设置；没设过是英文（语言设置之前的行为）", () => {
+    for (const theme of ["system", "light", "dark", "black"] as const) {
+      deepStrictEqual(themeLanguage(theme), null);
+      deepStrictEqual(effectiveLanguage(theme, "zh"), "zh");
+      deepStrictEqual(effectiveLanguage(theme, undefined), "en");
+    }
+  });
+
+  it("磁盘上的 language：认识的留下，坏值丢掉当没选过", () => {
+    deepStrictEqual(parseSettings({ language: "zh" }).language, "zh");
+    deepStrictEqual("language" in parseSettings({ language: "fr" }), false);
+    deepStrictEqual("language" in parseSettings({}), false);
   });
 });
