@@ -96,6 +96,9 @@ import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
+import { parseSkillBlock, skillForReadPath } from "@shared/skill";
+import type { SkillMeta } from "@shared/skill";
+import { api } from "../../api";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES } from "@shared/permission";
 import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
@@ -379,6 +382,28 @@ function QuoteSelectionLayer(props: {
   );
 }
 
+/**
+ * 会话区的 skill 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug。
+ * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
+ * （新建的 skill 下一轮会话自然出现）。
+ */
+function useSkillIndex(): SkillMeta[] {
+  const [skills, setSkills] = useState<SkillMeta[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void api.skill
+      .list()
+      .then((list) => {
+        if (alive) setSkills(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return skills;
+}
+
 function ChatViewBody(props: {
   /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
   dropActive?: boolean;
@@ -439,6 +464,8 @@ function ChatViewBody(props: {
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
+  // read SKILL.md 徽标的识别索引（挂载读一次，见 useSkillIndex）
+  const skills = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
@@ -918,6 +945,7 @@ function ChatViewBody(props: {
           onBranch={session.branchFrom}
           onOpenTask={session.openSession}
           channel={channel}
+          skills={skills}
         />
       </Pane>
     </>
@@ -950,6 +978,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
    * 每次渲染新建对象会打穿它（同 onOpenTask 的纪律）。
    */
   channel: ChannelViewContext;
+  /** skill 索引（read SKILL.md 徽标用）；挂载读一次，引用稳定不打穿 memo */
+  skills: SkillMeta[];
 }) {
   const t = useT();
   const { transcript } = props;
@@ -1039,6 +1069,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onOpenTask={props.onOpenTask}
                 carryoverCards={carryoverCards}
                 channel={props.channel}
+                skills={props.skills}
               />
             ) : (
               <EntryView
@@ -1049,6 +1080,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onOpenTask={props.onOpenTask}
                 carryoverCards={carryoverCards}
                 channel={props.channel}
+                skills={props.skills}
               />
             )}
             {branchAfter !== undefined && (
@@ -1752,6 +1784,8 @@ function EntryView(props: {
   carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
   channel: ChannelViewContext;
+  /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
+  skills: SkillMeta[];
 }) {
   const t = useT();
   const { entry } = props;
@@ -1809,6 +1843,7 @@ function EntryView(props: {
         result={props.toolResults.get(entry.toolCallId)}
         onOpenTask={props.onOpenTask}
         channel={props.channel}
+        skills={props.skills}
       />
     );
   }
@@ -1819,6 +1854,7 @@ function EntryView(props: {
       turnActive={props.turnActive}
       onOpenTask={props.onOpenTask}
       channel={props.channel}
+      skills={props.skills}
     />
   );
 }
@@ -1847,6 +1883,8 @@ function TurnRollupLine(props: {
   carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
   /** 子会话 PR4a：折叠展开后的成员行仍走 EntryView，需要同一份上下文原样转发 */
   channel: ChannelViewContext;
+  /** 透传给成员 EntryView（read SKILL.md 徽标用） */
+  skills: SkillMeta[];
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -1907,6 +1945,7 @@ function TurnRollupLine(props: {
               onOpenTask={props.onOpenTask}
               carryoverCards={props.carryoverCards}
               channel={props.channel}
+              skills={props.skills}
             />
           ))}
         </div>
@@ -1939,9 +1978,12 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
   // 文本块**按内容识别**（splitUserTextBlocks）：粘贴块 / 文件清单块解析回折叠 chip，
   // 其余才是正文——「只发附件不打字」的消息第一块就是 <pasted-text>，按「第一块
   // 恒是正文」猜会把裸标签渲染进气泡（review #90 指出）。旧会话只有单块正文，
-  // 这条路径同样走通、行为不变
+  // 这条路径同样走通、行为不变。
+  // `/skill:` 调用展开出的 <skill> 块（主进程拼的）同样拆成折叠卡：skill 正文几千字，
+  // 不能平铺进气泡；块后的附加指示才是用户自己的话，照常进气泡、照常被复制
   const split = splitUserTextBlocks(textBlocks.map((block) => block.text));
-  const parsed = parseQuotedMessage(split.body);
+  const skillBlock = parseSkillBlock(split.body);
+  const parsed = skillBlock !== null ? parseQuotedMessage(skillBlock.rest) : parseQuotedMessage(split.body);
   const quotes = parsed.quotes;
   const copyText = parsed.text;
   const pastedBlocks = split.pasted.map((content) => ({ content, lines: pastedTextSize(content).lines }));
@@ -1973,6 +2015,10 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
       }}
     >
       {images.length > 0 && <UserImages images={images} />}
+      {skillBlock !== null && (
+        // skill 卡在附加指示气泡之前——时间序就是「先调 skill，再说要做什么」
+        <SkillInvocationCard name={skillBlock.name} content={skillBlock.content} />
+      )}
       {quotes.length > 0 && (
         <div
           style={{
@@ -2148,6 +2194,86 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
  * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
  * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
  */
+/**
+ * `<skill>` 块的折叠卡（pi TUI 同款形态）：默认一行「skill 名」，点开看全文——
+ * skill 正文几千字，收着才不淹没对话。在右对齐的气泡列里要 fit-content 宽度，
+ * 不复用 CollapseRow（那套是全宽的工具行骨架）。
+ */
+function SkillInvocationCard(props: { name: string; content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: "var(--space-1)",
+        width: "fit-content",
+        maxWidth: "var(--bubble-max-width)",
+        minWidth: 0,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-2)",
+          padding: "6px 10px",
+          borderRadius: "var(--radius-md)",
+          border: "1px solid var(--color-border-subtle)",
+          background: "transparent",
+          cursor: "pointer",
+          minWidth: 0,
+          textAlign: "left",
+        }}
+      >
+        <Icon name="book-open" size={13} strokeWidth={1.8} style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }} />
+        <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
+          skill
+        </span>
+        <span
+          style={{
+            fontSize: "var(--font-size-caption)",
+            color: "var(--color-text-primary)",
+            fontWeight: 600,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {props.name}
+        </span>
+        <Icon
+          name={open ? "chevron-up" : "chevron-down"}
+          size={13}
+          strokeWidth={1.8}
+          style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
+        />
+      </button>
+      {open && (
+        <div
+          style={{
+            maxHeight: 320,
+            overflowY: "auto",
+            padding: "8px 10px",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--color-border-subtle)",
+            fontFamily: "var(--font-family-mono)",
+            fontSize: "var(--font-size-caption)",
+            lineHeight: 1.6,
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {props.content}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UserImages(props: { images: readonly PromptImage[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);
@@ -2511,6 +2637,8 @@ function ToolLine(props: {
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：delegate / reply_subsession / report_to_parent 三个通道工具要用 */
   channel: ChannelViewContext;
+  /** read SKILL.md 徽标的识别索引（透传自 EntryView） */
+  skills: SkillMeta[];
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2540,6 +2668,15 @@ function ToolLine(props: {
   }
   /** MCP 工具（4-5）：行首只说 tool 名，server 进副标；量词与失败分型另有规格 */
   const mcp = parseQualifiedToolName(props.toolName);
+  // read SKILL.md：路径尾巴 <slug>/SKILL.md 命中已知 skill 就是在用 skill——
+  // 行首换 book-open、标签 skill、副标 skill 名；普通 read 一字不变
+  const skillUse =
+    props.toolName === "read" &&
+    typeof props.input === "object" &&
+    props.input !== null &&
+    typeof (props.input as Record<string, unknown>)["path"] === "string"
+      ? skillForReadPath((props.input as Record<string, unknown>)["path"] as string, props.skills)
+      : null;
   const summary = mcp === null ? summarizeToolResult(result, t) : summarizeMcpResult(result, t);
   const callSummary = toolCallSummary(props.toolName, props.input);
   // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
@@ -2579,16 +2716,21 @@ function ToolLine(props: {
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
           <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
             <Icon
-              name={failed ? "triangle-alert" : toolIcon(props.toolName)}
+              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : toolIcon(props.toolName)}
               size={14}
               strokeWidth={1.8}
             />
           </span>
           <span style={mcp === null ? headLabel(active) : { ...headLabel(active), fontWeight: 650 }}>
-            {mcp === null ? props.toolName : mcp.tool}
+            {mcp !== null ? mcp.tool : skillUse !== null ? "skill" : props.toolName}
           </span>
         </span>
-        {mcp !== null ? (
+        {skillUse !== null ? (
+          // skill 使用：副标是 skill 名，完整路径进 tooltip（与路径类工具同一纪律）
+          <span title={callSummary ?? undefined} style={SLOT.sub}>
+            {skillUse.name}
+          </span>
+        ) : mcp !== null ? (
           // MCP 副标：{server} · {输入摘要}（mono caption tertiary，规格 §8）。
           // 内建摘要器不认识 MCP 工具，退回 JSON 一行截断。
           (() => {
@@ -2783,6 +2925,8 @@ function ToolGroupLine(props: {
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：展开后的成员行仍是 ToolLine，同一份上下文原样转发 */
   channel: ChannelViewContext;
+  /** 透传给成员 ToolLine（read SKILL.md 徽标用） */
+  skills: SkillMeta[];
 }) {
   const t = useT();
   const { group } = props;
@@ -2830,6 +2974,7 @@ function ToolGroupLine(props: {
               result={props.toolResults.get(call.toolCallId)}
               onOpenTask={props.onOpenTask}
               channel={props.channel}
+              skills={props.skills}
             />
           ))}
         </div>

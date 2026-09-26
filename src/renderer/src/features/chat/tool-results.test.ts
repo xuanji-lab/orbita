@@ -1317,6 +1317,18 @@ describe("toolCallSummary —— delegate（子会话 PR4a）", () => {
   });
 });
 
+describe("toolCallSummary —— 自我配置工具", () => {
+  test("create_skill 摘要取 name，缺席退回 slug", () => {
+    assert.equal(toolCallSummary("create_skill", { slug: "tdd", name: "TDD 流程", body: "..." }), "TDD 流程");
+    assert.equal(toolCallSummary("create_skill", { slug: "tdd" }), "tdd");
+    assert.equal(toolCallSummary("create_skill", {}), null);
+  });
+  test("add_mcp_server 摘要取 server 名", () => {
+    assert.equal(toolCallSummary("add_mcp_server", { name: "search", server: { command: "npx" } }), "search");
+    assert.equal(toolCallSummary("add_mcp_server", {}), null);
+  });
+});
+
 describe("channelSendMessageId（发送侧标记点了定位到父子会话面板里的那一条）", () => {
   const toolItem = (
     patch: Partial<Extract<ToolTranscriptItem, { status: "complete" }>> = {},

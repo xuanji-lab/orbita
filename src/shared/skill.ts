@@ -92,3 +92,61 @@ const SLUG = /^[a-z0-9][a-z0-9._-]*$/i;
 export function isSkillSlug(value: string): boolean {
   return value.length <= 100 && SLUG.test(value) && !value.includes("..");
 }
+
+/**
+ * `/skill:<target>` 指令的解析（主进程展开用）。**target 取到第一个空白为止**，
+ * 其余全是附加指示。不是这个形状返回 null，照常发送。
+ */
+export function parseSkillInvocation(text: string): { target: string; rest?: string } | null {
+  const match = /^\/skill:([^\s]+)(?:\s([\s\S]*))?$/.exec(text.trim());
+  if (match === null) return null;
+  const target = match[1] ?? "";
+  const rest = match[2]?.trim();
+  return target === "" ? null : rest !== undefined && rest !== "" ? { target, rest } : { target };
+}
+
+/**
+ * 展开成 pi 同款的 `<skill>` 块用户消息（pi 的 formatSkillInvocation 同一形状，
+ * 两端必须一致：模型靠它认 skill，显示端靠它认折叠卡）。instructions 是
+ * `/skill:x` 后面用户补的附加指示，拼在块后。
+ */
+export function formatSkillBlock(parts: {
+  name: string;
+  location: string;
+  body: string;
+  instructions?: string;
+}): string {
+  const slash = Math.max(parts.location.lastIndexOf("/"), parts.location.lastIndexOf("\\"));
+  const dir = slash > 0 ? parts.location.slice(0, slash) : "/";
+  const block = `<skill name="${parts.name}" location="${parts.location}">\nReferences are relative to ${dir}.\n\n${parts.body}\n</skill>`;
+  return parts.instructions !== undefined ? `${block}\n\n${parts.instructions}` : block;
+}
+
+/**
+ * 从用户消息原文里解析 skill 块（显示端用）。解析出块时 rest 是块后面的
+ * 附加指示（可能是空串）；没解析出返回 null，消息照常渲染。
+ */
+export function parseSkillBlock(text: string): { name: string; content: string; rest: string } | null {
+  const match = /^<skill name="([^"]+)"[^>]*>\n([\s\S]*)\n<\/skill>(?:\n\n([\s\S]*))?$/.exec(text);
+  if (match === null) return null;
+  return { name: match[1] ?? "", content: match[2] ?? "", rest: match[3] ?? "" };
+}
+
+/**
+ * 一次 read 调用是不是在用某条 skill：路径以 `<任意目录>/<slug>/SKILL.md` 结尾
+ * 且 slug 命中已知 skill。**只认 slug 尾巴不认全路径**——pi 把链接目录
+ * （junction / symlink）的路径写进 system prompt，真实读到的路径随平台与
+ * 规范化而变，但 `<slug>/SKILL.md` 这个尾巴在存储路径和链接路径上都在。
+ * # ponytail: 极端情况会误标（某仓库里恰好有同名 `<slug>/SKILL.md` 被读），
+ * 代价只是一个徽标，不值得为此把存储路径传进 renderer。
+ */
+export function skillForReadPath(
+  path: string,
+  skills: ReadonlyArray<{ slug: string; name: string }>,
+): { slug: string; name: string } | null {
+  const normalized = path.replace(/\\/g, "/").toLowerCase();
+  const match = /(^|\/)([^/]+)\/skill\.md$/.exec(normalized);
+  const dir = match?.[2];
+  if (dir === undefined) return null;
+  return skills.find((skill) => skill.slug.toLowerCase() === dir) ?? null;
+}

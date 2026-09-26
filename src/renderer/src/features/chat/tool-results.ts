@@ -959,6 +959,11 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     // 子会话：delegate 的入参同样有 task 字段——派出卡的任务预览复用这条摘要
     case "delegate":
       return str("task");
+    // 自我配置工具（4-3）：摘要就是它们造出来的那条的名字
+    case "create_skill":
+      return str("name") ?? str("slug");
+    case "add_mcp_server":
+      return str("name");
     default:
       return null;
   }
