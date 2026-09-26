@@ -48,8 +48,29 @@ let dir = "";
 let store: SessionStore;
 let record: (event: AgentEvent) => void;
 
-/** 事件是同步发的、写盘是异步的，等一轮微任务让写落下去 */
-const settle = () => new Promise((r) => setTimeout(r, 20));
+/**
+ * 事件是同步发的、写盘是异步的：**等条件成立**再断言，不用固定 sleep。
+ *
+ * 固定 20ms 在 `node --test` 按文件并行、整仓一起跑时不够（Windows 上写盘尤其慢）：
+ * 断言会读到写盘前的旧值，afterEach 的 rm 还会撞上正在写的文件（ENOTEMPTY）。
+ * 超时不在这里抛——让下面的断言报出真实的 actual/expected 更好读。
+ *
+ * 「什么都不该落」的用例仍然用 settle：那些事件被 recorder 同步丢掉，没有写盘要等。
+ */
+const settleUntil = async (ready: () => Promise<boolean>): Promise<void> => {
+  const deadline = Date.now() + 5000;
+  while (!(await ready())) {
+    if (Date.now() > deadline) return;
+    await new Promise((r) => setTimeout(r, 15));
+  }
+};
+
+/** 等到 transcript 落了 count 条 */
+const transcriptLanded = (count: number) => async (): Promise<boolean> =>
+  ((await store.load(ID))?.transcript.length ?? -1) === count;
+
+/** 「什么都不该落」：给写盘留出宽裕的一轮（已落定的写不会因为等得久就变多） */
+const settle = () => new Promise((r) => setTimeout(r, 150));
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "orbita-recorder-"));
@@ -75,19 +96,29 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  // Windows 上删一个“里面刚被写过”的目录会报 ENOTEMPTY（异步写落定的瞬间刚好撞上）。
+  // 重试几次，别让清理把一条已经通过的用例变红。
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rm(dir, { recursive: true, force: true });
+      return;
+    } catch (cause) {
+      if (attempt >= 5) throw cause;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
 });
 
 describe("createSessionRecorder", () => {
   test("用户消息走 item_started 落盘——它出生即完成，不会再有 finished", async () => {
     record(progress({ type: "item_started", item: user }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     assert.equal((await store.load(ID))?.transcript.length, 1);
   });
 
   test("assistant 走 item_finished 落盘", async () => {
     record(progress({ type: "item_finished", item: assistant("complete") }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     assert.equal((await store.load(ID))?.transcript.length, 1);
   });
 
@@ -108,7 +139,7 @@ describe("createSessionRecorder", () => {
    */
   test("被打断的半截回答照样落盘，靠 status 区分而不是靠存不存", async () => {
     record(progress({ type: "item_finished", item: assistant("aborted") }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     const item = (await store.load(ID))?.transcript[0];
     assert.equal(item !== undefined, true);
     assert.equal(item !== undefined && "status" in item ? item.status : undefined, "aborted");
@@ -137,7 +168,7 @@ describe("createSessionRecorder", () => {
   test("带内容的 error assistant 照样落盘——真失败要有尸体可查", async () => {
     const halfSaid = { ...retryTail, id: "a3", content: [{ type: "text" as const, text: "说到一半断了" }] };
     record(progress({ type: "item_finished", item: halfSaid }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     const item = (await store.load(ID))?.transcript[0];
     assert.equal(item !== undefined && "status" in item ? item.status : undefined, "error");
   });
@@ -177,7 +208,7 @@ describe("createSessionRecorder", () => {
 
   test("tool 终态帧落盘,字段原样", async () => {
     record(progress({ type: "item_finished", item: toolDone(false) }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     const item = (await store.load(ID))?.transcript[0];
     assert.equal(item?.role, "tool");
     assert.deepEqual(item, toolDone(false));
@@ -185,7 +216,7 @@ describe("createSessionRecorder", () => {
 
   test("失败的 tool 调用照样落盘,isError 带在身上", async () => {
     record(progress({ type: "item_finished", item: toolDone(true) }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     const item = (await store.load(ID))?.transcript[0];
     assert.equal(item !== undefined && "isError" in item ? item.isError : undefined, true);
   });
@@ -219,7 +250,7 @@ describe("createSessionRecorder", () => {
 
   test("compaction 事件原样落盘,六个字段一个不少", async () => {
     record({ type: "compaction", sessionId: ID, record: compacted });
-    await settle();
+    await settleUntil(transcriptLanded(1));
     const item = (await store.load(ID))?.transcript[0];
     assert.deepEqual(item, compacted);
     assert.equal(item !== undefined && "summary" in item ? item.summary : undefined, compacted.summary);
@@ -254,7 +285,7 @@ describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描�
       { id: "p1", title: "母任务" },
     );
     record(progress({ type: "item_started", item: envelopeUser(prompt) }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     const detail = await store.load(ID);
     assert.equal(detail?.transcript.length, 1);
     assert.deepEqual(detail?.transcript[0], {
@@ -270,7 +301,7 @@ describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描�
 
   test("普通 user 消息照旧落成 user 记录——不是每条 user 消息都要过一遍解析开销地改变落盘形状", async () => {
     record(progress({ type: "item_started", item: user }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     const item = (await store.load(ID))?.transcript[0];
     assert.equal(item?.role, "user");
   });
@@ -298,7 +329,7 @@ describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描�
       stopReason: "stop" as const,
     };
     record(progress({ type: "item_finished", item: assistantWithEnvelopeLikeText }));
-    await settle();
+    await settleUntil(transcriptLanded(1));
     const item = (await store.load(ID))?.transcript[0];
     assert.equal(item?.role, "assistant");
   });
@@ -307,7 +338,7 @@ describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描�
 describe("recorder 的 title 事件（C-3）", () => {
   test("标题落 meta（title + titleSource = auto），不落 transcript", async () => {
     record({ type: "title", sessionId: ID, title: "修复登录按钮" });
-    await settle();
+    await settleUntil(async () => (await store.load(ID))?.meta.title === "修复登录按钮");
     const detail = await store.load(ID);
     assert.equal(detail?.meta.title, "修复登录按钮");
     assert.equal(detail?.meta.titleSource, "auto");
@@ -327,7 +358,7 @@ describe("recorder 的 title 事件（C-3）", () => {
 describe("recorder 的 model 事件（C-4）", () => {
   test("providerId / modelId 落 meta，不落 transcript——重开播种与分支继承读的就是它", async () => {
     record({ type: "model", sessionId: ID, providerId: "other", modelId: "m2" });
-    await settle();
+    await settleUntil(async () => (await store.load(ID))?.meta.providerId === "other");
     const detail = await store.load(ID);
     assert.equal(detail?.meta.providerId, "other");
     assert.equal(detail?.meta.modelId, "m2");
