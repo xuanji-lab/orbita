@@ -244,7 +244,8 @@ describe("WorkspaceStore", () => {
     const real = await mkdtemp(join(tmpdir(), "orbita-real-"));
     try {
       const alias = join(dir, "alias");
-      await symlink(real, alias);
+      // 目录链接用 junction：Windows 上真 symlink 要特权（EPERM），POSIX 上该参数被忽略
+      await symlink(real, alias, "junction");
       const ws = await store.add("/repo/x");
       await store.attachDir(ws.id, alias);
       const again = await store.attachDir(ws.id, real); // 用真身再挂一次也不重复
@@ -294,7 +295,7 @@ describe("WorkspaceStore", () => {
     const real = await mkdtemp(join(tmpdir(), "orbita-home-dup-"));
     try {
       const alias = join(dir, "home-alias");
-      await symlink(real, alias);
+      await symlink(real, alias, "junction"); // 同上：目录链接走 junction
       await store.attachDir(null, alias);
       const again = await store.attachDir(null, real); // 用真身再挂一次也不重复
       assert.deepEqual(again, [await realpath(real)]);
