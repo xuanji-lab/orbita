@@ -962,8 +962,7 @@ export const en = {
   files: {
     title: "Files",
     emptyWorkbench: "Empty workbench — created on the agent's first write",
-    referenceToComposer: "Reference in the input box",
-    referenceToComposerTip: "Attach this path to your next message — the model reads it with its tools",
+    reference: "Add to chat",
     refreshing: "Refreshing file tree…",
     refresh: "Refresh file tree",
     attach: "Attach a directory",

@@ -248,7 +248,7 @@ export function FilesPanel(props: {
         items={[
           {
             id: "reference",
-            label: t.files.referenceToComposer,
+            label: t.files.reference,
             icon: "paperclip",
             onSelect: () => {
               if (menu === null) return;

@@ -899,8 +899,7 @@ export const zh: Messages = {
   files: {
     title: "文件",
     emptyWorkbench: "工作台为空 — 智能体第一次写入时创建",
-    referenceToComposer: "引用到输入卡",
-    referenceToComposerTip: "把这个路径附进下一条消息——模型用工具自己去读",
+    reference: "引用到输入框",
     refreshing: "正在刷新文件树…",
     refresh: "刷新文件树",
     attach: "附加一个目录",
