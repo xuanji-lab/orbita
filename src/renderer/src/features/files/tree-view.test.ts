@@ -13,7 +13,6 @@ import {
   mergeRefresh,
   orderEntries,
   refreshTargets,
-  relativePathOf,
 } from "./tree-view.ts";
 import type { FileEntry, FileRoot } from "../../../../shared/files.ts";
 import { en } from "../../messages-en.ts";
@@ -400,22 +399,5 @@ describe("mergeRefresh", () => {
     const next = mergeRefresh(current, ["/ws"], new Map([["/ws", [file("a.md")]]]));
     deepStrictEqual([...next.dirs.keys()], ["/ws"]);
     deepStrictEqual(next.expanded, new Set());
-  });
-});
-
-describe("relativePathOf —— 复制相对路径", () => {
-  it("去掉根前缀与开头的分隔符", () => {
-    deepStrictEqual(relativePathOf("/repo", "/repo/src/a.ts", false), "src/a.ts");
-    deepStrictEqual(relativePathOf("C:\\ws", "C:\\ws\\a.ts", true), "a.ts");
-  });
-
-  it("win32 把树拼接的 / 归一成原生反斜杠；非 win 原样", () => {
-    // 树的子路径是 `${dir}/${name}` 拼的，win 上根是原生分隔符、子段是 /，切完是混合形
-    deepStrictEqual(relativePathOf("C:\\ws", "C:\\ws/src/deep\\b.ts", true), "src\\deep\\b.ts");
-    deepStrictEqual(relativePathOf("/repo", "/repo/src/b.ts", false), "src/b.ts");
-  });
-
-  it("根自身的相对路径是空串（根行不产出，防御性给空）", () => {
-    deepStrictEqual(relativePathOf("/repo", "/repo", false), "");
   });
 });

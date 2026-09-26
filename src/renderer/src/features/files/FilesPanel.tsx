@@ -16,7 +16,6 @@ import {
   formatSize,
   hasAgentsMd,
   orderEntries,
-  relativePathOf,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
 import { FilePreviewPane } from "./FilePreviewPane";
@@ -49,8 +48,9 @@ export function FilesPanel(props: {
   const [selected, setSelected] = useState<string | null>(null);
   /** 打开的预览：root 是它所在分组的根路径，path 是文件绝对路径。null = 预览未打开 */
   const [preview, setPreview] = useState<{ root: string; path: string } | null>(null);
-  /** 右键菜单：打开位置 + 被右键的那一行（root 用于相对路径与 fs 白名单）。
-   * isRoot = 根分组头（目前只有 Session 根）：只有「添加文件引用」一项 */
+  /** 右键菜单：打开位置 + 被右键的根（目前只有 Session 根接了右键，
+   * 只有「添加文件引用」一项——把工作台目录整个递给模型）。条目行不接右键：
+   * 行尾 hover 按钮已覆盖引用，打开/复制路径类动作频率不足以撑一张菜单 */
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -58,7 +58,6 @@ export function FilesPanel(props: {
     path: string;
     name: string;
     kind: FileEntryKind;
-    isRoot?: boolean;
   } | null>(null);
   const tree = useFileTree(sessionId, workspaceId, session.workspaces);
 
@@ -166,9 +165,6 @@ export function FilesPanel(props: {
             selected={!isDir && selected === child}
             onSelect={() => selectFile(root, child)}
             onOpenPreview={() => openPreview(root, child)}
-            onContextMenu={(position) =>
-              setMenu({ ...position, root, path: child, name: entry.name, kind: entry.kind })
-            }
             onReference={() =>
               session.attachFileRef({
                 path: child,
@@ -224,7 +220,7 @@ export function FilesPanel(props: {
           // 工作台还没建（exists=false）时引用一条不存在的路径没有意义，不接
           onContextMenu={
             root.kind === "session" && root.exists
-              ? (position) => setMenu({ ...position, root, path: root.path, name: root.label, kind: "directory", isRoot: true })
+              ? (position) => setMenu({ ...position, root, path: root.path, name: root.label, kind: "directory" })
               : undefined
           }
         />
@@ -279,52 +275,13 @@ export function FilesPanel(props: {
       }
       footer={<PanelLine>{footerSummary(groupCount, missingAttached, t)}</PanelLine>}
     >
-      {/* 右键菜单（portal 到 body，位置在指针处）。条目行四项：打开 / 复制两个路径 /
-          添加文件引用（origin workspace：原位置引用不复制）；「在文件管理器中显示」
-          不进菜单——行尾的 hover Reveal 按钮就是它，放两处是重复。文件与目录都给——
-          目录的「打开」就是文件管理器里打开它。打开走既有 fs:open 白名单，复制是纯
-          renderer 剪贴板，零新契约。根分组头目前只有 Session 根接了右键，且只有
-          「添加文件引用」（把工作台目录整个递给模型） */}
+      {/* 右键菜单（portal 到 body，位置在指针处）。只有 Session 根分组头接了右键，
+          仅一项「添加文件引用」——把工作台目录整个递给模型。条目行不接右键：
+          引用走行尾 hover 按钮，其余动作不值得一张菜单（2026-09-27 用户裁决） */}
       <ContextMenu
         position={menu === null ? null : { x: menu.x, y: menu.y }}
         onClose={() => setMenu(null)}
-        items={
-          menu === null
-            ? []
-            : menu.isRoot === true
-              ? [referenceItem(menu)]
-              : [
-                  {
-                    id: "open",
-                    label: t.files.openDefault,
-                    icon: "external-link",
-                    onSelect: () => {
-                      if (menu === null) return;
-                      void api.files
-                        .open({ sessionId, workspaceId, root: menu.root.path, dir: menu.path })
-                        .catch((cause: unknown) => setActionError(failMessage(cause)));
-                    },
-                  },
-                  {
-                    id: "copy-rel",
-                    label: t.files.copyRelativePath,
-                    icon: "copy",
-                    onSelect: () => {
-                      if (menu === null) return;
-                      void navigator.clipboard.writeText(relativePathOf(menu.root.path, menu.path, api.platform === "win32"));
-                    },
-                  },
-                  {
-                    id: "copy-abs",
-                    label: t.files.copyAbsolutePath,
-                    icon: "copy",
-                    onSelect: () => {
-                      if (menu === null) return;
-                      void navigator.clipboard.writeText(menu.path);
-                    },
-                  },
-                ]
-        }
+        items={menu === null ? [] : [referenceItem(menu)]}
       />
       {/* container query 分栏：容器 ≥600px 且预览打开 → 左目录右预览；<600px 且
           预览打开 → 只显示预览，目录用 CSS 隐藏（不卸载，展开态与滚动位置还在）；
@@ -563,8 +520,6 @@ function TreeRow(props: {
   onSelect: () => void;
   /** 双击 / Enter 非目录行：选中并打开预览 */
   onOpenPreview: () => void;
-  /** 右键：文件与目录都可「添加文件引用」，调用方拿指针位置与这一行的身份 */
-  onContextMenu: (position: { x: number; y: number }) => void;
   /** 行尾 hover 的「添加文件引用」——引用是高频动作，升到与 Reveal 并排的一键入口 */
   onReference: () => void;
 }) {
@@ -594,11 +549,6 @@ function TreeRow(props: {
         title={title}
         onClick={isDir ? props.onToggle : props.onSelect}
         onDoubleClick={isDir ? undefined : props.onOpenPreview}
-        onContextMenu={(event) => {
-          // 右键同样是焦点动作：阻止浏览器默认菜单，弹我们的「引用到输入卡」
-          event.preventDefault();
-          props.onContextMenu({ x: event.clientX, y: event.clientY });
-        }}
         onKeyDown={
           isDir
             ? undefined

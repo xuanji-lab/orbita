@@ -106,24 +106,11 @@ export function fileIcon(name: string, kind: FileEntryKind, open = false): IconN
 }
 
 /**
- * 「复制相对路径」：相对**它所在的根**（工作区文件相对工作区根、附加目录文件相对
- * 那个附加根）——相对 agent cwd 的话，附加目录的文件会爬出 `..\..\` 的难看路径。
- *
- * `win32` 把树拼接产生的 `/` 归一成原生 `\`：树的子路径是 `${dir}/${name}` 拼的，
- * 根本身是原生分隔符，切完前缀剩下的是混合分隔符——剪贴板里贴进资源管理器 /
- * cmd 的东西要长成本机路径的样子。`path` 必须以 `root` 开头（树就是这么拼的，
- * 不是前缀时行为未定义——调用方只有这一处）。
- */
-export function relativePathOf(root: string, path: string, win32: boolean): string {
-  const rel = path.slice(root.length).replace(/^[/\\]+/, "");
-  return win32 ? rel.replace(/\//g, "\\") : rel;
-}
-
-/**
  * 字节数 → 人读文案（1024 进制）：`0 B` / `812 B` / `48 KB`（取整）/
  * `1.9 MB`、`2.3 GB`（一位小数，去掉多余的 `.0`）。
  */
-export function formatSize(bytes: number): string {  const KB = 1024;
+export function formatSize(bytes: number): string {
+  const KB = 1024;
   const MB = KB * 1024;
   const GB = MB * 1024;
   if (bytes < KB) return `${bytes} B`;
