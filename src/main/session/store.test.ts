@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -922,5 +922,49 @@ describe("SessionStore · 附图原图", () => {
     await store.remove(ID);
     assert.equal(await store.readOriginal(sent?.original), null);
     assert.equal((await readdir(join(dir, "sessions"))).includes(`${ID}.attachments`), false);
+  });
+});
+
+describe("SessionStore · 文件引用落盘", () => {
+  test("external 的复制进会话附件目录、引用改指副本，原文件不动", async () => {
+    await store.ensureSession(meta());
+    const source = join(dir, "outside", "notes.txt");
+    await mkdir(join(dir, "outside"), { recursive: true });
+    await writeFile(source, "hello attachment");
+    const [sent] = await store.saveExternalFiles(ID, [
+      { path: source, name: "notes.txt", kind: "file", origin: "external" },
+    ]);
+    assert.equal(sent?.name, "notes.txt");
+    assert.equal(sent?.kind, "file");
+    // 副本在会话目录里，内容与原文件一致；原文件留在原地
+    assert.match(sent?.path ?? "", new RegExp(`[\\\\/]${ID}\\.attachments[\\\\/][0-9a-f-]{36}\\.txt$`));
+    assert.equal(await readFile(sent?.path ?? "", "utf8"), "hello attachment");
+    assert.equal(await readFile(source, "utf8"), "hello attachment");
+  });
+
+  test("workspace 的原位置引用不复制，路径 realpath 成规范形", async () => {
+    const source = join(dir, "workspace-root", "a.ts");
+    await mkdir(join(dir, "workspace-root"), { recursive: true });
+    await writeFile(source, "export {};");
+    const [sent] = await store.saveExternalFiles(ID, [
+      { path: source, name: "a.ts", kind: "file", origin: "workspace" },
+    ]);
+    assert.equal(sent?.path, await realpath(source));
+    const attachments = join(dir, "sessions", `${ID}.attachments`);
+    await assert.rejects(readFile(join(attachments, "a.ts")), Error);
+  });
+
+  test("external 的目录不复制、按原位置引用；盘上没有的路径原样带上不抛错", async () => {
+    const externalDir = join(dir, "outside-dir");
+    await mkdir(externalDir, { recursive: true });
+    const [dirRef] = await store.saveExternalFiles(ID, [
+      { path: externalDir, name: "outside-dir", kind: "dir", origin: "external" },
+    ]);
+    assert.equal(dirRef?.kind, "dir");
+    assert.equal(dirRef?.path, await realpath(externalDir));
+    const [missing] = await store.saveExternalFiles(ID, [
+      { path: join(dir, "gone.txt"), name: "gone.txt", kind: "file", origin: "external" },
+    ]);
+    assert.equal(missing?.path, join(dir, "gone.txt"));
   });
 });

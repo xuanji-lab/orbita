@@ -188,12 +188,19 @@ export class TranscriptAdapter {
 
   /**
    * 用户提交的 prompt：本地立刻造一条 user item，不等模型回。
-   * 块序同 pi 自己拼的那条（文字在前、图片在后）；只发图时不造空 text 块——
-   * pi 那边会带一个空串块（各 provider 发送前自己滤掉），我们这本账不记这种残影。
+   * 块序：文字在前，粘贴块与文件清单（`extras`，prompt-attachments 组装好的带标签
+   * 文本）跟在后面，图片殿后——与 composePromptText 拼出的模型正文同一个顺序；
+   * 只发图时不造空 text 块——pi 那边会带一个空串块（各 provider 发送前自己滤掉），
+   * 我们这本账不记这种残影。
    */
-  userPrompt(text: string, images: readonly Extract<UserContent, { type: "image" }>[] = []): TranscriptProgress[] {
+  userPrompt(
+    text: string,
+    images: readonly Extract<UserContent, { type: "image" }>[] = [],
+    extras: readonly string[] = [],
+  ): TranscriptProgress[] {
     const content: UserContent[] = [
-      ...(text !== "" || images.length === 0 ? [{ type: "text" as const, text }] : []),
+      ...(text !== "" || (images.length === 0 && extras.length === 0) ? [{ type: "text" as const, text }] : []),
+      ...extras.map((extra): UserContent => ({ type: "text", text: extra })),
       ...images,
     ];
     const item: TranscriptItem = {
