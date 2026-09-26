@@ -1997,6 +1997,33 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           ))}
         </div>
       )}
+      {(pastedBlocks.length > 0 || fileRefs.length > 0) && (
+        // 附件回显在气泡**上方**（与附图、引用 chip 同区——附件聚在消息头部，
+        // 正文气泡保持干净）。粘贴块折叠成一行——发出去之后它是背景，不该在
+        // 对话流里再刷一次屏
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "var(--space-2)",
+            justifyContent: "flex-end",
+            maxWidth: "var(--bubble-max-width)",
+            marginBottom: "var(--space-1)",
+          }}
+        >
+          {fileRefs.map((ref, index) => (
+            <FileRefChip
+              key={`file:${index}`}
+              name={ref.path.split(/[\\/]/).filter((part) => part !== "").pop() ?? ref.path}
+              path={ref.path}
+              kind={ref.kind}
+            />
+          ))}
+          {pastedBlocks.map((block, index) => (
+            <PastedTextChip key={`pasted:${index}`} text={block.content} lines={block.lines} />
+          ))}
+        </div>
+      )}
       {hasText && (
         <div
           ref={bubbleRef}
@@ -2034,32 +2061,6 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
               }}
             />
           )}
-        </div>
-      )}
-      {(pastedBlocks.length > 0 || fileRefs.length > 0) && (
-        // 附件回显跟在气泡后面（与模型正文里的顺序一致：正文 → 粘贴块 → 文件清单）。
-        // 粘贴块折叠成一行——发出去之后它是背景，不该在对话流里再刷一次屏
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "var(--space-2)",
-            justifyContent: "flex-end",
-            maxWidth: "var(--bubble-max-width)",
-            marginTop: "var(--space-1)",
-          }}
-        >
-          {pastedBlocks.map((block, index) => (
-            <PastedTextChip key={`pasted:${index}`} text={block.content} lines={block.lines} />
-          ))}
-          {fileRefs.map((ref, index) => (
-            <FileRefChip
-              key={`file:${index}`}
-              name={ref.path.split(/[\\/]/).filter((part) => part !== "").pop() ?? ref.path}
-              path={ref.path}
-              kind={ref.kind}
-            />
-          ))}
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>

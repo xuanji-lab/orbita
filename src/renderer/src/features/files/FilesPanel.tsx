@@ -323,7 +323,6 @@ export function FilesPanel(props: {
                       void navigator.clipboard.writeText(menu.path);
                     },
                   },
-                  referenceItem(menu),
                 ]
         }
       />
