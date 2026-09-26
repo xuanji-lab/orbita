@@ -690,12 +690,14 @@ function TreeRow(props: {
         )}
       </button>
       {/* 引用（最外侧，高频动作优先够到）与 Reveal 并排：同一套 hover 浮现语言 */}
+      {/* 外侧 folder-open = 在文件管理器中显示；内侧 paperclip = 添加文件引用。
+          图形与动作必须成对（2026-09-26 教训：只换图形不换动作，按钮就说谎了） */}
       <button
         type="button"
         className="file-hover-act file-row-act"
-        title={t.files.reference}
-        aria-label={t.files.reference}
-        onClick={props.onReference}
+        title={t.files.revealInFileManager}
+        aria-label={t.files.revealInFileManager}
+        onClick={props.onReveal}
         style={{
           position: "absolute",
           right: 2,
@@ -716,8 +718,9 @@ function TreeRow(props: {
       <button
         type="button"
         className="file-hover-act file-row-act"
-        title={t.files.revealInFileManager}
-        onClick={props.onReveal}
+        title={t.files.reference}
+        aria-label={t.files.reference}
+        onClick={props.onReference}
         style={{
           position: "absolute",
           right: 24,
