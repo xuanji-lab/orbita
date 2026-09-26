@@ -2,10 +2,28 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   formatSkillBlock,
+  matchSkillTarget,
   parseSkillBlock,
   parseSkillInvocation,
   skillForReadPath,
 } from "./skill.ts";
+
+describe("matchSkillTarget", () => {
+  const available = [
+    { slug: "grill-me", name: "Grill" },
+    { slug: "tdd", name: "tdd" },
+  ];
+  it("slug 优先于 name", () => {
+    assert.deepEqual(matchSkillTarget(available, "grill-me"), available[0]);
+    assert.deepEqual(matchSkillTarget(available, "tdd"), available[1]);
+  });
+  it("slug 不中再按 name 匹配", () => {
+    assert.deepEqual(matchSkillTarget(available, "Grill"), available[0]);
+  });
+  it("都不中返回 null", () => {
+    assert.equal(matchSkillTarget(available, "nope"), null);
+  });
+});
 
 describe("parseSkillInvocation", () => {
   it("裸指令只有 target", () => {

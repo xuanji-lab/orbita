@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { ImageLightbox } from "./ImageLightbox";
@@ -12,6 +12,9 @@ import type { ComposerFileRef, ComposerPastedText } from "./composer-attachments
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
+import { api } from "../api";
+import { filterSkills } from "../features/skills/skill-filter";
+import type { SkillMeta } from "@shared/skill";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useT } from "../locale.ts";
@@ -91,6 +94,8 @@ export function Composer(props: {
   onPasteLargeText: (text: string) => void;
   /** 当前模型看不了图：有附图时在缩略图下说一句（pi 会把图换成占位文字，不报错） */
   imageUnsupported?: boolean;
+  /** 指令面板的动作项（/compact /new）：选中即执行，会话动作由调用方接（发送流不经这里） */
+  onCommand?: (command: "compact" | "new") => void;
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -132,6 +137,63 @@ export function Composer(props: {
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
   }, []);
+  // ── 指令面板（/ 触发）──────────────────────────────────────────────
+  // 首字符是 / 且单行时亮；Esc 关掉后改动内容才重新亮。skill 列表首次展开拉一次
+  // （skills 不参与聊天路径，不值得常驻；api.skill.list 与 Skills 面同一份 IPC）。
+  const [commandsDismissed, setCommandsDismissed] = useState(false);
+  const [activeCommand, setActiveCommand] = useState(0);
+  const [skillMetas, setSkillMetas] = useState<SkillMeta[] | null>(null);
+  const panelOpen =
+    props.value.startsWith("/") && !props.value.includes("\n") && !commandsDismissed;
+  const commandQuery = panelOpen ? props.value.slice(1).trim().toLowerCase() : "";
+  useEffect(() => {
+    if (panelOpen && skillMetas === null) {
+      void api.skill.list().then(setSkillMetas).catch(() => setSkillMetas([]));
+    }
+  }, [panelOpen, skillMetas]);
+  useEffect(() => {
+    if (!props.value.startsWith("/")) setCommandsDismissed(false);
+  }, [props.value]);
+  useEffect(() => setActiveCommand(0), [commandQuery]);
+  type CommandRow =
+    | { kind: "compact" | "new"; name: string; description: string }
+    | { kind: "skill"; slug: string; name: string; description: string };
+  const commandRows: CommandRow[] = useMemo(() => {
+    if (!panelOpen) return [];
+    const builtins: CommandRow[] = [
+      { kind: "compact", name: "compact", description: t.composer.cmdCompact },
+      { kind: "new", name: "new", description: t.composer.cmdNew },
+    ];
+    const matchSkill = (meta: SkillMeta): CommandRow => ({
+      kind: "skill",
+      slug: meta.slug,
+      name: meta.name,
+      description: meta.description,
+    });
+    if (commandQuery === "") {
+      return [...builtins, ...(skillMetas ?? []).filter((meta) => !meta.missing).map(matchSkill)];
+    }
+    return [
+      ...builtins.filter((row) => row.name.startsWith(commandQuery)),
+      ...filterSkills(skillMetas ?? [], commandQuery)
+        .filter((meta) => !meta.missing)
+        .map(matchSkill),
+    ];
+  }, [panelOpen, commandQuery, skillMetas, t]);
+
+  /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行 */
+  const runCommand = (row: CommandRow): void => {
+    setCommandsDismissed(true);
+    if (row.kind === "skill") {
+      props.onChange(`/skill:${row.slug} `);
+    } else if (props.onCommand !== undefined) {
+      props.onCommand(row.kind);
+    } else {
+      props.onChange(`/${row.name}`);
+    }
+    textareaRef.current?.focus();
+  };
+
   const disabled = props.disabled === true;
   const running = props.running === true;
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
@@ -221,6 +283,90 @@ export function Composer(props: {
           ))}
         </div>
       )}
+      {panelOpen && (
+        <div
+          role="listbox"
+          style={{
+            display: "grid",
+            gap: 2,
+            maxHeight: 240,
+            overflowY: "auto",
+            padding: 6,
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--color-border-subtle)",
+            background: "var(--color-bg-muted)",
+          }}
+        >
+          {commandRows.length === 0 ? (
+            <div
+              style={{
+                padding: "6px 8px",
+                fontSize: "var(--font-size-caption)",
+                color: "var(--color-text-tertiary)",
+              }}
+            >
+              {t.composer.commandNoMatch}
+            </div>
+          ) : (
+            commandRows.map((row, index) => (
+              <button
+                key={row.kind === "skill" ? `skill:${row.slug}` : row.kind}
+                type="button"
+                role="option"
+                aria-selected={index === activeCommand}
+                onClick={() => runCommand(row)}
+                onMouseEnter={() => setActiveCommand(index)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--space-2)",
+                  padding: "6px 8px",
+                  borderRadius: "var(--radius-md)",
+                  border: 0,
+                  background: index === activeCommand ? "var(--color-bg-active)" : "transparent",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  minWidth: 0,
+                }}
+              >
+                <Icon
+                  name={
+                    row.kind === "skill"
+                      ? "book-open"
+                      : row.kind === "compact"
+                        ? "fold-vertical"
+                        : "message-square-dashed"
+                  }
+                  size={13}
+                  strokeWidth={1.8}
+                  style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
+                />
+                <span
+                  style={{
+                    fontFamily: "var(--font-family-mono)",
+                    fontSize: "var(--font-size-caption)",
+                    color: "var(--color-text-primary)",
+                    flex: "0 0 auto",
+                  }}
+                >
+                  {row.kind === "skill" ? `/skill:${row.slug}` : `/${row.name}`}
+                </span>
+                <span
+                  style={{
+                    fontSize: "var(--font-size-caption)",
+                    color: "var(--color-text-tertiary)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.description}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
       <div className="composer-field">
         {whiteout && (
           // 镜像：与 textarea 同字体、同字距、同宽，字是透明的，只有英文段的白底看得见。
@@ -265,6 +411,30 @@ export function Composer(props: {
             }
           }}
           onKeyDown={(event) => {
+            // 面板开着时方向键与 Enter 归面板（Enter 选中即执行，不落进发送）；
+            // Esc 关面板，内容照在。组词中的按键不动面板。
+            if (panelOpen && !event.nativeEvent.isComposing) {
+              if (event.key === "ArrowDown" && commandRows.length > 0) {
+                event.preventDefault();
+                setActiveCommand((index) => (index + 1) % commandRows.length);
+                return;
+              }
+              if (event.key === "ArrowUp" && commandRows.length > 0) {
+                event.preventDefault();
+                setActiveCommand((index) => (index - 1 + commandRows.length) % commandRows.length);
+                return;
+              }
+              if (event.key === "Enter" && commandRows.length > 0) {
+                event.preventDefault();
+                const row = commandRows[Math.min(activeCommand, commandRows.length - 1)];
+                if (row !== undefined) runCommand(row);
+                return;
+              }
+              if (event.key === "Escape") {
+                setCommandsDismissed(true);
+                return;
+              }
+            }
             // 组词中的 Enter 是「确认候选词」，不是发送——规则与用例在 composer-keys.ts
             if (!isSubmitKey({
               key: event.key,

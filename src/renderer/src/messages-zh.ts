@@ -87,6 +87,9 @@ export const zh: Messages = {
     pastedExpand: "展开粘贴全文",
     pastedCollapse: "收起粘贴",
     removePasted: "移除粘贴文本",
+    commandNoMatch: "没有匹配的指令",
+    cmdCompact: "立即压缩上下文",
+    cmdNew: "开一条新会话",
   },
 
   quote: {

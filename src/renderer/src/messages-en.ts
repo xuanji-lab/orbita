@@ -107,6 +107,9 @@ export const en = {
     pastedExpand: "Show the pasted text in full",
     pastedCollapse: "Collapse the pasted text",
     removePasted: "Remove pasted text",
+    commandNoMatch: "No matching command",
+    cmdCompact: "Compact the context now",
+    cmdNew: "Start a new session",
   },
 
   quote: {

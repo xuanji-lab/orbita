@@ -314,6 +314,7 @@ void app.whenReady().then(async () => {
     // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     (workspaceId) => skills.linkDirs(workspaceId),
+    skills,
     mcp,
     settings,
   );

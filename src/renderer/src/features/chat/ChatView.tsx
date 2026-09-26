@@ -663,6 +663,16 @@ function ChatViewBody(props: {
         session.send();
       }}
       onStop={session.stop}
+      onCommand={(command) => {
+        if (command === "compact") {
+          // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
+          session.sendText("/compact");
+        } else {
+          // /new：清掉打了一半的草稿再开新会话
+          session.setDraft("");
+          session.newTask();
+        }
+      }}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
       // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index

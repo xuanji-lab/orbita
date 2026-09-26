@@ -106,6 +106,18 @@ export function parseSkillInvocation(text: string): { target: string; rest?: str
 }
 
 /**
+ * `/skill:` 的 target 匹配：先按 slug（面板插入的形态、文件系统安全字符集），
+ * 再按 frontmatter 名。可用性过滤（missing / global / workspace）由调用方先做，
+ * 这里只管名字。找不到返回 null。
+ */
+export function matchSkillTarget<T extends { slug: string; name: string }>(
+  available: readonly T[],
+  target: string,
+): T | null {
+  return available.find((m) => m.slug === target) ?? available.find((m) => m.name === target) ?? null;
+}
+
+/**
  * 展开成 pi 同款的 `<skill>` 块用户消息（pi 的 formatSkillInvocation 同一形状，
  * 两端必须一致：模型靠它认 skill，显示端靠它认折叠卡）。instructions 是
  * `/skill:x` 后面用户补的附加指示，拼在块后。

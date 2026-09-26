@@ -278,6 +278,8 @@ export interface ChatSession {
    */
   retryClosingScan: (() => void) | null;
   send: () => void;
+  /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
+  sendText: (text: string) => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
   /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
@@ -1492,8 +1494,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, model, mode, thinkingLevel, restoreSent],
   );
 
-  const send = useCallback(async () => {
-    const own = draft.trim();
+  const send = useCallback(async (override?: string) => {
+    const own = (override ?? draft).trim();
     const images = attachments.map((item) => item.image);
     if (
       own === "" &&
@@ -2438,6 +2440,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 重试只在「本槽正看着那条失败的会话」时给出——提示行本身就是那条会话的
     retryClosingScan: scanFailed !== null && scanFailed === viewedId ? retryClosingScan : null,
     send: () => void send(),
+    /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
+    sendText: (text: string) => void send(text),
     stop,
     queued: entry.queued,
     sendQueuedNow,
