@@ -78,10 +78,19 @@ export function sortFileEntries(entries: readonly FileEntry[]): FileEntry[] {
  */
 export function fileRootLabel(kind: FileRootKind, path: string, title: string, fallback: string): string {
   if (kind === "attached") {
-    const last = path.split("/").filter((part) => part !== "").pop();
-    return last === undefined || last === "" ? path : last;
+    const last = pathTail(path);
+    return last === "" ? path : last;
   }
   return title.trim() === "" ? fallback : title.trim();
+}
+
+/**
+ * 路径末段。同 workspace.ts 的同名函数：**shared 层不能引 node:path**（renderer 里没有
+ * node 内置，vite 会 externalize 掉、构建失败），在这里自己切。
+ */
+function pathTail(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part !== "");
+  return parts[parts.length - 1] ?? "";
 }
 
 /**
