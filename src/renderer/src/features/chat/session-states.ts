@@ -18,6 +18,7 @@ import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem 
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
+import type { ComposerFileRef, ComposerPastedText } from "../../shell/composer-attachments.ts";
 import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
 
@@ -43,8 +44,17 @@ export interface PendingApproval {
  * （同一条 `channel:event` 因订阅重连等原因重复到达时，队列里已有同 id 就不再入队）。
  */
 export type QueuedMessage =
-  /** images：随这条排队的附图（缺席 = 纯文字）。排队时就读成 base64，投递时原样交出去 */
-  | { id: string; kind: "text"; text: string; images?: readonly PromptImage[] }
+  /** images：随这条排队的附图（缺席 = 纯文字）。排队时就读成 base64，投递时原样交出去。
+   * files / pasted：同行的文件引用与粘贴文本块（语义见 shared/prompt-attachments.ts），
+   * 投递时原样交出去；撤回时原样回输入框 */
+  | {
+      id: string;
+      kind: "text";
+      text: string;
+      images?: readonly PromptImage[];
+      files?: readonly ComposerFileRef[];
+      pasted?: readonly ComposerPastedText[];
+    }
   | { id: string; kind: "compact"; instructions?: string }
   | { id: string; kind: "channel"; childId: string; message: ChannelMessage };
 

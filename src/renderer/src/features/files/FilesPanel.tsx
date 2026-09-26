@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { ContextMenu } from "../../shell/ContextMenu";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { api } from "../../api";
 import type { ChatSession } from "../chat/useChatSession";
@@ -46,6 +47,8 @@ export function FilesPanel(props: {
   const [selected, setSelected] = useState<string | null>(null);
   /** 打开的预览：root 是它所在分组的根路径，path 是文件绝对路径。null = 预览未打开 */
   const [preview, setPreview] = useState<{ root: string; path: string } | null>(null);
+  /** 右键菜单：打开位置 + 被右键的那一行。文件与目录都可引用（目录引用 = 给模型一个路径自己列） */
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string; name: string; kind: FileEntryKind } | null>(null);
   const tree = useFileTree(sessionId, workspaceId, session.workspaces);
 
   // 会话 / 工作区切换 = 换一棵树，选中与预览跟着清掉——旧会话的文件路径在新树里
@@ -139,6 +142,7 @@ export function FilesPanel(props: {
             selected={!isDir && selected === child}
             onSelect={() => selectFile(root, child)}
             onOpenPreview={() => openPreview(root, child)}
+            onContextMenu={(position) => setMenu({ ...position, path: child, name: entry.name, kind: entry.kind })}
           />
           {isDir && open && rowsOf(root, child, depth + 1)}
         </Fragment>
@@ -235,6 +239,28 @@ export function FilesPanel(props: {
       }
       footer={<PanelLine>{footerSummary(groupCount, missingAttached, t)}</PanelLine>}
     >
+      {/* 右键菜单（portal 到 body，位置在指针处）：v1 只有一项「引用到输入卡」——
+          把这一行的绝对路径附进当前输入框（origin workspace：原位置引用不复制）。
+          文件与目录都给：目录引用=给模型一个路径，让它自己列目录挑着读 */}
+      <ContextMenu
+        position={menu === null ? null : { x: menu.x, y: menu.y }}
+        onClose={() => setMenu(null)}
+        items={[
+          {
+            id: "reference",
+            label: t.files.referenceToComposer,
+            icon: "paperclip",
+            onSelect: () => {
+              if (menu === null) return;
+              session.attachFileRef({
+                path: menu.path,
+                name: menu.name,
+                kind: menu.kind === "directory" ? "dir" : "file",
+              });
+            },
+          },
+        ]}
+      />
       {/* container query 分栏：容器 ≥600px 且预览打开 → 左目录右预览；<600px 且
           预览打开 → 只显示预览，目录用 CSS 隐藏（不卸载，展开态与滚动位置还在）；
           预览未打开 → 目录占满，与分栏前的版式一样。断点与显隐规则全在 styles.css，
@@ -462,6 +488,8 @@ function TreeRow(props: {
   onSelect: () => void;
   /** 双击 / Enter 非目录行：选中并打开预览 */
   onOpenPreview: () => void;
+  /** 右键：文件与目录都可「引用到输入卡」，调用方拿指针位置与这一行的身份 */
+  onContextMenu: (position: { x: number; y: number }) => void;
 }) {
   const t = useT();
   const isDir = props.kind === "directory";
@@ -489,6 +517,11 @@ function TreeRow(props: {
         title={title}
         onClick={isDir ? props.onToggle : props.onSelect}
         onDoubleClick={isDir ? undefined : props.onOpenPreview}
+        onContextMenu={(event) => {
+          // 右键同样是焦点动作：阻止浏览器默认菜单，弹我们的「引用到输入卡」
+          event.preventDefault();
+          props.onContextMenu({ x: event.clientX, y: event.clientY });
+        }}
         onKeyDown={
           isDir
             ? undefined

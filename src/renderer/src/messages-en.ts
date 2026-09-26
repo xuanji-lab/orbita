@@ -91,13 +91,22 @@ export const en = {
     send: "Send",
     stop: "Stop",
     stopTurn: "Stop this turn",
-    attachImage: "Attach images (or paste / drop them)",
+    attachFiles: "Attach files (or paste / drop them)",
     removeImage: "Remove image",
     imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
     imageTooLarge: (name: string, mb: number) => `${name} is over ${mb} MB.`,
     tooManyImages: (max: number) => `Up to ${max} images per message.`,
     imageReadFailed: (name: string) => `Couldn't read ${name}.`,
     noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
+    removeFile: "Remove file",
+    fileNoPath: (name: string) =>
+      `Couldn't tell where ${name} lives on disk — copy it into a folder, then drag it in.`,
+    tooManyFiles: (max: number) => `Up to ${max} files per message.`,
+    fileAlreadyAttached: (name: string) => `${name} is already attached.`,
+    pastedTitle: (lines: number) => `Pasted text · ${lines} lines`,
+    pastedExpand: "Show the pasted text in full",
+    pastedCollapse: "Collapse the pasted text",
+    removePasted: "Remove pasted text",
   },
 
   quote: {
@@ -700,6 +709,7 @@ export const en = {
     // 工具结果摘要
     chars: (n: number) => `${n} chars`,
     images: (n: number) => plural(n, "image"),
+    pastedBlocks: (n: number) => plural(n, "pasted block"),
     noOutputShort: "No output",
     timedOut: "Timed out",
     unreachable: "Unreachable",
@@ -952,6 +962,8 @@ export const en = {
   files: {
     title: "Files",
     emptyWorkbench: "Empty workbench — created on the agent's first write",
+    referenceToComposer: "Reference in the input box",
+    referenceToComposerTip: "Attach this path to your next message — the model reads it with its tools",
     refreshing: "Refreshing file tree…",
     refresh: "Refresh file tree",
     attach: "Attach a directory",

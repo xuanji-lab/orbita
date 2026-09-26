@@ -89,6 +89,8 @@ import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
 import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
+import { parseFilesBlock, parsePastedBlock, pastedTextSize } from "@shared/prompt-attachments";
+import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
@@ -190,7 +192,7 @@ export function ChatView(props: ChatViewProps) {
         setDropActive(false);
         if (!carriesFiles(event)) return;
         event.preventDefault();
-        session.attachImages(filesOf(event.dataTransfer));
+        session.attachIncoming(filesOf(event.dataTransfer));
       }}
     >
       <QuoteJumpContext.Provider value={jumpToQuote}>
@@ -652,8 +654,13 @@ function ChatViewBody(props: {
       onRemoveQuote={session.removeQuote}
       jumpToQuote={jumpToQuote}
       attachments={session.attachments}
-      onAttach={session.attachImages}
+      onAttach={session.attachIncoming}
       onRemoveAttachment={session.removeAttachment}
+      files={session.files}
+      pasted={session.pasted}
+      onRemoveFile={session.removeFile}
+      onRemovePasted={session.removePasted}
+      onPasteLargeText={session.addPastedText}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
     />
   );
@@ -1929,10 +1936,19 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
     return () => window.clearTimeout(timer);
   }, [copied]);
   const textBlocks = props.item.content.filter((block) => block.type === "text");
-  // 正文里展开过的引用块解析回 chip：气泡只放用户自己的话，复制也只拷这部分
-  const parsed = parseQuotedMessage(textBlocks.map((block) => block.text).join("\n\n"));
+  // 第一块是正文（里头展开过的引用块解析回 chip：气泡只放用户自己的话，复制也只拷这部分）。
+  // 其后的文本块是 agent 进程组装的附件块（粘贴文本 / 文件清单，各自独立成块，见
+  // shared/prompt-attachments.ts）——解析回折叠 chip；旧会话只有单块，这条路径不触发，
+  // 行为一字不变
+  const [headText = "", ...extraTexts] = textBlocks.map((block) => block.text);
+  const parsed = parseQuotedMessage(headText);
   const quotes = parsed.quotes;
   const copyText = parsed.text;
+  const pastedBlocks = extraTexts
+    .map((extra) => parsePastedBlock(extra))
+    .filter((content): content is string => content !== null)
+    .map((content) => ({ content, lines: pastedTextSize(content).lines }));
+  const fileRefs = extraTexts.flatMap((extra) => parseFilesBlock(extra) ?? []);
   // markdown 轻量渲染（表格/粗体/代码块/数学放行，标题摊平——wafo 2026-09-20：
   // 「正文里渲染正确，user message 为什么不一并渲染」）。多块之间空行分段。
   const text = parsed.text;
@@ -2018,6 +2034,32 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
               }}
             />
           )}
+        </div>
+      )}
+      {(pastedBlocks.length > 0 || fileRefs.length > 0) && (
+        // 附件回显跟在气泡后面（与模型正文里的顺序一致：正文 → 粘贴块 → 文件清单）。
+        // 粘贴块折叠成一行——发出去之后它是背景，不该在对话流里再刷一次屏
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "var(--space-2)",
+            justifyContent: "flex-end",
+            maxWidth: "var(--bubble-max-width)",
+            marginTop: "var(--space-1)",
+          }}
+        >
+          {pastedBlocks.map((block, index) => (
+            <PastedTextChip key={`pasted:${index}`} text={block.content} lines={block.lines} />
+          ))}
+          {fileRefs.map((ref, index) => (
+            <FileRefChip
+              key={`file:${index}`}
+              name={ref.path.split(/[\\/]/).filter((part) => part !== "").pop() ?? ref.path}
+              path={ref.path}
+              kind={ref.kind}
+            />
+          ))}
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>

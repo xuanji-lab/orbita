@@ -4,9 +4,11 @@ import { IconButton } from "./IconButton";
 import { ImageLightbox } from "./ImageLightbox";
 import { PaperclipMark } from "./PaperclipMark";
 import { QuoteChip } from "./QuoteChip";
+import { FileRefChip, PastedTextChip } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
-import { PROMPT_IMAGE_MIME_TYPES } from "@shared/prompt-images";
+import { isPastedTextLarge } from "@shared/prompt-attachments";
 import { filesOf, imageSrc, type ComposerImage } from "./composer-images.ts";
+import type { ComposerFileRef, ComposerPastedText } from "./composer-attachments.ts";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
@@ -80,6 +82,13 @@ export function Composer(props: {
   /** 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收 */
   onAttach: (files: readonly File[]) => void;
   onRemoveAttachment: (id: string) => void;
+  /** 输入框里待发的文件引用与粘贴文本块（同一把会话草稿键隔离） */
+  files: readonly ComposerFileRef[];
+  pasted: readonly ComposerPastedText[];
+  onRemoveFile: (id: string) => void;
+  onRemovePasted: (id: string) => void;
+  /** 粘贴的一大段文字超过折叠阈值（shared 的 isPastedTextLarge），输入框拦下交给调用方成块 */
+  onPasteLargeText: (text: string) => void;
   /** 当前模型看不了图：有附图时在缩略图下说一句（pi 会把图换成占位文字，不报错） */
   imageUnsupported?: boolean;
 }) {
@@ -127,9 +136,14 @@ export function Composer(props: {
   const running = props.running === true;
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
   // 同一个位置的两面，按输入态切换。想停止时清掉草稿即可，排队是高频动作、停止是少数。
-  // 有图没字也能发——一张截图本身就是一句完整的话
+  // 有图 / 有附件 / 有引用没字也能发——一张截图本身就是一句完整的话
   const sendable =
-    !disabled && (props.value.trim() !== "" || props.attachments.length > 0 || props.quotes.length > 0);
+    !disabled &&
+    (props.value.trim() !== "" ||
+      props.attachments.length > 0 ||
+      props.quotes.length > 0 ||
+      props.files.length > 0 ||
+      props.pasted.length > 0);
   const stopping = running && !sendable;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragging = props.dropActive === true;
@@ -156,6 +170,27 @@ export function Composer(props: {
           removeLabel={t.composer.removeImage}
           openLabel={t.lightbox.open}
         />
+      )}
+      {(props.files.length > 0 || props.pasted.length > 0) && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", minWidth: 0 }}>
+          {props.files.map((file) => (
+            <FileRefChip
+              key={file.id}
+              name={file.name}
+              path={file.path}
+              kind={file.kind}
+              onRemove={() => props.onRemoveFile(file.id)}
+            />
+          ))}
+          {props.pasted.map((block) => (
+            <PastedTextChip
+              key={block.id}
+              text={block.text}
+              lines={block.lines}
+              onRemove={() => props.onRemovePasted(block.id)}
+            />
+          ))}
+        </div>
       )}
       {props.attachments.length > 0 && props.imageUnsupported === true && (
         <div
@@ -213,12 +248,21 @@ export function Composer(props: {
           placeholder={props.placeholder}
           onChange={(event) => props.onChange(event.target.value)}
           onPaste={(event) => {
-            // 剪贴板里有文件（截图、从别处复制的图）才拦；纯文字粘贴照常进输入框。
-            // 浏览器复制图片常常同时带一份 HTML/URL 文本——有文件时以文件为准，文本不贴
+            // 剪贴板里有文件（截图、从别处复制的文件）才拦；分拣与报错在调用方。
+            // 浏览器复制文件常常同时带一份 HTML/URL 文本——有文件时以文件为准，文本不贴
             const files = filesOf(event.clipboardData);
-            if (files.length === 0) return;
-            event.preventDefault();
-            props.onAttach(files);
+            if (files.length > 0) {
+              event.preventDefault();
+              props.onAttach(files);
+              return;
+            }
+            // 纯文字粘贴：超过折叠阈值的一大段抽成粘贴块（全文进模型，永不截断），
+            // 普通文字照常进输入框
+            const text = event.clipboardData.getData("text/plain");
+            if (text !== "" && isPastedTextLarge(text)) {
+              event.preventDefault();
+              props.onPasteLargeText(text);
+            }
           }}
           onKeyDown={(event) => {
             // 组词中的 Enter 是「确认候选词」，不是发送——规则与用例在 composer-keys.ts
@@ -261,18 +305,17 @@ export function Composer(props: {
           发送键挤出可见区（`.composer-bottom-bar` 的容器查询规则见 styles.css）。
         */}
         <IconButton
-          label={t.composer.attachImage}
+          label={t.composer.attachFiles}
           size={28}
           disabled={disabled}
           onClick={() => fileInputRef.current?.click()}
           style={{ flex: "0 0 auto" }}
         >
-          <Icon name="image" size={15} strokeWidth={1.8} />
+          <Icon name="paperclip" size={15} strokeWidth={1.8} />
         </IconButton>
         <input
           ref={fileInputRef}
           type="file"
-          accept={PROMPT_IMAGE_MIME_TYPES.join(",")}
           multiple
           hidden
           onChange={(event) => {
