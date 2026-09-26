@@ -692,7 +692,7 @@ function TreeRow(props: {
       {/* 引用（最外侧，高频动作优先够到）与 Reveal 并排：同一套 hover 浮现语言 */}
       <button
         type="button"
-        className="file-hover-act"
+        className="file-hover-act file-row-act"
         title={t.files.reference}
         aria-label={t.files.reference}
         onClick={props.onReference}
@@ -715,7 +715,7 @@ function TreeRow(props: {
       </button>
       <button
         type="button"
-        className="file-hover-act file-row-reveal"
+        className="file-hover-act file-row-act"
         title={t.files.revealInFileManager}
         onClick={props.onReveal}
         style={{

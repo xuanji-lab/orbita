@@ -1763,8 +1763,8 @@ body {
   background: transparent;
   color: var(--color-text-secondary);
 }
-/* 行尾 Reveal 浮在行上：实色底盖住行尾的名字 / size·mtime（设计稿 .row-act） */
-.file-row-reveal {
+/* 行尾 hover 动作按钮（引用 / 在文件管理器中显示）浮在行上：实色底盖住行尾的名字 / size·mtime（设计稿 .row-act）——两个按钮共用，底色只差在 CSS 不差在 inline 
+.file-row-act {
   background: var(--color-bg-panel);
 }
 .file-hover-act:hover {
