@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { ContextMenu } from "../../shell/ContextMenu";
+import type { MenuItem } from "../../shell/Menu";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { api } from "../../api";
 import type { ChatSession } from "../chat/useChatSession";
@@ -15,6 +16,7 @@ import {
   formatSize,
   hasAgentsMd,
   orderEntries,
+  relativePathOf,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
 import { FilePreviewPane } from "./FilePreviewPane";
@@ -47,8 +49,17 @@ export function FilesPanel(props: {
   const [selected, setSelected] = useState<string | null>(null);
   /** 打开的预览：root 是它所在分组的根路径，path 是文件绝对路径。null = 预览未打开 */
   const [preview, setPreview] = useState<{ root: string; path: string } | null>(null);
-  /** 右键菜单：打开位置 + 被右键的那一行。文件与目录都可引用（目录引用 = 给模型一个路径自己列） */
-  const [menu, setMenu] = useState<{ x: number; y: number; path: string; name: string; kind: FileEntryKind } | null>(null);
+  /** 右键菜单：打开位置 + 被右键的那一行（root 用于相对路径与 fs 白名单）。
+   * isRoot = 根分组头（目前只有 Session 根）：只有「添加文件引用」一项 */
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    root: FileRoot;
+    path: string;
+    name: string;
+    kind: FileEntryKind;
+    isRoot?: boolean;
+  } | null>(null);
   const tree = useFileTree(sessionId, workspaceId, session.workspaces);
 
   // 会话 / 工作区切换 = 换一棵树，选中与预览跟着清掉——旧会话的文件路径在新树里
@@ -108,6 +119,19 @@ export function FilesPanel(props: {
       .catch((cause: unknown) => setActionError(failMessage(cause)));
   };
 
+  /** 「添加文件引用」：条目行与会话根行共用——把这一行的路径附进当前输入框（原位置引用） */
+  const referenceItem = (entry: { path: string; name: string; kind: FileEntryKind }): MenuItem => ({
+    id: "reference",
+    label: t.files.reference,
+    icon: "paperclip",
+    onSelect: () =>
+      session.attachFileRef({
+        path: entry.path,
+        name: entry.name,
+        kind: entry.kind === "directory" ? "dir" : "file",
+      }),
+  });
+
   /** 一个分组里的整棵子树（递归渲染已展开的层） */
   const rowsOf = (root: FileRoot, dir: string, depth: number): React.ReactNode => {
     const entries = tree.dirs.get(dir);
@@ -142,7 +166,9 @@ export function FilesPanel(props: {
             selected={!isDir && selected === child}
             onSelect={() => selectFile(root, child)}
             onOpenPreview={() => openPreview(root, child)}
-            onContextMenu={(position) => setMenu({ ...position, path: child, name: entry.name, kind: entry.kind })}
+            onContextMenu={(position) =>
+              setMenu({ ...position, root, path: child, name: entry.name, kind: entry.kind })
+            }
           />
           {isDir && open && rowsOf(root, child, depth + 1)}
         </Fragment>
@@ -187,6 +213,13 @@ export function FilesPanel(props: {
           // missing 的 attached 根下面有常驻 Detach（见 MissingAttachedRow）——组头
           // 不再重复一个 hover 才出的 Detach，一个状态只留一个处理入口
           onDetach={root.kind === "attached" && root.exists ? () => detach(root.path) : undefined}
+          // 会话根行也接右键：只有「添加文件引用」（把工作台目录整个递给模型）。
+          // 工作台还没建（exists=false）时引用一条不存在的路径没有意义，不接
+          onContextMenu={
+            root.kind === "session" && root.exists
+              ? (position) => setMenu({ ...position, root, path: root.path, name: root.label, kind: "directory", isRoot: true })
+              : undefined
+          }
         />
         {/* 「在 Proma 里找不到规则文件」的痛点落点：工作区没有 AGENTS.md 时给一条
             虚线提示行。点击只 reveal 工作区根（打开文件夹让用户手建）——创建动作
@@ -239,27 +272,58 @@ export function FilesPanel(props: {
       }
       footer={<PanelLine>{footerSummary(groupCount, missingAttached, t)}</PanelLine>}
     >
-      {/* 右键菜单（portal 到 body，位置在指针处）：v1 只有一项「引用到输入卡」——
-          把这一行的绝对路径附进当前输入框（origin workspace：原位置引用不复制）。
-          文件与目录都给：目录引用=给模型一个路径，让它自己列目录挑着读 */}
+      {/* 右键菜单（portal 到 body，位置在指针处）。条目行五项：打开 / 显示 / 复制两个
+          路径 / 添加文件引用（origin workspace：原位置引用不复制）；文件与目录都给——
+          目录的「打开」就是文件管理器里打开它。打开与显示走既有 fs:open / fs:reveal
+          白名单，复制是纯 renderer 剪贴板，零新契约。根分组头目前只有 Session 根接了
+          右键，且只有「添加文件引用」（把工作台目录整个递给模型） */}
       <ContextMenu
         position={menu === null ? null : { x: menu.x, y: menu.y }}
         onClose={() => setMenu(null)}
-        items={[
-          {
-            id: "reference",
-            label: t.files.reference,
-            icon: "paperclip",
-            onSelect: () => {
-              if (menu === null) return;
-              session.attachFileRef({
-                path: menu.path,
-                name: menu.name,
-                kind: menu.kind === "directory" ? "dir" : "file",
-              });
-            },
-          },
-        ]}
+        items={
+          menu === null
+            ? []
+            : menu.isRoot === true
+              ? [referenceItem(menu)]
+              : [
+                  {
+                    id: "open",
+                    label: t.files.openDefault,
+                    icon: "external-link",
+                    onSelect: () => {
+                      if (menu === null) return;
+                      void api.files
+                        .open({ sessionId, workspaceId, root: menu.root.path, dir: menu.path })
+                        .catch((cause: unknown) => setActionError(failMessage(cause)));
+                    },
+                  },
+                  {
+                    id: "reveal",
+                    label: t.files.revealInFileManager,
+                    icon: "folder-open",
+                    onSelect: () => tree.reveal(menu.root.path, menu.path),
+                  },
+                  {
+                    id: "copy-rel",
+                    label: t.files.copyRelativePath,
+                    icon: "copy",
+                    onSelect: () => {
+                      if (menu === null) return;
+                      void navigator.clipboard.writeText(relativePathOf(menu.root.path, menu.path, api.platform === "win32"));
+                    },
+                  },
+                  {
+                    id: "copy-abs",
+                    label: t.files.copyAbsolutePath,
+                    icon: "copy",
+                    onSelect: () => {
+                      if (menu === null) return;
+                      void navigator.clipboard.writeText(menu.path);
+                    },
+                  },
+                  referenceItem(menu),
+                ]
+        }
       />
       {/* container query 分栏：容器 ≥600px 且预览打开 → 左目录右预览；<600px 且
           预览打开 → 只显示预览，目录用 CSS 隐藏（不卸载，展开态与滚动位置还在）；
@@ -389,11 +453,21 @@ function RootLabel(props: {
   missing?: boolean;
   onReveal?: () => void;
   onDetach?: () => void;
+  /** 右键（目前只有 Session 根接）：与条目行同一份 ContextMenu 机制 */
+  onContextMenu?: (position: { x: number; y: number }) => void;
 }) {
   const t = useT();
   return (
     <div
       className="file-hover-host file-root-label"
+      onContextMenu={
+        props.onContextMenu === undefined
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              props.onContextMenu?.({ x: event.clientX, y: event.clientY });
+            }
+      }
       style={{
         display: "flex",
         alignItems: "center",
@@ -427,7 +501,7 @@ function RootLabel(props: {
         {props.detail}
       </span>
       {props.canReveal && props.onReveal !== undefined && (
-        <LabelAction title={t.files.revealInFinder} onClick={props.onReveal}>
+        <LabelAction title={t.files.revealInFileManager} onClick={props.onReveal}>
           <Icon name="folder-open" size={12} />
         </LabelAction>
       )}
@@ -613,7 +687,7 @@ function TreeRow(props: {
       <button
         type="button"
         className="file-hover-act file-row-reveal"
-        title={t.files.revealInFinder}
+        title={t.files.revealInFileManager}
         onClick={props.onReveal}
         style={{
           position: "absolute",
