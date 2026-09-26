@@ -17,7 +17,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, extname, join, relative } from "node:path";
+import { dirname, extname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -76,8 +76,16 @@ function readClean(path: string, isTs: boolean): string {
   return text;
 }
 
+/**
+ * 仓库相对路径，**统一用正斜杠**（本仓的路径书写约定，git 也是这个形状）。
+ *
+ * 为什么必须归一：`HEX_FILE_EXEMPTIONS` 里的键是手写的路径字面量，而 `relative()`
+ * 在 Windows 上返回反斜杠——不归一的话豁免名单在 Windows 上**静默失效**，被豁免的
+ * highlight.ts 会被当成裸 hex 报错。这是「同一份名单两平台同一把钥匙」，
+ * 不是用来掩盖分隔符差异（真正的路径比较都走 realpath / join）。
+ */
 function relPath(path: string): string {
-  return relative(REPO_ROOT, path);
+  return relative(REPO_ROOT, path).split(sep).join("/");
 }
 
 /**
