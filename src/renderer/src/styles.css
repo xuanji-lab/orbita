@@ -1763,7 +1763,7 @@ body {
   background: transparent;
   color: var(--color-text-secondary);
 }
-/* 行尾 hover 动作按钮（引用 / 在文件管理器中显示）浮在行上：实色底盖住行尾的名字 / size·mtime（设计稿 .row-act）——两个按钮共用，底色只差在 CSS 不差在 inline 
+/* 行尾 hover 动作按钮（引用 / 在文件管理器中显示）浮在行上：实色底盖住行尾的名字 / size·mtime（设计稿 .row-act）——两个按钮共用。实色底只能写在 CSS，写在 inline 会压过 :hover（2026-09-23 实测同款坑） */
 .file-row-act {
   background: var(--color-bg-panel);
 }
