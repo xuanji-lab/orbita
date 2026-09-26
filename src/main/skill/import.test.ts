@@ -40,7 +40,8 @@ describe("scanSkillDirs", () => {
     await writeSkill(proma, "Bad Name");
     await writeSkill(shared, "archify");
     const tabbitReal = await writeSkill(join(root, "elsewhere"), "tabbit");
-    await symlink(tabbitReal, join(shared, "tabbit"));
+    // 目录链接用 junction：Windows 上真 symlink 要特权（EPERM），POSIX 上该参数被忽略
+    await symlink(tabbitReal, join(shared, "tabbit"), "junction");
     const dirs: SkillSourceDir[] = [
       { source: "proma", name: "默认工作区", dir: proma },
       { source: "agent-skills", name: null, dir: shared },
@@ -102,7 +103,7 @@ describe("importSkills + SkillStore", () => {
     const real = await writeSkill(join(root, "real"), "linked-real");
     await writeSkill(source, "alpha");
     await writeSkill(source, "beta");
-    await symlink(real, join(source, "linked-real"));
+    await symlink(real, join(source, "linked-real"), "junction");
     const other = join(root, "other");
     await writeSkill(other, "gamma");
     const configDir = join(root, "orbita");

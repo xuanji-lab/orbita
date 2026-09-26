@@ -621,7 +621,8 @@ describe("边界：工作区三规则", () => {
   test("symlink 同址：orbita 工作区路径经 symlink 指向 Proma 工作区根 → 合并", async () => {
     const real = await mkdtemp(join(tmpdir(), "orbita-ws-real-"));
     const link = join(root, "ws-link");
-    await symlink(real, link);
+    // 目录链接用 junction：Windows 上真 symlink 要特权（EPERM），POSIX 上该参数被忽略
+    await symlink(real, link, "junction");
     await writePromaWorkspaces([{ id: "pw-9", name: "链接", projectRootPath: real }]);
     const pi = await writePiSession("2026-09-01T00-00-00-000Z_sym-000000000000001.jsonl", real);
     await writeIndex([{ id: "s-sym", title: "符号链接", piSessionFile: pi, workspaceId: "pw-9", createdAt: 1, updatedAt: 2 }]);
