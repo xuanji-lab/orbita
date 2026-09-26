@@ -711,7 +711,7 @@ function TreeRow(props: {
           cursor: "pointer",
         }}
       >
-        <Icon name="paperclip" size={12} />
+        <Icon name="folder-open" size={12} />
       </button>
       <button
         type="button"
@@ -733,7 +733,7 @@ function TreeRow(props: {
           cursor: "pointer",
         }}
       >
-        <Icon name="folder-open" size={12} />
+        <Icon name="paperclip" size={12} />
       </button>
     </div>
   );
