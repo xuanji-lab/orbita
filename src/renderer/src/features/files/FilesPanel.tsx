@@ -169,6 +169,13 @@ export function FilesPanel(props: {
             onContextMenu={(position) =>
               setMenu({ ...position, root, path: child, name: entry.name, kind: entry.kind })
             }
+            onReference={() =>
+              session.attachFileRef({
+                path: child,
+                name: entry.name,
+                kind: entry.kind === "directory" ? "dir" : "file",
+              })
+            }
           />
           {isDir && open && rowsOf(root, child, depth + 1)}
         </Fragment>
@@ -272,11 +279,12 @@ export function FilesPanel(props: {
       }
       footer={<PanelLine>{footerSummary(groupCount, missingAttached, t)}</PanelLine>}
     >
-      {/* 右键菜单（portal 到 body，位置在指针处）。条目行五项：打开 / 显示 / 复制两个
-          路径 / 添加文件引用（origin workspace：原位置引用不复制）；文件与目录都给——
-          目录的「打开」就是文件管理器里打开它。打开与显示走既有 fs:open / fs:reveal
-          白名单，复制是纯 renderer 剪贴板，零新契约。根分组头目前只有 Session 根接了
-          右键，且只有「添加文件引用」（把工作台目录整个递给模型） */}
+      {/* 右键菜单（portal 到 body，位置在指针处）。条目行四项：打开 / 复制两个路径 /
+          添加文件引用（origin workspace：原位置引用不复制）；「在文件管理器中显示」
+          不进菜单——行尾的 hover Reveal 按钮就是它，放两处是重复。文件与目录都给——
+          目录的「打开」就是文件管理器里打开它。打开走既有 fs:open 白名单，复制是纯
+          renderer 剪贴板，零新契约。根分组头目前只有 Session 根接了右键，且只有
+          「添加文件引用」（把工作台目录整个递给模型） */}
       <ContextMenu
         position={menu === null ? null : { x: menu.x, y: menu.y }}
         onClose={() => setMenu(null)}
@@ -296,12 +304,6 @@ export function FilesPanel(props: {
                         .open({ sessionId, workspaceId, root: menu.root.path, dir: menu.path })
                         .catch((cause: unknown) => setActionError(failMessage(cause)));
                     },
-                  },
-                  {
-                    id: "reveal",
-                    label: t.files.revealInFileManager,
-                    icon: "folder-open",
-                    onSelect: () => tree.reveal(menu.root.path, menu.path),
                   },
                   {
                     id: "copy-rel",
@@ -562,8 +564,10 @@ function TreeRow(props: {
   onSelect: () => void;
   /** 双击 / Enter 非目录行：选中并打开预览 */
   onOpenPreview: () => void;
-  /** 右键：文件与目录都可「引用到输入卡」，调用方拿指针位置与这一行的身份 */
+  /** 右键：文件与目录都可「添加文件引用」，调用方拿指针位置与这一行的身份 */
   onContextMenu: (position: { x: number; y: number }) => void;
+  /** 行尾 hover 的「添加文件引用」——引用是高频动作，升到与 Reveal 并排的一键入口 */
+  onReference: () => void;
 }) {
   const t = useT();
   const isDir = props.kind === "directory";
@@ -614,8 +618,9 @@ function TreeRow(props: {
           width: "100%",
           height: 30,
           paddingLeft: `calc(var(--space-3) + ${props.depth} * 16px)`,
-          // 右侧给浮在行上的 Reveal（20px）留位：不留的话 AGENTS.md 的 rules 尾注会被它压住
-          paddingRight: "calc(var(--space-3) + 20px)",
+          // 右侧给浮在行上的两个 hover 按钮（引用 + Reveal，各 20px + 4px 缝）留位：
+          // 不留的话 AGENTS.md 的 rules 尾注会被它们压住
+          paddingRight: "calc(var(--space-3) + 44px)",
           border: 0,
           font: "inherit",
           fontSize: "var(--font-size-control)",
@@ -684,6 +689,30 @@ function TreeRow(props: {
           </span>
         )}
       </button>
+      {/* 引用（最外侧，高频动作优先够到）与 Reveal 并排：同一套 hover 浮现语言 */}
+      <button
+        type="button"
+        className="file-hover-act"
+        title={t.files.reference}
+        aria-label={t.files.reference}
+        onClick={props.onReference}
+        style={{
+          position: "absolute",
+          right: 2,
+          top: 5,
+          width: 20,
+          height: 20,
+          // display 由 .file-hover-act 的 CSS 管（hover 才出现）
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 0,
+          border: 0,
+          borderRadius: "var(--radius-sm)",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name="paperclip" size={12} />
+      </button>
       <button
         type="button"
         className="file-hover-act file-row-reveal"
@@ -691,7 +720,7 @@ function TreeRow(props: {
         onClick={props.onReveal}
         style={{
           position: "absolute",
-          right: 2,
+          right: 24,
           top: 5,
           width: 20,
           height: 20,
