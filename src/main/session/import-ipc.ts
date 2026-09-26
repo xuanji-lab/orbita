@@ -27,6 +27,7 @@ import type { SettingsStore } from "../settings/store.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import { findGreetingOnly } from "./greeting-only.ts";
+import type { CodexPaths } from "./importer.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
 import {
   emptyScanReport,
@@ -35,6 +36,7 @@ import {
   probeClaudeCode,
   probeKimiCode,
   probeOpencode,
+  probeCodex,
   probeProma,
   probeReasonix,
   probeZcode,
@@ -92,6 +94,7 @@ export function registerImportIpc(
       opencode: opencodePaths(),
       reasonix: reasonixPaths(),
       zcode: zcodePaths(),
+      codex: codexPaths(homedir()),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
       // mcp.json 坏了不挡扫描：会话与 skills 照导，MCP 写入时会各自报错
@@ -116,6 +119,7 @@ export function registerImportIpc(
       await probeOpencode(opencodePaths()),
       await probeReasonix(reasonixPaths()),
       await probeZcode(zcodePaths()),
+      await probeCodex(codexPaths(homedir())),
       await probeAgentSkills(agentSkillsDir()),
     ],
   }));
@@ -226,6 +230,12 @@ function reasonixPaths(): ReasonixPaths {
 function zcodePaths(): ZcodePaths {
   const home = homedir();
   return { dbFile: join(home, ".zcode", "cli", "db", "db.sqlite"), home };
+}
+
+/** Codex 的 sessions 目录：$CODEX_HOME（默认 ~/.codex）/sessions。 */
+function codexPaths(home: string): CodexPaths {
+  const root = process.env["CODEX_HOME"] ?? join(home, ".codex");
+  return { sessionsDir: join(root, "sessions"), home };
 }
 
 /** 多家 agent 共用的 skills 目录（agent-skills 来源）。探测与扫描同一个。 */

@@ -69,6 +69,8 @@ const ALLOWED_LATIN = new Set([
   "mcp.json",
   "SKILL.md",
   "AGENTS.md",
+  // 产品名（迁移来源的显示名，与 Proma / Kimi / opencode 同类）
+  "Codex",
   // 按键名
   "Ctrl",
   "Alt",

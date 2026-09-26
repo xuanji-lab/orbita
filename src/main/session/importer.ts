@@ -61,6 +61,7 @@ import {
   type ClaudeDesktopSession,
 } from "./claude-code.ts";
 import { kimiBlobRefs, parseKimiSessionState, parseKimiWire } from "./kimi-code.ts";
+import { parseCodexRollout } from "./codex.ts";
 import { onlyWrittenMessage } from "./greeting-only.ts";
 import {
   opencodeSessionBytes,
@@ -193,6 +194,14 @@ export interface ZcodePaths {
   home: string;
 }
 
+/** Codex 来源要读的位置（都在 $CODEX_HOME（默认 ~/.codex）下）。全部**只读**。 */
+export interface CodexPaths {
+  /** sessions/ 根（rollout-*.jsonl 在它的 YYYY/MM/DD/ 下） */
+  sessionsDir: string;
+  /** 家目录：在家目录里开的会话不算有文件夹 */
+  home: string;
+}
+
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
 export interface ImporterDeps {
   /**
@@ -211,6 +220,8 @@ export interface ImporterDeps {
   reasonix?: ReasonixPaths;
   /** ZCode 来源的位置。不传 = 扫描勾了它也不读 */
   zcode?: ZcodePaths;
+  /** Codex 来源的位置。不传 = 扫描勾了它也不读 */
+  codex?: CodexPaths;
   /** 多家共用的 skills 目录（~/.agents/skills，来源 agent-skills）。不传 = 勾了也不读 */
   agentSkillsDir?: string;
   /** orbita 已有的 skill slug（含只剩断链的）：skills 重名判断的底 */
@@ -395,6 +406,17 @@ export async function probeZcode(paths: ZcodePaths): Promise<ImportSourceProbe> 
     found = false;
   }
   return { id: "zcode", label: "ZCode", kind: "app", paths: [paths.dbFile], found };
+}
+
+/** Codex 来源的探测：只 stat sessions/ 目录。paths 是扫描会读的全部位置。 */
+export async function probeCodex(paths: CodexPaths): Promise<ImportSourceProbe> {
+  let found = false;
+  try {
+    found = (await stat(paths.sessionsDir)).isDirectory();
+  } catch {
+    found = false;
+  }
+  return { id: "codex", label: "Codex", kind: "cli", paths: [paths.sessionsDir], found };
 }
 
 /** 多家共用的 skills 目录（~/.agents/skills）：只 stat 这一个目录。 */
@@ -1488,6 +1510,9 @@ async function scanWithConfigs(
     skipped.push(...found.skipped);
     converted.push(...found.candidates);
   }
+  if (sources.includes("codex") && deps.codex !== undefined) {
+    skipped.push(...(await scanCodex(deps.codex, deps, importedBySource, converted)).skipped);
+  }
   for (const candidate of await placeConverted(converted, deps, newWorkspaceByKey)) {
     const resolution = applyDestination(candidate.resolution, overrides, deps);
     if (resolution.create !== null) {
@@ -1900,6 +1925,85 @@ async function readClaudeCodeRootUuid(file: string): Promise<string | null> {
 // ---------------------------------------------------------------------------
 
 /** 一条 Kimi Code 会话的对话文件（会话目录下 agents/main/wire.jsonl）：也是幂等键。 */
+/**
+ * Codex 的扫描：walk sessions/YYYY/MM/DD/rollout-*.jsonl，一份文件一条会话。
+ * 读全文转换（rollout 文件就是会话本体；扫描判「有没有 assistant」与标题、模型），
+ * 转换是纯函数（codex.ts，fixture 测试盖）。
+ */
+export async function scanCodex(
+  paths: CodexPaths,
+  deps: ImporterDeps,
+  importedBySource: ReadonlyMap<string, readonly SessionMeta[]>,
+  converted: ConvertedCandidate[],
+): Promise<{ skipped: ImportSkipItem[] }> {
+  const skipped: ImportSkipItem[] = [];
+  let years: { name: string; isDirectory(): boolean }[];
+  try {
+    years = await readdir(paths.sessionsDir, { withFileTypes: true });
+  } catch (cause) {
+    if (isNotFound(cause)) return { skipped };
+    throw cause;
+  }
+  for (const year of years.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!year.isDirectory()) continue;
+    const months = await readdir(join(paths.sessionsDir, year.name), { withFileTypes: true }).catch(() => []);
+    for (const month of months) {
+      if (!month.isDirectory()) continue;
+      const days = await readdir(join(paths.sessionsDir, year.name, month.name), { withFileTypes: true }).catch(() => []);
+      for (const day of days) {
+        if (!day.isDirectory()) continue;
+        const dir = join(paths.sessionsDir, year.name, month.name, day.name);
+        const files = (await readdir(dir, { withFileTypes: true }).catch(() => [])).filter(
+          (entry) => entry.isFile() && entry.name.startsWith("rollout-") && entry.name.endsWith(".jsonl"),
+        );
+        for (const file of files.sort((a, b) => a.name.localeCompare(b.name))) {
+          const sourceFile = join(dir, file.name);
+          const sourceId = file.name.replace(/\.jsonl$/, "");
+          let raw: string;
+          let bytes: number;
+          try {
+            bytes = (await stat(sourceFile)).size;
+            raw = await readFile(sourceFile, "utf8");
+          } catch {
+            skipped.push({ sourceId, title: null, reason: "missing-file", detail: sourceFile });
+            continue;
+          }
+          if (importedBySource.has(sourceFile)) {
+            skipped.push({ sourceId, title: null, reason: "already-imported" });
+            continue;
+          }
+          const rollout = parseCodexRollout(raw);
+          const title = deriveSessionTitle(rollout.firstPrompt ?? "") || `Codex session ${sourceId.slice(-6)}`;
+          if (!rollout.hasAssistant) {
+            skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+            continue;
+          }
+          const createdAt = rollout.meta.timestamp !== 0 ? rollout.meta.timestamp : rollout.lastTimestamp;
+          const place = await sessionFolder(rollout.meta.cwd, paths.home, deps.defaultCwd);
+          converted.push({
+            onlyMessage: null, // 候选在 placeConverted 之后由单消息筛出——Codex 的 onlyMessage 由调用处补
+            source: "codex",
+            sourceKind: "codex",
+            sourceId,
+            sourceFile,
+            title,
+            model: rollout.model,
+            createdAt,
+            updatedAt: rollout.lastTimestamp !== 0 ? rollout.lastTimestamp : createdAt,
+            bytes,
+            folder: place.folder,
+            cwd: place.cwd,
+          });
+          // 「只随手发了一句」的候选：全部 userDisplays 里非 null 的只有一条
+          const own = rollout.userDisplays.filter((display): display is string => display !== null);
+          if (own.length === 1) converted[converted.length - 1]!.onlyMessage = own[0]!;
+        }
+      }
+    }
+  }
+  return { skipped };
+}
+
 function kimiWireFile(sessionDir: string): string {
   return join(sessionDir, "agents", "main", "wire.jsonl");
 }
@@ -2666,7 +2770,9 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
                   ? await runReasonixImport(item, deps)
                 : item.sourceKind === "zcode"
                   ? await runZcodeImport(item, deps)
-                  : await runPiImport(
+                : item.sourceKind === "codex"
+                  ? await runCodexImport(item, deps)
+                : await runPiImport(
               item,
               deps,
               // 另导一份：不能落在原会话副本的文件名上（会盖掉 orbita 接着聊的那份），换一个
@@ -2966,6 +3072,15 @@ async function runZcodeImport(item: ImportPlanItem, deps: RunImporterDeps): Prom
     opencodeToMessages(readZcodeMessages(db, sessionId), UNASSIGNED_PROVIDER_ID, null),
   );
   return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
+}
+
+/**
+ * Codex 会话的灌入：rollout 文件 → codex.ts 转换 → persistConverted。
+ */
+async function runCodexImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+  const raw = await readFile(item.sourceFile, "utf8");
+  const rollout = parseCodexRollout(raw);
+  return persistConverted(item, deps, rollout.messages, rollout.userDisplays);
 }
 
 /**

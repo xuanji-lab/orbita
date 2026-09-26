@@ -528,6 +528,7 @@ export const en = {
       opencode: "opencode",
       reasonix: "Reasonix",
       zcode: "ZCode",
+      codex: "Codex",
       "agent-skills": "Shared agent skills",
     },
     kinds: {

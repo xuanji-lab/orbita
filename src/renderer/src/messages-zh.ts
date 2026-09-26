@@ -480,6 +480,7 @@ export const zh: Messages = {
       opencode: "opencode",
       reasonix: "Reasonix",
       zcode: "ZCode",
+      codex: "Codex",
       "agent-skills": "共享的智能体技能",
     },
     kinds: {

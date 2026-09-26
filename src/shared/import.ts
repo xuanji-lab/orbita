@@ -34,7 +34,7 @@
  *   概念无落点，都不迁（2026-09-28 裁决）
  * - agent-skills：多家 agent 共用的 skills 目录（~/.agents/skills），只有 skills，没有会话
  */
-export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "reasonix" | "zcode" | "agent-skills";
+export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "reasonix" | "zcode" | "codex" | "agent-skills";
 
 /**
  * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
@@ -173,7 +173,12 @@ export type ImportSourceKind =
   /** ZCode 的 SQLite 库（~/.zcode/cli/db/db.sqlite）：与 opencode 同形（session/message/part），
    *  转换直接走 opencode 的转换器，zcode.ts 只做取数与差异吸收（rewind 白名单、part 排序），
    *  键名分岔在转换器里两个拼写都认 */
-  | "zcode";
+  | "zcode"
+  /** Codex 的 rollout（$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl）：一行一个
+   *  {timestamp,type,payload}；session_meta 定会话、response_item 定消息（转换构造
+   *  pi 文件；工具项不导——细节见 codex.ts 文件头）。**依据公开逆向描述，未经真实
+   *  样本验证** */
+  | "codex";
 
 /**
  * 一条计划条目相对 orbita 的状态（再次导入，wafo 2026-09-24 23:55 裁决）。
@@ -507,6 +512,7 @@ const SOURCE_ID_TABLE: Record<ImportSourceId, true> = {
   opencode: true,
   reasonix: true,
   zcode: true,
+  codex: true,
   "agent-skills": true,
 };
 const SOURCE_IDS: readonly string[] = Object.keys(SOURCE_ID_TABLE);
