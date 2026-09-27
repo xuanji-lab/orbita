@@ -105,7 +105,9 @@
   --color-bg-active: rgba(214, 194, 69, 0.08);
   --color-text-primary: #f2f2f2;
   --color-text-secondary: #a6a6a6;
-  --color-text-tertiary: #6e6e6e;
+  /* tertiary 在 2026-09-27 从 #6e6e6e 提到 #808080：井上（#161616）的 micro 小字
+     （折叠统计行等）对比度只有 ~3.6:1，看不清；提到 ~4.6:1。仍比 secondary 深一档，层次不变 */
+  --color-text-tertiary: #808080;
   --color-text-inverse: #202020;
   --color-text-on-dark: #ffffff;
   --color-border-subtle: rgba(255, 255, 255, 0.1);
@@ -151,7 +153,9 @@
   --color-bg-active: rgba(214, 194, 69, 0.08);
   --color-text-primary: #f2f2f2;
   --color-text-secondary: #a6a6a6;
-  --color-text-tertiary: #6e6e6e;
+  /* 同 graphite：tertiary 提到 #808080——井上 micro 小字（折叠统计行）在 #6e6e6e
+     时只有 ~3.5:1，用户点名看不清（2026-09-27） */
+  --color-text-tertiary: #808080;
   --color-text-inverse: #1b1b1b;
   --color-text-on-dark: #ffffff;
   --color-border-subtle: rgba(255, 255, 255, 0.09);
