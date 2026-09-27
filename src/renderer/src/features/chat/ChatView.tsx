@@ -2742,7 +2742,10 @@ function ToolLine(props: {
               gap: 6,
               padding: "3px 10px",
               borderRadius: 999,
-              border: "1px solid var(--color-border-subtle)",
+              // 药丸是这一行的重点（用户 2026-09-27：hairline 边框看不清）：
+              // muted 底成块 + strong 边框勾轮廓，双信号才压得住玻璃面
+              background: "var(--color-bg-muted)",
+              border: "1px solid var(--color-border-strong)",
               minWidth: 0,
             }}
           >
@@ -2755,7 +2758,9 @@ function ToolLine(props: {
                 flex: "0 0 auto",
               }}
             />
-            <span style={SLOT.status}>{skillUse !== null ? "skill" : "mcp"}</span>
+            <span style={{ ...SLOT.status, color: "var(--color-text-secondary)" }}>
+              {skillUse !== null ? "skill" : "mcp"}
+            </span>
             <span
               style={{
                 minWidth: 0,
