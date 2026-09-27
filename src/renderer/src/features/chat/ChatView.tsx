@@ -41,6 +41,7 @@ import {
   mcpInputSummary,
   readTaskCard,
   showImageCard,
+  type ShowImageCardView,
   summarizeMcpResult,
   liveTailLines,
   parseEditDiff,
@@ -1069,6 +1070,49 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         const branchAfter = branchRows.get(index);
         // 复制与速度都按锚点所在的**整轮**取：轮内可能有多条 assistant 记录（每次 toolCall 切一条）
         const turnRecords = branchAfter !== undefined ? turnAssistantRecords(records, branchAfter) : [];
+        // 相邻 show_image 合并成一个画廊（2026-09-27 裁决）：首张渲染合并画廊，后续
+        // 兄弟渲染 null（数据数组不动，branchRows 索引不乱）；失败的 show_image 不进
+        // 合并——照通用红色骨架。判「组首」：自己是 show_image 且前一个不是
+        const isShowCall =
+          entry.kind === "toolCall" && entry.toolName === "show_image" && toolResults.get(entry.toolCallId)?.status !== "error";
+        const prevEntry = index > 0 ? turnView[index - 1] : undefined;
+        const prevIsShowCall =
+          prevEntry !== undefined &&
+          prevEntry.kind === "toolCall" &&
+          prevEntry.toolName === "show_image" &&
+          toolResults.get(prevEntry.toolCallId)?.status !== "error";
+        if (isShowCall) {
+          if (prevIsShowCall) return null; // 已被前面的组吸收
+          const cards: ShowImageCardView[] = [];
+          for (let scan = index; scan < turnView.length; scan++) {
+            const candidate = turnView[scan];
+            if (
+              candidate === undefined ||
+              candidate.kind !== "toolCall" ||
+              candidate.toolName !== "show_image"
+            ) {
+              break;
+            }
+            const card = showImageCard(toolResults.get(candidate.toolCallId));
+            if (card === null) break;
+            cards.push(card);
+          }
+          return (
+            <Fragment key={entry.key}>
+              <ShowImageGalleryGroup cards={cards} />
+              {branchAfter !== undefined && (
+                <BranchRow
+                  /* 挂点照常渲染：被吸收的 entry 只把主行换 null，分支行各归各 */
+                  anchorItemId={branchAfter}
+                  speed={replySpeed(turnRecords)}
+                  copyText={answerText(turnRecords)}
+                  disabled={toolsRunning}
+                  onBranch={props.onBranch}
+                />
+              )}
+            </Fragment>
+          );
+        }
         return (
           <Fragment key={entry.key}>
             {entry.kind === "turnGroup" ? (
@@ -3442,6 +3486,71 @@ function ShowImageToolLine(props: { result: ToolTranscriptItem | undefined }) {
           ))}
         </div>
       )}
+      {viewing !== null && (
+        <ImageLightbox images={lightboxImages} startIndex={viewing} onClose={() => setViewing(null)} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * show_image 的合并画廊（2026-09-27 裁决：正文前多个图片收进**一个**画廊窗口水平
+ * 滑动，不一张卡一张卡摞）。相邻的非失败 show_image 由循环层收集成组交给这里；
+ * 组内各卡的图片拼成一条横滑带，行标识报总张数，点开 Lightbox。
+ */
+function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
+  const t = useT();
+  const [viewing, setViewing] = useState<number | null>(null);
+  const images = props.cards.flatMap((card) => card.images);
+  const total = images.length;
+  const lightboxImages = images.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
+  return (
+    <div style={{ display: "grid", gap: "var(--space-2)", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <Icon name="image" size={13} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+        <span
+          style={{
+            fontSize: "var(--font-size-caption)",
+            fontFamily: "var(--font-family-mono)",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {t.chat.images(total)}
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: "var(--space-2)", overflowX: "auto", padding: "var(--space-1) 0", minWidth: 0 }}>
+        {images.map((img, i) => (
+          <figure key={`show-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0, flex: "0 0 auto" }}>
+            <button type="button" aria-label={t.lightbox.open} onClick={() => setViewing(i)} style={ZOOM_BUTTON_STYLE}>
+              <img
+                src={imageSrc({ type: "image", data: img.data, mimeType: img.mimeType })}
+                alt={img.name}
+                style={{
+                  display: "block",
+                  width: total === 1 ? "100%" : 200,
+                  height: total === 1 ? undefined : 136,
+                  maxHeight: 320,
+                  objectFit: total === 1 ? "contain" : "cover",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--color-border-subtle)",
+                  background: "var(--color-bg-panel)",
+                }}
+              />
+            </button>
+            <figcaption
+              style={{
+                fontSize: "var(--font-size-micro)",
+                color: "var(--color-text-tertiary)",
+                fontFamily: "var(--font-family-mono)",
+                overflowWrap: "anywhere",
+                width: 200,
+              }}
+            >
+              {img.name}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
       {viewing !== null && (
         <ImageLightbox images={lightboxImages} startIndex={viewing} onClose={() => setViewing(null)} />
       )}
