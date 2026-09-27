@@ -375,7 +375,8 @@ body {
  *
  * 两层玻璃画的是同一个 `--glass-bg`，.60 → .84 的阶梯是嵌套合成出来的，不是手调的第二个值。
  * 两层都 `border: 0`：分层靠透明度差，不靠描边（设计系统 *Corners and borders*：
- * the app shell and content pane run borderless）。
+ * the app shell and content pane run borderless）。**暗色三档除外**——地面实色
+ * （.layer/.pane 的覆写在 .pane 规则之后），玻璃只留给浮层。
  */
 .layer {
   height: 100%;
@@ -497,6 +498,24 @@ body {
   border: 0;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-composer);
+}
+
+/*
+ * 暗色三档的地面实色覆写（2026-09-27 重切，层次语义见 colors.css 头注释）：
+ * .layer = 外壳（左栏的地面，浅一档）、.pane = 会话井（深 10 步）。玻璃阶梯
+ * （嵌套只能往 tint 爬）表达不了「外壳浅、井更深」；且 Windows 窗口底是
+ * 不透明的浅色 #f3f4f1，玻璃叠上去只会灰糊。井缘补一条发丝线——两个实色面
+ * 之间需要那道界线。浮层（composer / 菜单 / 右栏面板）仍走 --glass-bg，
+ * 暗档里它 = 卡面色（glass.css），压在井上就是浮起的那一层。浅色与纸面档
+ * 维持玻璃阶梯不变；macOS 暗档因此不再透出桌面。
+ */
+:root:is([data-theme="dark"], [data-theme="graphite"], [data-theme="black"]) .layer {
+  background: var(--color-bg-app);
+}
+
+:root:is([data-theme="dark"], [data-theme="graphite"], [data-theme="black"]) .pane {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
 }
 
 /*
