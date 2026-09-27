@@ -222,7 +222,7 @@ function reasonixPaths(): ReasonixPaths {
   return { projectsRoot: join(reasonixDataRoot(process.platform, home, process.env), "projects"), home };
 }
 
-/** ZCode 的会话库（Electron userData 惯例；本机 Windows，其他平台探测 stat 不到就不可勾）。 */
+/** ZCode 的会话库（家目录点文件夹 ~/.zcode/cli/db/db.sqlite，平台间同路径；不在就不可勾）。 */
 function zcodePaths(): ZcodePaths {
   const home = homedir();
   return { dbFile: join(home, ".zcode", "cli", "db", "db.sqlite"), home };
