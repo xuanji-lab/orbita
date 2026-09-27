@@ -56,6 +56,16 @@ export default defineConfig({
           index: resolve(__dirname, "src/main/index.ts"),
           "agent-runtime": resolve(__dirname, "src/agent/runtime.ts"),
         },
+        /**
+         * @napi-rs/canvas（read_pdf 页图渲染）保持 external：它的入口是一串平台包
+         * require 回退（win32-x64-msvc / darwin-arm64 / …），被打进 bundle 后 .node
+         * 二进制的解析链断裂，requireCanvas 拿到 undefined，agent 进程起不来
+         * （2026-09-27 实测：`agent runtime exited with code 1`，直接跑产物崩在
+         * `"families" in GlobalFonts`）。external 后 require 原样保留，从项目
+         * node_modules 解析——与 photon 的 wasm 资产拷贝是两种病：wasm 是文件
+         * 丢了可以拷，.node 是原生模块必须留在原地 require。正则覆盖平台子包。
+         */
+        external: [/^@napi-rs\/canvas/],
         output: { entryFileNames: "[name].js" },
       },
     },

@@ -173,6 +173,20 @@ function isChannelToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && CHANNEL_TOOL_NAMES.has(entry.toolName);
 }
 
+/**
+ * 钉住工具（2026-09-27 裁决）：show_image 是**给用户的展示**，不是「工作过程」——
+ * 大折叠把轮内工具吞进统计行时会把它递出的画廊一起吞走，等于模型递完照片当场
+ * 收回。与通道工具同一套豁免口径（不进工具组 / 不锚折叠边界 / 折叠区间在它处
+ * 切开 / 不计统计——它根本不进 members），但语义不同：通道是父子通信，这是
+ * 面向用户的输出。常见节奏（show 完就给结尾回复）下，豁免让画廊正好钉在
+ * 折叠行之后、回复之前——「正文前面见图」不需要上浮收集就自然成立。
+ */
+const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image"]);
+
+function isPinnedToolCall(entry: RenderEntry): boolean {
+  return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
+}
+
 /** 这条 toolCall 是不是在 read 某条已知 skill 的 SKILL.md（分组排除用，同 ToolLine 的判定） */
 function isSkillRead(
   unit: ToolCallUnit,
@@ -222,7 +236,10 @@ export function groupToolUnits(
     // 它自己开的 run 会被后续同类 read 并进来，排除就白做了
     const skillRead = unit.kind === "toolCall" && isSkillRead(unit, skills);
     const groupable =
-      unit.kind === "toolCall" && !skillRead && !CHANNEL_TOOL_NAMES.has(unit.toolName);
+      unit.kind === "toolCall" &&
+      !skillRead &&
+      !CHANNEL_TOOL_NAMES.has(unit.toolName) &&
+      !PINNED_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
       continue;
@@ -280,7 +297,7 @@ export type TurnMemberEntry = Extract<
  * 它们也从不出现在 toolGroup 里（`groupToolUnits` 已挡），这里只需挡 toolCall 分支。
  */
 function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
-  if (isChannelToolCall(entry)) return false;
+  if (isChannelToolCall(entry) || isPinnedToolCall(entry)) return false;
   return entry.kind === "thinking" || entry.kind === "toolCall" || entry.kind === "toolGroup";
 }
 
@@ -363,15 +380,27 @@ export function groupTurns(
  * 不算轮成员且必须原样留在流里、位置不变（子会话 PR4b）——按它们把段切成若干块，
  * 每块各自套用「找首尾轮成员、中间收进折叠」的规则，通道工具本身穿插在块之间，
  * 永不进任何一块的折叠。没有通道工具时退化成原来的单块行为。
+ *
+ * 钉住工具（show_image）不同（2026-09-27 裁决 Y′）：画廊**挂轮尾**——不管
+ * show 发生在轮内哪一步（思考/工具之间也好），落定视图统一钉在折叠块之后、
+ * 结尾回复之前，「图贴正文」的阅读顺序永远成立；位置不随展开收起切换（不闪跳）。
+ * 代价是展开态画廊不在它的时间线原位——show_image 行本身在折叠展开流里仍有
+ * 标识，可追溯。若按原位切开，show 夹在轮中间会产生「两个折叠块夹一张画廊」
+ * 的割裂形态（正是本裁决要消灭的）。
  */
 function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
   const view: TurnViewEntry[] = [];
   let chunk: RenderEntry[] = [];
+  const pinned: RenderEntry[] = [];
   const flushChunk = () => {
     view.push(...foldChunk(chunk, results));
     chunk = [];
   };
   for (const entry of segment) {
+    if (isPinnedToolCall(entry)) {
+      pinned.push(entry);
+      continue;
+    }
     if (isChannelToolCall(entry)) {
       flushChunk();
       view.push(entry);
@@ -380,6 +409,11 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
     chunk.push(entry);
   }
   flushChunk();
+  if (pinned.length === 0) return view;
+  // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
+  let insertAt = view.length;
+  while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
+  view.splice(insertAt, 0, ...pinned);
   return view;
 }
 
@@ -675,6 +709,41 @@ export function readTaskCard(result: ToolTranscriptItem | undefined): ReadTaskCa
     ...(typeof rounds === "string" ? { rounds } : {}),
     roundCount,
   };
+}
+
+/** show_image 结果 details 里的画廊卡：图给用户看，与模型有没有视觉无关（agent/image-tools.ts） */
+export interface ShowImageCardView {
+  images: { data: string; mimeType: string; name: string }[];
+}
+
+/**
+ * show_image 的画廊卡。**逐字段校验，坏值判 null**——同 readTaskCard 的纪律；
+ * 键名 `"showImage"` 对应 `image-tools.ts` 落的 `details: { showImage: card }`。
+ * 卡片走 details 而非 content 的 image 块：非视觉模型时 content 没有图（provider
+ * 约束），用户的画廊不能跟着消失。
+ */
+export function showImageCard(result: ToolTranscriptItem | undefined): ShowImageCardView | null {
+  if (result === undefined || result.status === "running") return null;
+  const details = result.details;
+  if (typeof details !== "object" || details === null) return null;
+  const raw = (details as Record<string, unknown>)["showImage"];
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const list = value["images"];
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const images: { data: string; mimeType: string; name: string }[] = [];
+  for (const item of list) {
+    if (typeof item !== "object" || item === null) return null;
+    const entry = item as Record<string, unknown>;
+    const data = entry["data"];
+    const mimeType = entry["mimeType"];
+    const name = entry["name"];
+    if (typeof data !== "string" || data === "") return null;
+    if (typeof mimeType !== "string" || !mimeType.startsWith("image/")) return null;
+    if (typeof name !== "string") return null;
+    images.push({ data, mimeType, name });
+  }
+  return { images };
 }
 
 /**
@@ -1001,6 +1070,13 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     }
     case "ls":
       return str("path") ?? ".";
+    // show_image 的入参是路径数组：摘要 = 空格连接的文件名（截断由调用方排版管）
+    case "show_image": {
+      const value = record["paths"];
+      if (!Array.isArray(value)) return null;
+      const names = value.filter((item): item is string => typeof item === "string" && item !== "");
+      return names.length > 0 ? names.map((name) => name.split(/[\\/]/).pop() ?? name).join(" ") : null;
+    }
     case "read_task":
     // 子会话：delegate 的入参同样有 task 字段——派出卡的任务预览复用这条摘要
     case "delegate":
