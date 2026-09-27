@@ -33,6 +33,7 @@ import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
+import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
@@ -474,28 +475,31 @@ export function App() {
    * 遗留事项入口**常驻**，0 条也在（wafo 2026-09-25）：以前 0 条不渲染，导入的会话
    * 没走过收尾、一条遗留都没有，这个入口就整个不见了——用户不知道有这个功能，
    * 也没法确认「现在确实没有遗留」。点进去是面板自己的空态。
+   *
+   * 点亮判定与点击落点在 `rail-subview.ts`（纯函数，带测试）：没亮 = 打开该子视图
+   * 并**退出设置**——设置页里点这两个入口以前只是在底下翻转开关，界面不动。
    */
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
+  const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
+  const applySubviewState = (next: RailSubviewState): void => {
+    setOverlay(next.overlay);
+    setShowArchived(next.showArchived);
+    setShowCarryovers(next.showCarryovers);
+  };
   const railEntries: RailEntry[] = [
     {
       icon: "list-todo" as const,
       label: t.app.carryoversEntry(openCarryoverCount),
-      lit: showCarryovers && overlay === null && !showArchived,
-      onClick: () => {
-        setShowArchived(false);
-        setShowCarryovers((value) => !value);
-      },
+      lit: railSubviewLit(subviewState, "carryovers"),
+      onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
     },
     {
       icon: "archive" as const,
       label: t.app.archivedEntry(archivedCount),
-      lit: showArchived && overlay === null && !showCarryovers,
-      onClick: () => {
-        setShowCarryovers(false);
-        setShowArchived((value) => !value);
-      },
+      lit: railSubviewLit(subviewState, "archived"),
+      onClick: () => applySubviewState(toggleRailSubview(subviewState, "archived")),
     },
     {
       icon: "settings" as const,
