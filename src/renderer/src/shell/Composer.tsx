@@ -142,19 +142,24 @@ export function Composer(props: {
     return () => observer.disconnect();
   }, []);
   // ── 指令面板（/ 触发）──────────────────────────────────────────────
-  // 首字符是 / 且单行时亮；Esc 关掉后改动内容才重新亮。skill 清单从上层拿
-  // （ChatView 的 useSkillIndex），面板每次打开触发一次重拉——新建/删除的
-  // skill 下一次打开立即可见（review 挂账项：原实现只在首开拉一次，列表过期）。
-  const [commandsDismissed, setCommandsDismissed] = useState(false);
+  // 首字符是 / 且单行时亮。关闭分两种语义（用户实测：选中/ESC 后再打 / 前缀
+  // 文字，面板不弹，Enter 把半截指令当普通消息发出去了）：
+  //   "esc"——Esc 关闭或动作项执行完：继续输入就重开（人还在 / 模式里，面板是输入辅助）
+  //   "insert"——skill 插入 /skill:xxx 后：保持关闭直到离开 / 前缀（用户在补
+  //   附加指示，弹出「没有匹配的指令」空态只会挡视线）
+  // skill 清单从上层拿（ChatView 的 useSkillIndex），面板每次打开触发一次重拉。
+  const [commandsClosed, setCommandsClosed] = useState<"esc" | "insert" | null>(null);
   const [activeCommand, setActiveCommand] = useState(0);
   const panelOpen =
-    props.value.startsWith("/") && !props.value.includes("\n") && !commandsDismissed;
+    props.value.startsWith("/") && !props.value.includes("\n") && commandsClosed === null;
   const commandQuery = panelOpen ? props.value.slice(1).trim().toLowerCase() : "";
   useEffect(() => {
     if (panelOpen) props.onReloadSkills();
   }, [panelOpen, props.onReloadSkills]);
   useEffect(() => {
-    if (!props.value.startsWith("/")) setCommandsDismissed(false);
+    if (!props.value.startsWith("/")) setCommandsClosed(null);
+    // "esc" 类关闭在继续输入时重开；"insert" 保持（只有离开 / 前缀才重置）
+    else setCommandsClosed((closed) => (closed === "esc" ? null : closed));
   }, [props.value]);
   useEffect(() => setActiveCommand(0), [commandQuery]);
   // 键盘选中滚出可视区时带动面板滚动（用户实测：↑↓ 只在列表内移动，长列表
@@ -191,14 +196,20 @@ export function Composer(props: {
   }, [panelOpen, commandQuery, props.skills, t]);
 
   /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行 */
+  /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行，
+   * 并清掉半截指令残留——"/c" 留在框里，下一次回车就又是一条误发 */
   const runCommand = (row: CommandRow): void => {
-    setCommandsDismissed(true);
     if (row.kind === "skill") {
+      setCommandsClosed("insert");
       props.onChange(`/skill:${row.slug} `);
-    } else if (props.onCommand !== undefined) {
-      props.onCommand(row.kind);
     } else {
-      props.onChange(`/${row.name}`);
+      setCommandsClosed("esc");
+      if (props.onCommand !== undefined) {
+        props.onCommand(row.kind);
+        props.onChange("");
+      } else {
+        props.onChange(`/${row.name} `);
+      }
     }
     textareaRef.current?.focus();
   };
@@ -443,7 +454,7 @@ export function Composer(props: {
                 return;
               }
               if (event.key === "Escape") {
-                setCommandsDismissed(true);
+                setCommandsClosed("esc");
                 return;
               }
             }

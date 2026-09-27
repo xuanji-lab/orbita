@@ -11,7 +11,13 @@ import {
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
-import { formatSkillBlock, matchSkillTarget, parseSkillInvocation } from "../../shared/skill.ts";
+import {
+  formatSkillBlock,
+  matchSkillTarget,
+  parseSkillInvocation,
+  SKILL_NOT_FOUND_CODE,
+  SKILL_UNREADABLE_CODE,
+} from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -257,11 +263,6 @@ export function registerAgentIpc(
    * 发送失败如实上屏，而不是把 `/skill:xxx` 原文喂给模型让它角色扮演。
    * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
    */
-  /** /skill: 展开失败的报错文案按设置语言走（wafo 二轮：主进程报错也要 i18n，
-   * 同 readAttributionLanguage 的纪律——settings.language 是主进程可读的既有真源） */
-  const skillErrorText = async (zh: string, en: string): Promise<string> =>
-    (await readAttributionLanguage()) === "zh" ? zh : en;
-
   const expandSkillInvocation = async (text: string, workspaceId: string | null): Promise<string> => {
     const parsed = parseSkillInvocation(text);
     if (parsed === null) return text;
@@ -270,23 +271,9 @@ export function registerAgentIpc(
         !meta.missing && (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId))),
     );
     const meta = matchSkillTarget(available, parsed.target);
-    if (meta === null) {
-      throw new Error(
-        await skillErrorText(
-          `skill "${parsed.target}" 不存在，或没有链接到当前会话`,
-          `skill "${parsed.target}" does not exist or is not linked to this session`,
-        ),
-      );
-    }
+    if (meta === null) throw new Error(`${SKILL_NOT_FOUND_CODE}${parsed.target}`);
     const content = await skills.read(meta.slug);
-    if (content === null) {
-      throw new Error(
-        await skillErrorText(
-          `skill "${parsed.target}" 读不出来（存储里可能已损坏）`,
-          `skill "${parsed.target}" could not be read (its storage may be corrupted)`,
-        ),
-      );
-    }
+    if (content === null) throw new Error(`${SKILL_UNREADABLE_CODE}${parsed.target}`);
     return formatSkillBlock({
       name: content.name,
       location: join(skills.storeRoot(), meta.slug, "SKILL.md"),

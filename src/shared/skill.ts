@@ -94,6 +94,14 @@ export function isSkillSlug(value: string): boolean {
 }
 
 /**
+ * /skill: 展开失败的稳定错误码前缀：主进程 throw `SKILL_NOT_FOUND:<target>` /
+ * `SKILL_UNREADABLE:<target>`（message 首段），renderer 按界面语言把它翻成人话——
+ * 主进程不该猜界面语言，Electron 的 IPC 错误包装也不该原样上屏。
+ */
+export const SKILL_NOT_FOUND_CODE = "SKILL_NOT_FOUND:";
+export const SKILL_UNREADABLE_CODE = "SKILL_UNREADABLE:";
+
+/**
  * `/skill:<target>` 指令的解析（主进程展开用）。**target 取到第一个空白为止**，
  * 其余全是附加指示。不是这个形状返回 null，照常发送。
  */

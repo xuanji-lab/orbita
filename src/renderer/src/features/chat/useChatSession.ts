@@ -70,6 +70,24 @@ import {
 } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import type { Messages } from "../../messages-en.ts";
+import { SKILL_NOT_FOUND_CODE, SKILL_UNREADABLE_CODE } from "../../../../shared/skill.ts";
+
+/**
+ * IPC 错误上屏前的整理：剥掉 Electron 的「Error invoking remote method 'x': Error:」
+ * 包装（对用户是纯噪音），并把主进程抛的稳定错误码翻成界面语言的人话——
+ * 主进程不该猜界面语言（用户实测：英文界面下 /skill: 报错仍是中文）。
+ */
+function ipcErrorText(cause: unknown, t: Messages): string {
+  const raw = cause instanceof Error ? cause.message : String(cause);
+  const inner = raw.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
+  if (inner.startsWith(SKILL_NOT_FOUND_CODE)) {
+    return t.composer.skillNotFound(inner.slice(SKILL_NOT_FOUND_CODE.length));
+  }
+  if (inner.startsWith(SKILL_UNREADABLE_CODE)) {
+    return t.composer.skillUnreadable(inner.slice(SKILL_UNREADABLE_CODE.length));
+  }
+  return inner;
+}
 
 /**
  * 会话状态。**逻辑原样自 ChatView 上提**，一行未改语义——上提的唯一理由是
@@ -1482,7 +1500,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
         if (resume === null) engine.refreshSessions();
       } catch (cause) {
-        engine.setError(cause instanceof Error ? cause.message : String(cause));
+        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
         // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位。
         // IPC 直接失败（provider 装配等）不发事件，快照在这里兑底放回输入框
         if (restoreRef.current?.sessionId === id) {
@@ -2097,8 +2115,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const item = entry?.queued.find((queued) => queued.id === queuedId);
       if (entry === undefined || item === undefined) return;
       engine.applyStates((prev) => dequeue(prev, id, queuedId));
-      const fail = (cause: unknown): void =>
-        engine.setError(cause instanceof Error ? cause.message : String(cause));
+      const fail = (cause: unknown): void => {
+        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
+        // IPC 直接失败（provider 装配、/skill: 展开错误码）不发 agent 事件，回填
+        // 快照等不到兑底——与 send 直发分支同款，在这里放回输入框
+        if (item.kind === "text" && restoreRef.current?.sessionId === id) {
+          const snap = restoreRef.current;
+          restoreRef.current = null;
+          restoreSent(snap);
+        }
+      };
       // compact 的「立即」是另一回事：不打断，只是不等空闲马上压
       if (item.kind === "compact") {
         const turn = engine.buildTurn(id);
