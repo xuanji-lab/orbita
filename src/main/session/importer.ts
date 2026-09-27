@@ -1859,6 +1859,18 @@ async function scanOpencode(
  * （源行上没有 per-message 模型）。文件夹：meta 的 workspace_root。转换器见 reasonix.ts。
  * 根不在（没装）listReasonixSessions 返回空，不算错。
  */
+/** Reasonix 9-18 起的新版会话库目录名（与 projects/ 同级） */
+const REASONIX_V5_DIR = "desktop-sessions-v5";
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch (cause) {
+    if (isNotFound(cause)) return false;
+    throw cause;
+  }
+}
+
 async function scanReasonix(
   paths: ReasonixPaths,
   deps: ImporterDeps,
@@ -1866,6 +1878,18 @@ async function scanReasonix(
 ): Promise<{ candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] }> {
   const candidates: ConvertedCandidate[] = [];
   const skipped: ImportSkipItem[] = [];
+  // 9-18 起的新会话在 v5 库（与 projects/ 同在 userData 下），本来源还不读。只 stat 目录、
+  // 不数也不读内容（格式是二进制帧容器，另立一刀）——但要**说出来**：用户最近的会话恰恰在
+  // 那里，静默不列会让人以为已经导全了
+  const v5Store = join(dirname(paths.projectsRoot), REASONIX_V5_DIR);
+  if (await isDirectory(v5Store)) {
+    skipped.push({
+      sourceId: REASONIX_V5_DIR,
+      title: null,
+      reason: "unsupported-format",
+      detail: `sessions in Reasonix's newer store (${v5Store}, from 2026-09-18) are not supported yet and are not listed`,
+    });
+  }
   for (const { file, meta, bytes } of await listReasonixSessions(paths.projectsRoot)) {
     const sourceFile = resolve(file);
     const sourceId = meta?.id ?? file;

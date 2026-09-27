@@ -1996,6 +1996,19 @@ describe("reasonix 来源", () => {
     assert.equal(again.skipped.find((item) => item.sourceId === "a")?.reason, "already-imported");
   });
 
+  test("v5 新版会话库在：扫描如实报一条「不支持」，不静默漏掉；不在：不报", async () => {
+    const sessions = join(projectsRoot, "proj-a", "sessions");
+    await writeSession(sessions, "s-a.jsonl", null, repoRows("修测试"));
+    const without = await scanImport(rxDeps(), [], ["reasonix"]);
+    assert.equal(without.skipped.some((item) => item.sourceId === "desktop-sessions-v5"), false);
+    await mkdir(join(projectsRoot, "..", "desktop-sessions-v5"), { recursive: true });
+    const withV5 = await scanImport(rxDeps(), [], ["reasonix"]);
+    const v5 = withV5.skipped.find((item) => item.sourceId === "desktop-sessions-v5");
+    assert.equal(v5?.reason, "unsupported-format");
+    assert.match(v5?.detail ?? "", /not supported yet/);
+    assert.equal(withV5.plan.length, 1);
+  });
+
   test("探测：projects 根在不在；paths 列出扫描会读的一处", async () => {
     const found = await probeReasonix({ projectsRoot, home });
     assert.equal(found.found, true);
