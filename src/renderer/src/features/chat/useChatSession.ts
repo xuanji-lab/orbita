@@ -1508,15 +1508,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     ) {
       return;
     }
+    // override（指令面板的显式动作，如 sendText("/compact")）是另一回事：文本就用
+    // 指令本身，不拼槽里的引用；压缩判定**不设附件门**——面板选中是显式意图，挂着
+    // 附件时把 /compact 降级成普通消息（连附件一起喂给模型）才是错的（wafo 一轮 #4）。
+    // 附件留在输入框不动，压缩完用户自己决定去留。
+    const explicit = override !== undefined;
     // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）
-    const text = composeQuotedMessage(quotes, own);
+    const text = explicit ? own : composeQuotedMessage(quotes, own);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
-    // 带附件（图 / 文件 / 粘贴块）时不认压缩指令：压缩吃不了附件，当命令拦下会把
-    // 附件悉数丢掉——按普通消息发。
-    const compact =
-      images.length === 0 && quotes.length === 0 && files.length === 0 && pasted.length === 0
+    // 手工输入时带附件（图 / 文件 / 粘贴块）不认压缩指令：压缩吃不了附件，当命令
+    // 拦下会把附件悉数丢掉——按普通消息发。
+    const compact = explicit
+      ? parseCompactCommand(text)
+      : images.length === 0 && quotes.length === 0 && files.length === 0 && pasted.length === 0
         ? parseCompactCommand(text)
         : null;
     if (compact !== null) {
@@ -2119,6 +2125,25 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         item.kind === "text"
           ? { ...filesField(item.files), ...pastedField(item.pasted) }
           : {};
+      // 留回填快照（wafo 二轮：出队后失败即丢——9e2d7e5 的回填没覆盖这条路径）：
+      // 已从队列删掉，失败时 nowhere 可归，只有快照能把内容放回输入框。排队时引用
+      // 已展开进 text，这里解析回净文与 chip（撤回 restoreToDraft 同纪律），输入框
+      // 不留裸 XML；compact/channel 分支不建——压缩无内容可丢，channel 的正文在
+      // 通道账本里丢不了。
+      if (item.kind === "text") {
+        const { quotes: queuedQuotes, text: queuedText } = parseQuotedMessage(item.text);
+        restoreRef.current = {
+          sessionId: id,
+          draftKey,
+          fresh: false,
+          text: queuedText,
+          quotes: queuedQuotes,
+          // PromptImage → ComposerImage 与撤回同款转换（排队时名字已丢，name 空串是既有先例）
+          images: (item.images ?? []).map((image) => ({ id: crypto.randomUUID(), name: "", image })),
+          files: item.files ?? [],
+          pasted: item.pasted ?? [],
+        };
+      }
       if (entry.phase === "idle") {
         void api.agent.submit({ sessionId: id, text, ...images, ...extras, ...turn }).catch(fail);
       } else {

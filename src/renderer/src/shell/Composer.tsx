@@ -317,6 +317,9 @@ export function Composer(props: {
                 aria-selected={index === activeCommand}
                 onClick={() => runCommand(row)}
                 onMouseEnter={() => setActiveCommand(index)}
+                // 选中/悬停底色走 .option-row 配方（styles.css 的 aria-selected 规则，
+                // 与菜单/抽屉同一实现——wafo 二轮：状态样式不写在 inline 三元里）
+                className="option-row"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -324,7 +327,6 @@ export function Composer(props: {
                   padding: "6px 8px",
                   borderRadius: "var(--radius-md)",
                   border: 0,
-                  background: index === activeCommand ? "var(--color-bg-active)" : "transparent",
                   cursor: "pointer",
                   textAlign: "left",
                   minWidth: 0,

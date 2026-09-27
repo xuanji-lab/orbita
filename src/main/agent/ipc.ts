@@ -158,6 +158,7 @@ export function registerAgentIpc(
     return effectiveLanguage(current.theme, current.language);
   };
 
+
   /**
    * 开轮目录清单每轮现读现装配：工作区挂新目录、换工作区，下一轮即生效。
    * 逻辑在 turn-directories.ts（纯模块，可直接测）；这里只做路由。
@@ -256,6 +257,11 @@ export function registerAgentIpc(
    * 发送失败如实上屏，而不是把 `/skill:xxx` 原文喂给模型让它角色扮演。
    * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
    */
+  /** /skill: 展开失败的报错文案按设置语言走（wafo 二轮：主进程报错也要 i18n，
+   * 同 readAttributionLanguage 的纪律——settings.language 是主进程可读的既有真源） */
+  const skillErrorText = async (zh: string, en: string): Promise<string> =>
+    (await readAttributionLanguage()) === "zh" ? zh : en;
+
   const expandSkillInvocation = async (text: string, workspaceId: string | null): Promise<string> => {
     const parsed = parseSkillInvocation(text);
     if (parsed === null) return text;
@@ -264,9 +270,23 @@ export function registerAgentIpc(
         !meta.missing && (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId))),
     );
     const meta = matchSkillTarget(available, parsed.target);
-    if (meta === null) throw new Error(`skill "${parsed.target}" 不存在，或没有链接到当前会话`);
+    if (meta === null) {
+      throw new Error(
+        await skillErrorText(
+          `skill "${parsed.target}" 不存在，或没有链接到当前会话`,
+          `skill "${parsed.target}" does not exist or is not linked to this session`,
+        ),
+      );
+    }
     const content = await skills.read(meta.slug);
-    if (content === null) throw new Error(`skill "${parsed.target}" 读不出来（存储里可能已损坏）`);
+    if (content === null) {
+      throw new Error(
+        await skillErrorText(
+          `skill "${parsed.target}" 读不出来（存储里可能已损坏）`,
+          `skill "${parsed.target}" could not be read (its storage may be corrupted)`,
+        ),
+      );
+    }
     return formatSkillBlock({
       name: content.name,
       location: join(skills.storeRoot(), meta.slug, "SKILL.md"),
