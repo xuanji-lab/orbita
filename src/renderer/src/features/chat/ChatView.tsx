@@ -1680,6 +1680,9 @@ function ComposerBar(props: { session: ChatSession }) {
     <>
       <Menu
         items={scopeItems}
+        // 面板 shrink-to-fit，默认 maxWidth 320 装不下 Windows 的整条工作区路径——
+        // 放宽到 640，卡片随最长路径伸缩，超长仍由行的 ellipsis 兜底
+        panelMaxWidth={640}
         trigger={({ open, toggle }) =>
           namingWorkspace ? (
             // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
