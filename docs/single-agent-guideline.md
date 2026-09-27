@@ -145,7 +145,7 @@ pi 内建八个全开：`bash` / `edit` / `find` / `glob` / `grep` / `ls` / `rea
 
 ## 明确不做
 
-多 agent 编排 / 委派、飞书、桌宠、workflow 编辑器、终端面板、浏览器面板、git 面板、
+多 agent 编排 / 委派、飞书、桌宠、workflow 编辑器、终端面板、git 面板、
 Codex / Claude / OpenCode 会话导入。设计资产保留在架构文档里，等单 agent 立住后逐个立项。
 
 ## 悬置（不是共识，不要当默认）
