@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
+import * as ncanvas from "@napi-rs/canvas";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -27,6 +28,35 @@ export const SHOW_IMAGE_MAX_COUNT = 6;
 
 /** 单张体积上限（与 PROMPT_IMAGE_MAX_BYTES 同口径） */
 export const SHOW_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
+
+/**
+ * 转录内图片的长边上限。原图 base64 会**双份**进会话 JSONL（content 的 image 块
+ * + details 的画廊卡），一张 5MB 照片就是 13MB×2——用户附图的先例纪律是「转录
+ * 不存原图」。png/jpeg 超长边时缩放重编码（@napi-rs/canvas，与渲染同库）；gif
+ * 不做（loadImage 不保证支持动图解码，30MB 准入兜底），webp 同 png 路径。
+ */
+export const SHOW_IMAGE_MAX_EDGE = 2000;
+
+/** 缩放超长边的 png/webp（或 jpeg）。不超限或加载失败时原样返回——展示不该因转码挂掉 */
+async function shrinkIfNeeded(buffer: Buffer, mimeType: string): Promise<{ data: string; mimeType: string }> {
+  if (mimeType !== "image/png" && mimeType !== "image/webp" && mimeType !== "image/jpeg") {
+    return { data: buffer.toString("base64"), mimeType };
+  }
+  try {
+    const bitmap = await ncanvas.loadImage(buffer);
+    const longEdge = Math.max(bitmap.width, bitmap.height);
+    if (longEdge <= SHOW_IMAGE_MAX_EDGE) return { data: buffer.toString("base64"), mimeType };
+    const scale = SHOW_IMAGE_MAX_EDGE / longEdge;
+    const canvas = ncanvas.createCanvas(Math.round(bitmap.width * scale), Math.round(bitmap.height * scale));
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const encoded =
+      mimeType === "image/jpeg" ? await canvas.encode("jpeg", 90) : await canvas.encode("png");
+    return { data: Buffer.from(encoded).toString("base64"), mimeType };
+  } catch {
+    // 解码不了就原样给——魔数已过准入，交给 provider / img 渲染各自报错
+    return { data: buffer.toString("base64"), mimeType };
+  }
+}
 
 /** details 上的卡片载荷：renderer 渲染会话流图卡的真源 */
 export interface ShowImageCard {
@@ -85,7 +115,9 @@ export function createImageTools(cwd: string): ToolDefinition[] {
         if (mimeType === null) {
           throw new Error(`${path} is not a supported image (png / jpg / gif / webp).`);
         }
-        images.push({ data: buffer.toString("base64"), mimeType, name: basename(path) });
+        // 缩到转录友好的尺寸；content 与 details 共用这一份 base64（不再双存原图）
+        const shrunk = await shrinkIfNeeded(buffer, mimeType);
+        images.push({ data: shrunk.data, mimeType: shrunk.mimeType, name: basename(path) });
       }
 
       // 模型视野：视觉模型带 image 块（一跳两得）；非视觉省略 + read 同款 note。

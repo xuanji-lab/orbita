@@ -8,7 +8,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createImageTools, SHOW_IMAGE_MAX_COUNT } from "./image-tools.ts";
+import * as ncanvas from "@napi-rs/canvas";
+import { createImageTools, SHOW_IMAGE_MAX_COUNT, SHOW_IMAGE_MAX_EDGE } from "./image-tools.ts";
 
 /** 1×1 红色 PNG（最小合法图，魔数 PNG） */
 const TINY_PNG = Buffer.from(
@@ -74,5 +75,22 @@ describe("show_image", () => {
 
   test("文件不存在：ENOENT 原始错误穿透", async () => {
     await assert.rejects(run(["missing.png"]), /ENOENT/);
+  });
+
+  test("转录友好：超长边的 png 缩到上限（原图 base64 双份进 JSONL，不能存原图）", async () => {
+    const canvas = ncanvas.createCanvas(3000, 1000);
+    canvas.getContext("2d").fillRect(0, 0, 3000, 1000);
+    const bigPng = Buffer.from(await canvas.encode("png"));
+    await writeFile(join(dir, "huge.png"), bigPng);
+    const result = await run(["huge.png"], VISION_CTX);
+    const contentImage = result.content.find((block) => block.type === "image");
+    assert.ok(contentImage !== undefined && contentImage.type === "image");
+    const details = (result.details as Record<string, unknown>)["showImage"] as {
+      images: { data: string }[];
+    };
+    // content 与 details 共用同一份缩放产物，且长边 ≤ 上限
+    assert.equal(details.images[0]!.data, contentImage.data);
+    const width = Buffer.from(details.images[0]!.data, "base64").readUInt32BE(16);
+    assert.equal(width, SHOW_IMAGE_MAX_EDGE);
   });
 });

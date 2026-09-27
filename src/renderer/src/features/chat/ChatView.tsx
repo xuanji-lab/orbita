@@ -3376,7 +3376,8 @@ function ShowImageToolLine(props: { result: ToolTranscriptItem | undefined }) {
             color: "var(--color-text-secondary)",
           }}
         >
-          {t.chat.images(card?.images.length ?? 0)}
+          {/* 跑动中卡片未落（details 随终态帧来）——省略号占位，别显示「0 张图片」 */}
+          {card === null ? "…" : t.chat.images(card.images.length)}
         </span>
       </div>
       {card !== null && (
