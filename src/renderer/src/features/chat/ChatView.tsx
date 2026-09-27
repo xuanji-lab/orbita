@@ -3381,29 +3381,45 @@ function ShowImageToolLine(props: { result: ToolTranscriptItem | undefined }) {
       </div>
       {card !== null && (
         <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: card.images.length > 1 ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)",
-            gap: "var(--space-2)",
-            minWidth: 0,
-          }}
+          style={
+            card.images.length > 1
+              ? {
+                  // 多图横滑缩略条（2026-09-27 裁决）：文件夹多图不炸纵深，滑着看、点开放大
+                  display: "flex",
+                  gap: "var(--space-2)",
+                  overflowX: "auto",
+                  padding: "var(--space-1) 0",
+                  minWidth: 0,
+                }
+              : { display: "grid", minWidth: 0 }
+          }
         >
           {card.images.map((img, i) => (
-            <figure key={`show-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
+            <figure
+              key={`show-${i}`}
+              style={{
+                margin: 0,
+                display: "grid",
+                gap: 2,
+                minWidth: 0,
+                flex: card.images.length > 1 ? "0 0 auto" : undefined,
+              }}
+            >
               <button
                 type="button"
                 aria-label={t.lightbox.open}
                 onClick={() => setViewing(i)}
-                style={{ ...ZOOM_BUTTON_STYLE, justifySelf: "stretch" }}
+                style={{ ...ZOOM_BUTTON_STYLE, justifySelf: card.images.length > 1 ? "auto" : "stretch" }}
               >
                 <img
                   src={imageSrc({ type: "image", data: img.data, mimeType: img.mimeType })}
                   alt={img.name}
                   style={{
                     display: "block",
-                    width: "100%",
+                    width: card.images.length > 1 ? 200 : "100%",
+                    height: card.images.length > 1 ? 136 : undefined,
                     maxHeight: 320,
-                    objectFit: "contain",
+                    objectFit: "cover",
                     borderRadius: "var(--radius-md)",
                     border: "1px solid var(--color-border-subtle)",
                     background: "var(--color-bg-panel)",
@@ -3416,6 +3432,7 @@ function ShowImageToolLine(props: { result: ToolTranscriptItem | undefined }) {
                   color: "var(--color-text-tertiary)",
                   fontFamily: "var(--font-family-mono)",
                   overflowWrap: "anywhere",
+                  width: card.images.length > 1 ? 200 : undefined,
                 }}
               >
                 {img.name}

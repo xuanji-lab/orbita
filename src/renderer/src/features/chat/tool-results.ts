@@ -173,6 +173,20 @@ function isChannelToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && CHANNEL_TOOL_NAMES.has(entry.toolName);
 }
 
+/**
+ * 钉住工具（2026-09-27 裁决）：show_image 是**给用户的展示**，不是「工作过程」——
+ * 大折叠把轮内工具吞进统计行时会把它递出的画廊一起吞走，等于模型递完照片当场
+ * 收回。与通道工具同一套豁免口径（不进工具组 / 不锚折叠边界 / 折叠区间在它处
+ * 切开 / 不计统计——它根本不进 members），但语义不同：通道是父子通信，这是
+ * 面向用户的输出。常见节奏（show 完就给结尾回复）下，豁免让画廊正好钉在
+ * 折叠行之后、回复之前——「正文前面见图」不需要上浮收集就自然成立。
+ */
+const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image"]);
+
+function isPinnedToolCall(entry: RenderEntry): boolean {
+  return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
+}
+
 /** 这条 toolCall 是不是在 read 某条已知 skill 的 SKILL.md（分组排除用，同 ToolLine 的判定） */
 function isSkillRead(
   unit: ToolCallUnit,
@@ -222,7 +236,10 @@ export function groupToolUnits(
     // 它自己开的 run 会被后续同类 read 并进来，排除就白做了
     const skillRead = unit.kind === "toolCall" && isSkillRead(unit, skills);
     const groupable =
-      unit.kind === "toolCall" && !skillRead && !CHANNEL_TOOL_NAMES.has(unit.toolName);
+      unit.kind === "toolCall" &&
+      !skillRead &&
+      !CHANNEL_TOOL_NAMES.has(unit.toolName) &&
+      !PINNED_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
       continue;
@@ -280,7 +297,7 @@ export type TurnMemberEntry = Extract<
  * 它们也从不出现在 toolGroup 里（`groupToolUnits` 已挡），这里只需挡 toolCall 分支。
  */
 function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
-  if (isChannelToolCall(entry)) return false;
+  if (isChannelToolCall(entry) || isPinnedToolCall(entry)) return false;
   return entry.kind === "thinking" || entry.kind === "toolCall" || entry.kind === "toolGroup";
 }
 
@@ -372,7 +389,7 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
     chunk = [];
   };
   for (const entry of segment) {
-    if (isChannelToolCall(entry)) {
+    if (isChannelToolCall(entry) || isPinnedToolCall(entry)) {
       flushChunk();
       view.push(entry);
       continue;
