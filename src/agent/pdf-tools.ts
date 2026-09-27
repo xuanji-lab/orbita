@@ -63,8 +63,10 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
       const absolute = isAbsolute(pathRaw) ? pathRaw : join(cwd, pathRaw);
 
       const buffer = await readFile(absolute);
-      // 魔数定身份，不看扩展名——扩展名会说谎，文件头不会
-      if (buffer.length < 5 || buffer.subarray(0, 5).toString("latin1") !== "%PDF-") {
+      // 魔数定身份，不看扩展名——扩展名会说谎，文件头不会。窗口取前 1024 字节而非
+      // 字节 0：规范允许 header 前有垃圾（邮件系统前置字节是真实场景），pdf.js 自己
+      // 也按这个窗口搜——比解析器更严等于把解析器能读的文件在门口拒掉
+      if (!buffer.subarray(0, 1024).toString("latin1").includes("%PDF-")) {
         throw new Error(`Not a PDF file: ${pathRaw}. Use the read tool for text files and images.`);
       }
 
@@ -75,7 +77,10 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
         if (error instanceof Error && error.name === "PasswordException") {
           throw new Error(`The PDF is password-protected and cannot be read: ${pathRaw}`);
         }
-        throw error;
+        // 解析失败的原始错误不带文件名（"Invalid PDF structure."），模型不知道坏的
+        // 是哪一个——包上路径再抛
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to parse PDF (${pathRaw}): ${reason}`);
       }
       // mergePages: false → 逐页一串文本，分页的根基；空页就是空串
       const { totalPages, text } = await extractText(pdf, { mergePages: false });

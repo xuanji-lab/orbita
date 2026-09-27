@@ -20,8 +20,13 @@ function contentStream(text: string): string {
   return `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`;
 }
 
-/** 组装一份最小合法 PDF（Catalog=1, Pages=2, Font=3, 第 i 页占对象 4+2i 与 5+2i） */
-function buildPdf(pageTexts: readonly string[]): Buffer {
+/**
+ * 组装一份最小合法 PDF（Catalog=1, Pages=2, Font=3, 第 i 页占对象 4+2i 与 5+2i）。
+ * `encrypted` 挂一个伪标准安全处理器——/O /U 是垃圾值没关系：pdf.js 判「需要密码」
+ * 发生在比对 /U 之前，伪字典足以触发 PasswordException（/Encrypt 必须挂 **trailer**，
+ * 挂 Catalog 会被当不加密直接读——踩过）。
+ */
+function buildPdf(pageTexts: readonly string[], encrypted = false): Buffer {
   const kids = pageTexts.map((_, i) => `${4 + 2 * i} 0 R`).join(" ");
   const objects: (string | { stream: string })[] = [];
   objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
@@ -32,6 +37,11 @@ function buildPdf(pageTexts: readonly string[]): Buffer {
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + 2 * i} 0 R >>`;
     objects[5 + 2 * i] = { stream: contentStream(pageTexts[i]!) };
   }
+  const encryptObj = encrypted
+    ? "<< /Filter /Standard /V 1 /R 2 /O <0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20> " +
+      "/U <2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40> /P -1 >>"
+    : null;
+  if (encryptObj !== null) objects[6] = encryptObj;
   const chunks = ["%PDF-1.4"];
   const offsets: number[] = [];
   for (let num = 1; num < objects.length; num++) {
@@ -50,7 +60,10 @@ function buildPdf(pageTexts: readonly string[]): Buffer {
   for (let num = 1; num < size; num++) {
     xref += `${String(offsets[num]).padStart(10, "0")} 00000 n \n`;
   }
-  chunks.push(xref, `trailer\n<< /Size ${size} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`);
+  const trailerDict = encrypted
+    ? `<< /Size ${size} /Root 1 0 R /Encrypt 6 0 R /ID [<aabbccddeeff00112233445566778899> <aabbccddeeff00112233445566778899>] >>`
+    : `<< /Size ${size} /Root 1 0 R >>`;
+  chunks.push(xref, `trailer\n${trailerDict}\nstartxref\n${xrefStart}\n%%EOF`);
   return Buffer.from(chunks.join("\n"), "latin1");
 }
 
@@ -69,6 +82,10 @@ before(async () => {
   );
   await writeFile(join(dir, "scanned.pdf"), buildPdf(["", ""]));
   await writeFile(join(dir, "plain.txt"), "just text, not a pdf");
+  // header 前有垃圾（邮件系统前置字节的真实形态）——规范允许 header 落在前 1024 字节内
+  await writeFile(join(dir, "junk-prefix.pdf"), Buffer.concat([Buffer.from("JUNKJUNK"), buildPdf([LONG_LINE, LONG_LINE])]));
+  await writeFile(join(dir, "encrypted.pdf"), buildPdf([LONG_LINE], true));
+  await writeFile(join(dir, "fake-header.pdf"), Buffer.from("%PDF-1.4\nthis is not really a pdf\n"));
 });
 
 after(async () => {
@@ -116,6 +133,20 @@ describe("read_pdf", () => {
 
   test("非 PDF 报错并指回 read 工具", async () => {
     await assert.rejects(run("plain.txt"), /Not a PDF file/);
+  });
+
+  test("垃圾前缀 PDF 放行：header 在前 1024 字节内即认（与 pdf.js 同口径）", async () => {
+    const text = await run("junk-prefix.pdf");
+    assert.ok(text.includes("[PDF with 2 pages."), text.slice(0, 80));
+    assert.ok(text.includes(LONG_LINE));
+  });
+
+  test("加密 PDF 报 password-protected，不当原始错误抛", async () => {
+    await assert.rejects(run("encrypted.pdf"), /password-protected/);
+  });
+
+  test("解析失败的报错带文件名（裸 'Invalid PDF structure' 模型不知道坏的是哪个）", async () => {
+    await assert.rejects(run("fake-header.pdf"), /Failed to parse PDF \(fake-header\.pdf\)/);
   });
 
   test("offset 越界报错，报总页数", async () => {
