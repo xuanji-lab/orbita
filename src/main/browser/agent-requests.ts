@@ -11,8 +11,10 @@
  * 每个 CDP 命令都有超时：卡死的页面不能把 agent 的一轮拖死。
  */
 import { nativeImage, type WebContents } from "electron";
-import type { BrowserToolOutcome, BrowserToolRequest } from "../../shared/browser.ts";
-import { normalizeAddress } from "./address.ts";
+import { mkdir, writeFile } from "node:fs/promises";
+import type { BrowserTabSummary, BrowserToolOutcome, BrowserToolRequest } from "../../shared/browser.ts";
+import { availableDownloadPath } from "./downloads.ts";
+import { resolveAddressOrSearch } from "./address.ts";
 import { formatAxOutline, type AxNode } from "./page-outline.ts";
 import { extractScript, formatExtract, type PageRaw } from "./page-text.ts";
 import { describeDownload, pageUrl, type BrowserSandbox, type BrowserTab } from "./sandbox.ts";
@@ -33,7 +35,13 @@ export async function applyBrowserRequest(
   sessionId: string,
   request: BrowserToolRequest,
 ): Promise<BrowserToolOutcome> {
-  const tab = await sandbox.agentTab(sessionId);
+  if (request.action === "tabs") {
+    await sandbox.agentTab(sessionId);
+    return { ok: true, text: describeTabs(sandbox.visibleTabs(sessionId)), card: { tabId: "", url: "", title: "" } };
+  }
+  // 读取类工具可以读「你的」tab（只读）；其余一律作用于自己的 agent tab
+  const readsUser = "tab" in request && request.tab === "user";
+  const tab = readsUser ? await sandbox.userTab() : await sandbox.agentTab(sessionId);
   const outcome = await sandbox.runOnTab(tab, async (): Promise<BrowserToolOutcome> => {
     if (!sandbox.isLive(tab)) return { ok: false, error: "The browser tab was closed. Call the tool again to reopen it." };
     const contents = tab.view.webContents;
@@ -41,11 +49,16 @@ export async function applyBrowserRequest(
       if (request.action === "handoff") return await handoff(sandbox, tab, contents, request);
       if (request.action === "navigate") return await navigate(sandbox, tab, contents, request.url);
       if (pageUrl(contents) === "") {
-        return { ok: false, error: "Your browser tab has no page yet. Call browser_navigate first." };
+        return {
+          ok: false,
+          error: readsUser
+            ? "The user's tab is empty — they have not opened anything in it."
+            : "Your browser tab has no page yet. Call browser_navigate first (or browser_tabs to see what the user has open).",
+        };
       }
       if (request.action === "observe") return await observe(tab, contents, request.maxNodes);
       if (request.action === "extract") return await extract(tab, contents, request);
-      return await screenshot(tab, contents);
+      return await screenshot(tab, contents, request.save === true ? sandbox.screenshotDir(sessionId) : null);
     } catch (cause) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
@@ -79,10 +92,11 @@ async function navigate(
   contents: WebContents,
   input: string,
 ): Promise<BrowserToolOutcome> {
-  const url = normalizeAddress(input);
-  if (url === null) {
-    return { ok: false, error: `"${input}" is not a web address. Only http(s) URLs or bare domains are allowed.` };
+  const target = resolveAddressOrSearch(input);
+  if (target === null) {
+    return { ok: false, error: `"${input}" cannot be opened. Only http(s) addresses or search words are allowed.` };
   }
+  const url = target.url;
   tab.lastStatus = null;
   const since = Date.now();
   const outcome = await loadWithin(contents, url, NAVIGATE_TIMEOUT_MS);
@@ -104,6 +118,7 @@ async function navigate(
   }
   if (outcome.kind === "loaded") await delay(SETTLE_MS);
   const lines = [
+    ...(target.search !== null ? [`Searched Google for "${target.search}".`] : []),
     outcome.kind === "timeout"
       ? `Still loading after ${NAVIGATE_TIMEOUT_MS / 1000}s: ${pageUrl(contents)} — the content may be partial.`
       : `Loaded ${pageUrl(contents)}${tab.lastStatus !== null ? ` (HTTP ${tab.lastStatus})` : ""}`,
@@ -186,18 +201,32 @@ async function extract(
   return { ok: true, text, card: card(tab, contents) };
 }
 
-async function screenshot(tab: BrowserTab, contents: WebContents): Promise<BrowserToolOutcome> {
+/**
+ * 截图。默认只给模型看（压缩 JPEG 进上下文）；save 时另把原图（PNG，未缩放）存进会话工作台
+ * `screenshots/`，结果给路径——用户想留的参考图、要递给用户看的图都从这份文件走。
+ */
+async function screenshot(tab: BrowserTab, contents: WebContents, saveDir: string | null): Promise<BrowserToolOutcome> {
   const shot = (await cdp(contents, "Page.captureScreenshot", { format: "png" })) as { data?: unknown };
-  let image = typeof shot.data === "string" ? nativeImage.createFromBuffer(Buffer.from(shot.data, "base64")) : null;
-  if (image === null || image.isEmpty()) {
+  const png = typeof shot.data === "string" ? Buffer.from(shot.data, "base64") : null;
+  let image = png === null ? null : nativeImage.createFromBuffer(png);
+  if (png === null || image === null || image.isEmpty()) {
     throw new Error("The page has not rendered anything yet. Try again after it finishes loading.");
+  }
+  let saved = "";
+  if (saveDir !== null) {
+    await mkdir(saveDir, { recursive: true });
+    const path = availableDownloadPath(saveDir, screenshotName(pageUrl(contents)));
+    await writeFile(path, png);
+    saved = ` Saved the full-resolution image to ${path}.`;
   }
   const size = image.getSize();
   if (size.width > SCREENSHOT_MAX_WIDTH) image = image.resize({ width: SCREENSHOT_MAX_WIDTH, quality: "good" });
   const { width, height } = image.getSize();
   return {
     ok: true,
-    text: `Screenshot of ${pageUrl(contents)} (${contents.getTitle()}), ${width}×${height}, visible part of the page only.`,
+    text:
+      `Screenshot of ${pageUrl(contents)} (${contents.getTitle()}), ${width}×${height}, visible part of the page only. ` +
+      `The user does not see this image unless you show it to them.${saved}`,
     image: { data: image.toJPEG(SCREENSHOT_JPEG_QUALITY).toString("base64"), mimeType: "image/jpeg" },
     card: card(tab, contents),
   };
@@ -214,6 +243,34 @@ async function cdp(contents: WebContents, method: string, params?: object): Prom
     }
   }
   return withTimeout(debuggerApi.sendCommand(method, params), CDP_TIMEOUT_MS, "The page did not respond in time.");
+}
+
+/** `screenshots/` 里的文件名：时间 + 站点，同一分钟里重名交给 availableDownloadPath 加序号 */
+function screenshotName(url: string): string {
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+  let host = "page";
+  try {
+    host = new URL(url).hostname.replace(/^www\./, "") || host;
+  } catch {
+    // 空页 / 非法地址：用默认名
+  }
+  return `${stamp}-${host}.png`;
+}
+
+/** browser_tabs 的正文：你的 tab 与自己的 tab 各一行，标出哪个在交接中 */
+export function describeTabs(tabs: readonly BrowserTabSummary[]): string {
+  const lines = tabs.map((tab) => {
+    const who = tab.owner.kind === "user" ? "The user's tab (read with tab: \"user\")" : "Your tab";
+    const page = tab.url === "" ? "empty" : `${tab.title === "" ? "(untitled)" : tab.title} — ${tab.url}`;
+    return `- ${who}: ${page}${tab.loading ? " (loading)" : ""}${tab.handoff !== undefined ? " (handed to the user)" : ""}`;
+  });
+  return [
+    "Open browser tabs:",
+    ...lines,
+    "If the user already has the page you need open (often signed in through a library or proxy address), " +
+      "read it with tab: \"user\" instead of starting over; to act on it, open the same address in your own tab — " +
+      "the sign-in is shared.",
+  ].join("\n");
 }
 
 function asPageRaw(value: unknown): PageRaw {

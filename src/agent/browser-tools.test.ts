@@ -23,7 +23,7 @@ const setup = () => {
 const card = { tabId: "t1", url: "https://example.com/", title: "Example" };
 
 describe("browser_* 工具", () => {
-  test("名单就是只读四件 + 交接——与免审批名单对齐，免审批的范围不会悄悄变大", () => {
+  test("名单就是只读五件 + 交接——与免审批名单对齐，免审批的范围不会悄悄变大", () => {
     const { tools } = setup();
     assert.deepEqual([...tools.keys()].sort(), [...BROWSER_READ_TOOLS, USER_ACTION_TOOL].sort());
   });
@@ -50,6 +50,14 @@ describe("browser_* 工具", () => {
     assert.deepEqual(result.details, { browser: card });
   });
 
+  test("browser_tabs：无参上船", async () => {
+    const { sent, answer, run } = setup();
+    const pending = run("browser_tabs", {});
+    assert.deepEqual(sent[0]?.["request"], { action: "tabs" });
+    answer(0, { ok: true, text: "tabs", card });
+    await pending;
+  });
+
   test("navigate 缺 url 当场报错，不发请求", async () => {
     const { sent, run } = setup();
     await assert.rejects(run("browser_navigate", {}), /url is required/);
@@ -66,6 +74,18 @@ describe("browser_* 工具", () => {
     assert.deepEqual(sent[1]?.["request"], { action: "extract" });
     answer(1, { ok: true, text: "…", card });
     await second;
+  });
+
+  test("screenshot：save 与 tab=user 上船；图片块跟在文字后面", async () => {
+    const { sent, answer, run } = setup();
+    const first = run("browser_screenshot", { save: true, tab: "user" });
+    assert.deepEqual(sent[0]?.["request"], { action: "screenshot", save: true, tab: "user" });
+    answer(0, { ok: true, text: "Screenshot", image: { data: "AAAA", mimeType: "image/jpeg" }, card });
+    const result = await first;
+    assert.deepEqual(result.content, [
+      { type: "text", text: "Screenshot" },
+      { type: "image", data: "AAAA", mimeType: "image/jpeg" },
+    ]);
   });
 
   test("screenshot：图片块跟在文字后面", async () => {

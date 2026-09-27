@@ -72,7 +72,13 @@ export function isChannelTool(toolName: string): boolean {
  * 浏览器读的是外部页面，不是用户的盘，单独立桶。
  * 有副作用的浏览器动作（点击、填表）不在这里，届时照写操作过闸。
  */
-export const BROWSER_READ_TOOLS = ["browser_navigate", "browser_observe", "browser_extract", "browser_screenshot"] as const;
+export const BROWSER_READ_TOOLS = [
+  "browser_navigate",
+  "browser_observe",
+  "browser_extract",
+  "browser_screenshot",
+  "browser_tabs",
+] as const;
 
 export function isBrowserReadTool(toolName: string): boolean {
   return (BROWSER_READ_TOOLS as readonly string[]).includes(toolName);

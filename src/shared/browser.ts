@@ -102,18 +102,29 @@ export interface BrowserWindowState {
   page: BrowserPageState;
 }
 
-/** 地址栏提交的结果。不做搜索回退：不是网址就如实说，由工具条提示 */
+/** 地址栏提交的结果。不是网址就搜索；只有空输入回 not-an-address */
 export type BrowserNavigateResult = { ok: true } | { ok: false; reason: "not-an-address" };
+
+/**
+ * 读取类工具读哪个 tab：缺席 = agent 自己的 tab；"user" = 「你的」tab（**只读**）。
+ * 用户常常自己先打开并登录好了（例如经图书馆代理进 Scopus）——agent 读得到它，
+ * 要操作就在自己的 tab 里打开同一个地址（登录态共享）。
+ */
+export type BrowserReadTarget = "user";
 
 /**
  * agent 的浏览器工具请求（agent 进程 → 主进程，作用于该会话自己的 agent tab）。
  * 只读四件与交接各档免审批（shared/permission.ts 的 BROWSER_READ_TOOLS / USER_ACTION_TOOL）。
  */
 export type BrowserToolRequest =
+  /** url 也可以是搜索词：不是网址就交给搜索引擎（地址栏同一条规则） */
   | { action: "navigate"; url: string }
-  | { action: "observe"; maxNodes?: number }
-  | { action: "extract"; offset?: number; maxChars?: number; links?: boolean }
-  | { action: "screenshot" }
+  | { action: "observe"; maxNodes?: number; tab?: BrowserReadTarget }
+  | { action: "extract"; offset?: number; maxChars?: number; links?: boolean; tab?: BrowserReadTarget }
+  /** save：另存一份原图进会话工作台 screenshots/，结果给路径（默认不存，截图只给模型看） */
+  | { action: "screenshot"; save?: boolean; tab?: BrowserReadTarget }
+  /** 列出 agent 看得到的 tab：「你的」tab 与本会话的 agent tab（别的会话的 tab 不列） */
+  | { action: "tabs" }
   /** request_user_action：把 tab 交给用户，等用户交还（或取消、或这一轮被停掉） */
   | { action: "handoff"; toolCallId: string; reason: string };
 

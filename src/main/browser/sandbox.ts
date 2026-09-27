@@ -44,7 +44,7 @@ import {
   type BrowserTabSummary,
   type BrowserWindowState,
 } from "../../shared/browser.ts";
-import { normalizeAddress } from "./address.ts";
+import { normalizeAddress, resolveAddressOrSearch } from "./address.ts";
 import { browserUserAgent } from "./identity.ts";
 import { browserShortcut, type BrowserShortcut } from "./shortcuts.ts";
 import { availableDownloadPath, forceDownloadHeaders } from "./downloads.ts";
@@ -157,14 +157,14 @@ export class BrowserSandbox {
     return result;
   }
 
-  /** 地址栏提交：作用于正在显示的 tab */
+  /** 地址栏提交：作用于正在显示的 tab。不是网址就搜索（找不到图书馆入口时先得搜得到） */
   navigate(input: string): BrowserNavigateResult {
-    const url = normalizeAddress(input);
-    if (url === null) return { ok: false, reason: "not-an-address" };
+    const target = resolveAddressOrSearch(input);
+    if (target === null) return { ok: false, reason: "not-an-address" };
     const contents = this.shownContents();
     // loadURL 在被后续导航打断（ERR_ABORTED）或网络失败时 reject：页面自己会显示结果，
     // 这里不当异常抛——用户换个地址重来就好
-    if (contents !== null) contents.loadURL(url).catch(() => undefined);
+    if (contents !== null) contents.loadURL(target.url).catch(() => undefined);
     return { ok: true };
   }
 
@@ -271,6 +271,26 @@ export class BrowserSandbox {
       })
       .catch(() => undefined);
     return tab;
+  }
+
+  /** 「你的」tab（agent 的读取类工具带 tab: "user" 时读它，只读）。窗口没建过就先建 */
+  async userTab(): Promise<BrowserTab> {
+    await this.ensureWindow();
+    const tab = this.tabs.get(this.userTabId);
+    if (tab === undefined) throw new Error("浏览器的「你的」tab 不在");
+    return tab;
+  }
+
+  /** agent 看得到的 tab：「你的」tab + 这个会话自己的 agent tab。别的会话的 tab 不给——会话之间不互看 */
+  visibleTabs(sessionId: string): BrowserTabSummary[] {
+    return [...this.tabs.values()]
+      .filter((tab) => tab.owner.kind === "user" || tab.owner.sessionId === sessionId)
+      .map((tab) => summarize(tab));
+  }
+
+  /** 截图另存的目录：`<会话工作台>/screenshots/` */
+  screenshotDir(sessionId: string): string {
+    return join(this.deps.workbenchPath(sessionId), "screenshots");
   }
 
   /** 在 tab 上排队执行一个操作：同一页上的操作不交错，前一个失败不连累后一个 */

@@ -61,6 +61,8 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
     label: "browser_navigate",
     description:
       "Open a web page in your own tab of Orbita's built-in browser and wait for it to load. " +
+      "Accepts a search phrase too (it is searched on Google). " +
+      "First call browser_tabs: the user often already has the page open and signed in — read it with tab: \"user\" instead of starting over. " +
       "Returns the final URL (after redirects), the page title and the HTTP status. " +
       "Use browser_extract to read the page afterwards. " +
       "Links to files (PDF, CSV, RIS…) are downloaded into downloads/ in your session workbench instead of " +
@@ -104,8 +106,12 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       required: [],
     } as never,
     async execute(_toolCallId, params, signal) {
-      const maxNodes = (params as Record<string, unknown> | undefined)?.["maxNodes"];
-      return call({ action: "observe", ...(typeof maxNodes === "number" ? { maxNodes } : {}) }, signal);
+      const args = (params ?? {}) as Record<string, unknown>;
+      return call({
+        action: "observe",
+        ...(typeof args["maxNodes"] === "number" ? { maxNodes: args["maxNodes"] } : {}),
+        ...(args["tab"] === "user" ? { tab: "user" as const } : {}),
+      }, signal);
     },
   };
 
@@ -134,6 +140,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           ...(typeof args["offset"] === "number" ? { offset: args["offset"] } : {}),
           ...(typeof args["maxChars"] === "number" ? { maxChars: args["maxChars"] } : {}),
           ...(args["links"] === true ? { links: true } : {}),
+        ...(args["tab"] === "user" ? { tab: "user" as const } : {}),
         },
         signal,
       );
@@ -149,8 +156,16 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       "browser_extract is cheaper and more accurate. " +
       UNTRUSTED,
     parameters: { type: "object", properties: {}, required: [] } as never,
-    async execute(_toolCallId, _params, signal) {
-      return call({ action: "screenshot" }, signal);
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      return call(
+        {
+          action: "screenshot",
+          ...(args["save"] === true ? { save: true } : {}),
+          ...(args["tab"] === "user" ? { tab: "user" as const } : {}),
+        },
+        signal,
+      );
     },
   };
 
@@ -180,5 +195,19 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
     },
   };
 
-  return [navigate, observe, extract, screenshot, requestUserAction];
+  const tabs: ToolDefinition = {
+    name: "browser_tabs",
+    label: "browser_tabs",
+    description:
+      "List the browser tabs you can see: the user's tab and your own. Use it first — the user often " +
+      "already has the page you need open and signed in, e.g. through a library proxy. Reading the user's " +
+      "tab is read-only; to act on a page the user opened, open the same address in your own tab — the " +
+      "sign-in is shared.",
+    parameters: { type: "object", properties: {}, required: [] } as never,
+    async execute(_toolCallId, _params, signal) {
+      return call({ action: "tabs" }, signal);
+    },
+  };
+
+  return [navigate, observe, extract, screenshot, tabs, requestUserAction];
 }
