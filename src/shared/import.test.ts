@@ -15,6 +15,8 @@ describe("parseImportScanInput", () => {
     assert.equal(isImportSourceId("kimi-code"), true);
     assert.equal(isImportSourceId("opencode"), true);
     assert.equal(isImportSourceId("proma"), true);
+    assert.equal(isImportSourceId("reasonix"), true);
+    assert.equal(isImportSourceId("agent-skills"), true);
     assert.equal(isImportSourceId("codex"), false);
     assert.equal(isImportSourceId(1), false);
   });

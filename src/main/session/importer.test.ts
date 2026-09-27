@@ -29,6 +29,7 @@ import {
   probeKimiCode,
   probeOpencode,
   probeProma,
+  probeReasonix,
   runImport,
   scanGreetingCandidates,
   scanImport,
@@ -1924,6 +1925,95 @@ describe("opencode 来源", () => {
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [dbFile, join(root, "opencode", "opencode.json")]);
     assert.equal((await probeOpencode({ ...paths(), dbFile: join(root, "nope.db") })).found, false);
+  });
+});
+
+describe("reasonix 来源", () => {
+  let projectsRoot = "";
+  let home = "";
+
+  beforeEach(async () => {
+    projectsRoot = join(root, "reasonix", "projects");
+    home = join(root, "home");
+    await mkdir(join(projectsRoot, "proj-a", "sessions"), { recursive: true });
+    await mkdir(home, { recursive: true });
+  });
+
+  const rxDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps =>
+    deps({ reasonix: { projectsRoot, home }, ...overrides });
+
+  /** 一条会话：主 JSONL + meta 侧车。行形状按 2026-09-27 抽样（tool_calls 拍平形）。 */
+  async function writeSession(dir: string, name: string, meta: Record<string, unknown> | null, rows: Record<string, unknown>[]): Promise<void> {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, name), rows.map((row) => JSON.stringify(row)).join("\n") + "\n", "utf8");
+    if (meta !== null) await writeFile(join(dir, `${name}.meta`), JSON.stringify(meta), "utf8");
+  }
+
+  const repoRows = (prompt: string): Record<string, unknown>[] => [
+    { role: "user", content: prompt, raw_content: prompt, origin: "user", createdAt: 1757134310000 },
+    { role: "assistant", content: null, tool_calls: [{ id: "c1", name: "ls", arguments: '{"path": "."}' }] },
+    { role: "tool", tool_call_id: "c1", name: "ls", content: "a.txt" },
+    { role: "assistant", content: "好了。" },
+  ];
+
+  test("扫描与执行：meta 带标题/模型/工作区，同址建工作区，transcript 只有用户写的话，重扫即已导入", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    const meta = (id: string, title: string, workspaceRoot: string): Record<string, unknown> => ({
+      id, topic_title: title, model: "opencode-go/deepseek-v4", workspace_root: workspaceRoot,
+      created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:10:00Z",
+    });
+    const sessions = join(projectsRoot, "proj-a", "sessions");
+    await writeSession(sessions, "s-a.jsonl", meta("a", "标题A", repo), repoRows("修测试"));
+    await writeSession(sessions, "s-a2.jsonl", meta("a2", "标题A2", repo), repoRows("再跑一次"));
+    await writeSession(sessions, "s-b.jsonl", meta("b", "在家里的", home), repoRows("你好"));
+    await writeFile(join(sessions, "s-empty.jsonl"), "", "utf8");
+
+    const report = await scanImport(rxDeps(), [], ["reasonix"]);
+    const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([...byId.keys()].sort(), ["a", "a2", "b"]);
+    assert.equal(report.skipped.length, 1);
+    assert.equal(report.skipped[0]?.reason, "unsupported-format");
+    assert.equal(byId.get("a")?.title, "标题A");
+    assert.deepEqual([byId.get("a")?.source, byId.get("a")?.sourceKind, byId.get("a")?.importedModel], ["reasonix", "reasonix", "opencode-go/deepseek-v4"]);
+    assert.equal(byId.get("a")?.createdAt, Date.parse("2026-09-01T00:00:00Z"));
+    assert.deepEqual([byId.get("b")?.folder, byId.get("b")?.cwd], [null, home]);
+    assert.equal(report.newWorkspaces.length, 1);
+    assert.equal(byId.get("a2")?.workspaceId, report.newWorkspaces[0]?.id);
+
+    const run = await runImport(rxDeps(), { sources: ["reasonix"], sessions: new Set([byId.get("a")?.sourceFile ?? ""]), destinations: [] });
+    assert.equal(run.imported, 1);
+    assert.deepEqual(run.failed, []);
+    const [importedMeta] = await store.list();
+    const records = (await store.load(importedMeta?.id ?? ""))?.transcript ?? [];
+    const userTexts = records
+      .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
+      .map((record) => record.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
+    assert.deepEqual(userTexts, ["修测试"]);
+    const ledger = (await readFile(join(root, "imports.jsonl"), "utf8")).trim().split("\n").map((item) => JSON.parse(item) as Record<string, unknown>);
+    assert.deepEqual(ledger.map((item) => item["source"]), ["reasonix"]);
+    const again = await scanImport(rxDeps({ existingMetas: await store.list() }), [], ["reasonix"]);
+    assert.equal(again.skipped.find((item) => item.sourceId === "a")?.reason, "already-imported");
+  });
+
+  test("v5 新版会话库在：扫描如实报一条「不支持」，不静默漏掉；不在：不报", async () => {
+    const sessions = join(projectsRoot, "proj-a", "sessions");
+    await writeSession(sessions, "s-a.jsonl", null, repoRows("修测试"));
+    const without = await scanImport(rxDeps(), [], ["reasonix"]);
+    assert.equal(without.skipped.some((item) => item.sourceId === "desktop-sessions-v5"), false);
+    await mkdir(join(projectsRoot, "..", "desktop-sessions-v5"), { recursive: true });
+    const withV5 = await scanImport(rxDeps(), [], ["reasonix"]);
+    const v5 = withV5.skipped.find((item) => item.sourceId === "desktop-sessions-v5");
+    assert.equal(v5?.reason, "unsupported-format");
+    assert.match(v5?.detail ?? "", /not supported yet/);
+    assert.equal(withV5.plan.length, 1);
+  });
+
+  test("探测：projects 根在不在；paths 列出扫描会读的一处", async () => {
+    const found = await probeReasonix({ projectsRoot, home });
+    assert.equal(found.found, true);
+    assert.deepEqual(found.paths, [projectsRoot]);
+    assert.equal((await probeReasonix({ projectsRoot: join(root, "nope"), home })).found, false);
   });
 });
 

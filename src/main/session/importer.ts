@@ -69,6 +69,7 @@ import {
   readOpencodeSessions,
   withOpencodeDb,
 } from "./opencode.ts";
+import { listReasonixSessions, parseReasonixRows, readReasonixMeta, reasonixToMessages } from "./reasonix.ts";
 import { aggregatePrefixUsage } from "./store.ts";
 import {
   claudeCodeSkillDirs,
@@ -152,6 +153,14 @@ export interface OpencodePaths {
   home: string;
 }
 
+/** Reasonix 桌面版来源要读的位置。全部**只读**。 */
+export interface ReasonixPaths {
+  /** 会话根（Windows %APPDATA%/reasonix/projects）：每个项目一个子目录，sessions/ 下是 <id>.jsonl */
+  projectsRoot: string;
+  /** 家目录：在家目录里开的会话不算有文件夹 */
+  home: string;
+}
+
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
 export interface ImporterDeps {
   /** Proma 数据根（~/.proma-dev）。**只读** */
@@ -162,6 +171,8 @@ export interface ImporterDeps {
   kimiCode?: KimiCodePaths;
   /** opencode 来源的位置。不传 = 扫描勾了它也不读 */
   opencode?: OpencodePaths;
+  /** Reasonix 桌面版来源的位置。不传 = 扫描勾了它也不读 */
+  reasonix?: ReasonixPaths;
   /** 多家共用的 skills 目录（~/.agents/skills，来源 agent-skills）。不传 = 勾了也不读 */
   agentSkillsDir?: string;
   /** orbita 已有的 skill slug（含只剩断链的）：skills 重名判断的底 */
@@ -291,6 +302,17 @@ export async function probeOpencode(paths: OpencodePaths): Promise<ImportSourceP
     found = false;
   }
   return { id: "opencode", label: "opencode", kind: "cli", paths: [paths.dbFile, paths.configFile], found };
+}
+
+/** Reasonix 桌面版来源的探测：只 stat 会话根。paths 是扫描会读的全部位置。 */
+export async function probeReasonix(paths: ReasonixPaths): Promise<ImportSourceProbe> {
+  let found = false;
+  try {
+    found = (await stat(paths.projectsRoot)).isDirectory();
+  } catch {
+    found = false;
+  }
+  return { id: "reasonix", label: "Reasonix", kind: "app", paths: [paths.projectsRoot], found };
 }
 
 /** 多家共用的 skills 目录（~/.agents/skills）：只 stat 这一个目录。 */
@@ -1249,6 +1271,11 @@ async function scanWithConfigs(
     skipped.push(...found.skipped);
     converted.push(...found.candidates);
   }
+  if (sources.includes("reasonix") && deps.reasonix !== undefined) {
+    const found = await scanReasonix(deps.reasonix, deps, importedBySource);
+    skipped.push(...found.skipped);
+    converted.push(...found.candidates);
+  }
   for (const candidate of await placeConverted(converted, deps, newWorkspaceByKey)) {
     const resolution = applyDestination(candidate.resolution, overrides, deps);
     if (resolution.create !== null) {
@@ -1824,6 +1851,90 @@ async function scanOpencode(
   return { candidates, skipped };
 }
 
+/**
+ * 扫 Reasonix 桌面版的会话库：projects/<项目>/sessions/*.jsonl 一条一条。与执行同一条转换
+ * 判断能不能导（本机 326 条 / 304 MB 全量读取与转换实测 <1s——扫描有进度提示兜着）。
+ *
+ * 标题：meta 的 topic_title > 第一句用户写的话 > 「Reasonix session」。模型在 meta 上
+ * （源行上没有 per-message 模型）。文件夹：meta 的 workspace_root。转换器见 reasonix.ts。
+ * 根不在（没装）listReasonixSessions 返回空，不算错。
+ */
+/** Reasonix 9-18 起的新版会话库目录名（与 projects/ 同级） */
+const REASONIX_V5_DIR = "desktop-sessions-v5";
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch (cause) {
+    if (isNotFound(cause)) return false;
+    throw cause;
+  }
+}
+
+async function scanReasonix(
+  paths: ReasonixPaths,
+  deps: ImporterDeps,
+  importedBySource: ReadonlyMap<string, readonly SessionMeta[]>,
+): Promise<{ candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] }> {
+  const candidates: ConvertedCandidate[] = [];
+  const skipped: ImportSkipItem[] = [];
+  // 9-18 起的新会话在 v5 库（与 projects/ 同在 userData 下），本来源还不读。只 stat 目录、
+  // 不数也不读内容（格式是二进制帧容器，另立一刀）——但要**说出来**：用户最近的会话恰恰在
+  // 那里，静默不列会让人以为已经导全了
+  const v5Store = join(dirname(paths.projectsRoot), REASONIX_V5_DIR);
+  if (await isDirectory(v5Store)) {
+    skipped.push({
+      sourceId: REASONIX_V5_DIR,
+      title: null,
+      reason: "unsupported-format",
+      detail: `sessions in Reasonix's newer store (${v5Store}, from 2026-09-18) are not supported yet and are not listed`,
+    });
+  }
+  for (const { file, meta, bytes } of await listReasonixSessions(paths.projectsRoot)) {
+    const sourceFile = resolve(file);
+    const sourceId = meta?.id ?? file;
+    const title0 = meta?.title ?? null;
+    if (importedBySource.has(sourceFile)) {
+      skipped.push({ sourceId, title: title0, reason: "already-imported" });
+      continue;
+    }
+    let parsed: ReturnType<typeof reasonixToMessages>;
+    try {
+      const raw = await readFile(sourceFile, "utf8");
+      parsed = reasonixToMessages(parseReasonixRows(raw).rows, "scan", meta?.model ?? null);
+    } catch (cause) {
+      skipped.push({
+        sourceId,
+        title: title0,
+        reason: "bad-session-file",
+        detail: cause instanceof Error ? cause.message : String(cause),
+      });
+      continue;
+    }
+    if (!parsed.messages.some((message) => message.role === "assistant")) {
+      skipped.push({ sourceId, title: title0, reason: "unsupported-format", detail: "no assistant messages to convert" });
+      continue;
+    }
+    const title = deriveSessionTitle(title0 ?? parsed.firstPrompt ?? "") || "Reasonix session";
+    const place = await sessionFolder(meta?.workspaceRoot ?? null, paths.home, deps.defaultCwd);
+    const createdAt = meta?.createdAt ?? parsed.firstAt ?? Date.now();
+    candidates.push({
+      onlyMessage: onlyWrittenMessage(parsed.userDisplays),
+      source: "reasonix",
+      sourceKind: "reasonix",
+      sourceId,
+      sourceFile,
+      title,
+      model: meta?.model ?? null,
+      createdAt,
+      updatedAt: meta?.updatedAt ?? qaTime(parsed.lastAt, createdAt, createdAt),
+      bytes,
+      ...place,
+    });
+  }
+  return { candidates, skipped };
+}
+
 // ---------------------------------------------------------------------------
 // 子会话挂回母会话
 // ---------------------------------------------------------------------------
@@ -2262,7 +2373,9 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
               ? await runKimiCodeImport(item, deps)
               : item.sourceKind === "opencode"
                 ? await runOpencodeImport(item, deps)
-                : await runPiImport(
+                : item.sourceKind === "reasonix"
+                  ? await runReasonixImport(item, deps)
+                  : await runPiImport(
               item,
               deps,
               // 另导一份：不能落在原会话副本的文件名上（会盖掉 orbita 接着聊的那份），换一个
@@ -2534,6 +2647,15 @@ async function runOpencodeImport(item: ImportPlanItem, deps: RunImporterDeps): P
     if (session === undefined) throw new Error("the session is no longer in opencode's database");
     return opencodeToMessages(readOpencodeMessages(db, sessionId), item.providerId, session.revert);
   });
+  return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
+}
+
+async function runReasonixImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+  const raw = await readFile(item.sourceFile, "utf8");
+  const { rows } = parseReasonixRows(raw);
+  // meta 只带来会话级模型（源行上没有）；执行时 meta 被删了就盖 unknown，不拦导入
+  const meta = await readReasonixMeta(item.sourceFile);
+  const parsed = reasonixToMessages(rows, item.providerId, meta?.model ?? null);
   return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
 }
 
