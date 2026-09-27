@@ -74,6 +74,7 @@ import {
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import { basename } from "../../shell/basename";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
@@ -4068,10 +4069,4 @@ function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
     }
   }
   return null;
-}
-
-/** 取路径尾段。分隔符 `/` 与 `\` 都认——Windows 的 cwd 是反斜杠，只切 `/` 会整条漏出来 */
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/).filter((part) => part !== "");
-  return parts[parts.length - 1] ?? path;
 }

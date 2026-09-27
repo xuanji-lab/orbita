@@ -21,6 +21,10 @@ describe("deriveWorkspaceName", () => {
     strictEqual(deriveWorkspaceName("/Users/wafo/repo/orbita-lab"), "orbita-lab");
   });
 
+  it("Windows 反斜杠路径也取最后一段（只切 `/` 会把整条 C:\\… 当成名字）", () => {
+    strictEqual(deriveWorkspaceName("C:\\Users\\dama\\Desktop\\p1\\paper3"), "paper3");
+  });
+
   it("结尾的斜杠不影响", () => {
     strictEqual(deriveWorkspaceName("/Users/wafo/repo/orbita-lab/"), "orbita-lab");
   });

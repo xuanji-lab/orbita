@@ -38,7 +38,8 @@ export interface Workspace {
 
 /** 没起名字时的默认名：路径的最后一段。 */
 export function deriveWorkspaceName(path: string): string {
-  const parts = path.split("/").filter((part) => part !== "");
+  // `/` 与 `\` 都认：Windows 的工作区路径是反斜杠，只切 `/` 会把整条 `C:\…` 当成名字
+  const parts = path.split(/[\\/]/).filter((part) => part !== "");
   const last = parts[parts.length - 1];
   return last === undefined || last === "" ? path : last;
 }

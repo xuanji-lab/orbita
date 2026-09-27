@@ -11,6 +11,7 @@ import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
+import { basename } from "./basename";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
@@ -861,7 +862,8 @@ function WorkspaceGroup(props: {
               cursor: "default",
             }}
           >
-            {props.workspace.name}
+            {/* 显示层截尾：老工作区落库的名可能是完整路径，悬停 tooltip 看全路径 */}
+            {basename(props.workspace.name)}
           </strong>
         ) : (
           <input
@@ -1299,7 +1301,7 @@ function SessionRow(props: {
             },
             ...session.workspaces.map((workspace) => ({
               id: workspace.id,
-              label: workspace.name,
+              label: basename(workspace.name),
               icon: "folder" as const,
               checked: meta.workspaceId === workspace.id,
               onSelect: () => session.moveSession(meta.id, workspace.id),
