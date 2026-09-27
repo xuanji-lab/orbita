@@ -70,7 +70,11 @@ export function isChannelTool(toolName: string): boolean {
  *
  * **否决「并进 READ_ONLY_TOOLS」**：那个名单在 manual 档仍要问（「全都问」对本机读取成立）。
  * 浏览器读的是外部页面，不是用户的盘，单独立桶。
- * 有副作用的浏览器动作（点击、填表）不在这里，届时照写操作过闸。
+ *
+ * browser_scroll 也在这里：滚动只是往下读，不提交任何东西——翻长页要一屏屏看，每屏问一次不值。
+ * 点击、输入、按键（browser_click / browser_type / browser_press）**不在这里**：它们能提交表单、
+ * 下单、发消息，走默认的写操作闸门——plan 拒、manual 问、skip 放。不为它们另立名单：
+ * decidePermission 对不认识的工具本来就按有副作用处理。
  */
 export const BROWSER_READ_TOOLS = [
   "browser_navigate",
@@ -78,6 +82,7 @@ export const BROWSER_READ_TOOLS = [
   "browser_extract",
   "browser_screenshot",
   "browser_tabs",
+  "browser_scroll",
 ] as const;
 
 export function isBrowserReadTool(toolName: string): boolean {

@@ -113,16 +113,52 @@ export type BrowserNavigateResult = { ok: true } | { ok: false; reason: "not-an-
 export type BrowserReadTarget = "user";
 
 /**
+ * 交互动作的落点：`browser_observe` 给的元素引用（`e12`），或最近一次整页截图里的像素坐标。
+ *
+ * 两条都要：引用精确、不怕布局变化，是首选；但 canvas、图表、没有无障碍信息的自绘控件
+ * 在大纲里没有引用，只能看图点坐标（Anthropic browser toolset 同形：click 的目标二选一）。
+ * 引用在页面换成新文档（跨文档导航）时作废；坐标在页面滚动或变化后就不准了。
+ */
+export type BrowserTarget = { ref: string } | { x: number; y: number };
+
+/** 截图局部放大的区域：整页截图里的像素（左上角 + 宽高） */
+export interface BrowserRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type BrowserScrollDirection = "up" | "down" | "left" | "right";
+
+/**
  * agent 的浏览器工具请求（agent 进程 → 主进程，作用于该会话自己的 agent tab）。
- * 只读四件与交接各档免审批（shared/permission.ts 的 BROWSER_READ_TOOLS / USER_ACTION_TOOL）。
+ * 读取类、滚动与交接各档免审批（shared/permission.ts 的 BROWSER_READ_TOOLS / USER_ACTION_TOOL）；
+ * 点击、输入、按键会改变页面状态（提交表单、下单、发消息），照写操作过闸。
+ * 交互动作只作用于 agent 自己的 tab——「你的」tab 只读（2026-09-27 裁决）。
  */
 export type BrowserToolRequest =
   /** url 也可以是搜索词：不是网址就交给搜索引擎（地址栏同一条规则） */
   | { action: "navigate"; url: string }
+  /** 在 agent tab 的历史里后退 / 前进一步（browser_navigate 的 url 传 back / forward） */
+  | { action: "history"; direction: "back" | "forward" }
   | { action: "observe"; maxNodes?: number; tab?: BrowserReadTarget }
   | { action: "extract"; offset?: number; maxChars?: number; links?: boolean; tab?: BrowserReadTarget }
-  /** save：另存一份原图进会话工作台 screenshots/，结果给路径（默认不存，截图只给模型看） */
-  | { action: "screenshot"; save?: boolean; tab?: BrowserReadTarget }
+  /**
+   * save：另存一份原图进会话工作台 screenshots/，结果给路径（默认不存，截图只给模型看）。
+   * region：只拍整页截图里的这一块、放大给模型看（小字、图表细节）；放大图的像素不是点击坐标
+   */
+  | { action: "screenshot"; save?: boolean; tab?: BrowserReadTarget; region?: BrowserRegion }
+  | { action: "click"; target: BrowserTarget }
+  /**
+   * 输入文字。带 ref：先聚焦那个字段，默认清空后再输（clear: false 追加）；`<select>` 按选项文字选中。
+   * 不带 ref：输进当前有焦点的元素（先点坐标再输的路径）。submit：输完按 Enter
+   */
+  | { action: "type"; text: string; ref?: string; clear?: boolean; submit?: boolean }
+  /** 按键或组合键，如 Enter、Tab、Escape、ArrowDown、Shift+Tab、ControlOrMeta+A；repeat 连按几次 */
+  | { action: "press"; key: string; repeat?: number }
+  /** 滚动 amount 屏（默认 1）。target：在那个元素 / 坐标所在的可滚动区域里滚（缺席 = 视口中央） */
+  | { action: "scroll"; direction: BrowserScrollDirection; amount?: number; target?: BrowserTarget }
   /** 列出 agent 看得到的 tab：「你的」tab 与本会话的 agent tab（别的会话的 tab 不列） */
   | { action: "tabs" }
   /** request_user_action：把 tab 交给用户，等用户交还（或取消、或这一轮被停掉） */
