@@ -154,6 +154,16 @@ export const zh: Messages = {
     agentTabTip: (session, page) => `智能体标签页${session === "" ? "" : ` · ${session}`}${page === "" ? "" : `——${page}`}`,
     newPage: "新页面",
     closeTab: "关掉这个智能体标签页",
+    handoffKicker: "需要你",
+    handoffWhere: "在内置浏览器里",
+    handoffWaiting: "等你",
+    handoffHandedBack: "已交还",
+    handoffCancelled: "已取消",
+    handoffOpen: "去浏览器完成",
+    handoffDone: "完成了，继续",
+    handoffGone: "这次请求已经结束了。",
+    handoffBar: (reason) => `智能体在等你：${reason}`,
+    handoffBarDone: "完成，交还",
   },
 
   drawer: {
@@ -298,6 +308,12 @@ export const zh: Messages = {
     clearBrowserDataAction: "清除全部",
     clearBrowserDataConfirm: "退出所有网站？",
     clearBrowserDataDone: "已清除 · 内置浏览器已退出所有网站",
+    browserDownloads: "下载",
+    downloadDirectory: "下载位置",
+    downloadDirectoryInfo: "你在内置浏览器里下载的文件存到这里 · 智能体知道这个目录，可以帮你整理 · 智能体自己下载的文件存进它的会话工作台",
+    changeDirectory: "更改…",
+    chooseDownloadDirectory: "选择下载位置",
+    openDownloadDirectory: "打开下载位置",
   },
 
   themes: {

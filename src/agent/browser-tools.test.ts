@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import type { BrowserToolOutcome } from "../shared/browser.ts";
-import { BROWSER_READ_TOOLS } from "../shared/permission.ts";
+import { BROWSER_READ_TOOLS, USER_ACTION_TOOL } from "../shared/permission.ts";
 
 const setup = () => {
   const sent: Record<string, unknown>[] = [];
@@ -23,9 +23,19 @@ const setup = () => {
 const card = { tabId: "t1", url: "https://example.com/", title: "Example" };
 
 describe("browser_* 工具", () => {
-  test("名单就是只读四件——与 BROWSER_READ_TOOLS 对齐，免审批的范围不会悄悄变大", () => {
+  test("名单就是只读四件 + 交接——与免审批名单对齐，免审批的范围不会悄悄变大", () => {
     const { tools } = setup();
-    assert.deepEqual([...tools.keys()].sort(), [...BROWSER_READ_TOOLS].sort());
+    assert.deepEqual([...tools.keys()].sort(), [...BROWSER_READ_TOOLS, USER_ACTION_TOOL].sort());
+  });
+
+  test("request_user_action：带上 toolCallId 与去掉首尾空白的 reason；缺 reason 当场报错", async () => {
+    const { sent, tools, answer } = setup();
+    const tool = tools.get("request_user_action")!;
+    const pending = tool.execute("call-42", { reason: "  Sign in to Scopus  " } as never, undefined, undefined, undefined as never);
+    assert.deepEqual(sent[0]?.["request"], { action: "handoff", toolCallId: "call-42", reason: "Sign in to Scopus" });
+    answer(0, { ok: true, text: "The user finished", card });
+    await pending;
+    await assert.rejects(tool.execute("c", {} as never, undefined, undefined, undefined as never), /reason is required/);
   });
 
   test("navigate：url 上船，带发起会话；text 进 content、card 进 details", async () => {
@@ -67,6 +77,22 @@ describe("browser_* 工具", () => {
       { type: "text", text: "Screenshot" },
       { type: "image", data: "AAAA", mimeType: "image/jpeg" },
     ]);
+  });
+
+  test("这一轮被停掉：不等主进程回执，立刻放手（交接可能要等半小时）", async () => {
+    const { tools } = setup();
+    const controller = new AbortController();
+    const pending = tools
+      .get("request_user_action")!
+      .execute("c", { reason: "Sign in" } as never, controller.signal, undefined, undefined as never);
+    controller.abort();
+    await assert.rejects(pending, /Stopped/);
+    const already = new AbortController();
+    already.abort();
+    await assert.rejects(
+      tools.get("browser_observe")!.execute("c", {} as never, already.signal, undefined, undefined as never),
+      /Stopped/,
+    );
   });
 
   test("主进程回 ok:false → 工具失败，error 原话给模型", async () => {

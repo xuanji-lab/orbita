@@ -31,6 +31,8 @@ export class RequestBroker {
         this.pending.delete(requestId);
         resolve({ ok: false, error: `主进程没有在 ${Math.round(timeoutMs / 1000)} 秒内回执（进程可能已退出）` } as T);
       }, timeoutMs);
+      // 在途请求本身不该让进程活着（agent 进程靠 IPC 端口保活；测试里被中止的长等待不拖住退出）
+      timer.unref();
       this.pending.set(requestId, { settle: resolve as (result: unknown) => void, timer });
       this.sendEvent({ ...event, requestId });
     });

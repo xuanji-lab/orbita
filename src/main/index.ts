@@ -34,6 +34,7 @@ import { registerFilesIpc } from "./files/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
+import { browserDownloadDir } from "./browser/download-dir.ts";
 import { mainWindows } from "./window/main-windows.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
@@ -215,9 +216,11 @@ void app.whenReady().then(async () => {
     },
     loadToolbar: (window) => loadRendererPage(window, "browser-toolbar.html"),
     sessionTitle: async (sessionId) => (await sessions.readMeta(sessionId))?.title ?? "",
+    workbenchPath: (sessionId) => sessions.workbenchPath(sessionId),
+    userDownloadDir: () => browserDownloadDir(settings),
     appName: app.getName(),
   });
-  registerBrowserIpc(browserSandbox);
+  registerBrowserIpc(browserSandbox, settings);
   mainWindows.onLastClosed(() => browserSandbox.dispose());
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
@@ -273,6 +276,8 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
+    if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
     if (event.type === "failed" && event.sessionId === null) phases.clear();
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡。
     // 通道账本一并传进去：子会话每一轮的开头是通道消息，正文在那里。

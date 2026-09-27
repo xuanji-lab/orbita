@@ -25,15 +25,20 @@
  */
 import {
   BrowserWindow,
+  Notification,
   WebContentsView,
   session,
   type BrowserWindowConstructorOptions,
+  type DownloadItem,
   type Session,
   type WebContents,
 } from "electron";
 import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import {
   browserChannels,
+  type BrowserHandoffOutcome,
   type BrowserNavigateResult,
   type BrowserPageState,
   type BrowserTabSummary,
@@ -42,12 +47,17 @@ import {
 import { normalizeAddress } from "./address.ts";
 import { browserUserAgent } from "./identity.ts";
 import { browserShortcut, type BrowserShortcut } from "./shortcuts.ts";
+import { availableDownloadPath, forceDownloadHeaders } from "./downloads.ts";
 
 /** 全局一个持久化 partition（2026-09-27 裁决：学校登录是跨工作区的身份，不按工作区分） */
 export const BROWSER_PARTITION = "persist:orbita-browser";
 
 /** 工具条高度（tab 条 + 导航行）。工具条页面的 CSS 用同一个值（`--browser-toolbar-height`） */
 export const BROWSER_TOOLBAR_HEIGHT = 78;
+/** 显示中的 tab 正在交接时，工具条下面多一条提示栏（CSS `--browser-handoff-height`） */
+export const BROWSER_HANDOFF_BAR_HEIGHT = 44;
+/** 交接等太久自动取消：agent 的一轮不能被一张没人理的卡永远挂着 */
+const HANDOFF_TIMEOUT_MS = 30 * 60_000;
 
 /** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开 */
 const PAGE_PREFERENCES = {
@@ -70,6 +80,26 @@ export interface BrowserTab {
   lastStatus: number | null;
   /** agent tab 所属会话的标题，工具条用来区分；异步取到后回填 */
   sessionTitle: string;
+  /** 正交给用户：agent 的工具调用在等它结束（占着 queue，agent 碰不到这一页） */
+  handoff: PendingHandoff | null;
+  /** 这个 tab 触发的下载，按开始时间排；agent 工具按「导航开始之后」认领自己触发的那次 */
+  downloads: DownloadRecord[];
+}
+
+interface PendingHandoff {
+  toolCallId: string;
+  reason: string;
+  settle: (outcome: BrowserHandoffOutcome) => void;
+}
+
+export interface DownloadRecord {
+  url: string;
+  path: string;
+  startedAt: number;
+  /** 下载结束（完成 / 取消 / 中断）时兑现 */
+  finished: Promise<{ state: "completed" | "cancelled" | "interrupted"; bytes: number }>;
+  /** 已经在某次工具结果里告诉过 agent */
+  reported: boolean;
 }
 
 export interface BrowserSandboxDeps {
@@ -79,6 +109,10 @@ export interface BrowserSandboxDeps {
   loadToolbar: (window: BrowserWindow) => void;
   /** 会话标题（agent tab 在工具条上的标签）；取不到回空串 */
   sessionTitle: (sessionId: string) => Promise<string>;
+  /** 会话工作台路径：agent tab 的下载落进 `<工作台>/downloads/` */
+  workbenchPath: (sessionId: string) => string;
+  /** 「你的」tab 的下载目录生效值（设置 › 浏览器，缺席 = 系统下载文件夹） */
+  userDownloadDir: () => Promise<string>;
   appName: string;
 }
 
@@ -94,6 +128,11 @@ export class BrowserSandbox {
   private readonly popups = new Set<BrowserWindow>();
   private quitting = false;
   private guardedSession: Session | null = null;
+  /**
+   * 「你的」tab 下载目录的缓存：will-download 里必须**同步**给出保存路径（晚了 Electron 就弹
+   * 保存框），读设置是异步的——建窗时读一次，用户改了（setUserDownloadDir）就更新。
+   */
+  private userDownloads = "";
 
   constructor(deps: BrowserSandboxDeps) {
     this.deps = deps;
@@ -101,14 +140,15 @@ export class BrowserSandbox {
 
   // ── 用户侧（主窗口 / 工具条）────────────────────────────────────────
 
-  /** 打开或聚焦沙盒窗口；带 url 就在「你的」tab 里打开并切过去 */
+  /**
+   * 打开或聚焦沙盒窗口，切到「你的」tab（带 url 就在那里打开）。RightRail 的地球是「我的浏览器」
+   * 入口：总回到你的 tab，不停在上次交接切过去的 agent tab 上——否则你在地址栏里打开的东西
+   * 会落进 agent 的 tab、下载也跟着进了那个会话的工作台（冒烟实测到的）。看 agent 的 tab 走交接卡或 tab 条。
+   */
   async open(url?: string): Promise<BrowserNavigateResult> {
     const window = await this.ensureWindow();
-    let result: BrowserNavigateResult = { ok: true };
-    if (url !== undefined) {
-      this.show(this.userTabId);
-      result = this.navigate(url);
-    }
+    this.show(this.userTabId);
+    const result: BrowserNavigateResult = url !== undefined ? this.navigate(url) : { ok: true };
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();
@@ -156,10 +196,41 @@ export class BrowserSandbox {
     this.destroyTab(tab);
   }
 
-  /** 会话删除：它的 agent tab 一并关掉 */
+  /** 会话删除：它的 agent tab 一并关掉（交接中的先按取消结掉，别让那次工具调用挂着） */
   closeSessionTab(sessionId: string): void {
     const tab = this.findAgentTab(sessionId);
-    if (tab !== undefined) this.destroyTab(tab);
+    if (tab === undefined) return;
+    this.settleHandoff(tab, "cancelled");
+    this.destroyTab(tab);
+  }
+
+  /** 交接卡「去浏览器完成」：打开窗口、切到那个 tab、提到最前 */
+  async showHandoff(toolCallId: string): Promise<boolean> {
+    const tab = this.findHandoffTab(toolCallId);
+    if (tab === undefined) return false;
+    const window = await this.ensureWindow();
+    this.show(tab.id);
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    return true;
+  }
+
+  /** 交接结束（交接卡或窗口提示栏上点的）。找不到 = 已经结束过了，幂等 */
+  resolveHandoff(toolCallId: string, outcome: BrowserHandoffOutcome): void {
+    const tab = this.findHandoffTab(toolCallId);
+    if (tab !== undefined) this.settleHandoff(tab, outcome);
+  }
+
+  /** 会话这一轮停了（用户点停止、或出错）：它的交接按取消结掉——等的那一方已经不在了 */
+  cancelSessionHandoff(sessionId: string): void {
+    const tab = this.findAgentTab(sessionId);
+    if (tab !== undefined) this.settleHandoff(tab, "cancelled");
+  }
+
+  /** 用户在设置里换了下载目录：之后的下载落到新目录 */
+  setUserDownloadDir(dir: string): void {
+    this.userDownloads = dir;
   }
 
   state(): BrowserWindowState {
@@ -213,6 +284,51 @@ export class BrowserSandbox {
     return this.tabs.get(tab.id) === tab && !tab.view.webContents.isDestroyed();
   }
 
+  /**
+   * 把 tab 交给用户，等用户交还。调用方在 runOnTab 里等它——交接期间这个 tab 的队列被占住，
+   * agent 的其它浏览器调用排在后面：这就是控制权令牌。窗口不自动抢焦点（用户可能正在打字）：
+   * 聊天里的交接卡是入口；应用不在前台时再发一条系统通知。
+   */
+  beginHandoff(tab: BrowserTab, toolCallId: string, reason: string): Promise<BrowserHandoffOutcome> {
+    this.settleHandoff(tab, "cancelled");
+    return new Promise<BrowserHandoffOutcome>((resolve) => {
+      const timer = setTimeout(() => this.settleHandoff(tab, "cancelled"), HANDOFF_TIMEOUT_MS);
+      tab.handoff = {
+        toolCallId,
+        reason,
+        settle: (outcome) => {
+          clearTimeout(timer);
+          resolve(outcome);
+        },
+      };
+      this.layout();
+      this.push();
+      if (BrowserWindow.getFocusedWindow() === null && Notification.isSupported()) {
+        const notice = new Notification({ title: this.deps.appName, body: reason, silent: false });
+        notice.on("click", () => void this.showHandoff(toolCallId));
+        notice.show();
+      }
+    });
+  }
+
+  /** 这个 tab 在 since 之后开始的下载（导航触发了下载时，navigate 用它认领结果） */
+  downloadSince(tab: BrowserTab, since: number): DownloadRecord | undefined {
+    return tab.downloads.find((record) => record.startedAt >= since);
+  }
+
+  /** 已完成、还没告诉过 agent 的下载：每次工具结果末尾报一次，报过就标记 */
+  async takeFinishedDownloads(tab: BrowserTab): Promise<string[]> {
+    const lines: string[] = [];
+    for (const record of tab.downloads) {
+      if (record.reported) continue;
+      const done = await Promise.race([record.finished, Promise.resolve(null)]);
+      if (done === null) continue;
+      record.reported = true;
+      lines.push(describeDownload(record, done));
+    }
+    return lines;
+  }
+
   // ── 生命周期 ────────────────────────────────────────────────────────
 
   /** 应用即将退出：此后关窗不再改写成隐藏 */
@@ -225,6 +341,11 @@ export class BrowserSandbox {
     for (const popup of this.popups) if (!popup.isDestroyed()) popup.destroy();
     this.popups.clear();
     for (const tab of this.tabs.values()) {
+      if (tab.handoff !== null) {
+        const handoff = tab.handoff;
+        tab.handoff = null;
+        handoff.settle("cancelled");
+      }
       // WebContentsView 的 webContents 不随窗口销毁而释放，要自己关
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     }
@@ -241,6 +362,20 @@ export class BrowserSandbox {
   private shownContents(): WebContents | null {
     const contents = this.tabs.get(this.shownTabId)?.view.webContents;
     return contents === undefined || contents.isDestroyed() ? null : contents;
+  }
+
+  private findHandoffTab(toolCallId: string): BrowserTab | undefined {
+    for (const tab of this.tabs.values()) if (tab.handoff?.toolCallId === toolCallId) return tab;
+    return undefined;
+  }
+
+  private settleHandoff(tab: BrowserTab, outcome: BrowserHandoffOutcome): void {
+    const handoff = tab.handoff;
+    if (handoff === null) return;
+    tab.handoff = null;
+    handoff.settle(outcome);
+    this.layout();
+    this.push();
   }
 
   private findAgentTab(sessionId: string): BrowserTab | undefined {
@@ -260,6 +395,7 @@ export class BrowserSandbox {
 
   private async createWindow(): Promise<BrowserWindow> {
     this.guardSession();
+    if (this.userDownloads === "") this.userDownloads = await this.deps.userDownloadDir();
     const window = new BrowserWindow({
       width: 1100,
       height: 800,
@@ -295,7 +431,16 @@ export class BrowserSandbox {
     const window = this.window;
     if (window === null) throw new Error("浏览器窗口不在");
     const view = new WebContentsView({ webPreferences: PAGE_PREFERENCES });
-    const tab: BrowserTab = { id: randomUUID(), owner, view, queue: Promise.resolve(), lastStatus: null, sessionTitle: "" };
+    const tab: BrowserTab = {
+      id: randomUUID(),
+      owner,
+      view,
+      queue: Promise.resolve(),
+      lastStatus: null,
+      sessionTitle: "",
+      handoff: null,
+      downloads: [],
+    };
     this.tabs.set(tab.id, tab);
     // 先垫到最底层：新 agent tab 不盖住用户正在看的那一页
     window.contentView.addChildView(view, 0);
@@ -319,6 +464,8 @@ export class BrowserSandbox {
   }
 
   private destroyTab(tab: BrowserTab): void {
+    // 交接中的 tab 被关：那次工具调用按取消结掉，不挂着
+    this.settleHandoff(tab, "cancelled");
     this.tabs.delete(tab.id);
     const window = this.window;
     if (window !== null && !window.isDestroyed()) window.contentView.removeChildView(tab.view);
@@ -334,6 +481,7 @@ export class BrowserSandbox {
     if (tab === undefined || window === null || window.isDestroyed()) return;
     this.shownTabId = tabId;
     window.contentView.addChildView(tab.view);
+    this.layout();
     this.push();
   }
 
@@ -341,7 +489,9 @@ export class BrowserSandbox {
     const window = this.window;
     if (window === null || window.isDestroyed()) return;
     const { width, height } = window.getContentBounds();
-    const bounds = { x: 0, y: BROWSER_TOOLBAR_HEIGHT, width, height: Math.max(0, height - BROWSER_TOOLBAR_HEIGHT) };
+    // 提示栏只在显示中的 tab 交接时出现：工具条变高，网页往下让——仍是上下分区，不重叠
+    const top = BROWSER_TOOLBAR_HEIGHT + (this.tabs.get(this.shownTabId)?.handoff != null ? BROWSER_HANDOFF_BAR_HEIGHT : 0);
+    const bounds = { x: 0, y: top, width, height: Math.max(0, height - top) };
     for (const tab of this.tabs.values()) tab.view.setBounds(bounds);
   }
 
@@ -361,7 +511,56 @@ export class BrowserSandbox {
     partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     partition.setPermissionCheckHandler(() => false);
     partition.setUserAgent(browserUserAgent(partition.getUserAgent(), this.deps.appName));
+    partition.on("will-download", (_event, item, contents) => this.onDownload(item, contents));
+    // agent tab 打开 PDF 这类文件：改成下载，不在 tab 里显示——agent 读不了查看器里的字，
+    // 下载进工作台它能用文件工具读。「你的」tab 不动，照常在查看器里看
+    partition.webRequest.onHeadersReceived((details, callback) => {
+      const agentTab =
+        details.resourceType === "mainFrame" &&
+        [...this.tabs.values()].some(
+          (tab) => tab.owner.kind === "agent" && !tab.view.webContents.isDestroyed() && tab.view.webContents.id === details.webContentsId,
+        );
+      const headers = agentTab ? forceDownloadHeaders(details.responseHeaders) : undefined;
+      callback(headers === undefined ? {} : { responseHeaders: headers });
+    });
     this.guardedSession = partition;
+  }
+
+  /**
+   * 下载落点：agent tab → `<会话工作台>/downloads/`；其余（「你的」tab、弹窗）→ 用户指定的目录。
+   * **保存路径必须在这个回调里同步给出**，否则 Electron 弹保存框——所以用缓存的目录与同步建目录。
+   * 同名不覆盖：加 (1)、(2)…
+   */
+  private onDownload(item: DownloadItem, contents: WebContents): void {
+    const tab = [...this.tabs.values()].find((candidate) => candidate.view.webContents === contents);
+    const dir =
+      tab?.owner.kind === "agent"
+        ? join(this.deps.workbenchPath(tab.owner.sessionId), "downloads")
+        : this.userDownloads !== ""
+          ? this.userDownloads
+          : undefined;
+    if (dir === undefined) return;
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch (cause) {
+      console.error(`[browser] 下载目录建不出来，退回系统保存框：${dir}`, cause);
+      return;
+    }
+    const path = availableDownloadPath(dir, item.getFilename());
+    item.setSavePath(path);
+    if (tab === undefined) return;
+    const record: DownloadRecord = {
+      url: item.getURL(),
+      path,
+      startedAt: Date.now(),
+      reported: false,
+      finished: new Promise((resolve) => {
+        item.once("done", (_event, state) => resolve({ state, bytes: item.getReceivedBytes() }));
+      }),
+    };
+    tab.downloads.push(record);
+    // 只留最近 20 条：一个会话下几百个文件时不让这张表无限长
+    if (tab.downloads.length > 20) tab.downloads.splice(0, tab.downloads.length - 20);
   }
 
   /**
@@ -440,5 +639,20 @@ function summarize(tab: BrowserTab): BrowserTabSummary {
     title: live && url !== "" ? contents.getTitle() : "",
     url,
     loading: live && contents.isLoading(),
+    ...(tab.handoff === null ? {} : { handoff: { toolCallId: tab.handoff.toolCallId, reason: tab.handoff.reason } }),
   };
+}
+
+export function describeDownload(
+  record: DownloadRecord,
+  done: { state: "completed" | "cancelled" | "interrupted"; bytes: number },
+): string {
+  if (done.state === "completed") return `Downloaded ${record.url} → ${record.path} (${formatBytes(done.bytes)})`;
+  return `Download ${done.state}: ${record.url}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }

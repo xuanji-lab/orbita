@@ -175,6 +175,16 @@ export const en = {
       `Agent tab${session === "" ? "" : ` · ${session}`}${page === "" ? "" : ` — ${page}`}`,
     newPage: "New page",
     closeTab: "Close this agent tab",
+    handoffKicker: "Needs you",
+    handoffWhere: "In the built-in browser",
+    handoffWaiting: "waiting for you",
+    handoffHandedBack: "handed back",
+    handoffCancelled: "cancelled",
+    handoffOpen: "Open the browser",
+    handoffDone: "Done, continue",
+    handoffGone: "This request has already ended.",
+    handoffBar: (reason: string) => `The agent is waiting for you: ${reason}`,
+    handoffBarDone: "Done, hand back",
   },
 
   drawer: {
@@ -327,6 +337,13 @@ export const en = {
     clearBrowserDataAction: "Clear all",
     clearBrowserDataConfirm: "Sign out of every site?",
     clearBrowserDataDone: "Cleared · the built-in browser is signed out everywhere",
+    browserDownloads: "Downloads",
+    downloadDirectory: "Download location",
+    downloadDirectoryInfo:
+      "Files you download in the built-in browser land here · the agent is told where it is and can organize it for you · files the agent downloads go to its session workbench",
+    changeDirectory: "Change…",
+    chooseDownloadDirectory: "Choose a download location",
+    openDownloadDirectory: "Open the download location",
   },
 
   themes: {

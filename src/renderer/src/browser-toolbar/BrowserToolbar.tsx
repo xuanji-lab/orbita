@@ -47,10 +47,40 @@ export function BrowserToolbar() {
 
 function Toolbar() {
   const [state, setState] = useState<BrowserWindowState>(EMPTY_STATE);
+  const handoff = state.tabs.find((tab) => tab.id === state.shownTabId)?.handoff;
   return (
-    <div className="browser-toolbar">
+    <div className="browser-toolbar" data-handoff={handoff !== undefined || undefined}>
       <TabStrip tabs={state.tabs} shownTabId={state.shownTabId} />
       <NavRow state={state} onState={setState} />
+      {handoff !== undefined && <HandoffBar toolCallId={handoff.toolCallId} reason={handoff.reason} />}
+    </div>
+  );
+}
+
+/**
+ * 交接提示栏：显示中的 tab 正交给用户时出现在导航行下面（主进程同步把网页往下让，
+ * 上下分区不重叠）。用户登录完人就在这里，就地交还——不必切回聊天去找那张卡。
+ */
+function HandoffBar(props: { toolCallId: string; reason: string }) {
+  const t = useT();
+  return (
+    <div className="browser-handoff" role="status">
+      <Icon name="user" size={14} />
+      <span className="browser-handoff-text">{t.browser.handoffBar(props.reason)}</span>
+      <button
+        type="button"
+        className="btn-accent browser-handoff-done"
+        onClick={() => void api.browser.resolveHandoff(props.toolCallId, "done")}
+      >
+        <Icon name="check" size={13} /> {t.browser.handoffBarDone}
+      </button>
+      <button
+        type="button"
+        className="browser-handoff-cancel"
+        onClick={() => void api.browser.resolveHandoff(props.toolCallId, "cancelled")}
+      >
+        {t.common.cancel}
+      </button>
     </div>
   );
 }

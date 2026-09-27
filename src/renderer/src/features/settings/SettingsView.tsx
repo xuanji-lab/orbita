@@ -455,10 +455,86 @@ function BrowserSettings() {
   const t = useT();
   return (
     <div className="set-page">
+      <SettingGroup label={t.settings.browserDownloads}>
+        <DownloadDirectoryRow />
+      </SettingGroup>
       <SettingGroup label={t.settings.browserData}>
         <ClearBrowserDataRow />
       </SettingGroup>
     </div>
+  );
+}
+
+/**
+ * 下载位置：「你的」tab 下载的文件落在这里（2026-09-27 wafo 裁决：用户指定目录，不弹保存框），
+ * agent 每轮被告知这个目录、可以帮着整理。与 Data directory 行同一个形状：路径从左截断 + 操作键。
+ */
+function DownloadDirectoryRow() {
+  const t = useT();
+  const [dir, setDir] = useState<{ kind: "loading" } | { kind: "ready"; path: string } | { kind: "error" }>({
+    kind: "loading",
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.browser
+      .downloadDir()
+      .then((path) => {
+        if (!cancelled) setDir({ kind: "ready", path });
+      })
+      .catch(() => {
+        if (!cancelled) setDir({ kind: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const report = (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause));
+  const change = () => {
+    void api.browser
+      .pickDownloadDir()
+      .then((picked) => {
+        setError(null);
+        if (picked !== null) setDir({ kind: "ready", path: picked });
+      })
+      .catch(report);
+  };
+  const reveal = () => {
+    void api.browser
+      .revealDownloadDir()
+      .then(() => setError(null))
+      .catch(report);
+  };
+
+  return (
+    <SettingRow
+      name={t.settings.downloadDirectory}
+      info={t.settings.downloadDirectoryInfo}
+      note={
+        error !== null && (
+          <span role="alert" className="set-row-error">
+            {error}
+          </span>
+        )
+      }
+    >
+      <span className="set-inline">
+        {dir.kind === "ready" && (
+          <code className="data-dir-path" title={dir.path}>
+            <bdi dir="ltr">{dir.path}</bdi>
+          </code>
+        )}
+        {dir.kind === "error" && <code className="data-dir-path-unavailable">{t.settings.unavailable}</code>}
+        <PanelButton onClick={reveal} title={t.settings.openDownloadDirectory}>
+          <Icon name="folder" size={14} /> {t.settings.reveal}
+        </PanelButton>
+        <PanelButton onClick={change} title={t.settings.chooseDownloadDirectory}>
+          {t.settings.changeDirectory}
+        </PanelButton>
+      </span>
+    </SettingRow>
   );
 }
 

@@ -15,7 +15,7 @@ import type { BrowserToolOutcome, BrowserToolRequest } from "../../shared/browse
 import { normalizeAddress } from "./address.ts";
 import { formatAxOutline, type AxNode } from "./page-outline.ts";
 import { extractScript, formatExtract, type PageRaw } from "./page-text.ts";
-import { pageUrl, type BrowserSandbox, type BrowserTab } from "./sandbox.ts";
+import { describeDownload, pageUrl, type BrowserSandbox, type BrowserTab } from "./sandbox.ts";
 
 /** 页面加载最多等这么久；到点不算失败，如实说「还在加载」（慢站的正文往往已经可读） */
 const NAVIGATE_TIMEOUT_MS = 45_000;
@@ -25,6 +25,8 @@ const CDP_TIMEOUT_MS = 10_000;
 const OBSERVE_DEFAULT_LINES = 250;
 const SCREENSHOT_MAX_WIDTH = 1280;
 const SCREENSHOT_JPEG_QUALITY = 75;
+/** 导航触发了下载：再等它下完，最多 2 分钟（论文 PDF 通常几秒到几十秒） */
+const DOWNLOAD_WAIT_MS = 120_000;
 
 export async function applyBrowserRequest(
   sandbox: BrowserSandbox,
@@ -32,11 +34,12 @@ export async function applyBrowserRequest(
   request: BrowserToolRequest,
 ): Promise<BrowserToolOutcome> {
   const tab = await sandbox.agentTab(sessionId);
-  return sandbox.runOnTab(tab, async () => {
+  const outcome = await sandbox.runOnTab(tab, async (): Promise<BrowserToolOutcome> => {
     if (!sandbox.isLive(tab)) return { ok: false, error: "The browser tab was closed. Call the tool again to reopen it." };
     const contents = tab.view.webContents;
     try {
-      if (request.action === "navigate") return await navigate(tab, contents, request.url);
+      if (request.action === "handoff") return await handoff(sandbox, tab, contents, request);
+      if (request.action === "navigate") return await navigate(sandbox, tab, contents, request.url);
       if (pageUrl(contents) === "") {
         return { ok: false, error: "Your browser tab has no page yet. Call browser_navigate first." };
       }
@@ -47,15 +50,55 @@ export async function applyBrowserRequest(
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
   });
+  // 这期间下完、还没告诉过 agent 的文件（导航以外触发的，或上一次没等到的）：附在结果末尾
+  if (!outcome.ok) return outcome;
+  const finished = await sandbox.takeFinishedDownloads(tab);
+  return finished.length === 0 ? outcome : { ...outcome, text: [outcome.text, ...finished].join("\n") };
 }
 
-async function navigate(tab: BrowserTab, contents: WebContents, input: string): Promise<BrowserToolOutcome> {
+async function handoff(
+  sandbox: BrowserSandbox,
+  tab: BrowserTab,
+  contents: WebContents,
+  request: Extract<BrowserToolRequest, { action: "handoff" }>,
+): Promise<BrowserToolOutcome> {
+  const result = await sandbox.beginHandoff(tab, request.toolCallId, request.reason);
+  const where = pageUrl(contents) === "" ? "The tab is still empty." : `Current page: ${pageUrl(contents)} (${contents.getTitle()}).`;
+  const text =
+    result === "done"
+      ? `The user handed the browser back after: "${request.reason}". ${where} ` +
+        "The page has probably changed — observe or extract it again before continuing."
+      : `The user did not complete: "${request.reason}" (they cancelled, or the turn was stopped). ${where} ` +
+        "Do not ask again right away; tell the user what you need and why.";
+  return { ok: true, text, card: { ...card(tab, contents), handoff: result } };
+}
+
+async function navigate(
+  sandbox: BrowserSandbox,
+  tab: BrowserTab,
+  contents: WebContents,
+  input: string,
+): Promise<BrowserToolOutcome> {
   const url = normalizeAddress(input);
   if (url === null) {
     return { ok: false, error: `"${input}" is not a web address. Only http(s) URLs or bare domains are allowed.` };
   }
   tab.lastStatus = null;
+  const since = Date.now();
   const outcome = await loadWithin(contents, url, NAVIGATE_TIMEOUT_MS);
+  // 链接指向文件：导航被下载替换，页面留在原处。loadURL 此时报 ERR_ABORTED 或 ERR_FAILED
+  // （实测：被 Content-Disposition 改成下载的 PDF 报 ERR_FAILED）——不能据此判失败，
+  // 先认领这次导航触发的下载、等它下完再回
+  const replaced = outcome.kind === "failed" || outcome.aborted;
+  const download = await claimDownload(sandbox, tab, since, replaced);
+  if (download !== undefined) {
+    const done = await Promise.race([download.finished, delay(DOWNLOAD_WAIT_MS).then(() => null)]);
+    if (done === null) {
+      return { ok: true, text: `Still downloading after ${DOWNLOAD_WAIT_MS / 1000}s: ${url} → ${download.path}`, card: card(tab, contents) };
+    }
+    download.reported = true;
+    return { ok: true, text: describeDownload(download, done), card: card(tab, contents) };
+  }
   if (outcome.kind === "failed") {
     return { ok: false, error: `Could not load ${url}: ${outcome.reason}` };
   }
@@ -77,27 +120,37 @@ async function navigate(tab: BrowserTab, contents: WebContents, input: string): 
  * ERR_ABORTED（-3）不是失败：它是这次导航被页面自己的后续导航替换了（JS 重定向、SSO 跳转），
  * 等新的那次加载落定再说。
  */
+/** 导航开始之后这个 tab 触发的下载；导航被替换（aborted）时下载事件可能稍晚一拍到，多等一小会 */
+async function claimDownload(sandbox: BrowserSandbox, tab: BrowserTab, since: number, aborted: boolean) {
+  const found = sandbox.downloadSince(tab, since);
+  if (found !== undefined || !aborted) return found;
+  await delay(1500);
+  return sandbox.downloadSince(tab, since);
+}
+
 async function loadWithin(
   contents: WebContents,
   url: string,
   timeoutMs: number,
-): Promise<{ kind: "loaded" } | { kind: "timeout" } | { kind: "failed"; reason: string }> {
+): Promise<{ kind: "loaded"; aborted: boolean } | { kind: "timeout"; aborted: boolean } | { kind: "failed"; reason: string }> {
   const deadline = Date.now() + timeoutMs;
   const loaded = contents.loadURL(url).then(
-    () => ({ kind: "loaded" as const }),
+    () => ({ kind: "loaded" as const, aborted: false }),
     (cause: unknown) => {
       const code = (cause as { code?: unknown }).code;
       if (code === "ERR_ABORTED") return { kind: "aborted" as const };
       return { kind: "failed" as const, reason: typeof code === "string" ? code : String(cause) };
     },
   );
-  const first = await Promise.race([loaded, delay(timeoutMs).then(() => ({ kind: "timeout" as const }))]);
+  const first = await Promise.race([loaded, delay(timeoutMs).then(() => ({ kind: "timeout" as const, aborted: false }))]);
   if (first.kind !== "aborted") return first;
   const rest = Math.max(0, deadline - Date.now());
-  if (!contents.isLoading()) return { kind: "loaded" };
+  if (!contents.isLoading()) return { kind: "loaded", aborted: true };
   return Promise.race([
-    new Promise<{ kind: "loaded" }>((resolve) => contents.once("did-stop-loading", () => resolve({ kind: "loaded" }))),
-    delay(rest).then(() => ({ kind: "timeout" as const })),
+    new Promise<{ kind: "loaded"; aborted: boolean }>((resolve) =>
+      contents.once("did-stop-loading", () => resolve({ kind: "loaded", aborted: true })),
+    ),
+    delay(rest).then(() => ({ kind: "timeout" as const, aborted: true })),
   ]);
 }
 
