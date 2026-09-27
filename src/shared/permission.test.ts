@@ -1,8 +1,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
   decidePermission,
+  isBrowserReadTool,
   isChannelTool,
   isReadOnlyTool,
   PERMISSION_MODES,
@@ -95,5 +97,21 @@ describe("isReadOnlyTool", () => {
     assert.equal(isReadOnlyTool("bash"), false);
     // 名字里带 read 但不是只读工具，不能被误判
     assert.equal(isReadOnlyTool("read_and_write"), false);
+  });
+});
+
+describe("浏览器只读四件（BROWSER_READ_TOOLS）", () => {
+  test("三档一律放行，manual 也不问", () => {
+    for (const tool of BROWSER_READ_TOOLS) {
+      for (const mode of PERMISSION_MODES) {
+        assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode} ${tool}`);
+      }
+    }
+  });
+  test("不混进 READ_ONLY_TOOLS；名单外的 browser_* 不沾光", () => {
+    for (const tool of BROWSER_READ_TOOLS) assert.equal(isReadOnlyTool(tool), false, tool);
+    assert.equal(isBrowserReadTool("browser_click"), false);
+    assert.deepEqual(decidePermission("plan", "browser_click").behavior, "deny");
+    assert.deepEqual(decidePermission("manual", "browser_click").behavior, "ask");
   });
 });

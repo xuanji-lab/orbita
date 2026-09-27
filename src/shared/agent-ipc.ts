@@ -18,6 +18,7 @@ import type { CompactedRecord } from "./session.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
+import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type {
   ChannelDelivery,
   ChannelMessage,
@@ -590,6 +591,8 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
+  /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
+  | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
@@ -719,6 +722,12 @@ export type AgentEvent =
    * 读错了组）。
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
+  /**
+   * 受管浏览器：agent 的浏览器工具请求。**浏览器实例在主进程**（WebContentsView 只能在
+   * 主进程建），agent 进程只剩「工具定义 → requestId 问答」一层薄包装——换内核只重写那层。
+   * 作用于该会话自己的 agent tab（没有就建）。回 browserResult。
+   */
+  | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
