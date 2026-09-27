@@ -10,7 +10,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
-import { createPdfTools, PDF_MAX_PAGES_PER_CALL } from "./pdf-tools.ts";
+import { createPdfTools, PDF_IMAGE_MAX_PAGES_PER_CALL, PDF_MAX_PAGES_PER_CALL } from "./pdf-tools.ts";
 
 /** 夹具里的每页正文要够长（阈值 PDF_NO_TEXT_LAYER_MIN_CHARS 以上），除非在测扫描件 */
 const LONG_LINE = "The quick brown fox jumps over the lazy dog near the river bank every morning.";
@@ -97,6 +97,23 @@ const run = async (path: string, args: Record<string, unknown> = {}): Promise<st
   return result.content[0]!.type === "text" ? result.content[0]!.text : "";
 };
 
+/** 视觉模型的 ctx mock：ExtensionContext 只用到 model.input（visionCapable 的唯一读取面） */
+const VISION_CTX = { model: { input: ["text", "image"] } } as never;
+
+/** 跑一轮并保留完整 content（页图模式断言 image 块用） */
+const runFull = async (
+  path: string,
+  args: Record<string, unknown>,
+  ctx: unknown,
+): Promise<{ blocks: { type: string; text?: string }[] }> => {
+  const result = await tool.execute("call-1", { path, ...args }, undefined, undefined, ctx as never);
+  return {
+    blocks: result.content.map((block) =>
+      block.type === "text" ? { type: "text", text: block.text } : { type: block.type },
+    ),
+  };
+};
+
 describe("read_pdf", () => {
   test("整读：≤ limit 的文件一次给全，头注报总页数与范围", async () => {
     const text = await run("three-pages.pdf");
@@ -127,8 +144,46 @@ describe("read_pdf", () => {
     assert.ok(text.includes(LONG_LINE));
   });
 
-  test("扫描件（无文本层）报错，不当空文件放行", async () => {
+  test("扫描件 + 非视觉模型：无文本层仍报错（图给了也看不见）", async () => {
     await assert.rejects(run("scanned.pdf"), /no text layer/);
+  });
+
+  test("页图模式：images+视觉模型 → 文本在前、每页一图殿后（PNG base64）", async () => {
+    const { blocks } = await runFull("three-pages.pdf", { images: true, limit: 2 }, VISION_CTX);
+    assert.equal(blocks[0]!.type, "text");
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(text.includes("Showing pages 1-2 of 3; page images follow the text."), text.slice(0, 120));
+    assert.ok(text.includes("--- Page 1 ---"));
+    assert.equal(blocks.length, 3);
+    assert.equal(blocks[1]!.type, "image");
+    assert.equal(blocks[2]!.type, "image");
+  });
+
+  test("页图模式页数收紧：25 页文档 limit 100 → 只给前 5 页", async () => {
+    const { blocks } = await runFull("mixed.pdf", { images: true, limit: 100 }, VISION_CTX);
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(
+      text.includes(`Showing pages 1-${PDF_IMAGE_MAX_PAGES_PER_CALL} of 25; page images follow the text. Use offset=${PDF_IMAGE_MAX_PAGES_PER_CALL + 1} to continue.`),
+      text.slice(0, 160),
+    );
+    assert.equal(blocks.length, PDF_IMAGE_MAX_PAGES_PER_CALL + 1);
+  });
+
+  test("扫描件 + 视觉模型：不报错，自动转页图", async () => {
+    const { blocks } = await runFull("scanned.pdf", {}, VISION_CTX);
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(text.includes("Scanned PDF with no text layer"), text.slice(0, 120));
+    assert.ok(text.includes("Rendered pages 1-2 as images."), text.slice(0, 160));
+    assert.equal(blocks.length, 3);
+    assert.equal(blocks[1]!.type, "image");
+  });
+
+  test("images + 非视觉模型：降级纯文本 + 省略说明（pi read 读图同款文案）", async () => {
+    const { blocks } = await runFull("three-pages.pdf", { images: true }, undefined);
+    assert.equal(blocks.length, 1);
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(text.includes("Current model does not support images"), text.slice(0, 200));
+    assert.ok(text.includes("--- Page 1 ---"));
   });
 
   test("非 PDF 报错并指回 read 工具", async () => {
