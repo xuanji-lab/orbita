@@ -315,7 +315,10 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
+    // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份展开，
+    // 否则 /skill: 在这条路径以字面文本喂给模型
+    const text = await expandSkillInvocation(input.text, input.workspaceId);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
