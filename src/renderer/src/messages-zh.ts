@@ -591,6 +591,7 @@ export const zh: Messages = {
     noMessages: "还没有消息。发出第一条就开始了。",
     backToParent: (title) => `返回「${title}」`,
     renameTask: "重命名任务",
+    scrollToBottom: "滚动到底部",
     scanningLabel: "正在扫描遗留事项…",
     markTaskDone: "标记任务完成",
     reopenTask: "重新打开任务",

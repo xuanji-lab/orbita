@@ -147,6 +147,7 @@ export function Drawer(props: {
               session={props.view}
               providersError={props.providersError}
               homeBare={activeTab === NEW_TASK_TAB && props.view.sessionId === null}
+              scrollToEnd
             />
           )}
         </div>

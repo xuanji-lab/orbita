@@ -152,6 +152,7 @@ export function SubSessionsPanel(props: {
             providersError={props.providersError}
             hideComposer
             onOpenOwnChannel={openOwnChannel}
+            scrollToEnd
           />
         </div>
         {child === undefined && (

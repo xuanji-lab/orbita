@@ -645,6 +645,7 @@ export const en = {
     noMessages: "No messages yet. Send the first one to start.",
     backToParent: (title: string) => `Back to "${title}"`,
     renameTask: "Rename task",
+    scrollToBottom: "Scroll to bottom",
     scanningLabel: "Scanning for leftover items…",
     markTaskDone: "Mark task done",
     reopenTask: "Reopen task",

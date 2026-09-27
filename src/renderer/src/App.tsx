@@ -560,6 +560,8 @@ export function App() {
                 onOpenParent={openParent}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
+                scrollToEnd
+                scrollToEndHotkey
               />
             )}
           </div>
