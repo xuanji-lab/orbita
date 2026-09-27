@@ -8,10 +8,12 @@ import { randomUUID } from "node:crypto";
  * skillWriteRequest / mcpWriteRequest / readTaskRequest——本类不认识具体形状，
  * 只管配对、超时与「迟到回执丢弃」。
  *
- * 超时兜底：工具调用不悬死（主进程崩了的话，30 秒后模型拿到一句人话而不是永远
- * 转圈）。三个消息对的失败分支同形（`{ ok: false, error }`），超时值借道它回。
+ * 超时兜底：工具调用不悬死（主进程崩了的话，超时后模型拿到一句人话而不是永远
+ * 转圈）。各消息对的失败分支同形（`{ ok: false, error }`），超时值借道它回。
+ * 默认 30 秒；调用方可按请求放宽——浏览器导航要等页面加载，30 秒对慢站不够，
+ * 而主进程侧有自己更短的超时，这里只是「主进程失联」的兜底。
  */
-const REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export class RequestBroker {
   private readonly pending = new Map<string, { settle: (result: unknown) => void; timer: NodeJS.Timeout }>();
@@ -22,13 +24,13 @@ export class RequestBroker {
   }
 
   /** 发一个请求事件并等回执。结果形状由调用方声明——各消息对的载荷不同。 */
-  request<T>(event: Record<string, unknown>): Promise<T> {
+  request<T>(event: Record<string, unknown>, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<T> {
     const requestId = randomUUID();
     return new Promise<T>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        resolve({ ok: false, error: "主进程没有在 30 秒内回执（进程可能已退出）" } as T);
-      }, REQUEST_TIMEOUT_MS);
+        resolve({ ok: false, error: `主进程没有在 ${Math.round(timeoutMs / 1000)} 秒内回执（进程可能已退出）` } as T);
+      }, timeoutMs);
       this.pending.set(requestId, { settle: resolve as (result: unknown) => void, timer });
       this.sendEvent({ ...event, requestId });
     });

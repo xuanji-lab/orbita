@@ -3,7 +3,7 @@
  * 浏览器实例全在主进程（sandbox.ts）；这里只把通道接到它上面。
  */
 import { ipcMain } from "electron";
-import { browserChannels, type BrowserNavigateResult, type BrowserPageState } from "../../shared/browser.ts";
+import { browserChannels, type BrowserNavigateResult, type BrowserWindowState } from "../../shared/browser.ts";
 import type { BrowserSandbox } from "./sandbox.ts";
 
 export function registerBrowserIpc(sandbox: BrowserSandbox): void {
@@ -21,5 +21,11 @@ export function registerBrowserIpc(sandbox: BrowserSandbox): void {
   ipcMain.handle(browserChannels.browserBack, (): void => sandbox.back());
   ipcMain.handle(browserChannels.browserForward, (): void => sandbox.forward());
   ipcMain.handle(browserChannels.browserReloadOrStop, (): void => sandbox.reloadOrStop());
-  ipcMain.handle(browserChannels.browserGetState, (): BrowserPageState => sandbox.state());
+  ipcMain.handle(browserChannels.browserSelectTab, (_event, tabId: unknown): void => {
+    if (typeof tabId === "string") sandbox.selectTab(tabId);
+  });
+  ipcMain.handle(browserChannels.browserCloseTab, (_event, tabId: unknown): void => {
+    if (typeof tabId === "string") sandbox.closeTab(tabId);
+  });
+  ipcMain.handle(browserChannels.browserGetState, (): BrowserWindowState => sandbox.state());
 }

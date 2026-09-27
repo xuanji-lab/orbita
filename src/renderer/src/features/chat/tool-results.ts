@@ -1086,6 +1086,9 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
       return str("name") ?? str("slug");
     case "add_mcp_server":
       return str("name");
+    // 受管浏览器：导航说去哪；读取类作用于当前页，入参里没有值得摘的，交给结果摘要
+    case "browser_navigate":
+      return str("url");
     default:
       return null;
   }

@@ -33,6 +33,7 @@ import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
+import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { mainWindows } from "./window/main-windows.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
@@ -202,6 +203,23 @@ void app.whenReady().then(async () => {
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
   const workspaces = new WorkspaceStore(configDir, devDirs?.orbitaRoot);
+  /*
+   * 受管浏览器（沙盒窗口懒创建，见 browser/sandbox.ts）。关窗 = 隐藏；应用退出前先
+   * prepareQuit，退出时的关窗才不会被改写成隐藏；最后一个主窗口关闭就一并销毁——
+   * 否则 Windows / Linux 上隐藏的沙盒窗口让应用关不掉（window/main-windows.ts）。
+   */
+  const browserSandbox = new BrowserSandbox({
+    toolbarWindowOptions: async () => {
+      const current = await settings.read();
+      return { title: app.getName(), webPreferences: rendererPreferences(current.theme, current.language) };
+    },
+    loadToolbar: (window) => loadRendererPage(window, "browser-toolbar.html"),
+    sessionTitle: async (sessionId) => (await sessions.readMeta(sessionId))?.title ?? "",
+    appName: app.getName(),
+  });
+  registerBrowserIpc(browserSandbox);
+  mainWindows.onLastClosed(() => browserSandbox.dispose());
+
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
@@ -260,6 +278,18 @@ void app.whenReady().then(async () => {
     // 通道账本一并传进去：子会话每一轮的开头是通道消息，正文在那里。
     // 任何路径都必须回执（同 delegateRequest）：读盘抛错没有 catch 的话，agent 进程里的
     // read_task 调用永远挂着
+    // 受管浏览器：agent 的浏览器工具——浏览器在主进程（browser/sandbox.ts）。同样任何路径都回执
+    if (event.type === "browserRequest") {
+      void applyBrowserRequest(browserSandbox, event.sessionId, event.request)
+        .then((outcome) => agentHost.answerBrowser(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerBrowser(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "readTaskRequest") {
       void applyReadTask(sessions, event, workspaces, channels)
         .then((result) => agentHost.answerReadTask(event.requestId, result))
@@ -288,7 +318,16 @@ void app.whenReady().then(async () => {
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
   const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
-  registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost, carryovers);
+  registerSessionIpc(
+    sessions,
+    (id) => {
+      agentHost.disposeSession(id);
+      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉
+      browserSandbox.closeSessionTab(id);
+    },
+    agentHost,
+    carryovers,
+  );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
@@ -353,21 +392,6 @@ void app.whenReady().then(async () => {
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
-  /*
-   * 受管浏览器（沙盒窗口懒创建，见 browser/sandbox.ts）。关窗 = 隐藏；应用退出前先
-   * prepareQuit，退出时的关窗才不会被改写成隐藏；最后一个主窗口关闭就一并销毁——
-   * 否则 Windows / Linux 上隐藏的沙盒窗口让应用关不掉（window/main-windows.ts）。
-   */
-  const browserSandbox = new BrowserSandbox({
-    toolbarWindowOptions: async () => {
-      const current = await settings.read();
-      return { title: app.getName(), webPreferences: rendererPreferences(current.theme, current.language) };
-    },
-    loadToolbar: (window) => loadRendererPage(window, "browser-toolbar.html"),
-    appName: app.getName(),
-  });
-  registerBrowserIpc(browserSandbox);
-  mainWindows.onLastClosed(() => browserSandbox.dispose());
 
   app.on("before-quit", () => {
     browserSandbox.prepareQuit();

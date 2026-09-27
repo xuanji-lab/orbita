@@ -1370,6 +1370,14 @@ describe("toolCallSummary —— read_task（B-1）", () => {
   });
 });
 
+describe("toolCallSummary —— 受管浏览器", () => {
+  test("browser_navigate 摘要是 url；读取类没有入参摘要", () => {
+    assert.equal(toolCallSummary("browser_navigate", { url: "scopus.com" }), "scopus.com");
+    assert.equal(toolCallSummary("browser_extract", { offset: 100 }), null);
+    assert.equal(toolCallSummary("browser_screenshot", {}), null);
+  });
+});
+
 describe("toolCallSummary —— delegate（子会话 PR4a）", () => {
   test("派出卡任务预览复用同一条摘要（同 read_task 的 task 字段）", () => {
     assert.equal(toolCallSummary("delegate", { title: "x", task: "审查分支 3" }), "审查分支 3");

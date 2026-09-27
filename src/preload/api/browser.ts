@@ -2,10 +2,10 @@
  * 受管浏览器的 contextBridge 面 —— 四层契约的第 3 层。
  *
  * 两个调用方共用这一个面（同一个 preload）：主窗口用 open / clearData，沙盒窗口的工具条
- * 用其余的导航与状态订阅。网页本身不加载 preload，这里的任何方法它都碰不到。
+ * 用其余的导航、tab 切换与状态订阅。agent 的浏览器工具不走这里（agent 进程 ↔ 主进程直连）。网页本身不加载 preload，这里的任何方法它都碰不到。
  */
 import { ipcRenderer } from "electron";
-import { browserChannels, type BrowserNavigateResult, type BrowserPageState } from "../../shared/browser.ts";
+import { browserChannels, type BrowserNavigateResult, type BrowserWindowState } from "../../shared/browser.ts";
 
 export const browserApi = {
   /** 打开或聚焦沙盒窗口；带 url 就导航过去（不是网址时回 ok:false，窗口照样打开） */
@@ -17,9 +17,11 @@ export const browserApi = {
   back: (): Promise<void> => ipcRenderer.invoke(browserChannels.browserBack),
   forward: (): Promise<void> => ipcRenderer.invoke(browserChannels.browserForward),
   reloadOrStop: (): Promise<void> => ipcRenderer.invoke(browserChannels.browserReloadOrStop),
-  getState: (): Promise<BrowserPageState> => ipcRenderer.invoke(browserChannels.browserGetState),
-  onState: (listener: (state: BrowserPageState) => void): (() => void) => {
-    const handler = (_e: unknown, state: BrowserPageState) => listener(state);
+  selectTab: (tabId: string): Promise<void> => ipcRenderer.invoke(browserChannels.browserSelectTab, tabId),
+  closeTab: (tabId: string): Promise<void> => ipcRenderer.invoke(browserChannels.browserCloseTab, tabId),
+  getState: (): Promise<BrowserWindowState> => ipcRenderer.invoke(browserChannels.browserGetState),
+  onState: (listener: (state: BrowserWindowState) => void): (() => void) => {
+    const handler = (_e: unknown, state: BrowserWindowState) => listener(state);
     ipcRenderer.on(browserChannels.browserState, handler);
     return () => ipcRenderer.removeListener(browserChannels.browserState, handler);
   },

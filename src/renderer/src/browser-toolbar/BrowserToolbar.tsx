@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { effectiveLanguage, type Language, type ThemePreference } from "@shared/settings";
-import type { BrowserPageState } from "@shared/browser";
+import type { BrowserTabSummary, BrowserWindowState } from "@shared/browser";
 import { api } from "../api.ts";
 import { LocaleContext, useT } from "../locale.ts";
 import { useTheme } from "../useTheme.ts";
 import { Icon } from "../shell/Icon";
 import { IconButton } from "../shell/IconButton";
 
-const EMPTY_PAGE: BrowserPageState = { url: "", title: "", loading: false, canGoBack: false, canGoForward: false };
+const EMPTY_STATE: BrowserWindowState = {
+  tabs: [],
+  shownTabId: "",
+  page: { url: "", title: "", loading: false, canGoBack: false, canGoForward: false },
+};
 
 /**
- * 沙盒窗口的工具条：后退 / 前进 / 刷新（加载中变停止）/ 地址栏。
+ * 沙盒窗口的工具条：上面一行 tab 条（「你的」tab + 各会话的 agent tab），下面一行
+ * 后退 / 前进 / 刷新（加载中变停止）/ 地址栏，作用于正在显示的 tab。
  *
  * 主题与语言：首帧读建窗参数；之后窗口每次获得焦点重读一次设置——用户在主窗口改了
  * 主题，切到浏览器窗口时跟上。不为这件事另开一条推送通道。
@@ -35,14 +40,70 @@ export function BrowserToolbar() {
   const resolved = useTheme(preference, language);
   return (
     <LocaleContext.Provider value={effectiveLanguage(resolved, language)}>
-      <ToolbarRow />
+      <Toolbar />
     </LocaleContext.Provider>
   );
 }
 
-function ToolbarRow() {
+function Toolbar() {
+  const [state, setState] = useState<BrowserWindowState>(EMPTY_STATE);
+  return (
+    <div className="browser-toolbar">
+      <TabStrip tabs={state.tabs} shownTabId={state.shownTabId} />
+      <NavRow state={state} onState={setState} />
+    </div>
+  );
+}
+
+/**
+ * tab 条。agent tab 用会话标题标注（bot 图标），「你的」tab 用地球图标、不可关。
+ * 状态用图标 + 文字说话，颜色只是第二信号（设计系统）。
+ */
+function TabStrip(props: { tabs: readonly BrowserTabSummary[]; shownTabId: string }) {
   const t = useT();
-  const [page, setPage] = useState<BrowserPageState>(EMPTY_PAGE);
+  return (
+    <div className="browser-tabs" role="tablist" aria-label={t.browser.tabs}>
+      {props.tabs.map((tab) => {
+        const agent = tab.owner.kind === "agent";
+        const session = tab.owner.kind === "agent" ? tab.owner.sessionTitle : "";
+        const label = agent ? t.browser.agentTab(session) : t.browser.yourTab;
+        const page = tab.title !== "" ? tab.title : tab.url;
+        const shown = tab.id === props.shownTabId;
+        return (
+          <div key={tab.id} className="browser-tab" data-shown={shown || undefined}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={shown}
+              className="browser-tab-main"
+              title={agent ? t.browser.agentTabTip(session, page) : t.browser.yourTabTip}
+              onClick={() => void api.browser.selectTab(tab.id)}
+            >
+              <Icon
+                name={tab.loading ? "loader-circle" : agent ? "bot" : "globe"}
+                size={12}
+                spin={tab.loading}
+              />
+              <span className="browser-tab-label">{label}</span>
+              {agent && page !== "" && <span className="browser-tab-page">{page}</span>}
+              {!agent && page === "" && <span className="browser-tab-page">{t.browser.newPage}</span>}
+            </button>
+            {agent && (
+              <IconButton label={t.browser.closeTab} size={20} onClick={() => void api.browser.closeTab(tab.id)}>
+                <Icon name="x" size={11} />
+              </IconButton>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function NavRow(props: { state: BrowserWindowState; onState: (state: BrowserWindowState) => void }) {
+  const t = useT();
+  const { onState } = props;
+  const page = props.state.page;
   /** null = 没在编辑，地址栏显示页面真实地址；字符串 = 用户正在打的字 */
   const [draft, setDraft] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
@@ -57,15 +118,15 @@ function ToolbarRow() {
 
   useEffect(() => {
     let alive = true;
-    const offState = api.browser.onState(setPage);
+    const offState = api.browser.onState(onState);
     const offFocus = api.browser.onFocusAddress(focusAddress);
     void api.browser
       .getState()
       .then((state) => {
         if (!alive) return;
-        setPage(state);
+        onState(state);
         // 空白页：此刻用户要做的只有输入网址这一件事
-        if (state.url === "") focusAddress();
+        if (state.page.url === "") focusAddress();
       })
       .catch(() => undefined);
     return () => {
@@ -73,7 +134,13 @@ function ToolbarRow() {
       offState();
       offFocus();
     };
-  }, [focusAddress]);
+  }, [focusAddress, onState]);
+
+  // 切了 tab：放弃正在打的字（它属于上一个 tab），地址栏回到新 tab 的真实地址
+  useEffect(() => {
+    setDraft(null);
+    setInvalid(false);
+  }, [props.state.shownTabId]);
 
   const submit = (event: React.FormEvent): void => {
     event.preventDefault();
@@ -93,7 +160,7 @@ function ToolbarRow() {
   };
 
   return (
-    <div className="browser-toolbar">
+    <div className="browser-nav">
       <IconButton label={t.browser.back} size={28} disabled={!page.canGoBack} onClick={() => void api.browser.back()}>
         <Icon name="arrow-left" size={15} />
       </IconButton>

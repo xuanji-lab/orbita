@@ -13,6 +13,7 @@ import type {
   ReadTaskOutcome,
 } from "../../shared/agent-ipc.ts";
 import type { ChannelDelivery } from "../../shared/channel.ts";
+import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -331,6 +332,22 @@ export class AgentHostCore {
    */
   steer(sessionId: string, text: string, delivery: ChannelDelivery): void {
     this.post({ type: "steer", sessionId, text, delivery });
+  }
+
+  /** 受管浏览器：browserRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerBrowser(requestId: string, outcome: BrowserToolOutcome): void {
+    this.child?.postMessage({
+      type: "browserResult",
+      requestId,
+      ...(outcome.ok
+        ? {
+            ok: true as const,
+            text: outcome.text,
+            card: outcome.card,
+            ...(outcome.image === undefined ? {} : { image: outcome.image }),
+          }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
   }
 
   /** 子会话：delegateRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */

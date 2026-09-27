@@ -5,7 +5,9 @@
  * 就贴在这条下面，差一像素就会压住工具条的下边线，或露出一条缝。
  */
 :root {
-  --browser-toolbar-height: 44px;
+  /* tab 条 34 + 导航行 44 */
+  --browser-toolbar-height: 78px;
+  --browser-tabs-height: 34px;
 }
 
 /* 沙盒窗口不透明：不走主窗口 macOS 的透明 body（那条规则按 data-platform 生效，这里不设它） */
@@ -16,11 +18,90 @@ body {
 .browser-toolbar {
   height: var(--browser-toolbar-height);
   box-sizing: border-box;
+  display: grid;
+  grid-template-rows: var(--browser-tabs-height) minmax(0, 1fr);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* ===== tab 条 ===== */
+.browser-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.browser-tab {
+  flex: 0 1 220px;
+  min-width: 96px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-inline-end: 2px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  color: var(--color-text-secondary);
+}
+
+.browser-tab:hover {
+  background: var(--color-bg-hover);
+}
+
+.browser-tab[data-shown] {
+  background: var(--color-bg-panel);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.browser-tab-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
   display: flex;
   align-items: center;
   gap: var(--space-1);
   padding: 0 var(--space-2);
-  border-bottom: 1px solid var(--color-border-subtle);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  text-align: start;
+  cursor: pointer;
+}
+
+.browser-tab-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-bold);
+}
+
+.browser-tab-page {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+}
+
+/* ===== 导航行 ===== */
+.browser-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-2);
 }
 
 .browser-toolbar-form {

@@ -2737,6 +2737,12 @@ function toolIcon(toolName: string): IconName {
       return "folder";
     case "read_task":
       return "book-open";
+    // 受管浏览器：导航与读取都是「在网上」，截图单独一个相机形状不值得——同一枚地球
+    case "browser_navigate":
+    case "browser_observe":
+    case "browser_extract":
+    case "browser_screenshot":
+      return "globe";
     default:
       // MCP 工具（mcp__server__tool）：专属插头图标——外部能力，与内置工具一眼区分
       return parseQualifiedToolName(toolName) !== null ? "plug" : "wrench";

@@ -167,6 +167,14 @@ export const en = {
     address: "Address",
     addressPlaceholder: "Enter a web address",
     notAnAddress: "Not a web address — include a domain, like scopus.com",
+    tabs: "Browser tabs",
+    yourTab: "Your tab",
+    yourTabTip: "Your tab — sign in to sites here; the agent shares the sign-in",
+    agentTab: (session: string) => (session === "" ? "Agent" : session),
+    agentTabTip: (session: string, page: string) =>
+      `Agent tab${session === "" ? "" : ` · ${session}`}${page === "" ? "" : ` — ${page}`}`,
+    newPage: "New page",
+    closeTab: "Close this agent tab",
   },
 
   drawer: {
