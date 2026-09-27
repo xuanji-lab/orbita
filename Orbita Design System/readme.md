@@ -151,7 +151,9 @@ card colour — ZCode's popover recipe). The defects of the old Warm grounds wer
 day: green-tailed grounds (`#191c1d` / `#232525`) and cream ink (`#d6d5cf`) — the sources of the
 murky feel (gruvbox's full cream `#ebdbb2` had already been cut twice before). **Graphite** (石墨,
 added 2026-09-27) is the ZCode-exact neutral: `#202020 / #161616 / #2b2b2b`, ink
-`#f2f2f2 / #a6a6a6 / #6e6e6e`. **Ink** keeps the near-black identity with the same proportions —
+`#f2f2f2 / #a6a6a6 / #808080` (tertiary lifted from `#6e6e6e` the same day — micro captions on the
+well read at 3.6:1, below the 4.5 floor; guarded by `dark-contrast.test.ts`). **Ink** keeps the
+near-black identity with the same proportions —
 `#1b1b1b / #141414 / #242424` (the well lightened one step the same day; it must stay at or below
 Graphite's `#161616`) — and **stays the dark landing of `system`**. Both are manual choices and
 take the yellow accent (`#d6c245`) on `--color-accent-fg`; selection washes at `.08` — carried by
