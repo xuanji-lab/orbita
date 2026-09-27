@@ -1074,11 +1074,14 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     [records, turnActive],
   );
   // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
-  // 有工具还在跑时全部禁用——它的结果没齐，此刻切出去的上下文是畸形的。
-  // 锚点算在**大折叠视图**上：锚点的正文永远在折叠外面，按钮跟着正文走。
+  // 本轮还在跑（turnActive）时末尾候选不确认——复制/分支行等回答结束再出现；速度不在此列：
+  // 实时速度本就在 Responding 行（估算，每秒一跳），这里整行藏着的是落定后的 BranchRow
+  // （复制 + 分支 + 随记录落盘的真值速度）。有工具还在跑时分支按钮全部禁用（历史锚点
+  // 同）——它的结果没齐，此刻切出去的上下文是畸形的。锚点算在**大折叠视图**上：锚点的
+  // 正文永远在折叠外面，按钮跟着正文走。
   const branchRows = useMemo(
-    () => branchAnchorEntries(branchAnchorIds(records, toolResults), turnView),
-    [records, toolResults, turnView],
+    () => branchAnchorEntries(branchAnchorIds(records, toolResults, turnActive), turnView),
+    [records, toolResults, turnActive, turnView],
   );
   const toolsRunning = useMemo(
     () => transcript.some((item) => item.role === "tool" && item.status === "running"),
@@ -2503,7 +2506,8 @@ const ZOOM_BUTTON_STYLE: React.CSSProperties = {
  * 分支旁的复制图标（usage-speed-X 同行）：拷该回答的正文（markdown 原样，只含 text 块），
  * 成功后图标换对勾 1.2s——复制成功用图标换字形，不用颜色（ActionRail 同款）。
  * 再右边是这条回答的生成速度：adapter 挂在终态帧上的真值，随记录落盘、重开即回；
- * 过不了噪音门的回答没有这个字段，也就不显示。
+ * 过不了噪音门的回答没有这个字段，也就不显示。**流式中的实时速度不在这行**——
+ * 它在 Responding 行（估算，每秒一跳），落定后被这里的真值顶替（message-speed.ts）。
  */
 function BranchRow(props: {
   anchorItemId: string;
