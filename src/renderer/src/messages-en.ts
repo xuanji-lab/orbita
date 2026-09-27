@@ -303,7 +303,6 @@ export const en = {
   themes: {
     system: "System",
     light: "Light",
-    dark: "Warm",
     graphite: "Graphite",
     black: "Ink",
     copybook: "Copybook",
