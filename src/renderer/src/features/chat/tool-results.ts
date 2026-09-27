@@ -23,6 +23,7 @@ import type { CompactedRecord, SessionRecord } from "@shared/session";
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
+import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
 import { isThinkingLevel } from "../../../../shared/thinking.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -462,10 +463,28 @@ export interface TurnStats {
   byTool: ReadonlyArray<TurnToolStat>;
 }
 
+/**
+ * 折叠统计行的「统计词汇」（2026-09-27 裁决）：read SKILL.md 记作 skill、mcp__ 名
+ * 记作 mcp——按「家族」计数，不逐 server/tool 展开名字（多台 server 会撑爆一行）。
+ * TurnToolStat.toolName 装的是它，不总是真实工具名。
+ */
+export function rollupToolKey(
+  toolName: string,
+  input: unknown,
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
+): string {
+  if (toolName === "read") {
+    const path = (input as Record<string, unknown> | null)?.["path"];
+    if (typeof path === "string" && skillForReadPath(path, skills) !== null) return "skill";
+  }
+  return parseQualifiedToolName(toolName) !== null ? "mcp" : toolName;
+}
+
 export function turnStats(
   group: TurnGroupUnit,
   results: ToolResultIndex,
   now: number = Date.now(),
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
 ): TurnStats {
   let thinkingMs: number | null = 0;
   let thinkingCount = 0;
@@ -487,10 +506,11 @@ export function turnStats(
     if (member.kind === "text") continue;
     for (const call of member.kind === "toolGroup" ? member.calls : [member]) {
       calls++;
-      const stat = tools.get(call.toolName) ?? { toolName: call.toolName, count: 0, failed: 0 };
+      const statKey = rollupToolKey(call.toolName, call.input, skills);
+      const stat = tools.get(statKey) ?? { toolName: statKey, count: 0, failed: 0 };
       stat.count++;
       if (results.get(call.toolCallId)?.status === "error") stat.failed++;
-      tools.set(call.toolName, stat);
+      tools.set(statKey, stat);
     }
   }
   return {

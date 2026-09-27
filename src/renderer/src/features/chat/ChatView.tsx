@@ -1899,7 +1899,7 @@ function TurnRollupLine(props: {
   const t = useT();
   const [open, setOpen] = useState(false);
   const { group } = props;
-  const stats = turnStats(group, props.toolResults);
+  const stats = turnStats(group, props.toolResults, Date.now(), props.skills);
   // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
   // 工具次数与它的失败数字是一个段，中间不插
   const segments: ReactNode[] = [];
@@ -2725,6 +2725,68 @@ function ToolLine(props: {
       ? toolDurationText(props.toolCallId, t)
       : null;
 
+  // 外部能力事件卡（2026-09-27 grilling 裁决）：skill 使用与 MCP 调用不用过程行，
+  // 用 1px 边框的事件卡——与内置工具行的「透明行」一眼分块。族内再分一档：
+  // skill 名是正文字体（人写的指令），server/tool 是 mono（机器服务）。
+  if (skillUse !== null || mcp !== null) {
+    const mcpBrief = mcp === null ? null : (callLabel ?? mcpInputSummary(props.input));
+    return (
+      <div
+        style={{
+          minWidth: 0,
+          display: "grid",
+          borderRadius: "var(--radius-md)",
+          border: "1px solid var(--color-border-subtle)",
+          overflow: "hidden",
+        }}
+      >
+        <CollapseRow open={open} disabled={!expandable} onToggle={() => setOpen((value) => !value)}>
+          <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
+            <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
+              <Icon
+                name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : "plug"}
+                size={14}
+                strokeWidth={1.8}
+              />
+            </span>
+            <span style={SLOT.status}>{skillUse !== null ? "skill" : "mcp"}</span>
+          </span>
+          <span
+            style={{
+              flex: "0 1 auto",
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              fontSize: "var(--font-size-caption)",
+              color: "var(--color-text-primary)",
+              fontFamily:
+                skillUse !== null ? "var(--font-family-business)" : "var(--font-family-mono)",
+              fontWeight: 600,
+            }}
+          >
+            {skillUse !== null ? skillUse.name : mcp === null ? "" : `${mcp.server}/${mcp.tool}`}
+          </span>
+          {mcpBrief !== null && <span style={SLOT.sub}>{mcpBrief}</span>}
+          {summary !== null && !active && (
+            <span style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}>
+              {summary}
+            </span>
+          )}
+        </CollapseRow>
+        {open && expandable && (
+          <div style={{ padding: "0 10px 8px" }}>
+            {mcp !== null ? (
+              <McpToolBody result={result} />
+            ) : (
+              <PlainToolBody toolName={props.toolName} text={body} failed={failed} live={live} />
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       <CollapseRow open={open} disabled={!expandable} onToggle={() => setOpen((value) => !value)}>
@@ -2737,30 +2799,10 @@ function ToolLine(props: {
             />
           </span>
           <span style={headLabel(active)}>
-            {mcp !== null ? "mcp" : skillUse !== null ? "skill" : props.toolName}
+            {props.toolName}
           </span>
         </span>
-        {skillUse !== null ? (
-          // skill 使用：副标是 skill 名，完整路径进 tooltip（与路径类工具同一纪律）
-          <span title={callSummary ?? undefined} style={SLOT.sub}>
-            {skillUse.name}
-          </span>
-        ) : mcp !== null ? (
-          // MCP 副标：{server/tool} · {输入摘要}。server/tool 提亮一档加粗——
-          // 「调的哪台外部服务」是这条行最重要的事实，与内置工具行一眼区分
-          // （用户 2026-09-27：skill 与 MCP 调用要专门区别显示）。摘要退回 JSON 一行截断。
-          (() => {
-            const brief = callLabel ?? mcpInputSummary(props.input);
-            return (
-              <span style={{ ...SLOT.sub, fontFamily: "var(--font-family-mono)" }}>
-                <span style={{ color: "var(--color-text-secondary)", fontWeight: 650 }}>
-                  {mcp.server}/{mcp.tool}
-                </span>
-                {brief !== null ? ` · ${brief}` : ""}
-              </span>
-            );
-          })()
-        ) : callLabel !== null && (
+        {callLabel !== null && (
           <span
             title={callSummary !== callLabel ? (callSummary ?? undefined) : undefined}
             style={pathTool ? { ...SLOT.sub, color: "var(--color-chat-link)" } : SLOT.sub}
@@ -2818,10 +2860,7 @@ function ToolLine(props: {
       {open && expandable && diff === null && fileView !== null && (
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
-      {open && expandable && diff === null && fileView === null && mcp !== null && (
-        <McpToolBody result={result} />
-      )}
-      {open && expandable && diff === null && fileView === null && mcp === null && (
+      {open && expandable && diff === null && fileView === null && (
         <PlainToolBody toolName={props.toolName} text={body} failed={failed} live={live} />
       )}
     </div>

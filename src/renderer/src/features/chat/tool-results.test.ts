@@ -19,6 +19,7 @@ import {
   flattenRenderUnits,
   formatThinkingDuration,
   groupToolUnits,
+  rollupToolKey,
   indexToolResults,
   intraLineTokens,
   liveTailLines,
@@ -262,6 +263,38 @@ describe("groupToolUnits", () => {
     );
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.kind, "toolGroup");
+  });
+
+  test("skill read 在组员前后都不吞普通 read（前后各一个普通 read）", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [
+          readCall("r0", "b.ts"),
+          readCall("r1", "C:\\cfg\\tdd\\SKILL.md"),
+          readCall("r2", "a.ts"),
+        ]),
+      ]),
+      [{ slug: "tdd", name: "TDD" }],
+    );
+    assert.deepEqual(
+      entries.map((entry) => (entry.kind === "toolGroup" ? `group:${entry.calls.length}` : entry.kind)),
+      ["toolCall", "toolCall", "toolCall"],
+    );
+  });
+});
+
+describe("rollupToolKey（折叠统计行的统计词汇）", () => {
+  const skills = [{ slug: "tdd", name: "TDD" }];
+  test("read SKILL.md 记作 skill、mcp__ 名记作 mcp（家族聚合）", () => {
+    assert.equal(rollupToolKey("read", { path: "C:\\cfg\\tdd\\SKILL.md" }, skills), "skill");
+    assert.equal(rollupToolKey("mcp__fixture__echo", {}, skills), "mcp");
+  });
+  test("普通工具与不认识的 SKILL.md 路径用原名", () => {
+    assert.equal(rollupToolKey("bash", { command: "ls" }, skills), "bash");
+    // 尾巴 <slug>/SKILL.md 命中就是 skill 使用，不看前面的路径（与 skillForReadPath 同判法）
+    assert.equal(rollupToolKey("read", { path: "C:\\x\\tdd\\SKILL.md" }, skills), "skill");
+    assert.equal(rollupToolKey("read", { path: "C:\\x\\nope\\SKILL.md" }, skills), "read");
+    assert.equal(rollupToolKey("read", { path: "a.ts" }, []), "read");
   });
 
   test("正文永远独立成行，不进组——折叠只吞相邻 toolCall，正文没有折叠机制", () => {
