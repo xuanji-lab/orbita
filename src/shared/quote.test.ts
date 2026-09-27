@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   QUOTE_GUIDELINE,
   QUOTE_MAX_CHARS,
+  QUOTE_MAX_COUNT,
+  acceptQuote,
   clampQuote,
   composeQuotedMessage,
   countChars,
@@ -105,5 +107,25 @@ describe("QUOTE_GUIDELINE", () => {
     const attrs = [...block.matchAll(/ (\w+)="/g)].map((match) => match[1]);
     assert.deepEqual(attrs, ["index", "role", "turn"]);
     for (const attr of attrs) assert.match(QUOTE_GUIDELINE, new RegExp(`${attr}=`));
+  });
+});
+
+describe("acceptQuote —— 引用准入", () => {
+  it("同消息同段文字记 duplicate（旧规则：静默去重）", () => {
+    const current = [{ messageId: "m-1", text: "同一段" }];
+    assert.deepEqual(acceptQuote(current, { messageId: "m-1", text: "同一段" }), {
+      accepted: false,
+      reason: "duplicate",
+    });
+  });
+
+  it("满 5 条拒新条（too-many）；边界：4 条在册时第 5 条仍收", () => {
+    const four = Array.from({ length: QUOTE_MAX_COUNT - 1 }, (_, i) => ({ messageId: `m-${i}`, text: `第${i}段` }));
+    assert.equal(acceptQuote(four, { messageId: "m-new", text: "新段" }).accepted, true);
+    const five = [...four, { messageId: "m-x", text: "第五段" }];
+    assert.deepEqual(acceptQuote(five, { messageId: "m-new", text: "新段" }), {
+      accepted: false,
+      reason: "too-many",
+    });
   });
 });

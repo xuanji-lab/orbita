@@ -16,6 +16,7 @@ import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
+import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type {
   ChannelDelivery,
@@ -302,6 +303,14 @@ export interface SubmitAgentInput extends AgentTurnContext {
    * 有图时 text 可以为空串——只发一张截图也是一句完整的话。
    */
   images?: PromptImage[];
+  /**
+   * 随消息引用的文件（**纯路径，不携内容**，模型用 read 工具自己读）。
+   * external 的由主进程在发送前复制进会话附件目录并改写指向；落盘与组装的语义
+   * 见 `shared/prompt-attachments.ts`。
+   */
+  files?: PromptFileRef[];
+  /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
+  pasted?: string[];
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -373,6 +382,10 @@ export type AgentCommand =
       text: string;
       /** 随消息发的图片（原图 + 主进程铸的原图引用），语义见 SentImage */
       images?: SentImage[];
+      /** 随消息引用的文件（external 的已复制进会话目录、path 已指向副本），语义见 SentFileRef */
+      files?: SentFileRef[];
+      /** 随消息发的粘贴文本块，语义见 SubmitAgentInput.pasted */
+      pasted?: string[];
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;
@@ -472,6 +485,10 @@ export type AgentCommand =
       text: string;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
+      /** 随消息引用的文件，语义同 submit */
+      files?: SentFileRef[];
+      /** 随消息发的粘贴文本块，语义同 submit */
+      pasted?: string[];
       cwd: string;
       provider: ProviderSecrets;
       modelId: string;

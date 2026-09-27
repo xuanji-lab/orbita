@@ -36,6 +36,7 @@ import {
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
+import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
@@ -942,6 +943,42 @@ async function listBuiltins(): Promise<void> {
   send({ type: "builtins", providers: runtime.getProviders().map(toBuiltinProvider) });
 }
 
+/**
+ * 回显用户消息并交给 pi。submit 与 interrupt 的这一段逐字相同，抽出来是因为
+ * 各写一份迟早漂移（一份改了缩放口径另一份没跟的那种事故）。
+ *
+ * - 用户消息先落地再发给模型——不等模型回，UI 立刻看得到自己刚说的话。
+ *   echoed 记一笔：pi 随后 emit 的 message_start 是这条的回声，别重复显示。
+ *   **记的是拼好的整段**（composePromptText）：pi 的回声正文是拼好的那份，
+ *   对账按文本全等。
+ * - expandPromptTemplates 关掉：展开会改写文本，破坏按文本做的回声对账；
+ *   且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
+ * - 附图先缩好再回显：落盘与送给模型的是同一份。缩不了就在这里抛——
+ *   回显之前，转录里不会留下一条没发出去的消息。
+ * - 文件引用与粘贴块组装进正文之后；回显块保留块界（粘贴块 / 文件清单各自独立
+ *   text 块），显示层按块解析回 chip。
+ */
+async function echoAndPrompt(
+  opened: OpenedTurn,
+  note: LedgerNote,
+  command: Extract<AgentCommand, { type: "submit" | "interrupt" }>,
+): Promise<void> {
+  const images = await preparePromptImages(command.images);
+  const pasted = command.pasted ?? [];
+  const files = command.files ?? [];
+  const promptText = composePromptText(command.text, pasted, files);
+  note.echoed.add(promptText);
+  for (const progress of opened.adapter.userPrompt(command.text, images, attachmentBlocks(pasted, files))) {
+    // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
+    if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
+    send({ type: "progress", sessionId: command.sessionId, progress });
+  }
+  await opened.session.prompt(promptText, {
+    expandPromptTemplates: false,
+    ...(images.length > 0 ? { images: forModel(images) } : {}),
+  });
+}
+
 async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "listBuiltins") {
     await listBuiltins();
@@ -961,26 +998,7 @@ async function handle(command: AgentCommand): Promise<void> {
   }
 
   if (command.type === "submit") {
-    await startTurn(command, async (opened) => {
-      const note = ledgerNote(command.sessionId);
-      // 用户消息先落地再发给模型——不等模型回，UI 立刻看得到自己刚说的话。
-      // echoed 记一笔：pi 随后 emit 的 message_start 是这条的回声，别重复显示。
-      // expandPromptTemplates 关掉：展开会改写文本，破坏按文本做的回声对账；
-      // 且本仓没有 skill / template / 斜杠命令的 UI，展开本就无对象。
-      // 附图先缩好再回显：落盘与送给模型的是同一份。缩不了就在这里抛——
-      // 回显之前，转录里不会留下一条没发出去的消息。
-      const images = await preparePromptImages(command.images);
-      note.echoed.add(command.text);
-      for (const progress of opened.adapter.userPrompt(command.text, images)) {
-        // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
-        if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
-        send({ type: "progress", sessionId: command.sessionId, progress });
-      }
-      await opened.session.prompt(command.text, {
-        expandPromptTemplates: false,
-        ...(images.length > 0 ? { images: forModel(images) } : {}),
-      });
-    });
+    await startTurn(command, (opened) => echoAndPrompt(opened, ledgerNote(command.sessionId), command));
     return;
   }
 
@@ -995,20 +1013,7 @@ async function handle(command: AgentCommand): Promise<void> {
     settlePendingPermissions(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
-      await startTurn(command, async (opened) => {
-        const note = ledgerNote(command.sessionId);
-        const images = await preparePromptImages(command.images);
-        note.echoed.add(command.text);
-        for (const progress of opened.adapter.userPrompt(command.text, images)) {
-          // A-1：同 submit——预检压缩的界碑要盖这条回显的时间戳
-          if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
-          send({ type: "progress", sessionId: command.sessionId, progress });
-        }
-        await opened.session.prompt(command.text, {
-          expandPromptTemplates: false,
-          ...(images.length > 0 ? { images: forModel(images) } : {}),
-        });
-      });
+      await startTurn(command, (opened) => echoAndPrompt(opened, ledgerNote(command.sessionId), command));
     } catch (cause) {
       // 抢跑的旧轮没发 idle，新轮又没开起来——renderer 会卡在 turn。这里兑底。
       send({ type: "phase", sessionId: command.sessionId, phase: "idle" });

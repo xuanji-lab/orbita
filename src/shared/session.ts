@@ -13,6 +13,7 @@ import type { AgentStats } from "./agent-ipc.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
+import { splitUserTextBlocks } from "./prompt-attachments.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -348,8 +349,11 @@ export interface SessionDetail {
  */
 export function deriveSessionTitle(text: string): string {
   // 引用块不是用户自己说的话：剥掉再取首行，否则标题是一行 `<quoted_context …>`。
+  // 附件块同理（粘贴块 / 文件清单）：「只发附件不打字」开会话时，第一条用户消息的
+  // 文本块就是它们，不剥的话标题栏与最近提问是一行裸 XML。
   // 标题 / 最近提问 / 渲染层给当前会话算标题都走这里，一处剥全处生效
-  const line = withoutQuotes(text).trim().split("\n")[0]?.trim() ?? "";
+  const body = splitUserTextBlocks([withoutQuotes(text)]).body;
+  const line = body.trim().split("\n")[0]?.trim() ?? "";
   if (line === "") return "";
   return line.length > SESSION_TITLE_MAX ? `${line.slice(0, SESSION_TITLE_MAX)}…` : line;
 }

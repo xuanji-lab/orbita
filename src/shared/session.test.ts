@@ -62,6 +62,18 @@ describe("deriveSessionTitle", () => {
   it("空输入给空标题——会话可以建了还没发过消息", () => {
     strictEqual(deriveSessionTitle("   \n  "), "");
   });
+
+  it("附件块不进标题——「只发附件不打字」开会话不显示裸 XML", () => {
+    strictEqual(deriveSessionTitle("<pasted-text>\n一大段日志\n</pasted-text>"), "");
+    strictEqual(
+      deriveSessionTitle("<attached-files>\nThe user attached these files from their disk. Read them with the read tool when you need their contents.\n- /tmp/a.ts\n</attached-files>"),
+      "",
+    );
+  });
+
+  it("正文与附件同存时只取正文首行", () => {
+    strictEqual(deriveSessionTitle("看看这个配置\nsecond"), "看看这个配置");
+  });
 });
 
 describe("parseSessionMeta", () => {

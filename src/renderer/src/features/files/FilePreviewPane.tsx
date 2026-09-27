@@ -110,7 +110,7 @@ export function FilePreviewPane(props: {
           <PanelIconButton title={t.files.openDefault} onClick={openDefault}>
             <Icon name="external-link" size={16} />
           </PanelIconButton>
-          <PanelIconButton title={t.files.revealInFinder} onClick={reveal}>
+          <PanelIconButton title={t.files.revealInFileManager} onClick={reveal}>
             <Icon name="folder-open" size={16} />
           </PanelIconButton>
           <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>

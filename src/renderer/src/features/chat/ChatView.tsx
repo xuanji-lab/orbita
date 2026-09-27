@@ -89,6 +89,8 @@ import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
 import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
+import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
+import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
@@ -190,7 +192,7 @@ export function ChatView(props: ChatViewProps) {
         setDropActive(false);
         if (!carriesFiles(event)) return;
         event.preventDefault();
-        session.attachImages(filesOf(event.dataTransfer));
+        session.attachIncoming(filesOf(event.dataTransfer));
       }}
     >
       <QuoteJumpContext.Provider value={jumpToQuote}>
@@ -652,8 +654,13 @@ function ChatViewBody(props: {
       onRemoveQuote={session.removeQuote}
       jumpToQuote={jumpToQuote}
       attachments={session.attachments}
-      onAttach={session.attachImages}
+      onAttach={session.attachIncoming}
       onRemoveAttachment={session.removeAttachment}
+      files={session.files}
+      pasted={session.pasted}
+      onRemoveFile={session.removeFile}
+      onRemovePasted={session.removePasted}
+      onPasteLargeText={session.addPastedText}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
     />
   );
@@ -1929,10 +1936,16 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
     return () => window.clearTimeout(timer);
   }, [copied]);
   const textBlocks = props.item.content.filter((block) => block.type === "text");
-  // 正文里展开过的引用块解析回 chip：气泡只放用户自己的话，复制也只拷这部分
-  const parsed = parseQuotedMessage(textBlocks.map((block) => block.text).join("\n\n"));
+  // 文本块**按内容识别**（splitUserTextBlocks）：粘贴块 / 文件清单块解析回折叠 chip，
+  // 其余才是正文——「只发附件不打字」的消息第一块就是 <pasted-text>，按「第一块
+  // 恒是正文」猜会把裸标签渲染进气泡（review #90 指出）。旧会话只有单块正文，
+  // 这条路径同样走通、行为不变
+  const split = splitUserTextBlocks(textBlocks.map((block) => block.text));
+  const parsed = parseQuotedMessage(split.body);
   const quotes = parsed.quotes;
   const copyText = parsed.text;
+  const pastedBlocks = split.pasted.map((content) => ({ content, lines: pastedTextSize(content).lines }));
+  const fileRefs = split.files;
   // markdown 轻量渲染（表格/粗体/代码块/数学放行，标题摊平——wafo 2026-09-20：
   // 「正文里渲染正确，user message 为什么不一并渲染」）。多块之间空行分段。
   const text = parsed.text;
@@ -1978,6 +1991,48 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
               expanded={quotesExpanded}
               onJump={jumpToQuote(quote)}
             />
+          ))}
+        </div>
+      )}
+      {fileRefs.length > 0 && (
+        // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
+        // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
+        // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "var(--space-2)",
+            justifyContent: "flex-end",
+            maxWidth: "var(--bubble-max-width)",
+            marginBottom: "var(--space-1)",
+          }}
+        >
+          {fileRefs.map((ref, index) => (
+            <FileRefChip
+              key={`file:${index}`}
+              name={ref.path.split(/[\\/]/).filter((part) => part !== "").pop() ?? ref.path}
+              path={ref.path}
+              kind={ref.kind}
+            />
+          ))}
+        </div>
+      )}
+      {pastedBlocks.length > 0 && (
+        // 粘贴文字行：贴着气泡（它是用户写的内容，不是从磁盘带来的材料）；
+        // 折叠成一行——发出去之后它是背景，不该在对话流里再刷一次屏
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "var(--space-2)",
+            justifyContent: "flex-end",
+            maxWidth: "var(--bubble-max-width)",
+            marginBottom: "var(--space-1)",
+          }}
+        >
+          {pastedBlocks.map((block, index) => (
+            <PastedTextChip key={`pasted:${index}`} text={block.content} lines={block.lines} />
           ))}
         </div>
       )}

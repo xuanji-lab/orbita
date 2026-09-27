@@ -9,9 +9,9 @@
  * 要么改个标题就重写全文，要么读取时全文扫描找最后一条 meta。分开之后
  * **列会话只需读 N 个小 meta 文件，完全不碰日志**。
  */
-import { appendFile, cp, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { appendFile, copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import {
@@ -22,6 +22,7 @@ import {
   type SentImage,
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
+import type { PromptFileRef, SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -245,6 +246,58 @@ export class SessionStore {
         console.error("[session] 附图原图没存下，这张看大图时只有缩放图", error);
         saved.push(bare);
       }
+    }
+    return saved;
+  }
+
+  /**
+   * 文件引用发送前的装配（`sentImages` 的文件版）：external 的复制进会话附件目录、
+   * 引用改指副本——副本跟着会话一起删，回放不依赖原位置；workspace 的原位置引用，
+   * 本来就在 agent 的目录清单里，复制一份只会过期。两类路径都 realpath 成本机规范形
+   * 再发给模型（renderer 的树拼接在 win 上可能产出混合分隔符），文件还是目录按盘上
+   * lstat 修正（renderer 分不清拖进来的是什么）。realpath 解析不到就原样带上——
+   * 模型 read 会当场失败，比这里静默改写诚实。
+   *
+   * 副本存进**以 uuid 命名的子目录**、保留原文件名（`<uuid>/notes.txt`）：模型与
+   * 回显 chip 看到的末段是真名（`<uuid>.txt` 谁也认不出是什么）；同一批拖进两个
+   * 同名文件也各归各的子目录，天然不冲突。
+   *
+   * **存不下不拦发送**：与 saveOriginals 同一条规矩——副本只是外部文件的保险，
+   * 失败时引用原位置并在 dev 终端说明。目录不复制（可能巨大），原位置引用。
+   */
+  async saveExternalFiles(id: string, refs: readonly PromptFileRef[]): Promise<SentFileRef[]> {
+    const saved: SentFileRef[] = [];
+    for (const ref of refs) {
+      // realpath 既做规范化（win 混合分隔符）也做存在性检查；失败按「引用原样带上」处理
+      let real = ref.path;
+      try {
+        real = await realpath(ref.path);
+      } catch (cause) {
+        console.error(`[session] 文件引用 realpath 失败，按原路径引用：${ref.path}`, cause);
+      }
+      let kind: SentFileRef["kind"] = ref.kind;
+      let target = real;
+      if (ref.origin === "external") {
+        try {
+          const stats = await lstat(real);
+          kind = stats.isDirectory() ? "dir" : "file";
+          if (!stats.isDirectory()) {
+            const dest = join(this.attachmentsPath(id), randomUUID(), basename(real));
+            // copyFile 到临时名再 rename：半截副本不会被当成完整文件（writeBytesAtomic 的文件版）
+            const staging = `${dest}.partial`;
+            await mkdir(dirname(dest), { recursive: true });
+            await copyFile(real, staging);
+            await rename(staging, dest);
+            target = dest;
+          } else {
+            console.error(`[session] 外部目录不复制，按原位置引用：${real}`);
+          }
+        } catch (cause) {
+          // 复制失败引用原位置：模型读得到就读，读不到在对话里看得见
+          console.error(`[session] 外部文件没复制进会话，按原位置引用：${real}`, cause);
+        }
+      }
+      saved.push({ path: target, name: ref.name, kind });
     }
     return saved;
   }

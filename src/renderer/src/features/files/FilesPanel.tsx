@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { ContextMenu } from "../../shell/ContextMenu";
+import type { MenuItem } from "../../shell/Menu";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { api } from "../../api";
 import type { ChatSession } from "../chat/useChatSession";
@@ -46,6 +48,17 @@ export function FilesPanel(props: {
   const [selected, setSelected] = useState<string | null>(null);
   /** 打开的预览：root 是它所在分组的根路径，path 是文件绝对路径。null = 预览未打开 */
   const [preview, setPreview] = useState<{ root: string; path: string } | null>(null);
+  /** 右键菜单：打开位置 + 被右键的根（目前只有 Session 根接了右键，
+   * 只有「添加文件引用」一项——把工作台目录整个递给模型）。条目行不接右键：
+   * 行尾 hover 按钮已覆盖引用，打开/复制路径类动作频率不足以撑一张菜单 */
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    root: FileRoot;
+    path: string;
+    name: string;
+    kind: FileEntryKind;
+  } | null>(null);
   const tree = useFileTree(sessionId, workspaceId, session.workspaces);
 
   // 会话 / 工作区切换 = 换一棵树，选中与预览跟着清掉——旧会话的文件路径在新树里
@@ -105,6 +118,19 @@ export function FilesPanel(props: {
       .catch((cause: unknown) => setActionError(failMessage(cause)));
   };
 
+  /** 「添加文件引用」：条目行与会话根行共用——把这一行的路径附进当前输入框（原位置引用） */
+  const referenceItem = (entry: { path: string; name: string; kind: FileEntryKind }): MenuItem => ({
+    id: "reference",
+    label: t.files.reference,
+    icon: "paperclip",
+    onSelect: () =>
+      session.attachFileRef({
+        path: entry.path,
+        name: entry.name,
+        kind: entry.kind === "directory" ? "dir" : "file",
+      }),
+  });
+
   /** 一个分组里的整棵子树（递归渲染已展开的层） */
   const rowsOf = (root: FileRoot, dir: string, depth: number): React.ReactNode => {
     const entries = tree.dirs.get(dir);
@@ -139,6 +165,13 @@ export function FilesPanel(props: {
             selected={!isDir && selected === child}
             onSelect={() => selectFile(root, child)}
             onOpenPreview={() => openPreview(root, child)}
+            onReference={() =>
+              session.attachFileRef({
+                path: child,
+                name: entry.name,
+                kind: entry.kind === "directory" ? "dir" : "file",
+              })
+            }
           />
           {isDir && open && rowsOf(root, child, depth + 1)}
         </Fragment>
@@ -183,6 +216,13 @@ export function FilesPanel(props: {
           // missing 的 attached 根下面有常驻 Detach（见 MissingAttachedRow）——组头
           // 不再重复一个 hover 才出的 Detach，一个状态只留一个处理入口
           onDetach={root.kind === "attached" && root.exists ? () => detach(root.path) : undefined}
+          // 会话根行也接右键：只有「添加文件引用」（把工作台目录整个递给模型）。
+          // 工作台还没建（exists=false）时引用一条不存在的路径没有意义，不接
+          onContextMenu={
+            root.kind === "session" && root.exists
+              ? (position) => setMenu({ ...position, root, path: root.path, name: root.label, kind: "directory" })
+              : undefined
+          }
         />
         {/* 「在 Proma 里找不到规则文件」的痛点落点：工作区没有 AGENTS.md 时给一条
             虚线提示行。点击只 reveal 工作区根（打开文件夹让用户手建）——创建动作
@@ -235,6 +275,14 @@ export function FilesPanel(props: {
       }
       footer={<PanelLine>{footerSummary(groupCount, missingAttached, t)}</PanelLine>}
     >
+      {/* 右键菜单（portal 到 body，位置在指针处）。只有 Session 根分组头接了右键，
+          仅一项「添加文件引用」——把工作台目录整个递给模型。条目行不接右键：
+          引用走行尾 hover 按钮，其余动作不值得一张菜单（2026-09-27 用户裁决） */}
+      <ContextMenu
+        position={menu === null ? null : { x: menu.x, y: menu.y }}
+        onClose={() => setMenu(null)}
+        items={menu === null ? [] : [referenceItem(menu)]}
+      />
       {/* container query 分栏：容器 ≥600px 且预览打开 → 左目录右预览；<600px 且
           预览打开 → 只显示预览，目录用 CSS 隐藏（不卸载，展开态与滚动位置还在）；
           预览未打开 → 目录占满，与分栏前的版式一样。断点与显隐规则全在 styles.css，
@@ -363,11 +411,21 @@ function RootLabel(props: {
   missing?: boolean;
   onReveal?: () => void;
   onDetach?: () => void;
+  /** 右键（目前只有 Session 根接）：与条目行同一份 ContextMenu 机制 */
+  onContextMenu?: (position: { x: number; y: number }) => void;
 }) {
   const t = useT();
   return (
     <div
       className="file-hover-host file-root-label"
+      onContextMenu={
+        props.onContextMenu === undefined
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              props.onContextMenu?.({ x: event.clientX, y: event.clientY });
+            }
+      }
       style={{
         display: "flex",
         alignItems: "center",
@@ -401,7 +459,7 @@ function RootLabel(props: {
         {props.detail}
       </span>
       {props.canReveal && props.onReveal !== undefined && (
-        <LabelAction title={t.files.revealInFinder} onClick={props.onReveal}>
+        <LabelAction title={t.files.revealInFileManager} onClick={props.onReveal}>
           <Icon name="folder-open" size={12} />
         </LabelAction>
       )}
@@ -462,6 +520,8 @@ function TreeRow(props: {
   onSelect: () => void;
   /** 双击 / Enter 非目录行：选中并打开预览 */
   onOpenPreview: () => void;
+  /** 行尾 hover 的「添加文件引用」——引用是高频动作，升到与 Reveal 并排的一键入口 */
+  onReference: () => void;
 }) {
   const t = useT();
   const isDir = props.kind === "directory";
@@ -507,8 +567,9 @@ function TreeRow(props: {
           width: "100%",
           height: 30,
           paddingLeft: `calc(var(--space-3) + ${props.depth} * 16px)`,
-          // 右侧给浮在行上的 Reveal（20px）留位：不留的话 AGENTS.md 的 rules 尾注会被它压住
-          paddingRight: "calc(var(--space-3) + 20px)",
+          // 右侧给浮在行上的两个 hover 按钮（引用 + Reveal，各 20px + 4px 缝）留位：
+          // 不留的话 AGENTS.md 的 rules 尾注会被它们压住
+          paddingRight: "calc(var(--space-3) + 44px)",
           border: 0,
           font: "inherit",
           fontSize: "var(--font-size-control)",
@@ -577,10 +638,14 @@ function TreeRow(props: {
           </span>
         )}
       </button>
+      {/* 引用（最外侧，高频动作优先够到）与 Reveal 并排：同一套 hover 浮现语言 */}
+      {/* 外侧 folder-open = 在文件管理器中显示；内侧 paperclip = 添加文件引用。
+          图形与动作必须成对（2026-09-26 教训：只换图形不换动作，按钮就说谎了） */}
       <button
         type="button"
-        className="file-hover-act file-row-reveal"
-        title={t.files.revealInFinder}
+        className="file-hover-act file-row-act"
+        title={t.files.revealInFileManager}
+        aria-label={t.files.revealInFileManager}
         onClick={props.onReveal}
         style={{
           position: "absolute",
@@ -598,6 +663,29 @@ function TreeRow(props: {
         }}
       >
         <Icon name="folder-open" size={12} />
+      </button>
+      <button
+        type="button"
+        className="file-hover-act file-row-act"
+        title={t.files.reference}
+        aria-label={t.files.reference}
+        onClick={props.onReference}
+        style={{
+          position: "absolute",
+          right: 24,
+          top: 5,
+          width: 20,
+          height: 20,
+          // display 由 .file-hover-act 的 CSS 管（hover 才出现）
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 0,
+          border: 0,
+          borderRadius: "var(--radius-sm)",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name="paperclip" size={12} />
       </button>
     </div>
   );
