@@ -4,8 +4,10 @@ import { THEME_PREFERENCES } from "../../shared/settings.ts";
 import { resolveNativeThemeSource } from "./native-theme.ts";
 
 describe("resolveNativeThemeSource", () => {
-  it("black 映射成 dark——nativeTheme 只认三档", () => {
+  it("三个暗档映射成 dark——nativeTheme 只认三档，暗档明暗由 renderer 自画", () => {
     deepStrictEqual(resolveNativeThemeSource("black"), "dark");
+    deepStrictEqual(resolveNativeThemeSource("graphite"), "dark");
+    deepStrictEqual(resolveNativeThemeSource("dark"), "dark");
   });
 
   it("纸面两档映射成 light——它们只有明", () => {
