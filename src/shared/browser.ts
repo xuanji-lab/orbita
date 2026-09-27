@@ -22,7 +22,7 @@
  *
  * 调用方：
  *   主窗口    → `browserOpen`（RightRail 入口）、`browserClearData` / 下载目录三件（设置 › 浏览器）、
- *               交接卡的 `browserShowHandoff` / `browserResolveHandoff`
+ *               交接卡的 `browserShowHandoff` / `browserResolveHandoff`、登录状态导入四件（设置 › 浏览器，仅 macOS）
  *   工具条    → 导航四件套、切 / 关 tab、交接提示栏的 `browserResolveHandoff`、`browserGetState` / 订阅 `browserState`
  *   agent 进程 → `browserRequest` / `browserResult`（在 agent-ipc.ts，requestId 问答，read_task 同款）
  * 网页本身不加载任何 preload，碰不到这里的任何通道。
@@ -62,6 +62,16 @@ export const browserChannels = {
    * webContents，工具条收不到——由主进程截下后转过来。打开空窗口时也发一次
    */
   browserFocusAddress: "browser:focus-address",
+  // ── 登录状态导入（设置 › 浏览器 › 登录状态；新键一律追加在末尾）──
+  /** 列出本机检测到的可导入来源（浏览器 × profile）。macOS 之外回空数组 */
+  browserImportSources: "browser:import-sources",
+  /** 读取一个来源：主进程取钥匙串密钥 → 读 cookie 库 → 解密 → 按网站分组。
+   * cookie 值只留在主进程内存里，renderer 只拿「网站 + 条数」与一个 pendingId */
+  browserImportRead: "browser:import-read",
+  /** 把 pending 下勾选网站的 cookie 写进受管浏览器 partition，回计数 */
+  browserImportCommit: "browser:import-commit",
+  /** 丢弃一个 pending（取消导入）。幂等 */
+  browserImportCancel: "browser:import-cancel",
 } as const;
 
 export type BrowserChannel = (typeof browserChannels)[keyof typeof browserChannels];
@@ -187,3 +197,62 @@ export type BrowserToolOutcome =
       card: BrowserToolCard;
     }
   | { ok: false; error: string };
+
+// ── 登录状态导入（设置 › 浏览器 › 登录状态，仅 macOS）──────────────────
+
+/**
+ * 可导入登录状态的来源：浏览器 × profile。只列本机检测到的（用户数据目录在、且 profile
+ * 里有 cookie 库）；profile 名读 `Local State` 的 info_cache，缺席回落目录名。
+ * 只做与 Chrome 存储格式相同的五种 Chromium 系浏览器；Windows 的 App-Bound 加密需要
+ * 提权 helper，Linux 走系统密钥环，都不在这一刀。renderer 拿不到任何密钥或 cookie 值。
+ */
+export interface BrowserImportSource {
+  browserId: "chrome" | "edge" | "brave" | "arc" | "chromium";
+  /** 给人看的浏览器名（"Google Chrome"…）。数据，不是文案表的键 */
+  browserName: string;
+  /** profile 目录名（"Default" / "Profile 1"…） */
+  profileId: string;
+  /** Local State 里记的显示名，缺席 = profileId */
+  profileName: string;
+  /** 默认选中（last_used；没有就 Default）。恰有一个 true；无 profile 时整个浏览器不出现 */
+  recommended: boolean;
+}
+
+/** 读取结果里的一行：网站（近似 eTLD+1 分组）+ 该网站待导入的 cookie 条数 */
+export interface BrowserImportSite {
+  site: string;
+  count: number;
+}
+
+/** 读取失败的稳定错误码；renderer 用文案表翻成人话 */
+export type BrowserImportReadError =
+  /** 非 macOS（设置页不显示这一组，但 IPC 不当安全边界） */
+  | "not-supported"
+  /** 来源目录 / profile 不在了（浏览器被卸载、数据被清） */
+  | "profile-not-found"
+  /** profile 里找不到 cookie 库 */
+  | "no-cookie-db"
+  /**
+   * 钥匙串授权被拒绝 / 取消 / 超时。**整个读取终止**：用户对弹框说了「不」，就不能再写
+   * 任何一条 cookie——拒绝是授权语义，不是某一条的失败
+   */
+  | "keychain-denied"
+  /** 快照复制或 SQLite 读取失败（含钥匙串里没有该浏览器密钥这类非拒绝错误） */
+  | "read-failed";
+
+export type BrowserImportReadResult =
+  | { ok: true; pendingId: string; sites: BrowserImportSite[] }
+  | { ok: false; error: BrowserImportReadError };
+
+/** 导入结果的一行「已导入 X 条（Y 个网站），跳过 Z 条」的三个数 */
+export interface BrowserImportSummary {
+  imported: number;
+  sites: number;
+  /** 解不开 / 已过期 / 写入失败的条数 */
+  skipped: number;
+}
+
+export type BrowserImportCommitResult =
+  | { ok: true; summary: BrowserImportSummary }
+  /** pendingId 不认识：过期（10 分钟）、被取消或被新一次读取替换 */
+  | { ok: false; error: "no-pending" };
