@@ -160,19 +160,69 @@ export function figureIndex(text: readonly string[]): { label: string; page: num
     .slice(0, FIGURE_INDEX_MAX);
 }
 
-/** 渲染指定页列表为 PNG image 块（升序）。渲染错误穿透——如实报错好过静默少图 */
+/** 渲染宽度参数的合法区间。下限防马赛克（再小看不了字），上限是 pi 的 provider 内联限制 */
+export const PDF_IMAGE_WIDTH_MIN = 600;
+export const PDF_IMAGE_WIDTH_MAX = 2000;
+
+/** crop 区域的归一化坐标：x1,y1,x2,y2，左上原点，各值 0-1 且 x1<x2、y1<y2 */
+export interface CropRect {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** crop 源渲染的整页宽上限。crop 半页宽时源就要 4000px——封顶防极端窄条拉出巨型源图 */
+const CROP_SOURCE_WIDTH_MAX = 6000;
+
+/**
+ * 解析 crop 串 "x1,y1,x2,y2"（归一化 0-1）。报错带形状说明——报错是给模型改道用的。
+ */
+export function parseCrop(spec: string): { ok: true; crop: CropRect } | { ok: false; error: string } {
+  const parts = spec.split(",").map((piece) => piece.trim());
+  if (parts.length !== 4 || parts.some((piece) => !/^\d*\.?\d+$/.test(piece))) {
+    return { ok: false, error: `crop "${spec}" is not "x1,y1,x2,y2" with numbers in 0-1 (e.g. "0.1,0.1,0.9,0.55").` };
+  }
+  const [x1, y1, x2, y2] = parts.map(Number) as [number, number, number, number];
+  if (x1 < 0 || y1 < 0 || x2 > 1 || y2 > 1 || x1 >= x2 || y1 >= y2) {
+    return { ok: false, error: `crop "${spec}": need 0<=x1<x2<=1 and 0<=y1<y2<=1 (left-top origin, e.g. "0.1,0.1,0.9,0.55").` };
+  }
+  return { ok: true, crop: { x1, y1, x2, y2 } };
+}
+
+/**
+ * 渲染指定页列表为 PNG image 块（升序）。渲染错误穿透——如实报错好过静默少图。
+ * `crop` 给定时只渲染页内区域：源整页按 `width / (x2-x1)` 渲染后裁出区域——
+ * 区域输出就是 width 宽，局部高清而 token 不涨（模型拿 PIL 裁剪自救的工具化，
+ * 会话 09a4af6c 的教训）。
+ */
 async function renderPages(
   pdf: Awaited<ReturnType<typeof getDocumentProxy>>,
   pages: readonly number[],
   width: number,
+  crop: CropRect | null,
 ): Promise<{ type: "image"; data: string; mimeType: string }[]> {
   const images: { type: "image"; data: string; mimeType: string }[] = [];
+  const sourceWidth =
+    crop === null ? width : Math.min(CROP_SOURCE_WIDTH_MAX, Math.ceil(width / (crop.x2 - crop.x1)));
   for (const page of pages) {
     const png = await renderPageAsImage(pdf, page, {
       canvasImport: () => Promise.resolve(ncanvas),
-      width,
+      width: sourceWidth,
     });
-    images.push({ type: "image", data: Buffer.from(png).toString("base64"), mimeType: "image/png" });
+    if (crop === null) {
+      images.push({ type: "image", data: Buffer.from(png).toString("base64"), mimeType: "image/png" });
+      continue;
+    }
+    const bitmap = await ncanvas.loadImage(Buffer.from(png));
+    const left = Math.round(bitmap.width * crop.x1);
+    const top = Math.round(bitmap.height * crop.y1);
+    const boxWidth = Math.max(1, Math.round(bitmap.width * (crop.x2 - crop.x1)));
+    const boxHeight = Math.max(1, Math.round(bitmap.height * (crop.y2 - crop.y1)));
+    const canvas = ncanvas.createCanvas(boxWidth, boxHeight);
+    canvas.getContext("2d").drawImage(bitmap, -left, -top);
+    const cropped = await canvas.encode("png");
+    images.push({ type: "image", data: Buffer.from(cropped).toString("base64"), mimeType: "image/png" });
   }
   return images;
 }
@@ -215,8 +265,22 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
         images: {
           type: "boolean",
           description:
-            "Render every page of the current text range as an image. At most 5 pages per call. " +
-            "Prefer image_pages for targeted looking.",
+            "Render every page of the current text range as an image (default ~1080px wide, see width). " +
+            "At most 5 pages per call. Prefer image_pages for targeted looking.",
+        },
+        width: {
+          type: "number",
+          description:
+            "Render width in pixels for image output, 600-2000 (values outside are clamped). " +
+            "Default 2000 for image_pages, 1080 for images=true.",
+        },
+        crop: {
+          type: "string",
+          description:
+            'Requires image_pages. Render only a region of each requested page, as "x1,y1,x2,y2" ' +
+            'normalized 0-1 coordinates with left-top origin (e.g. "0.1,0.1,0.9,0.55"). The region comes ' +
+            "out at full render width — a close-up of a figure without paying tokens for the rest of the " +
+            "page. Look at the whole page first, estimate the figure's region, then crop.",
         },
       },
       required: ["path"],
@@ -274,6 +338,26 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
         pickedPages = parsed.pages;
       }
 
+      // crop 区域特写：只配 image_pages（模型先看过整页才估得出坐标；批转是整页浏览、
+      // 扫描件自动转时模型还没看过页面，两者带 crop 都是语义错误——当场说清）
+      const cropSpec = typeof args["crop"] === "string" ? args["crop"].trim() : "";
+      let crop: CropRect | null = null;
+      if (cropSpec !== "") {
+        if (pickedPages === null) {
+          throw new Error('crop requires image_pages (look at the whole page first, then crop the figure region).');
+        }
+        const parsed = parseCrop(cropSpec);
+        if (!parsed.ok) throw new Error(parsed.error);
+        crop = parsed.crop;
+      }
+
+      // 渲染宽度自选（600-2000，超出钳制——宽窄是偏好不是错误）；默认两档：
+      // 精准转 / 扫描件 2000 细看档，批转 1080 浏览档
+      const defaultWidth = pickedPages !== null || scannedAsImages ? PDF_IMAGE_HD_WIDTH : PDF_IMAGE_WIDTH;
+      const widthRaw =
+        typeof args["width"] === "number" && Number.isFinite(args["width"]) ? Math.floor(args["width"]) : defaultWidth;
+      const renderWidth = Math.min(PDF_IMAGE_WIDTH_MAX, Math.max(PDF_IMAGE_WIDTH_MIN, widthRaw));
+
       // 批转（images: true）把文本批也收紧到 5——图与文本同批；精准转图时文本批
       // 仍是完整 20 页（图只加在指定页上，不占文本的页数预算）
       const batchImageMode = (wantsImages && canSeeImages) || scannedAsImages;
@@ -319,17 +403,18 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
       let images: { type: "image"; data: string; mimeType: string }[] = [];
       if (scannedAsImages) {
         // 扫描件的页图就是正文，按高清渲（读字要分辨率）
-        images = await renderPages(pdf, rangeList(first, last), PDF_IMAGE_HD_WIDTH);
+        images = await renderPages(pdf, rangeList(first, last), renderWidth, null);
         header =
           `[Scanned PDF with no text layer: ${totalPages} pages. Rendered pages ${first}-${last} as images.` +
           `${continueHint}]`;
       } else if (pickedPages !== null) {
-        images = await renderPages(pdf, pickedPages, PDF_IMAGE_HD_WIDTH);
+        images = await renderPages(pdf, pickedPages, renderWidth, crop);
         header =
           `[PDF with ${totalPages} pages. Text of pages ${first}-${last} of ${totalPages}; images of ` +
-          `pages ${pickedPages.join(", ")} follow the text.${continueHint}]`;
+          `pages ${pickedPages.join(", ")} follow the text${crop === null ? "" : ` (cropped to ${cropSpec})`}.` +
+          `${continueHint}]`;
       } else if (batchImageMode) {
-        images = await renderPages(pdf, rangeList(first, last), PDF_IMAGE_WIDTH);
+        images = await renderPages(pdf, rangeList(first, last), renderWidth, null);
         header =
           `[PDF with ${totalPages} pages. Showing pages ${first}-${last} of ${totalPages}; page images follow the text.` +
           `${continueHint}]`;

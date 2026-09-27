@@ -15,6 +15,8 @@ import {
   PDF_IMAGE_HD_WIDTH,
   PDF_IMAGE_MAX_PAGES_PER_CALL,
   PDF_IMAGE_WIDTH,
+  PDF_IMAGE_WIDTH_MAX,
+  PDF_IMAGE_WIDTH_MIN,
   PDF_MAX_PAGES_PER_CALL,
 } from "./pdf-tools.ts";
 
@@ -262,6 +264,44 @@ describe("read_pdf", () => {
     // 扫描件自动转图同为高清档（页图即正文，读字要分辨率）
     const scanned = await runFull("scanned.pdf", {}, VISION_CTX);
     assert.equal(pngWidth((scanned.blocks[1] as { data?: string }).data ?? ""), PDF_IMAGE_HD_WIDTH);
+  });
+
+  test("width 自选：超范围钳制到 600-2000（宽窄是偏好不是错误）", async () => {
+    const small = await runFull("three-pages.pdf", { image_pages: "1", width: 100 }, VISION_CTX);
+    assert.equal(pngWidth((small.blocks[1] as { data?: string }).data ?? ""), PDF_IMAGE_WIDTH_MIN);
+    const big = await runFull("three-pages.pdf", { image_pages: "1", width: 9999 }, VISION_CTX);
+    assert.equal(pngWidth((big.blocks[1] as { data?: string }).data ?? ""), PDF_IMAGE_WIDTH_MAX);
+    const mid = await runFull("three-pages.pdf", { image_pages: "1", width: 1280 }, VISION_CTX);
+    assert.equal(pngWidth((mid.blocks[1] as { data?: string }).data ?? ""), 1280);
+  });
+
+  test("crop 特写：区域渲染到满宽（局部高清，token 不涨），头注注明 cropped", async () => {
+    // 取页面上半 40%：输出宽应≈2000（源 5000 宽裁 80% 横向）
+    const { blocks } = await runFull("three-pages.pdf", { image_pages: "1", crop: "0.1,0.1,0.9,0.5" }, VISION_CTX);
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(text.includes("(cropped to 0.1,0.1,0.9,0.5)"), text.slice(0, 220));
+    const data = (blocks[1] as { data?: string }).data ?? "";
+    const bytes = Buffer.from(data, "base64");
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    assert.ok(width >= 1500 && width <= 2000, `crop 输出宽 ${width}`);
+    // 高度 = 源宽(2500) × 页纵横比(792/612) × 纵向 0.4 ≈ 1294——显著小于整页高清高(≈2588)
+    assert.ok(height > 1100 && height < 1500, `crop 输出高 ${height}`);
+  });
+
+  test("crop 校验：不配 image_pages 报错；坏坐标报形状", async () => {
+    await assert.rejects(
+      runFull("three-pages.pdf", { crop: "0.1,0.1,0.9,0.5" }, VISION_CTX),
+      /crop requires image_pages/,
+    );
+    await assert.rejects(
+      runFull("three-pages.pdf", { image_pages: "1", crop: "0.9,0.1,0.1,0.5" }, VISION_CTX),
+      /need 0<=x1<x2<=1/,
+    );
+    await assert.rejects(
+      runFull("three-pages.pdf", { image_pages: "1", crop: "half" }, VISION_CTX),
+      /is not "x1,y1,x2,y2"/,
+    );
   });
 
   test("配合式：image_pages 精准转图——文本批不受影响，只渲染指定页", async () => {
