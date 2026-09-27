@@ -12,9 +12,18 @@
  * 全部由主进程持有、共用同一个 partition（登录态共享）；窗口一次只显示一个，其余在后台照跑——
  * agent 操作自己的 tab 不抢用户的屏幕。
  *
+ * 交接（第三刀）：agent 碰到登录墙 / 验证码 / 授权时调 `request_user_action`，把自己的 tab
+ * 交给用户。交接期间这个 tab 的操作队列被占住——agent 的后续浏览器调用排在用户交还之后，
+ * 这就是最小的「控制权令牌」。聊天里的交接卡直接从那次工具调用渲染，按 toolCallId 定位。
+ *
+ * 下载（第三刀）：agent tab 的下载落进会话工作台 `downloads/`（PDF 强制下载而不是在 tab 里
+ * 显示——agent 读不了查看器里的字）；「你的」tab 的下载落进用户指定的目录（设置 › 浏览器，
+ * 缺席 = 系统下载文件夹），这个目录每轮告诉 agent，agent 可以帮用户整理。
+ *
  * 调用方：
- *   主窗口    → `browserOpen`（RightRail 入口）、`browserClearData`（设置 › 浏览器）
- *   工具条    → 导航四件套、切 / 关 tab、`browserGetState` / 订阅 `browserState`
+ *   主窗口    → `browserOpen`（RightRail 入口）、`browserClearData` / 下载目录三件（设置 › 浏览器）、
+ *               交接卡的 `browserShowHandoff` / `browserResolveHandoff`
+ *   工具条    → 导航四件套、切 / 关 tab、交接提示栏的 `browserResolveHandoff`、`browserGetState` / 订阅 `browserState`
  *   agent 进程 → `browserRequest` / `browserResult`（在 agent-ipc.ts，requestId 问答，read_task 同款）
  * 网页本身不加载任何 preload，碰不到这里的任何通道。
  */
@@ -34,6 +43,16 @@ export const browserChannels = {
   browserSelectTab: "browser:select-tab",
   /** 关掉一个 agent tab。「你的」tab 不可关（它是登录入口）；agent 下次用浏览器会重开一个 */
   browserCloseTab: "browser:close-tab",
+  /** 交接卡「去浏览器完成」：打开窗口、切到那次交接的 tab、提到最前（按 toolCallId 定位） */
+  browserShowHandoff: "browser:show-handoff",
+  /** 交接结束：用户点「完成，交还」或「取消」（交接卡与窗口提示栏共用）。按 toolCallId 定位 */
+  browserResolveHandoff: "browser:resolve-handoff",
+  /** 「你的」tab 的下载目录（生效值：设置里指定的，缺席 = 系统下载文件夹） */
+  browserDownloadDir: "browser:download-dir",
+  /** 选一个目录作为下载目录（系统目录选择框），落进设置；取消回 null */
+  browserPickDownloadDir: "browser:pick-download-dir",
+  /** 在系统文件管理器里打开下载目录 */
+  browserRevealDownloadDir: "browser:reveal-download-dir",
   /** 工具条首帧拉一次当前状态；之后靠 `browserState` 推送 */
   browserGetState: "browser:get-state",
   /** 主进程 → 工具条：tab 列表或正在显示的页面有变化。单向推送 */
@@ -64,7 +83,17 @@ export interface BrowserTabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** 这个 tab 正交给用户：agent 在等（reason 是它说的原因）。缺席 = 没有交接 */
+  handoff?: BrowserHandoff;
 }
+
+/** 一次交接：toolCallId 是那次 request_user_action 调用，交接卡与提示栏都按它定位 */
+export interface BrowserHandoff {
+  toolCallId: string;
+  reason: string;
+}
+
+export type BrowserHandoffOutcome = "done" | "cancelled";
 
 /** 工具条的全部状态：tab 条 + 正在显示的那一页 */
 export interface BrowserWindowState {
@@ -78,13 +107,15 @@ export type BrowserNavigateResult = { ok: true } | { ok: false; reason: "not-an-
 
 /**
  * agent 的浏览器工具请求（agent 进程 → 主进程，作用于该会话自己的 agent tab）。
- * 第二刀只有只读四件，各档免审批（shared/permission.ts 的 BROWSER_READ_TOOLS）。
+ * 只读四件与交接各档免审批（shared/permission.ts 的 BROWSER_READ_TOOLS / USER_ACTION_TOOL）。
  */
 export type BrowserToolRequest =
   | { action: "navigate"; url: string }
   | { action: "observe"; maxNodes?: number }
   | { action: "extract"; offset?: number; maxChars?: number; links?: boolean }
-  | { action: "screenshot" };
+  | { action: "screenshot" }
+  /** request_user_action：把 tab 交给用户，等用户交还（或取消、或这一轮被停掉） */
+  | { action: "handoff"; toolCallId: string; reason: string };
 
 /**
  * 工具卡：只给 UI、不入模型上下文（pi ToolResult 的 `details` 通路，ReadTaskCard 同款）。
@@ -94,6 +125,8 @@ export interface BrowserToolCard {
   tabId: string;
   url: string;
   title: string;
+  /** 交接的结局（request_user_action 才有）：交接卡据此显示「已交还 / 已取消」，不解析给模型的文字 */
+  handoff?: BrowserHandoffOutcome;
 }
 
 /** browserRequest 的回执载荷：主进程组装，agent 进程翻成工具结果 */

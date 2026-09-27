@@ -78,6 +78,13 @@ export function isBrowserReadTool(toolName: string): boolean {
   return (BROWSER_READ_TOOLS as readonly string[]).includes(toolName);
 }
 
+/**
+ * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
+ * 再为「要不要问用户」弹一次审批是套娃。名字不带 browser 前缀：终端的 sudo / 2FA 是同一件事，
+ * 将来复用这个名字。
+ */
+export const USER_ACTION_TOOL = "request_user_action";
+
 export type PermissionDecision =
   | { behavior: "allow" }
   /** 需要问用户；调用方负责把问题送到 UI 并等回答 */
@@ -92,8 +99,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (mode === "skip") return { behavior: "allow" };
   // 通道三件套：三档一律放行，理由见 CHANNEL_TOOLS 的注释
   if (isChannelTool(toolName)) return { behavior: "allow" };
-  // 浏览器只读四件：三档一律放行，理由见 BROWSER_READ_TOOLS 的注释
-  if (isBrowserReadTool(toolName)) return { behavior: "allow" };
+  // 浏览器只读四件与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
+  if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
     return mode === "plan" ? { behavior: "allow" } : { behavior: "ask" };

@@ -6,6 +6,7 @@ import {
   decidePermission,
   isBrowserReadTool,
   isChannelTool,
+  USER_ACTION_TOOL,
   isReadOnlyTool,
   PERMISSION_MODES,
   READ_ONLY_TOOLS,
@@ -113,5 +114,13 @@ describe("浏览器只读四件（BROWSER_READ_TOOLS）", () => {
     assert.equal(isBrowserReadTool("browser_click"), false);
     assert.deepEqual(decidePermission("plan", "browser_click").behavior, "deny");
     assert.deepEqual(decidePermission("manual", "browser_click").behavior, "ask");
+  });
+});
+
+describe("交接（USER_ACTION_TOOL）", () => {
+  test("三档一律放行：它本身就是在问用户", () => {
+    for (const mode of PERMISSION_MODES) {
+      assert.deepEqual(decidePermission(mode, USER_ACTION_TOOL), { behavior: "allow" }, mode);
+    }
   });
 });

@@ -354,6 +354,11 @@ export interface TurnDirectories {
    * 缺席 = 没有父子关系（绝大多数会话）。
    */
   related?: { sessionId: string; relation: "parent" | "child"; label: string; path: string }[];
+  /**
+   * 受管浏览器「你的」tab 的下载目录（设置 › 浏览器，缺席 = 系统下载文件夹）。用户在浏览器里
+   * 下载的论文、导出文件落在这里；agent 可读写，帮用户按对话整理。只告知不硬拦（同 attached）。
+   */
+  browserDownloads?: string;
 }
 
 /** `channel:speak` 的载荷：用户在通道 composer 里代父发的那句话 */

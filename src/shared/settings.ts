@@ -171,6 +171,11 @@ export interface AppSettings {
    * 渲染层每次渲染时做，同 `rightPanelWidth` 的纪律。拖动中不落盘，松手才写。
    */
   channelColumnWidth?: number;
+  /**
+   * 受管浏览器「你的」tab 的下载目录（绝对路径）。**缺席 = 系统下载文件夹**（主进程解析）。
+   * 用户指定，agent 每轮被告知（TurnDirectories.browserDownloads）。
+   */
+  browserDownloadDir?: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -321,6 +326,7 @@ export function parseSettings(raw: unknown): AppSettings {
     subSessionThinking?: unknown;
     lastUsed?: unknown;
     channelColumnWidth?: unknown;
+    browserDownloadDir?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -367,7 +373,15 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
+    // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
+    ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
+      ? { browserDownloadDir: record.browserDownloadDir }
+      : {}),
   };
+}
+
+function isAbsolutePath(path: string): boolean {
+  return /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(path);
 }
 
 /**
