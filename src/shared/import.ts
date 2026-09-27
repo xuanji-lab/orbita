@@ -448,14 +448,21 @@ export function isSelectablePlanItem(item: ImportPlanItem, planSessionIds: Reado
 // IPC 边界的入参校验
 // ---------------------------------------------------------------------------
 
-const SOURCE_IDS: readonly string[] = [
-  "proma",
-  "claude-code",
-  "kimi-code",
-  "opencode",
-  "reasonix",
-  "agent-skills",
-] satisfies readonly ImportSourceId[];
+/**
+ * 运行时认的来源：**按 ImportSourceId 穷尽写成一张表**。此前是 `satisfies readonly ImportSourceId[]`
+ * 的数组——它只保证列进去的合法，查不出漏列：Codex 导入器写好了却漏登记，扫描一开始就被
+ * 这里以 `unknown import source` 挡掉（樊嘉铭 2026-09-27 修的那个）。写成 Record 之后，
+ * 类型里新增来源而这里忘了登记，编译期就报错。
+ */
+const SOURCE_ID_TABLE: Record<ImportSourceId, true> = {
+  proma: true,
+  "claude-code": true,
+  "kimi-code": true,
+  opencode: true,
+  reasonix: true,
+  "agent-skills": true,
+};
+const SOURCE_IDS: readonly string[] = Object.keys(SOURCE_ID_TABLE);
 
 /** 来源 id 的运行时判定：IPC 入参与导入清单（imports.jsonl）读回时共用。 */
 export function isImportSourceId(value: unknown): value is ImportSourceId {
