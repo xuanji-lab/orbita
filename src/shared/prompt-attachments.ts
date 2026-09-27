@@ -142,3 +142,32 @@ export function parseFilesBlock(block: string): { path: string; kind: "file" | "
   }
   return refs;
 }
+
+/**
+ * 一条 user 消息的文本块 → 正文 + 附件块。**按内容识别，不按位置猜**：每块先试
+ * 粘贴块 / 文件清单块，都不是才算正文——「只发附件不打字」的消息第一块就是
+ * `<pasted-text>`，按「第一块恒是正文」猜会把裸标签渲染进气泡（review #90 指出）。
+ * 正文可能多于一块（正文块与附件块交错时各归各类，正文以 \n\n 连接——与
+ * composePromptText 的拼法互逆）。
+ */
+export function splitUserTextBlocks(
+  blocks: readonly string[],
+): { body: string; pasted: string[]; files: { path: string; kind: "file" | "dir" }[] } {
+  const bodyParts: string[] = [];
+  const pasted: string[] = [];
+  let files: { path: string; kind: "file" | "dir" }[] = [];
+  for (const block of blocks) {
+    const pastedText = parsePastedBlock(block);
+    if (pastedText !== null) {
+      pasted.push(pastedText);
+      continue;
+    }
+    const fileRefs = parseFilesBlock(block);
+    if (fileRefs !== null) {
+      files = [...files, ...fileRefs];
+      continue;
+    }
+    bodyParts.push(block);
+  }
+  return { body: bodyParts.join("\n\n"), pasted, files };
+}

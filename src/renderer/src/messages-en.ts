@@ -963,8 +963,6 @@ export const en = {
     title: "Files",
     emptyWorkbench: "Empty workbench — created on the agent's first write",
     reference: "Add File Reference",
-    copyRelativePath: "Copy Relative Path",
-    copyAbsolutePath: "Copy Absolute Path",
     refreshing: "Refreshing file tree…",
     refresh: "Refresh file tree",
     attach: "Attach a directory",

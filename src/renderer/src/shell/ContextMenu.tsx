@@ -9,7 +9,8 @@ import type { MenuItem } from "./Menu";
  * 右键那一刻的视口坐标。样式、键盘导航、关闭规则与 Menu 同一套（menu-panel /
  * option-row / Esc / 点外关），只少触发器与悬停逻辑——右键本身就是触发器。
  *
- * 本分支此前没有右键菜单基建，这是第一个（消费者：FilesPanel 的「引用到输入卡」）。
+ * 目前唯一的消费者是 FilesPanel 的会话根分组头（「添加文件引用」）；条目行的
+ * 右键已随菜单裁撤移除（aab082b），行尾 hover 按钮接管了高频动作。
  */
 export function ContextMenu(props: {
   /** 打开位置（视口坐标，pointer 事件的 clientX/clientY）。null = 关闭 */

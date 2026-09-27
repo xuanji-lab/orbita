@@ -926,7 +926,7 @@ describe("SessionStore · 附图原图", () => {
 });
 
 describe("SessionStore · 文件引用落盘", () => {
-  test("external 的复制进会话附件目录、引用改指副本，原文件不动", async () => {
+  test("external 的复制进 <uuid>/<原名> 子目录，文件名保留、内容一致、原文件不动", async () => {
     await store.ensureSession(meta());
     const source = join(dir, "outside", "notes.txt");
     await mkdir(join(dir, "outside"), { recursive: true });
@@ -936,10 +936,22 @@ describe("SessionStore · 文件引用落盘", () => {
     ]);
     assert.equal(sent?.name, "notes.txt");
     assert.equal(sent?.kind, "file");
-    // 副本在会话目录里，内容与原文件一致；原文件留在原地
-    assert.match(sent?.path ?? "", new RegExp(`[\\\\/]${ID}\\.attachments[\\\\/][0-9a-f-]{36}\\.txt$`));
+    // 副本在会话目录的 uuid 子目录里、末段是原文件名（uuid.txt 谁也认不出是什么）
+    assert.match(sent?.path ?? "", new RegExp(`[\\\\/]${ID}\\.attachments[\\\\/][0-9a-f-]{36}[\\\\/]notes\\.txt$`));
     assert.equal(await readFile(sent?.path ?? "", "utf8"), "hello attachment");
     assert.equal(await readFile(source, "utf8"), "hello attachment");
+  });
+
+  test("目录名带点、文件无扩展名（…/guanhong.li/Makefile）不再误截扩展名", async () => {
+    await store.ensureSession(meta());
+    const source = join(dir, "guanhong.li", "Makefile");
+    await mkdir(join(dir, "guanhong.li"), { recursive: true });
+    await writeFile(source, "make it");
+    const [sent] = await store.saveExternalFiles(ID, [
+      { path: source, name: "Makefile", kind: "file", origin: "external" },
+    ]);
+    assert.match(sent?.path ?? "", new RegExp(`[\\\\/]Makefile$`));
+    assert.equal(await readFile(sent?.path ?? "", "utf8"), "make it");
   });
 
   test("workspace 的原位置引用不复制，路径 realpath 成规范形", async () => {

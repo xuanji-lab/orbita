@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { admitFileRefs, fileRefRejectionText } from "./composer-attachments.ts";
 import type { Messages } from "../messages-en.ts";
 
-const noPath = (): string => "";
-
 test("admitFileRefs 按顺序收、满了记 too-many", () => {
   const files = Array.from({ length: 12 }, (_, i) => ({ path: `/tmp/f${i}.ts`, name: `f${i}.ts` }));
   const { accepted, rejected } = admitFileRefs(files, []);
@@ -25,7 +23,6 @@ test("admitFileRefs：同路径记 duplicate，空路径记 no-path", () => {
   assert.equal(again.rejected[0]?.reason, "duplicate");
   const lost = admitFileRefs([{ path: "", name: "clipboard.png" }], []);
   assert.equal(lost.rejected[0]?.reason, "no-path");
-  assert.equal(noPath(), "");
 });
 
 /** 只走文件拒绝的两个分支——图片的文案归 composer-images 的 rejectionText */

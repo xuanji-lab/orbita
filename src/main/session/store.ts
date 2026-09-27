@@ -11,7 +11,7 @@
  */
 import { appendFile, copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import {
@@ -255,8 +255,12 @@ export class SessionStore {
    * 引用改指副本——副本跟着会话一起删，回放不依赖原位置；workspace 的原位置引用，
    * 本来就在 agent 的目录清单里，复制一份只会过期。两类路径都 realpath 成本机规范形
    * 再发给模型（renderer 的树拼接在 win 上可能产出混合分隔符），文件还是目录按盘上
-   * lstat 修正（renderer 分不清拖进来的是什么）。realpath 不动符号链接本体路径的话
-   * 解析不到就原样带上——模型 read 会当场失败，比这里静默改写诚实。
+   * lstat 修正（renderer 分不清拖进来的是什么）。realpath 解析不到就原样带上——
+   * 模型 read 会当场失败，比这里静默改写诚实。
+   *
+   * 副本存进**以 uuid 命名的子目录**、保留原文件名（`<uuid>/notes.txt`）：模型与
+   * 回显 chip 看到的末段是真名（`<uuid>.txt` 谁也认不出是什么）；同一批拖进两个
+   * 同名文件也各归各的子目录，天然不冲突。
    *
    * **存不下不拦发送**：与 saveOriginals 同一条规矩——副本只是外部文件的保险，
    * 失败时引用原位置并在 dev 终端说明。目录不复制（可能巨大），原位置引用。
@@ -278,13 +282,10 @@ export class SessionStore {
           const stats = await lstat(real);
           kind = stats.isDirectory() ? "dir" : "file";
           if (!stats.isDirectory()) {
-            const dir = this.attachmentsPath(id);
-            const extension = real.slice(real.lastIndexOf(".") + 1);
-            const name = `${randomUUID()}${extension !== "" && extension.length <= 16 ? `.${extension}` : ""}`;
-            const dest = join(dir, name);
+            const dest = join(this.attachmentsPath(id), randomUUID(), basename(real));
             // copyFile 到临时名再 rename：半截副本不会被当成完整文件（writeBytesAtomic 的文件版）
             const staging = `${dest}.partial`;
-            await mkdir(dir, { recursive: true });
+            await mkdir(dirname(dest), { recursive: true });
             await copyFile(real, staging);
             await rename(staging, dest);
             target = dest;
@@ -302,7 +303,8 @@ export class SessionStore {
   }
 
   /** 按引用读原图。引用不合格、文件不在（如分支的源会话已删）都是 null；其它读盘错照抛 */
-  async readOriginal(ref: unknown): Promise<PromptImage | null> {    if (!isOriginalRef(ref)) return null;
+  async readOriginal(ref: unknown): Promise<PromptImage | null> {
+    if (!isOriginalRef(ref)) return null;
     const [sessionId = "", name = ""] = ref.split("/");
     const mimeType = mimeOfExtension(name.slice(name.lastIndexOf(".") + 1));
     if (mimeType === null) return null;

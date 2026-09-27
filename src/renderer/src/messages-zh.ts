@@ -900,8 +900,6 @@ export const zh: Messages = {
     title: "文件",
     emptyWorkbench: "工作台为空 — 智能体第一次写入时创建",
     reference: "添加文件引用",
-    copyRelativePath: "复制相对路径",
-    copyAbsolutePath: "复制绝对路径",
     refreshing: "正在刷新文件树…",
     refresh: "刷新文件树",
     attach: "附加一个目录",
