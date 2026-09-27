@@ -226,8 +226,7 @@ describe("groupTurns", () => {
     assert.equal(first.key, second.key);
   });
 
-  test("通道工具（delegate）不算轮成员：一轮里 thinking + read + delegate 落定后，delegate 在折叠外、read 在折叠内（子会话 PR4b 显示缺陷修正）", () => {
-    const records = [
+  test("通道工具（delegate）不算轮成员：一轮里 thinking + read + delegate 落定后，delegate 在折叠外、read 在折叠内（子会话 PR4b 显示缺陷修正）", () => {    const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [
         { type: "thinking", thinking: "先看看" },
@@ -255,6 +254,38 @@ describe("groupTurns", () => {
     const trailing = view[2];
     assert.ok(trailing !== undefined && trailing.kind === "toolCall");
     assert.equal(trailing.kind === "toolCall" ? trailing.toolName : "", "delegate");
+  });
+
+  test("show_image 夹在轮中间（图后还有思考+工具）也挂轮尾：单一折叠 + 画廊贴正文前，不产生两折叠夹画廊（2026-09-27 裁决 Y′）", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "thinking", thinking: "先找图" },
+        { type: "toolCall", toolCallId: "p1", toolName: "read_pdf", input: { path: "x.pdf" } },
+      ]),
+      toolItem({ toolCallId: "p1", toolName: "read_pdf", timestamp: 2500 }),
+      assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "s1", toolName: "show_image", input: { paths: ["a.png"] } }]),
+      toolItem({ toolCallId: "s1", toolName: "show_image", timestamp: 3500 }),
+      assistantItem("a3", 4000, [
+        { type: "thinking", thinking: "再看一眼" },
+        { type: "toolCall", toolCallId: "r2", toolName: "read", input: { path: "b.ts" } },
+      ]),
+      toolItem({ toolCallId: "r2", timestamp: 4500 }),
+      assistantItem("a4", 9000, [{ type: "text", text: "结论在此" }]),
+    ];
+    const view = turnView(records, false);
+    // 单一折叠收进全部思考与工具（含 show 前后的），画廊钉在折叠后、正文前
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "toolCall", "text"],
+    );
+    const fold = foldUnits(view)[0];
+    assert.ok(fold !== undefined);
+    // show_image 不进 members——画廊行在折叠外
+    assert.ok(fold.members.every((member) => !(member.kind === "toolCall" && member.toolName === "show_image")));
+    const gallery = view[2];
+    assert.ok(gallery !== undefined && gallery.kind === "toolCall");
+    assert.equal(gallery.kind === "toolCall" ? gallery.toolName : "", "show_image");
   });
 
   test("通道工具夹在两次真实工具调用中间时同样被抠出来，前后各自成一个折叠，位置不变", () => {

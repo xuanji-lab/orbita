@@ -380,16 +380,28 @@ export function groupTurns(
  * 不算轮成员且必须原样留在流里、位置不变（子会话 PR4b）——按它们把段切成若干块，
  * 每块各自套用「找首尾轮成员、中间收进折叠」的规则，通道工具本身穿插在块之间，
  * 永不进任何一块的折叠。没有通道工具时退化成原来的单块行为。
+ *
+ * 钉住工具（show_image）不同（2026-09-27 裁决 Y′）：画廊**挂轮尾**——不管
+ * show 发生在轮内哪一步（思考/工具之间也好），落定视图统一钉在折叠块之后、
+ * 结尾回复之前，「图贴正文」的阅读顺序永远成立；位置不随展开收起切换（不闪跳）。
+ * 代价是展开态画廊不在它的时间线原位——show_image 行本身在折叠展开流里仍有
+ * 标识，可追溯。若按原位切开，show 夹在轮中间会产生「两个折叠块夹一张画廊」
+ * 的割裂形态（正是本裁决要消灭的）。
  */
 function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
   const view: TurnViewEntry[] = [];
   let chunk: RenderEntry[] = [];
+  const pinned: RenderEntry[] = [];
   const flushChunk = () => {
     view.push(...foldChunk(chunk, results));
     chunk = [];
   };
   for (const entry of segment) {
-    if (isChannelToolCall(entry) || isPinnedToolCall(entry)) {
+    if (isPinnedToolCall(entry)) {
+      pinned.push(entry);
+      continue;
+    }
+    if (isChannelToolCall(entry)) {
       flushChunk();
       view.push(entry);
       continue;
@@ -397,6 +409,11 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
     chunk.push(entry);
   }
   flushChunk();
+  if (pinned.length === 0) return view;
+  // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
+  let insertAt = view.length;
+  while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
+  view.splice(insertAt, 0, ...pinned);
   return view;
 }
 
