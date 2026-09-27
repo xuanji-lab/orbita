@@ -10,14 +10,17 @@ import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
  * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（Ink，
- * 2026-09-03 用户指定）；"dark"（Warm）与 "black" 从此都是手动档。
+ * 2026-09-03 用户指定）；三个暗档从此都是手动档。
+ *
+ * 暗色共三档（2026-09-27 按 ZCode 实测层次重切，小样页 design/dark-theme-variants.html v3 选型）：
+ * "dark"（Warm 微暖）、"graphite"（石墨，ZCode 直译的中性档）、"black"（Ink 近黑，system 的落点）。
  *
  * "copybook"（小学作业）与 "typescript"（打字稿）是璇玑载体谱「稿纸」一档的中文与英文
  * 两版（wafo 2026-09-25 要求载入）：绿格作业本 + 红笔，与打字稿 + 红色页边线。**只有明**，
  * system 不落这两档，都是手动档。copybook 载入当天由 "manuscript"（稿纸）改名：那个年代
  * 小学生写字用的是绿格作业本，不是稿纸。旧 id 的兼容见 `parseTheme`。
  */
-export const THEME_PREFERENCES = ["system", "light", "dark", "black", "copybook", "typescript"] as const;
+export const THEME_PREFERENCES = ["system", "light", "dark", "graphite", "black", "copybook", "typescript"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 /** 界面语言。缺席 = "en"（语言设置落地之前，双语主题一直是英文界面） */

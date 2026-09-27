@@ -306,6 +306,7 @@ export const en = {
     system: "System",
     light: "Light",
     dark: "Warm",
+    graphite: "Graphite",
     black: "Ink",
     copybook: "Copybook",
     typescript: "Typescript",

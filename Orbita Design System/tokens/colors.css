@@ -82,83 +82,41 @@
   --action-primary-hover: var(--color-accent-strong);
 }
 
-/* dark — Warm · 再柔化 + 压暗（2026-09-03 修订八/九）：墨只留一丝暖
-   #d6d5cf / #a3a29b / #82817b（原 gruvbox 暖米已两轮退烧），地面整条降一档
-   （app #191c1d、panel #232525），黄 accent 的 wash 压到 .05——选中态靠
-   字重与文字色兜底（readme：active is marked by weight），不靠色块。
-   设置里叫 Warm；system 不落这档（落 Ink），是纯手动档。 */
+/*
+ * 暗色三档共用一套层次语法（2026-09-27 重切，对照用户的参考应用 ZCode 实测）：
+ * **外壳（左栏与右图标条坐的地）浅一档 → 会话面板是井（深 10 步）→ 卡面/输入卡
+ * 浮起（亮 21 步）→ 发丝线是白色 ~10% 半透明**。旧值的两处病根同日退役：
+ * 地面带绿尾（#191c1d / #232525 系）与米色文字（#d6d5cf）——闷感的来源；
+ * 层次也反着（面板比外壳亮），井感无从谈起。三档差异只在色温与整体明度。
+ */
+/* dark — Warm · 微暖（v3 小样 W-1 中选）：外壳 #201f1c / 井 #171614 / 卡面 #2c2a26，
+   墨提到近白（#f2f0ec 系），暖只留一丝（暖白发丝线）。旧 gruvbox 米字的
+   两轮退烧史见 2026-09-03 的 commit。设置里叫 Warm；system 不落这档（落 Ink）。 */
 /* `[data-theme-preview="dark"]` 同上，给 Theme 预览卡的 Warm 缩略窗用。 */
 :root[data-theme="dark"],
 [data-theme-preview="dark"] {
   color-scheme: dark;
-  --color-bg-app: #191c1d;
-  --color-bg-sidebar: #1e2223;
-  --color-bg-panel: #232525;
-  --color-bg-muted: #1b1f20;
-  /* 同浅色的理由改成半透明；暗底上次级文字色是浅灰，混入即提亮。8% 与原实色 #2a2d2c 在
-     面板上的明显程度相当，但侧栏与面板上一样清楚 */
+  --color-bg-app: #201f1c;
+  --color-bg-sidebar: #201f1c;
+  --color-bg-panel: #171614;
+  --color-bg-muted: #1d1b18;
+  /* hover 走半透明提亮（同浅色档的机制）：压暗量与底色无关，侧栏与面板一样清楚 */
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
-  --color-bg-active: rgba(214, 194, 69, 0.05);
-  --color-text-primary: #d6d5cf;
-  --color-text-secondary: #a3a29b;
-  --color-text-tertiary: #82817b;
-  /*真正取反：暗主题正文近白，其反色即近黑。填充面上的字改用 --color-*-fg。 */
-  --color-text-inverse: #191c1d;
+  --color-bg-active: rgba(214, 194, 69, 0.08);
+  --color-text-primary: #f2f0ec;
+  --color-text-secondary: #a5a29c;
+  --color-text-tertiary: #706d66;
+  /* 真正取反：暗主题正文近白，其反色即外壳的地面。填充面上的字改用 --color-*-fg。 */
+  --color-text-inverse: #201f1c;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: #292b2b;
-  --color-border-default: #333534;
-  --color-border-strong: #3d403f;
+  --color-border-subtle: rgba(255, 242, 222, 0.09);
+  --color-border-default: rgba(255, 242, 222, 0.15);
+  --color-border-strong: rgba(255, 242, 222, 0.21);
   --color-accent: #d6c245;
   --color-accent-strong: #e2d05e;
-  --color-accent-soft: rgba(214, 194, 69, 0.05);
+  --color-accent-soft: rgba(214, 194, 69, 0.08);
   --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(214, 194, 69, 0.05);
-  --color-mode-active-fg: #d6c245;
-  --color-danger: #ff7b72;
-  --color-danger-solid: #c9372c;
-  --color-danger-fg: #ffffff;
-  --color-danger-soft: #3b1f1d;
-  --color-warning: #d4a72c;
-  --color-info: #83a598;
-  --color-info-fg: #1b1a15;
-  --color-success: #56d364;
-  --color-success-bg: #12251a;
-  --color-success-border: #1d4429;
-  --color-chat-card-bg: #232525;
-  --color-chat-muted-bg: #2a2d2c;
-  --color-chat-control-bg: #1e2223;
-  --color-chat-table-bg: #232525;
-  --color-chat-link: #52a8ff;
-}
-
-/* black — 极暗中性档（2026-09-03 定稿，Vercel/Geist 参考）：#0a0a0a 地、#111111 卡、
-   发丝线 #1e1e1e / #262626 / #2e2e2e，墨 #ededed / #a1a1a1 / #707070，链接蓝 #52a8ff。
-   唯一留给品牌的是黄 accent。历史：真黑 #000「太黑了」→ GitHub default「有点蓝」→
-   中性灰 #121212「有点泛黄」→ 定这版更暗的中性。若仍泛黄，退手是地加一丝冷偏
-   （#0a0b0c）或降 accent-soft 透明度。black 是手动档，system 跟随系统只落 light/dark。 */
-/* `[data-theme-preview="black"]` 同上，给 Theme 预览卡的 Ink 缩略窗（与 System 卡右半）用。 */
-:root[data-theme="black"],
-[data-theme-preview="black"] {
-  color-scheme: dark;
-  --color-bg-app: #0a0a0a;
-  --color-bg-sidebar: #0e0e0e;
-  --color-bg-panel: #111111;
-  --color-bg-muted: #0d0d0d;
-  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
-  --color-bg-active: rgba(214, 194, 69, 0.18);
-  --color-text-primary: #ededed;
-  --color-text-secondary: #a1a1a1;
-  --color-text-tertiary: #707070;
-  --color-text-inverse: #0a0a0a;
-  --color-text-on-dark: #ffffff;
-  --color-border-subtle: #1e1e1e;
-  --color-border-default: #262626;
-  --color-border-strong: #2e2e2e;
-  --color-accent: #d6c245;
-  --color-accent-strong: #e2d05e;
-  --color-accent-soft: rgba(214, 194, 69, 0.18);
-  --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(214, 194, 69, 0.18);
+  --color-mode-active-bg: rgba(214, 194, 69, 0.08);
   --color-mode-active-fg: #d6c245;
   --color-danger: #ff7b72;
   --color-danger-solid: #c9372c;
@@ -170,10 +128,100 @@
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #111111;
-  --color-chat-muted-bg: #1b1b1b;
-  --color-chat-control-bg: #0e0e0e;
-  --color-chat-table-bg: #111111;
+  --color-chat-card-bg: #2c2a26;
+  --color-chat-muted-bg: rgba(255, 242, 222, 0.05);
+  --color-chat-control-bg: #2c2a26;
+  --color-chat-table-bg: #171614;
+  --color-chat-link: #52a8ff;
+}
+
+/* graphite — 石墨（v3 小样 I-1 中选，2026-09-27 新增）：ZCode 逐值直译的中性档——
+   外壳 #202020 / 井 #161616 / 卡面 #2b2b2b，零色偏。用户点名「ZCode 的颜色很舒服」，
+   这档就是那套。手动档，system 不落。 */
+/* `[data-theme-preview="graphite"]` 同上，给 Theme 预览卡的 Graphite 缩略窗用。 */
+:root[data-theme="graphite"],
+[data-theme-preview="graphite"] {
+  color-scheme: dark;
+  --color-bg-app: #202020;
+  --color-bg-sidebar: #202020;
+  --color-bg-panel: #161616;
+  --color-bg-muted: #1c1c1c;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
+  --color-bg-active: rgba(214, 194, 69, 0.08);
+  --color-text-primary: #f2f2f2;
+  --color-text-secondary: #a6a6a6;
+  --color-text-tertiary: #6e6e6e;
+  --color-text-inverse: #202020;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: rgba(255, 255, 255, 0.1);
+  --color-border-default: rgba(255, 255, 255, 0.16);
+  --color-border-strong: rgba(255, 255, 255, 0.22);
+  --color-accent: #d6c245;
+  --color-accent-strong: #e2d05e;
+  --color-accent-soft: rgba(214, 194, 69, 0.08);
+  --color-accent-fg: #1b1a15;
+  --color-mode-active-bg: rgba(214, 194, 69, 0.08);
+  --color-mode-active-fg: #d6c245;
+  --color-danger: #ff7b72;
+  --color-danger-solid: #c9372c;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #3b1f1d;
+  --color-warning: #d4a72c;
+  --color-info: #52a8ff;
+  --color-info-fg: #1b1a15;
+  --color-success: #56d364;
+  --color-success-bg: #12251a;
+  --color-success-border: #1d4429;
+  --color-chat-card-bg: #2b2b2b;
+  --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
+  --color-chat-control-bg: #2b2b2b;
+  --color-chat-table-bg: #161616;
+  --color-chat-link: #52a8ff;
+}
+
+/* black — Ink · 近黑（v3 小样 I-2 中选）：保住近黑身份，比例照 ZCode——
+   外壳 #1b1b1b / 井 #0f0f0f / 卡面 #242424。**system 的深色落点仍是这档**
+   （2026-09-03 用户指定，2026-09-27 三档化后不变）。历史轮次：真黑 #000「太黑了」→
+   GitHub default「有点蓝」→ 中性灰 #121212「有点泛黄」→ 2026-09-03 定 #0a0a0a 系 →
+   2026-09-27 换 ZCode 层次重切。 */
+/* `[data-theme-preview="black"]` 同上，给 Theme 预览卡的 Ink 缩略窗（与 System 卡右半）用。 */
+:root[data-theme="black"],
+[data-theme-preview="black"] {
+  color-scheme: dark;
+  --color-bg-app: #1b1b1b;
+  --color-bg-sidebar: #1b1b1b;
+  --color-bg-panel: #0f0f0f;
+  --color-bg-muted: #141414;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
+  --color-bg-active: rgba(214, 194, 69, 0.08);
+  --color-text-primary: #f2f2f2;
+  --color-text-secondary: #a6a6a6;
+  --color-text-tertiary: #6e6e6e;
+  --color-text-inverse: #1b1b1b;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: rgba(255, 255, 255, 0.09);
+  --color-border-default: rgba(255, 255, 255, 0.15);
+  --color-border-strong: rgba(255, 255, 255, 0.21);
+  --color-accent: #d6c245;
+  --color-accent-strong: #e2d05e;
+  --color-accent-soft: rgba(214, 194, 69, 0.08);
+  --color-accent-fg: #1b1a15;
+  --color-mode-active-bg: rgba(214, 194, 69, 0.08);
+  --color-mode-active-fg: #d6c245;
+  --color-danger: #ff7b72;
+  --color-danger-solid: #c9372c;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #3b1f1d;
+  --color-warning: #d4a72c;
+  --color-info: #52a8ff;
+  --color-info-fg: #1b1a15;
+  --color-success: #56d364;
+  --color-success-bg: #12251a;
+  --color-success-border: #1d4429;
+  --color-chat-card-bg: #242424;
+  --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
+  --color-chat-control-bg: #242424;
+  --color-chat-table-bg: #0f0f0f;
   --color-chat-link: #52a8ff;
 }
 
