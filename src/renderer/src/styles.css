@@ -1343,16 +1343,18 @@ body {
 /*
  * shiki 高亮块（B-1）。pre.shiki 带内联 style（浅主题的底色/前景 + 每元素一份
  * --shiki-dark 变量），!important 是压过内联 style 的唯一手段；底色换回主题的
- * muted 底（见上方取舍注释），暗 / 黑主题把前景与 span 语法色翻到 --shiki-dark
- * ——black 底与 dark 底同样近黑，共用同一套双主题翻色，不生成第三套语法色。
+ * muted 底（见上方取舍注释），三个暗档把前景与 span 语法色翻到 --shiki-dark
+ * ——graphite / black 与 dark 同为暗地，共用同一套双主题翻色，不生成第四套语法色。
  */
 .chat-md pre.shiki {
   background-color: var(--color-chat-muted-bg) !important;
 }
 
 :root[data-theme="dark"] .chat-md pre.shiki,
+:root[data-theme="graphite"] .chat-md pre.shiki,
 :root[data-theme="black"] .chat-md pre.shiki,
 :root[data-theme="dark"] .chat-md pre.shiki span,
+:root[data-theme="graphite"] .chat-md pre.shiki span,
 :root[data-theme="black"] .chat-md pre.shiki span {
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg, transparent) !important;
@@ -1364,9 +1366,10 @@ body {
 /*
  * 工具行展开体（write/read 的行级高亮，ChatView 的 FileContentView）：token 的
  * 内联样式来自 shiki codeToTokens（浅色 color + --shiki-dark 变量），与上面整块
- * pre.shiki 同一套双主题机制，这里只给行级 span 补暗 / 黑主题翻色。
+ * pre.shiki 同一套双主题机制，这里只给行级 span 补三个暗档的翻色。
  */
 :root[data-theme="dark"] .shiki-tok,
+:root[data-theme="graphite"] .shiki-tok,
 :root[data-theme="black"] .shiki-tok {
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg, transparent) !important;
