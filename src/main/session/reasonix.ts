@@ -19,8 +19,8 @@
  * - thinking：一部分行是 thinking_blocks（`[{type, thinking, signature}]`），另一部分是
  *   reasoning_content + reasoning_signature——都转 pi 的 thinking 块，签名进 thinkingSignature
  *   （回原渠道有效、其他渠道无害，claude-legacy 同款）。
- * - tool_calls 是 OpenAI function 形（function.arguments 是 JSON 字符串）；tool 行按
- *   tool_call_id 配对，顺序即流序。
+ * - tool_calls 是 OpenAI function 形（function.arguments 是 JSON 字符串）；opencode-go 时代的
+ *   桌面版把它拍平成 {id, name, arguments}——两种形都认。tool 行按 tool_call_id 配对，顺序即流序。
  * - **assistant 行没有时间戳**；user 行约 84% 带 createdAt（epoch ms）。pi 消息要时间戳：
  *   沿行序继承「最后见过的时间」，全会话一个都没有时由扫描层拿 meta 的时间兜底。
  * - usage 无处可寻（行上没有，meta 只有 totalCostUsd 这类会话级数）→ 全零，不造数字。
@@ -319,11 +319,14 @@ export function reasonixToMessages(
       const listed = row["tool_calls"];
       if (Array.isArray(listed)) {
         for (const call of listed) {
-          if (!isRecord(call) || !isRecord(call["function"])) continue;
-          const id = optionalString(call["id"]);
-          const name = optionalString(call["function"]["name"]);
+          if (!isRecord(call)) continue;
+          // OpenAI 形是 {id, type:"function", function:{name, arguments}}；opencode-go 时代的
+          // 桌面版把 function 拍平成 {id, name, arguments}——本机两种形都实测到了，都认
+          const fn = isRecord(call["function"]) ? call["function"] : call;
+          const id = optionalString(fn["id"]) ?? optionalString(call["id"]);
+          const name = optionalString(fn["name"]);
           if (id === null || name === null) continue;
-          calls.push({ type: "toolCall", id, name, arguments: safeArguments(call["function"]["arguments"]) });
+          calls.push({ type: "toolCall", id, name, arguments: safeArguments(fn["arguments"]) });
         }
       }
       content.push(...calls);

@@ -141,6 +141,35 @@ describe("reasonixToMessages（合成样例，覆盖全部分支）", () => {
     assert.deepEqual(bad.arguments, { raw: "{path: tmp.py" });
   });
 
+  test("拍平的 tool_calls（opencode-go 时代桌面版，无 function 包装）也认", () => {
+    // 2026-09-27 本机 wuwo 项目实测：assistant 声明与 tool 引用的 id 全配得上
+    const flat = reasonixToMessages(
+      parseReasonixRows(
+        rowsOf(
+          { role: "user", content: "看下目录", raw_content: "看下目录", origin: "user", createdAt: USER_AT },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              { id: "call_00_abc", name: "ls", arguments: '{"path": "."}' },
+              { id: "call_01_def", name: "grep", arguments: '{"pattern": "x"}' },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_00_abc", name: "ls", content: "a.txt" },
+          { role: "tool", tool_call_id: "call_01_def", name: "grep", content: "x" },
+        ),
+      ).rows,
+      "scan",
+      null,
+    );
+    assert.equal(flat.stats.orphanToolResults, 0);
+    const assistant = flat.messages[1] as AssistantMessage;
+    assert.deepEqual(
+      assistant.content.map((block) => block.type),
+      ["toolCall", "toolCall"],
+    );
+  });
+
   test("结果配对：错误标记、打断占位、孤儿丢弃", () => {
     const ok = parsed.messages[2] as { toolCallId: string; isError: boolean };
     assert.equal(ok.toolCallId, "call_1");
