@@ -61,7 +61,9 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
     label: "browser_navigate",
     description:
       "Open a web page in your own tab of Orbita's built-in browser and wait for it to load. " +
-      "Accepts a search phrase too (it is searched on Google). " +
+      "Accepts a search phrase too (it is searched on Google), or an absolute path / file:// URL to a web page " +
+      "(.html, .htm, .xhtml, .svg) inside your directories — session workbench, working directory, attached " +
+      "directories, browser downloads — e.g. to preview a page you wrote; call it again after editing to reload. " +
       "First call browser_tabs: the user often already has the page open and signed in — read it with tab: \"user\" instead of starting over. " +
       "Returns the final URL (after redirects), the page title and the HTTP status. " +
       "Use browser_extract to read the page afterwards. " +
@@ -102,6 +104,11 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           type: "number",
           description: "Upper bound on outline lines, 20–600. Defaults to 250.",
         },
+        tab: {
+          type: "string",
+          enum: ["user"],
+          description: 'Set to "user" to read the user\'s tab (read-only) instead of your own. See browser_tabs.',
+        },
       },
       required: [],
     } as never,
@@ -129,6 +136,11 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
         offset: { type: "number", description: "Character offset to start from. Defaults to 0." },
         maxChars: { type: "number", description: "Characters to return, 1000–50000. Defaults to 20000." },
         links: { type: "boolean", description: "Also list the page's links. Defaults to false." },
+        tab: {
+          type: "string",
+          enum: ["user"],
+          description: 'Set to "user" to read the user\'s tab (read-only) instead of your own. See browser_tabs.',
+        },
       },
       required: [],
     } as never,
@@ -155,7 +167,23 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       "matters (figures, charts, reference images, checking what a page looks like); for reading text, " +
       "browser_extract is cheaper and more accurate. " +
       UNTRUSTED,
-    parameters: { type: "object", properties: {}, required: [] } as never,
+    parameters: {
+      type: "object",
+      properties: {
+        save: {
+          type: "boolean",
+          description:
+            "Also save the full-resolution image into screenshots/ in your session workbench and return its path. " +
+            "Use it when the user should see or keep the image — then call show_image with that path.",
+        },
+        tab: {
+          type: "string",
+          enum: ["user"],
+          description: 'Set to "user" to read the user\'s tab (read-only) instead of your own. See browser_tabs.',
+        },
+      },
+      required: [],
+    } as never,
     async execute(_toolCallId, params, signal) {
       const args = (params ?? {}) as Record<string, unknown>;
       return call(

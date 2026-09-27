@@ -35,6 +35,7 @@ import { registerBrowserIpc } from "./browser/ipc.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
+import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
@@ -218,6 +219,20 @@ void app.whenReady().then(async () => {
     sessionTitle: async (sessionId) => (await sessions.readMeta(sessionId))?.title ?? "",
     workbenchPath: (sessionId) => sessions.workbenchPath(sessionId),
     userDownloadDir: () => browserDownloadDir(settings),
+    // 与每轮告诉 agent 的目录清单同一个来源（resolveTurnDirectories）：工作台、附加目录，外加 cwd 与浏览器下载
+    sessionRoots: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      const directories = await resolveTurnDirectories(workspaces, sessions, channels, {
+        sessionId,
+        workspaceId: meta?.workspaceId ?? null,
+      });
+      return [
+        directories.workbench,
+        ...(meta?.cwd !== undefined ? [meta.cwd] : []),
+        ...directories.attached,
+        await browserDownloadDir(settings),
+      ];
+    },
     appName: app.getName(),
   });
   registerBrowserIpc(browserSandbox, settings);

@@ -50,6 +50,15 @@ describe("browser_* 工具", () => {
     assert.deepEqual(result.details, { browser: card });
   });
 
+  test("schema 写明了执行逻辑认的可选参数——模型只看 schema，漏写就等于没有这个选项", () => {
+    const { tools } = setup();
+    const props = (name: string): string[] =>
+      Object.keys((tools.get(name)!.parameters as { properties: Record<string, unknown> }).properties).sort();
+    assert.deepEqual(props("browser_screenshot"), ["save", "tab"]);
+    assert.deepEqual(props("browser_observe"), ["maxNodes", "tab"]);
+    assert.deepEqual(props("browser_extract"), ["links", "maxChars", "offset", "tab"]);
+  });
+
   test("browser_tabs：无参上船", async () => {
     const { sent, answer, run } = setup();
     const pending = run("browser_tabs", {});

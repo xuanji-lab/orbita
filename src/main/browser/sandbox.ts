@@ -113,6 +113,8 @@ export interface BrowserSandboxDeps {
   workbenchPath: (sessionId: string) => string;
   /** 「你的」tab 的下载目录生效值（设置 › 浏览器，缺席 = 系统下载文件夹） */
   userDownloadDir: () => Promise<string>;
+  /** 本会话能用的目录（工作台 / cwd / 附加目录 / 浏览器下载）：browser_navigate 打开本地网页只认这些 */
+  sessionRoots: (sessionId: string) => Promise<string[]>;
   appName: string;
 }
 
@@ -286,6 +288,11 @@ export class BrowserSandbox {
     return [...this.tabs.values()]
       .filter((tab) => tab.owner.kind === "user" || tab.owner.sessionId === sessionId)
       .map((tab) => summarize(tab));
+  }
+
+  /** 本会话能用的目录（打开本地网页的白名单） */
+  sessionRoots(sessionId: string): Promise<string[]> {
+    return this.deps.sessionRoots(sessionId);
   }
 
   /** 截图另存的目录：`<会话工作台>/screenshots/` */
@@ -667,7 +674,10 @@ export function describeDownload(
   record: DownloadRecord,
   done: { state: "completed" | "cancelled" | "interrupted"; bytes: number },
 ): string {
-  if (done.state === "completed") return `Downloaded ${record.url} → ${record.path} (${formatBytes(done.bytes)})`;
+  if (done.state === "completed") {
+    const hint = /\.pdf$/i.test(record.path) ? " Read it with read_pdf." : "";
+    return `Downloaded ${record.url} → ${record.path} (${formatBytes(done.bytes)}).${hint}`;
+  }
   return `Download ${done.state}: ${record.url}`;
 }
 

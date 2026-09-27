@@ -8,6 +8,8 @@
  * 省略协议时：本机与 IP 地址补 `http://`（内网设备、本地开发服务器大多没有证书），
  * 其余域名补 `https://`。
  */
+import { looksLikeLocalPath } from "./local-file.ts";
+
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 /** `localhost:3000`、`scopus.com:443/x` 形如「协议:」，其实是「主机:端口」 */
 const HOST_WITH_PORT = /^[^:/?#]+:\d/;
@@ -53,6 +55,7 @@ export function resolveAddressOrSearch(input: string): { url: string; search: st
   const url = normalizeAddress(input);
   if (url !== null) return { url, search: null };
   const text = input.trim().replace(/\s+/g, " ");
-  if (text === "" || BLOCKED_SCHEME.test(text)) return null;
+  // 本地路径不拿去搜（搜一串路径毫无意义）：本地网页只由 agent 在自己的 tab 里打开（local-file.ts）
+  if (text === "" || BLOCKED_SCHEME.test(text) || looksLikeLocalPath(text)) return null;
   return { url: `${SEARCH_URL}${encodeURIComponent(text)}`, search: text };
 }

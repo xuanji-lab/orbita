@@ -60,4 +60,7 @@ test("resolveAddressOrSearch：空输入与被禁的协议回 null，不拿去�
   assert.equal(resolveAddressOrSearch("file:///etc/passwd"), null);
   assert.equal(resolveAddressOrSearch("javascript:alert(1)"), null);
   assert.equal(resolveAddressOrSearch("chrome://settings"), null);
+  // 本地路径不拿去搜
+  assert.equal(resolveAddressOrSearch("/Users/me/page.html"), null);
+  assert.equal(resolveAddressOrSearch("C:\\Users\\me\\page.html"), null);
 });

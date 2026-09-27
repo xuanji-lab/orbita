@@ -15,6 +15,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import type { BrowserTabSummary, BrowserToolOutcome, BrowserToolRequest } from "../../shared/browser.ts";
 import { availableDownloadPath } from "./downloads.ts";
 import { resolveAddressOrSearch } from "./address.ts";
+import { looksLikeLocalPath, resolveLocalPage } from "./local-file.ts";
+import { pathToFileURL } from "node:url";
 import { formatAxOutline, type AxNode } from "./page-outline.ts";
 import { extractScript, formatExtract, type PageRaw } from "./page-text.ts";
 import { describeDownload, pageUrl, type BrowserSandbox, type BrowserTab } from "./sandbox.ts";
@@ -47,7 +49,11 @@ export async function applyBrowserRequest(
     const contents = tab.view.webContents;
     try {
       if (request.action === "handoff") return await handoff(sandbox, tab, contents, request);
-      if (request.action === "navigate") return await navigate(sandbox, tab, contents, request.url);
+      if (request.action === "navigate") {
+        return looksLikeLocalPath(request.url)
+          ? await openLocalPage(tab, contents, request.url, await sandbox.sessionRoots(sessionId))
+          : await navigate(sandbox, tab, contents, request.url);
+      }
       if (pageUrl(contents) === "") {
         return {
           ok: false,
@@ -135,6 +141,32 @@ async function navigate(
  * ERR_ABORTED（-3）不是失败：它是这次导航被页面自己的后续导航替换了（JS 重定向、SSO 跳转），
  * 等新的那次加载落定再说。
  */
+/**
+ * 打开本会话目录里的本地网页（agent 写的 HTML 预览）。白名单与判定在 local-file.ts；
+ * 这里只加载并报结果。file:// 页面照样在隔离 partition 里、照样无 preload。
+ */
+async function openLocalPage(
+  tab: BrowserTab,
+  contents: WebContents,
+  input: string,
+  roots: readonly string[],
+): Promise<BrowserToolOutcome> {
+  const resolved = await resolveLocalPage(input, roots);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  const url = pathToFileURL(resolved.path).href;
+  const outcome = await loadWithin(contents, url, NAVIGATE_TIMEOUT_MS);
+  if (outcome.kind === "failed") return { ok: false, error: `Could not open ${resolved.path}: ${outcome.reason}` };
+  await delay(SETTLE_MS);
+  return {
+    ok: true,
+    text:
+      `Opened ${resolved.path} in your browser tab.\nTitle: ${contents.getTitle()}\n` +
+      "The user sees it only if they open the built-in browser (globe icon on the right rail) and switch to your tab — " +
+      "tell them. After editing the file, call browser_navigate with the same path again to reload it.",
+    card: card(tab, contents),
+  };
+}
+
 /** 导航开始之后这个 tab 触发的下载；导航被替换（aborted）时下载事件可能稍晚一拍到，多等一小会 */
 async function claimDownload(sandbox: BrowserSandbox, tab: BrowserTab, since: number, aborted: boolean) {
   const found = sandbox.downloadSince(tab, since);
@@ -226,7 +258,11 @@ async function screenshot(tab: BrowserTab, contents: WebContents, saveDir: strin
     ok: true,
     text:
       `Screenshot of ${pageUrl(contents)} (${contents.getTitle()}), ${width}×${height}, visible part of the page only. ` +
-      `The user does not see this image unless you show it to them.${saved}`,
+      (saved === ""
+        ? "This screenshot was NOT saved to disk and the user only sees it inside a collapsed tool row. To show it " +
+          "to the user, call browser_screenshot again with save: true — the result gives the saved path — then " +
+          "call show_image with that exact path. Never guess a path."
+        : `${saved.trim()} To show it to the user, call show_image with this path.`),
     image: { data: image.toJPEG(SCREENSHOT_JPEG_QUALITY).toString("base64"), mimeType: "image/jpeg" },
     card: card(tab, contents),
   };
