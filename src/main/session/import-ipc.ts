@@ -33,6 +33,7 @@ import {
   probeKimiCode,
   probeOpencode,
   probeProma,
+  probeReasonix,
   runImport,
   scanGreetingCandidates,
   scanImport,
@@ -40,6 +41,7 @@ import {
   type ImporterDeps,
   type KimiCodePaths,
   type OpencodePaths,
+  type ReasonixPaths,
 } from "./importer.ts";
 
 export function registerImportIpc(
@@ -90,6 +92,7 @@ export function registerImportIpc(
       claudeCode: claudeCodePaths(),
       kimiCode: kimiCodePaths(),
       opencode: opencodePaths(),
+      reasonix: reasonixPaths(),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
       // mcp.json 坏了不挡扫描：会话与 skills 照导，MCP 写入时会各自报错
@@ -114,6 +117,7 @@ export function registerImportIpc(
       await probeClaudeCode(claudeCodePaths()),
       await probeKimiCode(kimiCodePaths()),
       await probeOpencode(opencodePaths()),
+      await probeReasonix(reasonixPaths()),
       await probeAgentSkills(agentSkillsDir()),
     ],
   }));
@@ -217,6 +221,16 @@ function opencodePaths(): OpencodePaths {
     configFile: join(home, ".config", "opencode", "opencode.json"),
     home,
   };
+}
+
+/**
+ * Reasonix 桌面版的数据根（Electron userData 惯例）。本机 Windows 是 %APPDATA%/reasonix；
+ * 其他平台的 userData 路径未调研——探测 stat 不到就不可勾，无害。
+ */
+function reasonixPaths(): ReasonixPaths {
+  const home = homedir();
+  const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
+  return { projectsRoot: join(appData, "reasonix", "projects"), home };
 }
 
 /** 多家 agent 共用的 skills 目录（agent-skills 来源）。探测与扫描同一个。 */
