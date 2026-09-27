@@ -10,7 +10,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
-import { createPdfTools, PDF_IMAGE_MAX_PAGES_PER_CALL, PDF_MAX_PAGES_PER_CALL } from "./pdf-tools.ts";
+import {
+  createPdfTools,
+  PDF_IMAGE_HD_WIDTH,
+  PDF_IMAGE_MAX_PAGES_PER_CALL,
+  PDF_IMAGE_WIDTH,
+  PDF_MAX_PAGES_PER_CALL,
+} from "./pdf-tools.ts";
 
 /** 夹具里的每页正文要够长（阈值 PDF_NO_TEXT_LAYER_MIN_CHARS 以上），除非在测扫描件 */
 /**
@@ -126,16 +132,24 @@ const run = async (path: string, args: Record<string, unknown> = {}): Promise<st
 /** 视觉模型的 ctx mock：ExtensionContext 只用到 model.input（visionCapable 的唯一读取面） */
 const VISION_CTX = { model: { input: ["text", "image"] } } as never;
 
+/** PNG IHDR 的宽度（字节偏移 16 起 4 字节 big-endian）——断言两档渲染宽度用 */
+function pngWidth(base64: string): number {
+  const bytes = Buffer.from(base64, "base64");
+  return bytes.readUInt32BE(16);
+}
+
 /** 跑一轮并保留完整 content（页图模式断言 image 块用） */
 const runFull = async (
   path: string,
   args: Record<string, unknown>,
   ctx: unknown,
-): Promise<{ blocks: { type: string; text?: string }[] }> => {
+): Promise<{ blocks: { type: string; text?: string; data?: string }[] }> => {
   const result = await tool.execute("call-1", { path, ...args }, undefined, undefined, ctx as never);
   return {
     blocks: result.content.map((block) =>
-      block.type === "text" ? { type: "text", text: block.text } : { type: block.type },
+      block.type === "text"
+        ? { type: "text", text: block.text }
+        : { type: block.type, data: "data" in block ? String(block.data) : undefined },
     ),
   };
 };
@@ -236,6 +250,18 @@ describe("read_pdf", () => {
     assert.ok(text.includes("images of pages 2 follow the text"), text.slice(0, 200));
     assert.equal(blocks.length, 2);
     assert.equal(blocks[1]!.type, "image");
+    // 精准转是高清档（2000px）：1080 下论文双栏里的图看不清，模型会绕路自救（会话 09a4af6c）
+    assert.equal(pngWidth((blocks[1] as { data?: string }).data ?? ""), PDF_IMAGE_HD_WIDTH);
+  });
+
+  test("两档渲染宽度：批转 images:true 是 1080 浏览档，image_pages 是 2000 细看档", async () => {
+    const batch = await runFull("three-pages.pdf", { images: true, limit: 1 }, VISION_CTX);
+    assert.equal(pngWidth((batch.blocks[1] as { data?: string }).data ?? ""), PDF_IMAGE_WIDTH);
+    const targeted = await runFull("three-pages.pdf", { image_pages: "1" }, VISION_CTX);
+    assert.equal(pngWidth((targeted.blocks[1] as { data?: string }).data ?? ""), PDF_IMAGE_HD_WIDTH);
+    // 扫描件自动转图同为高清档（页图即正文，读字要分辨率）
+    const scanned = await runFull("scanned.pdf", {}, VISION_CTX);
+    assert.equal(pngWidth((scanned.blocks[1] as { data?: string }).data ?? ""), PDF_IMAGE_HD_WIDTH);
   });
 
   test("配合式：image_pages 精准转图——文本批不受影响，只渲染指定页", async () => {

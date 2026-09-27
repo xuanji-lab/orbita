@@ -37,8 +37,19 @@ export const PDF_MAX_PAGES_PER_CALL = 20;
 /** 页图单次最多几页。一页图约 1-1.5k token——批转（images: true）与精准转（image_pages）同限 */
 export const PDF_IMAGE_MAX_PAGES_PER_CALL = 5;
 
-/** 页图渲染宽度。Claude Code 同口径；低于 pi 的 2000px 内联上限，无需二次缩放 */
+/**
+ * 批转（images: true）渲染宽度。浏览口径（Claude Code 同款），省 token——
+ * 低于 pi 的 2000px 内联上限，无需二次缩放
+ */
 export const PDF_IMAGE_WIDTH = 1080;
+
+/**
+ * 精准转（image_pages）渲染宽度。**细看就要清晰**：1080px 页宽下论文双栏里的图
+ * 只剩 ~500px 宽，模型看不清会绕路自救（2026-09-27 实测会话 09a4af6c：模型
+ * 用 bash+pymupdf+PIL 十几轮裁剪重渲、巨图塞满上下文后最终答不出正文）。
+ * 2000 是 pi 内联上限，图区域分辨率直接翻倍，自助绕路失去动机。
+ */
+export const PDF_IMAGE_HD_WIDTH = 2000;
 
 /** 全文低于这个字符数视为无文本层（扫描件）。取小值防误伤只有几行字的真 PDF */
 export const PDF_NO_TEXT_LAYER_MIN_CHARS = 50;
@@ -153,12 +164,13 @@ export function figureIndex(text: readonly string[]): { label: string; page: num
 async function renderPages(
   pdf: Awaited<ReturnType<typeof getDocumentProxy>>,
   pages: readonly number[],
+  width: number,
 ): Promise<{ type: "image"; data: string; mimeType: string }[]> {
   const images: { type: "image"; data: string; mimeType: string }[] = [];
   for (const page of pages) {
     const png = await renderPageAsImage(pdf, page, {
       canvasImport: () => Promise.resolve(ncanvas),
-      width: PDF_IMAGE_WIDTH,
+      width,
     });
     images.push({ type: "image", data: Buffer.from(png).toString("base64"), mimeType: "image/png" });
   }
@@ -195,9 +207,10 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
         image_pages: {
           type: "string",
           description:
-            'Specific pages to render as images (~1080px), e.g. "3" or "2-5" or "1,4" (absolute page numbers, ' +
-            "at most 5; text range is unaffected). Prefer this over images=true — read the text first, then " +
-            "look closely at the pages that matter.",
+            'Specific pages to render as high-resolution images (~2000px wide) for looking at figures and ' +
+            'layout closely, e.g. "3" or "2-5" or "1,4" (absolute page numbers, at most 5; the text range is ' +
+            "unaffected). Prefer this over images=true — read the text first, then look closely at the pages " +
+            "that matter.",
         },
         images: {
           type: "boolean",
@@ -305,17 +318,18 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
       let header: string;
       let images: { type: "image"; data: string; mimeType: string }[] = [];
       if (scannedAsImages) {
-        images = await renderPages(pdf, rangeList(first, last));
+        // 扫描件的页图就是正文，按高清渲（读字要分辨率）
+        images = await renderPages(pdf, rangeList(first, last), PDF_IMAGE_HD_WIDTH);
         header =
           `[Scanned PDF with no text layer: ${totalPages} pages. Rendered pages ${first}-${last} as images.` +
           `${continueHint}]`;
       } else if (pickedPages !== null) {
-        images = await renderPages(pdf, pickedPages);
+        images = await renderPages(pdf, pickedPages, PDF_IMAGE_HD_WIDTH);
         header =
           `[PDF with ${totalPages} pages. Text of pages ${first}-${last} of ${totalPages}; images of ` +
           `pages ${pickedPages.join(", ")} follow the text.${continueHint}]`;
       } else if (batchImageMode) {
-        images = await renderPages(pdf, rangeList(first, last));
+        images = await renderPages(pdf, rangeList(first, last), PDF_IMAGE_WIDTH);
         header =
           `[PDF with ${totalPages} pages. Showing pages ${first}-${last} of ${totalPages}; page images follow the text.` +
           `${continueHint}]`;
