@@ -142,20 +142,23 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
-**Three dark tiers** (re-cut 2026-09-27 from the v3 sample page, layering measured off the user's
+**Two dark tiers** (re-cut 2026-09-27 from the v3 sample page, layering measured off the user's
 comfort reference ZCode): **the shell — the ground the left rail and right icon strip sit on — is
-the lighter step; the chat panel is the well (−10 steps); cards and the composer float back up
-(+21 steps); hairlines are white ~10% translucent**. The two defects of the old Warm grounds were
-retired the same day: green-tailed grounds (`#191c1d` / `#232525`) and cream ink (`#d6d5cf`) —
-the sources of the murky feel (gruvbox's full cream `#ebdbb2` had already been cut twice before).
-**Warm** (微暖) is the barely-warm tier: `#201f1c` shell, `#171614` well, `#2c2a26` cards, ink
-`#f2f0ec / #a5a29c / #706d66`. **Graphite** (石墨, added 2026-09-27) is the ZCode-exact neutral:
-`#202020 / #161616 / #2b2b2b`, ink `#f2f2f2 / #a6a6a6 / #6e6e6e`. **Ink** keeps the near-black
-identity with the same proportions — `#1b1b1b / #0f0f0f / #242424` — and **stays the dark landing
-of `system`**. All three are manual choices and take the yellow accent (`#d6c245`) on
-`--color-accent-fg`; selection washes at `.08` — carried by weight and ink, not fill. (The 2026-09-03
-re-cut history — true black, GitHub default, GitHub ×0.78 and neutral gray each bounced — lives in
-that day's commits.)
+the lighter step; the chat panel is the well; cards and the composer float back up (+21 steps);
+hairlines are white ~10% translucent**. The grounds paint solid (`.layer` / `.pane` overrides in
+`src/renderer/src/styles.css`; glass is reserved for floating layers, whose `--glass-bg` is the
+card colour — ZCode's popover recipe). The defects of the old Warm grounds were retired the same
+day: green-tailed grounds (`#191c1d` / `#232525`) and cream ink (`#d6d5cf`) — the sources of the
+murky feel (gruvbox's full cream `#ebdbb2` had already been cut twice before). **Graphite** (石墨,
+added 2026-09-27) is the ZCode-exact neutral: `#202020 / #161616 / #2b2b2b`, ink
+`#f2f2f2 / #a6a6a6 / #6e6e6e`. **Ink** keeps the near-black identity with the same proportions —
+`#1b1b1b / #141414 / #242424` (the well lightened one step the same day; it must stay at or below
+Graphite's `#161616`) — and **stays the dark landing of `system`**. Both are manual choices and
+take the yellow accent (`#d6c245`) on `--color-accent-fg`; selection washes at `.08` — carried by
+weight and ink, not fill. A third tier, **Warm** (微暖), existed for one day and was cut by user
+decision — settings holding `dark` migrate to Graphite (`parseTheme`). (The 2026-09-03 re-cut
+history — true black, GitHub default, GitHub ×0.78 and neutral gray each bounced — lives in that
+day's commits.)
 
 **Paper themes** (added 2026-09-25): **Copybook** (小学作业) and **Typescript** (打字稿) are the two
 faces of the 稿纸 era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
@@ -454,8 +457,7 @@ source does not define them.
 
 ## Caveats
 
-- **`--color-text-inverse` actually inverts**: light `#ffffff`, dark `#201f1c`, graphite `#202020`,
-  black `#1b1b1b`
+- **`--color-text-inverse` actually inverts**: light `#ffffff`, graphite `#202020`, black `#1b1b1b`
   (`tokens/colors.css`, one per theme block) — each is that theme's own shell ground, the opposite of
   `--color-text-primary`. Text that must stay white on a permanently dark ground (overlays, toasts)
   uses `--color-text-on-dark`; text on a coloured fill uses that fill's `-fg` token.

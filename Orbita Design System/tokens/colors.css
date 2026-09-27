@@ -83,58 +83,13 @@
 }
 
 /*
- * 暗色三档共用一套层次语法（2026-09-27 重切，对照用户的参考应用 ZCode 实测）：
- * **外壳（左栏与右图标条坐的地）浅一档 → 会话面板是井（深 10 步）→ 卡面/输入卡
+ * 暗色两档共用一套层次语法（2026-09-27 重切，对照用户的参考应用 ZCode 实测）：
+ * **外壳（左栏与右图标条坐的地）浅一档 → 会话面板是井（深一档）→ 卡面/输入卡
  * 浮起（亮 21 步）→ 发丝线是白色 ~10% 半透明**。旧值的两处病根同日退役：
  * 地面带绿尾（#191c1d / #232525 系）与米色文字（#d6d5cf）——闷感的来源；
- * 层次也反着（面板比外壳亮），井感无从谈起。三档差异只在色温与整体明度。
+ * 层次也反着（面板比外壳亮），井感无从谈起。第三档 Warm（dark）当天从三档
+ * 收敛里退役（用户裁决：只留石墨与墨），存量设置迁移见 shared/settings 的 parseTheme。
  */
-/* dark — Warm · 微暖（v3 小样 W-1 中选）：外壳 #201f1c / 井 #171614 / 卡面 #2c2a26，
-   墨提到近白（#f2f0ec 系），暖只留一丝（暖白发丝线）。旧 gruvbox 米字的
-   两轮退烧史见 2026-09-03 的 commit。设置里叫 Warm；system 不落这档（落 Ink）。 */
-/* `[data-theme-preview="dark"]` 同上，给 Theme 预览卡的 Warm 缩略窗用。 */
-:root[data-theme="dark"],
-[data-theme-preview="dark"] {
-  color-scheme: dark;
-  --color-bg-app: #201f1c;
-  --color-bg-sidebar: #201f1c;
-  --color-bg-panel: #171614;
-  --color-bg-muted: #1d1b18;
-  /* hover 走半透明提亮（同浅色档的机制）：压暗量与底色无关，侧栏与面板一样清楚 */
-  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
-  --color-bg-active: rgba(214, 194, 69, 0.08);
-  --color-text-primary: #f2f0ec;
-  --color-text-secondary: #a5a29c;
-  --color-text-tertiary: #706d66;
-  /* 真正取反：暗主题正文近白，其反色即外壳的地面。填充面上的字改用 --color-*-fg。 */
-  --color-text-inverse: #201f1c;
-  --color-text-on-dark: #ffffff;
-  --color-border-subtle: rgba(255, 242, 222, 0.09);
-  --color-border-default: rgba(255, 242, 222, 0.15);
-  --color-border-strong: rgba(255, 242, 222, 0.21);
-  --color-accent: #d6c245;
-  --color-accent-strong: #e2d05e;
-  --color-accent-soft: rgba(214, 194, 69, 0.08);
-  --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(214, 194, 69, 0.08);
-  --color-mode-active-fg: #d6c245;
-  --color-danger: #ff7b72;
-  --color-danger-solid: #c9372c;
-  --color-danger-fg: #ffffff;
-  --color-danger-soft: #3b1f1d;
-  --color-warning: #d4a72c;
-  --color-info: #52a8ff;
-  --color-info-fg: #1b1a15;
-  --color-success: #56d364;
-  --color-success-bg: #12251a;
-  --color-success-border: #1d4429;
-  --color-chat-card-bg: #2c2a26;
-  --color-chat-muted-bg: rgba(255, 242, 222, 0.05);
-  --color-chat-control-bg: #2c2a26;
-  --color-chat-table-bg: #171614;
-  --color-chat-link: #52a8ff;
-}
-
 /* graphite — 石墨（v3 小样 I-1 中选，2026-09-27 新增）：ZCode 逐值直译的中性档——
    外壳 #202020 / 井 #161616 / 卡面 #2b2b2b，零色偏。用户点名「ZCode 的颜色很舒服」，
    这档就是那套。手动档，system 不落。 */
@@ -180,18 +135,18 @@
 }
 
 /* black — Ink · 近黑（v3 小样 I-2 中选）：保住近黑身份，比例照 ZCode——
-   外壳 #1b1b1b / 井 #0f0f0f / 卡面 #242424。**system 的深色落点仍是这档**
-   （2026-09-03 用户指定，2026-09-27 三档化后不变）。历史轮次：真黑 #000「太黑了」→
-   GitHub default「有点蓝」→ 中性灰 #121212「有点泛黄」→ 2026-09-03 定 #0a0a0a 系 →
-   2026-09-27 换 ZCode 层次重切。 */
+   外壳 #1b1b1b / 卡面 #242424。井 #141414（同日微调：比初切的 #0f0f0f 浅一档，
+   但**不越过石墨的 #161616**——用户裁决的硬边界）。**system 的深色落点仍是这档**
+   （2026-09-03 用户指定）。历史轮次：真黑 #000「太黑了」→ GitHub default「有点蓝」→
+   中性灰 #121212「有点泛黄」→ 2026-09-03 定 #0a0a0a 系 → 2026-09-27 换 ZCode 层次重切。 */
 /* `[data-theme-preview="black"]` 同上，给 Theme 预览卡的 Ink 缩略窗（与 System 卡右半）用。 */
 :root[data-theme="black"],
 [data-theme-preview="black"] {
   color-scheme: dark;
   --color-bg-app: #1b1b1b;
   --color-bg-sidebar: #1b1b1b;
-  --color-bg-panel: #0f0f0f;
-  --color-bg-muted: #141414;
+  --color-bg-panel: #141414;
+  --color-bg-muted: #171717;
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
   --color-bg-active: rgba(214, 194, 69, 0.08);
   --color-text-primary: #f2f2f2;
@@ -221,7 +176,7 @@
   --color-chat-card-bg: #242424;
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
   --color-chat-control-bg: #242424;
-  --color-chat-table-bg: #0f0f0f;
+  --color-chat-table-bg: #141414;
   --color-chat-link: #52a8ff;
 }
 

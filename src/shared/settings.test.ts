@@ -40,6 +40,10 @@ describe("parseSettings", () => {
     deepStrictEqual(parseSettings({ theme: "manuscript" }), { theme: "copybook", drawer: DEFAULT_SETTINGS.drawer });
   });
 
+  it("退役档 dark（Warm）迁移到 graphite——同为「不近黑的暗档」的继任", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }), { theme: "graphite", drawer: DEFAULT_SETTINGS.drawer });
+  });
+
   it("整个文件坏掉也退回默认", () => {
     deepStrictEqual(parseSettings(null), DEFAULT_SETTINGS);
     deepStrictEqual(parseSettings("dark"), DEFAULT_SETTINGS);
@@ -47,8 +51,8 @@ describe("parseSettings", () => {
   });
 
   it("不认识的字段丢掉，不原样带过去", () => {
-    deepStrictEqual(parseSettings({ theme: "dark", fontScale: 2, nested: { a: 1 } }), {
-      theme: "dark",
+    deepStrictEqual(parseSettings({ theme: "graphite", fontScale: 2, nested: { a: 1 } }), {
+      theme: "graphite",
       drawer: DEFAULT_SETTINGS.drawer,
     });
   });
@@ -56,7 +60,7 @@ describe("parseSettings", () => {
 
 describe("parseSettings: drawer 字段", () => {
   it("旧文件没有 drawer 字段：退回默认（收起 / 320 / 无停靠）", () => {
-    deepStrictEqual(parseSettings({ theme: "dark" }).drawer, DEFAULT_SETTINGS.drawer);
+    deepStrictEqual(parseSettings({ theme: "graphite" }).drawer, DEFAULT_SETTINGS.drawer);
   });
 
   it("合法值原样保留；宽度取整", () => {
@@ -140,7 +144,7 @@ describe("clampRightPanelWidth：区间是 pane 的 1/3–2/3（P = chat 主区 
 
 describe("parseSettings 的 sidebarWidth", () => {
   it("缺席 = 没拖过，不落这个键（默认宽度不写进用户的文件）", () => {
-    deepStrictEqual(parseSettings({ theme: "dark" }).sidebarWidth, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite" }).sidebarWidth, undefined);
   });
 
   it("合法值收下并取整", () => {
@@ -173,7 +177,7 @@ describe("parseSettings 的 sidebarWidth", () => {
 
 describe("parseSettings 的 rightPanelWidth", () => {
   it("缺席 = 没拖过，不落这个键", () => {
-    deepStrictEqual(parseSettings({ theme: "dark" }).rightPanelWidth, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite" }).rightPanelWidth, undefined);
   });
 
   // 右栏的上界依赖当前 pane 宽度（clampRightPanelWidth），存储层判不了：
@@ -189,7 +193,7 @@ describe("parseSettings 的 rightPanelWidth", () => {
 
 describe("parseSettings 的 channelColumnWidth（子会话 2026-09-23：通道列可拖宽）", () => {
   it("缺席 = 没拖过，不落这个键", () => {
-    deepStrictEqual(parseSettings({ theme: "dark" }).channelColumnWidth, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite" }).channelColumnWidth, undefined);
   });
 
   // 上界依赖当前 chat 区宽度（clampChannelColumnWidth），存储层判不了：同 rightPanelWidth 的纪律
@@ -255,8 +259,8 @@ describe("parseSettings 的 compaction（A-1）", () => {
   });
 
   it("缺席 = 用户从没动过它，不落这个键", () => {
-    deepStrictEqual(parseSettings({ theme: "dark" }), {
-      theme: "dark",
+    deepStrictEqual(parseSettings({ theme: "graphite" }), {
+      theme: "graphite",
       drawer: DEFAULT_SETTINGS.drawer,
     });
   });
@@ -305,8 +309,8 @@ describe("parseSettings 的 compaction（A-1）", () => {
 
 describe("parseSettings 的 gitAttribution", () => {
   it("缺席 = 开启，且不落这个键——默认值不写进用户的文件", () => {
-    deepStrictEqual(parseSettings({ theme: "dark" }), {
-      theme: "dark",
+    deepStrictEqual(parseSettings({ theme: "graphite" }), {
+      theme: "graphite",
       drawer: DEFAULT_SETTINGS.drawer,
     });
   });
@@ -325,7 +329,7 @@ describe("parseSettings 的 gitAttribution", () => {
 
 describe("parseSettings 的 titleModel", () => {
   it("缺席 = 用会话当前的模型，不落这个键", () => {
-    deepStrictEqual(parseSettings({ theme: "dark" }).titleModel, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite" }).titleModel, undefined);
   });
 
   it("两个 id 都在就原样收下", () => {
@@ -354,8 +358,8 @@ describe("parseSettings 的 titleModel", () => {
 
 describe("parseSettings 的 subSessionModel / subSessionThinking（子会话 2026-09-23）", () => {
   it("缺席 = 同父（不落键）——默认就是跟着父会话走", () => {
-    deepStrictEqual(parseSettings({ theme: "dark" }).subSessionModel, undefined);
-    deepStrictEqual(parseSettings({ theme: "dark" }).subSessionThinking, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite" }).subSessionModel, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite" }).subSessionThinking, undefined);
     deepStrictEqual(DEFAULT_SETTINGS.subSessionModel, undefined);
     deepStrictEqual(DEFAULT_SETTINGS.subSessionThinking, undefined);
   });
@@ -440,7 +444,7 @@ describe("界面语言", () => {
   });
 
   it("双语主题听设置；没设过是英文（语言设置之前的行为）", () => {
-    for (const theme of ["system", "light", "dark", "black"] as const) {
+    for (const theme of ["system", "light", "graphite", "black"] as const) {
       deepStrictEqual(themeLanguage(theme), null);
       deepStrictEqual(effectiveLanguage(theme, "zh"), "zh");
       deepStrictEqual(effectiveLanguage(theme, undefined), "en");
