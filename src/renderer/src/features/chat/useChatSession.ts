@@ -280,6 +280,8 @@ export interface ChatSession {
   send: () => void;
   /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
   sendText: (text: string) => void;
+  /** 指令面板 /new 用：清当前槽的引用与附件。必须在 newTask 之前调 */
+  clearComposerExtras: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
   /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
@@ -1633,6 +1635,29 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, []);
 
   /** 回到首页（本槽）。会话在首条消息提交时才真正创建（R8-01 ①）。 */
+  /**
+   * 指令面板 `/new` 用：清空当前槽挂着的引用、附图、文件与粘贴块（草稿由调用方清）。
+   * **必须在 newTask 之前调**——reset 换槽后 draftKey 变了，挂着的就清不到了
+   * （review 挂账项：/new 只清草稿，附件会跟到下一条新消息里）。
+   */
+  const clearComposerExtras = useCallback(() => {
+    const key = draftKey;
+    const dropKey = <T,>(
+      setMap: (updater: (prev: ReadonlyMap<string, T>) => ReadonlyMap<string, T>) => void,
+    ): void => {
+      setMap((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Map(prev);
+        next.delete(key);
+        return next;
+      });
+    };
+    dropKey(setQuoteMap);
+    dropKey(setAttachmentMap);
+    dropKey(setFileMap);
+    dropKey(setPastedMap);
+  }, [draftKey]);
+
   const reset = useCallback(() => {
     setSessionId(null);
     sessionRef.current = null;
@@ -2442,6 +2467,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     send: () => void send(),
     /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
     sendText: (text: string) => void send(text),
+    clearComposerExtras,
     stop,
     queued: entry.queued,
     sendQueuedNow,

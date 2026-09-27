@@ -12,7 +12,6 @@ import type { ComposerFileRef, ComposerPastedText } from "./composer-attachments
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
-import { api } from "../api";
 import { filterSkills } from "../features/skills/skill-filter";
 import type { SkillMeta } from "@shared/skill";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
@@ -96,6 +95,10 @@ export function Composer(props: {
   imageUnsupported?: boolean;
   /** 指令面板的动作项（/compact /new）：选中即执行，会话动作由调用方接（发送流不经这里） */
   onCommand?: (command: "compact" | "new") => void;
+  /** 指令面板的 skill 清单（ChatView 层 useSkillIndex 的同一份——徽标与面板共用，Composer 不自己拉） */
+  skills: readonly SkillMeta[];
+  /** 面板每次打开时触发重拉：新建 / 删除的 skill 下一次打开立即可见 */
+  onReloadSkills: () => void;
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -138,19 +141,17 @@ export function Composer(props: {
     return () => observer.disconnect();
   }, []);
   // ── 指令面板（/ 触发）──────────────────────────────────────────────
-  // 首字符是 / 且单行时亮；Esc 关掉后改动内容才重新亮。skill 列表首次展开拉一次
-  // （skills 不参与聊天路径，不值得常驻；api.skill.list 与 Skills 面同一份 IPC）。
+  // 首字符是 / 且单行时亮；Esc 关掉后改动内容才重新亮。skill 清单从上层拿
+  // （ChatView 的 useSkillIndex），面板每次打开触发一次重拉——新建/删除的
+  // skill 下一次打开立即可见（review 挂账项：原实现只在首开拉一次，列表过期）。
   const [commandsDismissed, setCommandsDismissed] = useState(false);
   const [activeCommand, setActiveCommand] = useState(0);
-  const [skillMetas, setSkillMetas] = useState<SkillMeta[] | null>(null);
   const panelOpen =
     props.value.startsWith("/") && !props.value.includes("\n") && !commandsDismissed;
   const commandQuery = panelOpen ? props.value.slice(1).trim().toLowerCase() : "";
   useEffect(() => {
-    if (panelOpen && skillMetas === null) {
-      void api.skill.list().then(setSkillMetas).catch(() => setSkillMetas([]));
-    }
-  }, [panelOpen, skillMetas]);
+    if (panelOpen) props.onReloadSkills();
+  }, [panelOpen, props.onReloadSkills]);
   useEffect(() => {
     if (!props.value.startsWith("/")) setCommandsDismissed(false);
   }, [props.value]);
@@ -171,15 +172,15 @@ export function Composer(props: {
       description: meta.description,
     });
     if (commandQuery === "") {
-      return [...builtins, ...(skillMetas ?? []).filter((meta) => !meta.missing).map(matchSkill)];
+      return [...builtins, ...props.skills.filter((meta) => !meta.missing).map(matchSkill)];
     }
     return [
       ...builtins.filter((row) => row.name.startsWith(commandQuery)),
-      ...filterSkills(skillMetas ?? [], commandQuery)
+      ...filterSkills([...props.skills], commandQuery)
         .filter((meta) => !meta.missing)
         .map(matchSkill),
     ];
-  }, [panelOpen, commandQuery, skillMetas, t]);
+  }, [panelOpen, commandQuery, props.skills, t]);
 
   /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行 */
   const runCommand = (row: CommandRow): void => {

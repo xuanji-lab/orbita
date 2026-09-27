@@ -387,21 +387,15 @@ function QuoteSelectionLayer(props: {
  * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
  * （新建的 skill 下一轮会话自然出现）。
  */
-function useSkillIndex(): SkillMeta[] {
+function useSkillIndex(): { skills: SkillMeta[]; reload: () => void } {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
-  useEffect(() => {
-    let alive = true;
-    void api.skill
-      .list()
-      .then((list) => {
-        if (alive) setSkills(list);
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
+  const reload = useCallback(() => {
+    void api.skill.list().then(setSkills).catch(() => undefined);
   }, []);
-  return skills;
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  return { skills, reload };
 }
 
 function ChatViewBody(props: {
@@ -464,8 +458,9 @@ function ChatViewBody(props: {
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引（挂载读一次，见 useSkillIndex）
-  const skills = useSkillIndex();
+  // read SKILL.md 徽标的识别索引 + 指令面板的 skill 清单（同一份数据）。
+  // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
+  const { skills, reload: reloadSkills } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
@@ -663,12 +658,16 @@ function ChatViewBody(props: {
         session.send();
       }}
       onStop={session.stop}
+      skills={skills}
+      onReloadSkills={reloadSkills}
       onCommand={(command) => {
         if (command === "compact") {
           // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
           session.sendText("/compact");
         } else {
-          // /new：清掉打了一半的草稿再开新会话
+          // /new：清掉打了一半的草稿与挂着的附件再开新会话（先清再切——
+          // newTask 换槽后 draftKey 变了，附件就清不到了）
+          session.clearComposerExtras();
           session.setDraft("");
           session.newTask();
         }
