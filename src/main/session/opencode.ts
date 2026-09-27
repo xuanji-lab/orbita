@@ -287,9 +287,11 @@ export function opencodeToMessages(
       stats.compactionMessages += 1;
       continue;
     }
-    const modelId = optionalString(info["modelID"]);
+    // ZCode 的 message.data 用小写 d 的 providerId/modelId（opencode 是大写 D，两家的库
+    // 同源不同代）——两个拼写都认，zcode 来源直接喂同一台转换器
+    const modelId = optionalString(info["modelID"]) ?? optionalString(info["modelId"]);
     if (modelId !== null) model = modelId;
-    const anthropic = info["providerID"] === "anthropic";
+    const anthropic = info["providerID"] === "anthropic" || info["providerId"] === "anthropic";
     const error = isRecord(info["error"]) ? info["error"] : null;
 
     // 按 step 拆：step-start 开新的，step-finish 收尾；step-start 之前的 part（旧版没有 step）归第一个
