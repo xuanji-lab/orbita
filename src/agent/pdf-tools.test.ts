@@ -205,7 +205,8 @@ describe("read_pdf", () => {
     const { blocks } = await runFull("mixed.pdf", { images: true, limit: 100 }, VISION_CTX);
     const text = (blocks[0] as { text?: string }).text ?? "";
     assert.ok(
-      text.includes(`Showing pages 1-${PDF_IMAGE_MAX_PAGES_PER_CALL} of 25; page images follow the text. Use offset=${PDF_IMAGE_MAX_PAGES_PER_CALL + 1} to continue.`),
+      text.includes(`Showing pages 1-${PDF_IMAGE_MAX_PAGES_PER_CALL} of 25; page images follow the text`) &&
+        text.includes(`Use offset=${PDF_IMAGE_MAX_PAGES_PER_CALL + 1} to continue.`),
       text.slice(0, 160),
     );
     assert.equal(blocks.length, PDF_IMAGE_MAX_PAGES_PER_CALL + 1);
@@ -215,7 +216,7 @@ describe("read_pdf", () => {
     const { blocks } = await runFull("scanned.pdf", {}, VISION_CTX);
     const text = (blocks[0] as { text?: string }).text ?? "";
     assert.ok(text.includes("Scanned PDF with no text layer"), text.slice(0, 120));
-    assert.ok(text.includes("Rendered pages 1-2 as images."), text.slice(0, 160));
+    assert.ok(text.includes("Rendered pages 1-2 as images (page 1: 2000×"), text.slice(0, 200));
     assert.equal(blocks.length, 3);
     assert.equal(blocks[1]!.type, "image");
   });
@@ -275,28 +276,41 @@ describe("read_pdf", () => {
     assert.equal(pngWidth((mid.blocks[1] as { data?: string }).data ?? ""), 1280);
   });
 
-  test("crop 特写：区域渲染到满宽（局部高清，token 不涨），头注注明 cropped", async () => {
-    // 取页面上半 40%：输出宽应≈2000（源 5000 宽裁 80% 横向）
-    const { blocks } = await runFull("three-pages.pdf", { image_pages: "1", crop: "0.1,0.1,0.9,0.5" }, VISION_CTX);
+  test("头注报图像素尺寸——crop 坐标的锚点（模型看到的图有多大，工具说清楚）", async () => {
+    const { blocks } = await runFull("three-pages.pdf", { image_pages: "1" }, VISION_CTX);
     const text = (blocks[0] as { text?: string }).text ?? "";
-    assert.ok(text.includes("(cropped to 0.1,0.1,0.9,0.5)"), text.slice(0, 220));
+    // 夹具页 612×792（纵横比 792/612=1.294），2000 宽渲染 → 高 ≈2588
+    assert.ok(text.includes("Image sizes: page 1: 2000×"), text.slice(0, 240));
+  });
+
+  test("crop 特写（像素坐标）：区域渲染到满宽，头注注明 cropped 与输出尺寸", async () => {
+    // 页图 2000×2588（头注报过）：取 x 200-1800（80% 宽）、y 259-1294（40% 高）
+    const { blocks } = await runFull("three-pages.pdf", { image_pages: "1", crop: "200,259,1800,1294" }, VISION_CTX);
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(text.includes("(cropped to 200,259,1800,1294)"), text.slice(0, 240));
+    assert.ok(text.includes("page 1 crop: 2000×1294px"), text.slice(0, 300));
     const data = (blocks[1] as { data?: string }).data ?? "";
     const bytes = Buffer.from(data, "base64");
     const width = bytes.readUInt32BE(16);
     const height = bytes.readUInt32BE(20);
+    // 区域宽 1600px，源放大因子 2000²/1600=2500 → 输出 = 1600·k' ≈ 2000 满宽
     assert.ok(width >= 1500 && width <= 2000, `crop 输出宽 ${width}`);
-    // 高度 = 源宽(2500) × 页纵横比(792/612) × 纵向 0.4 ≈ 1294——显著小于整页高清高(≈2588)
-    assert.ok(height > 1100 && height < 1500, `crop 输出高 ${height}`);
+    // 区域高 1035px · 同因子 → ≈1617·(1035/1600·2000/…)——按比例 ≈1294×2.5=…直接按实测窗口
+    assert.ok(height > 1200 && height < 1800, `crop 输出高 ${height}`);
   });
 
-  test("crop 校验：不配 image_pages 报错；坏坐标报形状", async () => {
+  test("crop 校验：不配 image_pages 报错；倒序报错；x2 超页图宽报锚点说明；坏语法报形状", async () => {
     await assert.rejects(
-      runFull("three-pages.pdf", { crop: "0.1,0.1,0.9,0.5" }, VISION_CTX),
+      runFull("three-pages.pdf", { crop: "200,259,1800,1294" }, VISION_CTX),
       /crop requires image_pages/,
     );
     await assert.rejects(
-      runFull("three-pages.pdf", { image_pages: "1", crop: "0.9,0.1,0.1,0.5" }, VISION_CTX),
-      /need 0<=x1<x2<=1/,
+      runFull("three-pages.pdf", { image_pages: "1", crop: "1800,259,200,1294" }, VISION_CTX),
+      /need x1<x2 and y1<y2/,
+    );
+    await assert.rejects(
+      runFull("three-pages.pdf", { image_pages: "1", crop: "0,0,2500,100" }, VISION_CTX),
+      /beyond the page image width 2000/,
     );
     await assert.rejects(
       runFull("three-pages.pdf", { image_pages: "1", crop: "half" }, VISION_CTX),
