@@ -4,7 +4,7 @@ import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
 
 describe("readInitialTheme", () => {
   it("正常：--orbita-theme= 前缀 + 合法值原样解出", () => {
-    strictEqual(readInitialTheme(["/path/to/electron", "--orbita-theme=dark"]), "dark");
+    strictEqual(readInitialTheme(["/path/to/electron", "--orbita-theme=graphite"]), "graphite");
     strictEqual(readInitialTheme(["--orbita-theme=system"]), "system");
   });
 

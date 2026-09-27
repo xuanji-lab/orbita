@@ -18,14 +18,8 @@
   --glass-bg: rgba(255, 255, 255, 0.6);
 }
 
-:root[data-theme="dark"] {
-  --glass-alpha: 1; /* @kind other */
-  --glass-border: rgba(255, 242, 222, 0.15);
-  --glass-bg: #2c2a26;
-}
-
 /*
- * 暗色三档（2026-09-27 重切，层次见 colors.css 头注释）：--glass-bg = **卡面色**
+ * 暗色两档（2026-09-27 重切，层次见 colors.css 头注释）：--glass-bg = **卡面色**
  * （ZCode 的 popover / input 同款实色）——composer、菜单、右栏面板等浮层用它，
  * 压在井上就是「浮起 +21 步」的那一层。地面（.layer 外壳 / .pane 井）不再走玻璃：
  * 透明度阶梯只能往 tint 爬，叠不出「外壳浅、井更深」；且 Windows 窗口底是不透明

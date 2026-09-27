@@ -10,17 +10,18 @@ import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
  * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（Ink，
- * 2026-09-03 用户指定）；三个暗档从此都是手动档。
+ * 2026-09-03 用户指定）；两个暗档都是手动档。
  *
- * 暗色共三档（2026-09-27 按 ZCode 实测层次重切，小样页 design/dark-theme-variants.html v3 选型）：
- * "dark"（Warm 微暖）、"graphite"（石墨，ZCode 直译的中性档）、"black"（Ink 近黑，system 的落点）。
+ * 暗色两档（2026-09-27 按 ZCode 实测层次重切，小样页选型）：**"graphite"**（石墨，
+ * ZCode 直译的中性档）与 **"black"**（Ink 近黑，井 #141414——不越过石墨的 #161616）。
+ * 第三档 "dark"（Warm 微暖）同日退役，存量设置迁移到 graphite（`parseTheme`）。
  *
  * "copybook"（小学作业）与 "typescript"（打字稿）是璇玑载体谱「稿纸」一档的中文与英文
  * 两版（wafo 2026-09-25 要求载入）：绿格作业本 + 红笔，与打字稿 + 红色页边线。**只有明**，
  * system 不落这两档，都是手动档。copybook 载入当天由 "manuscript"（稿纸）改名：那个年代
  * 小学生写字用的是绿格作业本，不是稿纸。旧 id 的兼容见 `parseTheme`。
  */
-export const THEME_PREFERENCES = ["system", "light", "dark", "graphite", "black", "copybook", "typescript"] as const;
+export const THEME_PREFERENCES = ["system", "light", "graphite", "black", "copybook", "typescript"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 /** 界面语言。缺席 = "en"（语言设置落地之前，双语主题一直是英文界面） */
@@ -30,7 +31,7 @@ export type Language = (typeof LANGUAGES)[number];
 /**
  * 主题自带的语言。**稿纸一档是单语的**：小学作业的绿格按汉字画、打字稿的横线按英文打字机
  * 画，换一门文字格子就对不上（wafo 2026-09-25 当初不加语言开关的理由，正是这种组合）；
- * 其余各档（system 与它落到的 light / black，以及 dark）中英都成立，跟 `language` 走。
+ * 其余各档（system 与它落到的 light / black，以及 graphite）中英都成立，跟 `language` 走。
  * null = 这个主题不定语言。
  */
 export function themeLanguage(theme: ThemePreference): Language | null {
@@ -281,11 +282,13 @@ function isThemePreference(value: unknown): value is ThemePreference {
 
 /**
  * "manuscript" 是 copybook 改名前的 id（同一档）：settings.json 里存着旧值的落回这一档，
- * 不退回 system。下次写设置时磁盘上就是新 id 了。
+ * 不退回 system。下次写设置时磁盘上就是新 id 了。"dark"（Warm）2026-09-27 退役，
+ * 存量值落到 graphite——同为「不近黑的暗档」，继任关系最直。
  */
 function parseTheme(value: unknown): ThemePreference {
   if (isThemePreference(value)) return value;
   if (value === "manuscript") return "copybook";
+  if (value === "dark") return "graphite";
   return DEFAULT_SETTINGS.theme;
 }
 

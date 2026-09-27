@@ -276,7 +276,6 @@ export const zh: Messages = {
   themes: {
     system: "跟随系统",
     light: "浅色",
-    dark: "暖色",
     graphite: "石墨",
     black: "墨",
     copybook: "小学作业",
