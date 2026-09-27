@@ -1349,6 +1349,62 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
+   * 发送失败时的回填快照。send 直发分支在提交前就清空输入框，而失败可能发生在
+   * 很后面（agent 进程的图片解码、主进程的 provider 装配）——不留快照的话，
+   * 「第 1 张图片无法解码…没有发送」之后用户挑好的图 / 文件 / 长文全没了，只能
+   * 重头再来（2026-09-27 用户实测报的）。快照的生死：
+   *   - 消息**落账**（本会话的下一条用户条目回显到达）→ 作废，正常走；
+   *   - 没等到回显就失败（failed）或归位（idle，含被停止）→ 内容放回输入框，
+   *     换模型 / 改内容再发。放回用撤回同一套拼接与名额截断。
+   */
+  interface SentSnapshot {
+    sessionId: string;
+    draftKey: string;
+    text: string;
+    quotes: readonly TextQuote[];
+    images: readonly ComposerImage[];
+    files: readonly ComposerFileRef[];
+    pasted: readonly ComposerPastedText[];
+  }
+  const restoreRef = useRef<SentSnapshot | null>(null);
+  const restoreSent = useCallback(
+    (snap: SentSnapshot) => {
+      if (snap.text !== "") {
+        setDrafts((prev) => new Map(prev).set(snap.draftKey, appendWithdrawn(prev.get(snap.draftKey) ?? "", snap.text)));
+      }
+      if (snap.quotes.length > 0) writeQuotes(snap.draftKey, (current) => [...current, ...snap.quotes]);
+      if (snap.images.length > 0) {
+        writeAttachments(snap.draftKey, (current) => [...current, ...snap.images].slice(0, PROMPT_IMAGE_MAX_COUNT));
+      }
+      if (snap.files.length > 0) {
+        writeFiles(snap.draftKey, (current) => [...current, ...snap.files].slice(0, PROMPT_FILE_MAX_COUNT));
+      }
+      if (snap.pasted.length > 0) writePasted(snap.draftKey, (current) => [...current, ...snap.pasted]);
+    },
+    [writeQuotes, writeAttachments, writeFiles, writePasted],
+  );
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        const snap = restoreRef.current;
+        if (snap === null) return;
+        if (event.type !== "progress" && event.type !== "failed" && event.type !== "phase") return;
+        if (event.sessionId !== snap.sessionId) return;
+        // 本会话出现用户条目回显 = 我们这条落账了；之后的失败属于「发出去了没答上」，
+        // 不是「没发出去」，不回填（消息已在转录里，回填等于重发一份）
+        if (event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "user") {
+          restoreRef.current = null;
+          return;
+        }
+        if (event.type === "failed" || (event.type === "phase" && event.phase === "idle")) {
+          restoreRef.current = null;
+          restoreSent(snap);
+        }
+      }),
+    [restoreSent],
+  );
+
+  /**
    * 绑定本槽 → 乐观置 turn → submit 全套开工上下文。send 的发送分支与遗留事项
    * 开工（startCarryoverTask）共用：两条路径对「发出去那一刻起它就是本槽的活
    * 会话」「失败归位并报错」「新本子首轮刷新侧栏」的要求完全一致，各写一份迟早漂移。
@@ -1400,11 +1456,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         if (resume === null) engine.refreshSessions();
       } catch (cause) {
         engine.setError(cause instanceof Error ? cause.message : String(cause));
-        // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位
+        // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位。
+        // IPC 直接失败（provider 装配等）不发事件，快照在这里兑底放回输入框
+        if (restoreRef.current?.sessionId === id) {
+          const snap = restoreRef.current;
+          restoreRef.current = null;
+          restoreSent(snap);
+        }
         engine.applyStates((prev) => setEntryPhase(prev, id, "idle"));
       }
     },
-    [engine, model, mode, thinkingLevel],
+    [engine, model, mode, thinkingLevel, restoreSent],
   );
 
   const send = useCallback(async () => {
@@ -1515,6 +1577,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (target === "") throw new Error(engine.messagesRef.current.session.noWorkspaceFolder);
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
       if (id === null) id = crypto.randomUUID();
+      // 留回填快照：这条没落账就失败（provider 装配、图片解码……）时内容放回输入框。
+      // 落账（用户条目回显）由事件订阅作废它；submitTurn 的 catch 兜底 IPC 直接失败的那类
+      restoreRef.current = {
+        sessionId: id,
+        draftKey,
+        text: draft,
+        quotes,
+        images: attachments,
+        files,
+        pasted,
+      };
       writeDraft(draftKey, "");
       writeAttachments(draftKey, () => []);
       writeFiles(draftKey, () => []);
