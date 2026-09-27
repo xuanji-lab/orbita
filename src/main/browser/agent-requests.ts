@@ -8,7 +8,8 @@
  *              （agent 在后台用浏览器是常态）时它报 "Current display surface not available"，
  *              后台 tab 报 UnknownVizError；CDP 截图在隐藏窗口、后台 tab 都拍得到真内容
  *              （2026-09-27 在主进程里实测五种窗口 / 视图状态）。
- * 每个 CDP 命令都有超时：卡死的页面不能把 agent 的一轮拖死。
+ * 交互（点击 / 输入 / 按键 / 滚动 / 后退）在 interactions.ts；这里派发，并把「动作之后页面怎么样了」
+ * （换页、下载、弹框）统一报给模型。每个 CDP 命令都有超时（cdp.ts）：卡死的页面不能把 agent 的一轮拖死。
  */
 import { nativeImage, type WebContents } from "electron";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -20,17 +21,25 @@ import { pathToFileURL } from "node:url";
 import { formatAxOutline, type AxNode } from "./page-outline.ts";
 import { extractScript, formatExtract, type PageRaw } from "./page-text.ts";
 import { describeDownload, pageUrl, type BrowserSandbox, type BrowserTab } from "./sandbox.ts";
+import { cdp, delay } from "./cdp.ts";
+import { HostPacer } from "./host-pacer.ts";
+import { click, goHistory, guardDialogs, press, scroll, typeText, watchPageChange } from "./interactions.ts";
+import { fitWithin, regionClip, shotSize, SHOT_MAX_HEIGHT, SHOT_MAX_WIDTH } from "./screenshot-geometry.ts";
 
 /** 页面加载最多等这么久；到点不算失败，如实说「还在加载」（慢站的正文往往已经可读） */
 const NAVIGATE_TIMEOUT_MS = 45_000;
 /** 加载完成后再等一小会：单页应用（Scopus 就是）在 load 之后才渲染结果 */
 const SETTLE_MS = 800;
-const CDP_TIMEOUT_MS = 10_000;
 const OBSERVE_DEFAULT_LINES = 250;
-const SCREENSHOT_MAX_WIDTH = 1280;
 const SCREENSHOT_JPEG_QUALITY = 75;
 /** 导航触发了下载：再等它下完，最多 2 分钟（论文 PDF 通常几秒到几十秒） */
 const DOWNLOAD_WAIT_MS = 120_000;
+
+/**
+ * 同站节流（host-pacer.ts）：所有会话的 agent tab 合起来，对同一站点「会发请求的动作」至少隔 1 秒。
+ * 进程级一份——沙盒也只有一个。
+ */
+const pacer = new HostPacer({ minIntervalMs: 1000 });
 
 export async function applyBrowserRequest(
   sandbox: BrowserSandbox,
@@ -49,6 +58,9 @@ export async function applyBrowserRequest(
     const contents = tab.view.webContents;
     try {
       if (request.action === "handoff") return await handoff(sandbox, tab, contents, request);
+      // agent 自己的 tab 先装对话框护栏（见 interactions.ts guardDialogs）；「你的」tab 只读，不动它的页面。
+      // 护栏是尽力而为：装不上不该让这次读取 / 操作失败
+      if (!readsUser) await guardDialogs(contents).catch(() => undefined);
       if (request.action === "navigate") {
         return looksLikeLocalPath(request.url)
           ? await openLocalPage(tab, contents, request.url, await sandbox.sessionRoots(sessionId))
@@ -62,9 +74,24 @@ export async function applyBrowserRequest(
             : "Your browser tab has no page yet. Call browser_navigate first (or browser_tabs to see what the user has open).",
         };
       }
-      if (request.action === "observe") return await observe(tab, contents, request.maxNodes);
+      if (request.action === "observe") return await observe(tab, contents, request.maxNodes, !readsUser);
       if (request.action === "extract") return await extract(tab, contents, request);
-      return await screenshot(tab, contents, request.save === true ? sandbox.screenshotDir(sessionId) : null);
+      if (request.action === "screenshot") {
+        return request.region !== undefined
+          ? await zoom(tab, contents, request.region)
+          : await screenshot(tab, contents, request.save === true ? sandbox.screenshotDir(sessionId) : null, !readsUser);
+      }
+      if (request.action === "scroll") {
+        return { ok: true, text: await scroll(contents, tab, request), card: card(tab, contents) };
+      }
+      // 会发请求的动作：同站节流、看有没有换页 / 下载 / 弹框。只输字不提交的不节流
+      const paced = request.action !== "type" || request.submit === true;
+      return await act(sandbox, tab, contents, paced, () => {
+        if (request.action === "click") return click(contents, tab, request.target);
+        if (request.action === "type") return typeText(contents, tab, request);
+        if (request.action === "press") return press(contents, request);
+        return goHistory(contents, request.direction);
+      });
     } catch (cause) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
@@ -103,6 +130,7 @@ async function navigate(
     return { ok: false, error: `"${input}" cannot be opened. Only http(s) addresses or search words are allowed.` };
   }
   const url = target.url;
+  await pacer.wait(url);
   tab.lastStatus = null;
   const since = Date.now();
   const outcome = await loadWithin(contents, url, NAVIGATE_TIMEOUT_MS);
@@ -123,6 +151,8 @@ async function navigate(
     return { ok: false, error: `Could not load ${url}: ${outcome.reason}` };
   }
   if (outcome.kind === "loaded") await delay(SETTLE_MS);
+  // 第一次导航之前视图还没有渲染进程、装不了护栏（见 guardDialogs）：页面落定后补上
+  await guardDialogs(contents).catch(() => undefined);
   const lines = [
     ...(target.search !== null ? [`Searched Google for "${target.search}".`] : []),
     outcome.kind === "timeout"
@@ -157,6 +187,7 @@ async function openLocalPage(
   const outcome = await loadWithin(contents, url, NAVIGATE_TIMEOUT_MS);
   if (outcome.kind === "failed") return { ok: false, error: `Could not open ${resolved.path}: ${outcome.reason}` };
   await delay(SETTLE_MS);
+  await guardDialogs(contents).catch(() => undefined);
   return {
     ok: true,
     text:
@@ -201,16 +232,71 @@ async function loadWithin(
   ]);
 }
 
-async function observe(tab: BrowserTab, contents: WebContents, maxNodes: number | undefined): Promise<BrowserToolOutcome> {
+/**
+ * 一个会发请求的动作（点击 / 输入 / 按键 / 后退）：同站节流 → 执行并看有没有换页 → 认领它触发的下载 →
+ * 一段话告诉模型现在在哪。换了新文档就说清旧引用作废——模型才不会拿着 e12 去点新页面。
+ */
+async function act(
+  sandbox: BrowserSandbox,
+  tab: BrowserTab,
+  contents: WebContents,
+  paced: boolean,
+  action: () => Promise<string>,
+): Promise<BrowserToolOutcome> {
+  if (paced) await pacer.wait(pageUrl(contents));
+  const since = Date.now();
+  const change = await watchPageChange(contents, action);
+  const lines = [change.value];
+  const download = sandbox.downloadSince(tab, since);
+  if (download !== undefined && !download.reported) {
+    const done = await Promise.race([download.finished, delay(DOWNLOAD_WAIT_MS).then(() => null)]);
+    if (done !== null) {
+      download.reported = true;
+      lines.push(describeDownload(download, done));
+    } else {
+      lines.push(`Still downloading after ${DOWNLOAD_WAIT_MS / 1000}s → ${download.path}`);
+    }
+  }
+  if (change.dialogs.length > 0) {
+    lines.push(
+      `The page showed ${change.dialogs.length === 1 ? "a dialog" : "dialogs"}, dismissed automatically ` +
+        `(confirm answers Cancel): ${change.dialogs.map((d) => `"${d}"`).join("; ")}`,
+    );
+  }
+  if (change.navigated) {
+    lines.push(
+      `The page is now ${pageUrl(contents)} — "${contents.getTitle()}"${change.loading ? " (still loading)" : ""}` +
+        `${tab.lastStatus !== null && tab.lastStatus >= 400 ? `, HTTP ${tab.lastStatus}` : ""}. ` +
+        "It is a new page: refs from earlier observations no longer apply — call browser_observe before using refs.",
+    );
+  } else {
+    lines.push(`Still on ${pageUrl(contents)}. Observe or screenshot the page to see what changed.`);
+  }
+  return { ok: true, text: lines.join("\n"), card: card(tab, contents) };
+}
+
+/** withRefs：给可交互节点发引用（自己的 tab）；读「你的」tab 时不发——agent 不操作它 */
+async function observe(
+  tab: BrowserTab,
+  contents: WebContents,
+  maxNodes: number | undefined,
+  withRefs: boolean,
+): Promise<BrowserToolOutcome> {
   const result = (await cdp(contents, "Accessibility.getFullAXTree")) as { nodes?: AxNode[] };
   const limit = clampInt(maxNodes ?? OBSERVE_DEFAULT_LINES, 20, 600);
-  const outline = formatAxOutline(result.nodes ?? [], limit);
+  const outline = formatAxOutline(result.nodes ?? [], limit, withRefs ? tab.refs : undefined);
   const text = [
     `URL: ${pageUrl(contents)}`,
     `Title: ${contents.getTitle()}`,
     outline.text === ""
       ? "The page exposes no structure yet (it may still be loading)."
       : ["<page-outline untrusted>", outline.text, "</page-outline>"].join("\n"),
+    ...(withRefs && outline.text.includes("[ref=")
+      ? [
+          "Pass a ref to browser_click / browser_type to act on that element. Refs stay valid until the page " +
+            "loads a new document.",
+        ]
+      : []),
     ...(outline.omitted > 0
       ? [`${outline.omitted} more lines omitted — raise maxNodes, or use browser_extract to read the text.`]
       : []),
@@ -236,8 +322,18 @@ async function extract(
 /**
  * 截图。默认只给模型看（压缩 JPEG 进上下文）；save 时另把原图（PNG，未缩放）存进会话工作台
  * `screenshots/`，结果给路径——用户想留的参考图、要递给用户看的图都从这份文件走。
+ *
+ * 给模型的图**按 CSS 视口尺寸出图**（screenshot-geometry.ts shotSize）：窗口不大时截图像素 = 页面像素，
+ * 模型拿图上的坐标来点正好落在那一点；几何记在 tab 上，坐标换算与局部放大都靠它。
+ * clickable：自己的 tab 才提坐标可点（「你的」tab 只读）。
  */
-async function screenshot(tab: BrowserTab, contents: WebContents, saveDir: string | null): Promise<BrowserToolOutcome> {
+async function screenshot(
+  tab: BrowserTab,
+  contents: WebContents,
+  saveDir: string | null,
+  clickable: boolean,
+): Promise<BrowserToolOutcome> {
+  const viewport = await visualViewport(contents);
   const shot = (await cdp(contents, "Page.captureScreenshot", { format: "png" })) as { data?: unknown };
   const png = typeof shot.data === "string" ? Buffer.from(shot.data, "base64") : null;
   let image = png === null ? null : nativeImage.createFromBuffer(png);
@@ -251,13 +347,28 @@ async function screenshot(tab: BrowserTab, contents: WebContents, saveDir: strin
     await writeFile(path, png);
     saved = ` Saved the full-resolution image to ${path}.`;
   }
-  const size = image.getSize();
-  if (size.width > SCREENSHOT_MAX_WIDTH) image = image.resize({ width: SCREENSHOT_MAX_WIDTH, quality: "good" });
+  const raw = image.getSize();
+  // 视口量不到（极少见）就按原图等比缩进上限，坐标照样按这张图记
+  const target =
+    viewport !== null ? shotSize(viewport.width, viewport.height) : fitWithin(raw.width, raw.height, SHOT_MAX_WIDTH, SHOT_MAX_HEIGHT);
+  if (target.width !== raw.width || target.height !== raw.height) {
+    image = image.resize({ width: target.width, height: target.height, quality: "good" });
+  }
   const { width, height } = image.getSize();
+  tab.shot = {
+    width,
+    height,
+    cssWidth: viewport?.width ?? width,
+    cssHeight: viewport?.height ?? height,
+  };
   return {
     ok: true,
     text:
       `Screenshot of ${pageUrl(contents)} (${contents.getTitle()}), ${width}×${height}, visible part of the page only. ` +
+      (clickable
+        ? "Pixel coordinates in this image can be passed to browser_click / browser_scroll as x, y until the page " +
+          "scrolls or changes; region zooms into part of it. "
+        : "") +
       (saved === ""
         ? "This screenshot was NOT saved to disk and the user only sees it inside a collapsed tool row. To show it " +
           "to the user, call browser_screenshot again with save: true — the result gives the saved path — then " +
@@ -268,17 +379,61 @@ async function screenshot(tab: BrowserTab, contents: WebContents, saveDir: strin
   };
 }
 
-/** 懒 attach 调试器；页面崩溃或被别的调试器抢走后下次调用自己重连。每条命令带超时 */
-async function cdp(contents: WebContents, method: string, params?: object): Promise<unknown> {
-  const debuggerApi = contents.debugger;
-  if (!debuggerApi.isAttached()) {
-    try {
-      debuggerApi.attach("1.3");
-    } catch (cause) {
-      throw new Error(`Could not inspect the page (${cause instanceof Error ? cause.message : String(cause)}).`);
-    }
+/**
+ * 局部放大：把最近一次整页截图里的一块按更高倍率重拍（小字、图表细节）。放大图不改 tab.shot——
+ * 它的像素不是点击坐标，模型点东西仍按整页截图的坐标。
+ */
+async function zoom(
+  tab: BrowserTab,
+  contents: WebContents,
+  region: { x: number; y: number; width: number; height: number },
+): Promise<BrowserToolOutcome> {
+  if (tab.shot === null) {
+    throw new Error("region refers to your latest full screenshot of this tab, and there is none for the current view. Call browser_screenshot first.");
   }
-  return withTimeout(debuggerApi.sendCommand(method, params), CDP_TIMEOUT_MS, "The page did not respond in time.");
+  const viewport = await visualViewport(contents);
+  const clip = regionClip(tab.shot, region, viewport ?? { pageX: 0, pageY: 0 });
+  if (clip === null) {
+    throw new Error(`The region is outside your latest screenshot (${tab.shot.width}×${tab.shot.height}) or smaller than 8 px.`);
+  }
+  const shot = (await cdp(contents, "Page.captureScreenshot", { format: "png", clip })) as { data?: unknown };
+  let image = typeof shot.data === "string" ? nativeImage.createFromBuffer(Buffer.from(shot.data, "base64")) : null;
+  if (image === null || image.isEmpty()) throw new Error("Could not capture that region. Take a fresh screenshot and try again.");
+  const raw = image.getSize();
+  const target = fitWithin(raw.width, raw.height, SHOT_MAX_WIDTH, SHOT_MAX_HEIGHT);
+  if (target.width !== raw.width || target.height !== raw.height) {
+    image = image.resize({ width: target.width, height: target.height, quality: "good" });
+  }
+  const { width, height } = image.getSize();
+  const factor = Math.round((width / Math.max(1, Math.min(region.width, tab.shot.width))) * 10) / 10;
+  return {
+    ok: true,
+    text:
+      `Zoomed view of (${Math.round(region.x)}, ${Math.round(region.y)}, ${Math.round(region.width)}×${Math.round(region.height)}) ` +
+      `from your latest screenshot, about ${factor}× — ${width}×${height}. Its pixels are NOT click coordinates: ` +
+      "use coordinates from the full screenshot.",
+    image: { data: image.toJPEG(SCREENSHOT_JPEG_QUALITY).toString("base64"), mimeType: "image/jpeg" },
+    card: card(tab, contents),
+  };
+}
+
+/** 视口的 CSS 尺寸与滚动偏移；量不到回 null */
+async function visualViewport(
+  contents: WebContents,
+): Promise<{ width: number; height: number; pageX: number; pageY: number } | null> {
+  const metrics = (await cdp(contents, "Page.getLayoutMetrics").catch(() => null)) as {
+    cssVisualViewport?: { clientWidth?: unknown; clientHeight?: unknown; pageX?: unknown; pageY?: unknown };
+  } | null;
+  const viewport = metrics?.cssVisualViewport;
+  const width = viewport?.clientWidth;
+  const height = viewport?.clientHeight;
+  if (typeof width !== "number" || typeof height !== "number" || width <= 0 || height <= 0) return null;
+  return {
+    width: Math.round(width),
+    height: Math.round(height),
+    pageX: typeof viewport?.pageX === "number" ? viewport.pageX : 0,
+    pageY: typeof viewport?.pageY === "number" ? viewport.pageY : 0,
+  };
 }
 
 /** `screenshots/` 里的文件名：时间 + 站点，同一分钟里重名交给 availableDownloadPath 加序号 */
@@ -323,20 +478,6 @@ function asPageRaw(value: unknown): PageRaw {
 
 function card(tab: BrowserTab, contents: WebContents) {
   return { tabId: tab.id, url: pageUrl(contents), title: contents.getTitle() };
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  return Promise.race([
-    promise,
-    new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function clampInt(value: number, min: number, max: number): number {

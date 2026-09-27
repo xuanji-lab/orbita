@@ -1415,6 +1415,15 @@ describe("toolCallSummary —— 受管浏览器", () => {
     assert.equal(toolCallSummary("browser_extract", { offset: 100 }), null);
     assert.equal(toolCallSummary("browser_screenshot", {}), null);
   });
+
+  test("交互类摘要是模型给的 element 人话；缺了退回 ref / 坐标；按键说键名、滚动说方向", () => {
+    assert.equal(toolCallSummary("browser_click", { element: "Search button", ref: "e3" }), "Search button");
+    assert.equal(toolCallSummary("browser_click", { ref: "e3" }), "e3");
+    assert.equal(toolCallSummary("browser_click", { x: 120, y: 48 }), "120, 48");
+    assert.equal(toolCallSummary("browser_type", { element: "Search box", text: "llm" }), "Search box");
+    assert.equal(toolCallSummary("browser_press", { key: "Enter" }), "Enter");
+    assert.equal(toolCallSummary("browser_scroll", { direction: "down" }), "down");
+  });
 });
 
 describe("toolCallSummary —— delegate（子会话 PR4a）", () => {

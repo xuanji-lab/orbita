@@ -48,6 +48,8 @@ import { normalizeAddress, resolveAddressOrSearch } from "./address.ts";
 import { browserUserAgent } from "./identity.ts";
 import { browserShortcut, type BrowserShortcut } from "./shortcuts.ts";
 import { availableDownloadPath, forceDownloadHeaders } from "./downloads.ts";
+import { emptyElementRefs, type ElementRefs } from "./page-outline.ts";
+import type { ShotGeometry } from "./screenshot-geometry.ts";
 
 /** 全局一个持久化 partition（2026-09-27 裁决：学校登录是跨工作区的身份，不按工作区分） */
 export const BROWSER_PARTITION = "persist:orbita-browser";
@@ -84,6 +86,10 @@ export interface BrowserTab {
   handoff: PendingHandoff | null;
   /** 这个 tab 触发的下载，按开始时间排；agent 工具按「导航开始之后」认领自己触发的那次 */
   downloads: DownloadRecord[];
+  /** 当前文档里发给模型的元素引用（browser_observe 发，click / type 用）。跨文档导航时整张换掉 */
+  refs: ElementRefs;
+  /** 最近一次整页截图的几何：截图坐标换算成页面坐标靠它。跨文档导航时作废 */
+  shot: ShotGeometry | null;
 }
 
 interface PendingHandoff {
@@ -467,6 +473,8 @@ export class BrowserSandbox {
       sessionTitle: "",
       handoff: null,
       downloads: [],
+      refs: emptyElementRefs(),
+      shot: null,
     };
     this.tabs.set(tab.id, tab);
     // 先垫到最底层：新 agent tab 不盖住用户正在看的那一页
@@ -476,12 +484,17 @@ export class BrowserSandbox {
     const contents = view.webContents;
     contents.on("did-navigate", (_event, _url, httpResponseCode) => {
       tab.lastStatus = httpResponseCode > 0 ? httpResponseCode : null;
+      // 新文档：旧引用指向的节点不在了，旧截图的坐标也不对了
+      tab.refs = emptyElementRefs();
+      tab.shot = null;
       this.push();
     });
     contents.on("did-start-loading", () => this.push());
     contents.on("did-stop-loading", () => this.push());
     contents.on("did-navigate-in-page", () => this.push());
     contents.on("page-title-updated", () => this.push());
+    // agent tab 离开页面不被 beforeunload 拦住：没人看得见那个「确定要离开吗」，拦住就是导航静默失败
+    if (owner.kind === "agent") contents.on("will-prevent-unload", (event) => event.preventDefault());
     this.guardContents(contents);
     this.wireShortcuts(contents);
     // 网页视图不预载 about:blank：它会成为历史的第一条，首次导航后「后退」就是亮的、

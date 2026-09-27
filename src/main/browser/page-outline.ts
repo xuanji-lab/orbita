@@ -6,7 +6,10 @@
  *   对话框。纯排版容器（generic / group / 无名 section）不印，也不加缩进——它们只会把大纲撑深。
  * - **不印正文**（StaticText）：读文字走 browser_extract，大纲只讲结构，控制 token。
  * - 被忽略（ignored）的节点自己不印，子节点照常下钻——很多真实控件挂在 ignored 包装之下。
- * - 第二刀不输出元素引用：还没有点击等动作消费它（引用表留到交互工具那一刀）。
+ * - **可交互的节点带元素引用**（`[ref=e12]`），browser_click / browser_type 拿它定位。引用背后是 CDP 的
+ *   backendDOMNodeId——同一个文档里稳定，布局变了也指得准；只在换文档（跨文档导航）时作废。
+ *   同一个节点在多次 observe 之间保持同一个编号（ElementRefs 的反查表），模型手里的旧引用不会被新的一次
+ *   observe 悉悉改指别的元素。读「你的」tab 时不发引用：agent 不操作它。
  */
 
 /** CDP `Accessibility.getFullAXTree` 返回节点里我们用到的字段 */
@@ -19,6 +22,32 @@ export interface AxNode {
   properties?: { name: string; value?: { value?: unknown } }[];
   childIds?: string[];
   parentId?: string;
+  /** 对应的 DOM 节点；元素引用就是它的别名 */
+  backendDOMNodeId?: number;
+}
+
+/**
+ * 一个文档里发出去的元素引用：`e1`、`e2`…… ↔ backendDOMNodeId。挂在 tab 上，跨文档导航时整张换掉。
+ */
+export interface ElementRefs {
+  byRef: Map<string, number>;
+  byNode: Map<number, string>;
+  next: number;
+}
+
+export function emptyElementRefs(): ElementRefs {
+  return { byRef: new Map(), byNode: new Map(), next: 1 };
+}
+
+/** 这个节点的引用；发过就复用，没发过就取下一个号 */
+export function refForNode(refs: ElementRefs, backendNodeId: number): string {
+  const existing = refs.byNode.get(backendNodeId);
+  if (existing !== undefined) return existing;
+  const ref = `e${refs.next}`;
+  refs.next += 1;
+  refs.byRef.set(ref, backendNodeId);
+  refs.byNode.set(backendNodeId, ref);
+  return ref;
 }
 
 /** 地标与容器：印出来，并让子节点缩进一层 */
@@ -68,15 +97,40 @@ const LEAF_ROLES = new Set([
   "status",
 ]);
 
+/** 能点、能输、能选的角色：印出来时带元素引用。标题、图片、提示只是看的，不发引用（省 token） */
+const INTERACTIVE_ROLES = new Set([
+  "link",
+  "button",
+  "textbox",
+  "searchbox",
+  "combobox",
+  "checkbox",
+  "radio",
+  "switch",
+  "slider",
+  "spinbutton",
+  "tab",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "option",
+  "treeitem",
+]);
+
 /** 列表 / 表格容器没有名字时印出来只是噪音：只作缩进锚，本身不占一行 */
 const SILENT_WHEN_UNNAMED = new Set(["list", "table", "grid", "region", "form", "listbox", "menu", "tree", "tablist"]);
 
 const NAME_MAX = 120;
 const VALUE_MAX = 80;
 
+/**
+ * @param refs 传了就给可交互节点发引用（agent 自己的 tab）；不传就只印结构（「你的」tab，只读）。
+ * 只给真正印出来的行发——行预算外的节点模型看不到，发了也没人用。
+ */
 export function formatAxOutline(
   nodes: readonly AxNode[],
   maxLines: number,
+  refs?: ElementRefs,
 ): { text: string; lines: number; omitted: number } {
   const byId = new Map(nodes.map((node) => [node.nodeId, node]));
   const root = nodes.find((node) => node.parentId === undefined) ?? nodes[0];
@@ -93,8 +147,10 @@ export function formatAxOutline(
     let childDepth = depth;
     if (printable && !skipUnnamed) {
       if (!silent) {
-        if (lines.length < maxLines) lines.push(`${"  ".repeat(depth)}- ${describe(node, role, name)}`);
-        else omitted += 1;
+        if (lines.length < maxLines) {
+          const ref = refs !== undefined ? refLabel(node, role, refs) : "";
+          lines.push(`${"  ".repeat(depth)}- ${describe(node, role, name)}${ref}`);
+        } else omitted += 1;
       }
       if (LEAF_ROLES.has(role)) return;
       childDepth = depth + 1;
@@ -106,6 +162,13 @@ export function formatAxOutline(
   };
   if (root !== undefined) visit(root, 0);
   return { text: lines.join("\n"), lines: lines.length, omitted };
+}
+
+/** ` [ref=e12]`；不可交互、被禁用或没有 DOM 节点的回空串 */
+function refLabel(node: AxNode, role: string, refs: ElementRefs): string {
+  if (!INTERACTIVE_ROLES.has(role) || node.backendDOMNodeId === undefined) return "";
+  const disabled = (node.properties ?? []).some((p) => p.name === "disabled" && p.value?.value === true);
+  return disabled ? "" : ` [ref=${refForNode(refs, node.backendDOMNodeId)}]`;
 }
 
 function describe(node: AxNode, role: string, name: string): string {

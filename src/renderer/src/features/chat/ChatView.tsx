@@ -2745,6 +2745,11 @@ function toolIcon(toolName: string): IconName {
     case "browser_observe":
     case "browser_extract":
     case "browser_screenshot":
+    case "browser_tabs":
+    case "browser_scroll":
+    case "browser_click":
+    case "browser_type":
+    case "browser_press":
       return "globe";
     default:
       // MCP 工具（mcp__server__tool）：专属插头图标——外部能力，与内置工具一眼区分

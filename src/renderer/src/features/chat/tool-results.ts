@@ -1112,6 +1112,18 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     // 受管浏览器：导航说去哪；读取类作用于当前页，入参里没有值得摘的，交给结果摘要
     case "browser_navigate":
       return str("url");
+    // 交互：模型给的 element 人话（审批卡上也是它）；缺了退回 ref / 坐标，至少知道点的哪
+    case "browser_click": {
+      const x = record["x"];
+      const y = record["y"];
+      return str("element") ?? str("ref") ?? (typeof x === "number" && typeof y === "number" ? `${x}, ${y}` : null);
+    }
+    case "browser_type":
+      return str("element") ?? str("ref");
+    case "browser_press":
+      return str("key");
+    case "browser_scroll":
+      return str("direction");
     // 交接：摘要就是 agent 说的原因（交接卡的标题）
     case "request_user_action":
       return str("reason");
