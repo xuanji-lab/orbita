@@ -40,6 +40,7 @@ import {
   channelSendMessageId,
   mcpInputSummary,
   readTaskCard,
+  showImageCard,
   summarizeMcpResult,
   liveTailLines,
   parseEditDiff,
@@ -2669,6 +2670,10 @@ function ToolLine(props: {
   if (props.toolName === "delegate" && !failed) {
     return <DelegateToolLine input={props.input} result={result} channel={props.channel} />;
   }
+  // show_image 成功时早退画廊行（失败照通用骨架）；delegate 特判同理见上
+  if (props.toolName === "show_image" && !failed) {
+    return <ShowImageToolLine result={result} />;
+  }
   if ((props.toolName === "reply_subsession" || props.toolName === "report_to_parent") && !failed) {
     return (
       <ChannelSendToolLine
@@ -3341,6 +3346,87 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
           </figcaption>
         </figure>
       ))}
+    </div>
+  );
+}
+
+/**
+ * show_image 的画廊行（agent/image-tools.ts）：模型「把图给用户看」的显式动作——
+ * 会话流一等公民，不折叠、直接可见。行标识（image 图标 + 张数）+ 网格画廊
+ * （单张大图、多张两列网格，点开 ImageLightbox），文件名一行 micro。
+ * 卡片数据来自 details.showImage（与模型有没有视觉无关）；失败不进这里
+ * ——ToolLine 特判只拦 !failed，失败照通用骨架走红色可展开。
+ */
+function ShowImageToolLine(props: { result: ToolTranscriptItem | undefined }) {
+  const t = useT();
+  const [viewing, setViewing] = useState<number | null>(null);
+  const card = showImageCard(props.result);
+  const lightboxImages =
+    card === null
+      ? []
+      : card.images.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
+  return (
+    <div style={{ display: "grid", gap: "var(--space-2)", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <Icon name="image" size={13} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+        <span
+          style={{
+            fontSize: "var(--font-size-caption)",
+            fontFamily: "var(--font-family-mono)",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {t.chat.images(card?.images.length ?? 0)}
+        </span>
+      </div>
+      {card !== null && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: card.images.length > 1 ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)",
+            gap: "var(--space-2)",
+            minWidth: 0,
+          }}
+        >
+          {card.images.map((img, i) => (
+            <figure key={`show-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
+              <button
+                type="button"
+                aria-label={t.lightbox.open}
+                onClick={() => setViewing(i)}
+                style={{ ...ZOOM_BUTTON_STYLE, justifySelf: "stretch" }}
+              >
+                <img
+                  src={imageSrc({ type: "image", data: img.data, mimeType: img.mimeType })}
+                  alt={img.name}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    maxHeight: 320,
+                    objectFit: "contain",
+                    borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--color-border-subtle)",
+                    background: "var(--color-bg-panel)",
+                  }}
+                />
+              </button>
+              <figcaption
+                style={{
+                  fontSize: "var(--font-size-micro)",
+                  color: "var(--color-text-tertiary)",
+                  fontFamily: "var(--font-family-mono)",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {img.name}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      )}
+      {viewing !== null && (
+        <ImageLightbox images={lightboxImages} startIndex={viewing} onClose={() => setViewing(null)} />
+      )}
     </div>
   );
 }

@@ -46,6 +46,7 @@ import { gitAttributionGuideline } from "./git-attribution.ts";
 import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { McpHub } from "./mcp.ts";
+import { createImageTools } from "./image-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
@@ -701,6 +702,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...mcpHub.currentTools(),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     ...createPdfTools(command.cwd),
+    // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
+    ...createImageTools(command.cwd),
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createChannelTools(requestBroker, command.sessionId, role),

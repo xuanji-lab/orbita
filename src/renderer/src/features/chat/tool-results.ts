@@ -677,6 +677,41 @@ export function readTaskCard(result: ToolTranscriptItem | undefined): ReadTaskCa
   };
 }
 
+/** show_image 结果 details 里的画廊卡：图给用户看，与模型有没有视觉无关（agent/image-tools.ts） */
+export interface ShowImageCardView {
+  images: { data: string; mimeType: string; name: string }[];
+}
+
+/**
+ * show_image 的画廊卡。**逐字段校验，坏值判 null**——同 readTaskCard 的纪律；
+ * 键名 `"showImage"` 对应 `image-tools.ts` 落的 `details: { showImage: card }`。
+ * 卡片走 details 而非 content 的 image 块：非视觉模型时 content 没有图（provider
+ * 约束），用户的画廊不能跟着消失。
+ */
+export function showImageCard(result: ToolTranscriptItem | undefined): ShowImageCardView | null {
+  if (result === undefined || result.status === "running") return null;
+  const details = result.details;
+  if (typeof details !== "object" || details === null) return null;
+  const raw = (details as Record<string, unknown>)["showImage"];
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const list = value["images"];
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const images: { data: string; mimeType: string; name: string }[] = [];
+  for (const item of list) {
+    if (typeof item !== "object" || item === null) return null;
+    const entry = item as Record<string, unknown>;
+    const data = entry["data"];
+    const mimeType = entry["mimeType"];
+    const name = entry["name"];
+    if (typeof data !== "string" || data === "") return null;
+    if (typeof mimeType !== "string" || !mimeType.startsWith("image/")) return null;
+    if (typeof name !== "string") return null;
+    images.push({ data, mimeType, name });
+  }
+  return { images };
+}
+
 /**
  * 子会话：`delegate` 结果 `details` 里的派出卡。**逐字段校验，坏值判 null**——
  * 同 readTaskCard 的纪律，键名 `"delegate"` 对应 `channel-tools.ts` 落的
@@ -1001,6 +1036,13 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     }
     case "ls":
       return str("path") ?? ".";
+    // show_image 的入参是路径数组：摘要 = 空格连接的文件名（截断由调用方排版管）
+    case "show_image": {
+      const value = record["paths"];
+      if (!Array.isArray(value)) return null;
+      const names = value.filter((item): item is string => typeof item === "string" && item !== "");
+      return names.length > 0 ? names.map((name) => name.split(/[\\/]/).pop() ?? name).join(" ") : null;
+    }
     case "read_task":
     // 子会话：delegate 的入参同样有 task 字段——派出卡的任务预览复用这条摘要
     case "delegate":
