@@ -53,6 +53,7 @@ const ALLOWED_LATIN = new Set([
   "Kimi",
   "opencode",
   "Reasonix",
+  "ZCode",
   "Desktop",
   // 登录状态导入的来源浏览器（其他应用的名字）
   "Chrome",

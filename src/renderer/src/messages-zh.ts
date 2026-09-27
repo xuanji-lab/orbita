@@ -479,6 +479,7 @@ export const zh: Messages = {
       "kimi-code": "Kimi Code",
       opencode: "opencode",
       reasonix: "Reasonix",
+      zcode: "ZCode",
       "agent-skills": "共享的智能体技能",
     },
     kinds: {
