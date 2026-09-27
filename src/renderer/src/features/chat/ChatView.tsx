@@ -2025,10 +2025,6 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
       }}
     >
       {images.length > 0 && <UserImages images={images} />}
-      {skillBlock !== null && (
-        // skill 卡在附加指示气泡之前——时间序就是「先调 skill，再说要做什么」
-        <SkillInvocationCard name={skillBlock.name} content={skillBlock.content} />
-      )}
       {quotes.length > 0 && (
         <div
           style={{
@@ -2130,6 +2126,12 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
             />
           )}
         </div>
+      )}
+      {skillBlock !== null && (
+        // skill 卡在气泡**之后**（统一的发送后排布：图片 → 引用 → 附件 chip →
+        // 文字气泡 → skill 卡）——发出去之后 skill 展开的正文是背景材料，
+        // 用户自己的话先行
+        <SkillInvocationCard name={skillBlock.name} content={skillBlock.content} />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
         {overflowing && (
