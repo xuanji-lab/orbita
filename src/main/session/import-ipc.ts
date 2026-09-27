@@ -37,6 +37,7 @@ import {
   probeOpencode,
   probeProma,
   probeReasonix,
+  probeZcode,
   runImport,
   scanGreetingCandidates,
   scanImport,
@@ -46,6 +47,7 @@ import {
   type OpencodePaths,
   reasonixDataRoot,
   type ReasonixPaths,
+  type ZcodePaths,
 } from "./importer.ts";
 
 export function registerImportIpc(
@@ -89,6 +91,7 @@ export function registerImportIpc(
       kimiCode: kimiCodePaths(),
       opencode: opencodePaths(),
       reasonix: reasonixPaths(),
+      zcode: zcodePaths(),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
       // mcp.json 坏了不挡扫描：会话与 skills 照导，MCP 写入时会各自报错
@@ -112,6 +115,7 @@ export function registerImportIpc(
       await probeKimiCode(kimiCodePaths()),
       await probeOpencode(opencodePaths()),
       await probeReasonix(reasonixPaths()),
+      await probeZcode(zcodePaths()),
       await probeAgentSkills(agentSkillsDir()),
     ],
   }));
@@ -216,6 +220,12 @@ function opencodePaths(): OpencodePaths {
 function reasonixPaths(): ReasonixPaths {
   const home = homedir();
   return { projectsRoot: join(reasonixDataRoot(process.platform, home, process.env), "projects"), home };
+}
+
+/** ZCode 的会话库（Electron userData 惯例；本机 Windows，其他平台探测 stat 不到就不可勾）。 */
+function zcodePaths(): ZcodePaths {
+  const home = homedir();
+  return { dbFile: join(home, ".zcode", "cli", "db", "db.sqlite"), home };
 }
 
 /** 多家 agent 共用的 skills 目录（agent-skills 来源）。探测与扫描同一个。 */

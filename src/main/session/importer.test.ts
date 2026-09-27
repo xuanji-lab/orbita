@@ -28,6 +28,7 @@ import {
   probeClaudeCode,
   probeKimiCode,
   probeOpencode,
+  probeZcode,
   probeProma,
   probeReasonix,
   reasonixDataRoot,
@@ -2259,6 +2260,102 @@ describe("reasonix 来源", () => {
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [projectsRoot]);
     assert.equal((await probeReasonix({ projectsRoot: join(root, "nope"), home })).found, false);
+  });
+});
+
+describe("zcode 来源", () => {
+  let dbFile = "";
+  let home = "";
+
+  beforeEach(async () => {
+    dbFile = join(root, "zcode", "db.sqlite");
+    home = join(root, "home");
+    await mkdir(dirname(dbFile), { recursive: true });
+    await mkdir(home, { recursive: true });
+    const db = new DatabaseSync(dbFile);
+    db.exec(`
+      create table session (id text primary key, parent_id text, directory text, title text, revert text, time_created integer, time_updated integer);
+      create table message (id text primary key, session_id text, data text, sequence integer);
+      create table part (id text primary key, message_id text, session_id text, data text, sequence integer);
+    `);
+    db.close();
+  });
+
+  const paths = () => ({ dbFile, home });
+  const zDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ zcode: paths(), ...overrides });
+
+  /** ZCode 库最小 schema（2026-09-28 对本机库 pragma 抄的）+ 两个真实形状的会话。 */
+  async function writeDb(sessions: { id: string; directory: string | null; title: string | null; revert?: string; parent?: string; rows: { seq: number; data: Record<string, unknown>; parts?: Record<string, unknown>[] }[] }[]): Promise<void> {
+    const db = new DatabaseSync(dbFile);
+    for (const session of sessions) {
+      db.prepare("insert into session values (?, ?, ?, ?, ?, 1000, 2000)").run(
+        session.id, session.parent ?? null, session.directory, session.title, session.revert ?? null,
+      );
+      for (const row of session.rows) {
+        const id = `${session.id}_m${row.seq}`;
+        db.prepare("insert into message values (?, ?, ?, ?)").run(id, session.id, JSON.stringify(row.data), row.seq);
+        (row.parts ?? []).forEach((part, index) => {
+          db.prepare("insert into part values (?, ?, ?, ?, ?)").run(`${id}_p${index}`, id, session.id, JSON.stringify(part), row.seq * 10 + index);
+        });
+      }
+    }
+    db.close();
+  }
+
+  const turn = (prompt: string): { seq: number; data: Record<string, unknown>; parts?: Record<string, unknown>[] }[] => [
+    { seq: 1, data: { role: "user", time: { created: 10000 } }, parts: [{ type: "text", text: prompt }] },
+    {
+      seq: 2,
+      data: { role: "assistant", time: { created: 10001 }, providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3-Flash" },
+      parts: [{ type: "step-start" }, { type: "text", text: `答：${prompt}` }, { type: "step-finish", reason: "stop", tokens: { input: 1, output: 1 } }],
+    },
+  ];
+
+  test("扫描与执行：子会话不列、rewind 只留白名单、transcript 只有用户写的话、重扫即已导入", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeDb([
+      { id: "ses_a", directory: repo, title: "标题A", rows: turn("修测试") },
+      { id: "ses_b", directory: repo, title: "标题B", rows: turn("再跑一次") },
+      { id: "ses_child", directory: repo, title: "子任务", parent: "ses_a", rows: turn("子 agent 的活") },
+      {
+        id: "ses_rw",
+        directory: repo,
+        title: "回退过的",
+        revert: JSON.stringify({ keptMessageIDs: ["ses_rw_m1", "ses_rw_m2"], kind: "conversation_rewind" }),
+        rows: [...turn("先问"), { seq: 3, data: { role: "user", time: { created: 20000 } }, parts: [{ type: "text", text: "回退掉的话" }] }],
+      },
+    ]);
+
+    const report = await scanImport(zDeps(), [], ["zcode"]);
+    const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([...byId.keys()].sort(), ["ses_a", "ses_b", "ses_rw"]);
+    assert.equal(byId.get("ses_a")?.title, "标题A");
+    assert.deepEqual([byId.get("ses_a")?.source, byId.get("ses_a")?.sourceKind, byId.get("ses_a")?.importedModel], ["zcode", "zcode", "GLM-5.3-Flash"]);
+    assert.equal(byId.get("ses_b")?.workspaceId, report.newWorkspaces[0]?.id);
+    assert.equal(report.newWorkspaces.length, 1);
+
+    // 执行 ses_a：transcript 只有用户写的话
+    const run = await runImport(zDeps(), { sources: ["zcode"], sessions: new Set([byId.get("ses_a")?.sourceFile ?? ""]), destinations: [] });
+    assert.equal(run.imported, 1);
+    assert.deepEqual(run.failed, []);
+    const [meta] = await store.list();
+    const records = (await store.load(meta?.id ?? ""))?.transcript ?? [];
+    const userTexts = records
+      .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
+      .map((record) => record.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
+    assert.deepEqual(userTexts, ["修测试"]);
+    const ledger = (await readFile(join(root, "imports.jsonl"), "utf8")).trim().split("\n").map((item) => JSON.parse(item) as Record<string, unknown>);
+    assert.deepEqual(ledger.map((item) => item["source"]), ["zcode"]);
+    const again = await scanImport(zDeps({ existingMetas: await store.list() }), [], ["zcode"]);
+    assert.equal(again.skipped.find((item) => item.sourceId === "ses_a")?.reason, "already-imported");
+  });
+
+  test("探测：库在不在；paths 列出扫描会读的一处", async () => {
+    const found = await probeZcode(paths());
+    assert.equal(found.found, true);
+    assert.deepEqual(found.paths, [dbFile]);
+    assert.equal((await probeZcode({ ...paths(), dbFile: join(root, "nope.sqlite") })).found, false);
   });
 });
 
