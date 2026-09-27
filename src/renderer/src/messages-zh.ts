@@ -218,6 +218,7 @@ export const zh: Messages = {
     taskActions: "任务操作",
     carryovers: "遗留事项",
     noCarryovers: "还没有遗留事项。收尾一个任务，把没做完的零碎收到这里。",
+    noArchived: "还没有归档的任务。从任务的菜单里归档，它会挪到这里，不会被删除。",
     sourceDeleted: "来源任务已删除",
     openSource: "打开来源任务",
     deletedTask: "已删除的任务",

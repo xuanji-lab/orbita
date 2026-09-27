@@ -1,8 +1,7 @@
 /**
  * 右栏底部应用入口（Archived / Carryovers）的点亮判定与点击落点。
  *
- * 单独成文件同 `subview-exit.ts` 的理由：**可测**——`node --test` 只加载 `.ts`，
- * 这套判定写在 App.tsx 里就没法直接跑。
+ * 单独成文件只为**可测**：`node --test` 只加载 `.ts`，这套判定写在 App.tsx 里就没法直接跑。
  *
  * 侧栏同一时刻只显示一块列表：设置（盖层）、Archived、Carryovers 或主列表，
  * 且设置的渲染优先级高于两个子视图（见 Sidebar.tsx 的分支顺序）。因此点击落点
