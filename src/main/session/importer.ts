@@ -1853,8 +1853,7 @@ async function scanOpencode(
 
 /**
  * 扫 Reasonix 桌面版的会话库：projects/<项目>/sessions/*.jsonl 一条一条。与执行同一条转换
- * 判断能不能导（本机 326 条 / 304 MB 全量读取与转换约 3s，比 opencode 慢一档——扫描有
- * 进度提示兜着）。
+ * 判断能不能导（本机 326 条 / 304 MB 全量读取与转换实测 <1s——扫描有进度提示兜着）。
  *
  * 标题：meta 的 topic_title > 第一句用户写的话 > 「Reasonix session」。模型在 meta 上
  * （源行上没有 per-message 模型）。文件夹：meta 的 workspace_root。转换器见 reasonix.ts。
