@@ -80,8 +80,11 @@ export function readZcodeMessages(db: DatabaseSync, sessionId: string): Opencode
   const revertRow = db.prepare("select revert from session where id = ?").get(sessionId) as Record<string, unknown> | undefined;
   const kept = keptMessageIds(revertRow?.["revert"]);
   const partsByMessage = new Map<string, { id: string; data: string }[]>();
+  // part.sequence 是 per-message 从 0 重开的（本机实测跨 message 有撞值）——只按 sequence
+  // 排在撞值处没有行序契约（冒烟 0 孤儿是 SQLite 恰按扫描序返回的运气），带上 message_id
+  // 才把每条消息内部的 part 顺序钉死。message.sequence 则是会话内严格递增，单独够用。
   for (const part of db
-    .prepare("select message_id, id, data from part where session_id = ? order by sequence")
+    .prepare("select message_id, id, data from part where session_id = ? order by message_id, sequence")
     .iterate(sessionId)) {
     const messageId = part["message_id"];
     if (typeof messageId !== "string") continue;
