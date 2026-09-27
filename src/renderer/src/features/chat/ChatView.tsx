@@ -2070,6 +2070,11 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           ))}
         </div>
       )}
+      {skillBlock !== null && (
+        // skill 卡落在统一排布的第四行：图片 → 引用 → 文件 → **skill** → 粘贴文字 →
+        // 文字气泡（2026-09-27 定稿）。它按内容也是「带进来的材料」，排在材料组末尾
+        <SkillInvocationCard name={skillBlock.name} content={skillBlock.content} />
+      )}
       {pastedBlocks.length > 0 && (
         // 粘贴文字行：贴着气泡（它是用户写的内容，不是从磁盘带来的材料）；
         // 折叠成一行——发出去之后它是背景，不该在对话流里再刷一次屏
@@ -2126,12 +2131,6 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
             />
           )}
         </div>
-      )}
-      {skillBlock !== null && (
-        // skill 卡在气泡**之后**（统一的发送后排布：图片 → 引用 → 附件 chip →
-        // 文字气泡 → skill 卡）——发出去之后 skill 展开的正文是背景材料，
-        // 用户自己的话先行
-        <SkillInvocationCard name={skillBlock.name} content={skillBlock.content} />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
         {overflowing && (
