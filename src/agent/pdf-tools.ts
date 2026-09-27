@@ -109,6 +109,46 @@ function sparsePages(text: readonly string[], totalChars: number): number[] {
   return pages;
 }
 
+/**
+ * 图注/表题的模式：**行首**的 Figure / Fig. / Table / 图 / 表 + 编号。图注通常独立
+ * 成行且以编号开头；句中引用（"as shown in Figure 3…" / 「如图 3 所示」）不在行首，
+ * 天然避开——引用指向的位置不是图所在页，混进来就是错索引。同编号取首次出现页。
+ */
+const CAPTION_PATTERNS: readonly { normalize: (id: string) => string; pattern: RegExp }[] = [
+  { normalize: (id) => `Figure ${id}`, pattern: /^(?:Figure|Fig\.)\s*(\d+(?:[.\-]\d+)*)/i },
+  { normalize: (id) => `Table ${id}`, pattern: /^Table\s*(\d+(?:[.\-]\d+)*)/i },
+  { normalize: (id) => `图 ${id}`, pattern: /^图\s*(\d+(?:[.\-]\d+)*)/ },
+  { normalize: (id) => `表 ${id}`, pattern: /^表\s*(\d+(?:[.\-]\d+)*)/ },
+];
+
+/** 图表索引最多列几条。论文级文档图表几十个，全列会刷屏——截断即够指路 */
+const FIGURE_INDEX_MAX = 15;
+
+/**
+ * 全文档扫出图表索引（图号 → 首次出现页）。头注把它列给模型：用户问「看一下
+ * 图 3.2 / 表 5-1」时，模型从头注直接拿到页码，`image_pages` 一步直达——不用
+ * 翻页找图注。配合式读法的定位层。
+ */
+export function figureIndex(text: readonly string[]): { label: string; page: number }[] {
+  const firstSeen = new Map<string, number>();
+  for (let i = 0; i < text.length; i++) {
+    for (const rawLine of (text[i] ?? "").split("\n")) {
+      const line = rawLine.trim();
+      for (const { normalize, pattern } of CAPTION_PATTERNS) {
+        const hit = pattern.exec(line);
+        const id = hit?.[1];
+        if (id === undefined) continue;
+        const label = normalize(id);
+        if (!firstSeen.has(label)) firstSeen.set(label, i + 1);
+      }
+    }
+  }
+  return [...firstSeen]
+    .map(([label, page]) => ({ label, page }))
+    .sort((a, b) => a.page - b.page)
+    .slice(0, FIGURE_INDEX_MAX);
+}
+
 /** 渲染指定页列表为 PNG image 块（升序）。渲染错误穿透——如实报错好过静默少图 */
 async function renderPages(
   pdf: Awaited<ReturnType<typeof getDocumentProxy>>,
@@ -130,10 +170,11 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
     name: "read_pdf",
     label: "read_pdf",
     description:
-      "Read a PDF file page by page. Default returns the extracted text (up to 20 pages per call) and lists " +
-      "pages with little text (likely figures) — then call again with image_pages to render just those pages " +
-      "as images and look at the charts, tables and layout closely. images=true renders the whole current " +
-      "page range instead (at most 5 pages). Scanned PDFs (no text layer) come back automatically as page " +
+      "Read a PDF file page by page. Default returns the extracted text (up to 20 pages per call), a list of " +
+      "pages with little text (likely figures), and a figures/tables index with page numbers — when the user " +
+      "asks about a specific figure or table (\"图 3.2\", \"Table 5\"), look it up in that index and call again " +
+      "with image_pages set to its page to render it as an image and look closely. images=true renders the whole " +
+      "current range instead (at most 5 pages). Scanned PDFs (no text layer) come back automatically as page " +
       "images on vision models. Image output requires a vision model; otherwise text is returned with a note. " +
       "Use this instead of read for any .pdf file — read cannot show PDF content.",
     parameters: {
@@ -250,13 +291,16 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
       }
 
       const continueHint = last < totalPages ? ` Use offset=${last + 1} to continue.` : "";
-      // 稀疏页提示只挂在纯文本模式：配合式读法的入口——模型据此对值得的页要图，
-      // 已经在拿图的调用里再列一遍是噪音
-      const sparseHint =
-        !batchImageMode && pickedPages === null && !scannedAsImages
-          ? sparsePages(text, totalChars).map((page) => `${page}`).join(", ")
-          : "";
+      // 稀疏页提示与图表索引只挂在纯文本模式：配合式读法的入口——模型据此对值得的
+      // 页要图，已经在拿图的调用里再列一遍是噪音
+      const textOnlyCall = !batchImageMode && pickedPages === null && !scannedAsImages;
+      const sparseHint = textOnlyCall ? sparsePages(text, totalChars).map((page) => `${page}`).join(", ") : "";
       const sparseLine = sparseHint !== "" ? ` Pages with little text (likely figures): ${sparseHint}.` : "";
+      const figures = textOnlyCall ? figureIndex(text) : [];
+      const figureLine =
+        figures.length > 0
+          ? ` Figures and tables: ${figures.map((f) => `${f.label} p.${f.page}`).join("; ")}.`
+          : "";
 
       let header: string;
       let images: { type: "image"; data: string; mimeType: string }[] = [];
@@ -279,11 +323,11 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
         // 要了图但模型看不见：降级纯文本，说清图为什么没来
         header =
           `[PDF with ${totalPages} pages. Showing pages ${first}-${last} of ${totalPages}.\n${NON_VISION_NOTE}` +
-          `${continueHint}${sparseLine}]`;
+          `${continueHint}${sparseLine}${figureLine}]`;
       } else {
         header =
           `[PDF with ${totalPages} pages. Showing pages ${first}-${last} of ${totalPages}.` +
-          `${continueHint}${sparseLine}]`;
+          `${continueHint}${sparseLine}${figureLine}]`;
       }
 
       const bodyText = parts.length > 0 ? `${header}\n\n${parts.join("\n\n")}` : header;

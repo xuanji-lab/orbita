@@ -99,6 +99,19 @@ before(async () => {
   await writeFile(join(dir, "junk-prefix.pdf"), Buffer.concat([Buffer.from("JUNKJUNK"), buildPdf([PAGE_BODY, PAGE_BODY])]));
   await writeFile(join(dir, "encrypted.pdf"), buildPdf([PAGE_BODY], true));
   await writeFile(join(dir, "fake-header.pdf"), Buffer.from("%PDF-1.4\nthis is not really a pdf\n"));
+  // 图表文档：页 2 Figure 图注、页 3 Fig. 缩写+Table 表题、页 4 句中引用（不该进索引）。
+  // 中文「图/表」模式盖不到：夹具是 Helvetica 西文字体，内容流里的中文会被 pdf.js 按
+  // Latin-1 读成乱码——真实中文 PDF 走 CID 字体+ToUnicode，提取是正常中文、正则同样命中，
+  // 这是手造夹具的物理边界而非工具边界
+  await writeFile(
+    join(dir, "figures.pdf"),
+    buildPdf([
+      PAGE_BODY,
+      `${PAGE_BODY}\nFigure 3.2: Quarterly revenue by region`,
+      `${PAGE_BODY}\nFig. 7 close-up view\nTable 2 regional summary`,
+      `${PAGE_BODY}\nas shown in Figure 3 the trend continues`,
+    ]),
+  );
 });
 
 after(async () => {
@@ -203,6 +216,26 @@ describe("read_pdf", () => {
     const text = await run("mixed.pdf", { limit: 3 });
     // mixed.pdf 的页 3、5 是空页（<80 字符）；其余页两行正文 ~157 字符不稀疏
     assert.ok(text.includes("Pages with little text (likely figures): 3, 5."), text.slice(0, 240));
+  });
+
+  test("图表索引：行首图注（Figure/Fig./Table）进索引报页码，句中引用不进", async () => {
+    const text = await run("figures.pdf");
+    const idx = text.indexOf("Figures and tables:");
+    assert.ok(idx > -1, text.slice(0, 260));
+    const indexLine = text.slice(idx, idx + 200);
+    assert.ok(indexLine.includes("Figure 3.2 p.2"), indexLine);
+    assert.ok(indexLine.includes("Figure 7 p.3"), indexLine);
+    assert.ok(indexLine.includes("Table 2 p.3"), indexLine);
+    // 页 4 的 "as shown in Figure 3 the trend" 是句中引用——Figure 3 不在索引里
+    assert.ok(!indexLine.includes("Figure 3 "), indexLine);
+  });
+
+  test("图表索引直达：按索引页码 image_pages，渲染的正是图注所在页", async () => {
+    const { blocks } = await runFull("figures.pdf", { image_pages: "2" }, VISION_CTX);
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(text.includes("images of pages 2 follow the text"), text.slice(0, 200));
+    assert.equal(blocks.length, 2);
+    assert.equal(blocks[1]!.type, "image");
   });
 
   test("配合式：image_pages 精准转图——文本批不受影响，只渲染指定页", async () => {
