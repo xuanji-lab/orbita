@@ -103,6 +103,7 @@ export const zh: Messages = {
     chars: (n) => `${n} 字`,
     truncated: (n) => `只引了前 ${n} 字`,
     count: (n) => `${n} 段引用`,
+    tooMany: (max) => `一条消息最多 ${max} 条引用。`,
     expand: "展开引用全文",
     collapse: "收起引用",
   },

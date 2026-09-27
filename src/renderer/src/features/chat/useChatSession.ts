@@ -39,7 +39,7 @@ import {
   PROMPT_FILE_MAX_COUNT,
   type PromptFileRef,
 } from "@shared/prompt-attachments";
-import { composeQuotedMessage, parseQuotedMessage, type TextQuote } from "../../../../shared/quote.ts";
+import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_COUNT, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import type { PermissionAnswer, PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
@@ -1225,13 +1225,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const quotes = quoteMap.get(draftKey) ?? NO_QUOTES;
 
   const addQuote = useCallback(
-    (quote: TextQuote) =>
-      writeQuotes(draftKey, (current) =>
-        current.some((item) => item.messageId === quote.messageId && item.text === quote.text)
-          ? current
-          : [...current, quote],
-      ),
-    [draftKey, writeQuotes],
+    (quote: TextQuote) => {
+      // 准入（shared/quote.ts 的 acceptQuote）：重复沿用旧规则静默去重；
+      // 超上限（QUOTE_MAX_COUNT=5）要说出原因——藏住一条用户看得见却发不出
+      // 的引用，比报一句更糟
+      const verdict = acceptQuote(quoteMap.get(draftKey) ?? [], quote);
+      engine.setError(verdict.reason === "too-many" ? engine.messagesRef.current.quote.tooMany(QUOTE_MAX_COUNT) : null);
+      if (!verdict.accepted) return;
+      writeQuotes(draftKey, (current) => [...current, quote]);
+    },
+    [draftKey, quoteMap, writeQuotes, engine],
   );
   const removeQuote = useCallback(
     (index: number) => writeQuotes(draftKey, (current) => current.filter((_, i) => i !== index)),

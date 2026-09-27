@@ -1994,10 +1994,10 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           ))}
         </div>
       )}
-      {(pastedBlocks.length > 0 || fileRefs.length > 0) && (
-        // 附件回显在气泡**上方**（与附图、引用 chip 同区——附件聚在消息头部，
-        // 正文气泡保持干净）。粘贴块折叠成一行——发出去之后它是背景，不该在
-        // 对话流里再刷一次屏
+      {fileRefs.length > 0 && (
+        // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
+        // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
+        // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
         <div
           style={{
             display: "flex",
@@ -2016,6 +2016,21 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
               kind={ref.kind}
             />
           ))}
+        </div>
+      )}
+      {pastedBlocks.length > 0 && (
+        // 粘贴文字行：贴着气泡（它是用户写的内容，不是从磁盘带来的材料）；
+        // 折叠成一行——发出去之后它是背景，不该在对话流里再刷一次屏
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "var(--space-2)",
+            justifyContent: "flex-end",
+            maxWidth: "var(--bubble-max-width)",
+            marginBottom: "var(--space-1)",
+          }}
+        >
           {pastedBlocks.map((block, index) => (
             <PastedTextChip key={`pasted:${index}`} text={block.content} lines={block.lines} />
           ))}

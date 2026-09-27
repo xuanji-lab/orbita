@@ -123,6 +123,7 @@ export const en = {
     chars: (n: number) => plural(n, "char"),
     truncated: (n: number) => `first ${n} chars only`,
     count: (n: number) => plural(n, "quote"),
+    tooMany: (max: number) => `Up to ${max} quotes per message.`,
     expand: "Show quoted text in full",
     collapse: "Collapse quotes",
   },

@@ -49,6 +49,27 @@ export interface TextQuote {
 /** 一段引用的上限（码点）。Proma 同值：再长就不是「引一句」，是贴全文了 */
 export const QUOTE_MAX_CHARS = 2000;
 
+/**
+ * 一条消息最多挂几条引用（2026-09-27 裁决）。与图片 / 文件的名额同量级——
+ * 此前引用只有单条 2000 字的上限、条数不限，理论上能挂几十条把上下文撑爆。
+ */
+export const QUOTE_MAX_COUNT = 5;
+
+/**
+ * 引用准入：重复与超限都拒。重复沿用旧规则（静默去重——同一段引两次是噪音，
+ * 不值得报错），超限要说出原因。给 hook（addQuote）与测试共用，纯函数。
+ */
+export function acceptQuote(
+  current: readonly { messageId: string; text: string }[],
+  quote: { messageId: string; text: string },
+): { accepted: boolean; reason?: "duplicate" | "too-many" } {
+  if (current.some((item) => item.messageId === quote.messageId && item.text === quote.text)) {
+    return { accepted: false, reason: "duplicate" };
+  }
+  if (current.length >= QUOTE_MAX_COUNT) return { accepted: false, reason: "too-many" };
+  return { accepted: true };
+}
+
 /** 按码点计数（汉字 / 字母 / emoji 各算 1），与用户对「字数」的直觉一致——chip 上的字数就是它 */
 export function countChars(text: string): number {
   return Array.from(text).length;
