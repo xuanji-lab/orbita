@@ -34,7 +34,7 @@ import { extractText, getDocumentProxy, renderPageAsImage } from "unpdf";
 /** 纯文本模式单次最多读几页。上下文护栏：一页密排文本可到 3k 字符，20 页已是一大口 */
 export const PDF_MAX_PAGES_PER_CALL = 20;
 
-/** 页图模式单次最多读几页。一页图约 1-1.5k token，20 页图就是 30k token——收紧到 5 */
+/** 页图单次最多几页。一页图约 1-1.5k token——批转（images: true）与精准转（image_pages）同限 */
 export const PDF_IMAGE_MAX_PAGES_PER_CALL = 5;
 
 /** 页图渲染宽度。Claude Code 同口径；低于 pi 的 2000px 内联上限，无需二次缩放 */
@@ -42,6 +42,16 @@ export const PDF_IMAGE_WIDTH = 1080;
 
 /** 全文低于这个字符数视为无文本层（扫描件）。取小值防误伤只有几行字的真 PDF */
 export const PDF_NO_TEXT_LAYER_MIN_CHARS = 50;
+
+/**
+ * 一页文本低于这个字符数算「稀疏页」——大概率是图表/整页插图（图注加轴标签通常
+ * 只有几十字符）。头注把稀疏页列给模型，它才知道该对哪几页要图：配合式读法的
+ * 依据——纯文本先看全景，再 image_pages 精准转图细看。
+ */
+export const PDF_SPARSE_PAGE_CHARS = 80;
+
+/** 稀疏页提示最多列几页。扫描件一半页都稀疏时不该刷屏，截前几个即够指路 */
+const SPARSE_HINT_MAX = 10;
 
 /** pi read 读图的同款文案：图省略的原因要说给模型听，不然它以为图丢了 */
 const NON_VISION_NOTE = "[Current model does not support images. The image will be omitted from this request.]";
@@ -51,14 +61,61 @@ function visionCapable(ctx: ExtensionContext | undefined): boolean {
   return ctx?.model?.input.includes("image") ?? false;
 }
 
-/** 渲染一段页为 PNG image 块。渲染错误穿透——如实报错好过静默少图 */
+/**
+ * 页码串 → 去重升序页码列表。语法与 read_task 的 rounds 同款："3"、"2-5"、"1,4"。
+ * 越界 / 倒序 / 非数字 / 超页数上限都报错并带有效范围——报错是给模型改道用的，
+ * 要能指导下一次调用（selectRounds 的口径）。
+ */
+export function parsePageNumbers(
+  spec: string,
+  totalPages: number,
+  maxPages: number,
+): { ok: true; pages: number[] } | { ok: false; error: string } {
+  const picked = new Set<number>();
+  for (const part of spec.split(",")) {
+    const piece = part.trim();
+    const single = /^(\d+)$/.exec(piece);
+    const range = /^(\d+)-(\d+)$/.exec(piece);
+    if (single !== null) {
+      picked.add(Number(single[1]));
+    } else if (range !== null) {
+      const from = Number(range[1]);
+      const to = Number(range[2]);
+      if (from > to) return { ok: false, error: `Invalid range ${piece}: start is greater than end.` };
+      for (let page = from; page <= to; page++) picked.add(page);
+    } else {
+      return { ok: false, error: `"${piece}" is not a page number; use forms like "3", "2-5", "1,4".` };
+    }
+  }
+  const pages = [...picked].sort((a, b) => a - b);
+  for (const page of pages) {
+    if (page < 1 || page > totalPages) {
+      return { ok: false, error: `Page ${page} does not exist; valid pages are 1-${totalPages}.` };
+    }
+  }
+  if (pages.length > maxPages) {
+    return { ok: false, error: `At most ${maxPages} image pages per call (asked for ${pages.length}).` };
+  }
+  return { ok: true, pages };
+}
+
+/** 全文档里文本稀少的页（图表候选）。空文本层文档不列——整个都是图，列了没有信息量 */
+function sparsePages(text: readonly string[], totalChars: number): number[] {
+  if (totalChars < PDF_NO_TEXT_LAYER_MIN_CHARS) return [];
+  const pages: number[] = [];
+  for (let i = 0; i < text.length && pages.length < SPARSE_HINT_MAX; i++) {
+    if ((text[i] ?? "").trim().length < PDF_SPARSE_PAGE_CHARS) pages.push(i + 1);
+  }
+  return pages;
+}
+
+/** 渲染指定页列表为 PNG image 块（升序）。渲染错误穿透——如实报错好过静默少图 */
 async function renderPages(
   pdf: Awaited<ReturnType<typeof getDocumentProxy>>,
-  first: number,
-  last: number,
+  pages: readonly number[],
 ): Promise<{ type: "image"; data: string; mimeType: string }[]> {
   const images: { type: "image"; data: string; mimeType: string }[] = [];
-  for (let page = first; page <= last; page++) {
+  for (const page of pages) {
     const png = await renderPageAsImage(pdf, page, {
       canvasImport: () => Promise.resolve(ncanvas),
       width: PDF_IMAGE_WIDTH,
@@ -73,12 +130,12 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
     name: "read_pdf",
     label: "read_pdf",
     description:
-      "Read a PDF file page by page: extracted text by default, or text plus a rendered image of every " +
-      "requested page when you pass images=true — use that to see charts, figures, tables and layout, which " +
-      "the text layer does not carry. Returns the total page count and the requested page range; use " +
-      'offset/limit to page through. Text mode reads up to 20 pages per call, image mode up to 5. ' +
-      "Scanned PDFs (no text layer) are automatically returned as page images when the model supports " +
-      "vision. Use this instead of read for any .pdf file — read cannot show PDF content.",
+      "Read a PDF file page by page. Default returns the extracted text (up to 20 pages per call) and lists " +
+      "pages with little text (likely figures) — then call again with image_pages to render just those pages " +
+      "as images and look at the charts, tables and layout closely. images=true renders the whole current " +
+      "page range instead (at most 5 pages). Scanned PDFs (no text layer) come back automatically as page " +
+      "images on vision models. Image output requires a vision model; otherwise text is returned with a note. " +
+      "Use this instead of read for any .pdf file — read cannot show PDF content.",
     parameters: {
       type: "object",
       properties: {
@@ -88,17 +145,24 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
         },
         offset: {
           type: "number",
-          description: "Page number to start reading from (1-indexed). Default 1.",
+          description: "Page number to start reading text from (1-indexed). Default 1.",
         },
         limit: {
           type: "number",
-          description: "Number of pages to read. Default and maximum: 20 text pages, 5 with images.",
+          description: "Number of text pages to read. Default and maximum: 20 text pages, 5 with images=true.",
+        },
+        image_pages: {
+          type: "string",
+          description:
+            'Specific pages to render as images (~1080px), e.g. "3" or "2-5" or "1,4" (absolute page numbers, ' +
+            "at most 5; text range is unaffected). Prefer this over images=true — read the text first, then " +
+            "look closely at the pages that matter.",
         },
         images: {
           type: "boolean",
           description:
-            "Also render each requested page as an image (~1080px) so charts and layout are visible. " +
-            "At most 5 pages per call with images.",
+            "Render every page of the current text range as an image. At most 5 pages per call. " +
+            "Prefer image_pages for targeted looking.",
         },
       },
       required: ["path"],
@@ -135,6 +199,8 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
       const noTextLayer = totalChars < PDF_NO_TEXT_LAYER_MIN_CHARS;
 
       const wantsImages = args["images"] === true;
+      const imagePagesSpec = typeof args["image_pages"] === "string" ? args["image_pages"].trim() : "";
+      const wantsAnyImages = wantsImages || imagePagesSpec !== "";
       const canSeeImages = visionCapable(ctx);
       // 扫描件 + 视觉模型：自动转图（页图是唯一可看的东西）；非视觉维持报错
       const scannedAsImages = noTextLayer && canSeeImages;
@@ -145,9 +211,19 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
         );
       }
 
-      // 带图的读法（显式 images 或扫描件自动转）：单次页数收紧到 5
-      const imageMode = (wantsImages && canSeeImages) || scannedAsImages;
-      const pageCap = imageMode ? PDF_IMAGE_MAX_PAGES_PER_CALL : PDF_MAX_PAGES_PER_CALL;
+      // 精准转图：image_pages 指定页（绝对页码），文本部分照 offset/limit 不受影响。
+      // 语法错 / 越界 / 超上限当场报错带有效范围——模型拿报错改道
+      let pickedPages: number[] | null = null;
+      if (imagePagesSpec !== "" && canSeeImages) {
+        const parsed = parsePageNumbers(imagePagesSpec, totalPages, PDF_IMAGE_MAX_PAGES_PER_CALL);
+        if (!parsed.ok) throw new Error(parsed.error);
+        pickedPages = parsed.pages;
+      }
+
+      // 批转（images: true）把文本批也收紧到 5——图与文本同批；精准转图时文本批
+      // 仍是完整 20 页（图只加在指定页上，不占文本的页数预算）
+      const batchImageMode = (wantsImages && canSeeImages) || scannedAsImages;
+      const pageCap = batchImageMode ? PDF_IMAGE_MAX_PAGES_PER_CALL : PDF_MAX_PAGES_PER_CALL;
 
       const requested =
         typeof args["offset"] === "number" && Number.isFinite(args["offset"])
@@ -173,27 +249,41 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
         parts.push(`--- Page ${page} ---\n${body}`);
       }
 
+      const continueHint = last < totalPages ? ` Use offset=${last + 1} to continue.` : "";
+      // 稀疏页提示只挂在纯文本模式：配合式读法的入口——模型据此对值得的页要图，
+      // 已经在拿图的调用里再列一遍是噪音
+      const sparseHint =
+        !batchImageMode && pickedPages === null && !scannedAsImages
+          ? sparsePages(text, totalChars).map((page) => `${page}`).join(", ")
+          : "";
+      const sparseLine = sparseHint !== "" ? ` Pages with little text (likely figures): ${sparseHint}.` : "";
+
       let header: string;
       let images: { type: "image"; data: string; mimeType: string }[] = [];
       if (scannedAsImages) {
-        images = await renderPages(pdf, first, last);
+        images = await renderPages(pdf, rangeList(first, last));
         header =
           `[Scanned PDF with no text layer: ${totalPages} pages. Rendered pages ${first}-${last} as images.` +
-          `${last < totalPages ? ` Use offset=${last + 1} to continue.` : ""}]`;
-      } else if (imageMode) {
-        images = await renderPages(pdf, first, last);
+          `${continueHint}]`;
+      } else if (pickedPages !== null) {
+        images = await renderPages(pdf, pickedPages);
+        header =
+          `[PDF with ${totalPages} pages. Text of pages ${first}-${last} of ${totalPages}; images of ` +
+          `pages ${pickedPages.join(", ")} follow the text.${continueHint}]`;
+      } else if (batchImageMode) {
+        images = await renderPages(pdf, rangeList(first, last));
         header =
           `[PDF with ${totalPages} pages. Showing pages ${first}-${last} of ${totalPages}; page images follow the text.` +
-          `${last < totalPages ? ` Use offset=${last + 1} to continue.` : ""}]`;
-      } else if (wantsImages) {
-        // 带了 images 但模型看不见图：降级纯文本，说清图为什么没来
+          `${continueHint}]`;
+      } else if (wantsAnyImages) {
+        // 要了图但模型看不见：降级纯文本，说清图为什么没来
         header =
           `[PDF with ${totalPages} pages. Showing pages ${first}-${last} of ${totalPages}.\n${NON_VISION_NOTE}` +
-          `${last < totalPages ? ` Use offset=${last + 1} to continue.` : ""}]`;
+          `${continueHint}${sparseLine}]`;
       } else {
         header =
           `[PDF with ${totalPages} pages. Showing pages ${first}-${last} of ${totalPages}.` +
-          `${last < totalPages ? ` Use offset=${last + 1} to continue.` : ""}]`;
+          `${continueHint}${sparseLine}]`;
       }
 
       const bodyText = parts.length > 0 ? `${header}\n\n${parts.join("\n\n")}` : header;
@@ -204,4 +294,11 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
     },
   };
   return [readPdf];
+}
+
+/** 连续页码列表（renderPages 的批转适配） */
+function rangeList(first: number, last: number): number[] {
+  const pages: number[] = [];
+  for (let page = first; page <= last; page++) pages.push(page);
+  return pages;
 }

@@ -13,11 +13,24 @@ import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createPdfTools, PDF_IMAGE_MAX_PAGES_PER_CALL, PDF_MAX_PAGES_PER_CALL } from "./pdf-tools.ts";
 
 /** 夹具里的每页正文要够长（阈值 PDF_NO_TEXT_LAYER_MIN_CHARS 以上），除非在测扫描件 */
-const LONG_LINE = "The quick brown fox jumps over the lazy dog near the river bank every morning.";
+/**
+ * 每页正文的两个行。各自行宽刻意 <90 字符：MediaBox 612pt / 12pt 字体一行只容得下
+ * ~94 字符，更长的单行会被 pdf.js 文本层在页宽处截断（踩过：133 字符的行只提取出
+ * 前 95 个）；两行合计 >80 又越过稀疏页阈值，不会每页都误报成图表候选。
+ */
+const LONG_A = "The quick brown fox jumps over the lazy dog near the river bank every morning.";
+const LONG_B = "The valley keeps its slow pace without answering anybody, and so does the wind.";
+const PAGE_BODY = `${LONG_A}\n${LONG_B}`;
 
 function contentStream(text: string): string {
   if (text === "") return "BT ET";
-  return `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`;
+  // 多行正文：一行一个 Tm 绝对定位（Td 是相对位移，第二行会叠加到页外被文本层丢弃，
+  // 踩过）——纵向步进 14pt，行宽与行高都在 MediaBox 内
+  const lines = text
+    .split("\n")
+    .map((line, i) => `/F1 12 Tf 1 0 0 1 72 ${720 - i * 14} Tm (${line}) Tj`)
+    .join("\n");
+  return `BT\n${lines}\nET`;
 }
 
 /**
@@ -73,18 +86,18 @@ let tool: ReturnType<typeof createPdfTools>[number];
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), "orbita-pdf-"));
   tool = createPdfTools(dir)[0]!;
-  await writeFile(join(dir, "three-pages.pdf"), buildPdf([LONG_LINE, LONG_LINE, LONG_LINE]));
+  await writeFile(join(dir, "three-pages.pdf"), buildPdf([PAGE_BODY, PAGE_BODY, PAGE_BODY]));
   await writeFile(
     join(dir, "mixed.pdf"),
-    buildPdf([LONG_LINE, LONG_LINE, "", LONG_LINE, "", LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE,
-      LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE,
-      LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE, LONG_LINE]),
+    buildPdf([PAGE_BODY, PAGE_BODY, "", PAGE_BODY, "", PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY,
+      PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY,
+      PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY]),
   );
   await writeFile(join(dir, "scanned.pdf"), buildPdf(["", ""]));
   await writeFile(join(dir, "plain.txt"), "just text, not a pdf");
   // header 前有垃圾（邮件系统前置字节的真实形态）——规范允许 header 落在前 1024 字节内
-  await writeFile(join(dir, "junk-prefix.pdf"), Buffer.concat([Buffer.from("JUNKJUNK"), buildPdf([LONG_LINE, LONG_LINE])]));
-  await writeFile(join(dir, "encrypted.pdf"), buildPdf([LONG_LINE], true));
+  await writeFile(join(dir, "junk-prefix.pdf"), Buffer.concat([Buffer.from("JUNKJUNK"), buildPdf([PAGE_BODY, PAGE_BODY])]));
+  await writeFile(join(dir, "encrypted.pdf"), buildPdf([PAGE_BODY], true));
   await writeFile(join(dir, "fake-header.pdf"), Buffer.from("%PDF-1.4\nthis is not really a pdf\n"));
 });
 
@@ -119,12 +132,12 @@ describe("read_pdf", () => {
     const text = await run("three-pages.pdf");
     assert.ok(text.startsWith("[PDF with 3 pages. Showing pages 1-3 of 3.]"), text.slice(0, 80));
     assert.ok(text.includes("--- Page 1 ---"));
-    assert.ok(text.includes(LONG_LINE));
+    assert.ok(text.includes(PAGE_BODY));
   });
 
   test("分页：offset/limit 按页切，余页给续读 offset", async () => {
     const text = await run("three-pages.pdf", { offset: 2, limit: 1 });
-    assert.ok(text.includes("Showing pages 2-2 of 3. Use offset=3 to continue.]"), text.slice(0, 120));
+    assert.ok(text.includes("Showing pages 2-2 of 3. Use offset=3 to continue."), text.slice(0, 120));
     assert.ok(!text.includes("--- Page 1 ---"));
     assert.ok(text.includes("--- Page 2 ---"));
   });
@@ -132,7 +145,7 @@ describe("read_pdf", () => {
   test("limit 封顶：超过 PDF_MAX_PAGES_PER_CALL 的请求被压到上限", async () => {
     const text = await run("mixed.pdf", { limit: 100 });
     assert.ok(
-      text.includes(`Showing pages 1-${PDF_MAX_PAGES_PER_CALL} of 25. Use offset=${PDF_MAX_PAGES_PER_CALL + 1} to continue.]`),
+      text.includes(`Showing pages 1-${PDF_MAX_PAGES_PER_CALL} of 25. Use offset=${PDF_MAX_PAGES_PER_CALL + 1} to continue.`),
       text.slice(0, 140),
     );
   });
@@ -141,7 +154,7 @@ describe("read_pdf", () => {
     const text = await run("mixed.pdf", { offset: 3, limit: 2 });
     assert.ok(text.includes(`[page 3 has no text layer]`));
     assert.ok(text.includes(`--- Page 4 ---`));
-    assert.ok(text.includes(LONG_LINE));
+    assert.ok(text.includes(PAGE_BODY));
   });
 
   test("扫描件 + 非视觉模型：无文本层仍报错（图给了也看不见）", async () => {
@@ -186,6 +199,48 @@ describe("read_pdf", () => {
     assert.ok(text.includes("--- Page 1 ---"));
   });
 
+  test("配合式：纯文本头注列出稀疏页（图表候选）——模型据此挑页", async () => {
+    const text = await run("mixed.pdf", { limit: 3 });
+    // mixed.pdf 的页 3、5 是空页（<80 字符）；其余页两行正文 ~157 字符不稀疏
+    assert.ok(text.includes("Pages with little text (likely figures): 3, 5."), text.slice(0, 240));
+  });
+
+  test("配合式：image_pages 精准转图——文本批不受影响，只渲染指定页", async () => {
+    const { blocks } = await runFull("mixed.pdf", { image_pages: "3,5" }, VISION_CTX);
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(text.includes("Text of pages 1-20 of 25; images of pages 3, 5 follow the text."), text.slice(0, 160));
+    assert.ok(text.includes("--- Page 1 ---"));
+    // 文本批仍是 20 页上限（图不占文本预算）
+    assert.ok(text.includes("--- Page 20 ---"));
+    assert.equal(blocks.length, 3);
+    assert.equal(blocks[1]!.type, "image");
+    assert.equal(blocks[2]!.type, "image");
+  });
+
+  test("image_pages 语法与边界：区间去重、越界报有效范围、超 5 页报上限、坏语法报形状", async () => {
+    const { blocks } = await runFull("three-pages.pdf", { image_pages: "1-2, 2" }, VISION_CTX);
+    assert.equal(blocks.length, 3); // "1-2, 2" 去重后 2 页图
+    await assert.rejects(
+      runFull("three-pages.pdf", { image_pages: "9" }, VISION_CTX),
+      /Page 9 does not exist; valid pages are 1-3\./,
+    );
+    await assert.rejects(
+      runFull("mixed.pdf", { image_pages: "1-6" }, VISION_CTX),
+      /At most 5 image pages per call/,
+    );
+    await assert.rejects(
+      runFull("three-pages.pdf", { image_pages: "page three" }, VISION_CTX),
+      /is not a page number/,
+    );
+  });
+
+  test("image_pages + 非视觉模型：降级纯文本 + 省略说明（同 images 的降级口径）", async () => {
+    const { blocks } = await runFull("three-pages.pdf", { image_pages: "1" }, undefined);
+    assert.equal(blocks.length, 1);
+    const text = (blocks[0] as { text?: string }).text ?? "";
+    assert.ok(text.includes("Current model does not support images"), text.slice(0, 200));
+  });
+
   test("非 PDF 报错并指回 read 工具", async () => {
     await assert.rejects(run("plain.txt"), /Not a PDF file/);
   });
@@ -193,7 +248,7 @@ describe("read_pdf", () => {
   test("垃圾前缀 PDF 放行：header 在前 1024 字节内即认（与 pdf.js 同口径）", async () => {
     const text = await run("junk-prefix.pdf");
     assert.ok(text.includes("[PDF with 2 pages."), text.slice(0, 80));
-    assert.ok(text.includes(LONG_LINE));
+    assert.ok(text.includes(PAGE_BODY));
   });
 
   test("加密 PDF 报 password-protected，不当原始错误抛", async () => {
