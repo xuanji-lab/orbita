@@ -1111,6 +1111,48 @@ body {
 }
 
 /*
+ * 一键回底浮钮（feat/scroll-to-bottom-X）：浮在消息列底端靠右。
+ * 面与描边同输入卡（.glass-card 的 --glass-bg / --glass-border）——实色
+ * --color-bg-panel 在暗档与井太接近（用户 2026-09-27：要跟输入框一个颜色）；
+ * 阴影仍抬 --shadow-popover 一级（浮在正文之上，同菜单/排队条的浮层语法）。
+ * 形状由组件内联样式负责。放在 .quiet-control 之后定义：同特异性时后来者赢。
+ */
+.scroll-end-float {
+  /* 面抽成变量：black 档在下面覆盖一处，hover 规则自动跟随 */
+  --scroll-end-face: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  background-color: var(--scroll-end-face);
+  box-shadow: var(--shadow-popover);
+}
+
+/* hover 保留卡面色，上面叠一层 option-hover 提亮（linear-gradient 当纯色覆盖层用），
+   不让 .quiet-control:hover 的半透明底把脸整个洗掉 */
+.scroll-end-float:hover {
+  background-color: var(--scroll-end-face);
+  background-image: linear-gradient(var(--option-hover-bg), var(--option-hover-bg));
+}
+
+/*
+ * 浮钮面全主题统一 60% 不透明（用户 2026-09-27）：
+ *  - 浅色默认档：--glass-bg 本就是 rgba(255,255,255,.6)，基态不用动；
+ *  - 两暗档（graphite / black）：--glass-bg 是实色，60% 混透明派生；描边同档透明
+ *    （--glass-border 的白丝在黑底上是清晰的圈，用户要求去掉）；
+ *  - 纸面两档（copybook / typescript）：--glass-bg 自带 0.92 alpha（「纸不是玻璃」），
+ *    65% 混透明 → 0.92 × 65% ≈ 0.6，与其余档对齐。
+ * color-mix 从 token 派生不落裸色值（colors.css 同款写法）；箭头是 currentColor，恒满强度。
+ */
+:root[data-theme="graphite"] .scroll-end-float,
+:root[data-theme="black"] .scroll-end-float {
+  --scroll-end-face: color-mix(in srgb, var(--glass-bg) 60%, transparent);
+  border-color: transparent;
+}
+
+:root[data-theme="copybook"] .scroll-end-float,
+:root[data-theme="typescript"] .scroll-end-float {
+  --scroll-end-face: color-mix(in srgb, var(--glass-bg) 65%, transparent);
+}
+
+/*
  * 滚动条全局弱化（wafo 2026-09-10，口径取自设置面 Providers）：
  * 8px 细条、thumb 贴 --color-border-default（token 随三主题各自变色）、track 透明、
  * hover 才加深一档。全局 * 一刀——聊天、侧栏、设置不再各长各的。

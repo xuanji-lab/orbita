@@ -2,6 +2,7 @@
 import { iconMarkup } from "./icon-markup.ts";
 import archive from "../../../../Orbita Design System/assets/icons/lucide/archive.svg?raw";
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
+import arrowDown from "../../../../Orbita Design System/assets/icons/lucide/arrow-down.svg?raw";
 import arrowLeft from "../../../../Orbita Design System/assets/icons/lucide/arrow-left.svg?raw";
 import arrowLeftRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-left-right.svg?raw";
 import arrowRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-right.svg?raw";
@@ -100,6 +101,7 @@ const ICONS = {
   book,
   "book-open": bookOpen,
   "archive-restore": archiveRestore,
+  "arrow-down": arrowDown,
   "arrow-left": arrowLeft,
   "arrow-left-right": arrowLeftRight,
   "arrow-right": arrowRight,

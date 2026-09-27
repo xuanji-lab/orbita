@@ -21,7 +21,7 @@ import {
   HOME_CARD_QUERY_ROWS,
   selectHomeCards,
 } from "./home-cards";
-import { isAtBottom } from "./scroll";
+import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
 import {
   branchAnchorEntries,
   branchAnchorIds,
@@ -457,6 +457,18 @@ function ChatViewBody(props: {
    * 审批条不受影响，照常渲染——用户必须能在这里直接批子会话的工具调用。
    */
   hideComposer?: boolean;
+  /**
+   * 一键回底浮钮（feat/scroll-to-bottom-X）：距底超过 300px 时在消息列底端浮现「回底」
+   * 浮钮，点击 smooth 滚到底。三个会话区都开：主槽、辅助对话抽屉、Sub-sessions 面板的
+   * 会话层——都有长转录、都会滚离底部。实现在本组件里三处共用。
+   */
+  scrollToEnd?: boolean;
+  /**
+   * End 键跳底的全局接管（feat/scroll-to-bottom-X）。**只有主槽给 true**：主槽常驻，
+   * 右栏面板（辅助对话 / 子会话）可能同时开着，两处都挂 window keydown 会把一次
+   * End 变成同时滚两个面——面板的回底走浮钮，不抢全局键。
+   */
+  scrollToEndHotkey?: boolean;
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
@@ -470,12 +482,26 @@ function ChatViewBody(props: {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
 
+  // 一键回底（feat/scroll-to-bottom-X）：距底超过 300px 浮出按钮。用 state——按钮显隐
+  // 是渲染输出，与 followRef 的「无 UI 依赖」不同。重算挂两处：滚动事件管用户滚动，
+  // 每个 commit 后再算一次——流式长高不改 scrollTop，不触发 scroll 事件，只靠
+  // onScroll 会在「脱离着看流式输出」时漏掉该浮出的按钮。
+  // ponytail: 窗口 resize 不重算显隐（无滚动无 commit 时短暂 stale，下一次 commit
+  // 自愈）；要精确就挂 ResizeObserver。
+  const [showScrollToEnd, setShowScrollToEnd] = useState(false);
+  const syncScrollToEnd = () => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    setShowScrollToEnd(isBeyondScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight));
+  };
+
   /** 用户滚动（滚轮/键盘/滚动条都一样）后重判是否在底部；程序化钉底触发的事件判真，不打架 */
   const handleScroll = () => {
     const el = scrollRef.current;
     if (el !== null) {
       followRef.current = isAtBottom(el.scrollTop, el.clientHeight, el.scrollHeight);
     }
+    syncScrollToEnd();
   };
 
   // 每次 commit 后钉底：不挑触发源——流式输出、忙碌指示出现、折叠展开全兜住；scrollTop 赋值廉价。
@@ -483,6 +509,7 @@ function ChatViewBody(props: {
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el !== null && followRef.current) el.scrollTop = el.scrollHeight;
+    syncScrollToEnd();
   });
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
@@ -538,7 +565,38 @@ function ChatViewBody(props: {
     followRef.current = true;
     const el = scrollRef.current;
     if (el !== null) el.scrollTop = el.scrollHeight;
+    syncScrollToEnd();
   }, [openId]);
+
+  // 一键回底：smooth 滚到底（reduced-motion 瞬时）。到达后滚动事件把跟随带回来
+  // （handleScroll 判贴底即恢复），不用在这里另管 followRef。
+  const scrollToEnd = useCallback(() => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({ top: el.scrollHeight, behavior: reduce ? "auto" : "smooth" });
+  }, []);
+
+  // End 键跳底：只在主槽接管全局键（scrollToEndHotkey 只主槽给——右栏面板可能同开，
+  // 两处都挂会一次滚两个面）；焦点在文本框里时不接管（composer 里 End 是行尾光标），
+  // 判定在 shouldJumpToEnd。
+  useEffect(() => {
+    if (props.scrollToEndHotkey !== true) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const takeover = shouldJumpToEnd(
+        event.key,
+        { ctrl: event.ctrlKey, meta: event.metaKey, alt: event.altKey, shift: event.shiftKey },
+        { tagName: target.tagName, isContentEditable: target.isContentEditable },
+      );
+      if (!takeover) return;
+      event.preventDefault();
+      scrollToEnd();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [props.scrollToEndHotkey, scrollToEnd]);
 
   // 首页会话卡：有 open 遗留事项的会话优先占卡，剩余槽位按「最近活跃」补齐；
   // 选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），这里只接线。
@@ -893,6 +951,7 @@ function ChatViewBody(props: {
         badgeTitle={openId}
         scrollRef={scrollRef}
         onScroll={handleScroll}
+        scrollToEnd={props.scrollToEnd === true ? { visible: showScrollToEnd, onClick: scrollToEnd } : null}
         // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用
         completion={openId === "" ? null : (openMeta?.completion ?? "open")}
         onSetCompletion={
@@ -1222,6 +1281,12 @@ function Pane(props: {
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: (() => void) | undefined;
+  /**
+   * 一键回底浮钮（feat/scroll-to-bottom-X）：非 null 才挂（只有主槽给）——浮在消息列
+   * 底端靠右、输入卡上方；visible 由 ChatView 按距底 300px 重算，点击回底。骨架只管
+   * 摆位，判定在 ChatViewBody。
+   */
+  scrollToEnd?: { visible: boolean; onClick: () => void } | null;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
@@ -1395,23 +1460,66 @@ function Pane(props: {
         </span>
       </header>
 
-      <div
-        ref={props.scrollRef}
-        onScroll={props.onScroll}
-        className="scroll"
-        style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}
-      >
+      {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走 */}
+      <div style={{ position: "relative", minHeight: 0, display: "grid" }}>
         <div
-          style={{
-            width: "min(100%, var(--content-max-width))",
-            margin: "0 auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: "var(--space-4)",
-          }}
+          ref={props.scrollRef}
+          onScroll={props.onScroll}
+          className="scroll"
+          style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}
         >
-          {props.children}
+          <div
+            style={{
+              width: "min(100%, var(--content-max-width))",
+              margin: "0 auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: "var(--space-4)",
+            }}
+          >
+            {props.children}
+          </div>
         </div>
+        {/* 一键回底浮钮（feat/scroll-to-bottom-X）：盖一层 pointer-events:none 的定位层，
+            内衬与消息列同宽同边距的列、按钮靠右缘——对齐的是消息列而不是面板边。
+            只盖按钮自身可点，正文照常选中/点击。 */}
+        {props.scrollToEnd?.visible === true && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 1,
+              pointerEvents: "none",
+              padding: "0 var(--space-5)",
+              display: "flex",
+              alignItems: "flex-end",
+            }}
+          >
+            <div
+              style={{
+                width: "min(100%, var(--content-max-width))",
+                margin: "0 auto",
+                display: "flex",
+                justifyContent: "flex-end",
+              }}
+            >
+              <IconButton
+                label={t.chat.scrollToBottom}
+                title={t.chat.scrollToBottom}
+                size={30}
+                className="scroll-end-float"
+                style={{
+                  pointerEvents: "auto",
+                  marginBottom: 10,
+                  borderRadius: "var(--radius-pill)",
+                }}
+                onClick={props.scrollToEnd.onClick}
+              >
+                <Icon name="arrow-down" size={15} />
+              </IconButton>
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ padding: "var(--space-1) var(--space-5) 10px" }}>
