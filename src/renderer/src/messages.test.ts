@@ -53,6 +53,7 @@ const ALLOWED_LATIN = new Set([
   "Kimi",
   "opencode",
   "Reasonix",
+  "ZCode",
   "Desktop",
   // 文件名
   "mcp.json",

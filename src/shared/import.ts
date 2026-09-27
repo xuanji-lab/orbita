@@ -25,9 +25,13 @@
  * - reasonix：Reasonix 桌面版（Windows %APPDATA%/reasonix）：只导会话——projects/<项目>/sessions/
  *   下的旧 JSONL。skills 是共用目录（~/.agents/skills）的链接子集（归 agent-skills）、MCP 只有
  *   TOML 里一台、hooks 双方都没有，都不迁（2026-09-27 裁决）；v5 二进制帧容器另立一刀
+ * - zcode：ZCode（~/.zcode/cli/db/db.sqlite，只读打开）：只导会话——会话库与 opencode 同源同形
+ *   （session/message/part），转换走 opencode 同一条路。skills 是共用目录（~/.agents/skills）
+ *   的 symlink 子集（归 agent-skills）、没有 mcpServers 配置、memories/plugins 是 ZCode 私有
+ *   概念无落点，都不迁（2026-09-28 裁决）
  * - agent-skills：多家 agent 共用的 skills 目录（~/.agents/skills），只有 skills，没有会话
  */
-export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "reasonix" | "agent-skills";
+export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "reasonix" | "zcode" | "agent-skills";
 
 /**
  * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
@@ -155,7 +159,11 @@ export type ImportSourceKind =
   /** Reasonix 桌面版的会话 JSONL（projects/<项目>/sessions/*.jsonl）：一行一条 OpenAI 扁平
    *  消息（user/assistant/tool，assistant 带 reasoning 与 tool_calls，另有 UI 元数据与分支记账
    *  行），转换构造 pi 文件 */
-  | "reasonix";
+  | "reasonix"
+  /** ZCode 的 SQLite 库（~/.zcode/cli/db/db.sqlite）：与 opencode 同形（session/message/part），
+   *  转换直接走 opencode 的转换器，zcode.ts 只做取数与差异吸收（rewind 白名单、part 排序），
+   *  键名分岔在转换器里两个拼写都认 */
+  | "zcode";
 
 /**
  * 一条计划条目相对 orbita 的状态（再次导入，wafo 2026-09-24 23:55 裁决）。
@@ -460,6 +468,7 @@ const SOURCE_ID_TABLE: Record<ImportSourceId, true> = {
   "kimi-code": true,
   opencode: true,
   reasonix: true,
+  zcode: true,
   "agent-skills": true,
 };
 const SOURCE_IDS: readonly string[] = Object.keys(SOURCE_ID_TABLE);

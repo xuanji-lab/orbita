@@ -429,6 +429,7 @@ export const en = {
       "kimi-code": "Kimi Code",
       opencode: "opencode",
       reasonix: "Reasonix",
+      zcode: "ZCode",
       "agent-skills": "Shared agent skills",
     },
     kinds: {
