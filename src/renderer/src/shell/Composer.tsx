@@ -102,6 +102,7 @@ export function Composer(props: {
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const commandListRef = useRef<HTMLDivElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
   // 输入法组词中的范围（没在组词是 null）。拼音字母会先进 value：字距判法在组词期间沿用
   // 上一次的结果，修正液不涂这一截
@@ -156,6 +157,13 @@ export function Composer(props: {
     if (!props.value.startsWith("/")) setCommandsDismissed(false);
   }, [props.value]);
   useEffect(() => setActiveCommand(0), [commandQuery]);
+  // 键盘选中滚出可视区时带动面板滚动（用户实测：↑↓ 只在列表内移动，长列表
+  // 时选中项躲在 overflow 外看不见）。block:"nearest" 只在需要时滚，不抖
+  useEffect(() => {
+    commandListRef.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeCommand]);
   type CommandRow =
     | { kind: "compact" | "new"; name: string; description: string }
     | { kind: "skill"; slug: string; name: string; description: string };
@@ -286,6 +294,7 @@ export function Composer(props: {
       )}
       {panelOpen && (
         <div
+          ref={commandListRef}
           role="listbox"
           style={{
             display: "grid",
