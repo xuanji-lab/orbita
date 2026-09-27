@@ -236,10 +236,11 @@ translucency step alone. No thick rules, no coloured left-border accents.
 **Cards.** One recipe: the single `--glass-bg`, 1px light border, `--shadow-composer`
 (`0 8px 28px rgba(20,24,31,.08)`), 10px radius. Chat-internal process cards (tool, thinking) have **no**
 border and **no** fill — they sit directly on the chat surface and are separated by 16px of space.
-External-capability events (skill use, MCP calls) are the one exception: they render as **event
-cards** — 1px hairline border, 10px radius, no fill, mono for machine names (server/tool) and the
-text face for human-written skill names — so an external call reads as a block, not a process row
-(2026-09-27).
+External-capability events (skill use, MCP calls) render as **chip rows**: their identity (icon +
+kind word + name) sits in one pill chip — 1px hairline, fully rounded, no fill — the same language
+as the composer's attachment and quote chips, so an "external object" looks alike everywhere; the
+row itself stays a process row. Within the family the skill name sets in the text face (a
+human-written instruction) while server/tool sets in mono (a machine service) (2026-09-27).
 Process rows live in the quiet tiers: while a row's activity is in progress its head (icon + label)
 is the only bright thing at secondary; once the state settles the **whole row** recedes to tertiary —
 one flat grey, with failure red as the only exception. Body text never competes with the past.

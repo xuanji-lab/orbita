@@ -2725,49 +2725,56 @@ function ToolLine(props: {
       ? toolDurationText(props.toolCallId, t)
       : null;
 
-  // 外部能力事件卡（2026-09-27 grilling 裁决）：skill 使用与 MCP 调用不用过程行，
-  // 用 1px 边框的事件卡——与内置工具行的「透明行」一眼分块。族内再分一档：
-  // skill 名是正文字体（人写的指令），server/tool 是 mono（机器服务）。
+  // 外部能力芯片行（2026-09-27 两轮裁决）：skill 使用与 MCP 调用的身份收进一枚
+  // 药丸芯片（图标 + 类型词 + 名字），与输入框附件 chip / 引用 chip 同族——「外部
+  // 对象」在整个应用里长一个样；后跟灰色摘要，行形态与普通工具行同层、不抢块。
+  // 族内分一档：skill 名正文字体（人写的指令），server/tool 是 mono（机器服务）。
   if (skillUse !== null || mcp !== null) {
     const mcpBrief = mcp === null ? null : (callLabel ?? mcpInputSummary(props.input));
     return (
-      <div
-        style={{
-          minWidth: 0,
-          display: "grid",
-          borderRadius: "var(--radius-md)",
-          border: "1px solid var(--color-border-subtle)",
-          overflow: "hidden",
-        }}
-      >
+      <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
         <CollapseRow open={open} disabled={!expandable} onToggle={() => setOpen((value) => !value)}>
-          <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
-            <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
-              <Icon
-                name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : "plug"}
-                size={14}
-                strokeWidth={1.8}
-              />
-            </span>
-            <span style={SLOT.status}>{skillUse !== null ? "skill" : "mcp"}</span>
-          </span>
           <span
+            className={active ? "orbita-breath" : undefined}
             style={{
               flex: "0 1 auto",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "3px 10px",
+              borderRadius: 999,
+              border: "1px solid var(--color-border-subtle)",
               minWidth: 0,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              fontSize: "var(--font-size-caption)",
-              color: "var(--color-text-primary)",
-              fontFamily:
-                skillUse !== null ? "var(--font-family-business)" : "var(--font-family-mono)",
-              fontWeight: 600,
             }}
           >
-            {skillUse !== null ? skillUse.name : mcp === null ? "" : `${mcp.server}/${mcp.tool}`}
+            <Icon
+              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : "plug"}
+              size={13}
+              strokeWidth={1.8}
+              style={{
+                color: failed ? "var(--color-danger)" : "var(--color-text-secondary)",
+                flex: "0 0 auto",
+              }}
+            />
+            <span style={SLOT.status}>{skillUse !== null ? "skill" : "mcp"}</span>
+            <span
+              style={{
+                minWidth: 0,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                fontSize: "var(--font-size-caption)",
+                lineHeight: "18px",
+                color: "var(--color-text-primary)",
+                fontFamily:
+                  skillUse !== null ? "var(--font-family-business)" : "var(--font-family-mono)",
+                fontWeight: 600,
+              }}
+            >
+              {skillUse !== null ? skillUse.name : mcp === null ? "" : `${mcp.server}/${mcp.tool}`}
+            </span>
           </span>
-          {mcpBrief !== null && <span style={SLOT.sub}>{mcpBrief}</span>}
+          {mcpBrief !== null && <span style={{ ...SLOT.sub, flex: "1 1 auto" }}>{mcpBrief}</span>}
           {summary !== null && !active && (
             <span style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}>
               {summary}
@@ -2775,13 +2782,13 @@ function ToolLine(props: {
           )}
         </CollapseRow>
         {open && expandable && (
-          <div style={{ padding: "0 10px 8px" }}>
+          <>
             {mcp !== null ? (
               <McpToolBody result={result} />
             ) : (
               <PlainToolBody toolName={props.toolName} text={body} failed={failed} live={live} />
             )}
-          </div>
+          </>
         )}
       </div>
     );
