@@ -21,6 +21,9 @@ import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
+// 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
+import { skillForReadPath } from "../../../../shared/skill.ts";
+import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
 import { isThinkingLevel } from "../../../../shared/thinking.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -170,6 +173,16 @@ function isChannelToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && CHANNEL_TOOL_NAMES.has(entry.toolName);
 }
 
+/** 这条 toolCall 是不是在 read 某条已知 skill 的 SKILL.md（分组排除用，同 ToolLine 的判定） */
+function isSkillRead(
+  unit: ToolCallUnit,
+  skills: ReadonlyArray<{ slug: string; name: string }>,
+): boolean {
+  if (unit.toolName !== "read") return false;
+  const path = (unit.input as Record<string, unknown> | null)?.["path"];
+  return typeof path === "string" && skillForReadPath(path, skills) !== null;
+}
+
 /**
  * 相邻同类 toolCall 合并成组。**只合相邻**：任何非同类单元（正文、思考、用户、
  * 界碑、别的工具）都断开 run——隔着东西合并等于撒谎（顺序即语义）。
@@ -177,8 +190,15 @@ function isChannelToolCall(entry: RenderEntry): boolean {
  *
  * 通道工具（见 `CHANNEL_TOOL_NAMES`）**永不参与合并**，哪怕同名连发两次：
  * 它们是各自独立的一次通信，合并成组会把「发了两条」显示成「发了一条」。
+ *
+ * read SKILL.md 同样不参与合并（skills 索引命中即视为 skill 使用）：它是
+ * 「agent 在用 skill」这个事件本身，并进普通文件组会把徽标吞掉——组头没有
+ * skill 身份，用户就永远看不到 skill 被用过。skills 为空数组时无行为变化。
  */
-export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
+export function groupToolUnits(
+  units: readonly RenderUnit[],
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
+): RenderEntry[] {
   const entries: RenderEntry[] = [];
   let run: ToolCallUnit[] = [];
   const flush = () => {
@@ -198,13 +218,19 @@ export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
   };
   for (const unit of units) {
     const head = run[0];
-    const groupable = unit.kind === "toolCall" && !CHANNEL_TOOL_NAMES.has(unit.toolName);
+    // skill read 要**彻底绕过 run 机制**（直接进 entries）：只挡在 groupable 上不够——
+    // 它自己开的 run 会被后续同类 read 并进来，排除就白做了
+    const skillRead = unit.kind === "toolCall" && isSkillRead(unit, skills);
+    const groupable =
+      unit.kind === "toolCall" && !skillRead && !CHANNEL_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
       continue;
     }
     flush();
-    if (unit.kind === "toolCall") {
+    if (skillRead) {
+      entries.push(unit);
+    } else if (unit.kind === "toolCall") {
       run = [unit];
     } else {
       entries.push(unit);
@@ -437,10 +463,28 @@ export interface TurnStats {
   byTool: ReadonlyArray<TurnToolStat>;
 }
 
+/**
+ * 折叠统计行的「统计词汇」（2026-09-27 裁决）：read SKILL.md 记作 skill、mcp__ 名
+ * 记作 mcp——按「家族」计数，不逐 server/tool 展开名字（多台 server 会撑爆一行）。
+ * TurnToolStat.toolName 装的是它，不总是真实工具名。
+ */
+export function rollupToolKey(
+  toolName: string,
+  input: unknown,
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
+): string {
+  if (toolName === "read") {
+    const path = (input as Record<string, unknown> | null)?.["path"];
+    if (typeof path === "string" && skillForReadPath(path, skills) !== null) return "skill";
+  }
+  return parseQualifiedToolName(toolName) !== null ? "mcp" : toolName;
+}
+
 export function turnStats(
   group: TurnGroupUnit,
   results: ToolResultIndex,
   now: number = Date.now(),
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
 ): TurnStats {
   let thinkingMs: number | null = 0;
   let thinkingCount = 0;
@@ -462,10 +506,11 @@ export function turnStats(
     if (member.kind === "text") continue;
     for (const call of member.kind === "toolGroup" ? member.calls : [member]) {
       calls++;
-      const stat = tools.get(call.toolName) ?? { toolName: call.toolName, count: 0, failed: 0 };
+      const statKey = rollupToolKey(call.toolName, call.input, skills);
+      const stat = tools.get(statKey) ?? { toolName: statKey, count: 0, failed: 0 };
       stat.count++;
       if (results.get(call.toolCallId)?.status === "error") stat.failed++;
-      tools.set(call.toolName, stat);
+      tools.set(statKey, stat);
     }
   }
   return {
@@ -959,6 +1004,11 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     // 子会话：delegate 的入参同样有 task 字段——派出卡的任务预览复用这条摘要
     case "delegate":
       return str("task");
+    // 自我配置工具（4-3）：摘要就是它们造出来的那条的名字
+    case "create_skill":
+      return str("name") ?? str("slug");
+    case "add_mcp_server":
+      return str("name");
     default:
       return null;
   }

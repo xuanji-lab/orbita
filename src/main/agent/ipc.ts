@@ -3,6 +3,7 @@
  * 事件是单向广播：主进程收到 agent 进程的消息就原样转给所有窗口，不在中间加工。
  */
 import { BrowserWindow, ipcMain } from "electron";
+import { join } from "node:path";
 import {
   ipcChannels,
   type CompactAgentInput,
@@ -10,6 +11,13 @@ import {
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
+import {
+  formatSkillBlock,
+  matchSkillTarget,
+  parseSkillInvocation,
+  SKILL_NOT_FOUND_CODE,
+  SKILL_UNREADABLE_CODE,
+} from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -21,6 +29,7 @@ import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
+import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 import type { SentImage } from "../../shared/prompt-images.ts";
@@ -123,6 +132,8 @@ export function registerAgentIpc(
   protectedPaths: string[],
   /** 某条会话该拿哪些 skill 集合目录（global 恒在 + 它的工作区）；路径策略在主进程 */
   skillDirs: (workspaceId: string | null) => string[],
+  /** skill 中心存储：`/skill:` 展开在这里查名与读正文（真源在 store，别人不再认一遍） */
+  skills: SkillStore,
   /** MCP 配置。**主进程读文件**，agent 进程只收解析好的结果（同 skillDirs 的纪律） */
   mcp: McpStore,
   /** 应用设置。压缩偏好（A-1）从这里装配进每轮开轮命令 */
@@ -152,6 +163,7 @@ export function registerAgentIpc(
     const current = await settings.read();
     return effectiveLanguage(current.theme, current.language);
   };
+
 
   /**
    * 开轮目录清单每轮现读现装配：工作区挂新目录、换工作区，下一轮即生效。
@@ -244,11 +256,38 @@ export function registerAgentIpc(
    * 也要开同一种轮——`applyDelegate` / `deliverToChild`（channel/requests.ts）
    * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
    */
+  /**
+   * `/skill:<target> 附加指示` → `<skill>` 块用户消息。**展开在主进程**：
+   * name→正文的真源在 skill store，agent 进程与 renderer 都不必再认一遍 skill；
+   * transcript 落的是展开后原文，重放历史所见即所得。找不到或读不出就抛错——
+   * 发送失败如实上屏，而不是把 `/skill:xxx` 原文喂给模型让它角色扮演。
+   * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
+   */
+  const expandSkillInvocation = async (text: string, workspaceId: string | null): Promise<string> => {
+    const parsed = parseSkillInvocation(text);
+    if (parsed === null) return text;
+    const available = (await skills.list()).filter(
+      (meta) =>
+        !meta.missing && (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId))),
+    );
+    const meta = matchSkillTarget(available, parsed.target);
+    if (meta === null) throw new Error(`${SKILL_NOT_FOUND_CODE}${parsed.target}`);
+    const content = await skills.read(meta.slug);
+    if (content === null) throw new Error(`${SKILL_UNREADABLE_CODE}${parsed.target}`);
+    return formatSkillBlock({
+      name: content.name,
+      location: join(skills.storeRoot(), meta.slug, "SKILL.md"),
+      body: content.body,
+      instructions: parsed.rest,
+    });
+  };
+
   async function submitTurn(input: SubmitAgentInput): Promise<void> {
     const provider = await resolveProviderSecrets(providers, input.providerId);
+    const text = await expandSkillInvocation(input.text, input.workspaceId);
     const piSessionFile = await host.submit({
       type: "submit",
-      text: input.text,
+      text,
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
@@ -283,7 +322,10 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text: input.text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
+    // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份展开，
+    // 否则 /skill: 在这条路径以字面文本喂给模型
+    const text = await expandSkillInvocation(input.text, input.workspaceId);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

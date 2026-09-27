@@ -70,6 +70,24 @@ import {
 } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import type { Messages } from "../../messages-en.ts";
+import { SKILL_NOT_FOUND_CODE, SKILL_UNREADABLE_CODE } from "../../../../shared/skill.ts";
+
+/**
+ * IPC 错误上屏前的整理：剥掉 Electron 的「Error invoking remote method 'x': Error:」
+ * 包装（对用户是纯噪音），并把主进程抛的稳定错误码翻成界面语言的人话——
+ * 主进程不该猜界面语言（用户实测：英文界面下 /skill: 报错仍是中文）。
+ */
+function ipcErrorText(cause: unknown, t: Messages): string {
+  const raw = cause instanceof Error ? cause.message : String(cause);
+  const inner = raw.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
+  if (inner.startsWith(SKILL_NOT_FOUND_CODE)) {
+    return t.composer.skillNotFound(inner.slice(SKILL_NOT_FOUND_CODE.length));
+  }
+  if (inner.startsWith(SKILL_UNREADABLE_CODE)) {
+    return t.composer.skillUnreadable(inner.slice(SKILL_UNREADABLE_CODE.length));
+  }
+  return inner;
+}
 
 /**
  * 会话状态。**逻辑原样自 ChatView 上提**，一行未改语义——上提的唯一理由是
@@ -278,6 +296,10 @@ export interface ChatSession {
    */
   retryClosingScan: (() => void) | null;
   send: () => void;
+  /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
+  sendText: (text: string) => void;
+  /** 指令面板 /new 用：清当前槽的引用与附件。必须在 newTask 之前调 */
+  clearComposerExtras: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
   /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
@@ -655,7 +677,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       if (head === null) return;
       applyStates((prev) => dequeue(prev, id, head.id));
       const fail = (cause: unknown): void =>
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(ipcErrorText(cause, messagesRef.current));
       if (head.kind === "compact") {
         const turn = buildTurn(id);
         if (turn === null) return;
@@ -1478,7 +1500,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
         if (resume === null) engine.refreshSessions();
       } catch (cause) {
-        engine.setError(cause instanceof Error ? cause.message : String(cause));
+        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
         // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位。
         // IPC 直接失败（provider 装配等）不发事件，快照在这里兑底放回输入框
         if (restoreRef.current?.sessionId === id) {
@@ -1492,8 +1514,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, model, mode, thinkingLevel, restoreSent],
   );
 
-  const send = useCallback(async () => {
-    const own = draft.trim();
+  const send = useCallback(async (override?: string) => {
+    const own = (override ?? draft).trim();
     const images = attachments.map((item) => item.image);
     if (
       own === "" &&
@@ -1504,15 +1526,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     ) {
       return;
     }
+    // override（指令面板的显式动作，如 sendText("/compact")）是另一回事：文本就用
+    // 指令本身，不拼槽里的引用；压缩判定**不设附件门**——面板选中是显式意图，挂着
+    // 附件时把 /compact 降级成普通消息（连附件一起喂给模型）才是错的（wafo 一轮 #4）。
+    // 附件留在输入框不动，压缩完用户自己决定去留。
+    const explicit = override !== undefined;
     // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）
-    const text = composeQuotedMessage(quotes, own);
+    const text = explicit ? own : composeQuotedMessage(quotes, own);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
-    // 带附件（图 / 文件 / 粘贴块）时不认压缩指令：压缩吃不了附件，当命令拦下会把
-    // 附件悉数丢掉——按普通消息发。
-    const compact =
-      images.length === 0 && quotes.length === 0 && files.length === 0 && pasted.length === 0
+    // 手工输入时带附件（图 / 文件 / 粘贴块）不认压缩指令：压缩吃不了附件，当命令
+    // 拦下会把附件悉数丢掉——按普通消息发。
+    const compact = explicit
+      ? parseCompactCommand(text)
+      : images.length === 0 && quotes.length === 0 && files.length === 0 && pasted.length === 0
         ? parseCompactCommand(text)
         : null;
     if (compact !== null) {
@@ -1631,6 +1659,29 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, []);
 
   /** 回到首页（本槽）。会话在首条消息提交时才真正创建（R8-01 ①）。 */
+  /**
+   * 指令面板 `/new` 用：清空当前槽挂着的引用、附图、文件与粘贴块（草稿由调用方清）。
+   * **必须在 newTask 之前调**——reset 换槽后 draftKey 变了，挂着的就清不到了
+   * （review 挂账项：/new 只清草稿，附件会跟到下一条新消息里）。
+   */
+  const clearComposerExtras = useCallback(() => {
+    const key = draftKey;
+    const dropKey = <T,>(
+      setMap: (updater: (prev: ReadonlyMap<string, T>) => ReadonlyMap<string, T>) => void,
+    ): void => {
+      setMap((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Map(prev);
+        next.delete(key);
+        return next;
+      });
+    };
+    dropKey(setQuoteMap);
+    dropKey(setAttachmentMap);
+    dropKey(setFileMap);
+    dropKey(setPastedMap);
+  }, [draftKey]);
+
   const reset = useCallback(() => {
     setSessionId(null);
     sessionRef.current = null;
@@ -2064,8 +2115,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const item = entry?.queued.find((queued) => queued.id === queuedId);
       if (entry === undefined || item === undefined) return;
       engine.applyStates((prev) => dequeue(prev, id, queuedId));
-      const fail = (cause: unknown): void =>
-        engine.setError(cause instanceof Error ? cause.message : String(cause));
+      const fail = (cause: unknown): void => {
+        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
+        // IPC 直接失败（provider 装配、/skill: 展开错误码）不发 agent 事件，回填
+        // 快照等不到兑底——与 send 直发分支同款，在这里放回输入框
+        if (item.kind === "text" && restoreRef.current?.sessionId === id) {
+          const snap = restoreRef.current;
+          restoreRef.current = null;
+          restoreSent(snap);
+        }
+      };
       // compact 的「立即」是另一回事：不打断，只是不等空闲马上压
       if (item.kind === "compact") {
         const turn = engine.buildTurn(id);
@@ -2092,6 +2151,25 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         item.kind === "text"
           ? { ...filesField(item.files), ...pastedField(item.pasted) }
           : {};
+      // 留回填快照（wafo 二轮：出队后失败即丢——9e2d7e5 的回填没覆盖这条路径）：
+      // 已从队列删掉，失败时 nowhere 可归，只有快照能把内容放回输入框。排队时引用
+      // 已展开进 text，这里解析回净文与 chip（撤回 restoreToDraft 同纪律），输入框
+      // 不留裸 XML；compact/channel 分支不建——压缩无内容可丢，channel 的正文在
+      // 通道账本里丢不了。
+      if (item.kind === "text") {
+        const { quotes: queuedQuotes, text: queuedText } = parseQuotedMessage(item.text);
+        restoreRef.current = {
+          sessionId: id,
+          draftKey,
+          fresh: false,
+          text: queuedText,
+          quotes: queuedQuotes,
+          // PromptImage → ComposerImage 与撤回同款转换（排队时名字已丢，name 空串是既有先例）
+          images: (item.images ?? []).map((image) => ({ id: crypto.randomUUID(), name: "", image })),
+          files: item.files ?? [],
+          pasted: item.pasted ?? [],
+        };
+      }
       if (entry.phase === "idle") {
         void api.agent.submit({ sessionId: id, text, ...images, ...extras, ...turn }).catch(fail);
       } else {
@@ -2438,6 +2516,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 重试只在「本槽正看着那条失败的会话」时给出——提示行本身就是那条会话的
     retryClosingScan: scanFailed !== null && scanFailed === viewedId ? retryClosingScan : null,
     send: () => void send(),
+    /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
+    sendText: (text: string) => void send(text),
+    clearComposerExtras,
     stop,
     queued: entry.queued,
     sendQueuedNow,

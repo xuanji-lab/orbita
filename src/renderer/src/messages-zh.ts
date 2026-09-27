@@ -87,6 +87,11 @@ export const zh: Messages = {
     pastedExpand: "展开粘贴全文",
     pastedCollapse: "收起粘贴",
     removePasted: "移除粘贴文本",
+    skillNotFound: (name: string) => `技能「${name}」不存在，或没有链接到当前会话`,
+    skillUnreadable: (name: string) => `技能「${name}」读不出来（存储里可能已损坏）`,
+    commandNoMatch: "没有匹配的指令",
+    cmdCompact: "立即压缩上下文",
+    cmdNew: "开一条新会话",
   },
 
   quote: {

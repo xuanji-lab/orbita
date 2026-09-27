@@ -19,6 +19,7 @@ import {
   flattenRenderUnits,
   formatThinkingDuration,
   groupToolUnits,
+  rollupToolKey,
   indexToolResults,
   intraLineTokens,
   liveTailLines,
@@ -235,6 +236,65 @@ describe("groupToolUnits", () => {
       entries.map((entry) => entry.kind),
       ["toolCall"],
     );
+  });
+
+  test("read SKILL.md 不参与合并——skill 使用是独立事件，并进组会把徽标吞掉", () => {
+    const skills = [{ slug: "tdd", name: "TDD" }];
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [
+          readCall("r1", "C:\\cfg\\skill-links\\global\\tdd\\SKILL.md"),
+          readCall("r2", "a.ts"),
+        ]),
+      ]),
+      skills,
+    );
+    assert.deepEqual(
+      entries.map((entry) => (entry.kind === "toolGroup" ? `group:${entry.calls.length}` : entry.kind)),
+      ["toolCall", "toolCall"],
+    );
+  });
+
+  test("skills 索引不认识时 SKILL.md 路径照常进组（默认参数无行为变化）", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [readCall("r1", "C:\\x\\tdd\\SKILL.md"), readCall("r2", "a.ts")]),
+      ]),
+    );
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.kind, "toolGroup");
+  });
+
+  test("skill read 在组员前后都不吞普通 read（前后各一个普通 read）", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [
+          readCall("r0", "b.ts"),
+          readCall("r1", "C:\\cfg\\tdd\\SKILL.md"),
+          readCall("r2", "a.ts"),
+        ]),
+      ]),
+      [{ slug: "tdd", name: "TDD" }],
+    );
+    assert.deepEqual(
+      entries.map((entry) => (entry.kind === "toolGroup" ? `group:${entry.calls.length}` : entry.kind)),
+      ["toolCall", "toolCall", "toolCall"],
+    );
+  });
+});
+
+describe("rollupToolKey（折叠统计行的统计词汇）", () => {
+  const skills = [{ slug: "tdd", name: "TDD" }];
+  test("read SKILL.md 记作 skill、mcp__ 名记作 mcp（家族聚合）", () => {
+    assert.equal(rollupToolKey("read", { path: "C:\\cfg\\tdd\\SKILL.md" }, skills), "skill");
+    assert.equal(rollupToolKey("mcp__fixture__echo", {}, skills), "mcp");
+  });
+  test("普通工具与不认识的 SKILL.md 路径用原名", () => {
+    assert.equal(rollupToolKey("bash", { command: "ls" }, skills), "bash");
+    // 尾巴 <slug>/SKILL.md 命中就是 skill 使用，不看前面的路径（与 skillForReadPath 同判法）
+    assert.equal(rollupToolKey("read", { path: "C:\\x\\tdd\\SKILL.md" }, skills), "skill");
+    assert.equal(rollupToolKey("read", { path: "C:\\x\\nope\\SKILL.md" }, skills), "read");
+    assert.equal(rollupToolKey("read", { path: "a.ts" }, []), "read");
   });
 
   test("正文永远独立成行，不进组——折叠只吞相邻 toolCall，正文没有折叠机制", () => {
@@ -1314,6 +1374,18 @@ describe("toolCallSummary —— delegate（子会话 PR4a）", () => {
   test("派出卡任务预览复用同一条摘要（同 read_task 的 task 字段）", () => {
     assert.equal(toolCallSummary("delegate", { title: "x", task: "审查分支 3" }), "审查分支 3");
     assert.equal(toolCallSummary("delegate", { title: "x" }), null);
+  });
+});
+
+describe("toolCallSummary —— 自我配置工具", () => {
+  test("create_skill 摘要取 name，缺席退回 slug", () => {
+    assert.equal(toolCallSummary("create_skill", { slug: "tdd", name: "TDD 流程", body: "..." }), "TDD 流程");
+    assert.equal(toolCallSummary("create_skill", { slug: "tdd" }), "tdd");
+    assert.equal(toolCallSummary("create_skill", {}), null);
+  });
+  test("add_mcp_server 摘要取 server 名", () => {
+    assert.equal(toolCallSummary("add_mcp_server", { name: "search", server: { command: "npx" } }), "search");
+    assert.equal(toolCallSummary("add_mcp_server", {}), null);
   });
 });
 

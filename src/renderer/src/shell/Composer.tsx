@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { ImageLightbox } from "./ImageLightbox";
@@ -12,6 +12,8 @@ import type { ComposerFileRef, ComposerPastedText } from "./composer-attachments
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
+import { filterSkills } from "../features/skills/skill-filter";
+import type { SkillMeta } from "@shared/skill";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useT } from "../locale.ts";
@@ -91,9 +93,16 @@ export function Composer(props: {
   onPasteLargeText: (text: string) => void;
   /** 当前模型看不了图：有附图时在缩略图下说一句（pi 会把图换成占位文字，不报错） */
   imageUnsupported?: boolean;
+  /** 指令面板的动作项（/compact /new）：选中即执行，会话动作由调用方接（发送流不经这里） */
+  onCommand?: (command: "compact" | "new") => void;
+  /** 指令面板的 skill 清单（ChatView 层 useSkillIndex 的同一份——徽标与面板共用，Composer 不自己拉） */
+  skills: readonly SkillMeta[];
+  /** 面板每次打开时触发重拉：新建 / 删除的 skill 下一次打开立即可见 */
+  onReloadSkills: () => void;
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const commandListRef = useRef<HTMLDivElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
   // 输入法组词中的范围（没在组词是 null）。拼音字母会先进 value：字距判法在组词期间沿用
   // 上一次的结果，修正液不涂这一截
@@ -132,6 +141,79 @@ export function Composer(props: {
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
   }, []);
+  // ── 指令面板（/ 触发）──────────────────────────────────────────────
+  // 首字符是 / 且单行时亮。关闭分两种语义（用户实测：选中/ESC 后再打 / 前缀
+  // 文字，面板不弹，Enter 把半截指令当普通消息发出去了）：
+  //   "esc"——Esc 关闭或动作项执行完：继续输入就重开（人还在 / 模式里，面板是输入辅助）
+  //   "insert"——skill 插入 /skill:xxx 后：保持关闭直到离开 / 前缀（用户在补
+  //   附加指示，弹出「没有匹配的指令」空态只会挡视线）
+  // skill 清单从上层拿（ChatView 的 useSkillIndex），面板每次打开触发一次重拉。
+  const [commandsClosed, setCommandsClosed] = useState<"esc" | "insert" | null>(null);
+  const [activeCommand, setActiveCommand] = useState(0);
+  const panelOpen =
+    props.value.startsWith("/") && !props.value.includes("\n") && commandsClosed === null;
+  const commandQuery = panelOpen ? props.value.slice(1).trim().toLowerCase() : "";
+  useEffect(() => {
+    if (panelOpen) props.onReloadSkills();
+  }, [panelOpen, props.onReloadSkills]);
+  useEffect(() => {
+    if (!props.value.startsWith("/")) setCommandsClosed(null);
+    // "esc" 类关闭在继续输入时重开；"insert" 保持（只有离开 / 前缀才重置）
+    else setCommandsClosed((closed) => (closed === "esc" ? null : closed));
+  }, [props.value]);
+  useEffect(() => setActiveCommand(0), [commandQuery]);
+  // 键盘选中滚出可视区时带动面板滚动（用户实测：↑↓ 只在列表内移动，长列表
+  // 时选中项躲在 overflow 外看不见）。block:"nearest" 只在需要时滚，不抖
+  useEffect(() => {
+    commandListRef.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeCommand]);
+  type CommandRow =
+    | { kind: "compact" | "new"; name: string; description: string }
+    | { kind: "skill"; slug: string; name: string; description: string };
+  const commandRows: CommandRow[] = useMemo(() => {
+    if (!panelOpen) return [];
+    const builtins: CommandRow[] = [
+      { kind: "compact", name: "compact", description: t.composer.cmdCompact },
+      { kind: "new", name: "new", description: t.composer.cmdNew },
+    ];
+    const matchSkill = (meta: SkillMeta): CommandRow => ({
+      kind: "skill",
+      slug: meta.slug,
+      name: meta.name,
+      description: meta.description,
+    });
+    if (commandQuery === "") {
+      return [...builtins, ...props.skills.filter((meta) => !meta.missing).map(matchSkill)];
+    }
+    return [
+      ...builtins.filter((row) => row.name.startsWith(commandQuery)),
+      ...filterSkills([...props.skills], commandQuery)
+        .filter((meta) => !meta.missing)
+        .map(matchSkill),
+    ];
+  }, [panelOpen, commandQuery, props.skills, t]);
+
+  /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行 */
+  /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行，
+   * 并清掉半截指令残留——"/c" 留在框里，下一次回车就又是一条误发 */
+  const runCommand = (row: CommandRow): void => {
+    if (row.kind === "skill") {
+      setCommandsClosed("insert");
+      props.onChange(`/skill:${row.slug} `);
+    } else {
+      setCommandsClosed("esc");
+      if (props.onCommand !== undefined) {
+        props.onCommand(row.kind);
+        props.onChange("");
+      } else {
+        props.onChange(`/${row.name} `);
+      }
+    }
+    textareaRef.current?.focus();
+  };
+
   const disabled = props.disabled === true;
   const running = props.running === true;
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
@@ -221,6 +303,93 @@ export function Composer(props: {
           ))}
         </div>
       )}
+      {panelOpen && (
+        <div
+          ref={commandListRef}
+          role="listbox"
+          style={{
+            display: "grid",
+            gap: 2,
+            maxHeight: 240,
+            overflowY: "auto",
+            padding: 6,
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--color-border-subtle)",
+            background: "var(--color-bg-muted)",
+          }}
+        >
+          {commandRows.length === 0 ? (
+            <div
+              style={{
+                padding: "6px 8px",
+                fontSize: "var(--font-size-caption)",
+                color: "var(--color-text-tertiary)",
+              }}
+            >
+              {t.composer.commandNoMatch}
+            </div>
+          ) : (
+            commandRows.map((row, index) => (
+              <button
+                key={row.kind === "skill" ? `skill:${row.slug}` : row.kind}
+                type="button"
+                role="option"
+                aria-selected={index === activeCommand}
+                onClick={() => runCommand(row)}
+                onMouseEnter={() => setActiveCommand(index)}
+                // 选中/悬停底色走 .option-row 配方（styles.css 的 aria-selected 规则，
+                // 与菜单/抽屉同一实现——wafo 二轮：状态样式不写在 inline 三元里）
+                className="option-row"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--space-2)",
+                  padding: "6px 8px",
+                  borderRadius: "var(--radius-md)",
+                  border: 0,
+                  cursor: "pointer",
+                  textAlign: "left",
+                  minWidth: 0,
+                }}
+              >
+                <Icon
+                  name={
+                    row.kind === "skill"
+                      ? "book-open"
+                      : row.kind === "compact"
+                        ? "fold-vertical"
+                        : "message-square-dashed"
+                  }
+                  size={13}
+                  strokeWidth={1.8}
+                  style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
+                />
+                <span
+                  style={{
+                    fontFamily: "var(--font-family-mono)",
+                    fontSize: "var(--font-size-caption)",
+                    color: "var(--color-text-primary)",
+                    flex: "0 0 auto",
+                  }}
+                >
+                  {row.kind === "skill" ? `/skill:${row.slug}` : `/${row.name}`}
+                </span>
+                <span
+                  style={{
+                    fontSize: "var(--font-size-caption)",
+                    color: "var(--color-text-tertiary)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.description}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
       <div className="composer-field">
         {whiteout && (
           // 镜像：与 textarea 同字体、同字距、同宽，字是透明的，只有英文段的白底看得见。
@@ -265,6 +434,30 @@ export function Composer(props: {
             }
           }}
           onKeyDown={(event) => {
+            // 面板开着时方向键与 Enter 归面板（Enter 选中即执行，不落进发送）；
+            // Esc 关面板，内容照在。组词中的按键不动面板。
+            if (panelOpen && !event.nativeEvent.isComposing) {
+              if (event.key === "ArrowDown" && commandRows.length > 0) {
+                event.preventDefault();
+                setActiveCommand((index) => (index + 1) % commandRows.length);
+                return;
+              }
+              if (event.key === "ArrowUp" && commandRows.length > 0) {
+                event.preventDefault();
+                setActiveCommand((index) => (index - 1 + commandRows.length) % commandRows.length);
+                return;
+              }
+              if (event.key === "Enter" && commandRows.length > 0) {
+                event.preventDefault();
+                const row = commandRows[Math.min(activeCommand, commandRows.length - 1)];
+                if (row !== undefined) runCommand(row);
+                return;
+              }
+              if (event.key === "Escape") {
+                setCommandsClosed("esc");
+                return;
+              }
+            }
             // 组词中的 Enter 是「确认候选词」，不是发送——规则与用例在 composer-keys.ts
             if (!isSubmitKey({
               key: event.key,

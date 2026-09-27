@@ -1,5 +1,6 @@
 import { deepStrictEqual, doesNotMatch, match, notStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
+import { formatSkillBlock } from "./skill.ts";
 import {
   deriveSessionTitle,
   isChannelMarkRecord,
@@ -61,6 +62,16 @@ describe("deriveSessionTitle", () => {
 
   it("空输入给空标题——会话可以建了还没发过消息", () => {
     strictEqual(deriveSessionTitle("   \n  "), "");
+  });
+
+  it("<skill> 块不进标题：剥掉取附加指示，剥完为空给空标题", () => {
+    const block = formatSkillBlock({
+      name: "TDD",
+      location: "C:/Orbita/skills/tdd/SKILL.md",
+      body: "# TDD\n先写测试",
+    });
+    strictEqual(deriveSessionTitle(block), "");
+    strictEqual(deriveSessionTitle(`${block}\n\n先只做第一步`), "先只做第一步");
   });
 
   it("附件块不进标题——「只发附件不打字」开会话不显示裸 XML", () => {
