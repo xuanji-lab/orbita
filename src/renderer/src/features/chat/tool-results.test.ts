@@ -237,6 +237,33 @@ describe("groupToolUnits", () => {
     );
   });
 
+  test("read SKILL.md 不参与合并——skill 使用是独立事件，并进组会把徽标吞掉", () => {
+    const skills = [{ slug: "tdd", name: "TDD" }];
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [
+          readCall("r1", "C:\\cfg\\skill-links\\global\\tdd\\SKILL.md"),
+          readCall("r2", "a.ts"),
+        ]),
+      ]),
+      skills,
+    );
+    assert.deepEqual(
+      entries.map((entry) => (entry.kind === "toolGroup" ? `group:${entry.calls.length}` : entry.kind)),
+      ["toolCall", "toolCall"],
+    );
+  });
+
+  test("skills 索引不认识时 SKILL.md 路径照常进组（默认参数无行为变化）", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [readCall("r1", "C:\\x\\tdd\\SKILL.md"), readCall("r2", "a.ts")]),
+      ]),
+    );
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.kind, "toolGroup");
+  });
+
   test("正文永远独立成行，不进组——折叠只吞相邻 toolCall，正文没有折叠机制", () => {
     const entries = groupToolUnits(
       flattenRenderUnits([

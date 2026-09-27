@@ -1003,7 +1003,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   );
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = useMemo(() => flattenRenderUnits(records), [records]);
-  const entries = useMemo(() => groupToolUnits(units), [units]);
+  const entries = useMemo(() => groupToolUnits(units, props.skills), [units, props.skills]);
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = props.phase === "turn";
   // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
@@ -2586,7 +2586,8 @@ function toolIcon(toolName: string): IconName {
     case "read_task":
       return "book-open";
     default:
-      return "wrench";
+      // MCP 工具（mcp__server__tool）：专属插头图标——外部能力，与内置工具一眼区分
+      return parseQualifiedToolName(toolName) !== null ? "plug" : "wrench";
   }
 }
 
@@ -2608,8 +2609,11 @@ function toolGroupLabel(toolName: string, t: Messages): string {
       return t.chat.toolEdit;
     case "ls":
       return t.chat.toolList;
-    default:
-      return toolName;
+    default: {
+      // MCP 组：组头直说 server/tool，不露 mcp__server__tool 原名
+      const mcp = parseQualifiedToolName(toolName);
+      return mcp !== null ? `${mcp.server}/${mcp.tool}` : toolName;
+    }
   }
 }
 
@@ -2732,8 +2736,8 @@ function ToolLine(props: {
               strokeWidth={1.8}
             />
           </span>
-          <span style={mcp === null ? headLabel(active) : { ...headLabel(active), fontWeight: 650 }}>
-            {mcp !== null ? mcp.tool : skillUse !== null ? "skill" : props.toolName}
+          <span style={headLabel(active)}>
+            {mcp !== null ? "mcp" : skillUse !== null ? "skill" : props.toolName}
           </span>
         </span>
         {skillUse !== null ? (
@@ -2742,13 +2746,16 @@ function ToolLine(props: {
             {skillUse.name}
           </span>
         ) : mcp !== null ? (
-          // MCP 副标：{server} · {输入摘要}（mono caption tertiary，规格 §8）。
-          // 内建摘要器不认识 MCP 工具，退回 JSON 一行截断。
+          // MCP 副标：{server/tool} · {输入摘要}。server/tool 提亮一档加粗——
+          // 「调的哪台外部服务」是这条行最重要的事实，与内置工具行一眼区分
+          // （用户 2026-09-27：skill 与 MCP 调用要专门区别显示）。摘要退回 JSON 一行截断。
           (() => {
             const brief = callLabel ?? mcpInputSummary(props.input);
             return (
               <span style={{ ...SLOT.sub, fontFamily: "var(--font-family-mono)" }}>
-                {mcp.server}
+                <span style={{ color: "var(--color-text-secondary)", fontWeight: 650 }}>
+                  {mcp.server}/{mcp.tool}
+                </span>
                 {brief !== null ? ` · ${brief}` : ""}
               </span>
             );

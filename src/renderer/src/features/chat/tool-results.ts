@@ -21,6 +21,8 @@ import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
+// 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
+import { skillForReadPath } from "../../../../shared/skill.ts";
 import { isThinkingLevel } from "../../../../shared/thinking.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -170,6 +172,16 @@ function isChannelToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && CHANNEL_TOOL_NAMES.has(entry.toolName);
 }
 
+/** 这条 toolCall 是不是在 read 某条已知 skill 的 SKILL.md（分组排除用，同 ToolLine 的判定） */
+function isSkillRead(
+  unit: ToolCallUnit,
+  skills: ReadonlyArray<{ slug: string; name: string }>,
+): boolean {
+  if (unit.toolName !== "read") return false;
+  const path = (unit.input as Record<string, unknown> | null)?.["path"];
+  return typeof path === "string" && skillForReadPath(path, skills) !== null;
+}
+
 /**
  * 相邻同类 toolCall 合并成组。**只合相邻**：任何非同类单元（正文、思考、用户、
  * 界碑、别的工具）都断开 run——隔着东西合并等于撒谎（顺序即语义）。
@@ -177,8 +189,15 @@ function isChannelToolCall(entry: RenderEntry): boolean {
  *
  * 通道工具（见 `CHANNEL_TOOL_NAMES`）**永不参与合并**，哪怕同名连发两次：
  * 它们是各自独立的一次通信，合并成组会把「发了两条」显示成「发了一条」。
+ *
+ * read SKILL.md 同样不参与合并（skills 索引命中即视为 skill 使用）：它是
+ * 「agent 在用 skill」这个事件本身，并进普通文件组会把徽标吞掉——组头没有
+ * skill 身份，用户就永远看不到 skill 被用过。skills 为空数组时无行为变化。
  */
-export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
+export function groupToolUnits(
+  units: readonly RenderUnit[],
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
+): RenderEntry[] {
   const entries: RenderEntry[] = [];
   let run: ToolCallUnit[] = [];
   const flush = () => {
@@ -198,13 +217,19 @@ export function groupToolUnits(units: readonly RenderUnit[]): RenderEntry[] {
   };
   for (const unit of units) {
     const head = run[0];
-    const groupable = unit.kind === "toolCall" && !CHANNEL_TOOL_NAMES.has(unit.toolName);
+    // skill read 要**彻底绕过 run 机制**（直接进 entries）：只挡在 groupable 上不够——
+    // 它自己开的 run 会被后续同类 read 并进来，排除就白做了
+    const skillRead = unit.kind === "toolCall" && isSkillRead(unit, skills);
+    const groupable =
+      unit.kind === "toolCall" && !skillRead && !CHANNEL_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
       continue;
     }
     flush();
-    if (unit.kind === "toolCall") {
+    if (skillRead) {
+      entries.push(unit);
+    } else if (unit.kind === "toolCall") {
       run = [unit];
     } else {
       entries.push(unit);
