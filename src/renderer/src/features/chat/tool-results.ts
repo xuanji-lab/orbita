@@ -990,6 +990,7 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     case "read":
     case "write":
     case "edit":
+    case "read_pdf": // PDF 的 read（agent/pdf-tools.ts）：摘要同样是它在读哪份文件
       return str("path");
     case "grep":
     case "find": {

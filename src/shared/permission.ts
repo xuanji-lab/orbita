@@ -22,8 +22,10 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
  * （CROSS_SESSION_READ_TOOLS），同日二次裁决撤销：读取而已，每次点击不值；
  * 会话文件的**写入**侧另有全档不变量兜着（tool_call 闸门的 protectedPaths），
  * 读的敞开不影响那道锁。见 PR #31/#32（立）与本文件的现状（撤）。
+ *
+ * read_pdf 同口径：提取 PDF 文本层而已（./pdf-tools.ts），与 read 同一待遇。
  */
-export const READ_ONLY_TOOLS = ["read", "grep", "glob", "ls", "find", "read_task"] as const;
+export const READ_ONLY_TOOLS = ["read", "grep", "glob", "ls", "find", "read_task", "read_pdf"] as const;
 
 export function isReadOnlyTool(toolName: string): boolean {
   return (READ_ONLY_TOOLS as readonly string[]).includes(toolName);

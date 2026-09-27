@@ -11,3 +11,27 @@ index f4fd9f37d9826a3e791f25c9ec748645a33d5616..2dac44fc00c4db60f9063a8acc0b1f3e
          this._emit({
              type: "auto_retry_start",
              attempt: this._retryAttempt,
+diff --git a/dist/core/tools/read.js b/dist/core/tools/read.js
+index 3e145b0e23bc3f25640907aeb9ff25f71eb328aa..c6649a75519d3fb84fd8164dd46a352b431e053f 100644
+--- a/dist/core/tools/read.js	
++++ b/dist/core/tools/read.js
+@@ -193,6 +193,11 @@ export function createReadToolDefinition(cwd, options) {
+                         else {
+                             // Read text content.
+                             const buffer = await ops.readFile(absolutePath);
++                            if (buffer.subarray(0, 1024).toString("latin1").includes("%PDF-")) {
++                                // PDF 的压缩流按 UTF-8 读出来是乱码——指路给 orbita 的 read_pdf 工具提取文本层
++                                content = [{ type: "text", text: "[This is a PDF document. Its binary content cannot be shown as text. Use the read_pdf tool to extract its text layer.]" }];
++                            }
++                            else {
+                             const textContent = buffer.toString("utf-8");
+                             const allLines = textContent.split("\n");
+                             const totalFileLines = allLines.length;
+@@ -247,6 +252,7 @@ export function createReadToolDefinition(cwd, options) {
+                                 outputText = truncation.content;
+                             }
+                             content = [{ type: "text", text: outputText }];
++                            }
+                         }
+                         if (aborted)
+                             return;
