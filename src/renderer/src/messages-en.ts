@@ -428,6 +428,7 @@ export const en = {
       "claude-code": "Claude Code",
       "kimi-code": "Kimi Code",
       opencode: "opencode",
+      reasonix: "Reasonix",
       "agent-skills": "Shared agent skills",
     },
     kinds: {

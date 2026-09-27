@@ -22,9 +22,12 @@
  *   agents/main/wire.jsonl 这份事件流；另有 mcp.json。skills 用的是共用目录（归 agent-skills）
  * - opencode：opencode 命令行：会话在它的 SQLite 库（~/.local/share/opencode/opencode.db，只读打开），
  *   MCP 在 ~/.config/opencode/opencode.json
+ * - reasonix：Reasonix 桌面版（Windows %APPDATA%/reasonix）：只导会话——projects/<项目>/sessions/
+ *   下的旧 JSONL。skills 是共用目录（~/.agents/skills）的链接子集（归 agent-skills）、MCP 只有
+ *   TOML 里一台、hooks 双方都没有，都不迁（2026-09-27 裁决）；v5 二进制帧容器另立一刀
  * - agent-skills：多家 agent 共用的 skills 目录（~/.agents/skills），只有 skills，没有会话
  */
-export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "agent-skills";
+export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "reasonix" | "agent-skills";
 
 /**
  * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
@@ -148,7 +151,11 @@ export type ImportSourceKind =
   /** opencode 的 SQLite 库：一条会话是 message 表的若干行，每行的内容在 part 表（文字、思考、
    *  工具调用连同结果、附件），按 step 拆成 pi 的 assistant 消息与工具结果，转换构造 pi 文件。
    *  库里没有「会话文件」，sourceFile 写成「库路径#会话 id」（幂等键） */
-  | "opencode";
+  | "opencode"
+  /** Reasonix 桌面版的会话 JSONL（projects/<项目>/sessions/*.jsonl）：一行一条 OpenAI 扁平
+   *  消息（user/assistant/tool，assistant 带 reasoning 与 tool_calls，另有 UI 元数据与分支记账
+   *  行），转换构造 pi 文件 */
+  | "reasonix";
 
 /**
  * 一条计划条目相对 orbita 的状态（再次导入，wafo 2026-09-24 23:55 裁决）。
@@ -446,6 +453,7 @@ const SOURCE_IDS: readonly string[] = [
   "claude-code",
   "kimi-code",
   "opencode",
+  "reasonix",
   "agent-skills",
 ] satisfies readonly ImportSourceId[];
 

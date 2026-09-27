@@ -391,6 +391,7 @@ export const zh: Messages = {
       "claude-code": "Claude Code",
       "kimi-code": "Kimi Code",
       opencode: "opencode",
+      reasonix: "Reasonix",
       "agent-skills": "共享的智能体技能",
     },
     kinds: {
