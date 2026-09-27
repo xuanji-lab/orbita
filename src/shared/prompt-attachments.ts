@@ -75,11 +75,14 @@ function fileLine(ref: { path: string; kind: "file" | "dir" }): string {
 /**
  * 文件引用 → 带标签的清单块。给模型的一句话说清这是什么、该怎么用——
  * 没有它，模型看到一串路径不知道是附件还是散文。目录行补尾斜杠（约定俗成的目录记号）。
+ * PDF 单独点名 read_pdf：pi 的 read 对 PDF 只会吐二进制乱码，文本层归 read_pdf 提取
+ * （见 agent/pdf-tools.ts）——不点名，模型多半拿 read 去撞。
  */
 export function filesBlockOf(files: readonly { path: string; kind: "file" | "dir" }[]): string {
   return [
     "<attached-files>",
-    "The user attached these files from their disk. Read them with the read tool when you need their contents.",
+    "The user attached these files from their disk. Read them with the read tool when you need their contents. " +
+      "PDF files: use the read_pdf tool instead of read.",
     ...files.map(fileLine),
     "</attached-files>",
   ].join("\n");
