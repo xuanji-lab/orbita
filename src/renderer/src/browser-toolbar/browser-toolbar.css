@@ -1,0 +1,66 @@
+/*
+ * 受管浏览器沙盒窗口的工具条（BrowserToolbar.tsx）。
+ *
+ * 高度必须与主进程的 BROWSER_TOOLBAR_HEIGHT（main/browser/sandbox.ts）一致：网页视图
+ * 就贴在这条下面，差一像素就会压住工具条的下边线，或露出一条缝。
+ */
+:root {
+  --browser-toolbar-height: 44px;
+}
+
+/* 沙盒窗口不透明：不走主窗口 macOS 的透明 body（那条规则按 data-platform 生效，这里不设它） */
+body {
+  background: var(--color-bg-panel);
+}
+
+.browser-toolbar {
+  height: var(--browser-toolbar-height);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.browser-toolbar-form {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  position: relative;
+  margin-inline-start: var(--space-1);
+}
+
+/* 地址栏左侧的地球 / 加载图标：压在输入框里，输入框给它让出左内边距 */
+.browser-address-icon {
+  position: absolute;
+  inset-inline-start: var(--space-3);
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+}
+
+.browser-address.text-field {
+  height: var(--control-height-sm);
+  padding-inline-start: calc(var(--space-3) + 13px + var(--space-2));
+  font-size: var(--font-size-control);
+}
+
+.browser-address[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.browser-toolbar-error {
+  flex: 0 1 auto;
+  max-width: 45%;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-caption);
+  color: var(--color-danger);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

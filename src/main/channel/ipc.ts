@@ -3,7 +3,8 @@
  * `channel:speak` 落到 `applySpeak`（requests.ts）；list/load 直接读 ChannelStore，
  * 不经过 requests.ts 的三个入口（它们是模型/用户发消息的路径，list/load 只读）。
  */
-import { BrowserWindow, ipcMain } from "electron";
+import { ipcMain } from "electron";
+import { mainWindows } from "../window/main-windows.ts";
 import { ipcChannels, type ChannelEvent, type ChannelSpeakInput } from "../../shared/agent-ipc.ts";
 import type { ChannelKey } from "../../shared/channel.ts";
 import { applySpeak, type ChannelDeps } from "./requests.ts";
@@ -16,9 +17,9 @@ export function registerChannelIpc(deps: ChannelDeps): void {
   ipcMain.handle(ipcChannels.channelSpeak, (_e, input: ChannelSpeakInput) => applySpeak(deps, input));
 }
 
-/** 主进程 → 所有窗口，同 agent/ipc.ts 的 broadcastAgentEvent 形态 */
+/** 主进程 → 所有主窗口，同 agent/ipc.ts 的 broadcastAgentEvent 形态 */
 export function broadcastChannelEvent(event: ChannelEvent): void {
-  for (const window of BrowserWindow.getAllWindows()) {
+  for (const window of mainWindows.list()) {
     window.webContents.send(ipcChannels.channelEvent, event);
   }
 }

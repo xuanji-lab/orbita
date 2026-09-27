@@ -4,6 +4,7 @@
  */
 import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
+import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
 import { filesApi } from "./api/files.ts";
 import { importApi } from "./api/import.ts";
@@ -27,6 +28,7 @@ const api = {
   workspace: workspaceApi,
   files: filesApi,
   import: importApi,
+  browser: browserApi,
   /**
    * 宿主平台。**不是 IPC 通道**，是个同步常量——渲染层需要它，因为
    * 「红黄绿三个键落在边界卡里」只在 macOS 成立，别的平台要给自己画圆角。

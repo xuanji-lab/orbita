@@ -75,6 +75,16 @@
   color: var(--color-danger);
 }
 
+/* 一次操作成功后的结果（如「已清除浏览器数据」）：图标 + 文字，颜色退到次要 */
+.set-row-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}
+
 /* 控件列：控件在上、效果预览在下，一律靠右 */
 .set-row-ctl {
   display: grid;

@@ -2,8 +2,9 @@
  * agent 域的 IPC handler —— 四层契约的第 2 层。
  * 事件是单向广播：主进程收到 agent 进程的消息就原样转给所有窗口，不在中间加工。
  */
-import { BrowserWindow, ipcMain } from "electron";
+import { ipcMain } from "electron";
 import { join } from "node:path";
+import { mainWindows } from "../window/main-windows.ts";
 import {
   ipcChannels,
   type CompactAgentInput,
@@ -371,9 +372,9 @@ export function registerAgentIpc(
   return { submitTurn };
 }
 
-/** agent 进程的事件 → 所有窗口 */
+/** agent 进程的事件 → 所有主窗口（沙盒浏览器窗口的工具条不收，见 window/main-windows.ts） */
 export function broadcastAgentEvent(event: unknown): void {
-  for (const window of BrowserWindow.getAllWindows()) {
+  for (const window of mainWindows.list()) {
     window.webContents.send(ipcChannels.agentEvent, event);
   }
 }

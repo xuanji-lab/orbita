@@ -136,6 +136,17 @@ export const zh: Messages = {
     sideChat: "辅助对话 Ctrl+Alt+D",
     subSessions: (count) => `子会话（${count}）`,
     channels: "子会话通道",
+    browser: "内置浏览器",
+  },
+
+  browser: {
+    back: "后退",
+    forward: "前进",
+    reload: "刷新",
+    stop: "停止加载",
+    address: "地址",
+    addressPlaceholder: "输入网址",
+    notAnAddress: "不是网址——要带上完整的域名",
   },
 
   drawer: {
@@ -235,6 +246,7 @@ export const zh: Messages = {
       general: "通用",
       providers: "模型服务",
       migration: "迁移",
+      browser: "浏览器",
     },
     appearance: "外观",
     theme: "主题",
@@ -273,6 +285,12 @@ export const zh: Messages = {
     openDataDirectory: "打开数据目录",
     reveal: "打开",
     aboutSetting: (name) => `关于「${name}」`,
+    browserData: "浏览器数据",
+    clearBrowserData: "清除全部浏览器数据",
+    clearBrowserDataInfo: "内置浏览器退出所有网站，删除它保存的登录信息、站点数据与缓存 · 不影响你自己的浏览器",
+    clearBrowserDataAction: "清除全部",
+    clearBrowserDataConfirm: "退出所有网站？",
+    clearBrowserDataDone: "已清除 · 内置浏览器已退出所有网站",
   },
 
   themes: {

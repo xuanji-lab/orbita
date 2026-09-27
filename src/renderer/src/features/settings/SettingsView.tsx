@@ -40,6 +40,7 @@ export const SETTINGS_TABS = [
   { id: "general", icon: "sliders" },
   { id: "providers", icon: "cpu" },
   { id: "migration", icon: "download" },
+  { id: "browser", icon: "globe" },
 ] as const satisfies readonly { id: string; icon: IconName }[];
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
@@ -94,6 +95,10 @@ export function SettingsView(props: {
           onImported={props.onImported}
           onOpenProviders={() => props.onTab("providers")}
         />
+      ) : props.tab === "browser" ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <BrowserSettings />
+        </div>
       ) : props.tab === "providers" ? (
         // Providers 是主从两栏，铺满内容面：厂商列表贴着面板左缘，两栏各自内部滚动
         <ProvidersView onChange={props.onProvidersChange} />
@@ -438,6 +443,78 @@ function AttributionPreview(props: { enabled: boolean; language: Language }) {
         <span className="set-trailer-text">{prLine}</span>
       </span>
     </span>
+  );
+}
+
+/**
+ * 设置 › 浏览器（受管浏览器，main/browser/sandbox.ts）。单独一页而不是 General 里的一行：
+ * 浏览器以后还会长出别的设置（登录状态导入、证书、下载位置…），先把位置占对。
+ * 第一刀只有一件事：清除全部数据——持久化了用户的登录态，就必须给一个退出的口子。
+ */
+function BrowserSettings() {
+  const t = useT();
+  return (
+    <div className="set-page">
+      <SettingGroup label={t.settings.browserData}>
+        <ClearBrowserDataRow />
+      </SettingGroup>
+    </div>
+  );
+}
+
+/**
+ * 清除全部浏览器数据：两段式确认（同 Skills 面清理引用的写法），清完在名字下方留一行结果。
+ * 不可撤销，所以危险键只在第二段出现。
+ */
+function ClearBrowserDataRow() {
+  const t = useT();
+  const [phase, setPhase] = useState<"idle" | "confirming" | "clearing" | "done">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  const clear = () => {
+    setPhase("clearing");
+    setError(null);
+    void api.browser
+      .clearData()
+      .then(() => setPhase("done"))
+      .catch((cause: unknown) => {
+        setPhase("idle");
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
+  };
+
+  return (
+    <SettingRow
+      name={t.settings.clearBrowserData}
+      info={t.settings.clearBrowserDataInfo}
+      note={
+        error !== null ? (
+          <span role="alert" className="set-row-error">
+            {error}
+          </span>
+        ) : phase === "done" ? (
+          <span role="status" className="set-row-note">
+            <Icon name="check" size={12} /> {t.settings.clearBrowserDataDone}
+          </span>
+        ) : undefined
+      }
+    >
+      {phase === "confirming" || phase === "clearing" ? (
+        <span className="set-inline">
+          <span className="set-row-hint">{t.settings.clearBrowserDataConfirm}</span>
+          <PanelButton danger disabled={phase === "clearing"} onClick={clear}>
+            <Icon name="trash-2" size={14} /> {t.settings.clearBrowserDataAction}
+          </PanelButton>
+          <PanelButton disabled={phase === "clearing"} onClick={() => setPhase("idle")}>
+            {t.common.cancel}
+          </PanelButton>
+        </span>
+      ) : (
+        <PanelButton onClick={() => setPhase("confirming")}>
+          <Icon name="trash-2" size={14} /> {t.settings.clearBrowserDataAction}
+        </PanelButton>
+      )}
+    </SettingRow>
   );
 }
 

@@ -77,7 +77,15 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, "src/renderer"),
     resolve: { alias: { "@shared": resolve(__dirname, "src/shared") } },
-    build: { rollupOptions: { input: resolve(__dirname, "src/renderer/index.html") } },
+    build: {
+      rollupOptions: {
+        // 两个页面入口：主窗口，与受管浏览器沙盒窗口的工具条（main/browser/sandbox.ts）
+        input: {
+          index: resolve(__dirname, "src/renderer/index.html"),
+          "browser-toolbar": resolve(__dirname, "src/renderer/browser-toolbar.html"),
+        },
+      },
+    },
     server: {
       /**
        * **固定端口、只绑 IPv4 回环、撞了当场失败。**

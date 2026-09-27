@@ -156,6 +156,17 @@ export const en = {
     sideChat: "Side chat Ctrl+Alt+D",
     subSessions: (count: number) => `Sub-sessions (${count})`,
     channels: "Sub-session channels",
+    browser: "Built-in browser",
+  },
+
+  browser: {
+    back: "Back",
+    forward: "Forward",
+    reload: "Reload",
+    stop: "Stop loading",
+    address: "Address",
+    addressPlaceholder: "Enter a web address",
+    notAnAddress: "Not a web address — include a domain, like scopus.com",
   },
 
   drawer: {
@@ -257,6 +268,7 @@ export const en = {
       general: "General",
       providers: "Providers",
       migration: "Migration",
+      browser: "Browser",
     },
     appearance: "Appearance",
     theme: "Theme",
@@ -300,6 +312,13 @@ export const en = {
     openDataDirectory: "Open the data directory",
     reveal: "Reveal",
     aboutSetting: (name: string) => `About ${name}`,
+    browserData: "Browser data",
+    clearBrowserData: "Clear all browser data",
+    clearBrowserDataInfo:
+      "Signs the built-in browser out of every site and deletes its cookies, site storage and cache · your own browser is not affected",
+    clearBrowserDataAction: "Clear all",
+    clearBrowserDataConfirm: "Sign out of every site?",
+    clearBrowserDataDone: "Cleared · the built-in browser is signed out everywhere",
   },
 
   themes: {
