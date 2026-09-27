@@ -2714,10 +2714,6 @@ function ToolLine(props: {
   if (props.toolName === "delegate" && !failed) {
     return <DelegateToolLine input={props.input} result={result} channel={props.channel} />;
   }
-  // show_image 成功时早退画廊行（失败照通用骨架）；delegate 特判同理见上
-  if (props.toolName === "show_image" && !failed) {
-    return <ShowImageToolLine result={result} />;
-  }
   if ((props.toolName === "reply_subsession" || props.toolName === "report_to_parent") && !failed) {
     return (
       <ChannelSendToolLine
@@ -3393,110 +3389,11 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
     </div>
   );
 }
-
-/**
- * show_image 的画廊行（agent/image-tools.ts）：模型「把图给用户看」的显式动作——
- * 会话流一等公民，不折叠、直接可见。行标识（image 图标 + 张数）+ 网格画廊
- * （单张大图、多张两列网格，点开 ImageLightbox），文件名一行 micro。
- * 卡片数据来自 details.showImage（与模型有没有视觉无关）；失败不进这里
- * ——ToolLine 特判只拦 !failed，失败照通用骨架走红色可展开。
- */
-function ShowImageToolLine(props: { result: ToolTranscriptItem | undefined }) {
-  const t = useT();
-  const [viewing, setViewing] = useState<number | null>(null);
-  const card = showImageCard(props.result);
-  const lightboxImages =
-    card === null
-      ? []
-      : card.images.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
-  return (
-    <div style={{ display: "grid", gap: "var(--space-2)", minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-        <Icon name="image" size={13} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
-        <span
-          style={{
-            fontSize: "var(--font-size-caption)",
-            fontFamily: "var(--font-family-mono)",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {/* 跑动中卡片未落（details 随终态帧来）——省略号占位，别显示「0 张图片」 */}
-          {card === null ? "…" : t.chat.images(card.images.length)}
-        </span>
-      </div>
-      {card !== null && (
-        <div
-          style={
-            card.images.length > 1
-              ? {
-                  // 多图横滑缩略条（2026-09-27 裁决）：文件夹多图不炸纵深，滑着看、点开放大
-                  display: "flex",
-                  gap: "var(--space-2)",
-                  overflowX: "auto",
-                  padding: "var(--space-1) 0",
-                  minWidth: 0,
-                }
-              : { display: "grid", minWidth: 0 }
-          }
-        >
-          {card.images.map((img, i) => (
-            <figure
-              key={`show-${i}`}
-              style={{
-                margin: 0,
-                display: "grid",
-                gap: 2,
-                minWidth: 0,
-                flex: card.images.length > 1 ? "0 0 auto" : undefined,
-              }}
-            >
-              <button
-                type="button"
-                aria-label={t.lightbox.open}
-                onClick={() => setViewing(i)}
-                style={{ ...ZOOM_BUTTON_STYLE, justifySelf: card.images.length > 1 ? "auto" : "stretch" }}
-              >
-                <img
-                  src={imageSrc({ type: "image", data: img.data, mimeType: img.mimeType })}
-                  alt={img.name}
-                  style={{
-                    display: "block",
-                    width: card.images.length > 1 ? 200 : "100%",
-                    height: card.images.length > 1 ? 136 : undefined,
-                    maxHeight: 320,
-                    objectFit: "cover",
-                    borderRadius: "var(--radius-md)",
-                    border: "1px solid var(--color-border-subtle)",
-                    background: "var(--color-bg-panel)",
-                  }}
-                />
-              </button>
-              <figcaption
-                style={{
-                  fontSize: "var(--font-size-micro)",
-                  color: "var(--color-text-tertiary)",
-                  fontFamily: "var(--font-family-mono)",
-                  overflowWrap: "anywhere",
-                  width: card.images.length > 1 ? 200 : undefined,
-                }}
-              >
-                {img.name}
-              </figcaption>
-            </figure>
-          ))}
-        </div>
-      )}
-      {viewing !== null && (
-        <ImageLightbox images={lightboxImages} startIndex={viewing} onClose={() => setViewing(null)} />
-      )}
-    </div>
-  );
-}
-
 /**
  * show_image 的合并画廊（2026-09-27 裁决：正文前多个图片收进**一个**画廊窗口水平
- * 滑动，不一张卡一张卡摞）。相邻的非失败 show_image 由循环层收集成组交给这里；
- * 组内各卡的图片拼成一条横滑带，行标识报总张数，点开 Lightbox。
+ * 滑动）。相邻的非失败 show_image 由渲染循环收集成组交给这里；组内各卡的图片拼成
+ * 一条横滑带，行标识报总张数，点开 Lightbox；组内单图退化大图形态。跑动中卡片
+ * 未落（details 随终态帧来）时行标识以省略号占位。
  */
 function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
   const t = useT();
@@ -3515,7 +3412,8 @@ function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
             color: "var(--color-text-secondary)",
           }}
         >
-          {t.chat.images(total)}
+          {/* 组首自己还在跑（卡片未落）时组是空的——省略号占位，别显示「0 张图片」 */}
+          {props.cards.length === 0 ? "…" : t.chat.images(total)}
         </span>
       </div>
       <div style={{ display: "flex", gap: "var(--space-2)", overflowX: "auto", padding: "var(--space-1) 0", minWidth: 0 }}>
