@@ -48,7 +48,9 @@ import { NEW_TASK_TAB } from "./shell/drawer-state";
  * **三层，不是四层**：用户自己的桌面 → **边界卡**（`.layer`，layer 1，就是窗口本身，
  * 侧栏也在里面）→ **内容面**（`.pane`，layer 2，四边等距浮在边界卡里，
  * 它的左边缘决定侧栏宽度）→ **输入卡**（layer 3）。
- * 两层玻璃画同一个 `--glass-bg`，深度是合成出来的；两层都 `border: 0`。
+ * 两层玻璃画同一个 `--glass-bg`，深度是合成出来的；两层都 `border: 0`
+ * （暗档例外：地面实色分层——外壳浅、会话井深，见 styles.css 的覆写与
+ * colors.css 头注释；玻璃只留给浮层）。
  *
  * 侧栏 288px 没有自己的面，直接坐在边界卡上（设计系统 *Layout*：both sidebars are
  * unbounded）。右抽屉（right-drawer-X）**是 pane 的子元素**——与会话列同一张卡，

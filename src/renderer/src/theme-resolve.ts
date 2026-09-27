@@ -7,7 +7,7 @@ import type { ThemePreference } from "@shared/settings";
  * `useTheme` 的首次 apply 就会判定「变了」而套上交叉淡入。
  *
  * `system` 的深色落点是 **black**（Ink，2026-09-03 用户指定），浅色落 `light`；
- * 其余各档（light / dark / black / copybook / typescript）原样透传——纸面两档只有明，
+ * 其余各档（light / graphite / black / copybook / typescript）原样透传——纸面两档只有明，
  * 与系统深浅无关。
  */
 export function resolveTheme(

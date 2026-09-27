@@ -138,19 +138,29 @@ on the theme ground, and as a fill they leave white text at 2.5:1. Filled danger
 Status prefers icons and words over colour — a spinner, a check, a lock glyph. List rows (sidebar
 sessions, settings tabs, menu items — one recipe, `.option-row`) hover with the neutral translucent
 fill; the selected row takes `--color-bg-active`, the same soft wash as the selected mode (light
-`#e7eefd`, Warm `.05` yellow, Ink `.18` yellow), plus semibold weight — chosen 2026-08-25 over a
+`#e7eefd`; the dark tiers share a `.08` yellow wash), plus semibold weight — chosen 2026-08-25 over a
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
-background colours per screen. The dark theme — **Warm** in settings — is a barely-warm
-near-black (`#191c1d` shell, `#232525` panel, ink `#d6d5cf / #a3a29b / #82817b` with only a
-whisper of warmth, yellow washes at `.05` — selection is carried by weight and ink, not fill):
-gruvbox's full cream (`#ebdbb2`) read as "过于黄色" and was cut twice. The black theme — **Ink** — is a **neutral near-black** (Vercel-referenced
-`#0a0a0a` shell, `#111111` panel, ink `#ededed / #a1a1a1 / #707070`), the darkest ground in the set
-and **the dark landing of `system`**. Both take the yellow accent (`#d6c245`) on
-`--color-accent-fg`; both are manual choices, `system` resolves to light or Ink. (Both dark grounds
-re-cut 2026-09-03 after seven same-day iterations — true black, GitHub default, GitHub ×0.78 and
-neutral gray each bounced; the user picked warm for dark and darkest-neutral for black from a
-rendered comparison page, then softened, renamed, darkened and de-yellowed Warm across two more
-rounds.)
+background colours per screen.
+
+**Two dark tiers** (re-cut 2026-09-27 from the v3 sample page, layering measured off the user's
+comfort reference ZCode): **the shell — the ground the left rail and right icon strip sit on — is
+the lighter step; the chat panel is the well; cards and the composer float back up (+21 steps);
+hairlines are white ~10% translucent**. The grounds paint solid (`.layer` / `.pane` overrides in
+`src/renderer/src/styles.css`; glass is reserved for floating layers, whose `--glass-bg` is the
+card colour — ZCode's popover recipe). The defects of the old Warm grounds were retired the same
+day: green-tailed grounds (`#191c1d` / `#232525`) and cream ink (`#d6d5cf`) — the sources of the
+murky feel (gruvbox's full cream `#ebdbb2` had already been cut twice before). **Graphite** (石墨,
+added 2026-09-27) is the ZCode-exact neutral: `#202020 / #161616 / #2b2b2b`, ink
+`#f2f2f2 / #a6a6a6 / #808080` (tertiary lifted from `#6e6e6e` the same day — micro captions on the
+well read at 3.6:1, below the 4.5 floor; guarded by `dark-contrast.test.ts`). **Ink** keeps the
+near-black identity with the same proportions —
+`#1b1b1b / #141414 / #242424` (the well lightened one step the same day; it must stay at or below
+Graphite's `#161616`) — and **stays the dark landing of `system`**. Both are manual choices and
+take the yellow accent (`#d6c245`) on `--color-accent-fg`; selection washes at `.08` — carried by
+weight and ink, not fill. A third tier, **Warm** (微暖), existed for one day and was cut by user
+decision — settings holding `dark` migrate to Graphite (`parseTheme`). (The 2026-09-03 re-cut
+history — true black, GitHub default, GitHub ×0.78 and neutral gray each bounced — lives in that
+day's commits.)
 
 **Paper themes** (added 2026-09-25): **Copybook** (小学作业) and **Typescript** (打字稿) are the two
 faces of the 稿纸 era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
@@ -449,7 +459,7 @@ source does not define them.
 
 ## Caveats
 
-- **`--color-text-inverse` actually inverts**: light `#ffffff`, dark `#191c1d`, black `#0a0a0a`
+- **`--color-text-inverse` actually inverts**: light `#ffffff`, graphite `#202020`, black `#1b1b1b`
   (`tokens/colors.css`, one per theme block) — each is that theme's own shell ground, the opposite of
   `--color-text-primary`. Text that must stay white on a permanently dark ground (overlays, toasts)
   uses `--color-text-on-dark`; text on a coloured fill uses that fill's `-fg` token.

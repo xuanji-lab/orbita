@@ -18,20 +18,25 @@
   --glass-bg: rgba(255, 255, 255, 0.6);
 }
 
-:root[data-theme="dark"] {
-  --glass-alpha: 0.7; /* @kind other */
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-bg: rgba(35, 37, 37, 0.7);
+/*
+ * 暗色两档（2026-09-27 重切，层次见 colors.css 头注释）：--glass-bg = **卡面色**
+ * （ZCode 的 popover / input 同款实色）——composer、菜单、右栏面板等浮层用它，
+ * 压在井上就是「浮起 +21 步」的那一层。地面（.layer 外壳 / .pane 井）不再走玻璃：
+ * 透明度阶梯只能往 tint 爬，叠不出「外壳浅、井更深」；且 Windows 窗口底是不透明
+ * 浅色 #f3f4f1，玻璃叠上去只会灰糊——实色覆写在 src/renderer/src/styles.css。
+ * 浅色与纸面档维持玻璃阶梯不变；macOS 暗档因此不再透出桌面——暗面要挡而不是透
+ * （本文件头注释「dark blocks more」的原则，实色是它的终点）。
+ */
+:root[data-theme="graphite"] {
+  --glass-alpha: 1; /* @kind other */
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --glass-bg: #2b2b2b;
 }
 
-/* black 与 dark 同透明度；tint 同一个配方——**用各自的 panel 色当 tint**
-   （dark 是暖灰 rgba(40,40,40,.7)=#282828，black 是中性 rgba(17,17,17,.7)=#111111）。
-   层叠后地面各自从 app 色单调升向 panel 色，保持「页面深、卡片浅」的层级。
-   2026-09-03 修订二教训：tint 不能用 app 色，层叠会塌成一块平色。 */
 :root[data-theme="black"] {
-  --glass-alpha: 0.7; /* @kind other */
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-bg: rgba(17, 17, 17, 0.7);
+  --glass-alpha: 1; /* @kind other */
+  --glass-border: rgba(255, 255, 255, 0.15);
+  --glass-bg: #242424;
 }
 
 /* 纸面两档（copybook / typescript）是纸，不是玻璃：面板几乎不透，桌面不从纸底下透出来。 */

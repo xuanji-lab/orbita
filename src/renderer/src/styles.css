@@ -375,7 +375,8 @@ body {
  *
  * 两层玻璃画的是同一个 `--glass-bg`，.60 → .84 的阶梯是嵌套合成出来的，不是手调的第二个值。
  * 两层都 `border: 0`：分层靠透明度差，不靠描边（设计系统 *Corners and borders*：
- * the app shell and content pane run borderless）。
+ * the app shell and content pane run borderless）。**暗档除外**——地面实色
+ * （.layer/.pane 的覆写在 .pane 规则之后），玻璃只留给浮层。
  */
 .layer {
   height: 100%;
@@ -497,6 +498,24 @@ body {
   border: 0;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-composer);
+}
+
+/*
+ * 暗色两档的地面实色覆写（2026-09-27 重切，层次语义见 colors.css 头注释）：
+ * .layer = 外壳（左栏的地面，浅一档）、.pane = 会话井（深一档）。玻璃阶梯
+ * （嵌套只能往 tint 爬）表达不了「外壳浅、井更深」；且 Windows 窗口底是
+ * 不透明的浅色 #f3f4f1，玻璃叠上去只会灰糊。井缘补一条发丝线——两个实色面
+ * 之间需要那道界线。浮层（composer / 菜单 / 右栏面板）仍走 --glass-bg，
+ * 暗档里它 = 卡面色（glass.css），压在井上就是浮起的那一层。浅色与纸面档
+ * 维持玻璃阶梯不变；macOS 暗档因此不再透出桌面。
+ */
+:root:is([data-theme="graphite"], [data-theme="black"]) .layer {
+  background: var(--color-bg-app);
+}
+
+:root:is([data-theme="graphite"], [data-theme="black"]) .pane {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
 }
 
 /*
@@ -1296,7 +1315,7 @@ body {
 
 /*
  * 行内 code（正文里的文件名、路径、标识符——「机器内容」）用链接色，与正文墨色
- * 分层：Light 蓝 / Warm 青 / Ink 蓝（2026-09-04 用户反馈：深色下与正文难分辨）。
+ * 分层：Light 墨蓝 / 暗档亮蓝（2026-09-04 用户反馈：深色下与正文难分辨）。
  * 只上行内：块内是语法色的领地，无语法色的裸块继承正文色，不能整块变链接色。
  */
 .chat-md :not(pre) > code {
@@ -1343,16 +1362,16 @@ body {
 /*
  * shiki 高亮块（B-1）。pre.shiki 带内联 style（浅主题的底色/前景 + 每元素一份
  * --shiki-dark 变量），!important 是压过内联 style 的唯一手段；底色换回主题的
- * muted 底（见上方取舍注释），暗 / 黑主题把前景与 span 语法色翻到 --shiki-dark
- * ——black 底与 dark 底同样近黑，共用同一套双主题翻色，不生成第三套语法色。
+ * muted 底（见上方取舍注释)，两个暗档把前景与 span 语法色翻到 --shiki-dark
+ * ——graphite / black 同为暗地，共用同一套双主题翻色，不生成第三套语法色。
  */
 .chat-md pre.shiki {
   background-color: var(--color-chat-muted-bg) !important;
 }
 
-:root[data-theme="dark"] .chat-md pre.shiki,
+:root[data-theme="graphite"] .chat-md pre.shiki,
 :root[data-theme="black"] .chat-md pre.shiki,
-:root[data-theme="dark"] .chat-md pre.shiki span,
+:root[data-theme="graphite"] .chat-md pre.shiki span,
 :root[data-theme="black"] .chat-md pre.shiki span {
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg, transparent) !important;
@@ -1364,9 +1383,9 @@ body {
 /*
  * 工具行展开体（write/read 的行级高亮，ChatView 的 FileContentView）：token 的
  * 内联样式来自 shiki codeToTokens（浅色 color + --shiki-dark 变量），与上面整块
- * pre.shiki 同一套双主题机制，这里只给行级 span 补暗 / 黑主题翻色。
+ * pre.shiki 同一套双主题机制，这里只给行级 span 补两个暗档的翻色。
  */
-:root[data-theme="dark"] .shiki-tok,
+:root[data-theme="graphite"] .shiki-tok,
 :root[data-theme="black"] .shiki-tok {
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg, transparent) !important;

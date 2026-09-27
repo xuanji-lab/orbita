@@ -23,12 +23,12 @@ describe("SettingsStore", () => {
   });
 
   test("写完能读回来，并且换个实例也读得到", async () => {
-    assert.deepEqual(await store.write({ theme: "dark" }), {
-      theme: "dark",
+    assert.deepEqual(await store.write({ theme: "graphite" }), {
+      theme: "graphite",
       drawer: DEFAULT_SETTINGS.drawer,
     });
     assert.deepEqual(await new SettingsStore(dir).read(), {
-      theme: "dark",
+      theme: "graphite",
       drawer: DEFAULT_SETTINGS.drawer,
     });
   });
@@ -46,7 +46,7 @@ describe("SettingsStore", () => {
 
   test("原子写：不留临时文件", async () => {
     await store.write({ theme: "light" });
-    await store.write({ theme: "dark" });
+    await store.write({ theme: "graphite" });
     assert.deepEqual(await readdir(dir), ["settings.json"]);
   });
 

@@ -16,9 +16,9 @@ describe("resolveTheme", () => {
     strictEqual(resolveTheme("light", false), "light");
   });
 
-  it("dark 原样透传，不受 prefersDark 影响", () => {
-    strictEqual(resolveTheme("dark", true), "dark");
-    strictEqual(resolveTheme("dark", false), "dark");
+  it("graphite 原样透传，不受 prefersDark 影响", () => {
+    strictEqual(resolveTheme("graphite", true), "graphite");
+    strictEqual(resolveTheme("graphite", false), "graphite");
   });
 
   it("black 原样透传，不受 prefersDark 影响", () => {
