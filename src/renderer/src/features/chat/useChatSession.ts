@@ -677,7 +677,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       if (head === null) return;
       applyStates((prev) => dequeue(prev, id, head.id));
       const fail = (cause: unknown): void =>
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(ipcErrorText(cause, messagesRef.current));
       if (head.kind === "compact") {
         const turn = buildTurn(id);
         if (turn === null) return;
