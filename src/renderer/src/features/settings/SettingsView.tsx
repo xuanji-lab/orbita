@@ -7,6 +7,12 @@ import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
 import type { ProviderDto } from "@shared/provider";
+import type {
+  BrowserImportReadError,
+  BrowserImportSite,
+  BrowserImportSource,
+  BrowserImportSummary,
+} from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
@@ -449,7 +455,6 @@ function AttributionPreview(props: { enabled: boolean; language: Language }) {
 /**
  * 设置 › 浏览器（受管浏览器，main/browser/sandbox.ts）。单独一页而不是 General 里的一行：
  * 浏览器以后还会长出别的设置（登录状态导入、证书、下载位置…），先把位置占对。
- * 第一刀只有一件事：清除全部数据——持久化了用户的登录态，就必须给一个退出的口子。
  */
 function BrowserSettings() {
   const t = useT();
@@ -461,6 +466,237 @@ function BrowserSettings() {
       <SettingGroup label={t.settings.browserData}>
         <ClearBrowserDataRow />
       </SettingGroup>
+      {/* 登录状态导入只做了 macOS（钥匙串 + Chrome 存储格式）；别的平台不显示这一组 */}
+      {api.platform === "darwin" && <LoginImportSection />}
+    </div>
+  );
+}
+
+/** 读取/导入的失败码（IPC 契约）加上提交制自己的 no-pending，都走同一张文案表 */
+type LoginImportError = BrowserImportReadError | "no-pending";
+
+function loginImportErrorText(t: ReturnType<typeof useT>, error: LoginImportError): string {
+  const errors = t.settings.loginImportErrors;
+  if (error === "keychain-denied") return errors.denied;
+  if (error === "profile-not-found" || error === "not-supported") return errors.missing;
+  if (error === "no-cookie-db") return errors.noCookies;
+  if (error === "no-pending") return errors.expired;
+  return errors.failed;
+}
+
+/** 来源在列表里的键：browserId + profileId 唯一确定一项 */
+function sourceKey(source: BrowserImportSource): string {
+  return `${source.browserId}/${source.profileId}`;
+}
+
+/**
+ * 登录状态导入（main/browser/chrome-import.ts）：选来源 → 读取（主进程弹钥匙串框）→
+ * 勾网站导入。cookie 值不过 IPC，这里自始至终只拿「网站 + 条数」；默认一个都不勾——
+ * 把选择权留给人，是把邮箱、银行登录交给 agent 之前的最后一道闸。
+ */
+function LoginImportSection() {
+  const t = useT();
+  const [sources, setSources] = useState<{ kind: "loading" } | { kind: "ready"; list: BrowserImportSource[] }>({
+    kind: "loading",
+  });
+  const [selected, setSelected] = useState<string | null>(null);
+  /** idle 选来源 / reading 等钥匙串 / picking 勾网站 / importing 写入中 */
+  const [phase, setPhase] = useState<"idle" | "reading" | "picking" | "importing">("idle");
+  const [pending, setPending] = useState<{ id: string; sites: BrowserImportSite[] } | null>(null);
+  const [error, setError] = useState<LoginImportError | null>(null);
+  const [done, setDone] = useState<BrowserImportSummary | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.browser
+      .importSources()
+      .then((list) => {
+        if (cancelled) return;
+        setSources({ kind: "ready", list });
+        const recommended = list.find((source) => source.recommended) ?? list[0];
+        setSelected(recommended !== undefined ? sourceKey(recommended) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setSources({ kind: "ready", list: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const current =
+    sources.kind === "ready" ? sources.list.find((source) => sourceKey(source) === selected) : undefined;
+
+  const read = () => {
+    if (current === undefined) return;
+    setPhase("reading");
+    setError(null);
+    setDone(null);
+    void api.browser
+      .importRead(current.browserId, current.profileId)
+      .then((result) => {
+        if (result.ok) {
+          setPending({ id: result.pendingId, sites: result.sites });
+          setPhase("picking");
+        } else {
+          setError(result.error);
+          setPhase("idle");
+        }
+      })
+      .catch(() => {
+        setError("read-failed");
+        setPhase("idle");
+      });
+  };
+
+  const finish = (outcome: { error: LoginImportError } | { summary: BrowserImportSummary }) => {
+    setPending(null);
+    setPhase("idle");
+    if ("error" in outcome) setError(outcome.error);
+    else setDone(outcome.summary);
+  };
+
+  // ── 第一行：来源下拉 + 读取 ──
+  const menuItems: MenuItem[] =
+    sources.kind === "ready"
+      ? sources.list.map((source) => ({
+          id: sourceKey(source),
+          label: `${source.browserName} · ${source.profileName}`,
+          checked: sourceKey(source) === selected,
+          onSelect: () => setSelected(sourceKey(source)),
+        }))
+      : [];
+
+  const note =
+    error !== null ? (
+      <span role="alert" className="set-row-error">
+        {loginImportErrorText(t, error)}
+      </span>
+    ) : phase === "reading" ? (
+      <span className="set-row-hint">
+        <Icon name="loader-circle" size={12} spin /> {t.settings.loginImportReading}
+      </span>
+    ) : done !== null ? (
+      <span role="status" className="set-row-note">
+        <Icon name="check" size={12} /> {t.settings.loginImportDone(done.imported, done.sites, done.skipped)}
+      </span>
+    ) : undefined;
+
+  return (
+    <SettingGroup label={t.settings.loginImportGroup}>
+      <SettingRow name={t.settings.loginImport} info={t.settings.loginImportInfo} note={note}>
+        {sources.kind === "loading" ? (
+          <span className="set-row-hint">…</span>
+        ) : sources.list.length === 0 ? (
+          <span className="set-row-hint">{t.settings.loginImportNoBrowsers}</span>
+        ) : (
+          <span className="set-inline">
+            <Menu
+              items={menuItems}
+              searchable={sources.list.length > 8}
+              trigger={({ open, toggle }) => (
+                <Chip active={open} onClick={toggle} chevron title={t.settings.loginImportSource}>
+                  {current !== undefined ? `${current.browserName} · ${current.profileName}` : "…"}
+                </Chip>
+              )}
+            />
+            <PanelButton
+              onClick={read}
+              disabled={phase !== "idle" || current === undefined}
+              title={t.settings.loginImportReadTitle}
+            >
+              <Icon name="key" size={14} /> {t.settings.loginImportRead}
+            </PanelButton>
+          </span>
+        )}
+      </SettingRow>
+      {(phase === "picking" || phase === "importing") && pending !== null && (
+        <LoginSitesPanel
+          sites={pending.sites}
+          busy={phase === "importing"}
+          onImport={(ticked) => {
+            setPhase("importing");
+            setError(null);
+            void api.browser
+              .importCommit(pending.id, ticked)
+              .then((result) =>
+                finish(result.ok ? { summary: result.summary } : { error: "no-pending" }),
+              )
+              .catch(() => finish({ error: "read-failed" }));
+          }}
+          onCancel={() => {
+            void api.browser.importCancel(pending.id).catch(() => undefined);
+            setPending(null);
+            setPhase("idle");
+          }}
+        />
+      )}
+    </SettingGroup>
+  );
+}
+
+/**
+ * 网站清单：搜索框 + 复选框行 + 底部「导入所选 N 个网站」。默认一个都不勾；
+ * 条数在每行末尾（mono，机器事实）。面板限高内滚，几十个网站也不把设置页撑长。
+ */
+function LoginSitesPanel(props: {
+  sites: BrowserImportSite[];
+  busy: boolean;
+  onImport: (ticked: string[]) => void;
+  onCancel: () => void;
+}) {
+  const t = useT();
+  const [query, setQuery] = useState("");
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
+  const needle = query.trim().toLowerCase();
+  const shown = props.sites.filter((site) => needle === "" || site.site.toLowerCase().includes(needle));
+  const toggle = (site: string) => {
+    setTicked((before) => {
+      const next = new Set(before);
+      if (next.has(site)) next.delete(site);
+      else next.add(site);
+      return next;
+    });
+  };
+
+  return (
+    <div className="login-sites">
+      <div className="login-sites-search">
+        <Icon name="search" size={13} />
+        <input
+          type="search"
+          className="text-field"
+          placeholder={t.settings.loginImportSearchPlaceholder}
+          aria-label={t.settings.loginImportSearchPlaceholder}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
+      <div className="login-sites-list" role="group" aria-label={t.settings.loginImportSitesAria}>
+        {shown.map((site) => (
+          <label key={site.site} className="login-site-row">
+            <input type="checkbox" checked={ticked.has(site.site)} onChange={() => toggle(site.site)} />
+            <span className="login-site-name" title={site.site}>
+              {site.site}
+            </span>
+            <span className="login-site-count">{t.settings.loginImportSiteCount(site.count)}</span>
+          </label>
+        ))}
+        {shown.length === 0 && (
+          <span className="login-sites-empty">
+            {/* 读到零个网站（全是过期 / 解不开的）与搜索没命中是两回事 */}
+            {props.sites.length === 0 ? t.settings.loginImportErrors.noCookies : t.settings.loginImportNoMatch}
+          </span>
+        )}
+      </div>
+      <div className="login-sites-footer">
+        <PanelButton disabled={props.busy || ticked.size === 0} onClick={() => props.onImport([...ticked])}>
+          <Icon name="arrow-down" size={14} /> {t.settings.loginImportAction(ticked.size)}
+        </PanelButton>
+        <PanelButton disabled={props.busy} onClick={props.onCancel}>
+          {t.common.cancel}
+        </PanelButton>
+      </div>
     </div>
   );
 }

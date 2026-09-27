@@ -314,6 +314,32 @@ export const zh: Messages = {
     changeDirectory: "更改…",
     chooseDownloadDirectory: "选择下载位置",
     openDownloadDirectory: "打开下载位置",
+    // ── 登录状态导入（与英文表同一段）──
+    loginImportGroup: "登录状态",
+    loginImport: "导入登录状态",
+    loginImportInfo:
+      "把 Chrome、Edge、Brave、Arc 或 Chromium 的登录 cookie 带进内置浏览器 · 只导入你勾选的网站 · 读取时会请求 macOS 钥匙串授权 · 有些网站仍需重新登录 · 不改动你自己的浏览器",
+    loginImportNoBrowsers: "没有找到存有登录信息的浏览器",
+    loginImportRead: "读取",
+    loginImportReadTitle: "读取会请求 macOS 钥匙串授权",
+    loginImportReading: "等待钥匙串授权…",
+    loginImportSource: "导入来源",
+    loginImportSitesAria: "待导入的网站",
+    loginImportSearchPlaceholder: "搜索网站",
+    loginImportNoMatch: "没有匹配的网站",
+    loginImportSiteCount: (count) => `${count} 条`,
+    loginImportAction: (count) => `导入所选 ${count} 个网站`,
+    loginImportDone: (imported, sites, skipped) =>
+      skipped > 0
+        ? `已导入 ${imported} 条（${sites} 个网站），跳过 ${skipped} 条`
+        : `已导入 ${imported} 条（${sites} 个网站）`,
+    loginImportErrors: {
+      denied: "钥匙串授权被拒绝 · 没有导入任何内容",
+      missing: "所选浏览器的个人资料已不可用，请重新选择来源",
+      noCookies: "该个人资料里没有登录信息",
+      failed: "导入未能完成",
+      expired: "所选内容已过期，请重新读取",
+    },
   },
 
   themes: {

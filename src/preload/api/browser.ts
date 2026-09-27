@@ -8,6 +8,9 @@ import { ipcRenderer } from "electron";
 import {
   browserChannels,
   type BrowserHandoffOutcome,
+  type BrowserImportCommitResult,
+  type BrowserImportReadResult,
+  type BrowserImportSource,
   type BrowserNavigateResult,
   type BrowserWindowState,
 } from "../../shared/browser.ts";
@@ -33,6 +36,17 @@ export const browserApi = {
   /** 选下载目录；取消回 null */
   pickDownloadDir: (): Promise<string | null> => ipcRenderer.invoke(browserChannels.browserPickDownloadDir),
   revealDownloadDir: (): Promise<void> => ipcRenderer.invoke(browserChannels.browserRevealDownloadDir),
+  // ── 登录状态导入（设置 › 浏览器；cookie 值不过这条桥，只有网站与计数）──
+  /** 列出可导入的浏览器 × profile；非 macOS 回空数组 */
+  importSources: (): Promise<BrowserImportSource[]> => ipcRenderer.invoke(browserChannels.browserImportSources),
+  /** 读取来源：主进程会弹钥匙串授权框，拒绝则整体失败 */
+  importRead: (browserId: string, profileId: string): Promise<BrowserImportReadResult> =>
+    ipcRenderer.invoke(browserChannels.browserImportRead, browserId, profileId),
+  /** 把勾选网站的登录状态写进受管浏览器 */
+  importCommit: (pendingId: string, sites: string[]): Promise<BrowserImportCommitResult> =>
+    ipcRenderer.invoke(browserChannels.browserImportCommit, pendingId, sites),
+  /** 丢弃读取结果（取消导入） */
+  importCancel: (pendingId: string): Promise<void> => ipcRenderer.invoke(browserChannels.browserImportCancel, pendingId),
   onState: (listener: (state: BrowserWindowState) => void): (() => void) => {
     const handler = (_e: unknown, state: BrowserWindowState) => listener(state);
     ipcRenderer.on(browserChannels.browserState, handler);

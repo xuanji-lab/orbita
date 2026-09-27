@@ -2,12 +2,20 @@
  * 受管浏览器的 IPC —— 四层契约的第 2 层。
  * 浏览器实例全在主进程（sandbox.ts）；这里只把通道接到它上面。
  */
-import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import { mkdir } from "node:fs/promises";
-import { browserChannels, type BrowserNavigateResult, type BrowserWindowState } from "../../shared/browser.ts";
+import {
+  browserChannels,
+  type BrowserImportCommitResult,
+  type BrowserImportReadResult,
+  type BrowserImportSource,
+  type BrowserNavigateResult,
+  type BrowserWindowState,
+} from "../../shared/browser.ts";
 import type { SettingsStore } from "../settings/store.ts";
+import { LoginImporter } from "./chrome-import.ts";
 import { browserDownloadDir } from "./download-dir.ts";
-import type { BrowserSandbox } from "./sandbox.ts";
+import { BROWSER_PARTITION, type BrowserSandbox } from "./sandbox.ts";
 
 export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsStore): void {
   ipcMain.handle(
@@ -61,5 +69,30 @@ export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsSt
     await mkdir(dir, { recursive: true });
     const failure = await shell.openPath(dir);
     if (failure !== "") throw new Error(failure);
+  });
+
+  // ── 登录状态导入（chrome-import.ts；cookie 值不过 IPC，renderer 只拿网站与计数）──
+  const loginImporter = new LoginImporter({ cookieTarget: () => session.fromPartition(BROWSER_PARTITION) });
+  ipcMain.handle(browserChannels.browserImportSources, (): Promise<BrowserImportSource[]> => loginImporter.sources());
+  ipcMain.handle(
+    browserChannels.browserImportRead,
+    (_event, browserId: unknown, profileId: unknown): Promise<BrowserImportReadResult> =>
+      typeof browserId === "string" && typeof profileId === "string"
+        ? loginImporter.read(browserId, profileId)
+        : Promise.resolve({ ok: false, error: "profile-not-found" }),
+  );
+  ipcMain.handle(
+    browserChannels.browserImportCommit,
+    (_event, pendingId: unknown, sites: unknown): Promise<BrowserImportCommitResult> => {
+      // 入参是 renderer 给的：pendingId 必须是串，sites 必须是串数组，否则当已过期处理
+      const selected = Array.isArray(sites) && sites.every((site) => typeof site === "string") ? (sites as string[]) : null;
+      if (typeof pendingId !== "string" || selected === null) {
+        return Promise.resolve({ ok: false, error: "no-pending" });
+      }
+      return loginImporter.commit(pendingId, selected);
+    },
+  );
+  ipcMain.handle(browserChannels.browserImportCancel, (_event, pendingId: unknown): void => {
+    if (typeof pendingId === "string") loginImporter.cancel(pendingId);
   });
 }

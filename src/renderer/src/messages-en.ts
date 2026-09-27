@@ -344,6 +344,31 @@ export const en = {
     changeDirectory: "Change…",
     chooseDownloadDirectory: "Choose a download location",
     openDownloadDirectory: "Open the download location",
+    // ── 登录状态导入（设置 › 浏览器 › 登录状态，仅 macOS 显示这一组）──
+    loginImportGroup: "Login state",
+    loginImport: "Import sign-ins",
+    loginImportInfo:
+      "Brings sign-in cookies from Chrome, Edge, Brave, Arc or Chromium into the built-in browser · only the sites you tick are imported · reading asks macOS to unlock the keychain · some sites will still ask you to sign in again · your own browser is not changed",
+    loginImportNoBrowsers: "No browser with saved cookies was found",
+    loginImportRead: "Read",
+    loginImportReadTitle: "Reading asks macOS for the browser's keychain key",
+    loginImportReading: "Waiting for the keychain…",
+    loginImportSource: "Import source",
+    loginImportSitesAria: "Sites to import",
+    loginImportSearchPlaceholder: "Search sites",
+    loginImportNoMatch: "No site matches",
+    loginImportSiteCount: (count: number) => `${count} cookie${count === 1 ? "" : "s"}`,
+    loginImportAction: (count: number) => `Import ${count} site${count === 1 ? "" : "s"}`,
+    loginImportDone: (imported: number, sites: number, skipped: number) =>
+      `Imported ${imported} cookie${imported === 1 ? "" : "s"} from ${sites} site${sites === 1 ? "" : "s"}` +
+      (skipped > 0 ? ` · ${skipped} skipped` : ""),
+    loginImportErrors: {
+      denied: "The keychain request was declined · nothing was imported",
+      missing: "That browser profile is no longer available · pick the source again",
+      noCookies: "No cookie store found in that profile",
+      failed: "Could not complete the import",
+      expired: "The selection expired · read again",
+    },
   },
 
   themes: {
