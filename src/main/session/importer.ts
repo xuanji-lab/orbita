@@ -70,6 +70,7 @@ import {
   withOpencodeDb,
 } from "./opencode.ts";
 import { listReasonixSessions, parseReasonixRows, readReasonixMeta, reasonixToMessages } from "./reasonix.ts";
+import { readZcodeMessages, readZcodeSessions, zcodeSessionBytes } from "./zcode.ts";
 import { aggregatePrefixUsage } from "./store.ts";
 import {
   claudeCodeSkillDirs,
@@ -161,6 +162,14 @@ export interface ReasonixPaths {
   home: string;
 }
 
+/** ZCode 来源要读的位置。全部**只读**（库按只读方式打开）。 */
+export interface ZcodePaths {
+  /** 会话库（~/.zcode/cli/db/db.sqlite），与 opencode 同形，转换共用一台转换器 */
+  dbFile: string;
+  /** 家目录：在家目录里开的会话不算有文件夹 */
+  home: string;
+}
+
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
 export interface ImporterDeps {
   /** Proma 数据根（~/.proma-dev）。**只读** */
@@ -173,6 +182,8 @@ export interface ImporterDeps {
   opencode?: OpencodePaths;
   /** Reasonix 桌面版来源的位置。不传 = 扫描勾了它也不读 */
   reasonix?: ReasonixPaths;
+  /** ZCode 来源的位置。不传 = 扫描勾了它也不读 */
+  zcode?: ZcodePaths;
   /** 多家共用的 skills 目录（~/.agents/skills，来源 agent-skills）。不传 = 勾了也不读 */
   agentSkillsDir?: string;
   /** orbita 已有的 skill slug（含只剩断链的）：skills 重名判断的底 */
@@ -313,6 +324,17 @@ export async function probeReasonix(paths: ReasonixPaths): Promise<ImportSourceP
     found = false;
   }
   return { id: "reasonix", label: "Reasonix", kind: "app", paths: [paths.projectsRoot], found };
+}
+
+/** ZCode 来源的探测：只 stat 会话库。paths 是扫描会读的全部位置。 */
+export async function probeZcode(paths: ZcodePaths): Promise<ImportSourceProbe> {
+  let found = false;
+  try {
+    found = (await stat(paths.dbFile)).isFile();
+  } catch {
+    found = false;
+  }
+  return { id: "zcode", label: "ZCode", kind: "app", paths: [paths.dbFile], found };
 }
 
 /** 多家共用的 skills 目录（~/.agents/skills）：只 stat 这一个目录。 */
@@ -1276,6 +1298,11 @@ async function scanWithConfigs(
     skipped.push(...found.skipped);
     converted.push(...found.candidates);
   }
+  if (sources.includes("zcode") && deps.zcode !== undefined) {
+    const found = await scanZcode(deps.zcode, deps, importedBySource);
+    skipped.push(...found.skipped);
+    converted.push(...found.candidates);
+  }
   for (const candidate of await placeConverted(converted, deps, newWorkspaceByKey)) {
     const resolution = applyDestination(candidate.resolution, overrides, deps);
     if (resolution.create !== null) {
@@ -1787,6 +1814,69 @@ async function scanKimiCode(
 /** opencode 会话的幂等键：库里没有会话文件，写成「库路径#会话 id」。 */
 function opencodeSourceKey(dbFile: string, sessionId: string): string {
   return `${resolve(dbFile)}#${sessionId}`;
+}
+
+/**
+ * 扫 ZCode 的库：根会话一条一条（parent_id 非空的是 side chat / task 子 agent，不列）。
+ * rewind 在取数层按 keptMessageIDs 白名单过滤（zcode.ts），喂给 opencodeToMessages 时
+ * revert 传 null。执行同一条转换判断能不能导。
+ *
+ * 标题：ZCode 的标题全是真实标题（first_input / generated），缺了退第一句用户写的话 >
+ * 「ZCode session」。文件夹：会话的 directory。库打不开（格式不认识、被锁）整次扫描
+ * 报错，不静默当成没有会话。
+ */
+async function scanZcode(
+  paths: ZcodePaths,
+  deps: ImporterDeps,
+  importedBySource: ReadonlyMap<string, readonly SessionMeta[]>,
+): Promise<{ candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] }> {
+  const candidates: ConvertedCandidate[] = [];
+  const skipped: ImportSkipItem[] = [];
+  try {
+    await stat(paths.dbFile);
+  } catch (cause) {
+    if (isNotFound(cause)) return { candidates, skipped };
+    throw cause;
+  }
+  const found = withOpencodeDb(paths.dbFile, (db) =>
+    readZcodeSessions(db).map((session) => {
+      const sourceFile = opencodeSourceKey(paths.dbFile, session.id);
+      if (importedBySource.has(sourceFile)) return { session, sourceFile, parsed: null, bytes: 0 };
+      return {
+        session,
+        sourceFile,
+        parsed: opencodeToMessages(readZcodeMessages(db, session.id), "scan", null),
+        bytes: zcodeSessionBytes(db, session.id),
+      };
+    }),
+  );
+  for (const { session, sourceFile, parsed, bytes } of found) {
+    if (parsed === null) {
+      skipped.push({ sourceId: session.id, title: session.title, reason: "already-imported" });
+      continue;
+    }
+    const title = deriveSessionTitle(session.title ?? parsed.firstPrompt ?? "") || "ZCode session";
+    if (!parsed.messages.some((message) => message.role === "assistant")) {
+      skipped.push({ sourceId: session.id, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+      continue;
+    }
+    const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd);
+    const createdAt = session.createdAt || parsed.firstAt || Date.now();
+    candidates.push({
+      onlyMessage: onlyWrittenMessage(parsed.userDisplays),
+      source: "zcode",
+      sourceKind: "zcode",
+      sourceId: session.id,
+      sourceFile,
+      title,
+      model: parsed.model,
+      createdAt,
+      updatedAt: qaTime(parsed.lastAt, createdAt, session.updatedAt || createdAt),
+      bytes,
+      ...place,
+    });
+  }
+  return { candidates, skipped };
 }
 
 /**
@@ -2375,6 +2465,8 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
                 ? await runOpencodeImport(item, deps)
                 : item.sourceKind === "reasonix"
                   ? await runReasonixImport(item, deps)
+                : item.sourceKind === "zcode"
+                  ? await runZcodeImport(item, deps)
                   : await runPiImport(
               item,
               deps,
@@ -2656,6 +2748,17 @@ async function runReasonixImport(item: ImportPlanItem, deps: RunImporterDeps): P
   // meta 只带来会话级模型（源行上没有）；执行时 meta 被删了就盖 unknown，不拦导入
   const meta = await readReasonixMeta(item.sourceFile);
   const parsed = reasonixToMessages(rows, item.providerId, meta?.model ?? null);
+  return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
+}
+
+async function runZcodeImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
+  const cut = item.sourceFile.lastIndexOf("#");
+  if (cut === -1) throw new Error(`not a zcode session key: ${item.sourceFile}`);
+  const dbFile = item.sourceFile.slice(0, cut);
+  const sessionId = item.sourceFile.slice(cut + 1);
+  // rewind 白名单在取数层（readZcodeMessages）过滤，这里 revert 传 null；会话被删了
+  // 转不出 assistant 消息，persistConverted 会拦
+  const parsed = withOpencodeDb(dbFile, (db) => opencodeToMessages(readZcodeMessages(db, sessionId), item.providerId, null));
   return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
 }
 
