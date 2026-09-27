@@ -2713,6 +2713,16 @@ function ToolLine(props: {
   const rawBody = result !== undefined ? toolResultText(result, t) : "";
   // 跑着时只渲染尾部：partial 是累积快照、每帧整条重渲染，万行输出会拖垮 DOM
   const body = live ? liveTailLines(rawBody) : rawBody;
+  // 工具结果里的 image 块（read_pdf 页图 / read 读图）内联展示给用户——模型看得见
+  // 的图用户也要看得见。有真图时正文里的 [image] 文字标记是冗余的，展开时剥掉
+  const toolImages =
+    result !== undefined && result.content.some((block) => block.type === "image")
+      ? result.content.filter((block): block is Extract<(typeof result.content)[number], { type: "image" }> => block.type === "image")
+      : [];
+  const imagelessBody =
+    toolImages.length > 0 && result !== undefined
+      ? result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n")
+      : body;
   // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
   const fileView = finished ? fileViewFor(props.toolName, props.input, result) : null;
   const fileLang = fileView !== null ? langFromPath(callSummary ?? "") : null;
@@ -2790,7 +2800,13 @@ function ToolLine(props: {
             {mcp !== null ? (
               <McpToolBody result={result} />
             ) : (
-              <PlainToolBody toolName={props.toolName} text={body} failed={failed} live={live} />
+              <PlainToolBody
+                toolName={props.toolName}
+                text={imagelessBody}
+                failed={failed}
+                live={live}
+                images={toolImages}
+              />
             )}
           </>
         )}
@@ -2872,7 +2888,13 @@ function ToolLine(props: {
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
       {open && expandable && diff === null && fileView === null && (
-        <PlainToolBody toolName={props.toolName} text={body} failed={failed} live={live} />
+        <PlainToolBody
+          toolName={props.toolName}
+          text={imagelessBody}
+          failed={failed}
+          live={live}
+          images={toolImages}
+        />
       )}
     </div>
   );
@@ -3328,10 +3350,51 @@ function PlainToolBody(props: {
   text: string;
   failed: boolean;
   live?: boolean;
+  images?: readonly { type: "image"; data: string; mimeType: string }[];
 }) {
   const t = useT();
   const follow = useFollowScroll(props.live === true);
-  if (props.text === "") {
+  // 看大图：放在提前 return 之前（hook 顺序不能随内容变）
+  const [viewing, setViewing] = useState<number | null>(null);
+  const images = props.images ?? [];
+  const imageStrip =
+    images.length > 0 ? (
+      <div style={{ display: "grid", gap: "var(--space-2)", padding: "var(--space-2) 0 var(--space-2) var(--space-2)" }}>
+        {viewing !== null && <ImageLightbox images={images} startIndex={viewing} onClose={() => setViewing(null)} />}
+        {images.map((block, i) => (
+          <figure key={`toolimg-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
+            <button
+              type="button"
+              aria-label={t.lightbox.open}
+              onClick={() => setViewing(i)}
+              style={{ ...ZOOM_BUTTON_STYLE, justifySelf: "start" }}
+            >
+              <img
+                src={imageSrc(block)}
+                alt=""
+                style={{
+                  display: "block",
+                  maxWidth: "100%",
+                  maxHeight: 240,
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--color-border-subtle)",
+                }}
+              />
+            </button>
+            <figcaption
+              style={{
+                fontSize: "var(--font-size-micro)",
+                color: "var(--color-text-tertiary)",
+                fontFamily: "var(--font-family-mono)",
+              }}
+            >
+              {block.mimeType}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+    ) : null;
+  if (props.text === "" && images.length === 0) {
     return (
       <div
         className="scroll"
@@ -3349,12 +3412,14 @@ function PlainToolBody(props: {
             {line === "" ? " " : line}
           </div>
         ))}
+        {imageStrip}
       </div>
     );
   }
   return (
     <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
       {props.text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
+      {imageStrip}
     </div>
   );
 }
