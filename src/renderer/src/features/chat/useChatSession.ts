@@ -1360,6 +1360,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   interface SentSnapshot {
     sessionId: string;
     draftKey: string;
+    /** 本条新建的会话（首页首条消息）：失败回填时若还绑定着，解绑回出发地 */
+    fresh: boolean;
     text: string;
     quotes: readonly TextQuote[];
     images: readonly ComposerImage[];
@@ -1380,6 +1382,27 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         writeFiles(snap.draftKey, (current) => [...current, ...snap.files].slice(0, PROMPT_FILE_MAX_COUNT));
       }
       if (snap.pasted.length > 0) writePasted(snap.draftKey, (current) => [...current, ...snap.pasted]);
+      // 首页发首条消息时，submitTurn 已把新会话绑成本槽的活会话、输入框换到新会话的
+      // 草稿键上——回填写回出发键（home:main）的话界面读的是新键，两头错过（2026-09-27
+      // CDP 实测复现：回填执行了、界面还是空的）。这条会话没落任何内容，解绑回首页，
+      // 用户带着内容回到出发地。解绑要三件套：sessionId、sessionRef 之外还有 opened——
+      // submit 成功路径的 refreshSessions→syncOpened 已把新建会话的 meta 填进 opened，
+      // 只清 sessionId 的话 homeActive 仍为 false、草稿键仍指向新会话（同轮 CDP 复现）。
+      // 若失败落地前用户已在新键上打了字（亚秒级窗口），一并搬回出发键，不丢
+      if (snap.fresh && sessionRef.current === snap.sessionId) {
+        setDrafts((prev) => {
+          const stray = prev.get(snap.sessionId) ?? "";
+          const map = new Map(prev);
+          if (stray.trim() !== "") {
+            map.set(snap.draftKey, appendWithdrawn(map.get(snap.draftKey) ?? "", stray));
+          }
+          map.delete(snap.sessionId);
+          return map;
+        });
+        setSessionId(null);
+        sessionRef.current = null;
+        setOpened(null);
+      }
     },
     [writeQuotes, writeAttachments, writeFiles, writePasted],
   );
@@ -1582,6 +1605,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       restoreRef.current = {
         sessionId: id,
         draftKey,
+        fresh: resume === null,
         text: draft,
         quotes,
         images: attachments,
