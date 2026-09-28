@@ -30,6 +30,7 @@ import {
   probeOpencode,
   probeProma,
   probeReasonix,
+  reasonixDataRoot,
   runImport,
   scanGreetingCandidates,
   scanImport,
@@ -2145,6 +2146,22 @@ describe("opencode 来源", () => {
   });
 });
 
+describe("reasonix 数据根（Electron userData 惯例，按平台各归各位）", () => {
+  test("win32 认 APPDATA（缺了退家目录）；darwin 固定 Library；linux 认 XDG_CONFIG_HOME（缺了退 ~/.config）", () => {
+    assert.equal(
+      reasonixDataRoot("win32", "C:\\Users\\u", { APPDATA: "C:\\Users\\u\\AppData\\Roaming" }),
+      join("C:\\Users\\u\\AppData\\Roaming", "reasonix"),
+    );
+    assert.equal(reasonixDataRoot("win32", "C:\\Users\\u", {}), join("C:\\Users\\u", "AppData", "Roaming", "reasonix"));
+    assert.equal(
+      reasonixDataRoot("darwin", "/Users/u", {}),
+      join("/Users/u", "Library", "Application Support", "reasonix"),
+    );
+    assert.equal(reasonixDataRoot("linux", "/home/u", { XDG_CONFIG_HOME: "/xdg" }), join("/xdg", "reasonix"));
+    assert.equal(reasonixDataRoot("linux", "/home/u", {}), join("/home/u", ".config", "reasonix"));
+  });
+});
+
 describe("reasonix 来源", () => {
   let projectsRoot = "";
   let home = "";
@@ -2224,6 +2241,14 @@ describe("reasonix 来源", () => {
     assert.equal(v5?.reason, "unsupported-format");
     assert.match(v5?.detail ?? "", /not supported yet/);
     assert.equal(withV5.plan.length, 1);
+  });
+
+  test("meta 的 workspace_root 是空串 → 与缺席同为无归属：folder null、cwd 退 defaultCwd（不是进程 cwd）", async () => {
+    const sessions = join(projectsRoot, "proj-a", "sessions");
+    await writeSession(sessions, "s-a.jsonl", { id: "a", workspace_root: "" }, repoRows("修测试"));
+    const report = await scanImport(rxDeps(), [], ["reasonix"]);
+    const [item] = report.plan;
+    assert.deepEqual([item?.folder, item?.cwd], [null, "/Users/tester"]);
   });
 
   test("探测：projects 根在不在；paths 列出扫描会读的一处", async () => {

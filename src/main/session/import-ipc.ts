@@ -44,6 +44,7 @@ import {
   type ImporterDeps,
   type KimiCodePaths,
   type OpencodePaths,
+  reasonixDataRoot,
   type ReasonixPaths,
 } from "./importer.ts";
 
@@ -210,13 +211,11 @@ function opencodePaths(): OpencodePaths {
 }
 
 /**
- * Reasonix 桌面版的数据根（Electron userData 惯例）。本机 Windows 是 %APPDATA%/reasonix；
- * 其他平台的 userData 路径未调研——探测 stat 不到就不可勾，无害。
+ * Reasonix 桌面版来源要读的位置（数据根按平台各归各位，见 reasonixDataRoot）。探测与扫描同一份。
  */
 function reasonixPaths(): ReasonixPaths {
   const home = homedir();
-  const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
-  return { projectsRoot: join(appData, "reasonix", "projects"), home };
+  return { projectsRoot: join(reasonixDataRoot(process.platform, home, process.env), "projects"), home };
 }
 
 /** 多家 agent 共用的 skills 目录（agent-skills 来源）。探测与扫描同一个。 */

@@ -24,7 +24,8 @@
  *   agents/main/wire.jsonl 这份事件流；另有 mcp.json。skills 用的是共用目录（归 agent-skills）
  * - opencode：opencode 命令行：会话在它的 SQLite 库（~/.local/share/opencode/opencode.db，只读打开），
  *   MCP 在 ~/.config/opencode/opencode.json
- * - reasonix：Reasonix 桌面版（Windows %APPDATA%/reasonix）：只导会话——projects/<项目>/sessions/
+ * - reasonix：Reasonix 桌面版（Electron userData 的 reasonix/projects：Win %APPDATA%、
+ *   mac ~/Library/Application Support、Linux ~/.config）：只导会话——projects/<项目>/sessions/
  *   下的旧 JSONL。skills 是共用目录（~/.agents/skills）的链接子集（归 agent-skills）、MCP 只有
  *   TOML 里一台、hooks 双方都没有，都不迁（2026-09-27 裁决）；v5 二进制帧容器另立一刀
  * - agent-skills：多家 agent 共用的 skills 目录（~/.agents/skills），只有 skills，没有会话
