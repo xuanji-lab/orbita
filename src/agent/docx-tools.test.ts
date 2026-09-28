@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import JSZip from "jszip";
+import * as ncanvas from "@napi-rs/canvas";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createDocxTools } from "./docx-tools.ts";
 
@@ -47,18 +48,34 @@ const BODY_LONG = Array.from(
 
 interface DocxOpts {
   body: string;
-  /** 是否带图片/批注/脚注相关的 part（省掉可测「引用了不存在 part」之外的瘦身形态） */
-  withImage?: boolean;
+  /** 内嵌 media 列表（rels/Content_Types/zip 三处联动生成）。默认一张 1×1 png（BODY_FULL 的 rId5） */
+  media?: { relId: string; file: string; contentType: string; data: Buffer }[];
   withComments?: boolean;
   withFootnotes?: boolean;
   title?: string;
 }
 
+const DEFAULT_MEDIA: { relId: string; file: string; contentType: string; data: Buffer }[] = [
+  { relId: "rId5", file: "media/image1.png", contentType: "image/png", data: PNG_1PX },
+];
+
+/** 一段引用内嵌图的正文（w:drawing 的最小可识别形态） */
+function imageParagraph(text: string, relId: string, name: string, descr: string): string {
+  return `<w:p><w:r><w:t>${text}</w:t></w:r><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="1000000" cy="1000000"/><wp:docPr id="1" name="${name}" descr="${descr}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="1" name="${name}" descr="${descr}"/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relId}"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+}
+
 async function buildDocx(opts: DocxOpts): Promise<Buffer> {
-  const withImage = opts.withImage ?? true;
+  const media = opts.media ?? DEFAULT_MEDIA;
   const withComments = opts.withComments ?? true;
   const withFootnotes = opts.withFootnotes ?? true;
   const zip = new JSZip();
+  // media 的扩展名各异（png/bmp/…），按需补 Content_Types 的 Default
+  const mediaDefaults = [...new Set(media.map((m) => m.file.split(".").pop()!.toLowerCase()))]
+    .map((ext) => {
+      const contentType = media.find((m) => m.file.split(".").pop()!.toLowerCase() === ext)!.contentType;
+      return `<Default Extension="${ext}" ContentType="${contentType}"/>`;
+    })
+    .join("\n");
   const overrides = [
     `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>`,
     `<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>`,
@@ -81,7 +98,7 @@ async function buildDocx(opts: DocxOpts): Promise<Buffer> {
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
-<Default Extension="png" ContentType="image/png"/>
+${mediaDefaults}
 ${overrides}
 </Types>`,
   );
@@ -94,7 +111,10 @@ ${opts.title !== undefined ? `<Relationship Id="rId2" Type="http://schemas.openx
 </Relationships>`,
   );
   const rels = [
-    `<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>`,
+    ...media.map(
+      (m) =>
+        `<Relationship Id="${m.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${m.file}"/>`,
+    ),
     `<Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`,
     withComments
       ? `<Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>`
@@ -171,7 +191,7 @@ ${opts.body}
 </cp:coreProperties>`,
     );
   }
-  if (withImage) zip.file("word/media/image1.png", PNG_1PX);
+  for (const m of media) zip.file(`word/${m.file}`, m.data);
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
@@ -182,8 +202,8 @@ before(async () => {
   dir = await mkdtemp(join(tmpdir(), "orbita-docx-"));
   tool = createDocxTools(dir)[0]!;
   await writeFile(join(dir, "full.docx"), await buildDocx({ body: BODY_FULL, title: "测试文档标题" }));
-  await writeFile(join(dir, "long.docx"), await buildDocx({ body: BODY_LONG, withImage: false, withComments: false, withFootnotes: false }));
-  await writeFile(join(dir, "empty.docx"), await buildDocx({ body: "<w:sectPr/>", withImage: false, withComments: false, withFootnotes: false }));
+  await writeFile(join(dir, "long.docx"), await buildDocx({ body: BODY_LONG, media: [], withComments: false, withFootnotes: false }));
+  await writeFile(join(dir, "empty.docx"), await buildDocx({ body: "<w:sectPr/>", media: [], withComments: false, withFootnotes: false }));
   await writeFile(join(dir, "plain.txt"), Buffer.from("just text, not a zip"));
   await writeFile(join(dir, "fake.docx"), Buffer.from("PK\x03\x04 not really a zip body"));
   await writeFile(
@@ -194,6 +214,43 @@ before(async () => {
     join(dir, "locked.docx"),
     Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0, 0, 0]),
   );
+
+  // 8 图文档：超 images 上限（6），断言截断提示
+  const manyMedia = Array.from({ length: 8 }, (_, i) => ({
+    relId: `rId20${i + 1}`,
+    file: `media/im${i + 1}.png`,
+    contentType: "image/png",
+    data: PNG_1PX,
+  }));
+  const manyBody = manyMedia
+    .map((m, i) => imageParagraph(`第${i + 1}张图`, m.relId, `im${i + 1}.png`, `说明${i + 1}`))
+    .join("\n");
+  await writeFile(join(dir, "many.docx"), await buildDocx({ body: manyBody, media: manyMedia, withComments: false, withFootnotes: false }));
+
+  // 大图文档：3000×1000 的真 PNG，断言转录缩放（长边 → 2000）
+  const bigCanvas = ncanvas.createCanvas(3000, 1000);
+  bigCanvas.getContext("2d").fillRect(0, 0, 3000, 1000);
+  const BIG_PNG = Buffer.from(await bigCanvas.encode("png"));
+  await writeFile(
+    join(dir, "big-image.docx"),
+    await buildDocx({
+      body: imageParagraph("大图段落", "rId5", "big.png", "超大图"),
+      media: [{ relId: "rId5", file: "media/image1.png", contentType: "image/png", data: BIG_PNG }],
+      withComments: false,
+      withFootnotes: false,
+    }),
+  );
+
+  // 非常规格式：bmp 头的假图（魔数不认 → 跳过并点名）
+  await writeFile(
+    join(dir, "bmp.docx"),
+    await buildDocx({
+      body: imageParagraph("位图段落", "rId5", "img.bmp", "位图"),
+      media: [{ relId: "rId5", file: "media/image1.bmp", contentType: "image/bmp", data: Buffer.from([0x42, 0x4d, 1, 2, 3, 4, 5, 6]) }],
+      withComments: false,
+      withFootnotes: false,
+    }),
+  );
 });
 
 after(async () => {
@@ -203,6 +260,29 @@ after(async () => {
 const run = async (path: string, args: Record<string, unknown> = {}): Promise<string> => {
   const result = await tool.execute("call-1", { path, ...args }, undefined, undefined, undefined as never);
   return result.content[0]!.type === "text" ? result.content[0]!.text : "";
+};
+
+/** 视觉模型的 ctx mock：ExtensionContext 只用到 model.input（visionCapable 的唯一读取面） */
+const VISION_CTX = { model: { input: ["text", "image"] } } as never;
+
+/** PNG IHDR 的宽度（字节偏移 16 起 4 字节 big-endian）——断言转录缩放用 */
+function pngWidth(base64: string): number {
+  const bytes = Buffer.from(base64, "base64");
+  return bytes.readUInt32BE(16);
+}
+
+/** 跑一轮并保留完整 content（image 块断言用） */
+const runFull = async (
+  path: string,
+  args: Record<string, unknown>,
+  ctx: unknown,
+): Promise<{ type: string; text?: string; data?: string; mimeType?: string }[]> => {
+  const result = await tool.execute("call-1", { path, ...args }, undefined, undefined, ctx as never);
+  return result.content.map((block) =>
+    block.type === "text"
+      ? { type: "text", text: block.text }
+      : { type: "image", data: block.data, mimeType: block.mimeType },
+  );
 };
 
 describe("read_docx", () => {
@@ -289,7 +369,7 @@ describe("read_docx", () => {
       join(dir, "no-title.docx"),
       await buildDocx({
         body: `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>回退标题</w:t></w:r></w:p><w:p><w:r><w:t>正文。</w:t></w:r></w:p>`,
-        withImage: false,
+        media: [], 
         withComments: false,
         withFootnotes: false,
       }),
@@ -302,7 +382,7 @@ describe("read_docx", () => {
     // body 有 commentReference 但 comments.xml 不在包里（真实损坏形态：half-saved）
     await writeFile(
       join(dir, "broken-parts.docx"),
-      await buildDocx({ body: BODY_FULL, withImage: false, withComments: false, withFootnotes: false }),
+      await buildDocx({ body: BODY_FULL, media: [], withComments: false, withFootnotes: false }),
     );
     await assert.rejects(run("broken-parts.docx"), /Failed to parse Word document \(broken-parts\.docx\)/);
   });
@@ -311,11 +391,55 @@ describe("read_docx", () => {
     const body = `<w:p><w:r><w:t>A &amp; B &lt;tag&gt;</w:t></w:r></w:p><w:p><w:r><w:t>上</w:t></w:r><w:br/><w:r><w:t>下</w:t></w:r></w:p>`;
     await writeFile(
       join(dir, "entity.docx"),
-      await buildDocx({ body, withImage: false, withComments: false, withFootnotes: false }),
+      await buildDocx({ body, media: [], withComments: false, withFootnotes: false }),
     );
     const text = await run("entity.docx");
     assert.ok(text.includes("A & B <tag>"));
     assert.ok(!text.includes("&amp;"));
     assert.ok(text.includes("上\n下"));
+  });
+
+  // ─── 内嵌图 ──────────────────────────────────────────────────────────────
+
+  test("图片默认关：content 只有 text 块，占位是文本", async () => {
+    const blocks = await runFull("full.docx", {}, VISION_CTX);
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0]!.type, "text");
+    assert.ok(blocks[0]!.text!.includes("[image 1: 实验装置图]"));
+  });
+
+  test("images=true 视觉双通道：范围内占位转真图块，文本殿前图殿后", async () => {
+    const blocks = await runFull("full.docx", { images: true }, VISION_CTX);
+    assert.equal(blocks.length, 2);
+    assert.equal(blocks[0]!.type, "text");
+    assert.equal(blocks[1]!.type, "image");
+    assert.equal(blocks[1]!.mimeType, "image/png");
+    assert.equal(pngWidth(blocks[1]!.data!), 1, "1×1 小图原样给");
+  });
+
+  test("images=true 超上限：截前 6 张，头注点名余量与收窄提示", async () => {
+    const blocks = await runFull("many.docx", { images: true }, VISION_CTX);
+    assert.equal(blocks.filter((b) => b.type === "image").length, 6);
+    assert.ok(blocks[0]!.text!.includes("first 6 of 8 images"));
+    assert.ok(blocks[0]!.text!.includes("narrow offset/limit"));
+  });
+
+  test("images=true 非视觉：降级纯文本 + note，无 image 块", async () => {
+    const blocks = await runFull("full.docx", { images: true }, undefined);
+    assert.equal(blocks.filter((b) => b.type === "image").length, 0);
+    assert.ok(blocks[0]!.text!.includes("Current model does not support images"));
+  });
+
+  test("转录纪律：长边 3000 的图缩放重编码到 2000", async () => {
+    const blocks = await runFull("big-image.docx", { images: true }, VISION_CTX);
+    const images = blocks.filter((b) => b.type === "image");
+    assert.equal(images.length, 1);
+    assert.equal(pngWidth(images[0]!.data!), 2000);
+  });
+
+  test("非常规格式：魔数不认（bmp）跳过并在头注点名", async () => {
+    const blocks = await runFull("bmp.docx", { images: true }, VISION_CTX);
+    assert.equal(blocks.filter((b) => b.type === "image").length, 0);
+    assert.ok(blocks[0]!.text!.includes("image 1 skipped: not an inlinable format"));
   });
 });

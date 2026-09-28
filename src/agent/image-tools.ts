@@ -37,16 +37,23 @@ export const SHOW_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
  */
 export const SHOW_IMAGE_MAX_EDGE = 2000;
 
-/** 缩放超长边的 png/webp（或 jpeg）。不超限或加载失败时原样返回——展示不该因转码挂掉 */
-async function shrinkIfNeeded(buffer: Buffer, mimeType: string): Promise<{ data: string; mimeType: string }> {
+/**
+ * 缩放超长边的 png/webp（或 jpeg）。不超限或加载失败时原样返回——展示不该因转码挂掉。
+ * maxEdge 参数化：show_image 传自己的上限，read_docx 的内嵌图转录纪律同款复用
+ */
+export async function shrinkIfNeeded(
+  buffer: Buffer,
+  mimeType: string,
+  maxEdge: number = SHOW_IMAGE_MAX_EDGE,
+): Promise<{ data: string; mimeType: string }> {
   if (mimeType !== "image/png" && mimeType !== "image/webp" && mimeType !== "image/jpeg") {
     return { data: buffer.toString("base64"), mimeType };
   }
   try {
     const bitmap = await ncanvas.loadImage(buffer);
     const longEdge = Math.max(bitmap.width, bitmap.height);
-    if (longEdge <= SHOW_IMAGE_MAX_EDGE) return { data: buffer.toString("base64"), mimeType };
-    const scale = SHOW_IMAGE_MAX_EDGE / longEdge;
+    if (longEdge <= maxEdge) return { data: buffer.toString("base64"), mimeType };
+    const scale = maxEdge / longEdge;
     const canvas = ncanvas.createCanvas(Math.round(bitmap.width * scale), Math.round(bitmap.height * scale));
     canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     const encoded =
@@ -63,8 +70,8 @@ export interface ShowImageCard {
   images: { data: string; mimeType: string; name: string }[];
 }
 
-/** 魔数→MIME。扩展名会说谎，文件头不会（read_pdf 同一教训） */
-function imageMimeOf(head: Buffer): string | null {
+/** 魔数→MIME。扩展名会说谎，文件头不会（read_pdf 同一教训）；read_docx 的内嵌图同款准入 */
+export function imageMimeOf(head: Buffer): string | null {
   if (head.subarray(0, 8).toString("latin1") === "\x89PNG\r\n\x1a\n") return "image/png";
   if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "image/jpeg";
   if (head.subarray(0, 3).toString("latin1") === "GIF") return "image/gif";

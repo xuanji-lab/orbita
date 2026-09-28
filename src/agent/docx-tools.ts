@@ -3,6 +3,7 @@ import { basename, extname, isAbsolute, join } from "node:path";
 import JSZip from "jszip";
 import mammoth from "mammoth";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { imageMimeOf, shrinkIfNeeded } from "./image-tools.ts";
 
 /**
  * agent 的 Word 工具：read_docx。
@@ -43,6 +44,12 @@ export const DOCX_MAX_CHARS_PER_CALL = 30000;
 
 /** images=true 时单次最多带几张内嵌图（show_image 的画廊上限同款） */
 export const DOCX_IMAGE_MAX_COUNT = 6;
+
+/** 内嵌图长边上限（转录不存原图——show_image 的 SHOW_IMAGE_MAX_EDGE 同款纪律） */
+export const DOCX_IMAGE_MAX_EDGE = 2000;
+
+/** 单张内嵌图体积上限（SHOW_IMAGE_MAX_BYTES 同口径——超出多半是误嵌） */
+const DOCX_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
 
 /** 头注大纲最多列几个 heading（read_pdf 图表索引 15 条同款护栏） */
 export const DOCX_OUTLINE_MAX = 15;
@@ -423,6 +430,42 @@ export function outlineOf(blocks: readonly Block[]): { text: string; block: numb
   return out;
 }
 
+/** 块里引用的内嵌图占位号（全文档序号，保序去重）——images=true 时按它取 buffer */
+export function imageRefsOf(block: Block): number[] {
+  const found: number[] = [];
+  const walkInline = (nodes: readonly Inline[]): void => {
+    for (const node of nodes) {
+      if (node.kind === "image") {
+        if (!found.includes(node.n)) found.push(node.n);
+      } else if (node.kind === "strong" || node.kind === "em" || node.kind === "strike" || node.kind === "sup" || node.kind === "sub") {
+        walkInline(node.children);
+      } else if (node.kind === "link") {
+        walkInline(node.children);
+      }
+    }
+  };
+  switch (block.kind) {
+    case "heading":
+    case "para":
+      walkInline(block.inline);
+      break;
+    case "list":
+      for (const item of block.items) {
+        walkInline(item.inline);
+        for (const child of item.children) {
+          for (const sub of child.items) {
+            walkInline(sub.inline);
+          }
+        }
+      }
+      break;
+    case "table":
+      for (const row of block.rows) for (const cell of row) walkInline(cell);
+      break;
+  }
+  return found;
+}
+
 /** docProps/core.xml 的 dc:title（正则抽，core.xml 是几行固定小文件） */
 async function coreTitle(buffer: Buffer): Promise<string> {
   try {
@@ -555,16 +598,61 @@ export function createDocxTools(cwd: string): ToolDefinition[] {
       }
       const continueHint = last < blocks.length ? ` Use offset=${last + 1} to continue.` : "";
 
+      // 内嵌图提取（images=true）：范围里的占位号 → buffer → 魔数复核 → 转录缩放。
+      // content 的 image 块只给视觉模型（read_pdf 同款）；非视觉降级为 note
+      const wantsImages = args["images"] === true;
+      const canSeeImages = ctx?.model?.input.includes("image") ?? false;
+      const images: { type: "image"; data: string; mimeType: string }[] = [];
+      let imageNotes: string[] = [];
+      if (wantsImages && canSeeImages) {
+        const inRange: number[] = [];
+        for (let i = first - 1; i < last; i++) {
+          for (const n of imageRefsOf(blocks[i]!)) {
+            if (!inRange.includes(n)) inRange.push(n);
+          }
+        }
+        if (inRange.length > DOCX_IMAGE_MAX_COUNT) {
+          imageNotes.push(
+            `showing the first ${DOCX_IMAGE_MAX_COUNT} of ${inRange.length} images in this range — narrow offset/limit to see the rest`,
+          );
+        }
+        for (const n of inRange.slice(0, DOCX_IMAGE_MAX_COUNT)) {
+          const found = collected.find((entry) => entry.n === n);
+          if (found === undefined) continue;
+          if (found.buffer.length > DOCX_IMAGE_MAX_BYTES) {
+            imageNotes.push(`image ${n} skipped: larger than 30MB`);
+            continue;
+          }
+          // 魔数复核（Content_Types 的声明会说谎）；bmp/tiff/emf 等内联不了，跳过并点名
+          const mimeType = imageMimeOf(found.buffer.subarray(0, 12));
+          if (mimeType === null) {
+            imageNotes.push(`image ${n} skipped: not an inlinable format (png/jpg/gif/webp)`);
+            continue;
+          }
+          const shrunk = await shrinkIfNeeded(found.buffer, mimeType, DOCX_IMAGE_MAX_EDGE);
+          images.push({ type: "image", data: shrunk.data, mimeType: shrunk.mimeType });
+        }
+      }
+      const imageLine =
+        imageNotes.length > 0 ? ` Note: ${imageNotes.join("; ")}.` : "";
+      const nonVisionLine =
+        wantsImages && !canSeeImages
+          ? `\n[Current model does not support images. The images will be omitted from this request.]`
+          : "";
+
       const outline = outlineOf(blocks);
       const outlineLine =
         outline.length > 0 ? ` Sections: ${outline.map((s) => `${s.text} (block ${s.block})`).join("; ")}.` : "";
 
       const header =
         `[Word document: ${title}. ${blocks.length} blocks, ${totalChars} chars. Showing blocks ${first}-${last}` +
-        ` of ${blocks.length}.${outlineLine}${continueHint}]`;
+        ` of ${blocks.length}.${outlineLine}${imageLine}${continueHint}]${nonVisionLine}`;
 
       return {
-        content: [{ type: "text", text: parts.length > 0 ? `${header}\n\n${parts.join("\n\n")}` : header }],
+        content: [
+          { type: "text", text: parts.length > 0 ? `${header}\n\n${parts.join("\n\n")}` : header },
+          ...images,
+        ],
         details: {},
       };
     },
