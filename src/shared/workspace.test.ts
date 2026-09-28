@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   deriveWorkspaceName,
   looksLikePathDerivedName,
+  looksLikeWindowsPath,
   normalizeWorkspaceName,
   parseWorkspace,
   WORKSPACE_NAME_MAX,
@@ -57,6 +58,8 @@ describe("deriveWorkspaceName", () => {
       ["\\\\server\\share\\proj", "proj"], // UNC 网络共享（SMB）
       ["\\\\wsl.localhost\\Ubuntu\\home\\u\\proj", "proj"], // WSL：Windows 选进 Linux 子系统
       ["\\\\?\\C:\\Users\\dama\\proj", "proj"], // Windows 长路径前缀
+      ["\\\\Users\\dama\\proj", "proj"], // 当前盘根相对（没有盘符的 Windows 路径）
+      ["\\\\?\\UNC\\server\\share\\proj", "proj"], // 长路径前缀 + UNC
       ["/Users/wafo/repo/orbita-lab", "orbita-lab"], // macOS
       ["/home/user/proj", "proj"], // Linux / BSD（POSIX 同形）
       ["/c/Users/dama/proj", "proj"], // Git Bash / MSYS 形
@@ -64,6 +67,26 @@ describe("deriveWorkspaceName", () => {
       ["file:///home/user/proj", "proj"], // file URI（POSIX）
     ];
     for (const [path, want] of cases) strictEqual(deriveWorkspaceName(path), want, path);
+  });
+});
+
+describe("looksLikeWindowsPath", () => {
+  it("盘符后不跟分隔符也算——`C:proj` 是盘符相对路径", () => {
+    strictEqual(looksLikeWindowsPath("C:proj"), true);
+    strictEqual(looksLikeWindowsPath("c:/Users/x"), true);
+  });
+
+  it("反斜杠起头：UNC、设备命名空间、当前盘根相对", () => {
+    strictEqual(looksLikeWindowsPath("\\\\server\\share"), true);
+    strictEqual(looksLikeWindowsPath("\\\\?\\C:\\x"), true);
+    strictEqual(looksLikeWindowsPath("\\Users\\dama\\proj"), true);
+  });
+
+  // 这一条是 macOS 上的真事：`my\folder` 是一个文件夹名，不是一个目录层级
+  it("POSIX 形不认——`\\` 只在这时候才当分隔符", () => {
+    strictEqual(looksLikeWindowsPath("/Users/x/my\\folder"), false);
+    strictEqual(looksLikeWindowsPath("/home/u/proj"), false);
+    strictEqual(looksLikeWindowsPath("my\\folder"), false);
   });
 });
 

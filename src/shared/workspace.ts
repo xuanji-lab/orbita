@@ -43,14 +43,19 @@ export interface Workspace {
 }
 
 /**
- * 盘符（`C:\` / `C:/`）或 UNC（`\\server\…`）起头：Windows 形路径。
+ * 盘符、UNC / 设备命名空间、当前盘根相对起头：Windows 形路径。
+ *
  * 分隔符按**路径自己的形**认，不按宿主 OS——POSIX 路径里 `\` 是文件夹名里的合法
  * 字符（Mac 的 `/Users/x/my\folder` 尾段就是 `my\folder`），只有 Windows 形才把
  * `\` 当分隔符。按形不按 OS 的另一个好处：从 Windows 机器导入 / 迁移来的路径，
  * 在 Mac 上也取对尾段。
+ *
+ * 盘符后面**不要求**跟分隔符：`C:proj` 也是 Windows 形（盘符相对）。代价是以 `\`
+ * 起头的 POSIX **相对**路径（`\weird/proj`）会被当成 Windows 形——调用方喂进来的
+ * 都是绝对路径，误判朝「多切一个分隔符」那一侧，是想要的那一边。
  */
 export function looksLikeWindowsPath(path: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
+  return /^[A-Za-z]:/.test(path) || path.startsWith("\\");
 }
 
 /**

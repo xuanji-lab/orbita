@@ -402,7 +402,7 @@ function illegalNameReason(name: string, platform: NodeJS.Platform): string | nu
   if (name === "." || name === "..") return "不能是 . 或 ..";
   if (name.includes("/")) return "不能含 /（会建出嵌套目录）";
   if (name.includes("\0")) return "不能含空字节";
-  if (looksLikeWindowsPath(name)) return "不能像路径（盘符或 \\\\ 起头）";
+  if (looksLikeWindowsPath(name)) return "不能像路径（盘符起头或反斜杠起头）";
   if (platform !== "win32") return null;
   if (name.includes("\\")) return "Windows 上不能含 \\（会建出嵌套目录）";
   const invalid = /[<>:"|?*]/.exec(name);
