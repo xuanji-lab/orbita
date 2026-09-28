@@ -27,7 +27,7 @@ export interface SessionFilters {
   range: RangeFilter;
   includeArchived: boolean;
   /**
-   * 去掉的 Proma 数据根。一条会话所在的根（ImportPlanItem.promaRoots）**全部**被去掉才藏起来——
+   * 去掉的 Proma 数据根。一条会话所在的根（ImportPlanItem.dataRoots）**全部**被去掉才藏起来——
    * 去掉一个根只去掉只在它里面的，别的根里也有的照导。记「去掉的」而不是「留下的」：
    * 导入后重扫多出一个根时，它默认在列，不会被一份旧的白名单悄悄藏掉
    */
@@ -76,7 +76,7 @@ export interface GroupedSessions {
 
 function passes(item: ImportPlanItem, filters: SessionFilters, now: number): boolean {
   if (!filters.includeArchived && item.archived) return false;
-  if (item.promaRoots.length > 0 && item.promaRoots.every((root) => filters.excludedRoots.has(root))) return false;
+  if (item.dataRoots.length > 0 && item.dataRoots.every((root) => filters.excludedRoots.has(root))) return false;
   if (filters.range === "all") return true;
   return now - item.updatedAt <= RANGE_MS[filters.range];
 }
@@ -173,8 +173,8 @@ export function promaRootCounts(report: ImportScanReport): PromaRootCount[] {
   const counts = new Map<string, number>();
   for (const item of report.plan) {
     if (!isSelectablePlanItem(item, planIds)) continue;
-    for (const root of item.promaRoots) {
-      counts.set(root, (counts.get(root) ?? 0) + (item.promaRoots.length === 1 ? 1 : 0));
+    for (const root of item.dataRoots) {
+      counts.set(root, (counts.get(root) ?? 0) + (item.dataRoots.length === 1 ? 1 : 0));
     }
   }
   return [...counts]

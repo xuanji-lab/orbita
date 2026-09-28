@@ -1369,7 +1369,7 @@ async function scanWithConfigs(
     plan.push({
       sourceId: entry.id,
       source: "proma",
-      promaRoots: roots,
+      dataRoots: roots,
       sourceKind: "pi",
       change,
       newMessages,
@@ -1460,7 +1460,7 @@ async function scanWithConfigs(
     plan.push({
       sourceId: entry.id,
       source: "proma",
-      promaRoots: roots,
+      dataRoots: roots,
       sourceKind: "claude-legacy",
       change: freshChange(sourceFile, aliases),
       newMessages: 0,
@@ -1529,7 +1529,7 @@ async function scanWithConfigs(
     plan.push({
       sourceId: candidate.sourceId,
       source: candidate.source,
-      promaRoots: [],
+      dataRoots: [],
       sourceKind: candidate.sourceKind,
       change: freshChange(candidate.sourceFile),
       newMessages: 0,
@@ -2530,7 +2530,7 @@ export function reimportState(source: readonly SessionEntry[], copies: readonly 
  */
 function updatedPlanItem(
   entry: PromaSessionIndexEntry,
-  promaRoots: string[],
+  dataRoots: string[],
   meta: SessionMeta,
   newMessages: number,
   sessionEntries: readonly SessionEntry[],
@@ -2539,7 +2539,7 @@ function updatedPlanItem(
   return {
     sourceId: entry.id,
     source: "proma",
-    promaRoots,
+    dataRoots,
     sourceKind: "pi",
     change: "updated",
     newMessages,
@@ -2922,7 +2922,7 @@ async function runPiImport(
   // transcript 里的用户消息还原成用户写的原文（proma-user-text.ts）：主路是 Proma 的界面日志，
   // 读不到就按 Proma 的拼接格式剥。**pi 副本上面已原样落盘**——那是模型当时读到的，不改
   // 界面日志在留下的那份的索引所在的数据根里（不一定是 pi 源文件所在的根）
-  const renderRoot = item.promaRoots[0];
+  const renderRoot = item.dataRoots[0];
   const renderLog = renderRoot === undefined ? null : await readRenderLog(renderRoot, item.sourceId);
   const userTexts = promaUserTextMap(sessionEntries, renderLog === null ? null : promaUserTexts(renderLog));
   return {

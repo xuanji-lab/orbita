@@ -27,7 +27,7 @@ function item(overrides: Partial<ImportPlanItem>): ImportPlanItem {
   return {
     sourceId: `s-${seq}`,
     source: "proma",
-    promaRoots: ["/home/.proma-dev"],
+    dataRoots: ["/home/.proma-dev"],
     sourceKind: "pi",
     change: "new",
     newMessages: 0,
@@ -118,12 +118,12 @@ describe("groupSessions", () => {
     const DEV = "/home/.proma-dev";
     const FORK = "/home/.proma-dev-fork";
     const OLD = "/home/.proma";
-    const devOnly = item({ folder: "/repo/a", promaRoots: [DEV], sourceFile: "/src/dev.jsonl" });
-    const forkOnly = item({ folder: "/repo/a", promaRoots: [FORK], sourceFile: "/src/fork.jsonl" });
-    const forkKid = item({ folder: "/repo/a", promaRoots: [FORK], parentId: forkOnly.sessionId });
+    const devOnly = item({ folder: "/repo/a", dataRoots: [DEV], sourceFile: "/src/dev.jsonl" });
+    const forkOnly = item({ folder: "/repo/a", dataRoots: [FORK], sourceFile: "/src/fork.jsonl" });
+    const forkKid = item({ folder: "/repo/a", dataRoots: [FORK], parentId: forkOnly.sessionId });
     // 字节相同的重复留了 .proma 那份：取消 .proma 不该藏掉它
-    const shared = item({ folder: "/repo/a", promaRoots: [OLD, DEV], sourceFile: "/src/shared.jsonl" });
-    const claude = item({ folder: "/repo/a", source: "claude-code", promaRoots: [], sourceFile: "/src/cc.jsonl" });
+    const shared = item({ folder: "/repo/a", dataRoots: [OLD, DEV], sourceFile: "/src/shared.jsonl" });
+    const claude = item({ folder: "/repo/a", source: "claude-code", dataRoots: [], sourceFile: "/src/cc.jsonl" });
     const r = report([forkOnly, forkKid, devOnly, shared, claude]);
     // 数的是只在这个根里的（取消它会少导的）；跟着母会话走的子会话不单算
     assert.deepEqual(promaRootCounts(r), [
