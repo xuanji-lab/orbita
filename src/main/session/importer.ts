@@ -155,10 +155,28 @@ export interface OpencodePaths {
 
 /** Reasonix 桌面版来源要读的位置。全部**只读**。 */
 export interface ReasonixPaths {
-  /** 会话根（Windows %APPDATA%/reasonix/projects）：每个项目一个子目录，sessions/ 下是 <id>.jsonl */
+  /** 会话根（<Reasonix 数据根>/projects，数据根按平台见 reasonixDataRoot）：每个项目一个子目录，sessions/ 下是 <id>.jsonl */
   projectsRoot: string;
   /** 家目录：在家目录里开的会话不算有文件夹 */
   home: string;
+}
+
+/**
+ * Reasonix 桌面版的数据根：它是 Electron 应用，userData 走 appData/<应用名> 惯例，
+ * 应用名三平台同名（Windows 实测就是小写 reasonix）。appData 各平台各归各位：
+ * win32 认 %APPDATA%，darwin 固定 ~/Library/Application Support，其余认 $XDG_CONFIG_HOME。
+ * Windows 实测过；mac / Linux 是按惯例推导——mac 文件系统大小写不敏感兜得住大小写差，
+ * 推错了探测 stat 不到就不可勾，无害。meta 里的 workspace_root 是会话当年所在机器上的
+ * 路径，别的形（跨机迁移）由 sessionFolder 的 stat 兜底退 defaultCwd。
+ */
+export function reasonixDataRoot(
+  platform: NodeJS.Platform,
+  home: string,
+  env: { APPDATA?: string; XDG_CONFIG_HOME?: string },
+): string {
+  if (platform === "win32") return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "reasonix");
+  if (platform === "darwin") return join(home, "Library", "Application Support", "reasonix");
+  return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "reasonix");
 }
 
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
