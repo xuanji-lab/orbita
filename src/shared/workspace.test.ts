@@ -25,6 +25,14 @@ describe("deriveWorkspaceName", () => {
     strictEqual(deriveWorkspaceName("C:\\Users\\dama\\Desktop\\p1\\paper3"), "paper3");
   });
 
+  it("UNC 路径取最后一段", () => {
+    strictEqual(deriveWorkspaceName("\\\\server\\share\\proj"), "proj");
+  });
+
+  it("POSIX 路径里 \\ 是文件夹名的合法字符，不当分隔符切", () => {
+    strictEqual(deriveWorkspaceName("/Users/x/my\\folder"), "my\\folder");
+  });
+
   it("结尾的斜杠不影响", () => {
     strictEqual(deriveWorkspaceName("/Users/wafo/repo/orbita-lab/"), "orbita-lab");
   });
@@ -81,9 +89,11 @@ describe("parseWorkspace", () => {
 
   // 早期只切 `/` 的派生在 Windows 落库的整条路径：读时截回尾段（磁盘不动，写回自然落净）。
   // 不治的话，超长老路径名会在改名回车时被 40 上限切成分尸名落库。
-  it("名字带分隔符读时治病——截回尾段", () => {
+  it("名字仍是路径形读时治病——截回尾段；Mac 的 a\\b 合法名字原样保留", () => {
     strictEqual(parseWorkspace({ ...valid, name: "C:\\Users\\dama\\Desktop\\p1\\paper3" })?.name, "paper3");
     strictEqual(parseWorkspace({ ...valid, name: "a/b" })?.name, "b");
+    strictEqual(parseWorkspace({ ...valid, name: "/Users/wafo/repo/orbita-lab" })?.name, "orbita-lab");
+    strictEqual(parseWorkspace({ ...valid, name: "a\\b" })?.name, "a\\b");
   });
 
   it("缺 createdAt 给 0，不因为一个时间戳丢掉整条工作区", () => {

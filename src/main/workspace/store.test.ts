@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, realpath, rm, stat, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WorkspaceStore } from "./store.ts";
+import { WorkspaceStore, assertLegalName } from "./store.ts";
 
 let dir = "";
 let store: WorkspaceStore;
@@ -195,19 +195,27 @@ describe("WorkspaceStore", () => {
     assert.equal(added.path, join(root, "已有文件夹"));
   });
 
-  test("非法名字抛错：空、纯空白、. 、.. 、含 / 或 \\ 或空字节，且不上磁盘", async () => {
+  test("非法名字抛错：空、纯空白、. 、.. 、像路径（含 / 或盘符起头）或空字节，且不上磁盘", async () => {
     const s = new WorkspaceStore(dir, join(dir, "Orbita"));
-    for (const bad of ["", "   ", ".", "..", "a/b", "a\\b", "a\0b"]) {
+    for (const bad of ["", "   ", ".", "..", "a/b", "C:\\x\\y", "a\0b"]) {
       await assert.rejects(() => s.create(bad), Error);
     }
     assert.deepEqual(await s.list(), []);
   });
 
-  test("改成带分隔符的名字抛错——显示层会把 a\\b 截成 b，落库的就不再是真名", async () => {
+  test("改成路径形的名字抛错——落库的名字不能再解析成路径", async () => {
     const added = await store.add("/repo/x");
-    await assert.rejects(() => store.rename(added.id, "a\\b"), Error);
     await assert.rejects(() => store.rename(added.id, "a/b"), Error);
+    await assert.rejects(() => store.rename(added.id, "C:\\x\\y"), Error);
     assert.equal((await store.list())[0]?.name, "x");
+  });
+
+  test("assertLegalName 平台矩阵：\\ 只在 Windows 拒——POSIX 里它是文件名的合法字符", () => {
+    assert.throws(() => assertLegalName("a\\b", "win32"), Error);
+    assertLegalName("a\\b", "darwin"); // Mac 上 a\b 是正常名字，不抛
+    assert.throws(() => assertLegalName("a/b", "darwin"), Error);
+    assert.throws(() => assertLegalName("C:\\x", "darwin"), Error); // 盘符形在哪个 OS 都像路径
+    assert.throws(() => assertLegalName("..", "darwin"), Error);
   });
 
   test("超长名字截到 WORKSPACE_NAME_MAX，目录名跟着截后的走", async () => {

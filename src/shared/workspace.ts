@@ -19,9 +19,10 @@ export interface Workspace {
   /**
    * 用户起的名字。没起过就是路径的最后一段。
    *
-   * **不变量：名字不含路径分隔符（`/` 与 `\`）。**写入两端守着（store 的 create /
-   * rename 拒收），读取端治病（parseWorkspace 把带分隔符的老名截回尾段）——带分隔符的
-   * 名字会在显示层被截成另一个词（显示撒谎），create 还会拿它当目录名建出嵌套目录。
+   * **不变量：名字不再解析成路径**（不含 `/`，也不是盘符 / UNC 起头的 Windows 形）。
+   * 写入两端守着（store 的 create / rename 拒收），读取端治病（parseWorkspace 把仍是
+   * 路径形的老名截回尾段）。注意 POSIX 里 `\` 是文件名的合法字符——Mac 上 `a\b` 是
+   * 正常名字，不在不变量的禁区内（Windows 上仍拒：create 拿名字当目录名会建出嵌套目录）。
    */
   name: string;
   path: string;
@@ -43,13 +44,25 @@ export interface Workspace {
 }
 
 /**
+ * 盘符（`C:\` / `C:/`）或 UNC（`\\server\…`）起头：Windows 形路径。
+ * 分隔符按**路径自己的形**认，不按宿主 OS——POSIX 路径里 `\` 是文件夹名里的合法
+ * 字符（Mac 的 `/Users/x/my\folder` 尾段就是 `my\folder`），只有 Windows 形才把
+ * `\` 当分隔符。按形不按 OS 的另一个好处：从 Windows 机器导入 / 迁移来的路径，
+ * 在 Mac 上也取对尾段。
+ */
+export function looksLikeWindowsPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
+}
+
+/**
  * 没起名字时的默认名：路径的最后一段。**也是显示层截尾的规则**——所有显示工作区名
  * 的地方（scope 芯片与菜单、左栏行、技能面板）都过这同一个函数：老工作区落库的名字
  * 可能是完整路径（早期创建没截尾），且菜单 label 与落库名不能算出不同的尾巴。
  */
 export function deriveWorkspaceName(path: string): string {
-  // `/` 与 `\` 都认：Windows 的工作区路径是反斜杠，只切 `/` 会把整条 `C:\…` 当成名字
-  const parts = path.split(/[\\/]/).filter((part) => part !== "");
+  const parts = (looksLikeWindowsPath(path) ? path.split(/[\\/]/) : path.split("/")).filter(
+    (part) => part !== "",
+  );
   return parts[parts.length - 1] ?? path;
 }
 
@@ -74,13 +87,11 @@ export function parseWorkspace(raw: unknown): Workspace | null {
   const rawName = typeof value["name"] === "string" ? value["name"] : "";
   return {
     id,
-    // 读时治病：名字带分隔符 = 早期只切 `/` 的派生在 Windows 落库的整条路径。
-    // 截回尾段——**磁盘不动**，下一次任何整份写回自然落净；40 上限与空回退照走 normalize。
-    // 不治病的话，超长的老路径名会在改名回车时被 40 上限切成分尸名落库。
-    name: normalizeWorkspaceName(
-      rawName.includes("/") || rawName.includes("\\") ? deriveWorkspaceName(rawName) : rawName,
-      path,
-    ),
+    // 读时治病：名字统一过一遍 derive——仍是路径形的（早期只切 `/` 的派生在 Windows
+    // 落库的整条路径）截回尾段；非路径形的名字 derive 幂等原样返回（Mac 的 `a\b` 这种
+    // 合法名字不受影响）。**磁盘不动**，下一次任何整份写回自然落净；40 上限与空回退
+    // 照走 normalize。不治病的话，超长的老路径名会在改名回车时被 40 上限切成分尸名落库。
+    name: normalizeWorkspaceName(deriveWorkspaceName(rawName), path),
     path,
     createdAt: typeof value["createdAt"] === "number" ? value["createdAt"] : 0,
     attachedDirs: parseAttachedDirs(value["attachedDirs"]),

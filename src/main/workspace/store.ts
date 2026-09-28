@@ -15,6 +15,7 @@ import { writeJsonAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
 import {
   deriveWorkspaceName,
+  looksLikeWindowsPath,
   normalizeWorkspaceName,
   parseWorkspace,
   type Workspace,
@@ -116,8 +117,9 @@ export class WorkspaceStore {
    * 命名新建（2026-09-22 裁决：一个工作区就是一个用户能在 Finder 里打开的文件夹）：
    * 在 ~/Orbita/<name>/ 建文件夹并加为工作区。名字先过 normalize（与 rename 同一套
    * 规则：trim + 40 上限）——目录名就是工作区名，**一辈子不动**；之后改名只改列表里
-   * 的显示名，不动文件夹。非法名（空、. / ..、含分隔符或空字节）当场抛错，不上磁盘。
-   * 同名文件夹已存在就直接加它：mkdir recursive 不炸、add 同路径幂等——不覆盖、不报错。
+   * 的显示名，不动文件夹。非法名（空、. / ..、像路径或空字节；Windows 上还含 `\`）
+   * 当场抛错，不上磁盘。同名文件夹已存在就直接加它：mkdir recursive 不炸、add 同路径
+   * 幂等——不覆盖、不报错。
    */
   async create(name: string): Promise<Workspace> {
     const trimmed = name.trim();
@@ -221,9 +223,9 @@ export class WorkspaceStore {
   }
 
   /**
-   * 改显示名（不动磁盘上的文件夹）。与 create 同一套非法名守卫——名字带上分隔符的
-   * 话，显示层会把 `a\b` 截成 `b`，侧栏显示的就不再是落库的真名。空白名不在守卫里：
-   * 退回路径末段是既有裁决。不存在的 id 静默无操作（既有语义）。
+   * 改显示名（不动磁盘上的文件夹）。与 create 同一套非法名守卫——落库的名字不能
+   * 再解析成路径（`a/b`、`C:\x` 都拒；`\` 只在 Windows 拒，Mac 上它是名字的合法
+   * 字符）。空白名不在守卫里：退回路径末段是既有裁决。不存在的 id 静默无操作（既有语义）。
    */
   async rename(id: string, name: string): Promise<void> {
     const workspaces = await this.list();
@@ -329,20 +331,24 @@ export class WorkspaceStore {
 
 /**
  * 工作区名字的非法内容守卫，create 与 rename 同一套（`Workspace.name` 的不变量：
- * 不含路径分隔符）。`/` 与 `\` 都拒——Windows 上 `\` 同样是分隔符：create 拿它当
- * 目录名会静默建出嵌套目录、落库的带分隔符名字会在显示层被截成另一个词。
- * 空名不在内：create 另行拒绝，rename 的空白退回路径末段是既有裁决。
+ * 不再解析成路径）。`/`、`.` / `..`、空字节、盘符 / UNC 起头在任何 OS 都拒；
+ * `\` **只在 Windows 拒**——POSIX 里它是文件名的合法字符（Mac 上 `a\b` 是正常名字），
+ * Windows 上 create 拿名字当目录名会静默建出嵌套目录。空名不在内：create 另行拒绝，
+ * rename 的空白退回路径末段是既有裁决。platform 可注入是为了测试能两个 OS 都验。
  */
-function assertLegalName(name: string): void {
+export function assertLegalName(name: string, platform: NodeJS.Platform = process.platform): void {
   if (
     name === "." ||
     name === ".." ||
     name.includes("/") ||
-    name.includes("\\") ||
-    name.includes("\0")
+    name.includes("\0") ||
+    looksLikeWindowsPath(name) ||
+    (platform === "win32" && name.includes("\\"))
   ) {
     throw new Error(
-      `「${name}」不能用作工作区名字：不能是 . 或 ..，也不能含路径分隔符（/ 或 \\）或空字节`,
+      platform === "win32"
+        ? `「${name}」不能用作工作区名字：不能是 . 或 ..，不能像路径（含 / 或盘符起头），Windows 上还不能含 \\`
+        : `「${name}」不能用作工作区名字：不能是 . 或 ..，也不能像路径（含 / 或盘符起头）`,
     );
   }
 }
