@@ -1,3 +1,6 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-e253dc2b34768df6 b/.bun-tag-e253dc2b34768df6
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
 index f4fd9f37d9826a3e791f25c9ec748645a33d5616..2dac44fc00c4db60f9063a8acc0b1f3ee2ae2899 100644
 --- a/dist/core/agent-session.js	
@@ -12,10 +15,10 @@ index f4fd9f37d9826a3e791f25c9ec748645a33d5616..2dac44fc00c4db60f9063a8acc0b1f3e
              type: "auto_retry_start",
              attempt: this._retryAttempt,
 diff --git a/dist/core/tools/read.js b/dist/core/tools/read.js
-index 3e145b0e23bc3f25640907aeb9ff25f71eb328aa..c6649a75519d3fb84fd8164dd46a352b431e053f 100644
+index 3e145b0e23bc3f25640907aeb9ff25f71eb328aa..83b05a1b75448e92c8b38c407735744b28d01e92 100644
 --- a/dist/core/tools/read.js	
 +++ b/dist/core/tools/read.js
-@@ -193,6 +193,11 @@ export function createReadToolDefinition(cwd, options) {
+@@ -193,6 +193,20 @@ export function createReadToolDefinition(cwd, options) {
                          else {
                              // Read text content.
                              const buffer = await ops.readFile(absolutePath);
@@ -23,11 +26,20 @@ index 3e145b0e23bc3f25640907aeb9ff25f71eb328aa..c6649a75519d3fb84fd8164dd46a352b
 +                                // PDF 的压缩流按 UTF-8 读出来是乱码——指路给 orbita 的 read_pdf 工具提取文本层
 +                                content = [{ type: "text", text: "[This is a PDF document. Its binary content cannot be shown as text. Use the read_pdf tool to extract its text layer.]" }];
 +                            }
++                            else if (/\.docx$/i.test(absolutePath)) {
++                                // docx 是 zip 容器，按 UTF-8 读出来是乱码——指路给 orbita 的 read_docx 工具做结构化提取。
++                                // 按扩展名不按 zip 魔数：PK 是通用 zip 魔数，会误指路 xlsx 等其它 office 包
++                                content = [{ type: "text", text: "[This is a Word document (.docx). Its binary content cannot be shown as text. Use the read_docx tool to read it as structured markdown.]" }];
++                            }
++                            else if (/\.doc$/i.test(absolutePath)) {
++                                // 旧版 OLE2 二进制格式，read_docx 也读不了——指路转存
++                                content = [{ type: "text", text: "[This is a legacy Word document (.doc). It is not supported directly — save it as .docx first, then use the read_docx tool.]" }];
++                            }
 +                            else {
                              const textContent = buffer.toString("utf-8");
                              const allLines = textContent.split("\n");
                              const totalFileLines = allLines.length;
-@@ -247,6 +252,7 @@ export function createReadToolDefinition(cwd, options) {
+@@ -247,6 +261,7 @@ export function createReadToolDefinition(cwd, options) {
                                  outputText = truncation.content;
                              }
                              content = [{ type: "text", text: outputText }];

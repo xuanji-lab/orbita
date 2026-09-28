@@ -24,6 +24,7 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
  * 读的敞开不影响那道锁。见 PR #31/#32（立）与本文件的现状（撤）。
  *
  * read_pdf 同口径：提取 PDF 文本层而已（./pdf-tools.ts），与 read 同一待遇。
+ * read_docx 同理（./docx-tools.ts）：word 文档的结构化提取，同样零副作用。
  * show_image 同理：读盘展示、零副作用（./image-tools.ts）。
  */
 export const READ_ONLY_TOOLS = [
@@ -34,6 +35,7 @@ export const READ_ONLY_TOOLS = [
   "find",
   "read_task",
   "read_pdf",
+  "read_docx",
   "show_image",
 ] as const;
 

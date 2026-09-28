@@ -688,7 +688,11 @@ export function describeDownload(
   done: { state: "completed" | "cancelled" | "interrupted"; bytes: number },
 ): string {
   if (done.state === "completed") {
-    const hint = /\.pdf$/i.test(record.path) ? " Read it with read_pdf." : "";
+    const hint = /\.pdf$/i.test(record.path)
+      ? " Read it with read_pdf."
+      : /\.docx$/i.test(record.path)
+        ? " Read it with read_docx."
+        : "";
     return `Downloaded ${record.url} → ${record.path} (${formatBytes(done.bytes)}).${hint}`;
   }
   return `Download ${done.state}: ${record.url}`;

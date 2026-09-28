@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import JSZip from "jszip";
 import * as ncanvas from "@napi-rs/canvas";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createDocxTools } from "./docx-tools.ts";
 
 /**
@@ -441,5 +441,22 @@ describe("read_docx", () => {
     const blocks = await runFull("bmp.docx", { images: true }, VISION_CTX);
     assert.equal(blocks.filter((b) => b.type === "image").length, 0);
     assert.ok(blocks[0]!.text!.includes("image 1 skipped: not an inlinable format"));
+  });
+
+  // ─── pi read 的指路（patch 守护） ─────────────────────────────────────────
+
+  test("pi 的 read 对 .docx 返回指路文案而非乱码（patch 守护）", async () => {
+    const readTool = createReadToolDefinition(dir);
+    const result = await readTool.execute("call-2", { path: join(dir, "full.docx") }, undefined, undefined, undefined as never);
+    const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
+    assert.ok(text.includes("read_docx"), text.slice(0, 120));
+    assert.ok(!text.includes("[Content_Types]"), text.slice(0, 120));
+  });
+
+  test("pi 的 read 对 .doc 返回转存提示（patch 守护）", async () => {
+    const readTool = createReadToolDefinition(dir);
+    const result = await readTool.execute("call-3", { path: join(dir, "legacy.doc") }, undefined, undefined, undefined as never);
+    const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
+    assert.ok(text.includes("save it as .docx"), text.slice(0, 140));
   });
 });
