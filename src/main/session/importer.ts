@@ -2016,8 +2016,8 @@ function opencodeSourceKey(dbFile: string, sessionId: string): string {
 
 /**
  * 扫 ZCode 的库：根会话一条一条（parent_id 非空的是 side chat / task 子 agent，不列）。
- * rewind 在取数层按 keptMessageIDs 白名单过滤（zcode.ts），喂给 opencodeToMessages 时
- * revert 传 null。执行同一条转换判断能不能导。
+ * rewind 在取数层按 ZCode 自己的可见规则取分支（zcode.ts 的 zcodeActiveBranch），喂给
+ * opencodeToMessages 时 revert 传 null。执行同一条转换判断能不能导。
  *
  * 标题：ZCode 的标题全是真实标题（first_input / generated），缺了退第一句用户写的话 >
  * 「ZCode session」。文件夹：会话的 directory。库打不开（格式不认识、被锁）整次扫描
@@ -2959,9 +2959,12 @@ async function runZcodeImport(item: ImportPlanItem, deps: RunImporterDeps): Prom
   if (cut === -1) throw new Error(`not a zcode session key: ${item.sourceFile}`);
   const dbFile = item.sourceFile.slice(0, cut);
   const sessionId = item.sourceFile.slice(cut + 1);
-  // rewind 白名单在取数层（readZcodeMessages）过滤，这里 revert 传 null；会话被删了
-  // 转不出 assistant 消息，persistConverted 会拦
-  const parsed = withOpencodeDb(dbFile, (db) => opencodeToMessages(readZcodeMessages(db, sessionId), item.providerId, null));
+  // rewind 在取数层（readZcodeMessages）按 ZCode 的可见规则取分支，这里 revert 传 null；会话被删了
+  // 转不出 assistant 消息，persistConverted 会拦。导入与模型解耦（#112）：provider 落占位，
+  // 与其它转换类来源一致（#109 写的是 item.providerId，#112 已删掉这个字段）
+  const parsed = withOpencodeDb(dbFile, (db) =>
+    opencodeToMessages(readZcodeMessages(db, sessionId), UNASSIGNED_PROVIDER_ID, null),
+  );
   return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
 }
 

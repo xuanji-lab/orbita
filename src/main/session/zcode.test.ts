@@ -14,8 +14,8 @@ function makeDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec(`
     create table session (id text primary key, parent_id text, directory text, title text, revert text, time_created integer, time_updated integer);
-    create table message (id text primary key, session_id text, data text, sequence integer);
-    create table part (id text primary key, message_id text, session_id text, data text, sequence integer);
+    create table message (id text primary key, session_id text, time_created integer, data text, sequence integer);
+    create table part (id text primary key, message_id text, session_id text, time_created integer, data text, sequence integer);
   `);
   return db;
 }
@@ -37,9 +37,22 @@ function writeSession(
 /** 一条消息：data 原文 + parts（按给定的 sequence 顺序写入库，读出来必须仍按 sequence 排）。 */
 function writeMessage(db: DatabaseSync, sessionId: string, seq: number, data: Record<string, unknown>, parts: Record<string, unknown>[] = []): string {
   const id = `${sessionId}_${data["role"] === "user" ? "mu" : "ma"}_${seq}`;
-  db.prepare("insert into message values (?, ?, ?, ?)").run(id, sessionId, JSON.stringify(data), seq);
+  db.prepare("insert into message (id, session_id, time_created, data, sequence) values (?, ?, ?, ?, ?)").run(
+    id,
+    sessionId,
+    seq,
+    JSON.stringify(data),
+    seq,
+  );
   parts.forEach((part, index) => {
-    db.prepare("insert into part values (?, ?, ?, ?, ?)").run(`p_${seq}_${index}`, id, sessionId, JSON.stringify(part), seq * 100 + index);
+    db.prepare("insert into part (id, message_id, session_id, time_created, data, sequence) values (?, ?, ?, ?, ?, ?)").run(
+      `p_${seq}_${index}`,
+      id,
+      sessionId,
+      seq,
+      JSON.stringify(part),
+      seq * 100 + index,
+    );
   });
   return id;
 }
@@ -86,29 +99,100 @@ describe("readZcodeMessages", () => {
     }
   });
 
-  test("rewind 白名单：keptMessageIDs 之外的消息不复活", () => {
+  /** 真实 revert 的形状（本机三条都是这样）：conversation_rewind，带 target / kept / cut 游标 */
+  const revertOf = (fields: Record<string, unknown>): string =>
+    JSON.stringify({ kind: "conversation_rewind", scope: "conversation", ...fields });
+
+  /** 1 问 2 答 3 问 4 答 → 回退到 3（kept = 1、2）→ 回退之后接着聊 5 问 6 答 7 问 8 答 */
+  function rewoundSession(db: DatabaseSync, revert: Record<string, unknown>): void {
+    writeSession(db, "s1", { revert: revertOf(revert) });
+    for (let seq = 1; seq <= 8; seq += 1) {
+      writeMessage(db, "s1", seq, { role: seq % 2 === 1 ? "user" : "assistant", time: { created: USER_AT + seq } });
+    }
+  }
+  const ids = (db: DatabaseSync): string[] => readZcodeMessages(db, "s1").map((row) => row.id);
+
+  test("回退之后接着聊的两轮照样导入：保留名单 + cut 游标之后的全部（本机真实形状）", () => {
     const db = makeDb();
     try {
-      writeSession(db, "s1", { revert: JSON.stringify({ keptMessageIDs: ["s1_mu_1", "s1_ma_2"], kind: "conversation_rewind" }) });
-      writeMessage(db, "s1", 1, { role: "user", time: { created: USER_AT } });
-      writeMessage(db, "s1", 2, { role: "assistant", time: { created: 3000 } });
-      writeMessage(db, "s1", 3, { role: "user", time: { created: 4000 } }); // 回退掉的
-      const rows = readZcodeMessages(db, "s1");
-      assert.deepEqual(rows.map((row) => row.id), ["s1_mu_1", "s1_ma_2"]);
+      rewoundSession(db, {
+        targetMessageID: "s1_mu_3",
+        keptMessageIDs: ["s1_mu_1", "s1_ma_2"],
+        branchCutAfterMessageID: "s1_ma_4",
+        branchGeneration: 1,
+      });
+      // 3、4 是回退掉的旧枝；5–8 不在保留名单里，但在 cut 游标之后，是 ZCode 里看得见的新枝
+      assert.deepEqual(ids(db), ["s1_mu_1", "s1_ma_2", "s1_mu_5", "s1_ma_6", "s1_mu_7", "s1_ma_8"]);
     } finally {
       db.close();
     }
   });
 
-  test("坏 revert / 不是数组 → 不动（坏记录不清空历史）", () => {
+  test("旧数据没有 cut 游标：保留名单 + createdMessageID 起的全部；连 created 都没有就只有名单", () => {
     const db = makeDb();
     try {
-      writeSession(db, "s1", { revert: "{不是json" });
-      writeMessage(db, "s1", 1, { role: "user", time: { created: USER_AT } });
-      writeSession(db, "s2", { revert: JSON.stringify({ other: true }) });
-      writeMessage(db, "s2", 1, { role: "user", time: { created: USER_AT } });
-      assert.equal(readZcodeMessages(db, "s1").length, 1);
-      assert.equal(readZcodeMessages(db, "s2").length, 1);
+      rewoundSession(db, { targetMessageID: "s1_mu_3", keptMessageIDs: ["s1_mu_1", "s1_ma_2"], createdMessageID: "s1_mu_5" });
+      assert.deepEqual(ids(db), ["s1_mu_1", "s1_ma_2", "s1_mu_5", "s1_ma_6", "s1_mu_7", "s1_ma_8"]);
+    } finally {
+      db.close();
+    }
+    const bare = makeDb();
+    try {
+      rewoundSession(bare, { targetMessageID: "s1_mu_3", keptMessageIDs: ["s1_mu_1", "s1_ma_2"] });
+      assert.deepEqual(ids(bare), ["s1_mu_1", "s1_ma_2"]);
+    } finally {
+      bare.close();
+    }
+  });
+
+  test("最老的数据没有保留名单：targetMessageID 之前的，加 createdMessageID 起的", () => {
+    const db = makeDb();
+    try {
+      rewoundSession(db, { targetMessageID: "s1_mu_3", createdMessageID: "s1_mu_7" });
+      assert.deepEqual(ids(db), ["s1_mu_1", "s1_ma_2", "s1_mu_7", "s1_ma_8"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("没有 targetMessageID = 没有回退，全部可见（名单也不看——与 ZCode 一致）；坏 revert 同样全部可见", () => {
+    const db = makeDb();
+    try {
+      rewoundSession(db, { keptMessageIDs: ["s1_mu_1"] });
+      assert.equal(ids(db).length, 8);
+    } finally {
+      db.close();
+    }
+    const broken = makeDb();
+    try {
+      writeSession(broken, "s1", { revert: "{不是json" });
+      writeMessage(broken, "s1", 1, { role: "user", time: { created: USER_AT } });
+      assert.equal(readZcodeMessages(broken, "s1").length, 1);
+    } finally {
+      broken.close();
+    }
+  });
+
+  test("cut 游标或 created 指向库里没有的消息：退回只要名单（ZCode 同一条分支）", () => {
+    const db = makeDb();
+    try {
+      rewoundSession(db, { targetMessageID: "s1_mu_3", keptMessageIDs: ["s1_mu_1", "s1_ma_2"], branchCutAfterMessageID: "gone" });
+      assert.deepEqual(ids(db), ["s1_mu_1", "s1_ma_2"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("顺序照 ZCode 的读法：sequence 为空的排最后，同 sequence 按 time_created", () => {
+    const db = makeDb();
+    try {
+      writeSession(db, "s1");
+      const insert = db.prepare("insert into message (id, session_id, time_created, data, sequence) values (?, 's1', ?, '{}', ?)");
+      insert.run("m_null", 1, null);
+      insert.run("m_late", 9, 5);
+      insert.run("m_early", 2, 5);
+      insert.run("m_first", 7, 1);
+      assert.deepEqual(ids(db), ["m_first", "m_early", "m_late", "m_null"]);
     } finally {
       db.close();
     }

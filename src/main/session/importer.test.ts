@@ -2275,8 +2275,8 @@ describe("zcode 来源", () => {
     const db = new DatabaseSync(dbFile);
     db.exec(`
       create table session (id text primary key, parent_id text, directory text, title text, revert text, time_created integer, time_updated integer);
-      create table message (id text primary key, session_id text, data text, sequence integer);
-      create table part (id text primary key, message_id text, session_id text, data text, sequence integer);
+      create table message (id text primary key, session_id text, time_created integer, data text, sequence integer);
+      create table part (id text primary key, message_id text, session_id text, time_created integer, data text, sequence integer);
     `);
     db.close();
   });
@@ -2293,9 +2293,13 @@ describe("zcode 来源", () => {
       );
       for (const row of session.rows) {
         const id = `${session.id}_m${row.seq}`;
-        db.prepare("insert into message values (?, ?, ?, ?)").run(id, session.id, JSON.stringify(row.data), row.seq);
+        db.prepare("insert into message (id, session_id, time_created, data, sequence) values (?, ?, ?, ?, ?)").run(
+          id, session.id, row.seq, JSON.stringify(row.data), row.seq,
+        );
         (row.parts ?? []).forEach((part, index) => {
-          db.prepare("insert into part values (?, ?, ?, ?, ?)").run(`${id}_p${index}`, id, session.id, JSON.stringify(part), row.seq * 10 + index);
+          db.prepare("insert into part (id, message_id, session_id, time_created, data, sequence) values (?, ?, ?, ?, ?, ?)").run(
+            `${id}_p${index}`, id, session.id, row.seq, JSON.stringify(part), row.seq * 10 + index,
+          );
         });
       }
     }
@@ -2311,7 +2315,7 @@ describe("zcode 来源", () => {
     },
   ];
 
-  test("扫描与执行：子会话不列、rewind 只留白名单、transcript 只有用户写的话、重扫即已导入", async () => {
+  test("扫描与执行：子会话不列、rewind 只留可见分支、transcript 只有用户写的话、重扫即已导入", async () => {
     const repo = join(root, "repo");
     await mkdir(repo, { recursive: true });
     await writeDb([
@@ -2322,7 +2326,13 @@ describe("zcode 来源", () => {
         id: "ses_rw",
         directory: repo,
         title: "回退过的",
-        revert: JSON.stringify({ keptMessageIDs: ["ses_rw_m1", "ses_rw_m2"], kind: "conversation_rewind" }),
+        // 真实形状：回退到 m3（它被回退掉），保留 m1、m2；没有接着聊（cut 游标就是 m3）
+        revert: JSON.stringify({
+          kind: "conversation_rewind",
+          targetMessageID: "ses_rw_m3",
+          keptMessageIDs: ["ses_rw_m1", "ses_rw_m2"],
+          branchCutAfterMessageID: "ses_rw_m3",
+        }),
         rows: [...turn("先问"), { seq: 3, data: { role: "user", time: { created: 20000 } }, parts: [{ type: "text", text: "回退掉的话" }] }],
       },
     ]);

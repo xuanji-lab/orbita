@@ -7,10 +7,13 @@
  *
  * - 库在 `~/.zcode/cli/db/db.sqlite`。session 表 parent_id 非空的是 ZCode 的 side chat /
  *   task 子 agent（本机 86/146），不列——母会话的工具结果已含它的产出（opencode 同款裁决）。
- * - message / part 都有显式 sequence 列，按它排序（opencode 是按 id）。
- * - **rewind 是白名单**：session.revert = `{keptMessageIDs: string[], …}`（ZCode 的
- *   conversation_rewind），不是 opencode 的截断点。取数时只留白名单里的消息——导用户在
- *   ZCode 里看到的历史，回退掉的不复活（本机 20/146 条带 revert）。
+ * - message / part 的顺序照 ZCode 自己的读法（adapters/.../repositories/messages.ts 的
+ *   messages()）：message `sequence is null, sequence, time_created, rowid`，part
+ *   `message_id, sequence is null, sequence, time_created, id`。可见分支按下标切，顺序错了切出来就错。
+ * - **rewind 照 ZCode 自己的可见规则取**（contracts/src/rewind 的 selectActiveConversationBranch，
+ *   界面读历史走 cold-event-merge，revert 四个字段原样喂进去）：保留名单 keptMessageIDs 只是
+ *   回退那一刻的快照，**回退之后接着聊的消息不在名单里**，靠 branchCutAfterMessageID 认。只按名单
+ *   过滤会把回退之后的整段对话丢掉（本机三条带 revert 的会话丢 13 / 31 / 246 条）。
  * - message.data 键名是小写 d 的 providerId / modelId（opencode 大写 D）——opencodeToMessages
  *   两个拼写都认，模型章与 anthropic 判定不受影响。finish 原因、step-finish.tokens 同形。
  * - part 多一个 `timeline` 类型（宿主的 UI 时间线，模型没见过）——opencode 转换器对不认识的
@@ -61,30 +64,74 @@ export function readZcodeSessions(db: DatabaseSync): ZcodeSessionRow[] {
   return rows;
 }
 
-/**
- * rewind 白名单：revert JSON 的 keptMessageIDs 是数组（哪怕空）就按它过滤；
- * 缺席 / 坏 JSON / 不是数组 → 不动（坏一条 rewind 记录不该清空整段历史）。
- */
-function keptMessageIds(revert: unknown): ReadonlySet<string> | null {
-  const point = typeof revert === "string" ? parseJson(revert) : isRecord(revert) ? revert : null;
-  const list = isRecord(point) && Array.isArray(point["keptMessageIDs"]) ? point["keptMessageIDs"] : null;
-  if (list === null) return null;
-  return new Set(list.filter((id): id is string => typeof id === "string"));
+/** session.revert 里可见分支要用的四个字段（SessionRevert 的子集）。 */
+interface ZcodeRevert {
+  targetMessageId: string | null;
+  keptMessageIds: readonly string[] | null;
+  branchCutAfterMessageId: string | null;
+  createdMessageId: string | null;
+}
+
+/** 解 session.revert。缺席 / 坏 JSON → null（当没有回退：ZCode 同样对全部消息可见）。 */
+function parseRevert(raw: unknown): ZcodeRevert | null {
+  const value = typeof raw === "string" ? parseJson(raw) : raw;
+  if (!isRecord(value)) return null;
+  const text = (key: string): string | null => {
+    const field = value[key];
+    return typeof field === "string" && field !== "" ? field : null;
+  };
+  const kept = value["keptMessageIDs"];
+  return {
+    targetMessageId: text("targetMessageID"),
+    keptMessageIds: Array.isArray(kept) ? kept.filter((id): id is string => typeof id === "string") : null,
+    branchCutAfterMessageId: text("branchCutAfterMessageID"),
+    createdMessageId: text("createdMessageID"),
+  };
 }
 
 /**
- * 一条会话的消息行（opencode 同形，喂 opencodeToMessages）。消息按 sequence 排序并过
- * rewind 白名单；part 按 sequence 排序后按 message_id 挂回。
+ * ZCode 的 selectActiveConversationBranch 逐分支照抄（只换成按 id 操作）。ZCode 的注释：
+ * active branch = keptMessageIDs + branchCutAfterMessageID 之后新追加的消息；旧数据没有
+ * cut 游标，用 createdMessageID 起算；连名单都没有的最老数据，取 targetMessageID 之前的。
+ * 没有 targetMessageID = 没有回退，全部可见。kept 的顺序是名单的顺序（不是库里的顺序）。
+ */
+export function zcodeActiveBranch(ids: readonly string[], revert: ZcodeRevert | null): string[] {
+  if (revert === null || revert.targetMessageId === null) return [...ids];
+  const known = new Set(ids);
+  const targetIndex = ids.indexOf(revert.targetMessageId);
+  const kept =
+    revert.keptMessageIds !== null
+      ? revert.keptMessageIds.filter((id) => known.has(id))
+      : targetIndex >= 0
+        ? ids.slice(0, targetIndex)
+        : [...ids];
+  if (revert.branchCutAfterMessageId !== null) {
+    const cutIndex = ids.indexOf(revert.branchCutAfterMessageId);
+    return cutIndex >= 0 ? [...kept, ...ids.slice(cutIndex + 1)] : kept;
+  }
+  if (revert.keptMessageIds !== null) {
+    if (revert.createdMessageId === null) return kept;
+    const createdIndex = ids.indexOf(revert.createdMessageId);
+    return createdIndex >= 0 ? [...kept, ...ids.slice(createdIndex)] : kept;
+  }
+  if (targetIndex < 0) return [...ids];
+  if (revert.createdMessageId === null) return kept;
+  const createdIndex = ids.indexOf(revert.createdMessageId);
+  return createdIndex >= 0 ? [...kept, ...ids.slice(createdIndex)] : kept;
+}
+
+/**
+ * 一条会话在 ZCode 里可见的消息行（opencode 同形，喂 opencodeToMessages）：按 ZCode 的顺序
+ * 读全部消息，再按它的可见规则取分支；part 按 ZCode 的顺序挂回各自的消息。
  */
 export function readZcodeMessages(db: DatabaseSync, sessionId: string): OpencodeMessageRow[] {
   const revertRow = db.prepare("select revert from session where id = ?").get(sessionId) as Record<string, unknown> | undefined;
-  const kept = keptMessageIds(revertRow?.["revert"]);
+  const revert = parseRevert(revertRow?.["revert"]);
   const partsByMessage = new Map<string, { id: string; data: string }[]>();
-  // part.sequence 是 per-message 从 0 重开的（本机实测跨 message 有撞值）——只按 sequence
-  // 排在撞值处没有行序契约（冒烟 0 孤儿是 SQLite 恰按扫描序返回的运气），带上 message_id
-  // 才把每条消息内部的 part 顺序钉死。message.sequence 则是会话内严格递增，单独够用。
   for (const part of db
-    .prepare("select message_id, id, data from part where session_id = ? order by message_id, sequence")
+    .prepare(
+      "select message_id, id, data from part where session_id = ? order by message_id, sequence is null, sequence, time_created, id",
+    )
     .iterate(sessionId)) {
     const messageId = part["message_id"];
     if (typeof messageId !== "string") continue;
@@ -93,14 +140,17 @@ export function readZcodeMessages(db: DatabaseSync, sessionId: string): Opencode
     if (list === undefined) partsByMessage.set(messageId, [entry]);
     else list.push(entry);
   }
-  const rows: OpencodeMessageRow[] = [];
-  for (const message of db.prepare("select id, data from message where session_id = ? order by sequence").iterate(sessionId)) {
+  const byId = new Map<string, string>();
+  const order: string[] = [];
+  for (const message of db
+    .prepare("select id, data from message where session_id = ? order by sequence is null, sequence, time_created, rowid")
+    .iterate(sessionId)) {
     const id = message["id"];
     if (typeof id !== "string") continue;
-    if (kept !== null && !kept.has(id)) continue;
-    rows.push({ id, data: String(message["data"] ?? ""), parts: partsByMessage.get(id) ?? [] });
+    byId.set(id, String(message["data"] ?? ""));
+    order.push(id);
   }
-  return rows;
+  return zcodeActiveBranch(order, revert).map((id) => ({ id, data: byId.get(id) ?? "", parts: partsByMessage.get(id) ?? [] }));
 }
 
 /** 会话在库里的体量（message + part 的 data 字节和），给计划条目估大小。 */
