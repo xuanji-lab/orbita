@@ -11,7 +11,7 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -23,8 +23,10 @@ import { SessionStore } from "./store.ts";
 import { SkillStore } from "../skill/store.ts";
 import {
   branchEntries,
+  compareSignatures,
   entriesToRecords,
   findPromaRoots,
+  messageSignature,
   probeClaudeCode,
   probeKimiCode,
   probeOpencode,
@@ -1675,7 +1677,7 @@ describe("Claude Code 来源", () => {
   });
 
   const ccDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps =>
-    deps({ claudeCode: { projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }, ...overrides });
+    deps({ claudeCode: [{ root: dirname(projectsDir), projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }], ...overrides });
 
   /** 一份 Claude Code 会话文件：rootUuid 决定分叉关系；prompts 是用户每轮说的话 */
   async function writeClaudeCodeSession(
@@ -1862,11 +1864,147 @@ describe("Claude Code 来源", () => {
   });
 
   test("探测：会话根目录在不在；paths 列出扫描会读的两处", async () => {
-    const found = await probeClaudeCode({ projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") });
+    const found = await probeClaudeCode([{ root: dirname(projectsDir), projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [projectsDir, desktopDir, join(root, "claude", "skills"), join(root, "claude.json")]);
-    const missing = await probeClaudeCode({ projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") });
+    const missing = await probeClaudeCode([{ root, projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }]);
     assert.equal(missing.found, false);
+  });
+
+  // —— 再次导入与多数据目录（转换类来源按内容指纹判，Claude Code 作代表） ——
+
+  /** 扫一遍再把计划里的全部导进来（只勾 Claude Code） */
+  async function importAllCc(overrides: Partial<RunImporterDeps> = {}) {
+    const report = await scanImport(ccDeps({ existingMetas: await store.list(), ...overrides }), [], ["claude-code"]);
+    const run = await runImport(ccDeps({ existingMetas: await store.list(), ...overrides }), {
+      sources: ["claude-code"],
+      sessions: new Set(report.plan.map((item) => item.sourceFile)),
+      destinations: [],
+    });
+    return { report, run };
+  }
+
+  async function userTexts(sessionId: string): Promise<string[]> {
+    const records = (await store.load(sessionId))?.transcript ?? [];
+    return records
+      .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
+      .map((record) => record.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
+  }
+
+  test("导过之后 Claude Code 里又聊了 → updated：追加进同一条会话，pi 副本的 header 不变；再扫即已导入", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    await importAllCc();
+    const [before] = await store.list();
+    assert.ok(before !== undefined && before.piSessionFile !== null);
+    const header = (await readFile(before.piSessionFile, "utf8")).split("\n")[0];
+
+    await writeClaudeCodeSession("s1", repo, ["第一问", "第二问", "第三问"]);
+    const { report, run } = await importAllCc();
+    assert.deepEqual(
+      report.plan.map((item) => [item.change, item.newMessages, item.sessionId]),
+      [["updated", 4, before.id]],
+    );
+    assert.deepEqual([run.imported, run.updated, run.failed.length], [0, 1, 0]);
+    const metas = await store.list();
+    assert.equal(metas.length, 1);
+    assert.deepEqual(await userTexts(before.id), ["第一问", "第二问", "第三问"]);
+    assert.equal((await readFile(before.piSessionFile, "utf8")).split("\n")[0], header, "会话在 orbita 里的身份不变");
+
+    const again = await scanImport(ccDeps({ existingMetas: await store.list() }), [], ["claude-code"]);
+    assert.equal(again.plan.length, 0);
+    assert.deepEqual(again.skipped.map((skip) => skip.reason), ["already-imported"]);
+  });
+
+  test("两边都接着聊了 → diverged：另导一份放在原会话旁边；只在 orbita 聊了 → 不列", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    await importAllCc();
+    const [original] = await store.list();
+    assert.ok(original !== undefined && original.piSessionFile !== null);
+    // 在 orbita 接着聊：副本末尾追加一条源里没有的用户消息
+    const lines = (await readFile(original.piSessionFile, "utf8")).trim().split("\n");
+    const lastId = (JSON.parse(lines[lines.length - 1] ?? "{}") as { id: string }).id;
+    const mine = { type: "message", id: "orbita-only", parentId: lastId, timestamp: "2026-09-21T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "在 orbita 问的" }], timestamp: 1790000000000 } };
+    await writeFile(original.piSessionFile, `${lines.join("\n")}\n${JSON.stringify(mine)}\n`);
+
+    const onlyHere = await scanImport(ccDeps({ existingMetas: await store.list() }), [], ["claude-code"]);
+    assert.equal(onlyHere.plan.length, 0, "源没有新消息：orbita 接着聊的不算要导的");
+
+    await writeClaudeCodeSession("s1", repo, ["第一问", "Claude Code 里的追问"]);
+    const { report, run } = await importAllCc();
+    const item = report.plan[0];
+    assert.deepEqual([report.plan.length, item?.change, item?.newMessages], [1, "diverged", 2]);
+    assert.deepEqual([item?.workspaceId, item?.cwd], [original.workspaceId, original.cwd]);
+    assert.notEqual(item?.sessionId, original.id);
+    assert.deepEqual([run.imported, run.updated], [1, 0]);
+    assert.equal((await store.list()).length, 2);
+  });
+
+  test("两个 Claude 数据目录里的同一条会话：内容相同只导一份，dataRoots 两个都记；一份是另一份的前缀留长的", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    const main = await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    const other = join(root, "claude-wt");
+    const copy = join(other, "projects", basename(dirname(main)), basename(main));
+    await mkdir(dirname(copy), { recursive: true });
+    await copyFile(main, copy);
+    const both = ccDeps();
+    const twoRoots = [...(both.claudeCode ?? []), { ...(both.claudeCode ?? [])[0]!, root: other, projectsDir: join(other, "projects") }];
+
+    const same = await scanImport(ccDeps({ claudeCode: twoRoots }), [], ["claude-code"]);
+    assert.deepEqual(same.plan.map((item) => [item.sourceFile, item.dataRoots]), [[main, [dirname(projectsDir), other]]]);
+    assert.deepEqual(same.skipped.map((skip) => [skip.reason, skip.detail]), [["duplicate", main]]);
+
+    // 另一个目录里那份接着聊了：它更长，留它
+    await writeClaudeCodeSession("s1", repo, ["第一问", "第二问"]);
+    await copyFile(main, copy);
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    const longer = await scanImport(ccDeps({ claudeCode: twoRoots }), [], ["claude-code"]);
+    assert.deepEqual(longer.plan.map((item) => [item.sourceFile, item.dataRoots]), [[copy, [other, dirname(projectsDir)]]]);
+  });
+
+  test("从一个数据目录导过，另一个目录里那份更长 → updated 进原会话，不另导一条", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    const main = await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    await importAllCc();
+    const [before] = await store.list();
+    assert.ok(before !== undefined);
+
+    const other = join(root, "claude-wt");
+    const copy = join(other, "projects", basename(dirname(main)), basename(main));
+    await mkdir(dirname(copy), { recursive: true });
+    await writeClaudeCodeSession("s1", repo, ["第一问", "第二问"]);
+    await copyFile(main, copy);
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    const base = ccDeps();
+    const twoRoots = [...(base.claudeCode ?? []), { ...(base.claudeCode ?? [])[0]!, root: other, projectsDir: join(other, "projects") }];
+
+    const { report, run } = await importAllCc({ claudeCode: twoRoots });
+    assert.deepEqual(report.plan.map((item) => [item.change, item.sourceFile, item.sessionId]), [["updated", copy, before.id]]);
+    assert.deepEqual([run.imported, run.updated], [0, 1]);
+    assert.equal((await store.list()).length, 1);
+  });
+
+  test("补记导入清单：Claude Code 导入的会话记成 claude-code（此前一律记成 proma）", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    // 清单出现之前的导入：写到别处
+    await importAllCc({ ledgerFile: join(root, "elsewhere.jsonl") });
+    await writeClaudeCodeSession("s2", repo, ["另一条"]);
+    await importAllCc();
+    const ledger = (await readFile(join(root, "imports.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { action: string; source: string });
+    assert.deepEqual(ledger.map((line) => [line.action, line.source]), [
+      ["backfill", "claude-code"],
+      ["import", "claude-code"],
+    ]);
   });
 });
 
@@ -1882,12 +2020,13 @@ describe("Kimi Code 来源", () => {
   });
 
   const kimiPaths = () => ({
+    root: kimiRoot,
     sessionsDir: join(kimiRoot, "sessions"),
     workspacesFile: join(kimiRoot, "workspaces.json"),
     mcpFile: join(kimiRoot, "mcp.json"),
     home,
   });
-  const kimiDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ kimiCode: kimiPaths(), ...overrides });
+  const kimiDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ kimiCode: [kimiPaths()], ...overrides });
 
   let clock = Date.UTC(2026, 8, 21, 2);
   const line = (record: Record<string, unknown>): Record<string, unknown> => ({ ...record, time: (clock += 1000) });
@@ -1974,7 +2113,7 @@ describe("Kimi Code 来源", () => {
         { type: "assistant", uuid: "a", parentUuid: "u", cwd: repo, timestamp: "2026-09-20T10:01:00.000Z", message: { id: "m", role: "assistant", model: "x", content: [{ type: "text", text: "yo" }], usage: {} } },
       ].map((item) => JSON.stringify(item)).join("\n") + "\n",
     );
-    const claudeCode = { projectsDir: join(root, "claude", "projects"), desktopSessionsDir: join(root, "none"), home, skillsDir: join(root, "none"), claudeJson: join(root, "none.json") };
+    const claudeCode = [{ root: join(root, "claude"), projectsDir: join(root, "claude", "projects"), desktopSessionsDir: join(root, "none"), home, skillsDir: join(root, "none"), claudeJson: join(root, "none.json") }];
     const report = await scanImport(kimiDeps({ claudeCode }), [], ["claude-code", "kimi-code"]);
     assert.equal(report.plan.length, 2);
     assert.equal(report.newWorkspaces.length, 1);
@@ -2023,10 +2162,10 @@ describe("Kimi Code 来源", () => {
   });
 
   test("探测：会话根目录在不在；paths 列出扫描会读的三处", async () => {
-    const found = await probeKimiCode(kimiPaths());
+    const found = await probeKimiCode([kimiPaths()]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [join(kimiRoot, "sessions"), join(kimiRoot, "workspaces.json"), join(kimiRoot, "mcp.json")]);
-    assert.equal((await probeKimiCode({ ...kimiPaths(), sessionsDir: join(root, "nope") })).found, false);
+    assert.equal((await probeKimiCode([{ ...kimiPaths(), sessionsDir: join(root, "nope") }])).found, false);
   });
 });
 
@@ -2048,8 +2187,8 @@ describe("opencode 来源", () => {
     db.close();
   });
 
-  const paths = () => ({ dbFile, configFile: join(root, "opencode", "opencode.json"), home });
-  const ocDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ opencode: paths(), ...overrides });
+  const paths = () => ({ root: dirname(dbFile), dbFile, configFile: join(root, "opencode", "opencode.json"), home });
+  const ocDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ opencode: [paths()], ...overrides });
 
   let seq = 0;
   /** 一条根会话（或子会话）：每个 prompt 一问一答 */
@@ -2140,10 +2279,10 @@ describe("opencode 来源", () => {
   });
 
   test("探测：库在不在；paths 列出库与配置", async () => {
-    const found = await probeOpencode(paths());
+    const found = await probeOpencode([paths()]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [dbFile, join(root, "opencode", "opencode.json")]);
-    assert.equal((await probeOpencode({ ...paths(), dbFile: join(root, "nope.db") })).found, false);
+    assert.equal((await probeOpencode([{ ...paths(), dbFile: join(root, "nope.db") }])).found, false);
   });
 });
 
@@ -2178,7 +2317,7 @@ describe("reasonix 来源", () => {
   });
 
   const rxDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps =>
-    deps({ reasonix: { projectsRoot, home }, ...overrides });
+    deps({ reasonix: [{ root: dirname(projectsRoot), projectsRoot, home }], ...overrides });
 
   /** 一条会话：主 JSONL + meta 侧车。行形状按 2026-09-27 抽样（tool_calls 拍平形）。 */
   async function writeSession(dir: string, name: string, meta: Record<string, unknown> | null, rows: Record<string, unknown>[]): Promise<void> {
@@ -2256,10 +2395,10 @@ describe("reasonix 来源", () => {
   });
 
   test("探测：projects 根在不在；paths 列出扫描会读的一处", async () => {
-    const found = await probeReasonix({ projectsRoot, home });
+    const found = await probeReasonix([{ root: dirname(projectsRoot), projectsRoot, home }]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [projectsRoot]);
-    assert.equal((await probeReasonix({ projectsRoot: join(root, "nope"), home })).found, false);
+    assert.equal((await probeReasonix([{ root, projectsRoot: join(root, "nope"), home }])).found, false);
   });
 });
 
@@ -2281,8 +2420,8 @@ describe("zcode 来源", () => {
     db.close();
   });
 
-  const paths = () => ({ dbFile, home });
-  const zDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ zcode: paths(), ...overrides });
+  const paths = () => ({ root: dirname(dbFile), dbFile, home });
+  const zDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ zcode: [paths()], ...overrides });
 
   /** ZCode 库最小 schema（2026-09-28 对本机库 pragma 抄的）+ 两个真实形状的会话。 */
   async function writeDb(sessions: { id: string; directory: string | null; title: string | null; revert?: string; parent?: string; rows: { seq: number; data: Record<string, unknown>; parts?: Record<string, unknown>[] }[] }[]): Promise<void> {
@@ -2362,10 +2501,10 @@ describe("zcode 来源", () => {
   });
 
   test("探测：库在不在；paths 列出扫描会读的一处", async () => {
-    const found = await probeZcode(paths());
+    const found = await probeZcode([paths()]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [dbFile]);
-    assert.equal((await probeZcode({ ...paths(), dbFile: join(root, "nope.sqlite") })).found, false);
+    assert.equal((await probeZcode([{ ...paths(), dbFile: join(root, "nope.sqlite") }])).found, false);
   });
 });
 
@@ -2412,13 +2551,16 @@ describe("MCP servers 随扫描与执行走", () => {
     );
     const added: string[] = [];
     const env = deps({
-      claudeCode: {
-        projectsDir: join(root, "none"),
-        desktopSessionsDir: join(root, "none-desktop"),
-        home: root,
-        skillsDir: join(root, "none-skills"),
-        claudeJson,
-      },
+      claudeCode: [
+        {
+          root,
+          projectsDir: join(root, "none"),
+          desktopSessionsDir: join(root, "none-desktop"),
+          home: root,
+          skillsDir: join(root, "none-skills"),
+          claudeJson,
+        },
+      ],
       existingMcp: ["mine"],
       mcpTarget: {
         add: async (name, server) => {
@@ -2475,5 +2617,34 @@ describe("Proma：「只随手发了一句」检查的候选", () => {
     assert.equal(report.greetingCheck.candidates, 0);
     assert.equal(report.greetingCheck.model, null);
     assert.equal(report.greetingCheck.unavailable, "no-chore-model");
+  });
+});
+
+describe("messageSignature：转换类来源的内容指纹", () => {
+  test("只看有文字的 user / assistant；纯工具调用、工具结果、空白不计；同样的对话同样的指纹", () => {
+    const talk = [
+      { role: "user", content: "问" },
+      { role: "assistant", content: [{ type: "toolCall", id: "t", name: "read", arguments: {} }] },
+      { role: "toolResult", content: [{ type: "text", text: "文件内容" }] },
+      { role: "assistant", content: [{ type: "thinking", thinking: "想" }, { type: "text", text: "答" }] },
+      { role: "user", content: [{ type: "text", text: "   " }] },
+    ];
+    const signature = messageSignature(talk);
+    assert.equal(signature.length, 2);
+    assert.deepEqual(messageSignature(talk), signature);
+    // 思考内容变了不影响：比的是用户看得到的文字
+    assert.deepEqual(
+      messageSignature([talk[0], { role: "assistant", content: [{ type: "thinking", thinking: "别的" }, { type: "text", text: "答" }] }]),
+      signature,
+    );
+    assert.notDeepEqual(messageSignature([{ role: "user", content: "问" }, { role: "assistant", content: "别的答" }]), signature);
+  });
+
+  test("compareSignatures：公共前缀之后各自多出来的", () => {
+    assert.deepEqual(compareSignatures(["a", "b", "c"], ["a", "b"]), { newMessages: 1, continuedHere: false });
+    assert.deepEqual(compareSignatures(["a", "b"], ["a", "b", "x"]), { newMessages: 0, continuedHere: true });
+    assert.deepEqual(compareSignatures(["a", "b", "c"], ["a", "x"]), { newMessages: 2, continuedHere: true });
+    // 一条公共的都没有：源的全部算新消息、副本算接着聊过 → diverged，不会被当成没变藏掉
+    assert.deepEqual(compareSignatures(["a"], ["x"]), { newMessages: 1, continuedHere: true });
   });
 });

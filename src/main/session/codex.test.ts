@@ -90,7 +90,7 @@ function makeTree(root: string): CodexPaths {
   // cwd 用盘上存在的目录（sessionFolder 对不在盘上的 cwd 退 defaultCwd，那是
   // 既有语义；这里要测的是「rollout 的 cwd 传下去了」）
   writeFileSync(join(sessionsDir, "rollout-2026-09-12T09-00-00-6f1c2b70.jsonl"), FIXTURE.replace("/Users/fjm/paper", root));
-  return { sessionsDir: join(root, "sessions"), home: "/Users/tester" };
+  return { root, sessionsDir: join(root, "sessions"), home: "/Users/tester" };
 }
 
 const FAKE_DEPS = {
@@ -110,8 +110,7 @@ test("扫描：sessions/YYYY/MM/DD/rollout-*.jsonl 各成一条候选；无 assi
     [line("session_meta", { id: "d" }), line("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "问" }] })].join("\n"),
   );
 
-  const converted: unknown[] = [];
-  const { skipped } = await scanCodex(paths, FAKE_DEPS, new Map(), converted as never[]);
+  const { candidates: converted, skipped } = await scanCodex(paths, FAKE_DEPS);
   assert.equal(converted.length, 1);
   const candidate = converted[0] as { source: string; sourceKind: string; title: string; model: string | null; cwd: string; onlyMessage: string | null };
   assert.equal(candidate.source, "codex");
@@ -129,10 +128,10 @@ test("扫描：sessions/YYYY/MM/DD/rollout-*.jsonl 各成一条候选；无 assi
 test("探测：sessions 目录在 = found；不在 = not found", async () => {
   const root = mkdtempSync(join(tmpdir(), "codex-probe-"));
   const paths = makeTree(root);
-  const found = await probeCodex(paths);
+  const found = await probeCodex([paths]);
   assert.equal(found.id, "codex");
   assert.equal(found.found, true);
   assert.deepEqual(found.paths, [paths.sessionsDir]);
-  const missing = await probeCodex({ sessionsDir: join(root, "nope"), home: root });
+  const missing = await probeCodex([{ root, sessionsDir: join(root, "nope"), home: root }]);
   assert.equal(missing.found, false);
 });
