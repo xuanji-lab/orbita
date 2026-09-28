@@ -25,7 +25,6 @@ import {
   branchEntries,
   compareSignatures,
   entriesToRecords,
-  findPromaRoots,
   messageSignature,
   probeClaudeCode,
   probeKimiCode,
@@ -33,7 +32,6 @@ import {
   probeZcode,
   probeProma,
   probeReasonix,
-  reasonixDataRoot,
   runImport,
   scanGreetingCandidates,
   scanImport,
@@ -1484,16 +1482,6 @@ describe("Proma 的几个数据根（.proma 与 .proma-* 变体）", () => {
     },
   ];
 
-  test("findPromaRoots：只认 .proma 与 .proma-* 目录，按名字排；家目录读不了返回空", async () => {
-    const home = join(root, "home");
-    for (const name of [".proma-dev", ".proma", ".proma-mem", ".promax", "proma"]) {
-      await mkdir(join(home, name), { recursive: true });
-    }
-    await writeFile(join(home, ".proma-file"), "不是目录");
-    assert.deepEqual(await findPromaRoots(home), [join(home, ".proma"), join(home, ".proma-dev"), join(home, ".proma-mem")]);
-    assert.deepEqual(await findPromaRoots(join(root, "no-such-home")), []);
-  });
-
   test("同一条会话在两个根里字节相同 → 只进一条，另一份 duplicate、detail 指向留下的；各自独有的都进", async () => {
     const same = await writePiSession("2026-09-01T00-00-00-000Z_same-00000000000001.jsonl", "/tmp/p");
     const devOnly = await writePiSession("2026-09-01T00-01-00-000Z_dev-000000000000002.jsonl", "/tmp/p");
@@ -2286,24 +2274,6 @@ describe("opencode 来源", () => {
   });
 });
 
-describe("reasonix 数据根（Electron userData 惯例，按平台各归各位）", () => {
-  test("win32 认 APPDATA（缺了退家目录）；darwin 固定 Library；linux 认 XDG_CONFIG_HOME（缺了退 ~/.config）", () => {
-    assert.equal(
-      reasonixDataRoot("win32", "C:\\Users\\u", { APPDATA: "C:\\Users\\u\\AppData\\Roaming" }),
-      join("C:\\Users\\u\\AppData\\Roaming", "reasonix"),
-    );
-    assert.equal(reasonixDataRoot("win32", "C:\\Users\\u", {}), join("C:\\Users\\u", "AppData", "Roaming", "reasonix"));
-    assert.equal(
-      reasonixDataRoot("darwin", "/Users/u", {}),
-      join("/Users/u", "Library", "Application Support", "reasonix"),
-    );
-    assert.equal(reasonixDataRoot("linux", "/home/u", { XDG_CONFIG_HOME: "/xdg" }), join("/xdg", "reasonix"));
-    assert.equal(reasonixDataRoot("linux", "/home/u", {}), join("/home/u", ".config", "reasonix"));
-    // 空串同缺席：空 APPDATA / XDG 退兜底，不塌成 join("") 那样的相对进程 cwd 的路径
-    assert.equal(reasonixDataRoot("win32", "C:\\Users\\u", { APPDATA: "" }), join("C:\\Users\\u", "AppData", "Roaming", "reasonix"));
-    assert.equal(reasonixDataRoot("linux", "/home/u", { XDG_CONFIG_HOME: "" }), join("/home/u", ".config", "reasonix"));
-  });
-});
 
 describe("reasonix 来源", () => {
   let projectsRoot = "";

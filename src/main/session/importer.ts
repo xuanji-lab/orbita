@@ -8,7 +8,7 @@
  *
  * ## 源目录绝对只读
  *
- * Proma 的数据根（`~/.proma` 与变体，见 findPromaRoots）是用户另一个应用的数据，引擎对它只做 `readFile`。**刻意不用
+ * Proma 的数据根（`~/.proma` 与变体，见 import-locate.ts）是用户另一个应用的数据，引擎对它只做 `readFile`。**刻意不用
  * `SessionManager.open()` 读源文件**——它的构造器会 mkdir、`_setSessionFile` 会就地
  * 重写 v1/v2 文件（迁移副作用）；这里全走包导出的纯函数
  * （`parseSessionEntries` / `migrateSessionEntries`），
@@ -167,31 +167,10 @@ export interface OpencodePaths {
 export interface ReasonixPaths {
   /** 这份路径所在的数据目录（import-locate 按「名字含产品名 + 聊天记录在不在」找到的；一个产品可以有好几个） */
   root: string;
-  /** 会话根（<Reasonix 数据根>/projects，数据根按平台见 reasonixDataRoot）：每个项目一个子目录，sessions/ 下是 <id>.jsonl */
+  /** 会话根（<Reasonix 数据根>/projects；数据根按平台取 appData 下的 reasonix，见 import-locate 的 baseDir）：每个项目一个子目录，sessions/ 下是 <id>.jsonl */
   projectsRoot: string;
   /** 家目录：在家目录里开的会话不算有文件夹 */
   home: string;
-}
-
-/**
- * Reasonix 桌面版的数据根：它是 Electron 应用，userData 走 appData/<应用名> 惯例，
- * 应用名三平台同名（Windows 实测就是小写 reasonix）。appData 各平台各归各位：
- * win32 认 %APPDATA%，darwin 固定 ~/Library/Application Support，其余认 $XDG_CONFIG_HOME。
- * Windows 实测过；mac / Linux 是按惯例推导——mac 文件系统大小写不敏感兜得住大小写差，
- * 推错了探测 stat 不到就不可勾，无害。meta 里的 workspace_root 是会话当年所在机器上的
- * 路径，别的形（跨机迁移）由 sessionFolder 的 stat 兜底退 defaultCwd。
- *
- * env 取根用 `||` 不是 `??`：环境变量空串同缺席（与 workspace_root 同款纪律），
- * 否则空串会让 join("") 塌成一个相对进程 cwd 的路径。
- */
-export function reasonixDataRoot(
-  platform: NodeJS.Platform,
-  home: string,
-  env: { APPDATA?: string; XDG_CONFIG_HOME?: string },
-): string {
-  if (platform === "win32") return join(env.APPDATA || join(home, "AppData", "Roaming"), "reasonix");
-  if (platform === "darwin") return join(home, "Library", "Application Support", "reasonix");
-  return join(env.XDG_CONFIG_HOME || join(home, ".config"), "reasonix");
 }
 
 /** ZCode 来源要读的位置。全部**只读**（库按只读方式打开）。 */
@@ -217,7 +196,7 @@ export interface CodexPaths {
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
 export interface ImporterDeps {
   /**
-   * Proma 的数据根（findPromaRoots 的产物），按这个顺序读。**只读**。几个根里同一条会话
+   * Proma 的数据根（import-locate 的 findDataRoots 找到的），按这个顺序读。**只读**。几个根里同一条会话
    * 只导一份（dedupeAcrossRoots）；这几个根也是索引里源文件路径的防御边界（本机
    * `.proma-dev` 的索引有 66 条仍指向 `.proma` 下的文件）
    */
@@ -279,35 +258,6 @@ export interface RunImporterDeps extends ImporterDeps {
 // ---------------------------------------------------------------------------
 // 探测（只 stat）
 // ---------------------------------------------------------------------------
-
-/** Proma 数据根的目录名：`.proma`，或 `.proma-` 后面跟一段名字（`.proma-dev`、`.proma-dev-fork`…） */
-const PROMA_ROOT_NAME = /^\.proma(-[^\\/]+)?$/;
-
-/**
- * 家目录下的 Proma 数据根。Proma 的正式版用 `~/.proma`，开发版 / 分支版各用一个 `~/.proma-*`
- * ——哪台机器上有哪几个说不准（此前写死 `~/.proma-dev`，Windows 上只有 `.proma` 的用户直接
- * 被判成「没装 Proma」），所以按名字找、有几个读几个。只列目录，有没有会话索引扫描时再看。
- *
- * 按名字排（`.proma` 在最前）：这个顺序决定几个根里内容相同的会话留哪一份、同名 skill /
- * MCP 先到先得，必须每次一样——执行时会重扫，用户勾的是扫描时留下的那份的路径。
- */
-export async function findPromaRoots(home: string): Promise<string[]> {
-  let names: string[];
-  try {
-    names = await readdir(home);
-  } catch {
-    return [];
-  }
-  const roots: string[] = [];
-  for (const name of names.filter((candidate) => PROMA_ROOT_NAME.test(candidate)).sort()) {
-    try {
-      if ((await stat(join(home, name))).isDirectory()) roots.push(join(home, name));
-    } catch {
-      // 断链、没权限：当它不存在
-    }
-  }
-  return roots;
-}
 
 /** 有会话索引的数据根（只 stat）。探测用它判断 Proma 在不在、列哪些路径 */
 async function rootsWithIndex(roots: readonly string[]): Promise<string[]> {

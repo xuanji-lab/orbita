@@ -30,9 +30,9 @@ import type { McpStore } from "../mcp/store.ts";
 import { findGreetingOnly } from "./greeting-only.ts";
 import type { CodexPaths } from "./importer.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
+import { DATA_ROOT_SPECS, baseDir, findDataRoots, type LocateContext } from "./import-locate.ts";
 import {
   emptyScanReport,
-  findPromaRoots,
   probeAgentSkills,
   probeClaudeCode,
   probeKimiCode,
@@ -48,7 +48,6 @@ import {
   type ImporterDeps,
   type KimiCodePaths,
   type OpencodePaths,
-  reasonixDataRoot,
   type ReasonixPaths,
   type ZcodePaths,
 } from "./importer.ts";
@@ -89,7 +88,7 @@ export function registerImportIpc(
 
   async function deps(): Promise<ImporterDeps> {
     return {
-      promaRoots: await findPromaRoots(homedir()),
+      promaRoots: await findDataRoots(DATA_ROOT_SPECS.proma, locateContext()),
       ...(await convertedPaths()),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
@@ -109,7 +108,7 @@ export function registerImportIpc(
   ipcMain.handle(ipcChannels.importDetect, async (): Promise<ImportDetectResult> => ({
     home: homedir(),
     sources: [
-      await probeProma(await findPromaRoots(homedir()), join(homedir(), ".proma")),
+      await probeProma(await findDataRoots(DATA_ROOT_SPECS.proma, locateContext()), join(homedir(), ".proma")),
       ...(await probeConverted()),
       await probeAgentSkills(agentSkillsDir()),
     ],
@@ -169,7 +168,26 @@ export function registerImportIpc(
   });
 }
 
-/** 各转换类来源的数据目录，按顺序（规范目录在前）。每个目录各出一份路径，扫描各扫一遍。 */
+/** findDataRoots 的环境：真实平台、家目录、环境变量。 */
+function locateContext(): LocateContext {
+  return { platform: process.platform, home: homedir(), env: process.env };
+}
+
+/**
+ * 一个转换类来源的数据目录（import-locate：名字含产品名 + 聊天记录在不在，环境变量优先）。
+ * 一个都没找到时给规范位置（环境变量指的、或基础目录下的默认名）：扫描照常扫空、探测照样
+ * 列出「找过哪里」、found 为 false。
+ */
+async function rootsOf(source: keyof typeof DATA_ROOT_SPECS): Promise<string[]> {
+  const spec = DATA_ROOT_SPECS[source];
+  const ctx = locateContext();
+  const found = await findDataRoots(spec, ctx);
+  if (found.length > 0) return found;
+  const fromEnv = spec.env === undefined ? undefined : ctx.env[spec.env];
+  return [fromEnv || join(baseDir(spec.base, ctx), spec.canonical)];
+}
+
+/** 各转换类来源的数据目录，按 findDataRoots 的顺序（环境变量 → 规范目录 → 其余按名字）。 */
 async function dataRoots(): Promise<{
   claudeCode: string[];
   kimiCode: string[];
@@ -178,14 +196,13 @@ async function dataRoots(): Promise<{
   zcode: string[];
   codex: string[];
 }> {
-  const home = homedir();
   return {
-    claudeCode: [join(home, ".claude")],
-    kimiCode: [join(home, ".kimi-code")],
-    opencode: [join(home, ".local", "share", "opencode")],
-    reasonix: [reasonixDataRoot(process.platform, home, process.env)],
-    zcode: [join(home, ".zcode")],
-    codex: [process.env["CODEX_HOME"] ?? join(home, ".codex")],
+    claudeCode: await rootsOf("claude-code"),
+    kimiCode: await rootsOf("kimi-code"),
+    opencode: await rootsOf("opencode"),
+    reasonix: await rootsOf("reasonix"),
+    zcode: await rootsOf("zcode"),
+    codex: await rootsOf("codex"),
   };
 }
 
