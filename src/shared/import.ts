@@ -195,6 +195,16 @@ export interface ImportPlanItem {
   sourceId: string;
   /** 来自哪个来源（页面按它给组内的来源分项计数） */
   source: ImportSourceId;
+  /**
+   * Proma 条目在哪几个数据根的索引里有（`~/.proma`、`~/.proma-dev`… 的绝对路径）。**第一个是留下的
+   * 那份的根**，其后是被它顶掉的重复所在的根；其余来源为空数组。
+   *
+   * 页面按它筛（几个根里有实验用的分支版数据时一次去掉整个根，不用在各文件夹组里逐条取消）。
+   * 必须是全部的根而不只是留下的那个：字节相同的重复留排在前面的根的那份，只看留下的根的话，
+   * 去掉 `~/.proma` 会把 `~/.proma-dev` 里也有的会话一起藏掉——去掉一个根应该只去掉只在它里面的。
+   * 不是 sourceFile 的前缀：索引里的源文件可以在别的根下（本机 `.proma-dev` 有 66 条指向 `.proma`）
+   */
+  promaRoots: string[];
   sourceKind: ImportSourceKind;
   /**
    * 源侧的文件夹，也是页面的分组键与去向的覆盖键。Proma = 所属工作区的
