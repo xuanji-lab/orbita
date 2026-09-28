@@ -24,6 +24,7 @@ import { SkillStore } from "../skill/store.ts";
 import {
   branchEntries,
   entriesToRecords,
+  findPromaRoots,
   probeClaudeCode,
   probeKimiCode,
   probeOpencode,
@@ -65,7 +66,7 @@ const DEFAULT_CWD = "/Users/tester";
 
 function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
   const base: RunImporterDeps = {
-    promaRoot,
+    promaRoots: [promaRoot],
     piSessionDir,
     defaultCwd: DEFAULT_CWD,
     workspaces: [],
@@ -519,7 +520,8 @@ describe("边界：索引与源文件的坏形态", () => {
       { id: "s-outside", title: "越界", piSessionFile: outsideFile, createdAt: 1, updatedAt: 2 },
       { id: "s-legacy-root", title: "旧根", piSessionFile: legacyFile, createdAt: 3, updatedAt: 4 },
     ]);
-    const report = await scanImport(deps({ extraSourceRoots: [legacyRoot] }));
+    // 旧根没有自己的索引也算数据根：扫描跳过它的索引，但它仍是源文件路径的合法边界
+    const report = await scanImport(deps({ promaRoots: [promaRoot, legacyRoot] }));
     const skip = report.skipped.find((s) => s.sourceId === "s-outside");
     assert.ok(skip !== undefined);
     assert.equal(skip.reason, "bad-session-file");
@@ -529,7 +531,7 @@ describe("边界：索引与源文件的坏形态", () => {
     assert.equal(report.plan[0]?.sourceId, "s-legacy-root");
   });
 
-  test("同一次扫描里两条索引指向同一源文件 → 第二条 already-imported", async () => {
+  test("同一次扫描里两条索引指向同一源文件 → 第二条 duplicate，detail 是留下的文件", async () => {
     const pi = await writePiSession("2026-09-01T00-00-00-000Z_dup-000000000000001.jsonl", "/tmp/project");
     await writeIndex([
       { id: "s-a", title: "甲", piSessionFile: pi, createdAt: 1, updatedAt: 2 },
@@ -540,7 +542,8 @@ describe("边界：索引与源文件的坏形态", () => {
     assert.equal(report.plan[0]?.sourceId, "s-a");
     const skip = report.skipped.find((s) => s.sourceId === "s-b");
     assert.ok(skip !== undefined);
-    assert.equal(skip.reason, "already-imported");
+    assert.equal(skip.reason, "duplicate");
+    assert.equal(skip.detail, pi);
   });
 });
 
@@ -1094,13 +1097,21 @@ describe("Migration 页的选择：去向覆盖、勾选过滤、探测", () => 
     assert.equal(picked[0]?.parentId, parentMeta?.id);
   });
 
-  test("probeProma：只 stat 索引；paths 列出扫描会读的全部位置（含旧根）", async () => {
-    const missing = await probeProma(promaRoot, ["/tmp/old-root"]);
+  test("probeProma：只 stat 索引；有索引的根各列一组路径，一个都没有时列第一个候选根", async () => {
+    const other = join(root, ".proma");
+    await mkdir(other, { recursive: true });
+    const missing = await probeProma([other, promaRoot], join(root, "fallback"));
     assert.equal(missing.found, false);
-    assert.ok(missing.paths.includes(join(promaRoot, "agent-sessions.json")));
-    assert.ok(missing.paths.includes(join("/tmp/old-root", "sdk-config", "sessions")));
+    assert.ok(missing.paths.includes(join(other, "agent-sessions.json")));
+    assert.ok(!missing.paths.includes(join(promaRoot, "agent-sessions.json")));
+    assert.ok((await probeProma([], join(root, "fallback"))).paths.includes(join(root, "fallback", "agent-sessions.json")));
+
     await writeIndex([]);
-    assert.equal((await probeProma(promaRoot)).found, true);
+    const found = await probeProma([other, promaRoot], join(root, "fallback"));
+    assert.equal(found.found, true);
+    // 没有索引的根不列
+    assert.ok(found.paths.includes(join(promaRoot, "sdk-config", "sessions")));
+    assert.ok(!found.paths.includes(join(other, "agent-sessions.json")));
   });
 });
 
@@ -1419,6 +1430,197 @@ describe("再次导入：对照 orbita 的副本与导入清单", () => {
     const metas = await store.list();
     assert.equal(metas.length, 2);
     assert.equal(metas.find((meta) => meta.title === "子")?.parentId, parent.id);
+  });
+});
+
+describe("Proma 的几个数据根（.proma 与 .proma-* 变体）", () => {
+  /** 排在 promaRoot（proma-dev）前面的另一个数据根 */
+  const oldRoot = (): string => join(root, ".proma");
+
+  async function writeIndexAt(dir: string, entries: unknown[]): Promise<void> {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "agent-sessions.json"), JSON.stringify({ version: 2, sessions: entries }));
+  }
+
+  /** 把一份 pi 真源复制到另一个根的 sdk-config/sessions 下（迁移时 Proma 就是这么整份复制的） */
+  async function copyInto(dir: string, file: string, name = file.split("/").pop() ?? "x.jsonl"): Promise<string> {
+    const target = join(dir, "sdk-config", "sessions", name);
+    await mkdir(dirname(target), { recursive: true });
+    await copyFile(file, target);
+    return target;
+  }
+
+  async function append(path: string, lines: unknown[]): Promise<void> {
+    await writeFile(path, `${await readFile(path, "utf8")}${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  }
+
+  /** 接着聊的一轮：user + assistant 接在 e2 后面 */
+  const turn = (suffix: string): unknown[] => [
+    {
+      type: "message",
+      id: `t-${suffix}-u`,
+      parentId: "e2",
+      timestamp: "2026-09-02T00:00:01.000Z",
+      message: { role: "user", content: [{ type: "text", text: `追问 ${suffix}` }], timestamp: 1780100001000 },
+    },
+    {
+      type: "message",
+      id: `t-${suffix}-a`,
+      parentId: `t-${suffix}-u`,
+      timestamp: "2026-09-02T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "回答" }],
+        provider: "proma-x",
+        model: "glm-5.3",
+        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: 1780100002000,
+      },
+    },
+  ];
+
+  test("findPromaRoots：只认 .proma 与 .proma-* 目录，按名字排；家目录读不了返回空", async () => {
+    const home = join(root, "home");
+    for (const name of [".proma-dev", ".proma", ".proma-mem", ".promax", "proma"]) {
+      await mkdir(join(home, name), { recursive: true });
+    }
+    await writeFile(join(home, ".proma-file"), "不是目录");
+    assert.deepEqual(await findPromaRoots(home), [join(home, ".proma"), join(home, ".proma-dev"), join(home, ".proma-mem")]);
+    assert.deepEqual(await findPromaRoots(join(root, "no-such-home")), []);
+  });
+
+  test("同一条会话在两个根里字节相同 → 只进一条，另一份 duplicate、detail 指向留下的；各自独有的都进", async () => {
+    const same = await writePiSession("2026-09-01T00-00-00-000Z_same-00000000000001.jsonl", "/tmp/p");
+    const devOnly = await writePiSession("2026-09-01T00-01-00-000Z_dev-000000000000002.jsonl", "/tmp/p");
+    await writeIndex([
+      { id: "same", title: "两边都有", piSessionFile: same, createdAt: 1, updatedAt: 2 },
+      { id: "dev-only", title: "只在 dev", piSessionFile: devOnly, createdAt: 3, updatedAt: 4 },
+    ]);
+    const sameOld = await copyInto(oldRoot(), same);
+    const oldOnly = await copyInto(oldRoot(), devOnly, "2026-09-01T00-02-00-000Z_old-000000000000003.jsonl");
+    await writeIndexAt(oldRoot(), [
+      { id: "same", title: "两边都有", piSessionFile: sameOld, createdAt: 1, updatedAt: 2 },
+      { id: "old-only", title: "只在旧根", piSessionFile: oldOnly, createdAt: 5, updatedAt: 6 },
+    ]);
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => item.sourceId).sort(), ["dev-only", "old-only", "same"]);
+    // 一样长时留排在前面的根的那份
+    assert.equal(report.plan.find((item) => item.sourceId === "same")?.sourceFile, sameOld);
+    assert.deepEqual(
+      report.skipped.map((skip) => [skip.sourceId, skip.reason, skip.detail]),
+      [["same", "duplicate", sameOld]],
+    );
+  });
+
+  test("一份是另一份的前缀（复制过去之后接着聊了）→ 留长的那份，不管它在哪个根", async () => {
+    const dev = await writePiSession("2026-09-01T00-00-00-000Z_pre-000000000000001.jsonl", "/tmp/p");
+    const old = await copyInto(oldRoot(), dev);
+    await append(dev, turn("dev"));
+    await writeIndex([{ id: "s", title: "接着聊过", piSessionFile: dev, createdAt: 1, updatedAt: 2 }]);
+    await writeIndexAt(oldRoot(), [{ id: "s", title: "接着聊过", piSessionFile: old, createdAt: 1, updatedAt: 2 }]);
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => item.sourceFile), [dev]);
+    assert.deepEqual(report.skipped.map((skip) => [skip.reason, skip.detail]), [["duplicate", dev]]);
+  });
+
+  test("同一个 id 下两份内容分了叉 → 两份都导，哪份都不丢", async () => {
+    const dev = await writePiSession("2026-09-01T00-00-00-000Z_div-000000000000001.jsonl", "/tmp/p");
+    const old = await copyInto(oldRoot(), dev);
+    await append(dev, turn("dev"));
+    await append(old, turn("old"));
+    await writeIndex([{ id: "s", title: "分叉", piSessionFile: dev, createdAt: 1, updatedAt: 2 }]);
+    await writeIndexAt(oldRoot(), [{ id: "s", title: "分叉", piSessionFile: old, createdAt: 1, updatedAt: 2 }]);
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => item.sourceFile).sort(), [dev, old].sort());
+    assert.equal(report.skipped.length, 0);
+  });
+
+  test("上次只从一个根导过，这次另一个根也在：认得出、不重复导；另一个根接着聊了 → 追加进同一条", async () => {
+    const dev = await writePiSession("2026-09-01T00-00-00-000Z_imp-000000000000001.jsonl", "/tmp/p");
+    await writeIndex([{ id: "s", title: "导过", piSessionFile: dev, createdAt: 1, updatedAt: 2 }]);
+    await runImport(deps());
+    const [before] = await store.list();
+    assert.ok(before !== undefined);
+
+    // 旧根里是字节相同的一份，且排在前面——留下的仍是导过的那份
+    const old = await copyInto(oldRoot(), dev);
+    await writeIndexAt(oldRoot(), [{ id: "s", title: "导过", piSessionFile: old, createdAt: 1, updatedAt: 2 }]);
+    const both = deps({ promaRoots: [oldRoot(), promaRoot], existingMetas: await store.list() });
+    const again = await scanImport(both);
+    assert.equal(again.plan.length, 0);
+    assert.deepEqual(again.skipped.map((skip) => skip.reason).sort(), ["already-imported", "duplicate"]);
+
+    // 旧根那份接着聊了：它更长，留它；orbita 里导过的是它的前缀 → updated，不是新会话
+    await append(old, turn("old"));
+    const later = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot], existingMetas: await store.list() }));
+    assert.deepEqual(
+      later.plan.map((item) => [item.change, item.sourceFile, item.sessionId, item.newMessages]),
+      [["updated", old, before.id, 2]],
+    );
+    const run = await runImport(deps({ promaRoots: [oldRoot(), promaRoot], existingMetas: await store.list() }));
+    assert.deepEqual([run.imported, run.updated, run.failed.length], [0, 1, 0]);
+    assert.equal((await store.list()).length, 1);
+  });
+
+  test("导过又在 orbita 删了：换一个根里的同一份也认得出是 deleted", async () => {
+    const dev = await writePiSession("2026-09-01T00-00-00-000Z_del-000000000000001.jsonl", "/tmp/p");
+    await writeIndex([{ id: "s", title: "删过", piSessionFile: dev, createdAt: 1, updatedAt: 2 }]);
+    await runImport(deps());
+    const [imported] = await store.list();
+    assert.ok(imported !== undefined);
+    await store.remove(imported.id);
+
+    const old = await copyInto(oldRoot(), dev);
+    await append(old, turn("old"));
+    await writeIndexAt(oldRoot(), [{ id: "s", title: "删过", piSessionFile: old, createdAt: 1, updatedAt: 2 }]);
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot], existingMetas: await store.list() }));
+    assert.deepEqual(report.plan.map((item) => [item.change, item.sourceFile]), [["deleted", old]]);
+  });
+
+  test("claude legacy 的界面日志两个根里一模一样 → 只导一条；没有会话源的条目按 id 去重计数", async () => {
+    const rows = [
+      { type: "user", message: { role: "user", content: [{ type: "text", text: "问" }] }, parent_tool_use_id: null, _createdAt: 1780000000000 },
+      {
+        type: "assistant",
+        message: { id: "m1", role: "assistant", type: "message", model: "glm-5.1", content: [{ type: "text", text: "答" }], stop_reason: null, usage: { input_tokens: 1, output_tokens: 1 } },
+        parent_tool_use_id: null,
+        _createdAt: 1780000001000,
+      },
+    ];
+    const entries = [
+      { id: "legacy", title: "claude 时代", createdAt: 1, updatedAt: 2, legacyTranscript: { sourceRuntime: "claude" } },
+      { id: "draft", title: "草稿", createdAt: 3, updatedAt: 4 },
+    ];
+    for (const dir of [oldRoot(), promaRoot]) {
+      await mkdir(join(dir, "agent-sessions"), { recursive: true });
+      await writeFile(join(dir, "agent-sessions", "legacy.jsonl"), rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+      await writeIndexAt(dir, entries);
+    }
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => [item.sourceKind, item.sourceFile]), [
+      ["claude-legacy", join(oldRoot(), "agent-sessions", "legacy.jsonl")],
+    ]);
+    assert.deepEqual(report.skipped.map((skip) => [skip.sourceId, skip.reason]), [["legacy", "duplicate"]]);
+    assert.equal(report.withoutPiSession, 1);
+  });
+
+  test("某个根的索引坏了 → 记一条 bad-index-entry、别的根照读；一个索引都没有才报错", async () => {
+    const pi = await writePiSession("2026-09-01T00-00-00-000Z_ok-0000000000000001.jsonl", "/tmp/p");
+    await writeIndex([{ id: "ok", title: "好的", piSessionFile: pi, createdAt: 1, updatedAt: 2 }]);
+    await mkdir(oldRoot(), { recursive: true });
+    await writeFile(join(oldRoot(), "agent-sessions.json"), "{ 半截");
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => item.sourceId), ["ok"]);
+    assert.deepEqual(report.skipped.map((skip) => [skip.sourceId, skip.reason]), [
+      [join(oldRoot(), "agent-sessions.json"), "bad-index-entry"],
+    ]);
+    await assert.rejects(scanImport(deps({ promaRoots: [join(root, ".proma-empty")] })), /找不到 Proma 会话索引/);
   });
 });
 

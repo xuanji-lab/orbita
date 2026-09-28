@@ -71,7 +71,7 @@ const DEFAULT_CWD = "/Users/tester";
 
 function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
   return {
-    promaRoot,
+    promaRoots: [promaRoot],
     piSessionDir,
     defaultCwd: DEFAULT_CWD,
     workspaces: [],
@@ -547,7 +547,7 @@ describe("importer 集成：claude 条目", () => {
     assert.notEqual(metas[1]?.piSessionFile, metas[0]?.piSessionFile);
   });
 
-  test("同源去重：两条 claude 索引指向同一文件路径 → 第二条 already-imported", async () => {
+  test("同源去重：两条 claude 索引指向同一文件路径 → 第二条 duplicate", async () => {
     // 源路径按 <id>.jsonl 推导，同 id 两条索引即同源
     await writeClaudeSession("c-dup", [userTextRow("问"), assistantBlockRow("m1", { type: "text", text: "答" })]);
     await writeClaudeIndex([
@@ -558,7 +558,7 @@ describe("importer 集成：claude 条目", () => {
     assert.equal(report.plan.length, 1);
     assert.equal(report.plan[0]?.title, "甲");
     assert.equal(report.skipped.length, 1);
-    assert.equal(report.skipped[0]?.reason, "already-imported");
+    assert.equal(report.skipped[0]?.reason, "duplicate");
   });
 
   test("子会话：claude 时代的 delegation 子会话同样挂回母会话，落盘带 parentId", async () => {

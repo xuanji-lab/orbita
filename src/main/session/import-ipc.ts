@@ -30,6 +30,7 @@ import { findGreetingOnly } from "./greeting-only.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
 import {
   emptyScanReport,
+  findPromaRoots,
   probeAgentSkills,
   probeClaudeCode,
   probeKimiCode,
@@ -82,10 +83,7 @@ export function registerImportIpc(
 
   async function deps(): Promise<ImporterDeps> {
     return {
-      promaRoot: joinPromaRoot(),
-      // Proma 数据根迁移史：.proma → .proma-dev，索引里仍有条目指向旧根（本机实测
-      // 66 条），文件仍在且是同一格式——旧根也是合法源，同样只读
-      extraSourceRoots: legacyPromaRoots(),
+      promaRoots: await findPromaRoots(homedir()),
       claudeCode: claudeCodePaths(),
       kimiCode: kimiCodePaths(),
       opencode: opencodePaths(),
@@ -108,7 +106,7 @@ export function registerImportIpc(
   ipcMain.handle(ipcChannels.importDetect, async (): Promise<ImportDetectResult> => ({
     home: homedir(),
     sources: [
-      await probeProma(joinPromaRoot(), legacyPromaRoots()),
+      await probeProma(await findPromaRoots(homedir()), join(homedir(), ".proma")),
       await probeClaudeCode(claudeCodePaths()),
       await probeKimiCode(kimiCodePaths()),
       await probeOpencode(opencodePaths()),
@@ -169,16 +167,6 @@ export function registerImportIpc(
       },
     );
   });
-}
-
-/** Proma 数据根固定在 ~/.proma-dev（应用数据目录约定，不做配置面）。 */
-function joinPromaRoot(): string {
-  return `${homedir()}/.proma-dev`;
-}
-
-/** Proma 的旧数据根：索引里仍有条目指向它（见 deps 里的注释）。探测与扫描同一份清单 */
-function legacyPromaRoots(): string[] {
-  return [`${homedir()}/.proma`];
 }
 
 /**

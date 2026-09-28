@@ -3,12 +3,12 @@
  *
  * 通路（调研 2026-09-21 §二）：Proma 的 pi 真源（header version 3）与 orbita 锁定的
  * pi 0.84.3 同版本同格式。导入 = **复制 pi 文件到自己的目录（自包含，不引用
- * ~/.proma-dev）+ 从 entries 离线派生 orbita 的 transcript JSONL + 生成 SessionMeta**。
+ * Proma 的数据根）+ 从 entries 离线派生 orbita 的 transcript JSONL + 生成 SessionMeta**。
  * 全程无 LLM 参与，确定性映射。
  *
  * ## 源目录绝对只读
  *
- * `~/.proma-dev` 是用户另一个应用的数据，引擎对它只做 `readFile`。**刻意不用
+ * Proma 的数据根（`~/.proma` 与变体，见 findPromaRoots）是用户另一个应用的数据，引擎对它只做 `readFile`。**刻意不用
  * `SessionManager.open()` 读源文件**——它的构造器会 mkdir、`_setSessionFile` 会就地
  * 重写 v1/v2 文件（迁移副作用）；这里全走包导出的纯函数
  * （`parseSessionEntries` / `migrateSessionEntries`），
@@ -26,7 +26,7 @@
  */
 import { copyFile, mkdir, open, readdir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   parseSessionEntries,
   migrateSessionEntries,
@@ -165,8 +165,12 @@ export interface ReasonixPaths {
 
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
 export interface ImporterDeps {
-  /** Proma 数据根（~/.proma-dev）。**只读** */
-  promaRoot: string;
+  /**
+   * Proma 的数据根（findPromaRoots 的产物），按这个顺序读。**只读**。几个根里同一条会话
+   * 只导一份（dedupeAcrossRoots）；这几个根也是索引里源文件路径的防御边界（本机
+   * `.proma-dev` 的索引有 66 条仍指向 `.proma` 下的文件）
+   */
+  promaRoots: readonly string[];
   /** Claude Code 来源的位置。不传 = 扫描勾了它也不读 */
   claudeCode?: ClaudeCodePaths;
   /** Kimi Code 来源的位置。不传 = 扫描勾了它也不读 */
@@ -181,9 +185,6 @@ export interface ImporterDeps {
   existingSkills?: readonly string[];
   /** orbita mcp.json 里已有的 server 名：MCP 重名判断的底 */
   existingMcp?: readonly string[];
-  /** 额外合法源根（Proma 迁移史的旧根 ~/.proma：索引里仍有条目指向它，文件仍在）。
-   *  防御边界是「这几个根之内」，不传则只认 promaRoot */
-  extraSourceRoots?: readonly string[];
   /** orbita 的 pi 本子目录（pi-sessions/）：源 pi 文件的副本落这里 */
   piSessionDir: string;
   /** cwd 三级链的最后一环：无归属且源 cwd 不可用时用（= WorkspaceStore.defaultPath） */
@@ -226,35 +227,71 @@ export interface RunImporterDeps extends ImporterDeps {
 // 探测（只 stat）
 // ---------------------------------------------------------------------------
 
+/** Proma 数据根的目录名：`.proma`，或 `.proma-` 后面跟一段名字（`.proma-dev`、`.proma-dev-fork`…） */
+const PROMA_ROOT_NAME = /^\.proma(-[^\\/]+)?$/;
+
+/**
+ * 家目录下的 Proma 数据根。Proma 的正式版用 `~/.proma`，开发版 / 分支版各用一个 `~/.proma-*`
+ * ——哪台机器上有哪几个说不准（此前写死 `~/.proma-dev`，Windows 上只有 `.proma` 的用户直接
+ * 被判成「没装 Proma」），所以按名字找、有几个读几个。只列目录，有没有会话索引扫描时再看。
+ *
+ * 按名字排（`.proma` 在最前）：这个顺序决定几个根里内容相同的会话留哪一份、同名 skill /
+ * MCP 先到先得，必须每次一样——执行时会重扫，用户勾的是扫描时留下的那份的路径。
+ */
+export async function findPromaRoots(home: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(home);
+  } catch {
+    return [];
+  }
+  const roots: string[] = [];
+  for (const name of names.filter((candidate) => PROMA_ROOT_NAME.test(candidate)).sort()) {
+    try {
+      if ((await stat(join(home, name))).isDirectory()) roots.push(join(home, name));
+    } catch {
+      // 断链、没权限：当它不存在
+    }
+  }
+  return roots;
+}
+
+/** 有会话索引的数据根（只 stat）。探测用它判断 Proma 在不在、列哪些路径 */
+async function rootsWithIndex(roots: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const root of roots) {
+    try {
+      if ((await stat(join(root, "agent-sessions.json"))).isFile()) out.push(root);
+    } catch {
+      // 没有索引：不是一个能导的数据根
+    }
+  }
+  return out;
+}
+
 /**
  * Proma 来源的探测：列出扫描会读的全部路径，只 stat 索引文件判断在不在。**不读内容**——
- * 页面一打开就跑它，用户还没勾任何东西。paths 与扫描的实际读取范围一一对应：
- * 会话索引、工作区表、pi 真源目录、claude legacy 渲染目录，以及旧根的 pi 真源（索引里
- * 有条目仍指向那里）。
+ * 页面一打开就跑它，用户还没勾任何东西。paths 与扫描的实际读取范围一一对应：每个有索引的
+ * 数据根各一组——会话索引、工作区表、pi 真源目录、claude legacy 渲染目录、skills、MCP。
+ * 一个都没有时列第一个候选根（没有候选就是 `fallbackRoot`），告诉用户找过哪里。
  */
-export async function probeProma(promaRoot: string, extraRoots: readonly string[] = []): Promise<ImportSourceProbe> {
-  const index = join(promaRoot, "agent-sessions.json");
-  let found = false;
-  try {
-    found = (await stat(index)).isFile();
-  } catch {
-    found = false;
-  }
+export async function probeProma(roots: readonly string[], fallbackRoot: string): Promise<ImportSourceProbe> {
+  const indexed = await rootsWithIndex(roots);
+  const listed = indexed.length > 0 ? indexed : [roots[0] ?? fallbackRoot];
   return {
     id: "proma",
     label: "Proma",
     kind: "app",
-    paths: [
-      index,
-      join(promaRoot, "agent-workspaces.json"),
-      join(promaRoot, "sdk-config", "sessions"),
-      join(promaRoot, "agent-sessions"),
-      ...extraRoots.map((root) => join(root, "sdk-config", "sessions")),
-      join(promaRoot, "agent-workspaces", "*", "skills"),
-      join(promaRoot, "default-skills"),
-      join(promaRoot, "agent-workspaces", "*", "mcp.json"),
-    ],
-    found,
+    paths: listed.flatMap((root) => [
+      join(root, "agent-sessions.json"),
+      join(root, "agent-workspaces.json"),
+      join(root, "sdk-config", "sessions"),
+      join(root, "agent-sessions"),
+      join(root, "agent-workspaces", "*", "skills"),
+      join(root, "default-skills"),
+      join(root, "agent-workspaces", "*", "mcp.json"),
+    ]),
+    found: indexed.length > 0,
   };
 }
 
@@ -392,7 +429,8 @@ export function parsePromaSessions(raw: string): {
   entries: PromaSessionIndexEntry[];
   claudeEntries: PromaClaudeIndexEntry[];
   bad: ImportSkipItem[];
-  withoutPiFile: number;
+  /** 没有可识别会话源的条目 id（几个数据根合起来按 id 去重再计数） */
+  withoutPiIds: string[];
 } {
   let parsed: unknown;
   try {
@@ -404,7 +442,7 @@ export function parsePromaSessions(raw: string): {
   const entries: PromaSessionIndexEntry[] = [];
   const claudeEntries: PromaClaudeIndexEntry[] = [];
   const bad: ImportSkipItem[] = [];
-  let withoutPiFile = 0;
+  const withoutPiIds: string[] = [];
   list.forEach((item, index) => {
     if (!isRecord(item)) {
       bad.push({ sourceId: `#${index}`, title: null, reason: "bad-index-entry", detail: "not an object" });
@@ -443,12 +481,164 @@ export function parsePromaSessions(raw: string): {
         ? optionalString(item["legacyTranscript"]["sourceRuntime"])
         : null;
       if (legacy === "claude") claudeEntries.push(common);
-      else withoutPiFile += 1;
+      else withoutPiIds.push(id);
       return;
     }
     entries.push({ ...common, piSessionFile });
   });
-  return { entries, claudeEntries, bad, withoutPiFile };
+  return { entries, claudeEntries, bad, withoutPiIds };
+}
+
+/** 一条索引条目连同它来自哪个数据根：工作区表与界面日志都按根各读各的。 */
+interface RootedEntry<E> {
+  entry: E;
+  root: string;
+  /** 这个根的工作区表（entry.workspaceId 指的是它里面的 id） */
+  workspaces: readonly PromaWorkspaceEntry[];
+  /** 源文件：pi 条目是索引里的 piSessionFile，claude legacy 按根推导 */
+  sourceFile: string;
+}
+
+/** 几个数据根的索引合在一起（按根的顺序，根内按索引顺序）。还没去重。 */
+interface PromaIndex {
+  pi: RootedEntry<PromaSessionIndexEntry>[];
+  claude: RootedEntry<PromaClaudeIndexEntry>[];
+  bad: ImportSkipItem[];
+  /** 没有可识别会话源的条数，按 id 去重 */
+  withoutPiSession: number;
+}
+
+const EMPTY_PROMA_INDEX: PromaIndex = { pi: [], claude: [], bad: [], withoutPiSession: 0 };
+
+/**
+ * 读全部数据根的会话索引与工作区表。没有索引的根跳过；某个根的索引坏了记一条
+ * bad-index-entry、别的根照读。**一个索引都读不到才抛错**——勾了 Proma 却什么都没读到，
+ * 不能报成「扫了但是空的」。
+ */
+async function readPromaIndex(roots: readonly string[]): Promise<PromaIndex> {
+  const index: PromaIndex = { pi: [], claude: [], bad: [], withoutPiSession: 0 };
+  const withoutPi = new Set<string>();
+  const failures: string[] = [];
+  let readAny = false;
+  for (const root of roots) {
+    const file = join(root, "agent-sessions.json");
+    let parsed: ReturnType<typeof parsePromaSessions>;
+    try {
+      parsed = parsePromaSessions(await readFile(file, "utf8"));
+    } catch (cause) {
+      if (isNotFound(cause)) continue;
+      const message = `${file}：${cause instanceof Error ? cause.message : String(cause)}`;
+      failures.push(message);
+      index.bad.push({ sourceId: file, title: null, reason: "bad-index-entry", detail: message });
+      continue;
+    }
+    readAny = true;
+    let workspaces: PromaWorkspaceEntry[] = [];
+    try {
+      workspaces = parsePromaWorkspaces(await readFile(join(root, "agent-workspaces.json"), "utf8"));
+    } catch {
+      // 工作区表读不到 ≠ 导不了：全部按无归属走规则 ②（TASKS）。旧版 Proma 可能
+      // 没有这份文件，会话照导，只是没有工作区归属
+    }
+    for (const entry of parsed.entries) {
+      index.pi.push({ entry, root, workspaces, sourceFile: entry.piSessionFile });
+    }
+    for (const entry of parsed.claudeEntries) {
+      index.claude.push({ entry, root, workspaces, sourceFile: claudeSourceFile(root, entry.id) });
+    }
+    index.bad.push(...parsed.bad);
+    for (const id of parsed.withoutPiIds) withoutPi.add(id);
+  }
+  if (!readAny) {
+    throw new Error(
+      failures.length > 0
+        ? `读不了 Proma 会话索引（${failures.join("；")}）`
+        : `找不到 Proma 会话索引（找过：${roots.length > 0 ? roots.join("、") : "家目录下没有 .proma*"}）`,
+    );
+  }
+  index.withoutPiSession = withoutPi.size;
+  return index;
+}
+
+/**
+ * 几个数据根里同一条会话只留一份。同一条 = 同一个 Proma 会话 id；留哪份按**内容**定：
+ *
+ * - 指向同一个文件（`.proma-dev` 的索引有 66 条仍指向 `.proma` 下的文件）→ 就是一份
+ * - 一份是另一份的字节前缀 → 留长的。两种源文件（pi 真源、claude legacy 界面日志）都只追加，
+ *   前缀 = 复制到另一个根之后又接着聊了；完全相同是前缀的特例（本机 `.proma` 与
+ *   `.proma-dev` 重叠的 328 条里 327 条字节相同）。一样长时留 preferred 的（导过的那份——
+ *   再次导入才对得上 orbita 里的副本），再不然留排在前面的根的
+ * - 谁也不是谁的前缀 → 都留，各导一条。同一个 id 下内容分了叉就是两段不同的对话（本机那 1 条
+ *   是 Proma 迁移后另起的 pi 会话，两份一条公共 entry 都没有），丢哪份都是丢数据
+ *
+ * 被顶掉的路径进留下那份的 aliases：导过没有、删过没有按全部别名认。读不了的文件不参与比较
+ * （留下，后面照常报 missing-file / bad-session-file）。只有出现在两个以上根里、路径又不同的 id
+ * 才读内容。
+ */
+async function dedupeAcrossRoots<E extends { id: string }>(
+  items: readonly RootedEntry<E>[],
+  preferred: (file: string) => boolean,
+): Promise<{
+  kept: { item: RootedEntry<E>; aliases: string[] }[];
+  dropped: { item: RootedEntry<E>; keptFile: string }[];
+}> {
+  const byId = new Map<string, number[]>();
+  items.forEach((item, index) => byId.set(item.entry.id, [...(byId.get(item.entry.id) ?? []), index]));
+
+  /** 被顶掉的条目下标 → 留下的条目下标 */
+  const droppedTo = new Map<number, number>();
+  for (const members of byId.values()) {
+    if (members.length < 2) continue;
+    // 同一文件的先并成一份（排在前面的根代表它）
+    const units: { rep: number; others: number[]; bytes: Buffer | null }[] = [];
+    for (const index of members) {
+      const file = resolve(items[index]?.sourceFile ?? "");
+      const unit = units.find((candidate) => resolve(items[candidate.rep]?.sourceFile ?? "") === file);
+      if (unit === undefined) units.push({ rep: index, others: [], bytes: null });
+      else unit.others.push(index);
+    }
+    if (units.length > 1) {
+      for (const unit of units) {
+        try {
+          unit.bytes = await readFile(items[unit.rep]?.sourceFile ?? "");
+        } catch {
+          unit.bytes = null;
+        }
+      }
+    }
+    const rank = (unit: (typeof units)[number]): number => (preferred(items[unit.rep]?.sourceFile ?? "") ? 0 : 1);
+    /** outer 是否覆盖 inner：inner 是 outer 的前缀，且 outer 更长、或一样长但排在前面 */
+    const covers = (outer: (typeof units)[number], inner: (typeof units)[number]): boolean => {
+      if (outer === inner || outer.bytes === null || inner.bytes === null) return false;
+      if (outer.bytes.length < inner.bytes.length) return false;
+      if (!outer.bytes.subarray(0, inner.bytes.length).equals(inner.bytes)) return false;
+      if (outer.bytes.length > inner.bytes.length) return true;
+      return rank(outer) < rank(inner) || (rank(outer) === rank(inner) && units.indexOf(outer) < units.indexOf(inner));
+    };
+    const survivors = units.filter((unit) => !units.some((other) => covers(other, unit)));
+    for (const unit of units) {
+      // 被覆盖的一份归到覆盖它的幸存者（前缀关系可传递，最长的那份一定覆盖它）
+      const owner = survivors.includes(unit) ? unit : survivors.find((survivor) => covers(survivor, unit));
+      const target = owner?.rep ?? unit.rep;
+      if (target !== unit.rep) droppedTo.set(unit.rep, target);
+      for (const other of unit.others) droppedTo.set(other, target);
+    }
+  }
+
+  const aliases = new Map<number, string[]>();
+  const dropped: { item: RootedEntry<E>; keptFile: string }[] = [];
+  items.forEach((item, index) => {
+    const target = droppedTo.get(index);
+    if (target === undefined) return;
+    const keptItem = items[target];
+    if (keptItem === undefined) return;
+    aliases.set(target, [...(aliases.get(target) ?? []), item.sourceFile]);
+    dropped.push({ item, keptFile: keptItem.sourceFile });
+  });
+  const kept = items.flatMap((item, index) =>
+    droppedTo.has(index) ? [] : [{ item, aliases: [...new Set([item.sourceFile, ...(aliases.get(index) ?? [])])] }],
+  );
+  return { kept, dropped };
 }
 
 /** 解 agent-workspaces.json。坏条目跳过（它只是映射辅助，不值得拦整批）。 */
@@ -755,7 +945,7 @@ async function resolveWorkspaceTarget(
   if (promaWorkspace === undefined || promaWorkspace.projectRootPath === null) {
     return {
       workspaceId: null,
-      cwd: usableCwd(headerCwd, deps.promaRoot, deps.defaultCwd),
+      cwd: usableCwd(headerCwd, deps.promaRoots, deps.defaultCwd),
       folder: null,
       create: null,
       mergedInto: null,
@@ -837,13 +1027,24 @@ function applyDestination(
   return resolution;
 }
 
-/** header cwd 可用性：空串或落在 Proma 数据根内 → 不可用，退 defaultCwd。 */
-function usableCwd(headerCwd: string, promaRoot: string, defaultCwd: string): string {
+/** header cwd 可用性：空串或落在某个 Proma 数据根内 → 不可用，退 defaultCwd。 */
+function usableCwd(headerCwd: string, promaRoots: readonly string[], defaultCwd: string): string {
   if (headerCwd === "") return defaultCwd;
-  const resolved = resolve(headerCwd);
-  const root = resolve(promaRoot);
-  if (resolved === root || resolved.startsWith(`${root}${sep}`)) return defaultCwd;
+  if (promaRoots.some((root) => isInside(root, headerCwd))) return defaultCwd;
   return headerCwd;
+}
+
+/**
+ * path 是不是 root 本身或在它下面。用 relative 判断，不用前缀比较（拼 `${root}/`、
+ * `${root}${sep}`，或 shared/path 的 pathWithin）：
+ * - 写死 `/` 在 Windows 上永远不成立（resolve 产出反斜杠），数据根里每个文件都被判「越界」；
+ * - 前缀比较区分大小写，而 Windows 路径不区分——盘符 `c:` / `C:`、索引里记的用户目录与
+ *   homedir() 的大小写不一致时同样误判越界。path.win32.relative 按不区分大小写比较。
+ * pathWithin 留给 renderer（那里没有 node:path）；主进程判越界走这里。
+ */
+function isInside(root: string, path: string): boolean {
+  const rel = relative(resolve(root), resolve(path));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 // ---------------------------------------------------------------------------
@@ -863,15 +1064,13 @@ interface PiSource {
  * migrateSessionEntries 在内存里迁移。
  * 抛错 = 这条进 bad-session-file（路径越界 / header 缺失 / version 超前 / 读不了）。
  */
-async function readPiSource(path: string, promaRoot: string, extraRoots: readonly string[]): Promise<PiSource> {
-  // 防御：索引里的路径必须落在已知数据根内（真源在 <root>/sdk-config/sessions/ 下；
+async function readPiSource(path: string, promaRoots: readonly string[]): Promise<PiSource> {
+  // 防御：索引里的路径必须落在某个数据根内（真源在 <root>/sdk-config/sessions/ 下；
   // 真实数据里 66 条仍指旧根 ~/.proma——Proma 从 .proma 迁到 .proma-dev 时索引没重写，
   // 文件仍在），一份被手改过的索引不该让导入器去读任意文件。
   // 分隔符必须用 sep：写死 `/` 时 Windows 上根内的每个文件都会被判成越界（这条咬过一次）
   const resolved = resolve(path);
-  const roots = [resolve(promaRoot), ...extraRoots.map((root) => resolve(root))];
-  const inAnyRoot = roots.some((root) => resolved === root || resolved.startsWith(`${root}${sep}`));
-  if (!inAnyRoot) {
+  if (!promaRoots.some((root) => isInside(root, resolved))) {
     throw new Error(`session file outside the Proma data roots: ${path}`);
   }
   let raw: string;
@@ -940,7 +1139,12 @@ async function scanWithConfigs(
   deps: ImporterDeps,
   destinations: readonly ImportDestinationChoice[],
   sources: readonly ImportSourceId[],
-): Promise<{ report: ImportScanReport; mcpServers: Map<string, McpServer>; greetingCandidates: Map<string, string> }> {
+): Promise<{
+  report: ImportScanReport;
+  mcpServers: Map<string, McpServer>;
+  greetingCandidates: Map<string, string>;
+  promaRootBySource: Map<string, string>;
+}> {
   const overrides = new Map<string | null, ImportDestination>(
     destinations.map((choice) => [choice.folder, choice.destination]),
   );
@@ -949,6 +1153,8 @@ async function scanWithConfigs(
   const skipped: ImportSkipItem[] = [];
   /** 新会话里用户只写过一条的：sourceFile → 那一条（「只随手发了一句」检查的候选，计划成形后再筛） */
   const singleMessages = new Map<string, string>();
+  /** Proma pi 条目的源文件 → 它的索引所在的数据根：执行时去那个根找界面日志（取用户原文） */
+  const promaRootBySource = new Map<string, string>();
   const skip = (sourceId: string, title: string | null, reason: ImportSkipReason, detail?: string): void => {
     skipped.push(detail === undefined ? { sourceId, title, reason } : { sourceId, title, reason, detail });
   };
@@ -968,55 +1174,48 @@ async function scanWithConfigs(
   // 导入清单：清单里有、meta 里没有 = 导过、后来在 orbita 删了
   const ledger = await readImportLedger(deps.ledgerFile);
   const everImported = new Set(ledger.map((line) => line.sourceFile));
-  const freshChange = (sourceFile: string): ImportChange => (everImported.has(sourceFile) ? "deleted" : "new");
+  /**
+   * 「导过没有、删过没有」按一条会话的**全部源路径**认：自己，加上几个数据根里被它顶掉的重复
+   * （aliases）。上次从 `.proma-dev` 导的，这次留下的是 `.proma` 那份（或反过来），照样认得出。
+   */
+  const freshChange = (sourceFile: string, aliases: readonly string[] = [sourceFile]): ImportChange =>
+    everImported.has(sourceFile) || aliases.some((file) => everImported.has(file)) ? "deleted" : "new";
+  const importedCopies = (aliases: readonly string[]): SessionMeta[] => [
+    ...new Set(aliases.flatMap((file) => importedBySource.get(file) ?? [])),
+  ];
 
   // 没勾 Proma：索引与工作区表都不读，下面两个 Proma 循环跑空
-  let promaSessions: ReturnType<typeof parsePromaSessions> = { entries: [], claudeEntries: [], bad: [], withoutPiFile: 0 };
-  if (sources.includes("proma")) {
-    try {
-      promaSessions = parsePromaSessions(await readFile(join(deps.promaRoot, "agent-sessions.json"), "utf8"));
-    } catch (cause) {
-      throw new Error(
-        `读不了 Proma 会话索引（${join(deps.promaRoot, "agent-sessions.json")}）：${cause instanceof Error ? cause.message : String(cause)}`,
-      );
-    }
-  }
-  skipped.push(...promaSessions.bad);
+  const promaIndex: PromaIndex = sources.includes("proma") ? await readPromaIndex(deps.promaRoots) : EMPTY_PROMA_INDEX;
+  skipped.push(...promaIndex.bad);
 
-  // 子会话回填的两张表（全部索引条目，不只是进了计划的）：父链，与找「此前已导入」的母会话用的源文件
+  // 子会话回填的两张表（全部数据根的全部索引条目，不只是进了计划的）：父链，与找「此前已导入」
+  // 的母会话用的源文件（一个 id 在几个根里各有一份，哪份导过都算）
   const parentSourceById = new Map<string, string>();
-  const sourceFileById = new Map<string, string>();
-  for (const entry of promaSessions.entries) {
-    sourceFileById.set(entry.id, entry.piSessionFile);
-    if (entry.parentSourceId !== null) parentSourceById.set(entry.id, entry.parentSourceId);
-  }
-  for (const entry of promaSessions.claudeEntries) {
-    sourceFileById.set(entry.id, claudeSourceFile(deps.promaRoot, entry.id));
-    if (entry.parentSourceId !== null) parentSourceById.set(entry.id, entry.parentSourceId);
-  }
-
-  let promaWorkspaces: PromaWorkspaceEntry[] = [];
-  if (sources.includes("proma")) {
-    try {
-      promaWorkspaces = parsePromaWorkspaces(await readFile(join(deps.promaRoot, "agent-workspaces.json"), "utf8"));
-    } catch {
-      // 工作区表读不到 ≠ 导不了：全部按无归属走规则 ②（TASKS）。旧版 Proma 可能
-      // 没有这份文件，会话照导，只是没有工作区归属
+  const sourceFilesById = new Map<string, string[]>();
+  for (const rooted of [...promaIndex.pi, ...promaIndex.claude]) {
+    sourceFilesById.set(rooted.entry.id, [...(sourceFilesById.get(rooted.entry.id) ?? []), rooted.sourceFile]);
+    if (rooted.entry.parentSourceId !== null && !parentSourceById.has(rooted.entry.id)) {
+      parentSourceById.set(rooted.entry.id, rooted.entry.parentSourceId);
     }
   }
 
-  for (const entry of promaSessions.entries) {
+  // 几个数据根里的同一条会话只留一份（内容相同或是前缀的那份不导）；导过的那份优先留，
+  // 再次导入才对得上 orbita 里的副本
+  const preferred = (file: string): boolean => importedBySource.has(file) || everImported.has(file);
+  const piDeduped = await dedupeAcrossRoots(promaIndex.pi, preferred);
+  const claudeDeduped = await dedupeAcrossRoots(promaIndex.claude, preferred);
+  for (const { item, keptFile } of [...piDeduped.dropped, ...claudeDeduped.dropped]) {
+    skip(item.entry.id, item.entry.title || null, "duplicate", keptFile);
+  }
+
+  for (const { item: rooted, aliases } of piDeduped.kept) {
+    const { entry } = rooted;
     if (seenSources.has(entry.piSessionFile)) {
-      skip(
-        entry.id,
-        entry.title || null,
-        "already-imported",
-        "another index entry with the same source file is already in the plan",
-      );
+      skip(entry.id, entry.title || null, "duplicate", entry.piSessionFile);
       continue;
     }
     seenSources.add(entry.piSessionFile);
-    const copies = importedBySource.get(entry.piSessionFile) ?? [];
+    const copies = importedCopies(aliases);
     let bytes: number | null;
     try {
       bytes = (await stat(entry.piSessionFile)).size;
@@ -1036,7 +1235,7 @@ async function scanWithConfigs(
 
     let source: PiSource;
     try {
-      source = await readPiSource(entry.piSessionFile, deps.promaRoot, deps.extraSourceRoots ?? []);
+      source = await readPiSource(entry.piSessionFile, deps.promaRoots);
     } catch (cause) {
       if (copies.length > 0) {
         // 导过、现在源读不了：orbita 里那份照留，这次不动它
@@ -1049,8 +1248,9 @@ async function scanWithConfigs(
     const sessionEntries = source.entries.filter(
       (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
     );
+    promaRootBySource.set(entry.piSessionFile, rooted.root);
 
-    let change: ImportChange = freshChange(entry.piSessionFile);
+    let change: ImportChange = freshChange(entry.piSessionFile, aliases);
     let newMessages = 0;
     /** diverged：另导的一份落在原会话旁边（同工作区、同 cwd），不走去向解析 */
     let besideOriginal: SessionMeta | null = null;
@@ -1070,7 +1270,7 @@ async function scanWithConfigs(
       besideOriginal = state.meta;
     } else {
       // 「只随手发了一句」检查的候选：只看没导过的（导过的怎么变都走上面的再次导入）
-      const only = await promaOnlyMessage(sessionEntries, deps.promaRoot, entry.id);
+      const only = await promaOnlyMessage(sessionEntries, rooted.root, entry.id);
       if (only !== null) singleMessages.set(entry.piSessionFile, only);
     }
 
@@ -1079,7 +1279,7 @@ async function scanWithConfigs(
       resolution = { folder: null, workspaceId: besideOriginal.workspaceId, cwd: besideOriginal.cwd };
     } else {
       const resolved = applyDestination(
-        await resolveWorkspaceTarget(entry.workspaceId, promaWorkspaces, deps.workspaces, source.headerCwd, deps),
+        await resolveWorkspaceTarget(entry.workspaceId, rooted.workspaces, deps.workspaces, source.headerCwd, deps),
         overrides,
         deps,
       );
@@ -1129,22 +1329,17 @@ async function scanWithConfigs(
     });
   }
 
-  // —— claude legacy 条目：渲染 JSONL 转换导入（源文件按 <promaRoot>/agent-sessions/<id>.jsonl 推导） ——
-  for (const entry of promaSessions.claudeEntries) {
-    const sourceFile = claudeSourceFile(deps.promaRoot, entry.id);
+  // —— claude legacy 条目：渲染 JSONL 转换导入（源文件按 <数据根>/agent-sessions/<id>.jsonl 推导） ——
+  for (const { item: rooted, aliases } of claudeDeduped.kept) {
+    const { entry, sourceFile } = rooted;
     // 导过就不会再变：Proma 的 Claude 时代会话是只读历史，不能续聊也不能回退
     // （Proma agent-orchestrator.ts 的 legacyTranscript.continuationRequired 拦截）
-    if (importedBySource.has(sourceFile)) {
+    if (importedCopies(aliases).length > 0) {
       skip(entry.id, entry.title || null, "already-imported");
       continue;
     }
     if (seenSources.has(sourceFile)) {
-      skip(
-        entry.id,
-        entry.title || null,
-        "already-imported",
-        "another index entry with the same source file is already in the plan",
-      );
+      skip(entry.id, entry.title || null, "duplicate", sourceFile);
       continue;
     }
     seenSources.add(sourceFile);
@@ -1176,7 +1371,7 @@ async function scanWithConfigs(
 
     // claude legacy 没有 pi header：无归属时 cwd 直接落 defaultCwd（usableCwd 对空串的行为）
     const resolution = applyDestination(
-      await resolveWorkspaceTarget(entry.workspaceId, promaWorkspaces, deps.workspaces, "", deps),
+      await resolveWorkspaceTarget(entry.workspaceId, rooted.workspaces, deps.workspaces, "", deps),
       overrides,
       deps,
     );
@@ -1199,7 +1394,7 @@ async function scanWithConfigs(
       sourceId: entry.id,
       source: "proma",
       sourceKind: "claude-legacy",
-      change: freshChange(sourceFile),
+      change: freshChange(sourceFile, aliases),
       newMessages: 0,
       folder: resolution.folder,
       sourceFile,
@@ -1282,7 +1477,7 @@ async function scanWithConfigs(
   const { subSessionCount, orphanedSubSessions } = linkSubSessions(
     plan,
     parentSourceById,
-    sourceFileById,
+    sourceFilesById,
     deps.existingMetas,
   );
   // 子会话对齐母会话的工作区之后，它自己解析出的新建 / 合并工作区可能已无人引用——
@@ -1301,9 +1496,23 @@ async function scanWithConfigs(
     if (isSelectablePlanItem(item, planIds)) greetingCandidates.set(item.sourceFile, only);
   }
 
-  // skills：组的顺序就是重名先到先得的顺序——Proma 各工作区 → 共用目录 → Claude Code
-  const promaFolders = sources.includes("proma") ? await promaWorkspaceFolders(deps.promaRoot) : [];
-  const skillDirs: SkillSourceDir[] = promaSkillDirs(deps.promaRoot, promaFolders);
+  // skills：组的顺序就是重名先到先得的顺序——Proma 各数据根的各工作区 → 共用目录 → Claude Code。
+  // 几个根里多半有同名工作区（整份复制过来的），不止一个根时组名后面带上根的目录名好分辨
+  const promaRoots = sources.includes("proma") ? await rootsWithIndex(deps.promaRoots) : [];
+  const promaFolders: { root: string; folders: { slug: string; name: string }[] }[] = [];
+  for (const root of promaRoots) {
+    const folders = await promaWorkspaceFolders(root);
+    promaFolders.push({
+      root,
+      folders:
+        promaRoots.length > 1 ? folders.map((folder) => ({ ...folder, name: `${folder.name} · ${basename(root)}` })) : folders,
+    });
+  }
+  const skillDirs: SkillSourceDir[] = promaFolders.flatMap(({ root, folders }) => promaSkillDirs(root, folders));
+  const promaBuiltIns = new Set<string>();
+  for (const root of promaRoots) {
+    for (const slug of await promaBuiltInSkills(root)) promaBuiltIns.add(slug);
+  }
   if (sources.includes("agent-skills") && deps.agentSkillsDir !== undefined) {
     skillDirs.push({ source: "agent-skills", name: null, dir: deps.agentSkillsDir });
   }
@@ -1316,11 +1525,12 @@ async function scanWithConfigs(
       : await scanSkillDirs(
           skillDirs,
           new Set(deps.existingSkills ?? []),
-          sources.includes("proma") ? await promaBuiltInSkills(deps.promaRoot) : new Set<string>(),
+          promaBuiltIns,
         );
 
   // MCP：同名取先到的配置——Proma（按工作区顺序）→ Claude Code（全局 → 各项目）→ Kimi Code → opencode
-  const mcpEntries: McpSourceEntry[] = await readPromaMcp(deps.promaRoot, promaFolders);
+  const mcpEntries: McpSourceEntry[] = [];
+  for (const { root, folders } of promaFolders) mcpEntries.push(...(await readPromaMcp(root, folders)));
   if (sources.includes("claude-code") && deps.claudeCode !== undefined) {
     mcpEntries.push(...(await readClaudeCodeMcp(deps.claudeCode.claudeJson)));
   }
@@ -1337,7 +1547,7 @@ async function scanWithConfigs(
     newWorkspaces: [...newWorkspaceByKey.values()].filter((workspace) => referenced.has(workspace.id)),
     mergedWorkspaceIds: [...mergedIds].filter((id) => referenced.has(id)),
     skipped,
-    withoutPiSession: promaSessions.withoutPiFile,
+    withoutPiSession: promaIndex.withoutPiSession,
     totalBytes,
     subSessionCount,
     orphanedSubSessions,
@@ -1353,7 +1563,7 @@ async function scanWithConfigs(
       unavailable: "unavailable" in greeting ? greeting.unavailable : null,
     },
   };
-  return { report, mcpServers: mcp.servers, greetingCandidates };
+  return { report, mcpServers: mcp.servers, greetingCandidates, promaRootBySource };
 }
 
 /** 一个来源都没勾时的扫描结果：什么都没读，也就什么都没有。 */
@@ -1932,7 +2142,7 @@ interface ParentTarget {
 function linkSubSessions(
   plan: ImportPlanItem[],
   parentSourceById: ReadonlyMap<string, string>,
-  sourceFileById: ReadonlyMap<string, string>,
+  sourceFilesById: ReadonlyMap<string, readonly string[]>,
   existingMetas: readonly SessionMeta[],
 ): { subSessionCount: number; orphanedSubSessions: number } {
   const planBySourceId = new Map(plan.map((item) => [item.sourceId, item]));
@@ -1960,8 +2170,10 @@ function linkSubSessions(
     if (inPlan !== undefined) {
       return { sessionId: inPlan.sessionId, workspaceId: inPlan.workspaceId, cwd: inPlan.cwd, folder: inPlan.folder };
     }
-    const sourceFile = sourceFileById.get(rootSourceId);
-    const imported = sourceFile === undefined ? undefined : importedByFile.get(sourceFile);
+    // 母会话在几个数据根里各有一份时，哪份导过都算
+    const imported = (sourceFilesById.get(rootSourceId) ?? [])
+      .map((file) => importedByFile.get(file))
+      .find((meta) => meta !== undefined);
     if (imported !== undefined) {
       return { sessionId: imported.id, workspaceId: imported.workspaceId, cwd: imported.cwd };
     }
@@ -2256,7 +2468,12 @@ export function selectPlan(plan: readonly ImportPlanItem[], chosen: ReadonlySet<
 }
 
 export async function runImport(deps: RunImporterDeps, selection?: ImportSelection): Promise<ImportRunReport> {
-  const { report: scanned, mcpServers } = await scanWithConfigs(deps, selection?.destinations ?? [], selection?.sources ?? ["proma"]);
+  const { report: scanned, mcpServers, promaRootBySource } = await scanWithConfigs(
+    deps,
+    selection?.destinations ?? [],
+    selection?.sources ?? ["proma"],
+  );
+  const renderRoot = (item: ImportPlanItem): string | null => promaRootBySource.get(item.sourceFile) ?? null;
   const plan = selection === undefined ? scanned.plan : selectPlan(scanned.plan, selection.sessions);
   // 没被勾的会话不落，它们要新建的工作区也不建
   const usedWorkspaceIds = new Set(plan.map((item) => item.workspaceId));
@@ -2314,7 +2531,7 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
         // 追加：副本换成新的源（副本是源的前缀，整份换 = 追加），transcript 整份重派生
         const target = deps.existingMetas.find((meta) => meta.id === item.sessionId)?.piSessionFile ?? null;
         if (target === null) throw new Error("the imported session has no pi session file to update");
-        const session = await runPiImport(item, deps, { path: target });
+        const session = await runPiImport(item, deps, { path: target }, renderRoot(item));
         await deps.refreshSession(item.sessionId, session.records, {
           recentQueries: recentQueriesFromRecords(session.records),
           stats: aggregatePrefixUsage(session.records),
@@ -2343,6 +2560,7 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
               item.change === "diverged"
                 ? { path: join(deps.piSessionDir, `${basename(item.sourceFile, ".jsonl").split("_")[0]}_${item.sessionId}.jsonl`), headerId: item.sessionId }
                 : { path: join(deps.piSessionDir, basename(item.sourceFile)) },
+              renderRoot(item),
             );
 
       // meta + transcript：两条源路最终都汇到同一个形态——records 已由各路返给 meta
@@ -2468,8 +2686,10 @@ async function runPiImport(
   item: ImportPlanItem,
   deps: RunImporterDeps,
   dest: { path: string; headerId?: string },
+  /** 界面日志所在的数据根（这条的索引所在的根）；null = 没有界面日志可读，按格式剥用户原文 */
+  renderRoot: string | null,
 ): Promise<ImportedSession> {
-  const source = await readPiSource(item.sourceFile, deps.promaRoot, deps.extraSourceRoots ?? []);
+  const source = await readPiSource(item.sourceFile, deps.promaRoots);
   const sessionEntries = source.entries.filter(
     (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
   );
@@ -2486,7 +2706,7 @@ async function runPiImport(
   }
   // transcript 里的用户消息还原成用户写的原文（proma-user-text.ts）：主路是 Proma 的界面日志，
   // 读不到就按 Proma 的拼接格式剥。**pi 副本上面已原样落盘**——那是模型当时读到的，不改
-  const renderLog = await readRenderLog(deps.promaRoot, item.sourceId);
+  const renderLog = renderRoot === null ? null : await readRenderLog(renderRoot, item.sourceId);
   const userTexts = promaUserTextMap(sessionEntries, renderLog === null ? null : promaUserTexts(renderLog));
   return {
     path: destPath,
@@ -2554,8 +2774,7 @@ async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps
 
 /** 补记行的来源：meta 只存了源文件，按它落在哪个来源的根下判断。 */
 function sourceOfImported(deps: ImporterDeps, sourceFile: string): ImportSourceId {
-  const under = (root: string | undefined): boolean =>
-    root !== undefined && sourceFile.startsWith(`${resolve(root)}${sep}`);
+  const under = (root: string | undefined): boolean => root !== undefined && sourceFile !== "" && isInside(root, sourceFile);
   if (under(deps.claudeCode?.projectsDir)) return "claude-code";
   if (under(deps.kimiCode?.sessionsDir)) return "kimi-code";
   if (deps.opencode !== undefined && sourceFile.startsWith(`${resolve(deps.opencode.dbFile)}#`)) return "opencode";

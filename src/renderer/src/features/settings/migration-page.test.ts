@@ -191,7 +191,7 @@ describe("migration-page · Sessions", () => {
     assert.equal(mixedSources([item({}), item({ source: "opencode" })]), true);
   });
 
-  test("事实条：数是 0 的不出现；已导入与导不了分开数", () => {
+  test("事实条：数是 0 的不出现；已导入、重复、导不了各数各的，重复挨着「只打了招呼」", () => {
     assert.deepEqual(sessionFacts(report({}), EMPTY_GROUPED, NOW, en), []);
     const facts = sessionFacts(
       report({
@@ -199,6 +199,8 @@ describe("migration-page · Sessions", () => {
           { sourceId: "a", title: null, reason: "already-imported" },
           { sourceId: "b", title: null, reason: "already-imported" },
           { sourceId: "c", title: null, reason: "missing-file" },
+          { sourceId: "d", title: null, reason: "duplicate", detail: "/home/.proma/x.jsonl" },
+          { sourceId: "e", title: null, reason: "duplicate", detail: "/home/.proma/y.jsonl" },
         ],
         withoutPiSession: 4,
         orphanedSubSessions: 1,
@@ -212,12 +214,13 @@ describe("migration-page · Sessions", () => {
       [
         ["hidden", 9, "hidden"],
         ["greeting", 3, "only said hi"],
+        ["duplicate", 2, "duplicates"],
         ["orphaned", 1, "listed on their own"],
         ["already", 2, "already imported"],
         ["cannot", 5, "can't import"],
       ],
     );
-    assert.match(facts[3]!.tip, /last import 09-25 00:09$/);
+    assert.match(facts[4]!.tip, /last import 09-25 00:09$/);
   });
 });
 
