@@ -20,6 +20,17 @@ import { splitUserTextBlocks } from "./prompt-attachments.ts";
 export const SESSION_TITLE_MAX = 60;
 
 /**
+ * 导入会话的 provider 占位（导入与模型解耦，2026-09-28 裁决）：导入时不在 orbita 里
+ * 替源模型挑渠道，providerId 一律写这个占位，打开时用户自己选。真实 provider id 只
+ * 允许小写字母 / 数字 / 连字符（provider.ts 的 ID_PATTERN），带冒号的占位永远撞不上。
+ * meta 解析要求 providerId / modelId 非空，所以不能写空串——必须有个非空占位。
+ */
+export const UNASSIGNED_PROVIDER_ID = "orbita:unassigned";
+
+/** 导入会话没记录到原模型名时 modelId 的占位（同上：非空是 meta 解析的硬要求）。 */
+export const UNASSIGNED_MODEL_ID = "unknown";
+
+/**
  * 压缩边界记录。上下文压缩不是一条消息，是「此前的一切已折叠成摘要」的界碑——
  * 单独一个 role，不塞进 pi 的 TranscriptItem，也不做通用 visibility 包装：
  * 今天唯一的内部记录就是它，等第二个消费者出现再泛化（加字段是加法）。
@@ -249,6 +260,13 @@ export interface SessionMeta {
    * 按**工作区 id** 而不是按 cwd 归属：用户挪个文件夹或改个名，会话不该成孤儿。
    */
   workspaceId: string | null;
+  /**
+   * 会话当前用的 provider / 模型。导入的会话没有「当前用的」——providerId 落
+   * `UNASSIGNED_PROVIDER_ID` 占位、modelId 落源应用记录的原模型名（缺席 "unknown"），
+   * 打开时模型栏显示「没有模型」、由用户自己选（2026-09-28 裁决：导入与模型解耦，
+   * 源模型名对到哪个渠道「在我们这里做不出好的设计决策」）。原生会话的 provider
+   * 被删后也会短暂处于「无效 provider」态，同一套界面处理。
+   */
   providerId: string;
   modelId: string;
   /** 最后一次用的权限档。存下来是为了重开这条会话时不会静默换档。 */

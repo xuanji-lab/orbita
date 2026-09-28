@@ -6,6 +6,11 @@ import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
 import type {
+  ModelAssignEntry,
+  ModelAssignGroups,
+  ModelAssignRunResult,
+} from "../../shared/model-assign.ts";
+import type {
   Carryover,
   CarryoverDraft,
   CarryoverStatus,
@@ -24,6 +29,12 @@ export const sessionApi = {
   rename: (id: string, title: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRename, id, title),
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.sessionDelete, id),
+  // —— 给导入的会话分配模型（设置 › 服务商） ——
+  /** 还挂着占位 provider 的会话按原模型名分组（只读）；提示行与预览都吃它 */
+  modelAssignGroups: (): Promise<ModelAssignGroups> => ipcRenderer.invoke(ipcChannels.modelAssignGroups),
+  /** 按「原模型名 → 目标」清单执行；目标失效以错误 reject（稳定错误码），期间被改过的会话跳过 */
+  modelAssignRun: (entries: ModelAssignEntry[]): Promise<ModelAssignRunResult> =>
+    ipcRenderer.invoke(ipcChannels.modelAssignRun, entries),
   /** 工作台现状（路径 / 存不存在 / 递归文件数）。删除确认项吃它——先把后果说出来再删 */
   workbenchStat: (id: string): Promise<SessionWorkbenchStat> =>
     ipcRenderer.invoke(ipcChannels.sessionWorkbenchStat, id),

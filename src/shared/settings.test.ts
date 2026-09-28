@@ -327,32 +327,48 @@ describe("parseSettings 的 gitAttribution", () => {
   });
 });
 
-describe("parseSettings 的 titleModel", () => {
-  it("缺席 = 用会话当前的模型，不落这个键", () => {
-    deepStrictEqual(parseSettings({ theme: "graphite" }).titleModel, undefined);
+describe("parseSettings 的 choreModel", () => {
+  it("缺席 = 各件家务退回会话模型，不落这个键", () => {
+    deepStrictEqual(parseSettings({ theme: "graphite" }).choreModel, undefined);
   });
 
   it("两个 id 都在就原样收下", () => {
     deepStrictEqual(
-      parseSettings({ titleModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } })
-        .titleModel,
+      parseSettings({ choreModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } })
+        .choreModel,
       { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
     );
   });
 
-  it("存半截的丢掉——光有 modelId 定位不到密钥，光有 providerId 不知道叫哪个模型", () => {
-    deepStrictEqual(parseSettings({ titleModel: { modelId: "glm-5.3-flash" } }).titleModel, undefined);
-    deepStrictEqual(parseSettings({ titleModel: { providerId: "zhipu-coding" } }).titleModel, undefined);
+  it("旧键 titleModel（只管起名的时代）在 choreModel 缺席时接着用，选过的用户不用重选", () => {
     deepStrictEqual(
-      parseSettings({ titleModel: { providerId: "", modelId: "m" } }).titleModel,
+      parseSettings({ titleModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } })
+        .choreModel,
+      { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
+    );
+    // 新键在就不再看旧键（同一对象里两者都有：新键赢）
+    deepStrictEqual(
+      parseSettings({
+        choreModel: { providerId: "kimi", modelId: "kimi-k3" },
+        titleModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
+      }).choreModel,
+      { providerId: "kimi", modelId: "kimi-k3" },
+    );
+  });
+
+  it("存半截的丢掉——光有 modelId 定位不到密钥，光有 providerId 不知道叫哪个模型", () => {
+    deepStrictEqual(parseSettings({ choreModel: { modelId: "glm-5.3-flash" } }).choreModel, undefined);
+    deepStrictEqual(parseSettings({ choreModel: { providerId: "zhipu-coding" } }).choreModel, undefined);
+    deepStrictEqual(
+      parseSettings({ choreModel: { providerId: "", modelId: "m" } }).choreModel,
       undefined,
     );
   });
 
   it("坏值与非对象一律当没指定", () => {
-    deepStrictEqual(parseSettings({ titleModel: { providerId: 1, modelId: 2 } }).titleModel, undefined);
-    deepStrictEqual(parseSettings({ titleModel: "fast" }).titleModel, undefined);
-    deepStrictEqual(parseSettings({ titleModel: null }).titleModel, undefined);
+    deepStrictEqual(parseSettings({ choreModel: { providerId: 1, modelId: 2 } }).choreModel, undefined);
+    deepStrictEqual(parseSettings({ choreModel: "fast" }).choreModel, undefined);
+    deepStrictEqual(parseSettings({ choreModel: null }).choreModel, undefined);
   });
 });
 

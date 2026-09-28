@@ -104,6 +104,17 @@ export const ipcChannels = {
   sessionExport: "session:export",
   sessionDelete: "session:delete",
   /**
+   * 给导入的会话分配模型（设置 › 服务商的「分配模型」）：还挂着占位 provider 的会话
+   * 按原模型名分组统计（回 ModelAssignGroups）。只读，提示行与预览都吃它。
+   * 契约与匹配纯函数在 `model-assign.ts`
+   */
+  modelAssignGroups: "model-assign:groups",
+  /**
+   * 执行分配（入参 ModelAssignEntry[]，回 ModelAssignRunResult）：主进程写入前再校验
+   * 目标仍存在、会话仍是占位——期间被用户改过的跳过，绝不覆盖手选的模型
+   */
+  modelAssignRun: "model-assign:run",
+  /**
    * 会话工作台的现状（文件系统 2026-09-22）：路径、存不存在、里面有几个文件。
    * 消费者是删除确认（「提示后删」：删会话连带删工作台，确认项要把文件数说出来）与文件面板的 Session 根。
    * 按需现算，不进 meta——工作台存不存在是磁盘上的事实，不是会话的状态。
@@ -463,7 +474,7 @@ export type AgentCommand =
       sessionId: string;
       text: string;
       /**
-       * 命名专用模型（设置里的 titleModel）。**主进程解好密钥面再发**：
+       * 家务活模型（设置里的 choreModel，给任务起名等小活用）。**主进程解好密钥面再发**：
        * runtime 不读设置也不读密钥库，只收数据（同开轮命令的 provider）。
        * 缺席 = 用会话当前的模型（原有行为）；指的 provider 已删或解析失败时
        * 主进程同样不带，标题不因此停掉。

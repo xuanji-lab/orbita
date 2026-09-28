@@ -477,3 +477,19 @@
   justify-content: flex-end;
   gap: var(--space-2);
 }
+
+/* 迁移页三步清单第②步跳过来时：家务活模型行短暂高亮，1.6s 后淡去。
+   用 token 色（深浅主题各自成立），颜色只是第二信号——滚动与焦点已经把行送到了眼前 */
+.set-row[data-flash="on"] {
+  animation: set-row-flash 1.6s ease-out;
+}
+
+@keyframes set-row-flash {
+  0%,
+  60% {
+    background: var(--color-bg-active);
+  }
+  100% {
+    background: transparent;
+  }
+}

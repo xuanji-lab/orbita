@@ -50,6 +50,7 @@ import { composeChannelPrompt } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
+import { modelRequiredText } from "./model-required.ts";
 import {
   CLOSING_SCAN_PROMPT,
   CLOSING_SCAN_TIMEOUT_MS,
@@ -395,6 +396,8 @@ export interface SessionEngine {
    * pi 本子）+ 会话级意图。拿不出可用上下文时把错误写进引擎 error 并返回 null。
    */
   buildTurn(id: string): Omit<SubmitAgentInput, "sessionId" | "text"> | null;
+  /** 没选模型时的发送报错文案：有服务商但没选 →「先选一个模型」，一个都没有 → 原文 */
+  readonly modelMissingText: () => string;
   readonly setError: (error: string | null) => void;
   readonly error: string | null;
   readonly refreshSessions: () => void;
@@ -566,10 +569,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   const buildTurn = useCallback(
     (id: string): Omit<SubmitAgentInput, "sessionId" | "text"> | null => {
       const intent = intentRef.current;
-      if (intent.model === null) {
-        setError(messagesRef.current.session.noProvider);
-        return null;
-      }
       const meta = sessionsRef.current.find((entry) => entry.id === id) ?? null;
       const cwdTarget = meta?.cwd ?? intent.cwd ?? intent.defaultCwd;
       if (cwdTarget === "") {
@@ -586,7 +585,18 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
        * cwd / 归属 / pi 本子不走这套——它们是会话固定事实，meta 就是真值。
        */
       const own = sessionIntentRef.current.get(id);
-      const model = own?.model ?? (meta === null ? intent.model : { providerId: meta.providerId, modelId: meta.modelId });
+      // meta 的 provider 已不在可用列表里时不认：导入的会话落的是占位 provider
+      // （导入与模型解耦，2026-09-28 裁决），provider 被删的旧会话同理——改拿投递兑底
+      // （用户当下选的模型），不把无效 id 送去主进程
+      const metaModel =
+        meta !== null && usableRef.current.some((provider) => provider.id === meta.providerId)
+          ? { providerId: meta.providerId, modelId: meta.modelId }
+          : null;
+      const model = own?.model ?? metaModel ?? intent.model;
+      if (model === null) {
+        setError(modelRequiredText(usableRef.current.length > 0, messagesRef.current));
+        return null;
+      }
       return {
         cwd: cwdTarget,
         workspaceId: meta?.workspaceId ?? intent.workspaceId ?? null,
@@ -822,6 +832,18 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
 
   /** 「配置好」的标准与设置面的命名模型菜单同源（model-menu），不各写一份 */
   const usable = useMemo(() => usableProviders(providers), [providers]);
+  /** usable 的 ref 镜像：事件回调（buildTurn / modelMissingText）在闭包里也要读最新一份 */
+  const usableRef = useRef(usable);
+  usableRef.current = usable;
+
+  /**
+   * 没选模型时的发送报错（model-required.ts 的取舍）：有可用服务商但没选模型
+   * →「先选一个模型」（导入的会话正是这个状态）；一个都没有 → 原来的「先添服务商」。
+   */
+  const modelMissingText = useCallback(
+    () => modelRequiredText(usableRef.current.length > 0, messagesRef.current),
+    [],
+  );
 
   const answerApproval = useCallback(
     (requestId: string, answer: PermissionAnswer) => {
@@ -970,6 +992,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     sessionIntent: sessionIntentRef,
     rememberSessionIntent,
     buildTurn,
+    modelMissingText,
     setError,
     error,
     refreshSessions,
@@ -1173,6 +1196,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (model === null || engine.usable.length === 0) return;
     if (!engine.usable.some((p) => p.id === model.providerId)) setModel(null);
   }, [engine.usable, model]);
+
+  // 清空的补种：正开着的会话 meta 从占位变成真实模型（设置 › 服务商的「分配
+  // 模型」），列表刷新把新 meta 送来时种回模型栏——此前它被上面清成了「没有模型」。
+  // 只补 null：用户手选的（非 null）永远不动，不替任何人改选择。
+  useEffect(() => {
+    if (model !== null || opened === null) return;
+    const provider = engine.usable.find((p) => p.id === opened.providerId);
+    if (provider !== undefined && provider.models.declared.some((m) => m.id === opened.modelId)) {
+      setModel({ providerId: opened.providerId, modelId: opened.modelId });
+    }
+  }, [engine.usable, model, opened]);
 
   /** **正看着的会话的 meta 必须从引擎的列表刷新里拿真值**——活会话（首页直接开的那条）
    *  opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
@@ -1469,7 +1503,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       extras?: { files?: readonly ComposerFileRef[]; pasted?: readonly ComposerPastedText[] },
     ): Promise<void> => {
       if (model === null) {
-        engine.setError(engine.messagesRef.current.session.noProvider);
+        engine.setError(engine.modelMissingText());
         return;
       }
       // 无论新建还是从盘上重开：发出去的那一刻起它就是「本槽的活会话」——排队 /
@@ -1568,7 +1602,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         return;
       }
       if (model === null) {
-        engine.setError(engine.messagesRef.current.session.noProvider);
+        engine.setError(engine.modelMissingText());
         return;
       }
       // 压缩轮开起来的那一刻起它也是「本槽的活会话」——压缩期间按 stop 才能找到它
@@ -1618,7 +1652,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       return;
     }
     try {
-      if (model === null) throw new Error(engine.messagesRef.current.session.noProvider);
+      if (model === null) throw new Error(engine.modelMissingText());
       // 已有会话的 cwd / 归属 / 本子以 meta 真值为准（会话固定——用户切了工作区
       // 再对旧会话发消息，工具目录不能跟着变）；新会话用本槽当前选择。
       const meta = id !== null ? engine.sessions.find((entry) => entry.id === id) ?? null : null;
@@ -1761,7 +1795,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const startCarryoverTask = useCallback(
     (item: Carryover): void => {
       if (model === null) {
-        engine.setError(engine.messagesRef.current.session.noProvider);
+        engine.setError(engine.modelMissingText());
         return;
       }
       const source = engine.sessions.find((meta) => meta.id === item.sourceSessionId) ?? null;
@@ -2180,16 +2214,18 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   // provider 到位后先落一个默认模型：第一个 provider 的第一个模型。
-  // 用户没选过时界面上也该显示出到底会用哪个，而不是一片空白
+  // **只种新任务槽（opened === null）**：用户没选过时界面上也该显示出到底会用哪个，
+  // 而不是一片空白。打开的会话不替用户挑渠道——导入的会话 meta 落的是占位
+  // provider（导入与模型解耦，2026-09-28 裁决）、provider 被删的旧会话同理，模型栏
+  // 如实显示「没有模型」，发送时引导先选（model-required.ts）
   useEffect(() => {
-    if (model !== null) return;
+    if (model !== null || opened !== null) return;
     const first = engine.usable[0];
     const firstModel = first?.models.declared[0];
     if (first === undefined || firstModel === undefined) return;
     setModel({ providerId: first.id, modelId: firstModel.id });
-    // 这个默认模型也要有一个真实的起档，不是停在初始 medium——只限新任务槽：打开的旧会话
-    // 因 provider 被删而落到这里时，它的档仍是它自己的（发送前 pi 按支持集夹）
-    if (opened === null) applyNewTaskThinking(firstModel.id);
+    // 这个默认模型也要有一个真实的起档，不是停在初始 medium
+    applyNewTaskThinking(firstModel.id);
   }, [engine.usable, model, opened, applyNewTaskThinking]);
 
   // 目录是异步到的：上面几处起档发生时 engine.catalog 可能还是空数组，算出来的
@@ -2294,7 +2330,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 发出扫描消息（首次与重试共用）。**它是一条普通的用户消息**：走与
    * `send` 同一条 submit 链，进消息流、进 pi 历史，标题门禁与最近提问按普通消息处理。
    *
-   * 只有一处不同：这一轮优先用设置里的命名模型（`settings.titleModel`）——详 scanTurnModel。
+   * 只有一处不同：这一轮优先用设置里的家务活模型（`settings.choreModel`）——详 scanTurnModel。
    * 设置读不出来不拦扫描，退回会话模型就是了。
    */
   const launchScan = useCallback(
@@ -2303,7 +2339,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       engine.applyStates((prev) => setEntryPhase(prev, id, "turn"));
       void api.settings
         .get()
-        .then((settings) => settings.titleModel)
+        .then((settings) => settings.choreModel)
         .catch(() => undefined)
         .then((naming) =>
           api.agent.submit({

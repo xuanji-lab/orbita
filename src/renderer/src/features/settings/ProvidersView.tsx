@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import "./providers-view.css";
 import { KNOWN_PROVIDERS, isPlanBilling, type KnownProvider } from "@shared/known-providers";
 import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinProvider } from "@shared/agent-ipc";
+import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssignRunResult } from "@shared/model-assign";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { InfoTip, useSettingTip } from "./InfoTip";
@@ -23,6 +24,7 @@ import {
   reorderIds,
   urlSuffix,
 } from "./providers-view-model.ts";
+import { assignEntries, assignHint, assignPreview, type AssignPreview } from "./providers-assign.ts";
 import { useT } from "../../locale.ts";
 
 /**
@@ -38,14 +40,14 @@ import { useT } from "../../locale.ts";
  *  4. **保存语义就近分层**：模型启用 / 删除 / 参数编辑立即落盘（mutateModels），
  *     Save 只管身份字段（名称 / URL / key），所以它收在连接区里，而不是整页底栏。
  */
-export function ProvidersView(props: { onChange?: () => void }) {
+export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?: () => void }) {
   const t = useT();
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** 右栏三态：详情 / 选厂商目录 / 新建表单 */
-  const [view, setView] = useState<{ kind: "detail" } | { kind: "catalog" } | { kind: "new"; kindId: string }>({
-    kind: "detail",
-  });
+  /** 右栏三态：详情 / 选厂商目录 / 新建表单 / 给导入的会话分配模型 */
+  const [view, setView] = useState<
+    { kind: "detail" } | { kind: "catalog" } | { kind: "new"; kindId: string } | { kind: "assign" }
+  >({ kind: "detail" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState(emptyDraft());
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
@@ -70,6 +72,23 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const [dragId, setDragId] = useState<string | null>(null);
   /** 小框高亮的目标行：框住谁，松手就落到谁的位置 */
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  // —— 给导入的会话分配模型（model-assign.ts）：分组只随会话变，挂载与分配后各读一次 ——
+  const [assignGroups, setAssignGroups] = useState<ModelAssignGroups | null>(null);
+  const [assignBusy, setAssignBusy] = useState(false);
+  /** 上一轮分配的结果行；开着让用户看得到「配上了几个」，再进预览或离开本页才清 */
+  const [assignDone, setAssignDone] = useState<ModelAssignRunResult | null>(null);
+  const [assignError, setAssignError] = useState<string | null>(null);
+
+  const loadAssignGroups = useCallback(() => {
+    void api.session
+      .modelAssignGroups()
+      .then(setAssignGroups)
+      .catch(() => setAssignGroups(null)); // 读不到当没有：不挡服务商页
+  }, []);
+  useEffect(() => {
+    loadAssignGroups();
+  }, [loadAssignGroups]);
 
   /** onChange 走 ref：refresh 必须引用稳定——若依赖 props 对象，父组件每次渲染都会让它重建，
    * effect 随之重跑 IPC，成功后又经 onChange 拉动父组件重渲，形成「渲染 → IPC → 渲染」死循环
@@ -205,6 +224,38 @@ export function ProvidersView(props: { onChange?: () => void }) {
   const openCatalog = () => {
     setView({ kind: "catalog" });
     resetTransient();
+  };
+
+  /** 打开分配预览：先拿一份最新分组（预览到确认之间会话可能又变） */
+  const openAssign = () => {
+    setView({ kind: "assign" });
+    resetTransient();
+    setAssignError(null);
+    loadAssignGroups();
+  };
+
+  const runAssign = async () => {
+    if (providers === null || assignGroups === null || assignBusy) return;
+    const entries = assignEntries(assignPreview(assignGroups, providers));
+    if (entries.length === 0) return;
+    setAssignBusy(true);
+    try {
+      const result = await api.session.modelAssignRun(entries);
+      setAssignDone(result);
+      setView({ kind: "detail" });
+      loadAssignGroups();
+      // 左栏会话列表 / 正开着的会话用导入完成的同一条刷新通路（engine.refreshSessions）
+      props.onSessionsChanged?.();
+    } catch (cause) {
+      const raw = cause instanceof Error ? cause.message : String(cause);
+      setAssignError(
+        raw.startsWith(MODEL_ASSIGN_TARGET_GONE_CODE)
+          ? t.providers.assignTargetGone(raw.slice(MODEL_ASSIGN_TARGET_GONE_CODE.length))
+          : raw,
+      );
+    } finally {
+      setAssignBusy(false);
+    }
   };
 
   /** 选目录条目：baseUrl 与协议一并定下，用户只剩名称、key、模型 */
@@ -488,6 +539,8 @@ export function ProvidersView(props: { onChange?: () => void }) {
   };
 
   const sorted = providers ?? [];
+  // 分配提示的三态（providers-assign.ts）：没有导入记录的用户永远看不到那块
+  const hint = assignHint(assignGroups, sorted);
   const editorDecl =
     editor === null || editor.isNew ? undefined : draft.models.find((m) => m.id === editor.id);
   /**
@@ -507,6 +560,34 @@ export function ProvidersView(props: { onChange?: () => void }) {
   return (
     <section className="pv-root">
       <nav className="pv-nav" aria-label={t.settings.tabs.providers}>
+        {(hint.kind !== "none" || assignDone !== null) && (
+          <div className="pv-assign-hint" data-tone={hint.kind === "leftover" ? "muted" : undefined}>
+            {assignDone !== null && (
+              <span className="pv-assign-done">
+                <Icon name="circle-check" size={12} strokeWidth={1.8} />
+                {t.providers.assignResult(assignDone.assigned)}
+                {assignDone.skipped > 0 ? t.providers.assignSkipped(assignDone.skipped) : ""}
+              </span>
+            )}
+            {hint.kind === "offer" && (
+              <>
+                <span className="pv-assign-line">{t.providers.assignHint(hint.total)}</span>
+                <span className="pv-assign-sub">{t.providers.assignHintBody}</span>
+                <button
+                  type="button"
+                  className="pv-btn accent"
+                  disabled={view.kind === "assign" || assignBusy}
+                  onClick={openAssign}
+                >
+                  <Icon name="arrow-left-right" size={13} /> {t.providers.assignButton}
+                </button>
+              </>
+            )}
+            {hint.kind === "leftover" && (
+              <span className="pv-assign-sub">{t.providers.assignLeftover(hint.unmatched)}</span>
+            )}
+          </div>
+        )}
         <div
           className="pv-list"
           onDragLeave={(e) => {
@@ -604,6 +685,17 @@ export function ProvidersView(props: { onChange?: () => void }) {
         )}
 
         {view.kind === "catalog" && <CatalogView onCancel={cancelSide} onPick={pickKnown} />}
+
+        {view.kind === "assign" && providers !== null && assignGroups !== null && (
+          <AssignView
+            preview={assignPreview(assignGroups, providers)}
+            providers={providers}
+            busy={assignBusy}
+            error={assignError}
+            onCancel={cancelSide}
+            onRun={() => void runAssign()}
+          />
+        )}
 
         {showForm && known !== undefined && (
           <div className="pv-scroll">
@@ -1009,6 +1101,90 @@ function UrlField(props: {
 }
 
 /** 目录视图：KNOWN_PROVIDERS 的卡片网格——协议跟随条目，没有协议选择框 */
+/** 分配预览（右栏）：每个原模型一行，底部分配 / 取消。 */
+function AssignView(props: {
+  preview: AssignPreview;
+  providers: readonly ProviderDto[];
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onRun: () => void;
+}) {
+  const t = useT();
+  const nameOf = (providerId: string): string =>
+    props.providers.find((provider) => provider.id === providerId)?.displayName ?? providerId;
+  return (
+    <div className="pv-scroll">
+      <div className="pv-content">
+        <div className="pv-head">
+          <span className="pv-title">{t.providers.assignTitle}</span>
+          <InfoTip label={t.providers.aboutAssign}>{t.providers.aboutAssignBody}</InfoTip>
+          <span className="pv-headend">
+            <button type="button" className="pv-btn" onClick={props.onCancel}>
+              {t.common.cancel}
+            </button>
+          </span>
+        </div>
+        <div className="pv-assign-rows">
+          {props.preview.rows.map((row) => (
+            <div key={row.model} className="pv-assign-row" data-hit={row.target !== null || undefined}>
+              <span className="pv-assign-model" title={row.model}>
+                {row.model}
+              </span>
+              <span className="pv-assign-count">{t.providers.assignSessions(row.sessions)}</span>
+              {row.target !== null ? (
+                <span className="pv-assign-target">
+                  <Icon name="arrow-left-right" size={12} strokeWidth={1.8} />
+                  {/* 服务商名可截断、模型名完整保留——多渠道同名时用户要看的恰恰是
+                      配到了哪家的哪个模型；完整「服务商 · 模型」放悬停 */}
+                  <span
+                    className="pv-assign-pair"
+                    title={`${nameOf(row.target.providerId)} · ${row.target.modelId}`}
+                  >
+                    <span className="pv-assign-provider">{nameOf(row.target.providerId)}</span>
+                    <span className="pv-assign-dot"> · </span>
+                    <span className="pv-assign-modelid">{row.target.modelId}</span>
+                  </span>
+                  {row.target.ambiguous && (
+                    <span className="pv-assign-note" title={t.providers.assignAmbiguousTip}>
+                      {t.providers.assignAmbiguous}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className="pv-assign-target none">
+                  <Icon name="circle-off" size={12} strokeWidth={1.8} />
+                  {t.providers.assignNoMatch}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+        {props.error !== null && (
+          <p className="pv-assign-error">
+            <Icon name="triangle-alert" size={12} />
+            {props.error}
+          </p>
+        )}
+        <div className="pv-assign-foot">
+          <span className="pv-assign-sum">
+            {props.preview.unmatched > 0 ? t.providers.assignUnmatchedNote(props.preview.unmatched) : ""}
+          </span>
+          <button
+            type="button"
+            className="pv-btn accent lg"
+            disabled={props.busy || props.preview.assignable === 0}
+            onClick={props.onRun}
+          >
+            {props.busy ? <Icon name="loader-circle" size={14} spin /> : <Icon name="arrow-left-right" size={14} />}
+            {t.providers.assignConfirm(props.preview.assignable)}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CatalogView(props: { onCancel: () => void; onPick: (kindId: string) => void }) {
   const t = useT();
   return (

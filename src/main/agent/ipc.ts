@@ -178,15 +178,15 @@ export function registerAgentIpc(
   });
 
   /**
-   * 命名专用模型（设置里的 titleModel）装配成带密钥的载荷。没指定、指的
-   * provider 已删、或密钥取不到，一律返回 undefined 让 runtime 退回会话模型——
-   * 标题是易耗品，不该因为一个删掉的 provider 就停掉；但原因要落到 dev 终端，
-   * 否则「我选了模型为什么没生效」无从查起。
+   * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
+   * 带密钥的载荷。没指定、指的 provider 已删、或密钥取不到，一律返回 undefined
+   * 让 runtime 退回会话模型——家务是易耗品，不该因为一个删掉的 provider 就停掉；
+   * 但原因要落到 dev 终端，否则「我选了模型为什么没生效」无从查起。
    */
-  const readTitleModel = async (): Promise<
+  const readChoreModel = async (): Promise<
     { provider: ProviderSecrets; modelId: string } | undefined
   > => {
-    const choice = (await settings.read()).titleModel;
+    const choice = (await settings.read()).choreModel;
     if (choice === undefined) return undefined;
     try {
       return {
@@ -195,7 +195,7 @@ export function registerAgentIpc(
       };
     } catch (error: unknown) {
       console.error(
-        `[main] 标题模型 ${choice.providerId}/${choice.modelId} 装配失败，这条退回会话模型`,
+        `[main] 家务活模型 ${choice.providerId}/${choice.modelId} 装配失败，这件家务退回会话模型`,
         error,
       );
       return undefined;
@@ -319,7 +319,7 @@ export function registerAgentIpc(
       parseChannelPrompt(input.text) === null &&
       (await sessions.needsAutoTitle(input.sessionId))
     ) {
-      host.generateTitle(input.sessionId, ownWords, await readTitleModel());
+      host.generateTitle(input.sessionId, ownWords, await readChoreModel());
     }
   }
 

@@ -62,7 +62,7 @@ export function collectScanAnswer(
 }
 
 /**
- * 扫描这**一轮**用哪个模型：设置里配了命名模型（`settings.titleModel`）就用它，
+ * 扫描这**一轮**用哪个模型：设置里配了家务活模型（`settings.choreModel`）就用它，
  * 没配就用会话自己的模型。扫描是一次机械的总结活，与命名同类，没必要花主力
  * 模型的钱。
  *

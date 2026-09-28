@@ -165,25 +165,25 @@ async function withManualCompactionTuning<T>(session: AgentSession, run: () => P
 }
 
 /**
- * 标题专用模型的鉴权面。**密钥不能沿用账本里的**——账本里那把是会话当前
+ * 家务活模型（起名等小活专用）的鉴权面。**密钥不能沿用账本里的**——账本里那把是会话当前
  * provider 的，拿它去调另一家只会 401。
  */
-interface ResolvedTitleModel {
+interface ResolvedChoreModel {
   model: PiModel;
   apiKey: string;
   headers?: Record<string, string>;
 }
 
 /**
- * 解析标题专用模型（设置里的 titleModel，主进程已把密钥面装配好）。
+ * 解析家务活模型（设置里的 choreModel，主进程已把密钥面装配好）。
  * 自建一次性 ModelRuntime 走同一套「注册 + 解析」（同 setLedgerModel）：
  * 「能不能用某个模型」在本仓只应该有一套真相。
  * 解不出来返回 null，由调用方退回会话模型——用户删了那家 provider 不该
  * 连带把标题停掉。
  */
-async function resolveTitleModel(
+async function resolveChoreModel(
   payload: NonNullable<Extract<AgentCommand, { type: "generateTitle" }>["model"]>,
-): Promise<ResolvedTitleModel | null> {
+): Promise<ResolvedChoreModel | null> {
   try {
     const runtime = await ModelRuntime.create({});
     const model = registerAndResolveModel(runtime, payload.provider, payload.modelId);
@@ -257,7 +257,7 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
 
 /**
  * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用。默认用会话当前模型；
- * 用户在设置里指了命名模型就用那一个（连同它自己的密钥与自定义头）。
+ * 用户在设置里指了家务活模型就用那一个（连同它自己的密钥与自定义头）。
  * 与当前轮并发跑（主进程在 submit 后立刻发本命令，轮还在 `running` 里），
  * 不阻塞对话；成功（且模型没答 none）才发 `title` 事件。
  * 失败一律静默——标题是易耗品，不该有任何一条报错通路；门禁（meta 的
@@ -275,13 +275,13 @@ async function generateSessionTitle(
   session: AgentSession,
   sessionId: string,
   text: string,
-  /** 命名专用模型；缺席或解析失败都退回会话模型 */
-  titleModel?: Extract<AgentCommand, { type: "generateTitle" }>["model"],
+  /** 家务活模型（设置里的 choreModel）；缺席或解析失败都退回会话模型 */
+  choreModel?: Extract<AgentCommand, { type: "generateTitle" }>["model"],
 ): Promise<void> {
   if (note.titleInFlight) return;
   note.titleInFlight = true;
   try {
-    const dedicated = titleModel === undefined ? null : await resolveTitleModel(titleModel);
+    const dedicated = choreModel === undefined ? null : await resolveChoreModel(choreModel);
     const model = dedicated?.model ?? session.model;
     if (model === undefined) return;
     // 鉴权面跟着模型走，**整个换不逐键兼**：专用模型没自定义头时继承账本里

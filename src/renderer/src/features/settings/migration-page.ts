@@ -17,7 +17,10 @@ import type {
   ImportSourceId,
   ImportSourceProbe,
 } from "@shared/import";
+import type { ModelPair } from "@shared/settings";
+import type { ProviderDto } from "@shared/provider";
 import type { Messages } from "../../messages-en.ts";
+import { hasCredentials } from "./providers-view-model.ts";
 import {
   formatBytes,
   formatMoment,
@@ -166,10 +169,9 @@ export function changeBadge(item: ImportPlanItem, t: Messages): ChangeBadge | nu
   return null;
 }
 
-/** 行尾模型格的悬停：原模型没配时说清会用哪个打开、原模型记在哪。 */
-export function modelTip(item: ImportPlanItem, t: Messages): string {
-  if (item.modelMatched) return t.migration.modelContinues;
-  return t.migration.modelFallbackTip(item.importedModel ?? t.migration.originalModel, item.modelId);
+/** 行尾模型格的悬停：导入的会话不绑定模型，原模型只是记录。 */
+export function modelTip(t: Messages): string {
+  return t.migration.modelRecordedTip;
 }
 
 /** 一块里有不止一个来源时，单条会话行才写来源名（只有一个来源时组名旁已经写了）。 */
@@ -182,7 +184,7 @@ export function unconvertibleSkips(report: ImportScanReport): ImportSkipItem[] {
   return report.skipped.filter((skip) => skip.reason !== "already-imported");
 }
 
-export type SessionFactKind = "hidden" | "greeting" | "fallback" | "orphaned" | "already" | "cannot";
+export type SessionFactKind = "hidden" | "greeting" | "orphaned" | "already" | "cannot";
 
 /** 列表下面那一行图标事实：一个数字 + 一个短语常驻，整句进悬停。 */
 export interface SessionFact {
@@ -196,13 +198,12 @@ export interface SessionFact {
 const FALLBACK_MODELS_SHOWN = 3;
 
 /**
- * 事实条。顺序即显示顺序：先是影响这次导入的（被筛掉的、要换模型打开的、单列的子会话），
+ * 事实条。顺序即显示顺序：先是影响这次导入的（被筛掉的、单列的子会话），
  * 后是列表之外的（已导入的、导不了的）。数是 0 的不出现。
  */
 export function sessionFacts(
   report: ImportScanReport,
   grouped: GroupedSessions,
-  fallback: ImportSummary["fallback"] | null,
   now: number,
   t: Messages,
 ): SessionFact[] {
@@ -221,18 +222,6 @@ export function sessionFacts(
       count: grouped.leftOut,
       label: t.migration.factGreeting,
       tip: t.migration.factGreetingTip,
-    });
-  }
-  if (fallback !== null && fallback.count > 0) {
-    const models = fallback.models.slice(0, FALLBACK_MODELS_SHOWN);
-    const shown = fallback.models.length > models.length ? [...models, "…"] : models;
-    const named = models.length === 0 ? "" : t.migration.parenthesized(shown.join(t.common.listSeparator));
-    const target = fallback.fallbackModel ?? t.migration.defaultModel;
-    facts.push({
-      kind: "fallback",
-      count: fallback.count,
-      label: t.migration.factFallback(target),
-      tip: t.migration.factFallbackTip(fallback.count, named, target),
     });
   }
   if (report.orphanedSubSessions > 0) {
@@ -419,4 +408,36 @@ export function doneFacts(result: ImportRunReport, t: Messages): DoneFact[] {
     });
   }
   return facts;
+}
+
+// ---------------------------------------------------------------------------
+// 「跳过随手一句」前面的三步清单（配置服务商 → 选家务活模型 → 检查）
+// ---------------------------------------------------------------------------
+
+/** 清单两步的完成态；第三步（检查本身）能不能勾由这两步推出。 */
+export interface GreetingStepsState {
+  /** ① 至少配了一个能用的服务商（有密钥且声明过模型——与模型菜单同一把尺） */
+  provider: boolean;
+  /** ② 选了家务活模型，且它指的服务商与模型都还在（provider 被删按没选处理） */
+  chore: boolean;
+}
+
+/**
+ * 清单状态**每次渲染按当下的服务商列表与设置现算**，不吃扫描报告里的旧值——
+ * 用户配完回来必须立刻看到打勾（wafo 2026-09-28：我们设计的很体贴，用户感知不到
+ * 还觉得懵逼——为什么这个小功能要麻烦我跳转两次）。
+ */
+export function greetingSteps(
+  providers: readonly ProviderDto[],
+  choreModel: ModelPair | undefined,
+): GreetingStepsState {
+  const usable = providers.filter((p) => hasCredentials(p.auth) && p.models.declared.length > 0);
+  return {
+    provider: usable.length > 0,
+    chore:
+      choreModel !== undefined &&
+      usable.some(
+        (p) => p.id === choreModel.providerId && p.models.declared.some((m) => m.id === choreModel.modelId),
+      ),
+  };
 }

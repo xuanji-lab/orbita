@@ -159,11 +159,27 @@ describe("resolveSubSessionModel", () => {
     );
   });
 
-  test("requested 与 setting 都没有——同父", () => {
+  test("requested 与 setting 都没有、父的 provider 还在——同父", () => {
     assert.deepEqual(
-      resolveSubSessionModel({ requested: undefined, setting: undefined, parent, providers: [] }),
+      resolveSubSessionModel({ requested: undefined, setting: undefined, parent, providers: [provider("zai", ["glm-5.3"])] }),
       { ok: true, providerId: "zai", modelId: "glm-5.3", source: "parent" },
     );
+  });
+
+  test("同父的前提是父的 provider 还在注册表里：占位 provider（导入的会话）或已删的 provider → 报错列出可用模型，让 delegate 带 modelId 重试", () => {
+    const providers = [provider("zai", ["glm-5.3"]), provider("kimi", ["kimi-k3"])];
+    const unassigned = resolveSubSessionModel({
+      requested: undefined,
+      setting: undefined,
+      parent: { providerId: "orbita:unassigned", modelId: "glm-5.3" },
+      providers,
+    });
+    assert.equal(unassigned.ok, false);
+    assert.match(!unassigned.ok ? unassigned.error : "", /Available models: glm-5\.3, kimi-k3/);
+    // 注册表空空如也也如实说，不静默同父（父的模型反正也发不出去）
+    const empty = resolveSubSessionModel({ requested: undefined, setting: undefined, parent, providers: [] });
+    assert.equal(empty.ok, false);
+    assert.match(!empty.ok ? empty.error : "", /\(none configured\)/);
   });
 });
 
@@ -183,7 +199,7 @@ function delegateEvent(
 describe("applyDelegate", () => {
   test("成功：子 meta 字段正确、通道仅一条 task、text 是可解析的信封、card.workbench 对", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT, cwd: "/work/proj", workspaceId: "ws1", mode: "skip" }));
-    const { deps, submitCalls } = fakeDeps();
+    const { deps, submitCalls } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
 
     const outcome = await applyDelegate(deps, delegateEvent());
     assert.equal(outcome.ok, true);

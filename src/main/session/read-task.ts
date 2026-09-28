@@ -35,6 +35,7 @@ import {
   isChannelMarkRecord,
   isCompactedRecord,
   transcriptToMarkdown,
+  UNASSIGNED_PROVIDER_ID,
   type ChannelMarkRecord,
   type SessionDetail,
   type SessionMeta,
@@ -338,7 +339,7 @@ function formatTaskIndex(
   ];
   for (const meta of [...active, ...archived]) {
     lines.push(
-      `- ${meta.title === "" ? "(untitled)" : meta.title} (id: ${meta.id}) · updated ${iso(meta.updatedAt)} · ${meta.providerId}/${meta.modelId}${meta.archived ? " · archived" : ""}`,
+      `- ${meta.title === "" ? "(untitled)" : meta.title} (id: ${meta.id}) · updated ${iso(meta.updatedAt)} · ${modelLineOf(meta)}${meta.archived ? " · archived" : ""}`,
     );
   }
   lines.push("Call read_task again with `task` set to one exact title or id to read that task.");
@@ -358,13 +359,18 @@ export function buildTaskIndex(
   return { ok: true, card: null, text: formatTaskIndex(metas, sessionId, workspaceName) };
 }
 
+/** meta 的模型一行：占位 provider（导入与模型解耦）只写原模型名，不把内部哨兵念出来。 */
+function modelLineOf(meta: SessionMeta): string {
+  return meta.providerId === UNASSIGNED_PROVIDER_ID ? meta.modelId : `${meta.providerId}/${meta.modelId}`;
+}
+
 function taskHeader(meta: SessionMeta, roundCount: number, workspaceName?: string | null): string {
   const lines = [
     `Task "${meta.title === "" ? "(untitled)" : meta.title}" (id: ${meta.id})`,
   ];
   if (workspaceName !== undefined) lines.push(`Workspace: ${workspaceLabel(workspaceName)}`);
   lines.push(
-    `Folder: ${meta.cwd} · Model: ${meta.providerId}/${meta.modelId} · ${roundCount} rounds`,
+    `Folder: ${meta.cwd} · Model: ${modelLineOf(meta)} · ${roundCount} rounds`,
   );
   const stats = meta.stats;
   if (stats !== null) {

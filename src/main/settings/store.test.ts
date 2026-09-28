@@ -68,16 +68,28 @@ describe("SettingsStore", () => {
     );
   });
 
-  test("titleModel 传 null = 清除，退回「Same as session」", async () => {
-    await store.write({ titleModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } });
-    assert.deepEqual((await store.read()).titleModel, {
+  test("choreModel 传 null = 清除，退回「Same as session」", async () => {
+    await store.write({ choreModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } });
+    assert.deepEqual((await store.read()).choreModel, {
       providerId: "zhipu-coding",
       modelId: "glm-5.3-flash",
     });
     // undefined 在补丁语义里是「这个键没改」，所以清除必须是显式的 null
-    await store.write({ titleModel: null });
-    assert.deepEqual((await store.read()).titleModel, undefined);
-    assert.deepEqual((await new SettingsStore(dir).read()).titleModel, undefined);
+    await store.write({ choreModel: null });
+    assert.deepEqual((await store.read()).choreModel, undefined);
+    assert.deepEqual((await new SettingsStore(dir).read()).choreModel, undefined);
+  });
+
+  test("旧键 titleModel 平滑迁移：读得到，任何一次写入都把旧键从盘上带走", async () => {
+    // 旧版本写的盘上只有 titleModel（只管起名的时代）
+    await writeFile(join(dir, "settings.json"), JSON.stringify({ theme: "light", titleModel: { providerId: "kimi", modelId: "kimi-k3" } }));
+    assert.deepEqual((await store.read()).choreModel, { providerId: "kimi", modelId: "kimi-k3" });
+    // 与本次无关的一次写入（改主题）也顺手迁移：解析白名单重建对象，旧键自然消失
+    await store.write({ sidebarWidth: 300 });
+    const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("titleModel" in raw, false);
+    assert.deepEqual(raw["choreModel"], { providerId: "kimi", modelId: "kimi-k3" });
+    assert.deepEqual((await new SettingsStore(dir).read()).choreModel, { providerId: "kimi", modelId: "kimi-k3" });
   });
 
   test("lastUsed 的部分更新按键合并——切档不抹已记的模型", async () => {

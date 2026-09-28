@@ -347,6 +347,7 @@ void app.whenReady().then(async () => {
     },
     agentHost,
     carryovers,
+    providers,
   );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*

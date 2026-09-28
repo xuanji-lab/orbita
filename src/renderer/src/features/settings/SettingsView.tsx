@@ -1,5 +1,5 @@
 import "./settings-view.css";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon, type IconName } from "../../shell/Icon";
@@ -68,6 +68,16 @@ export function SettingsView(props: {
 }) {
   const t = useT();
   const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
+  /**
+   * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
+   * Providers / General 再回来，每次回来都重扫就又回到「懵逼」（wafo 2026-09-28）。
+   * 做法：第一次进迁移页后保持挂载、切走时 display:none（扫描计划已与模型无关，
+   * 保留是安全的）。设置面整个关掉时照旧卸载。
+   */
+  const [migrationVisited, setMigrationVisited] = useState(props.tab === "migration");
+  if (props.tab === "migration" && !migrationVisited) setMigrationVisited(true);
+  /** 跳去 General 时高亮家务活模型行（一次性的信号，General 消费后清掉） */
+  const [highlightChore, setHighlightChore] = useState(false);
   return (
     <div
       style={{
@@ -95,23 +105,48 @@ export function SettingsView(props: {
         </strong>
       </header>
 
-      {props.tab === "migration" ? (
-        // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格
-        <MigrationView
-          workspaces={props.workspaces}
-          onImported={props.onImported}
-          onOpenProviders={() => props.onTab("providers")}
-        />
-      ) : props.tab === "browser" ? (
+      {migrationVisited ? (
+        // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格；
+        // 切走只是藏起来——扫描结果与勾选都还在（见上面 migrationVisited 的注释）。
+        // 显示时包装层必须是 display: contents：MigrationView 的根靠「自己就是第二行的
+        // grid 项」被拉伸到有限高度，内部滚动区才滚得动、底栏才贴底；包一层普通块级 div
+        // 它就按内容长高、被面板裁掉——整页滚不动、底栏消失（wafo 2026-09-28 验收发现）
+        <div
+          hidden={props.tab !== "migration"}
+          style={{ display: props.tab === "migration" ? "contents" : "none" }}
+        >
+          <MigrationView
+            workspaces={props.workspaces}
+            providers={props.providers}
+            choreModel={props.settings.choreModel}
+            onImported={props.onImported}
+            onOpenProviders={() => props.onTab("providers")}
+            onOpenGeneral={() => {
+              setHighlightChore(true);
+              props.onTab("general");
+            }}
+          />
+        </div>
+      ) : null}
+      {props.tab === "browser" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <BrowserSettings />
         </div>
       ) : props.tab === "providers" ? (
         // Providers 是主从两栏，铺满内容面：厂商列表贴着面板左缘，两栏各自内部滚动
-        <ProvidersView onChange={props.onProvidersChange} />
-      ) : (
+        <ProvidersView
+          onChange={props.onProvidersChange}
+          onSessionsChanged={props.onImported}
+        />
+      ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-          <General settings={props.settings} providers={props.providers} onChange={props.onSettingsChange} />
+          <General
+            settings={props.settings}
+            providers={props.providers}
+            onChange={props.onSettingsChange}
+            highlightChore={highlightChore}
+            onHighlightConsumed={() => setHighlightChore(false)}
+          />
         </div>
       )}
     </div>
@@ -119,7 +154,7 @@ export function SettingsView(props: {
 }
 
 /**
- * 「退回继承」菜单的公共形状：Task title model / Sub-session model 的模型与思考档
+ * 「退回继承」菜单的公共形状：Chore model / Sub-session model 的模型与思考档
  * 三处菜单都是「第一项退回上游（session 或 parent）、其后是具体可选值」——集合与文案
  * 各不相同，但「fallback 项 + 选中态 + null 清除」这段接线相同，抽出来避免三处重复。
  */
@@ -143,8 +178,33 @@ function General(props: {
   settings: AppSettings;
   providers: readonly ProviderDto[];
   onChange: (patch: SettingsPatch) => void;
+  /** 迁移页三步清单第②步跳过来时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
+  highlightChore?: boolean;
+  onHighlightConsumed?: () => void;
 }) {
   const t = useT();
+  const choreRowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (props.highlightChore !== true) return;
+    const row = choreRowRef.current;
+    if (row === null) return;
+    row.scrollIntoView({ block: "center" });
+    // 焦点落到选择器本体（Chip 是 button）：键盘用户从这一行继续
+    row.querySelector("button")?.focus();
+    row.dataset.flash = "on";
+    // 高亮的收尾听 animationend，不靠计时器；清 data-flash 的同一拍才通知父级
+    // 消费完——在 effect 里同步消费会让它立刻重跑、cleanup 把监听拆掉，
+    // data-flash 就永远留在行上（动画 1.6s，effect 依赖只有这个布尔）
+    const done = (): void => {
+      delete row.dataset.flash;
+      row.removeEventListener("animationend", done);
+      props.onHighlightConsumed?.();
+    };
+    row.addEventListener("animationend", done);
+    return () => row.removeEventListener("animationend", done);
+    // 依赖故意只有 highlightChore：onHighlightConsumed 只是 setHighlightChore(false)，
+    // 每次渲染新箭头函数，进依赖会让 effect 每帧重挂监听
+  }, [props.highlightChore]);
   // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
   const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
   const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
@@ -154,26 +214,26 @@ function General(props: {
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
 
-  const titleModel = props.settings.titleModel;
-  const titleModelItems: MenuItem[] = withInheritedFirst(
+  const choreModel = props.settings.choreModel;
+  const choreModelItems: MenuItem[] = withInheritedFirst(
     {
       id: "same-as-session",
       label: t.settings.sameAsSession,
       hint: t.settings.sameAsSessionHint,
-      inherited: titleModel === undefined,
+      inherited: choreModel === undefined,
       // null 而不是 undefined：补丁里的 undefined 是「这个键没改」，选不回默认
-      onSelect: () => props.onChange({ titleModel: null }),
+      onSelect: () => props.onChange({ choreModel: null }),
     },
     modelMenuItems({
       t,
       providers: usable,
       catalog,
-      selected: titleModel ?? null,
-      onSelect: (providerId, modelId) => props.onChange({ titleModel: { providerId, modelId } }),
+      selected: choreModel ?? null,
+      onSelect: (providerId, modelId) => props.onChange({ choreModel: { providerId, modelId } }),
     }),
   );
 
-  // 子会话的默认模型：同 titleModel 的「继承 + null 清除」语义，退回点是父会话而不是命名会话。
+  // 子会话的默认模型：同 choreModel 的「继承 + null 清除」语义，退回点是父会话而不是家务活模型。
   // 换模型 = 思考档回到新模型的默认档（shared 的 settings.ts 契约：subSessionThinking
   // 绑定 subSessionModel，脱离模型单独存一档是假选项），所以两个字段一起改
   const subSessionModel = props.settings.subSessionModel;
@@ -295,25 +355,26 @@ function General(props: {
           {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
         </SettingRow>
         <SettingRow
-          name={t.settings.titleModel}
-          info={t.settings.titleModelInfo}
+          name={t.settings.choreModel}
+          info={t.settings.choreModelInfo}
+          rowRef={choreRowRef}
         >
           {/* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */}
           <Menu
-            items={titleModelItems}
+            items={choreModelItems}
             searchable
             trigger={({ open, toggle }) => (
               <Chip
                 active={open}
                 title={
-                  titleModel === undefined
-                    ? t.settings.titleModelTip
-                    : `${titleModel.providerId} · ${titleModel.modelId}`
+                  choreModel === undefined
+                    ? t.settings.choreModelTip
+                    : `${choreModel.providerId} · ${choreModel.modelId}`
                 }
                 onClick={toggle}
                 chevron
               >
-                {titleModel?.modelId ?? t.settings.sameAsSession}
+                {choreModel?.modelId ?? t.settings.sameAsSession}
               </Chip>
             )}
           />
@@ -413,11 +474,13 @@ function SettingRow(props: {
   name: string;
   info?: React.ReactNode;
   note?: React.ReactNode;
+  /** 挂在整行上（迁移页三步清单跳过来时滚动 / 高亮 / 聚焦用） */
+  rowRef?: React.Ref<HTMLDivElement>;
   children: React.ReactNode;
 }) {
   const t = useT();
   return (
-    <div className="set-row">
+    <div className="set-row" ref={props.rowRef}>
       <span className="set-row-head">
         <span className="set-row-name">
           {props.name}

@@ -100,11 +100,11 @@ export interface LastUsedIntent {
 }
 
 /**
- * 给会话自动命名用的模型。标题是一次独立的小调用，用不着主力模型——
- * 指一个小而快的，标题来得更快也更便宜。
- * 两个 id 必须成对：光有 modelId 无法定位到哪家的密钥。
+ * 给家务活用的模型（起名、收尾扫描、迁移的随手一句检查……）。这些是一次次的
+ * 小调用，用不着主力模型——指一个小而快的，来得更快也更便宜，后面还会让它
+ * 承担更多家务。两个 id 必须成对：光有 modelId 无法定位到哪家的密钥。
  */
-export interface TitleModel {
+export interface ModelPair {
   providerId: string;
   modelId: string;
 }
@@ -144,16 +144,20 @@ export interface AppSettings {
    */
   gitAttribution?: boolean;
   /**
-   * 会话自动命名专用的模型。**缺席 = 用会话当前的模型**（原有行为）。
-   * 主进程在发标题命令前把它解成带密钥的 provider 载荷；指的 provider 被删了
-   * 不拦标题，退回会话模型。
+   * 家务活模型：给任务起名、收尾扫描、迁移的「跳过随手一句」检查这类小活的专用模型。
+   * **缺席 = 各自退回会话当时的模型**（起名 / 扫描）或置灰不可用（随手一句检查，
+   * 状态行提醒去选）。主进程在发命令前把它解成带密钥的 provider 载荷；指的
+   * provider 被删了不拦那件家务，退回会话模型。
+   *
+   * 由旧键 `titleModel`（只管起名的时代）平滑迁移：读取时 `choreModel` 缺席就
+   * 读旧键，任何一次设置写入都会把旧键从盘上带走。
    */
-  titleModel?: TitleModel;
+  choreModel?: ModelPair;
   /**
    * 子会话（delegate）的默认模型。**缺席 = 同父**。优先级：delegate 参数 >
-   * 这里 > 同父。形状同 titleModel（两 id 成对：光有 modelId 定位不到哪家的密钥）。
+   * 这里 > 同父。形状同 choreModel（两 id 成对：光有 modelId 定位不到哪家的密钥）。
    */
-  subSessionModel?: TitleModel;
+  subSessionModel?: ModelPair;
   /**
    * 子会话的思考档。**绑定 subSessionModel**（wafo 2026-09-23）：档位因模型而异，
    * 脱离模型单独存一档，派到不支持它的模型上就是一个假选项。所以：
@@ -188,7 +192,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
  */
 export type SettingsPatch = Partial<
-  Omit<AppSettings, "drawer" | "lastUsed" | "titleModel" | "subSessionModel" | "subSessionThinking">
+  Omit<AppSettings, "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking">
 > & {
   drawer?: Partial<DrawerSettings>;
   lastUsed?: Partial<LastUsedIntent>;
@@ -197,9 +201,9 @@ export type SettingsPatch = Partial<
    * 在补丁语义里是「这个键没改」；两者不分的话用户就选不回默认。
    * store 的 `{...current, ...patch}` 经 parseSettings 自然丢掉 null。
    */
-  titleModel?: TitleModel | null;
-  /** 同 titleModel 的 null 语义：清除后退回「Same as parent」（子会话跟父会话的模型走） */
-  subSessionModel?: TitleModel | null;
+  choreModel?: ModelPair | null;
+  /** 同 choreModel 的 null 语义：清除后退回「Same as parent」（子会话跟父会话的模型走） */
+  subSessionModel?: ModelPair | null;
   /** 清除后退回所选子会话模型的默认档；subSessionModel 被清除时它随之失效（见 AppSettings） */
   subSessionThinking?: ThinkingLevel | null;
 };
@@ -321,6 +325,8 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebarWidth?: unknown;
     compaction?: unknown;
     gitAttribution?: unknown;
+    choreModel?: unknown;
+    /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
     titleModel?: unknown;
     subSessionModel?: unknown;
     subSessionThinking?: unknown;
@@ -333,7 +339,9 @@ export function parseSettings(raw: unknown): AppSettings {
   const sidebar = record.sidebarWidth;
   const channelColumnWidth = record.channelColumnWidth;
   const compaction = parseCompaction(record.compaction);
-  const titleModel = parseModelPair(record.titleModel);
+  // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
+  // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
+  const choreModel = parseModelPair(record.choreModel) ?? parseModelPair(record.titleModel);
   const subSessionModel = parseModelPair(record.subSessionModel);
   // 绑定 subSessionModel：模型是「同父」时单独一档思考没有意义，丢掉（见 AppSettings）
   const subSessionThinking =
@@ -369,7 +377,7 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.gitAttribution === "boolean"
       ? { gitAttribution: record.gitAttribution }
       : {}),
-    ...(titleModel === undefined ? {} : { titleModel }),
+    ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
@@ -387,10 +395,10 @@ function isAbsolutePath(path: string): boolean {
 /**
  * 成对模型 id 校验：**两个都是非空字符串才认**。存半截的没意义——光有 modelId
  * 定位不到密钥，光有 providerId 不知道叫哪个模型，两种残形都只会让对应功能
- * 静默失败（titleModel 退会话模型，subSessionModel 退同父）。
+ * 静默失败（choreModel 退会话模型，subSessionModel 退同父）。
  * 缺席或坏值 = 没指定（返回 undefined，消费侧各自兜底）。
  */
-function parseModelPair(raw: unknown): TitleModel | undefined {
+function parseModelPair(raw: unknown): ModelPair | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const record = raw as { providerId?: unknown; modelId?: unknown };
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;
