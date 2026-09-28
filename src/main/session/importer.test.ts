@@ -17,14 +17,13 @@ import { DatabaseSync } from "node:sqlite";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { buildContextEntries } from "@earendil-works/pi-coding-agent";
 import type { Workspace } from "../../shared/workspace.ts";
-import { rootSessions, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
+import { rootSessions, UNASSIGNED_PROVIDER_ID, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ImportPlanItem } from "../../shared/import.ts";
 import { SessionStore } from "./store.ts";
 import { SkillStore } from "../skill/store.ts";
 import {
   branchEntries,
   entriesToRecords,
-  mapModel,
   probeClaudeCode,
   probeKimiCode,
   probeOpencode,
@@ -62,11 +61,6 @@ const orbitaWorkspace = (path: string, id = "11111111-1111-4111-8111-11111111111
   attachedDirs: [],
 });
 
-const REGISTERED = [
-  { providerId: "zai-coding", modelId: "glm-5.3" },
-  { providerId: "kimi", modelId: "kimi-k3" },
-];
-const FALLBACK = { providerId: "zai-coding", modelId: "glm-5.3" };
 const DEFAULT_CWD = "/Users/tester";
 
 function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
@@ -76,8 +70,6 @@ function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
     defaultCwd: DEFAULT_CWD,
     workspaces: [],
     existingMetas: [],
-    registeredModels: REGISTERED,
-    fallbackModel: FALLBACK,
     newId: takeId,
     ledgerFile: join(root, "imports.jsonl"),
     createWorkspace: async () => undefined,
@@ -254,10 +246,9 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     // ddpm 工作区虽然存在，但没有一条会话挂它——不为它新建；3 条会话分别走
     // 收容区×2（TASKS）与同址合并×1，没有新建工作区
     assert.equal(report.newWorkspaces.length, 0);
-    assert.equal(report.modelFallbackCount, 1);
 
     const bySource = new Map(report.plan.map((item) => [item.sourceId, item]));
-    // ① 收容区 → TASKS；模型 miss → fallback + importedModel 保原文。
+    // ① 收容区 → TASKS；importedModel 保原文（导入不映射模型）。
     //    cwd：真实样本的 header cwd 写死着 ~/.proma-dev/...（生产中它命中「数据根内
     //    → 退 defaultCwd」）；测试的 promaRoot 是 tmp，前缀对不上 → 保留原值。
     //    「数据根内退 default」的行为由下面的人造 fixture 单测覆盖，这里断言真实产物
@@ -268,17 +259,14 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
       defaultBin.cwd,
       "/Users/guanhongli/.proma-dev/agent-workspaces/default/15b136bc-6b8b-4e4a-b2f0-83f4ebf71643",
     );
-    assert.equal(defaultBin.modelMatched, false);
-    assert.equal(defaultBin.providerId, "zai-coding");
     assert.equal(defaultBin.importedModel, "qwen3.7-max");
     assert.equal(defaultBin.archived, true);
-    // ② 同上收容区，starred → 星标、不置顶；glm-5.3 精确命中
+    // ② 同上收容区，starred → 星标、不置顶
     const starred = bySource.get("bd8e2a4b-6559-4a48-8d23-5d38d21edb5e");
     assert.ok(starred !== undefined);
     assert.equal(starred.pinned, false);
     assert.equal(starred.starred, true);
-    assert.equal(starred.modelMatched, true);
-    assert.equal(starred.modelId, "glm-5.3");
+    assert.equal(starred.importedModel, "glm-5.3");
     // ③ 同址合并 → 挂 orbita 既有工作区，cwd 取其 path
     const merged = bySource.get("81a23de1-4caa-48a9-bda8-841eddac0923");
     assert.ok(merged !== undefined);
@@ -374,7 +362,7 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     assert.ok(m2 !== undefined);
     assert.equal(m2.pinned, false);
     assert.equal(m2.starred, true);
-    assert.equal(m2.providerId, "zai-coding");
+    assert.equal(m2.providerId, UNASSIGNED_PROVIDER_ID);
     assert.equal(m2.modelId, "glm-5.3");
     const detail2 = await store.load(m2.id);
     assert.ok(detail2 !== null);
@@ -651,36 +639,50 @@ describe("边界：工作区三规则", () => {
   });
 });
 
-describe("边界：模型映射", () => {
-  test("归一化命中（大小写/分隔符差）", () => {
-    const registered = [{ providerId: "kimi", modelId: "Kimi K3" }];
-    const hit = mapModel("kimi-k3", registered, FALLBACK);
-    assert.equal(hit.matched, true);
-    assert.equal(hit.modelId, "Kimi K3");
-  });
-
-  test("精确命中优先；miss 落 fallback；null 落 fallback", () => {
-    const registered = [
-      { providerId: "a", modelId: "glm-5.3" },
-      { providerId: "b", modelId: "GLM-5-3" },
-    ];
-    assert.deepEqual(mapModel("glm-5.3", registered, FALLBACK), { providerId: "a", modelId: "glm-5.3", matched: true });
-    const miss = mapModel("claude-fable-5-1", registered, FALLBACK);
-    assert.equal(miss.matched, false);
-    assert.deepEqual({ providerId: miss.providerId, modelId: miss.modelId }, FALLBACK);
-    assert.equal(mapModel(null, registered, FALLBACK).matched, false);
-  });
-
-  test("索引没记模型 → 从 pi 文件兜（最后的 model_change / assistant model）", async () => {
+describe("边界：导入与模型解耦", () => {
+  test("索引没记模型 → 从 pi 文件兜（最后的 model_change / assistant model），只存 importedModel", async () => {
     await writePiSession("2026-09-01T00-00-00-000Z_nm-0000000000000001.jsonl", "/tmp/p", [
       { type: "model_change", id: "mc", parentId: "e2", timestamp: "2026-09-01T00:00:03.000Z", provider: "proma-x", modelId: "kimi-k3" },
     ]);
     await writeIndex([{ id: "s-nomodel", title: "无模型记录", piSessionFile: join(promaRoot, "sdk-config", "sessions", "2026-09-01T00-00-00-000Z_nm-0000000000000001.jsonl"), createdAt: 1, updatedAt: 2 }]);
     const report = await scanImport(deps());
     assert.equal(report.plan.length, 1);
-    assert.equal(report.plan[0]?.modelId, "kimi-k3");
-    assert.equal(report.plan[0]?.modelMatched, true);
     assert.equal(report.plan[0]?.importedModel, "kimi-k3");
+  });
+
+  test("没有注册任何模型也照常扫描、照常导入：meta 落占位 provider + 原模型名", async () => {
+    // 导入与模型解耦（2026-09-28 裁决）：ImporterDeps 根本没有模型输入，
+    // 这个测试锚住「零 provider 环境下扫描出计划、导入落盘占位」的主行为
+    const withModel = await writePiSession("2026-09-01T00-00-00-000Z_np-0000000000000001.jsonl", "/tmp/p");
+    // 第二条：索引没记模型、pi 文件里也没有任何 assistant model → modelId 落固定占位
+    const dir = join(promaRoot, "sdk-config", "sessions");
+    await mkdir(dir, { recursive: true });
+    const noModel = join(dir, "2026-09-01T00-00-00-000Z_np-0000000000000002.jsonl");
+    await writeFile(
+      noModel,
+      [
+        JSON.stringify({ type: "session", version: 3, id: "np-2", timestamp: "2026-09-01T00:00:00.000Z", cwd: "/tmp/p" }),
+        JSON.stringify({ type: "message", id: "q1", parentId: null, timestamp: "2026-09-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "问" }], timestamp: 1780000001000 } }),
+        JSON.stringify({ type: "message", id: "q2", parentId: "q1", timestamp: "2026-09-01T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "答" }], stopReason: "stop", timestamp: 1780000002000 } }),
+      ].join("\n") + "\n",
+    );
+    await writeIndex([
+      { id: "s-with-model", title: "有模型", piSessionFile: withModel, modelId: "glm-5.3", createdAt: 1, updatedAt: 2 },
+      { id: "s-no-model", title: "无模型", piSessionFile: noModel, createdAt: 1, updatedAt: 2 },
+    ]);
+    const report = await scanImport(deps());
+    assert.equal(report.plan.length, 2);
+    await runImport(deps(), { sources: ["proma"], sessions: new Set([withModel, noModel]), destinations: [], skills: { skills: new Set(), mode: "copy", scopes: [] }, mcp: new Set() });
+    const metas = await store.list();
+    assert.equal(metas.length, 2);
+    for (const meta of metas) {
+      assert.equal(meta.providerId, UNASSIGNED_PROVIDER_ID);
+    }
+    // 原模型名写进 modelId（缺席时用固定占位 "unknown"），另存 importedModel
+    assert.deepEqual(
+      [...metas.map((meta) => [meta.modelId, meta.importedModel])].sort(),
+      [["glm-5.3", "glm-5.3"], ["unknown", undefined]],
+    );
   });
 });
 
@@ -1529,7 +1531,6 @@ describe("Claude Code 来源", () => {
     assert.equal(first?.sourceKind, "claude-code");
     assert.equal(first?.title, "修 bug");
     assert.equal(first?.importedModel, "kimi-k3");
-    assert.deepEqual({ providerId: first?.providerId, modelId: first?.modelId }, { providerId: "kimi", modelId: "kimi-k3" });
     assert.deepEqual([first?.archived, first?.pinned, first?.starred], [false, false, false]);
   });
 
@@ -1632,11 +1633,11 @@ describe("Claude Code 来源", () => {
     await writeClaudeCodeSession("c-hi", repo, ["hi"]);
     await writeClaudeCodeSession("c-test", repo, ["Test."]);
     await writeClaudeCodeSession("c-hi-then-work", repo, ["hi", "帮我看下构建为什么挂了"]);
-    const model = { providerId: "kimi", modelId: "kimi-k3", from: "sub-session" as const };
-    const env = ccDeps({ greetingModel: model });
+    const model = { providerId: "kimi", modelId: "kimi-k3" };
+    const env = ccDeps({ greetingModel: { model } });
     const report = await scanImport(env, [], ["claude-code"]);
     assert.equal(report.plan.length, 3);
-    assert.deepEqual(report.greetingCheck, { candidates: 2, model });
+    assert.deepEqual(report.greetingCheck, { candidates: 2, model, unavailable: null });
     const candidates = await scanGreetingCandidates(env, ["claude-code"]);
     assert.deepEqual([...candidates.values()].sort(), ["Test.", "hi"]);
     assert.ok([...candidates.keys()].every((file) => file.endsWith("c-hi.jsonl") || file.endsWith("c-test.jsonl")));
@@ -2111,6 +2112,17 @@ describe("Proma：「只随手发了一句」检查的候选", () => {
     const report = await scanImport(deps());
     assert.deepEqual(report.plan.map((item) => item.sourceId).sort(), ["hi-then-more", "only-hi"]);
     assert.equal(report.greetingCheck.candidates, 1);
+    // 没传 greetingModel（生产里主进程总会传）＝当作一个可用模型都没有
+    assert.deepEqual(report.greetingCheck, { candidates: 1, model: null, unavailable: "no-provider" });
     assert.deepEqual([...(await scanGreetingCandidates(deps(), ["proma"]))], [[hi, "hi"]]);
+  });
+
+  test("检查的家务活模型不可用的两种状态：没 provider / 没选家务活模型", async () => {
+    await writeIndex([]);
+    const noChore = deps({ greetingModel: { unavailable: "no-chore-model" } });
+    const report = await scanImport(noChore);
+    assert.equal(report.greetingCheck.candidates, 0);
+    assert.equal(report.greetingCheck.model, null);
+    assert.equal(report.greetingCheck.unavailable, "no-chore-model");
   });
 });

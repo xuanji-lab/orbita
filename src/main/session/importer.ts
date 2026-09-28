@@ -97,6 +97,8 @@ import { appendImportLedger, readImportLedger, type ImportLedgerLine } from "./i
 import {
   deriveSessionTitle,
   recentQueriesFromRecords,
+  UNASSIGNED_MODEL_ID,
+  UNASSIGNED_PROVIDER_ID,
   type SessionMeta,
   type SessionRecord,
 } from "../../shared/session.ts";
@@ -105,7 +107,7 @@ import {
   type ImportChange,
   type ImportDestination,
   type ImportDestinationChoice,
-  type ImportGreetingCheckPlan,
+  type ImportGreetingModelStatus,
   type ImportPlanItem,
   type ImportRunReport,
   type ImportScanReport,
@@ -179,8 +181,6 @@ export interface ImporterDeps {
   existingSkills?: readonly string[];
   /** orbita mcp.json 里已有的 server 名：MCP 重名判断的底 */
   existingMcp?: readonly string[];
-  /** 「只随手发了一句」检查会用的模型（页面据此写提醒）；不传 = 没有可用模型 */
-  greetingModel?: ImportGreetingCheckPlan["model"];
   /** 额外合法源根（Proma 迁移史的旧根 ~/.proma：索引里仍有条目指向它，文件仍在）。
    *  防御边界是「这几个根之内」，不传则只认 promaRoot */
   extraSourceRoots?: readonly string[];
@@ -194,10 +194,12 @@ export interface ImporterDeps {
   existingMetas: SessionMeta[];
   /** 导入清单 imports.jsonl 的路径（import-ledger.ts）：扫描读它认出「在 orbita 删过」的，执行往里追加 */
   ledgerFile: string;
-  /** 已注册模型全集（模型映射的候选） */
-  registeredModels: readonly { providerId: string; modelId: string }[];
-  /** 模型映射 miss 的兜底（orbita 当前默认 provider/model） */
-  fallbackModel: { providerId: string; modelId: string };
+  /**
+   * 「只随手发了一句」检查的家务活模型准备情况（页面据此写状态行）；不传 =
+   * 当作一个可用模型都没有。扫描 / 导入本身不碰模型配置（导入与模型解耦，
+   * 2026-09-28 裁决：源模型名对到哪个渠道不归我们决定，meta 落占位 provider）。
+   */
+  greetingModel?: ImportGreetingModelStatus;
   /** 铸新 id（会话与工作区）。注入为了测试可预测 */
   newId(): string;
 }
@@ -844,34 +846,6 @@ function usableCwd(headerCwd: string, promaRoot: string, defaultCwd: string): st
   return headerCwd;
 }
 
-/** 归一化 model id 供匹配：小写 + 只留字母数字（glm-5.3 ↔ GLM_5.3 这类书写差）。 */
-function normalizeModelId(id: string): string {
-  return id.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-/**
- * 模型映射：按 model id 在已注册模型里匹配。**先精确后归一化**——精确命中不动，
- * 书写差（大小写/分隔符）才走归一化。多个 provider 有同名模型取列表第一个
- * （providers.json 的顺序就是用户排的顺序）。渠道名一票否决：anthropic 渠道跑过
- * glm，渠道在 orbita 无对应物，不看。
- */
-export function mapModel(
-  promaModelId: string | null,
-  registered: readonly { providerId: string; modelId: string }[],
-  fallback: { providerId: string; modelId: string },
-): { providerId: string; modelId: string; matched: boolean } {
-  if (promaModelId !== null) {
-    const exact = registered.find((m) => m.modelId === promaModelId);
-    if (exact !== undefined) return { providerId: exact.providerId, modelId: exact.modelId, matched: true };
-    const normalized = normalizeModelId(promaModelId);
-    if (normalized !== "") {
-      const loose = registered.find((m) => normalizeModelId(m.modelId) === normalized);
-      if (loose !== undefined) return { providerId: loose.providerId, modelId: loose.modelId, matched: true };
-    }
-  }
-  return { providerId: fallback.providerId, modelId: fallback.modelId, matched: false };
-}
-
 // ---------------------------------------------------------------------------
 // pi 源文件读取（只读！不构造 SessionManager）
 // ---------------------------------------------------------------------------
@@ -969,6 +943,8 @@ async function scanWithConfigs(
   const overrides = new Map<string | null, ImportDestination>(
     destinations.map((choice) => [choice.folder, choice.destination]),
   );
+  // 检查的家务活模型准备情况（不传 = 当作一个可用模型都没有）
+  const greeting: ImportGreetingModelStatus = deps.greetingModel ?? { unavailable: "no-provider" };
   const skipped: ImportSkipItem[] = [];
   /** 新会话里用户只写过一条的：sourceFile → 那一条（「只随手发了一句」检查的候选，计划成形后再筛） */
   const singleMessages = new Map<string, string>();
@@ -979,7 +955,6 @@ async function scanWithConfigs(
   const plan: ImportPlanItem[] = [];
   const newWorkspaceByKey = new Map<string, ImportWorkspacePlan>();
   const mergedIds = new Set<string>();
-  let modelFallbackCount = 0;
   let totalBytes = 0;
 
   // 幂等底：已导入过的源路径 → 对应的 orbita 会话（另导过一份的有两条），+ 本次扫描内的同源去重
@@ -1122,8 +1097,6 @@ async function scanWithConfigs(
 
     // 模型：索引的 modelId 优先，缺失时从 pi 文件补（最后的 model_change / assistant model）
     const promaModelId = entry.modelId ?? modelFromEntries(sessionEntries);
-    const mapped = mapModel(promaModelId, deps.registeredModels, deps.fallbackModel);
-    if (!mapped.matched) modelFallbackCount += 1;
 
     totalBytes += bytes;
     plan.push({
@@ -1141,10 +1114,7 @@ async function scanWithConfigs(
       title: deriveSessionTitle(entry.title),
       workspaceId: resolution.workspaceId,
       cwd: resolution.cwd,
-      providerId: mapped.providerId,
-      modelId: mapped.modelId,
       importedModel: promaModelId,
-      modelMatched: mapped.matched,
       archived: entry.archived,
       pinned: entry.pinned,
       starred: entry.starred,
@@ -1221,8 +1191,6 @@ async function scanWithConfigs(
 
     // 模型：索引的 modelId 优先（只有 30/257 条有），缺失时从清洗后的行取最后的 assistant model
     const promaModelId = entry.modelId ?? lastModelFromRows(rows);
-    const mapped = mapModel(promaModelId, deps.registeredModels, deps.fallbackModel);
-    if (!mapped.matched) modelFallbackCount += 1;
 
     const createdAt = entry.createdAt ?? firstTimestamp(rows) ?? Date.now();
     totalBytes += bytes;
@@ -1240,10 +1208,7 @@ async function scanWithConfigs(
       title: deriveSessionTitle(entry.title),
       workspaceId: resolution.workspaceId,
       cwd: resolution.cwd,
-      providerId: mapped.providerId,
-      modelId: mapped.modelId,
       importedModel: promaModelId,
-      modelMatched: mapped.matched,
       archived: entry.archived,
       pinned: entry.pinned,
       starred: entry.starred,
@@ -1287,8 +1252,6 @@ async function scanWithConfigs(
       }
     }
     if (resolution.mergedInto !== null) mergedIds.add(resolution.mergedInto);
-    const mapped = mapModel(candidate.model, deps.registeredModels, deps.fallbackModel);
-    if (!mapped.matched) modelFallbackCount += 1;
     totalBytes += candidate.bytes;
     if (candidate.onlyMessage !== null) singleMessages.set(candidate.sourceFile, candidate.onlyMessage);
     plan.push({
@@ -1304,10 +1267,7 @@ async function scanWithConfigs(
       title: candidate.title,
       workspaceId: resolution.workspaceId,
       cwd: resolution.cwd,
-      providerId: mapped.providerId,
-      modelId: mapped.modelId,
       importedModel: candidate.model,
-      modelMatched: mapped.matched,
       // 迁移边界（2026-09-24）：不适配源应用的会话管理功能（桌面应用的归档也不跟）
       archived: false,
       pinned: false,
@@ -1378,7 +1338,6 @@ async function scanWithConfigs(
     skipped,
     withoutPiSession: promaSessions.withoutPiFile,
     totalBytes,
-    modelFallbackCount,
     subSessionCount,
     orphanedSubSessions,
     lastImportAt: ledger.reduce<number | null>(
@@ -1387,7 +1346,11 @@ async function scanWithConfigs(
     ),
     skills,
     mcp: mcp.items,
-    greetingCheck: { candidates: greetingCandidates.size, model: deps.greetingModel ?? null },
+    greetingCheck: {
+      candidates: greetingCandidates.size,
+      model: "model" in greeting ? greeting.model : null,
+      unavailable: "unavailable" in greeting ? greeting.unavailable : null,
+    },
   };
   return { report, mcpServers: mcp.servers, greetingCandidates };
 }
@@ -1401,13 +1364,12 @@ export function emptyScanReport(): ImportScanReport {
     skipped: [],
     withoutPiSession: 0,
     totalBytes: 0,
-    modelFallbackCount: 0,
     subSessionCount: 0,
     orphanedSubSessions: 0,
     lastImportAt: null,
     skills: [],
     mcp: [],
-    greetingCheck: { candidates: 0, model: null },
+    greetingCheck: { candidates: 0, model: null, unavailable: null },
   };
 }
 
@@ -1420,7 +1382,7 @@ function claudeSourceFile(promaRoot: string, id: string): string {
 // 转换类来源（Claude Code、Kimi Code）共用：候选与默认去向
 // ---------------------------------------------------------------------------
 
-/** 一条待导入的转换类会话：计划条目除去模型映射与去向之外的全部原料。 */
+/** 一条待导入的转换类会话：计划条目除去去向之外的全部原料。 */
 interface ConvertedCandidate {
   /** 用户唯一写过的那条（「只随手发了一句」检查的候选）；写过零条或不止一条为 null */
   onlyMessage: string | null;
@@ -2156,10 +2118,7 @@ function updatedPlanItem(
     title: meta.title,
     workspaceId: meta.workspaceId,
     cwd: meta.cwd,
-    providerId: meta.providerId,
-    modelId: meta.modelId,
     importedModel: meta.importedModel ?? null,
-    modelMatched: true,
     archived: meta.archived,
     pinned: meta.pinned,
     starred: meta.starred === true,
@@ -2395,8 +2354,10 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
         titleSource: "user",
         cwd: item.cwd,
         workspaceId: item.workspaceId,
-        providerId: item.providerId,
-        modelId: item.modelId,
+        // 导入与模型解耦（2026-09-28 裁决）：不替源模型挑渠道，provider 落占位、
+        // modelId 落原模型名；打开时模型栏「没有模型」，用户自己选。原模型另存 importedModel
+        providerId: UNASSIGNED_PROVIDER_ID,
+        modelId: item.importedModel ?? UNASSIGNED_MODEL_ID,
         ...(item.importedModel === null ? null : { importedModel: item.importedModel }),
         importedFrom: item.sourceFile,
         ...(item.parentId === null ? null : { parentId: item.parentId }),
@@ -2565,7 +2526,7 @@ async function promaOnlyMessage(entries: readonly SessionEntry[], promaRoot: str
 async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
   const raw = await readFile(item.sourceFile, "utf8");
   const { rows } = parseClaudeRows(raw);
-  const { messages } = claudeRowsToMessages(rows, item.providerId);
+  const { messages } = claudeRowsToMessages(rows, UNASSIGNED_PROVIDER_ID);
   await mkdir(deps.piSessionDir, { recursive: true });
   const manager = SessionManager.create(item.cwd, deps.piSessionDir);
   for (const message of messages) {
@@ -2605,7 +2566,7 @@ function sourceOfImported(deps: ImporterDeps, sourceFile: string): ImportSourceI
  */
 async function runClaudeCodeImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
   const session = parseClaudeCodeSession(await readFile(item.sourceFile, "utf8"));
-  const { messages, userRowIndexes } = claudeRowsToMessages(session.rows, item.providerId);
+  const { messages, userRowIndexes } = claudeRowsToMessages(session.rows, UNASSIGNED_PROVIDER_ID);
   return persistConverted(
     item,
     deps,
@@ -2629,7 +2590,7 @@ async function runKimiCodeImport(item: ImportPlanItem, deps: RunImporterDeps): P
       // 缺席即可：转换写文字说明
     }
   }
-  const wire = parseKimiWire(raw, item.providerId, blobs);
+  const wire = parseKimiWire(raw, UNASSIGNED_PROVIDER_ID, blobs);
   return persistConverted(item, deps, wire.messages, wire.userDisplays);
 }
 
@@ -2645,7 +2606,7 @@ async function runOpencodeImport(item: ImportPlanItem, deps: RunImporterDeps): P
   const parsed = withOpencodeDb(dbFile, (db) => {
     const session = readOpencodeSessions(db).find((candidate) => candidate.id === sessionId);
     if (session === undefined) throw new Error("the session is no longer in opencode's database");
-    return opencodeToMessages(readOpencodeMessages(db, sessionId), item.providerId, session.revert);
+    return opencodeToMessages(readOpencodeMessages(db, sessionId), UNASSIGNED_PROVIDER_ID, session.revert);
   });
   return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
 }
@@ -2655,7 +2616,7 @@ async function runReasonixImport(item: ImportPlanItem, deps: RunImporterDeps): P
   const { rows } = parseReasonixRows(raw);
   // meta 只带来会话级模型（源行上没有）；执行时 meta 被删了就盖 unknown，不拦导入
   const meta = await readReasonixMeta(item.sourceFile);
-  const parsed = reasonixToMessages(rows, item.providerId, meta?.model ?? null);
+  const parsed = reasonixToMessages(rows, UNASSIGNED_PROVIDER_ID, meta?.model ?? null);
   return persistConverted(item, deps, parsed.messages, parsed.userDisplays);
 }
 

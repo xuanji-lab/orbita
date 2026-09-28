@@ -67,8 +67,6 @@ let idQueue: string[] = [];
 
 const takeId = (): string => idQueue.shift() ?? `00000000-0000-4000-8000-${String(++seq).padStart(12, "0")}`;
 
-const REGISTERED = [{ providerId: "zai-coding", modelId: "glm-5.3" }];
-const FALLBACK = { providerId: "zai-coding", modelId: "glm-5.3" };
 const DEFAULT_CWD = "/Users/tester";
 
 function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
@@ -78,8 +76,6 @@ function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
     defaultCwd: DEFAULT_CWD,
     workspaces: [],
     existingMetas: [],
-    registeredModels: REGISTERED,
-    fallbackModel: FALLBACK,
     newId: takeId,
     ledgerFile: join(root, "imports.jsonl"),
     createWorkspace: async () => undefined,
@@ -433,10 +429,8 @@ describe("importer 集成：claude 条目", () => {
     assert.equal(item?.sourceFile, join(promaRoot, "agent-sessions", "c-1.jsonl"));
     assert.equal(item?.workspaceId, null);
     assert.equal(item?.cwd, DEFAULT_CWD);
-    // 索引没记模型 → 从最后的 assistant 行提（glm-5.1）→ 注册表里没有 → fallback + importedModel 留原值
-    assert.equal(item?.modelMatched, false);
+    // 索引没记模型 → 从最后的 assistant 行提（glm-5.1）→ 原样存进 importedModel（导入不映射模型）
     assert.equal(item?.importedModel, "glm-5.1");
-    assert.equal(item?.modelId, "glm-5.3");
     assert.equal(report.withoutPiSession, 0);
   });
 

@@ -13,8 +13,10 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   parseImportRunInput,
   parseImportScanInput,
+  IMPORT_GREETING_UNAVAILABLE_CODE,
   type ImportDetectResult,
   type ImportGreetingCheckResult,
+  type ImportGreetingModelStatus,
   type ImportModelRef,
   type ImportRunReport,
   type ImportScanReport,
@@ -60,30 +62,25 @@ export function registerImportIpc(
   /** 用指定模型判一批消息哪些是随手一句（agent 进程的 classifyGreetings），回判中的下标 */
   classifyGreetings: (model: ImportModelRef, messages: string[]) => Promise<number[]>,
 ): void {
-  async function deps(): Promise<ImporterDeps> {
+  /**
+   * 「只随手发了一句」检查的家务活模型（设置里的 choreModel）：一个声明了模型的
+   * provider 都没有 → no-provider；有 provider 但没选家务活模型（或所选模型已不在
+   * 注册表里）→ no-chore-model。扫描 / 导入本身不碰模型配置——导入与模型解耦
+   * （2026-09-28 裁决），没有 provider 时扫描照常出计划、导入照常落盘。
+   */
+  async function greetingModelStatus(): Promise<ImportGreetingModelStatus> {
     const [providerList, appSettings] = await Promise.all([providers.list(), settings.read()]);
     const registered = providerList.flatMap((provider) =>
       provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id })),
     );
-    // 兜底模型：上次用的（还在注册表里就用它），否则第一家-provider 的第一个模型。
-    // 一个模型都没有 = 没法兜底，直接报错让用户先去配 provider（映射 miss 的会话
-    // 会拿到一个发不出请求的组合，不如在入口拦下）
-    const last = appSettings.lastUsed;
-    const lastHit =
-      last?.providerId !== undefined && last.modelId !== undefined
-        ? registered.find((m) => m.providerId === last.providerId && m.modelId === last.modelId)
-        : undefined;
-    const fallback = lastHit ?? registered[0];
-    if (fallback === undefined) {
-      throw new Error("No registered model — configure a provider before importing");
-    }
-    // 「只随手发了一句」检查用子会话模型（它就是给这类后台小活的）；没设或它的 provider 已删，
-    // 用上面的兜底模型——页面上写明用的是哪一个
-    const sub = appSettings.subSessionModel;
-    const greetingModel =
-      sub !== undefined && registered.some((m) => m.providerId === sub.providerId && m.modelId === sub.modelId)
-        ? { ...sub, from: "sub-session" as const }
-        : { ...fallback, from: "default" as const };
+    if (registered.length === 0) return { unavailable: "no-provider" };
+    const chore = appSettings.choreModel;
+    if (chore === undefined) return { unavailable: "no-chore-model" };
+    const alive = registered.some((m) => m.providerId === chore.providerId && m.modelId === chore.modelId);
+    return alive ? { model: chore } : { unavailable: "no-chore-model" };
+  }
+
+  async function deps(): Promise<ImporterDeps> {
     return {
       promaRoot: joinPromaRoot(),
       // Proma 数据根迁移史：.proma → .proma-dev，索引里仍有条目指向旧根（本机实测
@@ -102,9 +99,7 @@ export function registerImportIpc(
       workspaces: await workspaces.list(),
       existingMetas: await sessions.list(),
       ledgerFile,
-      registeredModels: registered,
-      fallbackModel: fallback,
-      greetingModel,
+      greetingModel: await greetingModelStatus(),
       newId: randomUUID,
     };
   }
@@ -131,12 +126,15 @@ export function registerImportIpc(
     ipcChannels.importCheckGreetings,
     async (_event, raw: unknown): Promise<ImportGreetingCheckResult> => {
       const input = parseImportScanInput(raw);
-      const environment = await deps();
-      const model = environment.greetingModel;
-      if (model === undefined || model === null) throw new Error("No model to run the check with");
-      const ref = { providerId: model.providerId, modelId: model.modelId };
+      // 模型不可用时抛稳定错误码（页面按码翻文案），不再抛英文原文；扫出来的
+      // 状态行在勾选前就应把检查置灰，这里只兑扫描与点击之间模型被删的竞态
+      const status = await greetingModelStatus();
+      if ("unavailable" in status) {
+        throw new Error(IMPORT_GREETING_UNAVAILABLE_CODE + status.unavailable);
+      }
+      const ref: ImportModelRef = status.model;
       if (input.sources.length === 0) return { greetingOnly: [], checked: 0, asked: 0, model: ref };
-      const candidates = await scanGreetingCandidates(environment, input.sources);
+      const candidates = await scanGreetingCandidates(await deps(), input.sources);
       const found = await findGreetingOnly(candidates, (messages) => classifyGreetings(ref, messages));
       return { greetingOnly: found.greetingOnly, checked: candidates.size, asked: found.asked, model: ref };
     },
