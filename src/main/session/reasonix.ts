@@ -53,8 +53,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 空串与缺席同为 null（与 importer.ts 的 optionalString 同一纪律——空 workspace_root 落 defaultCwd，不能落到进程 cwd）。 */
 function optionalString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 function parseJson(raw: string): unknown {

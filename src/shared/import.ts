@@ -2,7 +2,7 @@
  * 迁移（设置 › Migration）的契约 —— IPC 四层的第 1 层（与引擎同 PR 落地，消费者纪律）。
  * 三个通道：探测（只 stat）→ 扫描（dry-run，只读勾选的来源）→ 执行（按用户的选择落盘）。
  *
- * 通路背景（调研 2026-09-21）：Proma 的 pi 真源（`~/.proma-dev/sdk-config/sessions/`，
+ * 通路背景（调研 2026-09-21）：Proma 的 pi 真源（`<数据根>/sdk-config/sessions/`，
  * header version 3）与 orbita 锁定的 pi 0.84.3 同版本同格式——这层导入是**同构复制 +
  * 元数据映射**，无 LLM 参与。本文件只定义「扫描报告 / 执行报告」的形状与跳过原因的
  * 词汇；映射规则（工作区三规则）在引擎里，`src/main/session/importer.ts`。导入与模型
@@ -16,19 +16,25 @@
 /**
  * 迁移来源（2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
  *
- * - proma：Proma 桌面应用（~/.proma-dev）
+ * - proma：Proma 桌面应用。数据根是家目录下的 `.proma` 与它的变体（`.proma-dev`、`.proma-dev-fork`…，
+ *   开发版与正式版各用一个），有几个读几个；同一条会话在几个根里都有时只导一份（跳过原因 duplicate）
  * - claude-code：Claude Code 的会话存储（~/.claude/projects），命令行与 Claude 桌面应用共用；
  *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题；另有 ~/.claude/skills
  * - kimi-code：Kimi Code 命令行（~/.kimi-code）：会话在 sessions/<工作区>/<会话>/ 下，对话是
  *   agents/main/wire.jsonl 这份事件流；另有 mcp.json。skills 用的是共用目录（归 agent-skills）
  * - opencode：opencode 命令行：会话在它的 SQLite 库（~/.local/share/opencode/opencode.db，只读打开），
  *   MCP 在 ~/.config/opencode/opencode.json
- * - reasonix：Reasonix 桌面版（Windows %APPDATA%/reasonix）：只导会话——projects/<项目>/sessions/
+ * - reasonix：Reasonix 桌面版（Electron userData 的 reasonix/projects：Win %APPDATA%、
+ *   mac ~/Library/Application Support、Linux ~/.config）：只导会话——projects/<项目>/sessions/
  *   下的旧 JSONL。skills 是共用目录（~/.agents/skills）的链接子集（归 agent-skills）、MCP 只有
  *   TOML 里一台、hooks 双方都没有，都不迁（2026-09-27 裁决）；v5 二进制帧容器另立一刀
+ * - zcode：ZCode（~/.zcode/cli/db/db.sqlite，只读打开）：只导会话——会话库与 opencode 同源同形
+ *   （session/message/part），转换走 opencode 同一条路。skills 是共用目录（~/.agents/skills）
+ *   的 symlink 子集（归 agent-skills）、没有 mcpServers 配置、memories/plugins 是 ZCode 私有
+ *   概念无落点，都不迁（2026-09-28 裁决）
  * - agent-skills：多家 agent 共用的 skills 目录（~/.agents/skills），只有 skills，没有会话
  */
-export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "reasonix" | "agent-skills";
+export type ImportSourceId = "proma" | "claude-code" | "kimi-code" | "opencode" | "reasonix" | "zcode" | "codex" | "agent-skills";
 
 /**
  * 一个来源的探测结果。打开 Migration 页就跑，**只 stat，不读内容**。
@@ -104,15 +110,31 @@ export type ImportSkipReason =
   | "no-pi-session"
   /** 幂等命中：这条源文件已经导入过（按 meta.importedFrom 判重） */
   | "already-imported"
+  /**
+   * 同一条会话在别处还有一份，那一份进了计划、这份不导。两种来路：同一个产品的几个数据目录
+   * （`.proma` 迁到 `.proma-dev`、`~/.claude` 备份成 `~/.claude-bak` 时整份复制过去）里同一个
+   * 会话 id 的内容相同，或这份是那份的前缀（复制过去之后又接着聊了）；以及 Proma 同一份索引里
+   * 两个条目指着同一个文件。
+   * detail 是留下的那一份的源文件路径
+   */
+  | "duplicate"
   /** 源文件指向的文件不在盘上 */
   | "missing-file"
   /** 打不开/读不懂：header 缺失、version 超前、文件本身坏 */
   | "bad-session-file"
   /** agent-sessions.json 里这条索引本身坏了（缺 id / 路径不是字符串等） */
   | "bad-index-entry"
-  /** 能读但转不出可续聊内容：claude legacy / Claude Code / Kimi Code / opencode 的会话里没有 assistant 消息
-   *  （纯旧扁平 / 空 draft / 只开了个头——pi 只在有 assistant 消息时才落盘文件） */
-  | "unsupported-format";
+  /**
+   * 能读但转不出可续聊的内容：Proma 的旧扁平格式 / 空 draft，以及还不支持的存储格式
+   * （Reasonix 9-18 起的新版会话库）。detail 写具体是哪种
+   */
+  | "unsupported-format"
+  /**
+   * 会话里一条回复都没有：只发了一句就断掉、或只开了个会话（转换类来源；在源应用里看得到那条
+   * 提问）。pi 只在有 assistant 消息时才落盘文件，导进来也没法续聊，所以不导。与
+   * unsupported-format 分开，页面才能说清楚「不是格式问题，是那边就没有回复」
+   */
+  | "no-reply";
 
 export interface ImportSkipItem {
   /** 源侧的会话 id；Proma 索引坏到连 id 都没有时用文件内序号顶上（报告要对得上数） */
@@ -156,7 +178,16 @@ export type ImportSourceKind =
   /** Reasonix 桌面版的会话 JSONL（projects/<项目>/sessions/*.jsonl）：一行一条 OpenAI 扁平
    *  消息（user/assistant/tool，assistant 带 reasoning 与 tool_calls，另有 UI 元数据与分支记账
    *  行），转换构造 pi 文件 */
-  | "reasonix";
+  | "reasonix"
+  /** ZCode 的 SQLite 库（~/.zcode/cli/db/db.sqlite）：与 opencode 同形（session/message/part），
+   *  转换直接走 opencode 的转换器，zcode.ts 只做取数与差异吸收（rewind 白名单、part 排序），
+   *  键名分岔在转换器里两个拼写都认 */
+  | "zcode"
+  /** Codex 的 rollout（$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl）：一行一个
+   *  {timestamp,type,payload}；session_meta 定会话、response_item 定消息（转换构造
+   *  pi 文件；工具项不导——细节见 codex.ts 文件头）。**依据公开逆向描述，未经真实
+   *  样本验证** */
+  | "codex";
 
 /**
  * 一条计划条目相对 orbita 的状态（再次导入，wafo 2026-09-24 23:55 裁决）。
@@ -187,6 +218,17 @@ export interface ImportPlanItem {
   sourceId: string;
   /** 来自哪个来源（页面按它给组内的来源分项计数） */
   source: ImportSourceId;
+  /**
+   * 这条会话在本来源的哪几个数据目录里有（绝对路径：`~/.proma`、`~/.proma-dev`、`~/.claude`、
+   * `$CODEX_HOME`…）。**第一个是留下的那份所在的目录**，其后是被它顶掉的重复所在的目录。
+   * 一个产品可以同时有几个数据目录（正式版、开发版、分支版各一个），见 import-locate.ts。
+   *
+   * 页面按它筛（有实验用的分支版数据时一次去掉整个目录，不用在各文件夹组里逐条取消）。
+   * 必须是全部的目录而不只是留下的那个：内容相同的重复留排在前面的目录的那份，只看留下的目录的话，
+   * 去掉 `~/.proma` 会把 `~/.proma-dev` 里也有的会话一起藏掉——去掉一个目录应该只去掉只在它里面的。
+   * 不是 sourceFile 的前缀：Proma 索引里的源文件可以在别的目录下（本机 `.proma-dev` 有 66 条指向 `.proma`）
+   */
+  dataRoots: string[];
   sourceKind: ImportSourceKind;
   /**
    * 源侧的文件夹，也是页面的分组键与去向的覆盖键。Proma = 所属工作区的
@@ -479,6 +521,8 @@ const SOURCE_ID_TABLE: Record<ImportSourceId, true> = {
   "kimi-code": true,
   opencode: true,
   reasonix: true,
+  zcode: true,
+  codex: true,
   "agent-skills": true,
 };
 const SOURCE_IDS: readonly string[] = Object.keys(SOURCE_ID_TABLE);

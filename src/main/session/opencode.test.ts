@@ -148,7 +148,7 @@ describe("opencodeToMessages", () => {
     assert.equal(parsed.stats.patchedToolCalls, 1);
   });
 
-  test("压缩请求与摘要不导、历史全留；撤回点之后的消息不导，带 partID 的从那个 part 截掉", () => {
+  test("历史全留；摘要记成一处压缩（位置、全文、压缩前 token），压缩请求不导；撤回点之后的消息不导，带 partID 的从那个 part 截掉", () => {
     const rows = [
       user("msg_1", [{ type: "text", text: "一" }]),
       assistant("msg_2", [{ type: "step-start" }, { type: "text", text: "答一" }, finish("stop")]),
@@ -161,6 +161,11 @@ describe("opencodeToMessages", () => {
     const plain = opencodeToMessages(rows, "p", null);
     assert.deepEqual(describeMessages(plain.messages), ["user:一", "assistant:答一", "user:二", "assistant:答二前半|答二后半", "user:三"]);
     assert.equal(plain.stats.compactionMessages, 2);
+    // 摘要落在「答一」之后（前面有 2 条消息）；tokensBefore = 摘要那一步的 input + cache（10 + 100 + 2）
+    assert.deepEqual(
+      plain.compactions.map((compaction) => [compaction.at, compaction.summary, compaction.tokensBefore]),
+      [[2, "摘要……", 112]],
+    );
 
     const reverted = opencodeToMessages(rows, "p", JSON.stringify({ messageID: "msg_7" }));
     assert.deepEqual(describeMessages(reverted.messages).at(-1), "assistant:答二前半|答二后半");

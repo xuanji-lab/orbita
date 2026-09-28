@@ -12,6 +12,7 @@ import {
   formatMoment,
   groupName,
   groupSessions,
+  dataRootCounts,
   selectedSourceFiles,
   summarize,
 } from "./migration-groups.ts";
@@ -26,6 +27,7 @@ function item(overrides: Partial<ImportPlanItem>): ImportPlanItem {
   return {
     sourceId: `s-${seq}`,
     source: "proma",
+    dataRoots: ["/home/.proma-dev"],
     sourceKind: "pi",
     change: "new",
     newMessages: 0,
@@ -104,11 +106,86 @@ describe("groupSessions", () => {
       item({ folder: "/repo/b" }),
     ];
     assert.equal(groupSessions(report(plan), DEFAULT_FILTERS, NOW).hidden, 0);
-    const narrowed = groupSessions(report(plan), { range: "90d", includeArchived: false }, NOW);
+    const narrowed = groupSessions(report(plan), { range: "90d", includeArchived: false, excludedRoots: new Set() }, NOW);
     assert.equal(narrowed.hidden, 2);
     assert.deepEqual(
       narrowed.groups.map((group) => group.folder),
       ["/repo/b"],
+    );
+  });
+
+  test("按数据根筛：会话所在的根全被去掉才藏（算进 hidden、不导）；别的根里也有的照导；其它来源不受影响", () => {
+    const DEV = "/home/.proma-dev";
+    const FORK = "/home/.proma-dev-fork";
+    const OLD = "/home/.proma";
+    const devOnly = item({ folder: "/repo/a", dataRoots: [DEV], sourceFile: "/src/dev.jsonl" });
+    const forkOnly = item({ folder: "/repo/a", dataRoots: [FORK], sourceFile: "/src/fork.jsonl" });
+    const forkKid = item({ folder: "/repo/a", dataRoots: [FORK], parentId: forkOnly.sessionId });
+    // 字节相同的重复留了 .proma 那份：取消 .proma 不该藏掉它
+    const shared = item({ folder: "/repo/a", dataRoots: [OLD, DEV], sourceFile: "/src/shared.jsonl" });
+    const claude = item({ folder: "/repo/a", source: "claude-code", dataRoots: [], sourceFile: "/src/cc.jsonl" });
+    const r = report([forkOnly, forkKid, devOnly, shared, claude]);
+    // 数的是只在这个根里的（取消它会少导的）；跟着母会话走的子会话不单算；
+    // claude-code 没有多目录概念（dataRoots 空），不进这个菜单
+    assert.deepEqual(dataRootCounts(r), [
+      {
+        source: "proma",
+        roots: [
+          { root: OLD, onlyHere: 0 },
+          { root: DEV, onlyHere: 1 },
+          { root: FORK, onlyHere: 1 },
+        ],
+      },
+    ]);
+    const all = ["/src/dev.jsonl", "/src/fork.jsonl", "/src/shared.jsonl", "/src/cc.jsonl"];
+    const noOld = groupSessions(r, { ...DEFAULT_FILTERS, excludedRoots: new Set([OLD, FORK]) }, NOW);
+    assert.equal(noOld.hidden, 1);
+    assert.deepEqual(selectedSourceFiles(noOld, new Set(all)).sort(), ["/src/cc.jsonl", "/src/dev.jsonl", "/src/shared.jsonl"]);
+    const noOldNoDev = groupSessions(r, { ...DEFAULT_FILTERS, excludedRoots: new Set([OLD, DEV]) }, NOW);
+    assert.deepEqual(selectedSourceFiles(noOldNoDev, new Set(all)).sort(), ["/src/cc.jsonl", "/src/fork.jsonl"]);
+  });
+
+  test("数据根清单按来源分组：只有一个目录的来源不出现；组按来源在计划里首次出现的顺序；去掉一个来源的根不串到别的来源", () => {
+    const PROMA = "/home/.proma";
+    const PROMA_DEV = "/home/.proma-dev";
+    const ZCODE = "/home/.zcode";
+    const ZCODE_WT = "/home/.zcode-wt";
+    const plan = [
+      // zcode 在计划里先出现：菜单里 zcode 组在前（引擎扫出什么顺序就列什么顺序）
+      item({ source: "zcode", dataRoots: [ZCODE_WT], sourceFile: "/src/zt.jsonl" }),
+      item({ source: "zcode", dataRoots: [ZCODE, ZCODE_WT], sourceFile: "/src/zshared.jsonl" }),
+      item({ source: "proma", dataRoots: [PROMA_DEV], sourceFile: "/src/pd.jsonl" }),
+      item({ source: "proma", dataRoots: [PROMA, PROMA_DEV], sourceFile: "/src/pshared.jsonl" }),
+      // 只有一个目录的来源（kimi-code）不出现——没得选；claude-code 没有多目录概念也不出现
+      item({ source: "kimi-code", dataRoots: ["/home/.kimi-code"], sourceFile: "/src/kimi.jsonl" }),
+      item({ source: "claude-code", dataRoots: [], sourceFile: "/src/cc.jsonl" }),
+    ];
+    const r = report(plan);
+    assert.deepEqual(
+      dataRootCounts(r).map((group) => [group.source, group.roots]),
+      [
+        [
+          "zcode",
+          [
+            { root: ZCODE, onlyHere: 0 },
+            { root: ZCODE_WT, onlyHere: 1 },
+          ],
+        ],
+        [
+          "proma",
+          [
+            { root: PROMA, onlyHere: 0 },
+            { root: PROMA_DEV, onlyHere: 1 },
+          ],
+        ],
+      ],
+    );
+    // 去掉 zcode 的 wt 根：只藏只在它里面的 zcode 会话；proma、单目录来源的照导
+    const noWt = groupSessions(r, { ...DEFAULT_FILTERS, excludedRoots: new Set([ZCODE_WT]) }, NOW);
+    assert.equal(noWt.hidden, 1);
+    assert.deepEqual(
+      selectedSourceFiles(noWt, new Set(plan.map((entry) => entry.sourceFile))).sort(),
+      ["/src/cc.jsonl", "/src/kimi.jsonl", "/src/pd.jsonl", "/src/pshared.jsonl", "/src/zshared.jsonl"],
     );
   });
 
@@ -130,7 +207,7 @@ describe("选择与汇总", () => {
     const r = report([a, b], ["w-new"]);
     const selected = defaultSelection(r);
     assert.equal(selected.size, 2);
-    const visible = groupSessions(r, { range: "all", includeArchived: false }, NOW);
+    const visible = groupSessions(r, { range: "all", includeArchived: false, excludedRoots: new Set() }, NOW);
     assert.deepEqual(selectedSourceFiles(visible, selected), [a.sourceFile]);
 
     const overrides = new Map([

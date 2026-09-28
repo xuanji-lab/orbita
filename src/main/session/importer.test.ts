@@ -9,13 +9,13 @@
  */
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { buildContextEntries } from "@earendil-works/pi-coding-agent";
+import { buildContextEntries, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import type { Workspace } from "../../shared/workspace.ts";
 import { rootSessions, UNASSIGNED_PROVIDER_ID, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ImportPlanItem } from "../../shared/import.ts";
@@ -23,10 +23,13 @@ import { SessionStore } from "./store.ts";
 import { SkillStore } from "../skill/store.ts";
 import {
   branchEntries,
+  compareSignatures,
   entriesToRecords,
+  messageSignature,
   probeClaudeCode,
   probeKimiCode,
   probeOpencode,
+  probeZcode,
   probeProma,
   probeReasonix,
   runImport,
@@ -55,7 +58,7 @@ const takeId = (): string => idQueue.shift() ?? `00000000-0000-4000-8000-${Strin
 
 const orbitaWorkspace = (path: string, id = "11111111-1111-4111-8111-111111111111"): Workspace => ({
   id,
-  name: path.split("/").pop() ?? path,
+  name: basename(path),
   path,
   createdAt: 1,
   attachedDirs: [],
@@ -65,7 +68,7 @@ const DEFAULT_CWD = "/Users/tester";
 
 function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
   const base: RunImporterDeps = {
-    promaRoot,
+    promaRoots: [promaRoot],
     piSessionDir,
     defaultCwd: DEFAULT_CWD,
     workspaces: [],
@@ -519,7 +522,8 @@ describe("边界：索引与源文件的坏形态", () => {
       { id: "s-outside", title: "越界", piSessionFile: outsideFile, createdAt: 1, updatedAt: 2 },
       { id: "s-legacy-root", title: "旧根", piSessionFile: legacyFile, createdAt: 3, updatedAt: 4 },
     ]);
-    const report = await scanImport(deps({ extraSourceRoots: [legacyRoot] }));
+    // 旧根没有自己的索引也算数据根：扫描跳过它的索引，但它仍是源文件路径的合法边界
+    const report = await scanImport(deps({ promaRoots: [promaRoot, legacyRoot] }));
     const skip = report.skipped.find((s) => s.sourceId === "s-outside");
     assert.ok(skip !== undefined);
     assert.equal(skip.reason, "bad-session-file");
@@ -529,7 +533,7 @@ describe("边界：索引与源文件的坏形态", () => {
     assert.equal(report.plan[0]?.sourceId, "s-legacy-root");
   });
 
-  test("同一次扫描里两条索引指向同一源文件 → 第二条 already-imported", async () => {
+  test("同一次扫描里两条索引指向同一源文件 → 第二条 duplicate，detail 是留下的文件", async () => {
     const pi = await writePiSession("2026-09-01T00-00-00-000Z_dup-000000000000001.jsonl", "/tmp/project");
     await writeIndex([
       { id: "s-a", title: "甲", piSessionFile: pi, createdAt: 1, updatedAt: 2 },
@@ -540,7 +544,8 @@ describe("边界：索引与源文件的坏形态", () => {
     assert.equal(report.plan[0]?.sourceId, "s-a");
     const skip = report.skipped.find((s) => s.sourceId === "s-b");
     assert.ok(skip !== undefined);
-    assert.equal(skip.reason, "already-imported");
+    assert.equal(skip.reason, "duplicate");
+    assert.equal(skip.detail, pi);
   });
 });
 
@@ -1094,13 +1099,21 @@ describe("Migration 页的选择：去向覆盖、勾选过滤、探测", () => 
     assert.equal(picked[0]?.parentId, parentMeta?.id);
   });
 
-  test("probeProma：只 stat 索引；paths 列出扫描会读的全部位置（含旧根）", async () => {
-    const missing = await probeProma(promaRoot, ["/tmp/old-root"]);
+  test("probeProma：只 stat 索引；有索引的根各列一组路径，一个都没有时列第一个候选根", async () => {
+    const other = join(root, ".proma");
+    await mkdir(other, { recursive: true });
+    const missing = await probeProma([other, promaRoot], join(root, "fallback"));
     assert.equal(missing.found, false);
-    assert.ok(missing.paths.includes(join(promaRoot, "agent-sessions.json")));
-    assert.ok(missing.paths.includes(join("/tmp/old-root", "sdk-config", "sessions")));
+    assert.ok(missing.paths.includes(join(other, "agent-sessions.json")));
+    assert.ok(!missing.paths.includes(join(promaRoot, "agent-sessions.json")));
+    assert.ok((await probeProma([], join(root, "fallback"))).paths.includes(join(root, "fallback", "agent-sessions.json")));
+
     await writeIndex([]);
-    assert.equal((await probeProma(promaRoot)).found, true);
+    const found = await probeProma([other, promaRoot], join(root, "fallback"));
+    assert.equal(found.found, true);
+    // 没有索引的根不列
+    assert.ok(found.paths.includes(join(promaRoot, "sdk-config", "sessions")));
+    assert.ok(!found.paths.includes(join(other, "agent-sessions.json")));
   });
 });
 
@@ -1422,6 +1435,196 @@ describe("再次导入：对照 orbita 的副本与导入清单", () => {
   });
 });
 
+describe("Proma 的几个数据根（.proma 与 .proma-* 变体）", () => {
+  /** 排在 promaRoot（proma-dev）前面的另一个数据根 */
+  const oldRoot = (): string => join(root, ".proma");
+
+  async function writeIndexAt(dir: string, entries: unknown[]): Promise<void> {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "agent-sessions.json"), JSON.stringify({ version: 2, sessions: entries }));
+  }
+
+  /** 把一份 pi 真源复制到另一个根的 sdk-config/sessions 下（迁移时 Proma 就是这么整份复制的） */
+  async function copyInto(dir: string, file: string, name = basename(file)): Promise<string> {
+    const target = join(dir, "sdk-config", "sessions", name);
+    await mkdir(dirname(target), { recursive: true });
+    await copyFile(file, target);
+    return target;
+  }
+
+  async function append(path: string, lines: unknown[]): Promise<void> {
+    await writeFile(path, `${await readFile(path, "utf8")}${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  }
+
+  /** 接着聊的一轮：user + assistant 接在 e2 后面 */
+  const turn = (suffix: string): unknown[] => [
+    {
+      type: "message",
+      id: `t-${suffix}-u`,
+      parentId: "e2",
+      timestamp: "2026-09-02T00:00:01.000Z",
+      message: { role: "user", content: [{ type: "text", text: `追问 ${suffix}` }], timestamp: 1780100001000 },
+    },
+    {
+      type: "message",
+      id: `t-${suffix}-a`,
+      parentId: `t-${suffix}-u`,
+      timestamp: "2026-09-02T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "回答" }],
+        provider: "proma-x",
+        model: "glm-5.3",
+        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: 1780100002000,
+      },
+    },
+  ];
+
+  test("同一条会话在两个根里字节相同 → 只进一条，另一份 duplicate、detail 指向留下的；各自独有的都进", async () => {
+    const same = await writePiSession("2026-09-01T00-00-00-000Z_same-00000000000001.jsonl", "/tmp/p");
+    const devOnly = await writePiSession("2026-09-01T00-01-00-000Z_dev-000000000000002.jsonl", "/tmp/p");
+    await writeIndex([
+      { id: "same", title: "两边都有", piSessionFile: same, createdAt: 1, updatedAt: 2 },
+      { id: "dev-only", title: "只在 dev", piSessionFile: devOnly, createdAt: 3, updatedAt: 4 },
+    ]);
+    const sameOld = await copyInto(oldRoot(), same);
+    const oldOnly = await copyInto(oldRoot(), devOnly, "2026-09-01T00-02-00-000Z_old-000000000000003.jsonl");
+    await writeIndexAt(oldRoot(), [
+      { id: "same", title: "两边都有", piSessionFile: sameOld, createdAt: 1, updatedAt: 2 },
+      { id: "old-only", title: "只在旧根", piSessionFile: oldOnly, createdAt: 5, updatedAt: 6 },
+    ]);
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => item.sourceId).sort(), ["dev-only", "old-only", "same"]);
+    // 一样长时留排在前面的根的那份
+    assert.equal(report.plan.find((item) => item.sourceId === "same")?.sourceFile, sameOld);
+    // 每条带着它所在的全部根，留下的那份的根在最前（页面按它筛）
+    assert.deepEqual(
+      report.plan.map((item) => [item.sourceId, item.dataRoots]).sort(),
+      [
+        ["dev-only", [promaRoot]],
+        ["old-only", [oldRoot()]],
+        ["same", [oldRoot(), promaRoot]],
+      ],
+    );
+    assert.deepEqual(
+      report.skipped.map((skip) => [skip.sourceId, skip.reason, skip.detail]),
+      [["same", "duplicate", sameOld]],
+    );
+  });
+
+  test("一份是另一份的前缀（复制过去之后接着聊了）→ 留长的那份，不管它在哪个根", async () => {
+    const dev = await writePiSession("2026-09-01T00-00-00-000Z_pre-000000000000001.jsonl", "/tmp/p");
+    const old = await copyInto(oldRoot(), dev);
+    await append(dev, turn("dev"));
+    await writeIndex([{ id: "s", title: "接着聊过", piSessionFile: dev, createdAt: 1, updatedAt: 2 }]);
+    await writeIndexAt(oldRoot(), [{ id: "s", title: "接着聊过", piSessionFile: old, createdAt: 1, updatedAt: 2 }]);
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => item.sourceFile), [dev]);
+    assert.deepEqual(report.skipped.map((skip) => [skip.reason, skip.detail]), [["duplicate", dev]]);
+  });
+
+  test("同一个 id 下两份内容分了叉 → 两份都导，哪份都不丢", async () => {
+    const dev = await writePiSession("2026-09-01T00-00-00-000Z_div-000000000000001.jsonl", "/tmp/p");
+    const old = await copyInto(oldRoot(), dev);
+    await append(dev, turn("dev"));
+    await append(old, turn("old"));
+    await writeIndex([{ id: "s", title: "分叉", piSessionFile: dev, createdAt: 1, updatedAt: 2 }]);
+    await writeIndexAt(oldRoot(), [{ id: "s", title: "分叉", piSessionFile: old, createdAt: 1, updatedAt: 2 }]);
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => item.sourceFile).sort(), [dev, old].sort());
+    assert.equal(report.skipped.length, 0);
+  });
+
+  test("上次只从一个根导过，这次另一个根也在：认得出、不重复导；另一个根接着聊了 → 追加进同一条", async () => {
+    const dev = await writePiSession("2026-09-01T00-00-00-000Z_imp-000000000000001.jsonl", "/tmp/p");
+    await writeIndex([{ id: "s", title: "导过", piSessionFile: dev, createdAt: 1, updatedAt: 2 }]);
+    await runImport(deps());
+    const [before] = await store.list();
+    assert.ok(before !== undefined);
+
+    // 旧根里是字节相同的一份，且排在前面——留下的仍是导过的那份
+    const old = await copyInto(oldRoot(), dev);
+    await writeIndexAt(oldRoot(), [{ id: "s", title: "导过", piSessionFile: old, createdAt: 1, updatedAt: 2 }]);
+    const both = deps({ promaRoots: [oldRoot(), promaRoot], existingMetas: await store.list() });
+    const again = await scanImport(both);
+    assert.equal(again.plan.length, 0);
+    assert.deepEqual(again.skipped.map((skip) => skip.reason).sort(), ["already-imported", "duplicate"]);
+
+    // 旧根那份接着聊了：它更长，留它；orbita 里导过的是它的前缀 → updated，不是新会话
+    await append(old, turn("old"));
+    const later = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot], existingMetas: await store.list() }));
+    assert.deepEqual(
+      later.plan.map((item) => [item.change, item.sourceFile, item.sessionId, item.newMessages]),
+      [["updated", old, before.id, 2]],
+    );
+    const run = await runImport(deps({ promaRoots: [oldRoot(), promaRoot], existingMetas: await store.list() }));
+    assert.deepEqual([run.imported, run.updated, run.failed.length], [0, 1, 0]);
+    assert.equal((await store.list()).length, 1);
+  });
+
+  test("导过又在 orbita 删了：换一个根里的同一份也认得出是 deleted", async () => {
+    const dev = await writePiSession("2026-09-01T00-00-00-000Z_del-000000000000001.jsonl", "/tmp/p");
+    await writeIndex([{ id: "s", title: "删过", piSessionFile: dev, createdAt: 1, updatedAt: 2 }]);
+    await runImport(deps());
+    const [imported] = await store.list();
+    assert.ok(imported !== undefined);
+    await store.remove(imported.id);
+
+    const old = await copyInto(oldRoot(), dev);
+    await append(old, turn("old"));
+    await writeIndexAt(oldRoot(), [{ id: "s", title: "删过", piSessionFile: old, createdAt: 1, updatedAt: 2 }]);
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot], existingMetas: await store.list() }));
+    assert.deepEqual(report.plan.map((item) => [item.change, item.sourceFile]), [["deleted", old]]);
+  });
+
+  test("claude legacy 的界面日志两个根里一模一样 → 只导一条；没有会话源的条目按 id 去重计数", async () => {
+    const rows = [
+      { type: "user", message: { role: "user", content: [{ type: "text", text: "问" }] }, parent_tool_use_id: null, _createdAt: 1780000000000 },
+      {
+        type: "assistant",
+        message: { id: "m1", role: "assistant", type: "message", model: "glm-5.1", content: [{ type: "text", text: "答" }], stop_reason: null, usage: { input_tokens: 1, output_tokens: 1 } },
+        parent_tool_use_id: null,
+        _createdAt: 1780000001000,
+      },
+    ];
+    const entries = [
+      { id: "legacy", title: "claude 时代", createdAt: 1, updatedAt: 2, legacyTranscript: { sourceRuntime: "claude" } },
+      { id: "draft", title: "草稿", createdAt: 3, updatedAt: 4 },
+    ];
+    for (const dir of [oldRoot(), promaRoot]) {
+      await mkdir(join(dir, "agent-sessions"), { recursive: true });
+      await writeFile(join(dir, "agent-sessions", "legacy.jsonl"), rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+      await writeIndexAt(dir, entries);
+    }
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => [item.sourceKind, item.sourceFile]), [
+      ["claude-legacy", join(oldRoot(), "agent-sessions", "legacy.jsonl")],
+    ]);
+    assert.deepEqual(report.skipped.map((skip) => [skip.sourceId, skip.reason]), [["legacy", "duplicate"]]);
+    assert.equal(report.withoutPiSession, 1);
+  });
+
+  test("某个根的索引坏了 → 记一条 bad-index-entry、别的根照读；一个索引都没有才报错", async () => {
+    const pi = await writePiSession("2026-09-01T00-00-00-000Z_ok-0000000000000001.jsonl", "/tmp/p");
+    await writeIndex([{ id: "ok", title: "好的", piSessionFile: pi, createdAt: 1, updatedAt: 2 }]);
+    await mkdir(oldRoot(), { recursive: true });
+    await writeFile(join(oldRoot(), "agent-sessions.json"), "{ 半截");
+
+    const report = await scanImport(deps({ promaRoots: [oldRoot(), promaRoot] }));
+    assert.deepEqual(report.plan.map((item) => item.sourceId), ["ok"]);
+    assert.deepEqual(report.skipped.map((skip) => [skip.sourceId, skip.reason]), [
+      [join(oldRoot(), "agent-sessions.json"), "bad-index-entry"],
+    ]);
+    await assert.rejects(scanImport(deps({ promaRoots: [join(root, ".proma-empty")] })), /找不到 Proma 会话索引/);
+  });
+});
+
 describe("边界：执行的单条失败不炸整批", () => {
   test("persistSession 第二条抛错 → 第一三条照落，failed 有明细", async () => {
     const pi1 = await writePiSession("2026-09-01T00-00-00-000Z_f1-0000000000000001.jsonl", "/tmp/a");
@@ -1462,7 +1665,7 @@ describe("Claude Code 来源", () => {
   });
 
   const ccDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps =>
-    deps({ claudeCode: { projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }, ...overrides });
+    deps({ claudeCode: [{ root: dirname(projectsDir), projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }], ...overrides });
 
   /** 一份 Claude Code 会话文件：rootUuid 决定分叉关系；prompts 是用户每轮说的话 */
   async function writeClaudeCodeSession(
@@ -1629,7 +1832,7 @@ describe("Claude Code 来源", () => {
     );
     const report = await scanImport(ccDeps(), [], ["claude-code"]);
     assert.equal(report.plan.length, 0);
-    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["lonely", "unsupported-format"]]);
+    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["lonely", "no-reply"]]);
   });
 
   test("「只随手发了一句」检查的候选：用户只写过一条的；接着聊过的不算；扫描本身照常列出", async () => {
@@ -1649,11 +1852,147 @@ describe("Claude Code 来源", () => {
   });
 
   test("探测：会话根目录在不在；paths 列出扫描会读的两处", async () => {
-    const found = await probeClaudeCode({ projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") });
+    const found = await probeClaudeCode([{ root: dirname(projectsDir), projectsDir, desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [projectsDir, desktopDir, join(root, "claude", "skills"), join(root, "claude.json")]);
-    const missing = await probeClaudeCode({ projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") });
+    const missing = await probeClaudeCode([{ root, projectsDir: join(root, "nope"), desktopSessionsDir: desktopDir, home, skillsDir: join(root, "claude", "skills"), claudeJson: join(root, "claude.json") }]);
     assert.equal(missing.found, false);
+  });
+
+  // —— 再次导入与多数据目录（转换类来源按内容指纹判，Claude Code 作代表） ——
+
+  /** 扫一遍再把计划里的全部导进来（只勾 Claude Code） */
+  async function importAllCc(overrides: Partial<RunImporterDeps> = {}) {
+    const report = await scanImport(ccDeps({ existingMetas: await store.list(), ...overrides }), [], ["claude-code"]);
+    const run = await runImport(ccDeps({ existingMetas: await store.list(), ...overrides }), {
+      sources: ["claude-code"],
+      sessions: new Set(report.plan.map((item) => item.sourceFile)),
+      destinations: [],
+    });
+    return { report, run };
+  }
+
+  async function userTexts(sessionId: string): Promise<string[]> {
+    const records = (await store.load(sessionId))?.transcript ?? [];
+    return records
+      .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
+      .map((record) => record.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
+  }
+
+  test("导过之后 Claude Code 里又聊了 → updated：追加进同一条会话，pi 副本的 header 不变；再扫即已导入", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    await importAllCc();
+    const [before] = await store.list();
+    assert.ok(before !== undefined && before.piSessionFile !== null);
+    const header = (await readFile(before.piSessionFile, "utf8")).split("\n")[0];
+
+    await writeClaudeCodeSession("s1", repo, ["第一问", "第二问", "第三问"]);
+    const { report, run } = await importAllCc();
+    assert.deepEqual(
+      report.plan.map((item) => [item.change, item.newMessages, item.sessionId]),
+      [["updated", 4, before.id]],
+    );
+    assert.deepEqual([run.imported, run.updated, run.failed.length], [0, 1, 0]);
+    const metas = await store.list();
+    assert.equal(metas.length, 1);
+    assert.deepEqual(await userTexts(before.id), ["第一问", "第二问", "第三问"]);
+    assert.equal((await readFile(before.piSessionFile, "utf8")).split("\n")[0], header, "会话在 orbita 里的身份不变");
+
+    const again = await scanImport(ccDeps({ existingMetas: await store.list() }), [], ["claude-code"]);
+    assert.equal(again.plan.length, 0);
+    assert.deepEqual(again.skipped.map((skip) => skip.reason), ["already-imported"]);
+  });
+
+  test("两边都接着聊了 → diverged：另导一份放在原会话旁边；只在 orbita 聊了 → 不列", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    await importAllCc();
+    const [original] = await store.list();
+    assert.ok(original !== undefined && original.piSessionFile !== null);
+    // 在 orbita 接着聊：副本末尾追加一条源里没有的用户消息
+    const lines = (await readFile(original.piSessionFile, "utf8")).trim().split("\n");
+    const lastId = (JSON.parse(lines[lines.length - 1] ?? "{}") as { id: string }).id;
+    const mine = { type: "message", id: "orbita-only", parentId: lastId, timestamp: "2026-09-21T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "在 orbita 问的" }], timestamp: 1790000000000 } };
+    await writeFile(original.piSessionFile, `${lines.join("\n")}\n${JSON.stringify(mine)}\n`);
+
+    const onlyHere = await scanImport(ccDeps({ existingMetas: await store.list() }), [], ["claude-code"]);
+    assert.equal(onlyHere.plan.length, 0, "源没有新消息：orbita 接着聊的不算要导的");
+
+    await writeClaudeCodeSession("s1", repo, ["第一问", "Claude Code 里的追问"]);
+    const { report, run } = await importAllCc();
+    const item = report.plan[0];
+    assert.deepEqual([report.plan.length, item?.change, item?.newMessages], [1, "diverged", 2]);
+    assert.deepEqual([item?.workspaceId, item?.cwd], [original.workspaceId, original.cwd]);
+    assert.notEqual(item?.sessionId, original.id);
+    assert.deepEqual([run.imported, run.updated], [1, 0]);
+    assert.equal((await store.list()).length, 2);
+  });
+
+  test("两个 Claude 数据目录里的同一条会话：内容相同只导一份，dataRoots 两个都记；一份是另一份的前缀留长的", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    const main = await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    const other = join(root, "claude-wt");
+    const copy = join(other, "projects", basename(dirname(main)), basename(main));
+    await mkdir(dirname(copy), { recursive: true });
+    await copyFile(main, copy);
+    const both = ccDeps();
+    const twoRoots = [...(both.claudeCode ?? []), { ...(both.claudeCode ?? [])[0]!, root: other, projectsDir: join(other, "projects") }];
+
+    const same = await scanImport(ccDeps({ claudeCode: twoRoots }), [], ["claude-code"]);
+    assert.deepEqual(same.plan.map((item) => [item.sourceFile, item.dataRoots]), [[main, [dirname(projectsDir), other]]]);
+    assert.deepEqual(same.skipped.map((skip) => [skip.reason, skip.detail]), [["duplicate", main]]);
+
+    // 另一个目录里那份接着聊了：它更长，留它
+    await writeClaudeCodeSession("s1", repo, ["第一问", "第二问"]);
+    await copyFile(main, copy);
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    const longer = await scanImport(ccDeps({ claudeCode: twoRoots }), [], ["claude-code"]);
+    assert.deepEqual(longer.plan.map((item) => [item.sourceFile, item.dataRoots]), [[copy, [other, dirname(projectsDir)]]]);
+  });
+
+  test("从一个数据目录导过，另一个目录里那份更长 → updated 进原会话，不另导一条", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    const main = await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    await importAllCc();
+    const [before] = await store.list();
+    assert.ok(before !== undefined);
+
+    const other = join(root, "claude-wt");
+    const copy = join(other, "projects", basename(dirname(main)), basename(main));
+    await mkdir(dirname(copy), { recursive: true });
+    await writeClaudeCodeSession("s1", repo, ["第一问", "第二问"]);
+    await copyFile(main, copy);
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    const base = ccDeps();
+    const twoRoots = [...(base.claudeCode ?? []), { ...(base.claudeCode ?? [])[0]!, root: other, projectsDir: join(other, "projects") }];
+
+    const { report, run } = await importAllCc({ claudeCode: twoRoots });
+    assert.deepEqual(report.plan.map((item) => [item.change, item.sourceFile, item.sessionId]), [["updated", copy, before.id]]);
+    assert.deepEqual([run.imported, run.updated], [0, 1]);
+    assert.equal((await store.list()).length, 1);
+  });
+
+  test("补记导入清单：Claude Code 导入的会话记成 claude-code（此前一律记成 proma）", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeClaudeCodeSession("s1", repo, ["第一问"]);
+    // 清单出现之前的导入：写到别处
+    await importAllCc({ ledgerFile: join(root, "elsewhere.jsonl") });
+    await writeClaudeCodeSession("s2", repo, ["另一条"]);
+    await importAllCc();
+    const ledger = (await readFile(join(root, "imports.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { action: string; source: string });
+    assert.deepEqual(ledger.map((line) => [line.action, line.source]), [
+      ["backfill", "claude-code"],
+      ["import", "claude-code"],
+    ]);
   });
 });
 
@@ -1669,12 +2008,13 @@ describe("Kimi Code 来源", () => {
   });
 
   const kimiPaths = () => ({
+    root: kimiRoot,
     sessionsDir: join(kimiRoot, "sessions"),
     workspacesFile: join(kimiRoot, "workspaces.json"),
     mcpFile: join(kimiRoot, "mcp.json"),
     home,
   });
-  const kimiDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ kimiCode: kimiPaths(), ...overrides });
+  const kimiDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ kimiCode: [kimiPaths()], ...overrides });
 
   let clock = Date.UTC(2026, 8, 21, 2);
   const line = (record: Record<string, unknown>): Record<string, unknown> => ({ ...record, time: (clock += 1000) });
@@ -1734,7 +2074,7 @@ describe("Kimi Code 来源", () => {
     const report = await scanImport(kimiDeps(), [], ["kimi-code"]);
     const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
     assert.deepEqual([...byId.keys()].sort(), ["session_a", "session_b", "session_c"]);
-    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["session_empty", "unsupported-format"]]);
+    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["session_empty", "no-reply"]]);
     // 同一文件夹两条 → 新建工作区；标题「New Session」不算，取第一句用户写的话
     assert.equal(report.newWorkspaces.length, 1);
     assert.equal(byId.get("session_a")?.workspaceId, report.newWorkspaces[0]?.id);
@@ -1761,7 +2101,7 @@ describe("Kimi Code 来源", () => {
         { type: "assistant", uuid: "a", parentUuid: "u", cwd: repo, timestamp: "2026-09-20T10:01:00.000Z", message: { id: "m", role: "assistant", model: "x", content: [{ type: "text", text: "yo" }], usage: {} } },
       ].map((item) => JSON.stringify(item)).join("\n") + "\n",
     );
-    const claudeCode = { projectsDir: join(root, "claude", "projects"), desktopSessionsDir: join(root, "none"), home, skillsDir: join(root, "none"), claudeJson: join(root, "none.json") };
+    const claudeCode = [{ root: join(root, "claude"), projectsDir: join(root, "claude", "projects"), desktopSessionsDir: join(root, "none"), home, skillsDir: join(root, "none"), claudeJson: join(root, "none.json") }];
     const report = await scanImport(kimiDeps({ claudeCode }), [], ["claude-code", "kimi-code"]);
     assert.equal(report.plan.length, 2);
     assert.equal(report.newWorkspaces.length, 1);
@@ -1810,10 +2150,10 @@ describe("Kimi Code 来源", () => {
   });
 
   test("探测：会话根目录在不在；paths 列出扫描会读的三处", async () => {
-    const found = await probeKimiCode(kimiPaths());
+    const found = await probeKimiCode([kimiPaths()]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [join(kimiRoot, "sessions"), join(kimiRoot, "workspaces.json"), join(kimiRoot, "mcp.json")]);
-    assert.equal((await probeKimiCode({ ...kimiPaths(), sessionsDir: join(root, "nope") })).found, false);
+    assert.equal((await probeKimiCode([{ ...kimiPaths(), sessionsDir: join(root, "nope") }])).found, false);
   });
 });
 
@@ -1835,8 +2175,8 @@ describe("opencode 来源", () => {
     db.close();
   });
 
-  const paths = () => ({ dbFile, configFile: join(root, "opencode", "opencode.json"), home });
-  const ocDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ opencode: paths(), ...overrides });
+  const paths = () => ({ root: dirname(dbFile), dbFile, configFile: join(root, "opencode", "opencode.json"), home });
+  const ocDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ opencode: [paths()], ...overrides });
 
   let seq = 0;
   /** 一条根会话（或子会话）：每个 prompt 一问一答 */
@@ -1860,6 +2200,47 @@ describe("opencode 来源", () => {
     db.close();
   }
 
+  test("压缩过的会话：摘要成一条压缩界碑、落在源里的位置与时刻；续聊的上下文是摘要 + 压缩之后的", async () => {
+    const db = new DatabaseSync(dbFile);
+    db.prepare("insert into session values ('ses_c', 'p', null, ?, '压缩过的', 1000, 2000, null)").run(home);
+    const insertMessage = db.prepare("insert into message values (?, 'ses_c', ?, 0, ?)");
+    const insertPart = db.prepare("insert into part values (?, ?, 'ses_c', 0, 0, ?)");
+    const reply = (id: string, at: number, text: string, extra: Record<string, unknown> = {}): void => {
+      insertMessage.run(id, at, JSON.stringify({ role: "assistant", time: { created: at }, providerID: "zhipuai", modelID: "glm-5.1", ...extra }));
+      insertPart.run(`${id}_a`, id, JSON.stringify({ type: "step-start" }));
+      insertPart.run(`${id}_b`, id, JSON.stringify({ type: "text", text }));
+      insertPart.run(`${id}_c`, id, JSON.stringify({ type: "step-finish", reason: "stop", tokens: { input: 5000, output: 1, cache: { read: 0, write: 0 } } }));
+    };
+    const ask = (id: string, at: number, part: Record<string, unknown>): void => {
+      insertMessage.run(id, at, JSON.stringify({ role: "user", time: { created: at } }));
+      insertPart.run(`${id}_a`, id, JSON.stringify(part));
+    };
+    ask("msg_1", 1_780_000_000_000, { type: "text", text: "旧问题" });
+    reply("msg_2", 1_780_000_001_000, "旧回答");
+    ask("msg_3", 1_780_000_002_000, { type: "compaction", auto: true });
+    reply("msg_4", 1_780_000_003_000, "## 摘要\n旧问题已答", { summary: true });
+    ask("msg_5", 1_780_000_004_000, { type: "text", text: "新问题" });
+    reply("msg_6", 1_780_000_005_000, "新回答");
+    db.close();
+
+    const run = await runImport(ocDeps(), { sources: ["opencode"], sessions: new Set([`${resolve(dbFile)}#ses_c`]), destinations: [] });
+    assert.deepEqual([run.imported, run.failed], [1, []]);
+    const [meta] = await store.list();
+    const transcript = (await store.load(meta?.id ?? ""))?.transcript ?? [];
+    assert.deepEqual(
+      transcript.map((record) => (record.role === "compacted" ? `compacted:${record.summary}` : record.role)),
+      ["user", "assistant", "compacted:## 摘要\n旧问题已答", "user", "assistant"],
+    );
+    const boundary = transcript.find((record) => record.role === "compacted");
+    assert.equal(boundary?.role === "compacted" ? [boundary.timestamp, boundary.tokensBefore].join() : "", [1_780_000_003_000, 5000].join());
+    // 续聊的上下文：摘要 + 压缩之后的，旧问答不再发给模型
+    const entries = parseSessionEntries(await readFile(meta?.piSessionFile ?? "", "utf8")).filter(
+      (entry): entry is SessionEntry => entry.type !== "session",
+    );
+    const context = buildContextEntries(entries, entries.at(-1)?.id ?? null);
+    assert.deepEqual(context.map((entry) => entry.type), ["compaction", "message", "message"]);
+  });
+
   test("扫描：只列根会话；默认标题取第一句用户写的话；同文件夹两条建工作区；执行后 transcript 只有用户写的话、清单记 opencode、重扫即已导入", async () => {
     const repo = join(root, "repo");
     await mkdir(repo, { recursive: true });
@@ -1876,7 +2257,7 @@ describe("opencode 来源", () => {
     const report = await scanImport(ocDeps(), [], ["opencode"]);
     const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
     assert.deepEqual([...byId.keys()].sort(), ["ses_a", "ses_b", "ses_home"]);
-    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["ses_empty", "unsupported-format"]]);
+    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["ses_empty", "no-reply"]]);
     assert.equal(byId.get("ses_a")?.title, "修测试");
     assert.equal(byId.get("ses_a")?.sourceFile, `${dbFile}#ses_a`);
     assert.deepEqual([byId.get("ses_a")?.source, byId.get("ses_a")?.sourceKind, byId.get("ses_a")?.importedModel], ["opencode", "opencode", "glm-5.1"]);
@@ -1927,12 +2308,13 @@ describe("opencode 来源", () => {
   });
 
   test("探测：库在不在；paths 列出库与配置", async () => {
-    const found = await probeOpencode(paths());
+    const found = await probeOpencode([paths()]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [dbFile, join(root, "opencode", "opencode.json")]);
-    assert.equal((await probeOpencode({ ...paths(), dbFile: join(root, "nope.db") })).found, false);
+    assert.equal((await probeOpencode([{ ...paths(), dbFile: join(root, "nope.db") }])).found, false);
   });
 });
+
 
 describe("reasonix 来源", () => {
   let projectsRoot = "";
@@ -1946,7 +2328,7 @@ describe("reasonix 来源", () => {
   });
 
   const rxDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps =>
-    deps({ reasonix: { projectsRoot, home }, ...overrides });
+    deps({ reasonix: [{ root: dirname(projectsRoot), projectsRoot, home }], ...overrides });
 
   /** 一条会话：主 JSONL + meta 侧车。行形状按 2026-09-27 抽样（tool_calls 拍平形）。 */
   async function writeSession(dir: string, name: string, meta: Record<string, unknown> | null, rows: Record<string, unknown>[]): Promise<void> {
@@ -1961,6 +2343,35 @@ describe("reasonix 来源", () => {
     { role: "tool", tool_call_id: "c1", name: "ls", content: "a.txt" },
     { role: "assistant", content: "好了。" },
   ];
+
+  test("两个数据目录里的同一份会话（含没有 meta 的老会话）只导一份；空会话在「导不了」里只算一次", async () => {
+    const sessions = join(projectsRoot, "proj-a", "sessions");
+    await writeSession(sessions, "with-meta.jsonl", { id: "m1", topic_title: "有 meta" }, repoRows("修测试"));
+    // Windows 验收实测：没有 meta 侧车的老会话 id 原来退回绝对路径，两个目录里配不上、各导一份
+    await writeSession(sessions, "no-meta.jsonl", null, repoRows("你好"));
+    await writeFile(join(sessions, "empty.jsonl"), "", "utf8");
+    const copyRoot = join(root, "reasonix-copy");
+    await cp(dirname(projectsRoot), copyRoot, { recursive: true });
+    const two = rxDeps({
+      reasonix: [
+        { root: dirname(projectsRoot), projectsRoot, home },
+        { root: copyRoot, projectsRoot: join(copyRoot, "projects"), home },
+      ],
+    });
+
+    const report = await scanImport(two, [], ["reasonix"]);
+    assert.deepEqual(
+      report.plan.map((item) => [item.sourceId, item.dataRoots]).sort(),
+      [
+        ["m1", [dirname(projectsRoot), copyRoot]],
+        ["proj-a/sessions/no-meta.jsonl", [dirname(projectsRoot), copyRoot]],
+      ],
+    );
+    assert.deepEqual(
+      report.skipped.map((skip) => skip.reason).sort(),
+      ["duplicate", "duplicate", "no-reply"],
+    );
+  });
 
   test("扫描与执行：meta 带标题/模型/工作区，同址建工作区，transcript 只有用户写的话，重扫即已导入", async () => {
     const repo = join(root, "repo");
@@ -1979,7 +2390,7 @@ describe("reasonix 来源", () => {
     const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
     assert.deepEqual([...byId.keys()].sort(), ["a", "a2", "b"]);
     assert.equal(report.skipped.length, 1);
-    assert.equal(report.skipped[0]?.reason, "unsupported-format");
+    assert.equal(report.skipped[0]?.reason, "no-reply");
     assert.equal(byId.get("a")?.title, "标题A");
     assert.deepEqual([byId.get("a")?.source, byId.get("a")?.sourceKind, byId.get("a")?.importedModel], ["reasonix", "reasonix", "opencode-go/deepseek-v4"]);
     assert.equal(byId.get("a")?.createdAt, Date.parse("2026-09-01T00:00:00Z"));
@@ -2015,11 +2426,143 @@ describe("reasonix 来源", () => {
     assert.equal(withV5.plan.length, 1);
   });
 
+  test("meta 的 workspace_root 是空串 → 与缺席同为无归属：folder null、cwd 退 defaultCwd（不是进程 cwd）", async () => {
+    const sessions = join(projectsRoot, "proj-a", "sessions");
+    await writeSession(sessions, "s-a.jsonl", { id: "a", workspace_root: "" }, repoRows("修测试"));
+    const report = await scanImport(rxDeps(), [], ["reasonix"]);
+    const [item] = report.plan;
+    assert.deepEqual([item?.folder, item?.cwd], [null, "/Users/tester"]);
+  });
+
   test("探测：projects 根在不在；paths 列出扫描会读的一处", async () => {
-    const found = await probeReasonix({ projectsRoot, home });
+    const found = await probeReasonix([{ root: dirname(projectsRoot), projectsRoot, home }]);
     assert.equal(found.found, true);
     assert.deepEqual(found.paths, [projectsRoot]);
-    assert.equal((await probeReasonix({ projectsRoot: join(root, "nope"), home })).found, false);
+    assert.equal((await probeReasonix([{ root, projectsRoot: join(root, "nope"), home }])).found, false);
+  });
+});
+
+describe("zcode 来源", () => {
+  let dbFile = "";
+  let home = "";
+
+  beforeEach(async () => {
+    dbFile = join(root, "zcode", "db.sqlite");
+    home = join(root, "home");
+    await mkdir(dirname(dbFile), { recursive: true });
+    await mkdir(home, { recursive: true });
+    const db = new DatabaseSync(dbFile);
+    db.exec(`
+      create table session (id text primary key, parent_id text, directory text, title text, revert text, time_created integer, time_updated integer);
+      create table message (id text primary key, session_id text, time_created integer, data text, sequence integer);
+      create table part (id text primary key, message_id text, session_id text, time_created integer, data text, sequence integer);
+    `);
+    db.close();
+  });
+
+  const paths = () => ({ root: dirname(dbFile), dbFile, home });
+  const zDeps = (overrides: Partial<RunImporterDeps> = {}): RunImporterDeps => deps({ zcode: [paths()], ...overrides });
+
+  /** ZCode 库最小 schema（2026-09-28 对本机库 pragma 抄的）+ 两个真实形状的会话。 */
+  async function writeDb(sessions: { id: string; directory: string | null; title: string | null; revert?: string; parent?: string; rows: { seq: number; data: Record<string, unknown>; parts?: Record<string, unknown>[] }[] }[]): Promise<void> {
+    const db = new DatabaseSync(dbFile);
+    for (const session of sessions) {
+      db.prepare("insert into session values (?, ?, ?, ?, ?, 1000, 2000)").run(
+        session.id, session.parent ?? null, session.directory, session.title, session.revert ?? null,
+      );
+      for (const row of session.rows) {
+        const id = `${session.id}_m${row.seq}`;
+        db.prepare("insert into message (id, session_id, time_created, data, sequence) values (?, ?, ?, ?, ?)").run(
+          id, session.id, row.seq, JSON.stringify(row.data), row.seq,
+        );
+        (row.parts ?? []).forEach((part, index) => {
+          db.prepare("insert into part (id, message_id, session_id, time_created, data, sequence) values (?, ?, ?, ?, ?, ?)").run(
+            `${id}_p${index}`, id, session.id, row.seq, JSON.stringify(part), row.seq * 10 + index,
+          );
+        });
+      }
+    }
+    db.close();
+  }
+
+  const turn = (prompt: string): { seq: number; data: Record<string, unknown>; parts?: Record<string, unknown>[] }[] => [
+    { seq: 1, data: { role: "user", time: { created: 10000 } }, parts: [{ type: "text", text: prompt }] },
+    {
+      seq: 2,
+      data: { role: "assistant", time: { created: 10001 }, providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3-Flash" },
+      parts: [{ type: "step-start" }, { type: "text", text: `答：${prompt}` }, { type: "step-finish", reason: "stop", tokens: { input: 1, output: 1 } }],
+    },
+  ];
+
+  test("扫描与执行：子会话不列、rewind 只留可见分支、transcript 只有用户写的话、重扫即已导入", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await writeDb([
+      { id: "ses_a", directory: repo, title: "标题A", rows: turn("修测试") },
+      { id: "ses_b", directory: repo, title: "标题B", rows: turn("再跑一次") },
+      { id: "ses_child", directory: repo, title: "子任务", parent: "ses_a", rows: turn("子 agent 的活") },
+      {
+        id: "ses_rw",
+        directory: repo,
+        title: "回退过的",
+        // 真实形状：回退到 m3（它被回退掉），保留 m1、m2；没有接着聊（cut 游标就是 m3）
+        revert: JSON.stringify({
+          kind: "conversation_rewind",
+          targetMessageID: "ses_rw_m3",
+          keptMessageIDs: ["ses_rw_m1", "ses_rw_m2"],
+          branchCutAfterMessageID: "ses_rw_m3",
+        }),
+        rows: [...turn("先问"), { seq: 3, data: { role: "user", time: { created: 20000 } }, parts: [{ type: "text", text: "回退掉的话" }] }],
+      },
+    ]);
+
+    const report = await scanImport(zDeps(), [], ["zcode"]);
+    const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([...byId.keys()].sort(), ["ses_a", "ses_b", "ses_rw"]);
+    assert.equal(byId.get("ses_a")?.title, "标题A");
+    assert.deepEqual([byId.get("ses_a")?.source, byId.get("ses_a")?.sourceKind, byId.get("ses_a")?.importedModel], ["zcode", "zcode", "GLM-5.3-Flash"]);
+    assert.equal(byId.get("ses_b")?.workspaceId, report.newWorkspaces[0]?.id);
+    assert.equal(report.newWorkspaces.length, 1);
+
+    // 执行 ses_a：transcript 只有用户写的话
+    const run = await runImport(zDeps(), { sources: ["zcode"], sessions: new Set([byId.get("ses_a")?.sourceFile ?? ""]), destinations: [] });
+    assert.equal(run.imported, 1);
+    assert.deepEqual(run.failed, []);
+    const [meta] = await store.list();
+    const records = (await store.load(meta?.id ?? ""))?.transcript ?? [];
+    const userTexts = records
+      .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
+      .map((record) => record.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
+    assert.deepEqual(userTexts, ["修测试"]);
+    const ledger = (await readFile(join(root, "imports.jsonl"), "utf8")).trim().split("\n").map((item) => JSON.parse(item) as Record<string, unknown>);
+    assert.deepEqual(ledger.map((item) => item["source"]), ["zcode"]);
+    const again = await scanImport(zDeps({ existingMetas: await store.list() }), [], ["zcode"]);
+    assert.equal(again.skipped.find((item) => item.sourceId === "ses_a")?.reason, "already-imported");
+  });
+
+  test("会话的目录落在 ZCode 自己的数据目录里（默认工作区）：不算文件夹、不建工作区，cwd 退默认", async () => {
+    const scratch = join(dirname(dbFile), "workspace", "default");
+    const repo = join(root, "repo");
+    await mkdir(scratch, { recursive: true });
+    await mkdir(repo, { recursive: true });
+    await writeDb([
+      { id: "ses_s1", directory: scratch, title: "草稿一", rows: turn("随手问") },
+      { id: "ses_s2", directory: scratch, title: "草稿二", rows: turn("再问") },
+      { id: "ses_r", directory: repo, title: "项目里的", rows: turn("改代码") },
+    ]);
+    const report = await scanImport(zDeps(), [], ["zcode"]);
+    const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([byId.get("ses_s1")?.folder, byId.get("ses_s1")?.cwd, byId.get("ses_s1")?.workspaceId], [null, DEFAULT_CWD, null]);
+    assert.equal(byId.get("ses_s2")?.folder, null);
+    assert.equal(byId.get("ses_r")?.folder, repo);
+    assert.equal(report.newWorkspaces.length, 0, "两条草稿不再凑出一个叫 default 的新工作区");
+  });
+
+  test("探测：库在不在；paths 列出扫描会读的一处", async () => {
+    const found = await probeZcode([paths()]);
+    assert.equal(found.found, true);
+    assert.deepEqual(found.paths, [dbFile]);
+    assert.equal((await probeZcode([{ ...paths(), dbFile: join(root, "nope.sqlite") }])).found, false);
   });
 });
 
@@ -2066,13 +2609,16 @@ describe("MCP servers 随扫描与执行走", () => {
     );
     const added: string[] = [];
     const env = deps({
-      claudeCode: {
-        projectsDir: join(root, "none"),
-        desktopSessionsDir: join(root, "none-desktop"),
-        home: root,
-        skillsDir: join(root, "none-skills"),
-        claudeJson,
-      },
+      claudeCode: [
+        {
+          root,
+          projectsDir: join(root, "none"),
+          desktopSessionsDir: join(root, "none-desktop"),
+          home: root,
+          skillsDir: join(root, "none-skills"),
+          claudeJson,
+        },
+      ],
       existingMcp: ["mine"],
       mcpTarget: {
         add: async (name, server) => {
@@ -2129,5 +2675,34 @@ describe("Proma：「只随手发了一句」检查的候选", () => {
     assert.equal(report.greetingCheck.candidates, 0);
     assert.equal(report.greetingCheck.model, null);
     assert.equal(report.greetingCheck.unavailable, "no-chore-model");
+  });
+});
+
+describe("messageSignature：转换类来源的内容指纹", () => {
+  test("只看有文字的 user / assistant；纯工具调用、工具结果、空白不计；同样的对话同样的指纹", () => {
+    const talk = [
+      { role: "user", content: "问" },
+      { role: "assistant", content: [{ type: "toolCall", id: "t", name: "read", arguments: {} }] },
+      { role: "toolResult", content: [{ type: "text", text: "文件内容" }] },
+      { role: "assistant", content: [{ type: "thinking", thinking: "想" }, { type: "text", text: "答" }] },
+      { role: "user", content: [{ type: "text", text: "   " }] },
+    ];
+    const signature = messageSignature(talk);
+    assert.equal(signature.length, 2);
+    assert.deepEqual(messageSignature(talk), signature);
+    // 思考内容变了不影响：比的是用户看得到的文字
+    assert.deepEqual(
+      messageSignature([talk[0], { role: "assistant", content: [{ type: "thinking", thinking: "别的" }, { type: "text", text: "答" }] }]),
+      signature,
+    );
+    assert.notDeepEqual(messageSignature([{ role: "user", content: "问" }, { role: "assistant", content: "别的答" }]), signature);
+  });
+
+  test("compareSignatures：公共前缀之后各自多出来的", () => {
+    assert.deepEqual(compareSignatures(["a", "b", "c"], ["a", "b"]), { newMessages: 1, continuedHere: false });
+    assert.deepEqual(compareSignatures(["a", "b"], ["a", "b", "x"]), { newMessages: 0, continuedHere: true });
+    assert.deepEqual(compareSignatures(["a", "b", "c"], ["a", "x"]), { newMessages: 2, continuedHere: true });
+    // 一条公共的都没有：源的全部算新消息、副本算接着聊过 → diverged，不会被当成没变藏掉
+    assert.deepEqual(compareSignatures(["a"], ["x"]), { newMessages: 1, continuedHere: true });
   });
 });

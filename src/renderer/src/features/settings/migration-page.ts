@@ -179,12 +179,17 @@ export function mixedSources(items: readonly ImportPlanItem[]): boolean {
   return new Set(items.map((item) => item.source)).size > 1;
 }
 
-/** 转换不了的跳过项（已导入的不算：它们是「不用导」，不是「导不了」）。 */
+/** 转换不了的跳过项（已导入的、重复的不算：它们是「不用导」，不是「导不了」）。 */
 export function unconvertibleSkips(report: ImportScanReport): ImportSkipItem[] {
-  return report.skipped.filter((skip) => skip.reason !== "already-imported");
+  return report.skipped.filter((skip) => skip.reason !== "already-imported" && skip.reason !== "duplicate");
 }
 
-export type SessionFactKind = "hidden" | "greeting" | "orphaned" | "already" | "cannot";
+/** 别处还有一份、这份不导的会话（detail 是留下的那一份的源文件）。 */
+export function duplicateSkips(report: ImportScanReport): ImportSkipItem[] {
+  return report.skipped.filter((skip) => skip.reason === "duplicate");
+}
+
+export type SessionFactKind = "hidden" | "greeting" | "duplicate" | "orphaned" | "already" | "cannot";
 
 /** 列表下面那一行图标事实：一个数字 + 一个短语常驻，整句进悬停。 */
 export interface SessionFact {
@@ -198,8 +203,8 @@ export interface SessionFact {
 const FALLBACK_MODELS_SHOWN = 3;
 
 /**
- * 事实条。顺序即显示顺序：先是影响这次导入的（被筛掉的、单列的子会话），
- * 后是列表之外的（已导入的、导不了的）。数是 0 的不出现。
+ * 事实条。顺序即显示顺序：先是影响这次导入的（被筛掉的、建议剔除的——只打了招呼的与
+ * 重复的挨着——单列的子会话），后是列表之外的（已导入的、导不了的）。数是 0 的不出现。
  */
 export function sessionFacts(
   report: ImportScanReport,
@@ -224,6 +229,16 @@ export function sessionFacts(
       tip: t.migration.factGreetingTip,
     });
   }
+  // 重复不要模型：扫描时就按内容认出来了，与「只打了招呼」是同一类「不导也不丢东西」的会话
+  const duplicates = duplicateSkips(report).length;
+  if (duplicates > 0) {
+    facts.push({
+      kind: "duplicate",
+      count: duplicates,
+      label: t.migration.factDuplicate,
+      tip: t.migration.factDuplicateTip,
+    });
+  }
   if (report.orphanedSubSessions > 0) {
     facts.push({
       kind: "orphaned",
@@ -232,7 +247,7 @@ export function sessionFacts(
       tip: t.migration.factOrphanedTip,
     });
   }
-  const already = report.skipped.length - unconvertibleSkips(report).length;
+  const already = report.skipped.filter((skip) => skip.reason === "already-imported").length;
   if (already > 0) {
     facts.push({
       kind: "already",

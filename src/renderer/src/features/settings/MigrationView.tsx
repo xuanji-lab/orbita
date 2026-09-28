@@ -35,6 +35,7 @@ import {
   formatDay,
   groupName,
   groupSessions,
+  dataRootCounts,
   sameDestination,
   selectedSourceFiles,
   summarize,
@@ -60,6 +61,7 @@ import {
   sourcePaths,
   sourceStatus,
   stepStates,
+  duplicateSkips,
   unconvertibleSkips,
   type ChangeBadge,
   type FootFactKind,
@@ -222,6 +224,13 @@ export function MigrationView(props: {
   const summary = useMemo(
     () => (grouped === null ? null : summarize(grouped, selected, overrides)),
     [grouped, selected, overrides],
+  );
+  /** 计划里的数据根，按来源分组：有任何一组（组内目录必 >1）就出「按数据目录筛」的菜单 */
+  const rootGroups = useMemo(() => (scan.kind === "ready" ? dataRootCounts(scan.report) : []), [scan]);
+  const rootTotal = rootGroups.reduce((sum, group) => sum + group.roots.length, 0);
+  const shownRoots = rootGroups.reduce(
+    (sum, group) => sum + group.roots.filter((entry) => !filters.excludedRoots.has(entry.root)).length,
+    0,
   );
   const skillCount = scan.kind === "ready" ? countSelectedSkills(scan.report.skills, skillSelected) : 0;
   const mcpCount = scan.kind === "ready" ? selectedMcpNames(scan.report.mcp, mcpSelected).length : 0;
@@ -402,6 +411,40 @@ export function MigrationView(props: {
                   >
                     {t.migration.includeArchived}
                   </Chip>
+                  {rootGroups.length > 0 && (
+                    <Menu
+                      items={rootGroups.flatMap((group) => [
+                        // 分组头 = 来源名；Menu 的 header 项不可选、不抢焦点，样式同设置面节标题
+                        {
+                          id: `source:${group.source}`,
+                          label: t.migration.sources[group.source],
+                          header: true,
+                        },
+                        ...group.roots.map((entry) => ({
+                          id: entry.root,
+                          label: abbreviateHome(entry.root, home),
+                          hint: t.migration.dataRootOnlyHere(entry.onlyHere),
+                          checked: !filters.excludedRoots.has(entry.root),
+                          // 多选：点一下切一个根，菜单不关
+                          keepOpen: true,
+                          onSelect: () => {
+                            touch();
+                            setFilters((current) => ({
+                              ...current,
+                              excludedRoots: toggled(current.excludedRoots, entry.root),
+                            }));
+                          },
+                        })),
+                      ])}
+                      trigger={({ open, toggle }) => (
+                        <Chip icon="folder-open" active={open} chevron onClick={toggle} title={t.migration.dataRootsTip}>
+                          {shownRoots === rootTotal
+                            ? t.migration.dataRootsAll
+                            : t.migration.dataRootsSome(shownRoots, rootTotal)}
+                        </Chip>
+                      )}
+                    />
+                  )}
                   <span className="mg-sep" />
                   <SelectAllButton grouped={grouped} selected={selected} disabled={busy} onSet={setRows} />
                 </span>
@@ -489,6 +532,7 @@ export function MigrationView(props: {
                   report={scan.report}
                   grouped={grouped}
                   now={scan.scannedAt}
+                  home={home}
                   leftOut={
                     greetings.kind === "on" ? scan.report.plan.filter((item) => greetings.leaveOut.has(item.sourceFile)) : []
                   }
@@ -1251,25 +1295,30 @@ function GreetingStep(props: {
 const FACT_ICON: Record<SessionFactKind, IconName> = {
   hidden: "eye-off",
   greeting: "message-square-dashed",
+  duplicate: "copy",
   orphaned: "git-fork",
   already: "circle-check",
   cannot: "circle-off",
 };
 
-/** 列表下面一行图标事实（被筛掉的、已导入的、导不了的），整句进悬停。 */
+/** 列表下面一行图标事实（被筛掉的、建议剔除的、已导入的、导不了的），整句进悬停。 */
 function SessionFacts(props: {
   report: ImportScanReport;
   grouped: GroupedSessions;
   now: number;
+  /** 重复项的「留下哪一份」路径缩成 ~ */
+  home: string;
   /** 「只随手发了一句」检查判中、不列的会话（Details 里逐条列出，可以单条放回） */
   leftOut: readonly ImportPlanItem[];
   onKeep: (sourceFile: string) => void;
 }) {
   const t = useT();
-  const [details, setDetails] = useState<"cannot" | "greeting" | null>(null);
+  const [details, setDetails] = useState<"cannot" | "greeting" | "duplicate" | null>(null);
   const facts = sessionFacts(props.report, props.grouped, props.now, t);
   const unconvertible = unconvertibleSkips(props.report);
-  const toggle = (which: "cannot" | "greeting"): void => setDetails((open) => (open === which ? null : which));
+  const duplicates = duplicateSkips(props.report);
+  const toggle = (which: "cannot" | "greeting" | "duplicate"): void =>
+    setDetails((open) => (open === which ? null : which));
   if (facts.length === 0) return null;
   return (
     <>
@@ -1288,6 +1337,11 @@ function SessionFacts(props: {
                 {details === "greeting" ? t.migration.hide : t.migration.review}
               </button>
             )}
+            {fact.kind === "duplicate" && (
+              <button type="button" className="mg-link" aria-expanded={details === "duplicate"} onClick={() => toggle("duplicate")}>
+                {details === "duplicate" ? t.migration.hide : t.migration.review}
+              </button>
+            )}
           </Fact>
         ))}
       </div>
@@ -1304,12 +1358,29 @@ function SessionFacts(props: {
           ))}
         </ul>
       )}
+      {details === "duplicate" && (
+        <ul className="mg-skips">
+          {duplicates.slice(0, 30).map((skip, index) => (
+            // 同一个会话 id 可能有好几份重复（几个数据根各一份），id 不唯一
+            <li key={`${skip.sourceId}-${index}`}>
+              <span className="mg-skip-title">{skip.title ?? skip.sourceId}</span>
+              <span className="mg-skip-why">
+                {skip.detail === undefined ? "" : t.migration.duplicateKept(abbreviateHome(skip.detail, props.home))}
+              </span>
+            </li>
+          ))}
+          {duplicates.length > 30 && <li className="mg-skip-why">{t.migration.andMore(duplicates.length - 30)}</li>}
+        </ul>
+      )}
       {details === "cannot" && (
         <ul className="mg-skips">
           {unconvertible.slice(0, 30).map((skip) => (
             <li key={skip.sourceId}>
               <span className="mg-skip-title">{skip.title ?? skip.sourceId}</span>
-              <span className="mg-skip-why">{skip.detail ?? skip.reason}</span>
+              <span className="mg-skip-why">
+                {t.migration.skipReasons[skip.reason]}
+                {skip.detail === undefined ? "" : ` · ${skip.detail}`}
+              </span>
             </li>
           ))}
           {unconvertible.length > 30 && <li className="mg-skip-why">{t.migration.andMore(unconvertible.length - 30)}</li>}

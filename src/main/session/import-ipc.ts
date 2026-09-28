@@ -7,7 +7,7 @@
  */
 import { ipcMain } from "electron";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
@@ -20,6 +20,7 @@ import {
   type ImportModelRef,
   type ImportRunReport,
   type ImportScanReport,
+  type ImportSourceProbe,
 } from "../../shared/import.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
@@ -27,15 +28,19 @@ import type { SettingsStore } from "../settings/store.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import { findGreetingOnly } from "./greeting-only.ts";
+import type { CodexPaths } from "./importer.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
+import { DATA_ROOT_SPECS, baseDir, findDataRoots, type LocateContext } from "./import-locate.ts";
 import {
   emptyScanReport,
   probeAgentSkills,
   probeClaudeCode,
   probeKimiCode,
   probeOpencode,
+  probeCodex,
   probeProma,
   probeReasonix,
+  probeZcode,
   runImport,
   scanGreetingCandidates,
   scanImport,
@@ -44,6 +49,7 @@ import {
   type KimiCodePaths,
   type OpencodePaths,
   type ReasonixPaths,
+  type ZcodePaths,
 } from "./importer.ts";
 
 export function registerImportIpc(
@@ -82,14 +88,8 @@ export function registerImportIpc(
 
   async function deps(): Promise<ImporterDeps> {
     return {
-      promaRoot: joinPromaRoot(),
-      // Proma 数据根迁移史：.proma → .proma-dev，索引里仍有条目指向旧根（本机实测
-      // 66 条），文件仍在且是同一格式——旧根也是合法源，同样只读
-      extraSourceRoots: legacyPromaRoots(),
-      claudeCode: claudeCodePaths(),
-      kimiCode: kimiCodePaths(),
-      opencode: opencodePaths(),
-      reasonix: reasonixPaths(),
+      promaRoots: await findDataRoots(DATA_ROOT_SPECS.proma, locateContext()),
+      ...(await convertedPaths()),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
       // mcp.json 坏了不挡扫描：会话与 skills 照导，MCP 写入时会各自报错
@@ -108,11 +108,8 @@ export function registerImportIpc(
   ipcMain.handle(ipcChannels.importDetect, async (): Promise<ImportDetectResult> => ({
     home: homedir(),
     sources: [
-      await probeProma(joinPromaRoot(), legacyPromaRoots()),
-      await probeClaudeCode(claudeCodePaths()),
-      await probeKimiCode(kimiCodePaths()),
-      await probeOpencode(opencodePaths()),
-      await probeReasonix(reasonixPaths()),
+      await probeProma(await findDataRoots(DATA_ROOT_SPECS.proma, locateContext()), join(homedir(), ".proma")),
+      ...(await probeConverted()),
       await probeAgentSkills(agentSkillsDir()),
     ],
   }));
@@ -171,36 +168,91 @@ export function registerImportIpc(
   });
 }
 
-/** Proma 数据根固定在 ~/.proma-dev（应用数据目录约定，不做配置面）。 */
-function joinPromaRoot(): string {
-  return `${homedir()}/.proma-dev`;
-}
-
-/** Proma 的旧数据根：索引里仍有条目指向它（见 deps 里的注释）。探测与扫描同一份清单 */
-function legacyPromaRoots(): string[] {
-  return [`${homedir()}/.proma`];
+/** findDataRoots 的环境：真实平台、家目录、环境变量。 */
+function locateContext(): LocateContext {
+  return { platform: process.platform, home: homedir(), env: process.env };
 }
 
 /**
- * Claude Code 的会话在 ~/.claude/projects（命令行与桌面应用共用）；桌面应用的会话清单在它自己的
- * 应用数据目录（macOS 路径，别的系统上不存在，扫描照常）。探测与扫描同一份。
+ * 一个转换类来源的数据目录（import-locate：名字含产品名 + 聊天记录在不在，环境变量优先）。
+ * 一个都没找到时给规范位置（环境变量指的、或基础目录下的默认名）：扫描照常扫空、探测照样
+ * 列出「找过哪里」、found 为 false。
  */
-function claudeCodePaths(): ClaudeCodePaths {
-  const home = homedir();
+async function rootsOf(source: keyof typeof DATA_ROOT_SPECS): Promise<string[]> {
+  const spec = DATA_ROOT_SPECS[source];
+  const ctx = locateContext();
+  const found = await findDataRoots(spec, ctx);
+  if (found.length > 0) return found;
+  const fromEnv = spec.env === undefined ? undefined : ctx.env[spec.env];
+  return [fromEnv || join(baseDir(spec.base, ctx), spec.canonical)];
+}
+
+/** 各转换类来源的数据目录，按 findDataRoots 的顺序（环境变量 → 规范目录 → 其余按名字）。 */
+async function dataRoots(): Promise<{
+  claudeCode: string[];
+  kimiCode: string[];
+  opencode: string[];
+  reasonix: string[];
+  zcode: string[];
+  codex: string[];
+}> {
   return {
-    projectsDir: join(home, ".claude", "projects"),
-    desktopSessionsDir: join(home, "Library", "Application Support", "Claude", "claude-code-sessions"),
-    home,
-    skillsDir: join(home, ".claude", "skills"),
-    claudeJson: join(home, ".claude.json"),
+    claudeCode: await rootsOf("claude-code"),
+    kimiCode: await rootsOf("kimi-code"),
+    opencode: await rootsOf("opencode"),
+    reasonix: await rootsOf("reasonix"),
+    zcode: await rootsOf("zcode"),
+    codex: await rootsOf("codex"),
   };
 }
 
-/** Kimi Code 的数据都在 ~/.kimi-code 下（命令行，各平台同一位置）。探测与扫描同一份。 */
-function kimiCodePaths(): KimiCodePaths {
+/** 扫描用：每个找到的数据目录一份路径。 */
+async function convertedPaths(): Promise<Pick<ImporterDeps, "claudeCode" | "kimiCode" | "opencode" | "reasonix" | "zcode" | "codex">> {
   const home = homedir();
-  const root = join(home, ".kimi-code");
+  const roots = await dataRoots();
   return {
+    claudeCode: roots.claudeCode.map((root) => claudeCodePaths(root, home)),
+    kimiCode: roots.kimiCode.map((root) => kimiCodePaths(root, home)),
+    opencode: roots.opencode.map((root) => opencodePaths(root, home)),
+    reasonix: roots.reasonix.map((root) => ({ root, projectsRoot: join(root, "projects"), home })),
+    zcode: roots.zcode.map((root) => ({ root, dbFile: join(root, "cli", "db", "db.sqlite"), home })),
+    codex: roots.codex.map((root) => ({ root, sessionsDir: join(root, "sessions"), home })),
+  };
+}
+
+/** 探测用：与扫描同一份路径（一个都没找到时由 dataRoots 的规范目录兜着，页面照样列出找过哪里）。 */
+async function probeConverted(): Promise<ImportSourceProbe[]> {
+  const paths = await convertedPaths();
+  return [
+    await probeClaudeCode(paths.claudeCode ?? []),
+    await probeKimiCode(paths.kimiCode ?? []),
+    await probeOpencode(paths.opencode ?? []),
+    await probeReasonix(paths.reasonix ?? []),
+    await probeZcode(paths.zcode ?? []),
+    await probeCodex(paths.codex ?? []),
+  ];
+}
+
+/**
+ * Claude Code 一个数据目录（默认 ~/.claude，CLAUDE_CONFIG_DIR 可以另指）要读的位置。会话在
+ * projects/；桌面应用的会话清单在它自己的应用数据目录（macOS 路径，别的系统上不存在，扫描照常）；
+ * 用户配置：默认目录的在家目录的 ~/.claude.json，另指的目录在目录自己里面。
+ */
+function claudeCodePaths(root: string, home: string): ClaudeCodePaths {
+  return {
+    root,
+    projectsDir: join(root, "projects"),
+    desktopSessionsDir: join(home, "Library", "Application Support", "Claude", "claude-code-sessions"),
+    home,
+    skillsDir: join(root, "skills"),
+    claudeJson: root === join(home, ".claude") ? join(home, ".claude.json") : join(root, ".claude.json"),
+  };
+}
+
+/** Kimi Code 一个数据目录（默认 ~/.kimi-code）要读的位置。 */
+function kimiCodePaths(root: string, home: string): KimiCodePaths {
+  return {
+    root,
     sessionsDir: join(root, "sessions"),
     workspacesFile: join(root, "workspaces.json"),
     mcpFile: join(root, "mcp.json"),
@@ -209,26 +261,16 @@ function kimiCodePaths(): KimiCodePaths {
 }
 
 /**
- * opencode 按 XDG 目录放数据：会话库在 ~/.local/share/opencode，配置在 ~/.config/opencode
- * （macOS 上也是这两处，不在 Library 下）。探测与扫描同一份。
+ * opencode 按 XDG 放数据：会话库在 <XDG data>/opencode，配置在 <XDG config>/<同名目录>/opencode.json
+ * （macOS 上也是这两处，不在 Library 下）。
  */
-function opencodePaths(): OpencodePaths {
-  const home = homedir();
+function opencodePaths(root: string, home: string): OpencodePaths {
   return {
-    dbFile: join(home, ".local", "share", "opencode", "opencode.db"),
-    configFile: join(home, ".config", "opencode", "opencode.json"),
+    root,
+    dbFile: join(root, "opencode.db"),
+    configFile: join(process.env["XDG_CONFIG_HOME"] || join(home, ".config"), basename(root), "opencode.json"),
     home,
   };
-}
-
-/**
- * Reasonix 桌面版的数据根（Electron userData 惯例）。本机 Windows 是 %APPDATA%/reasonix；
- * 其他平台的 userData 路径未调研——探测 stat 不到就不可勾，无害。
- */
-function reasonixPaths(): ReasonixPaths {
-  const home = homedir();
-  const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
-  return { projectsRoot: join(appData, "reasonix", "projects"), home };
 }
 
 /** 多家 agent 共用的 skills 目录（agent-skills 来源）。探测与扫描同一个。 */
