@@ -29,6 +29,14 @@ describe("deriveWorkspaceName", () => {
     strictEqual(deriveWorkspaceName("/Users/wafo/repo/orbita-lab/"), "orbita-lab");
   });
 
+  it("连续分隔符不产生空尾段", () => {
+    strictEqual(deriveWorkspaceName("C:\\work\\\\proj\\"), "proj");
+  });
+
+  it("没有分隔符就整条返回", () => {
+    strictEqual(deriveWorkspaceName("paper3"), "paper3");
+  });
+
   it("根目录退回原路径，不给空名字", () => {
     strictEqual(deriveWorkspaceName("/"), "/");
   });

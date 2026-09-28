@@ -36,12 +36,15 @@ export interface Workspace {
   attachedDirs: string[];
 }
 
-/** 没起名字时的默认名：路径的最后一段。 */
+/**
+ * 没起名字时的默认名：路径的最后一段。**也是显示层截尾的规则**——所有显示工作区名
+ * 的地方（scope 芯片与菜单、左栏行、技能面板）都过这同一个函数：老工作区落库的名字
+ * 可能是完整路径（早期创建没截尾），且菜单 label 与落库名不能算出不同的尾巴。
+ */
 export function deriveWorkspaceName(path: string): string {
   // `/` 与 `\` 都认：Windows 的工作区路径是反斜杠，只切 `/` 会把整条 `C:\…` 当成名字
   const parts = path.split(/[\\/]/).filter((part) => part !== "");
-  const last = parts[parts.length - 1];
-  return last === undefined || last === "" ? path : last;
+  return parts[parts.length - 1] ?? path;
 }
 
 /** 用户输入的名字 → 落盘的名字。空白名退回路径末段，而不是留一个看不见的空行。 */

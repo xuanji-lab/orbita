@@ -74,7 +74,6 @@ import {
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
-import { basename } from "../../shell/basename";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
@@ -89,6 +88,7 @@ import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
+import { deriveWorkspaceName } from "@shared/workspace";
 import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
@@ -1599,9 +1599,9 @@ function ComposerBar(props: { session: ChatSession }) {
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
   // 作用域显示**目录名**。老工作区落库的名可能是完整路径（早期创建没截尾），
-  // 所以两个分支都要过 basename——显示层截尾，不动落库数据
+  // 所以两个分支都要过 deriveWorkspaceName——显示层截尾，不动落库数据
   const scopeSource = workspace?.name ?? session.cwd;
-  const scope = scopeSource === null ? t.chat.home : basename(scopeSource) || t.chat.home;
+  const scope = scopeSource === null ? t.chat.home : deriveWorkspaceName(scopeSource) || t.chat.home;
   // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
   // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
   const [namingWorkspace, setNamingWorkspace] = useState(false);
@@ -1621,7 +1621,10 @@ function ComposerBar(props: { session: ChatSession }) {
     },
     ...session.workspaces.map((item) => ({
       id: item.id,
-      label: item.name,
+      // label 截尾与左栏同规则；全路径放 hint 消歧（两个同名尾段的工作区），
+      // 与 home 项的 defaultCwd 同构
+      label: deriveWorkspaceName(item.name),
+      hint: item.path,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
@@ -1680,9 +1683,6 @@ function ComposerBar(props: { session: ChatSession }) {
     <>
       <Menu
         items={scopeItems}
-        // 面板 shrink-to-fit，默认 maxWidth 320 装不下 Windows 的整条工作区路径——
-        // 放宽到 640，卡片随最长路径伸缩，超长仍由行的 ellipsis 兜底
-        panelMaxWidth={640}
         trigger={({ open, toggle }) =>
           namingWorkspace ? (
             // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
