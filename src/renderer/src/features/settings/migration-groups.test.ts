@@ -233,5 +233,8 @@ describe("去向选项与文案", () => {
     assert.equal(groupName(null, en), "No folder");
     assert.equal(abbreviateHome("/Users/me/.proma-dev/agent-sessions.json", "/Users/me"), "~/.proma-dev/agent-sessions.json");
     assert.equal(abbreviateHome("/Users/meta/x", "/Users/me"), "/Users/meta/x");
+    // Windows 原生反斜杠路径：末段与「在家目录下」都要认——单斜杠 split / startsWith 会把整条路径当成一段、永不匹配
+    assert.equal(groupName("C:\\Users\\me\\repo\\orbita", en), "orbita");
+    assert.equal(abbreviateHome("C:\\Users\\me\\.proma-dev\\x", "C:\\Users\\me"), "~\\.proma-dev\\x");
   });
 });

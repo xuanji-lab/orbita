@@ -11,6 +11,8 @@
  * 主进程算出来的这几个根之内的路径，不能拿这条通道当通用文件浏览器。
  */
 
+import { pathTail } from "./path.ts";
+
 export type FileRootKind = "session" | "workspace" | "attached";
 
 export interface FileRoot {
@@ -82,15 +84,6 @@ export function fileRootLabel(kind: FileRootKind, path: string, title: string, f
     return last === "" ? path : last;
   }
   return title.trim() === "" ? fallback : title.trim();
-}
-
-/**
- * 路径末段。同 workspace.ts 的同名函数：**shared 层不能引 node:path**（renderer 里没有
- * node 内置，vite 会 externalize 掉、构建失败），在这里自己切。
- */
-function pathTail(path: string): string {
-  const parts = path.split(/[\\/]/).filter((part) => part !== "");
-  return parts[parts.length - 1] ?? "";
 }
 
 /**
