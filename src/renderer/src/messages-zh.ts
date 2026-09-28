@@ -583,7 +583,7 @@ export const zh: Messages = {
     factGreeting: "个只打了招呼",
     factGreetingTip: "只打了个招呼或随手发了句测试，之后没再聊 · 这次不导入",
     factDuplicate: "个重复",
-    factDuplicateTip: "同一个会话在另一个 Proma 数据目录（~/.proma、~/.proma-dev…）里也有 · 只导内容最全的那一份",
+    factDuplicateTip: "同一个会话在同一个应用的另一个数据目录里也有（~/.proma 与 ~/.proma-dev、~/.claude 与 ~/.claude-work…）· 只导内容最全的那一份",
     duplicateKept: (path) => `留下 ${path}`,
     factOrphaned: "个单独列出",
     factOrphanedTip: "母会话导不进来的子会话 · 作为独立会话导入",

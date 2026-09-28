@@ -9,7 +9,7 @@
  */
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2343,6 +2343,35 @@ describe("reasonix 来源", () => {
     { role: "tool", tool_call_id: "c1", name: "ls", content: "a.txt" },
     { role: "assistant", content: "好了。" },
   ];
+
+  test("两个数据目录里的同一份会话（含没有 meta 的老会话）只导一份；空会话在「导不了」里只算一次", async () => {
+    const sessions = join(projectsRoot, "proj-a", "sessions");
+    await writeSession(sessions, "with-meta.jsonl", { id: "m1", topic_title: "有 meta" }, repoRows("修测试"));
+    // Windows 验收实测：没有 meta 侧车的老会话 id 原来退回绝对路径，两个目录里配不上、各导一份
+    await writeSession(sessions, "no-meta.jsonl", null, repoRows("你好"));
+    await writeFile(join(sessions, "empty.jsonl"), "", "utf8");
+    const copyRoot = join(root, "reasonix-copy");
+    await cp(dirname(projectsRoot), copyRoot, { recursive: true });
+    const two = rxDeps({
+      reasonix: [
+        { root: dirname(projectsRoot), projectsRoot, home },
+        { root: copyRoot, projectsRoot: join(copyRoot, "projects"), home },
+      ],
+    });
+
+    const report = await scanImport(two, [], ["reasonix"]);
+    assert.deepEqual(
+      report.plan.map((item) => [item.sourceId, item.dataRoots]).sort(),
+      [
+        ["m1", [dirname(projectsRoot), copyRoot]],
+        ["proj-a/sessions/no-meta.jsonl", [dirname(projectsRoot), copyRoot]],
+      ],
+    );
+    assert.deepEqual(
+      report.skipped.map((skip) => skip.reason).sort(),
+      ["duplicate", "duplicate", "no-reply"],
+    );
+  });
 
   test("扫描与执行：meta 带标题/模型/工作区，同址建工作区，transcript 只有用户写的话，重扫即已导入", async () => {
     const repo = join(root, "repo");

@@ -642,7 +642,7 @@ export const en = {
     factGreetingTip: 'Only a greeting or a test like "hi" or "test", never continued · left out of this import',
     factDuplicate: "duplicates",
     factDuplicateTip:
-      "The same conversation is also in another Proma data folder (~/.proma, ~/.proma-dev…) · only the most complete copy is imported",
+      "The same conversation is also in another data folder of the same app (~/.proma and ~/.proma-dev, ~/.claude and ~/.claude-work…) · only the most complete copy is imported",
     duplicateKept: (path: string) => `kept ${path}`,
     factOrphaned: "listed on their own",
     factOrphanedTip: "Sub-sessions whose parent can't be imported · they come in as sessions of their own",

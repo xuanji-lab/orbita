@@ -1639,10 +1639,18 @@ async function scanEach<P>(
   scan: (paths: P) => Promise<{ candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] }>,
 ): Promise<{ candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] }> {
   const out: { candidates: ConvertedCandidate[]; skipped: ImportSkipItem[] } = { candidates: [], skipped: [] };
+  /** 「没有回复」按源会话 id 只记一次：几个数据目录里各有一份空会话，页面上「导不了」不该翻倍 */
+  const noReply = new Set<string>();
   for (const paths of list ?? []) {
     const found = await scan(paths);
     out.candidates.push(...found.candidates);
-    out.skipped.push(...found.skipped);
+    for (const item of found.skipped) {
+      if (item.reason === "no-reply") {
+        if (noReply.has(item.sourceId)) continue;
+        noReply.add(item.sourceId);
+      }
+      out.skipped.push(item);
+    }
   }
   return out;
 }
@@ -2341,7 +2349,10 @@ async function scanReasonix(
   }
   for (const { file, meta, bytes } of await listReasonixSessions(paths.projectsRoot)) {
     const sourceFile = resolve(file);
-    const sourceId = meta?.id ?? file;
+    // 没有 meta 侧车的老会话退回「相对 projects/ 的路径」（统一成 /）：几个数据目录里同一份文件
+    // 的 id 才一样，跨目录去重（按来源 + 源会话 id 分组）才配得上。此前退回绝对路径，
+    // 同一份文件在两个目录里 id 不同，永远配不上（Windows 验收：两条「你好」各导两份）
+    const sourceId = meta?.id ?? relative(paths.projectsRoot, file).split(sep).join("/");
     const title0 = meta?.title ?? null;
     let parsed: ReturnType<typeof reasonixToMessages>;
     try {
