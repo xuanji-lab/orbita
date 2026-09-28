@@ -1832,7 +1832,7 @@ describe("Claude Code 来源", () => {
     );
     const report = await scanImport(ccDeps(), [], ["claude-code"]);
     assert.equal(report.plan.length, 0);
-    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["lonely", "unsupported-format"]]);
+    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["lonely", "no-reply"]]);
   });
 
   test("「只随手发了一句」检查的候选：用户只写过一条的；接着聊过的不算；扫描本身照常列出", async () => {
@@ -2074,7 +2074,7 @@ describe("Kimi Code 来源", () => {
     const report = await scanImport(kimiDeps(), [], ["kimi-code"]);
     const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
     assert.deepEqual([...byId.keys()].sort(), ["session_a", "session_b", "session_c"]);
-    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["session_empty", "unsupported-format"]]);
+    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["session_empty", "no-reply"]]);
     // 同一文件夹两条 → 新建工作区；标题「New Session」不算，取第一句用户写的话
     assert.equal(report.newWorkspaces.length, 1);
     assert.equal(byId.get("session_a")?.workspaceId, report.newWorkspaces[0]?.id);
@@ -2216,7 +2216,7 @@ describe("opencode 来源", () => {
     const report = await scanImport(ocDeps(), [], ["opencode"]);
     const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
     assert.deepEqual([...byId.keys()].sort(), ["ses_a", "ses_b", "ses_home"]);
-    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["ses_empty", "unsupported-format"]]);
+    assert.deepEqual(report.skipped.map((item) => [item.sourceId, item.reason]), [["ses_empty", "no-reply"]]);
     assert.equal(byId.get("ses_a")?.title, "修测试");
     assert.equal(byId.get("ses_a")?.sourceFile, `${dbFile}#ses_a`);
     assert.deepEqual([byId.get("ses_a")?.source, byId.get("ses_a")?.sourceKind, byId.get("ses_a")?.importedModel], ["opencode", "opencode", "glm-5.1"]);
@@ -2320,7 +2320,7 @@ describe("reasonix 来源", () => {
     const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
     assert.deepEqual([...byId.keys()].sort(), ["a", "a2", "b"]);
     assert.equal(report.skipped.length, 1);
-    assert.equal(report.skipped[0]?.reason, "unsupported-format");
+    assert.equal(report.skipped[0]?.reason, "no-reply");
     assert.equal(byId.get("a")?.title, "标题A");
     assert.deepEqual([byId.get("a")?.source, byId.get("a")?.sourceKind, byId.get("a")?.importedModel], ["reasonix", "reasonix", "opencode-go/deepseek-v4"]);
     assert.equal(byId.get("a")?.createdAt, Date.parse("2026-09-01T00:00:00Z"));

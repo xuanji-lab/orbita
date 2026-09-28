@@ -121,7 +121,7 @@ test("扫描：sessions/YYYY/MM/DD/rollout-*.jsonl 各成一条候选；无 assi
   assert.equal(candidate.onlyMessage, "帮我把第二章的论证理一遍", "唯一一条用户话进「只随手发了一句」候选");
   assert.deepEqual(
     skipped.map((item) => item.reason),
-    ["unsupported-format"],
+    ["no-reply"],
   );
 });
 

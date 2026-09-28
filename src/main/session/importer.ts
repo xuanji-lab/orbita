@@ -1880,7 +1880,7 @@ async function scanClaudeCode(
     const converted = claudeRowsToMessages(session.rows, "scan");
     // 按执行时同一条转换判断：没有 assistant 消息 pi 不落盘（只发了一句就断掉的会话）
     if (!converted.messages.some((message) => message.role === "assistant")) {
-      skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+      skipped.push({ sourceId, title, reason: "no-reply" });
       continue;
     }
     const place = await sessionFolder(entry?.folder ?? session.cwd, paths.home, deps.defaultCwd);
@@ -2036,7 +2036,7 @@ export async function scanCodex(
           const rollout = parseCodexRollout(raw, UNASSIGNED_PROVIDER_ID);
           const title = deriveSessionTitle(rollout.firstPrompt ?? "") || `Codex session ${sourceId.slice(-6)}`;
           if (!rollout.hasAssistant) {
-            skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+            skipped.push({ sourceId, title, reason: "no-reply" });
             continue;
           }
           const createdAt = rollout.meta.timestamp !== 0 ? rollout.meta.timestamp : rollout.lastTimestamp;
@@ -2142,7 +2142,7 @@ async function scanKimiCode(
       const wire = parseKimiWire(raw, "scan", new Map());
       const title = deriveSessionTitle(state?.title ?? wire.firstPrompt ?? "") || "Kimi Code session";
       if (!wire.messages.some((message) => message.role === "assistant")) {
-        skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+        skipped.push({ sourceId, title, reason: "no-reply" });
         continue;
       }
       const place = await sessionFolder(state?.cwd ?? workspaces.roots.get(workspace.name) ?? null, paths.home, deps.defaultCwd);
@@ -2211,7 +2211,7 @@ async function scanZcode(
   for (const { session, sourceFile, parsed, bytes } of found) {
     const title = deriveSessionTitle(session.title ?? parsed.firstPrompt ?? "") || "ZCode session";
     if (!parsed.messages.some((message) => message.role === "assistant")) {
-      skipped.push({ sourceId: session.id, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+      skipped.push({ sourceId: session.id, title, reason: "no-reply" });
       continue;
     }
     const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd);
@@ -2269,7 +2269,7 @@ async function scanOpencode(
   for (const { session, sourceFile, parsed, bytes } of found) {
     const title = deriveSessionTitle(session.title ?? parsed.firstPrompt ?? "") || "opencode session";
     if (!parsed.messages.some((message) => message.role === "assistant")) {
-      skipped.push({ sourceId: session.id, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
+      skipped.push({ sourceId: session.id, title, reason: "no-reply" });
       continue;
     }
     const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd);
@@ -2349,7 +2349,7 @@ async function scanReasonix(
       continue;
     }
     if (!parsed.messages.some((message) => message.role === "assistant")) {
-      skipped.push({ sourceId, title: title0, reason: "unsupported-format", detail: "no assistant messages to convert" });
+      skipped.push({ sourceId, title: title0, reason: "no-reply" });
       continue;
     }
     const title = deriveSessionTitle(title0 ?? parsed.firstPrompt ?? "") || "Reasonix session";

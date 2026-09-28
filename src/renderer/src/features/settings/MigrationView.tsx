@@ -1377,7 +1377,10 @@ function SessionFacts(props: {
           {unconvertible.slice(0, 30).map((skip) => (
             <li key={skip.sourceId}>
               <span className="mg-skip-title">{skip.title ?? skip.sourceId}</span>
-              <span className="mg-skip-why">{skip.detail ?? skip.reason}</span>
+              <span className="mg-skip-why">
+                {t.migration.skipReasons[skip.reason]}
+                {skip.detail === undefined ? "" : ` · ${skip.detail}`}
+              </span>
             </li>
           ))}
           {unconvertible.length > 30 && <li className="mg-skip-why">{t.migration.andMore(unconvertible.length - 30)}</li>}
