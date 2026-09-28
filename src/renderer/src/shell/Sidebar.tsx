@@ -11,7 +11,6 @@ import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
-import { shouldExitSubview } from "./subview-exit.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
@@ -238,14 +237,6 @@ export function Sidebar(props: {
   /** 归档的从主列表里移走——**不是删除**，它们收在底部那一行后面 */
   const live = roots.filter((m) => !m.archived);
   const archived = roots.filter((m) => m.archived);
-  /**
-   * Archived 空了就自动退回主列表——否则停在一个空视图里。判定与理由在
-   * `subview-exit.ts`。遗留事项面板**不**这样：0 条也要能进来看空态（入口常驻，
-   * 见 App.tsx 的 railEntries），它标题旁有自己的返回键。
-   */
-  useEffect(() => {
-    if (shouldExitSubview(props.showArchived, archived.length)) props.onShowArchived(false);
-  }, [props.showArchived, props.onShowArchived, archived.length]);
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   // 用 roots.length 不用 session.sessions.length：这里描述的是左栏那份列表
@@ -519,6 +510,12 @@ export function Sidebar(props: {
               </IconButton>
               <NodeLabel>{t.sidebar.archived}</NodeLabel>
             </div>
+            {/*
+              空了也停在这里、显示空态（2026-09-27 wafo：空的时候自动弹回主列表，点入口像按钮坏了）。
+              以前会自动退回，是因为出口只有底部那条会在 0 条时禁用的入口——现在标题旁有返回键、
+              入口常驻右栏，死胡同已不存在。与遗留事项面板（09-25 起 0 条也能进）同一口径。
+            */}
+            {archived.length === 0 && <Empty>{t.sidebar.noArchived}</Empty>}
             {archived.map((meta) => (
               <SessionRow
                 key={meta.id}

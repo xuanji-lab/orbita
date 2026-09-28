@@ -268,6 +268,7 @@ export const en = {
     taskActions: "Task actions",
     carryovers: "Carryovers",
     noCarryovers: "No carryover items yet. Wrap up a task to collect its loose ends.",
+    noArchived: "Nothing archived. Archive a task from its menu to move it here without deleting it.",
     sourceDeleted: "The source task was deleted",
     openSource: "Open the source task",
     deletedTask: "Deleted task",
