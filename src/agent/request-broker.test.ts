@@ -49,4 +49,14 @@ describe("RequestBroker", () => {
     if (!firstResult.ok) assert.match(firstResult.error, /first/);
     if (!secondResult.ok) assert.match(secondResult.error, /second/);
   });
+
+  test("超时按请求给：到点回一句人话，之后迟到的回执丢弃", async () => {
+    const sent: object[] = [];
+    const broker = new RequestBroker((event) => sent.push(event));
+    const pending = broker.request<ReadTaskOutcome>({ type: "readTaskRequest" }, 20);
+    const result = await pending;
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.error, /回执/);
+    broker.resolve(String((sent[0] as Record<string, unknown>).requestId), { ok: true, card: null, text: "late" });
+  });
 });

@@ -51,6 +51,7 @@ import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
+import { createBrowserTools } from "./browser-tools.ts";
 import {
   COMPACTION_DEFAULT,
 } from "../shared/settings.ts";
@@ -451,7 +452,7 @@ const running = new Map<string, CycleSlot<TurnParts>>();
 const mcpHub = new McpHub();
 /**
  * 工具请求的在途表（4-3 立，B-1 泛化）：create_skill / add_mcp_server /
- * read_task 的回执由 handle 的命令分支结掉。进程级一份——主进程是唯一的
+ * read_task / browser_* 的回执由 handle 的命令分支结掉。进程级一份——主进程是唯一的
  * 对端，不需要按会话分。
  */
 const requestBroker = new RequestBroker((event) => send(event as AgentEvent));
@@ -706,6 +707,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createImageTools(command.cwd),
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
+    ...createBrowserTools(requestBroker, command.sessionId),
     ...createChannelTools(requestBroker, command.sessionId, role),
   ];
   const { session } = await createAgentSessionFromServices({
@@ -1133,6 +1135,20 @@ async function handle(command: AgentCommand): Promise<void> {
       command.ok
         ? { ok: true, card: command.card, text: command.text }
         : { ok: false, error: command.error ?? "Read failed" },
+    );
+    return;
+  }
+  if (command.type === "browserResult") {
+    requestBroker.resolve(
+      command.requestId,
+      command.ok
+        ? {
+            ok: true,
+            text: command.text,
+            card: command.card,
+            ...(command.image === undefined ? {} : { image: command.image }),
+          }
+        : { ok: false, error: command.error ?? "Browser request failed" },
     );
     return;
   }

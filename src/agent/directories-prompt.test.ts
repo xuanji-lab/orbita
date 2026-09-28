@@ -68,4 +68,10 @@ describe("describeDirectories", () => {
     assert.ok(text.includes('Sub-session "先派出的" (id child-1) workbench: /workbenches/child-1'));
     assert.ok(text.includes('Sub-session "Sub-session" (id child-2) workbench: /workbenches/child-2'));
   });
+  test("browserDownloads：有就说在哪、可以整理；缺席不出现", () => {
+    const withDownloads = describeDirectories("/cwd", { attached: [], workbench: "/wb", browserDownloads: "/Users/me/Downloads" });
+    assert.match(withDownloads, /Browser downloads: \/Users\/me\/Downloads/);
+    assert.match(withDownloads, /ask before deleting/);
+    assert.doesNotMatch(describeDirectories("/cwd", { attached: [], workbench: "/wb" }), /Browser downloads/);
+  });
 });

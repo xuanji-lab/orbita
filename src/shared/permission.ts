@@ -61,6 +61,41 @@ export function isChannelTool(toolName: string): boolean {
   return (CHANNEL_TOOLS as readonly string[]).includes(toolName);
 }
 
+/**
+ * 受管浏览器的只读四件（2026-09-27 wafo 裁决）：三档模式一律放行。
+ *
+ * 它们只在隔离的沙盒浏览器里读页面（导航、结构、正文、截图），不碰用户的文件与 shell；
+ * 登录态本来就是用户为 agent 准备的。plan 档要能用——「上网找参考」本就是规划的一部分，
+ * web search 之外还能读需要登录的站；manual 档也不问——翻一次论文列表点十次审批不值。
+ *
+ * **否决「并进 READ_ONLY_TOOLS」**：那个名单在 manual 档仍要问（「全都问」对本机读取成立）。
+ * 浏览器读的是外部页面，不是用户的盘，单独立桶。
+ *
+ * browser_scroll 也在这里：滚动只是往下读，不提交任何东西——翻长页要一屏屏看，每屏问一次不值。
+ * 点击、输入、按键（browser_click / browser_type / browser_press）**不在这里**：它们能提交表单、
+ * 下单、发消息，走默认的写操作闸门——plan 拒、manual 问、skip 放。不为它们另立名单：
+ * decidePermission 对不认识的工具本来就按有副作用处理。
+ */
+export const BROWSER_READ_TOOLS = [
+  "browser_navigate",
+  "browser_observe",
+  "browser_extract",
+  "browser_screenshot",
+  "browser_tabs",
+  "browser_scroll",
+] as const;
+
+export function isBrowserReadTool(toolName: string): boolean {
+  return (BROWSER_READ_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
+ * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
+ * 再为「要不要问用户」弹一次审批是套娃。名字不带 browser 前缀：终端的 sudo / 2FA 是同一件事，
+ * 将来复用这个名字。
+ */
+export const USER_ACTION_TOOL = "request_user_action";
+
 export type PermissionDecision =
   | { behavior: "allow" }
   /** 需要问用户；调用方负责把问题送到 UI 并等回答 */
@@ -75,6 +110,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (mode === "skip") return { behavior: "allow" };
   // 通道三件套：三档一律放行，理由见 CHANNEL_TOOLS 的注释
   if (isChannelTool(toolName)) return { behavior: "allow" };
+  // 浏览器只读四件与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
+  if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
     return mode === "plan" ? { behavior: "allow" } : { behavior: "ask" };

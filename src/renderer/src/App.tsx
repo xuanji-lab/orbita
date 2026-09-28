@@ -504,6 +504,16 @@ export function App() {
       onClick: () => applySubviewState(toggleRailSubview(subviewState, "archived")),
     },
     {
+      // 受管浏览器是独立的沙盒窗口（不占右栏面板位）：点了就打开或聚焦它，没有「亮」的状态。
+      // 它是 agent 的工具，这个入口给用户提前登录、看一眼 agent 停在哪
+      icon: "globe" as const,
+      label: t.rail.browser,
+      lit: false,
+      onClick: () => {
+        api.browser.open().catch((cause: unknown) => console.error("[browser] 打开沙盒窗口失败", cause));
+      },
+    },
+    {
       icon: "settings" as const,
       label: t.common.settings,
       lit: overlay === "settings",

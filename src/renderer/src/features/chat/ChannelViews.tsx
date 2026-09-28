@@ -25,6 +25,7 @@ import { useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
 import { taskCardBody } from "./channel-column.ts";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "./ExitCard";
 import { channelMarkLabel, type ChannelMarkTone } from "./tool-results";
 import type { SessionEntry } from "./session-states";
 import type { Messages } from "../../messages-en.ts";
@@ -269,31 +270,6 @@ function delegateStatusColor(status: DelegateCardStatus): string {
   }
 }
 
-const CARD_STYLE = {
-  display: "grid",
-  gap: "var(--space-1)",
-  padding: "var(--space-2) var(--space-3)",
-  borderRadius: "var(--radius-lg)",
-  border: "1px solid var(--color-border-subtle)",
-  background: "var(--color-bg-panel)",
-  minWidth: 0,
-} satisfies React.CSSProperties;
-
-const CARD_KICKER = {
-  flex: "0 0 auto",
-  fontFamily: "var(--font-family-mono)",
-  fontSize: "var(--font-size-micro)",
-  letterSpacing: "0.06em",
-  textTransform: "uppercase",
-  color: "var(--color-text-tertiary)",
-} satisfies React.CSSProperties;
-
-/** `.card.lit`（设计稿）：accent 描边 + 3px `--color-bg-active` 外环——右栏会话层正开着这条子会话时。 */
-const CARD_LIT_STYLE = {
-  borderColor: "var(--color-accent)",
-  boxShadow: "0 0 0 3px var(--color-bg-active)",
-} satisfies React.CSSProperties;
-
 /**
  * 派出卡：`delegate` 工具的结果卡（第一行 DELEGATED + 标题 + 状态，第二行任务
  * 首行截断，第三行模型 id · 思考档）。`card` 为 null 是 running 帧（details 随
@@ -317,79 +293,24 @@ export function DelegateCardView(props: {
   const t = useT();
   if (props.card === null) {
     return (
-      <div style={CARD_STYLE}>
-        <span className="orbita-breath" style={{ ...CARD_KICKER, color: "var(--color-accent)" }}>
+      <div style={EXIT_CARD_STYLE}>
+        <span className="orbita-breath" style={{ ...EXIT_CARD_KICKER, color: "var(--color-accent)" }}>
           {t.channel.delegating}
         </span>
       </div>
     );
   }
-  const { card, status, onClick } = props;
-  const color = delegateStatusColor(status);
-  const style: React.CSSProperties = {
-    ...CARD_STYLE,
-    ...(props.lit === true ? CARD_LIT_STYLE : {}),
-    ...(onClick !== undefined ? { width: "100%", textAlign: "left", cursor: "pointer", font: "inherit" } : {}),
-  };
-  const content = (
-    <>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
-        <span style={CARD_KICKER}>{t.channel.delegated}</span>
-        <span
-          style={{
-            fontWeight: "var(--weight-strong)",
-            fontSize: "var(--font-size-body)",
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {card.title}
-        </span>
-        <span
-          className={status === "running" ? "orbita-breath" : undefined}
-          style={{
-            marginLeft: "auto",
-            flex: "0 0 auto",
-            fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-micro)",
-            color,
-          }}
-        >
-          {t.channel.delegateStatus[status]}
-        </span>
-      </div>
-      {props.taskPreview !== "" && (
-        <p
-          style={{
-            margin: 0,
-            fontSize: "var(--font-size-caption)",
-            color: "var(--color-text-secondary)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {props.taskPreview}
-        </p>
-      )}
-      <span
-        style={{
-          fontFamily: "var(--font-family-mono)",
-          fontSize: "var(--font-size-micro)",
-          color: "var(--color-text-tertiary)",
-        }}
-      >
-        {card.modelId} · {thinkingLevelLabel(card.thinkingLevel, card.modelId)}
-      </span>
-    </>
-  );
-  if (onClick === undefined) return <div style={style}>{content}</div>;
+  const { card, status } = props;
   return (
-    <button type="button" onClick={onClick} title={t.chat.openTaskCard(card.title)} style={style}>
-      {content}
-    </button>
+    <ExitCard
+      kicker={t.channel.delegated}
+      title={card.title}
+      status={{ text: t.channel.delegateStatus[status], color: delegateStatusColor(status), active: status === "running" }}
+      preview={props.taskPreview}
+      meta={`${card.modelId} · ${thinkingLevelLabel(card.thinkingLevel, card.modelId)}`}
+      {...(props.onClick !== undefined ? { onClick: props.onClick, clickTitle: t.chat.openTaskCard(card.title) } : {})}
+      {...(props.lit !== undefined ? { lit: props.lit } : {})}
+    />
   );
 }
 
@@ -427,9 +348,9 @@ export function ChannelTaskCard(props: {
   const { message } = props;
   const { body, hasMore } = taskCardBody(message?.text ?? "", expanded);
   return (
-    <div style={CARD_STYLE}>
+    <div style={EXIT_CARD_STYLE}>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <span style={CARD_KICKER}>{t.channel.taskKicker}</span>
+        <span style={EXIT_CARD_KICKER}>{t.channel.taskKicker}</span>
         <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
           {t.channel.from(props.peerTitle)}
         </span>

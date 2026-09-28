@@ -45,6 +45,14 @@ export function describeDirectories(cwd: string, directories: TurnDirectories | 
         "Do not modify files the other session is actively using unless the task calls for it.",
     );
   }
+  if (directories.browserDownloads !== undefined) {
+    lines.push(
+      `Browser downloads: ${directories.browserDownloads}`,
+      "  Files the user downloaded in Orbita's built-in browser (papers, exports) land here. " +
+        "You may read and organize them when the conversation calls for it; ask before deleting anything. " +
+        "Files you download in your own browser tab go to downloads/ in your session workbench instead.",
+    );
+  }
   lines.push("</directories>");
   return lines.join("\n");
 }

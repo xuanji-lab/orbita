@@ -11,6 +11,7 @@ import {
   channelMarkLabel,
   channelSendMessageId,
   delegateCard,
+  handoffOutcome,
   editDiffEntries,
   editDiffStats,
   editDiffText,
@@ -341,6 +342,44 @@ describe("rollupToolKey（折叠统计行的统计词汇）", () => {
       entries.map((entry) => entry.kind),
       ["toolCall", "toolCall"],
     );
+  });
+
+  test("request_user_action 不成组——交接卡要一直露在外面，折进组里用户看不见", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [{ type: "toolCall", toolCallId: "h1", toolName: "request_user_action", input: {} }]),
+        toolItem({ toolCallId: "h1", toolName: "request_user_action" }),
+        assistantItem("a2", [{ type: "toolCall", toolCallId: "h2", toolName: "request_user_action", input: {} }]),
+      ]),
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.kind),
+      ["toolCall", "toolCall"],
+    );
+  });
+});
+
+describe("handoffOutcome（交接卡的结局）", () => {
+  const handoffItem = (details: unknown, status: "complete" | "running" = "complete"): ToolTranscriptItem =>
+    ({
+      id: "i1",
+      role: "tool",
+      toolCallId: "h1",
+      toolName: "request_user_action",
+      input: { reason: "Sign in to Scopus" },
+      content: [{ type: "text", text: "…" }],
+      timestamp: 1,
+      status,
+      isError: false,
+      details,
+    }) as ToolTranscriptItem;
+  test("从 details.browser.handoff 取；缺席、坏值、还在等都是 null", () => {
+    assert.equal(handoffOutcome(handoffItem({ browser: { tabId: "t", url: "", title: "", handoff: "done" } })), "done");
+    assert.equal(handoffOutcome(handoffItem({ browser: { handoff: "cancelled" } })), "cancelled");
+    assert.equal(handoffOutcome(handoffItem({ browser: { handoff: "maybe" } })), null);
+    assert.equal(handoffOutcome(handoffItem({})), null);
+    assert.equal(handoffOutcome(handoffItem({ browser: { handoff: "done" } }, "running")), null);
+    assert.equal(handoffOutcome(undefined), null);
   });
 });
 
@@ -1367,6 +1406,23 @@ describe("toolCallSummary —— read_task（B-1）", () => {
   test("行首参数摘要显示引用本身", () => {
     assert.equal(toolCallSummary("read_task", { task: "fix sidebar", rounds: "1" }), "fix sidebar");
     assert.equal(toolCallSummary("read_task", {}), null);
+  });
+});
+
+describe("toolCallSummary —— 受管浏览器", () => {
+  test("browser_navigate 摘要是 url；读取类没有入参摘要", () => {
+    assert.equal(toolCallSummary("browser_navigate", { url: "scopus.com" }), "scopus.com");
+    assert.equal(toolCallSummary("browser_extract", { offset: 100 }), null);
+    assert.equal(toolCallSummary("browser_screenshot", {}), null);
+  });
+
+  test("交互类摘要是模型给的 element 人话；缺了退回 ref / 坐标；按键说键名、滚动说方向", () => {
+    assert.equal(toolCallSummary("browser_click", { element: "Search button", ref: "e3" }), "Search button");
+    assert.equal(toolCallSummary("browser_click", { ref: "e3" }), "e3");
+    assert.equal(toolCallSummary("browser_click", { x: 120, y: 48 }), "120, 48");
+    assert.equal(toolCallSummary("browser_type", { element: "Search box", text: "llm" }), "Search box");
+    assert.equal(toolCallSummary("browser_press", { key: "Enter" }), "Enter");
+    assert.equal(toolCallSummary("browser_scroll", { direction: "down" }), "down");
   });
 });
 

@@ -156,6 +156,35 @@ export const en = {
     sideChat: "Side chat Ctrl+Alt+D",
     subSessions: (count: number) => `Sub-sessions (${count})`,
     channels: "Sub-session channels",
+    browser: "Built-in browser",
+  },
+
+  browser: {
+    back: "Back",
+    forward: "Forward",
+    reload: "Reload",
+    stop: "Stop loading",
+    address: "Address",
+    addressPlaceholder: "Address or search",
+    notAnAddress: "Enter a web address or search words",
+    tabs: "Browser tabs",
+    yourTab: "Your tab",
+    yourTabTip: "Your tab — sign in to sites here; the agent shares the sign-in",
+    agentTab: (session: string) => (session === "" ? "Agent" : session),
+    agentTabTip: (session: string, page: string) =>
+      `Agent tab${session === "" ? "" : ` · ${session}`}${page === "" ? "" : ` — ${page}`}`,
+    newPage: "New page",
+    closeTab: "Close this agent tab",
+    handoffKicker: "Needs you",
+    handoffWhere: "In the built-in browser",
+    handoffWaiting: "waiting for you",
+    handoffHandedBack: "handed back",
+    handoffCancelled: "cancelled",
+    handoffOpen: "Open the browser",
+    handoffDone: "Done, continue",
+    handoffGone: "This request has already ended.",
+    handoffBar: (reason: string) => `The agent is waiting for you: ${reason}`,
+    handoffBarDone: "Done, hand back",
   },
 
   drawer: {
@@ -257,6 +286,7 @@ export const en = {
       general: "General",
       providers: "Providers",
       migration: "Migration",
+      browser: "Browser",
     },
     appearance: "Appearance",
     theme: "Theme",
@@ -300,6 +330,48 @@ export const en = {
     openDataDirectory: "Open the data directory",
     reveal: "Reveal",
     aboutSetting: (name: string) => `About ${name}`,
+    browserData: "Browser data",
+    clearBrowserData: "Clear all browser data",
+    clearBrowserDataInfo:
+      "Signs the built-in browser out of every site and deletes its cookies, site storage and cache · your own browser is not affected",
+    clearBrowserDataAction: "Clear all",
+    clearBrowserDataConfirm: "Sign out of every site?",
+    clearBrowserDataDone: "Cleared · the built-in browser is signed out everywhere",
+    browserDownloads: "Downloads",
+    downloadDirectory: "Download location",
+    downloadDirectoryInfo:
+      "Files you download in the built-in browser land here · the agent is told where it is and can organize it for you · files the agent downloads go to its session workbench",
+    changeDirectory: "Change…",
+    chooseDownloadDirectory: "Choose a download location",
+    openDownloadDirectory: "Open the download location",
+    // ── 登录状态导入（设置 › 浏览器 › 登录状态，仅 macOS 显示这一组）──
+    loginImportGroup: "Login state",
+    loginImport: "Import sign-ins",
+    loginImportInfo:
+      "Brings sign-in cookies from Chrome, Edge, Brave, Arc or Chromium into the built-in browser · only the sites you tick are imported · reading asks macOS to unlock the keychain · some sites will still ask you to sign in again · your own browser is not changed",
+    loginImportNoBrowsers: "No browser with saved cookies was found",
+    loginImportRead: "Read",
+    loginImportReadTitle: "Reading asks macOS for the browser's keychain key",
+    loginImportReading: "Waiting for the keychain…",
+    loginImportSource: "Import source",
+    loginImportSitesAria: "Sites to import",
+    loginImportSearchPlaceholder: "Search sites",
+    loginImportNoMatch: "No site matches",
+    // 不复用 migration.clearAll：同一页上「Clear all」已是清除浏览器数据的危险键，撞词会让人以为这里也在删东西
+    loginImportSelectAll: "Select all",
+    loginImportDeselectAll: "Deselect all",
+    loginImportSiteCount: (count: number) => `${count} cookie${count === 1 ? "" : "s"}`,
+    loginImportAction: (count: number) => `Import ${count} site${count === 1 ? "" : "s"}`,
+    loginImportDone: (imported: number, sites: number, skipped: number) =>
+      `Imported ${imported} cookie${imported === 1 ? "" : "s"} from ${sites} site${sites === 1 ? "" : "s"}` +
+      (skipped > 0 ? ` · ${skipped} skipped` : ""),
+    loginImportErrors: {
+      denied: "The keychain request was declined · nothing was imported",
+      missing: "That browser profile is no longer available · pick the source again",
+      noCookies: "No cookie store found in that profile",
+      failed: "Could not complete the import",
+      expired: "The selection expired · read again",
+    },
   },
 
   themes: {

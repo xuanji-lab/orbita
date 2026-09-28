@@ -2,8 +2,9 @@
  * agent 域的 IPC handler —— 四层契约的第 2 层。
  * 事件是单向广播：主进程收到 agent 进程的消息就原样转给所有窗口，不在中间加工。
  */
-import { BrowserWindow, ipcMain } from "electron";
+import { ipcMain } from "electron";
 import { join } from "node:path";
+import { mainWindows } from "../window/main-windows.ts";
 import {
   ipcChannels,
   type CompactAgentInput,
@@ -36,6 +37,7 @@ import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
+import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
 
 /**
@@ -169,8 +171,11 @@ export function registerAgentIpc(
    * 开轮目录清单每轮现读现装配：工作区挂新目录、换工作区，下一轮即生效。
    * 逻辑在 turn-directories.ts（纯模块，可直接测）；这里只做路由。
    */
-  const readDirectories = (input: SubmitAgentInput | CompactAgentInput): Promise<TurnDirectories> =>
-    resolveTurnDirectories(workspaces, sessions, channels, input);
+  // 受管浏览器的下载目录一并告诉 agent（用户在浏览器里下的论文 / 导出文件在那里，agent 帮着整理）
+  const readDirectories = async (input: SubmitAgentInput | CompactAgentInput): Promise<TurnDirectories> => ({
+    ...(await resolveTurnDirectories(workspaces, sessions, channels, input)),
+    browserDownloads: await browserDownloadDir(settings),
+  });
 
   /**
    * 命名专用模型（设置里的 titleModel）装配成带密钥的载荷。没指定、指的
@@ -371,9 +376,9 @@ export function registerAgentIpc(
   return { submitTurn };
 }
 
-/** agent 进程的事件 → 所有窗口 */
+/** agent 进程的事件 → 所有主窗口（沙盒浏览器窗口的工具条不收，见 window/main-windows.ts） */
 export function broadcastAgentEvent(event: unknown): void {
-  for (const window of BrowserWindow.getAllWindows()) {
+  for (const window of mainWindows.list()) {
     window.webContents.send(ipcChannels.agentEvent, event);
   }
 }

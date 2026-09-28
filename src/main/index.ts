@@ -3,7 +3,7 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
@@ -31,6 +31,12 @@ import { registerWindowIpc } from "./window/ipc.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { registerBrowserIpc } from "./browser/ipc.ts";
+import { BrowserSandbox } from "./browser/sandbox.ts";
+import { applyBrowserRequest } from "./browser/agent-requests.ts";
+import { browserDownloadDir } from "./browser/download-dir.ts";
+import { resolveTurnDirectories } from "./agent/turn-directories.ts";
+import { mainWindows } from "./window/main-windows.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
@@ -102,13 +108,9 @@ function createMainWindow(theme: ThemePreference, language: Language | undefined
         // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
         // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
         { frame: false, backgroundColor: "#f3f4f1" }),
-    webPreferences: {
-      ...SECURITY_INVARIANTS,
-      preload: join(__dirname, "../preload/index.js"),
-      // 语言同理（`--orbita-language=`，preload 的 readInitialLanguage）：没选过就不传
-      additionalArguments: [`--orbita-theme=${theme}`, ...(language === undefined ? [] : [`--orbita-language=${language}`])],
-    },
+    webPreferences: rendererPreferences(theme, language),
   });
+  mainWindows.track(window);
 
   // 只在内容就绪后显示，避免空窗口先出现
   window.once("ready-to-show", () => window.show());
@@ -119,16 +121,40 @@ function createMainWindow(theme: ThemePreference, language: Language | undefined
     return { action: "deny" };
   });
 
+  loadRendererPage(window, "index.html");
+  return window;
+}
+
+/**
+ * 我们自己的 renderer 页面的 webPreferences：主窗口与沙盒浏览器窗口的工具条共用。
+ * 工具条走同一个 preload——它是我们自己的页面，信任级与主窗口相同；网页本身在另一个
+ * WebContentsView 里，不加载任何 preload（browser/sandbox.ts）。
+ */
+function rendererPreferences(theme: ThemePreference, language: Language | undefined): WebPreferences {
+  return {
+    ...SECURITY_INVARIANTS,
+    preload: join(__dirname, "../preload/index.js"),
+    // 语言同理（`--orbita-language=`，preload 的 readInitialLanguage）：没选过就不传
+    additionalArguments: [`--orbita-theme=${theme}`, ...(language === undefined ? [] : [`--orbita-language=${language}`])],
+  };
+}
+
+/**
+ * 把 renderer 的某个 HTML 入口载入窗口：主窗口是 index.html，沙盒窗口的工具条是
+ * browser-toolbar.html（electron-vite 的第二个 renderer 入口）。
+ */
+function loadRendererPage(window: BrowserWindow, page: "index.html" | "browser-toolbar.html"): void {
   // 打包产物一律读包内 renderer，不认这个环境变量：在 dev 版 orbita 的 agent 终端里
   // 直接启动打包产物时，这个变量会从 electron-vite dev 一路继承下来，不拦就会连到 dev server
   const devServerUrl = app.isPackaged ? undefined : process.env["ELECTRON_RENDERER_URL"];
   if (devServerUrl) {
+    const pageUrl = page === "index.html" ? devServerUrl : new URL(page, `${devServerUrl.replace(/\/?$/, "/")}`).href;
     // 两类 dev 首载故障都会把窗口留在底色上（真实事故 2026-09-10：白屏只能手动 Ctrl+R）：
     // ① server 未就绪 loadURL 拒绝——退避重试；ready-to-show 没到窗口不可见，重试无感。
     // ② 首帧合成失败——页面加载零错误、DOM 完整，但画面停在窗口底色（reload 能救活）；
     //    落定后 executeJavaScript 探到内容即 invalidate() 强制重绘上屏。
     const load = (attempt: number): void => {
-      window.loadURL(devServerUrl).catch(() => {
+      window.loadURL(pageUrl).catch(() => {
         if (window.isDestroyed() || attempt >= 10) return;
         setTimeout(() => load(attempt + 1), 500 * attempt);
       });
@@ -144,9 +170,7 @@ function createMainWindow(theme: ThemePreference, language: Language | undefined
           .catch(() => {});
       }, 1500);
     });
-  } else void window.loadFile(join(__dirname, "../renderer/index.html"));
-
-  return window;
+  } else void window.loadFile(join(__dirname, "../renderer", page));
 }
 
 void app.whenReady().then(async () => {
@@ -181,6 +205,39 @@ void app.whenReady().then(async () => {
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
   const workspaces = new WorkspaceStore(configDir, devDirs?.orbitaRoot);
+  /*
+   * 受管浏览器（沙盒窗口懒创建，见 browser/sandbox.ts）。关窗 = 隐藏；应用退出前先
+   * prepareQuit，退出时的关窗才不会被改写成隐藏；最后一个主窗口关闭就一并销毁——
+   * 否则 Windows / Linux 上隐藏的沙盒窗口让应用关不掉（window/main-windows.ts）。
+   */
+  const browserSandbox = new BrowserSandbox({
+    toolbarWindowOptions: async () => {
+      const current = await settings.read();
+      return { title: app.getName(), webPreferences: rendererPreferences(current.theme, current.language) };
+    },
+    loadToolbar: (window) => loadRendererPage(window, "browser-toolbar.html"),
+    sessionTitle: async (sessionId) => (await sessions.readMeta(sessionId))?.title ?? "",
+    workbenchPath: (sessionId) => sessions.workbenchPath(sessionId),
+    userDownloadDir: () => browserDownloadDir(settings),
+    // 与每轮告诉 agent 的目录清单同一个来源（resolveTurnDirectories）：工作台、附加目录，外加 cwd 与浏览器下载
+    sessionRoots: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      const directories = await resolveTurnDirectories(workspaces, sessions, channels, {
+        sessionId,
+        workspaceId: meta?.workspaceId ?? null,
+      });
+      return [
+        directories.workbench,
+        ...(meta?.cwd !== undefined ? [meta.cwd] : []),
+        ...directories.attached,
+        await browserDownloadDir(settings),
+      ];
+    },
+    appName: app.getName(),
+  });
+  registerBrowserIpc(browserSandbox, settings);
+  mainWindows.onLastClosed(() => browserSandbox.dispose());
+
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
@@ -234,11 +291,25 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
+    if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
     if (event.type === "failed" && event.sessionId === null) phases.clear();
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡。
     // 通道账本一并传进去：子会话每一轮的开头是通道消息，正文在那里。
     // 任何路径都必须回执（同 delegateRequest）：读盘抛错没有 catch 的话，agent 进程里的
     // read_task 调用永远挂着
+    // 受管浏览器：agent 的浏览器工具——浏览器在主进程（browser/sandbox.ts）。同样任何路径都回执
+    if (event.type === "browserRequest") {
+      void applyBrowserRequest(browserSandbox, event.sessionId, event.request)
+        .then((outcome) => agentHost.answerBrowser(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerBrowser(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "readTaskRequest") {
       void applyReadTask(sessions, event, workspaces, channels)
         .then((result) => agentHost.answerReadTask(event.requestId, result))
@@ -267,7 +338,16 @@ void app.whenReady().then(async () => {
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
   const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
-  registerSessionIpc(sessions, (id) => agentHost.disposeSession(id), agentHost, carryovers);
+  registerSessionIpc(
+    sessions,
+    (id) => {
+      agentHost.disposeSession(id);
+      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉
+      browserSandbox.closeSessionTab(id);
+    },
+    agentHost,
+    carryovers,
+  );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
@@ -332,14 +412,19 @@ void app.whenReady().then(async () => {
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
-  app.on("before-quit", () => agentHost.dispose());
+
+  app.on("before-quit", () => {
+    browserSandbox.prepareQuit();
+    agentHost.dispose();
+  });
 
   createMainWindow(initialSettings.theme, initialSettings.language);
 
   // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
   // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    // 只问主窗口：隐藏着的沙盒浏览器窗口也算一个窗口，按 getAllWindows 判就回不来了
+    if (mainWindows.list().length === 0) {
       void settings.read().then((current) => createMainWindow(current.theme, current.language));
     }
   });

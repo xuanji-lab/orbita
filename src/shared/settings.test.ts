@@ -457,3 +457,16 @@ describe("界面语言", () => {
     deepStrictEqual("language" in parseSettings({}), false);
   });
 });
+
+describe("parseSettings 的 browserDownloadDir（受管浏览器下载目录）", () => {
+  it("绝对路径留下：POSIX、Windows 盘符、UNC", () => {
+    deepStrictEqual(parseSettings({ browserDownloadDir: "/Users/me/Papers" }).browserDownloadDir, "/Users/me/Papers");
+    deepStrictEqual(parseSettings({ browserDownloadDir: "C:\\Users\\me\\Papers" }).browserDownloadDir, "C:\\Users\\me\\Papers");
+    deepStrictEqual(parseSettings({ browserDownloadDir: "\\\\nas\\share" }).browserDownloadDir, "\\\\nas\\share");
+  });
+  it("缺席、相对路径、非字符串都当没设（主进程退回系统下载文件夹）", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).browserDownloadDir, undefined);
+    deepStrictEqual(parseSettings({ browserDownloadDir: "Papers" }).browserDownloadDir, undefined);
+    deepStrictEqual(parseSettings({ browserDownloadDir: 42 }).browserDownloadDir, undefined);
+  });
+});

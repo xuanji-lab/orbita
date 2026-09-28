@@ -54,6 +54,16 @@ const ALLOWED_LATIN = new Set([
   "opencode",
   "Reasonix",
   "Desktop",
+  // 登录状态导入的来源浏览器（其他应用的名字）
+  "Chrome",
+  "Edge",
+  "Brave",
+  "Arc",
+  "Chromium",
+  // 技术名：登录状态导入的对象就是 cookie（说「登录 cookie」最准，不译成「小甜饼」）
+  "cookie",
+  // 系统名（macOS 钥匙串授权的提示）
+  "macOS",
   // 文件名
   "mcp.json",
   "SKILL.md",

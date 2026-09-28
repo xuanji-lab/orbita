@@ -1,0 +1,208 @@
+/*
+ * 受管浏览器沙盒窗口的工具条（BrowserToolbar.tsx）。
+ *
+ * 高度必须与主进程的 BROWSER_TOOLBAR_HEIGHT（main/browser/sandbox.ts）一致：网页视图
+ * 就贴在这条下面，差一像素就会压住工具条的下边线，或露出一条缝。
+ */
+:root {
+  /* tab 条 34 + 导航行 44 */
+  --browser-toolbar-height: 78px;
+  --browser-tabs-height: 34px;
+  /* 交接提示栏：与主进程 BROWSER_HANDOFF_BAR_HEIGHT 一致 */
+  --browser-handoff-height: 44px;
+}
+
+/* 沙盒窗口不透明：不走主窗口 macOS 的透明 body（那条规则按 data-platform 生效，这里不设它） */
+body {
+  background: var(--color-bg-panel);
+}
+
+.browser-toolbar {
+  height: var(--browser-toolbar-height);
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: var(--browser-tabs-height) minmax(0, 1fr);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.browser-toolbar[data-handoff] {
+  height: calc(var(--browser-toolbar-height) + var(--browser-handoff-height));
+  grid-template-rows: var(--browser-tabs-height) minmax(0, 1fr) var(--browser-handoff-height);
+}
+
+/* ===== 交接提示栏 ===== */
+.browser-handoff {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0 var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+
+.browser-handoff-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-bold);
+}
+
+/* 主操作：accent 只给它（设计系统 accent 只给主操作） */
+.browser-handoff-done {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-bold);
+}
+
+.browser-handoff-cancel {
+  flex: 0 0 auto;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-control);
+  cursor: pointer;
+}
+
+.browser-handoff-cancel:hover {
+  background: var(--color-bg-hover);
+}
+
+/* ===== tab 条 ===== */
+.browser-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.browser-tab {
+  flex: 0 1 220px;
+  min-width: 96px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-inline-end: 2px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  color: var(--color-text-secondary);
+}
+
+.browser-tab:hover {
+  background: var(--color-bg-hover);
+}
+
+.browser-tab[data-shown] {
+  background: var(--color-bg-panel);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.browser-tab-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  text-align: start;
+  cursor: pointer;
+}
+
+.browser-tab-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-bold);
+}
+
+.browser-tab-page {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+}
+
+/* ===== 导航行 ===== */
+.browser-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-2);
+}
+
+.browser-toolbar-form {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  position: relative;
+  margin-inline-start: var(--space-1);
+}
+
+/* 地址栏左侧的地球 / 加载图标：压在输入框里，输入框给它让出左内边距 */
+.browser-address-icon {
+  position: absolute;
+  inset-inline-start: var(--space-3);
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+}
+
+.browser-address.text-field {
+  height: var(--control-height-sm);
+  padding-inline-start: calc(var(--space-3) + 13px + var(--space-2));
+  font-size: var(--font-size-control);
+}
+
+.browser-address[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.browser-toolbar-error {
+  flex: 0 1 auto;
+  max-width: 45%;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-caption);
+  color: var(--color-danger);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

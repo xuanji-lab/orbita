@@ -166,11 +166,18 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "report_to_parent",
 ]);
 
+/**
+ * 交接（request_user_action）同样独立成卡、不进折叠：它是「这一步要你来」的离开卡，
+ * 折进组里用户就看不见，agent 会一直等下去。
+ */
+const HANDOFF_TOOL_NAME = "request_user_action";
+
 // 故意不写成类型谓词（`entry is ToolCallUnit`）：只有「toolCall 且工具名在名单里」
 // 那一部分该被排除，谓词的假分支会让 TS 把整个 "toolCall" kind 都窄掉，
 // 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
+// 名字沿用 isChannelToolCall：通道工具与交接都是「独立成卡、不参与合并与折叠」的那一类。
 function isChannelToolCall(entry: RenderEntry): boolean {
-  return entry.kind === "toolCall" && CHANNEL_TOOL_NAMES.has(entry.toolName);
+  return entry.kind === "toolCall" && (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME);
 }
 
 /**
@@ -235,10 +242,12 @@ export function groupToolUnits(
     // skill read 要**彻底绕过 run 机制**（直接进 entries）：只挡在 groupable 上不够——
     // 它自己开的 run 会被后续同类 read 并进来，排除就白做了
     const skillRead = unit.kind === "toolCall" && isSkillRead(unit, skills);
+    // 交接（request_user_action）与通道工具同待遇：独立成卡，不并进工具组
     const groupable =
       unit.kind === "toolCall" &&
       !skillRead &&
       !CHANNEL_TOOL_NAMES.has(unit.toolName) &&
+      unit.toolName !== HANDOFF_TOOL_NAME &&
       !PINNED_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
@@ -752,6 +761,20 @@ export function showImageCard(result: ToolTranscriptItem | undefined): ShowImage
  * `details: { delegate: card satisfies DelegateCard }`。running 帧还没有卡
  * （details 随终态帧来），一律 null。
  */
+/**
+ * 交接（request_user_action）的结局：details.browser.handoff（主进程写的，不解析给模型的文字）。
+ * 还在等 / 结果还没到 / 形状不对都是 null——交接卡按「等你」画。
+ */
+export function handoffOutcome(result: ToolTranscriptItem | undefined): "done" | "cancelled" | null {
+  if (result === undefined || result.status === "running") return null;
+  const details = result.details;
+  if (typeof details !== "object" || details === null) return null;
+  const browser = (details as Record<string, unknown>)["browser"];
+  if (typeof browser !== "object" || browser === null) return null;
+  const outcome = (browser as Record<string, unknown>)["handoff"];
+  return outcome === "done" || outcome === "cancelled" ? outcome : null;
+}
+
 export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCard | null {
   if (result === undefined || result.status === "running") return null;
   const details = result.details;
@@ -1086,6 +1109,24 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
       return str("name") ?? str("slug");
     case "add_mcp_server":
       return str("name");
+    // 受管浏览器：导航说去哪；读取类作用于当前页，入参里没有值得摘的，交给结果摘要
+    case "browser_navigate":
+      return str("url");
+    // 交互：模型给的 element 人话（审批卡上也是它）；缺了退回 ref / 坐标，至少知道点的哪
+    case "browser_click": {
+      const x = record["x"];
+      const y = record["y"];
+      return str("element") ?? str("ref") ?? (typeof x === "number" && typeof y === "number" ? `${x}, ${y}` : null);
+    }
+    case "browser_type":
+      return str("element") ?? str("ref");
+    case "browser_press":
+      return str("key");
+    case "browser_scroll":
+      return str("direction");
+    // 交接：摘要就是 agent 说的原因（交接卡的标题）
+    case "request_user_action":
+      return str("reason");
     default:
       return null;
   }

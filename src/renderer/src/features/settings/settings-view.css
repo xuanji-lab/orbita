@@ -75,6 +75,16 @@
   color: var(--color-danger);
 }
 
+/* 一次操作成功后的结果（如「已清除浏览器数据」）：图标 + 文字，颜色退到次要 */
+.set-row-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}
+
 /* 控件列：控件在上、效果预览在下，一律靠右 */
 .set-row-ctl {
   display: grid;
@@ -380,4 +390,90 @@
   font-family: var(--font-family-business);
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
+}
+
+/* ===== 登录状态导入（SettingsView.tsx 的 LoginImportSection） =====
+ * 网站清单是设置页里唯一的「多行选择面板」：面板色 + 发丝框（浮层配方），
+ * 限高内滚——几十个网站也不把设置页撑长。 */
+.login-sites {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+}
+
+.login-sites-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+}
+
+.login-sites-search input {
+  flex: 1;
+  min-width: 0;
+}
+
+.login-sites-list {
+  display: grid;
+  gap: 1px;
+  align-content: start;
+  max-height: 264px;
+  overflow-y: auto;
+}
+
+.login-site-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.login-site-row:hover {
+  background: var(--color-bg-hover);
+}
+
+/* 复选框着 accent（与 Migration 的来源清单同一条裁决，wafo 2026-09-24） */
+.login-site-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+/* 网站名是机器事实：mono；长了右边省略（域名差异集中在末尾，保留前缀可辨） */
+.login-site-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-primary);
+}
+
+.login-site-count {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.login-sites-empty {
+  padding: var(--space-2) var(--space-2);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.login-sites-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }

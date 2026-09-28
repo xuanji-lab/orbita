@@ -82,6 +82,7 @@ import sliders from "../../../../Orbita Design System/assets/icons/lucide/slider
 import star from "../../../../Orbita Design System/assets/icons/lucide/star.svg?raw";
 import triangleAlert from "../../../../Orbita Design System/assets/icons/lucide/triangle-alert.svg?raw";
 import undo2 from "../../../../Orbita Design System/assets/icons/lucide/undo-2.svg?raw";
+import user from "../../../../Orbita Design System/assets/icons/lucide/user.svg?raw";
 import unlink from "../../../../Orbita Design System/assets/icons/lucide/unlink.svg?raw";
 import workflow from "../../../../Orbita Design System/assets/icons/lucide/workflow.svg?raw";
 import x from "../../../../Orbita Design System/assets/icons/lucide/x.svg?raw";
@@ -178,6 +179,7 @@ const ICONS = {
   "trash-2": trash2,
   "triangle-alert": triangleAlert,
   "undo-2": undo2,
+  user,
   unlink,
   workflow,
   wrench,

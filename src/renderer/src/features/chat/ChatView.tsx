@@ -22,11 +22,14 @@ import {
   selectHomeCards,
 } from "./home-cards";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
+import { ExitCard } from "./ExitCard";
+import { PanelButton } from "../../shell/RightPanel";
 import {
   branchAnchorEntries,
   branchAnchorIds,
   answerText,
   delegateCard,
+  handoffOutcome,
   editDiffText,
   failedFoldKey,
   fileViewFor,
@@ -2737,6 +2740,17 @@ function toolIcon(toolName: string): IconName {
       return "folder";
     case "read_task":
       return "book-open";
+    // 受管浏览器：导航与读取都是「在网上」，截图单独一个相机形状不值得——同一枚地球
+    case "browser_navigate":
+    case "browser_observe":
+    case "browser_extract":
+    case "browser_screenshot":
+    case "browser_tabs":
+    case "browser_scroll":
+    case "browser_click":
+    case "browser_type":
+    case "browser_press":
+      return "globe";
     default:
       // MCP 工具（mcp__server__tool）：专属插头图标——外部能力，与内置工具一眼区分
       return parseQualifiedToolName(toolName) !== null ? "plug" : "wrench";
@@ -2821,6 +2835,10 @@ function ToolLine(props: {
   // 「派出中」而不是「失败了」。
   if (props.toolName === "delegate" && !failed) {
     return <DelegateToolLine input={props.input} result={result} channel={props.channel} />;
+  }
+  // 交接（受管浏览器）：离开卡，与派出卡同一个骨架。失败照通用骨架走（红色 + 可展开看错误）
+  if (props.toolName === "request_user_action" && !failed) {
+    return <HandoffToolLine toolCallId={props.toolCallId} input={props.input} result={result} />;
   }
   if ((props.toolName === "reply_subsession" || props.toolName === "report_to_parent") && !failed) {
     return (
@@ -3050,6 +3068,58 @@ function ToolLine(props: {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * `request_user_action` 的交接卡：agent 请用户去受管浏览器亲手做一步（登录、验证码、授权）。
+ * 与派出卡同一个「离开卡」骨架（ExitCard）——两者都是「点了离开聊天区」。
+ *
+ * 等待中：三个动作——去浏览器完成（打开窗口、切到那个 tab）/ 完成了，继续 / 取消。
+ * 窗口顶部也有同样的交还按钮：用户登录完人在浏览器里，就地交还，不必切回来找这张卡。
+ * 结束后：状态写「已交还 / 已取消」（主进程写进 details，不解析给模型的文字）。
+ */
+function HandoffToolLine(props: { toolCallId: string; input: unknown; result: ToolTranscriptItem | undefined }) {
+  const t = useT();
+  const [gone, setGone] = useState(false);
+  const reason = toolCallSummary("request_user_action", props.input) ?? "";
+  const outcome = handoffOutcome(props.result);
+  const waiting = outcome === null && !gone;
+  const status = waiting
+    ? { text: t.browser.handoffWaiting, color: "var(--color-accent)", active: true }
+    : outcome === "done"
+      ? { text: t.browser.handoffHandedBack, color: "var(--color-success)", active: false }
+      : { text: t.browser.handoffCancelled, color: "var(--color-text-tertiary)", active: false };
+  const open = () => {
+    void api.browser.showHandoff(props.toolCallId).then((live) => {
+      if (!live) setGone(true);
+    });
+  };
+  return (
+    <ExitCard
+      kicker={t.browser.handoffKicker}
+      icon="user"
+      title={reason}
+      status={status}
+      preview={gone && outcome === null ? t.browser.handoffGone : t.browser.handoffWhere}
+      {...(waiting
+        ? {
+            actions: (
+              <>
+                <PanelButton onClick={open}>
+                  <Icon name="arrow-up-right" size={13} /> {t.browser.handoffOpen}
+                </PanelButton>
+                <PanelButton onClick={() => void api.browser.resolveHandoff(props.toolCallId, "done")}>
+                  <Icon name="check" size={13} /> {t.browser.handoffDone}
+                </PanelButton>
+                <PanelButton onClick={() => void api.browser.resolveHandoff(props.toolCallId, "cancelled")}>
+                  {t.common.cancel}
+                </PanelButton>
+              </>
+            ),
+          }
+        : {})}
+    />
   );
 }
 

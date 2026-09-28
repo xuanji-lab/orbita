@@ -1,9 +1,12 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
   decidePermission,
+  isBrowserReadTool,
   isChannelTool,
+  USER_ACTION_TOOL,
   isReadOnlyTool,
   PERMISSION_MODES,
   READ_ONLY_TOOLS,
@@ -95,5 +98,35 @@ describe("isReadOnlyTool", () => {
     assert.equal(isReadOnlyTool("bash"), false);
     // 名字里带 read 但不是只读工具，不能被误判
     assert.equal(isReadOnlyTool("read_and_write"), false);
+  });
+});
+
+describe("浏览器只读四件（BROWSER_READ_TOOLS）", () => {
+  test("三档一律放行，manual 也不问", () => {
+    for (const tool of BROWSER_READ_TOOLS) {
+      for (const mode of PERMISSION_MODES) {
+        assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode} ${tool}`);
+      }
+    }
+  });
+  test("不混进 READ_ONLY_TOOLS；名单外的 browser_* 不沾光", () => {
+    for (const tool of BROWSER_READ_TOOLS) assert.equal(isReadOnlyTool(tool), false, tool);
+    assert.equal(isBrowserReadTool("browser_click"), false);
+  });
+  test("点击 / 输入 / 按键照写操作过闸：plan 拒、manual 问、skip 放；滚动只是往下读，免审批", () => {
+    for (const tool of ["browser_click", "browser_type", "browser_press"]) {
+      assert.equal(decidePermission("plan", tool).behavior, "deny", tool);
+      assert.equal(decidePermission("manual", tool).behavior, "ask", tool);
+      assert.equal(decidePermission("skip", tool).behavior, "allow", tool);
+    }
+    assert.equal(isBrowserReadTool("browser_scroll"), true);
+  });
+});
+
+describe("交接（USER_ACTION_TOOL）", () => {
+  test("三档一律放行：它本身就是在问用户", () => {
+    for (const mode of PERMISSION_MODES) {
+      assert.deepEqual(decidePermission(mode, USER_ACTION_TOOL), { behavior: "allow" }, mode);
+    }
   });
 });
