@@ -244,8 +244,6 @@ export interface ImportSummary {
   bytes: number;
   /** 去向为新建的组里有勾选的，就要建一个工作区 */
   newWorkspaces: number;
-  /** 勾选的会话里原模型没配、会用默认模型打开的条数，与这些原模型 id（去重） */
-  fallback: { count: number; models: string[]; fallbackModel: string | null };
 }
 
 export function summarize(
@@ -258,20 +256,12 @@ export function summarize(
   let subSessions = 0;
   let bytes = 0;
   let newWorkspaces = 0;
-  const models = new Set<string>();
-  let fallbackCount = 0;
-  let fallbackModel: string | null = null;
   const count = (row: SessionRow): boolean => {
     if (!selected.has(row.item.sourceFile)) return false;
     if (row.item.change === "updated") updates += 1;
     else sessions += 1;
     subSessions += row.subSessions;
     bytes += row.bytes;
-    if (!row.item.modelMatched) {
-      fallbackCount += 1;
-      fallbackModel = row.item.modelId;
-      if (row.item.importedModel !== null) models.add(row.item.importedModel);
-    }
     return true;
   };
   for (const row of grouped.changed) count(row);
@@ -288,7 +278,6 @@ export function summarize(
     subSessions,
     bytes,
     newWorkspaces,
-    fallback: { count: fallbackCount, models: [...models], fallbackModel },
   };
 }
 

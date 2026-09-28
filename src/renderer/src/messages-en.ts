@@ -305,10 +305,10 @@ export const en = {
     compactLeft: (percent: number) => `${percent}% left`,
     compactHistory: "history",
     compactSummary: "folds into a summary",
-    titleModel: "Task title model",
-    titleModelInfo:
-      "Names a task from its first message · one small call, a fast model does it well · applies to tasks named from now on",
-    titleModelTip: "Titles use the model the task is running",
+    choreModel: "Chore model",
+    choreModelInfo:
+      "Small housekeeping calls — naming tasks, closing scans, filtering throwaway imports · a fast model is enough · more chores will move here over time",
+    choreModelTip: "Chores use the model the task is running",
     sameAsSession: "Same as session",
     sameAsSessionHint: "Use whichever model the task is running",
     subSessionModel: "Sub-session model",
@@ -509,7 +509,6 @@ export const en = {
       cli: "CLI",
       folder: "Folder used by several agents",
     },
-    parenthesized: (text: string) => ` (${text})`,
     // 计数：数量为 0 的调用方已经滤掉
     sessions: (n: number) => plural(n, "session"),
     skills: (n: number) => plural(n, "skill"),
@@ -586,10 +585,7 @@ export const en = {
       `Also continued in orbita · the ${source} side comes in as a separate copy next to it · not ticked by default`,
     deletedBadge: "Deleted here",
     deletedTip: "You deleted it in orbita · not ticked by default",
-    modelContinues: "Continues on this model",
-    originalModel: "The original model",
-    modelFallbackTip: (original: string, modelId: string) =>
-      `${original} isn't set up here · opens on ${modelId} and keeps a record of the original`,
+    modelRecordedTip: "Imported sessions carry no model — pick one when you open them · the original stays recorded",
     // 招呼检查
     greetingTitle: "Leave out sessions that only say hi or test",
     greetingAsking: (model: string, sessions: string) => `Asking ${model} about ${sessions}…`,
@@ -597,21 +593,17 @@ export const en = {
     greetingResult: (checked: number, asked: number, model: string, leftOut: number) =>
       `${checked} checked · ${asked} read by ${model} · ${leftOut} left out`,
     greetingFailed: "The check failed:",
-    greetingNeedsModel: "Needs a model — set up a provider first",
+    greetingNeedsProvider: "Needs a provider — set one up first",
+    greetingPickChore: "Pick a chore model in General settings first",
+    greetingOpenSettings: "Open General",
     greetingNothing: "No session has just one message from you, so there's nothing to check",
-    greetingUsesSubSession: (sessions: string, modelId: string) =>
-      `Looks at the ${sessions} where you sent one message · uses ${modelId} (your sub-session model) and your quota`,
-    greetingUsesDefault: (sessions: string, modelId: string) =>
-      `Looks at the ${sessions} where you sent one message · uses ${modelId} (your default model — no sub-session model is set) and your quota`,
+    greetingUsesChore: (sessions: string, modelId: string) =>
+      `Looks at the ${sessions} where you sent one message · uses ${modelId} (your chore model) and your quota`,
     // 事实条：数字常驻在前，label 跟在后面
     factHidden: "hidden",
     factHiddenTip: "Hidden by the filters · only listed sessions are imported",
     factGreeting: "only said hi",
     factGreetingTip: 'Only a greeting or a test like "hi" or "test", never continued · left out of this import',
-    factFallback: (model: string) => `open on ${model}`,
-    defaultModel: "the default model",
-    factFallbackTip: (count: number, named: string, model: string) =>
-      `${count} of the ticked sessions ran models you haven't set up here${named} · they open on ${model} and keep a record of the original`,
     factOrphaned: "listed on their own",
     factOrphanedTip: "Sub-sessions whose parent can't be imported · they come in as sessions of their own",
     factAlready: "already imported",
@@ -934,6 +926,7 @@ export const en = {
   /** 会话引擎（useChatSession）报给界面的错误与收尾结果 */
   session: {
     noProvider: "Add a provider with at least one model first",
+    pickModelFirst: "Pick a model first.",
     noWorkspaceFolder: "Choose a workspace folder first",
     noRunningToCompact: "No running task to compact",
     scanTimeout: "The leftover scan didn't finish in time — marked done without a checklist.",

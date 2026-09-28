@@ -606,10 +606,6 @@
   cursor: help;
 }
 
-.mg-model-was {
-  color: var(--color-text-tertiary);
-}
-
 .mg-more {
   padding: 4px 0 6px 34px;
   border-top: 1px solid var(--color-border-subtle);

@@ -35,12 +35,9 @@ function item(overrides: Partial<ImportPlanItem>): ImportPlanItem {
     title: "session",
     workspaceId: null,
     cwd: "/tmp",
-    providerId: "p",
-    modelId: "glm-5.3",
     importedModel: "glm-5.3",
     sessionId: "o",
     parentId: null,
-    modelMatched: true,
     archived: false,
     pinned: false,
     starred: false,
@@ -63,13 +60,12 @@ function report(overrides: Partial<ImportScanReport>): ImportScanReport {
     skipped: [],
     withoutPiSession: 0,
     totalBytes: 0,
-    modelFallbackCount: 0,
     subSessionCount: 0,
     orphanedSubSessions: 0,
     lastImportAt: null,
     skills: [],
     mcp: [],
-    greetingCheck: { candidates: 0, model: null },
+    greetingCheck: { candidates: 0, model: null, unavailable: null },
     ...overrides,
   };
 }
@@ -83,7 +79,6 @@ function summary(overrides: Partial<ImportSummary>): ImportSummary {
     subSessions: 0,
     bytes: 0,
     newWorkspaces: 0,
-    fallback: { count: 0, models: [], fallbackModel: null },
     ...overrides,
   };
 }
@@ -183,13 +178,10 @@ describe("migration-page · Sessions", () => {
     assert.equal(changeBadge(item({ change: "new" }), en), null);
   });
 
-  test("模型悬停：配了的续用；没配的写原模型与兜底模型", () => {
-    assert.equal(modelTip(item({}), en), "Continues on this model");
-    assert.equal(
-      modelTip(item({ modelMatched: false, importedModel: "k3", modelId: "glm-5.3" }), en),
-      "k3 isn't set up here · opens on glm-5.3 and keeps a record of the original",
-    );
-    assert.match(modelTip(item({ modelMatched: false, importedModel: null }), en), /^The original model/);
+  test("模型悬停：导入的会话不绑定模型，原模型只是记录", () => {
+    assert.equal(modelTip(en), en.migration.modelRecordedTip);
+    assert.equal(modelTip(zh), zh.migration.modelRecordedTip);
+    assert.match(modelTip(en), /pick one when you open them/);
   });
 
   test("混合来源才在单条行上写来源名", () => {
@@ -198,7 +190,7 @@ describe("migration-page · Sessions", () => {
   });
 
   test("事实条：数是 0 的不出现；已导入与导不了分开数", () => {
-    assert.deepEqual(sessionFacts(report({}), EMPTY_GROUPED, null, NOW, en), []);
+    assert.deepEqual(sessionFacts(report({}), EMPTY_GROUPED, NOW, en), []);
     const facts = sessionFacts(
       report({
         skipped: [
@@ -211,7 +203,6 @@ describe("migration-page · Sessions", () => {
         lastImportAt: new Date(2026, 8, 25, 0, 9).getTime(),
       }),
       { ...EMPTY_GROUPED, hidden: 9, leftOut: 3 },
-      { count: 5, models: ["a", "b", "c", "d"], fallbackModel: "glm-5.3" },
       NOW, en,
     );
     assert.deepEqual(
@@ -219,14 +210,12 @@ describe("migration-page · Sessions", () => {
       [
         ["hidden", 9, "hidden"],
         ["greeting", 3, "only said hi"],
-        ["fallback", 5, "open on glm-5.3"],
         ["orphaned", 1, "listed on their own"],
         ["already", 2, "already imported"],
         ["cannot", 5, "can't import"],
       ],
     );
-    assert.match(facts[2]!.tip, /\(a, b, c, …\)/);
-    assert.match(facts[4]!.tip, /last import 09-25 00:09$/);
+    assert.match(facts[3]!.tip, /last import 09-25 00:09$/);
   });
 });
 
@@ -317,7 +306,7 @@ describe("migration-page · 中文（小学作业）", () => {
   });
 
   test("事实条：数字在前、量词跟着 label", () => {
-    const facts = sessionFacts(report({ orphanedSubSessions: 2 }), EMPTY_GROUPED, null, NOW, zh);
+    const facts = sessionFacts(report({ orphanedSubSessions: 2 }), EMPTY_GROUPED, NOW, zh);
     assert.deepEqual(
       facts.map((fact) => `${fact.count} ${fact.label}`),
       ["2 个单独列出"],

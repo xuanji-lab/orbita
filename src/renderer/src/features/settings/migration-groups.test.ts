@@ -34,12 +34,9 @@ function item(overrides: Partial<ImportPlanItem>): ImportPlanItem {
     title: `session ${seq}`,
     workspaceId: null,
     cwd: "/tmp",
-    providerId: "p",
-    modelId: "glm-5.3",
     importedModel: "glm-5.3",
     sessionId: `o-${seq}`,
     parentId: null,
-    modelMatched: true,
     archived: false,
     pinned: false,
     starred: false,
@@ -58,13 +55,12 @@ function report(plan: ImportPlanItem[], newWorkspaceIds: string[] = []): ImportS
     skipped: [],
     withoutPiSession: 0,
     totalBytes: 0,
-    modelFallbackCount: 0,
     subSessionCount: 0,
     orphanedSubSessions: 0,
     lastImportAt: null,
     skills: [],
     mcp: [],
-    greetingCheck: { candidates: 0, model: null },
+    greetingCheck: { candidates: 0, model: null, unavailable: null },
   };
 }
 
@@ -148,8 +144,8 @@ describe("选择与汇总", () => {
     assert.deepEqual(destinationChoices(all, moved), [{ folder: "/repo/a", destination: { kind: "tasks" } }]);
   });
 
-  test("汇总：子会话、字节、新建工作区数随去向变；模型兜底按勾选的算", () => {
-    const parent = item({ folder: "/repo/a", workspaceId: "w-new", modelMatched: false, importedModel: "claude-opus-5-5" });
+  test("汇总：子会话、字节、新建工作区数随去向变", () => {
+    const parent = item({ folder: "/repo/a", workspaceId: "w-new" });
     const kid = item({ folder: "/repo/a", parentId: parent.sessionId, bytes: 40 });
     const other = item({ folder: null });
     const grouped = groupSessions(report([parent, kid, other], ["w-new"]), DEFAULT_FILTERS, NOW);
@@ -159,7 +155,6 @@ describe("选择与汇总", () => {
     assert.equal(summary.subSessions, 1);
     assert.equal(summary.bytes, 140);
     assert.equal(summary.newWorkspaces, 1);
-    assert.deepEqual(summary.fallback, { count: 1, models: ["claude-opus-5-5"], fallbackModel: "glm-5.3" });
     assert.equal(summarize(grouped, selected, new Map([["/repo/a", { kind: "tasks" as const }]])).newWorkspaces, 0);
   });
 });

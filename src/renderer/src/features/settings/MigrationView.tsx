@@ -4,6 +4,7 @@ import type {
   ImportDestination,
   ImportDetectResult,
   ImportGreetingCheckPlan,
+  ImportGreetingUnavailable,
   ImportPlanItem,
   ImportRunReport,
   ImportScanReport,
@@ -13,6 +14,7 @@ import type {
   ImportSourceId,
   ImportSourceProbe,
 } from "@shared/import";
+import { IMPORT_GREETING_UNAVAILABLE_CODE } from "@shared/import";
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
@@ -135,6 +137,8 @@ export function MigrationView(props: {
   workspaces: readonly Workspace[];
   onImported: () => void;
   onOpenProviders: () => void;
+  /** 招呼检查没选家务活模型时跳到通用设置（那里选） */
+  onOpenGeneral: () => void;
 }) {
   const t = useT();
   const [detect, setDetect] = useState<DetectState>({ kind: "loading" });
@@ -253,7 +257,11 @@ export function MigrationView(props: {
         ),
       )
       .catch((cause: unknown) =>
-        setGreetings((current) => (current.kind === "checking" ? { kind: "error", message: errorText(cause) } : current)),
+        setGreetings((current) => {
+          if (current.kind !== "checking") return current;
+          const message = errorText(cause);
+          return { kind: "error", reason: greetingUnavailableOf(message), message };
+        }),
       );
   };
 
@@ -413,6 +421,8 @@ export function MigrationView(props: {
                       plan={scan.report.greetingCheck}
                       state={greetings}
                       disabled={scan.kind !== "ready" || run.kind === "running"}
+                      onOpenProviders={props.onOpenProviders}
+                      onOpenGeneral={props.onOpenGeneral}
                       onToggle={setGreetingCheck}
                     />
                     <div className="mg-colhead mg-grid-sessions" aria-hidden="true">
@@ -469,11 +479,9 @@ export function MigrationView(props: {
                   report={scan.report}
                   grouped={grouped}
                   now={scan.scannedAt}
-                  fallback={summary?.fallback ?? null}
                   leftOut={
                     greetings.kind === "on" ? scan.report.plan.filter((item) => greetings.leaveOut.has(item.sourceFile)) : []
                   }
-                  onOpenProviders={props.onOpenProviders}
                   onKeep={(sourceFile) => {
                     touch();
                     setGreetings((current) => {
@@ -1094,16 +1102,8 @@ function SessionLine(props: {
             {subSessions}
           </Tipped>
         )}
-        <Tipped className="mg-model" tip={modelTip(item, t)}>
-          {item.modelMatched ? (
-            item.modelId
-          ) : (
-            <>
-              <span className="mg-model-was">{item.importedModel ?? t.migration.unknownModel}</span>
-              <Icon name="arrow-right" size={10} />
-              {item.modelId}
-            </>
-          )}
+        <Tipped className="mg-model" tip={modelTip(t)}>
+          {item.importedModel ?? t.migration.unknownModel}
         </Tipped>
       </span>
     </label>
@@ -1115,16 +1115,29 @@ type GreetingState =
   | { kind: "off" }
   | { kind: "checking" }
   | { kind: "on"; leaveOut: ReadonlySet<string>; checked: number; asked: number; model: string }
-  | { kind: "error"; message: string };
+  /** reason 非空 = 主进程抛的稳定错误码（模型不可用），按码翻文案 */
+  | { kind: "error"; reason: ImportGreetingUnavailable | null; message: string };
+
+/** 主进程错误文本里的稳定码 → 不可用原因；不认识的码返回 null（照原文显示） */
+function greetingUnavailableOf(text: string): ImportGreetingUnavailable | null {
+  if (!text.startsWith(IMPORT_GREETING_UNAVAILABLE_CODE)) return null;
+  const reason = text.slice(IMPORT_GREETING_UNAVAILABLE_CODE.length);
+  return reason === "no-provider" || reason === "no-chore-model" ? reason : null;
+}
 
 /**
- * 列表上方一个勾选框：「不导只随手发了一句 hi / test 的会话」。默认不勾——它要调模型，副行事先写明
- * 用哪个模型（子会话模型，没设就是默认模型）、要问几条，花的是用户的额度（wafo 2026-09-25）。
+ * 列表上方一个勾选框：「不导只随手发了一句 hi / test 的会话」。默认不勾——它要调模型，
+ * 副行事先写明用哪个模型（家务活模型）、要查几条，花的是用户的额度（wafo 2026-09-25）。
+ * 模型不可用时置灰，状态行说原因并给出去路：没有 provider → 跳 Providers；
+ * 有 provider 但没选家务活模型 → 跳通用设置（2026-09-28 裁决：检查只用家务活模型，
+ * 不再占用子会话模型或导入兑底模型）。
  */
 function GreetingCheck(props: {
   plan: ImportGreetingCheckPlan;
   state: GreetingState;
   disabled: boolean;
+  onOpenProviders: () => void;
+  onOpenGeneral: () => void;
   onToggle: (on: boolean) => void;
 }) {
   const t = useT();
@@ -1132,6 +1145,28 @@ function GreetingCheck(props: {
   const model = plan.model;
   const unavailable = model === null || plan.candidates === 0;
   const sessions = t.migration.sessions(plan.candidates);
+  const jump = (open: () => void) => (event: React.MouseEvent): void => {
+    // 在 <label> 里点按钮不能触发勾选（label 的默认行为），也不冒泡
+    event.preventDefault();
+    event.stopPropagation();
+    open();
+  };
+  const unavailableReason: ImportGreetingUnavailable | null =
+    state.kind === "error" && state.reason !== null
+      ? state.reason
+      : model === null
+        ? plan.unavailable
+        : null;
+  const action =
+    unavailableReason === "no-provider" ? (
+      <button type="button" className="mg-link" onClick={jump(props.onOpenProviders)}>
+        {t.migration.setUpProviders}
+      </button>
+    ) : unavailableReason === "no-chore-model" ? (
+      <button type="button" className="mg-link" onClick={jump(props.onOpenGeneral)}>
+        {t.migration.greetingOpenSettings}
+      </button>
+    ) : null;
   let sub: React.ReactNode;
   if (state.kind === "checking") {
     sub = (
@@ -1142,6 +1177,13 @@ function GreetingCheck(props: {
     );
   } else if (state.kind === "on") {
     sub = t.migration.greetingResult(state.checked, state.asked, state.model, state.leaveOut.size);
+  } else if (state.kind === "error" && state.reason !== null) {
+    // 主进程抛的稳定错误码（模型在扫描与点击之间被删）：按码翻文案，不念英文原文
+    sub = (
+      <span className="mg-error">
+        {state.reason === "no-provider" ? t.migration.greetingNeedsProvider : t.migration.greetingPickChore}
+      </span>
+    );
   } else if (state.kind === "error") {
     sub = (
       <span className="mg-error">
@@ -1149,14 +1191,11 @@ function GreetingCheck(props: {
       </span>
     );
   } else if (model === null) {
-    sub = t.migration.greetingNeedsModel;
+    sub = plan.unavailable === "no-provider" ? t.migration.greetingNeedsProvider : t.migration.greetingPickChore;
   } else if (plan.candidates === 0) {
     sub = t.migration.greetingNothing;
   } else {
-    sub =
-      model.from === "sub-session"
-        ? t.migration.greetingUsesSubSession(sessions, model.modelId)
-        : t.migration.greetingUsesDefault(sessions, model.modelId);
+    sub = t.migration.greetingUsesChore(sessions, model.modelId);
   }
   return (
     <label className="mg-greet" data-disabled={unavailable || undefined}>
@@ -1168,7 +1207,10 @@ function GreetingCheck(props: {
       />
       <span className="mg-greet-copy">
         <span className="mg-greet-title">{t.migration.greetingTitle}</span>
-        <span className="mg-greet-sub">{sub}</span>
+        <span className="mg-greet-sub">
+          {sub}
+          {action}
+        </span>
       </span>
     </label>
   );
@@ -1177,26 +1219,23 @@ function GreetingCheck(props: {
 const FACT_ICON: Record<SessionFactKind, IconName> = {
   hidden: "eye-off",
   greeting: "message-square-dashed",
-  fallback: "cpu",
   orphaned: "git-fork",
   already: "circle-check",
   cannot: "circle-off",
 };
 
-/** 列表下面一行图标事实（被筛掉的、换模型打开的、已导入的、导不了的），整句进悬停。 */
+/** 列表下面一行图标事实（被筛掉的、已导入的、导不了的），整句进悬停。 */
 function SessionFacts(props: {
   report: ImportScanReport;
   grouped: GroupedSessions;
   now: number;
-  fallback: { count: number; models: string[]; fallbackModel: string | null } | null;
   /** 「只随手发了一句」检查判中、不列的会话（Details 里逐条列出，可以单条放回） */
   leftOut: readonly ImportPlanItem[];
-  onOpenProviders: () => void;
   onKeep: (sourceFile: string) => void;
 }) {
   const t = useT();
   const [details, setDetails] = useState<"cannot" | "greeting" | null>(null);
-  const facts = sessionFacts(props.report, props.grouped, props.fallback, props.now, t);
+  const facts = sessionFacts(props.report, props.grouped, props.now, t);
   const unconvertible = unconvertibleSkips(props.report);
   const toggle = (which: "cannot" | "greeting"): void => setDetails((open) => (open === which ? null : which));
   if (facts.length === 0) return null;
@@ -1207,11 +1246,6 @@ function SessionFacts(props: {
           <Fact key={fact.kind} icon={FACT_ICON[fact.kind]} tip={fact.tip}>
             <b>{fact.count}</b>
             {fact.label}
-            {fact.kind === "fallback" && (
-              <button type="button" className="mg-link" onClick={props.onOpenProviders}>
-                {t.migration.setUpProviders}
-              </button>
-            )}
             {fact.kind === "cannot" && unconvertible.length > 0 && (
               <button type="button" className="mg-link" aria-expanded={details === "cannot"} onClick={() => toggle("cannot")}>
                 {details === "cannot" ? t.migration.hide : t.migration.details}

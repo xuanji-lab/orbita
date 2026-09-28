@@ -166,10 +166,9 @@ export function changeBadge(item: ImportPlanItem, t: Messages): ChangeBadge | nu
   return null;
 }
 
-/** 行尾模型格的悬停：原模型没配时说清会用哪个打开、原模型记在哪。 */
-export function modelTip(item: ImportPlanItem, t: Messages): string {
-  if (item.modelMatched) return t.migration.modelContinues;
-  return t.migration.modelFallbackTip(item.importedModel ?? t.migration.originalModel, item.modelId);
+/** 行尾模型格的悬停：导入的会话不绑定模型，原模型只是记录。 */
+export function modelTip(t: Messages): string {
+  return t.migration.modelRecordedTip;
 }
 
 /** 一块里有不止一个来源时，单条会话行才写来源名（只有一个来源时组名旁已经写了）。 */
@@ -182,7 +181,7 @@ export function unconvertibleSkips(report: ImportScanReport): ImportSkipItem[] {
   return report.skipped.filter((skip) => skip.reason !== "already-imported");
 }
 
-export type SessionFactKind = "hidden" | "greeting" | "fallback" | "orphaned" | "already" | "cannot";
+export type SessionFactKind = "hidden" | "greeting" | "orphaned" | "already" | "cannot";
 
 /** 列表下面那一行图标事实：一个数字 + 一个短语常驻，整句进悬停。 */
 export interface SessionFact {
@@ -196,13 +195,12 @@ export interface SessionFact {
 const FALLBACK_MODELS_SHOWN = 3;
 
 /**
- * 事实条。顺序即显示顺序：先是影响这次导入的（被筛掉的、要换模型打开的、单列的子会话），
+ * 事实条。顺序即显示顺序：先是影响这次导入的（被筛掉的、单列的子会话），
  * 后是列表之外的（已导入的、导不了的）。数是 0 的不出现。
  */
 export function sessionFacts(
   report: ImportScanReport,
   grouped: GroupedSessions,
-  fallback: ImportSummary["fallback"] | null,
   now: number,
   t: Messages,
 ): SessionFact[] {
@@ -221,18 +219,6 @@ export function sessionFacts(
       count: grouped.leftOut,
       label: t.migration.factGreeting,
       tip: t.migration.factGreetingTip,
-    });
-  }
-  if (fallback !== null && fallback.count > 0) {
-    const models = fallback.models.slice(0, FALLBACK_MODELS_SHOWN);
-    const shown = fallback.models.length > models.length ? [...models, "…"] : models;
-    const named = models.length === 0 ? "" : t.migration.parenthesized(shown.join(t.common.listSeparator));
-    const target = fallback.fallbackModel ?? t.migration.defaultModel;
-    facts.push({
-      kind: "fallback",
-      count: fallback.count,
-      label: t.migration.factFallback(target),
-      tip: t.migration.factFallbackTip(fallback.count, named, target),
     });
   }
   if (report.orphanedSubSessions > 0) {

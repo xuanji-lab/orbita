@@ -101,6 +101,7 @@ export function SettingsView(props: {
           workspaces={props.workspaces}
           onImported={props.onImported}
           onOpenProviders={() => props.onTab("providers")}
+          onOpenGeneral={() => props.onTab("general")}
         />
       ) : props.tab === "browser" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
@@ -119,7 +120,7 @@ export function SettingsView(props: {
 }
 
 /**
- * 「退回继承」菜单的公共形状：Task title model / Sub-session model 的模型与思考档
+ * 「退回继承」菜单的公共形状：Chore model / Sub-session model 的模型与思考档
  * 三处菜单都是「第一项退回上游（session 或 parent）、其后是具体可选值」——集合与文案
  * 各不相同，但「fallback 项 + 选中态 + null 清除」这段接线相同，抽出来避免三处重复。
  */
@@ -154,26 +155,26 @@ function General(props: {
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
 
-  const titleModel = props.settings.titleModel;
-  const titleModelItems: MenuItem[] = withInheritedFirst(
+  const choreModel = props.settings.choreModel;
+  const choreModelItems: MenuItem[] = withInheritedFirst(
     {
       id: "same-as-session",
       label: t.settings.sameAsSession,
       hint: t.settings.sameAsSessionHint,
-      inherited: titleModel === undefined,
+      inherited: choreModel === undefined,
       // null 而不是 undefined：补丁里的 undefined 是「这个键没改」，选不回默认
-      onSelect: () => props.onChange({ titleModel: null }),
+      onSelect: () => props.onChange({ choreModel: null }),
     },
     modelMenuItems({
       t,
       providers: usable,
       catalog,
-      selected: titleModel ?? null,
-      onSelect: (providerId, modelId) => props.onChange({ titleModel: { providerId, modelId } }),
+      selected: choreModel ?? null,
+      onSelect: (providerId, modelId) => props.onChange({ choreModel: { providerId, modelId } }),
     }),
   );
 
-  // 子会话的默认模型：同 titleModel 的「继承 + null 清除」语义，退回点是父会话而不是命名会话。
+  // 子会话的默认模型：同 choreModel 的「继承 + null 清除」语义，退回点是父会话而不是家务活模型。
   // 换模型 = 思考档回到新模型的默认档（shared 的 settings.ts 契约：subSessionThinking
   // 绑定 subSessionModel，脱离模型单独存一档是假选项），所以两个字段一起改
   const subSessionModel = props.settings.subSessionModel;
@@ -295,25 +296,25 @@ function General(props: {
           {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
         </SettingRow>
         <SettingRow
-          name={t.settings.titleModel}
-          info={t.settings.titleModelInfo}
+          name={t.settings.choreModel}
+          info={t.settings.choreModelInfo}
         >
           {/* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */}
           <Menu
-            items={titleModelItems}
+            items={choreModelItems}
             searchable
             trigger={({ open, toggle }) => (
               <Chip
                 active={open}
                 title={
-                  titleModel === undefined
-                    ? t.settings.titleModelTip
-                    : `${titleModel.providerId} · ${titleModel.modelId}`
+                  choreModel === undefined
+                    ? t.settings.choreModelTip
+                    : `${choreModel.providerId} · ${choreModel.modelId}`
                 }
                 onClick={toggle}
                 chevron
               >
-                {titleModel?.modelId ?? t.settings.sameAsSession}
+                {choreModel?.modelId ?? t.settings.sameAsSession}
               </Chip>
             )}
           />
