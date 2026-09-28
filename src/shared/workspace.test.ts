@@ -3,7 +3,6 @@ import { describe, it } from "node:test";
 import {
   deriveWorkspaceName,
   looksLikePathDerivedName,
-  looksLikeWindowsPath,
   normalizeWorkspaceName,
   parseWorkspace,
   WORKSPACE_NAME_MAX,
@@ -67,26 +66,6 @@ describe("deriveWorkspaceName", () => {
       ["file:///home/user/proj", "proj"], // file URI（POSIX）
     ];
     for (const [path, want] of cases) strictEqual(deriveWorkspaceName(path), want, path);
-  });
-});
-
-describe("looksLikeWindowsPath", () => {
-  it("盘符后不跟分隔符也算——`C:proj` 是盘符相对路径", () => {
-    strictEqual(looksLikeWindowsPath("C:proj"), true);
-    strictEqual(looksLikeWindowsPath("c:/Users/x"), true);
-  });
-
-  it("反斜杠起头：UNC、设备命名空间、当前盘根相对", () => {
-    strictEqual(looksLikeWindowsPath("\\\\server\\share"), true);
-    strictEqual(looksLikeWindowsPath("\\\\?\\C:\\x"), true);
-    strictEqual(looksLikeWindowsPath("\\Users\\dama\\proj"), true);
-  });
-
-  // 这一条是 macOS 上的真事：`my\folder` 是一个文件夹名，不是一个目录层级
-  it("POSIX 形不认——`\\` 只在这时候才当分隔符", () => {
-    strictEqual(looksLikeWindowsPath("/Users/x/my\\folder"), false);
-    strictEqual(looksLikeWindowsPath("/home/u/proj"), false);
-    strictEqual(looksLikeWindowsPath("my\\folder"), false);
   });
 });
 

@@ -6,6 +6,8 @@
  * 的隔离执行副本（那个将来叫 worktree）——见 `docs/ubiquitous-language.md`。
  */
 
+import { looksLikeWindowsPath, pathTail } from "./path.ts";
+
 /**
  * **历史切档，不再是上限**（2026-09-28 裁决：截断是笨办法）。老版本的输入端用它把名字
  * 截到 40 字，落盘的前 40 字前缀是老数据的一种形态——`looksLikePathDerivedName` 第 2 类
@@ -47,31 +49,16 @@ export interface Workspace {
 }
 
 /**
- * 盘符、UNC / 设备命名空间、当前盘根相对起头：Windows 形路径。
- *
- * 分隔符按**路径自己的形**认，不按宿主 OS——POSIX 路径里 `\` 是文件夹名里的合法
- * 字符（Mac 的 `/Users/x/my\folder` 尾段就是 `my\folder`），只有 Windows 形才把
- * `\` 当分隔符。按形不按 OS 的另一个好处：从 Windows 机器导入 / 迁移来的路径，
- * 在 Mac 上也取对尾段。
- *
- * 盘符后面**不要求**跟分隔符：`C:proj` 也是 Windows 形（盘符相对）。代价是以 `\`
- * 起头的 POSIX **相对**路径（`\weird/proj`）会被当成 Windows 形——调用方喂进来的
- * 都是绝对路径，误判朝「多切一个分隔符」那一侧，是想要的那一边。
- */
-export function looksLikeWindowsPath(path: string): boolean {
-  return /^[A-Za-z]:/.test(path) || path.startsWith("\\");
-}
-
-/**
  * 没起名字时的默认名：路径的最后一段。服务的是**路径**：cwd 的目录尾段（scope 芯片）、
  * add / v1 迁移 / 导入铸名，以及 v2 → v3 迁移把老脏名治回来（store 的 healNames）。
  * 不服务名字本身——名字是自由显示文本，显示层原样显示不过这个函数。
+ * 切分隔符的规则（按路径形认）在 shared/path.ts——文件面板、预览、迁移页的末段提取
+ * 与它是同一套，别再各写一份。
  */
 export function deriveWorkspaceName(path: string): string {
-  const parts = (looksLikeWindowsPath(path) ? path.split(/[\\/]/) : path.split("/")).filter(
-    (part) => part !== "",
-  );
-  return parts[parts.length - 1] ?? path;
+  const last = pathTail(path);
+  // 末段是空串（`/` 这种全是分隔符的路径）就退回原路径，不给一个空名字
+  return last === "" ? path : last;
 }
 
 /**

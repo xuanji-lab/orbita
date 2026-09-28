@@ -13,10 +13,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
+import { looksLikeWindowsPath } from "../../shared/path.ts";
 import {
   deriveWorkspaceName,
   looksLikePathDerivedName,
-  looksLikeWindowsPath,
   normalizeWorkspaceName,
   parseWorkspace,
   type Workspace,
