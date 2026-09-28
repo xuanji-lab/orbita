@@ -36,8 +36,11 @@ const FIXTURE = [
 ].join("\n");
 
 test("解析：meta / 模型 / 消息与 thinking / 工具项不导 / 注入剥掉", () => {
-  const rollout = parseCodexRollout(FIXTURE);
+  const rollout = parseCodexRollout(FIXTURE, "unassigned");
   assert.equal(rollout.meta.id, "6f1c2b70");
+  // provider 由调用方给（导入落占位），不再写死
+  const reply = rollout.messages.find((message) => message.role === "assistant");
+  assert.equal(reply?.role === "assistant" ? reply.provider : null, "unassigned");
   assert.equal(rollout.meta.cwd, "/Users/fjm/paper");
   assert.equal(rollout.model, "gpt-5-codex");
   assert.equal(rollout.hasAssistant, true);
@@ -67,7 +70,7 @@ test("解析：纯注入的 user 是 display null；没有 assistant = 不可转
     "{ 这是一行坏 JSON",
     line("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "真实问题" }] }),
   ].join("\n");
-  const rollout = parseCodexRollout(raw);
+  const rollout = parseCodexRollout(raw, "p");
   assert.deepEqual(rollout.userDisplays, [null, "真实问题"]);
   assert.equal(rollout.hasAssistant, false);
   assert.equal(rollout.messages.length, 2, "坏行跳过，前后都保留");

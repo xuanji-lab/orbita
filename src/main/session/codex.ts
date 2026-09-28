@@ -28,7 +28,8 @@
  *  `<ENVIRONMENT_CONTEXT>` 整块；剥完没有自己的话 = 用户没写（display null，
  *  进 pi 不显示——opencode 的 synthetic 同一条纪律）。
  * - session_meta 的 instructions（Codex 的系统提示词）不导。
- * - 模型：最后一个 turn_context 的 model（没有 = null，走映射兜底）。
+ * - 模型：最后一个 turn_context 的 model（没有 = null）。只原样记进 importedModel，不映射到渠道
+ *   （导入与模型解耦，#112）。
  */
 import type { AssistantMessage, Message, TextContent, ThinkingContent } from "@earendil-works/pi-ai";
 
@@ -75,7 +76,7 @@ export function codexUserText(text: string): string | null {
 }
 
 /** 一份 rollout 文本 → 转换结果。坏行跳过（半截文件照转，前文不丢）；空文件 messages 空。 */
-export function parseCodexRollout(raw: string): CodexRollout {
+export function parseCodexRollout(raw: string, providerId: string): CodexRollout {
   let meta: CodexRollout["meta"] = { id: null, cwd: null, timestamp: 0 };
   let model: string | null = null;
   let lastTimestamp = 0;
@@ -151,7 +152,8 @@ export function parseCodexRollout(raw: string): CodexRollout {
         // rollout 里（计费走 event_msg，首版不解析），零值占位——续聊与 QA 都不吃它
         api: "openai-completions",
         stopReason: "stop",
-        provider: "codex-import",
+        // 导入与模型解耦（#112）：provider 由调用方给（导入落 UNASSIGNED_PROVIDER_ID），同其它转换类来源
+        provider: providerId,
         model: model ?? "codex-unknown",
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
         timestamp: lastTimestamp,

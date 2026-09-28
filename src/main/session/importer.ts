@@ -1972,7 +1972,7 @@ export async function scanCodex(
             skipped.push({ sourceId, title: null, reason: "already-imported" });
             continue;
           }
-          const rollout = parseCodexRollout(raw);
+          const rollout = parseCodexRollout(raw, UNASSIGNED_PROVIDER_ID);
           const title = deriveSessionTitle(rollout.firstPrompt ?? "") || `Codex session ${sourceId.slice(-6)}`;
           if (!rollout.hasAssistant) {
             skipped.push({ sourceId, title, reason: "unsupported-format", detail: "no assistant messages to convert" });
@@ -1981,7 +1981,8 @@ export async function scanCodex(
           const createdAt = rollout.meta.timestamp !== 0 ? rollout.meta.timestamp : rollout.lastTimestamp;
           const place = await sessionFolder(rollout.meta.cwd, paths.home, deps.defaultCwd);
           converted.push({
-            onlyMessage: null, // 候选在 placeConverted 之后由单消息筛出——Codex 的 onlyMessage 由调用处补
+            // 「只随手发了一句」的候选：与其它转换类来源同一个判定（去空白、只有空白的不算一条）
+            onlyMessage: onlyWrittenMessage(rollout.userDisplays),
             source: "codex",
             sourceKind: "codex",
             sourceId,
@@ -1994,9 +1995,6 @@ export async function scanCodex(
             folder: place.folder,
             cwd: place.cwd,
           });
-          // 「只随手发了一句」的候选：全部 userDisplays 里非 null 的只有一条
-          const own = rollout.userDisplays.filter((display): display is string => display !== null);
-          if (own.length === 1) converted[converted.length - 1]!.onlyMessage = own[0]!;
         }
       }
     }
@@ -3079,7 +3077,7 @@ async function runZcodeImport(item: ImportPlanItem, deps: RunImporterDeps): Prom
  */
 async function runCodexImport(item: ImportPlanItem, deps: RunImporterDeps): Promise<ImportedSession> {
   const raw = await readFile(item.sourceFile, "utf8");
-  const rollout = parseCodexRollout(raw);
+  const rollout = parseCodexRollout(raw, UNASSIGNED_PROVIDER_ID);
   return persistConverted(item, deps, rollout.messages, rollout.userDisplays);
 }
 
