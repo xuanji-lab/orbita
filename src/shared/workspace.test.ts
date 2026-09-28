@@ -2,6 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   deriveWorkspaceName,
+  looksLikePathDerivedName,
   normalizeWorkspaceName,
   parseWorkspace,
   WORKSPACE_NAME_MAX,
@@ -82,6 +83,40 @@ describe("normalizeWorkspaceName", () => {
   });
 });
 
+describe("looksLikePathDerivedName", () => {
+  // 早期只切 `/` 的派生在 Windows 落库的整条路径。指纹必须收窄到「跟这条记录自己的 path
+  // 对得上」：用户自己起的名字是自由显示文本，「像路径」不是理由
+  it("整条路径当名字：认出来", () => {
+    const win = "C:\\Users\\dama\\Desktop\\p1\\paper3";
+    strictEqual(looksLikePathDerivedName(win, win), true);
+    strictEqual(
+      looksLikePathDerivedName("/Users/wafo/repo/orbita-lab", "/Users/wafo/repo/orbita-lab"),
+      true,
+    );
+  });
+
+  // 落库前会过 normalize 的 40 上限，>40 字的路径存下来的是它的前 40 字。这是同一病根的
+  // 第二副面孔，而它比「整条路径」更常见（真实路径几乎都过 40 字）——只认第一种就会漏
+  it("被 40 上限切过的路径前缀：也认出来", () => {
+    const win = "C:\\Users\\dama\\Desktop\\my-super-long-project-folder-name-2026";
+    strictEqual(win.length > WORKSPACE_NAME_MAX, true);
+    strictEqual(looksLikePathDerivedName(win.slice(0, WORKSPACE_NAME_MAX), win), true);
+  });
+
+  it("用户自己起的名字一个字不动——含分隔符的、长度刚好 40 的", () => {
+    const path = "/Users/wafo/repo/orbita-lab";
+    strictEqual(looksLikePathDerivedName("PhD/Year1", path), false);
+    strictEqual(looksLikePathDerivedName("x".repeat(WORKSPACE_NAME_MAX), path), false);
+    strictEqual(looksLikePathDerivedName("a\\b", "C:\\Users\\dama\\folder"), false);
+  });
+
+  // 盘符大小写在同一条 Windows 路径上可以两样；POSIX 上大小写是文件名的一部分，折了会误伤
+  it("大小写只在 Windows 形路径上折", () => {
+    strictEqual(looksLikePathDerivedName("c:\\users\\dama\\proj", "C:\\Users\\dama\\proj"), true);
+    strictEqual(looksLikePathDerivedName("/users/wafo/proj", "/Users/wafo/proj"), false);
+  });
+});
+
 describe("parseWorkspace", () => {
   it("完整的一条原样解出来", () => {
     deepStrictEqual(parseWorkspace(valid), valid);
@@ -103,20 +138,11 @@ describe("parseWorkspace", () => {
     strictEqual(parseWorkspace({ ...valid, name: "   " })?.name, "orbita-lab");
   });
 
-  // 早期只切 `/` 的派生在 Windows 落库的整条路径——精确指纹是「名字 == 路径」，
-  // 只治这一类（wafo 裁决）；磁盘不动，下一次整份写回自然落净。不治的话，超长的
-  // 老路径名会在改名回车时被 40 上限切成分尸名落库。治完显示层不再需要任何截尾。
-  it("读时治愈只治「名字 == 路径」；用户起的名字一个字不动", () => {
-    strictEqual(parseWorkspace({ ...valid, name: valid.path })?.name, "orbita-lab");
-    strictEqual(
-      parseWorkspace({
-        ...valid,
-        path: "C:\\Users\\dama\\Desktop\\p1\\paper3",
-        name: "C:\\Users\\dama\\Desktop\\p1\\paper3",
-      })?.name,
-      "paper3",
-    );
-    // 用户自己起的名字是自由显示文本：含 / 的、Mac 的 a\b——原样保留
+  // 解析不改数据：老脏名（名字就是路径）在解析这一层**原样出来**，治它是 store 的
+  // v2 → v3 迁移的事。这一条钉住「解析函数不做隐藏的数据变更」
+  it("名字原样解析，不在这里治老脏名", () => {
+    const win = "C:\\Users\\dama\\Desktop\\p1\\paper3";
+    strictEqual(parseWorkspace({ ...valid, path: win, name: win })?.name, win);
     strictEqual(parseWorkspace({ ...valid, name: "PhD/Year1" })?.name, "PhD/Year1");
     strictEqual(parseWorkspace({ ...valid, name: "a\\b" })?.name, "a\\b");
   });

@@ -18,8 +18,9 @@ export interface Workspace {
   id: string;
   /**
    * 用户起的名字。没起过就是路径的最后一段。**自由显示文本**——含 `/` 也行
-   * （如 `PhD/Year1`），显示层原样显示、不截尾；唯一的脏数据「名字 == 路径」
-   * （早期只切 `/` 的派生在 Windows 落库的整条路径）由 parseWorkspace 读时治愈。
+   * （如 `PhD/Year1`），显示层原样显示、不截尾。早期只切 `/` 的派生在 Windows 上把
+   * 整条路径铸成了名字，这一类由 store 的 v2 → v3 迁移治一次（`looksLikePathDerivedName`
+   * 是它的指纹），**读路径上不再有治愈**——parseWorkspace 只解析，不改数据。
    * create 用名字当目录名，另有更严的守卫（见 store 的 assertLegalName）。
    */
   name: string;
@@ -54,8 +55,10 @@ export function looksLikeWindowsPath(path: string): boolean {
 
 /**
  * 没起名字时的默认名：路径的最后一段。服务的是**路径**：cwd 的目录尾段（scope 芯片）、
- * add / v1 迁移 / 导入铸名、以及 parseWorkspace 对「名字 == 路径」老数据的治愈。
+ * add / v1 迁移 / 导入铸名，以及 v2 → v3 迁移把老脏名治回来（store 的 healNames）。
  * 不服务名字本身——名字是自由显示文本，显示层原样显示不过这个函数。
+ * **不受 40 上限约束**：WORKSPACE_NAME_MAX 约束的是用户输入（normalize），从路径派生
+ * 出来的名字照实取——截一刀只会得到分尸名，而磁盘上的目录名是完整的。
  */
 export function deriveWorkspaceName(path: string): string {
   const parts = (looksLikeWindowsPath(path) ? path.split(/[\\/]/) : path.split("/")).filter(
@@ -72,6 +75,26 @@ export function normalizeWorkspaceName(name: string, path: string): string {
 }
 
 /**
+ * 老数据的精确指纹：这个名字是**机器从路径铸的**，不是用户起的。
+ *
+ * 只给 store 的 v2 → v3 一次性迁移用（`healNames`），**不在读路径上跑**——
+ * 每次读都改一个用户可见字段是隐藏的数据变更，磁盘也永远脏。两类：
+ *   1. 整条路径当名字：`add` / v1 迁移铸的（早期只切 `/` 的派生在 Windows 的产物）
+ *   2. 路径被 WORKSPACE_NAME_MAX 切过：`addImported` / `rename` 落库前过的 normalize
+ * 判定必须收得这么窄：用户自己起的名字是自由显示文本（`PhD/Year1`、Mac 的 `a\b`），
+ * 「像路径」不是理由，只有「跟这条记录自己的 path 对得上」才是。第 1 类里超长的那些
+ * 在 parseWorkspace 里已经被 normalize 切过，正好落进第 2 类——两条一起才没有缝。
+ */
+export function looksLikePathDerivedName(name: string, path: string): boolean {
+  // 大小写只在 Windows 形路径上折：POSIX 的文件名区分大小写，折了会误伤用户的名字；
+  // 盘符大小写在同一条路径上可以两样（`c:\…` 与 `C:\…` 是同一个盘）
+  const fold = (value: string): string => (looksLikeWindowsPath(path) ? value.toLowerCase() : value);
+  const folded = fold(name);
+  const wanted = fold(path);
+  return folded === wanted || (folded.length === WORKSPACE_NAME_MAX && wanted.startsWith(folded));
+}
+
+/**
  * 解析磁盘上的一条工作区。**坏了返回 null，调用方跳过这条**——
  * 与 `parseSessionMeta` 同一个理由：一条路径是编出来的工作区，
  * 会把 agent 指向一个不存在的目录。
@@ -82,18 +105,12 @@ export function parseWorkspace(raw: unknown): Workspace | null {
   const id = typeof value["id"] === "string" && value["id"] !== "" ? value["id"] : null;
   const path = typeof value["path"] === "string" && value["path"] !== "" ? value["path"] : null;
   if (id === null || path === null) return null;
-  const rawName = typeof value["name"] === "string" ? value["name"] : "";
   return {
     id,
-    // 读时治愈（wafo 裁决）：**只治「名字 == 路径」**——这是早期只切 `/` 的派生在
-    // Windows 落库的精确指纹。用户自己起的名字（含 `PhD/Year1`、Mac 的 `a\b`）是
-    // 自由显示文本，一个字不动。**磁盘不动**，下一次任何整份写回自然落净；40 上限
-    // 与空回退照走 normalize。不治的话，超长的老路径名会在改名回车时被 40 上限切成
-    // 分尸名落库。治完之后显示层不再需要任何截尾。
-    name: normalizeWorkspaceName(
-      rawName === path ? deriveWorkspaceName(rawName) : rawName,
-      path,
-    ),
+    // 纯解析：名字原样过 normalize（trim + 40 上限 + 空回退），一个字不改语义。
+    // 老脏名（机器从路径铸的那些）不在这里治——**解析函数不该改用户看得见的数据**，
+    // 那是 store 的 v2 → v3 一次性迁移的事（looksLikePathDerivedName 判指纹）
+    name: normalizeWorkspaceName(typeof value["name"] === "string" ? value["name"] : "", path),
     path,
     createdAt: typeof value["createdAt"] === "number" ? value["createdAt"] : 0,
     attachedDirs: parseAttachedDirs(value["attachedDirs"]),

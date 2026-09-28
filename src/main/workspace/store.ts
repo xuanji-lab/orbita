@@ -15,13 +15,17 @@ import { writeJsonAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
 import {
   deriveWorkspaceName,
+  looksLikePathDerivedName,
   looksLikeWindowsPath,
   normalizeWorkspaceName,
   parseWorkspace,
   type Workspace,
 } from "../../shared/workspace.ts";
 
-/** v2 文件里的两块内容：工作区列表 + Home 的附加目录。内存缓存（cache）也是这个形状 */
+/** 落盘格式版本。v3 = 工作区名那一列从「机器从路径铸的」治过一遍（见 healNames） */
+const WORKSPACE_FILE_VERSION = 3;
+
+/** 文件里的两块内容：工作区列表 + Home 的附加目录。内存缓存（cache）也是这个形状 */
 interface WorkspaceState {
   workspaces: Workspace[];
   homeAttachedDirs: string[];
@@ -31,7 +35,11 @@ interface WorkspaceState {
 const EMPTY_STATE: WorkspaceState = { workspaces: [], homeAttachedDirs: [] };
 
 interface WorkspaceFile {
-  version: 2;
+  /**
+   * **只抬版本号，字段形状一个没动。**升级前的版本读得懂 v3 文件（它的 read 只校验
+   * workspaces 是数组、不认 version），所以这个迁移没有「降级打不开」这条路。
+   */
+  version: number;
   workspaces: Workspace[];
   /**
    * Home（归属 id 为 null 的会话）挂的附加目录。放顶层而不是造一条 Home 记录进列表：
@@ -90,11 +98,39 @@ export class WorkspaceStore {
     return (await this.load()).workspaces;
   }
 
-  /** 读一次并缓存（list / attachedDirsOf / attach / detach 共用同一个内存态） */
+  /** 读一次并缓存（list / attachedDirsOf / attach / detach 共用同一个内存态）。旧版本在这里升级一次 */
   private async load(): Promise<WorkspaceState> {
     if (this.cache !== null) return this.cache;
-    this.cache = (await this.read()) ?? (await this.migrate());
+    const read = await this.read();
+    this.cache =
+      read === null
+        ? await this.migrate() // 没有 v2 文件（全新安装 / 只有 v1）：走 v1 迁移
+        : read.version >= WORKSPACE_FILE_VERSION
+          ? read.state
+          : await this.healNames(read.state); // v2 → v3
     return this.cache;
+  }
+
+  /**
+   * v2 → v3：把「名字是机器从路径铸的」那些记录治一次，**整份写回**（版本抬到 3）。
+   *
+   * 为什么是一次性迁移而不是每次读都判一遍指纹：指纹要判准就得判全（只认一种形态就会漏掉
+   * 另一种，真实老数据两种都有），而「每次读都改一个用户可见字段」本身是隐藏的数据变更——
+   * 磁盘永远脏，降级回旧版本又看见旧名字。治完一次，磁盘与内存一致，读路径退回纯解析。
+   *
+   * **写盘失败不拦启动**（只读挂载 / 磁盘满）：内存态已经治好，本次照常用，下次再试。
+   * 与 `read()` 那条「读不懂不能默默覆写」不矛盾——这里写的正是刚读出来的东西。
+   */
+  private async healNames(state: WorkspaceState): Promise<WorkspaceState> {
+    const workspaces = state.workspaces.map((w) =>
+      looksLikePathDerivedName(w.name, w.path) ? { ...w, name: deriveWorkspaceName(w.path) } : w,
+    );
+    try {
+      await this.persist(workspaces, state.homeAttachedDirs);
+    } catch (cause) {
+      console.error(`工作区名迁移（v${WORKSPACE_FILE_VERSION}）写盘失败，本次先用内存态`, cause);
+    }
+    return { workspaces, homeAttachedDirs: state.homeAttachedDirs };
   }
 
   /** 加一个文件夹。**同一个路径只会有一条**——重复加返回已有的那条。 */
@@ -253,7 +289,7 @@ export class WorkspaceStore {
   /** 整份写回（原子写）。Home 清单为空就不落字段：没用过 Home 挂目录的文件保持原有形状 */
   private async persist(workspaces: Workspace[], homeAttachedDirs: string[]): Promise<void> {
     const payload: WorkspaceFile = {
-      version: 2,
+      version: WORKSPACE_FILE_VERSION,
       workspaces,
       ...(homeAttachedDirs.length > 0 ? { homeAttachedDirs } : {}),
     };
@@ -262,33 +298,40 @@ export class WorkspaceStore {
   }
 
   /**
-   * 读 v2 文件。`null` = 没有这份文件（该去试 v1 迁移），**不是「读失败」**。
+   * 读文件。`null` = 没有这份文件（该去试 v1 迁移），**不是「读失败」**。
    *
    * 读不出来必须抛。这里不只是显示对不对的问题：把一份读坏的文件当成「空列表」交出去，
    * 用户下一次 add 就会踩着 `save()` 把它**整个覆盖写掉**——
    * 本来只是文件损坏（还能手工救），变成真的没了。**读不懂的东西不能默默覆写。**
    *
-   * 所以 `null` 只有一个来源：文件不存在。JSON 坏了、结构不对（比如未来的 v3 格式）
-   * 都是「读不懂」，一律抛。
+   * 所以 `null` 只有一个来源：文件不存在。JSON 坏了、形状不对（没有 workspaces 数组）
+   * 都是「读不懂」，一律抛。**version 不在此列**：它只决定要不要跑一次数据迁移
+   * （见 load），认不出来（字段缺了、被人手改）就当最老的算——迁移是幂等的，多跑一次
+   * 没有代价；反过来把高版本当读不懂拦下来，才是真的把用户挡在门外。
    */
-  private async read(): Promise<WorkspaceState | null> {
+  private async read(): Promise<{ state: WorkspaceState; version: number } | null> {
     let raw: string;
     try {
       raw = await readFile(this.filePath, "utf8");
     } catch (cause) {
-      if (isNotFound(cause)) return null; // 还没写过 v2：去走迁移
+      if (isNotFound(cause)) return null; // 还没写过：去走迁移
       throw cause; // 权限 / IO 坏了
     }
-    const parsed = JSON.parse(raw) as { workspaces?: unknown; homeAttachedDirs?: unknown };
+    const parsed = JSON.parse(raw) as {
+      version?: unknown;
+      workspaces?: unknown;
+      homeAttachedDirs?: unknown;
+    };
     if (!Array.isArray(parsed.workspaces)) {
       throw new Error(`workspaces.json 读不懂：没有 workspaces 数组（${this.filePath}）`);
     }
-    // 坏掉的一条跳过，不让它挡住整张列表
     return {
-      workspaces: parsed.workspaces
-        .map(parseWorkspace)
-        .filter((w): w is Workspace => w !== null),
-      homeAttachedDirs: parseHomeAttachedDirs(parsed.homeAttachedDirs),
+      // 坏掉的一条跳过，不让它挡住整张列表
+      state: {
+        workspaces: parsed.workspaces.map(parseWorkspace).filter((w): w is Workspace => w !== null),
+        homeAttachedDirs: parseHomeAttachedDirs(parsed.homeAttachedDirs),
+      },
+      version: typeof parsed.version === "number" ? parsed.version : 0,
     };
   }
 

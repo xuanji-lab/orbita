@@ -4,6 +4,7 @@ import { mkdtemp, readFile, readdir, realpath, rm, stat, writeFile, mkdir, symli
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceStore, assertLegalName } from "./store.ts";
+import { WORKSPACE_NAME_MAX } from "../../shared/workspace.ts";
 
 let dir = "";
 let store: WorkspaceStore;
@@ -15,6 +16,22 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
+
+/** 落一份 v2 文件——老版本写出来的形状：version 2 + 名字那一列是机器从路径铸的 */
+async function writeV2(workspaces: readonly unknown[]): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "workspaces.json"), JSON.stringify({ version: 2, workspaces }), "utf8");
+}
+
+/** 一条 v2 记录（id 由名字派生，够用即可） */
+function v2Record(name: string, path: string): Record<string, unknown> {
+  return { id: `w-${name}`, name, path, createdAt: 1, attachedDirs: [] };
+}
+
+/** 磁盘上那份 workspaces.json 现在长什么样 */
+async function readDisk(): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(join(dir, "workspaces.json"), "utf8")) as Record<string, unknown>;
+}
 
 describe("WorkspaceStore", () => {
   test("全新安装：一个工作区都没有", async () => {
@@ -97,6 +114,75 @@ describe("WorkspaceStore", () => {
     assert.deepEqual(await new WorkspaceStore(dir).list(), []);
   });
 
+  // ── v2 → v3：名字那一列治一次 ──
+  //
+  // 老数据里名字被铸成了整条路径（早期只切 `/` 的派生在 Windows 上的产物），治它是
+  // **一次性迁移**而不是「每次读判一遍指纹」：判不准就会漏（真实数据两种形态都有，
+  // 见下面两条），而每次读都改一个用户看得见的字段本身就是隐藏的数据变更。
+
+  test("v2 → v3：整条路径当名字的老记录治成末段，并整份写回（version 抬到 3）", async () => {
+    const path = "C:\\Users\\dama\\Desktop\\p1\\paper3";
+    await writeV2([v2Record(path, path)]);
+    const [workspace] = await new WorkspaceStore(dir).list();
+    assert.equal(workspace?.name, "paper3");
+    const disk = await readDisk();
+    assert.equal(disk["version"], 3);
+    assert.equal((disk["workspaces"] as Array<{ name: string }>)[0]?.name, "paper3");
+  });
+
+  test("v2 → v3：被 40 上限切过的老记录也治——名字是路径的前 40 字", async () => {
+    const path = "C:\\Users\\dama\\Desktop\\my-super-long-project-folder-name-2026";
+    await writeV2([v2Record(path.slice(0, WORKSPACE_NAME_MAX), path)]);
+    const [workspace] = await new WorkspaceStore(dir).list();
+    // 治回来的名字**不截**：磁盘上的目录名是完整的，add 铸名本来也不截
+    assert.equal(workspace?.name, "my-super-long-project-folder-name-2026");
+  });
+
+  test("v2 → v3：用户自己起的名字一个字不动——含 / 的、长度刚好 40 的", async () => {
+    const path = "/Users/wafo/repo/orbita-lab";
+    await writeV2([
+      v2Record("PhD/Year1", path),
+      v2Record("x".repeat(WORKSPACE_NAME_MAX), path),
+      v2Record("a\\b", path),
+    ]);
+    assert.deepEqual(
+      (await new WorkspaceStore(dir).list()).map((w) => w.name),
+      ["PhD/Year1", "x".repeat(WORKSPACE_NAME_MAX), "a\\b"],
+    );
+  });
+
+  test("v2 → v3：盘符大小写不同也算同一条路径", async () => {
+    await writeV2([v2Record("c:\\users\\dama\\proj", "C:\\Users\\dama\\proj")]);
+    assert.equal((await new WorkspaceStore(dir).list())[0]?.name, "proj");
+  });
+
+  // 版本号就是「治过了」那个开关。已经是 v3 就一点都不动——文件里留一个我们不会写回去的
+  // 字段当指纹：它还在，就说明这次读没有顺手写盘
+  test("v3 文件不再改写（幂等）——连手写痕迹都留着", async () => {
+    const path = "C:\\x\\paper3";
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "workspaces.json"),
+      JSON.stringify({ version: 3, workspaces: [v2Record(path, path)], 手写的: true }),
+      "utf8",
+    );
+    const [workspace] = await new WorkspaceStore(dir).list();
+    assert.equal(workspace?.name, path); // 说好了 v3 不迁就不迁——哪怕名字还像路径
+    assert.equal((await readDisk())["手写的"], true);
+  });
+
+  // 版本号认不出来（字段缺了 / 被人手改）就当最老的算：多治一次是幂等的，把用户挡在门外才是真事故
+  test("没有 version 字段的文件也照治，不拦路", async () => {
+    const path = "C:\\Users\\dama\\Desktop\\p1\\paper3";
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "workspaces.json"),
+      JSON.stringify({ workspaces: [v2Record(path, path)] }),
+      "utf8",
+    );
+    assert.equal((await new WorkspaceStore(dir).list())[0]?.name, "paper3");
+  });
+
   test("坏掉的一条跳过，不让它挡住整张列表", async () => {
     const good = await store.add("/repo/good");
     const raw = JSON.parse(await readFile(join(dir, "workspaces.json"), "utf8")) as {
@@ -123,12 +209,13 @@ describe("WorkspaceStore", () => {
     assert.equal(await readFile(join(dir, "workspaces.json"), "utf8"), "{ 这不是 JSON");
   });
 
-  // 合法 JSON 但结构不对（手改坏了，或未来的 v3 格式）也是「读不懂」，同样不能被覆写
+  // 合法 JSON 但形状不对（手改坏了）就是「读不懂」，同样不能被覆写。
+  // 注意 version 高不是理由——版本号只决定要不要迁移，形状才是能不能读的门槛
   test("结构不对的文件不当成空列表", async () => {
     await mkdir(dir, { recursive: true });
     await writeFile(
       join(dir, "workspaces.json"),
-      JSON.stringify({ version: 3, folders: [] }),
+      JSON.stringify({ version: 99, folders: [] }),
       "utf8",
     );
     await assert.rejects(() => new WorkspaceStore(dir).list());
