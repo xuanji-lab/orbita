@@ -1,4 +1,5 @@
 import type { FileEntry, FileEntryKind, FileRoot } from "@shared/files";
+import { pathWithin } from "../../../../shared/path.ts";
 // 只要类型：IconName 是纯类型别名，`node --test` 的原生剥离会把整条 import 连同
 // 这一行一起删掉，不会真的去加载 Icon.tsx（那份文件带 JSX，Node 的类型剥离不认）。
 import type { IconName } from "../../shell/Icon.tsx";
@@ -187,7 +188,7 @@ export function countLoadedEntries(dirs: ReadonlyMap<string, readonly FileEntry[
 
 /** `dir` 是不是 `ancestor` 本身或其子孙（按路径段判，`/ws/a` 不算 `/ws/ab` 的祖先）。 */
 function isWithin(ancestor: string, dir: string): boolean {
-  return dir === ancestor || dir.startsWith(`${ancestor}/`);
+  return pathWithin(ancestor, dir);
 }
 
 /** 刷新要重拉的一个目录：`root` 是它所属根的路径（`fs:list` 白名单要它）。 */

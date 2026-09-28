@@ -401,3 +401,23 @@ describe("mergeRefresh", () => {
     deepStrictEqual(next.expanded, new Set());
   });
 });
+
+describe("原生 Windows 路径（反斜杠根）", () => {
+  const root: FileRoot = { kind: "workspace", label: "orbita", path: "C:\\Orbita", exists: true };
+
+  it("countVisibleEntries：原生根拼出的混形子键也能取到已加载项", () => {
+    // 子键是 `${root}/${name}`：原生根 C:\Orbita 拼出混形 C:\Orbita/src，dirs/expanded 用同一把钥匙
+    const dirs = new Map<string, readonly FileEntry[]>([
+      ["C:\\Orbita", [dir("src"), file("README.md")]],
+      ["C:\\Orbita/src", [file("index.ts")]],
+    ]);
+    deepStrictEqual(countVisibleEntries([root], dirs, new Set(["C:\\Orbita/src"]), ""), 3);
+  });
+
+  it("refreshTargets：展开目录落在反斜杠根之内也重拉（isWithin 走 pathWithin）", () => {
+    deepStrictEqual(refreshTargets([root], new Set(["C:\\Orbita/src"])), [
+      { root: "C:\\Orbita", dir: "C:\\Orbita" },
+      { root: "C:\\Orbita", dir: "C:\\Orbita/src" },
+    ]);
+  });
+});

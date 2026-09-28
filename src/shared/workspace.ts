@@ -6,6 +6,8 @@
  * 的隔离执行副本（那个将来叫 worktree）——见 `docs/ubiquitous-language.md`。
  */
 
+import { pathTail } from "./path.ts";
+
 /** 名字上限。侧栏只有 288px，名字要和分支、计数挤在一行。 */
 export const WORKSPACE_NAME_MAX = 40;
 
@@ -41,17 +43,6 @@ export function deriveWorkspaceName(path: string): string {
   const last = pathTail(path);
   // 末段是空串（`/` 这种全是分隔符的路径）就退回原路径，不给一个空名字
   return last === "" ? path : last;
-}
-
-/**
- * 路径末段（文件名 / 文件夹名）。**刻意不引 node:path**：shared 是主进程与 renderer
- * 共用层，renderer 里没有 node 内置——vite 会把 `node:path` 标成 "externalized for
- * browser compatibility"，构建当场失败（2026-09 验收打回的那次）。在这里自己切：
- * 两种分隔符都算，滤掉空段；全是分隔符时返回空串，回退交给调用方。
- */
-function pathTail(path: string): string {
-  const parts = path.split(/[\\/]/).filter((part) => part !== "");
-  return parts[parts.length - 1] ?? "";
 }
 
 /** 用户输入的名字 → 落盘的名字。空白名退回路径末段，而不是留一个看不见的空行。 */

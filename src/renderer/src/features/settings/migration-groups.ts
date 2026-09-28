@@ -17,6 +17,7 @@ import type {
   ImportSourceId,
 } from "@shared/import";
 import type { Workspace } from "@shared/workspace";
+import { pathTail, pathWithin } from "../../../../shared/path.ts";
 import { isSelectablePlanItem } from "../../../../shared/import.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -184,8 +185,8 @@ export function effectiveDestination(
 /** 文件夹末段；没有文件夹的组叫 No folder。 */
 export function groupName(folder: string | null, t: Messages): string {
   if (folder === null) return t.migration.noFolder;
-  const parts = folder.split("/").filter((part) => part !== "");
-  return parts[parts.length - 1] ?? folder;
+  const last = pathTail(folder);
+  return last === "" ? folder : last;
 }
 
 /** 去向在菜单与芯片上的说法。找不到的工作区（刚被删）如实说 missing，不猜。 */
@@ -318,7 +319,7 @@ export function destinationChoices(
 export function abbreviateHome(path: string, home: string): string {
   if (home === "") return path;
   if (path === home) return "~";
-  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+  return pathWithin(home, path) ? `~${path.slice(home.length)}` : path;
 }
 
 /** 字节数 → 人读的体量（导入是 GB 级的事，用户需要知道要复制多少进盘）。 */
