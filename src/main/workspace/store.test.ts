@@ -305,6 +305,50 @@ describe("WorkspaceStore", () => {
     assert.throws(() => assertLegalName("..", "darwin"), Error);
   });
 
+  // 名字在 create 里会真的变成 ~/Orbita 下的一个目录。这些名字在 Windows 上要么建出来
+  // 的东西不是它（保留名、尾点），要么报一串用户看不懂的 errno（`阶段一: 重构`）
+  test("assertLegalName：Windows 非法字符 / 保留名 / 尾点——只在 Windows 拒", () => {
+    const windowsOnly = [
+      "阶段一: 重构", // 中文用户用 ASCII 冒号起名很常见；macOS 上合法，Finder 会显示成 》阶段一/ 重构《
+      "a<b",
+      "a>b",
+      'a"b',
+      "a|b",
+      "a?b",
+      "a*b",
+      "proj.",
+      "第 1 阶段.",
+      "CON",
+      "nul",
+      "Com1", // 不分大小写
+      "con.txt", // 带扩展名同样是设备
+      "LPT9",
+    ];
+    for (const bad of windowsOnly) {
+      assert.throws(() => assertLegalName(bad, "win32"), Error, bad);
+      assertLegalName(bad, "darwin"); // POSIX 里它们都是正常文件名，不能一刀切拒掉
+      assertLegalName(bad, "linux");
+    }
+  });
+
+  // 报错要说人话：用户要能从话里看出该改哪里
+  test("assertLegalName：报错点名是哪一条", () => {
+    const message = (name: string, platform: NodeJS.Platform): string => {
+      try {
+        assertLegalName(name, platform);
+        return "";
+      } catch (cause) {
+        return (cause as Error).message;
+      }
+    };
+    assert.match(message("阶段一: 重构", "win32"), /不能含 :/);
+    assert.match(message("CON", "win32"), /保留的设备名/);
+    assert.match(message("proj.", "win32"), /不能以 \. 或空格结尾/);
+    assert.match(message("a\\b", "win32"), /不能含 \\/);
+    assert.match(message("a/b", "darwin"), /不能含 \//);
+    assert.match(message("C:\\x", "darwin"), /不能像路径/);
+  });
+
   test("超长名字截到 WORKSPACE_NAME_MAX，目录名跟着截后的走", async () => {
     const root = join(dir, "Orbita");
     const s = new WorkspaceStore(dir, root);

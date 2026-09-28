@@ -370,28 +370,47 @@ export class WorkspaceStore {
   }
 }
 
+/** Windows 保留的设备名（不分大小写，带扩展名也算：`CON.txt` 同样是设备） */
+const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+
 /**
- * **create 的目录名守卫**（只管 create：那里名字会真的变成磁盘上的一个目录）：
- * `/`、`.` / `..`、空字节、盘符 / UNC 起头在任何 OS 都拒；`\` **只在 Windows 拒**
- * ——POSIX 里它是文件名的合法字符（Mac / Linux 上 `a\b` 是正常的目录名），Windows
- * 上当目录名会静默建出嵌套目录。rename 不走这个守卫：显示名是自由文本。
- * platform 可注入是为了测试能两个 OS 都验。
+ * **create 的目录名守卫**（只管 create：那里名字会真的变成磁盘上的一个目录）。
+ *
+ * 为什么要拒在门口：`mkdir` 的报错是原始 errno（`阶段一: 重构` →
+ * `ENOENT: ... mkdir '…\阶段一: 重构'`），用户看不懂；而比报错更坏的是**不报错但建出来的
+ * 不是那个名字**——Windows 保留名（CON / NUL / COM1）与以 `.` 结尾的名字都能建出来，
+ * 但资源管理器按 Win32 语义解析同一个字符串会落到另一个目录上（实测：
+ * `Test-Path '…\proj.'` 为真、解析到 `…\proj`）。create 的契约是「一个用户能在
+ * 资源管理器里打开的文件夹」，建一个他打不开的东西不算兑现。
+ *
+ * `/`、`.` / `..`、空字节、盘符 / UNC 起头在任何 OS 都拒——那是「名字被当成路径」
+ * 这一个病。`\`、`<>:"|?*`、结尾的 `.`、保留名**只在 Windows 拒**：POSIX 里它们都是
+ * 文件名的合法字符（Mac / Linux 上 `a\b` 是正常的目录名），一刀切会拒掉 Mac 用户正常
+ * 起的名（2026-09-28 那一轮踩过）。
+ *
+ * rename 不走这个守卫：显示名是自由文本，不落到磁盘上。
+ * platform 可注入是为了测试能把三个 OS 都验到。
  */
 export function assertLegalName(name: string, platform: NodeJS.Platform = process.platform): void {
-  if (
-    name === "." ||
-    name === ".." ||
-    name.includes("/") ||
-    name.includes("\0") ||
-    looksLikeWindowsPath(name) ||
-    (platform === "win32" && name.includes("\\"))
-  ) {
-    throw new Error(
-      platform === "win32"
-        ? `「${name}」不能用作工作区名字：不能是 . 或 ..，不能像路径（含 / 或盘符起头），Windows 上还不能含 \\`
-        : `「${name}」不能用作工作区名字：不能是 . 或 ..，也不能像路径（含 / 或盘符起头）`,
-    );
-  }
+  const reason = illegalNameReason(name, platform);
+  if (reason !== null) throw new Error(`「${name}」不能用作工作区名字：${reason}`);
+}
+
+/** 名字不能当目录名的理由（null = 可以）。抽出来是为了报错说人话，也让测试能断言具体哪一条 */
+function illegalNameReason(name: string, platform: NodeJS.Platform): string | null {
+  if (name === "") return "不能为空";
+  if (name === "." || name === "..") return "不能是 . 或 ..";
+  if (name.includes("/")) return "不能含 /（会建出嵌套目录）";
+  if (name.includes("\0")) return "不能含空字节";
+  if (looksLikeWindowsPath(name)) return "不能像路径（盘符或 \\\\ 起头）";
+  if (platform !== "win32") return null;
+  if (name.includes("\\")) return "Windows 上不能含 \\（会建出嵌套目录）";
+  const invalid = /[<>:"|?*]/.exec(name);
+  if (invalid !== null) return `Windows 上不能含 ${invalid[0]}`;
+  if (/[\u0001-\u001f]/.test(name)) return "不能含控制字符";
+  if (/[. ]$/.test(name)) return "不能以 . 或空格结尾（Windows 会把它吃掉，建出来的目录与名字对不上）";
+  if (WINDOWS_RESERVED_NAME.test(name)) return "不能是 Windows 保留的设备名（CON / NUL / COM1 这类）";
+  return null;
 }
 
 /**
