@@ -124,9 +124,17 @@ export type ImportSkipReason =
   | "bad-session-file"
   /** agent-sessions.json 里这条索引本身坏了（缺 id / 路径不是字符串等） */
   | "bad-index-entry"
-  /** 能读但转不出可续聊内容：claude legacy / Claude Code / Kimi Code / opencode 的会话里没有 assistant 消息
-   *  （纯旧扁平 / 空 draft / 只开了个头——pi 只在有 assistant 消息时才落盘文件） */
-  | "unsupported-format";
+  /**
+   * 能读但转不出可续聊的内容：Proma 的旧扁平格式 / 空 draft，以及还不支持的存储格式
+   * （Reasonix 9-18 起的新版会话库）。detail 写具体是哪种
+   */
+  | "unsupported-format"
+  /**
+   * 会话里一条回复都没有：只发了一句就断掉、或只开了个会话（转换类来源；在源应用里看得到那条
+   * 提问）。pi 只在有 assistant 消息时才落盘文件，导进来也没法续聊，所以不导。与
+   * unsupported-format 分开，页面才能说清楚「不是格式问题，是那边就没有回复」
+   */
+  | "no-reply";
 
 export interface ImportSkipItem {
   /** 源侧的会话 id；Proma 索引坏到连 id 都没有时用文件内序号顶上（报告要对得上数） */
