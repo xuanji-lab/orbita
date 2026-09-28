@@ -404,6 +404,31 @@ export const en = {
     addProvider: "Add provider",
     loadingProviders: "Loading providers…",
     noProviders: "No providers",
+    // —— 给导入的会话分配模型 ——
+    assignHint: (count: number) =>
+      `${count} imported session${count === 1 ? "" : "s"} still ${count === 1 ? "needs" : "need"} a model`,
+    assignHintBody: "Once every provider is set up, assign by the model names they came with",
+    assignButton: "Assign models",
+    assignLeftover: (count: number) =>
+      count === 1
+        ? "1 session has no matching model — pick one when you open it"
+        : `${count} sessions have no matching model — pick one when you open them`,
+    assignTitle: "Assign models to imported sessions",
+    aboutAssign: "About assigning",
+    aboutAssignBody:
+      "Only sessions that don't have a model yet are touched · matching is by model name only, no fallback · already-chosen models are never overwritten",
+    assignSessions: (count: number) => `${count} session${count === 1 ? "" : "s"}`,
+    assignNoMatch: "No matching model — left as is",
+    assignAmbiguous: "Several providers have it",
+    assignAmbiguousTip: "More than one provider declares this model · using the first one in the provider list",
+    assignUnmatchedNote: (count: number) =>
+      count === 1
+        ? "1 session without a match stays as it is"
+        : `${count} sessions without a match stay as they are`,
+    assignConfirm: (count: number) => `Assign ${count} session${count === 1 ? "" : "s"}`,
+    assignResult: (count: number) => `Models assigned to ${count} session${count === 1 ? "" : "s"}`,
+    assignSkipped: (count: number) => ` · ${count} skipped (changed in the meantime)`,
+    assignTargetGone: (model: string) => `${model} no longer matches a configured provider — refresh and try again`,
     newProvider: "New provider",
     confirmRemove: "Confirm remove",
     confirmRemoveProviderTip: "Click again to remove this provider",

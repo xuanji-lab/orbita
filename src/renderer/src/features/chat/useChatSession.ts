@@ -1197,6 +1197,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (!engine.usable.some((p) => p.id === model.providerId)) setModel(null);
   }, [engine.usable, model]);
 
+  // 清空的补种：正开着的会话 meta 从占位变成真实模型（设置 › 服务商的「分配
+  // 模型」），列表刷新把新 meta 送来时种回模型栏——此前它被上面清成了「没有模型」。
+  // 只补 null：用户手选的（非 null）永远不动，不替任何人改选择。
+  useEffect(() => {
+    if (model !== null || opened === null) return;
+    const provider = engine.usable.find((p) => p.id === opened.providerId);
+    if (provider !== undefined && provider.models.declared.some((m) => m.id === opened.modelId)) {
+      setModel({ providerId: opened.providerId, modelId: opened.modelId });
+    }
+  }, [engine.usable, model, opened]);
+
   /** **正看着的会话的 meta 必须从引擎的列表刷新里拿真值**——活会话（首页直接开的那条）
    *  opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
    *  改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。

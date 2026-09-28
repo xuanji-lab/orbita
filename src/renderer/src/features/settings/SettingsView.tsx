@@ -109,7 +109,10 @@ export function SettingsView(props: {
         </div>
       ) : props.tab === "providers" ? (
         // Providers 是主从两栏，铺满内容面：厂商列表贴着面板左缘，两栏各自内部滚动
-        <ProvidersView onChange={props.onProvidersChange} />
+        <ProvidersView
+          onChange={props.onProvidersChange}
+          onSessionsChanged={props.onImported}
+        />
       ) : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <General settings={props.settings} providers={props.providers} onChange={props.onSettingsChange} />

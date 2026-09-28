@@ -883,3 +883,142 @@
 
 /* 设置页不做窄窗口降级（wafo 2026-09-10）：永远三栏——左侧设置菜单、
    中间厂商列表、右侧厂商详情。 */
+
+/* ---------- 给导入的会话分配模型（左栏提示 + 右栏预览） ---------- */
+
+/* 左栏顶部的提示块：只有存在占位会话且配了能用的服务商才渲染 */
+.pv-assign-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--space-2) var(--space-2) var(--space-2) calc(var(--space-2) + 24px);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  position: relative;
+}
+.pv-assign-hint::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: calc(var(--space-2) + 2px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+.pv-assign-hint[data-tone="muted"]::before {
+  background: var(--color-text-tertiary);
+}
+.pv-assign-line {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-primary);
+}
+.pv-assign-sub {
+  font-size: var(--font-size-micro);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-tertiary);
+}
+.pv-assign-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-primary);
+}
+.pv-assign-hint .pv-btn {
+  margin-top: 2px;
+  justify-content: flex-start;
+}
+
+/* 右栏预览：每个原模型一行 */
+.pv-assign-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.pv-assign-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto minmax(0, 1.4fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-caption);
+}
+.pv-assign-row:last-child {
+  border-bottom: 0;
+}
+.pv-assign-model {
+  font-family: var(--font-family-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+.pv-assign-count {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.pv-assign-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--color-text-primary);
+}
+.pv-assign-target.none {
+  color: var(--color-text-tertiary);
+}
+.pv-assign-pair {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: help;
+}
+.pv-assign-provider {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.pv-assign-dot {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.pv-assign-modelid {
+  flex: none;
+  font-family: var(--font-family-mono);
+  white-space: nowrap;
+}
+.pv-assign-note {
+  flex: none;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  cursor: help;
+}
+.pv-assign-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-danger);
+}
+.pv-assign-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.pv-assign-sum {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
