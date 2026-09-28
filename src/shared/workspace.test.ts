@@ -79,6 +79,13 @@ describe("parseWorkspace", () => {
     strictEqual(parseWorkspace({ ...valid, name: "   " })?.name, "orbita-lab");
   });
 
+  // 早期只切 `/` 的派生在 Windows 落库的整条路径：读时截回尾段（磁盘不动，写回自然落净）。
+  // 不治的话，超长老路径名会在改名回车时被 40 上限切成分尸名落库。
+  it("名字带分隔符读时治病——截回尾段", () => {
+    strictEqual(parseWorkspace({ ...valid, name: "C:\\Users\\dama\\Desktop\\p1\\paper3" })?.name, "paper3");
+    strictEqual(parseWorkspace({ ...valid, name: "a/b" })?.name, "b");
+  });
+
   it("缺 createdAt 给 0，不因为一个时间戳丢掉整条工作区", () => {
     strictEqual(parseWorkspace({ ...valid, createdAt: undefined })?.createdAt, 0);
   });

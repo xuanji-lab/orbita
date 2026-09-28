@@ -16,7 +16,13 @@ export interface Workspace {
    * 也与 proma 的 `AgentSessionMeta.workspaceId` 是同一个做法。）
    */
   id: string;
-  /** 用户起的名字。没起过就是路径的最后一段。 */
+  /**
+   * 用户起的名字。没起过就是路径的最后一段。
+   *
+   * **不变量：名字不含路径分隔符（`/` 与 `\`）。**写入两端守着（store 的 create /
+   * rename 拒收），读取端治病（parseWorkspace 把带分隔符的老名截回尾段）——带分隔符的
+   * 名字会在显示层被截成另一个词（显示撒谎），create 还会拿它当目录名建出嵌套目录。
+   */
   name: string;
   path: string;
   createdAt: number;
@@ -65,9 +71,16 @@ export function parseWorkspace(raw: unknown): Workspace | null {
   const id = typeof value["id"] === "string" && value["id"] !== "" ? value["id"] : null;
   const path = typeof value["path"] === "string" && value["path"] !== "" ? value["path"] : null;
   if (id === null || path === null) return null;
+  const rawName = typeof value["name"] === "string" ? value["name"] : "";
   return {
     id,
-    name: normalizeWorkspaceName(typeof value["name"] === "string" ? value["name"] : "", path),
+    // 读时治病：名字带分隔符 = 早期只切 `/` 的派生在 Windows 落库的整条路径。
+    // 截回尾段——**磁盘不动**，下一次任何整份写回自然落净；40 上限与空回退照走 normalize。
+    // 不治病的话，超长的老路径名会在改名回车时被 40 上限切成分尸名落库。
+    name: normalizeWorkspaceName(
+      rawName.includes("/") || rawName.includes("\\") ? deriveWorkspaceName(rawName) : rawName,
+      path,
+    ),
     path,
     createdAt: typeof value["createdAt"] === "number" ? value["createdAt"] : 0,
     attachedDirs: parseAttachedDirs(value["attachedDirs"]),

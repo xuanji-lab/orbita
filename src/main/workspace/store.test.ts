@@ -195,12 +195,19 @@ describe("WorkspaceStore", () => {
     assert.equal(added.path, join(root, "已有文件夹"));
   });
 
-  test("非法名字抛错：空、纯空白、. 、.. 、含 / 或空字节，且不上磁盘", async () => {
+  test("非法名字抛错：空、纯空白、. 、.. 、含 / 或 \\ 或空字节，且不上磁盘", async () => {
     const s = new WorkspaceStore(dir, join(dir, "Orbita"));
-    for (const bad of ["", "   ", ".", "..", "a/b", "a\0b"]) {
+    for (const bad of ["", "   ", ".", "..", "a/b", "a\\b", "a\0b"]) {
       await assert.rejects(() => s.create(bad), Error);
     }
     assert.deepEqual(await s.list(), []);
+  });
+
+  test("改成带分隔符的名字抛错——显示层会把 a\\b 截成 b，落库的就不再是真名", async () => {
+    const added = await store.add("/repo/x");
+    await assert.rejects(() => store.rename(added.id, "a\\b"), Error);
+    await assert.rejects(() => store.rename(added.id, "a/b"), Error);
+    assert.equal((await store.list())[0]?.name, "x");
   });
 
   test("超长名字截到 WORKSPACE_NAME_MAX，目录名跟着截后的走", async () => {
