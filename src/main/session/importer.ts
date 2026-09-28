@@ -1807,14 +1807,21 @@ async function placeConverted<T extends ConvertedCandidate>(
 /**
  * 会话的文件夹与续聊用的 cwd。家目录不算文件夹（cwd 仍是它）；不在盘上的文件夹
  * （删掉的 worktree、别的应用的临时工作目录）既不算文件夹也不能当 cwd，退 defaultCwd。
+ *
+ * **落在来源自己的数据目录里的也不算**（dataRoot，如 ZCode 的默认工作区
+ * `~/.zcode/workspace/default`）：那是别的应用的私有树、也是导入的只读边界，不该为它建
+ * 工作区，续聊的工具也不该指过去——退 defaultCwd。与 Proma 的 usableCwd 同一条规则；此前
+ * 只有 Proma 这样做，ZCode 这 3 条会导入页默认新建一个叫「default」的工作区。
  */
 async function sessionFolder(
   path: string | null,
   home: string,
   defaultCwd: string,
+  dataRoot: string,
 ): Promise<{ folder: string | null; cwd: string }> {
   if (path === null) return { folder: null, cwd: defaultCwd };
   const resolved = resolve(path);
+  if (isInside(dataRoot, resolved)) return { folder: null, cwd: defaultCwd };
   let isDirectory = false;
   try {
     isDirectory = (await stat(resolved)).isDirectory();
@@ -1884,7 +1891,7 @@ async function scanClaudeCode(
       skipped.push({ sourceId, title, reason: "no-reply" });
       continue;
     }
-    const place = await sessionFolder(entry?.folder ?? session.cwd, paths.home, deps.defaultCwd);
+    const place = await sessionFolder(entry?.folder ?? session.cwd, paths.home, deps.defaultCwd, paths.root);
     const createdAt = entry?.createdAt ?? firstTimestamp(session.rows) ?? Date.now();
     candidates.push({
       onlyMessage: onlyWrittenMessage(converted.userRowIndexes.map((row) => session.displays[row] ?? null)),
@@ -2041,7 +2048,7 @@ export async function scanCodex(
             continue;
           }
           const createdAt = rollout.meta.timestamp !== 0 ? rollout.meta.timestamp : rollout.lastTimestamp;
-          const place = await sessionFolder(rollout.meta.cwd, paths.home, deps.defaultCwd);
+          const place = await sessionFolder(rollout.meta.cwd, paths.home, deps.defaultCwd, paths.root);
           candidates.push({
             // 「只随手发了一句」的候选：与其它转换类来源同一个判定（去空白、只有空白的不算一条）
             onlyMessage: onlyWrittenMessage(rollout.userDisplays),
@@ -2146,7 +2153,7 @@ async function scanKimiCode(
         skipped.push({ sourceId, title, reason: "no-reply" });
         continue;
       }
-      const place = await sessionFolder(state?.cwd ?? workspaces.roots.get(workspace.name) ?? null, paths.home, deps.defaultCwd);
+      const place = await sessionFolder(state?.cwd ?? workspaces.roots.get(workspace.name) ?? null, paths.home, deps.defaultCwd, paths.root);
       const createdAt = state?.createdAt ?? wire.firstAt ?? Date.now();
       candidates.push({
         onlyMessage: onlyWrittenMessage(wire.userDisplays),
@@ -2215,7 +2222,7 @@ async function scanZcode(
       skipped.push({ sourceId: session.id, title, reason: "no-reply" });
       continue;
     }
-    const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd);
+    const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd, paths.root);
     const createdAt = session.createdAt || parsed.firstAt || Date.now();
     candidates.push({
       onlyMessage: onlyWrittenMessage(parsed.userDisplays),
@@ -2273,7 +2280,7 @@ async function scanOpencode(
       skipped.push({ sourceId: session.id, title, reason: "no-reply" });
       continue;
     }
-    const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd);
+    const place = await sessionFolder(session.directory, paths.home, deps.defaultCwd, paths.root);
     const createdAt = session.createdAt || parsed.firstAt || Date.now();
     candidates.push({
       onlyMessage: onlyWrittenMessage(parsed.userDisplays),
@@ -2354,7 +2361,7 @@ async function scanReasonix(
       continue;
     }
     const title = deriveSessionTitle(title0 ?? parsed.firstPrompt ?? "") || "Reasonix session";
-    const place = await sessionFolder(meta?.workspaceRoot ?? null, paths.home, deps.defaultCwd);
+    const place = await sessionFolder(meta?.workspaceRoot ?? null, paths.home, deps.defaultCwd, paths.root);
     const createdAt = meta?.createdAt ?? parsed.firstAt ?? Date.now();
     candidates.push({
       onlyMessage: onlyWrittenMessage(parsed.userDisplays),

@@ -2511,6 +2511,24 @@ describe("zcode 来源", () => {
     assert.equal(again.skipped.find((item) => item.sourceId === "ses_a")?.reason, "already-imported");
   });
 
+  test("会话的目录落在 ZCode 自己的数据目录里（默认工作区）：不算文件夹、不建工作区，cwd 退默认", async () => {
+    const scratch = join(dirname(dbFile), "workspace", "default");
+    const repo = join(root, "repo");
+    await mkdir(scratch, { recursive: true });
+    await mkdir(repo, { recursive: true });
+    await writeDb([
+      { id: "ses_s1", directory: scratch, title: "草稿一", rows: turn("随手问") },
+      { id: "ses_s2", directory: scratch, title: "草稿二", rows: turn("再问") },
+      { id: "ses_r", directory: repo, title: "项目里的", rows: turn("改代码") },
+    ]);
+    const report = await scanImport(zDeps(), [], ["zcode"]);
+    const byId = new Map(report.plan.map((item) => [item.sourceId, item]));
+    assert.deepEqual([byId.get("ses_s1")?.folder, byId.get("ses_s1")?.cwd, byId.get("ses_s1")?.workspaceId], [null, DEFAULT_CWD, null]);
+    assert.equal(byId.get("ses_s2")?.folder, null);
+    assert.equal(byId.get("ses_r")?.folder, repo);
+    assert.equal(report.newWorkspaces.length, 0, "两条草稿不再凑出一个叫 default 的新工作区");
+  });
+
   test("探测：库在不在；paths 列出扫描会读的一处", async () => {
     const found = await probeZcode([paths()]);
     assert.equal(found.found, true);

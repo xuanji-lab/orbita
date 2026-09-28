@@ -85,12 +85,15 @@ test("codexUserText：剥 environment_context 与 user_instructions，全注入�
 // —— 扫描（真目录 + fixture 文件） ——
 
 function makeTree(root: string): CodexPaths {
-  const sessionsDir = join(root, "sessions", "2026", "09", "12");
+  // 数据目录是 root 下的子目录：会话的 cwd（root 本身）不能落在数据目录里（那样会被当成
+  // Codex 的私有树、退默认 cwd，见 importer 的 sessionFolder）
+  const dataRoot = join(root, "codex-home");
+  const sessionsDir = join(dataRoot, "sessions", "2026", "09", "12");
   mkdirSync(sessionsDir, { recursive: true });
   // cwd 用盘上存在的目录（sessionFolder 对不在盘上的 cwd 退 defaultCwd，那是
   // 既有语义；这里要测的是「rollout 的 cwd 传下去了」）
   writeFileSync(join(sessionsDir, "rollout-2026-09-12T09-00-00-6f1c2b70.jsonl"), FIXTURE.replace("/Users/fjm/paper", root));
-  return { root, sessionsDir: join(root, "sessions"), home: "/Users/tester" };
+  return { root: dataRoot, sessionsDir: join(dataRoot, "sessions"), home: "/Users/tester" };
 }
 
 const FAKE_DEPS = {
@@ -103,7 +106,7 @@ test("扫描：sessions/YYYY/MM/DD/rollout-*.jsonl 各成一条候选；无 assi
   const root = mkdtempSync(join(tmpdir(), "codex-"));
   const paths = makeTree(root);
   // 一份没有 assistant 的（只有 user）
-  const emptyDir = join(root, "sessions", "2026", "09", "13");
+  const emptyDir = join(paths.sessionsDir, "2026", "09", "13");
   mkdirSync(emptyDir, { recursive: true });
   writeFileSync(
     join(emptyDir, "rollout-2026-09-13T08-00-00-deadbeef.jsonl"),
