@@ -11,11 +11,11 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { buildContextEntries } from "@earendil-works/pi-coding-agent";
+import { buildContextEntries, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import type { Workspace } from "../../shared/workspace.ts";
 import { rootSessions, UNASSIGNED_PROVIDER_ID, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ImportPlanItem } from "../../shared/import.ts";
@@ -2199,6 +2199,47 @@ describe("opencode 来源", () => {
     }
     db.close();
   }
+
+  test("压缩过的会话：摘要成一条压缩界碑、落在源里的位置与时刻；续聊的上下文是摘要 + 压缩之后的", async () => {
+    const db = new DatabaseSync(dbFile);
+    db.prepare("insert into session values ('ses_c', 'p', null, ?, '压缩过的', 1000, 2000, null)").run(home);
+    const insertMessage = db.prepare("insert into message values (?, 'ses_c', ?, 0, ?)");
+    const insertPart = db.prepare("insert into part values (?, ?, 'ses_c', 0, 0, ?)");
+    const reply = (id: string, at: number, text: string, extra: Record<string, unknown> = {}): void => {
+      insertMessage.run(id, at, JSON.stringify({ role: "assistant", time: { created: at }, providerID: "zhipuai", modelID: "glm-5.1", ...extra }));
+      insertPart.run(`${id}_a`, id, JSON.stringify({ type: "step-start" }));
+      insertPart.run(`${id}_b`, id, JSON.stringify({ type: "text", text }));
+      insertPart.run(`${id}_c`, id, JSON.stringify({ type: "step-finish", reason: "stop", tokens: { input: 5000, output: 1, cache: { read: 0, write: 0 } } }));
+    };
+    const ask = (id: string, at: number, part: Record<string, unknown>): void => {
+      insertMessage.run(id, at, JSON.stringify({ role: "user", time: { created: at } }));
+      insertPart.run(`${id}_a`, id, JSON.stringify(part));
+    };
+    ask("msg_1", 1_780_000_000_000, { type: "text", text: "旧问题" });
+    reply("msg_2", 1_780_000_001_000, "旧回答");
+    ask("msg_3", 1_780_000_002_000, { type: "compaction", auto: true });
+    reply("msg_4", 1_780_000_003_000, "## 摘要\n旧问题已答", { summary: true });
+    ask("msg_5", 1_780_000_004_000, { type: "text", text: "新问题" });
+    reply("msg_6", 1_780_000_005_000, "新回答");
+    db.close();
+
+    const run = await runImport(ocDeps(), { sources: ["opencode"], sessions: new Set([`${resolve(dbFile)}#ses_c`]), destinations: [] });
+    assert.deepEqual([run.imported, run.failed], [1, []]);
+    const [meta] = await store.list();
+    const transcript = (await store.load(meta?.id ?? ""))?.transcript ?? [];
+    assert.deepEqual(
+      transcript.map((record) => (record.role === "compacted" ? `compacted:${record.summary}` : record.role)),
+      ["user", "assistant", "compacted:## 摘要\n旧问题已答", "user", "assistant"],
+    );
+    const boundary = transcript.find((record) => record.role === "compacted");
+    assert.equal(boundary?.role === "compacted" ? [boundary.timestamp, boundary.tokensBefore].join() : "", [1_780_000_003_000, 5000].join());
+    // 续聊的上下文：摘要 + 压缩之后的，旧问答不再发给模型
+    const entries = parseSessionEntries(await readFile(meta?.piSessionFile ?? "", "utf8")).filter(
+      (entry): entry is SessionEntry => entry.type !== "session",
+    );
+    const context = buildContextEntries(entries, entries.at(-1)?.id ?? null);
+    assert.deepEqual(context.map((entry) => entry.type), ["compaction", "message", "message"]);
+  });
 
   test("扫描：只列根会话；默认标题取第一句用户写的话；同文件夹两条建工作区；执行后 transcript 只有用户写的话、清单记 opencode、重扫即已导入", async () => {
     const repo = join(root, "repo");

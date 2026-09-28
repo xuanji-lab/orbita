@@ -13,7 +13,20 @@ export type ConvertedEntry =
   /** display：这条在 transcript 里的原文；null = 模型读到、用户没写的，不显示 */
   | { kind: "user"; message: UserMessage; display: string | null }
   | { kind: "assistant"; message: AssistantMessage }
-  | { kind: "result"; message: ToolResultMessage };
+  | { kind: "result"; message: ToolResultMessage }
+  /** 源应用在这里压缩过上下文：摘要全文、压缩前上下文的 token 数、压缩的时刻 */
+  | { kind: "compaction"; summary: string; tokensBefore: number; timestamp: number };
+
+/**
+ * 一处压缩在消息序列里的位置：at = 它前面有几条 messages（落 pi 时在第 at 条之前插一条
+ * compaction entry）。与 messages 同一次审计产出——审计会补占位、丢孤儿，位置只能在这里定。
+ */
+export interface ConvertedCompaction {
+  at: number;
+  summary: string;
+  tokensBefore: number;
+  timestamp: number;
+}
 
 export interface AuditedMessages {
   messages: Message[];
@@ -26,6 +39,8 @@ export interface AuditedMessages {
   lastAt: number | null;
   orphanToolResults: number;
   patchedToolCalls: number;
+  /** 源里的压缩（没有的来源为空数组） */
+  compactions: ConvertedCompaction[];
 }
 
 /** source 写进合成结果的说明里（「[kimi-code import] …」），排障时认得出是哪一路补的。 */
@@ -53,7 +68,14 @@ export function auditToolPairs(entries: readonly ConvertedEntry[], source: strin
   let firstPrompt: string | null = null;
   let firstAt: number | null = null;
   let lastAt: number | null = null;
+  const compactions: ConvertedCompaction[] = [];
   for (const entry of entries) {
+    if (entry.kind === "compaction") {
+      // 压缩发生在两轮之间：先把悬着的工具调用收口，压缩前的对话才是完整的
+      patch();
+      compactions.push({ at: messages.length, summary: entry.summary, tokensBefore: entry.tokensBefore, timestamp: entry.timestamp });
+      continue;
+    }
     if (entry.kind === "result") {
       const name = pending.get(entry.message.toolCallId);
       if (name === undefined) {
@@ -80,5 +102,5 @@ export function auditToolPairs(entries: readonly ConvertedEntry[], source: strin
     }
   }
   patch();
-  return { messages, userDisplays, firstPrompt, firstAt, lastAt, orphanToolResults, patchedToolCalls };
+  return { messages, userDisplays, firstPrompt, firstAt, lastAt, orphanToolResults, patchedToolCalls, compactions };
 }

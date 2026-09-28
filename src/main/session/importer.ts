@@ -95,6 +95,7 @@ import {
 } from "../mcp/import.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 import { promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
+import type { ConvertedCompaction } from "./tool-pairing.ts";
 import { appendImportLedger, readImportLedger, type ImportLedgerLine } from "./import-ledger.ts";
 import {
   deriveSessionTitle,
@@ -3290,7 +3291,7 @@ async function runOpencodeImport(
     if (session === undefined) throw new Error("the session is no longer in opencode's database");
     return opencodeToMessages(readOpencodeMessages(db, sessionId), UNASSIGNED_PROVIDER_ID, session.revert);
   });
-  return persistConverted(item, deps, parsed.messages, parsed.userDisplays, replace);
+  return persistConverted(item, deps, parsed.messages, parsed.userDisplays, replace, parsed.compactions);
 }
 
 async function runReasonixImport(
@@ -3321,7 +3322,7 @@ async function runZcodeImport(
   const parsed = withOpencodeDb(dbFile, (db) =>
     opencodeToMessages(readZcodeMessages(db, sessionId), UNASSIGNED_PROVIDER_ID, null),
   );
-  return persistConverted(item, deps, parsed.messages, parsed.userDisplays, replace);
+  return persistConverted(item, deps, parsed.messages, parsed.userDisplays, replace, parsed.compactions);
 }
 
 /**
@@ -3354,6 +3355,13 @@ async function persistConverted(
    * 会话在 orbita 里的身份不变。null = 新导入，落一份新文件。
    */
   replace: string | null,
+  /**
+   * 源里的压缩（目前只有 opencode 带）：在第 at 条消息之前插一条 pi compaction entry。
+   * firstKeptEntryId 故意给一个不存在的 id——pi 的 buildContextEntries 找不到它就一条旧消息都不留，
+   * 续聊时模型看到的是「摘要 + 压缩之后的」，与源应用压缩后发给模型的一致；transcript 仍是全量
+   * 历史，界碑落在原位（entriesToRecords 的 compaction → CompactedRecord）。
+   */
+  compactions: readonly ConvertedCompaction[] = [],
 ): Promise<ImportedSession> {
   const dir = replace === null ? deps.piSessionDir : join(deps.piSessionDir, ".rebuild");
   await mkdir(dir, { recursive: true });
@@ -3361,7 +3369,20 @@ async function persistConverted(
   const texts = new Map<string, string>();
   const hidden = new Set<string>();
   let userIndex = 0;
-  for (const message of messages) {
+  /** compaction entry id → 源里压缩的时刻（pi 的 appendCompaction 只会写「现在」，落盘后改回来） */
+  const compactedAt = new Map<string, string>();
+  const compactBefore = (index: number): void => {
+    for (const compaction of compactions) {
+      if (compaction.at !== index) continue;
+      const id = manager.appendCompaction(compaction.summary, "", compaction.tokensBefore);
+      const at = new Date(compaction.timestamp > 0 ? compaction.timestamp : Date.now()).toISOString();
+      compactedAt.set(id, at);
+      const entry = manager.getEntry(id);
+      if (entry !== undefined) entry.timestamp = at;
+    }
+  };
+  for (const [index, message] of messages.entries()) {
+    compactBefore(index);
     const id = manager.appendMessage(message);
     if (message.role !== "user") continue;
     const display = userDisplays[userIndex] ?? null;
@@ -3369,10 +3390,21 @@ async function persistConverted(
     if (display === null) hidden.add(id);
     else texts.set(id, display);
   }
+  compactBefore(messages.length);
   const built = manager.getSessionFile();
   if (built === undefined) {
     // 扫描期已剔除转不出 assistant 消息的文件；这里防御扫描与执行之间文件被改
     throw new Error("no assistant messages — nothing was persisted by pi");
+  }
+  if (compactedAt.size > 0) {
+    // pi 已经按「现在」落了盘：把 compaction entry 的时间改回源里的，transcript 的界碑才在对的时刻
+    const lines = (await readFile(built, "utf8")).split("\n").map((line) => {
+      if (line.trim() === "") return line;
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      const at = entry["type"] === "compaction" && typeof entry["id"] === "string" ? compactedAt.get(entry["id"]) : undefined;
+      return at === undefined ? line : JSON.stringify({ ...entry, timestamp: at });
+    });
+    await writeTextAtomic(built, lines.join("\n"));
   }
   let path = built;
   if (replace !== null) {

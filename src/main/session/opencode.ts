@@ -23,7 +23,11 @@
  *   这个 step 里各工具的结果——与 opencode 发给模型时的拆法一致。
  * - api：anthropic 的记 anthropic-messages，思考带回 metadata.anthropic.signature；其余记
  *   openai-completions。usage 按 step-finish 的 tokens 换算（input / output / cache.read / cache.write）。
- * - 压缩：保留全部历史，压缩请求与摘要消息不导（与 Claude Code 的处理一致，续聊时 pi 自己压缩）。
+ * - 压缩：保留全部历史；摘要消息（summary: true）落成 pi 的 compaction entry，位置就是它在源里
+ *   的位置——transcript 在那里出一条可展开的压缩界碑（摘要全文），续聊时模型看到的是「摘要 +
+ *   压缩之后的消息」，与 opencode 压缩后发给模型的一致。此前摘要整条丢弃（对账：本机 2 条会话
+ *   丢 5 段摘要，opencode 里看得到）。压缩请求（user 消息里的 compaction part）不是用户写的话，
+ *   仍不导。tokensBefore 取摘要那一步 step-finish 的输入 token（摘要是读着整段上下文写的）。
  * - 撤回（session.revert）：撤回点之后的消息不导；带 partID 的，那条消息从这个 part 起截掉。
  * - 用户消息在 transcript 里的原文：非 synthetic 的文字；只有 synthetic 文字的消息为 null（进 pi、
  *   不显示）。插件（oh-my-opencode 等）插进来却没标 synthetic 的文字按内容认：以
@@ -34,7 +38,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
-import { auditToolPairs, type ConvertedEntry } from "./tool-pairing.ts";
+import { auditToolPairs, type ConvertedCompaction, type ConvertedEntry } from "./tool-pairing.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -168,6 +172,8 @@ export interface OpencodeStats {
 
 export interface OpencodeParse {
   messages: Message[];
+  /** 源里的压缩摘要及其在 messages 里的位置（落 pi 时插 compaction entry） */
+  compactions: ConvertedCompaction[];
   /** 每条 user 消息在 transcript 里的原文（按 messages 里 user 消息的顺序）；null = 不显示 */
   userDisplays: (string | null)[];
   /** 最后一条 assistant 的模型 id */
@@ -285,6 +291,16 @@ export function opencodeToMessages(
     if (info["role"] !== "assistant") continue;
     if (info["summary"] === true) {
       stats.compactionMessages += 1;
+      const summary = parts
+        .filter((part) => part["type"] === "text" && typeof part["text"] === "string")
+        .map((part) => String(part["text"]))
+        .join("\n")
+        .trim();
+      if (summary !== "") {
+        const finish = [...parts].reverse().find((part) => part["type"] === "step-finish");
+        const usage = toUsage(finish?.["tokens"]);
+        entries.push({ kind: "compaction", summary, tokensBefore: usage.input + usage.cacheRead + usage.cacheWrite, timestamp: time });
+      }
       continue;
     }
     // ZCode 的 message.data 用小写 d 的 providerId/modelId（opencode 是大写 D，两家的库
@@ -393,6 +409,7 @@ export function opencodeToMessages(
   stats.patchedToolCalls = audited.patchedToolCalls;
   return {
     messages: audited.messages,
+    compactions: audited.compactions,
     userDisplays: audited.userDisplays,
     model,
     firstPrompt: audited.firstPrompt,
