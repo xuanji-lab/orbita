@@ -13,14 +13,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
+import { looksLikeWindowsPath } from "../../shared/path.ts";
 import {
   deriveWorkspaceName,
+  looksLikePathDerivedName,
   normalizeWorkspaceName,
   parseWorkspace,
   type Workspace,
 } from "../../shared/workspace.ts";
 
-/** v2 文件里的两块内容：工作区列表 + Home 的附加目录。内存缓存（cache）也是这个形状 */
+/** 落盘格式版本。v3 = 工作区名那一列从「机器从路径铸的」治过一遍（见 healNames） */
+const WORKSPACE_FILE_VERSION = 3;
+
+/** 文件里的两块内容：工作区列表 + Home 的附加目录。内存缓存（cache）也是这个形状 */
 interface WorkspaceState {
   workspaces: Workspace[];
   homeAttachedDirs: string[];
@@ -30,7 +35,11 @@ interface WorkspaceState {
 const EMPTY_STATE: WorkspaceState = { workspaces: [], homeAttachedDirs: [] };
 
 interface WorkspaceFile {
-  version: 2;
+  /**
+   * **只抬版本号，字段形状一个没动。**升级前的版本读得懂 v3 文件（它的 read 只校验
+   * workspaces 是数组、不认 version），所以这个迁移没有「降级打不开」这条路。
+   */
+  version: number;
   workspaces: Workspace[];
   /**
    * Home（归属 id 为 null 的会话）挂的附加目录。放顶层而不是造一条 Home 记录进列表：
@@ -89,11 +98,39 @@ export class WorkspaceStore {
     return (await this.load()).workspaces;
   }
 
-  /** 读一次并缓存（list / attachedDirsOf / attach / detach 共用同一个内存态） */
+  /** 读一次并缓存（list / attachedDirsOf / attach / detach 共用同一个内存态）。旧版本在这里升级一次 */
   private async load(): Promise<WorkspaceState> {
     if (this.cache !== null) return this.cache;
-    this.cache = (await this.read()) ?? (await this.migrate());
+    const read = await this.read();
+    this.cache =
+      read === null
+        ? await this.migrate() // 没有 v2 文件（全新安装 / 只有 v1）：走 v1 迁移
+        : read.version >= WORKSPACE_FILE_VERSION
+          ? read.state
+          : await this.healNames(read.state); // v2 → v3
     return this.cache;
+  }
+
+  /**
+   * v2 → v3：把「名字是机器从路径铸的」那些记录治一次，**整份写回**（版本抬到 3）。
+   *
+   * 为什么是一次性迁移而不是每次读都判一遍指纹：指纹要判准就得判全（只认一种形态就会漏掉
+   * 另一种，真实老数据两种都有），而「每次读都改一个用户可见字段」本身是隐藏的数据变更——
+   * 磁盘永远脏，降级回旧版本又看见旧名字。治完一次，磁盘与内存一致，读路径退回纯解析。
+   *
+   * **写盘失败不拦启动**（只读挂载 / 磁盘满）：内存态已经治好，本次照常用，下次再试。
+   * 与 `read()` 那条「读不懂不能默默覆写」不矛盾——这里写的正是刚读出来的东西。
+   */
+  private async healNames(state: WorkspaceState): Promise<WorkspaceState> {
+    const workspaces = state.workspaces.map((w) =>
+      looksLikePathDerivedName(w.name, w.path) ? { ...w, name: deriveWorkspaceName(w.path) } : w,
+    );
+    try {
+      await this.persist(workspaces, state.homeAttachedDirs);
+    } catch (cause) {
+      console.error(`工作区名迁移（v${WORKSPACE_FILE_VERSION}）写盘失败，本次先用内存态`, cause);
+    }
+    return { workspaces, homeAttachedDirs: state.homeAttachedDirs };
   }
 
   /** 加一个文件夹。**同一个路径只会有一条**——重复加返回已有的那条。 */
@@ -115,23 +152,19 @@ export class WorkspaceStore {
   /**
    * 命名新建（2026-09-22 裁决：一个工作区就是一个用户能在 Finder 里打开的文件夹）：
    * 在 ~/Orbita/<name>/ 建文件夹并加为工作区。名字先过 normalize（与 rename 同一套
-   * 规则：trim + 40 上限）——目录名就是工作区名，**一辈子不动**；之后改名只改列表里
-   * 的显示名，不动文件夹。非法名（空、. / ..、含 / 或空字节）当场抛错，不上磁盘。
-   * 同名文件夹已存在就直接加它：mkdir recursive 不炸、add 同路径幂等——不覆盖、不报错。
+   * 规则：trim + 空白回退）——目录名就是工作区名，**一辈子不动**；之后改名只改列表里
+   * 的显示名，不动文件夹。非法名（空、. / ..、像路径或空字节；Windows 上还含 `\`）
+   * 当场抛错，不上磁盘。同名文件夹已存在就直接加它：mkdir recursive 不炸、add 同路径
+   * 幂等——不覆盖、不报错。
    */
   async create(name: string): Promise<Workspace> {
     const normalized = normalizeWorkspaceName(name, "");
-    if (
-      normalized === "" ||
-      normalized === "." ||
-      normalized === ".." ||
-      normalized.includes("/") ||
-      normalized.includes("\0")
-    ) {
-      throw new Error(
-        `「${name}」不能用作工作区名字：不能为空，不能是 . 或 ..，也不能含 / 或空字节`,
-      );
+    if (normalized === "") {
+      throw new Error(`「${name}」不能用作工作区名字：不能为空`);
     }
+    // 守卫查的就是真正当目录名的这份——查截断/规整前的输入会漏（老代码在这吃了亏：
+    // 检查的对象和落盘的对象不是同一个字符串）
+    assertLegalName(normalized);
     const path = join(this.orbitaRoot(), normalized);
     await mkdir(path, { recursive: true });
     // add 的默认名取路径末段，而这里的目录名就是 normalize 后的名字——恰好是用户给的
@@ -226,6 +259,11 @@ export class WorkspaceStore {
     return workspaces.find((w) => w.id === id)?.attachedDirs ?? [];
   }
 
+  /**
+   * 改显示名（不动磁盘上的文件夹）。显示名是**自由文本**（wafo 裁决）：含 `/` 的
+   * `PhD/Year1`、Mac 的 `a\b` 都合法——显示层原样显示，不再截尾，所以也不需要守卫。
+   * 空白名退回路径末段是既有裁决；不存在的 id 静默无操作（既有语义）。
+   */
   async rename(id: string, name: string): Promise<void> {
     const workspaces = await this.list();
     await this.save(
@@ -252,7 +290,7 @@ export class WorkspaceStore {
   /** 整份写回（原子写）。Home 清单为空就不落字段：没用过 Home 挂目录的文件保持原有形状 */
   private async persist(workspaces: Workspace[], homeAttachedDirs: string[]): Promise<void> {
     const payload: WorkspaceFile = {
-      version: 2,
+      version: WORKSPACE_FILE_VERSION,
       workspaces,
       ...(homeAttachedDirs.length > 0 ? { homeAttachedDirs } : {}),
     };
@@ -261,33 +299,40 @@ export class WorkspaceStore {
   }
 
   /**
-   * 读 v2 文件。`null` = 没有这份文件（该去试 v1 迁移），**不是「读失败」**。
+   * 读文件。`null` = 没有这份文件（该去试 v1 迁移），**不是「读失败」**。
    *
    * 读不出来必须抛。这里不只是显示对不对的问题：把一份读坏的文件当成「空列表」交出去，
    * 用户下一次 add 就会踩着 `save()` 把它**整个覆盖写掉**——
    * 本来只是文件损坏（还能手工救），变成真的没了。**读不懂的东西不能默默覆写。**
    *
-   * 所以 `null` 只有一个来源：文件不存在。JSON 坏了、结构不对（比如未来的 v3 格式）
-   * 都是「读不懂」，一律抛。
+   * 所以 `null` 只有一个来源：文件不存在。JSON 坏了、形状不对（没有 workspaces 数组）
+   * 都是「读不懂」，一律抛。**version 不在此列**：它只决定要不要跑一次数据迁移
+   * （见 load），认不出来（字段缺了、被人手改）就当最老的算——迁移是幂等的，多跑一次
+   * 没有代价；反过来把高版本当读不懂拦下来，才是真的把用户挡在门外。
    */
-  private async read(): Promise<WorkspaceState | null> {
+  private async read(): Promise<{ state: WorkspaceState; version: number } | null> {
     let raw: string;
     try {
       raw = await readFile(this.filePath, "utf8");
     } catch (cause) {
-      if (isNotFound(cause)) return null; // 还没写过 v2：去走迁移
+      if (isNotFound(cause)) return null; // 还没写过：去走迁移
       throw cause; // 权限 / IO 坏了
     }
-    const parsed = JSON.parse(raw) as { workspaces?: unknown; homeAttachedDirs?: unknown };
+    const parsed = JSON.parse(raw) as {
+      version?: unknown;
+      workspaces?: unknown;
+      homeAttachedDirs?: unknown;
+    };
     if (!Array.isArray(parsed.workspaces)) {
       throw new Error(`workspaces.json 读不懂：没有 workspaces 数组（${this.filePath}）`);
     }
-    // 坏掉的一条跳过，不让它挡住整张列表
     return {
-      workspaces: parsed.workspaces
-        .map(parseWorkspace)
-        .filter((w): w is Workspace => w !== null),
-      homeAttachedDirs: parseHomeAttachedDirs(parsed.homeAttachedDirs),
+      // 坏掉的一条跳过，不让它挡住整张列表
+      state: {
+        workspaces: parsed.workspaces.map(parseWorkspace).filter((w): w is Workspace => w !== null),
+        homeAttachedDirs: parseHomeAttachedDirs(parsed.homeAttachedDirs),
+      },
+      version: typeof parsed.version === "number" ? parsed.version : 0,
     };
   }
 
@@ -324,6 +369,49 @@ export class WorkspaceStore {
     await this.save(workspaces);
     return { workspaces, homeAttachedDirs: [] };
   }
+}
+
+/** Windows 保留的设备名（不分大小写，带扩展名也算：`CON.txt` 同样是设备） */
+const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+
+/**
+ * **create 的目录名守卫**（只管 create：那里名字会真的变成磁盘上的一个目录）。
+ *
+ * 为什么要拒在门口：`mkdir` 的报错是原始 errno（`阶段一: 重构` →
+ * `ENOENT: ... mkdir '…\阶段一: 重构'`），用户看不懂；而比报错更坏的是**不报错但建出来的
+ * 不是那个名字**——Windows 保留名（CON / NUL / COM1）与以 `.` 结尾的名字都能建出来，
+ * 但资源管理器按 Win32 语义解析同一个字符串会落到另一个目录上（实测：
+ * `Test-Path '…\proj.'` 为真、解析到 `…\proj`）。create 的契约是「一个用户能在
+ * 资源管理器里打开的文件夹」，建一个他打不开的东西不算兑现。
+ *
+ * `/`、`.` / `..`、空字节、盘符 / UNC 起头在任何 OS 都拒——那是「名字被当成路径」
+ * 这一个病。`\`、`<>:"|?*`、结尾的 `.`、保留名**只在 Windows 拒**：POSIX 里它们都是
+ * 文件名的合法字符（Mac / Linux 上 `a\b` 是正常的目录名），一刀切会拒掉 Mac 用户正常
+ * 起的名（2026-09-28 那一轮踩过）。
+ *
+ * rename 不走这个守卫：显示名是自由文本，不落到磁盘上。
+ * platform 可注入是为了测试能把三个 OS 都验到。
+ */
+export function assertLegalName(name: string, platform: NodeJS.Platform = process.platform): void {
+  const reason = illegalNameReason(name, platform);
+  if (reason !== null) throw new Error(`「${name}」不能用作工作区名字：${reason}`);
+}
+
+/** 名字不能当目录名的理由（null = 可以）。抽出来是为了报错说人话，也让测试能断言具体哪一条 */
+function illegalNameReason(name: string, platform: NodeJS.Platform): string | null {
+  if (name === "") return "不能为空";
+  if (name === "." || name === "..") return "不能是 . 或 ..";
+  if (name.includes("/")) return "不能含 /（会建出嵌套目录）";
+  if (name.includes("\0")) return "不能含空字节";
+  if (looksLikeWindowsPath(name)) return "不能像路径（盘符起头或反斜杠起头）";
+  if (platform !== "win32") return null;
+  if (name.includes("\\")) return "Windows 上不能含 \\（会建出嵌套目录）";
+  const invalid = /[<>:"|?*]/.exec(name);
+  if (invalid !== null) return `Windows 上不能含 ${invalid[0]}`;
+  if (/[\u0001-\u001f]/.test(name)) return "不能含控制字符";
+  if (/[. ]$/.test(name)) return "不能以 . 或空格结尾（Windows 会把它吃掉，建出来的目录与名字对不上）";
+  if (WINDOWS_RESERVED_NAME.test(name)) return "不能是 Windows 保留的设备名（CON / NUL / COM1 这类）";
+  return null;
 }
 
 /**

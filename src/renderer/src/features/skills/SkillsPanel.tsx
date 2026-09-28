@@ -50,6 +50,7 @@ export function SkillsPanel(props: {
     if (selected !== null && meta === null) setView("list");
   }, [selected, meta]);
 
+  // 名字原样显示——「名字 == 路径」的老数据在 store 读时已治，显示层不截尾
   const workspaceName = (id: string): string =>
     skills.workspaces.find((w) => w.id === id)?.name ?? id;
 

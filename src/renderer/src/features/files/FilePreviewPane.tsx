@@ -8,6 +8,7 @@ import { highlightBlock, highlighterReady, langFromPath } from "../chat/highligh
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
+import { pathTail } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
 /**
@@ -149,8 +150,8 @@ const failMessage = (cause: unknown): string => (cause instanceof Error ? cause.
 
 /** path 的最后一段（文件名，不含目录）。path 恒非空——FilesPanel 只用真实条目路径构造它 */
 function baseName(path: string): string {
-  const parts = path.split("/").filter((part) => part !== "");
-  return parts.length === 0 ? path : (parts[parts.length - 1] ?? path);
+  const last = pathTail(path);
+  return last === "" ? path : last;
 }
 
 type LoadState =

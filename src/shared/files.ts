@@ -11,6 +11,8 @@
  * 主进程算出来的这几个根之内的路径，不能拿这条通道当通用文件浏览器。
  */
 
+import { pathTail } from "./path.ts";
+
 export type FileRootKind = "session" | "workspace" | "attached";
 
 export interface FileRoot {
@@ -78,8 +80,8 @@ export function sortFileEntries(entries: readonly FileEntry[]): FileEntry[] {
  */
 export function fileRootLabel(kind: FileRootKind, path: string, title: string, fallback: string): string {
   if (kind === "attached") {
-    const last = path.split("/").filter((part) => part !== "").pop();
-    return last === undefined || last === "" ? path : last;
+    const last = pathTail(path);
+    return last === "" ? path : last;
   }
   return title.trim() === "" ? fallback : title.trim();
 }

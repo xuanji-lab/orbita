@@ -88,6 +88,7 @@ import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
+import { deriveWorkspaceName } from "@shared/workspace";
 import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
@@ -1597,10 +1598,15 @@ function ComposerBar(props: { session: ChatSession }) {
   const t = useT();
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
-  // 作用域显示**目录名**。老工作区落库的名可能是完整路径（早期创建没截尾），
-  // 所以两个分支都要过 basename——显示层截尾，不动落库数据
-  const scopeSource = workspace?.name ?? session.cwd;
-  const scope = scopeSource === null ? t.chat.home : basename(scopeSource) || t.chat.home;
+  // 工作区名**原样**显示（「名字 == 路径」的老数据在 store 读时已治愈，wafo 裁决——
+  // 显示层不截尾，用户起的 `PhD/Year1` 不会再被截成 `Year1`）；没选工作区时落在
+  // cwd，那才是真路径，显示目录尾段
+  const scope =
+    workspace !== undefined
+      ? workspace.name
+      : session.cwd === null
+        ? t.chat.home
+        : deriveWorkspaceName(session.cwd) || t.chat.home;
   // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
   // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
   const [namingWorkspace, setNamingWorkspace] = useState(false);
@@ -1620,7 +1626,10 @@ function ComposerBar(props: { session: ChatSession }) {
     },
     ...session.workspaces.map((item) => ({
       id: item.id,
+      // 名字原样（读时已治）；全路径放 hint 消歧（两个同名的工作区），
+      // 与 home 项的 defaultCwd 同构
       label: item.name,
+      hint: item.path,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
@@ -4068,10 +4077,4 @@ function sessionTitle(transcript: readonly TranscriptItem[]): string | null {
     }
   }
   return null;
-}
-
-/** 取路径尾段。分隔符 `/` 与 `\` 都认——Windows 的 cwd 是反斜杠，只切 `/` 会整条漏出来 */
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/).filter((part) => part !== "");
-  return parts[parts.length - 1] ?? path;
 }

@@ -26,7 +26,7 @@
  */
 import { copyFile, mkdir, open, readdir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   parseSessionEntries,
   migrateSessionEntries,
@@ -842,7 +842,7 @@ function usableCwd(headerCwd: string, promaRoot: string, defaultCwd: string): st
   if (headerCwd === "") return defaultCwd;
   const resolved = resolve(headerCwd);
   const root = resolve(promaRoot);
-  if (resolved === root || resolved.startsWith(`${root}/`)) return defaultCwd;
+  if (resolved === root || resolved.startsWith(`${root}${sep}`)) return defaultCwd;
   return headerCwd;
 }
 
@@ -866,10 +866,11 @@ interface PiSource {
 async function readPiSource(path: string, promaRoot: string, extraRoots: readonly string[]): Promise<PiSource> {
   // 防御：索引里的路径必须落在已知数据根内（真源在 <root>/sdk-config/sessions/ 下；
   // 真实数据里 66 条仍指旧根 ~/.proma——Proma 从 .proma 迁到 .proma-dev 时索引没重写，
-  // 文件仍在），一份被手改过的索引不该让导入器去读任意文件
+  // 文件仍在），一份被手改过的索引不该让导入器去读任意文件。
+  // 分隔符必须用 sep：写死 `/` 时 Windows 上根内的每个文件都会被判成越界（这条咬过一次）
   const resolved = resolve(path);
   const roots = [resolve(promaRoot), ...extraRoots.map((root) => resolve(root))];
-  const inAnyRoot = roots.some((root) => resolved === root || resolved.startsWith(`${root}/`));
+  const inAnyRoot = roots.some((root) => resolved === root || resolved.startsWith(`${root}${sep}`));
   if (!inAnyRoot) {
     throw new Error(`session file outside the Proma data roots: ${path}`);
   }
@@ -2553,7 +2554,8 @@ async function runClaudeLegacyImport(item: ImportPlanItem, deps: RunImporterDeps
 
 /** 补记行的来源：meta 只存了源文件，按它落在哪个来源的根下判断。 */
 function sourceOfImported(deps: ImporterDeps, sourceFile: string): ImportSourceId {
-  const under = (root: string | undefined): boolean => root !== undefined && sourceFile.startsWith(`${resolve(root)}/`);
+  const under = (root: string | undefined): boolean =>
+    root !== undefined && sourceFile.startsWith(`${resolve(root)}${sep}`);
   if (under(deps.claudeCode?.projectsDir)) return "claude-code";
   if (under(deps.kimiCode?.sessionsDir)) return "kimi-code";
   if (deps.opencode !== undefined && sourceFile.startsWith(`${resolve(deps.opencode.dbFile)}#`)) return "opencode";

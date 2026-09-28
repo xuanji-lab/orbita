@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, realpath, rm, stat, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WorkspaceStore } from "./store.ts";
+import { WorkspaceStore, assertLegalName } from "./store.ts";
+import { WORKSPACE_NAME_MAX } from "../../shared/workspace.ts";
 
 let dir = "";
 let store: WorkspaceStore;
@@ -15,6 +16,22 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
+
+/** 落一份 v2 文件——老版本写出来的形状：version 2 + 名字那一列是机器从路径铸的 */
+async function writeV2(workspaces: readonly unknown[]): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "workspaces.json"), JSON.stringify({ version: 2, workspaces }), "utf8");
+}
+
+/** 一条 v2 记录（id 由名字派生，够用即可） */
+function v2Record(name: string, path: string): Record<string, unknown> {
+  return { id: `w-${name}`, name, path, createdAt: 1, attachedDirs: [] };
+}
+
+/** 磁盘上那份 workspaces.json 现在长什么样 */
+async function readDisk(): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(join(dir, "workspaces.json"), "utf8")) as Record<string, unknown>;
+}
 
 describe("WorkspaceStore", () => {
   test("全新安装：一个工作区都没有", async () => {
@@ -97,6 +114,92 @@ describe("WorkspaceStore", () => {
     assert.deepEqual(await new WorkspaceStore(dir).list(), []);
   });
 
+  // ── v2 → v3：名字那一列治一次 ──
+  //
+  // 老数据里名字被铸成了整条路径（早期只切 `/` 的派生在 Windows 上的产物），治它是
+  // **一次性迁移**而不是「每次读判一遍指纹」：判不准就会漏（真实数据两种形态都有，
+  // 见下面两条），而每次读都改一个用户看得见的字段本身就是隐藏的数据变更。
+
+  test("v2 → v3：整条路径当名字的老记录治成末段，并整份写回（version 抬到 3）", async () => {
+    const path = "C:\\Users\\dama\\Desktop\\p1\\paper3";
+    await writeV2([v2Record(path, path)]);
+    const [workspace] = await new WorkspaceStore(dir).list();
+    assert.equal(workspace?.name, "paper3");
+    const disk = await readDisk();
+    assert.equal(disk["version"], 3);
+    assert.equal((disk["workspaces"] as Array<{ name: string }>)[0]?.name, "paper3");
+  });
+
+  test("v2 → v3：被 40 上限切过的老记录也治——名字是路径的前 40 字", async () => {
+    const path = "C:\\Users\\dama\\Desktop\\my-super-long-project-folder-name-2026";
+    await writeV2([v2Record(path.slice(0, WORKSPACE_NAME_MAX), path)]);
+    const [workspace] = await new WorkspaceStore(dir).list();
+    // 治回来的名字**不截**：磁盘上的目录名是完整的，add 铸名本来也不截
+    assert.equal(workspace?.name, "my-super-long-project-folder-name-2026");
+  });
+
+  // 治好的名字要活过重启：v2 → v3 把 >40 字的尾段原样落盘，若读盘再切一刀（老 parse
+  // 的 40 上限），治好的名字只活一个会话——重启变分尸名，之后任何一次写操作把分尸名
+  // 回写磁盘，治愈彻底销毁。这一条把「迁移不截 + 读盘不截」整条链钉住
+  test("治好的超长尾段活过重启：再读不变形，写操作后磁盘不碎", async () => {
+    const long = "my-extremely-long-project-directory-name-2026-forever";
+    const path = "C:\\Users\\dama\\Desktop\\" + long;
+    await writeV2([v2Record(path.slice(0, WORKSPACE_NAME_MAX), path)]);
+    await new WorkspaceStore(dir).list(); // 第一次启动:迁移治好,落盘 v3
+
+    const reopened = (await new WorkspaceStore(dir).list())[0]; // 重启:version 3,纯解析
+    assert.equal(reopened?.name, long);
+
+    await new WorkspaceStore(dir).add("/another/proj"); // 重启后的任意写操作
+    const disk = await readDisk();
+    assert.equal((disk["workspaces"] as Array<{ name: string }>)[0]?.name, long);
+  });
+
+  test("v2 → v3：用户自己起的名字一个字不动——含 / 的、长度刚好 40 的", async () => {
+    const path = "/Users/wafo/repo/orbita-lab";
+    await writeV2([
+      v2Record("PhD/Year1", path),
+      v2Record("x".repeat(WORKSPACE_NAME_MAX), path),
+      v2Record("a\\b", path),
+    ]);
+    assert.deepEqual(
+      (await new WorkspaceStore(dir).list()).map((w) => w.name),
+      ["PhD/Year1", "x".repeat(WORKSPACE_NAME_MAX), "a\\b"],
+    );
+  });
+
+  test("v2 → v3：盘符大小写不同也算同一条路径", async () => {
+    await writeV2([v2Record("c:\\users\\dama\\proj", "C:\\Users\\dama\\proj")]);
+    assert.equal((await new WorkspaceStore(dir).list())[0]?.name, "proj");
+  });
+
+  // 版本号就是「治过了」那个开关。已经是 v3 就一点都不动——文件里留一个我们不会写回去的
+  // 字段当指纹：它还在，就说明这次读没有顺手写盘
+  test("v3 文件不再改写（幂等）——连手写痕迹都留着", async () => {
+    const path = "C:\\x\\paper3";
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "workspaces.json"),
+      JSON.stringify({ version: 3, workspaces: [v2Record(path, path)], 手写的: true }),
+      "utf8",
+    );
+    const [workspace] = await new WorkspaceStore(dir).list();
+    assert.equal(workspace?.name, path); // 说好了 v3 不迁就不迁——哪怕名字还像路径
+    assert.equal((await readDisk())["手写的"], true);
+  });
+
+  // 版本号认不出来（字段缺了 / 被人手改）就当最老的算：多治一次是幂等的，把用户挡在门外才是真事故
+  test("没有 version 字段的文件也照治，不拦路", async () => {
+    const path = "C:\\Users\\dama\\Desktop\\p1\\paper3";
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "workspaces.json"),
+      JSON.stringify({ workspaces: [v2Record(path, path)] }),
+      "utf8",
+    );
+    assert.equal((await new WorkspaceStore(dir).list())[0]?.name, "paper3");
+  });
+
   test("坏掉的一条跳过，不让它挡住整张列表", async () => {
     const good = await store.add("/repo/good");
     const raw = JSON.parse(await readFile(join(dir, "workspaces.json"), "utf8")) as {
@@ -123,12 +226,13 @@ describe("WorkspaceStore", () => {
     assert.equal(await readFile(join(dir, "workspaces.json"), "utf8"), "{ 这不是 JSON");
   });
 
-  // 合法 JSON 但结构不对（手改坏了，或未来的 v3 格式）也是「读不懂」，同样不能被覆写
+  // 合法 JSON 但形状不对（手改坏了）就是「读不懂」，同样不能被覆写。
+  // 注意 version 高不是理由——版本号只决定要不要迁移，形状才是能不能读的门槛
   test("结构不对的文件不当成空列表", async () => {
     await mkdir(dir, { recursive: true });
     await writeFile(
       join(dir, "workspaces.json"),
-      JSON.stringify({ version: 3, folders: [] }),
+      JSON.stringify({ version: 99, folders: [] }),
       "utf8",
     );
     await assert.rejects(() => new WorkspaceStore(dir).list());
@@ -195,20 +299,81 @@ describe("WorkspaceStore", () => {
     assert.equal(added.path, join(root, "已有文件夹"));
   });
 
-  test("非法名字抛错：空、纯空白、. 、.. 、含 / 或空字节，且不上磁盘", async () => {
+  test("非法名字抛错：空、纯空白、. 、.. 、像路径（含 / 或盘符起头）或空字节，且不上磁盘", async () => {
     const s = new WorkspaceStore(dir, join(dir, "Orbita"));
-    for (const bad of ["", "   ", ".", "..", "a/b", "a\0b"]) {
+    for (const bad of ["", "   ", ".", "..", "a/b", "C:\\x\\y", "a\0b"]) {
       await assert.rejects(() => s.create(bad), Error);
     }
     assert.deepEqual(await s.list(), []);
   });
 
-  test("超长名字截到 WORKSPACE_NAME_MAX，目录名跟着截后的走", async () => {
+  test("rename 是自由显示文本：含 / 的 PhD/Year1 也收——显示层原样显示不截尾（wafo 裁决）", async () => {
+    const added = await store.add("/repo/x");
+    await store.rename(added.id, "PhD/Year1");
+    assert.equal((await store.list())[0]?.name, "PhD/Year1");
+  });
+
+  test("assertLegalName 平台矩阵：\\ 只在 Windows 拒——POSIX 系（Mac / Linux）里它是文件名的合法字符", () => {
+    assert.throws(() => assertLegalName("a\\b", "win32"), Error);
+    assertLegalName("a\\b", "darwin"); // Mac 上 a\b 是正常名字，不抛
+    assertLegalName("a\\b", "linux"); // Linux 同 POSIX
+    assert.throws(() => assertLegalName("a/b", "darwin"), Error);
+    assert.throws(() => assertLegalName("C:\\x", "darwin"), Error); // 盘符形在哪个 OS 都像路径
+    assert.throws(() => assertLegalName("..", "darwin"), Error);
+  });
+
+  // 名字在 create 里会真的变成 ~/Orbita 下的一个目录。这些名字在 Windows 上要么建出来
+  // 的东西不是它（保留名、尾点），要么报一串用户看不懂的 errno（`阶段一: 重构`）
+  test("assertLegalName：Windows 非法字符 / 保留名 / 尾点——只在 Windows 拒", () => {
+    const windowsOnly = [
+      "阶段一: 重构", // 中文用户用 ASCII 冒号起名很常见；macOS 上合法，Finder 会显示成 》阶段一/ 重构《
+      "a<b",
+      "a>b",
+      'a"b',
+      "a|b",
+      "a?b",
+      "a*b",
+      "proj.",
+      "第 1 阶段.",
+      "CON",
+      "nul",
+      "Com1", // 不分大小写
+      "con.txt", // 带扩展名同样是设备
+      "LPT9",
+    ];
+    for (const bad of windowsOnly) {
+      assert.throws(() => assertLegalName(bad, "win32"), Error, bad);
+      assertLegalName(bad, "darwin"); // POSIX 里它们都是正常文件名，不能一刀切拒掉
+      assertLegalName(bad, "linux");
+    }
+  });
+
+  // 报错要说人话：用户要能从话里看出该改哪里
+  test("assertLegalName：报错点名是哪一条", () => {
+    const message = (name: string, platform: NodeJS.Platform): string => {
+      try {
+        assertLegalName(name, platform);
+        return "";
+      } catch (cause) {
+        return (cause as Error).message;
+      }
+    };
+    assert.match(message("阶段一: 重构", "win32"), /不能含 :/);
+    assert.match(message("CON", "win32"), /保留的设备名/);
+    assert.match(message("proj.", "win32"), /不能以 \. 或空格结尾/);
+    assert.match(message("a\\b", "win32"), /不能含 \\/);
+    assert.match(message("a/b", "darwin"), /不能含 \//);
+    assert.match(message("C:\\x", "darwin"), /不能像路径/);
+  });
+
+  // 截断退役：目录名就是用户给的名字，照实建（显示层 CSS ellipsis 兜底）。NTFS 单段
+  // 上限 255 字符，50 字毫无压力；真到 255+ 是 mkdir 报错，不是静默建错东西
+  test("超长名字原样当目录名，不截断", async () => {
     const root = join(dir, "Orbita");
     const s = new WorkspaceStore(dir, root);
     const created = await s.create("长".repeat(50));
-    assert.equal(created.name.length, 40);
-    assert.equal(created.path, join(root, "长".repeat(40)));
+    assert.equal(created.name, "长".repeat(50));
+    assert.equal(created.path, join(root, "长".repeat(50)));
   });
 
   // ── 附加目录（文件面板与开轮目录清单共同的数据源）──
@@ -244,7 +409,8 @@ describe("WorkspaceStore", () => {
     const real = await mkdtemp(join(tmpdir(), "orbita-real-"));
     try {
       const alias = join(dir, "alias");
-      await symlink(real, alias);
+      // 目录链接用 junction：Windows 上真 symlink 要特权（EPERM），POSIX 上该参数被忽略
+      await symlink(real, alias, "junction");
       const ws = await store.add("/repo/x");
       await store.attachDir(ws.id, alias);
       const again = await store.attachDir(ws.id, real); // 用真身再挂一次也不重复
@@ -294,7 +460,7 @@ describe("WorkspaceStore", () => {
     const real = await mkdtemp(join(tmpdir(), "orbita-home-dup-"));
     try {
       const alias = join(dir, "home-alias");
-      await symlink(real, alias);
+      await symlink(real, alias, "junction"); // 同上：目录链接走 junction
       await store.attachDir(null, alias);
       const again = await store.attachDir(null, real); // 用真身再挂一次也不重复
       assert.deepEqual(again, [await realpath(real)]);

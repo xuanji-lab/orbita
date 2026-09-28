@@ -504,7 +504,11 @@ describe("边界：索引与源文件的坏形态", () => {
   });
 
   test("索引里的 piSessionFile 指向数据根外 → 拒绝（防御）；指向旧根 → 接受", async () => {
-    await writeIndex([{ id: "s-outside", title: "越界", piSessionFile: "/etc/passwd", createdAt: 1, updatedAt: 2 }]);
+    // 越界样本得是「盘上真实存在、但不在任何 Proma 数据根里」的文件：不存在的话 importer
+    // 在包含性判定之前就把它当 missing-file 了（/etc/passwd 只在 POSIX 上存在）
+    const outsideFile = join(root, "outside-the-roots.jsonl");
+    await writeFile(outsideFile, "{}\n");
+    await writeIndex([{ id: "s-outside", title: "越界", piSessionFile: outsideFile, createdAt: 1, updatedAt: 2 }]);
     const legacyRoot = join(root, "proma-old");
     const legacyDir = join(legacyRoot, "sdk-config", "sessions");
     await mkdir(legacyDir, { recursive: true });
@@ -512,7 +516,7 @@ describe("边界：索引与源文件的坏形态", () => {
     const header = { type: "session", version: 3, id: "legacy", timestamp: "2026-09-01T00:00:00.000Z", cwd: "/tmp" };
     await writeFile(legacyFile, JSON.stringify(header) + "\n");
     await writeIndex([
-      { id: "s-outside", title: "越界", piSessionFile: "/etc/passwd", createdAt: 1, updatedAt: 2 },
+      { id: "s-outside", title: "越界", piSessionFile: outsideFile, createdAt: 1, updatedAt: 2 },
       { id: "s-legacy-root", title: "旧根", piSessionFile: legacyFile, createdAt: 3, updatedAt: 4 },
     ]);
     const report = await scanImport(deps({ extraSourceRoots: [legacyRoot] }));
@@ -605,7 +609,8 @@ describe("边界：工作区三规则", () => {
   test("symlink 同址：orbita 工作区路径经 symlink 指向 Proma 工作区根 → 合并", async () => {
     const real = await mkdtemp(join(tmpdir(), "orbita-ws-real-"));
     const link = join(root, "ws-link");
-    await symlink(real, link);
+    // 目录链接用 junction：Windows 上真 symlink 要特权（EPERM），POSIX 上该参数被忽略
+    await symlink(real, link, "junction");
     await writePromaWorkspaces([{ id: "pw-9", name: "链接", projectRootPath: real }]);
     const pi = await writePiSession("2026-09-01T00-00-00-000Z_sym-000000000000001.jsonl", real);
     await writeIndex([{ id: "s-sym", title: "符号链接", piSessionFile: pi, workspaceId: "pw-9", createdAt: 1, updatedAt: 2 }]);

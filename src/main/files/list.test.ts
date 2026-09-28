@@ -26,8 +26,11 @@ beforeEach(async () => {
   await mkdir(join(rootDir, "alpha-dir"));
   await writeFile(join(rootDir, "b.txt"), "hello", "utf8");
   await writeFile(join(rootDir, "A.md"), "12345", "utf8");
-  // 链接指向目录：仍标 symlink 不跟——跟的话链接环转不出来
-  await symlink(join(rootDir, "alpha-dir"), join(rootDir, "z-link"));
+  // 链接指向目录：仍标 symlink 不跟——跟的话链接环转不出来。
+  // 用 junction 而不是真 symlink：Windows 上建真 symlink 要特权（未开开发者模式的机器一律
+  // EPERM），junction 是同一件事的免特权形态（lstat 仍 isSymbolicLink、readlink/realpath 行为
+  // 一致）；POSIX 上 type 参数被忽略，照旧是真 symlink——同 agent/skills-layout.test.ts。
+  await symlink(join(rootDir, "alpha-dir"), join(rootDir, "z-link"), "junction");
   roots = [{ kind: "attached", label: "root", path: rootDir, exists: true }];
 });
 afterEach(async () => {
@@ -79,7 +82,7 @@ describe("listDirectory", () => {
   test("root 里的链接指向 root 外：realpath 解析后落在根外，拒绝（symlink 跳板）", async () => {
     const outside = join(dir, "outside");
     await mkdir(outside);
-    await symlink(outside, join(rootDir, "escape"));
+    await symlink(outside, join(rootDir, "escape"), "junction");
     await assert.rejects(
       () => listDirectory(roots, req(rootDir, join(rootDir, "escape"))),
       /不在允许的根之内/,

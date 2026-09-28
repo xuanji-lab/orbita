@@ -861,6 +861,7 @@ function WorkspaceGroup(props: {
               cursor: "default",
             }}
           >
+            {/* 名字原样显示——「名字 == 路径」的老数据在 store 读时已治；悬停 tooltip 看全路径 */}
             {props.workspace.name}
           </strong>
         ) : (
