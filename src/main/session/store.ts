@@ -35,6 +35,7 @@ import {
   pushRecentQuery,
   recentQueriesFromRecords,
   sortSessions,
+  UNASSIGNED_PROVIDER_ID,
   type SessionCompletion,
   type SessionDetail,
   type SessionMeta,
@@ -457,6 +458,21 @@ export class SessionStore {
    */
   setStats(id: string, stats: AgentStats): Promise<void> {
     return this.update(id, { stats });
+  }
+
+  /**
+   * 给导入的会话分配模型（设置 › 服务商的「分配模型」，model-assign.ts）。
+   * **写入时再核一次占位**：预览到确认之间用户可能已经在某条会话里手动选过
+   * 模型（provider 已是真实值），那时不覆盖、返回 false。importedModel 原样
+   * 保留——分配不抹掉「原来用的是谁」的记录。
+   */
+  assignModel(id: string, providerId: string, modelId: string): Promise<boolean> {
+    return this.queueMeta(id, async () => {
+      const meta = await this.readMeta(id);
+      if (meta === null || meta.providerId !== UNASSIGNED_PROVIDER_ID) return false;
+      await writeJsonAtomic(this.metaPath(id), { ...meta, providerId, modelId });
+      return true;
+    });
   }
 
   /**

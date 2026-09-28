@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { branchRoles, SessionStore } from "./store.ts";
 import { ChannelStore } from "../channel/store.ts";
-import type { ChannelMarkRecord, SessionMeta } from "../../shared/session.ts";
+import { UNASSIGNED_PROVIDER_ID, type ChannelMarkRecord, type SessionMeta } from "../../shared/session.ts";
 import type { ChannelMessage } from "../../shared/channel.ts";
 
 const ID = "a7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c";
@@ -978,5 +978,31 @@ describe("SessionStore · 文件引用落盘", () => {
       { path: join(dir, "gone.txt"), name: "gone.txt", kind: "file", origin: "external" },
     ]);
     assert.equal(missing?.path, join(dir, "gone.txt"));
+  });
+});
+
+describe("SessionStore.assignModel（给导入的会话分配模型）", () => {
+  test("占位会话写入目标，importedModel 原样保留", async () => {
+    await store.ensureSession(
+      meta({ id: ID, providerId: UNASSIGNED_PROVIDER_ID, modelId: "glm-5.3", importedModel: "glm-5.3" }),
+    );
+    assert.equal(await store.assignModel(ID, "zai", "glm-5.3"), true);
+    const after = await store.readMeta(ID);
+    assert.equal(after?.providerId, "zai");
+    assert.equal(after?.modelId, "glm-5.3");
+    // 分配不抹掉「原来用的是谁」的记录
+    assert.equal(after?.importedModel, "glm-5.3");
+  });
+
+  test("已是真实 provider 的会话不覆盖（用户手选过的绝不碰），返回 false", async () => {
+    await store.ensureSession(meta({ id: ID, providerId: "kimi", modelId: "kimi-k3" }));
+    assert.equal(await store.assignModel(ID, "zai", "glm-5.3"), false);
+    const after = await store.readMeta(ID);
+    assert.equal(after?.providerId, "kimi");
+    assert.equal(after?.modelId, "kimi-k3");
+  });
+
+  test("meta 不在（刚被删）静默 false，不抛错", async () => {
+    assert.equal(await store.assignModel("no-such-session", "zai", "glm-5.3"), false);
   });
 });

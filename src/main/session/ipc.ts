@@ -11,8 +11,18 @@ import {
   type CarryoverStatus,
   type SessionCompletion,
 } from "../../shared/session.ts";
+import {
+  MODEL_ASSIGN_TARGET_GONE_CODE,
+  findDeadTarget,
+  groupUnassignedModels,
+  parseModelAssignEntries,
+  planAssignments,
+  type ModelAssignGroups,
+  type ModelAssignRunResult,
+} from "../../shared/model-assign.ts";
 import type { AgentHost } from "../agent/host.ts";
 import type { CarryoverStore } from "./carryover-store.ts";
+import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
 
 export function registerSessionIpc(
@@ -20,9 +30,41 @@ export function registerSessionIpc(
   onSessionRemoved: ((id: string) => void) | undefined,
   agentHost: AgentHost,
   carryovers: CarryoverStore,
+  /** 给导入的会话分配模型：执行前校验目标 provider / 模型仍存在（model-assign.ts） */
+  providers: ProviderStore,
 ): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
   ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.load(id));
+
+  // —— 给导入的会话分配模型（设置 › 服务商，契约在 shared/model-assign.ts） ——
+  ipcMain.handle(ipcChannels.modelAssignGroups, async (): Promise<ModelAssignGroups> =>
+    groupUnassignedModels(await store.list()),
+  );
+  ipcMain.handle(
+    ipcChannels.modelAssignRun,
+    async (_event, raw: unknown): Promise<ModelAssignRunResult> => {
+      const entries = parseModelAssignEntries(raw);
+      // 写入前再校验一次：目标 provider 与模型仍存在（预览到确认之间可能被删）。
+      // 整批拒绝而不是跳过那一条——半截结果会让人以为全配上了
+      const dead = findDeadTarget(
+        entries,
+        (await providers.list()).flatMap((provider) =>
+          provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id })),
+        ),
+      );
+      if (dead !== null) throw new Error(MODEL_ASSIGN_TARGET_GONE_CODE + dead.model);
+      // 会话侧按当下的盘算：还是占位且原模型名在清单里的才分配；写入时 store
+      // 再核一次占位——期间被用户改过的自然跳过（skipped）
+      let assigned = 0;
+      let skipped = 0;
+      for (const plan of planAssignments(await store.list(), entries)) {
+        if (await store.assignModel(plan.id, plan.providerId, plan.modelId)) assigned += 1;
+        else skipped += 1;
+      }
+      return { assigned, skipped };
+    },
+  );
+
   ipcMain.handle(ipcChannels.sessionRename, (_event, id: string, title: string) =>
     store.rename(id, title),
   );
