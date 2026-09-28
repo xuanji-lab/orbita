@@ -58,7 +58,7 @@ const takeId = (): string => idQueue.shift() ?? `00000000-0000-4000-8000-${Strin
 
 const orbitaWorkspace = (path: string, id = "11111111-1111-4111-8111-111111111111"): Workspace => ({
   id,
-  name: path.split("/").pop() ?? path,
+  name: basename(path),
   path,
   createdAt: 1,
   attachedDirs: [],
@@ -1445,7 +1445,7 @@ describe("Proma 的几个数据根（.proma 与 .proma-* 变体）", () => {
   }
 
   /** 把一份 pi 真源复制到另一个根的 sdk-config/sessions 下（迁移时 Proma 就是这么整份复制的） */
-  async function copyInto(dir: string, file: string, name = file.split("/").pop() ?? "x.jsonl"): Promise<string> {
+  async function copyInto(dir: string, file: string, name = basename(file)): Promise<string> {
     const target = join(dir, "sdk-config", "sessions", name);
     await mkdir(dirname(target), { recursive: true });
     await copyFile(file, target);

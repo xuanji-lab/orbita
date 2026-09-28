@@ -92,7 +92,7 @@ function makeTree(root: string): CodexPaths {
   mkdirSync(sessionsDir, { recursive: true });
   // cwd 用盘上存在的目录（sessionFolder 对不在盘上的 cwd 退 defaultCwd，那是
   // 既有语义；这里要测的是「rollout 的 cwd 传下去了」）
-  writeFileSync(join(sessionsDir, "rollout-2026-09-12T09-00-00-6f1c2b70.jsonl"), FIXTURE.replace("/Users/fjm/paper", root));
+  writeFileSync(join(sessionsDir, "rollout-2026-09-12T09-00-00-6f1c2b70.jsonl"), FIXTURE.replace("/Users/fjm/paper", JSON.stringify(root).slice(1, -1)));
   return { root: dataRoot, sessionsDir: join(dataRoot, "sessions"), home: "/Users/tester" };
 }
 
