@@ -2159,6 +2159,9 @@ describe("reasonix 数据根（Electron userData 惯例，按平台各归各位�
     );
     assert.equal(reasonixDataRoot("linux", "/home/u", { XDG_CONFIG_HOME: "/xdg" }), join("/xdg", "reasonix"));
     assert.equal(reasonixDataRoot("linux", "/home/u", {}), join("/home/u", ".config", "reasonix"));
+    // 空串同缺席：空 APPDATA / XDG 退兜底，不塌成 join("") 那样的相对进程 cwd 的路径
+    assert.equal(reasonixDataRoot("win32", "C:\\Users\\u", { APPDATA: "" }), join("C:\\Users\\u", "AppData", "Roaming", "reasonix"));
+    assert.equal(reasonixDataRoot("linux", "/home/u", { XDG_CONFIG_HOME: "" }), join("/home/u", ".config", "reasonix"));
   });
 });
 

@@ -170,15 +170,18 @@ export interface ReasonixPaths {
  * Windows 实测过；mac / Linux 是按惯例推导——mac 文件系统大小写不敏感兜得住大小写差，
  * 推错了探测 stat 不到就不可勾，无害。meta 里的 workspace_root 是会话当年所在机器上的
  * 路径，别的形（跨机迁移）由 sessionFolder 的 stat 兜底退 defaultCwd。
+ *
+ * env 取根用 `||` 不是 `??`：环境变量空串同缺席（与 workspace_root 同款纪律），
+ * 否则空串会让 join("") 塌成一个相对进程 cwd 的路径。
  */
 export function reasonixDataRoot(
   platform: NodeJS.Platform,
   home: string,
   env: { APPDATA?: string; XDG_CONFIG_HOME?: string },
 ): string {
-  if (platform === "win32") return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "reasonix");
+  if (platform === "win32") return join(env.APPDATA || join(home, "AppData", "Roaming"), "reasonix");
   if (platform === "darwin") return join(home, "Library", "Application Support", "reasonix");
-  return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "reasonix");
+  return join(env.XDG_CONFIG_HOME || join(home, ".config"), "reasonix");
 }
 
 /** 引擎对外的全部环境依赖。生产由 main 装配，测试注入临时目录与可预测的 id。 */
