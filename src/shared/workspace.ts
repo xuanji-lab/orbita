@@ -17,12 +17,10 @@ export interface Workspace {
    */
   id: string;
   /**
-   * 用户起的名字。没起过就是路径的最后一段。
-   *
-   * **不变量：名字不再解析成路径**（不含 `/`，也不是盘符 / UNC 起头的 Windows 形）。
-   * 写入两端守着（store 的 create / rename 拒收），读取端治病（parseWorkspace 把仍是
-   * 路径形的老名截回尾段）。注意 POSIX 里 `\` 是文件名的合法字符——Mac 上 `a\b` 是
-   * 正常名字，不在不变量的禁区内（Windows 上仍拒：create 拿名字当目录名会建出嵌套目录）。
+   * 用户起的名字。没起过就是路径的最后一段。**自由显示文本**——含 `/` 也行
+   * （如 `PhD/Year1`），显示层原样显示、不截尾；唯一的脏数据「名字 == 路径」
+   * （早期只切 `/` 的派生在 Windows 落库的整条路径）由 parseWorkspace 读时治愈。
+   * create 用名字当目录名，另有更严的守卫（见 store 的 assertLegalName）。
    */
   name: string;
   path: string;
@@ -55,9 +53,9 @@ export function looksLikeWindowsPath(path: string): boolean {
 }
 
 /**
- * 没起名字时的默认名：路径的最后一段。**也是显示层截尾的规则**——所有显示工作区名
- * 的地方（scope 芯片与菜单、左栏行、技能面板）都过这同一个函数：老工作区落库的名字
- * 可能是完整路径（早期创建没截尾），且菜单 label 与落库名不能算出不同的尾巴。
+ * 没起名字时的默认名：路径的最后一段。服务的是**路径**：cwd 的目录尾段（scope 芯片）、
+ * add / v1 迁移 / 导入铸名、以及 parseWorkspace 对「名字 == 路径」老数据的治愈。
+ * 不服务名字本身——名字是自由显示文本，显示层原样显示不过这个函数。
  */
 export function deriveWorkspaceName(path: string): string {
   const parts = (looksLikeWindowsPath(path) ? path.split(/[\\/]/) : path.split("/")).filter(
@@ -87,11 +85,15 @@ export function parseWorkspace(raw: unknown): Workspace | null {
   const rawName = typeof value["name"] === "string" ? value["name"] : "";
   return {
     id,
-    // 读时治病：名字统一过一遍 derive——仍是路径形的（早期只切 `/` 的派生在 Windows
-    // 落库的整条路径）截回尾段；非路径形的名字 derive 幂等原样返回（Mac 的 `a\b` 这种
-    // 合法名字不受影响）。**磁盘不动**，下一次任何整份写回自然落净；40 上限与空回退
-    // 照走 normalize。不治病的话，超长的老路径名会在改名回车时被 40 上限切成分尸名落库。
-    name: normalizeWorkspaceName(deriveWorkspaceName(rawName), path),
+    // 读时治愈（wafo 裁决）：**只治「名字 == 路径」**——这是早期只切 `/` 的派生在
+    // Windows 落库的精确指纹。用户自己起的名字（含 `PhD/Year1`、Mac 的 `a\b`）是
+    // 自由显示文本，一个字不动。**磁盘不动**，下一次任何整份写回自然落净；40 上限
+    // 与空回退照走 normalize。不治的话，超长的老路径名会在改名回车时被 40 上限切成
+    // 分尸名落库。治完之后显示层不再需要任何截尾。
+    name: normalizeWorkspaceName(
+      rawName === path ? deriveWorkspaceName(rawName) : rawName,
+      path,
+    ),
     path,
     createdAt: typeof value["createdAt"] === "number" ? value["createdAt"] : 0,
     attachedDirs: parseAttachedDirs(value["attachedDirs"]),

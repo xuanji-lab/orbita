@@ -15,7 +15,6 @@ import { api } from "../../api";
 import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
 import { isSkillSlug } from "@shared/skill";
-import { deriveWorkspaceName } from "@shared/workspace";
 import { filterSkills } from "./skill-filter.ts";
 import { useT } from "../../locale.ts";
 
@@ -51,11 +50,9 @@ export function SkillsPanel(props: {
     if (selected !== null && meta === null) setView("list");
   }, [selected, meta]);
 
-  // 显示层截尾：老工作区落库的名可能是完整路径（早期创建没截尾）
-  const workspaceName = (id: string): string => {
-    const ws = skills.workspaces.find((w) => w.id === id);
-    return ws === undefined ? id : deriveWorkspaceName(ws.name);
-  };
+  // 名字原样显示——「名字 == 路径」的老数据在 store 读时已治，显示层不截尾
+  const workspaceName = (id: string): string =>
+    skills.workspaces.find((w) => w.id === id)?.name ?? id;
 
   if (meta !== null) {
     return (
@@ -248,7 +245,7 @@ function SkillList(props: {
                 if (members.length === 0) return null;
                 return (
                   <div className="skill-group" key={ws.id}>
-                    <GroupLabel count={members.length}>{deriveWorkspaceName(ws.name)}</GroupLabel>
+                    <GroupLabel count={members.length}>{ws.name}</GroupLabel>
                     {members.map((s) => (
                       <SkillRow
                         key={`${ws.id}:${s.slug}`}
@@ -624,7 +621,7 @@ function SkillDetail(props: {
                           : skills.link(meta.slug, { kind: "workspace", workspaceId: ws.id })
                       }
                     >
-                      {deriveWorkspaceName(ws.name)}
+                      {ws.name}
                     </Chip>
                   );
                 })}

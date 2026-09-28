@@ -223,17 +223,15 @@ export class WorkspaceStore {
   }
 
   /**
-   * 改显示名（不动磁盘上的文件夹）。与 create 同一套非法名守卫——落库的名字不能
-   * 再解析成路径（`a/b`、`C:\x` 都拒；`\` 只在 Windows 拒，Mac 上它是名字的合法
-   * 字符）。空白名不在守卫里：退回路径末段是既有裁决。不存在的 id 静默无操作（既有语义）。
+   * 改显示名（不动磁盘上的文件夹）。显示名是**自由文本**（wafo 裁决）：含 `/` 的
+   * `PhD/Year1`、Mac 的 `a\b` 都合法——显示层原样显示，不再截尾，所以也不需要守卫。
+   * 空白名退回路径末段是既有裁决；不存在的 id 静默无操作（既有语义）。
    */
   async rename(id: string, name: string): Promise<void> {
     const workspaces = await this.list();
-    const target = workspaces.find((w) => w.id === id);
-    if (target === undefined) return;
-    assertLegalName(name.trim());
-    const normalized = normalizeWorkspaceName(name, target.path);
-    await this.save(workspaces.map((w) => (w.id === id ? { ...w, name: normalized } : w)));
+    await this.save(
+      workspaces.map((w) => (w.id === id ? { ...w, name: normalizeWorkspaceName(name, w.path) } : w)),
+    );
   }
 
   /**
@@ -330,11 +328,11 @@ export class WorkspaceStore {
 }
 
 /**
- * 工作区名字的非法内容守卫，create 与 rename 同一套（`Workspace.name` 的不变量：
- * 不再解析成路径）。`/`、`.` / `..`、空字节、盘符 / UNC 起头在任何 OS 都拒；
- * `\` **只在 Windows 拒**——POSIX 里它是文件名的合法字符（Mac 上 `a\b` 是正常名字），
- * Windows 上 create 拿名字当目录名会静默建出嵌套目录。空名不在内：create 另行拒绝，
- * rename 的空白退回路径末段是既有裁决。platform 可注入是为了测试能两个 OS 都验。
+ * **create 的目录名守卫**（只管 create：那里名字会真的变成磁盘上的一个目录）：
+ * `/`、`.` / `..`、空字节、盘符 / UNC 起头在任何 OS 都拒；`\` **只在 Windows 拒**
+ * ——POSIX 里它是文件名的合法字符（Mac / Linux 上 `a\b` 是正常的目录名），Windows
+ * 上当目录名会静默建出嵌套目录。rename 不走这个守卫：显示名是自由文本。
+ * platform 可注入是为了测试能两个 OS 都验。
  */
 export function assertLegalName(name: string, platform: NodeJS.Platform = process.platform): void {
   if (

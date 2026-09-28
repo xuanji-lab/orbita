@@ -7,7 +7,7 @@ import { Menu, type MenuItem } from "./Menu";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
-import { deriveWorkspaceName, type Workspace } from "@shared/workspace";
+import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
@@ -861,8 +861,8 @@ function WorkspaceGroup(props: {
               cursor: "default",
             }}
           >
-            {/* 显示层截尾：老工作区落库的名可能是完整路径，悬停 tooltip 看全路径 */}
-            {deriveWorkspaceName(props.workspace.name)}
+            {/* 名字原样显示——「名字 == 路径」的老数据在 store 读时已治；悬停 tooltip 看全路径 */}
+            {props.workspace.name}
           </strong>
         ) : (
           <input
@@ -1300,7 +1300,7 @@ function SessionRow(props: {
             },
             ...session.workspaces.map((workspace) => ({
               id: workspace.id,
-              label: deriveWorkspaceName(workspace.name),
+              label: workspace.name,
               icon: "folder" as const,
               checked: meta.workspaceId === workspace.id,
               onSelect: () => session.moveSession(meta.id, workspace.id),

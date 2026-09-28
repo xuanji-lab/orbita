@@ -48,6 +48,22 @@ describe("deriveWorkspaceName", () => {
   it("根目录退回原路径，不给空名字", () => {
     strictEqual(deriveWorkspaceName("/"), "/");
   });
+
+  it("主流系统的路径形都取对尾段——覆盖绝大多数电脑", () => {
+    const cases: Array<[string, string]> = [
+      ["C:\\Users\\dama\\Desktop\\p1\\paper3", "paper3"], // Windows 盘符
+      ["C:/Users/dama/Desktop/p1/paper3", "paper3"], // Windows 正斜杠（混合分隔）
+      ["\\\\server\\share\\proj", "proj"], // UNC 网络共享（SMB）
+      ["\\\\wsl.localhost\\Ubuntu\\home\\u\\proj", "proj"], // WSL：Windows 选进 Linux 子系统
+      ["\\\\?\\C:\\Users\\dama\\proj", "proj"], // Windows 长路径前缀
+      ["/Users/wafo/repo/orbita-lab", "orbita-lab"], // macOS
+      ["/home/user/proj", "proj"], // Linux / BSD（POSIX 同形）
+      ["/c/Users/dama/proj", "proj"], // Git Bash / MSYS 形
+      ["file:///C:/Users/dama/proj", "proj"], // file URI（Windows 盘）
+      ["file:///home/user/proj", "proj"], // file URI（POSIX）
+    ];
+    for (const [path, want] of cases) strictEqual(deriveWorkspaceName(path), want, path);
+  });
 });
 
 describe("normalizeWorkspaceName", () => {
@@ -87,12 +103,21 @@ describe("parseWorkspace", () => {
     strictEqual(parseWorkspace({ ...valid, name: "   " })?.name, "orbita-lab");
   });
 
-  // 早期只切 `/` 的派生在 Windows 落库的整条路径：读时截回尾段（磁盘不动，写回自然落净）。
-  // 不治的话，超长老路径名会在改名回车时被 40 上限切成分尸名落库。
-  it("名字仍是路径形读时治病——截回尾段；Mac 的 a\\b 合法名字原样保留", () => {
-    strictEqual(parseWorkspace({ ...valid, name: "C:\\Users\\dama\\Desktop\\p1\\paper3" })?.name, "paper3");
-    strictEqual(parseWorkspace({ ...valid, name: "a/b" })?.name, "b");
-    strictEqual(parseWorkspace({ ...valid, name: "/Users/wafo/repo/orbita-lab" })?.name, "orbita-lab");
+  // 早期只切 `/` 的派生在 Windows 落库的整条路径——精确指纹是「名字 == 路径」，
+  // 只治这一类（wafo 裁决）；磁盘不动，下一次整份写回自然落净。不治的话，超长的
+  // 老路径名会在改名回车时被 40 上限切成分尸名落库。治完显示层不再需要任何截尾。
+  it("读时治愈只治「名字 == 路径」；用户起的名字一个字不动", () => {
+    strictEqual(parseWorkspace({ ...valid, name: valid.path })?.name, "orbita-lab");
+    strictEqual(
+      parseWorkspace({
+        ...valid,
+        path: "C:\\Users\\dama\\Desktop\\p1\\paper3",
+        name: "C:\\Users\\dama\\Desktop\\p1\\paper3",
+      })?.name,
+      "paper3",
+    );
+    // 用户自己起的名字是自由显示文本：含 / 的、Mac 的 a\b——原样保留
+    strictEqual(parseWorkspace({ ...valid, name: "PhD/Year1" })?.name, "PhD/Year1");
     strictEqual(parseWorkspace({ ...valid, name: "a\\b" })?.name, "a\\b");
   });
 

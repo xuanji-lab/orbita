@@ -203,16 +203,16 @@ describe("WorkspaceStore", () => {
     assert.deepEqual(await s.list(), []);
   });
 
-  test("改成路径形的名字抛错——落库的名字不能再解析成路径", async () => {
+  test("rename 是自由显示文本：含 / 的 PhD/Year1 也收——显示层原样显示不截尾（wafo 裁决）", async () => {
     const added = await store.add("/repo/x");
-    await assert.rejects(() => store.rename(added.id, "a/b"), Error);
-    await assert.rejects(() => store.rename(added.id, "C:\\x\\y"), Error);
-    assert.equal((await store.list())[0]?.name, "x");
+    await store.rename(added.id, "PhD/Year1");
+    assert.equal((await store.list())[0]?.name, "PhD/Year1");
   });
 
-  test("assertLegalName 平台矩阵：\\ 只在 Windows 拒——POSIX 里它是文件名的合法字符", () => {
+  test("assertLegalName 平台矩阵：\\ 只在 Windows 拒——POSIX 系（Mac / Linux）里它是文件名的合法字符", () => {
     assert.throws(() => assertLegalName("a\\b", "win32"), Error);
     assertLegalName("a\\b", "darwin"); // Mac 上 a\b 是正常名字，不抛
+    assertLegalName("a\\b", "linux"); // Linux 同 POSIX
     assert.throws(() => assertLegalName("a/b", "darwin"), Error);
     assert.throws(() => assertLegalName("C:\\x", "darwin"), Error); // 盘符形在哪个 OS 都像路径
     assert.throws(() => assertLegalName("..", "darwin"), Error);
