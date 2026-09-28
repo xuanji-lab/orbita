@@ -2,7 +2,7 @@
  * 迁移（设置 › Migration）的契约 —— IPC 四层的第 1 层（与引擎同 PR 落地，消费者纪律）。
  * 三个通道：探测（只 stat）→ 扫描（dry-run，只读勾选的来源）→ 执行（按用户的选择落盘）。
  *
- * 通路背景（调研 2026-09-21）：Proma 的 pi 真源（`~/.proma-dev/sdk-config/sessions/`，
+ * 通路背景（调研 2026-09-21）：Proma 的 pi 真源（`<数据根>/sdk-config/sessions/`，
  * header version 3）与 orbita 锁定的 pi 0.84.3 同版本同格式——这层导入是**同构复制 +
  * 元数据映射**，无 LLM 参与。本文件只定义「扫描报告 / 执行报告」的形状与跳过原因的
  * 词汇；映射规则（工作区三规则）在引擎里，`src/main/session/importer.ts`。导入与模型
@@ -16,7 +16,8 @@
 /**
  * 迁移来源（2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
  *
- * - proma：Proma 桌面应用（~/.proma-dev）
+ * - proma：Proma 桌面应用。数据根是家目录下的 `.proma` 与它的变体（`.proma-dev`、`.proma-dev-fork`…，
+ *   开发版与正式版各用一个），有几个读几个；同一条会话在几个根里都有时只导一份（跳过原因 duplicate）
  * - claude-code：Claude Code 的会话存储（~/.claude/projects），命令行与 Claude 桌面应用共用；
  *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题；另有 ~/.claude/skills
  * - kimi-code：Kimi Code 命令行（~/.kimi-code）：会话在 sessions/<工作区>/<会话>/ 下，对话是
@@ -104,6 +105,13 @@ export type ImportSkipReason =
   | "no-pi-session"
   /** 幂等命中：这条源文件已经导入过（按 meta.importedFrom 判重） */
   | "already-imported"
+  /**
+   * 同一条会话在别处还有一份，那一份进了计划、这份不导。两种来路：Proma 的几个数据根
+   * （`.proma` 迁到 `.proma-dev` 时整份复制过去）里同一个会话 id 的源文件内容相同，或这份是
+   * 那份的前缀（复制过去之后又接着聊了）；以及同一份索引里两个条目指着同一个文件。
+   * detail 是留下的那一份的源文件路径
+   */
+  | "duplicate"
   /** 源文件指向的文件不在盘上 */
   | "missing-file"
   /** 打不开/读不懂：header 缺失、version 超前、文件本身坏 */
