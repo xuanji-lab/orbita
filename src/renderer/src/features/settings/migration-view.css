@@ -952,7 +952,7 @@
   margin-bottom: var(--space-3);
 }
 
-.mg-greet-steps {
+.mg-prereq {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -962,7 +962,7 @@
   flex: none;
 }
 
-.mg-step {
+.mg-prereq-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -972,19 +972,19 @@
 }
 
 /* 完成的一步：勾用 success 色（颜色只是第二信号，状态本身在图标形状上） */
-.mg-step[data-done] {
+.mg-prereq-item[data-done] {
   color: var(--color-text-secondary);
 }
 
-.mg-step[data-done] > svg {
+.mg-prereq-item[data-done] > svg {
   color: var(--color-success);
 }
 
-.mg-step[data-locked] {
+.mg-prereq-item[data-locked] {
   color: var(--color-text-tertiary);
 }
 
-.mg-step-link {
+.mg-prereq-link {
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -999,11 +999,11 @@
   cursor: pointer;
 }
 
-.mg-step-link:hover {
+.mg-prereq-link:hover {
   text-decoration-color: currentColor;
 }
 
-.mg-step-label {
+.mg-prereq-label {
   white-space: nowrap;
 }
 

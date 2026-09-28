@@ -1190,7 +1190,7 @@ function GreetingChecklist(props: {
   }
   return (
     <div className="mg-greet" data-ready={ready || undefined}>
-      <ol className="mg-greet-steps">
+      <ol className="mg-prereq">
         <GreetingStep
           done={steps.provider}
           label={t.migration.greetingStepProvider}
@@ -1230,19 +1230,19 @@ function GreetingStep(props: {
 }) {
   const locked = props.locked === true;
   return (
-    <li className="mg-step" data-done={props.done || undefined} data-locked={locked || undefined} title={locked ? props.lockedTip : undefined}>
+    <li className="mg-prereq-item" data-done={props.done || undefined} data-locked={locked || undefined} title={locked ? props.lockedTip : undefined}>
       <Icon
         name={props.done ? "circle-check" : locked ? "circle-off" : "circle-dot"}
         size={12}
         strokeWidth={1.8}
       />
       {props.onJump !== undefined ? (
-        <button type="button" className="mg-step-link" onClick={props.onJump}>
+        <button type="button" className="mg-prereq-link" onClick={props.onJump}>
           {props.label}
           <Icon name="arrow-right" size={10} strokeWidth={1.8} />
         </button>
       ) : (
-        <span className="mg-step-label">{props.label}</span>
+        <span className="mg-prereq-label">{props.label}</span>
       )}
     </li>
   );

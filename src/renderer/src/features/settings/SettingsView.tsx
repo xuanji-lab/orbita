@@ -182,19 +182,26 @@ function General(props: {
   const t = useT();
   const choreRowRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!props.highlightChore || props.onHighlightConsumed === undefined) return;
-    props.onHighlightConsumed();
+    if (props.highlightChore !== true) return;
     const row = choreRowRef.current;
     if (row === null) return;
     row.scrollIntoView({ block: "center" });
     // 焦点落到选择器本体（Chip 是 button）：键盘用户从这一行继续
     row.querySelector("button")?.focus();
     row.dataset.flash = "on";
-    const timer = window.setTimeout(() => {
+    // 高亮的收尾听 animationend，不靠计时器；清 data-flash 的同一拍才通知父级
+    // 消费完——在 effect 里同步消费会让它立刻重跑、cleanup 把监听拆掉，
+    // data-flash 就永远留在行上（动画 1.6s，effect 依赖只有这个布尔）
+    const done = (): void => {
       delete row.dataset.flash;
-    }, 1600);
-    return () => window.clearTimeout(timer);
-  }, [props.highlightChore, props.onHighlightConsumed]);
+      row.removeEventListener("animationend", done);
+      props.onHighlightConsumed?.();
+    };
+    row.addEventListener("animationend", done);
+    return () => row.removeEventListener("animationend", done);
+    // 依赖故意只有 highlightChore：onHighlightConsumed 只是 setHighlightChore(false)，
+    // 每次渲染新箭头函数，进依赖会让 effect 每帧重挂监听
+  }, [props.highlightChore]);
   // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
   const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
   const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
