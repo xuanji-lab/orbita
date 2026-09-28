@@ -6,7 +6,11 @@
  * 的隔离执行副本（那个将来叫 worktree）——见 `docs/ubiquitous-language.md`。
  */
 
-/** 名字上限。侧栏只有 288px，名字要和分支、计数挤在一行。 */
+/**
+ * **历史切档，不再是上限**（2026-09-28 裁决：截断是笨办法）。老版本的输入端用它把名字
+ * 截到 40 字，落盘的前 40 字前缀是老数据的一种形态——`looksLikePathDerivedName` 第 2 类
+ * 指纹要认这一档，所以常量留着。新数据不截断：侧栏显示由 CSS ellipsis 兜底。
+ */
 export const WORKSPACE_NAME_MAX = 40;
 
 export interface Workspace {
@@ -62,8 +66,6 @@ export function looksLikeWindowsPath(path: string): boolean {
  * 没起名字时的默认名：路径的最后一段。服务的是**路径**：cwd 的目录尾段（scope 芯片）、
  * add / v1 迁移 / 导入铸名，以及 v2 → v3 迁移把老脏名治回来（store 的 healNames）。
  * 不服务名字本身——名字是自由显示文本，显示层原样显示不过这个函数。
- * **不受 40 上限约束**：WORKSPACE_NAME_MAX 约束的是用户输入（normalize），从路径派生
- * 出来的名字照实取——截一刀只会得到分尸名，而磁盘上的目录名是完整的。
  */
 export function deriveWorkspaceName(path: string): string {
   const parts = (looksLikeWindowsPath(path) ? path.split(/[\\/]/) : path.split("/")).filter(
@@ -72,11 +74,16 @@ export function deriveWorkspaceName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-/** 用户输入的名字 → 落盘的名字。空白名退回路径末段，而不是留一个看不见的空行。 */
+/**
+ * 用户输入的名字 → 落盘的名字。空白名退回路径末段，而不是留一个看不见的空行。
+ * **不截断**：名字超长的病根是「路径当名字」（治它取尾段，不靠切），用户自己起的
+ * 长名字是自由显示文本，照实存——显示层 CSS ellipsis 兜底。截断只会造分尸名：
+ * 切出来的前缀既不是用户起的名，也不是路径的尾段，两头不是。
+ */
 export function normalizeWorkspaceName(name: string, path: string): string {
   const trimmed = name.trim();
   if (trimmed === "") return deriveWorkspaceName(path);
-  return trimmed.length > WORKSPACE_NAME_MAX ? trimmed.slice(0, WORKSPACE_NAME_MAX) : trimmed;
+  return trimmed;
 }
 
 /**
@@ -85,10 +92,11 @@ export function normalizeWorkspaceName(name: string, path: string): string {
  * 只给 store 的 v2 → v3 一次性迁移用（`healNames`），**不在读路径上跑**——
  * 每次读都改一个用户可见字段是隐藏的数据变更，磁盘也永远脏。两类：
  *   1. 整条路径当名字：`add` / v1 迁移铸的（早期只切 `/` 的派生在 Windows 的产物）
- *   2. 路径被 WORKSPACE_NAME_MAX 切过：`addImported` / `rename` 落库前过的 normalize
+ *   2. 路径的前 40 字：**老版本**的 `addImported` / `rename` 落库前过的 normalize 切档
+ *      （截断现已退役，但切过的老数据还在磁盘上）
  * 判定必须收得这么窄：用户自己起的名字是自由显示文本（`PhD/Year1`、Mac 的 `a\b`），
- * 「像路径」不是理由，只有「跟这条记录自己的 path 对得上」才是。第 1 类里超长的那些
- * 在 parseWorkspace 里已经被 normalize 切过，正好落进第 2 类——两条一起才没有缝。
+ * 「像路径」不是理由，只有「跟这条记录自己的 path 对得上」才是。超长的整条路径在
+ * 第 1 类里全等命中；被老 normalize 切过前 40 字的在第 2 类——两条一起才没有缝。
  */
 export function looksLikePathDerivedName(name: string, path: string): boolean {
   // 大小写只在 Windows 形路径上折：POSIX 的文件名区分大小写，折了会误伤用户的名字；
@@ -96,6 +104,8 @@ export function looksLikePathDerivedName(name: string, path: string): boolean {
   const fold = (value: string): string => (looksLikeWindowsPath(path) ? value.toLowerCase() : value);
   const folded = fold(name);
   const wanted = fold(path);
+  // 第 2 类的 40 字档是老 normalize 的切档位（截断已退役，见 WORKSPACE_NAME_MAX）——
+  // 它切过的老数据还在磁盘上，指纹得继续认这一档
   return folded === wanted || (folded.length === WORKSPACE_NAME_MAX && wanted.startsWith(folded));
 }
 

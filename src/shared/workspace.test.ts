@@ -101,8 +101,10 @@ describe("normalizeWorkspaceName", () => {
     strictEqual(normalizeWorkspaceName("", "/Users/wafo/repo/orbita-lab"), "orbita-lab");
   });
 
-  it("超长截断——侧栏只有 288px", () => {
-    strictEqual(normalizeWorkspaceName("x".repeat(200), "/x/y").length, WORKSPACE_NAME_MAX);
+  // 2026-09-28 裁决：截断退役——超长名字照实存，显示层 CSS ellipsis 兜底。
+  // 截断只会造分尸名：切出来的前缀既不是用户起的名，也不是路径的尾段，两头不是
+  it("超长不截断", () => {
+    strictEqual(normalizeWorkspaceName("x".repeat(200), "/x/y"), "x".repeat(200));
   });
 });
 
@@ -118,8 +120,10 @@ describe("looksLikePathDerivedName", () => {
     );
   });
 
-  // 落库前会过 normalize 的 40 上限，>40 字的路径存下来的是它的前 40 字。这是同一病根的
-  // 第二副面孔，而它比「整条路径」更常见（真实路径几乎都过 40 字）——只认第一种就会漏
+  // 老版本的落库链路（addImported / rename 过 normalize）会把 >40 字的路径存成它的
+  // 前 40 字。这是同一病根的第二副面孔，而它比「整条路径」更常见（真实路径几乎都过
+  // 40 字）——只认第一种就会漏。截断虽已退役（见 WORKSPACE_NAME_MAX），切过的老数据
+  // 还在磁盘上，这一档指纹要一直认下去
   it("被 40 上限切过的路径前缀：也认出来", () => {
     const win = "C:\\Users\\dama\\Desktop\\my-super-long-project-folder-name-2026";
     strictEqual(win.length > WORKSPACE_NAME_MAX, true);
@@ -168,6 +172,14 @@ describe("parseWorkspace", () => {
     strictEqual(parseWorkspace({ ...valid, path: win, name: win })?.name, win);
     strictEqual(parseWorkspace({ ...valid, name: "PhD/Year1" })?.name, "PhD/Year1");
     strictEqual(parseWorkspace({ ...valid, name: "a\\b" })?.name, "a\\b");
+  });
+
+  // 截断退役的另一半：读盘不截。v2 → v3 迁移会把 >40 字的尾段原样落盘（healNames
+  // 不截），若 parse 再切一刀，治好的名字只活一个会话——重启变分尸名，写一次盘就回写磁盘
+  it("超长名字原样解析，读盘不截断", () => {
+    const long = "my-extremely-long-project-directory-name-2026-forever";
+    strictEqual(long.length > WORKSPACE_NAME_MAX, true);
+    strictEqual(parseWorkspace({ ...valid, name: long })?.name, long);
   });
 
   it("缺 createdAt 给 0，不因为一个时间戳丢掉整条工作区", () => {

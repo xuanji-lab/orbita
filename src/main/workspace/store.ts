@@ -152,18 +152,19 @@ export class WorkspaceStore {
   /**
    * 命名新建（2026-09-22 裁决：一个工作区就是一个用户能在 Finder 里打开的文件夹）：
    * 在 ~/Orbita/<name>/ 建文件夹并加为工作区。名字先过 normalize（与 rename 同一套
-   * 规则：trim + 40 上限）——目录名就是工作区名，**一辈子不动**；之后改名只改列表里
+   * 规则：trim + 空白回退）——目录名就是工作区名，**一辈子不动**；之后改名只改列表里
    * 的显示名，不动文件夹。非法名（空、. / ..、像路径或空字节；Windows 上还含 `\`）
    * 当场抛错，不上磁盘。同名文件夹已存在就直接加它：mkdir recursive 不炸、add 同路径
    * 幂等——不覆盖、不报错。
    */
   async create(name: string): Promise<Workspace> {
-    const trimmed = name.trim();
     const normalized = normalizeWorkspaceName(name, "");
     if (normalized === "") {
       throw new Error(`「${name}」不能用作工作区名字：不能为空`);
     }
-    assertLegalName(trimmed);
+    // 守卫查的就是真正当目录名的这份——查截断/规整前的输入会漏（老代码在这吃了亏：
+    // 检查的对象和落盘的对象不是同一个字符串）
+    assertLegalName(normalized);
     const path = join(this.orbitaRoot(), normalized);
     await mkdir(path, { recursive: true });
     // add 的默认名取路径末段，而这里的目录名就是 normalize 后的名字——恰好是用户给的

@@ -138,6 +138,23 @@ describe("WorkspaceStore", () => {
     assert.equal(workspace?.name, "my-super-long-project-folder-name-2026");
   });
 
+  // 治好的名字要活过重启：v2 → v3 把 >40 字的尾段原样落盘，若读盘再切一刀（老 parse
+  // 的 40 上限），治好的名字只活一个会话——重启变分尸名，之后任何一次写操作把分尸名
+  // 回写磁盘，治愈彻底销毁。这一条把「迁移不截 + 读盘不截」整条链钉住
+  test("治好的超长尾段活过重启：再读不变形，写操作后磁盘不碎", async () => {
+    const long = "my-extremely-long-project-directory-name-2026-forever";
+    const path = "C:\\Users\\dama\\Desktop\\" + long;
+    await writeV2([v2Record(path.slice(0, WORKSPACE_NAME_MAX), path)]);
+    await new WorkspaceStore(dir).list(); // 第一次启动:迁移治好,落盘 v3
+
+    const reopened = (await new WorkspaceStore(dir).list())[0]; // 重启:version 3,纯解析
+    assert.equal(reopened?.name, long);
+
+    await new WorkspaceStore(dir).add("/another/proj"); // 重启后的任意写操作
+    const disk = await readDisk();
+    assert.equal((disk["workspaces"] as Array<{ name: string }>)[0]?.name, long);
+  });
+
   test("v2 → v3：用户自己起的名字一个字不动——含 / 的、长度刚好 40 的", async () => {
     const path = "/Users/wafo/repo/orbita-lab";
     await writeV2([
@@ -349,12 +366,14 @@ describe("WorkspaceStore", () => {
     assert.match(message("C:\\x", "darwin"), /不能像路径/);
   });
 
-  test("超长名字截到 WORKSPACE_NAME_MAX，目录名跟着截后的走", async () => {
+  // 截断退役：目录名就是用户给的名字，照实建（显示层 CSS ellipsis 兜底）。NTFS 单段
+  // 上限 255 字符，50 字毫无压力；真到 255+ 是 mkdir 报错，不是静默建错东西
+  test("超长名字原样当目录名，不截断", async () => {
     const root = join(dir, "Orbita");
     const s = new WorkspaceStore(dir, root);
     const created = await s.create("长".repeat(50));
-    assert.equal(created.name.length, 40);
-    assert.equal(created.path, join(root, "长".repeat(40)));
+    assert.equal(created.name, "长".repeat(50));
+    assert.equal(created.path, join(root, "长".repeat(50)));
   });
 
   // ── 附加目录（文件面板与开轮目录清单共同的数据源）──
