@@ -17,7 +17,10 @@ import type {
   ImportSourceId,
   ImportSourceProbe,
 } from "@shared/import";
+import type { ModelPair } from "@shared/settings";
+import type { ProviderDto } from "@shared/provider";
 import type { Messages } from "../../messages-en.ts";
+import { hasCredentials } from "./providers-view-model.ts";
 import {
   formatBytes,
   formatMoment,
@@ -405,4 +408,36 @@ export function doneFacts(result: ImportRunReport, t: Messages): DoneFact[] {
     });
   }
   return facts;
+}
+
+// ---------------------------------------------------------------------------
+// 「跳过随手一句」前面的三步清单（配置服务商 → 选家务活模型 → 检查）
+// ---------------------------------------------------------------------------
+
+/** 清单两步的完成态；第三步（检查本身）能不能勾由这两步推出。 */
+export interface GreetingStepsState {
+  /** ① 至少配了一个能用的服务商（有密钥且声明过模型——与模型菜单同一把尺） */
+  provider: boolean;
+  /** ② 选了家务活模型，且它指的服务商与模型都还在（provider 被删按没选处理） */
+  chore: boolean;
+}
+
+/**
+ * 清单状态**每次渲染按当下的服务商列表与设置现算**，不吃扫描报告里的旧值——
+ * 用户配完回来必须立刻看到打勾（wafo 2026-09-28：我们设计的很体贴，用户感知不到
+ * 还觉得懵逼——为什么这个小功能要麻烦我跳转两次）。
+ */
+export function greetingSteps(
+  providers: readonly ProviderDto[],
+  choreModel: ModelPair | undefined,
+): GreetingStepsState {
+  const usable = providers.filter((p) => hasCredentials(p.auth) && p.models.declared.length > 0);
+  return {
+    provider: usable.length > 0,
+    chore:
+      choreModel !== undefined &&
+      usable.some(
+        (p) => p.id === choreModel.providerId && p.models.declared.some((m) => m.id === choreModel.modelId),
+      ),
+  };
 }

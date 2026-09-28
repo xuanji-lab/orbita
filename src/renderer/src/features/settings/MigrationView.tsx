@@ -16,6 +16,8 @@ import type {
 } from "@shared/import";
 import { IMPORT_GREETING_UNAVAILABLE_CODE } from "@shared/import";
 import type { Workspace } from "@shared/workspace";
+import type { ProviderDto } from "@shared/provider";
+import type { ModelPair } from "@shared/settings";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon, type IconName } from "../../shell/Icon";
@@ -48,6 +50,7 @@ import {
   doneFacts,
   doneHeadline,
   footFacts,
+  greetingSteps,
   headline,
   mixedSources,
   modelTip,
@@ -60,6 +63,7 @@ import {
   unconvertibleSkips,
   type ChangeBadge,
   type FootFactKind,
+  type GreetingStepsState,
   type PathGlyph,
   type SessionFactKind,
   type SourceCounts,
@@ -135,9 +139,13 @@ function errorText(cause: unknown): string {
 
 export function MigrationView(props: {
   workspaces: readonly Workspace[];
+  /** 全部厂商（含没填 key 的）——三步清单的状态每次按它现算 */
+  providers: readonly ProviderDto[];
+  /** 设置里的家务活模型（清单第②步与检查用的模型都取这份实时值） */
+  choreModel: ModelPair | undefined;
   onImported: () => void;
   onOpenProviders: () => void;
-  /** 招呼检查没选家务活模型时跳到通用设置（那里选） */
+  /** 招呼检查没选家务活模型时跳到通用设置（那里选，并高亮那一行） */
   onOpenGeneral: () => void;
 }) {
   const t = useT();
@@ -417,9 +425,11 @@ export function MigrationView(props: {
                   </div>
                 ) : (
                   <>
-                    <GreetingCheck
+                    <GreetingChecklist
                       plan={scan.report.greetingCheck}
                       state={greetings}
+                      steps={greetingSteps(props.providers, props.choreModel)}
+                      choreModel={props.choreModel}
                       disabled={scan.kind !== "ready" || run.kind === "running"}
                       onOpenProviders={props.onOpenProviders}
                       onOpenGeneral={props.onOpenGeneral}
@@ -1126,53 +1136,36 @@ function greetingUnavailableOf(text: string): ImportGreetingUnavailable | null {
 }
 
 /**
- * 列表上方一个勾选框：「不导只随手发了一句 hi / test 的会话」。默认不勾——它要调模型，
- * 副行事先写明用哪个模型（家务活模型）、要查几条，花的是用户的额度（wafo 2026-09-25）。
- * 模型不可用时置灰，状态行说原因并给出去路：没有 provider → 跳 Providers；
- * 有 provider 但没选家务活模型 → 跳通用设置（2026-09-28 裁决：检查只用家务活模型，
- * 不再占用子会话模型或导入兑底模型）。
+ * 列表上方的三步清单：「① 配置服务商 → ② 选家务活模型 → ③ 不导只随手发了一句
+ * hi / test 的会话」。①② 的状态**每次渲染按当下的服务商与设置现算**（migration-page.ts
+ * 的 greetingSteps），不吃扫描报告的旧值——用户从别处配完回来要立刻看到打勾
+ * （wafo 2026-09-28 原话：我们设计的很体贴，用户感知不到还觉得懵逼——为什么这个
+ * 小功能要麻烦我跳转两次；直接在迁移页可视化地告诉用户，你需要跳转两次）。
+ * ①②未完成时整行是跳转（ Providers / General）；①没完成时②置灰（没有服务商
+ * 就选不了家务活模型）；③只有①②都完成才可勾，写明用的是哪个模型。
  */
-function GreetingCheck(props: {
+function GreetingChecklist(props: {
   plan: ImportGreetingCheckPlan;
   state: GreetingState;
+  steps: GreetingStepsState;
+  choreModel: ModelPair | undefined;
   disabled: boolean;
   onOpenProviders: () => void;
   onOpenGeneral: () => void;
   onToggle: (on: boolean) => void;
 }) {
   const t = useT();
-  const { plan, state } = props;
-  const model = plan.model;
-  const unavailable = model === null || plan.candidates === 0;
+  const { plan, state, steps } = props;
+  const ready = steps.provider && steps.chore;
   const sessions = t.migration.sessions(plan.candidates);
-  const jump = (open: () => void) => (event: React.MouseEvent): void => {
-    // 在 <label> 里点按钮不能触发勾选（label 的默认行为），也不冒泡
-    event.preventDefault();
-    event.stopPropagation();
-    open();
-  };
-  const unavailableReason: ImportGreetingUnavailable | null =
-    state.kind === "error" && state.reason !== null
-      ? state.reason
-      : model === null
-        ? plan.unavailable
-        : null;
-  const action =
-    unavailableReason === "no-provider" ? (
-      <button type="button" className="mg-link" onClick={jump(props.onOpenProviders)}>
-        {t.migration.setUpProviders}
-      </button>
-    ) : unavailableReason === "no-chore-model" ? (
-      <button type="button" className="mg-link" onClick={jump(props.onOpenGeneral)}>
-        {t.migration.greetingOpenSettings}
-      </button>
-    ) : null;
+  // 显示的模型取实时设置（steps.chore 为真时必有值），不取扫描报告里的旧值
+  const modelId = steps.chore ? props.choreModel?.modelId ?? null : null;
   let sub: React.ReactNode;
   if (state.kind === "checking") {
     sub = (
       <>
         <Icon name="loader-circle" size={11} spin />
-        {t.migration.greetingAsking(model?.modelId ?? t.migration.theModel, sessions)}
+        {t.migration.greetingAsking(modelId ?? t.migration.theModel, sessions)}
       </>
     );
   } else if (state.kind === "on") {
@@ -1190,29 +1183,68 @@ function GreetingCheck(props: {
         {t.migration.greetingFailed} {state.message}
       </span>
     );
-  } else if (model === null) {
-    sub = plan.unavailable === "no-provider" ? t.migration.greetingNeedsProvider : t.migration.greetingPickChore;
-  } else if (plan.candidates === 0) {
+  } else if (ready && plan.candidates === 0) {
     sub = t.migration.greetingNothing;
-  } else {
-    sub = t.migration.greetingUsesChore(sessions, model.modelId);
+  } else if (ready) {
+    sub = t.migration.greetingUsesChore(sessions, modelId ?? t.migration.theModel);
   }
   return (
-    <label className="mg-greet" data-disabled={unavailable || undefined}>
-      <input
-        type="checkbox"
-        checked={state.kind === "checking" || state.kind === "on"}
-        disabled={props.disabled || unavailable || state.kind === "checking"}
-        onChange={(event) => props.onToggle(event.target.checked)}
-      />
-      <span className="mg-greet-copy">
-        <span className="mg-greet-title">{t.migration.greetingTitle}</span>
-        <span className="mg-greet-sub">
-          {sub}
-          {action}
+    <div className="mg-greet" data-ready={ready || undefined}>
+      <ol className="mg-greet-steps">
+        <GreetingStep
+          done={steps.provider}
+          label={t.migration.greetingStepProvider}
+          onJump={steps.provider ? undefined : props.onOpenProviders}
+        />
+        <GreetingStep
+          done={steps.chore}
+          label={t.migration.greetingStepChore}
+          locked={!steps.provider}
+          lockedTip={t.migration.greetingStepLockedTip}
+          onJump={steps.provider && !steps.chore ? props.onOpenGeneral : undefined}
+        />
+      </ol>
+      <label className="mg-greet-main" data-disabled={!ready || undefined}>
+        <input
+          type="checkbox"
+          checked={state.kind === "checking" || state.kind === "on"}
+          disabled={props.disabled || !ready || state.kind === "checking"}
+          onChange={(event) => props.onToggle(event.target.checked)}
+        />
+        <span className="mg-greet-copy">
+          <span className="mg-greet-title">{t.migration.greetingTitle}</span>
+          <span className="mg-greet-sub">{sub}</span>
         </span>
-      </span>
-    </label>
+      </label>
+    </div>
+  );
+}
+
+/** 清单里的一步：完成的打勾（success 色）；未完成的是跳转；①没完成时②置灰。 */
+function GreetingStep(props: {
+  done: boolean;
+  label: string;
+  locked?: boolean;
+  lockedTip?: string;
+  onJump?: () => void;
+}) {
+  const locked = props.locked === true;
+  return (
+    <li className="mg-step" data-done={props.done || undefined} data-locked={locked || undefined} title={locked ? props.lockedTip : undefined}>
+      <Icon
+        name={props.done ? "circle-check" : locked ? "circle-off" : "circle-dot"}
+        size={12}
+        strokeWidth={1.8}
+      />
+      {props.onJump !== undefined ? (
+        <button type="button" className="mg-step-link" onClick={props.onJump}>
+          {props.label}
+          <Icon name="arrow-right" size={10} strokeWidth={1.8} />
+        </button>
+      ) : (
+        <span className="mg-step-label">{props.label}</span>
+      )}
+    </li>
   );
 }
 

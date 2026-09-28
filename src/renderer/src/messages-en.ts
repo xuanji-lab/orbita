@@ -613,6 +613,10 @@ export const en = {
     modelRecordedTip: "Imported sessions carry no model — pick one when you open them · the original stays recorded",
     // 招呼检查
     greetingTitle: "Leave out sessions that only say hi or test",
+    // 三步清单（①配置服务商 → ②选家务活模型 → ③检查）：未完成的步是可点的跳转
+    greetingStepProvider: "Set up a provider",
+    greetingStepChore: "Pick a chore model",
+    greetingStepLockedTip: "Needs a provider first",
     greetingAsking: (model: string, sessions: string) => `Asking ${model} about ${sessions}…`,
     theModel: "the model",
     greetingResult: (checked: number, asked: number, model: string, leftOut: number) =>

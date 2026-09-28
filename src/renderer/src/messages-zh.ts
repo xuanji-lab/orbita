@@ -557,6 +557,10 @@ export const zh: Messages = {
     deletedTip: "你在 orbita 删过 · 默认不勾",
     modelRecordedTip: "导入的会话不绑定模型 · 打开后自己选 · 原模型记录保留",
     greetingTitle: "不导入只打了招呼或随手测试的会话",
+    // 三步清单（①配置服务商 → ②选家务活模型 → ③检查）：未完成的步是可点的跳转
+    greetingStepProvider: "配置服务商",
+    greetingStepChore: "选家务活模型",
+    greetingStepLockedTip: "先配置服务商",
     greetingAsking: (model, sessions) => `正在请 ${model} 看 ${sessions}…`,
     theModel: "模型",
     greetingResult: (checked, asked, model, leftOut) =>

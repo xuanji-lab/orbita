@@ -943,19 +943,86 @@
 
 /* ---- 「只随手发了一句」检查：列表上方一个勾选框，副行写明用哪个模型、问几条 ---- */
 
+/* 「跳过随手一句」的三步清单：①配置服务商 → ②选家务活模型 → ③检查本身。
+   紧凑两列结构（步骤一列 + 检查一列），是会话步骤里的可选项，不做大卡片 */
 .mg-greet {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-2);
+  gap: var(--space-3);
   margin-bottom: var(--space-3);
+}
+
+.mg-greet-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: none;
+}
+
+.mg-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}
+
+/* 完成的一步：勾用 success 色（颜色只是第二信号，状态本身在图标形状上） */
+.mg-step[data-done] {
+  color: var(--color-text-secondary);
+}
+
+.mg-step[data-done] > svg {
+  color: var(--color-success);
+}
+
+.mg-step[data-locked] {
+  color: var(--color-text-tertiary);
+}
+
+.mg-step-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-strong);
+  text-underline-offset: 2px;
   cursor: pointer;
 }
 
-.mg-greet[data-disabled] {
+.mg-step-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.mg-step-label {
+  white-space: nowrap;
+}
+
+/* 第三步（检查本身）：与前两步隔一条发丝线，走原来的标题 + 副行形状 */
+.mg-greet-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.mg-greet-main[data-disabled] {
   cursor: default;
 }
 
-.mg-greet > input {
+.mg-greet-main > input {
   margin-top: 3px;
 }
 
@@ -971,7 +1038,7 @@
   color: var(--color-text-primary);
 }
 
-.mg-greet[data-disabled] .mg-greet-title {
+.mg-greet-main[data-disabled] .mg-greet-title {
   color: var(--color-text-tertiary);
 }
 
@@ -983,3 +1050,4 @@
   line-height: var(--line-height-caption);
   color: var(--color-text-tertiary);
 }
+

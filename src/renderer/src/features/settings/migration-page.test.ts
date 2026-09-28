@@ -8,6 +8,7 @@ import {
   doneFacts,
   doneHeadline,
   footFacts,
+  greetingSteps,
   headline,
   mixedSources,
   modelTip,
@@ -18,6 +19,7 @@ import {
   sourceStatus,
   stepStates,
 } from "./migration-page.ts";
+import type { ProviderDto } from "../../../../shared/provider.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 
@@ -314,3 +316,40 @@ describe("migration-page · 中文（小学作业）", () => {
   });
 });
 
+
+describe("greetingSteps —— 三步清单前两步的判定（每次回迁移页现算）", () => {
+  const provider = (id: string, models: string[], keyed = true): ProviderDto => ({
+    id,
+    displayName: id,
+    endpoint: { baseUrl: "https://x", api: "openai-completions" },
+    auth: keyed ? { scheme: "api_key", hasSecret: true, masked: "k" } : { scheme: "none" },
+    models: { declared: models.map((m) => ({ id: m })) },
+  });
+
+  test("无服务商：①②都未完成（没 key 或没模型的服务商不算「配好」）", () => {
+    assert.deepEqual(greetingSteps([], undefined), { provider: false, chore: false });
+    assert.deepEqual(greetingSteps([provider("nokey", ["glm-5.3"], false)], undefined), { provider: false, chore: false });
+    assert.deepEqual(greetingSteps([provider("empty", [])], undefined), { provider: false, chore: false });
+  });
+
+  test("有服务商没选家务活模型：①完成、②未完成", () => {
+    assert.deepEqual(greetingSteps([provider("zai", ["glm-5.3"])], undefined), { provider: true, chore: false });
+  });
+
+  test("选了且模型还在：两步都完成", () => {
+    const providers = [provider("zai", ["glm-5.3"])];
+    assert.deepEqual(greetingSteps(providers, { providerId: "zai", modelId: "glm-5.3" }), { provider: true, chore: true });
+  });
+
+  test("家务活模型指的服务商被删（或没 key）：②按未完成处理", () => {
+    assert.deepEqual(greetingSteps([provider("zai", ["glm-5.3"])], { providerId: "gone", modelId: "glm-5.3" }), { provider: true, chore: false });
+    assert.deepEqual(
+      greetingSteps([provider("zai", ["glm-5.3"], false)], { providerId: "zai", modelId: "glm-5.3" }),
+      { provider: false, chore: false },
+    );
+  });
+
+  test("服务商在但那个模型已不在声明里：②未完成", () => {
+    assert.deepEqual(greetingSteps([provider("zai", ["glm-5.3"])], { providerId: "zai", modelId: "kimi-k3" }), { provider: true, chore: false });
+  });
+});

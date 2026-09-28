@@ -1,5 +1,5 @@
 import "./settings-view.css";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon, type IconName } from "../../shell/Icon";
@@ -68,6 +68,16 @@ export function SettingsView(props: {
 }) {
   const t = useT();
   const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
+  /**
+   * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
+   * Providers / General 再回来，每次回来都重扫就又回到「懵逼」（wafo 2026-09-28）。
+   * 做法：第一次进迁移页后保持挂载、切走时 display:none（扫描计划已与模型无关，
+   * 保留是安全的）。设置面整个关掉时照旧卸载。
+   */
+  const [migrationVisited, setMigrationVisited] = useState(props.tab === "migration");
+  if (props.tab === "migration" && !migrationVisited) setMigrationVisited(true);
+  /** 跳去 General 时高亮家务活模型行（一次性的信号，General 消费后清掉） */
+  const [highlightChore, setHighlightChore] = useState(false);
   return (
     <div
       style={{
@@ -95,15 +105,27 @@ export function SettingsView(props: {
         </strong>
       </header>
 
-      {props.tab === "migration" ? (
-        // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格
-        <MigrationView
-          workspaces={props.workspaces}
-          onImported={props.onImported}
-          onOpenProviders={() => props.onTab("providers")}
-          onOpenGeneral={() => props.onTab("general")}
-        />
-      ) : props.tab === "browser" ? (
+      {migrationVisited ? (
+        // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格；
+        // 切走只是藏起来——扫描结果与勾选都还在（见上面 migrationVisited 的注释）
+        <div
+          hidden={props.tab !== "migration"}
+          style={{ height: "100%", minHeight: 0, display: props.tab === "migration" ? undefined : "none" }}
+        >
+          <MigrationView
+            workspaces={props.workspaces}
+            providers={props.providers}
+            choreModel={props.settings.choreModel}
+            onImported={props.onImported}
+            onOpenProviders={() => props.onTab("providers")}
+            onOpenGeneral={() => {
+              setHighlightChore(true);
+              props.onTab("general");
+            }}
+          />
+        </div>
+      ) : null}
+      {props.tab === "browser" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <BrowserSettings />
         </div>
@@ -113,9 +135,15 @@ export function SettingsView(props: {
           onChange={props.onProvidersChange}
           onSessionsChanged={props.onImported}
         />
-      ) : (
+      ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-          <General settings={props.settings} providers={props.providers} onChange={props.onSettingsChange} />
+          <General
+            settings={props.settings}
+            providers={props.providers}
+            onChange={props.onSettingsChange}
+            highlightChore={highlightChore}
+            onHighlightConsumed={() => setHighlightChore(false)}
+          />
         </div>
       )}
     </div>
@@ -147,8 +175,26 @@ function General(props: {
   settings: AppSettings;
   providers: readonly ProviderDto[];
   onChange: (patch: SettingsPatch) => void;
+  /** 迁移页三步清单第②步跳过来时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
+  highlightChore?: boolean;
+  onHighlightConsumed?: () => void;
 }) {
   const t = useT();
+  const choreRowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!props.highlightChore || props.onHighlightConsumed === undefined) return;
+    props.onHighlightConsumed();
+    const row = choreRowRef.current;
+    if (row === null) return;
+    row.scrollIntoView({ block: "center" });
+    // 焦点落到选择器本体（Chip 是 button）：键盘用户从这一行继续
+    row.querySelector("button")?.focus();
+    row.dataset.flash = "on";
+    const timer = window.setTimeout(() => {
+      delete row.dataset.flash;
+    }, 1600);
+    return () => window.clearTimeout(timer);
+  }, [props.highlightChore, props.onHighlightConsumed]);
   // 缺席 = 出厂默认：解析层只管坏值回默认，UI 的选中态要自己兜这一层
   const compaction = props.settings.compaction ?? COMPACTION_DEFAULT;
   const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
@@ -301,6 +347,7 @@ function General(props: {
         <SettingRow
           name={t.settings.choreModel}
           info={t.settings.choreModelInfo}
+          rowRef={choreRowRef}
         >
           {/* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */}
           <Menu
@@ -417,11 +464,13 @@ function SettingRow(props: {
   name: string;
   info?: React.ReactNode;
   note?: React.ReactNode;
+  /** 挂在整行上（迁移页三步清单跳过来时滚动 / 高亮 / 聚焦用） */
+  rowRef?: React.Ref<HTMLDivElement>;
   children: React.ReactNode;
 }) {
   const t = useT();
   return (
-    <div className="set-row">
+    <div className="set-row" ref={props.rowRef}>
       <span className="set-row-head">
         <span className="set-row-name">
           {props.name}
