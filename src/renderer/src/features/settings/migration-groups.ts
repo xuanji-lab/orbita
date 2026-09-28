@@ -27,8 +27,9 @@ export interface SessionFilters {
   range: RangeFilter;
   includeArchived: boolean;
   /**
-   * 去掉的 Proma 数据根。一条会话所在的根（ImportPlanItem.dataRoots）**全部**被去掉才藏起来——
-   * 去掉一个根只去掉只在它里面的，别的根里也有的照导。记「去掉的」而不是「留下的」：
+   * 去掉的数据根（跨来源共用一个集合：不同来源的根路径不会撞）。一条会话所在的根
+   * （ImportPlanItem.dataRoots）**全部**被去掉才藏起来——去掉一个根只去掉只在它里面的，
+   * 别的根里也有的照导。记「去掉的」而不是「留下的」：
    * 导入后重扫多出一个根时，它默认在列，不会被一份旧的白名单悄悄藏掉
    */
   excludedRoots: ReadonlySet<string>;
@@ -155,7 +156,7 @@ export function groupSessions(
   return { groups, changed, hidden, leftOut, total, totalBySource };
 }
 
-export interface PromaRootCount {
+export interface DataRootCount {
   root: string;
   /**
    * 只在这个根里有的可选会话数（不看筛选）——取消它会少导多少条，是决定取不取消时要看的数。
@@ -164,22 +165,39 @@ export interface PromaRootCount {
   onlyHere: number;
 }
 
+/** 一个来源的数据根组：页面菜单上一节 = 一个来源 + 它的目录项 */
+export interface SourceDataRoots {
+  source: ImportSourceId;
+  roots: DataRootCount[];
+}
+
 /**
- * 计划里出现的 Proma 数据根及各自独有的会话数，按路径排（与主进程读根的顺序一致）。
- * 只有一个根时页面不出这个筛选——没得选。
+ * 计划里出现的数据根，按来源分组：**只保留目录数 > 1 的来源**——只有一个目录的来源没得选，
+ * 出现在菜单里只会占一行永远勾着的项。组内目录按路径排（主进程是「环境变量 → 规范目录 → 其余按名字」，按路径排通常与它一致；
+ * 菜单里只影响显示顺序，不影响去重留哪一份）。
+ * 组按该来源在计划里**首次出现的顺序**排：不往渲染层复制一份来源清单（探测顺序在主进程，
+ * 抄过来迟早漂移），引擎按什么顺序扫出来就按什么顺序列，引擎加来源这里不用改。
  */
-export function promaRootCounts(report: ImportScanReport): PromaRootCount[] {
+export function dataRootCounts(report: ImportScanReport): SourceDataRoots[] {
   const planIds = new Set(report.plan.map((item) => item.sessionId));
-  const counts = new Map<string, number>();
+  const bySource = new Map<ImportSourceId, Map<string, number>>();
   for (const item of report.plan) {
-    if (!isSelectablePlanItem(item, planIds)) continue;
+    if (!isSelectablePlanItem(item, planIds) || item.dataRoots.length === 0) continue;
+    const counts = bySource.get(item.source) ?? new Map<string, number>();
     for (const root of item.dataRoots) {
       counts.set(root, (counts.get(root) ?? 0) + (item.dataRoots.length === 1 ? 1 : 0));
     }
+    bySource.set(item.source, counts);
   }
-  return [...counts]
-    .map(([root, onlyHere]) => ({ root, onlyHere }))
-    .sort((a, b) => (a.root < b.root ? -1 : a.root > b.root ? 1 : 0));
+  const groups: SourceDataRoots[] = [];
+  for (const [source, counts] of bySource) {
+    if (counts.size < 2) continue;
+    const roots = [...counts]
+      .map(([root, onlyHere]) => ({ root, onlyHere }))
+      .sort((a, b) => (a.root < b.root ? -1 : a.root > b.root ? 1 : 0));
+    groups.push({ source, roots });
+  }
+  return groups;
 }
 
 /** 页面上列出的全部行：changed 块在前，其后各文件夹组。 */

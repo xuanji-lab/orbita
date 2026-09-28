@@ -12,7 +12,7 @@ import {
   formatMoment,
   groupName,
   groupSessions,
-  promaRootCounts,
+  dataRootCounts,
   selectedSourceFiles,
   summarize,
 } from "./migration-groups.ts";
@@ -114,7 +114,7 @@ describe("groupSessions", () => {
     );
   });
 
-  test("按 Proma 数据根筛：会话所在的根全被去掉才藏（算进 hidden、不导）；别的根里也有的照导；其它来源不受影响", () => {
+  test("按数据根筛：会话所在的根全被去掉才藏（算进 hidden、不导）；别的根里也有的照导；其它来源不受影响", () => {
     const DEV = "/home/.proma-dev";
     const FORK = "/home/.proma-dev-fork";
     const OLD = "/home/.proma";
@@ -125,11 +125,17 @@ describe("groupSessions", () => {
     const shared = item({ folder: "/repo/a", dataRoots: [OLD, DEV], sourceFile: "/src/shared.jsonl" });
     const claude = item({ folder: "/repo/a", source: "claude-code", dataRoots: [], sourceFile: "/src/cc.jsonl" });
     const r = report([forkOnly, forkKid, devOnly, shared, claude]);
-    // 数的是只在这个根里的（取消它会少导的）；跟着母会话走的子会话不单算
-    assert.deepEqual(promaRootCounts(r), [
-      { root: OLD, onlyHere: 0 },
-      { root: DEV, onlyHere: 1 },
-      { root: FORK, onlyHere: 1 },
+    // 数的是只在这个根里的（取消它会少导的）；跟着母会话走的子会话不单算；
+    // claude-code 没有多目录概念（dataRoots 空），不进这个菜单
+    assert.deepEqual(dataRootCounts(r), [
+      {
+        source: "proma",
+        roots: [
+          { root: OLD, onlyHere: 0 },
+          { root: DEV, onlyHere: 1 },
+          { root: FORK, onlyHere: 1 },
+        ],
+      },
     ]);
     const all = ["/src/dev.jsonl", "/src/fork.jsonl", "/src/shared.jsonl", "/src/cc.jsonl"];
     const noOld = groupSessions(r, { ...DEFAULT_FILTERS, excludedRoots: new Set([OLD, FORK]) }, NOW);
@@ -137,6 +143,50 @@ describe("groupSessions", () => {
     assert.deepEqual(selectedSourceFiles(noOld, new Set(all)).sort(), ["/src/cc.jsonl", "/src/dev.jsonl", "/src/shared.jsonl"]);
     const noOldNoDev = groupSessions(r, { ...DEFAULT_FILTERS, excludedRoots: new Set([OLD, DEV]) }, NOW);
     assert.deepEqual(selectedSourceFiles(noOldNoDev, new Set(all)).sort(), ["/src/cc.jsonl", "/src/fork.jsonl"]);
+  });
+
+  test("数据根清单按来源分组：只有一个目录的来源不出现；组按来源在计划里首次出现的顺序；去掉一个来源的根不串到别的来源", () => {
+    const PROMA = "/home/.proma";
+    const PROMA_DEV = "/home/.proma-dev";
+    const ZCODE = "/home/.zcode";
+    const ZCODE_WT = "/home/.zcode-wt";
+    const plan = [
+      // zcode 在计划里先出现：菜单里 zcode 组在前（引擎扫出什么顺序就列什么顺序）
+      item({ source: "zcode", dataRoots: [ZCODE_WT], sourceFile: "/src/zt.jsonl" }),
+      item({ source: "zcode", dataRoots: [ZCODE, ZCODE_WT], sourceFile: "/src/zshared.jsonl" }),
+      item({ source: "proma", dataRoots: [PROMA_DEV], sourceFile: "/src/pd.jsonl" }),
+      item({ source: "proma", dataRoots: [PROMA, PROMA_DEV], sourceFile: "/src/pshared.jsonl" }),
+      // 只有一个目录的来源（kimi-code）不出现——没得选；claude-code 没有多目录概念也不出现
+      item({ source: "kimi-code", dataRoots: ["/home/.kimi-code"], sourceFile: "/src/kimi.jsonl" }),
+      item({ source: "claude-code", dataRoots: [], sourceFile: "/src/cc.jsonl" }),
+    ];
+    const r = report(plan);
+    assert.deepEqual(
+      dataRootCounts(r).map((group) => [group.source, group.roots]),
+      [
+        [
+          "zcode",
+          [
+            { root: ZCODE, onlyHere: 0 },
+            { root: ZCODE_WT, onlyHere: 1 },
+          ],
+        ],
+        [
+          "proma",
+          [
+            { root: PROMA, onlyHere: 0 },
+            { root: PROMA_DEV, onlyHere: 1 },
+          ],
+        ],
+      ],
+    );
+    // 去掉 zcode 的 wt 根：只藏只在它里面的 zcode 会话；proma、单目录来源的照导
+    const noWt = groupSessions(r, { ...DEFAULT_FILTERS, excludedRoots: new Set([ZCODE_WT]) }, NOW);
+    assert.equal(noWt.hidden, 1);
+    assert.deepEqual(
+      selectedSourceFiles(noWt, new Set(plan.map((entry) => entry.sourceFile))).sort(),
+      ["/src/cc.jsonl", "/src/kimi.jsonl", "/src/pd.jsonl", "/src/pshared.jsonl", "/src/zshared.jsonl"],
+    );
   });
 
   test("「只随手发了一句」判中的：不列、不算进 hidden，单独计数；执行勾选里自然没有它们", () => {

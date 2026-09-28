@@ -35,7 +35,7 @@ import {
   formatDay,
   groupName,
   groupSessions,
-  promaRootCounts,
+  dataRootCounts,
   sameDestination,
   selectedSourceFiles,
   summarize,
@@ -225,9 +225,13 @@ export function MigrationView(props: {
     () => (grouped === null ? null : summarize(grouped, selected, overrides)),
     [grouped, selected, overrides],
   );
-  /** 计划里的 Proma 数据根：不止一个才出「按数据目录筛」的菜单 */
-  const promaRoots = useMemo(() => (scan.kind === "ready" ? promaRootCounts(scan.report) : []), [scan]);
-  const shownRoots = promaRoots.filter((entry) => !filters.excludedRoots.has(entry.root)).length;
+  /** 计划里的数据根，按来源分组：有任何一组（组内目录必 >1）就出「按数据目录筛」的菜单 */
+  const rootGroups = useMemo(() => (scan.kind === "ready" ? dataRootCounts(scan.report) : []), [scan]);
+  const rootTotal = rootGroups.reduce((sum, group) => sum + group.roots.length, 0);
+  const shownRoots = rootGroups.reduce(
+    (sum, group) => sum + group.roots.filter((entry) => !filters.excludedRoots.has(entry.root)).length,
+    0,
+  );
   const skillCount = scan.kind === "ready" ? countSelectedSkills(scan.report.skills, skillSelected) : 0;
   const mcpCount = scan.kind === "ready" ? selectedMcpNames(scan.report.mcp, mcpSelected).length : 0;
   const nothingTicked = summary === null || summary.sessions + summary.updates + skillCount + mcpCount === 0;
@@ -407,28 +411,36 @@ export function MigrationView(props: {
                   >
                     {t.migration.includeArchived}
                   </Chip>
-                  {promaRoots.length > 1 && (
+                  {rootGroups.length > 0 && (
                     <Menu
-                      items={promaRoots.map((entry) => ({
-                        id: entry.root,
-                        label: abbreviateHome(entry.root, home),
-                        hint: t.migration.promaRootOnlyHere(entry.onlyHere),
-                        checked: !filters.excludedRoots.has(entry.root),
-                        // 多选：点一下切一个根，菜单不关
-                        keepOpen: true,
-                        onSelect: () => {
-                          touch();
-                          setFilters((current) => ({
-                            ...current,
-                            excludedRoots: toggled(current.excludedRoots, entry.root),
-                          }));
+                      items={rootGroups.flatMap((group) => [
+                        // 分组头 = 来源名；Menu 的 header 项不可选、不抢焦点，样式同设置面节标题
+                        {
+                          id: `source:${group.source}`,
+                          label: t.migration.sources[group.source],
+                          header: true,
                         },
-                      }))}
+                        ...group.roots.map((entry) => ({
+                          id: entry.root,
+                          label: abbreviateHome(entry.root, home),
+                          hint: t.migration.dataRootOnlyHere(entry.onlyHere),
+                          checked: !filters.excludedRoots.has(entry.root),
+                          // 多选：点一下切一个根，菜单不关
+                          keepOpen: true,
+                          onSelect: () => {
+                            touch();
+                            setFilters((current) => ({
+                              ...current,
+                              excludedRoots: toggled(current.excludedRoots, entry.root),
+                            }));
+                          },
+                        })),
+                      ])}
                       trigger={({ open, toggle }) => (
-                        <Chip icon="folder-open" active={open} chevron onClick={toggle} title={t.migration.promaRootsTip}>
-                          {shownRoots === promaRoots.length
-                            ? t.migration.promaRootsAll
-                            : t.migration.promaRootsSome(shownRoots, promaRoots.length)}
+                        <Chip icon="folder-open" active={open} chevron onClick={toggle} title={t.migration.dataRootsTip}>
+                          {shownRoots === rootTotal
+                            ? t.migration.dataRootsAll
+                            : t.migration.dataRootsSome(shownRoots, rootTotal)}
                         </Chip>
                       )}
                     />
