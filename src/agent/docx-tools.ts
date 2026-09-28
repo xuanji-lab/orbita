@@ -40,19 +40,19 @@ import { imageMimeOf, shrinkIfNeeded } from "./image-tools.ts";
  */
 
 /** 单次最多输出多少字符的正文。上下文护栏：read_pdf 20 页密排文本同量级 */
-export const DOCX_MAX_CHARS_PER_CALL = 30000;
+const DOCX_MAX_CHARS_PER_CALL = 30000;
 
 /** images=true 时单次最多带几张内嵌图（show_image 的画廊上限同款） */
-export const DOCX_IMAGE_MAX_COUNT = 6;
+const DOCX_IMAGE_MAX_COUNT = 6;
 
 /** 内嵌图长边上限（转录不存原图——show_image 的 SHOW_IMAGE_MAX_EDGE 同款纪律） */
-export const DOCX_IMAGE_MAX_EDGE = 2000;
+const DOCX_IMAGE_MAX_EDGE = 2000;
 
 /** 单张内嵌图体积上限（SHOW_IMAGE_MAX_BYTES 同口径——超出多半是误嵌） */
 const DOCX_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
 
 /** 头注大纲最多列几个 heading（read_pdf 图表索引 15 条同款护栏） */
-export const DOCX_OUTLINE_MAX = 15;
+const DOCX_OUTLINE_MAX = 15;
 
 // ─── HTML → markdown 薄转换 ────────────────────────────────────────────────
 // mammoth 的输出是单行拼接的规整 HTML（它自己生成的，属性无裸 >），标签
@@ -102,10 +102,9 @@ function decodeEntities(text: string): string {
 
 interface Token {
   text?: string;
-  /** 开标签名（小写）；自闭合标签 close 同步为 true */
+  /** 开标签名（小写） */
   tag?: string;
   close?: boolean;
-  selfClosed?: boolean;
   attrs?: Record<string, string>;
 }
 
@@ -130,7 +129,7 @@ function tokenize(html: string): Token[] {
       const key = attrMatch[1]!.toLowerCase();
       if (key === "src" || key === "alt" || key === "href") attrs[key] = attrMatch[2]!;
     }
-    tokens.push({ tag, close: isClose, selfClosed: match[3] === "/", attrs });
+    tokens.push({ tag, close: isClose, attrs });
   }
   return tokens;
 }
@@ -398,7 +397,7 @@ function tableToMarkdown(rows: readonly Inline[][][]): string {
 }
 
 /** 一个顶层块 → markdown 文本（分片与统计的最小单元） */
-export function blockToMarkdown(block: Block): string {
+function blockToMarkdown(block: Block): string {
   switch (block.kind) {
     case "heading":
       return `${"#".repeat(block.level)} ${inlineToMarkdown(block.inline).trim()}`;
@@ -412,7 +411,7 @@ export function blockToMarkdown(block: Block): string {
 }
 
 /** mammoth 的 HTML → 顶层块列表 + 每块 markdown。空块（只剩回链箭头等）过滤 */
-export function htmlToBlocks(html: string): Block[] {
+function htmlToBlocks(html: string): Block[] {
   const blocks = parseBlocks(tokenize(html));
   return blocks.filter((block) => blockToMarkdown(block).trim() !== "");
 }
@@ -420,7 +419,7 @@ export function htmlToBlocks(html: string): Block[] {
 // ─── 大纲与标题 ────────────────────────────────────────────────────────────
 
 /** Sections 大纲：heading 文本 → 起始块号（1-indexed），截前 DOCX_OUTLINE_MAX 条 */
-export function outlineOf(blocks: readonly Block[]): { text: string; block: number }[] {
+function outlineOf(blocks: readonly Block[]): { text: string; block: number }[] {
   const out: { text: string; block: number }[] = [];
   for (let i = 0; i < blocks.length && out.length < DOCX_OUTLINE_MAX; i++) {
     const block = blocks[i]!;
@@ -431,17 +430,22 @@ export function outlineOf(blocks: readonly Block[]): { text: string; block: numb
 }
 
 /** 块里引用的内嵌图占位号（全文档序号，保序去重）——images=true 时按它取 buffer */
-export function imageRefsOf(block: Block): number[] {
+function imageRefsOf(block: Block): number[] {
   const found: number[] = [];
   const walkInline = (nodes: readonly Inline[]): void => {
     for (const node of nodes) {
       if (node.kind === "image") {
         if (!found.includes(node.n)) found.push(node.n);
-      } else if (node.kind === "strong" || node.kind === "em" || node.kind === "strike" || node.kind === "sup" || node.kind === "sub") {
-        walkInline(node.children);
-      } else if (node.kind === "link") {
+      } else if ("children" in node) {
         walkInline(node.children);
       }
+    }
+  };
+  const walkItems = (items: readonly ListItem[]): void => {
+    for (const item of items) {
+      walkInline(item.inline);
+      // 嵌套列表是递归结构（Word 的 ilvl 任意深），收集同构下探
+      for (const child of item.children) walkItems(child.items);
     }
   };
   switch (block.kind) {
@@ -450,14 +454,7 @@ export function imageRefsOf(block: Block): number[] {
       walkInline(block.inline);
       break;
     case "list":
-      for (const item of block.items) {
-        walkInline(item.inline);
-        for (const child of item.children) {
-          for (const sub of child.items) {
-            walkInline(sub.inline);
-          }
-        }
-      }
+      walkItems(block.items);
       break;
     case "table":
       for (const row of block.rows) for (const cell of row) walkInline(cell);

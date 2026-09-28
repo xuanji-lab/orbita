@@ -59,9 +59,11 @@ const DEFAULT_MEDIA: { relId: string; file: string; contentType: string; data: B
   { relId: "rId5", file: "media/image1.png", contentType: "image/png", data: PNG_1PX },
 ];
 
-/** 一段引用内嵌图的正文（w:drawing 的最小可识别形态） */
-function imageParagraph(text: string, relId: string, name: string, descr: string): string {
-  return `<w:p><w:r><w:t>${text}</w:t></w:r><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="1000000" cy="1000000"/><wp:docPr id="1" name="${name}" descr="${descr}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="1" name="${name}" descr="${descr}"/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relId}"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+/** 一段引用内嵌图的正文（w:drawing 的最小可识别形态）；numPr 给定时是列表项内带图 */
+function imageParagraph(text: string, relId: string, name: string, descr: string, numLevel?: number): string {
+  const numPr =
+    numLevel === undefined ? "" : `<w:numPr><w:ilvl w:val="${numLevel}"/><w:numId w:val="1"/></w:numPr>`;
+  return `<w:p><w:pPr>${numPr}</w:pPr><w:r><w:t>${text}</w:t></w:r><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="1000000" cy="1000000"/><wp:docPr id="1" name="${name}" descr="${descr}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="1" name="${name}" descr="${descr}"/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relId}"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
 }
 
 async function buildDocx(opts: DocxOpts): Promise<Buffer> {
@@ -178,6 +180,7 @@ ${opts.body}
 <w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>
 <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val=""/><w:lvlJc w:val="left"/></w:lvl>
 <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val=""/><w:lvlJc w:val="left"/></w:lvl>
+<w:lvl w:ilvl="2"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val=""/><w:lvlJc w:val="left"/></w:lvl>
 </w:abstractNum>
 <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
 </w:numbering>`,
@@ -236,6 +239,19 @@ before(async () => {
     await buildDocx({
       body: imageParagraph("大图段落", "rId5", "big.png", "超大图"),
       media: [{ relId: "rId5", file: "media/image1.png", contentType: "image/png", data: BIG_PNG }],
+      withComments: false,
+      withFootnotes: false,
+    }),
+  );
+
+  // 三层嵌套列表：图在最深层（Word 的 ilvl 任意深，收集必须同构下探）
+  await writeFile(
+    join(dir, "deep-list.docx"),
+    await buildDocx({
+      body:
+        `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>一层</w:t></w:r></w:p>` +
+        `<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>二层</w:t></w:r></w:p>` +
+        imageParagraph("三层带图", "rId5", "deep.png", "深层图", 2),
       withComments: false,
       withFootnotes: false,
     }),
@@ -441,6 +457,12 @@ describe("read_docx", () => {
     const blocks = await runFull("bmp.docx", { images: true }, VISION_CTX);
     assert.equal(blocks.filter((b) => b.type === "image").length, 0);
     assert.ok(blocks[0]!.text!.includes("image 1 skipped: not an inlinable format"));
+  });
+
+  test("三层嵌套列表里的图也能提取（ilvl 任意深）", async () => {
+    const blocks = await runFull("deep-list.docx", { images: true }, VISION_CTX);
+    assert.equal(blocks.filter((b) => b.type === "image").length, 1);
+    assert.ok(blocks[0]!.text!.includes("[image 1: 深层图]"));
   });
 
   // ─── pi read 的指路（patch 守护） ─────────────────────────────────────────
