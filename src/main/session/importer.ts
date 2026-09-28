@@ -579,7 +579,8 @@ async function dedupeAcrossRoots<E extends { id: string }>(
   items: readonly RootedEntry<E>[],
   preferred: (file: string) => boolean,
 ): Promise<{
-  kept: { item: RootedEntry<E>; aliases: string[] }[];
+  /** aliases：留下的这份与被它顶掉的重复的源文件；roots：它们各自的数据根，留下的这份的根在最前 */
+  kept: { item: RootedEntry<E>; aliases: string[]; roots: string[] }[];
   dropped: { item: RootedEntry<E>; keptFile: string }[];
 }> {
   const byId = new Map<string, number[]>();
@@ -625,19 +626,27 @@ async function dedupeAcrossRoots<E extends { id: string }>(
     }
   }
 
-  const aliases = new Map<number, string[]>();
+  const aliases = new Map<number, RootedEntry<E>[]>();
   const dropped: { item: RootedEntry<E>; keptFile: string }[] = [];
   items.forEach((item, index) => {
     const target = droppedTo.get(index);
     if (target === undefined) return;
     const keptItem = items[target];
     if (keptItem === undefined) return;
-    aliases.set(target, [...(aliases.get(target) ?? []), item.sourceFile]);
+    aliases.set(target, [...(aliases.get(target) ?? []), item]);
     dropped.push({ item, keptFile: keptItem.sourceFile });
   });
-  const kept = items.flatMap((item, index) =>
-    droppedTo.has(index) ? [] : [{ item, aliases: [...new Set([item.sourceFile, ...(aliases.get(index) ?? [])])] }],
-  );
+  const kept = items.flatMap((item, index) => {
+    if (droppedTo.has(index)) return [];
+    const all = [item, ...(aliases.get(index) ?? [])];
+    return [
+      {
+        item,
+        aliases: [...new Set(all.map((member) => member.sourceFile))],
+        roots: [...new Set(all.map((member) => member.root))],
+      },
+    ];
+  });
   return { kept, dropped };
 }
 
@@ -1139,12 +1148,7 @@ async function scanWithConfigs(
   deps: ImporterDeps,
   destinations: readonly ImportDestinationChoice[],
   sources: readonly ImportSourceId[],
-): Promise<{
-  report: ImportScanReport;
-  mcpServers: Map<string, McpServer>;
-  greetingCandidates: Map<string, string>;
-  promaRootBySource: Map<string, string>;
-}> {
+): Promise<{ report: ImportScanReport; mcpServers: Map<string, McpServer>; greetingCandidates: Map<string, string> }> {
   const overrides = new Map<string | null, ImportDestination>(
     destinations.map((choice) => [choice.folder, choice.destination]),
   );
@@ -1153,8 +1157,6 @@ async function scanWithConfigs(
   const skipped: ImportSkipItem[] = [];
   /** 新会话里用户只写过一条的：sourceFile → 那一条（「只随手发了一句」检查的候选，计划成形后再筛） */
   const singleMessages = new Map<string, string>();
-  /** Proma pi 条目的源文件 → 它的索引所在的数据根：执行时去那个根找界面日志（取用户原文） */
-  const promaRootBySource = new Map<string, string>();
   const skip = (sourceId: string, title: string | null, reason: ImportSkipReason, detail?: string): void => {
     skipped.push(detail === undefined ? { sourceId, title, reason } : { sourceId, title, reason, detail });
   };
@@ -1208,7 +1210,7 @@ async function scanWithConfigs(
     skip(item.entry.id, item.entry.title || null, "duplicate", keptFile);
   }
 
-  for (const { item: rooted, aliases } of piDeduped.kept) {
+  for (const { item: rooted, aliases, roots } of piDeduped.kept) {
     const { entry } = rooted;
     if (seenSources.has(entry.piSessionFile)) {
       skip(entry.id, entry.title || null, "duplicate", entry.piSessionFile);
@@ -1248,7 +1250,6 @@ async function scanWithConfigs(
     const sessionEntries = source.entries.filter(
       (fileEntry): fileEntry is SessionEntry => fileEntry.type !== "session",
     );
-    promaRootBySource.set(entry.piSessionFile, rooted.root);
 
     let change: ImportChange = freshChange(entry.piSessionFile, aliases);
     let newMessages = 0;
@@ -1262,7 +1263,7 @@ async function scanWithConfigs(
       }
       if (state.kind === "updated") {
         totalBytes += bytes;
-        plan.push(updatedPlanItem(entry, state.meta, state.newMessages, sessionEntries, bytes));
+        plan.push(updatedPlanItem(entry, roots, state.meta, state.newMessages, sessionEntries, bytes));
         continue;
       }
       change = "diverged";
@@ -1303,6 +1304,7 @@ async function scanWithConfigs(
     plan.push({
       sourceId: entry.id,
       source: "proma",
+      promaRoots: roots,
       sourceKind: "pi",
       change,
       newMessages,
@@ -1330,7 +1332,7 @@ async function scanWithConfigs(
   }
 
   // —— claude legacy 条目：渲染 JSONL 转换导入（源文件按 <数据根>/agent-sessions/<id>.jsonl 推导） ——
-  for (const { item: rooted, aliases } of claudeDeduped.kept) {
+  for (const { item: rooted, aliases, roots } of claudeDeduped.kept) {
     const { entry, sourceFile } = rooted;
     // 导过就不会再变：Proma 的 Claude 时代会话是只读历史，不能续聊也不能回退
     // （Proma agent-orchestrator.ts 的 legacyTranscript.continuationRequired 拦截）
@@ -1393,6 +1395,7 @@ async function scanWithConfigs(
     plan.push({
       sourceId: entry.id,
       source: "proma",
+      promaRoots: roots,
       sourceKind: "claude-legacy",
       change: freshChange(sourceFile, aliases),
       newMessages: 0,
@@ -1453,6 +1456,7 @@ async function scanWithConfigs(
     plan.push({
       sourceId: candidate.sourceId,
       source: candidate.source,
+      promaRoots: [],
       sourceKind: candidate.sourceKind,
       change: freshChange(candidate.sourceFile),
       newMessages: 0,
@@ -1563,7 +1567,7 @@ async function scanWithConfigs(
       unavailable: "unavailable" in greeting ? greeting.unavailable : null,
     },
   };
-  return { report, mcpServers: mcp.servers, greetingCandidates, promaRootBySource };
+  return { report, mcpServers: mcp.servers, greetingCandidates };
 }
 
 /** 一个来源都没勾时的扫描结果：什么都没读，也就什么都没有。 */
@@ -2313,6 +2317,7 @@ export function reimportState(source: readonly SessionEntry[], copies: readonly 
  */
 function updatedPlanItem(
   entry: PromaSessionIndexEntry,
+  promaRoots: string[],
   meta: SessionMeta,
   newMessages: number,
   sessionEntries: readonly SessionEntry[],
@@ -2321,6 +2326,7 @@ function updatedPlanItem(
   return {
     sourceId: entry.id,
     source: "proma",
+    promaRoots,
     sourceKind: "pi",
     change: "updated",
     newMessages,
@@ -2468,12 +2474,7 @@ export function selectPlan(plan: readonly ImportPlanItem[], chosen: ReadonlySet<
 }
 
 export async function runImport(deps: RunImporterDeps, selection?: ImportSelection): Promise<ImportRunReport> {
-  const { report: scanned, mcpServers, promaRootBySource } = await scanWithConfigs(
-    deps,
-    selection?.destinations ?? [],
-    selection?.sources ?? ["proma"],
-  );
-  const renderRoot = (item: ImportPlanItem): string | null => promaRootBySource.get(item.sourceFile) ?? null;
+  const { report: scanned, mcpServers } = await scanWithConfigs(deps, selection?.destinations ?? [], selection?.sources ?? ["proma"]);
   const plan = selection === undefined ? scanned.plan : selectPlan(scanned.plan, selection.sessions);
   // 没被勾的会话不落，它们要新建的工作区也不建
   const usedWorkspaceIds = new Set(plan.map((item) => item.workspaceId));
@@ -2531,7 +2532,7 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
         // 追加：副本换成新的源（副本是源的前缀，整份换 = 追加），transcript 整份重派生
         const target = deps.existingMetas.find((meta) => meta.id === item.sessionId)?.piSessionFile ?? null;
         if (target === null) throw new Error("the imported session has no pi session file to update");
-        const session = await runPiImport(item, deps, { path: target }, renderRoot(item));
+        const session = await runPiImport(item, deps, { path: target });
         await deps.refreshSession(item.sessionId, session.records, {
           recentQueries: recentQueriesFromRecords(session.records),
           stats: aggregatePrefixUsage(session.records),
@@ -2560,7 +2561,6 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
               item.change === "diverged"
                 ? { path: join(deps.piSessionDir, `${basename(item.sourceFile, ".jsonl").split("_")[0]}_${item.sessionId}.jsonl`), headerId: item.sessionId }
                 : { path: join(deps.piSessionDir, basename(item.sourceFile)) },
-              renderRoot(item),
             );
 
       // meta + transcript：两条源路最终都汇到同一个形态——records 已由各路返给 meta
@@ -2686,8 +2686,6 @@ async function runPiImport(
   item: ImportPlanItem,
   deps: RunImporterDeps,
   dest: { path: string; headerId?: string },
-  /** 界面日志所在的数据根（这条的索引所在的根）；null = 没有界面日志可读，按格式剥用户原文 */
-  renderRoot: string | null,
 ): Promise<ImportedSession> {
   const source = await readPiSource(item.sourceFile, deps.promaRoots);
   const sessionEntries = source.entries.filter(
@@ -2706,7 +2704,9 @@ async function runPiImport(
   }
   // transcript 里的用户消息还原成用户写的原文（proma-user-text.ts）：主路是 Proma 的界面日志，
   // 读不到就按 Proma 的拼接格式剥。**pi 副本上面已原样落盘**——那是模型当时读到的，不改
-  const renderLog = renderRoot === null ? null : await readRenderLog(renderRoot, item.sourceId);
+  // 界面日志在留下的那份的索引所在的数据根里（不一定是 pi 源文件所在的根）
+  const renderRoot = item.promaRoots[0];
+  const renderLog = renderRoot === undefined ? null : await readRenderLog(renderRoot, item.sourceId);
   const userTexts = promaUserTextMap(sessionEntries, renderLog === null ? null : promaUserTexts(renderLog));
   return {
     path: destPath,

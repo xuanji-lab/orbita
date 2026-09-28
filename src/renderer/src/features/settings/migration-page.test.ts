@@ -29,6 +29,7 @@ function item(overrides: Partial<ImportPlanItem>): ImportPlanItem {
   return {
     sourceId: "s",
     source: "proma",
+    promaRoots: ["/home/.proma-dev"],
     sourceKind: "pi",
     change: "new",
     newMessages: 0,

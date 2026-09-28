@@ -35,6 +35,7 @@ import {
   formatDay,
   groupName,
   groupSessions,
+  promaRootCounts,
   sameDestination,
   selectedSourceFiles,
   summarize,
@@ -224,6 +225,9 @@ export function MigrationView(props: {
     () => (grouped === null ? null : summarize(grouped, selected, overrides)),
     [grouped, selected, overrides],
   );
+  /** 计划里的 Proma 数据根：不止一个才出「按数据目录筛」的菜单 */
+  const promaRoots = useMemo(() => (scan.kind === "ready" ? promaRootCounts(scan.report) : []), [scan]);
+  const shownRoots = promaRoots.filter((entry) => !filters.excludedRoots.has(entry.root)).length;
   const skillCount = scan.kind === "ready" ? countSelectedSkills(scan.report.skills, skillSelected) : 0;
   const mcpCount = scan.kind === "ready" ? selectedMcpNames(scan.report.mcp, mcpSelected).length : 0;
   const nothingTicked = summary === null || summary.sessions + summary.updates + skillCount + mcpCount === 0;
@@ -403,6 +407,32 @@ export function MigrationView(props: {
                   >
                     {t.migration.includeArchived}
                   </Chip>
+                  {promaRoots.length > 1 && (
+                    <Menu
+                      items={promaRoots.map((entry) => ({
+                        id: entry.root,
+                        label: abbreviateHome(entry.root, home),
+                        hint: t.migration.promaRootOnlyHere(entry.onlyHere),
+                        checked: !filters.excludedRoots.has(entry.root),
+                        // 多选：点一下切一个根，菜单不关
+                        keepOpen: true,
+                        onSelect: () => {
+                          touch();
+                          setFilters((current) => ({
+                            ...current,
+                            excludedRoots: toggled(current.excludedRoots, entry.root),
+                          }));
+                        },
+                      }))}
+                      trigger={({ open, toggle }) => (
+                        <Chip icon="folder-open" active={open} chevron onClick={toggle} title={t.migration.promaRootsTip}>
+                          {shownRoots === promaRoots.length
+                            ? t.migration.promaRootsAll
+                            : t.migration.promaRootsSome(shownRoots, promaRoots.length)}
+                        </Chip>
+                      )}
+                    />
+                  )}
                   <span className="mg-sep" />
                   <SelectAllButton grouped={grouped} selected={selected} disabled={busy} onSet={setRows} />
                 </span>

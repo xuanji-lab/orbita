@@ -26,10 +26,16 @@ export type RangeFilter = "all" | "7d" | "30d" | "90d";
 export interface SessionFilters {
   range: RangeFilter;
   includeArchived: boolean;
+  /**
+   * 去掉的 Proma 数据根。一条会话所在的根（ImportPlanItem.promaRoots）**全部**被去掉才藏起来——
+   * 去掉一个根只去掉只在它里面的，别的根里也有的照导。记「去掉的」而不是「留下的」：
+   * 导入后重扫多出一个根时，它默认在列，不会被一份旧的白名单悄悄藏掉
+   */
+  excludedRoots: ReadonlySet<string>;
 }
 
-/** 默认全部：不限时间、含归档（wafo 2026-09-24 裁决，筛选按钮保留） */
-export const DEFAULT_FILTERS: SessionFilters = { range: "all", includeArchived: true };
+/** 默认全部：不限时间、含归档、每个数据根都列（wafo 2026-09-24 裁决，筛选按钮保留） */
+export const DEFAULT_FILTERS: SessionFilters = { range: "all", includeArchived: true, excludedRoots: new Set() };
 
 const DAY = 24 * 60 * 60 * 1000;
 const RANGE_MS: Record<Exclude<RangeFilter, "all">, number> = { "7d": 7 * DAY, "30d": 30 * DAY, "90d": 90 * DAY };
@@ -70,6 +76,7 @@ export interface GroupedSessions {
 
 function passes(item: ImportPlanItem, filters: SessionFilters, now: number): boolean {
   if (!filters.includeArchived && item.archived) return false;
+  if (item.promaRoots.length > 0 && item.promaRoots.every((root) => filters.excludedRoots.has(root))) return false;
   if (filters.range === "all") return true;
   return now - item.updatedAt <= RANGE_MS[filters.range];
 }
@@ -146,6 +153,33 @@ export function groupSessions(
     return b.rows.length - a.rows.length || a.folder.localeCompare(b.folder);
   });
   return { groups, changed, hidden, leftOut, total, totalBySource };
+}
+
+export interface PromaRootCount {
+  root: string;
+  /**
+   * 只在这个根里有的可选会话数（不看筛选）——取消它会少导多少条，是决定取不取消时要看的数。
+   * 别的根里也有的不算：取消这个根它们照导
+   */
+  onlyHere: number;
+}
+
+/**
+ * 计划里出现的 Proma 数据根及各自独有的会话数，按路径排（与主进程读根的顺序一致）。
+ * 只有一个根时页面不出这个筛选——没得选。
+ */
+export function promaRootCounts(report: ImportScanReport): PromaRootCount[] {
+  const planIds = new Set(report.plan.map((item) => item.sessionId));
+  const counts = new Map<string, number>();
+  for (const item of report.plan) {
+    if (!isSelectablePlanItem(item, planIds)) continue;
+    for (const root of item.promaRoots) {
+      counts.set(root, (counts.get(root) ?? 0) + (item.promaRoots.length === 1 ? 1 : 0));
+    }
+  }
+  return [...counts]
+    .map(([root, onlyHere]) => ({ root, onlyHere }))
+    .sort((a, b) => (a.root < b.root ? -1 : a.root > b.root ? 1 : 0));
 }
 
 /** 页面上列出的全部行：changed 块在前，其后各文件夹组。 */

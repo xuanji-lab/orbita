@@ -568,6 +568,11 @@ export const en = {
     archivedListedTip: "Archived sessions are listed · click to hide them",
     archivedHiddenTip: "Archived sessions are hidden · click to list them",
     includeArchived: "Include archived",
+    promaRootsAll: "All Proma folders",
+    promaRootsSome: (shown: number, total: number) => `${shown} of ${total} Proma folders`,
+    promaRootsTip:
+      "Proma keeps one data folder per build (~/.proma, ~/.proma-dev…) · untick one to leave out the sessions found only there",
+    promaRootOnlyHere: (n: number) => `${n} only here`,
     sessionsCaption: "Grouped by folder · one destination per folder",
     readingSessions: "Reading session lists…",
     scanFailed: "Scan failed:",

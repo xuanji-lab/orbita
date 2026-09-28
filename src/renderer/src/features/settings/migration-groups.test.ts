@@ -12,6 +12,7 @@ import {
   formatMoment,
   groupName,
   groupSessions,
+  promaRootCounts,
   selectedSourceFiles,
   summarize,
 } from "./migration-groups.ts";
@@ -26,6 +27,7 @@ function item(overrides: Partial<ImportPlanItem>): ImportPlanItem {
   return {
     sourceId: `s-${seq}`,
     source: "proma",
+    promaRoots: ["/home/.proma-dev"],
     sourceKind: "pi",
     change: "new",
     newMessages: 0,
@@ -104,12 +106,37 @@ describe("groupSessions", () => {
       item({ folder: "/repo/b" }),
     ];
     assert.equal(groupSessions(report(plan), DEFAULT_FILTERS, NOW).hidden, 0);
-    const narrowed = groupSessions(report(plan), { range: "90d", includeArchived: false }, NOW);
+    const narrowed = groupSessions(report(plan), { range: "90d", includeArchived: false, excludedRoots: new Set() }, NOW);
     assert.equal(narrowed.hidden, 2);
     assert.deepEqual(
       narrowed.groups.map((group) => group.folder),
       ["/repo/b"],
     );
+  });
+
+  test("按 Proma 数据根筛：会话所在的根全被去掉才藏（算进 hidden、不导）；别的根里也有的照导；其它来源不受影响", () => {
+    const DEV = "/home/.proma-dev";
+    const FORK = "/home/.proma-dev-fork";
+    const OLD = "/home/.proma";
+    const devOnly = item({ folder: "/repo/a", promaRoots: [DEV], sourceFile: "/src/dev.jsonl" });
+    const forkOnly = item({ folder: "/repo/a", promaRoots: [FORK], sourceFile: "/src/fork.jsonl" });
+    const forkKid = item({ folder: "/repo/a", promaRoots: [FORK], parentId: forkOnly.sessionId });
+    // 字节相同的重复留了 .proma 那份：取消 .proma 不该藏掉它
+    const shared = item({ folder: "/repo/a", promaRoots: [OLD, DEV], sourceFile: "/src/shared.jsonl" });
+    const claude = item({ folder: "/repo/a", source: "claude-code", promaRoots: [], sourceFile: "/src/cc.jsonl" });
+    const r = report([forkOnly, forkKid, devOnly, shared, claude]);
+    // 数的是只在这个根里的（取消它会少导的）；跟着母会话走的子会话不单算
+    assert.deepEqual(promaRootCounts(r), [
+      { root: OLD, onlyHere: 0 },
+      { root: DEV, onlyHere: 1 },
+      { root: FORK, onlyHere: 1 },
+    ]);
+    const all = ["/src/dev.jsonl", "/src/fork.jsonl", "/src/shared.jsonl", "/src/cc.jsonl"];
+    const noOld = groupSessions(r, { ...DEFAULT_FILTERS, excludedRoots: new Set([OLD, FORK]) }, NOW);
+    assert.equal(noOld.hidden, 1);
+    assert.deepEqual(selectedSourceFiles(noOld, new Set(all)).sort(), ["/src/cc.jsonl", "/src/dev.jsonl", "/src/shared.jsonl"]);
+    const noOldNoDev = groupSessions(r, { ...DEFAULT_FILTERS, excludedRoots: new Set([OLD, DEV]) }, NOW);
+    assert.deepEqual(selectedSourceFiles(noOldNoDev, new Set(all)).sort(), ["/src/cc.jsonl", "/src/fork.jsonl"]);
   });
 
   test("「只随手发了一句」判中的：不列、不算进 hidden，单独计数；执行勾选里自然没有它们", () => {
@@ -130,7 +157,7 @@ describe("选择与汇总", () => {
     const r = report([a, b], ["w-new"]);
     const selected = defaultSelection(r);
     assert.equal(selected.size, 2);
-    const visible = groupSessions(r, { range: "all", includeArchived: false }, NOW);
+    const visible = groupSessions(r, { range: "all", includeArchived: false, excludedRoots: new Set() }, NOW);
     assert.deepEqual(selectedSourceFiles(visible, selected), [a.sourceFile]);
 
     const overrides = new Map([

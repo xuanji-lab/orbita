@@ -1508,6 +1508,15 @@ describe("Proma 的几个数据根（.proma 与 .proma-* 变体）", () => {
     assert.deepEqual(report.plan.map((item) => item.sourceId).sort(), ["dev-only", "old-only", "same"]);
     // 一样长时留排在前面的根的那份
     assert.equal(report.plan.find((item) => item.sourceId === "same")?.sourceFile, sameOld);
+    // 每条带着它所在的全部根，留下的那份的根在最前（页面按它筛）
+    assert.deepEqual(
+      report.plan.map((item) => [item.sourceId, item.promaRoots]).sort(),
+      [
+        ["dev-only", [promaRoot]],
+        ["old-only", [oldRoot()]],
+        ["same", [oldRoot(), promaRoot]],
+      ],
+    );
     assert.deepEqual(
       report.skipped.map((skip) => [skip.sourceId, skip.reason, skip.detail]),
       [["same", "duplicate", sameOld]],
