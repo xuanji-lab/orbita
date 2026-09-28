@@ -5,7 +5,8 @@
  * 通路背景（调研 2026-09-21）：Proma 的 pi 真源（`~/.proma-dev/sdk-config/sessions/`，
  * header version 3）与 orbita 锁定的 pi 0.84.3 同版本同格式——这层导入是**同构复制 +
  * 元数据映射**，无 LLM 参与。本文件只定义「扫描报告 / 执行报告」的形状与跳过原因的
- * 词汇；映射规则（工作区三规则、模型归一化）在引擎里，`src/main/session/importer.ts`。
+ * 词汇；映射规则（工作区三规则）在引擎里，`src/main/session/importer.ts`。导入与模型
+ * 解耦（2026-09-28 裁决）：扫描 / 导入不碰模型配置，原模型名只原样记录（importedModel）。
  *
  * **扫描与执行分离**：扫描（dry-run）只读两侧磁盘产出汇总；执行重新扫描一遍再落盘
  * （不接收 renderer 回传的计划——载荷可过期可篡改，重扫的两次结果在数据没变时一致，
@@ -202,10 +203,11 @@ export interface ImportPlanItem {
   workspaceId: string | null;
   /** 本条落进去的 cwd（三规则的产物） */
   cwd: string;
-  /** 模型映射的结果（miss 时是默认兜底） */
-  providerId: string;
-  modelId: string;
-  /** 源应用记录的原始模型 id。渠道名不可信，只有 id 值得留 */
+  /**
+   * 源应用记录的原始模型 id。导入不映射模型（2026-09-28 裁决：导入与模型解耦），
+   * 落盘时 meta 的 providerId 写占位、modelId 写这个名字——打开导入的会话时
+   * 模型栏显示「没有模型」，用户自己选。
+   */
   importedModel: string | null;
   /**
    * 这条落盘时的 orbita 会话 id；updated = 被追加的那条既有会话的 id。**扫描期就铸好**（同 ImportWorkspacePlan.id 的理由）：
@@ -218,8 +220,6 @@ export interface ImportPlanItem {
    * 索引里已不存在）时也是 null——按根会话导，数据不丢，计入 orphanedSubSessions。
    */
   parentId: string | null;
-  /** false = 没有匹配到已注册模型，用了默认兜底 */
-  modelMatched: boolean;
   /**
    * Proma 侧的归档态照搬——归档过的会话导进来还是归档的。以下三个状态只有 Proma 映射；
    * 其余来源一律 false（2026-09-24 迁移边界：只迁聊天记录与最少的组织信息，不适配
@@ -252,8 +252,6 @@ export interface ImportScanReport {
   withoutPiSession: number;
   /** plan 里全部源文件的字节总和 */
   totalBytes: number;
-  /** 模型映射 miss（用默认兜底）的条数 */
-  modelFallbackCount: number;
   /** plan 里 parentId 非 null 的条数：导进来后折叠在母会话下、不进左栏的那些 */
   subSessionCount: number;
   /** 源里有父但父不可导、只好按根会话导的条数（不应该发生，发生了要让人看见） */
@@ -275,6 +273,22 @@ export interface ImportModelRef {
 }
 
 /**
+ * 「只随手发了一句」检查用不了模型的原因（主进程装配时判定，页面据此写状态行）。
+ * 检查只用**家务活模型**（设置里的 choreModel，与给任务起名同一个）——它是杂活，
+ * 不该占用子会话模型或主力模型。
+ */
+export type ImportGreetingUnavailable =
+  /** 一个声明了模型的 provider 都没有：先去 Providers 页配一个 */
+  | "no-provider"
+  /** 有 provider 但没选家务活模型（或所选模型已不在注册表里）：去通用设置选一个 */
+  | "no-chore-model";
+
+/** 主进程装配出的检查准备情况（报告里补上 candidates 计数）。 */
+export type ImportGreetingModelStatus =
+  | { model: ImportModelRef }
+  | { unavailable: ImportGreetingUnavailable };
+
+/**
  * 可选的「不导只说了句招呼的会话」（wafo 2026-09-25）：Claude 的 5 小时额度窗口从第一条消息
  * 开始计时，很多人先随手发一句 hi / test 把窗口开起来，之后不再回这个会话。用户在页面上勾选后，
  * 主进程把**用户只写过一条消息的新会话**的那一条交给模型判断是不是这种随手一句；判中的在页面上
@@ -285,15 +299,20 @@ export interface ImportModelRef {
 export interface ImportGreetingCheckPlan {
   /** 会被送去判的会话数（新会话里用户只写过一条消息的） */
   candidates: number;
-  /**
-   * 会用的模型：设置里的子会话模型（from = sub-session），没设就是导入的兜底模型
-   * （from = default）；null = 一个可用模型都没有
-   */
-  model: (ImportModelRef & { from: "sub-session" | "default" }) | null;
+  /** 会用的家务活模型；null 时 unavailable 给出用不了的原因 */
+  model: ImportModelRef | null;
+  unavailable: ImportGreetingUnavailable | null;
 }
 
 /** `import:check-greetings` 的请求与扫描同形：只带来源，候选由主进程按同样的来源重扫得出。 */
 export type ImportGreetingCheckInput = ImportScanInput;
+
+/**
+ * `import:check-greetings` 在模型不可用时抛的稳定错误码（附 ImportGreetingUnavailable
+ * 原文，如 `IMPORT_GREETING_UNAVAILABLE:no-provider`）——主进程不猜界面语言，
+ * renderer 按码翻文案（同 SKILL_NOT_FOUND_CODE 的纪律）。
+ */
+export const IMPORT_GREETING_UNAVAILABLE_CODE = "IMPORT_GREETING_UNAVAILABLE:";
 
 export interface ImportGreetingCheckResult {
   /** 判为「只是随手一句」的会话，按 sourceFile（与执行请求的勾选同一个键） */

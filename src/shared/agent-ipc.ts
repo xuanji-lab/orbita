@@ -463,7 +463,7 @@ export type AgentCommand =
       sessionId: string;
       text: string;
       /**
-       * 命名专用模型（设置里的 titleModel）。**主进程解好密钥面再发**：
+       * 家务活模型（设置里的 choreModel，给任务起名等小活用）。**主进程解好密钥面再发**：
        * runtime 不读设置也不读密钥库，只收数据（同开轮命令的 provider）。
        * 缺席 = 用会话当前的模型（原有行为）；指的 provider 已删或解析失败时
        * 主进程同样不带，标题不因此停掉。
