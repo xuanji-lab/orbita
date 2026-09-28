@@ -107,10 +107,13 @@ export function SettingsView(props: {
 
       {migrationVisited ? (
         // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格；
-        // 切走只是藏起来——扫描结果与勾选都还在（见上面 migrationVisited 的注释）
+        // 切走只是藏起来——扫描结果与勾选都还在（见上面 migrationVisited 的注释）。
+        // 显示时包装层必须是 display: contents：MigrationView 的根靠「自己就是第二行的
+        // grid 项」被拉伸到有限高度，内部滚动区才滚得动、底栏才贴底；包一层普通块级 div
+        // 它就按内容长高、被面板裁掉——整页滚不动、底栏消失（wafo 2026-09-28 验收发现）
         <div
           hidden={props.tab !== "migration"}
-          style={{ height: "100%", minHeight: 0, display: props.tab === "migration" ? undefined : "none" }}
+          style={{ display: props.tab === "migration" ? "contents" : "none" }}
         >
           <MigrationView
             workspaces={props.workspaces}
