@@ -357,6 +357,9 @@ export const en = {
     loginImportSitesAria: "Sites to import",
     loginImportSearchPlaceholder: "Search sites",
     loginImportNoMatch: "No site matches",
+    // 不复用 migration.clearAll：同一页上「Clear all」已是清除浏览器数据的危险键，撞词会让人以为这里也在删东西
+    loginImportSelectAll: "Select all",
+    loginImportDeselectAll: "Deselect all",
     loginImportSiteCount: (count: number) => `${count} cookie${count === 1 ? "" : "s"}`,
     loginImportAction: (count: number) => `Import ${count} site${count === 1 ? "" : "s"}`,
     loginImportDone: (imported: number, sites: number, skipped: number) =>

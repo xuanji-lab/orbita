@@ -16,6 +16,7 @@ import type {
 import type { Workspace } from "@shared/workspace";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
+import { allShownTicked, setShown } from "./login-sites.ts";
 import { InfoTip } from "./InfoTip";
 import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
@@ -636,7 +637,7 @@ function LoginImportSection() {
 }
 
 /**
- * 网站清单：搜索框 + 复选框行 + 底部「导入所选 N 个网站」。默认一个都不勾；
+ * 网站清单：搜索框（右侧「全选 / 全不选」，只作用于搜索结果）+ 复选框行 + 底部「导入所选 N 个网站」。默认一个都不勾；
  * 条数在每行末尾（mono，机器事实）。面板限高内滚，几十个网站也不把设置页撑长。
  */
 function LoginSitesPanel(props: {
@@ -650,6 +651,8 @@ function LoginSitesPanel(props: {
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const needle = query.trim().toLowerCase();
   const shown = props.sites.filter((site) => needle === "" || site.site.toLowerCase().includes(needle));
+  const shownNames = shown.map((site) => site.site);
+  const allTicked = allShownTicked(shownNames, ticked);
   const toggle = (site: string) => {
     setTicked((before) => {
       const next = new Set(before);
@@ -671,6 +674,17 @@ function LoginSitesPanel(props: {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
+        {/* 全选 / 全不选：只作用于当前显示的网站（login-sites.ts）。沿用 Migration 页的文字按钮样式 mg-textbtn */}
+        {shown.length > 1 && (
+          <button
+            type="button"
+            className="mg-textbtn"
+            disabled={props.busy}
+            onClick={() => setTicked((before) => setShown(before, shownNames, !allTicked))}
+          >
+            {allTicked ? t.settings.loginImportDeselectAll : t.settings.loginImportSelectAll}
+          </button>
+        )}
       </div>
       <div className="login-sites-list" role="group" aria-label={t.settings.loginImportSitesAria}>
         {shown.map((site) => (

@@ -327,6 +327,8 @@ export const zh: Messages = {
     loginImportSitesAria: "待导入的网站",
     loginImportSearchPlaceholder: "搜索网站",
     loginImportNoMatch: "没有匹配的网站",
+    loginImportSelectAll: "全选",
+    loginImportDeselectAll: "全不选",
     loginImportSiteCount: (count) => `${count} 条`,
     loginImportAction: (count) => `导入所选 ${count} 个网站`,
     loginImportDone: (imported, sites, skipped) =>
