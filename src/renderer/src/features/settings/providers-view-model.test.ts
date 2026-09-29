@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelDefaults } from "../../../../shared/model-defaults.ts";
+import type { ProviderDto } from "../../../../shared/provider.ts";
 import {
   compactTokens,
   connectionDirty,
@@ -9,7 +10,9 @@ import {
   modelAcceptsImage,
   modelIdIssue,
   modelContextText,
+  kindOf,
   nextCopyId,
+  nextFreeId,
   parseRateInput,
   parseTokenInput,
   reorderIds,
@@ -86,6 +89,28 @@ describe("nextCopyId", () => {
     assert.equal(nextCopyId(["a", "b"], "deepseek"), "deepseek-copy");
     assert.equal(nextCopyId(["deepseek-copy"], "deepseek"), "deepseek-copy2");
     assert.equal(nextCopyId(["deepseek-copy", "deepseek-copy2"], "deepseek"), "deepseek-copy3");
+  });
+});
+
+describe("nextFreeId —— 同一目录条目加第二次不撞 id", () => {
+  test("没占用用条目 id 本身；占用了依次 -2 / -3", () => {
+    assert.equal(nextFreeId(["deepseek"], "anthropic-compatible"), "anthropic-compatible");
+    assert.equal(nextFreeId(["anthropic-compatible"], "anthropic-compatible"), "anthropic-compatible-2");
+    assert.equal(
+      nextFreeId(["anthropic-compatible", "anthropic-compatible-2"], "anthropic-compatible"),
+      "anthropic-compatible-3",
+    );
+  });
+
+  test("带序号的 id 仍按协议认回兼容条目", () => {
+    const dto: ProviderDto = {
+      id: "anthropic-compatible-2",
+      displayName: "Anthropic Compatible",
+      endpoint: { baseUrl: "https://gateway.example.com", api: "anthropic-messages" },
+      models: { declared: [] },
+      auth: { scheme: "none" },
+    };
+    assert.equal(kindOf(dto), "anthropic-compatible");
   });
 });
 

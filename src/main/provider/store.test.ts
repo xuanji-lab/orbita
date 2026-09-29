@@ -93,6 +93,29 @@ describe("ProviderStore", () => {
     assert.deepEqual([...secrets.values.entries()][0], before, "account 与明文都应原样保留");
   });
 
+  test("create 撞了已有 id → 拒绝，原来那条与它的密钥原样保留", async () => {
+    await store.upsert({ ...input(), create: true });
+    const before = [...secrets.values.entries()];
+
+    await assert.rejects(
+      () => store.upsert({ ...input({ displayName: "第二个" }), apiKey: "sk-second-key-9999", create: true }),
+      (error: unknown) =>
+        error instanceof ProviderValidationError && error.issues.some((issue) => issue.field === "id"),
+    );
+    const list = await store.list();
+    assert.equal(list.length, 1);
+    assert.equal(list[0]?.displayName, "OpenAI");
+    assert.deepEqual([...secrets.values.entries()], before, "旧密钥不得被新 key 覆盖");
+  });
+
+  test("create 用新 id → 与已有的并存", async () => {
+    await store.upsert({ ...input(), create: true });
+    await store.upsert({ ...input({ id: "openai-2" }), apiKey: "sk-second-key-9999", create: true });
+    assert.deepEqual((await store.list()).map((p) => p.id), ["openai", "openai-2"]);
+    assert.equal(await store.resolveApiKey("openai"), "sk-proj-abcdefgh1234");
+    assert.equal(await store.resolveApiKey("openai-2"), "sk-second-key-9999");
+  });
+
   test("新建 api_key provider 但不给密钥 → 拒绝，且不落盘", async () => {
     await assert.rejects(
       () => store.upsert({ provider: input().provider }),

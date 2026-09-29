@@ -64,6 +64,21 @@ export function nextCopyId(existing: readonly string[], base: string): string {
 }
 
 /**
+ * 从目录新建厂商的 id：没占就用条目 id 本身，占了依次试 anthropic-compatible-2 / -3 …
+ * 目录条目可以加不止一次（两个 Anthropic 兼容网关、同厂两个账号），id 却是存储主键——
+ * 直接拿条目 id 会让第二个落盘时整条换掉第一个。带后缀的 id 认不出目录条目时，
+ * kindOf 按协议落回「兼容」条目，与复制出来的副本同一套处理。
+ */
+export function nextFreeId(existing: readonly string[], base: string): string {
+  const taken = new Set(existing);
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const id = `${base}-${n}`;
+    if (!taken.has(id)) return id;
+  }
+}
+
+/**
  * 拖拽重排后的 id 顺序：被拖行落到目标行的位置（小框框住的那行），其余行顺移补位。
  * from/to 不在表里或相同则原样返回。
  */

@@ -95,6 +95,9 @@ export class ProviderStore {
 
     const providers = await this.load();
     const existing = providers.find((p) => p.id === draft.id);
+    if (input.create === true && existing !== undefined) {
+      throw new ProviderValidationError([{ field: "id", message: `provider "${draft.id}" already exists` }]);
+    }
 
     const normalized: Provider = {
       id: draft.id,
