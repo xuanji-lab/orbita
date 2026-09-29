@@ -147,6 +147,22 @@ body {
   font-weight: var(--weight-bold);
 }
 
+/* 用户 tab 的页面标题：它就是这个 tab 的名字，跟 tab 的文字颜色走（显示中为主色），不加粗 */
+.browser-tab-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「+」贴在最后一个 tab 后面，垂直居中在 tab 条里 */
+.browser-tab-new {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-flex;
+}
+
 .browser-tab-page {
   flex: 1 1 auto;
   min-width: 0;

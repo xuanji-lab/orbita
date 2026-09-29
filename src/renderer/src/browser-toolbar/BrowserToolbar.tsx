@@ -14,7 +14,7 @@ const EMPTY_STATE: BrowserWindowState = {
 };
 
 /**
- * 沙盒窗口的工具条：上面一行 tab 条（「你的」tab + 各会话的 agent tab），下面一行
+ * 沙盒窗口的工具条：上面一行 tab 条（用户的 tab + 各会话的 agent tab），下面一行
  * 后退 / 前进 / 刷新（加载中变停止）/ 地址栏，作用于正在显示的 tab。
  *
  * 主题与语言：首帧读建窗参数；之后窗口每次获得焦点重读一次设置——用户在主窗口改了
@@ -86,7 +86,8 @@ function HandoffBar(props: { toolCallId: string; reason: string }) {
 }
 
 /**
- * tab 条。agent tab 用会话标题标注（bot 图标），「你的」tab 用地球图标、不可关。
+ * tab 条。用户的 tab 用地球图标 + 页面标题（空白页写「新标签页」），可以有多个；agent tab 用 bot 图标 +
+ * 会话标题（后面跟页面）。每个 tab 都能关（用户的最后一个关掉时主进程补一个空白的），末尾「+」新开用户 tab。
  * 状态用图标 + 文字说话，颜色只是第二信号（设计系统）。
  */
 function TabStrip(props: { tabs: readonly BrowserTabSummary[]; shownTabId: string }) {
@@ -96,7 +97,6 @@ function TabStrip(props: { tabs: readonly BrowserTabSummary[]; shownTabId: strin
       {props.tabs.map((tab) => {
         const agent = tab.owner.kind === "agent";
         const session = tab.owner.kind === "agent" ? tab.owner.sessionTitle : "";
-        const label = agent ? t.browser.agentTab(session) : t.browser.yourTab;
         const page = tab.title !== "" ? tab.title : tab.url;
         const shown = tab.id === props.shownTabId;
         return (
@@ -106,7 +106,7 @@ function TabStrip(props: { tabs: readonly BrowserTabSummary[]; shownTabId: strin
               role="tab"
               aria-selected={shown}
               className="browser-tab-main"
-              title={agent ? t.browser.agentTabTip(session, page) : t.browser.yourTabTip}
+              title={agent ? t.browser.agentTabTip(session, page) : t.browser.yourTabTip(page)}
               onClick={() => void api.browser.selectTab(tab.id)}
             >
               <Icon
@@ -114,18 +114,26 @@ function TabStrip(props: { tabs: readonly BrowserTabSummary[]; shownTabId: strin
                 size={12}
                 spin={tab.loading}
               />
-              <span className="browser-tab-label">{label}</span>
-              {agent && page !== "" && <span className="browser-tab-page">{page}</span>}
-              {!agent && page === "" && <span className="browser-tab-page">{t.browser.newPage}</span>}
+              {agent ? (
+                <>
+                  <span className="browser-tab-label">{t.browser.agentTab(session)}</span>
+                  {page !== "" && <span className="browser-tab-page">{page}</span>}
+                </>
+              ) : (
+                <span className="browser-tab-title">{page !== "" ? page : t.browser.newTab}</span>
+              )}
             </button>
-            {agent && (
-              <IconButton label={t.browser.closeTab} size={20} onClick={() => void api.browser.closeTab(tab.id)}>
-                <Icon name="x" size={11} />
-              </IconButton>
-            )}
+            <IconButton label={t.browser.closeTab} size={20} onClick={() => void api.browser.closeTab(tab.id)}>
+              <Icon name="x" size={11} />
+            </IconButton>
           </div>
         );
       })}
+      <span className="browser-tab-new">
+        <IconButton label={t.browser.newTab} size={24} onClick={() => void api.browser.newTab()}>
+          <Icon name="plus" size={13} />
+        </IconButton>
+      </span>
     </div>
   );
 }

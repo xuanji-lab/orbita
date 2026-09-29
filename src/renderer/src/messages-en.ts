@@ -169,13 +169,13 @@ export const en = {
     addressPlaceholder: "Address or search",
     notAnAddress: "Enter a web address or search words",
     tabs: "Browser tabs",
-    yourTab: "Your tab",
-    yourTabTip: "Your tab — sign in to sites here; the agent shares the sign-in",
+    yourTabTip: (page: string) =>
+      `${page === "" ? "" : `${page} — `}Your tab · sign in to sites here; the agent shares the sign-in`,
     agentTab: (session: string) => (session === "" ? "Agent" : session),
     agentTabTip: (session: string, page: string) =>
       `Agent tab${session === "" ? "" : ` · ${session}`}${page === "" ? "" : ` — ${page}`}`,
-    newPage: "New page",
-    closeTab: "Close this agent tab",
+    newTab: "New tab",
+    closeTab: "Close tab",
     handoffKicker: "Needs you",
     handoffWhere: "In the built-in browser",
     handoffWaiting: "waiting for you",

@@ -53,6 +53,7 @@ export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsSt
   });
   ipcMain.handle(browserChannels.browserGetState, (): BrowserWindowState => sandbox.state());
   ipcMain.handle(browserChannels.browserOpenExternal, (): Promise<void> => sandbox.openShownExternally());
+  ipcMain.handle(browserChannels.browserNewTab, (): Promise<void> => sandbox.newTab());
 
   ipcMain.handle(browserChannels.browserShowHandoff, (_event, toolCallId: unknown): Promise<boolean> =>
     typeof toolCallId === "string" ? sandbox.showHandoff(toolCallId) : Promise.resolve(false),

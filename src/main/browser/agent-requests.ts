@@ -13,7 +13,7 @@
  */
 import { nativeImage, type WebContents } from "electron";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { BrowserTabSummary, BrowserToolOutcome, BrowserToolRequest } from "../../shared/browser.ts";
+import type { BrowserToolOutcome, BrowserToolRequest } from "../../shared/browser.ts";
 import { availableDownloadPath } from "./downloads.ts";
 import { resolveAddressOrSearch } from "./address.ts";
 import { looksLikeLocalPath, resolveLocalPage } from "./local-file.ts";
@@ -23,6 +23,7 @@ import { extractScript, formatExtract, type PageRaw } from "./page-text.ts";
 import { describeDownload, pageUrl, type BrowserSandbox, type BrowserTab } from "./sandbox.ts";
 import { cdp, delay } from "./cdp.ts";
 import { HostPacer } from "./host-pacer.ts";
+import { describeTabs } from "./user-tabs.ts";
 import { click, goHistory, guardDialogs, press, scroll, typeText, watchPageChange } from "./interactions.ts";
 import { fitWithin, regionClip, shotSize, SHOT_MAX_HEIGHT, SHOT_MAX_WIDTH } from "./screenshot-geometry.ts";
 
@@ -48,11 +49,23 @@ export async function applyBrowserRequest(
 ): Promise<BrowserToolOutcome> {
   if (request.action === "tabs") {
     await sandbox.agentTab(sessionId);
-    return { ok: true, text: describeTabs(sandbox.visibleTabs(sessionId)), card: { tabId: "", url: "", title: "" } };
+    return {
+      ok: true,
+      text: describeTabs(sandbox.visibleTabs(sessionId), sandbox.onScreenTabId()),
+      card: { tabId: "", url: "", title: "" },
+    };
   }
-  // 读取类工具可以读「你的」tab（只读）；其余一律作用于自己的 agent tab
-  const readsUser = "tab" in request && request.tab === "user";
-  const tab = readsUser ? await sandbox.userTab() : await sandbox.agentTab(sessionId);
+  // 读取类工具可以按 id 读用户的某个 tab（只读）；其余一律作用于自己的 agent tab
+  const userTabId = "tab" in request && typeof request.tab === "string" && request.tab !== "" ? request.tab : null;
+  const readsUser = userTabId !== null;
+  const userTab = userTabId === null ? undefined : sandbox.userTabById(userTabId);
+  if (userTabId !== null && userTab === undefined) {
+    return {
+      ok: false,
+      error: `No user tab has the id "${userTabId}" — it may have been closed. Call browser_tabs to see the user's tabs and their ids.`,
+    };
+  }
+  const tab = userTab ?? (await sandbox.agentTab(sessionId));
   const outcome = await sandbox.runOnTab(tab, async (): Promise<BrowserToolOutcome> => {
     if (!sandbox.isLive(tab)) return { ok: false, error: "The browser tab was closed. Call the tool again to reopen it." };
     const contents = tab.view.webContents;
@@ -446,22 +459,6 @@ function screenshotName(url: string): string {
     // 空页 / 非法地址：用默认名
   }
   return `${stamp}-${host}.png`;
-}
-
-/** browser_tabs 的正文：你的 tab 与自己的 tab 各一行，标出哪个在交接中 */
-export function describeTabs(tabs: readonly BrowserTabSummary[]): string {
-  const lines = tabs.map((tab) => {
-    const who = tab.owner.kind === "user" ? "The user's tab (read with tab: \"user\")" : "Your tab";
-    const page = tab.url === "" ? "empty" : `${tab.title === "" ? "(untitled)" : tab.title} — ${tab.url}`;
-    return `- ${who}: ${page}${tab.loading ? " (loading)" : ""}${tab.handoff !== undefined ? " (handed to the user)" : ""}`;
-  });
-  return [
-    "Open browser tabs:",
-    ...lines,
-    "If the user already has the page you need open (often signed in through a library or proxy address), " +
-      "read it with tab: \"user\" instead of starting over; to act on it, open the same address in your own tab — " +
-      "the sign-in is shared.",
-  ].join("\n");
 }
 
 function asPageRaw(value: unknown): PageRaw {

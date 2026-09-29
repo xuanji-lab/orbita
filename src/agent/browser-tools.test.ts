@@ -144,6 +144,22 @@ describe("browser_* 工具", () => {
     assert.equal(sent.length, 0);
   });
 
+  test("tab 参数：非空字符串才上船（去掉首尾空白），空串与非字符串当没给", async () => {
+    const { sent, answer, run } = setup();
+    const first = run("browser_observe", { tab: " 5c1e2a90 " });
+    assert.deepEqual(sent[0]?.["request"], { action: "observe", tab: "5c1e2a90" });
+    answer(0, { ok: true, text: "…", card });
+    await first;
+    const second = run("browser_extract", { tab: "" });
+    assert.deepEqual(sent[1]?.["request"], { action: "extract" });
+    answer(1, { ok: true, text: "…", card });
+    await second;
+    const third = run("browser_observe", { tab: 3 });
+    assert.deepEqual(sent[2]?.["request"], { action: "observe" });
+    answer(2, { ok: true, text: "…", card });
+    await third;
+  });
+
   test("extract：只带给了的参数；非 true 的 links 不上船", async () => {
     const { sent, answer, run } = setup();
     const first = run("browser_extract", { offset: 100, links: true });
@@ -156,10 +172,10 @@ describe("browser_* 工具", () => {
     await second;
   });
 
-  test("screenshot：save 与 tab=user 上船；图片块跟在文字后面", async () => {
+  test("screenshot：save 与用户 tab 的 id 上船；图片块跟在文字后面", async () => {
     const { sent, answer, run } = setup();
-    const first = run("browser_screenshot", { save: true, tab: "user" });
-    assert.deepEqual(sent[0]?.["request"], { action: "screenshot", save: true, tab: "user" });
+    const first = run("browser_screenshot", { save: true, tab: "5c1e2a90" });
+    assert.deepEqual(sent[0]?.["request"], { action: "screenshot", save: true, tab: "5c1e2a90" });
     answer(0, { ok: true, text: "Screenshot", image: { data: "AAAA", mimeType: "image/jpeg" }, card });
     const result = await first;
     assert.deepEqual(result.content, [
