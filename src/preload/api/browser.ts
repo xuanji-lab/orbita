@@ -55,6 +55,8 @@ export const browserApi = {
     ipcRenderer.invoke(browserChannels.browserImportedRemove, site),
   /** 工具条：正在显示的页面交给系统默认应用打开 */
   openExternal: (): Promise<void> => ipcRenderer.invoke(browserChannels.browserOpenExternal),
+  /** 工具条「+」：新开空白的用户 tab */
+  newTab: (): Promise<void> => ipcRenderer.invoke(browserChannels.browserNewTab),
   onState: (listener: (state: BrowserWindowState) => void): (() => void) => {
     const handler = (_e: unknown, state: BrowserWindowState) => listener(state);
     ipcRenderer.on(browserChannels.browserState, handler);

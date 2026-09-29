@@ -8,7 +8,8 @@
  * 放进独立窗口的理由：原生视图不会再压住任何 DOM 浮层，也就不需要任何让位逻辑。
  *
  * tab：
- *   - 「你的」tab：用户登录用，不属于任何会话，不可关。
+ *   - 用户的 tab：不属于任何会话，可以有多个（2026-09-29：界面里的链接与本地网页默认在这里开，
+ *     一个 tab 装不下）。可新开可关，但至少留一个——它是登录入口。
  *   - agent tab：每个用过浏览器的会话一个（agentTab），agent 的工具只作用于自己会话的 tab。
  *   所有 tab 都挂在窗口里、铺满同一块区域；**显示哪个只是 z 序**（重新 addChildView 置顶）。
  *   其余 tab 在下面照常加载、照常渲染——agent 在后台操作自己的 tab 不抢用户的屏幕，
@@ -50,6 +51,7 @@ import { normalizeAddress, resolveAddressOrSearch } from "./address.ts";
 import { browserUserAgent } from "./identity.ts";
 import { browserShortcut, type BrowserShortcut } from "./shortcuts.ts";
 import { availableDownloadPath, forceDownloadHeaders } from "./downloads.ts";
+import { placeInUserTab } from "./user-tabs.ts";
 import { emptyElementRefs, type ElementRefs } from "./page-outline.ts";
 import type { ShotGeometry } from "./screenshot-geometry.ts";
 
@@ -132,7 +134,8 @@ export class BrowserSandbox {
   /** 并发 ensureWindow 共用同一次创建（agent 并行工具调用会同时要窗口） */
   private creating: Promise<BrowserWindow> | null = null;
   private readonly tabs = new Map<string, BrowserTab>();
-  private userTabId = "";
+  /** 最近显示过的用户 tab：地球入口回到它，新链接判断「空白页复用」也看它 */
+  private lastUserTabId = "";
   private shownTabId = "";
   /** 页面开出的弹窗子窗口：dispose 时一并收掉 */
   private readonly popups = new Set<BrowserWindow>();
@@ -151,14 +154,20 @@ export class BrowserSandbox {
   // ── 用户侧（主窗口 / 工具条）────────────────────────────────────────
 
   /**
-   * 打开或聚焦沙盒窗口，切到「你的」tab（带 url 就在那里打开）。RightRail 的地球是「我的浏览器」
-   * 入口：总回到你的 tab，不停在上次交接切过去的 agent tab 上——否则你在地址栏里打开的东西
-   * 会落进 agent 的 tab、下载也跟着进了那个会话的工作台（冒烟实测到的）。看 agent 的 tab 走交接卡或 tab 条。
+   * 打开或聚焦沙盒窗口，切到用户的 tab（带 url 就按 placeInUserTab 开：已开着同一地址就切过去，
+   * 否则新开）。RightRail 的地球是「我的浏览器」入口：总回到最近用过的那个用户 tab，不停在上次
+   * 交接切过去的 agent tab 上——否则你在地址栏里打开的东西会落进 agent 的 tab、下载也跟着进了
+   * 那个会话的工作台（冒烟实测到的）。看 agent 的 tab 走交接卡或 tab 条。
    */
   async open(url?: string): Promise<BrowserNavigateResult> {
     const window = await this.ensureWindow();
-    this.show(this.userTabId);
-    const result: BrowserNavigateResult = url !== undefined ? this.navigate(url) : { ok: true };
+    let result: BrowserNavigateResult = { ok: true };
+    const target = url === undefined ? null : resolveAddressOrSearch(url);
+    if (target !== null) this.openInUserTab(target.url);
+    else {
+      this.show(this.currentUserTab().id);
+      if (url !== undefined) result = { ok: false, reason: "not-an-address" };
+    }
     bringToFront(window);
     // 空白页打开时光标直接进地址栏：此刻用户要做的只有输入网址这一件事
     if (this.state().page.url === "") window.webContents.send(browserChannels.browserFocusAddress);
@@ -166,20 +175,23 @@ export class BrowserSandbox {
   }
 
   /**
-   * 文件面板「在内置浏览器打开」：在「你的」tab 里加载一个本地网页。路径已过文件面板的
-   * root/dir 白名单与 isWebPageFile（files/ipc.ts），这里不再判。
+   * 文件面板「在内置浏览器打开」：在用户的 tab 里打开一个本地网页（同 open 的落点规则）。
+   * 路径已过文件面板的 root/dir 白名单与 isWebPageFile（files/ipc.ts），这里不再判。
    *
-   * 落在「你的」tab 而不是会话的 agent tab，理由同 open：你手动打开的东西不该落进 agent 正在用的
-   * tab——会打断它手上的操作，下载也会跟着进那个会话的工作台。agent 要看，用 tab: "user" 只读。
-   * 原来那一页不丢：后退就回去。
+   * 落在用户的 tab 而不是会话的 agent tab，理由同 open：你手动打开的东西不该落进 agent 正在用的
+   * tab——会打断它手上的操作，下载也会跟着进那个会话的工作台。agent 要看，按 id 只读。
    */
   async openLocalFile(path: string): Promise<void> {
     const window = await this.ensureWindow();
-    this.show(this.userTabId);
-    const contents = this.shownContents();
-    // 加载失败（文件刚被删）页面自己会显示错误页，不当异常抛——同 navigate
-    if (contents !== null) contents.loadURL(pathToFileURL(path).href).catch(() => undefined);
+    this.openInUserTab(pathToFileURL(path).href);
     bringToFront(window);
+  }
+
+  /** 工具条「+」：新开一个空白的用户 tab，切过去，光标进地址栏 */
+  async newTab(): Promise<void> {
+    const window = await this.ensureWindow();
+    this.show(this.createTab({ kind: "user" }).id);
+    window.webContents.send(browserChannels.browserFocusAddress);
   }
 
   /**
@@ -231,10 +243,13 @@ export class BrowserSandbox {
     if (this.tabs.has(tabId)) this.show(tabId);
   }
 
-  /** 关掉一个 agent tab。「你的」tab 不可关；agent 下次用浏览器会重开一个（登录态不丢） */
+  /**
+   * 关掉一个 tab。用户的 tab 关掉最后一个时 destroyTab 补一个空白的；agent tab 关掉后
+   * agent 下次用浏览器会重开一个（登录态在 partition 里，不丢）
+   */
   closeTab(tabId: string): void {
     const tab = this.tabs.get(tabId);
-    if (tab === undefined || tab.owner.kind === "user") return;
+    if (tab === undefined) return;
     this.destroyTab(tab);
   }
 
@@ -313,15 +328,26 @@ export class BrowserSandbox {
     return tab;
   }
 
-  /** 「你的」tab（agent 的读取类工具带 tab: "user" 时读它，只读）。窗口没建过就先建 */
-  async userTab(): Promise<BrowserTab> {
-    await this.ensureWindow();
-    const tab = this.tabs.get(this.userTabId);
-    if (tab === undefined) throw new Error("浏览器的「你的」tab 不在");
-    return tab;
+  /**
+   * 按 id 找一个用户的 tab（agent 的读取类工具带 tab 时读它，只读）。别的会话的 agent tab
+   * 不给——id 碰巧对上也不行，会话之间不互看
+   */
+  userTabById(tabId: string): BrowserTab | undefined {
+    const tab = this.tabs.get(tabId);
+    return tab?.owner.kind === "user" ? tab : undefined;
   }
 
-  /** agent 看得到的 tab：「你的」tab + 这个会话自己的 agent tab。别的会话的 tab 不给——会话之间不互看 */
+  /**
+   * 此刻在屏幕上的那个 tab：窗口可见且没最小化时才有。browser_tabs 如实标给模型——
+   * 读哪个用户 tab 由模型按上下文挑，挑的依据给足（2026-09-29 用户裁决）
+   */
+  onScreenTabId(): string | null {
+    const window = this.window;
+    if (window === null || window.isDestroyed() || !window.isVisible() || window.isMinimized()) return null;
+    return this.shownTabId === "" ? null : this.shownTabId;
+  }
+
+  /** agent 看得到的 tab：用户的全部 tab + 这个会话自己的 agent tab。别的会话的 tab 不给——会话之间不互看 */
   visibleTabs(sessionId: string): BrowserTabSummary[] {
     return [...this.tabs.values()]
       .filter((tab) => tab.owner.kind === "user" || tab.owner.sessionId === sessionId)
@@ -415,7 +441,7 @@ export class BrowserSandbox {
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     }
     this.tabs.clear();
-    this.userTabId = "";
+    this.lastUserTabId = "";
     this.shownTabId = "";
     const window = this.window;
     this.window = null;
@@ -485,9 +511,7 @@ export class BrowserSandbox {
     });
     this.wireShortcuts(window.webContents);
 
-    const userTab = this.createTab({ kind: "user" });
-    this.userTabId = userTab.id;
-    this.show(userTab.id);
+    this.show(this.createTab({ kind: "user" }).id);
     this.deps.loadToolbar(window);
     return window;
   }
@@ -542,8 +566,40 @@ export class BrowserSandbox {
     const window = this.window;
     if (window !== null && !window.isDestroyed()) window.contentView.removeChildView(tab.view);
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
-    if (this.shownTabId === tab.id) this.show(this.userTabId);
+    if (this.lastUserTabId === tab.id) this.lastUserTabId = "";
+    // 用户的 tab 至少留一个：它是登录入口，地球按钮也要有地方回（窗口没了就不补，重建时会建）
+    const windowAlive = window !== null && !window.isDestroyed();
+    if (windowAlive && this.userTabs().length === 0) this.createTab({ kind: "user" });
+    if (this.shownTabId === tab.id && windowAlive) this.show(this.currentUserTab().id);
     else this.push();
+  }
+
+  private userTabs(): BrowserTab[] {
+    return [...this.tabs.values()].filter((tab) => tab.owner.kind === "user");
+  }
+
+  /** 最近显示过的用户 tab；它被关了就退到 tab 条上最后一个用户 tab；一个都没有就新建（调用方保证窗口在） */
+  private currentUserTab(): BrowserTab {
+    const last = this.tabs.get(this.lastUserTabId);
+    if (last !== undefined) return last;
+    return this.userTabs().at(-1) ?? this.createTab({ kind: "user" });
+  }
+
+  /** 在用户的 tab 里打开 url（已规范化）：落点规则见 user-tabs.ts */
+  private openInUserTab(url: string): void {
+    const views = this.userTabs()
+      .filter((tab) => !tab.view.webContents.isDestroyed())
+      .map((tab) => ({ id: tab.id, url: pageUrl(tab.view.webContents), loading: tab.view.webContents.isLoading() }));
+    const placement = placeInUserTab(url, views, this.currentUserTab().id);
+    if (placement.kind === "switch") {
+      this.show(placement.id);
+      return;
+    }
+    const tab = placement.kind === "reuse" ? this.tabs.get(placement.id) : this.createTab({ kind: "user" });
+    if (tab === undefined) return;
+    this.show(tab.id);
+    // 加载失败（断网、文件刚被删）页面自己会显示错误页，不当异常抛——同 navigate
+    tab.view.webContents.loadURL(url).catch(() => undefined);
   }
 
   /** 显示某个 tab：把它的视图置顶（重新 addChildView 就是置顶）。其余 tab 留在下面照常渲染 */
@@ -552,6 +608,7 @@ export class BrowserSandbox {
     const window = this.window;
     if (tab === undefined || window === null || window.isDestroyed()) return;
     this.shownTabId = tabId;
+    if (tab.owner.kind === "user") this.lastUserTabId = tabId;
     window.contentView.addChildView(tab.view);
     this.layout();
     this.push();

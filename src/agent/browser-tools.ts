@@ -39,6 +39,20 @@ const LOGIN_HINT =
   "The browser shares its sign-in state with the user. If a page needs a login, a CAPTCHA or an authorization " +
   "you cannot do yourself, call request_user_action — do not guess credentials.";
 
+/**
+ * 读取类工具的 tab 参数：用户某个 tab 的 id（browser_tabs 给）。用户的 tab 可以有多个，读哪个由模型
+ * 按上下文挑（2026-09-29 用户裁决，不硬编码「读正在看的那个」），所以这里不设枚举。
+ */
+const USER_TAB_PARAM = {
+  type: "string",
+  description: "Id of one of the user's tabs (from browser_tabs) to read it, read-only, instead of your own tab.",
+} as const;
+
+/** tab 参数上船：非空字符串才带，别的一律当没给（= 读自己的 tab） */
+function userTabArg(value: unknown): { tab?: string } {
+  return typeof value === "string" && value.trim() !== "" ? { tab: value.trim() } : {};
+}
+
 export function createBrowserTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
   /**
    * 发请求并等回执；**这一轮被停掉（signal abort）就立刻放手**——pi 等工具返回才结束一轮，
@@ -79,7 +93,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       "Accepts a search phrase too (it is searched on Google), or an absolute path / file:// URL to a web page " +
       "(.html, .htm, .xhtml, .svg) inside your directories — session workbench, working directory, attached " +
       "directories, browser downloads — e.g. to preview a page you wrote; call it again after editing to reload. " +
-      "First call browser_tabs: the user often already has the page open and signed in — read it with tab: \"user\" instead of starting over. " +
+      "First call browser_tabs: the user often already has the page open and signed in — read it by passing its id as tab instead of starting over. " +
       "Returns the final URL (after redirects), the page title and the HTTP status. " +
       "Then read it with browser_extract, or browser_observe to see its structure and get element refs for " +
       "browser_click / browser_type. " +
@@ -127,11 +141,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           type: "number",
           description: "Upper bound on outline lines, 20–600. Defaults to 250.",
         },
-        tab: {
-          type: "string",
-          enum: ["user"],
-          description: 'Set to "user" to read the user\'s tab (read-only) instead of your own. See browser_tabs.',
-        },
+        tab: USER_TAB_PARAM,
       },
       required: [],
     } as never,
@@ -140,7 +150,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       return call({
         action: "observe",
         ...(typeof args["maxNodes"] === "number" ? { maxNodes: args["maxNodes"] } : {}),
-        ...(args["tab"] === "user" ? { tab: "user" as const } : {}),
+        ...userTabArg(args["tab"]),
       }, signal);
     },
   };
@@ -159,11 +169,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
         offset: { type: "number", description: "Character offset to start from. Defaults to 0." },
         maxChars: { type: "number", description: "Characters to return, 1000–50000. Defaults to 20000." },
         links: { type: "boolean", description: "Also list the page's links. Defaults to false." },
-        tab: {
-          type: "string",
-          enum: ["user"],
-          description: 'Set to "user" to read the user\'s tab (read-only) instead of your own. See browser_tabs.',
-        },
+        tab: USER_TAB_PARAM,
       },
       required: [],
     } as never,
@@ -175,7 +181,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           ...(typeof args["offset"] === "number" ? { offset: args["offset"] } : {}),
           ...(typeof args["maxChars"] === "number" ? { maxChars: args["maxChars"] } : {}),
           ...(args["links"] === true ? { links: true } : {}),
-        ...(args["tab"] === "user" ? { tab: "user" as const } : {}),
+        ...userTabArg(args["tab"]),
         },
         signal,
       );
@@ -214,11 +220,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
             "Also save the full-resolution image into screenshots/ in your session workbench and return its path. " +
             "Use it when the user should see or keep the image — then call show_image with that path.",
         },
-        tab: {
-          type: "string",
-          enum: ["user"],
-          description: 'Set to "user" to read the user\'s tab (read-only) instead of your own. See browser_tabs.',
-        },
+        tab: USER_TAB_PARAM,
       },
       required: [],
     } as never,
@@ -228,7 +230,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
         {
           action: "screenshot",
           ...(args["save"] === true ? { save: true } : {}),
-          ...(args["tab"] === "user" ? { tab: "user" as const } : {}),
+          ...userTabArg(args["tab"]),
           ...regionOf(args["region"]),
         },
         signal,
@@ -266,10 +268,10 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
     name: "browser_tabs",
     label: "browser_tabs",
     description:
-      "List the browser tabs you can see: the user's tab and your own. Use it first — the user often " +
-      "already has the page you need open and signed in, e.g. through a library proxy. Reading the user's " +
-      "tab is read-only; to act on a page the user opened, open the same address in your own tab — the " +
-      "sign-in is shared.",
+      "List the browser tabs you can see: the user's tabs (each with an id) and your own, marking the one on " +
+      "screen now. Use it first — the user often already has the page you need open and signed in, e.g. through " +
+      "a library proxy. Reading a user's tab is read-only; to act on a page the user opened, open the same " +
+      "address in your own tab — the sign-in is shared.",
     parameters: { type: "object", properties: {}, required: [] } as never,
     async execute(_toolCallId, _params, signal) {
       return call({ action: "tabs" }, signal);
