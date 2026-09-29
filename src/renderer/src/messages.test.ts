@@ -71,6 +71,13 @@ const ALLOWED_LATIN = new Set([
   "AGENTS.md",
   // 产品名（迁移来源的显示名，与 Proma / Kimi / opencode 同类）
   "Codex",
+  // 语音厂商控制台里的字段名与资源 ID（火山引擎豆包语音，用户原样照填）
+  "APP",
+  "Access",
+  "Token",
+  "Resource",
+  "volc.seedasr.sauc.duration",
+  "volc.bigasr.sauc.duration",
   // 按键名
   "Ctrl",
   "Alt",

@@ -543,3 +543,20 @@
     background: transparent;
   }
 }
+
+/* ===== 设置 › 语音（SettingsView.tsx 的 DoubaoVoiceGroup） =====
+ * 凭证是机器事实：等宽；宽度够放下一整个 Resource ID，窗口窄了跟着收 */
+/* 百分比宽度在 auto 列里会绕回输入框自己的默认宽：给定宽，窄了靠 max-width 收 */
+.text-field.voice-field {
+  width: 320px;
+  max-width: 100%;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+}
+
+/* 服务端的原话（如 401 的 JSON）：等宽、次一级的灰，跟在原因后面 */
+.voice-failure-detail {
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+  word-break: break-all;
+}

@@ -40,6 +40,10 @@ import { mainWindows } from "./window/main-windows.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
+import { DoubaoAsr } from "./voice/doubao-asr.ts";
+import { registerVoiceIpc } from "./voice/ipc.ts";
+import { diagnoseOverHttps, openUndiciSocket } from "./voice/socket.ts";
+import { VoiceStore } from "./voice/store.ts";
 
 // 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
 preferIPv4();
@@ -177,8 +181,14 @@ void app.whenReady().then(async () => {
   // 配置落在 Electron 的 userData 目录，不再依赖 pi 的 ~/.pi/agent。
   // 从旧 models.json / auth.json 的迁移等到真有旧数据的用户时再单独立项（落库纪律：没有消费者不写）。
   const configDir = app.getPath("userData");
-  const providers = new ProviderStore(configDir, new SafeStorageSecrets(configDir));
+  // 一个 secrets.json 一个实例：provider 的 API key 与语音厂商的密钥共用，读改写不互相踩
+  const secrets = new SafeStorageSecrets(configDir);
+  const providers = new ProviderStore(configDir, secrets);
   registerProviderIpc(providers);
+  registerVoiceIpc(
+    new VoiceStore(configDir, secrets),
+    new DoubaoAsr({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
+  );
   // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 
   /*
