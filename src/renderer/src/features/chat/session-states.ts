@@ -90,6 +90,11 @@ export interface SessionEntry {
   /** turn = 这一轮还在跑；compaction = 上下文压缩中（居中呼吸行）；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
   /**
+   * 收到过几次 phase 事件（只增）。乐观置 turn 的失败归位靠它判「提交以来 runtime
+   * 有没有报过真相」——见 revertOptimisticTurn。纯 ephemeral，不落盘。
+   */
+  phaseEpoch: number;
+  /**
    * 排队队列——**唯一真源**，按显示顺序存。
    *
    * 不再有 pi 快照、不再有顺序账本、不再有另一套本地待办：那三份要互相对账，
@@ -139,6 +144,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   compactions: [],
   marks: [],
   phase: "idle",
+  phaseEpoch: 0,
   queued: [],
   retry: null,
   turnError: null,
@@ -163,6 +169,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       phase: event.phase === "idle" ? "idle" : event.phase === "compaction" ? "compaction" : "turn",
+      phaseEpoch: entry.phaseEpoch + 1,
       // 任何 phase 事件都清重试槽：重试尝试开跑（agent_start）、整轮落定（settled）、
       // 压缩起止——都是「重试等待结束了」的时刻，倒数行不该再挂。
       // queued 不在这里清：投递由 hook 在 phase 事件那拍驱动（见 useChatSession），
@@ -240,6 +247,28 @@ export function setEntryPhase(
 }
 
 /**
+ * 乐观 turn 的失败归位：提交在 IPC 上失败时把乐观置的 turn 退回 idle——**仅当**提交
+ * 以来这个会话没收到过任何 phase 事件（`epochAtSubmit` 是乐观置 turn 那一刻的
+ * phaseEpoch）。
+ *
+ * 收到过就说明 runtime 那边确有一轮在跑（典型：撞 already running——提交被拒，
+ * 但占着坑的那一轮的 turn 事件已经先到了），它收尾时的 idle 迟早会来。这时无条件
+ * 归位会把真在跑的会话标成空闲：之后每次回车都走直发、撞 already running、
+ * 回填快照把字放回输入框——「发出去的字还留在框里」，直到那一轮跑完（2026-09-28
+ * CDP 复现）。没收到过就照旧归位：失败发生在 runtime 之前（主进程装配 provider 等），
+ * 不会有任何事件来收尾。
+ */
+export function revertOptimisticTurn(
+  states: SessionStates,
+  sessionId: string,
+  epochAtSubmit: number,
+): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || entry.phaseEpoch !== epochAtSubmit) return states;
+  return setEntryPhase(states, sessionId, "idle");
+}
+
+/**
  * 用落盘的 transcript 覆盖一个槽。**整槽覆盖**：历史会话的真相在盘上，
  * 顺带把上次看它时留下的审批清掉——与老实现 `setApprovals([])` 同语义。
  * 活会话**不走这里**：槽里的累积比盘新，种盘等于回退。
@@ -269,6 +298,8 @@ export function seedFromDisk(
     compactions,
     marks,
     phase: "idle",
+    // 计数只增：同一会话重新种盘也不回零，免得撞上某个提交前记下的旧值
+    phaseEpoch: states.get(sessionId)?.phaseEpoch ?? 0,
     // 排队是 ephemeral：盘上没有，也不该有（会话断了一次排队就物理消失了）
     queued: [],
     retry: null,

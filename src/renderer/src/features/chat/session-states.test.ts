@@ -19,6 +19,7 @@ import {
   removeApproval,
   nextDeliverable,
   removeSessionEntry,
+  revertOptimisticTurn,
   seedFromDisk,
   setEntryPhase,
   type QueuedMessage,
@@ -230,6 +231,41 @@ describe("seedFromDisk / setEntryPhase", () => {
   test("setEntryPhase 对不存在的槽也生效（send 的乐观 turn 先于事件到达）", () => {
     const states = setEntryPhase(new Map(), "A", "turn");
     assert.equal(states.get("A")?.phase, "turn");
+  });
+});
+
+describe("乐观 turn 的失败归位（revertOptimisticTurn）", () => {
+  test("每条 phase 事件把 phaseEpoch 加一；乐观置 phase 不动它；种盘不回零", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
+    assert.equal(states.get("A")?.phaseEpoch, 2);
+    states = setEntryPhase(states, "A", "turn");
+    assert.equal(states.get("A")?.phaseEpoch, 2);
+    states = seedFromDisk(states, "A", []);
+    assert.equal(states.get("A")?.phaseEpoch, 2);
+  });
+
+  test("提交以来没来过 phase 事件：归位 idle（主进程装配失败这类，不会有事件收尾）", () => {
+    const epoch = EMPTY_ENTRY.phaseEpoch;
+    const states = setEntryPhase(new Map(), "A", "turn");
+    assert.equal(revertOptimisticTurn(states, "A", epoch).get("A")?.phase, "idle");
+  });
+
+  test("期间来过 phase 事件（撞 already running：占坑的那一轮已报 turn）：不踩，原样返回", () => {
+    // 复现序：队首投递后 runtime 已占坑 → 用户回车被当成直发（乐观 turn，记下 epoch）
+    // → 那一轮的 turn 事件到达 → 直发的 IPC 以 already running 失败。
+    // 此时归位 idle 会让之后每次回车都直发、失败、把字回填进输入框
+    let states = setEntryPhase(new Map(), "A", "turn");
+    const epoch = states.get("A")?.phaseEpoch ?? 0;
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    const after = revertOptimisticTurn(states, "A", epoch);
+    assert.equal(after, states);
+    assert.equal(after.get("A")?.phase, "turn");
+  });
+
+  test("槽不存在原样返回，不凭空造槽", () => {
+    const states: SessionStates = new Map();
+    assert.equal(revertOptimisticTurn(states, "A", 0), states);
   });
 });
 
