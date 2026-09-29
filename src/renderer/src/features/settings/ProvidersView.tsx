@@ -19,6 +19,7 @@ import {
   modelContextText,
   modelIdIssue,
   nextCopyId,
+  nextFreeId,
   parseRateInput,
   parseTokenInput,
   reorderIds,
@@ -266,7 +267,8 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
     // 候选池留空，等 Fetch 去问供应商——目录按厂商组织，分不清套餐
     setDraft({
       kind: kindId,
-      id: target?.id ?? "",
+      // 同一条目可以加第二次：id 撞了就带序号，否则落盘会覆盖先加的那个
+      id: target === undefined ? "" : nextFreeId((providers ?? []).map((p) => p.id), target.id),
       displayName: target?.label ?? "",
       baseUrl: target?.baseUrl ?? "",
       models: [],
@@ -428,6 +430,12 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
     return true;
   };
 
+  /** id 没有输入框，撞名的 issue 挂不到字段上——走顶部错误条，别让保存无声失败 */
+  const showIdIssue = (list: readonly ValidationIssue[]) => {
+    const message = list.find((i) => i.field === "id")?.message;
+    if (message !== undefined) setError(message);
+  };
+
   const save = async () => {
     setError(null);
     const result = await api.provider.upsert({
@@ -443,9 +451,11 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
         auth: { scheme: "api_key" },
       },
       ...(draft.apiKey === "" ? {} : { apiKey: draft.apiKey }),
+      ...(editingId === null ? { create: true } : {}),
     });
     if (!result.ok) {
       setIssues(result.issues);
+      showIdIssue(result.issues);
       return;
     }
     setIssues([]);
@@ -491,9 +501,11 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
           },
           auth: { scheme: "none" },
         },
+        create: true,
       });
       if (!result.ok) {
         setIssues(result.issues);
+        showIdIssue(result.issues);
         return;
       }
     } catch (cause) {
