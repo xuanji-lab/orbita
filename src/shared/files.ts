@@ -105,6 +105,16 @@ export type FilePreview =
   /** 图片比 PREVIEW_IMAGE_LIMIT 大：不读，同样给「用默认应用打开」 */
   | { kind: "too-large"; limit: number; size: number; modifiedAt: number };
 
+/**
+ * 网页类文件：浏览器能直接渲染、在内置浏览器里打开有意义的那几种。文件面板据此给「在内置
+ * 浏览器打开」，agent 的 browser_navigate 打开本地文件也只认这几种（main/browser/local-file.ts）。
+ */
+const WEB_PAGE_EXTENSIONS = /\.(?:html?|xhtml|svg)$/i;
+
+export function isWebPageFile(path: string): boolean {
+  return WEB_PAGE_EXTENSIONS.test(path);
+}
+
 /** 文本预览最多读的字节数（2 MB）：再大的日志 / 数据文件只读开头，截断如实标出 */
 export const PREVIEW_TEXT_LIMIT = 2 * 1024 * 1024;
 

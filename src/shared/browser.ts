@@ -76,6 +76,11 @@ export const browserChannels = {
   browserImportedList: "browser:imported-list",
   /** 移除一个已导入的网站：删掉受管浏览器里该网站的全部 cookie，并从账本销掉，回新清单 */
   browserImportedRemove: "browser:imported-remove",
+  /**
+   * 工具条「用系统浏览器打开」：把正在显示的页面交给系统默认应用（http(s) 走默认浏览器，
+   * 本地网页走默认打开方式）。链接默认进内置浏览器，这是想用系统浏览器时的出口
+   */
+  browserOpenExternal: "browser:open-external",
 } as const;
 
 export type BrowserChannel = (typeof browserChannels)[keyof typeof browserChannels];

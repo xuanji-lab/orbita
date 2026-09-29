@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fileRootLabel, sortFileEntries, type FileEntry } from "./files.ts";
+import { fileRootLabel, isWebPageFile, sortFileEntries, type FileEntry } from "./files.ts";
 
 const entry = (name: string, kind: FileEntry["kind"]): FileEntry => ({ name, kind, modifiedAt: 0 });
 
@@ -39,5 +39,12 @@ describe("fileRootLabel", () => {
     strictEqual(fileRootLabel("session", "/w/1", "grill 文件系统", "Untitled"), "grill 文件系统");
     strictEqual(fileRootLabel("session", "/w/1", "   ", "Untitled"), "Untitled");
     strictEqual(fileRootLabel("workspace", "/x", "orbita", "Home"), "orbita");
+  });
+});
+
+describe("isWebPageFile", () => {
+  it("html / htm / xhtml / svg 算网页，大小写不敏感；别的不算", () => {
+    for (const name of ["report.html", "a/b/INDEX.HTM", "page.xhtml", "chart.svg"]) strictEqual(isWebPageFile(name), true, name);
+    for (const name of ["notes.md", "data.json", "html", "page.html.bak", "shot.png"]) strictEqual(isWebPageFile(name), false, name);
   });
 });
