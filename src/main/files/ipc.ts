@@ -5,14 +5,22 @@
 import { ipcMain, shell } from "electron";
 import { stat } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { FileListRequest, FilePreview, FileRootsRequest } from "../../shared/files.ts";
+import { isWebPageFile, type FileListRequest, type FilePreview, type FileRootsRequest } from "../../shared/files.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { readPreview } from "./read.ts";
 
-export function registerFilesIpc(workspaces: WorkspaceStore, sessions: SessionStore): void {
+/**
+ * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
+ * 传函数不传沙盒：文件面板只需要这一个动作
+ */
+export function registerFilesIpc(
+  workspaces: WorkspaceStore,
+  sessions: SessionStore,
+  openInBrowser: (path: string) => Promise<void>,
+): void {
   ipcMain.handle(ipcChannels.fsRoots, (_event, req: FileRootsRequest) =>
     resolveFileRoots(workspaces, sessions, req),
   );
@@ -61,5 +69,17 @@ export function registerFilesIpc(workspaces: WorkspaceStore, sessions: SessionSt
     if (failure !== "") {
       throw new Error(`Couldn't open ${path}: ${failure}`);
     }
+  });
+
+  /**
+   * 网页文件的默认打开方式：内置浏览器（2026-09-29 裁决「全都默认用内置」）。同一道白名单，
+   * 外加只认网页文件——这条通道不能变成「让浏览器加载任意本地文件」。判定用 realpath 之后的
+   * 路径：指向别的类型的 foo.html 软链接同样被拒。
+   */
+  ipcMain.handle(ipcChannels.fsOpenInBrowser, async (_event, req: FileListRequest): Promise<void> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
+    await openInBrowser(path);
   });
 }

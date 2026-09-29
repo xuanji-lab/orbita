@@ -7,13 +7,13 @@
  * 目录里放一个指向外面的软链接，不能借它跳出去。
  *
  * 用户地址栏不走这里：「你的」tab 不属于任何会话，没有「本会话的目录」可以对照。
+ * 文件面板的「在内置浏览器打开」也不走这里：它在「你的」tab 打开，白名单是文件面板自己那道
+ * （main/files/ipc.ts 的 fs:open-in-browser）。
  */
 import { realpath as fsRealpath } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-
-/** 网页类文件：浏览器能直接渲染、预览有意义的那几种 */
-const PAGE_EXTENSIONS = /\.(?:html?|xhtml|svg)$/i;
+import { isWebPageFile } from "../../shared/files.ts";
 
 /** 形如本地路径的输入：绝对路径（POSIX / Windows 盘符）或 file:// 地址 */
 export function looksLikeLocalPath(input: string): boolean {
@@ -42,7 +42,7 @@ export async function resolveLocalPage(
     return { ok: false, error: `"${input}" is not a valid file address.` };
   }
   if (!isAbsolute(path)) return { ok: false, error: `"${input}" is not an absolute path.` };
-  if (!PAGE_EXTENSIONS.test(path)) {
+  if (!isWebPageFile(path)) {
     return { ok: false, error: `Only web pages (.html, .htm, .xhtml, .svg) can be opened from disk; "${path}" is not one.` };
   }
   let real: string;

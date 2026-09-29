@@ -38,10 +38,10 @@ const SANITIZE_SCHEMA = {
  *   降级成斜体次级灰（流式期间的常态，不是报警）。
  * - 代码块高亮走 shiki（`CodeBlock.tsx` 覆写 pre，双主题 HTML + CSS 变量切换），
  *   配色来自 github-light / github-dark 主题，是设计系统 token 的既定例外。
- * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 会把它送去系统浏览器
- *   （`src/main/index.ts`），外链绝不能在应用窗口内导航走。
+ * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 把网页送进内置浏览器、
+ *   mailto 交给系统（`src/main/index.ts` 的 openLink），外链绝不能在应用窗口内导航走。
  * - **图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
- *   渲染成占位链接，点击才去系统浏览器看（ImagePlaceholder）。
+ *   渲染成占位链接，点击才去内置浏览器看（ImagePlaceholder）。
  * - **raw HTML 只放行 `<details>`/`<summary>`**：rehype-raw 解析 + rehype-sanitize
  *   白名单剥离，其余标签仍是纯文本。白名单可审计，攻击面有界。
  * - 元素样式在 `styles.css` 的 `.chat-md` 作用域里，走设计系统 token。
@@ -138,7 +138,7 @@ function ExternalAnchor(props: AnchorProps) {
 
 /**
  * 图片占位：永不设 `src`，远程图就不可能被加载。占位本身是个链接——
- * 用户点了才在系统浏览器里看，加载与否、何时加载由用户决定。
+ * 用户点了才在内置浏览器里看，加载与否、何时加载由用户决定。
  */
 function ImagePlaceholder(props: ImageProps) {
   const { src, alt, node: _node } = props;

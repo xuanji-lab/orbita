@@ -24,4 +24,6 @@ export const filesApi = {
   read: (req: FileListRequest): Promise<FilePreview> => ipcRenderer.invoke(ipcChannels.fsRead, req),
   /** 用系统默认应用打开 dir（同白名单） */
   open: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpen, req),
+  /** 在内置浏览器「你的」tab 打开网页文件（同白名单，且须是网页文件） */
+  openInBrowser: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpenInBrowser, req),
 } as const;

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeAddress, resolveAddressOrSearch } from "./address.ts";
+import { isWebLink, normalizeAddress, resolveAddressOrSearch } from "./address.ts";
 
 test("带 http / https 协议的原样放行（规范化成 href）", () => {
   assert.equal(normalizeAddress("https://www.scopus.com"), "https://www.scopus.com/");
@@ -63,4 +63,13 @@ test("resolveAddressOrSearch：空输入与被禁的协议回 null，不拿去�
   // 本地路径不拿去搜
   assert.equal(resolveAddressOrSearch("/Users/me/page.html"), null);
   assert.equal(resolveAddressOrSearch("C:\\Users\\me\\page.html"), null);
+});
+
+test("isWebLink：http / https 进内置浏览器；mailto、file、javascript 与坏地址不算", () => {
+  for (const url of ["https://github.com/xuanji-lab/orbita", "http://127.0.0.1:5273/", " HTTPS://Example.com "]) {
+    assert.equal(isWebLink(url), true, url);
+  }
+  for (const url of ["mailto:a@b.com", "file:///Users/x/report.html", "javascript:alert(1)", "github.com", ""]) {
+    assert.equal(isWebLink(url), false, url);
+  }
 });
