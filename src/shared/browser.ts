@@ -72,6 +72,10 @@ export const browserChannels = {
   browserImportCommit: "browser:import-commit",
   /** 丢弃一个 pending（取消导入）。幂等 */
   browserImportCancel: "browser:import-cancel",
+  /** 已导入的网站：导入账本 + 受管浏览器 cookie 现状（这个网站此刻还有没有 cookie） */
+  browserImportedList: "browser:imported-list",
+  /** 移除一个已导入的网站：删掉受管浏览器里该网站的全部 cookie，并从账本销掉，回新清单 */
+  browserImportedRemove: "browser:imported-remove",
 } as const;
 
 export type BrowserChannel = (typeof browserChannels)[keyof typeof browserChannels];
@@ -250,6 +254,21 @@ export interface BrowserImportSummary {
   sites: number;
   /** 解不开 / 已过期 / 写入失败的条数 */
   skipped: number;
+}
+
+/**
+ * 已导入清单的一行。前四个字段是导入当时记下的事实（账本），present 是每次现查的现状——
+ * 受管浏览器的 cookie 库分不出「导入的」和「浏览时网站自己种的」，所以「导入过哪些」只能靠账本。
+ */
+export interface BrowserImportedSite {
+  site: string;
+  /** 来源浏览器与 profile 的显示名（导入当时的） */
+  browserName: string;
+  profileName: string;
+  /** 最近一次导入这个网站的时刻（毫秒） */
+  importedAt: number;
+  /** 受管浏览器里此刻还有这个网站的 cookie。false = 全过期了或被网站清掉，得重新导入 */
+  present: boolean;
 }
 
 export type BrowserImportCommitResult =
