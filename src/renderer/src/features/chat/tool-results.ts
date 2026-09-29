@@ -992,10 +992,16 @@ export function liveTailLines(text: string, keep = 200): string {
  *
  * 这是**展示层**判定（决定按钮出不出），最终裁决在 agent 进程的对账守卫——
  * 界面判对而账对不上时，分支会被拒绝并报错，不会切错。
+ *
+ * `turnActive`（本轮还在跑）：**不做末尾确认**。工具结果刚落定、下一条回答还没开始
+ * 生成的窗口里，半轮的 candidate 会被末尾确认误钉成锚点——复制/分支/速度行在
+ * 「回应中」就冒出来，回答落定前又消失（2026-09-28 用户报告）。轮边界确认的历史
+ * 锚点不受影响。
  */
 export function branchAnchorIds(
   records: readonly SessionRecord[],
   toolResults: ToolResultIndex,
+  turnActive = false,
 ): ReadonlySet<string> {
   const settled = (toolCallId: string): boolean => {
     const result = toolResults.get(toolCallId);
@@ -1025,7 +1031,7 @@ export function branchAnchorIds(
     );
     candidate = hasText && toolsSettled ? record.id : null;
   }
-  confirm();
+  if (!turnActive) confirm(); // 末尾确认只属于落定的轮次；活跃轮的半轮候选等回答结束
   return anchors;
 }
 

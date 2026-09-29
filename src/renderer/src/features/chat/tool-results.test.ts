@@ -1215,6 +1215,36 @@ describe("branchAnchorIds", () => {
     assert.equal(branchAnchorIds(records, indexToolResults(records as TranscriptItem[])).size, 0);
   });
 
+  test("turnActive：末尾候选不确认——工具刚落定、下条回答未生的窗口里不出复制/分支行", () => {
+    // 场景即 2026-09-28 用户报告：assistant（带 toolCall）已终态、工具结果已落定、
+    // 下一条回答还没开始生成，转录到这里结束——末尾确认会把半轮钉成锚点
+    const records = [
+      userItem,
+      said("a1", [{ type: "text", text: "第一轮答" }]),
+      { ...userItem, id: "u2" }, // 轮边界：a1 在这里被确认（历史锚点）
+      said("a2", [{ type: "text", text: "先看看" }, readCall("r2", "b.ts")]),
+      toolItem({ toolCallId: "r2", toolName: "read" }),
+    ];
+    // 轮活跃：末尾的 a2 不确认，边界确认的 a1 照旧是锚点
+    assert.deepEqual(
+      [...branchAnchorIds(records, indexToolResults(records as TranscriptItem[]), true)],
+      ["a1"],
+    );
+    // 轮落定（phase 回 idle）：末尾确认照旧，a2 也成锚点
+    assert.deepEqual(
+      [...branchAnchorIds(records, indexToolResults(records as TranscriptItem[]), false)],
+      ["a1", "a2"],
+    );
+    // 活跃轮里已经出现流式中的下一条回答：它本身不是锚点，末尾确认跳过也不复活前面
+    const withStreaming = [
+      userItem,
+      said("a1", [{ type: "text", text: "先看看" }, readCall("r1", "a.ts")]),
+      toolItem({ toolCallId: "r1", toolName: "read" }),
+      said("a2", [{ type: "text", text: "生成中" }], "streaming"),
+    ];
+    assert.equal(branchAnchorIds(withStreaming, indexToolResults(withStreaming as TranscriptItem[]), true).size, 0);
+  });
+
   test("工具没落定（跑着 / 没有结果帧）不锚——有调用没结果的上下文切出去是畸形的", () => {
     const records = [
       userItem,
