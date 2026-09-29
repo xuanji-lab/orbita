@@ -88,7 +88,7 @@ export const COMPACTION_PERCENT = { min: 5, max: 50 } as const;
  * 上次使用的权限档与模型（A-0 复验 bug A：重启后 composer 忘了上次的选择）。
  * 会话各自的档/模型记在各条 meta 与内存 Map（按会话记账，cd0ee98）；这里是
  * **启动恢复点**：新会话槽的初始值。切换时逐键写回（改档只写 mode）。
- * 缺席 = 应用默认（第一档 plan、第一个可用模型）。
+ * 缺席 = 应用默认（DEFAULT_PERMISSION_MODE、第一个可用模型）。
  */
 export interface LastUsedIntent {
   mode?: PermissionMode;
