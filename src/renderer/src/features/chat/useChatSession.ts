@@ -14,6 +14,7 @@ import {
   removeApproval,
   nextDeliverable,
   removeSessionEntry,
+  revertOptimisticTurn,
   seedFromDisk,
   setEntryPhase,
   type PendingApproval,
@@ -362,6 +363,11 @@ export interface SessionEngine {
   /** 幂等应用一次状态变更（并同步镜像）——查看槽的队列操作走这里 */
   applyStates(fn: (prev: SessionStates) => SessionStates): void;
   /**
+   * renderer 发起一轮（submit / compact）前乐观置 turn，返回 IPC 失败时调的归位。
+   * 归位带防踩（revertOptimisticTurn）：期间来过 phase 事件就不动，交给 runtime 的 idle。
+   */
+  beginOptimisticTurn(id: string): () => void;
+  /**
    * 各槽把自己的 UI 选择推进引擎的投递兜底：deliverNext 对拿不到会话级意图
    * 与 meta 的新会话（极少：排队首条发出时 meta 已落盘），只能拿「最近的 UI 选择」。
    */
@@ -485,6 +491,15 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     statesRef.current = next;
     setStates(next);
   }, []);
+
+  const beginOptimisticTurn = useCallback(
+    (id: string): (() => void) => {
+      const epoch = (statesRef.current.get(id) ?? EMPTY_ENTRY).phaseEpoch;
+      applyStates((prev) => setEntryPhase(prev, id, "turn"));
+      return () => applyStates((prev) => revertOptimisticTurn(prev, id, epoch));
+    },
+    [applyStates],
+  );
 
   /**
    * 会话 meta 真值的 ref 镜像（refreshSessions 灌入）。无状态 submit 每轮都要
@@ -678,6 +693,11 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
    * 投递队首的一条。**一次只发一条**——发完这一轮结束会再来一次 phase 事件，
    * 那时再取下一条。先出队再发：出队是同步的，避免同一拍被投递两次。
    * 与「哪个槽在看」无关：队是按会话分的，事件带着 id 来。
+   *
+   * **发出前乐观置 turn**（与 send 直发同一条规矩）：runtime 收到 submit 就占坑，
+   * 但它的 turn 事件要等 open 完、agent_start 才来（几百毫秒）。不填这段空档的话，
+   * 这期间用户回车会被当成「空闲直发」、撞 already running，开头就是
+   * 「发出去的字留在输入框里」那条链（2026-09-28 CDP 复现）。
    */
   const deliverNext = useCallback(
     (id: string) => {
@@ -686,14 +706,23 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       const head = nextDeliverable(entry);
       if (head === null) return;
       applyStates((prev) => dequeue(prev, id, head.id));
-      const fail = (cause: unknown): void =>
-        setError(ipcErrorText(cause, messagesRef.current));
+      const dispatch = (request: () => Promise<void>): void => {
+        const revert = beginOptimisticTurn(id);
+        request().catch((cause: unknown) => {
+          setError(ipcErrorText(cause, messagesRef.current));
+          revert();
+        });
+      };
       if (head.kind === "compact") {
         const turn = buildTurn(id);
         if (turn === null) return;
-        void api.agent
-          .compact({ sessionId: id, ...turn, ...(head.instructions !== undefined ? { instructions: head.instructions } : {}) })
-          .catch(fail);
+        dispatch(() =>
+          api.agent.compact({
+            sessionId: id,
+            ...turn,
+            ...(head.instructions !== undefined ? { instructions: head.instructions } : {}),
+          }),
+        );
       } else if (head.kind === "channel") {
         // 子会话 PR4a：子→父投递就在这里发生——子标题从 sessionsRef 真值查
         // （查不到用 ""，composeChannelPrompt 自己会写 Untitled，不是哨兵值）。
@@ -703,23 +732,23 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         const text = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
         const turn = buildTurn(id);
         if (turn === null) return;
-        void api.agent.submit({ sessionId: id, text, ...turn }).catch(fail);
+        dispatch(() => api.agent.submit({ sessionId: id, text, ...turn }));
       } else {
         const turn = buildTurn(id);
         if (turn === null) return;
-        void api.agent
-          .submit({
+        dispatch(() =>
+          api.agent.submit({
             sessionId: id,
             text: head.text,
             ...imagesField(head.images),
             ...filesField(head.files),
             ...pastedField(head.pasted),
             ...turn,
-          })
-          .catch(fail);
+          }),
+        );
       }
     },
-    [applyStates, buildTurn],
+    [applyStates, beginOptimisticTurn, buildTurn],
   );
 
   useEffect(() => {
@@ -988,6 +1017,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     statesRef,
     views: views.current,
     applyStates,
+    beginOptimisticTurn,
     syncIntent,
     sessionIntent: sessionIntentRef,
     rememberSessionIntent,
@@ -1513,7 +1543,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         sessionRef.current = id;
       }
       // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子
-      engine.applyStates((prev) => setEntryPhase(prev, id, "turn"));
+      const revertTurn = engine.beginOptimisticTurn(id);
       try {
         // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效。
         // 文件引用与粘贴块跟图同行：主进程落盘副本 / agent 进程组装进正文
@@ -1542,7 +1572,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           restoreRef.current = null;
           restoreSent(snap);
         }
-        engine.applyStates((prev) => setEntryPhase(prev, id, "idle"));
+        // 归位带防踩：撞 already running 时真在跑的那一轮已报过 phase，不能把它标成空闲
+        revertTurn();
       }
     },
     [engine, model, mode, thinkingLevel, restoreSent],
@@ -1851,10 +1882,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           setSessionId(id);
           sessionRef.current = id;
         }
-        engine.applyStates((prev) => setEntryPhase(prev, id, "turn"));
+        const revertTurn = engine.beginOptimisticTurn(id);
         void api.agent.submit({ sessionId: id, text, ...turn }).catch((cause: unknown) => {
           engine.setError(cause instanceof Error ? cause.message : String(cause));
-          engine.applyStates((prev) => setEntryPhase(prev, id, "idle"));
+          revertTurn();
         });
       });
     },
@@ -2205,12 +2236,18 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         };
       }
       if (entry.phase === "idle") {
-        void api.agent.submit({ sessionId: id, text, ...images, ...extras, ...turn }).catch(fail);
+        // 空闲直发同样乐观置 turn：不填 runtime 首个 phase 事件前的空档，期间的回车会
+        // 被当成空闲直发、撞 already running（与 deliverNext 同因）
+        const revertTurn = engine.beginOptimisticTurn(id);
+        void api.agent.submit({ sessionId: id, text, ...images, ...extras, ...turn }).catch((cause: unknown) => {
+          fail(cause);
+          revertTurn();
+        });
       } else {
         void api.agent.interrupt({ sessionId: id, text, ...images, ...extras, ...turn }).catch(fail);
       }
     },
-    [engine],
+    [engine, draftKey, restoreSent],
   );
 
   // provider 到位后先落一个默认模型：第一个 provider 的第一个模型。
@@ -2336,7 +2373,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const launchScan = useCallback(
     (id: string, baseline: number, turn: Omit<SubmitAgentInput, "sessionId" | "text">): void => {
       setClosingScan({ sessionId: id, baseline });
-      engine.applyStates((prev) => setEntryPhase(prev, id, "turn"));
+      const revertTurn = engine.beginOptimisticTurn(id);
       void api.settings
         .get()
         .then((settings) => settings.choreModel)
@@ -2351,7 +2388,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .catch((cause: unknown) => {
           // 提交没送出去：扫描轮没开起来，归位并交代一句
           setClosingScan(null);
-          engine.applyStates((prev) => setEntryPhase(prev, id, "idle"));
+          revertTurn();
           engine.setError(cause instanceof Error ? cause.message : String(cause));
         });
     },
