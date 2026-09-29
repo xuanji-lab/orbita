@@ -29,6 +29,10 @@ describe("protectedPathRefusal", () => {
     const backslash = `type "${SESSIONS}\\abc.meta.json"`;
     assert.match(protectedPathRefusal("powershell", { command: backslash }, PROTECTED, CWD) ?? "", /immutable/);
     assert.equal(protectedPathRefusal("bash", { command: "git status" }, PROTECTED, CWD), null);
+    // 只读命令也拦（字面量拦分不出读写）——拒绝理由必须指明改用 ls/read 工具，别让模型以为自己在写
+    const readOnly = protectedPathRefusal("bash", { command: `ls -lt "${SESSIONS}/" | head -20` }, PROTECTED, CWD) ?? "";
+    assert.match(readOnly, /shell commands may not reference it/);
+    assert.match(readOnly, /ls \/ read \/ find \/ grep tools/);
     // 相邻前缀不算命中：/orbita/sessions-extra 不是禁区
     assert.equal(
       protectedPathRefusal("bash", { command: `rm -rf ${SESSIONS}-extra` }, PROTECTED, CWD),

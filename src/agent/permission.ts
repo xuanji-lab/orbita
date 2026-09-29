@@ -125,7 +125,7 @@ export function protectedPathRefusal(
       const base = foldPath(resolve(dir));
       const rel = relative(base, resolved);
       if (!rel.startsWith("..") && !isAbsolute(rel)) {
-        return refusalMessage(dir);
+        return refusalMessage(dir, "path");
       }
     }
     return null;
@@ -142,7 +142,7 @@ export function protectedPathRefusal(
       let index = haystack.indexOf(needle);
       while (index !== -1) {
         const next = haystack[index + needle.length];
-        if (next === undefined || !/[a-z0-9_-]/i.test(next)) return refusalMessage(dir);
+        if (next === undefined || !/[a-z0-9_-]/i.test(next)) return refusalMessage(dir, "command");
         index = haystack.indexOf(needle, index + 1);
       }
     }
@@ -152,11 +152,22 @@ export function protectedPathRefusal(
   return null;
 }
 
-function refusalMessage(dir: string): string {
+/**
+ * 拒绝理由分两种讲法。命令串拦是字面量拦，分不出读写——`ls` 一个会话目录也会撞上。
+ * 只说「不能写」模型会以为自己在写，原地重试或卡住（实测）；所以命令这一支要
+ * 直说「命令里不能出现这个目录，读请换 ls / read / find / grep 工具或 read_task」，
+ * 让它第一次撞墙就知道往哪绕。保护强度不变。
+ */
+function refusalMessage(dir: string, via: "path" | "command"): string {
+  const lead =
+    via === "command"
+      ? `Session records are immutable: "${dir}" is protected, and shell commands may not reference it ` +
+        "in any permission mode — even read-only ones, because the check cannot tell reading from writing. "
+      : `Session records are immutable: "${dir}" is protected — no tool may write there in any permission mode. `;
   return (
-    `Session records are immutable: "${dir}" is protected — no tool may write there ` +
-    "in any permission mode. Reading stays available (read_task). " +
-    "Describe the change to the user instead; only the user can modify session data."
+    lead +
+    "To read it, use the ls / read / find / grep tools (not the shell), or read_task for a task's transcript. " +
+    "To change it, describe the change to the user instead; only the user can modify session data."
   );
 }
 
