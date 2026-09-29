@@ -4,6 +4,7 @@ import {
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
   decidePermission,
+  DEFAULT_PERMISSION_MODE,
   isBrowserReadTool,
   isChannelTool,
   USER_ACTION_TOOL,
@@ -13,6 +14,15 @@ import {
 } from "./permission.ts";
 
 const MUTATING = ["bash", "write", "edit", "multi_edit", "patch", "powershell"];
+
+describe("DEFAULT_PERMISSION_MODE", () => {
+  test("新任务起始档是 skip：开箱即干活，写与 shell 都不拦", () => {
+    assert.equal(DEFAULT_PERMISSION_MODE, "skip");
+    for (const tool of MUTATING) {
+      assert.deepEqual(decidePermission(DEFAULT_PERMISSION_MODE, tool), { behavior: "allow" }, tool);
+    }
+  });
+});
 
 describe("decidePermission", () => {
   test("plan：只读放行，其余一律拒绝——bash 在 plan 下不可能被执行", () => {

@@ -42,7 +42,7 @@ import {
 } from "@shared/prompt-attachments";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_COUNT, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
-import type { PermissionAnswer, PermissionMode } from "@shared/permission";
+import { DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import { defaultThinkingLevel } from "@shared/model-defaults";
@@ -522,7 +522,14 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     cwd: string | null;
     workspaceId: string | null;
     defaultCwd: string;
-  }>({ model: null, mode: "plan", thinkingLevel: "medium", cwd: null, workspaceId: null, defaultCwd: "" });
+  }>({
+    model: null,
+    mode: DEFAULT_PERMISSION_MODE,
+    thinkingLevel: "medium",
+    cwd: null,
+    workspaceId: null,
+    defaultCwd: "",
+  });
   useEffect(() => {
     intentRef.current.defaultCwd = defaultCwd;
   }, [defaultCwd]);
@@ -1090,7 +1097,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const [cwd, setCwd] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
-  const [mode, setMode] = useState<PermissionMode>("plan");
+  const [mode, setMode] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE);
   // 思考档初始 medium：不是新拍的默认，是这些会话一直实际在跑的那一档（pi 出厂默认）
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("medium");
   const sessionRef = useRef<string | null>(null);

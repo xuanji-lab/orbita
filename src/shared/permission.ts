@@ -8,6 +8,17 @@
 export const PERMISSION_MODES = ["plan", "manual", "skip"] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
+/**
+ * 新任务槽的起始档（没有 lastUsed 可恢复时）。skip：用户 2026-09-29 裁决——plan 起步
+ * 意味着第一次让 agent 动手必撞墙、再回来切档（反馈「每次默认模式都是 plan」）。
+ * 中间档（manual 全问）同样被否：用户要的是开箱即干活，要收紧时自己切档。
+ * 与 Proma 的默认档（bypassPermissions）同口径。会话记录只读锁不受档位影响，skip 也拦。
+ *
+ * 它只管「用户看得见的起始档」。坏值回落（session meta 解析）、导入会话、agent 进程
+ * 账本的兜底仍是 plan——那是「没人告诉我档位」时的最保守值，不是默认值。
+ */
+export const DEFAULT_PERMISSION_MODE: PermissionMode = "skip";
+
 export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hint: string }> = {
   plan: { label: "Plan", hint: "Read-only. Writing and shell are refused." },
   manual: { label: "Manual", hint: "Ask before every tool call." },
