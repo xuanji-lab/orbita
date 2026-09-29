@@ -52,6 +52,7 @@ export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsSt
     if (typeof tabId === "string") sandbox.closeTab(tabId);
   });
   ipcMain.handle(browserChannels.browserGetState, (): BrowserWindowState => sandbox.state());
+  ipcMain.handle(browserChannels.browserOpenExternal, (): Promise<void> => sandbox.openShownExternally());
 
   ipcMain.handle(browserChannels.browserShowHandoff, (_event, toolCallId: unknown): Promise<boolean> =>
     typeof toolCallId === "string" ? sandbox.showHandoff(toolCallId) : Promise.resolve(false),

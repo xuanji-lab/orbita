@@ -53,6 +53,8 @@ export const browserApi = {
   /** 让内置浏览器退出这个网站并从清单移除，回新清单 */
   removeImported: (site: string): Promise<BrowserImportedSite[]> =>
     ipcRenderer.invoke(browserChannels.browserImportedRemove, site),
+  /** 工具条：正在显示的页面交给系统默认应用打开 */
+  openExternal: (): Promise<void> => ipcRenderer.invoke(browserChannels.browserOpenExternal),
   onState: (listener: (state: BrowserWindowState) => void): (() => void) => {
     const handler = (_e: unknown, state: BrowserWindowState) => listener(state);
     ipcRenderer.on(browserChannels.browserState, handler);

@@ -32,6 +32,7 @@ import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
+import { isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
@@ -94,7 +95,11 @@ const MAC_WINDOW = {
  * 不走 IPC / localStorage：这是窗口创建时刻就同步可得的值，硬塞一条通道或另存
  * 一份缓存反而多造一个真源（同 preload 里 `platform` 的先例）。
  */
-function createMainWindow(theme: ThemePreference, language: Language | undefined): BrowserWindow {
+function createMainWindow(
+  theme: ThemePreference,
+  language: Language | undefined,
+  openLink: (url: string) => void,
+): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -115,9 +120,9 @@ function createMainWindow(theme: ThemePreference, language: Language | undefined
   // 只在内容就绪后显示，避免空窗口先出现
   window.once("ready-to-show", () => window.show());
 
-  // 外链走系统浏览器，不在应用内开新窗
+  // 外链不在应用内开新窗：交给 openLink（网页进内置浏览器，其余协议交给系统）
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    openLink(url);
     return { action: "deny" };
   });
 
@@ -384,7 +389,7 @@ void app.whenReady().then(async () => {
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
-  registerFilesIpc(workspaces, sessions);
+  registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
@@ -419,14 +424,27 @@ void app.whenReady().then(async () => {
     agentHost.dispose();
   });
 
-  createMainWindow(initialSettings.theme, initialSettings.language);
+  /**
+   * 界面里点到的外链（聊天里的链接、设置页的文档链接……）：网页默认进内置浏览器「你的」tab
+   * （2026-09-29 裁决「全都默认用内置，想用系统默认有个 button 足矣」——那个按钮在沙盒工具条上，
+   * browser:open-external）。mailto 这类别的协议内置浏览器接不了，照旧交给系统。
+   */
+  const openLink = (url: string): void => {
+    if (isWebLink(url)) {
+      void browserSandbox.open(url).catch((cause: unknown) => console.error("[browser] 链接打开失败", url, cause));
+    } else {
+      void shell.openExternal(url);
+    }
+  };
+
+  createMainWindow(initialSettings.theme, initialSettings.language, openLink);
 
   // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
   // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings
   app.on("activate", () => {
     // 只问主窗口：隐藏着的沙盒浏览器窗口也算一个窗口，按 getAllWindows 判就回不来了
     if (mainWindows.list().length === 0) {
-      void settings.read().then((current) => createMainWindow(current.theme, current.language));
+      void settings.read().then((current) => createMainWindow(current.theme, current.language, openLink));
     }
   });
 });

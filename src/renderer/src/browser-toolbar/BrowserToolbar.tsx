@@ -251,6 +251,15 @@ function NavRow(props: { state: BrowserWindowState; onState: (state: BrowserWind
           </span>
         )}
       </form>
+      {/* 链接默认进内置浏览器（2026-09-29 裁决），想用系统浏览器就从这里交出去 */}
+      <IconButton
+        label={t.browser.openExternal}
+        size={28}
+        disabled={page.url === ""}
+        onClick={() => void api.browser.openExternal().catch(() => undefined)}
+      >
+        <Icon name="external-link" size={15} />
+      </IconButton>
     </div>
   );
 }

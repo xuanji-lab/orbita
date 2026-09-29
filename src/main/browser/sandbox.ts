@@ -28,6 +28,7 @@ import {
   Notification,
   WebContentsView,
   session,
+  shell,
   type BrowserWindowConstructorOptions,
   type DownloadItem,
   type Session,
@@ -36,6 +37,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   browserChannels,
   type BrowserHandoffOutcome,
@@ -157,12 +159,44 @@ export class BrowserSandbox {
     const window = await this.ensureWindow();
     this.show(this.userTabId);
     const result: BrowserNavigateResult = url !== undefined ? this.navigate(url) : { ok: true };
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
+    bringToFront(window);
     // 空白页打开时光标直接进地址栏：此刻用户要做的只有输入网址这一件事
     if (this.state().page.url === "") window.webContents.send(browserChannels.browserFocusAddress);
     return result;
+  }
+
+  /**
+   * 文件面板「在内置浏览器打开」：在「你的」tab 里加载一个本地网页。路径已过文件面板的
+   * root/dir 白名单与 isWebPageFile（files/ipc.ts），这里不再判。
+   *
+   * 落在「你的」tab 而不是会话的 agent tab，理由同 open：你手动打开的东西不该落进 agent 正在用的
+   * tab——会打断它手上的操作，下载也会跟着进那个会话的工作台。agent 要看，用 tab: "user" 只读。
+   * 原来那一页不丢：后退就回去。
+   */
+  async openLocalFile(path: string): Promise<void> {
+    const window = await this.ensureWindow();
+    this.show(this.userTabId);
+    const contents = this.shownContents();
+    // 加载失败（文件刚被删）页面自己会显示错误页，不当异常抛——同 navigate
+    if (contents !== null) contents.loadURL(pathToFileURL(path).href).catch(() => undefined);
+    bringToFront(window);
+  }
+
+  /**
+   * 工具条「用系统浏览器打开」：正在显示的页面交给系统。网页走默认浏览器；本地网页（file://）
+   * 走它的默认打开方式——openExternal 对 file:// 在各平台行为不一，本地文件统一用 openPath。
+   * 空页（没加载过）什么都不做：工具条上这时按钮本来就是灰的。
+   */
+  async openShownExternally(): Promise<void> {
+    const contents = this.shownContents();
+    if (contents === null) return;
+    const url = pageUrl(contents);
+    if (url.startsWith("file:")) {
+      const failure = await shell.openPath(fileURLToPath(url));
+      if (failure !== "") throw new Error(failure);
+      return;
+    }
+    if (normalizeAddress(url) !== null) await shell.openExternal(url);
   }
 
   /** 地址栏提交：作用于正在显示的 tab。不是网址就搜索（找不到图书馆入口时先得搜得到） */
@@ -218,9 +252,7 @@ export class BrowserSandbox {
     if (tab === undefined) return false;
     const window = await this.ensureWindow();
     this.show(tab.id);
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
+    bringToFront(window);
     return true;
   }
 
@@ -648,6 +680,13 @@ export class BrowserSandbox {
       this.window.webContents.send(browserChannels.browserFocusAddress);
     }
   }
+}
+
+/** 把沙盒窗口提到最前（最小化了先还原） */
+function bringToFront(window: BrowserWindow): void {
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
 }
 
 /** 页面地址；没加载过（空串）与 about:blank 都当「空页」 */

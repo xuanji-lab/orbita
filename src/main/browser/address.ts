@@ -33,6 +33,15 @@ export function normalizeAddress(input: string): string | null {
   return parse(`${plain ? "http" : "https"}://${text}`)?.href ?? null;
 }
 
+/**
+ * 界面里点到的外链（聊天里的链接、设置页的文档链接）是不是网页：是就进内置浏览器，
+ * 否则（mailto 之类内置浏览器接不了的）交给系统（index.ts 的 openLink）。
+ */
+export function isWebLink(url: string): boolean {
+  const parsed = parse(url.trim());
+  return parsed !== null && (parsed.protocol === "http:" || parsed.protocol === "https:");
+}
+
 function parse(text: string): URL | null {
   try {
     return new URL(text);
@@ -55,7 +64,9 @@ export function resolveAddressOrSearch(input: string): { url: string; search: st
   const url = normalizeAddress(input);
   if (url !== null) return { url, search: null };
   const text = input.trim().replace(/\s+/g, " ");
-  // 本地路径不拿去搜（搜一串路径毫无意义）：本地网页只由 agent 在自己的 tab 里打开（local-file.ts）
+  // 本地路径不拿去搜（搜一串路径毫无意义）。地址栏不收本地路径：本地网页只走两条专用通道——
+  // agent 在自己的 tab 里打开（local-file.ts 按会话目录判），文件面板在你的 tab 里打开
+  // （fs:open-in-browser 按文件面板白名单判）
   if (text === "" || BLOCKED_SCHEME.test(text) || looksLikeLocalPath(text)) return null;
   return { url: `${SEARCH_URL}${encodeURIComponent(text)}`, search: text };
 }

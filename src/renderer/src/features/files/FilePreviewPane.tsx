@@ -7,7 +7,7 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
-import { PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
+import { isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
 import { pathTail } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
@@ -63,6 +63,14 @@ export function FilePreviewPane(props: {
     });
   };
 
+  // 网页文件的默认打开方式是内置浏览器（2026-09-29 裁决），系统默认应用退到后一个按钮
+  const webPage = isWebPageFile(path);
+  const openInBrowser = (): void => {
+    void api.files.openInBrowser({ sessionId, workspaceId, root, dir: path }).catch(() => {
+      // 同 openDefault：失败时浏览器窗口自己显示错误页，面板不另开错误态
+    });
+  };
+
   const reveal = (): void => {
     void api.files.reveal({ sessionId, workspaceId, root, dir: path }).catch(() => {
       // 同上：Finder 定位失败留给系统层
@@ -108,6 +116,11 @@ export function FilePreviewPane(props: {
         </div>
         <span style={{ flex: 1 }} />
         <div className="file-preview-actions">
+          {webPage && (
+            <PanelIconButton title={t.files.openInBrowser} onClick={openInBrowser}>
+              <Icon name="globe" size={16} />
+            </PanelIconButton>
+          )}
           <PanelIconButton title={t.files.openDefault} onClick={openDefault}>
             <Icon name="external-link" size={16} />
           </PanelIconButton>
