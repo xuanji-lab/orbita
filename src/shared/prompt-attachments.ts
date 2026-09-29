@@ -82,7 +82,7 @@ export function filesBlockOf(files: readonly { path: string; kind: "file" | "dir
   return [
     "<attached-files>",
     "The user attached these files from their disk. Read them with the read tool when you need their contents. " +
-      "PDF files: use the read_pdf tool instead of read.",
+      "PDF files: use the read_pdf tool instead of read. Word (.docx) files: use the read_docx tool instead of read.",
     ...files.map(fileLine),
     "</attached-files>",
   ].join("\n");
