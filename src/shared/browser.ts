@@ -3,12 +3,14 @@
  *
  * 定位（2026-09-27 wafo 裁决）：浏览器是 **agent 的工具**，不是用户的浏览器。用户想浏览
  * 就用自己的浏览器；与 agent 共用的时刻只有交接（登录 / 验证码 / 授权）。
+ * 2026-09-29 用户裁决放宽：界面里点到的链接与文件面板的本地网页默认在这里打开（系统浏览器
+ * 退为工具条上的一个按钮），用户的 tab 因此可以有多个。agent 与用户的 tab 仍然分开。
  *
  * 形态：网页是主进程持有的 `WebContentsView`，放在**独立的沙盒窗口**里——不嵌进主窗口，
  * 原生视图压住 DOM 浮层的问题（参考 proma-ai/Proma#1817 #2007 #1909）从布局上不存在。
  * 沙盒窗口上方是工具条（我们自己的页面，走同一个 preload），下方是网页；两块上下分区、不重叠。
  *
- * tab：一个「你的」tab（用户登录用，不属于任何会话）+ 每个用过浏览器的会话一个 agent tab。
+ * tab：用户的 tab（不属于任何会话；至少一个，可新开、可关）+ 每个用过浏览器的会话一个 agent tab。
  * 全部由主进程持有、共用同一个 partition（登录态共享）；窗口一次只显示一个，其余在后台照跑——
  * agent 操作自己的 tab 不抢用户的屏幕。
  *
@@ -41,7 +43,10 @@ export const browserChannels = {
   browserReloadOrStop: "browser:reload-or-stop",
   /** 工具条切到某个 tab */
   browserSelectTab: "browser:select-tab",
-  /** 关掉一个 agent tab。「你的」tab 不可关（它是登录入口）；agent 下次用浏览器会重开一个 */
+  /**
+   * 关掉一个 tab。用户的 tab 关掉最后一个时补一个空白的（窗口里总有一个用户的 tab，它是登录入口）；
+   * agent tab 关掉后 agent 下次用浏览器会重开一个
+   */
   browserCloseTab: "browser:close-tab",
   /** 交接卡「去浏览器完成」：打开窗口、切到那次交接的 tab、提到最前（按 toolCallId 定位） */
   browserShowHandoff: "browser:show-handoff",
@@ -81,6 +86,8 @@ export const browserChannels = {
    * 本地网页走默认打开方式）。链接默认进内置浏览器，这是想用系统浏览器时的出口
    */
   browserOpenExternal: "browser:open-external",
+  /** 工具条「+」：新开一个空白的用户 tab、切过去、光标进地址栏 */
+  browserNewTab: "browser:new-tab",
 } as const;
 
 export type BrowserChannel = (typeof browserChannels)[keyof typeof browserChannels];
@@ -97,7 +104,7 @@ export interface BrowserPageState {
 /** tab 条上的一格 */
 export interface BrowserTabSummary {
   id: string;
-  /** 「你的」tab 恒为 user；agent tab 带所属会话，工具条用会话标题区分 */
+  /** 用户的 tab 为 user（可以有多个）；agent tab 带所属会话，工具条用会话标题区分 */
   owner: { kind: "user" } | { kind: "agent"; sessionId: string; sessionTitle: string };
   title: string;
   url: string;
@@ -125,11 +132,14 @@ export interface BrowserWindowState {
 export type BrowserNavigateResult = { ok: true } | { ok: false; reason: "not-an-address" };
 
 /**
- * 读取类工具读哪个 tab：缺席 = agent 自己的 tab；"user" = 「你的」tab（**只读**）。
- * 用户常常自己先打开并登录好了（例如经图书馆代理进 Scopus）——agent 读得到它，
+ * 读取类工具读哪个 tab：缺席 = agent 自己的 tab；否则是 browser_tabs 列出的某个**用户 tab 的 id**
+ * （**只读**）。用户常常自己先打开并登录好了（例如经图书馆代理进 Scopus）——agent 读得到它，
  * 要操作就在自己的 tab 里打开同一个地址（登录态共享）。
+ *
+ * 用户的 tab 可以有多个，读哪个由模型按上下文自己挑（2026-09-29 用户裁决：不硬编码「读正在看的
+ * 那个」）；browser_tabs 如实标出哪个此刻正显示，挑的依据给足，规则不替它定。
  */
-export type BrowserReadTarget = "user";
+export type BrowserReadTarget = string;
 
 /**
  * 交互动作的落点：`browser_observe` 给的元素引用（`e12`），或最近一次整页截图里的像素坐标。
