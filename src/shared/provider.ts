@@ -93,6 +93,11 @@ export interface ProviderUpsertInput {
   provider: Omit<Provider, "auth"> & { auth: { scheme: ProviderAuth["scheme"] } };
   /** 明文密钥。只出现在这个方向（renderer → main），main 落库后即丢弃。 */
   apiKey?: string;
+  /**
+   * true = 新建：id 已被占用时拒绝（issue 落在 `id` 字段），**绝不覆盖已有的那一条**。
+   * 缺省 = 按 id 改写（编辑）。新建与编辑不分开时，一个撞了名的新建会悄悄换掉原来那条连同它的密钥。
+   */
+  create?: boolean;
 }
 
 /** 校验失败项：field 用点号路径，便于表单逐项标红。 */
