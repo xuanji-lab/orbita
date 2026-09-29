@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { ImageLightbox } from "./ImageLightbox";
-import { PaperclipMark } from "./PaperclipMark";
+import { ImageThumb } from "./ImageThumb";
 import { QuoteChip } from "./QuoteChip";
 import { FileRefChip, PastedTextChip } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
@@ -634,11 +634,7 @@ function DictationStatus(props: { phase: DictationPhase; problem: DictationProbl
   );
 }
 
-/**
- * 待发附图的缩略图条。方形裁切（object-fit: cover）只为排得齐——原图完整地
- * 发出去，点缩略图看大图。移除键常显而不是悬停才出：键盘用户要能 Tab 到它。
- * 缩略图与移除键是兄弟不是嵌套：button 里不能再套 button。
- */
+/** 待发附图的缩略图条：卡片与模型输出画廊共用 ImageThumb。 */
 function AttachmentStrip(props: {
   items: readonly ComposerImage[];
   onRemove: (id: string) => void;
@@ -647,7 +643,7 @@ function AttachmentStrip(props: {
 }) {
   const [viewing, setViewing] = useState<number | null>(null);
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: "var(--space-3)" }}>
       {viewing !== null && (
         <ImageLightbox
           images={props.items.map((item) => item.image)}
@@ -656,67 +652,20 @@ function AttachmentStrip(props: {
         />
       )}
       {props.items.map((item, index) => (
-        <div
+        <ImageThumb
           key={item.id}
-          title={item.name === "" ? undefined : item.name}
-          style={{
-            // 外层不裁切：回形针要半露在缩略图外面；裁切放在里面的按钮上
-            position: "relative",
-            width: 56,
-            height: 56,
-            flex: "0 0 auto",
-          }}
-        >
-          <PaperclipMark size={18} />
-          <button
-            type="button"
-            aria-label={props.openLabel}
-            onClick={() => setViewing(index)}
-            style={{
-              display: "block",
-              width: "100%",
-              height: "100%",
-              padding: 0,
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--color-border-subtle)",
-              overflow: "hidden",
-              background: "var(--color-bg-muted)",
-              cursor: "zoom-in",
-            }}
-          >
-            <img
-              src={imageSrc(item.image)}
-              alt={item.name}
-              draggable={false}
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-            />
-          </button>
-          <button
-            type="button"
-            aria-label={props.removeLabel}
-            title={props.removeLabel}
-            onClick={() => props.onRemove(item.id)}
-            style={{
-              position: "absolute",
-              top: 3,
-              right: 3,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 18,
-              height: 18,
-              padding: 0,
-              border: "1px solid var(--color-border-subtle)",
-              borderRadius: "var(--radius-pill)",
-              background: "var(--color-bg-panel)",
-              color: "var(--color-text-secondary)",
-              cursor: "pointer",
-            }}
-          >
-            <Icon name="x" size={11} strokeWidth={2} />
-          </button>
-        </div>
+          src={imageSrc(item.image)}
+          name={item.name}
+          size={COMPOSER_THUMB_SIZE}
+          openLabel={props.openLabel}
+          onOpen={() => setViewing(index)}
+          paperclip
+          onRemove={() => props.onRemove(item.id)}
+          removeLabel={props.removeLabel}
+        />
       ))}
     </div>
   );
 }
+
+const COMPOSER_THUMB_SIZE = 72;
