@@ -54,6 +54,7 @@ import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/l
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
 import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-todo.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
+import mic from "../../../../Orbita Design System/assets/icons/lucide/mic.svg?raw";
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import play from "../../../../Orbita Design System/assets/icons/lucide/play.svg?raw";
@@ -152,6 +153,7 @@ const ICONS = {
   "list-todo": listTodo,
   lock,
   "message-square": messageSquare,
+  mic,
   "message-square-dashed": messageSquareDashed,
   "messages-square": messagesSquare,
   minus,

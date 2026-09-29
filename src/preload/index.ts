@@ -11,6 +11,7 @@ import { importApi } from "./api/import.ts";
 import { providerApi } from "./api/provider.ts";
 import { sessionApi } from "./api/session.ts";
 import { settingsApi } from "./api/settings.ts";
+import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
 import { windowApi } from "./api/window.ts";
 import { workspaceApi } from "./api/workspace.ts";
@@ -29,6 +30,7 @@ const api = {
   files: filesApi,
   import: importApi,
   browser: browserApi,
+  voice: voiceApi,
   /**
    * 宿主平台。**不是 IPC 通道**，是个同步常量——渲染层需要它，因为
    * 「红黄绿三个键落在边界卡里」只在 macOS 成立，别的平台要给自己画圆角。

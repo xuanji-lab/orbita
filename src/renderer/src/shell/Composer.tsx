@@ -16,6 +16,7 @@ import { filterSkills } from "../features/skills/skill-filter";
 import type { SkillMeta } from "@shared/skill";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
+import { useDictation, type DictationPhase, type DictationProblem } from "../features/voice/useDictation.ts";
 import { useT } from "../locale.ts";
 
 /**
@@ -102,6 +103,10 @@ export function Composer(props: {
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 听写（features/voice/useDictation.ts）：识别文字直接写进这个输入框。听写中输入框只读——
+  // 手打的字会被下一次识别结果覆盖；回车 = 结束听写（不发送），Esc = 取消
+  const dictation = useDictation({ value: props.value, onChange: props.onChange, textareaRef });
+  const dictating = dictation.phase !== "idle";
   const commandListRef = useRef<HTMLDivElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
   // 输入法组词中的范围（没在组词是 null）。拼音字母会先进 value：字距判法在组词期间沿用
@@ -414,8 +419,13 @@ export function Composer(props: {
           rows={COMPOSER_MIN_ROWS}
           value={props.value}
           disabled={disabled}
+          readOnly={dictating}
           placeholder={props.placeholder}
-          onChange={(event) => props.onChange(event.target.value)}
+          onChange={(event) => {
+            // 上一次听写的问题说过了：用户动手打字就收起来
+            if (dictation.problem !== null) dictation.clearProblem();
+            props.onChange(event.target.value);
+          }}
           onPaste={(event) => {
             // 剪贴板里有文件（截图、从别处复制的文件）才拦；分拣与报错在调用方。
             // 浏览器复制文件常常同时带一份 HTML/URL 文本——有文件时以文件为准，文本不贴
@@ -434,6 +444,14 @@ export function Composer(props: {
             }
           }}
           onKeyDown={(event) => {
+            // 听写中：回车结束听写，文字留在框里等你再看一眼——不直接发出去（Esc 在 useDictation 里接）
+            if (dictating) {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                dictation.finish();
+              }
+              return;
+            }
             // 面板开着时方向键与 Enter 归面板（Enter 选中即执行，不落进发送）；
             // Esc 关面板，内容照在。组词中的按键不动面板。
             if (panelOpen && !event.nativeEvent.isComposing) {
@@ -491,6 +509,9 @@ export function Composer(props: {
           }}
         />
       </div>
+      {(dictating || dictation.problem !== null) && (
+        <DictationStatus phase={dictation.phase} problem={dictation.problem} />
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {/*
           芯片群包一层：flex:1 1 auto + min-width:0 让它先于发送键让路，
@@ -518,16 +539,30 @@ export function Composer(props: {
           }}
         />
         <div className="composer-bottom-bar">{props.bottomSlot}</div>
+        <IconButton
+          label={dictating ? t.voice.dictateFinish : t.voice.dictate}
+          size={28}
+          active={dictation.phase === "listening"}
+          disabled={disabled || dictation.phase === "finishing"}
+          onClick={dictation.toggle}
+          style={{ marginInlineStart: "auto", flex: "0 0 auto" }}
+        >
+          {dictation.phase === "connecting" || dictation.phase === "finishing" ? (
+            <Icon name="loader-circle" size={15} spin />
+          ) : (
+            <Icon name="mic" size={15} strokeWidth={1.8} className={dictation.phase === "listening" ? "orbita-breath" : undefined} />
+          )}
+        </IconButton>
         <button
           type="button"
           className="btn-accent"
           data-tone={stopping ? "danger" : undefined}
           aria-label={sendable ? t.composer.send : stopping ? t.composer.stop : t.composer.send}
           title={sendable ? t.composer.send : stopping ? t.composer.stopTurn : t.composer.send}
-          disabled={!sendable && !stopping}
+          // 听写中不发送：识别文字还在变，先结束听写（回车或再点麦克风）再发
+          disabled={dictating || (!sendable && !stopping)}
           onClick={() => (sendable ? props.onSubmit() : props.onStop())}
           style={{
-            marginInlineStart: "auto",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -542,6 +577,59 @@ export function Composer(props: {
           <Icon name={sendable ? "arrow-up" : "square"} size={sendable ? 16 : 12} />
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 听写的一行状态：进行中说「在干什么、怎么结束」，出了问题说原因（服务端的原话用等宽跟在后面）。
+ * 状态用图标 + 文字，红色只给失败（设计系统：颜色是第二信号）。
+ */
+function DictationStatus(props: { phase: DictationPhase; problem: DictationProblem | null }) {
+  const t = useT();
+  const problem = props.problem;
+  const text =
+    problem !== null
+      ? problem.kind === "mic-denied"
+        ? t.voice.micDenied
+        : problem.kind === "mic-unavailable"
+          ? t.voice.micUnavailable
+          : t.voice.failures[problem.reason]
+      : props.phase === "connecting"
+        ? t.voice.connecting
+        : props.phase === "finishing"
+          ? t.voice.finishing
+          : t.voice.listening;
+  const detail = problem !== null && problem.kind === "service" ? problem.detail : undefined;
+  return (
+    <div
+      role={problem !== null ? "alert" : "status"}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-1)",
+        minWidth: 0,
+        fontSize: "var(--font-size-caption)",
+        color: problem !== null ? "var(--color-danger)" : "var(--color-text-secondary)",
+      }}
+    >
+      <Icon name={problem !== null ? "triangle-alert" : "mic"} size={12} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+      <span style={{ minWidth: 0 }}>{text}</span>
+      {detail !== undefined && (
+        <code
+          title={detail}
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontFamily: "var(--font-family-mono)",
+            color: "var(--color-text-tertiary)",
+          }}
+        >
+          {detail}
+        </code>
+      )}
     </div>
   );
 }

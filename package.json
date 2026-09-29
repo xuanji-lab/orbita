@@ -80,6 +80,9 @@
         }
       ],
       "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "orbita uses the microphone for voice input: what you say is transcribed into the message box."
+      },
       "identity": "-",
       "hardenedRuntime": false
     }

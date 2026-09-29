@@ -15,6 +15,7 @@ import type {
   BrowserImportSummary,
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
+import type { DoubaoVoiceConfig, VoiceFailure } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
@@ -50,6 +51,7 @@ export const SETTINGS_TABS = [
   { id: "providers", icon: "cpu" },
   { id: "migration", icon: "download" },
   { id: "browser", icon: "globe" },
+  { id: "voice", icon: "mic" },
 ] as const satisfies readonly { id: string; icon: IconName }[];
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
@@ -133,6 +135,10 @@ export function SettingsView(props: {
       {props.tab === "browser" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <BrowserSettings />
+        </div>
+      ) : props.tab === "voice" ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <VoiceSettings />
         </div>
       ) : props.tab === "providers" ? (
         // Providers 是主从两栏，铺满内容面：厂商列表贴着面板左缘，两栏各自内部滚动
@@ -515,6 +521,152 @@ function AttributionPreview(props: { enabled: boolean; language: Language }) {
         <span className="set-trailer-text">{prLine}</span>
       </span>
     </span>
+  );
+}
+
+/**
+ * 设置 › 语音。语音是一整套系统（听写 + 实时对话，厂商会有好几家，shared/voice.ts 顶注释）；
+ * 这一页现在只有豆包的凭证——输入框的麦克风听写用它。
+ */
+function VoiceSettings() {
+  return (
+    <div className="set-page">
+      <DoubaoVoiceGroup />
+    </div>
+  );
+}
+
+type VoiceStatus =
+  | { kind: "idle" }
+  | { kind: "busy"; what: "test" | "save" }
+  | { kind: "tested" }
+  | { kind: "saved" }
+  | { kind: "failed"; failure: VoiceFailure }
+  | { kind: "save-failed" };
+
+/**
+ * 豆包三样：APP ID、Access Token、Resource ID。Token 只进不出——输入框永远是空的，占位写着
+ * 已存的掩码，留空保存 = 保留（同 Providers 的 API key）。「测试连接」用输入框里的草稿试，
+ * 不落盘；Token 没填就拿已存的试。
+ */
+function DoubaoVoiceGroup() {
+  const t = useT();
+  const [config, setConfig] = useState<DoubaoVoiceConfig | null>(null);
+  const [appId, setAppId] = useState("");
+  const [resourceId, setResourceId] = useState("");
+  const [token, setToken] = useState("");
+  const [status, setStatus] = useState<VoiceStatus>({ kind: "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.voice
+      .doubaoGet()
+      .then((loaded) => {
+        if (cancelled) return;
+        setConfig(loaded);
+        setAppId(loaded.appId);
+        setResourceId(loaded.resourceId);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const draft = { appId, resourceId, ...(token.trim() === "" ? {} : { accessToken: token }) };
+  const dirty = config !== null && (appId !== config.appId || resourceId !== config.resourceId || token.trim() !== "");
+  const busy = status.kind === "busy";
+  // 改了任何一格，上一次的结果就不再说明现在这组值了
+  const edit = (set: (value: string) => void) => (value: string) => {
+    set(value);
+    if (status.kind !== "busy") setStatus({ kind: "idle" });
+  };
+
+  const test = () => {
+    setStatus({ kind: "busy", what: "test" });
+    void api.voice
+      .doubaoTest(draft)
+      .then((result) => setStatus(result.ok ? { kind: "tested" } : { kind: "failed", failure: result }))
+      .catch(() => setStatus({ kind: "failed", failure: { reason: "network" } }));
+  };
+  const save = () => {
+    setStatus({ kind: "busy", what: "save" });
+    void api.voice
+      .doubaoSave(draft)
+      .then((saved) => {
+        setConfig(saved);
+        setAppId(saved.appId);
+        setResourceId(saved.resourceId);
+        setToken("");
+        setStatus({ kind: "saved" });
+      })
+      .catch(() => setStatus({ kind: "save-failed" }));
+  };
+
+  const note =
+    status.kind === "busy" ? (
+      <span className="set-row-hint">
+        <Icon name="loader-circle" size={12} spin /> {status.what === "test" ? t.voice.testing : t.voice.saving}
+      </span>
+    ) : status.kind === "tested" || status.kind === "saved" ? (
+      <span role="status" className="set-row-note">
+        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.testOk : t.voice.saved}
+      </span>
+    ) : status.kind === "failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.failures[status.failure.reason]}
+        {status.failure.detail !== undefined && <code className="voice-failure-detail"> {status.failure.detail}</code>}
+      </span>
+    ) : status.kind === "save-failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.saveFailed}
+      </span>
+    ) : undefined;
+
+  return (
+    <SettingGroup label={t.voice.doubaoGroup}>
+      <SettingRow name={t.voice.appId} info={t.voice.appIdInfo}>
+        <input
+          className="text-field voice-field"
+          aria-label={t.voice.appId}
+          spellCheck={false}
+          value={appId}
+          onChange={(event) => edit(setAppId)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.accessToken} info={t.voice.accessTokenInfo}>
+        <input
+          className="text-field voice-field"
+          type="password"
+          aria-label={t.voice.accessToken}
+          autoComplete="off"
+          placeholder={
+            config !== null && config.tokenMasked !== null ? t.voice.tokenSaved(config.tokenMasked) : t.voice.tokenPaste
+          }
+          value={token}
+          onChange={(event) => edit(setToken)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.resourceId} info={t.voice.resourceIdInfo}>
+        <input
+          className="text-field voice-field"
+          aria-label={t.voice.resourceId}
+          spellCheck={false}
+          value={resourceId}
+          onChange={(event) => edit(setResourceId)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.connection} note={note}>
+        <span className="set-inline">
+          <PanelButton onClick={test} disabled={busy || config === null}>
+            {t.voice.test}
+          </PanelButton>
+          <PanelButton onClick={save} disabled={busy || !dirty}>
+            {t.voice.save}
+          </PanelButton>
+        </span>
+      </SettingRow>
+    </SettingGroup>
   );
 }
 
