@@ -21,3 +21,11 @@ export function setShown(ticked: ReadonlySet<string>, shown: readonly string[], 
   }
   return next;
 }
+
+/**
+ * 网站清单的顺序：已导入过的排最前（重新读取时一眼看到「这些已经在了」），组内保持原序
+ * （主进程给的是字母序）。「已导入」只是标记，不预先勾上——勾选的语义是「这一次要导入」。
+ */
+export function importedFirst<T extends { site: string }>(sites: readonly T[], imported: ReadonlySet<string>): T[] {
+  return [...sites.filter((item) => imported.has(item.site)), ...sites.filter((item) => !imported.has(item.site))];
+}

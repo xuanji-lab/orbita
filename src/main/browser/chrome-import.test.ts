@@ -25,10 +25,13 @@ import {
   pickRecommendedProfile,
   readCookieRows,
   siteGroupKey,
+  storedCookieUrl,
   toImportCookie,
   type ChromeCookieRow,
   type ImportCookieDetails,
+  type StoredCookie,
 } from "./chrome-import.ts";
+import { readImportLedger } from "./import-ledger.ts";
 
 const SECRET = "test-secret";
 const KEY = deriveSafeStorageKey(SECRET);
@@ -311,18 +314,37 @@ test("discoverImportSources：Local State 坏了退回扫 Default / Profile N，
 
 // ── LoginImporter 流程（钥匙串与写入目标注入替身；仅 macOS 走这条链路） ──
 
-/** 写入目标替身：记录 set 调用，可按 cookie 名抛错模拟失败 */
+/**
+ * 写入目标替身：一个迷你 cookie 库。set 记录并入库（可按 cookie 名抛错模拟失败），
+ * get 回库里全部，remove 按 url 的主机 + 路径 + 名字删——与 Electron 的匹配口径一致到够用。
+ */
 function fakeTarget(failNames: ReadonlySet<string> = new Set()) {
   const written: ImportCookieDetails[] = [];
+  const stored: StoredCookie[] = [];
   let flushed = 0;
   return {
     written,
+    stored,
     flushCount: () => flushed,
     target: {
       cookies: {
         set: async (details: ImportCookieDetails) => {
           if (failNames.has(details.name)) throw new Error("set-failed");
           written.push(details);
+          stored.push({
+            name: details.name,
+            domain: details.domain ?? new URL(details.url).hostname,
+            path: details.path,
+            secure: details.secure,
+          });
+        },
+        get: async () => [...stored],
+        remove: async (url: string, name: string) => {
+          const { hostname, pathname } = new URL(url);
+          const index = stored.findIndex(
+            (cookie) => cookie.name === name && (cookie.domain ?? "").replace(/^\./, "") === hostname && (cookie.path ?? "/") === pathname,
+          );
+          if (index !== -1) stored.splice(index, 1);
         },
         flushStore: async () => {
           flushed += 1;
@@ -364,6 +386,7 @@ test("LoginImporter：读取（解密 + 分组）→ 只导勾选的网站 → �
   const fake = fakeTarget();
   const importer = new LoginImporter({
     cookieTarget: () => fake.target,
+    ledgerPath: join(root, "browser-imports.json"),
     appSupportDir: root,
     readSecret: async () => SECRET,
     nowSeconds: () => NOW,
@@ -423,6 +446,7 @@ test("LoginImporter：所选网站里解不开 / 过期的计入跳过；写入�
   const fake = fakeTarget(new Set(["doomed"]));
   const importer = new LoginImporter({
     cookieTarget: () => fake.target,
+    ledgerPath: join(root, "browser-imports.json"),
     appSupportDir: root,
     readSecret: async () => SECRET,
     nowSeconds: () => NOW,
@@ -458,6 +482,7 @@ test("LoginImporter：钥匙串拒绝整体终止；其他失败归 read-failed"
 
   const base = {
     cookieTarget: () => fakeTarget().target,
+    ledgerPath: join(root, "browser-imports.json"),
     appSupportDir: root,
     nowSeconds: () => NOW,
   };
@@ -485,6 +510,7 @@ test("LoginImporter：来源不存在 / 没 cookie 库 / 路径逃逸的错误�
   let secretReads = 0;
   const importer = new LoginImporter({
     cookieTarget: () => fakeTarget().target,
+    ledgerPath: join(root, "browser-imports.json"),
     appSupportDir: root,
     readSecret: async () => {
       secretReads += 1;
@@ -534,7 +560,12 @@ test("LoginImporter：默认时钟按秒算——一年后才过期的 cookie �
   );
   const fake = fakeTarget();
   // 不注入时钟：走生产默认值
-  const importer = new LoginImporter({ cookieTarget: () => fake.target, appSupportDir: root, readSecret: async () => SECRET });
+  const importer = new LoginImporter({
+    cookieTarget: () => fake.target,
+    ledgerPath: join(root, "browser-imports.json"),
+    appSupportDir: root,
+    readSecret: async () => SECRET,
+  });
   const read = await importer.read("chrome", "Default");
   assert.ok(read.ok);
   assert.deepEqual(read.sites, [{ site: "github.com", count: 2 }]);
@@ -544,4 +575,110 @@ test("LoginImporter：默认时钟按秒算——一年后才过期的 cookie �
   const session = fake.written.find((cookie) => cookie.name === "session");
   const days = ((session?.expirationDate ?? 0) - nowSeconds) / 86400;
   assert.ok(days > 399 && days < 401, `session cookie expires in ${days} days`);
+});
+
+// ── 已导入清单（导入账本 + cookie 现状） ──────────────────────────
+
+test("storedCookieUrl：协议随 secure、去前导点、带 cookie 自己的路径", () => {
+  assert.equal(storedCookieUrl({ name: "a", domain: ".google.com", path: "/", secure: true }), "https://google.com/");
+  assert.equal(storedCookieUrl({ name: "a", domain: "lib.nus.edu.sg", path: "/sso", secure: false }), "http://lib.nus.edu.sg/sso");
+  assert.equal(storedCookieUrl({ name: "a", domain: "a.com" }), "http://a.com/");
+});
+
+test("LoginImporter：导入记账（来源显示名 + 时刻）→ 清单现查 cookie 在不在 → 移除整站 → 清空", async (t) => {
+  if (process.platform !== "darwin") return t.skip("仅 macOS");
+  const root = await mkdtemp(join(tmpdir(), "orbita-import-test-"));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  const chromeDir = join(root, "Google", "Chrome");
+  const profileDir = join(chromeDir, "Profile 1");
+  await mkdir(join(profileDir, "Network"), { recursive: true });
+  await writeFile(join(chromeDir, "Local State"), JSON.stringify({ profile: { info_cache: { "Profile 1": { name: "工作" } } } }));
+  await writeCookieDatabase(
+    profileDir,
+    [
+      { host: "github.com", name: "gh", expiresUnix: THE_FUTURE, value: "a", encrypted: null },
+      { host: ".google.com", name: "SID", expiresUnix: THE_FUTURE, value: "b", encrypted: null },
+      // 这个网站的 cookie 全部写入失败：不该记成「已导入」
+      { host: "broken.com", name: "doomed", expiresUnix: THE_FUTURE, value: "c", encrypted: null },
+    ],
+    24,
+  );
+
+  const fake = fakeTarget(new Set(["doomed"]));
+  // 浏览时网站自己种的 cookie：同一个网站（子域），移除时要一起删；别的网站不动
+  fake.stored.push({ name: "browsed", domain: "gist.github.com", path: "/", secure: true });
+  fake.stored.push({ name: "other", domain: "example.org", path: "/", secure: true });
+  const ledgerPath = join(root, "browser-imports.json");
+  const importer = new LoginImporter({
+    cookieTarget: () => fake.target,
+    ledgerPath,
+    appSupportDir: root,
+    readSecret: async () => SECRET,
+    nowSeconds: () => NOW,
+  });
+
+  assert.deepEqual(await importer.imported(), [], "没导入过：空清单");
+
+  const read = await importer.read("chrome", "Profile 1");
+  assert.ok(read.ok);
+  const commit = await importer.commit(read.pendingId, ["github.com", "google.com", "broken.com"]);
+  assert.ok(commit.ok);
+  assert.deepEqual(
+    await importer.imported(),
+    [
+      { site: "github.com", browserName: "Google Chrome", profileName: "工作", importedAt: NOW * 1000, present: true },
+      { site: "google.com", browserName: "Google Chrome", profileName: "工作", importedAt: NOW * 1000, present: true },
+    ],
+  );
+
+  // 账本落盘：换一个实例（= 重启应用）照样读得到
+  assert.deepEqual((await readImportLedger(ledgerPath)).map((entry) => entry.site), ["github.com", "google.com"]);
+
+  // google.com 的 cookie 被网站清掉：账本还在，清单说它失效
+  fake.stored.splice(fake.stored.findIndex((cookie) => cookie.name === "SID"), 1);
+  const stale = await importer.imported();
+  assert.deepEqual(stale.map((entry) => [entry.site, entry.present]), [["github.com", true], ["google.com", false]]);
+
+  // 移除 github.com：导入的与浏览时种的一起删，别的网站不动，账本销掉
+  const afterRemove = await importer.removeImported("github.com");
+  assert.deepEqual(afterRemove.map((entry) => entry.site), ["google.com"]);
+  assert.deepEqual(fake.stored.map((cookie) => cookie.name), ["other"]);
+
+  // 清除全部浏览器数据之后：账本清空
+  await importer.forgetImported();
+  assert.deepEqual(await importer.imported(), []);
+  assert.deepEqual(await readImportLedger(ledgerPath), []);
+});
+
+test("LoginImporter：重新导入同一个网站刷新来源与时刻，不重复成两行", async (t) => {
+  if (process.platform !== "darwin") return t.skip("仅 macOS");
+  const root = await mkdtemp(join(tmpdir(), "orbita-import-test-"));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  const profileDir = join(root, "Google", "Chrome", "Default");
+  await mkdir(join(profileDir, "Network"), { recursive: true });
+  await writeCookieDatabase(profileDir, [{ host: "github.com", name: "gh", expiresUnix: THE_FUTURE + 100, value: "a", encrypted: null }], 24);
+
+  let now = NOW;
+  const fake = fakeTarget();
+  const importer = new LoginImporter({
+    cookieTarget: () => fake.target,
+    ledgerPath: join(root, "browser-imports.json"),
+    appSupportDir: root,
+    readSecret: async () => SECRET,
+    nowSeconds: () => now,
+  });
+  for (const at of [NOW, NOW + 60]) {
+    now = at;
+    const read = await importer.read("chrome", "Default");
+    assert.ok(read.ok);
+    await importer.commit(read.pendingId, ["github.com"]);
+  }
+  const list = await importer.imported();
+  assert.equal(list.length, 1);
+  // Local State 不在：profile 显示名回落目录名，同下拉里的规则
+  assert.deepEqual(list[0], { site: "github.com", browserName: "Google Chrome", profileName: "Default", importedAt: (NOW + 60) * 1000, present: true });
 });

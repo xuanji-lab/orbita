@@ -4,9 +4,11 @@
  */
 import { BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import {
   browserChannels,
   type BrowserImportCommitResult,
+  type BrowserImportedSite,
   type BrowserImportReadResult,
   type BrowserImportSource,
   type BrowserNavigateResult,
@@ -17,13 +19,24 @@ import { LoginImporter } from "./chrome-import.ts";
 import { browserDownloadDir } from "./download-dir.ts";
 import { BROWSER_PARTITION, type BrowserSandbox } from "./sandbox.ts";
 
-export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsStore): void {
+export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsStore, configDir: string): void {
+  // 登录状态导入（chrome-import.ts；cookie 值不过 IPC，renderer 只拿网站与计数）。
+  // 建在最前：清除浏览器数据也要用它清空导入账本
+  const loginImporter = new LoginImporter({
+    cookieTarget: () => session.fromPartition(BROWSER_PARTITION),
+    ledgerPath: join(configDir, "browser-imports.json"),
+  });
+
   ipcMain.handle(
     browserChannels.browserOpen,
     (_event, url?: string): Promise<BrowserNavigateResult> =>
       sandbox.open(typeof url === "string" ? url : undefined),
   );
-  ipcMain.handle(browserChannels.browserClearData, (): Promise<void> => sandbox.clearData());
+  ipcMain.handle(browserChannels.browserClearData, async (): Promise<void> => {
+    await sandbox.clearData();
+    // cookie 已经全没了：「已导入的网站」清单跟着清空，不留一排失效的行
+    await loginImporter.forgetImported();
+  });
   ipcMain.handle(
     browserChannels.browserNavigate,
     (_event, input: unknown): BrowserNavigateResult =>
@@ -71,8 +84,7 @@ export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsSt
     if (failure !== "") throw new Error(failure);
   });
 
-  // ── 登录状态导入（chrome-import.ts；cookie 值不过 IPC，renderer 只拿网站与计数）──
-  const loginImporter = new LoginImporter({ cookieTarget: () => session.fromPartition(BROWSER_PARTITION) });
+  // ── 登录状态导入 ──
   ipcMain.handle(browserChannels.browserImportSources, (): Promise<BrowserImportSource[]> => loginImporter.sources());
   ipcMain.handle(
     browserChannels.browserImportRead,
@@ -94,5 +106,10 @@ export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsSt
   );
   ipcMain.handle(browserChannels.browserImportCancel, (_event, pendingId: unknown): void => {
     if (typeof pendingId === "string") loginImporter.cancel(pendingId);
+  });
+  ipcMain.handle(browserChannels.browserImportedList, (): Promise<BrowserImportedSite[]> => loginImporter.imported());
+  ipcMain.handle(browserChannels.browserImportedRemove, (_event, site: unknown): Promise<BrowserImportedSite[]> => {
+    if (typeof site !== "string" || site === "") return loginImporter.imported();
+    return loginImporter.removeImported(site);
   });
 }

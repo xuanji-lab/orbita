@@ -9,6 +9,7 @@ import {
   browserChannels,
   type BrowserHandoffOutcome,
   type BrowserImportCommitResult,
+  type BrowserImportedSite,
   type BrowserImportReadResult,
   type BrowserImportSource,
   type BrowserNavigateResult,
@@ -47,6 +48,11 @@ export const browserApi = {
     ipcRenderer.invoke(browserChannels.browserImportCommit, pendingId, sites),
   /** 丢弃读取结果（取消导入） */
   importCancel: (pendingId: string): Promise<void> => ipcRenderer.invoke(browserChannels.browserImportCancel, pendingId),
+  /** 已导入的网站（账本 + 此刻还有没有 cookie） */
+  imported: (): Promise<BrowserImportedSite[]> => ipcRenderer.invoke(browserChannels.browserImportedList),
+  /** 让内置浏览器退出这个网站并从清单移除，回新清单 */
+  removeImported: (site: string): Promise<BrowserImportedSite[]> =>
+    ipcRenderer.invoke(browserChannels.browserImportedRemove, site),
   onState: (listener: (state: BrowserWindowState) => void): (() => void) => {
     const handler = (_e: unknown, state: BrowserWindowState) => listener(state);
     ipcRenderer.on(browserChannels.browserState, handler);

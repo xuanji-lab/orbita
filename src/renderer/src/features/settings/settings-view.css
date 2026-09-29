@@ -466,6 +466,56 @@
   color: var(--color-text-tertiary);
 }
 
+/* 选网站时，已导入过的网站行内的标记：图标 + 字，不靠颜色 */
+.login-site-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+/* 已导入的网站：接在「已导入的网站」那一行下面，是那一行的内容——所以那一行不画分隔线，
+   分隔线挪到清单底下，清单与下一行（导入入口）之间才是分界 */
+.set-row:has(+ .login-imported) {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.login-imported {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: var(--space-2) 0 var(--space-3) var(--space-3);
+  list-style: none;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.login-imported-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) minmax(0, auto) auto;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 32px;
+}
+
+.login-imported-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* 账本记着、cookie 已经没了：图标 + 字说「已失效」，红色是第二信号 */
+.login-imported-meta[data-stale] {
+  color: var(--color-danger);
+}
+
+.login-imported-meta[data-stale] svg {
+  vertical-align: -2px;
+}
+
 .login-sites-empty {
   padding: var(--space-2) var(--space-2);
   font-size: var(--font-size-caption);

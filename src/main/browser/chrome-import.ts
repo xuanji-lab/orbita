@@ -22,11 +22,13 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
   BrowserImportCommitResult,
+  BrowserImportedSite,
   BrowserImportReadResult,
   BrowserImportSite,
   BrowserImportSource,
   BrowserImportSummary,
 } from "../../shared/browser.ts";
+import { readImportLedger, recordImports, writeImportLedger, type ImportLedgerEntry } from "./import-ledger.ts";
 
 // ── 浏览器表 ────────────────────────────────────────────────────────
 
@@ -375,16 +377,36 @@ export async function discoverImportSources(
   return sources;
 }
 
+/** 受管浏览器 cookie 库里已有的一条（Electron Cookie 里我们用得上的字段） */
+export interface StoredCookie {
+  name: string;
+  /** host-only 是主机名，域 cookie 带前导点 */
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+}
+
 /** cookie 写入目标（受管浏览器 partition），由 ipc.ts 注入 */
 export interface CookieWriteTarget {
   cookies: {
     set(details: ImportCookieDetails): Promise<void>;
+    /** 只用 `get({})` 取全部——已导入清单要按网站现查「还在不在」 */
+    get(filter: Record<string, never>): Promise<StoredCookie[]>;
+    remove(url: string, name: string): Promise<void>;
     flushStore(): Promise<void>;
   };
 }
 
+/** 删一条已存 cookie 要给的 url：协议随 secure，主机去掉前导点，路径用它自己的（路径不匹配删不掉） */
+export function storedCookieUrl(cookie: StoredCookie): string {
+  const host = (cookie.domain ?? "").replace(/^\./, "");
+  return `${cookie.secure === true ? "https" : "http"}://${host}${cookie.path ?? "/"}`;
+}
+
 export interface LoginImporterDeps {
   cookieTarget: () => CookieWriteTarget;
+  /** 导入账本（import-ledger.ts）的落盘路径：userData/browser-imports.json */
+  ledgerPath: string;
   /** 覆盖浏览器数据根目录（测试用）；默认 ~/Library/Application Support */
   appSupportDir?: string;
   /** 覆盖钥匙串读取（测试用） */
@@ -405,6 +427,8 @@ interface PendingSite {
 
 interface PendingImport {
   id: string;
+  /** 来源的显示名，导入成功后记进账本 */
+  source: { browserName: string; profileName: string };
   sites: Map<string, PendingSite>;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -420,6 +444,8 @@ const PENDING_TTL_MS = 10 * 60_000;
 export class LoginImporter {
   private readonly deps: LoginImporterDeps;
   private pending: PendingImport | null = null;
+  /** 账本的读-改-写串行化：导入与移除交错时后写的不能覆盖先写的 */
+  private ledgerQueue: Promise<unknown> = Promise.resolve();
 
   constructor(deps: LoginImporterDeps) {
     this.deps = deps;
@@ -492,8 +518,9 @@ export class LoginImporter {
       sites.set(site, group);
     }
 
+    const source = { browserName: browser.name, profileName: await this.profileName(browser, profileId) };
     const pendingId = randomUUID();
-    this.replacePending({ id: pendingId, sites, timer: this.armTtl(pendingId) });
+    this.replacePending({ id: pendingId, source, sites, timer: this.armTtl(pendingId) });
     const list: BrowserImportSite[] = [...sites.entries()]
       .map(([site, group]) => ({ site, count: group.cookies.length }))
       .sort((a, b) => (a.site < b.site ? -1 : a.site > b.site ? 1 : 0));
@@ -505,7 +532,7 @@ export class LoginImporter {
     if (pending === null || pending.id !== pendingId) return { ok: false, error: "no-pending" };
 
     const now = this.nowSeconds();
-    const toWrite: ImportCookieDetails[] = [];
+    const toWrite: { site: string; cookie: ImportCookieDetails }[] = [];
     let siteCount = 0;
     let skipped = 0;
     for (const site of selectedSites) {
@@ -516,24 +543,36 @@ export class LoginImporter {
       for (const cookie of group.cookies) {
         // 读取与导入之间可能隔了几分钟：恰好到期的按跳过
         if (cookie.expirationDate <= now) skipped += 1;
-        else toWrite.push(cookie);
+        else toWrite.push({ site, cookie });
       }
     }
 
     let imported = 0;
+    /** 至少写进一条的网站才记账——一条都没写进去的，说「已导入」就是假话 */
+    const landed = new Set<string>();
     if (toWrite.length > 0) {
       const target = this.deps.cookieTarget();
       for (let offset = 0; offset < toWrite.length; offset += WRITE_CONCURRENCY) {
         const batch = toWrite.slice(offset, offset + WRITE_CONCURRENCY);
-        const settled = await Promise.allSettled(batch.map((cookie) => target.cookies.set(cookie)));
-        for (const outcome of settled) {
-          if (outcome.status === "fulfilled") imported += 1;
-          else skipped += 1;
-        }
+        const settled = await Promise.allSettled(batch.map((item) => target.cookies.set(item.cookie)));
+        settled.forEach((outcome, index) => {
+          if (outcome.status === "fulfilled") {
+            imported += 1;
+            const item = batch[index];
+            if (item !== undefined) landed.add(item.site);
+          } else skipped += 1;
+        });
       }
       await target.cookies.flushStore();
     }
     this.discardPending(pending.id);
+    if (landed.size > 0) {
+      const importedAt = now * 1000;
+      // 记账失败不改写导入结果：cookie 已经写进去了，报「导入失败」是假话；丢的只是清单里的一行
+      await this.updateLedger((entries) => recordImports(entries, [...landed], pending.source, importedAt)).catch(
+        (error: unknown) => console.warn("[browser-import] 导入账本写入失败", error instanceof Error ? error.message : error),
+      );
+    }
     const summary: BrowserImportSummary = { imported, sites: siteCount, skipped };
     return { ok: true, summary };
   }
@@ -543,10 +582,68 @@ export class LoginImporter {
     this.discardPending(pendingId);
   }
 
+  /**
+   * 已导入清单：账本里的网站 + 受管浏览器此刻还有没有它的 cookie（按 siteGroupKey 同一套
+   * 分组现查）。cookie 全过期、被网站清掉，账本还在，present 为 false——设置页据此提示重新导入。
+   */
+  async imported(): Promise<BrowserImportedSite[]> {
+    if (process.platform !== "darwin") return [];
+    const entries = await this.ledgerSnapshot();
+    if (entries.length === 0) return [];
+    const stored = await this.deps.cookieTarget().cookies.get({});
+    const sitesWithCookies = new Set(stored.map((cookie) => siteGroupKey(cookie.domain ?? "")));
+    return entries.map((entry) => ({ ...entry, present: sitesWithCookies.has(entry.site) }));
+  }
+
+  /**
+   * 移除一个已导入的网站：删掉受管浏览器里这个网站的**全部** cookie（分不出导入的与浏览时
+   * 种的——要的效果就是「内置浏览器退出这个网站」），再从账本销掉。回新清单。
+   */
+  async removeImported(site: string): Promise<BrowserImportedSite[]> {
+    const target = this.deps.cookieTarget();
+    const stored = await target.cookies.get({});
+    const doomed = stored.filter((cookie) => siteGroupKey(cookie.domain ?? "") === site);
+    await Promise.all(doomed.map((cookie) => target.cookies.remove(storedCookieUrl(cookie), cookie.name)));
+    if (doomed.length > 0) await target.cookies.flushStore();
+    await this.updateLedger((entries) => entries.filter((entry) => entry.site !== site));
+    return this.imported();
+  }
+
+  /** 清除全部浏览器数据之后：cookie 已经全没了，账本跟着清空 */
+  async forgetImported(): Promise<void> {
+    await this.updateLedger(() => []);
+  }
+
   // ── 内部 ──────────────────────────────────────────────────────────
 
   private appSupportDir(): string {
     return this.deps.appSupportDir ?? join(homedir(), "Library", "Application Support");
+  }
+
+  /** profile 的显示名（Local State 的 info_cache）；读不出回落目录名，同下拉里的规则 */
+  private async profileName(browser: ImportableBrowser, profileId: string): Promise<string> {
+    try {
+      const localState = parseLocalState(await readFile(join(this.appSupportDir(), browser.userDataDir, "Local State"), "utf8"));
+      return localState.names.get(profileId) ?? profileId;
+    } catch {
+      return profileId;
+    }
+  }
+
+  /** 读账本也排进队列：正在写的那一笔落盘之后再读，清单不会少刚导入的网站 */
+  private ledgerSnapshot(): Promise<ImportLedgerEntry[]> {
+    const next = this.ledgerQueue.then(() => readImportLedger(this.deps.ledgerPath));
+    this.ledgerQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  private updateLedger(change: (entries: ImportLedgerEntry[]) => ImportLedgerEntry[]): Promise<void> {
+    const next = this.ledgerQueue.then(async () => {
+      const entries = await readImportLedger(this.deps.ledgerPath);
+      await writeImportLedger(this.deps.ledgerPath, change(entries));
+    });
+    this.ledgerQueue = next.catch(() => undefined);
+    return next;
   }
 
   private readSecret(service: string): Promise<string> {

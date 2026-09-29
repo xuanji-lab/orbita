@@ -235,7 +235,7 @@ void app.whenReady().then(async () => {
     },
     appName: app.getName(),
   });
-  registerBrowserIpc(browserSandbox, settings);
+  registerBrowserIpc(browserSandbox, settings, configDir);
   mainWindows.onLastClosed(() => browserSandbox.dispose());
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
