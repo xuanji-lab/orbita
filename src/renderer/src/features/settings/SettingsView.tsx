@@ -8,6 +8,7 @@ import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
 import type { ProviderDto } from "@shared/provider";
 import type {
+  BrowserImportedSite,
   BrowserImportReadError,
   BrowserImportSite,
   BrowserImportSource,
@@ -16,7 +17,8 @@ import type {
 import type { Workspace } from "@shared/workspace";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
-import { allShownTicked, setShown } from "./login-sites.ts";
+import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
+import { formatDay } from "./migration-groups.ts";
 import { InfoTip } from "./InfoTip";
 import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
@@ -522,16 +524,18 @@ function AttributionPreview(props: { enabled: boolean; language: Language }) {
  */
 function BrowserSettings() {
   const t = useT();
+  /** 清除全部浏览器数据会清空导入账本：计数一跳，已导入清单重新拉一次 */
+  const [clearedCount, setClearedCount] = useState(0);
   return (
     <div className="set-page">
       <SettingGroup label={t.settings.browserDownloads}>
         <DownloadDirectoryRow />
       </SettingGroup>
       <SettingGroup label={t.settings.browserData}>
-        <ClearBrowserDataRow />
+        <ClearBrowserDataRow onCleared={() => setClearedCount((count) => count + 1)} />
       </SettingGroup>
       {/* 登录状态导入只做了 macOS（钥匙串 + Chrome 存储格式）；别的平台不显示这一组 */}
-      {api.platform === "darwin" && <LoginImportSection />}
+      {api.platform === "darwin" && <LoginImportSection clearedCount={clearedCount} />}
     </div>
   );
 }
@@ -554,12 +558,37 @@ function sourceKey(source: BrowserImportSource): string {
 }
 
 /**
- * 登录状态导入（main/browser/chrome-import.ts）：选来源 → 读取（主进程弹钥匙串框）→
- * 勾网站导入。cookie 值不过 IPC，这里自始至终只拿「网站 + 条数」；默认一个都不勾——
+ * 登录状态导入（main/browser/chrome-import.ts）：上面是「已导入的网站」清单（导入账本 +
+ * 此刻还有没有 cookie），下面是导入入口：选来源 → 选择网站（主进程弹钥匙串框）→ 勾网站导入。
+ * cookie 值不过 IPC，这里自始至终只拿「网站 + 条数」；默认一个都不勾——
  * 把选择权留给人，是把邮箱、银行登录交给 agent 之前的最后一道闸。
+ *
+ * 清单先于入口：打开这一页要先回答「我把哪些网站的登录交出去了」，导入是之后才做的事。
  */
-function LoginImportSection() {
+function LoginImportSection(props: { clearedCount: number }) {
   const t = useT();
+  const [imported, setImported] = useState<
+    { kind: "loading" } | { kind: "ready"; list: BrowserImportedSite[] } | { kind: "error" }
+  >({ kind: "loading" });
+  const [removeError, setRemoveError] = useState(false);
+  const refreshImported = () => {
+    void api.browser
+      .imported()
+      .then((list) => setImported({ kind: "ready", list }))
+      .catch(() => setImported({ kind: "error" }));
+  };
+  // 挂载时拉一次；清除全部浏览器数据之后（账本已清空）再拉一次
+  useEffect(() => {
+    refreshImported();
+  }, [props.clearedCount]);
+  const removeImported = (site: string) => {
+    setRemoveError(false);
+    void api.browser
+      .removeImported(site)
+      .then((list) => setImported({ kind: "ready", list }))
+      .catch(() => setRemoveError(true));
+  };
+  const importedSites = new Set(imported.kind === "ready" ? imported.list.map((entry) => entry.site) : []);
   const [sources, setSources] = useState<{ kind: "loading" } | { kind: "ready"; list: BrowserImportSource[] }>({
     kind: "loading",
   });
@@ -617,10 +646,13 @@ function LoginImportSection() {
     setPending(null);
     setPhase("idle");
     if ("error" in outcome) setError(outcome.error);
-    else setDone(outcome.summary);
+    else {
+      setDone(outcome.summary);
+      refreshImported();
+    }
   };
 
-  // ── 第一行：来源下拉 + 读取 ──
+  // ── 导入入口：来源下拉 + 选择网站 ──
   const menuItems: MenuItem[] =
     sources.kind === "ready"
       ? sources.list.map((source) => ({
@@ -648,6 +680,28 @@ function LoginImportSection() {
 
   return (
     <SettingGroup label={t.settings.loginImportGroup}>
+      <SettingRow
+        name={t.settings.loginImported}
+        info={t.settings.loginImportedInfo}
+        note={
+          removeError && (
+            <span role="alert" className="set-row-error">
+              {t.settings.loginImportedRemoveFailed}
+            </span>
+          )
+        }
+      >
+        {imported.kind === "loading" ? (
+          <span className="set-row-hint">…</span>
+        ) : imported.kind === "error" ? (
+          <span className="set-row-hint">{t.settings.unavailable}</span>
+        ) : imported.list.length === 0 ? (
+          <span className="set-row-hint">{t.settings.loginImportedNone}</span>
+        ) : null}
+      </SettingRow>
+      {imported.kind === "ready" && imported.list.length > 0 && (
+        <ImportedSitesList sites={imported.list} onRemove={removeImported} />
+      )}
       <SettingRow name={t.settings.loginImport} info={t.settings.loginImportInfo} note={note}>
         {sources.kind === "loading" ? (
           <span className="set-row-hint">…</span>
@@ -677,6 +731,7 @@ function LoginImportSection() {
       {(phase === "picking" || phase === "importing") && pending !== null && (
         <LoginSitesPanel
           sites={pending.sites}
+          imported={importedSites}
           busy={phase === "importing"}
           onImport={(ticked) => {
             setPhase("importing");
@@ -700,11 +755,51 @@ function LoginImportSection() {
 }
 
 /**
+ * 已导入的网站：一行一个网站——名字（mono，机器事实）、来源与导入日期、「移除」。
+ * cookie 已不在（全过期 / 被网站清掉）的行把来源换成「已失效 · 请重新导入」：清单只说真话，
+ * 账本记过不等于此刻还登录着。移除不二次确认：删的是内置浏览器里的登录，重新导入就回来。
+ */
+function ImportedSitesList(props: { sites: BrowserImportedSite[]; onRemove: (site: string) => void }) {
+  const t = useT();
+  const now = Date.now();
+  return (
+    <ul className="login-imported" aria-label={t.settings.loginImported}>
+      {props.sites.map((entry) => (
+        <li key={entry.site} className="login-imported-row">
+          <span className="login-site-name" title={entry.site}>
+            {entry.site}
+          </span>
+          {entry.present ? (
+            <span className="login-imported-meta">
+              {t.settings.loginImportedFrom(`${entry.browserName} · ${entry.profileName}`, formatDay(entry.importedAt, now))}
+            </span>
+          ) : (
+            <span className="login-imported-meta" data-stale="">
+              <Icon name="triangle-alert" size={12} /> {t.settings.loginImportedStale}
+            </span>
+          )}
+          <button
+            type="button"
+            className="mg-textbtn"
+            title={t.settings.loginImportedRemoveTitle(entry.site)}
+            onClick={() => props.onRemove(entry.site)}
+          >
+            {t.settings.loginImportedRemove}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
  * 网站清单：搜索框（右侧「全选 / 全不选」，只作用于搜索结果）+ 复选框行 + 底部「导入所选 N 个网站」。默认一个都不勾；
  * 条数在每行末尾（mono，机器事实）。面板限高内滚，几十个网站也不把设置页撑长。
+ * 已导入过的网站排最前、行内标「已导入」——重新读取时不会让人以为它没导进去；勾上它 = 重新导入（刷新）。
  */
 function LoginSitesPanel(props: {
   sites: BrowserImportSite[];
+  imported: ReadonlySet<string>;
   busy: boolean;
   onImport: (ticked: string[]) => void;
   onCancel: () => void;
@@ -713,7 +808,9 @@ function LoginSitesPanel(props: {
   const [query, setQuery] = useState("");
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const needle = query.trim().toLowerCase();
-  const shown = props.sites.filter((site) => needle === "" || site.site.toLowerCase().includes(needle));
+  const shown = importedFirst(props.sites, props.imported).filter(
+    (site) => needle === "" || site.site.toLowerCase().includes(needle),
+  );
   const shownNames = shown.map((site) => site.site);
   const allTicked = allShownTicked(shownNames, ticked);
   const toggle = (site: string) => {
@@ -756,6 +853,11 @@ function LoginSitesPanel(props: {
             <span className="login-site-name" title={site.site}>
               {site.site}
             </span>
+            {props.imported.has(site.site) && (
+              <span className="login-site-tag">
+                <Icon name="check" size={11} /> {t.settings.loginImportAlready}
+              </span>
+            )}
             <span className="login-site-count">{t.settings.loginImportSiteCount(site.count)}</span>
           </label>
         ))}
@@ -855,7 +957,7 @@ function DownloadDirectoryRow() {
  * 清除全部浏览器数据：两段式确认（同 Skills 面清理引用的写法），清完在名字下方留一行结果。
  * 不可撤销，所以危险键只在第二段出现。
  */
-function ClearBrowserDataRow() {
+function ClearBrowserDataRow(props: { onCleared: () => void }) {
   const t = useT();
   const [phase, setPhase] = useState<"idle" | "confirming" | "clearing" | "done">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -865,7 +967,10 @@ function ClearBrowserDataRow() {
     setError(null);
     void api.browser
       .clearData()
-      .then(() => setPhase("done"))
+      .then(() => {
+        setPhase("done");
+        props.onCleared();
+      })
       .catch((cause: unknown) => {
         setPhase("idle");
         setError(cause instanceof Error ? cause.message : String(cause));

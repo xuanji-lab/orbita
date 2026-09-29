@@ -321,8 +321,8 @@ export const zh: Messages = {
     loginImportInfo:
       "把 Chrome、Edge、Brave、Arc 或 Chromium 的登录 cookie 带进内置浏览器 · 只导入你勾选的网站 · 读取时会请求 macOS 钥匙串授权 · 有些网站仍需重新登录 · 不改动你自己的浏览器",
     loginImportNoBrowsers: "没有找到存有登录信息的浏览器",
-    loginImportRead: "读取",
-    loginImportReadTitle: "读取会请求 macOS 钥匙串授权",
+    loginImportRead: "选择网站…",
+    loginImportReadTitle: "列出网站前会请求 macOS 钥匙串授权",
     loginImportReading: "等待钥匙串授权…",
     loginImportSource: "导入来源",
     loginImportSitesAria: "待导入的网站",
@@ -336,6 +336,16 @@ export const zh: Messages = {
       skipped > 0
         ? `已导入 ${imported} 条（${sites} 个网站），跳过 ${skipped} 条`
         : `已导入 ${imported} 条（${sites} 个网站）`,
+    loginImportAlready: "已导入",
+    loginImported: "已导入的网站",
+    loginImportedInfo:
+      "已把登录带进内置浏览器的网站 · 智能体在这些网站上以你的身份登录 · 移除即让内置浏览器退出该网站",
+    loginImportedNone: "还没有导入任何网站",
+    loginImportedFrom: (source, day) => `来自 ${source} · ${day}`,
+    loginImportedStale: "已失效 · 请重新导入",
+    loginImportedRemove: "移除",
+    loginImportedRemoveTitle: (site) => `让内置浏览器退出 ${site}`,
+    loginImportedRemoveFailed: "未能移除该网站",
     loginImportErrors: {
       denied: "钥匙串授权被拒绝 · 没有导入任何内容",
       missing: "所选浏览器的个人资料已不可用，请重新选择来源",

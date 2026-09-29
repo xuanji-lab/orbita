@@ -351,8 +351,8 @@ export const en = {
     loginImportInfo:
       "Brings sign-in cookies from Chrome, Edge, Brave, Arc or Chromium into the built-in browser · only the sites you tick are imported · reading asks macOS to unlock the keychain · some sites will still ask you to sign in again · your own browser is not changed",
     loginImportNoBrowsers: "No browser with saved cookies was found",
-    loginImportRead: "Read",
-    loginImportReadTitle: "Reading asks macOS for the browser's keychain key",
+    loginImportRead: "Choose sites…",
+    loginImportReadTitle: "Listing the sites asks macOS for the browser's keychain key",
     loginImportReading: "Waiting for the keychain…",
     loginImportSource: "Import source",
     loginImportSitesAria: "Sites to import",
@@ -366,6 +366,16 @@ export const en = {
     loginImportDone: (imported: number, sites: number, skipped: number) =>
       `Imported ${imported} cookie${imported === 1 ? "" : "s"} from ${sites} site${sites === 1 ? "" : "s"}` +
       (skipped > 0 ? ` · ${skipped} skipped` : ""),
+    loginImportAlready: "Imported",
+    loginImported: "Imported sites",
+    loginImportedInfo:
+      "Sites whose sign-in you brought into the built-in browser · the agent is signed in as you there · remove a site to sign the built-in browser out of it",
+    loginImportedNone: "None yet",
+    loginImportedFrom: (source: string, day: string) => `From ${source} · ${day}`,
+    loginImportedStale: "Signed out · import it again",
+    loginImportedRemove: "Remove",
+    loginImportedRemoveTitle: (site: string) => `Sign the built-in browser out of ${site}`,
+    loginImportedRemoveFailed: "Could not remove that site",
     loginImportErrors: {
       denied: "The keychain request was declined · nothing was imported",
       missing: "That browser profile is no longer available · pick the source again",
