@@ -39,6 +39,7 @@ import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
+import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { planBranchCut } from "./branch-cut.ts";
@@ -735,7 +736,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 下面的订阅置位。预检压缩（prompt 前那一次）发生时 echoedAt 已有、sawAssistant
   // 还是 false——compaction_end 据此盖回显的时间戳，界碑落到刚发那句之前。
   const turn: TurnTiming = { echoedAt: null, sawAssistant: false };
+  const observeTurnFailure = createTurnFailureTracker();
   const unsubscribe = session.subscribe((event) => {
+    // 不重试的模型错误（400 / 401 …）只留下一条空 error 回答，我们不落盘也不渲染它——
+    // 回合终局时补报一条回合级失败，让错误挂在这轮没得到回答的话下面（见 ./turn-failure.ts）
+    const turnFailure = observeTurnFailure(event);
+    if (turnFailure !== null) {
+      send({ type: "failed", sessionId: command.sessionId, message: turnFailure, turn: true });
+    }
     const adaptable = asAdaptable(event);
     if (adaptable) {
       // 排队消息的「迟到显形」留在原处：本地没回显过的 user message_start 当场造
