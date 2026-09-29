@@ -93,6 +93,7 @@ import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-men
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
+import { ImageThumb } from "../../shell/ImageThumb";
 import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
@@ -3586,6 +3587,8 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
  * 一条横滑带，行标识报总张数，点开 Lightbox；组内单图退化大图形态。跑动中卡片
  * 未落（details 随终态帧来）时行标识以省略号占位。
  */
+const GALLERY_THUMB_SIZE = 120;
+
 function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);
@@ -3607,19 +3610,23 @@ function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
           {props.cards.length === 0 ? "…" : t.chat.images(total)}
         </span>
       </div>
-      <div style={{ display: "flex", gap: "var(--space-2)", overflowX: "auto", padding: "var(--space-1) 0", minWidth: 0 }}>
-        {images.map((img, i) => (
-          <figure key={`show-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0, flex: "0 0 auto" }}>
-            <button type="button" aria-label={t.lightbox.open} onClick={() => setViewing(i)} style={ZOOM_BUTTON_STYLE}>
+      {total === 1 ? (
+        images.map((img, i) => (
+          <figure key={`show-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
+            <button
+              type="button"
+              aria-label={t.lightbox.open}
+              onClick={() => setViewing(i)}
+              style={{ ...ZOOM_BUTTON_STYLE, justifySelf: "start" }}
+            >
               <img
                 src={imageSrc({ type: "image", data: img.data, mimeType: img.mimeType })}
                 alt={img.name}
                 style={{
                   display: "block",
-                  width: total === 1 ? "100%" : 200,
-                  height: total === 1 ? undefined : 136,
+                  maxWidth: "100%",
                   maxHeight: 320,
-                  objectFit: total === 1 ? "contain" : "cover",
+                  objectFit: "contain",
                   borderRadius: "var(--radius-md)",
                   border: "1px solid var(--color-border-subtle)",
                   background: "var(--color-bg-panel)",
@@ -3632,14 +3639,37 @@ function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
                 color: "var(--color-text-tertiary)",
                 fontFamily: "var(--font-family-mono)",
                 overflowWrap: "anywhere",
-                width: 200,
               }}
             >
               {img.name}
             </figcaption>
           </figure>
-        ))}
-      </div>
+        ))
+      ) : (
+        // 多图：与 composer 附图同一张卡（方形裁切 + 单行文件名），顶端对齐，横向滑动
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "var(--space-3)",
+            overflowX: "auto",
+            padding: "var(--space-1) 0",
+            minWidth: 0,
+          }}
+        >
+          {images.map((img, i) => (
+            <ImageThumb
+              key={`show-${i}`}
+              src={imageSrc({ type: "image", data: img.data, mimeType: img.mimeType })}
+              name={img.name}
+              size={GALLERY_THUMB_SIZE}
+              openLabel={t.lightbox.open}
+              onOpen={() => setViewing(i)}
+              caption
+            />
+          ))}
+        </div>
+      )}
       {viewing !== null && (
         <ImageLightbox images={lightboxImages} startIndex={viewing} onClose={() => setViewing(null)} />
       )}
