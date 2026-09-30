@@ -1030,7 +1030,8 @@ export const en = {
     noWorkspaceFolder: "Choose a workspace folder first",
     noRunningToCompact: "No running task to compact",
     scanTimeout: "The leftover scan didn't finish in time — marked done without a checklist.",
-    scanUnreadable: "Couldn't read the scan result — marked done without a checklist.",
+    scanUnreadable:
+      "Couldn't read the scan result — marked done without a checklist. If this keeps happening, try a different chore model in Settings.",
     scanNothing: "The leftover scan found nothing — marked done.",
     queuedBeforeWrapUp: "There are queued messages in this task — send or withdraw them before wrapping up.",
     noAgentSession: "This task cannot be scanned (no agent session) — marked done directly.",
