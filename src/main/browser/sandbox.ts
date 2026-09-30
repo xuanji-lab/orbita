@@ -28,6 +28,7 @@ import {
   BrowserWindow,
   Notification,
   WebContentsView,
+  nativeTheme,
   session,
   shell,
   type BrowserWindowConstructorOptions,
@@ -64,6 +65,18 @@ export const BROWSER_TOOLBAR_HEIGHT = 78;
 export const BROWSER_HANDOFF_BAR_HEIGHT = 44;
 /** 交接等太久自动取消：agent 的一轮不能被一张没人理的卡永远挂着 */
 const HANDOFF_TIMEOUT_MS = 30 * 60_000;
+
+/* 空白 tab 的不透明垫底色：没加载过任何页面的 WebContentsView 是透明的，而所有 tab
+ * 叠在同一块区域上——不垫底色，空白的用户 tab 会透出下面 agent tab 的页面。
+ * 两个值对应设计系统 tokens/colors.css 的 `--color-bg-app`：明主题壳底与 Ink 档
+ * （也是 system 的深色落点）；前者与 index.ts 里非 macOS 窗口的底色一致。 */
+const PAGE_BACKGROUND_LIGHT = "#f3f4f1";
+const PAGE_BACKGROUND_DARK = "#1b1b1b";
+
+/** 垫底色跟系统深浅走 */
+function pageBackground(): string {
+  return nativeTheme.shouldUseDarkColors ? PAGE_BACKGROUND_DARK : PAGE_BACKGROUND_LIGHT;
+}
 
 /** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开 */
 const PAGE_PREFERENCES = {
@@ -146,6 +159,12 @@ export class BrowserSandbox {
    * 保存框），读设置是异步的——建窗时读一次，用户改了（setUserDownloadDir）就更新。
    */
   private userDownloads = "";
+
+  /** 主题切换时给所有还活着的 tab 重铺垫底色（已加载页面的被页面盖住，重设无副作用） */
+  private readonly reapplyPageBackground = (): void => {
+    const background = pageBackground();
+    for (const tab of this.tabs.values()) tab.view.setBackgroundColor(background);
+  };
 
   constructor(deps: BrowserSandboxDeps) {
     this.deps = deps;
@@ -429,6 +448,7 @@ export class BrowserSandbox {
 
   /** 真正销毁：最后一个主窗口关闭、或应用退出时调用 */
   dispose(): void {
+    nativeTheme.off("updated", this.reapplyPageBackground);
     for (const popup of this.popups) if (!popup.isDestroyed()) popup.destroy();
     this.popups.clear();
     for (const tab of this.tabs.values()) {
@@ -497,6 +517,8 @@ export class BrowserSandbox {
       ...(await this.deps.toolbarWindowOptions()),
     });
     this.window = window;
+    // 与 dispose() 里的 off 一一对应：窗口销毁后不再吃主题事件
+    nativeTheme.on("updated", this.reapplyPageBackground);
 
     window.on("resize", () => this.layout());
     // 窗口标题跟网页走，不让工具条页面的 <title> 盖掉它
@@ -520,6 +542,9 @@ export class BrowserSandbox {
     const window = this.window;
     if (window === null) throw new Error("浏览器窗口不在");
     const view = new WebContentsView({ webPreferences: PAGE_PREFERENCES });
+    // 没加载过页面的视图是**透明**的（不是白的）：所有 tab 铺满同一块区域，不垫一层
+    // 不透明底色，空白 tab 会透出下面别的 tab 的页面
+    view.setBackgroundColor(pageBackground());
     const tab: BrowserTab = {
       id: randomUUID(),
       owner,
@@ -554,7 +579,7 @@ export class BrowserSandbox {
     this.guardContents(contents);
     this.wireShortcuts(contents);
     // 网页视图不预载 about:blank：它会成为历史的第一条，首次导航后「后退」就是亮的、
-    // 点了退到一张空白页（第一刀 CDP 冒烟抓到的）。没加载过任何页面的视图本来就是白的
+    // 点了退到一张空白页（第一刀 CDP 冒烟抓到的）。空白态的观感靠上面的不透明垫底色
     this.push();
     return tab;
   }
