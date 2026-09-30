@@ -910,7 +910,7 @@ export const en = {
     fileCardUndone: "Undone",
     fileCardWebPage: "Web page",
     openInOrbita: "Open in orbita",
-    openDefaultApp: "System browser",
+    revealArtifact: "Show in folder",
     worked: "Worked",
     thought: "thought",
     lines: (n: number) => `${n} lines`,

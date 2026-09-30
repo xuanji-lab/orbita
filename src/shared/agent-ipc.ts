@@ -164,8 +164,8 @@ export const ipcChannels = {
   sessionUndo: "session:undo",
   /** 轮尾产物打开方式一：在内置浏览器「你的」tab 打开网页文件（仅会话文件账里的 .html/.htm/.svg） */
   sessionOpenArtifactInBrowser: "session:open-artifact-in-browser",
-  /** 轮尾产物打开方式二：用系统默认应用打开（仅会话文件账里记过的文件） */
-  sessionOpenArtifactDefault: "session:open-artifact-default",
+  /** 轮尾产物打开方式二：在系统文件管理器里定位它（仅会话文件账里记过的文件） */
+  sessionRevealArtifact: "session:reveal-artifact",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */

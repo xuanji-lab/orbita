@@ -836,7 +836,7 @@ export const zh: Messages = {
     fileCardUndone: "已撤销",
     fileCardWebPage: "网页",
     openInOrbita: "在 orbita 打开",
-    openDefaultApp: "默认浏览器",
+    revealArtifact: "打开文件位置",
     worked: "用时",
     thought: "思考",
     lines: (n) => `${n} 行`,

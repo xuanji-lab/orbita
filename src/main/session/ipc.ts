@@ -173,10 +173,11 @@ export function registerSessionIpc(
     }
     await openArtifactInBrowser(path);
   });
-  ipcMain.handle(ipcChannels.sessionOpenArtifactDefault, async (_event, id: string, path: string) => {
+  // 第二个出口是「打开文件所在位置」而不是「默认浏览器」（用户 2026-10-01 裁决）：
+  // 默认浏览器与内置浏览器是同一件事的两个版本，定位文件才是另一种需要（拷走、拖进别的应用）
+  ipcMain.handle(ipcChannels.sessionRevealArtifact, async (_event, id: string, path: string) => {
     await knownArtifact(id, path);
-    const failure = await shell.openPath(path);
-    if (failure !== "") throw new Error(`Couldn't open ${path}: ${failure}`);
+    shell.showItemInFolder(path);
   });
 
   /**

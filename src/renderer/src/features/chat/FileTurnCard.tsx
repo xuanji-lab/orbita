@@ -228,7 +228,7 @@ export function FileTurnCard(props: {
 /**
  * 轮尾产物行（.html / .htm / .svg）：左图标、名称 + 类型「网页」（zcode 参考的
  * 形态），末端两个按钮——「在 Orbita 浏览器打开」（网页产物的默认出口，沙盒里
- * 还能开着 DevTools 看）与「用默认浏览器打开」。主进程按会话文件账白名单校验。
+ * 还能开着 DevTools 看）与「打开文件所在位置」。主进程按会话文件账白名单校验。
  */
 function ArtifactRow(props: { path: string; cwd: string | null; sessionId: string }) {
   const t = useT();
@@ -238,9 +238,9 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
       console.error("[file-card] 内置浏览器打开失败", cause);
     });
   };
-  const openDefault = () => {
-    void api.session.openArtifactDefault(props.sessionId, props.path).catch((cause: unknown) => {
-      console.error("[file-card] 默认应用打开失败", cause);
+  const reveal = () => {
+    void api.session.revealArtifact(props.sessionId, props.path).catch((cause: unknown) => {
+      console.error("[file-card] 定位文件失败", cause);
     });
   };
   const button: React.CSSProperties = {
@@ -273,9 +273,9 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
         <Icon name="arrow-up-right" size={11} strokeWidth={1.8} />
         {t.chat.openInOrbita}
       </button>
-      <button type="button" style={button} onClick={openDefault} title={t.chat.openDefaultApp}>
-        <Icon name="external-link" size={11} strokeWidth={1.8} />
-        {t.chat.openDefaultApp}
+      <button type="button" style={button} onClick={reveal} title={t.chat.revealArtifact}>
+        <Icon name="folder-open" size={11} strokeWidth={1.8} />
+        {t.chat.revealArtifact}
       </button>
     </div>
   );

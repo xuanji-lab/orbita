@@ -90,7 +90,7 @@ export const sessionApi = {
   /** 轮尾产物在内置浏览器打开（仅会话文件账里的网页文件） */
   openArtifactInBrowser: (id: string, path: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionOpenArtifactInBrowser, id, path),
-  /** 轮尾产物用系统默认应用打开（仅会话文件账里记过的文件） */
-  openArtifactDefault: (id: string, path: string): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionOpenArtifactDefault, id, path),
+  /** 轮尾产物在系统文件管理器里定位（仅会话文件账里记过的文件） */
+  revealArtifact: (id: string, path: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionRevealArtifact, id, path),
 };
