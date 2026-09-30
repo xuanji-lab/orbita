@@ -139,3 +139,48 @@ test("不认识的消息安静丢弃：坏 JSON、非对象 JSON、没见过的 
   assert.deepEqual(feed(protocol, JSON.stringify({ type: "conversation.item.created", item: {} })), []);
   assert.deepEqual(feed(protocol, JSON.stringify({ type: "conversation.item.input_audio_transcription.delta" })), []);
 });
+
+/** 真 key 日志里 delta 的样子（2026-10-01）：text 是说定的前缀，stash 是还会变的尾巴，两者不重叠 */
+function realDelta(itemId: string, text: string, stash: string | null): string {
+  return JSON.stringify({
+    type: "conversation.item.input_audio_transcription.delta",
+    item_id: itemId,
+    content_index: 0,
+    text,
+    ...(stash === null ? {} : { stash }),
+  });
+}
+
+test("真 key 形状：这句当前的样子 = text + stash；短句全在 stash 里时也要立刻显示", () => {
+  const protocol = createStepfunProtocol("sk-test");
+  // 短句：text 一直为空，字全在 stash——只读 text 会整句看不到
+  assert.deepEqual(feed(protocol, realDelta("a", "", "测试测")), [{ kind: "transcript", text: "测试测", final: false }]);
+  // 长句：前缀陆续说定，尾巴还在 stash
+  assert.deepEqual(feed(protocol, realDelta("a", "测试测试，", "你好你")), [
+    { kind: "transcript", text: "测试测试，你好你", final: false },
+  ]);
+  // 定稿前最后一个 delta：没有 stash 字段
+  assert.deepEqual(feed(protocol, realDelta("a", "测试测试，你好你好。", null)), [
+    { kind: "transcript", text: "测试测试，你好你好。", final: false },
+  ]);
+});
+
+test("结束时：服务端已报开口、文字还没到的那句也要等，不能在上一句定稿时就收尾", () => {
+  const protocol = createStepfunProtocol("sk-test");
+  feed(protocol, realDelta("a", "", "测试测试"));
+  // 第二句：服务端先报开口，文字要过几秒才到（长句时识别落后说话十几秒）
+  assert.deepEqual(
+    feed(protocol, JSON.stringify({ type: "input_audio_buffer.speech_started", audio_start_ms: 3904, item_id: "b" })),
+    [],
+  );
+  protocol.stopFrame();
+  // 第一句定稿：第二句还没定稿，不能报结束
+  assert.deepEqual(feed(protocol, completed("a", "测试测试。")), [
+    { kind: "transcript", text: "测试测试。", final: false },
+  ]);
+  feed(protocol, realDelta("b", "", "你好你好"));
+  assert.deepEqual(feed(protocol, completed("b", "你好你好。")), [
+    { kind: "transcript", text: "测试测试。你好你好。", final: true },
+    { kind: "ended" },
+  ]);
+});

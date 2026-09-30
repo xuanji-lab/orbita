@@ -5,9 +5,11 @@
  * input_audio_buffer.commit，入站按 item（一句话）给增量与定稿。
  *
  * stepaudio-2.5-asr-stream 的语义要点（文档 + 需真 key 复核的点见 git log）：
- * - `conversation.item.input_audio_transcription.delta` 的 text 是**该 item 截止当前的累计
- *   全量文本**（含对前文的纠错），要整体替换、不能追加；末尾可能被改写的部分在 stash 里
- *   （已含在 text 中，只是给 UI 区分样式用的，这里不碰）。
+ * - `conversation.item.input_audio_transcription.delta`：**这句话当前的样子 = text + stash**，
+ *   每个 delta 都整体替换、不追加。text 只是已经说定的前缀，stash 是还可能被改写的尾巴，
+ *   **两者不重叠**——文档说 stash 含在 text 里，2026-10-01 真 key 日志证明不是：短句整句都在
+ *   stash 里、text 为空，直到这句定稿才一次性挪进 text。只读 text 的后果是短句全程看不到字、
+ *   长句要等前缀陆续定下来才「突然开始流式」，结束时还没定稿的尾巴整个丢掉。
  * - `…completed` 的 transcript 是该 item 的最终文本（full_rerun_on_commit=true 时是二遍
  *   纠错后的），之后这个 item 不再变。
  * - 错误码里的 `max_idle_timeout` 是「空闲超时」：听写的人停下来想，撞上它当**正常结束**
@@ -120,10 +122,19 @@ export function createStepfunProtocol(apiKey: string): DictationProtocol {
       const itemId = typeof record["item_id"] === "string" ? record["item_id"] : "";
       if (itemId === "") return [];
 
+      // 服务端听到开口就登记这句：它的文字可能好几秒后才到（长句时服务端识别会落后说话十几秒），
+      // 早登记，结束时「所有句子都定稿了吗」才不会漏掉它
+      if (type === "input_audio_buffer.speech_started") {
+        item(itemId);
+        return [];
+      }
       if (type === "conversation.item.input_audio_transcription.delta") {
-        const text = record["text"];
-        if (typeof text !== "string") return [];
-        item(itemId).text = text; // 整体替换（含纠错），不追加
+        const settledPart = record["text"];
+        const tentative = record["stash"];
+        if (typeof settledPart !== "string" && typeof tentative !== "string") return [];
+        // 整体替换（含纠错），不追加：说定的前缀 + 还会变的尾巴
+        item(itemId).text =
+          (typeof settledPart === "string" ? settledPart : "") + (typeof tentative === "string" ? tentative : "");
         return [transcript()];
       }
       if (type === "conversation.item.input_audio_transcription.completed") {
