@@ -6,34 +6,40 @@ import type { RevertPlan, UndoPlan } from "@shared/revert";
 
 /**
  * 回退 / 撤销的确认框 —— 「直接撤回，不整七七八八的。但一定要提醒用户」
- * （2026-11 用户裁决）：不拦截执行，把后果说全——
+ * （2026-11 用户裁决）：不拦截执行，把后果说全。
  *
- *   1. 将恢复 / 将删除（回退前不存在）的文件清单
- *   2. **警示组**（danger 色、单独一组）：你的修改也会一并撤回——磁盘当前内容 ≠
- *      快照记录的 agent 改完内容的文件；撤销第 N 轮时后续轮次也改过的同一文件
- *   3. 一句「shell 命令改过的文件不会回退」——bash 的改动不在快照账里，如实说明
- *
- * 落盘文件多时清单可滚（maxHeight + scroll），焦点进框即盯确认键——回退是
- * 破坏性动作，主按钮走 danger。
+ * 提醒分三档（设计系统「每个颜色只有一个职责」：红 = 失败，不是「注意」）：
+ *   信息（最弱）：tertiary 文字、无底色——shell 不回退的说明、无法回退的清单。
+ *   注意（中）：triangle-alert 图标 + primary 文字 + bg-muted 分组底——「你的修改
+ *     也会一并撤回」「后续轮次也改过这些文件」。不用红也不用琥珀（琥珀 = 运行中）。
+ *   危险（最强）：只给执行键（危险红字、hover danger-soft）与真正的失败报错。
+ * 三档的样式常量集中在 CAUTION_* 一处——若设计系统将来立 caution token，这里
+ * 一处替换。
  */
 
-/** 清单里的一行路径：mono、可截断（目录淡、文件名亮）。 */
-function PathRow(props: { path: string; note?: string; danger?: boolean }) {
+/** 注意档（中）：图标 + primary 文字；分组底用 bg-muted。 */
+const CAUTION = {
+  icon: "var(--color-text-primary)",
+  text: "var(--color-text-primary)",
+  groupBg: "var(--color-bg-muted)",
+  label: "var(--color-text-secondary)",
+} as const;
+
+/** 清单里的一行路径：mono、可截断（目录淡、文件名亮）。tone 决定图标与文字。 */
+function PathRow(props: { path: string; tone: "normal" | "caution" | "info" }) {
   const normalized = props.path.replaceAll("\\", "/");
   const name = normalized.split("/").filter(Boolean).pop() ?? normalized;
   const dir = normalized.slice(0, normalized.length - name.length);
+  const color = props.tone === "caution" ? CAUTION.text : props.tone === "info" ? "var(--color-text-tertiary)" : "var(--color-text-primary)";
+  const iconColor = props.tone === "caution" ? CAUTION.icon : "var(--color-text-tertiary)";
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        minWidth: 0,
-        color: props.danger === true ? "var(--color-danger)" : "var(--color-text-primary)",
-      }}
-    >
-      <span style={{ flex: "0 0 auto" }}>
-        <Icon name={props.danger === true ? "triangle-alert" : "file-text"} size={12} strokeWidth={1.8} />
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0, color }}>
+      <span style={{ flex: "0 0 auto", color: iconColor }}>
+        <Icon
+          name={props.tone === "caution" ? "triangle-alert" : props.tone === "info" ? "info" : "file-text"}
+          size={12}
+          strokeWidth={1.8}
+        />
       </span>
       <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
         <span style={{ fontFamily: "var(--font-family-mono)", whiteSpace: "nowrap" }}>{name}</span>
@@ -54,42 +60,50 @@ function PathRow(props: { path: string; note?: string; danger?: boolean }) {
           </span>
         )}
       </span>
-      {props.note !== undefined && (
-        <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
-          {props.note}
-        </span>
-      )}
     </div>
   );
 }
 
-/** 一组文件（组标题 + 清单；空组不渲染）。 */
+/** 一组文件（组标题 + 清单；空组不渲染）。caution 组带 bg-muted 分组底。 */
 function PathGroup(props: {
   title: string;
   paths: readonly string[];
   note?: string;
-  danger?: boolean;
-  noteOf?: (path: string) => string | undefined;
+  tone: "normal" | "caution" | "info";
 }) {
   if (props.paths.length === 0) return null;
+  const caution = props.tone === "caution";
   return (
-    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+    <div
+      style={{
+        display: "grid",
+        gap: "var(--space-1)",
+        minWidth: 0,
+        ...(caution ? { background: CAUTION.groupBg, borderRadius: "var(--radius-md)", padding: "var(--space-2) var(--space-3)" } : {}),
+      }}
+    >
       <div
         style={{
           fontSize: "var(--font-size-micro)",
           textTransform: "uppercase",
           letterSpacing: "0.06em",
           fontFamily: "var(--font-family-mono)",
-          color: props.danger === true ? "var(--color-danger)" : "var(--color-text-tertiary)",
+          color: caution ? CAUTION.label : "var(--color-text-tertiary)",
         }}
       >
         {props.title}
       </div>
       {props.paths.map((path) => (
-        <PathRow key={path} path={path} danger={props.danger} note={props.noteOf?.(path)} />
+        <PathRow key={path} path={path} tone={props.tone} />
       ))}
       {props.note !== undefined && (
-        <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+        <p
+          style={{
+            margin: 0,
+            fontSize: "var(--font-size-caption)",
+            color: caution ? "var(--color-text-secondary)" : "var(--color-text-tertiary)",
+          }}
+        >
           {props.note}
         </p>
       )}
@@ -161,7 +175,7 @@ function DialogShell(props: {
             borderBottom: "1px solid var(--color-border-subtle)",
           }}
         >
-          <span style={{ color: "var(--color-danger)" }}>
+          <span style={{ color: "var(--color-text-secondary)" }}>
             <Icon name="rotate-ccw" size={16} strokeWidth={2} />
           </span>
           <span style={{ fontWeight: 650, fontSize: "var(--font-size-title)" }}>{props.title}</span>
@@ -190,18 +204,21 @@ function DialogShell(props: {
           >
             {t.common.cancel}
           </button>
+          {/* 危险档（最强）只落在执行键上：红字 + 发丝描边 + hover danger-soft
+              （设计系统「危险红字、hover --color-danger-soft」，不是实底红） */}
           <button
             ref={confirmRef}
             type="button"
+            className="revert-confirm"
             onClick={props.onConfirm}
             disabled={props.busy}
             style={{
               height: "var(--control-height-md)",
               padding: "0 var(--space-4)",
-              border: 0,
+              border: "1px solid var(--color-danger)",
               borderRadius: "var(--radius-md)",
-              background: props.busy ? "var(--color-bg-hover)" : "var(--color-danger-solid)",
-              color: props.busy ? "var(--color-text-tertiary)" : "var(--color-danger-fg)",
+              background: "transparent",
+              color: props.busy ? "var(--color-text-tertiary)" : "var(--color-danger)",
               font: "inherit",
               fontSize: "var(--font-size-control)",
               fontWeight: 500,
@@ -235,10 +252,20 @@ export function RevertDialog(props: {
     >
       <div style={{ display: "grid", gap: "var(--space-4)" }}>
         <p style={{ margin: 0, color: "var(--color-text-secondary)" }}>{t.chat.revertLead}</p>
-        <PathGroup title={t.chat.revertWillRestore} paths={props.plan.restore} />
-        <PathGroup title={t.chat.revertWillDelete} paths={props.plan.deletes} />
-        <PathGroup title={t.chat.revertUserModified} paths={props.plan.userModified} danger note={t.chat.revertUserModifiedNote} />
-        <PathGroup title={t.chat.revertUnrecoverable} paths={props.plan.unrecoverable} note={t.chat.revertUnrecoverableNote} />
+        <PathGroup title={t.chat.revertWillRestore} paths={props.plan.restore} tone="normal" />
+        <PathGroup title={t.chat.revertWillDelete} paths={props.plan.deletes} tone="normal" />
+        <PathGroup
+          title={t.chat.revertUserModified}
+          paths={props.plan.userModified}
+          tone="caution"
+          note={t.chat.revertUserModifiedNote}
+        />
+        <PathGroup
+          title={t.chat.revertUnrecoverable}
+          paths={props.plan.unrecoverable}
+          tone="info"
+          note={t.chat.revertUnrecoverableNote}
+        />
         <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
           {t.chat.revertShellNote}
         </p>
@@ -265,11 +292,26 @@ export function UndoDialog(props: {
     >
       <div style={{ display: "grid", gap: "var(--space-4)" }}>
         <p style={{ margin: 0, color: "var(--color-text-secondary)" }}>{t.chat.undoLead}</p>
-        <PathGroup title={t.chat.revertWillRestore} paths={props.plan.restore} />
-        <PathGroup title={t.chat.revertWillDelete} paths={props.plan.deletes} />
-        <PathGroup title={t.chat.revertUserModified} paths={props.plan.userModified} danger note={t.chat.revertUserModifiedNote} />
-        <PathGroup title={t.chat.undoLaterTouched} paths={props.plan.laterTouched} danger note={t.chat.undoLaterTouchedNote} />
-        <PathGroup title={t.chat.revertUnrecoverable} paths={props.plan.unrecoverable} note={t.chat.revertUnrecoverableNote} />
+        <PathGroup title={t.chat.revertWillRestore} paths={props.plan.restore} tone="normal" />
+        <PathGroup title={t.chat.revertWillDelete} paths={props.plan.deletes} tone="normal" />
+        <PathGroup
+          title={t.chat.revertUserModified}
+          paths={props.plan.userModified}
+          tone="caution"
+          note={t.chat.revertUserModifiedNote}
+        />
+        <PathGroup
+          title={t.chat.undoLaterTouched}
+          paths={props.plan.laterTouched}
+          tone="caution"
+          note={t.chat.undoLaterTouchedNote}
+        />
+        <PathGroup
+          title={t.chat.revertUnrecoverable}
+          paths={props.plan.unrecoverable}
+          tone="info"
+          note={t.chat.revertUnrecoverableNote}
+        />
         <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
           {t.chat.revertShellNote}
         </p>

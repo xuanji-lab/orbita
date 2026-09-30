@@ -102,6 +102,12 @@
   cursor: not-allowed;
 }
 
+/* 回退 / 撤销确认框的执行键（危险档）：红字 + 发丝描边，hover 铺 danger-soft
+   （设计系统「危险红字、hover --color-danger-soft」；状态化样式归 CSS，不进组件） */
+.revert-confirm:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+
 /* IconButton 的 variant="soft"：静止态填 --color-bg-muted；hover / pressed / disabled
    仍按上面的顺序盖过它——这条规则必须排在它们前面，只补 rest 态的底色 */
 .icon-btn-soft {
