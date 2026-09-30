@@ -84,6 +84,8 @@ import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { CarryoverChecklist } from "./CarryoverChecklist";
+import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
+import { RevertDialog, UndoDialog } from "./RevertDialog";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
@@ -116,6 +118,7 @@ import {
   type CompactedRecord,
   type SessionCompletion,
 } from "@shared/session";
+import type { FileTurnView, RevertRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 import type { ThemePreference } from "@shared/settings";
@@ -1021,8 +1024,31 @@ function ChatViewBody(props: {
           onOpenTask={session.openSession}
           channel={channel}
           skills={skills}
+          fileTurns={session.fileTurns}
+          reverts={session.reverts}
+          cwd={session.cwd}
+          onUndoTurn={session.undoTurn}
+          onRevertTo={session.revertToMessage}
+          actionsBusy={session.phase !== "idle" || session.queued.length > 0}
+          readOnly={session.readOnly}
         />
       </Pane>
+      {session.revertDialog !== null && (
+        <RevertDialog
+          plan={session.revertDialog.plan}
+          busy={session.revertBusy}
+          onConfirm={session.confirmRevert}
+          onCancel={session.cancelRevert}
+        />
+      )}
+      {session.undoDialog !== null && (
+        <UndoDialog
+          plan={session.undoDialog.plan}
+          busy={session.undoBusy}
+          onConfirm={session.confirmUndo}
+          onCancel={session.cancelUndo}
+        />
+      )}
     </>
   );
 }
@@ -1055,16 +1081,38 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   channel: ChannelViewContext;
   /** skill 索引（read SKILL.md 徽标用）；挂载读一次，引用稳定不打穿 memo */
   skills: SkillMeta[];
+  /** 轮尾文件账（fileTurn 事件 + 盘上种子），与 marks 同一条纪律 */
+  fileTurns: readonly FileTurnView[];
+  /** 回退界碑（盘上种子；回退后重读会话自然进来） */
+  reverts: readonly RevertRecord[];
+  /** 会话 cwd：轮尾卡的路径显示（cwd 内相对、外绝对） */
+  cwd: string | null;
+  /** 单轮撤销入口（轮尾卡的 Undo）；引用稳定，不破 memo */
+  onUndoTurn: (turnId: string) => void;
+  /** 回退入口（user 气泡的「回到这里」）：开确认框的回调 */
+  onRevertTo: (messageId: string) => void;
+  /** 运行中 / 排队非空：回退与撤销的入口全禁 */
+  actionsBusy: boolean;
+  /** 只读（无 pi 本子）：回退 / 撤销不可用——没有可裁的本子 */
+  readOnly: boolean;
 }) {
   const t = useT();
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
   const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
-  // 界碑与通道标记按发生位置插回往来流：压缩摘要收进「已压缩」折叠行、通道标记
-  // 画成一行虚线标记，历史一条不少
+  // 界碑、通道标记、轮尾账与回退界碑按发生位置插回往来流：压缩摘要收进「已压缩」
+  // 折叠行、通道标记画成一行虚线标记、轮尾账是卡片、回退界碑是标记行 + 还原卡
   const records = useMemo(
-    () => mergeSideRecords(props.compactions, props.marks, transcript),
-    [props.compactions, props.marks, transcript],
+    () => mergeSideRecords(props.compactions, props.marks, props.fileTurns, props.reverts, transcript),
+    [props.compactions, props.marks, props.fileTurns, props.reverts, transcript],
+  );
+  // 被撤销的轮 id 集：轮尾卡据此挂「已撤销」徽标（undo 记录不是渲染单元）
+  const undoneTurnIds = useMemo(
+    () =>
+      new Set(
+        records.filter((record) => record.role === "undo").map((record) => record.turnId),
+      ),
+    [records],
   );
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = useMemo(() => flattenRenderUnits(records), [records]);
@@ -1191,6 +1239,10 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 carryoverCards={carryoverCards}
                 channel={props.channel}
                 skills={props.skills}
+                cwd={props.cwd}
+                undoneTurnIds={undoneTurnIds}
+                onUndoTurn={props.onUndoTurn}
+                actionsBusy={props.actionsBusy}
               />
             ) : (
               <EntryView
@@ -1202,6 +1254,10 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 carryoverCards={carryoverCards}
                 channel={props.channel}
                 skills={props.skills}
+                cwd={props.cwd}
+                undoneTurnIds={undoneTurnIds}
+                onUndoTurn={props.onUndoTurn}
+                actionsBusy={props.actionsBusy}
               />
             )}
             {branchAfter !== undefined && (
@@ -1964,11 +2020,43 @@ function EntryView(props: {
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
   skills: SkillMeta[];
+  /** 轮尾卡：会话 cwd（路径显示用）与被撤销的轮 id 集 */
+  cwd: string | null;
+  undoneTurnIds: ReadonlySet<string>;
+  /** 单轮撤销入口（轮尾卡的 Undo）；busy 时卡上按钮自己禁用 */
+  onUndoTurn: (turnId: string) => void;
+  /** 会话在跑 / 排队非空：撤销入口禁用的真值在 ChatViewBody 算好传入 */
+  actionsBusy: boolean;
+  /** 回退入口（user 气泡的「回到这里」）；undefined = 不给（子会话面板等只读视图） */
+  onRevertTo?: (messageId: string) => void;
+  /** 只读（无 pi 本子）：回退 / 撤销不可用 */
+  readOnly?: boolean;
 }) {
   const t = useT();
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
-  if (entry.kind === "user") return <UserBubble item={entry.item} />;
+  if (entry.kind === "user") {
+    return (
+      <UserBubble
+        item={entry.item}
+        onRevertTo={props.onRevertTo}
+        revertDisabled={props.actionsBusy || props.readOnly === true}
+        revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
+      />
+    );
+  }
+  if (entry.kind === "fileTurn") {
+    return (
+      <FileTurnCard
+        record={entry.record}
+        cwd={props.cwd}
+        undone={props.undoneTurnIds.has(entry.record.id)}
+        busy={props.actionsBusy}
+        onUndo={props.onUndoTurn}
+      />
+    );
+  }
+  if (entry.kind === "revertMark") return <RevertMarkView record={entry.record} />;
   if (entry.kind === "channelMark") {
     // 子会话自己流里的 task 标记：渲染成完整任务卡而不是一行胶囊（子会话
     // 2026-09-23 裁决①）——父给子的第一条任务是这条会话最该显眼的内容。
@@ -2063,6 +2151,12 @@ function TurnRollupLine(props: {
   channel: ChannelViewContext;
   /** 透传给成员 EntryView（read SKILL.md 徽标用） */
   skills: SkillMeta[];
+  /** 轮尾卡（成员里可能有 fileTurn 单元——折叠段尾钉着的卡不进 members，但
+   * 通道工具切块后的段内仍可能夹着）：与 TranscriptColumn 同名 props 原样转发 */
+  cwd: string | null;
+  undoneTurnIds: ReadonlySet<string>;
+  onUndoTurn: (turnId: string) => void;
+  actionsBusy: boolean;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2124,6 +2218,10 @@ function TurnRollupLine(props: {
               carryoverCards={props.carryoverCards}
               channel={props.channel}
               skills={props.skills}
+              cwd={props.cwd}
+              undoneTurnIds={props.undoneTurnIds}
+              onUndoTurn={props.onUndoTurn}
+              actionsBusy={props.actionsBusy}
             />
           ))}
         </div>
@@ -2138,7 +2236,14 @@ function TurnRollupLine(props: {
  * 用户气泡与模型回复（MarkdownBlock）刻意是两套渲染。
  * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
  */
-function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
+function UserBubble(props: {
+  item: Extract<TranscriptItem, { role: "user" }>;
+  /** 「回到这里」：回退到这条消息之前（含原文放回输入框）；undefined = 不给入口 */
+  onRevertTo?: (messageId: string) => void;
+  /** 运行中 / 排队非空 / 只读：入口禁用（tooltip 说明） */
+  revertDisabled: boolean;
+  revertDisabledWhy?: string;
+}) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
@@ -2363,6 +2468,26 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         >
           <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
         </button>
+        )}
+        {props.onRevertTo !== undefined && (
+          <button
+            type="button"
+            title={props.revertDisabled ? (props.revertDisabledWhy ?? t.chat.revertHere) : t.chat.revertHere}
+            aria-label={t.chat.revertHere}
+            disabled={props.revertDisabled}
+            onClick={() => props.onRevertTo?.(props.item.id)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: 3,
+              border: "none",
+              background: "none",
+              color: "var(--color-text-tertiary)",
+              cursor: props.revertDisabled ? "default" : "pointer",
+            }}
+          >
+            <Icon name="rotate-ccw" size={12} strokeWidth={1.8} />
+          </button>
         )}
       </div>
     </div>

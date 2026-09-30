@@ -15,11 +15,7 @@ import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillBlock } from "./skill.ts";
 import { splitUserTextBlocks } from "./prompt-attachments.ts";
-import type {
-  FileTurnRecord,
-  RevertRecord,
-  UndoRecord,
-} from "./revert.ts";
+import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -115,6 +111,14 @@ export type SessionRecord =
   | FileTurnRecord
   | RevertRecord
   | UndoRecord;
+
+/**
+ * 渲染层的合并记录：SessionRecord 外加轮尾账的**视图形**（FileTurnView——剥掉快照
+ * 引用的路径 + 统计）。renderer 的实时事件（fileTurnView）与盘上种子（FileTurnRecord，
+ * 视图的超集）在这里汇流；主进程的读者（load / export / branch）只见 SessionRecord，
+ * 不认识视图形。
+ */
+export type TranscriptRecord = SessionRecord | FileTurnView;
 
 /**
  * 逐字段校验，坏值判 false。readLog 靠它分流：**坏掉的 compacted 行按坏行跳过**，

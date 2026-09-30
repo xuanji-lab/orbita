@@ -343,6 +343,23 @@ void app.whenReady().then(async () => {
       void sessions.setPiSessionFile(event.sessionId, event.piSessionFile).catch(() => undefined);
       return;
     }
+    // 轮尾文件账：落盘（recorder 写 blob + FileTurnRecord）之外，给 renderer 广播
+    // 的是**剥掉正文的视图**（fileTurnView）——轮尾卡片不吃快照正文，1MB 的文件
+    // 内容没有理由过 renderer 的 IPC。这是「主进程只转发不加工」的第二个例外
+    // （第一个是落盘本身），理由同：正文进 renderer 是纯浪费。
+    if (event.type === "fileTurn") {
+      record(event);
+      broadcastAgentEvent({
+        type: "fileTurnView",
+        sessionId: event.sessionId,
+        changes: event.changes.map((change) => ({
+          path: change.path,
+          added: change.added,
+          removed: change.removed,
+        })),
+      });
+      return;
+    }
     record(event);
     broadcastAgentEvent(event);
   });

@@ -20,6 +20,8 @@ import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ComposerFileRef, ComposerPastedText } from "../../shell/composer-attachments.ts";
 import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
+import type { FileTurnView, RevertRecord } from "@shared/revert";
+import type { TranscriptRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
 
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
@@ -129,6 +131,14 @@ export interface SessionEntry {
    */
   thinking: { level: PiThinkingLevel; supported: readonly PiThinkingLevel[] } | null;
   approvals: PendingApproval[];
+  /**
+   * 轮尾文件账（revert.ts，与 marks 同一条纪律）：不进归约器，卡片层直接消费；
+   * 实时事件（fileTurnView，剥掉正文的视图）与盘上种子（FileTurnRecord，视图的
+   * 超集）都归这个桶。
+   */
+  fileTurns: readonly FileTurnView[];
+  /** 回退界碑（盘上种子；回退后全量重读会话，没有实时事件） */
+  reverts: readonly RevertRecord[];
 }
 
 /** 全部会话的槽。**不可变**：每个事件产出新 Map，没变的槽保持同一引用。 */
@@ -151,6 +161,8 @@ export const EMPTY_ENTRY: SessionEntry = {
   stats: null,
   thinking: null,
   approvals: [],
+  fileTurns: [],
+  reverts: [],
 };
 
 /**
@@ -190,6 +202,18 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       compactions: [...entry.compactions, event.record],
+    }));
+  }
+  if (event.type === "fileTurnView") {
+    // 轮尾文件账的渲染视图：转成记录形状进槽。盘上那份主进程会铸自己的 id，
+    // 重读会话后自然对齐；活会话期这帧就是卡片的数据源
+    if (event.changes.length === 0) return states;
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      fileTurns: [
+        ...entry.fileTurns,
+        { role: "file-turn", id: crypto.randomUUID(), timestamp: Date.now(), changes: event.changes },
+      ],
     }));
   }
   if (event.type === "stats") {
@@ -295,6 +319,28 @@ export function seedFromDisk(
   const marks = transcript.filter(
     (item): item is ChannelMarkRecord => item.role === "channel-mark",
   );
+  // 文件账三件：轮尾账与回退界碑进各自桶（undo 只在轮尾卡上挂徽标，不单独记账）；
+  // undo 记录随重读进不来这里——它在 transcript 里但没有渲染桶，卡片层从 transcript
+  // 以外的途径拿不到它……不：undo 记录也在 transcript 里，但它是轮尾卡的附注，
+  // 由 ChatView 从 records 里按 turnId 对回去（见 FileTurnCard），不占桶
+  const fileTurns: FileTurnView[] = [];
+  const reverts: RevertRecord[] = [];
+  for (const record of transcript) {
+    if (record.role === "file-turn") {
+      fileTurns.push({
+        role: "file-turn",
+        id: record.id,
+        timestamp: record.timestamp,
+        changes: record.changes.map((change) => ({
+          path: change.path,
+          added: change.added,
+          removed: change.removed,
+        })),
+      });
+    } else if (record.role === "revert") {
+      reverts.push(record);
+    }
+  }
   const next = new Map(states);
   next.set(sessionId, {
     transcript: createTranscriptState(seedSnapshot(items)),
@@ -315,31 +361,38 @@ export function seedFromDisk(
     // 思考档真值不落盘（meta 里的意图档才是持久事实）：种盘即空，等下一次开轮的推送
     thinking: null,
     approvals: [],
+    fileTurns,
+    reverts,
   });
   return next;
 }
 
 /**
- * 视图合成：界碑与通道标记都按发生位置插回往来流。**历史一条不少地保持可见**——
- * 被收进「已压缩」折叠行的是摘要本身（它才是混进对话的内部消息），
- * 不是压缩点之前的往来。pi 的「边界前隐藏」语义在这里被用户裁决否决：
+ * 视图合成：界碑、通道标记、轮尾账与回退界碑都按发生位置插回往来流。**历史
+ * 一条不少地保持可见**——被收进「已压缩」折叠行的是摘要本身（它才是混进对话的
+ * 内部消息），不是压缩点之前的往来。pi 的「边界前隐藏」语义在这里被用户裁决否决：
  * 可追溯是产品底线，pi 的做法照搬错了对象。
  *
  * 原名 `mergeCompactions`（子会话 PR4a 推广）：通道标记与界碑同一处境——都不进
- * pi 的归约器，都要按 timestamp 插回 transcript——没必要另开一份并行逻辑。
+ * pi 的归约器，都要按 timestamp 插回 transcript——没有必要另开一份并行逻辑。
+ * 轮尾账 / 回退界碑（会话回退）同理加入。
  */
 export function mergeSideRecords(
   compactions: readonly CompactedRecord[],
   marks: readonly ChannelMarkRecord[],
+  fileTurns: readonly FileTurnView[],
+  reverts: readonly RevertRecord[],
   transcript: readonly TranscriptItem[],
-): SessionRecord[] {
-  if (compactions.length === 0 && marks.length === 0) return [...transcript];
-  const records: SessionRecord[] = [...transcript, ...compactions, ...marks];
-  // 同毫秒时非 transcript 的一侧记录（界碑 / 通道标记）排在前——界碑在前的老规则
-  // 原样保留，通道标记同一条纪律：两者都不是 pi 归约器认识的消息，混排靠落盘
-  // 时间戳定序，非 transcript 的一侧优先出现在同刻的前面。
-  const isSideRecord = (record: SessionRecord): boolean =>
-    record.role === "compacted" || record.role === "channel-mark";
+): TranscriptRecord[] {
+  if (compactions.length === 0 && marks.length === 0 && fileTurns.length === 0 && reverts.length === 0) {
+    return [...transcript];
+  }
+  const records: TranscriptRecord[] = [...transcript, ...compactions, ...marks, ...fileTurns, ...reverts];
+  // 同毫秒时非 transcript 的一侧记录（界碑 / 通道标记 / 轮尾账 / 回退界碑）排在前
+  // ——界碑在前的老规则原样保留：混排靠落盘时间戳定序，非 transcript 的一侧优先
+  // 出现在同刻的前面（轮尾账的时戳晚于本轮末条消息，不受这条影响）。
+  const isSideRecord = (record: TranscriptRecord): boolean =>
+    record.role !== "user" && record.role !== "assistant" && record.role !== "tool";
   records.sort(
     (a, b) => a.timestamp - b.timestamp || Number(isSideRecord(b)) - Number(isSideRecord(a)),
   );

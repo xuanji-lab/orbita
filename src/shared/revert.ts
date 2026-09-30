@@ -42,6 +42,24 @@ export interface FileChange {
   removed: number;
 }
 
+/**
+ * 轮尾账的**渲染视图**（主进程 → renderer 广播用）：不带快照——卡片只要路径与
+ * 统计，正文（可能 1MB）没有理由过 IPC 进 renderer。盘上读回的 FileTurnRecord
+ * 结构上是它的超集，种子时直接兼容。
+ */
+export interface FileChangeView {
+  path: string;
+  added: number;
+  removed: number;
+}
+
+export interface FileTurnView {
+  role: "file-turn";
+  id: string;
+  timestamp: number;
+  changes: readonly FileChangeView[];
+}
+
 /** agent 进程报上来的轮内改动：正文内联，主进程负责写 blob。 */
 export type SnapshotPayload =
   | { kind: "text"; content: string }

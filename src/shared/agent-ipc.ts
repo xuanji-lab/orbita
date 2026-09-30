@@ -15,7 +15,7 @@ import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
-import type { FileChangePayload } from "./revert.ts";
+import type { FileChangePayload, FileChangeView } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
@@ -849,6 +849,11 @@ export type AgentEvent =
    * 后落 FileTurnRecord。没有改动的轮不发（不落空记录）。
    */
   | { type: "fileTurn"; sessionId: string; changes: readonly FileChangePayload[] }
+  /**
+   * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
+   * 与统计——renderer 的轮尾卡片不吃正文，1MB 的文件内容没有理由过这道 IPC。
+   */
+  | { type: "fileTurnView"; sessionId: string; changes: readonly FileChangeView[] }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的
    * pending 等待者吃掉它——renderer 不消费，不广播。

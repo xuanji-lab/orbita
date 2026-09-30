@@ -22,6 +22,7 @@ import {
 } from "../../shared/model-assign.ts";
 import type { AgentHost } from "../agent/host.ts";
 import type { CarryoverStore } from "./carryover-store.ts";
+import { executeRevert, executeUndo, planRevert, planUndo } from "./revert.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
 
@@ -136,6 +137,20 @@ export function registerSessionIpc(
       await store.commitBranch(plan, piSessionFile);
       return plan.newId;
     },
+  );
+
+  // —— 会话回退 / 单轮撤销（revert.ts）：计划与执行分两条通道，确认框只读计划 ——
+  ipcMain.handle(ipcChannels.sessionRevertPlan, (_event, id: string, targetMessageId: string) =>
+    planRevert(store, id, targetMessageId),
+  );
+  ipcMain.handle(ipcChannels.sessionRevert, (_event, id: string, targetMessageId: string) =>
+    executeRevert({ store, host: agentHost }, id, targetMessageId),
+  );
+  ipcMain.handle(ipcChannels.sessionUndoPlan, (_event, id: string, turnId: string) =>
+    planUndo(store, id, turnId),
+  );
+  ipcMain.handle(ipcChannels.sessionUndo, (_event, id: string, turnId: string) =>
+    executeUndo({ store, host: agentHost }, id, turnId),
   );
 
   /**
