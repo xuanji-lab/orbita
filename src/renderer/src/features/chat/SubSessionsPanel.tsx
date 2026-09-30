@@ -32,6 +32,8 @@ const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
   approval: "var(--color-warning)",
   done: "var(--color-success)",
   failed: "var(--color-danger)",
+  // stopped 是用户的裁决不是故障：中性灰，区别于 failed 的红（图标已经在说话）
+  stopped: "var(--color-text-tertiary)",
   idle: "var(--color-text-tertiary)",
 };
 
@@ -41,6 +43,7 @@ const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
   approval: "shield-check",
   done: "circle-check",
   failed: "triangle-alert",
+  stopped: "octagon-x",
   idle: "circle-off",
 };
 

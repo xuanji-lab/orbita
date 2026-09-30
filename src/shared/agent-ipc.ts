@@ -22,6 +22,7 @@ import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type {
   ChannelDelivery,
+  ChannelKey,
   ChannelMessage,
   ChannelMessageKind,
   ChannelStatus,
@@ -127,6 +128,13 @@ export const ipcChannels = {
   channelLoad: "channel:load",
   /** 用户在通道里代父发言（Speak as parent）：载荷 `ChannelSpeakInput`，回主进程铸好的 `ChannelMessage` */
   channelSpeak: "channel:speak",
+  /**
+   * 用户终止一个子会话：载荷 `ChannelStopInput`，回 void。三步：在跑就中止这一轮
+   * （agent:abort）、挂着的浏览器交接按取消结掉（BrowserSandbox.cancelSessionHandoff）、
+   * 通道里落一条 parent 侧的 stop（状态翻 stopped）。stopped 后父模型的发信被拒
+   * （applyChannelSend），只有用户代父发言（channel:speak 的 author user reply）能重开
+   */
+  channelStop: "channel:stop",
   /** 主进程 → renderer 推送（`ChannelEvent`）：新消息落账或通道状态变化 */
   channelEvent: "channel:event",
   /** 文件面板（契约在 `files.ts`）：这条会话的根清单（工作台 / 工作区 / 附加目录），主进程算 */
@@ -402,6 +410,9 @@ export interface ChannelSpeakInput {
   /** 投递方式（默认 steer，可切 turn end = followUp）：子在跑时注入不断轮，子空闲退化普通开轮 */
   delivery: ChannelDelivery;
 }
+
+/** `channel:stop` 的载荷：用户终止这个子会话（语义见 ipcChannels.channelStop 的注释） */
+export type ChannelStopInput = ChannelKey;
 
 /** `channel:event` 的推送载荷。status 是派生值（channelStatus），主进程算好推——
 renderer 不必为更新通道列的状态徽标拉一份全量账本 */

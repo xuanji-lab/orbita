@@ -985,6 +985,7 @@ export const en = {
     kinds: {
       task: "task",
       reply: "reply",
+      stop: "stopped",
       question: "question",
       progress: "progress",
       done: "done",
@@ -1006,6 +1007,8 @@ export const en = {
     deliveryTip:
       "steer: injects at the next tool call without stopping it · turn end: waits until its current turn ends",
     closed: "closed ·",
+    /** stopped 专用那一行（与 closed 同一个 reopen 入口，但话说清楚是谁停的） */
+    closedStopped: "stopped by you ·",
     reopenToSpeak: "reopen to speak",
     steer: "steer",
     turnEnd: "turn end",
@@ -1017,6 +1020,7 @@ export const en = {
       done: "done",
       failed: "failed",
       idle: "idle",
+      stopped: "stopped",
     },
     subSession: "Sub-session",
     parentSession: "Parent session",
@@ -1058,6 +1062,8 @@ export const en = {
       approval: "needs approval",
       done: "done",
       failed: "failed",
+      /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */
+      stopped: "stopped",
       idle: "idle",
     },
     back: "Back to sub-sessions",

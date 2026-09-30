@@ -57,6 +57,17 @@ describe("subSessionRowStatus", () => {
       "idle",
     );
   });
+
+  it("stopped 压过 needsApproval / running——用户终止了就别再拿待批 / 在跑引导用户", () => {
+    strictEqual(
+      subSessionRowStatus({ channelStatus: "stopped", needsApproval: true, running: true }),
+      "stopped",
+    );
+    strictEqual(
+      subSessionRowStatus({ channelStatus: "stopped", needsApproval: false, running: false }),
+      "stopped",
+    );
+  });
 });
 
 describe("subSessionStatusOf", () => {
@@ -93,26 +104,27 @@ describe("sortSubSessionRows", () => {
     status,
   });
 
-  it("waiting 最前，其次 approval，其次 running，其余按原序（派出顺序）", () => {
+  it("waiting 最前，其次 approval，其次 running，其余（含 stopped）按原序（派出顺序）", () => {
     const rows = [
       row("idle-1", "idle"),
       row("running-1", "running"),
       row("waiting-1", "waiting"),
       row("done-1", "done"),
+      row("stopped-1", "stopped"),
       row("approval-1", "approval"),
       row("running-2", "running"),
     ];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["waiting-1", "approval-1", "running-1", "running-2", "idle-1", "done-1"],
+      ["waiting-1", "approval-1", "running-1", "running-2", "idle-1", "done-1", "stopped-1"],
     );
   });
 
-  it("done/failed/idle 同一档，稳定排序保留原始（派出）顺序", () => {
-    const rows = [row("failed-1", "failed"), row("idle-1", "idle"), row("done-1", "done")];
+  it("done/failed/stopped/idle 同一档，稳定排序保留原始（派出）顺序", () => {
+    const rows = [row("failed-1", "failed"), row("stopped-1", "stopped"), row("idle-1", "idle"), row("done-1", "done")];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["failed-1", "idle-1", "done-1"],
+      ["failed-1", "stopped-1", "idle-1", "done-1"],
     );
   });
 

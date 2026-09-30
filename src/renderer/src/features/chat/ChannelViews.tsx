@@ -127,6 +127,9 @@ export function channelKindIcon(kind: ChannelMessageKind): IconName {
       return "circle-check";
     case "failed":
       return "triangle-alert";
+    // 用户终止：终止八边形，与通道卡 / 子会话列表的 stopped 状态同一枚图标
+    case "stop":
+      return "octagon-x";
     default:
       return "message-square";
   }

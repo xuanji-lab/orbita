@@ -244,10 +244,17 @@ function statusTone(
       return { color: "var(--color-danger)", text, icon: "triangle-alert", breathing: false };
     case "idle":
       return { color: "var(--color-text-tertiary)", text, icon: "circle-off", breathing: false };
+    // stopped 是用户的裁决不是故障：中性灰 + 终止八边形，区别于 failed
+    case "stopped":
+      return { color: "var(--color-text-tertiary)", text, icon: "octagon-x", breathing: false };
   }
 }
 
-/** 一张通道卡：头部（对子标题 + 状态）、消息区、composer / closed 行。 */
+/**
+ * 一张通道卡：头部（对子标题 + 状态）、消息区、composer / closed 行。
+ * stopped（用户终止）与 done / failed 同用 closed 行的 reopen 入口——重开部是同一个动作
+ * （用户代父发言），只是话说清楚是谁停的。
+ */
 function ChannelCard(props: {
   summary: ChannelSummary;
   engine: SessionEngine;
@@ -403,17 +410,21 @@ function ChannelMessageRow(props: { message: ChannelMessage; highlighted: boolea
         {label.text}
         {label.you && <span style={{ color: "var(--color-text-primary)" }}> · {t.channel.you}</span>}
       </span>
-      <MarkdownBlock text={message.text} variant="bubble" />
+      {/* stop 是用户的裁决标记，不是谁说的话——只画 who 行，不画空气泡 */}
+      {message.kind !== "stop" && <MarkdownBlock text={message.text} variant="bubble" />}
     </div>
   );
 }
 
 
-/** running / waiting 状态的 composer，或 done / failed 的 closed 行（reopen 后换成同一个 composer）。 */
+/** running / waiting 状态的 composer，或 done / failed / stopped 的 closed 行（reopen 后换成同一个 composer）。 */
 function ChannelFoot(props: { summary: ChannelSummary }) {
   const t = useT();
   const { summary } = props;
-  const closed = summary.status === "done" || summary.status === "failed";
+  // stopped（用户终止）与 done / failed 同用 closed 行：重开是同一个动作（用户代父
+  // 发言），父模型被 applyChannelSend 拦在外面，进不了这里。
+  const closed = summary.status === "done" || summary.status === "failed" || summary.status === "stopped";
+  const closedText = summary.status === "stopped" ? t.channel.closedStopped : t.channel.closed;
   const [reopened, setReopened] = useState(false);
   // reopen 只对**这一次** closed 有效：reply 送达后 status 翻回 running（第 2 节），
   // 之后子若再报一次 done/failed（新的一次 closed），要重新显示「closed · reopen
@@ -427,7 +438,7 @@ function ChannelFoot(props: { summary: ChannelSummary }) {
   if (closed && !reopened) {
     return (
       <div className="channel-card-foot channel-card-foot-closed">
-        <span>{t.channel.closed}</span>
+        <span>{closedText}</span>
         <button type="button" className="channel-reopen" onClick={() => setReopened(true)}>
           <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
           {t.channel.reopenToSpeak}
