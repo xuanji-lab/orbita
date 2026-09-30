@@ -11,7 +11,7 @@ import { writeJsonAtomic } from "../atomic-write.ts";
 import type { SecretsPort } from "../provider/store.ts";
 import { maskSecret } from "../../shared/provider.ts";
 import { DEFAULT_DOUBAO_RESOURCE_ID, type DoubaoVoiceConfig, type DoubaoVoiceInput } from "../../shared/voice.ts";
-import type { DoubaoCredentials } from "./doubao-asr.ts";
+import type { DoubaoCredentials } from "./doubao-protocol.ts";
 
 /** secrets.json 里的账户名。provider 的账户是 `<id>-<hex>`，带冒号的撞不上 */
 const DOUBAO_TOKEN_ACCOUNT = "voice:doubao-access-token";

@@ -41,7 +41,8 @@ import { mainWindows } from "./window/main-windows.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
-import { DoubaoAsr } from "./voice/doubao-asr.ts";
+import { createDoubaoProtocol } from "./voice/doubao-protocol.ts";
+import { DictationSessions } from "./voice/dictation.ts";
 import { registerVoiceIpc } from "./voice/ipc.ts";
 import { diagnoseOverHttps, openUndiciSocket } from "./voice/socket.ts";
 import { VoiceStore } from "./voice/store.ts";
@@ -192,7 +193,7 @@ void app.whenReady().then(async () => {
   registerProviderIpc(providers);
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
-    new DoubaoAsr({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
+    new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
   );
   // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 

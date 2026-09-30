@@ -10,7 +10,8 @@ import {
   type DoubaoVoiceInput,
   type VoiceResult,
 } from "../../shared/voice.ts";
-import type { DoubaoAsr } from "./doubao-asr.ts";
+import { createDoubaoProtocol } from "./doubao-protocol.ts";
+import type { DictationSessions } from "./dictation.ts";
 import type { VoiceStore } from "./store.ts";
 
 /** sessionId 由 renderer 铸（randomUUID）：只收像样的短串 */
@@ -37,7 +38,7 @@ function pcmBytes(value: unknown): Uint8Array | null {
   return null;
 }
 
-export function registerVoiceIpc(store: VoiceStore, doubao: DoubaoAsr): void {
+export function registerVoiceIpc(store: VoiceStore, dictation: DictationSessions): void {
   // ── 豆包凭证 ──
   ipcMain.handle(voiceChannels.voiceDoubaoGet, (): Promise<DoubaoVoiceConfig> => store.doubaoConfig());
 
@@ -51,7 +52,7 @@ export function registerVoiceIpc(store: VoiceStore, doubao: DoubaoAsr): void {
     const input = doubaoInput(raw);
     const credentials = input === null ? null : await store.doubaoCredentialsFor(input);
     if (credentials === null) return { ok: false, reason: "not-configured" };
-    return doubao.test(credentials);
+    return dictation.test(createDoubaoProtocol(credentials));
   });
 
   // ── 听写（现在只有豆包一家；第二家接入时这里按「听写用哪家」分派）──
@@ -64,7 +65,7 @@ export function registerVoiceIpc(store: VoiceStore, doubao: DoubaoAsr): void {
     const owner = sender.id;
     sender.once("destroyed", () => {
       watched.delete(owner);
-      doubao.cancelOwner(owner);
+      dictation.cancelOwner(owner);
     });
   };
 
@@ -74,21 +75,21 @@ export function registerVoiceIpc(store: VoiceStore, doubao: DoubaoAsr): void {
     if (credentials === null) return { ok: false, reason: "not-configured" };
     const sender = event.sender;
     watch(sender);
-    return doubao.start(sessionId, sender.id, credentials, (dictationEvent: DictationEvent) => {
+    return dictation.start(sessionId, sender.id, createDoubaoProtocol(credentials), (dictationEvent: DictationEvent) => {
       if (!sender.isDestroyed()) sender.send(voiceChannels.voiceDictationEvent, dictationEvent);
     });
   });
 
   ipcMain.on(voiceChannels.voiceDictationAudio, (_event, sessionId: unknown, data: unknown) => {
     const pcm = pcmBytes(data);
-    if (isSessionId(sessionId) && pcm !== null) doubao.audio(sessionId, pcm);
+    if (isSessionId(sessionId) && pcm !== null) dictation.audio(sessionId, pcm);
   });
 
   ipcMain.handle(voiceChannels.voiceDictationStop, async (_event, sessionId: unknown): Promise<void> => {
-    if (isSessionId(sessionId)) await doubao.stop(sessionId);
+    if (isSessionId(sessionId)) await dictation.stop(sessionId);
   });
 
   ipcMain.handle(voiceChannels.voiceDictationCancel, (_event, sessionId: unknown): void => {
-    if (isSessionId(sessionId)) doubao.cancel(sessionId);
+    if (isSessionId(sessionId)) dictation.cancel(sessionId);
   });
 }
