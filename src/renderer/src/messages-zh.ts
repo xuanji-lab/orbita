@@ -182,6 +182,7 @@ export const zh: Messages = {
 
   rowStatus: {
     pinned: "已置顶",
+    subRunning: "子会话运行中",
   },
 
   menu: {

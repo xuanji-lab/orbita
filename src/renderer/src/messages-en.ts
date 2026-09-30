@@ -205,6 +205,7 @@ export const en = {
 
   rowStatus: {
     pinned: "Pinned",
+    subRunning: "Sub-session running",
   },
 
   menu: {
