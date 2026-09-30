@@ -7,13 +7,17 @@
  * 会话层不用 `RightPanelFrame`——那会在 `ChatView` 自己的 `Pane` 头之上再叠一层
  * 标题栏，两条标题挤在一起（`Pane` 已经画标题/改名/完成入口）。照辅助对话抽屉的
  * 先例（`Drawer.tsx`：标签条 + `ChatView`，标签条不是第二个 `RightPanelFrame`）：
- * 一条瘦头部（返回 / 状态 / Open as main）+ `ChatView`（自带标题头 + transcript
- * + 审批条，`hideComposer` 关掉输入框与排队条）。
+ * 一条瘦头部（返回 / 状态 / Open as main）+ 用户控制行（终止等，见
+ * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
+ * （自带标题头 + transcript + 审批条，`hideComposer` 关掉输入框与排队条）。
  */
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { childSessions, type SessionMeta } from "@shared/session";
 import { Icon, type IconName } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
+import { Chip } from "../../shell/Chip";
+import { Menu, type MenuItem } from "../../shell/Menu";
+import { api } from "../../api";
 import { useChannelSummaries } from "./useChannelSummaries";
 import {
   sortSubSessionRows,
@@ -149,6 +153,16 @@ export function SubSessionsPanel(props: {
             <Icon name="x" size={16} />
           </PanelIconButton>
         </div>
+        {/* 用户对子会话的控制行（用户裁决：mode / 模型 / 终止都归用户，不归父模型）。
+            key 按子会话 id：换一条就把确认步 / 错误行复位 */}
+        {child !== undefined && (
+          <SubSessionControls
+            key={child.id}
+            parentId={props.parentId}
+            childId={child.id}
+            stopped={summaries.get(child.id)?.status === "stopped"}
+          />
+        )}
         <div style={{ flex: 1, minHeight: 0 }}>
           {/* 只读查看 + 审批：不给输入框（hideComposer），不传 onOpenSubSession(s)/onOpenParent——
               「UI 只做一层」，面板里查看的子会话不再嵌一层它自己的子会话入口。标记可点
@@ -214,6 +228,78 @@ export function SubSessionsPanel(props: {
         </div>
       )}
     </RightPanelFrame>
+  );
+}
+
+/**
+ * 会话层的控制行（用户裁决原话：「用户应该有自己修改子会话的权限，不管是 mode、
+ * 模型、终止与否」）。终止入口在本刀；档位与模型的菜单随后同排。
+ *
+ * 确认是**就地菜单**（不弹大窗）：点开菜单已是明确意图，后果行直接摆在确认键
+ * 上方（fact 行），确认键 danger——与侧栏 Delete / Compact 的两段式同族，只是
+ * 触发器是专用入口，省掉「再点一次才换出确认项」的那一段。
+ */
+function SubSessionControls(props: { parentId: string; childId: string; stopped: boolean }) {
+  const t = useT();
+  const [stopping, setStopping] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const stop = (): void => {
+    if (stopping) return;
+    setStopping(true);
+    setError(null);
+    void api.channel
+      .stop({ parentId: props.parentId, childId: props.childId })
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setStopping(false));
+  };
+
+  const items: MenuItem[] = [
+    { id: "stop-hint", label: t.subSessions.stopHint, fact: true },
+    {
+      id: "stop-confirm",
+      label: t.subSessions.stopConfirm,
+      icon: "octagon-x",
+      danger: true,
+      disabled: stopping,
+      onSelect: stop,
+    },
+    { id: "stop-cancel", label: t.common.cancel, icon: "x", onSelect: () => undefined },
+  ];
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        minWidth: 0,
+        padding: "6px 14px",
+        borderBottom: "1px solid var(--color-border-subtle)",
+      }}
+    >
+      {error !== null && (
+        <span style={{ minWidth: 0, overflow: "hidden" }} role="alert">
+          <PanelLine danger>{error}</PanelLine>
+        </span>
+      )}
+      <span style={{ flex: 1 }} />
+      <Menu
+        items={items}
+        align="end"
+        trigger={({ open, toggle }) => (
+          <Chip
+            icon="octagon-x"
+            active={open}
+            chevron
+            disabled={props.stopped}
+            title={props.stopped ? t.subSessions.stoppedHint : t.subSessions.stopTip}
+            onClick={toggle}
+          >
+            {t.subSessions.stopLabel}
+          </Chip>
+        )}
+      />
+    </div>
   );
 }
 

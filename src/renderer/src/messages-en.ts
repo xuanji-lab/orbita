@@ -1073,6 +1073,14 @@ export const en = {
     of: (title: string) => `Sub-sessions of "${title}"`,
     none: "No sub-sessions yet.",
     untitled: "Untitled",
+    /** 终止入口（会话层头部）：菜单里的后果行要短（菜单行单行省略号），
+     * 完整后果在 chip 的 title 悬停说明里 */
+    stopLabel: "Stop",
+    stopTip:
+      "Stop this sub-session — aborts its current turn and closes the channel. Only you can re-open it, by speaking as the parent in the channel.",
+    stopHint: "Aborts the current turn and closes the channel. Only you can re-open it.",
+    stopConfirm: "Stop it",
+    stoppedHint: "Already stopped — speak as the parent in the channel to re-open.",
   },
 
   approval: {

@@ -445,9 +445,10 @@ void app.whenReady().then(async () => {
     mcp,
     settings,
   );
-  // 子会话：派出 / 发信 / 代父发言的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
+  // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
-  // turnFields/readDirectories 那一整套装配；steer 走 agentHost（AgentHostCore 的方法）。
+  // turnFields/readDirectories 那一整套装配；steer 走 agentHost（AgentHostCore 的方法）；
+  // abort 同源（agent:abort）；cancelBrowserHandoff 是 BrowserSandbox 的幂等取消。
   const deps: ChannelDeps = {
     sessions,
     channels,
@@ -455,6 +456,8 @@ void app.whenReady().then(async () => {
     settings,
     submitTurn: (input) => agentIpc.submitTurn(input),
     steer: (sessionId, text, delivery) => agentHost.steer(sessionId, text, delivery),
+    abort: (sessionId) => agentHost.abort(sessionId),
+    cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
     phases,
     broadcast: broadcastChannelEvent,
   };
