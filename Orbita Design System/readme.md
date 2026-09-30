@@ -149,13 +149,19 @@ step, the chat panel is the well, cards and the composer float back up; hairline
 low translucency; grounds paint solid** (`.layer` / `.pane` overrides in
 `src/renderer/src/styles.css`; glass is reserved for floating layers, whose `--glass-bg` is the
 tier's card colour). What moved is where each tier's contrast lives: the two wells now sit at the
-same depth (`#151517` / `#161616`), and the split is in the shell. **黛 Slate** (id `graphite`,
-the DeepSeek Harness palette) draws in: blue-gray shell `#1b1b1c` one step above its well `#151517`,
-cards `#2c2c2e`, and the brightest grey ink of the set `#f9fafb / #cfd3d6 / #adb2b8` — timestamps
-and tool captions read clearly. **玄 Onyx** (id `black`, ZCode zai-dark's real structure) opens
-up: the shell floats at `#2b2b2b` — a full step above the well `#161616` — cards `#262626`, ink
-`#e5e5e5 / #a6a6a6 / #808080` (ZCode derives its greys by alpha; the 30%-white tertiary fails the
-4.5 floor on the well, so this tier pins solid values that pass — guarded by `dark-contrast.test.ts`).
+same depth (`#151517` / `#161616`), and the split is in the shell — **but both shells must clear the
+well by a step the eye can see.** **黛 Slate** (id `graphite`, the DeepSeek Harness palette) draws
+in: blue-gray shell `#202021`, well `#151517`, cards `#2c2c2e`, and the brightest grey ink of the
+set `#f9fafb / #cfd3d6 / #adb2b8` — timestamps and tool captions read clearly. The well, cards and
+ink are DeepSeek's own values; **the shell is not**: DeepSeek's own shell sits only ΔL\* 3.0 above
+its well — the same murk this re-cut exists to remove, and worse than the retired 石墨's ΔL\* 5.0 —
+so it was lifted to `#202021` (ΔL\* 5.5). **玄 Onyx** (id `black`, ZCode zai-dark's real structure)
+opens up: the shell floats at `#2b2b2b` — a full step above the well `#161616` (ΔL\* 10.3) — cards
+`#262626`, ink `#e5e5e5 / #b8b8b8 / #808080`. ZCode derives its greys by alpha (0.90 / 0.72 / 0.50
+white); this tier pins them solid, because the 30%-white tertiary fails the 4.5 floor on the well,
+and the second step has to clear 7 on the **lighter shell**, where the rail's section labels and
+empty-state hints sit (there it read 5.82:1 until it was lifted from `#a6a6a6`) — `dark-contrast.test.ts`
+guards both grounds.
 The retired 石墨/Ink pairing had its shell only a hair above the well — shell and well read as one
 murk, which is why it was replaced. **玄 stays the dark landing of `system`**; both are manual
 choices too, and both keep the yellow accent (`#d6c245`) on `--color-accent-fg`; selection washes
@@ -460,7 +466,7 @@ source does not define them.
 
 ## Caveats
 
-- **`--color-text-inverse` actually inverts**: light `#ffffff`, graphite `#1b1b1c`, black `#2b2b2b`
+- **`--color-text-inverse` actually inverts**: light `#ffffff`, graphite `#202021`, black `#2b2b2b`
   (`tokens/colors.css`, one per theme block) — each is that theme's own shell ground, the opposite of
   `--color-text-primary`. Text that must stay white on a permanently dark ground (overlays, toasts)
   uses `--color-text-on-dark`; text on a coloured fill uses that fill's `-fg` token.

@@ -84,31 +84,36 @@
 
 /*
  * 暗色两档（2026-09-30 定稿，色值取自两家参考应用的安装包实测——见 PR 描述）：
- * **黛 = DeepSeek Harness 深色**（蓝灰，收敛：暗壳 #1b1b1c / 井 #151517 / 卡 #2c2c2e，
+ * **黛 = DeepSeek Harness 深色**（蓝灰，收敛：壳 #202021 / 井 #151517 / 卡 #2c2c2e，
  * 灰字是三家参考里最亮的一档 #cfd3d6 / #adb2b8）；
  * **玄 = ZCode zai-dark 的真实结构**（纯灰，张开：亮壳 #2b2b2b / 井 #161616 / 卡 #262626——
  * 左栏透窗口框架底色 #2b2b2b，会话区另盖 #161616，代码块与井同色靠边框分）。
- * 两井几乎同深，**分野全在外壳与卡面的亮度**：黛的壳只比井浅一点（整片收拢），
- * 玄的壳比井亮一大截（外壳亮堂、会话沉底）——旧石墨外壳与井糊成一片，这是换血根因。
+ * 两井几乎同深，**分野全在外壳与卡面的亮度**：黛的壳比井高一档（ΔL* 5.5），玄的壳比井亮
+ * 一大截（ΔL* 10.3）。**两档的壳都必须与井拉开看得见的台阶**——旧石墨糊成一片（ΔL* 5.0）
+ * 是换血的根因，DeepSeek 原样的壳只比井高 3.0（同病，甚至更糊），所以黛的壳从 #1b1b1c
+ * 提到 #202021：井、卡与三档墨仍是 DeepSeek 原值，只有壳离开原样。
  * 层次语法不变：外壳 → 会话井 → 卡面/输入卡浮起 → 发丝线白色低透明。
  * accent 琥珀黄全链不动；文字三档必须实色且过对比度底线（dark-contrast.test）。
  */
 /* graphite — 黛 Slate（2026-09-30 换血，顶替原石墨槽位）：DeepSeek 蓝灰档。
+   壳 #202021 不是 DeepSeek 原值（原值 #1b1b1c 与井只差 ΔL* 3.0，比它替换掉的旧石墨还糊）；
+   井 / 卡 / 三档墨仍是原值。`--color-bg-muted` 跟着壳一起 +5（原值 #232324 走的是
+   「壳 +8 通道」的关系，不跟就会贴在壳上——右栏 soft 图标按钮的底就是它）。
    手动档，system 不落。显示名见 messages；档位 id 沿用 graphite（IPC 契约不动）。 */
 /* `[data-theme-preview="graphite"]` 同上，给 Theme 预览卡的黛缩略窗用。 */
 :root[data-theme="graphite"],
 [data-theme-preview="graphite"] {
   color-scheme: dark;
-  --color-bg-app: #1b1b1c;
-  --color-bg-sidebar: #1b1b1c;
+  --color-bg-app: #202021;
+  --color-bg-sidebar: #202021;
   --color-bg-panel: #151517;
-  --color-bg-muted: #232324;
+  --color-bg-muted: #282829;
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
   --color-bg-active: rgba(214, 194, 69, 0.08);
   --color-text-primary: #f9fafb;
   --color-text-secondary: #cfd3d6;
   --color-text-tertiary: #adb2b8;
-  --color-text-inverse: #1b1b1c;
+  --color-text-inverse: #202021;
   --color-text-on-dark: #ffffff;
   --color-border-subtle: rgba(255, 255, 255, 0.06);
   --color-border-default: rgba(255, 255, 255, 0.12);
@@ -137,8 +142,11 @@
 }
 
 /* black — 玄 Onyx（2026-09-30 换血，顶替原墨槽位）：ZCode zai-dark 纯灰档。
-   **system 的深色落点仍是这档**（沿用原墨的位）。灰字不用 ZCode 的透明度派生
-   （30% 白三级在井上只有 ~2.2:1），钉成过线实色。档位 id 沿用 black。 */
+   **system 的深色落点仍是这档**（沿用原墨的位）。灰字不用 ZCode 的透明度派生，钉成实色，
+   取它的档位（白 0.90 / 0.72 / 0.50 → #e5e5e5 / #b8b8b8 / #808080）：
+   30% 白的三级在井上只有 ~2.2:1，过不了 4.5；二级从换血时的 #a6a6a6 抬了一档——壳亮起来
+   之后它压在壳（#2b2b2b）上只有 5.82:1，破了 secondary ≥ 7，而左栏标签与空态提示就落在壳上；
+   #b8b8b8 是壳上 7.14 / 井上 9.12。档位 id 沿用 black。 */
 /* `[data-theme-preview="black"]` 同上，给 Theme 预览卡的玄缩略窗（与 System 卡右半）用。 */
 :root[data-theme="black"],
 [data-theme-preview="black"] {
@@ -150,7 +158,7 @@
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
   --color-bg-active: rgba(214, 194, 69, 0.08);
   --color-text-primary: #e5e5e5;
-  --color-text-secondary: #a6a6a6;
+  --color-text-secondary: #b8b8b8;
   --color-text-tertiary: #808080;
   --color-text-inverse: #2b2b2b;
   --color-text-on-dark: #ffffff;

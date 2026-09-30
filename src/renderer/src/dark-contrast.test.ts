@@ -9,11 +9,11 @@
  *
  * 只读 tokens/colors.css 的暗色两块（graphite / black）；色值解析认 `#rrggbb`，
  * 遇 rgba / color-mix 的 token 直接跳过（暗档文字色全是实色 hex）。
- *
- * **底只取井（--color-bg-panel）。** 玄的壳 #2b2b2b 比井亮一档，而左栏标签、空态提示
- * 用的是 secondary #a6a6a6——压在壳上是 5.82:1（旧墨壳 #1b1b1b 上是 7.08），低于本档
- * 自定的 7；tertiary 目前不上壳，真上壳是 3.59（低于 4.5）。改壳的亮度或壳上的墨色时，
- * 这一面不在守卫内，得自己看。
+ * **底取两个面：井（--color-bg-panel）与壳（--color-bg-app）。** 左栏标签、空态提示坐在壳上
+ * （2026-09-30 实测：壳上只有 secondary），所以 secondary 两面都要过 7：玄的壳 #2b2b2b 变亮时
+ * 它从 7.08 掉到 5.82，就是这条底线抓出来的，二级跟着抬到 #b8b8b8（壳上 7.14）。
+ * 壳上暂时没有 tertiary，所以不按壳去查三级（玄的壳亮，真上壳只有 3.59，过不了 4.5；
+ * 黛那边是 7.63）；往玄的左栏放三级微字前，先看这一面。
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -70,6 +70,18 @@ const REQUIRED = [
 
 describe("暗色两档的对比度底线（井 = --color-bg-panel）", () => {
   for (const theme of ["graphite", "black"] as const) {
+    it(`${theme}：壳上的 secondary ≥ 7（左栏标签与空态提示坐在 --color-bg-app 上）`, () => {
+      const vars = themeBlock(theme);
+      const shell = vars.get("--color-bg-app");
+      assert.ok(shell !== undefined && /^#[0-9a-f]{6}$/i.test(shell), `${theme} 的壳底必须是实色 hex`);
+      const value = vars.get("--color-text-secondary");
+      assert.ok(value !== undefined && /^#[0-9a-f]{6}$/i.test(value), `${theme} 的 --color-text-secondary 必须是实色 hex`);
+      const ratio = contrast(value, shell);
+      assert.ok(
+        ratio >= 7,
+        `${theme}：壳上的 secondary ${value} 压壳 ${shell} 只有 ${ratio.toFixed(2)}:1，低于 7（左栏的标签与空态提示就在这个面上）`,
+      );
+    });
     it(`${theme}：${REQUIRED.map((r) => `${r.token.slice("--color-text-".length)} ≥ ${r.floor}`).join("、")}`, () => {
       const vars = themeBlock(theme);
       const well = vars.get("--color-bg-panel");
