@@ -1,6 +1,12 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { sortSubSessionRows, subSessionRowStatus, type SubSessionRowStatus } from "./sub-sessions-rows.ts";
+import {
+  sortSubSessionRows,
+  subSessionRowStatus,
+  subSessionStatusOf,
+  type SubSessionEngineSlots,
+  type SubSessionRowStatus,
+} from "./sub-sessions-rows.ts";
 
 describe("subSessionRowStatus", () => {
   it("channelStatus waiting：不管 running/needsApproval 是什么都判 waiting", () => {
@@ -50,6 +56,34 @@ describe("subSessionRowStatus", () => {
       subSessionRowStatus({ channelStatus: undefined, needsApproval: false, running: false }),
       "idle",
     );
+  });
+});
+
+describe("subSessionStatusOf", () => {
+  /** 假引擎：running 里的会话在跑，approving 里的有待答审批（两者可同时） */
+  const engine = (running: readonly string[], approving: readonly string[]): SubSessionEngineSlots => ({
+    states: new Map(approving.map((id) => [id, { approvals: [{}] }])),
+    phaseOf: (id: string) => (running.includes(id) ? "turn" : "idle"),
+  });
+
+  it("子在跑：通道只有 task（channelStatus running）也判 running", () => {
+    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"], [])), "running");
+  });
+
+  it("子不在跑、通道也没报终态：判 idle——通道开着不等于在跑（2026-10 bug 回归）", () => {
+    strictEqual(subSessionStatusOf("c1", "running", engine([], [])), "idle");
+  });
+
+  it("审批槽优先于 phase：在跑但有待答审批判 approval", () => {
+    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"], ["c1"])), "approval");
+  });
+
+  it("waiting 压过审批与 phase", () => {
+    strictEqual(subSessionStatusOf("c1", "waiting", engine(["c1"], ["c1"])), "waiting");
+  });
+
+  it("没有摘要（还没拉到）也按槽走，不因缺席先验成 idle", () => {
+    strictEqual(subSessionStatusOf("c1", undefined, engine(["c1"], [])), "running");
   });
 });
 

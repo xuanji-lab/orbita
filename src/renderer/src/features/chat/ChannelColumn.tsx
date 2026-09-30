@@ -22,17 +22,19 @@
  * 够宽时——不够宽时它只能进槽，不替用户换掉槽里的东西。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ChannelKey, ChannelMessage, ChannelStatus, ChannelSummary } from "@shared/channel";
+import type { ChannelKey, ChannelMessage, ChannelSummary } from "@shared/channel";
 import { CHANNEL_COLUMN_WIDTH_DEFAULT, clampChannelColumnWidth } from "@shared/settings";
 import { api } from "../../api";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { Icon, type IconName } from "../../shell/Icon";
 import { channelWhoLabel, nonTaskMessages, type ChannelColumnEntry } from "./channel-column.ts";
+import { subSessionStatusOf, type SubSessionRowStatus } from "./sub-sessions-rows";
 import { channelKindIcon } from "./ChannelViews";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { isAtBottom } from "./scroll.ts";
 import { useChannelMessages } from "./useChannelMessages";
+import type { SessionEngine } from "./useChatSession";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -53,6 +55,11 @@ export interface ChannelOpenRequest {
 export function ChannelCards(props: {
   parentTitle: string;
   entries: readonly ChannelColumnEntry[];
+  /**
+   * 卡片头部的状态要拿它（审批槽 + phaseOf，拼进 `subSessionStatusOf`）——与
+   * Sub-sessions 面板同一份推导，两处画出同一个状态
+   */
+  engine: SessionEngine;
   openRequest: ChannelOpenRequest | null;
   /** 容器的 class：内联列要 `channel-column-inner`（定宽），槽里不要 */
   className?: string;
@@ -78,6 +85,7 @@ export function ChannelCards(props: {
           <ChannelCard
             key={entry.summary.childId}
             summary={entry.summary}
+            engine={props.engine}
             parentTitle={props.parentTitle}
             collapsed={collapsed}
             onToggleCollapsed={() => toggleCollapsed(entry.summary.childId, collapsed)}
@@ -95,6 +103,8 @@ export function ChannelColumn(props: {
   parentId: string | null;
   parentTitle: string;
   entries: readonly ChannelColumnEntry[];
+  /** 卡片状态与面板同源要用它（审批槽 + phaseOf）——App 手里的同一台引擎 */
+  engine: SessionEngine;
   /** 内联列此刻是否展开（App 按模式、显式选择与默认值算好，`channelInlineOpen`） */
   open: boolean;
   /** 够宽与否：不够宽时这一列不出现，新通道也不替用户弹出（那时它只能进槽） */
@@ -201,14 +211,23 @@ export function ChannelColumn(props: {
         className="channel-column-inner"
         parentTitle={props.parentTitle}
         entries={entries}
+        engine={props.engine}
         openRequest={props.openRequest}
       />
     </div>
   );
 }
 
+/**
+ * 卡片头部的状态显示：六档与 Sub-sessions 面板同源（`subSessionStatusOf` 的推导，
+ * 图标与颜色的分配也同面板的 STATUS_ICON / STATUS_COLOR）——两处必须画出同一个
+ * 状态。**不直接用 `ChannelStatus`**：它的 "running" 是「通道开着」（子会话还没报
+ * done/failed/question），不是「子在跑」；把它画成 accent 呼吸的运行中，就是
+ * 「面板已 idle、通道还在 running」那个 bug 的根（2026-10）。channelStatus 本身
+ * 的语义不动——composer 的 closed 行与 reopen 规则仍看它，这里只改「显示成什么」。
+ */
 function statusTone(
-  status: ChannelStatus,
+  status: SubSessionRowStatus,
   t: Messages,
 ): { color: string; text: string; icon: IconName; breathing: boolean } {
   const text = t.channel.status[status];
@@ -217,16 +236,21 @@ function statusTone(
       return { color: "var(--color-accent)", text, icon: "loader-circle", breathing: true };
     case "waiting":
       return { color: "var(--color-warning)", text, icon: "message-square", breathing: false };
+    case "approval":
+      return { color: "var(--color-warning)", text, icon: "shield-check", breathing: false };
     case "done":
       return { color: "var(--color-success)", text, icon: "circle-check", breathing: false };
     case "failed":
       return { color: "var(--color-danger)", text, icon: "triangle-alert", breathing: false };
+    case "idle":
+      return { color: "var(--color-text-tertiary)", text, icon: "circle-off", breathing: false };
   }
 }
 
 /** 一张通道卡：头部（对子标题 + 状态）、消息区、composer / closed 行。 */
 function ChannelCard(props: {
   summary: ChannelSummary;
+  engine: SessionEngine;
   parentTitle: string;
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -239,7 +263,10 @@ function ChannelCard(props: {
     [summary.parentId, summary.childId],
   );
   const channelMessages = useChannelMessages(key);
-  const tone = statusTone(summary.status, t);
+  // 状态与面板同源：phase 必须参与（channelStatus 的 running 只说明通道开着，
+  // 见 statusTone 的注释）——子会话跑完但没报 done 时，这里也要像面板一样退回 idle
+  const status = subSessionStatusOf(summary.childId, summary.status, props.engine);
+  const tone = statusTone(status, t);
 
   return (
     <div className={props.collapsed ? "channel-card collapsed" : "channel-card"}>

@@ -1,7 +1,8 @@
 /**
- * 右栏 Sub-sessions 面板列表层的纯函数：一行的状态怎么算、全部行怎么排序。
- * 组件不测（仓库 renderer 组件无测试框架先例，channel-column.ts 同款做法）——
- * 逻辑抽出来落在这里测，`SubSessionsPanel.tsx` 只负责取数据、拼行、调这两个函数。
+ * 右栏 Sub-sessions 面板列表层与父子会话通道卡的纯函数：一行 / 一卡的状态怎么算、
+ * 全部行怎么排序。组件不测（仓库 renderer 组件无测试框架先例，channel-column.ts 同款
+ * 做法）——逻辑抽出来落在这里测，`SubSessionsPanel.tsx` 只负责取数据、拼行、调这里的
+ * 函数。
  *
  * 纯模块：不 import React、不 import `@shared/*` 的值（只用类型），可被
  * `node --test` 直接加载。
@@ -60,4 +61,38 @@ export function sortSubSessionRows<T extends { status: SubSessionRowStatus }>(
   rows: readonly T[],
 ): T[] {
   return [...rows].sort((a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]);
+}
+
+/**
+ * `subSessionStatusOf` 从引擎读的两个槽的**最小结构面**——结构化而不是直接引用
+ * `SessionEngine` 整型：本模块保持纯模块纪律（不 import useChatSession），
+ * 测试拿字面量假对象就能喂，真实引擎天然满足这个形状。
+ */
+export interface SubSessionEngineSlots {
+  /** 分槽状态里的审批槽：有未答审批 = approval 档 */
+  states: ReadonlyMap<string, { approvals: readonly unknown[] }>;
+  /** 会话 phase：非 idle = 这条会话此刻真的在跑 */
+  phaseOf: (id: string) => string;
+}
+
+/**
+ * 一行 / 一张通道卡的显示状态怎么取：通道摘要的 status + 引擎的审批槽与 phase，
+ * 拼成 `subSessionRowStatus` 的输入。Sub-sessions 面板的行与父子会话面板的通道卡
+ * **共用这一份 glue**，两处画出来的状态永远同源。
+ *
+ * 2026-10 bug 的直接教训：通道卡曾只看 channelStatus，而它的 "running" 语义是
+ * 「通道开着」（子会话还没报 done/failed/question），跟子会话在不在跑无关——子会话
+ * 这一轮跑完但没调 report_to_parent 时，面板已按 phase 画 idle，通道卡还在画
+ * accent 呼吸的「运行中」。phase 必须参与推导，且只能从这一处参与。
+ */
+export function subSessionStatusOf(
+  childId: string,
+  channelStatus: ChannelStatus | undefined,
+  engine: SubSessionEngineSlots,
+): SubSessionRowStatus {
+  return subSessionRowStatus({
+    channelStatus,
+    needsApproval: (engine.states.get(childId)?.approvals.length ?? 0) > 0,
+    running: engine.phaseOf(childId) !== "idle",
+  });
 }

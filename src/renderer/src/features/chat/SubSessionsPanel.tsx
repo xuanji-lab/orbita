@@ -12,11 +12,14 @@
  */
 import { useCallback } from "react";
 import { childSessions, type SessionMeta } from "@shared/session";
-import type { ChannelSummary } from "@shared/channel";
 import { Icon, type IconName } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { useChannelSummaries } from "./useChannelSummaries";
-import { sortSubSessionRows, subSessionRowStatus, type SubSessionRowStatus } from "./sub-sessions-rows";
+import {
+  sortSubSessionRows,
+  subSessionStatusOf,
+  type SubSessionRowStatus,
+} from "./sub-sessions-rows";
 import type { SubSessionsView } from "./sub-sessions-state";
 import { ChatView } from "./ChatView";
 import type { ChatSession, SessionEngine } from "./useChatSession";
@@ -44,9 +47,9 @@ const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
 export function SubSessionsPanel(props: {
   parentId: string;
   parentTitle: string;
-  /** 主槽的 ChatSession：读 `sessions`（子会话清单）与 `phaseOf`（在跑与否） */
+  /** 主槽的 ChatSession：读 `sessions`（子会话清单） */
   session: ChatSession;
-  /** 只用它的 `states`（每条子会话的审批槽）——引擎级，不随「当前看哪条」变化 */
+  /** 只用它的 `states`（审批槽）与 `phaseOf`（在跑与否）——引擎级，不随「当前看哪条」变化 */
   engine: SessionEngine;
   /** 会话层的查看槽（`useSessionView(engine, "subsessions")`，App 持有） */
   view: ChatSession;
@@ -82,7 +85,7 @@ export function SubSessionsPanel(props: {
   if (props.nav.kind === "session") {
     const childId = props.nav.sessionId;
     const child = children.find((meta) => meta.id === childId);
-    const status = statusOf(childId, summaries, props.engine, props.session);
+    const status = subSessionStatusOf(childId, summaries.get(childId)?.status, props.engine);
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div
@@ -166,11 +169,12 @@ export function SubSessionsPanel(props: {
     );
   }
 
-  // 列表层：waiting 最前，其次 needs approval，其次 running，其余按派出顺序（sub-sessions-rows.ts）
+  // 列表层：waiting 最前，其次 needs approval，其次 running，其余按派出顺序（sub-sessions-rows.ts）。
+  // 状态与通道卡同源（subSessionStatusOf）——两处必须画出同一个状态
   const rows = sortSubSessionRows(
     children.map((meta) => ({
       meta,
-      status: statusOf(meta.id, summaries, props.engine, props.session),
+      status: subSessionStatusOf(meta.id, summaries.get(meta.id)?.status, props.engine),
     })),
   );
 
@@ -208,20 +212,6 @@ export function SubSessionsPanel(props: {
       )}
     </RightPanelFrame>
   );
-}
-
-/** 一行的状态：通道摘要优先给 waiting/done/failed，审批槽给 approval，否则看 phase（子会话 PR4c）。 */
-function statusOf(
-  childId: string,
-  summaries: ReadonlyMap<string, ChannelSummary>,
-  engine: SessionEngine,
-  session: ChatSession,
-): SubSessionRowStatus {
-  return subSessionRowStatus({
-    channelStatus: summaries.get(childId)?.status,
-    needsApproval: (engine.states.get(childId)?.approvals.length ?? 0) > 0,
-    running: session.phaseOf(childId) !== "idle",
-  });
 }
 
 function SubSessionRow(props: { meta: SessionMeta; status: SubSessionRowStatus; onClick: () => void }) {

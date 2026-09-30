@@ -1012,8 +1012,10 @@ export const en = {
     status: {
       running: "running",
       waiting: "waiting",
+      approval: "needs approval",
       done: "done",
       failed: "failed",
+      idle: "idle",
     },
     subSession: "Sub-session",
     parentSession: "Parent session",
