@@ -13,11 +13,13 @@
  */
 import { useCallback, useState } from "react";
 import { childSessions, type SessionMeta } from "@shared/session";
+import { PERMISSION_MODES, type PermissionMode } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { api } from "../../api";
+import { modelMenuItems } from "../settings/model-menu";
 import { useChannelSummaries } from "./useChannelSummaries";
 import {
   sortSubSessionRows,
@@ -160,6 +162,7 @@ export function SubSessionsPanel(props: {
             key={child.id}
             parentId={props.parentId}
             childId={child.id}
+            view={props.view}
             stopped={summaries.get(child.id)?.status === "stopped"}
           />
         )}
@@ -232,17 +235,52 @@ export function SubSessionsPanel(props: {
 }
 
 /**
- * 会话层的控制行（用户裁决原话：「用户应该有自己修改子会话的权限，不管是 mode、
- * 模型、终止与否」）。终止入口在本刀；档位与模型的菜单随后同排。
+ * 会话层的控制行（用户裁决原话：「我觉得用户应该有自己修改子会话的权限，不管是
+ * mode、模型、终止与否，这些目前都没有。」）：档位 / 模型菜单在左，终止在右。
+ * 档位与模型复用输入卡底栏同一套件（Menu + Chip + modelMenuItems + t.permissionModes），
+ * 不另写一套；动作走查看槽的 changeMode / chooseModel（与「Open as main 后在输入卡
+ * 底栏里改」同一条路，含 lastUsed 启动恢复点的跟随）。
  *
- * 确认是**就地菜单**（不弹大窗）：点开菜单已是明确意图，后果行直接摆在确认键
- * 上方（fact 行），确认键 danger——与侧栏 Delete / Compact 的两段式同族，只是
- * 触发器是专用入口，省掉「再点一次才换出确认项」的那一段。
+ * **与主槽的一个差别**：子会话的下一轮由主进程按 meta 装配（deliverToChild），
+ * 不经 renderer 的排队投递——changeMode / chooseModel 只在空闲时落 meta，子会话
+ * 在跑时那一笔会丢（下一轮还是旧档 / 旧模型）。所以在跑时补一发直连 IPC 把 meta
+ * 当场落下去：语义仍是「下一轮生效」（pi 在轮启动时快照档位 / 模型，对在跑的轮
+ * 无效），与主槽一致。
+ *
+ * 终止的确认是**就地菜单**（不弹大窗）：点开菜单已是明确意图，后果行（fact）
+ * 直接摆在 danger 确认键上方——与侧栏 Delete / Compact 的两段式同族，只是触发器
+ * 是专用入口，省掉「再点一次才换出确认项」那一段。
  */
-function SubSessionControls(props: { parentId: string; childId: string; stopped: boolean }) {
+function SubSessionControls(props: {
+  parentId: string;
+  childId: string;
+  /** 会话层的查看槽（正开着这条子会话）：mode / model / usable / catalog 与两个改档函数都从它走 */
+  view: ChatSession;
+  stopped: boolean;
+}) {
   const t = useT();
+  const { view } = props;
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /** 在跑时补发的直连 IPC 失败要就地报，不静默（空闲路径的失败走 engine 的红字，与主槽同源） */
+  const report = (cause: unknown): void =>
+    setError(cause instanceof Error ? cause.message : String(cause));
+
+  const changeMode = (next: PermissionMode): void => {
+    view.changeMode(next);
+    if (view.phaseOf(props.childId) !== "idle") {
+      void api.agent.setMode(props.childId, next).catch(report);
+    }
+  };
+
+  const chooseModel = (providerId: string, modelId: string): void => {
+    view.chooseModel(providerId, modelId);
+    if (view.phaseOf(props.childId) !== "idle") {
+      // 成功经 model 事件回环：recorder 落 meta，查看槽的 chip 由 alignModel 对齐
+      void api.agent.setModel(props.childId, providerId, modelId).catch(report);
+    }
+  };
 
   const stop = (): void => {
     if (stopping) return;
@@ -250,11 +288,26 @@ function SubSessionControls(props: { parentId: string; childId: string; stopped:
     setError(null);
     void api.channel
       .stop({ parentId: props.parentId, childId: props.childId })
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .catch(report)
       .finally(() => setStopping(false));
   };
 
-  const items: MenuItem[] = [
+  const modeItems: MenuItem[] = PERMISSION_MODES.map((value) => ({
+    id: value,
+    label: t.permissionModes[value].label,
+    checked: view.mode === value,
+    onSelect: () => changeMode(value),
+  }));
+
+  const modelItems: MenuItem[] = modelMenuItems({
+    t,
+    providers: view.usable,
+    catalog: view.catalog,
+    selected: view.model,
+    onSelect: chooseModel,
+  });
+
+  const stopItems: MenuItem[] = [
     { id: "stop-hint", label: t.subSessions.stopHint, fact: true },
     {
       id: "stop-confirm",
@@ -268,6 +321,7 @@ function SubSessionControls(props: { parentId: string; childId: string; stopped:
   ];
   return (
     <div
+      className="subsession-controls"
       style={{
         display: "flex",
         alignItems: "center",
@@ -277,6 +331,34 @@ function SubSessionControls(props: { parentId: string; childId: string; stopped:
         borderBottom: "1px solid var(--color-border-subtle)",
       }}
     >
+      {/* 档位 / 模型：与输入卡底栏同一套菜单件，checked 标当前（状态优先图标与文字） */}
+      <Menu
+        items={modeItems}
+        panelMinWidth={112}
+        trigger={({ open, toggle }) => (
+          <Chip
+            icon="shield-check"
+            active={open}
+            fixedWidth={84}
+            chevron
+            title={t.permissionModes[view.mode].hint}
+            onClick={toggle}
+          >
+            {t.permissionModes[view.mode].label}
+          </Chip>
+        )}
+      />
+      {modelItems.length > 0 && (
+        <Menu
+          items={modelItems}
+          searchable
+          trigger={({ open, toggle }) => (
+            <Chip active={open} italic chevron title={t.chat.modelTip} onClick={toggle}>
+              {view.model?.modelId ?? t.chat.noModel}
+            </Chip>
+          )}
+        />
+      )}
       {error !== null && (
         <span style={{ minWidth: 0, overflow: "hidden" }} role="alert">
           <PanelLine danger>{error}</PanelLine>
@@ -284,7 +366,7 @@ function SubSessionControls(props: { parentId: string; childId: string; stopped:
       )}
       <span style={{ flex: 1 }} />
       <Menu
-        items={items}
+        items={stopItems}
         align="end"
         trigger={({ open, toggle }) => (
           <Chip
