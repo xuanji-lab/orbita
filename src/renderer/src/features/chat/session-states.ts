@@ -281,10 +281,13 @@ export function seedFromDisk(
 ): SessionStates {
   // 界碑与通道标记都不进 pi 的归约器（它们不是模型消息，归约器不认识）——分开记账，
   // 显示时由 mergeSideRecords 按时间插回往来流；实时与历史从此是同一条显示路径。
+  // 文件账三件（revert.ts）同理：轮尾账自成卡片（②/⑤ 接上渲染），回退界碑自成
+  // 标记行，撤销只是轮尾卡上的徽标——都不进归约器，也不进 items。
   // 内联 role 谓词而非 isCompactedRecord()/isChannelMarkRecord()：本文件被 node --test
   // 加载，@shared 的值导入解析不了（AGENTS.md 硬规则）。
   const items = transcript.filter(
-    (item): item is TranscriptItem => item.role !== "compacted" && item.role !== "channel-mark",
+    (item): item is TranscriptItem =>
+      item.role === "user" || item.role === "assistant" || item.role === "tool",
   );
   const compactions = transcript.filter(
     (item): item is CompactedRecord => item.role === "compacted",

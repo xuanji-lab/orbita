@@ -43,6 +43,7 @@ import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
 import { describeDirectories } from "./directories-prompt.ts";
@@ -941,14 +942,43 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
  * `createBranchedSession` 裁新文件。绝不碰活着的 manager——那个方法会把实例原地
  * 换绑到新文件上，误用在活会话的 manager 上，后续追加就写进分支文件了（事故形状）。
  * 源会话正在跑也没关系：只读源文件、只写新文件，追加与读取互不干扰。
+ * 对账输入是 **getBranch()（当前叶子路径）**：会话回退会在本子里留废枝，文件序
+ * （getEntries）会把废枝也数进来，从第一次回退起对账必然错位。
  */
 async function branchPiSession(command: Extract<AgentCommand, { type: "branch" }>): Promise<void> {
   const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
-  const targetId = planBranchCut(manager.getEntries(), command.roles);
+  const targetId = planBranchCut(manager.getBranch(), command.roles);
   const branchFile = manager.createBranchedSession(targetId);
   if (branchFile === undefined) throw new Error("pi produced no branch file");
   // 复用 created 事件通路：主进程对 branch 与开机用同一条等待逻辑
   send({ type: "created", sessionId: command.sessionId, piSessionFile: branchFile });
+}
+
+/**
+ * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：详见 pi-book-edit.ts。
+ * **会话不在跑是硬前提**——在跑的话工具还没落定，此刻裁枝会把进行中的轮
+ * 写进废枝；由这里拒绝（主进程的 renderer 禁用只是第一道，这是信任边界）。
+ */
+function revertPiBookCommand(command: Extract<AgentCommand, { type: "revertPiBook" }>): void {
+  if (running.has(command.sessionId)) {
+    throw new Error("the session is still running — stop it before reverting");
+  }
+  const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
+  revertPiBook(manager, command.roles, { targetMessageId: command.targetMessageId });
+  send({ type: "piBookEdited", sessionId: command.sessionId, edit: "revert" });
+}
+
+/**
+ * 单轮撤销的 pi 侧一刀：在当前叶子追加告知模型的 custom_message（进上下文）。
+ * 同样要求会话不在跑；notice 是主进程拼好的完整句子（含文件清单）。
+ */
+function undoPiBookCommand(command: Extract<AgentCommand, { type: "undoPiBook" }>): void {
+  if (running.has(command.sessionId)) {
+    throw new Error("the session is still running — stop it before undoing");
+  }
+  const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
+  undoPiBook(manager, command.notice);
+  send({ type: "piBookEdited", sessionId: command.sessionId, edit: "undo" });
 }
 
 /**
@@ -1013,6 +1043,16 @@ async function handle(command: AgentCommand): Promise<void> {
   // 分支带的是「新会话的 id」，此刻账本里还没有——不依赖任何表，直接裁文件
   if (command.type === "branch") {
     await branchPiSession(command);
+    return;
+  }
+
+  // 回退 / 撤销的 pi 侧一刀：同步文件操作，完成经 piBookEdited 回执
+  if (command.type === "revertPiBook") {
+    revertPiBookCommand(command);
+    return;
+  }
+  if (command.type === "undoPiBook") {
+    undoPiBookCommand(command);
     return;
   }
 

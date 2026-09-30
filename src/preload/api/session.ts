@@ -5,6 +5,7 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
+import type { RevertPlan, UndoPlan } from "../../shared/revert.ts";
 import type {
   ModelAssignEntry,
   ModelAssignGroups,
@@ -73,4 +74,23 @@ export const sessionApi = {
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
   carryoverSetStatus: (id: string, status: CarryoverStatus): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.carryoverSetStatus, id, status),
+  // —— 会话回退 / 单轮撤销（revert.ts）四通道 + 轮尾产物打开两通道 ——
+  /** 回退计划（确认框列清单用）：目标消息及之后会被撤回什么 */
+  revertPlan: (id: string, targetMessageId: string): Promise<RevertPlan> =>
+    ipcRenderer.invoke(ipcChannels.sessionRevertPlan, id, targetMessageId),
+  /** 执行回退：对话撤回、pi 本子裁枝、文件还原到快照；返回后重读会话即得新画面 */
+  revert: (id: string, targetMessageId: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionRevert, id, targetMessageId),
+  /** 撤销计划（确认框列清单用）：这一轮的文件会被还原成什么 */
+  undoPlan: (id: string, turnId: string): Promise<UndoPlan> =>
+    ipcRenderer.invoke(ipcChannels.sessionUndoPlan, id, turnId),
+  /** 执行单轮撤销：只还原这一轮的文件，pi 本子追加一条告知模型 */
+  undo: (id: string, turnId: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionUndo, id, turnId),
+  /** 轮尾产物在内置浏览器打开（仅会话文件账里的网页文件） */
+  openArtifactInBrowser: (id: string, path: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionOpenArtifactInBrowser, id, path),
+  /** 轮尾产物用系统默认应用打开（仅会话文件账里记过的文件） */
+  openArtifactDefault: (id: string, path: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionOpenArtifactDefault, id, path),
 };

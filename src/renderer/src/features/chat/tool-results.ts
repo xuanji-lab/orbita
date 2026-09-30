@@ -104,6 +104,9 @@ export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUni
       continue;
     }
     if (record.role === "tool") continue;
+    // 文件账三件（revert.ts）自成卡片 / 标记行（FileTurnCard、回退界碑），
+    // 不摊平成消息单元——渲染在 ②/⑤ 的卡片层接上，这里不误把它们当消息
+    if (record.role === "file-turn" || record.role === "revert" || record.role === "undo") continue;
     if (record.role === "user") {
       // 实时流里的通道消息：重载前 recorder 还没来得及把它落成 channel-mark 记录，
       // 首个 text 块能解出信封就按同一条判定画成标记行、不产 user 单元——
@@ -1019,6 +1022,12 @@ export function branchAnchorIds(
       continue;
     }
     if (record.role === "tool") continue; // 结果归位到调用行，不构成边界
+    // 文件账三件（revert.ts）：轮尾账跟着回答落定，确认锚点；界碑 / 撤销不开新轮
+    if (record.role === "file-turn") {
+      confirm();
+      continue;
+    }
+    if (record.role === "revert" || record.role === "undo") continue;
     if (record.status === "streaming") {
       candidate = null; // 还没完整——这一轮没有可分支的「最终输出」
       continue;

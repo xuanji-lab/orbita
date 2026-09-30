@@ -15,6 +15,11 @@ import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillBlock } from "./skill.ts";
 import { splitUserTextBlocks } from "./prompt-attachments.ts";
+import type {
+  FileTurnRecord,
+  RevertRecord,
+  UndoRecord,
+} from "./revert.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -100,9 +105,16 @@ export function isChannelMarkRecord(raw: unknown): raw is ChannelMarkRecord {
 }
 
 /**
- * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）、压缩界碑或通道标记（我们的）。
+ * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）、压缩界碑、通道标记
+ * 或文件账三件（`revert.ts`：轮尾文件账 / 回退界碑 / 单轮撤销标记）。
  */
-export type SessionRecord = TranscriptItem | CompactedRecord | ChannelMarkRecord;
+export type SessionRecord =
+  | TranscriptItem
+  | CompactedRecord
+  | ChannelMarkRecord
+  | FileTurnRecord
+  | RevertRecord
+  | UndoRecord;
 
 /**
  * 逐字段校验，坏值判 false。readLog 靠它分流：**坏掉的 compacted 行按坏行跳过**，
@@ -610,6 +622,16 @@ export function transcriptToMarkdown(
     if (isChannelMarkRecord(item)) {
       // 通道标记暂不渲染（真正的标记 UI 是后续 PR）。正文只有一份、在通道账本里，
       // 导出也不该在这里捏一行假的——要看通道往来，去读那份账本
+      continue;
+    }
+    // 文件账三件（revert.ts）不是对话：轮尾账与撤销标记跳过；回退界碑落一行
+    // 「此后已回退」的说明——存档的人要知道再往前的记录是被回退折掉的
+    if (item.role === "file-turn" || item.role === "undo") continue;
+    if (item.role === "revert") {
+      parts.push("---");
+      parts.push(
+        `**[Reverted]** (${item.restored.length} file(s) restored · conversation below this point was rolled back and re-run)`,
+      );
       continue;
     }
     if (item.role === "tool") {

@@ -9,6 +9,7 @@ import { channelApi } from "./api/channel.ts";
 import { filesApi } from "./api/files.ts";
 import { importApi } from "./api/import.ts";
 import { providerApi } from "./api/provider.ts";
+import { reviewApi } from "./api/review.ts";
 import { sessionApi } from "./api/session.ts";
 import { settingsApi } from "./api/settings.ts";
 import { voiceApi } from "./api/voice.ts";
@@ -22,6 +23,7 @@ const api = {
   channel: channelApi,
   provider: providerApi,
   session: sessionApi,
+  review: reviewApi,
   settings: settingsApi,
   skill: skillApi,
   mcp: mcpApi,

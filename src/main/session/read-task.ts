@@ -289,9 +289,18 @@ function firstLine(text: string, max = OUTLINE_LINE_MAX): string {
   return line.length > max ? `${line.slice(0, max)}…` : line;
 }
 
-/** 记录里第一个 text 块的文本（没有 text 块 = 空串）。通道标记不是消息（正文在通道账本里），没有可取的文本 */
+/** 记录里第一个 text 块的文本（没有 text 块 = 空串）。非消息记录（界碑 / 通道标记 / 文件账三件）没有可取的文本 */
 function firstTextOf(record: SessionRecord | undefined): string {
-  if (record === undefined || record.role === "compacted" || isChannelMarkRecord(record)) return "";
+  if (
+    record === undefined ||
+    record.role === "compacted" ||
+    isChannelMarkRecord(record) ||
+    record.role === "file-turn" ||
+    record.role === "revert" ||
+    record.role === "undo"
+  ) {
+    return "";
+  }
   for (const block of record.content) {
     if (block.type === "text") return block.text;
   }
