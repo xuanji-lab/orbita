@@ -83,36 +83,36 @@
 }
 
 /*
- * 暗色两档共用一套层次语法（2026-09-27 重切，对照用户的参考应用 ZCode 实测）：
- * **外壳（左栏与右图标条坐的地）浅一档 → 会话面板是井（深一档）→ 卡面/输入卡
- * 浮起（亮 21 步）→ 发丝线是白色 ~10% 半透明**。旧值的两处病根同日退役：
- * 地面带绿尾（#191c1d / #232525 系）与米色文字（#d6d5cf）——闷感的来源；
- * 层次也反着（面板比外壳亮），井感无从谈起。第三档 Warm（dark）当天从三档
- * 收敛里退役（用户裁决：只留石墨与墨），存量设置迁移见 shared/settings 的 parseTheme。
+ * 暗色两档（2026-09-30 定稿，色值取自两家参考应用的安装包实测——见 PR 描述）：
+ * **黛 = DeepSeek Harness 深色**（蓝灰，收敛：暗壳 #1b1b1c / 井 #151517 / 卡 #2c2c2e，
+ * 灰字是三家参考里最亮的一档 #cfd3d6 / #adb2b8）；
+ * **玄 = ZCode zai-dark 的真实结构**（纯灰，张开：亮壳 #2b2b2b / 井 #161616 / 卡 #262626——
+ * 左栏透窗口框架底色 #2b2b2b，会话区另盖 #161616，代码块与井同色靠边框分）。
+ * 两井几乎同深，**分野全在外壳与卡面的亮度**：黛的壳只比井浅一点（整片收拢），
+ * 玄的壳比井亮一大截（外壳亮堂、会话沉底）——旧石墨外壳与井糊成一片，这是换血根因。
+ * 层次语法不变：外壳 → 会话井 → 卡面/输入卡浮起 → 发丝线白色低透明。
+ * accent 琥珀黄全链不动；文字三档必须实色且过对比度底线（dark-contrast.test）。
  */
-/* graphite — 石墨（v3 小样 I-1 中选，2026-09-27 新增）：ZCode 逐值直译的中性档——
-   外壳 #202020 / 井 #161616 / 卡面 #2b2b2b，零色偏。用户点名「ZCode 的颜色很舒服」，
-   这档就是那套。手动档，system 不落。 */
-/* `[data-theme-preview="graphite"]` 同上，给 Theme 预览卡的 Graphite 缩略窗用。 */
+/* graphite — 黛 Slate（2026-09-30 换血，顶替原石墨槽位）：DeepSeek 蓝灰档。
+   手动档，system 不落。显示名见 messages；档位 id 沿用 graphite（IPC 契约不动）。 */
+/* `[data-theme-preview="graphite"]` 同上，给 Theme 预览卡的黛缩略窗用。 */
 :root[data-theme="graphite"],
 [data-theme-preview="graphite"] {
   color-scheme: dark;
-  --color-bg-app: #202020;
-  --color-bg-sidebar: #202020;
-  --color-bg-panel: #161616;
-  --color-bg-muted: #1c1c1c;
+  --color-bg-app: #1b1b1c;
+  --color-bg-sidebar: #1b1b1c;
+  --color-bg-panel: #151517;
+  --color-bg-muted: #232324;
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
   --color-bg-active: rgba(214, 194, 69, 0.08);
-  --color-text-primary: #f2f2f2;
-  --color-text-secondary: #a6a6a6;
-  /* tertiary 在 2026-09-27 从 #6e6e6e 提到 #808080：井上（#161616）的 micro 小字
-     （折叠统计行等）对比度只有 ~3.6:1，看不清；提到 ~4.6:1。仍比 secondary 深一档，层次不变 */
-  --color-text-tertiary: #808080;
-  --color-text-inverse: #202020;
+  --color-text-primary: #f9fafb;
+  --color-text-secondary: #cfd3d6;
+  --color-text-tertiary: #adb2b8;
+  --color-text-inverse: #1b1b1c;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: rgba(255, 255, 255, 0.1);
-  --color-border-default: rgba(255, 255, 255, 0.16);
-  --color-border-strong: rgba(255, 255, 255, 0.22);
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-default: rgba(255, 255, 255, 0.12);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
   --color-accent: #d6c245;
   --color-accent-strong: #e2d05e;
   --color-accent-soft: rgba(214, 194, 69, 0.08);
@@ -129,38 +129,37 @@
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #2b2b2b;
+  --color-chat-card-bg: #2c2c2e;
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
-  --color-chat-control-bg: #2b2b2b;
-  --color-chat-table-bg: #161616;
+  --color-chat-control-bg: #2c2c2e;
+  --color-chat-table-bg: #151517;
   --color-chat-link: #52a8ff;
+  /* 代码块随黛阶：底取 DeepSeek 代码块面 #1b1b1c（比井浮一档），前景提到 #f9fafb */
+  --color-code-bg: #1b1b1c;
+  --color-code-text: #f9fafb;
 }
 
-/* black — Ink · 近黑（v3 小样 I-2 中选）：保住近黑身份，比例照 ZCode——
-   外壳 #1b1b1b / 卡面 #242424。井 #141414（同日微调：比初切的 #0f0f0f 浅一档，
-   但**不越过石墨的 #161616**——用户裁决的硬边界）。**system 的深色落点仍是这档**
-   （2026-09-03 用户指定）。历史轮次：真黑 #000「太黑了」→ GitHub default「有点蓝」→
-   中性灰 #121212「有点泛黄」→ 2026-09-03 定 #0a0a0a 系 → 2026-09-27 换 ZCode 层次重切。 */
-/* `[data-theme-preview="black"]` 同上，给 Theme 预览卡的 Ink 缩略窗（与 System 卡右半）用。 */
+/* black — 玄 Onyx（2026-09-30 换血，顶替原墨槽位）：ZCode zai-dark 纯灰档。
+   **system 的深色落点仍是这档**（沿用原墨的位）。灰字不用 ZCode 的透明度派生
+   （30% 白三级在井上只有 ~2.2:1），钉成过线实色。档位 id 沿用 black。 */
+/* `[data-theme-preview="black"]` 同上，给 Theme 预览卡的玄缩略窗（与 System 卡右半）用。 */
 :root[data-theme="black"],
 [data-theme-preview="black"] {
   color-scheme: dark;
-  --color-bg-app: #1b1b1b;
-  --color-bg-sidebar: #1b1b1b;
-  --color-bg-panel: #141414;
-  --color-bg-muted: #171717;
+  --color-bg-app: #2b2b2b;
+  --color-bg-sidebar: #2b2b2b;
+  --color-bg-panel: #161616;
+  --color-bg-muted: #202020;
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
   --color-bg-active: rgba(214, 194, 69, 0.08);
-  --color-text-primary: #f2f2f2;
+  --color-text-primary: #e5e5e5;
   --color-text-secondary: #a6a6a6;
-  /* 同 graphite：tertiary 提到 #808080——井上 micro 小字（折叠统计行）在 #6e6e6e
-     时只有 ~3.5:1，用户点名看不清（2026-09-27） */
   --color-text-tertiary: #808080;
-  --color-text-inverse: #1b1b1b;
+  --color-text-inverse: #2b2b2b;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: rgba(255, 255, 255, 0.09);
-  --color-border-default: rgba(255, 255, 255, 0.15);
-  --color-border-strong: rgba(255, 255, 255, 0.21);
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-border-default: rgba(255, 255, 255, 0.1);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
   --color-accent: #d6c245;
   --color-accent-strong: #e2d05e;
   --color-accent-soft: rgba(214, 194, 69, 0.08);
@@ -177,11 +176,14 @@
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
-  --color-chat-card-bg: #242424;
+  --color-chat-card-bg: #262626;
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
-  --color-chat-control-bg: #242424;
-  --color-chat-table-bg: #141414;
+  --color-chat-control-bg: #262626;
+  --color-chat-table-bg: #161616;
   --color-chat-link: #52a8ff;
+  /* 代码块随玄阶：ZCode 的代码块与井同色靠边框分（#161616），前景 #e5e5e5 */
+  --color-code-bg: #161616;
+  --color-code-text: #e5e5e5;
 }
 
 /* copybook — 小学作业（中文）：璇玑载体谱「稿纸」一档的中文版（2026-09-25 载入，同日由
