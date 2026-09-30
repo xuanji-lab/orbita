@@ -2488,8 +2488,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   } | null>(null);
   /** 降级 / 结果的一句反馈（中性，不是错误）；下一次发起或打开会话时清 */
   const [scanNotice, setScanNotice] = useState<string | null>(null);
-  /** 读不懂结果的那条会话（重试按它定向）。null = 没有可重试的失败。 */
-  const [scanFailed, setScanFailed] = useState<string | null>(null);
+  /**
+   * 读不懂结果的那条会话（重试按它定向）。null = 没有可重试的失败。
+   * messageId = 那条扫描消息在转录里的 id——重试**回退到它**再重发（不是追加：
+   * 旧回答留在历史里，模型会参考自己上次的失败格式再错一次）。
+   */
+  const [scanFailed, setScanFailed] = useState<{ sessionId: string; messageId: string | null } | null>(null);
 
   /** 打开另一条会话：上一轮的提示不是那条会话的事，不能跟过来。
    *  待确认的清单（scanResult）**不清**：它是发起会话的未完成动作，切走再切回
@@ -2501,6 +2505,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setScanFailed(null);
   }, [viewedId]);
 
+  /** 已选出的消息列表里那条扫描消息的 id（从后往前找最近一次扫描）。 */
+  const scanMessageIdIn = (items: readonly TranscriptItem[]): string | null => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      if (item?.role !== "user") continue;
+      const text = item.content.find((block) => block.type === "text");
+      if (text !== undefined && text.type === "text" && text.text === CLOSING_SCAN_PROMPT) return item.id;
+    }
+    return null;
+  };
+
+  /** 转录里那条扫描消息的 id（重试回退的锚点；找不到 null，重试退回追加式）。 */
+  const scanMessageIdOf = (transcript: Parameters<typeof selectTranscript>[0]): string | null =>
+    scanMessageIdIn(selectTranscript(transcript));
+
   /** 扫描超时（默认 60s）：直接标完成并说清楚，不让用户卡在等待里。
    *  依赖取稳定字段而不是整个 engine（每次渲染都是新引用，会让 timer 被无谓
    *  重置）：setCompletionSession 是 useCallback 产物，引用稳定。 */
@@ -2510,7 +2529,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const timer = window.setTimeout(() => {
       setCompletionSession(closingScan.sessionId, "done");
       setScanNotice(engine.messagesRef.current.session.scanTimeout);
-      setScanFailed(closingScan.sessionId);
+      setScanFailed({
+        sessionId: closingScan.sessionId,
+        messageId: scanMessageIdOf(engine.statesRef.current.get(closingScan.sessionId)?.transcript ?? EMPTY_ENTRY.transcript),
+      });
       setClosingScan(null);
     }, CLOSING_SCAN_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
@@ -2537,7 +2559,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 重试——扫描消息就在对话里，模型回了什么用户看得见，重发一条就行。
       engine.setCompletionSession(closingScan.sessionId, "done");
       setScanNotice(engine.messagesRef.current.session.scanUnreadable);
-      setScanFailed(closingScan.sessionId);
+      setScanFailed({ sessionId: closingScan.sessionId, messageId: scanMessageIdIn(items) });
       return;
     }
     if (drafts.length === 0) {
@@ -2633,17 +2655,39 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 基线重新取（上一轮的扫描消息与回答都已在转录里，不重新取会把旧回答再解一遍）。
    */
   const retryClosingScan = useCallback((): void => {
-    const id = scanFailed;
-    if (id === null || closingScan !== null) return;
-    const current = engine.statesRef.current.get(id);
+    const failed = scanFailed;
+    if (failed === null || closingScan !== null) return;
+    const current = engine.statesRef.current.get(failed.sessionId);
     if (current === undefined || current.phase !== "idle") return;
-    const turn = engine.buildTurn(id);
-    if (turn === null) return;
     engine.setError(null);
     setScanNotice(null);
     setScanFailed(null);
-    launchScan(id, selectTranscript(current.transcript).length, turn);
-  }, [closingScan, engine, launchScan, scanFailed]);
+    /** 重发扫描（基线取此刻槽里的消息数——回退种盘后它是「扫描之前」的世界） */
+    const relaunch = (): void => {
+      const turn = engine.buildTurn(failed.sessionId);
+      if (turn === null) return;
+      const items = selectTranscript(
+        engine.statesRef.current.get(failed.sessionId)?.transcript ?? EMPTY_ENTRY.transcript,
+      );
+      launchScan(failed.sessionId, items.length, turn);
+    };
+    // 回退到那条扫描消息再重发：连它读不懂的回答（以及扫描轮里可能动过的
+    // 文件）一起撤掉——追加式重发会让模型参考自己上次的失败格式再错一次
+    if (failed.messageId === null) {
+      relaunch();
+      return;
+    }
+    void api.session
+      .revert(failed.sessionId, failed.messageId)
+      .then(() => {
+        engine.refreshSessions();
+        return reloadSession(failed.sessionId);
+      })
+      .then(relaunch)
+      .catch((cause: unknown) =>
+        engine.setError(ipcErrorText(cause, engine.messagesRef.current)),
+      );
+  }, [closingScan, engine, launchScan, scanFailed, reloadSession]);
 
   /**
    * 确认清单：勾选项落盘 + setCompletion(done_with_todos)；全不勾 = done
@@ -2774,7 +2818,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     cancelCarryovers,
     scanNotice,
     // 重试只在「本槽正看着那条失败的会话」时给出——提示行本身就是那条会话的
-    retryClosingScan: scanFailed !== null && scanFailed === viewedId ? retryClosingScan : null,
+    retryClosingScan: scanFailed !== null && scanFailed.sessionId === viewedId ? retryClosingScan : null,
     fileTurns: entry.fileTurns,
     reverts: entry.reverts,
     revertToMessage,
