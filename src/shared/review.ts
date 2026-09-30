@@ -70,3 +70,36 @@ export interface ReviewDiff {
   /** task 来源：基线与现状一致，没有正文可展开 */
   restored: boolean;
 }
+
+// ————————————————————————————————————————————————
+// git 只读输出的纯解析（主进程调用，这里单测）
+// ————————————————————————————————————————————
+
+/**
+ * `git diff --numstat` 的一行 → 文件条目。`added / removed` 为 `-` 是二进制；
+ * 重命名行的 path 原样保留（`src/{a => b}.ts`）——展示够用，拉 diff 拉不到就空正文，
+ * 不猜。解不了返回 null（空行 / 格式漂移），调用方跳过。
+ */
+export function parseNumstatLine(line: string): ReviewEntry | null {
+  const parts = line.split("\t");
+  if (parts.length < 3) return null;
+  const added = parts[0];
+  const removed = parts[1];
+  const path = parts.slice(2).join("\t");
+  if (path === "" || added === undefined || removed === undefined) return null;
+  const binary = added === "-" || removed === "-";
+  if (binary) return { path, added: 0, removed: 0, binary: true };
+  const addedNum = Number(added);
+  const removedNum = Number(removed);
+  if (!Number.isFinite(addedNum) || !Number.isFinite(removedNum)) return null;
+  return { path, added: addedNum, removed: removedNum, binary: false };
+}
+
+/** `git status --porcelain=v2` 的未跟踪行（`? path`，含尾随引号形态）→ path。 */
+export function parseUntrackedLine(line: string): string | null {
+  if (!line.startsWith("? ")) return null;
+  let path = line.slice(2);
+  // 含空格 /非 ASCII 的路径被 C 引用：`"a b.txt"`——剥引号不动内容（不解转义，展示用够）
+  if (path.startsWith('"') && path.endsWith('"') && path.length >= 2) path = path.slice(1, -1);
+  return path === "" ? null : path;
+}

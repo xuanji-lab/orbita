@@ -85,6 +85,7 @@ import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { CarryoverChecklist } from "./CarryoverChecklist";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
+import { DiffBody } from "../../shell/DiffView";
 import { RevertDialog, UndoDialog } from "./RevertDialog";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
@@ -465,6 +466,11 @@ function ChatViewBody(props: {
    * 审批条不受影响，照常渲染——用户必须能在这里直接批子会话的工具调用。
    */
   hideComposer?: boolean;
+  /**
+   * 轮尾卡 / 界碑卡的「在面板里看」：打开右侧审查面板并定位该文件。
+   * 只有主槽的 ChatView 拿到它（面板开在主槽旁边）；右栏与抽屉里不传，行不可点。
+   */
+  onOpenReviewAt?: (path: string) => void;
   /**
    * 一键回底浮钮（feat/scroll-to-bottom-X）：距底超过 300px 时在消息列底端浮现「回底」
    * 浮钮，点击 smooth 滚到底。三个会话区都开：主槽、辅助对话抽屉、Sub-sessions 面板的
@@ -1031,6 +1037,7 @@ function ChatViewBody(props: {
           onRevertTo={session.revertToMessage}
           actionsBusy={session.phase !== "idle" || session.queued.length > 0}
           readOnly={session.readOnly}
+          onOpenReviewAt={props.onOpenReviewAt}
         />
       </Pane>
       {session.revertDialog !== null && (
@@ -1095,6 +1102,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   actionsBusy: boolean;
   /** 只读（无 pi 本子）：回退 / 撤销不可用——没有可裁的本子 */
   readOnly: boolean;
+  /** 轮尾卡文件行的「在面板里看」（主槽才有；引用稳定） */
+  onOpenReviewAt?: (path: string) => void;
 }) {
   const t = useT();
   const { transcript } = props;
@@ -1243,6 +1252,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 undoneTurnIds={undoneTurnIds}
                 onUndoTurn={props.onUndoTurn}
                 actionsBusy={props.actionsBusy}
+                onOpenReviewAt={props.onOpenReviewAt}
               />
             ) : (
               <EntryView
@@ -1258,6 +1268,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 undoneTurnIds={undoneTurnIds}
                 onUndoTurn={props.onUndoTurn}
                 actionsBusy={props.actionsBusy}
+                onOpenReviewAt={props.onOpenReviewAt}
               />
             )}
             {branchAfter !== undefined && (
@@ -2031,6 +2042,8 @@ function EntryView(props: {
   onRevertTo?: (messageId: string) => void;
   /** 只读（无 pi 本子）：回退 / 撤销不可用 */
   readOnly?: boolean;
+  /** 轮尾卡文件行的「在面板里看」（原样转发给 FileTurnCard） */
+  onOpenReviewAt?: (path: string) => void;
 }) {
   const t = useT();
   const { entry } = props;
@@ -2053,6 +2066,7 @@ function EntryView(props: {
         undone={props.undoneTurnIds.has(entry.record.id)}
         busy={props.actionsBusy}
         onUndo={props.onUndoTurn}
+        onOpenFile={props.onOpenReviewAt}
       />
     );
   }
@@ -2157,6 +2171,8 @@ function TurnRollupLine(props: {
   undoneTurnIds: ReadonlySet<string>;
   onUndoTurn: (turnId: string) => void;
   actionsBusy: boolean;
+  /** 轮尾卡文件行的「在面板里看」（成员里的 fileTurn 单元用，原样转发） */
+  onOpenReviewAt?: (path: string) => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2222,6 +2238,7 @@ function TurnRollupLine(props: {
               undoneTurnIds={props.undoneTurnIds}
               onUndoTurn={props.onUndoTurn}
               actionsBusy={props.actionsBusy}
+              onOpenReviewAt={props.onOpenReviewAt}
             />
           ))}
         </div>
@@ -3447,35 +3464,14 @@ function DiffView(props: { diff: string }) {
   const entries = editDiffEntries(parseEditDiff(props.diff));
   return (
     <div
-      className="scroll"
       style={{
-        maxHeight: 320,
-        overflow: "auto",
         marginLeft: RAIL_X,
         paddingLeft: "var(--space-2)",
         borderTop: "1px solid var(--color-border-subtle)",
         borderLeft: RAIL_LINE,
-        fontFamily: "var(--font-family-mono)",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: 1.6,
       }}
     >
-      {entries.map((entry, index) =>
-        entry.kind === "pair" ? (
-          <Fragment key={index}>
-            <DiffRow kind="del" lineNum={entry.removed.lineNum}>
-              {intraSpans(entry.tokens.removed, "del")}
-            </DiffRow>
-            <DiffRow kind="add" lineNum={entry.added.lineNum}>
-              {intraSpans(entry.tokens.added, "add")}
-            </DiffRow>
-          </Fragment>
-        ) : (
-          <DiffRow key={index} kind={entry.row.kind} lineNum={entry.row.lineNum}>
-            {entry.row.text === "" ? " " : entry.row.text}
-          </DiffRow>
-        ),
-      )}
+      <DiffBody entries={entries} maxHeight={320} />
     </div>
   );
 }
@@ -3489,60 +3485,6 @@ const LINE_NUM_COLUMN = {
   opacity: 0.7,
   fontVariantNumeric: "tabular-nums",
 } satisfies React.CSSProperties;
-
-/** diff 行两列 grid：行号（gutter——细分隔线 + 最低调的褪色，只作定位不作内容）| 正文。
- * 深浅三级：改动行正文 primary（第一眼）> 上下文正文 secondary > 行号（tertiary 再降
- * 不透明度）；增删整行淡底色 */
-function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children: ReactNode }) {
-  const { kind } = props;
-  return (
-    <div
-      style={{
-        display: "grid",
-        // 轨道要连 LINE_NUM_COLUMN 的横向内边距一起算进去，否则三位数行号顶穿竖线挤进正文
-        gridTemplateColumns: "calc(4ch + var(--space-2) + var(--space-1)) 1fr",
-        background:
-          kind === "add"
-            ? "var(--color-success-soft)"
-            : kind === "del"
-              ? "var(--color-danger-soft)"
-              : undefined,
-      }}
-    >
-      <span style={LINE_NUM_COLUMN}>{props.lineNum}</span>
-      <span
-        style={{
-          padding: "0 var(--space-2) 0 var(--space-2)",
-          whiteSpace: "pre-wrap",
-          overflowWrap: "anywhere",
-          color: kind === "ctx" ? "var(--color-text-secondary)" : "var(--color-text-primary)",
-        }}
-      >
-        {props.children}
-      </span>
-    </div>
-  );
-}
-
-/** 词级对比 token → span；changed 片段按角色加底（pi inverse 的 DOM 等价物） */
-function intraSpans(tokens: readonly IntraToken[], kind: "del" | "add") {
-  return tokens.map((token, index) =>
-    token.changed ? (
-      <span
-        key={index}
-        style={{
-          backgroundColor: kind === "add" ? "var(--color-success)" : "var(--color-danger)",
-          color: "var(--color-bg-panel)",
-          borderRadius: 2,
-        }}
-      >
-        {token.text}
-      </span>
-    ) : (
-      <span key={index}>{token.text}</span>
-    ),
-  );
-}
 
 /**
  * 文件内容视图（write 写入的正文）：行号列 + shiki 高亮正文，视觉语言与 DiffView

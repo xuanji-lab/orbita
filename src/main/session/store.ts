@@ -866,6 +866,17 @@ export class SessionStore {
   }
 
   /**
+   * 读日志的**原始全量**（不做回退折叠）。唯一的消费者是审查面板的 task 来源
+   * （`main/review/task-source.ts`）：基线 = 本任务首次改该文件前的快照，**含已
+   * 撤回轮次**——回退不抹掉「这个任务动过哪些文件」的事实，面板看的是盘上现状
+   * 与最初基线的净差。其余读者（load / export / branch / read_task）都要生效视图，
+   * 用 readLog。
+   */
+  readRawLog(id: string): Promise<SessionRecord[]> {
+    return this.readLogEntries(id);
+  }
+
+  /**
    * 读日志（**生效视图**）：逐行解析、坏行跳过——只追加的文件最后一行可能因为
    * 断电写了一半，为此丢掉整条会话的记录是不划算的。回退界碑（revert 记录）在
    * 这里折叠生效列表：截到它的 targetMessageId 之前，界碑本身留下（界面画
@@ -873,6 +884,12 @@ export class SessionStore {
    * 不折叠——坏记录不该连带丢掉后面的真历史。
    */
   private async readLog(id: string): Promise<SessionRecord[]> {
+    // 生效视图 = 原始全量 + 回退界碑折叠（见 readRawLog 的注释：只有 task 来源要全量）
+    return this.foldReverts(await this.readLogEntries(id));
+  }
+
+  /** 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环。 */
+  private async readLogEntries(id: string): Promise<SessionRecord[]> {
     let raw: string;
     try {
       raw = await readFile(this.logPath(id), "utf8");
@@ -898,10 +915,6 @@ export class SessionStore {
         }
         // 文件账三件（revert.ts）同一条纪律：字段齐的收下，不齐的跳过
         if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) {
-          if (isRevertRecord(parsed)) {
-            const target = records.findIndex((record) => record.id === parsed.targetMessageId);
-            if (target >= 0) records.length = target;
-          }
           records.push(parsed);
           continue;
         }
@@ -921,6 +934,23 @@ export class SessionStore {
       }
     }
     return records;
+  }
+
+  /**
+   * 回退界碑折叠：界碑把生效列表截到它的 targetMessageId 之前（该消息及之后全部
+   * 撤出），界碑自己留下（界面画「已回退」+ 还原卡）。目标不在列表里（自身已被更早
+   * 的回退折掉）只留界碑、不折叠——坏记录不该连带丢掉后面的真历史。
+   */
+  private foldReverts(records: readonly SessionRecord[]): SessionRecord[] {
+    const effective: SessionRecord[] = [];
+    for (const record of records) {
+      if (isRevertRecord(record)) {
+        const target = effective.findIndex((item) => item.id === record.targetMessageId);
+        if (target >= 0) effective.length = target;
+      }
+      effective.push(record);
+    }
+    return effective;
   }
 }
 

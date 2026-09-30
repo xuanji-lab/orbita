@@ -24,6 +24,22 @@ const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入"
  * - 省略号跟原型用单个「…」（菜单项「移到…」、进行中「正在载入…」）。
  */
 export const zh: Messages = {
+  review: {
+    title: "审查",
+    source: (source) =>
+      source === "task" ? "本任务改动" : source === "unstaged" ? "未暂存" : source === "staged" ? "已暂存" : "与上游对比",
+    refresh: "刷新",
+    noTask: "先打开一个任务，才能看它的改动。",
+    emptyNoChanges: "没有改动。",
+    emptyNotRepo: "这个文件夹不是 Git 仓库——Git 三个来源需要一个仓库。「本任务改动」不需要。",
+    emptyNoGit: "这台机器没有安装 Git。「本任务改动」不依赖它。",
+    emptyNoUpstream: "当前分支没有上游，对比不了。",
+    againstUpstream: (name) => `与 ${name} 对比`,
+    restored: "已还原",
+    restoredEmpty: "与基线一致——没有可展示的差异。",
+    noBaseline: "无基线",
+    binary: "二进制",
+  },
   common: {
     cancel: "取消",
     close: "关闭",
@@ -167,6 +183,7 @@ export const zh: Messages = {
 
   rail: {
     files: "文件",
+    review: "审查改动",
     skills: "技能",
     mcp: "MCP 服务",
     sideChat: "辅助对话 Ctrl+Alt+D",

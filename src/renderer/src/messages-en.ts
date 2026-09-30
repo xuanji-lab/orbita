@@ -1,5 +1,6 @@
 import { thinkingLevelLabel, type ThinkingLevel } from "../../shared/thinking.ts";
 import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
+import type { ReviewSource } from "../../shared/review.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -60,6 +61,23 @@ export const en = {
     save: "Save",
     apply: "Apply",
     reset: "Reset",
+  },
+
+  review: {
+    title: "Review",
+    source: (source: ReviewSource): string =>
+      source === "task" ? "This task" : source === "unstaged" ? "Unstaged" : source === "staged" ? "Staged" : "vs upstream",
+    refresh: "Refresh",
+    noTask: "Open a task to review its changes.",
+    emptyNoChanges: "No changes.",
+    emptyNotRepo: 'This folder is not a Git repository — the Git sources need one. "This task" works everywhere.',
+    emptyNoGit: 'Git is not installed on this machine. "This task" works without it.',
+    emptyNoUpstream: "This branch has no upstream — nothing to compare against.",
+    againstUpstream: (name: string) => `Compared with ${name}`,
+    restored: "Restored",
+    restoredEmpty: "Identical to the baseline — nothing to show.",
+    noBaseline: "No baseline",
+    binary: "Binary",
   },
 
   /** 思考档的显示名：英文沿用 shared 的词（含模型家族专属叫法，如 claude 的 Extra） */
@@ -188,6 +206,7 @@ export const en = {
 
   rail: {
     files: "Files",
+    review: "Review changes",
     skills: "Skills",
     mcp: "MCP servers",
     sideChat: "Side chat Ctrl+Alt+D",

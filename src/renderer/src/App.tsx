@@ -37,6 +37,7 @@ import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shel
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
+import { ReviewPanel } from "./features/review/ReviewPanel";
 import { CHANNEL_COLUMN_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
@@ -279,6 +280,17 @@ export function App() {
   const subSessionsMainIdRef = useRef<string | null>(null);
   /** 文件面板的「Esc 先退一层」：预览开着时由它关预览（FilesPanel 填，Esc 监听里先问它） */
   const filesEscapeRef = useRef<(() => boolean) | null>(null);
+  /**
+   * 审查面板的一次性定位请求（轮尾卡 / 界碑卡点「在面板里看」）：token 单调递增，
+   * 同一路径连点两次也能触发展开。ChatView 经 props 回调上报，面板消费后自会展开。
+   */
+  const [reviewFocus, setReviewFocus] = useState<{ path: string; token: number } | null>(null);
+  const reviewFocusTokenRef = useRef(0);
+  const openReviewAt = useCallback((path: string) => {
+    reviewFocusTokenRef.current += 1;
+    setReviewFocus({ path, token: reviewFocusTokenRef.current });
+    setRightPanel("review");
+  }, []);
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
     setSubSessionsNav((prev) => syncToMainSession(prev, subSessionsMainIdRef.current, nextMainId));
@@ -564,6 +576,7 @@ export function App() {
               <ChatView
                 session={session}
                 providersError={providersError}
+                onOpenReviewAt={openReviewAt}
                 onOpenChannel={openChannel}
                 onOpenSubSession={openSubSessionInPanel}
                 onOpenSubSessions={openSubSessionsList}
@@ -610,6 +623,12 @@ export function App() {
             >
               {shownPanel === "files" ? (
                 <FilesPanel session={session} onClose={() => handlePanel(null)} escapeRef={filesEscapeRef} />
+              ) : shownPanel === "review" ? (
+                <ReviewPanel
+                  sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  focus={reviewFocus}
+                  onClose={() => handlePanel(null)}
+                />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel
                   skills={skills}

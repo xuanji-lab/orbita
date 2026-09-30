@@ -31,6 +31,7 @@ import { registerWindowIpc } from "./window/ipc.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
@@ -417,6 +418,8 @@ void app.whenReady().then(async () => {
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
+  // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
+  registerReviewIpc(sessions);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,

@@ -55,6 +55,8 @@ export function FileTurnCard(props: {
   undone: boolean;
   busy: boolean;
   onUndo: (turnId: string) => void;
+  /** 点文件行 → 右侧审查面板打开并定位该文件的 diff */
+  onOpenFile?: (path: string) => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -142,10 +144,28 @@ export function FileTurnCard(props: {
         <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
           {props.record.changes.map((change) => {
             const parts = pathParts(change.path, props.cwd);
+            const clickable = props.onOpenFile !== undefined;
             return (
-              <div
+              <button
                 key={change.path}
-                style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}
+                type="button"
+                disabled={!clickable}
+                title={clickable ? undefined : undefined}
+                onClick={() => props.onOpenFile?.(change.path)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--space-2)",
+                  minWidth: 0,
+                  width: "100%",
+                  padding: "2px 0",
+                  border: 0,
+                  background: "transparent",
+                  color: "inherit",
+                  font: "inherit",
+                  textAlign: "left",
+                  cursor: clickable ? "pointer" : "default",
+                }}
               >
                 <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
                   <Icon name="file-text" size={12} strokeWidth={1.8} />
@@ -157,7 +177,7 @@ export function FileTurnCard(props: {
                   {parts.dir !== "" && <span style={SLOT_DIR}>{parts.dir}</span>}
                 </span>
                 <Stats added={change.added} removed={change.removed} />
-              </div>
+              </button>
             );
           })}
         </div>
