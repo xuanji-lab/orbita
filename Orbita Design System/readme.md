@@ -123,8 +123,8 @@ the English copy; the Chinese copy follows the same voice.
 
 ## Visual foundations
 
-**Colour.** Three themes: **white + blue** (light), **warm dark + yellow** (dark), and
-**neutral black + yellow** (black). A warm off-white shell (`#f3f4f1`) with
+**Colour.** Themes: **white + blue** (light), the two dark tiers **黛 Slate + yellow** and
+**玄 Onyx + yellow**, and the two paper faces (below). A warm off-white shell (`#f3f4f1`) with
 pure-white panels, three text greys, three hairline greys. Every colour has exactly one job: the
 accent is blue `#1d4ed8` on light and yellow `#d6c245` on dark, and it means the single primary
 action (the send button, "New task", "Start Agent"), the selected mode, and a checked checkbox
@@ -142,25 +142,27 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
-**Two dark tiers** (re-cut 2026-09-27 from the v3 sample page, layering measured off the user's
-comfort reference ZCode): **the shell — the ground the left rail and right icon strip sit on — is
-the lighter step; the chat panel is the well; cards and the composer float back up (+21 steps);
-hairlines are white ~10% translucent**. The grounds paint solid (`.layer` / `.pane` overrides in
+**Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
+user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is
+unchanged — **the shell (the ground the left rail and right icon strip sit on) is the lighter
+step, the chat panel is the well, cards and the composer float back up; hairlines are white at
+low translucency; grounds paint solid** (`.layer` / `.pane` overrides in
 `src/renderer/src/styles.css`; glass is reserved for floating layers, whose `--glass-bg` is the
-card colour — ZCode's popover recipe). The defects of the old Warm grounds were retired the same
-day: green-tailed grounds (`#191c1d` / `#232525`) and cream ink (`#d6d5cf`) — the sources of the
-murky feel (gruvbox's full cream `#ebdbb2` had already been cut twice before). **Graphite** (石墨,
-added 2026-09-27) is the ZCode-exact neutral: `#202020 / #161616 / #2b2b2b`, ink
-`#f2f2f2 / #a6a6a6 / #808080` (tertiary lifted from `#6e6e6e` the same day — micro captions on the
-well read at 3.6:1, below the 4.5 floor; guarded by `dark-contrast.test.ts`). **Ink** keeps the
-near-black identity with the same proportions —
-`#1b1b1b / #141414 / #242424` (the well lightened one step the same day; it must stay at or below
-Graphite's `#161616`) — and **stays the dark landing of `system`**. Both are manual choices and
-take the yellow accent (`#d6c245`) on `--color-accent-fg`; selection washes at `.08` — carried by
-weight and ink, not fill. A third tier, **Warm** (微暖), existed for one day and was cut by user
-decision — settings holding `dark` migrate to Graphite (`parseTheme`). (The 2026-09-03 re-cut
-history — true black, GitHub default, GitHub ×0.78 and neutral gray each bounced — lives in that
-day's commits.)
+tier's card colour). What moved is where each tier's contrast lives: the two wells now sit at the
+same depth (`#151517` / `#161616`), and the split is in the shell. **黛 Slate** (id `graphite`,
+the DeepSeek Harness palette) draws in: blue-gray shell `#1b1b1c` one step above its well `#151517`,
+cards `#2c2c2e`, and the brightest grey ink of the set `#f9fafb / #cfd3d6 / #adb2b8` — timestamps
+and tool captions read clearly. **玄 Onyx** (id `black`, ZCode zai-dark's real structure) opens
+up: the shell floats at `#2b2b2b` — a full step above the well `#161616` — cards `#262626`, ink
+`#e5e5e5 / #a6a6a6 / #808080` (ZCode derives its greys by alpha; the 30%-white tertiary fails the
+4.5 floor on the well, so this tier pins solid values that pass — guarded by `dark-contrast.test.ts`).
+The retired 石墨/Ink pairing had its shell only a hair above the well — shell and well read as one
+murk, which is why it was replaced. **玄 stays the dark landing of `system`**; both are manual
+choices too, and both keep the yellow accent (`#d6c245`) on `--color-accent-fg`; selection washes
+at `.08` — carried by weight and ink, not fill. Tier ids remain `graphite`/`black` (they are the
+settings/IPC contract); the display names 黛/Slate and 玄/Onyx live in the message catalogues.
+(The 2026-09-27 ZCode-transcribed 石墨/墨 pairing and its own history — Warm's one-day life, the
+2026-09-03 true-black/GitHub/neutral bounces — live in those days' commits.)
 
 **Paper themes** (added 2026-09-25): **Copybook** (小学作业) and **Typescript** (打字稿) are the two
 faces of the 稿纸 era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
@@ -218,11 +220,10 @@ from colour.
 by nesting rather than blurred behind — a moving pixel anywhere on screen used to force the GPU to
 recomposite the whole window every frame, so the depth cue now comes from compositing alone. One
 alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
-`.60 / .84 / .936` and dark and black `.70 / .91 / .973`. The themes are deliberately unequal —
-**dark and black block more than light** — because light text needs a settled ground and a bleeding
-wallpaper costs a dark ground its whole promise. Dark and black share one glass recipe: **the tint
-is each theme's own panel colour** (warm `rgba(40,40,40,.7)`, neutral `rgba(17,17,17,.7)`), so the
-ladder always climbs from the page ground toward the panel colour.
+`.60 / .84 / .936` and the paper faces `.92`. The two dark tiers left the ladder on 2026-09-27:
+their glass is now **solid** (`--glass-alpha: 1`, `--glass-bg` = the tier's card colour) — dark
+grounds must block, not transmit, and Windows' opaque light window base turned translucent dark
+grounds to mud; solid is the endpoint of **dark blocks more than light**.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
