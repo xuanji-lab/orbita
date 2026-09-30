@@ -134,9 +134,6 @@
   --color-chat-control-bg: #2c2c2e;
   --color-chat-table-bg: #151517;
   --color-chat-link: #52a8ff;
-  /* 代码块随黛阶：底取 DeepSeek 代码块面 #1b1b1c（比井浮一档），前景提到 #f9fafb */
-  --color-code-bg: #1b1b1c;
-  --color-code-text: #f9fafb;
 }
 
 /* black — 玄 Onyx（2026-09-30 换血，顶替原墨槽位）：ZCode zai-dark 纯灰档。
@@ -181,9 +178,6 @@
   --color-chat-control-bg: #262626;
   --color-chat-table-bg: #161616;
   --color-chat-link: #52a8ff;
-  /* 代码块随玄阶：ZCode 的代码块与井同色靠边框分（#161616），前景 #e5e5e5 */
-  --color-code-bg: #161616;
-  --color-code-text: #e5e5e5;
 }
 
 /* copybook — 小学作业（中文）：璇玑载体谱「稿纸」一档的中文版（2026-09-25 载入，同日由

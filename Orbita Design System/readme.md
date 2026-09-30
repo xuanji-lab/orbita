@@ -460,7 +460,7 @@ source does not define them.
 
 ## Caveats
 
-- **`--color-text-inverse` actually inverts**: light `#ffffff`, graphite `#202020`, black `#1b1b1b`
+- **`--color-text-inverse` actually inverts**: light `#ffffff`, graphite `#1b1b1c`, black `#2b2b2b`
   (`tokens/colors.css`, one per theme block) — each is that theme's own shell ground, the opposite of
   `--color-text-primary`. Text that must stay white on a permanently dark ground (overlays, toasts)
   uses `--color-text-on-dark`; text on a coloured fill uses that fill's `-fg` token.

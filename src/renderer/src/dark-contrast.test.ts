@@ -9,6 +9,11 @@
  *
  * 只读 tokens/colors.css 的暗色两块（graphite / black）；色值解析认 `#rrggbb`，
  * 遇 rgba / color-mix 的 token 直接跳过（暗档文字色全是实色 hex）。
+ *
+ * **底只取井（--color-bg-panel）。** 玄的壳 #2b2b2b 比井亮一档，而左栏标签、空态提示
+ * 用的是 secondary #a6a6a6——压在壳上是 5.82:1（旧墨壳 #1b1b1b 上是 7.08），低于本档
+ * 自定的 7；tertiary 目前不上壳，真上壳是 3.59（低于 4.5）。改壳的亮度或壳上的墨色时，
+ * 这一面不在守卫内，得自己看。
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
