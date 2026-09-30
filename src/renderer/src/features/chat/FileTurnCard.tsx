@@ -1,8 +1,12 @@
 import { useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
+import { api } from "../../api";
 import type { FileTurnView, RevertRecord } from "@shared/revert";
 import { splitPathTail } from "./tool-results";
+
+/** 网页产物：浏览器能直接渲染、值得给「打开」动作的那几种（files.ts 同一张表）。 */
+const WEB_ARTIFACT = /\.(?:html?|svg)$/i;
 
 /**
  * 轮尾卡片家族 —— 每轮 assistant 结束后插在对话流的文件账（FileTurnRecord）与
@@ -57,6 +61,8 @@ export function FileTurnCard(props: {
   onUndo: (turnId: string) => void;
   /** 点文件行 → 右侧审查面板打开并定位该文件的 diff */
   onOpenFile?: (path: string) => void;
+  /** 产物打开按钮要按会话对账（主进程白名单：会话文件账里的路径才打得开） */
+  sessionId: string;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -142,7 +148,7 @@ export function FileTurnCard(props: {
       </div>
       {open && (
         <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-          {props.record.changes.map((change) => {
+          {props.record.changes.filter((change) => !WEB_ARTIFACT.test(change.path)).map((change) => {
             const parts = pathParts(change.path, props.cwd);
             const clickable = props.onOpenFile !== undefined;
             return (
@@ -180,8 +186,78 @@ export function FileTurnCard(props: {
               </button>
             );
           })}
+          {props.record.changes.some((change) => WEB_ARTIFACT.test(change.path)) && (
+            <div style={{ display: "grid", gap: 2, marginTop: "var(--space-1)", paddingTop: "var(--space-1)", borderTop: "1px solid var(--color-border-subtle)" }}>
+              {props.record.changes
+                .filter((change) => WEB_ARTIFACT.test(change.path))
+                .map((change) => (
+                  <ArtifactRow
+                    key={change.path}
+                    path={change.path}
+                    cwd={props.cwd}
+                    sessionId={props.sessionId}
+                  />
+                ))}
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 轮尾产物行（.html / .htm / .svg）：左图标、名称 + 类型「网页」（zcode 参考的
+ * 形态），末端两个按钮——「在 Orbita 浏览器打开」（网页产物的默认出口，沙盒里
+ * 还能开着 DevTools 看）与「用默认浏览器打开」。主进程按会话文件账白名单校验。
+ */
+function ArtifactRow(props: { path: string; cwd: string | null; sessionId: string }) {
+  const t = useT();
+  const parts = pathParts(props.path, props.cwd);
+  const openInBrowser = () => {
+    void api.session.openArtifactInBrowser(props.sessionId, props.path).catch((cause: unknown) => {
+      console.error("[file-card] 内置浏览器打开失败", cause);
+    });
+  };
+  const openDefault = () => {
+    void api.session.openArtifactDefault(props.sessionId, props.path).catch((cause: unknown) => {
+      console.error("[file-card] 默认应用打开失败", cause);
+    });
+  };
+  const button: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    padding: "2px var(--space-2)",
+    border: "1px solid var(--color-border-subtle)",
+    borderRadius: "var(--radius-sm)",
+    background: "transparent",
+    color: "var(--color-text-secondary)",
+    font: "inherit",
+    fontSize: "var(--font-size-caption)",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
+      <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
+        <Icon name="globe" size={12} strokeWidth={1.8} />
+      </span>
+      <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
+        <span style={{ fontWeight: 600, color: "var(--color-text-primary)", whiteSpace: "nowrap" }}>
+          {parts.name}
+        </span>
+        <span style={{ ...SLOT_DIR, flex: "0 0 auto" }}>{t.chat.fileCardWebPage}</span>
+        {parts.dir !== "" && <span style={SLOT_DIR}>{parts.dir}</span>}
+      </span>
+      <button type="button" style={button} onClick={openInBrowser} title={t.chat.openInOrbita}>
+        <Icon name="arrow-up-right" size={11} strokeWidth={1.8} />
+        {t.chat.openInOrbita}
+      </button>
+      <button type="button" style={button} onClick={openDefault} title={t.chat.openDefaultApp}>
+        <Icon name="external-link" size={11} strokeWidth={1.8} />
+        {t.chat.openDefaultApp}
+      </button>
     </div>
   );
 }

@@ -1038,6 +1038,7 @@ function ChatViewBody(props: {
           actionsBusy={session.phase !== "idle" || session.queued.length > 0}
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
+          sessionId={openId}
         />
       </Pane>
       {session.revertDialog !== null && (
@@ -1104,6 +1105,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   readOnly: boolean;
   /** 轮尾卡文件行的「在面板里看」（主槽才有；引用稳定） */
   onOpenReviewAt?: (path: string) => void;
+  /** 产物打开按钮的会话对账 */
+  sessionId: string;
 }) {
   const t = useT();
   const { transcript } = props;
@@ -1253,6 +1256,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onUndoTurn={props.onUndoTurn}
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
+                sessionId={props.sessionId}
               />
             ) : (
               <EntryView
@@ -1269,6 +1273,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onUndoTurn={props.onUndoTurn}
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
+                sessionId={props.sessionId}
               />
             )}
             {branchAfter !== undefined && (
@@ -2044,6 +2049,8 @@ function EntryView(props: {
   readOnly?: boolean;
   /** 轮尾卡文件行的「在面板里看」（原样转发给 FileTurnCard） */
   onOpenReviewAt?: (path: string) => void;
+  /** 产物打开按钮的会话对账（主进程白名单按它查） */
+  sessionId: string;
 }) {
   const t = useT();
   const { entry } = props;
@@ -2067,6 +2074,7 @@ function EntryView(props: {
         busy={props.actionsBusy}
         onUndo={props.onUndoTurn}
         onOpenFile={props.onOpenReviewAt}
+        sessionId={props.sessionId}
       />
     );
   }
@@ -2173,6 +2181,8 @@ function TurnRollupLine(props: {
   actionsBusy: boolean;
   /** 轮尾卡文件行的「在面板里看」（成员里的 fileTurn 单元用，原样转发） */
   onOpenReviewAt?: (path: string) => void;
+  /** 产物打开按钮的会话对账 */
+  sessionId: string;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2239,6 +2249,7 @@ function TurnRollupLine(props: {
               onUndoTurn={props.onUndoTurn}
               actionsBusy={props.actionsBusy}
               onOpenReviewAt={props.onOpenReviewAt}
+              sessionId={props.sessionId}
             />
           ))}
         </div>
