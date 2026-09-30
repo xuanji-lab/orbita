@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
 import type { DictationEvent, VoiceFailure } from "../../shared/voice.ts";
 import { createDoubaoProtocol } from "./doubao-protocol.ts";
+import { createStepfunProtocol } from "./stepfun-protocol.ts";
 import { DictationSessions, type OpenSocket, type OutboundFrame, type SocketHandlers } from "./dictation.ts";
 
 const CREDS = { appId: "app", accessToken: "token", resourceId: "volc.seedasr.sauc.duration" };
@@ -182,4 +183,45 @@ test("test：连上即关，回 ok；连不上回诊断结果", async () => {
   const bad = sessions.test(createDoubaoProtocol(CREDS));
   opened[1]!.handlers.onError();
   assert.deepEqual(await bad, { ok: false, reason: "unauthorized", detail: "401" });
+});
+
+/** 阶跃线协议走一遍共用生命周期：文本帧出站、JSON 入站、commit 收尾（两家至少各一条全链路） */
+test("阶跃：连上发 session.update，音频转 base64 文本帧，commit 后最后一句定稿即收尾", async () => {
+  const { opened, openSocket } = fakeSockets();
+  const sessions = new DictationSessions({ openSocket, diagnose: async () => ({ reason: "network" }) });
+  const events: DictationEvent[] = [];
+  const started = sessions.start("s1", 7, createStepfunProtocol("sk-test"), (event) => events.push(event));
+  const socket = opened[0]!;
+  assert.equal(socket.headers["Authorization"], "Bearer sk-test");
+  socket.handlers.onOpen();
+  assert.deepEqual(await started, { ok: true });
+  const first = socket.sent[0];
+  assert.ok(first !== undefined && first.kind === "text");
+  assert.equal(JSON.parse(first.data)["type"], "session.update");
+
+  sessions.audio("s1", new Uint8Array([1, 2]));
+  const second = socket.sent[1];
+  assert.ok(second !== undefined && second.kind === "text");
+  const appended = JSON.parse(second.data) as Record<string, unknown>;
+  assert.equal(appended["type"], "input_audio_buffer.append");
+  assert.equal(appended["audio"], "AQI=");
+
+  socket.handlers.onMessage(
+    JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", item_id: "a", text: "你好" }),
+  );
+  assert.deepEqual(events.at(-1), { sessionId: "s1", kind: "transcript", text: "你好", final: false });
+
+  const stopped = sessions.stop("s1");
+  const commit = socket.sent[2];
+  assert.ok(commit !== undefined && commit.kind === "text");
+  assert.equal(JSON.parse(commit.data)["type"], "input_audio_buffer.commit");
+  socket.handlers.onMessage(
+    JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", item_id: "a", transcript: "你好。" }),
+  );
+  await stopped;
+  assert.equal(socket.closed, true, "收尾完成主动关连接");
+  assert.deepEqual(events.slice(-2), [
+    { sessionId: "s1", kind: "transcript", text: "你好。", final: true },
+    { sessionId: "s1", kind: "ended" },
+  ]);
 });
