@@ -15,7 +15,8 @@ import type {
   BrowserImportSummary,
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
-import type { DoubaoVoiceConfig, VoiceFailure } from "@shared/voice";
+import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
+import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
@@ -526,13 +527,74 @@ function AttributionPreview(props: { enabled: boolean; language: Language }) {
 
 /**
  * 设置 › 语音。语音是一整套系统（听写 + 实时对话，厂商会有好几家，shared/voice.ts 顶注释）；
- * 这一页现在只有豆包的凭证——输入框的麦克风听写用它。
+ * 这里选「听写用哪家」，下面各家凭证一组一组排开——各家要填的东西不一样，不硬凑成一张表单。
  */
 function VoiceSettings() {
   return (
     <div className="set-page">
+      <DictationEngineGroup />
       <DoubaoVoiceGroup />
+      <StepfunVoiceGroup />
     </div>
+  );
+}
+
+/**
+ * 「听写用哪家」：芯片选厂商（同 General 里语言行的形状）。选中的那家没配好时名字下方说一句，
+ * 但不拦着选——用户可能想先选好再去下面填凭证。
+ */
+function DictationEngineGroup() {
+  const t = useT();
+  const [selection, setSelection] = useState<DictationSelection | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.voice
+      .dictationSelection()
+      .then((loaded) => {
+        if (!cancelled) setSelection(loaded);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const select = (provider: DictationProvider) => {
+    if (busy || selection?.provider === provider) return;
+    setBusy(true);
+    void api.voice
+      .setDictationProvider(provider)
+      .then((next) => setSelection(next))
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <SettingGroup label={t.voice.dictationGroup}>
+      <SettingRow
+        name={t.voice.dictationEngine}
+        info={t.voice.dictationEngineInfo}
+        note={
+          selection !== null && !selection.configured ? (
+            <span className="set-row-hint">{t.voice.engineNotReady}</span>
+          ) : undefined
+        }
+      >
+        {selection === null ? (
+          <span className="set-row-hint">…</span>
+        ) : (
+          <span className="set-chips" role="group" aria-label={t.voice.dictationEngine}>
+            {DICTATION_PROVIDERS.map((provider) => (
+              <Chip key={provider} active={selection.provider === provider} disabled={busy} onClick={() => select(provider)}>
+                {t.voice.providers[provider]}
+              </Chip>
+            ))}
+          </span>
+        )}
+      </SettingRow>
+    </SettingGroup>
   );
 }
 
@@ -610,11 +672,11 @@ function DoubaoVoiceGroup() {
       </span>
     ) : status.kind === "tested" || status.kind === "saved" ? (
       <span role="status" className="set-row-note">
-        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.testOk : t.voice.saved}
+        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.testOk("doubao") : t.voice.saved}
       </span>
     ) : status.kind === "failed" ? (
       <span role="alert" className="set-row-error">
-        {t.voice.failures[status.failure.reason]}
+        {t.voice.failures[status.failure.reason]("doubao")}
         {status.failure.detail !== undefined && <code className="voice-failure-detail"> {status.failure.detail}</code>}
       </span>
     ) : status.kind === "save-failed" ? (
@@ -654,6 +716,108 @@ function DoubaoVoiceGroup() {
           spellCheck={false}
           value={resourceId}
           onChange={(event) => edit(setResourceId)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.connection} note={note}>
+        <span className="set-inline">
+          <PanelButton onClick={test} disabled={busy || config === null}>
+            {t.voice.test}
+          </PanelButton>
+          <PanelButton onClick={save} disabled={busy || !dirty}>
+            {t.voice.save}
+          </PanelButton>
+        </span>
+      </SettingRow>
+    </SettingGroup>
+  );
+}
+
+/**
+ * 阶跃凭证就一样：API Key。规矩同豆包组——key 只进不出，输入框永远空、占位写已存掩码，
+ * 留空保存 = 保留；「测试连接」用草稿试、不落盘，key 没填拿已存的试。
+ */
+function StepfunVoiceGroup() {
+  const t = useT();
+  const [config, setConfig] = useState<StepfunVoiceConfig | null>(null);
+  const [key, setKey] = useState("");
+  const [status, setStatus] = useState<VoiceStatus>({ kind: "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.voice
+      .stepfunGet()
+      .then((loaded) => {
+        if (!cancelled) setConfig(loaded);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const draft = key.trim() === "" ? {} : { apiKey: key };
+  const dirty = config !== null && key.trim() !== "";
+  const busy = status.kind === "busy";
+  // 改了 key，上一次的结果就不再说明现在这组值了
+  const edit = (value: string) => {
+    setKey(value);
+    if (status.kind !== "busy") setStatus({ kind: "idle" });
+  };
+
+  const test = () => {
+    setStatus({ kind: "busy", what: "test" });
+    void api.voice
+      .stepfunTest(draft)
+      .then((result) => setStatus(result.ok ? { kind: "tested" } : { kind: "failed", failure: result }))
+      .catch(() => setStatus({ kind: "failed", failure: { reason: "network" } }));
+  };
+  const save = () => {
+    setStatus({ kind: "busy", what: "save" });
+    void api.voice
+      .stepfunSave(draft)
+      .then((saved) => {
+        setConfig(saved);
+        setKey("");
+        setStatus({ kind: "saved" });
+      })
+      .catch(() => setStatus({ kind: "save-failed" }));
+  };
+
+  const note =
+    status.kind === "busy" ? (
+      <span className="set-row-hint">
+        <Icon name="loader-circle" size={12} spin /> {status.what === "test" ? t.voice.testing : t.voice.saving}
+      </span>
+    ) : status.kind === "tested" || status.kind === "saved" ? (
+      <span role="status" className="set-row-note">
+        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.testOk("stepfun") : t.voice.saved}
+      </span>
+    ) : status.kind === "failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.failures[status.failure.reason]("stepfun")}
+        {status.failure.detail !== undefined && <code className="voice-failure-detail"> {status.failure.detail}</code>}
+      </span>
+    ) : status.kind === "save-failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.saveFailed}
+      </span>
+    ) : undefined;
+
+  return (
+    <SettingGroup label={t.voice.stepfunGroup}>
+      <SettingRow name={t.voice.stepfunApiKey} info={t.voice.stepfunApiKeyInfo}>
+        <input
+          className="text-field voice-field"
+          type="password"
+          aria-label={t.voice.stepfunApiKey}
+          autoComplete="off"
+          placeholder={
+            config !== null && config.apiKeyMasked !== null
+              ? t.voice.tokenSaved(config.apiKeyMasked)
+              : t.voice.keyPaste
+          }
+          value={key}
+          onChange={(event) => edit(event.target.value)}
         />
       </SettingRow>
       <SettingRow name={t.voice.connection} note={note}>
