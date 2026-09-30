@@ -807,15 +807,27 @@ export const zh: Messages = {
     revertHere: "回到这里——撤回这条消息及之后全部，还原被改的文件，原文放回输入框",
     revertBusy: "等这个任务跑完再回退",
     revertReadOnly: "这个任务没有智能体会话，回退不了",
+    previewRevertLead: (files, yours) =>
+      files === 0
+        ? "回到这条消息之前？之后的对话会撤回。"
+        : `回到这条消息之前？之后的对话会撤回，还原 ${files} 个文件${yours > 0 ? `——其中 ${yours} 个你改过，你的改动会被覆盖` : ""}。`,
+    previewUndoLead: (files, yours) =>
+      `撤销这一轮的文件改动？${files} 个文件回到这一轮之前${yours > 0 ? `——其中 ${yours} 个之后又被改过，那些改动会被覆盖` : ""}。对话不动。`,
+    previewEffect: (effect) =>
+      effect === "restore" ? "恢复" : effect === "delete" ? "删除" : effect === "yours" ? "你改过" : effect === "later" ? "后续轮改过" : "无法还原",
+    previewEffectHint: (effect) =>
+      effect === "restore"
+        ? "回到改动之前的内容。"
+        : effect === "delete"
+          ? "之前不存在，会被删除。"
+          : effect === "yours"
+            ? "智能体改完之后又被改过（你或 shell 命令）。这些改动会被快照覆盖。"
+            : effect === "later"
+              ? "后面的轮次也改过这个文件。撤销会把它还原到这一轮之前，后面的改动一起没了。"
+              : "没有快照（太大或不是文本），这个文件保持原样。",
+    previewCut: "从这里起的对话将被撤回",
     revertTitle: "回退对话",
-    revertLead: "这条消息及之后的所有往来会被撤回。被撤轮次里智能体改过的文件，还原到动手之前。",
     revertConfirm: "回退",
-    revertWillRestore: "将恢复",
-    revertWillDelete: "将删除（回退前不存在）",
-    revertUserModified: "你的修改也会一并撤回",
-    revertUserModifiedNote: "这些文件在智能体改完之后被动过（你手改或终端命令改过）。回退会还原到快照——那部分修改会丢。",
-    revertUnrecoverable: "无法回退",
-    revertUnrecoverableNote: "它们的快照不可用（过大或不是文本）。回退后这些文件保持原样。",
     revertShellNote: "只被终端命令改过的文件不在账上，不会回退。",
     revertOutcome: (outcome: "restored" | "deleted" | "skipped") =>
       outcome === "restored" ? "已恢复" : outcome === "deleted" ? "已删除" : "未还原",
@@ -824,10 +836,7 @@ export const zh: Messages = {
     revertSkipped: (n: number) => `${n} 个没还原（无快照）`,
     revertedHere: "已回退——对话从这里重新来过",
     undoTitle: "撤销文件改动",
-    undoLead: "只把这一轮改过的文件还原到这一轮开始前。对话不动；模型会被告知这些改动没了。",
     undoConfirm: "撤销改动",
-    undoLaterTouched: "后续轮次也改过这些文件",
-    undoLaterTouchedNote: "撤销会还原到这一轮之前——后续轮次对它们的改动也会一并退掉。",
     fileCardChanged: (n: number) => `${n} 个文件已更改`,
     fileCardExpand: "展开改动的文件",
     fileCardCollapse: "收起改动的文件",

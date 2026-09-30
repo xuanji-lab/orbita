@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
 import type { FileTurnView, RevertRecord } from "@shared/revert";
 import { splitPathTail } from "./tool-results";
+import { RevertPreviewContext } from "./revert-preview.ts";
 
 /** 网页产物：浏览器能直接渲染、值得给「打开」动作的那几种（files.ts 同一张表）。 */
 const WEB_ARTIFACT = /\.(?:html?|svg)$/i;
@@ -68,7 +69,11 @@ export function FileTurnCard(props: {
   sessionId: string;
 }) {
   const t = useT();
+  const preview = useContext(RevertPreviewContext);
+  // 撤销预演中的那一轮：描边加重 + 自动展开，底部确认栏说的就是这张卡里的文件
+  const previewing = preview?.kind === "undo" && preview.turnId === props.record.id;
   const [open, setOpen] = useState(false);
+  const shown = open || previewing;
   const added = props.record.changes.reduce((sum, change) => sum + change.added, 0);
   const removed = props.record.changes.reduce((sum, change) => sum + change.removed, 0);
   return (
@@ -76,10 +81,11 @@ export function FileTurnCard(props: {
       className="file-turn-card"
       style={{
         display: "grid",
-        gap: open ? "var(--space-1)" : 0,
+        gap: shown ? "var(--space-1)" : 0,
         padding: "var(--space-2) var(--space-3)",
         background: "var(--color-chat-card-bg)",
-        border: "1px solid var(--color-border-subtle)",
+        border: `1px solid ${previewing ? "var(--color-border-strong)" : "var(--color-border-subtle)"}`,
+        boxShadow: previewing ? "0 0 0 1px var(--color-border-strong)" : "none",
         borderRadius: "var(--radius-md)",
         fontSize: "var(--font-size-caption)",
       }}
@@ -88,8 +94,8 @@ export function FileTurnCard(props: {
         {/* 整个头部左段都是展开键（不是只有 13px 的 chevron）：zcode 同款，点哪都开 */}
         <button
           type="button"
-          title={open ? t.chat.fileCardCollapse : t.chat.fileCardExpand}
-          aria-expanded={open}
+          title={shown ? t.chat.fileCardCollapse : t.chat.fileCardExpand}
+          aria-expanded={shown}
           onClick={() => setOpen((value) => !value)}
           style={{
             display: "inline-flex",
@@ -111,7 +117,7 @@ export function FileTurnCard(props: {
               display: "inline-flex",
               color: "var(--color-text-tertiary)",
               transition: "transform var(--duration-fast) var(--ease-out-quint)",
-              transform: open ? "rotate(90deg)" : "none",
+              transform: shown ? "rotate(90deg)" : "none",
             }}
           >
             <Icon name="chevron-right" size={13} strokeWidth={1.8} />
@@ -165,7 +171,7 @@ export function FileTurnCard(props: {
           </button>
         )}
       </div>
-      {open && (
+      {shown && (
         <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
           {props.record.changes.filter((change) => !WEB_ARTIFACT.test(change.path)).map((change) => {
             const parts = pathParts(change.path, props.cwd);

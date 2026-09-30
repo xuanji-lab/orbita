@@ -86,7 +86,8 @@ import { HomeHero } from "./HomeHero";
 import { CarryoverChecklist } from "./CarryoverChecklist";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import { DiffBody } from "../../shell/DiffView";
-import { RevertDialog, UndoDialog } from "./RevertDialog";
+import { RevertPreviewBar } from "./RevertPreviewBar";
+import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
@@ -528,6 +529,18 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
+  // 回退 / 撤销的预演对象：TranscriptColumn 是 memo，按原始值记忆，不每帧新建对象
+  const previewMessageId = session.revertDialog?.targetMessageId ?? null;
+  const previewTurnId = session.undoDialog?.turnId ?? null;
+  const revertPreview = useMemo<RevertPreview>(
+    () =>
+      previewMessageId !== null
+        ? { kind: "revert", messageId: previewMessageId }
+        : previewTurnId !== null
+          ? { kind: "undo", turnId: previewTurnId }
+          : null,
+    [previewMessageId, previewTurnId],
+  );
 
   // —— R5-05 首发过渡：slogan 与会话卡 220ms 向上淡出，composer 240ms 滑向窗口底部。
   // leaving 由事件处理器（发送 / 点会话卡）同步置位，首页保持挂载走完动画再让位；
@@ -984,6 +997,29 @@ function ChatViewBody(props: {
         footer={
           <>
             {notices}
+            {/* 回退 / 撤销的预演确认栏：与审批条、收尾清单同位同配方（就地，不遮消息流） */}
+            {session.revertDialog !== null && (
+              <RevertPreviewBar
+                mode="revert"
+                plan={session.revertDialog.plan}
+                cwd={session.cwd}
+                busy={session.revertBusy}
+                onConfirm={session.confirmRevert}
+                onCancel={session.cancelRevert}
+                onOpenFile={props.onOpenReviewAt}
+              />
+            )}
+            {session.undoDialog !== null && (
+              <RevertPreviewBar
+                mode="undo"
+                plan={session.undoDialog.plan}
+                cwd={session.cwd}
+                busy={session.undoBusy}
+                onConfirm={session.confirmUndo}
+                onCancel={session.cancelUndo}
+                onOpenFile={props.onOpenReviewAt}
+              />
+            )}
             {session.approvals[0] && (
               <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
             )}
@@ -1018,7 +1054,9 @@ function ChatViewBody(props: {
           </>
         }
       >
+        <RevertPreviewContext.Provider value={revertPreview}>
         <TranscriptColumn
+          preview={revertPreview}
           transcript={session.transcript}
           compactions={session.compactions}
           marks={session.marks}
@@ -1036,30 +1074,13 @@ function ChatViewBody(props: {
           cwd={session.cwd}
           onUndoTurn={session.undoTurn}
           onRevertTo={session.revertToMessage}
-          actionsBusy={session.phase !== "idle" || session.queued.length > 0}
+          actionsBusy={session.phase !== "idle" || session.queued.length > 0 || revertPreview !== null}
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
           sessionId={openId}
         />
+        </RevertPreviewContext.Provider>
       </Pane>
-      {session.revertDialog !== null && (
-        <RevertDialog
-          cwd={session.cwd}
-          plan={session.revertDialog.plan}
-          busy={session.revertBusy}
-          onConfirm={session.confirmRevert}
-          onCancel={session.cancelRevert}
-        />
-      )}
-      {session.undoDialog !== null && (
-        <UndoDialog
-          cwd={session.cwd}
-          plan={session.undoDialog.plan}
-          busy={session.undoBusy}
-          onConfirm={session.confirmUndo}
-          onCancel={session.cancelUndo}
-        />
-      )}
     </>
   );
 }
@@ -1073,6 +1094,8 @@ function ChatViewBody(props: {
  * 逐帧变化，列照旧逐帧重渲染，活体的实时性不变。
  */
 const TranscriptColumn = memo(function TranscriptColumn(props: {
+  /** 回退 / 撤销预演：回退时切点之后的往来变淡加删除线；撤销时那一轮的轮尾卡描边 */
+  preview: RevertPreview;
   transcript: readonly TranscriptItem[];
   compactions: readonly CompactedRecord[];
   /** 子会话 PR4a：盘上读回的通道标记，与 compactions 同一条纪律（见 mergeSideRecords） */
@@ -1186,6 +1209,19 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
   // 局部名叫 failedFold：failedFoldKey 是 turn-rollup 里的函数，不能重名遮蔽。
   const failedFold = props.turnError !== null ? failedFoldKey(turnView) : null;
+  // 回退预演的切点：要撤回的那条用户消息在视图里的位置（-1 = 没在预演 / 不在视图里）
+  const previewMessageId = props.preview?.kind === "revert" ? props.preview.messageId : null;
+  const cutIndex = useMemo(
+    () =>
+      previewMessageId === null
+        ? -1
+        : turnView.findIndex((entry) => entry.kind === "user" && entry.item.id === previewMessageId),
+    [previewMessageId, turnView],
+  );
+  const cutRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (cutIndex >= 0) cutRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [cutIndex]);
 
   return (
     <>
@@ -1231,6 +1267,13 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           }
           return (
             <Fragment key={entry.key}>
+              {index === cutIndex && (
+                <div ref={cutRef} className="revert-cut">
+                  <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
+                  {t.chat.previewCut}
+                </div>
+              )}
+              <div className={cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"}>
               <ShowImageGalleryGroup cards={cards} />
               {branchAfter !== undefined && (
                 <BranchRow
@@ -1242,11 +1285,20 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                   onBranch={props.onBranch}
                 />
               )}
+              </div>
             </Fragment>
           );
         }
+        const doomed = cutIndex >= 0 && index >= cutIndex;
         return (
           <Fragment key={entry.key}>
+            {index === cutIndex && (
+              <div ref={cutRef} className="revert-cut">
+                <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
+                {t.chat.previewCut}
+              </div>
+            )}
+            <div className={doomed ? "revert-doomed" : "revert-keep"}>
             {entry.kind === "turnGroup" ? (
               <TurnRollupLine
                 group={entry}
@@ -1291,6 +1343,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onBranch={props.onBranch}
               />
             )}
+            </div>
           </Fragment>
         );
       })}

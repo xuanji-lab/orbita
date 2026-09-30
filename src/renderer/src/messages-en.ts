@@ -879,16 +879,27 @@ export const en = {
     revertHere: "Revert to here — removes this message and everything after, restores the files it changed, and puts the text back in the composer",
     revertBusy: "Wait for this task to finish before reverting",
     revertReadOnly: "This task has no agent session to revert",
+    previewRevertLead: (files: number, yours: number): string =>
+      files === 0
+        ? "Go back to before this message? Everything after it is removed."
+        : `Go back to before this message? Everything after it is removed and ${files} file${files === 1 ? "" : "s"} go back${yours > 0 ? ` — ${yours} of them you edited, your edits will be overwritten` : ""}.`,
+    previewUndoLead: (files: number, yours: number): string =>
+      `Undo this round's file changes? ${files} file${files === 1 ? "" : "s"} go back to before it${yours > 0 ? ` — ${yours} of them changed since, those changes will be overwritten` : ""}. The conversation stays.`,
+    previewEffect: (effect: "restore" | "delete" | "yours" | "later" | "stuck"): string =>
+      effect === "restore" ? "restore" : effect === "delete" ? "delete" : effect === "yours" ? "you edited" : effect === "later" ? "later rounds edited" : "can't restore",
+    previewEffectHint: (effect: "restore" | "delete" | "yours" | "later" | "stuck"): string =>
+      effect === "restore"
+        ? "Goes back to its content from before."
+        : effect === "delete"
+          ? "Didn't exist before, so it will be deleted."
+          : effect === "yours"
+            ? "Changed after the agent finished (by you or a shell command). Those edits will be overwritten by the snapshot."
+            : effect === "later"
+              ? "Later rounds also changed this file. Undoing restores it to before this round, so their changes go too."
+              : "No snapshot (too large or not text). This file is left as it is.",
+    previewCut: "Everything from here will be removed",
     revertTitle: "Revert conversation",
-    revertLead:
-      "This message and everything after it will be removed from the conversation. Files the agent changed in those rounds go back to what they were before.",
     revertConfirm: "Revert",
-    revertWillRestore: "Will be restored",
-    revertWillDelete: "Will be deleted (didn't exist before)",
-    revertUserModified: "Your edits will be reverted too",
-    revertUserModifiedNote: "These files were changed after the agent finished (by you or by shell commands). Reverting restores the agent's snapshot — those edits are lost.",
-    revertUnrecoverable: "Cannot be reverted",
-    revertUnrecoverableNote: "Their snapshots are unavailable (too large or not text). Reverting leaves these files as they are.",
     revertShellNote: "Files changed only by shell commands are not tracked and will not be reverted.",
     revertOutcome: (outcome: "restored" | "deleted" | "skipped"): string =>
       outcome === "restored" ? "Restored" : outcome === "deleted" ? "Deleted" : "Not restored",
@@ -897,11 +908,7 @@ export const en = {
     revertSkipped: (n: number) => `${n} not restored (no snapshot)`,
     revertedHere: "Reverted — the conversation continued from here",
     undoTitle: "Undo file changes",
-    undoLead:
-      "Only this round's files go back to what they were before it. The conversation stays; the model is told the changes are gone.",
     undoConfirm: "Undo changes",
-    undoLaterTouched: "Later rounds changed these too",
-    undoLaterTouchedNote: "Undoing restores the state before this round — changes from later rounds to these files are lost as well.",
     fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
