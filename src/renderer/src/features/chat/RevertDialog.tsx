@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import type { RevertPlan, UndoPlan } from "@shared/revert";
+import { pathParts } from "./FileTurnCard";
 
 /**
  * 回退 / 撤销的确认框 —— 「直接撤回，不整七七八八的。但一定要提醒用户」
@@ -26,10 +27,9 @@ const CAUTION = {
 } as const;
 
 /** 清单里的一行路径：mono、可截断（目录淡、文件名亮）。tone 决定图标与文字。 */
-function PathRow(props: { path: string; tone: "normal" | "caution" | "info" }) {
-  const normalized = props.path.replaceAll("\\", "/");
-  const name = normalized.split("/").filter(Boolean).pop() ?? normalized;
-  const dir = normalized.slice(0, normalized.length - name.length);
+function PathRow(props: { path: string; cwd: string | null; tone: "normal" | "caution" | "info" }) {
+  // cwd 之内显示相对路径（与轮尾卡同一个 pathParts）：绝对路径把真正的文件名挤出视野
+  const { name, dir } = pathParts(props.path, props.cwd);
   const color = props.tone === "caution" ? CAUTION.text : props.tone === "info" ? "var(--color-text-tertiary)" : "var(--color-text-primary)";
   const iconColor = props.tone === "caution" ? CAUTION.icon : "var(--color-text-tertiary)";
   return (
@@ -42,11 +42,11 @@ function PathRow(props: { path: string; tone: "normal" | "caution" | "info" }) {
         />
       </span>
       <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
-        <span style={{ fontFamily: "var(--font-family-mono)", whiteSpace: "nowrap" }}>{name}</span>
+        <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{name}</span>
         {dir !== "" && (
           <span
             style={{
-              fontFamily: "var(--font-family-mono)",
+              minWidth: 0,
               fontSize: "var(--font-size-caption)",
               color: "var(--color-text-tertiary)",
               overflow: "hidden",
@@ -68,6 +68,7 @@ function PathRow(props: { path: string; tone: "normal" | "caution" | "info" }) {
 function PathGroup(props: {
   title: string;
   paths: readonly string[];
+  cwd: string | null;
   note?: string;
   tone: "normal" | "caution" | "info";
 }) {
@@ -84,17 +85,15 @@ function PathGroup(props: {
     >
       <div
         style={{
-          fontSize: "var(--font-size-micro)",
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-          fontFamily: "var(--font-family-mono)",
-          color: caution ? CAUTION.label : "var(--color-text-tertiary)",
+          fontSize: "var(--font-size-caption)",
+          fontWeight: 600,
+          color: caution ? CAUTION.label : "var(--color-text-secondary)",
         }}
       >
         {props.title}
       </div>
       {props.paths.map((path) => (
-        <PathRow key={path} path={path} tone={props.tone} />
+        <PathRow key={path} path={path} cwd={props.cwd} tone={props.tone} />
       ))}
       {props.note !== undefined && (
         <p
@@ -121,15 +120,15 @@ function DialogShell(props: {
   onCancel: () => void;
 }) {
   const t = useT();
-  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  // 破坏性确认的焦点给「取消」：回车只会按到焦点上的键，误触回车不会把文件冲掉。
+  // 想执行就 Tab 到执行键或直接点（系统对话框同一纪律）
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
-    confirmRef.current?.focus();
+    // 不画焦点环：打开即聚焦是为了键盘路径（Tab / Esc），不是在提示「按这里」——
+    // 程序聚焦画出的粗黑框被读成「默认选中」（实机）。键盘 Tab 过来照常有环
+    cancelRef.current?.focus({ focusVisible: false } as FocusOptions);
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") props.onCancel();
-      if (event.key === "Enter") {
-        event.preventDefault();
-        props.onConfirm();
-      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -196,18 +195,27 @@ function DialogShell(props: {
           }}
         >
           <button
+            ref={cancelRef}
             type="button"
             className="quiet-control"
             onClick={props.onCancel}
             disabled={props.busy}
-            style={{ height: "var(--control-height-md)", padding: "0 var(--space-4)", cursor: "pointer", font: "inherit", fontSize: "var(--font-size-control)" }}
+            style={{
+              height: "var(--control-height-md)",
+              padding: "0 var(--space-4)",
+              // 与执行键同一个轮廓（发丝描边 + md 圆角）；不写 border 会落到 UA 默认的 2px outset 黑框（实机）
+              border: "1px solid var(--color-border-default)",
+              borderRadius: "var(--radius-md)",
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: "var(--font-size-control)",
+            }}
           >
             {t.common.cancel}
           </button>
           {/* 危险档（最强）只落在执行键上：红字 + 发丝描边 + hover danger-soft
               （设计系统「危险红字、hover --color-danger-soft」，不是实底红） */}
           <button
-            ref={confirmRef}
             type="button"
             className="revert-confirm"
             onClick={props.onConfirm}
@@ -236,12 +244,17 @@ function DialogShell(props: {
 
 /** 回退确认框（清单来自主进程的 RevertPlan）。 */
 export function RevertDialog(props: {
+  cwd: string | null;
   plan: RevertPlan;
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const t = useT();
+  // 注意组里的文件不在普通清单里重复出现：同一个路径列两遍，读的人会以为是两件事
+  const flagged = new Set(props.plan.userModified);
+  const restore = props.plan.restore.filter((path) => !flagged.has(path));
+  const deletes = props.plan.deletes.filter((path) => !flagged.has(path));
   return (
     <DialogShell
       title={t.chat.revertTitle}
@@ -252,17 +265,19 @@ export function RevertDialog(props: {
     >
       <div style={{ display: "grid", gap: "var(--space-4)" }}>
         <p style={{ margin: 0, color: "var(--color-text-secondary)" }}>{t.chat.revertLead}</p>
-        <PathGroup title={t.chat.revertWillRestore} paths={props.plan.restore} tone="normal" />
-        <PathGroup title={t.chat.revertWillDelete} paths={props.plan.deletes} tone="normal" />
+        <PathGroup title={t.chat.revertWillRestore} paths={restore} cwd={props.cwd} tone="normal" />
+        <PathGroup title={t.chat.revertWillDelete} paths={deletes} cwd={props.cwd} tone="normal" />
         <PathGroup
           title={t.chat.revertUserModified}
           paths={props.plan.userModified}
+          cwd={props.cwd}
           tone="caution"
           note={t.chat.revertUserModifiedNote}
         />
         <PathGroup
           title={t.chat.revertUnrecoverable}
           paths={props.plan.unrecoverable}
+          cwd={props.cwd}
           tone="info"
           note={t.chat.revertUnrecoverableNote}
         />
@@ -276,12 +291,18 @@ export function RevertDialog(props: {
 
 /** 撤销确认框（清单来自主进程的 UndoPlan；多一组「后续轮次也改过」）。 */
 export function UndoDialog(props: {
+  cwd: string | null;
   plan: UndoPlan;
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const t = useT();
+  const flagged = new Set([...props.plan.userModified, ...props.plan.laterTouched]);
+  const restore = props.plan.restore.filter((path) => !flagged.has(path));
+  const deletes = props.plan.deletes.filter((path) => !flagged.has(path));
+  // 同一文件既被手改又被后续轮改过：只进「你的修改」一组
+  const laterTouched = props.plan.laterTouched.filter((path) => !props.plan.userModified.includes(path));
   return (
     <DialogShell
       title={t.chat.undoTitle}
@@ -292,23 +313,26 @@ export function UndoDialog(props: {
     >
       <div style={{ display: "grid", gap: "var(--space-4)" }}>
         <p style={{ margin: 0, color: "var(--color-text-secondary)" }}>{t.chat.undoLead}</p>
-        <PathGroup title={t.chat.revertWillRestore} paths={props.plan.restore} tone="normal" />
-        <PathGroup title={t.chat.revertWillDelete} paths={props.plan.deletes} tone="normal" />
+        <PathGroup title={t.chat.revertWillRestore} paths={restore} cwd={props.cwd} tone="normal" />
+        <PathGroup title={t.chat.revertWillDelete} paths={deletes} cwd={props.cwd} tone="normal" />
         <PathGroup
           title={t.chat.revertUserModified}
           paths={props.plan.userModified}
+          cwd={props.cwd}
           tone="caution"
           note={t.chat.revertUserModifiedNote}
         />
         <PathGroup
           title={t.chat.undoLaterTouched}
-          paths={props.plan.laterTouched}
+          paths={laterTouched}
+          cwd={props.cwd}
           tone="caution"
           note={t.chat.undoLaterTouchedNote}
         />
         <PathGroup
           title={t.chat.revertUnrecoverable}
           paths={props.plan.unrecoverable}
+          cwd={props.cwd}
           tone="info"
           note={t.chat.revertUnrecoverableNote}
         />

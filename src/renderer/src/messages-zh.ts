@@ -30,7 +30,15 @@ export const zh: Messages = {
       source === "task" ? "本任务改动" : source === "unstaged" ? "未暂存" : source === "staged" ? "已暂存" : "与上游对比",
     refresh: "刷新",
     noTask: "先打开一个任务，才能看它的改动。",
-    emptyNoChanges: "没有改动。",
+    errorTitle: "读不出改动",
+    titleNotRepo: "不是 Git 仓库",
+    titleNoGit: "这台电脑没有 Git",
+    titleNoUpstream: "没有上游分支",
+    emptyNoChangesDetail: (source) =>
+      source === "task"
+        ? "agent 在这个任务里写入或编辑的文件会列在这里，与改动之前对比。"
+        : "这个来源下暂时没有改动。可以切换来源，或等下次改动后刷新。",
+    emptyNoChanges: "还没有改动",
     emptyNotRepo: "这个文件夹不是 Git 仓库——Git 三个来源需要一个仓库。「本任务改动」不需要。",
     emptyNoGit: "这台机器没有安装 Git。「本任务改动」不依赖它。",
     emptyNoUpstream: "当前分支没有上游，对比不了。",
@@ -809,6 +817,8 @@ export const zh: Messages = {
     revertUnrecoverable: "无法回退",
     revertUnrecoverableNote: "它们的快照不可用（过大或不是文本）。回退后这些文件保持原样。",
     revertShellNote: "只被终端命令改过的文件不在账上，不会回退。",
+    revertOutcome: (outcome: "restored" | "deleted" | "skipped") =>
+      outcome === "restored" ? "已恢复" : outcome === "deleted" ? "已删除" : "未还原",
     revertRestored: (n: number) => `还原了 ${n} 个文件`,
     revertDeleted: (n: number) => `删除 ${n} 个`,
     revertSkipped: (n: number) => `${n} 个没还原（无快照）`,
@@ -821,7 +831,8 @@ export const zh: Messages = {
     fileCardChanged: (n: number) => `${n} 个文件已更改`,
     fileCardExpand: "展开改动的文件",
     fileCardCollapse: "收起改动的文件",
-    fileCardUndo: "撤销这一轮的文件改动",
+    fileCardUndo: "撤销",
+    fileCardUndoHint: "撤销这一轮的文件改动——对话不动",
     fileCardUndone: "已撤销",
     fileCardWebPage: "网页",
     openInOrbita: "在 orbita 打开",

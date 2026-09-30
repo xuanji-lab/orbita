@@ -69,7 +69,15 @@ export const en = {
       source === "task" ? "This task" : source === "unstaged" ? "Unstaged" : source === "staged" ? "Staged" : "vs upstream",
     refresh: "Refresh",
     noTask: "Open a task to review its changes.",
-    emptyNoChanges: "No changes.",
+    errorTitle: "Couldn't load changes",
+    titleNotRepo: "Not a Git repository",
+    titleNoGit: "Git isn't available",
+    titleNoUpstream: "No upstream branch",
+    emptyNoChangesDetail: (source: ReviewSource): string =>
+      source === "task"
+        ? "Files the agent writes or edits in this task show up here, compared with how they were before."
+        : "Nothing to show from this source right now. Switch sources or refresh after the next change.",
+    emptyNoChanges: "No changes yet",
     emptyNotRepo: 'This folder is not a Git repository — the Git sources need one. "This task" works everywhere.',
     emptyNoGit: 'Git is not installed on this machine. "This task" works without it.',
     emptyNoUpstream: "This branch has no upstream — nothing to compare against.",
@@ -882,6 +890,8 @@ export const en = {
     revertUnrecoverable: "Cannot be reverted",
     revertUnrecoverableNote: "Their snapshots are unavailable (too large or not text). Reverting leaves these files as they are.",
     revertShellNote: "Files changed only by shell commands are not tracked and will not be reverted.",
+    revertOutcome: (outcome: "restored" | "deleted" | "skipped"): string =>
+      outcome === "restored" ? "Restored" : outcome === "deleted" ? "Deleted" : "Not restored",
     revertRestored: (n: number) => `${n} file${n === 1 ? "" : "s"} restored`,
     revertDeleted: (n: number) => `${n} deleted`,
     revertSkipped: (n: number) => `${n} not restored (no snapshot)`,
@@ -895,7 +905,8 @@ export const en = {
     fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
-    fileCardUndo: "Undo this round's file changes",
+    fileCardUndo: "Undo",
+    fileCardUndoHint: "Undo this round's file changes — the conversation stays",
     fileCardUndone: "Undone",
     fileCardWebPage: "Web page",
     openInOrbita: "Open in orbita",

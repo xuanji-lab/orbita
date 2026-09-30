@@ -72,8 +72,9 @@ async function compareWithDisk(
   id: string,
   restores: Map<string, SnapshotRef>,
   afters: Map<string, SnapshotRef>,
-): Promise<{ userModified: string[]; unrecoverable: string[] }> {
+): Promise<{ userModified: string[]; unrecoverable: string[]; alreadyThere: string[] }> {
   const userModified: string[] = [];
+  const alreadyThere: string[] = [];
   const unrecoverable: string[] = [];
   for (const [path, before] of restores) {
     if (before.kind === "unrecoverable") {
@@ -81,18 +82,31 @@ async function compareWithDisk(
       continue;
     }
     const disk = await diskText(path);
+    if (disk === null) continue; // 比不了（二进制 / 读不了）——不猜
+    // 磁盘已经是还原目标（比如那一轮先被单独撤销过）：这次什么都不会丢，不算「你的修改」。
+    // 不先判这一步的话，撤销过的新建文件在回退时被报成「你改过」（实机）
+    const target = await snapshotText(store, id, before);
+    if (target !== null && (disk.kind === "absent" ? before.kind === "absent" : disk.content === target && before.kind !== "absent")) {
+      alreadyThere.push(path);
+      continue;
+    }
     const afterContent = await snapshotText(store, id, afters.get(path) ?? { kind: "absent" });
-    if (disk === null || afterContent === null) continue; // 比不了（二进制 / 快照缺）——不猜
+    if (afterContent === null) continue; // 快照缺——不猜
     const differs = disk.kind === "absent" ? afterContent !== "" : disk.content !== afterContent;
     if (differs) userModified.push(path);
   }
-  return { userModified, unrecoverable };
+  return { userModified, unrecoverable, alreadyThere };
 }
 
-function splitRestoreDeletes(restores: Map<string, SnapshotRef>): { restore: string[]; deletes: string[] } {
+/** 还原 / 删除两张清单。已经是目标状态的路径（skip）不进清单——确认框不报「将删除」一个早就不在的文件。 */
+function splitRestoreDeletes(
+  restores: Map<string, SnapshotRef>,
+  skip: readonly string[] = [],
+): { restore: string[]; deletes: string[] } {
   const restore: string[] = [];
   const deletes: string[] = [];
   for (const [path, before] of restores) {
+    if (skip.includes(path)) continue;
     if (before.kind === "absent") deletes.push(path);
     else restore.push(path);
   }
@@ -116,8 +130,8 @@ export async function planRevert(store: SessionStore, id: string, targetMessageI
   }
   const turns = fileTurnsIn(transcript.slice(index));
   const restores = planRestores(turns);
-  const { userModified, unrecoverable } = await compareWithDisk(store, id, restores, latestAfters(turns));
-  const { restore, deletes } = splitRestoreDeletes(restores);
+  const { userModified, unrecoverable, alreadyThere } = await compareWithDisk(store, id, restores, latestAfters(turns));
+  const { restore, deletes } = splitRestoreDeletes(restores, alreadyThere);
   return { restore, deletes, userModified, unrecoverable };
 }
 
@@ -215,13 +229,13 @@ export async function planUndo(store: SessionStore, id: string, turnId: string):
   // 还原目标只看这一轮的 before；比较基准要算上之后的轮次（磁盘最后一次被 agent
   // 改成什么样，是这一轮 + 之后轮次的最后一份 after）
   const restores = planRestores([turn]);
-  const { userModified, unrecoverable } = await compareWithDisk(
+  const { userModified, unrecoverable, alreadyThere } = await compareWithDisk(
     store,
     id,
     restores,
     latestAfters([...later, turn]),
   );
-  const { restore, deletes } = splitRestoreDeletes(restores);
+  const { restore, deletes } = splitRestoreDeletes(restores, alreadyThere);
   const laterPaths = new Set(later.flatMap((entry) => entry.changes.map((change) => change.path)));
   return {
     turnId,

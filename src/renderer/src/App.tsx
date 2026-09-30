@@ -627,6 +627,8 @@ export function App() {
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
                   focus={reviewFocus}
+                  revision={`${session.fileTurns.length}:${session.reverts.length}:${session.undos.length}:${session.phase}`}
+                  cwd={session.cwd}
                   onClose={() => handlePanel(null)}
                 />
               ) : shownPanel === "skills" ? (

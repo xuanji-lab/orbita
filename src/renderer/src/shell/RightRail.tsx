@@ -100,7 +100,7 @@ export function RightRail(props: {
         />
       </span>
       <RailEntryButton
-        icon="history"
+        icon="file-diff"
         label={t.rail.review}
         lit={props.panel === "review"}
         onClick={() => props.onPanel(props.panel === "review" ? null : "review")}

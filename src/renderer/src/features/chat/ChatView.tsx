@@ -1044,6 +1044,7 @@ function ChatViewBody(props: {
       </Pane>
       {session.revertDialog !== null && (
         <RevertDialog
+          cwd={session.cwd}
           plan={session.revertDialog.plan}
           busy={session.revertBusy}
           onConfirm={session.confirmRevert}
@@ -1052,6 +1053,7 @@ function ChatViewBody(props: {
       )}
       {session.undoDialog !== null && (
         <UndoDialog
+          cwd={session.cwd}
           plan={session.undoDialog.plan}
           busy={session.undoBusy}
           onConfirm={session.confirmUndo}
@@ -2082,7 +2084,9 @@ function EntryView(props: {
       />
     );
   }
-  if (entry.kind === "revertMark") return <RevertMarkView record={entry.record} />;
+  if (entry.kind === "revertMark") {
+    return <RevertMarkView record={entry.record} cwd={props.cwd} onOpenFile={props.onOpenReviewAt} />;
+  }
   if (entry.kind === "channelMark") {
     // 子会话自己流里的 task 标记：渲染成完整任务卡而不是一行胶囊（子会话
     // 2026-09-23 裁决①）——父给子的第一条任务是这条会话最该显眼的内容。

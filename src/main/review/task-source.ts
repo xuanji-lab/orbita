@@ -73,7 +73,12 @@ export async function taskReviewList(store: SessionStore, sessionId: string): Pr
       continue;
     }
     if (disk === null) {
-      if (base === "") continue; // 任务里建过又删净：净差为零，不列
+      // 任务里新建、后来又被回退 / 撤销删掉：净差为零，但要列出来标「已还原」——
+      // 面板要能回答「那个文件呢？」（实机：撤销后面板一片空白，看不出发生过什么）
+      if (before.kind === "absent") {
+        entries.push({ path, added: 0, removed: 0, binary: false, restored: true });
+        continue;
+      }
       const patch = patchOf(path, base, "");
       entries.push({ path, added: 0, removed: patch.removed, binary: false });
       continue;
@@ -107,7 +112,7 @@ export async function taskReviewDiff(
   if (base === undefined || disk === undefined) {
     return { diff: null, binary: true, restored: false };
   }
-  if (disk === base) return { diff: null, binary: false, restored: true };
+  if (disk === base || (disk === null && before.kind === "absent")) return { diff: null, binary: false, restored: true };
   if (disk === null) {
     const patch = patchOf(path, base, "");
     return { diff: patch.diff, binary: false, restored: false };

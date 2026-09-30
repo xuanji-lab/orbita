@@ -1247,6 +1247,9 @@ export function parseDiffLines(diff: string): ParsedDiff {
         path = stripPathPrefix(line.slice(4));
         continue;
       }
+      // 第一个 hunk 之前的其余行都是头部元数据（`Index:`、`=====` 分隔线、`index abc..def`、
+      // `new file mode`）——不是正文。以前漏到正文里，jsdiff 的 `=====` 被画成第 0 行（实机）
+      continue;
     }
     if (line.startsWith("\\")) {
       rows.push({ kind: "meta", oldLine: null, newLine: null, text: line });

@@ -46,3 +46,18 @@ export function reviewEmptyText(list: Extract<ReviewList, { kind: "empty" | "err
       return t.review.emptyNoUpstream;
   }
 }
+
+/** 空态 / 错误的标题（短句）；说明句见 reviewEmptyText。 */
+export function reviewEmptyTitle(list: Extract<ReviewList, { kind: "empty" | "error" }>, t: Messages): string {
+  if (list.kind === "error") return t.review.errorTitle;
+  switch (list.reason) {
+    case "no-changes":
+      return t.review.emptyNoChanges;
+    case "not-repo":
+      return t.review.titleNotRepo;
+    case "no-git":
+      return t.review.titleNoGit;
+    case "no-upstream":
+      return t.review.titleNoUpstream;
+  }
+}

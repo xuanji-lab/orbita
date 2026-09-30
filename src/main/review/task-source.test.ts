@@ -96,7 +96,7 @@ describe("taskReviewList", () => {
     assert.ok(list.entries.some((entry) => entry.path.endsWith("x.ts")));
   });
 
-  test("任务里建过又删净 → 不列；磁盘上被删（基线在）→ 全量删除", async () => {
+  test("任务里建过又删净 → 列出并标已还原；磁盘上被删（基线在）→ 全量删除", async () => {
     await turn("t1", [{ path: join(lab, "made.txt"), before: null, after: "x\n" }]);
     await turn("t2", [{ path: join(lab, "gone.txt"), before: "g0\n", after: "g1\n" }]);
     // made.txt 被删净（undo 删除）；gone.txt 被外部删了
@@ -104,7 +104,8 @@ describe("taskReviewList", () => {
     assert.equal(list.kind, "ok");
     if (list.kind !== "ok") return;
     const names = list.entries.map((entry) => entry.path.split("/").pop() ?? "");
-    assert.ok(!names.includes("made.txt"));
+    assert.ok(names.includes("made.txt"));
+    assert.equal(list.entries.find((entry) => entry.path.endsWith("made.txt"))?.restored, true);
     assert.ok(names.includes("gone.txt"));
     assert.equal(list.entries.find((entry) => entry.path.endsWith("gone.txt"))?.removed, 1);
   });

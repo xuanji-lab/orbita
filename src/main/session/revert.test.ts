@@ -252,6 +252,35 @@ describe("planRevert / executeRevert", () => {
   });
 });
 
+describe("planRevert 对已还原的文件", () => {
+  test("那一轮先被单独撤销过（新建文件已删、改过的文件已回去）→ 回退时不报「你的修改」", async () => {
+    // 磁盘已是还原目标：new.md 不在、a.ts 是 before
+    await writeFile(join(lab, "a.ts"), "old\n", "utf8");
+    await store.record(ID, userItem("u1", "第一句", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [
+      { path: join(lab, "a.ts"), before: "old\n", after: "agent v1\n", added: 1, removed: 1 },
+      { path: join(lab, "new.md"), before: null, after: "brand new\n", added: 1, removed: 0 },
+    ]);
+    const plan = await planRevert(store, ID, "u1");
+    assert.deepEqual(plan.userModified, []);
+    // 已是目标状态：不进「将还原 / 将删除」清单
+    assert.deepEqual(plan.restore, []);
+    assert.deepEqual(plan.deletes, []);
+  });
+
+  test("磁盘既不是 agent 改完的样子、也不是还原目标 → 仍报「你的修改」", async () => {
+    await writeFile(join(lab, "a.ts"), "hand edited\n", "utf8");
+    await store.record(ID, userItem("u1", "第一句", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [
+      { path: join(lab, "a.ts"), before: "old\n", after: "agent v1\n", added: 1, removed: 1 },
+    ]);
+    const plan = await planRevert(store, ID, "u1");
+    assert.deepEqual(plan.userModified, [join(lab, "a.ts")]);
+  });
+});
+
 describe("planUndo / executeUndo", () => {
   async function twoTurnsSameFile(): Promise<void> {
     await writeFile(join(lab, "a.ts"), "v2\n", "utf8");

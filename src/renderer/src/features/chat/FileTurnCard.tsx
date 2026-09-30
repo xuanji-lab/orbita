@@ -18,22 +18,25 @@ const WEB_ARTIFACT = /\.(?:html?|svg)$/i;
  */
 
 /** 路径的显示形：cwd 之内显示相对，之外显示绝对；再拆成 文件名（粗）+ 目录（淡）。 */
-function pathParts(path: string, cwd: string | null): { name: string; dir: string } {
+export function pathParts(path: string, cwd: string | null): { name: string; dir: string } {
   const display =
     cwd !== null && cwd !== "" && (path === cwd || path.startsWith(`${cwd}/`) || path.startsWith(`${cwd}\\`))
       ? path.slice(cwd.length + 1)
       : path;
   const tail = splitPathTail(display.replaceAll("\\", "/"));
-  return tail;
+  return { name: tail.name, dir: tail.dir.replace(/\/$/, "") };
 }
 
-/** 一行增删统计（git stat 读法：+ 绿 − 红）。 */
-function Stats(props: { added: number; removed: number }) {
+/**
+ * 一行增删统计（git stat 读法：+ 绿 − 红）。**为零的一侧不画**（zcode 同款）：
+ * 新建文件写成「+12 −0」，那个红色的 −0 是没有信息量的噪音，还把红色用在了非失败上。
+ */
+export function Stats(props: { added: number; removed: number }) {
   if (props.added === 0 && props.removed === 0) return null;
   return (
-    <span style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-      <span style={{ color: "var(--color-success)" }}>+{props.added}</span>{" "}
-      <span style={{ color: "var(--color-danger)" }}>−{props.removed}</span>
+    <span style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", display: "inline-flex", gap: 6 }}>
+      {props.added > 0 && <span style={{ color: "var(--color-success)" }}>+{props.added}</span>}
+      {props.removed > 0 && <span style={{ color: "var(--color-danger)" }}>−{props.removed}</span>}
     </span>
   );
 }
@@ -82,49 +85,64 @@ export function FileTurnCard(props: {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
+        {/* 整个头部左段都是展开键（不是只有 13px 的 chevron）：zcode 同款，点哪都开 */}
         <button
           type="button"
           title={open ? t.chat.fileCardCollapse : t.chat.fileCardExpand}
-          aria-label={open ? t.chat.fileCardCollapse : t.chat.fileCardExpand}
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
           style={{
             display: "inline-flex",
             alignItems: "center",
+            gap: "var(--space-2)",
+            flex: "1 1 auto",
+            minWidth: 0,
             padding: 0,
             border: "none",
             background: "none",
-            color: "var(--color-text-tertiary)",
+            font: "inherit",
+            color: "inherit",
+            textAlign: "left",
             cursor: "pointer",
-            transition: "transform var(--duration-fast) var(--ease-out-quint)",
-            transform: open ? "rotate(90deg)" : "none",
           }}
         >
-          <Icon name="chevron-right" size={13} strokeWidth={1.8} />
+          <span
+            style={{
+              display: "inline-flex",
+              color: "var(--color-text-tertiary)",
+              transition: "transform var(--duration-fast) var(--ease-out-quint)",
+              transform: open ? "rotate(90deg)" : "none",
+            }}
+          >
+            <Icon name="chevron-right" size={13} strokeWidth={1.8} />
+          </span>
+          <span style={{ color: "var(--color-text-secondary)", fontWeight: 600 }}>
+            {t.chat.fileCardChanged(props.record.changes.length)}
+          </span>
+          <Stats added={added} removed={removed} />
         </button>
-        <span style={{ color: "var(--color-text-secondary)", fontWeight: 600 }}>
-          {t.chat.fileCardChanged(props.record.changes.length)}
-        </span>
-        <Stats added={added} removed={removed} />
-        <span style={{ flex: 1 }} />
         {props.undone ? (
           <span
             style={{
               display: "inline-flex",
               alignItems: "center",
               gap: 4,
+              padding: "1px var(--space-2)",
+              borderRadius: "var(--radius-pill)",
+              background: "var(--color-bg-muted)",
               fontSize: "var(--font-size-caption)",
               color: "var(--color-text-tertiary)",
+              flex: "0 0 auto",
             }}
           >
-            <Icon name="undo-2" size={11} strokeWidth={1.8} />
+            <Icon name="check" size={11} strokeWidth={1.8} />
             {t.chat.fileCardUndone}
           </span>
         ) : (
           <button
             type="button"
-            title={t.chat.fileCardUndo}
-            aria-label={t.chat.fileCardUndo}
+            title={t.chat.fileCardUndoHint}
+            aria-label={t.chat.fileCardUndoHint}
             disabled={props.busy}
             onClick={() => props.onUndo(props.record.id)}
             style={{
@@ -139,6 +157,7 @@ export function FileTurnCard(props: {
               font: "inherit",
               fontSize: "var(--font-size-caption)",
               cursor: props.busy ? "default" : "pointer",
+              flex: "0 0 auto",
             }}
           >
             <Icon name="undo-2" size={11} strokeWidth={1.8} />
@@ -265,12 +284,19 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
 /**
  * 回退界碑：「已回退」一行 + 同款卡片的还原摘要（还原了 N 个文件 / 删除了 M 个）。
  * 卡与被撤轮次的卡一起消失的是对话；这里留的是回退发生过、以及盘被动过什么的凭据。
+ * 卡片可展开：逐文件列出结果（恢复 / 删除 / 未还原），点行去审查面板看现状。
  */
-export function RevertMarkView(props: { record: RevertRecord }) {
+export function RevertMarkView(props: {
+  record: RevertRecord;
+  cwd: string | null;
+  onOpenFile?: (path: string) => void;
+}) {
   const t = useT();
-  const restored = props.record.restored.filter((entry) => entry.outcome === "restored").length;
-  const deleted = props.record.restored.filter((entry) => entry.outcome === "deleted").length;
-  const skipped = props.record.restored.filter((entry) => entry.outcome === "skipped").length;
+  const [open, setOpen] = useState(false);
+  const files = props.record.restored;
+  const restored = files.filter((entry) => entry.outcome === "restored").length;
+  const deleted = files.filter((entry) => entry.outcome === "deleted").length;
+  const skipped = files.filter((entry) => entry.outcome === "skipped").length;
   const parts = [
     restored > 0 ? t.chat.revertRestored(restored) : null,
     deleted > 0 ? t.chat.revertDeleted(deleted) : null,
@@ -287,35 +313,94 @@ export function RevertMarkView(props: { record: RevertRecord }) {
           color: "var(--color-text-tertiary)",
         }}
       >
-        <span
-          style={{
-            width: 18,
-            height: 1,
-            background: "var(--color-border-subtle)",
-            flex: "0 0 auto",
-          }}
-        />
+        <span style={{ width: 18, height: 1, background: "var(--color-border-subtle)", flex: "0 0 auto" }} />
         <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
         {t.chat.revertedHere}
+        <span style={{ flex: 1, height: 1, background: "var(--color-border-subtle)" }} />
       </div>
       {parts.length > 0 && (
         <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
+            display: "grid",
+            gap: open ? "var(--space-1)" : 0,
             padding: "var(--space-2) var(--space-3)",
             background: "var(--color-chat-card-bg)",
             border: "1px solid var(--color-border-subtle)",
             borderRadius: "var(--radius-md)",
             fontSize: "var(--font-size-caption)",
-            color: "var(--color-text-secondary)",
           }}
         >
-          <span style={{ color: "var(--color-text-tertiary)" }}>
-            <Icon name="rotate-ccw" size={13} strokeWidth={1.8} />
-          </span>
-          {parts.join(" · ")}
+          <button
+            type="button"
+            aria-expanded={open}
+            title={open ? t.chat.fileCardCollapse : t.chat.fileCardExpand}
+            onClick={() => setOpen((value) => !value)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+              padding: 0,
+              border: "none",
+              background: "none",
+              font: "inherit",
+              color: "var(--color-text-secondary)",
+              textAlign: "left",
+              cursor: "pointer",
+            }}
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                color: "var(--color-text-tertiary)",
+                transition: "transform var(--duration-fast) var(--ease-out-quint)",
+                transform: open ? "rotate(90deg)" : "none",
+              }}
+            >
+              <Icon name="chevron-right" size={13} strokeWidth={1.8} />
+            </span>
+            <span style={{ fontWeight: 600 }}>{parts.join(" · ")}</span>
+          </button>
+          {open &&
+            files.map((entry) => {
+              const name = pathParts(entry.path, props.cwd);
+              const clickable = props.onOpenFile !== undefined && entry.outcome !== "skipped";
+              return (
+                <button
+                  key={entry.path}
+                  type="button"
+                  disabled={!clickable}
+                  onClick={() => props.onOpenFile?.(entry.path)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "var(--space-2)",
+                    minWidth: 0,
+                    padding: "2px 0 2px 21px",
+                    border: 0,
+                    background: "transparent",
+                    color: "inherit",
+                    font: "inherit",
+                    textAlign: "left",
+                    cursor: clickable ? "pointer" : "default",
+                  }}
+                >
+                  <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto", display: "inline-flex" }}>
+                    <Icon
+                      name={entry.outcome === "deleted" ? "trash-2" : entry.outcome === "skipped" ? "info" : "rotate-ccw"}
+                      size={12}
+                      strokeWidth={1.8}
+                    />
+                  </span>
+                  <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
+                    <span style={{ fontWeight: 600, color: "var(--color-text-primary)", whiteSpace: "nowrap" }}>{name.name}</span>
+                    {name.dir !== "" && <span style={SLOT_DIR}>{name.dir}</span>}
+                  </span>
+                  <span style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}>
+                    {t.chat.revertOutcome(entry.outcome)}
+                  </span>
+                </button>
+              );
+            })}
         </div>
       )}
     </div>

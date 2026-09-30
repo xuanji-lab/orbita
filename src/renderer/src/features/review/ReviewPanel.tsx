@@ -6,7 +6,8 @@ import { DiffBody } from "../../shell/DiffView";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
 import { REVIEW_SOURCES, type ReviewDiff, type ReviewEntry, type ReviewList, type ReviewSource } from "@shared/review";
-import { reviewEmptyText, unifiedDiffEntries } from "./review-panel";
+import { reviewEmptyText, reviewEmptyTitle, unifiedDiffEntries } from "./review-panel";
+import { pathParts, Stats } from "../chat/FileTurnCard";
 
 /**
  * 审查面板（右栏新入口，与 Files / Skills / MCP 互斥）：四种来源——本任务改动
@@ -22,6 +23,13 @@ export function ReviewPanel(props: {
   sessionId: string | null;
   /** 轮尾卡 / 界碑卡的「在面板里看」请求：带 token 的一次性定位（展开 + 滚到） */
   focus: { path: string; token: number } | null;
+  /**
+   * 会话文件账的版本（轮尾账 / 回退 / 撤销的条数拼成的串）：变了就重拉当前来源。
+   * 不接它的话，面板开着时 agent 又改了一轮文件，列表停在旧状态（实测）。
+   */
+  revision: string;
+  /** 会话 cwd：cwd 之内显示相对路径 */
+  cwd: string | null;
   onClose: () => void;
 }) {
   const t = useT();
@@ -37,7 +45,6 @@ export function ReviewPanel(props: {
     (wanted: ReviewSource) => {
       if (props.sessionId === null) return;
       setLoading(true);
-      setExpanded(null);
       void api.review
         .list(props.sessionId, wanted)
         .then((result) => {
@@ -63,7 +70,7 @@ export function ReviewPanel(props: {
       return;
     }
     refresh(source);
-  }, [source, props.sessionId, refresh]);
+  }, [source, props.sessionId, props.revision, refresh]);
 
   // 一次性定位：展开目标路径并滚到它
   useEffect(() => {
@@ -79,21 +86,35 @@ export function ReviewPanel(props: {
 
   const entries = list?.kind === "ok" ? list.entries : [];
 
-  const toggle = useCallback(
-    (entry: ReviewEntry) => {
-      if (entry.binary || entry.restored === true || entry.noBaseline === true) return;
-      setExpanded((current) => (current === entry.path ? null : entry.path));
-      if (!diffs.has(entry.path)) {
-        setDiffLoading(entry.path);
-        void api.review
-          .diff(props.sessionId ?? "", source, entry.path)
-          .then((result) => setDiffs((current) => new Map(current).set(entry.path, result)))
-          .catch(() => setDiffs((current) => new Map(current).set(entry.path, { diff: null, binary: false, restored: false })))
-          .finally(() => setDiffLoading(null));
-      }
-    },
-    [diffs, props.sessionId, source],
-  );
+  const toggle = useCallback((entry: ReviewEntry) => {
+    if (entry.binary || entry.restored === true || entry.noBaseline === true) return;
+    setExpanded((current) => (current === entry.path ? null : entry.path));
+  }, []);
+
+  /**
+   * 展开着的文件缺 diff 就去取——点击展开、轮尾卡的定位请求、刷新后清了缓存，
+   * 三条路都落到这里（以前只有点击会取，定位过来的会一直停在加载中）。
+   */
+  useEffect(() => {
+    if (expanded === null || props.sessionId === null || diffs.has(expanded)) return;
+    const path = expanded;
+    let cancelled = false;
+    setDiffLoading(path);
+    void api.review
+      .diff(props.sessionId, source, path)
+      .then((result) => {
+        if (!cancelled) setDiffs((current) => new Map(current).set(path, result));
+      })
+      .catch(() => {
+        if (!cancelled) setDiffs((current) => new Map(current).set(path, { diff: null, binary: false, restored: false }));
+      })
+      .finally(() => {
+        if (!cancelled) setDiffLoading(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, diffs, props.sessionId, source]);
 
   const sourceItems: MenuItem[] = useMemo(
     () =>
@@ -101,7 +122,10 @@ export function ReviewPanel(props: {
         id: item,
         label: t.review.source(item),
         checked: item === source,
-        onClick: () => setSource(item),
+        onClick: () => {
+          setExpanded(null);
+          setSource(item);
+        },
       })),
     [t, source],
   );
@@ -144,20 +168,24 @@ export function ReviewPanel(props: {
         </PanelIconButton>
       }
       onClose={props.onClose}
-      contentKey={`${source}:${props.sessionId ?? "none"}:${loading ? "loading" : "done"}`}
+      contentKey={`${source}:${props.sessionId ?? "none"}`}
     >
       {props.sessionId === null ? (
-        <EmptyLine>{t.review.noTask}</EmptyLine>
-      ) : loading ? (
-        <EmptyLine>{t.common.loading}</EmptyLine>
-      ) : list === null ? (
-        <EmptyLine>{t.review.emptyNoChanges}</EmptyLine>
+        <EmptyState icon="file-diff" title={t.review.noTask} />
+      ) : loading && list === null ? (
+        <EmptyState icon="loader-circle" title={t.common.loading} />
+      ) : list === null || (list.kind === "ok" && entries.length === 0) ? (
+        <EmptyState icon="file-diff" title={t.review.emptyNoChanges} detail={t.review.emptyNoChangesDetail(source)} />
       ) : list.kind !== "ok" ? (
-        <EmptyLine>{reviewEmptyText(list, t)}</EmptyLine>
-      ) : entries.length === 0 ? (
-        <EmptyLine>{t.review.emptyNoChanges}</EmptyLine>
+        <EmptyState
+          icon={list.kind === "error" ? "triangle-alert" : "file-diff"}
+          title={reviewEmptyTitle(list, t)}
+          detail={reviewEmptyText(list, t)}
+          danger={list.kind === "error"}
+        />
       ) : (
-        <div style={{ display: "grid", padding: "var(--space-2) var(--space-3) var(--space-5)" }}>
+        // minmax(0,1fr)：grid 项默认 min-width:auto，长文件名会把行撑出面板、把右端统计挤出视野（实机）
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", padding: "var(--space-2) var(--space-3) var(--space-5)" }}>
           {source === "branch" && list.upstream !== undefined && (
             <p style={{ margin: "0 0 var(--space-2)", fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
               {t.review.againstUpstream(list.upstream)}
@@ -180,7 +208,7 @@ export function ReviewPanel(props: {
                     alignItems: "center",
                     gap: "var(--space-2)",
                     width: "100%",
-                    padding: "var(--space-2) 0",
+                    padding: "var(--space-2) var(--space-2) var(--space-2) 0",
                     border: 0,
                     background: "transparent",
                     color: "var(--color-text-primary)",
@@ -200,27 +228,21 @@ export function ReviewPanel(props: {
                   >
                     <Icon name="chevron-right" size={12} strokeWidth={1.8} />
                   </span>
-                  <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
-                    <span style={{ fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-caption)", whiteSpace: "nowrap" }}>
-                      {entry.path.split("/").filter(Boolean).pop() ?? entry.path}
-                    </span>
+                  <RowName path={entry.path} cwd={props.cwd} />
+                  {entry.restored === true ? (
                     <span
                       style={{
-                        fontFamily: "var(--font-family-mono)",
+                        flex: "0 0 auto",
+                        display: "inline-flex",
+                        gap: 4,
+                        alignItems: "center",
+                        padding: "1px var(--space-2)",
+                        borderRadius: "var(--radius-pill)",
+                        background: "var(--color-bg-muted)",
                         fontSize: "var(--font-size-caption)",
                         color: "var(--color-text-tertiary)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        direction: "rtl",
-                        textAlign: "left",
                       }}
                     >
-                      {entry.path}
-                    </span>
-                  </span>
-                  {entry.restored === true ? (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)", display: "inline-flex", gap: 4, alignItems: "center" }}>
                       <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
                       {t.review.restored}
                     </span>
@@ -233,9 +255,8 @@ export function ReviewPanel(props: {
                       {t.review.binary}
                     </span>
                   ) : (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)", fontVariantNumeric: "tabular-nums" }}>
-                      <span style={{ color: "var(--color-success)" }}>+{entry.added}</span>{" "}
-                      <span style={{ color: "var(--color-danger)" }}>−{entry.removed}</span>
+                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)" }}>
+                      <Stats added={entry.added} removed={entry.removed} />
                     </span>
                   )}
                 </button>
@@ -263,17 +284,68 @@ export function ReviewPanel(props: {
   );
 }
 
-function EmptyLine(props: { children: React.ReactNode }) {
+/** 文件名（粗）+ 目录（淡、可截断，cwd 之内为相对路径）。截断落在目录上，文件名与统计永远可见。 */
+function RowName(props: { path: string; cwd: string | null }) {
+  const { name, dir } = pathParts(props.path, props.cwd);
   return (
-    <p
+    <span style={{ minWidth: 0, display: "flex", alignItems: "baseline", gap: "var(--space-1)", flex: "1 1 auto", overflow: "hidden" }}>
+      <span
+        style={{
+          fontWeight: 600,
+          fontSize: "var(--font-size-body)",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          minWidth: 0,
+          flex: "0 1 auto",
+        }}
+      >
+        {name}
+      </span>
+      {dir !== "" && (
+        <span
+          style={{
+            minWidth: 0,
+            fontSize: "var(--font-size-caption)",
+            color: "var(--color-text-tertiary)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {dir}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * 空态：图标 + 一句标题 + 一句说明，居中（zcode 审查面板同款）。只有真正的失败
+ * （git 报错）标题走 danger 色；「不是仓库 / 没装 git / 没改动」都是信息档。
+ */
+function EmptyState(props: { icon: "file-diff" | "loader-circle" | "triangle-alert"; title: string; detail?: string; danger?: boolean }) {
+  return (
+    <div
       style={{
-        margin: 0,
-        padding: "var(--space-4) var(--space-4)",
-        fontSize: "var(--font-size-caption)",
-        color: "var(--color-text-tertiary)",
+        display: "grid",
+        justifyItems: "center",
+        gap: "var(--space-2)",
+        padding: "var(--space-8) var(--space-5)",
+        textAlign: "center",
       }}
     >
-      {props.children}
-    </p>
+      <span style={{ color: props.danger === true ? "var(--color-danger)" : "var(--color-text-tertiary)" }}>
+        <Icon name={props.icon} size={28} strokeWidth={1.5} spin={props.icon === "loader-circle"} />
+      </span>
+      <span style={{ fontWeight: 600, color: props.danger === true ? "var(--color-danger)" : "var(--color-text-primary)" }}>
+        {props.title}
+      </span>
+      {props.detail !== undefined && (
+        <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)", maxWidth: 320 }}>
+          {props.detail}
+        </span>
+      )}
+    </div>
   );
 }

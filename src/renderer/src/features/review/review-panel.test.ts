@@ -45,3 +45,18 @@ describe("unifiedDiffEntries", () => {
     assert.deepEqual(unifiedDiffEntries(""), []);
   });
 });
+
+test("jsdiff 的 `=====` 分隔行与 Index 头不进正文（实机：被画成第 0 行）", () => {
+  const diff = [
+    "Index: a/x.html",
+    "===================================================================",
+    "--- a/x.html",
+    "+++ b/x.html",
+    "@@ -0,0 +1,2 @@",
+    "+<h1>hi</h1>",
+    "+<p>x</p>",
+  ].join("\n");
+  const rows = unifiedDiffEntries(diff);
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((entry) => entry.kind !== "pair" && entry.row.kind === "add"));
+});
