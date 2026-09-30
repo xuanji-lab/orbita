@@ -63,6 +63,7 @@ import {
 } from "./carryover-parse.ts";
 import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.ts";
 import {
+  childSessions,
   rootSessions,
   type Carryover,
   type ChannelMarkRecord,
@@ -367,6 +368,8 @@ interface ViewHandle {
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
   alignThinking(event: { level: PiThinkingLevel }): void;
+  /** 档位被父会话切档联动改了（主进程已落 meta / runtime）：mode 芯片对齐 */
+  alignMode(mode: PermissionMode): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
   /** 正开着的那条换了归属工作区：meta 与作用域芯片跟着变 */
@@ -439,6 +442,15 @@ export interface SessionEngine {
       thinkingLevel?: ThinkingLevel;
     },
   ): void;
+  /**
+   * 子会话档位联动（renderer 侧）：用户切父会话档时，主进程已把子会话的 runtime
+   * 账与 meta 一起切（applyModeCascade，agent 域）；这里同步三样衍生状态——
+   *   ① 子会话的会话级意图覆写（intent 优先于 meta：buildTurn / openSession 都
+   *      先读它，不覆写的话下一轮 submit 仍带旧档、切回子会话 chip 也显示旧档）；
+   *   ② 会话列表缓存乐观更新（Sub-sessions 面板等直读这份缓存）；
+   *   ③ 正看着某条子会话的查看槽，mode 芯片对齐。
+   */
+  cascadeSubSessionModes(parentId: string, mode: PermissionMode): void;
   /**
    * 组装无状态开工上下文（AgentTurnContext 的主体）：meta 真值（cwd / 归属 /
    * pi 本子）+ 会话级意图。拿不出可用上下文时把错误写进引擎 error 并返回 null。
@@ -623,6 +635,31 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       map.set(id, { ...map.get(id), ...patch });
     },
     [],
+  );
+
+  /**
+   * 子会话档位联动（renderer 侧）。真值由主进程落盘，这里只同步衍生状态——
+   * 缓存里还没有的子会话（刚派出、列表未刷新）跳过：它没有旧 intent 可挡，
+   * meta 已被主进程切，buildTurn 拿到的就是新档。
+   */
+  const cascadeSubSessionModes = useCallback(
+    (parentId: string, mode: PermissionMode) => {
+      const children = childSessions(sessionsRef.current, parentId);
+      if (children.length === 0) return;
+      const childIds = new Set(children.map((child) => child.id));
+      const next = sessionsRef.current.map((meta) =>
+        childIds.has(meta.id) ? { ...meta, mode } : meta,
+      );
+      sessionsRef.current = next;
+      setSessions(next);
+      for (const child of children) {
+        rememberSessionIntent(child.id, { mode });
+        for (const view of views.current) {
+          if (view.sessionRef.current === child.id) view.alignMode(mode);
+        }
+      }
+    },
+    [rememberSessionIntent],
   );
 
   /**
@@ -1070,6 +1107,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     syncIntent,
     sessionIntent: sessionIntentRef,
     rememberSessionIntent,
+    cascadeSubSessionModes,
     buildTurn,
     modelMissingText,
     setError,
@@ -1304,6 +1342,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const handle: ViewHandle = {
       sessionRef,
       alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
+      // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
+      alignMode: (mode) => setMode(mode),
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
       // 不认识就保持原样——意图档继续显示，下一轮事件再纠
       alignThinking: (event) => {
@@ -2079,23 +2119,27 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
 
   const changeMode = useCallback(
     (next: PermissionMode) => {
-      // 理由同 chooseModel：权限档决定 bash 能不能跑，轮内改是另一种串台——
-      // 所以注入延迟（UI 即时），不是锁 chip；跑着时下一轮 submit 自带新档
+      // 理由同 chooseModel 的记账链：UI 即时、意图记在会话名下（跑着时改不进
+      // meta，排队卡投递时要拿这一档）。
+      // **总是发 IPC（不再只在 idle 时发）**：档位联动子会话（父带子）不能等父
+      // 会话空闲——用户切档解救卡在 plan 档的子会话时，父多半正跑着等子会话回报，
+      // 只在 idle 发的话联动在那条时间线上根本不触发。轮内改档是安全的：runtime
+      // 的 setMode 只改账本，工具审批闸门每次调用现场读账，当前轮后续工具立刻
+      // 按新档判；system prompt 里的档位描述下一个 before_agent_start 重讲。
       setMode(next);
       // 启动恢复点跟随（bug A）：下次启动应用从这一档开始
       void api.settings.set({ lastUsed: { mode: next } }).catch(() => undefined);
       const id = sessionRef.current;
       if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
-      // **先记在这条会话名下**：跑着时改不进 meta，而它的排队卡可能在你已经切去
-      // 看别的会话之后才投递，那时全局意图已经是别人的了
       engine.rememberSessionIntent(id, { mode: next });
-      if (currentPhase() === "idle") {
-        void api.agent
-          .setMode(id, next)
-          .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
-      }
+      // 子会话的 renderer 侧联动（intent 覆写 + 列表缓存 + 正看着子会话的槽）；
+      // 子会话切档时它没有下级，这里是 no-op（联动单向：父带子）
+      engine.cascadeSubSessionModes(id, next);
+      void api.agent
+        .setMode(id, next)
+        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
     },
-    [engine, currentPhase],
+    [engine],
   );
 
   const changeThinkingLevel = useCallback(
