@@ -20,7 +20,7 @@ import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ComposerFileRef, ComposerPastedText } from "../../shell/composer-attachments.ts";
 import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
-import type { FileTurnView, RevertRecord } from "@shared/revert";
+import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { TranscriptRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
 
@@ -139,6 +139,8 @@ export interface SessionEntry {
   fileTurns: readonly FileTurnView[];
   /** 回退界碑（盘上种子；回退后全量重读会话，没有实时事件） */
   reverts: readonly RevertRecord[];
+  /** 撤销记录（同上，盘上种子）：不渲染单元，轮尾卡据此挂「已撤销」徽标 */
+  undos: readonly UndoRecord[];
 }
 
 /** 全部会话的槽。**不可变**：每个事件产出新 Map，没变的槽保持同一引用。 */
@@ -163,6 +165,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   approvals: [],
   fileTurns: [],
   reverts: [],
+  undos: [],
 };
 
 /**
@@ -212,7 +215,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       ...entry,
       fileTurns: [
         ...entry.fileTurns,
-        { role: "file-turn", id: crypto.randomUUID(), timestamp: Date.now(), changes: event.changes },
+        { role: "file-turn", id: event.turnId, timestamp: Date.now(), changes: event.changes },
       ],
     }));
   }
@@ -325,6 +328,7 @@ export function seedFromDisk(
   // 由 ChatView 从 records 里按 turnId 对回去（见 FileTurnCard），不占桶
   const fileTurns: FileTurnView[] = [];
   const reverts: RevertRecord[] = [];
+  const undos: UndoRecord[] = [];
   for (const record of transcript) {
     if (record.role === "file-turn") {
       fileTurns.push({
@@ -339,6 +343,8 @@ export function seedFromDisk(
       });
     } else if (record.role === "revert") {
       reverts.push(record);
+    } else if (record.role === "undo") {
+      undos.push(record);
     }
   }
   const next = new Map(states);
@@ -363,6 +369,7 @@ export function seedFromDisk(
     approvals: [],
     fileTurns,
     reverts,
+    undos,
   });
   return next;
 }
@@ -382,12 +389,19 @@ export function mergeSideRecords(
   marks: readonly ChannelMarkRecord[],
   fileTurns: readonly FileTurnView[],
   reverts: readonly RevertRecord[],
+  undos: readonly UndoRecord[],
   transcript: readonly TranscriptItem[],
 ): TranscriptRecord[] {
-  if (compactions.length === 0 && marks.length === 0 && fileTurns.length === 0 && reverts.length === 0) {
+  if (
+    compactions.length === 0 &&
+    marks.length === 0 &&
+    fileTurns.length === 0 &&
+    reverts.length === 0 &&
+    undos.length === 0
+  ) {
     return [...transcript];
   }
-  const records: TranscriptRecord[] = [...transcript, ...compactions, ...marks, ...fileTurns, ...reverts];
+  const records: TranscriptRecord[] = [...transcript, ...compactions, ...marks, ...fileTurns, ...reverts, ...undos];
   // 同毫秒时非 transcript 的一侧记录（界碑 / 通道标记 / 轮尾账 / 回退界碑）排在前
   // ——界碑在前的老规则原样保留：混排靠落盘时间戳定序，非 transcript 的一侧优先
   // 出现在同刻的前面（轮尾账的时戳晚于本轮末条消息，不受这条影响）。

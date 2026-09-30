@@ -37,16 +37,6 @@ export function createSessionRecorder(store: SessionStore): (event: AgentEvent) 
   };
   return (event) => {
     if (event.type === "compaction") return persist(event.sessionId, event.record);
-    if (event.type === "fileTurn") {
-      // 轮尾文件账：主进程写快照 blob + 落 FileTurnRecord（正文进 snapshots/，
-      // 记录里只有引用）。写失败只记日志——快照是回退能力的代价面，不是对话的依赖面
-      void store
-        .recordFileTurn(event.sessionId, event.changes)
-        .catch((error: unknown) =>
-          console.error("[session] 轮尾文件账落盘失败", event.sessionId, error),
-        );
-      return;
-    }
     if (event.type === "title") {
       // 标题落 meta 不落 transcript——它不是对话的一部分。store 内部核验
       // titleSource 仍是 derived 才写，迟到的标题盖不掉用户刚改的名字。

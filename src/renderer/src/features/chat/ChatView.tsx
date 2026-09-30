@@ -119,7 +119,7 @@ import {
   type CompactedRecord,
   type SessionCompletion,
 } from "@shared/session";
-import type { FileTurnView, RevertRecord } from "@shared/revert";
+import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 import type { ThemePreference } from "@shared/settings";
@@ -1032,6 +1032,7 @@ function ChatViewBody(props: {
           skills={skills}
           fileTurns={session.fileTurns}
           reverts={session.reverts}
+          undos={session.undos}
           cwd={session.cwd}
           onUndoTurn={session.undoTurn}
           onRevertTo={session.revertToMessage}
@@ -1093,6 +1094,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   fileTurns: readonly FileTurnView[];
   /** 回退界碑（盘上种子；回退后重读会话自然进来） */
   reverts: readonly RevertRecord[];
+  /** 撤销记录（盘上种子）：轮尾卡的「已撤销」徽标按它点亮 */
+  undos: readonly UndoRecord[];
   /** 会话 cwd：轮尾卡的路径显示（cwd 内相对、外绝对） */
   cwd: string | null;
   /** 单轮撤销入口（轮尾卡的 Undo）；引用稳定，不破 memo */
@@ -1115,8 +1118,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 界碑、通道标记、轮尾账与回退界碑按发生位置插回往来流：压缩摘要收进「已压缩」
   // 折叠行、通道标记画成一行虚线标记、轮尾账是卡片、回退界碑是标记行 + 还原卡
   const records = useMemo(
-    () => mergeSideRecords(props.compactions, props.marks, props.fileTurns, props.reverts, transcript),
-    [props.compactions, props.marks, props.fileTurns, props.reverts, transcript],
+    () => mergeSideRecords(props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript),
+    [props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript],
   );
   // 被撤销的轮 id 集：轮尾卡据此挂「已撤销」徽标（undo 记录不是渲染单元）
   const undoneTurnIds = useMemo(
@@ -1274,6 +1277,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
                 sessionId={props.sessionId}
+                onRevertTo={props.onRevertTo}
               />
             )}
             {branchAfter !== undefined && (

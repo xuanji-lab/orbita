@@ -853,7 +853,7 @@ export type AgentEvent =
    * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
    * 与统计——renderer 的轮尾卡片不吃正文，1MB 的文件内容没有理由过这道 IPC。
    */
-  | { type: "fileTurnView"; sessionId: string; changes: readonly FileChangeView[] }
+  | { type: "fileTurnView"; sessionId: string; turnId: string; changes: readonly FileChangeView[] }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的
    * pending 等待者吃掉它——renderer 不消费，不广播。

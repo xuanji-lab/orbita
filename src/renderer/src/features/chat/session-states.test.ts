@@ -340,12 +340,13 @@ describe("压缩界碑的进出槽", () => {
 describe("mergeSideRecords —— 界碑与通道标记就地插回，历史一条不少", () => {
   test("没有界碑也没有标记时原样全显", () => {
     const items = [userItem("u1", 1), userItem("u2", 2)];
-    assert.deepEqual(mergeSideRecords([], [], [], [], items), items);
+    assert.deepEqual(mergeSideRecords([], [], [], [], [], items), items);
   });
 
   test("界碑按发生位置插回，此前的往来保持可见——被收起的是摘要，不是历史", () => {
     const records = mergeSideRecords(
       [compacted("c1", 2000)],
+      [],
       [],
       [],
       [],
@@ -364,6 +365,7 @@ describe("mergeSideRecords —— 界碑与通道标记就地插回，历史一�
       [],
       [],
       [],
+      [],
       [userItem("u1", 1000), userItem("u2", 3000), userItem("u3", 7000)],
     );
     assert.deepEqual(roles(records), ["user", "compacted", "user", "compacted", "user"]);
@@ -371,7 +373,7 @@ describe("mergeSideRecords —— 界碑与通道标记就地插回，历史一�
   });
 
   test("同毫秒时界碑在前——先立碑，后发生的消息排在碑后", () => {
-    const records = mergeSideRecords([compacted("c1", 3000)], [], [], [], [userItem("u2", 3000)]);
+    const records = mergeSideRecords([compacted("c1", 3000)], [], [], [], [], [userItem("u2", 3000)]);
     assert.deepEqual(records.map((r) => r.id), ["c1", "u2"]);
   });
 
@@ -379,6 +381,7 @@ describe("mergeSideRecords —— 界碑与通道标记就地插回，历史一�
     const records = mergeSideRecords(
       [],
       [channelMark("k1", 2000)],
+      [],
       [],
       [],
       [userItem("u1", 1000), userItem("u2", 3000)],
@@ -391,6 +394,7 @@ describe("mergeSideRecords —— 界碑与通道标记就地插回，历史一�
     const records = mergeSideRecords(
       [compacted("c1", 4000)],
       [channelMark("k1", 2000)],
+      [],
       [],
       [],
       [userItem("u1", 1000), userItem("u2", 3000), userItem("u3", 5000)],
@@ -420,6 +424,7 @@ describe("mergeSideRecords —— 界碑与通道标记就地插回，历史一�
       [],
       [fileTurn],
       [revertRecord],
+      [],
       [userItem("u1", 1000), userItem("u2", 3000), userItem("u3", 8000)],
     );
     assert.deepEqual(records.map((r) => r.id), ["u1", "u2", "t1", "r1", "u3"]);

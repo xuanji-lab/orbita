@@ -49,6 +49,7 @@ import {
   isUndoRecord,
   type FileChange,
   type FileChangePayload,
+  type FileTurnRecord,
 } from "../../shared/revert.ts";
 
 /**
@@ -439,8 +440,11 @@ export class SessionStore {
    * 引用。单个 blob 写失败降级成 unrecoverable（那一轮那一个文件回退不了，
    * 但整轮的账还在）——快照是回退能力的代价面，不是对话的依赖面。
    */
-  async recordFileTurn(id: string, changes: readonly FileChangePayload[]): Promise<void> {
-    if (changes.length === 0) return;
+  async recordFileTurn(
+    id: string,
+    changes: readonly FileChangePayload[],
+  ): Promise<FileTurnRecord | null> {
+    if (changes.length === 0) return null;
     const persisted: FileChange[] = [];
     for (const change of changes) {
       persisted.push({
@@ -451,12 +455,14 @@ export class SessionStore {
         removed: change.removed,
       });
     }
-    await this.record(id, {
+    const record: FileTurnRecord = {
       role: "file-turn",
       id: randomUUID(),
       timestamp: Date.now(),
       changes: persisted,
-    });
+    };
+    await this.record(id, record);
+    return record;
   }
 
   private async persistSnapshot(

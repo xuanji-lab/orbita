@@ -349,16 +349,26 @@ void app.whenReady().then(async () => {
     // 内容没有理由过 renderer 的 IPC。这是「主进程只转发不加工」的第二个例外
     // （第一个是落盘本身），理由同：正文进 renderer 是纯浪费。
     if (event.type === "fileTurn") {
-      record(event);
-      broadcastAgentEvent({
-        type: "fileTurnView",
-        sessionId: event.sessionId,
-        changes: event.changes.map((change) => ({
-          path: change.path,
-          added: change.added,
-          removed: change.removed,
-        })),
-      });
+      // 等**落盘完**再广播，并带上落盘记录的真 id——renderer 的轮尾卡拿它当 key
+      // 与撤销的 turnId（单轮撤销按它回查账本），自造 id 会对不上盘
+      void sessions
+        .recordFileTurn(event.sessionId, event.changes)
+        .then((record) => {
+          if (record === null) return;
+          broadcastAgentEvent({
+            type: "fileTurnView",
+            sessionId: event.sessionId,
+            turnId: record.id,
+            changes: record.changes.map((change) => ({
+              path: change.path,
+              added: change.added,
+              removed: change.removed,
+            })),
+          });
+        })
+        .catch((cause: unknown) =>
+          console.error("[session] 轮尾文件账落盘失败", event.sessionId, cause),
+        );
       return;
     }
     record(event);

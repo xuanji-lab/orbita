@@ -70,7 +70,7 @@ import {
   type SessionCompletion,
   type SessionMeta,
 } from "@shared/session";
-import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan } from "@shared/revert";
+import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
 import { splitUserTextBlocks } from "@shared/prompt-attachments";
 import type { Workspace } from "@shared/workspace";
 import type { Messages } from "../../messages-en.ts";
@@ -319,6 +319,8 @@ export interface ChatSession {
   fileTurns: readonly FileTurnView[];
   /** 回退界碑（盘上种子）——「已回退」标记行与还原卡 */
   reverts: readonly RevertRecord[];
+  /** 撤销记录（盘上种子）——轮尾卡的「已撤销」徽标 */
+  undos: readonly UndoRecord[];
   /**
    * 「回到这里」入口（user 气泡）：拉回退计划并弹确认框。确认后走 confirmRevert。
    * 原文（含附件）放回输入框是 executeRevert 成功后的动作，见 confirmRevert。
@@ -2821,6 +2823,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     retryClosingScan: scanFailed !== null && scanFailed.sessionId === viewedId ? retryClosingScan : null,
     fileTurns: entry.fileTurns,
     reverts: entry.reverts,
+    undos: entry.undos,
     revertToMessage,
     revertDialog,
     revertBusy,
