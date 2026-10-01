@@ -366,6 +366,20 @@ export function Menu(props: {
     setActive((current) => (current + delta + enabled.length) % enabled.length);
   };
 
+  /**
+   * 光标走到哪儿，列表就跟到哪儿。
+   *
+   * 少了这一步，键盘上下只是把一个看不见的光标在清单里推——超过一屏（模型卡片
+   * 是六行）之后就完全不知道自己在哪了（2026-10-01 用户实测：上下带不动滚动条）。
+   * `block: "nearest"` 是「已可见就不动」：光标在视野内时按上下，列表不跳。
+   *
+   * 打开时也跑一次：清单长时卡片直接停在**当前模型**那一行，而不是从头开始。
+   */
+  useLayoutEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLElement>('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
   const choose = (item: MenuItem) => {
     if (item.keepOpen !== true) close();
     else setActive(0);
