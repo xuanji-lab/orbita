@@ -48,12 +48,14 @@ import gitPullRequest from "../../../../Orbita Design System/assets/icons/lucide
 import globe from "../../../../Orbita Design System/assets/icons/lucide/globe.svg?raw";
 import hardDrive from "../../../../Orbita Design System/assets/icons/lucide/hard-drive.svg?raw";
 import fileDiff from "../../../../Orbita Design System/assets/icons/lucide/file-diff.svg?raw";
-import history from "../../../../Orbita Design System/assets/icons/lucide/history.svg?raw";
+import grid3x3 from "../../../../Orbita Design System/assets/icons/lucide/grid-3x3.svg?raw";
 import gripVertical from "../../../../Orbita Design System/assets/icons/lucide/grip-vertical.svg?raw";
 import key from "../../../../Orbita Design System/assets/icons/lucide/key.svg?raw";
 import lightbulb from "../../../../Orbita Design System/assets/icons/lucide/lightbulb.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
+import layoutGrid from "../../../../Orbita Design System/assets/icons/lucide/layout-grid.svg?raw";
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
+import listFilter from "../../../../Orbita Design System/assets/icons/lucide/list-filter.svg?raw";
 import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-todo.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../Orbita Design System/assets/icons/lucide/mic.svg?raw";
@@ -145,8 +147,8 @@ const ICONS = {
   "git-pull-request": gitPullRequest,
   globe,
   "hard-drive": hardDrive,
-  history,
   "file-diff": fileDiff,
+  "grid-3x3": grid3x3,
   "grip-vertical": gripVertical,
   image,
   info,
@@ -154,6 +156,8 @@ const ICONS = {
   lightbulb,
   "loader-circle": loaderCircle,
   list,
+  "layout-grid": layoutGrid,
+  "list-filter": listFilter,
   "list-todo": listTodo,
   lock,
   "message-square": messageSquare,
