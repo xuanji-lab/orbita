@@ -370,6 +370,27 @@ describe("字节级还原：符号链接 / 权限位 / BOM / CRLF", () => {
     assert.equal(await readFile(real, "utf8"), "old\n");
   });
 
+  test("链式符号链接（a → b → real）：两个链接都保持是链接，内容写到最终目标", async (t) => {
+    const real = join(lab, "chain-real.ts");
+    const middle = join(lab, "chain-b.ts");
+    const head = join(lab, "chain-a.ts");
+    await writeFile(real, "agent v1\n", "utf8");
+    try {
+      await symlink(real, middle);
+      await symlink(middle, head);
+    } catch {
+      return t.skip("此环境无法创建符号链接（Windows 需管理员权限或开发者模式）");
+    }
+    await store.record(ID, userItem("u1", "q1", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [{ path: head, before: "old\n", after: "agent v1\n", added: 1, removed: 1 }]);
+
+    await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
+    assert.ok((await lstat(head)).isSymbolicLink());
+    assert.ok((await lstat(middle)).isSymbolicLink(), "中间那一跳不得被换成普通文件");
+    assert.equal(await readFile(real, "utf8"), "old\n");
+  });
+
   test("还原保持原文件的权限位（0755）", async () => {
     const path = join(lab, "run.sh");
     await writeFile(path, "agent v1\n", { encoding: "utf8", mode: 0o755 });

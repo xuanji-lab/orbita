@@ -148,16 +148,23 @@ export async function planRevert(store: SessionStore, id: string, targetMessageI
  * 2. 临时文件是新建的，原文件的权限位（可执行位等）会丢——stat 先记下，写完补回。
  *    Windows 上 chmod 只作用于只读位，其余位被忽略、不抛错。
  */
+/** 跟符号链接的跳数上限（与 Linux 的 MAXSYMLINKS 同量级），防链接成环 */
+const MAX_LINK_HOPS = 40;
+
 async function resolveRestoreTarget(path: string): Promise<{ target: string; mode: number | null }> {
   let target = path;
-  try {
-    if ((await lstat(path)).isSymbolicLink()) {
+  // 链式链接（a → b → c）要一路跟到底：只跟一层会把中间的 b 换成普通文件、c 还原不到。
+  // 设上限防环（a → b → a）：跟满还没到普通文件就按当前这一跳写，不死循环
+  for (let hop = 0; hop < MAX_LINK_HOPS; hop += 1) {
+    try {
+      if (!(await lstat(target)).isSymbolicLink()) break;
       // realpath 对悬空链接抛 ENOENT，改用 readlink + dirname 拼接
-      const raw = await readlink(path);
-      target = isAbsolute(raw) ? raw : resolve(dirname(path), raw);
+      const raw = await readlink(target);
+      target = isAbsolute(raw) ? raw : resolve(dirname(target), raw);
+    } catch {
+      // 不在（悬空链接的终点 / 新建路径）：就写这里，rename 不会碰到任何链接
+      break;
     }
-  } catch {
-    // 链接读不出（路径不在等）：按原路径写，rename 不会碰到任何链接
   }
   let mode: number | null = null;
   try {
