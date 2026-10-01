@@ -118,13 +118,12 @@ export function ReviewPanel(props: {
 
   const sourceItems: MenuItem[] = useMemo(
     () =>
-      REVIEW_SOURCES.map((item) => ({
+      // 回调标注 MenuItem：不标的话 map 先推断字面量类型、再赋给 MenuItem[]，已不是新鲜字面量，
+      // 不做多余属性检查——曾把 onSelect 写成 onClick 仍过 typecheck，点了没反应，git 三源切不过去
+      REVIEW_SOURCES.map((item): MenuItem => ({
         id: item,
         label: t.review.source(item),
         checked: item === source,
-        // MenuItem 的动作属性是 onSelect（Menu.choose 只调 item.onSelect）：
-        // 写成 onClick 能过 typecheck（map 泛型先推断，赋回 MenuItem[] 已非新鲜字面量，
-        // 不做 excess property check）但点了没反应——git 三源曾在 Windows 验收时整个切不过去
         onSelect: () => {
           setExpanded(null);
           setSource(item);

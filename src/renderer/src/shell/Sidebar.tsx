@@ -1298,7 +1298,7 @@ function SessionRow(props: {
               checked: meta.workspaceId === null,
               onSelect: () => session.moveSession(meta.id, null),
             },
-            ...session.workspaces.map((workspace) => ({
+            ...session.workspaces.map((workspace): MenuItem => ({
               id: workspace.id,
               label: workspace.name,
               icon: "folder" as const,

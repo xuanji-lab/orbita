@@ -291,7 +291,7 @@ function General(props: {
             inherited: subSessionThinking === undefined,
             onSelect: () => props.onChange({ subSessionThinking: null }),
           },
-          (subSessionThinkingModel.supported ?? THINKING_LEVELS).map((level) => ({
+          (subSessionThinkingModel.supported ?? THINKING_LEVELS).map((level): MenuItem => ({
             id: level,
             label: t.thinkingLevel(level, subSessionThinkingModel.modelId),
             checked: subSessionThinking === level,
@@ -809,7 +809,7 @@ function LoginImportSection(props: { clearedCount: number }) {
   // ── 导入入口：来源下拉 + 选择网站 ──
   const menuItems: MenuItem[] =
     sources.kind === "ready"
-      ? sources.list.map((source) => ({
+      ? sources.list.map((source): MenuItem => ({
           id: sourceKey(source),
           label: `${source.browserName} · ${source.profileName}`,
           checked: sourceKey(source) === selected,
