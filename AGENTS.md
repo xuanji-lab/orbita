@@ -11,7 +11,7 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 - **代码是唯一真源。** 读代码必须能读出系统的真实行为——这是丢掉旧内核的全部理由：
   上一版 SDK 内核 49,879 行、对外导出 332 个符号，而应用只调用其中 **9 个**运行时符号。
   代码在陈述「这里有 332 种能力」，而这个陈述是假的。**不落在调用路径上的代码不进本分支。**
-- **本分支不做**：多 agent 编排、飞书、桌宠、workflow 编辑器、终端 / git 面板。
+- **本分支不做**：多 agent 编排、飞书、桌宠、workflow 编辑器。终端与 git 面板在做（2026-09-30 用户裁决）。
   它们的设计资产留在 `docs/architecture/orbita_v4.5.1/`，等单 agent 立住之后逐个立项。
 
 ## 必须遵守
@@ -68,7 +68,16 @@ bun run test         # 测试
 > **dev server 固定在 `http://127.0.0.1:5273`**（只绑 IPv4 回环 + `strictPort`，撞了当场失败）。
 > 停服务按 PID 杀，**不要 `pkill -f "electron-vite dev"`**——同机别的 electron-vite 应用会陪葬（陷阱史 #2）。
 
-> 骨架落地后在此补实测命令与打包命令，并注明实测平台与日期。
+> **实测命令与打包**（2026-09-30，Windows 10.0.26200 实测；macOS 打包未实测）：
+>
+> ```bash
+> bun run build        # 编译到 out/（**不能直接双击**，用 node_modules/electron/dist/electron.exe . 跑）
+> bun run dist:win     # Windows x64 NSIS 安装器 → dist/orbita-<version>-win-x64-setup.exe
+> bun run dist         # macOS arm64 的 dmg / zip（需 Apple Silicon，本机未实测）
+> ```
+>
+> Windows 安装器实测跑通「出包 → 安装 → 启动 → 卸载」全链（仅为当前用户、可改安装位置、未签名会被 SmartScreen 拦一次）。
+> 构建机连不上 GitHub 时（Electron / NSIS 产物下载 `ETIMEDOUT`）要加镜像环境变量，见 README 的「打包」。
 
 ## 设计系统
 
@@ -91,8 +100,9 @@ token 规范与实现不一致时以设计系统为准。
   计划、调研、progress 笔记一律留在 agent 自己的会话工作台，**不进仓**。
   `docs/plans/`、`UPDATE_NOTES.md` 及任何新增 `.md`，只在**用户当次明确点名**时才写。
   理由：多出来的文字要么过期后误导后来者，要么每轮吃上下文，而它描述的事实代码里都有。
-- **版本号暂停使用**：本分支尚无发布通道，版本号没有消费者，`package.json` 的 version 冻结不动。
-  发布通道落地当天恢复「每次改动至少 patch +1」。
+- **版本号**：2026-09-30 起恢复使用（内测包落地，版本号进了安装包名、安装程序页与卸载项的 DisplayVersion）：
+  内测期走 `0.x.y`（首个内测包 `0.1.0`），每次改动至少 patch +1；对外首发时抬 `1.0.0`。
+  **必须是合法 semver**——四段号（`0.0.0.0`）electron-builder 直接拒（`Invalid version`）。
 - 提交前 `git diff` / `git status` 核对：不含无关文件、不覆盖他人未提交改动。
 
 ## 工程陷阱史（真实事故，新会话必读）

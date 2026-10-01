@@ -1,12 +1,14 @@
-import type { ThemePreference } from "@shared/settings";
+import type { ThemePreference } from "./settings.ts";
 
 /**
- * 主题偏好 → 实际要画的 `data-theme`。**纯函数**，`useTheme.ts`（运行中切主题）与
- * `main.tsx`（冷启动首帧、createRoot 之前同步写属性）共用同一份映射——两处各写一遍
+ * 主题偏好 → 实际要画的 `data-theme`。**纯函数**，`useTheme.ts`（运行中切主题）、
+ * `main.tsx`（冷启动首帧、createRoot 之前同步写属性）与主进程的浏览器空白页垫底色
+ * （browser/page-background.ts）共用同一份映射——两处各写一遍
  * 三元表达式正是「首帧闪系统色」bug 的根源之一：只要两处算出来的值有一帧不一致，
  * `useTheme` 的首次 apply 就会判定「变了」而套上交叉淡入。
  *
- * `system` 的深色落点是 **black**（Ink，2026-09-03 用户指定），浅色落 `light`；
+ * `system` 的深色落点是 **black**（玄 Onyx，2026-09-03 用户指定、2026-09-30 换血后沿用），
+ * 浅色落 `light`；
  * 其余各档（light / graphite / black / copybook / typescript）原样透传——纸面两档只有明，
  * 与系统深浅无关。
  */

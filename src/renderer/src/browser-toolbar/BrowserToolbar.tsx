@@ -86,7 +86,7 @@ function HandoffBar(props: { toolCallId: string; reason: string }) {
 }
 
 /**
- * tab 条。用户的 tab 用地球图标 + 页面标题（空白页写「新标签页」），可以有多个；agent tab 用 bot 图标 +
+ * tab 条。用户 tab 用人形图标（user，与 agent 的 bot 区分）+ 页面标题（空白页写「新标签页」），可以有多个；agent tab 用 bot 图标 +
  * 会话标题（后面跟页面）。每个 tab 都能关（用户的最后一个关掉时主进程补一个空白的），末尾「+」新开用户 tab。
  * 状态用图标 + 文字说话，颜色只是第二信号（设计系统）。
  */
@@ -110,7 +110,7 @@ function TabStrip(props: { tabs: readonly BrowserTabSummary[]; shownTabId: strin
               onClick={() => void api.browser.selectTab(tab.id)}
             >
               <Icon
-                name={tab.loading ? "loader-circle" : agent ? "bot" : "globe"}
+                name={tab.loading ? "loader-circle" : agent ? "bot" : "user"}
                 size={12}
                 spin={tab.loading}
               />

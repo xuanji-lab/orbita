@@ -28,7 +28,7 @@ import { useT } from "../locale.ts";
  */
 
 /** 右栏面板位里放什么。`"channels"` 只在不够宽时出现：够宽时父子会话面板是独立的一列 */
-export type RightPanelKind = "files" | "skills" | "mcp" | "drawer" | "subsessions" | "channels";
+export type RightPanelKind = "files" | "review" | "skills" | "mcp" | "drawer" | "subsessions" | "channels";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -99,6 +99,12 @@ export function RightRail(props: {
           onClick={() => props.onPanel(props.panel === "files" ? null : "files")}
         />
       </span>
+      <RailEntryButton
+        icon="file-diff"
+        label={t.rail.review}
+        lit={props.panel === "review"}
+        onClick={() => props.onPanel(props.panel === "review" ? null : "review")}
+      />
       <RailEntryButton
         icon="book-open"
         label={t.rail.skills}
