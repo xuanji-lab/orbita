@@ -63,6 +63,9 @@ test("resolveAddressOrSearch：空输入与被禁的协议回 null，不拿去�
   // 本地路径不拿去搜
   assert.equal(resolveAddressOrSearch("/Users/me/page.html"), null);
   assert.equal(resolveAddressOrSearch("C:\\Users\\me\\page.html"), null);
+  // UNC 与设备路径同样不拿去搜：漏过去的话，\\?\C:\… 会整条被 URL 编码送进搜索引擎（本地路径外泄）
+  assert.equal(resolveAddressOrSearch("\\\\server\\share\\page.html"), null);
+  assert.equal(resolveAddressOrSearch("\\\\?\\C:\\foo\\bar.html"), null);
 });
 
 test("isWebLink：http / https 进内置浏览器；mailto、file、javascript 与坏地址不算", () => {
