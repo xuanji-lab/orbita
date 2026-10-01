@@ -415,6 +415,10 @@ export const zh: Messages = {
     acceptsImage: "可输入图片——多模态",
     starred: "星标",
     starredEmpty: "还没有星标的模型。在任意模型行右侧点星加入。",
+    // 行右端那颗星的三个说法——与会话行的星标同形（加 / 取消 / 已加）
+    star: "加星标",
+    unstar: "取消星标",
+    starredTip: "已加星标 · 点击取消",
     configure: "配置模型",
   },
 

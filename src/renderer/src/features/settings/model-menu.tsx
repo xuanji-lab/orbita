@@ -14,6 +14,7 @@ import type { ProviderDto } from "@shared/provider";
 import type { ModelDecl } from "@shared/provider";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
+import { IconButton } from "../../shell/IconButton";
 import type { MenuItem } from "../../shell/Menu";
 import { hasCredentials, kindOf, modelAcceptsImage, modelContextText } from "./providers-view-model.ts";
 import type { Messages } from "../../messages-en.ts";
@@ -149,19 +150,6 @@ const RAIL_CELL: React.CSSProperties = {
   fontFamily: "var(--font-family-base)",
   fontSize: "var(--font-size-caption)",
   textAlign: "left",
-  cursor: "pointer",
-};
-
-/** 行右端的星标。几何在这里，颜色在 styles.css 的 `.menu-star`（要 :hover） */
-const STAR_BUTTON: React.CSSProperties = {
-  display: "grid",
-  placeItems: "center",
-  width: "var(--control-height-xs)",
-  height: "var(--control-height-xs)",
-  marginRight: "var(--space-1)",
-  border: 0,
-  borderRadius: "var(--radius-sm)",
-  background: "transparent",
   cursor: "pointer",
 };
 
@@ -314,17 +302,27 @@ export function modelCardItems(options: {
       checked:
         options.selected?.providerId === provider.id && options.selected.modelId === declared.id,
       trailing: (
-        <button
-          type="button"
-          className="menu-star"
-          style={STAR_BUTTON}
-          title={options.t.modelMenu.starred}
-          aria-label={options.t.modelMenu.starred}
-          aria-pressed={isStarred}
+        /*
+         * 与**会话行的星标同一套**（Sidebar 的 meta.starred 那颗）：同一个 IconButton、
+         * 同一个 accent 色、同样「已星标常显、未星标只在悬停/键盘聚焦时浮出」。
+         * 两处的星长得不一样比不好看更糟——同一个手势在两处给不同反馈，用户会怀疑
+         * 它们是不是一件事（2026-10-01 用户点名要求统一）。
+         */
+        <IconButton
+          label={isStarred ? options.t.modelMenu.unstar : options.t.modelMenu.star}
+          title={isStarred ? options.t.modelMenu.starredTip : options.t.modelMenu.star}
+          size={20}
           onClick={() => options.onToggleStar({ providerId: provider.id, modelId: declared.id })}
+          className="reveal"
+          style={{
+            borderRadius: "var(--radius-xs)",
+            marginRight: "var(--space-1)",
+            color: isStarred ? "var(--color-accent)" : "var(--color-text-tertiary)",
+            opacity: isStarred ? 1 : undefined,
+          }}
         >
           <Icon name="star" size={13} strokeWidth={1.8} fill={isStarred} />
-        </button>
+        </IconButton>
       ),
       onSelect: () => options.onSelect(provider.id, declared.id),
     };

@@ -365,16 +365,17 @@
 }
 
 /*
- * 行右端的星标（模型卡片）。**只改颜色、不加底**：底是「整行」的事，
- * 星上再画一层就等于在一行里画出两个靶子。
- * 填充只表达一件事——「这个模型已星标」（未星标 = 描边）。
+ * 行右端的星标：颜色与浮出规则**全会话行那一颗**（Sidebar 的 meta.starred）：
+ * 已星标 = accent 常显（用户亲手点亮的标记，靠颜色一眼找到是它的全部目的），
+ * 未星标 = tertiary 描边，只在悬停/键盘聚焦时浮出。
+ *
+ * 这里不用裸 `.reveal` 配后代选择器，而是挂在 `.menu-row-tail` 上：
+ * 同理 styles.css 里那个公头/会话行互点亮的真回归（一个块里出现多颗 .reveal 时，
+ * 粗选择器会连带点亮它们）。
  */
-.menu-star {
-  color: var(--color-text-tertiary);
-}
-.menu-star:hover,
-.menu-star[aria-pressed="true"] {
-  color: var(--color-text-primary);
+.menu-row-tail:hover .reveal,
+.menu-row-tail:has(:focus-visible) .reveal {
+  opacity: 1;
 }
 
 *,

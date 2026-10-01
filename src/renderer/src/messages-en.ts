@@ -443,6 +443,9 @@ export const en = {
     acceptsImage: "Accepts image input — multimodal",
     starred: "Starred",
     starredEmpty: "No starred models yet. Star one from the right of any model row.",
+    star: "Star this model",
+    unstar: "Unstar this model",
+    starredTip: "Starred · click to unstar",
     configure: "Configure models",
   },
 
