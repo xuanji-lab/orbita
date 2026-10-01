@@ -1190,14 +1190,21 @@ function SessionRow(props: {
   const live = meta.id === session.sessionId;
   // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
   const running = session.phaseOf(meta.id) !== "idle";
-  // 失败同样查槽：后台会话重试耗尽（turnError）也亮 Failed，不止正看着的那条
-  const failed = !running && (session.turnErrorOf(meta.id) !== null || (live && session.error !== null));
+  // 子会话在跑：任一**直接**子会话的 phase 不是 idle（childSessions 只取一层，
+  // 与删除确认的子会话数同一个口径）。父自己在跑时不必查——优先级链里 running
+  // 已压过 subRunning；子会话自己的行没有孩子，some 恒 false，不受影响
+  const children = childSessions(session.sessions, meta.id);
+  const subRunning = !running && children.some((child) => session.phaseOf(child.id) !== "idle");
+  // 失败同样查槽：后台会话重试耗尽（turnError）也亮 Failed，不止正看着的那条。
+  // 只描述母会话自己的事实，与 subRunning 同时成立时谁上谁下交给优先级链（row-status.ts）
+  const failed =
+    !running && (session.turnErrorOf(meta.id) !== null || (live && session.error !== null));
   const done = isSessionDone(meta);
   /**
-   * 行首状态槽：running > failed > pinned > 空。优先级与理由在
+   * 行首状态槽：running > subRunning > failed > pinned > 空。优先级与理由在
    * `row-status.ts`（纯函数 + 测试）。`null` = 这一行没什么可说，槽留空。
    */
-  const status = rowStatusIcon({ running, failed, pinned: meta.pinned === true }, t);
+  const status = rowStatusIcon({ running, subRunning, failed, pinned: meta.pinned === true }, t);
   // 这条会话的未办遗留数（行尾角标，与筛选同口径）
   const openTodos = openTodoCount(session.carryovers, meta.id);
   // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）。子会话不参与
@@ -1213,7 +1220,7 @@ function SessionRow(props: {
   const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
   // 删父连带删子（session.ts 的级联契约）：删除确认要把这个后果说出来，不能只
   // 提工作台文件数——子会话数是更容易被忽略、也更重的一条后果（子会话 PR4c 2.4）
-  const childCount = childSessions(session.sessions, meta.id).length;
+  const childCount = children.length;
 
   /**
    * 进删除确认步：异步拉工作台文件数，到了再补进文案——拉取不阻塞菜单，

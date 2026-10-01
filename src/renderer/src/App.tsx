@@ -600,6 +600,7 @@ export function App() {
             parentId={channelParentId}
             parentTitle={channelParentTitle}
             entries={channelEntries}
+            engine={engine}
             open={channelInlineOpen}
             wide={channelWide}
             paneWidth={paneWidth}
@@ -664,6 +665,7 @@ export function App() {
                 <ChannelCards
                   parentTitle={channelParentTitle}
                   entries={channelEntries}
+                  engine={engine}
                   openRequest={channelOpenRequest}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (

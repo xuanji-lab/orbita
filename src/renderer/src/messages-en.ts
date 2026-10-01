@@ -208,6 +208,7 @@ export const en = {
 
   rowStatus: {
     pinned: "Pinned",
+    subRunning: "Sub-session running",
   },
 
   menu: {
@@ -1026,8 +1027,10 @@ export const en = {
     status: {
       running: "running",
       waiting: "waiting",
+      approval: "needs approval",
       done: "done",
       failed: "failed",
+      idle: "idle",
     },
     subSession: "Sub-session",
     parentSession: "Parent session",

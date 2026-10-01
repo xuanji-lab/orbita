@@ -182,6 +182,7 @@ export const zh: Messages = {
 
   rowStatus: {
     pinned: "已置顶",
+    subRunning: "子会话运行中",
   },
 
   menu: {
@@ -944,8 +945,10 @@ export const zh: Messages = {
     status: {
       running: "运行中",
       waiting: "等待中",
+      approval: "待批准",
       done: "完成",
       failed: "失败",
+      idle: "空闲",
     },
     subSession: "子会话",
     parentSession: "母会话",
