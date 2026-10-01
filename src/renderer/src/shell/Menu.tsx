@@ -752,7 +752,8 @@ function MenuRow(props: {
               overflow: "hidden",
               textOverflow: "ellipsis",
               color: "var(--color-text-tertiary)",
-              fontSize: "var(--font-size-caption)",
+              // 副行是注脚（今天的唯一消费者是模型卡片的厂商名），比主行退两档
+              fontSize: "var(--font-size-micro)",
               lineHeight: "16px",
             }}
           >
