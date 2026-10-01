@@ -122,7 +122,10 @@ export function ReviewPanel(props: {
         id: item,
         label: t.review.source(item),
         checked: item === source,
-        onClick: () => {
+        // MenuItem 的动作属性是 onSelect（Menu.choose 只调 item.onSelect）：
+        // 写成 onClick 能过 typecheck（map 泛型先推断，赋回 MenuItem[] 已非新鲜字面量，
+        // 不做 excess property check）但点了没反应——git 三源曾在 Windows 验收时整个切不过去
+        onSelect: () => {
           setExpanded(null);
           setSource(item);
         },
