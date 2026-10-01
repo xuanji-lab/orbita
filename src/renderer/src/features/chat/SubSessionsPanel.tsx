@@ -244,8 +244,9 @@ export function SubSessionsPanel(props: {
  * **与主槽的一个差别**：子会话的下一轮由主进程按 meta 装配（deliverToChild），
  * 不经 renderer 的排队投递——changeMode / chooseModel 只在空闲时落 meta，子会话
  * 在跑时那一笔会丢（下一轮还是旧档 / 旧模型）。所以在跑时补一发直连 IPC 把 meta
- * 当场落下去：语义仍是「下一轮生效」（pi 在轮启动时快照档位 / 模型，对在跑的轮
- * 无效），与主槽一致。
+ * 当场落下去。**在跑时两者都当场生效，不等下一轮**：档位改的是 agent 进程账本，工具
+ * 审批闸门每次调用现场读账；模型经 pi 的 setModel 写进 agent.state.model，pi 在同一次
+ * 运行的下一次模型调用前（prepareNextTurn）就换上新模型。
  *
  * 终止的确认是**就地菜单**（不弹大窗）：点开菜单已是明确意图，后果行（fact）
  * 直接摆在 danger 确认键上方——与侧栏 Delete / Compact 的两段式同族，只是触发器
@@ -308,7 +309,9 @@ function SubSessionControls(props: {
   });
 
   const stopItems: MenuItem[] = [
+    // 说明拆成两行短事实：Menu 行的 label 不换行，一整句会顶出面板右边缘（验收截图）
     { id: "stop-hint", label: t.subSessions.stopHint, fact: true },
+    { id: "stop-hint-reopen", label: t.subSessions.stopHintReopen, fact: true },
     {
       id: "stop-confirm",
       label: t.subSessions.stopConfirm,
@@ -365,22 +368,25 @@ function SubSessionControls(props: {
         </span>
       )}
       <span style={{ flex: 1 }} />
-      <Menu
-        items={stopItems}
-        align="end"
-        trigger={({ open, toggle }) => (
-          <Chip
-            icon="octagon-x"
-            active={open}
-            chevron
-            disabled={props.stopped}
-            title={props.stopped ? t.subSessions.stoppedHint : t.subSessions.stopTip}
-            onClick={toggle}
-          >
-            {t.subSessions.stopLabel}
-          </Chip>
-        )}
-      />
+      {/* 终止不参与收缩：模型名长时由模型芯片省略，「终止」两字不被挤成「终…」（验收截图） */}
+      <span style={{ flex: "none", display: "inline-flex" }}>
+        <Menu
+          items={stopItems}
+          align="end"
+          trigger={({ open, toggle }) => (
+            <Chip
+              icon="octagon-x"
+              active={open}
+              chevron
+              disabled={props.stopped}
+              title={props.stopped ? t.subSessions.stoppedHint : t.subSessions.stopTip}
+              onClick={toggle}
+            >
+              {t.subSessions.stopLabel}
+            </Chip>
+          )}
+        />
+      </span>
     </div>
   );
 }

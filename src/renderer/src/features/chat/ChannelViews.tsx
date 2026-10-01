@@ -255,7 +255,7 @@ export function ChannelToolMarkLine(props: {
   );
 }
 
-export type DelegateCardStatus = "running" | "waiting" | "done" | "failed" | "idle";
+export type DelegateCardStatus = "running" | "waiting" | "done" | "failed" | "stopped" | "idle";
 
 
 function delegateStatusColor(status: DelegateCardStatus): string {
@@ -268,6 +268,8 @@ function delegateStatusColor(status: DelegateCardStatus): string {
       return "var(--color-success)";
     case "failed":
       return "var(--color-danger)";
+    // stopped 是用户的裁决不是故障：中性灰（同 Sub-sessions 面板的 STATUS_COLOR）
+    case "stopped":
     case "idle":
       return "var(--color-text-tertiary)";
   }
