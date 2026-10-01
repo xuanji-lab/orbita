@@ -66,17 +66,8 @@ export const BROWSER_HANDOFF_BAR_HEIGHT = 44;
 /** 交接等太久自动取消：agent 的一轮不能被一张没人理的卡永远挂着 */
 const HANDOFF_TIMEOUT_MS = 30 * 60_000;
 
-/* 空白 tab 的不透明垫底色：没加载过任何页面的 WebContentsView 是透明的，而所有 tab
- * 叠在同一块区域上——不垫底色，空白的用户 tab 会透出下面 agent tab 的页面。
- * 两个值对应设计系统 tokens/colors.css 的 `--color-bg-app`：明主题壳底与 Ink 档
- * （也是 system 的深色落点）；前者与 index.ts 里非 macOS 窗口的底色一致。 */
-const PAGE_BACKGROUND_LIGHT = "#f3f4f1";
-const PAGE_BACKGROUND_DARK = "#1b1b1b";
-
-/** 垫底色跟系统深浅走 */
-function pageBackground(): string {
-  return nativeTheme.shouldUseDarkColors ? PAGE_BACKGROUND_DARK : PAGE_BACKGROUND_LIGHT;
-}
+/** 空白 tab 在第一次读到设置之前的垫底色（明主题壳底）。按档取色见 page-background.ts */
+const PAGE_BACKGROUND_FALLBACK = "#f3f4f1";
 
 /** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开 */
 const PAGE_PREFERENCES = {
@@ -130,6 +121,8 @@ export interface BrowserSandboxDeps {
   toolbarWindowOptions: () => Promise<BrowserWindowConstructorOptions>;
   /** 把工具条页面载入窗口（dev server 与打包产物两条路，同主窗口的装载逻辑） */
   loadToolbar: (window: BrowserWindow) => void;
+  /** 空白 tab 的垫底色：当前主题档的 `--color-bg-app`（index.ts 读设置，page-background.ts 取色） */
+  pageBackground: () => Promise<string>;
   /** 会话标题（agent tab 在工具条上的标签）；取不到回空串 */
   sessionTitle: (sessionId: string) => Promise<string>;
   /** 会话工作台路径：agent tab 的下载落进 `<工作台>/downloads/` */
@@ -160,10 +153,31 @@ export class BrowserSandbox {
    */
   private userDownloads = "";
 
-  /** 主题切换时给所有还活着的 tab 重铺垫底色（已加载页面的被页面盖住，重设无副作用） */
-  private readonly reapplyPageBackground = (): void => {
-    const background = pageBackground();
-    for (const tab of this.tabs.values()) tab.view.setBackgroundColor(background);
+  /**
+   * 空白 tab 的垫底色缓存：createTab 是同步的，读设置是异步的——建窗时先读一次，
+   * 之后在主题可能变了的时刻重读（见 refreshPageBackground）。
+   */
+  private pageBackground = PAGE_BACKGROUND_FALLBACK;
+
+  /**
+   * 重读当前主题档的垫底色，给所有还活着的 tab 重铺（已加载页面的被页面盖住，重设无副作用）。
+   * 两个触发点：系统深浅变了（nativeTheme updated，system 档要跟），与浏览器窗口获得
+   * 焦点——黛↔玄、明↔纸面在原生层是同一档，nativeTheme 不会报变化；工具条页面也是
+   * 「窗口获得焦点就重读设置」（BrowserToolbar.tsx），两边同一时刻跟上，不另开推送通道。
+   */
+  private readonly refreshPageBackground = async (): Promise<void> => {
+    try {
+      this.pageBackground = await this.deps.pageBackground();
+    } catch {
+      return; // 读不到设置就维持原色，不为一层底色报错
+    }
+    for (const tab of this.tabs.values()) {
+      if (!tab.view.webContents.isDestroyed()) tab.view.setBackgroundColor(this.pageBackground);
+    }
+  };
+
+  private readonly onThemeMaybeChanged = (): void => {
+    void this.refreshPageBackground();
   };
 
   constructor(deps: BrowserSandboxDeps) {
@@ -448,7 +462,7 @@ export class BrowserSandbox {
 
   /** 真正销毁：最后一个主窗口关闭、或应用退出时调用 */
   dispose(): void {
-    nativeTheme.off("updated", this.reapplyPageBackground);
+    nativeTheme.off("updated", this.onThemeMaybeChanged);
     for (const popup of this.popups) if (!popup.isDestroyed()) popup.destroy();
     this.popups.clear();
     for (const tab of this.tabs.values()) {
@@ -517,8 +531,11 @@ export class BrowserSandbox {
       ...(await this.deps.toolbarWindowOptions()),
     });
     this.window = window;
+    // 第一个 tab 就要对的底色：先读一次再建 tab
+    await this.refreshPageBackground();
     // 与 dispose() 里的 off 一一对应：窗口销毁后不再吃主题事件
-    nativeTheme.on("updated", this.reapplyPageBackground);
+    nativeTheme.on("updated", this.onThemeMaybeChanged);
+    window.on("focus", this.onThemeMaybeChanged);
 
     window.on("resize", () => this.layout());
     // 窗口标题跟网页走，不让工具条页面的 <title> 盖掉它
@@ -544,7 +561,7 @@ export class BrowserSandbox {
     const view = new WebContentsView({ webPreferences: PAGE_PREFERENCES });
     // 没加载过页面的视图是**透明**的（不是白的）：所有 tab 铺满同一块区域，不垫一层
     // 不透明底色，空白 tab 会透出下面别的 tab 的页面
-    view.setBackgroundColor(pageBackground());
+    view.setBackgroundColor(this.pageBackground);
     const tab: BrowserTab = {
       id: randomUUID(),
       owner,

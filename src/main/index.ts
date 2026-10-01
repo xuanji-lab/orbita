@@ -3,7 +3,7 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
-import { app, BrowserWindow, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
@@ -36,6 +36,7 @@ import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
+import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
 import { resolveTurnDirectories } from "./agent/turn-directories.ts";
@@ -282,6 +283,7 @@ void app.whenReady().then(async () => {
       return { title: app.getName(), webPreferences: rendererPreferences(current.theme, current.language) };
     },
     loadToolbar: (window) => loadRendererPage(window, "browser-toolbar.html"),
+    pageBackground: async () => pageBackgroundColor((await settings.read()).theme, nativeTheme.shouldUseDarkColors),
     sessionTitle: async (sessionId) => (await sessions.readMeta(sessionId))?.title ?? "",
     workbenchPath: (sessionId) => sessions.workbenchPath(sessionId),
     userDownloadDir: () => browserDownloadDir(settings),

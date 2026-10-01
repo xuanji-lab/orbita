@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { effectiveLanguage, type Language, type ThemePreference } from "@shared/settings";
-import { resolveTheme } from "./theme-resolve.ts";
+import { resolveTheme } from "@shared/theme-resolve";
 import { htmlLang } from "./locale.ts";
 
 /**

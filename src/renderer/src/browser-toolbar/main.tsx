@@ -10,7 +10,7 @@ import { createRoot } from "react-dom/client";
 import { effectiveLanguage } from "@shared/settings";
 import { api } from "../api.ts";
 import { htmlLang } from "../locale.ts";
-import { resolveTheme } from "../theme-resolve.ts";
+import { resolveTheme } from "@shared/theme-resolve";
 import { BrowserToolbar } from "./BrowserToolbar";
 import "../styles.css";
 import "../paper-themes.css";
