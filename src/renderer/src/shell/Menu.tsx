@@ -117,14 +117,6 @@ export function Menu(props: {
   /** 开合的回声。给调用方复位自己的两段式状态用（菜单关了，确认态不该留着） */
   onOpenChange?: (open: boolean) => void;
   /**
-   * 面板**定宽**（px）。给了它就不再按内容收放：卡片宽度只跟窗口有关。
-   *
-   * 与定高（`listRows`）是同一件事的两半：宽或高只要还跟着内容走，点一次左栏过滤
-   * 就换一个尺寸，卡片位置也跟着跳（2026-10-01 用户实测两次）。
-   * 定宽之后长的模型名会被截断，行的 `title` 是那个出口。
-   */
-  panelWidth?: number;
-  /**
    * 面板最小宽度（px）。全局默认 180 是给带描述/徽标的菜单定的；短词菜单
    * （思考档的 Low/High/Max）被它撑出一大截空白，显得轻浮。给**窄值**时面板
    * 收窄到内容，maxWidth 320 仍兜底。
@@ -493,14 +485,10 @@ export function Menu(props: {
                   ? { height: position.cap }
                   : { maxHeight: position.cap }),
               zIndex: 40,
-              // 定宽或按内容：两条都夹一道视口（面板是 fixed 的，100vw 就是可用宽）——
+              minWidth: props.panelMinWidth ?? 180,
+              // 上限夹一道视口（面板是 fixed 的，100vw 就是可用宽）——
               // 窄窗下宁可窄、也不让右边半截出屏
-              ...(props.panelWidth === undefined
-                ? {
-                    minWidth: props.panelMinWidth ?? 180,
-                    maxWidth: `min(${props.panelMaxWidth ?? 320}px, calc(100vw - 48px))`,
-                  }
-                : { width: `min(${props.panelWidth}px, calc(100vw - 48px))` }),
+              maxWidth: `min(${props.panelMaxWidth ?? 320}px, calc(100vw - 48px))`,
               padding: "var(--space-1)",
               display: "flex",
               flexDirection: "column",

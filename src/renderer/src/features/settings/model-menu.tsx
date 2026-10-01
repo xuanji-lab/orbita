@@ -128,8 +128,8 @@ export type ModelScope =
 /** 「全部」在状态里的值。默认态，也是搜索时的复位目标 */
 export const MODEL_SCOPE_ALL: ModelScope = { kind: "all" };
 
-/** 星标的键：两个 id 成对（与 AppSettings.starredModels 同一口径） */
-export function starKey(providerId: string, modelId: string): string {
+/** 星标的键：两个 id 成对（与 AppSettings.starredModels 同一口径）。内部用，不导出——没有第二个消费者 */
+function starKey(providerId: string, modelId: string): string {
   return `${providerId}:${modelId}`;
 }
 
