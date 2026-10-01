@@ -23,6 +23,12 @@ export interface MenuItem {
   hintEllipsis?: "tail" | "head";
   /** 最右端的徽标区（如模型项的 ctx 窗口与图片能力）。小而事实性的东西，不参与布局语义 */
   badge?: React.ReactNode;
+  /**
+   * 行右端的**独立控件**（今天的消费者只有星标）。它与「选这一行」不是一件事：
+   * 点行 = 选中这个模型、卡片收起；点它 = 只切标记，不选任何东西、卡片也不关。
+   * 所以它必须是行按钮的**兄弟**（见 MenuRow 的渲染）。
+   */
+  trailing?: React.ReactNode;
   /** 当前项。用 check 图标标出来，不用染色——状态优先图标与文字 */
   checked?: boolean;
   disabled?: boolean;
@@ -145,6 +151,12 @@ export function Menu(props: {
    * 否则会出现「左栏亮着某家、列表里全是别家」这种自相矛盾的画面。
    */
   onSearch?: (query: string) => void;
+  /**
+   * 清单为空时写什么。**空不等于「搜不到」**：星标一格都没星过时列表也是空的，
+   * 而那与搜索无关。所以那句话得由调用方给——它才知道现在是什么过滤状态。
+   * 不给就退回「没有匹配的模型。」（只对搜索成立的说法）。
+   */
+  emptyText?: (query: string) => string;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -244,7 +256,6 @@ export function Menu(props: {
   // 内容，不先量就只能猜。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下。
   // 搜索过滤改变行数时同样要重量——deps 里的 visible.length 就是为此
   const visible = filterMenuItems(props.items, query.trim().toLowerCase());
-  const searching = props.searchable === true && query.trim() !== "";
   useLayoutEffect(() => {
     if (!open) return;
     positionMenu();
@@ -482,7 +493,7 @@ export function Menu(props: {
                 ref={listRef}
                 style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
               >
-              {searching && visible.length === 0 && (
+              {visible.length === 0 && (
                 <div
                   style={{
                     padding: "var(--space-2)",
@@ -491,7 +502,7 @@ export function Menu(props: {
                     color: "var(--color-text-tertiary)",
                   }}
                 >
-                  {t.menu.noModels}
+                  {(props.emptyText ?? (() => t.menu.noModels))(query)}
                 </div>
               )}
               {visible.map((item) => (
@@ -526,7 +537,7 @@ function MenuRow(props: {
   const fact = item.fact === true;
   const header = item.header === true;
   const disabled = item.disabled === true || fact || header;
-  return (
+  const row = (
     <button
       type="button"
       role={fact || header ? "presentation" : "menuitem"}
@@ -671,5 +682,17 @@ function MenuRow(props: {
       </span>
       {item.badge}
     </button>
+  );
+  /*
+   * 尾控件（星标）是行按钮的**兄弟**，不是子节点：HTML 里 button 不能嵌 button，
+   * 浏览器会把内层拆出去，点击行为跟着乱。整行的底由外面这一层给（见 styles.css 的
+   * .menu-row-tail）——鼠标落在星上时，亮的是整行，不是只有一半。
+   */
+  if (item.trailing === undefined) return row;
+  return (
+    <div className="menu-row-tail" data-cursor={props.cursor} data-current={item.checked === true}>
+      {row}
+      {item.trailing}
+    </div>
   );
 }

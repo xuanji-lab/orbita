@@ -182,8 +182,10 @@ export const en = {
   },
 
   menu: {
-    searchModels: "Search models…",
-    noModels: "No models match.",
+    searchModels: "Search models or providers…",
+    noModels: "No matching models.",
+    all: "All",
+    noMatchInProvider: (query: string) => `No model matching “${query}” in this provider.`,
   },
 
   rail: {
@@ -439,6 +441,8 @@ export const en = {
   modelMenu: {
     contextWindow: "Context window",
     acceptsImage: "Accepts image input — multimodal",
+    starred: "Starred",
+    starredEmpty: "No starred models yet. Star one from the right of any model row.",
   },
 
   providers: {

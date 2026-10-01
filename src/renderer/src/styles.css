@@ -327,6 +327,50 @@
   font-weight: var(--weight-regular);
 }
 
+/*
+ * 行右端带独立控件（今天的唯一消费者是模型卡片的星标）的行。
+ *
+ * 控件是行按钮的**兄弟**（button 不能嵌 button），所以底不能只画在行按钮上：
+ * 鼠标落在星上时也得亮整行——靶子是「这一行」，不是行里的某一格。
+ * 选中盖过 hover 的取舍同 .option-row：持久状态压临时状态，规则放最后。
+ */
+.menu-row-tail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: var(--transition-hover);
+}
+.menu-row-tail:hover,
+.menu-row-tail[data-cursor="true"] {
+  background: var(--option-hover-bg);
+}
+.menu-row-tail[data-current="true"],
+.menu-row-tail[data-current="true"]:hover {
+  background: var(--option-active-bg);
+}
+/* 底在这一层，里面的行按钮不再自己画（否则只有左半边亮） */
+.menu-row-tail > .option-row,
+.menu-row-tail > .option-row:hover,
+.menu-row-tail > .option-row[data-cursor="true"],
+.menu-row-tail > .option-row[aria-selected="true"] {
+  background: transparent;
+}
+
+/*
+ * 行右端的星标（模型卡片）。**只改颜色、不加底**：底是「整行」的事，
+ * 星上再画一层就等于在一行里画出两个靶子。
+ * 填充只表达一件事——「这个模型已星标」（未星标 = 描边）。
+ */
+.menu-star {
+  color: var(--color-text-tertiary);
+}
+.menu-star:hover,
+.menu-star[aria-pressed="true"] {
+  color: var(--color-text-primary);
+}
+
 *,
 *::before,
 *::after {

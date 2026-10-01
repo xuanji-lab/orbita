@@ -11,6 +11,7 @@ import type { BuiltinProvider } from "@shared/agent-ipc";
 import { KNOWN_PROVIDERS } from "@shared/known-providers";
 import { resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
+import type { ModelDecl } from "@shared/provider";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import type { MenuItem } from "../../shell/Menu";
@@ -112,12 +113,24 @@ export function modelMenuItems(options: {
 }
 
 /**
- * 左栏的选中态。`null` = 全部（也是搜索时的落点）。
+ * 左栏的选中态。
  *
  * 用 provider 实例 id，不用 kind：同一个 kind 可以有两个实例（两把 key 的自建网关），
- * 而右栏列的是实例。
+ * 而右栏列的是实例。星标是**跨厂商**的一维，所以自成一档，不跟厂商交集
+ * （交集会造出空集：星标里恰好没有某家的模型时，用户对着两格都亮着的地方看到空卡片）。
  */
-export type ModelScope = string | null;
+export type ModelScope =
+  | { kind: "all" }
+  | { kind: "starred" }
+  | { kind: "provider"; id: string };
+
+/** 「全部」在状态里的值。默认态，也是搜索时的复位目标 */
+export const MODEL_SCOPE_ALL: ModelScope = { kind: "all" };
+
+/** 星标的键：两个 id 成对（与 AppSettings.starredModels 同一口径） */
+export function starKey(providerId: string, modelId: string): string {
+  return `${providerId}:${modelId}`;
+}
 
 /**
  * 左栏一格。**纯图标格（星标 / 全部）与厂商格共用这一套尺寸**：两组混在一列里，
@@ -139,6 +152,19 @@ const RAIL_CELL: React.CSSProperties = {
   cursor: "pointer",
 };
 
+/** 行右端的星标。几何在这里，颜色在 styles.css 的 `.menu-star`（要 :hover） */
+const STAR_BUTTON: React.CSSProperties = {
+  display: "grid",
+  placeItems: "center",
+  width: "var(--control-height-xs)",
+  height: "var(--control-height-xs)",
+  marginRight: "var(--space-1)",
+  border: 0,
+  borderRadius: "var(--radius-sm)",
+  background: "transparent",
+  cursor: "pointer",
+};
+
 /** 厂商在左栏里的短名。改过名的实例显示他起的名字——那列说的是「哪个接入」 */
 function railShortName(provider: ProviderDto): string {
   const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
@@ -147,29 +173,41 @@ function railShortName(provider: ProviderDto): string {
 }
 
 /**
- * 模型卡片的左栏：全部 + 各厂商（单选，互斥）。
+ * 模型卡片的左栏：星标 / 全部 / 各厂商（**单选互斥**）。
  *
- * 不用像设置面那样列出「组头」：左栏已经把厂商说了一遍，右栏的行只写厂商在副行里。
- * 星标那一格在收藏落地后接在最上面（它跨厂商，所以排在「全部」之前）。
+ * 星标格永远描边、不填实：星形的**填充在这个应用里只有一个意思**——「这个模型已星标」
+ * （会话行在用）。选中那一格说的是「现在只看星标」，那是视图状态，走 .option-row 的
+ * 选中底（aria-selected），不借填充去说。
+ *
+ * 不用像设置面那样列「组头」：左栏已经把厂商说了一遍，行里只在副行重复一次。
  */
 export function modelPickerRail(options: {
+  t: Messages;
   providers: readonly ProviderDto[];
   scope: ModelScope;
   onScope: (scope: ModelScope) => void;
-  /** 星标格的可见性交给调用方（收藏还没落地时不给它留位置） */
-  top?: React.ReactNode;
 }): React.ReactNode {
   return (
     <>
-      {options.top}
       <button
         type="button"
         className="option-row"
         style={RAIL_CELL}
-        title="全部"
-        aria-label="全部"
-        aria-selected={options.scope === null}
-        onClick={() => options.onScope(null)}
+        title={options.t.modelMenu.starred}
+        aria-label={options.t.modelMenu.starred}
+        aria-selected={options.scope.kind === "starred"}
+        onClick={() => options.onScope({ kind: "starred" })}
+      >
+        <Icon name="star" size={13} strokeWidth={1.8} />
+      </button>
+      <button
+        type="button"
+        className="option-row"
+        style={RAIL_CELL}
+        title={options.t.menu.all}
+        aria-label={options.t.menu.all}
+        aria-selected={options.scope.kind === "all"}
+        onClick={() => options.onScope(MODEL_SCOPE_ALL)}
       >
         <Icon name="menu" size={13} strokeWidth={1.8} />
       </button>
@@ -180,16 +218,10 @@ export function modelPickerRail(options: {
           className="option-row"
           style={RAIL_CELL}
           title={provider.displayName}
-          aria-selected={options.scope === provider.id}
-          onClick={() => options.onScope(provider.id)}
+          aria-selected={options.scope.kind === "provider" && options.scope.id === provider.id}
+          onClick={() => options.onScope({ kind: "provider", id: provider.id })}
         >
-          <span
-            style={{
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-              textOverflow: "ellipsis",
-            }}
-          >
+          <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
             {railShortName(provider)}
           </span>
         </button>
@@ -199,10 +231,14 @@ export function modelPickerRail(options: {
 }
 
 /**
- * 模型卡片的行：**两行**（模型名 + 它的厂商）。
+ * 模型卡片的行：**两行**（模型名 + 它属于哪家）、右端一颗星。
  *
  * 与设置面那份的差别全部来自左栏：厂商归属已经在左栏可见，所以这里不再插组头行
  * （组头 + 左栏是在同一句话上说两遍），厂名改从副行说。
+ *
+ * 星标视图（scope=starred）**按加入顺序**列，不按厂商分组：星标的意义就是
+ * 「我挑出来的这几个」，再按厂商拢回去等于又把它搅成全量清单的形状。
+ * 星标过的模型后来没 key 了 / 从声明里消失：静默剔除（同 drawer.docked 丢已删会话）。
  */
 export function modelCardItems(options: {
   t: Messages;
@@ -210,38 +246,64 @@ export function modelCardItems(options: {
   catalog: readonly BuiltinProvider[];
   selected: { providerId: string; modelId: string } | null;
   scope: ModelScope;
+  starred: readonly { providerId: string; modelId: string }[];
+  onToggleStar: (pair: { providerId: string; modelId: string }) => void;
   onSelect: (providerId: string, modelId: string) => void;
 }): MenuItem[] {
-  const shown =
-    options.scope === null ? options.providers : options.providers.filter((p) => p.id === options.scope);
-  return shown.flatMap((provider) => {
+  const starredKeys = new Set(options.starred.map((pair) => starKey(pair.providerId, pair.modelId)));
+  const rowFor = (provider: ProviderDto, declared: ModelDecl): MenuItem => {
     const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-    return provider.models.declared.map((declared) => {
-      const defaults = resolveModelDefaults(options.catalog, declared.id, {
-        catalogId: known?.catalogId,
-        api: known?.api,
-      });
-      const context = modelContextText(declared, defaults);
-      return {
-        id: `${provider.id}:${declared.id}`,
-        label: declared.id,
-        subLabel: provider.displayName,
-        badge: (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
-            <span className="pv-badge" title={options.t.modelMenu.contextWindow}>
-              {context.text}
-            </span>
-            {modelAcceptsImage(declared, defaults) && (
-              <span className="pv-badge" title={options.t.modelMenu.acceptsImage}>
-                <Icon name="image" size={11} strokeWidth={1.8} />
-              </span>
-            )}
-          </span>
-        ),
-        checked:
-          options.selected?.providerId === provider.id && options.selected.modelId === declared.id,
-        onSelect: () => options.onSelect(provider.id, declared.id),
-      };
+    const defaults = resolveModelDefaults(options.catalog, declared.id, {
+      catalogId: known?.catalogId,
+      api: known?.api,
     });
-  });
+    const context = modelContextText(declared, defaults);
+    const isStarred = starredKeys.has(starKey(provider.id, declared.id));
+    return {
+      id: starKey(provider.id, declared.id),
+      label: declared.id,
+      subLabel: provider.displayName,
+      badge: (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
+          <span className="pv-badge" title={options.t.modelMenu.contextWindow}>
+            {context.text}
+          </span>
+          {modelAcceptsImage(declared, defaults) && (
+            <span className="pv-badge" title={options.t.modelMenu.acceptsImage}>
+              <Icon name="image" size={11} strokeWidth={1.8} />
+            </span>
+          )}
+        </span>
+      ),
+      checked:
+        options.selected?.providerId === provider.id && options.selected.modelId === declared.id,
+      trailing: (
+        <button
+          type="button"
+          className="menu-star"
+          style={STAR_BUTTON}
+          title={options.t.modelMenu.starred}
+          aria-label={options.t.modelMenu.starred}
+          aria-pressed={isStarred}
+          onClick={() => options.onToggleStar({ providerId: provider.id, modelId: declared.id })}
+        >
+          <Icon name="star" size={13} strokeWidth={1.8} fill={isStarred} />
+        </button>
+      ),
+      onSelect: () => options.onSelect(provider.id, declared.id),
+    };
+  };
+
+  const scope = options.scope;
+  if (scope.kind === "starred") {
+    return options.starred.flatMap((pair) => {
+      const provider = options.providers.find((p) => p.id === pair.providerId);
+      const declared = provider?.models.declared.find((m) => m.id === pair.modelId);
+      if (provider === undefined || declared === undefined) return [];
+      return [rowFor(provider, declared)];
+    });
+  }
+  const shown =
+    scope.kind === "provider" ? options.providers.filter((p) => p.id === scope.id) : options.providers;
+  return shown.flatMap((provider) => provider.models.declared.map((declared) => rowFor(provider, declared)));
 }

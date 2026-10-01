@@ -89,7 +89,7 @@ import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelCardItems, modelPickerRail, type ModelScope, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardItems, MODEL_SCOPE_ALL, modelPickerRail, type ModelScope, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -118,7 +118,7 @@ import {
 } from "@shared/session";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
-import type { ThemePreference } from "@shared/settings";
+import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -415,6 +415,9 @@ function ChatViewBody(props: {
    * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
    */
   homeBare?: boolean;
+  /** 星标（收藏）的模型。**不是会话元数据**——它跟着用户走，存在设置里 */
+  starredModels?: readonly ModelPair[];
+  onToggleStarModel?: (pair: ModelPair) => void;
   /**
    * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
    * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
@@ -749,7 +752,13 @@ function ChatViewBody(props: {
       }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
-      bottomSlot={<ComposerBar session={session} />}
+      bottomSlot={
+        <ComposerBar
+          session={session}
+          starredModels={props.starredModels ?? []}
+          onToggleStarModel={props.onToggleStarModel ?? (() => {})}
+        />
+      }
       dropActive={props.dropActive === true}
       quotes={session.quotes}
       onRemoveQuote={session.removeQuote}
@@ -1598,7 +1607,12 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
  * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
  * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
  */
-function ComposerBar(props: { session: ChatSession }) {
+function ComposerBar(props: {
+  session: ChatSession;
+  /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
+}) {
   const t = useT();
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
@@ -1618,7 +1632,7 @@ function ComposerBar(props: { session: ChatSession }) {
    * 模型卡片左栏选中哪家（null = 全部）。**只活在这个卡片里**：它是「现在想找什么」
    * 的一时状态，不是设置——跨卡片记住它只会让人下次打开时奇怪「我的模型呢」。
    */
-  const [modelScope, setModelScope] = useState<ModelScope>(null);
+  const [modelScope, setModelScope] = useState<ModelScope>(MODEL_SCOPE_ALL);
 
   // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
   // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
@@ -1674,14 +1688,16 @@ function ComposerBar(props: { session: ChatSession }) {
     catalog,
     selected: session.model,
     scope: modelScope,
+    starred: props.starredModels,
+    onToggleStar: props.onToggleStarModel,
     onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
   });
 
   // 选着的那家后来没 key 了 / 被删了：左栏那一格会消失，过滤得跟着回「全部」，
   // 否则清单会停在空集上，而用户看不到任何能解释这件事的东西
   useEffect(() => {
-    if (modelScope !== null && !session.usable.some((provider) => provider.id === modelScope)) {
-      setModelScope(null);
+    if (modelScope.kind === "provider" && !session.usable.some((p) => p.id === modelScope.id)) {
+      setModelScope(MODEL_SCOPE_ALL);
     }
   }, [modelScope, session.usable]);
 
@@ -1770,6 +1786,7 @@ function ComposerBar(props: { session: ChatSession }) {
           items={modelItems}
           searchable
           rail={modelPickerRail({
+            t,
             providers: session.usable,
             scope: modelScope,
             onScope: setModelScope,
@@ -1777,7 +1794,13 @@ function ComposerBar(props: { session: ChatSession }) {
           // 搜索是一切的旁路：左下栏正亮着某家时去搜，必须把过滤复位到「全部」，
           // 否则会出现「左栏亮着智谱、列表里全是 deepseek」这种自相矛盾的画面
           onSearch={(query) => {
-            if (query.trim() !== "") setModelScope(null);
+            if (query.trim() !== "") setModelScope(MODEL_SCOPE_ALL);
+          }}
+          // 空清单要说清是哪一种空：星标一条都没星过、还是在一家里面搜不到
+          emptyText={(query) => {
+            if (modelScope.kind === "starred") return t.modelMenu.starredEmpty;
+            if (modelScope.kind === "provider") return t.menu.noMatchInProvider(query);
+            return t.menu.noModels;
           }}
           panelMaxHeight={520}
           panelMaxWidth={420}
