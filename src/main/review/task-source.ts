@@ -11,14 +11,16 @@ import type { ReviewDiff, ReviewEntry, ReviewList } from "../../shared/review.ts
 import type { SessionStore } from "../session/store.ts";
 
 /** 磁盘现状：不在 = null；读不了 / 非 utf8 / 带 NUL = undefined（比不了、也出不了 diff）。 */
-
 async function diskContent(path: string): Promise<string | null | undefined> {
   try {
     const info = await stat(path);
     if (!info.isFile()) return undefined;
     const bytes = await readFile(path);
     if (bytes.includes(0)) return undefined;
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // ignoreBOM 与 file-tracker.toSnapshot / revert.diskText 同一口径（三处必须一起改）：
+    // 默认会剥掉开头的 U+FEFF，而快照侧留着——BOM 文件会算出「首行改了」的幽灵 diff，
+    // 字节级还原之后也永远判不成「已还原」（Windows 验收实机：VS 系 .cs / .ps1 大量带 BOM）
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return null;
   }
