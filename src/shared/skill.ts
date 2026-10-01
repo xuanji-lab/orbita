@@ -102,15 +102,65 @@ export const SKILL_NOT_FOUND_CODE = "SKILL_NOT_FOUND:";
 export const SKILL_UNREADABLE_CODE = "SKILL_UNREADABLE:";
 
 /**
- * `/skill:<target>` 指令的解析（主进程展开用）。**target 取到第一个空白为止**，
- * 其余全是附加指示。不是这个形状返回 null，照常发送。
+ * 一次 `/skill:` 调用在原文里的位置。start 指向 `/`，end 在 target 之后
+ * （下一个空白或文末）。**边界规则与输入框面板的触发判定（slash-trigger.ts）
+ * 是同一份语法**：`/` 的前一个字符必须是行首或空白（含全角空格）——两处各写
+ * 一遍就会出现「面板认、展开不认」的裂缝。
  */
-export function parseSkillInvocation(text: string): { target: string; rest?: string } | null {
-  const match = /^\/skill:([^\s]+)(?:\s([\s\S]*))?$/.exec(text.trim());
-  if (match === null) return null;
-  const target = match[1] ?? "";
-  const rest = match[2]?.trim();
-  return target === "" ? null : rest !== undefined && rest !== "" ? { target, rest } : { target };
+export interface SkillToken {
+  start: number;
+  end: number;
+  target: string;
+}
+
+const isBoundaryChar = (ch: string): boolean => /\s/.test(ch);
+
+/**
+ * 扫出原文里全部 `/skill:<target>` 调用（任意位置、任意多条——句中补全选中的
+ * 就是这种形态）。target 是 `/skill:` 后连续的非空白段，空 target 不算。
+ * 不是 `/skill:` 前缀的 `/xxx`（如 `/compact`、路径）不在这里管。
+ */
+export function findSkillTokens(text: string): SkillToken[] {
+  const tokens: SkillToken[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "/") continue;
+    if (i > 0 && !isBoundaryChar(text[i - 1] ?? "")) continue;
+    if (!text.startsWith("/skill:", i)) continue;
+    let end = i + 7;
+    while (end < text.length && !isBoundaryChar(text[end] ?? "")) end++;
+    if (end === i + 7) continue;
+    tokens.push({ start: i, end, target: text.slice(i + 7, end) });
+  }
+  return tokens;
+}
+
+/**
+ * 把原文里的 `/skill:` token 就地替换成块文本（块由调用方按 target 备好；
+ * 查无此 skill 的报错在调用方——这里只管拼）。每个 token 的附加指示 = 它后面
+ * 到下一个 token（或文末）的文字——阅读顺序不变，散文留在原位。
+ *
+ * 消息开头单条调用时与旧格式逐字节一致（`块\n\n指示`，存量转录不用迁移）。
+ */
+export function replaceSkillTokens(
+  text: string,
+  tokens: readonly SkillToken[],
+  blockOf: (target: string) => string,
+): string {
+  let out = "";
+  let cursor = 0;
+  for (const [i, token] of tokens.entries()) {
+    // 首个 token 之前的文字照抄；此后游标已推进到下一个 token，切片恒为空——
+    // token 之间的散文由前一个 token 的附加指示吸收，不能在这里重发一遍
+    out += text.slice(cursor, token.start);
+    // 块与前文之间空一行；开头单条时 out 为空不加分隔，与旧格式对齐
+    if (out !== "" && !out.endsWith("\n")) out += "\n\n";
+    const next = tokens[i + 1]?.start ?? text.length;
+    const instructions = text.slice(token.end, next).trim();
+    const block = blockOf(token.target);
+    out += instructions === "" ? block : `${block}\n\n${instructions}`;
+    cursor = next;
+  }
+  return out;
 }
 
 /**
@@ -143,13 +193,30 @@ export function formatSkillBlock(parts: {
 }
 
 /**
- * 从用户消息原文里解析 skill 块（显示端用）。解析出块时 rest 是块后面的
- * 附加指示（可能是空串）；没解析出返回 null，消息照常渲染。
+ * 用户消息的段落：skill 块或纯文字（显示端用）。句中 `/skill:` 展开后一条消息
+ * 里可能有任意多段，块前后的文字按原顺序保留在 text 段里。
  */
-export function parseSkillBlock(text: string): { name: string; content: string; rest: string } | null {
-  const match = /^<skill name="([^"]+)"[^>]*>\n([\s\S]*)\n<\/skill>(?:\n\n([\s\S]*))?$/.exec(text);
-  if (match === null) return null;
-  return { name: match[1] ?? "", content: match[2] ?? "", rest: match[3] ?? "" };
+export type SkillSegment =
+  | { kind: "text"; text: string }
+  | { kind: "skill"; name: string; content: string };
+
+/**
+ * 从用户消息原文里解析全部 `<skill>` 块（任意位置、任意多段）。一个块都没有时
+ * 返回 null，消息照常渲染；块与块之间/前后的文字成为 text 段（可能为空串）。
+ */
+export function parseSkillSegments(text: string): SkillSegment[] | null {
+  const pattern = /<skill name="([^"]+)"[^>]*>\n([\s\S]*?)\n<\/skill>/g;
+  const segments: SkillSegment[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) segments.push({ kind: "text", text: text.slice(cursor, match.index) });
+    segments.push({ kind: "skill", name: match[1] ?? "", content: match[2] ?? "" });
+    cursor = pattern.lastIndex;
+  }
+  if (segments.length === 0) return null;
+  if (cursor < text.length) segments.push({ kind: "text", text: text.slice(cursor) });
+  return segments;
 }
 
 /**

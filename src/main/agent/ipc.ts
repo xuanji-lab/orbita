@@ -13,9 +13,10 @@ import {
 } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import {
+  findSkillTokens,
   formatSkillBlock,
   matchSkillTarget,
-  parseSkillInvocation,
+  replaceSkillTokens,
   SKILL_NOT_FOUND_CODE,
   SKILL_UNREADABLE_CODE,
 } from "../../shared/skill.ts";
@@ -258,29 +259,40 @@ export function registerAgentIpc(
    * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
    */
   /**
-   * `/skill:<target> 附加指示` → `<skill>` 块用户消息。**展开在主进程**：
-   * name→正文的真源在 skill store，agent 进程与 renderer 都不必再认一遍 skill；
-   * transcript 落的是展开后原文，重放历史所见即所得。找不到或读不出就抛错——
-   * 发送失败如实上屏，而不是把 `/skill:xxx` 原文喂给模型让它角色扮演。
-   * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
+   * `/skill:<target>` → `<skill>` 块用户消息，**任意位置、任意多条**（句中补全
+   * 选中的就是这个形态）：每个 token 就地替换，它后面到下一个 token 的散文成为
+   * 那个块的附加指示。**展开在主进程**：name→正文的真源在 skill store，agent
+   * 进程与 renderer 都不必再认一遍 skill；transcript 落的是展开后原文，重放
+   * 历史所见即所得。任何一条查不到或读不出就整条抛错——发送失败如实上屏，
+   * 而不是把 `/skill:xxx` 原文喂给模型让它角色扮演。target 先按 slug 匹配
+   * （面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
    */
   const expandSkillInvocation = async (text: string, workspaceId: string | null): Promise<string> => {
-    const parsed = parseSkillInvocation(text);
-    if (parsed === null) return text;
+    const trimmed = text.trim();
+    const tokens = findSkillTokens(trimmed);
+    if (tokens.length === 0) return text;
     const available = (await skills.list()).filter(
       (meta) =>
         !meta.missing && (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId))),
     );
-    const meta = matchSkillTarget(available, parsed.target);
-    if (meta === null) throw new Error(`${SKILL_NOT_FOUND_CODE}${parsed.target}`);
-    const content = await skills.read(meta.slug);
-    if (content === null) throw new Error(`${SKILL_UNREADABLE_CODE}${parsed.target}`);
-    return formatSkillBlock({
-      name: content.name,
-      location: join(skills.storeRoot(), meta.slug, "SKILL.md"),
-      body: content.body,
-      instructions: parsed.rest,
-    });
+    // 先全部备好再替换：中途一条查不到，整条都不发
+    const blocks = new Map<string, string>();
+    for (const token of tokens) {
+      if (blocks.has(token.target)) continue;
+      const meta = matchSkillTarget(available, token.target);
+      if (meta === null) throw new Error(`${SKILL_NOT_FOUND_CODE}${token.target}`);
+      const content = await skills.read(meta.slug);
+      if (content === null) throw new Error(`${SKILL_UNREADABLE_CODE}${token.target}`);
+      blocks.set(
+        token.target,
+        formatSkillBlock({
+          name: content.name,
+          location: join(skills.storeRoot(), meta.slug, "SKILL.md"),
+          body: content.body,
+        }),
+      );
+    }
+    return replaceSkillTokens(trimmed, tokens, (target) => blocks.get(target) ?? "");
   };
 
   async function submitTurn(input: SubmitAgentInput): Promise<void> {

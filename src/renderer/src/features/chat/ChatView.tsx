@@ -103,8 +103,8 @@ import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName } from "@shared/mcp";
-import { parseSkillBlock, skillForReadPath } from "@shared/skill";
-import type { SkillMeta } from "@shared/skill";
+import { parseSkillSegments, skillForReadPath } from "@shared/skill";
+import type { SkillMeta, SkillSegment } from "@shared/skill";
 import { api } from "../../api";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES } from "@shared/permission";
@@ -2160,10 +2160,26 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
   // 恒是正文」猜会把裸标签渲染进气泡（review #90 指出）。旧会话只有单块正文，
   // 这条路径同样走通、行为不变。
   // `/skill:` 调用展开出的 <skill> 块（主进程拼的）同样拆成折叠卡：skill 正文几千字，
-  // 不能平铺进气泡；块后的附加指示才是用户自己的话，照常进气泡、照常被复制
+  // 不能平铺进气泡；句中 /skill: 展开后一条消息可能有多块，逐张成卡，块前后的
+  // 文字按原顺序留在气泡里（附加指示、散文各归各位）
   const split = splitUserTextBlocks(textBlocks.map((block) => block.text));
-  const skillBlock = parseSkillBlock(split.body);
-  const parsed = skillBlock !== null ? parseQuotedMessage(skillBlock.rest) : parseQuotedMessage(split.body);
+  const skillSegments = parseSkillSegments(split.body);
+  const skillCards =
+    skillSegments === null
+      ? []
+      : skillSegments.filter(
+          (segment): segment is Extract<SkillSegment, { kind: "skill" }> => segment.kind === "skill",
+        );
+  const skillFreeText =
+    skillSegments === null
+      ? split.body
+      : skillSegments
+          .filter(
+            (segment): segment is Extract<SkillSegment, { kind: "text" }> => segment.kind === "text",
+          )
+          .map((segment) => segment.text)
+          .join("\n\n");
+  const parsed = parseQuotedMessage(skillFreeText);
   const quotes = parsed.quotes;
   const copyText = parsed.text;
   const pastedBlocks = split.pasted.map((content) => ({ content, lines: pastedTextSize(content).lines }));
@@ -2240,11 +2256,13 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
           ))}
         </div>
       )}
-      {skillBlock !== null && (
+      {skillCards.length > 0 &&
         // skill 卡落在统一排布的第四行：图片 → 引用 → 文件 → **skill** → 粘贴文字 →
-        // 文字气泡（2026-09-27 定稿）。它按内容也是「带进来的材料」，排在材料组末尾
-        <SkillInvocationCard name={skillBlock.name} content={skillBlock.content} />
-      )}
+        // 文字气泡（2026-09-27 定稿）。它按内容也是「带进来的材料」，排在材料组末尾；
+        // 句中多块调用就多张卡，同一行话语里挂多个 skill
+        skillCards.map((card, index) => (
+          <SkillInvocationCard key={`skill:${index}`} name={card.name} content={card.content} />
+        ))}
       {pastedBlocks.length > 0 && (
         // 粘贴文字行：贴着气泡（它是用户写的内容，不是从磁盘带来的材料）；
         // 折叠成一行——发出去之后它是背景，不该在对话流里再刷一次屏
