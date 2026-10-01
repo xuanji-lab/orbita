@@ -53,6 +53,7 @@ import lightbulb from "../../../../Orbita Design System/assets/icons/lucide/ligh
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
 import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-todo.svg?raw";
+import menu from "../../../../Orbita Design System/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../Orbita Design System/assets/icons/lucide/mic.svg?raw";
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
@@ -151,6 +152,10 @@ const ICONS = {
   "loader-circle": loaderCircle,
   list,
   "list-todo": listTodo,
+  // 三条等长横线。列表用 `list`（带项目符号，读作「清单」），这一枚是「全部」——
+  // 模型卡片左栏的视图开关（2026-10-01）。lucide 完整集里的 `menu`，按设计系统
+  // Iconography 那节「拷一份工作子集进来」的做法引入
+  menu,
   lock,
   "message-square": messageSquare,
   mic,

@@ -7,6 +7,11 @@ import { useT } from "../locale.ts";
 export interface MenuItem {
   id: string;
   label: string;
+  /**
+   * 行的第二行（小一号、tertiary）。只有模型卡片用它：主行是模型名、副行是它属于哪家——
+   * 左栏按厂商过滤之后组头那一行就没了，厂商名得有地方待（2026-10-01 定）。
+   */
+  subLabel?: string;
   icon?: IconName;
   /** 右侧的说明。菜单项自己解释后果，比事后弹一个确认框好 */
   hint?: string;
@@ -128,6 +133,18 @@ export function Menu(props: {
    * 开在下方会盖住紧挨着的下一条会话，想看别的会话就得先关菜单。
    */
   placement?: MenuPlacementSide;
+  /**
+   * 左栏（弹层内容的**第一等结构**，不是装饰）：与行清单并排、自己不滚，
+   * 清单在它右边滚。今天只有模型卡片用它——星标 / 全部 / 各厂商的过滤列。
+   * 里面是什么由调用方给（本原语不管），但**键盘左右切栏**由这里实现：
+   * 焦点在左栏时 `↑↓` 在格间走、`→` 交给清单；焦点在清单时 `←` 回左栏。
+   */
+  rail?: React.ReactNode;
+  /**
+   * 搜索词的回声。搜索是**一切过滤的旁路**：调用方拿它把左栏的选中复位到「全部」，
+   * 否则会出现「左栏亮着某家、列表里全是别家」这种自相矛盾的画面。
+   */
+  onSearch?: (query: string) => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -142,6 +159,10 @@ export function Menu(props: {
   const menuRef = useRef<HTMLDivElement>(null);
   /** 行清单（不含搜索框）——既是滚动容器，也是量自然高度的那个元素 */
   const listRef = useRef<HTMLDivElement>(null);
+  /** 左栏容器：只为键盘切栏用 */
+  const railRef = useRef<HTMLDivElement>(null);
+  /** 装 [左栏 | 清单] 的那一行：量自然高度要用它，不能只用清单 */
+  const bodyRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   /** 这次是点开的还是悬停开的——决定要不要把焦点交给菜单 */
   const byClickRef = useRef(false);
@@ -184,13 +205,15 @@ export function Menu(props: {
     const panel = menuRef.current;
     if (anchor === undefined || panel === null) return;
     const panelBox = panel.getBoundingClientRect();
-    const list = listRef.current;
     /**
      * 量的是**不封顶的自然高度**。封顶生效后面板会被压矮，拿面板高去算就会越算越小；
-     * 而列表的 `scrollHeight` 永远是真实内容高，两者差值就是外壳（搜索框、内边距）占掉的那一截。
+     * 而内容自己的 scrollHeight 永远是真实内容高——差值就是外壳（搜索框、内边距）占掉的那一截。
+     * 两栏并排时取**高的那一个**：左栏十家（320px）比两行清单高时，卡片得按左栏算。
      */
-    const naturalHeight =
-      list === null ? panelBox.height : panelBox.height - list.getBoundingClientRect().height + list.scrollHeight;
+    const body = bodyRef.current;
+    const bodyBox = body?.getBoundingClientRect().height ?? 0;
+    const tallest = Math.max(listRef.current?.scrollHeight ?? 0, railRef.current?.scrollHeight ?? 0);
+    const naturalHeight = body === null ? panelBox.height : panelBox.height - bodyBox + tallest;
     const box: MenuBox = {
       top: anchor.top,
       bottom: anchor.bottom,
@@ -323,6 +346,38 @@ export function Menu(props: {
                 event.preventDefault();
                 close();
               }
+              /*
+               * 左栏与清单是两栏，焦点在里面走要和光标（active）分开：
+               * 焦点在左栏时上下是「换格子」，不能去挪右边清单的光标。
+               */
+              const railEl = railRef.current;
+              const inRail = railEl !== null && event.target instanceof Node && railEl.contains(event.target);
+              const railButtons = (): HTMLButtonElement[] =>
+                railEl === null ? [] : [...railEl.querySelectorAll<HTMLButtonElement>("button")];
+              if (inRail && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                event.preventDefault();
+                const buttons = railButtons();
+                if (buttons.length === 0) return;
+                const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                const next = at < 0 ? 0 : (at + step + buttons.length) % buttons.length;
+                buttons[next]?.focus();
+                return;
+              }
+              if (inRail && event.key === "ArrowRight") {
+                event.preventDefault();
+                listRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+                return;
+              }
+              if (!inRail && event.key === "ArrowLeft" && railEl !== null) {
+                event.preventDefault();
+                // 回左栏时落在**当前选中**那一格上（没有就第一格）：光标该回到它刚离开的地方
+                const target =
+                  railEl.querySelector<HTMLButtonElement>('[aria-selected="true"]') ??
+                  railEl.querySelector<HTMLButtonElement>("button");
+                target?.focus();
+                return;
+              }
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 move(1);
@@ -387,6 +442,7 @@ export function Menu(props: {
                   onChange={(e) => {
                     setQuery(e.target.value);
                     setActive(0);
+                    props.onSearch?.(e.target.value);
                   }}
                   style={{
                     width: "100%",
@@ -408,11 +464,24 @@ export function Menu(props: {
               行清单是**唯一滚动的那一层**（搜索框钉在顶部不跟着滚）：封顶生效时
               面板变矮，这里 `overflow-y: auto` 接管，底部的模型因此永远够得到。
               它也是量自然高度的那个元素：scrollHeight 不受封顶影响。
+              有左栏时两栏并排：左栏是几个格子，自己也能滚（厂商多的人），但两栏滚的是各自的。
             */}
             <div
-              ref={listRef}
-              style={{ minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
+              ref={bodyRef}
+              style={{ display: "flex", flex: "1 1 auto", minWidth: 0, minHeight: 0, gap: "var(--space-1)" }}
             >
+              {props.rail !== undefined && (
+                <div
+                  ref={railRef}
+                  style={{ flex: "none", display: "flex", flexDirection: "column", overflowY: "auto" }}
+                >
+                  {props.rail}
+                </div>
+              )}
+              <div
+                ref={listRef}
+                style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
+              >
               {searching && visible.length === 0 && (
                 <div
                   style={{
@@ -437,6 +506,7 @@ export function Menu(props: {
                   onSelect={() => choose(item)}
                 />
               ))}
+              </div>
             </div>
           </div>,
           document.body,
@@ -478,7 +548,11 @@ function MenuRow(props: {
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
-        minHeight: "var(--control-height-md)",
+        // 两行的行要高出一档（32 + 16 = 48）：副行不是浮着的小字，它是行的下半截
+        minHeight:
+          item.subLabel === undefined
+            ? "var(--control-height-md)"
+            : "calc(var(--control-height-md) + var(--space-4))",
         padding: "var(--space-1) var(--space-2)",
         border: 0,
         borderRadius: "var(--radius-sm)",
@@ -529,10 +603,37 @@ function MenuRow(props: {
         在两者之间留白（没有多余空间时退化成紧贴），hint 才是那个会被压缩、
         用 ellipsis 截断的一方。
       */}
-      <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-2)", minWidth: 0 }}>
-        <span style={{ flex: "none", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <span
+        style={{
+          display: "flex",
+          // 有副行时这一列竖过来（主行 + 副行）；没副行就还是「label — hint」一行
+          flexDirection: item.subLabel === undefined ? "row" : "column",
+          alignItems: item.subLabel === undefined ? "center" : "flex-start",
+          justifyContent: "space-between",
+          gap: item.subLabel === undefined ? "var(--space-2)" : 0,
+          minWidth: 0,
+        }}
+      >
+        <span style={{ flex: "none", maxWidth: "100%", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "18px" }}>
           {item.label}
         </span>
+        {item.subLabel !== undefined && (
+          <span
+            style={{
+              flex: "none",
+              maxWidth: "100%",
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              color: "var(--color-text-tertiary)",
+              fontSize: "var(--font-size-caption)",
+              lineHeight: "16px",
+            }}
+          >
+            {item.subLabel}
+          </span>
+        )}
         {item.hint !== undefined && (
           <span
             style={{

@@ -22,6 +22,18 @@ export interface KnownProvider {
   id: string;
   /** 显示名。中文厂商保留中文——这是厂商的名字，不是界面文案 */
   label: string;
+  /**
+   * 模型卡片左栏那一格里的短名字。**尽量取官方或大家都那么叫的**（2026-10-01 定）：
+   *
+   * - `deepseek` → `DS`（中文圈就这么叫）；`stepfun` → `STEP`（模型线就叫 `step-*`）；
+   *   其余名字长的取词首（`OC` / `ANT` / `OAI`）——这三条是我们自造的，官方没有缩写。
+   * - **智谱那三格直接用条目 id**：`zhipu` / `zhipu-cp` / `zai`。它比任何缩写都短且天然唯一，
+   *   而 `CP` 单独一个指不回智谱（仓里两格都是 Coding Plan），`ZAI` 也分不开国内与国际站。
+   *
+   * 用户给实例改过名（`displayName !== label`）时这一格换成他起的名字：左边那列说的是
+   * 「哪个接入」，不是我们替厂商取的名字。
+   */
+  short: string;
   api: ProviderApi;
   /** 预填的 baseUrl。空串表示必须用户自己填（兼容格式的通用入口） */
   baseUrl: string;
@@ -130,6 +142,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "deepseek",
     label: "DeepSeek",
+    short: "DS",
     api: "openai-completions",
     baseUrl: "https://api.deepseek.com",
     catalogId: "deepseek",
@@ -167,6 +180,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "zhipu",
     label: "智谱 GLM",
+    short: "zhipu",
     api: "openai-completions",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     catalogId: "zai-coding-cn",
@@ -175,6 +189,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "zhipu-coding",
     label: "智谱 Coding Plan",
+    short: "zhipu-cp",
     api: "anthropic-messages",
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     catalogId: "zai-coding-cn",
@@ -205,6 +220,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "zai",
     label: "Z.AI (国际)",
+    short: "zai",
     api: "openai-completions",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
     catalogId: "zai",
@@ -215,6 +231,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "stepfun",
     label: "StepFun",
+    short: "STEP",
     api: "openai-completions",
     baseUrl: "https://api.stepfun.com/step_plan/v1",
     // pi 目录未收录 stepfun：参数靠网关 Fetch 或手填，行摘要会如实标注走兜底
@@ -260,6 +277,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "opencode-go",
     label: "OpenCode Go",
+    short: "OC",
     api: "openai-completions",
     baseUrl: "https://opencode.ai/zen/go/v1",
     catalogId: "opencode-go",
@@ -270,6 +288,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "anthropic-compatible",
     label: "Anthropic 兼容",
+    short: "ANT",
     api: "anthropic-messages",
     baseUrl: "",
     modelParams: {
@@ -320,6 +339,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "openai-compatible",
     label: "OpenAI 兼容",
+    short: "OAI",
     api: "openai-completions",
     baseUrl: "",
     note: "自建网关 / 私有部署，地址要带到版本段，客户端接 /chat/completions",

@@ -110,3 +110,138 @@ export function modelMenuItems(options: {
     return rows;
   });
 }
+
+/**
+ * 左栏的选中态。`null` = 全部（也是搜索时的落点）。
+ *
+ * 用 provider 实例 id，不用 kind：同一个 kind 可以有两个实例（两把 key 的自建网关），
+ * 而右栏列的是实例。
+ */
+export type ModelScope = string | null;
+
+/**
+ * 左栏一格。**纯图标格（星标 / 全部）与厂商格共用这一套尺寸**：两组混在一列里，
+ * 行高与左缘对不上就会看起来是两件没拼上的东西。左缘是同一个起点——没有图标槽，
+ * 厂商格的文字就落在纯图标格图标的同一条线上（2026-10-01 定）。
+ */
+const RAIL_CELL: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--space-2)",
+  width: "100%",
+  minHeight: "var(--control-height-md)",
+  padding: "0 var(--space-2)",
+  border: 0,
+  borderRadius: "var(--radius-sm)",
+  fontFamily: "var(--font-family-base)",
+  fontSize: "var(--font-size-caption)",
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+/** 厂商在左栏里的短名。改过名的实例显示他起的名字——那列说的是「哪个接入」 */
+function railShortName(provider: ProviderDto): string {
+  const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
+  if (known === undefined || provider.displayName !== known.label) return provider.displayName;
+  return known.short;
+}
+
+/**
+ * 模型卡片的左栏：全部 + 各厂商（单选，互斥）。
+ *
+ * 不用像设置面那样列出「组头」：左栏已经把厂商说了一遍，右栏的行只写厂商在副行里。
+ * 星标那一格在收藏落地后接在最上面（它跨厂商，所以排在「全部」之前）。
+ */
+export function modelPickerRail(options: {
+  providers: readonly ProviderDto[];
+  scope: ModelScope;
+  onScope: (scope: ModelScope) => void;
+  /** 星标格的可见性交给调用方（收藏还没落地时不给它留位置） */
+  top?: React.ReactNode;
+}): React.ReactNode {
+  return (
+    <>
+      {options.top}
+      <button
+        type="button"
+        className="option-row"
+        style={RAIL_CELL}
+        title="全部"
+        aria-label="全部"
+        aria-selected={options.scope === null}
+        onClick={() => options.onScope(null)}
+      >
+        <Icon name="menu" size={13} strokeWidth={1.8} />
+      </button>
+      {options.providers.map((provider) => (
+        <button
+          key={provider.id}
+          type="button"
+          className="option-row"
+          style={RAIL_CELL}
+          title={provider.displayName}
+          aria-selected={options.scope === provider.id}
+          onClick={() => options.onScope(provider.id)}
+        >
+          <span
+            style={{
+              overflow: "hidden",
+              whiteSpace: "nowrap",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {railShortName(provider)}
+          </span>
+        </button>
+      ))}
+    </>
+  );
+}
+
+/**
+ * 模型卡片的行：**两行**（模型名 + 它的厂商）。
+ *
+ * 与设置面那份的差别全部来自左栏：厂商归属已经在左栏可见，所以这里不再插组头行
+ * （组头 + 左栏是在同一句话上说两遍），厂名改从副行说。
+ */
+export function modelCardItems(options: {
+  t: Messages;
+  providers: readonly ProviderDto[];
+  catalog: readonly BuiltinProvider[];
+  selected: { providerId: string; modelId: string } | null;
+  scope: ModelScope;
+  onSelect: (providerId: string, modelId: string) => void;
+}): MenuItem[] {
+  const shown =
+    options.scope === null ? options.providers : options.providers.filter((p) => p.id === options.scope);
+  return shown.flatMap((provider) => {
+    const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
+    return provider.models.declared.map((declared) => {
+      const defaults = resolveModelDefaults(options.catalog, declared.id, {
+        catalogId: known?.catalogId,
+        api: known?.api,
+      });
+      const context = modelContextText(declared, defaults);
+      return {
+        id: `${provider.id}:${declared.id}`,
+        label: declared.id,
+        subLabel: provider.displayName,
+        badge: (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
+            <span className="pv-badge" title={options.t.modelMenu.contextWindow}>
+              {context.text}
+            </span>
+            {modelAcceptsImage(declared, defaults) && (
+              <span className="pv-badge" title={options.t.modelMenu.acceptsImage}>
+                <Icon name="image" size={11} strokeWidth={1.8} />
+              </span>
+            )}
+          </span>
+        ),
+        checked:
+          options.selected?.providerId === provider.id && options.selected.modelId === declared.id,
+        onSelect: () => options.onSelect(provider.id, declared.id),
+      };
+    });
+  });
+}

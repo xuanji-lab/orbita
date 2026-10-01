@@ -89,7 +89,7 @@ import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardItems, modelPickerRail, type ModelScope, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -1614,6 +1614,11 @@ function ComposerBar(props: { session: ChatSession }) {
   // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
   // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
   const [namingWorkspace, setNamingWorkspace] = useState(false);
+  /**
+   * 模型卡片左栏选中哪家（null = 全部）。**只活在这个卡片里**：它是「现在想找什么」
+   * 的一时状态，不是设置——跨卡片记住它只会让人下次打开时奇怪「我的模型呢」。
+   */
+  const [modelScope, setModelScope] = useState<ModelScope>(null);
 
   // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
   // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
@@ -1661,13 +1666,24 @@ function ComposerBar(props: { session: ChatSession }) {
   }));
 
   // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
-  const modelItems: MenuItem[] = modelMenuItems({
+  // 模型卡片的行（两行：模型名 + 厂商）与左栏（全部 / 各厂商）。
+  // 设置面那份「按厂商分组」的构造还在用，两边的参数口径（ctx 徽标、当前项）同源。
+  const modelItems: MenuItem[] = modelCardItems({
     t,
     providers: session.usable,
     catalog,
     selected: session.model,
+    scope: modelScope,
     onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
   });
+
+  // 选着的那家后来没 key 了 / 被删了：左栏那一格会消失，过滤得跟着回「全部」，
+  // 否则清单会停在空集上，而用户看不到任何能解释这件事的东西
+  useEffect(() => {
+    if (modelScope !== null && !session.usable.some((provider) => provider.id === modelScope)) {
+      setModelScope(null);
+    }
+  }, [modelScope, session.usable]);
 
   // 思考档菜单按模型真实支持集显示（官方档位表：glm-5.3 只有 low/high/max，
   // claude 按型号——fable 系关不掉思考、opus-4-6 没有 xhigh——写死档位只会递增假选项）。来源三级
@@ -1753,6 +1769,18 @@ function ComposerBar(props: { session: ChatSession }) {
         <Menu
           items={modelItems}
           searchable
+          rail={modelPickerRail({
+            providers: session.usable,
+            scope: modelScope,
+            onScope: setModelScope,
+          })}
+          // 搜索是一切的旁路：左下栏正亮着某家时去搜，必须把过滤复位到「全部」，
+          // 否则会出现「左栏亮着智谱、列表里全是 deepseek」这种自相矛盾的画面
+          onSearch={(query) => {
+            if (query.trim() !== "") setModelScope(null);
+          }}
+          panelMaxHeight={520}
+          panelMaxWidth={420}
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
