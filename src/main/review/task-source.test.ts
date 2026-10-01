@@ -2,7 +2,7 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import { SessionStore } from "../session/store.ts";
 import { taskReviewDiff, taskReviewList } from "./task-source.ts";
@@ -75,7 +75,7 @@ describe("taskReviewList", () => {
     const list = await taskReviewList(store, ID);
     assert.equal(list.kind, "ok");
     if (list.kind !== "ok") return;
-    const byPath = new Map(list.entries.map((entry) => [entry.path.split("/").pop() ?? "", entry]));
+    const byPath = new Map(list.entries.map((entry) => [basename(entry.path), entry]));
     assert.equal(byPath.get("a.ts")?.restored, true);
     assert.equal(byPath.get("new.md")?.added, 1);
     assert.equal(byPath.get("new.md")?.restored, undefined);
@@ -103,7 +103,7 @@ describe("taskReviewList", () => {
     const list = await taskReviewList(store, ID);
     assert.equal(list.kind, "ok");
     if (list.kind !== "ok") return;
-    const names = list.entries.map((entry) => entry.path.split("/").pop() ?? "");
+    const names = list.entries.map((entry) => basename(entry.path));
     assert.ok(names.includes("made.txt"));
     assert.equal(list.entries.find((entry) => entry.path.endsWith("made.txt"))?.restored, true);
     assert.ok(names.includes("gone.txt"));
