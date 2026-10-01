@@ -1606,6 +1606,23 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
   );
 }
 
+/** 路径卡片底栏的动作行：与模型卡片「配置模型」同一形状（整行可点、图标 + 词） */
+const SCOPE_FOOTER_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--space-2)",
+  width: "100%",
+  minHeight: "var(--control-height-lg)",
+  padding: "0 var(--space-2)",
+  border: 0,
+  borderRadius: "var(--radius-sm)",
+  color: "var(--color-text-primary)",
+  fontFamily: "var(--font-family-base)",
+  fontSize: "var(--font-size-control)",
+  textAlign: "left",
+  cursor: "pointer",
+};
+
 /**
  * 输入卡底栏：作用域 / 权限档 / 模型——都是「这一句会以什么身份发出去」的事实。
  *
@@ -1646,31 +1663,25 @@ function ComposerBar(props: {
       id: "home",
       label: t.chat.home,
       icon: "folder",
-      hint: session.defaultCwd,
-      // 路径的**尾段才是名字**（/Users/dama/Desktop/orbita → orbita），
-      // 所以窄卡片里从头部省略，别把唯一有信息量的那段切掉
-      hintEllipsis: "head",
+      // 路径副行（mono 注脚）：主行报名字，副行说它在哪。路径的**尾段才是名字**
+      // （/Users/dama/Desktop/orbita → orbita），所以从头部省略，别把唯一有信息量的那段切掉
+      subLabel: session.defaultCwd,
+      subLabelMono: true,
+      subLabelEllipsis: "head",
       checked: session.workspaceId === null && session.cwd === null,
       onSelect: session.newTask,
     },
     ...session.workspaces.map((item) => ({
       id: item.id,
-      // 名字原样（读时已治）；全路径放 hint 消歧（两个同名的工作区），
-      // 与 home 项的 defaultCwd 同构
+      // 名字原样（读时已治）；全路径放副行消歧（两个同名的工作区），与 home 项的 defaultCwd 同构
       label: item.name,
-      hint: item.path,
-      hintEllipsis: "head" as const,
+      subLabel: item.path,
+      subLabelMono: true,
+      subLabelEllipsis: "head" as const,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
     })),
-    {
-      id: "new-workspace",
-      label: t.sidebar.newWorkspace,
-      icon: "plus",
-      onSelect: () => setNamingWorkspace(true),
-    },
-    { id: "add", label: t.sidebar.addFolder, icon: "folder-plus", onSelect: session.addWorkspace },
   ];
 
   // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
@@ -1721,6 +1732,35 @@ function ComposerBar(props: {
         // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
         panelMaxHeight={520}
         panelMaxWidth={640}
+        // 「去哪」与「往清单里加东西」是两件事：动作收进底栏，发卡线分隔（同模型卡片的「配置模型」）
+        footer={(close) => (
+          <>
+            <button
+              type="button"
+              className="option-row"
+              style={SCOPE_FOOTER_ROW}
+              onClick={() => {
+                close();
+                setNamingWorkspace(true);
+              }}
+            >
+              <Icon name="plus" size={13} strokeWidth={1.8} />
+              <span>{t.sidebar.newWorkspace}</span>
+            </button>
+            <button
+              type="button"
+              className="option-row"
+              style={SCOPE_FOOTER_ROW}
+              onClick={() => {
+                close();
+                session.addWorkspace();
+              }}
+            >
+              <Icon name="folder-plus" size={13} strokeWidth={1.8} />
+              <span>{t.sidebar.addFolder}</span>
+            </button>
+          </>
+        )}
         trigger={({ open, toggle }) =>
           namingWorkspace ? (
             // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——

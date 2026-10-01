@@ -10,8 +10,13 @@ export interface MenuItem {
   /**
    * 行的第二行（小一号、tertiary）。只有模型卡片用它：主行是模型名、副行是它属于哪家——
    * 左栏按厂商过滤之后组头那一行就没了，厂商名得有地方待（2026-10-01 定）。
+   * 路径卡片也用它：主行是工作区名、副行是全路径（`subLabelMono` + `subLabelEllipsis: "head"`）。
    */
   subLabel?: string;
+  /** 副行的截断方向。默认 `tail`；路径这类「尾段才是名字」的用 `head`（与 hintEllipsis 同一口径） */
+  subLabelEllipsis?: "tail" | "head";
+  /** 副行是机器事实（路径）：mono 字体（设计系统：mono for machine facts） */
+  subLabelMono?: boolean;
   icon?: IconName;
   /** 右侧的说明。菜单项自己解释后果，比事后弹一个确认框好 */
   hint?: string;
@@ -752,12 +757,21 @@ function MenuRow(props: {
               overflow: "hidden",
               textOverflow: "ellipsis",
               color: "var(--color-text-tertiary)",
-              // 副行是注脚（今天的唯一消费者是模型卡片的厂商名），比主行退两档
+              // 副行是注脚（模型卡片的厂商名、路径卡片的全路径），比主行退两档
               fontSize: "var(--font-size-micro)",
               lineHeight: "16px",
+              ...(item.subLabelMono === true ? { fontFamily: "var(--font-family-mono)" } : null),
+              // 「保尾巴」同 hint：direction rtl 让溢出发生在左侧，内层再隔离回 LTR
+              ...(item.subLabelEllipsis === "head"
+                ? { direction: "rtl" as const, textAlign: "left" as const }
+                : null),
             }}
           >
-            {item.subLabel}
+            {item.subLabelEllipsis === "head" ? (
+              <span style={{ unicodeBidi: "isolate", direction: "ltr" }}>{item.subLabel}</span>
+            ) : (
+              item.subLabel
+            )}
           </span>
         )}
         {item.hint !== undefined && (
