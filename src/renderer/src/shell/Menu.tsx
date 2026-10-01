@@ -367,6 +367,14 @@ export function Menu(props: {
   };
 
   /**
+   * 过滤/搜索之后清单会变短，光标可能落在不再存在的行上——那时 `enabled[active]` 是
+   * undefined，右上那一行不会亮，按上下看起来像「没反应」。回到第一行。
+   */
+  useEffect(() => {
+    setActive((current) => (current < enabled.length ? current : 0));
+  }, [enabled.length]);
+
+  /**
    * 光标走到哪儿，列表就跟到哪儿。
    *
    * 少了这一步，键盘上下只是把一个看不见的光标在清单里推——超过一屏（模型卡片
@@ -378,7 +386,8 @@ export function Menu(props: {
   useLayoutEffect(() => {
     if (!open) return;
     listRef.current?.querySelector<HTMLElement>('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
-  }, [open, active]);
+    // visible.length 也在依赖里：过滤/搜索后光标落在另一行上，得重新把它带进视野
+  }, [open, active, visible.length]);
 
   const choose = (item: MenuItem) => {
     if (item.keepOpen !== true) close();
@@ -438,35 +447,20 @@ export function Menu(props: {
                 close();
               }
               /*
-               * 左栏与清单是两栏，焦点在里面走要和光标（active）分开：
-               * 焦点在左栏时上下是「换格子」，不能去挪右边清单的光标。
+               * 键盘只认上下（2026-10-01 用户定）：左右不切栏，卡片里就只有一条轴。
+               * 左栏仍然可达——格子是按钮，Tab 能进去，Enter 应用过滤（无键盘陷阱）。
+               * 焦点在左栏时上下走格子，不在左栏时上下推清单的光标（两件事不打架）。
                */
               const railEl = railRef.current;
               const inRail = railEl !== null && event.target instanceof Node && railEl.contains(event.target);
-              const railButtons = (): HTMLButtonElement[] =>
-                railEl === null ? [] : [...railEl.querySelectorAll<HTMLButtonElement>("button")];
               if (inRail && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
                 event.preventDefault();
-                const buttons = railButtons();
+                const buttons = [...railEl.querySelectorAll<HTMLButtonElement>("button")];
                 if (buttons.length === 0) return;
                 const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
                 const step = event.key === "ArrowDown" ? 1 : -1;
                 const next = at < 0 ? 0 : (at + step + buttons.length) % buttons.length;
                 buttons[next]?.focus();
-                return;
-              }
-              if (inRail && event.key === "ArrowRight") {
-                event.preventDefault();
-                listRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-                return;
-              }
-              if (!inRail && event.key === "ArrowLeft" && railEl !== null) {
-                event.preventDefault();
-                // 回左栏时落在**当前选中**那一格上（没有就第一格）：光标该回到它刚离开的地方
-                const target =
-                  railEl.querySelector<HTMLButtonElement>('[aria-selected="true"]') ??
-                  railEl.querySelector<HTMLButtonElement>("button");
-                target?.focus();
                 return;
               }
               if (event.key === "ArrowDown") {
