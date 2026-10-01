@@ -11,3 +11,19 @@ index 65c7c9efd7667445b711fcd43549062ee3eb5ecf..88b1d2e3ae08d44398dcac972ec15679
          await callbacks?.onRetryScheduled?.(attempt, maxAttempts, delayMs, lastRetry.errorMessage);
          // Normalize aborts during retry backoff to the same AssistantMessage shape as
          // provider stream aborts, so callers do not need to care when cancellation happened.
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index b1beb1a..ceaddc7 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -1206,7 +1206,10 @@ function detectCompat(model) {
+         baseUrl.includes("api.z.ai") ||
+         baseUrl.includes("open.bigmodel.cn");
+     const isTogether = provider === "together" || baseUrl.includes("api.together.ai") || baseUrl.includes("api.together.xyz");
+-    const isMoonshot = provider === "moonshotai" || provider === "moonshotai-cn" || baseUrl.includes("api.moonshot.");
++    const isMoonshot = provider === "moonshotai" ||
++        provider === "moonshotai-cn" ||
++        baseUrl.includes("api.moonshot.") ||
++        baseUrl.includes("api.kimi.com");
+     const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
+     const isCloudflareWorkersAI = provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
+     const isCloudflareAiGateway = provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");

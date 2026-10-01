@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isNotFound } from "../fs-errors.ts";
+import { KNOWN_PROVIDERS } from "../../shared/known-providers.ts";
 import {
   maskSecret,
   normalizeBaseUrl,
@@ -99,8 +100,11 @@ export class ProviderStore {
       throw new ProviderValidationError([{ field: "id", message: `provider "${draft.id}" already exists` }]);
     }
 
+    // 来自哪个目录条目：只收认得的条目 id；编辑时没带就沿用盘上的（老 renderer / 只改模型的写回）
+    const kind = draft.kind ?? existing?.kind;
     const normalized: Provider = {
       id: draft.id,
+      ...(kind !== undefined && KNOWN_PROVIDERS.some((item) => item.id === kind) ? { kind } : {}),
       displayName: draft.displayName.trim(),
       endpoint: {
         ...draft.endpoint,

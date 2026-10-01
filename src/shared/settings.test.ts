@@ -537,3 +537,12 @@ describe("parseSettings 的 starredModels（模型星标）", () => {
     deepStrictEqual("starredModels" in parseSettings({}), false);
   });
 });
+
+describe("parseSettings 的 providerCardSize（模型服务的卡片尺寸）", () => {
+  it("large / small 留下，其余当没选过（缺席 = large）", () => {
+    deepStrictEqual(parseSettings({ providerCardSize: "small" }).providerCardSize, "small");
+    deepStrictEqual(parseSettings({ providerCardSize: "large" }).providerCardSize, "large");
+    deepStrictEqual("providerCardSize" in parseSettings({ providerCardSize: "huge" }), false);
+    deepStrictEqual("providerCardSize" in parseSettings({}), false);
+  });
+});

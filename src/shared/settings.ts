@@ -9,12 +9,14 @@ import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
- * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（Ink，
- * 2026-09-03 用户指定）；两个暗档都是手动档。
+ * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（玄 Onyx，
+ * 2026-09-03 用户指定、2026-09-30 换血后沿用）；两个暗档都是手动档。
  *
- * 暗色两档（2026-09-27 按 ZCode 实测层次重切，小样页选型）：**"graphite"**（石墨，
- * ZCode 直译的中性档）与 **"black"**（Ink 近黑，井 #141414——不越过石墨的 #161616）。
- * 第三档 "dark"（Warm 微暖）同日退役，存量设置迁移到 graphite（`parseTheme`）。
+ * 暗色两档（2026-09-30 换血，色值取自 DeepSeek Harness 与 ZCode 的安装包实测，
+ * 层次与理由见 tokens/colors.css 头注释）：**"graphite"**（黛 Slate，蓝灰、收敛）与
+ * **"black"**（玄 Onyx，纯灰、外壳亮堂）。**档位 id 沿用旧名不动**——它们是 settings/IPC
+ * 契约，换的只是显示名（`themes` 在 messages-*.ts）。第三档 "dark"（Warm 微暖）
+ * 2026-09-27 退役，存量设置迁移到 graphite（`parseTheme`）。
  *
  * "copybook"（小学作业）与 "typescript"（打字稿）是璇玑载体谱「稿纸」一档的中文与英文
  * 两版（wafo 2026-09-25 要求载入）：绿格作业本 + 红笔，与打字稿 + 红色页边线。**只有明**，
@@ -188,7 +190,14 @@ export interface AppSettings {
    * 用户指定，agent 每轮被告知（TurnDirectories.browserDownloads）。
    */
   browserDownloadDir?: string;
+  /**
+   * 设置 › 模型服务的厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，
+   * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
+   */
+  providerCardSize?: ProviderCardSize;
 }
+
+export type ProviderCardSize = "large" | "small";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
@@ -342,6 +351,7 @@ export function parseSettings(raw: unknown): AppSettings {
     channelColumnWidth?: unknown;
     browserDownloadDir?: unknown;
     starredModels?: unknown;
+    providerCardSize?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -392,6 +402,10 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
+    // 不认识的尺寸当没选过（缺席 = large）
+    ...(record.providerCardSize === "large" || record.providerCardSize === "small"
+      ? { providerCardSize: record.providerCardSize }
+      : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }

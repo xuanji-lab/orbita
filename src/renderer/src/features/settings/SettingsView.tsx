@@ -144,10 +144,12 @@ export function SettingsView(props: {
           <VoiceSettings />
         </div>
       ) : props.tab === "providers" ? (
-        // Providers 是主从两栏，铺满内容面：厂商列表贴着面板左缘，两栏各自内部滚动
+        // 模型服务铺满内容面：卡片墙 / 详情页自己内部滚动
         <ProvidersView
           onChange={props.onProvidersChange}
           onSessionsChanged={props.onImported}
+          cardSize={props.settings.providerCardSize ?? "large"}
+          onCardSize={(providerCardSize) => props.onSettingsChange({ providerCardSize })}
         />
       ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
@@ -287,7 +289,7 @@ function General(props: {
             inherited: subSessionThinking === undefined,
             onSelect: () => props.onChange({ subSessionThinking: null }),
           },
-          (subSessionThinkingModel.supported ?? THINKING_LEVELS).map((level) => ({
+          (subSessionThinkingModel.supported ?? THINKING_LEVELS).map((level): MenuItem => ({
             id: level,
             label: t.thinkingLevel(level, subSessionThinkingModel.modelId),
             checked: subSessionThinking === level,
@@ -818,7 +820,7 @@ function LoginImportSection(props: { clearedCount: number }) {
   // ── 导入入口：来源下拉 + 选择网站 ──
   const menuItems: MenuItem[] =
     sources.kind === "ready"
-      ? sources.list.map((source) => ({
+      ? sources.list.map((source): MenuItem => ({
           id: sourceKey(source),
           label: `${source.browserName} · ${source.profileName}`,
           checked: sourceKey(source) === selected,

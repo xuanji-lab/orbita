@@ -1,6 +1,12 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { sortSubSessionRows, subSessionRowStatus, type SubSessionRowStatus } from "./sub-sessions-rows.ts";
+import {
+  sortSubSessionRows,
+  subSessionRowStatus,
+  subSessionStatusOf,
+  type SubSessionEngineSlots,
+  type SubSessionRowStatus,
+} from "./sub-sessions-rows.ts";
 
 describe("subSessionRowStatus", () => {
   it("channelStatus waiting：不管 running/needsApproval 是什么都判 waiting", () => {
@@ -51,6 +57,45 @@ describe("subSessionRowStatus", () => {
       "idle",
     );
   });
+
+  it("stopped 压过 needsApproval / running——用户终止了就别再拿待批 / 在跑引导用户", () => {
+    strictEqual(
+      subSessionRowStatus({ channelStatus: "stopped", needsApproval: true, running: true }),
+      "stopped",
+    );
+    strictEqual(
+      subSessionRowStatus({ channelStatus: "stopped", needsApproval: false, running: false }),
+      "stopped",
+    );
+  });
+});
+
+describe("subSessionStatusOf", () => {
+  /** 假引擎：running 里的会话在跑，approving 里的有待答审批（两者可同时） */
+  const engine = (running: readonly string[], approving: readonly string[]): SubSessionEngineSlots => ({
+    states: new Map(approving.map((id) => [id, { approvals: [{}] }])),
+    phaseOf: (id: string) => (running.includes(id) ? "turn" : "idle"),
+  });
+
+  it("子在跑：通道只有 task（channelStatus running）也判 running", () => {
+    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"], [])), "running");
+  });
+
+  it("子不在跑、通道也没报终态：判 idle——通道开着不等于在跑（2026-10 bug 回归）", () => {
+    strictEqual(subSessionStatusOf("c1", "running", engine([], [])), "idle");
+  });
+
+  it("审批槽优先于 phase：在跑但有待答审批判 approval", () => {
+    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"], ["c1"])), "approval");
+  });
+
+  it("waiting 压过审批与 phase", () => {
+    strictEqual(subSessionStatusOf("c1", "waiting", engine(["c1"], ["c1"])), "waiting");
+  });
+
+  it("没有摘要（还没拉到）也按槽走，不因缺席先验成 idle", () => {
+    strictEqual(subSessionStatusOf("c1", undefined, engine(["c1"], [])), "running");
+  });
 });
 
 describe("sortSubSessionRows", () => {
@@ -59,26 +104,27 @@ describe("sortSubSessionRows", () => {
     status,
   });
 
-  it("waiting 最前，其次 approval，其次 running，其余按原序（派出顺序）", () => {
+  it("waiting 最前，其次 approval，其次 running，其余（含 stopped）按原序（派出顺序）", () => {
     const rows = [
       row("idle-1", "idle"),
       row("running-1", "running"),
       row("waiting-1", "waiting"),
       row("done-1", "done"),
+      row("stopped-1", "stopped"),
       row("approval-1", "approval"),
       row("running-2", "running"),
     ];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["waiting-1", "approval-1", "running-1", "running-2", "idle-1", "done-1"],
+      ["waiting-1", "approval-1", "running-1", "running-2", "idle-1", "done-1", "stopped-1"],
     );
   });
 
-  it("done/failed/idle 同一档，稳定排序保留原始（派出）顺序", () => {
-    const rows = [row("failed-1", "failed"), row("idle-1", "idle"), row("done-1", "done")];
+  it("done/failed/stopped/idle 同一档，稳定排序保留原始（派出）顺序", () => {
+    const rows = [row("failed-1", "failed"), row("stopped-1", "stopped"), row("idle-1", "idle"), row("done-1", "done")];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["failed-1", "idle-1", "done-1"],
+      ["failed-1", "stopped-1", "idle-1", "done-1"],
     );
   });
 

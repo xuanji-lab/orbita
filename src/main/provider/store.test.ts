@@ -116,6 +116,18 @@ describe("ProviderStore", () => {
     assert.equal(await store.resolveApiKey("openai-2"), "sk-second-key-9999");
   });
 
+  test("kind：认得的条目 id 落盘，认不得的丢掉；编辑时没带就沿用盘上的", async () => {
+    await store.upsert({ ...input({ id: "ds-work", kind: "deepseek" }), create: true });
+    assert.equal((await store.list())[0]?.kind, "deepseek");
+
+    // 只改名字、不带 kind 的写回：不能把来历冲掉
+    await store.upsert({ provider: { ...input({ id: "ds-work" }).provider, displayName: "工作号" } });
+    assert.equal((await store.list())[0]?.kind, "deepseek");
+
+    await store.upsert({ ...input({ id: "gw", kind: "no-such-entry" }), create: true });
+    assert.equal((await store.list()).find((p) => p.id === "gw")?.kind, undefined);
+  });
+
   test("新建 api_key provider 但不给密钥 → 拒绝，且不落盘", async () => {
     await assert.rejects(
       () => store.upsert({ provider: input().provider }),
