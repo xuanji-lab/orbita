@@ -164,6 +164,15 @@ export function Menu(props: {
    */
   listRows?: number;
   /**
+   * 宽度尺：面板宽度按这些文字里**最长的那一条**定，与当前可见的行无关。
+   *
+   * 为什么需要它：卡片按内容收放时，左栏一过滤可见的名字就换了一批——宽度跟着换，
+   * 卡片就换尺寸、位置也跟着跳（2026-10-01 用户实测）。把「全部配置好的模型名」
+   * 交给它，卡片的宽度就只跟**配置**有关，与筛剩几条无关。
+   * 实现是一段不可见、不占高的文字（由 CSS 自己撑宽），不是用 JS 量字宽。
+   */
+  widthRuler?: readonly string[];
+  /**
    * 搜索词的回声。搜索是**一切过滤的旁路**：调用方拿它把左栏的选中复位到「全部」，
    * 否则会出现「左栏亮着某家、列表里全是别家」这种自相矛盾的画面。
    */
@@ -258,9 +267,14 @@ export function Menu(props: {
      * 一行多高：读**计算后的 minHeight**，不写 48。
      * 行高是两个地方的事（CSS 定 `--menu-row-height`，卡片定「显几行」），
      * 在 JS 里再写一遍数字，改了 CSS 这边就静默错位。
+     *
+     * 探针不能取「第一个子元素」：清单的第一个子元素是宽度尺（高 0），不是行。
+     * 拿行按钮（空清单时退到空态那一段，它也有行高）。
      */
-    const probe = listRef.current?.firstElementChild as HTMLElement | null;
-    const rowHeight = probe === null ? 0 : parseFloat(getComputedStyle(probe).minHeight) || 0;
+    const probe =
+      listRef.current?.querySelector<HTMLElement>("button") ??
+      (listRef.current?.lastElementChild as HTMLElement | null);
+    const rowHeight = probe === null || probe === undefined ? 0 : parseFloat(getComputedStyle(probe).minHeight) || 0;
     const fixed = props.listRows !== undefined;
     const naturalHeight =
       body === null
@@ -549,6 +563,27 @@ export function Menu(props: {
                 ref={listRef}
                 style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
               >
+                {/*
+                  宽度尺：摆着全部配置好的名字（不可见、不占高），让面板的宽度由它们里
+                  最长的一条决定。它**不跟着过滤变**，所以卡片宽度也不跟着过滤变。
+                */}
+                {props.widthRuler !== undefined && (
+                  <div
+                    aria-hidden
+                    style={{
+                      height: 0,
+                      overflow: "hidden",
+                      visibility: "hidden",
+                      whiteSpace: "nowrap",
+                      fontSize: "var(--font-size-control)",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {props.widthRuler.map((text, index) => (
+                      <div key={`${text}#${index}`}>{text}</div>
+                    ))}
+                  </div>
+                )}
               {visible.length === 0 && (
                 <div
                   style={{

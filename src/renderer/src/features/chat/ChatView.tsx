@@ -1821,8 +1821,14 @@ function ComposerBar(props: {
             })
           }
           panelMaxHeight={520}
-          // 定宽：只跟窗口有关，不跟着筛剩几条的模型名长短变（与 listRows 同一件事的两半）
-          panelWidth={420}
+          // 宽度不由「筛剩的那几条」定，而是由**全部配置好的模型名**里最长的那条定
+          // （宽度尺），所以点左栏过滤时卡片宽、高、位置都不动
+          panelMaxWidth={480}
+          widthRuler={[
+            ...session.usable.flatMap((provider) => provider.models.declared.map((model) => model.id)),
+            // 副行（厂商名）也参与：某家名字比任何模型名都长时，它才是宽度的那条基准
+            ...session.usable.map((provider) => provider.displayName),
+          ]}
           // 定高：外壳 + 六行。卡片大小不跟着「筛剩几个模型」变——
           // 否则点一次左栏过滤就换一个尺寸，位置也跟着跳（2026-10-01 用户实测）
           listRows={6}
