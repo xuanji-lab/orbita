@@ -7,7 +7,7 @@ import { app, BrowserWindow, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
-import type { Language, ThemePreference } from "../shared/settings.ts";
+import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
@@ -28,6 +28,7 @@ import { CarryoverStore } from "./session/carryover-store.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
+import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
@@ -54,6 +55,26 @@ preferIPv4();
 const devDirs = devDataDirs({ packaged: app.isPackaged, appData: app.getPath("appData"), home: homedir() });
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
+
+/*
+ * 单实例锁。「关窗 = 收进托盘」之后，双击桌面图标必须回到原进程——否则两个进程
+ * 同时写同一份会话 JSONL / settings（「读全量 → 改写 → rename」的原子写挡不住
+ * 两个写入者，会互相覆盖丢更新）。锁按 userData 目录划分，dev 与打包版、显式
+ * `--user-data-dir` 的隔离实例互不干扰。
+ */
+if (!app.requestSingleInstanceLock()) {
+  // exit 而不是 quit：锁拿不到说明本进程还在最顶层、没建窗没接 IPC，没有要清理的东西
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    // 已有进程的窗口可能收在托盘里（hidden）或最小化：叫出来，不另起一窗
+    for (const window of mainWindows.list()) {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    }
+  });
+}
 
 /** 26-entry-layer §9.2 安全不变量：三条都不许放松。 */
 const SECURITY_INVARIANTS = {
@@ -99,10 +120,16 @@ const MAC_WINDOW = {
  * 不走 IPC / localStorage：这是窗口创建时刻就同步可得的值，硬塞一条通道或另存
  * 一份缓存反而多造一个真源（同 preload 里 `platform` 的先例）。
  */
+/**
+ * 托盘（Windows / Linux，见 window/tray.ts）。退出前必须销毁，否则进程退不掉。
+ */
+let appTray: AppTray | null = null;
+
 function createMainWindow(
   theme: ThemePreference,
   language: Language | undefined,
   openLink: (url: string) => void,
+  readLanguage: () => Promise<Language>,
 ): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
@@ -129,6 +156,29 @@ function createMainWindow(
     openLink(url);
     return { action: "deny" };
   });
+
+  /*
+   * 关窗 = 收进托盘（Windows / Linux）。**托盘先建成功，才接这道闸门**：藏了却找不回来
+   * 比直接退出更糟，所以图标缺失时这里什么都不做，关窗保持原语义。
+   * macOS 不接——那边关窗本来就留进程，点 Dock 回来，与这套闸门是两种惯例。
+   */
+  if (process.platform !== "darwin" && appTray === null) {
+    const icon = loadTrayIcon();
+    if (icon === null) {
+      console.warn("[tray] 托盘图标缺失（build/tray.png），关窗仍然是退出");
+    } else {
+      appTray = installCloseToTray({
+        window,
+        icon,
+        language: effectiveLanguage(theme, language),
+        readLanguage,
+      });
+    }
+  }
+
+  // Windows 注销 / 关机：系统要收这扇窗，别让「关窗 = 隐藏」把关机拦住
+  // （session-end 是 BrowserWindow 上的事件，不在 app 上）
+  window.on("session-end", () => appTray?.beginQuit());
 
   loadRendererPage(window, "index.html");
   return window;
@@ -430,6 +480,9 @@ void app.whenReady().then(async () => {
   registerChannelIpc(deps);
 
   app.on("before-quit", () => {
+    appTray?.beginQuit();
+    appTray?.destroy();
+    appTray = null;
     browserSandbox.prepareQuit();
     agentHost.dispose();
   });
@@ -447,14 +500,22 @@ void app.whenReady().then(async () => {
     }
   };
 
-  createMainWindow(initialSettings.theme, initialSettings.language, openLink);
+  /** 托盘菜单文案要跟界面语言走；读一次最新设置即可（没有第二处消费者，不另开推送通道） */
+  const readLanguage = async (): Promise<Language> => {
+    const current = await settings.read();
+    return effectiveLanguage(current.theme, current.language);
+  };
+
+  createMainWindow(initialSettings.theme, initialSettings.language, openLink, readLanguage);
 
   // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
   // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings
   app.on("activate", () => {
     // 只问主窗口：隐藏着的沙盒浏览器窗口也算一个窗口，按 getAllWindows 判就回不来了
     if (mainWindows.list().length === 0) {
-      void settings.read().then((current) => createMainWindow(current.theme, current.language, openLink));
+      void settings
+        .read()
+        .then((current) => createMainWindow(current.theme, current.language, openLink, readLanguage));
     }
   });
 });
