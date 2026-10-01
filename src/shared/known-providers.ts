@@ -35,8 +35,8 @@ export interface KnownProvider {
    * - **智谱那三格直接用条目 id**：`zhipu` / `zhipu-cp` / `zai`。它比任何缩写都短且天然唯一，
    *   而 `CP` 单独一个指不回智谱（仓里两格都是 Coding Plan），`ZAI` 也分不开国内与国际站。
    *
-   * 用户给实例改过名（`displayName !== label`）时这一格换成他起的名字：左边那列说的是
-   * 「哪个接入」，不是我们替厂商取的名字。
+   * 同一家多个实例时第二个起加序号（DS / DS 2），兼容入口用实例名——规则在
+   * providers-view-model.ts 的 `railShortNames`。
    */
   short: string;
   api: ProviderApi;

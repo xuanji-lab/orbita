@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import type { BuiltinProvider } from "@shared/agent-ipc";
-import { KNOWN_PROVIDERS, knownProviderDefaultName } from "@shared/known-providers";
+import { KNOWN_PROVIDERS } from "@shared/known-providers";
 import { resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
 import type { ModelDecl } from "@shared/provider";
@@ -19,7 +19,7 @@ import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { Menu, type MenuItem } from "../../shell/Menu";
-import { hasCredentials, kindOf, modelAcceptsImage, modelContextText } from "./providers-view-model.ts";
+import { hasCredentials, kindOf, modelAcceptsImage, modelContextText, railShortNames } from "./providers-view-model.ts";
 import type { Messages } from "../../messages-en.ts";
 
 /**
@@ -146,19 +146,6 @@ export function modelCardFooter(options: { t: Messages; onConfigure: () => void 
 }
 
 /**
- * 厂商在左栏里的短名。改过名的实例显示他起的名字——那列说的是「哪个接入」。
- * 「没改过名」认两种：等于目录 label，或等于新建时给的默认名（knownProviderDefaultName）——
- * 同一厂商在按量 / 套餐两区各有一条时 label 相同，默认名会带「（按量）/（套餐）」后缀，
- * 只比 label 的话智谱两格都会显示成长名，不出 zhipu / zhipu-cp。
- */
-function railShortName(provider: ProviderDto): string {
-  const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-  if (known === undefined) return provider.displayName;
-  const untouched = provider.displayName === known.label || provider.displayName === knownProviderDefaultName(known);
-  return untouched ? known.short : provider.displayName;
-}
-
-/**
  * 三处「挑一个模型」共用的卡片外壳：输入卡的模型芯片、设置面的家务活模型、子会话模型。
  *
  * 抽出来的理由比「口径同源」那条更强：这三处的**形状**必须一致（左栏过滤、
@@ -256,6 +243,7 @@ export function modelPickerRail(options: {
   scope: ModelScope;
   onScope: (scope: ModelScope) => void;
 }): React.ReactNode {
+  const shortNames = railShortNames(options.providers);
   return (
     <>
       {/*
@@ -280,7 +268,7 @@ export function modelPickerRail(options: {
           // 横向 padding 与 RAIL_CELL 相同：尺比的是「格子整宽」——少算这 16px 的话，
           // 选中格变 semibold 时左栏还是会胖 1px（pr138 机器验收量到 61.55 → 62.55）
           <div key={`rail-ruler:${provider.id}`} style={{ padding: "0 var(--space-2)" }}>
-            {railShortName(provider)}
+            {shortNames.get(provider.id) ?? provider.displayName}
           </div>
         ))}
       </span>
@@ -317,7 +305,7 @@ export function modelPickerRail(options: {
           onClick={() => options.onScope({ kind: "provider", id: provider.id })}
         >
           <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-            {railShortName(provider)}
+            {shortNames.get(provider.id) ?? provider.displayName}
           </span>
         </button>
       ))}
