@@ -558,7 +558,21 @@ export function Menu(props: {
               )}
               <div
                 ref={listRef}
-                style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
+                style={{
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  minHeight: 0,
+                  overflowY: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  /*
+                   * 滚动条也占宽：不 reserve 的话，「能滚」与「不能滚」差一个滚动条宽——
+                   * 而筛剩几条恰好决定了能不能滚，于是卡片宽度跟着过滤变（真机验收：
+                   * 全部 379 → 筛到一家 369，正好 10px）。只给带宽度尺的卡片钉住，
+                   * 其余菜单不能被白留一条 10px 的空缝。
+                   */
+                  ...(props.widthItems === undefined ? null : { scrollbarGutter: "stable" }),
+                }}
               >
                 {/*
                   宽度尺：不过滤的全部行（同一套 MenuRow 画的），不可见也不占高。

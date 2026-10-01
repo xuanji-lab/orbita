@@ -213,6 +213,27 @@ export function modelPickerRail(options: {
 }): React.ReactNode {
   return (
     <>
+      {/*
+        左栏的宽度尺：选中那一格是 semibold（.option-row 的选中配方），比常规字重宽——
+        不把「加粗后的宽度」也算进基准的话，切厂商时左栏会自己胖瘦，卡片宽度跟着动
+        （2026-10-01 真机验收量到：379 → 369）。摆一份加粗的全部短名，不可见、不占高。
+      */}
+      <span
+        aria-hidden
+        style={{
+          height: 0,
+          overflow: "hidden",
+          visibility: "hidden",
+          whiteSpace: "nowrap",
+          fontFamily: "var(--font-family-base)",
+          fontSize: "var(--font-size-caption)",
+          fontWeight: "var(--weight-semibold)",
+        }}
+      >
+        {options.providers.map((provider) => (
+          <div key={`rail-ruler:${provider.id}`}>{railShortName(provider)}</div>
+        ))}
+      </span>
       <button
         type="button"
         className="option-row"
