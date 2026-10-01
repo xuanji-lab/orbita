@@ -24,3 +24,15 @@
 
 **行为守卫**：`src/agent/retry-patch.test.ts`（pi-ai 链路；agent-session 的 `_prepareRetry`
 无法脱离整套会话机器单测，pi 升级重打 patch 时人工核对这一处）。
+
+## @earendil-works/pi-coding-agent — 公开入口导出 `resolveToCwd`
+
+`dist/index.js` / `dist/index.d.ts`：追加一行 `export { resolveToCwd } from "./core/tools/path-utils.js"`。
+
+**为什么（2026-10-01）**：会话回退的文件账（`src/agent/file-tracker.ts` 的 `resolveToolPath`）必须与
+pi 的 write / edit 工具算出**同一个**绝对路径，而工具内部用的就是 `resolveToCwd`。它不在包的公开入口，
+deep import 又被 `exports` 拦下（`ERR_PACKAGE_PATH_NOT_EXPORTED`）。此前手抄的一份漏了 win32 的
+MSYS 路径折算（`/c/Users/x` → `C:\Users\x`）、`~\` 展开与 `file://` 转换，工具写 A、账记 B，回退静默失效。
+
+**行为守卫**：`src/agent/file-tracker.test.ts`（断言 `resolveToolPath === resolveToCwd`，并逐形态比对）。
+pi 升级后若原生导出了它，删掉这两行 patch。
