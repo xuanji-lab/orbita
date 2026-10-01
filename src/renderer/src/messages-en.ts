@@ -455,7 +455,6 @@ export const en = {
     noApiKey: "No API key",
     addProvider: "Add provider",
     loadingProviders: "Loading providers…",
-    noProviders: "No providers",
     // —— 给导入的会话分配模型 ——
     assignHint: (count: number) =>
       `${count} imported session${count === 1 ? "" : "s"} still ${count === 1 ? "needs" : "need"} a model`,
@@ -515,11 +514,17 @@ export const en = {
     removeModel: (id: string) => `Remove ${id}`,
     apiFormatTip: "API format · set by the provider preset · to switch protocol, add a different entry",
     urlSuffixTip: "The client appends this path",
-    aboutList: "About this list",
-    aboutListBody: "Only adapters verified against real endpoints · the protocol follows the entry you pick",
-    catalogTip: "Model parameters come from the built-in catalog",
-    catalogBadge: "catalog",
     /** 「添加服务商」目录的三个分区标题（knownProviderGroup） */
+    /** 模型服务卡片墙的工具条与卡片 */
+    searchProviders: "Search providers, URLs or your own names",
+    onlyAdded: "Added only",
+    cardSize: "Card size",
+    cardSizes: { large: "Large", small: "Small" },
+    noProvidersMatch: "No providers match · a self-hosted gateway can use Custom compatible",
+    noneAdded: "No providers added yet · turn off Added only to see them all",
+    addAnother: "Add another",
+    addAnotherTip: (name: string) => `Add another ${name} (a second account or key)`,
+    customUrl: "Your own URL",
     catalogGroups: {
       api: "API providers",
       plan: "Coding plans",

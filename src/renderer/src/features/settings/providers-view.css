@@ -1,137 +1,22 @@
 /*
- * ProvidersView 的样式层——主从两栏铺满内容面、连接区与模型区两块实底、模型弹窗。
- * 左栏厂商列表贴着面板左缘、右栏详情各自内部滚动；详情内容列限宽 720px（与 General 同一
- * 个测量），宽窗口里输入框不会被拉成一整屏。token 全部来自设计系统真源，禁裸值。
+ * ProvidersView 的样式层——卡片墙（厂商卡片、工具条）、详情页（这一家的实例标签、连接区与
+ * 模型区两块实底）、模型弹窗。详情内容列限宽 720px（与 General 同一个测量）；卡片墙不限宽，
+ * 卡片按列宽自动排。token 全部来自设计系统真源，禁裸值（厂商 logo 自带的品牌色除外，见 VendorLogo）。
  */
 
 .pv-root {
   position: relative;
   min-height: 0;
   height: 100%;
-  display: grid;
-  grid-template-columns: 236px minmax(0, 1fr);
-}
-
-/* ---------- 左栏：厂商列表 + 底部 Add provider ---------- */
-
-.pv-nav {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-  min-height: 0;
-  padding: var(--space-3) var(--space-2);
-  border-right: 1px solid var(--color-border-subtle);
 }
 
-.pv-list {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow: auto;
-}
-
-/* 厂商行：可拖动排序，点选切换。选中态与设置 tab / 侧栏行同源（--color-bg-active + 加重） */
-.pv-row {
-  display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: 7px 8px 7px 4px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-primary);
-  font-family: var(--font-family-base);
-  text-align: left;
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-.pv-row:hover {
-  background: var(--color-bg-hover);
-}
-.pv-row.on {
-  background: var(--color-bg-active);
-}
-/* 拖拽排序：拖动中的行半透明让出「这块在动」的视觉；目标行用 accent 小框整行圈住 */
-.pv-row.dragging {
-  opacity: 0.4;
-}
-.pv-row.drop-on {
-  box-shadow: inset 0 0 0 1.5px var(--color-accent);
-}
-
-/* 拖拽把手：静止隐形，悬停或键盘聚焦才浮现 */
-.pv-grip {
-  display: inline-flex;
-  color: var(--color-text-tertiary);
-  opacity: 0;
-  cursor: grab;
-  transition: opacity var(--duration-instant) var(--ease-standard);
-}
-.pv-row:hover .pv-grip,
-.pv-row:focus-visible .pv-grip {
-  opacity: 1;
-}
-
-.pv-row-main {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-.pv-row-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-control);
-  line-height: var(--line-height-control);
-}
-.pv-row.on .pv-row-name {
-  font-weight: var(--weight-semibold);
-}
-.pv-row-sub {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
-  line-height: 14px;
-  color: var(--color-text-tertiary);
-}
-/* 没填 key：是一句话不是机器事实，退回 UI 字体、抬到 secondary */
-.pv-row-sub.nokey {
-  font-family: var(--font-family-base);
-  color: var(--color-text-secondary);
-}
+/* 数字小字：标签里的模型数、「仅显示已添加」后的家数 */
 .pv-row-count {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
-}
-
-.pv-add {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: var(--control-height-md);
-  border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-control);
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-.pv-add:hover,
-.pv-add[aria-pressed="true"] {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
 }
 
 /* ---------- 右栏：详情 / 目录 / 空态 ---------- */
@@ -159,19 +44,6 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-4) var(--space-6) 0;
-}
-
-.pv-empty {
-  flex: 1;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: var(--space-3);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-control);
-}
-.pv-empty > .orbita-icon {
-  color: var(--color-text-tertiary);
 }
 
 .pv-head {
@@ -559,63 +431,369 @@
   color: var(--color-text-tertiary);
 }
 
-/* ---------- 目录（Add provider）：两列卡片 ---------- */
+/* ---------- 卡片墙：工具条 + 三个分区的厂商卡片 ---------- */
 
-/* 分区：组标题 + 卡片网格；区与区之间的距离大于卡与卡，分组靠留白读出来 */
-.pv-catalog-group {
+.pv-wall {
   display: grid;
-  gap: var(--space-2);
-}
-.pv-catalog-group + .pv-catalog-group {
-  margin-top: var(--space-4);
-}
-.pv-catalog {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
-}
-.pv-card {
-  display: grid;
+  gap: var(--space-3);
   align-content: start;
+}
+.pv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.pv-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-height-md);
+  padding: 0 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+}
+.pv-search:focus-within {
+  border-color: var(--color-accent);
+}
+.pv-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-control);
+}
+.pv-search input::placeholder {
+  color: var(--color-text-tertiary);
+}
+/* 开关态的按钮（仅显示已添加）：按下 = 选中行的那层洗色，与设置 tab 同源 */
+.pv-btn[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  border-color: transparent;
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+/* 大 / 小两档：一组分段按钮 */
+.pv-seg {
+  display: inline-flex;
+  flex: none;
+  padding: 2px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+.pv-seg button {
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
-  padding: var(--space-3);
+  height: calc(var(--control-height-md) - 6px);
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+.pv-seg button:hover {
+  color: var(--color-text-primary);
+}
+.pv-seg button[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.pv-wall-group {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.pv-wall-empty {
+  padding: var(--space-6) 0;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+
+.pv-cards {
+  display: grid;
+  gap: var(--space-2);
+}
+.pv-cards.large {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+.pv-cards.small {
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px;
+}
+
+/* 厂商卡：hover 抬阴影、描边加深，不换色不位移（设计系统 *Hover*） */
+.pv-vcard {
+  position: relative;
+  min-width: 0;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   background: var(--color-bg-panel);
   color: var(--color-text-primary);
-  font-family: var(--font-family-base);
-  text-align: left;
   cursor: pointer;
   transition:
     var(--transition-hover),
     box-shadow var(--duration-instant) var(--ease-standard);
 }
-/* 卡片 hover：抬阴影、描边加深，不换色不位移（设计系统 *Hover*） */
-.pv-card:hover {
+.pv-vcard:hover {
   border-color: var(--color-border-strong);
   box-shadow: var(--shadow-composer);
 }
-.pv-card-name {
+.pv-vcard:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+/* 自定义兼容、还没加过：虚线空白卡，读起来就是「填你自己的」 */
+.pv-vcard.blank {
+  border-style: dashed;
+  background: transparent;
+}
+.pv-cards.large .pv-vcard {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--space-2);
+  min-height: 140px;
+  padding: var(--space-3);
+}
+.pv-cards.small .pv-vcard {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-height: 42px;
+  padding: 6px 8px;
+}
+.pv-vcard-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.pv-logo-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-app);
+}
+.pv-logo-tile.sm {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+}
+.pv-vcard.blank .pv-logo-tile {
+  border-style: dashed;
+  background: transparent;
+}
+.pv-vcard-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.pv-vcard-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--font-size-control);
   font-weight: var(--weight-semibold);
 }
-.pv-card-name .orbita-icon {
-  margin-left: auto;
-  color: var(--color-text-tertiary);
+.pv-cards.small .pv-vcard-name {
+  flex: 1;
 }
-.pv-card-note {
+.pv-vcard-note {
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
   color: var(--color-text-secondary);
 }
-.pv-card-meta {
+.pv-vcard-foot {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 30px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+/* 已添加：图标是状态，颜色只是第二信号 */
+.pv-added-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-micro);
+  white-space: nowrap;
+}
+.pv-added-badge .orbita-icon {
+  color: var(--color-success);
+}
+/* 再加一个：悬停或键盘聚焦才浮出 */
+.pv-card-more {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.pv-cards.large .pv-card-more {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+}
+/* 小卡一行放不下第四样东西：「+」悬停时浮在角标上，不占行宽 */
+.pv-cards.small .pv-card-more {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.pv-vcard:hover .pv-card-more,
+.pv-vcard:focus-within .pv-card-more {
+  opacity: 1;
+}
+.pv-card-more:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+
+/* 厂商 logo：SVG 填满盒子；单色 logo 跟文字色 */
+.pv-logo {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--color-text-primary);
+}
+.pv-logo svg {
+  width: 100%;
+  height: 100%;
+}
+.pv-logo-text {
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-control);
+}
+
+/* ---------- 详情页头：返回、这一家、实例标签 ---------- */
+
+.pv-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 var(--space-3) -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-control);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.pv-back:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.pv-kind {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.pv-kind .pv-logo {
+  padding: 8px;
+  box-sizing: content-box;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-app);
+}
+.pv-kind-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.pv-kind-name {
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-semibold);
+}
+.pv-kind-note {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+.pv-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 2px;
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 实例标签：选中态与设置 tab / 侧栏行同源；可拖动排序（目标标签用 accent 小框圈住） */
+.pv-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  height: var(--control-height-md);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-control);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.pv-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.pv-tab[aria-selected="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+.pv-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pv-tab-nokey {
+  font-size: var(--font-size-micro);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+.pv-tab.dragging {
+  opacity: 0.4;
+}
+.pv-tab.drop-on {
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
 }
 
 /* ---------- 控件：ghost / line / accent（唯一主操作）/ danger ---------- */
@@ -892,7 +1070,7 @@
 /* 设置页不做窄窗口降级（wafo 2026-09-10）：永远三栏——左侧设置菜单、
    中间厂商列表、右侧厂商详情。 */
 
-/* ---------- 给导入的会话分配模型（左栏提示 + 右栏预览） ---------- */
+/* ---------- 给导入的会话分配模型（卡片墙顶部提示 + 预览页） ---------- */
 
 /* 左栏顶部的提示块：只有存在占位会话且配了能用的服务商才渲染 */
 .pv-assign-hint {
@@ -939,6 +1117,7 @@
 .pv-assign-hint .pv-btn {
   margin-top: 2px;
   justify-content: flex-start;
+  align-self: flex-start;
 }
 
 /* 右栏预览：每个原模型一行 */
