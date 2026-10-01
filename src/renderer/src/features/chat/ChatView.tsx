@@ -3371,10 +3371,14 @@ function DelegateToolLine(props: {
     return <DelegateCardView card={null} status="running" taskPreview={taskPreview} />;
   }
   const summary = props.channel.channelSummaries.get(card.childId);
-  // 状态优先读通道摘要的终态（done/failed/waiting）；否则看子会话在 renderer
+  // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
   // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
+  // stopped 不读的话，用户终止过的子会话在派出卡上会退回「空闲」（验收发现）
   const status: DelegateCardStatus =
-    summary?.status === "done" || summary?.status === "failed" || summary?.status === "waiting"
+    summary?.status === "done" ||
+    summary?.status === "failed" ||
+    summary?.status === "waiting" ||
+    summary?.status === "stopped"
       ? summary.status
       : props.channel.childPhaseOf(card.childId) !== "idle"
         ? "running"

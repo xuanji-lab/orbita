@@ -918,6 +918,7 @@ export const zh: Messages = {
     kinds: {
       task: "任务",
       reply: "回复",
+      stop: "终止",
       question: "提问",
       progress: "进展",
       done: "完成",
@@ -938,6 +939,7 @@ export const zh: Messages = {
     empty: "还没有消息——以母会话身份发言来引导它。",
     deliveryTip: "引导：在它下一次调用工具时插入，不打断 · 本轮结束后：等它当前这一轮结束再送达",
     closed: "已关闭 ·",
+    closedStopped: "已由你终止 ·",
     reopenToSpeak: "重新打开才能发言",
     steer: "引导",
     turnEnd: "本轮结束后",
@@ -949,6 +951,7 @@ export const zh: Messages = {
       done: "完成",
       failed: "失败",
       idle: "空闲",
+      stopped: "已终止",
     },
     subSession: "子会话",
     parentSession: "母会话",
@@ -958,6 +961,7 @@ export const zh: Messages = {
       done: "完成",
       failed: "失败",
       idle: "空闲",
+      stopped: "已终止",
     },
     delegating: "委派中…",
     delegated: "已委派",
@@ -990,6 +994,7 @@ export const zh: Messages = {
       approval: "待批准",
       done: "完成",
       failed: "失败",
+      stopped: "已终止",
       idle: "空闲",
     },
     back: "返回子会话列表",
@@ -999,6 +1004,13 @@ export const zh: Messages = {
     of: (title) => `「${title}」的子会话`,
     none: "还没有子会话。",
     untitled: "未命名",
+    stopLabel: "终止",
+    stopTip:
+      "终止这个子会话——中止它正在跑的这一轮并关闭通道。只有你以母会话身份发言能重新打开。",
+    stopHint: "中止当前这一轮并关闭通道",
+    stopHintReopen: "只有你能重新打开",
+    stopConfirm: "终止",
+    stoppedHint: "已终止——在通道里以母会话身份发言可重新打开。",
   },
 
   approval: {

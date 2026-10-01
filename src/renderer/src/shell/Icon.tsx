@@ -73,6 +73,7 @@ import power from "../../../../Orbita Design System/assets/icons/lucide/power.sv
 import messageSquareDashed from "../../../../Orbita Design System/assets/icons/lucide/message-square-dashed.svg?raw";
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
 import messagesSquare from "../../../../Orbita Design System/assets/icons/lucide/messages-square.svg?raw";
+import octagonX from "../../../../Orbita Design System/assets/icons/lucide/octagon-x.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
 import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rotate-ccw.svg?raw";
@@ -165,6 +166,7 @@ const ICONS = {
   "message-square-dashed": messageSquareDashed,
   "messages-square": messagesSquare,
   minus,
+  "octagon-x": octagonX,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,

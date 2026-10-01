@@ -999,6 +999,7 @@ export const en = {
     kinds: {
       task: "task",
       reply: "reply",
+      stop: "stopped",
       question: "question",
       progress: "progress",
       done: "done",
@@ -1020,6 +1021,8 @@ export const en = {
     deliveryTip:
       "steer: injects at the next tool call without stopping it · turn end: waits until its current turn ends",
     closed: "closed ·",
+    /** stopped 专用那一行（与 closed 同一个 reopen 入口，但话说清楚是谁停的） */
+    closedStopped: "stopped by you ·",
     reopenToSpeak: "reopen to speak",
     steer: "steer",
     turnEnd: "turn end",
@@ -1031,6 +1034,7 @@ export const en = {
       done: "done",
       failed: "failed",
       idle: "idle",
+      stopped: "stopped",
     },
     subSession: "Sub-session",
     parentSession: "Parent session",
@@ -1040,6 +1044,7 @@ export const en = {
       done: "done",
       failed: "failed",
       idle: "idle",
+      stopped: "stopped",
     },
     delegating: "delegating…",
     delegated: "DELEGATED",
@@ -1072,6 +1077,8 @@ export const en = {
       approval: "needs approval",
       done: "done",
       failed: "failed",
+      /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */
+      stopped: "stopped",
       idle: "idle",
     },
     back: "Back to sub-sessions",
@@ -1081,6 +1088,15 @@ export const en = {
     of: (title: string) => `Sub-sessions of "${title}"`,
     none: "No sub-sessions yet.",
     untitled: "Untitled",
+    /** 终止入口（会话层头部）：菜单里的后果行要短（菜单行单行省略号），
+     * 完整后果在 chip 的 title 悬停说明里 */
+    stopLabel: "Stop",
+    stopTip:
+      "Stop this sub-session — aborts its current turn and closes the channel. Only you can re-open it, by speaking as the parent in the channel.",
+    stopHint: "Aborts this turn and closes the channel",
+    stopHintReopen: "Only you can re-open it",
+    stopConfirm: "Stop it",
+    stoppedHint: "Already stopped — speak as the parent in the channel to re-open.",
   },
 
   approval: {
