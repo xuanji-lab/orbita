@@ -145,9 +145,11 @@ describe("TurnFileTracker", () => {
 });
 
 describe("字节口径：BOM 与 CRLF 原样进出快照", () => {
-  // 自带路径与读盘闭包，避免与其它测试的 fakeFs / CWD 纠缠
-  const ROOT = "/byte-snap";
-  const FILE = `${ROOT}/a.cs`;
+  // 自带路径与读盘闭包，避免与其它测试的 fakeFs / CWD 纠缠。
+  // ROOT/FILE 必须经 resolve/join 归一：win32 上 resolveToCwd 会把 "/byte-snap/a.cs"
+  // 折成当前盘符根的 "C:\\byte-snap\\a.cs"，与字面 POSIX 串永不相等，闭包就永远读不到文件
+  const ROOT = resolve("/byte-snap");
+  const FILE = join(ROOT, "a.cs");
 
   /** 可变单文件读盘：模拟 agent 改盘前后两次读。 */
   function mutableFile(initial: string): { read: (path: string) => Promise<ReadOutcome>; set: (next: string) => void } {
