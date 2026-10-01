@@ -23,6 +23,12 @@
 :root {
   --option-hover-bg: var(--color-bg-hover);
   --option-active-bg: var(--color-bg-active);
+  /*
+   * 两行的行（模型卡片：模型名 + 厂商副行）的高度。
+   * 卡片是**定高**的（高 = 外壳 + N 行），所以这个值也是「一行多少钱」的那个单价——
+   * 写在一处，Menu 那边量一行就够，不把 48 再拄一遍（2026-10-01）。
+   */
+  --menu-row-height: calc(var(--control-height-md) + var(--space-4));
 }
 
 /*

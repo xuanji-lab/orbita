@@ -1822,6 +1822,9 @@ function ComposerBar(props: {
           }
           panelMaxHeight={520}
           panelMaxWidth={420}
+          // 定高：外壳 + 六行。卡片大小不跟着「筛剩几个模型」变——
+          // 否则点一次左栏过滤就换一个尺寸，位置也跟着跳（2026-10-01 用户实测）
+          listRows={6}
           trigger={({ open, toggle }) => (
             <Chip
               active={open}

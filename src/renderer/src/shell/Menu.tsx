@@ -147,6 +147,15 @@ export function Menu(props: {
    */
   rail?: React.ReactNode;
   /**
+   * 行清单的**定高**（显示几行的量）：给了它就是定高卡片。
+   *
+   * 为什么要有这一档：卡片的高度若跟着**内容**走，点一次左栏过滤就换一个尺寸——
+   * 位置跟着跳，而且「刚才那个模型在哪」的肌肉记忆每次都被清掉（2026-10-01 用户实测）。
+   * 定高之后，卡片大小只跟窗口有关，与筛剩几条无关。
+   * 行高取 CSS 变量 `--menu-row-height`，不在这里写死一个数。
+   */
+  listRows?: number;
+  /**
    * 搜索词的回声。搜索是**一切过滤的旁路**：调用方拿它把左栏的选中复位到「全部」，
    * 否则会出现「左栏亮着某家、列表里全是别家」这种自相矛盾的画面。
    */
@@ -167,10 +176,11 @@ export function Menu(props: {
   const t = useT();
   const [open, setOpen] = useState(false);
   /**
-   * `maxHeight` 来自 `placeMenu`：菜单比可用空间高时不再探出屏幕，而是封顶 + 列表内部滚。
-   * 只在算好之后才写进面板样式——首帧要不封顶地量一次自然高度。
+   * `cap` = 面板实际能占的高度（视口余量与卡片上限取小）。
+   * `fixed` = 这是定高卡片：`cap` 写进 `height`（内容少也不缩）；否则写进 `maxHeight`
+   * （内容少就矮，封顶只管内容多的时候）。
    */
-  const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
+  const [position, setPosition] = useState<{ top: number; left: number; cap: number; fixed: boolean } | null>(null);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -224,14 +234,39 @@ export function Menu(props: {
     if (anchor === undefined || panel === null) return;
     const panelBox = panel.getBoundingClientRect();
     /**
-     * 量的是**不封顶的自然高度**。封顶生效后面板会被压矮，拿面板高去算就会越算越小；
-     * 而内容自己的 scrollHeight 永远是真实内容高——差值就是外壳（搜索框、内边距）占掉的那一截。
-     * 两栏并排时取**高的那一个**：左栏十家（320px）比两行清单高时，卡片得按左栏算。
+     * 高度两种口径，分开算：
+     *
+     * - **定高卡片**（`listRows`）：外壳 + N 行。行高**量一行**而不写死数字——
+     *   行高是 CSS 的事，在这边再写一个 48 就是同一件事两处写死。
+     * - **按内容**：外壳 + 两栏里高的那一个。封顶生效后面板会被压矮，拿面板高去算
+     *   就会越算越小；而内容自己的 scrollHeight 永远是真实内容高。
+     *
+     * 两种都用「面板高 − 两栏高」求外壳：搜索框、底部行、内边距都不随内容变。
      */
     const body = bodyRef.current;
     const bodyBox = body?.getBoundingClientRect().height ?? 0;
-    const tallest = Math.max(listRef.current?.scrollHeight ?? 0, railRef.current?.scrollHeight ?? 0);
-    const naturalHeight = body === null ? panelBox.height : panelBox.height - bodyBox + tallest;
+    const chrome = panelBox.height - bodyBox;
+    /**
+     * 一行多高：读**计算后的 minHeight**，不写 48。
+     * 行高是两个地方的事（CSS 定 `--menu-row-height`，卡片定「显几行」），
+     * 在 JS 里再写一遍数字，改了 CSS 这边就静默错位。
+     */
+    const probe = listRef.current?.firstElementChild as HTMLElement | null;
+    const rowHeight = probe === null ? 0 : parseFloat(getComputedStyle(probe).minHeight) || 0;
+    const fixed = props.listRows !== undefined;
+    const naturalHeight =
+      body === null
+        ? panelBox.height
+        : fixed
+          ? chrome + (props.listRows ?? 0) * rowHeight
+          : chrome + Math.max(listRef.current?.scrollHeight ?? 0, railRef.current?.scrollHeight ?? 0);
+    /**
+     * 交给定位的必须是**面板真会长成的高度**，不是内容高。
+     * 少了这一道 min，卡片会被推到离锚点很远的地方：定位按内容高（758）算「上面装得下」，
+     * 而面板被 `panelMaxHeight`（520）卡住只长了 520——中间那 238px 的差就是那段空气
+     * （2026-10-01 用户实测：「卡片没有贴住 chip」）。
+     */
+    const requested = Math.min(naturalHeight, props.panelMaxHeight ?? Number.POSITIVE_INFINITY);
     const box: MenuBox = {
       top: anchor.top,
       bottom: anchor.bottom,
@@ -242,7 +277,7 @@ export function Menu(props: {
     };
     const placed = placeMenu(
       box,
-      { width: panelBox.width, height: naturalHeight },
+      { width: panelBox.width, height: requested },
       props.align,
       { width: window.innerWidth, height: window.innerHeight },
       props.placement,
@@ -251,12 +286,14 @@ export function Menu(props: {
       close();
       return;
     }
+    // 定高卡片的上限就是它自己那份高（六行），`panelMaxHeight` 对它没意义
+    const cap = Math.min(placed.maxHeight, fixed ? naturalHeight : requested);
     setPosition((prev) =>
-      prev !== null && prev.top === placed.top && prev.left === placed.left && prev.maxHeight === placed.maxHeight
+      prev !== null && prev.top === placed.top && prev.left === placed.left && prev.cap === cap && prev.fixed === fixed
         ? prev
-        : { top: placed.top, left: placed.left, maxHeight: placed.maxHeight },
+        : { top: placed.top, left: placed.left, cap, fixed },
     );
-  }, [props.align, props.placement, close]);
+  }, [props.align, props.placement, props.panelMaxHeight, props.listRows, close]);
 
   // 首次打开：先按旧位置渲染但不可见，量到真实高度之后再定位——菜单高度取决于
   // 内容，不先量就只能猜。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下。
@@ -417,12 +454,13 @@ export function Menu(props: {
               left: position?.left ?? 0,
               // 量高度那一帧不可见，避开在错位置闪一下（首帧也不封顶，才量得到自然高度）
               visibility: position === null ? "hidden" : "visible",
-              // 封顶：placeMenu 算好的可用空间，与卡片自己的上限取小
-              // （滚动的是下面 listRef 那个行清单）。position 为 null 时不封顶，那是在量自然高度
-              maxHeight:
-                position === null
-                  ? undefined
-                  : Math.min(position.maxHeight, props.panelMaxHeight ?? Number.POSITIVE_INFINITY),
+              // 定高卡片给 height（内容少也不缩，卡片大小不跟着筛剩几条变）、
+              // 按内容的给 maxHeight（封顶 + 内部滚）。position 为 null 时是在量自然高度，不设
+              ...(position === null
+                ? null
+                : position.fixed
+                  ? { height: position.cap }
+                  : { maxHeight: position.cap }),
               zIndex: 40,
               minWidth: props.panelMinWidth ?? 180,
               // 上限再夹一道视口：面板是 fixed 的，100vw 就是可用宽——
@@ -502,6 +540,8 @@ export function Menu(props: {
               {visible.length === 0 && (
                 <div
                   style={{
+                    // 空态也占一行：卡片是定高的，空清单时它不能瘪下去
+                    minHeight: "var(--menu-row-height)",
                     padding: "var(--space-2)",
                     fontFamily: "var(--font-family-base)",
                     fontSize: "var(--font-size-caption)",
@@ -581,7 +621,7 @@ function MenuRow(props: {
         minHeight:
           item.subLabel === undefined
             ? "var(--control-height-md)"
-            : "calc(var(--control-height-md) + var(--space-4))",
+            : "var(--menu-row-height)",
         padding: "var(--space-1) var(--space-2)",
         border: 0,
         borderRadius: "var(--radius-sm)",
