@@ -58,7 +58,7 @@ export function ProvidersView(props: {
   const t = useT();
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-/** 页面四态：卡片墙 / 某个实例的详情 / 新建表单 / 给导入的会话分配模型 */
+  /** 页面四态：卡片墙 / 某个实例的详情 / 新建表单 / 给导入的会话分配模型 */
   const [view, setView] = useState<
     { kind: "grid" } | { kind: "detail" } | { kind: "new"; kindId: string } | { kind: "assign" }
   >({ kind: "grid" });
