@@ -138,6 +138,28 @@ describe("gitReviewDiff", () => {
     const branch = await gitReviewDiff(runner, "/w", "branch", "b.ts");
     assert.equal(branch.diff, "@@\n+line");
   });
+
+  test("未跟踪文件：不再被空 git diff 误标已还原——读盘对空文件造全量新增 diff；带 NUL → binary", async () => {
+    const runner = fakeGit({
+      "diff --no-renames -- new.txt": { stdout: "" },
+      "ls-files -- new.txt": { stdout: "" },
+      "diff --no-renames -- bin.dat": { stdout: "" },
+      "ls-files -- bin.dat": { stdout: "" },
+      // 已跟踪且无改动：ls-files 有输出 → 不走未跟踪分支，照旧 restored
+      "diff --no-renames -- a.ts": { stdout: "" },
+      "ls-files -- a.ts": { stdout: "a.ts\n" },
+    });
+    const readUntracked = async (path: string): Promise<Buffer | null> =>
+      path.endsWith("new.txt") ? Buffer.from("one\ntwo\n", "utf8") : Buffer.from([0, 1]);
+    const fresh = await gitReviewDiff(runner, "/w", "unstaged", "new.txt", readUntracked);
+    assert.equal(fresh.restored, false);
+    assert.ok(fresh.diff?.includes("+++ new.txt"));
+    assert.ok(fresh.diff?.includes("+one"));
+    const bin = await gitReviewDiff(runner, "/w", "unstaged", "bin.dat", readUntracked);
+    assert.deepEqual([bin.diff, bin.binary, bin.restored], [null, true, false]);
+    const clean = await gitReviewDiff(runner, "/w", "unstaged", "a.ts", readUntracked);
+    assert.deepEqual([clean.diff, clean.restored], [null, true]);
+  });
 });
 
 // ————————————————————————————————————————————————

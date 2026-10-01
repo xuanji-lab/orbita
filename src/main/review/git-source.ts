@@ -178,17 +178,34 @@ export async function gitReviewList(
     : { kind: "ok", cwd, entries };
 }
 
+/** `git ls-files -- <path>` 空 = 未跟踪（exit 0、无输出）。只读，不改 index。 */
+async function isUntracked(runner: GitRunner, cwd: string, path: string): Promise<boolean> {
+  const result = await runner(["ls-files", "--", path], cwd);
+  return result.code === 0 && result.stdout.trim() === "";
+}
+
 /** `review:diff` 的 git 侧实现（unified diff 原样返回）。 */
 export async function gitReviewDiff(
   runner: GitRunner,
   cwd: string,
   source: ReviewSource,
   path: string,
+  readUntracked: UntrackedReader = diskUntrackedReader,
 ): Promise<ReviewDiff> {
   const upstream = source === "branch" ? await upstreamName(runner, cwd) : null;
   const args = diffArgs(source, upstream, { path });
   if (args === null) return { diff: null, binary: false, restored: false };
   const result = await runner(args, cwd);
-  const diff = result.stdout.trimEnd();
+  let diff = result.stdout.trimEnd();
+  // 未跟踪文件不在 git diff 的覆盖面里（恒空输出）——曾把空正文当 restored，新建文件
+  // 被说成「与基线一致」。列表侧（untrackedEntries）把它算全量新增，正文侧同口径：
+  // 读盘对着空文件造一份 diff（带 NUL 的按 binary 处理，同列表侧）。
+  if (diff === "" && source === "unstaged" && (await isUntracked(runner, cwd, path))) {
+    const bytes = await readUntracked(`${cwd}/${path}`);
+    if (bytes !== null) {
+      if (bytes.includes(0)) return { diff: null, binary: true, restored: false };
+      diff = createTwoFilesPatch("/dev/null", path, "", bytes.toString("utf8"));
+    }
+  }
   return { diff: diff === "" ? null : diff, binary: false, restored: diff === "" };
 }
