@@ -271,7 +271,11 @@ export function modelPickerRail(options: {
         }}
       >
         {options.providers.map((provider) => (
-          <div key={`rail-ruler:${provider.id}`}>{railShortName(provider)}</div>
+          // 横向 padding 与 RAIL_CELL 相同：尺比的是「格子整宽」——少算这 16px 的话，
+          // 选中格变 semibold 时左栏还是会胖 1px（pr138 机器验收量到 61.55 → 62.55）
+          <div key={`rail-ruler:${provider.id}`} style={{ padding: "0 var(--space-2)" }}>
+            {railShortName(provider)}
+          </div>
         ))}
       </span>
       <button
