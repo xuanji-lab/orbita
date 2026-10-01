@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import type { BuiltinProvider } from "@shared/agent-ipc";
-import { KNOWN_PROVIDERS } from "@shared/known-providers";
+import { KNOWN_PROVIDERS, knownProviderDefaultName } from "@shared/known-providers";
 import { resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
 import type { ModelDecl } from "@shared/provider";
@@ -145,11 +145,17 @@ export function modelCardFooter(options: { t: Messages; onConfigure: () => void 
   );
 }
 
-/** 厂商在左栏里的短名。改过名的实例显示他起的名字——那列说的是「哪个接入」 */
+/**
+ * 厂商在左栏里的短名。改过名的实例显示他起的名字——那列说的是「哪个接入」。
+ * 「没改过名」认两种：等于目录 label，或等于新建时给的默认名（knownProviderDefaultName）——
+ * 同一厂商在按量 / 套餐两区各有一条时 label 相同，默认名会带「（按量）/（套餐）」后缀，
+ * 只比 label 的话智谱两格都会显示成长名，不出 zhipu / zhipu-cp。
+ */
 function railShortName(provider: ProviderDto): string {
   const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-  if (known === undefined || provider.displayName !== known.label) return provider.displayName;
-  return known.short;
+  if (known === undefined) return provider.displayName;
+  const untouched = provider.displayName === known.label || provider.displayName === knownProviderDefaultName(known);
+  return untouched ? known.short : provider.displayName;
 }
 
 /**

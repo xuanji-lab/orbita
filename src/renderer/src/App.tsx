@@ -720,6 +720,8 @@ export function App() {
                   onOpenChannel={openChannel}
                   onClose={() => handlePanel(null)}
                   providersError={providersError}
+                  starredModels={settings.starredModels ?? []}
+                  onToggleStarModel={toggleStarModel}
                 />
               ) : null}
             </div>
