@@ -171,7 +171,7 @@ function SkillGroupBlock(props: {
   const picked = selectable.filter((skill) => props.selected.has(skill.dir)).length;
   const all = selectable.length > 0 && picked === selectable.length;
   const empty = selectable.length === 0;
-  const scopeItems: MenuItem[] = skillScopeOptions(props.workspaces, t).map((option, index) => ({
+  const scopeItems: MenuItem[] = skillScopeOptions(props.workspaces, t).map((option, index): MenuItem => ({
     id: `${index}`,
     label: option.label,
     ...(option.hint === undefined ? null : { hint: option.hint }),

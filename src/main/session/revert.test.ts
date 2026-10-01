@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, readFile, writeFile, stat, lstat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentCommand } from "../../shared/agent-ipc.ts";
@@ -217,6 +217,9 @@ describe("planRevert / executeRevert", () => {
     ]);
     const plan = await planRevert(store, ID, "u1");
     assert.deepEqual(plan.unrecoverable, [join(lab, "big.txt")]);
+    // 不进 restore/deletes 清单（确认栏只出「无法还原」一枚胶囊，结论句不把它数进「还原 N 个文件」）
+    assert.deepEqual(plan.restore, []);
+    assert.deepEqual(plan.deletes, []);
     const outcomes = await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
     assert.deepEqual(outcomes, [{ path: join(lab, "big.txt"), outcome: "skipped" }]);
     assert.equal((await readFile(join(lab, "big.txt"), "utf8")).length, big.length);
@@ -336,5 +339,87 @@ describe("planUndo / executeUndo", () => {
     assert.ok(detail?.transcript.some((record) => record.role === "undo"));
     // 消息一条没少
     assert.equal(detail?.transcript.filter((record) => record.role === "user").length, 2);
+  });
+});
+
+describe("字节级还原：符号链接 / 权限位 / BOM / CRLF", () => {
+  /** 落一轮只有一个文件的轮尾账（磁盘现状 = after），并补齐前置消息。 */
+  async function oneTurn(path: string, before: string, after: string): Promise<void> {
+    await writeFile(path, after, "utf8");
+    await store.record(ID, userItem("u1", "q1", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [{ path, before, after, added: 1, removed: 1 }]);
+  }
+
+  test("还原目标是符号链接：链接仍是链接，内容写到链接指向的真实文件", async (t) => {
+    const real = join(lab, "real.ts");
+    const link = join(lab, "link.ts");
+    await writeFile(real, "agent v1\n", "utf8");
+    try {
+      await symlink(real, link);
+    } catch {
+      // Windows：非管理员且未开开发者模式时无权创建符号链接——跳过而不是红
+      return t.skip("此环境无法创建符号链接（Windows 需管理员权限或开发者模式）");
+    }
+    await store.record(ID, userItem("u1", "q1", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    // pi 的 write / edit 跟随链接改的是 real.ts，tracker 记的路径是 link
+    await turnRecord("t1", [{ path: link, before: "old\n", after: "agent v1\n", added: 1, removed: 1 }]);
+
+    const outcomes = await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
+    assert.deepEqual(outcomes, [{ path: link, outcome: "restored" }]);
+    // rename 不得把链接换成普通文件
+    assert.ok((await lstat(link)).isSymbolicLink());
+    assert.equal(await readFile(real, "utf8"), "old\n");
+  });
+
+  test("链式符号链接（a → b → real）：两个链接都保持是链接，内容写到最终目标", async (t) => {
+    const real = join(lab, "chain-real.ts");
+    const middle = join(lab, "chain-b.ts");
+    const head = join(lab, "chain-a.ts");
+    await writeFile(real, "agent v1\n", "utf8");
+    try {
+      await symlink(real, middle);
+      await symlink(middle, head);
+    } catch {
+      return t.skip("此环境无法创建符号链接（Windows 需管理员权限或开发者模式）");
+    }
+    await store.record(ID, userItem("u1", "q1", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [{ path: head, before: "old\n", after: "agent v1\n", added: 1, removed: 1 }]);
+
+    await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
+    assert.ok((await lstat(head)).isSymbolicLink());
+    assert.ok((await lstat(middle)).isSymbolicLink(), "中间那一跳不得被换成普通文件");
+    assert.equal(await readFile(real, "utf8"), "old\n");
+  });
+
+  test("还原保持原文件的权限位（0755）", async () => {
+    const path = join(lab, "run.sh");
+    await writeFile(path, "agent v1\n", { encoding: "utf8", mode: 0o755 });
+    await store.record(ID, userItem("u1", "q1", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [{ path, before: "old\n", after: "agent v1\n", added: 1, removed: 1 }]);
+    await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
+    assert.equal(await readFile(path, "utf8"), "old\n");
+    if (process.platform === "win32") return; // Windows 的 mode 只有只读位，跳过断言
+    assert.equal((await stat(path)).mode & 0o777, 0o755);
+  });
+
+  test("带 UTF-8 BOM 的文件：还原后与原字节完全相等，且不误报「你改过」", async () => {
+    const path = join(lab, "bom.cs");
+    // \uFEFF = EF BB BF：VS 生成的 .cs / .csproj 常带；快照与磁盘比较两边都不许剥
+    await oneTurn(path, "\uFEFFold line\n", "\uFEFFagent line\n");
+    const plan = await planRevert(store, ID, "u1");
+    assert.deepEqual(plan.userModified, []);
+    await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
+    assert.ok((await readFile(path)).equals(Buffer.from("\uFEFFold line\n", "utf8")));
+  });
+
+  test("CRLF 行尾的文件：还原后与原字节完全相等", async () => {
+    const path = join(lab, "crlf.txt");
+    await oneTurn(path, "a\r\nb\r\n", "a\r\nX\r\n");
+    await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
+    assert.ok((await readFile(path)).equals(Buffer.from("a\r\nb\r\n", "utf8")));
   });
 });

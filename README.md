@@ -41,15 +41,30 @@ bun run build        # 构建到 out/
 
 ```bash
 bun run dist         # macOS arm64：dist/mac-arm64/orbita.app，另出 dmg 与 zip
+bun run dist:win     # Windows x64：dist/orbita-<version>-win-x64-setup.exe（NSIS 安装器）
 bun run icon         # 重新生成 build/icon.icns（需要 macOS 的 swift / sips / iconutil）
+bun run icon:win     # 重新生成 build/icon.png（Windows 图标，任何平台都能跑）
 ```
 
-打出来的包是 ad-hoc 签名、未公证，只打包不发布。本机打的包直接双击即可；从别处拷来的包被 Gatekeeper 拦下时，
+**macOS**：打出来的包是 ad-hoc 签名、未公证，只打包不发布。本机打的包直接双击即可；从别处拷来的包被 Gatekeeper 拦下时，
 执行 `xattr -dr com.apple.quarantine /Applications/orbita.app`，或到「系统设置 › 隐私与安全性」点「仍要打开」。
+只有 arm64，Intel Mac 用不了。
+
+**Windows**：NSIS 安装器，向导两步：**先选「为使用这台电脑的任何人（要管理员，默认装进 `C:\Program Files`）／仅为我（免管理员，装进 `%LOCALAPPDATA%\Programs`）」，再选安装位置**。
+桌面与开始菜单各一份快捷方式，卸载走「设置 › 应用 › orbita」。安装器与 exe 都没有代码签名，
+首次运行会被 SmartScreen 拦一次（点「更多信息 › 仍要运行」）。只有 x64。
+
+> 构建机直连 GitHub 慢或被墙时，Electron 与 NSIS 的产物会下载超时（`ETIMEDOUT`）。换镜像：
+>
+> ```bash
+> ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ \
+> ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ \
+> bun run dist:win
+> ```
 
 ## 数据放在哪
 
-全部在 `~/Library/Application Support/orbita/`：
+全部在 userData 里：macOS 是 `~/Library/Application Support/orbita/`，Windows 是 `%APPDATA%\orbita\`。
 
 | 路径 | 内容 |
 |---|---|
@@ -60,7 +75,7 @@ bun run icon         # 重新生成 build/icon.icns（需要 macOS 的 swift / s
 | `skills/`、`mcp.json` | skills 中心目录与 MCP 配置 |
 | `imports.jsonl` | 迁移的导入清单 |
 
-开发版与打包版用的是同一个数据目录，不要两个同时开。
+开发版与打包版各用各的数据（开发版在隔壁的 `orbita-dev/`），所以两个可以同时开。开发版第一次启动是空的，provider key 要重新填一次。
 
 ## 文档
 

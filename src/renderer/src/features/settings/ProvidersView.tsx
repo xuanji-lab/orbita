@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import "./providers-view.css";
-import { KNOWN_PROVIDERS, isPlanBilling, type KnownProvider } from "@shared/known-providers";
+import { KNOWN_PROVIDERS, knownProviderDefaultName, type KnownProvider } from "@shared/known-providers";
+import type { ProviderCardSize } from "@shared/settings";
 import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinProvider } from "@shared/agent-ipc";
@@ -22,14 +23,20 @@ import {
   nextFreeId,
   parseRateInput,
   parseTokenInput,
+  providerCards,
   reorderIds,
+  type ProviderCard,
   urlSuffix,
 } from "./providers-view-model.ts";
 import { assignEntries, assignHint, assignPreview, type AssignPreview } from "./providers-assign.ts";
 import { useT } from "../../locale.ts";
+import { VendorLogo } from "./VendorLogo";
 
 /**
- * Provider 设置面 —— 主从两栏铺满内容面：左栏厂商列表（可拖动排序、可复制），右栏唯一编辑区。
+ * Provider 设置面 —— 两层：**卡片墙**（每个目录条目一张卡，加过的挂「已添加」角标，顶部搜索 /
+ * 仅显示已添加 / 大小两档）与**详情页**（点卡进入：这一家的实例标签 + 唯一编辑区）。
+ * 同一家可以加多个实例（不同账号 / key）：卡片悬停的「+」与详情页的「再添加一个」都走 pickKnown，
+ * id 由 nextFreeId 避撞，kind 字段记下它来自哪张卡。实例标签可拖动排序（模型菜单按这个顺序列）。
  * 说明文字能换成效果的都换了：协议是标题旁的锁形徽标、客户端要接的路径是 URL 框尾的灰字、
  * Save 条只在连接区有改动时出现，其余整句进悬停（InfoTip / useSettingTip）。
  *
@@ -41,14 +48,23 @@ import { useT } from "../../locale.ts";
  *  4. **保存语义就近分层**：模型启用 / 删除 / 参数编辑立即落盘（mutateModels），
  *     Save 只管身份字段（名称 / URL / key），所以它收在连接区里，而不是整页底栏。
  */
-export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?: () => void }) {
+export function ProvidersView(props: {
+  onChange?: () => void;
+  onSessionsChanged?: () => void;
+  /** 卡片墙的尺寸档（AppSettings.providerCardSize，缺席 = large）；切换即落设置 */
+  cardSize: ProviderCardSize;
+  onCardSize: (size: ProviderCardSize) => void;
+}) {
   const t = useT();
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** 右栏三态：详情 / 选厂商目录 / 新建表单 / 给导入的会话分配模型 */
+  /** 页面四态：卡片墙 / 某个实例的详情 / 新建表单 / 给导入的会话分配模型 */
   const [view, setView] = useState<
-    { kind: "detail" } | { kind: "catalog" } | { kind: "new"; kindId: string } | { kind: "assign" }
-  >({ kind: "detail" });
+    { kind: "grid" } | { kind: "detail" } | { kind: "new"; kindId: string } | { kind: "assign" }
+  >({ kind: "grid" });
+  /** 卡片墙的搜索词与「仅显示已添加」：只活在这一页，离开设置就清 */
+  const [query, setQuery] = useState("");
+  const [onlyAdded, setOnlyAdded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState(emptyDraft());
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
@@ -222,9 +238,21 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
     }
   };
 
-  const openCatalog = () => {
-    setView({ kind: "catalog" });
+  /** 回卡片墙：编辑区里没存的改动就此丢弃（与原来切走左栏行同一语义） */
+  const backToGrid = () => {
+    setView({ kind: "grid" });
     resetTransient();
+  };
+
+  /** 同一张卡下的实例（按存储顺序）：卡片角标、详情页标签共用这一个口径 */
+  const instancesOfKind = (kindId: string): ProviderDto[] =>
+    (providers ?? []).filter((provider) => kindOf(provider) === kindId);
+
+  /** 点卡片：加过的进第一个实例的详情，没加过的直接开新建表单 */
+  const openKind = (kindId: string) => {
+    const first = instancesOfKind(kindId)[0];
+    if (first === undefined) pickKnown(kindId);
+    else selectProvider(first.id);
   };
 
   /** 打开分配预览：先拿一份最新分组（预览到确认之间会话可能又变） */
@@ -243,7 +271,7 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
     try {
       const result = await api.session.modelAssignRun(entries);
       setAssignDone(result);
-      setView({ kind: "detail" });
+      setView({ kind: "grid" });
       loadAssignGroups();
       // 左栏会话列表 / 正开着的会话用导入完成的同一条刷新通路（engine.refreshSessions）
       props.onSessionsChanged?.();
@@ -269,18 +297,36 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
       kind: kindId,
       // 同一条目可以加第二次：id 撞了就带序号，否则落盘会覆盖先加的那个
       id: target === undefined ? "" : nextFreeId((providers ?? []).map((p) => p.id), target.id),
-      displayName: target?.label ?? "",
+      // 这一家已经有实例：名字带上序号，否则详情页的标签是两个一模一样的「DeepSeek」
+      displayName:
+        target === undefined
+          ? ""
+          : instancesOfKind(target.id).length === 0
+            ? knownProviderDefaultName(target)
+            : `${knownProviderDefaultName(target)} ${instancesOfKind(target.id).length + 1}`,
       baseUrl: target?.baseUrl ?? "",
       models: [],
       apiKey: "",
     });
   };
 
+  /**
+   * 取消：新建表单 → 回这一家的第一个实例（没有就回卡片墙）；分配预览 → 回卡片墙；
+   * 详情页的 Save 条 → 原地把草稿拉回盘上的值。
+   */
   const cancelSide = () => {
-    setView({ kind: "detail" });
+    if (view.kind === "new") {
+      const first = instancesOfKind(view.kindId)[0];
+      if (first === undefined) backToGrid();
+      else selectProvider(first.id);
+      return;
+    }
+    if (view.kind === "assign") {
+      backToGrid();
+      return;
+    }
     resetTransient();
-    const current = editingId === null ? providers?.find((p) => p.id === selectedId) : editing;
-    if (current !== undefined) loadDraft(current);
+    if (editing !== undefined) loadDraft(editing);
   };
 
   /**
@@ -441,6 +487,8 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
     const result = await api.provider.upsert({
       provider: {
         id: draft.id.trim(),
+        // 记下来自哪张卡：第二个实例的 id 是 deepseek-2，光凭 id 认不回来
+        ...(known === undefined ? {} : { kind: known.id }),
         displayName: draft.displayName.trim(),
         endpoint: {
           baseUrl: draft.baseUrl.trim(),
@@ -487,6 +535,7 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
       const result = await api.provider.upsert({
         provider: {
           id,
+          ...(known === undefined ? {} : { kind: known.id }),
           displayName: `${name} (copy)`,
           endpoint: {
             baseUrl,
@@ -534,9 +583,17 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
       setError(cause instanceof Error ? cause.message : String(cause));
       return;
     }
-    setView({ kind: "detail" });
+    // 同一家还有别的实例就留在这家的详情页，删光了回卡片墙
+    const sibling = instancesOfKind(draft.kind).find((provider) => provider.id !== selectedId);
     resetTransient();
     await refresh();
+    if (sibling === undefined) {
+      setView({ kind: "grid" });
+      return;
+    }
+    setSelectedId(sibling.id);
+    setView({ kind: "detail" });
+    loadDraft(sibling);
   };
 
   /** 模型弹窗 Apply：decl 只带「用户填了的」覆盖字段，留空 = 继承目录 / 兜底 */
@@ -569,109 +626,35 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
         revealedKey,
       ));
 
+  /** 分配提示（providers-assign.ts 三态）：放在卡片墙顶部，没有导入记录的用户永远看不到 */
+  const assignBanner =
+    hint.kind === "none" && assignDone === null ? null : (
+      <div className="pv-assign-hint" data-tone={hint.kind === "leftover" ? "muted" : undefined}>
+        {assignDone !== null && (
+          <span className="pv-assign-done">
+            <Icon name="circle-check" size={12} strokeWidth={1.8} />
+            {t.providers.assignResult(assignDone.assigned)}
+            {assignDone.skipped > 0 ? t.providers.assignSkipped(assignDone.skipped) : ""}
+          </span>
+        )}
+        {hint.kind === "offer" && (
+          <>
+            <span className="pv-assign-line">{t.providers.assignHint(hint.total)}</span>
+            <span className="pv-assign-sub">{t.providers.assignHintBody}</span>
+            <button type="button" className="pv-btn accent" disabled={assignBusy} onClick={openAssign}>
+              <Icon name="arrow-left-right" size={13} /> {t.providers.assignButton}
+            </button>
+          </>
+        )}
+        {hint.kind === "leftover" && <span className="pv-assign-sub">{t.providers.assignLeftover(hint.unmatched)}</span>}
+      </div>
+    );
+
+  /** 详情页顶部这一家的实例：标签可切换、可拖动排序，末尾「再添加一个」 */
+  const kindInstances = known === undefined ? [] : instancesOfKind(known.id);
+
   return (
     <section className="pv-root">
-      <nav className="pv-nav" aria-label={t.settings.tabs.providers}>
-        {(hint.kind !== "none" || assignDone !== null) && (
-          <div className="pv-assign-hint" data-tone={hint.kind === "leftover" ? "muted" : undefined}>
-            {assignDone !== null && (
-              <span className="pv-assign-done">
-                <Icon name="circle-check" size={12} strokeWidth={1.8} />
-                {t.providers.assignResult(assignDone.assigned)}
-                {assignDone.skipped > 0 ? t.providers.assignSkipped(assignDone.skipped) : ""}
-              </span>
-            )}
-            {hint.kind === "offer" && (
-              <>
-                <span className="pv-assign-line">{t.providers.assignHint(hint.total)}</span>
-                <span className="pv-assign-sub">{t.providers.assignHintBody}</span>
-                <button
-                  type="button"
-                  className="pv-btn accent"
-                  disabled={view.kind === "assign" || assignBusy}
-                  onClick={openAssign}
-                >
-                  <Icon name="arrow-left-right" size={13} /> {t.providers.assignButton}
-                </button>
-              </>
-            )}
-            {hint.kind === "leftover" && (
-              <span className="pv-assign-sub">{t.providers.assignLeftover(hint.unmatched)}</span>
-            )}
-          </div>
-        )}
-        <div
-          className="pv-list"
-          onDragLeave={(e) => {
-            // relatedTarget 是拖拽进入的下一个元素——还在列表里就不收线
-            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null);
-          }}
-        >
-          {sorted.map((provider) => {
-            const keyed = hasCredentials(provider.auth);
-            return (
-              <button
-                key={provider.id}
-                type="button"
-                className={`pv-row${view.kind === "detail" && provider.id === selectedId ? " on" : ""}${provider.id === dragId ? " dragging" : ""}${dropTarget === provider.id ? " drop-on" : ""}`}
-                title={
-                  provider.auth.scheme === "env"
-                    ? t.providers.keyFromEnv(provider.displayName, provider.auth.envKeys.join(", "))
-                    : provider.displayName
-                }
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData("text/plain", provider.id);
-                  e.dataTransfer.effectAllowed = "move";
-                  setDragId(provider.id);
-                }}
-                onDragEnd={() => {
-                  setDragId(null);
-                  setDropTarget(null);
-                }}
-                onDragOver={(e) => {
-                  if (dragId === null || dragId === provider.id) return;
-                  e.preventDefault();
-                  // 同值返回让 React 跳过无谓的重渲——dragover 事件是高频的
-                  setDropTarget((cur) => (cur === provider.id ? cur : provider.id));
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  void reorderProviders(dragId, provider.id);
-                  setDropTarget(null);
-                }}
-                onClick={() => selectProvider(provider.id)}
-              >
-                {/* 拖拽把手：悬停才浮现，告诉用户这一行能拖（原来靠用户自己发现） */}
-                <span className="pv-grip" aria-hidden="true">
-                  <Icon name="grip-vertical" size={12} />
-                </span>
-                <span className="pv-row-main">
-                  <span className="pv-row-name">{provider.displayName}</span>
-                  {/* 没填 key 直接写出来，不再靠一个空心圆点 + 悬停去猜 */}
-                  {keyed ? (
-                    <span className="pv-row-sub">{hostOf(provider.endpoint.baseUrl)}</span>
-                  ) : (
-                    <span className="pv-row-sub nokey">{t.providers.noApiKey}</span>
-                  )}
-                </span>
-                <span className="pv-row-count" title={`${provider.models.declared.length} models`}>
-                  {provider.models.declared.length}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <button
-          type="button"
-          className="pv-add"
-          aria-pressed={view.kind !== "detail"}
-          onClick={openCatalog}
-        >
-          <Icon name="plus" size={14} /> {t.providers.addProvider}
-        </button>
-      </nav>
-
       <div className="pv-detail">
         {error !== null && (
           <div className="pv-banner">
@@ -686,17 +669,21 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
             <Line tone="busy">{t.providers.loadingProviders}</Line>
           </div>
         )}
-        {error === null && providers !== null && sorted.length === 0 && view.kind === "detail" && (
-          <div className="pv-empty">
-            <Icon name="cpu" size={24} strokeWidth={1.8} />
-            <span>{t.providers.noProviders}</span>
-            <button type="button" className="pv-btn accent lg" onClick={openCatalog}>
-              <Icon name="plus" size={14} /> {t.providers.addProvider}
-            </button>
-          </div>
-        )}
 
-        {view.kind === "catalog" && <CatalogView onCancel={cancelSide} onPick={pickKnown} />}
+        {view.kind === "grid" && providers !== null && (
+          <ProviderGrid
+            providers={sorted}
+            banner={assignBanner}
+            query={query}
+            onQuery={setQuery}
+            onlyAdded={onlyAdded}
+            onOnlyAdded={setOnlyAdded}
+            size={props.cardSize}
+            onSize={props.onCardSize}
+            onOpen={openKind}
+            onAddAnother={pickKnown}
+          />
+        )}
 
         {view.kind === "assign" && providers !== null && assignGroups !== null && (
           <AssignView
@@ -712,6 +699,75 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
         {showForm && known !== undefined && (
           <div className="pv-scroll">
             <div className="pv-content">
+              <button type="button" className="pv-back" onClick={backToGrid}>
+                <Icon name="chevron-left" size={14} /> {t.settings.tabs.providers}
+              </button>
+              <div className="pv-kind">
+                <VendorLogo kindId={known.id} label={known.label} size={22} />
+                <span className="pv-kind-text">
+                  <span className="pv-kind-name">{t.providers.knownLabel(known.id, known.label)}</span>
+                  <span className="pv-kind-note">{t.providers.knownNote(known.id, known.note)}</span>
+                </span>
+              </div>
+              <div
+                className="pv-tabs"
+                role="tablist"
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null);
+                }}
+              >
+                {kindInstances.map((provider) => (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={view.kind === "detail" && provider.id === selectedId}
+                    className={`pv-tab${provider.id === dragId ? " dragging" : ""}${dropTarget === provider.id ? " drop-on" : ""}`}
+                    title={hasCredentials(provider.auth) ? provider.endpoint.baseUrl : t.providers.noApiKey}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData("text/plain", provider.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      setDragId(provider.id);
+                    }}
+                    onDragEnd={() => {
+                      setDragId(null);
+                      setDropTarget(null);
+                    }}
+                    onDragOver={(e) => {
+                      if (dragId === null || dragId === provider.id) return;
+                      e.preventDefault();
+                      setDropTarget((cur) => (cur === provider.id ? cur : provider.id));
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      void reorderProviders(dragId, provider.id);
+                      setDropTarget(null);
+                    }}
+                    onClick={() => selectProvider(provider.id)}
+                  >
+                    <span className="pv-tab-name">{provider.displayName}</span>
+                    {/* 没填 key 直接写出来（原左栏行的口径），不靠一个图标让人猜 */}
+                    {hasCredentials(provider.auth) ? (
+                      <span className="pv-row-count">{provider.models.declared.length}</span>
+                    ) : (
+                      <span className="pv-tab-nokey">{t.providers.noApiKey}</span>
+                    )}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isNew}
+                  className="pv-tab add"
+                  title={t.providers.addAnotherTip(t.providers.knownLabel(known.id, known.label))}
+                  onClick={() => {
+                    if (!isNew) pickKnown(known.id);
+                  }}
+                >
+                  <Icon name="plus" size={13} /> {kindInstances.length === 0 ? t.providers.newProvider : t.providers.addAnother}
+                </button>
+              </div>
               <div className="pv-head">
                 <span className="pv-title">
                   {draft.displayName || (isNew ? t.providers.newProvider : editing?.displayName)}
@@ -1042,7 +1098,7 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
             catalog={catalog}
             decl={editorDecl}
             existingIds={draft.models.map((m) => m.id)}
-            plan={isPlanBilling(known.id)}
+            plan={known.billing === "plan"}
             onApply={applyModel}
             onClose={() => setEditor(null)}
           />
@@ -1112,7 +1168,6 @@ function UrlField(props: {
   );
 }
 
-/** 目录视图：KNOWN_PROVIDERS 的卡片网格——协议跟随条目，没有协议选择框 */
 /** 分配预览（右栏）：每个原模型一行，底部分配 / 取消。 */
 function AssignView(props: {
   preview: AssignPreview;
@@ -1197,53 +1252,172 @@ function AssignView(props: {
   );
 }
 
-function CatalogView(props: { onCancel: () => void; onPick: (kindId: string) => void }) {
+/**
+ * 卡片墙：顶部工具条（搜索 / 仅显示已添加 / 大小两档）+ 三个分区的厂商卡片。
+ * 分区与过滤在 providerCards（纯函数、有测试），这里只画。
+ */
+function ProviderGrid(props: {
+  providers: readonly ProviderDto[];
+  /** 分配模型的提示条（没有就是 null） */
+  banner: React.ReactNode;
+  query: string;
+  onQuery: (query: string) => void;
+  onlyAdded: boolean;
+  onOnlyAdded: (only: boolean) => void;
+  size: ProviderCardSize;
+  onSize: (size: ProviderCardSize) => void;
+  onOpen: (kindId: string) => void;
+  onAddAnother: (kindId: string) => void;
+}) {
   const t = useT();
+  const groups = providerCards(props.providers, {
+    query: props.query,
+    onlyAdded: props.onlyAdded,
+    textOf: (known) => `${t.providers.knownLabel(known.id, known.label)} ${t.providers.knownNote(known.id, known.note)}`,
+  });
+  const addedKinds = new Set(props.providers.map((provider) => kindOf(provider))).size;
   return (
     <div className="pv-scroll">
-      <div className="pv-content">
-        <div className="pv-head">
-          <span className="pv-title">{t.providers.addProvider}</span>
-          <InfoTip label={t.providers.aboutList}>{t.providers.aboutListBody}</InfoTip>
-          <span className="pv-headend">
-            <button type="button" className="pv-btn" onClick={props.onCancel}>
-              {t.common.cancel}
-            </button>
+      <div className="pv-wall">
+        {props.banner}
+        <div className="pv-toolbar">
+          <label className="pv-search">
+            <Icon name="search" size={14} />
+            <input
+              value={props.query}
+              placeholder={t.providers.searchProviders}
+              aria-label={t.providers.searchProviders}
+              onChange={(e) => props.onQuery(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="pv-btn line"
+            aria-pressed={props.onlyAdded}
+            onClick={() => props.onOnlyAdded(!props.onlyAdded)}
+          >
+            <Icon name="list-filter" size={13} /> {t.providers.onlyAdded}
+            <span className="pv-row-count">{addedKinds}</span>
+          </button>
+          <span className="pv-seg" role="group" aria-label={t.providers.cardSize}>
+            {(["large", "small"] as const).map((size) => (
+              <button
+                key={size}
+                type="button"
+                aria-pressed={props.size === size}
+                title={t.providers.cardSizes[size]}
+                onClick={() => props.onSize(size)}
+              >
+                <Icon name={size === "large" ? "layout-grid" : "grid-3x3"} size={13} /> {t.providers.cardSizes[size]}
+              </button>
+            ))}
           </span>
         </div>
-        <div className="pv-catalog">
-          {KNOWN_PROVIDERS.map((k) => (
-            <CatalogCard key={k.id} known={k} onPick={() => props.onPick(k.id)} />
-          ))}
-        </div>
+        {groups.length === 0 && (
+          <div className="pv-wall-empty">
+            {props.onlyAdded && props.query.trim() === "" ? t.providers.noneAdded : t.providers.noProvidersMatch}
+          </div>
+        )}
+        {groups.map(({ group, cards }) => (
+          <section key={group} className="pv-wall-group">
+            <span className="section-label">{t.providers.catalogGroups[group]}</span>
+            <div className={`pv-cards ${props.size}`}>
+              {cards.map((card) => (
+                <ProviderGridCard
+                  key={card.known.id}
+                  card={card}
+                  size={props.size}
+                  onOpen={() => props.onOpen(card.known.id)}
+                  onAddAnother={() => props.onAddAnother(card.known.id)}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
       </div>
     </div>
   );
 }
 
-/** 一张目录卡。`catalog` 徽标 = 模型参数有官方目录可继承（原来是页脚一句说明） */
-function CatalogCard(props: { known: KnownProvider; onPick: () => void }) {
+/**
+ * 一张厂商卡。大卡：logo、名字、说明、底行（没加过写预填地址，加过写实例名）；小卡一行只留
+ * logo、名字与角标。加过的卡右上角「已添加」（多于一个带数字），悬停浮出「+」再加一个。
+ * 卡片本身是 div + role="button"：里面还套着「+」按钮，button 不能嵌 button。
+ */
+function ProviderGridCard(props: {
+  card: ProviderCard;
+  size: ProviderCardSize;
+  onOpen: () => void;
+  onAddAnother: () => void;
+}) {
   const t = useT();
-  const tip = useSettingTip<HTMLSpanElement>(t.providers.catalogTip);
-  return (
-    <button type="button" className="pv-card" onClick={props.onPick}>
-      <span className="pv-card-name">
-        {t.providers.knownLabel(props.known.id, props.known.label)}
-        <Icon name="chevron-right" size={13} />
-      </span>
-      <span className="pv-card-note">{t.providers.knownNote(props.known.id, props.known.note)}</span>
-      <span className="pv-card-meta">
-        <span className="pv-badge">{props.known.api}</span>
-        {props.known.catalogId !== undefined && (
-          <>
-            <span className="pv-badge pv-badge-plain" {...tip.anchor}>
-              <Icon name="book-open" size={11} strokeWidth={1.8} /> {t.providers.catalogBadge}
-            </span>
-            {tip.layer}
-          </>
-        )}
-      </span>
+  const { known, instances } = props.card;
+  const label = t.providers.knownLabel(known.id, known.label);
+  const added = instances.length > 0;
+  const custom = known.baseUrl === "";
+  const badge = added ? (
+    <span className="pv-added-badge">
+      <Icon name="circle-check" size={12} strokeWidth={1.8} />
+      {props.size === "large" && <span>{t.providers.added}</span>}
+      {instances.length > 1 && <span className="pv-mono">{instances.length}</span>}
+    </span>
+  ) : null;
+  const more = added ? (
+    <button
+      type="button"
+      className="pv-card-more"
+      aria-label={t.providers.addAnotherTip(label)}
+      title={t.providers.addAnotherTip(label)}
+      onClick={(e) => {
+        e.stopPropagation();
+        props.onAddAnother();
+      }}
+    >
+      <Icon name="plus" size={13} />
     </button>
+  ) : null;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className={`pv-vcard${custom && !added ? " blank" : ""}`}
+      onClick={props.onOpen}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          props.onOpen();
+        }
+      }}
+    >
+      {props.size === "large" ? (
+        <>
+          <span className="pv-vcard-top">
+            <span className="pv-logo-tile">
+              <VendorLogo kindId={known.id} label={known.label} size={22} />
+            </span>
+            {badge}
+          </span>
+          <span className="pv-vcard-text">
+            <span className="pv-vcard-name">{label}</span>
+            <span className="pv-vcard-note">{t.providers.knownNote(known.id, known.note)}</span>
+          </span>
+          <span className="pv-vcard-foot">
+            {added ? instances.map((provider) => provider.displayName).join(" · ") : custom ? t.providers.customUrl : hostOf(known.baseUrl)}
+          </span>
+          {more}
+        </>
+      ) : (
+        <>
+          <span className="pv-logo-tile sm">
+            <VendorLogo kindId={known.id} label={known.label} size={16} />
+          </span>
+          <span className="pv-vcard-name">{label}</span>
+          {badge}
+          {more}
+        </>
+      )}
+    </div>
   );
 }
 

@@ -10,8 +10,8 @@
  * 但一定要提醒用户」）：确认框里的警示组由 planRevert / planUndo 提供。
  */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { chmod, lstat, mkdir, readFile, readlink, rm, stat } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
 import type { AgentCommand } from "../../shared/agent-ipc.ts";
 import {
   isFileTurnRecord,
@@ -48,7 +48,9 @@ async function diskText(path: string): Promise<{ kind: "absent" } | { kind: "tex
     if (!info.isFile()) return null;
     const bytes = await readFile(path);
     if (bytes.includes(0)) return null;
-    return { kind: "text", content: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+    // ignoreBOM：把开头的 U+FEFF 留在字符串里，与 file-tracker.toSnapshot 同一口径
+    // （两边一边剥一边不剥的话，带 BOM 的文件会被误报「你改过」）。
+    return { kind: "text", content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) };
   } catch {
     return { kind: "absent" };
   }
@@ -107,6 +109,12 @@ function splitRestoreDeletes(
   const deletes: string[] = [];
   for (const [path, before] of restores) {
     if (skip.includes(path)) continue;
+    // unrecoverable 不进这两张清单：它是「还原不了」，不是「将恢复 / 将删除」——
+    // 进了的话确认栏同一文件出两枚矛盾胶囊（恢复 + 无法还原），结论句还会把它数进
+    // 「还原 N 个文件」（N 个里有一个根本还原不了）。它由 plan.unrecoverable 单独
+    // 报告，compareWithDisk 保证三个清单不重叠。执行侧不走这里（restoreFiles 直接看
+    // restores 全量、逐条记 skipped），所以这只影响计划展示，不影响行为。
+    if (before.kind === "unrecoverable") continue;
     if (before.kind === "absent") deletes.push(path);
     else restore.push(path);
   }
@@ -135,6 +143,45 @@ export async function planRevert(store: SessionStore, id: string, targetMessageI
   return { restore, deletes, userModified, unrecoverable };
 }
 
+/**
+ * 解析还原写入的真实目标 + 要补回的权限位。
+ *
+ * 两个坑都出在「临时文件 + rename」上，而 atomic-write 的通用语义不能动
+ * （配置 / 会话元数据等大量消费），这层适配留在还原侧：
+ * 1. 目标是符号链接时，rename 会把**链接本身**换成普通文件，链接指向的文件还原
+ *    不了——pi 的 write / edit 跟随链接写目标文件，tracker 读盘也是跟随读，还原
+ *    同样写到真实目标（悬空链接照此重建目标文件）；
+ * 2. 临时文件是新建的，原文件的权限位（可执行位等）会丢——stat 先记下，写完补回。
+ *    Windows 上 chmod 只作用于只读位，其余位被忽略、不抛错。
+ */
+/** 跟符号链接的跳数上限（与 Linux 的 MAXSYMLINKS 同量级），防链接成环 */
+const MAX_LINK_HOPS = 40;
+
+async function resolveRestoreTarget(path: string): Promise<{ target: string; mode: number | null }> {
+  let target = path;
+  // 链式链接（a → b → c）要一路跟到底：只跟一层会把中间的 b 换成普通文件、c 还原不到。
+  // 设上限防环（a → b → a）：跟满还没到普通文件就按当前这一跳写，不死循环
+  for (let hop = 0; hop < MAX_LINK_HOPS; hop += 1) {
+    try {
+      if (!(await lstat(target)).isSymbolicLink()) break;
+      // realpath 对悬空链接抛 ENOENT，改用 readlink + dirname 拼接
+      const raw = await readlink(target);
+      target = isAbsolute(raw) ? raw : resolve(dirname(target), raw);
+    } catch {
+      // 不在（悬空链接的终点 / 新建路径）：就写这里，rename 不会碰到任何链接
+      break;
+    }
+  }
+  let mode: number | null = null;
+  try {
+    const info = await stat(target);
+    if (info.isFile()) mode = info.mode & 0o777;
+  } catch {
+    // 目标不在（新建路径）：没有权限位要补
+  }
+  return { target, mode };
+}
+
 /** 把一批 before 快照写回磁盘。单文件失败记 skipped，不砸整批。 */
 async function restoreFiles(
   store: SessionStore,
@@ -158,8 +205,15 @@ async function restoreFiles(
         outcomes.push({ path, outcome: "skipped" });
         continue;
       }
-      await mkdir(dirname(path), { recursive: true });
-      await writeTextAtomic(path, content);
+      const { target, mode } = await resolveRestoreTarget(path);
+      await mkdir(dirname(target), { recursive: true });
+      await writeTextAtomic(target, content);
+      if (mode !== null) {
+        // 权限位补回是尽力而为：内容已还原，mode 补不上不该把整条记成失败
+        await chmod(target, mode).catch((cause: unknown) => {
+          console.error("[revert] 补回文件权限位失败（内容已还原）", path, cause);
+        });
+      }
       outcomes.push({ path, outcome: "restored" });
     } catch (cause) {
       console.error("[revert] 还原一个文件失败，记 skipped", path, cause);

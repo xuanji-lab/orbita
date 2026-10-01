@@ -16,10 +16,9 @@
  *
  * 纯注入设计：读盘经 read 回调注入，node --test 可以喂假文件系统。
  */
-import { homedir } from "node:os";
 import { stat, readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
 import { structuredPatch } from "diff";
+import { resolveToCwd } from "@earendil-works/pi-coding-agent";
 import { SNAPSHOT_MAX_BYTES, type FileChangePayload, type SnapshotPayload } from "../shared/revert.ts";
 
 /** 一次读盘的结果：文件不在 / 在（带字节）。读失败（权限等）按「在但不可读」→ unrecoverable。 */
@@ -38,15 +37,14 @@ export const diskReader: PathReader = async (path) => {
   }
 };
 
-/** resolveToCwd 的最小同构（pi core/tools/path-utils）：@ 前缀剥离、unicode 空格归一、~ 展开、cwd 相对解析。 */
-export function resolveToolPath(input: string, cwd: string): string {
-  let normalized = input.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ");
-  if (normalized.startsWith("@")) normalized = normalized.slice(1);
-  const home = homedir();
-  if (normalized === "~") normalized = home;
-  else if (normalized.startsWith("~/")) normalized = resolve(home, normalized.slice(2));
-  return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
-}
+/**
+ * write / edit 工具落盘前解析路径用的就是 pi 的 resolveToCwd（见 pi core/tools/write.js、edit.js）。
+ * tracker 必须与工具算出**同一个**绝对路径，因此这里不自己实现、直接用 pi 的实现——
+ * 手抄一份曾漏掉 win32 的 MSYS/Git-bash 路径折算、`~\` 展开与 file:// URL 转换，
+ * 造成工具写 A 文件、tracker 记 B 路径（两边都不存在 → absent==absent 判「没改动」），
+ * 回退 / 撤销静默失效。resolveToCwd 经 patch 从包公开入口导出（见 patches/）。
+ */
+export const resolveToolPath = resolveToCwd;
 
 /** 字节 → 快照：NUL / 超 1MB / 解不了 utf8 / 读不了 → unrecoverable；不在 → absent。 */
 function toSnapshot(outcome: ReadOutcome): SnapshotPayload {
@@ -55,7 +53,14 @@ function toSnapshot(outcome: ReadOutcome): SnapshotPayload {
   if (outcome.bytes.byteLength > SNAPSHOT_MAX_BYTES) return { kind: "unrecoverable" };
   if (outcome.bytes.includes(0)) return { kind: "unrecoverable" };
   try {
-    return { kind: "text", content: new TextDecoder("utf-8", { fatal: true }).decode(outcome.bytes) };
+    // ignoreBOM：把开头的 U+FEFF 留在字符串里（TextDecoder 默认会剥掉）。快照是字节
+    // 级还原的来源——BOM 在这里被剥掉，还原写回的文件就少了 EF BB BF，git 显示假
+    // 改动（Windows 上 VS 生成的 .cs / .csproj 常带 BOM）。写回时 utf8 编码原样
+    // 还原这三个字节；与 revert.ts 的 diskText 必须同一口径，否则「你改过」会误报。
+    return {
+      kind: "text",
+      content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(outcome.bytes),
+    };
   } catch {
     return { kind: "unrecoverable" };
   }
