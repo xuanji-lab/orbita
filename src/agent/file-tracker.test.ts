@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { TurnFileTracker, resolveToolPath, type ReadOutcome } from "./file-tracker.ts";
 
 /** 假文件系统：path → 字节（Buffer.from）；不在表里 = 文件不存在。 */
@@ -17,14 +18,21 @@ function fakeFsProxy(current: () => Record<string, string>): (path: string) => P
   };
 }
 
-const CWD = "/w";
+// Windows 上 resolve("/w") 会折到当前盘符根（如 C:\w），与工具实际行为一致；期望值一律用同一函数算
+const CWD = resolve("/w");
 
 describe("resolveToolPath", () => {
   test("@ 前缀剥离 + cwd 相对解析", () => {
-    assert.equal(resolveToolPath("@src/a.ts", CWD), "/w/src/a.ts");
-    assert.equal(resolveToolPath("a.ts", CWD), "/w/a.ts");
-    assert.equal(resolveToolPath("/x/a.ts", CWD), "/x/a.ts");
+    assert.equal(resolveToolPath("@src/a.ts", CWD), join(CWD, "src/a.ts"));
+    assert.equal(resolveToolPath("a.ts", CWD), join(CWD, "a.ts"));
+    // 平台原生绝对路径：已归一，原样返回
+    assert.equal(resolveToolPath(join(CWD, "x/a.ts"), CWD), join(CWD, "x/a.ts"));
   });
+
+  test("~ 展开与绝对路径", () => {
+    assert.equal(resolveToolPath("~/x/a.ts", CWD), join(homedir(), "x", "a.ts"));
+  });
+
 });
 
 describe("TurnFileTracker", () => {
@@ -32,12 +40,12 @@ describe("TurnFileTracker", () => {
     let disk: Record<string, string> = {};
     const tracker = new TurnFileTracker(CWD, fakeFsProxy(() => disk));
     await tracker.noteAllowed("c1", "write", { path: "a.ts", content: "one\ntwo\nthree\n" });
-    disk = { "/w/a.ts": "one\ntwo\nthree\n" };
+    disk = { [join(CWD, "a.ts")]: "one\ntwo\nthree\n" };
     await tracker.noteExecutionEnd("c1");
     const changes = await tracker.finalize();
     assert.equal(changes.length, 1);
     const change = changes[0];
-    assert.equal(change?.path, "/w/a.ts");
+    assert.equal(change?.path, join(CWD, "a.ts"));
     assert.deepEqual(change?.before, { kind: "absent" });
     assert.deepEqual(change?.after, { kind: "text", content: "one\ntwo\nthree\n" });
     assert.equal(change?.added, 3);
@@ -76,7 +84,7 @@ describe("TurnFileTracker", () => {
   });
 
   test("before == after 的路径整个丢弃（没有真实改动）", async () => {
-    const tracker = new TurnFileTracker(CWD, fakeFs({ "/w/a.ts": "same\n" }));
+    const tracker = new TurnFileTracker(CWD, fakeFs({ [join(CWD, "a.ts")]: "same\n" }));
     await tracker.noteAllowed("c1", "edit", { path: "a.ts" });
     await tracker.noteExecutionEnd("c1");
     assert.deepEqual(await tracker.finalize(), []);
@@ -91,7 +99,7 @@ describe("TurnFileTracker", () => {
 
   test(">1MB 或二进制：unrecoverable，照常出现在账里（卡片计数、回退标无法回退）", async () => {
     const big = "a".repeat(1024 * 1024 + 1);
-    const tracker = new TurnFileTracker(CWD, fakeFs({ "/w/big.txt": big, "/w/bin.png": "\u0000\u0001" }));
+    const tracker = new TurnFileTracker(CWD, fakeFs({ [join(CWD, "big.txt")]: big, [join(CWD, "bin.png")]: "\u0000\u0001" }));
     await tracker.noteAllowed("c1", "write", { path: "big.txt" });
     await tracker.noteExecutionEnd("c1");
     await tracker.noteAllowed("c2", "write", { path: "bin.png" });
@@ -112,9 +120,5 @@ describe("TurnFileTracker", () => {
     assert.deepEqual(changes[0]?.before, { kind: "text", content: "old\n" });
     assert.deepEqual(changes[0]?.after, { kind: "absent" });
     assert.equal(changes[0]?.removed, 1);
-  });
-
-  test("~ 展开与绝对路径", () => {
-    assert.equal(resolveToolPath("~/x/a.ts", CWD), `${homedir()}/x/a.ts`);
   });
 });
