@@ -53,7 +53,14 @@ function toSnapshot(outcome: ReadOutcome): SnapshotPayload {
   if (outcome.bytes.byteLength > SNAPSHOT_MAX_BYTES) return { kind: "unrecoverable" };
   if (outcome.bytes.includes(0)) return { kind: "unrecoverable" };
   try {
-    return { kind: "text", content: new TextDecoder("utf-8", { fatal: true }).decode(outcome.bytes) };
+    // ignoreBOM：把开头的 U+FEFF 留在字符串里（TextDecoder 默认会剥掉）。快照是字节
+    // 级还原的来源——BOM 在这里被剥掉，还原写回的文件就少了 EF BB BF，git 显示假
+    // 改动（Windows 上 VS 生成的 .cs / .csproj 常带 BOM）。写回时 utf8 编码原样
+    // 还原这三个字节；与 revert.ts 的 diskText 必须同一口径，否则「你改过」会误报。
+    return {
+      kind: "text",
+      content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(outcome.bytes),
+    };
   } catch {
     return { kind: "unrecoverable" };
   }
