@@ -76,15 +76,19 @@ export function RevertPreviewBar(props: {
 }) {
   const t = useT();
   const cancelRef = useRef<HTMLButtonElement | null>(null);
+  // 监听只在挂载时注册一次，取消回调与 busy 经 ref 读最新值：直接闭包 props 的话，
+  // 拿到的是挂载那一拍的 onCancel（它记着 busy=false）——回退执行到一半按 Esc 会把确认栏提前关掉
+  const latest = useRef({ onCancel: props.onCancel, busy: props.busy });
+  latest.current = { onCancel: props.onCancel, busy: props.busy };
   useEffect(() => {
     // 不画程序焦点环：聚焦是为键盘路径，不是在提示「按这里」
     cancelRef.current?.focus({ focusVisible: false } as FocusOptions);
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") props.onCancel();
+      if (event.key !== "Escape" || latest.current.busy) return;
+      latest.current.onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const chips = chipsOf(props.plan);
   const moving = chips.filter((chip) => chip.effect !== "stuck").length;
