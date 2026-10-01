@@ -32,6 +32,7 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
@@ -393,6 +394,33 @@ void app.whenReady().then(async () => {
       void sessions.setPiSessionFile(event.sessionId, event.piSessionFile).catch(() => undefined);
       return;
     }
+    // 轮尾文件账：落盘（recorder 写 blob + FileTurnRecord）之外，给 renderer 广播
+    // 的是**剥掉正文的视图**（fileTurnView）——轮尾卡片不吃快照正文，1MB 的文件
+    // 内容没有理由过 renderer 的 IPC。这是「主进程只转发不加工」的第二个例外
+    // （第一个是落盘本身），理由同：正文进 renderer 是纯浪费。
+    if (event.type === "fileTurn") {
+      // 等**落盘完**再广播，并带上落盘记录的真 id——renderer 的轮尾卡拿它当 key
+      // 与撤销的 turnId（单轮撤销按它回查账本），自造 id 会对不上盘
+      void sessions
+        .recordFileTurn(event.sessionId, event.changes)
+        .then((record) => {
+          if (record === null) return;
+          broadcastAgentEvent({
+            type: "fileTurnView",
+            sessionId: event.sessionId,
+            turnId: record.id,
+            changes: record.changes.map((change) => ({
+              path: change.path,
+              added: change.added,
+              removed: change.removed,
+            })),
+          });
+        })
+        .catch((cause: unknown) =>
+          console.error("[session] 轮尾文件账落盘失败", event.sessionId, cause),
+        );
+      return;
+    }
     record(event);
     broadcastAgentEvent(event);
   });
@@ -413,6 +441,7 @@ void app.whenReady().then(async () => {
     agentHost,
     carryovers,
     providers,
+    (path) => browserSandbox.openLocalFile(path),
   );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
@@ -450,6 +479,8 @@ void app.whenReady().then(async () => {
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
+  // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
+  registerReviewIpc(sessions);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,

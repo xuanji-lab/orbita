@@ -15,6 +15,7 @@ import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpServerInfo } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
+import type { FileChangePayload, FileChangeView } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
@@ -153,6 +154,22 @@ export const ipcChannels = {
   carryoverCreate: "carryover:create",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
   carryoverSetStatus: "carryover:set-status",
+  /** 会话回退：算计划（确认框列清单用），不执行 */
+  sessionRevertPlan: "session:revert-plan",
+  /** 会话回退：撤回目标消息及之后全部（对话 + pi 本子 + 文件快照） */
+  sessionRevert: "session:revert",
+  /** 单轮撤销：算计划（确认框列清单用），不执行 */
+  sessionUndoPlan: "session:undo-plan",
+  /** 单轮撤销：只还原这一轮改过的文件，pi 本子追加一条告知模型 */
+  sessionUndo: "session:undo",
+  /** 轮尾产物打开方式一：在内置浏览器「你的」tab 打开网页文件（仅会话文件账里的 .html/.htm/.svg） */
+  sessionOpenArtifactInBrowser: "session:open-artifact-in-browser",
+  /** 轮尾产物打开方式二：在系统文件管理器里定位它（仅会话文件账里记过的文件） */
+  sessionRevealArtifact: "session:reveal-artifact",
+  /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
+  reviewList: "review:list",
+  /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
+  reviewDiff: "review:diff",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */
@@ -618,6 +635,36 @@ export type AgentCommand =
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
+  | {
+      /**
+       * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：打开源本子 →
+       * 按 getBranch()（当前叶子路径）对账 → 裁到 roles 前缀之后（roles 为空 =
+       * 回退到开头，resetLeaf）→ 追加一条 `orbita-revert` custom 条目把新叶子落盘。
+       * 不开新文件、不碰活 manager——回退后下一次开轮自然从新叶子继续。
+       * 完成（或拒绝）经 `piBookEdited` / `failed` 事件回传。
+       */
+      type: "revertPiBook";
+      sessionId: string;
+      sourcePiSessionFile: string;
+      cwd: string;
+      /** 生效列表里目标消息之前的 user/assistant 角色序列；空 = 回退到首条消息之前 */
+      roles: readonly ("user" | "assistant")[];
+      /** 回退目标（我们转录里的 user 消息 id）——写进界碑 details，排障用 */
+      targetMessageId: string;
+    }
+  | {
+      /**
+       * 单轮撤销的 pi 侧一刀：打开源本子，在当前叶子追加一条 custom_message
+       * （进上下文，告知模型用户撤销了那轮文件改动）。会话必须不在跑——
+       * 在跑由 runtime 拒绝（宁拒不切错）。完成经 `piBookEdited` / `failed` 回传。
+       */
+      type: "undoPiBook";
+      sessionId: string;
+      sourcePiSessionFile: string;
+      cwd: string;
+      /** 告知模型的那句通知（含文件清单） */
+      notice: string;
+    }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
@@ -797,6 +844,21 @@ export type AgentEvent =
 | { type: "skillsChanged" }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
+  /**
+   * 一轮落定时的文件账（agent 进程的快照跟踪器报来）：正文内联，主进程写 blob
+   * 后落 FileTurnRecord。没有改动的轮不发（不落空记录）。
+   */
+  | { type: "fileTurn"; sessionId: string; changes: readonly FileChangePayload[] }
+  /**
+   * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
+   * 与统计——renderer 的轮尾卡片不吃正文，1MB 的文件内容没有理由过这道 IPC。
+   */
+  | { type: "fileTurnView"; sessionId: string; turnId: string; changes: readonly FileChangeView[] }
+  /**
+   * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的
+   * pending 等待者吃掉它——renderer 不消费，不广播。
+   */
+  | { type: "piBookEdited"; sessionId: string; edit: "revert" | "undo" }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
   /**
    * 模型生成的会话标题（C-3 的 `generateTitle` 命令翻译而来）。**只在成功时发**：

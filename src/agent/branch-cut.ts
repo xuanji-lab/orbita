@@ -11,6 +11,11 @@
  * 条目施加同一个排除谓词（isEmptyErrorAssistantEntry），否则被打断过的会话从漂移点
  * 起就再也分支不了。
  *
+ * **对账输入必须是当前叶子路径（getBranch()），不是文件序（getEntries()）**：
+ * 会话回退会在 pi 本子里留度枝（branch 之后再追加，旧枝的条目还躺在文件中段），
+ * 文件序会把度枝也数进来，从第一次回退起对账必然错位。getBranch() 只走
+ * root → 当前叶子这一条路，度枝天然不在其中（分支功能同改，2026-11 会话回退）。
+ *
  * 其余漂移（如同毫秒排序）仍然拒绝分支——**宁可拒绝分支，不可切错位置**：
  * 切错意味着用户以为带着 A 之前的前文，实际带的是 B 的。
  *
@@ -42,16 +47,18 @@ export function isEmptyErrorAssistantEntry(entry: BranchCutEntry): boolean {
 }
 
 /**
- * 算 pi 侧的裁点 entry id。
+ * 算 pi 侧的裁点 entry id（会话回退与分支共用）。
  *
- * @param entries pi 文件里的全部条目（含 session 头，顺序即文件顺序）
- * @param roles   我们这本账前缀（含锚点）的 user/assistant 角色序列
- * @throws 两本账对不上（长度或顺序）、roles 为空、锚点不是 assistant
+ * @param entries pi 本子当前叶子路径上的全部条目（getBranch()，root → leaf；含 session 头）
+ * @param roles   生效列表里裁点之前的 user/assistant 角色序列；**空序列合法**（回退到
+ *                首条消息之前，返回 null，调用方走 resetLeaf）
+ * @throws 两本账对不上（长度或顺序）
+ * @returns 裁点 entry id（含它连带的 toolResult）；null = 裁到最前（resetLeaf）
  */
-export function planBranchCut(
+export function planCutEntry(
   entries: readonly BranchCutEntry[],
   roles: readonly ("user" | "assistant")[],
-): string {
+): string | null {
   // pi 侧被计入对账的条目：message 条目里的 user/assistant（toolResult 不计——
   // 它在我们账上是 role:"tool" 的记录，两边各自消化，不入序列）
   const counted: { id: string; role: "user" | "assistant"; fileIndex: number }[] = [];
@@ -65,24 +72,23 @@ export function planBranchCut(
     if (role === "user" || role === "assistant") counted.push({ id: entry.id, role, fileIndex: i });
   }
 
-  if (roles.at(-1) !== "assistant") {
-    throw new Error(roles.length === 0 ? "No messages before the branch point" : "The branch point must be an agent reply");
-  }
+  // 空序列 = 裁到最前：整本都不要了
+  if (roles.length === 0) return null;
 
-  // 对账只对前缀：pi 文件里还有锚点之后的后文（counted 更长是常态）。
+  // 对账只对前缀：pi 文件里还有裁点之后的后文（counted 更长是常态）。
   // pi 的消息比本地记录还少 = 账对不上；前 N 位任何一位不合也是。
   if (counted.length < roles.length) {
     throw new Error(
-      `Ledger mismatch: pi has ${counted.length} messages, local records have ${roles.length} — cannot branch`,
+      `Ledger mismatch: pi has ${counted.length} messages, local records have ${roles.length} — cannot cut`,
     );
   }
   for (let i = 0; i < roles.length; i++) {
     if (counted[i]?.role !== roles[i]) {
-      throw new Error("Message order mismatch between the two ledgers — cannot branch");
+      throw new Error("Message order mismatch between the two ledgers — cannot cut");
     }
   }
   const anchor = counted[roles.length - 1];
-  if (anchor === undefined) throw new Error("No messages before the branch point");
+  if (anchor === undefined) throw new Error("No messages before the cut point");
 
   // 锚点条目向后连吃它的 toolResult——上下文要完整（有调用必须有结果，缺结果的
   // tool_use 会被 LLM API 拒收）。遇到别的（user / assistant / 压缩界碑 / 非消息
@@ -95,4 +101,23 @@ export function planBranchCut(
     fileIndex++;
   }
   return entries[fileIndex]?.id ?? anchor.id;
+}
+
+/**
+ * 算 pi 侧的裁点 entry id（分支专用：在 planCutEntry 上加「锚点必须是 assistant 回答」
+ * 的门槛——界面只在轮末 agent 回答下给分支入口，这里是信任边界的再校验）。
+ */
+export function planBranchCut(
+  entries: readonly BranchCutEntry[],
+  roles: readonly ("user" | "assistant")[],
+): string {
+  if (roles.length === 0) {
+    throw new Error("No messages before the branch point");
+  }
+  if (roles.at(-1) !== "assistant") {
+    throw new Error("The branch point must be an agent reply");
+  }
+  const cut = planCutEntry(entries, roles);
+  if (cut === null) throw new Error("No messages before the branch point");
+  return cut;
 }

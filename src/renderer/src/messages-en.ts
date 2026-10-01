@@ -1,5 +1,6 @@
 import { thinkingLevelLabel, type ThinkingLevel } from "../../shared/thinking.ts";
 import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
+import type { ReviewSource } from "../../shared/review.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -63,6 +64,31 @@ export const en = {
     save: "Save",
     apply: "Apply",
     reset: "Reset",
+  },
+
+  review: {
+    title: "Review",
+    source: (source: ReviewSource): string =>
+      source === "task" ? "This task" : source === "unstaged" ? "Unstaged" : source === "staged" ? "Staged" : "vs upstream",
+    refresh: "Refresh",
+    noTask: "Open a task to review its changes.",
+    errorTitle: "Couldn't load changes",
+    titleNotRepo: "Not a Git repository",
+    titleNoGit: "Git isn't available",
+    titleNoUpstream: "No upstream branch",
+    emptyNoChangesDetail: (source: ReviewSource): string =>
+      source === "task"
+        ? "Files the agent writes or edits in this task show up here, compared with how they were before."
+        : "Nothing to show from this source right now. Switch sources or refresh after the next change.",
+    emptyNoChanges: "No changes yet",
+    emptyNotRepo: 'This folder is not a Git repository — the Git sources need one. "This task" works everywhere.',
+    emptyNoGit: 'Git is not installed on this machine. "This task" works without it.',
+    emptyNoUpstream: "This branch has no upstream — nothing to compare against.",
+    againstUpstream: (name: string) => `Compared with ${name}`,
+    restored: "Restored",
+    restoredEmpty: "Identical to the baseline — nothing to show.",
+    noBaseline: "No baseline",
+    binary: "Binary",
   },
 
   /** 思考档的显示名：英文沿用 shared 的词（含模型家族专属叫法，如 claude 的 Extra） */
@@ -191,6 +217,7 @@ export const en = {
 
   rail: {
     files: "Files",
+    review: "Review changes",
     skills: "Skills",
     mcp: "MCP servers",
     sideChat: "Side chat Ctrl+Alt+D",
@@ -863,6 +890,48 @@ export const en = {
     waitingOutput: "(waiting for output…)",
     noOutput: "(no output)",
     branchFromHere: "Branch from here",
+    revertHere: "Revert to here — removes this message and everything after, restores the files it changed, and puts the text back in the composer",
+    revertBusy: "Wait for this task to finish before reverting",
+    revertReadOnly: "This task has no agent session to revert",
+    previewRevertLead: (files: number, yours: number): string =>
+      files === 0
+        ? "Go back to before this message? Everything after it is removed."
+        : `Go back to before this message? Everything after it is removed and ${files} file${files === 1 ? "" : "s"} go back${yours > 0 ? ` — ${yours} of them you edited, your edits will be overwritten` : ""}.`,
+    previewUndoLead: (files: number, yours: number): string =>
+      `Undo this round's file changes? ${files} file${files === 1 ? "" : "s"} go back to before it${yours > 0 ? ` — ${yours} of them changed since, those changes will be overwritten` : ""}. The conversation stays.`,
+    previewEffect: (effect: "restore" | "delete" | "yours" | "later" | "stuck"): string =>
+      effect === "restore" ? "restore" : effect === "delete" ? "delete" : effect === "yours" ? "you edited" : effect === "later" ? "later rounds edited" : "can't restore",
+    previewEffectHint: (effect: "restore" | "delete" | "yours" | "later" | "stuck"): string =>
+      effect === "restore"
+        ? "Goes back to its content from before."
+        : effect === "delete"
+          ? "Didn't exist before, so it will be deleted."
+          : effect === "yours"
+            ? "Changed after the agent finished (by you or a shell command). Those edits will be overwritten by the snapshot."
+            : effect === "later"
+              ? "Later rounds also changed this file. Undoing restores it to before this round, so their changes go too."
+              : "No snapshot (too large or not text). This file is left as it is.",
+    previewCut: "Everything from here will be removed",
+    revertTitle: "Revert conversation",
+    revertConfirm: "Revert",
+    revertShellNote: "Files changed only by shell commands are not tracked and will not be reverted.",
+    revertOutcome: (outcome: "restored" | "deleted" | "skipped"): string =>
+      outcome === "restored" ? "Restored" : outcome === "deleted" ? "Deleted" : "Not restored",
+    revertRestored: (n: number) => `${n} file${n === 1 ? "" : "s"} restored`,
+    revertDeleted: (n: number) => `${n} deleted`,
+    revertSkipped: (n: number) => `${n} not restored (no snapshot)`,
+    revertedHere: "Reverted — the conversation continued from here",
+    undoTitle: "Undo file changes",
+    undoConfirm: "Undo changes",
+    fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
+    fileCardExpand: "Show changed files",
+    fileCardCollapse: "Hide changed files",
+    fileCardUndo: "Undo",
+    fileCardUndoHint: "Undo this round's file changes — the conversation stays",
+    fileCardUndone: "Undone",
+    fileCardWebPage: "Web page",
+    openInOrbita: "Open in orbita",
+    revealArtifact: "Show in folder",
     worked: "Worked",
     thought: "thought",
     lines: (n: number) => `${n} lines`,

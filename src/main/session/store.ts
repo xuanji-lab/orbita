@@ -42,6 +42,15 @@ import {
   type SessionRecord,
 } from "../../shared/session.ts";
 import type { ChannelStore } from "../channel/store.ts";
+import { SnapshotStore } from "./snapshots.ts";
+import {
+  isFileTurnRecord,
+  isRevertRecord,
+  isUndoRecord,
+  type FileChange,
+  type FileChangePayload,
+  type FileTurnRecord,
+} from "../../shared/revert.ts";
 
 /**
  * 会话 id 必须长得像 `randomUUID()`。
@@ -162,6 +171,12 @@ export class SessionStore {
   private readonly workbenchesDir: string;
 
   /**
+   * 快照正文仓（sessions/<id>.snapshots/，revert.ts）：轮尾账的 before / after
+   * 正文按内容寻址存在这里，JSONL 只存引用。与会话同生共死（remove 一并删）。
+   */
+  readonly snapshots: SnapshotStore;
+
+  /**
    * 每条会话的 meta 写入链（见 `queueMeta`）。会话删掉时清掉自己那条，
    * 不然长会话跑一天下来这里会攒下一堆已经没人要的 promise。
    */
@@ -177,6 +192,7 @@ export class SessionStore {
     this.dir = dir;
     this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
     this.channels = channels;
+    this.snapshots = new SnapshotStore(dir);
   }
 
   private metaPath(id: string): string {
@@ -420,7 +436,49 @@ export class SessionStore {
   }
 
   /**
-   * 改名。**改成空名字就退回推导**——侧栏里一行看不见的东西比一个坏名字更糟，
+   * 轮尾文件账落盘（recorder 收到 fileTurn 事件时调）：正文写 blob、记录里只存
+   * 引用。单个 blob 写失败降级成 unrecoverable（那一轮那一个文件回退不了，
+   * 但整轮的账还在）——快照是回退能力的代价面，不是对话的依赖面。
+   */
+  async recordFileTurn(
+    id: string,
+    changes: readonly FileChangePayload[],
+  ): Promise<FileTurnRecord | null> {
+    if (changes.length === 0) return null;
+    const persisted: FileChange[] = [];
+    for (const change of changes) {
+      persisted.push({
+        path: change.path,
+        before: await this.persistSnapshot(id, change.before),
+        after: await this.persistSnapshot(id, change.after),
+        added: change.added,
+        removed: change.removed,
+      });
+    }
+    const record: FileTurnRecord = {
+      role: "file-turn",
+      id: randomUUID(),
+      timestamp: Date.now(),
+      changes: persisted,
+    };
+    await this.record(id, record);
+    return record;
+  }
+
+  private async persistSnapshot(
+    id: string,
+    payload: FileChangePayload["before"],
+  ): Promise<FileChange["before"]> {
+    if (payload.kind !== "text") return payload;
+    try {
+      return { kind: "text", blob: await this.snapshots.save(id, payload.content) };
+    } catch (cause) {
+      console.error("[session] 快照 blob 没存下，该文件这一轮无法回退", cause);
+      return { kind: "unrecoverable" };
+    }
+  }
+
+  /**
    * 用户会以为会话丢了（工作区改名走的是同一条规矩：空名退回路径末段）。
    * **任何显式改名（含改空）都记成 `user`**：auto-title 永不覆盖用户起的名字，
    * 连「用户清掉的名字」也不该在几条消息后自己长回来——那会被当成改名丢失。
@@ -794,6 +852,8 @@ export class SessionStore {
     await rm(this.metaPath(id), { force: true });
     // 原图在 meta 之后删：删失败最多残留一个没人引用的目录，不会出现「会话还在、图没了」
     await rm(this.attachmentsPath(id), { recursive: true, force: true });
+    // 快照正文仓同理（回退能力的代价面，跟会话一起走）
+    await rm(join(this.dir, `${id}.snapshots`), { recursive: true, force: true });
     // 工作台最后删：它删失败最多残留一个无引用目录（不进列表、不吵任何人）；
     // 若排在前头、账本还没删就崩，则留一条「有工作台却列不出来」的半残会话。
     await rm(this.workbenchPath(id), { recursive: true, force: true });
@@ -812,10 +872,30 @@ export class SessionStore {
   }
 
   /**
-   * 读日志。**逐行解析、坏行跳过**——只追加的文件最后一行可能因为断电写了一半，
-   * 为此丢掉整条会话的记录是不划算的。
+   * 读日志的**原始全量**（不做回退折叠）。唯一的消费者是审查面板的 task 来源
+   * （`main/review/task-source.ts`）：基线 = 本任务首次改该文件前的快照，**含已
+   * 撤回轮次**——回退不抹掉「这个任务动过哪些文件」的事实，面板看的是盘上现状
+   * 与最初基线的净差。其余读者（load / export / branch / read_task）都要生效视图，
+   * 用 readLog。
+   */
+  readRawLog(id: string): Promise<SessionRecord[]> {
+    return this.readLogEntries(id);
+  }
+
+  /**
+   * 读日志（**生效视图**）：逐行解析、坏行跳过——只追加的文件最后一行可能因为
+   * 断电写了一半，为此丢掉整条会话的记录是不划算的。回退界碑（revert 记录）在
+   * 这里折叠生效列表：截到它的 targetMessageId 之前，界碑本身留下（界面画
+   * 「已回退」+ 还原卡）。目标不在生效列表里（自身已被更早的回退折掉）只留界碑，
+   * 不折叠——坏记录不该连带丢掉后面的真历史。
    */
   private async readLog(id: string): Promise<SessionRecord[]> {
+    // 生效视图 = 原始全量 + 回退界碑折叠（见 readRawLog 的注释：只有 task 来源要全量）
+    return this.foldReverts(await this.readLogEntries(id));
+  }
+
+  /** 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环。 */
+  private async readLogEntries(id: string): Promise<SessionRecord[]> {
     let raw: string;
     try {
       raw = await readFile(this.logPath(id), "utf8");
@@ -839,15 +919,44 @@ export class SessionStore {
           records.push(parsed);
           continue;
         }
+        // 文件账三件（revert.ts）同一条纪律：字段齐的收下，不齐的跳过
+        if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) {
+          records.push(parsed);
+          continue;
+        }
         const suspect = parsed as { role?: unknown } | null;
         if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") continue;
         if (suspect !== null && typeof suspect === "object" && suspect.role === "channel-mark") continue;
+        if (
+          suspect !== null &&
+          typeof suspect === "object" &&
+          (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo")
+        ) {
+          continue;
+        }
         records.push(parsed as TranscriptItem);
       } catch {
         // 半截行：跳过它，前面读到的照常返回
       }
     }
     return records;
+  }
+
+  /**
+   * 回退界碑折叠：界碑把生效列表截到它的 targetMessageId 之前（该消息及之后全部
+   * 撤出），界碑自己留下（界面画「已回退」+ 还原卡）。目标不在列表里（自身已被更早
+   * 的回退折掉）只留界碑、不折叠——坏记录不该连带丢掉后面的真历史。
+   */
+  private foldReverts(records: readonly SessionRecord[]): SessionRecord[] {
+    const effective: SessionRecord[] = [];
+    for (const record of records) {
+      if (isRevertRecord(record)) {
+        const target = effective.findIndex((item) => item.id === record.targetMessageId);
+        if (target >= 0) effective.length = target;
+      }
+      effective.push(record);
+    }
+    return effective;
   }
 }
 

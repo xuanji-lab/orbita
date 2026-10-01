@@ -24,6 +24,30 @@ const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入"
  * - 省略号跟原型用单个「…」（菜单项「移到…」、进行中「正在载入…」）。
  */
 export const zh: Messages = {
+  review: {
+    title: "审查",
+    source: (source) =>
+      source === "task" ? "本任务改动" : source === "unstaged" ? "未暂存" : source === "staged" ? "已暂存" : "与上游对比",
+    refresh: "刷新",
+    noTask: "先打开一个任务，才能看它的改动。",
+    errorTitle: "读不出改动",
+    titleNotRepo: "不是 Git 仓库",
+    titleNoGit: "这台电脑没有 Git",
+    titleNoUpstream: "没有上游分支",
+    emptyNoChangesDetail: (source) =>
+      source === "task"
+        ? "agent 在这个任务里写入或编辑的文件会列在这里，与改动之前对比。"
+        : "这个来源下暂时没有改动。可以切换来源，或等下次改动后刷新。",
+    emptyNoChanges: "还没有改动",
+    emptyNotRepo: "这个文件夹不是 Git 仓库——Git 三个来源需要一个仓库。「本任务改动」不需要。",
+    emptyNoGit: "这台机器没有安装 Git。「本任务改动」不依赖它。",
+    emptyNoUpstream: "当前分支没有上游，对比不了。",
+    againstUpstream: (name) => `与 ${name} 对比`,
+    restored: "已还原",
+    restoredEmpty: "与基线一致——没有可展示的差异。",
+    noBaseline: "无基线",
+    binary: "二进制",
+  },
   common: {
     cancel: "取消",
     close: "关闭",
@@ -167,6 +191,7 @@ export const zh: Messages = {
 
   rail: {
     files: "文件",
+    review: "审查改动",
     skills: "技能",
     mcp: "MCP 服务",
     sideChat: "辅助对话 Ctrl+Alt+D",
@@ -788,6 +813,48 @@ export const zh: Messages = {
     waitingOutput: "（等待输出…）",
     noOutput: "（没有输出）",
     branchFromHere: "从这里分支",
+    revertHere: "回到这里——撤回这条消息及之后全部，还原被改的文件，原文放回输入框",
+    revertBusy: "等这个任务跑完再回退",
+    revertReadOnly: "这个任务没有智能体会话，回退不了",
+    previewRevertLead: (files, yours) =>
+      files === 0
+        ? "回到这条消息之前？之后的对话会撤回。"
+        : `回到这条消息之前？之后的对话会撤回，还原 ${files} 个文件${yours > 0 ? `——其中 ${yours} 个你改过，你的改动会被覆盖` : ""}。`,
+    previewUndoLead: (files, yours) =>
+      `撤销这一轮的文件改动？${files} 个文件回到这一轮之前${yours > 0 ? `——其中 ${yours} 个之后又被改过，那些改动会被覆盖` : ""}。对话不动。`,
+    previewEffect: (effect) =>
+      effect === "restore" ? "恢复" : effect === "delete" ? "删除" : effect === "yours" ? "你改过" : effect === "later" ? "后续轮改过" : "无法还原",
+    previewEffectHint: (effect) =>
+      effect === "restore"
+        ? "回到改动之前的内容。"
+        : effect === "delete"
+          ? "之前不存在，会被删除。"
+          : effect === "yours"
+            ? "智能体改完之后又被改过（你或 shell 命令）。这些改动会被快照覆盖。"
+            : effect === "later"
+              ? "后面的轮次也改过这个文件。撤销会把它还原到这一轮之前，后面的改动一起没了。"
+              : "没有快照（太大或不是文本），这个文件保持原样。",
+    previewCut: "从这里起的对话将被撤回",
+    revertTitle: "回退对话",
+    revertConfirm: "回退",
+    revertShellNote: "只被终端命令改过的文件不在账上，不会回退。",
+    revertOutcome: (outcome: "restored" | "deleted" | "skipped") =>
+      outcome === "restored" ? "已恢复" : outcome === "deleted" ? "已删除" : "未还原",
+    revertRestored: (n: number) => `还原了 ${n} 个文件`,
+    revertDeleted: (n: number) => `删除 ${n} 个`,
+    revertSkipped: (n: number) => `${n} 个没还原（无快照）`,
+    revertedHere: "已回退——对话从这里重新来过",
+    undoTitle: "撤销文件改动",
+    undoConfirm: "撤销改动",
+    fileCardChanged: (n: number) => `${n} 个文件已更改`,
+    fileCardExpand: "展开改动的文件",
+    fileCardCollapse: "收起改动的文件",
+    fileCardUndo: "撤销",
+    fileCardUndoHint: "撤销这一轮的文件改动——对话不动",
+    fileCardUndone: "已撤销",
+    fileCardWebPage: "网页",
+    openInOrbita: "在 orbita 打开",
+    revealArtifact: "打开文件位置",
     worked: "用时",
     thought: "思考",
     lines: (n) => `${n} 行`,
