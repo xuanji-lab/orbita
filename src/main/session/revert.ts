@@ -10,8 +10,8 @@
  * 但一定要提醒用户」）：确认框里的警示组由 planRevert / planUndo 提供。
  */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { chmod, lstat, mkdir, readFile, readlink, rm, stat } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
 import type { AgentCommand } from "../../shared/agent-ipc.ts";
 import {
   isFileTurnRecord,
@@ -135,6 +135,38 @@ export async function planRevert(store: SessionStore, id: string, targetMessageI
   return { restore, deletes, userModified, unrecoverable };
 }
 
+/**
+ * 解析还原写入的真实目标 + 要补回的权限位。
+ *
+ * 两个坑都出在「临时文件 + rename」上，而 atomic-write 的通用语义不能动
+ * （配置 / 会话元数据等大量消费），这层适配留在还原侧：
+ * 1. 目标是符号链接时，rename 会把**链接本身**换成普通文件，链接指向的文件还原
+ *    不了——pi 的 write / edit 跟随链接写目标文件，tracker 读盘也是跟随读，还原
+ *    同样写到真实目标（悬空链接照此重建目标文件）；
+ * 2. 临时文件是新建的，原文件的权限位（可执行位等）会丢——stat 先记下，写完补回。
+ *    Windows 上 chmod 只作用于只读位，其余位被忽略、不抛错。
+ */
+async function resolveRestoreTarget(path: string): Promise<{ target: string; mode: number | null }> {
+  let target = path;
+  try {
+    if ((await lstat(path)).isSymbolicLink()) {
+      // realpath 对悬空链接抛 ENOENT，改用 readlink + dirname 拼接
+      const raw = await readlink(path);
+      target = isAbsolute(raw) ? raw : resolve(dirname(path), raw);
+    }
+  } catch {
+    // 链接读不出（路径不在等）：按原路径写，rename 不会碰到任何链接
+  }
+  let mode: number | null = null;
+  try {
+    const info = await stat(target);
+    if (info.isFile()) mode = info.mode & 0o777;
+  } catch {
+    // 目标不在（新建路径）：没有权限位要补
+  }
+  return { target, mode };
+}
+
 /** 把一批 before 快照写回磁盘。单文件失败记 skipped，不砸整批。 */
 async function restoreFiles(
   store: SessionStore,
@@ -158,8 +190,15 @@ async function restoreFiles(
         outcomes.push({ path, outcome: "skipped" });
         continue;
       }
-      await mkdir(dirname(path), { recursive: true });
-      await writeTextAtomic(path, content);
+      const { target, mode } = await resolveRestoreTarget(path);
+      await mkdir(dirname(target), { recursive: true });
+      await writeTextAtomic(target, content);
+      if (mode !== null) {
+        // 权限位补回是尽力而为：内容已还原，mode 补不上不该把整条记成失败
+        await chmod(target, mode).catch((cause: unknown) => {
+          console.error("[revert] 补回文件权限位失败（内容已还原）", path, cause);
+        });
+      }
       outcomes.push({ path, outcome: "restored" });
     } catch (cause) {
       console.error("[revert] 还原一个文件失败，记 skipped", path, cause);
