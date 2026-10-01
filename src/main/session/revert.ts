@@ -109,6 +109,12 @@ function splitRestoreDeletes(
   const deletes: string[] = [];
   for (const [path, before] of restores) {
     if (skip.includes(path)) continue;
+    // unrecoverable 不进这两张清单：它是「还原不了」，不是「将恢复 / 将删除」——
+    // 进了的话确认栏同一文件出两枚矛盾胶囊（恢复 + 无法还原），结论句还会把它数进
+    // 「还原 N 个文件」（N 个里有一个根本还原不了）。它由 plan.unrecoverable 单独
+    // 报告，compareWithDisk 保证三个清单不重叠。执行侧不走这里（restoreFiles 直接看
+    // restores 全量、逐条记 skipped），所以这只影响计划展示，不影响行为。
+    if (before.kind === "unrecoverable") continue;
     if (before.kind === "absent") deletes.push(path);
     else restore.push(path);
   }

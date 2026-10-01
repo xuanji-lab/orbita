@@ -217,6 +217,9 @@ describe("planRevert / executeRevert", () => {
     ]);
     const plan = await planRevert(store, ID, "u1");
     assert.deepEqual(plan.unrecoverable, [join(lab, "big.txt")]);
+    // 不进 restore/deletes 清单（确认栏只出「无法还原」一枚胶囊，结论句不把它数进「还原 N 个文件」）
+    assert.deepEqual(plan.restore, []);
+    assert.deepEqual(plan.deletes, []);
     const outcomes = await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
     assert.deepEqual(outcomes, [{ path: join(lab, "big.txt"), outcome: "skipped" }]);
     assert.equal((await readFile(join(lab, "big.txt"), "utf8")).length, big.length);
