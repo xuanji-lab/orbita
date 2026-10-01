@@ -1690,6 +1690,21 @@ function ComposerBar(props: {
   // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
   // 模型卡片的行（两行：模型名 + 厂商）与左栏（全部 / 各厂商）。
   // 设置面那份「按厂商分组」的构造还在用，两边的参数口径（ctx 徽标、当前项）同源。
+  /**
+   * 宽度尺：**不过滤**的那一份（与上面同一套构造，只把 scope 换成「全部」）。
+   * 卡片按它定宽，所以左栏怎么筛宽、高、位置都不动。
+   */
+  const modelWidthItems: MenuItem[] = modelCardItems({
+    t,
+    providers: session.usable,
+    catalog,
+    selected: session.model,
+    scope: MODEL_SCOPE_ALL,
+    starred: props.starredModels,
+    onToggleStar: props.onToggleStarModel,
+    onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
+  });
+
   const modelItems: MenuItem[] = modelCardItems({
     t,
     providers: session.usable,
@@ -1824,11 +1839,7 @@ function ComposerBar(props: {
           // 宽度不由「筛剩的那几条」定，而是由**全部配置好的模型名**里最长的那条定
           // （宽度尺），所以点左栏过滤时卡片宽、高、位置都不动
           panelMaxWidth={480}
-          widthRuler={[
-            ...session.usable.flatMap((provider) => provider.models.declared.map((model) => model.id)),
-            // 副行（厂商名）也参与：某家名字比任何模型名都长时，它才是宽度的那条基准
-            ...session.usable.map((provider) => provider.displayName),
-          ]}
+          widthItems={modelWidthItems}
           // 定高：外壳 + 六行。卡片大小不跟着「筛剩几个模型」变——
           // 否则点一次左栏过滤就换一个尺寸，位置也跟着跳（2026-10-01 用户实测）
           listRows={6}

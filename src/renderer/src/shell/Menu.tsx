@@ -164,14 +164,15 @@ export function Menu(props: {
    */
   listRows?: number;
   /**
-   * 宽度尺：面板宽度按这些文字里**最长的那一条**定，与当前可见的行无关。
+   * 宽度尺：**不过滤**的完整行清单。它们会被画成真实的行，但不可见、不占高——
+   * 面板宽度因此由「全部配置好的模型」决定，与当前筛剩几条无关。
    *
-   * 为什么需要它：卡片按内容收放时，左栏一过滤可见的名字就换了一批——宽度跟着换，
-   * 卡片就换尺寸、位置也跟着跳（2026-10-01 用户实测）。把「全部配置好的模型名」
-   * 交给它，卡片的宽度就只跟**配置**有关，与筛剩几条无关。
-   * 实现是一段不可见、不占高的文字（由 CSS 自己撑宽），不是用 JS 量字宽。
+   * 为什么不是「一串名字」：行宽 ≠ 名字宽，行还有图标槽、徽标、星（固定零件约 116px）。
+   * 只摆名字的尺子在筛到短名字时会被**行本身**超过——实测尺子 183px、一行 226px，
+   * 宽度照样跟着过滤变（2026-10-01 第二次返工）。所以尺子必须是整行，而且得是同一套
+   * `MenuRow` 画出来的——手写一份「像行的东西」迟早会跟真行脱节。
    */
-  widthRuler?: readonly string[];
+  widthItems?: readonly MenuItem[];
   /**
    * 搜索词的回声。搜索是**一切过滤的旁路**：调用方拿它把左栏的选中复位到「全部」，
    * 否则会出现「左栏亮着某家、列表里全是别家」这种自相矛盾的画面。
@@ -315,7 +316,7 @@ export function Menu(props: {
         ? prev
         : { top: placed.top, left: placed.left, cap, fixed },
     );
-  }, [props.align, props.placement, props.panelMaxHeight, props.listRows, close]);
+  }, [props.align, props.placement, props.listRows, props.panelMaxHeight, close]);
 
   // 首次打开：先按旧位置渲染但不可见，量到真实高度之后再定位——菜单高度取决于
   // 内容，不先量就只能猜。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下。
@@ -564,23 +565,19 @@ export function Menu(props: {
                 style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
               >
                 {/*
-                  宽度尺：摆着全部配置好的名字（不可见、不占高），让面板的宽度由它们里
-                  最长的一条决定。它**不跟着过滤变**，所以卡片宽度也不跟着过滤变。
+                  宽度尺：不过滤的全部行（同一套 MenuRow 画的），不可见也不占高。
+                  它们撑住面板宽度，所以左栏怎么筛都不换尺寸。
                 */}
-                {props.widthRuler !== undefined && (
-                  <div
-                    aria-hidden
-                    style={{
-                      height: 0,
-                      overflow: "hidden",
-                      visibility: "hidden",
-                      whiteSpace: "nowrap",
-                      fontSize: "var(--font-size-control)",
-                      pointerEvents: "none",
-                    }}
-                  >
-                    {props.widthRuler.map((text, index) => (
-                      <div key={`${text}#${index}`}>{text}</div>
+                {props.widthItems !== undefined && (
+                  <div aria-hidden style={{ height: 0, overflow: "hidden", visibility: "hidden" }}>
+                    {props.widthItems.map((item) => (
+                      <MenuRow
+                        key={`ruler:${item.id}`}
+                        item={item}
+                        cursor={false}
+                        onHover={() => {}}
+                        onSelect={() => {}}
+                      />
                     ))}
                   </div>
                 )}
