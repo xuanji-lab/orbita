@@ -486,3 +486,12 @@ describe("parseSettings 的 browserDownloadDir（受管浏览器下载目录）"
     deepStrictEqual(parseSettings({ browserDownloadDir: 42 }).browserDownloadDir, undefined);
   });
 });
+
+describe("parseSettings 的 providerCardSize（模型服务的卡片尺寸）", () => {
+  it("large / small 留下，其余当没选过（缺席 = large）", () => {
+    deepStrictEqual(parseSettings({ providerCardSize: "small" }).providerCardSize, "small");
+    deepStrictEqual(parseSettings({ providerCardSize: "large" }).providerCardSize, "large");
+    deepStrictEqual("providerCardSize" in parseSettings({ providerCardSize: "huge" }), false);
+    deepStrictEqual("providerCardSize" in parseSettings({}), false);
+  });
+});

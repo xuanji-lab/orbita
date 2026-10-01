@@ -9,6 +9,10 @@
  * 所以这里连一次，所有会话共享同一批工具。
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+// 客户端握手里的版本号随包走，不另放一份字面量——政策是每次改动 patch +1，
+// 硬编码的副本会在下一次 bump 时静默说谎。`with { type: "json" }` 是 node --test
+// 原生加载本文件的要求（裸导入 JSON 报 ERR_IMPORT_ATTRIBUTE_MISSING）
+import packageJson from "../../package.json" with { type: "json" };
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -150,7 +154,7 @@ export class McpHub {
   }
 
   private async connect(name: string, server: McpServer): Promise<Connected> {
-    const client = new Client({ name: "orbita", version: "0.0.0" }, { capabilities: {} });
+    const client = new Client({ name: "orbita", version: packageJson.version }, { capabilities: {} });
     const transport = createTransport(server);
     await withTimeout(client.connect(transport), CONNECT_TIMEOUT_MS, `连接 ${name} 超时`);
     this.clients.set(name, client);

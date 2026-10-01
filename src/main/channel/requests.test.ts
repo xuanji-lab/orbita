@@ -13,6 +13,7 @@ import {
   applyChannelSend,
   applyDelegate,
   applySpeak,
+  applyStop,
   resolveSubSessionModel,
   type ChannelDeps,
 } from "./requests.ts";
@@ -65,7 +66,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** 假 deps：submitTurn / steer / broadcast 只记调用，不做真事。 */
+/** 假 deps：submitTurn / steer / abort / broadcast 只记调用，不做真事。 */
 function fakeDeps(overrides: {
   providers?: ProviderDto[];
   settings?: AppSettings;
@@ -75,10 +76,14 @@ function fakeDeps(overrides: {
   deps: ChannelDeps;
   submitCalls: SubmitAgentInput[];
   steerCalls: { sessionId: string; text: string; delivery: ChannelDelivery }[];
+  abortCalls: string[];
+  handoffCancels: string[];
   broadcastCalls: ChannelEvent[];
 } {
   const submitCalls: SubmitAgentInput[] = [];
   const steerCalls: { sessionId: string; text: string; delivery: ChannelDelivery }[] = [];
+  const abortCalls: string[] = [];
+  const handoffCancels: string[] = [];
   const broadcastCalls: ChannelEvent[] = [];
   const deps: ChannelDeps = {
     sessions,
@@ -93,12 +98,18 @@ function fakeDeps(overrides: {
     steer: (sessionId, text, delivery) => {
       steerCalls.push({ sessionId, text, delivery });
     },
+    abort: async (sessionId) => {
+      abortCalls.push(sessionId);
+    },
+    cancelBrowserHandoff: (sessionId) => {
+      handoffCancels.push(sessionId);
+    },
     phases: overrides.phases ?? new Map(),
     broadcast: (event) => {
       broadcastCalls.push(event);
     },
   };
-  return { deps, submitCalls, steerCalls, broadcastCalls };
+  return { deps, submitCalls, steerCalls, abortCalls, handoffCancels, broadcastCalls };
 }
 
 describe("resolveSubSessionModel", () => {
@@ -454,5 +465,143 @@ describe("applySpeak", () => {
     await assert.rejects(() => applySpeak(deps, { parentId: PARENT, childId: OTHER, text: "x", delivery: "steer" }));
     await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
     await assert.rejects(() => applySpeak(deps, { parentId: PARENT, childId: CHILD, text: "   ", delivery: "steer" }));
+  });
+});
+
+/** 造一对父子 + 一条 task，stopped 系列测试的公共底座 */
+async function seedChannel(): Promise<void> {
+  await sessions.ensureSession(baseMeta({ id: PARENT }));
+  await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+  await channels.append({ parentId: PARENT, childId: CHILD }, {
+    id: "task-1",
+    from: "parent",
+    author: "model",
+    kind: "task",
+    text: "去把外壳重做",
+    delivery: "followUp",
+    createdAt: 1,
+  });
+}
+
+/** 直接在账本里造一条 stop（applyStop 的产物形状），给发信 / 终止测试当底座 */
+async function seedStop(): Promise<void> {
+  await channels.append({ parentId: PARENT, childId: CHILD }, {
+    id: "stop-1",
+    from: "parent",
+    author: "user",
+    kind: "stop",
+    text: "",
+    delivery: "followUp",
+    createdAt: 2,
+  });
+}
+
+describe("applyStop", () => {
+  test("在跑的子：abort + 结交接 + 账本落 stop，广播翻 stopped", async () => {
+    await seedChannel();
+    const phases = new Map<string, SessionPhase>([[CHILD, "turn"]]);
+    const { deps, abortCalls, handoffCancels, broadcastCalls, submitCalls, steerCalls } = fakeDeps({ phases });
+
+    await applyStop(deps, { parentId: PARENT, childId: CHILD });
+
+    assert.deepEqual(abortCalls, [CHILD]);
+    assert.deepEqual(handoffCancels, [CHILD]);
+    // 终止不开新轮、不注入——只有停
+    assert.equal(submitCalls.length, 0);
+    assert.equal(steerCalls.length, 0);
+    const stop = (await channels.load({ parentId: PARENT, childId: CHILD })).at(-1);
+    assert.equal(stop?.kind, "stop");
+    assert.equal(stop?.author, "user");
+    assert.equal(stop?.from, "parent");
+    assert.equal(broadcastCalls.some((event) => event.type === "status" && event.status === "stopped"), true);
+    assert.equal(broadcastCalls.some((event) => event.type === "message"), true);
+  });
+
+  test("空闲的子（在等回复的那种）：不 abort、不拉起 runtime，其余照旧", async () => {
+    await seedChannel();
+    const { deps, abortCalls, handoffCancels } = fakeDeps();
+
+    await applyStop(deps, { parentId: PARENT, childId: CHILD });
+
+    assert.deepEqual(abortCalls, []);
+    // 交接照样显式结一次（幂等）：不依赖 phase 事件的时序，也覆盖「空闲但交接还挂着」
+    assert.deepEqual(handoffCancels, [CHILD]);
+    assert.equal((await channels.load({ parentId: PARENT, childId: CHILD })).at(-1)?.kind, "stop");
+  });
+
+  test("校验失败抛错：父不存在 / 不是它的子 / 已 stopped（幂等护栏不静默）", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    await sessions.ensureSession(baseMeta({ id: OTHER }));
+    await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+    const { deps } = fakeDeps();
+    await assert.rejects(() => applyStop(deps, { parentId: "nope", childId: CHILD }));
+    await assert.rejects(() => applyStop(deps, { parentId: PARENT, childId: OTHER }));
+    await seedStop();
+    await assert.rejects(() => applyStop(deps, { parentId: PARENT, childId: CHILD }), /already stopped/);
+    // 幂等护栏拦下后账本里仍只有那一条 stop
+    const messages = await channels.load({ parentId: PARENT, childId: CHILD });
+    assert.equal(messages.filter((m) => m.kind === "stop").length, 1);
+  });
+});
+
+describe("stopped 通道上的发信（用户裁决的硬拦）", () => {
+  test("父模型的 reply 被拒——错误文本告诉模型子会话已被用户终止，路指向用户", async () => {
+    await seedChannel();
+    await seedStop();
+    const { deps, submitCalls, steerCalls, broadcastCalls } = fakeDeps();
+    const outcome = await applyChannelSend(
+      deps,
+      channelSendEvent({ sessionId: PARENT, to: { childId: CHILD }, kind: "reply", text: "继续干" }),
+    );
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) assert.match(outcome.error, /stopped by the user/);
+    // 不落账、不投递、不广播——终止就是终止
+    assert.equal((await channels.load({ parentId: PARENT, childId: CHILD })).length, 2);
+    assert.equal(submitCalls.length, 0);
+    assert.equal(steerCalls.length, 0);
+    assert.equal(broadcastCalls.length, 0);
+  });
+
+  test("子的回报同样被拒——通道关了，report_to_parent 不再落账", async () => {
+    await seedChannel();
+    await seedStop();
+    const { deps } = fakeDeps();
+    const outcome = await applyChannelSend(deps, channelSendEvent({ kind: "progress", text: "还在跑" }));
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) assert.match(outcome.error, /stopped by the user/);
+    assert.equal((await channels.load({ parentId: PARENT, childId: CHILD })).length, 2);
+  });
+
+  test("用户代父发言（applySpeak）不被拦：落 user 的 reply、重开、照常投递给子", async () => {
+    await seedChannel();
+    await seedStop();
+    const { deps, submitCalls } = fakeDeps();
+
+    const message = await applySpeak(deps, {
+      parentId: PARENT,
+      childId: CHILD,
+      text: "重新开始，接着做",
+      delivery: "steer",
+    });
+    assert.equal(message.kind, "reply");
+    assert.equal(message.author, "user");
+    // 子空闲：重开的这条投递退化普通开轮
+    assert.equal(submitCalls.length, 1);
+    const messages = await channels.load({ parentId: PARENT, childId: CHILD });
+    assert.equal(messages.length, 3);
+    assert.equal(messages.at(-1)?.id, message.id);
+  });
+
+  test("用户重开之后父模型的 reply 恢复可用——通道翻回 running，不再拦", async () => {
+    await seedChannel();
+    await seedStop();
+    const { deps } = fakeDeps();
+    await applySpeak(deps, { parentId: PARENT, childId: CHILD, text: "重新开始", delivery: "steer" });
+
+    const outcome = await applyChannelSend(
+      deps,
+      channelSendEvent({ sessionId: PARENT, to: { childId: CHILD }, kind: "reply", text: "补充一点" }),
+    );
+    assert.equal(outcome.ok, true);
   });
 });

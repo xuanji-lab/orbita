@@ -10,6 +10,7 @@
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
+import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
@@ -79,9 +80,12 @@ export interface ChannelMarkRecord {
   peerId: string;
   /** 指向的通道消息 id（`ChannelMessage.id`） */
   messageId: string;
-  /** 冷数据，免得画一行标记还要先读通道：谁发的、什么类型 */
+  /** 冷数据，免得画一行标记还要先读通道：谁发的 */
   from: "parent" | "child";
-  kind: "task" | "reply" | "question" | "progress" | "done" | "failed";
+  /** 什么类型。跟着 ChannelMessageKind 走（stop 理论上不出现——标记只落在收到
+   * 投递的一侧，而 stop 不投递给任何人；但 parseChannelPrompt 认识它，类型上
+   * 诚实比防御性收窄好） */
+  kind: ChannelMessageKind;
   timestamp: number;
 }
 
@@ -95,7 +99,7 @@ export function isChannelMarkRecord(raw: unknown): raw is ChannelMarkRecord {
     typeof value["messageId"] === "string" &&
     (value["from"] === "parent" || value["from"] === "child") &&
     typeof value["kind"] === "string" &&
-    ["task", "reply", "question", "progress", "done", "failed"].includes(value["kind"]) &&
+    (CHANNEL_MESSAGE_KINDS as readonly string[]).includes(value["kind"]) &&
     typeof value["timestamp"] === "number"
   );
 }

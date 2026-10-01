@@ -263,6 +263,16 @@
 }
 
 /*
+ * Sub-sessions 面板会话层的控制行（SubSessionsPanel.tsx 的 SubSessionControls）：
+ * 芯片允许被 flex 压缩（同 .composer-bottom-bar 的局部豁免与理由，不外溢到别的
+ * 消费者——侧栏筛选行还指着 chip 默认的「宁溢不缩」）：面板 320px 起，档位（84）+
+ * 模型名 + 终止并排，模型名随时可省略号截断（chip-label 自常 ellipsis）。
+ */
+.subsession-controls .chip {
+  min-width: 0;
+}
+
+/*
  * ModeChip（Sidebar 的模式 tab，role="tab"）：静止态就是主字色，不必等 hover 才升级——
  * 不走安静控件默认的「secondary 起步」。选中同样优先于禁用（同 Chip）。
  */

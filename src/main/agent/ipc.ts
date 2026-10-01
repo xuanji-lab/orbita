@@ -22,7 +22,7 @@ import {
 import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
+import { knownModelParams, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
@@ -81,13 +81,9 @@ export async function resolveProviderSecrets(
     }),
     // pi 目录里这家叫什么。**模型官方参数按它查**——我们的 id 与目录 id 不是一回事
     // （zhipu-coding ↔ zai-coding-cn），拿自己的 id 查一无所获，1M 会被拍成 128k。
-    ...(catalogIdOf(dto.id) === undefined ? {} : { catalogId: catalogIdOf(dto.id) }),
+    // 按条目认（knownProviderOf）而不是按 id：第二个 DeepSeek 实例（deepseek-2）同样吃目录参数
+    ...(knownProviderOf(dto).catalogId === undefined ? {} : { catalogId: knownProviderOf(dto).catalogId }),
   };
-}
-
-/** 这家在 pi 目录里的 id。自建 provider 不在表里 → undefined，由 runtime 落兜底。 */
-function catalogIdOf(providerId: string): string | undefined {
-  return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.catalogId;
 }
 
 /** AgentTurnContext 的 renderer 载荷 → AgentCommand 的公共字段（submit / interrupt / compact 共用）。 */
