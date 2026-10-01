@@ -33,8 +33,6 @@ export interface AppTray {
   beginQuit(): void;
   /** 必须销毁，否则进程退不掉（Electron 的经典坑） */
   destroy(): void;
-  refresh(language: Language): void;
-  hint(): void;
 }
 
 export function installCloseToTray(options: TrayOptions): AppTray {
@@ -96,10 +94,5 @@ export function installCloseToTray(options: TrayOptions): AppTray {
   return {
     beginQuit: () => gate.beginQuit(),
     destroy: () => tray.destroy(),
-    refresh: (language) => {
-      labels = trayLabels(language);
-      rebuildMenu();
-    },
-    hint,
   };
 }
