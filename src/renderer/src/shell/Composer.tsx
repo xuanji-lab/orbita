@@ -171,12 +171,13 @@ export function Composer(props: {
   useEffect(() => {
     if (panelOpen) props.onReloadSkills();
   }, [panelOpen, props.onReloadSkills]);
-  const inSlashMode = slashMode(props.value);
+  // 依赖是**值**而不是「是否在 / 模式」那个布尔：Esc 关闭后继续打字要重开面板，
+  // 而多打一个字不会让布尔变——拿布尔当依赖，"esc" 就永远清不掉（2026-10-01 真机验收抓到）
   useEffect(() => {
-    if (!inSlashMode) setCommandsClosed(null);
+    if (!slashMode(props.value)) setCommandsClosed(null);
     // "esc" 类关闭在继续输入时重开；"insert" 保持（只有离开 / 前缀才重置）
     else setCommandsClosed((closed) => (closed === "esc" ? null : closed));
-  }, [inSlashMode]);
+  }, [props.value]);
   useEffect(() => setActiveCommand(0), [commandQuery]);
   // 键盘选中滚出可视区时带动面板滚动（用户实测：↑↓ 只在列表内移动，长列表
   // 时选中项躲在 overflow 外看不见）。block:"nearest" 只在需要时滚，不抖
