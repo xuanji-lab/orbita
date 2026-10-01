@@ -82,6 +82,7 @@ token 规范与实现不一致时以设计系统为准。
 ## 分支 / PR / 版本
 
 - **一个功能一个 PR**。commit 前缀：`feat(scope):` / `fix(scope):` / `perf(scope):` / `chore(scope):` / `docs(scope):`。`perf` 只给以性能为目的、用户可见行为不变的改动，正文必须附改动前后的实测数字。
+- **分支名 = `<type>/<scope>-<短描述>`；归 xiaozf99 的那条尾缀加 `-X`**。本 agent 代 xiaozf99 开的分支一律带 `-X`（如 `fix/menu-scroll-overflow-X`），别人提的分支不带——尾缀只标归属，不替代名字要说的那件事。scope 落在真实模块上，不挂计划编号。
 - **commit 与 PR 标题只说功能与 bug，不说计划编号**。「A 线」「B-1」「M0/M1」是计划文档的坐标，
   计划文档最终会被删，编号随之失去所指——半年后读 `git log` 的人看到「B-1 补强二」不知道那是什么。
   标题写开发了什么 / 解决了什么（`feat(agent): read_task 给模型一份会话索引`，不是 `feat(agent): B-1 修复`）；
