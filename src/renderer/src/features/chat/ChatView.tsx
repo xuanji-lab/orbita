@@ -1803,8 +1803,10 @@ function UsageRing(props: { session: ChatSession }) {
   const busy = session.phase !== "idle";
   // 包月制的 provider 不显示花费——那个数字是拿 API 价目表算的估价，不是他的账单。
   // 认不得的 id（自建网关）一律当按量算：藏起真实花费比多一行估价更坏。
-  const billing =
-    session.model !== null && isPlanBilling(session.model.providerId) ? "plan" : "metered";
+  // 按目录条目判（同一家的第二个实例也认得出），所以要拿到这条会话用的 provider 本身
+  const provider =
+    session.model === null ? undefined : session.usable.find((item) => item.id === session.model?.providerId);
+  const billing = provider !== undefined && isPlanBilling(provider) ? "plan" : "metered";
   /**
    * 压缩走两段式（与侧栏 Delete 同一副骨架，wafo 2026-09-03 裁决）：
    * 用户意愿优先——不再拿「内容太少」当拒绝理由，改说「价值不大」再让他确认。

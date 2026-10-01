@@ -74,6 +74,13 @@ export interface ProviderEndpoint {
 
 export interface Provider {
   id: ProviderId;
+  /**
+   * 来自哪个目录条目（`KNOWN_PROVIDERS` 的 id）。同一家可以加多个实例（不同账号 / key），
+   * 第二个的 id 是 `deepseek-2` 这样的存储主键，光凭 id 认不出它是 DeepSeek——于是目录参数、
+   * 套餐计费、设置页的厂商卡片都会把它当成“兼容”。缺席（老数据）时由
+   * `knownProviderOf` 按 id 推断，不需要迁移。
+   */
+  kind?: string;
   displayName: string;
   endpoint: ProviderEndpoint;
   auth: ProviderAuth;
@@ -126,6 +133,9 @@ export function validateProvider(input: unknown): ValidationIssue[] {
 
   if (typeof p["id"] !== "string" || !ID_PATTERN.test(p["id"])) {
     push("id", "id must be lowercase letters, digits or dashes (1–64 chars)");
+  }
+  if (p["kind"] !== undefined && typeof p["kind"] !== "string") {
+    push("kind", "kind must be a string");
   }
   if (typeof p["displayName"] !== "string" || p["displayName"].trim() === "") {
     push("displayName", "display name is required");

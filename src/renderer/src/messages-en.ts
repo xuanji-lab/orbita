@@ -18,17 +18,20 @@ import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
 const KNOWN_NOTES: Record<string, string> = {
   deepseek: "DeepSeek official API",
   zhipu: "Zhipu open platform standard API (billed per token)",
-  "zhipu-coding": "Coding Plan subscription, via the Anthropic-compatible endpoint",
-  zai: "Zhipu's international site; accounts are separate from the China site",
-  stepfun: "StepFun official API (Step plan endpoint; the URL must include /v1)",
-  "opencode-go": "OpenCode Zen gateway — one key for models from many vendors (DeepSeek / MiniMax…)",
+  "zhipu-coding": "GLM Coding Plan subscription, via the Anthropic-compatible endpoint",
+  zai: "GLM Coding Plan on Zhipu's international site; accounts are separate from the China site",
+  stepfun: "Step Plan subscription (the URL must include /v1)",
+  "kimi-coding": "Kimi Code membership, via the Anthropic-compatible endpoint",
+  "opencode-go": "OpenCode Go subscription — one key for open models from many vendors (DeepSeek / MiniMax…)",
   "anthropic-compatible": "Self-hosted gateway / private deployment; the client appends /v1/messages to your URL",
   "openai-compatible":
     "Self-hosted gateway / private deployment; include the version segment, the client appends /chat/completions",
 };
 
 const KNOWN_LABELS: Record<string, string> = {
-  zai: "Z.AI (International)",
+  zhipu: "Zhipu",
+  "zhipu-coding": "Zhipu",
+  stepfun: "StepFun",
   "anthropic-compatible": "Anthropic-compatible",
   "openai-compatible": "OpenAI-compatible",
 };
@@ -452,7 +455,6 @@ export const en = {
     noApiKey: "No API key",
     addProvider: "Add provider",
     loadingProviders: "Loading providers…",
-    noProviders: "No providers",
     // —— 给导入的会话分配模型 ——
     assignHint: (count: number) =>
       `${count} imported session${count === 1 ? "" : "s"} still ${count === 1 ? "needs" : "need"} a model`,
@@ -512,10 +514,22 @@ export const en = {
     removeModel: (id: string) => `Remove ${id}`,
     apiFormatTip: "API format · set by the provider preset · to switch protocol, add a different entry",
     urlSuffixTip: "The client appends this path",
-    aboutList: "About this list",
-    aboutListBody: "Only adapters verified against real endpoints · the protocol follows the entry you pick",
-    catalogTip: "Model parameters come from the built-in catalog",
-    catalogBadge: "catalog",
+    /** 「添加服务商」目录的三个分区标题（knownProviderGroup） */
+    /** 模型服务卡片墙的工具条与卡片 */
+    searchProviders: "Search providers, URLs or your own names",
+    onlyAdded: "Added only",
+    cardSize: "Card size",
+    cardSizes: { large: "Large", small: "Small" },
+    noProvidersMatch: "No providers match · a self-hosted gateway can use Custom compatible",
+    noneAdded: "No providers added yet · turn off Added only to see them all",
+    addAnother: "Add another",
+    addAnotherTip: (name: string) => `Add another ${name} (a second account or key)`,
+    customUrl: "Your own URL",
+    catalogGroups: {
+      api: "API providers",
+      plan: "Coding plans",
+      custom: "Custom compatible",
+    },
     /** 目录卡的说明：shared 的 note 是中文，英文界面在这里给英文；查不到退回 shared 原文 */
     knownNote: (id: string, fallback: string) => KNOWN_NOTES[id] ?? fallback,
     /** 目录卡的名字：只有带描述性中文的几条要换（「Anthropic 兼容」），厂商名原样 */
