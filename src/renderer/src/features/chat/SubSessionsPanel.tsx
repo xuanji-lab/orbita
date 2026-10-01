@@ -13,7 +13,7 @@
  */
 import { useCallback, useState } from "react";
 import { childSessions, type SessionMeta } from "@shared/session";
-import { PERMISSION_MODES, type PermissionMode } from "@shared/permission";
+import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { Chip } from "../../shell/Chip";
@@ -242,9 +242,9 @@ export function SubSessionsPanel(props: {
  * 底栏里改」同一条路，含 lastUsed 启动恢复点的跟随）。
  *
  * **与主槽的一个差别**：子会话的下一轮由主进程按 meta 装配（deliverToChild），
- * 不经 renderer 的排队投递——changeMode / chooseModel 只在空闲时落 meta，子会话
- * 在跑时那一笔会丢（下一轮还是旧档 / 旧模型）。所以在跑时补一发直连 IPC 把 meta
- * 当场落下去。**在跑时两者都当场生效，不等下一轮**：档位改的是 agent 进程账本，工具
+ * 不经 renderer 的排队投递——chooseModel 只在空闲时落 meta，子会话在跑时那一笔
+ * 会丢（下一轮还是旧模型），所以在跑时补一发直连 IPC 把 meta 当场落下去。
+ * changeMode 不用补：它不论空闲与否都发 agent:set-mode（档位联动子会话那一刀改的）。**在跑时两者都当场生效，不等下一轮**：档位改的是 agent 进程账本，工具
  * 审批闸门每次调用现场读账；模型经 pi 的 setModel 写进 agent.state.model，pi 在同一次
  * 运行的下一次模型调用前（prepareNextTurn）就换上新模型。
  *
@@ -268,13 +268,6 @@ function SubSessionControls(props: {
   const report = (cause: unknown): void =>
     setError(cause instanceof Error ? cause.message : String(cause));
 
-  const changeMode = (next: PermissionMode): void => {
-    view.changeMode(next);
-    if (view.phaseOf(props.childId) !== "idle") {
-      void api.agent.setMode(props.childId, next).catch(report);
-    }
-  };
-
   const chooseModel = (providerId: string, modelId: string): void => {
     view.chooseModel(providerId, modelId);
     if (view.phaseOf(props.childId) !== "idle") {
@@ -297,7 +290,7 @@ function SubSessionControls(props: {
     id: value,
     label: t.permissionModes[value].label,
     checked: view.mode === value,
-    onSelect: () => changeMode(value),
+    onSelect: () => view.changeMode(value),
   }));
 
   const modelItems: MenuItem[] = modelMenuItems({
