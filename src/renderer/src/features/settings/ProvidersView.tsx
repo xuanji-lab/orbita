@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import "./providers-view.css";
-import { KNOWN_PROVIDERS, isPlanBilling, type KnownProvider } from "@shared/known-providers";
+import {
+  KNOWN_PROVIDERS,
+  isPlanBilling,
+  knownProviderGroup,
+  type KnownProvider,
+  type KnownProviderGroup,
+} from "@shared/known-providers";
 import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinProvider } from "@shared/agent-ipc";
@@ -1197,6 +1203,9 @@ function AssignView(props: {
   );
 }
 
+/** 目录分区的先后：官方 API 最常用在前，自建兼容入口沉底 */
+const CATALOG_GROUPS: readonly KnownProviderGroup[] = ["api", "plan", "custom"];
+
 function CatalogView(props: { onCancel: () => void; onPick: (kindId: string) => void }) {
   const t = useT();
   return (
@@ -1211,11 +1220,21 @@ function CatalogView(props: { onCancel: () => void; onPick: (kindId: string) => 
             </button>
           </span>
         </div>
-        <div className="pv-catalog">
-          {KNOWN_PROVIDERS.map((k) => (
-            <CatalogCard key={k.id} known={k} onPick={() => props.onPick(k.id)} />
-          ))}
-        </div>
+        {/* 三个分区：API / 套餐订阅 / 自建兼容（knownProviderGroup）。空区不画标题 */}
+        {CATALOG_GROUPS.map((group) => {
+          const items = KNOWN_PROVIDERS.filter((k) => knownProviderGroup(k) === group);
+          if (items.length === 0) return null;
+          return (
+            <section key={group} className="pv-catalog-group">
+              <span className="section-label">{t.providers.catalogGroups[group]}</span>
+              <div className="pv-catalog">
+                {items.map((k) => (
+                  <CatalogCard key={k.id} known={k} onPick={() => props.onPick(k.id)} />
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
     </div>
   );

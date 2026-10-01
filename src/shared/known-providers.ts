@@ -258,6 +258,22 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     note: "StepFun 官方 API（Step 套餐端点，地址要带到 /v1）",
   },
   {
+    id: "kimi-coding",
+    label: "Kimi Coding Plan",
+    /*
+     * Kimi 会员（Kimi Code）的编程端点。走 Anthropic 兼容协议——与 pi 内建的 kimi-coding
+     * 条目同一个 baseUrl 与协议（客户端接 /v1/messages），模型参数（k3 / k3-256k /
+     * kimi-for-coding）直接继承它的目录。不走 OpenAI 兼容的 /coding/v1：那条路要靠
+     * pi-ai 补丁把 api.kimi.com 认成 Moonshot 才不发 developer 角色，Anthropic 协议
+     * 没有这个问题。
+     */
+    api: "anthropic-messages",
+    baseUrl: "https://api.kimi.com/coding",
+    catalogId: "kimi-coding",
+    billing: "plan",
+    note: "Kimi 会员订阅（Kimi Code），走 Anthropic 兼容端点",
+  },
+  {
     id: "opencode-go",
     label: "OpenCode Go",
     api: "openai-completions",
@@ -325,6 +341,18 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     note: "自建网关 / 私有部署，地址要带到版本段，客户端接 /chat/completions",
   },
 ];
+
+/**
+ * 「添加服务商」目录的三个分区：按量计费的官方 API / 套餐订阅 / 自建的兼容网关。
+ * **从条目已有的字段推出来，不另立字段**：没有预填地址（baseUrl 为空）= 兼容入口；
+ * 套餐计费 = 订阅；其余 = API。新加条目只要 billing 与 baseUrl 写对，分区自动跟着对。
+ */
+export type KnownProviderGroup = "api" | "plan" | "custom";
+
+export function knownProviderGroup(provider: KnownProvider): KnownProviderGroup {
+  if (provider.baseUrl === "") return "custom";
+  return provider.billing === "plan" ? "plan" : "api";
+}
 
 /**
  * 这家是不是包月制。**认不得的 id（自建网关、以后新加的）一律当按量算**——

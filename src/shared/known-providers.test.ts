@@ -1,6 +1,6 @@
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { KNOWN_PROVIDERS, isPlanBilling, knownModelParams } from "./known-providers.ts";
+import { KNOWN_PROVIDERS, isPlanBilling, knownModelParams, knownProviderGroup } from "./known-providers.ts";
 
 // 与 validateProvider 的 ID_PATTERN 同一条规则（那边未导出，这里镜像一份；改要同步）
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,64}$/;
@@ -12,6 +12,28 @@ test("KNOWN_PROVIDERS：id 合法且不重复——下拉框的 key 与 upsert �
     assert.match(provider.id, ID_PATTERN, `${provider.id} 过不了 upsert 校验`);
     assert.ok(provider.label !== "", `${provider.id} 缺显示名`);
   }
+});
+
+describe("knownProviderGroup —— 添加服务商目录的三个分区", () => {
+  const groupOf = (id: string) => {
+    const provider = KNOWN_PROVIDERS.find((item) => item.id === id);
+    assert.ok(provider !== undefined, id);
+    return knownProviderGroup(provider);
+  };
+
+  it("按量的官方 API 进 api，套餐进 plan，没有预填地址的兼容入口进 custom", () => {
+    assert.equal(groupOf("deepseek"), "api");
+    assert.equal(groupOf("zhipu"), "api");
+    assert.equal(groupOf("zhipu-coding"), "plan");
+    assert.equal(groupOf("kimi-coding"), "plan");
+    assert.equal(groupOf("anthropic-compatible"), "custom");
+    assert.equal(groupOf("openai-compatible"), "custom");
+  });
+
+  it("每个区都不空——空区意味着条目的 billing / baseUrl 写错了", () => {
+    const groups = new Set(KNOWN_PROVIDERS.map(knownProviderGroup));
+    assert.deepEqual([...groups].sort(), ["api", "custom", "plan"]);
+  });
 });
 
 describe("isPlanBilling —— 两句话不能混", () => {

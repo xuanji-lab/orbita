@@ -475,6 +475,11 @@ export const zh: Messages = {
     aboutListBody: "只列出对真实端点验证过的适配 · 协议跟着你选的条目走",
     catalogTip: "模型参数来自内置目录",
     catalogBadge: "目录",
+    catalogGroups: {
+      api: "API 服务商",
+      plan: "编程套餐订阅",
+      custom: "自定义兼容",
+    },
     // shared 的 note 与 label 本来就是中文
     knownNote: (_id, fallback) => fallback,
     knownLabel: (_id, fallback) => fallback,
