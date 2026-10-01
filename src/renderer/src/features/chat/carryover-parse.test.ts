@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CLOSING_SCAN_PROMPT,
   collectScanAnswer,
   locateMessageRange,
   matchCarryoverMessage,
@@ -137,6 +138,25 @@ describe("parseCarryoverResponse", () => {
       parseCarryoverResponse('```json\n{"carryovers": [{"title": 42, "detail": ""}]}\n```'),
       null,
     );
+  });
+
+  test("重复键：后一个 title: null 覆盖前一个 → 整份 null（实机事故形状，prompt 自检段防的就是它）", () => {
+    const answer = [
+      "```json",
+      '{"carryovers": [',
+      '  {"title": "好的一条", "detail": "a"},',
+      '  {"title": "PR 123 / 124 的验收没回音", "title": null, "detail": "b"}',
+      "]}",
+      "```",
+    ].join("\n");
+    assert.equal(parseCarryoverResponse(answer), null);
+  });
+
+  test("扫描 prompt 的自检规则与 parseBlock 的判定对齐", () => {
+    // 措辞就是契约：自检段点名的每条规则，都是解析器真会拒收的形状
+    for (const rule of ["合法 JSON", "title 和 detail 两个键", "不重复", "null", "整块重新生成"]) {
+      assert.ok(CLOSING_SCAN_PROMPT.includes(rule), `prompt 缺少自检规则：${rule}`);
+    }
   });
 
   test("结构不符：条目 detail 不是字符串 → null", () => {

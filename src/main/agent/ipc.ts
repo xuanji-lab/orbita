@@ -22,7 +22,7 @@ import {
 import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { KNOWN_PROVIDERS, knownModelParams } from "../../shared/known-providers.ts";
+import { knownModelParams, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
@@ -37,6 +37,7 @@ import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
+import { applyModeCascade } from "./mode-cascade.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
 
@@ -80,13 +81,9 @@ export async function resolveProviderSecrets(
     }),
     // pi 目录里这家叫什么。**模型官方参数按它查**——我们的 id 与目录 id 不是一回事
     // （zhipu-coding ↔ zai-coding-cn），拿自己的 id 查一无所获，1M 会被拍成 128k。
-    ...(catalogIdOf(dto.id) === undefined ? {} : { catalogId: catalogIdOf(dto.id) }),
+    // 按条目认（knownProviderOf）而不是按 id：第二个 DeepSeek 实例（deepseek-2）同样吃目录参数
+    ...(knownProviderOf(dto).catalogId === undefined ? {} : { catalogId: knownProviderOf(dto).catalogId }),
   };
-}
-
-/** 这家在 pi 目录里的 id。自建 provider 不在表里 → undefined，由 runtime 落兜底。 */
-function catalogIdOf(providerId: string): string | undefined {
-  return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.catalogId;
 }
 
 /** AgentTurnContext 的 renderer 载荷 → AgentCommand 的公共字段（submit / interrupt / compact 共用）。 */
@@ -342,9 +339,18 @@ export function registerAgentIpc(
   ipcMain.handle(
     ipcChannels.agentSetMode,
     async (_e, sessionId: string, mode: PermissionMode) => {
-      await host.setMode(sessionId, mode);
-      // 档位也落盘：重开这条会话时不该静默换档，而这一档决定 bash 能不能跑
-      await sessions.setMode(sessionId, mode);
+      // 用户切档：自己 + 名下直接子会话一起切（单向：父带子，2026-09-30 用户裁决；
+      // 语义与理由见 mode-cascade.ts）。档位也落盘：重开这条会话时不该静默换档，
+      // 而这一档决定 bash 能不能跑
+      await applyModeCascade(
+        {
+          listSessions: () => sessions.list(),
+          setRuntimeMode: (id, next) => host.setMode(id, next),
+          setStoredMode: (id, next) => sessions.setMode(id, next),
+        },
+        sessionId,
+        mode,
+      );
     },
   );
 

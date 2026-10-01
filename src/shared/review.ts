@@ -76,9 +76,10 @@ export interface ReviewDiff {
 // ————————————————————————————————————————————
 
 /**
- * `git diff --numstat` 的一行 → 文件条目。`added / removed` 为 `-` 是二进制；
- * 重命名行的 path 原样保留（`src/{a => b}.ts`）——展示够用，拉 diff 拉不到就空正文，
- * 不猜。解不了返回 null（空行 / 格式漂移），调用方跳过。
+ * `git diff --numstat` 的一行 → 文件条目。`added / removed` 为 `-` 是二进制。
+ * 调用方（git-source）已带 `--no-renames`，numstat 不产 `old => new` 改名形态；
+ * 万一出现，按字面路径解析（读不了盘 / 拉不到 diff 就空正文，不猜）。
+ * 解不了返回 null（空行 / 格式漂移），调用方跳过。
  */
 export function parseNumstatLine(line: string): ReviewEntry | null {
   const parts = line.split("\t");
@@ -99,7 +100,8 @@ export function parseNumstatLine(line: string): ReviewEntry | null {
 export function parseUntrackedLine(line: string): string | null {
   if (!line.startsWith("? ")) return null;
   let path = line.slice(2);
-  // 含空格 /非 ASCII 的路径被 C 引用：`"a b.txt"`——剥引号不动内容（不解转义，展示用够）
+  // 调用方（realGitRunner）已带 core.quotepath=false，非 ASCII 路径原样输出，不再被 C 引用；
+  // 但含 `"` / `\\` / 控制字符的路径 git 始终会 C 引用——剥引号不解转义（这种路径极端罕见，展示用够）
   if (path.startsWith('"') && path.endsWith('"') && path.length >= 2) path = path.slice(1, -1);
   return path === "" ? null : path;
 }

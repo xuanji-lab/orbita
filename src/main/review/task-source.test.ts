@@ -2,7 +2,7 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import { SessionStore } from "../session/store.ts";
 import { taskReviewDiff, taskReviewList } from "./task-source.ts";
@@ -75,7 +75,7 @@ describe("taskReviewList", () => {
     const list = await taskReviewList(store, ID);
     assert.equal(list.kind, "ok");
     if (list.kind !== "ok") return;
-    const byPath = new Map(list.entries.map((entry) => [entry.path.split("/").pop() ?? "", entry]));
+    const byPath = new Map(list.entries.map((entry) => [basename(entry.path), entry]));
     assert.equal(byPath.get("a.ts")?.restored, true);
     assert.equal(byPath.get("new.md")?.added, 1);
     assert.equal(byPath.get("new.md")?.restored, undefined);
@@ -103,7 +103,7 @@ describe("taskReviewList", () => {
     const list = await taskReviewList(store, ID);
     assert.equal(list.kind, "ok");
     if (list.kind !== "ok") return;
-    const names = list.entries.map((entry) => entry.path.split("/").pop() ?? "");
+    const names = list.entries.map((entry) => basename(entry.path));
     assert.ok(names.includes("made.txt"));
     assert.equal(list.entries.find((entry) => entry.path.endsWith("made.txt"))?.restored, true);
     assert.ok(names.includes("gone.txt"));
@@ -113,6 +113,24 @@ describe("taskReviewList", () => {
   test("没有轮尾账 → no-changes 空态", async () => {
     const list = await taskReviewList(store, ID);
     assert.deepEqual(list, { kind: "empty", reason: "no-changes", cwd: lab });
+  });
+
+  test("带 BOM 的文件：磁盘与基线字节一致 → 已还原，不出幽灵 diff（与 toSnapshot / diskText 同口径）", async () => {
+    // 快照侧（file-tracker.toSnapshot）ignoreBOM 把 U+FEFF 留在正文里；磁盘读侧曾用
+    // 默认 TextDecoder（剥 BOM），两边口径不一 → 首行永远“改了”、字节级还原后也判不成
+    // 已还原（Windows 实机验收）。这里锁死：带 BOM 且未变的文件就是已还原。
+    const bom = "\uFEFFalpha\r\nbeta\r\n";
+    await writeFile(join(lab, "bom.cs"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("alpha\r\nbeta\r\n", "utf8")]));
+    await turn("t1", [{ path: join(lab, "bom.cs"), before: bom, after: "\uFEFFalpha\r\nBETA\r\n" }]);
+    // 磁盘 = 基线（字节级还原过）
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const entry = list.entries.find((item) => item.path.endsWith("bom.cs"));
+    assert.equal(entry?.restored, true);
+    const diff = await taskReviewDiff(store, ID, join(lab, "bom.cs"));
+    assert.equal(diff.restored, true);
+    assert.equal(diff.diff, null);
   });
 });
 

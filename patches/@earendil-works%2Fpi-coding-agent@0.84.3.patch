@@ -1,9 +1,12 @@
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-e253dc2b34768df6 b/.bun-tag-e253dc2b34768df6
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-ec94782b6fff3ae b/.bun-tag-ec94782b6fff3ae
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
 index f4fd9f37d9826a3e791f25c9ec748645a33d5616..2dac44fc00c4db60f9063a8acc0b1f3ee2ae2899 100644
---- a/dist/core/agent-session.js	
+--- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
 @@ -2219,7 +2219,7 @@ export class AgentSession {
              this._retryAttempt--;
@@ -16,7 +19,7 @@ index f4fd9f37d9826a3e791f25c9ec748645a33d5616..2dac44fc00c4db60f9063a8acc0b1f3e
              attempt: this._retryAttempt,
 diff --git a/dist/core/tools/read.js b/dist/core/tools/read.js
 index 3e145b0e23bc3f25640907aeb9ff25f71eb328aa..83b05a1b75448e92c8b38c407735744b28d01e92 100644
---- a/dist/core/tools/read.js	
+--- a/dist/core/tools/read.js
 +++ b/dist/core/tools/read.js
 @@ -193,6 +193,20 @@ export function createReadToolDefinition(cwd, options) {
                          else {
@@ -47,3 +50,28 @@ index 3e145b0e23bc3f25640907aeb9ff25f71eb328aa..83b05a1b75448e92c8b38c407735744b
                          }
                          if (aborted)
                              return;
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index cd12d9e885c21ea14c3a1e681e9ca1544087600a..ab2baf1358dfcaae911abda085889173d0eee199 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -22,6 +22,7 @@ export { formatSkillsForPrompt, type LoadSkillsFromDirOptions, type LoadSkillsRe
+ export { createSyntheticSourceInfo } from "./core/source-info.ts";
+ export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
+ export { type BashOperations, type BashSpawnContext, type BashSpawnHook, type BashToolDetails, type BashToolInput, type BashToolOptions, createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLocalBashOperations, createLocalPowerShellOperations, createLsToolDefinition, createPowerShellToolDefinition, createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type EditOperations, type EditToolDetails, type EditToolInput, type EditToolOptions, type FindOperations, type FindToolDetails, type FindToolInput, type FindToolOptions, formatSize, type GrepOperations, type GrepToolDetails, type GrepToolInput, type GrepToolOptions, type LsOperations, type LsToolDetails, type LsToolInput, type LsToolOptions, type PowerShellOperations, type PowerShellSpawnContext, type PowerShellSpawnHook, type PowerShellToolDetails, type PowerShellToolInput, type PowerShellToolOptions, type ReadOperations, type ReadToolDetails, type ReadToolInput, type ReadToolOptions, type ToolsOptions, type TruncationOptions, type TruncationResult, truncateHead, truncateLine, truncateTail, type WriteOperations, type WriteToolInput, type WriteToolOptions, withFileMutationQueue, } from "./core/tools/index.ts";
++export { resolveToCwd } from "./core/tools/path-utils.ts";
+ export { hasTrustRequiringProjectResources, type ProjectTrustDecision, ProjectTrustStore, type ProjectTrustStoreEntry, type ProjectTrustUpdate, } from "./core/trust-manager.ts";
+ export { type MainOptions, main } from "./main.ts";
+ export { InteractiveMode, type InteractiveModeOptions, type JsonAgentSessionEvent, type ModelInfo, type PrintModeOptions, RpcClient, type RpcClientOptions, type RpcCommand, type RpcEventListener, type RpcExtensionUIRequest, type RpcExtensionUIResponse, type RpcResponse, type RpcSessionState, runPrintMode, runRpcMode, } from "./modes/index.ts";
+diff --git a/dist/index.js b/dist/index.js
+index 7bc4467f5af64aba74ab6cafd136e468b6aab803..43cf5f4fa889fd70a3826ed365ba919c736f3416 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -28,6 +28,8 @@ export { createSyntheticSourceInfo } from "./core/source-info.js";
+ export { generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.js";
+ // Tools
+ export { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLocalBashOperations, createLocalPowerShellOperations, createLsToolDefinition, createPowerShellToolDefinition, createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateLine, truncateTail, withFileMutationQueue, } from "./core/tools/index.js";
++// orbita：write/edit 工具内部即用此函数解析路径，外部需同一实现保证路径口径一致
++export { resolveToCwd } from "./core/tools/path-utils.js";
+ export { hasTrustRequiringProjectResources, ProjectTrustStore, } from "./core/trust-manager.js";
+ // Main entry point
+ export { main } from "./main.js";

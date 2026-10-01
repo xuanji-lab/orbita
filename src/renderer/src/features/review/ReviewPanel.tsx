@@ -118,11 +118,13 @@ export function ReviewPanel(props: {
 
   const sourceItems: MenuItem[] = useMemo(
     () =>
-      REVIEW_SOURCES.map((item) => ({
+      // 回调标注 MenuItem：不标的话 map 先推断字面量类型、再赋给 MenuItem[]，已不是新鲜字面量，
+      // 不做多余属性检查——曾把 onSelect 写成 onClick 仍过 typecheck，点了没反应，git 三源切不过去
+      REVIEW_SOURCES.map((item): MenuItem => ({
         id: item,
         label: t.review.source(item),
         checked: item === source,
-        onClick: () => {
+        onSelect: () => {
           setExpanded(null);
           setSource(item);
         },

@@ -293,7 +293,13 @@ export function App() {
   }, []);
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
-    setSubSessionsNav((prev) => syncToMainSession(prev, subSessionsMainIdRef.current, nextMainId));
+    // 上一拍 id 必须在派发 setState 之前读出来链进局部量：updater 可能被 React
+    // 推迟到渲染期才执行（同 fiber 已有待处理更新时——子会话在跑时引擎的
+    // applyStates/refreshSessions 更新不断，正是常态），那时再读 ref 拿到的已是
+    // 下面那行写进去的新值，previousMainId === nextMainId 恒真、重置被静默吞掉
+    // ——「切主会话右栏子会话面板不跟着切」的根因（React 19.2.8 隔离探针实测复现）
+    const previousMainId = subSessionsMainIdRef.current;
+    setSubSessionsNav((prev) => syncToMainSession(prev, previousMainId, nextMainId));
     subSessionsMainIdRef.current = nextMainId;
   }, [mainOpenId]);
 
@@ -594,6 +600,7 @@ export function App() {
             parentId={channelParentId}
             parentTitle={channelParentTitle}
             entries={channelEntries}
+            engine={engine}
             open={channelInlineOpen}
             wide={channelWide}
             paneWidth={paneWidth}
@@ -658,6 +665,7 @@ export function App() {
                 <ChannelCards
                   parentTitle={channelParentTitle}
                   entries={channelEntries}
+                  engine={engine}
                   openRequest={channelOpenRequest}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (

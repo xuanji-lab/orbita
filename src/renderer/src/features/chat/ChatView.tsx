@@ -1759,7 +1759,7 @@ function ComposerBar(props: { session: ChatSession }) {
       checked: session.workspaceId === null && session.cwd === null,
       onSelect: session.newTask,
     },
-    ...session.workspaces.map((item) => ({
+    ...session.workspaces.map((item): MenuItem => ({
       id: item.id,
       // 名字原样（读时已治）；全路径放 hint 消歧（两个同名的工作区），
       // 与 home 项的 defaultCwd 同构
@@ -1780,7 +1780,7 @@ function ComposerBar(props: { session: ChatSession }) {
 
   // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
   // 展开卡片里一行行小字只会让它显得吵；宽度也因此能固定）
-  const modeItems: MenuItem[] = PERMISSION_MODES.map((value) => ({
+  const modeItems: MenuItem[] = PERMISSION_MODES.map((value): MenuItem => ({
     id: value,
     label: t.permissionModes[value].label,
     checked: session.mode === value,
@@ -1808,7 +1808,7 @@ function ComposerBar(props: { session: ChatSession }) {
   // 逐档判断，不是全局锁：glm-5.3 支持 low/high/max（不含 minimal），全局判
   // 「不含 minimal」会把整个菜单错锁成全灰——那是 reasoning:false 模型（支持集
   // 真只有 off）才有的形状。不支持的档单独禁用并说明，可用的照常可选
-  const thinkingItems: MenuItem[] = thinkingMenuLevels.map((value) => {
+  const thinkingItems: MenuItem[] = thinkingMenuLevels.map((value): MenuItem => {
     const unavailable = thinkingSupported !== null && !thinkingSupported.includes(value);
     return {
       id: value,
@@ -1934,8 +1934,10 @@ function UsageRing(props: { session: ChatSession }) {
   const busy = session.phase !== "idle";
   // 包月制的 provider 不显示花费——那个数字是拿 API 价目表算的估价，不是他的账单。
   // 认不得的 id（自建网关）一律当按量算：藏起真实花费比多一行估价更坏。
-  const billing =
-    session.model !== null && isPlanBilling(session.model.providerId) ? "plan" : "metered";
+  // 按目录条目判（同一家的第二个实例也认得出），所以要拿到这条会话用的 provider 本身
+  const provider =
+    session.model === null ? undefined : session.usable.find((item) => item.id === session.model?.providerId);
+  const billing = provider !== undefined && isPlanBilling(provider) ? "plan" : "metered";
   /**
    * 压缩走两段式（与侧栏 Delete 同一副骨架，wafo 2026-09-03 裁决）：
    * 用户意愿优先——不再拿「内容太少」当拒绝理由，改说「价值不大」再让他确认。
@@ -1960,7 +1962,7 @@ function UsageRing(props: { session: ChatSession }) {
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
   const items: MenuItem[] = [
-    ...usageBreakdown(stats, t, billing).map((row) => ({
+    ...usageBreakdown(stats, t, billing).map((row): MenuItem => ({
       id: row.label,
       label: row.label,
       hint: row.value,
@@ -3369,10 +3371,14 @@ function DelegateToolLine(props: {
     return <DelegateCardView card={null} status="running" taskPreview={taskPreview} />;
   }
   const summary = props.channel.channelSummaries.get(card.childId);
-  // 状态优先读通道摘要的终态（done/failed/waiting）；否则看子会话在 renderer
+  // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
   // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
+  // stopped 不读的话，用户终止过的子会话在派出卡上会退回「空闲」（验收发现）
   const status: DelegateCardStatus =
-    summary?.status === "done" || summary?.status === "failed" || summary?.status === "waiting"
+    summary?.status === "done" ||
+    summary?.status === "failed" ||
+    summary?.status === "waiting" ||
+    summary?.status === "stopped"
       ? summary.status
       : props.channel.childPhaseOf(card.childId) !== "idle"
         ? "running"
