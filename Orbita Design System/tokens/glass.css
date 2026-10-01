@@ -29,14 +29,14 @@
  */
 :root[data-theme="graphite"] {
   --glass-alpha: 1; /* @kind other */
-  --glass-border: rgba(255, 255, 255, 0.16);
-  --glass-bg: #2b2b2b;
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-bg: #2c2c2e;
 }
 
 :root[data-theme="black"] {
   --glass-alpha: 1; /* @kind other */
-  --glass-border: rgba(255, 255, 255, 0.15);
-  --glass-bg: #242424;
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-bg: #262626;
 }
 
 /* 纸面两档（copybook / typescript）是纸，不是玻璃：面板几乎不透，桌面不从纸底下透出来。 */
