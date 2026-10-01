@@ -1625,6 +1625,9 @@ function ComposerBar(props: { session: ChatSession }) {
       label: t.chat.home,
       icon: "folder",
       hint: session.defaultCwd,
+      // 路径的**尾段才是名字**（/Users/dama/Desktop/orbita → orbita），
+      // 所以窄卡片里从头部省略，别把唯一有信息量的那段切掉
+      hintEllipsis: "head",
       checked: session.workspaceId === null && session.cwd === null,
       onSelect: session.newTask,
     },
@@ -1634,6 +1637,7 @@ function ComposerBar(props: { session: ChatSession }) {
       // 与 home 项的 defaultCwd 同构
       label: item.name,
       hint: item.path,
+      hintEllipsis: "head" as const,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
@@ -1692,6 +1696,10 @@ function ComposerBar(props: { session: ChatSession }) {
     <>
       <Menu
         items={scopeItems}
+        // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
+        // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
+        panelMaxHeight={520}
+        panelMaxWidth={640}
         trigger={({ open, toggle }) =>
           namingWorkspace ? (
             // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——

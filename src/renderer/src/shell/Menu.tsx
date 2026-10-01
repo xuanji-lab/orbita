@@ -10,6 +10,12 @@ export interface MenuItem {
   icon?: IconName;
   /** 右侧的说明。菜单项自己解释后果，比事后弹一个确认框好 */
   hint?: string;
+  /**
+   * hint 被挤到装不下时从哪一头省略。默认 `tail`（尾部省略号）适合词；
+   * **路径这类「尾段才是名字」的东西要 `head`**：`/Users/dama/Desktop/orbita`
+   * 截成 `/Users/dama/Deskto…` 等于把唯一有信息量的那段切掉了。
+   */
+  hintEllipsis?: "tail" | "head";
   /** 最右端的徽标区（如模型项的 ctx 窗口与图片能力）。小而事实性的东西，不参与布局语义 */
   badge?: React.ReactNode;
   /** 当前项。用 check 图标标出来，不用染色——状态优先图标与文字 */
@@ -111,6 +117,12 @@ export function Menu(props: {
    * 撑到 320 只是在会话列表旁边糊一大块玻璃（2026-09-22 wafo：「卡片太大」）。
    */
   panelMaxWidth?: number;
+  /**
+   * 面板最大高度（px）。**这是卡片自己的上限，不是视口那一道**：视口能装多少由
+   * `placeMenu` 算并封顶，这里管的是「内容再长也不超过这个高」——输入卡的两张卡片
+   * 都取 520（2026-10-01 定）。两者取小，所以窗口矮时卡片照样跟着降。
+   */
+  panelMaxHeight?: number;
   /**
    * 菜单开在锚点的哪一边。默认下方；`right` 给侧栏会话行——
    * 开在下方会盖住紧挨着的下一条会话，想看别的会话就得先关菜单。
@@ -333,11 +345,17 @@ export function Menu(props: {
               left: position?.left ?? 0,
               // 量高度那一帧不可见，避开在错位置闪一下（首帧也不封顶，才量得到自然高度）
               visibility: position === null ? "hidden" : "visible",
-              // 封顶：placeMenu 算好的可用空间。滚动的是下面 listRef 那个行清单
-              maxHeight: position?.maxHeight,
+              // 封顶：placeMenu 算好的可用空间，与卡片自己的上限取小
+              // （滚动的是下面 listRef 那个行清单）。position 为 null 时不封顶，那是在量自然高度
+              maxHeight:
+                position === null
+                  ? undefined
+                  : Math.min(position.maxHeight, props.panelMaxHeight ?? Number.POSITIVE_INFINITY),
               zIndex: 40,
               minWidth: props.panelMinWidth ?? 180,
-              maxWidth: props.panelMaxWidth ?? 320,
+              // 上限再夹一道视口：面板是 fixed 的，100vw 就是可用宽——
+              // 窄窗下宁可窄、也不让右边半截出屏
+              maxWidth: `min(${props.panelMaxWidth ?? 320}px, calc(100vw - 48px))`,
               padding: "var(--space-1)",
               display: "flex",
               flexDirection: "column",
@@ -525,6 +543,12 @@ function MenuRow(props: {
               color: "var(--color-text-tertiary)",
               fontSize: "var(--font-size-micro)",
               whiteSpace: "nowrap",
+              // 「保尾巴」的截断：direction: rtl 让溢出发生在左侧（省略号落到头部），
+              // text-align 再把它拉回左缘。**不能加 unicode-bidi: plaintext**——
+              // 那会按首个强字符把方向判回 LTR，省略号又跑回尾部
+              ...(item.hintEllipsis === "head"
+                ? { direction: "rtl" as const, textAlign: "left" as const }
+                : null),
               ...(fact
                 ? {
                     fontFamily: "var(--font-family-business)",
@@ -534,7 +558,13 @@ function MenuRow(props: {
                 : null),
             }}
           >
-            {item.hint}
+            {/* 内层必须是 LTR 的隔离段：不然行首的 "/" 会被 RTL 段落搬到行尾
+                （"/Users/dama" 显示成 "Users/dama/"，小样里踩过） */}
+            {item.hintEllipsis === "head" ? (
+              <span style={{ unicodeBidi: "isolate", direction: "ltr" }}>{item.hint}</span>
+            ) : (
+              item.hint
+            )}
           </span>
         )}
       </span>
