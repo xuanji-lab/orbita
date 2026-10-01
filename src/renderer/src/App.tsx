@@ -34,6 +34,7 @@ import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRai
 import { RightPanelSlot } from "./shell/RightPanel";
 import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
@@ -418,10 +419,11 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [rightPanel, subSessionsNav, toggleChannel]);
 
-  // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
+  // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）。判定抽在 shell/drawer-shortcut.ts：
+  // macOS 上 Option 会把 event.key 变成 ∂，只看 key 在 mac 上永远匹配不到
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.ctrlKey && event.altKey && (event.key === "d" || event.key === "D")) {
+      if (isDrawerToggleShortcut(event)) {
         event.preventDefault();
         setRightPanel((current) => (current === "drawer" ? null : "drawer"));
       }
