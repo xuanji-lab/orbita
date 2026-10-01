@@ -37,6 +37,7 @@ import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
+import { applyModeCascade } from "./mode-cascade.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
 
@@ -338,9 +339,18 @@ export function registerAgentIpc(
   ipcMain.handle(
     ipcChannels.agentSetMode,
     async (_e, sessionId: string, mode: PermissionMode) => {
-      await host.setMode(sessionId, mode);
-      // 档位也落盘：重开这条会话时不该静默换档，而这一档决定 bash 能不能跑
-      await sessions.setMode(sessionId, mode);
+      // 用户切档：自己 + 名下直接子会话一起切（单向：父带子，2026-09-30 用户裁决；
+      // 语义与理由见 mode-cascade.ts）。档位也落盘：重开这条会话时不该静默换档，
+      // 而这一档决定 bash 能不能跑
+      await applyModeCascade(
+        {
+          listSessions: () => sessions.list(),
+          setRuntimeMode: (id, next) => host.setMode(id, next),
+          setStoredMode: (id, next) => sessions.setMode(id, next),
+        },
+        sessionId,
+        mode,
+      );
     },
   );
 

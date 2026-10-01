@@ -102,6 +102,44 @@
   cursor: not-allowed;
 }
 
+/* 回退 / 撤销确认框的执行键（危险档）：红字 + 发丝描边，hover 铺 danger-soft
+   （设计系统「危险红字、hover --color-danger-soft」；状态化样式归 CSS，不进组件） */
+/*
+ * 回退预演（用户选定的形态 D）：切点之后要撤回的往来变淡加删除线、不可交互；
+ * 其余条目的包裹层 display: contents，布局与不预演时逐像素相同。
+ * doomed 层是 grid 并继承父级 gap——包裹进来的「条目 + 分支行」间距不变。
+ */
+.revert-keep {
+  display: contents;
+}
+.revert-doomed {
+  display: grid;
+  gap: inherit;
+  opacity: 0.4;
+  text-decoration: line-through;
+  text-decoration-color: var(--color-text-tertiary);
+  pointer-events: none;
+  user-select: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.revert-cut {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+.revert-cut::before,
+.revert-cut::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-strong);
+}
+.revert-confirm:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+
 /* IconButton 的 variant="soft"：静止态填 --color-bg-muted；hover / pressed / disabled
    仍按上面的顺序盖过它——这条规则必须排在它们前面，只补 rest 态的底色 */
 .icon-btn-soft {
@@ -222,6 +260,16 @@
 .composer-bottom-bar .chip-model {
   flex: 1 1 auto;
   min-width: 32px;
+}
+
+/*
+ * Sub-sessions 面板会话层的控制行（SubSessionsPanel.tsx 的 SubSessionControls）：
+ * 芯片允许被 flex 压缩（同 .composer-bottom-bar 的局部豁免与理由，不外溢到别的
+ * 消费者——侧栏筛选行还指着 chip 默认的「宁溢不缩」）：面板 320px 起，档位（84）+
+ * 模型名 + 终止并排，模型名随时可省略号截断（chip-label 自常 ellipsis）。
+ */
+.subsession-controls .chip {
+  min-width: 0;
 }
 
 /*

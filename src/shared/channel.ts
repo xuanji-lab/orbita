@@ -15,14 +15,23 @@ export type ChannelSide = "parent" | "child";
 
 /**
  * 消息类型。谁能发什么由 `allowedKinds` 定：
- *   parent → task（派出时的任务说明，通道的第一条）、reply（回信 / 追加指令）
+ *   parent → task（派出时的任务说明，通道的第一条）、reply（回信 / 追加指令）、
+ *     stop（用户终止这个子会话——**只能由用户发起**，见 parseChannelMessage 的作者约束）
  *   child  → question（等父答）、progress（报进度）、done（完成回报）、failed（无法完成）
  */
-export type ChannelMessageKind = "task" | "reply" | "question" | "progress" | "done" | "failed";
+export type ChannelMessageKind =
+  | "task"
+  | "reply"
+  | "stop"
+  | "question"
+  | "progress"
+  | "done"
+  | "failed";
 
 export const CHANNEL_MESSAGE_KINDS: readonly ChannelMessageKind[] = [
   "task",
   "reply",
+  "stop",
   "question",
   "progress",
   "done",
@@ -30,7 +39,7 @@ export const CHANNEL_MESSAGE_KINDS: readonly ChannelMessageKind[] = [
 ];
 
 export function allowedKinds(from: ChannelSide): readonly ChannelMessageKind[] {
-  return from === "parent" ? ["task", "reply"] : ["question", "progress", "done", "failed"];
+  return from === "parent" ? ["task", "reply", "stop"] : ["question", "progress", "done", "failed"];
 }
 
 /**
@@ -68,9 +77,13 @@ export interface ChannelKey {
  *   done / failed = 子发过 done / failed 之后**父还没回过信**——通道 closed，
  *     可 reopen：用户在通道里 reopen 后代父回信（一条 reply）就翻回 running，
  *     不是永久终态（见 `channelStatus` 的 reopen 语义）
+ *   stopped = **用户**终止了这个子会话（通道里一条 parent 侧的 stop）。比 closed
+ *     更硬：父模型的 reply 不能重开它（重开等于父模型把用户的裁决绕了过去——
+ *     越界），只有用户在通道里代父发言（author 为 user 的 reply）才翻回 running。
+ *     发信侧的硬拦在 `applyChannelSend`（主进程），这里的派生只管如实反映账本
  *   running = 其余
  */
-export type ChannelStatus = "running" | "waiting" | "done" | "failed";
+export type ChannelStatus = "running" | "waiting" | "done" | "failed" | "stopped";
 
 /** 通道列表项：主进程按父会话现算，renderer 画通道列与右栏 Sub-sessions 面板的列表层 */
 export interface ChannelSummary extends ChannelKey {
@@ -111,6 +124,9 @@ export function parseChannelMessage(raw: unknown): ChannelMessage | null {
   if (!allowedKinds(from).includes(kind)) return null;
   const author = value["author"] === "user" ? "user" : "model";
   if (author === "user" && from !== "parent") return null;
+  // stop 只能是用户发起的（channel:stop IPC）——model 作者的 stop 只能来自手改文件，
+  // 静默接受它等于允许账本伪造「用户终止过」。
+  if (kind === "stop" && author !== "user") return null;
   const delivery = value["delivery"] === "steer" ? "steer" : "followUp";
   return { id, from, author, kind, text, delivery, createdAt };
 }
@@ -126,10 +142,28 @@ export function sortChannelMessages(messages: readonly ChannelMessage[]): Channe
  * 再来一条 done → done）。**只有 `reply` 能重开**：done / failed 之后子自己又发的
  * progress / question（没有经过父的 reopen）不重开——通道列该继续显示 closed，
  * 不能因为子多嘴一句就悄悄又变回「等你处理」。
+ *
+ * stopped 单独一档（用户裁决）：**只有 author 为 user 的父侧 reply 能重开**——
+ * 父模型的 reply 不行（否则父模型一回信就把用户的终止绕了过去），子后续的
+ * progress / question / done / failed 也不行（通道已经关了，发信侧在
+ * `applyChannelSend` 硬拦，这里只管派生不为「不会发生」的组合留缺口）。
  */
 export function channelStatus(messages: readonly ChannelMessage[]): ChannelStatus {
   let status: ChannelStatus = "running";
   for (const message of sortChannelMessages(messages)) {
+    // stopped 期间只认用户代父的 reply（reopen）；其余一切消息都不改变状态。
+    if (status === "stopped") {
+      if (message.kind === "reply" && message.from === "parent" && message.author === "user") {
+        status = "running";
+      }
+      continue;
+    }
+    // 用户终止（done / failed 之后同样适用：用户停掉一个已 closed 的通道，
+    // 意图正是封死父模型 reopen 的口子）。
+    if (message.kind === "stop") {
+      status = "stopped";
+      continue;
+    }
     // reply 恒重开：不管此刻是不是 closed，父回信了就翻回 running。
     if (message.kind === "reply") {
       status = "running";

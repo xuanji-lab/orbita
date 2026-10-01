@@ -15,6 +15,7 @@ const ALLOWED_LATIN = new Set([
   "orbita",
   // 协议 / 格式 / 技术名
   "MCP",
+  "Git",
   "API",
   "URL",
   "JSON",

@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { rowStatusIcon } from "./row-status.ts";
 import { en } from "../messages-en.ts";
 
-const none = { running: false, failed: false, pinned: false };
+const none = { running: false, subRunning: false, failed: false, pinned: false };
 
 describe("rowStatusIcon", () => {
   it("运行中画静态实心点，颜色是 accent，不转圈", () => {
@@ -11,6 +11,15 @@ describe("rowStatusIcon", () => {
       icon: "circle-dot",
       tone: "var(--color-accent)",
       label: "Running",
+      spin: false,
+    });
+  });
+
+  it("子会话在跑画静态 git-fork，颜色是 accent，不转圈", () => {
+    deepStrictEqual(rowStatusIcon({ ...none, subRunning: true }, en), {
+      icon: "git-fork",
+      tone: "var(--color-accent)",
+      label: "Sub-session running",
       spin: false,
     });
   });
@@ -28,9 +37,27 @@ describe("rowStatusIcon", () => {
     strictEqual(rowStatusIcon(none, en), null);
   });
 
+  it("父会话在跑压过子会话在跑：同时运行用母会话自己的 running 标识", () => {
+    strictEqual(
+      rowStatusIcon({ ...none, running: true, subRunning: true, pinned: true }, en)?.icon,
+      "circle-dot",
+    );
+  });
+
+  it("子会话在跑压过失败：此刻正在发生的事优先，母会话上一轮的失败让位", () => {
+    strictEqual(
+      rowStatusIcon({ ...none, subRunning: true, failed: true }, en)?.icon,
+      "git-fork",
+    );
+  });
+
+  it("子会话在跑压过置顶", () => {
+    strictEqual(rowStatusIcon({ ...none, subRunning: true, pinned: true }, en)?.icon, "git-fork");
+  });
+
   it("正在跑压过置顶：正在发生的事优先", () => {
     strictEqual(
-      rowStatusIcon({ running: true, failed: false, pinned: true }, en)?.icon,
+      rowStatusIcon({ running: true, subRunning: false, failed: false, pinned: true }, en)?.icon,
       "circle-dot",
     );
   });

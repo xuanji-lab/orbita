@@ -196,7 +196,9 @@ test("isSafeProfileId：拒绝路径逃逸，接受正常目录名", () => {
 });
 
 test("cookieDatabaseCandidates：Chrome 96 的 Network/Cookies 优先于旧版位置", () => {
-  assert.deepEqual(cookieDatabaseCandidates("/p"), ["/p/Network/Cookies", "/p/Cookies"]);
+  // 期望值用 join 拼，与产品代码同一套规则（约定见 data-dirs.test.ts:6-7）：写死 "/p/Network/Cookies"
+  // 只在 POSIX 上成立，Windows 上产出的是 "\\p\\Network\\Cookies"。
+  assert.deepEqual(cookieDatabaseCandidates("/p"), [join("/p", "Network", "Cookies"), join("/p", "Cookies")]);
 });
 
 // ── 钥匙串失败分类 ──────────────────────────────────────────────────
