@@ -19,7 +19,8 @@ export function ContextMenu(props: {
   onClose: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  /** `maxHeight` 同 Menu：右键菜单比可用空间高时封顶 + 内部滚，而不是尾巴出屏 */
+  const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const [active, setActive] = useState(0);
   const open = props.position !== null;
 
@@ -47,7 +48,7 @@ export function ContextMenu(props: {
       props.onClose();
       return;
     }
-    setPosition({ top: placed.top, left: placed.left });
+    setPosition({ top: placed.top, left: placed.left, maxHeight: placed.maxHeight });
     menuRef.current?.focus();
     // 依赖 position 本身：同一处连点右键也要重量（菜单内容可能随行变化）
   }, [props.position, props.onClose]);
@@ -69,7 +70,7 @@ export function ContextMenu(props: {
         "start",
         { width: window.innerWidth, height: window.innerHeight },
       );
-      if (placed.visible) setPosition({ top: placed.top, left: placed.left });
+      if (placed.visible) setPosition({ top: placed.top, left: placed.left, maxHeight: placed.maxHeight });
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("resize", reposition);
@@ -119,6 +120,7 @@ export function ContextMenu(props: {
         top: position?.top ?? 0,
         left: position?.left ?? 0,
         visibility: position === null ? "hidden" : "visible",
+        maxHeight: position?.maxHeight,
         zIndex: 40,
         minWidth: 140,
         maxWidth: 320,
@@ -128,7 +130,9 @@ export function ContextMenu(props: {
         outline: "none",
       }}
     >
-      {props.items.map((item) => {
+      {/* 封顶时滚的是行清单本身（同 Menu）：右键菜单也不会再整段尾巴出屏 */}
+      <div style={{ minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+        {props.items.map((item) => {
         const disabled = item.disabled === true || item.fact === true || item.header === true;
         return (
           <button
@@ -209,6 +213,7 @@ export function ContextMenu(props: {
           </button>
         );
       })}
+      </div>
     </div>,
     document.body,
   );

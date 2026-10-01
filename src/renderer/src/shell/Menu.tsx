@@ -119,11 +119,17 @@ export function Menu(props: {
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  /**
+   * `maxHeight` 来自 `placeMenu`：菜单比可用空间高时不再探出屏幕，而是封顶 + 列表内部滚。
+   * 只在算好之后才写进面板样式——首帧要不封顶地量一次自然高度。
+   */
+  const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
   const anchorRef = useRef<HTMLSpanElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  /** 行清单（不含搜索框）——既是滚动容器，也是量自然高度的那个元素 */
+  const listRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   /** 这次是点开的还是悬停开的——决定要不要把焦点交给菜单 */
   const byClickRef = useRef(false);
@@ -163,8 +169,16 @@ export function Menu(props: {
    */
   const positionMenu = useCallback(() => {
     const anchor = anchorRef.current?.getBoundingClientRect();
-    const menu = menuRef.current?.getBoundingClientRect();
-    if (anchor === undefined || menu === undefined) return;
+    const panel = menuRef.current;
+    if (anchor === undefined || panel === null) return;
+    const panelBox = panel.getBoundingClientRect();
+    const list = listRef.current;
+    /**
+     * 量的是**不封顶的自然高度**。封顶生效后面板会被压矮，拿面板高去算就会越算越小；
+     * 而列表的 `scrollHeight` 永远是真实内容高，两者差值就是外壳（搜索框、内边距）占掉的那一截。
+     */
+    const naturalHeight =
+      list === null ? panelBox.height : panelBox.height - list.getBoundingClientRect().height + list.scrollHeight;
     const box: MenuBox = {
       top: anchor.top,
       bottom: anchor.bottom,
@@ -175,7 +189,7 @@ export function Menu(props: {
     };
     const placed = placeMenu(
       box,
-      { width: menu.width, height: menu.height },
+      { width: panelBox.width, height: naturalHeight },
       props.align,
       { width: window.innerWidth, height: window.innerHeight },
       props.placement,
@@ -185,7 +199,9 @@ export function Menu(props: {
       return;
     }
     setPosition((prev) =>
-      prev !== null && prev.top === placed.top && prev.left === placed.left ? prev : { top: placed.top, left: placed.left },
+      prev !== null && prev.top === placed.top && prev.left === placed.left && prev.maxHeight === placed.maxHeight
+        ? prev
+        : { top: placed.top, left: placed.left, maxHeight: placed.maxHeight },
     );
   }, [props.align, props.placement, close]);
 
@@ -315,8 +331,10 @@ export function Menu(props: {
               position: "fixed",
               top: position?.top ?? 0,
               left: position?.left ?? 0,
-              // 量高度那一帧不可见，避免在错位置闪一下
+              // 量高度那一帧不可见，避开在错位置闪一下（首帧也不封顶，才量得到自然高度）
               visibility: position === null ? "hidden" : "visible",
+              // 封顶：placeMenu 算好的可用空间。滚动的是下面 listRef 那个行清单
+              maxHeight: position?.maxHeight,
               zIndex: 40,
               minWidth: props.panelMinWidth ?? 180,
               maxWidth: props.panelMaxWidth ?? 320,
@@ -368,30 +386,40 @@ export function Menu(props: {
                 />
               </div>
             )}
-            {searching && visible.length === 0 && (
-              <div
-                style={{
-                  padding: "var(--space-2)",
-                  fontFamily: "var(--font-family-base)",
-                  fontSize: "var(--font-size-caption)",
-                  color: "var(--color-text-tertiary)",
-                }}
-              >
-                {t.menu.noModels}
-              </div>
-            )}
-            {visible.map((item) => (
-              <MenuRow
-                key={item.id}
-                item={item}
-                cursor={enabled[active]?.id === item.id}
-                onHover={() => {
-                  const index = enabled.findIndex((candidate) => candidate.id === item.id);
-                  if (index >= 0) setActive(index);
-                }}
-                onSelect={() => choose(item)}
-              />
-            ))}
+            {/*
+              行清单是**唯一滚动的那一层**（搜索框钉在顶部不跟着滚）：封顶生效时
+              面板变矮，这里 `overflow-y: auto` 接管，底部的模型因此永远够得到。
+              它也是量自然高度的那个元素：scrollHeight 不受封顶影响。
+            */}
+            <div
+              ref={listRef}
+              style={{ minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
+            >
+              {searching && visible.length === 0 && (
+                <div
+                  style={{
+                    padding: "var(--space-2)",
+                    fontFamily: "var(--font-family-base)",
+                    fontSize: "var(--font-size-caption)",
+                    color: "var(--color-text-tertiary)",
+                  }}
+                >
+                  {t.menu.noModels}
+                </div>
+              )}
+              {visible.map((item) => (
+                <MenuRow
+                  key={item.id}
+                  item={item}
+                  cursor={enabled[active]?.id === item.id}
+                  onHover={() => {
+                    const index = enabled.findIndex((candidate) => candidate.id === item.id);
+                    if (index >= 0) setActive(index);
+                  }}
+                  onSelect={() => choose(item)}
+                />
+              ))}
+            </div>
           </div>,
           document.body,
         )}
