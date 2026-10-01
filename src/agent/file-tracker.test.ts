@@ -2,6 +2,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { resolveToCwd } from "@earendil-works/pi-coding-agent";
 import { TurnFileTracker, resolveToolPath, type ReadOutcome } from "./file-tracker.ts";
 
 /** 假文件系统：path → 字节（Buffer.from）；不在表里 = 文件不存在。 */
@@ -33,6 +35,25 @@ describe("resolveToolPath", () => {
     assert.equal(resolveToolPath("~/x/a.ts", CWD), join(homedir(), "x", "a.ts"));
   });
 
+  test("与 pi 的 resolveToCwd 是同一个函数（回退 / 撤销正确性的前提）", () => {
+    // 手抄一份曾在 Windows 上与工具算出不同路径（MSYS / ~\ / file:// 三处缺口），
+    // 回退静默失效。这里锁死「tracker 用的就是 pi write/edit 落盘用的那个函数」。
+    assert.equal(resolveToolPath, resolveToCwd);
+    const forms = [
+      "a.ts",
+      "src/deep/../b.ts",
+      "@src/a.ts",
+      "~",
+      "~/x/a.ts",
+      pathToFileURL(join(CWD, "f.ts")).href, // file:// URL
+      join(CWD, "abs.txt"), // 平台原生绝对路径
+      "/c/Users/x/a.ts", // win32 上折算成 C:\Users\x\a.ts；其它平台按 POSIX 绝对路径处理
+      "/w/a.ts",
+    ];
+    for (const form of forms) {
+      assert.equal(resolveToolPath(form, CWD), resolveToCwd(form, CWD), `form: ${form}`);
+    }
+  });
 });
 
 describe("TurnFileTracker", () => {
