@@ -561,6 +561,14 @@
 
 /* ---------- 目录（Add provider）：两列卡片 ---------- */
 
+/* 分区：组标题 + 卡片网格；区与区之间的距离大于卡与卡，分组靠留白读出来 */
+.pv-catalog-group {
+  display: grid;
+  gap: var(--space-2);
+}
+.pv-catalog-group + .pv-catalog-group {
+  margin-top: var(--space-4);
+}
 .pv-catalog {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

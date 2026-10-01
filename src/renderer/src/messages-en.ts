@@ -21,6 +21,7 @@ const KNOWN_NOTES: Record<string, string> = {
   "zhipu-coding": "Coding Plan subscription, via the Anthropic-compatible endpoint",
   zai: "Zhipu's international site; accounts are separate from the China site",
   stepfun: "StepFun official API (Step plan endpoint; the URL must include /v1)",
+  "kimi-coding": "Kimi membership plan (Kimi Code), via the Anthropic-compatible endpoint",
   "opencode-go": "OpenCode Zen gateway — one key for models from many vendors (DeepSeek / MiniMax…)",
   "anthropic-compatible": "Self-hosted gateway / private deployment; the client appends /v1/messages to your URL",
   "openai-compatible":
@@ -516,6 +517,12 @@ export const en = {
     aboutListBody: "Only adapters verified against real endpoints · the protocol follows the entry you pick",
     catalogTip: "Model parameters come from the built-in catalog",
     catalogBadge: "catalog",
+    /** 「添加服务商」目录的三个分区标题（knownProviderGroup） */
+    catalogGroups: {
+      api: "API providers",
+      plan: "Coding plans",
+      custom: "Custom compatible",
+    },
     /** 目录卡的说明：shared 的 note 是中文，英文界面在这里给英文；查不到退回 shared 原文 */
     knownNote: (id: string, fallback: string) => KNOWN_NOTES[id] ?? fallback,
     /** 目录卡的名字：只有带描述性中文的几条要换（「Anthropic 兼容」），厂商名原样 */
