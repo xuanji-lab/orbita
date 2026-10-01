@@ -165,6 +165,42 @@ const STAR_BUTTON: React.CSSProperties = {
   cursor: "pointer",
 };
 
+/** 底部固定行（「配置模型」）。整行可点，右端一个 chevron 说明它领着你去别处 */
+const FOOTER_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--space-2)",
+  width: "100%",
+  minHeight: "var(--control-height-lg)",
+  padding: "0 var(--space-2)",
+  border: 0,
+  borderRadius: "var(--radius-sm)",
+  color: "var(--color-text-primary)",
+  fontFamily: "var(--font-family-base)",
+  fontSize: "var(--font-size-control)",
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+/**
+ * 卡片底部的「配置模型」——去了就没模型的出口。
+ *
+ * 这个卡片会**筛掉没配 key 的厂商**（usableProviders）：只看得见一家的用户，
+ * 在这张卡片里看不出「别的厂商不是不存在，是你没配」。这行是卡片里唯一能把
+ * 这件事说清楚的地方，也是左栏为什么只有几家那个问题的答案。
+ */
+export function modelCardFooter(options: { t: Messages; onConfigure: () => void }): React.ReactNode {
+  return (
+    <button type="button" className="option-row" style={FOOTER_ROW} onClick={options.onConfigure}>
+      <Icon name="plus" size={13} strokeWidth={1.8} />
+      <span>{options.t.modelMenu.configure}</span>
+      <span style={{ marginLeft: "auto", display: "inline-flex", color: "var(--color-text-tertiary)" }}>
+        <Icon name="chevron-right" size={13} strokeWidth={1.8} />
+      </span>
+    </button>
+  );
+}
+
 /** 厂商在左栏里的短名。改过名的实例显示他起的名字——那列说的是「哪个接入」 */
 function railShortName(provider: ProviderDto): string {
   const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));

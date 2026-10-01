@@ -89,7 +89,7 @@ import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelCardItems, MODEL_SCOPE_ALL, modelPickerRail, type ModelScope, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardFooter, modelCardItems, MODEL_SCOPE_ALL, modelPickerRail, type ModelScope, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -418,6 +418,11 @@ function ChatViewBody(props: {
   /** 星标（收藏）的模型。**不是会话元数据**——它跟着用户走，存在设置里 */
   starredModels?: readonly ModelPair[];
   onToggleStarModel?: (pair: ModelPair) => void;
+  /**
+   * 模型卡片底部「配置模型」的去处（设置面的服务商页）。不传时那行仍然在，
+   * 点了只是把卡片关上——比给一个点了没反应的东西好。
+   */
+  onOpenProviders?: () => void;
   /**
    * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
    * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
@@ -757,6 +762,7 @@ function ChatViewBody(props: {
           session={session}
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
+          onOpenProviders={props.onOpenProviders ?? (() => {})}
         />
       }
       dropActive={props.dropActive === true}
@@ -1612,6 +1618,8 @@ function ComposerBar(props: {
   /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
   starredModels: readonly ModelPair[];
   onToggleStarModel: (pair: ModelPair) => void;
+  /** 卡片底部「配置模型」→ 设置面的服务商页 */
+  onOpenProviders: () => void;
 }) {
   const t = useT();
   const { session } = props;
@@ -1802,6 +1810,16 @@ function ComposerBar(props: {
             if (modelScope.kind === "provider") return t.menu.noMatchInProvider(query);
             return t.menu.noModels;
           }}
+          // 底部固定行：卡片会筛掉没配 key 的厂商，这行是唯一能说清「别家不是不存在」的地方
+          footer={(close) =>
+            modelCardFooter({
+              t,
+              onConfigure: () => {
+                close();
+                props.onOpenProviders();
+              },
+            })
+          }
           panelMaxHeight={520}
           panelMaxWidth={420}
           trigger={({ open, toggle }) => (

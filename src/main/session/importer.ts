@@ -498,6 +498,10 @@ export function parsePromaSessions(raw: string): {
       // 两个独立字段：pinned = 置顶；starred = 星标（Proma 07-21 加，「不影响排序或置顶」）。
       // 早先把 starred 也当置顶导，是把它误读成了 pinned 的新名字（本机 pinned=true 0 条、
       // starred=true 55 条，导进来一片置顶）
+      //
+      // 「不影响排序」这句只说**会话上的** starred（它纯粹是个用户标记，自己不筛任何东西）。
+      // 模型上的星标是另一件事：那个会当过滤口径用（模型卡片左栏第一格），
+      // 存在设置里（AppSettings.starredModels），跟这条导入路径无关。
       pinned: item["pinned"] === true,
       starred: item["starred"] === true,
       // 只认 delegation 的 parentSessionId。explorationParentSessionId（Proma 的探索分叉）

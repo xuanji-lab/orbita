@@ -157,6 +157,12 @@ export function Menu(props: {
    * 不给就退回「没有匹配的模型。」（只对搜索成立的说法）。
    */
   emptyText?: (query: string) => string;
+  /**
+   * 钉在面板底部的固定行（不跟着清单滚），拿到 `close` 自己决定关不关卡片。
+   * 模型卡片的「配置模型」就住在这里：它是「我要的东西不在这里」的出口，
+   * 最需要随时可达——放进滚动清单里就会被一屏外的东西带走。
+   */
+  footer?: (close: () => void) => React.ReactNode;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -519,6 +525,18 @@ export function Menu(props: {
               ))}
               </div>
             </div>
+            {props.footer !== undefined && (
+              <div
+                style={{
+                  flex: "none",
+                  marginTop: "var(--space-1)",
+                  paddingTop: "var(--space-1)",
+                  borderTop: "1px solid var(--color-border-subtle)",
+                }}
+              >
+                {props.footer(close)}
+              </div>
+            )}
           </div>,
           document.body,
         )}

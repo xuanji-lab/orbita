@@ -142,6 +142,12 @@ export function App() {
     [changeSettings],
   );
 
+  /** 模型卡片底部「配置模型」的去处：设置面的服务商页（不是通用页） */
+  const openProvidersTab = useCallback(() => {
+    setSettingsTab("providers");
+    setOverlay("settings");
+  }, []);
+
   /** 右侧面板宽度（4-0 拖宽）：拖动中只改本地，松手才落 settings */
   const [panelWidth, setPanelWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
   useEffect(() => {
@@ -596,6 +602,7 @@ export function App() {
                 theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}
                 onToggleStarModel={toggleStarModel}
+                onOpenProviders={openProvidersTab}
                 scrollToEnd
                 scrollToEndHotkey
               />
@@ -653,6 +660,7 @@ export function App() {
                   providersError={providersError}
                   starredModels={settings.starredModels ?? []}
                   onToggleStarModel={toggleStarModel}
+                  onOpenProviders={openProvidersTab}
                   docked={docked}
                   onDockedChange={(list) =>
                     changeDocked(

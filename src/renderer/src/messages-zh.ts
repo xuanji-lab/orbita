@@ -415,6 +415,7 @@ export const zh: Messages = {
     acceptsImage: "可输入图片——多模态",
     starred: "星标",
     starredEmpty: "还没有星标的模型。在任意模型行右侧点星加入。",
+    configure: "配置模型",
   },
 
   providers: {

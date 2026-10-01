@@ -37,6 +37,8 @@ export function Drawer(props: {
   /** 星标过的模型：抽屉里的输入卡也会开模型卡片，那颗星与主槽同一份状态 */
   starredModels: readonly ModelPair[];
   onToggleStarModel: (pair: ModelPair) => void;
+  /** 模型卡片底部「配置模型」→ 设置面的服务商页 */
+  onOpenProviders: () => void;
   docked: DockedTab[];
   onDockedChange: (docked: DockedTab[]) => void;
 }) {
@@ -152,6 +154,7 @@ export function Drawer(props: {
               providersError={props.providersError}
               starredModels={props.starredModels}
               onToggleStarModel={props.onToggleStarModel}
+              onOpenProviders={props.onOpenProviders}
               homeBare={activeTab === NEW_TASK_TAB && props.view.sessionId === null}
               scrollToEnd
             />
