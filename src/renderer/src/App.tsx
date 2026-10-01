@@ -581,6 +581,8 @@ export function App() {
                 tab={settingsTab}
                 settings={settings}
                 providers={providers}
+                starredModels={settings.starredModels ?? []}
+                onToggleStarModel={toggleStarModel}
                 onSettingsChange={changeSettings}
                 onProvidersChange={refresh}
                 onImported={() => {

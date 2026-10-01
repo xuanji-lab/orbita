@@ -89,7 +89,7 @@ import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelCardFooter, modelCardItems, MODEL_SCOPE_ALL, modelPickerRail, type ModelScope, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardFooter, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -1636,11 +1636,6 @@ function ComposerBar(props: {
   // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
   // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
   const [namingWorkspace, setNamingWorkspace] = useState(false);
-  /**
-   * 模型卡片左栏选中哪家（null = 全部）。**只活在这个卡片里**：它是「现在想找什么」
-   * 的一时状态，不是设置——跨卡片记住它只会让人下次打开时奇怪「我的模型呢」。
-   */
-  const [modelScope, setModelScope] = useState<ModelScope>(MODEL_SCOPE_ALL);
 
   // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
   // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
@@ -1694,35 +1689,6 @@ function ComposerBar(props: {
    * 宽度尺：**不过滤**的那一份（与上面同一套构造，只把 scope 换成「全部」）。
    * 卡片按它定宽，所以左栏怎么筛宽、高、位置都不动。
    */
-  const modelWidthItems: MenuItem[] = modelCardItems({
-    t,
-    providers: session.usable,
-    catalog,
-    selected: session.model,
-    scope: MODEL_SCOPE_ALL,
-    starred: props.starredModels,
-    onToggleStar: props.onToggleStarModel,
-    onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
-  });
-
-  const modelItems: MenuItem[] = modelCardItems({
-    t,
-    providers: session.usable,
-    catalog,
-    selected: session.model,
-    scope: modelScope,
-    starred: props.starredModels,
-    onToggleStar: props.onToggleStarModel,
-    onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
-  });
-
-  // 选着的那家后来没 key 了 / 被删了：左栏那一格会消失，过滤得跟着回「全部」，
-  // 否则清单会停在空集上，而用户看不到任何能解释这件事的东西
-  useEffect(() => {
-    if (modelScope.kind === "provider" && !session.usable.some((p) => p.id === modelScope.id)) {
-      setModelScope(MODEL_SCOPE_ALL);
-    }
-  }, [modelScope, session.usable]);
 
   // 思考档菜单按模型真实支持集显示（官方档位表：glm-5.3 只有 low/high/max，
   // claude 按型号——fable 系关不掉思考、opus-4-6 没有 xhigh——写死档位只会递增假选项）。来源三级
@@ -1804,27 +1770,15 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
-      {modelItems.length > 0 && (
-        <Menu
-          items={modelItems}
-          searchable
-          rail={modelPickerRail({
-            t,
-            providers: session.usable,
-            scope: modelScope,
-            onScope: setModelScope,
-          })}
-          // 搜索是一切的旁路：左下栏正亮着某家时去搜，必须把过滤复位到「全部」，
-          // 否则会出现「左栏亮着智谱、列表里全是 deepseek」这种自相矛盾的画面
-          onSearch={(query) => {
-            if (query.trim() !== "") setModelScope(MODEL_SCOPE_ALL);
-          }}
-          // 空清单要说清是哪一种空：星标一条都没星过、还是在一家里面搜不到
-          emptyText={(query) => {
-            if (modelScope.kind === "starred") return t.modelMenu.starredEmpty;
-            if (modelScope.kind === "provider") return t.menu.noMatchInProvider(query);
-            return t.menu.noModels;
-          }}
+      {session.usable.length > 0 && (
+        <ModelPickerMenu
+          t={t}
+          providers={session.usable}
+          catalog={catalog}
+          selected={session.model}
+          starred={props.starredModels}
+          onToggleStar={props.onToggleStarModel}
+          onSelect={(providerId, modelId) => session.chooseModel(providerId, modelId)}
           // 底部固定行：卡片会筛掉没配 key 的厂商，这行是唯一能说清「别家不是不存在」的地方
           footer={(close) =>
             modelCardFooter({
@@ -1835,14 +1789,6 @@ function ComposerBar(props: {
               },
             })
           }
-          panelMaxHeight={520}
-          // 宽度不由「筛剩的那几条」定，而是由**全部配置好的模型名**里最长的那条定
-          // （宽度尺），所以点左栏过滤时卡片宽、高、位置都不动
-          panelMaxWidth={480}
-          widthItems={modelWidthItems}
-          // 定高：外壳 + 六行。卡片大小不跟着「筛剩几个模型」变——
-          // 否则点一次左栏过滤就换一个尺寸，位置也跟着跳（2026-10-01 用户实测）
-          listRows={6}
           trigger={({ open, toggle }) => (
             <Chip
               active={open}

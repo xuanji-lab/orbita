@@ -1,10 +1,13 @@
 /**
- * 「挑一个模型」的菜单构造 —— 两个消费者共用：输入卡底栏的模型芯片，
- * 与设置面的会话命名模型。
+ * 「挑一个模型」的卡片 —— 三个消费者共用：输入卡底栏的模型芯片、设置面的家务活模型、
+ * 设置面的子会话模型（`ModelPickerMenu`）。
  *
- * 抽出来的理由是**这份菜单本身讲一个故事**：哪些厂商能用（填了 key 且声明过模型）、
- * 按厂商分组、每个模型带参数徽标，而参数口径必须与设置页同源（用户覆盖 > pi 目录 >
- * 白名单 > 兜底）。复制一份的话，两处迟早对同一个模型说出两个上下文窗口。
+ * 共用两层理由：
+ * 1. **口径**：哪些厂商能用（填了 key 且声明过模型）、每个模型的上下文窗口与图片能力，
+ *    必须与设置页同源（用户覆盖 > pi 目录 > 白名单 > 兜底）。复制一份的话，两处迟早
+ *    对同一个模型说出两个上下文窗口。
+ * 2. **形状**：左栏过滤、两行行、定高六行、宽度按全部模型里最长那一行定。三处各拼一遍
+ *    就是这一刀返工五次的起因（2026-10-01）——所以外壳只有一个，谁也不许再拼。
  */
 import { useEffect, useState } from "react";
 import type { BuiltinProvider } from "@shared/agent-ipc";
@@ -15,7 +18,7 @@ import type { ModelDecl } from "@shared/provider";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
-import type { MenuItem } from "../../shell/Menu";
+import { Menu, type MenuItem } from "../../shell/Menu";
 import { hasCredentials, kindOf, modelAcceptsImage, modelContextText } from "./providers-view-model.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -64,53 +67,6 @@ export function selectedModelAcceptsImage(
   const declared = provider?.models.declared.find((m) => m.id === selected.modelId);
   if (provider === undefined || declared === undefined) return true;
   return modelAcceptsImage(declared, defaultsFor(provider, catalog, declared.id));
-}
-
-/**
- * 按厂商分组的模型菜单项：厂商名做组头行，模型行缩进其下只带参数徽标。
- *
- * @param providers 已过 `usableProviders` 的厂商列表
- * @param selected 当前选中的模型；null = 一个都没选（如设置面选了「Same as session」）
- */
-export function modelMenuItems(options: {
-  /** 文案表：徽标的悬停说明跟界面语言走 */
-  t: Messages;
-  providers: readonly ProviderDto[];
-  catalog: readonly BuiltinProvider[];
-  selected: { providerId: string; modelId: string } | null;
-  onSelect: (providerId: string, modelId: string) => void;
-}): MenuItem[] {
-  return options.providers.flatMap((provider) => {
-    const defaultsOf = (id: string) => defaultsFor(provider, options.catalog, id);
-    const rows: MenuItem[] = [
-      { id: `hdr:${provider.id}`, label: provider.displayName, header: true },
-    ];
-    for (const declared of provider.models.declared) {
-      const defaults = defaultsOf(declared.id);
-      const badge = modelContextText(declared, defaults);
-      rows.push({
-        id: `${provider.id}:${declared.id}`,
-        label: declared.id,
-        badge: (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
-            <span className="pv-badge" title={options.t.modelMenu.contextWindow}>
-              {badge.text}
-            </span>
-            {modelAcceptsImage(declared, defaults) && (
-              <span className="pv-badge" title={options.t.modelMenu.acceptsImage}>
-                <Icon name="image" size={11} strokeWidth={1.8} />
-              </span>
-            )}
-          </span>
-        ),
-        checked:
-          options.selected?.providerId === provider.id &&
-          options.selected.modelId === declared.id,
-        onSelect: () => options.onSelect(provider.id, declared.id),
-      });
-    }
-    return rows;
-  });
 }
 
 /**
@@ -194,6 +150,89 @@ function railShortName(provider: ProviderDto): string {
   const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
   if (known === undefined || provider.displayName !== known.label) return provider.displayName;
   return known.short;
+}
+
+/**
+ * 三处「挑一个模型」共用的卡片外壳：输入卡的模型芯片、设置面的家务活模型、子会话模型。
+ *
+ * 抽出来的理由比「口径同源」那条更强：这三处的**形状**必须一致（左栏过滤、
+ * 两行行、定高六行、宽度按全部模型里最长的那一行定），各拼一遍 Menu 的 props 早晚会漂
+ * ——而形状不一致正是这一刀返工五次的原因（2026-10-01）。
+ *
+ * 组件自己拿着左栏的选中态：那是「现在想找什么」的一时状态，不属于设置。
+ */
+export function ModelPickerMenu(props: {
+  t: Messages;
+  providers: readonly ProviderDto[];
+  catalog: readonly BuiltinProvider[];
+  selected: { providerId: string; modelId: string } | null;
+  starred: readonly { providerId: string; modelId: string }[];
+  onToggleStar: (pair: { providerId: string; modelId: string }) => void;
+  onSelect: (providerId: string, modelId: string) => void;
+  /**
+   * 过滤不掉的置顶项（设置面那两个「同会话 / 同父」）。它们不是模型，不进左栏过滤，
+   * 但参与宽度尺——它们一直在，所以不影响「尺寸不跟着过滤变」。
+   */
+  leading?: MenuItem[];
+  trigger: (state: { open: boolean; toggle: () => void }) => React.ReactNode;
+  /** 底部固定行。只有输入卡给（「配置模型」）；设置面本身就在设置里，不用再来一个入口 */
+  footer?: (close: () => void) => React.ReactNode;
+}): React.ReactNode {
+  const [scope, setScope] = useState<ModelScope>(MODEL_SCOPE_ALL);
+  const pick = (range: ModelScope) =>
+    modelCardItems({
+      t: props.t,
+      providers: props.providers,
+      catalog: props.catalog,
+      selected: props.selected,
+      scope: range,
+      starred: props.starred,
+      onToggleStar: props.onToggleStar,
+      onSelect: props.onSelect,
+    });
+  const visible = pick(scope);
+  // 宽度尺要的是**不过滤**的那一份
+  const all = scope.kind === "all" ? visible : pick(MODEL_SCOPE_ALL);
+  const withLeading = (rows: MenuItem[]) => (props.leading === undefined ? rows : [...props.leading, ...rows]);
+  /*
+   * 一个可用的模型都没有时不摆卡片架子：没东西可筛却给一列空左栏 + 六行定高，
+   * 看起来像坏了。退回普通菜单（设置面那两个 picker 在没配服务商时就是这个状态）。
+   */
+  const isCard = props.providers.length > 0;
+
+  // 选着的那家被删了 / 没 key 了：过滤要跟着回「全部」，否则清单停在空集上
+  useEffect(() => {
+    if (scope.kind === "provider" && !props.providers.some((p) => p.id === scope.id)) {
+      setScope(MODEL_SCOPE_ALL);
+    }
+  }, [scope, props.providers]);
+
+  return (
+    <Menu
+      items={withLeading(visible)}
+      searchable
+      rail={
+        isCard ? modelPickerRail({ t: props.t, providers: props.providers, scope, onScope: setScope }) : undefined
+      }
+      // 搜索是一切的旁路：左栏正亮着某家时去搜，必须复位到「全部」，
+      // 否则会出现「左栏亮着智谱、列表里全是 deepseek」这种自相矛盾的画面
+      onSearch={(query) => {
+        if (query.trim() !== "") setScope(MODEL_SCOPE_ALL);
+      }}
+      // 三种空要说清是哪一种：星标一条都没星过 ≠ 在一家里面搜不到 ≠ 全部里搜不到
+      emptyText={(query) => {
+        if (scope.kind === "starred") return props.t.modelMenu.starredEmpty;
+        if (scope.kind === "provider") return props.t.menu.noMatchInProvider(query);
+        return props.t.menu.noModels;
+      }}
+      panelMaxHeight={520}
+      panelMaxWidth={480}
+      widthItems={isCard ? withLeading(all) : undefined}
+      listRows={isCard ? 6 : undefined}
+      trigger={props.trigger}
+      footer={props.footer}
+    />
+  );
 }
 
 /**
