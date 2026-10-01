@@ -12,6 +12,13 @@
  * - auto_retry_end：重试路径自己收尾（耗尽由 runtime 另报一条），这里清掉，不报第二遍；
  * - compaction_start：上下文溢出由压缩接手续跑，结局看后面的事件，先清掉；
  * - agent_settled：还记着就是这一轮的终局，交出去并清空。
+ *
+ * **被我们自己停下的轮不报**（`wasAborted`）：停止 / 抢跑（interrupt、compact）发生在
+ * 工具执行中时，pi 在工具出错后还会再调一次模型，拿着已 abort 的 signal 立刻得到一条
+ * `stopReason: "error"`（"This operation was aborted"）——它不是模型错误，是我们按下的
+ * 停止，与「Retry cancelled 不报」同一条理由。报出去的后果不止一条假红字：renderer 的
+ * 回填快照把这条 failed 当成「抢跑那条没发出去」，把已经发出去的话放回输入框
+ * （2026-09-29 用户稳定复现：等 bash 跑起来再点排队项的立即发送）。
  */
 
 /** 只取判定要用的那几个形状（结构匹配 pi 的 AgentSessionEvent，不引它的联合类型） */
@@ -30,7 +37,9 @@ interface TurnMessage {
 }
 
 /** 返回 observe：喂每一个 pi 事件；只有 agent_settled 且本轮以错误收场时返回错误串。 */
-export function createTurnFailureTracker(): (event: TurnFailureEvent) => string | null {
+export function createTurnFailureTracker(
+  wasAborted: () => boolean = () => false,
+): (event: TurnFailureEvent) => string | null {
   let pending: string | null = null;
   return (event) => {
     switch (event.type) {
@@ -52,7 +61,7 @@ export function createTurnFailureTracker(): (event: TurnFailureEvent) => string 
       case "agent_settled": {
         const message = pending;
         pending = null;
-        return message;
+        return wasAborted() ? null : message;
       }
       default:
         return null;
