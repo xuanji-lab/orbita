@@ -339,7 +339,15 @@ describe("planUndo / executeUndo", () => {
   });
 });
 
-describe("字节级还原：符号链接 / 权限位", () => {
+describe("字节级还原：符号链接 / 权限位 / BOM / CRLF", () => {
+  /** 落一轮只有一个文件的轮尾账（磁盘现状 = after），并补齐前置消息。 */
+  async function oneTurn(path: string, before: string, after: string): Promise<void> {
+    await writeFile(path, after, "utf8");
+    await store.record(ID, userItem("u1", "q1", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [{ path, before, after, added: 1, removed: 1 }]);
+  }
+
   test("还原目标是符号链接：链接仍是链接，内容写到链接指向的真实文件", async (t) => {
     const real = join(lab, "real.ts");
     const link = join(lab, "link.ts");
@@ -372,5 +380,22 @@ describe("字节级还原：符号链接 / 权限位", () => {
     assert.equal(await readFile(path, "utf8"), "old\n");
     if (process.platform === "win32") return; // Windows 的 mode 只有只读位，跳过断言
     assert.equal((await stat(path)).mode & 0o777, 0o755);
+  });
+
+  test("带 UTF-8 BOM 的文件：还原后与原字节完全相等，且不误报「你改过」", async () => {
+    const path = join(lab, "bom.cs");
+    // \uFEFF = EF BB BF：VS 生成的 .cs / .csproj 常带；快照与磁盘比较两边都不许剥
+    await oneTurn(path, "\uFEFFold line\n", "\uFEFFagent line\n");
+    const plan = await planRevert(store, ID, "u1");
+    assert.deepEqual(plan.userModified, []);
+    await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
+    assert.ok((await readFile(path)).equals(Buffer.from("\uFEFFold line\n", "utf8")));
+  });
+
+  test("CRLF 行尾的文件：还原后与原字节完全相等", async () => {
+    const path = join(lab, "crlf.txt");
+    await oneTurn(path, "a\r\nb\r\n", "a\r\nX\r\n");
+    await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
+    assert.ok((await readFile(path)).equals(Buffer.from("a\r\nb\r\n", "utf8")));
   });
 });

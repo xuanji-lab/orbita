@@ -48,7 +48,9 @@ async function diskText(path: string): Promise<{ kind: "absent" } | { kind: "tex
     if (!info.isFile()) return null;
     const bytes = await readFile(path);
     if (bytes.includes(0)) return null;
-    return { kind: "text", content: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+    // ignoreBOM：把开头的 U+FEFF 留在字符串里，与 file-tracker.toSnapshot 同一口径
+    // （两边一边剥一边不剥的话，带 BOM 的文件会被误报「你改过」）。
+    return { kind: "text", content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) };
   } catch {
     return { kind: "absent" };
   }

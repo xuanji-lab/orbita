@@ -118,3 +118,51 @@ describe("TurnFileTracker", () => {
     assert.equal(resolveToolPath("~/x/a.ts", CWD), `${homedir()}/x/a.ts`);
   });
 });
+
+describe("字节口径：BOM 与 CRLF 原样进出快照", () => {
+  // 自带路径与读盘闭包，避免与其它测试的 fakeFs / CWD 纠缠
+  const ROOT = "/byte-snap";
+  const FILE = `${ROOT}/a.cs`;
+
+  /** 可变单文件读盘：模拟 agent 改盘前后两次读。 */
+  function mutableFile(initial: string): { read: (path: string) => Promise<ReadOutcome>; set: (next: string) => void } {
+    let content = initial;
+    return {
+      read: async (path) => (path === FILE ? { exists: true, bytes: Buffer.from(content, "utf8") } : { exists: false }),
+      set: (next) => {
+        content = next;
+      },
+    };
+  }
+
+  test("带 BOM 的文件：快照正文保留开头的 U+FEFF，编码回去仍是 EF BB BF", async () => {
+    const disk = mutableFile("\uFEFFold\n");
+    const tracker = new TurnFileTracker(ROOT, disk.read);
+    await tracker.noteAllowed("c1", "edit", { path: FILE });
+    disk.set("\uFEFFagent v1\n");
+    await tracker.noteExecutionEnd("c1");
+    const changes = await tracker.finalize();
+    assert.equal(changes.length, 1);
+    const before = changes[0]?.before.kind === "text" ? changes[0].before.content : "";
+    const after = changes[0]?.after.kind === "text" ? changes[0].after.content : "";
+    assert.equal(before, "\uFEFFold\n");
+    assert.equal(after, "\uFEFFagent v1\n");
+    // 快照正文 utf8 编码回去必须等于盘上字节（还原写回的依据）
+    assert.deepEqual([...Buffer.from(before, "utf8").subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  });
+
+  test("CRLF 行尾：快照原样保留 \\r\\n，行级统计按行算不乱", async () => {
+    const disk = mutableFile("a\r\nb\r\n");
+    const tracker = new TurnFileTracker(ROOT, disk.read);
+    await tracker.noteAllowed("c1", "edit", { path: FILE });
+    disk.set("a\r\nX\r\n");
+    await tracker.noteExecutionEnd("c1");
+    const changes = await tracker.finalize();
+    assert.equal(changes.length, 1);
+    const change = changes[0];
+    assert.equal(change?.before.kind === "text" ? change.before.content : "", "a\r\nb\r\n");
+    assert.equal(change?.after.kind === "text" ? change.after.content : "", "a\r\nX\r\n");
+    assert.equal(change?.added, 1);
+    assert.equal(change?.removed, 1);
+  });
+});
