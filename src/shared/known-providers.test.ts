@@ -1,6 +1,12 @@
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { KNOWN_PROVIDERS, isPlanBilling, knownModelParams, knownProviderGroup } from "./known-providers.ts";
+import {
+  KNOWN_PROVIDERS,
+  isPlanBilling,
+  knownModelParams,
+  knownProviderDefaultName,
+  knownProviderGroup,
+} from "./known-providers.ts";
 
 // 与 validateProvider 的 ID_PATTERN 同一条规则（那边未导出，这里镜像一份；改要同步）
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,64}$/;
@@ -26,6 +32,7 @@ describe("knownProviderGroup —— 添加服务商目录的三个分区", () =>
     assert.equal(groupOf("zhipu"), "api");
     assert.equal(groupOf("zhipu-coding"), "plan");
     assert.equal(groupOf("kimi-coding"), "plan");
+    assert.equal(groupOf("opencode-go"), "plan");
     assert.equal(groupOf("anthropic-compatible"), "custom");
     assert.equal(groupOf("openai-compatible"), "custom");
   });
@@ -33,6 +40,27 @@ describe("knownProviderGroup —— 添加服务商目录的三个分区", () =>
   it("每个区都不空——空区意味着条目的 billing / baseUrl 写错了", () => {
     const groups = new Set(KNOWN_PROVIDERS.map(knownProviderGroup));
     assert.deepEqual([...groups].sort(), ["api", "custom", "plan"]);
+  });
+});
+
+describe("命名 —— label 是厂商名，计费方式交给分区", () => {
+  it("label 不带 Coding Plan / API 一类的计费后缀", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      assert.doesNotMatch(provider.label, /coding plan|\bapi\b|套餐|按量/i, provider.id);
+    }
+  });
+
+  it("同名的两条（智谱按量 / 套餐）实例默认名带上计费方式，不同名的就是 label", () => {
+    const byId = (id: string) => {
+      const provider = KNOWN_PROVIDERS.find((item) => item.id === id);
+      assert.ok(provider !== undefined, id);
+      return provider;
+    };
+    assert.equal(knownProviderDefaultName(byId("zhipu")), "智谱（按量）");
+    assert.equal(knownProviderDefaultName(byId("zhipu-coding")), "智谱（套餐）");
+    assert.equal(knownProviderDefaultName(byId("kimi-coding")), "Kimi");
+    const names = KNOWN_PROVIDERS.map(knownProviderDefaultName);
+    assert.equal(new Set(names).size, names.length, "默认名撞了，服务商列表里分不出来");
   });
 });
 

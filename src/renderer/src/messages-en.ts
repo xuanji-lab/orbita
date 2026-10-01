@@ -18,18 +18,20 @@ import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
 const KNOWN_NOTES: Record<string, string> = {
   deepseek: "DeepSeek official API",
   zhipu: "Zhipu open platform standard API (billed per token)",
-  "zhipu-coding": "Coding Plan subscription, via the Anthropic-compatible endpoint",
-  zai: "Zhipu's international site; accounts are separate from the China site",
-  stepfun: "StepFun official API (Step plan endpoint; the URL must include /v1)",
-  "kimi-coding": "Kimi membership plan (Kimi Code), via the Anthropic-compatible endpoint",
-  "opencode-go": "OpenCode Zen gateway — one key for models from many vendors (DeepSeek / MiniMax…)",
+  "zhipu-coding": "GLM Coding Plan subscription, via the Anthropic-compatible endpoint",
+  zai: "GLM Coding Plan on Zhipu's international site; accounts are separate from the China site",
+  stepfun: "Step Plan subscription (the URL must include /v1)",
+  "kimi-coding": "Kimi Code membership, via the Anthropic-compatible endpoint",
+  "opencode-go": "OpenCode Go subscription — one key for open models from many vendors (DeepSeek / MiniMax…)",
   "anthropic-compatible": "Self-hosted gateway / private deployment; the client appends /v1/messages to your URL",
   "openai-compatible":
     "Self-hosted gateway / private deployment; include the version segment, the client appends /chat/completions",
 };
 
 const KNOWN_LABELS: Record<string, string> = {
-  zai: "Z.AI (International)",
+  zhipu: "Zhipu",
+  "zhipu-coding": "Zhipu",
+  stepfun: "StepFun",
   "anthropic-compatible": "Anthropic-compatible",
   "openai-compatible": "OpenAI-compatible",
 };

@@ -4,6 +4,7 @@ import "./providers-view.css";
 import {
   KNOWN_PROVIDERS,
   isPlanBilling,
+  knownProviderDefaultName,
   knownProviderGroup,
   type KnownProvider,
   type KnownProviderGroup,
@@ -275,7 +276,7 @@ export function ProvidersView(props: { onChange?: () => void; onSessionsChanged?
       kind: kindId,
       // 同一条目可以加第二次：id 撞了就带序号，否则落盘会覆盖先加的那个
       id: target === undefined ? "" : nextFreeId((providers ?? []).map((p) => p.id), target.id),
-      displayName: target?.label ?? "",
+      displayName: target === undefined ? "" : knownProviderDefaultName(target),
       baseUrl: target?.baseUrl ?? "",
       models: [],
       apiKey: "",

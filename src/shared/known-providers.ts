@@ -20,7 +20,12 @@ import type { ProviderApi } from "./provider.ts";
 export interface KnownProvider {
   /** 我们的稳定 id，也是用户看到的 identifier */
   id: string;
-  /** 显示名。中文厂商保留中文——这是厂商的名字，不是界面文案 */
+  /**
+   * 显示名 = **厂商名**，不带计费方式的后缀（「Coding Plan」「API」）：目录按分区摆
+   * （knownProviderGroup），分区标题已经说了是按量还是套餐。中文厂商用中文名（智谱、
+   * 阶跃星辰）——这是厂商的名字，不是界面文案；英文界面的写法在 messages-en 的 KNOWN_LABELS。
+   * 同一厂商在两个分区各有一条时 label 相同，实例的默认名靠 knownProviderDefaultName 区分。
+   */
   label: string;
   api: ProviderApi;
   /** 预填的 baseUrl。空串表示必须用户自己填（兼容格式的通用入口） */
@@ -166,7 +171,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   },
   {
     id: "zhipu",
-    label: "智谱 GLM",
+    label: "智谱",
     api: "openai-completions",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     catalogId: "zai-coding-cn",
@@ -174,7 +179,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   },
   {
     id: "zhipu-coding",
-    label: "智谱 Coding Plan",
+    label: "智谱",
     api: "anthropic-messages",
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     catalogId: "zai-coding-cn",
@@ -200,21 +205,21 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
        */
       "glm-5.3": { defaultThinkingLevel: "max" },
     },
-    note: "Coding Plan 订阅，走 Anthropic 兼容端点",
+    note: "GLM Coding Plan 订阅，走 Anthropic 兼容端点",
   },
   {
     id: "zai",
-    label: "Z.AI (国际)",
+    label: "Z.AI",
     api: "openai-completions",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
     catalogId: "zai",
     // 端点就是 `/coding/paas/`——与国内站 Coding Plan 同一套餐制
     billing: "plan",
-    note: "智谱国际站，与国内站账号不通用",
+    note: "智谱国际站的 GLM Coding Plan，与国内站账号不通用",
   },
   {
     id: "stepfun",
-    label: "StepFun",
+    label: "阶跃星辰",
     api: "openai-completions",
     baseUrl: "https://api.stepfun.com/step_plan/v1",
     // pi 目录未收录 stepfun：参数靠网关 Fetch 或手填，行摘要会如实标注走兜底
@@ -255,11 +260,11 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
         defaultThinkingLevel: "high",
       },
     },
-    note: "StepFun 官方 API（Step 套餐端点，地址要带到 /v1）",
+    note: "Step Plan 订阅（地址要带到 /v1）",
   },
   {
     id: "kimi-coding",
-    label: "Kimi Coding Plan",
+    label: "Kimi",
     /*
      * Kimi 会员（Kimi Code）的编程端点。走 Anthropic 兼容协议——与 pi 内建的 kimi-coding
      * 条目同一个 baseUrl 与协议（客户端接 /v1/messages），模型参数（k3 / k3-256k /
@@ -271,17 +276,19 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "https://api.kimi.com/coding",
     catalogId: "kimi-coding",
     billing: "plan",
-    note: "Kimi 会员订阅（Kimi Code），走 Anthropic 兼容端点",
+    note: "Kimi Code 会员订阅，走 Anthropic 兼容端点",
   },
   {
     id: "opencode-go",
-    label: "OpenCode Go",
+    label: "OpenCode",
     api: "openai-completions",
     baseUrl: "https://opencode.ai/zen/go/v1",
     catalogId: "opencode-go",
     // 网关硬要求（缺了 400 MissingSessionID）：会话头用于前缀缓存路由，任意稳定值即可
     headers: { "x-opencode-session": "orbita" },
-    note: "OpenCode Zen 聚合网关——一个 key 调用多家模型（DeepSeek / MiniMax…）",
+    // OpenCode Go 是月费订阅（opencode.ai/go：$10/月，额度制）；按量计费的是 Zen，不是这个端点
+    billing: "plan",
+    note: "OpenCode Go 订阅——一个 key 调用多家开源模型（DeepSeek / MiniMax…）",
   },
   {
     id: "anthropic-compatible",
@@ -352,6 +359,16 @@ export type KnownProviderGroup = "api" | "plan" | "custom";
 export function knownProviderGroup(provider: KnownProvider): KnownProviderGroup {
   if (provider.baseUrl === "") return "custom";
   return provider.billing === "plan" ? "plan" : "api";
+}
+
+/**
+ * 新建实例时预填的名字。label 在目录里有分区标题兜着；出了目录（服务商列表、模型菜单）
+ * 就没有分区可看，所以 label 撞名的条目（智谱的按量与套餐）在名字里补上计费方式。
+ */
+export function knownProviderDefaultName(provider: KnownProvider): string {
+  const collides = KNOWN_PROVIDERS.some((item) => item.id !== provider.id && item.label === provider.label);
+  if (!collides) return provider.label;
+  return `${provider.label}（${knownProviderGroup(provider) === "plan" ? "套餐" : "按量"}）`;
 }
 
 /**
