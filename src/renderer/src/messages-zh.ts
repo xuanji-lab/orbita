@@ -962,7 +962,7 @@ export const zh: Messages = {
     noWorkspaceFolder: "先选一个工作区文件夹",
     noRunningToCompact: "没有正在运行的任务可压缩",
     scanTimeout: "遗留扫描没能按时完成——已标为完成，没有生成清单。",
-    scanUnreadable: "读不懂扫描结果——已标为完成，没有生成清单。",
+    scanUnreadable: "读不懂扫描结果——已标为完成，没有生成清单。反复出现的话，可以在设置里换一个家务活模型。",
     scanNothing: "遗留扫描什么也没找到——已标为完成。",
     queuedBeforeWrapUp: "这个任务里还有排队的消息——先发出或撤回，再收尾。",
     noAgentSession: "这个任务没法扫描（没有智能体会话）——已直接标为完成。",
