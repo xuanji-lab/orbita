@@ -134,6 +134,41 @@ export function findSkillTokens(text: string): SkillToken[] {
   return tokens;
 }
 
+/** 一个 skill target 查出来的结果：块文本，或失败码（SKILL_NOT_FOUND_CODE / SKILL_UNREADABLE_CODE） */
+export type SkillLookup = { ok: true; block: string } | { ok: false; code: string };
+
+/**
+ * 整条消息的 `/skill:` 展开（主进程 expandSkillInvocation 的纯核，查 skill 由调用方注入）。
+ *
+ * **严格度分两档**：消息开头那一条是「用户明确在调用」——查不到就整条抛错，发送失败
+ * 如实上屏，不把 `/skill:xxx` 原文喂给模型让它角色扮演（与句中补全之前的口径一致）。
+ * 句中的 token 可能只是在**提到**一个 skill（「上次用 /skill:review 效果不好」），
+ * 也可能是父模型写进子会话任务说明里的一句——查不到就原样留在文字里，不让整条
+ * 消息发不出去。查得到的照常展开（句中补全选中的正是这种）。
+ */
+export async function expandSkillText(
+  text: string,
+  lookup: (target: string) => Promise<SkillLookup>,
+): Promise<string> {
+  const trimmed = text.trim();
+  const tokens = findSkillTokens(trimmed);
+  if (tokens.length === 0) return text;
+  const leading = tokens[0]?.start === 0 ? tokens[0].target : null;
+  // 先全部查完再替换：开头那条查不到，整条都不发
+  const blocks = new Map<string, string>();
+  const missing = new Set<string>();
+  for (const token of tokens) {
+    if (blocks.has(token.target) || missing.has(token.target)) continue;
+    const found = await lookup(token.target);
+    if (found.ok) blocks.set(token.target, found.block);
+    else if (token.target === leading) throw new Error(`${found.code}${token.target}`);
+    else missing.add(token.target);
+  }
+  const expandable = tokens.filter((token) => blocks.has(token.target));
+  if (expandable.length === 0) return text;
+  return replaceSkillTokens(trimmed, expandable, (target) => blocks.get(target) ?? "");
+}
+
 /**
  * 把原文里的 `/skill:` token 就地替换成块文本（块由调用方按 target 备好；
  * 查无此 skill 的报错在调用方——这里只管拼）。每个 token 的附加指示 = 它后面

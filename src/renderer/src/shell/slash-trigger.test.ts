@@ -66,7 +66,7 @@ describe("replaceToken", () => {
     const token = slashTokenAt("/c 附加说明", 2);
     deepStrictEqual(
       token !== null ? replaceToken("/c 附加说明", token, "/skill:code-review ") : "token 为 null",
-      "/skill:code-review  附加说明",
+      "/skill:code-review 附加说明",
     );
   });
   it("句中补全：替换的是整个 token（光标在 token 中间也替换到词尾）", () => {
@@ -74,7 +74,18 @@ describe("replaceToken", () => {
     const token = slashTokenAt(value, 6);
     deepStrictEqual(
       token !== null ? replaceToken(value, token, "/skill:ponytail ") : "token 为 null",
-      "先读 /skill:ponytail  再重构",
+      "先读 /skill:ponytail 再重构",
+    );
+  });
+});
+
+describe("replaceToken 的尾随空格", () => {
+  it("token 在行尾：插入串的尾随空格保留，光标落在空格后可直接接着打", () => {
+    const value = "先读 /po";
+    const token = slashTokenAt(value, value.length);
+    deepStrictEqual(
+      token !== null ? replaceToken(value, token, "/skill:ponytail ") : "token 为 null",
+      "先读 /skill:ponytail ",
     );
   });
 });

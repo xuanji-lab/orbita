@@ -13,10 +13,10 @@ import {
 } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import {
+  expandSkillText,
   findSkillTokens,
   formatSkillBlock,
   matchSkillTarget,
-  replaceSkillTokens,
   SKILL_NOT_FOUND_CODE,
   SKILL_UNREADABLE_CODE,
 } from "../../shared/skill.ts";
@@ -264,36 +264,30 @@ export function registerAgentIpc(
    * 选中的就是这个形态）：每个 token 就地替换，它后面到下一个 token 的散文成为
    * 那个块的附加指示。**展开在主进程**：name→正文的真源在 skill store，agent
    * 进程与 renderer 都不必再认一遍 skill；transcript 落的是展开后原文，重放
-   * 历史所见即所得。任何一条查不到或读不出就整条抛错——发送失败如实上屏，
-   * 而不是把 `/skill:xxx` 原文喂给模型让它角色扮演。target 先按 slug 匹配
-   * （面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
+   * 历史所见即所得。消息开头那条查不到或读不出就整条抛错（发送失败如实上屏）；
+   * 句中查不到的原样留在文字里——规则与理由见 shared/skill.ts 的 expandSkillText。
+   * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
    */
   const expandSkillInvocation = async (text: string, workspaceId: string | null): Promise<string> => {
-    const trimmed = text.trim();
-    const tokens = findSkillTokens(trimmed);
-    if (tokens.length === 0) return text;
+    if (findSkillTokens(text).length === 0) return text;
     const available = (await skills.list()).filter(
       (meta) =>
         !meta.missing && (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId))),
     );
-    // 先全部备好再替换：中途一条查不到，整条都不发
-    const blocks = new Map<string, string>();
-    for (const token of tokens) {
-      if (blocks.has(token.target)) continue;
-      const meta = matchSkillTarget(available, token.target);
-      if (meta === null) throw new Error(`${SKILL_NOT_FOUND_CODE}${token.target}`);
+    return expandSkillText(text, async (target) => {
+      const meta = matchSkillTarget(available, target);
+      if (meta === null) return { ok: false, code: SKILL_NOT_FOUND_CODE };
       const content = await skills.read(meta.slug);
-      if (content === null) throw new Error(`${SKILL_UNREADABLE_CODE}${token.target}`);
-      blocks.set(
-        token.target,
-        formatSkillBlock({
+      if (content === null) return { ok: false, code: SKILL_UNREADABLE_CODE };
+      return {
+        ok: true,
+        block: formatSkillBlock({
           name: content.name,
           location: join(skills.storeRoot(), meta.slug, "SKILL.md"),
           body: content.body,
         }),
-      );
-    }
-    return replaceSkillTokens(trimmed, tokens, (target) => blocks.get(target) ?? "");
+      };
+    });
   };
 
   async function submitTurn(input: SubmitAgentInput): Promise<void> {

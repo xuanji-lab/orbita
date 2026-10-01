@@ -62,9 +62,15 @@ export function slashTokenAt(value: string, cursor: number): SlashToken | null {
   };
 }
 
-/** 选中指令后只替换 token 本身，前后文（含同行的附加指示）原样保留。 */
+/**
+ * 选中指令后只替换 token 本身，前后文（含同行的附加指示）原样保留。
+ * 插入串自带的尾随空格遇到 token 后面本来就有的空白时省掉，不叠成双空格——
+ * 省掉后 `token.start + insertion.length` 恰好落在原有那个空白之后，光标位置不变。
+ */
 export function replaceToken(value: string, token: SlashToken, insertion: string): string {
-  return value.slice(0, token.start) + insertion + value.slice(token.end);
+  const after = value.slice(token.end);
+  const text = /\s$/.test(insertion) && /^\s/.test(after) ? insertion.slice(0, -1) : insertion;
+  return value.slice(0, token.start) + text + after;
 }
 
 /**

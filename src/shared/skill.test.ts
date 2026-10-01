@@ -1,12 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  expandSkillText,
   findSkillTokens,
   formatSkillBlock,
   matchSkillTarget,
   parseSkillSegments,
   replaceSkillTokens,
   skillForReadPath,
+  SKILL_NOT_FOUND_CODE,
+  type SkillLookup,
 } from "./skill.ts";
 
 describe("matchSkillTarget", () => {
@@ -92,6 +95,31 @@ describe("replaceSkillTokens", () => {
     assert.ok(out.startsWith(blockOf("a")), out);
     assert.ok(out.includes(`${blockOf("a")}\n\n先做\n\n${blockOf("b")}`), out);
     assert.ok(out.endsWith(`${blockOf("b")}\n\n再做`), out);
+  });
+});
+
+describe("expandSkillText", () => {
+  const known = new Set(["tdd", "review"]);
+  const lookup = async (target: string): Promise<SkillLookup> =>
+    known.has(target) ? { ok: true, block: `[${target}]` } : { ok: false, code: SKILL_NOT_FOUND_CODE };
+
+  it("开头那条查不到：整条抛错（明确的调用，不能静默喂原文给模型）", async () => {
+    await assert.rejects(expandSkillText("/skill:nope 做点事", lookup), new RegExp(`${SKILL_NOT_FOUND_CODE}nope`));
+  });
+  it("句中查不到：原样保留，不让整条消息发不出去", async () => {
+    assert.equal(await expandSkillText("上次用 /skill:nope 效果不好", lookup), "上次用 /skill:nope 效果不好");
+  });
+  it("句中查得到的照常展开，查不到的留在附加指示里", async () => {
+    assert.equal(
+      await expandSkillText("先读 /skill:tdd 再看 /skill:nope 的写法", lookup),
+      "先读 \n\n[tdd]\n\n再看 /skill:nope 的写法",
+    );
+  });
+  it("开头查得到、句中查不到：开头展开，句中原样", async () => {
+    assert.equal(await expandSkillText("/skill:review 参考 /skill:nope", lookup), "[review]\n\n参考 /skill:nope");
+  });
+  it("没有 token：原文原样返回（不 trim）", async () => {
+    assert.equal(await expandSkillText("  普通消息  ", lookup), "  普通消息  ");
   });
 });
 
