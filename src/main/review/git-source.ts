@@ -30,7 +30,14 @@ export type GitRunner = (args: string[], cwd: string) => Promise<GitRunOutcome>;
 
 export const realGitRunner: GitRunner = async (args, cwd) => {
   try {
-    const { stdout } = await execFileAsync("git", args, { cwd, maxBuffer: 32 * 1024 * 1024, encoding: "utf8" });
+    // -c core.quotepath=false：非 ASCII 路径原样输出。git 默认把中文路径 C 转义成
+    // `"\344\270\255.txt"`——未跟踪文件读盘 ENOENT 被静默跳过、已跟踪文件拉空 diff
+    // 误显「与基线一致」。加在 runner 一处，rev-parse / status / diff 全部生效。
+    const { stdout } = await execFileAsync("git", ["-c", "core.quotepath=false", ...args], {
+      cwd,
+      maxBuffer: 32 * 1024 * 1024,
+      encoding: "utf8",
+    });
     return { code: 0, stdout };
   } catch (cause) {
     // 非零退出码不是异常（not-repo / no-upstream 靠它表达）：stdout 在 error 上原样带回；
@@ -104,13 +111,25 @@ async function upstreamName(runner: GitRunner, cwd: string): Promise<string | nu
   return result.code === 0 && result.stdout.trim() !== "" ? result.stdout.trim() : null;
 }
 
-/** 来源 → git diff 的参数组（列表与正文同一套）。 */
-function diffArgs(source: ReviewSource, upstream: string | null, path?: string): string[] | null {
-  if (source === "unstaged") return ["diff", ...(path === undefined ? [] : ["--", path])];
-  if (source === "staged") return ["diff", "--cached", ...(path === undefined ? [] : ["--", path])];
+/**
+ * 来源 → git diff 的参数组。列表带 `--numstat`（行级统计，numstatEntries 解析）；
+ * 正文不带（unified diff 原样返回）。曾共用一套参数、列表忘了 --numstat，
+ * 真 git 输出 patch 正文被 numstat 解析器全部丢弃——三源列表永远空。
+ */
+function diffArgs(
+  source: ReviewSource,
+  upstream: string | null,
+  opts: { path?: string; numstat?: boolean } = {},
+): string[] | null {
+  // --no-renames：改名拆成「删旧 + 增新」两条真实路径。开着改名检测时 numstat 输出
+  // `旧名.txt => 新名.txt` 一行，解析出的路径读不了盘、拉不到 diff（空正文误显「已还原」）。
+  const numstat = opts.numstat === true ? ["--numstat"] : [];
+  const pathArg = opts.path === undefined ? [] : ["--", opts.path];
+  if (source === "unstaged") return ["diff", "--no-renames", ...numstat, ...pathArg];
+  if (source === "staged") return ["diff", "--cached", "--no-renames", ...numstat, ...pathArg];
   if (source === "branch") {
     if (upstream === null) return null;
-    return ["diff", `${upstream}...HEAD`, ...(path === undefined ? [] : ["--", path])];
+    return ["diff", "--no-renames", ...numstat, `${upstream}...HEAD`, ...pathArg];
   }
   return null;
 }
@@ -133,7 +152,7 @@ export async function gitReviewList(
   if (source === "branch") {
     const upstream = await upstreamName(runner, cwd);
     if (upstream === null) return { kind: "empty", reason: "no-upstream", cwd };
-    const args = diffArgs(source, upstream);
+    const args = diffArgs(source, upstream, { numstat: true });
     if (args === null) return { kind: "empty", reason: "no-upstream", cwd };
     const entries = numstatEntries((await runner(args, cwd)).stdout);
     return entries.length === 0
@@ -143,7 +162,7 @@ export async function gitReviewList(
 
   if (source === "unstaged") {
     const status = await runner(["status", "--porcelain=v2", "--untracked-files=all"], cwd);
-    const diff = await runner(diffArgs(source, null) ?? [], cwd);
+    const diff = await runner(diffArgs(source, null, { numstat: true }) ?? [], cwd);
     const entries = [...numstatEntries(diff.stdout), ...(await untrackedEntries(cwd, status.stdout, readUntracked))];
     if (entries.length === 0) return { kind: "empty", reason: "no-changes", cwd };
     // 同一路径可能两处出现（已改 + 未跟踪不会同路径；稳妥起见去重保序）
@@ -152,7 +171,7 @@ export async function gitReviewList(
     return { kind: "ok", cwd, entries: unique };
   }
 
-  const diff = await runner(diffArgs(source, null) ?? [], cwd);
+  const diff = await runner(diffArgs(source, null, { numstat: true }) ?? [], cwd);
   const entries = numstatEntries(diff.stdout);
   return entries.length === 0
     ? { kind: "empty", reason: "no-changes", cwd }
@@ -167,7 +186,7 @@ export async function gitReviewDiff(
   path: string,
 ): Promise<ReviewDiff> {
   const upstream = source === "branch" ? await upstreamName(runner, cwd) : null;
-  const args = diffArgs(source, upstream, path);
+  const args = diffArgs(source, upstream, { path });
   if (args === null) return { diff: null, binary: false, restored: false };
   const result = await runner(args, cwd);
   const diff = result.stdout.trimEnd();
