@@ -56,6 +56,26 @@ const devDirs = devDataDirs({ packaged: app.isPackaged, appData: app.getPath("ap
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
 
+/*
+ * 单实例锁。「关窗 = 收进托盘」之后，双击桌面图标必须回到原进程——否则两个进程
+ * 同时写同一份会话 JSONL / settings（「读全量 → 改写 → rename」的原子写挡不住
+ * 两个写入者，会互相覆盖丢更新）。锁按 userData 目录划分，dev 与打包版、显式
+ * `--user-data-dir` 的隔离实例互不干扰。
+ */
+if (!app.requestSingleInstanceLock()) {
+  // exit 而不是 quit：锁拿不到说明本进程还在最顶层、没建窗没接 IPC，没有要清理的东西
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    // 已有进程的窗口可能收在托盘里（hidden）或最小化：叫出来，不另起一窗
+    for (const window of mainWindows.list()) {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    }
+  });
+}
+
 /** 26-entry-layer §9.2 安全不变量：三条都不许放松。 */
 const SECURITY_INVARIANTS = {
   contextIsolation: true,
