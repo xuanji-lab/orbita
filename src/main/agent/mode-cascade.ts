@@ -34,9 +34,10 @@ export interface ModeCascadeDeps {
 /**
  * 把「用户切档」落到自己 + 全部直接子会话。本分支子会话只有一层（delegate 拒绝
  * 子再派），`childSessions` 也只取一层，不递归。子会话清单**先列后改**：改动与
- * 遍历互不影响。任何一个 setRuntimeMode / setStoredMode 抛错整个 handler 报错
- * （preload 翻成 IPC reject）——半途而废的切档比失败更糟：父子档位不一致正是
- * 这个功能要消灭的状态。
+ * 遍历互不影响。任何一个 setRuntimeMode / setStoredMode 抛错就停下、整个 handler
+ * 报错（preload 翻成 IPC reject，renderer 出红字）——**已经切过的不回滚**：父子档位
+ * 可能一时不一致，但用户看得见失败，再切一次即可对齐（切档幂等）。不做回滚是因为
+ * 回滚本身也可能失败，而且把已经放行的档悄悄改回去，比停在半路更难解释。
  */
 export async function applyModeCascade(
   deps: ModeCascadeDeps,
