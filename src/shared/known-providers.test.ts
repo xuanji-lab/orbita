@@ -5,8 +5,10 @@ import {
   isPlanBilling,
   knownModelParams,
   knownProviderDefaultName,
+  knownProviderOf,
   knownProviderGroup,
 } from "./known-providers.ts";
+import type { ProviderApi } from "./provider.ts";
 
 // 与 validateProvider 的 ID_PATTERN 同一条规则（那边未导出，这里镜像一份；改要同步）
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,64}$/;
@@ -64,11 +66,42 @@ describe("命名 —— label 是厂商名，计费方式交给分区", () => {
   });
 });
 
+/** 一个已配置 provider 的最小形状（knownProviderOf 的入参） */
+const p = (id: string, extra: { kind?: string; api?: ProviderApi } = {}) => ({
+  id,
+  ...(extra.kind === undefined ? {} : { kind: extra.kind }),
+  endpoint: { api: extra.api ?? ("openai-completions" as ProviderApi) },
+});
+
+describe("knownProviderOf —— 同一家的第二个实例也认得出", () => {
+  it("显式 kind 优先", () => {
+    assert.equal(knownProviderOf(p("my-ds", { kind: "deepseek" })).id, "deepseek");
+  });
+  it("老数据没有 kind：id 本身、-N 与 -copy 后缀都认回目录条目", () => {
+    assert.equal(knownProviderOf(p("deepseek")).id, "deepseek");
+    assert.equal(knownProviderOf(p("deepseek-2")).id, "deepseek");
+    assert.equal(knownProviderOf(p("kimi-coding-3", { api: "anthropic-messages" })).id, "kimi-coding");
+    assert.equal(knownProviderOf(p("zhipu-coding-copy2", { api: "anthropic-messages" })).id, "zhipu-coding");
+  });
+  it("后缀剥离不误伤：zhipu-coding 不会被认成 zhipu", () => {
+    assert.equal(knownProviderOf(p("zhipu-coding", { api: "anthropic-messages" })).id, "zhipu-coding");
+  });
+  it("认不出的按协议落兼容；不认识的 kind 当没写", () => {
+    assert.equal(knownProviderOf(p("proma")).id, "openai-compatible");
+    assert.equal(knownProviderOf(p("gw", { api: "anthropic-messages" })).id, "anthropic-compatible");
+    assert.equal(knownProviderOf(p("gw", { kind: "nope" })).id, "openai-compatible");
+  });
+  it("第二个套餐实例同样按套餐计费", () => {
+    assert.equal(isPlanBilling(p("kimi-coding-2", { api: "anthropic-messages" })), true);
+    assert.equal(isPlanBilling(p("my-kimi", { kind: "kimi-coding", api: "anthropic-messages" })), true);
+  });
+});
+
 describe("isPlanBilling —— 两句话不能混", () => {
   it("Coding Plan 与 Step Plan 是订阅制", () => {
-    assert.equal(isPlanBilling("zhipu-coding"), true);
-    assert.equal(isPlanBilling("zai"), true);
-    assert.equal(isPlanBilling("stepfun"), true);
+    assert.equal(isPlanBilling(p("zhipu-coding")), true);
+    assert.equal(isPlanBilling(p("zai")), true);
+    assert.equal(isPlanBilling(p("stepfun")), true);
   });
 
   it("白名单补的参数能取到，且只含确知字段（stepfun 官方页没写输出上限）", () => {
@@ -88,13 +121,13 @@ describe("isPlanBilling —— 两句话不能混", () => {
   });
 
   it("标准 API 按量计费", () => {
-    assert.equal(isPlanBilling("zhipu"), false);
-    assert.equal(isPlanBilling("deepseek"), false);
+    assert.equal(isPlanBilling(p("zhipu")), false);
+    assert.equal(isPlanBilling(p("deepseek")), false);
   });
 
   it("认不得的 id（自建网关）一律当按量算——藏起真实花费比多一行估价更坏", () => {
-    assert.equal(isPlanBilling("my-own-gateway"), false);
-    assert.equal(isPlanBilling(""), false);
+    assert.equal(isPlanBilling(p("my-own-gateway")), false);
+    assert.equal(isPlanBilling(p("")), false);
   });
 });
 

@@ -180,7 +180,14 @@ export interface AppSettings {
    * 用户指定，agent 每轮被告知（TurnDirectories.browserDownloads）。
    */
   browserDownloadDir?: string;
+  /**
+   * 设置 › 模型服务的厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，
+   * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
+   */
+  providerCardSize?: ProviderCardSize;
 }
+
+export type ProviderCardSize = "large" | "small";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
@@ -333,6 +340,7 @@ export function parseSettings(raw: unknown): AppSettings {
     lastUsed?: unknown;
     channelColumnWidth?: unknown;
     browserDownloadDir?: unknown;
+    providerCardSize?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -381,6 +389,10 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
+    // 不认识的尺寸当没选过（缺席 = large）
+    ...(record.providerCardSize === "large" || record.providerCardSize === "small"
+      ? { providerCardSize: record.providerCardSize }
+      : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }

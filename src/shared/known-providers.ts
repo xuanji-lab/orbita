@@ -371,12 +371,44 @@ export function knownProviderDefaultName(provider: KnownProvider): string {
   return `${provider.label}（${knownProviderGroup(provider) === "plan" ? "套餐" : "按量"}）`;
 }
 
+/** knownProviderOf 要的最小形状：Provider / ProviderDto 天然满足 */
+export interface ProviderKindSource {
+  id: string;
+  kind?: string;
+  endpoint: { api: ProviderApi };
+}
+
+function knownById(id: string): KnownProvider | undefined {
+  return KNOWN_PROVIDERS.find((item) => item.id === id);
+}
+
 /**
- * 这家是不是包月制。**认不得的 id（自建网关、以后新加的）一律当按量算**——
- * 误报成包月会把真实花费藏起来，比多显示一行估价更坏。
+ * 一个已配置的 provider 来自哪个目录条目。三档，先到先得：
+ *   1. 显式的 `kind`（新建 / 复制时写入）；
+ *   2. id 本身就是条目 id（第一个实例），或去掉 `-2` / `-copy` / `-copy3` 后缀后是——
+ *      老数据没有 kind，第二个实例与副本只能靠 id 的生成规则（nextFreeId / nextCopyId）认回来；
+ *   3. 都不是：按协议落到两个「兼容」条目之一。
+ * 永远有答案：调用方不必再处理「认不出来」。
  */
-export function isPlanBilling(providerId: string): boolean {
-  return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.billing === "plan";
+export function knownProviderOf(provider: ProviderKindSource): KnownProvider {
+  const explicit = provider.kind === undefined ? undefined : knownById(provider.kind);
+  if (explicit !== undefined) return explicit;
+  const byId = knownById(provider.id) ?? knownById(provider.id.replace(/-(?:\d+|copy\d*)$/, ""));
+  if (byId !== undefined) return byId;
+  const compatible = knownById(
+    provider.endpoint.api === "anthropic-messages" ? "anthropic-compatible" : "openai-compatible",
+  );
+  if (compatible === undefined) throw new Error("KNOWN_PROVIDERS 缺少兼容条目");
+  return compatible;
+}
+
+/**
+ * 这家是不是包月制。**认不得的（自建网关）一律当按量算**——
+ * 误报成包月会把真实花费藏起来，比多显示一行估价更坏。按条目判而不是按 id：
+ * 第二个 Kimi 实例（kimi-coding-2）一样是套餐。
+ */
+export function isPlanBilling(provider: ProviderKindSource): boolean {
+  return knownProviderOf(provider).billing === "plan";
 }
 
 /**
