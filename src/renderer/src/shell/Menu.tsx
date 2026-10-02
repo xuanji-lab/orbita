@@ -351,6 +351,21 @@ export function Menu(props: {
     };
   }, [open, close, positionMenu]);
 
+  /*
+   * 面板的宽度在首次量完之后还可能长（宽度尺、字体、滚动条落定），而定位已经按
+   * 旧宽度向右夹过——结果卡片贴死视口右缘（2026-10-02 实测：设置面模型卡片量时 366、
+   * 落定 374，右缘正好顶到窗口边，副行说明被挤成省略号）。开着时盯尺寸变了就重定位；
+   * positionMenu 对相同结果不 setState，不会自激。
+   */
+  useEffect(() => {
+    if (!open) return;
+    const panel = menuRef.current;
+    if (panel === null) return;
+    const observer = new ResizeObserver(() => positionMenu());
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [open, positionMenu]);
+
   // 键盘导航与渲染都走**过滤后**的清单——搜索时 cursor 与 Enter 只在可见项里打转
   const enabled = visible.filter(
     (item) => item.disabled !== true && item.fact !== true && item.header !== true,
