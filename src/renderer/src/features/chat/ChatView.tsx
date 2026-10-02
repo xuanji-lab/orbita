@@ -2360,7 +2360,8 @@ function UserBubble(props: {
   // 几千字，不能平铺进气泡；句中展开时代一条消息可能有多块，逐张成卡，块前后的
   // 文字按原顺序留在气泡里。新消息不再产生 `<skill>` 块，这条路径仅服务旧数据。
   const split = splitUserTextBlocks(textBlocks.map((block) => block.text));
-  const skillSegments = parseSkillSegments(stripInvocationBlock(split.body));
+  const body = stripInvocationBlock(split.body);
+  const skillSegments = parseSkillSegments(body);
   const skillCards =
     skillSegments === null
       ? []
@@ -2369,7 +2370,7 @@ function UserBubble(props: {
         );
   const skillFreeText =
     skillSegments === null
-      ? split.body
+      ? body
       : skillSegments
           .filter(
             (segment): segment is Extract<SkillSegment, { kind: "text" }> => segment.kind === "text",
