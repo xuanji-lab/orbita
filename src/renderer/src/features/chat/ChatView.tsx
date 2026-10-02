@@ -2087,7 +2087,7 @@ function UsageRing(props: { session: ChatSession }) {
           if (!next) setConfirming(false);
         }}
         trigger={({ open, toggle }) => (
-          <Chip active={open} onClick={toggle} aria-label={ring.label}>
+          <Chip active={open} onClick={toggle} ariaLabel={ring.label}>
             <Ring ring={ring} />
           </Chip>
         )}
