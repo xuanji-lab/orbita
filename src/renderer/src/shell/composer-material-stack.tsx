@@ -82,7 +82,7 @@ function ImageLayer(props: { images: readonly Extract<ComposerMaterial, { kind: 
 }
 
 /** 模型看不了图的一句话提示：跟在截图行下面，图标 + 文字（颜色是第二信号） */
-function NoVisionHint() {
+export function NoVisionHint() {
   const t = useT();
   return (
     <div

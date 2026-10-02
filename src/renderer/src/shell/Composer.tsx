@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { MaterialStack } from "./composer-material-stack.tsx";
+import { MaterialTetris } from "./MaterialTetris";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge } from "@shared/prompt-attachments";
 import { filesOf, type ComposerImage } from "./composer-images.ts";
@@ -104,6 +105,11 @@ export function Composer(props: {
   /** 指令面板 MCP 栏的 server 清单与重拉（同 skills 的规矩：面板打开时重拉） */
   servers: readonly McpServerInfo[];
   onReloadServers: () => void;
+  /**
+   * 材料区俄罗斯方块（设置 › 游戏化，默认关）：开启时四类材料拼成 dense 方块井，
+   * 材料数据与默认叠放是同一份（下面 attachments / files / pasted / quotes 这几个 prop）。
+   */
+  materialTetris?: boolean;
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -346,9 +352,15 @@ export function Composer(props: {
   const dragging = props.dropActive === true;
   return (
     // 材料叠放（B 定稿）：四路附件全部移出输入卡，叠在卡片上方——截图一行、胶囊一行、
-    // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）
+    // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身。叠放层按设置切换：游戏化的
+    // 俄罗斯方块开关（设置 › 游戏化，默认关）开启时换 MaterialTetris——同一份
+    // composerMaterials() 清单、同一套移除/跳回行为，只换排布。
     <div style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
-      <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
+      {props.materialTetris === true ? (
+        <MaterialTetris materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
+      ) : (
+        <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
+      )}
       <div
         ref={cardRef}
         className="glass-card"
@@ -366,6 +378,7 @@ export function Composer(props: {
           outlineOffset: -5,
         }}
       >
+
       {panelOpen && (
         <div
           ref={commandListRef}

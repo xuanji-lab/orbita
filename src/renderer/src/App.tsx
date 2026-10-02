@@ -589,6 +589,7 @@ export function App() {
                 onOpenParent={openParent}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
+                materialTetris={settings.materialTetris === true}
                 scrollToEnd
                 scrollToEndHotkey
               />

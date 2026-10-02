@@ -65,18 +65,19 @@ export function columnsForWidth(containerPx: number): number {
 }
 
 /**
- * 模拟 `grid-auto-flow: row dense` 的排布，返回占满后的总行数。
+ * 模拟 `grid-auto-flow: row dense` 的排布，返回每个块的落位（行、列，0 起）。
  *
  * dense 的语义：按 DOM 顺序逐个放，每个找**最早能放下的洞**（行优先扫描），
  * 早先行数不一留下的洞会被后面的小块补上。用位图直白模拟：放一个 w×h 的块，
  * 就是从第一行起扫第一个「连续 w 列、连续 h 行都空闲」的矩形区。
  *
- * 这个函数是「展开 / 收起」的判定源：行数 > TETRIS_MAX_ROWS 才显示展开行。
+ * 落位是「展开 / 收起」的判定源：折叠态只渲染落位完全在前 4 行内的块
+ * （而不是 CSS 裁切——不出现半截块）；行数 > TETRIS_MAX_ROWS 才显示展开行。
  */
-export function packedRows(
+export function packPlacements(
   spans: readonly { col: number; row: number }[],
   columns: number,
-): number {
+): { row: number; col: number }[] {
   // occupied[r][c] = 第 r 行第 c 列是否已占。行按需长（ensureRow）
   const occupied: boolean[][] = [];
   const ensureRow = (row: number): boolean[] => {
@@ -93,6 +94,7 @@ export function packedRows(
     }
     return true;
   };
+  const placements: { row: number; col: number }[] = [];
   for (const span of spans) {
     const colSpan = Math.min(span.col, columns);
     const rowSpan = span.row;
@@ -104,11 +106,28 @@ export function packedRows(
             const cells = ensureRow(r);
             for (let c = col; c < col + colSpan; c++) cells[c] = true;
           }
+          placements.push({ row, col });
           placed = true;
           break;
         }
       }
     }
   }
-  return occupied.length;
+  return placements;
+}
+
+/** dense 排布占满后的总行数（packPlacements 的行数摘要） */
+export function packedRows(
+  spans: readonly { col: number; row: number }[],
+  columns: number,
+): number {
+  const placements = packPlacements(spans, columns);
+  let rows = 0;
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i];
+    const at = placements[i];
+    if (span === undefined || at === undefined) continue;
+    rows = Math.max(rows, at.row + span.row);
+  }
+  return rows;
 }

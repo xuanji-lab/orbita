@@ -1,0 +1,182 @@
+/**
+ * 俄罗斯方块材料区（MaterialTetris.tsx；设置 › 游戏化 › 材料区俄罗斯方块，默认关）。
+ *
+ * 类型色只在 tokens/colors.css 的材料类型色组（--color-material-*）里取，
+ * 这里只做形状与淡染：块底 = 类型色 14% 混面板、描边 38% 透明、图标用本色、
+ * 文字恒用正墨（见设计系统 readme 的 Material type colours 一节）。
+ * 方块尺寸与落位是 tetris-layout.ts 的纯函数；这里的 --tetris-cell 与其
+ * TETRIS_CELL_PX 同值（30px：1 行的块与现有 28px chip 近邻）。
+ */
+.tetris-wrap {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tetris-well {
+  --tetris-cell: 30px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, var(--tetris-cell));
+  grid-auto-rows: var(--tetris-cell);
+  grid-auto-flow: row dense;
+  gap: 4px;
+  min-width: 0;
+  /* 新块从井口上方落下：井外的那段裁掉（clip 而非 hidden，留 10px 余量——
+     截图方块左上角半露的回形针标记约 9px，静态态不能被裁） */
+  overflow: clip;
+  overflow-clip-margin: 10px;
+}
+
+.tetris-block {
+  --tone: var(--color-text-secondary);
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 8px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tone) 14%, var(--color-bg-panel));
+  border: 1px solid color-mix(in srgb, var(--tone) 38%, transparent);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-primary);
+  overflow: hidden;
+}
+
+.tetris-block .orbita-icon {
+  color: var(--tone);
+  flex: 0 0 auto;
+}
+
+.tetris-image {
+  --tone: var(--color-material-image);
+  padding: 2px;
+}
+.tetris-file {
+  --tone: var(--color-material-file);
+}
+.tetris-pasted {
+  --tone: var(--color-material-pasted);
+}
+.tetris-quote {
+  --tone: var(--color-material-quote);
+}
+
+/* 长粘贴的 2 行高形态：头行 + 两行预览 */
+.tetris-tall {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+}
+.tetris-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tetris-preview {
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 名字 / 正文：单行省略，块宽说了算 */
+.tetris-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* meta（引用的第几轮 · 谁 · 字数）：机器事实用 mono，靠右不挤名字 */
+.tetris-meta {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* 移除键：与 FileRefChip 的移除键同一配方（18px 圆、面板底、subtle 描边） */
+.tetris-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.tetris-x:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 引用正文是按钮（可跳回原文）：占名字的位置，不可跳时置灰不挡 */
+.tetris-quote-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tetris-quote-text:disabled {
+  cursor: default;
+}
+.tetris-quote-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--tone) 18%, transparent);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+}
+
+/* 展开 / 收起一行：井下方的一行安静文字键，与引用卡的「还有 N 条」同语气 */
+.tetris-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  justify-self: start;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+.tetris-more:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}

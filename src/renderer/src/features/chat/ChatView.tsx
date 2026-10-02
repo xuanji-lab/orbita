@@ -467,6 +467,11 @@ function ChatViewBody(props: {
    */
   theme?: Exclude<ThemePreference, "system">;
   /**
+   * 材料区俄罗斯方块（设置 › 游戏化，默认关）：透给 Composer，开启时材料区换
+   * 成方块井（同一份材料数据与移除/跳回行为）。设置在 App 层，这里只透传。
+   */
+  materialTetris?: boolean;
+  /**
    * 右栏 Sub-sessions 面板会话层正开着的子会话 id（子会话 PR4c）：派出卡按它描边。
    * 只有主槽的 ChatView 拿到非 null 值。
    */
@@ -797,6 +802,7 @@ function ChatViewBody(props: {
       onRemovePasted={session.removePasted}
       onPasteLargeText={session.addPastedText}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
+      materialTetris={props.materialTetris}
     />
   );
 

@@ -4,6 +4,7 @@ import {
   columnsForWidth,
   fileSpan,
   imageSpan,
+  packPlacements,
   packedRows,
   pastedSpan,
   quoteSpan,
@@ -95,6 +96,34 @@ describe("packedRows：dense 排布的行数模拟", () => {
     // 12 列容器塞 30 个 3×1 的文件块：dense 也排不下 4 行
     const spans = Array.from({ length: 30 }, () => ({ col: 3, row: 1 }));
     deepStrictEqual(packedRows(spans, 12) > TETRIS_MAX_ROWS, true);
+  });
+});
+
+describe("packPlacements：落位与折叠过滤", () => {
+  it("首个块从 (0,0) 起，第二个排它后面，装不下换行", () => {
+    deepStrictEqual(
+      packPlacements([{ col: 2, row: 1 }, { col: 2, row: 1 }], 6),
+      [{ row: 0, col: 0 }, { row: 0, col: 2 }],
+    );
+    deepStrictEqual(
+      packPlacements([{ col: 4, row: 1 }, { col: 4, row: 1 }], 6),
+      [{ row: 0, col: 0 }, { row: 1, col: 0 }],
+    );
+  });
+
+  it("dense 回填：2×2 截图旁边的洞由后面的 1×1 补上", () => {
+    deepStrictEqual(
+      packPlacements([{ col: 2, row: 2 }, { col: 1, row: 1 }], 3),
+      [{ row: 0, col: 0 }, { row: 0, col: 2 }],
+    );
+  });
+
+  it("落位完全在前 4 行内的块折叠态可见（跨界的不可见）", () => {
+    // 3 列容器：三个 3×1 排 0/1/2 行，第四个到第 3 行，第五个到第 4 行
+    const spans = Array.from({ length: 5 }, () => ({ col: 3, row: 1 }));
+    const placements = packPlacements(spans, 3);
+    const visible = placements.filter((at, i) => at.row + spans[i]!.row <= TETRIS_MAX_ROWS).length;
+    deepStrictEqual(visible, 4);
   });
 });
 
