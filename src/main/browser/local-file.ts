@@ -15,10 +15,13 @@ import { isAbsolute, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isWebPageFile } from "../../shared/files.ts";
 
-/** 形如本地路径的输入：绝对路径（POSIX / Windows 盘符）或 file:// 地址 */
+/** 形如本地路径的输入：绝对路径（POSIX / Windows 盘符 / UNC 与设备路径 `\\…`）或 file:// 地址 */
 export function looksLikeLocalPath(input: string): boolean {
   const text = input.trim();
-  return /^file:\/\//i.test(text) || text.startsWith("/") || /^[A-Za-z]:[\\/]/.test(text);
+  // Windows 的绝对路径除了盘符还有两类不以盘符开头：UNC（\\server\share\…）与设备路径（\\?\C:\…）。
+  // 不认它们的话它们会漏到网址/搜索那条路：UNC 被解析成 https://server/share/… 并对该主机发请求，
+  // \\?\C:\… 整条被 URL 编码后送进搜索——本地路径外泄给第三方。
+  return /^file:\/\//i.test(text) || text.startsWith("/") || /^[A-Za-z]:[\\/]/.test(text) || text.startsWith("\\\\");
 }
 
 export type LocalFileResult =
