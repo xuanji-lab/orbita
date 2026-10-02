@@ -354,7 +354,7 @@ function SubSessionControls(props: {
           onToggleStar={props.onToggleStarModel}
           onSelect={chooseModel}
           trigger={({ open, toggle }) => (
-            <Chip active={open} italic chevron title={t.chat.modelTip} onClick={toggle}>
+            <Chip active={open} chevron title={t.chat.modelTip} onClick={toggle}>
               {view.model?.modelId ?? t.chat.noModel}
             </Chip>
           )}
