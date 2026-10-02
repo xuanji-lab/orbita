@@ -74,6 +74,7 @@ import {
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import { insertToken, type TokenPickResult } from "../../shell/panel-token.ts";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
@@ -420,6 +421,13 @@ function useSkillIndex(): {
   return { skills, servers, reload, reloadServers };
 }
 
+/*
+ * 右栏选取回执的消费水位（模块级）：只有主槽的 ChatView 拿 tokenPickResult，
+ * 不会串合；但主槽会在设置页来回切时重挂——实例 ref 会归零，旧回执被重放、
+ * token 插两遍。水位放模块级，重挂也记得消费过哪一条。
+ */
+let consumedPickNonce = 0;
+
 function ChatViewBody(props: {
   /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
   dropActive?: boolean;
@@ -494,6 +502,18 @@ function ChatViewBody(props: {
    * End 变成同时滚两个面——面板的回底走浮钮，不抢全局键。
    */
   scrollToEndHotkey?: boolean;
+  /**
+   * 「/ + 空格」打开右栏选取（panel-token.ts）：消息开头孤立的 / 按空格时交出插入
+   * 锚点。**只有主槽的 ChatView 拿到它**（App 在那边接住去开面板）；抽屉 / 面板内
+   * 的 Composer 不参与，那边的 / 空格就是普通文字。
+   */
+  onSlashSpace?: (position: number) => boolean;
+  /**
+   * 右栏选取的一次性回执（nonce 单调递增，同 channelOpenRequest 的先例）：token
+   * 非空 = 插到 position（execCommand 保撤销栈）；null = 取消，只把焦点送回输入框。
+   * 只有主槽的 ChatView 拿到它。
+   */
+  tokenPickResult?: TokenPickResult | null;
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
@@ -501,6 +521,36 @@ function ChatViewBody(props: {
   // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
   const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
+
+  // ── 右栏选取的回执：插入 token、焦点回输入框（panel-token.ts）────────
+  useEffect(() => {
+    const result = props.tokenPickResult;
+    if (result == null || result.nonce <= consumedPickNonce) return;
+    consumedPickNonce = result.nonce;
+    const composerTextarea = (): HTMLTextAreaElement | null =>
+      document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
+    if (result.token === null) {
+      requestAnimationFrame(() => composerTextarea()?.focus());
+      return;
+    }
+    const token = result.token;
+    const anchor = result.position;
+    requestAnimationFrame(() => {
+      const el = composerTextarea();
+      const position = Math.max(0, Math.min(anchor, session.draft.length));
+      const next = insertToken(session.draft, position, token);
+      // execCommand("insertText") 保撤销栈：input 事件会把最终值送回 onChange →
+      // draft 自动同步；输入框不在（设置页盖着）或被拒（只读）就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tokenPickResult]);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -797,6 +847,7 @@ function ChatViewBody(props: {
       onRemovePasted={session.removePasted}
       onPasteLargeText={session.addPastedText}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
+      onSlashSpace={props.onSlashSpace}
     />
   );
 

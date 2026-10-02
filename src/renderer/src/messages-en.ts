@@ -1151,6 +1151,8 @@ export const en = {
   mcp: {
     title: "MCP servers",
     addServer: "Add a server",
+    filterPlaceholder: "Filter servers…",
+    pickerHint: "Enter inserts · Tab switches to skills · Esc cancels",
     editConfig: "Edit mcp.json",
     reloading: "Reloading…",
     reload: "Reload",
@@ -1208,6 +1210,7 @@ export const en = {
     filterAria: "Filter skills",
     clear: "Clear",
     noMatch: (query: string) => `No skill matches “${query}”.`,
+    pickerHint: "Enter inserts · Tab switches to MCP servers · Esc cancels",
     global: "Global",
     disabled: "Disabled",
     missing: "Missing",

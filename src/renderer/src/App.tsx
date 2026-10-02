@@ -34,6 +34,7 @@ import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRai
 import { RightPanelSlot } from "./shell/RightPanel";
 import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
@@ -413,6 +414,51 @@ export function App() {
     setRightPanel(next);
   }, []);
 
+  // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
+  // Composer 把消息开头孤立的 / 按空格时交来插入锚点（那个 / 的位置）；面板选中后
+  // 经 tokenPickResult（nonce 一次性请求，同 channelOpenRequest / reviewFocus 的
+  // 先例）传回 ChatView 插入并焦点回输入框。选完即收面板：选取是输入辅助，与指令
+  // 面板同一种临时性；拖拽入口不受影响（面板开着时随时能拖）。
+  const [tokenPickerOn, setTokenPickerOn] = useState(false);
+  const tokenPickAnchorRef = useRef<number | null>(null);
+  const [tokenPickResult, setTokenPickResult] = useState<TokenPickResult | null>(null);
+  const tokenPickNonceRef = useRef(0);
+  const openTokenPicker = useCallback((position: number): boolean => {
+    tokenPickAnchorRef.current = position;
+    setTokenPickerOn(true);
+    setRightPanel("skills");
+    return true;
+  }, []);
+  const finishTokenPick = useCallback(
+    (token: string | null): void => {
+      // 锚点丢失（面板被切走等）就落到草稿末尾——选取的意图仍是「插进来」
+      const position = tokenPickAnchorRef.current ?? session.draft.length;
+      tokenPickAnchorRef.current = null;
+      setTokenPickerOn(false);
+      setRightPanel(null);
+      tokenPickNonceRef.current += 1;
+      setTokenPickResult({ token, position, nonce: tokenPickNonceRef.current });
+    },
+    [session.draft],
+  );
+  // 面板被切走 / 关掉（rail 点了别的、× 、全局 Esc）：选取态跟着退，锚点一并丢
+  useEffect(() => {
+    if (tokenPickerOn && rightPanel !== "skills" && rightPanel !== "mcp") {
+      setTokenPickerOn(false);
+      tokenPickAnchorRef.current = null;
+    }
+  }, [rightPanel, tokenPickerOn]);
+  const skillsPicker: TokenPickerControl = {
+    onSelect: finishTokenPick,
+    onCancel: () => finishTokenPick(null),
+    onSwitch: () => setRightPanel("mcp"),
+  };
+  const mcpPicker: TokenPickerControl = {
+    onSelect: finishTokenPick,
+    onCancel: () => finishTokenPick(null),
+    onSwitch: () => setRightPanel("skills"),
+  };
+
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
   // 会话层时，Esc 只退一层回列表（escapeFrom），不直接关掉整个面板——与面板内部
   // 「返回」按钮同一个退出台阶（子会话 PR4c 2.1）。槽里是父子会话面板（不够宽）时
@@ -591,6 +637,8 @@ export function App() {
                 theme={resolvedTheme}
                 scrollToEnd
                 scrollToEndHotkey
+                onSlashSpace={openTokenPicker}
+                tokenPickResult={tokenPickResult}
               />
             )}
           </div>
@@ -644,9 +692,10 @@ export function App() {
                   onClose={() => handlePanel(null)}
                   defaultWorkspaceId={session.workspaceId}
                   onCreateSkill={createSkillDraft}
+                  picker={tokenPickerOn ? skillsPicker : undefined}
                 />
               ) : shownPanel === "mcp" ? (
-                <McpPanel skills={skills} onClose={() => handlePanel(null)} />
+                <McpPanel skills={skills} onClose={() => handlePanel(null)} picker={tokenPickerOn ? mcpPicker : undefined} />
               ) : shownPanel === "drawer" ? (
                 <Drawer
                   engine={engine}

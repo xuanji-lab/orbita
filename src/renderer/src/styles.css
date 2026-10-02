@@ -1710,6 +1710,46 @@ body {
   flex: 0 0 auto;
 }
 
+/*
+ * 「/ + 空格」选取模式的键盘提示行（panel-token.ts）：过滤行下方一条微字，
+ * 说清 ↑↓ / Enter / Tab / Esc 各自干什么。不设 uppercase——那是组标签的待遇。
+ */
+.panel-picker-hint {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * 长按拖拽源（useLongPressDrag.ts）：按住 300ms 进入可拖状态后 grab 光标 +
+ * 禁选中（起拖前的微动不该拉出文本选区）；起拖后源行压淡，注意力跟落点走
+ * （同 QueueStrip 拖拽源）。Skills 行与 MCP 卡共用这两个类。
+ */
+.drag-armed {
+  cursor: grab;
+  user-select: none;
+}
+.drag-source {
+  opacity: 0.4;
+}
+
+/* 选取模式的键盘高亮：淡底 + semibold（.option-row 选中同款口径），盖过 hover */
+.skill-row.picker-active {
+  background: var(--option-active-bg);
+}
+.skill-row.picker-active .skill-row-name {
+  font-weight: var(--weight-semibold);
+}
+.mcp-card.picker-active {
+  border-color: var(--color-border-strong);
+  background: var(--option-active-bg);
+}
+
 /* 组间发丝线：组与组之间 1px 分隔，代替纯间距——长列表扫读时组边界更清楚 */
 .skill-group + .skill-group {
   border-top: 1px solid var(--color-border-subtle);

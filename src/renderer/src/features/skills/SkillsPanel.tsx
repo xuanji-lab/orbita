@@ -16,6 +16,12 @@ import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
 import { isSkillSlug } from "@shared/skill";
 import { filterSkills } from "./skill-filter.ts";
+import {
+  skillToken,
+  type OrbitaTokenPayload,
+  type TokenPickerControl,
+} from "../../shell/panel-token.ts";
+import { useLongPressDrag } from "../../shell/useLongPressDrag.ts";
 import { useT } from "../../locale.ts";
 
 /** 行 hover tooltip 出现的延迟——比 IconButton 的 200ms 更慢，快速划过列表不惊扰 */
@@ -37,6 +43,8 @@ export function SkillsPanel(props: {
   defaultWorkspaceId: string | null;
   /** Create skill…：新建会话并预填 composer，让 agent 用 create_skill 落盘 */
   onCreateSkill: () => void;
+  /** 「/ + 空格」右栏选取模式（panel-token.ts）：只主槽的 App 提供，rail 开的面板不传 */
+  picker?: TokenPickerControl;
 }) {
   const { skills } = props;
   /** 当前面板视图：列表 / 详情 / 新建表单（4-1） */
@@ -49,6 +57,13 @@ export function SkillsPanel(props: {
   useEffect(() => {
     if (selected !== null && meta === null) setView("list");
   }, [selected, meta]);
+
+  // 进入选取模式时回列表视图：详情页里没有可选取的行，「/ + 空格」要把人带到
+  // 能选的地方（rail 正常开面板不受影响——那边 picker 恒 undefined）
+  useEffect(() => {
+    if (props.picker !== undefined) setSelected(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.picker !== undefined]);
 
   // 名字原样显示——「名字 == 路径」的老数据在 store 读时已治，显示层不截尾
   const workspaceName = (id: string): string =>
@@ -75,6 +90,7 @@ export function SkillsPanel(props: {
       }}
       onCreateSkill={props.onCreateSkill}
       onClose={props.onClose}
+      picker={props.picker}
     />
   );
 }
@@ -114,6 +130,7 @@ function SkillList(props: {
   onSelect: (slug: string) => void;
   onCreateSkill: () => void;
   onClose: () => void;
+  picker?: TokenPickerControl;
 }) {
   const t = useT();
   const { skills } = props;
@@ -123,11 +140,106 @@ function SkillList(props: {
   const [menuOpen, setMenuOpen] = useState(false);
   /** 过滤行的查询词；分组仍在这个组件里做，过滤只决定哪些行留下（skill-filter.ts） */
   const [query, setQuery] = useState("");
+  const picker = props.picker;
+  const filterRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  /** 选取模式的高亮行（↑↓ 移动，Enter 选中）；-1 = 无高亮 */
+  const [pickIndex, setPickIndex] = useState(-1);
+  // 过滤与计数：列表 / 空态 / 加载三态共用（filterRow 的计数也在场）
+  const total = skills.skills.length;
+  const filtered = filterSkills(skills.skills, query);
+  const filtering = query.trim() !== "";
+  // 选取模式的可行行：扁平、去 missing（拖进输入框的 token 要能展开）
+  const pickRows = picker !== undefined ? filtered.filter((s) => !s.missing) : [];
+  // 进入选取模式：清词、聚焦过滤行、高亮首行（与指令面板主模式同款）
+  useEffect(() => {
+    if (picker === undefined) return;
+    setQuery("");
+    setPickIndex(-1);
+    filterRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picker !== undefined]);
+  // 面板刚开时清单还在读盘（空表），读回来后补上首行高亮；过滤后越界则夹回
+  useEffect(() => {
+    if (picker === undefined) return;
+    setPickIndex((i) => (pickRows.length === 0 ? -1 : i === -1 ? 0 : Math.min(i, pickRows.length - 1)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickRows.length]);
+  // 高亮行滚进视野（同 Composer 指令面板的 block:"nearest"，不抖）
+  useEffect(() => {
+    listRef.current?.querySelector('[data-picker-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [pickIndex]);
+  /** 选取模式的键盘导航：↑↓ 移动、Enter 选中、Tab 切到 MCP、Esc 清词→退出 */
+  const onPickerKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (picker === undefined) return;
+    const count = pickRows.length;
+    if (event.key === "ArrowDown" && count > 0) {
+      event.preventDefault();
+      setPickIndex((i) => (i === -1 ? 0 : (i + 1) % count));
+    } else if (event.key === "ArrowUp" && count > 0) {
+      event.preventDefault();
+      setPickIndex((i) => (i === -1 ? count - 1 : (i - 1 + count) % count));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const row = pickRows[pickIndex >= 0 ? pickIndex : 0];
+      if (row !== undefined) picker.onSelect(skillToken(row.slug));
+    } else if (event.key === "Tab") {
+      // Tab 切面板（skills ↔ MCP）：搜索框里的 ←→ 仍归光标移动，不抢
+      event.preventDefault();
+      picker.onSwitch();
+    } else if (event.key === "Escape") {
+      // 两段式：先清词（人还在搜），词空了才退出选取
+      event.stopPropagation();
+      if (query !== "") setQuery("");
+      else picker.onCancel();
+    }
+  };
 
   const header = (
     <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
       {t.skills.title}
     </strong>
+  );
+  // 过滤行（+ 选取模式的提示行）：列表 / 空态 / 加载三态共用同一份。**不能只长在
+  // 列表分支里**——「/ + 空格」开面板时清单常还在读盘，先渲染加载态，过滤行不在
+  // 场上，选取模式的聚焦就落空了
+  const shownCount = picker !== undefined ? pickRows.length : filtered.length;
+  const filterRow = (
+    <>
+      <div className="skills-filter-row">
+        <Icon name="search" size={14} />
+        <input
+          ref={filterRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (picker !== undefined) {
+              onPickerKeyDown(e);
+              return;
+            }
+            // Esc 清空输入；已经空了就不拦截——让它照旧冒泡去关面板（App.tsx 的
+            // 全局 Esc 处理），两次 Esc 才关面板的手感和大多数搜索框一致
+            if (e.key === "Escape" && query !== "") {
+              e.stopPropagation();
+              setQuery("");
+            }
+          }}
+          placeholder={t.skills.filter}
+          aria-label={t.skills.filterAria}
+        />
+        <span className="skills-filter-count">{filtering ? `${shownCount} / ${total}` : total}</span>
+        {query !== "" && (
+          <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
+            <Icon name="x" size={12} />
+          </IconButton>
+        )}
+      </div>
+      {picker !== undefined && (
+        <div className="panel-picker-hint" aria-hidden="true">
+          {t.skills.pickerHint}
+        </div>
+      )}
+    </>
   );
 
   // 空态与加载：footer 的 reveal 行照常（新建的路一直在）
@@ -140,6 +252,7 @@ function SkillList(props: {
         headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
+        {filterRow}
         <div style={{ padding: "var(--space-4)" }}>
           <PanelLine>{t.common.loading}</PanelLine>
         </div>
@@ -155,6 +268,7 @@ function SkillList(props: {
         headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
+        {filterRow}
         {/* 空态自己包一层内容版式（与 MCP 面板同款）：列表行的 hover 要通到面板
             两个侧缘（行自带内边距），所以壳的内容区不能统一加 padding——
             空态没有行，忘了这层就会整段贴着面板左缘 */}
@@ -174,10 +288,6 @@ function SkillList(props: {
     );
   }
 
-  const total = skills.skills.length;
-  const filtered = filterSkills(skills.skills, query);
-  const filtering = query.trim() !== "";
-
   const linked = filtered.filter((s) => s.global || s.workspaces.length > 0);
   const disabled = filtered.filter((s) => !s.global && s.workspaces.length === 0);
   const globalMembers = filtered.filter((s) => s.global);
@@ -191,29 +301,34 @@ function SkillList(props: {
       footer={<FooterReveal skills={skills} />}
     >
       <>
-        <div className="skills-filter-row">
-          <Icon name="search" size={14} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              // Esc 清空输入；已经空了就不拦截——让它照旧冒泡去关面板（App.tsx 的
-              // 全局 Esc 处理），两次 Esc 才关面板的手感和大多数搜索框一致
-              if (e.key === "Escape" && query !== "") {
-                e.stopPropagation();
-                setQuery("");
-              }
-            }}
-            placeholder={t.skills.filter}
-            aria-label={t.skills.filterAria}
-          />
-          <span className="skills-filter-count">{filtering ? `${filtered.length} / ${total}` : total}</span>
-          {query !== "" && (
-            <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
-              <Icon name="x" size={12} />
-            </IconButton>
-          )}
-        </div>
+        {filterRow}
+        {picker !== undefined ? (
+          /* 选取模式：扁平列表（分组对 ↑↓ 导航只是噪声），点选即插 token */
+          <div ref={listRef} style={{ display: "grid", alignContent: "start" }}>
+            {error !== null && (
+              <div style={{ padding: "var(--space-3)" }}>
+                <PanelLine danger>{t.skills.readFailed} {error}</PanelLine>
+              </div>
+            )}
+            {pickRows.length === 0 ? (
+              <div style={{ padding: "var(--space-4)" }}>
+                <PanelLine>{t.skills.noMatch(query.trim())}</PanelLine>
+              </div>
+            ) : (
+              pickRows.map((s, index) => (
+                <SkillRow
+                  key={s.slug}
+                  skill={s}
+                  onSelect={props.onSelect}
+                  workspaceName={props.workspaceName}
+                  onClean={skills.clean}
+                  pickerActive={index === pickIndex}
+                  onPickerSelect={() => picker.onSelect(skillToken(s.slug))}
+                />
+              ))
+            )}
+          </div>
+        ) : (
         <div style={{ display: "grid", alignContent: "start" }}>
           {error !== null && (
             <div style={{ padding: "var(--space-3)" }}>
@@ -276,6 +391,7 @@ function SkillList(props: {
             </>
           )}
         </div>
+        )}
       </>
     </RightPanelFrame>
   );
@@ -314,10 +430,18 @@ function SkillRow(props: {
   onSelect: (slug: string) => void;
   workspaceName: (id: string) => string;
   onClean: (slug: string) => void;
+  /** 选取模式：本行是否高亮（↑↓ 键盘导航的位置） */
+  pickerActive?: boolean;
+  /** 选取模式：点选即插 token（替换「点开详情」） */
+  onPickerSelect?: () => void;
 }) {
   const t = useT();
   const { skill } = props;
   const dim = props.dim === true;
+  // 长按拖拽源（useLongPressDrag）：missing 的拖不了——token 落进输入框也展开不了
+  const drag = useLongPressDrag(
+    () => (skill.missing ? null : { kind: "skill", token: skillToken(skill.slug) }) satisfies OrbitaTokenPayload | null,
+  );
   const setNames = [skill.global ? t.skills.global : null, ...skill.workspaces.map(props.workspaceName)].filter(
     (name): name is string => name !== null,
   );
@@ -351,13 +475,23 @@ function SkillRow(props: {
 
   return (
     <div
-      className={`skill-row${skill.missing ? " skill-row-missing" : dim ? " skill-row-dim" : ""}`}
+      className={`skill-row${skill.missing ? " skill-row-missing" : dim ? " skill-row-dim" : ""}${
+        props.pickerActive === true ? " picker-active" : ""
+      }${drag.armed ? " drag-armed" : ""}${drag.dragging ? " drag-source" : ""}`}
+      data-picker-active={props.pickerActive === true ? "true" : undefined}
+      draggable={drag.armed}
+      onPointerDown={drag.handlers.onPointerDown}
+      onClickCapture={drag.handlers.onClickCapture}
+      onDragStart={drag.handlers.onDragStart}
+      onDragEnd={drag.handlers.onDragEnd}
     >
       <button
         ref={tooltip.anchorRef}
         type="button"
         className="skill-row-main"
-        onClick={() => props.onSelect(skill.slug)}
+        onClick={() =>
+          props.onPickerSelect !== undefined ? props.onPickerSelect() : props.onSelect(skill.slug)
+        }
         onMouseEnter={tooltip.handlers.onMouseEnter}
         onMouseLeave={tooltip.handlers.onMouseLeave}
         onFocus={tooltip.handlers.onFocus}

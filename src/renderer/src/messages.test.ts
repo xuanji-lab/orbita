@@ -85,6 +85,7 @@ const ALLOWED_LATIN = new Set([
   "Shift",
   "Enter",
   "Esc",
+  "Tab",
   "Cmd",
 ]);
 

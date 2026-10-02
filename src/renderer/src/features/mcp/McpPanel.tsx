@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
+import { IconButton } from "../../shell/IconButton";
 import {
   PanelButton,
   PanelIconButton,
@@ -9,8 +10,10 @@ import {
 } from "../../shell/RightPanel";
 import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
 import type { SkillsState } from "../skills/useSkills";
-import type { McpServer, McpStatus } from "@shared/mcp";
+import type { McpServer, McpServerInfo, McpStatus } from "@shared/mcp";
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
+import { mcpToken, type TokenPickerControl } from "../../shell/panel-token.ts";
+import { useLongPressDrag } from "../../shell/useLongPressDrag.ts";
 import { useT } from "../../locale.ts";
 
 /**
@@ -25,6 +28,8 @@ import { useT } from "../../locale.ts";
 export function McpPanel(props: {
   skills: SkillsState;
   onClose: () => void;
+  /** 「/ + 空格」右栏选取模式（panel-token.ts）：从 Skills 侧 Tab 切过来 */
+  picker?: TokenPickerControl;
 }) {
   const t = useT();
   const { servers, serversLoad, openMcpConfig, reloadMcp } = props.skills;
@@ -35,10 +40,59 @@ export function McpPanel(props: {
   /** 工具 chips 已展开的 server 名字集合（简报 1，一次展开不再收回） */
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<string>>(new Set());
   const error = serversLoad.kind === "failed" ? serversLoad.message : null;
-
-  // Reload 期间：非 disabled 行都转 connecting（实时状态还没回来，不装作不变）
-  const statusOf = (status: McpStatus): McpStatus =>
-    reloading && status.kind !== "disabled" ? { kind: "connecting" } : status;
+  // ── 选取模式（「/ + 空格」从 Skills 侧 Tab 切过来）─────────────────
+  const picker = props.picker;
+  /** 选取模式的过滤词（面板平时没有过滤行，选取时才出现） */
+  const [query, setQuery] = useState("");
+  const filterRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  /** 选取模式的高亮卡（↑↓ 移动，Enter 选中）；-1 = 无高亮 */
+  const [pickIndex, setPickIndex] = useState(-1);
+  // 可选行：非 disabled（禁用的 server 展不开，token 落进输入框也没用）
+  const pickRows =
+    picker !== undefined
+      ? servers.filter(
+          (s) => s.status.kind !== "disabled" && s.name.toLowerCase().includes(query.trim().toLowerCase()),
+        )
+      : [];
+  useEffect(() => {
+    if (picker === undefined) return;
+    setQuery("");
+    setPickIndex(-1);
+    filterRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picker !== undefined]);
+  // 列表还在读盘 / 过滤后越界：补首行高亮 / 夹回
+  useEffect(() => {
+    if (picker === undefined) return;
+    setPickIndex((i) => (pickRows.length === 0 ? -1 : i === -1 ? 0 : Math.min(i, pickRows.length - 1)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickRows.length]);
+  useEffect(() => {
+    listRef.current?.querySelector('[data-picker-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [pickIndex]);
+  const onPickerKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (picker === undefined) return;
+    const count = pickRows.length;
+    if (event.key === "ArrowDown" && count > 0) {
+      event.preventDefault();
+      setPickIndex((i) => (i === -1 ? 0 : (i + 1) % count));
+    } else if (event.key === "ArrowUp" && count > 0) {
+      event.preventDefault();
+      setPickIndex((i) => (i === -1 ? count - 1 : (i - 1 + count) % count));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const row = pickRows[pickIndex >= 0 ? pickIndex : 0];
+      if (row !== undefined) picker.onSelect(mcpToken(row.name));
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      picker.onSwitch();
+    } else if (event.key === "Escape") {
+      event.stopPropagation();
+      if (query !== "") setQuery("");
+      else picker.onCancel();
+    }
+  };
 
   /** Retry 与页头 Reload 同一路（简报 2：不新增契约），忙的时候两处按钮一起禁用 */
   const runReload = (): void => {
@@ -94,7 +148,31 @@ export function McpPanel(props: {
         </>
       }
     >
+      {picker !== undefined && (
+        <>
+          <div className="skills-filter-row">
+            <Icon name="search" size={14} />
+            <input
+              ref={filterRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onPickerKeyDown}
+              placeholder={t.mcp.filterPlaceholder}
+              aria-label={t.mcp.filterPlaceholder}
+            />
+            {query !== "" && (
+              <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
+                <Icon name="x" size={12} />
+              </IconButton>
+            )}
+          </div>
+          <div className="panel-picker-hint" aria-hidden="true">
+            {t.mcp.pickerHint}
+          </div>
+        </>
+      )}
       <div
+        ref={listRef}
         style={{
           padding: "var(--space-4)",
           display: "grid",
@@ -109,83 +187,40 @@ export function McpPanel(props: {
           <McpEmptyState onAdd={() => setAdding(true)} onEditConfig={openMcpConfig} />
         ) : (
           <>
-            {servers.map((server) => (
-              <div key={server.name} className="mcp-card glass-card">
-                <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <StatusIcon status={statusOf(server.status)} />
-                  <strong className="mcp-name">{server.name}</strong>
-                  <StatusText status={statusOf(server.status)} />
-                  {/* 悬停/键盘聚焦浮现（简报 3）；删除确认行出现时强制常显，见 .reveal 注释 */}
-                  <span
-                    className="mcp-actions reveal"
-                    style={{ opacity: confirming === server.name ? 1 : undefined }}
-                  >
-                    <PanelIconButton
-                      title={server.status.kind === "disabled" ? t.mcp.enable : t.mcp.disable}
-                      onClick={() => props.skills.setServerDisabled(server.name, server.status.kind !== "disabled")}
-                    >
-                      <Icon name="power" size={14} />
-                    </PanelIconButton>
-                    <PanelIconButton title={t.mcp.removeTip} onClick={() => setConfirming(server.name)}>
-                      <Icon name="trash-2" size={14} />
-                    </PanelIconButton>
-                  </span>
-                </span>
-                <code
-                  style={{
-                    fontSize: "var(--font-size-caption)",
-                    color: "var(--color-text-tertiary)",
-                    overflowWrap: "anywhere",
-                  }}
-                >
-                  {server.detail}
-                </code>
-                {server.status.kind === "ready" && server.status.tools.length > 0 && (
-                  <ToolChips
-                    tools={server.status.tools}
-                    expanded={expandedTools.has(server.name)}
-                    onExpand={() =>
-                      setExpandedTools((prev) => {
-                        const next = new Set(prev);
-                        next.add(server.name);
-                        return next;
-                      })
-                    }
-                  />
-                )}
-                {server.status.kind === "failed" && (
-                  <div className="mcp-error">
-                    <p className="mcp-error-text">{server.status.message}</p>
-                    <span className="mcp-error-actions">
-                      <button type="button" className="mcp-retry-btn" disabled={reloading} onClick={runReload}>
-                        <Icon
-                          name="refresh-cw"
-                          size={11}
-                          // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
-                          className={reloading ? "anim-continuous" : undefined}
-                          style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
-                        />
-                        {t.common.retry}
-                      </button>
-                    </span>
-                  </div>
-                )}
-                {confirming === server.name && (
-                  <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
-                    <PanelLine>{t.mcp.removeConfirm(server.name)}</PanelLine>
-                    <PanelButton
-                      danger
-                      onClick={() => {
-                        setConfirming(null);
-                        void props.skills.removeServer(server.name).catch(() => undefined);
-                      }}
-                    >
-                      {t.mcp.remove}
-                    </PanelButton>
-                    <PanelButton onClick={() => setConfirming(null)}>{t.common.cancel}</PanelButton>
-                  </span>
-                )}
-              </div>
+            {servers
+              .filter(
+                (server) =>
+                  picker === undefined ||
+                  (server.status.kind !== "disabled" &&
+                    server.name.toLowerCase().includes(query.trim().toLowerCase())),
+              )
+              .map((server, index) => (
+              <McpCard
+                key={server.name}
+                server={server}
+                reloading={reloading}
+                confirming={confirming === server.name}
+                expandedTools={expandedTools.has(server.name)}
+                onExpandTools={() =>
+                  setExpandedTools((prev) => {
+                    const next = new Set(prev);
+                    next.add(server.name);
+                    return next;
+                  })
+                }
+                onSetDisabled={(disabled) => props.skills.setServerDisabled(server.name, disabled)}
+                onAskRemove={() => setConfirming(server.name)}
+                onConfirmRemove={() => {
+                  setConfirming(null);
+                  void props.skills.removeServer(server.name).catch(() => undefined);
+                }}
+                onCancelRemove={() => setConfirming(null)}
+                onReload={runReload}
+                pickerActive={picker !== undefined && index === pickIndex}
+                onPickerSelect={
+                  picker !== undefined ? () => picker.onSelect(mcpToken(server.name)) : undefined
+                }
+              />
             ))}
             <button type="button" className="mcp-add-card" onClick={() => setAdding(true)}>
               <Icon name="plus" size={14} /> {t.mcp.addServer}
@@ -199,6 +234,111 @@ export function McpPanel(props: {
         )}
       </div>
     </RightPanelFrame>
+  );
+}
+
+/*
+ * 一台 server 的卡片（从 McpPanel 列表里提出来的组件）：长按可拖进输入框落
+ * /mcp:<name> token（useLongPressDrag）；选取模式下点选即插 token、高亮卡随
+ * ↑↓ 移动。短按的原行为（启停 / 删除 / 展开）不变。
+ */
+function McpCard(props: {
+  server: McpServerInfo;
+  /** Reload 进行中：非 disabled 行实时转 connecting */
+  reloading: boolean;
+  confirming: boolean;
+  expandedTools: boolean;
+  onExpandTools: () => void;
+  onSetDisabled: (disabled: boolean) => void;
+  onAskRemove: () => void;
+  onConfirmRemove: () => void;
+  onCancelRemove: () => void;
+  onReload: () => void;
+  pickerActive?: boolean;
+  onPickerSelect?: () => void;
+}) {
+  const t = useT();
+  const { server } = props;
+  // Reload 期间：非 disabled 行都转 connecting（实时状态还没回来，不装作不变）
+  const status: McpStatus =
+    props.reloading && server.status.kind !== "disabled" ? { kind: "connecting" } : server.status;
+  const drag = useLongPressDrag(() => ({ kind: "mcp", token: mcpToken(server.name) }));
+  const confirming = props.confirming;
+  return (
+    <div
+      className={`mcp-card glass-card${props.pickerActive === true ? " picker-active" : ""}${
+        drag.armed ? " drag-armed" : ""
+      }${drag.dragging ? " drag-source" : ""}`}
+      data-picker-active={props.pickerActive === true ? "true" : undefined}
+      draggable={drag.armed}
+      onPointerDown={drag.handlers.onPointerDown}
+      onClickCapture={drag.handlers.onClickCapture}
+      onDragStart={drag.handlers.onDragStart}
+      onDragEnd={drag.handlers.onDragEnd}
+      onClick={(event) => {
+        if (props.onPickerSelect === undefined) return;
+        // 行内动作键（启停 / 删除 / 展开工具）各自干活，不当作整卡选取
+        if ((event.target as HTMLElement).closest("button, a, input, textarea") !== null) return;
+        props.onPickerSelect();
+      }}
+      style={{ cursor: props.onPickerSelect !== undefined ? "pointer" : undefined }}
+    >
+      <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+        <StatusIcon status={status} />
+        <strong className="mcp-name">{server.name}</strong>
+        <StatusText status={status} />
+        {/* 悬停/键盘聚焦浮现（简报 3）；删除确认行出现时强制常显，见 .reveal 注释 */}
+        <span className="mcp-actions reveal" style={{ opacity: confirming ? 1 : undefined }}>
+          <PanelIconButton
+            title={status.kind === "disabled" ? t.mcp.enable : t.mcp.disable}
+            onClick={() => props.onSetDisabled(status.kind === "disabled")}
+          >
+            <Icon name="power" size={14} />
+          </PanelIconButton>
+          <PanelIconButton title={t.mcp.removeTip} onClick={props.onAskRemove}>
+            <Icon name="trash-2" size={14} />
+          </PanelIconButton>
+        </span>
+      </span>
+      <code
+        style={{
+          fontSize: "var(--font-size-caption)",
+          color: "var(--color-text-tertiary)",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {server.detail}
+      </code>
+      {server.status.kind === "ready" && server.status.tools.length > 0 && (
+        <ToolChips tools={server.status.tools} expanded={props.expandedTools} onExpand={props.onExpandTools} />
+      )}
+      {server.status.kind === "failed" && (
+        <div className="mcp-error">
+          <p className="mcp-error-text">{server.status.message}</p>
+          <span className="mcp-error-actions">
+            <button type="button" className="mcp-retry-btn" disabled={props.reloading} onClick={props.onReload}>
+              <Icon
+                name="refresh-cw"
+                size={11}
+                // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
+                className={props.reloading ? "anim-continuous" : undefined}
+                style={props.reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
+              />
+              {t.common.retry}
+            </button>
+          </span>
+        </div>
+      )}
+      {confirming && (
+        <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+          <PanelLine>{t.mcp.removeConfirm(server.name)}</PanelLine>
+          <PanelButton danger onClick={props.onConfirmRemove}>
+            {t.mcp.remove}
+          </PanelButton>
+          <PanelButton onClick={props.onCancelRemove}>{t.common.cancel}</PanelButton>
+        </span>
+      )}
+    </div>
   );
 }
 

@@ -1062,6 +1062,8 @@ export const zh: Messages = {
   mcp: {
     title: "MCP 服务",
     addServer: "添加服务",
+    filterPlaceholder: "筛选服务…",
+    pickerHint: "回车插入 · Tab 切到技能 · Esc 取消",
     editConfig: "编辑 mcp.json",
     reloading: "正在重新加载…",
     reload: "重新加载",
@@ -1118,6 +1120,7 @@ export const zh: Messages = {
     filterAria: "筛选技能",
     clear: "清除",
     noMatch: (query) => `没有匹配「${query}」的技能。`,
+    pickerHint: "回车插入 · Tab 切到 MCP 服务 · Esc 取消",
     global: "全局",
     disabled: "已停用",
     missing: "已缺失",
