@@ -351,8 +351,8 @@ export type ImportGreetingCheckInput = ImportScanInput;
 
 /**
  * `import:check-greetings` 在模型不可用时抛的稳定错误码（附 ImportGreetingUnavailable
- * 原文，如 `IMPORT_GREETING_UNAVAILABLE:no-provider`）——主进程不猜界面语言，
- * renderer 按码翻文案（同 SKILL_NOT_FOUND_CODE 的纪律）。
+ * 原文，如 `IMPORT_GREETING_UNAVAILABLE:no-provider`）——主进程只给稳定码、
+ * 不猜界面语言，renderer 按码翻成界面语言的文案。
  */
 export const IMPORT_GREETING_UNAVAILABLE_CODE = "IMPORT_GREETING_UNAVAILABLE:";
 

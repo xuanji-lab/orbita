@@ -13,13 +13,12 @@ import {
 } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import {
-  expandSkillText,
-  findSkillTokens,
-  formatSkillBlock,
-  matchSkillTarget,
-  SKILL_NOT_FOUND_CODE,
-  SKILL_UNREADABLE_CODE,
-} from "../../shared/skill.ts";
+  composeInvocationPrompt,
+  findInvocationTokens,
+  type InvokedMcp,
+  type InvokedSkill,
+} from "../../shared/invocation.ts";
+import { matchSkillTarget } from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -255,44 +254,70 @@ export function registerAgentIpc(
   }
 
   /**
+   * `/skill:<target>` / `/mcp:<server>` → 指令式调用块（任意位置、任意多条）：
+   * 在用户原文**前面**拼一段硬措辞指令，点名的 skill 写明 SKILL.md 绝对路径、
+   * 要求模型先用 read 工具读了再干活（渐进式披露：索引常驻 system prompt，正文
+   * 以 tool result 身份按需进上下文，不内联进 user message）；点名的 MCP server
+   * 写明 mcp__<server>__<tool> 工具名。查不到 / 读不出不再拦下整条消息，指令里
+   * 如实写明「不要假装加载」。**组装在主进程**：名字与启用状态的真源在 store；
+   * transcript 落组装后的全文，重放历史所见即所得（pi 无状态，每轮把历史喂回去，
+   * 存原文再改写会打断 provider 的前缀缓存）。
+   * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
+   * 通道信封（子会话的投递文本）不组装：首行是 `<channel …>` 头，前面拼块会破
+   * parseChannelPrompt 的识别；那不是用户输入，父模型要用 skill 自会在任务说明里
+   * 写明路径。
+   */
+  const prependInvocationDirectives = async (
+    text: string,
+    workspaceId: string | null,
+  ): Promise<string> => {
+    if (parseChannelPrompt(text) !== null) return text;
+    const tokens = findInvocationTokens(text);
+    if (tokens.length === 0) return text;
+    const skillTargets = [...new Set(tokens.filter((t) => t.kind === "skill").map((t) => t.target))];
+    const mcpTargets = [...new Set(tokens.filter((t) => t.kind === "mcp").map((t) => t.target))];
+    const available =
+      skillTargets.length > 0
+        ? (await skills.list()).filter(
+            (meta) =>
+              !meta.missing &&
+              (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId))),
+          )
+        : [];
+    const invokedSkills: InvokedSkill[] = [];
+    for (const target of skillTargets) {
+      const meta = matchSkillTarget(available, target);
+      if (meta === null) {
+        invokedSkills.push({ target, problem: "not-found" });
+        continue;
+      }
+      // 正文不进消息，read 只为探知可读（存储损坏的 skill 与查不到同样如实写明）
+      const content = await skills.read(meta.slug);
+      if (content === null) {
+        invokedSkills.push({ target, problem: "unreadable" });
+        continue;
+      }
+      invokedSkills.push({ target, location: join(skills.storeRoot(), meta.slug, "SKILL.md") });
+    }
+    const invokedMcps: InvokedMcp[] = [];
+    if (mcpTargets.length > 0) {
+      const servers = await readMcpServers();
+      for (const target of mcpTargets) {
+        const server = servers[target];
+        invokedMcps.push({ target, available: server !== undefined && server.disabled !== true });
+      }
+    }
+    return composeInvocationPrompt(text, invokedSkills, invokedMcps);
+  };
+
+  /**
    * 发一轮（`agent:submit` handler 的函数体，抽出来是因为子会话的派出/投递
    * 也要开同一种轮——`applyDelegate` / `deliverToChild`（channel/requests.ts）
    * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
    */
-  /**
-   * `/skill:<target>` → `<skill>` 块用户消息，**任意位置、任意多条**（句中补全
-   * 选中的就是这个形态）：每个 token 就地替换，它后面到下一个 token 的散文成为
-   * 那个块的附加指示。**展开在主进程**：name→正文的真源在 skill store，agent
-   * 进程与 renderer 都不必再认一遍 skill；transcript 落的是展开后原文，重放
-   * 历史所见即所得。消息开头那条查不到或读不出就整条抛错（发送失败如实上屏）；
-   * 句中查不到的原样留在文字里——规则与理由见 shared/skill.ts 的 expandSkillText。
-   * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
-   */
-  const expandSkillInvocation = async (text: string, workspaceId: string | null): Promise<string> => {
-    if (findSkillTokens(text).length === 0) return text;
-    const available = (await skills.list()).filter(
-      (meta) =>
-        !meta.missing && (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId))),
-    );
-    return expandSkillText(text, async (target) => {
-      const meta = matchSkillTarget(available, target);
-      if (meta === null) return { ok: false, code: SKILL_NOT_FOUND_CODE };
-      const content = await skills.read(meta.slug);
-      if (content === null) return { ok: false, code: SKILL_UNREADABLE_CODE };
-      return {
-        ok: true,
-        block: formatSkillBlock({
-          name: content.name,
-          location: join(skills.storeRoot(), meta.slug, "SKILL.md"),
-          body: content.body,
-        }),
-      };
-    });
-  };
-
   async function submitTurn(input: SubmitAgentInput): Promise<void> {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const text = await expandSkillInvocation(input.text, input.workspaceId);
+    const text = await prependInvocationDirectives(input.text, input.workspaceId);
     const piSessionFile = await host.submit({
       type: "submit",
       text,
@@ -330,9 +355,9 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份展开，
+    // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
-    const text = await expandSkillInvocation(input.text, input.workspaceId);
+    const text = await prependInvocationDirectives(input.text, input.workspaceId);
     const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
     await settleFirstTurn(input, piSessionFile);
   });

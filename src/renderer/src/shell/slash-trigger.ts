@@ -14,8 +14,8 @@
  * 前缀命中的 skill 行、默认不高亮（Enter 原样落下，打路径时不抢键——Claude Code
  * fullscreen 同款）。
  *
- * `/skill:` 的展开边界与这里的 token 语法同源：`src/shared/skill.ts` 的
- * findSkillTokens 同样认「行首或空白后的 /」——面板补出来的东西发送时必然被展开。
+ * `/skill:` / `/mcp:` 的展开边界与这里的 token 语法同源：`src/shared/invocation.ts` 的
+ * findInvocationTokens 同样认「行首或空白后的 /」——面板补出来的东西发送时必然被组装。
  *
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */

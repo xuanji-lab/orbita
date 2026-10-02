@@ -138,8 +138,6 @@ export const en = {
     pastedExpand: "Show the pasted text in full",
     pastedCollapse: "Collapse the pasted text",
     removePasted: "Remove pasted text",
-    skillNotFound: (name: string) => `skill "${name}" does not exist or is not linked to this session`,
-    skillUnreadable: (name: string) => `skill "${name}" could not be read (its storage may be corrupted)`,
     commandPanel: "Slash commands",
     commandNoMatch: "No matching command",
     slashSectionCommands: "Commands",
