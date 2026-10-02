@@ -61,6 +61,16 @@
   --color-success-bg: #f0fdf4;
   --color-success-border: #bbf7d0;
 
+  /* material types — 游戏化材料区（俄罗斯方块）区分四种材料的唯一职责色组
+     （截图 / 文件与目录 / 粘贴文本 / 引用）。仅此一职：不借 info/success/warning/accent
+     ——那些色各有各的语义（accent 只给主操作，状态色只报状态），材料不是状态。
+     用法是淡染：块底 = 本色 14% 混面板、描边 = 38% 透明、图标用本色，文字恒用正墨。
+     色值各档明暗都要在面板上 ≥ 4.5（图标承色，比正文宽，但同底线防“调主题顺手调塌”）。 */
+  --color-material-image: #0e7490;
+  --color-material-file: #15803d;
+  --color-material-pasted: #c2410c;
+  --color-material-quote: #6d28d9;
+
   /* chat surfaces */
   --color-chat-card-bg: #fafafa;
   --color-chat-muted-bg: #f4f4f5;
@@ -134,6 +144,12 @@
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
+  /* material types — 材料类型色组（职责与淡染用法见 light 块的同名注释）；
+     暗档取亮一档的同色相，与暗档状态色同亮度带（并井 ≥ 6.6，两两色相隔 ≥ 30°） */
+  --color-material-image: #22d3ee;
+  --color-material-file: #4ade80;
+  --color-material-pasted: #fb923c;
+  --color-material-quote: #a78bfa;
   --color-chat-card-bg: #2c2c2e;
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
   --color-chat-control-bg: #2c2c2e;
@@ -181,6 +197,12 @@
   --color-success: #56d364;
   --color-success-bg: #12251a;
   --color-success-border: #1d4429;
+  /* material types — 材料类型色组（职责与淡染用法见 light 块的同名注释）；
+     暗档取亮一档的同色相，与暗档状态色同亮度带（并井 ≥ 6.6，两两色相隔 ≥ 30°） */
+  --color-material-image: #22d3ee;
+  --color-material-file: #4ade80;
+  --color-material-pasted: #fb923c;
+  --color-material-quote: #a78bfa;
   --color-chat-card-bg: #262626;
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
   --color-chat-control-bg: #262626;
@@ -226,6 +248,12 @@
   --color-success: #2e7d4f;
   --color-success-bg: #eef7f0;
   --color-success-border: #bfe0c9;
+  /* material types — 材料类型色组（职责与淡染用法见 light 块的同名注释）；
+     纸面两档用降饱和的同色相（作业本上没有荧光笔，只有钢笔水色） */
+  --color-material-image: #2f6b75;
+  --color-material-file: #35693f;
+  --color-material-pasted: #96560e;
+  --color-material-quote: #5b4a9c;
   --color-chat-card-bg: #ffffff;
   --color-chat-muted-bg: #f4f4ef;
   --color-chat-control-bg: #ffffff;
@@ -274,6 +302,12 @@
   --color-success: #2e7d4f;
   --color-success-bg: #eef7f0;
   --color-success-border: #bfe0c9;
+  /* material types — 材料类型色组（职责与淡染用法见 light 块的同名注释）；
+     纸面两档用降饱和的同色相（打字稿上只有色带墨水色） */
+  --color-material-image: #2f6b75;
+  --color-material-file: #35693f;
+  --color-material-pasted: #96560e;
+  --color-material-quote: #5b4a9c;
   --color-chat-card-bg: #ffffff;
   --color-chat-muted-bg: #f4f4ef;
   --color-chat-control-bg: #ffffff;

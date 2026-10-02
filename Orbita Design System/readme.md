@@ -142,6 +142,18 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
+**Material type colours** (`--color-material-image / -file / -pasted / -quote`, added 2026-10) have
+exactly one job: **distinguishing the four material kinds in the gamified material area** (Settings ›
+Gamification → Material area Tetris — screenshots, files & directories, pasted text, quotes). They
+are *not* borrowable for anything else, and nothing else borrows info/success/warning/accent into
+this job: those colours mean running/thinking/failure/success and the primary action — a material
+block is not a status. Recipe: the block ground tints the type colour at 14% over the panel, the
+border is the type colour at 38% alpha, the 13px icon takes the full-strength colour, and **text
+always stays the primary ink** — the tint is the only signal of kind. All four carry ≥ 4.5:1 on
+every theme's panel and sit ≥ 30° of hue apart within a theme (`material-colors.test.ts` guards
+both). Hues: cyan = screenshot, green = file/directory, orange = pasted text, violet = quote;
+the two paper themes take the same four hues in their desaturated pen-ink register.
+
 **Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is
 unchanged — **the shell (the ground the left rail and right icon strip sit on) is the lighter
