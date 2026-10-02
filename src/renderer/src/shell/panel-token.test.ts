@@ -1,5 +1,6 @@
 import { deepStrictEqual, equal } from "node:assert/strict";
 import { describe, it } from "node:test";
+import { findInvocationTokens } from "../../../shared/invocation.ts";
 import {
   LONG_PRESS_MS,
   LONG_PRESS_MOVE_TOLERANCE_PX,
@@ -74,6 +75,23 @@ describe("insertToken", () => {
   });
   it("尾随全角空格也算空白，省掉尾随空格", () => {
     equal(insertToken("你好\u3000世界", 2, "/x ").value, "你好 /x\u3000世界");
+  });
+  it("插入后的文本能被发送端的 findInvocationTokens 认出来（补空格不破边界）", () => {
+    const cases: Array<[string, number, string, "skill" | "mcp", string]> = [
+      ["helloworld", 5, skillToken("review"), "skill", "review"],
+      ["", 0, skillToken("a-b"), "skill", "a-b"],
+      ["先跑 world", 3, mcpToken("miyo"), "mcp", "miyo"],
+      ["hello world", 5, mcpToken("s1"), "mcp", "s1"],
+    ];
+    for (const [before, pos, token, kind, target] of cases) {
+      const after = insertToken(before, pos, token).value;
+      const tokens = findInvocationTokens(after);
+      deepStrictEqual(
+        tokens.some((t) => t.kind === kind && t.target === target),
+        true,
+        `${JSON.stringify(before)} @${pos} → ${JSON.stringify(after)} 应含 /${kind}:${target}`,
+      );
+    }
   });
 });
 
