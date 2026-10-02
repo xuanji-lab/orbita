@@ -45,6 +45,19 @@ describe("parseChips", () => {
     ]);
   });
 
+  it("/mcp: 同一函数认（findInvocationTokens），kind 区分", () => {
+    deepStrictEqual(parseChips("先 /skill:a 再 /mcp:filesystem 干活"), [
+      { start: 2, end: 10, kind: "skill", target: "a" },
+      { start: 13, end: 28, kind: "mcp", target: "filesystem" },
+    ]);
+    deepStrictEqual(parseChips("/mcp:x"), [{ start: 0, end: 6, kind: "mcp", target: "x" }]);
+  });
+
+  it("/mcp: 空 target 与非空白前导同样不认", () => {
+    deepStrictEqual(parseChips("/mcp: 后"), []);
+    deepStrictEqual(parseChips("用/mcp:x"), []);
+  });
+
   it("超长文本不解析（性能闸，与修正液同一阈值）", () => {
     deepStrictEqual(parseChips("x".repeat(CHIPS_MAX_LENGTH) + " /skill:a"), []);
     deepStrictEqual(parseChips(""), []);

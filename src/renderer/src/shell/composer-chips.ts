@@ -1,30 +1,30 @@
 /**
- * 句中 chip 的纯逻辑——token（`/skill:<slug>`）在输入框与气泡里的视觉包装。
+ * 句中 chip 的纯逻辑——token（`/skill:<slug>`、`/mcp:<server>`）在输入框与气泡里
+ * 的视觉包装。
  *
  * 方案 D（选型报告 §3-D，2026-10-06）：保留 textarea，token 就是普通文本，
  * 镜像层（原 copybook 修正液的镜像，现全主题常驻）把 token 区间画成 chip。
  * chip 只是视觉，**存储、草稿、发送、撤销全是同一份字符串**——这里不做任何
  * 文本改写，只算区间。
  *
- * **token 识别复用发送端的 `findSkillTokens`**（src/shared/skill.ts）：发送时会
- * 展开 / 保留的边界（`/` 前是行首或空白、target 到下一个空白）就是 chip 的边界
- * ——输入框里画成 chip 的，发送时必然被当 token 认；两边各写一条规则就会出现
- * 「看着是 chip、发出去是散文」的裂缝。`/mcp:` 等 token 种类等发送语义 PR
- * （#148）导出自己的查找函数后再并入 `parseChips`，不在这一层另写正则。
+ * **token 识别复用发送端的 `findInvocationTokens`**（src/shared/invocation.ts）：
+ * 发送时会组装指令块的边界（`/` 前是行首或空白、target 到下一个空白）就是 chip
+ * 的边界——输入框里画成 chip 的，发送时必然被当 token 认；两边各写一条规则就会
+ * 出现「看着是 chip、发出去是散文」的裂缝。
  */
 
-import { findSkillTokens } from "../../../shared/skill.ts";
+import { findInvocationTokens } from "../../../shared/invocation.ts";
 import type { WhiteoutSegment } from "./whiteout-segments.ts";
 
-/** token 种类。目前只有 skill；`/mcp:<server>` 由 #148 定义发送语义后加入 */
-export type ChipKind = "skill";
+/** token 种类：skill 读文件，mcp 用工具（与 InvocationKind 同一集合） */
+export type ChipKind = "skill" | "mcp";
 
 /** 原文里的一个 chip：[start, end) 按 UTF-16 下标，与 textarea 的 selectionStart 同一套 */
 export interface ChipSpan {
   start: number;
   end: number;
   kind: ChipKind;
-  /** `/skill:` 与下一个空白之间的 target（含粘连的标点——findSkillTokens 的语义） */
+  /** 冒号与下一个空白之间的 target（含粘连的标点——findInvocationTokens 的语义） */
   target: string;
 }
 
@@ -32,13 +32,13 @@ export interface ChipSpan {
  * 粘一大段日志的代价是实打实的卡顿，换来的只是装饰） */
 export const CHIPS_MAX_LENGTH = 20_000;
 
-/** 扫出原文里全部 chip 区间（就是 findSkillTokens 的区间，换成 chip 的形状） */
+/** 扫出原文里全部 chip 区间（就是 findInvocationTokens 的区间，换成 chip 的形状） */
 export function parseChips(text: string): ChipSpan[] {
   if (text === "" || text.length > CHIPS_MAX_LENGTH) return [];
-  return findSkillTokens(text).map((token) => ({
+  return findInvocationTokens(text).map((token) => ({
     start: token.start,
     end: token.end,
-    kind: "skill",
+    kind: token.kind,
     target: token.target,
   }));
 }

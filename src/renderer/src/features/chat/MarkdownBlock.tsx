@@ -179,9 +179,11 @@ type AnchorProps = ComponentPropsWithoutRef<"a"> & { node?: unknown };
 
 /**
  * 气泡里的句中 chip：chip-runs.ts 的 rehype 变换把 token 塞进
- * `<span class="bubble-chip bubble-chip-skill">token</span>`，react-markdown 把它交到这里
- * 换成图标 + 名字的胶囊。其余 span（sanitize 白名单幸存的）原样放行。chip 元素里只有
- * 一个文本子节点（chip-runs.ts 放进去的），String(children) 拿到的就是 token 原文。
+ * `<span class="bubble-chip bubble-chip-<kind>">token</span>`（skill / mcp 同构），
+ * react-markdown 把它交到这里换成图标 + 名字的胶囊。图标随 kind：skill 是
+ * book-open，mcp 是 plug（与指令面板同一套词汇）。其余 span（sanitize 白名单
+ * 幸存的）原样放行。chip 元素里只有一个文本子节点（chip-runs.ts 放进去的），
+ * String(children) 拿到的就是 token 原文。
  */
 function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) {
   const { className, children, node: _node, ...rest } = props;
@@ -190,10 +192,11 @@ function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) 
     return <span className={className}>{children}</span>;
   }
   const token = String(children);
+  const mcp = token.startsWith("/mcp:");
   return (
     <span className={classes.join(" ")} title={token}>
-      <Icon name="book-open" size={12} strokeWidth={1.8} className="bubble-chip-icon" />
-      <span className="bubble-chip-target">{token.replace(/^\/skill:/, "")}</span>
+      <Icon name={mcp ? "plug" : "book-open"} size={12} strokeWidth={1.8} className="bubble-chip-icon" />
+      <span className="bubble-chip-target">{token.replace(/^\/(?:skill|mcp):/, "")}</span>
     </span>
   );
 }

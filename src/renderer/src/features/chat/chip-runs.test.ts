@@ -6,16 +6,24 @@ describe("splitChipRuns —— 气泡文本节点的切分", () => {
   it("中英混排：token 成 chip，散文原样", () => {
     deepStrictEqual(splitChipRuns("先调用 /skill:pdf-tools 处理", true), [
       { kind: "text", text: "先调用 " },
-      { kind: "chip", text: "/skill:pdf-tools", target: "pdf-tools" },
+      { kind: "chip", chipKind: "skill", text: "/skill:pdf-tools", target: "pdf-tools" },
       { kind: "text", text: " 处理" },
     ]);
   });
 
   it("多 token、多行", () => {
     deepStrictEqual(splitChipRuns("/skill:a 再\n/skill:b", true), [
-      { kind: "chip", text: "/skill:a", target: "a" },
+      { kind: "chip", chipKind: "skill", text: "/skill:a", target: "a" },
       { kind: "text", text: " 再\n" },
-      { kind: "chip", text: "/skill:b", target: "b" },
+      { kind: "chip", chipKind: "skill", text: "/skill:b", target: "b" },
+    ]);
+  });
+
+  it("/mcp: token 也画，kind 随 token", () => {
+    deepStrictEqual(splitChipRuns("用 /mcp:filesystem 读", true), [
+      { kind: "text", text: "用 " },
+      { kind: "chip", chipKind: "mcp", text: "/mcp:filesystem", target: "filesystem" },
+      { kind: "text", text: " 读" },
     ]);
   });
 
@@ -27,7 +35,7 @@ describe("splitChipRuns —— 气泡文本节点的切分", () => {
 
   it("token 在节点开头且前面是边界（段首 / 前一个文本节点以空白收尾）→ 画", () => {
     deepStrictEqual(splitChipRuns("/skill:x 后面", true), [
-      { kind: "chip", text: "/skill:x", target: "x" },
+      { kind: "chip", chipKind: "skill", text: "/skill:x", target: "x" },
       { kind: "text", text: " 后面" },
     ]);
   });
@@ -35,13 +43,13 @@ describe("splitChipRuns —— 气泡文本节点的切分", () => {
   it("节点开头的 token 被拒后，节点后面的 token 照画", () => {
     deepStrictEqual(splitChipRuns("/skill:x 然后 /skill:y", false), [
       { kind: "text", text: "/skill:x 然后 " },
-      { kind: "chip", text: "/skill:y", target: "y" },
+      { kind: "chip", chipKind: "skill", text: "/skill:y", target: "y" },
     ]);
   });
 
   it("破损 token（空 target、词内 /、缺冒号）不成 chip", () => {
-    deepStrictEqual(splitChipRuns("a /skill: b用/skill:c https://x/skill:d", true), [
-      { kind: "text", text: "a /skill: b用/skill:c https://x/skill:d" },
+    deepStrictEqual(splitChipRuns("a /skill: b用/skill:c https://x/skill:d /mcp:", true), [
+      { kind: "text", text: "a /skill: b用/skill:c https://x/skill:d /mcp:" },
     ]);
   });
 
@@ -69,6 +77,21 @@ describe("rehypeBubbleChips —— hast 树上的替换", () => {
         children: [text("/skill:pdf")],
       },
       text(" 后"),
+    ]);
+  });
+
+  it("/mcp: token 换成 bubble-chip-mcp", () => {
+    const tree = root([p([text("用 /mcp:fs 帮忙")])]);
+    rehypeBubbleChips()(tree);
+    deepStrictEqual((tree.children?.[0] as { children: HastNode[] }).children, [
+      text("用 "),
+      {
+        type: "element",
+        tagName: "span",
+        properties: { className: ["bubble-chip", "bubble-chip-mcp"] },
+        children: [text("/mcp:fs")],
+      },
+      text(" 帮忙"),
     ]);
   });
 
