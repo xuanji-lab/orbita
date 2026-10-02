@@ -18,7 +18,7 @@ import type { ModelDecl } from "@shared/provider";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
-import { Menu, type MenuItem } from "../../shell/Menu";
+import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import { hasCredentials, kindOf, modelAcceptsImage, modelContextText, railShortNames } from "./providers-view-model.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -109,23 +109,6 @@ const RAIL_CELL: React.CSSProperties = {
   cursor: "pointer",
 };
 
-/** 底部固定行（「配置模型」）。整行可点，右端一个 chevron 说明它领着你去别处 */
-const FOOTER_ROW: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "var(--space-2)",
-  width: "100%",
-  minHeight: "var(--control-height-lg)",
-  padding: "0 var(--space-2)",
-  border: 0,
-  borderRadius: "var(--radius-sm)",
-  color: "var(--color-text-primary)",
-  fontFamily: "var(--font-family-base)",
-  fontSize: "var(--font-size-control)",
-  textAlign: "left",
-  cursor: "pointer",
-};
-
 /**
  * 卡片底部的「配置模型」——去了就没模型的出口。
  *
@@ -135,7 +118,7 @@ const FOOTER_ROW: React.CSSProperties = {
  */
 export function modelCardFooter(options: { t: Messages; onConfigure: () => void }): React.ReactNode {
   return (
-    <button type="button" className="option-row" style={FOOTER_ROW} onClick={options.onConfigure}>
+    <button type="button" className="option-row" style={menuFooterRowStyle} onClick={options.onConfigure}>
       <Icon name="plus" size={13} strokeWidth={1.8} />
       <span>{options.t.modelMenu.configure}</span>
       <span style={{ marginLeft: "auto", display: "inline-flex", color: "var(--color-text-tertiary)" }}>

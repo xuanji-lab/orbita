@@ -77,7 +77,7 @@ import { Composer } from "../../shell/Composer";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
-import { Menu, type MenuItem } from "../../shell/Menu";
+import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
@@ -1737,23 +1737,6 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
   );
 }
 
-/** 路径卡片底栏的动作行：与模型卡片「配置模型」同一形状（整行可点、图标 + 词） */
-const SCOPE_FOOTER_ROW: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "var(--space-2)",
-  width: "100%",
-  minHeight: "var(--control-height-lg)",
-  padding: "0 var(--space-2)",
-  border: 0,
-  borderRadius: "var(--radius-sm)",
-  color: "var(--color-text-primary)",
-  fontFamily: "var(--font-family-base)",
-  fontSize: "var(--font-size-control)",
-  textAlign: "left",
-  cursor: "pointer",
-};
-
 /**
  * 输入卡底栏：作用域 / 权限档 / 模型——都是「这一句会以什么身份发出去」的事实。
  *
@@ -1869,7 +1852,7 @@ function ComposerBar(props: {
             <button
               type="button"
               className="option-row"
-              style={SCOPE_FOOTER_ROW}
+              style={menuFooterRowStyle}
               onClick={() => {
                 close();
                 setNamingWorkspace(true);
@@ -1881,7 +1864,7 @@ function ComposerBar(props: {
             <button
               type="button"
               className="option-row"
-              style={SCOPE_FOOTER_ROW}
+              style={menuFooterRowStyle}
               onClick={() => {
                 close();
                 session.addWorkspace();
