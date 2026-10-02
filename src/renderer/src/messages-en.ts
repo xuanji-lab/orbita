@@ -1101,8 +1101,7 @@ export const en = {
     stopLabel: "Stop",
     stopTip:
       "Stop this sub-session — aborts its current turn and closes the channel. Only you can re-open it, by speaking as the parent in the channel.",
-    stopHint: "Aborts this turn and closes the channel",
-    stopHintReopen: "Only you can re-open it",
+    stopHint: "Aborts this turn and closes the channel — only you can re-open it",
     stopConfirm: "Stop it",
     stoppedHint: "Already stopped — speak as the parent in the channel to re-open.",
   },

@@ -1020,8 +1020,7 @@ export const zh: Messages = {
     stopLabel: "终止",
     stopTip:
       "终止这个子会话——中止它正在跑的这一轮并关闭通道。只有你以母会话身份发言能重新打开。",
-    stopHint: "中止当前这一轮并关闭通道",
-    stopHintReopen: "只有你能重新打开",
+    stopHint: "中止当前这一轮并关闭通道，只有你能重新打开",
     stopConfirm: "终止",
     stoppedHint: "已终止——在通道里以母会话身份发言可重新打开。",
   },

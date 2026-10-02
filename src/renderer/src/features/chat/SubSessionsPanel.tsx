@@ -302,9 +302,8 @@ function SubSessionControls(props: {
   }));
 
   const stopItems: MenuItem[] = [
-    // 说明拆成两行短事实：Menu 行的 label 不换行，一整句会顶出面板右边缘（验收截图）
+    // 一句话说完的事实行：Menu 里无 hint 的事实行会换行，不会被省略号切掉半句
     { id: "stop-hint", label: t.subSessions.stopHint, fact: true },
-    { id: "stop-hint-reopen", label: t.subSessions.stopHintReopen, fact: true },
     {
       id: "stop-confirm",
       label: t.subSessions.stopConfirm,

@@ -643,6 +643,27 @@ export function Menu(props: {
   );
 }
 
+/**
+ * 菜单底栏的动作行样式（整行可点、图标 + 词）。底栏容器由 Menu 画，行的形状也归这里管：
+ * 模型卡片的「配置模型」与路径卡片的「新建工作区 / 添加文件夹」共用这一份——
+ * 两份逐字相同的样式各放一处，迟早漂（2026-10-02 wafo 评审）。
+ */
+export const menuFooterRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--space-2)",
+  width: "100%",
+  minHeight: "var(--control-height-lg)",
+  padding: "0 var(--space-2)",
+  border: 0,
+  borderRadius: "var(--radius-sm)",
+  color: "var(--color-text-primary)",
+  fontFamily: "var(--font-family-base)",
+  fontSize: "var(--font-size-control)",
+  textAlign: "left",
+  cursor: "pointer",
+};
+
 function MenuRow(props: {
   item: MenuItem;
   /** 键盘 / 鼠标的停留位置。与「选中」是两件事——见 styles.css 的 `.option-row` */
@@ -744,7 +765,22 @@ function MenuRow(props: {
           minWidth: 0,
         }}
       >
-        <span style={{ flex: "none", maxWidth: "100%", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "18px" }}>
+        <span
+          style={{
+            flex: "none",
+            maxWidth: "100%",
+            minWidth: 0,
+            lineHeight: "18px",
+            /*
+             * 事实行且没有 hint 时，label 是唯一的叙事者：长句（压缩确认那句
+             * 「…仍要压缩？」）必须换行说完——省略号切掉一半就成了另一句话。
+             * 其余行照旧单行省略：名字被截断至少还是个名字。
+             */
+            ...(fact && item.hint === undefined
+              ? { whiteSpace: "normal" }
+              : { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }),
+          }}
+        >
           {item.label}
         </span>
         {item.subLabel !== undefined && (
