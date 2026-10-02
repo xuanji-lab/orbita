@@ -59,11 +59,11 @@ export function SkillsPanel(props: {
   }, [selected, meta]);
 
   // 进入选取模式时回列表视图：详情页里没有可选取的行，「/ + 空格」要把人带到
-  // 能选的地方（rail 正常开面板不受影响——那边 picker 恒 undefined）
+  // 能选的地方（rail 正常开面板不受影响——那边 picker 恒 undefined）。靠 request
+  // 重触发：面板可能已开着，选取态可能已在
   useEffect(() => {
     if (props.picker !== undefined) setSelected(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.picker !== undefined]);
+  }, [props.picker?.request]);
 
   // 名字原样显示——「名字 == 路径」的老数据在 store 读时已治，显示层不截尾
   const workspaceName = (id: string): string =>
@@ -151,14 +151,14 @@ function SkillList(props: {
   const filtering = query.trim() !== "";
   // 选取模式的可行行：扁平、去 missing（拖进输入框的 token 要能展开）
   const pickRows = picker !== undefined ? filtered.filter((s) => !s.missing) : [];
-  // 进入选取模式：清词、聚焦过滤行、高亮首行（与指令面板主模式同款）
+  // 进入选取模式：清词、聚焦过滤行、高亮首行（与指令面板主模式同款）。
+  // 靠 request 重触发：第二次「/ + 空格」时面板可能已开、选取态可能已在
   useEffect(() => {
     if (picker === undefined) return;
     setQuery("");
     setPickIndex(-1);
     filterRef.current?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picker !== undefined]);
+  }, [picker?.request]);
   // 面板刚开时清单还在读盘（空表），读回来后补上首行高亮；过滤后越界则夹回
   useEffect(() => {
     if (picker === undefined) return;

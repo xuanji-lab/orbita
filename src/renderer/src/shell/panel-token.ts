@@ -149,6 +149,10 @@ export interface TokenPickerControl {
   onCancel: () => void;
   /** Tab：切到另一边（skills ↔ MCP），锚点保留 */
   onSwitch: () => void;
+  /** 发起号：每次「/ + 空格」递增——面板可能已开着（选取态也在），只看
+   * 「在不在选取态」会在第二次 / + 空格时什么也不做，靠它重入选取态（重新
+   * 聚焦、重置过滗词） */
+  request: number;
 }
 
 /** 面板选取的回执：token 为 null 表示取消（只把焦点送回输入框）。nonce 单调递增 */

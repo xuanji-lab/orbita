@@ -60,8 +60,7 @@ export function McpPanel(props: {
     setQuery("");
     setPickIndex(-1);
     filterRef.current?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picker !== undefined]);
+  }, [picker?.request]);
   // 列表还在读盘 / 过滤后越界：补首行高亮 / 夹回
   useEffect(() => {
     if (picker === undefined) return;

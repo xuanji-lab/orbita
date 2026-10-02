@@ -608,7 +608,11 @@ export function Composer(props: {
                   }
                 }
                 props.onChange(props.value.slice(0, position) + props.value.slice(position + 1));
-                pinCursor(position);
+                // 退回路径不回抢焦点（下一拍右栏搜索框要接管）；光标只落在删除点
+                setCursor(position);
+                requestAnimationFrame(() => {
+                  textareaRef.current?.setSelectionRange(position, position);
+                });
                 return;
               }
             }

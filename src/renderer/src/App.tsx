@@ -423,9 +423,12 @@ export function App() {
   const tokenPickAnchorRef = useRef<number | null>(null);
   const [tokenPickResult, setTokenPickResult] = useState<TokenPickResult | null>(null);
   const tokenPickNonceRef = useRef(0);
+  /** 发起号：面板可能已开着，选取态可能已在——靠它重新聚焦/重置 */
+  const [tokenPickRequest, setTokenPickRequest] = useState(0);
   const openTokenPicker = useCallback((position: number): boolean => {
     tokenPickAnchorRef.current = position;
     setTokenPickerOn(true);
+    setTokenPickRequest((n) => n + 1);
     setRightPanel("skills");
     return true;
   }, []);
@@ -452,11 +455,13 @@ export function App() {
     onSelect: finishTokenPick,
     onCancel: () => finishTokenPick(null),
     onSwitch: () => setRightPanel("mcp"),
+    request: tokenPickRequest,
   };
   const mcpPicker: TokenPickerControl = {
     onSelect: finishTokenPick,
     onCancel: () => finishTokenPick(null),
     onSwitch: () => setRightPanel("skills"),
+    request: tokenPickRequest,
   };
 
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
