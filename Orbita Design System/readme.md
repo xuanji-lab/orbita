@@ -255,9 +255,20 @@ translucency step alone. No thick rules, no coloured left-border accents.
 border and **no** fill — they sit directly on the chat surface and are separated by 16px of space.
 External-capability events (skill use, MCP calls) render as **chip rows**: their identity (icon +
 kind word + name) sits in one pill chip — 1px hairline, fully rounded, no fill — the same language
-as the composer's attachment and quote chips, so an "external object" looks alike everywhere; the
+as the composer's attachment pills, so an "external object" looks alike everywhere; the
 row itself stays a process row. Within the family the skill name sets in the text face (a
 human-written instruction) while server/tool sets in mono (a machine service) (2026-09-27).
+**The composer's materials never enter the input card** (2026-10-03, the "stacked" ruling):
+screenshots, file/directory references, pasted-text blocks and quotes stack *above* the card,
+in that order — screenshots as one row of square thumbs; references and pasted text as one row
+of the same pill chips, single-row, horizontally scrolled, fading at the right edge; quotes as a
+floating-glass card of queue-strip rows, at most two visible and the rest folded behind
+"N more quotes…". Only the quote card takes a card; the other layers sit directly on the chat
+surface, each chip carrying its own `--glass-bg` and `--shadow-border`. Pasted text shows its
+full content in a floating popover above the row, never by growing the input area. The slash
+panel stays out of the flow the same way: it opens *downward* from the `/` line as a solid
+popover positioned inside the input card's bounds — it may cover the bottom bar (attach, model,
+send) but never leaves the card.
 Process rows live in the quiet tiers: while a row's activity is in progress its head (icon + label)
 is the only bright thing at secondary; once the state settles the **whole row** recedes to tertiary —
 one flat grey, with failure red as the only exception. Body text never competes with the past.
