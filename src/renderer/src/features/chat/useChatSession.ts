@@ -40,7 +40,7 @@ import {
   PROMPT_FILE_MAX_COUNT,
   type PromptFileRef,
 } from "@shared/prompt-attachments";
-import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_COUNT, type TextQuote } from "../../../../shared/quote.ts";
+import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import { DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
@@ -1402,10 +1402,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const addQuote = useCallback(
     (quote: TextQuote) => {
       // 准入（shared/quote.ts 的 acceptQuote）：重复沿用旧规则静默去重；
-      // 超上限（QUOTE_MAX_COUNT=5）要说出原因——藏住一条用户看得见却发不出
+      // 总字数超上限要说出原因——藏住一条用户看得见却发不出
       // 的引用，比报一句更糟
       const verdict = acceptQuote(quoteMap.get(draftKey) ?? [], quote);
-      engine.setError(verdict.reason === "too-many" ? engine.messagesRef.current.quote.tooMany(QUOTE_MAX_COUNT) : null);
+      engine.setError(verdict.reason === "too-long-total" ? engine.messagesRef.current.quote.tooLongTotal(QUOTE_MAX_TOTAL_CHARS) : null);
       if (!verdict.accepted) return;
       writeQuotes(draftKey, (current) => [...current, quote]);
     },
