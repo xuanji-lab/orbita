@@ -1,6 +1,7 @@
 /**
- * 豆包大模型流式语音识别的二进制帧（火山引擎公开文档「大模型流式语音识别 API」）。纯函数，
- * 只依赖 node:zlib，node --test 直接加载。
+ * 豆包大模型流式语音识别的二进制帧（火山引擎公开文档「大模型流式语音识别 API」），以及把它们
+ * 组成线协议（dictation.ts 的 DictationProtocol）的工厂。只依赖 node:zlib 与 node:crypto，
+ * node --test 直接加载。
  *
  * 帧 = 4 字节头 + [4 字节序号] + 4 字节负载长度（大端）+ 负载。头的四个字节：
  *   byte0  高 4 位协议版本（1）、低 4 位头长度（以 4 字节为单位，1 = 4 字节）
@@ -9,8 +10,10 @@
  *   byte3  保留
  * 服务端的错误帧没有负载长度，换成 4 字节错误码 + 4 字节消息长度 + 消息。
  */
+import { randomUUID } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { DICTATION_SAMPLE_RATE } from "../../shared/voice.ts";
+import type { DictationProtocol, OutboundFrame, ProtocolEvent } from "./dictation.ts";
 
 const VERSION = 0b0001;
 const HEADER_WORDS = 0b0001;
@@ -29,6 +32,48 @@ const SERIALIZE_JSON = 0b0001;
 const COMPRESS_GZIP = 0b0001;
 
 export const ASR_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
+
+/** 听写要用的豆包凭证三样（store 里拼好） */
+export interface DoubaoCredentials {
+  appId: string;
+  accessToken: string;
+  resourceId: string;
+}
+
+export function doubaoHeaders(credentials: DoubaoCredentials): Record<string, string> {
+  return {
+    "X-Api-App-Key": credentials.appId,
+    "X-Api-Access-Key": credentials.accessToken,
+    "X-Api-Resource-Id": credentials.resourceId,
+    "X-Api-Connect-Id": randomUUID(),
+  };
+}
+
+/**
+ * 豆包的线协议：一条连接一个（Connect-Id 每条连接一个，所以是工厂）。帧格式无状态，
+ * 入站逐帧解析。
+ */
+export function createDoubaoProtocol(credentials: DoubaoCredentials): DictationProtocol {
+  return {
+    url: ASR_ENDPOINT,
+    headers: doubaoHeaders(credentials),
+    openFrame: (): OutboundFrame => ({ kind: "bytes", data: startFrame("orbita") }),
+    // 对象方法名与模块函数同名：方法体里的 audioFrame 指向上面的模块函数
+    audioFrame: (pcm: Uint8Array): OutboundFrame => ({ kind: "bytes", data: audioFrame(pcm, false) }),
+    stopFrame: (): OutboundFrame => ({ kind: "bytes", data: audioFrame(new Uint8Array(), true) }),
+    inbound: (data: Uint8Array | string): ProtocolEvent[] => {
+      if (typeof data === "string") return []; // 豆包只有二进制帧
+      const message = parseServerFrame(data);
+      if (message === null) return [];
+      if (message.kind === "result") {
+        return [{ kind: "transcript", text: message.text, final: message.final }];
+      }
+      return [
+        { kind: "error", failure: { reason: "server", detail: `${message.code} ${message.message}` } },
+      ];
+    },
+  };
+}
 
 /**
  * 停顿多久算一句话说完（毫秒）。听写的人会停下来想，默认的 800 ms 太短——话没说完就被切成

@@ -79,6 +79,8 @@ const ALLOWED_LATIN = new Set([
   "Resource",
   "volc.seedasr.sauc.duration",
   "volc.bigasr.sauc.duration",
+  // 语音厂商凭证字段名（阶跃星辰 API Key，用户原样照填）
+  "Key",
   // 按键名
   "Ctrl",
   "Alt",
@@ -97,6 +99,15 @@ type Entry = { path: string; text: string };
  */
 const SAMPLE_ARGS: Record<string, unknown[][]> = {
   thinkingLevel: [["xhigh", "claude-opus-4-6"], ["medium", null]],
+  // 语音文案的参数是厂商 id：两家各调一遍，插值出来的名字才被守卫看到
+  "voice.failures.not-configured": [["doubao"], ["stepfun"]],
+  "voice.failures.unauthorized": [["doubao"], ["stepfun"]],
+  "voice.failures.rejected": [["doubao"], ["stepfun"]],
+  "voice.failures.network": [["doubao"], ["stepfun"]],
+  "voice.failures.timeout": [["doubao"], ["stepfun"]],
+  "voice.failures.server": [["doubao"], ["stepfun"]],
+  "voice.connecting": [["doubao"], ["stepfun"]],
+  "voice.testOk": [["doubao"], ["stepfun"]],
 };
 
 /** 把表摊平成 (键路径, 文本)；函数按参数个数塞样例参数 */

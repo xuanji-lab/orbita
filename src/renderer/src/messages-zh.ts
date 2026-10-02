@@ -1,5 +1,6 @@
 import type { Messages } from "./messages-en.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
+import type { DictationProvider } from "../../shared/voice.ts";
 
 const THINKING_ZH: Record<ThinkingLevel, string> = {
   off: "关",
@@ -9,6 +10,12 @@ const THINKING_ZH: Record<ThinkingLevel, string> = {
   high: "高",
   xhigh: "超高",
   max: "最高",
+};
+
+/** 听写厂商的中文自称（voice 段的 failures / connecting / testOk 插值用） */
+const VENDOR_NAMES_ZH: Record<DictationProvider, string> = {
+  doubao: "豆包",
+  stepfun: "阶跃星辰",
 };
 
 const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录" };
@@ -119,21 +126,32 @@ export const zh: Messages = {
   },
 
   voice: {
+    providers: VENDOR_NAMES_ZH,
     failures: {
-      "not-configured": "先在 设置 › 语音 里填好豆包的 APP ID、Access Token 与 Resource ID",
-      unauthorized: "豆包拒绝了这组凭证 · 检查 APP ID、Access Token 与 Resource ID，并确认服务已开通",
-      rejected: "豆包拒绝了连接",
-      network: "连不上豆包 · 检查网络或代理",
-      timeout: "豆包 10 秒内没有响应",
-      server: "豆包报错",
+      "not-configured": (provider) =>
+        provider === "doubao"
+          ? "先在 设置 › 语音 里填好豆包的 APP ID、Access Token 与 Resource ID"
+          : "先在 设置 › 语音 里填好阶跃星辰的 API Key",
+      unauthorized: (provider) =>
+        provider === "doubao"
+          ? "豆包拒绝了这组凭证 · 检查 APP ID、Access Token 与 Resource ID，并确认服务已开通"
+          : "阶跃星辰拒绝了这组凭证 · 检查 API Key，并确认服务已开通",
+      rejected: (provider) => `${VENDOR_NAMES_ZH[provider]}拒绝了连接`,
+      network: (provider) => `连不上${VENDOR_NAMES_ZH[provider]} · 检查网络或代理`,
+      timeout: (provider) => `${VENDOR_NAMES_ZH[provider]} 10 秒内没有响应`,
+      server: (provider) => `${VENDOR_NAMES_ZH[provider]}报错`,
     },
     micDenied: "麦克风权限没开 · 去 系统设置 › 隐私与安全性 › 麦克风 里给 orbita 打开",
     micUnavailable: "找不到可用的麦克风",
     dictate: "语音输入",
     dictateFinish: "结束听写",
-    connecting: "正在连接豆包…",
+    connecting: (provider) => `正在连接${VENDOR_NAMES_ZH[provider]}…`,
     listening: "正在听写 · 回车或再点麦克风结束，Esc 取消",
     finishing: "正在收尾…",
+    dictationGroup: "听写",
+    dictationEngine: "识别引擎",
+    dictationEngineInfo: "输入框的麦克风用哪家识别 · 各家凭证在下面填",
+    engineNotReady: "这家还没配好——在下面填好它的凭证",
     doubaoGroup: "豆包语音识别",
     appId: "APP ID",
     appIdInfo: "在火山引擎豆包语音控制台里创建的应用 ID",
@@ -144,10 +162,14 @@ export const zh: Messages = {
     resourceId: "Resource ID",
     resourceIdInfo:
       "决定用哪个模型、怎么计费 · 流式语音识别 2.0 按时长计费是 volc.seedasr.sauc.duration（默认）；1.0 的应用填 volc.bigasr.sauc.duration",
+    stepfunGroup: "阶跃星辰语音识别",
+    stepfunApiKey: "API Key",
+    stepfunApiKeyInfo: "在阶跃星辰开放平台创建的密钥 · 加密存进系统钥匙串，存下后不再显示",
+    keyPaste: "粘贴 API Key",
     connection: "连接",
     test: "测试连接",
     testing: "测试中…",
-    testOk: "已连上豆包",
+    testOk: (provider) => `已连上${VENDOR_NAMES_ZH[provider]}`,
     save: "保存",
     saving: "保存中…",
     saved: "已保存",
