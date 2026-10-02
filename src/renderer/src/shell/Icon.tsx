@@ -57,6 +57,7 @@ import layoutGrid from "../../../../Orbita Design System/assets/icons/lucide/lay
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
 import listFilter from "../../../../Orbita Design System/assets/icons/lucide/list-filter.svg?raw";
 import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-todo.svg?raw";
+import menu from "../../../../Orbita Design System/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../Orbita Design System/assets/icons/lucide/mic.svg?raw";
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
@@ -160,6 +161,10 @@ const ICONS = {
   "layout-grid": layoutGrid,
   "list-filter": listFilter,
   "list-todo": listTodo,
+  // 三条等长横线。列表用 `list`（带项目符号，读作「清单」），这一枚是「全部」——
+  // 模型卡片左栏的视图开关（2026-10-01）。lucide 完整集里的 `menu`，按设计系统
+  // Iconography 那节「拷一份工作子集进来」的做法引入
+  menu,
   lock,
   "message-square": messageSquare,
   mic,
@@ -226,7 +231,8 @@ export function Icon(props: {
    * 用 `star` / `star-off` 表达开关会把「已星标」画成一个带斜杠的禁止符。
    * 填色走 CSS 变量（同 `--icon-stroke`），不改写 SVG 源串。
    *
-   * 今天唯一的消费者是星标，而 star 是**单一形状**，填实一路继承下去就是对的。
+   * 今天两个消费者都在星上：侧栏的会话行、模型卡片右端的星标——star 是**单一形状**，
+   * 填实一路继承下去就是对的。
    * （多形状图标如 circle-check 还需要一个内部标记色才不至于把勾吃掉，等真有那么
    * 一个消费者时再加——没有调用点的代码不留在分支里。）
    */

@@ -7,11 +7,33 @@ import { useT } from "../locale.ts";
 export interface MenuItem {
   id: string;
   label: string;
+  /**
+   * 行的第二行（小一号、tertiary）。只有模型卡片用它：主行是模型名、副行是它属于哪家——
+   * 左栏按厂商过滤之后组头那一行就没了，厂商名得有地方待（2026-10-01 定）。
+   * 路径卡片也用它：主行是工作区名、副行是全路径（`subLabelMono` + `subLabelEllipsis: "head"`）。
+   */
+  subLabel?: string;
+  /** 副行的截断方向。默认 `tail`；路径这类「尾段才是名字」的用 `head`（与 hintEllipsis 同一口径） */
+  subLabelEllipsis?: "tail" | "head";
+  /** 副行是机器事实（路径）：mono 字体（设计系统：mono for machine facts） */
+  subLabelMono?: boolean;
   icon?: IconName;
   /** 右侧的说明。菜单项自己解释后果，比事后弹一个确认框好 */
   hint?: string;
+  /**
+   * hint 被挤到装不下时从哪一头省略。默认 `tail`（尾部省略号）适合词；
+   * **路径这类「尾段才是名字」的东西要 `head`**：`/Users/dama/Desktop/orbita`
+   * 截成 `/Users/dama/Deskto…` 等于把唯一有信息量的那段切掉了。
+   */
+  hintEllipsis?: "tail" | "head";
   /** 最右端的徽标区（如模型项的 ctx 窗口与图片能力）。小而事实性的东西，不参与布局语义 */
   badge?: React.ReactNode;
+  /**
+   * 行右端的**独立控件**（今天的消费者只有星标）。它与「选这一行」不是一件事：
+   * 点行 = 选中这个模型、卡片收起；点它 = 只切标记，不选任何东西、卡片也不关。
+   * 所以它必须是行按钮的**兄弟**（见 MenuRow 的渲染）。
+   */
+  trailing?: React.ReactNode;
   /** 当前项。用 check 图标标出来，不用染色——状态优先图标与文字 */
   checked?: boolean;
   disabled?: boolean;
@@ -112,18 +134,78 @@ export function Menu(props: {
    */
   panelMaxWidth?: number;
   /**
+   * 面板最大高度（px）。**这是卡片自己的上限，不是视口那一道**：视口能装多少由
+   * `placeMenu` 算并封顶，这里管的是「内容再长也不超过这个高」——输入卡的两张卡片
+   * 都取 520（2026-10-01 定）。两者取小，所以窗口矮时卡片照样跟着降。
+   */
+  panelMaxHeight?: number;
+  /**
    * 菜单开在锚点的哪一边。默认下方；`right` 给侧栏会话行——
    * 开在下方会盖住紧挨着的下一条会话，想看别的会话就得先关菜单。
    */
   placement?: MenuPlacementSide;
+  /**
+   * 左栏（弹层内容的**第一等结构**，不是装饰）：与行清单并排、自己不滚，
+   * 清单在它右边滚。今天只有模型卡片用它——星标 / 全部 / 各厂商的过滤列。
+   * 里面是什么由调用方给（本原语不管），但**键盘左右切栏**由这里实现：
+   * 焦点在左栏时 `↑↓` 在格间走、`→` 交给清单；焦点在清单时 `←` 回左栏。
+   */
+  rail?: React.ReactNode;
+  /**
+   * 行清单的**定高**（显示几行的量）：给了它就是定高卡片。
+   *
+   * 为什么要有这一档：卡片的高度若跟着**内容**走，点一次左栏过滤就换一个尺寸——
+   * 位置跟着跳，而且「刚才那个模型在哪」的肌肉记忆每次都被清掉（2026-10-01 用户实测）。
+   * 定高之后，卡片大小只跟窗口有关，与筛剩几条无关。
+   * 行高取 CSS 变量 `--menu-row-height`，不在这里写死一个数。
+   */
+  listRows?: number;
+  /**
+   * 宽度尺：**不过滤**的完整行清单。它们会被画成真实的行，但不可见、不占高——
+   * 面板宽度因此由「全部配置好的模型」决定，与当前筛剩几条无关。
+   *
+   * 为什么不是「一串名字」：行宽 ≠ 名字宽，行还有图标槽、徽标、星（固定零件约 116px）。
+   * 只摆名字的尺子在筛到短名字时会被**行本身**超过——实测尺子 183px、一行 226px，
+   * 宽度照样跟着过滤变（2026-10-01 第二次返工）。所以尺子必须是整行，而且得是同一套
+   * `MenuRow` 画出来的——手写一份「像行的东西」迟早会跟真行脱节。
+   */
+  widthItems?: readonly MenuItem[];
+  /**
+   * 搜索词的回声。搜索是**一切过滤的旁路**：调用方拿它把左栏的选中复位到「全部」，
+   * 否则会出现「左栏亮着某家、列表里全是别家」这种自相矛盾的画面。
+   */
+  onSearch?: (query: string) => void;
+  /**
+   * 清单为空时写什么。**空不等于「搜不到」**：星标一格都没星过时列表也是空的，
+   * 而那与搜索无关。所以那句话得由调用方给——它才知道现在是什么过滤状态。
+   * 不给就退回「没有匹配的模型。」（只对搜索成立的说法）。
+   */
+  emptyText?: (query: string) => string;
+  /**
+   * 钉在面板底部的固定行（不跟着清单滚），拿到 `close` 自己决定关不关卡片。
+   * 模型卡片的「配置模型」就住在这里：它是「我要的东西不在这里」的出口，
+   * 最需要随时可达——放进滚动清单里就会被一屏外的东西带走。
+   */
+  footer?: (close: () => void) => React.ReactNode;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  /**
+   * `cap` = 面板实际能占的高度（视口余量与卡片上限取小）。
+   * `fixed` = 这是定高卡片：`cap` 写进 `height`（内容少也不缩）；否则写进 `maxHeight`
+   * （内容少就矮，封顶只管内容多的时候）。
+   */
+  const [position, setPosition] = useState<{ top: number; left: number; cap: number; fixed: boolean } | null>(null);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
   const anchorRef = useRef<HTMLSpanElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  /** 行清单（不含搜索框）——既是滚动容器，也是量自然高度的那个元素 */
+  const listRef = useRef<HTMLDivElement>(null);
+  /** 左栏容器：只为键盘切栏用 */
+  const railRef = useRef<HTMLDivElement>(null);
+  /** 装 [左栏 | 清单] 的那一行：量自然高度要用它，不能只用清单 */
+  const bodyRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   /** 这次是点开的还是悬停开的——决定要不要把焦点交给菜单 */
   const byClickRef = useRef(false);
@@ -163,8 +245,48 @@ export function Menu(props: {
    */
   const positionMenu = useCallback(() => {
     const anchor = anchorRef.current?.getBoundingClientRect();
-    const menu = menuRef.current?.getBoundingClientRect();
-    if (anchor === undefined || menu === undefined) return;
+    const panel = menuRef.current;
+    if (anchor === undefined || panel === null) return;
+    const panelBox = panel.getBoundingClientRect();
+    /**
+     * 高度两种口径，分开算：
+     *
+     * - **定高卡片**（`listRows`）：外壳 + N 行。行高**量一行**而不写死数字——
+     *   行高是 CSS 的事，在这边再写一个 48 就是同一件事两处写死。
+     * - **按内容**：外壳 + 两栏里高的那一个。封顶生效后面板会被压矮，拿面板高去算
+     *   就会越算越小；而内容自己的 scrollHeight 永远是真实内容高。
+     *
+     * 两种都用「面板高 − 两栏高」求外壳：搜索框、底部行、内边距都不随内容变。
+     */
+    const body = bodyRef.current;
+    const bodyBox = body?.getBoundingClientRect().height ?? 0;
+    const chrome = panelBox.height - bodyBox;
+    /**
+     * 一行多高：读**计算后的 minHeight**，不写 48。
+     * 行高是两个地方的事（CSS 定 `--menu-row-height`，卡片定「显几行」），
+     * 在 JS 里再写一遍数字，改了 CSS 这边就静默错位。
+     *
+     * 探针不能取「第一个子元素」：清单的第一个子元素是宽度尺（高 0），不是行。
+     * 拿行按钮（空清单时退到空态那一段，它也有行高）。
+     */
+    const probe =
+      listRef.current?.querySelector<HTMLElement>("button") ??
+      (listRef.current?.lastElementChild as HTMLElement | null);
+    const rowHeight = probe === null || probe === undefined ? 0 : parseFloat(getComputedStyle(probe).minHeight) || 0;
+    const fixed = props.listRows !== undefined;
+    const naturalHeight =
+      body === null
+        ? panelBox.height
+        : fixed
+          ? chrome + (props.listRows ?? 0) * rowHeight
+          : chrome + Math.max(listRef.current?.scrollHeight ?? 0, railRef.current?.scrollHeight ?? 0);
+    /**
+     * 交给定位的必须是**面板真会长成的高度**，不是内容高。
+     * 少了这一道 min，卡片会被推到离锚点很远的地方：定位按内容高（758）算「上面装得下」，
+     * 而面板被 `panelMaxHeight`（520）卡住只长了 520——中间那 238px 的差就是那段空气
+     * （2026-10-01 用户实测：「卡片没有贴住 chip」）。
+     */
+    const requested = Math.min(naturalHeight, props.panelMaxHeight ?? Number.POSITIVE_INFINITY);
     const box: MenuBox = {
       top: anchor.top,
       bottom: anchor.bottom,
@@ -175,7 +297,7 @@ export function Menu(props: {
     };
     const placed = placeMenu(
       box,
-      { width: menu.width, height: menu.height },
+      { width: panelBox.width, height: requested },
       props.align,
       { width: window.innerWidth, height: window.innerHeight },
       props.placement,
@@ -184,16 +306,19 @@ export function Menu(props: {
       close();
       return;
     }
+    // 定高卡片的上限就是它自己那份高（六行），`panelMaxHeight` 对它没意义
+    const cap = Math.min(placed.maxHeight, fixed ? naturalHeight : requested);
     setPosition((prev) =>
-      prev !== null && prev.top === placed.top && prev.left === placed.left ? prev : { top: placed.top, left: placed.left },
+      prev !== null && prev.top === placed.top && prev.left === placed.left && prev.cap === cap && prev.fixed === fixed
+        ? prev
+        : { top: placed.top, left: placed.left, cap, fixed },
     );
-  }, [props.align, props.placement, close]);
+  }, [props.align, props.placement, props.listRows, props.panelMaxHeight, close]);
 
   // 首次打开：先按旧位置渲染但不可见，量到真实高度之后再定位——菜单高度取决于
   // 内容，不先量就只能猜。这一步必须在浏览器绘制前做完，否则会看到菜单跳一下。
   // 搜索过滤改变行数时同样要重量——deps 里的 visible.length 就是为此
   const visible = filterMenuItems(props.items, query.trim().toLowerCase());
-  const searching = props.searchable === true && query.trim() !== "";
   useLayoutEffect(() => {
     if (!open) return;
     positionMenu();
@@ -226,6 +351,21 @@ export function Menu(props: {
     };
   }, [open, close, positionMenu]);
 
+  /*
+   * 面板的宽度在首次量完之后还可能长（宽度尺、字体、滚动条落定），而定位已经按
+   * 旧宽度向右夹过——结果卡片贴死视口右缘（2026-10-02 实测：设置面模型卡片量时 366、
+   * 落定 374，右缘正好顶到窗口边，副行说明被挤成省略号）。开着时盯尺寸变了就重定位；
+   * positionMenu 对相同结果不 setState，不会自激。
+   */
+  useEffect(() => {
+    if (!open) return;
+    const panel = menuRef.current;
+    if (panel === null) return;
+    const observer = new ResizeObserver(() => positionMenu());
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [open, positionMenu]);
+
   // 键盘导航与渲染都走**过滤后**的清单——搜索时 cursor 与 Enter 只在可见项里打转
   const enabled = visible.filter(
     (item) => item.disabled !== true && item.fact !== true && item.header !== true,
@@ -237,6 +377,29 @@ export function Menu(props: {
     if (enabled.length === 0) return;
     setActive((current) => (current + delta + enabled.length) % enabled.length);
   };
+
+  /**
+   * 过滤/搜索之后清单会变短，光标可能落在不再存在的行上——那时 `enabled[active]` 是
+   * undefined，右上那一行不会亮，按上下看起来像「没反应」。回到第一行。
+   */
+  useEffect(() => {
+    setActive((current) => (current < enabled.length ? current : 0));
+  }, [enabled.length]);
+
+  /**
+   * 光标走到哪儿，列表就跟到哪儿。
+   *
+   * 少了这一步，键盘上下只是把一个看不见的光标在清单里推——超过一屏（模型卡片
+   * 是六行）之后就完全不知道自己在哪了（2026-10-01 用户实测：上下带不动滚动条）。
+   * `block: "nearest"` 是「已可见就不动」：光标在视野内时按上下，列表不跳。
+   *
+   * 打开时也跑一次：清单长时卡片直接停在**当前模型**那一行，而不是从头开始。
+   */
+  useLayoutEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLElement>('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
+    // visible.length 也在依赖里：过滤/搜索后光标落在另一行上，得重新把它带进视野
+  }, [open, active, visible.length]);
 
   const choose = (item: MenuItem) => {
     if (item.keepOpen !== true) close();
@@ -295,6 +458,23 @@ export function Menu(props: {
                 event.preventDefault();
                 close();
               }
+              /*
+               * 键盘只认上下（2026-10-01 用户定）：左右不切栏，卡片里就只有一条轴。
+               * 左栏仍然可达——格子是按钮，Tab 能进去，Enter 应用过滤（无键盘陷阱）。
+               * 焦点在左栏时上下走格子，不在左栏时上下推清单的光标（两件事不打架）。
+               */
+              const railEl = railRef.current;
+              const inRail = railEl !== null && event.target instanceof Node && railEl.contains(event.target);
+              if (inRail && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                event.preventDefault();
+                const buttons = [...railEl.querySelectorAll<HTMLButtonElement>("button")];
+                if (buttons.length === 0) return;
+                const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                const next = at < 0 ? 0 : (at + step + buttons.length) % buttons.length;
+                buttons[next]?.focus();
+                return;
+              }
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 move(1);
@@ -315,11 +495,20 @@ export function Menu(props: {
               position: "fixed",
               top: position?.top ?? 0,
               left: position?.left ?? 0,
-              // 量高度那一帧不可见，避免在错位置闪一下
+              // 量高度那一帧不可见，避开在错位置闪一下（首帧也不封顶，才量得到自然高度）
               visibility: position === null ? "hidden" : "visible",
+              // 定高卡片给 height（内容少也不缩，卡片大小不跟着筛剩几条变）、
+              // 按内容的给 maxHeight（封顶 + 内部滚）。position 为 null 时是在量自然高度，不设
+              ...(position === null
+                ? null
+                : position.fixed
+                  ? { height: position.cap }
+                  : { maxHeight: position.cap }),
               zIndex: 40,
               minWidth: props.panelMinWidth ?? 180,
-              maxWidth: props.panelMaxWidth ?? 320,
+              // 上限夹一道视口（面板是 fixed 的，100vw 就是可用宽）——
+              // 窄窗下宁可窄、也不让右边半截出屏
+              maxWidth: `min(${props.panelMaxWidth ?? 320}px, calc(100vw - 48px))`,
               padding: "var(--space-1)",
               display: "flex",
               flexDirection: "column",
@@ -351,6 +540,7 @@ export function Menu(props: {
                   onChange={(e) => {
                     setQuery(e.target.value);
                     setActive(0);
+                    props.onSearch?.(e.target.value);
                   }}
                   style={{
                     width: "100%",
@@ -368,36 +558,126 @@ export function Menu(props: {
                 />
               </div>
             )}
-            {searching && visible.length === 0 && (
+            {/*
+              行清单是**唯一滚动的那一层**（搜索框钉在顶部不跟着滚）：封顶生效时
+              面板变矮，这里 `overflow-y: auto` 接管，底部的模型因此永远够得到。
+              它也是量自然高度的那个元素：scrollHeight 不受封顶影响。
+              有左栏时两栏并排：左栏是几个格子，自己也能滚（厂商多的人），但两栏滚的是各自的。
+            */}
+            <div
+              ref={bodyRef}
+              style={{ display: "flex", flex: "1 1 auto", minWidth: 0, minHeight: 0, gap: "var(--space-1)" }}
+            >
+              {props.rail !== undefined && (
+                <div
+                  ref={railRef}
+                  style={{ flex: "none", display: "flex", flexDirection: "column", overflowY: "auto" }}
+                >
+                  {props.rail}
+                </div>
+              )}
               <div
+                ref={listRef}
                 style={{
-                  padding: "var(--space-2)",
-                  fontFamily: "var(--font-family-base)",
-                  fontSize: "var(--font-size-caption)",
-                  color: "var(--color-text-tertiary)",
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  minHeight: 0,
+                  overflowY: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  /*
+                   * 滚动条也占宽：不 reserve 的话，「能滚」与「不能滚」差一个滚动条宽——
+                   * 而筛剩几条恰好决定了能不能滚，于是卡片宽度跟着过滤变（真机验收：
+                   * 全部 379 → 筛到一家 369，正好 10px）。只给带宽度尺的卡片钉住，
+                   * 其余菜单不能被白留一条 10px 的空缝。
+                   */
+                  ...(props.widthItems === undefined ? null : { scrollbarGutter: "stable" }),
                 }}
               >
-                {t.menu.noModels}
+                {/*
+                  宽度尺：不过滤的全部行（同一套 MenuRow 画的），不可见也不占高。
+                  它们撑住面板宽度，所以左栏怎么筛都不换尺寸。
+                */}
+                {props.widthItems !== undefined && (
+                  <div aria-hidden style={{ height: 0, overflow: "hidden", visibility: "hidden" }}>
+                    {props.widthItems.map((item) => (
+                      <MenuRow
+                        key={`ruler:${item.id}`}
+                        item={item}
+                        cursor={false}
+                        onHover={() => {}}
+                        onSelect={() => {}}
+                      />
+                    ))}
+                  </div>
+                )}
+              {visible.length === 0 && (
+                <div
+                  style={{
+                    // 空态也占一行：卡片是定高的，空清单时它不能瘪下去
+                    minHeight: "var(--menu-row-height)",
+                    padding: "var(--space-2)",
+                    fontFamily: "var(--font-family-base)",
+                    fontSize: "var(--font-size-caption)",
+                    color: "var(--color-text-tertiary)",
+                  }}
+                >
+                  {(props.emptyText ?? (() => t.menu.noModels))(query)}
+                </div>
+              )}
+              {visible.map((item) => (
+                <MenuRow
+                  key={item.id}
+                  item={item}
+                  cursor={enabled[active]?.id === item.id}
+                  onHover={() => {
+                    const index = enabled.findIndex((candidate) => candidate.id === item.id);
+                    if (index >= 0) setActive(index);
+                  }}
+                  onSelect={() => choose(item)}
+                />
+              ))}
+              </div>
+            </div>
+            {props.footer !== undefined && (
+              <div
+                style={{
+                  flex: "none",
+                  marginTop: "var(--space-1)",
+                  paddingTop: "var(--space-1)",
+                  borderTop: "1px solid var(--color-border-subtle)",
+                }}
+              >
+                {props.footer(close)}
               </div>
             )}
-            {visible.map((item) => (
-              <MenuRow
-                key={item.id}
-                item={item}
-                cursor={enabled[active]?.id === item.id}
-                onHover={() => {
-                  const index = enabled.findIndex((candidate) => candidate.id === item.id);
-                  if (index >= 0) setActive(index);
-                }}
-                onSelect={() => choose(item)}
-              />
-            ))}
           </div>,
           document.body,
         )}
     </>
   );
 }
+
+/**
+ * 菜单底栏的动作行样式（整行可点、图标 + 词）。底栏容器由 Menu 画，行的形状也归这里管：
+ * 模型卡片的「配置模型」与路径卡片的「新建工作区 / 添加文件夹」共用这一份——
+ * 两份逐字相同的样式各放一处，迟早漂（2026-10-02 wafo 评审）。
+ */
+export const menuFooterRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--space-2)",
+  width: "100%",
+  minHeight: "var(--control-height-lg)",
+  padding: "0 var(--space-2)",
+  border: 0,
+  borderRadius: "var(--radius-sm)",
+  color: "var(--color-text-primary)",
+  fontFamily: "var(--font-family-base)",
+  fontSize: "var(--font-size-control)",
+  textAlign: "left",
+  cursor: "pointer",
+};
 
 function MenuRow(props: {
   item: MenuItem;
@@ -410,7 +690,7 @@ function MenuRow(props: {
   const fact = item.fact === true;
   const header = item.header === true;
   const disabled = item.disabled === true || fact || header;
-  return (
+  const row = (
     <button
       type="button"
       role={fact || header ? "presentation" : "menuitem"}
@@ -420,6 +700,8 @@ function MenuRow(props: {
       // 停的那行会跟着一起亮）
       data-cursor={props.cursor}
       aria-selected={item.checked === true || undefined}
+      // 定宽卡片里名字可能被截断，title 是那个出口（副行、徽标不进 title：那是注释不是身份）
+      title={item.label}
       disabled={disabled}
       onMouseEnter={props.onHover}
       onClick={props.onSelect}
@@ -432,7 +714,11 @@ function MenuRow(props: {
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
-        minHeight: "var(--control-height-md)",
+        // 两行的行要高出一档（32 + 16 = 48）：副行不是浮着的小字，它是行的下半截
+        minHeight:
+          item.subLabel === undefined
+            ? "var(--control-height-md)"
+            : "var(--menu-row-height)",
         padding: "var(--space-1) var(--space-2)",
         border: 0,
         borderRadius: "var(--radius-sm)",
@@ -483,10 +769,62 @@ function MenuRow(props: {
         在两者之间留白（没有多余空间时退化成紧贴），hint 才是那个会被压缩、
         用 ellipsis 截断的一方。
       */}
-      <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-2)", minWidth: 0 }}>
-        <span style={{ flex: "none", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <span
+        style={{
+          display: "flex",
+          // 有副行时这一列竖过来（主行 + 副行）；没副行就还是「label — hint」一行
+          flexDirection: item.subLabel === undefined ? "row" : "column",
+          alignItems: item.subLabel === undefined ? "center" : "flex-start",
+          justifyContent: "space-between",
+          gap: item.subLabel === undefined ? "var(--space-2)" : 0,
+          minWidth: 0,
+        }}
+      >
+        <span
+          style={{
+            flex: "none",
+            maxWidth: "100%",
+            minWidth: 0,
+            lineHeight: "18px",
+            /*
+             * 事实行且没有 hint 时，label 是唯一的叙事者：长句（压缩确认那句
+             * 「…仍要压缩？」）必须换行说完——省略号切掉一半就成了另一句话。
+             * 其余行照旧单行省略：名字被截断至少还是个名字。
+             */
+            ...(fact && item.hint === undefined
+              ? { whiteSpace: "normal" }
+              : { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }),
+          }}
+        >
           {item.label}
         </span>
+        {item.subLabel !== undefined && (
+          <span
+            style={{
+              flex: "none",
+              maxWidth: "100%",
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              color: "var(--color-text-tertiary)",
+              // 副行是注脚（模型卡片的厂商名、路径卡片的全路径），比主行退两档
+              fontSize: "var(--font-size-micro)",
+              lineHeight: "16px",
+              ...(item.subLabelMono === true ? { fontFamily: "var(--font-family-mono)" } : null),
+              // 「保尾巴」同 hint：direction rtl 让溢出发生在左侧，内层再隔离回 LTR
+              ...(item.subLabelEllipsis === "head"
+                ? { direction: "rtl" as const, textAlign: "left" as const }
+                : null),
+            }}
+          >
+            {item.subLabelEllipsis === "head" ? (
+              <span style={{ unicodeBidi: "isolate", direction: "ltr" }}>{item.subLabel}</span>
+            ) : (
+              item.subLabel
+            )}
+          </span>
+        )}
         {item.hint !== undefined && (
           <span
             style={{
@@ -497,6 +835,12 @@ function MenuRow(props: {
               color: "var(--color-text-tertiary)",
               fontSize: "var(--font-size-micro)",
               whiteSpace: "nowrap",
+              // 「保尾巴」的截断：direction: rtl 让溢出发生在左侧（省略号落到头部），
+              // text-align 再把它拉回左缘。**不能加 unicode-bidi: plaintext**——
+              // 那会按首个强字符把方向判回 LTR，省略号又跑回尾部
+              ...(item.hintEllipsis === "head"
+                ? { direction: "rtl" as const, textAlign: "left" as const }
+                : null),
               ...(fact
                 ? {
                     fontFamily: "var(--font-family-business)",
@@ -506,11 +850,29 @@ function MenuRow(props: {
                 : null),
             }}
           >
-            {item.hint}
+            {/* 内层必须是 LTR 的隔离段：不然行首的 "/" 会被 RTL 段落搬到行尾
+                （"/Users/dama" 显示成 "Users/dama/"，小样里踩过） */}
+            {item.hintEllipsis === "head" ? (
+              <span style={{ unicodeBidi: "isolate", direction: "ltr" }}>{item.hint}</span>
+            ) : (
+              item.hint
+            )}
           </span>
         )}
       </span>
       {item.badge}
     </button>
+  );
+  /*
+   * 尾控件（星标）是行按钮的**兄弟**，不是子节点：HTML 里 button 不能嵌 button，
+   * 浏览器会把内层拆出去，点击行为跟着乱。整行的底由外面这一层给（见 styles.css 的
+   * .menu-row-tail）——鼠标落在星上时，亮的是整行，不是只有一半。
+   */
+  if (item.trailing === undefined) return row;
+  return (
+    <div className="menu-row-tail" data-cursor={props.cursor} data-current={item.checked === true}>
+      {row}
+      {item.trailing}
+    </div>
   );
 }

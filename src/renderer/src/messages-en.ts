@@ -237,8 +237,10 @@ export const en = {
   },
 
   menu: {
-    searchModels: "Search models…",
-    noModels: "No models match.",
+    searchModels: "Search models or providers…",
+    noModels: "No matching models.",
+    all: "All",
+    noMatchInProvider: (query: string) => `No model matching “${query}” in this provider.`,
   },
 
   rail: {
@@ -495,6 +497,12 @@ export const en = {
   modelMenu: {
     contextWindow: "Context window",
     acceptsImage: "Accepts image input — multimodal",
+    starred: "Starred",
+    starredEmpty: "No starred models yet. Star one from the right of any model row.",
+    star: "Star this model",
+    unstar: "Unstar this model",
+    starredTip: "Starred · click to unstar",
+    configure: "Configure models",
   },
 
   providers: {
@@ -1118,8 +1126,7 @@ export const en = {
     stopLabel: "Stop",
     stopTip:
       "Stop this sub-session — aborts its current turn and closes the channel. Only you can re-open it, by speaking as the parent in the channel.",
-    stopHint: "Aborts this turn and closes the channel",
-    stopHintReopen: "Only you can re-open it",
+    stopHint: "Aborts this turn and closes the channel — only you can re-open it",
     stopConfirm: "Stop it",
     stoppedHint: "Already stopped — speak as the parent in the channel to re-open.",
   },

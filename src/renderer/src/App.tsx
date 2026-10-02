@@ -3,7 +3,7 @@ import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type SettingsPatch } from "@shared/settings";
+import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
@@ -117,6 +117,36 @@ export function App() {
   /** 先落盘再回填：写失败时 UI 不该显示一个其实没存下来的选择 */
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
+  }, []);
+
+  /**
+   * 星标是个**开关**：在库里就取消、不在就加到最后（新星的排在末尾，
+   * 因为左栏的星标视图按加入顺序列）。
+   *
+   * 读的是 ref 而不是 `settings.starredModels`：连点两下时两下都发生在回包之前，
+   * 用闭包里那份旧列表的话，两下都按「加」算——星标就永远点不灭。
+   */
+  const starredRef = useRef<ModelPair[]>([]);
+  useEffect(() => {
+    starredRef.current = settings.starredModels ?? [];
+  }, [settings.starredModels]);
+  const toggleStarModel = useCallback(
+    (pair: ModelPair) => {
+      const key = `${pair.providerId}:${pair.modelId}`;
+      const list = starredRef.current;
+      const next = list.some((p) => `${p.providerId}:${p.modelId}` === key)
+        ? list.filter((p) => `${p.providerId}:${p.modelId}` !== key)
+        : [...list, pair];
+      starredRef.current = next;
+      changeSettings({ starredModels: next });
+    },
+    [changeSettings],
+  );
+
+  /** 模型卡片底部「配置模型」的去处：设置面的服务商页（不是通用页） */
+  const openProvidersTab = useCallback(() => {
+    setSettingsTab("providers");
+    setOverlay("settings");
   }, []);
 
   /** 右侧面板宽度（4-0 拖宽）：拖动中只改本地，松手才落 settings */
@@ -569,6 +599,8 @@ export function App() {
                 tab={settingsTab}
                 settings={settings}
                 providers={providers}
+                starredModels={settings.starredModels ?? []}
+                onToggleStarModel={toggleStarModel}
                 onSettingsChange={changeSettings}
                 onProvidersChange={refresh}
                 onImported={() => {
@@ -589,6 +621,9 @@ export function App() {
                 onOpenParent={openParent}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
+                starredModels={settings.starredModels ?? []}
+                onToggleStarModel={toggleStarModel}
+                onOpenProviders={openProvidersTab}
                 scrollToEnd
                 scrollToEndHotkey
               />
@@ -653,6 +688,9 @@ export function App() {
                   view={drawerView}
                   mainSessionId={mainSessionId}
                   providersError={providersError}
+                  starredModels={settings.starredModels ?? []}
+                  onToggleStarModel={toggleStarModel}
+                  onOpenProviders={openProvidersTab}
                   docked={docked}
                   onDockedChange={(list) =>
                     changeDocked(
@@ -682,6 +720,8 @@ export function App() {
                   onOpenChannel={openChannel}
                   onClose={() => handlePanel(null)}
                   providersError={providersError}
+                  starredModels={settings.starredModels ?? []}
+                  onToggleStarModel={toggleStarModel}
                 />
               ) : null}
             </div>

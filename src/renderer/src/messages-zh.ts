@@ -208,8 +208,14 @@ export const zh: Messages = {
   },
 
   menu: {
-    searchModels: "搜索模型…",
+    // 搜索是**跨全部厂商**的（搜索时左栏复位到「全部」），而且它连厂商名也搜——
+    // 占位符不说的话，用户不知道搜「智谱」能命中整家
+    searchModels: "搜索模型或服务商…",
     noModels: "没有匹配的模型。",
+    all: "全部",
+    // 左栏选着某家时搜不到：这句话必须把「你在一家里面搜」说出来，
+    // 否则用户会以为搜索坏了（其实是过滤在起作用）
+    noMatchInProvider: (query: string) => `这家服务商里没有匹配「${query}」的模型。`,
   },
 
   rail: {
@@ -455,6 +461,13 @@ export const zh: Messages = {
   modelMenu: {
     contextWindow: "上下文窗口",
     acceptsImage: "可输入图片——多模态",
+    starred: "星标",
+    starredEmpty: "还没有星标的模型。在任意模型行右侧点星加入。",
+    // 行右端那颗星的三个说法——与会话行的星标同形（加 / 取消 / 已加）
+    star: "加星标",
+    unstar: "取消星标",
+    starredTip: "已加星标 · 点击取消",
+    configure: "配置模型",
   },
 
   providers: {
@@ -1029,8 +1042,7 @@ export const zh: Messages = {
     stopLabel: "终止",
     stopTip:
       "终止这个子会话——中止它正在跑的这一轮并关闭通道。只有你以母会话身份发言能重新打开。",
-    stopHint: "中止当前这一轮并关闭通道",
-    stopHintReopen: "只有你能重新打开",
+    stopHint: "中止当前这一轮并关闭通道，只有你能重新打开",
     stopConfirm: "终止",
     stoppedHint: "已终止——在通道里以母会话身份发言可重新打开。",
   },
