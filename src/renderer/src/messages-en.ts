@@ -1,6 +1,7 @@
 import { thinkingLevelLabel, type ThinkingLevel } from "../../shared/thinking.ts";
 import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
+import type { ReviewSource } from "../../shared/review.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -19,17 +20,20 @@ import type { DictationProvider } from "../../shared/voice.ts";
 const KNOWN_NOTES: Record<string, string> = {
   deepseek: "DeepSeek official API",
   zhipu: "Zhipu open platform standard API (billed per token)",
-  "zhipu-coding": "Coding Plan subscription, via the Anthropic-compatible endpoint",
-  zai: "Zhipu's international site; accounts are separate from the China site",
-  stepfun: "StepFun official API (Step plan endpoint; the URL must include /v1)",
-  "opencode-go": "OpenCode Zen gateway — one key for models from many vendors (DeepSeek / MiniMax…)",
+  "zhipu-coding": "GLM Coding Plan subscription, via the Anthropic-compatible endpoint",
+  zai: "GLM Coding Plan on Zhipu's international site; accounts are separate from the China site",
+  stepfun: "Step Plan subscription (the URL must include /v1)",
+  "kimi-coding": "Kimi Code membership, via the Anthropic-compatible endpoint",
+  "opencode-go": "OpenCode Go subscription — one key for open models from many vendors (DeepSeek / MiniMax…)",
   "anthropic-compatible": "Self-hosted gateway / private deployment; the client appends /v1/messages to your URL",
   "openai-compatible":
     "Self-hosted gateway / private deployment; include the version segment, the client appends /chat/completions",
 };
 
 const KNOWN_LABELS: Record<string, string> = {
-  zai: "Z.AI (International)",
+  zhipu: "Zhipu",
+  "zhipu-coding": "Zhipu",
+  stepfun: "StepFun",
   "anthropic-compatible": "Anthropic-compatible",
   "openai-compatible": "OpenAI-compatible",
 };
@@ -67,6 +71,31 @@ export const en = {
     save: "Save",
     apply: "Apply",
     reset: "Reset",
+  },
+
+  review: {
+    title: "Review",
+    source: (source: ReviewSource): string =>
+      source === "task" ? "This task" : source === "unstaged" ? "Unstaged" : source === "staged" ? "Staged" : "vs upstream",
+    refresh: "Refresh",
+    noTask: "Open a task to review its changes.",
+    errorTitle: "Couldn't load changes",
+    titleNotRepo: "Not a Git repository",
+    titleNoGit: "Git isn't available",
+    titleNoUpstream: "No upstream branch",
+    emptyNoChangesDetail: (source: ReviewSource): string =>
+      source === "task"
+        ? "Files the agent writes or edits in this task show up here, compared with how they were before."
+        : "Nothing to show from this source right now. Switch sources or refresh after the next change.",
+    emptyNoChanges: "No changes yet",
+    emptyNotRepo: 'This folder is not a Git repository — the Git sources need one. "This task" works everywhere.',
+    emptyNoGit: 'Git is not installed on this machine. "This task" works without it.',
+    emptyNoUpstream: "This branch has no upstream — nothing to compare against.",
+    againstUpstream: (name: string) => `Compared with ${name}`,
+    restored: "Restored",
+    restoredEmpty: "Identical to the baseline — nothing to show.",
+    noBaseline: "No baseline",
+    binary: "Binary",
   },
 
   /** 思考档的显示名：英文沿用 shared 的词（含模型家族专属叫法，如 claude 的 Extra） */
@@ -204,6 +233,7 @@ export const en = {
 
   rowStatus: {
     pinned: "Pinned",
+    subRunning: "Sub-session running",
   },
 
   menu: {
@@ -213,6 +243,7 @@ export const en = {
 
   rail: {
     files: "Files",
+    review: "Review changes",
     skills: "Skills",
     mcp: "MCP servers",
     sideChat: "Side chat Ctrl+Alt+D",
@@ -452,11 +483,11 @@ export const en = {
   themes: {
     system: "System",
     light: "Light",
-    graphite: "Graphite",
-    black: "Ink",
+    graphite: "Slate",
+    black: "Onyx",
     copybook: "Copybook",
     typescript: "Typescript",
-    systemTip: "Follows your desktop's light or dark appearance · dark lands on Ink",
+    systemTip: "Follows your desktop's light or dark appearance · dark lands on Onyx",
     copybookTip: "A green-grid Chinese school exercise book with red pen marks · light only",
     typescriptTip: "A typewritten page with a red margin line, the English counterpart of Copybook · light only",
   },
@@ -477,7 +508,6 @@ export const en = {
     noApiKey: "No API key",
     addProvider: "Add provider",
     loadingProviders: "Loading providers…",
-    noProviders: "No providers",
     // —— 给导入的会话分配模型 ——
     assignHint: (count: number) =>
       `${count} imported session${count === 1 ? "" : "s"} still ${count === 1 ? "needs" : "need"} a model`,
@@ -537,10 +567,22 @@ export const en = {
     removeModel: (id: string) => `Remove ${id}`,
     apiFormatTip: "API format · set by the provider preset · to switch protocol, add a different entry",
     urlSuffixTip: "The client appends this path",
-    aboutList: "About this list",
-    aboutListBody: "Only adapters verified against real endpoints · the protocol follows the entry you pick",
-    catalogTip: "Model parameters come from the built-in catalog",
-    catalogBadge: "catalog",
+    /** 「添加服务商」目录的三个分区标题（knownProviderGroup） */
+    /** 模型服务卡片墙的工具条与卡片 */
+    searchProviders: "Search providers, URLs or your own names",
+    onlyAdded: "Added only",
+    cardSize: "Card size",
+    cardSizes: { large: "Large", small: "Small" },
+    noProvidersMatch: "No providers match · a self-hosted gateway can use Custom compatible",
+    noneAdded: "No providers added yet · turn off Added only to see them all",
+    addAnother: "Add another",
+    addAnotherTip: (name: string) => `Add another ${name} (a second account or key)`,
+    customUrl: "Your own URL",
+    catalogGroups: {
+      api: "API providers",
+      plan: "Coding plans",
+      custom: "Custom compatible",
+    },
     /** 目录卡的说明：shared 的 note 是中文，英文界面在这里给英文；查不到退回 shared 原文 */
     knownNote: (id: string, fallback: string) => KNOWN_NOTES[id] ?? fallback,
     /** 目录卡的名字：只有带描述性中文的几条要换（「Anthropic 兼容」），厂商名原样 */
@@ -874,6 +916,48 @@ export const en = {
     waitingOutput: "(waiting for output…)",
     noOutput: "(no output)",
     branchFromHere: "Branch from here",
+    revertHere: "Revert to here — removes this message and everything after, restores the files it changed, and puts the text back in the composer",
+    revertBusy: "Wait for this task to finish before reverting",
+    revertReadOnly: "This task has no agent session to revert",
+    previewRevertLead: (files: number, yours: number): string =>
+      files === 0
+        ? "Go back to before this message? Everything after it is removed."
+        : `Go back to before this message? Everything after it is removed and ${files} file${files === 1 ? "" : "s"} go back${yours > 0 ? ` — ${yours} of them you edited, your edits will be overwritten` : ""}.`,
+    previewUndoLead: (files: number, yours: number): string =>
+      `Undo this round's file changes? ${files} file${files === 1 ? "" : "s"} go back to before it${yours > 0 ? ` — ${yours} of them changed since, those changes will be overwritten` : ""}. The conversation stays.`,
+    previewEffect: (effect: "restore" | "delete" | "yours" | "later" | "stuck"): string =>
+      effect === "restore" ? "restore" : effect === "delete" ? "delete" : effect === "yours" ? "you edited" : effect === "later" ? "later rounds edited" : "can't restore",
+    previewEffectHint: (effect: "restore" | "delete" | "yours" | "later" | "stuck"): string =>
+      effect === "restore"
+        ? "Goes back to its content from before."
+        : effect === "delete"
+          ? "Didn't exist before, so it will be deleted."
+          : effect === "yours"
+            ? "Changed after the agent finished (by you or a shell command). Those edits will be overwritten by the snapshot."
+            : effect === "later"
+              ? "Later rounds also changed this file. Undoing restores it to before this round, so their changes go too."
+              : "No snapshot (too large or not text). This file is left as it is.",
+    previewCut: "Everything from here will be removed",
+    revertTitle: "Revert conversation",
+    revertConfirm: "Revert",
+    revertShellNote: "Files changed only by shell commands are not tracked and will not be reverted.",
+    revertOutcome: (outcome: "restored" | "deleted" | "skipped"): string =>
+      outcome === "restored" ? "Restored" : outcome === "deleted" ? "Deleted" : "Not restored",
+    revertRestored: (n: number) => `${n} file${n === 1 ? "" : "s"} restored`,
+    revertDeleted: (n: number) => `${n} deleted`,
+    revertSkipped: (n: number) => `${n} not restored (no snapshot)`,
+    revertedHere: "Reverted — the conversation continued from here",
+    undoTitle: "Undo file changes",
+    undoConfirm: "Undo changes",
+    fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
+    fileCardExpand: "Show changed files",
+    fileCardCollapse: "Hide changed files",
+    fileCardUndo: "Undo",
+    fileCardUndoHint: "Undo this round's file changes — the conversation stays",
+    fileCardUndone: "Undone",
+    fileCardWebPage: "Web page",
+    openInOrbita: "Open in orbita",
+    revealArtifact: "Show in folder",
     worked: "Worked",
     thought: "thought",
     lines: (n: number) => `${n} lines`,
@@ -940,6 +1024,7 @@ export const en = {
     kinds: {
       task: "task",
       reply: "reply",
+      stop: "stopped",
       question: "question",
       progress: "progress",
       done: "done",
@@ -961,6 +1046,8 @@ export const en = {
     deliveryTip:
       "steer: injects at the next tool call without stopping it · turn end: waits until its current turn ends",
     closed: "closed ·",
+    /** stopped 专用那一行（与 closed 同一个 reopen 入口，但话说清楚是谁停的） */
+    closedStopped: "stopped by you ·",
     reopenToSpeak: "reopen to speak",
     steer: "steer",
     turnEnd: "turn end",
@@ -968,8 +1055,11 @@ export const en = {
     status: {
       running: "running",
       waiting: "waiting",
+      approval: "needs approval",
       done: "done",
       failed: "failed",
+      idle: "idle",
+      stopped: "stopped",
     },
     subSession: "Sub-session",
     parentSession: "Parent session",
@@ -979,6 +1069,7 @@ export const en = {
       done: "done",
       failed: "failed",
       idle: "idle",
+      stopped: "stopped",
     },
     delegating: "delegating…",
     delegated: "DELEGATED",
@@ -1011,6 +1102,8 @@ export const en = {
       approval: "needs approval",
       done: "done",
       failed: "failed",
+      /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */
+      stopped: "stopped",
       idle: "idle",
     },
     back: "Back to sub-sessions",
@@ -1020,6 +1113,15 @@ export const en = {
     of: (title: string) => `Sub-sessions of "${title}"`,
     none: "No sub-sessions yet.",
     untitled: "Untitled",
+    /** 终止入口（会话层头部）：菜单里的后果行要短（菜单行单行省略号），
+     * 完整后果在 chip 的 title 悬停说明里 */
+    stopLabel: "Stop",
+    stopTip:
+      "Stop this sub-session — aborts its current turn and closes the channel. Only you can re-open it, by speaking as the parent in the channel.",
+    stopHint: "Aborts this turn and closes the channel",
+    stopHintReopen: "Only you can re-open it",
+    stopConfirm: "Stop it",
+    stoppedHint: "Already stopped — speak as the parent in the channel to re-open.",
   },
 
   approval: {
@@ -1055,7 +1157,8 @@ export const en = {
     noWorkspaceFolder: "Choose a workspace folder first",
     noRunningToCompact: "No running task to compact",
     scanTimeout: "The leftover scan didn't finish in time — marked done without a checklist.",
-    scanUnreadable: "Couldn't read the scan result — marked done without a checklist.",
+    scanUnreadable:
+      "Couldn't read the scan result — marked done without a checklist. If this keeps happening, try a different chore model in Settings.",
     scanNothing: "The leftover scan found nothing — marked done.",
     queuedBeforeWrapUp: "There are queued messages in this task — send or withdraw them before wrapping up.",
     noAgentSession: "This task cannot be scanned (no agent session) — marked done directly.",

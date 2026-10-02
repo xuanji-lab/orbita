@@ -27,8 +27,8 @@ function message(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
 }
 
 describe("allowedKinds", () => {
-  it("父只能发 task / reply；子只能发 question / progress / done / failed", () => {
-    deepStrictEqual([...allowedKinds("parent")], ["task", "reply"]);
+  it("父只能发 task / reply / stop；子只能发 question / progress / done / failed", () => {
+    deepStrictEqual([...allowedKinds("parent")], ["task", "reply", "stop"]);
     deepStrictEqual([...allowedKinds("child")], ["question", "progress", "done", "failed"]);
   });
 });
@@ -62,6 +62,18 @@ describe("parseChannelMessage", () => {
   it("user 作者只允许出现在 parent 侧——child 侧没有「代子发言」的入口", () => {
     strictEqual(
       parseChannelMessage(message({ from: "child", kind: "question", author: "user" })),
+      null,
+    );
+  });
+
+  it("stop 只能由用户发起（parent · user）；model 作者的 stop 是坏行——只能来自手改文件", () => {
+    deepStrictEqual(
+      parseChannelMessage(message({ kind: "stop", author: "user", text: "" })),
+      message({ kind: "stop", author: "user", text: "" }),
+    );
+    strictEqual(parseChannelMessage(message({ kind: "stop", author: "model" })), null);
+    strictEqual(
+      parseChannelMessage(message({ from: "child", kind: "stop", author: "user" })),
       null,
     );
   });
@@ -193,8 +205,92 @@ describe("channelStatus", () => {
   });
 });
 
+describe("channelStatus · stopped（用户终止）", () => {
+  const stop = (id: string, createdAt: number): ChannelMessage =>
+    message({ id, kind: "stop", author: "user", text: "", createdAt });
+
+  it("stop 落账 → stopped；waiting 的通道被用户终止也翻 stopped（不再是等你回复）", () => {
+    strictEqual(channelStatus([message(), stop("m2", 2)]), "stopped");
+    strictEqual(
+      channelStatus([
+        message(),
+        message({ id: "m2", from: "child", kind: "question", createdAt: 2 }),
+        stop("m3", 3),
+      ]),
+      "stopped",
+    );
+  });
+
+  it("done / failed 之后用户再终止 → stopped：封死父模型 reopen 的口子", () => {
+    strictEqual(
+      channelStatus([
+        message(),
+        message({ id: "m2", from: "child", kind: "done", createdAt: 2 }),
+        stop("m3", 3),
+      ]),
+      "stopped",
+    );
+  });
+
+  it("父模型的 reply 不能重开 stopped——否则父模型一回信就把用户的裁决绕了过去", () => {
+    strictEqual(
+      channelStatus([
+        message(),
+        stop("m2", 2),
+        message({ id: "m3", kind: "reply", author: "model", createdAt: 3 }),
+      ]),
+      "stopped",
+    );
+  });
+
+  it("子后续的 progress / question / done / failed 同样不重开 stopped", () => {
+    strictEqual(
+      channelStatus([
+        message(),
+        stop("m2", 2),
+        message({ id: "m3", from: "child", kind: "progress", createdAt: 3 }),
+        message({ id: "m4", from: "child", kind: "question", createdAt: 4 }),
+        message({ id: "m5", from: "child", kind: "done", createdAt: 5 }),
+      ]),
+      "stopped",
+    );
+  });
+
+  it("用户代父发言（author user 的 reply）重开 → running，之后照常推导", () => {
+    strictEqual(
+      channelStatus([
+        message(),
+        stop("m2", 2),
+        message({ id: "m3", kind: "reply", author: "user", createdAt: 3 }),
+      ]),
+      "running",
+    );
+    strictEqual(
+      channelStatus([
+        message(),
+        stop("m2", 2),
+        message({ id: "m3", kind: "reply", author: "user", createdAt: 3 }),
+        message({ id: "m4", from: "child", kind: "question", createdAt: 4 }),
+      ]),
+      "waiting",
+    );
+  });
+
+  it("重开之后可再次终止；双 stop 不改变状态", () => {
+    strictEqual(
+      channelStatus([
+        stop("m1", 1),
+        message({ id: "m2", kind: "reply", author: "user", createdAt: 2 }),
+        stop("m3", 3),
+      ]),
+      "stopped",
+    );
+    strictEqual(channelStatus([stop("m1", 1), stop("m2", 2)]), "stopped");
+  });
+});
+
 describe("hasExchange", () => {
-  it("只有 task = 没有往来；task 之外任意一条都算", () => {
+  it("只有 task = 没有往来；task 之外任意一条都算（stop 也算——终止过的通道继续占位）", () => {
     strictEqual(hasExchange([]), false);
     strictEqual(hasExchange([message()]), false);
     strictEqual(
@@ -202,6 +298,7 @@ describe("hasExchange", () => {
       true,
     );
     strictEqual(hasExchange([message({ kind: "reply" })]), true);
+    strictEqual(hasExchange([message(), message({ id: "m2", kind: "stop", author: "user", createdAt: 2 })]), true);
   });
 });
 

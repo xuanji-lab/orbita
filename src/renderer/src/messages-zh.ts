@@ -31,6 +31,30 @@ const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入"
  * - 省略号跟原型用单个「…」（菜单项「移到…」、进行中「正在载入…」）。
  */
 export const zh: Messages = {
+  review: {
+    title: "审查",
+    source: (source) =>
+      source === "task" ? "本任务改动" : source === "unstaged" ? "未暂存" : source === "staged" ? "已暂存" : "与上游对比",
+    refresh: "刷新",
+    noTask: "先打开一个任务，才能看它的改动。",
+    errorTitle: "读不出改动",
+    titleNotRepo: "不是 Git 仓库",
+    titleNoGit: "这台电脑没有 Git",
+    titleNoUpstream: "没有上游分支",
+    emptyNoChangesDetail: (source) =>
+      source === "task"
+        ? "agent 在这个任务里写入或编辑的文件会列在这里，与改动之前对比。"
+        : "这个来源下暂时没有改动。可以切换来源，或等下次改动后刷新。",
+    emptyNoChanges: "还没有改动",
+    emptyNotRepo: "这个文件夹不是 Git 仓库——Git 三个来源需要一个仓库。「本任务改动」不需要。",
+    emptyNoGit: "这台机器没有安装 Git。「本任务改动」不依赖它。",
+    emptyNoUpstream: "当前分支没有上游，对比不了。",
+    againstUpstream: (name) => `与 ${name} 对比`,
+    restored: "已还原",
+    restoredEmpty: "与基线一致——没有可展示的差异。",
+    noBaseline: "无基线",
+    binary: "二进制",
+  },
   common: {
     cancel: "取消",
     close: "关闭",
@@ -180,6 +204,7 @@ export const zh: Messages = {
 
   rowStatus: {
     pinned: "已置顶",
+    subRunning: "子会话运行中",
   },
 
   menu: {
@@ -189,6 +214,7 @@ export const zh: Messages = {
 
   rail: {
     files: "文件",
+    review: "审查改动",
     skills: "技能",
     mcp: "MCP 服务",
     sideChat: "辅助对话 Ctrl+Alt+D",
@@ -417,11 +443,11 @@ export const zh: Messages = {
   themes: {
     system: "跟随系统",
     light: "浅色",
-    graphite: "石墨",
-    black: "墨",
+    graphite: "黛",
+    black: "玄",
     copybook: "小学作业",
     typescript: "打字稿",
-    systemTip: "按桌面的明暗切换 · 暗色落到「墨」",
+    systemTip: "按桌面的明暗切换 · 暗色落到「玄」",
     copybookTip: "绿格作业本，红笔批改 · 只有浅色",
     typescriptTip: "打字机打出的纸页，一道红色页边线，小学作业的英文版 · 只有浅色",
   },
@@ -441,7 +467,6 @@ export const zh: Messages = {
     noApiKey: "还没有 API 密钥",
     addProvider: "添加服务商",
     loadingProviders: "正在载入服务商…",
-    noProviders: "还没有服务商",
     // —— 给导入的会话分配模型 ——
     assignHint: (count) => `有 ${count} 个导入的会话还没有模型`,
     assignHintBody: "配好所有服务商后，按原来用的模型名一键给它们配上",
@@ -493,10 +518,20 @@ export const zh: Messages = {
     removeModel: (id) => `移除 ${id}`,
     apiFormatTip: "接口格式由预设决定 · 要换协议就换一个条目",
     urlSuffixTip: "客户端会接上这段路径",
-    aboutList: "关于这份列表",
-    aboutListBody: "只列出对真实端点验证过的适配 · 协议跟着你选的条目走",
-    catalogTip: "模型参数来自内置目录",
-    catalogBadge: "目录",
+    searchProviders: "搜索服务商、地址或你起的名字",
+    onlyAdded: "仅显示已添加",
+    cardSize: "卡片尺寸",
+    cardSizes: { large: "大", small: "小" },
+    noProvidersMatch: "没有匹配的服务商 · 自建网关可以用「自定义兼容」接入",
+    noneAdded: "还没有添加服务商 · 关掉「仅显示已添加」看全部",
+    addAnother: "再添加一个",
+    addAnotherTip: (name) => `再添加一个 ${name}（另一个账号或密钥）`,
+    customUrl: "填你自己的地址",
+    catalogGroups: {
+      api: "API 服务商",
+      plan: "编程套餐订阅",
+      custom: "自定义兼容",
+    },
     // shared 的 note 与 label 本来就是中文
     knownNote: (_id, fallback) => fallback,
     knownLabel: (_id, fallback) => fallback,
@@ -801,6 +836,48 @@ export const zh: Messages = {
     waitingOutput: "（等待输出…）",
     noOutput: "（没有输出）",
     branchFromHere: "从这里分支",
+    revertHere: "回到这里——撤回这条消息及之后全部，还原被改的文件，原文放回输入框",
+    revertBusy: "等这个任务跑完再回退",
+    revertReadOnly: "这个任务没有智能体会话，回退不了",
+    previewRevertLead: (files, yours) =>
+      files === 0
+        ? "回到这条消息之前？之后的对话会撤回。"
+        : `回到这条消息之前？之后的对话会撤回，还原 ${files} 个文件${yours > 0 ? `——其中 ${yours} 个你改过，你的改动会被覆盖` : ""}。`,
+    previewUndoLead: (files, yours) =>
+      `撤销这一轮的文件改动？${files} 个文件回到这一轮之前${yours > 0 ? `——其中 ${yours} 个之后又被改过，那些改动会被覆盖` : ""}。对话不动。`,
+    previewEffect: (effect) =>
+      effect === "restore" ? "恢复" : effect === "delete" ? "删除" : effect === "yours" ? "你改过" : effect === "later" ? "后续轮改过" : "无法还原",
+    previewEffectHint: (effect) =>
+      effect === "restore"
+        ? "回到改动之前的内容。"
+        : effect === "delete"
+          ? "之前不存在，会被删除。"
+          : effect === "yours"
+            ? "智能体改完之后又被改过（你或 shell 命令）。这些改动会被快照覆盖。"
+            : effect === "later"
+              ? "后面的轮次也改过这个文件。撤销会把它还原到这一轮之前，后面的改动一起没了。"
+              : "没有快照（太大或不是文本），这个文件保持原样。",
+    previewCut: "从这里起的对话将被撤回",
+    revertTitle: "回退对话",
+    revertConfirm: "回退",
+    revertShellNote: "只被终端命令改过的文件不在账上，不会回退。",
+    revertOutcome: (outcome: "restored" | "deleted" | "skipped") =>
+      outcome === "restored" ? "已恢复" : outcome === "deleted" ? "已删除" : "未还原",
+    revertRestored: (n: number) => `还原了 ${n} 个文件`,
+    revertDeleted: (n: number) => `删除 ${n} 个`,
+    revertSkipped: (n: number) => `${n} 个没还原（无快照）`,
+    revertedHere: "已回退——对话从这里重新来过",
+    undoTitle: "撤销文件改动",
+    undoConfirm: "撤销改动",
+    fileCardChanged: (n: number) => `${n} 个文件已更改`,
+    fileCardExpand: "展开改动的文件",
+    fileCardCollapse: "收起改动的文件",
+    fileCardUndo: "撤销",
+    fileCardUndoHint: "撤销这一轮的文件改动——对话不动",
+    fileCardUndone: "已撤销",
+    fileCardWebPage: "网页",
+    openInOrbita: "在 orbita 打开",
+    revealArtifact: "打开文件位置",
     worked: "用时",
     thought: "思考",
     lines: (n) => `${n} 行`,
@@ -863,6 +940,7 @@ export const zh: Messages = {
     kinds: {
       task: "任务",
       reply: "回复",
+      stop: "终止",
       question: "提问",
       progress: "进展",
       done: "完成",
@@ -883,6 +961,7 @@ export const zh: Messages = {
     empty: "还没有消息——以母会话身份发言来引导它。",
     deliveryTip: "引导：在它下一次调用工具时插入，不打断 · 本轮结束后：等它当前这一轮结束再送达",
     closed: "已关闭 ·",
+    closedStopped: "已由你终止 ·",
     reopenToSpeak: "重新打开才能发言",
     steer: "引导",
     turnEnd: "本轮结束后",
@@ -890,8 +969,11 @@ export const zh: Messages = {
     status: {
       running: "运行中",
       waiting: "等待中",
+      approval: "待批准",
       done: "完成",
       failed: "失败",
+      idle: "空闲",
+      stopped: "已终止",
     },
     subSession: "子会话",
     parentSession: "母会话",
@@ -901,6 +983,7 @@ export const zh: Messages = {
       done: "完成",
       failed: "失败",
       idle: "空闲",
+      stopped: "已终止",
     },
     delegating: "委派中…",
     delegated: "已委派",
@@ -933,6 +1016,7 @@ export const zh: Messages = {
       approval: "待批准",
       done: "完成",
       failed: "失败",
+      stopped: "已终止",
       idle: "空闲",
     },
     back: "返回子会话列表",
@@ -942,6 +1026,13 @@ export const zh: Messages = {
     of: (title) => `「${title}」的子会话`,
     none: "还没有子会话。",
     untitled: "未命名",
+    stopLabel: "终止",
+    stopTip:
+      "终止这个子会话——中止它正在跑的这一轮并关闭通道。只有你以母会话身份发言能重新打开。",
+    stopHint: "中止当前这一轮并关闭通道",
+    stopHintReopen: "只有你能重新打开",
+    stopConfirm: "终止",
+    stoppedHint: "已终止——在通道里以母会话身份发言可重新打开。",
   },
 
   approval: {
@@ -975,7 +1066,7 @@ export const zh: Messages = {
     noWorkspaceFolder: "先选一个工作区文件夹",
     noRunningToCompact: "没有正在运行的任务可压缩",
     scanTimeout: "遗留扫描没能按时完成——已标为完成，没有生成清单。",
-    scanUnreadable: "读不懂扫描结果——已标为完成，没有生成清单。",
+    scanUnreadable: "读不懂扫描结果——已标为完成，没有生成清单。反复出现的话，可以在设置里换一个家务活模型。",
     scanNothing: "遗留扫描什么也没找到——已标为完成。",
     queuedBeforeWrapUp: "这个任务里还有排队的消息——先发出或撤回，再收尾。",
     noAgentSession: "这个任务没法扫描（没有智能体会话）——已直接标为完成。",

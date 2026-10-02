@@ -49,6 +49,14 @@ export class AgentHostCore {
    * 进程退出要 reject：那量重启后状态未知，不能装作重载成功。
    */
   private pendingMcpReload: { resolve: () => void; reject: (error: Error) => void } | null = null;
+  /**
+   * 在等的 pi 本子编辑回执（会话回退 / 单轮撤销）：runtime 裁完发 `piBookEdited`，
+   * 失败走 `failed`。按 sessionId 一条——同一会话的回退 / 撤销不可能并发。
+   */
+  private readonly pendingPiEdits = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
   /** 在等的 classifyGreetings 回执（迁移的「只随手发了一句」检查），按 requestId；进程退出全部 reject */
   private readonly pendingGreetings = new Map<
     string,
@@ -84,6 +92,12 @@ export class AgentHostCore {
           this.pendingMcpReload?.resolve();
           this.pendingMcpReload = null;
         }
+        if (message.type === "piBookEdited") {
+          // 回退 / 撤销的回执：只结 pending 的 promise，不广播——renderer 不消费它
+          this.pendingPiEdits.get(message.sessionId)?.resolve();
+          this.pendingPiEdits.delete(message.sessionId);
+          return;
+        }
         if (message.type === "greetingsClassified") {
           // 只回给发起的那次检查，不广播：窗口不认这个事件
           const pending = this.pendingGreetings.get(message.requestId);
@@ -105,6 +119,11 @@ export class AgentHostCore {
           return;
         }
         if (message.type === "failed" && message.sessionId !== null) {
+          const pendingEdit = this.pendingPiEdits.get(message.sessionId);
+          if (pendingEdit) {
+            this.pendingPiEdits.delete(message.sessionId);
+            pendingEdit.reject(new Error(message.message));
+          }
           const pending = this.pendingCreates.get(message.sessionId);
           if (pending) {
             // 创建失败要把错误交回调用方，而不是只广播一条事件——
@@ -126,6 +145,8 @@ export class AgentHostCore {
         const message = `agent runtime exited with code ${code}`;
         for (const pending of this.pendingCreates.values()) pending.reject(new Error(message));
         this.pendingCreates.clear();
+        for (const pending of this.pendingPiEdits.values()) pending.reject(new Error(message));
+        this.pendingPiEdits.clear();
         this.pendingMcpReload?.reject(new Error(message));
         this.pendingMcpReload = null;
         for (const pending of this.pendingGreetings.values()) pending.reject(new Error(message));
@@ -168,6 +189,25 @@ export class AgentHostCore {
     const created = this.awaitCreated(sessionId, "agent runtime did not confirm the branch in time");
     this.post({ type: "branch", sessionId, ...input });
     return created;
+  }
+
+  /**
+   * pi 本子的原地编辑（回退 / 撤销）：等 runtime 的 `piBookEdited` 回执。
+   * ensure：回退可以在冷启动后、第一次开轮前发生（用户打开旧会话直接回退），
+   * 那时 runtime 还没起——裁本子不需要会话活着，只需要进程在。
+   */
+  async editPiBook(
+    command: Extract<AgentCommand, { type: "revertPiBook" | "undoPiBook" }>,
+  ): Promise<void> {
+    await this.ensure();
+    return new Promise<void>((resolve, reject) => {
+      this.pendingPiEdits.set(command.sessionId, { resolve, reject });
+      setTimeout(() => {
+        if (!this.pendingPiEdits.delete(command.sessionId)) return;
+        reject(new Error("agent runtime did not confirm the pi book edit in time"));
+      }, 30_000);
+      this.post(command);
+    });
   }
 
   /** 等 runtime 对一条命令回 `created`（create 与 branch 共用；失败经 failed / exit 拒绝）。 */

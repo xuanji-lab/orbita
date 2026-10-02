@@ -43,6 +43,8 @@ import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
+import { TurnFileTracker } from "./file-tracker.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
 import { describeDirectories } from "./directories-prompt.ts";
@@ -128,6 +130,20 @@ function pushStats(sessionId: string, session: AgentSession, persist?: true): vo
     });
   } catch (cause) {
     console.error("[agent] 读用量失败", sessionId, cause);
+  }
+}
+
+/**
+ * 轮落定的文件账上报：主进程写快照 blob、落 FileTurnRecord 并广播给轮尾卡片。
+ * 没有改动的轮不发（不落空记录）；报失败只记日志——快照是回退能力的代价面，
+ * 不是对话的依赖面，坏一条日志好过砸一轮对话。
+ */
+async function reportFileTurn(sessionId: string, tracker: TurnFileTracker): Promise<void> {
+  try {
+    const changes = await tracker.finalize();
+    if (changes.length > 0) send({ type: "fileTurn", sessionId, changes });
+  } catch (cause) {
+    console.error("[agent] 轮尾文件账没报出去（回退会缺这一轮的快照）", sessionId, cause);
   }
 }
 
@@ -442,6 +458,8 @@ interface TurnParts {
   adapter: TranscriptAdapter;
   /** 本轮时间语义（A-1）：run 的回显处填 echoedAt，界碑盖戳读它 */
   turn: TurnTiming;
+  /** 本轮的文件快照跟踪器（OpenedTurn.tracker 的透传） */
+  tracker: TurnFileTracker;
 }
 
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
@@ -540,6 +558,8 @@ interface OpenedTurn {
   unsubscribe: () => void;
   /** 本轮时间语义（A-1）：回显时间戳 + 出没出过 assistant 产物，界碑盖戳用 */
   turn: TurnTiming;
+  /** 本轮的文件快照跟踪器：闸门放行记 before、执行落定读 after（file-tracker.ts） */
+  tracker: TurnFileTracker;
 }
 
 /**
@@ -594,6 +614,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     command.protectedPaths,
     command.cwd,
   );
+  // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
+  // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
+  // pi 顺序跑钩子，同批并行调用的 before 互不踩。
+  const tracker = new TurnFileTracker(command.cwd);
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -622,7 +646,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           name: "orbita-permission",
           hidden: true,
           factory: (pi: PiExtensionApi) => {
-            pi.on("tool_call", (event) => gate(event));
+            pi.on("tool_call", async (event) => {
+              const result = await gate(event);
+              if (!result.block) await tracker.noteAllowed(event.toolCallId, event.toolName, event.input);
+              return result;
+            });
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
@@ -741,6 +769,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const turn: TurnTiming = { echoedAt: null, sawAssistant: false };
   const observeTurnFailure = createTurnFailureTracker();
   const unsubscribe = session.subscribe((event) => {
+    // 文件快照的 after：工具落定即读盘。不 await（读盘是毫秒级，不该卡事件流），
+    // finalize 自己等在途读全部落定
+    if (event.type === "tool_execution_end") {
+      void tracker.noteExecutionEnd(event.toolCallId);
+    }
     // 不重试的模型错误（400 / 401 …）只留下一条空 error 回答，我们不落盘也不渲染它——
     // 回合终局时补报一条回合级失败，让错误挂在这轮没得到回答的话下面（见 ./turn-failure.ts）
     const turnFailure = observeTurnFailure(event);
@@ -886,7 +919,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe, turn };
+  return { session, adapter, unsubscribe, turn, tracker };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -926,10 +959,17 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         session: opened.session,
         adapter: opened.adapter,
         turn: opened.turn,
+        tracker: opened.tracker,
       };
     },
     async (parts) =>
-      run({ session: parts.session, adapter: parts.adapter, unsubscribe: parts.unsubscribe, turn: parts.turn }),
+      run({
+        session: parts.session,
+        adapter: parts.adapter,
+        unsubscribe: parts.unsubscribe,
+        turn: parts.turn,
+        tracker: parts.tracker,
+      }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
     // idle 时本轮已完全收尾，排队投递不会撞 already running
     () => send({ type: "phase", sessionId: id, phase: "idle" }),
@@ -941,14 +981,43 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
  * `createBranchedSession` 裁新文件。绝不碰活着的 manager——那个方法会把实例原地
  * 换绑到新文件上，误用在活会话的 manager 上，后续追加就写进分支文件了（事故形状）。
  * 源会话正在跑也没关系：只读源文件、只写新文件，追加与读取互不干扰。
+ * 对账输入是 **getBranch()（当前叶子路径）**：会话回退会在本子里留废枝，文件序
+ * （getEntries）会把废枝也数进来，从第一次回退起对账必然错位。
  */
 async function branchPiSession(command: Extract<AgentCommand, { type: "branch" }>): Promise<void> {
   const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
-  const targetId = planBranchCut(manager.getEntries(), command.roles);
+  const targetId = planBranchCut(manager.getBranch(), command.roles);
   const branchFile = manager.createBranchedSession(targetId);
   if (branchFile === undefined) throw new Error("pi produced no branch file");
   // 复用 created 事件通路：主进程对 branch 与开机用同一条等待逻辑
   send({ type: "created", sessionId: command.sessionId, piSessionFile: branchFile });
+}
+
+/**
+ * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：详见 pi-book-edit.ts。
+ * **会话不在跑是硬前提**——在跑的话工具还没落定，此刻裁枝会把进行中的轮
+ * 写进废枝；由这里拒绝（主进程的 renderer 禁用只是第一道，这是信任边界）。
+ */
+function revertPiBookCommand(command: Extract<AgentCommand, { type: "revertPiBook" }>): void {
+  if (running.has(command.sessionId)) {
+    throw new Error("the session is still running — stop it before reverting");
+  }
+  const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
+  revertPiBook(manager, command.roles, { targetMessageId: command.targetMessageId });
+  send({ type: "piBookEdited", sessionId: command.sessionId, edit: "revert" });
+}
+
+/**
+ * 单轮撤销的 pi 侧一刀：在当前叶子追加告知模型的 custom_message（进上下文）。
+ * 同样要求会话不在跑；notice 是主进程拼好的完整句子（含文件清单）。
+ */
+function undoPiBookCommand(command: Extract<AgentCommand, { type: "undoPiBook" }>): void {
+  if (running.has(command.sessionId)) {
+    throw new Error("the session is still running — stop it before undoing");
+  }
+  const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
+  undoPiBook(manager, command.notice);
+  send({ type: "piBookEdited", sessionId: command.sessionId, edit: "undo" });
 }
 
 /**
@@ -1016,8 +1085,24 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
 
+  // 回退 / 撤销的 pi 侧一刀：同步文件操作，完成经 piBookEdited 回执
+  if (command.type === "revertPiBook") {
+    revertPiBookCommand(command);
+    return;
+  }
+  if (command.type === "undoPiBook") {
+    undoPiBookCommand(command);
+    return;
+  }
+
   if (command.type === "submit") {
-    await startTurn(command, (opened) => echoAndPrompt(opened, ledgerNote(command.sessionId), command));
+    await startTurn(command, async (opened) => {
+      try {
+        await echoAndPrompt(opened, ledgerNote(command.sessionId), command);
+      } finally {
+        await reportFileTurn(command.sessionId, opened.tracker);
+      }
+    });
     return;
   }
 
@@ -1032,7 +1117,13 @@ async function handle(command: AgentCommand): Promise<void> {
     settlePendingPermissions(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
-      await startTurn(command, (opened) => echoAndPrompt(opened, ledgerNote(command.sessionId), command));
+      await startTurn(command, async (opened) => {
+        try {
+          await echoAndPrompt(opened, ledgerNote(command.sessionId), command);
+        } finally {
+          await reportFileTurn(command.sessionId, opened.tracker);
+        }
+      });
     } catch (cause) {
       // 抢跑的旧轮没发 idle，新轮又没开起来——renderer 会卡在 turn。这里兑底。
       send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
@@ -1051,9 +1142,15 @@ async function handle(command: AgentCommand): Promise<void> {
     settlePendingPermissions(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
-      await startTurn(command, (opened) =>
-        withManualCompactionTuning(opened.session, () => opened.session.compact(command.instructions)),
-      );
+      await startTurn(command, async (opened) => {
+        try {
+          await withManualCompactionTuning(opened.session, () => opened.session.compact(command.instructions));
+        } finally {
+          // 压缩轮不跑工具，finalize 恒为空——留着这行是为了「每轮都 finalize」的
+          // 不变量不被将来加的压缩内工具破坏
+          await reportFileTurn(command.sessionId, opened.tracker);
+        }
+      });
     } catch (cause) {
       // 抢跑的旧轮没发 idle，新轮又没开起来——renderer 会卡在 turn。这里兑底。
       send({ type: "phase", sessionId: command.sessionId, phase: "idle" });

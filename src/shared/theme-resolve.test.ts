@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { resolveTheme } from "./theme-resolve.ts";
 
 describe("resolveTheme", () => {
-  it("system 深色落 black（Ink，2026-09-03 用户指定）", () => {
+  it("system 深色落 black（玄 Onyx，2026-09-03 用户指定）", () => {
     strictEqual(resolveTheme("system", true), "black");
   });
 

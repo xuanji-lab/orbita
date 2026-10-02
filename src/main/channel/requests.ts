@@ -1,14 +1,16 @@
 /**
- * 子会话：派出 / 通道发信 / 代父发言的落地（子会话 2026-09-23 裁决）。
+ * 子会话：派出 / 通道发信 / 代父发言 / 终止的落地（子会话 2026-09-23 裁决）。
  *
  * 分层与 `session/read-task.ts` 的 `applyReadTask`、`agent/write-requests.ts` 同款：
  * **纯核 + 依赖注入**（`ChannelDeps`），可被 `node --test` 用真 SessionStore /
  * ChannelStore + 假 submitTurn/steer/broadcast 直测，不 import electron。
  *
- * 三个入口：
+ * 四个入口：
  *   applyDelegate    —— 父模型的 delegate 工具请求（agent 进程 → delegateRequest 事件）
  *   applyChannelSend —— 父的 reply_subsession / 子的 report_to_parent（channelSendRequest 事件）
  *   applySpeak       —— 用户在通道 composer 里代父发言（channel:speak IPC）
+ *   applyStop        —— 用户终止一个子会话（channel:stop IPC；中止在跑的轮 +
+ *     结掉挂着的浏览器交接 + 账本落 stop，状态翻 stopped）
  */
 import { randomUUID } from "node:crypto";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
@@ -17,6 +19,7 @@ import type {
   ChannelEvent,
   ChannelSendOutcome,
   ChannelSpeakInput,
+  ChannelStopInput,
   DelegateOutcome,
   SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
@@ -47,6 +50,10 @@ export interface ChannelDeps {
   submitTurn(input: SubmitAgentInput): Promise<void>;
   /** 父→子注入（`AgentHostCore.steer`）：目标在跑时用它，抛错 = 投递失败 */
   steer(sessionId: string, text: string, delivery: ChannelDelivery): void;
+  /** 停掉一条会话正在跑的这一轮（`agent:abort` 的 host.abort）——终止子会话三步的第一步 */
+  abort(sessionId: string): Promise<void>;
+  /** 按取消结掉这条会话挂着的浏览器交接（`BrowserSandbox.cancelSessionHandoff`，幂等）——第二步 */
+  cancelBrowserHandoff(sessionId: string): void;
   /** 主进程按 phase 事件维护的活会话状态；用来判断目标此刻是不是空闲 */
   phases: Map<string, SessionPhase>;
   broadcast(event: ChannelEvent): void;
@@ -287,6 +294,15 @@ export async function applyChannelSend(
       };
     }
     const key: ChannelKey = { parentId: parent.id, childId: sender.id };
+    // 用户终止过的通道是关着的：子的回报也拒（窗口期只有终止在途的那几毫秒——
+    // abort 已经把正在跑的轮砍了，之后的 report_to_parent 不该再落账）。
+    if (channelStatus(await deps.channels.load(key)) === "stopped") {
+      return {
+        ok: false,
+        error:
+          "This sub-session was stopped by the user; its channel is closed. Only the user can re-open it by speaking as the parent in the channel.",
+      };
+    }
     // 子→父恒 followUp：进父的 renderer 队列，本 PR 不为它开轮、不 steer父——
     // 那是后续 PR 的事，主进程这里只落账 + 广播。
     const message: ChannelMessage = {
@@ -314,6 +330,16 @@ export async function applyChannelSend(
     };
   }
   const key: ChannelKey = { parentId: sender.id, childId: child.id };
+  // **核心语义（用户裁决）**：被用户终止的子会话，父模型的 reply 不能重开它——
+  // 否则父会话通过回信绕过用户的决定。只有用户在通道里代父发言
+  // （applySpeak，author user）能重开。错误文本写给模型看，把路指给用户。
+  if (channelStatus(await deps.channels.load(key)) === "stopped") {
+    return {
+      ok: false,
+      error:
+        "This sub-session was stopped by the user and cannot receive messages. Only the user can re-open it by speaking as the parent in the channel — end this turn and tell the user if they need it running again.",
+    };
+  }
   const message: ChannelMessage = {
     id: randomUUID(),
     from: "parent",
@@ -368,6 +394,53 @@ export async function applySpeak(deps: ChannelDeps, input: ChannelSpeakInput): P
   await broadcastAfterAppend(deps, key, message);
   await deliverToChild(deps, child, parent, message);
   return message;
+}
+
+// ── 终止（channel:stop）──
+
+/**
+ * 用户终止一个子会话（`channel:stop` IPC，子会话面板会话层的入口）。三步：
+ *
+ * 1. 在跑就中止这一轮（`agent:abort` 的同一条路）。只在 phase 显示在跑时才发——
+ *    host.abort 会 ensure 拉起 agent 进程，对一个空闲的子会话这么做是末倒置。
+ * 2. 挂着的浏览器交接按取消结掉（`BrowserSandbox.cancelSessionHandoff`，幂等）。
+ *    phase 回 idle 时主进程也会结（index.ts），这里显式再结一次：不依赖事件时序，
+ *    也覆盖「子空闲但交接还挂着」的在等子会话。
+ * 3. 账本落一条 parent 侧的 stop（author user），状态翻 stopped。此后的硬拦在
+ *    `applyChannelSend`（父模型的 reply 被拒）、重开只在 `applySpeak`（用户代父发言）。
+ *
+ * 不给父会话新开一轮通知它（用户裁决：默认不为此花一次模型调用）——父模型
+ * 下次调 reply_subsession 会拿到明确的错误文本，那就是它知道这件事的时刻。
+ *
+ * 校验失败抛错（同 applySpeak）：preload 的 invoke 会把它翻成 IPC reject。
+ */
+export async function applyStop(deps: ChannelDeps, input: ChannelStopInput): Promise<void> {
+  const parent = await deps.sessions.readMeta(input.parentId);
+  if (parent === null) throw new Error(`Session ${input.parentId} was not found.`);
+  const child = await deps.sessions.readMeta(input.childId);
+  if (child === null || child.parentId !== parent.id) {
+    throw new Error(`Session ${input.childId} is not a sub-session of ${input.parentId}.`);
+  }
+  const key: ChannelKey = { parentId: parent.id, childId: child.id };
+  if (channelStatus(await deps.channels.load(key)) === "stopped") {
+    // 幂等护栏（正常进不了这里：面板在 stopped 态禁用入口）：再终止一次没有意义，
+    // 但也不静默成功——静默会让「我以为停的是另一条」无从察觉。
+    throw new Error("This sub-session is already stopped. Speak as the parent in the channel to re-open it.");
+  }
+  const phase = deps.phases.get(child.id);
+  if (phase !== undefined && phase !== "idle") await deps.abort(child.id);
+  deps.cancelBrowserHandoff(child.id);
+  const message: ChannelMessage = {
+    id: randomUUID(),
+    from: "parent",
+    author: "user",
+    kind: "stop",
+    text: "",
+    delivery: "followUp",
+    createdAt: Date.now(),
+  };
+  await deps.channels.append(key, message);
+  await broadcastAfterAppend(deps, key, message);
 }
 
 // ── 内部：投递给子 + 落账后的通用广播 ──

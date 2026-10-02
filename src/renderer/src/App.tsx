@@ -37,6 +37,7 @@ import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shel
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
+import { ReviewPanel } from "./features/review/ReviewPanel";
 import { CHANNEL_COLUMN_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
@@ -279,9 +280,26 @@ export function App() {
   const subSessionsMainIdRef = useRef<string | null>(null);
   /** 文件面板的「Esc 先退一层」：预览开着时由它关预览（FilesPanel 填，Esc 监听里先问它） */
   const filesEscapeRef = useRef<(() => boolean) | null>(null);
+  /**
+   * 审查面板的一次性定位请求（轮尾卡 / 界碑卡点「在面板里看」）：token 单调递增，
+   * 同一路径连点两次也能触发展开。ChatView 经 props 回调上报，面板消费后自会展开。
+   */
+  const [reviewFocus, setReviewFocus] = useState<{ path: string; token: number } | null>(null);
+  const reviewFocusTokenRef = useRef(0);
+  const openReviewAt = useCallback((path: string) => {
+    reviewFocusTokenRef.current += 1;
+    setReviewFocus({ path, token: reviewFocusTokenRef.current });
+    setRightPanel("review");
+  }, []);
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
-    setSubSessionsNav((prev) => syncToMainSession(prev, subSessionsMainIdRef.current, nextMainId));
+    // 上一拍 id 必须在派发 setState 之前读出来链进局部量：updater 可能被 React
+    // 推迟到渲染期才执行（同 fiber 已有待处理更新时——子会话在跑时引擎的
+    // applyStates/refreshSessions 更新不断，正是常态），那时再读 ref 拿到的已是
+    // 下面那行写进去的新值，previousMainId === nextMainId 恒真、重置被静默吞掉
+    // ——「切主会话右栏子会话面板不跟着切」的根因（React 19.2.8 隔离探针实测复现）
+    const previousMainId = subSessionsMainIdRef.current;
+    setSubSessionsNav((prev) => syncToMainSession(prev, previousMainId, nextMainId));
     subSessionsMainIdRef.current = nextMainId;
   }, [mainOpenId]);
 
@@ -564,6 +582,7 @@ export function App() {
               <ChatView
                 session={session}
                 providersError={providersError}
+                onOpenReviewAt={openReviewAt}
                 onOpenChannel={openChannel}
                 onOpenSubSession={openSubSessionInPanel}
                 onOpenSubSessions={openSubSessionsList}
@@ -581,6 +600,7 @@ export function App() {
             parentId={channelParentId}
             parentTitle={channelParentTitle}
             entries={channelEntries}
+            engine={engine}
             open={channelInlineOpen}
             wide={channelWide}
             paneWidth={paneWidth}
@@ -610,6 +630,14 @@ export function App() {
             >
               {shownPanel === "files" ? (
                 <FilesPanel session={session} onClose={() => handlePanel(null)} escapeRef={filesEscapeRef} />
+              ) : shownPanel === "review" ? (
+                <ReviewPanel
+                  sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  focus={reviewFocus}
+                  revision={`${session.fileTurns.length}:${session.reverts.length}:${session.undos.length}:${session.phase}`}
+                  cwd={session.cwd}
+                  onClose={() => handlePanel(null)}
+                />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel
                   skills={skills}
@@ -637,6 +665,7 @@ export function App() {
                 <ChannelCards
                   parentTitle={channelParentTitle}
                   entries={channelEntries}
+                  engine={engine}
                   openRequest={channelOpenRequest}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (

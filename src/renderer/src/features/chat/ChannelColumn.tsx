@@ -22,17 +22,19 @@
  * 够宽时——不够宽时它只能进槽，不替用户换掉槽里的东西。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ChannelKey, ChannelMessage, ChannelStatus, ChannelSummary } from "@shared/channel";
+import type { ChannelKey, ChannelMessage, ChannelSummary } from "@shared/channel";
 import { CHANNEL_COLUMN_WIDTH_DEFAULT, clampChannelColumnWidth } from "@shared/settings";
 import { api } from "../../api";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { Icon, type IconName } from "../../shell/Icon";
 import { channelWhoLabel, nonTaskMessages, type ChannelColumnEntry } from "./channel-column.ts";
+import { subSessionStatusOf, type SubSessionRowStatus } from "./sub-sessions-rows";
 import { channelKindIcon } from "./ChannelViews";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { isAtBottom } from "./scroll.ts";
 import { useChannelMessages } from "./useChannelMessages";
+import type { SessionEngine } from "./useChatSession";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -53,6 +55,11 @@ export interface ChannelOpenRequest {
 export function ChannelCards(props: {
   parentTitle: string;
   entries: readonly ChannelColumnEntry[];
+  /**
+   * 卡片头部的状态要拿它（审批槽 + phaseOf，拼进 `subSessionStatusOf`）——与
+   * Sub-sessions 面板同一份推导，两处画出同一个状态
+   */
+  engine: SessionEngine;
   openRequest: ChannelOpenRequest | null;
   /** 容器的 class：内联列要 `channel-column-inner`（定宽），槽里不要 */
   className?: string;
@@ -78,6 +85,7 @@ export function ChannelCards(props: {
           <ChannelCard
             key={entry.summary.childId}
             summary={entry.summary}
+            engine={props.engine}
             parentTitle={props.parentTitle}
             collapsed={collapsed}
             onToggleCollapsed={() => toggleCollapsed(entry.summary.childId, collapsed)}
@@ -95,6 +103,8 @@ export function ChannelColumn(props: {
   parentId: string | null;
   parentTitle: string;
   entries: readonly ChannelColumnEntry[];
+  /** 卡片状态与面板同源要用它（审批槽 + phaseOf）——App 手里的同一台引擎 */
+  engine: SessionEngine;
   /** 内联列此刻是否展开（App 按模式、显式选择与默认值算好，`channelInlineOpen`） */
   open: boolean;
   /** 够宽与否：不够宽时这一列不出现，新通道也不替用户弹出（那时它只能进槽） */
@@ -201,14 +211,23 @@ export function ChannelColumn(props: {
         className="channel-column-inner"
         parentTitle={props.parentTitle}
         entries={entries}
+        engine={props.engine}
         openRequest={props.openRequest}
       />
     </div>
   );
 }
 
+/**
+ * 卡片头部的状态显示：六档与 Sub-sessions 面板同源（`subSessionStatusOf` 的推导，
+ * 图标与颜色的分配也同面板的 STATUS_ICON / STATUS_COLOR）——两处必须画出同一个
+ * 状态。**不直接用 `ChannelStatus`**：它的 "running" 是「通道开着」（子会话还没报
+ * done/failed/question），不是「子在跑」；把它画成 accent 呼吸的运行中，就是
+ * 「面板已 idle、通道还在 running」那个 bug 的根（2026-10）。channelStatus 本身
+ * 的语义不动——composer 的 closed 行与 reopen 规则仍看它，这里只改「显示成什么」。
+ */
 function statusTone(
-  status: ChannelStatus,
+  status: SubSessionRowStatus,
   t: Messages,
 ): { color: string; text: string; icon: IconName; breathing: boolean } {
   const text = t.channel.status[status];
@@ -217,16 +236,28 @@ function statusTone(
       return { color: "var(--color-accent)", text, icon: "loader-circle", breathing: true };
     case "waiting":
       return { color: "var(--color-warning)", text, icon: "message-square", breathing: false };
+    case "approval":
+      return { color: "var(--color-warning)", text, icon: "shield-check", breathing: false };
     case "done":
       return { color: "var(--color-success)", text, icon: "circle-check", breathing: false };
     case "failed":
       return { color: "var(--color-danger)", text, icon: "triangle-alert", breathing: false };
+    case "idle":
+      return { color: "var(--color-text-tertiary)", text, icon: "circle-off", breathing: false };
+    // stopped 是用户的裁决不是故障：中性灰 + 终止八边形，区别于 failed
+    case "stopped":
+      return { color: "var(--color-text-tertiary)", text, icon: "octagon-x", breathing: false };
   }
 }
 
-/** 一张通道卡：头部（对子标题 + 状态）、消息区、composer / closed 行。 */
+/**
+ * 一张通道卡：头部（对子标题 + 状态）、消息区、composer / closed 行。
+ * stopped（用户终止）与 done / failed 同用 closed 行的 reopen 入口——重开部是同一个动作
+ * （用户代父发言），只是话说清楚是谁停的。
+ */
 function ChannelCard(props: {
   summary: ChannelSummary;
+  engine: SessionEngine;
   parentTitle: string;
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -239,7 +270,10 @@ function ChannelCard(props: {
     [summary.parentId, summary.childId],
   );
   const channelMessages = useChannelMessages(key);
-  const tone = statusTone(summary.status, t);
+  // 状态与面板同源：phase 必须参与（channelStatus 的 running 只说明通道开着，
+  // 见 statusTone 的注释）——子会话跑完但没报 done 时，这里也要像面板一样退回 idle
+  const status = subSessionStatusOf(summary.childId, summary.status, props.engine);
+  const tone = statusTone(status, t);
 
   return (
     <div className={props.collapsed ? "channel-card collapsed" : "channel-card"}>
@@ -376,17 +410,21 @@ function ChannelMessageRow(props: { message: ChannelMessage; highlighted: boolea
         {label.text}
         {label.you && <span style={{ color: "var(--color-text-primary)" }}> · {t.channel.you}</span>}
       </span>
-      <MarkdownBlock text={message.text} variant="bubble" />
+      {/* stop 是用户的裁决标记，不是谁说的话——只画 who 行，不画空气泡 */}
+      {message.kind !== "stop" && <MarkdownBlock text={message.text} variant="bubble" />}
     </div>
   );
 }
 
 
-/** running / waiting 状态的 composer，或 done / failed 的 closed 行（reopen 后换成同一个 composer）。 */
+/** running / waiting 状态的 composer，或 done / failed / stopped 的 closed 行（reopen 后换成同一个 composer）。 */
 function ChannelFoot(props: { summary: ChannelSummary }) {
   const t = useT();
   const { summary } = props;
-  const closed = summary.status === "done" || summary.status === "failed";
+  // stopped（用户终止）与 done / failed 同用 closed 行：重开是同一个动作（用户代父
+  // 发言），父模型被 applyChannelSend 拦在外面，进不了这里。
+  const closed = summary.status === "done" || summary.status === "failed" || summary.status === "stopped";
+  const closedText = summary.status === "stopped" ? t.channel.closedStopped : t.channel.closed;
   const [reopened, setReopened] = useState(false);
   // reopen 只对**这一次** closed 有效：reply 送达后 status 翻回 running（第 2 节），
   // 之后子若再报一次 done/failed（新的一次 closed），要重新显示「closed · reopen
@@ -400,7 +438,7 @@ function ChannelFoot(props: { summary: ChannelSummary }) {
   if (closed && !reopened) {
     return (
       <div className="channel-card-foot channel-card-foot-closed">
-        <span>{t.channel.closed}</span>
+        <span>{closedText}</span>
         <button type="button" className="channel-reopen" onClick={() => setReopened(true)}>
           <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
           {t.channel.reopenToSpeak}

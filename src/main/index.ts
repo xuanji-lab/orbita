@@ -3,11 +3,11 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
-import { app, BrowserWindow, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
-import type { Language, ThemePreference } from "../shared/settings.ts";
+import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
@@ -28,12 +28,15 @@ import { CarryoverStore } from "./session/carryover-store.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
+import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
+import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
 import { resolveTurnDirectories } from "./agent/turn-directories.ts";
@@ -55,6 +58,26 @@ preferIPv4();
 const devDirs = devDataDirs({ packaged: app.isPackaged, appData: app.getPath("appData"), home: homedir() });
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
+
+/*
+ * 单实例锁。「关窗 = 收进托盘」之后，双击桌面图标必须回到原进程——否则两个进程
+ * 同时写同一份会话 JSONL / settings（「读全量 → 改写 → rename」的原子写挡不住
+ * 两个写入者，会互相覆盖丢更新）。锁按 userData 目录划分，dev 与打包版、显式
+ * `--user-data-dir` 的隔离实例互不干扰。
+ */
+if (!app.requestSingleInstanceLock()) {
+  // exit 而不是 quit：锁拿不到说明本进程还在最顶层、没建窗没接 IPC，没有要清理的东西
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    // 已有进程的窗口可能收在托盘里（hidden）或最小化：叫出来，不另起一窗
+    for (const window of mainWindows.list()) {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    }
+  });
+}
 
 /** 26-entry-layer §9.2 安全不变量：三条都不许放松。 */
 const SECURITY_INVARIANTS = {
@@ -100,10 +123,16 @@ const MAC_WINDOW = {
  * 不走 IPC / localStorage：这是窗口创建时刻就同步可得的值，硬塞一条通道或另存
  * 一份缓存反而多造一个真源（同 preload 里 `platform` 的先例）。
  */
+/**
+ * 托盘（Windows / Linux，见 window/tray.ts）。退出前必须销毁，否则进程退不掉。
+ */
+let appTray: AppTray | null = null;
+
 function createMainWindow(
   theme: ThemePreference,
   language: Language | undefined,
   openLink: (url: string) => void,
+  readLanguage: () => Promise<Language>,
 ): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
@@ -130,6 +159,29 @@ function createMainWindow(
     openLink(url);
     return { action: "deny" };
   });
+
+  /*
+   * 关窗 = 收进托盘（Windows / Linux）。**托盘先建成功，才接这道闸门**：藏了却找不回来
+   * 比直接退出更糟，所以图标缺失时这里什么都不做，关窗保持原语义。
+   * macOS 不接——那边关窗本来就留进程，点 Dock 回来，与这套闸门是两种惯例。
+   */
+  if (process.platform !== "darwin" && appTray === null) {
+    const icon = loadTrayIcon();
+    if (icon === null) {
+      console.warn("[tray] 托盘图标缺失（build/tray.png），关窗仍然是退出");
+    } else {
+      appTray = installCloseToTray({
+        window,
+        icon,
+        language: effectiveLanguage(theme, language),
+        readLanguage,
+      });
+    }
+  }
+
+  // Windows 注销 / 关机：系统要收这扇窗，别让「关窗 = 隐藏」把关机拦住
+  // （session-end 是 BrowserWindow 上的事件，不在 app 上）
+  window.on("session-end", () => appTray?.beginQuit());
 
   loadRendererPage(window, "index.html");
   return window;
@@ -232,6 +284,7 @@ void app.whenReady().then(async () => {
       return { title: app.getName(), webPreferences: rendererPreferences(current.theme, current.language) };
     },
     loadToolbar: (window) => loadRendererPage(window, "browser-toolbar.html"),
+    pageBackground: async () => pageBackgroundColor((await settings.read()).theme, nativeTheme.shouldUseDarkColors),
     sessionTitle: async (sessionId) => (await sessions.readMeta(sessionId))?.title ?? "",
     workbenchPath: (sessionId) => sessions.workbenchPath(sessionId),
     userDownloadDir: () => browserDownloadDir(settings),
@@ -344,6 +397,33 @@ void app.whenReady().then(async () => {
       void sessions.setPiSessionFile(event.sessionId, event.piSessionFile).catch(() => undefined);
       return;
     }
+    // 轮尾文件账：落盘（recorder 写 blob + FileTurnRecord）之外，给 renderer 广播
+    // 的是**剥掉正文的视图**（fileTurnView）——轮尾卡片不吃快照正文，1MB 的文件
+    // 内容没有理由过 renderer 的 IPC。这是「主进程只转发不加工」的第二个例外
+    // （第一个是落盘本身），理由同：正文进 renderer 是纯浪费。
+    if (event.type === "fileTurn") {
+      // 等**落盘完**再广播，并带上落盘记录的真 id——renderer 的轮尾卡拿它当 key
+      // 与撤销的 turnId（单轮撤销按它回查账本），自造 id 会对不上盘
+      void sessions
+        .recordFileTurn(event.sessionId, event.changes)
+        .then((record) => {
+          if (record === null) return;
+          broadcastAgentEvent({
+            type: "fileTurnView",
+            sessionId: event.sessionId,
+            turnId: record.id,
+            changes: record.changes.map((change) => ({
+              path: change.path,
+              added: change.added,
+              removed: change.removed,
+            })),
+          });
+        })
+        .catch((cause: unknown) =>
+          console.error("[session] 轮尾文件账落盘失败", event.sessionId, cause),
+        );
+      return;
+    }
     record(event);
     broadcastAgentEvent(event);
   });
@@ -364,6 +444,7 @@ void app.whenReady().then(async () => {
     agentHost,
     carryovers,
     providers,
+    (path) => browserSandbox.openLocalFile(path),
   );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
@@ -401,6 +482,8 @@ void app.whenReady().then(async () => {
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
+  // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
+  registerReviewIpc(sessions);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
@@ -415,9 +498,10 @@ void app.whenReady().then(async () => {
     mcp,
     settings,
   );
-  // 子会话：派出 / 发信 / 代父发言的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
+  // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
-  // turnFields/readDirectories 那一整套装配；steer 走 agentHost（AgentHostCore 的方法）。
+  // turnFields/readDirectories 那一整套装配；steer 走 agentHost（AgentHostCore 的方法）；
+  // abort 同源（agent:abort）；cancelBrowserHandoff 是 BrowserSandbox 的幂等取消。
   const deps: ChannelDeps = {
     sessions,
     channels,
@@ -425,12 +509,17 @@ void app.whenReady().then(async () => {
     settings,
     submitTurn: (input) => agentIpc.submitTurn(input),
     steer: (sessionId, text, delivery) => agentHost.steer(sessionId, text, delivery),
+    abort: (sessionId) => agentHost.abort(sessionId),
+    cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
     phases,
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
 
   app.on("before-quit", () => {
+    appTray?.beginQuit();
+    appTray?.destroy();
+    appTray = null;
     browserSandbox.prepareQuit();
     agentHost.dispose();
   });
@@ -448,14 +537,22 @@ void app.whenReady().then(async () => {
     }
   };
 
-  createMainWindow(initialSettings.theme, initialSettings.language, openLink);
+  /** 托盘菜单文案要跟界面语言走；读一次最新设置即可（没有第二处消费者，不另开推送通道） */
+  const readLanguage = async (): Promise<Language> => {
+    const current = await settings.read();
+    return effectiveLanguage(current.theme, current.language);
+  };
+
+  createMainWindow(initialSettings.theme, initialSettings.language, openLink, readLanguage);
 
   // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
   // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings
   app.on("activate", () => {
     // 只问主窗口：隐藏着的沙盒浏览器窗口也算一个窗口，按 getAllWindows 判就回不来了
     if (mainWindows.list().length === 0) {
-      void settings.read().then((current) => createMainWindow(current.theme, current.language, openLink));
+      void settings
+        .read()
+        .then((current) => createMainWindow(current.theme, current.language, openLink, readLanguage));
     }
   });
 });
