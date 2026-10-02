@@ -185,13 +185,18 @@ function inheritedRow(fallback: InheritedFallback): MenuItem {
   return {
     id: fallback.id,
     label: fallback.label,
-    hint: fallback.hint,
+    /*
+     * 说明放哪儿分两档：模型卡片里放主行下面当副行（两行行）——卡片里其余行
+     * 都是两行行，而且右端 hint 会把那一行拉得很长、说明还被截断（2026-10-02
+     * 用户实测）；思考档菜单都是单行行，说明留在右端 hint。
+     */
+    ...(fallback.hintBelow === true ? { subLabel: fallback.hint } : { hint: fallback.hint }),
     checked: fallback.inherited,
     onSelect: fallback.onSelect,
   };
 }
 
-type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void };
+type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void; hintBelow?: boolean };
 
 function General(props: {
   settings: AppSettings;
@@ -246,6 +251,7 @@ function General(props: {
     id: "same-as-session",
     label: t.settings.sameAsSession,
     hint: t.settings.sameAsSessionHint,
+    hintBelow: true,
     inherited: choreModel === undefined,
     // null 而不是 undefined：补丁里的 undefined 是「这个键没改」，选不回默认
     onSelect: () => props.onChange({ choreModel: null }),
@@ -259,6 +265,7 @@ function General(props: {
     id: "same-as-parent",
     label: t.settings.sameAsParent,
     hint: t.settings.sameAsParentHint,
+    hintBelow: true,
     inherited: subSessionModel === undefined,
     onSelect: () => props.onChange({ subSessionModel: null, subSessionThinking: null }),
   });
