@@ -269,6 +269,11 @@ full content in a floating popover above the row, never by growing the input are
 panel stays out of the flow the same way: it opens *downward* from the `/` line as a solid
 popover positioned inside the input card's bounds — it may cover the bottom bar (attach, model,
 send) but never leaves the card.
+The same language extends **inline**: a `/skill:` token typed mid-sentence renders as a chip in the
+composer (a mirror layer beneath the textarea paints the pill exactly under the token's glyphs —
+no horizontal padding or icon, or the text would shift out of alignment) and in the sent user
+bubble (icon + name, the pill recipe above); the composer variant can therefore only ever show
+the token's literal text (2026-10-06, chip-overlay option D).
 Process rows live in the quiet tiers: while a row's activity is in progress its head (icon + label)
 is the only bright thing at secondary; once the state settles the **whole row** recedes to tertiary —
 one flat grey, with failure red as the only exception. Body text never competes with the past.

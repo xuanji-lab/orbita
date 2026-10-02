@@ -218,8 +218,8 @@
   font-size: var(--font-size-input);
 }
 
-/* 输入框外层：textarea 与小学作业主题的镜像层叠在同一格里，镜像在下、textarea 在上
-   （修正液，Composer.tsx）。只有 textarea 时就是一层普通包裹 */
+/* 输入框外层：textarea 与镜像层叠在同一格里，镜像在下、textarea 在上（修正液与句中 chip，
+   Composer.tsx）。只有 textarea 时就是一层普通包裹 */
 .composer-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -227,6 +227,42 @@
 
 .composer-field > * {
   grid-area: 1 / 1;
+}
+
+/* 镜像层（全主题常驻，垫在 textarea 下）：字透明，只画句中 chip 与（copybook 的）修正液；
+   换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步）。
+   曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06） */
+.composer-mirror {
+  color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+/*
+ * 句中 chip：镜像层里 token（/skill:…）的视觉包装，与 attachment chip 同配方
+ * （底、hairline、圆角）。两条硬约束（选型报告 §3-D，原型实测）：
+ *
+ * 1. **不能有横向 padding**——会把 chip 自己的字推右、与 textarea 的字错位
+ *    （原型实测 native=18/mirror=23，差值正好是 padding）。pill 的描边与呼吸
+ *    全用 box-shadow 向外扩散画（1px 底色扩散当呼吸，1px 发丝线当描边），
+ *    零布局影响；纵向 padding 不进水平排版，可自由用。
+ * 2. **字体继承输入框**（.composer-input 同时挂在镜像上），换字体就错位。
+ *
+ * 跨行换行时 clone：断开的每一截各自是一个完整的 pill，与底下文字同步换行。
+ * copybook 主题的白底绿描边变体在 paper-themes.css。
+ */
+.composer-chip {
+  border-radius: var(--radius-md);
+  padding: 1.5px 0;
+  background: var(--color-bg-muted);
+  box-shadow:
+    0 0 0 1px var(--color-bg-muted),
+    0 0 0 2px var(--color-border-subtle);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .composer-bottom-bar {
@@ -1345,6 +1381,36 @@ body {
 
 .chat-md.bubble-md > :last-child {
   margin-bottom: 0;
+}
+
+/*
+ * 气泡里的句中 chip：用户原文里的 /skill: token（chip-runs.ts 的 rehype 变换塞进
+ * span.bubble-chip，MarkdownBlock 的 ChipSpan 换成图标 + 名字）。与输入框镜像层的
+ * .composer-chip 是同一语言的另一形态：气泡没有对齐约束，可以有横向 padding、真边框
+ * 与图标；配方取 attachment chip（底 bg-muted、hairline、圆角），胶囊圆。图标与文字
+ * 缩到 caption 号——chip 是句子里的一个对象，不与正文争字号。
+ * 纵向不採行高：气泡行高 1.68（约 25px），chip 装得下 22px。
+ */
+.bubble-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-caption);
+  box-decoration-break: clone;
+}
+
+.bubble-chip-icon {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+
+.bubble-chip-target {
+  color: var(--color-text-primary);
+  font-weight: 500;
 }
 
 .chat-md li::marker {
