@@ -11,8 +11,10 @@ import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
 import { replaceToken, slashMode, slashTokenAt } from "./slash-trigger.ts";
-import { filterSkills, skillsByPrefix } from "../features/skills/skill-filter";
+import { moveSlashSelection, slashPanelBox, slashRowCount, slashSections, slashRowAt, type SlashPanelBox, type SlashRow } from "./slash-panel.ts";
+import { caretPoint } from "./caret-point.ts";
 import type { SkillMeta } from "@shared/skill";
+import type { McpServerInfo } from "@shared/mcp";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useDictation, type DictationPhase, type DictationProblem } from "../features/voice/useDictation.ts";
@@ -99,6 +101,9 @@ export function Composer(props: {
   skills: readonly SkillMeta[];
   /** 面板每次打开时触发重拉：新建 / 删除的 skill 下一次打开立即可见 */
   onReloadSkills: () => void;
+  /** 指令面板 MCP 栏的 server 清单与重拉（同 skills 的规矩：面板打开时重拉） */
+  servers: readonly McpServerInfo[];
+  onReloadServers: () => void;
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -151,17 +156,19 @@ export function Composer(props: {
   // 触发规则在 slash-trigger.ts：光标所在的「指令 token」。两种模式：
   //   主模式（token 在消息开头，之前只有空白）——PR #146 已验收的语义：列动作项
   //   + skill、空态可显示、默认高亮首行、Enter 选中；
-  //   补全模式（句中 token）——只列前缀命中的 skill、无命中不弹、默认不高亮
+  //   补全模式（句中 token）——只列前缀命中的 skill / MCP、无命中不弹、默认不高亮
   //   （Enter 原样落下，打路径时不抢键），Esc 后同一 token 内不再弹（Codex 的
   //   dismissed token 同款）。
+  // 面板往下开、分节（指令 / Skills / MCP）、几何不伸出输入卡——模型在
+  // slash-panel.ts，/ 字符坐标的量法在 caret-point.ts（2026-10-03 用户裁决）。
   // 主模式的关闭态分两种语义（用户实测：选中/ESC 后再打 / 前缀文字，面板不弹，
   // Enter 把半截指令当普通消息发出去了）：
   //   "esc"——Esc 关闭或动作项执行完：继续输入就重开（人还在 / 模式里，面板是输入辅助）
-  //   "insert"——skill 插入 /skill:xxx 后：保持关闭直到离开 / 前缀（用户在补
+  //   "insert"——skill / mcp 插入后：保持关闭直到离开 / 前缀（用户在补
   //   附加指示，弹出「没有匹配的指令」空态只会挡视线）
-  // skill 清单从上层拿（ChatView 的 useSkillIndex），面板每次打开触发一次重拉。
   const [commandsClosed, setCommandsClosed] = useState<"esc" | "insert" | null>(null);
-  const [activeCommand, setActiveCommand] = useState(0);
+  // 选中行（跨节全局行号；-1 = 无高亮——补全模式默认，↑↓ 才开始选中）
+  const [slashRow, setSlashRow] = useState(-1);
   // 补全模式的 Esc 记忆：被关掉的 token 起点不重弹，换 token / 离开才重弹
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   // 光标位置是触发条件之一（面板只在光标处于 token 内时亮）。纯移动不经过 onChange，
@@ -172,41 +179,41 @@ export function Composer(props: {
     if (el !== null) setCursor(el.selectionStart);
   }, [props.value]);
   const token = slashTokenAt(props.value, cursor);
+  // token 每次渲染都是新对象，effect / memo 的依赖只能吃稳定标量，否则无限重渲
+  // （2026-10-03 真机抓到：面板一开就 Maximum update depth）
+  const tokenStart = token?.start ?? -1;
+  const tokenAtStart = token?.atMessageStart === true;
   const startToken = token !== null && token.atMessageStart ? token : null;
   const commandQuery = token?.query ?? "";
   // 行先于开关算（不带 panelOpen 门控）：补全模式无命中时面板要**整个不弹**，
   // 开关反过来要看行数，顺序颠倒就循环了。token 为 null 时直接空表，不自费
-  type CommandRow =
-    | { kind: "compact" | "new"; name: string; description: string }
-    | { kind: "skill"; slug: string; name: string; description: string };
-  const commandRows: CommandRow[] = useMemo(() => {
-    if (token === null) return [];
-    const matchSkill = (meta: SkillMeta): CommandRow => ({
-      kind: "skill",
-      slug: meta.slug,
-      name: meta.name,
-      description: meta.description,
-    });
-    const usable = props.skills.filter((meta) => !meta.missing);
-    // 补全模式：只列 skill（动作项是会话动作，插到句中永远不执行，列出来就是误导），
-    // 且严格前缀命中（skillsByPrefix——无命中面板整个不弹，路径的第三道闸）
-    if (!token.atMessageStart) return skillsByPrefix([...usable], token.query).map(matchSkill);
-    const builtins: CommandRow[] = [
-      { kind: "compact", name: "compact", description: t.composer.cmdCompact },
-      { kind: "new", name: "new", description: t.composer.cmdNew },
-    ];
-    return [
-      ...builtins.filter((row) => row.name.startsWith(token.query)),
-      ...filterSkills([...usable], token.query).map(matchSkill),
-    ];
-  }, [token, props.skills, t]);
+  const commandSections = useMemo(
+    () =>
+      slashSections({
+        atMessageStart: tokenAtStart,
+        query: commandQuery,
+        commands: [
+          { kind: "compact", name: "compact", description: t.composer.cmdCompact },
+          { kind: "new", name: "new", description: t.composer.cmdNew },
+        ],
+        skills: [...props.skills],
+        servers: props.servers
+          .filter((server) => server.status.kind !== "disabled")
+          .map((server) => ({ name: server.name, detail: server.detail })),
+      }),
+    [tokenAtStart, commandQuery, props.skills, props.servers, t],
+  );
+  const commandRowsTotal = slashRowCount(commandSections);
   const panelOpen =
     startToken !== null
       ? commandsClosed === null
-      : token !== null && token.start !== dismissedStart && commandRows.length > 0;
+      : token !== null && token.start !== dismissedStart && commandRowsTotal > 0;
   useEffect(() => {
-    if (panelOpen) props.onReloadSkills();
-  }, [panelOpen, props.onReloadSkills]);
+    if (panelOpen) {
+      props.onReloadSkills();
+      props.onReloadServers();
+    }
+  }, [panelOpen, props.onReloadSkills, props.onReloadServers]);
   // 依赖是**值**而不是「是否在 / 模式」那个布尔：Esc 关闭后继续打字要重开面板，
   // 而多打一个字不会让布尔变——拿布尔当依赖，"esc" 就永远清不掉（2026-10-01 真机验收抓到）
   useEffect(() => {
@@ -220,16 +227,45 @@ export function Composer(props: {
   }, [token === null]);
   // 查询词或模式变了选中态归位：主模式高亮首行，补全模式无高亮（Enter 不抢键）
   useEffect(() => {
-    setActiveCommand(startToken !== null ? 0 : -1);
+    setSlashRow(startToken !== null ? 0 : -1);
   }, [commandQuery, startToken !== null]);
-  // 键盘选中滚出可视区时带动面板滚动（用户实测：↑↓ 只在列表内移动，长列表
-  // 时选中项躲在 overflow 外看不见）。block:"nearest" 只在需要时滚，不抖。
-  // 补全模式无高亮（-1）时无选中项，自然不滚
+  // 面板几何：面板开着就量 `/` 字符的坐标（打字会挪行、换行会变行）。量完在
+  // 同一个 commit 里落位，不闪。面板关了就作废，下次开重量
+  const [slashBox, setSlashBox] = useState<SlashPanelBox | null>(null);
+  useLayoutEffect(() => {
+    if (!panelOpen || token === null) {
+      setSlashBox(null);
+      return;
+    }
+    const ta = textareaRef.current;
+    const card = cardRef.current;
+    if (ta === null || card === null) return;
+    const point = caretPoint(ta, token.start);
+    if (point === null) return;
+    const taRect = ta.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const cardStyle = getComputedStyle(card);
+    const borderLeft = Number.parseFloat(cardStyle.borderLeftWidth) || 0;
+    const borderTop = Number.parseFloat(cardStyle.borderTopWidth) || 0;
+    setSlashBox(
+      slashPanelBox({
+        // 卡的 padding box 坐标系（面板绝对定位的参照系）
+        slashLeft: taRect.left + point.left - (cardRect.left + borderLeft),
+        lineBottom: taRect.top + point.top + point.height - (cardRect.top + borderTop),
+        cardWidth: card.clientWidth,
+        // 底部留 4px：可以盖住底栏（+、模型名、发送键），但不伸出卡外
+        cardBottom: card.clientHeight - 4,
+      }),
+    );
+    // 依赖全部是标量：token 对象每渲染都是新的，直接当依赖会无限重渲
+  }, [panelOpen, tokenStart, props.value, cursor, script]);
+  // 键盘选中滚出可视区时带动面板滚动（↑↓ 跨节续行、←→ 跳节都靠它把目标滚连来）。
+  // block:"nearest" 只在需要时滚，不抖。无高亮（-1）时无选中项，自然不滚
   useEffect(() => {
     commandListRef.current
-      ?.querySelector('[aria-selected="true"]')
+      ?.querySelector(`[data-row="${slashRow}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [activeCommand]);
+  }, [slashRow, commandSections]);
 
   /** 选中指令后把光标钉在插入文本之后：onChange 改的是父级状态，等 React 提交完再设选区 */
   const pinCursor = (position: number): void => {
@@ -242,31 +278,33 @@ export function Composer(props: {
       }
     });
   };
-  /** 面板选中。skill：只替换 token 本身，前后文（含同行的附加指示、后续行）原样
-   * 保留，光标钉在插入之后——主模式与补全模式同一规则；主模式另落 "insert"
+  /** 面板选中。skill / mcp：只替换 token 本身，前后文（含同行的附加指示、后续行）
+   * 原样保留，光标钉在插入之后——主模式与补全模式同一规则；主模式另落 "insert"
    * 关闭态（补全模式插入后光标在尾随空格后，天然不在任何 token 上，不需要）。
-   * 动作项只在主模式列出，选中即执行，并清掉半截指令残留——"/c" 留在框里，
-   * 下一次回车就又是一条误发 */
-  const runCommand = (row: CommandRow): void => {
+   * /mcp:<server> 的发送端语义在另一刀（src/shared/skill.ts 那侧），这里只负责把
+   * token 插进去。动作项只在主模式列出，选中即执行，并清掉半截指令残留——"/c"
+   * 留在框里，下一次回车就又是一条误发 */
+  const runRow = (row: SlashRow): void => {
     // 点击/回车时重算一次：面板开着必有 token，但闭包里的这份可能已陈旧
     const token = slashTokenAt(props.value, cursor);
-    if (row.kind === "skill") {
+    if (row.kind === "skill" || row.kind === "mcp") {
       if (token === null) return;
       if (token.atMessageStart) setCommandsClosed("insert");
-      const inserted = `/skill:${row.slug} `;
+      const inserted = row.kind === "skill" ? `/skill:${row.slug} ` : `/mcp:${row.server} `;
       props.onChange(replaceToken(props.value, token, inserted));
       pinCursor(token.start + inserted.length);
     } else {
       setCommandsClosed("esc");
       if (props.onCommand !== undefined) {
-        props.onCommand(row.kind);
+        props.onCommand(row.action);
         // 全清而不是只丢指令行：/new 的语义就是「清草稿清附件再开会话」，
         // ChatView 在 onCommand 里已经 setDraft("")，这里再写回剩余行会把
         // 清掉的东西复活到新会话的草稿里
         props.onChange("");
         pinCursor(0);
       } else if (token !== null) {
-        const inserted = `/${row.name} `;
+        // row.name 已带前导 /（面板里显示的就是插入形态）
+        const inserted = `${row.name} `;
         props.onChange(replaceToken(props.value, token, inserted));
         pinCursor(token.start + inserted.length);
       }
@@ -332,86 +370,81 @@ export function Composer(props: {
         <div
           ref={commandListRef}
           role="listbox"
-          style={{
-            display: "grid",
-            gap: 2,
-            maxHeight: 240,
-            overflowY: "auto",
-            padding: 6,
-            borderRadius: "var(--radius-md)",
-            border: "1px solid var(--color-border-subtle)",
-            background: "var(--color-bg-muted)",
-          }}
+          aria-label={t.composer.commandPanel}
+          className="slash-panel"
+          style={
+            slashBox === null
+              ? // 几何还没量出来（首次开的第一个 commit）：先藏起来占位，量完即落位
+                { visibility: "hidden", left: 0, top: 0, width: 0, maxHeight: 0 }
+              : {
+                  left: slashBox.left,
+                  top: slashBox.top,
+                  width: slashBox.width,
+                  maxHeight: slashBox.maxHeight,
+                }
+          }
         >
-          {commandRows.length === 0 ? (
-            <div
-              style={{
-                padding: "6px 8px",
-                fontSize: "var(--font-size-caption)",
-                color: "var(--color-text-tertiary)",
-              }}
-            >
-              {t.composer.commandNoMatch}
-            </div>
+          {commandSections.length === 0 ? (
+            <div className="slash-empty">{t.composer.commandNoMatch}</div>
           ) : (
-            commandRows.map((row, index) => (
-              <button
-                key={row.kind === "skill" ? `skill:${row.slug}` : row.kind}
-                type="button"
-                role="option"
-                aria-selected={index === activeCommand}
-                onClick={() => runCommand(row)}
-                onMouseEnter={() => setActiveCommand(index)}
-                // 选中/悬停底色走 .option-row 配方（styles.css 的 aria-selected 规则，
-                // 与菜单/抽屉同一实现——wafo 二轮：状态样式不写在 inline 三元里）
-                className="option-row"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "var(--space-2)",
-                  padding: "6px 8px",
-                  borderRadius: "var(--radius-md)",
-                  border: 0,
-                  cursor: "pointer",
-                  textAlign: "left",
-                  minWidth: 0,
-                }}
-              >
-                <Icon
-                  name={
-                    row.kind === "skill"
-                      ? "book-open"
-                      : row.kind === "compact"
-                        ? "fold-vertical"
-                        : "message-square-dashed"
-                  }
-                  size={13}
-                  strokeWidth={1.8}
-                  style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
-                />
-                <span
-                  style={{
-                    fontFamily: "var(--font-family-mono)",
-                    fontSize: "var(--font-size-caption)",
-                    color: "var(--color-text-primary)",
-                    flex: "0 0 auto",
-                  }}
-                >
-                  {row.kind === "skill" ? `/skill:${row.slug}` : `/${row.name}`}
-                </span>
-                <span
-                  style={{
-                    fontSize: "var(--font-size-caption)",
-                    color: "var(--color-text-tertiary)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {row.description}
-                </span>
-              </button>
-            ))
+            (() => {
+              let rowNumber = 0;
+              return commandSections.map((section) => {
+                const kicker =
+                  section.id === "commands"
+                    ? t.composer.slashSectionCommands
+                    : section.id === "skills"
+                      ? t.composer.slashSectionSkills
+                      : t.composer.slashSectionMcp;
+                return (
+                  <div key={section.id} role="group" aria-label={kicker}>
+                    <div className="slash-kicker" aria-hidden="true">
+                      {kicker}
+                    </div>
+                    {section.rows.map((row) => {
+                      const current = rowNumber++;
+                      return (
+                        <button
+                          key={row.name}
+                          type="button"
+                          role="option"
+                          data-row={current}
+                          aria-selected={current === slashRow}
+                          onClick={() => runRow(row)}
+                          onMouseEnter={() => setSlashRow(current)}
+                          // 选中/悬停底色走 .option-row 配方（styles.css 的 aria-selected 规则，
+                          // 与菜单/抽屉同一实现——wafo 二轮：状态样式不写在 inline 三元里）
+                          className="option-row slash-row"
+                        >
+                          <Icon
+                            name={
+                              row.kind === "skill"
+                                ? "book-open"
+                                : row.kind === "mcp"
+                                  ? "plug"
+                                  : row.action === "compact"
+                                    ? "fold-vertical"
+                                    : "message-square-dashed"
+                            }
+                            size={13}
+                            strokeWidth={1.8}
+                            style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
+                          />
+                          <span className="slash-name">{row.name}</span>
+                          {/* 说明只在面板够宽时显示（几何在 slash-panel.ts 里量过）；藏掉时
+                              title 兜底，鼠标悬停还能看 */}
+                          {slashBox?.showDescription !== false && (
+                            <span className="slash-desc" title={row.description}>
+                              {row.description}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              });
+            })()
           )}
         </div>
       )}
@@ -475,28 +508,36 @@ export function Composer(props: {
               return;
             }
             // 面板开着时方向键与 Enter 归面板；Esc 关面板，内容照在。组词中的按键不动面板。
-            // 补全模式的特殊点：无高亮（-1）时 ↑↓ 才开始选中、Enter 不抢键（原样
-            // 发送/换行）——打路径时面板在场的那几个按键里回车，不能凭空插进一条
-            // 指令（Cursor 被官方认定成 UX bug 的正是这类事）
+            // ↑↓ 跨节线性移动（节边界自然续到下一节、两端循环）；←→ 跳相邻节并选中
+            // 它的第一项——**只在已有高亮时接管**：补全模式默认无高亮，←→ 先留给光标
+            // （同「Enter 不抢键」的道理：打路径时面板在场，箭头不能凭空变成选单导航）。
+            // 主模式默认高亮首行，←→ 从一开始就是切节。补全模式无高亮（-1）时 ↑↓ 才
+            // 开始选中、Enter 不抢键（原样发送/换行）——Cursor 被官方认定成 UX bug
+            // 的正是这类事
             if (panelOpen && !event.nativeEvent.isComposing) {
-              if (event.key === "ArrowDown" && commandRows.length > 0) {
+              if (event.key === "ArrowDown" && commandRowsTotal > 0) {
                 event.preventDefault();
-                setActiveCommand((index) => (index === -1 ? 0 : (index + 1) % commandRows.length));
+                setSlashRow((row) => moveSlashSelection(commandSections, row, "down"));
                 return;
               }
-              if (event.key === "ArrowUp" && commandRows.length > 0) {
+              if (event.key === "ArrowUp" && commandRowsTotal > 0) {
                 event.preventDefault();
-                setActiveCommand((index) =>
-                  index === -1
-                    ? commandRows.length - 1
-                    : (index - 1 + commandRows.length) % commandRows.length,
-                );
+                setSlashRow((row) => moveSlashSelection(commandSections, row, "up"));
                 return;
               }
-              if (event.key === "Enter" && activeCommand >= 0 && activeCommand < commandRows.length) {
+              if (
+                (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+                commandRowsTotal > 0 &&
+                slashRow >= 0
+              ) {
                 event.preventDefault();
-                const row = commandRows[activeCommand];
-                if (row !== undefined) runCommand(row);
+                setSlashRow((row) => moveSlashSelection(commandSections, row, event.key === "ArrowLeft" ? "left" : "right"));
+                return;
+              }
+              if (event.key === "Enter" && slashRow >= 0 && slashRow < commandRowsTotal) {
+                event.preventDefault();
+                const row = slashRowAt(commandSections, slashRow);
+                if (row !== undefined) runRow(row);
                 return;
               }
               if (event.key === "Escape") {

@@ -106,7 +106,7 @@ import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { parseQualifiedToolName } from "@shared/mcp";
+import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
 import { api } from "../../api";
@@ -395,19 +395,28 @@ function QuoteSelectionLayer(props: {
 }
 
 /**
- * 会话区的 skill 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug。
- * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
- * （新建的 skill 下一轮会话自然出现）。
+ * 会话区的 skill / MCP 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug，
+ * 指令面板的 skill 清单与 MCP 栏也用同一份。挂载读一次、失败静默——徽标是锦上
+ * 添花，不为它报错，也不为它做重读 UI（新建的 skill 下一轮会话自然出现）。
  */
-function useSkillIndex(): { skills: SkillMeta[]; reload: () => void } {
+function useSkillIndex(): {
+  skills: SkillMeta[];
+  reload: () => void;
+  servers: McpServerInfo[];
+  reloadServers: () => void;
+} {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  const [servers, setServers] = useState<McpServerInfo[]>([]);
   const reload = useCallback(() => {
     void api.skill.list().then(setSkills).catch(() => undefined);
+  }, []);
+  const reloadServers = useCallback(() => {
+    void api.mcp.list().then(setServers).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
   }, [reload]);
-  return { skills, reload };
+  return { skills, servers, reload, reloadServers };
 }
 
 function ChatViewBody(props: {
@@ -487,9 +496,9 @@ function ChatViewBody(props: {
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引 + 指令面板的 skill 清单（同一份数据）。
+  // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
   // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
-  const { skills, reload: reloadSkills } = useSkillIndex();
+  const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
@@ -747,6 +756,8 @@ function ChatViewBody(props: {
       onStop={session.stop}
       skills={skills}
       onReloadSkills={reloadSkills}
+      servers={servers}
+      onReloadServers={reloadServers}
       onCommand={(command) => {
         if (command === "compact") {
           // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
