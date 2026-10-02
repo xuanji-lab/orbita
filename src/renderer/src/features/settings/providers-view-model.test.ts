@@ -15,6 +15,8 @@ import {
   nextFreeId,
   parseRateInput,
   parseTokenInput,
+  providerCards,
+  railShortNames,
   reorderIds,
   urlSuffix,
 } from "./providers-view-model.ts";
@@ -111,6 +113,50 @@ describe("nextFreeId —— 同一目录条目加第二次不撞 id", () => {
       auth: { scheme: "none" },
     };
     assert.equal(kindOf(dto), "anthropic-compatible");
+  });
+});
+
+describe("providerCards —— 模型服务的卡片墙", () => {
+  const dto = (id: string, extra: Partial<ProviderDto> = {}): ProviderDto => ({
+    id,
+    displayName: id,
+    endpoint: { baseUrl: "https://example.com", api: "openai-completions" },
+    models: { declared: [] },
+    auth: { scheme: "none" },
+    ...extra,
+  });
+  const text = (known: { label: string; note: string }) => `${known.label} ${known.note}`;
+  const cardOf = (groups: ReturnType<typeof providerCards>, id: string) =>
+    groups.flatMap((entry) => entry.cards).find((card) => card.known.id === id);
+
+  test("同一家的多个实例都归到它的卡上（含没有 kind 的老数据 deepseek-2）", () => {
+    const groups = providerCards([dto("deepseek"), dto("deepseek-2"), dto("work", { kind: "deepseek" })], {
+      query: "",
+      onlyAdded: false,
+      textOf: text,
+    });
+    assert.deepEqual(cardOf(groups, "deepseek")?.instances.map((p) => p.id), ["deepseek", "deepseek-2", "work"]);
+    assert.equal(cardOf(groups, "openai-compatible")?.instances.length, 0);
+  });
+
+  test("分区顺序固定 API → 套餐 → 自定义；仅显示已添加时空区整个不返回", () => {
+    assert.deepEqual(
+      providerCards([], { query: "", onlyAdded: false, textOf: text }).map((entry) => entry.group),
+      ["api", "plan", "custom"],
+    );
+    const onlyAdded = providerCards([dto("proma")], { query: "", onlyAdded: true, textOf: text });
+    assert.deepEqual(onlyAdded.map((entry) => entry.group), ["custom"]);
+    assert.deepEqual(onlyAdded[0]?.cards.map((card) => card.known.id), ["openai-compatible"]);
+  });
+
+  test("搜索命中卡片文字、预填地址、以及用户给实例起的名字", () => {
+    const ids = (query: string) =>
+      providerCards([dto("openai-compatible", { displayName: "Proma" })], { query, onlyAdded: false, textOf: text })
+        .flatMap((entry) => entry.cards)
+        .map((card) => card.known.id);
+    assert.deepEqual(ids("PROMA"), ["openai-compatible"]);
+    assert.deepEqual(ids("api.kimi.com"), ["kimi-coding"]);
+    assert.deepEqual(ids("没有这一家"), []);
   });
 });
 
@@ -258,5 +304,38 @@ describe("connectionDirty", () => {
   test("Show 拉出的已存 key 原样不动不算改动，改一个字才算", () => {
     assert.equal(connectionDirty({ ...draft, apiKey: "sk-old" }, saved, "sk-old"), false);
     assert.equal(connectionDirty({ ...draft, apiKey: "sk-old2" }, saved, "sk-old"), true);
+  });
+});
+
+describe("railShortNames —— 模型卡片左栏的短名", () => {
+  const dto = (id: string, displayName: string, extra: Partial<ProviderDto> = {}): ProviderDto => ({
+    id,
+    displayName,
+    endpoint: { baseUrl: "https://example.com", api: "openai-completions" },
+    models: { declared: [] },
+    auth: { scheme: "none" },
+    ...extra,
+  });
+
+  test("认得的厂商用 short，与实例名无关（存量旧名、默认名带后缀都不影响）", () => {
+    const names = railShortNames([
+      dto("zhipu", "智谱（按量）"),
+      dto("zhipu-coding", "智谱 Coding Plan", { endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" } }),
+      dto("deepseek", "DeepSeek"),
+    ]);
+    assert.equal(names.get("zhipu"), "zhipu");
+    assert.equal(names.get("zhipu-coding"), "zhipu-cp");
+    assert.equal(names.get("deepseek"), "DS");
+  });
+
+  test("同一家多个实例：第二个起加序号，按传入顺序", () => {
+    const names = railShortNames([dto("deepseek", "DeepSeek"), dto("deepseek-2", "DeepSeek 2")]);
+    assert.equal(names.get("deepseek"), "DS");
+    assert.equal(names.get("deepseek-2"), "DS 2");
+  });
+
+  test("兼容入口用实例名：用户自建网关，短码说不出是哪个", () => {
+    const names = railShortNames([dto("my-gateway", "公司网关", { kind: "openai-compatible" })]);
+    assert.equal(names.get("my-gateway"), "公司网关");
   });
 });

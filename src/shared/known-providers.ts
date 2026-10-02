@@ -20,8 +20,25 @@ import type { ProviderApi } from "./provider.ts";
 export interface KnownProvider {
   /** 我们的稳定 id，也是用户看到的 identifier */
   id: string;
-  /** 显示名。中文厂商保留中文——这是厂商的名字，不是界面文案 */
+  /**
+   * 显示名 = **厂商名**，不带计费方式的后缀（「Coding Plan」「API」）：目录按分区摆
+   * （knownProviderGroup），分区标题已经说了是按量还是套餐。中文厂商用中文名（智谱、
+   * 阶跃星辰）——这是厂商的名字，不是界面文案；英文界面的写法在 messages-en 的 KNOWN_LABELS。
+   * 同一厂商在两个分区各有一条时 label 相同，实例的默认名靠 knownProviderDefaultName 区分。
+   */
   label: string;
+  /**
+   * 模型卡片左栏那一格里的短名字。**尽量取官方或大家都那么叫的**（2026-10-01 定）：
+   *
+   * - `deepseek` → `DS`（中文圈就这么叫）；`stepfun` → `STEP`（模型线就叫 `step-*`）；
+   *   其余名字长的取词首（`OC` / `ANT` / `OAI`）——这三条是我们自造的，官方没有缩写。
+   * - **智谱那三格直接用条目 id**：`zhipu` / `zhipu-cp` / `zai`。它比任何缩写都短且天然唯一，
+   *   而 `CP` 单独一个指不回智谱（仓里两格都是 Coding Plan），`ZAI` 也分不开国内与国际站。
+   *
+   * 同一家多个实例时第二个起加序号（DS / DS 2），兼容入口用实例名——规则在
+   * providers-view-model.ts 的 `railShortNames`。
+   */
+  short: string;
   api: ProviderApi;
   /** 预填的 baseUrl。空串表示必须用户自己填（兼容格式的通用入口） */
   baseUrl: string;
@@ -130,6 +147,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "deepseek",
     label: "DeepSeek",
+    short: "DS",
     api: "openai-completions",
     baseUrl: "https://api.deepseek.com",
     catalogId: "deepseek",
@@ -166,7 +184,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   },
   {
     id: "zhipu",
-    label: "智谱 GLM",
+    label: "智谱",
+    short: "zhipu",
     api: "openai-completions",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     catalogId: "zai-coding-cn",
@@ -174,7 +193,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   },
   {
     id: "zhipu-coding",
-    label: "智谱 Coding Plan",
+    label: "智谱",
+    short: "zhipu-cp",
     api: "anthropic-messages",
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     catalogId: "zai-coding-cn",
@@ -200,21 +220,23 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
        */
       "glm-5.3": { defaultThinkingLevel: "max" },
     },
-    note: "Coding Plan 订阅，走 Anthropic 兼容端点",
+    note: "GLM Coding Plan 订阅，走 Anthropic 兼容端点",
   },
   {
     id: "zai",
-    label: "Z.AI (国际)",
+    label: "Z.AI",
+    short: "zai",
     api: "openai-completions",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
     catalogId: "zai",
     // 端点就是 `/coding/paas/`——与国内站 Coding Plan 同一套餐制
     billing: "plan",
-    note: "智谱国际站，与国内站账号不通用",
+    note: "智谱国际站的 GLM Coding Plan，与国内站账号不通用",
   },
   {
     id: "stepfun",
-    label: "StepFun",
+    label: "阶跃星辰",
+    short: "STEP",
     api: "openai-completions",
     baseUrl: "https://api.stepfun.com/step_plan/v1",
     // pi 目录未收录 stepfun：参数靠网关 Fetch 或手填，行摘要会如实标注走兜底
@@ -255,21 +277,42 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
         defaultThinkingLevel: "high",
       },
     },
-    note: "StepFun 官方 API（Step 套餐端点，地址要带到 /v1）",
+    note: "Step Plan 订阅（地址要带到 /v1）",
+  },
+  {
+    id: "kimi-coding",
+    label: "Kimi",
+    short: "Kimi",
+    /*
+     * Kimi 会员（Kimi Code）的编程端点。走 Anthropic 兼容协议——与 pi 内建的 kimi-coding
+     * 条目同一个 baseUrl 与协议（客户端接 /v1/messages），模型参数（k3 / k3-256k /
+     * kimi-for-coding）直接继承它的目录。不走 OpenAI 兼容的 /coding/v1：那条路要靠
+     * pi-ai 补丁把 api.kimi.com 认成 Moonshot 才不发 developer 角色，Anthropic 协议
+     * 没有这个问题。
+     */
+    api: "anthropic-messages",
+    baseUrl: "https://api.kimi.com/coding",
+    catalogId: "kimi-coding",
+    billing: "plan",
+    note: "Kimi Code 会员订阅，走 Anthropic 兼容端点",
   },
   {
     id: "opencode-go",
-    label: "OpenCode Go",
+    label: "OpenCode",
+    short: "OC",
     api: "openai-completions",
     baseUrl: "https://opencode.ai/zen/go/v1",
     catalogId: "opencode-go",
     // 网关硬要求（缺了 400 MissingSessionID）：会话头用于前缀缓存路由，任意稳定值即可
     headers: { "x-opencode-session": "orbita" },
-    note: "OpenCode Zen 聚合网关——一个 key 调用多家模型（DeepSeek / MiniMax…）",
+    // OpenCode Go 是月费订阅（opencode.ai/go：$10/月，额度制）；按量计费的是 Zen，不是这个端点
+    billing: "plan",
+    note: "OpenCode Go 订阅——一个 key 调用多家开源模型（DeepSeek / MiniMax…）",
   },
   {
     id: "anthropic-compatible",
     label: "Anthropic 兼容",
+    short: "ANT",
     api: "anthropic-messages",
     baseUrl: "",
     modelParams: {
@@ -320,6 +363,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "openai-compatible",
     label: "OpenAI 兼容",
+    short: "OAI",
     api: "openai-completions",
     baseUrl: "",
     note: "自建网关 / 私有部署，地址要带到版本段，客户端接 /chat/completions",
@@ -327,11 +371,65 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
 ];
 
 /**
- * 这家是不是包月制。**认不得的 id（自建网关、以后新加的）一律当按量算**——
- * 误报成包月会把真实花费藏起来，比多显示一行估价更坏。
+ * 「添加服务商」目录的三个分区：按量计费的官方 API / 套餐订阅 / 自建的兼容网关。
+ * **从条目已有的字段推出来，不另立字段**：没有预填地址（baseUrl 为空）= 兼容入口；
+ * 套餐计费 = 订阅；其余 = API。新加条目只要 billing 与 baseUrl 写对，分区自动跟着对。
  */
-export function isPlanBilling(providerId: string): boolean {
-  return KNOWN_PROVIDERS.find((item) => item.id === providerId)?.billing === "plan";
+export type KnownProviderGroup = "api" | "plan" | "custom";
+
+export function knownProviderGroup(provider: KnownProvider): KnownProviderGroup {
+  if (provider.baseUrl === "") return "custom";
+  return provider.billing === "plan" ? "plan" : "api";
+}
+
+/**
+ * 新建实例时预填的名字。label 在目录里有分区标题兜着；出了目录（服务商列表、模型菜单）
+ * 就没有分区可看，所以 label 撞名的条目（智谱的按量与套餐）在名字里补上计费方式。
+ */
+export function knownProviderDefaultName(provider: KnownProvider): string {
+  const collides = KNOWN_PROVIDERS.some((item) => item.id !== provider.id && item.label === provider.label);
+  if (!collides) return provider.label;
+  return `${provider.label}（${knownProviderGroup(provider) === "plan" ? "套餐" : "按量"}）`;
+}
+
+/** knownProviderOf 要的最小形状：Provider / ProviderDto 天然满足 */
+export interface ProviderKindSource {
+  id: string;
+  kind?: string;
+  endpoint: { api: ProviderApi };
+}
+
+function knownById(id: string): KnownProvider | undefined {
+  return KNOWN_PROVIDERS.find((item) => item.id === id);
+}
+
+/**
+ * 一个已配置的 provider 来自哪个目录条目。三档，先到先得：
+ *   1. 显式的 `kind`（新建 / 复制时写入）；
+ *   2. id 本身就是条目 id（第一个实例），或去掉 `-2` / `-copy` / `-copy3` 后缀后是——
+ *      老数据没有 kind，第二个实例与副本只能靠 id 的生成规则（nextFreeId / nextCopyId）认回来；
+ *   3. 都不是：按协议落到两个「兼容」条目之一。
+ * 永远有答案：调用方不必再处理「认不出来」。
+ */
+export function knownProviderOf(provider: ProviderKindSource): KnownProvider {
+  const explicit = provider.kind === undefined ? undefined : knownById(provider.kind);
+  if (explicit !== undefined) return explicit;
+  const byId = knownById(provider.id) ?? knownById(provider.id.replace(/-(?:\d+|copy\d*)$/, ""));
+  if (byId !== undefined) return byId;
+  const compatible = knownById(
+    provider.endpoint.api === "anthropic-messages" ? "anthropic-compatible" : "openai-compatible",
+  );
+  if (compatible === undefined) throw new Error("KNOWN_PROVIDERS 缺少兼容条目");
+  return compatible;
+}
+
+/**
+ * 这家是不是包月制。**认不得的（自建网关）一律当按量算**——
+ * 误报成包月会把真实花费藏起来，比多显示一行估价更坏。按条目判而不是按 id：
+ * 第二个 Kimi 实例（kimi-coding-2）一样是套餐。
+ */
+export function isPlanBilling(provider: ProviderKindSource): boolean {
+  return knownProviderOf(provider).billing === "plan";
 }
 
 /**

@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { api } from "./api.ts";
-import { resolveTheme } from "./theme-resolve.ts";
+import { resolveTheme } from "@shared/theme-resolve";
 import { htmlLang } from "./locale.ts";
 import { effectiveLanguage } from "@shared/settings";
 import { watchWindowActivity } from "./shell/window-activity.ts";

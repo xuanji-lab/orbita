@@ -77,19 +77,23 @@ import { Composer } from "../../shell/Composer";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
-import { Menu, type MenuItem } from "../../shell/Menu";
+import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { CarryoverChecklist } from "./CarryoverChecklist";
+import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
+import { DiffBody } from "../../shell/DiffView";
+import { RevertPreviewBar } from "./RevertPreviewBar";
+import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardFooter, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -116,9 +120,10 @@ import {
   type CompactedRecord,
   type SessionCompletion,
 } from "@shared/session";
+import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
-import type { ThemePreference } from "@shared/settings";
+import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -415,6 +420,14 @@ function ChatViewBody(props: {
    * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
    */
   homeBare?: boolean;
+  /** 星标（收藏）的模型。**不是会话元数据**——它跟着用户走，存在设置里 */
+  starredModels?: readonly ModelPair[];
+  onToggleStarModel?: (pair: ModelPair) => void;
+  /**
+   * 模型卡片底部「配置模型」的去处（设置面的服务商页）。不传时那行仍然在，
+   * 点了只是把卡片关上——比给一个点了没反应的东西好。
+   */
+  onOpenProviders?: () => void;
   /**
    * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
    * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
@@ -462,6 +475,11 @@ function ChatViewBody(props: {
    * 审批条不受影响，照常渲染——用户必须能在这里直接批子会话的工具调用。
    */
   hideComposer?: boolean;
+  /**
+   * 轮尾卡 / 界碑卡的「在面板里看」：打开右侧审查面板并定位该文件。
+   * 只有主槽的 ChatView 拿到它（面板开在主槽旁边）；右栏与抽屉里不传，行不可点。
+   */
+  onOpenReviewAt?: (path: string) => void;
   /**
    * 一键回底浮钮（feat/scroll-to-bottom-X）：距底超过 300px 时在消息列底端浮现「回底」
    * 浮钮，点击 smooth 滚到底。三个会话区都开：主槽、辅助对话抽屉、Sub-sessions 面板的
@@ -519,6 +537,18 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
+  // 回退 / 撤销的预演对象：TranscriptColumn 是 memo，按原始值记忆，不每帧新建对象
+  const previewMessageId = session.revertDialog?.targetMessageId ?? null;
+  const previewTurnId = session.undoDialog?.turnId ?? null;
+  const revertPreview = useMemo<RevertPreview>(
+    () =>
+      previewMessageId !== null
+        ? { kind: "revert", messageId: previewMessageId }
+        : previewTurnId !== null
+          ? { kind: "undo", turnId: previewTurnId }
+          : null,
+    [previewMessageId, previewTurnId],
+  );
 
   // —— R5-05 首发过渡：slogan 与会话卡 220ms 向上淡出，composer 240ms 滑向窗口底部。
   // leaving 由事件处理器（发送 / 点会话卡）同步置位，首页保持挂载走完动画再让位；
@@ -749,7 +779,14 @@ function ChatViewBody(props: {
       }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
-      bottomSlot={<ComposerBar session={session} />}
+      bottomSlot={
+        <ComposerBar
+          session={session}
+          starredModels={props.starredModels ?? []}
+          onToggleStarModel={props.onToggleStarModel ?? (() => {})}
+          onOpenProviders={props.onOpenProviders ?? (() => {})}
+        />
+      }
       dropActive={props.dropActive === true}
       quotes={session.quotes}
       onRemoveQuote={session.removeQuote}
@@ -975,6 +1012,29 @@ function ChatViewBody(props: {
         footer={
           <>
             {notices}
+            {/* 回退 / 撤销的预演确认栏：与审批条、收尾清单同位同配方（就地，不遮消息流） */}
+            {session.revertDialog !== null && (
+              <RevertPreviewBar
+                mode="revert"
+                plan={session.revertDialog.plan}
+                cwd={session.cwd}
+                busy={session.revertBusy}
+                onConfirm={session.confirmRevert}
+                onCancel={session.cancelRevert}
+                onOpenFile={props.onOpenReviewAt}
+              />
+            )}
+            {session.undoDialog !== null && (
+              <RevertPreviewBar
+                mode="undo"
+                plan={session.undoDialog.plan}
+                cwd={session.cwd}
+                busy={session.undoBusy}
+                onConfirm={session.confirmUndo}
+                onCancel={session.cancelUndo}
+                onOpenFile={props.onOpenReviewAt}
+              />
+            )}
             {session.approvals[0] && (
               <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
             )}
@@ -1009,7 +1069,9 @@ function ChatViewBody(props: {
           </>
         }
       >
+        <RevertPreviewContext.Provider value={revertPreview}>
         <TranscriptColumn
+          preview={revertPreview}
           transcript={session.transcript}
           compactions={session.compactions}
           marks={session.marks}
@@ -1021,7 +1083,18 @@ function ChatViewBody(props: {
           onOpenTask={session.openSession}
           channel={channel}
           skills={skills}
+          fileTurns={session.fileTurns}
+          reverts={session.reverts}
+          undos={session.undos}
+          cwd={session.cwd}
+          onUndoTurn={session.undoTurn}
+          onRevertTo={session.revertToMessage}
+          actionsBusy={session.phase !== "idle" || session.queued.length > 0 || revertPreview !== null}
+          readOnly={session.readOnly}
+          onOpenReviewAt={props.onOpenReviewAt}
+          sessionId={openId}
         />
+        </RevertPreviewContext.Provider>
       </Pane>
     </>
   );
@@ -1036,6 +1109,8 @@ function ChatViewBody(props: {
  * 逐帧变化，列照旧逐帧重渲染，活体的实时性不变。
  */
 const TranscriptColumn = memo(function TranscriptColumn(props: {
+  /** 回退 / 撤销预演：回退时切点之后的往来变淡加删除线；撤销时那一轮的轮尾卡描边 */
+  preview: RevertPreview;
   transcript: readonly TranscriptItem[];
   compactions: readonly CompactedRecord[];
   /** 子会话 PR4a：盘上读回的通道标记，与 compactions 同一条纪律（见 mergeSideRecords） */
@@ -1055,16 +1130,44 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   channel: ChannelViewContext;
   /** skill 索引（read SKILL.md 徽标用）；挂载读一次，引用稳定不打穿 memo */
   skills: SkillMeta[];
+  /** 轮尾文件账（fileTurn 事件 + 盘上种子），与 marks 同一条纪律 */
+  fileTurns: readonly FileTurnView[];
+  /** 回退界碑（盘上种子；回退后重读会话自然进来） */
+  reverts: readonly RevertRecord[];
+  /** 撤销记录（盘上种子）：轮尾卡的「已撤销」徽标按它点亮 */
+  undos: readonly UndoRecord[];
+  /** 会话 cwd：轮尾卡的路径显示（cwd 内相对、外绝对） */
+  cwd: string | null;
+  /** 单轮撤销入口（轮尾卡的 Undo）；引用稳定，不破 memo */
+  onUndoTurn: (turnId: string) => void;
+  /** 回退入口（user 气泡的「回到这里」）：开确认框的回调 */
+  onRevertTo: (messageId: string) => void;
+  /** 运行中 / 排队非空：回退与撤销的入口全禁 */
+  actionsBusy: boolean;
+  /** 只读（无 pi 本子）：回退 / 撤销不可用——没有可裁的本子 */
+  readOnly: boolean;
+  /** 轮尾卡文件行的「在面板里看」（主槽才有；引用稳定） */
+  onOpenReviewAt?: (path: string) => void;
+  /** 产物打开按钮的会话对账 */
+  sessionId: string;
 }) {
   const t = useT();
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
   const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
-  // 界碑与通道标记按发生位置插回往来流：压缩摘要收进「已压缩」折叠行、通道标记
-  // 画成一行虚线标记，历史一条不少
+  // 界碑、通道标记、轮尾账与回退界碑按发生位置插回往来流：压缩摘要收进「已压缩」
+  // 折叠行、通道标记画成一行虚线标记、轮尾账是卡片、回退界碑是标记行 + 还原卡
   const records = useMemo(
-    () => mergeSideRecords(props.compactions, props.marks, transcript),
-    [props.compactions, props.marks, transcript],
+    () => mergeSideRecords(props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript),
+    [props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript],
+  );
+  // 被撤销的轮 id 集：轮尾卡据此挂「已撤销」徽标（undo 记录不是渲染单元）
+  const undoneTurnIds = useMemo(
+    () =>
+      new Set(
+        records.filter((record) => record.role === "undo").map((record) => record.turnId),
+      ),
+    [records],
   );
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = useMemo(() => flattenRenderUnits(records), [records]);
@@ -1121,6 +1224,19 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
   // 局部名叫 failedFold：failedFoldKey 是 turn-rollup 里的函数，不能重名遮蔽。
   const failedFold = props.turnError !== null ? failedFoldKey(turnView) : null;
+  // 回退预演的切点：要撤回的那条用户消息在视图里的位置（-1 = 没在预演 / 不在视图里）
+  const previewMessageId = props.preview?.kind === "revert" ? props.preview.messageId : null;
+  const cutIndex = useMemo(
+    () =>
+      previewMessageId === null
+        ? -1
+        : turnView.findIndex((entry) => entry.kind === "user" && entry.item.id === previewMessageId),
+    [previewMessageId, turnView],
+  );
+  const cutRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (cutIndex >= 0) cutRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [cutIndex]);
 
   return (
     <>
@@ -1166,6 +1282,13 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           }
           return (
             <Fragment key={entry.key}>
+              {index === cutIndex && (
+                <div ref={cutRef} className="revert-cut">
+                  <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
+                  {t.chat.previewCut}
+                </div>
+              )}
+              <div className={cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"}>
               <ShowImageGalleryGroup cards={cards} />
               {branchAfter !== undefined && (
                 <BranchRow
@@ -1177,11 +1300,20 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                   onBranch={props.onBranch}
                 />
               )}
+              </div>
             </Fragment>
           );
         }
+        const doomed = cutIndex >= 0 && index >= cutIndex;
         return (
           <Fragment key={entry.key}>
+            {index === cutIndex && (
+              <div ref={cutRef} className="revert-cut">
+                <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
+                {t.chat.previewCut}
+              </div>
+            )}
+            <div className={doomed ? "revert-doomed" : "revert-keep"}>
             {entry.kind === "turnGroup" ? (
               <TurnRollupLine
                 group={entry}
@@ -1191,6 +1323,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 carryoverCards={carryoverCards}
                 channel={props.channel}
                 skills={props.skills}
+                cwd={props.cwd}
+                undoneTurnIds={undoneTurnIds}
+                onUndoTurn={props.onUndoTurn}
+                actionsBusy={props.actionsBusy}
+                onOpenReviewAt={props.onOpenReviewAt}
+                sessionId={props.sessionId}
               />
             ) : (
               <EntryView
@@ -1202,6 +1340,13 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 carryoverCards={carryoverCards}
                 channel={props.channel}
                 skills={props.skills}
+                cwd={props.cwd}
+                undoneTurnIds={undoneTurnIds}
+                onUndoTurn={props.onUndoTurn}
+                actionsBusy={props.actionsBusy}
+                onOpenReviewAt={props.onOpenReviewAt}
+                sessionId={props.sessionId}
+                onRevertTo={props.onRevertTo}
               />
             )}
             {branchAfter !== undefined && (
@@ -1213,6 +1358,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onBranch={props.onBranch}
               />
             )}
+            </div>
           </Fragment>
         );
       })}
@@ -1598,7 +1744,14 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
  * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
  * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
  */
-function ComposerBar(props: { session: ChatSession }) {
+function ComposerBar(props: {
+  session: ChatSession;
+  /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
+  /** 卡片底部「配置模型」→ 设置面的服务商页 */
+  onOpenProviders: () => void;
+}) {
   const t = useT();
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
@@ -1624,32 +1777,30 @@ function ComposerBar(props: { session: ChatSession }) {
       id: "home",
       label: t.chat.home,
       icon: "folder",
-      hint: session.defaultCwd,
+      // 路径副行（mono 注脚）：主行报名字，副行说它在哪。路径的**尾段才是名字**
+      // （/Users/dama/Desktop/orbita → orbita），所以从头部省略，别把唯一有信息量的那段切掉
+      subLabel: session.defaultCwd,
+      subLabelMono: true,
+      subLabelEllipsis: "head",
       checked: session.workspaceId === null && session.cwd === null,
       onSelect: session.newTask,
     },
-    ...session.workspaces.map((item) => ({
+    ...session.workspaces.map((item): MenuItem => ({
       id: item.id,
-      // 名字原样（读时已治）；全路径放 hint 消歧（两个同名的工作区），
-      // 与 home 项的 defaultCwd 同构
+      // 名字原样（读时已治）；全路径放副行消歧（两个同名的工作区），与 home 项的 defaultCwd 同构
       label: item.name,
-      hint: item.path,
+      subLabel: item.path,
+      subLabelMono: true,
+      subLabelEllipsis: "head" as const,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
     })),
-    {
-      id: "new-workspace",
-      label: t.sidebar.newWorkspace,
-      icon: "plus",
-      onSelect: () => setNamingWorkspace(true),
-    },
-    { id: "add", label: t.sidebar.addFolder, icon: "folder-plus", onSelect: session.addWorkspace },
   ];
 
   // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
   // 展开卡片里一行行小字只会让它显得吵；宽度也因此能固定）
-  const modeItems: MenuItem[] = PERMISSION_MODES.map((value) => ({
+  const modeItems: MenuItem[] = PERMISSION_MODES.map((value): MenuItem => ({
     id: value,
     label: t.permissionModes[value].label,
     checked: session.mode === value,
@@ -1657,13 +1808,12 @@ function ComposerBar(props: { session: ChatSession }) {
   }));
 
   // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
-  const modelItems: MenuItem[] = modelMenuItems({
-    t,
-    providers: session.usable,
-    catalog,
-    selected: session.model,
-    onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
-  });
+  // 模型卡片的行（两行：模型名 + 厂商）与左栏（全部 / 各厂商）。
+  // 设置面那份「按厂商分组」的构造还在用，两边的参数口径（ctx 徽标、当前项）同源。
+  /**
+   * 宽度尺：**不过滤**的那一份（与上面同一套构造，只把 scope 换成「全部」）。
+   * 卡片按它定宽，所以左栏怎么筛宽、高、位置都不动。
+   */
 
   // 思考档菜单按模型真实支持集显示（官方档位表：glm-5.3 只有 low/high/max，
   // claude 按型号——fable 系关不掉思考、opus-4-6 没有 xhigh——写死档位只会递增假选项）。来源三级
@@ -1677,7 +1827,7 @@ function ComposerBar(props: { session: ChatSession }) {
   // 逐档判断，不是全局锁：glm-5.3 支持 low/high/max（不含 minimal），全局判
   // 「不含 minimal」会把整个菜单错锁成全灰——那是 reasoning:false 模型（支持集
   // 真只有 off）才有的形状。不支持的档单独禁用并说明，可用的照常可选
-  const thinkingItems: MenuItem[] = thinkingMenuLevels.map((value) => {
+  const thinkingItems: MenuItem[] = thinkingMenuLevels.map((value): MenuItem => {
     const unavailable = thinkingSupported !== null && !thinkingSupported.includes(value);
     return {
       id: value,
@@ -1692,6 +1842,39 @@ function ComposerBar(props: { session: ChatSession }) {
     <>
       <Menu
         items={scopeItems}
+        // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
+        // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
+        panelMaxHeight={520}
+        panelMaxWidth={640}
+        // 「去哪」与「往清单里加东西」是两件事：动作收进底栏，发卡线分隔（同模型卡片的「配置模型」）
+        footer={(close) => (
+          <>
+            <button
+              type="button"
+              className="option-row"
+              style={menuFooterRowStyle}
+              onClick={() => {
+                close();
+                setNamingWorkspace(true);
+              }}
+            >
+              <Icon name="plus" size={13} strokeWidth={1.8} />
+              <span>{t.sidebar.newWorkspace}</span>
+            </button>
+            <button
+              type="button"
+              className="option-row"
+              style={menuFooterRowStyle}
+              onClick={() => {
+                close();
+                session.addWorkspace();
+              }}
+            >
+              <Icon name="folder-plus" size={13} strokeWidth={1.8} />
+              <span>{t.sidebar.addFolder}</span>
+            </button>
+          </>
+        )}
         trigger={({ open, toggle }) =>
           namingWorkspace ? (
             // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
@@ -1741,10 +1924,25 @@ function ComposerBar(props: { session: ChatSession }) {
           </Chip>
         )}
       />
-      {modelItems.length > 0 && (
-        <Menu
-          items={modelItems}
-          searchable
+      {session.usable.length > 0 && (
+        <ModelPickerMenu
+          t={t}
+          providers={session.usable}
+          catalog={catalog}
+          selected={session.model}
+          starred={props.starredModels}
+          onToggleStar={props.onToggleStarModel}
+          onSelect={(providerId, modelId) => session.chooseModel(providerId, modelId)}
+          // 底部固定行：卡片会筛掉没配 key 的厂商，这行是唯一能说清「别家不是不存在」的地方
+          footer={(close) =>
+            modelCardFooter({
+              t,
+              onConfigure: () => {
+                close();
+                props.onOpenProviders();
+              },
+            })
+          }
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
@@ -1803,8 +2001,10 @@ function UsageRing(props: { session: ChatSession }) {
   const busy = session.phase !== "idle";
   // 包月制的 provider 不显示花费——那个数字是拿 API 价目表算的估价，不是他的账单。
   // 认不得的 id（自建网关）一律当按量算：藏起真实花费比多一行估价更坏。
-  const billing =
-    session.model !== null && isPlanBilling(session.model.providerId) ? "plan" : "metered";
+  // 按目录条目判（同一家的第二个实例也认得出），所以要拿到这条会话用的 provider 本身
+  const provider =
+    session.model === null ? undefined : session.usable.find((item) => item.id === session.model?.providerId);
+  const billing = provider !== undefined && isPlanBilling(provider) ? "plan" : "metered";
   /**
    * 压缩走两段式（与侧栏 Delete 同一副骨架，wafo 2026-09-03 裁决）：
    * 用户意愿优先——不再拿「内容太少」当拒绝理由，改说「价值不大」再让他确认。
@@ -1829,7 +2029,7 @@ function UsageRing(props: { session: ChatSession }) {
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
   const items: MenuItem[] = [
-    ...usageBreakdown(stats, t, billing).map((row) => ({
+    ...usageBreakdown(stats, t, billing).map((row): MenuItem => ({
       id: row.label,
       label: row.label,
       hint: row.value,
@@ -1887,7 +2087,7 @@ function UsageRing(props: { session: ChatSession }) {
           if (!next) setConfirming(false);
         }}
         trigger={({ open, toggle }) => (
-          <Chip active={open} onClick={toggle} aria-label={ring.label}>
+          <Chip active={open} onClick={toggle} ariaLabel={ring.label}>
             <Ring ring={ring} />
           </Chip>
         )}
@@ -1964,11 +2164,51 @@ function EntryView(props: {
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
   skills: SkillMeta[];
+  /** 轮尾卡：会话 cwd（路径显示用）与被撤销的轮 id 集 */
+  cwd: string | null;
+  undoneTurnIds: ReadonlySet<string>;
+  /** 单轮撤销入口（轮尾卡的 Undo）；busy 时卡上按钮自己禁用 */
+  onUndoTurn: (turnId: string) => void;
+  /** 会话在跑 / 排队非空：撤销入口禁用的真值在 ChatViewBody 算好传入 */
+  actionsBusy: boolean;
+  /** 回退入口（user 气泡的「回到这里」）；undefined = 不给（子会话面板等只读视图） */
+  onRevertTo?: (messageId: string) => void;
+  /** 只读（无 pi 本子）：回退 / 撤销不可用 */
+  readOnly?: boolean;
+  /** 轮尾卡文件行的「在面板里看」（原样转发给 FileTurnCard） */
+  onOpenReviewAt?: (path: string) => void;
+  /** 产物打开按钮的会话对账（主进程白名单按它查） */
+  sessionId: string;
 }) {
   const t = useT();
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
-  if (entry.kind === "user") return <UserBubble item={entry.item} />;
+  if (entry.kind === "user") {
+    return (
+      <UserBubble
+        item={entry.item}
+        onRevertTo={props.onRevertTo}
+        revertDisabled={props.actionsBusy || props.readOnly === true}
+        revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
+      />
+    );
+  }
+  if (entry.kind === "fileTurn") {
+    return (
+      <FileTurnCard
+        record={entry.record}
+        cwd={props.cwd}
+        undone={props.undoneTurnIds.has(entry.record.id)}
+        busy={props.actionsBusy}
+        onUndo={props.onUndoTurn}
+        onOpenFile={props.onOpenReviewAt}
+        sessionId={props.sessionId}
+      />
+    );
+  }
+  if (entry.kind === "revertMark") {
+    return <RevertMarkView record={entry.record} cwd={props.cwd} onOpenFile={props.onOpenReviewAt} />;
+  }
   if (entry.kind === "channelMark") {
     // 子会话自己流里的 task 标记：渲染成完整任务卡而不是一行胶囊（子会话
     // 2026-09-23 裁决①）——父给子的第一条任务是这条会话最该显眼的内容。
@@ -2063,6 +2303,16 @@ function TurnRollupLine(props: {
   channel: ChannelViewContext;
   /** 透传给成员 EntryView（read SKILL.md 徽标用） */
   skills: SkillMeta[];
+  /** 轮尾卡（成员里可能有 fileTurn 单元——折叠段尾钉着的卡不进 members，但
+   * 通道工具切块后的段内仍可能夹着）：与 TranscriptColumn 同名 props 原样转发 */
+  cwd: string | null;
+  undoneTurnIds: ReadonlySet<string>;
+  onUndoTurn: (turnId: string) => void;
+  actionsBusy: boolean;
+  /** 轮尾卡文件行的「在面板里看」（成员里的 fileTurn 单元用，原样转发） */
+  onOpenReviewAt?: (path: string) => void;
+  /** 产物打开按钮的会话对账 */
+  sessionId: string;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2124,6 +2374,12 @@ function TurnRollupLine(props: {
               carryoverCards={props.carryoverCards}
               channel={props.channel}
               skills={props.skills}
+              cwd={props.cwd}
+              undoneTurnIds={props.undoneTurnIds}
+              onUndoTurn={props.onUndoTurn}
+              actionsBusy={props.actionsBusy}
+              onOpenReviewAt={props.onOpenReviewAt}
+              sessionId={props.sessionId}
             />
           ))}
         </div>
@@ -2138,7 +2394,14 @@ function TurnRollupLine(props: {
  * 用户气泡与模型回复（MarkdownBlock）刻意是两套渲染。
  * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
  */
-function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) {
+function UserBubble(props: {
+  item: Extract<TranscriptItem, { role: "user" }>;
+  /** 「回到这里」：回退到这条消息之前（含原文放回输入框）；undefined = 不给入口 */
+  onRevertTo?: (messageId: string) => void;
+  /** 运行中 / 排队非空 / 只读：入口禁用（tooltip 说明） */
+  revertDisabled: boolean;
+  revertDisabledWhy?: string;
+}) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
@@ -2363,6 +2626,26 @@ function UserBubble(props: { item: Extract<TranscriptItem, { role: "user" }> }) 
         >
           <Icon name={copied ? "check" : "copy"} size={12} strokeWidth={1.8} />
         </button>
+        )}
+        {props.onRevertTo !== undefined && (
+          <button
+            type="button"
+            title={props.revertDisabled ? (props.revertDisabledWhy ?? t.chat.revertHere) : t.chat.revertHere}
+            aria-label={t.chat.revertHere}
+            disabled={props.revertDisabled}
+            onClick={() => props.onRevertTo?.(props.item.id)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: 3,
+              border: "none",
+              background: "none",
+              color: "var(--color-text-tertiary)",
+              cursor: props.revertDisabled ? "default" : "pointer",
+            }}
+          >
+            <Icon name="rotate-ccw" size={12} strokeWidth={1.8} />
+          </button>
         )}
       </div>
     </div>
@@ -3155,10 +3438,14 @@ function DelegateToolLine(props: {
     return <DelegateCardView card={null} status="running" taskPreview={taskPreview} />;
   }
   const summary = props.channel.channelSummaries.get(card.childId);
-  // 状态优先读通道摘要的终态（done/failed/waiting）；否则看子会话在 renderer
+  // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
   // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
+  // stopped 不读的话，用户终止过的子会话在派出卡上会退回「空闲」（验收发现）
   const status: DelegateCardStatus =
-    summary?.status === "done" || summary?.status === "failed" || summary?.status === "waiting"
+    summary?.status === "done" ||
+    summary?.status === "failed" ||
+    summary?.status === "waiting" ||
+    summary?.status === "stopped"
       ? summary.status
       : props.channel.childPhaseOf(card.childId) !== "idle"
         ? "running"
@@ -3322,35 +3609,14 @@ function DiffView(props: { diff: string }) {
   const entries = editDiffEntries(parseEditDiff(props.diff));
   return (
     <div
-      className="scroll"
       style={{
-        maxHeight: 320,
-        overflow: "auto",
         marginLeft: RAIL_X,
         paddingLeft: "var(--space-2)",
         borderTop: "1px solid var(--color-border-subtle)",
         borderLeft: RAIL_LINE,
-        fontFamily: "var(--font-family-mono)",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: 1.6,
       }}
     >
-      {entries.map((entry, index) =>
-        entry.kind === "pair" ? (
-          <Fragment key={index}>
-            <DiffRow kind="del" lineNum={entry.removed.lineNum}>
-              {intraSpans(entry.tokens.removed, "del")}
-            </DiffRow>
-            <DiffRow kind="add" lineNum={entry.added.lineNum}>
-              {intraSpans(entry.tokens.added, "add")}
-            </DiffRow>
-          </Fragment>
-        ) : (
-          <DiffRow key={index} kind={entry.row.kind} lineNum={entry.row.lineNum}>
-            {entry.row.text === "" ? " " : entry.row.text}
-          </DiffRow>
-        ),
-      )}
+      <DiffBody entries={entries} maxHeight={320} />
     </div>
   );
 }
@@ -3364,60 +3630,6 @@ const LINE_NUM_COLUMN = {
   opacity: 0.7,
   fontVariantNumeric: "tabular-nums",
 } satisfies React.CSSProperties;
-
-/** diff 行两列 grid：行号（gutter——细分隔线 + 最低调的褪色，只作定位不作内容）| 正文。
- * 深浅三级：改动行正文 primary（第一眼）> 上下文正文 secondary > 行号（tertiary 再降
- * 不透明度）；增删整行淡底色 */
-function DiffRow(props: { kind: "add" | "del" | "ctx"; lineNum: string; children: ReactNode }) {
-  const { kind } = props;
-  return (
-    <div
-      style={{
-        display: "grid",
-        // 轨道要连 LINE_NUM_COLUMN 的横向内边距一起算进去，否则三位数行号顶穿竖线挤进正文
-        gridTemplateColumns: "calc(4ch + var(--space-2) + var(--space-1)) 1fr",
-        background:
-          kind === "add"
-            ? "var(--color-success-soft)"
-            : kind === "del"
-              ? "var(--color-danger-soft)"
-              : undefined,
-      }}
-    >
-      <span style={LINE_NUM_COLUMN}>{props.lineNum}</span>
-      <span
-        style={{
-          padding: "0 var(--space-2) 0 var(--space-2)",
-          whiteSpace: "pre-wrap",
-          overflowWrap: "anywhere",
-          color: kind === "ctx" ? "var(--color-text-secondary)" : "var(--color-text-primary)",
-        }}
-      >
-        {props.children}
-      </span>
-    </div>
-  );
-}
-
-/** 词级对比 token → span；changed 片段按角色加底（pi inverse 的 DOM 等价物） */
-function intraSpans(tokens: readonly IntraToken[], kind: "del" | "add") {
-  return tokens.map((token, index) =>
-    token.changed ? (
-      <span
-        key={index}
-        style={{
-          backgroundColor: kind === "add" ? "var(--color-success)" : "var(--color-danger)",
-          color: "var(--color-bg-panel)",
-          borderRadius: 2,
-        }}
-      >
-        {token.text}
-      </span>
-    ) : (
-      <span key={index}>{token.text}</span>
-    ),
-  );
-}
 
 /**
  * 文件内容视图（write 写入的正文）：行号列 + shiki 高亮正文，视觉语言与 DiffView

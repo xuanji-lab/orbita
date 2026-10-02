@@ -10,11 +10,13 @@
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
+import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillBlock } from "./skill.ts";
 import { splitUserTextBlocks } from "./prompt-attachments.ts";
+import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -78,9 +80,12 @@ export interface ChannelMarkRecord {
   peerId: string;
   /** 指向的通道消息 id（`ChannelMessage.id`） */
   messageId: string;
-  /** 冷数据，免得画一行标记还要先读通道：谁发的、什么类型 */
+  /** 冷数据，免得画一行标记还要先读通道：谁发的 */
   from: "parent" | "child";
-  kind: "task" | "reply" | "question" | "progress" | "done" | "failed";
+  /** 什么类型。跟着 ChannelMessageKind 走（stop 理论上不出现——标记只落在收到
+   * 投递的一侧，而 stop 不投递给任何人；但 parseChannelPrompt 认识它，类型上
+   * 诚实比防御性收窄好） */
+  kind: ChannelMessageKind;
   timestamp: number;
 }
 
@@ -94,15 +99,30 @@ export function isChannelMarkRecord(raw: unknown): raw is ChannelMarkRecord {
     typeof value["messageId"] === "string" &&
     (value["from"] === "parent" || value["from"] === "child") &&
     typeof value["kind"] === "string" &&
-    ["task", "reply", "question", "progress", "done", "failed"].includes(value["kind"]) &&
+    (CHANNEL_MESSAGE_KINDS as readonly string[]).includes(value["kind"]) &&
     typeof value["timestamp"] === "number"
   );
 }
 
 /**
- * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）、压缩界碑或通道标记（我们的）。
+ * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）、压缩界碑、通道标记
+ * 或文件账三件（`revert.ts`：轮尾文件账 / 回退界碑 / 单轮撤销标记）。
  */
-export type SessionRecord = TranscriptItem | CompactedRecord | ChannelMarkRecord;
+export type SessionRecord =
+  | TranscriptItem
+  | CompactedRecord
+  | ChannelMarkRecord
+  | FileTurnRecord
+  | RevertRecord
+  | UndoRecord;
+
+/**
+ * 渲染层的合并记录：SessionRecord 外加轮尾账的**视图形**（FileTurnView——剥掉快照
+ * 引用的路径 + 统计）。renderer 的实时事件（fileTurnView）与盘上种子（FileTurnRecord，
+ * 视图的超集）在这里汇流；主进程的读者（load / export / branch）只见 SessionRecord，
+ * 不认识视图形。
+ */
+export type TranscriptRecord = SessionRecord | FileTurnView;
 
 /**
  * 逐字段校验，坏值判 false。readLog 靠它分流：**坏掉的 compacted 行按坏行跳过**，
@@ -610,6 +630,16 @@ export function transcriptToMarkdown(
     if (isChannelMarkRecord(item)) {
       // 通道标记暂不渲染（真正的标记 UI 是后续 PR）。正文只有一份、在通道账本里，
       // 导出也不该在这里捏一行假的——要看通道往来，去读那份账本
+      continue;
+    }
+    // 文件账三件（revert.ts）不是对话：轮尾账与撤销标记跳过；回退界碑落一行
+    // 「此后已回退」的说明——存档的人要知道再往前的记录是被回退折掉的
+    if (item.role === "file-turn" || item.role === "undo") continue;
+    if (item.role === "revert") {
+      parts.push("---");
+      parts.push(
+        `**[Reverted]** (${item.restored.length} file(s) restored · conversation below this point was rolled back and re-run)`,
+      );
       continue;
     }
     if (item.role === "tool") {

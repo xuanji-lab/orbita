@@ -380,7 +380,7 @@ export function MigrationView(props: {
               grouped.total > 0 && (
                 <span className="mg-tools">
                   <Menu
-                    items={(Object.keys(t.migration.ranges) as RangeFilter[]).map((range) => ({
+                    items={(Object.keys(t.migration.ranges) as RangeFilter[]).map((range): MenuItem => ({
                       id: range,
                       label: t.migration.ranges[range],
                       checked: filters.range === range,
@@ -420,7 +420,7 @@ export function MigrationView(props: {
                           label: t.migration.sources[group.source],
                           header: true,
                         },
-                        ...group.roots.map((entry) => ({
+                        ...group.roots.map((entry): MenuItem => ({
                           id: entry.root,
                           label: abbreviateHome(entry.root, home),
                           hint: t.migration.dataRootOnlyHere(entry.onlyHere),
@@ -1018,7 +1018,7 @@ function GroupBlock(props: {
   const { group } = props;
   const picked = group.rows.filter((row) => props.selected.has(row.item.sourceFile)).length;
   const subSessions = group.rows.reduce((sum, row) => sum + row.subSessions, 0);
-  const destinationItems: MenuItem[] = destinationOptions(group, props.workspaces, t).map((option, index) => ({
+  const destinationItems: MenuItem[] = destinationOptions(group, props.workspaces, t).map((option, index): MenuItem => ({
     id: `${index}`,
     label: option.label,
     ...(option.hint === undefined ? null : { hint: option.hint }),

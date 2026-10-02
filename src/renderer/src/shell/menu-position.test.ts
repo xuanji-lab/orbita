@@ -1,7 +1,7 @@
 /**
  * 菜单定位口径的边界。这些规则会被争论，所以钉住：
- * 默认向下、下方装不下且上方装得下才翻上去、横向宁可不对齐也不出屏、
- * 锚点整个出视口就不该再跟着走（关门信号）。
+ * 默认向下、下方装不下且上方装得下才翻上去、上下都装不下就挑空间大的一侧并封顶、
+ * 横向宁可不对齐也不出屏、锚点整个出视口就不该再跟着走（关门信号）。
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -35,13 +35,41 @@ describe("placeMenu —— 默认向下与翻转", () => {
     assert.equal(placed.top, 780 - 6 - 120);
   });
 
-  test("上下都装不下：宁向下不悬空——菜单至少锚在下方", () => {
-    // 视口 100 高，锚点在 50：下方 44px、上方 44px 都装不下 120 的菜单
+  test("上下都装不下：挑空间大的那一侧，并把那一侧的空间交给 maxHeight 封顶", () => {
+    // 视口 100 高、锚点 50–60、菜单 120：下方只剩 26px（100 − 66 − 8）、上方 36px（50 − 6 − 8）
     const placed = placeMenu(anchor({ top: 50, bottom: 60 }), menu, "start", {
       width: 1200,
       height: 100,
     });
-    assert.equal(placed.top, 66);
+    assert.equal(placed.visible, true);
+    assert.equal(placed.maxHeight, 36); // 上方那侧
+    assert.equal(placed.top, 8); // 封顶之后顶边落在 MENU_EDGE
+  });
+});
+
+describe("placeMenu —— 封顶：maxHeight 是所选那一侧真正剩下的空间", () => {
+  test("向下且装得下：maxHeight = 锚点下方到视口底（不影响高度）", () => {
+    const placed = placeMenu(anchor(), menu, "start", viewport);
+    assert.equal(placed.top, 626);
+    assert.equal(placed.maxHeight, 800 - 626 - 8);
+  });
+
+  test("向上：maxHeight = 锚点上方到视口顶", () => {
+    const placed = placeMenu(anchor({ top: 780, bottom: 790 }), menu, "start", viewport);
+    assert.equal(placed.top, 780 - 6 - 120);
+    assert.equal(placed.maxHeight, 780 - 6 - 8);
+  });
+
+  test("右侧贴视口底：maxHeight 只算到边（菜单比余量大就内部滚）", () => {
+    const placed = placeMenu(anchor({ top: 760, bottom: 792, left: 12, right: 280 }), menu, "end", viewport, "right");
+    assert.equal(placed.top, 800 - 120 - 8);
+    assert.equal(placed.maxHeight, 800 - (800 - 120 - 8) - 8);
+  });
+
+  test("菜单比视口还高：保住顶边，maxHeight 是整条视口光去两道边", () => {
+    const placed = placeMenu(anchor({ top: 40, bottom: 72, left: 12, right: 280 }), { width: 200, height: 900 }, "end", viewport, "right");
+    assert.equal(placed.top, 8);
+    assert.equal(placed.maxHeight, 800 - 8 - 8);
   });
 });
 
@@ -99,6 +127,7 @@ describe("placeMenu —— 锚点出视口就是关门信号", () => {
   test("锚点整个滚出上方（bottom ≤ 0）：visible=false", () => {
     const placed = placeMenu(anchor({ top: -80, bottom: -60 }), menu, "start", viewport);
     assert.equal(placed.visible, false);
+    assert.equal(placed.maxHeight, 0);
   });
 
   test("锚点整个滚出下方（top ≥ 视口高）：visible=false", () => {

@@ -23,6 +23,12 @@
 :root {
   --option-hover-bg: var(--color-bg-hover);
   --option-active-bg: var(--color-bg-active);
+  /*
+   * 两行的行（模型卡片：模型名 + 厂商副行）的高度。
+   * 卡片是**定高**的（高 = 外壳 + N 行），所以这个值也是「一行多少钱」的那个单价——
+   * 写在一处，Menu 那边量一行就够，不把 48 再拄一遍（2026-10-01）。
+   */
+  --menu-row-height: calc(var(--control-height-md) + var(--space-4));
 }
 
 /*
@@ -100,6 +106,44 @@
   background: transparent;
   color: var(--color-text-tertiary);
   cursor: not-allowed;
+}
+
+/* 回退 / 撤销确认框的执行键（危险档）：红字 + 发丝描边，hover 铺 danger-soft
+   （设计系统「危险红字、hover --color-danger-soft」；状态化样式归 CSS，不进组件） */
+/*
+ * 回退预演（用户选定的形态 D）：切点之后要撤回的往来变淡加删除线、不可交互；
+ * 其余条目的包裹层 display: contents，布局与不预演时逐像素相同。
+ * doomed 层是 grid 并继承父级 gap——包裹进来的「条目 + 分支行」间距不变。
+ */
+.revert-keep {
+  display: contents;
+}
+.revert-doomed {
+  display: grid;
+  gap: inherit;
+  opacity: 0.4;
+  text-decoration: line-through;
+  text-decoration-color: var(--color-text-tertiary);
+  pointer-events: none;
+  user-select: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.revert-cut {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+.revert-cut::before,
+.revert-cut::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-strong);
+}
+.revert-confirm:hover:not(:disabled) {
+  background: var(--color-danger-soft);
 }
 
 /* IconButton 的 variant="soft"：静止态填 --color-bg-muted；hover / pressed / disabled
@@ -225,6 +269,16 @@
 }
 
 /*
+ * Sub-sessions 面板会话层的控制行（SubSessionsPanel.tsx 的 SubSessionControls）：
+ * 芯片允许被 flex 压缩（同 .composer-bottom-bar 的局部豁免与理由，不外溢到别的
+ * 消费者——侧栏筛选行还指着 chip 默认的「宁溢不缩」）：面板 320px 起，档位（84）+
+ * 模型名 + 终止并排，模型名随时可省略号截断（chip-label 自常 ellipsis）。
+ */
+.subsession-controls .chip {
+  min-width: 0;
+}
+
+/*
  * ModeChip（Sidebar 的模式 tab，role="tab"）：静止态就是主字色，不必等 hover 才升级——
  * 不走安静控件默认的「secondary 起步」。选中同样优先于禁用（同 Chip）。
  */
@@ -325,6 +379,51 @@
   background: transparent;
   color: var(--color-text-tertiary);
   font-weight: var(--weight-regular);
+}
+
+/*
+ * 行右端带独立控件（今天的唯一消费者是模型卡片的星标）的行。
+ *
+ * 控件是行按钮的**兄弟**（button 不能嵌 button），所以底不能只画在行按钮上：
+ * 鼠标落在星上时也得亮整行——靶子是「这一行」，不是行里的某一格。
+ * 选中盖过 hover 的取舍同 .option-row：持久状态压临时状态，规则放最后。
+ */
+.menu-row-tail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: var(--transition-hover);
+}
+.menu-row-tail:hover,
+.menu-row-tail[data-cursor="true"] {
+  background: var(--option-hover-bg);
+}
+.menu-row-tail[data-current="true"],
+.menu-row-tail[data-current="true"]:hover {
+  background: var(--option-active-bg);
+}
+/* 底在这一层，里面的行按钮不再自己画（否则只有左半边亮） */
+.menu-row-tail > .option-row,
+.menu-row-tail > .option-row:hover,
+.menu-row-tail > .option-row[data-cursor="true"],
+.menu-row-tail > .option-row[aria-selected="true"] {
+  background: transparent;
+}
+
+/*
+ * 行右端的星标：颜色与浮出规则**全会话行那一颗**（Sidebar 的 meta.starred）：
+ * 已星标 = accent 常显（用户亲手点亮的标记，靠颜色一眼找到是它的全部目的），
+ * 未星标 = tertiary 描边，只在悬停/键盘聚焦时浮出。
+ *
+ * 这里不用裸 `.reveal` 配后代选择器，而是挂在 `.menu-row-tail` 上：
+ * 同理 styles.css 里那个公头/会话行互点亮的真回归（一个块里出现多颗 .reveal 时，
+ * 粗选择器会连带点亮它们）。
+ */
+.menu-row-tail:hover .reveal,
+.menu-row-tail:has(:focus-visible) .reveal {
+  opacity: 1;
 }
 
 *,

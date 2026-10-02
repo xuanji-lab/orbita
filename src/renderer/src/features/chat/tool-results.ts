@@ -18,7 +18,8 @@ import { diffWords } from "diff";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
 import type { ChannelMessageKind } from "@shared/channel";
-import type { CompactedRecord, SessionRecord } from "@shared/session";
+import type { CompactedRecord, SessionRecord, TranscriptRecord } from "@shared/session";
+import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
@@ -64,7 +65,9 @@ export type RenderUnit =
       key: string;
       mark: { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind };
       timestamp: number;
-    };
+    }
+  | { kind: "fileTurn"; key: string; record: FileTurnView }
+  | { kind: "revertMark"; key: string; record: RevertRecord };
 
 /** toolCall 单元的别名：分组函数的输入输出都说它。 */
 export type ToolCallUnit = Extract<RenderUnit, { kind: "toolCall" }>;
@@ -86,7 +89,7 @@ export type RenderEntry = RenderUnit | ToolGroupUnit;
  * （协议上不该发生，因为结果必然由一次调用产生），它就不会被显示。
  * 宁可如此，也不要为了兜这个不存在的情形，让正常路径多出一行冗余。
  */
-export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUnit[] {
+export function flattenRenderUnits(records: readonly TranscriptRecord[]): RenderUnit[] {
   const units: RenderUnit[] = [];
   for (const record of records) {
     if (record.role === "compacted") {
@@ -104,6 +107,17 @@ export function flattenRenderUnits(records: readonly SessionRecord[]): RenderUni
       continue;
     }
     if (record.role === "tool") continue;
+    // 文件账三件（revert.ts）：轮尾账自成卡片、回退界碑自成标记行（FileTurnCard）；
+    // undo 记录不产单元——它是轮尾卡上的徽标，由 ChatView 按 turnId 对回去
+    if (record.role === "file-turn") {
+      units.push({ kind: "fileTurn", key: record.id, record });
+      continue;
+    }
+    if (record.role === "revert") {
+      units.push({ kind: "revertMark", key: record.id, record });
+      continue;
+    }
+    if (record.role === "undo") continue;
     if (record.role === "user") {
       // 实时流里的通道消息：重载前 recorder 还没来得及把它落成 channel-mark 记录，
       // 首个 text 块能解出信封就按同一条判定画成标记行、不产 user 单元——
@@ -316,13 +330,21 @@ function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
  * 它顶替的正是 pi 本子里的一条 user 消息，不该被收进折叠。
  */
 function isTurnContent(entry: RenderEntry): entry is TurnMemberEntry {
-  return entry.kind !== "user" && entry.kind !== "compacted" && entry.kind !== "channelMark";
+  return (
+    entry.kind !== "user" &&
+    entry.kind !== "compacted" &&
+    entry.kind !== "channelMark" &&
+    entry.kind !== "fileTurn" &&
+    entry.kind !== "revertMark"
+  );
 }
 
 function entryTimestamp(entry: RenderEntry): number | null {
   if (entry.kind === "user") return entry.item.timestamp;
   if (entry.kind === "compacted") return entry.record.timestamp;
   if (entry.kind === "toolGroup") return entry.calls[0]?.timestamp ?? null;
+  if (entry.kind === "fileTurn") return entry.record.timestamp;
+  if (entry.kind === "revertMark") return entry.record.timestamp;
   return entry.timestamp;
 }
 
@@ -366,7 +388,13 @@ export function groupTurns(
   for (const entry of entries) {
     // 通道标记与 user 同级：它顶替的正是 pi 本子里的一条 user 消息（子会话
     // 2026-09-23 不变量），因此同样开新段、不进折叠。
-    if (entry.kind === "user" || entry.kind === "compacted" || entry.kind === "channelMark" || segments.length === 0) {
+    if (
+      entry.kind === "user" ||
+      entry.kind === "compacted" ||
+      entry.kind === "channelMark" ||
+      entry.kind === "revertMark" ||
+      segments.length === 0
+    ) {
       segments.push([entry]);
     } else {
       segments[segments.length - 1]?.push(entry);
@@ -401,6 +429,7 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
   const view: TurnViewEntry[] = [];
   let chunk: RenderEntry[] = [];
   const pinned: RenderEntry[] = [];
+  const tailCards: RenderEntry[] = [];
   const flushChunk = () => {
     view.push(...foldChunk(chunk, results));
     chunk = [];
@@ -408,6 +437,13 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
   for (const entry of segment) {
     if (isPinnedToolCall(entry)) {
       pinned.push(entry);
+      continue;
+    }
+    // 轮尾文件卡钉在段尾：不管这一轮改文件的动作发生在哪一步，落定视图统一
+    // 「回答在前、文件账殿后」——它是这一轮的产物小结，永远跟着轮走（show_image
+    // 钉在结尾回复之前，文件卡钉在最后：画廊是正文的一部分，账是结算行）
+    if (entry.kind === "fileTurn") {
+      tailCards.push(entry);
       continue;
     }
     if (isChannelToolCall(entry)) {
@@ -418,6 +454,7 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
     chunk.push(entry);
   }
   flushChunk();
+  if (tailCards.length > 0) view.push(...tailCards);
   if (pinned.length === 0) return view;
   // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
   let insertAt = view.length;
@@ -610,7 +647,7 @@ export function thinkingPreview(text: string): string {
  * 其余情况（idle、压缩中、末条是 user/tool/界碑、末块不是 thinking）都返回 null。
  */
 export function streamingThinkingKey(
-  records: readonly SessionRecord[],
+  records: readonly TranscriptRecord[],
   turnActive: boolean,
 ): string | null {
   if (!turnActive) return null;
@@ -999,7 +1036,7 @@ export function liveTailLines(text: string, keep = 200): string {
  * 锚点不受影响。
  */
 export function branchAnchorIds(
-  records: readonly SessionRecord[],
+  records: readonly TranscriptRecord[],
   toolResults: ToolResultIndex,
   turnActive = false,
 ): ReadonlySet<string> {
@@ -1019,6 +1056,12 @@ export function branchAnchorIds(
       continue;
     }
     if (record.role === "tool") continue; // 结果归位到调用行，不构成边界
+    // 文件账三件（revert.ts）：轮尾账跟着回答落定，确认锚点；界碑 / 撤销不开新轮
+    if (record.role === "file-turn") {
+      confirm();
+      continue;
+    }
+    if (record.role === "revert" || record.role === "undo") continue;
     if (record.status === "streaming") {
       candidate = null; // 还没完整——这一轮没有可分支的「最终输出」
       continue;
@@ -1204,6 +1247,9 @@ export function parseDiffLines(diff: string): ParsedDiff {
         path = stripPathPrefix(line.slice(4));
         continue;
       }
+      // 第一个 hunk 之前的其余行都是头部元数据（`Index:`、`=====` 分隔线、`index abc..def`、
+      // `new file mode`）——不是正文。以前漏到正文里，jsdiff 的 `=====` 被画成第 0 行（实机）
+      continue;
     }
     if (line.startsWith("\\")) {
       rows.push({ kind: "meta", oldLine: null, newLine: null, text: line });

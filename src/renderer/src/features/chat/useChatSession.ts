@@ -63,6 +63,7 @@ import {
 } from "./carryover-parse.ts";
 import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.ts";
 import {
+  childSessions,
   rootSessions,
   type Carryover,
   type ChannelMarkRecord,
@@ -70,6 +71,8 @@ import {
   type SessionCompletion,
   type SessionMeta,
 } from "@shared/session";
+import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
+import { splitUserTextBlocks } from "@shared/prompt-attachments";
 import type { Workspace } from "@shared/workspace";
 import type { Messages } from "../../messages-en.ts";
 import { SKILL_NOT_FOUND_CODE, SKILL_UNREADABLE_CODE } from "../../../../shared/skill.ts";
@@ -114,6 +117,22 @@ function ipcErrorText(cause: unknown, t: Messages): string {
  * `buildTurn` 与会话级意图账本（它们按会话 id 记账，天然多槽安全）；
  * 查看槽的每轮 submit 显式带上自己槽内的 model / mode / cwd。
  */
+/** 回退确认框的全部状态：计划 + 要放回输入框的那条原文（含附件）。 */
+export interface RevertDialogState {
+  sessionId: string;
+  targetMessageId: string;
+  plan: RevertPlan;
+  /** 回退目标那条 user 记录（确认成功后原文放回输入框用） */
+  message: Extract<TranscriptItem, { role: "user" }>;
+}
+
+/** 撤销确认框的状态。 */
+export interface UndoDialogState {
+  sessionId: string;
+  turnId: string;
+  plan: UndoPlan;
+}
+
 export interface ChatSession {
   sessionId: string | null;
   transcript: readonly TranscriptItem[];
@@ -297,6 +316,30 @@ export interface ChatSession {
    * 解析失败不再只留一句「已标完成」就完事——那是把失败变成死胡同。
    */
   retryClosingScan: (() => void) | null;
+  /** 轮尾文件账（fileTurn 事件 + 盘上种子）——轮尾卡片的数据源 */
+  fileTurns: readonly FileTurnView[];
+  /** 回退界碑（盘上种子）——「已回退」标记行与还原卡 */
+  reverts: readonly RevertRecord[];
+  /** 撤销记录（盘上种子）——轮尾卡的「已撤销」徽标 */
+  undos: readonly UndoRecord[];
+  /**
+   * 「回到这里」入口（user 气泡）：拉回退计划并弹确认框。确认后走 confirmRevert。
+   * 原文（含附件）放回输入框是 executeRevert 成功后的动作，见 confirmRevert。
+   */
+  revertToMessage: (messageId: string) => void;
+  /** 确认框正在展示的回退计划；null = 无框 */
+  revertDialog: RevertDialogState | null;
+  /** 回退在途：确认框转圈、双提交防抖 */
+  revertBusy: boolean;
+  confirmRevert: () => void;
+  cancelRevert: () => void;
+  /** 轮尾卡的撤销入口：拉撤销计划并弹确认框 */
+  undoTurn: (turnId: string) => void;
+  undoDialog: UndoDialogState | null;
+  /** 撤销在途 */
+  undoBusy: boolean;
+  confirmUndo: () => void;
+  cancelUndo: () => void;
   send: () => void;
   /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
   sendText: (text: string) => void;
@@ -322,9 +365,16 @@ export interface ChatSession {
 /** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */
 interface ViewHandle {
   readonly sessionRef: Readonly<{ current: string | null }>;
+  /** 正在看的会话 id（含盘上打开、未唤醒的：sessionRef 为 null、opened 在）。
+  * model / thinking 事件按它路由——盘上打开的会话切模型后事件可能要几秒才回
+  * （agent 进程冷启动），期间任何一次 openSession 都拿旧 meta 把 chip 播种回去，
+  * 迟到的事件必须能纠回正看着的槽 */
+  readonly viewedIdRef: Readonly<{ current: string | null }>;
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
   alignThinking(event: { level: PiThinkingLevel }): void;
+  /** 档位被父会话切档联动改了（主进程已落 meta / runtime）：mode 芯片对齐 */
+  alignMode(mode: PermissionMode): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
   /** 正开着的那条换了归属工作区：meta 与作用域芯片跟着变 */
@@ -397,6 +447,15 @@ export interface SessionEngine {
       thinkingLevel?: ThinkingLevel;
     },
   ): void;
+  /**
+   * 子会话档位联动（renderer 侧）：用户切父会话档时，主进程已把子会话的 runtime
+   * 账与 meta 一起切（applyModeCascade，agent 域）；这里同步三样衍生状态——
+   *   ① 子会话的会话级意图覆写（intent 优先于 meta：buildTurn / openSession 都
+   *      先读它，不覆写的话下一轮 submit 仍带旧档、切回子会话 chip 也显示旧档）；
+   *   ② 会话列表缓存乐观更新（Sub-sessions 面板等直读这份缓存）；
+   *   ③ 正看着某条子会话的查看槽，mode 芯片对齐。
+   */
+  cascadeSubSessionModes(parentId: string, mode: PermissionMode): void;
   /**
    * 组装无状态开工上下文（AgentTurnContext 的主体）：meta 真值（cwd / 归属 /
    * pi 本子）+ 会话级意图。拿不出可用上下文时把错误写进引擎 error 并返回 null。
@@ -581,6 +640,31 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       map.set(id, { ...map.get(id), ...patch });
     },
     [],
+  );
+
+  /**
+   * 子会话档位联动（renderer 侧）。真值由主进程落盘，这里只同步衍生状态——
+   * 缓存里还没有的子会话（刚派出、列表未刷新）跳过：它没有旧 intent 可挡，
+   * meta 已被主进程切，buildTurn 拿到的就是新档。
+   */
+  const cascadeSubSessionModes = useCallback(
+    (parentId: string, mode: PermissionMode) => {
+      const children = childSessions(sessionsRef.current, parentId);
+      if (children.length === 0) return;
+      const childIds = new Set(children.map((child) => child.id));
+      const next = sessionsRef.current.map((meta) =>
+        childIds.has(meta.id) ? { ...meta, mode } : meta,
+      );
+      sessionsRef.current = next;
+      setSessions(next);
+      for (const child of children) {
+        rememberSessionIntent(child.id, { mode });
+        for (const view of views.current) {
+          if (view.sessionRef.current === child.id) view.alignMode(mode);
+        }
+      }
+    },
+    [rememberSessionIntent],
   );
 
   /**
@@ -784,19 +868,22 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 回填），排在下面 model 的 alignModel 前面调用不改变先后
         if (shouldRefreshSessions(event, sessionsRef.current)) refreshSessions();
         // 会话内模型切换成功（C-4，主进程已落 meta）：对齐**正看着那条**的槽——
-        // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽
+        // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽。按 viewedId
+        // （活会话 ?? 盘上打开的）路由：盘上打开的会话切模型后事件可能要几秒才回
+        // （agent 进程冷启动），期间 openSession 已拿旧 meta 把 chip 播种回去了，
+        // 迟到的事件要能纠回正看着的槽（2026-10-08 验收实测的竞态）
         if (event.type === "model") {
           for (const view of views.current) {
-            if (event.sessionId === view.sessionRef.current) {
+            if (event.sessionId === view.viewedIdRef.current) {
               view.alignModel(event);
               break;
             }
           }
         }
-        // 思考档真值（clamp 后事实）到了：对齐正看着那条的槽，芯片自我纠真
+        // 思考档真值（clamp 后事实）到了：同一条路由规则对齐
         if (event.type === "thinking") {
           for (const view of views.current) {
-            if (event.sessionId === view.sessionRef.current) {
+            if (event.sessionId === view.viewedIdRef.current) {
               view.alignThinking(event);
               break;
             }
@@ -1028,6 +1115,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     syncIntent,
     sessionIntent: sessionIntentRef,
     rememberSessionIntent,
+    cascadeSubSessionModes,
     buildTurn,
     modelMissingText,
     setError,
@@ -1258,10 +1346,19 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, []);
 
   /** 注册进引擎：model 事件路由、删除/移动会话通知、meta 同步都按这份名册来 */
+  // viewedId 镜像（事件路由用，见 ViewHandle.viewedIdRef）：「正看着哪条」＝活会话优先，
+  // 否则盘上打开的那条。注册只一次，闭包里的 opened 会陈旧，ref 永远新鲜
+  const viewedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    viewedIdRef.current = sessionId ?? opened?.id ?? null;
+  }, [sessionId, opened]);
   useEffect(() => {
     const handle: ViewHandle = {
       sessionRef,
+      viewedIdRef,
       alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
+      // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
+      alignMode: (mode) => setMode(mode),
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
       // 不认识就保持原样——意图档继续显示，下一轮事件再纠
       alignThinking: (event) => {
@@ -1915,6 +2012,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, opened, openSession],
   );
 
+
   /** 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底 */
   const newTask = useCallback(() => {
     reset();
@@ -1991,10 +2089,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
-   * 换模型（C-4）。**有活会话就地切**：命令发过去，成功经 `model` 事件回环对齐
-   * model state（不乐观——切换会失败：无 key、未知模型；失败红字说明，chip 不动）；
-   * 没活的（首页 / 盘上打开未唤醒）只改意图，下一条消息 submit 时生效——
-   * 换了却不发言就切走，会被 openSession 的 meta 播种冲掉，等于没换过（已裁决接受）。
+   * 换模型（C-4）。**选中哪条会话就切哪条**：本地即设（UI 即时）+ 命令发过去，
+   * 成功经 `model` 事件回环对齐；失败红字说明。
+   * 盘上打开、还没唤醒的旧会话（sessionRef 置空、opened 在）同样按会话记账并注入
+   * （2026-10-08 CDP 实测复现后修）：此前这里只改本地显示，选择既不落 meta 也不进
+   * 会话意图账，任何一次 openSession——包括再点一次同一行——都拿旧 meta 把 chip
+   * 播种回去，用户看到的就是「切了没同步」。runtime 的 setLedgerModel 本就为
+   * 「没在跑」的会话而设：校验 + `model` 事件回环落 meta，与活会话同一条真源。
+   * 换了不发言就切走会丢选择的旧裁决由此作废——现在选择当场落盘。
    * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
    *
    * 思考档跟着模型走（用户裁决 wafo 2026-09-23）：本槽没有会话（新任务槽）按
@@ -2011,12 +2113,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const supported = modelThinkingLevels(modelId, catalog);
       const switched =
         supported !== null && !supported.includes(thinkingLevel) ? defaultThinkingLevel(modelId, supported) : null;
-      const id = sessionRef.current;
+      // 盘上打开的旧会话按它的 id 记账与注入（理由见函数头）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {
-        // sessionRef 为 null 有两种：首页新任务槽（按「手选 > 默认」起档），与盘上打开
-        // 还没唤醒的旧会话（opened 不为 null——它有自己的档，按上面的规则只在不支持时改）
-        if (opened === null) applyNewTaskThinking(modelId);
-        else if (switched !== null) setThinkingLevelState(switched);
+        applyNewTaskThinking(modelId);
         return;
       }
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
@@ -2024,7 +2124,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       engine.rememberSessionIntent(id, { model: { providerId, modelId } });
       if (currentPhase() === "idle") {
         // 闲着就注入（校验 + 落 meta + model 事件回环）；跑着只改显示——
-        // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账
+        // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账。
+        // currentPhase 只认本槽活会话（sessionRef）：盘上打开的会话恒判 idle，
+        // 若它其实正在后台跑（通道投递开的轮），runtime 侧自然走 setSessionModel
+        // 的在跑路径——两条路都是正解
         void api.agent
           .setModel(id, providerId, modelId)
           .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
@@ -2036,23 +2139,29 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
 
   const changeMode = useCallback(
     (next: PermissionMode) => {
-      // 理由同 chooseModel：权限档决定 bash 能不能跑，轮内改是另一种串台——
-      // 所以注入延迟（UI 即时），不是锁 chip；跑着时下一轮 submit 自带新档
+      // 理由同 chooseModel 的记账链：UI 即时、意图记在会话名下（跑着时改不进
+      // meta，排队卡投递时要拿这一档）。
+      // **总是发 IPC（不再只在 idle 时发）**：档位联动子会话（父带子）不能等父
+      // 会话空闲——用户切档解救卡在 plan 档的子会话时，父多半正跑着等子会话回报，
+      // 只在 idle 发的话联动在那条时间线上根本不触发。轮内改档是安全的：runtime
+      // 的 setMode 只改账本，工具审批闸门每次调用现场读账，当前轮后续工具立刻
+      // 按新档判；system prompt 里的档位描述下一个 before_agent_start 重讲。
       setMode(next);
       // 启动恢复点跟随（bug A）：下次启动应用从这一档开始
       void api.settings.set({ lastUsed: { mode: next } }).catch(() => undefined);
-      const id = sessionRef.current;
+      // 盘上打开的旧会话同样记账并落 meta（同 chooseModel 的口径：选择当场落盘，
+      // 不留「切走再回就回跳」的键面）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
-      // **先记在这条会话名下**：跑着时改不进 meta，而它的排队卡可能在你已经切去
-      // 看别的会话之后才投递，那时全局意图已经是别人的了
       engine.rememberSessionIntent(id, { mode: next });
-      if (currentPhase() === "idle") {
-        void api.agent
-          .setMode(id, next)
-          .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
-      }
+      // 子会话的 renderer 侧联动（intent 覆写 + 列表缓存 + 正看着子会话的槽）；
+      // 子会话切档时它没有下级，这里是 no-op（联动单向：父带子）
+      engine.cascadeSubSessionModes(id, next);
+      void api.agent
+        .setMode(id, next)
+        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
     },
-    [engine, currentPhase],
+    [engine, opened],
   );
 
   const changeThinkingLevel = useCallback(
@@ -2064,14 +2173,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // **这是用户手选**：记进本次运行的手选记忆——重启前的新任务槽起档都从它
       // 开始，双查看槽共用（用户上一次手选是全局的，不按槽分）
       engine.pickedThinkingRef.current = next;
-      const id = sessionRef.current;
+      // 盘上打开的旧会话同样记账并落 meta（同 chooseModel 的口径）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {
         setThinkingLevelState(next); // 本槽开新任务：还没有会话可记，槽意图就是意图
         return;
       }
       applySessionThinking(id, next);
     },
-    [engine, applySessionThinking],
+    [engine, opened, applySessionThinking],
   );
 
   /**
@@ -2146,6 +2256,145 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [draftKey, writeAttachments, writeQuotes, writeFiles, writePasted],
   );
+
+  // ————————————————— 会话回退 / 单轮撤销（revert.ts） —————————————————
+
+  /**
+   * 从盘上重读一条会话种进槽（回退 / 撤销执行后的刷新）。openSession 有「已经是
+   * 这条就不重开」的守卫，而回退恰恰需要**就地换血**——槽里的旧画面全是被撤掉
+   * 的世界。live 会话不可能（回退入口在忙碌时禁用），种盘语义安全。
+   */
+  const reloadSession = useCallback(
+    (id: string): Promise<void> =>
+      api.session
+        .load(id)
+        .then((detail) => {
+          if (detail === null) return;
+          setOpened(detail.meta);
+          engine.applyStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
+        })
+        .catch((cause: unknown) =>
+          engine.setError(cause instanceof Error ? cause.message : String(cause)),
+        ),
+    [engine],
+  );
+
+  /** 回退确认框 */
+  const [revertDialog, setRevertDialog] = useState<RevertDialogState | null>(null);
+  const [revertBusy, setRevertBusy] = useState(false);
+  /** 撤销确认框 */
+  const [undoDialog, setUndoDialog] = useState<UndoDialogState | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
+
+  /** 「回到这里」：拉计划弹框。原文从槽里的转录取（它就是屏幕上那条气泡）。 */
+  const revertToMessage = useCallback(
+    (messageId: string) => {
+      const id = sessionRef.current ?? opened?.id ?? null;
+      if (id === null) return;
+      const item = selectTranscript(
+        engine.statesRef.current.get(id)?.transcript ?? EMPTY_ENTRY.transcript,
+      ).find((entry): entry is Extract<TranscriptItem, { role: "user" }> => entry.role === "user" && entry.id === messageId);
+      if (item === undefined) return;
+      engine.setError(null);
+      void api.session
+        .revertPlan(id, messageId)
+        .then((plan) => setRevertDialog({ sessionId: id, targetMessageId: messageId, plan, message: item }))
+        .catch((cause: unknown) =>
+          engine.setError(ipcErrorText(cause, engine.messagesRef.current)),
+        );
+    },
+    [engine, opened],
+  );
+
+  /**
+   * 确认回退：执行 → 重读会话（新世界）→ 原文（含附件）放回输入框。
+   * 执行中禁用整框（防止连点两条回退）。
+   */
+  const confirmRevert = useCallback((): void => {
+    if (revertDialog === null || revertBusy) return;
+    const { sessionId, targetMessageId, message } = revertDialog;
+    setRevertBusy(true);
+    void api.session
+      .revert(sessionId, targetMessageId)
+      .then(() => {
+        setRevertDialog(null);
+        engine.refreshSessions();
+        void reloadSession(sessionId);
+        // 原文放回输入框：拆回正文 / 引用 / 粘贴块 / 文件引用 / 附图（restoreToDraft
+        // 的同一条纪律——发出去的块解析回 chip，输入框不留裸 XML）
+        const texts = message.content
+          .filter((block) => block.type === "text")
+          .map((block) => (block.type === "text" ? block.text : ""));
+        const split = splitUserTextBlocks(texts);
+        const images = message.content
+          .filter((block): block is Extract<typeof block, { type: "image" }> => block.type === "image")
+          .map((block) => ({ type: "image" as const, data: block.data, mimeType: block.mimeType }));
+        restoreToDraft(
+          split.body,
+          images,
+          split.files.map((file) => ({
+            id: crypto.randomUUID(),
+            name: file.path.split(/[\\/]/).filter(Boolean).pop() ?? file.path,
+            path: file.path,
+            kind: file.kind,
+            origin: "workspace" as const,
+          })),
+          split.pasted.map((content) => {
+            const size = pastedTextSize(content);
+            return { id: crypto.randomUUID(), text: content, lines: size.lines };
+          }),
+        );
+      })
+      .catch((cause: unknown) => {
+        // 失败留在框里（计划还有效），错误亮出来
+        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
+      })
+      .finally(() => setRevertBusy(false));
+  }, [revertDialog, revertBusy, engine, reloadSession, restoreToDraft]);
+
+  const cancelRevert = useCallback((): void => {
+    if (revertBusy) return;
+    setRevertDialog(null);
+  }, [revertBusy]);
+
+  /** 轮尾卡的撤销入口 */
+  const undoTurn = useCallback(
+    (turnId: string) => {
+      const id = sessionRef.current ?? opened?.id ?? null;
+      if (id === null) return;
+      engine.setError(null);
+      void api.session
+        .undoPlan(id, turnId)
+        .then((plan) => setUndoDialog({ sessionId: id, turnId, plan }))
+        .catch((cause: unknown) =>
+          engine.setError(ipcErrorText(cause, engine.messagesRef.current)),
+        );
+    },
+    [engine, opened],
+  );
+
+  /** 确认撤销：执行 → 重读会话（轮尾卡挂「已撤销」徽标）。对话不动。 */
+  const confirmUndo = useCallback((): void => {
+    if (undoDialog === null || undoBusy) return;
+    const { sessionId, turnId } = undoDialog;
+    setUndoBusy(true);
+    void api.session
+      .undo(sessionId, turnId)
+      .then(() => {
+        setUndoDialog(null);
+        engine.refreshSessions();
+        void reloadSession(sessionId);
+      })
+      .catch((cause: unknown) => {
+        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
+      })
+      .finally(() => setUndoBusy(false));
+  }, [undoDialog, undoBusy, engine, reloadSession]);
+
+  const cancelUndo = useCallback((): void => {
+    if (undoBusy) return;
+    setUndoDialog(null);
+  }, [undoBusy]);
 
   /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。 */
   const withdrawQueued = useCallback(
@@ -2308,8 +2557,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   } | null>(null);
   /** 降级 / 结果的一句反馈（中性，不是错误）；下一次发起或打开会话时清 */
   const [scanNotice, setScanNotice] = useState<string | null>(null);
-  /** 读不懂结果的那条会话（重试按它定向）。null = 没有可重试的失败。 */
-  const [scanFailed, setScanFailed] = useState<string | null>(null);
+  /**
+   * 读不懂结果的那条会话（重试按它定向）。null = 没有可重试的失败。
+   * messageId = 那条扫描消息在转录里的 id——重试**回退到它**再重发（不是追加：
+   * 旧回答留在历史里，模型会参考自己上次的失败格式再错一次）。
+   */
+  const [scanFailed, setScanFailed] = useState<{ sessionId: string; messageId: string | null } | null>(null);
 
   /** 打开另一条会话：上一轮的提示不是那条会话的事，不能跟过来。
    *  待确认的清单（scanResult）**不清**：它是发起会话的未完成动作，切走再切回
@@ -2321,6 +2574,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setScanFailed(null);
   }, [viewedId]);
 
+  /** 已选出的消息列表里那条扫描消息的 id（从后往前找最近一次扫描）。 */
+  const scanMessageIdIn = (items: readonly TranscriptItem[]): string | null => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      if (item?.role !== "user") continue;
+      const text = item.content.find((block) => block.type === "text");
+      if (text !== undefined && text.type === "text" && text.text === CLOSING_SCAN_PROMPT) return item.id;
+    }
+    return null;
+  };
+
+  /** 转录里那条扫描消息的 id（重试回退的锚点；找不到 null，重试退回追加式）。 */
+  const scanMessageIdOf = (transcript: Parameters<typeof selectTranscript>[0]): string | null =>
+    scanMessageIdIn(selectTranscript(transcript));
+
   /** 扫描超时（默认 60s）：直接标完成并说清楚，不让用户卡在等待里。
    *  依赖取稳定字段而不是整个 engine（每次渲染都是新引用，会让 timer 被无谓
    *  重置）：setCompletionSession 是 useCallback 产物，引用稳定。 */
@@ -2330,7 +2598,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const timer = window.setTimeout(() => {
       setCompletionSession(closingScan.sessionId, "done");
       setScanNotice(engine.messagesRef.current.session.scanTimeout);
-      setScanFailed(closingScan.sessionId);
+      setScanFailed({
+        sessionId: closingScan.sessionId,
+        messageId: scanMessageIdOf(engine.statesRef.current.get(closingScan.sessionId)?.transcript ?? EMPTY_ENTRY.transcript),
+      });
       setClosingScan(null);
     }, CLOSING_SCAN_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
@@ -2357,7 +2628,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 重试——扫描消息就在对话里，模型回了什么用户看得见，重发一条就行。
       engine.setCompletionSession(closingScan.sessionId, "done");
       setScanNotice(engine.messagesRef.current.session.scanUnreadable);
-      setScanFailed(closingScan.sessionId);
+      setScanFailed({ sessionId: closingScan.sessionId, messageId: scanMessageIdIn(items) });
       return;
     }
     if (drafts.length === 0) {
@@ -2453,17 +2724,39 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 基线重新取（上一轮的扫描消息与回答都已在转录里，不重新取会把旧回答再解一遍）。
    */
   const retryClosingScan = useCallback((): void => {
-    const id = scanFailed;
-    if (id === null || closingScan !== null) return;
-    const current = engine.statesRef.current.get(id);
+    const failed = scanFailed;
+    if (failed === null || closingScan !== null) return;
+    const current = engine.statesRef.current.get(failed.sessionId);
     if (current === undefined || current.phase !== "idle") return;
-    const turn = engine.buildTurn(id);
-    if (turn === null) return;
     engine.setError(null);
     setScanNotice(null);
     setScanFailed(null);
-    launchScan(id, selectTranscript(current.transcript).length, turn);
-  }, [closingScan, engine, launchScan, scanFailed]);
+    /** 重发扫描（基线取此刻槽里的消息数——回退种盘后它是「扫描之前」的世界） */
+    const relaunch = (): void => {
+      const turn = engine.buildTurn(failed.sessionId);
+      if (turn === null) return;
+      const items = selectTranscript(
+        engine.statesRef.current.get(failed.sessionId)?.transcript ?? EMPTY_ENTRY.transcript,
+      );
+      launchScan(failed.sessionId, items.length, turn);
+    };
+    // 回退到那条扫描消息再重发：连它读不懂的回答（以及扫描轮里可能动过的
+    // 文件）一起撤掉——追加式重发会让模型参考自己上次的失败格式再错一次
+    if (failed.messageId === null) {
+      relaunch();
+      return;
+    }
+    void api.session
+      .revert(failed.sessionId, failed.messageId)
+      .then(() => {
+        engine.refreshSessions();
+        return reloadSession(failed.sessionId);
+      })
+      .then(relaunch)
+      .catch((cause: unknown) =>
+        engine.setError(ipcErrorText(cause, engine.messagesRef.current)),
+      );
+  }, [closingScan, engine, launchScan, scanFailed, reloadSession]);
 
   /**
    * 确认清单：勾选项落盘 + setCompletion(done_with_todos)；全不勾 = done
@@ -2594,7 +2887,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     cancelCarryovers,
     scanNotice,
     // 重试只在「本槽正看着那条失败的会话」时给出——提示行本身就是那条会话的
-    retryClosingScan: scanFailed !== null && scanFailed === viewedId ? retryClosingScan : null,
+    retryClosingScan: scanFailed !== null && scanFailed.sessionId === viewedId ? retryClosingScan : null,
+    fileTurns: entry.fileTurns,
+    reverts: entry.reverts,
+    undos: entry.undos,
+    revertToMessage,
+    revertDialog,
+    revertBusy,
+    confirmRevert,
+    cancelRevert,
+    undoTurn,
+    undoDialog,
+    undoBusy,
+    confirmUndo,
+    cancelUndo,
     send: () => void send(),
     /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
     sendText: (text: string) => void send(text),

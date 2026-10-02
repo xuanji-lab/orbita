@@ -3,7 +3,7 @@ import type { ThemePreference } from "@shared/settings";
 /**
  * 首页门面（slogan + 纸面两档的红笔批语）的纯逻辑，HomeHero.tsx 的可测内核。
  *
- * 门面按**主题**分，不按界面语言分：Light / Warm / Ink 是英文界面，slogan 却一直是中文
+ * 门面按**主题**分，不按界面语言分：明暗各档（Light / 黛 / 玄）是英文界面，slogan 却一直是中文
  * （品牌里唯一一句抒情的话）；只有 Typescript——小学作业的英文版——换成原型里的英文
  * slogan。所以这里吃解析后的主题，不吃 locale。
  */

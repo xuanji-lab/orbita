@@ -12,11 +12,13 @@ import type { ComposerFileRef, ComposerPastedText } from "./composer-attachments
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
+import { replaceFirstLine, slashMode, slashQuery } from "./slash-trigger.ts";
 import { filterSkills } from "../features/skills/skill-filter";
 import type { SkillMeta } from "@shared/skill";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useDictation, type DictationPhase, type DictationProblem } from "../features/voice/useDictation.ts";
+import type { DictationProvider } from "@shared/voice";
 import { useT } from "../locale.ts";
 
 /**
@@ -147,7 +149,9 @@ export function Composer(props: {
     return () => observer.disconnect();
   }, []);
   // ── 指令面板（/ 触发）──────────────────────────────────────────────
-  // 首字符是 / 且单行时亮。关闭分两种语义（用户实测：选中/ESC 后再打 / 前缀
+  // 触发规则在 slash-trigger.ts：第一行（允许前导空白）以 / 开头、且光标在
+  // 第一行——多行输入不再整个不弹，编辑后续行时 ↑↓/Enter 也不会被面板劫走。
+  // 关闭分两种语义（用户实测：选中/ESC 后再打 / 前缀
   // 文字，面板不弹，Enter 把半截指令当普通消息发出去了）：
   //   "esc"——Esc 关闭或动作项执行完：继续输入就重开（人还在 / 模式里，面板是输入辅助）
   //   "insert"——skill 插入 /skill:xxx 后：保持关闭直到离开 / 前缀（用户在补
@@ -155,14 +159,23 @@ export function Composer(props: {
   // skill 清单从上层拿（ChatView 的 useSkillIndex），面板每次打开触发一次重拉。
   const [commandsClosed, setCommandsClosed] = useState<"esc" | "insert" | null>(null);
   const [activeCommand, setActiveCommand] = useState(0);
-  const panelOpen =
-    props.value.startsWith("/") && !props.value.includes("\n") && commandsClosed === null;
-  const commandQuery = panelOpen ? props.value.slice(1).trim().toLowerCase() : "";
+  // 光标位置是触发条件之一（面板只在光标处于第一行时亮）。纯移动不经过 onChange，
+  // 所以还要 onSelect 跟；value 被外部改写（草稿恢复、指令插入）后从 DOM 回同步一次
+  const [cursor, setCursor] = useState(0);
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (el !== null) setCursor(el.selectionStart);
+  }, [props.value]);
+  const query = slashQuery(props.value, cursor);
+  const panelOpen = query !== null && commandsClosed === null;
+  const commandQuery = query ?? "";
   useEffect(() => {
     if (panelOpen) props.onReloadSkills();
   }, [panelOpen, props.onReloadSkills]);
+  // 依赖是**值**而不是「是否在 / 模式」那个布尔：Esc 关闭后继续打字要重开面板，
+  // 而多打一个字不会让布尔变——拿布尔当依赖，"esc" 就永远清不掉（2026-10-01 真机验收抓到）
   useEffect(() => {
-    if (!props.value.startsWith("/")) setCommandsClosed(null);
+    if (!slashMode(props.value)) setCommandsClosed(null);
     // "esc" 类关闭在继续输入时重开；"insert" 保持（只有离开 / 前缀才重置）
     else setCommandsClosed((closed) => (closed === "esc" ? null : closed));
   }, [props.value]);
@@ -200,20 +213,39 @@ export function Composer(props: {
     ];
   }, [panelOpen, commandQuery, props.skills, t]);
 
-  /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行 */
+  /** 选中指令后把光标钉在插入文本之后：onChange 改的是父级状态，等 React 提交完再设选区 */
+  const pinCursor = (position: number): void => {
+    setCursor(position);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el !== null) {
+        el.focus();
+        el.setSelectionRange(position, position);
+      }
+    });
+  };
   /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行，
-   * 并清掉半截指令残留——"/c" 留在框里，下一次回车就又是一条误发 */
+   * 并清掉半截指令残留——"/c" 留在框里，下一次回车就又是一条误发。
+   * 多行输入里 skill 只替换第一行，其余草稿行保留；动作项执行后仍全清（理由见下） */
   const runCommand = (row: CommandRow): void => {
     if (row.kind === "skill") {
       setCommandsClosed("insert");
-      props.onChange(`/skill:${row.slug} `);
+      const inserted = `/skill:${row.slug} `;
+      props.onChange(replaceFirstLine(props.value, inserted));
+      pinCursor(inserted.length);
     } else {
       setCommandsClosed("esc");
       if (props.onCommand !== undefined) {
         props.onCommand(row.kind);
+        // 全清而不是只丢指令行：/new 的语义就是「清草稿清附件再开会话」，
+        // ChatView 在 onCommand 里已经 setDraft("")，这里再写回剩余行会把
+        // 清掉的东西复活到新会话的草稿里
         props.onChange("");
+        pinCursor(0);
       } else {
-        props.onChange(`/${row.name} `);
+        const inserted = `/${row.name} `;
+        props.onChange(replaceFirstLine(props.value, inserted));
+        pinCursor(inserted.length);
       }
     }
     textareaRef.current?.focus();
@@ -424,8 +456,10 @@ export function Composer(props: {
           onChange={(event) => {
             // 上一次听写的问题说过了：用户动手打字就收起来
             if (dictation.problem !== null) dictation.clearProblem();
+            setCursor(event.target.selectionStart);
             props.onChange(event.target.value);
           }}
+          onSelect={(event) => setCursor(event.currentTarget.selectionStart)}
           onPaste={(event) => {
             // 剪贴板里有文件（截图、从别处复制的文件）才拦；分拣与报错在调用方。
             // 浏览器复制文件常常同时带一份 HTML/URL 文本——有文件时以文件为准，文本不贴
@@ -510,7 +544,7 @@ export function Composer(props: {
         />
       </div>
       {(dictating || dictation.problem !== null) && (
-        <DictationStatus phase={dictation.phase} problem={dictation.problem} />
+        <DictationStatus phase={dictation.phase} problem={dictation.problem} provider={dictation.provider} />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {/*
@@ -583,9 +617,13 @@ export function Composer(props: {
 
 /**
  * 听写的一行状态：进行中说「在干什么、怎么结束」，出了问题说原因（服务端的原话用等宽跟在后面）。
- * 状态用图标 + 文字，红色只给失败（设计系统：颜色是第二信号）。
+ * 状态用图标 + 文字，红色只给失败（设计系统：颜色是第二信号）。厂商名跟着这次听写用的那家。
  */
-function DictationStatus(props: { phase: DictationPhase; problem: DictationProblem | null }) {
+function DictationStatus(props: {
+  phase: DictationPhase;
+  problem: DictationProblem | null;
+  provider: DictationProvider | null;
+}) {
   const t = useT();
   const problem = props.problem;
   const text =
@@ -594,9 +632,9 @@ function DictationStatus(props: { phase: DictationPhase; problem: DictationProbl
         ? t.voice.micDenied
         : problem.kind === "mic-unavailable"
           ? t.voice.micUnavailable
-          : t.voice.failures[problem.reason]
+          : t.voice.failures[problem.reason](problem.provider)
       : props.phase === "connecting"
-        ? t.voice.connecting
+        ? t.voice.connecting(props.provider ?? "doubao")
         : props.phase === "finishing"
           ? t.voice.finishing
           : t.voice.listening;

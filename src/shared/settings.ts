@@ -9,12 +9,14 @@ import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
- * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（Ink，
- * 2026-09-03 用户指定）；两个暗档都是手动档。
+ * 用户没表态时应用要跟着系统深浅走。system 的深色落点是 **"black"**（玄 Onyx，
+ * 2026-09-03 用户指定、2026-09-30 换血后沿用）；两个暗档都是手动档。
  *
- * 暗色两档（2026-09-27 按 ZCode 实测层次重切，小样页选型）：**"graphite"**（石墨，
- * ZCode 直译的中性档）与 **"black"**（Ink 近黑，井 #141414——不越过石墨的 #161616）。
- * 第三档 "dark"（Warm 微暖）同日退役，存量设置迁移到 graphite（`parseTheme`）。
+ * 暗色两档（2026-09-30 换血，色值取自 DeepSeek Harness 与 ZCode 的安装包实测，
+ * 层次与理由见 tokens/colors.css 头注释）：**"graphite"**（黛 Slate，蓝灰、收敛）与
+ * **"black"**（玄 Onyx，纯灰、外壳亮堂）。**档位 id 沿用旧名不动**——它们是 settings/IPC
+ * 契约，换的只是显示名（`themes` 在 messages-*.ts）。第三档 "dark"（Warm 微暖）
+ * 2026-09-27 退役，存量设置迁移到 graphite（`parseTheme`）。
  *
  * "copybook"（小学作业）与 "typescript"（打字稿）是璇玑载体谱「稿纸」一档的中文与英文
  * 两版（wafo 2026-09-25 要求载入）：绿格作业本 + 红笔，与打字稿 + 红色页边线。**只有明**，
@@ -166,6 +168,14 @@ export interface AppSettings {
    * delegate 参数显式给的档仍然最优先。
    */
   subSessionThinking?: ThinkingLevel;
+  /**
+   * 星标的模型（收藏）。**跟着用户走、不分会话**，所以落在设置里而不是会话元数据。
+   *
+   * 与会话的 `starred` 是两件东西：那个只是用户标记，不影响排序、也不筛选任何东西；
+   * 这一个**会当过滤口径用**（模型卡片左栏第一格：只看星标）。
+   * 存对子不存 modelId：光有 modelId 定位不到哪家的密钥（同 choreModel 的理由）。
+   */
+  starredModels?: ModelPair[];
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
   /**
@@ -180,7 +190,14 @@ export interface AppSettings {
    * 用户指定，agent 每轮被告知（TurnDirectories.browserDownloads）。
    */
   browserDownloadDir?: string;
+  /**
+   * 设置 › 模型服务的厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，
+   * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
+   */
+  providerCardSize?: ProviderCardSize;
 }
+
+export type ProviderCardSize = "large" | "small";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
@@ -333,6 +350,8 @@ export function parseSettings(raw: unknown): AppSettings {
     lastUsed?: unknown;
     channelColumnWidth?: unknown;
     browserDownloadDir?: unknown;
+    starredModels?: unknown;
+    providerCardSize?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -349,6 +368,7 @@ export function parseSettings(raw: unknown): AppSettings {
       ? record.subSessionThinking
       : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
+  const starredModels = parseStarredModels(record.starredModels);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -371,6 +391,7 @@ export function parseSettings(raw: unknown): AppSettings {
       ? { channelColumnWidth: Math.round(channelColumnWidth) }
       : {}),
     drawer: parseDrawer(record.drawer),
+    ...(starredModels === undefined ? {} : { starredModels }),
     ...(compaction === undefined ? {} : { compaction }),
     // 非布尔一律当作「没动过」丢掉：缺席与 true 是同一个行为，落一个坏值进来
     // 只会让设置面显示的状态和实际行为对不上
@@ -381,6 +402,10 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
+    // 不认识的尺寸当没选过（缺席 = large）
+    ...(record.providerCardSize === "large" || record.providerCardSize === "small"
+      ? { providerCardSize: record.providerCardSize }
+      : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
@@ -404,6 +429,29 @@ function parseModelPair(raw: unknown): ModelPair | undefined {
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;
   if (typeof record.modelId !== "string" || record.modelId === "") return undefined;
   return { providerId: record.providerId, modelId: record.modelId };
+}
+
+/**
+ * 星标模型列表：逐项校验 + **按 (providerId, modelId) 去重**。
+ *
+ * 去重不是洁癖：星标是个开关，重复项会让「点亮 / 取消」算错（取消一条还剩一条，
+ * 星星看起来关不掉）。校验不过的项直接丢，坏值不落库（同其它字段的纪律）。
+ * 全部无效或本来就是空数组时返回 undefined——「没有星标」与「这个键不在」
+ * 行为完全一样，不为此在盘上留一个空数组。
+ */
+function parseStarredModels(raw: unknown): ModelPair[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: ModelPair[] = [];
+  for (const entry of raw) {
+    const pair = parseModelPair(entry);
+    if (pair === undefined) continue;
+    const key = `${pair.providerId}:${pair.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(pair);
+  }
+  return out.length === 0 ? undefined : out;
 }
 
 /**

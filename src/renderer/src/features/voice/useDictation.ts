@@ -1,5 +1,5 @@
 /**
- * 输入框的听写：麦克风 → PCM → 主进程（→ 豆包）→ 识别文字实时写进输入框。
+ * 输入框的听写：麦克风 → PCM → 主进程（→ 设置里选的厂商）→ 识别文字实时写进输入框。
  *
  * 一次听写的完整生命：
  *   开始  先确认凭证填齐（没填齐不去碰麦克风——不为一次注定失败的听写弹系统授权框）；
@@ -19,17 +19,17 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { api } from "../../api";
-import { isDoubaoConfigured, type VoiceFailure } from "@shared/voice";
+import type { DictationProvider, VoiceFailure } from "@shared/voice";
 import { composeDictation, joinSpoken, splitAtSelection } from "./dictation-text.ts";
 import { PcmChunker, toPcm16 } from "./pcm.ts";
 
 export type DictationPhase = "idle" | "connecting" | "listening" | "finishing";
 
-/** 说给用户的问题（Composer 用文案表翻译） */
+/** 说给用户的问题（Composer 用文案表翻译，随厂商换名字） */
 export type DictationProblem =
   | { kind: "mic-denied" }
   | { kind: "mic-unavailable" }
-  | ({ kind: "service" } & VoiceFailure);
+  | ({ kind: "service"; provider: DictationProvider } & VoiceFailure);
 
 /** 连上之前最多排多少段（约 10 秒）：再多就丢最早的——连这么久还没连上，多半要失败了 */
 const QUEUE_LIMIT = 50;
@@ -39,6 +39,8 @@ interface Live {
   original: string;
   before: string;
   after: string;
+  /** 这条听写用的厂商（问题文案里报它的名字；切换设置不影响进行中的连接） */
+  provider: DictationProvider;
   /** 前面几条连接已经固定下来的文字 */
   committed: string;
   /** 当前连接到目前为止的全量文字 */
@@ -58,6 +60,8 @@ interface Live {
 export interface Dictation {
   phase: DictationPhase;
   problem: DictationProblem | null;
+  /** 进行中这次听写用的厂商（connecting 的状态行报它的名字） */
+  provider: DictationProvider | null;
   /** 麦克风按钮：没在听写就开始，在听写就结束 */
   toggle: () => void;
   /** 结束（回车）：文字留下 */
@@ -79,6 +83,7 @@ export function useDictation(input: {
 }): Dictation {
   const [phase, setPhase] = useState<DictationPhase>("idle");
   const [problem, setProblem] = useState<DictationProblem | null>(null);
+  const [provider, setProvider] = useState<DictationProvider | null>(null);
   const liveRef = useRef<Live | null>(null);
   // 回调里要拿最新的 value / onChange：听写跨好几次渲染，闭包里的会过期
   const valueRef = useRef(input.value);
@@ -109,6 +114,7 @@ export function useDictation(input: {
       live.unsubscribe();
       stopCapture(live);
       setPhase("idle");
+      setProvider(null);
     },
     [stopCapture],
   );
@@ -157,7 +163,7 @@ export function useDictation(input: {
             return;
           }
           if (!result.ok) {
-            fail(live, { kind: "service", reason: result.reason, ...(result.detail === undefined ? {} : { detail: result.detail }) });
+            fail(live, { kind: "service", provider: live.provider, reason: result.reason, ...(result.detail === undefined ? {} : { detail: result.detail }) });
             return;
           }
           live.connected = true;
@@ -166,7 +172,7 @@ export function useDictation(input: {
           if (live.finishing) wrapUp(live);
           else setPhase("listening");
         })
-        .catch(() => fail(live, { kind: "service", reason: "network" }));
+        .catch(() => fail(live, { kind: "service", provider: live.provider, reason: "network" }));
     },
     [fail, wrapUp],
   );
@@ -201,12 +207,13 @@ export function useDictation(input: {
   const start = useCallback(async () => {
     if (liveRef.current !== null) return;
     setProblem(null);
-    const config = await api.voice.doubaoGet().catch(() => null);
-    if (config === null || !isDoubaoConfigured(config)) {
-      setProblem({ kind: "service", reason: "not-configured" });
+    // 先看选中的那家配齐了没（没配齐不去碰麦克风——不为一次注定失败的听写弹系统授权框）
+    const selection = await api.voice.dictationSelection().catch(() => null);
+    if (liveRef.current !== null) return;
+    if (selection === null || !selection.configured) {
+      setProblem({ kind: "service", provider: selection?.provider ?? "doubao", reason: "not-configured" });
       return;
     }
-    if (liveRef.current !== null) return;
     const textarea = input.textareaRef.current;
     const original = valueRef.current;
     const { before, after } = splitAtSelection(original, textarea?.selectionStart ?? null, textarea?.selectionEnd ?? null);
@@ -214,6 +221,7 @@ export function useDictation(input: {
       original,
       before,
       after,
+      provider: selection.provider,
       committed: "",
       current: "",
       written: original,
@@ -228,6 +236,7 @@ export function useDictation(input: {
     };
     liveRef.current = live;
     setPhase("connecting");
+    setProvider(selection.provider);
     live.unsubscribe = api.voice.onDictationEvent((event) => {
       if (liveRef.current !== live || event.sessionId !== live.sessionId) return;
       if (event.kind === "transcript") {
@@ -243,7 +252,7 @@ export function useDictation(input: {
         connect(live);
         return;
       }
-      fail(live, { kind: "service", reason: event.reason, ...(event.detail === undefined ? {} : { detail: event.detail }) });
+      fail(live, { kind: "service", provider: live.provider, reason: event.reason, ...(event.detail === undefined ? {} : { detail: event.detail }) });
     });
     connect(live);
     startCapture(live).catch((cause: unknown) => fail(live, micProblem(cause)));
@@ -309,5 +318,5 @@ export function useDictation(input: {
     [],
   );
 
-  return { phase, problem, toggle, finish, cancel, clearProblem: () => setProblem(null) };
+  return { phase, problem, provider, toggle, finish, cancel, clearProblem: () => setProblem(null) };
 }

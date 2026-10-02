@@ -5,7 +5,13 @@
 import type { ModelDefaults } from "@shared/model-defaults";
 import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared/provider";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
-import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
+import {
+  KNOWN_PROVIDERS,
+  knownProviderGroup,
+  knownProviderOf,
+  type KnownProvider,
+  type KnownProviderGroup,
+} from "../../../../shared/known-providers.ts";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -67,7 +73,7 @@ export function nextCopyId(existing: readonly string[], base: string): string {
  * 从目录新建厂商的 id：没占就用条目 id 本身，占了依次试 anthropic-compatible-2 / -3 …
  * 目录条目可以加不止一次（两个 Anthropic 兼容网关、同厂两个账号），id 却是存储主键——
  * 直接拿条目 id 会让第二个落盘时整条换掉第一个。带后缀的 id 认不出目录条目时，
- * kindOf 按协议落回「兼容」条目，与复制出来的副本同一套处理。
+ * 新建时另写 kind 字段；没有 kind 的老数据由 knownProviderOf 剥掉 -N 后缀认回条目。
  */
 export function nextFreeId(existing: readonly string[], base: string): string {
   const taken = new Set(existing);
@@ -92,13 +98,39 @@ export function reorderIds(ids: readonly string[], from: string, to: string): re
   return next;
 }
 
-/** provider 对应的目录 kind 兜底（自建网关按协议落到两个「兼容」条目上）。
+/** provider 来自哪个目录条目（knownProviderOf：显式 kind > id 推断 > 按协议落兼容）。
  * 设置页与聊天底栏的模型简报共用——两边必须认同同一个目录。 */
 export function kindOf(provider: ProviderDto): string {
-  return (
-    KNOWN_PROVIDERS.find((k) => k.id === provider.id)?.id ??
-    (provider.endpoint.api === "anthropic-messages" ? "anthropic-compatible" : "openai-compatible")
-  );
+  return knownProviderOf(provider).id;
+}
+
+/**
+ * 模型卡片左栏每一格的短名（按传入顺序，键是 provider id）。
+ *
+ * **不靠「名字是否等于 label」猜用户改没改过名**：#140 把 label 改成纯厂商名（「智谱」），
+ * 新建实例的默认名还会带「（按量）/（套餐）」或序号，存量实例沿用旧名（「智谱 Coding
+ * Plan」）——按名字猜，几乎每个实例都会被误判成「改过名」，左栏显示完整长名。
+ *
+ * 规则：
+ *   - 目录里认得的厂商一律用它的 short；同一家有多个实例时，第二个起加序号（DS / DS 2），
+ *     完整实例名放格子的 title。
+ *   - 兼容入口（openai-compatible / anthropic-compatible）用实例名：那是用户自建的网关，
+ *     「OAI / OAI 2」说不出是哪个网关，用户起的名字才说得出。
+ */
+export function railShortNames(providers: readonly ProviderDto[]): Map<string, string> {
+  const names = new Map<string, string>();
+  const seen = new Map<string, number>();
+  for (const provider of providers) {
+    const known = knownProviderOf(provider);
+    if (known.id === "openai-compatible" || known.id === "anthropic-compatible") {
+      names.set(provider.id, provider.displayName);
+      continue;
+    }
+    const count = (seen.get(known.id) ?? 0) + 1;
+    seen.set(known.id, count);
+    names.set(provider.id, count === 1 ? known.short : `${known.short} ${count}`);
+  }
+  return names;
 }
 
 /**
@@ -184,4 +216,51 @@ export function connectionDirty(
   if (draft.displayName !== saved.displayName) return true;
   if (draft.baseUrl !== saved.baseUrl) return true;
   return draft.apiKey !== "" && draft.apiKey !== revealedKey;
+}
+
+/** 模型服务卡片墙的一张卡：一个目录条目 + 用户名下归它的全部实例（按存储顺序） */
+export interface ProviderCard {
+  known: KnownProvider;
+  instances: ProviderDto[];
+}
+
+/**
+ * 卡片墙按分区（API / 套餐 / 自定义）排好、过滤好的内容。纯函数：搜索与「仅显示已添加」
+ * 都在这里判，组件只管画。
+ *
+ * - 实例按 `knownProviderOf` 归卡：同一家的第二个实例（deepseek-2）也归 DeepSeek，
+ *   角标数字才对得上。
+ * - 搜索不分大小写，命中任一即可：卡片的名字与说明（调用方给本地化后的文本）、预填地址、
+ *   以及实例的名字与地址——用户常记得自己起的名字（「Proma」）而不记得它挂在哪张卡下。
+ * - 空区整个不返回，调用方不画空的分区标题。
+ */
+export function providerCards(
+  providers: readonly ProviderDto[],
+  options: {
+    query: string;
+    onlyAdded: boolean;
+    /** 本地化后的卡片文字（名字 + 说明），参与搜索 */
+    textOf: (known: KnownProvider) => string;
+  },
+): { group: KnownProviderGroup; cards: ProviderCard[] }[] {
+  const query = options.query.trim().toLowerCase();
+  const cards = KNOWN_PROVIDERS.map((known) => ({
+    known,
+    instances: providers.filter((provider) => knownProviderOf(provider).id === known.id),
+  }))
+    .filter((card) => !options.onlyAdded || card.instances.length > 0)
+    .filter((card) => {
+      if (query === "") return true;
+      const haystack = [
+        options.textOf(card.known),
+        card.known.label,
+        card.known.baseUrl,
+        ...card.instances.flatMap((instance) => [instance.displayName, instance.endpoint.baseUrl]),
+      ];
+      return haystack.some((text) => text.toLowerCase().includes(query));
+    });
+  const groups: KnownProviderGroup[] = ["api", "plan", "custom"];
+  return groups
+    .map((group) => ({ group, cards: cards.filter((card) => knownProviderGroup(card.known) === group) }))
+    .filter((entry) => entry.cards.length > 0);
 }
