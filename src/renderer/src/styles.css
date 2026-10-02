@@ -2401,3 +2401,276 @@ textarea.text-field {
   padding: var(--space-2) var(--space-3);
   resize: vertical;
 }
+
+/*
+ * ————— 输入框材料叠放（composer-materials.tsx，B 叠放定稿） —————
+ * 材料全部移出输入卡、叠在卡片上方：截图一行 → 胶囊一行 → 引用一张卡。
+ * 除引用卡外都不加卡底——胶囊自带 --glass-bg + --shadow-border，一行语言
+ * 不需要再包一层玻璃；悬停 / 展开等状态样式都在这里（不写 JS hover）。
+ */
+
+/* 截图一行：正方形缩略、不换行，多了横向滚动 */
+.material-image-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding: 2px;
+}
+
+/* 胶囊一行：一行横排、超出横向滚动、右侧渐隐（渐隐只是遮罩不是颜色） */
+.material-chip-scroll {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px;
+  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+}
+
+/* 浮层（粘贴全文）锚在胶囊行的上方 */
+.material-chip-row {
+  position: relative;
+  min-width: 0;
+}
+
+/* 同一种胶囊：全圆角、玻璃底、1px 内发丝；文件 / 目录 / 粘贴文本共用 */
+.material-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 0;
+  max-width: 260px;
+  flex: 0 0 auto;
+  padding: 0 4px 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-border);
+  font-size: var(--font-size-caption);
+}
+
+.material-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+
+/* 元信息（行数）：等宽、tertiary——机器事实 */
+.material-chip-meta {
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* 粘贴胶囊的本体是按钮（点开全文浮层） */
+.material-chip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* 胶囊移除键：18px 圆形安静键 */
+.material-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.material-chip-x:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 粘贴全文浮层：floating layer（实底面板 + 发丝 + popover 阴影），开在胶囊行上方 */
+.material-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  width: min(520px, 100%);
+  display: grid;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-popover);
+}
+
+.material-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 6px 0 10px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+.material-popover-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.material-popover-close:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 全文永不截断，折叠只是显示形态：限高滚动 */
+.material-popover-body {
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 6px 10px 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-bubble);
+  color: var(--color-text-secondary);
+}
+
+/* 引用卡：排队卡（QueueStrip）同款整行——一张 glass-float 卡、行高 30 */
+.material-quote-card {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2);
+  max-height: 264px;
+  overflow-y: auto;
+}
+
+.material-quote-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+}
+
+.material-quote-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.material-quote-idx {
+  flex: 0 0 auto;
+  min-width: 10px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-secondary);
+}
+
+/* 正文：一行省略；可跳时是按钮（title 挂全文——原文不在转录里时唯一看全文的地方） */
+.material-quote-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-primary);
+  text-align: left;
+}
+
+.material-quote-jump {
+  cursor: pointer;
+}
+
+/* 来源注脚（第几轮 · 谁说的 · 字数）：micro、tertiary，不与正文抢分量 */
+.material-quote-note {
+  flex: 0 0 auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* 悬停一行出「跳回原文」「移除」；focus-within 让键盘 Tab 到动作键时同样现身 */
+.material-quote-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: var(--transition-hover);
+}
+
+.material-quote-row:hover .material-quote-actions,
+.material-quote-row:focus-within .material-quote-actions {
+  opacity: 1;
+}
+
+.material-quote-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.material-quote-actions button:hover {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+
+/* 「还有 N 条引用…」/「收起」：次级文字行，整行可点 */
+.material-quote-more {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.material-quote-more:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}

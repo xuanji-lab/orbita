@@ -1,14 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
-import { ImageLightbox } from "./ImageLightbox";
-import { ImageThumb } from "./ImageThumb";
-import { QuoteChip } from "./QuoteChip";
-import { FileRefChip, PastedTextChip } from "./attachment-chips";
+import { MaterialStack } from "./composer-material-stack.tsx";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge } from "@shared/prompt-attachments";
-import { filesOf, imageSrc, type ComposerImage } from "./composer-images.ts";
+import { filesOf, type ComposerImage } from "./composer-images.ts";
 import type { ComposerFileRef, ComposerPastedText } from "./composer-attachments.ts";
+import { composerMaterials } from "./composer-materials.ts";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
@@ -104,6 +102,8 @@ export function Composer(props: {
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 输入卡本体：指令面板（斜杠）绝对定位在卡内，定位与边界的参照系
+  const cardRef = useRef<HTMLDivElement>(null);
   // 听写（features/voice/useDictation.ts）：识别文字直接写进这个输入框。听写中输入框只读——
   // 手打的字会被下一次识别结果覆盖；回车 = 结束听写（不发送），Esc = 取消
   const dictation = useDictation({ value: props.value, onChange: props.onChange, textareaRef });
@@ -276,6 +276,23 @@ export function Composer(props: {
 
   const disabled = props.disabled === true;
   const running = props.running === true;
+  // 材料清单（composer-materials.ts 的唯一数据来源）：叠放层与后续排布都吃它。
+  // useMemo 的依赖按值给全——清单是每次渲染重建的数组，闭包里的 remove 回调才新鲜
+  const materials = useMemo(
+    () =>
+      composerMaterials({
+        attachments: props.attachments,
+        files: props.files,
+        pasted: props.pasted,
+        quotes: props.quotes,
+        onRemoveAttachment: props.onRemoveAttachment,
+        onRemoveFile: props.onRemoveFile,
+        onRemovePasted: props.onRemovePasted,
+        onRemoveQuote: props.onRemoveQuote,
+        t,
+      }),
+    [props.attachments, props.files, props.pasted, props.quotes, props.onRemoveAttachment, props.onRemoveFile, props.onRemovePasted, props.onRemoveQuote, t],
+  );
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
   // 同一个位置的两面，按输入态切换。想停止时清掉草稿即可，排队是高频动作、停止是少数。
   // 有图 / 有附件 / 有引用没字也能发——一张截图本身就是一句完整的话
@@ -290,79 +307,27 @@ export function Composer(props: {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragging = props.dropActive === true;
   return (
-    <div
-      className="glass-card"
-      style={{
-        width: "100%",
-        minWidth: 0,
-        display: "flex",
-        flexDirection: "column",
-        gap: 6,
-        padding: "10px 12px 8px",
-        // 拖进来时的落点提示：中性虚线，不染 accent（accent 只给主操作）
-        outline: dragging ? "1.5px dashed var(--color-border-strong)" : undefined,
-        outlineOffset: -5,
-      }}
-    >
-      {/* 截图叠在引用上面：图是一眼能认出来的，放在最上面当锚点；引用是一段段文字，贴着输入框 */}
-      {props.attachments.length > 0 && (
-        <AttachmentStrip
-          items={props.attachments}
-          onRemove={props.onRemoveAttachment}
-          removeLabel={t.composer.removeImage}
-          openLabel={t.lightbox.open}
-        />
-      )}
-      {(props.files.length > 0 || props.pasted.length > 0) && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", minWidth: 0 }}>
-          {props.files.map((file) => (
-            <FileRefChip
-              key={file.id}
-              name={file.name}
-              path={file.path}
-              kind={file.kind}
-              onRemove={() => props.onRemoveFile(file.id)}
-            />
-          ))}
-          {props.pasted.map((block) => (
-            <PastedTextChip
-              key={block.id}
-              text={block.text}
-              lines={block.lines}
-              onRemove={() => props.onRemovePasted(block.id)}
-            />
-          ))}
-        </div>
-      )}
-      {props.attachments.length > 0 && props.imageUnsupported === true && (
-        <div
-          role="status"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--space-1)",
-            fontSize: "var(--font-size-caption)",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          <Icon name="triangle-alert" size={12} strokeWidth={1.8} style={{ color: "var(--color-warning)", flex: "0 0 auto" }} />
-          <span>{t.composer.noVision}</span>
-        </div>
-      )}
-      {props.quotes.length > 0 && (
-        <div style={{ display: "grid", gap: "var(--space-1)" }}>
-          {props.quotes.map((quote, index) => (
-            <QuoteChip
-              key={`${quote.messageId}:${index}`}
-              index={index + 1}
-              quote={quote}
-              expanded
-              onJump={props.jumpToQuote(quote)}
-              onRemove={() => props.onRemoveQuote(index)}
-            />
-          ))}
-        </div>
-      )}
+    // 材料叠放（B 定稿）：四路附件全部移出输入卡，叠在卡片上方——截图一行、胶囊一行、
+    // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）
+    <div style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
+      <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
+      <div
+        ref={cardRef}
+        className="glass-card"
+        style={{
+          width: "100%",
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          padding: "10px 12px 8px",
+          // 指令面板（commit 3 起）绝对定位在卡内，盖着底栏开——不伸到卡外
+          position: "relative",
+          // 拖进来时的落点提示：中性虚线，不染 accent（accent 只给主操作）
+          outline: dragging ? "1.5px dashed var(--color-border-strong)" : undefined,
+          outlineOffset: -5,
+        }}
+      >
       {panelOpen && (
         <div
           ref={commandListRef}
@@ -643,6 +608,7 @@ export function Composer(props: {
           <Icon name={sendable ? "arrow-up" : "square"} size={sendable ? 16 : 12} />
         </button>
       </div>
+      </div>
     </div>
   );
 }
@@ -699,39 +665,3 @@ function DictationStatus(props: { phase: DictationPhase; problem: DictationProbl
     </div>
   );
 }
-
-/** 待发附图的缩略图条：卡片与模型输出画廊共用 ImageThumb。 */
-function AttachmentStrip(props: {
-  items: readonly ComposerImage[];
-  onRemove: (id: string) => void;
-  removeLabel: string;
-  openLabel: string;
-}) {
-  const [viewing, setViewing] = useState<number | null>(null);
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: "var(--space-3)" }}>
-      {viewing !== null && (
-        <ImageLightbox
-          images={props.items.map((item) => item.image)}
-          startIndex={viewing}
-          onClose={() => setViewing(null)}
-        />
-      )}
-      {props.items.map((item, index) => (
-        <ImageThumb
-          key={item.id}
-          src={imageSrc(item.image)}
-          name={item.name}
-          size={COMPOSER_THUMB_SIZE}
-          openLabel={props.openLabel}
-          onOpen={() => setViewing(index)}
-          paperclip
-          onRemove={() => props.onRemove(item.id)}
-          removeLabel={props.removeLabel}
-        />
-      ))}
-    </div>
-  );
-}
-
-const COMPOSER_THUMB_SIZE = 72;
