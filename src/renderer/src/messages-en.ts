@@ -363,6 +363,7 @@ export const en = {
       migration: "Migration",
       browser: "Browser",
       voice: "Voice",
+      gamification: "Gamification",
     },
     appearance: "Appearance",
     theme: "Theme",
@@ -458,6 +459,12 @@ export const en = {
       failed: "Could not complete the import",
       expired: "The selection expired · read again",
     },
+    // ── 游戏化（设置 › 游戏化：把功能换成好玩变体的开关，第一个是材料区俄罗斯方块）──
+    gamificationGroup: "Input box",
+    materialTetris: "Material area Tetris",
+    materialTetrisAria: "Material area Tetris",
+    materialTetrisInfo:
+      "Screenshots, files, pasted text and quotes stack as blocks above the input box — new material drops in from the top, removing one slides the rest into the gap · off keeps the default stack",
   },
 
   themes: {

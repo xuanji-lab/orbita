@@ -41,6 +41,7 @@ import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.
 import folderOpen from "../../../../Orbita Design System/assets/icons/lucide/folder-open.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
 import folderSync from "../../../../Orbita Design System/assets/icons/lucide/folder-sync.svg?raw";
+import gamepad2 from "../../../../Orbita Design System/assets/icons/lucide/gamepad-2.svg?raw";
 import gitBranch from "../../../../Orbita Design System/assets/icons/lucide/git-branch.svg?raw";
 import gitCommitHorizontal from "../../../../Orbita Design System/assets/icons/lucide/git-commit-horizontal.svg?raw";
 import gitFork from "../../../../Orbita Design System/assets/icons/lucide/git-fork.svg?raw";
@@ -142,6 +143,7 @@ const ICONS = {
   "folder-open": folderOpen,
   "folder-plus": folderPlus,
   "folder-sync": folderSync,
+  "gamepad-2": gamepad2,
   "git-branch": gitBranch,
   "git-commit-horizontal": gitCommitHorizontal,
   "git-fork": gitFork,

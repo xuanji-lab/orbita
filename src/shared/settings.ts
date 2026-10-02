@@ -187,6 +187,14 @@ export interface AppSettings {
    * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
    */
   providerCardSize?: ProviderCardSize;
+  /**
+   * 游戏化：材料区俄罗斯方块（设置 › 游戏化的开关，2026-10 用户点的发散）。
+   * **缺席 = 关**——游戏化是口味不是能力，默认关，想要的人自己开一次。
+   * 开启后输入框上方的材料区（截图 / 文件 / 粘贴 / 引用）换成方块拼图：
+   * 新材料从顶上落进格子、删除后其余块滑动补位。材料数据与 B 叠放同一份，
+   * 这里只换显示形态。只认布尔，非布尔当作没开过（同 gitAttribution 的纪律）。
+   */
+  materialTetris?: boolean;
 }
 
 export type ProviderCardSize = "large" | "small";
@@ -343,6 +351,7 @@ export function parseSettings(raw: unknown): AppSettings {
     channelColumnWidth?: unknown;
     browserDownloadDir?: unknown;
     providerCardSize?: unknown;
+    materialTetris?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -399,6 +408,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
       : {}),
+    // 俄罗斯方块开关同 gitAttribution：非布尔一律当作「没开过」丢掉
+    ...(typeof record.materialTetris === "boolean" ? { materialTetris: record.materialTetris } : {}),
   };
 }
 

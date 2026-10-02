@@ -327,6 +327,26 @@ describe("parseSettings 的 gitAttribution", () => {
   });
 });
 
+describe("parseSettings 的 materialTetris", () => {
+  it("缺席 = 关（游戏化是口味不是能力，默认关），且不落这个键", () => {
+    deepStrictEqual(parseSettings({ theme: "graphite" }), {
+      theme: "graphite",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
+  });
+
+  it("true / false 都原样保留", () => {
+    deepStrictEqual(parseSettings({ materialTetris: true }).materialTetris, true);
+    deepStrictEqual(parseSettings({ materialTetris: false }).materialTetris, false);
+  });
+
+  it("非布尔一律丢掉，不当成真", () => {
+    deepStrictEqual(parseSettings({ materialTetris: "on" }).materialTetris, undefined);
+    deepStrictEqual(parseSettings({ materialTetris: 1 }).materialTetris, undefined);
+    deepStrictEqual(parseSettings({ materialTetris: null }).materialTetris, undefined);
+  });
+});
+
 describe("parseSettings 的 choreModel", () => {
   it("缺席 = 各件家务退回会话模型，不落这个键", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }).choreModel, undefined);

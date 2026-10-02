@@ -333,6 +333,7 @@ export const zh: Messages = {
       migration: "迁移",
       browser: "浏览器",
       voice: "语音",
+      gamification: "游戏化",
     },
     appearance: "外观",
     theme: "主题",
@@ -421,6 +422,12 @@ export const zh: Messages = {
       failed: "导入未能完成",
       expired: "所选内容已过期，请重新读取",
     },
+    // ── 游戏化（设置 › 游戏化：把功能换成好玩变体的开关，第一个是材料区俄罗斯方块）──
+    gamificationGroup: "输入框",
+    materialTetris: "材料区俄罗斯方块",
+    materialTetrisAria: "材料区俄罗斯方块",
+    materialTetrisInfo:
+      "截图、文件、粘贴文本与引用变成输入框上方的方块拼图——新材料从顶上落下，删掉一块其余的滑过来补位 · 关闭时用默认叠放",
   },
 
   themes: {

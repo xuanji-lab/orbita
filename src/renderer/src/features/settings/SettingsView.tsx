@@ -52,6 +52,7 @@ export const SETTINGS_TABS = [
   { id: "migration", icon: "download" },
   { id: "browser", icon: "globe" },
   { id: "voice", icon: "mic" },
+  { id: "gamification", icon: "gamepad-2" },
 ] as const satisfies readonly { id: string; icon: IconName }[];
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
@@ -148,6 +149,10 @@ export function SettingsView(props: {
           cardSize={props.settings.providerCardSize ?? "large"}
           onCardSize={(providerCardSize) => props.onSettingsChange({ providerCardSize })}
         />
+      ) : props.tab === "gamification" ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <Gamification settings={props.settings} onChange={props.onSettingsChange} />
+        </div>
       ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <General
@@ -159,6 +164,33 @@ export function SettingsView(props: {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 设置 › 游戏化：把某个面换成好玩变体的开关都住这一页（今天只有材料区俄罗斯方块）。
+ * 每个开关都默认关——游戏化是口味不是能力，想要的人自己开一次。
+ */
+function Gamification(props: { settings: AppSettings; onChange: (patch: SettingsPatch) => void }) {
+  const t = useT();
+  // 缺席 = 关，UI 要把这一层兤回来（同 gitAttribution 的纪律）
+  const materialTetris = props.settings.materialTetris ?? false;
+  return (
+    <div className="set-page">
+      <SettingGroup label={t.settings.gamificationGroup}>
+        <SettingRow name={t.settings.materialTetris} info={t.settings.materialTetrisInfo}>
+          {/* 设计系统里没有 Switch，开关就用两个 Chip——与提交署名、自动压缩的 Off 同一个形状 */}
+          <span className="set-chips" role="group" aria-label={t.settings.materialTetrisAria}>
+            <Chip active={materialTetris} onClick={() => props.onChange({ materialTetris: true })}>
+              {t.common.on}
+            </Chip>
+            <Chip active={!materialTetris} onClick={() => props.onChange({ materialTetris: false })}>
+              {t.common.off}
+            </Chip>
+          </span>
+        </SettingRow>
+      </SettingGroup>
     </div>
   );
 }
