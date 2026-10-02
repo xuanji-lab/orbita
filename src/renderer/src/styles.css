@@ -251,12 +251,15 @@
  *    零布局影响；纵向 padding 不进水平排版，可自由用。
  * 2. **字体继承输入框**（.composer-input 同时挂在镜像上），换字体就错位。
  *
+ * 纵向 padding 1px：22px 的行盒里 pill 21px，上下各留 1px——连续两行都是 chip 时
+ * 描边不至于贴边；copybook 24px 的格子里上下露一点横线，与修正液同款气质。
+ *
  * 跨行换行时 clone：断开的每一截各自是一个完整的 pill，与底下文字同步换行。
  * copybook 主题的白底绿描边变体在 paper-themes.css。
  */
 .composer-chip {
   border-radius: var(--radius-md);
-  padding: 1.5px 0;
+  padding: 1px 0;
   background: var(--color-bg-muted);
   box-shadow:
     0 0 0 1px var(--color-bg-muted),

@@ -1,79 +1,64 @@
 /**
- * textarea 里某个位置的**插入点坐标**（镜像层量法）。
+ * textarea 里某个位置的**插入点坐标**（在常驻镜像层上量）。
  *
  * 斜杠面板要「左缘对齐 `/` 字符的横坐标、顶缘在 `/` 所在行下方」，textarea 没有
- * 原生 API 给字符坐标，Range 也进不去 textarea——标准做法是垫一个同样排版的
- * 镜像 div：同样的字体 / 字距 / 行高 / padding / 宽度，灌入光标前的文本，在末尾
- * 放一个零宽标记，量标记的位置。whiteout 的镜像（小学作业主题）同一家族，但那个
- * 常驻渲染且只服务纸面主题，这里按需建、量完即弃。
+ * 原生 API 给字符坐标，Range 也进不去 textarea——标准做法是垫一个同样排版的镜像
+ * div 量字符位置。这里直接用 Composer 的**常驻镜像层**（.composer-mirror，chip /
+ * 修正液画的那一层，2026-10-06 起全主题常驻）：同字体、同字距、同宽（滚动条占宽
+ * 有补偿），排版逐像素一致，不必每次另建一个量完即弃的临时 div——两层镜像各量
+ * 各的迟早量出两套坐标（用户裁决：合并成一层）。
  *
- * 返回坐标**相对 textarea 的内容盒**、且已扣除滚动（textarea 内部滚了多少，
- * 视觉位置就上移多少）——调用方加上 textarea 自身在卡里的偏移就是卡内坐标。
+ * 镜像随 textarea 同步滚动（Composer 的 syncMirror / onScroll），Range 量出来的
+ * 就是**视觉位置**：textarea 内部滚了多少，坐标自动跟着走，调用方不用再补
+ * scrollTop。返回坐标相对 textarea 的 border box。
  */
 
-/** 插入点的位置与该行的行高（都相对 textarea 内容盒、已扣滚动） */
+/** 插入点的位置与该行的行高（都相对 textarea 的 border box、视觉坐标） */
 export interface CaretPoint {
   left: number;
   top: number;
   height: number;
 }
 
-const COPIED_STYLES = [
-  "fontFamily",
-  "fontSize",
-  "fontWeight",
-  "fontStyle",
-  "fontVariant",
-  "fontFeatureSettings",
-  "letterSpacing",
-  "lineHeight",
-  "paddingTop",
-  "paddingRight",
-  "paddingBottom",
-  "paddingLeft",
-  "borderTopWidth",
-  "borderRightWidth",
-  "borderBottomWidth",
-  "borderLeftWidth",
-  "boxSizing",
-  "textIndent",
-  "tabSize",
-  "textTransform",
-] as const;
+/**
+ * 在镜像层里定位全局文本偏移：镜像的子节点是裸文本、chip / 修正液 span 与末尾的
+ * 零宽哨兵（textarea 末尾换行多出的行靠它垫出来），偏移按 textContent 累加换算。
+ */
+function locateText(root: Node, offset: number): { node: Text; offset: number } | null {
+  let remaining = offset;
+  for (const child of Array.from(root.childNodes)) {
+    const length = child.textContent?.length ?? 0;
+    if (child.nodeType === Node.TEXT_NODE) {
+      // 裸文本：offset 允许落在末尾（含哨兵的 0 位——文本以 \n 结尾时的下一行）
+      if (remaining <= length) return { node: child as Text, offset: remaining };
+    } else if (remaining < length) {
+      // span（chip / 修正液）：只在其内部才递归；正好在边界上留给下一个兄弟
+      return locateText(child, remaining);
+    }
+    remaining -= length;
+  }
+  return null;
+}
 
 export function caretPoint(textarea: HTMLTextAreaElement, index: number): CaretPoint | null {
   const value = textarea.value;
   if (index < 0 || index > value.length) return null;
-  const computed = getComputedStyle(textarea);
-  const mirror = document.createElement("div");
-  for (const property of COPIED_STYLES) {
-    // computed 的值是活的字符串，直接照抄
-    mirror.style[property] = computed[property];
-  }
-  // 换行与折行都照 textarea 的规矩：pre-wrap + 长词断行
-  mirror.style.whiteSpace = "pre-wrap";
-  mirror.style.overflowWrap = "break-word";
-  mirror.style.wordBreak = computed.wordBreak;
-  mirror.style.position = "absolute";
-  mirror.style.visibility = "hidden";
-  mirror.style.top = "0";
-  mirror.style.left = "0";
-  mirror.style.width = `${textarea.clientWidth}px`;
-  mirror.style.height = "auto";
-  mirror.style.overflow = "hidden";
-  mirror.textContent = value.slice(0, index);
-  const marker = document.createElement("span");
-  // 零宽字符：文本以 \n 结尾时 div 不出最后一个行盒，标记垫出那一行
-  marker.textContent = "\u200b";
-  mirror.appendChild(marker);
-  document.body.appendChild(mirror);
-  const markerRect = marker.getBoundingClientRect();
+  // 镜像与 textarea 同在 .composer-field 的一格里（styles.css 的 grid 叠放）
+  const mirror = textarea.parentElement?.querySelector(":scope > .composer-mirror") ?? null;
+  if (mirror === null) return null;
+  const located = locateText(mirror, index);
+  if (located === null) return null;
+  const range = document.createRange();
+  range.setStart(located.node, located.offset);
+  range.collapse(true);
+  const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0) return null;
   const areaRect = textarea.getBoundingClientRect();
-  mirror.remove();
+  const computed = getComputedStyle(textarea);
   const lineHeight = Number.parseFloat(computed.lineHeight);
   return {
-    left: markerRect.left - areaRect.left + textarea.scrollLeft,
-    top: markerRect.top - areaRect.top + textarea.scrollTop,
-    height: Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : markerRect.height,
+    left: rect.left - areaRect.left,
+    top: rect.top - areaRect.top,
+    height: Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : rect.height,
   };
 }
