@@ -30,3 +30,44 @@ describe("devDataDirs", () => {
     assert.notEqual(dev?.orbitaRoot.toLowerCase(), PACKAGED_ORBITA_ROOT.toLowerCase());
   });
 });
+
+describe("devDataDirs —— 显式 --user-data-dir（隔离实例）", () => {
+  test("工作区根跟 userData 目录名走：orbita-dev-2 → ~/Orbita-dev-2", () => {
+    assert.deepEqual(
+      devDataDirs({ packaged: false, appData: APP_DATA, home: HOME, userDataSwitch: join(APP_DATA, "orbita-dev-2") }),
+      { userData: join(APP_DATA, "orbita-dev-2"), orbitaRoot: join(HOME, "Orbita-dev-2") },
+    );
+  });
+
+  test("目录名不带 orbita- 前缀也行：accept → ~/Orbita-accept", () => {
+    assert.equal(
+      devDataDirs({ packaged: false, appData: APP_DATA, home: HOME, userDataSwitch: join(APP_DATA, "accept") })?.orbitaRoot,
+      join(HOME, "Orbita-accept"),
+    );
+  });
+
+  test("尾部分隔符不碍事：orbita-dev-2/ 与无尾斜杠同结果", () => {
+    const withSlash = devDataDirs({ packaged: false, appData: APP_DATA, home: HOME, userDataSwitch: `${join(APP_DATA, "orbita-dev-2")}/` });
+    const bare = devDataDirs({ packaged: false, appData: APP_DATA, home: HOME, userDataSwitch: join(APP_DATA, "orbita-dev-2") });
+    assert.deepEqual(withSlash, bare);
+  });
+
+  test("空串与未给等价：走默认开发版目录", () => {
+    assert.deepEqual(
+      devDataDirs({ packaged: false, appData: APP_DATA, home: HOME, userDataSwitch: "" }),
+      devDataDirs({ packaged: false, appData: APP_DATA, home: HOME }),
+    );
+  });
+
+  test("隔离实例的工作区根也不与正式版撞", () => {
+    const iso = devDataDirs({ packaged: false, appData: APP_DATA, home: HOME, userDataSwitch: join(APP_DATA, "orbita-dev-2") });
+    assert.notEqual(iso?.orbitaRoot.toLowerCase(), PACKAGED_ORBITA_ROOT.toLowerCase());
+  });
+
+  test("正式版带 --user-data-dir 也不改路径：packaged 优先返回 null", () => {
+    assert.equal(
+      devDataDirs({ packaged: true, appData: APP_DATA, home: HOME, userDataSwitch: join(APP_DATA, "orbita-dev-2") }),
+      null,
+    );
+  });
+});

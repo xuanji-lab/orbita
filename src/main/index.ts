@@ -55,7 +55,13 @@ preferIPv4();
 
 // 开发版与正式版各用各的数据（理由见 data-dirs.ts）。**必须在任何人读 userData 之前**：
 // 放在模块顶层、whenReady 之前——Chromium 的 Local Storage / 缓存也在 ready 时按它定位
-const devDirs = devDataDirs({ packaged: app.isPackaged, appData: app.getPath("appData"), home: homedir() });
+const devDirs = devDataDirs({
+  packaged: app.isPackaged,
+  appData: app.getPath("appData"),
+  home: homedir(),
+  // 隔离实例（--user-data-dir）：锁与 userData 由 Chromium 分开，工作区根在 devDataDirs 里跟着目录名派生
+  userDataSwitch: app.commandLine.getSwitchValue("user-data-dir"),
+});
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
 
