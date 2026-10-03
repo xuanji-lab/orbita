@@ -477,8 +477,8 @@ const mcpHub = new McpHub();
 mcpHub.onIdleDrop = () => send({ type: "mcp", servers: mcpHub.describe() });
 /**
  * bash 可执行文件路径探测。**进程级缓存**——pi 每轮都会重跑 `getShellConfig()`，而 Git
- * 不在默认安装位置的机器上那一步是 `spawnSync("where", …)`（实测 85ms，同步、卡事件
- * 循环），每一次 bash 调用都要付。探一次、把结果钉在 pi 的 `shellPath` 上，之后只剩一次的
+ * 不在默认安装位置的机器上那一步是 `spawnSync("where", …)`（本机多轮实测 50~85ms，同步、
+ * 卡事件循环），每一次 bash 调用都要付。探一次、把结果钉在 pi 的 `shellPath` 上，之后只剩一次的
  * `existsSync`。完整理由与平台边界见 ./shell-path.ts。
  */
 const resolveShellPath = createShellPathResolver();
@@ -712,12 +712,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
   /**
    * bash 路径钉一次（A2）。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里
-   * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 85ms 的同步 `where`）。
+   * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 50~85ms 的同步 `where`）。
    *
    * **只在用户没显式设过时补**：`shellPath` 是 pi 的设置项，用户可能在自己的
    * `~/.pi/agent/settings.json` 里指定了别的 shell（MSYS2、WSL bash）——那是当事人的选择，
    * `applyOverrides` 盖掉它等于替用户改配置。空着才是我们该补的那种机器。
    * 探不到（没装 Git Bash）也不填：pi 会照旧走它自己的报错路径，那种机器上行为不变。
+   * 钉住后不复探：bash 二进制中途消失会一路抛「Custom shell path not found」直到重启
+   * （已知代价，取舍见 ./shell-path.ts）。
    */
   if (services.settingsManager.getShellPath() === undefined) {
     const shellPath = resolveShellPath();
