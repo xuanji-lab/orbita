@@ -14,10 +14,34 @@ import { decidePermission, type PermissionAnswer, type PermissionMode } from "..
 import { isAbsolute, relative, resolve } from "node:path";
 
 /**
- * pi 内建、且我们全开的八个工具（guideline §五）。
- * 只有一个用途：**把权限模式讲给模型听**——见 `describePermissionMode`。
+ * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
+ *
+ *   1. `runtime.ts` 开轮时经 `settingsManager.applyOverrides({ defaultTools })` 交给 pi，
+ *      决定本会话**内建工具的初始选择**（不是 `tools` 白名单——那个是全局的，会连自定义
+ *      工具一起过滤掉，实测见 runtime.ts 那段注释）；
+ *   2. `describePermissionMode` 把「哪些工具会放行 / 询问 / 拒绝」讲给模型听（见下）。
+ *
+ * 两者**必须同一份**：分开写就会漂——这份名单以前带着一个 pi 根本没有的 `glob`，
+ * 于是提示词常年在告诉模型一个不存在的工具（2026-10-04 查证：pi 0.84.3 的
+ * `createAllToolDefinitions` 只有 read / bash / powershell / edit / write / grep / find / ls）。
+ *
+ * **为什么搜索类工具必须在里面**：pi 的默认集是 `["read","bash","edit","write"]`，而 pi 的
+ * system prompt 里有一条规则——**当工具集里有 bash、却一个 grep / find / ls 都没有的时候**，
+ * 它给模型下一句 "Use bash for file operations like ls, rg, find"（0.84.3 与上游 1.0.0 同构，
+ * 条件写死在 system-prompt 里）。于是搜索全走 shell：真实会话 33,201 次 bash 调用里
+ * **52.4% 是搜索类命令**；而 `grep -rn X .` 会递归进 node_modules（本仓 34,337 个文件里
+ * 30,997 个是它），实测 **5.57s** —— pi 自带的 grep 走 ripgrep、尊重 .gitignore，
+ * 同一个任务 **0.08s**。
+ *
+ * 把这三个补进来**同时做两件事**：搜索改走 ripgrep / fd；并且上面那条把模型推向 bash 的
+ * 规则的**触发条件不再成立**，那句话自动消失。这比「在提示词里劝模型别用 bash 搜索」硬：
+ * 我们只能往 pi 的 system prompt 后面**追加**，删不掉它写的那句，劝也劝不过
+ * （模型自填 timeout 那件事已经证明：提示词管不住模型）。
+ *
+ * 顺序只影响提示词里工具清单的先后（pi 拿它当「内建工具的初始选择」，顺序无功能含义），
+ * 保持按名字排列。
  */
-const BUILTIN_TOOLS = ["bash", "edit", "find", "glob", "grep", "ls", "read", "write"] as const;
+export const ENABLED_BUILTIN_TOOLS = ["bash", "edit", "find", "grep", "ls", "read", "write"] as const;
 
 /**
  * 把当前模式翻成一段系统提示。
@@ -29,8 +53,10 @@ const BUILTIN_TOOLS = ["bash", "edit", "find", "glob", "grep", "ls", "read", "wr
  * 文案**从 `decidePermission` 推出来**，不是另写一遍：三档的工具分桶由策略函数当场算，
  * 策略改了这段话跟着改。两处描述各说各话，比没有描述更糟。
  *
+ * 枚举的是 `ENABLED_BUILTIN_TOOLS`——**真的启用了哪些**，不是「pi 有哪些」。
+ *
  * @param extraToolNames 内建之外当前真实注册的工具名（1-2 起 MCP 的
- * `mcp__server__tool` 全部由调用方从注册表里拿来传入）——不再只枚举内建八个，
+ * `mcp__server__tool` 全部由调用方从注册表里拿来传入）——不再只枚举内建的那几个，
  * 否则 plan 模式下模型不知道 MCP 工具会被拒，照样一头撞墙（已知缺口 #4）。
  * MCP 工具没有「只读」豁免，分桶全由 decidePermission 算，不在提示词里另立规则。
  */
@@ -38,7 +64,7 @@ export function describePermissionMode(mode: PermissionMode, extraToolNames: rea
   const allow: string[] = [];
   const ask: string[] = [];
   const deny: string[] = [];
-  for (const tool of [...BUILTIN_TOOLS, ...extraToolNames]) {
+  for (const tool of [...ENABLED_BUILTIN_TOOLS, ...extraToolNames]) {
     const decision = decidePermission(mode, tool);
     if (decision.behavior === "allow") allow.push(tool);
     else if (decision.behavior === "ask") ask.push(tool);

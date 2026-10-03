@@ -1,29 +1,47 @@
-import { match, doesNotMatch } from "node:assert/strict";
+import { match, doesNotMatch, deepEqual as assertDeepEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { describePermissionMode } from "./permission.ts";
+import { describePermissionMode, ENABLED_BUILTIN_TOOLS } from "./permission.ts";
 
 describe("describePermissionMode", () => {
   it("plan：只读工具直接跑，写与 shell 明确说不可用", () => {
     const text = describePermissionMode("plan");
-    match(text, /Runs immediately: find, glob, grep, ls, read\./);
+    // 只读的四个（find/grep/ls/read）——名单与 ENABLED_BUILTIN_TOOLS 同源。
+    // 以前这里断言里有一个 pi 根本没有的 `glob`（错位，2026-10-04 修）
+    match(text, /Runs immediately: find, grep, ls, read\./);
     match(text, /Refused outright: bash, edit, write\./);
     // 这句是这次修的病灶：模型答应了才发现不能改
     match(text, /do not tell the user you will change anything on disk/);
     doesNotMatch(text, /Asks the user first/);
   });
 
-  it("manual：八个全部要问，没有直接放行的", () => {
+  it("manual：七个全部要问，没有直接放行的", () => {
     const text = describePermissionMode("manual");
-    match(text, /Asks the user first: bash, edit, find, glob, grep, ls, read, write\./);
+    match(text, /Asks the user first: bash, edit, find, grep, ls, read, write\./);
     doesNotMatch(text, /Runs immediately/);
     doesNotMatch(text, /Refused outright/);
   });
 
-  it("skip：八个全部直接跑", () => {
+  it("skip：七个全部直接跑", () => {
     const text = describePermissionMode("skip");
-    match(text, /Runs immediately: bash, edit, find, glob, grep, ls, read, write\./);
+    match(text, /Runs immediately: bash, edit, find, grep, ls, read, write\./);
     doesNotMatch(text, /Asks the user first/);
     doesNotMatch(text, /Refused outright/);
+  });
+
+  /**
+   * 提示词与真实工具集必须同源：以前这段文案里的 `glob` 是 pi 根本没有的工具，
+   * 模型被告知有一个存在的工具而实际没有。这条钉住「文案里的每个名字都在
+   * ENABLED_BUILTIN_TOOLS 里」。
+   */
+  it("文案里不出现 ENABLED_BUILTIN_TOOLS 之外的内建工具名", () => {
+    const text = describePermissionMode("skip");
+    const listed = text
+      .split("Runs immediately: ")[1]
+      ?.split(".")[0]
+      ?.split(", ")
+      .map((name) => name.trim());
+    assertDeepEqual(listed, [...ENABLED_BUILTIN_TOOLS]);
+    doesNotMatch(text, /\bglob\b/);
   });
 
   it("模式名进得去——模型要能说出自己在哪一档", () => {

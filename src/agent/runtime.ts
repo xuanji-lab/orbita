@@ -32,6 +32,7 @@ import {
 import {
   createToolCallGate,
   describePermissionMode,
+  ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
@@ -697,6 +698,31 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    */
   services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
   /**
+   * 内建工具集**显式给**，不吃 pi 的默认四件套（read/bash/edit/write）。
+   *
+   * 因为 pi 的 system prompt 里有一条规则：**有 bash 而 grep / find / ls 一个都不在**时，
+   * 它给模型下一句 "Use bash for file operations like ls, rg, find"（实测：默认四件套下这句
+   * 就在 systemPrompt 里）——搜索于是全走 shell。后果实测：真实会话 33,201 次 bash 调用里
+   * 52.4% 是搜索类命令；`grep -rn X .` 会递归进 node_modules（本仓 34,337 个文件里 30,997 个
+   * 是它）耗 5.57s，而 pi 自带的 grep 工具走 ripgrep、尊重 .gitignore，同一任务 0.08s。
+   *
+   * 补上这三个，那条规则的**触发条件不再成立，它自己就消失**（实测：同一句从 systemPrompt
+   * 里消失）——不用去提示词里劝模型。我们只能往 pi 的 system prompt 后面**追加**，删不掉它写的
+   * 那句。
+   *
+   * **走 defaultTools 设置，不走 `tools` 白名单**：`tools` 是**全局**白名单，
+   * `_refreshToolRegistry` 里同一个 `isAllowedTool` 会**连自定义工具一起过滤**——
+   * 2026-10-04 实测：传 `tools: [七个内建]` 后 MCP、read_pdf、read_docx、show_image、store / task /
+   * browser / channel 工具与 pi 自己的 ask_question / todo **全部消失**，而且不报错。
+   * `defaultTools` 是设置项，只决定**内建工具的初始选择**，不构成白名单，自定义工具不受影响
+   * （实测：七个内建 + 自定义工具同时在位）。
+   *
+   * 覆盖用户 pi 全局的 `defaultTools` 是刻意的：那是另一个应用的配置，不该决定 orbita
+   * 手里有哪些工具——同 retry / compaction 那几处同一个口径。
+   * 名单与权限提示词同一份真源：./permission.ts 的 ENABLED_BUILTIN_TOOLS。
+   */
+  services.settingsManager.applyOverrides({ defaultTools: [...ENABLED_BUILTIN_TOOLS] });
+  /**
    * 压缩阈值（A-1）：用户设置走「剩余百分比」，按**本轮模型**的窗口换算成 pi 的
    * reserveTokens——pi 的判定（agent-session 的 shouldCompact）拿当前模型窗口比，
    * 这里必须同源。保留量不暴露、内部按窗口钳制（pi 出厂 2 万对 ≤16k 窗口的模型
@@ -754,6 +780,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     services,
     sessionManager,
     model,
+    // 内建工具集走上面那句 applyOverrides({ defaultTools })，**不在这里传 `tools`**——
+    // `tools` 是全局白名单，会把自定义工具（MCP / read_pdf / browser / …）一并过滤掉。
     // 思考档每轮显式给：不传的话 pi 退到用户全局 ~/.pi/agent/settings.json，
     // 那是另一个应用的配置——这一刀收归己有的就是它
     thinkingLevel: command.thinkingLevel,
