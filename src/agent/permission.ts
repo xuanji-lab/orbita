@@ -131,8 +131,8 @@ const COMMAND_TOOLS = new Set(["bash", "powershell"]);
  */
 export const COMMAND_TIMEOUT_FLOOR_SECONDS = 600;
 
-/** 原地抬 `event.input.timeout`（pi 的约定，与下面的改写入参同一套）。导出来只为可测。 */
-export function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): void {
+/** 原地抬 `event.input.timeout`（pi 的约定，与下面的改写入参同一套）。闸门内部用，行为经 `createToolCallGate` 测。 */
+function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): void {
   if (!COMMAND_TOOLS.has(toolName)) return;
   const timeout = input["timeout"];
   if (typeof timeout !== "number" || !Number.isFinite(timeout)) return;
