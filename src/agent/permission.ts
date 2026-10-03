@@ -114,6 +114,34 @@ const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 
 /**
+ * 模型自填的命令超时**下限**（秒）：低于它的 `timeout` 抬到它，不填就不动。
+ *
+ * pi 的 bash 工具**没有系统超时**（`MAX_TIMEOUT_SECONDS` 是 2147483.647 秒，约 24 天），
+ * 唯一的秒表就是 schema 里那个可选 `timeout` 参数——**由模型自己填**。它会填一个保守的
+ * 小值（2026-10-01 统计全部会话：60s ×128、30s ×27、10s ×12；2026-10-04 复查，填过的共
+ * 1,812 次），于是慢命令被自己的秒表拦腰砍掉：全仓 grep、依赖安装、构建、测试在 Windows 上
+ * 本来就慢。**代价不是「命令失败」，是白等一分钟再重试**——进程重开、环境重热、从头再跑。
+ * 系统提示词里那句「不要传 timeout」拦不住，所以这里兜底。
+ *
+ * **只升不降**：不填 = 不设超时，那是**最宽**的选择，抬它反而变窄；填得比下限大
+ * （900s）是模型自己的判断，尊重它。非法值（≤ 0 / 非有限数）不在这里修——
+ * pi 自己会报「Invalid timeout」，我们不替它做第二套校验。
+ *
+ * 导出只为让提示词那段话引用它：同一个数有两处真源的话，改了常量提示词还说着旧数。
+ */
+export const COMMAND_TIMEOUT_FLOOR_SECONDS = 600;
+
+/** 原地抬 `event.input.timeout`（pi 的约定，与下面的改写入参同一套）。导出来只为可测。 */
+export function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): void {
+  if (!COMMAND_TOOLS.has(toolName)) return;
+  const timeout = input["timeout"];
+  if (typeof timeout !== "number" || !Number.isFinite(timeout)) return;
+  if (timeout > 0 && timeout < COMMAND_TIMEOUT_FLOOR_SECONDS) {
+    input["timeout"] = COMMAND_TIMEOUT_FLOOR_SECONDS;
+  }
+}
+
+/**
  * 路径折叠：Windows 文件系统大小写不敏感，比较前小写化、反斜杠转正斜杠、
  * 收拢连续斜杠（JSON.stringify 会把 `\` 转义成 `\\`，不收拢就对不上）。
  * posix 保持原样——文件系统大小写敏感，不折。
@@ -216,6 +244,10 @@ export interface PiExtensionApi {
  * 不做禁区检查；给了就在权限档判定**之前**拦——Skip 档也拦。
  *
  * 改写入参走 pi 的约定：**原地改 `event.input`**（不是返回新对象）。
+ *
+ * 顺序上讲一句：参数兜底（`raiseCommandTimeout`）跑在**所有早退之前**，而用户在审批卡片里
+ * 改的入参跑在**最后**——两条都是原地改，含义不同：兜底是防模型失手，人工明确填的秒表
+ * 是当事人自己的选择，不以兜底覆盖它。
  */
 export function createToolCallGate(
   getMode: () => PermissionMode,
@@ -224,6 +256,9 @@ export function createToolCallGate(
   cwd: string = process.cwd(),
 ) {
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
+    // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
+    // 放行）就漏掉了——而那正是模型填小超时的场景。
+    raiseCommandTimeout(event.toolName, event.input);
     const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
     if (refusal !== null) return { block: true, reason: refusal };
     const decision = decidePermission(getMode(), event.toolName);

@@ -30,6 +30,7 @@ import {
   type PiModel,
 } from "./model-registration.ts";
 import {
+  COMMAND_TIMEOUT_FLOOR_SECONDS,
   createToolCallGate,
   describePermissionMode,
   ENABLED_BUILTIN_TOOLS,
@@ -493,12 +494,16 @@ const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>()
 
 /**
  * 每轮重讲的工具使用指引。bash 的 schema 暴露了可选 `timeout`（秒），模型会自作主张
- * 给大扫描带上 60 秒这种小值，把 node_modules 级别的正常慢命令拦腰杀掉（实测：
- * `grep -r node_modules/` + `timeout:60` → "Command timed out after 60 seconds"）。
- * 短命令不受影响，只要求慢命令别自己设短超时。
+ * 给慢命令带上 60 秒这种小值（2026-10-01 统计：60s ×128、30s ×27、10s ×12），
+ * 把依赖安装 / 构建 / 测试这类正常慢命令拦腰砍掉——短命令不受影响，只要求慢命令
+ * 别自己设短超时。
+ *
+ * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS`）：低于下限的会被抬
+ * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
  */
 const TOOL_GUIDELINES =
-  "跑可能耗时的命令（大目录/全仓搜索、依赖安装、构建、测试）时，不要给 bash/powershell 传 timeout 参数，或至少设 300 秒以上——Windows 上扫大目录本来就慢，短超时会把正常的慢命令拦腰杀掉。";
+  "跑可能耗时的命令（依赖安装、构建、测试）时，不要给 bash/powershell 传 timeout 参数——" +
+  `Windows 上这些命令本来就慢，短超时会把正常的慢命令拦腰杀掉；填了小于 ${COMMAND_TIMEOUT_FLOOR_SECONDS} 秒的值不会生效。`;
 
 /**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
@@ -706,8 +711,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    */
   services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
   /**
-   * bash 路径钉一次。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里重跑一套
-   * 查找（Git 不在默认安装位置的机器上那一步是 85ms 的同步 `where`）。
+   * bash 路径钉一次（A2）。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里
+   * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 85ms 的同步 `where`）。
    *
    * **只在用户没显式设过时补**：`shellPath` 是 pi 的设置项，用户可能在自己的
    * `~/.pi/agent/settings.json` 里指定了别的 shell（MSYS2、WSL bash）——那是当事人的选择，
