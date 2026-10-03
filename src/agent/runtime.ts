@@ -35,6 +35,7 @@ import {
   ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
+import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
@@ -474,6 +475,13 @@ const mcpHub = new McpHub();
 // 闲置工作区的实例被回收后，主进程缓存的状态就陈旧了（显示就绪但进程已退）——推新快照
 mcpHub.onIdleDrop = () => send({ type: "mcp", servers: mcpHub.describe() });
 /**
+ * bash 可执行文件路径探测。**进程级缓存**——pi 每轮都会重跑 `getShellConfig()`，而 Git
+ * 不在默认安装位置的机器上那一步是 `spawnSync("where", …)`（实测 85ms，同步、卡事件
+ * 循环），每一次 bash 调用都要付。探一次、把结果钉在 pi 的 `shellPath` 上，之后只剩一次的
+ * `existsSync`。完整理由与平台边界见 ./shell-path.ts。
+ */
+const resolveShellPath = createShellPathResolver();
+/**
  * 工具请求的在途表（4-3 立，B-1 泛化）：create_skill / add_mcp_server /
  * read_task / browser_* 的回执由 handle 的命令分支结掉。进程级一份——主进程是唯一的
  * 对端，不需要按会话分。
@@ -698,6 +706,19 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    */
   services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
   /**
+   * bash 路径钉一次。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里重跑一套
+   * 查找（Git 不在默认安装位置的机器上那一步是 85ms 的同步 `where`）。
+   *
+   * **只在用户没显式设过时补**：`shellPath` 是 pi 的设置项，用户可能在自己的
+   * `~/.pi/agent/settings.json` 里指定了别的 shell（MSYS2、WSL bash）——那是当事人的选择，
+   * `applyOverrides` 盖掉它等于替用户改配置。空着才是我们该补的那种机器。
+   * 探不到（没装 Git Bash）也不填：pi 会照旧走它自己的报错路径，那种机器上行为不变。
+   */
+  if (services.settingsManager.getShellPath() === undefined) {
+    const shellPath = resolveShellPath();
+    if (shellPath !== undefined) services.settingsManager.applyOverrides({ shellPath });
+  }
+  /**
    * 内建工具集**显式给**，不吃 pi 的默认四件套（read/bash/edit/write）。
    *
    * 因为 pi 的 system prompt 里有一条规则：**有 bash 而 grep / find / ls 一个都不在**时，
@@ -718,7 +739,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * （实测：七个内建 + 自定义工具同时在位）。
    *
    * 覆盖用户 pi 全局的 `defaultTools` 是刻意的：那是另一个应用的配置，不该决定 orbita
-   * 手里有哪些工具——同 retry / compaction 那几处同一个口径。
+   * 手里有哪些工具——同 retry / compaction / shellPath 那几处同一个口径。
    * 名单与权限提示词同一份真源：./permission.ts 的 ENABLED_BUILTIN_TOOLS。
    */
   services.settingsManager.applyOverrides({ defaultTools: [...ENABLED_BUILTIN_TOOLS] });
