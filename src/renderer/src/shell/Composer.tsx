@@ -642,36 +642,6 @@ export function Composer(props: {
                 return;
               }
             }
-            // 「/ + 空格」打开右栏 Skills 面板选取（panel-token.ts）：只认消息开头
-            // 孤立的 /，句中的「a / b」是普通文字。删掉 / 后斜杠面板随 token 消失自然
-            // 收起，右栏由 App 接着打开。删 / 走 execCommand("delete") 保撤销栈；被拒
-            // 退回 onChange 直写（不回抢焦点——下一拍右栏搜索框要接管）。组词中不触发
-            if (
-              event.key === " " &&
-              !event.nativeEvent.isComposing &&
-              composition === null &&
-              props.onSlashSpace !== undefined
-            ) {
-              const position = slashSpaceOpensPanel(props.value, cursor);
-              if (position !== null && props.onSlashSpace(position)) {
-                event.preventDefault();
-                const el = textareaRef.current;
-                if (el !== null) {
-                  el.setSelectionRange(position, position + 1);
-                  if (document.execCommand("delete")) {
-                    // execCommand 后光标就落在删除点；只同步 cursor state
-                    setCursor(position);
-                    return;
-                  }
-                }
-                props.onChange(props.value.slice(0, position) + props.value.slice(position + 1));
-                setCursor(position);
-                requestAnimationFrame(() => {
-                  textareaRef.current?.setSelectionRange(position, position);
-                });
-                return;
-              }
-            }
             // 面板开着时方向键与 Enter 归面板；Esc 关面板，内容照在。组词中的按键不动面板。
             // ↑↓ 跨节线性移动（节边界自然续到下一节、两端循环）；←→ 跳相邻节并选中
             // 它的第一项——**只在已有高亮时接管**：补全模式默认无高亮，←→ 先留给光标
