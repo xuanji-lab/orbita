@@ -806,6 +806,7 @@ function ChatViewBody(props: {
       }}
       onStop={session.stop}
       skills={skills}
+      workspaceId={session.workspaceId}
       onReloadSkills={reloadSkills}
       servers={servers}
       onReloadServers={reloadServers}

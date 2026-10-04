@@ -143,6 +143,7 @@ export const en = {
     slashSectionCommands: "Commands",
     slashSectionSkills: "Skills",
     slashSectionMcp: "MCP",
+    skillNoneInWorkspace: "No skills available in this workspace",
     cmdCompact: "Compact the context now",
     cmdNew: "Start a new session",
   },

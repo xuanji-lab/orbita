@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { MaterialStack } from "./composer-material-stack.tsx";
@@ -19,7 +19,7 @@ import {
   slashSpaceOpensPanel,
   tokenPayloadOf,
 } from "./panel-token.ts";
-import type { SkillMeta } from "@shared/skill";
+import { isSkillAvailable, type SkillMeta } from "@shared/skill";
 import type { McpServerInfo } from "@shared/mcp";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
@@ -103,8 +103,11 @@ export function Composer(props: {
   imageUnsupported?: boolean;
   /** 指令面板的动作项（/compact /new）：选中即执行，会话动作由调用方接（发送流不经这里） */
   onCommand?: (command: "compact" | "new") => void;
-  /** 指令面板的 skill 清单（ChatView 层 useSkillIndex 的同一份——徽标与面板共用，Composer 不自己拉） */
+  /** 指令面板的 skill 清单（ChatView 层 useSkillIndex 的同一份——徽标与面板共用，Composer 不自己拉）。
+   * 面板只列对 workspaceId 可用的那部分（isSkillAvailable，与发送端同一谓词） */
   skills: readonly SkillMeta[];
+  /** 当前草稿所属的工作区：面板的可用性调词吃它（首页 = picker 选中的；无工作区 = 只剩 global） */
+  workspaceId: string | null;
   /** 面板每次打开时触发重拉：新建 / 删除的 skill 下一次打开立即可见 */
   onReloadSkills: () => void;
   /** 指令面板 MCP 栏的 server 清单与重拉（同 skills 的规矩：面板打开时重拉） */
@@ -200,6 +203,17 @@ export function Composer(props: {
   const commandQuery = token?.query ?? "";
   // 行先于开关算（不带 panelOpen 门控）：补全模式无命中时面板要**整个不弹**，
   // 开关反过来要看行数，顺序颠倒就循环了。token 为 null 时直接空表，不自费
+  // 当前工作区可用的 skill（isSkillAvailable 与主进程发送端同一份——面板认的，
+  // 发送时必然认；两个满不在同一处，面板就会列出发出去只报「不存在」的 skill）
+  const availableSkills = useMemo(
+    () => props.skills.filter((meta) => isSkillAvailable(meta, props.workspaceId)),
+    [props.skills, props.workspaceId],
+  );
+  // Skills 节空态：主模式、还没打查询词时补一句「这个工作区没有可用 skill」——
+  // 面板不静默少一节，用户才知道是归属问题而不是面板坏了。打了查询词就回到
+  // 「没有匹配的指令」的整体空态，不为过滤结果另起一套文案
+  const skillsEmptyHint =
+    tokenAtStart && commandQuery.trim() === "" && availableSkills.length === 0;
   const commandSections = useMemo(
     () =>
       slashSections({
@@ -209,12 +223,12 @@ export function Composer(props: {
           { kind: "compact", name: "compact", description: t.composer.cmdCompact },
           { kind: "new", name: "new", description: t.composer.cmdNew },
         ],
-        skills: [...props.skills],
+        skills: availableSkills,
         servers: props.servers
           .filter((server) => server.status.kind !== "disabled")
           .map((server) => ({ name: server.name, detail: server.detail })),
       }),
-    [tokenAtStart, commandQuery, props.skills, props.servers, t],
+    [tokenAtStart, commandQuery, availableSkills, props.servers, t],
   );
   const commandRowsTotal = slashRowCount(commandSections);
   const panelOpen =
@@ -462,7 +476,8 @@ export function Composer(props: {
                       ? t.composer.slashSectionSkills
                       : t.composer.slashSectionMcp;
                 return (
-                  <div key={section.id} role="group" aria-label={kicker}>
+                  <Fragment key={section.id}>
+                  <div role="group" aria-label={kicker}>
                     <div className="slash-kicker" aria-hidden="true">
                       {kicker}
                     </div>
@@ -507,6 +522,17 @@ export function Composer(props: {
                       );
                     })}
                   </div>
+                  {/* Skills 空态提示跟在指令节后面（skillsEmptyHint 只在查询词为空时成立，
+                      而 q=空时指令节必然在）；不可选中、不占行号——它不是选项 */}
+                  {section.id === "commands" && skillsEmptyHint && (
+                    <div role="group" aria-label={t.composer.slashSectionSkills}>
+                      <div className="slash-kicker" aria-hidden="true">
+                        {t.composer.slashSectionSkills}
+                      </div>
+                      <div className="slash-empty">{t.composer.skillNoneInWorkspace}</div>
+                    </div>
+                  )}
+                  </Fragment>
                 );
               });
             })()

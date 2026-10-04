@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { matchSkillTarget, parseSkillSegments, skillForReadPath } from "./skill.ts";
+import { isSkillAvailable, matchSkillTarget, parseSkillSegments, skillForReadPath } from "./skill.ts";
 
 /**
  * 旧转录的 `<skill>` 块字节形状（2026-10-02 改指令式之前，主进程 formatSkillBlock
@@ -15,6 +15,34 @@ const LEGACY_SKILL_BLOCK = [
   "先写测试。",
   "</skill>",
 ].join("\n");
+
+describe("isSkillAvailable", () => {
+  // 三种归属形态：global、单工作区、多工作区；missing 是第四种状态（断链）
+  const globalSkill = { slug: "g", name: "g", description: "", global: true, workspaces: [], missing: false, linkedPath: null };
+  const wsSkill = { slug: "w", name: "w", description: "", global: false, workspaces: ["ws1"], missing: false, linkedPath: null };
+  const multiSkill = { slug: "m", name: "m", description: "", global: false, workspaces: ["ws1", "ws2"], missing: false, linkedPath: null };
+  const brokenSkill = { slug: "b", name: "b", description: "", global: true, workspaces: [], missing: true, linkedPath: null };
+  it("global 对所有会话可用（含无工作区）", () => {
+    assert.equal(isSkillAvailable(globalSkill, null), true);
+    assert.equal(isSkillAvailable(globalSkill, "ws1"), true);
+  });
+  it("链在本工作区才可用", () => {
+    assert.equal(isSkillAvailable(wsSkill, "ws1"), true);
+    assert.equal(isSkillAvailable(wsSkill, "ws2"), false);
+  });
+  it("多工作区：链在其中一个即可", () => {
+    assert.equal(isSkillAvailable(multiSkill, "ws1"), true);
+    assert.equal(isSkillAvailable(multiSkill, "ws2"), true);
+    assert.equal(isSkillAvailable(multiSkill, "ws3"), false);
+  });
+  it("无工作区的会话只剩 global 可用", () => {
+    assert.equal(isSkillAvailable(wsSkill, null), false);
+  });
+  it("断链一律不可用（哪怕 global）", () => {
+    assert.equal(isSkillAvailable(brokenSkill, null), false);
+    assert.equal(isSkillAvailable(brokenSkill, "ws1"), false);
+  });
+});
 
 describe("matchSkillTarget", () => {
   const available = [

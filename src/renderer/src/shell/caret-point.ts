@@ -7,11 +7,12 @@
  * 放一个零宽标记，量标记的位置。whiteout 的镜像（小学作业主题）同一家族，但那个
  * 常驻渲染且只服务纸面主题，这里按需建、量完即弃。
  *
- * 返回坐标**相对 textarea 的内容盒**、且已扣除滚动（textarea 内部滚了多少，
- * 视觉位置就上移多少）——调用方加上 textarea 自身在卡里的偏移就是卡内坐标。
+ * 返回坐标**相对 textarea 的 border box**（镜像同排版，镜像内偏移即 textarea 内偏移；
+ * 等价地：border box + 复制来的 padding 就是内容首行）。滚动已补偿（textarea 内部
+ * 滚了多少，视觉位置就上移多少）——调用方加上 textarea 自身在卡里的偏移就是卡内坐标。
  */
 
-/** 插入点的位置与该行的行高（都相对 textarea 内容盒、已扣滚动） */
+/** 插入点的位置与该行的行高（都相对 textarea 的 border box、已补偿滚动） */
 export interface CaretPoint {
   left: number;
   top: number;
@@ -67,13 +68,20 @@ export function caretPoint(textarea: HTMLTextAreaElement, index: number): CaretP
   marker.textContent = "\u200b";
   mirror.appendChild(marker);
   document.body.appendChild(mirror);
+  // 量的基准是镜像自己的 border box，不是 textarea：镜像挂在 body 顶上（absolute
+  // 0,0），marker 的 viewport 坐标带着「文档原点到镜像」的那一段；减 mirrorRect 才是
+  // 「标记在镜像里第几行」。旧版减 areaRect，textarea 不在视口顶时面板会整段高估
+  // ——首页输入卡在窗口中部，量出的 top 是 -355px，面板飘到 slogan 上方
+  // （CDP 实测：markerTop=4 / mirrorTop=0 / taTop=395，旧公式 -391，正算 4）。
+  // 镜像与 textarea 同排版（同 padding / border / 字体），镜像内偏移 == textarea 内偏移
+  const mirrorRect = mirror.getBoundingClientRect();
   const markerRect = marker.getBoundingClientRect();
   const areaRect = textarea.getBoundingClientRect();
   mirror.remove();
   const lineHeight = Number.parseFloat(computed.lineHeight);
   return {
-    left: markerRect.left - areaRect.left + textarea.scrollLeft,
-    top: markerRect.top - areaRect.top + textarea.scrollTop,
+    left: markerRect.left - mirrorRect.left + textarea.scrollLeft,
+    top: markerRect.top - mirrorRect.top + textarea.scrollTop,
     height: Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : markerRect.height,
   };
 }
