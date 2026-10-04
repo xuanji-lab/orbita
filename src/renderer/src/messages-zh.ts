@@ -118,6 +118,7 @@ export const zh: Messages = {
     slashSectionCommands: "指令",
     slashSectionSkills: "技能",
     slashSectionMcp: "MCP",
+    skillNoneInWorkspace: "当前工作区没有可用的技能",
     cmdCompact: "立即压缩上下文",
     cmdNew: "开一条新会话",
   },
