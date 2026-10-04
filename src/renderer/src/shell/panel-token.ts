@@ -153,6 +153,10 @@ export interface TokenPickerControl {
    * 「在不在选取态」会在第二次 / + 空格时什么也不做，靠它重入选取态（重新
    * 聚焦、重置过滗词） */
   request: number;
+  /** 发起选取的那个输入框所在的工作区（主槽 = session.workspaceId）。Skills
+   * 选取模式用它过滤候选（isSkillAvailable，与斜杠面板、发送端同一谓词）；
+   * MCP 面板无工作区概念，不消费它 */
+  workspaceId: string | null;
 }
 
 /** 面板选取的回执：token 为 null 表示取消（只把焦点送回输入框）。nonce 单调递增 */

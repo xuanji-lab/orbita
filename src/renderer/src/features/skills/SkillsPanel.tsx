@@ -14,7 +14,7 @@ import {
 import { api } from "../../api";
 import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
-import { isSkillSlug } from "@shared/skill";
+import { isSkillAvailable, isSkillSlug } from "@shared/skill";
 import { filterSkills } from "./skill-filter.ts";
 import {
   skillToken,
@@ -149,8 +149,10 @@ function SkillList(props: {
   const total = skills.skills.length;
   const filtered = filterSkills(skills.skills, query);
   const filtering = query.trim() !== "";
-  // 选取模式的可行行：扁平、去 missing（拖进输入框的 token 要能展开）
-  const pickRows = picker !== undefined ? filtered.filter((s) => !s.missing) : [];
+  // 选取模式的可行行：扁平、按发起输入框的工作区可用（isSkillAvailable，与斜杠
+  // 面板、主进程发送端同一谓词——这里选得到的，发出去必然认）。拖拽源不在选取
+  // 态也用同一份，与浏览视图的分组展示互不影响
+  const pickRows = picker !== undefined ? filtered.filter((s) => isSkillAvailable(s, picker.workspaceId)) : [];
   // 进入选取模式：清词、聚焦过滤行、高亮首行（与指令面板主模式同款）。
   // 靠 request 重触发：第二次「/ + 空格」时面板可能已开、选取态可能已在
   useEffect(() => {
@@ -312,7 +314,10 @@ function SkillList(props: {
             )}
             {pickRows.length === 0 ? (
               <div style={{ padding: "var(--space-4)" }}>
-                <PanelLine>{t.skills.noMatch(query.trim())}</PanelLine>
+                {/* 查询词空着且一个可用 skill 都没有：说工作区，不说「没有匹配」*/}
+                <PanelLine>
+                  {query.trim() === "" ? t.composer.skillNoneInWorkspace : t.skills.noMatch(query.trim())}
+                </PanelLine>
               </div>
             ) : (
               pickRows.map((s, index) => (

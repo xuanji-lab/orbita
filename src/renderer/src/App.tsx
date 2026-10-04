@@ -456,12 +456,14 @@ export function App() {
     onCancel: () => finishTokenPick(null),
     onSwitch: () => setRightPanel("mcp"),
     request: tokenPickRequest,
+    workspaceId: session.workspaceId,
   };
   const mcpPicker: TokenPickerControl = {
     onSelect: finishTokenPick,
     onCancel: () => finishTokenPick(null),
     onSwitch: () => setRightPanel("skills"),
     request: tokenPickRequest,
+    workspaceId: session.workspaceId,
   };
 
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
