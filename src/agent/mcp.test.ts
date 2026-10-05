@@ -300,6 +300,85 @@ describe("McpHub.reset（热重载）", () => {
  * 白名单管「哪台 server 在哪个工作区出现」，`${workspaceFolder}` 管「同一个定义
  * 在每个工作区里指向哪里」。
  */
+/**
+ * 闲置回收：工作区没人用了，它的实例（与子进程）就该收工——进程和 server 侧的
+ * 资源（比如论文工具挂在 state 上的锁）不该挂到 app 退出。回收只动资源不动配置：
+ * 下一次 ensure 原样重连。全部拿真子进程验——「它应该退了」不能靠读代码相信。
+ */
+describe("McpHub 的闲置回收", () => {
+  /** 等一个 pid 真的死（最多 5 秒）。 */
+  async function waitDead(pid: number): Promise<boolean> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  }
+
+  test("闲置超时的工作区实例被回收，子进程真的退了，管理面如实回到「还没连」", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-mcp-idle-"));
+    const pidFile = join(dir, "child.pid");
+    const hub = new McpHub({ idleMs: 300, sweepMs: 50 });
+    let notified = 0;
+    hub.onIdleDrop = () => {
+      notified += 1;
+    };
+    await hub.ensure("w1", { demo: tagged("w1", { ORBITA_MCP_FIXTURE_PID_FILE: pidFile }) }, "");
+    assert.ok(hub.toolsFor("w1").length > 0);
+    const pid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+    assert.ok(Number.isInteger(pid));
+
+    assert.ok(await waitDead(pid), `子进程 ${pid} 在闲置超时后 5 秒内没有退出`);
+    assert.deepEqual(hub.toolsFor("w1"), []);
+    assert.ok(notified >= 1, "回收后没有通知（面板会停在陈旧的就绪态）");
+    const statuses = new Map(hub.describe().map((s) => [s.name, s.status.kind]));
+    assert.equal(statuses.get("demo"), "connecting");
+    await hub.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("活跃的工作区不被回收：开机与调用都刷新闲置计时", async () => {
+    const hub = new McpHub({ idleMs: 800, sweepMs: 60 });
+    const server = tagged("w1");
+    await hub.ensure("w1", { demo: server }, "");
+    const echo = hub.toolsFor("w1").find((t) => t.name === "mcp__demo__echo");
+    assert.ok(echo);
+    // 在闲置窗口内反复活跃（两次调用、一次重复开机），总跨度 1200ms > idleMs 800ms
+    for (let i = 0; i < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await echo.execute("c", { text: "活着" }, undefined, undefined, undefined as never);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await hub.ensure("w1", { demo: server }, "");
+    assert.ok(hub.toolsFor("w1").length > 0, "活跃期间实例不该被回收");
+    await hub.dispose();
+  });
+
+  test("回收只动资源不动配置：下一次开机原样重连（新子进程，工具照常用）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-mcp-idle-"));
+    const pidFile = join(dir, "child.pid");
+    const hub = new McpHub({ idleMs: 300, sweepMs: 50 });
+    const server = tagged("w1", { ORBITA_MCP_FIXTURE_PID_FILE: pidFile });
+    await hub.ensure("w1", { demo: server }, "");
+    const firstPid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+    assert.ok(await waitDead(firstPid), "第一轮实例没被回收");
+
+    await hub.ensure("w1", { demo: server }, "");
+    const secondPid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+    assert.notEqual(secondPid, firstPid, "重连该是一份新子进程");
+    const echo = hub.toolsFor("w1").find((t) => t.name === "mcp__demo__echo");
+    const result = await echo!.execute("c", { text: "回来" }, undefined, undefined, undefined as never);
+    assert.deepEqual(result.content[0], { type: "text", text: "echo: 回来 [w1]" });
+    await hub.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
 describe("resolveServersForWorkspace", () => {
   const PAPER3 = { id: "ws-1", name: "paper3", path: "C:/papers/paper3" };
   const XIEGAO = { id: "ws-2", name: "写稿", path: "C:/papers/写稿" };

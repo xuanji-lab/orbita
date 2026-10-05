@@ -10,7 +10,7 @@
  *
  * 粒度停在「工作区」而不是「会话」：同一工作区的多条会话共用一份，否则子进程
  * 数量会随会话数线性增长。**只连当前这轮要用的工作区**——用户没打开的工作区
- * 不会被拉起来。
+ * 不会被拉起来；**闲置超时的工作区会被回收**（`SCOPE_IDLE_MS`），下次开机重连。
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 // 客户端握手里的版本号随包走，不另放一份字面量——政策是每次改动 patch +1，
@@ -30,6 +30,16 @@ import {
   type McpServerInfo,
   type McpStatus,
 } from "../shared/mcp.ts";
+
+/**
+ * 一个工作区多久没有任何开机/调用，它的实例就整批回收（拆连接 → stdio 子进程退出
+ * → server 侧的资源随之释放，比如 aw-mcp 挂在论文 state 上的锁）。回收的是「资源占用」
+ * 不是「配置」——下次开机 `ensure` 原样重连。30 分钟：写稿节奏里两轮隔多久都正常，
+ * 但「上午开过 paper3、下午都在写稿」不该让 paper3 的进程和锁挂一整天。
+ */
+const SCOPE_IDLE_MS = 30 * 60_000;
+/** 清扫节拍。 */
+const SWEEP_MS = 60_000;
 
 /** 连不上不该拖住建会话——超过这个时间就放弃这一台，别的照常。 */
 const CONNECT_TIMEOUT_MS = 20_000;
@@ -78,16 +88,30 @@ export class McpHub {
    * 会留一批指向旧配置的活连接）。
    */
   private generation = 0;
+  /** scope → 最近一次开机或调用的时间戳。清扫器按它回收闲置工作区的实例。 */
+  private readonly lastUsed = new Map<string, number>();
+  private readonly idleMs: number;
+  private readonly sweepMs: number;
+  private sweepTimer: NodeJS.Timeout | null = null;
+  /** 回收真的拆掉了实例后调一次（runtime 挂它给面板推新快照——不然面板上还是陈旧的就绪）。 */
+  onIdleDrop: (() => void) | null = null;
+
+  constructor(options: { idleMs?: number; sweepMs?: number } = {}) {
+    this.idleMs = options.idleMs ?? SCOPE_IDLE_MS;
+    this.sweepMs = options.sweepMs ?? SWEEP_MS;
+  }
 
   /**
    * 让 `scope` 这批 server 连上。**每轮开机都调**，所以必须幂等：
    * 已经在、配置也没变的不动；配置变了或这台被删了就拆掉重来。
    *
-   * **只连这一轮要用的工作区**，别的不会被拉起来。连过的留着不回收——
-   * 换回去的时候不必重连，而热重载会把它们全拆掉。
+   * **只连这一轮要用的工作区**，别的不会被拉起来。连过的留着，直到闲置超时
+   * 被清扫器回收（`SCOPE_IDLE_MS`）——那之前换回去不必重连。
    */
   async ensure(scope: string, servers: Record<string, McpServer>, label: string): Promise<void> {
     const generation = this.generation;
+    this.touch(scope);
+    this.startSweeper();
     for (const [name, server] of Object.entries(servers)) this.seen.set(name, server);
     const wanted = new Set(Object.keys(servers));
     const doomed = [...this.instances.values()].filter(
@@ -122,6 +146,7 @@ export class McpHub {
     signal: AbortSignal | undefined,
     publicName: string,
   ) {
+    this.touch(scope);
     const client = this.instances.get(this.key(scope, serverName))?.client ?? null;
     if (client === null) {
       throw new Error(
@@ -176,8 +201,47 @@ export class McpHub {
   }
 
   async dispose(): Promise<void> {
+    if (this.sweepTimer !== null) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     await this.reset();
     this.seen.clear();
+    this.lastUsed.clear();
+  }
+
+  private touch(scope: string): void {
+    this.lastUsed.set(scope, Date.now());
+  }
+
+  /** 首次有工作区开机时启动；unref——这个计时器不许拖着进程不退。 */
+  private startSweeper(): void {
+    if (this.sweepTimer !== null) return;
+    this.sweepTimer = setInterval(() => void this.sweepIdle(), this.sweepMs);
+    this.sweepTimer.unref();
+  }
+
+  /**
+   * 回收闲置 scope 的整批实例（同一生死：一个工作区没人用了，它的 server 都收工）。
+   * 「正在跑的轮不受影响」这一保证在这里不成立：一轮闲置窗口内没有任何 MCP 调用的
+   * 极端情况会被拆掉，它的下一次调用报「not connected」干净错误，下一轮开机重连。
+   */
+  private async sweepIdle(): Promise<void> {
+    const now = Date.now();
+    const doomed = [...this.lastUsed.entries()].filter(([, at]) => now - at > this.idleMs);
+    if (doomed.length === 0) return;
+    // 记账只删「还是当时那笔」的——清扫在飞的途中这个 scope 又开机了，新时间戳不许抹
+    for (const [scope, at] of doomed) {
+      if (this.lastUsed.get(scope) === at) this.lastUsed.delete(scope);
+    }
+    const doomedScopes = new Set(doomed.map(([scope]) => scope));
+    const doomedInstances = [...this.instances.values()].filter((instance) =>
+      doomedScopes.has(instance.scope),
+    );
+    await Promise.all(
+      doomedInstances.map((instance) => this.drop(this.key(instance.scope, instance.serverName), instance)),
+    );
+    if (doomedInstances.length > 0) this.onIdleDrop?.();
   }
 
   private key(scope: string, serverName: string): string {
@@ -224,6 +288,8 @@ export class McpHub {
       instance.client = connected.client;
       instance.tools = connected.tools;
       instance.status = { kind: "ready", tools: connected.tools.map((tool) => tool.name) };
+      // 闲置计时从「能用了」起算，不从「开始连」算——连接慢不该让刚连上的实例立刻被回收
+      this.touch(scope);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       instance.status = { kind: "failed", message };
@@ -231,9 +297,14 @@ export class McpHub {
     }
   }
 
-  private async drop(key: string): Promise<void> {
+  /**
+   * 传了 `expected` 就只在这份实例还是表里的那一份时才拆——清扫/重连在飞的途中，
+   * 同一个 key 可能已经被 ensure 换上了新实例，新实例不许被旧决策顺手拆掉。
+   */
+  private async drop(key: string, expected?: Instance): Promise<void> {
     const instance = this.instances.get(key);
     if (instance === undefined) return;
+    if (expected !== undefined && instance !== expected) return;
     this.instances.delete(key);
     await instance.client?.close().catch(() => undefined);
   }

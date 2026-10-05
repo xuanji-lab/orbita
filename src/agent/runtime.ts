@@ -466,10 +466,12 @@ interface TurnParts {
 const running = new Map<string, CycleSlot<TurnParts>>();
 
 /**
- * MCP 连接。**进程级一份**，所有会话共享——每条会话各拉一份 `npx some-server`
- * 会让子进程数量随会话线性增长，而 MCP server 本来就是无状态的工具提供方。
+ * MCP 连接。一个 hub 托管所有工作区的实例（连接按 工作区×server 分片，见 mcp.ts）——
+ * 每条会话各拉一份 `npx some-server` 会让子进程数量随会话线性增长。
  */
 const mcpHub = new McpHub();
+// 闲置工作区的实例被回收后，主进程缓存的状态就陈旧了（显示就绪但进程已退）——推新快照
+mcpHub.onIdleDrop = () => send({ type: "mcp", servers: mcpHub.describe() });
 /**
  * 工具请求的在途表（4-3 立，B-1 泛化）：create_skill / add_mcp_server /
  * read_task / browser_* 的回执由 handle 的命令分支结掉。进程级一份——主进程是唯一的
