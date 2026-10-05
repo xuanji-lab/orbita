@@ -18,6 +18,7 @@ import circleCheck from "../../../../Orbita Design System/assets/icons/lucide/ci
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import circleDot from "../../../../Orbita Design System/assets/icons/lucide/circle-dot.svg?raw";
 import circleOff from "../../../../Orbita Design System/assets/icons/lucide/circle-off.svg?raw";
+import circleDashed from "../../../../Orbita Design System/assets/icons/lucide/circle-dashed.svg?raw";
 import chevronLeft from "../../../../Orbita Design System/assets/icons/lucide/chevron-left.svg?raw";
 import chevronRight from "../../../../Orbita Design System/assets/icons/lucide/chevron-right.svg?raw";
 import chevronUp from "../../../../Orbita Design System/assets/icons/lucide/chevron-up.svg?raw";
@@ -125,6 +126,7 @@ const ICONS = {
   "chevron-up": chevronUp,
   clock,
   "circle-dot": circleDot,
+  "circle-dashed": circleDashed,
   "circle-off": circleOff,
   copy,
   "corner-down-left": cornerDownLeft,

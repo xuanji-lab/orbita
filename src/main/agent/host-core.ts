@@ -13,6 +13,7 @@ import type {
   ReadTaskOutcome,
 } from "../../shared/agent-ipc.ts";
 import type { ChannelDelivery } from "../../shared/channel.ts";
+import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
@@ -352,7 +353,7 @@ export class AgentHostCore {
 
   answerMcpWrite(
     requestId: string,
-    result: { ok: boolean; status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string }; error?: string },
+    result: { ok: boolean; status?: McpStatus; error?: string },
   ): void {
     this.child?.postMessage({
       type: "mcpWriteResult",

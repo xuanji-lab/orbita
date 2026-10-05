@@ -12,7 +12,7 @@
 import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
-import type { McpServer, McpStatusSnapshot } from "./mcp.ts";
+import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
@@ -648,7 +648,7 @@ export type AgentCommand =
       requestId: string;
       ok: boolean;
       /** 重连后这台 server 的状态（ready / failed …），给模型看连接结果 */
-      status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string };
+      status?: McpStatus;
       error?: string;
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */

@@ -2360,6 +2360,86 @@ button.mcp-tool-chip {
 }
 
 /*
+ * ===== MCP · 工作区实例明细（分片/分层之后） =====
+ * 设计稿真源 design/mcp-panel-workspace.html。五个类，其余复用现有配方。
+ */
+
+/* 限定工作区行 / 定义来源行（同一个视觉：caption + tertiary + folder 图标） */
+.mcp-scope {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* 实例状态行：独占一行，不挤头行（320px 抽屉放不下「图标+名字+长状态+动作+展开钮」） */
+.mcp-ws-status {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.mcp-ws-status.bad {
+  color: var(--color-danger);
+}
+
+/* 行尾展开钮：quiet-control 同款中性 hover；aria-expanded 旋转 160ms */
+.mcp-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: transform 160ms var(--ease-out-quint), var(--transition-hover);
+}
+.mcp-expand:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.mcp-expand[aria-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+/* 实例明细：卡内发丝顶线分隔的子列表 */
+.mcp-instances {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-2);
+}
+.mcp-instance {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-caption);
+}
+.mcp-instance .ws {
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.mcp-instance .st {
+  color: var(--color-text-tertiary);
+}
+.mcp-instance .st.bad {
+  color: var(--color-danger);
+}
+.mcp-instance .bind {
+  grid-column: 1 / -1;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+  padding-left: 20px;
+}
+
+/*
  * 虚线「Add a server」卡（简报 4）：列表尾的第二入口，与页头 `+` 同一个
  * onClick（进添加表单）。
  */

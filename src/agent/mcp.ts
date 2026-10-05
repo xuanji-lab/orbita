@@ -195,9 +195,13 @@ export class McpHub {
       .map(([name, server]) => ({
         name,
         // 没有实例 = 这个工作区还没打开过（或刚 reload 完 / 闲置被回收），如实说「还没连」
+        // ——是 idle 不是 connecting：没有在连的东西，不转圈
         status:
           statuses.get(name) ??
-          (server.disabled === true ? { kind: "disabled" as const } : { kind: "connecting" as const }),
+          (server.disabled === true ? { kind: "disabled" as const } : { kind: "idle" as const }),
+        instances: [...this.instances.values()]
+          .filter((instance) => instance.serverName === name)
+          .map((instance) => ({ scope: instance.scope, label: instance.label, status: instance.status })),
       }))
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }

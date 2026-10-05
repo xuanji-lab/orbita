@@ -102,12 +102,12 @@ describe("applyMcpWrite（真 store）", () => {
       async () => {
         reloaded.push(1);
       },
-      (name) => (name === "agent-add" ? { kind: "ready" } : undefined),
+      (name) => (name === "agent-add" ? { kind: "ready", tools: [] } : undefined),
       { type: "mcpWriteRequest", requestId: "r2", name: "agent-add", server: { transport: "stdio", command: "node" } },
     );
     assert.equal(result.ok, true);
     if (!result.ok) return;
-    assert.deepEqual(result.status, { kind: "ready" });
+    assert.deepEqual(result.status, { kind: "ready", tools: [] });
     assert.deepEqual(Object.keys(await mcp.read()), ["agent-add"]);
     assert.equal(reloaded.length, 1);
   });
