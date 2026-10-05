@@ -63,7 +63,29 @@ export interface McpServerInfo {
   status: McpStatus;
   /** 配的 `workspaces` 白名单原样带出来给面板显示。空 = 所有工作区都能用。 */
   scopedTo: string[];
+  /** 定义来自哪里：全局 mcp.json，和 / 或这些工作区自带的 `.mcp.json`（同名时工作区赢）。 */
+  source: McpSource;
 }
+
+/** 面板列表行的定义来源（配置分层：工作区自带 `.mcp.json` ∪ 全局 mcp.json）。 */
+export interface McpSource {
+  /** 全局 mcp.json 里有定义 */
+  global: boolean;
+  /** 这些工作区自带的 `.mcp.json` 里有定义（同名时工作区赢全局） */
+  workspaces: string[];
+}
+
+/** 面板列表的返回：合并后的行 + 读坏的工作区配置警告（一个工作区的坏文件不拖死整表）。 */
+export interface McpListResult {
+  servers: McpServerInfo[];
+  warnings: string[];
+}
+
+/**
+ * agent 进程报上来的连接状态快照——主进程只拿它叠状态，**不当列表**：
+ * 列表的真源是配置文件（白名单、定义来源都在文件里，见 main/mcp/ipc.ts）。
+ */
+export type McpStatusSnapshot = { name: string; status: McpStatus }[];
 
 export function isHttpServer(server: McpServer): server is McpHttpServer {
   return server.transport === "http";
@@ -176,12 +198,60 @@ export function describeServer(server: McpServer): string {
 }
 
 /**
+ * 配置分层合并：工作区自带的 `.mcp.json`（overlay）∪ 全局 mcp.json（base），
+ * **同名 overlay 赢**——工作区可以给全局某台换参数，也可以有一台全局没有的；
+ * 「在这个工作区停用全局某台」= 同名条目 + `disabled: true`。
+ * 不改输入，返回新对象。
+ */
+export function mergeMcpConfigs(
+  base: Record<string, McpServer>,
+  overlay: Record<string, McpServer>,
+): Record<string, McpServer> {
+  return { ...base, ...overlay };
+}
+
+/**
+ * 面板列表的合并（纯函数）：全局一份 + 各工作区自带的 `.mcp.json`，按名字收成一行，
+ * 来源累计。行上展示「跑得起来的那份定义」：被工作区覆盖的全局条目，展示工作区那份；
+ * 多个工作区定义同名的，展示第一份（detail 只是给人看的命令行，实例各自解析各自的）。
+ */
+export function mergeServerSources(
+  global: Record<string, McpServer>,
+  workspaceFiles: { workspace: string; servers: Record<string, McpServer> }[],
+): { name: string; server: McpServer; source: McpSource }[] {
+  const rows = new Map<string, { name: string; server: McpServer; source: McpSource }>();
+  for (const [name, server] of Object.entries(global)) {
+    rows.set(name, { name, server, source: { global: true, workspaces: [] } });
+  }
+  for (const { workspace, servers } of workspaceFiles) {
+    for (const [name, server] of Object.entries(servers)) {
+      const row = rows.get(name);
+      if (row === undefined) {
+        rows.set(name, { name, server, source: { global: false, workspaces: [workspace] } });
+        continue;
+      }
+      row.source.workspaces.push(workspace);
+      // 同名工作区赢全局：行上展示最终会跑的那份
+      if (row.source.global) row.server = server;
+    }
+  }
+  return [...rows.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+/**
  * 配置里唯一支持的变量：**这条会话所属工作区的根目录**。
  *
  * 只有这一个，不做 `${env:...}` / `${input:...}` 那一整套——那套的第二个消费者还没出现
  * （AGENTS.md 的消费者纪律）。语法跟 Cursor / VS Code 一致，用户不必另学一套。
  */
 export const WORKSPACE_FOLDER_VAR = "${workspaceFolder}";
+
+/**
+ * 工作区自带的 MCP 配置文件名，放在工作区根——**配置跟文件夹走**：
+ * 整目录拷走 / 换机即用；工作区改名、删了重加都不丢配置（它不挂在 orbita 的
+ * 工作区记录上）。格式与全局 mcp.json 同构（Claude Desktop 兼容）。
+ */
+export const WORKSPACE_MCP_FILENAME = ".mcp.json";
 
 /** 工作区在解析期的样子。`path` 就是 `${workspaceFolder}` 的值。 */
 export interface McpWorkspace {

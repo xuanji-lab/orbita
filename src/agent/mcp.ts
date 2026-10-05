@@ -23,12 +23,11 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
-  describeServer,
   isHttpServer,
   qualifiedToolName,
   type McpServer,
-  type McpServerInfo,
   type McpStatus,
+  type McpStatusSnapshot,
 } from "../shared/mcp.ts";
 
 /**
@@ -165,11 +164,13 @@ export class McpHub {
   }
 
   /**
-   * 管理面要看的状态。**一行一台 server**，不是一行一个实例：一台 server 在几个
-   * 工作区里各有一份实例，逐实例列出来会把同一台重复 N 遍，而面板要回答的是
-   * 「这台 server 能不能用」。所以取各实例里最可用的那个状态。
+   * 报给主进程的连接状态快照。**一行一台 server**，不是一行一个实例：一台 server
+   * 在几个工作区里各有一份实例，逐实例列出来会把同一台重复 N 遍，而快照要回答的是
+   * 「这台 server 能不能用」——取各实例里最可用的那个状态。
+   * **只报状态**：列表的真源是配置文件（白名单、定义来源都在文件里），主进程拿
+   * 这份快照叠状态，不拿它当列表。
    */
-  describe(): McpServerInfo[] {
+  describe(): McpStatusSnapshot {
     const statuses = new Map<string, McpStatus>();
     for (const instance of this.instances.values()) {
       const previous = statuses.get(instance.serverName);
@@ -181,12 +182,10 @@ export class McpHub {
     return [...this.seen.entries()]
       .map(([name, server]) => ({
         name,
-        detail: describeServer(server),
-        scopedTo: server.workspaces ?? [],
-        // 没有实例 = 这个工作区还没打开过（或刚 reload 完），如实说「还没连」
+        // 没有实例 = 这个工作区还没打开过（或刚 reload 完 / 闲置被回收），如实说「还没连」
         status:
           statuses.get(name) ??
-          (server.disabled === true ? { kind: "disabled" } : { kind: "connecting" }),
+          (server.disabled === true ? { kind: "disabled" as const } : { kind: "connecting" as const }),
       }))
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }

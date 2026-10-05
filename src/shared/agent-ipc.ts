@@ -12,7 +12,7 @@
 import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
-import type { McpServer, McpServerInfo } from "./mcp.ts";
+import type { McpServer, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
@@ -780,7 +780,7 @@ export type AgentEvent =
    * MCP 连接结果。**没有 sessionId**：连接是进程级的，不属于哪一条会话。
    * 主进程接住它当缓存，管理面查的就是这份快照（连接状态是运行时事实，不落盘）。
    */
-  | { type: "mcp"; servers: McpServerInfo[] }
+  | { type: "mcp"; servers: McpStatusSnapshot }
   /**
    * 4-3：agent 工具 create_skill 的写盘请求。**写盘在主进程**（agent 进程
    * 不碰 userData）——主进程调 SkillStore 后回 skillWriteResult。

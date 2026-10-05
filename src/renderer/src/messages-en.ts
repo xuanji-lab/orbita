@@ -1186,8 +1186,11 @@ export const en = {
     disable: "Disable this server",
     removeTip: "Remove this server",
     scopedTo: (names: string) => `Only in workspace: ${names}`,
+    sourceWorkspace: (names: string) => `From workspace config: ${names}`,
+    sourceOverride: (names: string) => `Global, overridden by ${names}’s workspace config`,
+    workspaceFileOnly: "This one comes from a workspace’s .mcp.json — edit that file.",
     workspaceHint:
-      "Set “workspaces” on a server to limit it to some workspaces. ${workspaceFolder} in command, args, env, cwd, url or headers becomes that workspace’s folder — so one server definition turns into one isolated instance per workspace.",
+      "Set “workspaces” on a server to limit it to some workspaces. ${workspaceFolder} in command, args, env, cwd, url or headers becomes that workspace’s folder — so one server definition turns into one isolated instance per workspace. Or drop a .mcp.json in a workspace’s root: it applies only there and travels with the folder.",
     removeConfirm: (name: string) => `Remove ${name}?`,
     remove: "Remove",
     reloadNote:

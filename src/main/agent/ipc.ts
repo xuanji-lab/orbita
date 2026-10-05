@@ -30,9 +30,16 @@ import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
+import { readMcpConfigFile } from "../mcp/store.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
-import { resolveServersForWorkspace, type McpServer, type McpWorkspace } from "../../shared/mcp.ts";
+import {
+  mergeMcpConfigs,
+  resolveServersForWorkspace,
+  WORKSPACE_MCP_FILENAME,
+  type McpServer,
+  type McpWorkspace,
+} from "../../shared/mcp.ts";
 import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
@@ -151,20 +158,33 @@ export function registerAgentIpc(
   };
 
   /**
-   * 读一份 mcp.json，**解析成这一条会话该看到的那一份**：按工作区白名单筛，
-   * 再把 `${workspaceFolder}` 换成该工作区的根。解析放主进程——只有它知道工作区路径
-   * （与 `skillDirs` 同一条纪律：agent 进程只收数据）。
+   * 读配置并**解析成这一条会话该看到的那一份**：全局 mcp.json ∪ 工作区自带的
+   * `.mcp.json`（同名工作区赢），再按白名单筛、把 `${workspaceFolder}` 换成该工作区
+   * 的根。解析放主进程——只有它知道工作区路径（与 `skillDirs` 同一条纪律：
+   * agent 进程只收数据）。
    *
-   * 读不出来不拦开轮：失败当场打日志、管理面会把读错原文显示出来；一份写坏的
-   * mcp.json 不该让用户连对话都开不了（与 D-3 不矛盾：那条纪律是「不把失败伪装成空」
-   * 且不披露，这里两者都做到）。
+   * 读不出来不拦开轮：全局文件坏了记日志、这一轮没有 MCP 工具；工作区文件坏了
+   * 记日志、只用全局（管理面会把读错原文显示出来）。一份写坏的配置不该让用户
+   * 连对话都开不了（与 D-3 不矛盾：那条纪律是「不把失败伪装成空」且不披露，
+   * 这里两者都做到）。
    */
   const readMcpServers = async (workspaceId: string | null): Promise<Record<string, McpServer>> => {
     const configured = await mcp.read().catch((error: unknown) => {
       console.error("[main] mcp.json 读不了，这一轮没有 MCP 工具", error);
       return {};
     });
-    return resolveServersForWorkspace(configured, await scopeOf(workspaceId));
+    const scope = await scopeOf(workspaceId);
+    const local =
+      scope === null
+        ? {}
+        : await readMcpConfigFile(join(scope.path, WORKSPACE_MCP_FILENAME)).catch((error: unknown) => {
+            console.error(
+              `[main] ${scope.name} 的 ${WORKSPACE_MCP_FILENAME} 读不了，这一轮只用全局配置`,
+              error,
+            );
+            return {};
+          });
+    return resolveServersForWorkspace(mergeMcpConfigs(configured, local), scope);
   };
 
   /** 每轮现读压缩偏好：设置改动下一轮即生效，无需重启会话 */

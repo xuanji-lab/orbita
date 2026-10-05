@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { McpHub } from "./mcp.ts";
 import {
+  mergeMcpConfigs,
+  mergeServerSources,
   parseMcpConfig,
   parseQualifiedToolName,
   qualifiedToolName,
@@ -215,13 +217,12 @@ describe("McpHub 的工作区分片", () => {
     assert.equal(echo?.description, "把收到的话原样回一遍");
   });
 
-  /** 面板是全局管理面：一个工作区都没打开时也要看得出配过什么 */
-  test("describe 跨工作区取并集，且带出白名单", async () => {
+  /** 面板是全局管理面：一个工作区都没打开时也要报得出「配过什么」的状态 */
+  test("describe 跨工作区取并集报状态（列表与白名单归文件侧，快照只报状态）", async () => {
     const hub = new McpHub();
     await hub.ensure("paper3", { scoped: { ...tagged("p"), workspaces: ["paper3", "写稿"] } }, "");
     const rows = hub.describe();
     assert.deepEqual(rows.map((r) => r.name), ["scoped"]);
-    assert.deepEqual(rows[0]?.scopedTo, ["paper3", "写稿"]);
     assert.equal(rows[0]?.status.kind, "ready");
     await hub.dispose();
   });
@@ -466,6 +467,53 @@ describe("resolveServersForWorkspace", () => {
     });
     // 非论文工作区拿不到它——不然会在自己的仓库里跑起一台论文工具、还往里写 state
     assert.deepEqual(Object.keys(orbita), []);
+  });
+});
+
+/**
+ * 配置分层合并（纯函数）：工作区自带的 `.mcp.json` ∪ 全局 mcp.json，同名工作区赢。
+ * 面板列表的合并（mergeServerSources）与之配套：行按名字收拢，来源累计。
+ */
+describe("mergeMcpConfigs / mergeServerSources", () => {
+  test("同名工作区赢全局；不相交的并集都在", () => {
+    const global: Record<string, McpServer> = {
+      fetch: { transport: "stdio", command: "uvx", args: ["mcp-server-fetch"] },
+      shared: { transport: "stdio", command: "node", args: ["global.js"] },
+    };
+    const local: Record<string, McpServer> = {
+      "aw-mcp": { transport: "stdio", command: "node", env: { AW_PAPER_ROOT: "${workspaceFolder}" } },
+      shared: { transport: "stdio", command: "node", args: ["local.js"] },
+    };
+    const merged = mergeMcpConfigs(global, local);
+    assert.deepEqual(Object.keys(merged).sort(), ["aw-mcp", "fetch", "shared"]);
+    // 同名覆盖：工作区那份赢
+    assert.deepEqual(merged["shared"], { transport: "stdio", command: "node", args: ["local.js"] });
+    // 不改输入
+    assert.deepEqual(global["shared"], { transport: "stdio", command: "node", args: ["global.js"] });
+  });
+
+  test("「在这个工作区停用全局某台」= 同名 + disabled: true", () => {
+    const merged = mergeMcpConfigs(
+      { fetch: { transport: "stdio", command: "uvx" } },
+      { fetch: { transport: "stdio", command: "uvx", disabled: true } },
+    );
+    assert.equal(merged["fetch"]?.disabled, true);
+  });
+
+  test("面板行合并：来源累计，被覆盖的全局条目展示工作区那份", () => {
+    const rows = mergeServerSources(
+      { shared: { transport: "stdio", command: "node", args: ["global.js"] } },
+      [
+        { workspace: "paper3", servers: { "aw-mcp": { transport: "stdio", command: "node" }, shared: { transport: "stdio", command: "node", args: ["local.js"] } } },
+        { workspace: "写稿", servers: { "aw-mcp": { transport: "stdio", command: "node" } } },
+      ],
+    );
+    const byName = new Map(rows.map((r) => [r.name, r]));
+    assert.deepEqual(byName.get("aw-mcp")?.source, { global: false, workspaces: ["paper3", "写稿"] });
+    assert.deepEqual(byName.get("shared")?.source, { global: true, workspaces: ["paper3"] });
+    // 同名工作区赢全局：行上展示跑得起来的那份
+    assert.deepEqual((byName.get("shared")?.server as { args?: string[] }).args, ["local.js"]);
+    assert.deepEqual(rows.map((r) => r.name), ["aw-mcp", "shared"]);
   });
 });
 

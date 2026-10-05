@@ -429,7 +429,7 @@ void app.whenReady().then(async () => {
   });
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
-  const mcpIpc = registerMcpIpc(mcp, () => agentHost.mcpReload());
+  const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁

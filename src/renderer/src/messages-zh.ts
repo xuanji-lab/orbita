@@ -1099,8 +1099,11 @@ export const zh: Messages = {
     disable: "停用这个服务",
     removeTip: "移除这个服务",
     scopedTo: (names) => `限定工作区：${names}`,
+    sourceWorkspace: (names) => `来自工作区配置：${names}`,
+    sourceOverride: (names) => `全局定义，${names} 的工作区配置覆盖`,
+    workspaceFileOnly: "这台来自工作区的 .mcp.json——到那个文件里改",
     workspaceHint:
-      "在服务上写 “workspaces” 可以把它限定在几个工作区里；命令、参数、环境变量、工作目录、地址与请求头里的 ${workspaceFolder} 会换成那个工作区的目录——一份定义就变成每个工作区一份、互不干扰的实例。",
+      "在服务上写 “workspaces” 可以把它限定在几个工作区里；命令、参数、环境变量、工作目录、地址与请求头里的 ${workspaceFolder} 会换成那个工作区的目录——一份定义就变成每个工作区一份、互不干扰的实例。也可以在某个工作区根目录放一份 .mcp.json：那份配置只对那个工作区生效，跟文件夹走。",
     removeConfirm: (name) => `移除 ${name}？`,
     remove: "移除",
     reloadNote: "重新加载会读取 mcp.json 并拆掉现有连接。正在跑的任务保留原工具，新任务拿到新的一套。",
