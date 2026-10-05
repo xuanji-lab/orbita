@@ -67,6 +67,7 @@ const TURN_FIELDS = {
   piSessionDir: "C:/pi-sessions",
   protectedPaths: ["C:/pi-sessions"],
   skillsDirs: ["C:/skills"],
+  workspaceId: null,
   mcpServers: {},
 };
 

@@ -1185,10 +1185,13 @@ export const en = {
     enable: "Enable this server",
     disable: "Disable this server",
     removeTip: "Remove this server",
+    scopedTo: (names: string) => `Only in workspace: ${names}`,
+    workspaceHint:
+      "Set “workspaces” on a server to limit it to some workspaces. ${workspaceFolder} in command, args, env, cwd, url or headers becomes that workspace’s folder — so one server definition turns into one isolated instance per workspace.",
     removeConfirm: (name: string) => `Remove ${name}?`,
     remove: "Remove",
     reloadNote:
-      "Reload reads mcp.json and reconnects. Running tasks keep their current tools; new tasks get the new set.",
+      "Reload reads mcp.json and tears down the current connections. Running tasks keep their current tools; new tasks get the new set.",
     nameTaken: "A server with this name already exists.",
     nameShape: "Use letters, digits, dashes or underscores.",
     invalidJson: "That’s not valid JSON.",

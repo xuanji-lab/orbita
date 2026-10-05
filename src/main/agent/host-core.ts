@@ -236,11 +236,12 @@ export class AgentHostCore {
   }
 
   /**
-   * 重读配置后重连（1-1）。等 runtime 的 `mcp` 快照事件回来才返回——
-   * 那一刻新状态已缓存并广播。**不 ensure**：进程没起就没有连接，reload 无对象
-   * （generateTitle 同款理由），配置会在下一次开轮时生效。
+   * 热重载（1-1）：让 runtime 把 MCP 连接全拆，等它的 `mcp` 快照事件回来才返回——
+   * 那一刻新状态已缓存并广播。**不送 servers**：每轮开轮本来就会送该工作区那一份。
+   * **不 ensure**：进程没起就没有连接，reload 无对象（generateTitle 同款理由），
+   * 配置会在下一次开轮时生效。
    */
-  mcpReload(servers: Extract<AgentCommand, { type: "mcpReload" }>["servers"]): Promise<void> {
+  mcpReload(): Promise<void> {
     if (!this.child) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       this.pendingMcpReload = { resolve, reject };
@@ -249,7 +250,7 @@ export class AgentHostCore {
         this.pendingMcpReload = null;
         reject(new Error("agent runtime did not report MCP status in time"));
       }, 60_000);
-      this.post({ type: "mcpReload", servers });
+      this.post({ type: "mcpReload" });
     });
   }
 

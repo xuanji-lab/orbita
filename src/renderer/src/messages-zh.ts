@@ -1098,9 +1098,12 @@ export const zh: Messages = {
     enable: "启用这个服务",
     disable: "停用这个服务",
     removeTip: "移除这个服务",
+    scopedTo: (names) => `限定工作区：${names}`,
+    workspaceHint:
+      "在服务上写 “workspaces” 可以把它限定在几个工作区里；命令、参数、环境变量、工作目录、地址与请求头里的 ${workspaceFolder} 会换成那个工作区的目录——一份定义就变成每个工作区一份、互不干扰的实例。",
     removeConfirm: (name) => `移除 ${name}？`,
     remove: "移除",
-    reloadNote: "重新加载会读取 mcp.json 并重连。正在跑的任务保留原工具，新任务拿到新的一套。",
+    reloadNote: "重新加载会读取 mcp.json 并拆掉现有连接。正在跑的任务保留原工具，新任务拿到新的一套。",
     nameTaken: "已经有同名的服务了。",
     nameShape: "只能用字母、数字、连字符或下划线。",
     invalidJson: "这不是有效的 JSON。",

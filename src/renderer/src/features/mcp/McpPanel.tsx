@@ -140,6 +140,17 @@ export function McpPanel(props: {
                 >
                   {server.detail}
                 </code>
+                {/* 限定工作区：不显示的话，用户会以为「配了却没生效」是自己的错 */}
+                {server.scopedTo.length > 0 && (
+                  <span
+                    style={{
+                      fontSize: "var(--font-size-caption)",
+                      color: "var(--color-text-tertiary)",
+                    }}
+                  >
+                    {t.mcp.scopedTo(server.scopedTo.join("、"))}
+                  </span>
+                )}
                 {server.status.kind === "ready" && server.status.tools.length > 0 && (
                   <ToolChips
                     tools={server.status.tools}
@@ -193,6 +204,9 @@ export function McpPanel(props: {
             <span style={{ marginTop: "var(--space-2)" }}>
               <PanelLine>
                 {t.mcp.reloadNote}
+              </PanelLine>
+              <PanelLine>
+                {t.mcp.workspaceHint}
               </PanelLine>
             </span>
           </>

@@ -32,7 +32,7 @@ import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
-import type { McpServer } from "../../shared/mcp.ts";
+import { resolveServersForWorkspace, type McpServer, type McpWorkspace } from "../../shared/mcp.ts";
 import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
@@ -106,6 +106,8 @@ function turnFields(
   return {
     sessionId: input.sessionId,
     cwd: input.cwd,
+    // MCP 连接按工作区分片（同一工作区共用一份，不同工作区各一份实例）
+    workspaceId: input.workspaceId,
     provider,
     modelId: input.modelId,
     mode: input.mode,
@@ -139,15 +141,31 @@ export function registerAgentIpc(
   settings: SettingsStore,
 ): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
-   * 读一份 mcp.json。读不出来不拦开轮：失败当场打日志、管理面会把读错原文显示出来；
-   * 一份写坏的 mcp.json 不该让用户连对话都开不了（与 D-3 不矛盾：那条纪律是
-   * 「不把失败伪装成空」且不披露，这里两者都做到）。
+   * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
+   * 变量都按 Home 处理，**不拦开轮**（同「一台坏的 MCP server 不该把会话堵死」）。
    */
-  const readMcpServers = (): Promise<Record<string, McpServer>> =>
-    mcp.read().catch((error: unknown) => {
+  const scopeOf = async (workspaceId: string | null): Promise<McpWorkspace | null> => {
+    if (workspaceId === null) return null;
+    const found = (await workspaces.list()).find((workspace) => workspace.id === workspaceId);
+    return found === undefined ? null : { id: found.id, name: found.name, path: found.path };
+  };
+
+  /**
+   * 读一份 mcp.json，**解析成这一条会话该看到的那一份**：按工作区白名单筛，
+   * 再把 `${workspaceFolder}` 换成该工作区的根。解析放主进程——只有它知道工作区路径
+   * （与 `skillDirs` 同一条纪律：agent 进程只收数据）。
+   *
+   * 读不出来不拦开轮：失败当场打日志、管理面会把读错原文显示出来；一份写坏的
+   * mcp.json 不该让用户连对话都开不了（与 D-3 不矛盾：那条纪律是「不把失败伪装成空」
+   * 且不披露，这里两者都做到）。
+   */
+  const readMcpServers = async (workspaceId: string | null): Promise<Record<string, McpServer>> => {
+    const configured = await mcp.read().catch((error: unknown) => {
       console.error("[main] mcp.json 读不了，这一轮没有 MCP 工具", error);
       return {};
     });
+    return resolveServersForWorkspace(configured, await scopeOf(workspaceId));
+  };
 
   /** 每轮现读压缩偏好：设置改动下一轮即生效，无需重启会话 */
   const readCompaction = async (): Promise<CompactionSetting> =>
@@ -296,7 +314,7 @@ export function registerAgentIpc(
       ...turnFields(input, provider, piSessionDir, protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
         directories: await readDirectories(input),
-        mcpServers: await readMcpServers(),
+        mcpServers: await readMcpServers(input.workspaceId),
         compaction: await readCompaction(),
         gitAttribution: await readGitAttribution(),
         attributionLanguage: await readAttributionLanguage(),
@@ -327,12 +345,12 @@ export function registerAgentIpc(
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份展开，
     // 否则 /skill: 在这条路径以字面文本喂给模型
     const text = await expandSkillInvocation(input.text, input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
