@@ -214,7 +214,7 @@ export function McpPanel(props: {
                 {expandedInstances.has(server.name) && server.instances.length > 0 && (
                   <div className="mcp-instances">
                     {server.instances.map((instance) => (
-                      <div key={instance.workspace} className="mcp-instance">
+                      <div key={instance.scope} className="mcp-instance">
                         <Icon
                           name={instance.status.kind === "failed" ? "triangle-alert" : "folder"}
                           size={13}
@@ -239,7 +239,7 @@ export function McpPanel(props: {
                       </div>
                     ))}
                     {failedInstances.map((instance) => (
-                      <div key={instance.workspace} className="mcp-error">
+                      <div key={instance.scope} className="mcp-error">
                         <p className="mcp-error-text">{instance.status.message}</p>
                         <span className="mcp-error-actions">
                           <button type="button" className="mcp-retry-btn" disabled={reloading} onClick={runReload}>
@@ -249,7 +249,7 @@ export function McpPanel(props: {
                               className={reloading ? "anim-continuous" : undefined}
                               style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
                             />
-                            {t.common.retry}
+                            {t.mcp.reload}
                           </button>
                         </span>
                       </div>
@@ -281,7 +281,7 @@ export function McpPanel(props: {
                           className={reloading ? "anim-continuous" : undefined}
                           style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
                         />
-                        {t.common.retry}
+                        {t.mcp.reload}
                       </button>
                     </span>
                   </div>

@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { headIconKind, statusLine, summarizeInstances } from "./row-display.ts";
 import type { McpInstanceInfo } from "@shared/mcp";
 
-function inst(workspace: string, kind: "ready" | "failed" | "idle" | "connecting"): McpInstanceInfo {
+function inst(workspace: string, kind: "ready" | "failed" | "idle" | "connecting" | "disabled"): McpInstanceInfo {
   const status: McpInstanceInfo["status"] =
     kind === "ready"
       ? { kind: "ready", tools: ["a", "b"] }
       : kind === "failed"
         ? { kind: "failed", message: "boom" }
         : { kind };
-  return { workspace, label: `C:/${workspace}`, status };
+  return { scope: `id-${workspace}`, workspace, label: `C:/${workspace}`, status };
 }
 
 describe("summarizeInstances / headIconKind / statusLine", () => {
@@ -46,5 +46,14 @@ describe("summarizeInstances / headIconKind / statusLine", () => {
     const summary = summarizeInstances([inst("paper3", "ready"), inst("写稿", "connecting")]);
     assert.equal(headIconKind({ kind: "ready", tools: [] }, summary), "ready");
     assert.deepEqual(statusLine(summary), { total: 2, ready: 1, failed: [] });
+  });
+
+  test("停用的实例不计入就绪率：「不该就绪」不是「没就绪」", () => {
+    // PR #164 评审：disabled 的 server 显示成「0/1 个工作区就绪」，像一个故障——它是用户自己关的
+    const only = summarizeInstances([inst("paper3", "disabled")]);
+    assert.deepEqual(only, { total: 0, ready: 0, failed: [] });
+    assert.equal(statusLine(only), null);
+    const mixed = summarizeInstances([inst("paper3", "ready"), inst("写稿", "disabled")]);
+    assert.deepEqual(statusLine(mixed), { total: 1, ready: 1, failed: [] });
   });
 });

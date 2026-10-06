@@ -8,7 +8,9 @@
 import type { McpInstanceInfo, McpStatus } from "@shared/mcp";
 
 export interface InstanceSummary {
-  /** 实例总数（Home 实例已被主进程滤掉，这里全是工作区实例） */
+  /** 计入就绪率的实例数（disabled 不算：它是「不该就绪」，不是「没就绪」——
+      算进去停用的 server 会显示成「0/1 就绪」，像一个故障）。
+      connecting 算：那是进度，头行同时在转圈 */
   total: number;
   ready: number;
   /** 连接失败的工作区名（按实例顺序） */
@@ -17,12 +19,15 @@ export interface InstanceSummary {
 
 export function summarizeInstances(instances: McpInstanceInfo[]): InstanceSummary {
   let ready = 0;
+  let counted = 0;
   const failed: string[] = [];
   for (const instance of instances) {
+    if (instance.status.kind === "disabled") continue;
+    counted += 1;
     if (instance.status.kind === "ready") ready += 1;
     if (instance.status.kind === "failed") failed.push(instance.workspace);
   }
-  return { total: instances.length, ready, failed };
+  return { total: counted, ready, failed };
 }
 
 /**
