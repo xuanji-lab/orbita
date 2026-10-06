@@ -394,6 +394,36 @@ describe("McpHub 的闲置回收", () => {
   });
 });
 
+describe("McpHub 并发", () => {
+  // 两条都来自 PR #163 评审的复现（wafo210715，2026-10-06）：未修前两红。
+  test("同一工作区两条会话并发开机：第二条 ensure 返回时工具应已就绪", async () => {
+    const hub = new McpHub();
+    const server = tagged("w1", { ORBITA_MCP_FIXTURE_START_DELAY_MS: "800" });
+    const first = hub.ensure("w1", { demo: server }, "");
+    await new Promise((r) => setTimeout(r, 50)); // 第二条会话几乎同时开机
+    await hub.ensure("w1", { demo: server }, "");
+    const toolsAtSecondOpen = hub.toolsFor("w1").length;
+    await first;
+    await hub.dispose();
+    assert.equal(toolsAtSecondOpen, 2);
+  });
+
+  test("ensure 拆旧实例期间发生 reset：不该留下永远 connecting 的僵尸", async () => {
+    const hub = new McpHub({ idleMs: 300, sweepMs: 100 });
+    await hub.ensure("w1", { demo: tagged("旧") }, "");
+    // 配置变了 → ensure 先拆旧的（等子进程退）；紧跟着用户点了 Reload
+    const ensuring = hub.ensure("w1", { demo: tagged("新", { ORBITA_MCP_FIXTURE_START_DELAY_MS: "300" }) }, "");
+    await hub.reset();
+    await ensuring;
+    // 再开一轮，配置相同：应该能用
+    await hub.ensure("w1", { demo: tagged("新", { ORBITA_MCP_FIXTURE_START_DELAY_MS: "300" }) }, "");
+    const tools = hub.toolsFor("w1").length;
+    const status = hub.describe().find((s) => s.name === "demo")?.status.kind;
+    await hub.dispose();
+    assert.equal(tools, 2, `状态 ${status}`);
+  });
+});
+
 describe("resolveServersForWorkspace", () => {
   const PAPER3 = { id: "ws-1", name: "paper3", path: "C:/papers/paper3" };
   const XIEGAO = { id: "ws-2", name: "写稿", path: "C:/papers/写稿" };

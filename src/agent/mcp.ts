@@ -61,6 +61,11 @@ interface Instance {
   client: Client | null;
   status: McpStatus;
   tools: ToolDefinition[];
+  /**
+   * 这次连接尝试落地的 promise（永不 reject——失败收进 `status`）。并发开机的
+   * ensure 靠它等「别的会话在飞的连接」：实例一进表就算「有」，但「有」≠「能用」。
+   */
+  pending: Promise<void>;
 }
 
 /** scope 与 server 名都不含 NUL，拼 key 拼不出歧义。 */
@@ -108,7 +113,6 @@ export class McpHub {
    * 被清扫器回收（`SCOPE_IDLE_MS`）——那之前换回去不必重连。
    */
   async ensure(scope: string, servers: Record<string, McpServer>, label: string): Promise<void> {
-    const generation = this.generation;
     this.touch(scope);
     this.startSweeper();
     for (const [name, server] of Object.entries(servers)) this.seen.set(name, server);
@@ -120,11 +124,19 @@ export class McpHub {
           JSON.stringify(instance.server) !== JSON.stringify(servers[instance.serverName])),
     );
     await Promise.all(doomed.map((instance) => this.drop(this.key(scope, instance.serverName))));
+    // 代数在拆旧**之后**现取：拆旧要等子进程退出，期间可能发生 reset（面板 Reload
+    // 等）把代数加一，拿 ensure 开头捕获的旧代数去 add，连接落地时才发现代数不对，
+    // 白连一场（PR #163 评审复现）。
+    const generation = this.generation;
     await Promise.all(
       Object.entries(servers)
         .filter(([name]) => !this.instances.has(this.key(scope, name)))
         .map(([name, server]) => this.add(scope, name, server, label, generation)),
     );
+    // 并发开机：另一条会话可能正在连这个 scope 的同一批 server（实例在表里、还在
+    // connecting）——「表里有」≠「能用」。等这个 scope 所有在飞的连接落地再返回，
+    // 否则这条会话开机取到的是空工具集，而 customTools 开机即定格，整条会话都没有。
+    await Promise.all(this.instancesIn(scope).map((instance) => instance.pending));
   }
 
   /** 这个工作区此刻可用的工具。每轮开机取一次，作为 `customTools` 交给 pi。 */
@@ -276,6 +288,7 @@ export class McpHub {
     label: string,
     generation: number,
   ): Promise<void> {
+    const key = this.key(scope, serverName);
     const instance: Instance = {
       scope,
       serverName,
@@ -284,14 +297,30 @@ export class McpHub {
       client: null,
       status: server.disabled === true ? { kind: "disabled" } : { kind: "connecting" },
       tools: [],
+      // 占位，下面同一拍换成真的连接 promise——保证实例进表后 pending 一定已挂上，
+      // 并发 ensure 任何时候拿到这份实例都能等
+      pending: Promise.resolve(),
     };
-    const key = this.key(scope, serverName);
     this.instances.set(key, instance);
-    if (server.disabled === true) return;
+    instance.pending = this.connectInstance(key, instance, generation);
+    await instance.pending;
+  }
+
+  /** `add` 的连接本体；失败不抛——如实记进实例状态（面板看得见），pending 照常 resolve。 */
+  private async connectInstance(key: string, instance: Instance, generation: number): Promise<void> {
+    if (instance.server.disabled === true) return;
     try {
-      const connected = await this.connect(scope, serverName, server, label);
-      // 连接期间发生了热重载（或这一份已被换掉）→ 这份连接作废，别写回表里
+      const connected = await this.connect(
+        instance.scope,
+        instance.serverName,
+        instance.server,
+        instance.label,
+      );
+      // 连接期间发生了热重载（或这一份已被换掉）→ 这份连接作废，别写回表里。
+      // 表里还是自己就顺手把表项删掉：留着就是永远 connecting 的僵尸——ensure 看到
+      // key 已在不重连、清扫器看到 connecting 不回收，只剩手动 Reload 能救（PR #163 评审复现）。
       if (generation !== this.generation || this.instances.get(key) !== instance) {
+        if (this.instances.get(key) === instance) this.instances.delete(key);
         await connected.client.close().catch(() => undefined);
         return;
       }
@@ -299,11 +328,13 @@ export class McpHub {
       instance.tools = connected.tools;
       instance.status = { kind: "ready", tools: connected.tools.map((tool) => tool.name) };
       // 闲置计时从「能用了」起算，不从「开始连」算——连接慢不该让刚连上的实例立刻被回收
-      this.touch(scope);
+      this.touch(instance.scope);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       instance.status = { kind: "failed", message };
-      console.error(`[mcp] ${serverName}（工作区 ${label === "" ? "无" : label}）连不上：${message}`);
+      console.error(
+        `[mcp] ${instance.serverName}（工作区 ${instance.label === "" ? "无" : instance.label}）连不上：${message}`,
+      );
     }
   }
 
