@@ -84,6 +84,16 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
     refreshServers();
   }, [active, refresh, refreshServers]);
 
+  // MCP 的连接状态是 agent 进程的运行时事实，随开会话、重载、闲置回收持续变化——
+  // #163 按工作区实例化后它从「稀有事件」变成「连续变化」，面板开着就得跟着快照走，
+  // 否则永远停在打开那一刻的状态（实测：会话里工具能用，面板却显示「还没连上」）
+  useEffect(() => {
+    if (!active) return undefined;
+    return api.agent.onEvent((event) => {
+      if (event.type === "mcp") refreshServers();
+    });
+  }, [active, refreshServers]);
+
   /**
    * 工作区集合变了就重读 skill 列表：侧栏删一个工作区时，主进程会连带清掉
    * 它下面的 skill 链接（`registerWorkspaceIpc` 注入的清理），面板还开着的话
