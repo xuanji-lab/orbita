@@ -61,6 +61,7 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 ```bash
 bun install          # 依赖变更
 bun run dev          # 开发
+bun run dev:isolated # 隔离实例验收：独立 userData/单实例锁/工作区根（~/Orbita-dev-2），不碰正在跑的实例
 bun run typecheck    # 类型检查
 bun run test         # 测试
 ```
