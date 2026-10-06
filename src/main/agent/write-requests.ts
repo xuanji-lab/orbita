@@ -47,14 +47,15 @@ export async function applySkillWrite(
 
 export async function applyMcpWrite(
   mcp: McpStore,
-  reload: (servers: Awaited<ReturnType<McpStore["read"]>>) => Promise<void>,
+  /** 写盘后让 agent 进程拆掉连接重来。不送 servers：每轮开轮本来就会送该工作区那一份 */
+  reload: () => Promise<void>,
   statusOf: (name: string) => { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string } | undefined,
   event: Extract<AgentEvent, { type: "mcpWriteRequest" }>,
 ): Promise<WriteOutcome> {
   try {
     // 已存在同名：拒绝（覆盖等于吃掉用户现有配置）；模型要改就去编辑文件
     await mcp.add(event.name, event.server);
-    await reload(await mcp.read()).catch(() => undefined); // 重连失败不算写失败（配置已在）
+    await reload().catch(() => undefined); // 重连失败不算写失败（配置已在）
     return { ok: true, status: statusOf(event.name) };
   } catch (cause) {
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };

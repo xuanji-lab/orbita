@@ -466,10 +466,12 @@ interface TurnParts {
 const running = new Map<string, CycleSlot<TurnParts>>();
 
 /**
- * MCP 连接。**进程级一份**，所有会话共享——每条会话各拉一份 `npx some-server`
- * 会让子进程数量随会话线性增长，而 MCP server 本来就是无状态的工具提供方。
+ * MCP 连接。一个 hub 托管所有工作区的实例（连接按 工作区×server 分片，见 mcp.ts）——
+ * 每条会话各拉一份 `npx some-server` 会让子进程数量随会话线性增长。
  */
 const mcpHub = new McpHub();
+// 闲置工作区的实例被回收后，主进程缓存的状态就陈旧了（显示就绪但进程已退）——推新快照
+mcpHub.onIdleDrop = () => send({ type: "mcp", servers: mcpHub.describe() });
 /**
  * 工具请求的在途表（4-3 立，B-1 泛化）：create_skill / add_mcp_server /
  * read_task / browser_* 的回执由 handle 的命令分支结掉。进程级一份——主进程是唯一的
@@ -659,7 +661,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               systemPrompt: [
                 event.systemPrompt,
                 describePermissionMode(currentMode(), [
-                  ...mcpHub.currentTools().map((tool) => tool.name),
+                  ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
                   "create_skill",
                   "add_mcp_server",
                   "read_task",
@@ -722,15 +724,21 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    */
   const sessionManager = openOrCreate(command);
   /**
-   * MCP 工具。**连接在进程级只做一次**（`McpHub.start` 幂等：首个 start 连，后续轮直接
-   * 复用）；无状态化后每轮都经过这里，但只有第一轮真的拉起连接。连不上不拦开轮——
-   * MCP server 是外部程序，装错命令、缺环境变量都是常态，不该让一台坏的把会话堵死；
-   * 状态经 `mcp` 事件告诉界面（每轮重报一次快照，自愈主进程缓存）。
+   * MCP 工具。**连接按 (工作区, server) 建**，不是进程级一份——同一个 server 名
+   * 在不同工作区往往是不同实例（参数不同、数据不同），共享一份就会静默串号。
+   * `ensure` 幂等：已在的、配置没变的不动；**只连这一轮要用的工作区**。
+   * 连不上不拦开轮——MCP server 是外部程序，装错命令、缺环境变量都是常态，
+   * 不该让一台坏的把会话堵死；状态经 `mcp` 事件告诉界面（每轮重报一次快照，
+   * 自愈主进程缓存）。
    */
-  await mcpHub.start(command.mcpServers);
+  const mcpScope = command.workspaceId ?? "";
+  // Home 会话没有工作区根：不往工具描述里加绑定行（与 resolveServersForWorkspace
+  // 对 Home 跳过 `${workspaceFolder}` 那条同源）
+  const mcpLabel = command.workspaceId === null ? "" : command.cwd;
+  await mcpHub.ensure(mcpScope, command.mcpServers, mcpLabel);
   send({ type: "mcp", servers: mcpHub.describe() });
   const customTools = [
-    ...mcpHub.currentTools(),
+    ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     ...createPdfTools(command.cwd),
     // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
@@ -1303,9 +1311,9 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
   if (command.type === "mcpReload") {
-    // 重连后把新快照报给主进程（缓存 + 广播给管理面）。
+    // 全拆，下一轮开机按新配置重建（配置每轮都从主进程现送，不必在这里再送一份）。
     // 已在跑的轮不受影响：它们的 customTools 在开机时已定格。
-    await mcpHub.restart(command.servers);
+    await mcpHub.reset();
     send({ type: "mcp", servers: mcpHub.describe() });
     return;
   }

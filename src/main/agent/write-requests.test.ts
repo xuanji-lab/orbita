@@ -96,11 +96,11 @@ describe("applySkillWrite（真 store）", () => {
 
 describe("applyMcpWrite（真 store）", () => {
   test("加一台 + reload 被调 + 回执带状态", async () => {
-    const reloaded: string[][] = [];
+    const reloaded: number[] = [];
     const result = await applyMcpWrite(
       mcp,
-      async (servers) => {
-        reloaded.push(Object.keys(servers));
+      async () => {
+        reloaded.push(1);
       },
       (name) => (name === "agent-add" ? { kind: "ready" } : undefined),
       { type: "mcpWriteRequest", requestId: "r2", name: "agent-add", server: { transport: "stdio", command: "node" } },
@@ -109,7 +109,7 @@ describe("applyMcpWrite（真 store）", () => {
     if (!result.ok) return;
     assert.deepEqual(result.status, { kind: "ready" });
     assert.deepEqual(Object.keys(await mcp.read()), ["agent-add"]);
-    assert.deepEqual(reloaded, [["agent-add"]]);
+    assert.equal(reloaded.length, 1);
   });
 
   test("重名：报错不覆盖；reload 不被调", async () => {

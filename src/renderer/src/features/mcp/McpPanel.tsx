@@ -27,7 +27,7 @@ export function McpPanel(props: {
   onClose: () => void;
 }) {
   const t = useT();
-  const { servers, serversLoad, openMcpConfig, reloadMcp } = props.skills;
+  const { servers, serversLoad, serverWarnings, openMcpConfig, reloadMcp } = props.skills;
   const [reloading, setReloading] = useState(false);
   const [adding, setAdding] = useState(false);
   /** 删除二次确认：正要删哪一台（面板内一行确认，不弹窗） */
@@ -103,6 +103,9 @@ export function McpPanel(props: {
         }}
       >
         {error !== null && <PanelLine danger>{error}</PanelLine>}
+        {serverWarnings.map((warning) => (
+          <PanelLine key={warning} danger>{warning}</PanelLine>
+        ))}
         {serversLoad.kind === "loading" && servers.length === 0 ? (
           <PanelLine>{t.mcp.loadingServers}</PanelLine>
         ) : servers.length === 0 ? (
@@ -120,13 +123,26 @@ export function McpPanel(props: {
                     className="mcp-actions reveal"
                     style={{ opacity: confirming === server.name ? 1 : undefined }}
                   >
+                    {/* 只来自工作区自带 .mcp.json 的：写全局文件够不着它，
+                        按钮禁用并指到真正的文件（遮蔽不是编辑） */}
                     <PanelIconButton
-                      title={server.status.kind === "disabled" ? t.mcp.enable : t.mcp.disable}
-                      onClick={() => props.skills.setServerDisabled(server.name, server.status.kind !== "disabled")}
+                      title={
+                        server.source.global
+                          ? server.disabled
+                            ? t.mcp.enable
+                            : t.mcp.disable
+                          : t.mcp.workspaceFileOnly
+                      }
+                      disabled={!server.source.global}
+                      onClick={() => props.skills.setServerDisabled(server.name, !server.disabled)}
                     >
                       <Icon name="power" size={14} />
                     </PanelIconButton>
-                    <PanelIconButton title={t.mcp.removeTip} onClick={() => setConfirming(server.name)}>
+                    <PanelIconButton
+                      title={server.source.global ? t.mcp.removeTip : t.mcp.workspaceFileOnly}
+                      disabled={!server.source.global}
+                      onClick={() => setConfirming(server.name)}
+                    >
                       <Icon name="trash-2" size={14} />
                     </PanelIconButton>
                   </span>
@@ -140,6 +156,30 @@ export function McpPanel(props: {
                 >
                   {server.detail}
                 </code>
+                {/* 限定工作区：不显示的话，用户会以为「配了却没生效」是自己的错 */}
+                {server.scopedTo.length > 0 && (
+                  <span
+                    style={{
+                      fontSize: "var(--font-size-caption)",
+                      color: "var(--color-text-tertiary)",
+                    }}
+                  >
+                    {t.mcp.scopedTo(server.scopedTo.join("、"))}
+                  </span>
+                )}
+                {/* 定义来源：工作区自带的 .mcp.json（配置跟文件夹走）。全局的不标——默认即全局 */}
+                {server.source.workspaces.length > 0 && (
+                  <span
+                    style={{
+                      fontSize: "var(--font-size-caption)",
+                      color: "var(--color-text-tertiary)",
+                    }}
+                  >
+                    {server.source.global
+                      ? t.mcp.sourceOverride(server.source.workspaces.join("、"))
+                      : t.mcp.sourceWorkspace(server.source.workspaces.join("、"))}
+                  </span>
+                )}
                 {server.status.kind === "ready" && server.status.tools.length > 0 && (
                   <ToolChips
                     tools={server.status.tools}
@@ -193,6 +233,9 @@ export function McpPanel(props: {
             <span style={{ marginTop: "var(--space-2)" }}>
               <PanelLine>
                 {t.mcp.reloadNote}
+              </PanelLine>
+              <PanelLine>
+                {t.mcp.workspaceHint}
               </PanelLine>
             </span>
           </>
