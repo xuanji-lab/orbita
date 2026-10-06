@@ -33,7 +33,7 @@ export function registerMcpIpc(
 ): {
   onAgentSnapshot: (servers: McpStatusSnapshot) => void;
   /** 缓存快照里一台 server 的状态（写盘回执给模型看连接结果用；没缓存过返回 undefined） */
-  statusOf: (name: string) => { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string } | undefined;
+  statusOf: (name: string) => McpStatus | undefined;
 } {
   /** agent 进程报上来的最后一次连接状态。null = 还没连过（没建过会话）。 */
   let snapshot: McpStatusSnapshot | null = null;
@@ -45,19 +45,27 @@ export function registerMcpIpc(
     return found.status;
   };
 
+  /** 上次快照里这台的整行（状态 + 实例明细）。 */
+  const snapshotRow = (name: string): McpStatusSnapshot[number] | undefined =>
+    snapshot?.find((s) => s.name === name);
+
   /**
    * 全局一份 + 各工作区自带的 `.mcp.json` 一起读。**一个工作区的文件读坏不拖死整表**
    * （记一条警告，面板如实显示）；全局文件读坏如实抛（面板显示错误原文）。
+   * 顺带交出 id → 名字的对照：实例的 scope、白名单里的 id，都要翻成人读的名字。
    */
   const readAllSources = async (): Promise<{
     global: Record<string, McpServer>;
     workspaceFiles: { workspace: string; servers: Record<string, McpServer> }[];
     warnings: string[];
+    nameOf: Map<string, string>;
   }> => {
     const global = await store.read();
     const warnings: string[] = [];
     const workspaceFiles: { workspace: string; servers: Record<string, McpServer> }[] = [];
-    for (const workspace of await workspaces.list()) {
+    const wsList = await workspaces.list();
+    const nameOf = new Map(wsList.map((w) => [w.id, w.name]));
+    for (const workspace of wsList) {
       let servers: Record<string, McpServer>;
       try {
         servers = await readMcpConfigFile(join(workspace.path, WORKSPACE_MCP_FILENAME));
@@ -69,7 +77,7 @@ export function registerMcpIpc(
       }
       if (Object.keys(servers).length > 0) workspaceFiles.push({ workspace: workspace.name, servers });
     }
-    return { global, workspaceFiles, warnings };
+    return { global, workspaceFiles, warnings, nameOf };
   };
 
   /*
@@ -83,16 +91,26 @@ export function registerMcpIpc(
    * 第二套生命周期。所以快照缺席时状态如实标成「还没连」（disabled 之外的归 connecting）。
    */
   ipcMain.handle(ipcChannels.mcpList, async (): Promise<McpListResult> => {
-    const { global, workspaceFiles, warnings } = await readAllSources();
+    const { global, workspaceFiles, warnings, nameOf } = await readAllSources();
     const servers = mergeServerSources(global, workspaceFiles).map((row) => ({
       name: row.name,
       detail: describeServer(row.server),
       disabled: mcpRowDisabledFact(row, global),
-      scopedTo: row.server.workspaces ?? [],
+      // 白名单按名或 id 都能写；显示统一成名（id 读不出是哪一篇）
+      scopedTo: (row.server.workspaces ?? []).map((entry) => nameOf.get(entry) ?? entry),
       source: row.source,
       status:
         statusOf(row.name) ??
-        (mcpRowDisabledFact(row, global) ? { kind: "disabled" as const } : { kind: "connecting" as const }),
+        (mcpRowDisabledFact(row, global) ? { kind: "disabled" as const } : { kind: "idle" as const }),
+      instances: (snapshotRow(row.name)?.instances ?? [])
+        // Home 实例（scope ""）没有分片语义，不进明细；翻不到名字的 id 原样显示
+        .filter((instance) => instance.scope !== "")
+        .map((instance) => ({
+          scope: instance.scope,
+          workspace: nameOf.get(instance.scope) ?? instance.scope,
+          label: instance.label,
+          status: instance.status,
+        })),
     }));
     return { servers, warnings };
   });

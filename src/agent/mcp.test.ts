@@ -219,12 +219,20 @@ describe("McpHub 的工作区分片", () => {
   });
 
   /** 面板是全局管理面：一个工作区都没打开时也要报得出「配过什么」的状态 */
-  test("describe 跨工作区取并集报状态（列表与白名单归文件侧，快照只报状态）", async () => {
+  test("describe 跨工作区取并集报状态，且带出各实例（scope/绑定/各自状态）", async () => {
     const hub = new McpHub();
-    await hub.ensure("paper3", { scoped: { ...tagged("p"), workspaces: ["paper3", "写稿"] } }, "");
+    await hub.ensure("paper3", { scoped: { ...tagged("p"), workspaces: ["paper3", "写稿"] } }, "C:/papers/paper3");
+    await hub.ensure("写稿", { scoped: tagged("x") }, "C:/papers/写稿");
     const rows = hub.describe();
     assert.deepEqual(rows.map((r) => r.name), ["scoped"]);
     assert.equal(rows[0]?.status.kind, "ready");
+    // 实例明细：两个工作区各一份，scope 与绑定路径各自跟着自己
+    const instances = rows[0]?.instances ?? [];
+    assert.equal(instances.length, 2);
+    const byScope = new Map(instances.map((i) => [i.scope, i]));
+    assert.equal(byScope.get("paper3")?.label, "C:/papers/paper3");
+    assert.equal(byScope.get("写稿")?.label, "C:/papers/写稿");
+    assert.equal(byScope.get("写稿")?.status.kind, "ready");
     await hub.dispose();
   });
 });
@@ -239,7 +247,7 @@ describe("McpHub.reset（热重载）", () => {
     await hub.reset();
     assert.deepEqual(hub.toolsFor("w1"), []);
     const statuses = new Map(hub.describe().map((s) => [s.name, s.status.kind]));
-    assert.equal(statuses.get("demo"), "connecting");
+    assert.equal(statuses.get("demo"), "idle");
     await hub.dispose();
   });
 
@@ -346,7 +354,7 @@ describe("McpHub 的闲置回收", () => {
     }
     assert.ok(notified >= 1, "回收后没有通知（面板会停在陈旧的就绪态）");
     const statuses = new Map(hub.describe().map((s) => [s.name, s.status.kind]));
-    assert.equal(statuses.get("demo"), "connecting");
+    assert.equal(statuses.get("demo"), "idle");
     await hub.dispose();
     await rm(dir, { recursive: true, force: true });
   });

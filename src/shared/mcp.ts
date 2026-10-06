@@ -51,6 +51,8 @@ export interface McpConfigFile {
 /** 一台 server 此刻怎么样了。**连接状态不落盘**，它是运行时事实。 */
 export type McpStatus =
   | { kind: "disabled" }
+  /** 还没连：对应工作区没打开过 / 闲置被回收 / 刚 reload 完。与 connecting 分开——它不转圈 */
+  | { kind: "idle" }
   | { kind: "connecting" }
   | { kind: "ready"; tools: string[] }
   | { kind: "failed"; message: string };
@@ -69,6 +71,21 @@ export interface McpServerInfo {
   scopedTo: string[];
   /** 定义来自哪里：全局 mcp.json，和 / 或这些工作区自带的 `.mcp.json`（同名时工作区赢）。 */
   source: McpSource;
+  /** 各工作区实例（面板展开明细）。空 = 还没连过（或全局单实例没分片的必要）。 */
+  instances: McpInstanceInfo[];
+}
+
+/** 一个工作区实例的快照（面板展开明细的一行）。 */
+export interface McpInstanceInfo {
+  /** 工作区 id（agent 上报的原值，不翻名）——实例的身份。React key 用它：
+      名字取的是文件夹 basename，两个不同路径的同名文件夹会撞 */
+  scope: string;
+  /** 工作区名（主进程把 scope id 翻成名；翻不到显示原 id）。"" = Home 会话 */
+  workspace: string;
+  /** 实例绑定的工作区根（= 它所在工作区的路径；工作区会话里每台 server 的实例都带，
+      不只用了 `${workspaceFolder}` 的那些）。"" = 不属于任何工作区（Home 会话） */
+  label: string;
+  status: McpStatus;
 }
 
 /** 面板列表行的定义来源（配置分层：工作区自带 `.mcp.json` ∪ 全局 mcp.json）。 */
@@ -88,8 +105,14 @@ export interface McpListResult {
 /**
  * agent 进程报上来的连接状态快照——主进程只拿它叠状态，**不当列表**：
  * 列表的真源是配置文件（白名单、定义来源都在文件里，见 main/mcp/ipc.ts）。
+ * `instances` 里 scope 是工作区 id（agent 进程不认工作区，只收 id），
+ * 翻成人读的名字是主进程的事。
  */
-export type McpStatusSnapshot = { name: string; status: McpStatus }[];
+export type McpStatusSnapshot = {
+  name: string;
+  status: McpStatus;
+  instances: { scope: string; label: string; status: McpStatus }[];
+}[];
 
 export function isHttpServer(server: McpServer): server is McpHttpServer {
   return server.transport === "http";

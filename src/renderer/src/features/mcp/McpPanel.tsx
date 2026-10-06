@@ -9,8 +9,9 @@ import {
 } from "../../shell/RightPanel";
 import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
 import type { SkillsState } from "../skills/useSkills";
-import type { McpServer, McpStatus } from "@shared/mcp";
+import type { McpServer, McpStatus, McpInstanceInfo } from "@shared/mcp";
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
+import { headIconKind, statusLine, summarizeInstances } from "./row-display.ts";
 import { useT } from "../../locale.ts";
 
 /**
@@ -34,6 +35,16 @@ export function McpPanel(props: {
   const [confirming, setConfirming] = useState<string | null>(null);
   /** 工具 chips 已展开的 server 名字集合（简报 1，一次展开不再收回） */
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<string>>(new Set());
+  /** 实例明细展开的 server 名字集合。**不记**：面板关掉组件就卸载——
+      失败行自己会穿透红字，诊断入口不需要记忆 */
+  const [expandedInstances, setExpandedInstances] = useState<ReadonlySet<string>>(new Set());
+  const toggleInstances = (name: string): void =>
+    setExpandedInstances((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
   const error = serversLoad.kind === "failed" ? serversLoad.message : null;
 
   // Reload 期间：非 disabled 行都转 connecting（实时状态还没回来，不装作不变）
@@ -112,10 +123,18 @@ export function McpPanel(props: {
           <McpEmptyState onAdd={() => setAdding(true)} onEditConfig={openMcpConfig} />
         ) : (
           <>
-            {servers.map((server) => (
+            {servers.map((server) => {
+              const summary = summarizeInstances(server.instances);
+              const line = statusLine(summary);
+              const failedInstances = server.instances.filter(
+                (instance): instance is McpInstanceInfo & { status: { kind: "failed"; message: string } } =>
+                  instance.status.kind === "failed",
+              );
+              return (
               <div key={server.name} className="mcp-card glass-card">
                 <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <StatusIcon status={statusOf(server.status)} />
+                  {/* 有实例失败就红三角——哪怕合并状态是就绪（失败不许被遮住） */}
+                  <StatusIcon kind={headIconKind(statusOf(server.status), summary)} />
                   <strong className="mcp-name">{server.name}</strong>
                   <StatusText status={statusOf(server.status)} />
                   {/* 悬停/键盘聚焦浮现（简报 3）；删除确认行出现时强制常显，见 .reveal 注释 */}
@@ -146,6 +165,17 @@ export function McpPanel(props: {
                       <Icon name="trash-2" size={14} />
                     </PanelIconButton>
                   </span>
+                  {server.instances.length > 0 && (
+                    <button
+                      type="button"
+                      className="mcp-expand"
+                      aria-expanded={expandedInstances.has(server.name)}
+                      title={expandedInstances.has(server.name) ? t.mcp.collapseInstances : t.mcp.expandInstances}
+                      onClick={() => toggleInstances(server.name)}
+                    >
+                      <Icon name="chevron-right" size={13} />
+                    </button>
+                  )}
                 </span>
                 <code
                   style={{
@@ -158,27 +188,73 @@ export function McpPanel(props: {
                 </code>
                 {/* 限定工作区：不显示的话，用户会以为「配了却没生效」是自己的错 */}
                 {server.scopedTo.length > 0 && (
-                  <span
-                    style={{
-                      fontSize: "var(--font-size-caption)",
-                      color: "var(--color-text-tertiary)",
-                    }}
-                  >
+                  <span className="mcp-scope">
+                    <Icon name="folder" size={12} />
                     {t.mcp.scopedTo(server.scopedTo.join("、"))}
                   </span>
                 )}
                 {/* 定义来源：工作区自带的 .mcp.json（配置跟文件夹走）。全局的不标——默认即全局 */}
                 {server.source.workspaces.length > 0 && (
-                  <span
-                    style={{
-                      fontSize: "var(--font-size-caption)",
-                      color: "var(--color-text-tertiary)",
-                    }}
-                  >
+                  <span className="mcp-scope">
+                    <Icon name="folder" size={12} />
                     {server.source.global
                       ? t.mcp.sourceOverride(server.source.workspaces.join("、"))
                       : t.mcp.sourceWorkspace(server.source.workspaces.join("、"))}
                   </span>
+                )}
+                {/* 实例状态行：独占一行不挤头行。全灭时 null——错误块接管，不重复说 */}
+                {line !== null && (
+                  <span className={`mcp-ws-status${line.failed.length > 0 ? " bad" : ""}`}>
+                    {line.failed.length > 0
+                      ? t.mcp.instancesPartial(line.ready, line.total, line.failed.join("、"))
+                      : t.mcp.instancesReady(line.ready, line.total)}
+                  </span>
+                )}
+                {/* 实例明细：诊断层——哪一份坏了、它指向哪里；错误块就地放在明细尾 */}
+                {expandedInstances.has(server.name) && server.instances.length > 0 && (
+                  <div className="mcp-instances">
+                    {server.instances.map((instance) => (
+                      <div key={instance.scope} className="mcp-instance">
+                        <Icon
+                          name={instance.status.kind === "failed" ? "triangle-alert" : "folder"}
+                          size={13}
+                          style={{
+                            color:
+                              instance.status.kind === "failed"
+                                ? "var(--color-danger)"
+                                : "var(--color-text-tertiary)",
+                          }}
+                        />
+                        <span className="ws">{instance.workspace}</span>
+                        <span className={`st${instance.status.kind === "failed" ? " bad" : ""}`}>
+                          {instance.status.kind === "ready"
+                            ? t.mcp.instanceReady(instance.status.tools.length)
+                            : instance.status.kind === "failed"
+                              ? t.mcp.connectFailed
+                              : instance.status.kind === "connecting"
+                                ? t.mcp.connecting
+                                : t.mcp.notConnected}
+                        </span>
+                        {instance.label !== "" && <span className="bind">→ {instance.label}</span>}
+                      </div>
+                    ))}
+                    {failedInstances.map((instance) => (
+                      <div key={instance.scope} className="mcp-error">
+                        <p className="mcp-error-text">{instance.status.message}</p>
+                        <span className="mcp-error-actions">
+                          <button type="button" className="mcp-retry-btn" disabled={reloading} onClick={runReload}>
+                            <Icon
+                              name="refresh-cw"
+                              size={11}
+                              className={reloading ? "anim-continuous" : undefined}
+                              style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
+                            />
+                            {t.mcp.reload}
+                          </button>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 )}
                 {server.status.kind === "ready" && server.status.tools.length > 0 && (
                   <ToolChips
@@ -205,7 +281,7 @@ export function McpPanel(props: {
                           className={reloading ? "anim-continuous" : undefined}
                           style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
                         />
-                        {t.common.retry}
+                        {t.mcp.reload}
                       </button>
                     </span>
                   </div>
@@ -226,7 +302,8 @@ export function McpPanel(props: {
                   </span>
                 )}
               </div>
-            ))}
+              );
+            })}
             <button type="button" className="mcp-add-card" onClick={() => setAdding(true)}>
               <Icon name="plus" size={14} /> {t.mcp.addServer}
             </button>
@@ -521,21 +598,23 @@ function FieldError(props: { children: React.ReactNode }) {
   );
 }
 
-/** 四状态图标对（§7）：ready=check / connecting=loader-circle 旋转 / failed=triangle-alert / disabled=circle-off。 */
-function StatusIcon(props: { status: McpStatus }) {
-  const { status } = props;
+/** 五状态图标对：ready=check / connecting=loader-circle 旋转 / failed=triangle-alert / disabled=circle-off / idle=circle-dashed（静态，不转）。 */
+function StatusIcon(props: { kind: McpStatus["kind"] }) {
+  const { kind } = props;
   const icon =
-    status.kind === "ready"
+    kind === "ready"
       ? "check"
-      : status.kind === "failed"
+      : kind === "failed"
         ? "triangle-alert"
-        : status.kind === "disabled"
+        : kind === "disabled"
           ? "circle-off"
-          : "loader-circle";
+          : kind === "idle"
+            ? "circle-dashed"
+            : "loader-circle";
   const color =
-    status.kind === "failed"
+    kind === "failed"
       ? "var(--color-danger)"
-      : status.kind === "ready"
+      : kind === "ready"
         ? "var(--color-text-secondary)"
         : "var(--color-text-tertiary)";
   return (
@@ -543,11 +622,11 @@ function StatusIcon(props: { status: McpStatus }) {
       name={icon}
       size={14}
       // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
-      className={status.kind === "connecting" ? "anim-continuous" : undefined}
+      className={kind === "connecting" ? "anim-continuous" : undefined}
       style={{
         color,
         flex: "0 0 auto",
-        animation: status.kind === "connecting" ? "mcp-spin 1s linear infinite" : undefined,
+        animation: kind === "connecting" ? "mcp-spin 1s linear infinite" : undefined,
       }}
     />
   );
