@@ -14,6 +14,7 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   describeServer,
   isMcpServerName,
+  mcpRowDisabledFact,
   mergeServerSources,
   WORKSPACE_MCP_FILENAME,
   type McpListResult,
@@ -86,12 +87,12 @@ export function registerMcpIpc(
     const servers = mergeServerSources(global, workspaceFiles).map((row) => ({
       name: row.name,
       detail: describeServer(row.server),
-      disabled: row.server.disabled === true,
+      disabled: mcpRowDisabledFact(row, global),
       scopedTo: row.server.workspaces ?? [],
       source: row.source,
       status:
         statusOf(row.name) ??
-        (row.server.disabled === true ? { kind: "disabled" as const } : { kind: "connecting" as const }),
+        (mcpRowDisabledFact(row, global) ? { kind: "disabled" as const } : { kind: "connecting" as const }),
     }));
     return { servers, warnings };
   });

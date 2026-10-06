@@ -243,6 +243,20 @@ export function mergeServerSources(
 }
 
 /**
+ * 面板行上「文件里的 disabled 事实」读哪份：启停写路径只落全局文件
+ *（工作区配置由用户自己编辑，见 main/mcp/ipc.ts 头注释），所以显示的事实
+ * 必须跟按钮写的那份对齐——有全局来源的行读全局文件（行上展示的定义仍是
+ * 跑得起来的工作区那份，不变）；工作区独有的行按钮禁用、够不着写路径，
+ * 读它自己的文件。
+ */
+export function mcpRowDisabledFact(
+  row: { name: string; server: McpServer; source: McpSource },
+  global: Record<string, McpServer>,
+): boolean {
+  return row.source.global ? global[row.name]?.disabled === true : row.server.disabled === true;
+}
+
+/**
  * 配置里唯一支持的变量：**这条会话所属工作区的根目录**。
  *
  * 只有这一个，不做 `${env:...}` / `${input:...}` 那一整套——那套的第二个消费者还没出现

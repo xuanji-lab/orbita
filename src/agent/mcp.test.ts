@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { McpHub } from "./mcp.ts";
 import {
+  mcpRowDisabledFact,
   mergeMcpConfigs,
   mergeServerSources,
   parseMcpConfig,
@@ -565,6 +566,35 @@ describe("mergeMcpConfigs / mergeServerSources", () => {
     // 同名工作区赢全局：行上展示跑得起来的那份
     assert.deepEqual((byName.get("shared")?.server as { args?: string[] }).args, ["local.js"]);
     assert.deepEqual(rows.map((r) => r.name), ["aw-mcp", "shared"]);
+  });
+
+  test("启停的事实跟按钮写的那份文件对齐（有全局来源读全局，工作区独有读自己）", () => {
+    const global: Record<string, McpServer> = {
+      // 全局 + 工作区同名：行上展示工作区那份定义（没有 disabled），
+      // 但启停按钮只写全局文件——事实必须读全局，否则按钮看起来是死的
+      shared: { transport: "stdio", command: "node", disabled: true },
+      globalOnly: { transport: "stdio", command: "node", disabled: true },
+    };
+    const rows = mergeServerSources(global, [
+      {
+        workspace: "paper3",
+        servers: {
+          shared: { transport: "stdio", command: "node" },
+          wsOnly: { transport: "stdio", command: "node", disabled: true },
+        },
+      },
+    ]);
+    const byName = new Map(rows.map((r) => [r.name, r]));
+    const shared = byName.get("shared");
+    const globalOnly = byName.get("globalOnly");
+    const wsOnly = byName.get("wsOnly");
+    assert(shared !== undefined && globalOnly !== undefined && wsOnly !== undefined);
+    // 行上展示的确实是工作区那份定义（同名工作区赢，不变）
+    assert.equal(shared.server.disabled, undefined);
+    assert.equal(mcpRowDisabledFact(shared, global), true);
+    assert.equal(mcpRowDisabledFact(globalOnly, global), true);
+    // 工作区独有的行：按钮禁用、够不着写路径，读它自己的文件
+    assert.equal(mcpRowDisabledFact(wsOnly, global), true);
   });
 });
 
