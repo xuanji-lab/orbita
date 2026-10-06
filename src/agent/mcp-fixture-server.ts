@@ -11,6 +11,8 @@
  *     子进程真的退出」，以及「同一工作区第二次开机没有重新拉起子进程」）
  *   ORBITA_MCP_FIXTURE_TAG      —— 设了就把身份标记追在 echo 后面。同名 server 在不同
  *     工作区各一份实例时，靠它断言调用真的落到了对的那一份（不设就不加，既有断言不受影响）
+ *   ORBITA_MCP_FIXTURE_START_DELAY_MS —— 推迟 connect，模拟「连接比闲置窗口还慢」的
+ *     server，专供清扫器「开机中的工作区不算闲置」的回归测试
  */
 import { writeFileSync } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -61,5 +63,10 @@ server.setRequestHandler(CallToolRequestSchema, (request) => {
 
 const pidFile = process.env["ORBITA_MCP_FIXTURE_PID_FILE"];
 if (pidFile !== undefined) writeFileSync(pidFile, `${process.pid}\n`);
+
+const startDelayMs = process.env["ORBITA_MCP_FIXTURE_START_DELAY_MS"];
+if (startDelayMs !== undefined) {
+  await new Promise((resolve) => setTimeout(resolve, Number(startDelayMs)));
+}
 
 await server.connect(new StdioServerTransport());

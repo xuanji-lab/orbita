@@ -227,7 +227,18 @@ export class McpHub {
    */
   private async sweepIdle(): Promise<void> {
     const now = Date.now();
-    const doomed = [...this.lastUsed.entries()].filter(([, at]) => now - at > this.idleMs);
+    // 还有实例在连的 scope 不算闲置：「连接慢」和「没人用」是两回事。连接比闲置
+    // 窗口还慢是常态（CI 上拉起子进程 + 握手就能超过测试的几百毫秒窗口），这种
+    // scope 被拆掉的话，在飞的 connect 落地时发现自己已被除名、连接作废，ensure
+    // 回来表里什么都没有（CI 实测挂过）。
+    const connectingScopes = new Set(
+      [...this.instances.values()]
+        .filter((instance) => instance.status.kind === "connecting")
+        .map((instance) => instance.scope),
+    );
+    const doomed = [...this.lastUsed.entries()].filter(
+      ([scope, at]) => now - at > this.idleMs && !connectingScopes.has(scope),
+    );
     if (doomed.length === 0) return;
     // 记账只删「还是当时那笔」的——清扫在飞的途中这个 scope 又开机了，新时间戳不许抹
     for (const [scope, at] of doomed) {
