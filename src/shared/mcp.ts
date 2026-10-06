@@ -61,6 +61,10 @@ export interface McpServerInfo {
   /** 给人看的一行：stdio 显示命令，http 显示 URL */
   detail: string;
   status: McpStatus;
+  /** 文件里的 `disabled` 事实。启停按钮按它决定语义——运行时合并状态（各工作区
+      实例取最优）可以和文件事实相反（别的 scope 有 ready/failed 实例时），
+      按运行时状态决定按钮会显示错误的动词、写错误的值（PR #163 评审第 5 条） */
+  disabled: boolean;
   /** 配的 `workspaces` 白名单原样带出来给面板显示。空 = 所有工作区都能用。 */
   scopedTo: string[];
   /** 定义来自哪里：全局 mcp.json，和 / 或这些工作区自带的 `.mcp.json`（同名时工作区赢）。 */

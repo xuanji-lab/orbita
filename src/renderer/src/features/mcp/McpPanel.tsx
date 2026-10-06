@@ -128,13 +128,13 @@ export function McpPanel(props: {
                     <PanelIconButton
                       title={
                         server.source.global
-                          ? server.status.kind === "disabled"
+                          ? server.disabled
                             ? t.mcp.enable
                             : t.mcp.disable
                           : t.mcp.workspaceFileOnly
                       }
                       disabled={!server.source.global}
-                      onClick={() => props.skills.setServerDisabled(server.name, server.status.kind !== "disabled")}
+                      onClick={() => props.skills.setServerDisabled(server.name, !server.disabled)}
                     >
                       <Icon name="power" size={14} />
                     </PanelIconButton>

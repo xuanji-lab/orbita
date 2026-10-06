@@ -86,6 +86,7 @@ export function registerMcpIpc(
     const servers = mergeServerSources(global, workspaceFiles).map((row) => ({
       name: row.name,
       detail: describeServer(row.server),
+      disabled: row.server.disabled === true,
       scopedTo: row.server.workspaces ?? [],
       source: row.source,
       status:
