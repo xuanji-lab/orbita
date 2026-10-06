@@ -336,6 +336,13 @@ describe("McpHub 的闲置回收", () => {
 
     assert.ok(await waitDead(pid), `子进程 ${pid} 在闲置超时后 10 秒内没有退出`);
     assert.deepEqual(hub.toolsFor("w1"), []);
+    // 等通知到位再断言：清扫的 drop 先删表项再 close 子进程，waitDead 一看见子进程
+    // 死就往下走，而 onIdleDrop 在 close 的 promise 落定后才调——CI 上这两个事件之间
+    // 能隔出几百毫秒（Windows runner 红过一次：子退了、表空了、通知还没跑到）
+    const notifyDeadline = Date.now() + 10_000;
+    while (notified < 1 && Date.now() < notifyDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     assert.ok(notified >= 1, "回收后没有通知（面板会停在陈旧的就绪态）");
     const statuses = new Map(hub.describe().map((s) => [s.name, s.status.kind]));
     assert.equal(statuses.get("demo"), "connecting");
