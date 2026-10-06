@@ -77,9 +77,13 @@ export interface McpServerInfo {
 
 /** 一个工作区实例的快照（面板展开明细的一行）。 */
 export interface McpInstanceInfo {
+  /** 工作区 id（agent 上报的原值，不翻名）——实例的身份。React key 用它：
+      名字取的是文件夹 basename，两个不同路径的同名文件夹会撞 */
+  scope: string;
   /** 工作区名（主进程把 scope id 翻成名；翻不到显示原 id）。"" = Home 会话 */
   workspace: string;
-  /** 绑定的工作区根（`${workspaceFolder}` 换出来的那个值）；"" = 没绑定 */
+  /** 实例绑定的工作区根（= 它所在工作区的路径；工作区会话里每台 server 的实例都带，
+      不只用了 `${workspaceFolder}` 的那些）。"" = 不属于任何工作区（Home 会话） */
   label: string;
   status: McpStatus;
 }

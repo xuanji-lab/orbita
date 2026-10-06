@@ -106,6 +106,7 @@ export function registerMcpIpc(
         // Home 实例（scope ""）没有分片语义，不进明细；翻不到名字的 id 原样显示
         .filter((instance) => instance.scope !== "")
         .map((instance) => ({
+          scope: instance.scope,
           workspace: nameOf.get(instance.scope) ?? instance.scope,
           label: instance.label,
           status: instance.status,
