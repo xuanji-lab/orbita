@@ -486,3 +486,37 @@ describe("classifyGreetings（迁移的「只随手发了一句」检查）", ()
     await assert.rejects(pending, /exited/);
   });
 });
+
+describe("mcpReload —— 回执共享在飞的一份（PR #163 验收：单槽顶号让面板永远冻结）", () => {
+  /** 先把进程拉起来（mcpReload 不 ensure：进程没起直接 resolve，没有等待者） */
+  async function runningHost(): Promise<{ host: AgentHostCore; child: () => FakeChild }> {
+    const ctx = await freshHost();
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+    return ctx;
+  }
+
+  test("60 秒内第二次 reload 不顶掉前一个：一份快照把两个调用方都结掉", async () => {
+    const { host, child } = await runningHost();
+    const first = host.mcpReload();
+    const second = host.mcpReload();
+    // 共享在飞：第二个调用不必再发一条 reset——reset 不读配置，连发两次语义相同
+    assert.equal(child().posted.filter((m) => m.type === "mcpReload").length, 1);
+    child().emit({ type: "mcp", servers: [] });
+    await Promise.all([first, second]);
+    // 落定后下一次调用重新起一份
+    const third = host.mcpReload();
+    assert.equal(child().posted.filter((m) => m.type === "mcpReload").length, 2);
+    child().emit({ type: "mcp", servers: [] });
+    await third;
+  });
+
+  test("进程退出：在等的 reload 如实 reject，不装作重载成功", async () => {
+    const { host, child } = await runningHost();
+    const pending = host.mcpReload();
+    await assert.rejects(Promise.all([pending, Promise.resolve().then(() => child().exitWith(1))]), /exited/);
+  });
+});
