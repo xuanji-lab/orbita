@@ -3039,21 +3039,3 @@ textarea.text-field {
   color: var(--color-text-tertiary);
 }
 
-/*
- * 消息两侧对称留白（--message-gutter，设计系统 spacing token）：用户气泡从右往左伸、
- * 左侧留白靠 --bubble-max-width；agent 一侧的所有块（回复正文、工具行、文件改动 /
- * 撤销卡、轮尾统计、图片组）从左往右伸，右侧留同样宽——统一挂在转录行的包裹层上，
- * 新加的块自动跟随，不必各自记得加 padding。
- */
-.agent-lane {
-  min-width: 0;
-  padding-right: var(--message-gutter);
-}
-
-/* .revert-keep 平时是 display: contents（让条目直接参与转录列的 grid 与 gap），
- * 而 contents 元素自己的 padding 不生效——agent 一侧要留白，就得让包裹层成为真盒子。
- * 照 .revert-doomed 的做法：自己成 grid、gap 跟随转录列，内部排布不变 */
-.revert-keep.agent-lane {
-  display: grid;
-  gap: inherit;
-}

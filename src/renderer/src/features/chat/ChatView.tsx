@@ -1323,7 +1323,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                   {t.chat.previewCut}
                 </div>
               )}
-              <div className={`${cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"} agent-lane`}>
+              <div className={cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"}>
               <ShowImageGalleryGroup cards={cards} />
               {branchAfter !== undefined && (
                 <BranchRow
@@ -1348,9 +1348,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 {t.chat.previewCut}
               </div>
             )}
-            {/* agent 一侧（回复、工具行、文件改动 / 撤销卡、轮尾统计…）共用一条右侧留白，
-                与用户气泡左侧的留白同宽——宽度绑在这一处，不逐个组件各加 */}
-            <div className={`${doomed ? "revert-doomed" : "revert-keep"}${entry.kind === "user" ? "" : " agent-lane"}`}>
+            <div className={doomed ? "revert-doomed" : "revert-keep"}>
             {entry.kind === "turnGroup" ? (
               <TurnRollupLine
                 group={entry}
