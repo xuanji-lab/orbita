@@ -149,14 +149,7 @@ export const en = {
     pastedCollapse: "Collapse the pasted text",
     pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
     pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
-    commandPanel: "Slash commands",
-    commandNoMatch: "No matching command",
-    slashSectionCommands: "Commands",
-    slashSectionSkills: "Skills",
-    slashSectionMcp: "MCP",
     skillNoneInWorkspace: "No skills available in this workspace",
-    cmdCompact: "Compact the context now",
-    cmdNew: "Start a new session",
   },
 
   /** 语音（shared/voice.ts）：输入框的听写 + 设置 › 语音 */

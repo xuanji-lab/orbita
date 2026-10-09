@@ -149,11 +149,11 @@ function SkillList(props: {
   const total = skills.skills.length;
   const filtered = filterSkills(skills.skills, query);
   const filtering = query.trim() !== "";
-  // 选取模式的可行行：扁平、按发起输入框的工作区可用（isSkillAvailable，与斜杠
-  // 面板、主进程发送端同一谓词——这里选得到的，发出去必然认）。拖拽源不在选取
+  // 选取模式的可行行：扁平、按发起输入框的工作区可用（isSkillAvailable，与
+  // 主进程发送端同一谓词——这里选得到的，发出去必然认）。拖拽源不在选取
   // 态也用同一份，与浏览视图的分组展示互不影响
   const pickRows = picker !== undefined ? filtered.filter((s) => isSkillAvailable(s, picker.workspaceId)) : [];
-  // 进入选取模式：清词、聚焦过滤行、高亮首行（与指令面板主模式同款）。
+  // 进入选取模式：清词、聚焦过滤行、高亮首行。
   // 靠 request 重触发：第二次「/ + 空格」时面板可能已开、选取态可能已在
   useEffect(() => {
     if (picker === undefined) return;
@@ -167,7 +167,7 @@ function SkillList(props: {
     setPickIndex((i) => (pickRows.length === 0 ? -1 : i === -1 ? 0 : Math.min(i, pickRows.length - 1)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickRows.length]);
-  // 高亮行滚进视野（同 Composer 指令面板的 block:"nearest"，不抖）
+  // 高亮行滚进视野（block:"nearest"，只在需要时滚，不抖）
   useEffect(() => {
     listRef.current?.querySelector('[data-picker-active="true"]')?.scrollIntoView({ block: "nearest" });
   }, [pickIndex]);

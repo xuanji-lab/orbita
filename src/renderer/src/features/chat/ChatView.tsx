@@ -108,7 +108,7 @@ import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { isMcpServerOffered, parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
+import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
@@ -398,29 +398,21 @@ function QuoteSelectionLayer(props: {
 }
 
 /**
- * 会话区的 skill / MCP 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug，
- * 指令面板的 skill 清单与 MCP 栏也用同一份。挂载读一次、失败静默——徽标是锦上
- * 添花，不为它报错，也不为它做重读 UI（新建的 skill 下一轮会话自然出现）。
+ * 会话区的 skill 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug。
+ * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
+ * （新建的 skill 下一轮会话自然出现）。
  */
 function useSkillIndex(): {
   skills: SkillMeta[];
-  reload: () => void;
-  servers: McpServerInfo[];
-  reloadServers: () => void;
 } {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
-  const [servers, setServers] = useState<McpServerInfo[]>([]);
   const reload = useCallback(() => {
     void api.skill.list().then(setSkills).catch(() => undefined);
-  }, []);
-  const reloadServers = useCallback(() => {
-    // main 的 mcp:list 回 { servers, warnings }（工作区配置分层后）；warnings 由 MCP 管理面显示，面板不管
-    void api.mcp.list().then((result) => setServers(result.servers)).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
   }, [reload]);
-  return { skills, servers, reload, reloadServers };
+  return { skills };
 }
 
 /*
@@ -527,14 +519,8 @@ function ChatViewBody(props: {
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
-  // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
-  const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
-  const offeredWorkspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
-  const offeredServers = useMemo(
-    () => servers.filter((server) => isMcpServerOffered(server, offeredWorkspace)),
-    [servers, offeredWorkspace],
-  );
+  // read SKILL.md 徽标的识别索引（徽标与工具行共用同一份数据）
+  const { skills } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
 
   // ── 右栏选取的回执：插入 token、焦点回输入框（panel-token.ts）────────
@@ -820,24 +806,6 @@ function ChatViewBody(props: {
         session.send();
       }}
       onStop={session.stop}
-      skills={skills}
-      workspaceId={session.workspaceId}
-      onReloadSkills={reloadSkills}
-      // 只给当前工作区能用的 server（isMcpServerOffered：与发送端判 /mcp: 可用同一依据）
-      servers={offeredServers}
-      onReloadServers={reloadServers}
-      onCommand={(command) => {
-        if (command === "compact") {
-          // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
-          session.sendText("/compact");
-        } else {
-          // /new：清掉打了一半的草稿与挂着的附件再开新会话（先清再切——
-          // newTask 换槽后 draftKey 变了，附件就清不到了）
-          session.clearComposerExtras();
-          session.setDraft("");
-          session.newTask();
-        }
-      }}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
       // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index

@@ -11,8 +11,7 @@ import { slashTokenAt } from "./slash-trigger.ts";
  *
  * token 形态由发送端定义：skill → `/skill:<slug> `，MCP → `/mcp:<server> `
  * （`/skill:` 的展开边界在 `@shared/skill` 的 findSkillTokens，同一套 token 语法）。
- * 两个 token 都带尾随空格——`replaceToken`（slash-trigger.ts）插入指令时同款，
- * 尾随空格让 token 天然终止、光标落在继续打字的位置。
+ * 两个 token 都带尾随空格——尾随空格让 token 天然终止、光标落在继续打字的位置。
  *
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
@@ -66,7 +65,7 @@ export function tokenPayloadOf(transfer: DataTransfer | null): OrbitaTokenPayloa
  * 在 `position` 处插入 token，前后自动补空格避免与相邻字粘连：
  * - 前面有非空白字 → token 前补一个空格；
  * - token 自带尾随空格，落点后面已是空白才省掉，不叠出双空格（文末保留——
- *   继续打字不用先补间隔，与 `replaceToken` 的取舍一致）。
+ *   继续打字不用先补间隔）。
  *
  * 返回补好空格后的全文、实际插进_buffer_ 的那段文本（`text`，供
  * `execCommand("insertText")` 原地替换用——那条路保撤销栈）与光标落点
@@ -154,7 +153,7 @@ export interface TokenPickerControl {
    * 聚焦、重置过滗词） */
   request: number;
   /** 发起选取的那个输入框所在的工作区（主槽 = session.workspaceId）。Skills
-   * 选取模式用它过滤候选（isSkillAvailable，与斜杠面板、发送端同一谓词）；
+   * 选取模式用它过滤候选（isSkillAvailable，与发送端同一谓词）；
    * MCP 面板无工作区概念，不消费它 */
   workspaceId: string | null;
 }

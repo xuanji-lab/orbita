@@ -15,7 +15,7 @@ import {
 } from "./panel-token.ts";
 
 describe("skillToken / mcpToken", () => {
-  it("带尾随空格（与 replaceToken 插入指令同款）", () => {
+  it("带尾随空格（token 天然终止，光标落在可继续打字的位置）", () => {
     equal(skillToken("orbita-always-open-pr"), "/skill:orbita-always-open-pr ");
     equal(mcpToken("miyo"), "/mcp:miyo ");
   });
