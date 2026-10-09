@@ -2580,6 +2580,25 @@ body {
   gap: 2px;
   flex: 0 0 auto;
 }
+/*
+ * 悬停动作键不占位（设计系统 Implementation rules「行尾血线」）：平时动作组收成零宽，
+ * 名字拿满整行；悬停 / 键盘聚焦时动作组展开、状态文字让位——名字不会被三颗键与状态
+ * 一起挤成「de…」。用 max-width 收而不用 display:none：收起的键仍可 Tab 聚焦，
+ * focus-within 一到就展开。删除二次确认时常显（data-confirming）。
+ */
+.mcp-card .mcp-actions {
+  max-width: 0;
+  overflow: hidden;
+}
+.mcp-card:hover .mcp-actions,
+.mcp-card:focus-within .mcp-actions,
+.mcp-actions[data-confirming] {
+  max-width: 120px;
+}
+.mcp-card:hover .mcp-status-text,
+.mcp-card:focus-within .mcp-status-text {
+  display: none;
+}
 
 /*
  * 工具 chips（简报 1）：mono 小胶囊横排换行，纯函数 `visibleTools`

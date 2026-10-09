@@ -317,6 +317,7 @@ function McpServerCard(props: {
         {/* 悬停/键盘聚焦浮现（简报 3）；删除确认行出现时强制常显，见 .reveal 注释 */}
         <span
           className="mcp-actions reveal"
+          data-confirming={props.confirming ? "true" : undefined}
           style={{ opacity: props.confirming ? 1 : undefined }}
         >
           {/* 「选用」键排在启停 / 删除之前（建设性动作在前）；与 PanelIconButton
@@ -800,6 +801,7 @@ function StatusText(props: { status: McpStatus }) {
           : t.mcp.notConnected;
   return (
     <span
+      className="mcp-status-text"
       style={{
         fontSize: "var(--font-size-caption)",
         color: status.kind === "failed" ? "var(--color-danger)" : "var(--color-text-tertiary)",
