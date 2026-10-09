@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
+import { ExperimentalContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
@@ -534,6 +535,10 @@ export function App() {
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
+  // 实验功能开关（会话生命周期三件套挂在它后面）：关着时右栏底部的遗留事项
+  // 入口不渲染；showCarryovers 的本地状态可能残留（开着面板去设置里关了开关），
+  // 在传给 Sidebar 的路上一并压掉——开关关了，这个子视图就不该再出得来
+  const experimental = settings.experimental ?? false;
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -541,12 +546,17 @@ export function App() {
     setShowCarryovers(next.showCarryovers);
   };
   const railEntries: RailEntry[] = [
-    {
-      icon: "list-todo" as const,
-      label: t.app.carryoversEntry(openCarryoverCount),
-      lit: railSubviewLit(subviewState, "carryovers"),
-      onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
-    },
+    // 遗留事项入口（收尾扫描的下游）挂实验开关；Archived / Browser / Settings 不挂
+    ...(experimental
+      ? [
+          {
+            icon: "list-todo" as const,
+            label: t.app.carryoversEntry(openCarryoverCount),
+            lit: railSubviewLit(subviewState, "carryovers"),
+            onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
+          },
+        ]
+      : []),
     {
       icon: "archive" as const,
       label: t.app.archivedEntry(archivedCount),
@@ -573,6 +583,7 @@ export function App() {
 
   return (
     <LocaleContext.Provider value={locale}>
+    <ExperimentalContext.Provider value={experimental}>
     <div className="app-shell">
       <Titlebar />
       <div className="layer">
@@ -583,7 +594,7 @@ export function App() {
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
           showArchived={showArchived}
-          showCarryovers={showCarryovers}
+          showCarryovers={showCarryovers && experimental}
           onShowArchived={setShowArchived}
           onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}
@@ -743,6 +754,7 @@ export function App() {
         />
       </div>
     </div>
+    </ExperimentalContext.Provider>
     </LocaleContext.Provider>
   );
 }

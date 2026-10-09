@@ -1,4 +1,4 @@
-import { THEME_PREFERENCES, type SettingsPatch, type ThemePreference } from "@shared/settings";
+import { selectableThemes, type SettingsPatch, type ThemePreference } from "@shared/settings";
 import { Icon } from "../../shell/Icon";
 import { useSettingTip } from "./InfoTip";
 import { useT } from "../../locale.ts";
@@ -24,15 +24,22 @@ type PreviewTheme = Exclude<ThemePreference, "system">;
  * 用**各自主题**的 token 画——不是当前主题的（见 ThemeThumb 与
  * `Orbita Design System/tokens/colors.css` 的 `[data-theme-preview]` 选择器）。
  * 只有 Theme 这一行用它，不拆成多个导出。
+ *
+ * 可选档位过 `selectableThemes(experimental)`：实验开关关闭时纸面两档
+ * （copybook / typescript）不出现在选择卡里。**已存的主题不受影响**——恰好
+ * 存着这两档之一的用户主题照常应用，只是没有选中卡可看（不崩、不退回
+ * system），开关打开即恢复可选。
  */
 export function ThemePicker(props: {
   value: ThemePreference;
+  /** 实验功能开关（设置原值）：纸面两档挂它后面 */
+  experimental: boolean;
   onChange: (patch: SettingsPatch) => void;
 }) {
   const t = useT();
   return (
     <div className="theme-grid" role="group" aria-label={t.settings.theme}>
-      {THEME_PREFERENCES.map((value) => (
+      {selectableThemes(props.experimental).map((value) => (
         <ThemeCard
           key={value}
           value={value}

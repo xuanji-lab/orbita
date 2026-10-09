@@ -404,6 +404,10 @@ export const en = {
       "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
     languageLockedZh: "This theme is Chinese-only",
     languageLockedEn: "This theme is English-only",
+    experimental: "Experimental features",
+    experimentalAria: "Experimental features",
+    experimentalInfo:
+      "Shows surfaces still being polished: the Copybook and Typescript paper themes, and the session lifecycle — star, done, carryover scan · anything you already have is kept and comes back when turned on",
     agent: "Agent",
     autoCompact: "Auto-compact",
     /** 说明中间夹着一个 <b>/compact</b>，拆成前后两段 */

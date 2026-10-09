@@ -313,7 +313,11 @@ function General(props: {
     <div className="set-page">
       <SettingGroup label={t.settings.appearance}>
         <SettingRow name={t.settings.theme}>
-          <ThemePicker value={props.settings.theme} onChange={props.onChange} />
+          <ThemePicker
+            value={props.settings.theme}
+            experimental={props.settings.experimental === true}
+            onChange={props.onChange}
+          />
         </SettingRow>
         <SettingRow name={t.settings.language} info={t.settings.languageInfo}>
           {/* 单语主题下两个芯片都置灰、亮的是主题定的那门语言，旁边说清为什么——
@@ -335,6 +339,28 @@ function General(props: {
               {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
             </span>
           )}
+        </SettingRow>
+        {/*
+          实验功能总开关：纸面两档皮肤与会话生命周期三件套的入口挂它后面。
+          放 Appearance 组：它说的是「界面上出现什么」。开关用两个 Chip——设计系统
+          里没有 Switch，与 Attribution 行同一个形状。默认关：不成熟的功能在公开
+          快照里不出现（2026-10 用户裁决）；只藏入口不动数据，开了就原样回来。
+        */}
+        <SettingRow name={t.settings.experimental} info={t.settings.experimentalInfo}>
+          <span className="set-chips" role="group" aria-label={t.settings.experimentalAria}>
+            <Chip
+              active={props.settings.experimental === true}
+              onClick={() => props.onChange({ experimental: true })}
+            >
+              {t.common.on}
+            </Chip>
+            <Chip
+              active={props.settings.experimental !== true}
+              onClick={() => props.onChange({ experimental: false })}
+            >
+              {t.common.off}
+            </Chip>
+          </span>
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
