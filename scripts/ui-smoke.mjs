@@ -8,11 +8,11 @@
  * 用法：
  *   1. 带调试端口启动应用（electron-vite 把 `--` 之后的参数透传给 Electron）：
  *        bun run dev -- --remote-debugging-port=9333
- *        bun run dev:isolated -- --remote-debugging-port=9334   # 第二个实例，dev 端口 5274
+ *        ORBITA_DEV_INSTANCE=2 ORBITA_DEV_PORT=5274 bun run dev -- --remote-debugging-port=9334   # 第二实例，dev 端口 5274
  *   2. 另开终端：
  *        bun scripts/ui-smoke.mjs [CDP 端口] [dev 端口]
  *      CDP 端口默认 9333；dev 端口默认读 ORBITA_DEV_PORT、再默认 5273——它用来认页面，
- *      验 dev:isolated 实例时传 5274。
+ *      验隔离实例（设了 ORBITA_DEV_PORT）时传对应端口。
  *      CDP 端口只在连不上时才需要换：Windows 的保留端口段会静默吞掉 bind
  *      （应用起得来、端口就是不通），先查表换一个落在段外的：
  *        netsh interface ipv4 show excludedportrange protocol=tcp
