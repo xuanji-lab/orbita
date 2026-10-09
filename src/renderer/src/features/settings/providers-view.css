@@ -201,6 +201,30 @@
   min-width: 0;
 }
 
+/* OAuth 登录行：状态占输入框的位置，登录 / 重新登录钮占原 Test 钮左侧 */
+.pv-oauth-state {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  height: 30px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
+  color: var(--color-success);
+  overflow: hidden;
+}
+.pv-oauth-state > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pv-oauth-state .pv-oauth-out {
+  color: var(--color-text-tertiary);
+}
+
 /* Save 条：只在连接区有没存的改动时出现，贴在连接区底边 */
 .pv-savebar {
   display: flex;
