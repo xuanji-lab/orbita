@@ -19,6 +19,7 @@ import {
   SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
   foldKeyForWorkspace,
+  isGroupFolded,
   toggleGroupFold,
   toggleGroupFull,
   unfoldGroup,
@@ -199,7 +200,7 @@ export function Sidebar(props: {
    * `sidebar-fold.ts`；同样**不持久化**，理由同上——列表每次启动从盘上重读。
    */
   const [groups, setGroups] = useState<SidebarGroupState>({
-    folds: new Set<string>(),
+    overrides: new Set<string>(),
     full: new Set<string>(),
   });
   useEffect(() => {
@@ -260,7 +261,7 @@ export function Sidebar(props: {
   const workspaceMatches = filtered
     ? session.workspaces.filter((workspace) => scoped.some((m) => m.workspaceId === workspace.id))
     : session.workspaces;
-  const tasksFolded = groups.folds.has(TASKS_FOLD_KEY);
+  const tasksFolded = isGroupFolded(groups, TASKS_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
   const tasksFull = groups.full.has(TASKS_FOLD_KEY);
   const looseVisible = tasksFull ? loose : loose.slice(0, SESSIONS_PREVIEW_LIMIT);
@@ -655,7 +656,7 @@ export function Sidebar(props: {
                       sessions={scoped.filter((m) => m.workspaceId === workspace.id)}
                       session={session}
                       openId={openId}
-                      folded={groups.folds.has(foldKeyForWorkspace(workspace.id))}
+                      folded={isGroupFolded(groups, foldKeyForWorkspace(workspace.id))}
                       onToggleFold={() =>
                         setGroups((current) =>
                           toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
