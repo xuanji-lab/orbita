@@ -43,11 +43,15 @@ export interface MenuPlacement {
 /**
  * 菜单开在锚点的哪一边。
  * - `below`（默认）：锚点下方，装不下翻上去。
+ * - `above`：锚点上方——**两侧都装得下时也选上方**，上方装不下才回落到下方。给输入卡
+ *   底栏的芯片用：输入卡在首页悬在窗口中间，按「哪边空往哪开」会出现同一排芯片
+ *   有的朝下开、有的翻上去（短卡片下方装得下就朝下，长卡片先翻上去），而钉底的
+ *   聊天页又全是朝上。点名要上方，两边朝向才一致（2026-10-03 用户定）。
  * - `right`：锚点**右侧**，左缘贴锚点右缘 + GAP、顶边与锚点顶边对齐。给侧栏会话行用——
  *   开在下方会盖住紧挨着的下一条会话，用户要看别的会话就得先关菜单（2026-09-22 wafo）。
  *   右侧装不下（窄窗）时回落到 `below`，不做「向左翻」的第三种形态：那等于又盖回列表。
  */
-export type MenuPlacementSide = "below" | "right";
+export type MenuPlacementSide = "below" | "above" | "right";
 
 /**
  * 默认向下、下方装不下且上方装得下才翻上去；横向向 align 对齐后夹回窗口内
@@ -82,7 +86,17 @@ export function placeMenu(
   const roomAbove = anchor.top - MENU_GAP - MENU_EDGE;
   const fitsBelow = menu.height <= roomBelow;
   const fitsAbove = menu.height <= roomAbove;
-  const above = fitsAbove && !fitsBelow ? true : !fitsAbove && !fitsBelow ? roomAbove > roomBelow : false;
+  // 两侧都装得下时按 side 的偏好（默认下方，`above` 点名要上方）；只有一侧装得下：
+  // 用那一侧；都装不下：挑空间大的。`above` 只改「两侧都行」的那一格，回落与
+  // 封顶规则与默认完全同构——偏好不是硬压，真开不下时不把菜单塞出屏
+  const above =
+    fitsAbove && fitsBelow
+      ? side === "above"
+      : fitsAbove
+        ? true
+        : fitsBelow
+          ? false
+          : roomAbove > roomBelow;
   const maxHeight = above ? roomAbove : roomBelow;
   // 两侧都挤不出位置（窗口比 2×边距还矮）：没有可展示的地方，关门信号
   if (maxHeight <= 0) return { top: 0, left: 0, visible: false, maxHeight: 0 };

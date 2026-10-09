@@ -79,7 +79,14 @@
   --text-faint: var(--color-text-tertiary);
   --border-hairline: var(--color-border-subtle);
   --action-primary: var(--color-accent);
-  --action-primary-hover: var(--color-accent-strong);
+  --action-primary-hover: var(--color-accent-strong);  /* 文件类型色（2026-10 用户新增）：文档 / 演示 / 表格三族图标的辨认色——仅用于
+     图标（fileIconTone 的消费面：文件面板树、输入框胶囊、Session·附件列表），文件名
+     文字仍是正墨。不借 accent / info / success / warning（各有语义），这组只回答
+     「这是什么类型的文件」；对比度按图标级别 ≥ 3:1（filetype-colors.test.ts 把关）。 */
+  --color-filetype-doc: #1b5dc7;
+  --color-filetype-slides: #c2410c;
+  --color-filetype-sheet: #15803d;
+
 }
 
 /*
@@ -138,7 +145,11 @@
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
   --color-chat-control-bg: #2c2c2e;
   --color-chat-table-bg: #151517;
-  --color-chat-link: #52a8ff;
+  --color-chat-link: #52a8ff;  /* 文件类型色（同明档，换亮值）：三色在黛 / 玄的井、卡与壳上都 ≥ 3:1，色相彼此分开 */
+  --color-filetype-doc: #6ea8fe;
+  --color-filetype-slides: #ff9466;
+  --color-filetype-sheet: #4ecf7e;
+
 }
 
 /* black — 玄 Onyx（2026-09-30 换血，顶替原墨槽位）：ZCode zai-dark 纯灰档。
@@ -185,7 +196,11 @@
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
   --color-chat-control-bg: #262626;
   --color-chat-table-bg: #161616;
-  --color-chat-link: #52a8ff;
+  --color-chat-link: #52a8ff;  /* 文件类型色（同明档，换亮值）：三色在黛 / 玄的井、卡与壳上都 ≥ 3:1，色相彼此分开 */
+  --color-filetype-doc: #6ea8fe;
+  --color-filetype-slides: #ff9466;
+  --color-filetype-sheet: #4ecf7e;
+
 }
 
 /* copybook — 小学作业（中文）：璇玑载体谱「稿纸」一档的中文版（2026-09-25 载入，同日由
@@ -236,7 +251,14 @@
   --color-paper-grid: rgba(59, 122, 85, 0.42);
   --color-paper-pen: #cc3a2e;
   --color-paper-tian: #cf4a3c;
-  --color-paper-whiteout: #ffffff;
+  --color-paper-whiteout: #ffffff;  /* 文件类型色（2026-10 用户新增）：文档 / 演示 / 表格三族图标的辨认色——仅用于
+     图标（fileIconTone 的消费面：文件面板树、输入框胶囊、Session·附件列表），文件名
+     文字仍是正墨。不借 accent / info / success / warning（各有语义），这组只回答
+     「这是什么类型的文件」；对比度按图标级别 ≥ 3:1（filetype-colors.test.ts 把关）。 */
+  --color-filetype-doc: #1b5dc7;
+  --color-filetype-slides: #c2410c;
+  --color-filetype-sheet: #15803d;
+
 }
 
 /* typescript — 打字稿（英文）：同一档的英文版。同一张米白纸，不画格也不满屏画线，
@@ -282,5 +304,12 @@
   /* 纸面：输入框的蓝横线与红页边线；首页批语的红笔 */
   --color-paper-rule: #a9c6e2;
   --color-paper-margin: #e38f86;
-  --color-paper-pen: #cc3a2e;
+  --color-paper-pen: #cc3a2e;  /* 文件类型色（2026-10 用户新增）：文档 / 演示 / 表格三族图标的辨认色——仅用于
+     图标（fileIconTone 的消费面：文件面板树、输入框胶囊、Session·附件列表），文件名
+     文字仍是正墨。不借 accent / info / success / warning（各有语义），这组只回答
+     「这是什么类型的文件」；对比度按图标级别 ≥ 3:1（filetype-colors.test.ts 把关）。 */
+  --color-filetype-doc: #1b5dc7;
+  --color-filetype-slides: #c2410c;
+  --color-filetype-sheet: #15803d;
+
 }

@@ -156,6 +156,21 @@ export const ipcChannels = {
    * 网页文件的默认打开方式——系统默认应用（fs:open）退为次要按钮
    */
   fsOpenInBrowser: "fs:open-in-browser",
+  /**
+   * 把一批绝对路径 stat 成盘上事实（回 `FsEntryFact[]`，与路径等长同序：kind 是
+   * file / dir 还是 null、size 多大）。消费者是输入框的附件分拣与文件面板的已发送
+   * 附件列表：拖入 / 粘贴的 `File` 对象在 renderer 里分不清是文件还是目录，主进程
+   * 发送时的 lstat 纠正来得太晚——图标与名字当场就该是对的；面板那侧还要靠它
+   * 如实标出已不在盘上的附件。不走面板的根白名单——拖入条目本来就在三根之外
+   * （发送时复制或原位置引用），问类型不构成通用文件浏览器：不读内容、不列目录。
+   */
+  fsStatKind: "fs:stat-kind",
+  /**
+   * 开系统目录选择器（openDirectory + multiSelections），回选中目录的绝对路径数组，
+   * 取消返回 null。给输入框回形针的「添加文件夹」用——Windows 不允许同一个对话框
+   * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
+   */
+  fsPickFolders: "fs:pick-folders",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
