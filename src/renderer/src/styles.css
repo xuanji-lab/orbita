@@ -798,6 +798,25 @@ body {
 }
 
 /*
+ * 行尾悬停动作键的公共形态（shell/RowHoverAction.tsx 的默认 class）：显隐仍由
+ * 调用方的配对机制管（文件面板 .file-hover-act 的 display、skill 行 / MCP 卡
+ * .reveal 的 opacity），这里只定配色与居中——文件 / skill 两处带自己的配色
+ * class，这条只服务 MCP 卡动作组里的静态排布（与 PanelIconButton 同一副
+ * hover 语言：透明底 → hover 抬底色 + 正墨）。
+ */
+.row-hover-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+.row-hover-act:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/*
  * 工作区组头：hover 到组内任意位置（含下方的会话行）就浮出删除键，原 onMouseEnter
  * 挂在组的外层 div 上，:hover 的命中范围原样对应。**只点名 `.workspace-group-remove`，
  * 不用通用的 `.reveal`**——组头与它下面的会话行是同一个 `.workspace-group` 的
@@ -2005,6 +2024,31 @@ body {
   white-space: nowrap;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
+}
+
+/*
+ * 行尾「选用」键（RowHoverAction，reveal 家族）：绝对定位盖在行尾——血线规则
+ * 的悬停组合例外，静止态尾部（归属点阵）钉血线，悬停 / 键盘聚焦时让位淡出。
+ * 集合信息不丢：行 tooltip（skill-row-tip，350ms）里有 slug · 集合全名。实底
+ * 取悬停行底色，盖住让位过渡中还没淡尽的点（files 面板 .file-row-act 用面板
+ * 底盖悬停元信息，同一职责、这里行底是 hover 底）。
+ */
+.skill-row-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+}
+.skill-row-act:hover {
+  color: var(--color-text-primary);
+}
+.skill-row .set-dots {
+  transition: opacity var(--transition-hover);
+}
+.skill-row:hover .set-dots,
+.skill-row:has(:focus-visible) .set-dots {
+  opacity: 0;
 }
 
 /*

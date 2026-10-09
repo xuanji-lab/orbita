@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { IconButton } from "../../shell/IconButton";
+import { RowHoverAction } from "../../shell/RowHoverAction";
 import { SetDots } from "../../shell/SetDots";
 import { useHoverTooltip } from "../../shell/useHoverTooltip.ts";
 import {
@@ -43,6 +44,8 @@ export function SkillsPanel(props: {
   onCreateSkill: () => void;
   /** 「/ + 空格」右栏选取模式（panel-token.ts）：只主槽的 App 提供，rail 开的面板不传 */
   picker?: TokenPickerControl;
+  /** 行尾「选用」键：把 token 插到主槽输入框当前光标处（PanelInsertRequest） */
+  onInsert: (token: string) => void;
 }) {
   const { skills } = props;
   /** 当前面板视图：列表 / 详情 / 新建表单（4-1） */
@@ -89,6 +92,7 @@ export function SkillsPanel(props: {
       onCreateSkill={props.onCreateSkill}
       onClose={props.onClose}
       picker={props.picker}
+      onInsert={props.onInsert}
     />
   );
 }
@@ -129,6 +133,7 @@ function SkillList(props: {
   onCreateSkill: () => void;
   onClose: () => void;
   picker?: TokenPickerControl;
+  onInsert: (token: string) => void;
 }) {
   const t = useT();
   const { skills } = props;
@@ -325,6 +330,7 @@ function SkillList(props: {
                   onSelect={props.onSelect}
                   workspaceName={props.workspaceName}
                   onClean={skills.clean}
+                  onInsert={props.onInsert}
                   pickerActive={index === pickIndex}
                   onPickerSelect={() => picker.onSelect(skillToken(s.slug))}
                 />
@@ -354,6 +360,7 @@ function SkillList(props: {
                       onSelect={props.onSelect}
                       workspaceName={props.workspaceName}
                       onClean={skills.clean}
+                      onInsert={props.onInsert}
                     />
                   ))}
                 </div>
@@ -371,6 +378,7 @@ function SkillList(props: {
                         onSelect={props.onSelect}
                         workspaceName={props.workspaceName}
                         onClean={skills.clean}
+                        onInsert={props.onInsert}
                       />
                     ))}
                   </div>
@@ -387,6 +395,7 @@ function SkillList(props: {
                       onSelect={props.onSelect}
                       workspaceName={props.workspaceName}
                       onClean={skills.clean}
+                      onInsert={props.onInsert}
                     />
                   ))}
                 </div>
@@ -433,6 +442,8 @@ function SkillRow(props: {
   onSelect: (slug: string) => void;
   workspaceName: (id: string) => string;
   onClean: (slug: string) => void;
+  /** 行尾「选用」键：插 /skill:<slug> 进输入框（浏览态与选取态都在） */
+  onInsert: (token: string) => void;
   /** 选取模式：本行是否高亮（↑↓ 键盘导航的位置） */
   pickerActive?: boolean;
   /** 选取模式：点选即插 token（替换「点开详情」） */
@@ -514,6 +525,18 @@ function SkillRow(props: {
       )}
       {!skill.missing && !dim && (
         <SetDots global={skill.global} workspaces={skill.workspaces.length} title={setNames.join(", ")} />
+      )}
+      {/* 「选用」键：悬停 / 键盘聚焦浮现，绝对定位盖在行尾（血线规则的悬停组合
+          例外，归属点阵让位）。missing 的不给——token 落进输入框也展开不了 */}
+      {!skill.missing && (
+        <RowHoverAction
+          icon="corner-down-left"
+          title={t.skills.use}
+          onClick={() => props.onInsert(skillToken(skill.slug))}
+          right={2}
+          top={8}
+          className="reveal skill-row-act"
+        />
       )}
       {tooltip.open &&
         createPortal(

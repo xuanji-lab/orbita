@@ -4,6 +4,7 @@ import { findInvocationTokens } from "../../../shared/invocation.ts";
 import {
   insertToken,
   mcpToken,
+  panelInsertPosition,
   skillToken,
   slashSpaceOpensPanel,
 } from "./panel-token.ts";
@@ -70,6 +71,23 @@ describe("insertToken", () => {
         `${JSON.stringify(before)} @${pos} → ${JSON.stringify(after)} 应含 /${kind}:${target}`,
       );
     }
+  });
+});
+
+describe("panelInsertPosition", () => {
+  it("有光标历史：落在当前光标（失焦后 selectionStart 仍停在那）", () => {
+    equal(panelInsertPosition(5, 10), 5);
+    equal(panelInsertPosition(10, 10), 10);
+  });
+  it("草稿为空：0 与末尾同点", () => {
+    equal(panelInsertPosition(0, 0), 0);
+  });
+  it("光标停在 0 而草稿非空：视为从未聚焦过，落草稿末尾（不前插到恢复的草稿头上）", () => {
+    equal(panelInsertPosition(0, 7), 7);
+  });
+  it("草稿被外部改短、光标停在旧位置之外：夹回草稿长度", () => {
+    equal(panelInsertPosition(99, 3), 3);
+    equal(panelInsertPosition(-1, 3), 3);
   });
 });
 

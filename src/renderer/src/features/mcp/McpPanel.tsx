@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { IconButton } from "../../shell/IconButton";
+import { RowHoverAction } from "../../shell/RowHoverAction";
 import {
   PanelButton,
   PanelIconButton,
@@ -30,6 +31,8 @@ export function McpPanel(props: {
   onClose: () => void;
   /** 「/ + 空格」右栏选取模式（panel-token.ts）：从 Skills 侧 Tab 切过来 */
   picker?: TokenPickerControl;
+  /** 卡上「选用」键：把 /mcp:<server> 插到主槽输入框当前光标处（PanelInsertRequest） */
+  onInsert: (token: string) => void;
 }) {
   const t = useT();
   const { servers, serversLoad, serverWarnings, openMcpConfig, reloadMcp } = props.skills;
@@ -235,6 +238,7 @@ export function McpPanel(props: {
                   }}
                   onCancelRemove={() => setConfirming(null)}
                   onReload={runReload}
+                  onInsert={() => props.onInsert(mcpToken(server.name))}
                   pickerActive={picker !== undefined && index === pickIndex}
                   onPickerSelect={
                     picker !== undefined ? () => picker.onSelect(mcpToken(server.name)) : undefined
@@ -260,8 +264,10 @@ export function McpPanel(props: {
 }
 
 /*
- * 一台 server 的卡片（从 McpPanel 列表里提出来的组件）：选取模式下点选即插
- * token、高亮卡随 ↑↓ 移动；短按的原行为（启停 / 删除 / 展开实例与工具）不变。
+ * 一台 server 的卡片（从 McpPanel 列表里提出来的组件）：卡头动作组里带「选用」
+ * 键（RowHoverAction，随组 reveal）——插 /mcp:<name> 进输入框；选取模式下点
+ * 选即插 token、高亮卡随 ↑↓ 移动。短按的原行为（启停 / 删除 / 展开实例与
+ * 工具）不变。
  */
 function McpServerCard(props: {
   server: McpServerInfo;
@@ -278,6 +284,8 @@ function McpServerCard(props: {
   onConfirmRemove: () => void;
   onCancelRemove: () => void;
   onReload: () => void;
+  /** 「选用」键：插 token 进输入框（停用的 server 没有——展不开工具，token 没用） */
+  onInsert: () => void;
   pickerActive?: boolean;
   onPickerSelect?: () => void;
 }) {
@@ -311,6 +319,17 @@ function McpServerCard(props: {
           className="mcp-actions reveal"
           style={{ opacity: props.confirming ? 1 : undefined }}
         >
+          {/* 「选用」键排在启停 / 删除之前（建设性动作在前）；与 PanelIconButton
+              同尺寸，随本组 reveal。停用的 server 不给（展不开工具） */}
+          {!server.disabled && (
+            <RowHoverAction
+              icon="corner-down-left"
+              title={t.mcp.use}
+              onClick={props.onInsert}
+              size={26}
+              iconSize={14}
+            />
+          )}
           {/* 只来自工作区自带 .mcp.json 的：写全局文件够不着它，
               按钮禁用并指到真正的文件（遮蔽不是编辑） */}
           <PanelIconButton

@@ -34,7 +34,7 @@ import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRai
 import { RightPanelSlot } from "./shell/RightPanel";
 import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
-import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
+import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
@@ -498,6 +498,17 @@ export function App() {
     workspaceId: session.workspaceId,
   };
 
+  // ── 面板行内「选用」按钮的插入（panel-token.ts）─────────────────
+  // Skills 行 / MCP 卡尾的选用键（RowHoverAction）：token 落到主槽输入框当前
+  // 光标处（从未聚焦过则草稿末尾）、焦点回输入框。与选取的锚点回执分开走：
+  // 按钮是浏览态入口，面板不关，可以连插几条
+  const [panelInsert, setPanelInsert] = useState<PanelInsertRequest | null>(null);
+  const panelInsertNonceRef = useRef(0);
+  const insertPanelToken = useCallback((token: string): void => {
+    panelInsertNonceRef.current += 1;
+    setPanelInsert({ token, nonce: panelInsertNonceRef.current });
+  }, []);
+
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
   // 会话层时，Esc 只退一层回列表（escapeFrom），不直接关掉整个面板——与面板内部
   // 「返回」按钮同一个退出台阶（子会话 PR4c 2.1）。槽里是父子会话面板（不够宽）时
@@ -685,6 +696,7 @@ export function App() {
                 scrollToEndHotkey
                 onSlashSpace={openTokenPicker}
                 tokenPickResult={tokenPickResult}
+                panelInsert={panelInsert}
               />
             )}
           </div>
@@ -739,9 +751,15 @@ export function App() {
                   defaultWorkspaceId={session.workspaceId}
                   onCreateSkill={createSkillDraft}
                   picker={tokenPickerOn ? skillsPicker : undefined}
+                  onInsert={insertPanelToken}
                 />
               ) : shownPanel === "mcp" ? (
-                <McpPanel skills={skills} onClose={() => handlePanel(null)} picker={tokenPickerOn ? mcpPicker : undefined} />
+                <McpPanel
+                  skills={skills}
+                  onClose={() => handlePanel(null)}
+                  picker={tokenPickerOn ? mcpPicker : undefined}
+                  onInsert={insertPanelToken}
+                />
               ) : shownPanel === "drawer" ? (
                 <Drawer
                   engine={engine}
