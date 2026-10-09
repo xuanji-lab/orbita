@@ -6,7 +6,7 @@ import { ImageThumb } from "./ImageThumb";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { imageSrc } from "./composer-images.ts";
 import { quoteRowPreview } from "./quote-label.ts";
-import { fileIcon } from "../features/files/tree-view.ts";
+import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import type { TextQuote } from "@shared/quote";
 import { useT } from "../locale.ts";
@@ -189,6 +189,14 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
   const t = useT();
   const isDir = props.chip.kind === "dir";
   const tooltip = useHoverTooltip<HTMLSpanElement>(PATH_TOOLTIP_DELAY_MS, true);
+  // 文档 / 演示 / 表格三族上色（fileIconTone，与文件面板同一份），其余中性
+  const tone = isDir ? null : fileIconTone(props.chip.name, "file");
+  const iconColor =
+    isDir
+      ? "var(--color-text-secondary)"
+      : tone === null
+        ? "var(--color-text-tertiary)"
+        : FILETYPE_TONE_COLOR[tone];
   return (
     <>
       <span
@@ -203,7 +211,7 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
           strokeWidth={1.8}
           fill={isDir}
           style={{
-            color: isDir ? "var(--color-text-secondary)" : "var(--color-text-tertiary)",
+            color: iconColor,
             flex: "0 0 auto",
           }}
         />

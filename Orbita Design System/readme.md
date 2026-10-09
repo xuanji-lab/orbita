@@ -142,6 +142,12 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
+**Filetype colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): one job only —
+telling Word-ish docs, slide decks and spreadsheets apart **at a glance in their 13–14px icons**
+(files tree, composer pills, sent-attachment list; filenames stay in ink). Not the accent or any
+status colour; ≥ 3:1 on every theme's panel / muted / app grounds, hues ≥ 40° apart, guarded by
+`filetype-colors.test.ts`.
+
 **Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is
 unchanged — **the shell (the ground the left rail and right icon strip sit on) is the lighter

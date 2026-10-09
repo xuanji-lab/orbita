@@ -86,6 +86,26 @@ const ARCHIVE_EXTS = new Set(["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz
 const AUDIO_EXTS = new Set(["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma", "aiff", "opus", "mid", "midi"]);
 const VIDEO_EXTS = new Set(["mp4", "mov", "avi", "mkv", "webm", "flv", "wmv", "m4v", "mpg", "mpeg", "ts"]);
 
+/** 文档色调（Word 蓝）：docx 一族；pdf 不在内——用户点名的是 docx / ppt / xlsx 三件套 */
+const DOC_TONE_EXTS = new Set(["doc", "docx", "rtf", "odt"]);
+/** 演示色调（PowerPoint 橙红） */
+const SLIDE_TONE_EXTS = new Set(["ppt", "pptx", "key", "odp"]);
+/** 表格色调（Excel 绿） */
+const SHEET_TONE_EXTS = new Set(["xls", "xlsx", "csv", "numbers", "ods"]);
+
+/** 图标色调：只有这三族有色，其余（含目录 / symlink / 未列出扩展名）都是中性 tertiary */
+export type FileIconTone = "doc" | "slides" | "sheet";
+
+/**
+ * tone → 颜色 token。显式逐个写、不拼模板串：design-tokens.test.ts 的静态扫描
+ * 要能从引用处认出完整 token 名，才能反向验证「有引用就有声明」。
+ */
+export const FILETYPE_TONE_COLOR: Record<FileIconTone, string> = {
+  doc: "var(--color-filetype-doc)",
+  slides: "var(--color-filetype-slides)",
+  sheet: "var(--color-filetype-sheet)",
+};
+
 /**
  * 名字里「扩展名」那一段：取最后一个 `.` 之后的部分，小写。开头就是 `.` 的点文件
  * （`.gitignore`）没有「扩展名」这个概念，这里按约定返回空串，交给
@@ -135,6 +155,21 @@ export function fileIcon(name: string, kind: FileEntryKind, open = false): IconN
   if (VIDEO_EXTS.has(ext)) return "file-video-2";
   if (TEXT_EXTS.has(ext)) return "file-text";
   return "file";
+}
+
+/**
+ * 条目图标的色调（与 fileIcon 同处、同一套判定输入）：文档 / 演示 / 表格三族返回
+ * tone（渲染层映射到 `--color-filetype-<tone>`），其余 null = 中性 tertiary。颜色只
+ * 上在**图标**上，名字文字仍是正墨（2026-10 用户裁决 F）；文件面板树、输入框胶囊、
+ * Session·附件列表三处共用这一份，颜色一致。
+ */
+export function fileIconTone(name: string, kind: FileEntryKind): FileIconTone | null {
+  if (kind !== "file") return null;
+  const ext = extOf(name);
+  if (DOC_TONE_EXTS.has(ext)) return "doc";
+  if (SLIDE_TONE_EXTS.has(ext)) return "slides";
+  if (SHEET_TONE_EXTS.has(ext)) return "sheet";
+  return null;
 }
 
 /**

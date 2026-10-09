@@ -9,6 +9,8 @@ import {
   countLoadedEntries,
   countVisibleEntries,
   fileIcon,
+  fileIconTone,
+  FILETYPE_TONE_COLOR,
   filterCountText,
   filterEntries,
   footerSummary,
@@ -588,6 +590,8 @@ function TreeRow(props: {
   const dotted = props.name.startsWith(".");
   const isRules = props.name === "AGENTS.md";
   const iconName = fileIcon(props.name, props.kind, props.open);
+  // 文档 / 演示 / 表格三族图标上色（fileIconTone），其余中性——名字文字仍正墨
+  const tone = fileIconTone(props.name, props.kind);
   const hasMeta = props.size !== undefined;
   // hover 行尾把 size·mtime 缩成 `48 KB · 12m`，省略的完整信息（名字、完整时间戳）
   // 放回 title 里；symlink 没有 size，但契约里连目标路径都没有，title 只能如实说
@@ -663,7 +667,10 @@ function TreeRow(props: {
           <Icon
             name={iconName}
             size={14}
-            style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
+            style={{
+              color: tone === null ? "var(--color-text-tertiary)" : FILETYPE_TONE_COLOR[tone],
+              flex: "0 0 auto",
+            }}
           />
         )}
         <span
@@ -835,6 +842,7 @@ function AttachmentRow(props: {
     statKind === "dir" || (statKind === undefined && props.declaredKind === "dir")
       ? "directory"
       : "file";
+  const tone = fileIconTone(name, kind);
   const missing = props.fact !== undefined && props.fact.kind === null;
   const owner = props.roots.find((root) => root.exists && pathWithin(root.path, props.path)) ?? null;
   const clickable = !missing && owner !== null;
@@ -872,7 +880,10 @@ function AttachmentRow(props: {
         <Icon
           name={fileIcon(name, kind)}
           size={14}
-          style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
+          style={{
+            color: tone === null ? "var(--color-text-tertiary)" : FILETYPE_TONE_COLOR[tone],
+            flex: "0 0 auto",
+          }}
         />
         <span
           style={{
