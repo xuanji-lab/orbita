@@ -26,7 +26,7 @@ const DEV_ORBITA_ROOT = "Orbita-dev";
  *
  * 隔离实例：只分 userData 不分工作区根的话，两个进程还是写同一批会话文件，单实例锁
  * 就白分了（2026-10-03「一键隔离实例」）。两种给法，userData 与工作区根总是一起分：
- * - `ORBITA_DEV_INSTANCE=<名字>`（如 `ORBITA_DEV_INSTANCE=2 ORBITA_DEV_PORT=5274 bun run dev`）：orbita-dev-<名字> 与
+ * - `ORBITA_DEV_INSTANCE=<名字>`（如 `ORBITA_DEV_INSTANCE=accept ORBITA_DEV_PORT=5310 bun run dev`）：orbita-dev-<名字> 与
  *   ~/Orbita-dev-<名字>，appData 由 Electron 按平台给——不在脚本里拼 `$APPDATA`
  *   （那只在 Windows 有值，macOS 上会展开成根目录下的 `/orbita-dev-2`）。
  * - 显式 `--user-data-dir`：userData 用调用方给的值（Chromium 已应用它），工作区根

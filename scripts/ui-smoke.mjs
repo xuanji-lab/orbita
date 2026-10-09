@@ -8,7 +8,7 @@
  * 用法：
  *   1. 带调试端口启动应用（electron-vite 把 `--` 之后的参数透传给 Electron）：
  *        bun run dev -- --remote-debugging-port=9333
- *        ORBITA_DEV_INSTANCE=2 ORBITA_DEV_PORT=5274 bun run dev -- --remote-debugging-port=9334   # 第二实例，dev 端口 5274
+ *        ORBITA_DEV_INSTANCE=accept ORBITA_DEV_PORT=5310 bun run dev -- --remote-debugging-port=39334   # 第二实例，dev 端口 5310
  *   2. 另开终端：
  *        bun scripts/ui-smoke.mjs [CDP 端口] [dev 端口]
  *      CDP 端口默认 9333；dev 端口默认读 ORBITA_DEV_PORT、再默认 5273——它用来认页面，

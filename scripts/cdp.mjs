@@ -12,7 +12,7 @@
  *
  * 用法（临时脚本放会话工作台，import 用绝对路径）：
  *   import { connectCdp } from "<仓库>/scripts/cdp.mjs";
- *   const cdp = await connectCdp({ cdpPort: 9334, devPort: 5274 });
+ *   const cdp = await connectCdp({ cdpPort: 39334, devPort: 5310 });
  *   await cdp.evaluate("document.title");
  *   await cdp.screenshot("/tmp/shot.png");
  *   cdp.close();
