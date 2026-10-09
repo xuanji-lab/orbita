@@ -97,6 +97,7 @@ UI 真源是 `Orbita Design System/readme.md`，**所有用户可见渲染面无
 token 规范与实现不一致时以设计系统为准。
 
 - 禁裸 hex / 未定义 CSS 变量；accent 只给主操作（明主题蓝、暗主题黄）。
+- **行尾血线**：行 / 卡尾部元素右缘钉在行右内边距（`.row-trailing` 推右，悬停动作键不占位）；规矩见设计系统 readme *Implementation rules*，几何由 `scripts/ui-edges.mjs` 把关。
 - **禁 emoji 与 Unicode 字符当图标**——只用 lucide。状态优先用图标与文字，颜色是第二信号。
 - 重视空态、键盘操作、加载态、深浅主题。
 

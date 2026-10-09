@@ -2,10 +2,16 @@
  * 文件面板的 IPC —— 四层契约的第 2 层。
  * Finder 定位与目录读取都走主进程：renderer 在 sandbox 里没有文件系统访问权。
  */
-import { ipcMain, shell } from "electron";
+import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { stat } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import { isWebPageFile, type FileListRequest, type FilePreview, type FileRootsRequest } from "../../shared/files.ts";
+import {
+  isWebPageFile,
+  type FileListRequest,
+  type FilePreview,
+  type FileRootsRequest,
+  type FsEntryFact,
+} from "../../shared/files.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
@@ -81,5 +87,40 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
     await openInBrowser(path);
+  });
+
+  /**
+   * 输入框附件分拣与文件面板已发送附件列表共用的类型 / 存在性问询（不上面板的
+   * 白名单）：拖入 / 粘贴的条目本来就在三根之外（发送时复制进会话或原位置引用），
+   * 问它是什么类型不构成「通用文件浏览器」——不读内容、不列目录。用 stat
+   * （跟 symlink）：软链接指向目录就报 dir，与发送侧 realpath 后 lstat 的判定
+   * 一致，两边不各说各话。stat 不到回 { kind: null, size: null }——分拣自己
+   * 兑底成 file（不拦附件），面板据此标「不在盘上」。
+   */
+  ipcMain.handle(ipcChannels.fsStatKind, (_event, paths: string[]): Promise<FsEntryFact[]> =>
+    Promise.all(
+      paths.map(async (path): Promise<FsEntryFact> => {
+        try {
+          const stats = await stat(path);
+          return stats.isDirectory()
+            ? { kind: "dir", size: null }
+            : { kind: "file", size: stats.size };
+        } catch {
+          return { kind: null, size: null };
+        }
+      }),
+    ),
+  );
+
+  /**
+   * 回形针「添加文件夹」的系统目录选择器（多选；Windows 不允许 openFile+
+   * openDirectory 同框，文件仍走 renderer 的隐藏 input）。取消返回 null。
+   */
+  ipcMain.handle(ipcChannels.fsPickFolders, async (event): Promise<string[] | null> => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = await (window
+      ? dialog.showOpenDialog(window, { properties: ["openDirectory", "multiSelections"] })
+      : dialog.showOpenDialog({ properties: ["openDirectory", "multiSelections"] }));
+    return result.canceled ? null : result.filePaths;
   });
 }
