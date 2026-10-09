@@ -1,12 +1,20 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  formatSkillBlock,
-  matchSkillTarget,
-  parseSkillBlock,
-  parseSkillInvocation,
-  skillForReadPath,
-} from "./skill.ts";
+import { matchSkillTarget, parseSkillSegments, skillForReadPath } from "./skill.ts";
+
+/**
+ * 旧转录的 `<skill>` 块字节形状（2026-10-02 改指令式之前，主进程 formatSkillBlock
+ * 产出的格式）。用字面量钉在这里：显示端要永远认得它，而产出方已经删了——
+ * 测试就是这份遗留格式的规格说明。
+ */
+const LEGACY_SKILL_BLOCK = [
+  '<skill name="tdd" location="C:\\Users\\d\\Orbita\\skills\\tdd\\SKILL.md">',
+  "References are relative to C:\\Users\\d\\Orbita\\skills\\tdd.",
+  "",
+  "# TDD",
+  "先写测试。",
+  "</skill>",
+].join("\n");
 
 describe("matchSkillTarget", () => {
   const available = [
@@ -25,50 +33,44 @@ describe("matchSkillTarget", () => {
   });
 });
 
-describe("parseSkillInvocation", () => {
-  it("裸指令只有 target", () => {
-    assert.deepEqual(parseSkillInvocation("/skill:grill-me"), { target: "grill-me" });
+describe("parseSkillSegments（旧转录显示路径）", () => {
+  it("旧格式的块原样认回（正文含 pi 的 References 行）", () => {
+    const segments = parseSkillSegments(LEGACY_SKILL_BLOCK);
+    assert.deepEqual(segments, [
+      {
+        kind: "skill",
+        name: "tdd",
+        content:
+          "References are relative to C:\\Users\\d\\Orbita\\skills\\tdd.\n\n# TDD\n先写测试。",
+      },
+    ]);
   });
-  it("带附加指示时 rest 拿到其余全部（含换行）", () => {
-    assert.deepEqual(parseSkillInvocation("/skill:tdd  按这个来\n第二行"), {
-      target: "tdd",
-      rest: "按这个来\n第二行",
-    });
+  it("块在前：text 段是附加指示（旧消息形态，开头块 + rest）", () => {
+    const segments = parseSkillSegments(`${LEGACY_SKILL_BLOCK}\n\n按这个流程做`);
+    assert.deepEqual(segments, [
+      {
+        kind: "skill",
+        name: "tdd",
+        content:
+          "References are relative to C:\\Users\\d\\Orbita\\skills\\tdd.\n\n# TDD\n先写测试。",
+      },
+      { kind: "text", text: "\n\n按这个流程做" },
+    ]);
   });
-  it("前后空白不影响", () => {
-    assert.deepEqual(parseSkillInvocation("  /skill:x   "), { target: "x" });
-  });
-  it("不是指令返回 null", () => {
-    assert.equal(parseSkillInvocation("/compact"), null);
-    assert.equal(parseSkillInvocation("/skill:"), null);
-    assert.equal(parseSkillInvocation("用 /skill:x 的方式"), null);
-    assert.equal(parseSkillInvocation(""), null);
-  });
-});
-
-describe("formatSkillBlock / parseSkillBlock", () => {
-  const formatted = formatSkillBlock({
-    name: "tdd",
-    location: "C:\\Users\\d\\Orbita\\skills\\tdd\\SKILL.md",
-    body: "# TDD\n先写测试。",
-  });
-  it("format 出的块能被 parse 原样认回（两端一致的契约；正文含 pi 的 References 行）", () => {
-    const parsed = parseSkillBlock(formatted);
-    assert.deepEqual(parsed, {
-      name: "tdd",
-      content: "References are relative to C:\\Users\\d\\Orbita\\skills\\tdd.\n\n# TDD\n先写测试。",
-      rest: "",
-    });
-  });
-  it("带附加指示时 rest 是指示原文", () => {
-    const parsed = parseSkillBlock(`${formatted}\n\n按这个流程做`);
-    assert.equal(parsed?.name, "tdd");
-    assert.equal(parsed?.rest, "按这个流程做");
+  it("句中多块：块前 / 块间的文字按原顺序保留为 text 段", () => {
+    const segments = parseSkillSegments(`先读 ${LEGACY_SKILL_BLOCK}\n\n按这个来 再 ${LEGACY_SKILL_BLOCK}`);
+    assert.equal(segments?.length, 4);
+    assert.deepEqual(segments?.[0], { kind: "text", text: "先读 " });
+    assert.equal(segments?.[1]?.kind, "skill");
+    assert.ok(
+      segments?.[2]?.kind === "text" && segments[2].text.includes("按这个来 再"),
+    );
+    assert.equal(segments?.[3]?.kind, "skill");
   });
   it("不是 skill 块的消息返回 null", () => {
-    assert.equal(parseSkillBlock("普通消息"), null);
-    assert.equal(parseSkillBlock("<skill name=\"x\">没有换行闭合</skill>"), null);
-    assert.equal(parseSkillBlock(""), null);
+    assert.equal(parseSkillSegments("普通消息"), null);
+    assert.equal(parseSkillSegments('<skill name="x">没有换行闭合</skill>'), null);
+    assert.equal(parseSkillSegments(""), null);
   });
 });
 

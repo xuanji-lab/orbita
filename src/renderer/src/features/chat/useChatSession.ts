@@ -74,24 +74,17 @@ import {
 import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
 import { splitUserTextBlocks } from "@shared/prompt-attachments";
 import type { Workspace } from "@shared/workspace";
+import { stripInvocationBlock } from "../../../../shared/invocation.ts";
 import type { Messages } from "../../messages-en.ts";
-import { SKILL_NOT_FOUND_CODE, SKILL_UNREADABLE_CODE } from "../../../../shared/skill.ts";
 
 /**
  * IPC 错误上屏前的整理：剥掉 Electron 的「Error invoking remote method 'x': Error:」
- * 包装（对用户是纯噪音），并把主进程抛的稳定错误码翻成界面语言的人话——
- * 主进程不该猜界面语言（用户实测：英文界面下 /skill: 报错仍是中文）。
+ * 包装（对用户是纯噪音）。需要按界面语言翻译的稳定错误码属于各自的功能面
+ * （如迁移页的 IMPORT_GREETING_UNAVAILABLE），不走这里。
  */
-function ipcErrorText(cause: unknown, t: Messages): string {
+function ipcErrorText(cause: unknown): string {
   const raw = cause instanceof Error ? cause.message : String(cause);
-  const inner = raw.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
-  if (inner.startsWith(SKILL_NOT_FOUND_CODE)) {
-    return t.composer.skillNotFound(inner.slice(SKILL_NOT_FOUND_CODE.length));
-  }
-  if (inner.startsWith(SKILL_UNREADABLE_CODE)) {
-    return t.composer.skillUnreadable(inner.slice(SKILL_UNREADABLE_CODE.length));
-  }
-  return inner;
+  return raw.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
 }
 
 /**
@@ -800,7 +793,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       const dispatch = (request: () => Promise<void>): void => {
         const revert = beginOptimisticTurn(id);
         request().catch((cause: unknown) => {
-          setError(ipcErrorText(cause, messagesRef.current));
+          setError(ipcErrorText(cause));
           revert();
         });
       };
@@ -1668,7 +1661,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
         if (resume === null) engine.refreshSessions();
       } catch (cause) {
-        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
+        engine.setError(ipcErrorText(cause));
         // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位。
         // IPC 直接失败（provider 装配等）不发事件，快照在这里兑底放回输入框
         if (restoreRef.current?.sessionId === id) {
@@ -2300,7 +2293,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .revertPlan(id, messageId)
         .then((plan) => setRevertDialog({ sessionId: id, targetMessageId: messageId, plan, message: item }))
         .catch((cause: unknown) =>
-          engine.setError(ipcErrorText(cause, engine.messagesRef.current)),
+          engine.setError(ipcErrorText(cause)),
         );
     },
     [engine, opened],
@@ -2321,7 +2314,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         engine.refreshSessions();
         void reloadSession(sessionId);
         // 原文放回输入框：拆回正文 / 引用 / 粘贴块 / 文件引用 / 附图（restoreToDraft
-        // 的同一条纪律——发出去的块解析回 chip，输入框不留裸 XML）
+        // 的同一条纪律——发出去的块解析回 chip，输入框不留裸 XML；/skill: 指令块
+        // 剥掉，回到输入框的必须是用户自己当时打的那句）
         const texts = message.content
           .filter((block) => block.type === "text")
           .map((block) => (block.type === "text" ? block.text : ""));
@@ -2330,7 +2324,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           .filter((block): block is Extract<typeof block, { type: "image" }> => block.type === "image")
           .map((block) => ({ type: "image" as const, data: block.data, mimeType: block.mimeType }));
         restoreToDraft(
-          split.body,
+          stripInvocationBlock(split.body),
           images,
           split.files.map((file) => ({
             id: crypto.randomUUID(),
@@ -2347,7 +2341,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       })
       .catch((cause: unknown) => {
         // 失败留在框里（计划还有效），错误亮出来
-        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
+        engine.setError(ipcErrorText(cause));
       })
       .finally(() => setRevertBusy(false));
   }, [revertDialog, revertBusy, engine, reloadSession, restoreToDraft]);
@@ -2367,7 +2361,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .undoPlan(id, turnId)
         .then((plan) => setUndoDialog({ sessionId: id, turnId, plan }))
         .catch((cause: unknown) =>
-          engine.setError(ipcErrorText(cause, engine.messagesRef.current)),
+          engine.setError(ipcErrorText(cause)),
         );
     },
     [engine, opened],
@@ -2386,7 +2380,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         void reloadSession(sessionId);
       })
       .catch((cause: unknown) => {
-        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
+        engine.setError(ipcErrorText(cause));
       })
       .finally(() => setUndoBusy(false));
   }, [undoDialog, undoBusy, engine, reloadSession]);
@@ -2437,8 +2431,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (entry === undefined || item === undefined) return;
       engine.applyStates((prev) => dequeue(prev, id, queuedId));
       const fail = (cause: unknown): void => {
-        engine.setError(ipcErrorText(cause, engine.messagesRef.current));
-        // IPC 直接失败（provider 装配、/skill: 展开错误码）不发 agent 事件，回填
+        engine.setError(ipcErrorText(cause));
+        // IPC 直接失败（provider 装配等）不发 agent 事件，回填
         // 快照等不到兑底——与 send 直发分支同款，在这里放回输入框
         if (item.kind === "text" && restoreRef.current?.sessionId === id) {
           const snap = restoreRef.current;
@@ -2754,7 +2748,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       })
       .then(relaunch)
       .catch((cause: unknown) =>
-        engine.setError(ipcErrorText(cause, engine.messagesRef.current)),
+        engine.setError(ipcErrorText(cause)),
       );
   }, [closingScan, engine, launchScan, scanFailed, reloadSession]);
 

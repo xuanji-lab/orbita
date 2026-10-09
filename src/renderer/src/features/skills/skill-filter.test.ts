@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { filterSkills } from "./skill-filter.ts";
+import { filterSkills, skillsByPrefix } from "./skill-filter.ts";
 import type { SkillMeta } from "@shared/skill";
 
 const skill = (over: Partial<SkillMeta> = {}): SkillMeta => ({
@@ -56,5 +56,32 @@ describe("filterSkills", () => {
   test("无命中：返回空数组", () => {
     const skills = [skill()];
     assert.deepEqual(filterSkills(skills, "nonexistent"), []);
+  });
+});
+
+describe("skillsByPrefix（补全模式的严格前缀）", () => {
+  test("slug 或 name 的前缀命中，大小写不敏感", () => {
+    const skills = [
+      skill({ slug: "tdd", name: "TDD" }),
+      skill({ slug: "ponytail", name: "Ponytail" }),
+      skill({ slug: "code-review", name: "Code review" }),
+    ];
+    assert.deepEqual(
+      skillsByPrefix(skills, "td").map((meta) => meta.slug),
+      ["tdd"],
+    );
+    assert.deepEqual(
+      skillsByPrefix(skills, "PO").map((meta) => meta.slug),
+      ["ponytail"],
+    );
+  });
+  test("空查询：全部命中（裸 / 弹全列表）", () => {
+    const skills = [skill(), skill({ slug: "tdd", name: "TDD" })];
+    assert.equal(skillsByPrefix(skills, "").length, 2);
+  });
+  test("子串不算：description 里的词、词中同字母都不命中——这是路径防误触的闸门", () => {
+    const skills = [skill()]; // description: "Review the changes since a fixed point."
+    assert.deepEqual(skillsByPrefix(skills, "view"), []); // name "Code review" 的后半段
+    assert.deepEqual(skillsByPrefix(skills, "tmp"), []);
   });
 });

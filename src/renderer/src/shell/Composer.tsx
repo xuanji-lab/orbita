@@ -12,8 +12,8 @@ import type { ComposerFileRef, ComposerPastedText } from "./composer-attachments
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
-import { replaceFirstLine, slashMode, slashQuery } from "./slash-trigger.ts";
-import { filterSkills } from "../features/skills/skill-filter";
+import { replaceToken, slashMode, slashTokenAt } from "./slash-trigger.ts";
+import { filterSkills, skillsByPrefix } from "../features/skills/skill-filter";
 import type { SkillMeta } from "@shared/skill";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
@@ -149,26 +149,62 @@ export function Composer(props: {
     return () => observer.disconnect();
   }, []);
   // ── 指令面板（/ 触发）──────────────────────────────────────────────
-  // 触发规则在 slash-trigger.ts：第一行（允许前导空白）以 / 开头、且光标在
-  // 第一行——多行输入不再整个不弹，编辑后续行时 ↑↓/Enter 也不会被面板劫走。
-  // 关闭分两种语义（用户实测：选中/ESC 后再打 / 前缀
-  // 文字，面板不弹，Enter 把半截指令当普通消息发出去了）：
+  // 触发规则在 slash-trigger.ts：光标所在的「指令 token」。两种模式：
+  //   主模式（token 在消息开头，之前只有空白）——PR #146 已验收的语义：列动作项
+  //   + skill、空态可显示、默认高亮首行、Enter 选中；
+  //   补全模式（句中 token）——只列前缀命中的 skill、无命中不弹、默认不高亮
+  //   （Enter 原样落下，打路径时不抢键），Esc 后同一 token 内不再弹（Codex 的
+  //   dismissed token 同款）。
+  // 主模式的关闭态分两种语义（用户实测：选中/ESC 后再打 / 前缀文字，面板不弹，
+  // Enter 把半截指令当普通消息发出去了）：
   //   "esc"——Esc 关闭或动作项执行完：继续输入就重开（人还在 / 模式里，面板是输入辅助）
   //   "insert"——skill 插入 /skill:xxx 后：保持关闭直到离开 / 前缀（用户在补
   //   附加指示，弹出「没有匹配的指令」空态只会挡视线）
   // skill 清单从上层拿（ChatView 的 useSkillIndex），面板每次打开触发一次重拉。
   const [commandsClosed, setCommandsClosed] = useState<"esc" | "insert" | null>(null);
   const [activeCommand, setActiveCommand] = useState(0);
-  // 光标位置是触发条件之一（面板只在光标处于第一行时亮）。纯移动不经过 onChange，
+  // 补全模式的 Esc 记忆：被关掉的 token 起点不重弹，换 token / 离开才重弹
+  const [dismissedStart, setDismissedStart] = useState<number | null>(null);
+  // 光标位置是触发条件之一（面板只在光标处于 token 内时亮）。纯移动不经过 onChange，
   // 所以还要 onSelect 跟；value 被外部改写（草稿恢复、指令插入）后从 DOM 回同步一次
   const [cursor, setCursor] = useState(0);
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (el !== null) setCursor(el.selectionStart);
   }, [props.value]);
-  const query = slashQuery(props.value, cursor);
-  const panelOpen = query !== null && commandsClosed === null;
-  const commandQuery = query ?? "";
+  const token = slashTokenAt(props.value, cursor);
+  const startToken = token !== null && token.atMessageStart ? token : null;
+  const commandQuery = token?.query ?? "";
+  // 行先于开关算（不带 panelOpen 门控）：补全模式无命中时面板要**整个不弹**，
+  // 开关反过来要看行数，顺序颠倒就循环了。token 为 null 时直接空表，不自费
+  type CommandRow =
+    | { kind: "compact" | "new"; name: string; description: string }
+    | { kind: "skill"; slug: string; name: string; description: string };
+  const commandRows: CommandRow[] = useMemo(() => {
+    if (token === null) return [];
+    const matchSkill = (meta: SkillMeta): CommandRow => ({
+      kind: "skill",
+      slug: meta.slug,
+      name: meta.name,
+      description: meta.description,
+    });
+    const usable = props.skills.filter((meta) => !meta.missing);
+    // 补全模式：只列 skill（动作项是会话动作，插到句中永远不执行，列出来就是误导），
+    // 且严格前缀命中（skillsByPrefix——无命中面板整个不弹，路径的第三道闸）
+    if (!token.atMessageStart) return skillsByPrefix([...usable], token.query).map(matchSkill);
+    const builtins: CommandRow[] = [
+      { kind: "compact", name: "compact", description: t.composer.cmdCompact },
+      { kind: "new", name: "new", description: t.composer.cmdNew },
+    ];
+    return [
+      ...builtins.filter((row) => row.name.startsWith(token.query)),
+      ...filterSkills([...usable], token.query).map(matchSkill),
+    ];
+  }, [token, props.skills, t]);
+  const panelOpen =
+    startToken !== null
+      ? commandsClosed === null
+      : token !== null && token.start !== dismissedStart && commandRows.length > 0;
   useEffect(() => {
     if (panelOpen) props.onReloadSkills();
   }, [panelOpen, props.onReloadSkills]);
@@ -179,39 +215,22 @@ export function Composer(props: {
     // "esc" 类关闭在继续输入时重开；"insert" 保持（只有离开 / 前缀才重置）
     else setCommandsClosed((closed) => (closed === "esc" ? null : closed));
   }, [props.value]);
-  useEffect(() => setActiveCommand(0), [commandQuery]);
+  // 离开 token（删掉 / 或移走光标）后补全模式的 Esc 记忆重新武装
+  useEffect(() => {
+    if (token === null) setDismissedStart(null);
+  }, [token === null]);
+  // 查询词或模式变了选中态归位：主模式高亮首行，补全模式无高亮（Enter 不抢键）
+  useEffect(() => {
+    setActiveCommand(startToken !== null ? 0 : -1);
+  }, [commandQuery, startToken !== null]);
   // 键盘选中滚出可视区时带动面板滚动（用户实测：↑↓ 只在列表内移动，长列表
-  // 时选中项躲在 overflow 外看不见）。block:"nearest" 只在需要时滚，不抖
+  // 时选中项躲在 overflow 外看不见）。block:"nearest" 只在需要时滚，不抖。
+  // 补全模式无高亮（-1）时无选中项，自然不滚
   useEffect(() => {
     commandListRef.current
       ?.querySelector('[aria-selected="true"]')
       ?.scrollIntoView({ block: "nearest" });
   }, [activeCommand]);
-  type CommandRow =
-    | { kind: "compact" | "new"; name: string; description: string }
-    | { kind: "skill"; slug: string; name: string; description: string };
-  const commandRows: CommandRow[] = useMemo(() => {
-    if (!panelOpen) return [];
-    const builtins: CommandRow[] = [
-      { kind: "compact", name: "compact", description: t.composer.cmdCompact },
-      { kind: "new", name: "new", description: t.composer.cmdNew },
-    ];
-    const matchSkill = (meta: SkillMeta): CommandRow => ({
-      kind: "skill",
-      slug: meta.slug,
-      name: meta.name,
-      description: meta.description,
-    });
-    if (commandQuery === "") {
-      return [...builtins, ...props.skills.filter((meta) => !meta.missing).map(matchSkill)];
-    }
-    return [
-      ...builtins.filter((row) => row.name.startsWith(commandQuery)),
-      ...filterSkills([...props.skills], commandQuery)
-        .filter((meta) => !meta.missing)
-        .map(matchSkill),
-    ];
-  }, [panelOpen, commandQuery, props.skills, t]);
 
   /** 选中指令后把光标钉在插入文本之后：onChange 改的是父级状态，等 React 提交完再设选区 */
   const pinCursor = (position: number): void => {
@@ -224,15 +243,20 @@ export function Composer(props: {
       }
     });
   };
-  /** 面板选中：skill 插进输入框（可再补附加指示）；动作项交给调用方立即执行，
-   * 并清掉半截指令残留——"/c" 留在框里，下一次回车就又是一条误发。
-   * 多行输入里 skill 只替换第一行，其余草稿行保留；动作项执行后仍全清（理由见下） */
+  /** 面板选中。skill：只替换 token 本身，前后文（含同行的附加指示、后续行）原样
+   * 保留，光标钉在插入之后——主模式与补全模式同一规则；主模式另落 "insert"
+   * 关闭态（补全模式插入后光标在尾随空格后，天然不在任何 token 上，不需要）。
+   * 动作项只在主模式列出，选中即执行，并清掉半截指令残留——"/c" 留在框里，
+   * 下一次回车就又是一条误发 */
   const runCommand = (row: CommandRow): void => {
+    // 点击/回车时重算一次：面板开着必有 token，但闭包里的这份可能已陈旧
+    const token = slashTokenAt(props.value, cursor);
     if (row.kind === "skill") {
-      setCommandsClosed("insert");
+      if (token === null) return;
+      if (token.atMessageStart) setCommandsClosed("insert");
       const inserted = `/skill:${row.slug} `;
-      props.onChange(replaceFirstLine(props.value, inserted));
-      pinCursor(inserted.length);
+      props.onChange(replaceToken(props.value, token, inserted));
+      pinCursor(token.start + inserted.length);
     } else {
       setCommandsClosed("esc");
       if (props.onCommand !== undefined) {
@@ -242,10 +266,10 @@ export function Composer(props: {
         // 清掉的东西复活到新会话的草稿里
         props.onChange("");
         pinCursor(0);
-      } else {
+      } else if (token !== null) {
         const inserted = `/${row.name} `;
-        props.onChange(replaceFirstLine(props.value, inserted));
-        pinCursor(inserted.length);
+        props.onChange(replaceToken(props.value, token, inserted));
+        pinCursor(token.start + inserted.length);
       }
     }
     textareaRef.current?.focus();
@@ -486,27 +510,36 @@ export function Composer(props: {
               }
               return;
             }
-            // 面板开着时方向键与 Enter 归面板（Enter 选中即执行，不落进发送）；
-            // Esc 关面板，内容照在。组词中的按键不动面板。
+            // 面板开着时方向键与 Enter 归面板；Esc 关面板，内容照在。组词中的按键不动面板。
+            // 补全模式的特殊点：无高亮（-1）时 ↑↓ 才开始选中、Enter 不抢键（原样
+            // 发送/换行）——打路径时面板在场的那几个按键里回车，不能凭空插进一条
+            // 指令（Cursor 被官方认定成 UX bug 的正是这类事）
             if (panelOpen && !event.nativeEvent.isComposing) {
               if (event.key === "ArrowDown" && commandRows.length > 0) {
                 event.preventDefault();
-                setActiveCommand((index) => (index + 1) % commandRows.length);
+                setActiveCommand((index) => (index === -1 ? 0 : (index + 1) % commandRows.length));
                 return;
               }
               if (event.key === "ArrowUp" && commandRows.length > 0) {
                 event.preventDefault();
-                setActiveCommand((index) => (index - 1 + commandRows.length) % commandRows.length);
+                setActiveCommand((index) =>
+                  index === -1
+                    ? commandRows.length - 1
+                    : (index - 1 + commandRows.length) % commandRows.length,
+                );
                 return;
               }
-              if (event.key === "Enter" && commandRows.length > 0) {
+              if (event.key === "Enter" && activeCommand >= 0 && activeCommand < commandRows.length) {
                 event.preventDefault();
-                const row = commandRows[Math.min(activeCommand, commandRows.length - 1)];
+                const row = commandRows[activeCommand];
                 if (row !== undefined) runCommand(row);
                 return;
               }
               if (event.key === "Escape") {
-                setCommandsClosed("esc");
+                // 主模式沿用既有语义（继续输入就重开）；补全模式记住被关的 token，
+                // 同一 token 内不再弹，换 token / 离开才重弹（Codex 同款）
+                if (startToken !== null) setCommandsClosed("esc");
+                else setDismissedStart(token?.start ?? null);
                 return;
               }
             }
