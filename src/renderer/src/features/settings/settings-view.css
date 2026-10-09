@@ -560,3 +560,71 @@
   color: var(--color-text-tertiary);
   word-break: break-all;
 }
+
+/* ===== 设置 › 电脑使用（SettingsView.tsx 的 ComputerUseView） ===== */
+
+/* 沙箱状态徽标：图标颜色来自视图层的 CSS 变量（statusVisual 的 tone），文字并排——
+   状态用图标 + 文字说话，颜色只是第二信号（设计系统） */
+.cu-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+/* 就绪态：整页唯一用成功绿的一处（只染图标，文字仍是正文色） */
+.cu-ready .orbita-icon {
+  color: var(--color-success);
+}
+
+/* 未就绪指引：主进程 guidance 一行一条；行里可能有命令原文，允许在任意字符处换行 */
+.cu-guidance {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0 0 var(--space-3);
+  list-style: none;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* 指引与截图块都直接接在自己那一行的下面，是那一行的内容——
+   分隔线不画在行与块之间（同 .set-row:has(+ .login-imported) 的处理） */
+.set-row:has(+ .cu-guidance),
+.set-row:has(+ .cu-shot) {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* 「看一眼」的截图框：登录网站面板同一套配方（面板色 + 发丝框 + 大圆角），
+   图片按内容面宽度缩放，元信息条压在图下沿 */
+.cu-shot {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+}
+
+.cu-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.cu-shot-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* 元信息是机器事实（尺寸 × 时间）：mono */
+.cu-shot-meta code {
+  font-family: var(--font-family-mono);
+}

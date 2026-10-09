@@ -61,6 +61,7 @@ import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-
 import menu from "../../../../Orbita Design System/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../Orbita Design System/assets/icons/lucide/mic.svg?raw";
+import monitor from "../../../../Orbita Design System/assets/icons/lucide/monitor.svg?raw";
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../Orbita Design System/assets/icons/lucide/pencil-line.svg?raw";
 import play from "../../../../Orbita Design System/assets/icons/lucide/play.svg?raw";
@@ -170,6 +171,7 @@ const ICONS = {
   lock,
   "message-square": messageSquare,
   mic,
+  monitor,
   "message-square-dashed": messageSquareDashed,
   "messages-square": messagesSquare,
   minus,
