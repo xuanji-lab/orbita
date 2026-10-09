@@ -7,6 +7,7 @@ import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { imageSrc } from "./composer-images.ts";
 import { quoteNoteParts, quoteRowPreview } from "./quote-label.ts";
 import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
+import { DirMarkName } from "./DirMarkName.tsx";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import type { TextQuote } from "@shared/quote";
 import { useT } from "../locale.ts";
@@ -218,13 +219,8 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
             flex: "0 0 auto",
           }}
         />
-        <span className="material-chip-name">{props.chip.name}</span>
-        {/* 目录记号 `/`：单独一格不参与省略号，名字再长也不会把它吃掉 */}
-        {isDir && (
-          <span className="material-chip-meta" aria-hidden="true">
-            /
-          </span>
-        )}
+        {/* 名字 + 目录尾 `/`：共用组件（胶囊 / 面板行 / 气泡三处同一段结构） */}
+        <DirMarkName name={props.chip.name} dir={isDir} wrapStyle={{ flex: "0 1 auto" }} nameClassName="material-chip-name" />
         {/* 超限未复制（发送时按原位置引用）：icon + 文字，warning 色只做第二信号 */}
         {props.chip.ref.uncopied === true && (
           <span className="material-chip-uncopied">

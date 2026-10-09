@@ -22,6 +22,7 @@ import {
 import { useFileTree } from "./useFileTree";
 import { collectSentAttachments } from "./sent-attachments.ts";
 import { FilePreviewPane } from "./FilePreviewPane";
+import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
 import { pathTail, pathWithin } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
@@ -885,38 +886,9 @@ function AttachmentRow(props: {
             flex: "0 0 auto",
           }}
         />
-        {/* 名字区占剩余宽：名字在里面省略，目录的尾 `/` 紧跟其后（与输入框胶囊同款，
-            2026-10 验收 I：原先 `/` 挂在行的另一头，像另一列） */}
-        <span
-          style={{
-            flex: "1 1 auto",
-            minWidth: 0,
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          <span
-            style={{
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {name}
-          </span>
-          {kind === "directory" && (
-            <span
-              style={{
-                flex: "0 0 auto",
-                fontSize: "var(--font-size-micro)",
-                color: "var(--color-text-tertiary)",
-            }}
-            >
-              /
-            </span>
-          )}
-        </span>
+        {/* 名字 + 目录尾 `/`：共用组件 DirMarkName（胶囊 / 面板行 / 气泡三处同一段
+            结构；2026-10 验收 I+K：斜杠紧跟名字，不再挂到行的另一头） */}
+        <DirMarkName name={name} dir={kind === "directory"} wrapStyle={{ flex: "1 1 auto" }} />
         {missing && (
           <span className="attachment-missing-mark" title={t.files.attachmentMissing}>
             <Icon name="triangle-alert" size={11} strokeWidth={2} />

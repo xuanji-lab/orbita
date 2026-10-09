@@ -4,6 +4,7 @@ import { Icon } from "./Icon";
 import { useT } from "../locale.ts";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
+import { DirMarkName } from "./DirMarkName.tsx";
 
 /**
  * 文件引用与粘贴文本的 chip——输入框附件区与聊天流回显共用这两个形态：
@@ -63,23 +64,12 @@ export function FileRefChip(props: {
             flex: "0 0 auto",
           }}
         />
-        <span
-          style={{
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontSize: "var(--font-size-caption)",
-            color: "var(--color-text-primary)",
-          }}
-        >
-          {props.name}
-        </span>
-        {isDir && (
-          <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
-            /
-          </span>
-        )}
+        <DirMarkName
+          name={props.name}
+          dir={isDir}
+          wrapStyle={{ flex: "0 1 auto" }}
+          nameStyle={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-primary)" }}
+        />
         {props.onRemove !== undefined && (
           <button
             type="button"

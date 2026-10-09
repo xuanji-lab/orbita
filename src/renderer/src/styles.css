@@ -2599,6 +2599,15 @@ textarea.text-field {
   color: var(--color-text-primary);
 }
 
+/* 目录尾斜杠（DirMarkName）：紧跟省略号名字，不参与省略。三处共用——胶囊 /
+   面板行 / 气泡回显，不再各写各的（2026-10 验收 K） */
+.dir-mark-slash {
+  flex: 0 0 auto;
+  margin-left: 1px;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
 /* 元信息（行数）：等宽、tertiary——机器事实；目录胶囊的尾 `/` 也用它（记号，不进读屏） */
 .material-chip-meta {
   flex: 0 0 auto;
