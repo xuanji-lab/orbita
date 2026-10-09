@@ -42,6 +42,19 @@ function photonWasmNextToChunk(): Plugin {
 }
 
 /**
+ * dev server 端口：默认 5273，`ORBITA_DEV_PORT` 可覆盖（理由见下方 server 注释）。
+ * 值不合法就报错不回落——想隔离却惄悄落回 5273，正是「连上了别人的应用」那类事故。
+ */
+function devServerPort(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return 5273;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`ORBITA_DEV_PORT 不是合法端口（1024–65535）：${raw}`);
+  }
+  return port;
+}
+
+/**
  * electron-vite 三段构建：main / preload / renderer。
  * renderer 直接 @import 仓库根的「Orbita Design System」——设计系统是 UI 真源，
  * 不复制一份到 src 下，避免 token 漂移（AGENTS.md「设计系统」一节）。
@@ -102,9 +115,13 @@ export default defineConfig({
        * 三条一起才管用：唯一端口 5273、`host` 明确绑 IPv4 回环（不再双栈监听）、
        * `strictPort` 让冲突当场失败。脚本里也一律用 `127.0.0.1:5273`，
        * 不用 `localhost`——把解析这一层的歧义整个去掉。
+       *
+       * 端口可由 `ORBITA_DEV_PORT` 覆盖（`bun run dev:isolated` 用 5274）：第二个 dev 实例
+       * 以前只能临时改这一行、再记得别提交。覆盖只换号，host 与 strictPort 不变——
+       * 撞了照样当场失败。
        */
       host: "127.0.0.1",
-      port: 5273,
+      port: devServerPort(process.env.ORBITA_DEV_PORT),
       strictPort: true,
       fs: { allow: [resolve(__dirname)] },
     },
