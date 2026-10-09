@@ -901,6 +901,8 @@ export const zh: Messages = {
     calls: (n) => `${n} 次调用`,
     tools: (n) => `工具 ${n}`,
     failedCount: (n) => `${n} 个失败`,
+    toolInterrupted: "已中断 · 连接断开，未执行",
+    interruptedCount: (n) => `${n} 个已中断`,
     toolRead: "读取",
     toolSearch: "搜索",
     toolWrite: "写入",

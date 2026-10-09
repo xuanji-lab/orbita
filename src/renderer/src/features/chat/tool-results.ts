@@ -602,28 +602,73 @@ export function turnStats(
   };
 }
 
-/** 组行的状态汇总：结果索引上数一遍，失败/进行中/完成各多少。 */
+/** 组行的状态汇总：结果索引上数一遍，失败/进行中/已中断/完成各多少。 */
 export interface ToolGroupStatus {
   total: number;
   failed: number;
   running: number;
+  /** 已中断（无结果帧且结果永远不会来，见 `interruptedToolCallIds`）——不占 running，组头不为它呼吸 */
+  interrupted: number;
   done: number;
 }
 
 export function toolGroupStatus(
   calls: readonly ToolCallUnit[],
   results: ToolResultIndex,
+  interrupted: ReadonlySet<string> = new Set(),
 ): ToolGroupStatus {
   let failed = 0;
   let running = 0;
+  let broke = 0;
   let done = 0;
   for (const call of calls) {
     const result = results.get(call.toolCallId);
-    if (result === undefined || result.status === "running") running++;
-    else if (result.status === "error") failed++;
+    if (result === undefined || result.status === "running") {
+      // 连结果帧都没有、且判定已中断：按中断计，不算运行中
+      if (result === undefined && interrupted.has(call.toolCallId)) broke++;
+      else running++;
+    } else if (result.status === "error") failed++;
     else done++;
   }
-  return { total: calls.length, failed, running, done };
+  return { total: calls.length, failed, running, interrupted: broke, done };
+}
+
+/**
+ * 已中断的工具调用 id 集：调用**从未执行、结果永远不会来**——所在 assistant 消息
+ * 以 error / aborted 收场（模型流在发 tool call 参数途中被切断，2026-10-09 的
+ * 「委派中…」呼吸不停就是它），或消息已落定而轮已结束 / 后面已有新记录，结果
+ * 帧却始终缺席。这类调用按「运行中」渲染就会永远呼吸（delegate 卡）/ 转圈，
+ * 界面要能说出「这一步没发生」。
+ *
+ * 判定护住三类真跑着的调用，不误伤：
+ * - **有结果帧**（含 running 帧）的一律不算——工具已经启动，结果只是还没到；
+ * - **流式中的消息**（status "streaming"，stopReason 尚未定）不算；
+ * - **活跃轮的最后一条记录**上的 complete 调用不算——那是「消息已完、工具即将
+ *   启动」的正常窗口；轮一旦结束（turnActive false，含重开的旧会话）或后面出现
+ *   了新记录（如错误后的自动重试另起了消息），结果就不可能再来。
+ */
+export function interruptedToolCallIds(
+  records: readonly TranscriptRecord[],
+  results: ToolResultIndex,
+  turnActive: boolean,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  const lastIndex = records.length - 1;
+  records.forEach((record, index) => {
+    if (record.role !== "assistant" || record.status === "streaming") return;
+    for (const block of record.content) {
+      if (block.type !== "toolCall" || results.has(block.toolCallId)) continue;
+      if (
+        record.status === "error" ||
+        record.status === "aborted" ||
+        !turnActive ||
+        index < lastIndex
+      ) {
+        ids.add(block.toolCallId);
+      }
+    }
+  });
+  return ids;
 }
 
 /**

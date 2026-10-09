@@ -23,6 +23,7 @@ import {
   rollupToolKey,
   indexToolResults,
   intraLineTokens,
+  interruptedToolCallIds,
   liveTailLines,
   parseDiffLines,
   parseEditDiff,
@@ -392,7 +393,96 @@ describe("toolGroupStatus", () => {
       toolItem({ toolCallId: "r2", toolName: "read", status: "error", isError: true }),
       toolItem({ toolCallId: "r3", toolName: "read" }),
     ]);
-    assert.deepEqual(toolGroupStatus(calls, results), { total: 3, failed: 1, running: 1, done: 1 });
+    assert.deepEqual(toolGroupStatus(calls, results), {
+      total: 3,
+      failed: 1,
+      running: 1,
+      interrupted: 0,
+      done: 1,
+    });
+  });
+
+  test("已中断的成员不占 running（组头不再为它呼吸），单另计入 interrupted", () => {
+    const calls = flattenRenderUnits([
+      assistantItem("a1", [readCall("r1", "a.ts"), readCall("r9", "x.ts")]),
+    ]).filter((unit): unit is Extract<typeof unit, { kind: "toolCall" }> => unit.kind === "toolCall");
+    const results = indexToolResults([toolItem({ toolCallId: "r1", toolName: "read" })]);
+    const interrupted = interruptedToolCallIds(
+      [said("a1", [readCall("r1", "a.ts"), readCall("r9", "x.ts")], "error")],
+      results,
+      false,
+    );
+    assert.deepEqual(toolGroupStatus(calls, results, interrupted), {
+      total: 2,
+      failed: 0,
+      running: 0,
+      interrupted: 1,
+      done: 1,
+    });
+  });
+});
+
+describe("interruptedToolCallIds", () => {
+  test("正常运行中：有 running 结果帧的调用不算中断——工具已启动，结果只是没到", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete")];
+    const results = indexToolResults([
+      toolItem({ toolCallId: "r1", toolName: "read", status: "running", isError: false, content: [] }),
+    ]);
+    assert.equal(interruptedToolCallIds(records, results, true).size, 0);
+  });
+
+  test("活跃轮末条的 complete 调用不算——那是「消息已完、工具即将启动」的正常窗口", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete")];
+    assert.equal(interruptedToolCallIds(records, indexToolResults([]), true).size, 0);
+  });
+
+  test("消息以 error 收场且无结果 → 中断（参数没发完，调用从未执行）", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "error")];
+    // 轮还活跃也算：error 是那条消息的终态，重试会另起 toolCallId，这个永远没有结果
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), true)], ["r1"]);
+  });
+
+  test("消息以 aborted 收场且无结果 → 中断", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "aborted")];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), false)], ["r1"]);
+  });
+
+  test("有结果（含 error 结果）的一律不算——结果说了算", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "error")];
+    const results = indexToolResults([
+      toolItem({ toolCallId: "r1", toolName: "read", status: "error", isError: true }),
+    ]);
+    assert.equal(interruptedToolCallIds(records, results, false).size, 0);
+  });
+
+  test("后续已有消息（错误后的自动重试另起一条）→ 前一条的孤儿调用中断", () => {
+    const records = [
+      userItem,
+      said("a1", [readCall("r1", "a.ts")], "complete"),
+      said("a2", [readCall("r2", "b.ts")], "streaming"),
+    ];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), true)], ["r1"]);
+  });
+
+  test("轮已结束（turnActive false，含重开的旧会话）：complete 无结果也是中断", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete")];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), false)], ["r1"]);
+  });
+
+  test("流式中的消息不算——stopReason 尚未定，不能误杀正在长的调用", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "streaming")];
+    assert.equal(interruptedToolCallIds(records, indexToolResults([]), true).size, 0);
+  });
+
+  test("非 assistant 记录与 thinking/text 块不干扰；多条孤儿都收", () => {
+    const records: SessionRecord[] = [
+      userItem,
+      compacted,
+      said("a1", [{ type: "text", text: "先说" }, readCall("r1", "a.ts")], "error"),
+      channelMark,
+      said("a2", [{ type: "thinking", thinking: "想" }, readCall("r2", "b.ts")], "aborted"),
+    ];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), false)], ["r1", "r2"]);
   });
 });
 
