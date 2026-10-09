@@ -329,6 +329,41 @@ export const zh: Messages = {
     handoffBarDone: "完成，交还",
   },
 
+  /** 设置 › 电脑使用（computer-use-view.ts 是它的纯派生层） */
+  computerUse: {
+    capabilityGroup: "能力检测",
+    sandboxFeature: "沙箱功能",
+    sandboxFeatureInfo:
+      "电脑使用在沙箱里干活——一个一次性的隔离系统，智能体在里面操作网页，你的桌面键鼠与文件都不会被碰；沙箱关闭时里面的一切随之丢弃。",
+    probe: "检测能力",
+    probeIdle: "还没检测过",
+    probing: "检测中…",
+    probeReady: "沙箱可用",
+    probeNotReady: "还未就绪，按下方的步骤手动开启",
+    probeFailed: "检测没跑成",
+    sandboxGroup: "沙箱",
+    sandboxState: "状态",
+    sandboxStateInfo:
+      "启动要等沙箱回头注册（最多一分钟）；关闭会丢掉沙箱里的一切。出错之后，「启动」可以直接重试，「关闭」会复位回未启动。",
+    states: {
+      off: "未启动",
+      starting: "启动中…",
+      running: "运行中",
+      stopping: "关闭中…",
+      error: "出错",
+    },
+    start: "启动",
+    stop: "关闭",
+    shotGroup: "手动截图",
+    shotRow: "沙箱桌面",
+    shotRowInfo: "现在就拍一张沙箱桌面的截图——只在你点击时拍，绝不自动拍。",
+    shot: "看一眼",
+    shotBusy: "拍摄中…",
+    shotNeedsRunning: "沙箱启动后才能看一眼",
+    shotNativeSize: "原始尺寸",
+    shotAlt: "沙箱桌面截图",
+  },
+
   drawer: {
     title: "辅助对话",
     filter: "过滤任务…",
@@ -507,6 +542,7 @@ export const zh: Messages = {
       browser: "浏览器",
       voice: "语音",
       experimental: "实验功能",
+      "computer-use": "电脑使用",
     },
     appearance: "外观",
     theme: "主题",
