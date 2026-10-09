@@ -40,13 +40,15 @@ import { useT } from "../../locale.ts";
  * 交互模型（2026-10-10 改版，HTML 原型 files-panel-prototype.html，用户逐条裁决）：
  * 打开的文件以标签页列在头部「文件」标题旁，单击文件行即打开 / 激活标签；
  * 「文件」标题本身是文件树开关——有打开文件时可切树的显隐（宽容器并排窄列，
- * 窄容器浮层），没有打开文件时树就是整个面板、开关禁用。缩窄跨过 640px 断点树
- * 自动折叠；拉宽永不反向展开。布局裁决纯函数在 panel-layout.ts，显示形态的
- * container query 在 styles.css——这里不量宽度做显示判定。
+ * 窄容器浮层），没有打开文件时树就是整个面板、开关禁用。树开着时面板被拉窄
+ * 就自动折叠（任何幅度），拉宽永不反向展开。布局裁决纯函数在 panel-layout.ts，
+ * 显示形态的 container query 在 styles.css——这里不量宽度做显示判定。
+ *
+ * 头部没有 ×：关文件是标签 ✕ / Esc，关面板是右侧栏的面板按钮（同一个入口不必
+ * 在面板里再长一个）——2026-10-10 用户裁决。
  */
 export function FilesPanel(props: {
   session: ChatSession;
-  onClose: () => void;
   /**
    * App 的全局 Esc 先问这里：有激活标签就只关它、回报「处理掉了」，面板不关——
    * 与子会话面板「Esc 先退一层」同一个台阶。不自己挂 window 监听：App 的监听注册
@@ -376,7 +378,6 @@ export function FilesPanel(props: {
         </>
       }
       contentKey="files"
-      onClose={props.onClose}
       headerExtra={
         <>
           {/* 面板是快照：agent 写了文件、外部改了盘，点这里重拉根与所有展开目录，

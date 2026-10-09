@@ -1193,7 +1193,7 @@ export const zh: Messages = {
 
   files: {
     title: "文件",
-    treeToggleTip: "文件树开关——宽时并排，窄时浮层；缩窄过断点自动折叠",
+    treeToggleTip: "文件树开关——宽时并排，窄时浮层；面板一拉窄就自动收起",
     tabsAria: "打开的文件",
     closeTab: "关闭标签",
     groupToggleTip: "折叠或展开这一组",

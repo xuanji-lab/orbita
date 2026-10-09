@@ -1281,7 +1281,7 @@ export const en = {
 
   files: {
     title: "Files",
-    treeToggleTip: "Toggle the file tree — side by side when wide, overlay when narrow; narrowing past the breakpoint collapses it",
+    treeToggleTip: "Toggle the file tree — side by side when wide, overlay when narrow; narrowing the panel collapses it",
     tabsAria: "Open files",
     closeTab: "Close tab",
     groupToggleTip: "Collapse or expand this group",

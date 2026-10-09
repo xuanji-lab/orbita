@@ -666,7 +666,7 @@ export function App() {
               }}
             >
               {shownPanel === "files" ? (
-                <FilesPanel session={session} onClose={() => handlePanel(null)} escapeRef={filesEscapeRef} />
+                <FilesPanel session={session} escapeRef={filesEscapeRef} />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
