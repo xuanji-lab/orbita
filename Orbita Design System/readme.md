@@ -272,9 +272,10 @@ queue-strip rows, at most two visible and the rest folded behind "N more quotes�
 quote card takes a card; the other layers sit directly on the chat surface, each chip carrying
 its own `--glass-bg` and `--shadow-border`. Pasted text left the stack in 2026-10-09 (plan C): a
 large paste collapses into an **inline chip in the text** at the caret (below), so the stack no
-longer carries it. The slash panel stays out of the flow the same way: it opens *downward* from
-the `/` line as a solid popover positioned inside the input card's bounds — it may cover the
-bottom bar (attach, model, send) but never leaves the card.
+longer carries it. Skill / MCP tokens enter the text the same way: typing a lone `/` at the very
+start of the draft and pressing **space** opens the right-rail Skills picker (Tab switches to MCP,
+Enter inserts the token back at the caret) — there is no in-composer slash panel anymore
+(2026-10-10 ruling; drag a Skills/MCP card into the box as the other path).
 The same language extends **inline**: a `/skill:` or `/mcp:` token typed mid-sentence renders as a chip in the
 composer (a mirror layer beneath the textarea paints the pill exactly under the token's glyphs —
 no horizontal padding or icon, or the text would shift out of alignment) and in the sent user
