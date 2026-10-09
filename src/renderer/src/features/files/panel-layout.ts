@@ -17,6 +17,9 @@ import { pathTail, looksLikeWindowsPath } from "../../../../shared/path.ts";
  * 树列与浮层的分界（px）：容器 ≥ 此值且树开着 → 并排固定窄列；< 此值 → 浮层 +
  * 遮罩。与 styles.css 里 `.files-panel-layout` 的 `@container (min-width: 640px)`
  * 成对改，两边不一致浮层与折叠就会打架。
+ *
+ * 注意：这只决定树**开着时**的形态（并排 / 浮层），**不再管折叠**——折叠走
+ * shouldCollapseOnNarrow（拉窄即折叠），因为它跨不过去（面板下界能高于 640）。
  */
 export const TREE_BREAKPOINT = 640;
 
@@ -62,12 +65,19 @@ export function closeTab(
 }
 
 /**
- * 缩窄过断点：树自动折叠（不论之前是并排还是浮层）。只在「缩窄」这一个方向发生
- * ——拉宽永不反向自动展开，树只能由「文件」标题开关打开（原型裁决）。wasWide /
- * nowWide 由调用方的 ResizeObserver 按容器宽度跨不跨 TREE_BREAKPOINT 喂进来。
+ * 拉窄即折叠：树开着时面板被拉窄（任何幅度）→ 收起树。
+ *
+ * 为什么不用「跨 640px 断点」判：面板宽度的夹取下界是 pane 的 1/3
+ * （clampRightPanelWidth），窗口越宽下界越高——2560 屏实测下界 693px >
+ * 640px，断点永远跨不过去，规则等于死的（2026-10-10 用户实机指出：
+ * 树展开后拉窄不折叠）。拉窄是用户「我要更多内容空间」的信号，与当前
+ * 宽度在哪一档无关。1px 容差挡亚像素抖动。
  */
-export function shouldCollapseOnNarrow(wasWide: boolean, nowWide: boolean): boolean {
-  return wasWide && !nowWide;
+export function shouldCollapseOnNarrow(
+  previousWidth: number | null,
+  nextWidth: number,
+): boolean {
+  return previousWidth !== null && nextWidth < previousWidth - 1;
 }
 
 /** 面板主体元素的 data-* 属性——CSS 显示形态的唯一输入，见 styles.css 的 container query。 */

@@ -80,17 +80,30 @@ describe("shouldCollapseOnNarrow", () => {
     strictEqual(TREE_BREAKPOINT, 640);
   });
 
-  it("宽 → 窄：折叠", () => {
-    strictEqual(shouldCollapseOnNarrow(true, false), true);
+  it("拉窄（任何幅度）就折叠——不依赖跨断点：面板下界能高于 640，断点无法作为判据", () => {
+    strictEqual(shouldCollapseOnNarrow(693, 691), true);   // 两侧都在「宽侧」，只拉窄 2px
+    strictEqual(shouldCollapseOnNarrow(700, 690), true);
+    strictEqual(shouldCollapseOnNarrow(650, 630), true);   // 跨断点
+    strictEqual(shouldCollapseOnNarrow(500, 480), true);   // 两侧都在窄侧
   });
 
-  it("窄 → 宽：不反向自动展开（树只能由标题开关打开）", () => {
-    strictEqual(shouldCollapseOnNarrow(false, true), false);
+  it("1px 之差当作抖动：不折叠（拖动中的亚像素噪声不该把树折了）", () => {
+    strictEqual(shouldCollapseOnNarrow(693, 692), false);
   });
 
-  it("同侧不动：不折叠", () => {
-    strictEqual(shouldCollapseOnNarrow(true, true), false);
-    strictEqual(shouldCollapseOnNarrow(false, false), false);
+  it("拉宽：不反向自动折叠（树只能由标题开关打开）", () => {
+    strictEqual(shouldCollapseOnNarrow(690, 700), false);
+    strictEqual(shouldCollapseOnNarrow(630, 650), false);
+  });
+
+  it("等宽 / 亚像素抖动：不折叠", () => {
+    strictEqual(shouldCollapseOnNarrow(693, 693), false);
+    strictEqual(shouldCollapseOnNarrow(693, 692.4), false);
+  });
+
+  it("首帧（还没量过宽）：不动作", () => {
+    strictEqual(shouldCollapseOnNarrow(null, 693), false);
+    strictEqual(shouldCollapseOnNarrow(null, 300), false);
   });
 });
 

@@ -95,22 +95,21 @@ export function FilesPanel(props: {
   }, [sessionId, workspaceId]);
 
   // 面板主体的宽度感知：唯一 allowed 的 JS 宽度事实，来自这只 ResizeObserver——
-  // 跨过 640px 断点且方向是缩窄时把 treeOn 折叠（拉宽永不反向展开）；窄侧事实
-  // 缓存进 narrowRef 供「浮层里点了文件 → 收浮层」用。显示形态（并排 / 浮层）
-  // 仍由 styles.css 的 container query 裁决，这里只更新状态
+  // 面板被拉窄（任何幅度）就把 treeOn 折叠（拉宽永不反向展开）；窄侧事实缓存进
+  // narrowRef 供「浮层里点了文件 → 收浮层」用。显示形态（并排 / 浮层）仍由
+  // styles.css 的 container query 裁决，这里只更新状态
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const narrowRef = useRef(false);
   useEffect(() => {
     const el = bodyRef.current;
     if (el === null) return;
-    let wasWide: boolean | null = null;
+    let lastWidth: number | null = null;
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width ?? 0;
-      const nowWide = width >= TREE_BREAKPOINT;
-      // 首帧只记侧、不动作：面板挂载在窄侧不该把已经开着的树折掉
-      if (wasWide !== null && shouldCollapseOnNarrow(wasWide, nowWide)) setTreeOn(false);
-      wasWide = nowWide;
-      narrowRef.current = !nowWide;
+      // 首帧只记宽、不动作：面板挂载时不该把已经开着的树折掉
+      if (shouldCollapseOnNarrow(lastWidth, width)) setTreeOn(false);
+      lastWidth = width;
+      narrowRef.current = width < TREE_BREAKPOINT;
     });
     observer.observe(el);
     return () => observer.disconnect();
