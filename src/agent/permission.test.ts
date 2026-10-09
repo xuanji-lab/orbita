@@ -160,10 +160,12 @@ describe("命令超时兜底（经 createToolCallGate）", () => {
     const gate = createToolCallGate(
       () => "skip",
       async () => ({ behavior: "allow" }),
-      ["C:\\secrets"],
-      "C:\\work",
+      // 用正斜杠的绝对路径：两平台字面一致。写成 C:\\secrets 只在 Windows 上成立
+      // （反斜杠与大小写的折叠只在 win32 做），macOS 上这条会误红
+      ["/secrets"],
+      "/work",
     );
-    const e = event("bash", { command: "cat C:/secrets/a.json", timeout: 30 });
+    const e = event("bash", { command: "cat /secrets/a.json", timeout: 30 });
     const result = await gate(e);
     assert.equal(result.block, true, "受保护路径本就该拒");
     assert.equal(e.input["timeout"], 600, "拒绝这条路上也要先抬");
