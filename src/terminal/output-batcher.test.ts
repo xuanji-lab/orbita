@@ -81,9 +81,10 @@ describe("OutputPipeline —— 积压上限与丢弃标记", () => {
     pipeline.enqueue("t1", "overflow-bytes");
     t.mock.timers.tick(OUTPUT_FLUSH_DELAY_MS);
     strictEqual(sent.length, 1);
-    strictEqual(sent[0].sequence, 1);
-    strictEqual(sent[0].data.includes("overflow-bytes"), false);
-    strictEqual(sent[0].data.includes("已丢弃 14 个字符"), true);
+    const batch = sent[0] ?? { terminalId: "", sequence: 0, data: "" };
+    strictEqual(batch.sequence, 1);
+    strictEqual(batch.data.includes("overflow-bytes"), false);
+    strictEqual(batch.data.includes("已丢弃 14 个字符"), true);
   });
 
   it("1MB 满格之后的输出全部计丢弃，不再保留", (t) => {
@@ -95,7 +96,7 @@ describe("OutputPipeline —— 积压上限与丢弃标记", () => {
     pipeline.enqueue("t1", "zzz");
     t.mock.timers.tick(OUTPUT_FLUSH_DELAY_MS);
     strictEqual(sent.length, 1);
-    strictEqual(sent[0].data.includes("已丢弃 6 个字符"), true);
+    strictEqual((sent[0] ?? { data: "" }).data.includes("已丢弃 6 个字符"), true);
   });
 });
 
