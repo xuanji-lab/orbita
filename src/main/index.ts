@@ -32,6 +32,8 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { TerminalService } from "./terminal/service.ts";
+import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { isWebLink } from "./browser/address.ts";
@@ -484,6 +486,9 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
+  // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
+  const terminals = new TerminalService();
+  registerTerminalIpc(terminals);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
@@ -522,6 +527,8 @@ void app.whenReady().then(async () => {
     appTray = null;
     browserSandbox.prepareQuit();
     agentHost.dispose();
+    // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
+    terminals.dispose();
   });
 
   /**
