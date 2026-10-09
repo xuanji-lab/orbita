@@ -38,7 +38,10 @@ function varsOf(css: string, from: number, to: number): Map<string, string> {
 }
 
 function themeBlock(theme: string): Map<string, string> {
-  const css = readFileSync(join(TOKENS, "colors.css"), "utf8");
+  // 先折 CRLF：明档块靠两行字面量定位，Windows 工作区（core.autocrlf=true）拉
+  // 下来的 colors.css 带 \r\n，字面量会找不到（2026-10-10 Windows CI 与本地同报
+  // 「找不到明档 token 块」；Linux 上一直绿）
+  const css = readFileSync(join(TOKENS, "colors.css"), "utf8").replace(/\r\n/g, "\n");
   if (theme === "light") {
     const open = css.indexOf(":root,\n[data-theme-preview=\"light\"] {");
     assert.ok(open >= 0, "colors.css 里找不到明档 token 块");
