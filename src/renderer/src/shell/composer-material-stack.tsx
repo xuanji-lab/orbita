@@ -214,6 +214,13 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
             /
           </span>
         )}
+        {/* 超限未复制（发送时按原位置引用）：icon + 文字，warning 色只做第二信号 */}
+        {props.chip.ref.uncopied === true && (
+          <span className="material-chip-uncopied">
+            <Icon name="triangle-alert" size={10} strokeWidth={2} />
+            {t.composer.notCopied}
+          </span>
+        )}
         <button type="button" className="material-chip-x" aria-label={t.composer.removeFile} title={t.composer.removeFile} onClick={props.chip.remove}>
           <Icon name="x" size={11} strokeWidth={2} />
         </button>
@@ -227,7 +234,13 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
             data-placed={tooltip.placement !== null}
             style={{ top: tooltip.placement?.top ?? 0, left: tooltip.placement?.left ?? 0 }}
           >
-            {props.chip.ref.path}
+            <div>{props.chip.ref.path}</div>
+            {props.chip.ref.uncopied === true && (
+              <div className="material-path-note">
+                <Icon name="triangle-alert" size={10} strokeWidth={2} />
+                {t.composer.notCopiedTip}
+              </div>
+            )}
           </div>,
           document.body,
         )}

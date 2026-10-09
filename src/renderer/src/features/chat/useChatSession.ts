@@ -38,6 +38,7 @@ import {
 } from "../../shell/composer-attachments.ts";
 import {
   pastedTextSize,
+  EXTERNAL_FILE_COPY_MAX_BYTES,
   type PromptFileRef,
 } from "@shared/prompt-attachments";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
@@ -1469,11 +1470,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         void api.files
           .statKind(entries.map((entry) => entry.path))
           .then((facts) => {
-            // kind 为 null（stat 不到）时按 file 收下：分拣不给附件添堵
+            // kind 为 null（stat 不到）时按 file 收下：分拣不给附件添堵；超过复制
+            // 上限的标「未复制」——发送时主进程会按原位置引用，胶囊上明说代价
             writeFiles(key, (current) =>
               withStatKinds(
                 current,
-                entries.map((entry, index) => ({ id: entry.id, kind: facts[index]?.kind ?? "file" })),
+                entries.map((entry, index) => ({
+                  id: entry.id,
+                  kind: facts[index]?.kind ?? "file",
+                  uncopied: (facts[index]?.size ?? 0) > EXTERNAL_FILE_COPY_MAX_BYTES,
+                })),
               ),
             );
           })

@@ -18,21 +18,32 @@ export interface ComposerFileRef {
   kind: "file" | "dir";
   /** workspace = 文件面板引用（原位置不动）；external = 拖入/选择（发送时主进程复制进会话） */
   origin: "workspace" | "external";
+  /**
+   * 超过复制上限（EXTERNAL_FILE_COPY_MAX_BYTES）的 external 文件：发送时主进程
+   * 不复制、按原位置引用——原件挪走 / 删掉后引用会断，胶囊上要明说。只在 renderer
+   * 里存在，不上 IPC（发送侧自己 lstat 判定，不信这个标记）。
+   */
+  uncopied?: boolean;
 }
 
 /**
- * 把主进程 stat 回来的真实类型按入列时记下的 id 贴回。拖入的条目先按 file 同步
- * 入列（拖放与回车发送抢的是同一拍，不能等 IPC 往返），stat 回来再改真实类型——
- * 这期间被移除的（id 已不在）自然跳过，贴不上的（回执比入列短）维持原样。
+ * 把主进程 stat 回来的盘上事实（类型 + 是否超限）按入列时记下的 id 贴回。拖入的
+ * 条目先按 file 同步入列（拖放与回车发送抢的是同一拍，不能等 IPC 往返），stat
+ * 回来再改真实类型——这期间被移除的（id 已不在）自然跳过，贴不上的（回执比
+ * 入列短）维持原样。
  */
-export function withStatKinds<T extends { id: string; kind: "file" | "dir" }>(
+export function withStatKinds<T extends { id: string; kind: "file" | "dir"; uncopied?: boolean }>(
   current: readonly T[],
-  statted: readonly { id: string; kind: "file" | "dir" }[],
+  statted: readonly { id: string; kind: "file" | "dir"; uncopied?: boolean }[],
 ): T[] {
-  const kinds = new Map(statted.map((item) => [item.id, item.kind]));
+  const facts = new Map(statted.map((item) => [item.id, item]));
   return current.map((item) => {
-    const kind = kinds.get(item.id);
-    return kind === undefined || kind === item.kind ? item : { ...item, kind };
+    const fact = facts.get(item.id);
+    if (fact === undefined) return item;
+    const wantUncopied = fact.uncopied === true;
+    const hadUncopied = item.uncopied === true;
+    if (fact.kind === item.kind && hadUncopied === wantUncopied) return item;
+    return wantUncopied ? { ...item, kind: fact.kind, uncopied: true } : { ...item, kind: fact.kind };
   });
 }
 

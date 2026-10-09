@@ -22,7 +22,7 @@ import {
   type SentImage,
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
-import type { PromptFileRef, SentFileRef } from "../../shared/prompt-attachments.ts";
+import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -280,9 +280,17 @@ export class SessionStore {
    * 同名文件也各归各的子目录，天然不冲突。
    *
    * **存不下不拦发送**：与 saveOriginals 同一条规矩——副本只是外部文件的保险，
-   * 失败时引用原位置并在 dev 终端说明。目录不复制（可能巨大），原位置引用。
+   * 失败时引用原位置并在 dev 终端说明。目录不复制（可能巨大），原位置引用；
+   * **超过 EXTERNAL_FILE_COPY_MAX_BYTES 的文件同样不复制**（Proma Agent 同一阈值
+   * 先例）：一份 100MB+ 的副本 noticeable 地吃磁盘与拷贝时间，而引用原路径对
+   * 模型同样可用——代价是原件挪走后引用会断，这一点 renderer 在胶囊上明说。
+   * `copyLimit` 只给测试注入小阈值用，生产不给。
    */
-  async saveExternalFiles(id: string, refs: readonly PromptFileRef[]): Promise<SentFileRef[]> {
+  async saveExternalFiles(
+    id: string,
+    refs: readonly PromptFileRef[],
+    copyLimit: number = EXTERNAL_FILE_COPY_MAX_BYTES,
+  ): Promise<SentFileRef[]> {
     const saved: SentFileRef[] = [];
     for (const ref of refs) {
       // realpath 既做规范化（win 混合分隔符）也做存在性检查；失败按「引用原样带上」处理
@@ -299,13 +307,18 @@ export class SessionStore {
           const stats = await lstat(real);
           kind = stats.isDirectory() ? "dir" : "file";
           if (!stats.isDirectory()) {
-            const dest = join(this.attachmentsPath(id), randomUUID(), basename(real));
-            // copyFile 到临时名再 rename：半截副本不会被当成完整文件（writeBytesAtomic 的文件版）
-            const staging = `${dest}.partial`;
-            await mkdir(dirname(dest), { recursive: true });
-            await copyFile(real, staging);
-            await rename(staging, dest);
-            target = dest;
+            if (stats.size > copyLimit) {
+              // 超限不复制：按原位置引用，代价（原件挪走即断）由胶囊上的「未复制」说明
+              console.error(`[session] 外部文件超过复制上限（${stats.size} > ${copyLimit}），按原位置引用：${real}`);
+            } else {
+              const dest = join(this.attachmentsPath(id), randomUUID(), basename(real));
+              // copyFile 到临时名再 rename：半截副本不会被当成完整文件（writeBytesAtomic 的文件版）
+              const staging = `${dest}.partial`;
+              await mkdir(dirname(dest), { recursive: true });
+              await copyFile(real, staging);
+              await rename(staging, dest);
+              target = dest;
+            }
           } else {
             console.error(`[session] 外部目录不复制，按原位置引用：${real}`);
           }

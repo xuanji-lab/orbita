@@ -137,6 +137,8 @@ export const en = {
     imageReadFailed: (name: string) => `Couldn't read ${name}.`,
     noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
     removeFile: "Remove file",
+    notCopied: "Not copied",
+    notCopiedTip: "Not copied — the reference breaks if the original file is moved or deleted",
     fileNoPath: (name: string) =>
       `Couldn't tell where ${name} lives on disk — copy it into a folder, then drag it in.`,
     fileAlreadyAttached: (name: string) => `${name} is already attached.`,

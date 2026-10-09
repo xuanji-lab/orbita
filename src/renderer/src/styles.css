@@ -2595,6 +2595,17 @@ textarea.text-field {
   color: var(--color-text-tertiary);
 }
 
+/* 超限未复制的标记（外部文件超过复制上限，发送时按原位置引用）：icon + 文字，
+   warning 色只做第二信号，信息全在文字里 */
+.material-chip-uncopied {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-warning);
+}
+
 /* 附件胶囊的完整路径 tooltip（useHoverTooltip 定位）：mono（机器事实）、
    长路径换行不截断——看全正是它的存在理由。z-index 与 IconButton 的 tooltip 同档（70） */
 .material-path-tip {
@@ -2618,6 +2629,16 @@ textarea.text-field {
 /* 首帧定位前不显形，免得先闪在左上角再跳（同 setting-tip） */
 .material-path-tip[data-placed="false"] {
   opacity: 0;
+}
+
+/* 未复制的代价一句：路径下方一行，icon + 文字，warning 色第二信号 */
+.material-path-note {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-family: var(--font-family-base);
+  color: var(--color-warning);
 }
 
 /* 粘贴胶囊的本体是按钮（点开全文浮层） */

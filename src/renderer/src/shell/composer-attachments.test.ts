@@ -24,23 +24,26 @@ test("admitFileRefs：同路径记 duplicate，空路径记 no-path", () => {
   assert.equal(lost.rejected[0]?.reason, "no-path");
 });
 
-test("withStatKinds：按 id 贴回真实类型，被移除的与贴不上的不动", () => {
+test("withStatKinds：按 id 贴回真实类型与超限标记，被移除的与贴不上的不动", () => {
   const base = [
     { id: "a", path: "/tmp/a.ts", kind: "file" as const },
     { id: "dir", path: "/tmp/dir", kind: "file" as const },
+    { id: "big", path: "/tmp/big.bin", kind: "file" as const },
     { id: "gone", path: "/tmp/gone", kind: "file" as const },
   ];
-  // stat 回来时 gone 已被用户移除；回执只盖得住前两条
+  // stat 回来时 gone 已被用户移除；回执只盖得住前三条
   const current = base.filter((item) => item.id !== "gone");
   const next = withStatKinds(current, [
     { id: "a", kind: "file" },
     { id: "dir", kind: "dir" },
+    { id: "big", kind: "file", uncopied: true },
   ]);
   assert.deepEqual(next, [
     { id: "a", path: "/tmp/a.ts", kind: "file" },
     { id: "dir", path: "/tmp/dir", kind: "dir" },
+    { id: "big", path: "/tmp/big.bin", kind: "file", uncopied: true },
   ]);
-  // kind 没变的条目返回原对象（React 按引用短路重渲）
+  // kind 没变且没有超限标记的条目返回原对象（React 按引用短路重渲）
   assert.equal(next[0], current[0]);
   // 整批都贴不上（通道回执短一截）时原样返回
   assert.deepEqual(withStatKinds(current, []), current);

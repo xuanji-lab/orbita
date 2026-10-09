@@ -113,6 +113,8 @@ export const zh: Messages = {
     imageReadFailed: (name) => `读不出 ${name}。`,
     noVision: "这个模型不能看图，图片不会发给它。换一个带图片标记的模型。",
     removeFile: "移除文件",
+    notCopied: "未复制",
+    notCopiedTip: "未复制 · 原文件移动或删除后将无法读取",
     fileNoPath: (name) => `拿不到 ${name} 在磁盘上的位置——先把它复制到文件夹里，再拖进来。`,
     fileAlreadyAttached: (name) => `${name} 已经在附件里了。`,
     pastedName: "粘贴的文本",
