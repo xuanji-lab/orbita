@@ -195,6 +195,11 @@ export interface AppSettings {
    * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
    */
   providerCardSize?: ProviderCardSize;
+  /**
+   * 实验功能总开关（纸面皮肤两档 + 会话生命周期三件套）。缺席 = false——
+   * 这批功能挂在开关后面，默认不出现；语义见 `selectableThemes` 的注释。
+   */
+  experimental?: boolean;
 }
 
 export type ProviderCardSize = "large" | "small";
@@ -318,6 +323,19 @@ function parseTheme(value: unknown): ThemePreference {
   return DEFAULT_SETTINGS.theme;
 }
 
+/**
+ * 实验功能总开关。缺席 = false：挂在其后的入口默认不出现——纸面皮肤两档
+ * （copybook / typescript）的选择卡、会话生命周期三件套（完成标记、收尾扫描与
+ * 遗留事项、星标）的全部入口（消费面在 renderer，见 experimental.ts）。
+ * **只藏入口不动数据**：已存的主题照常应用、已星标 / 已完成的会话与遗留事项
+ * 原样在盘上，开关打开入口就回来。开源首发的默认门面（2026-10 用户裁决：
+ * 不成熟的功能在公开快照里默认不出现）。
+ */
+export function selectableThemes(experimental: boolean): readonly ThemePreference[] {
+  if (experimental) return THEME_PREFERENCES;
+  return THEME_PREFERENCES.filter((theme) => theme !== "copybook" && theme !== "typescript");
+}
+
 /** 只在区间内才认；钳制交给渲染层，这里不「猜」用户想要的宽度 */
 function parseWidth(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DRAWER_WIDTH.default;
@@ -352,6 +370,7 @@ export function parseSettings(raw: unknown): AppSettings {
     browserDownloadDir?: unknown;
     starredModels?: unknown;
     providerCardSize?: unknown;
+    experimental?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -410,6 +429,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
       : {}),
+    // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真
+    ...(typeof record.experimental === "boolean" ? { experimental: record.experimental } : {}),
   };
 }
 

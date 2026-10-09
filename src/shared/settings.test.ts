@@ -1,7 +1,8 @@
-import { deepStrictEqual } from "node:assert/strict";
+import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   effectiveLanguage,
+  selectableThemes,
   themeLanguage,
   CHANNEL_COLUMN_WIDTH_DEFAULT,
   clampChannelColumnWidth,
@@ -544,5 +545,37 @@ describe("parseSettings 的 providerCardSize（模型服务的卡片尺寸）", 
     deepStrictEqual(parseSettings({ providerCardSize: "large" }).providerCardSize, "large");
     deepStrictEqual("providerCardSize" in parseSettings({ providerCardSize: "huge" }), false);
     deepStrictEqual("providerCardSize" in parseSettings({}), false);
+  });
+});
+
+describe("parseSettings 的 experimental（实验功能总开关）", () => {
+  it("缺席 = 键不在：默认关，不带一个显式的 false 进盘", () => {
+    deepStrictEqual("experimental" in parseSettings({}), false);
+  });
+
+  it("显式 true / false 都认", () => {
+    deepStrictEqual(parseSettings({ experimental: true }).experimental, true);
+    deepStrictEqual(parseSettings({ experimental: false }).experimental, false);
+  });
+
+  it("非布尔丢掉（手改得出 \"yes\"，该被丢而不是当成真）", () => {
+    deepStrictEqual("experimental" in parseSettings({ experimental: "yes" }), false);
+    deepStrictEqual("experimental" in parseSettings({ experimental: 1 }), false);
+    deepStrictEqual("experimental" in parseSettings({ experimental: null }), false);
+  });
+});
+
+describe("selectableThemes（主题选择卡的可选档位）", () => {
+  it("实验开关开着：全六档都可选", () => {
+    deepStrictEqual(selectableThemes(true), THEME_PREFERENCES);
+  });
+
+  it("实验开关关着：纸面两档（copybook / typescript）不出现", () => {
+    deepStrictEqual(selectableThemes(false), ["system", "light", "graphite", "black"]);
+  });
+
+  it("过滤只动选择卡：已存的 copybook 仍被 parseTheme 认（照常应用，只是不再可选）", () => {
+    deepStrictEqual(parseSettings({ theme: "copybook" }).theme, "copybook");
+    ok(selectableThemes(false).includes(parseSettings({ theme: "copybook" }).theme) === false);
   });
 });
