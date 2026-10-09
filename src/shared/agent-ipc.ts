@@ -68,6 +68,12 @@ export const ipcChannels = {
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
+  /**
+   * Claude 订阅账号的 OAuth 登录：主进程起回调服务器 + 开系统浏览器，成功后直接
+   * 落盘 provider 与凭据，返回 UpsertResult。凭据（access / refresh token）全程
+   * 不进 renderer——登录本身就是保存。
+   */
+  providerOauthLogin: "provider:oauth-login",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
   /**
@@ -320,9 +326,24 @@ export interface ProviderSecrets {
   id: string;
   api: string;
   baseUrl: string;
+  /** api_key 的明文，或 OAuth 的访问令牌（sk-ant-oat…，pi 端自动切换 Bearer 头） */
   apiKey: string;
   headers?: Record<string, string>;
   models: ModelDecl[];
+}
+
+/**
+ * `provider:oauth-login` 的入参。登录即保存：主进程成功后 upsert 这条 provider
+ * （scheme oauth）并落盘凭据。重登录（create=false）时模型清单沿用盘上的——
+ * 换令牌不该把用户配好的模型一并抹掉。
+ */
+export interface OauthLoginInput {
+  id: string;
+  displayName: string;
+  /** 新建时 true（id 撞名拒绝）；已有 provider 重登录时缺省 */
+  create?: boolean;
+  /** 仅 create 时生效：登录后启用的模型清单（一般空，登录后用 Fetch 拉取） */
+  models?: ModelDecl[];
 }
 
 /**
