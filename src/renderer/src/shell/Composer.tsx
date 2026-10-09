@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { ImageLightbox } from "./ImageLightbox";
 import { ImageThumb } from "./ImageThumb";
 import { QuoteChip } from "./QuoteChip";
-import { FileRefChip, PastedTextChip } from "./attachment-chips";
+import { FileRefChip, PastedTextChip, PastedTextCollapseContext } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge } from "@shared/prompt-attachments";
 import { filesOf, imageSrc, type ComposerImage } from "./composer-images.ts";
@@ -105,6 +105,8 @@ export function Composer(props: {
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 粘贴文本折叠开关（设置 › collapsePastedText）：关掉后大段粘贴不成 chip，直接进输入框
+  const collapsePasted = useContext(PastedTextCollapseContext);
   // 听写（features/voice/useDictation.ts）：识别文字直接写进这个输入框。听写中输入框只读——
   // 手打的字会被下一次识别结果覆盖；回车 = 结束听写（不发送），Esc = 取消
   const dictation = useDictation({ value: props.value, onChange: props.onChange, textareaRef });
@@ -331,6 +333,14 @@ export function Composer(props: {
               text={block.text}
               lines={block.lines}
               onRemove={() => props.onRemovePasted(block.id)}
+              onExpandIntoInput={() => {
+                // 展开 = 移进输入框：文本接在草稿末尾（必要时补一个换行），chip 移除，
+                // 焦点回输入框接着改。发送时它就是普通消息文本，不再是粘贴块
+                const glue = props.value === "" || props.value.endsWith("\n") ? "" : "\n";
+                props.onChange(props.value + glue + block.text);
+                props.onRemovePasted(block.id);
+                textareaRef.current?.focus();
+              }}
             />
           ))}
         </div>
@@ -494,9 +504,9 @@ export function Composer(props: {
               return;
             }
             // 纯文字粘贴：超过折叠阈值的一大段抽成粘贴块（全文进模型，永不截断），
-            // 普通文字照常进输入框
+            // 普通文字照常进输入框。设置关掉折叠后不拦截——大段文字也直接进输入框
             const text = event.clipboardData.getData("text/plain");
-            if (text !== "" && isPastedTextLarge(text)) {
+            if (collapsePasted && text !== "" && isPastedTextLarge(text)) {
               event.preventDefault();
               props.onPasteLargeText(text);
             }

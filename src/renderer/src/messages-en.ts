@@ -141,6 +141,7 @@ export const en = {
     fileAlreadyAttached: (name: string) => `${name} is already attached.`,
     pastedTitle: (lines: number) => `Pasted text · ${lines} lines`,
     pastedExpand: "Show the pasted text in full",
+    pastedExpandToInput: "Expand into the input box",
     pastedCollapse: "Collapse the pasted text",
     removePasted: "Remove pasted text",
     commandNoMatch: "No matching command",
@@ -419,6 +420,10 @@ export const en = {
     attributionAria: "Commit and PR attribution",
     attributionInfo:
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
+    pastedCollapse: "Collapse pasted text",
+    pastedCollapseAria: "Collapse pasted text",
+    pastedCollapseInfo:
+      "Long pasted text folds into a one-line chip whose expand drops it into the input box · off sends large pastes straight into the input box, no chip",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",

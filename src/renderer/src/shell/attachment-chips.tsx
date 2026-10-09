@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createContext, useState } from "react";
 import { Icon } from "./Icon";
 import { useT } from "../locale.ts";
 
@@ -80,13 +80,29 @@ export function FileRefChip(props: {
 }
 
 /**
- * 一段粘贴文本：折叠成一行（「粘贴的文本 · N 行」），点开展开全文（限高滚动），
- * 再点收起——**全文永不截断**，折叠只是显示形态。展开态收在 chip 内部：
- * 粘贴的是要紧内容，展开时不该把它推到视线之外。
+ * 粘贴文本是否折叠成一行（设置 › collapsePastedText，缺席 = 折叠）。
+ * 消费方是输入框的粘贴拦截（Composer）：关掉后大段粘贴不成块，直接进输入框。
+ * App 根部提供一次，免得逐级透传。
  */
-export function PastedTextChip(props: { text: string; lines: number; onRemove?: () => void }) {
+export const PastedTextCollapseContext = createContext(true);
+
+/**
+ * 一段粘贴文本：折叠成一行（「粘贴的文本 · N 行」）。**全文永不截断**，折叠只是
+ * 显示形态。展开有两个去处：
+ * - 输入框里（传了 onExpandIntoInput）：展开 = 把文本**移进输入框**——chip 移除，
+ *   文本回到草稿里可编辑（wafo 2026-10-09：「折叠式 chip，展开要放进输入框中」）；
+ * - 转录里（只读，没传）：就地展开全文（限高滚动），再点收起——那里没有输入框可去。
+ */
+export function PastedTextChip(props: {
+  text: string;
+  lines: number;
+  onRemove?: () => void;
+  /** 展开 = 移进输入框（输入框附件区传）；缺席 = 就地展开（转录回显） */
+  onExpandIntoInput?: () => void;
+}) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
+  const intoInput = props.onExpandIntoInput !== undefined;
   return (
     <div
       style={{
@@ -102,9 +118,17 @@ export function PastedTextChip(props: { text: string; lines: number; onRemove?: 
       <div style={{ display: "flex", alignItems: "center", gap: 6, minHeight: 28, padding: "0 6px 0 8px" }}>
         <button
           type="button"
-          aria-expanded={expanded}
-          title={expanded ? t.composer.pastedCollapse : t.composer.pastedExpand}
-          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={intoInput ? undefined : expanded}
+          title={
+            intoInput
+              ? t.composer.pastedExpandToInput
+              : expanded
+                ? t.composer.pastedCollapse
+                : t.composer.pastedExpand
+          }
+          onClick={() =>
+            intoInput ? props.onExpandIntoInput?.() : setExpanded((value) => !value)
+          }
           style={{
             display: "flex",
             alignItems: "center",
@@ -120,7 +144,7 @@ export function PastedTextChip(props: { text: string; lines: number; onRemove?: 
           }}
         >
           <Icon
-            name={expanded ? "chevron-down" : "chevron-right"}
+            name={intoInput ? "arrow-down" : expanded ? "chevron-down" : "chevron-right"}
             size={12}
             style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
           />

@@ -34,6 +34,7 @@ import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRai
 import { RightPanelSlot } from "./shell/RightPanel";
 import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
@@ -573,6 +574,7 @@ export function App() {
 
   return (
     <LocaleContext.Provider value={locale}>
+    <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
     <div className="app-shell">
       <Titlebar />
       <div className="layer">
@@ -743,6 +745,7 @@ export function App() {
         />
       </div>
     </div>
+    </PastedTextCollapseContext.Provider>
     </LocaleContext.Provider>
   );
 }
