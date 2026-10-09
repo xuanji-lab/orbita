@@ -81,6 +81,21 @@
     0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
+/* 类别上色在稿纸上的变体：涂改带底不变（叠彩底会胜），只把描边换成类别色——
+   像用彩笔把这块涂改带描了个边 */
+:root[data-theme="copybook"] .composer-chip[data-kind="skill"] {
+  box-shadow:
+    0 0 0 1px var(--color-paper-whiteout),
+    0 0 0 2px var(--color-filetype-sheet),
+    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+:root[data-theme="copybook"] .composer-chip[data-kind="mcp"] {
+  box-shadow:
+    0 0 0 1px var(--color-paper-whiteout),
+    0 0 0 2px var(--color-filetype-doc),
+    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+
 /* 粘贴展开段（copybook 变体，方案 C）：不涂修正液也不白底——它是正文不是涂改，
    铺一层淡淡的绿（方格线色当荧光笔）标出「这段是粘贴进来的」，竖格线从底下透出来 */
 :root[data-theme="copybook"] .composer-paste-run {

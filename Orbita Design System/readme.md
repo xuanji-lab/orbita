@@ -142,11 +142,16 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
-**Filetype colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): one job only —
-telling Word-ish docs, slide decks and spreadsheets apart **at a glance in their 13–14px icons**
-(files tree, composer pills, sent-attachment list; filenames stay in ink). Not the accent or any
-status colour; ≥ 3:1 on every theme's panel / muted / app grounds, hues ≥ 40° apart, guarded by
-`filetype-colors.test.ts`.
+**Category colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): a shared
+three-colour set — blue for doc-ish, green for sheets, orange-red for slides — that tells file
+types apart **at a glance in their 13–14px icons** (files tree, composer pills, sent-attachment
+list; filenames stay in ink) and colours tool-type chips: skill chips green (`-sheet`), MCP chips
+blue (`-doc`); orange (`-slides`) is reserved for command chips (`/new`, `/compact` — not wired
+yet). The material blocks (Excel / Doc / PPT — the blue / green / orange of the later tetris
+view) join the same set when they land. Not the accent or any status colour; ≥ 3:1 on every
+theme's panel / muted / app grounds (icon use), hues ≥ 40° apart, guarded by
+`filetype-colors.test.ts`. Chip usage is tint-and-stroke: a light `color-mix` tint of the same
+variable as the fill, the full colour as the stroke, text in ink; icons may use the full colour.
 
 **Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is

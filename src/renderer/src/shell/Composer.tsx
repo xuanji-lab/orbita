@@ -165,8 +165,15 @@ export function Composer(props: {
     () => pasted.flatMap((block) => (block.range !== null ? [block.range] : [])),
     [pasted],
   );
-  // 画成胶囊的区间：skill / mcp 的 token + 收着的粘贴 token（同一副药方）
-  const chipSpans = useMemo(() => [...chips, ...paintedPasteTokens], [chips, paintedPasteTokens]);
+  // 画成胶囊的区间：skill / mcp 的 token（带 kind，按类别上色）+ 收着的粘贴
+  // token（不带 kind，中性配方）——同一副药方，两种墨
+  const chipSpans = useMemo(
+    () => [
+      ...chips.map((chip) => ({ start: chip.start, end: chip.end, kind: chip.kind })),
+      ...paintedPasteTokens.map((token) => ({ start: token.start, end: token.end })),
+    ],
+    [chips, paintedPasteTokens],
+  );
   const segments = useMemo(
     () =>
       mirrorSegments(
@@ -298,7 +305,7 @@ export function Composer(props: {
         <div ref={mirrorRef} className="composer-input composer-mirror" data-script={script} aria-hidden="true">
           {segments.map((segment, index) =>
             segment.chip ? (
-              <span key={index} className="composer-chip">
+              <span key={index} className="composer-chip" data-kind={segment.chipKind ?? undefined}>
                 {segment.text}
               </span>
             ) : segment.pasteRun ? (

@@ -307,6 +307,28 @@
 }
 
 /*
+ * chip 按类别上色（2026-10 用户裁决：「直接用颜色给我区分吧，skills 一个颜色，
+ * mcp 一个颜色」）：skill = 表格绿（--color-filetype-sheet）、MCP = 文档蓝
+ * （--color-filetype-doc）——与文件类型图标同一组类别色，之后材料方块
+ * （Excel / Doc / PPT）也用它。淡底 + 同色描边、字保持正墨：token 原文照显
+ * （含 /skill: 前缀），底与描边都从同一变量 mix 出来，五档主题随各自那一组值
+ * 走。描边与呼吸仍全用 box-shadow，横向 padding 禁令不破；粘贴 token 的 chip
+ * 不带 data-kind，落回上面的中性配方（它不属于这三类）。
+ */
+.composer-chip[data-kind="skill"] {
+  background: color-mix(in srgb, var(--color-filetype-sheet) 12%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-filetype-sheet) 12%, transparent),
+    0 0 0 2px var(--color-filetype-sheet);
+}
+.composer-chip[data-kind="mcp"] {
+  background: color-mix(in srgb, var(--color-filetype-doc) 12%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-filetype-doc) 12%, transparent),
+    0 0 0 2px var(--color-filetype-doc);
+}
+
+/*
  * 粘贴展开段（方案 C，paste-blocks.ts）：一段粘贴进来的文字展开回正文，只铺浅底色
  * 标出「这段是粘贴进来的」——文字与正文同字体、可直接编辑，区间随编辑伸缩。
  * 没有描边没有圆角：它是一段话，不是一颗胶囊；chip 的描边语言留给收起态。
@@ -1557,6 +1579,26 @@ body {
 .bubble-chip-target {
   color: var(--color-text-primary);
   font-weight: 500;
+}
+
+/*
+ * 气泡 chip 同一套类别色（与镜像层的 .composer-chip[data-kind] 同源）：淡底 +
+ * 同色描边 + 正墨字，图标用本色（图标处对比度按 ≥ 3:1 把过关的那组值）。
+ * chip-runs.ts 早已按 kind 输出 bubble-chip-skill / -mcp，这里补上色。
+ */
+.bubble-chip-skill {
+  background: color-mix(in srgb, var(--color-filetype-sheet) 10%, transparent);
+  border-color: var(--color-filetype-sheet);
+}
+.bubble-chip-skill .bubble-chip-icon {
+  color: var(--color-filetype-sheet);
+}
+.bubble-chip-mcp {
+  background: color-mix(in srgb, var(--color-filetype-doc) 10%, transparent);
+  border-color: var(--color-filetype-doc);
+}
+.bubble-chip-mcp .bubble-chip-icon {
+  color: var(--color-filetype-doc);
 }
 
 .chat-md li::marker {
