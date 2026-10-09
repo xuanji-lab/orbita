@@ -116,12 +116,23 @@ export function isWebPageFile(path: string): boolean {
 }
 
 /**
- * 盘上一条路径的类型（`fs:stat-kind` 的回执行）。与 `PromptFileRef` / `SentFileRef`
+ * 盘上一条路径的类型（`fs:stat-kind` 的回执字段）。与 `PromptFileRef` / `SentFileRef`
  * （prompt-attachments.ts）的 `kind` 同一套词汇，不与面板的 `FileEntryKind`
  * （还有 symlink / other）混用：这边只回答输入框附件分拣要问的那一问——
  * 发给模型时是按文件（read）还是按目录（尾斜杠）记。
  */
 export type FsEntryKind = "file" | "dir";
+
+/**
+ * `fs:stat-kind` 的回执行：一条路径的盘上事实。`kind` 为 null = stat 不到
+ * （路径已不在、无权限）——调用方自己兑底：附件分拣按 file 收下，文件面板的
+ * 已发送附件列表据此如实标「不在盘上」。`size` 只对文件有意义，目录与 stat
+ * 不到的都是 null（大文件复制阈值判定只看文件）。
+ */
+export interface FsEntryFact {
+  kind: FsEntryKind | null;
+  size: number | null;
+}
 
 /** 文本预览最多读的字节数（2 MB）：再大的日志 / 数据文件只读开头，截断如实标出 */
 export const PREVIEW_TEXT_LIMIT = 2 * 1024 * 1024;

@@ -157,10 +157,12 @@ export const ipcChannels = {
    */
   fsOpenInBrowser: "fs:open-in-browser",
   /**
-   * 把一批绝对路径 stat 成 file / dir（回 `FsEntryKind[]`，与路径等长同序）。消费者是
-   * 输入框的附件分拣：拖入 / 粘贴的 `File` 对象在 renderer 里分不清是文件还是目录，
-   * 主进程发送时的 lstat 纠正来得太晚——图标与名字当场就该是对的。stat 不到按
-   * file 报：分拣不给附件添堵，发送侧的纠正仍兜底。
+   * 把一批绝对路径 stat 成盘上事实（回 `FsEntryFact[]`，与路径等长同序：kind 是
+   * file / dir 还是 null、size 多大）。消费者是输入框的附件分拣与文件面板的已发送
+   * 附件列表：拖入 / 粘贴的 `File` 对象在 renderer 里分不清是文件还是目录，主进程
+   * 发送时的 lstat 纠正来得太晚——图标与名字当场就该是对的；面板那侧还要靠它
+   * 如实标出已不在盘上的附件。不走面板的根白名单——拖入条目本来就在三根之外
+   * （发送时复制或原位置引用），问类型不构成通用文件浏览器：不读内容、不列目录。
    */
   fsStatKind: "fs:stat-kind",
   /**

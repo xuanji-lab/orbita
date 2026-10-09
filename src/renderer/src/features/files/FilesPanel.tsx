@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
@@ -18,8 +18,10 @@ import {
   orderEntries,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
+import { collectSentAttachments } from "./sent-attachments.ts";
 import { FilePreviewPane } from "./FilePreviewPane";
-import type { FileEntryKind, FileRoot, FileRootKind } from "@shared/files";
+import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
+import { pathTail, pathWithin } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
 /**
@@ -61,12 +63,51 @@ export function FilesPanel(props: {
   } | null>(null);
   const tree = useFileTree(sessionId, workspaceId, session.workspaces);
 
+  // Session · 附件：已发送过的文件引用从已加载转录派生（sent-attachments.ts，不动盘、
+  // 不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问。
+  // 转录每变一次（新发送）重问一次；面板头的刷新也顺带重问
+  const sentAttachments = useMemo(() => collectSentAttachments(session.transcript), [session.transcript]);
+  const [attachFacts, setAttachFacts] = useState<ReadonlyMap<string, FsEntryFact>>(new Map());
+  // 重问一次盘上事实的把手（面板头刷新时一并触发）：effect 的依赖加一个自增的轮次
+  const [attachStatRound, setAttachStatRound] = useState(0);
+  useEffect(() => {
+    if (sentAttachments.length === 0) {
+      setAttachFacts(new Map());
+      return;
+    }
+    let alive = true;
+    void api.files
+      .statKind(sentAttachments.map((item) => item.path))
+      .then((facts) => {
+        if (!alive) return;
+        setAttachFacts(
+          new Map(
+            sentAttachments.map((item, index) => [
+              item.path,
+              facts[index] ?? { kind: null, size: null },
+            ]),
+          ),
+        );
+      })
+      .catch(() => {
+        // 问不到就当未知显示（不标不在，也不报错）——列表本身来自转录，不依赖这次 IPC
+        if (alive) setAttachFacts(new Map());
+      });
+    return () => {
+      alive = false;
+    };
+  }, [sentAttachments, attachStatRound]);
+
   // 会话 / 工作区切换 = 换一棵树，选中与预览跟着清掉——旧会话的文件路径在新树里
   // 没有意义（同 useFileTree 清缓存 / 展开态的先例）
   useEffect(() => {
     setSelected(null);
     setPreview(null);
   }, [sessionId, workspaceId]);
+
+  // 附件列表吃同一条过滤词（按末段名字）；过滤中零命中时整节隐藏（与树的空目录
+  // 同一条纪律：安静），不过滤时才出空态文案
+  const filteredAttachments = filterAttachments(sentAttachments, query);
 
   // 预览打开时 Esc 关闭：窄屏「回到目录」与宽屏「关闭预览」是同一个动作
   // （两者都只是 setPreview(null)，宽窄只影响头上按钮的图标与文案），所以
@@ -239,6 +280,19 @@ export function FilesPanel(props: {
           <MissingAttachedRow onDetach={() => detach(root.path)} />
         )}
         {root.exists && rowsOf(root, root.path, 0)}
+        {/* Session · 附件：本会话已发给过模型的引用清单（方案 A——不动盘、不建链接、
+            不新增副本），从转录派生；点文件走现有预览，目录走 reveal，不在任何根内
+            的（超限未复制的原位置引用等）只展示不可点 */}
+        {root.kind === "session" && (query.trim() === "" || filteredAttachments.length > 0) && (
+          <AttachmentSection
+            attachments={filteredAttachments}
+            facts={attachFacts}
+            roots={tree.roots}
+            onSelectPreview={selectFile}
+            onReveal={tree.reveal}
+            onReference={(ref) => session.attachFileRef(ref)}
+          />
+        )}
       </div>
     );
   };
@@ -263,7 +317,11 @@ export function FilesPanel(props: {
               在途时换成面板里通用的 loader-circle——转一个文件夹不像在加载 */}
           <PanelIconButton
             title={tree.refreshing ? t.files.refreshing : t.files.refresh}
-            onClick={tree.refresh}
+            onClick={() => {
+              tree.refresh();
+              // 附件的存在性也一并重问——树刷了、附件标着旧状态会更误导
+              setAttachStatRound((round) => round + 1);
+            }}
             disabled={tree.refreshing}
           >
             <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={16} spin={tree.refreshing} />
@@ -677,6 +735,217 @@ function TreeRow(props: {
           width: 20,
           height: 20,
           // display 由 .file-hover-act 的 CSS 管（hover 才出现）
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 0,
+          border: 0,
+          borderRadius: "var(--radius-sm)",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name="paperclip" size={12} />
+      </button>
+    </div>
+  );
+}
+
+/** 附件列表吃同一条过滤词（按末段名字，与树同大小写口径） */
+function filterAttachments(
+  attachments: readonly { path: string; kind: "file" | "dir" }[],
+  query: string,
+): { path: string; kind: "file" | "dir" }[] {
+  const q = query.trim().toLowerCase();
+  if (q === "") return [...attachments];
+  return attachments.filter((item) => pathTail(item.path).toLowerCase().includes(q));
+}
+
+/**
+ * Session 分组下的「附件」小节：标题行 + 已发送引用清单（或空态一句）。
+ * 存在性由 facts 提供（fs:stat-kind 现问）；还没回来时按未知显示（不标不在）。
+ */
+function AttachmentSection(props: {
+  attachments: readonly { path: string; kind: "file" | "dir" }[];
+  facts: ReadonlyMap<string, FsEntryFact>;
+  roots: readonly FileRoot[];
+  onSelectPreview: (root: FileRoot, path: string) => void;
+  onReveal: (root: string, dir: string) => void;
+  onReference: (ref: { path: string; name: string; kind: "file" | "dir" }) => void;
+}) {
+  const t = useT();
+  return (
+    <section aria-label={t.files.attachments} style={{ marginTop: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          minHeight: 24,
+          padding: "0 var(--space-3)",
+          fontFamily: "var(--font-family-mono)",
+          fontSize: "var(--font-size-micro)",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          color: "var(--color-text-secondary)",
+        }}
+      >
+        <Icon name="paperclip" size={11} style={{ flex: "0 0 auto" }} />
+        <span>{t.files.attachments}</span>
+      </div>
+      {props.attachments.length === 0 ? (
+        <DimRow>{t.files.attachmentsEmpty}</DimRow>
+      ) : (
+        props.attachments.map((item) => (
+          <AttachmentRow
+            key={item.path}
+            path={item.path}
+            declaredKind={item.kind}
+            fact={props.facts.get(item.path)}
+            roots={props.roots}
+            onSelectPreview={props.onSelectPreview}
+            onReveal={props.onReveal}
+            onReference={props.onReference}
+          />
+        ))
+      )}
+    </section>
+  );
+}
+
+/**
+ * 一条已发送附件：图标吃 fileIcon（类型以盘上事实优先，转录里的 kind 兑底），
+ * 名字是路径末段，title 挂模型实际拿到的那条完整路径。不在盘上的如实标出、
+ * 不报错也不可点；文件点击走现有预览、目录点击 reveal——都要求落在某个在盘的
+ * 根之内（副本在会话工作台、workspace 引用在工作区根；超限未复制的原位置引用
+ * 可能在根外，只展示）。行尾 hover 的「添加文件引用」把这条再引回输入框。
+ */
+function AttachmentRow(props: {
+  path: string;
+  declaredKind: "file" | "dir";
+  fact: FsEntryFact | undefined;
+  roots: readonly FileRoot[];
+  onSelectPreview: (root: FileRoot, path: string) => void;
+  onReveal: (root: string, dir: string) => void;
+  onReference: (ref: { path: string; name: string; kind: "file" | "dir" }) => void;
+}) {
+  const t = useT();
+  const name = pathTail(props.path) || props.path;
+  // 类型以盘上事实优先；stat 还没回来（fact 未定义）时用转录里记的 kind 兑底
+  const statKind = props.fact?.kind;
+  const kind: FileEntryKind =
+    statKind === "dir" || (statKind === undefined && props.declaredKind === "dir")
+      ? "directory"
+      : "file";
+  const missing = props.fact !== undefined && props.fact.kind === null;
+  const owner = props.roots.find((root) => root.exists && pathWithin(root.path, props.path)) ?? null;
+  const clickable = !missing && owner !== null;
+  return (
+    <div className="file-hover-host" style={{ position: "relative" }}>
+      <button
+        type="button"
+        className="file-row"
+        title={props.path}
+        disabled={!clickable}
+        onClick={
+          clickable && owner !== null && kind !== "directory"
+            ? () => props.onSelectPreview(owner, props.path)
+            : clickable && owner !== null
+              ? () => props.onReveal(owner.path, props.path)
+              : undefined
+        }
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          height: 30,
+          paddingLeft: `calc(var(--space-3) + 1 * 16px)`,
+          paddingRight: "calc(var(--space-3) + 44px)",
+          border: 0,
+          font: "inherit",
+          fontSize: "var(--font-size-control)",
+          textAlign: "left",
+          cursor: clickable ? "pointer" : "default",
+          color: "var(--color-text-primary)",
+        }}
+      >
+        <span style={{ width: 12, flex: "0 0 auto" }} />
+        <Icon
+          name={fileIcon(name, kind)}
+          size={14}
+          style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
+        />
+        <span
+          style={{
+            flex: "1 1 auto",
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {name}
+        </span>
+        {kind === "directory" && (
+          <span style={{ fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
+            /
+          </span>
+        )}
+        {missing && (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              flex: "0 0 auto",
+              fontFamily: "var(--font-family-mono)",
+              fontSize: "var(--font-size-micro)",
+              color: "var(--color-warning)",
+            }}
+          >
+            <Icon name="triangle-alert" size={10} strokeWidth={2} />
+            {t.files.attachmentMissing}
+          </span>
+        )}
+        {!missing && props.fact?.size != null && props.fact.kind === "file" && (
+          <span className="file-row-meta">{formatSize(props.fact.size)}</span>
+        )}
+      </button>
+      {clickable && owner !== null && (
+        <button
+          type="button"
+          className="file-hover-act file-row-act"
+          title={t.files.revealInFileManager}
+          aria-label={t.files.revealInFileManager}
+          onClick={() => props.onReveal(owner.path, props.path)}
+          style={{
+            position: "absolute",
+            right: 2,
+            top: 5,
+            width: 20,
+            height: 20,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            border: 0,
+            borderRadius: "var(--radius-sm)",
+            cursor: "pointer",
+          }}
+        >
+          <Icon name="folder-open" size={12} />
+        </button>
+      )}
+      <button
+        type="button"
+        className="file-hover-act file-row-act"
+        title={t.files.reference}
+        aria-label={t.files.reference}
+        onClick={() => props.onReference({ path: props.path, name, kind: kind === "directory" ? "dir" : "file" })}
+        style={{
+          position: "absolute",
+          right: clickable ? 24 : 2,
+          top: 5,
+          width: 20,
+          height: 20,
           alignItems: "center",
           justifyContent: "center",
           padding: 0,

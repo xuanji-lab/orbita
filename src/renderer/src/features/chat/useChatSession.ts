@@ -1468,11 +1468,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         writeFiles(key, (current) => [...current, ...entries]);
         void api.files
           .statKind(entries.map((entry) => entry.path))
-          .then((kinds) => {
+          .then((facts) => {
+            // kind 为 null（stat 不到）时按 file 收下：分拣不给附件添堵
             writeFiles(key, (current) =>
               withStatKinds(
                 current,
-                entries.map((entry, index) => ({ id: entry.id, kind: kinds[index] ?? "file" })),
+                entries.map((entry, index) => ({ id: entry.id, kind: facts[index]?.kind ?? "file" })),
               ),
             );
           })

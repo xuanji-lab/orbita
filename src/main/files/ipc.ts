@@ -10,7 +10,7 @@ import {
   type FileListRequest,
   type FilePreview,
   type FileRootsRequest,
-  type FsEntryKind,
+  type FsEntryFact,
 } from "../../shared/files.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
@@ -90,19 +90,23 @@ export function registerFilesIpc(
   });
 
   /**
-   * 输入框附件分拣的类型问询（不上面板的白名单）：拖入 / 粘贴的条目本来就在三根
-   * 之外（发送时复制进会话或原位置引用），问它是什么类型不构成「通用文件浏览器」
-   * ——不读内容、不列目录，只回答 isDirectory。用 stat（跟 symlink）：软链接指向
-   * 目录就报 dir，与发送侧 realpath 后 lstat 的判定一致，两边不各说各话。
-   * stat 不到按 file 报——分拣不给附件添堵，发送时的纠正仍兜底。
+   * 输入框附件分拣与文件面板已发送附件列表共用的类型 / 存在性问询（不上面板的
+   * 白名单）：拖入 / 粘贴的条目本来就在三根之外（发送时复制进会话或原位置引用），
+   * 问它是什么类型不构成「通用文件浏览器」——不读内容、不列目录。用 stat
+   * （跟 symlink）：软链接指向目录就报 dir，与发送侧 realpath 后 lstat 的判定
+   * 一致，两边不各说各话。stat 不到回 { kind: null, size: null }——分拣自己
+   * 兑底成 file（不拦附件），面板据此标「不在盘上」。
    */
-  ipcMain.handle(ipcChannels.fsStatKind, (_event, paths: string[]): Promise<FsEntryKind[]> =>
+  ipcMain.handle(ipcChannels.fsStatKind, (_event, paths: string[]): Promise<FsEntryFact[]> =>
     Promise.all(
-      paths.map(async (path): Promise<FsEntryKind> => {
+      paths.map(async (path): Promise<FsEntryFact> => {
         try {
-          return (await stat(path)).isDirectory() ? "dir" : "file";
+          const stats = await stat(path);
+          return stats.isDirectory()
+            ? { kind: "dir", size: null }
+            : { kind: "file", size: stats.size };
         } catch {
-          return "file";
+          return { kind: null, size: null };
         }
       }),
     ),
