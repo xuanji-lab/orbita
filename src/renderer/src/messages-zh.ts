@@ -929,6 +929,10 @@ export const zh: Messages = {
     reportedProgress: "报告进展",
     seconds: (s) => `${s} 秒`,
     minutesSeconds: (m, s) => `${m} 分 ${s} 秒`,
+    // 运行中 shell 的时钟：上限与预计（elapsed 的 m:ss 由 formatRunClock 直出，不走字典）
+    limitLabel: (clock) => `上限 ${clock}`,
+    expectedAbout: (duration) => `预计约 ${duration}`,
+    slowerThanExpected: "比预计慢",
     tokensApprox: (before) => `约 ${before} token`,
     tokensArrow: (before, after) => `${before} → ${after} token`,
     chars: (n) => `${n} 字`,
