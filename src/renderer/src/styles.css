@@ -23,6 +23,12 @@
 :root {
   --option-hover-bg: var(--color-bg-hover);
   --option-active-bg: var(--color-bg-active);
+  /*
+   * 两行的行（模型卡片：模型名 + 厂商副行）的高度。
+   * 卡片是**定高**的（高 = 外壳 + N 行），所以这个值也是「一行多少钱」的那个单价——
+   * 写在一处，Menu 那边量一行就够，不把 48 再拄一遍（2026-10-01）。
+   */
+  --menu-row-height: calc(var(--control-height-md) + var(--space-4));
 }
 
 /*
@@ -373,6 +379,51 @@
   background: transparent;
   color: var(--color-text-tertiary);
   font-weight: var(--weight-regular);
+}
+
+/*
+ * 行右端带独立控件（今天的唯一消费者是模型卡片的星标）的行。
+ *
+ * 控件是行按钮的**兄弟**（button 不能嵌 button），所以底不能只画在行按钮上：
+ * 鼠标落在星上时也得亮整行——靶子是「这一行」，不是行里的某一格。
+ * 选中盖过 hover 的取舍同 .option-row：持久状态压临时状态，规则放最后。
+ */
+.menu-row-tail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: var(--transition-hover);
+}
+.menu-row-tail:hover,
+.menu-row-tail[data-cursor="true"] {
+  background: var(--option-hover-bg);
+}
+.menu-row-tail[data-current="true"],
+.menu-row-tail[data-current="true"]:hover {
+  background: var(--option-active-bg);
+}
+/* 底在这一层，里面的行按钮不再自己画（否则只有左半边亮） */
+.menu-row-tail > .option-row,
+.menu-row-tail > .option-row:hover,
+.menu-row-tail > .option-row[data-cursor="true"],
+.menu-row-tail > .option-row[aria-selected="true"] {
+  background: transparent;
+}
+
+/*
+ * 行右端的星标：颜色与浮出规则**全会话行那一颗**（Sidebar 的 meta.starred）：
+ * 已星标 = accent 常显（用户亲手点亮的标记，靠颜色一眼找到是它的全部目的），
+ * 未星标 = tertiary 描边，只在悬停/键盘聚焦时浮出。
+ *
+ * 这里不用裸 `.reveal` 配后代选择器，而是挂在 `.menu-row-tail` 上：
+ * 同理 styles.css 里那个公头/会话行互点亮的真回归（一个块里出现多颗 .reveal 时，
+ * 粗选择器会连带点亮它们）。
+ */
+.menu-row-tail:hover .reveal,
+.menu-row-tail:has(:focus-visible) .reveal {
+  opacity: 1;
 }
 
 *,
@@ -2306,6 +2357,86 @@ button.mcp-tool-chip {
   color: var(--color-text-tertiary);
   border-color: var(--color-border-subtle);
   cursor: default;
+}
+
+/*
+ * ===== MCP · 工作区实例明细（分片/分层之后） =====
+ * 设计稿真源 design/mcp-panel-workspace.html。五个类，其余复用现有配方。
+ */
+
+/* 限定工作区行 / 定义来源行（同一个视觉：caption + tertiary + folder 图标） */
+.mcp-scope {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* 实例状态行：独占一行，不挤头行（320px 抽屉放不下「图标+名字+长状态+动作+展开钮」） */
+.mcp-ws-status {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.mcp-ws-status.bad {
+  color: var(--color-danger);
+}
+
+/* 行尾展开钮：quiet-control 同款中性 hover；aria-expanded 旋转 160ms */
+.mcp-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: transform 160ms var(--ease-out-quint), var(--transition-hover);
+}
+.mcp-expand:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.mcp-expand[aria-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+/* 实例明细：卡内发丝顶线分隔的子列表 */
+.mcp-instances {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-2);
+}
+.mcp-instance {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-caption);
+}
+.mcp-instance .ws {
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.mcp-instance .st {
+  color: var(--color-text-tertiary);
+}
+.mcp-instance .st.bad {
+  color: var(--color-danger);
+}
+.mcp-instance .bind {
+  grid-column: 1 / -1;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+  padding-left: 20px;
 }
 
 /*

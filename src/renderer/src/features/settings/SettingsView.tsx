@@ -15,7 +15,8 @@ import type {
   BrowserImportSummary,
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
-import type { DoubaoVoiceConfig, VoiceFailure } from "@shared/voice";
+import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
+import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
@@ -24,7 +25,7 @@ import { InfoTip } from "./InfoTip";
 import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
-import { modelMenuItems, useBuiltinCatalog, usableProviders } from "./model-menu";
+import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
   type AppSettings,
@@ -33,7 +34,7 @@ import {
 } from "@shared/settings";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, LANGUAGES, themeLanguage, type Language } from "@shared/settings";
+import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
 
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
@@ -61,6 +62,9 @@ export function SettingsView(props: {
   settings: AppSettings;
   /** 全部厂商（含没填 key 的）；命名模型菜单自己过 usableProviders */
   providers: readonly ProviderDto[];
+  /** 星标过的模型：设置面的两个模型卡片也有那颗星（与输入卡、会话行同一套） */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
   onSettingsChange: (patch: SettingsPatch) => void;
   onProvidersChange: () => void;
   /** 导入落地后主界面两张列表（会话/工作区）要重读 */
@@ -153,6 +157,8 @@ export function SettingsView(props: {
           <General
             settings={props.settings}
             providers={props.providers}
+            starredModels={props.starredModels}
+            onToggleStarModel={props.onToggleStarModel}
             onChange={props.onSettingsChange}
             highlightChore={highlightChore}
             onHighlightConsumed={() => setHighlightChore(false)}
@@ -169,24 +175,36 @@ export function SettingsView(props: {
  * 各不相同，但「fallback 项 + 选中态 + null 清除」这段接线相同，抽出来避免三处重复。
  */
 function withInheritedFirst(
-  fallback: { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void },
+  fallback: InheritedFallback,
   items: MenuItem[],
 ): MenuItem[] {
-  return [
-    {
-      id: fallback.id,
-      label: fallback.label,
-      hint: fallback.hint,
-      checked: fallback.inherited,
-      onSelect: fallback.onSelect,
-    },
-    ...items,
-  ];
+  return [inheritedRow(fallback), ...items];
 }
+
+/** 同上，只要那一行——模型卡片把它当 `leading` 传进去（卡片自己拿着过滤后的行） */
+function inheritedRow(fallback: InheritedFallback): MenuItem {
+  return {
+    id: fallback.id,
+    label: fallback.label,
+    /*
+     * 说明放哪儿分两档：模型卡片里放主行下面当副行（两行行）——卡片里其余行
+     * 都是两行行，而且右端 hint 会把那一行拉得很长、说明还被截断（2026-10-02
+     * 用户实测）；思考档菜单都是单行行，说明留在右端 hint。
+     */
+    ...(fallback.hintBelow === true ? { subLabel: fallback.hint } : { hint: fallback.hint }),
+    checked: fallback.inherited,
+    onSelect: fallback.onSelect,
+  };
+}
+
+type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void; hintBelow?: boolean };
 
 function General(props: {
   settings: AppSettings;
   providers: readonly ProviderDto[];
+  /** 星标过的模型：设置面的两个模型卡片也有那颗星（与输入卡、会话行同一套） */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
   onChange: (patch: SettingsPatch) => void;
   /** 迁移页三步清单第②步跳过来时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
   highlightChore?: boolean;
@@ -225,45 +243,33 @@ function General(props: {
   const usable = usableProviders(props.providers);
 
   const choreModel = props.settings.choreModel;
-  const choreModelItems: MenuItem[] = withInheritedFirst(
-    {
-      id: "same-as-session",
-      label: t.settings.sameAsSession,
-      hint: t.settings.sameAsSessionHint,
-      inherited: choreModel === undefined,
-      // null 而不是 undefined：补丁里的 undefined 是「这个键没改」，选不回默认
-      onSelect: () => props.onChange({ choreModel: null }),
-    },
-    modelMenuItems({
-      t,
-      providers: usable,
-      catalog,
-      selected: choreModel ?? null,
-      onSelect: (providerId, modelId) => props.onChange({ choreModel: { providerId, modelId } }),
-    }),
-  );
+  /**
+   * 两个模型 picker 都走 `ModelPickerMenu`——与输入卡的模型芯片**同一个卡片**
+   * （左栏过滤、两行行、定高六行、宽度按全部模型里最长那一行定、星标同一颗）。
+   * 形状分家就是这一刀返工五次的起因，所以三处必须共用同一个外壳（2026-10-01）。
+   */
+  const choreFallback = inheritedRow({
+    id: "same-as-session",
+    label: t.settings.sameAsSession,
+    hint: t.settings.sameAsSessionHint,
+    hintBelow: true,
+    inherited: choreModel === undefined,
+    // null 而不是 undefined：补丁里的 undefined 是「这个键没改」，选不回默认
+    onSelect: () => props.onChange({ choreModel: null }),
+  });
 
   // 子会话的默认模型：同 choreModel 的「继承 + null 清除」语义，退回点是父会话而不是家务活模型。
   // 换模型 = 思考档回到新模型的默认档（shared 的 settings.ts 契约：subSessionThinking
   // 绑定 subSessionModel，脱离模型单独存一档是假选项），所以两个字段一起改
   const subSessionModel = props.settings.subSessionModel;
-  const subSessionModelItems: MenuItem[] = withInheritedFirst(
-    {
-      id: "same-as-parent",
-      label: t.settings.sameAsParent,
-      hint: t.settings.sameAsParentHint,
-      inherited: subSessionModel === undefined,
-      onSelect: () => props.onChange({ subSessionModel: null, subSessionThinking: null }),
-    },
-    modelMenuItems({
-      t,
-      providers: usable,
-      catalog,
-      selected: subSessionModel ?? null,
-      onSelect: (providerId, modelId) =>
-        props.onChange({ subSessionModel: { providerId, modelId }, subSessionThinking: null }),
-    }),
-  );
+  const subSessionFallback = inheritedRow({
+    id: "same-as-parent",
+    label: t.settings.sameAsParent,
+    hint: t.settings.sameAsParentHint,
+    hintBelow: true,
+    inherited: subSessionModel === undefined,
+    onSelect: () => props.onChange({ subSessionModel: null, subSessionThinking: null }),
+  });
 
   // 子会话的默认思考档：**绑定 subSessionModel**——模型是 Same as parent 时没有
   // 型号可算支持集或默认档，这一档没有意义（不渲染思考档芯片）；指定了模型才按这个
@@ -370,9 +376,15 @@ function General(props: {
           rowRef={choreRowRef}
         >
           {/* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */}
-          <Menu
-            items={choreModelItems}
-            searchable
+          <ModelPickerMenu
+            t={t}
+            providers={usable}
+            catalog={catalog}
+            selected={choreModel ?? null}
+            starred={props.starredModels}
+            onToggleStar={props.onToggleStarModel}
+            onSelect={(providerId, modelId) => props.onChange({ choreModel: { providerId, modelId } })}
+            leading={[choreFallback]}
             trigger={({ open, toggle }) => (
               <Chip
                 active={open}
@@ -397,9 +409,16 @@ function General(props: {
               模型芯片、选了具体模型才长出思考档芯片。Same as parent 时思考档跟父走，
               不放一个置灰的芯片占位——没有可选的东西就不画控件 */}
           <span className="set-chips">
-            <Menu
-              items={subSessionModelItems}
-              searchable
+            <ModelPickerMenu
+              t={t}
+              providers={usable}
+              catalog={catalog}
+              selected={subSessionModel ?? null}
+              starred={props.starredModels}
+              onToggleStar={props.onToggleStarModel}
+              onSelect={(providerId, modelId) =>
+                props.onChange({ subSessionModel: { providerId, modelId }, subSessionThinking: null })}
+              leading={[subSessionFallback]}
               trigger={({ open, toggle }) => (
                 <Chip
                   active={open}
@@ -528,13 +547,74 @@ function AttributionPreview(props: { enabled: boolean; language: Language }) {
 
 /**
  * 设置 › 语音。语音是一整套系统（听写 + 实时对话，厂商会有好几家，shared/voice.ts 顶注释）；
- * 这一页现在只有豆包的凭证——输入框的麦克风听写用它。
+ * 这里选「听写用哪家」，下面各家凭证一组一组排开——各家要填的东西不一样，不硬凑成一张表单。
  */
 function VoiceSettings() {
   return (
     <div className="set-page">
+      <DictationEngineGroup />
       <DoubaoVoiceGroup />
+      <StepfunVoiceGroup />
     </div>
+  );
+}
+
+/**
+ * 「听写用哪家」：芯片选厂商（同 General 里语言行的形状）。选中的那家没配好时名字下方说一句，
+ * 但不拦着选——用户可能想先选好再去下面填凭证。
+ */
+function DictationEngineGroup() {
+  const t = useT();
+  const [selection, setSelection] = useState<DictationSelection | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.voice
+      .dictationSelection()
+      .then((loaded) => {
+        if (!cancelled) setSelection(loaded);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const select = (provider: DictationProvider) => {
+    if (busy || selection?.provider === provider) return;
+    setBusy(true);
+    void api.voice
+      .setDictationProvider(provider)
+      .then((next) => setSelection(next))
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <SettingGroup label={t.voice.dictationGroup}>
+      <SettingRow
+        name={t.voice.dictationEngine}
+        info={t.voice.dictationEngineInfo}
+        note={
+          selection !== null && !selection.configured ? (
+            <span className="set-row-hint">{t.voice.engineNotReady}</span>
+          ) : undefined
+        }
+      >
+        {selection === null ? (
+          <span className="set-row-hint">…</span>
+        ) : (
+          <span className="set-chips" role="group" aria-label={t.voice.dictationEngine}>
+            {DICTATION_PROVIDERS.map((provider) => (
+              <Chip key={provider} active={selection.provider === provider} disabled={busy} onClick={() => select(provider)}>
+                {t.voice.providers[provider]}
+              </Chip>
+            ))}
+          </span>
+        )}
+      </SettingRow>
+    </SettingGroup>
   );
 }
 
@@ -612,11 +692,11 @@ function DoubaoVoiceGroup() {
       </span>
     ) : status.kind === "tested" || status.kind === "saved" ? (
       <span role="status" className="set-row-note">
-        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.testOk : t.voice.saved}
+        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.testOk("doubao") : t.voice.saved}
       </span>
     ) : status.kind === "failed" ? (
       <span role="alert" className="set-row-error">
-        {t.voice.failures[status.failure.reason]}
+        {t.voice.failures[status.failure.reason]("doubao")}
         {status.failure.detail !== undefined && <code className="voice-failure-detail"> {status.failure.detail}</code>}
       </span>
     ) : status.kind === "save-failed" ? (
@@ -656,6 +736,108 @@ function DoubaoVoiceGroup() {
           spellCheck={false}
           value={resourceId}
           onChange={(event) => edit(setResourceId)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.connection} note={note}>
+        <span className="set-inline">
+          <PanelButton onClick={test} disabled={busy || config === null}>
+            {t.voice.test}
+          </PanelButton>
+          <PanelButton onClick={save} disabled={busy || !dirty}>
+            {t.voice.save}
+          </PanelButton>
+        </span>
+      </SettingRow>
+    </SettingGroup>
+  );
+}
+
+/**
+ * 阶跃凭证就一样：API Key。规矩同豆包组——key 只进不出，输入框永远空、占位写已存掩码，
+ * 留空保存 = 保留；「测试连接」用草稿试、不落盘，key 没填拿已存的试。
+ */
+function StepfunVoiceGroup() {
+  const t = useT();
+  const [config, setConfig] = useState<StepfunVoiceConfig | null>(null);
+  const [key, setKey] = useState("");
+  const [status, setStatus] = useState<VoiceStatus>({ kind: "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.voice
+      .stepfunGet()
+      .then((loaded) => {
+        if (!cancelled) setConfig(loaded);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const draft = key.trim() === "" ? {} : { apiKey: key };
+  const dirty = config !== null && key.trim() !== "";
+  const busy = status.kind === "busy";
+  // 改了 key，上一次的结果就不再说明现在这组值了
+  const edit = (value: string) => {
+    setKey(value);
+    if (status.kind !== "busy") setStatus({ kind: "idle" });
+  };
+
+  const test = () => {
+    setStatus({ kind: "busy", what: "test" });
+    void api.voice
+      .stepfunTest(draft)
+      .then((result) => setStatus(result.ok ? { kind: "tested" } : { kind: "failed", failure: result }))
+      .catch(() => setStatus({ kind: "failed", failure: { reason: "network" } }));
+  };
+  const save = () => {
+    setStatus({ kind: "busy", what: "save" });
+    void api.voice
+      .stepfunSave(draft)
+      .then((saved) => {
+        setConfig(saved);
+        setKey("");
+        setStatus({ kind: "saved" });
+      })
+      .catch(() => setStatus({ kind: "save-failed" }));
+  };
+
+  const note =
+    status.kind === "busy" ? (
+      <span className="set-row-hint">
+        <Icon name="loader-circle" size={12} spin /> {status.what === "test" ? t.voice.testing : t.voice.saving}
+      </span>
+    ) : status.kind === "tested" || status.kind === "saved" ? (
+      <span role="status" className="set-row-note">
+        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.testOk("stepfun") : t.voice.saved}
+      </span>
+    ) : status.kind === "failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.failures[status.failure.reason]("stepfun")}
+        {status.failure.detail !== undefined && <code className="voice-failure-detail"> {status.failure.detail}</code>}
+      </span>
+    ) : status.kind === "save-failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.saveFailed}
+      </span>
+    ) : undefined;
+
+  return (
+    <SettingGroup label={t.voice.stepfunGroup}>
+      <SettingRow name={t.voice.stepfunApiKey} info={t.voice.stepfunApiKeyInfo}>
+        <input
+          className="text-field voice-field"
+          type="password"
+          aria-label={t.voice.stepfunApiKey}
+          autoComplete="off"
+          placeholder={
+            config !== null && config.apiKeyMasked !== null
+              ? t.voice.tokenSaved(config.apiKeyMasked)
+              : t.voice.keyPaste
+          }
+          value={key}
+          onChange={(event) => edit(event.target.value)}
         />
       </SettingRow>
       <SettingRow name={t.voice.connection} note={note}>

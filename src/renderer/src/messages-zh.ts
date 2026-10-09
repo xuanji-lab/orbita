@@ -1,5 +1,6 @@
 import type { Messages } from "./messages-en.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
+import type { DictationProvider } from "../../shared/voice.ts";
 
 const THINKING_ZH: Record<ThinkingLevel, string> = {
   off: "关",
@@ -9,6 +10,12 @@ const THINKING_ZH: Record<ThinkingLevel, string> = {
   high: "高",
   xhigh: "超高",
   max: "最高",
+};
+
+/** 听写厂商的中文自称（voice 段的 failures / connecting / testOk 插值用） */
+const VENDOR_NAMES_ZH: Record<DictationProvider, string> = {
+  doubao: "豆包",
+  stepfun: "阶跃星辰",
 };
 
 const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录" };
@@ -117,21 +124,32 @@ export const zh: Messages = {
   },
 
   voice: {
+    providers: VENDOR_NAMES_ZH,
     failures: {
-      "not-configured": "先在 设置 › 语音 里填好豆包的 APP ID、Access Token 与 Resource ID",
-      unauthorized: "豆包拒绝了这组凭证 · 检查 APP ID、Access Token 与 Resource ID，并确认服务已开通",
-      rejected: "豆包拒绝了连接",
-      network: "连不上豆包 · 检查网络或代理",
-      timeout: "豆包 10 秒内没有响应",
-      server: "豆包报错",
+      "not-configured": (provider) =>
+        provider === "doubao"
+          ? "先在 设置 › 语音 里填好豆包的 APP ID、Access Token 与 Resource ID"
+          : "先在 设置 › 语音 里填好阶跃星辰的 API Key",
+      unauthorized: (provider) =>
+        provider === "doubao"
+          ? "豆包拒绝了这组凭证 · 检查 APP ID、Access Token 与 Resource ID，并确认服务已开通"
+          : "阶跃星辰拒绝了这组凭证 · 检查 API Key，并确认服务已开通",
+      rejected: (provider) => `${VENDOR_NAMES_ZH[provider]}拒绝了连接`,
+      network: (provider) => `连不上${VENDOR_NAMES_ZH[provider]} · 检查网络或代理`,
+      timeout: (provider) => `${VENDOR_NAMES_ZH[provider]} 10 秒内没有响应`,
+      server: (provider) => `${VENDOR_NAMES_ZH[provider]}报错`,
     },
     micDenied: "麦克风权限没开 · 去 系统设置 › 隐私与安全性 › 麦克风 里给 orbita 打开",
     micUnavailable: "找不到可用的麦克风",
     dictate: "语音输入",
     dictateFinish: "结束听写",
-    connecting: "正在连接豆包…",
+    connecting: (provider) => `正在连接${VENDOR_NAMES_ZH[provider]}…`,
     listening: "正在听写 · 回车或再点麦克风结束，Esc 取消",
     finishing: "正在收尾…",
+    dictationGroup: "听写",
+    dictationEngine: "识别引擎",
+    dictationEngineInfo: "输入框的麦克风用哪家识别 · 各家凭证在下面填",
+    engineNotReady: "这家还没配好——在下面填好它的凭证",
     doubaoGroup: "豆包语音识别",
     appId: "APP ID",
     appIdInfo: "在火山引擎豆包语音控制台里创建的应用 ID",
@@ -142,10 +160,14 @@ export const zh: Messages = {
     resourceId: "Resource ID",
     resourceIdInfo:
       "决定用哪个模型、怎么计费 · 流式语音识别 2.0 按时长计费是 volc.seedasr.sauc.duration（默认）；1.0 的应用填 volc.bigasr.sauc.duration",
+    stepfunGroup: "阶跃星辰语音识别",
+    stepfunApiKey: "API Key",
+    stepfunApiKeyInfo: "在阶跃星辰开放平台创建的密钥 · 加密存进系统钥匙串，存下后不再显示",
+    keyPaste: "粘贴 API Key",
     connection: "连接",
     test: "测试连接",
     testing: "测试中…",
-    testOk: "已连上豆包",
+    testOk: (provider) => `已连上${VENDOR_NAMES_ZH[provider]}`,
     save: "保存",
     saving: "保存中…",
     saved: "已保存",
@@ -184,8 +206,14 @@ export const zh: Messages = {
   },
 
   menu: {
-    searchModels: "搜索模型…",
+    // 搜索是**跨全部厂商**的（搜索时左栏复位到「全部」），而且它连厂商名也搜——
+    // 占位符不说的话，用户不知道搜「智谱」能命中整家
+    searchModels: "搜索模型或服务商…",
     noModels: "没有匹配的模型。",
+    all: "全部",
+    // 左栏选着某家时搜不到：这句话必须把「你在一家里面搜」说出来，
+    // 否则用户会以为搜索坏了（其实是过滤在起作用）
+    noMatchInProvider: (query: string) => `这家服务商里没有匹配「${query}」的模型。`,
   },
 
   rail: {
@@ -431,6 +459,13 @@ export const zh: Messages = {
   modelMenu: {
     contextWindow: "上下文窗口",
     acceptsImage: "可输入图片——多模态",
+    starred: "星标",
+    starredEmpty: "还没有星标的模型。在任意模型行右侧点星加入。",
+    // 行右端那颗星的三个说法——与会话行的星标同形（加 / 取消 / 已加）
+    star: "加星标",
+    unstar: "取消星标",
+    starredTip: "已加星标 · 点击取消",
+    configure: "配置模型",
   },
 
   providers: {
@@ -1005,8 +1040,7 @@ export const zh: Messages = {
     stopLabel: "终止",
     stopTip:
       "终止这个子会话——中止它正在跑的这一轮并关闭通道。只有你以母会话身份发言能重新打开。",
-    stopHint: "中止当前这一轮并关闭通道",
-    stopHintReopen: "只有你能重新打开",
+    stopHint: "中止当前这一轮并关闭通道，只有你能重新打开",
     stopConfirm: "终止",
     stoppedHint: "已终止——在通道里以母会话身份发言可重新打开。",
   },
@@ -1062,9 +1096,15 @@ export const zh: Messages = {
     enable: "启用这个服务",
     disable: "停用这个服务",
     removeTip: "移除这个服务",
+    scopedTo: (names) => `限定工作区：${names}`,
+    sourceWorkspace: (names) => `来自工作区配置：${names}`,
+    sourceOverride: (names) => `全局定义，${names} 的工作区配置覆盖`,
+    workspaceFileOnly: "这台来自工作区的 .mcp.json——到那个文件里改",
+    workspaceHint:
+      "在服务上写 “workspaces” 可以把它限定在几个工作区里；命令、参数、环境变量、工作目录、地址与请求头里的 ${workspaceFolder} 会换成那个工作区的目录——一份定义就变成每个工作区一份、互不干扰的实例。也可以在某个工作区根目录放一份 .mcp.json：那份配置只对那个工作区生效，跟文件夹走。",
     removeConfirm: (name) => `移除 ${name}？`,
     remove: "移除",
-    reloadNote: "重新加载会读取 mcp.json 并重连。正在跑的任务保留原工具，新任务拿到新的一套。",
+    reloadNote: "重新加载会读取 mcp.json 并拆掉现有连接。正在跑的任务保留原工具，新任务拿到新的一套。",
     nameTaken: "已经有同名的服务了。",
     nameShape: "只能用字母、数字、连字符或下划线。",
     invalidJson: "这不是有效的 JSON。",
@@ -1097,6 +1137,13 @@ export const zh: Messages = {
     tools: (n) => `${n} 个工具`,
     disabled: "已停用",
     notConnected: "还没连上",
+    connecting: "连接中",
+    connectFailed: "连接失败",
+    expandInstances: "展开各工作区实例",
+    collapseInstances: "收起",
+    instancesReady: (ready, total) => `${ready}/${total} 个工作区就绪`,
+    instancesPartial: (ready, total, names) => `${ready}/${total} 就绪 · ${names} 连接失败`,
+    instanceReady: (count) => `就绪 · ${count} 个工具`,
     more: (n) => `还有 ${n} 个`,
     emptyTitle: "还没有 MCP 服务",
     emptyDesc: "没有服务时，智能体只有内建工具。添加一个，或直接编辑 mcp.json。",

@@ -70,6 +70,9 @@ const ALLOWED_LATIN = new Set([
   "mcp.json",
   "SKILL.md",
   "AGENTS.md",
+  // MCP 配置的字段名与变量名（用户要照抄进 mcp.json 的字面量）
+  "workspaces",
+  "workspaceFolder",
   // 产品名（迁移来源的显示名，与 Proma / Kimi / opencode 同类）
   "Codex",
   // 语音厂商控制台里的字段名与资源 ID（火山引擎豆包语音，用户原样照填）
@@ -79,6 +82,8 @@ const ALLOWED_LATIN = new Set([
   "Resource",
   "volc.seedasr.sauc.duration",
   "volc.bigasr.sauc.duration",
+  // 语音厂商凭证字段名（阶跃星辰 API Key，用户原样照填）
+  "Key",
   // 按键名
   "Ctrl",
   "Alt",
@@ -97,6 +102,15 @@ type Entry = { path: string; text: string };
  */
 const SAMPLE_ARGS: Record<string, unknown[][]> = {
   thinkingLevel: [["xhigh", "claude-opus-4-6"], ["medium", null]],
+  // 语音文案的参数是厂商 id：两家各调一遍，插值出来的名字才被守卫看到
+  "voice.failures.not-configured": [["doubao"], ["stepfun"]],
+  "voice.failures.unauthorized": [["doubao"], ["stepfun"]],
+  "voice.failures.rejected": [["doubao"], ["stepfun"]],
+  "voice.failures.network": [["doubao"], ["stepfun"]],
+  "voice.failures.timeout": [["doubao"], ["stepfun"]],
+  "voice.failures.server": [["doubao"], ["stepfun"]],
+  "voice.connecting": [["doubao"], ["stepfun"]],
+  "voice.testOk": [["doubao"], ["stepfun"]],
 };
 
 /** 把表摊平成 (键路径, 文本)；函数按参数个数塞样例参数 */

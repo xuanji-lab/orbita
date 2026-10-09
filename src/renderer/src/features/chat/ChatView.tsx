@@ -77,7 +77,7 @@ import { Composer } from "../../shell/Composer";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
-import { Menu, type MenuItem } from "../../shell/Menu";
+import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
@@ -93,7 +93,7 @@ import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardFooter, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -124,7 +124,7 @@ import {
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
-import type { ThemePreference } from "@shared/settings";
+import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -421,6 +421,14 @@ function ChatViewBody(props: {
    * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
    */
   homeBare?: boolean;
+  /** 星标（收藏）的模型。**不是会话元数据**——它跟着用户走，存在设置里 */
+  starredModels?: readonly ModelPair[];
+  onToggleStarModel?: (pair: ModelPair) => void;
+  /**
+   * 模型卡片底部「配置模型」的去处（设置面的服务商页）。不传时那行仍然在，
+   * 点了只是把卡片关上——比给一个点了没反应的东西好。
+   */
+  onOpenProviders?: () => void;
   /**
    * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
    * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
@@ -772,7 +780,14 @@ function ChatViewBody(props: {
       }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
-      bottomSlot={<ComposerBar session={session} />}
+      bottomSlot={
+        <ComposerBar
+          session={session}
+          starredModels={props.starredModels ?? []}
+          onToggleStarModel={props.onToggleStarModel ?? (() => {})}
+          onOpenProviders={props.onOpenProviders ?? (() => {})}
+        />
+      }
       dropActive={props.dropActive === true}
       quotes={session.quotes}
       onRemoveQuote={session.removeQuote}
@@ -1730,7 +1745,14 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
  * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
  * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
  */
-function ComposerBar(props: { session: ChatSession }) {
+function ComposerBar(props: {
+  session: ChatSession;
+  /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
+  /** 卡片底部「配置模型」→ 设置面的服务商页 */
+  onOpenProviders: () => void;
+}) {
   const t = useT();
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
@@ -1756,27 +1778,25 @@ function ComposerBar(props: { session: ChatSession }) {
       id: "home",
       label: t.chat.home,
       icon: "folder",
-      hint: session.defaultCwd,
+      // 路径副行（mono 注脚）：主行报名字，副行说它在哪。路径的**尾段才是名字**
+      // （/Users/dama/Desktop/orbita → orbita），所以从头部省略，别把唯一有信息量的那段切掉
+      subLabel: session.defaultCwd,
+      subLabelMono: true,
+      subLabelEllipsis: "head",
       checked: session.workspaceId === null && session.cwd === null,
       onSelect: session.newTask,
     },
     ...session.workspaces.map((item): MenuItem => ({
       id: item.id,
-      // 名字原样（读时已治）；全路径放 hint 消歧（两个同名的工作区），
-      // 与 home 项的 defaultCwd 同构
+      // 名字原样（读时已治）；全路径放副行消歧（两个同名的工作区），与 home 项的 defaultCwd 同构
       label: item.name,
-      hint: item.path,
+      subLabel: item.path,
+      subLabelMono: true,
+      subLabelEllipsis: "head" as const,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
     })),
-    {
-      id: "new-workspace",
-      label: t.sidebar.newWorkspace,
-      icon: "plus",
-      onSelect: () => setNamingWorkspace(true),
-    },
-    { id: "add", label: t.sidebar.addFolder, icon: "folder-plus", onSelect: session.addWorkspace },
   ];
 
   // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
@@ -1789,13 +1809,12 @@ function ComposerBar(props: { session: ChatSession }) {
   }));
 
   // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
-  const modelItems: MenuItem[] = modelMenuItems({
-    t,
-    providers: session.usable,
-    catalog,
-    selected: session.model,
-    onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
-  });
+  // 模型卡片的行（两行：模型名 + 厂商）与左栏（全部 / 各厂商）。
+  // 设置面那份「按厂商分组」的构造还在用，两边的参数口径（ctx 徽标、当前项）同源。
+  /**
+   * 宽度尺：**不过滤**的那一份（与上面同一套构造，只把 scope 换成「全部」）。
+   * 卡片按它定宽，所以左栏怎么筛宽、高、位置都不动。
+   */
 
   // 思考档菜单按模型真实支持集显示（官方档位表：glm-5.3 只有 low/high/max，
   // claude 按型号——fable 系关不掉思考、opus-4-6 没有 xhigh——写死档位只会递增假选项）。来源三级
@@ -1822,8 +1841,47 @@ function ComposerBar(props: { session: ChatSession }) {
 
   return (
     <>
+      {/*
+        底栏芯片的菜单一律 placement="above"：首页里输入卡悬在窗口中间，默认
+        「哪边空往哪开」会往下方弹（还会同一排芯片朝向不一）；聊天页钉底又全朝上。
+        点名朝上，两边同一朝向（2026-10-03 用户定）
+      */}
       <Menu
         items={scopeItems}
+        placement="above"
+        // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
+        // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
+        panelMaxHeight={520}
+        panelMaxWidth={640}
+        // 「去哪」与「往清单里加东西」是两件事：动作收进底栏，发卡线分隔（同模型卡片的「配置模型」）
+        footer={(close) => (
+          <>
+            <button
+              type="button"
+              className="option-row"
+              style={menuFooterRowStyle}
+              onClick={() => {
+                close();
+                setNamingWorkspace(true);
+              }}
+            >
+              <Icon name="plus" size={13} strokeWidth={1.8} />
+              <span>{t.sidebar.newWorkspace}</span>
+            </button>
+            <button
+              type="button"
+              className="option-row"
+              style={menuFooterRowStyle}
+              onClick={() => {
+                close();
+                session.addWorkspace();
+              }}
+            >
+              <Icon name="folder-plus" size={13} strokeWidth={1.8} />
+              <span>{t.sidebar.addFolder}</span>
+            </button>
+          </>
+        )}
         trigger={({ open, toggle }) =>
           namingWorkspace ? (
             // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
@@ -1857,6 +1915,7 @@ function ComposerBar(props: { session: ChatSession }) {
       />
       <Menu
         items={modeItems}
+        placement="above"
         panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
@@ -1873,10 +1932,26 @@ function ComposerBar(props: { session: ChatSession }) {
           </Chip>
         )}
       />
-      {modelItems.length > 0 && (
-        <Menu
-          items={modelItems}
-          searchable
+      {session.usable.length > 0 && (
+        <ModelPickerMenu
+          t={t}
+          providers={session.usable}
+          catalog={catalog}
+          selected={session.model}
+          starred={props.starredModels}
+          onToggleStar={props.onToggleStarModel}
+          onSelect={(providerId, modelId) => session.chooseModel(providerId, modelId)}
+          placement="above"
+          // 底部固定行：卡片会筛掉没配 key 的厂商，这行是唯一能说清「别家不是不存在」的地方
+          footer={(close) =>
+            modelCardFooter({
+              t,
+              onConfigure: () => {
+                close();
+                props.onOpenProviders();
+              },
+            })
+          }
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
@@ -1893,6 +1968,7 @@ function ComposerBar(props: { session: ChatSession }) {
       )}
       <Menu
         items={thinkingItems}
+        placement="above"
         panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
@@ -2015,13 +2091,14 @@ function UsageRing(props: { session: ChatSession }) {
     <span style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end" }}>
       <Menu
         items={items}
+        placement="above"
         align="end"
         hoverOpen
         onOpenChange={(next) => {
           if (!next) setConfirming(false);
         }}
         trigger={({ open, toggle }) => (
-          <Chip active={open} onClick={toggle} aria-label={ring.label}>
+          <Chip active={open} onClick={toggle} ariaLabel={ring.label}>
             <Ring ring={ring} />
           </Chip>
         )}

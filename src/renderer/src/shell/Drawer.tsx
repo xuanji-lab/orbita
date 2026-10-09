@@ -3,6 +3,7 @@ import { Icon } from "./Icon";
 import { ChatView } from "../features/chat/ChatView";
 import type { ChatSession, SessionEngine } from "../features/chat/useChatSession";
 import { rootSessions, type SessionMeta } from "@shared/session";
+import type { ModelPair } from "@shared/settings";
 import {
   NEW_TASK_TAB,
   closeTab,
@@ -33,6 +34,11 @@ export function Drawer(props: {
   /** 主槽正看着的会话：选择器里排除它（它已经在中间了） */
   mainSessionId: string | null;
   providersError: string | null;
+  /** 星标过的模型：抽屉里的输入卡也会开模型卡片，那颗星与主槽同一份状态 */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
+  /** 模型卡片底部「配置模型」→ 设置面的服务商页 */
+  onOpenProviders: () => void;
   docked: DockedTab[];
   onDockedChange: (docked: DockedTab[]) => void;
 }) {
@@ -146,6 +152,9 @@ export function Drawer(props: {
             <ChatView
               session={props.view}
               providersError={props.providersError}
+              starredModels={props.starredModels}
+              onToggleStarModel={props.onToggleStarModel}
+              onOpenProviders={props.onOpenProviders}
               homeBare={activeTab === NEW_TASK_TAB && props.view.sessionId === null}
               scrollToEnd
             />

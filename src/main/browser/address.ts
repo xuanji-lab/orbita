@@ -61,12 +61,14 @@ const BLOCKED_SCHEME = /^(?:file|javascript|data|chrome|chrome-extension|about|b
  * 拿去搜索（search 带回原词，好让结果里说清「搜了什么」）；空输入与被禁的协议回 null。
  */
 export function resolveAddressOrSearch(input: string): { url: string; search: string | null } | null {
+  const text = input.trim().replace(/\s+/g, " ");
+  // 本地路径先判，不能漏给 normalizeAddress：UNC（\\server\share\…）会被域名规则误认，
+  // 拼出 https://server/share/… 这种假网址（Windows 实测）；漏到搜索则整条外泄给搜索引擎。
+  // 地址栏不收本地路径：本地网页只走两条专用通道——agent 在自己的 tab 里打开（local-file.ts
+  // 按会话目录判），文件面板在你的 tab 里打开（fs:open-in-browser 按文件面板白名单判）
+  if (text !== "" && looksLikeLocalPath(text)) return null;
   const url = normalizeAddress(input);
   if (url !== null) return { url, search: null };
-  const text = input.trim().replace(/\s+/g, " ");
-  // 本地路径不拿去搜（搜一串路径毫无意义）。地址栏不收本地路径：本地网页只走两条专用通道——
-  // agent 在自己的 tab 里打开（local-file.ts 按会话目录判），文件面板在你的 tab 里打开
-  // （fs:open-in-browser 按文件面板白名单判）
-  if (text === "" || BLOCKED_SCHEME.test(text) || looksLikeLocalPath(text)) return null;
+  if (text === "" || BLOCKED_SCHEME.test(text)) return null;
   return { url: `${SEARCH_URL}${encodeURIComponent(text)}`, search: text };
 }

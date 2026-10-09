@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { McpStore } from "./store.ts";
+import { McpStore, readMcpConfigFile } from "./store.ts";
 
 let dir = "";
 let store: McpStore;
@@ -75,5 +75,34 @@ describe("McpStore 读-改-写", () => {
   test("顶层没有 mcpServers 对象时报形状错，不瞎建", async () => {
     await writeFile(file(), JSON.stringify([1, 2, 3]), "utf8");
     await assert.rejects(store.add("x", { transport: "stdio", command: "y" }), /wrong shape/);
+  });
+});
+
+/**
+ * readMcpConfigFile：任意 MCP 配置文件的读法（全局 mcp.json 与工作区自带的
+ * .mcp.json 同构）。语义与 McpStore.read 一致——不在 = 空，坏了 = 抛。
+ */
+describe("readMcpConfigFile", () => {
+  test("文件不在返回空（工作区没自带配置是常态）", async () => {
+    assert.deepEqual(await readMcpConfigFile(join(dir, ".mcp.json")), {});
+  });
+
+  test("正常解析，与全局同构（含 workspaces 白名单字段）", async () => {
+    await writeFile(
+      join(dir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { demo: { command: "node", workspaces: ["paper3"] } } }),
+      "utf8",
+    );
+    const parsed = await readMcpConfigFile(join(dir, ".mcp.json"));
+    assert.deepEqual(parsed["demo"], {
+      transport: "stdio",
+      command: "node",
+      workspaces: ["paper3"],
+    });
+  });
+
+  test("坏 JSON 往上抛（调用方决定怎么报，不在这里伪装成空）", async () => {
+    await writeFile(join(dir, ".mcp.json"), "{ 不是 JSON", "utf8");
+    await assert.rejects(readMcpConfigFile(join(dir, ".mcp.json")), /SyntaxError|JSON/);
   });
 });
