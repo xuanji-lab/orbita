@@ -20,6 +20,8 @@ export interface SkillsState {
   workspaces: Workspace[];
   /** MCP server 与它们此刻的连接状态。**和 skills 同一个面**：两者都是「agent 会什么」。 */
   servers: McpServerInfo[];
+  /** 读坏的工作区自带 `.mcp.json` 的警告（一个坏文件不拖死整表，如实贴出来） */
+  serverWarnings: string[];
   serversLoad: LoadState;
   openMcpConfig: () => void;
   reloadMcp: () => Promise<void>;
@@ -50,6 +52,7 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
   const [load, setLoad] = useState<LoadState>(LOADING);
   const [selected, setSelected] = useState<string | null>(null);
   const [servers, setServers] = useState<McpServerInfo[]>([]);
+  const [serverWarnings, setServerWarnings] = useState<string[]>([]);
   const [serversLoad, setServersLoad] = useState<LoadState>(LOADING);
 
   /** **读失败不清空手里那份**：刷新失败时上一份还列着，错误贴在它上面。 */
@@ -66,8 +69,9 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
   const refreshServers = useCallback(() => {
     void api.mcp
       .list()
-      .then((list) => {
-        setServers(list);
+      .then((result) => {
+        setServers(result.servers);
+        setServerWarnings(result.warnings);
         setServersLoad(READY);
       })
       .catch((cause: unknown) => setServersLoad(failed(cause)));
@@ -79,6 +83,16 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
     refresh();
     refreshServers();
   }, [active, refresh, refreshServers]);
+
+  // MCP 的连接状态是 agent 进程的运行时事实，随开会话、重载、闲置回收持续变化——
+  // #163 按工作区实例化后它从「稀有事件」变成「连续变化」，面板开着就得跟着快照走，
+  // 否则永远停在打开那一刻的状态（实测：会话里工具能用，面板却显示「还没连上」）
+  useEffect(() => {
+    if (!active) return undefined;
+    return api.agent.onEvent((event) => {
+      if (event.type === "mcp") refreshServers();
+    });
+  }, [active, refreshServers]);
 
   /**
    * 工作区集合变了就重读 skill 列表：侧栏删一个工作区时，主进程会连带清掉
@@ -202,6 +216,7 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
     load,
     workspaces,
     servers,
+    serverWarnings,
     serversLoad,
     openMcpConfig,
     reloadMcp,

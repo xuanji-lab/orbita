@@ -13,6 +13,7 @@ import type {
   ReadTaskOutcome,
 } from "../../shared/agent-ipc.ts";
 import type { ChannelDelivery } from "../../shared/channel.ts";
+import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
@@ -46,9 +47,13 @@ export class AgentHostCore {
   /**
    * 在等的 mcpReload 回执（1-1 热重载）：runtime 重连完会发一条 `mcp` 快照事件，
    * 用它把 invoke 的 promise 结掉——reload 是显式动作，调用方等着拿结果。
-   * 进程退出要 reject：那量重启后状态未知，不能装作重载成功。
+   * **在飞的只有一份，并发调用共享它**：单槽时代第二次调用会把前一个等待者顶掉，
+   * 被顶的 promise 永远不了结（面板点快了就冻结，2026-10-06 实测）。reset 不读配置
+   * （配置随开轮现送），两次连续 reload 语义相同，共享不丢东西。
+   * 进程退出要 reject：那之后状态未知，不能装作重载成功。
    */
-  private pendingMcpReload: { resolve: () => void; reject: (error: Error) => void } | null = null;
+  private mcpReloadInFlight: Promise<void> | null = null;
+  private settleMcpReload: { resolve: () => void; reject: (error: Error) => void } | null = null;
   /**
    * 在等的 pi 本子编辑回执（会话回退 / 单轮撤销）：runtime 裁完发 `piBookEdited`，
    * 失败走 `failed`。按 sessionId 一条——同一会话的回退 / 撤销不可能并发。
@@ -89,8 +94,9 @@ export class AgentHostCore {
         }
         if (message.type === "mcp") {
           // reload 的回执到了：事件照常往下走（缓存 + 广播），这里只结 promise
-          this.pendingMcpReload?.resolve();
-          this.pendingMcpReload = null;
+          this.settleMcpReload?.resolve();
+          this.settleMcpReload = null;
+          this.mcpReloadInFlight = null;
         }
         if (message.type === "piBookEdited") {
           // 回退 / 撤销的回执：只结 pending 的 promise，不广播——renderer 不消费它
@@ -147,8 +153,9 @@ export class AgentHostCore {
         this.pendingCreates.clear();
         for (const pending of this.pendingPiEdits.values()) pending.reject(new Error(message));
         this.pendingPiEdits.clear();
-        this.pendingMcpReload?.reject(new Error(message));
-        this.pendingMcpReload = null;
+        this.settleMcpReload?.reject(new Error(message));
+        this.settleMcpReload = null;
+        this.mcpReloadInFlight = null;
         for (const pending of this.pendingGreetings.values()) pending.reject(new Error(message));
         this.pendingGreetings.clear();
         reject(new Error(message));
@@ -236,21 +243,24 @@ export class AgentHostCore {
   }
 
   /**
-   * 重读配置后重连（1-1）。等 runtime 的 `mcp` 快照事件回来才返回——
-   * 那一刻新状态已缓存并广播。**不 ensure**：进程没起就没有连接，reload 无对象
-   * （generateTitle 同款理由），配置会在下一次开轮时生效。
+   * 热重载（1-1）：让 runtime 把 MCP 连接全拆，等它的 `mcp` 快照事件回来才返回——
+   * 那一刻新状态已缓存并广播。**不送 servers**：每轮开轮本来就会送该工作区那一份。
+   * **不 ensure**：进程没起就没有连接，reload 无对象（generateTitle 同款理由），
+   * 配置会在下一次开轮时生效。
    */
-  mcpReload(servers: Extract<AgentCommand, { type: "mcpReload" }>["servers"]): Promise<void> {
+  mcpReload(): Promise<void> {
     if (!this.child) return Promise.resolve();
-    return new Promise<void>((resolve, reject) => {
-      this.pendingMcpReload = { resolve, reject };
+    this.mcpReloadInFlight ??= new Promise<void>((resolve, reject) => {
+      this.settleMcpReload = { resolve, reject };
       setTimeout(() => {
-        if (this.pendingMcpReload?.resolve !== resolve) return;
-        this.pendingMcpReload = null;
+        if (this.settleMcpReload?.resolve !== resolve) return;
+        this.settleMcpReload = null;
+        this.mcpReloadInFlight = null;
         reject(new Error("agent runtime did not report MCP status in time"));
       }, 60_000);
-      this.post({ type: "mcpReload", servers });
+      this.post({ type: "mcpReload" });
     });
+    return this.mcpReloadInFlight;
   }
 
   /** 开一轮：无状态 submit。返回见 postTurn */
@@ -343,7 +353,7 @@ export class AgentHostCore {
 
   answerMcpWrite(
     requestId: string,
-    result: { ok: boolean; status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string }; error?: string },
+    result: { ok: boolean; status?: McpStatus; error?: string },
   ): void {
     this.child?.postMessage({
       type: "mcpWriteResult",

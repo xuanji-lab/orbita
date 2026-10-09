@@ -168,6 +168,14 @@ export interface AppSettings {
    * delegate 参数显式给的档仍然最优先。
    */
   subSessionThinking?: ThinkingLevel;
+  /**
+   * 星标的模型（收藏）。**跟着用户走、不分会话**，所以落在设置里而不是会话元数据。
+   *
+   * 与会话的 `starred` 是两件东西：那个只是用户标记，不影响排序、也不筛选任何东西；
+   * 这一个**会当过滤口径用**（模型卡片左栏第一格：只看星标）。
+   * 存对子不存 modelId：光有 modelId 定位不到哪家的密钥（同 choreModel 的理由）。
+   */
+  starredModels?: ModelPair[];
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
   /**
@@ -342,6 +350,7 @@ export function parseSettings(raw: unknown): AppSettings {
     lastUsed?: unknown;
     channelColumnWidth?: unknown;
     browserDownloadDir?: unknown;
+    starredModels?: unknown;
     providerCardSize?: unknown;
   };
   const theme = parseTheme(record.theme);
@@ -359,6 +368,7 @@ export function parseSettings(raw: unknown): AppSettings {
       ? record.subSessionThinking
       : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
+  const starredModels = parseStarredModels(record.starredModels);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -381,6 +391,7 @@ export function parseSettings(raw: unknown): AppSettings {
       ? { channelColumnWidth: Math.round(channelColumnWidth) }
       : {}),
     drawer: parseDrawer(record.drawer),
+    ...(starredModels === undefined ? {} : { starredModels }),
     ...(compaction === undefined ? {} : { compaction }),
     // 非布尔一律当作「没动过」丢掉：缺席与 true 是同一个行为，落一个坏值进来
     // 只会让设置面显示的状态和实际行为对不上
@@ -418,6 +429,29 @@ function parseModelPair(raw: unknown): ModelPair | undefined {
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;
   if (typeof record.modelId !== "string" || record.modelId === "") return undefined;
   return { providerId: record.providerId, modelId: record.modelId };
+}
+
+/**
+ * 星标模型列表：逐项校验 + **按 (providerId, modelId) 去重**。
+ *
+ * 去重不是洁癖：星标是个开关，重复项会让「点亮 / 取消」算错（取消一条还剩一条，
+ * 星星看起来关不掉）。校验不过的项直接丢，坏值不落库（同其它字段的纪律）。
+ * 全部无效或本来就是空数组时返回 undefined——「没有星标」与「这个键不在」
+ * 行为完全一样，不为此在盘上留一个空数组。
+ */
+function parseStarredModels(raw: unknown): ModelPair[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: ModelPair[] = [];
+  for (const entry of raw) {
+    const pair = parseModelPair(entry);
+    if (pair === undefined) continue;
+    const key = `${pair.providerId}:${pair.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(pair);
+  }
+  return out.length === 0 ? undefined : out;
 }
 
 /**

@@ -13,6 +13,11 @@ export function Chip(props: {
   title?: string;
   /** 尾部的下拉指示。**用 lucide 的 chevron-down**——设计系统自己那个 `▾` 是 Unicode 字符，违反它自己的硬规则 */
   chevron?: boolean;
+  /**
+   * 无文字芯片（用量环）的可读名。以前调用方直接传 `aria-label`，但 Chip 不转发
+   * 未声明的 props，它被静默丢掉（2026-10-02 PR138 复审发现）；显式声明并转发。
+   */
+  ariaLabel?: string;
   /** 模型与思考档的标签是斜体次级灰——UI 里唯一的斜体（设计系统 *Type*） */
   italic?: boolean;
   /**
@@ -41,6 +46,7 @@ export function Chip(props: {
       type="button"
       className={`quiet-control chip${props.className === undefined ? "" : ` ${props.className}`}`}
       title={props.title}
+      aria-label={props.ariaLabel}
       aria-pressed={props.onClick === undefined ? undefined : active}
       // 视觉上的「选中」与是否可点无关（不可点的 Chip 也可能是恒亮的当前态，如
       // SkillsPanel 的 List/Map 视图切换）；aria-pressed 只在可点时才挂，是 a11y

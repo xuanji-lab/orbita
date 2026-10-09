@@ -18,6 +18,7 @@ import type { McpServerInfo } from "@shared/mcp";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useDictation, type DictationPhase, type DictationProblem } from "../features/voice/useDictation.ts";
+import type { DictationProvider } from "@shared/voice";
 import { useT } from "../locale.ts";
 
 /**
@@ -608,7 +609,7 @@ export function Composer(props: {
         />
       </div>
       {(dictating || dictation.problem !== null) && (
-        <DictationStatus phase={dictation.phase} problem={dictation.problem} />
+        <DictationStatus phase={dictation.phase} problem={dictation.problem} provider={dictation.provider} />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {/*
@@ -682,9 +683,13 @@ export function Composer(props: {
 
 /**
  * 听写的一行状态：进行中说「在干什么、怎么结束」，出了问题说原因（服务端的原话用等宽跟在后面）。
- * 状态用图标 + 文字，红色只给失败（设计系统：颜色是第二信号）。
+ * 状态用图标 + 文字，红色只给失败（设计系统：颜色是第二信号）。厂商名跟着这次听写用的那家。
  */
-function DictationStatus(props: { phase: DictationPhase; problem: DictationProblem | null }) {
+function DictationStatus(props: {
+  phase: DictationPhase;
+  problem: DictationProblem | null;
+  provider: DictationProvider | null;
+}) {
   const t = useT();
   const problem = props.problem;
   const text =
@@ -693,9 +698,9 @@ function DictationStatus(props: { phase: DictationPhase; problem: DictationProbl
         ? t.voice.micDenied
         : problem.kind === "mic-unavailable"
           ? t.voice.micUnavailable
-          : t.voice.failures[problem.reason]
+          : t.voice.failures[problem.reason](problem.provider)
       : props.phase === "connecting"
-        ? t.voice.connecting
+        ? t.voice.connecting(props.provider ?? "doubao")
         : props.phase === "finishing"
           ? t.voice.finishing
           : t.voice.listening;

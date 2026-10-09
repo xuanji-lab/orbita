@@ -358,6 +358,11 @@ export interface ChatSession {
 /** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */
 interface ViewHandle {
   readonly sessionRef: Readonly<{ current: string | null }>;
+  /** 正在看的会话 id（含盘上打开、未唤醒的：sessionRef 为 null、opened 在）。
+  * model / thinking 事件按它路由——盘上打开的会话切模型后事件可能要几秒才回
+  * （agent 进程冷启动），期间任何一次 openSession 都拿旧 meta 把 chip 播种回去，
+  * 迟到的事件必须能纠回正看着的槽 */
+  readonly viewedIdRef: Readonly<{ current: string | null }>;
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
   alignThinking(event: { level: PiThinkingLevel }): void;
@@ -856,19 +861,22 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 回填），排在下面 model 的 alignModel 前面调用不改变先后
         if (shouldRefreshSessions(event, sessionsRef.current)) refreshSessions();
         // 会话内模型切换成功（C-4，主进程已落 meta）：对齐**正看着那条**的槽——
-        // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽
+        // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽。按 viewedId
+        // （活会话 ?? 盘上打开的）路由：盘上打开的会话切模型后事件可能要几秒才回
+        // （agent 进程冷启动），期间 openSession 已拿旧 meta 把 chip 播种回去了，
+        // 迟到的事件要能纠回正看着的槽（2026-10-08 验收实测的竞态）
         if (event.type === "model") {
           for (const view of views.current) {
-            if (event.sessionId === view.sessionRef.current) {
+            if (event.sessionId === view.viewedIdRef.current) {
               view.alignModel(event);
               break;
             }
           }
         }
-        // 思考档真值（clamp 后事实）到了：对齐正看着那条的槽，芯片自我纠真
+        // 思考档真值（clamp 后事实）到了：同一条路由规则对齐
         if (event.type === "thinking") {
           for (const view of views.current) {
-            if (event.sessionId === view.sessionRef.current) {
+            if (event.sessionId === view.viewedIdRef.current) {
               view.alignThinking(event);
               break;
             }
@@ -1331,9 +1339,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, []);
 
   /** 注册进引擎：model 事件路由、删除/移动会话通知、meta 同步都按这份名册来 */
+  // viewedId 镜像（事件路由用，见 ViewHandle.viewedIdRef）：「正看着哪条」＝活会话优先，
+  // 否则盘上打开的那条。注册只一次，闭包里的 opened 会陈旧，ref 永远新鲜
+  const viewedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    viewedIdRef.current = sessionId ?? opened?.id ?? null;
+  }, [sessionId, opened]);
   useEffect(() => {
     const handle: ViewHandle = {
       sessionRef,
+      viewedIdRef,
       alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
       // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
       alignMode: (mode) => setMode(mode),
@@ -2067,10 +2082,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
-   * 换模型（C-4）。**有活会话就地切**：命令发过去，成功经 `model` 事件回环对齐
-   * model state（不乐观——切换会失败：无 key、未知模型；失败红字说明，chip 不动）；
-   * 没活的（首页 / 盘上打开未唤醒）只改意图，下一条消息 submit 时生效——
-   * 换了却不发言就切走，会被 openSession 的 meta 播种冲掉，等于没换过（已裁决接受）。
+   * 换模型（C-4）。**选中哪条会话就切哪条**：本地即设（UI 即时）+ 命令发过去，
+   * 成功经 `model` 事件回环对齐；失败红字说明。
+   * 盘上打开、还没唤醒的旧会话（sessionRef 置空、opened 在）同样按会话记账并注入
+   * （2026-10-08 CDP 实测复现后修）：此前这里只改本地显示，选择既不落 meta 也不进
+   * 会话意图账，任何一次 openSession——包括再点一次同一行——都拿旧 meta 把 chip
+   * 播种回去，用户看到的就是「切了没同步」。runtime 的 setLedgerModel 本就为
+   * 「没在跑」的会话而设：校验 + `model` 事件回环落 meta，与活会话同一条真源。
+   * 换了不发言就切走会丢选择的旧裁决由此作废——现在选择当场落盘。
    * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
    *
    * 思考档跟着模型走（用户裁决 wafo 2026-09-23）：本槽没有会话（新任务槽）按
@@ -2087,12 +2106,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const supported = modelThinkingLevels(modelId, catalog);
       const switched =
         supported !== null && !supported.includes(thinkingLevel) ? defaultThinkingLevel(modelId, supported) : null;
-      const id = sessionRef.current;
+      // 盘上打开的旧会话按它的 id 记账与注入（理由见函数头）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {
-        // sessionRef 为 null 有两种：首页新任务槽（按「手选 > 默认」起档），与盘上打开
-        // 还没唤醒的旧会话（opened 不为 null——它有自己的档，按上面的规则只在不支持时改）
-        if (opened === null) applyNewTaskThinking(modelId);
-        else if (switched !== null) setThinkingLevelState(switched);
+        applyNewTaskThinking(modelId);
         return;
       }
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
@@ -2100,7 +2117,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       engine.rememberSessionIntent(id, { model: { providerId, modelId } });
       if (currentPhase() === "idle") {
         // 闲着就注入（校验 + 落 meta + model 事件回环）；跑着只改显示——
-        // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账
+        // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账。
+        // currentPhase 只认本槽活会话（sessionRef）：盘上打开的会话恒判 idle，
+        // 若它其实正在后台跑（通道投递开的轮），runtime 侧自然走 setSessionModel
+        // 的在跑路径——两条路都是正解
         void api.agent
           .setModel(id, providerId, modelId)
           .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
@@ -2122,7 +2142,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setMode(next);
       // 启动恢复点跟随（bug A）：下次启动应用从这一档开始
       void api.settings.set({ lastUsed: { mode: next } }).catch(() => undefined);
-      const id = sessionRef.current;
+      // 盘上打开的旧会话同样记账并落 meta（同 chooseModel 的口径：选择当场落盘，
+      // 不留「切走再回就回跳」的键面）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
       engine.rememberSessionIntent(id, { mode: next });
       // 子会话的 renderer 侧联动（intent 覆写 + 列表缓存 + 正看着子会话的槽）；
@@ -2132,7 +2154,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .setMode(id, next)
         .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
     },
-    [engine],
+    [engine, opened],
   );
 
   const changeThinkingLevel = useCallback(
@@ -2144,14 +2166,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // **这是用户手选**：记进本次运行的手选记忆——重启前的新任务槽起档都从它
       // 开始，双查看槽共用（用户上一次手选是全局的，不按槽分）
       engine.pickedThinkingRef.current = next;
-      const id = sessionRef.current;
+      // 盘上打开的旧会话同样记账并落 meta（同 chooseModel 的口径）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {
         setThinkingLevelState(next); // 本槽开新任务：还没有会话可记，槽意图就是意图
         return;
       }
       applySessionThinking(id, next);
     },
-    [engine, applySessionThinking],
+    [engine, opened, applySessionThinking],
   );
 
   /**

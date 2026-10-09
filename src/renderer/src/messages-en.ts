@@ -1,5 +1,6 @@
 import { thinkingLevelLabel, type ThinkingLevel } from "../../shared/thinking.ts";
 import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
+import type { DictationProvider } from "../../shared/voice.ts";
 import type { ReviewSource } from "../../shared/review.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
@@ -35,6 +36,12 @@ const KNOWN_LABELS: Record<string, string> = {
   stepfun: "StepFun",
   "anthropic-compatible": "Anthropic-compatible",
   "openai-compatible": "OpenAI-compatible",
+};
+
+/** 听写厂商的英文自称（voice 段的 failures / connecting / testOk 插值用） */
+const VENDOR_NAMES: Record<DictationProvider, string> = {
+  doubao: "Doubao",
+  stepfun: "StepFun",
 };
 
 /** 批语日期的月份写法（AP 缩写：Sept，不写 Sep；March–July 写全） */
@@ -150,21 +157,34 @@ export const en = {
 
   /** 语音（shared/voice.ts）：输入框的听写 + 设置 › 语音 */
   voice: {
+    /** 听写厂商的显示名（选择芯片与状态文案共用；加厂商时补这里） */
+    providers: VENDOR_NAMES,
+    /** 失败原因翻人话，跟着所选厂商换名字（凭证提示里各家要填的东西不一样） */
     failures: {
-      "not-configured": "Set up Doubao under Settings › Voice first (APP ID, Access Token, Resource ID)",
-      unauthorized: "Doubao rejected these credentials · check APP ID, Access Token and Resource ID, and that the service is enabled",
-      rejected: "Doubao refused the connection",
-      network: "Could not reach Doubao · check the network or proxy",
-      timeout: "Doubao did not answer within 10 seconds",
-      server: "Doubao reported an error",
+      "not-configured": (provider: DictationProvider): string =>
+        provider === "doubao"
+          ? "Set up Doubao under Settings › Voice first (APP ID, Access Token, Resource ID)"
+          : "Set up StepFun under Settings › Voice first (API Key)",
+      unauthorized: (provider: DictationProvider): string =>
+        provider === "doubao"
+          ? "Doubao rejected these credentials · check APP ID, Access Token and Resource ID, and that the service is enabled"
+          : "StepFun rejected these credentials · check the API Key, and that the service is enabled",
+      rejected: (provider: DictationProvider): string => `${VENDOR_NAMES[provider]} refused the connection`,
+      network: (provider: DictationProvider): string => `Could not reach ${VENDOR_NAMES[provider]} · check the network or proxy`,
+      timeout: (provider: DictationProvider): string => `${VENDOR_NAMES[provider]} did not answer within 10 seconds`,
+      server: (provider: DictationProvider): string => `${VENDOR_NAMES[provider]} reported an error`,
     },
     micDenied: "Microphone access is off · turn it on for orbita in System Settings › Privacy & Security › Microphone",
     micUnavailable: "No usable microphone was found",
     dictate: "Dictate",
     dictateFinish: "Finish dictation",
-    connecting: "Connecting to Doubao…",
+    connecting: (provider: DictationProvider): string => `Connecting to ${VENDOR_NAMES[provider]}…`,
     listening: "Listening · Enter or the mic finishes, Esc cancels",
     finishing: "Finishing…",
+    dictationGroup: "Dictation",
+    dictationEngine: "Speech engine",
+    dictationEngineInfo: "Which vendor the composer's microphone dictates with · each vendor's credentials are below",
+    engineNotReady: "This vendor is not set up yet — fill in its credentials below",
     doubaoGroup: "Doubao speech recognition",
     appId: "APP ID",
     appIdInfo: "The ID of the app you created in the Volcengine Doubao Speech console",
@@ -175,10 +195,15 @@ export const en = {
     resourceId: "Resource ID",
     resourceIdInfo:
       "Picks the model and billing · streaming recognition 2.0 by duration is volc.seedasr.sauc.duration (default); 1.0 apps use volc.bigasr.sauc.duration",
+    stepfunGroup: "StepFun speech recognition",
+    stepfunApiKey: "API Key",
+    stepfunApiKeyInfo:
+      "The key you created on the StepFun open platform · stored encrypted in the system keychain and never shown again",
+    keyPaste: "Paste the API Key",
     connection: "Connection",
     test: "Test connection",
     testing: "Testing…",
-    testOk: "Connected to Doubao",
+    testOk: (provider: DictationProvider): string => `Connected to ${VENDOR_NAMES[provider]}`,
     save: "Save",
     saving: "Saving…",
     saved: "Saved",
@@ -218,8 +243,10 @@ export const en = {
   },
 
   menu: {
-    searchModels: "Search models…",
-    noModels: "No models match.",
+    searchModels: "Search models or providers…",
+    noModels: "No matching models.",
+    all: "All",
+    noMatchInProvider: (query: string) => `No model matching “${query}” in this provider.`,
   },
 
   rail: {
@@ -476,6 +503,12 @@ export const en = {
   modelMenu: {
     contextWindow: "Context window",
     acceptsImage: "Accepts image input — multimodal",
+    starred: "Starred",
+    starredEmpty: "No starred models yet. Star one from the right of any model row.",
+    star: "Star this model",
+    unstar: "Unstar this model",
+    starredTip: "Starred · click to unstar",
+    configure: "Configure models",
   },
 
   providers: {
@@ -1099,8 +1132,7 @@ export const en = {
     stopLabel: "Stop",
     stopTip:
       "Stop this sub-session — aborts its current turn and closes the channel. Only you can re-open it, by speaking as the parent in the channel.",
-    stopHint: "Aborts this turn and closes the channel",
-    stopHintReopen: "Only you can re-open it",
+    stopHint: "Aborts this turn and closes the channel — only you can re-open it",
     stopConfirm: "Stop it",
     stoppedHint: "Already stopped — speak as the parent in the channel to re-open.",
   },
@@ -1159,10 +1191,16 @@ export const en = {
     enable: "Enable this server",
     disable: "Disable this server",
     removeTip: "Remove this server",
+    scopedTo: (names: string) => `Only in workspace: ${names}`,
+    sourceWorkspace: (names: string) => `From workspace config: ${names}`,
+    sourceOverride: (names: string) => `Global, overridden by ${names}’s workspace config`,
+    workspaceFileOnly: "This one comes from a workspace’s .mcp.json — edit that file.",
+    workspaceHint:
+      "Set “workspaces” on a server to limit it to some workspaces. ${workspaceFolder} in command, args, env, cwd, url or headers becomes that workspace’s folder — so one server definition turns into one isolated instance per workspace. Or drop a .mcp.json in a workspace’s root: it applies only there and travels with the folder.",
     removeConfirm: (name: string) => `Remove ${name}?`,
     remove: "Remove",
     reloadNote:
-      "Reload reads mcp.json and reconnects. Running tasks keep their current tools; new tasks get the new set.",
+      "Reload reads mcp.json and tears down the current connections. Running tasks keep their current tools; new tasks get the new set.",
     nameTaken: "A server with this name already exists.",
     nameShape: "Use letters, digits, dashes or underscores.",
     invalidJson: "That’s not valid JSON.",
@@ -1195,6 +1233,13 @@ export const en = {
     tools: (n: number) => plural(n, "tool"),
     disabled: "Disabled",
     notConnected: "Not connected yet",
+    connecting: "Connecting",
+    connectFailed: "Connection failed",
+    expandInstances: "Show per-workspace instances",
+    collapseInstances: "Collapse",
+    instancesReady: (ready: number, total: number) => `${ready}/${total} workspaces ready`,
+    instancesPartial: (ready: number, total: number, names: string) => `${ready}/${total} ready · ${names} failed`,
+    instanceReady: (count: number) => `Ready · ${plural(count, "tool")}`,
     more: (n: number) => `+${n} more`,
     emptyTitle: "No MCP server yet",
     emptyDesc: "Without a server the agent only has its built-in tools. Add one, or edit mcp.json directly.",
