@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   assemblePasteDraft,
+  draftFromSentBlocks,
   collapsePasteRange,
   draftFromSentText,
   expandPasteToken,
@@ -33,8 +34,8 @@ describe("parsePasteTokens", () => {
       tokens.map((token) => [token.seq, token.lines]),
       [[1, 42], [2, 7]],
     );
-    assert.equal(text.slice(tokens[0].start, tokens[0].end), zhToken(1, 42));
-    assert.equal(text.slice(tokens[1].start, tokens[1].end), enToken(2, 7));
+    assert.equal(text.slice(tokens[0]!.start, tokens[0]!.end), zhToken(1, 42));
+    assert.equal(text.slice(tokens[1]!.start, tokens[1]!.end), enToken(2, 7));
   });
 
   it("形状不对的不是 token", () => {
@@ -47,8 +48,8 @@ describe("parsePasteTokens", () => {
   it("相邻的普通文字不碍事，嵌套括号认内层", () => {
     const tokens = parsePasteTokens(`a[粘贴 1 · 3 行]b`);
     assert.equal(tokens.length, 1);
-    assert.equal(tokens[0].start, 1);
-    assert.equal(tokens[0].end, 1 + zhToken(1, 3).length);
+    assert.equal(tokens[0]!.start, 1);
+    assert.equal(tokens[0]!.end, 1 + zhToken(1, 3).length);
   });
 });
 
@@ -71,7 +72,7 @@ describe("insertPasteToken / expand / collapse", () => {
     assert.equal(inserted, `前${token}后`);
     const parsed = parsePasteTokens(inserted);
     assert.equal(parsed.length, 1);
-    const expanded = expandPasteToken(inserted, parsed[0], "第一行\n第二行");
+    const expanded = expandPasteToken(inserted, parsed[0]!, "第一行\n第二行");
     assert.equal(expanded.text, "前第一行\n第二行后");
     assert.deepEqual(expanded.range, { start: 1, end: 1 + "第一行\n第二行".length });
     const collapsed = collapsePasteRange(expanded.text, expanded.range, token);
@@ -130,9 +131,9 @@ describe("repositionBlocks", () => {
     const blocks = [block(1, "x"), { ...block(2, "y"), range: { start: 2, end: 4 } }];
     const moved = repositionBlocks("ab cliché", "ab cliché", blocks);
     // 文本没变：原样
-    assert.equal(moved[0].range, null);
+    assert.equal(moved[0]!.range, null);
     const emptied = repositionBlocks("abcd", "ab", [{ ...block(2, "y"), range: { start: 2, end: 4 } }]);
-    assert.equal(emptied[0].range, null);
+    assert.equal(emptied[0]!.range, null);
   });
 
   it("展开被撤销（区间内容变回自己的 token）：折回收起，全文不动", () => {
@@ -142,8 +143,8 @@ describe("repositionBlocks", () => {
     const undone = `前${token}后`;
     const blocks = [{ ...block(3, "两行\n正文", 2), range: { start: 1, end: 1 + "两行\n正文".length } }];
     const moved = repositionBlocks(expandedText, undone, blocks);
-    assert.equal(moved[0].range, null);
-    assert.equal(moved[0].text, "两行\n正文");
+    assert.equal(moved[0]!.range, null);
+    assert.equal(moved[0]!.text, "两行\n正文");
   });
 
   it("区间内容是别人的 token：不动它", () => {
@@ -152,8 +153,8 @@ describe("repositionBlocks", () => {
     const newText = `01${other}6789`;
     const blocks = [{ ...block(3, "zz"), range: { start: 2, end: 6 } }];
     const moved = repositionBlocks(oldText, newText, blocks);
-    assert.deepEqual(moved[0].range, { start: 2, end: 2 + other.length });
-    assert.equal(newText.slice(moved[0].range!.start, moved[0].range!.end), other);
+    assert.deepEqual(moved[0]!.range, { start: 2, end: 2 + other.length });
+    assert.equal(newText.slice(moved[0]!.range!.start, moved[0]!.range!.end), other);
   });
 });
 
@@ -200,25 +201,61 @@ describe("assemblePasteDraft", () => {
 });
 
 describe("draftFromSentText", () => {
-  it("块换回 token，垫的空行剥一层，seq 续上", () => {
+  const seqFrom = (base: number): (() => number) => {
+    let n = base;
+    return () => {
+      n += 1;
+      return n;
+    };
+  };
+
+  it("块换回 token，垫的空行剥一层，seq 从分配器来", () => {
     const sent = "看这段\n\n<pasted-text>\n第一行\n第二行\n</pasted-text>\n\n如何";
-    const { draft, blocks } = draftFromSentText(sent, 4, zhToken);
+    const { draft, blocks } = draftFromSentText(sent, seqFrom(4), zhToken);
     assert.equal(draft, `看这段${zhToken(5, 2)}如何`);
-    assert.deepEqual(blocks, [{ text: "第一行\n第二行", lines: 2 }]);
+    assert.deepEqual(blocks, [{ seq: 5, text: "第一行\n第二行", lines: 2 }]);
   });
 
   it("没有块时原样通过；用户自己的空行不动", () => {
-    assert.equal(draftFromSentText("普通\n\n正文", 0, zhToken).draft, "普通\n\n正文");
+    assert.equal(draftFromSentText("普通\n\n正文", seqFrom(0), zhToken).draft, "普通\n\n正文");
     const sent = "<pasted-text>\n一\n</pasted-text>";
-    const { draft } = draftFromSentText(sent, 0, zhToken);
+    const { draft } = draftFromSentText(sent, seqFrom(0), zhToken);
     assert.equal(draft, zhToken(1, 1));
   });
 
   it("多个块顺序与位置保留", () => {
     const sent = "A\n\n<pasted-text>\n一\n</pasted-text>\n\nB\n\n<pasted-text>\n二\n</pasted-text>\n\nC";
-    const { draft, blocks } = draftFromSentText(sent, 0, enToken);
+    const { draft, blocks } = draftFromSentText(sent, seqFrom(0), enToken);
     assert.equal(draft, `A${enToken(1, 1)}B${enToken(2, 1)}C`);
     assert.deepEqual(blocks.map((item) => item.text), ["一", "二"]);
+    assert.deepEqual(blocks.map((item) => item.seq), [1, 2]);
+  });
+});
+
+describe("draftFromSentBlocks", () => {
+  const seqFrom = (): (() => number) => {
+    let n = 0;
+    return () => {
+      n += 1;
+      return n;
+    };
+  };
+
+  it("按块序走：粘贴块换 token、文件清单跳过、正文原位", () => {
+    const blocks = [
+      "看这段",
+      "<pasted-text>\n第一行\n第二行\n</pasted-text>",
+      "如何",
+      "<attached-files>\nThe user attached these files.\n- /repo/a.ts\n</attached-files>",
+    ];
+    const { draft, pasted } = draftFromSentBlocks(blocks, seqFrom(), zhToken);
+    assert.equal(draft, `看这段\n\n${zhToken(1, 2)}\n\n如何`);
+    assert.deepEqual(pasted, [{ seq: 1, text: "第一行\n第二行", lines: 2 }]);
+  });
+
+  it("多段正文重新接回一空行分隔", () => {
+    const { draft } = draftFromSentBlocks(["第一段", "第二段"], seqFrom(), zhToken);
+    assert.equal(draft, "第一段\n\n第二段");
   });
 });
 
@@ -227,7 +264,7 @@ describe("token 格式与文案表对齐", () => {
     for (const token of [zhToken(1, 42), enToken(3, 7)]) {
       const parsed = parsePasteTokens(token);
       assert.equal(parsed.length, 1);
-      assert.equal(parsed[0].end, token.length);
+      assert.equal(parsed[0]!.end, token.length);
     }
   });
 });

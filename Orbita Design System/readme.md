@@ -265,21 +265,27 @@ as the composer's attachment pills, so an "external object" looks alike everywhe
 row itself stays a process row. Within the family the skill name sets in the text face (a
 human-written instruction) while server/tool sets in mono (a machine service) (2026-09-27).
 **The composer's materials never enter the input card** (2026-10-03, the "stacked" ruling):
-screenshots, file/directory references, pasted-text blocks and quotes stack *above* the card,
-in that order — screenshots as one row of square thumbs; references and pasted text as one row
-of the same pill chips, single-row, horizontally scrolled, fading at the right edge; quotes as a
-floating-glass card of queue-strip rows, at most two visible and the rest folded behind
-"N more quotes…". Only the quote card takes a card; the other layers sit directly on the chat
-surface, each chip carrying its own `--glass-bg` and `--shadow-border`. Pasted text shows its
-full content in a floating popover above the row, never by growing the input area. The slash
-panel stays out of the flow the same way: it opens *downward* from the `/` line as a solid
-popover positioned inside the input card's bounds — it may cover the bottom bar (attach, model,
-send) but never leaves the card.
+screenshots, file/directory references and quotes stack *above* the card, in that order —
+screenshots as one row of square thumbs; references as one row of the same pill chips,
+single-row, wrapping to fill the row when crowded; quotes as a floating-glass card of
+queue-strip rows, at most two visible and the rest folded behind "N more quotes…". Only the
+quote card takes a card; the other layers sit directly on the chat surface, each chip carrying
+its own `--glass-bg` and `--shadow-border`. Pasted text left the stack in 2026-10-09 (plan C): a
+large paste collapses into an **inline chip in the text** at the caret (below), so the stack no
+longer carries it. The slash panel stays out of the flow the same way: it opens *downward* from
+the `/` line as a solid popover positioned inside the input card's bounds — it may cover the
+bottom bar (attach, model, send) but never leaves the card.
 The same language extends **inline**: a `/skill:` or `/mcp:` token typed mid-sentence renders as a chip in the
 composer (a mirror layer beneath the textarea paints the pill exactly under the token's glyphs —
 no horizontal padding or icon, or the text would shift out of alignment) and in the sent user
 bubble (icon + name, the pill recipe above); the composer variant can therefore only ever show
-the token's literal text (2026-10-06, chip-overlay option D).
+the token's literal text (2026-10-06, chip-overlay option D). A large paste joins the same
+family (2026-10-09, plan C): it lands **at the caret** as a chip whose token is its literal label
+(`[粘贴 1 · 42 行]`), deletable as one block by a backspace at its tail, restored whole by one
+undo step, and assembled into a `<pasted-text>` block in place when sent. Clicking the chip
+expands the full text back into the box — editable normal text wearing only a muted background
+run, with a small floating pill (icon + "42 行 · 收起") at the run's head to fold it back; the run
+stretches as you edit, and the composer keeps its 12-row cap with internal scrolling.
 Process rows live in the quiet tiers: while a row's activity is in progress its head (icon + label)
 is the only bright thing at secondary; once the state settles the **whole row** recedes to tertiary —
 one flat grey, with failure red as the only exception. Body text never competes with the past.

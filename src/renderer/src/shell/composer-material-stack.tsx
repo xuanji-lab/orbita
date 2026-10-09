@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { ImageLightbox } from "./ImageLightbox";
@@ -42,8 +42,8 @@ export function MaterialStack(props: {
 }) {
   const images = props.materials.filter((item): item is Extract<ComposerMaterial, { kind: "image" }> => item.kind === "image");
   const chips = props.materials.filter(
-    (item): item is Extract<ComposerMaterial, { kind: "file" | "dir" | "pasted" }> =>
-      item.kind === "file" || item.kind === "dir" || item.kind === "pasted",
+    (item): item is Extract<ComposerMaterial, { kind: "file" | "dir" }> =>
+      item.kind === "file" || item.kind === "dir",
   );
   const quotes = props.materials.filter((item): item is Extract<ComposerMaterial, { kind: "quote" }> => item.kind === "quote");
   return (
@@ -111,66 +111,19 @@ function NoVisionHint() {
 }
 
 /**
- * 文件 / 目录 / 粘贴文本共用的一种胶囊：**顶到就换行铺满**（2026-10 用户裁决
+ * 文件 / 目录共用的一种胶囊：**顶到就换行铺满**（2026-10 用户裁决
  * 「我喜欢全部看到，自然的 stack，顶到了就换行」），不再横滚、不再右侧渐隐。
- * 粘贴文本点开看全文——不撑高输入区：全文放浮层（点开的那颗胶囊上方），
- * 浮层是 floating layer（实底面板 + 发丝 + popover 阴影），滚动限高。
+ * 粘贴文本已改道句中胶囊（方案 C，paste-blocks.ts），材料区只剩截图、文件 /
+ * 目录、引用三路。
  */
-function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "file" | "dir" | "pasted" }>[] }) {
-  const t = useT();
-  const [openId, setOpenId] = useState<string | null>(null);
-  const layerRef = useRef<HTMLDivElement>(null);
-  // 点浮层与胶囊以外的地方收起全文；Esc 同义。指针与键盘两条路都收
-  useEffect(() => {
-    if (openId === null) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (layerRef.current !== null && !layerRef.current.contains(event.target as Node)) setOpenId(null);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpenId(null);
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [openId]);
-  const open = props.chips.find(
-    (chip): chip is Extract<ComposerMaterial, { kind: "pasted" }> => chip.id === openId && chip.kind === "pasted",
-  );
+function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "file" | "dir" }>[] }) {
   return (
-    <div className="material-chip-row" ref={layerRef}>
+    <div className="material-chip-row">
       <div className="material-chip-scroll">
-        {props.chips.map((chip) =>
-          chip.kind === "pasted" ? (
-            <PastedChip
-              key={chip.id}
-              chip={chip}
-              open={openId === chip.id}
-              onToggle={() => setOpenId((current) => (current === chip.id ? null : chip.id))}
-            />
-          ) : (
-            <FileChip key={chip.id} chip={chip} />
-          ),
-        )}
+        {props.chips.map((chip) => (
+          <FileChip key={chip.id} chip={chip} />
+        ))}
       </div>
-      {open !== undefined && (
-        <div className="material-popover" role="region" aria-label={t.composer.pastedTitle(open.block.lines)}>
-          <div className="material-popover-head">
-            <span>{t.composer.pastedTitle(open.block.lines)}</span>
-            <button
-              type="button"
-              aria-label={t.composer.pastedCollapse}
-              onClick={() => setOpenId(null)}
-              className="material-popover-close"
-            >
-              <Icon name="x" size={12} strokeWidth={2} />
-            </button>
-          </div>
-          <div className="material-popover-body">{open.block.text}</div>
-        </div>
-      )}
     </div>
   );
 }
@@ -252,44 +205,6 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
           document.body,
         )}
     </>
-  );
-}
-
-/** 粘贴文本的胶囊：点胶囊本体开 / 关全文浮层；行数是元信息，跟在名字后 */
-function PastedChip(props: {
-  chip: Extract<ComposerMaterial, { kind: "pasted" }>;
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const t = useT();
-  return (
-    <span className="material-chip">
-      <button
-        type="button"
-        className="material-chip-toggle"
-        aria-expanded={props.open}
-        title={props.open ? t.composer.pastedCollapse : t.composer.pastedExpand}
-        onClick={props.onToggle}
-      >
-        <Icon
-          name={props.open ? "chevron-down" : "chevron-right"}
-          size={12}
-          style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-        />
-        <Icon name="file-text" size={13} strokeWidth={1.8} style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }} />
-        <span className="material-chip-name">{props.chip.name}</span>
-        <span className="material-chip-meta">{props.chip.meta}</span>
-      </button>
-      <button
-        type="button"
-        className="material-chip-x"
-        aria-label={t.composer.removePasted}
-        title={t.composer.removePasted}
-        onClick={props.chip.remove}
-      >
-        <Icon name="x" size={11} strokeWidth={2} />
-      </button>
-    </span>
   );
 }
 

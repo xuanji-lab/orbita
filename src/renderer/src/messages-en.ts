@@ -146,9 +146,7 @@ export const en = {
     pastedLines: (lines: number) => plural(lines, "line"),
     pastedTitle: (lines: number) => `Pasted text · ${lines} lines`,
     pastedExpand: "Show the pasted text in full",
-    pastedExpandToInput: "Expand into the input box",
     pastedCollapse: "Collapse the pasted text",
-    removePasted: "Remove pasted text",
     pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
     pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
     commandPanel: "Slash commands",
@@ -436,7 +434,7 @@ export const en = {
     pastedCollapse: "Collapse pasted text",
     pastedCollapseAria: "Collapse pasted text",
     pastedCollapseInfo:
-      "Long pasted text folds into a one-line chip whose expand drops it into the input box · off sends large pastes straight into the input box, no chip",
+      "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",

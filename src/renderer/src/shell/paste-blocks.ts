@@ -17,7 +17,12 @@
  * 两语表的 `composer.pasteToken`；这里的解析两种语言都认（切换语言后旧 token
  * 仍可解析）。区间伸缩的边界约定见 `repositionRange`。
  */
-import { pastedBlockOf, pastedTextSize } from "../../../shared/prompt-attachments.ts";
+import {
+  parseFilesBlock,
+  parsePastedBlock,
+  pastedBlockOf,
+  pastedTextSize,
+} from "../../../shared/prompt-attachments.ts";
 
 /** 草稿里的一段粘贴块（全文的存放处；收起 / 展开两个形态都指它） */
 export interface ComposerPasteBlock {
@@ -175,7 +180,13 @@ export function repositionBlocks(
     if (moved === null) return { ...block, range: null };
     const inside = newText.slice(moved.start, moved.end);
     const own = parsePasteTokens(inside);
-    if (own.length === 1 && own[0].seq === block.seq && own[0].start === 0 && own[0].end === inside.length) {
+    if (
+      own.length === 1 &&
+      own[0] !== undefined &&
+      own[0].seq === block.seq &&
+      own[0].start === 0 &&
+      own[0].end === inside.length
+    ) {
       return { ...block, range: null };
     }
     return { ...block, range: moved };
@@ -205,29 +216,57 @@ export function assemblePasteDraft(text: string, blocks: readonly ComposerPasteB
 }
 
 /**
- * 已发送文本 → 草稿（撤回 / 回退放回输入框用）：`<pasted-text>` 块换回 token，
- * 位置不动。组装时在块两侧垫的空行剥掉一层（自己垫的才是这一层）；正文里的
- * 空行是用户自己敲的，不在剥的范围。seq 从 seqBase 续（不与草稿里已有的撞）。
+ * 已发送文本 → 草稿（撤回排队项用）：`<pasted-text>` 块换回 token，位置不动。
+ * 组装时在块两侧垫的空行剥掉一层（自己垫的才是这一层）；正文里的空行是用户
+ * 自己敲的，不在剥的范围。seq 由 nextSeq 分（调用方管唯一性），token 文案由
+ * tokenOf 给（语言跟当前界面走）。
  */
 export function draftFromSentText(
   text: string,
-  seqBase: number,
+  nextSeq: () => number,
   tokenOf: (seq: number, lines: number) => string,
-): { draft: string; blocks: { text: string; lines: number }[] } {
+): { draft: string; blocks: { seq: number; text: string; lines: number }[] } {
   const pattern = /(?:\n\n)?<pasted-text>\r?\n([\s\S]*?)\r?\n<\/pasted-text>(?:\n\n)?/g;
-  const blocks: { text: string; lines: number }[] = [];
+  const blocks: { seq: number; text: string; lines: number }[] = [];
   let draft = "";
   let last = 0;
   let hit: RegExpExecArray | null;
   while ((hit = pattern.exec(text)) !== null) {
     const body = hit[1] ?? "";
     const { lines } = pastedTextSize(body);
-    const seq = seqBase + blocks.length + 1;
+    const seq = nextSeq();
     draft += text.slice(last, hit.index);
     draft += tokenOf(seq, lines);
-    blocks.push({ text: body, lines });
+    blocks.push({ seq, text: body, lines });
     last = hit.index + hit[0].length;
   }
   draft += text.slice(last);
   return { draft, blocks };
+}
+
+/**
+ * 已发送消息的转录块序列 → 草稿（「回到这里」回退用）：按块序走——粘贴块换回
+ * token、文件清单块跳过（文件引用另有还原路）、其余是正文，**位置即发送时的位置**
+ * （token 落回它当时在的块缝里）。正文与 token 之间保留一空行（组装时垫的）。
+ */
+export function draftFromSentBlocks(
+  blocks: readonly string[],
+  nextSeq: () => number,
+  tokenOf: (seq: number, lines: number) => string,
+): { draft: string; pasted: { seq: number; text: string; lines: number }[] } {
+  const parts: string[] = [];
+  const pasted: { seq: number; text: string; lines: number }[] = [];
+  for (const block of blocks) {
+    const pastedBody = parsePastedBlock(block);
+    if (pastedBody !== null) {
+      const { lines } = pastedTextSize(pastedBody);
+      const seq = nextSeq();
+      parts.push(tokenOf(seq, lines));
+      pasted.push({ seq, text: pastedBody, lines });
+      continue;
+    }
+    if (parseFilesBlock(block) !== null) continue;
+    parts.push(block);
+  }
+  return { draft: parts.filter((part) => part !== "").join("\n\n"), pasted };
 }

@@ -121,22 +121,14 @@ export function FileRefChip(props: {
 export const PastedTextCollapseContext = createContext(true);
 
 /**
- * 一段粘贴文本：折叠成一行（「粘贴的文本 · N 行」）。**全文永不截断**，折叠只是
- * 显示形态。展开有两个去处：
- * - 输入框里（传了 onExpandIntoInput）：展开 = 把文本**移进输入框**——chip 移除，
- *   文本回到草稿里可编辑（wafo 2026-10-09：「折叠式 chip，展开要放进输入框中」）；
- * - 转录里（只读，没传）：就地展开全文（限高滚动），再点收起——那里没有输入框可去。
+ * 转录气泡里的一段已发送粘贴文本：折叠成一行（「粘贴的文本 · N 行」），点开就地
+ * 展开全文（限高滚动），再点收起。**全文永不截断**，折叠只是显示形态。
+ * 输入框那一侧已改道句中胶囊（方案 C，paste-blocks.ts / Composer 的镜像层），
+ * 这里只剩转录回显一个消费者。
  */
-export function PastedTextChip(props: {
-  text: string;
-  lines: number;
-  onRemove?: () => void;
-  /** 展开 = 移进输入框（输入框附件区传）；缺席 = 就地展开（转录回显） */
-  onExpandIntoInput?: () => void;
-}) {
+export function PastedTextChip(props: { text: string; lines: number }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
-  const intoInput = props.onExpandIntoInput !== undefined;
   return (
     <div
       style={{
@@ -152,17 +144,9 @@ export function PastedTextChip(props: {
       <div style={{ display: "flex", alignItems: "center", gap: 6, minHeight: 28, padding: "0 6px 0 8px" }}>
         <button
           type="button"
-          aria-expanded={intoInput ? undefined : expanded}
-          title={
-            intoInput
-              ? t.composer.pastedExpandToInput
-              : expanded
-                ? t.composer.pastedCollapse
-                : t.composer.pastedExpand
-          }
-          onClick={() =>
-            intoInput ? props.onExpandIntoInput?.() : setExpanded((value) => !value)
-          }
+          aria-expanded={expanded}
+          title={expanded ? t.composer.pastedCollapse : t.composer.pastedExpand}
+          onClick={() => setExpanded((value) => !value)}
           style={{
             display: "flex",
             alignItems: "center",
@@ -178,7 +162,7 @@ export function PastedTextChip(props: {
           }}
         >
           <Icon
-            name={intoInput ? "arrow-down" : expanded ? "chevron-down" : "chevron-right"}
+            name={expanded ? "chevron-down" : "chevron-right"}
             size={12}
             style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
           />
@@ -195,31 +179,7 @@ export function PastedTextChip(props: {
             {t.composer.pastedTitle(props.lines)}
           </span>
         </button>
-        {props.onRemove !== undefined && (
-          <button
-            type="button"
-            aria-label={t.composer.removePasted}
-            title={t.composer.removePasted}
-            onClick={props.onRemove}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 18,
-              height: 18,
-              flex: "0 0 auto",
-              marginInlineStart: "auto",
-              padding: 0,
-              border: "1px solid var(--color-border-subtle)",
-              borderRadius: "var(--radius-pill)",
-              background: "var(--color-bg-panel)",
-              color: "var(--color-text-secondary)",
-              cursor: "pointer",
-            }}
-          >
-            <Icon name="x" size={11} strokeWidth={2} />
-          </button>
-        )}
+        <span style={{ flex: "1 1 auto" }} />
       </div>
       {expanded && (
         <div
