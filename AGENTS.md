@@ -23,6 +23,11 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 - **消费者纪律**：新模块 / 新导出必须在**同一个 PR** 里有真实调用点（测试文件不算）。
   接不上就不落库，留在会话工作台等它被需要。
 - **避免过度抽象**：没有第二个消费者就不建包、不建抽象层、不建 barrel。
+- **禁止动用户的桌面会话**：不执行 `pmset`（休眠 / 关显示器）、锁屏、`caffeinate`、`osascript` / AppleScript
+  操控其他应用或窗口、全屏或会盖住屏幕的窗口、改系统设置、`killall` 系统进程。用户可能正在开会 / 共享屏幕
+  （2026-10-09：子会话为复现截图问题跑 `pmset displaysleepnow`，锁屏两次、踢掉了用户的腾讯会议）。
+  需要测最小化 / 隐藏等状态，只在 agent 自己创建的窗口里用 API 模拟；做不到就写「未测」交给用户手动验。
+  派子会话时把这条写进任务。
 - 禁 `any`；禁 inline import（`await import()` / `import("pkg").Type`）——顶层 import only。
 - **禁 TS 参数属性（`constructor(private x: T)`）、`enum`、`namespace`**：Node 原生只剥离类型、
   不做代码生成，这些会让 `node --test` 直接加载失败。相对 import 必须带 `.ts` 后缀（同因）。
