@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { quoteMeta, quotePreview, quoteSource } from "./quote-label.ts";
+import { quoteMeta, quotePreview, quoteRowPreview, quoteSource, QUOTE_ROW_PREVIEW_MAX_CHARS } from "./quote-label.ts";
 import { en } from "../messages-en.ts";
 import { zh } from "../messages-zh.ts";
 
@@ -23,5 +23,22 @@ describe("引用 chip 文案", () => {
     const long = { text: "一二三四五六七八九十\n一二三四五六七八九十多", messageId: "m", role: "assistant" as const, turn: 2 };
     assert.equal(quotePreview(long), "一二三四五六七八九十 一二三四五六七八九…");
     assert.equal(quotePreview({ text: "短句", messageId: "m", role: "assistant", turn: 2 }), "短句");
+  });
+
+  test("引用卡一行不预截：长正文整段交给 CSS 裁，只压平空白", () => {
+    const long = { text: "一二三四五六七八九十\n一二三四五六七八九十多", messageId: "m", role: "assistant" as const, turn: 2 };
+    assert.equal(quoteRowPreview(long), "一二三四五六七八九十 一二三四五六七八九十多");
+    assert.equal(quoteRowPreview({ text: "短句", messageId: "m", role: "assistant", turn: 2 }), "短句");
+  });
+
+  test("引用卡一行只设 300 字安全上限：超出截断加省略号", () => {
+    const base = "一二三四五六七八九十".repeat(40); // 400 字
+    const out = quoteRowPreview({ text: base, messageId: "m", role: "assistant", turn: 1 });
+    assert.equal(Array.from(out).length, QUOTE_ROW_PREVIEW_MAX_CHARS + 1); // 300 字 + 省略号
+    assert.equal(Array.from(out).at(-1), "…");
+    // 上限内不省略
+    const within = quoteRowPreview({ text: "一二三四五六七八九十".repeat(30), messageId: "m", role: "assistant", turn: 1 });
+    assert.equal(Array.from(within).length, 300);
+    assert.equal(Array.from(within).at(-1), "十");
   });
 });

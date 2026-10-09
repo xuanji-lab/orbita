@@ -5,7 +5,7 @@ import { ImageLightbox } from "./ImageLightbox";
 import { ImageThumb } from "./ImageThumb";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { imageSrc } from "./composer-images.ts";
-import { quotePreview } from "./quote-label.ts";
+import { quoteRowPreview } from "./quote-label.ts";
 import { fileIcon } from "../features/files/tree-view.ts";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import type { TextQuote } from "@shared/quote";
@@ -328,7 +328,7 @@ function QuoteRow(props: {
   onJump: (() => void) | undefined;
 }) {
   const t = useT();
-  const preview = quotePreview(props.item.quote);
+  const preview = quoteRowPreview(props.item.quote);
   return (
     <div className="material-quote-row">
       <span style={{ display: "inline-flex", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>

@@ -2747,6 +2747,7 @@ textarea.text-field {
 }
 
 .material-quote-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -2788,18 +2789,25 @@ textarea.text-field {
   cursor: pointer;
 }
 
-/* 来源注脚（第几轮 · 谁说的 · 字数）：micro、tertiary，不与正文抢分量 */
+/* 来源注脚（第几轮 · 谁说的 · 字数）：micro、tertiary，不与正文抢分量。
+   行尾顶格（右侧 = 行右内边距，与左侧引号图标的左缩进对称，2026-10 用户验收：
+   动作键占位把它挤离右缘）；悬停 / 聚焦时让位给动作键，各回各位 */
 .material-quote-note {
   flex: 0 0 auto;
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
+  transition: opacity var(--transition-hover);
 }
 
-/* 悬停一行出「跳回原文」「移除」；focus-within 让键盘 Tab 到动作键时同样现身 */
+/* 悬停一行出「跳回原文」「移除」；focus-within 让键盘 Tab 到动作键时同样现身。
+   **绝对定位不占位**：在流里占 ~46px 宽会把注脚挤离右缘；改盖在行尾之上，
+   出现的同时注脚隐去（上一条规则），不需要底色遮罩 */
 .material-quote-actions {
+  position: absolute;
+  right: 2px;
+  top: 4px;
   display: inline-flex;
   gap: 2px;
-  flex: 0 0 auto;
   opacity: 0;
   transition: var(--transition-hover);
 }
@@ -2807,6 +2815,11 @@ textarea.text-field {
 .material-quote-row:hover .material-quote-actions,
 .material-quote-row:focus-within .material-quote-actions {
   opacity: 1;
+}
+
+.material-quote-row:hover .material-quote-note,
+.material-quote-row:focus-within .material-quote-note {
+  opacity: 0;
 }
 
 .material-quote-actions button {
