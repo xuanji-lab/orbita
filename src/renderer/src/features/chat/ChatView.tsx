@@ -106,7 +106,7 @@ import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
+import { isMcpServerOffered, parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
@@ -509,6 +509,11 @@ function ChatViewBody(props: {
   // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
   // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
   const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
+  const offeredWorkspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
+  const offeredServers = useMemo(
+    () => servers.filter((server) => isMcpServerOffered(server, offeredWorkspace)),
+    [servers, offeredWorkspace],
+  );
   const jumpToQuote = useContext(QuoteJumpContext);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
@@ -767,7 +772,8 @@ function ChatViewBody(props: {
       skills={skills}
       workspaceId={session.workspaceId}
       onReloadSkills={reloadSkills}
-      servers={servers}
+      // 只给当前工作区能用的 server（isMcpServerOffered：与发送端判 /mcp: 可用同一依据）
+      servers={offeredServers}
       onReloadServers={reloadServers}
       onCommand={(command) => {
         if (command === "compact") {
