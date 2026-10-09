@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { streamSimple as streamOpenAIChat } from "@earendil-works/pi-ai/api/openai-completions";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 import {
@@ -204,6 +205,65 @@ describe("toFallbackModels —— 借参抄档位表（thinkingLevelMap 是模�
   });
 });
 
+describe("白名单档位 → pi 的 thinkingLevelMap（openai-completions 那一族）", () => {
+  /** 注册 + 补上 provider 级的 api / baseUrl（真 runtime 的组合层会补齐，替身只存 models） */
+  function registered(id: string, api = "openai-completions"): PiModel {
+    const entry = toFallbackModels([], [{ id }], [], { api }, [])[0];
+    assert.notEqual(entry, undefined);
+    return { ...entry, api, provider: "p", baseUrl: "https://example.com/v1" } as unknown as PiModel;
+  }
+
+  /** pi 真正要发出去的 reasoning_effort：与 anthropic 那个同款，换一个协议入口 */
+  async function sentEffort(model: PiModel, reasoning: string): Promise<unknown> {
+    let captured: Record<string, unknown> | undefined;
+    const events = streamOpenAIChat(
+      model as Model<"openai-completions">,
+      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      {
+        apiKey: "sk-test",
+        reasoning: reasoning as never,
+        onPayload: (payload) => {
+          captured = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    for await (const _event of events) {
+      // 抛错后流以 error 事件收尾
+    }
+    assert.ok(captured !== undefined, "pi 没走到构造请求体");
+    return captured["reasoning_effort"] ?? null;
+  }
+
+  test("菜单的三档就是 pi 认的三档：step-5-preview 的 off / xhigh / max 被夹掉", async () => {
+    const model = registered("step-5-preview");
+    assert.deepEqual(model.thinkingLevelMap, { off: null, minimal: null, xhigh: null, max: null });
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high"]);
+    // 真实发出去的：low / medium / high 原样；老会话账里的 off 被夹成能发的 low
+    assert.equal(await sentEffort(model, "low"), "low");
+    assert.equal(await sentEffort(model, "medium"), "medium");
+    assert.equal(await sentEffort(model, "off"), "low");
+    assert.equal(await sentEffort(model, "max"), "high");
+  });
+
+  test("白名单里 xhigh / max 是真档的型号（space-bunny）：它们原样发出去，不再被夹成 high", async () => {
+    const model = registered("space-bunny");
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high", "xhigh", "max"]);
+    assert.equal(await sentEffort(model, "xhigh"), "xhigh");
+    assert.equal(await sentEffort(model, "max"), "max");
+  });
+
+  test("白名单没写 medium 的型号（deepseek-flash）：发出去的不会是它会 400 的 medium", async () => {
+    const model = registered("deepseek-flash");
+    assert.deepEqual(getSupportedThinkingLevels(model), ["off", "low", "high", "max"]);
+    assert.equal(await sentEffort(model, "medium"), "high");
+  });
+
+  test("anthropic-messages 的非 adaptive 型号不在这条路上：档位表仍然是空的（要单独核 budget 那两处）", () => {
+    assert.equal("thinkingLevelMap" in registered("glm-5.3-flash", "anthropic-messages"), false);
+  });
+});
+
 describe("toFallbackRegistration —— 补注册必须带完整 auth 面", () => {
   const gateway = {
     apiKey: "sk-gw",
@@ -234,6 +294,15 @@ describe("toFallbackRegistration —— 补注册必须带完整 auth 面", () =
   test("白名单与目录都没有的 id：还是兜底条目", () => {
     const registration = toFallbackRegistration({ ...gateway, models: [{ id: "house-model" }] }, []);
     assert.equal(registration.models?.[0]?.contextWindow, FALLBACK_MODEL.contextWindow);
+  });
+
+  test("白名单的模态也跟着过线：step-5-preview 拿到 1M / 64k / 可收图（目录未收录 stepfun）", () => {
+    const registration = toFallbackRegistration({ ...gateway, models: [{ id: "step-5-preview" }] }, []);
+    const model = registration.models?.[0];
+    assert.equal(model?.contextWindow, 1_000_000);
+    assert.equal(model?.maxTokens, 65_536);
+    assert.equal(model?.reasoning, true);
+    assert.deepEqual(model?.input, ["text", "image"]);
   });
 });
 
