@@ -1,6 +1,8 @@
 import "./migration-view.css";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  ImportCustomRoot,
+  ImportCustomRootInvalidReason,
   ImportDestination,
   ImportDetectResult,
   ImportGreetingCheckPlan,
@@ -14,7 +16,7 @@ import type {
   ImportSourceId,
   ImportSourceProbe,
 } from "@shared/import";
-import { IMPORT_GREETING_UNAVAILABLE_CODE } from "@shared/import";
+import { IMPORT_CUSTOM_ROOT_INVALID_CODE, IMPORT_GREETING_UNAVAILABLE_CODE } from "@shared/import";
 import type { Workspace } from "@shared/workspace";
 import type { ProviderDto } from "@shared/provider";
 import type { ModelPair } from "@shared/settings";
@@ -128,6 +130,30 @@ type RunState =
 /** 展开的组里先列这么多条，其余收进「Show N more」 */
 const ROWS_BEFORE_MORE = 8;
 
+/** 自定义路径支持的来源（= 有定位规格的那批；agent-skills 是单一共用目录，不支持） */
+const CUSTOM_ROOT_SOURCES = [
+  "proma",
+  "claude-code",
+  "kimi-code",
+  "opencode",
+  "reasonix",
+  "zcode",
+  "codex",
+] as const satisfies readonly ImportCustomRoot["source"][];
+
+/**
+ * 主进程错误文本里的稳定码 → 添加失败原因；不认识的码返回 null（照原文显示）。
+ * 用 indexOf 而不是 startsWith：Electron 会把 IPC 拒绝包成
+ * "Error invoking remote method '…': Error: IMPORT_CUSTOM_ROOT_INVALID:not-found"，
+ * 码不在开头而在中段
+ */
+function customRootInvalidOf(text: string): ImportCustomRootInvalidReason | null {
+  const at = text.indexOf(IMPORT_CUSTOM_ROOT_INVALID_CODE);
+  if (at < 0) return null;
+  const reason = text.slice(at + IMPORT_CUSTOM_ROOT_INVALID_CODE.length).match(/^[a-z-]+/)?.[0] ?? "";
+  return reason === "not-found" || reason === "no-data" || reason === "duplicate" ? reason : null;
+}
+
 function toggled<T>(set: ReadonlySet<T>, key: T): Set<T> {
   const next = new Set(set);
   if (next.has(key)) next.delete(key);
@@ -172,7 +198,9 @@ export function MigrationView(props: {
   const [mcpSelected, setMcpSelected] = useState<ReadonlySet<string>>(new Set());
   const [greetings, setGreetings] = useState<GreetingState>({ kind: "off" });
 
-  useEffect(() => {
+  /** first = 首次打开（出 loading 态）；之后的刷新（加 / 删自定义路径）保留旧结果，避免整页闪骨架 */
+  const loadDetect = useCallback((first: boolean) => {
+    if (first) setDetect({ kind: "loading" });
     let cancelled = false;
     void api.import
       .detect()
@@ -186,6 +214,17 @@ export function MigrationView(props: {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => loadDetect(true), [loadDetect]);
+
+  /**
+   * 自定义路径变了：路径清单与 found 状态要重探；上一次扫描是按旧清单扫的，
+   * 「Imported …」那行结果退场（与 touch() 同款纪律），重扫交给用户点 Rescan
+   */
+  const customRootsChanged = useCallback(() => {
+    setRun((current) => (current.kind === "done" ? { kind: "idle" } : current));
+    loadDetect(false);
+  }, [loadDetect]);
 
   // 检查进行中也不能导：判中的还没从勾选里拿掉
   const busy = scan.kind === "scanning" || run.kind === "running" || greetings.kind === "checking";
@@ -359,6 +398,7 @@ export function MigrationView(props: {
             probes={probes}
             home={home}
             ticked={ticked}
+            customRoots={detect.kind === "ready" ? detect.result.customRoots : []}
             scanned={scan.kind === "ready" ? scan.sources : null}
             scanning={scan.kind === "scanning"}
             open={scan.kind !== "ready" || sourcesOpen}
@@ -367,6 +407,7 @@ export function MigrationView(props: {
             onToggleOpen={() => setSourcesOpen((open) => !open)}
             onToggle={(id) => setTicked((current) => toggled(current, id))}
             onTickAll={() => setTicked(new Set(probes.filter((probe) => probe.found).map((probe) => probe.id)))}
+            onCustomRootsChanged={customRootsChanged}
             onScan={() => startScan([...ticked], false)}
           />
 
@@ -641,6 +682,8 @@ function SourcesStep(props: {
   probes: readonly ImportSourceProbe[];
   home: string;
   ticked: ReadonlySet<ImportSourceId>;
+  /** 已添加的自定义来源路径（detect 随行带回） */
+  customRoots: readonly ImportCustomRoot[];
   /** 上一次扫描用的来源；还没扫出结果为 null */
   scanned: readonly ImportSourceId[] | null;
   scanning: boolean;
@@ -651,6 +694,8 @@ function SourcesStep(props: {
   onToggleOpen: () => void;
   onToggle: (id: ImportSourceId) => void;
   onTickAll: () => void;
+  /** 添加 / 删除自定义路径之后：重探（刷新路径清单与 found 状态） */
+  onCustomRootsChanged: () => void;
   onScan: () => void;
 }) {
   const t = useT();
@@ -738,6 +783,12 @@ function SourcesStep(props: {
                   />
                 ))}
               </div>
+              <CustomRootsSection
+                roots={props.customRoots}
+                home={props.home}
+                disabled={props.busy}
+                onChanged={props.onCustomRootsChanged}
+              />
             </>
           )}
         </>
@@ -831,6 +882,155 @@ function SourceRow(props: {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 1 Sources · 自定义路径
+// ---------------------------------------------------------------------------
+
+/** 自定义路径的添加 / 删除状态：null = 没在报错 */
+type CustomRootError = { reason: ImportCustomRootInvalidReason | null; message: string };
+
+/**
+ * 第 1 步里的自定义路径入口：自动定位漏掉的散落历史目录（备份、改过名的旧目录），
+ * 用户选来源、粘路径（或开目录选择框），经该来源 validate 检查后加进扫描清单——与
+ * 自动定位到的目录并列出现在上面的路径清单里（隐私声明同样覆盖它）。行尾可删。
+ */
+function CustomRootsSection(props: {
+  roots: readonly ImportCustomRoot[];
+  home: string;
+  disabled: boolean;
+  /** 添加 / 移除之后：重探（父组件刷新 detect） */
+  onChanged: () => void;
+}) {
+  const t = useT();
+  const [source, setSource] = useState<ImportCustomRoot["source"]>("proma");
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<CustomRootError | null>(null);
+  const locked = props.disabled || busy;
+
+  const add = (): void => {
+    const dir = path.trim();
+    if (dir === "" || locked) return;
+    setBusy(true);
+    setError(null);
+    void api.import
+      .addCustomRoot({ source, dir })
+      .then(() => {
+        setPath("");
+        props.onChanged();
+      })
+      .catch((cause: unknown) => {
+        const message = errorText(cause);
+        setError({ reason: customRootInvalidOf(message), message });
+      })
+      .finally(() => setBusy(false));
+  };
+
+  const remove = (root: ImportCustomRoot): void => {
+    if (locked) return;
+    setBusy(true);
+    setError(null);
+    void api.import
+      .removeCustomRoot({ source: root.source, dir: root.dir })
+      .then(props.onChanged)
+      .catch((cause: unknown) => setError({ reason: null, message: errorText(cause) }))
+      .finally(() => setBusy(false));
+  };
+
+  const pick = (): void => {
+    if (locked) return;
+    // 取消返回 null：不动已粘的路径
+    void api.import.pickDirectory().then((picked) => {
+      if (picked !== null) setPath(picked);
+    });
+  };
+
+  return (
+    <div className="mg-custom">
+      <p className="mg-caption mg-caption-lead">
+        <Icon name="folder-plus" size={12} strokeWidth={1.8} />
+        {t.migration.customRootsNote}
+      </p>
+      <div className="mg-block">
+        {props.roots.map((root) => (
+          <div className="mg-custom-row" key={`${root.source}:${root.dir}`} aria-label={t.migration.customRootsAddedFor(t.migration.sources[root.source])}>
+            <Icon name="folder" size={12} strokeWidth={1.8} />
+            <span className="mg-custom-src">{t.migration.sources[root.source]}</span>
+            <span className="mg-custom-path" title={root.dir}>
+              {abbreviateHome(root.dir, props.home)}
+            </span>
+            <button
+              type="button"
+              className="quiet-control mg-custom-x row-trailing"
+              aria-label={t.migration.customRootsRemove}
+              title={t.migration.customRootsRemoveTip}
+              disabled={locked}
+              onClick={() => remove(root)}
+            >
+              <Icon name="x" size={12} strokeWidth={1.8} />
+            </button>
+          </div>
+        ))}
+        <form
+          className="mg-custom-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            add();
+          }}
+        >
+          <Menu
+            items={CUSTOM_ROOT_SOURCES.map((id): MenuItem => ({
+              id,
+              label: t.migration.sources[id],
+              checked: id === source,
+              onSelect: () => setSource(id),
+            }))}
+            trigger={({ open, toggle }) => (
+              <Chip active={open} chevron disabled={locked} title={t.migration.customRootsSourceLabel} onClick={toggle}>
+                {t.migration.sources[source]}
+              </Chip>
+            )}
+          />
+          <input
+            className="text-field mg-custom-field"
+            aria-label={t.migration.customRootsPathLabel}
+            spellCheck={false}
+            placeholder={t.migration.customRootsPathPlaceholder}
+            value={path}
+            disabled={locked}
+            onChange={(event) => setPath(event.target.value)}
+          />
+          <button type="button" className="quiet-control mg-btn" disabled={locked} onClick={pick}>
+            <Icon name="folder-open" size={12} strokeWidth={1.8} />
+            {t.migration.customRootsBrowse}
+          </button>
+          <button
+            type="submit"
+            className="quiet-control mg-btn"
+            disabled={locked || path.trim() === ""}
+            title={path.trim() === "" ? t.migration.customRootsPathPlaceholder : undefined}
+          >
+            <Icon name={busy ? "loader-circle" : "plus"} size={12} spin={busy} strokeWidth={1.8} />
+            {busy ? t.migration.customRootsAdding : t.migration.customRootsAdd}
+          </button>
+        </form>
+      </div>
+      {error !== null && (
+        <p className="mg-caption mg-error" role="alert">
+          <Icon name="triangle-alert" size={12} />
+          {error.reason !== null ? (
+            t.migration.customRootsInvalid[error.reason]
+          ) : (
+            <>
+              {t.migration.customRootsAddFailed} {error.message}
+            </>
+          )}
+        </p>
+      )}
     </div>
   );
 }

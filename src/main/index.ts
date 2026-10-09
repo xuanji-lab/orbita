@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
+import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
@@ -485,6 +486,7 @@ void app.whenReady().then(async () => {
     settings,
     join(configDir, "pi-sessions"),
     join(configDir, "imports.jsonl"),
+    new CustomRootsStore(configDir),
     skills,
     mcp,
     async () => agentHost.mcpReload(),

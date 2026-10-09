@@ -739,6 +739,76 @@
   flex: none;
 }
 
+/* 自定义来源路径：已添加清单 + 添加行同住一个 mg-block，行间细分隔线同 .mg-src */
+.mg-custom {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.mg-custom-row,
+.mg-custom-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-4);
+}
+
+.mg-custom-row + .mg-custom-row,
+.mg-custom-row + .mg-custom-form,
+.mg-custom-form + .mg-custom-row {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.mg-custom-row > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.mg-custom-src {
+  flex: none;
+  font-size: var(--font-size-control);
+  color: var(--color-text-secondary);
+}
+
+.mg-custom-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* 行尾移除键：quiet 图标键，钉右血线（row-trailing 推右） */
+.mg-custom-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+}
+
+.mg-custom-x:hover:enabled {
+  color: var(--color-danger);
+}
+
+/* 添加行里的路径输入：随行自适应（text-field 自带 width:100%，这里交给 flex） */
+.mg-custom-field {
+  flex: 1 1 auto;
+  width: auto;
+  height: var(--control-height-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+}
+
 /* ===== 2 Sessions：扫描前 / 中的骨架 ===== */
 
 .mg-skel-list {
