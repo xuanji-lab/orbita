@@ -14,10 +14,34 @@ import { decidePermission, type PermissionAnswer, type PermissionMode } from "..
 import { isAbsolute, relative, resolve } from "node:path";
 
 /**
- * pi 内建、且我们全开的八个工具（guideline §五）。
- * 只有一个用途：**把权限模式讲给模型听**——见 `describePermissionMode`。
+ * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
+ *
+ *   1. `runtime.ts` 开轮时经 `settingsManager.applyOverrides({ defaultTools })` 交给 pi，
+ *      决定本会话**内建工具的初始选择**（不是 `tools` 白名单——那个是全局的，会连自定义
+ *      工具一起过滤掉，实测见 runtime.ts 那段注释）；
+ *   2. `describePermissionMode` 把「哪些工具会放行 / 询问 / 拒绝」讲给模型听（见下）。
+ *
+ * 两者**必须同一份**：分开写就会漂——这份名单以前带着一个 pi 根本没有的 `glob`，
+ * 于是提示词常年在告诉模型一个不存在的工具（2026-10-04 查证：pi 0.84.3 的
+ * `createAllToolDefinitions` 只有 read / bash / powershell / edit / write / grep / find / ls）。
+ *
+ * **为什么搜索类工具必须在里面**：pi 的默认集是 `["read","bash","edit","write"]`，而 pi 的
+ * system prompt 里有一条规则——**当工具集里有 bash、却一个 grep / find / ls 都没有的时候**，
+ * 它给模型下一句 "Use bash for file operations like ls, rg, find"（0.84.3 与上游 1.0.0 同构，
+ * 条件写死在 system-prompt 里）。于是搜索全走 shell：真实会话 33,201 次 bash 调用里
+ * **52.4% 是搜索类命令**；而 `grep -rn X .` 会递归进 node_modules（本仓 34,337 个文件里
+ * 30,997 个是它），实测 **5.57s** —— pi 自带的 grep 走 ripgrep、尊重 .gitignore，
+ * 同一个任务 **0.08s**。
+ *
+ * 把这三个补进来**同时做两件事**：搜索改走 ripgrep / fd；并且上面那条把模型推向 bash 的
+ * 规则的**触发条件不再成立**，那句话自动消失。这比「在提示词里劝模型别用 bash 搜索」硬：
+ * 我们只能往 pi 的 system prompt 后面**追加**，删不掉它写的那句，劝也劝不过
+ * （模型自填 timeout 那件事已经证明：提示词管不住模型）。
+ *
+ * 顺序只影响提示词里工具清单的先后（pi 拿它当「内建工具的初始选择」，顺序无功能含义），
+ * 保持按名字排列。
  */
-const BUILTIN_TOOLS = ["bash", "edit", "find", "glob", "grep", "ls", "read", "write"] as const;
+export const ENABLED_BUILTIN_TOOLS = ["bash", "edit", "find", "grep", "ls", "read", "write"] as const;
 
 /**
  * 把当前模式翻成一段系统提示。
@@ -29,8 +53,10 @@ const BUILTIN_TOOLS = ["bash", "edit", "find", "glob", "grep", "ls", "read", "wr
  * 文案**从 `decidePermission` 推出来**，不是另写一遍：三档的工具分桶由策略函数当场算，
  * 策略改了这段话跟着改。两处描述各说各话，比没有描述更糟。
  *
+ * 枚举的是 `ENABLED_BUILTIN_TOOLS`——**真的启用了哪些**，不是「pi 有哪些」。
+ *
  * @param extraToolNames 内建之外当前真实注册的工具名（1-2 起 MCP 的
- * `mcp__server__tool` 全部由调用方从注册表里拿来传入）——不再只枚举内建八个，
+ * `mcp__server__tool` 全部由调用方从注册表里拿来传入）——不再只枚举内建的那几个，
  * 否则 plan 模式下模型不知道 MCP 工具会被拒，照样一头撞墙（已知缺口 #4）。
  * MCP 工具没有「只读」豁免，分桶全由 decidePermission 算，不在提示词里另立规则。
  */
@@ -38,7 +64,7 @@ export function describePermissionMode(mode: PermissionMode, extraToolNames: rea
   const allow: string[] = [];
   const ask: string[] = [];
   const deny: string[] = [];
-  for (const tool of [...BUILTIN_TOOLS, ...extraToolNames]) {
+  for (const tool of [...ENABLED_BUILTIN_TOOLS, ...extraToolNames]) {
     const decision = decidePermission(mode, tool);
     if (decision.behavior === "allow") allow.push(tool);
     else if (decision.behavior === "ask") ask.push(tool);
@@ -86,6 +112,34 @@ export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>
 /** 拦截面：按路径改文件的（write/edit 的 input.path）与跑命令的（bash/powershell 的 input.command）。 */
 const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
+
+/**
+ * 模型自填的命令超时**下限**（秒）：低于它的 `timeout` 抬到它，不填就不动。
+ *
+ * pi 的 bash 工具**没有系统超时**（`MAX_TIMEOUT_SECONDS` 是 2147483.647 秒，约 24 天），
+ * 唯一的秒表就是 schema 里那个可选 `timeout` 参数——**由模型自己填**。它会填一个保守的
+ * 小值（2026-10-01 统计全部会话：60s ×128、30s ×27、10s ×12；2026-10-04 复查，填过的共
+ * 1,812 次），于是慢命令被自己的秒表拦腰砍掉：全仓 grep、依赖安装、构建、测试在 Windows 上
+ * 本来就慢。**代价不是「命令失败」，是白等一分钟再重试**——进程重开、环境重热、从头再跑。
+ * 系统提示词里那句「不要传 timeout」拦不住，所以这里兜底。
+ *
+ * **只升不降**：不填 = 不设超时，那是**最宽**的选择，抬它反而变窄；填得比下限大
+ * （900s）是模型自己的判断，尊重它。非法值（≤ 0 / 非有限数）不在这里修——
+ * pi 自己会报「Invalid timeout」，我们不替它做第二套校验。
+ *
+ * 导出只为让提示词那段话引用它：同一个数有两处真源的话，改了常量提示词还说着旧数。
+ */
+export const COMMAND_TIMEOUT_FLOOR_SECONDS = 600;
+
+/** 原地抬 `event.input.timeout`（pi 的约定，与下面的改写入参同一套）。闸门内部用，行为经 `createToolCallGate` 测。 */
+function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): void {
+  if (!COMMAND_TOOLS.has(toolName)) return;
+  const timeout = input["timeout"];
+  if (typeof timeout !== "number" || !Number.isFinite(timeout)) return;
+  if (timeout > 0 && timeout < COMMAND_TIMEOUT_FLOOR_SECONDS) {
+    input["timeout"] = COMMAND_TIMEOUT_FLOOR_SECONDS;
+  }
+}
 
 /**
  * 路径折叠：Windows 文件系统大小写不敏感，比较前小写化、反斜杠转正斜杠、
@@ -190,6 +244,10 @@ export interface PiExtensionApi {
  * 不做禁区检查；给了就在权限档判定**之前**拦——Skip 档也拦。
  *
  * 改写入参走 pi 的约定：**原地改 `event.input`**（不是返回新对象）。
+ *
+ * 顺序上讲一句：参数兜底（`raiseCommandTimeout`）跑在**所有早退之前**，而用户在审批卡片里
+ * 改的入参跑在**最后**——两条都是原地改，含义不同：兜底是防模型失手，人工明确填的秒表
+ * 是当事人自己的选择，不以兜底覆盖它。
  */
 export function createToolCallGate(
   getMode: () => PermissionMode,
@@ -198,6 +256,9 @@ export function createToolCallGate(
   cwd: string = process.cwd(),
 ) {
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
+    // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
+    // 放行）就漏掉了——而那正是模型填小超时的场景。
+    raiseCommandTimeout(event.toolName, event.input);
     const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
     if (refusal !== null) return { block: true, reason: refusal };
     const decision = decidePermission(getMode(), event.toolName);
