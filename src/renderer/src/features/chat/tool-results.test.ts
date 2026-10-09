@@ -19,6 +19,8 @@ import {
   fileViewFor,
   flattenRenderUnits,
   formatThinkingDuration,
+  formatRunClock,
+  expectedSecondsOf,
   groupToolUnits,
   rollupToolKey,
   indexToolResults,
@@ -30,6 +32,10 @@ import {
   readTaskCard,
   formatToolDuration,
   recordToolFrame,
+  shellAutoExpand,
+  tailPreviewLines,
+  timeoutSecondsOf,
+  toolStartAt,
   splitPathTail,
   streamingThinkingKey,
   mcpFailureKind,
@@ -1621,5 +1627,90 @@ describe("时长与结果摘要 —— 中文（小学作业）", () => {
     assert.equal(formatToolDuration(12_345, zh), "12.3 秒");
     assert.equal(formatToolDuration(64_000, zh), "1 分 04 秒");
     assert.equal(formatThinkingDuration(400, zh), "1 秒");
+  });
+});
+
+// ── 运行中 shell 的可见性：expected_seconds / 运行时钟 / 自动展开 / 活尾 ──
+
+describe("expectedSecondsOf / timeoutSecondsOf", () => {
+  test("合法数字照收；额外字段不挤占 command 的读取", () => {
+    assert.equal(expectedSecondsOf({ command: "sleep 40", timeout: 600, expected_seconds: 40 }), 40);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 600, expected_seconds: 40 }), 600);
+  });
+  test("坏值判 null：缺失、零、负数、NaN、字符串数字、超一天", () => {
+    assert.equal(expectedSecondsOf({ command: "x" }), null);
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: 0 }), null);
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: -5 }), null);
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: Number.NaN }), null);
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: "40" }), null, "字符串数字不猜");
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: 100_000 }), null);
+    assert.equal(expectedSecondsOf(null), null);
+    assert.equal(expectedSecondsOf("sleep 40"), null);
+  });
+  test("整数与浮点都收（预计 1.5 秒也是认真的估计）", () => {
+    assert.equal(expectedSecondsOf({ expected_seconds: 1.5 }), 1.5);
+  });
+});
+
+describe("formatRunClock", () => {
+  test("m:ss，秒两位补零，分钟不限位；负数归零", () => {
+    assert.equal(formatRunClock(0), "0:00");
+    assert.equal(formatRunClock(45_000), "0:45");
+    assert.equal(formatRunClock(60_000), "1:00");
+    assert.equal(formatRunClock(723_000), "12:03");
+    assert.equal(formatRunClock(4_335_000), "72:15", "超一小时继续涨分钟，不进位小时");
+    assert.equal(formatRunClock(-3_000), "0:00");
+  });
+});
+
+describe("shellAutoExpand", () => {
+  test("expected 达阈值：开跑就展（elapsed 未知也展）", () => {
+    assert.equal(shellAutoExpand(10, null), true);
+    assert.equal(shellAutoExpand(120, 0), true);
+  });
+  test("expected 没给或没达：等已运行时长达阈值", () => {
+    assert.equal(shellAutoExpand(null, 9_999), false);
+    assert.equal(shellAutoExpand(null, 10_000), true);
+    assert.equal(shellAutoExpand(5, 9_999), false, "预计 5 秒的快命令不打扰");
+    assert.equal(shellAutoExpand(5, 10_000), true, "但真跑了 10 秒还是展");
+  });
+  test("两个信号都没有（旧会话重开、没记到起点）：不展", () => {
+    assert.equal(shellAutoExpand(null, null), false);
+  });
+});
+
+describe("tailPreviewLines", () => {
+  test("取末尾非空行，跳过尾部空行，按原顺序返回", () => {
+    assert.deepEqual(tailPreviewLines("a\nb\nc\n\n"), ["b", "c"]);
+    assert.deepEqual(tailPreviewLines("only"), ["only"]);
+    assert.deepEqual(tailPreviewLines(""), []);
+    assert.deepEqual(tailPreviewLines("\n\n"), []);
+  });
+  test("行数多于 keep 只留最后 keep 行；长行截断带省略号", () => {
+    assert.deepEqual(tailPreviewLines("1\n2\n3\n4", 2), ["3", "4"]);
+    const long = "x".repeat(200);
+    const preview = tailPreviewLines(long)[0];
+    assert.ok(preview !== undefined && preview.endsWith("…") && preview.length < 200);
+  });
+});
+
+describe("toolStartAt", () => {
+  test("跑着的条目给起点（end 为 null）；落定后不再给（运行时钟退场）", () => {
+    recordToolFrame(toolItem({ toolCallId: "clock-1", status: "running", timestamp: 1_000 }));
+    assert.equal(toolStartAt("clock-1"), 1_000);
+    recordToolFrame(toolItem({ toolCallId: "clock-1", timestamp: 4_000 }));
+    assert.equal(toolStartAt("clock-1"), null, "落定后运行时钟该退场");
+    assert.equal(toolStartAt("clock-unknown"), null);
+  });
+});
+
+describe("运行时钟文案（en / zh）", () => {
+  test("上限与预计的字典键在两种语言下都成句", () => {
+    assert.equal(en.chat.limitLabel("10:00"), "limit 10:00");
+    assert.equal(zh.chat.limitLabel("10:00"), "上限 10:00");
+    assert.equal(en.chat.expectedAbout("40s"), "expected ~40s");
+    assert.equal(zh.chat.expectedAbout("40 秒"), "预计约 40 秒");
+    assert.equal(en.chat.slowerThanExpected, "slower than expected");
+    assert.equal(zh.chat.slowerThanExpected, "比预计慢");
   });
 });

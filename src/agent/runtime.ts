@@ -506,6 +506,19 @@ const TOOL_GUIDELINES =
   `Windows 上这些命令本来就慢，短超时会把正常的慢命令拦腰杀掉；填了小于 ${COMMAND_TIMEOUT_FLOOR_SECONDS} 秒的值不会生效。`;
 
 /**
+ * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
+ * 模型可以用 `expected_seconds` 告诉 UI「这条预计要跑多久」——**只影响界面**
+ * （运行行显示「预计约 X」，预计超 10 秒的调用开始就展开看实时输出），不影响
+ * 执行、不做硬性结束、也不进 shell。机制：pi 的 TypeBox 校验对未知字段放行
+ * （0.84.3 实测），字段随入参原样流到渲染层，bash 的 execute 只解构
+ * command/timeout、无视它——因此不需要 patch pi，也不需要在闸门里剔除。
+ */
+const EXPECTED_SECONDS_GUIDELINE =
+  "调 bash/powershell 时，如果你预计这条命令要跑 10 秒以上（测试、构建、装依赖、sleep、" +
+  "大目录扫描），可以在参数里额外带上 expected_seconds（数字，秒，你的估计值）。" +
+  "它只用于界面展示（进度提示与自动展开），不影响命令的执行与超时。";
+
+/**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
  *
  * 但这个 promise 也**不听 abort**：pi 的 prepareToolCall 是 `await beforeToolCall(...)`
@@ -689,6 +702,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 describeChannelRole(role),
                 STORE_TOOLS_GUIDELINES,
                 TOOL_GUIDELINES,
+                EXPECTED_SECONDS_GUIDELINE,
                 // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
                 // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
                 QUOTE_GUIDELINE,

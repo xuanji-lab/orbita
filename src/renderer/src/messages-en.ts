@@ -994,6 +994,10 @@ export const en = {
     // 时长：秒数不足一分钟带小数，满一分钟「1m 05s」（秒两位补零由调用方做）
     seconds: (s: string) => `${s}s`,
     minutesSeconds: (m: number, s: string) => `${m}m ${s}s`,
+    // 运行中 shell 的时钟：上限与预计（elapsed 的 m:ss 由 formatRunClock 直出，不走字典）
+    limitLabel: (clock: string) => `limit ${clock}`,
+    expectedAbout: (duration: string) => `expected ~${duration}`,
+    slowerThanExpected: "slower than expected",
     tokensApprox: (before: string) => `~${before} tokens`,
     tokensArrow: (before: string, after: string) => `${before} → ${after} tokens`,
     // 工具结果摘要

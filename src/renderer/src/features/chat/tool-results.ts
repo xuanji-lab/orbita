@@ -719,6 +719,83 @@ export function toolDurationText(toolCallId: string, t: Messages): string | null
   return formatToolDuration(entry.end - entry.start, t);
 }
 
+/**
+ * 运行中的 shell 工具还差多久说不清，但「已经跑了多久」必须说得清（2026-10 用户
+ * 反馈：长 bash 一行不动，像卡死）。起点读现场计时表：还在跑的条目 end 为 null，
+ * 没记到（旧会话重开、或 renderer 晚于工具启动才挂上）返回 null，界面退化为不显示计时。
+ */
+export function toolStartAt(toolCallId: string): number | null {
+  const entry = toolTimers.get(toolCallId);
+  return entry !== undefined && entry.end === null ? entry.start : null;
+}
+
+// ── 运行中 shell 的可见性（长命令自动展开 + 活尾 + 计时）──
+
+/**
+ * 自动展开阈值（秒）。依据：全量 46,363 次 bash 调用里 P90 ≈ 6.3s——10s 只会
+ * 打进约 8% 的慢命令，快命令（读文件、小 grep）永不展开，界面的安静不被破坏。
+ */
+export const SHELL_AUTO_EXPAND_SECONDS = 10;
+
+/** expected_seconds 的合法上限（秒）：超过一天的一定不是认真的估计，当坏值丢弃。 */
+const EXPECTED_SECONDS_MAX = 86_400;
+
+/**
+ * 模型自估的执行秒数（`expected_seconds`）。**只给 UI**（展开时机与「预计约」文案），
+ * 不影响执行、不做硬性结束——pi 的 TypeBox 校验对未知字段放行（实测 0.84.3），
+ * 字段随入参原样流到渲染层，bash 的 execute 只解构 command/timeout、无视它。
+ * 逐字段校验：非有限正数、超上限、字符串数字都判 null（字符串数字不猜——
+ * 「预计约 abc」比没有预计更糟）。
+ */
+export function expectedSecondsOf(input: unknown): number | null {
+  return secondsFieldOf(input, "expected_seconds");
+}
+
+/** 本次调用的 timeout 上限（秒）：入参里的 `timeout`，运行行显示「/ 上限 10:00」。 */
+export function timeoutSecondsOf(input: unknown): number | null {
+  return secondsFieldOf(input, "timeout");
+}
+
+function secondsFieldOf(input: unknown, key: string): number | null {
+  if (typeof input !== "object" || input === null) return null;
+  const value = (input as Record<string, unknown>)[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  if (value > EXPECTED_SECONDS_MAX) return null;
+  return value;
+}
+
+/** 运行中计时的 m:ss 形态（0:45 / 12:03）：秒两位补零，分钟不限位。 */
+export function formatRunClock(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * 折叠行下的活尾预览：让「它在动」不展开也看得见。取末尾最多 keep 个**非空**行
+ * （尾部空行是噪音），每行截到 maxChars——预览是信号不是正文，长行以「…」收口。
+ * 从尾往前找，返回按原顺序排列。
+ */
+export function tailPreviewLines(text: string, keep = 2, maxChars = 160): string[] {
+  const lines = text.split("\n");
+  const picked: string[] = [];
+  for (let i = lines.length - 1; i >= 0 && picked.length < keep; i--) {
+    const line = lines[i];
+    if (line === undefined || line.trim() === "") continue;
+    picked.push(line.length > maxChars ? `${line.slice(0, maxChars)}…` : line);
+  }
+  return picked.reverse();
+}
+
+/**
+ * 自动展开判定（纯函数，驱动方拿着它在每秒重算）：模型给了 expected 且达阈值 →
+ * **开跑就展**（一秒都不让用户盯着静止的行）；没给或没达 → 已运行时长达阈值再展。
+ * elapsed 记不到（晚挂载）时只认 expected——两个信号都没有就不自动展开。
+ */
+export function shellAutoExpand(expectedSeconds: number | null, elapsedMs: number | null): boolean {
+  if (expectedSeconds !== null && expectedSeconds >= SHELL_AUTO_EXPAND_SECONDS) return true;
+  return elapsedMs !== null && elapsedMs >= SHELL_AUTO_EXPAND_SECONDS * 1000;
+}
+
 /** 工具时长格式：不足一分钟带一位小数（毫秒级工具是噪音，只有慢命令值得看），满一分钟「1m 04s」（秒两位补零）。 */
 export function formatToolDuration(ms: number, t: Messages): string {
   const seconds = ms / 1000;
