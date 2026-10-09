@@ -2549,17 +2549,15 @@ textarea.text-field {
   padding: 2px;
 }
 
-/* 胶囊一行：一行横排、超出横向滚动、右侧渐隐（渐隐只是遮罩不是颜色） */
+/* 胶囊行：顶到就换行铺满（2026-10 用户裁决：全部看到，不要横滚与渐隐） */
 .material-chip-scroll {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  overflow-x: auto;
   padding: 2px;
-  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
 }
 
-/* 浮层（粘贴全文）锚在胶囊行的上方 */
+/* 浮层（粘贴全文）锚在胶囊行的上方；行会折成多行，浮层仍开在整块上方 */
 .material-chip-row {
   position: relative;
   min-width: 0;
@@ -2589,12 +2587,37 @@ textarea.text-field {
   color: var(--color-text-primary);
 }
 
-/* 元信息（行数）：等宽、tertiary——机器事实 */
+/* 元信息（行数）：等宽、tertiary——机器事实；目录胶囊的尾 `/` 也用它（记号，不进读屏） */
 .material-chip-meta {
   flex: 0 0 auto;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
+}
+
+/* 附件胶囊的完整路径 tooltip（useHoverTooltip 定位）：mono（机器事实）、
+   长路径换行不截断——看全正是它的存在理由。z-index 与 IconButton 的 tooltip 同档（70） */
+.material-path-tip {
+  position: fixed;
+  z-index: 70;
+  max-width: min(480px, calc(100vw - 16px));
+  padding: 2px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* 首帧定位前不显形，免得先闪在左上角再跳（同 setting-tip） */
+.material-path-tip[data-placed="false"] {
+  opacity: 0;
 }
 
 /* 粘贴胶囊的本体是按钮（点开全文浮层） */

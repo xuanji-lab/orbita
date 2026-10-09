@@ -90,7 +90,7 @@ export function composerMaterials(input: {
       kind: ref.kind,
       id: ref.id,
       name: ref.name,
-      // 完整路径挂 title 就够，meta 不重复它
+      // 完整路径走胶囊的悬停 tooltip（FileChip），meta 不重复它
       meta: null,
       remove: () => input.onRemoveFile(ref.id),
       ref,
