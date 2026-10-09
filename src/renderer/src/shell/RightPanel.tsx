@@ -111,7 +111,9 @@ export function RightPanelSlot(props: {
             bottom: 0,
             width: 6,
             cursor: "col-resize",
-            zIndex: 5,
+            // 要在面板内容的浮层之上（文件树 overlay 是 z-20）：浮层盖住热区就把
+            // 拖宽没收了（2026-10-10 实机验收抓到）；全局浮层（contextmenu 70）仍更高
+            zIndex: 30,
           }}
         />
       )}

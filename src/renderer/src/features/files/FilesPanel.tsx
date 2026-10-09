@@ -339,7 +339,7 @@ export function FilesPanel(props: {
                       role="tab"
                       tabIndex={0}
                       aria-selected={active}
-                      className="files-tab"
+                      className="files-tab no-drag"
                       title={tab.path}
                       onClick={() => setActivePath(tab.path)}
                       onKeyDown={(event) => {
