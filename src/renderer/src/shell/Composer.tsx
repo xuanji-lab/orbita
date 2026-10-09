@@ -23,10 +23,7 @@ import { isSubmitKey } from "./composer-keys.ts";
 import { composerScript } from "./composer-script.ts";
 import { caretPoint } from "./caret-point.ts";
 import {
-  diffInsertion,
-  insertToken,
   slashSpaceOpensPanel,
-  tokenPayloadOf,
 } from "./panel-token.ts";
 import { chipRangeAfter, chipRangeBefore, mirrorSegments, parseChips } from "./composer-chips.ts";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
@@ -257,23 +254,6 @@ export function Composer(props: {
       }),
     [props.attachments, props.files, props.quotes, props.onRemoveAttachment, props.onRemoveFile, props.onRemoveQuote, t],
   );
-  // ── 右栏面板的 token 拖入（panel-token.ts）─────────────────────────
-  // 拖拽源在 Skills / MCP 面板（长按卡片起拖）。落在 textarea 上时不拦默认行为——
-  // 原生 drop 会按指针位置插入 text/plain，input 事件里再把这段换成补过空格的
-  // 形态（diffInsertion 找到插入点）；落在输入框其它部位（材料叠放层等）时追加到
-  // 草稿末尾。文件 / 图片拖放不走这里（tokenPayloadOf 认不出就返回，ChatView 照接）。
-  const [tokenDragOver, setTokenDragOver] = useState(false);
-  /** 原生 drop 已插入、等下一拍补空格的 token（input 事件里消费，自愈见 diffInsertion） */
-  const pendingTokenDropRef = useRef<string | null>(null);
-  /** 把原生插入的那段换成补过空格的形态：走 execCommand 保撤销栈，input 事件会把
-   * 最终值送回 onChange */
-  const fixupTokenDrop = (range: { start: number; end: number }, token: string): void => {
-    const el = textareaRef.current;
-    if (el === null) return;
-    el.focus();
-    el.setSelectionRange(range.start, range.end);
-    document.execCommand("insertText", false, insertToken(props.value, range.start, token).text);
-  };
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
   // 同一个位置的两面，按输入态切换。想停止时清掉草稿即可，排队是高频动作、停止是少数。
   // 有图 / 有附件 / 有引用没字也能发——一张截图本身就是一句完整的话
@@ -287,8 +267,6 @@ export function Composer(props: {
   const stopping = running && !sendable;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragging = props.dropActive === true;
-  // token 拖入的落点提示与文件拖放同一套：中性虚线，不染 accent（accent 只给主操作）
-  const dropHint = dragging || tokenDragOver;
   return (
     // 材料叠放（B 定稿）：四路附件全部移出输入卡，叠在卡片上方——截图一行、胶囊一行、
     // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）。
@@ -304,42 +282,10 @@ export function Composer(props: {
           flexDirection: "column",
           gap: 6,
           padding: "10px 12px 8px",
-          // 拖进来时的落点提示（文件拖放与 token 拖入同一套）：中性虚线，不染 accent
-          outline: dropHint ? "1.5px dashed var(--color-border-strong)" : undefined,
+          // 文件 / 图片拖在聊天面板上方时的落点提示（dropActive）：中性虚线，
+          // 不染 accent（accent 只给主操作）
+          outline: dragging ? "1.5px dashed var(--color-border-strong)" : undefined,
           outlineOffset: -5,
-        }}
-        onDragOver={(event) => {
-          if (tokenPayloadOf(event.dataTransfer) === null) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-          if (!tokenDragOver) setTokenDragOver(true);
-        }}
-        onDragLeave={(event) => {
-          // 卡内部元素之间移动也触发 leave；真离开卡片才收
-          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-          setTokenDragOver(false);
-        }}
-        onDrop={(event) => {
-          const payload = tokenPayloadOf(event.dataTransfer);
-          if (payload === null) return;
-          setTokenDragOver(false);
-          if (event.target === textareaRef.current) {
-            // 落在 textarea 上：不 preventDefault，原生插入后下一拍补空格（见 onChange）
-            pendingTokenDropRef.current = payload.token;
-            return;
-          }
-          // 落在输入卡其它部位（底栏等）：追加到草稿末尾。execCommand 保撤销栈；
-          // 被拒（只读 / 禁用）就退回 onChange 直写
-          event.preventDefault();
-          const next = insertToken(props.value, props.value.length, payload.token);
-          const el = textareaRef.current;
-          if (el === null) {
-            props.onChange(next.value);
-            return;
-          }
-          el.focus();
-          el.setSelectionRange(props.value.length, props.value.length);
-          if (!document.execCommand("insertText", false, next.text)) props.onChange(next.value);
         }}
       >
       <div className={`composer-field${pasteRuns.length > 0 ? " has-paste-run" : ""}`}>
@@ -397,19 +343,6 @@ export function Composer(props: {
           onChange={(event) => {
             // 上一次听写的问题说过了：用户动手打字就收起来
             if (dictation.problem !== null) dictation.clearProblem();
-            // 右栏 token 拖入的原生插入到了（按指针位置落了 text/plain）：先按原样
-            // 进 draft（React 与 DOM 同步），下一拍把这段换成补过空格的形态。
-            // diff 对不上（drop 被拦 / 只读没插进去 / 残留等待态撞上下一次输入）就
-            // 当普通输入走——等待态在这里自愈
-            const pending = pendingTokenDropRef.current;
-            if (pending !== null) {
-              pendingTokenDropRef.current = null;
-              const range = diffInsertion(props.value, event.target.value, pending);
-              setCursor(event.target.selectionStart);
-              props.onChange(event.target.value);
-              if (range !== null) requestAnimationFrame(() => fixupTokenDrop(range, pending));
-              return;
-            }
             setCursor(event.target.selectionStart);
             props.onChange(event.target.value);
           }}

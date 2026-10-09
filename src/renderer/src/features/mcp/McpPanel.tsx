@@ -14,7 +14,6 @@ import type { McpServer, McpStatus, McpInstanceInfo, McpServerInfo } from "@shar
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
 import { headIconKind, statusLine, summarizeInstances } from "./row-display.ts";
 import { mcpToken, type TokenPickerControl } from "../../shell/panel-token.ts";
-import { useLongPressDrag } from "../../shell/useLongPressDrag.ts";
 import { useT } from "../../locale.ts";
 
 /**
@@ -261,9 +260,8 @@ export function McpPanel(props: {
 }
 
 /*
- * 一台 server 的卡片（从 McpPanel 列表里提出来的组件）：长按可拖进输入框落
- * /mcp:<name> token（useLongPressDrag）；选取模式下点选即插 token、高亮卡随
- * ↑↓ 移动。短按的原行为（启停 / 删除 / 展开实例与工具）不变。
+ * 一台 server 的卡片（从 McpPanel 列表里提出来的组件）：选取模式下点选即插
+ * token、高亮卡随 ↑↓ 移动；短按的原行为（启停 / 删除 / 展开实例与工具）不变。
  */
 function McpServerCard(props: {
   server: McpServerInfo;
@@ -291,18 +289,10 @@ function McpServerCard(props: {
     (instance): instance is McpInstanceInfo & { status: { kind: "failed"; message: string } } =>
       instance.status.kind === "failed",
   );
-  const drag = useLongPressDrag(() => ({ kind: "mcp", token: mcpToken(server.name) }));
   return (
     <div
-      className={`mcp-card glass-card${props.pickerActive === true ? " picker-active" : ""}${
-        drag.armed ? " drag-armed" : ""
-      }${drag.dragging ? " drag-source" : ""}`}
+      className={`mcp-card glass-card${props.pickerActive === true ? " picker-active" : ""}`}
       data-picker-active={props.pickerActive === true ? "true" : undefined}
-      draggable={drag.armed}
-      onPointerDown={drag.handlers.onPointerDown}
-      onClickCapture={drag.handlers.onClickCapture}
-      onDragStart={drag.handlers.onDragStart}
-      onDragEnd={drag.handlers.onDragEnd}
       onClick={(event) => {
         if (props.onPickerSelect === undefined) return;
         // 行内动作键（启停 / 删除 / 展开实例与工具）各自干活，不当作整卡选取

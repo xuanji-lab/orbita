@@ -1,13 +1,11 @@
 import { slashTokenAt } from "./slash-trigger.ts";
 
 /**
- * 右栏面板 ↔ 输入框之间的「token 通道」纯逻辑：
+ * 右栏面板 → 输入框的「token 通道」纯逻辑：
  *
- * 1. **拖拽**（Skills / MCP 面板的卡片长按后 HTML5 拖入输入框）：
- *    拖拽源在 dataTransfer 里同时带 `text/plain`（token 文本——落到别处也还是
- *    一段可读文字）与自定义 MIME（结构化负载，输入框一侧按它做空格补齐）；
- * 2. **`/` + 空格选取**：消息开头孤立的 `/` 按空格 → 删掉 `/`、打开右栏 Skills
- *    面板进入选取模式，选中后把 token 插回原光标位置。
+ * 「`/` + 空格」选取：消息开头孤立的 `/` 按空格 → 删掉 `/`、打开右栏 Skills
+ * 面板进入选取模式，选中后把 token 插回原光标位置。
+ *（曾有第二条路——面板卡片长按后 HTML5 拖入输入框；2026-10 用户裁决删去。）
  *
  * token 形态由发送端定义：skill → `/skill:<slug> `，MCP → `/mcp:<server> `
  * （`/skill:` 的展开边界在 `@shared/skill` 的 findSkillTokens，同一套 token 语法）。
@@ -15,15 +13,6 @@ import { slashTokenAt } from "./slash-trigger.ts";
  *
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
-
-/** 拖拽负载的自定义 MIME。Chromium 在 dragover/drop 里都能读到非标准类型 */
-export const ORBITA_TOKEN_MIME = "application/x-orbita-token";
-
-export interface OrbitaTokenPayload {
-  kind: "skill" | "mcp";
-  /** 插入文本（带尾随空格），text/plain 与它一致 */
-  token: string;
-}
 
 /** skill 的插入 token：`/skill:<slug> ` */
 export function skillToken(slug: string): string {
@@ -33,32 +22,6 @@ export function skillToken(slug: string): string {
 /** MCP server 的插入 token：`/mcp:<name> ` */
 export function mcpToken(name: string): string {
   return `/mcp:${name} `;
-}
-
-export function encodeTokenPayload(payload: OrbitaTokenPayload): string {
-  return JSON.stringify(payload);
-}
-
-/** 宽松解码：坏 JSON / 形状不对一律 null，不让拖拽通道把异常带进输入框 */
-export function decodeTokenPayload(raw: string | null): OrbitaTokenPayload | null {
-  if (raw === null || raw === "") return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const value = parsed as Record<string, unknown>;
-  if (value.kind !== "skill" && value.kind !== "mcp") return null;
-  if (typeof value.token !== "string" || !value.token.startsWith("/")) return null;
-  return { kind: value.kind, token: value.token };
-}
-
-/** 拖拽事件里取本应用的 token 负载；不是我们的拖拽返回 null（文件 / 图片照旧走原路） */
-export function tokenPayloadOf(transfer: DataTransfer | null): OrbitaTokenPayload | null {
-  if (transfer === null) return null;
-  return decodeTokenPayload(transfer.getData(ORBITA_TOKEN_MIME));
 }
 
 /**
@@ -86,36 +49,10 @@ export function insertToken(
 }
 
 /**
- * 原生 drop 之后找「浏览器把 text/plain 插到了哪」：对 drop 前后的值做
- * 前后缀比对，切出的插入段必须恰好等于期望的 token——对不上（drop 被拦、
- * 只读框没插进去、或下一次正常输入撞上残留的等待态）返回 null，调用方按
- * 普通输入处理。这让「等待 drop 的 input 事件」天然自愈，不会误伤后续打字。
- */
-export function diffInsertion(
-  before: string,
-  after: string,
-  expected: string,
-): { start: number; end: number } | null {
-  if (after.length !== before.length + expected.length) return null;
-  let prefix = 0;
-  while (prefix < before.length && before.charAt(prefix) === after.charAt(prefix)) prefix++;
-  let suffix = 0;
-  while (
-    suffix < before.length - prefix &&
-    before.charAt(before.length - 1 - suffix) === after.charAt(after.length - 1 - suffix)
-  ) {
-    suffix++;
-  }
-  const inserted = after.slice(prefix, after.length - suffix);
-  if (inserted !== expected) return null;
-  return { start: prefix, end: after.length - suffix };
-}
-
-/**
  * 「`/` + 空格」是否打开右栏 Skills 面板：光标紧跟在消息开头的孤立 `/` 之后
  * （`/` 之前只有空白，`/` 之后还没打任何字）。与 slash-trigger 的 token 规则
  * 同源；**只认消息开头**——句中的 `/ ` 是普通文字（「a / b」），中途的插入
- * 走拖拽或句中补全面板，不该被空格劫持。
+ * 走句中补全面板，不该被空格劫持。
  *
  * 命中返回 `/` 的下标（删掉它、并把 token 插回的位置），否则 null。
  */
@@ -125,16 +62,6 @@ export function slashSpaceOpensPanel(value: string, cursor: number): number | nu
   const token = slashTokenAt(value, cursor);
   if (token === null || !token.atMessageStart || token.query !== "") return null;
   return token.start;
-}
-
-/** 长按进入可拖状态的等待时长（毫秒） */
-export const LONG_PRESS_MS = 300;
-/** 等待期允许的手抖位移（像素）——超过就算点选 / 滚动，不再武装拖拽 */
-export const LONG_PRESS_MOVE_TOLERANCE_PX = 6;
-
-/** 长按判定：按住够久且没移出容差，才算进入可拖状态 */
-export function longPressArmed(heldMs: number, movedPx: number): boolean {
-  return heldMs >= LONG_PRESS_MS && movedPx <= LONG_PRESS_MOVE_TOLERANCE_PX;
 }
 
 /**

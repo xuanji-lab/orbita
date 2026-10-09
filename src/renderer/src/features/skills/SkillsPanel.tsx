@@ -18,10 +18,8 @@ import { isSkillAvailable, isSkillSlug } from "@shared/skill";
 import { filterSkills } from "./skill-filter.ts";
 import {
   skillToken,
-  type OrbitaTokenPayload,
   type TokenPickerControl,
 } from "../../shell/panel-token.ts";
-import { useLongPressDrag } from "../../shell/useLongPressDrag.ts";
 import { useT } from "../../locale.ts";
 
 /** 行 hover tooltip 出现的延迟——比 IconButton 的 200ms 更慢，快速划过列表不惊扰 */
@@ -443,10 +441,6 @@ function SkillRow(props: {
   const t = useT();
   const { skill } = props;
   const dim = props.dim === true;
-  // 长按拖拽源（useLongPressDrag）：missing 的拖不了——token 落进输入框也展开不了
-  const drag = useLongPressDrag(
-    () => (skill.missing ? null : { kind: "skill", token: skillToken(skill.slug) }) satisfies OrbitaTokenPayload | null,
-  );
   const setNames = [skill.global ? t.skills.global : null, ...skill.workspaces.map(props.workspaceName)].filter(
     (name): name is string => name !== null,
   );
@@ -482,13 +476,8 @@ function SkillRow(props: {
     <div
       className={`skill-row${skill.missing ? " skill-row-missing" : dim ? " skill-row-dim" : ""}${
         props.pickerActive === true ? " picker-active" : ""
-      }${drag.armed ? " drag-armed" : ""}${drag.dragging ? " drag-source" : ""}`}
+      }`}
       data-picker-active={props.pickerActive === true ? "true" : undefined}
-      draggable={drag.armed}
-      onPointerDown={drag.handlers.onPointerDown}
-      onClickCapture={drag.handlers.onClickCapture}
-      onDragStart={drag.handlers.onDragStart}
-      onDragEnd={drag.handlers.onDragEnd}
     >
       <button
         ref={tooltip.anchorRef}

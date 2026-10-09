@@ -1921,19 +1921,6 @@ body {
   color: var(--color-text-tertiary);
 }
 
-/*
- * 长按拖拽源（useLongPressDrag.ts）：按住 300ms 进入可拖状态后 grab 光标 +
- * 禁选中（起拖前的微动不该拉出文本选区）；起拖后源行压淡，注意力跟落点走
- * （同 QueueStrip 拖拽源）。Skills 行与 MCP 卡共用这两个类。
- */
-.drag-armed {
-  cursor: grab;
-  user-select: none;
-}
-.drag-source {
-  opacity: 0.4;
-}
-
 /* 选取模式的键盘高亮：淡底 + semibold（.option-row 选中同款口径），盖过 hover */
 .skill-row.picker-active {
   background: var(--option-active-bg);

@@ -2,13 +2,7 @@ import { deepStrictEqual, equal } from "node:assert/strict";
 import { describe, it } from "node:test";
 import { findInvocationTokens } from "../../../shared/invocation.ts";
 import {
-  LONG_PRESS_MS,
-  LONG_PRESS_MOVE_TOLERANCE_PX,
-  decodeTokenPayload,
-  diffInsertion,
-  encodeTokenPayload,
   insertToken,
-  longPressArmed,
   mcpToken,
   skillToken,
   slashSpaceOpensPanel,
@@ -18,22 +12,6 @@ describe("skillToken / mcpToken", () => {
   it("带尾随空格（token 天然终止，光标落在可继续打字的位置）", () => {
     equal(skillToken("orbita-always-open-pr"), "/skill:orbita-always-open-pr ");
     equal(mcpToken("miyo"), "/mcp:miyo ");
-  });
-});
-
-describe("encodeTokenPayload / decodeTokenPayload", () => {
-  it("roundtrip", () => {
-    const payload = { kind: "skill" as const, token: skillToken("a") };
-    deepStrictEqual(decodeTokenPayload(encodeTokenPayload(payload)), payload);
-  });
-  it("坏负载一律 null，不抛异常", () => {
-    equal(decodeTokenPayload(null), null);
-    equal(decodeTokenPayload(""), null);
-    equal(decodeTokenPayload("not json"), null);
-    equal(decodeTokenPayload("42"), null);
-    equal(decodeTokenPayload('{"kind":"other","token":"/x "}'), null);
-    equal(decodeTokenPayload('{"kind":"skill","token":"x "}'), null);
-    equal(decodeTokenPayload('{"kind":"mcp"}'), null);
   });
 });
 
@@ -95,24 +73,6 @@ describe("insertToken", () => {
   });
 });
 
-describe("diffInsertion", () => {
-  it("找出原生 drop 的插入点", () => {
-    deepStrictEqual(diffInsertion("helloworld", "hello/skill:x world", "/skill:x "), {
-      start: 5,
-      end: 5 + "/skill:x ".length,
-    });
-  });
-  it("重复文本下贪婪前缀会把插入点切在最靠后的等价位置，内容对得上即可", () => {
-    // aaaa 中插入 aa：贪婪前缀吃到第 4 位，插入段仍是 aa（等价插入点）
-    deepStrictEqual(diffInsertion("aaaa", "aaaaaa", "aa"), { start: 4, end: 6 });
-  });
-  it("内容 / 长度对不上返回 null（等待态自愈的钥匙）", () => {
-    equal(diffInsertion("abc", "abcd", "/x "), null);
-    equal(diffInsertion("abc", "abc/x y", "/x "), null);
-    equal(diffInsertion("abc", "abXc", "/x "), null);
-  });
-});
-
 describe("slashSpaceOpensPanel", () => {
   it("消息开头孤立的 /：返回 / 的下标", () => {
     equal(slashSpaceOpensPanel("/", 1), 0);
@@ -132,15 +92,5 @@ describe("slashSpaceOpensPanel", () => {
     equal(slashSpaceOpensPanel("/", 0), null);
     equal(slashSpaceOpensPanel("普通文字", 4), null);
     equal(slashSpaceOpensPanel("", 0), null);
-  });
-});
-
-describe("longPressArmed", () => {
-  it("时长与位移双闸", () => {
-    equal(longPressArmed(LONG_PRESS_MS - 1, 0), false);
-    equal(longPressArmed(LONG_PRESS_MS, 0), true);
-    equal(longPressArmed(LONG_PRESS_MS, LONG_PRESS_MOVE_TOLERANCE_PX), true);
-    equal(longPressArmed(LONG_PRESS_MS, LONG_PRESS_MOVE_TOLERANCE_PX + 0.5), false);
-    equal(longPressArmed(LONG_PRESS_MS + 5000, LONG_PRESS_MOVE_TOLERANCE_PX + 1), false);
   });
 });
