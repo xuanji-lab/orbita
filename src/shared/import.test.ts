@@ -1,6 +1,12 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { isImportSourceId, parseImportRunInput, parseImportScanInput } from "./import.ts";
+import {
+  isCustomRootSource,
+  isImportSourceId,
+  parseImportCustomRootInput,
+  parseImportRunInput,
+  parseImportScanInput,
+} from "./import.ts";
 
 describe("parseImportScanInput", () => {
   test("认识的来源原样通过，重复的去重", () => {
@@ -31,6 +37,32 @@ describe("parseImportScanInput", () => {
     assert.throws(() => parseImportScanInput({ sources: ["cursor"] }), /unknown import source/);
     assert.throws(() => parseImportScanInput({ sources: "proma" }), /array/);
     assert.throws(() => parseImportScanInput(null), /object/);
+  });
+});
+
+describe("parseImportCustomRootInput", () => {
+  test("认识的来源 + 非空路径原样通过（空白会被 trim）", () => {
+    assert.deepEqual(parseImportCustomRootInput({ source: "proma", dir: "  ~/.proma-dev  " }), {
+      source: "proma",
+      dir: "~/.proma-dev",
+    });
+  });
+
+  test("isCustomRootSource 只认有定位规格的来源（agent-skills 不支持自定义路径）", () => {
+    assert.equal(isCustomRootSource("proma"), true);
+    assert.equal(isCustomRootSource("codex"), true);
+    assert.equal(isCustomRootSource("agent-skills"), false);
+    assert.equal(isCustomRootSource("cursor"), false);
+    assert.equal(isCustomRootSource(1), false);
+  });
+
+  test("不认识的来源 / agent-skills / 空路径 / 坏形状整体拒绝", () => {
+    assert.throws(() => parseImportCustomRootInput({ source: "cursor", dir: "/x" }), /unknown import source/);
+    assert.throws(() => parseImportCustomRootInput({ source: "agent-skills", dir: "/x" }), /unknown import source/);
+    assert.throws(() => parseImportCustomRootInput({ source: "proma", dir: "" }), /non-empty/);
+    assert.throws(() => parseImportCustomRootInput({ source: "proma", dir: "   " }), /non-empty/);
+    assert.throws(() => parseImportCustomRootInput({ source: "proma" }), /non-empty/);
+    assert.throws(() => parseImportCustomRootInput(null), /object/);
   });
 });
 

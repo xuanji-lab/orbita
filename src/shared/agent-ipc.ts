@@ -210,6 +210,15 @@ export const ipcChannels = {
    * hi / test（返回 ImportGreetingCheckResult）。只判断、不落盘
    */
   importCheckGreetings: "import:check-greetings",
+  /**
+   * 自定义来源路径：添加（入参 ImportCustomRootInput）——目录经该来源 validate 过才落盘，
+   * 失败抛稳定错误码 IMPORT_CUSTOM_ROOT_INVALID:*；成功返回更新后的清单（ImportCustomRoot[]）
+   */
+  importCustomRootsAdd: "import:custom-roots:add",
+  /** 自定义来源路径：移除一条（入参 ImportCustomRootInput），返回更新后的清单 */
+  importCustomRootsRemove: "import:custom-roots:remove",
+  /** 目录选择框（renderer 无文件系统权，主进程开）：选中返回绝对路径，取消返回 null */
+  importPickDirectory: "import:pick-directory",
   /** 中心存储里的全部 skill（含没链进任何集合的） */
   skillList: "skill:list",
   /** 把 skill 链进一个集合（global 或某个 workspace）；互斥规则见 SkillScope */
