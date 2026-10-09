@@ -4,6 +4,7 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 tool-results.ts 本身的纪律）
 import { composeChannelPrompt } from "../../../../shared/channel.ts";
+import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
 import {
   answerText,
   branchAnchorEntries,
@@ -1636,6 +1637,16 @@ describe("expectedSecondsOf / timeoutSecondsOf", () => {
   test("合法数字照收；额外字段不挤占 command 的读取", () => {
     assert.equal(expectedSecondsOf({ command: "sleep 40", timeout: 600, expected_seconds: 40 }), 40);
     assert.equal(timeoutSecondsOf({ command: "x", timeout: 600, expected_seconds: 40 }), 600);
+  });
+  test("timeout 套闸门同一条下限规则：比下限小抬到下限、填大尊重、不填不动、非法不修", () => {
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 60 }), COMMAND_TIMEOUT_FLOOR_SECONDS, "模型填 60，实际跑在下限上，显示也得说下限");
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 900 }), 900);
+    assert.equal(timeoutSecondsOf({ command: "x" }), null, "不填 = 不设超时，不显示上限");
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: -5 }), null);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: "600" }), null, "字符串数字不猜");
+  });
+  test("expected_seconds 不套下限——它是估计不是超时，估计 3 秒是合法的", () => {
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: 3 }), 3);
   });
   test("坏值判 null：缺失、零、负数、NaN、字符串数字、超一天", () => {
     assert.equal(expectedSecondsOf({ command: "x" }), null);

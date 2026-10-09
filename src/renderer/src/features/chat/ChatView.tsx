@@ -3297,17 +3297,18 @@ function ToolLine(props: {
       ? toolDurationText(props.toolCallId, t)
       : null;
   // 运行中时钟：已跑多久（+上限，+预计）。起点没记到（旧会话重开）时退化为只报预计，
-  // 两个都没有就什么都不报——宁缺勿假。预计超时了如实说「比预计慢」，不给负数倒计时。
+  // 连预计都没有就什么都不报——宁缺勿假。超出预计如实说「比预计慢」，不给负数倒计时。
   const runClock =
     shellActive && runStart !== null
       ? formatRunClock(Math.max(0, now - runStart)) +
         (limitSeconds !== null ? ` / ${t.chat.limitLabel(formatRunClock(limitSeconds * 1000))}` : "")
       : null;
   const runExpected = (() => {
-    if (!shellActive || expectedSeconds === null || runStart === null) return null;
-    return now - runStart >= expectedSeconds * 1000
-      ? t.chat.slowerThanExpected
-      : t.chat.expectedAbout(formatThinkingDuration(expectedSeconds * 1000, t));
+    if (!shellActive || expectedSeconds === null) return null;
+    const about = t.chat.expectedAbout(formatThinkingDuration(expectedSeconds * 1000, t));
+    // 起点没记到就没有时钟可比，「比预计慢」判断不了——只报预计，不猜
+    if (runStart === null) return about;
+    return now - runStart >= expectedSeconds * 1000 ? t.chat.slowerThanExpected : about;
   })();
   // 折叠行下的活尾：有流式输出时取末几行，让「它在动」不展开也看得见；
   // 展开时藏起（展开体本身就是完整活尾，别显两遍）

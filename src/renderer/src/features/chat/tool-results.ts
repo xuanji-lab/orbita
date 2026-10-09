@@ -22,6 +22,7 @@ import type { CompactedRecord, SessionRecord, TranscriptRecord } from "@shared/s
 import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
+import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -751,9 +752,17 @@ export function expectedSecondsOf(input: unknown): number | null {
   return secondsFieldOf(input, "expected_seconds");
 }
 
-/** 本次调用的 timeout 上限（秒）：入参里的 `timeout`，运行行显示「/ 上限 10:00」。 */
+/**
+ * 本次调用的 timeout 上限（秒），运行行显示「/ 上限 10:00」。**套闸门同一条下限规则**
+ * （COMMAND_TIMEOUT_FLOOR_SECONDS）：闸门抬超时改的是入参对象、不回写会话记录，
+ * 这里读到的是模型原始值——模型填 60 实际跑在 600 上，显示也得说 600，否则界面撒谎。
+ * 规则一字不差：不填 = null（不设上限，不显示）、比下限小 → 抬到下限、比下限大 → 尊重、
+ * 非法 → null（不替 pi 做第二套校验）。
+ */
 export function timeoutSecondsOf(input: unknown): number | null {
-  return secondsFieldOf(input, "timeout");
+  const raw = secondsFieldOf(input, "timeout");
+  if (raw === null) return null;
+  return Math.max(raw, COMMAND_TIMEOUT_FLOOR_SECONDS);
 }
 
 function secondsFieldOf(input: unknown, key: string): number | null {

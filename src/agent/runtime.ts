@@ -30,12 +30,12 @@ import {
   type PiModel,
 } from "./model-registration.ts";
 import {
-  COMMAND_TIMEOUT_FLOOR_SECONDS,
   createToolCallGate,
   describePermissionMode,
   ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
+import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
