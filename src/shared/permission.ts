@@ -26,8 +26,15 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
 };
 
 /**
- * 不改变任何东西的工具：pi 内建五个，加我们自己的 read_task（B-1）——它经主进程
- * 读别的 task 的落盘记录，不改任何盘。其余（write / edit / bash…）一律视为有副作用。
+ * 不改变任何东西的工具：pi 内建四个（read / grep / ls / find），加我们自己的
+ * read_task（B-1）——它经主进程读别的 task 的落盘记录，不改任何盘。
+ * 其余（write / edit / bash…）一律视为有副作用。
+ *
+ * **名单里不放 pi 没有的工具**：以前这里（与 agent/permission.ts 的内建名单）都带着一个
+ * `glob`，而 pi 0.84.3 的 createAllToolDefinitions 里没有这个工具（只有
+ * read / bash / powershell / edit / write / grep / find / ls）。一个永远不会被调到的名字
+ * 放在这里只是假的声明——它不会多拦任何东西，但会让读的人以为有这条路。
+ * 真源与启用的内建工具集同源：`src/agent/permission.ts` 的 `ENABLED_BUILTIN_TOOLS`。
  *
  * read_task 是「跨会话读」，曾在 2026-09-18 短暂立过「plan 档也弹审批」的桶
  * （CROSS_SESSION_READ_TOOLS），同日二次裁决撤销：读取而已，每次点击不值；
@@ -41,7 +48,6 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
 export const READ_ONLY_TOOLS = [
   "read",
   "grep",
-  "glob",
   "ls",
   "find",
   "read_task",

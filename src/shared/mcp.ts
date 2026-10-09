@@ -7,10 +7,25 @@
  * 启停沿用 skills 的哲学——**配置文件就是全部状态**，不另存一份启用清单。
  * 区别是 MCP 不像 skill 那样能靠移动目录表达，所以用一个 `disabled` 字段
  * （Cursor / Windsurf 同款），仍然只有一份真相。
+ *
+ * **工作区限定**也走同一条哲学：`workspaces` 白名单 + 配置里的 `${workspaceFolder}`
+ * 变量，两者都写在 server 条目上，不另开一份「哪个工作区用哪些 server」的清单。
  */
 
+/**
+ * 这台 server 限定只在哪些工作区里启用。
+ *
+ * **缺席 / 空数组 = 所有工作区都启用**（含没有工作区的 Home 会话），这是向后兼容的默认。
+ * 匹配按**工作区名或 id**任一命中——名字是给人读的（`4cc7bad3-…` 读不出是哪篇论文），
+ * id 是给「改名之后仍然生效」兜底的：只认名字的话，一次 rename 就会让这台 server
+ * 静默从那个工作区消失，而静默消失正是本项目一直在治的病。
+ */
+export interface McpWorkspaceScope {
+  workspaces?: string[];
+}
+
 /** 本地子进程。绝大多数 MCP server 是这种。 */
-export interface McpStdioServer {
+export interface McpStdioServer extends McpWorkspaceScope {
   transport?: "stdio";
   command: string;
   args?: string[];
@@ -20,7 +35,7 @@ export interface McpStdioServer {
 }
 
 /** 远端 HTTP。Streamable HTTP，不是已废弃的 SSE。 */
-export interface McpHttpServer {
+export interface McpHttpServer extends McpWorkspaceScope {
   transport: "http";
   url: string;
   headers?: Record<string, string>;
@@ -36,6 +51,8 @@ export interface McpConfigFile {
 /** 一台 server 此刻怎么样了。**连接状态不落盘**，它是运行时事实。 */
 export type McpStatus =
   | { kind: "disabled" }
+  /** 还没连：对应工作区没打开过 / 闲置被回收 / 刚 reload 完。与 connecting 分开——它不转圈 */
+  | { kind: "idle" }
   | { kind: "connecting" }
   | { kind: "ready"; tools: string[] }
   | { kind: "failed"; message: string };
@@ -46,7 +63,56 @@ export interface McpServerInfo {
   /** 给人看的一行：stdio 显示命令，http 显示 URL */
   detail: string;
   status: McpStatus;
+  /** 文件里的 `disabled` 事实。启停按钮按它决定语义——运行时合并状态（各工作区
+      实例取最优）可以和文件事实相反（别的 scope 有 ready/failed 实例时），
+      按运行时状态决定按钮会显示错误的动词、写错误的值（PR #163 评审第 5 条） */
+  disabled: boolean;
+  /** 配的 `workspaces` 白名单原样带出来给面板显示。空 = 所有工作区都能用。 */
+  scopedTo: string[];
+  /** 定义来自哪里：全局 mcp.json，和 / 或这些工作区自带的 `.mcp.json`（同名时工作区赢）。 */
+  source: McpSource;
+  /** 各工作区实例（面板展开明细）。空 = 还没连过（或全局单实例没分片的必要）。 */
+  instances: McpInstanceInfo[];
 }
+
+/** 一个工作区实例的快照（面板展开明细的一行）。 */
+export interface McpInstanceInfo {
+  /** 工作区 id（agent 上报的原值，不翻名）——实例的身份。React key 用它：
+      名字取的是文件夹 basename，两个不同路径的同名文件夹会撞 */
+  scope: string;
+  /** 工作区名（主进程把 scope id 翻成名；翻不到显示原 id）。"" = Home 会话 */
+  workspace: string;
+  /** 实例绑定的工作区根（= 它所在工作区的路径；工作区会话里每台 server 的实例都带，
+      不只用了 `${workspaceFolder}` 的那些）。"" = 不属于任何工作区（Home 会话） */
+  label: string;
+  status: McpStatus;
+}
+
+/** 面板列表行的定义来源（配置分层：工作区自带 `.mcp.json` ∪ 全局 mcp.json）。 */
+export interface McpSource {
+  /** 全局 mcp.json 里有定义 */
+  global: boolean;
+  /** 这些工作区自带的 `.mcp.json` 里有定义（同名时工作区赢全局） */
+  workspaces: string[];
+}
+
+/** 面板列表的返回：合并后的行 + 读坏的工作区配置警告（一个工作区的坏文件不拖死整表）。 */
+export interface McpListResult {
+  servers: McpServerInfo[];
+  warnings: string[];
+}
+
+/**
+ * agent 进程报上来的连接状态快照——主进程只拿它叠状态，**不当列表**：
+ * 列表的真源是配置文件（白名单、定义来源都在文件里，见 main/mcp/ipc.ts）。
+ * `instances` 里 scope 是工作区 id（agent 进程不认工作区，只收 id），
+ * 翻成人读的名字是主进程的事。
+ */
+export type McpStatusSnapshot = {
+  name: string;
+  status: McpStatus;
+  instances: { scope: string; label: string; status: McpStatus }[];
+}[];
 
 export function isHttpServer(server: McpServer): server is McpHttpServer {
   return server.transport === "http";
@@ -111,6 +177,7 @@ function parseServer(raw: unknown): McpServer | null {
       url,
       ...(record(value["headers"]) !== null ? { headers: record(value["headers"]) as Record<string, string> } : {}),
       ...(disabled ? { disabled } : {}),
+      ...scoped(value["workspaces"]),
     };
   }
   const command = str(value["command"]);
@@ -126,7 +193,15 @@ function parseServer(raw: unknown): McpServer | null {
     ...(record(value["env"]) !== null ? { env: record(value["env"]) as Record<string, string> } : {}),
     ...(cwd !== null ? { cwd } : {}),
     ...(disabled ? { disabled } : {}),
+    ...scoped(value["workspaces"]),
   };
+}
+
+/** 白名单：非数组、非字符串项一律丢掉；全丢光就当作没写（= 所有工作区）。 */
+function scoped(value: unknown): { workspaces?: string[] } {
+  if (!Array.isArray(value)) return {};
+  const names = value.filter((item): item is string => typeof item === "string" && item !== "");
+  return names.length === 0 ? {} : { workspaces: [...new Set(names)] };
 }
 
 function str(value: unknown): string | null {
@@ -147,4 +222,185 @@ export function describeServer(server: McpServer): string {
   return isHttpServer(server)
     ? server.url
     : [server.command, ...(server.args ?? [])].join(" ");
+}
+
+/**
+ * 配置分层合并：工作区自带的 `.mcp.json`（overlay）∪ 全局 mcp.json（base），
+ * **同名 overlay 赢**——工作区可以给全局某台换参数，也可以有一台全局没有的；
+ * 「在这个工作区停用全局某台」= 同名条目 + `disabled: true`。
+ * 不改输入，返回新对象。
+ */
+export function mergeMcpConfigs(
+  base: Record<string, McpServer>,
+  overlay: Record<string, McpServer>,
+): Record<string, McpServer> {
+  return { ...base, ...overlay };
+}
+
+/**
+ * 面板列表的合并（纯函数）：全局一份 + 各工作区自带的 `.mcp.json`，按名字收成一行，
+ * 来源累计。行上展示「跑得起来的那份定义」：被工作区覆盖的全局条目，展示工作区那份；
+ * 多个工作区定义同名的，展示第一份（detail 只是给人看的命令行，实例各自解析各自的）。
+ */
+export function mergeServerSources(
+  global: Record<string, McpServer>,
+  workspaceFiles: { workspace: string; servers: Record<string, McpServer> }[],
+): { name: string; server: McpServer; source: McpSource }[] {
+  const rows = new Map<string, { name: string; server: McpServer; source: McpSource }>();
+  for (const [name, server] of Object.entries(global)) {
+    rows.set(name, { name, server, source: { global: true, workspaces: [] } });
+  }
+  for (const { workspace, servers } of workspaceFiles) {
+    for (const [name, server] of Object.entries(servers)) {
+      const row = rows.get(name);
+      if (row === undefined) {
+        rows.set(name, { name, server, source: { global: false, workspaces: [workspace] } });
+        continue;
+      }
+      row.source.workspaces.push(workspace);
+      // 同名工作区赢全局：行上展示最终会跑的那份
+      if (row.source.global) row.server = server;
+    }
+  }
+  return [...rows.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+/**
+ * 面板行上「文件里的 disabled 事实」读哪份：启停写路径只落全局文件
+ *（工作区配置由用户自己编辑，见 main/mcp/ipc.ts 头注释），所以显示的事实
+ * 必须跟按钮写的那份对齐——有全局来源的行读全局文件（行上展示的定义仍是
+ * 跑得起来的工作区那份，不变）；工作区独有的行按钮禁用、够不着写路径，
+ * 读它自己的文件。
+ */
+export function mcpRowDisabledFact(
+  row: { name: string; server: McpServer; source: McpSource },
+  global: Record<string, McpServer>,
+): boolean {
+  return row.source.global ? global[row.name]?.disabled === true : row.server.disabled === true;
+}
+
+/**
+ * 配置里唯一支持的变量：**这条会话所属工作区的根目录**。
+ *
+ * 只有这一个，不做 `${env:...}` / `${input:...}` 那一整套——那套的第二个消费者还没出现
+ * （AGENTS.md 的消费者纪律）。语法跟 Cursor / VS Code 一致，用户不必另学一套。
+ */
+export const WORKSPACE_FOLDER_VAR = "${workspaceFolder}";
+
+/**
+ * 工作区自带的 MCP 配置文件名，放在工作区根——**配置跟文件夹走**：
+ * 整目录拷走 / 换机即用；工作区改名、删了重加都不丢配置（它不挂在 orbita 的
+ * 工作区记录上）。格式与全局 mcp.json 同构（Claude Desktop 兼容）。
+ */
+export const WORKSPACE_MCP_FILENAME = ".mcp.json";
+
+/** 工作区在解析期的样子。`path` 就是 `${workspaceFolder}` 的值。 */
+export interface McpWorkspace {
+  id: string;
+  name: string;
+  path: string;
+}
+
+/** 这台 server 的配置里用了工作区变量吗。 */
+export function usesWorkspaceFolder(server: McpServer): boolean {
+  const hit = (text: string): boolean => text.includes(WORKSPACE_FOLDER_VAR);
+  if (isHttpServer(server)) {
+    return hit(server.url) || Object.values(server.headers ?? {}).some(hit);
+  }
+  return (
+    hit(server.command) ||
+    (server.args ?? []).some(hit) ||
+    Object.values(server.env ?? {}).some(hit) ||
+    (server.cwd !== undefined && hit(server.cwd))
+  );
+}
+
+/** 白名单是否放行这条会话。`null` = 会话不属于任何工作区（Home）。 */
+export function appliesToWorkspace(
+  server: McpServer,
+  workspace: { id: string; name: string } | null,
+): boolean {
+  const scoped = server.workspaces;
+  if (scoped === undefined || scoped.length === 0) return true;
+  if (workspace === null) return false;
+  return scoped.includes(workspace.name) || scoped.includes(workspace.id);
+}
+
+/**
+ * 斜杠面板该不该给这台 server：定义对这个工作区可见（全局有，或该工作区自带的
+ * `.mcp.json` 有）、白名单放行（appliesToWorkspace 同一条规则）、未停用。
+ *
+ * 与发送端判 `/mcp:` 可用的依据对齐——发送端读的是「全局 ∪ 本工作区 .mcp.json」再按
+ * 白名单筛（ipc.ts readMcpServers）。`mcp:list` 列的是**所有**工作区的 server，面板不筛
+ * 就会在 A 工作区列出只在 B 配的 server，插进去发出去被告知不可用（与 2026-10-04 用户
+ * 报的「面板列了别的工作区的 skill」同一类分叉）。source / scopedTo 里存的是工作区名。
+ * 已知近似：全局停用、某工作区 `.mcp.json` 同名改成启用时，列表行只有一个 disabled 事实，
+ * 这里按它算——宁可少列，不多列。
+ */
+export function isMcpServerOffered(
+  info: { disabled: boolean; scopedTo: readonly string[]; source: McpSource },
+  workspace: { id: string; name: string } | null,
+): boolean {
+  if (info.disabled) return false;
+  const defined = info.source.global || (workspace !== null && info.source.workspaces.includes(workspace.name));
+  if (!defined) return false;
+  if (info.scopedTo.length === 0) return true;
+  return workspace !== null && (info.scopedTo.includes(workspace.name) || info.scopedTo.includes(workspace.id));
+}
+
+/**
+ * 把 `${workspaceFolder}` 换成工作区根。
+ *
+ * 覆盖 `command` / `args` / `env` / `cwd` / `url` / `headers`——一个字符串都不漏，
+ * 漏一个就是「用户以为写对了、实际没生效」。`disabled` 与 `workspaces` 原样保留
+ * （后者还要给工具描述标绑定用）。
+ */
+export function substituteWorkspaceFolder(server: McpServer, folder: string): McpServer {
+  const sub = (text: string): string => text.split(WORKSPACE_FOLDER_VAR).join(folder);
+  const subAll = (bag: Record<string, string>): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(bag)) out[key] = sub(value);
+    return out;
+  };
+  if (isHttpServer(server)) {
+    return {
+      ...server,
+      url: sub(server.url),
+      ...(server.headers === undefined ? {} : { headers: subAll(server.headers) }),
+    };
+  }
+  return {
+    ...server,
+    command: sub(server.command),
+    ...(server.args === undefined ? {} : { args: server.args.map(sub) }),
+    ...(server.env === undefined ? {} : { env: subAll(server.env) }),
+    ...(server.cwd === undefined ? {} : { cwd: sub(server.cwd) }),
+  };
+}
+
+/**
+ * 把一份 mcp.json 解析成**某一条会话该看到的那一份**：按白名单筛，再把工作区变量换掉。
+ *
+ * 解析放在主进程——只有它知道工作区路径（与 `skillsDirs` 同一条纪律：agent 进程只收数据）。
+ */
+export function resolveServersForWorkspace(
+  configured: Record<string, McpServer>,
+  workspace: McpWorkspace | null,
+): Record<string, McpServer> {
+  const out: Record<string, McpServer> = {};
+  for (const [name, server] of Object.entries(configured)) {
+    if (!appliesToWorkspace(server, workspace)) continue;
+    if (usesWorkspaceFolder(server)) {
+      /*
+       * Home 会话没有工作区根可换。**跳过，不塞默认值**——塞一个猜的值正是
+       * aw-mcp 那类 server 静默空转 / 串号的来源（它的 `AW_PAPER_ROOT` 配错时
+       * 引用检查、快照、期刊迁移会全部对着错误的论文跑）。
+       */
+      if (workspace === null) continue;
+      out[name] = substituteWorkspaceFolder(server, workspace.path);
+    } else {
+      out[name] = server;
+    }
+  }
+  return out;
 }

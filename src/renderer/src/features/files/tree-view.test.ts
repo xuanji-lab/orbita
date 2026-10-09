@@ -4,6 +4,7 @@ import {
   countLoadedEntries,
   countVisibleEntries,
   fileIcon,
+  fileIconTone,
   filterCountText,
   filterEntries,
   footerSummary,
@@ -113,7 +114,7 @@ describe("fileIcon", () => {
     deepStrictEqual(fileIcon("index.ts", "file"), "file-code-2");
     deepStrictEqual(fileIcon("App.tsx", "file"), "file-code-2");
     deepStrictEqual(fileIcon("main.py", "file"), "file-code-2");
-    deepStrictEqual(fileIcon("styles.CSS", "file"), "file-code-2"); // 大小写不敏感
+    deepStrictEqual(fileIcon("styles.SCSS", "file"), "file-code-2"); // 大小写不敏感
   });
 
   it("配置扩展名 → file-json-2", () => {
@@ -141,15 +142,72 @@ describe("fileIcon", () => {
     deepStrictEqual(fileIcon("logo.svg", "file"), "image");
   });
 
-  it("文本扩展名 → file-text", () => {
+  it("文本扩展名 → file-text；markdown 也是文本形状", () => {
     deepStrictEqual(fileIcon("README.md", "file"), "file-text");
     deepStrictEqual(fileIcon("notes.txt", "file"), "file-text");
+    deepStrictEqual(fileIcon("guide.mdx", "file"), "file-text");
+  });
+
+  it("网页扩展名 → globe（html / css 与样式表同档）", () => {
+    deepStrictEqual(fileIcon("index.html", "file"), "globe");
+    deepStrictEqual(fileIcon("styles.CSS", "file"), "globe"); // 大小写不敏感
+    deepStrictEqual(fileIcon("page.htm", "file"), "globe");
+  });
+
+  it("文档扩展名 → book（排版过的成品文档）；pdf 单独走卷轴 scroll-text（与 docx 形状先分，2026-10 验收 L）", () => {
+    deepStrictEqual(fileIcon("paper.pdf", "file"), "scroll-text");
+    deepStrictEqual(fileIcon("简历.DOCX", "file"), "book");
+    deepStrictEqual(fileIcon("report.rtf", "file"), "book");
+  });
+
+  it("演示扩展名 → presentation", () => {
+    deepStrictEqual(fileIcon("slides.pptx", "file"), "presentation");
+    deepStrictEqual(fileIcon("demo.KEY", "file"), "presentation");
+  });
+
+  it("表格扩展名 → file-spreadsheet（csv/tsv 从文本形状挪来——形状是表）", () => {
+    deepStrictEqual(fileIcon("budget.XLSX", "file"), "file-spreadsheet");
+    deepStrictEqual(fileIcon("data.csv", "file"), "file-spreadsheet");
+    deepStrictEqual(fileIcon("sheet.numbers", "file"), "file-spreadsheet");
+  });
+
+  it("压缩包扩展名 → file-archive", () => {
+    deepStrictEqual(fileIcon("bundle.zip", "file"), "file-archive");
+    deepStrictEqual(fileIcon("backup.7Z", "file"), "file-archive");
+    deepStrictEqual(fileIcon("src.tar.gz", "file"), "file-archive");
+  });
+
+  it("音视频分开：mp3 → file-audio-2，mp4 → file-video-2", () => {
+    deepStrictEqual(fileIcon("voice.MP3", "file"), "file-audio-2");
+    deepStrictEqual(fileIcon("clip.mov", "file"), "file-video-2");
+    deepStrictEqual(fileIcon("lecture.mp4", "file"), "file-video-2");
   });
 
   it("无扩展名、不在任何配置名单里、其它未知扩展名 → file（兜底）", () => {
     deepStrictEqual(fileIcon("LICENSE", "file"), "file");
     deepStrictEqual(fileIcon("binary.out", "file"), "file");
     deepStrictEqual(fileIcon(".mystery", "file"), "file"); // 点文件但不在配置名单
+  });
+
+  it("fileIconTone：文档 / 演示 / 表格三族有色，其余（含 pdf、目录、symlink）中性", () => {
+    deepStrictEqual(fileIconTone("论文.DOCX", "file"), "doc");
+    deepStrictEqual(fileIconTone("memo.rtf", "file"), "doc");
+    deepStrictEqual(fileIconTone("notes.odt", "file"), "doc");
+    deepStrictEqual(fileIconTone("slides.pptx", "file"), "slides");
+    deepStrictEqual(fileIconTone("demo.key", "file"), "slides");
+    deepStrictEqual(fileIconTone("budget.xlsx", "file"), "sheet");
+    deepStrictEqual(fileIconTone("data.CSV", "file"), "sheet");
+    deepStrictEqual(fileIconTone("sheet.numbers", "file"), "sheet");
+    deepStrictEqual(fileIconTone("ledger.ods", "file"), "sheet");
+    // pdf 用户点名不在内；代码 / 图片 / 文本 / 压缩包 / 音视频一律中性
+    deepStrictEqual(fileIconTone("paper.pdf", "file"), null);
+    deepStrictEqual(fileIconTone("index.ts", "file"), null);
+    deepStrictEqual(fileIconTone("notes.txt", "file"), null);
+    deepStrictEqual(fileIconTone("data.tsv", "file"), null); // tsv 不在用户点名的表格清单里
+    deepStrictEqual(fileIconTone("bundle.zip", "file"), null);
+    deepStrictEqual(fileIconTone("src", "directory"), null);
+    deepStrictEqual(fileIconTone("readme.md", "symlink"), null);
+    deepStrictEqual(fileIconTone("无扩展名", "file"), null);
   });
 });
 

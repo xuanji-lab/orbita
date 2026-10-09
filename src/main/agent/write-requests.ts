@@ -8,13 +8,14 @@
  * 「workspace」对它没有指称，宁可报错也不猜成 global）。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
+import type { McpStatus } from "../../shared/mcp.ts";
 import type { SkillScope } from "../../shared/skill.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import type { SessionStore } from "../session/store.ts";
 
 export type WriteOutcome =
-  | { ok: true; path?: string; status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string } }
+  | { ok: true; path?: string; status?: McpStatus }
   | { ok: false; error: string };
 
 export async function applySkillWrite(
@@ -47,14 +48,15 @@ export async function applySkillWrite(
 
 export async function applyMcpWrite(
   mcp: McpStore,
-  reload: (servers: Awaited<ReturnType<McpStore["read"]>>) => Promise<void>,
-  statusOf: (name: string) => { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string } | undefined,
+  /** 写盘后让 agent 进程拆掉连接重来。不送 servers：每轮开轮本来就会送该工作区那一份 */
+  reload: () => Promise<void>,
+  statusOf: (name: string) => McpStatus | undefined,
   event: Extract<AgentEvent, { type: "mcpWriteRequest" }>,
 ): Promise<WriteOutcome> {
   try {
     // 已存在同名：拒绝（覆盖等于吃掉用户现有配置）；模型要改就去编辑文件
     await mcp.add(event.name, event.server);
-    await reload(await mcp.read()).catch(() => undefined); // 重连失败不算写失败（配置已在）
+    await reload().catch(() => undefined); // 重连失败不算写失败（配置已在）
     return { ok: true, status: statusOf(event.name) };
   } catch (cause) {
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };

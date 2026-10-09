@@ -32,12 +32,13 @@ import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } fro
 import {
   admitFileRefs,
   fileRefRejectionText,
+  withStatKinds,
   type ComposerFileRef,
   type ComposerPastedText,
 } from "../../shell/composer-attachments.ts";
 import {
   pastedTextSize,
-  PROMPT_FILE_MAX_COUNT,
+  EXTERNAL_FILE_COPY_MAX_BYTES,
   type PromptFileRef,
 } from "@shared/prompt-attachments";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
@@ -74,6 +75,7 @@ import {
 import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
 import { splitUserTextBlocks } from "@shared/prompt-attachments";
 import type { Workspace } from "@shared/workspace";
+import { pathTail } from "@shared/path";
 import { stripInvocationBlock } from "../../../../shared/invocation.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -167,9 +169,11 @@ export interface ChatSession {
   /** 挑选 / 粘贴 / 拖进来的文件：图片读成 base64、其余按路径引用；被拒的点名报在 error 上 */
   attachIncoming: (files: readonly File[]) => void;
   removeAttachment: (id: string) => void;
+  /** 回形针「添加文件夹」：主进程目录选择器，选中目录按拖入同一套分拣入列 */
+  attachFolderRefs: () => Promise<void>;
   /** 当前查看会话输入框里的文件引用（纯路径，模型用 read 工具自己读） */
   files: readonly ComposerFileRef[];
-  /** 文件面板「引用到输入卡」的入口：原位置引用（不复制），同名额与去重走同一套分拣 */
+  /** 文件面板「引用到输入卡」的入口：原位置引用（不复制），去重走同一套分拣 */
   attachFileRef: (ref: { path: string; name: string; kind: "file" | "dir" }) => void;
   removeFile: (id: string) => void;
   /** 当前查看会话输入框里的粘贴文本块（全文在内存里，发送时永不截断） */
@@ -358,6 +362,11 @@ export interface ChatSession {
 /** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */
 interface ViewHandle {
   readonly sessionRef: Readonly<{ current: string | null }>;
+  /** 正在看的会话 id（含盘上打开、未唤醒的：sessionRef 为 null、opened 在）。
+  * model / thinking 事件按它路由——盘上打开的会话切模型后事件可能要几秒才回
+  * （agent 进程冷启动），期间任何一次 openSession 都拿旧 meta 把 chip 播种回去，
+  * 迟到的事件必须能纠回正看着的槽 */
+  readonly viewedIdRef: Readonly<{ current: string | null }>;
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
   alignThinking(event: { level: PiThinkingLevel }): void;
@@ -856,19 +865,22 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 回填），排在下面 model 的 alignModel 前面调用不改变先后
         if (shouldRefreshSessions(event, sessionsRef.current)) refreshSessions();
         // 会话内模型切换成功（C-4，主进程已落 meta）：对齐**正看着那条**的槽——
-        // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽
+        // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽。按 viewedId
+        // （活会话 ?? 盘上打开的）路由：盘上打开的会话切模型后事件可能要几秒才回
+        // （agent 进程冷启动），期间 openSession 已拿旧 meta 把 chip 播种回去了，
+        // 迟到的事件要能纠回正看着的槽（2026-10-08 验收实测的竞态）
         if (event.type === "model") {
           for (const view of views.current) {
-            if (event.sessionId === view.sessionRef.current) {
+            if (event.sessionId === view.viewedIdRef.current) {
               view.alignModel(event);
               break;
             }
           }
         }
-        // 思考档真值（clamp 后事实）到了：对齐正看着那条的槽，芯片自我纠真
+        // 思考档真值（clamp 后事实）到了：同一条路由规则对齐
         if (event.type === "thinking") {
           for (const view of views.current) {
-            if (event.sessionId === view.sessionRef.current) {
+            if (event.sessionId === view.viewedIdRef.current) {
               view.alignThinking(event);
               break;
             }
@@ -1331,9 +1343,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, []);
 
   /** 注册进引擎：model 事件路由、删除/移动会话通知、meta 同步都按这份名册来 */
+  // viewedId 镜像（事件路由用，见 ViewHandle.viewedIdRef）：「正看着哪条」＝活会话优先，
+  // 否则盘上打开的那条。注册只一次，闭包里的 opened 会陈旧，ref 永远新鲜
+  const viewedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    viewedIdRef.current = sessionId ?? opened?.id ?? null;
+  }, [sessionId, opened]);
   useEffect(() => {
     const handle: ViewHandle = {
       sessionRef,
+      viewedIdRef,
       alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
       // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
       alignMode: (mode) => setMode(mode),
@@ -1415,7 +1434,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * **纯路径引用**（admitFileRefs，发送时主进程把副本收进会话目录）——内容模型
    * 用 read 工具自己读。分拣是同步的（被拒的当场点名）；读图是异步的——**键在
    * 进来那一刻定下**，读完时用户就算切到别的会话，图也落回它被拖进来的那个输入框。
-   * 名额在追加时再截一次：两批并发拖进来，各自分拣时都以为还有位子。
+   * 文件先按 file 同步入列、再向主进程问一次真实类型（拖入的目录在 renderer 里
+   * 分不出来，发送时的 lstat 纠正又太晚——图标与名字当场就该是对的）；问不到就
+   * 留在 file，发送侧的纠正仍兑底。
    */
   const attachIncoming = useCallback(
     (incoming: readonly File[]) => {
@@ -1437,18 +1458,38 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .join(" ");
       engine.setError(notice === "" ? null : notice);
       if (acceptedFiles.length > 0) {
-        writeFiles(key, (current) => [
-          ...current,
-          ...acceptedFiles.map((ref) => ({
-            id: crypto.randomUUID(),
-            name: ref.name,
-            path: ref.path,
-            kind: "file" as const,
-            origin: "external" as const,
-          })),
-        ]);
+        // id 在入列那一刻铸好，stat 回来按它贴回类型；发送与这次写入不互相等
+        const entries = acceptedFiles.map((ref) => ({
+          id: crypto.randomUUID(),
+          name: ref.name,
+          path: ref.path,
+          kind: "file" as const,
+          origin: "external" as const,
+        }));
+        writeFiles(key, (current) => [...current, ...entries]);
+        void api.files
+          .statKind(entries.map((entry) => entry.path))
+          .then((facts) => {
+            // kind 为 null（stat 不到）时按 file 收下：分拣不给附件添堵；超过复制
+            // 上限的标「未复制」——发送时主进程会按原位置引用，胶囊上明说代价
+            writeFiles(key, (current) =>
+              withStatKinds(
+                current,
+                entries.map((entry, index) => ({
+                  id: entry.id,
+                  kind: facts[index]?.kind ?? "file",
+                  uncopied: (facts[index]?.size ?? 0) > EXTERNAL_FILE_COPY_MAX_BYTES,
+                })),
+              ),
+            );
+          })
+          .catch((cause: unknown) => {
+            // 通道坏了维持 file 入列：发送时主进程的 lstat 纠正仍会给出真实类型
+            console.error("[chat] 附件类型没问到，按文件入列", cause);
+          });
       }
       if (acceptedImages.length === 0) return;
+      // 图的名额在追加时再截一次：两批并发拖进来，各自分拣时都以为还有位子（文件不设名额）
       void Promise.allSettled(acceptedImages.map((file) => readAsPromptImage(file))).then((results) => {
         const read: ComposerImage[] = [];
         const failures: string[] = [];
@@ -1472,7 +1513,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   /**
    * 文件面板「引用到输入卡」：**原位置引用，不复制**——文件本来就在这条会话的
    * 根清单里（工作台 / 工作区 / 附加目录），agent 的 read 一定够得着，复制一份
-   * 只会过期。去重与名额走与拖入同一套分拣（重复引用会点名，不会无声无息）。
+   * 只会过期。去重走与拖入同一套分拣（重复引用会点名，不会无声无息）。
    */
   const attachFileRef = useCallback(
     (ref: { path: string; name: string; kind: "file" | "dir" }) => {
@@ -1499,6 +1540,42 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     (id: string) => writeFiles(draftKey, (current) => current.filter((item) => item.id !== id)),
     [draftKey, writeFiles],
   );
+
+  /**
+   * 回形针「添加文件夹」：主进程开目录选择器（多选；Windows 不允许与选文件同框，
+   * 所以与「添加文件」分两个入口），选回来的与拖入同一套分拣入列。kind 直接记
+   * dir——选择器只会给出目录，不必再问一遍 stat；origin external（发送时主进程
+   * 不复制目录、按原位置引用，路径仍 realpath 成规范形）。取消选择器是用户的
+   * 正常退出，不报错也不动草稿。
+   */
+  const attachFolderRefs = useCallback(async () => {
+    const key = draftKey;
+    let picked: string[] | null;
+    try {
+      picked = await api.files.pickFolders();
+    } catch (cause: unknown) {
+      console.error("[chat] 文件夹选择器打不开", cause);
+      return;
+    }
+    if (picked === null || picked.length === 0) return;
+    const t = engine.messagesRef.current;
+    const { accepted, rejected } = admitFileRefs(
+      picked.map((path) => ({ path, name: pathTail(path) === "" ? path : pathTail(path) })),
+      fileMap.get(key) ?? [],
+    );
+    engine.setError(fileRefRejectionText(rejected, t));
+    if (accepted.length === 0) return;
+    writeFiles(key, (current) => [
+      ...current,
+      ...accepted.map((item) => ({
+        id: crypto.randomUUID(),
+        name: item.name,
+        path: item.path,
+        kind: "dir" as const,
+        origin: "external" as const,
+      })),
+    ]);
+  }, [draftKey, fileMap, writeFiles, engine]);
 
   /** 粘贴的一大段文字（Composer 已按阈值拦下）抽成粘贴块。全文在内存里，永不截断 */
   const addPastedText = useCallback(
@@ -1547,7 +1624,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         writeAttachments(snap.draftKey, (current) => [...current, ...snap.images].slice(0, PROMPT_IMAGE_MAX_COUNT));
       }
       if (snap.files.length > 0) {
-        writeFiles(snap.draftKey, (current) => [...current, ...snap.files].slice(0, PROMPT_FILE_MAX_COUNT));
+        writeFiles(snap.draftKey, (current) => [...current, ...snap.files]);
       }
       if (snap.pasted.length > 0) writePasted(snap.draftKey, (current) => [...current, ...snap.pasted]);
       // 首页发首条消息时，submitTurn 已把新会话绑成本槽的活会话、输入框换到新会话的
@@ -2067,10 +2144,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
-   * 换模型（C-4）。**有活会话就地切**：命令发过去，成功经 `model` 事件回环对齐
-   * model state（不乐观——切换会失败：无 key、未知模型；失败红字说明，chip 不动）；
-   * 没活的（首页 / 盘上打开未唤醒）只改意图，下一条消息 submit 时生效——
-   * 换了却不发言就切走，会被 openSession 的 meta 播种冲掉，等于没换过（已裁决接受）。
+   * 换模型（C-4）。**选中哪条会话就切哪条**：本地即设（UI 即时）+ 命令发过去，
+   * 成功经 `model` 事件回环对齐；失败红字说明。
+   * 盘上打开、还没唤醒的旧会话（sessionRef 置空、opened 在）同样按会话记账并注入
+   * （2026-10-08 CDP 实测复现后修）：此前这里只改本地显示，选择既不落 meta 也不进
+   * 会话意图账，任何一次 openSession——包括再点一次同一行——都拿旧 meta 把 chip
+   * 播种回去，用户看到的就是「切了没同步」。runtime 的 setLedgerModel 本就为
+   * 「没在跑」的会话而设：校验 + `model` 事件回环落 meta，与活会话同一条真源。
+   * 换了不发言就切走会丢选择的旧裁决由此作废——现在选择当场落盘。
    * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
    *
    * 思考档跟着模型走（用户裁决 wafo 2026-09-23）：本槽没有会话（新任务槽）按
@@ -2087,12 +2168,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const supported = modelThinkingLevels(modelId, catalog);
       const switched =
         supported !== null && !supported.includes(thinkingLevel) ? defaultThinkingLevel(modelId, supported) : null;
-      const id = sessionRef.current;
+      // 盘上打开的旧会话按它的 id 记账与注入（理由见函数头）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {
-        // sessionRef 为 null 有两种：首页新任务槽（按「手选 > 默认」起档），与盘上打开
-        // 还没唤醒的旧会话（opened 不为 null——它有自己的档，按上面的规则只在不支持时改）
-        if (opened === null) applyNewTaskThinking(modelId);
-        else if (switched !== null) setThinkingLevelState(switched);
+        applyNewTaskThinking(modelId);
         return;
       }
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
@@ -2100,7 +2179,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       engine.rememberSessionIntent(id, { model: { providerId, modelId } });
       if (currentPhase() === "idle") {
         // 闲着就注入（校验 + 落 meta + model 事件回环）；跑着只改显示——
-        // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账
+        // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账。
+        // currentPhase 只认本槽活会话（sessionRef）：盘上打开的会话恒判 idle，
+        // 若它其实正在后台跑（通道投递开的轮），runtime 侧自然走 setSessionModel
+        // 的在跑路径——两条路都是正解
         void api.agent
           .setModel(id, providerId, modelId)
           .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
@@ -2122,7 +2204,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setMode(next);
       // 启动恢复点跟随（bug A）：下次启动应用从这一档开始
       void api.settings.set({ lastUsed: { mode: next } }).catch(() => undefined);
-      const id = sessionRef.current;
+      // 盘上打开的旧会话同样记账并落 meta（同 chooseModel 的口径：选择当场落盘，
+      // 不留「切走再回就回跳」的键面）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
       engine.rememberSessionIntent(id, { mode: next });
       // 子会话的 renderer 侧联动（intent 覆写 + 列表缓存 + 正看着子会话的槽）；
@@ -2132,7 +2216,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .setMode(id, next)
         .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
     },
-    [engine],
+    [engine, opened],
   );
 
   const changeThinkingLevel = useCallback(
@@ -2144,14 +2228,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // **这是用户手选**：记进本次运行的手选记忆——重启前的新任务槽起档都从它
       // 开始，双查看槽共用（用户上一次手选是全局的，不按槽分）
       engine.pickedThinkingRef.current = next;
-      const id = sessionRef.current;
+      // 盘上打开的旧会话同样记账并落 meta（同 chooseModel 的口径）；首页新任务槽两者皆空
+      const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {
         setThinkingLevelState(next); // 本槽开新任务：还没有会话可记，槽意图就是意图
         return;
       }
       applySessionThinking(id, next);
     },
-    [engine, applySessionThinking],
+    [engine, opened, applySessionThinking],
   );
 
   /**
@@ -2211,11 +2296,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           ),
         );
       }
-      // 文件引用与粘贴文本块同退：名额截断与图片同一条纪律
+      // 文件引用与粘贴文本块同退（文件不设条数上限）
       if (files.length > 0) {
-        writeFiles(draftKey, (current) =>
-          [...current, ...files.map((file) => ({ ...file, id: crypto.randomUUID() }))].slice(0, PROMPT_FILE_MAX_COUNT),
-        );
+        writeFiles(draftKey, (current) => [...current, ...files.map((file) => ({ ...file, id: crypto.randomUUID() }))]);
       }
       if (pasted.length > 0) {
         writePasted(draftKey, (current) => [
@@ -2798,6 +2881,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     attachments,
     attachIncoming,
     removeAttachment,
+    attachFolderRefs,
     files,
     attachFileRef,
     removeFile,

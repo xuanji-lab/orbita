@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { ImageLightbox } from "./ImageLightbox";
 import { ImageThumb } from "./ImageThumb";
+import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { imageSrc } from "./composer-images.ts";
-import { quotePreview } from "./quote-label.ts";
+import { quoteNoteParts, quoteRowPreview } from "./quote-label.ts";
+import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
+import { DirMarkName } from "./DirMarkName.tsx";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import type { TextQuote } from "@shared/quote";
 import { useT } from "../locale.ts";
@@ -11,7 +15,7 @@ import { useT } from "../locale.ts";
 /**
  * 输入框上方的**材料叠放区**（B 叠放定稿）：四路附件全部移出输入卡，叠在卡片
  * 上方，从上到下——截图一行（正方形缩略）→ 文件 / 目录 / 粘贴文本一行（同一种
- * 胶囊、横滚、右侧渐隐）→ 引用一张卡（排队卡同款整行，最多 2 条、其余折叠）。
+ * 胶囊、顶到就换行铺满）→ 引用一张卡（排队卡同款整行，最多 2 条、其余折叠）。
  * 除引用卡外都不加卡底，直接坐在聊天面上：材料是「接下来要发的东西」，不是
  * 输入框的一部分；胶囊自带 `--glass-bg` + `--shadow-border`，一层语言不需要卡。
  *
@@ -21,8 +25,13 @@ import { useT } from "../locale.ts";
 
 /** 截图缩略的边长（正方形）。64：比 72 的旧卡小一档——材料行是配角，不抢输入框。 */
 const IMAGE_SQUARE = 64;
-/** 引用卡折叠态显示的条数。2：再多就该折叠了——引用是上下文，不是正文。 */
-const QUOTE_COLLAPSED_ROWS = 2;
+/**
+ * 引用卡折叠态显示的条数。4 = 两列两行（2026-10 用户裁决「半行两列」）：与旧单列
+ * 两行高度相当，多放一倍。
+ */
+const QUOTE_COLLAPSED_ROWS = 4;
+/** 胶囊路径 tooltip 的延迟，与 IconButton 同值：太快手抖就闪，太慢感知等于没有 */
+const PATH_TOOLTIP_DELAY_MS = 200;
 
 export function MaterialStack(props: {
   materials: readonly ComposerMaterial[];
@@ -102,7 +111,8 @@ function NoVisionHint() {
 }
 
 /**
- * 文件 / 目录 / 粘贴文本共用的一种胶囊：一行横排、超出横向滚动、右侧渐隐。
+ * 文件 / 目录 / 粘贴文本共用的一种胶囊：**顶到就换行铺满**（2026-10 用户裁决
+ * 「我喜欢全部看到，自然的 stack，顶到了就换行」），不再横滚、不再右侧渐隐。
  * 粘贴文本点开看全文——不撑高输入区：全文放浮层（点开的那颗胶囊上方），
  * 浮层是 floating layer（实底面板 + 发丝 + popover 阴影），滚动限高。
  */
@@ -165,22 +175,83 @@ function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "f
   );
 }
 
-/** 文件 / 目录引用的胶囊：图标 + 名字（省略号）+ 移除键；title 挂完整路径 */
+/**
+ * 文件 / 目录引用的胶囊：图标 + 名字（省略号）+ 移除键。
+ *
+ * **目录一眼可辨**（2026-10 用户验收「文件夹的图标跟文件区分不开」）靠三个信号：
+ * folder 图标**填实**（文件按扩展名分形状，与文件面板树同一个 fileIcon——形状先分，
+ * 颜色后跟）、图标升一档到 secondary、名字后跟一条 `/`（目录的约定俗成记号，
+ * 与发给模型的清单块同一约定）。填实是 Icon 的 fill（描边与填实在同一个
+ * currentColor 里，同星标的做法）。
+ *
+ * **完整路径用自绘快速 tooltip**（useHoverTooltip，与 IconButton 同 200ms）而不用
+ * 原生 title：原生要一秒多才出，且在胶囊行上时隐时现不可靠（同 IconButton 弃用
+ * title 的理由）。路径是机器事实，mono 字体；长路径换行不截断——看全正是它的存在
+ * 理由。键盘路径不给：胶囊本身不是焦点停点，与原生 title 时代一致。
+ */
 function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir" }> }) {
   const t = useT();
+  const isDir = props.chip.kind === "dir";
+  const tooltip = useHoverTooltip<HTMLSpanElement>(PATH_TOOLTIP_DELAY_MS, true);
+  // 文档 / 演示 / 表格三族上色（fileIconTone，与文件面板同一份），其余中性
+  const tone = isDir ? null : fileIconTone(props.chip.name, "file");
+  const iconColor =
+    isDir
+      ? "var(--color-text-secondary)"
+      : tone === null
+        ? "var(--color-text-tertiary)"
+        : FILETYPE_TONE_COLOR[tone];
   return (
-    <span className="material-chip" title={props.chip.ref.path}>
-      <Icon
-        name={props.chip.kind === "dir" ? "folder" : "file"}
-        size={13}
-        strokeWidth={1.8}
-        style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-      />
-      <span className="material-chip-name">{props.chip.name}</span>
-      <button type="button" className="material-chip-x" aria-label={t.composer.removeFile} title={t.composer.removeFile} onClick={props.chip.remove}>
-        <Icon name="x" size={11} strokeWidth={2} />
-      </button>
-    </span>
+    <>
+      <span
+        className="material-chip"
+        ref={tooltip.anchorRef}
+        onMouseEnter={tooltip.handlers.onMouseEnter}
+        onMouseLeave={tooltip.handlers.onMouseLeave}
+      >
+        <Icon
+          name={isDir ? "folder" : fileIcon(props.chip.name, "file")}
+          size={13}
+          strokeWidth={1.8}
+          fill={isDir}
+          style={{
+            color: iconColor,
+            flex: "0 0 auto",
+          }}
+        />
+        {/* 名字 + 目录尾 `/`：共用组件（胶囊 / 面板行 / 气泡三处同一段结构） */}
+        <DirMarkName name={props.chip.name} dir={isDir} wrapStyle={{ flex: "0 1 auto" }} nameClassName="material-chip-name" />
+        {/* 超限未复制（发送时按原位置引用）：icon + 文字，warning 色只做第二信号 */}
+        {props.chip.ref.uncopied === true && (
+          <span className="material-chip-uncopied">
+            <Icon name="triangle-alert" size={10} strokeWidth={2} />
+            {t.composer.notCopied}
+          </span>
+        )}
+        <button type="button" className="material-chip-x" aria-label={t.composer.removeFile} title={t.composer.removeFile} onClick={props.chip.remove}>
+          <Icon name="x" size={11} strokeWidth={2} />
+        </button>
+      </span>
+      {tooltip.open &&
+        createPortal(
+          <div
+            ref={tooltip.tooltipRef}
+            role="tooltip"
+            className="material-path-tip"
+            data-placed={tooltip.placement !== null}
+            style={{ top: tooltip.placement?.top ?? 0, left: tooltip.placement?.left ?? 0 }}
+          >
+            <div>{props.chip.ref.path}</div>
+            {props.chip.ref.uncopied === true && (
+              <div className="material-path-note">
+                <Icon name="triangle-alert" size={10} strokeWidth={2} />
+                {t.composer.notCopiedTip}
+              </div>
+            )}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -223,10 +294,11 @@ function PastedChip(props: {
 }
 
 /**
- * 引用卡：排队卡（QueueStrip）同款整行样式——一行 = 图标 + 编号 + 正文（省略号）+
- * 来源注脚，悬停出「跳回原文」「移除」。最多显示 2 条，其余折成「还有 N 条引用…」
- * 可展开 / 收起；**引用条数已不设上限**（shared/quote.ts 只限总字数），展开态限高
- * 内部滚动，卡片不无限长高。
+ * 引用卡：**半行两列**（2026-10 用户裁决「我还是想要半行两列」）——每条引用只占
+ * 半行，两列并排堆叠更多引用；卡窄（子会话抽屉、窄窗）时 container query 回落
+ * 一列。折叠态显示两行 = 4 条，其余折成「还有 N 条引用…」跨两列占整行；展开态
+ * 限高内部滚动。「还有 N 条 / 收起」跨两列占整行。行内仍是 D/E 的规矩：正文不预截
+ * 交给 CSS 省略、注脚贴右缘、动作键绝对定位不占位。
  */
 function QuoteCard(props: {
   quotes: readonly Extract<ComposerMaterial, { kind: "quote" }>[];
@@ -264,7 +336,9 @@ function QuoteRow(props: {
   onJump: (() => void) | undefined;
 }) {
   const t = useT();
-  const preview = quotePreview(props.item.quote);
+  const preview = quoteRowPreview(props.item.quote);
+  // 注脚分三段（轮次 / 谁说的 / 字数）：窄格里 CSS 先藏「谁说的」；title 仍挂引用全文
+  const note = quoteNoteParts(props.item.quote, t);
   return (
     <div className="material-quote-row">
       <span style={{ display: "inline-flex", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
@@ -281,7 +355,9 @@ function QuoteRow(props: {
         </button>
       )}
       <span className="material-quote-note" title={props.item.quote.text}>
-        {props.item.meta}
+        {note.lead !== null && <span>{note.lead}</span>}
+        {note.who !== null && <span className="material-quote-note-who">{(note.lead !== null ? " · " : "") + note.who}</span>}
+        <span>{(note.lead !== null || note.who !== null ? " · " : "") + note.size}</span>
       </span>
       <span className="material-quote-actions">
         {props.onJump !== undefined && (

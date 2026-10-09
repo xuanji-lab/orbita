@@ -142,6 +142,12 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
+**Filetype colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): one job only —
+telling Word-ish docs, slide decks and spreadsheets apart **at a glance in their 13–14px icons**
+(files tree, composer pills, sent-attachment list; filenames stay in ink). Not the accent or any
+status colour; ≥ 3:1 on every theme's panel / muted / app grounds, hues ≥ 40° apart, guarded by
+`filetype-colors.test.ts`.
+
 **Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is
 unchanged — **the shell (the ground the left rail and right icon strip sit on) is the lighter
@@ -314,6 +320,16 @@ continuous animation that would otherwise sit on screen unattended, for a backgr
 isn't currently watching.
 
 ## Implementation rules
+
+**Trailing edges sit on the row's right hem.** A row / card / list item's trailing
+element — a status mark, footnote, count or timestamp — pins its right edge to the row's right
+padding, the same hem the leading element's left edge sits on (depth indent goes left only). Push
+it there with the shared `.row-trailing` primitive (`margin-left: auto; flex: 0 0 auto`) — never
+with a fixed width or magic padding. A hover-only action cluster never occupies space at rest: it
+overlays the corner (absolutely positioned) and the trailing element yields (fades) while it is up.
+The anti-pattern this rule kills: `padding-right: 44px` reserving room for hidden buttons, so a
+resting status mark floats mid-row while the left side hugs its hem. Geometry is guarded by
+`scripts/ui-edges.mjs`.
 
 **Stateful styling lives in CSS classes.** Hover, `:focus-visible`, `:active`, `:disabled`,
 `[aria-selected]` / `[aria-expanded]`, `:focus-within`, container queries, `prefers-reduced-motion`,

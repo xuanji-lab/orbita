@@ -85,7 +85,8 @@ export function createStoreTools(broker: RequestBroker, sessionId: string): Tool
     name: "add_mcp_server",
     label: "add_mcp_server",
     description:
-      "Add an MCP server to this agent's mcp.json and reconnect. " +
+      "Add an MCP server to this agent's mcp.json (writes the config and reloads connections; " +
+      "the new server's tools are available in sessions opened afterwards, not in the current one). " +
       "stdio: {transport:'stdio', command, args, env}; http: {transport:'http', url, headers}.",
     parameters: {
       type: "object",
@@ -110,7 +111,7 @@ export function createStoreTools(broker: RequestBroker, sessionId: string): Tool
       const status = result.status;
       const text =
         status === undefined
-          ? "Server added."
+          ? "Server added; its tools will be available in sessions opened afterwards."
           : status.kind === "ready"
             ? "Server added and connected (ready)."
             : `Server added; connection status: ${status.kind}${status.message ? ` — ${status.message}` : ""}`;

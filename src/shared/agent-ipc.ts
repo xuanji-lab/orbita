@@ -12,7 +12,7 @@
 import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
-import type { McpServer, McpServerInfo } from "./mcp.ts";
+import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
@@ -156,6 +156,21 @@ export const ipcChannels = {
    * 网页文件的默认打开方式——系统默认应用（fs:open）退为次要按钮
    */
   fsOpenInBrowser: "fs:open-in-browser",
+  /**
+   * 把一批绝对路径 stat 成盘上事实（回 `FsEntryFact[]`，与路径等长同序：kind 是
+   * file / dir 还是 null、size 多大）。消费者是输入框的附件分拣与文件面板的已发送
+   * 附件列表：拖入 / 粘贴的 `File` 对象在 renderer 里分不清是文件还是目录，主进程
+   * 发送时的 lstat 纠正来得太晚——图标与名字当场就该是对的；面板那侧还要靠它
+   * 如实标出已不在盘上的附件。不走面板的根白名单——拖入条目本来就在三根之外
+   * （发送时复制或原位置引用），问类型不构成通用文件浏览器：不读内容、不列目录。
+   */
+  fsStatKind: "fs:stat-kind",
+  /**
+   * 开系统目录选择器（openDirectory + multiSelections），回选中目录的绝对路径数组，
+   * 取消返回 null。给输入框回形针的「添加文件夹」用——Windows 不允许同一个对话框
+   * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
+   */
+  fsPickFolders: "fs:pick-folders",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
@@ -209,7 +224,7 @@ export const ipcChannels = {
   mcpList: "mcp:list",
   /** 用系统默认编辑器打开 mcp.json（加减 server 走文件，不做表单） */
   mcpOpenConfig: "mcp:open-config",
-  /** 重读 mcp.json 并重连全部 server（已开任务的工具集不变，新任务拿新集） */
+  /** 重读 mcp.json 并拆掉全部 MCP 连接（下一轮开机按新配置重建；已开任务的工具集不变） */
   mcpReload: "mcp:reload",
   /** 加一台 server（4-2）：写 mcp.json 后自动重连 */
   mcpAdd: "mcp:add",
@@ -437,6 +452,12 @@ export type AgentCommand =
       /** 随消息发的粘贴文本块，语义见 SubmitAgentInput.pasted */
       pasted?: string[];
       cwd: string;
+      /**
+       * 这条会话属于哪个工作区；null = 不属于任何工作区。
+       * **MCP 连接按它分片**（同一工作区共用一份，不同工作区各一份实例），
+       * 工具描述里的工作区绑定也用它——agent 进程不认工作区，只收这个 id。
+       */
+      workspaceId: string | null;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -473,8 +494,10 @@ export type AgentCommand =
        * （跟 skillsDir 同一条纪律），而且 env 里往往有密钥，路径传过去等于让
        * agent 进程自己去读一份我们已经读过的敏感文件。
        *
-       * **连接是进程级的**：同一个 agent 进程里只连一次，后续会话共享已连上的
-       * 那批工具——每条会话都拉起一份 `npx some-server` 会让子进程数量随会话线性增长。
+       * **每轮送的是「这一轮那个工作区该看到的那一份」**：主进程已经按工作区白名单
+       * 筛过、把 `${workspaceFolder}` 换成了那个工作区的根。连接按 (工作区, server)
+       * 建：同一个 server 名在不同工作区是不同实例，同一工作区的多条会话共用一份
+       * （每条会话各拉起一份 `npx some-server` 会让子进程随会话数线性增长）。
        */
       mcpServers: Record<string, McpServer>;
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
@@ -540,6 +563,8 @@ export type AgentCommand =
       /** 随消息发的粘贴文本块，语义同 submit */
       pasted?: string[];
       cwd: string;
+      /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
+      workspaceId: string | null;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -593,6 +618,8 @@ export type AgentCommand =
       sessionId: string;
       instructions?: string;
       cwd: string;
+      /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
+      workspaceId: string | null;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -615,11 +642,12 @@ export type AgentCommand =
     }
   | { type: "listBuiltins" }
   /**
-   * 重读 mcp.json 后重连（1-1 热重载）。servers 由主进程读好传进来——读文件与
-   * 讲错误是主进程的事（与开轮命令里的 mcpServers 同一条纪律）。重连是进程级的：
+   * 热重载（1-1）：把现有 MCP 连接全拆，下一轮开机按新配置重建。**不送 servers**——
+   * 配置本来就每轮由主进程现读现解析（开轮命令里的 `mcpServers`），这里再送一份
+   * 等于把同一份真相说两遍，而且说不了「哪个工作区看哪一份」。
    * 已开会话的 customTools 在开机时已定格，不受影响；下一轮开机拿新工具集。
    */
-  | { type: "mcpReload"; servers: Record<string, McpServer> }
+  | { type: "mcpReload" }
   /** 4-3：主进程对 skillWriteRequest 的回执（同 permissionAnswer 的 requestId 模式） */
   | {
       type: "skillWriteResult";
@@ -635,7 +663,7 @@ export type AgentCommand =
       requestId: string;
       ok: boolean;
       /** 重连后这台 server 的状态（ready / failed …），给模型看连接结果 */
-      status?: { kind: "ready" | "failed" | "disabled" | "connecting"; message?: string };
+      status?: McpStatus;
       error?: string;
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
@@ -767,7 +795,7 @@ export type AgentEvent =
    * MCP 连接结果。**没有 sessionId**：连接是进程级的，不属于哪一条会话。
    * 主进程接住它当缓存，管理面查的就是这份快照（连接状态是运行时事实，不落盘）。
    */
-  | { type: "mcp"; servers: McpServerInfo[] }
+  | { type: "mcp"; servers: McpStatusSnapshot }
   /**
    * 4-3：agent 工具 create_skill 的写盘请求。**写盘在主进程**（agent 进程
    * 不碰 userData）——主进程调 SkillStore 后回 skillWriteResult。

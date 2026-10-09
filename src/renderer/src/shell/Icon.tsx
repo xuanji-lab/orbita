@@ -18,6 +18,7 @@ import circleCheck from "../../../../Orbita Design System/assets/icons/lucide/ci
 import chevronDown from "../../../../Orbita Design System/assets/icons/lucide/chevron-down.svg?raw";
 import circleDot from "../../../../Orbita Design System/assets/icons/lucide/circle-dot.svg?raw";
 import circleOff from "../../../../Orbita Design System/assets/icons/lucide/circle-off.svg?raw";
+import circleDashed from "../../../../Orbita Design System/assets/icons/lucide/circle-dashed.svg?raw";
 import chevronLeft from "../../../../Orbita Design System/assets/icons/lucide/chevron-left.svg?raw";
 import chevronRight from "../../../../Orbita Design System/assets/icons/lucide/chevron-right.svg?raw";
 import chevronUp from "../../../../Orbita Design System/assets/icons/lucide/chevron-up.svg?raw";
@@ -32,8 +33,14 @@ import eye from "../../../../Orbita Design System/assets/icons/lucide/eye.svg?ra
 import eyeOff from "../../../../Orbita Design System/assets/icons/lucide/eye-off.svg?raw";
 import externalLink from "../../../../Orbita Design System/assets/icons/lucide/external-link.svg?raw";
 import file from "../../../../Orbita Design System/assets/icons/lucide/file.svg?raw";
+import fileArchive from "../../../../Orbita Design System/assets/icons/lucide/file-archive.svg?raw";
+import fileAudio2 from "../../../../Orbita Design System/assets/icons/lucide/file-audio-2.svg?raw";
 import fileCode2 from "../../../../Orbita Design System/assets/icons/lucide/file-code-2.svg?raw";
 import fileJson2 from "../../../../Orbita Design System/assets/icons/lucide/file-json-2.svg?raw";
+import fileSpreadsheet from "../../../../Orbita Design System/assets/icons/lucide/file-spreadsheet.svg?raw";
+import fileVideo2 from "../../../../Orbita Design System/assets/icons/lucide/file-video-2.svg?raw";
+import presentation from "../../../../Orbita Design System/assets/icons/lucide/presentation.svg?raw";
+import scrollText from "../../../../Orbita Design System/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
 import info from "../../../../Orbita Design System/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
@@ -57,6 +64,7 @@ import layoutGrid from "../../../../Orbita Design System/assets/icons/lucide/lay
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
 import listFilter from "../../../../Orbita Design System/assets/icons/lucide/list-filter.svg?raw";
 import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-todo.svg?raw";
+import menu from "../../../../Orbita Design System/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../Orbita Design System/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../Orbita Design System/assets/icons/lucide/mic.svg?raw";
 import minus from "../../../../Orbita Design System/assets/icons/lucide/minus.svg?raw";
@@ -124,6 +132,7 @@ const ICONS = {
   "chevron-up": chevronUp,
   clock,
   "circle-dot": circleDot,
+  "circle-dashed": circleDashed,
   "circle-off": circleOff,
   copy,
   "corner-down-left": cornerDownLeft,
@@ -135,8 +144,14 @@ const ICONS = {
   "eye-off": eyeOff,
   "external-link": externalLink,
   file,
+  "file-archive": fileArchive,
+  "file-audio-2": fileAudio2,
   "file-code-2": fileCode2,
   "file-json-2": fileJson2,
+  "file-spreadsheet": fileSpreadsheet,
+  "file-video-2": fileVideo2,
+  presentation,
+  "scroll-text": scrollText,
   "fold-vertical": foldVertical,
   folder,
   "folder-open": folderOpen,
@@ -160,6 +175,10 @@ const ICONS = {
   "layout-grid": layoutGrid,
   "list-filter": listFilter,
   "list-todo": listTodo,
+  // 三条等长横线。列表用 `list`（带项目符号，读作「清单」），这一枚是「全部」——
+  // 模型卡片左栏的视图开关（2026-10-01）。lucide 完整集里的 `menu`，按设计系统
+  // Iconography 那节「拷一份工作子集进来」的做法引入
+  menu,
   lock,
   "message-square": messageSquare,
   mic,
@@ -226,7 +245,8 @@ export function Icon(props: {
    * 用 `star` / `star-off` 表达开关会把「已星标」画成一个带斜杠的禁止符。
    * 填色走 CSS 变量（同 `--icon-stroke`），不改写 SVG 源串。
    *
-   * 今天唯一的消费者是星标，而 star 是**单一形状**，填实一路继承下去就是对的。
+   * 今天两个消费者都在星上：侧栏的会话行、模型卡片右端的星标——star 是**单一形状**，
+   * 填实一路继承下去就是对的。
    * （多形状图标如 circle-check 还需要一个内部标记色才不至于把勾吃掉，等真有那么
    * 一个消费者时再加——没有调用点的代码不留在分支里。）
    */

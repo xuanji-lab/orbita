@@ -16,6 +16,7 @@ import {
   parseRateInput,
   parseTokenInput,
   providerCards,
+  railShortNames,
   reorderIds,
   urlSuffix,
 } from "./providers-view-model.ts";
@@ -303,5 +304,38 @@ describe("connectionDirty", () => {
   test("Show 拉出的已存 key 原样不动不算改动，改一个字才算", () => {
     assert.equal(connectionDirty({ ...draft, apiKey: "sk-old" }, saved, "sk-old"), false);
     assert.equal(connectionDirty({ ...draft, apiKey: "sk-old2" }, saved, "sk-old"), true);
+  });
+});
+
+describe("railShortNames —— 模型卡片左栏的短名", () => {
+  const dto = (id: string, displayName: string, extra: Partial<ProviderDto> = {}): ProviderDto => ({
+    id,
+    displayName,
+    endpoint: { baseUrl: "https://example.com", api: "openai-completions" },
+    models: { declared: [] },
+    auth: { scheme: "none" },
+    ...extra,
+  });
+
+  test("认得的厂商用 short，与实例名无关（存量旧名、默认名带后缀都不影响）", () => {
+    const names = railShortNames([
+      dto("zhipu", "智谱（按量）"),
+      dto("zhipu-coding", "智谱 Coding Plan", { endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" } }),
+      dto("deepseek", "DeepSeek"),
+    ]);
+    assert.equal(names.get("zhipu"), "zhipu");
+    assert.equal(names.get("zhipu-coding"), "zhipu-cp");
+    assert.equal(names.get("deepseek"), "DS");
+  });
+
+  test("同一家多个实例：第二个起加序号，按传入顺序", () => {
+    const names = railShortNames([dto("deepseek", "DeepSeek"), dto("deepseek-2", "DeepSeek 2")]);
+    assert.equal(names.get("deepseek"), "DS");
+    assert.equal(names.get("deepseek-2"), "DS 2");
+  });
+
+  test("兼容入口用实例名：用户自建网关，短码说不出是哪个", () => {
+    const names = railShortNames([dto("my-gateway", "公司网关", { kind: "openai-compatible" })]);
+    assert.equal(names.get("my-gateway"), "公司网关");
   });
 });

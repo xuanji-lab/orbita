@@ -9,6 +9,8 @@ import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
+import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
@@ -44,7 +46,8 @@ import { mainWindows } from "./window/main-windows.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
-import { DoubaoAsr } from "./voice/doubao-asr.ts";
+import { createDoubaoProtocol } from "./voice/doubao-protocol.ts";
+import { DictationSessions } from "./voice/dictation.ts";
 import { registerVoiceIpc } from "./voice/ipc.ts";
 import { diagnoseOverHttps, openUndiciSocket } from "./voice/socket.ts";
 import { VoiceStore } from "./voice/store.ts";
@@ -54,7 +57,15 @@ preferIPv4();
 
 // 开发版与正式版各用各的数据（理由见 data-dirs.ts）。**必须在任何人读 userData 之前**：
 // 放在模块顶层、whenReady 之前——Chromium 的 Local Storage / 缓存也在 ready 时按它定位
-const devDirs = devDataDirs({ packaged: app.isPackaged, appData: app.getPath("appData"), home: homedir() });
+const devDirs = devDataDirs({
+  packaged: app.isPackaged,
+  appData: app.getPath("appData"),
+  home: homedir(),
+  // 隔离实例（--user-data-dir）：锁与 userData 由 Chromium 分开，工作区根在 devDataDirs 里跟着目录名派生
+  userDataSwitch: app.commandLine.getSwitchValue("user-data-dir"),
+  // 隔离实例（ORBITA_DEV_INSTANCE）：按名字分 userData 与工作区根，appData 由 Electron 按平台给
+  instance: process.env.ORBITA_DEV_INSTANCE,
+});
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
 
@@ -244,7 +255,7 @@ void app.whenReady().then(async () => {
   registerProviderIpc(providers);
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
-    new DoubaoAsr({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
+    new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
   );
   // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 
@@ -309,7 +320,17 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
-  const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
+  // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
+  // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
+  const searchBins = bundledBinDir({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    platform: process.platform,
+    arch: process.arch,
+  });
+  const agentProcessEnv = existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : { ...process.env };
+  const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
     // 4-3：agent 工具的写盘请求——主进程落盘、回执、广播刷新。
@@ -321,7 +342,7 @@ void app.whenReady().then(async () => {
       return;
     }
     if (event.type === "mcpWriteRequest") {
-      void applyMcpWrite(mcp, (servers) => agentHost.mcpReload(servers), (name) => mcpIpc.statusOf(name), event).then(
+      void applyMcpWrite(mcp, () => agentHost.mcpReload(), (name) => mcpIpc.statusOf(name), event).then(
         (result) => {
           agentHost.answerMcpWrite(event.requestId, result);
         },
@@ -428,7 +449,7 @@ void app.whenReady().then(async () => {
   });
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
-  const mcpIpc = registerMcpIpc(mcp, (servers) => agentHost.mcpReload(servers));
+  const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
@@ -467,7 +488,7 @@ void app.whenReady().then(async () => {
     join(configDir, "imports.jsonl"),
     skills,
     mcp,
-    async () => agentHost.mcpReload(await mcp.read()),
+    async () => agentHost.mcpReload(),
     async (model, messages) =>
       agentHost.classifyGreetings(await resolveProviderSecrets(providers, model.providerId), model.modelId, messages),
   );

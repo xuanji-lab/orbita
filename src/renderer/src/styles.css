@@ -23,6 +23,12 @@
 :root {
   --option-hover-bg: var(--color-bg-hover);
   --option-active-bg: var(--color-bg-active);
+  /*
+   * 两行的行（模型卡片：模型名 + 厂商副行）的高度。
+   * 卡片是**定高**的（高 = 外壳 + N 行），所以这个值也是「一行多少钱」的那个单价——
+   * 写在一处，Menu 那边量一行就够，不把 48 再拄一遍（2026-10-01）。
+   */
+  --menu-row-height: calc(var(--control-height-md) + var(--space-4));
 }
 
 /*
@@ -412,6 +418,51 @@
   background: transparent;
   color: var(--color-text-tertiary);
   font-weight: var(--weight-regular);
+}
+
+/*
+ * 行右端带独立控件（今天的唯一消费者是模型卡片的星标）的行。
+ *
+ * 控件是行按钮的**兄弟**（button 不能嵌 button），所以底不能只画在行按钮上：
+ * 鼠标落在星上时也得亮整行——靶子是「这一行」，不是行里的某一格。
+ * 选中盖过 hover 的取舍同 .option-row：持久状态压临时状态，规则放最后。
+ */
+.menu-row-tail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: var(--transition-hover);
+}
+.menu-row-tail:hover,
+.menu-row-tail[data-cursor="true"] {
+  background: var(--option-hover-bg);
+}
+.menu-row-tail[data-current="true"],
+.menu-row-tail[data-current="true"]:hover {
+  background: var(--option-active-bg);
+}
+/* 底在这一层，里面的行按钮不再自己画（否则只有左半边亮） */
+.menu-row-tail > .option-row,
+.menu-row-tail > .option-row:hover,
+.menu-row-tail > .option-row[data-cursor="true"],
+.menu-row-tail > .option-row[aria-selected="true"] {
+  background: transparent;
+}
+
+/*
+ * 行右端的星标：颜色与浮出规则**全会话行那一颗**（Sidebar 的 meta.starred）：
+ * 已星标 = accent 常显（用户亲手点亮的标记，靠颜色一眼找到是它的全部目的），
+ * 未星标 = tertiary 描边，只在悬停/键盘聚焦时浮出。
+ *
+ * 这里不用裸 `.reveal` 配后代选择器，而是挂在 `.menu-row-tail` 上：
+ * 同理 styles.css 里那个公头/会话行互点亮的真回归（一个块里出现多颗 .reveal 时，
+ * 粗选择器会连带点亮它们）。
+ */
+.menu-row-tail:hover .reveal,
+.menu-row-tail:has(:focus-visible) .reveal {
+  opacity: 1;
 }
 
 *,
@@ -1974,6 +2025,15 @@ body {
 }
 
 /*
+ * 树行右内边距：给悬停才出的两个动作键（20px×2 + 缝）留位——它们绝对定位盖在
+ * 行尾，悬停元信息（size·mtime）停在它们之左（血线规则的悬停组合例外，见
+ * .row-trailing 的注释）。附件行不用这条：它的尾部是静止态元素，直接钉血线。
+ */
+.file-row {
+  padding-right: calc(var(--space-3) + 44px);
+}
+
+/*
  * hover 行尾的 size · mtime（`48 KB · 12m`）：只在 hover 时出现，不 hover 不占
  * 视觉——它们是「看一眼就够」的机器事实，常驻会让每行都背着两个数字（裁决见
  * 设计稿「待裁决」章节）。挂同一个 .file-hover-host 宿主，与 Reveal 同一套
@@ -1989,6 +2049,48 @@ body {
 }
 .file-hover-host:hover .file-row-meta {
   display: inline;
+}
+
+/* 附件行「已不在」标记（Session·附件列表）：图标 + 两三个字，短到不挤文件名
+   （名字优先占宽，可省略但要保住大部分）；完整说明放 title，颜色只做第二信号 */
+.attachment-missing-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-warning);
+  white-space: nowrap;
+}
+
+/* ===== 行尾血线（2026-10 验收 M，用户原话「左侧顶格有血线的，右侧应该一样顶格」）=====
+ * 行 / 卡 / 列表项的尾部元素（状态标记、注脚、计数、时间），右缘必须钉在行的
+ * 右内边距上——与左侧首个元素的左缘同一条基线；有深度缩进的行，深度只加左缘，
+ * 右缘仍是基础内边距。尾部元素统一用 .row-trailing 推到右侧（margin-left: auto），
+ * 不用固定宽度 / 魔法数 padding 凑。悬停才出现的动作键不得在平时占位：绝对定位
+ * 盖在行尾（D 项同款），出现时尾部元素让位（opacity 0）；仅悬停可见的次要信息
+ * 可以停在动作键之左——血线管静止态。几何由 scripts/ui-edges.mjs 把关。
+ */
+.row-trailing {
+  margin-left: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* 附件行的尾部（size / 已不在）：静止态钉在右血线上，悬停时让位给绝对定位的
+   引用 / Reveal 动作键 */
+.attachment-row-tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  transition: opacity var(--transition-hover);
+}
+
+.file-hover-host:hover .attachment-row-tail {
+  opacity: 0;
 }
 
 /*
@@ -2378,6 +2480,86 @@ button.mcp-tool-chip {
 }
 
 /*
+ * ===== MCP · 工作区实例明细（分片/分层之后） =====
+ * 设计稿真源 design/mcp-panel-workspace.html。五个类，其余复用现有配方。
+ */
+
+/* 限定工作区行 / 定义来源行（同一个视觉：caption + tertiary + folder 图标） */
+.mcp-scope {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* 实例状态行：独占一行，不挤头行（320px 抽屉放不下「图标+名字+长状态+动作+展开钮」） */
+.mcp-ws-status {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.mcp-ws-status.bad {
+  color: var(--color-danger);
+}
+
+/* 行尾展开钮：quiet-control 同款中性 hover；aria-expanded 旋转 160ms */
+.mcp-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: transform 160ms var(--ease-out-quint), var(--transition-hover);
+}
+.mcp-expand:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.mcp-expand[aria-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+/* 实例明细：卡内发丝顶线分隔的子列表 */
+.mcp-instances {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-2);
+}
+.mcp-instance {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-caption);
+}
+.mcp-instance .ws {
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.mcp-instance .st {
+  color: var(--color-text-tertiary);
+}
+.mcp-instance .st.bad {
+  color: var(--color-danger);
+}
+.mcp-instance .bind {
+  grid-column: 1 / -1;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+  padding-left: 20px;
+}
+
+/*
  * 虚线「Add a server」卡（简报 4）：列表尾的第二入口，与页头 `+` 同一个
  * onClick（进添加表单）。
  */
@@ -2487,17 +2669,15 @@ textarea.text-field {
   padding: 2px;
 }
 
-/* 胶囊一行：一行横排、超出横向滚动、右侧渐隐（渐隐只是遮罩不是颜色） */
+/* 胶囊行：顶到就换行铺满（2026-10 用户裁决：全部看到，不要横滚与渐隐） */
 .material-chip-scroll {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  overflow-x: auto;
   padding: 2px;
-  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
 }
 
-/* 浮层（粘贴全文）锚在胶囊行的上方 */
+/* 浮层（粘贴全文）锚在胶囊行的上方；行会折成多行，浮层仍开在整块上方 */
 .material-chip-row {
   position: relative;
   min-width: 0;
@@ -2527,12 +2707,67 @@ textarea.text-field {
   color: var(--color-text-primary);
 }
 
-/* 元信息（行数）：等宽、tertiary——机器事实 */
+/* 目录尾斜杠（DirMarkName）：紧跟省略号名字，不参与省略。三处共用——胶囊 /
+   面板行 / 气泡回显，不再各写各的（2026-10 验收 K） */
+.dir-mark-slash {
+  flex: 0 0 auto;
+  margin-left: 1px;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* 元信息（行数）：等宽、tertiary——机器事实；目录胶囊的尾 `/` 也用它（记号，不进读屏） */
 .material-chip-meta {
   flex: 0 0 auto;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
+}
+
+/* 超限未复制的标记（外部文件超过复制上限，发送时按原位置引用）：icon + 文字，
+   warning 色只做第二信号，信息全在文字里 */
+.material-chip-uncopied {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-warning);
+}
+
+/* 附件胶囊的完整路径 tooltip（useHoverTooltip 定位）：mono（机器事实）、
+   长路径换行不截断——看全正是它的存在理由。z-index 与 IconButton 的 tooltip 同档（70） */
+.material-path-tip {
+  position: fixed;
+  z-index: 70;
+  max-width: min(480px, calc(100vw - 16px));
+  padding: 2px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* 首帧定位前不显形，免得先闪在左上角再跳（同 setting-tip） */
+.material-path-tip[data-placed="false"] {
+  opacity: 0;
+}
+
+/* 未复制的代价一句：路径下方一行，icon + 文字，warning 色第二信号 */
+.material-path-note {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-family: var(--font-family-base);
+  color: var(--color-warning);
 }
 
 /* 粘贴胶囊的本体是按钮（点开全文浮层） */
@@ -2631,16 +2866,48 @@ textarea.text-field {
   color: var(--color-text-secondary);
 }
 
-/* 引用卡：排队卡（QueueStrip）同款整行——一张 glass-float 卡、行高 30 */
+/* 引用卡两列版式的 container query 容器：composer 最外层（宽度 = 输入卡宽度） */
+.composer-stack {
+  container-type: inline-size;
+}
+
+/* 引用卡：**半行两列**（2026-10 用户裁决）——每条只占半行，两列并排堆更多引用；
+   折叠态两行 = 4 条，展开限高滚动；「还有 N 条 / 收起」跨两列占整行 */
 .material-quote-card {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2px;
   padding: var(--space-2);
   max-height: 264px;
   overflow-y: auto;
 }
 
+/* 窄卡回落一列：容器宽度（composer 外层 .composer-stack）不足 480px 时，两列各
+   ~230px 放不下图标+编号+正文+注脚的一行 */
+@container (max-width: 639px) {
+  /* 两列但格子偏窄（480–639px，每格 < 320px）：注脚藏掉「谁说的」，只留「第 1 轮 · 6 字」 */
+  .material-quote-note-who {
+    display: none;
+  }
+}
+
+@container (max-width: 479px) {
+  .material-quote-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* 回落一列后格子宽了，「谁说的」那段注脚重新显出来（639px 那条的隐藏不再适用） */
+  .material-quote-note-who {
+    display: inline;
+  }
+}
+
+/* 「还有 N 条 / 收起」：跨两列占整行 */
+.material-quote-more {
+  grid-column: 1 / -1;
+}
+
 .material-quote-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -2682,18 +2949,25 @@ textarea.text-field {
   cursor: pointer;
 }
 
-/* 来源注脚（第几轮 · 谁说的 · 字数）：micro、tertiary，不与正文抢分量 */
+/* 引用卡格子注脚：尾部元素，钉在格右血线上（动作键绝对定位，悬停时它让位——
+   D 项同款）；用 .row-trailing 同一套推右 */
 .material-quote-note {
+  margin-left: auto;
   flex: 0 0 auto;
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
+  transition: opacity var(--transition-hover);
 }
 
-/* 悬停一行出「跳回原文」「移除」；focus-within 让键盘 Tab 到动作键时同样现身 */
+/* 悬停一行出「跳回原文」「移除」；focus-within 让键盘 Tab 到动作键时同样现身。
+   **绝对定位不占位**：在流里占 ~46px 宽会把注脚挤离右缘；改盖在行尾之上，
+   出现的同时注脚隐去（上一条规则），不需要底色遮罩 */
 .material-quote-actions {
+  position: absolute;
+  right: 2px;
+  top: 4px;
   display: inline-flex;
   gap: 2px;
-  flex: 0 0 auto;
   opacity: 0;
   transition: var(--transition-hover);
 }
@@ -2701,6 +2975,11 @@ textarea.text-field {
 .material-quote-row:hover .material-quote-actions,
 .material-quote-row:focus-within .material-quote-actions {
   opacity: 1;
+}
+
+.material-quote-row:hover .material-quote-note,
+.material-quote-row:focus-within .material-quote-note {
+  opacity: 0;
 }
 
 .material-quote-actions button {

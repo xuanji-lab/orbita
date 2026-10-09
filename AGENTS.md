@@ -23,6 +23,11 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 - **消费者纪律**：新模块 / 新导出必须在**同一个 PR** 里有真实调用点（测试文件不算）。
   接不上就不落库，留在会话工作台等它被需要。
 - **避免过度抽象**：没有第二个消费者就不建包、不建抽象层、不建 barrel。
+- **禁止动用户的桌面会话**：不执行 `pmset`（休眠 / 关显示器）、锁屏、`caffeinate`、`osascript` / AppleScript
+  操控其他应用或窗口、全屏或会盖住屏幕的窗口、改系统设置、`killall` 系统进程。用户可能正在开会 / 共享屏幕
+  （2026-10-09：子会话为复现截图问题跑 `pmset displaysleepnow`，锁屏两次、踢掉了用户的腾讯会议）。
+  需要测最小化 / 隐藏等状态，只在 agent 自己创建的窗口里用 API 模拟；做不到就写「未测」交给用户手动验。
+  派子会话时把这条写进任务。
 - 禁 `any`；禁 inline import（`await import()` / `import("pkg").Type`）——顶层 import only。
 - **禁 TS 参数属性（`constructor(private x: T)`）、`enum`、`namespace`**：Node 原生只剥离类型、
   不做代码生成，这些会让 `node --test` 直接加载失败。相对 import 必须带 `.ts` 后缀（同因）。
@@ -60,13 +65,23 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 
 ```bash
 bun install          # 依赖变更
-bun run dev          # 开发
+bun run dev          # 开发（5273，留给用户自己跑）
 bun run typecheck    # 类型检查
 bun run test         # 测试
 ```
 
 > **dev server 固定在 `http://127.0.0.1:5273`**（只绑 IPv4 回环 + `strictPort`，撞了当场失败）。
+> **`bun run dev`（5273）留给用户**；agent 起验收实例用环境变量另起名字与 5300 以上端口，
+> 不要跟用户挤 5273：
+> `ORBITA_DEV_INSTANCE=<名> ORBITA_DEV_PORT=<端口> bun run dev`
+> （PowerShell：`$env:ORBITA_DEV_INSTANCE="<名>"; $env:ORBITA_DEV_PORT="<端口>"; bun run dev`）。
+> 不要改配置里的端口。
 > 停服务按 PID 杀，**不要 `pkill -f "electron-vite dev"`**——同机别的 electron-vite 应用会陪葬（陷阱史 #2）。
+> **新开 worktree 交给用户前**：`bun install`，`node_modules/electron/path.txt` 不在就跑 `node node_modules/electron/install.js`，
+> 确认 `node -e "require('electron')"` 打印出路径。不要拿软链主仓 node_modules 充数——用户进去 `bun run dev` 会报 `Electron uninstall`。
+> **CDP 驱动真应用验收**：起实例带 `-- --remote-debugging-port=<39xxx>`（Windows 保留段常吞 9xxx）；冒烟跑
+> `bun scripts/ui-smoke.mjs <CDP> <dev端口>`；临时脚本一律 import `scripts/cdp.mjs`（每步限时 + 看门狗，exit 2 会报停在哪一步），
+> 不裸写 WebSocket。每步重试 ≤ 2 次、CDP 折腾累计 ≤ 15 分钟，超了改用 DOM 取证并如实写「未 CDP 验收」。
 
 > **实测命令与打包**（2026-09-30，Windows 10.0.26200 实测；macOS 打包未实测）：
 >
@@ -85,6 +100,7 @@ UI 真源是 `Orbita Design System/readme.md`，**所有用户可见渲染面无
 token 规范与实现不一致时以设计系统为准。
 
 - 禁裸 hex / 未定义 CSS 变量；accent 只给主操作（明主题蓝、暗主题黄）。
+- **行尾血线**：行 / 卡尾部元素右缘钉在行右内边距（`.row-trailing` 推右，悬停动作键不占位）；规矩见设计系统 readme *Implementation rules*，几何由 `scripts/ui-edges.mjs` 把关。
 - **禁 emoji 与 Unicode 字符当图标**——只用 lucide。状态优先用图标与文字，颜色是第二信号。
 - 重视空态、键盘操作、加载态、深浅主题。
 

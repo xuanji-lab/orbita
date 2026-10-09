@@ -3,7 +3,7 @@ import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type SettingsPatch } from "@shared/settings";
+import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
@@ -34,6 +34,7 @@ import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRai
 import { RightPanelSlot } from "./shell/RightPanel";
 import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
@@ -117,6 +118,36 @@ export function App() {
   /** 先落盘再回填：写失败时 UI 不该显示一个其实没存下来的选择 */
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
+  }, []);
+
+  /**
+   * 星标是个**开关**：在库里就取消、不在就加到最后（新星的排在末尾，
+   * 因为左栏的星标视图按加入顺序列）。
+   *
+   * 读的是 ref 而不是 `settings.starredModels`：连点两下时两下都发生在回包之前，
+   * 用闭包里那份旧列表的话，两下都按「加」算——星标就永远点不灭。
+   */
+  const starredRef = useRef<ModelPair[]>([]);
+  useEffect(() => {
+    starredRef.current = settings.starredModels ?? [];
+  }, [settings.starredModels]);
+  const toggleStarModel = useCallback(
+    (pair: ModelPair) => {
+      const key = `${pair.providerId}:${pair.modelId}`;
+      const list = starredRef.current;
+      const next = list.some((p) => `${p.providerId}:${p.modelId}` === key)
+        ? list.filter((p) => `${p.providerId}:${p.modelId}` !== key)
+        : [...list, pair];
+      starredRef.current = next;
+      changeSettings({ starredModels: next });
+    },
+    [changeSettings],
+  );
+
+  /** 模型卡片底部「配置模型」的去处：设置面的服务商页（不是通用页） */
+  const openProvidersTab = useCallback(() => {
+    setSettingsTab("providers");
+    setOverlay("settings");
   }, []);
 
   /** 右侧面板宽度（4-0 拖宽）：拖动中只改本地，松手才落 settings */
@@ -436,10 +467,11 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [rightPanel, subSessionsNav, toggleChannel]);
 
-  // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）
+  // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）。判定抽在 shell/drawer-shortcut.ts：
+  // macOS 上 Option 会把 event.key 变成 ∂，只看 key 在 mac 上永远匹配不到
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.ctrlKey && event.altKey && (event.key === "d" || event.key === "D")) {
+      if (isDrawerToggleShortcut(event)) {
         event.preventDefault();
         setRightPanel((current) => (current === "drawer" ? null : "drawer"));
       }
@@ -569,6 +601,8 @@ export function App() {
                 tab={settingsTab}
                 settings={settings}
                 providers={providers}
+                starredModels={settings.starredModels ?? []}
+                onToggleStarModel={toggleStarModel}
                 onSettingsChange={changeSettings}
                 onProvidersChange={refresh}
                 onImported={() => {
@@ -589,6 +623,9 @@ export function App() {
                 onOpenParent={openParent}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
+                starredModels={settings.starredModels ?? []}
+                onToggleStarModel={toggleStarModel}
+                onOpenProviders={openProvidersTab}
                 scrollToEnd
                 scrollToEndHotkey
               />
@@ -653,6 +690,9 @@ export function App() {
                   view={drawerView}
                   mainSessionId={mainSessionId}
                   providersError={providersError}
+                  starredModels={settings.starredModels ?? []}
+                  onToggleStarModel={toggleStarModel}
+                  onOpenProviders={openProvidersTab}
                   docked={docked}
                   onDockedChange={(list) =>
                     changeDocked(
@@ -682,6 +722,8 @@ export function App() {
                   onOpenChannel={openChannel}
                   onClose={() => handlePanel(null)}
                   providersError={providersError}
+                  starredModels={settings.starredModels ?? []}
+                  onToggleStarModel={toggleStarModel}
                 />
               ) : null}
             </div>

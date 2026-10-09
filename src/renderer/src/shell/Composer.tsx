@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
+import { Menu } from "./Menu";
 import { MaterialStack } from "./composer-material-stack.tsx";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge } from "@shared/prompt-attachments";
@@ -13,12 +14,13 @@ import { composerScript } from "./composer-script.ts";
 import { replaceToken, slashMode, slashTokenAt } from "./slash-trigger.ts";
 import { moveSlashSelection, slashPanelBox, slashRowCount, slashSections, slashRowAt, type SlashPanelBox, type SlashRow } from "./slash-panel.ts";
 import { caretPoint } from "./caret-point.ts";
-import type { SkillMeta } from "@shared/skill";
+import { isSkillAvailable, type SkillMeta } from "@shared/skill";
 import type { McpServerInfo } from "@shared/mcp";
 import { chipRangeAfter, chipRangeBefore, mirrorSegments, parseChips } from "./composer-chips.ts";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useDictation, type DictationPhase, type DictationProblem } from "../features/voice/useDictation.ts";
+import type { DictationProvider } from "@shared/voice";
 import { useT } from "../locale.ts";
 
 /**
@@ -87,6 +89,8 @@ export function Composer(props: {
   /** 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收 */
   onAttach: (files: readonly File[]) => void;
   onRemoveAttachment: (id: string) => void;
+  /** 回形针菜单的「添加文件夹」：主进程目录选择器（Windows 不能与选文件同框，分两个入口） */
+  onPickFolders: () => void;
   /** 输入框里待发的文件引用与粘贴文本块（同一把会话草稿键隔离） */
   files: readonly ComposerFileRef[];
   pasted: readonly ComposerPastedText[];
@@ -98,8 +102,11 @@ export function Composer(props: {
   imageUnsupported?: boolean;
   /** 指令面板的动作项（/compact /new）：选中即执行，会话动作由调用方接（发送流不经这里） */
   onCommand?: (command: "compact" | "new") => void;
-  /** 指令面板的 skill 清单（ChatView 层 useSkillIndex 的同一份——徽标与面板共用，Composer 不自己拉） */
+  /** 指令面板的 skill 清单（ChatView 层 useSkillIndex 的同一份——徽标与面板共用，Composer 不自己拉）。
+   * 面板只列对 workspaceId 可用的那部分（isSkillAvailable，与发送端同一谓词） */
   skills: readonly SkillMeta[];
+  /** 当前草稿所属的工作区：面板的可用性调词吃它（首页 = picker 选中的；无工作区 = 只剩 global） */
+  workspaceId: string | null;
   /** 面板每次打开时触发重拉：新建 / 删除的 skill 下一次打开立即可见 */
   onReloadSkills: () => void;
   /** 指令面板 MCP 栏的 server 清单与重拉（同 skills 的规矩：面板打开时重拉） */
@@ -194,6 +201,17 @@ export function Composer(props: {
   const commandQuery = token?.query ?? "";
   // 行先于开关算（不带 panelOpen 门控）：补全模式无命中时面板要**整个不弹**，
   // 开关反过来要看行数，顺序颠倒就循环了。token 为 null 时直接空表，不自费
+  // 当前工作区可用的 skill（isSkillAvailable 与主进程发送端同一份——面板认的，
+  // 发送时必然认；两个满不在同一处，面板就会列出发出去只报「不存在」的 skill）
+  const availableSkills = useMemo(
+    () => props.skills.filter((meta) => isSkillAvailable(meta, props.workspaceId)),
+    [props.skills, props.workspaceId],
+  );
+  // Skills 节空态：主模式、还没打查询词时补一句「这个工作区没有可用 skill」——
+  // 面板不静默少一节，用户才知道是归属问题而不是面板坏了。打了查询词就回到
+  // 「没有匹配的指令」的整体空态，不为过滤结果另起一套文案
+  const skillsEmptyHint =
+    tokenAtStart && commandQuery.trim() === "" && availableSkills.length === 0;
   const commandSections = useMemo(
     () =>
       slashSections({
@@ -203,12 +221,12 @@ export function Composer(props: {
           { kind: "compact", name: "compact", description: t.composer.cmdCompact },
           { kind: "new", name: "new", description: t.composer.cmdNew },
         ],
-        skills: [...props.skills],
+        skills: availableSkills,
         servers: props.servers
           .filter((server) => server.status.kind !== "disabled")
           .map((server) => ({ name: server.name, detail: server.detail })),
       }),
-    [tokenAtStart, commandQuery, props.skills, props.servers, t],
+    [tokenAtStart, commandQuery, availableSkills, props.servers, t],
   );
   const commandRowsTotal = slashRowCount(commandSections);
   const panelOpen =
@@ -353,8 +371,9 @@ export function Composer(props: {
   const dragging = props.dropActive === true;
   return (
     // 材料叠放（B 定稿）：四路附件全部移出输入卡，叠在卡片上方——截图一行、胶囊一行、
-    // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）
-    <div style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
+    // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）。
+    // composer-stack 同时是引用卡两列版式的 container query 容器（窄窗 / 抽屉里回落一列）
+    <div className="composer-stack" style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
       <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
       <div
         ref={cardRef}
@@ -404,7 +423,8 @@ export function Composer(props: {
                       ? t.composer.slashSectionSkills
                       : t.composer.slashSectionMcp;
                 return (
-                  <div key={section.id} role="group" aria-label={kicker}>
+                  <Fragment key={section.id}>
+                  <div role="group" aria-label={kicker}>
                     <div className="slash-kicker" aria-hidden="true">
                       {kicker}
                     </div>
@@ -449,6 +469,17 @@ export function Composer(props: {
                       );
                     })}
                   </div>
+                  {/* Skills 空态提示跟在指令节后面（skillsEmptyHint 只在查询词为空时成立，
+                      而 q=空时指令节必然在）；不可选中、不占行号——它不是选项 */}
+                  {section.id === "commands" && skillsEmptyHint && (
+                    <div role="group" aria-label={t.composer.slashSectionSkills}>
+                      <div className="slash-kicker" aria-hidden="true">
+                        {t.composer.slashSectionSkills}
+                      </div>
+                      <div className="slash-empty">{t.composer.skillNoneInWorkspace}</div>
+                    </div>
+                  )}
+                  </Fragment>
                 );
               });
             })()
@@ -623,7 +654,7 @@ export function Composer(props: {
         />
       </div>
       {(dictating || dictation.problem !== null) && (
-        <DictationStatus phase={dictation.phase} problem={dictation.problem} />
+        <DictationStatus phase={dictation.phase} problem={dictation.problem} provider={dictation.provider} />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {/*
@@ -631,15 +662,38 @@ export function Composer(props: {
           overflow:hidden 兜底——窄到连图标态都装不下时裁掉多出来的，而不是把
           发送键挤出可见区（`.composer-bottom-bar` 的容器查询规则见 styles.css）。
         */}
-        <IconButton
-          label={t.composer.attachFiles}
-          size={28}
-          disabled={disabled}
-          onClick={() => fileInputRef.current?.click()}
-          style={{ flex: "0 0 auto" }}
-        >
-          <Icon name="paperclip" size={15} strokeWidth={1.8} />
-        </IconButton>
+        <Menu
+          items={[
+            {
+              id: "files",
+              label: t.composer.attachFileAction,
+              icon: "file",
+              onSelect: () => fileInputRef.current?.click(),
+            },
+            {
+              id: "folders",
+              label: t.composer.attachFolderAction,
+              icon: "folder-plus",
+              onSelect: () => void props.onPickFolders(),
+            },
+          ]}
+          // 底栏芯片一律朝上开（同 menu-position 的 above 规则）：菜单盖住输入框，
+          // 不盖住底下正在看的内容
+          placement="above"
+          panelMinWidth={170}
+          trigger={({ open, toggle }) => (
+            <IconButton
+              label={t.composer.attachFiles}
+              size={28}
+              active={open}
+              disabled={disabled}
+              onClick={toggle}
+              style={{ flex: "0 0 auto" }}
+            >
+              <Icon name="paperclip" size={15} strokeWidth={1.8} />
+            </IconButton>
+          )}
+        />
         <input
           ref={fileInputRef}
           type="file"
@@ -697,9 +751,13 @@ export function Composer(props: {
 
 /**
  * 听写的一行状态：进行中说「在干什么、怎么结束」，出了问题说原因（服务端的原话用等宽跟在后面）。
- * 状态用图标 + 文字，红色只给失败（设计系统：颜色是第二信号）。
+ * 状态用图标 + 文字，红色只给失败（设计系统：颜色是第二信号）。厂商名跟着这次听写用的那家。
  */
-function DictationStatus(props: { phase: DictationPhase; problem: DictationProblem | null }) {
+function DictationStatus(props: {
+  phase: DictationPhase;
+  problem: DictationProblem | null;
+  provider: DictationProvider | null;
+}) {
   const t = useT();
   const problem = props.problem;
   const text =
@@ -708,9 +766,9 @@ function DictationStatus(props: { phase: DictationPhase; problem: DictationProbl
         ? t.voice.micDenied
         : problem.kind === "mic-unavailable"
           ? t.voice.micUnavailable
-          : t.voice.failures[problem.reason]
+          : t.voice.failures[problem.reason](problem.provider)
       : props.phase === "connecting"
-        ? t.voice.connecting
+        ? t.voice.connecting(props.provider ?? "doubao")
         : props.phase === "finishing"
           ? t.voice.finishing
           : t.voice.listening;
