@@ -32,6 +32,7 @@ import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } fro
 import {
   admitFileRefs,
   fileRefRejectionText,
+  withStatKinds,
   type ComposerFileRef,
   type ComposerPastedText,
 } from "../../shell/composer-attachments.ts";
@@ -74,6 +75,7 @@ import {
 import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
 import { splitUserTextBlocks } from "@shared/prompt-attachments";
 import type { Workspace } from "@shared/workspace";
+import { pathTail } from "@shared/path";
 import { stripInvocationBlock } from "../../../../shared/invocation.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -167,6 +169,8 @@ export interface ChatSession {
   /** 挑选 / 粘贴 / 拖进来的文件：图片读成 base64、其余按路径引用；被拒的点名报在 error 上 */
   attachIncoming: (files: readonly File[]) => void;
   removeAttachment: (id: string) => void;
+  /** 回形针「添加文件夹」：主进程目录选择器，选中目录按拖入同一套分拣入列 */
+  attachFolderRefs: () => Promise<void>;
   /** 当前查看会话输入框里的文件引用（纯路径，模型用 read 工具自己读） */
   files: readonly ComposerFileRef[];
   /** 文件面板「引用到输入卡」的入口：原位置引用（不复制），同名额与去重走同一套分拣 */
@@ -1430,7 +1434,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * **纯路径引用**（admitFileRefs，发送时主进程把副本收进会话目录）——内容模型
    * 用 read 工具自己读。分拣是同步的（被拒的当场点名）；读图是异步的——**键在
    * 进来那一刻定下**，读完时用户就算切到别的会话，图也落回它被拖进来的那个输入框。
-   * 名额在追加时再截一次：两批并发拖进来，各自分拣时都以为还有位子。
+   * 文件先按 file 同步入列、再向主进程问一次真实类型（拖入的目录在 renderer 里
+   * 分不出来，发送时的 lstat 纠正又太晚——图标与名字当场就该是对的）；问不到就
+   * 留在 file，发送侧的纠正仍兑底。
    */
   const attachIncoming = useCallback(
     (incoming: readonly File[]) => {
@@ -1452,16 +1458,29 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .join(" ");
       engine.setError(notice === "" ? null : notice);
       if (acceptedFiles.length > 0) {
-        writeFiles(key, (current) => [
-          ...current,
-          ...acceptedFiles.map((ref) => ({
-            id: crypto.randomUUID(),
-            name: ref.name,
-            path: ref.path,
-            kind: "file" as const,
-            origin: "external" as const,
-          })),
-        ]);
+        // id 在入列那一刻铸好，stat 回来按它贴回类型；发送与这次写入不互相等
+        const entries = acceptedFiles.map((ref) => ({
+          id: crypto.randomUUID(),
+          name: ref.name,
+          path: ref.path,
+          kind: "file" as const,
+          origin: "external" as const,
+        }));
+        writeFiles(key, (current) => [...current, ...entries]);
+        void api.files
+          .statKind(entries.map((entry) => entry.path))
+          .then((kinds) => {
+            writeFiles(key, (current) =>
+              withStatKinds(
+                current,
+                entries.map((entry, index) => ({ id: entry.id, kind: kinds[index] ?? "file" })),
+              ),
+            );
+          })
+          .catch((cause: unknown) => {
+            // 通道坏了维持 file 入列：发送时主进程的 lstat 纠正仍会给出真实类型
+            console.error("[chat] 附件类型没问到，按文件入列", cause);
+          });
       }
       if (acceptedImages.length === 0) return;
       void Promise.allSettled(acceptedImages.map((file) => readAsPromptImage(file))).then((results) => {
@@ -1514,6 +1533,42 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     (id: string) => writeFiles(draftKey, (current) => current.filter((item) => item.id !== id)),
     [draftKey, writeFiles],
   );
+
+  /**
+   * 回形针「添加文件夹」：主进程开目录选择器（多选；Windows 不允许与选文件同框，
+   * 所以与「添加文件」分两个入口），选回来的与拖入同一套分拣入列。kind 直接记
+   * dir——选择器只会给出目录，不必再问一遍 stat；origin external（发送时主进程
+   * 不复制目录、按原位置引用，路径仍 realpath 成规范形）。取消选择器是用户的
+   * 正常退出，不报错也不动草稿。
+   */
+  const attachFolderRefs = useCallback(async () => {
+    const key = draftKey;
+    let picked: string[] | null;
+    try {
+      picked = await api.files.pickFolders();
+    } catch (cause: unknown) {
+      console.error("[chat] 文件夹选择器打不开", cause);
+      return;
+    }
+    if (picked === null || picked.length === 0) return;
+    const t = engine.messagesRef.current;
+    const { accepted, rejected } = admitFileRefs(
+      picked.map((path) => ({ path, name: pathTail(path) === "" ? path : pathTail(path) })),
+      fileMap.get(key) ?? [],
+    );
+    engine.setError(fileRefRejectionText(rejected, t));
+    if (accepted.length === 0) return;
+    writeFiles(key, (current) => [
+      ...current,
+      ...accepted.map((item) => ({
+        id: crypto.randomUUID(),
+        name: item.name,
+        path: item.path,
+        kind: "dir" as const,
+        origin: "external" as const,
+      })),
+    ]);
+  }, [draftKey, fileMap, writeFiles, engine]);
 
   /** 粘贴的一大段文字（Composer 已按阈值拦下）抽成粘贴块。全文在内存里，永不截断 */
   const addPastedText = useCallback(
@@ -2821,6 +2876,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     attachments,
     attachIncoming,
     removeAttachment,
+    attachFolderRefs,
     files,
     attachFileRef,
     removeFile,

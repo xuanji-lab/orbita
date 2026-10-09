@@ -20,6 +20,22 @@ export interface ComposerFileRef {
   origin: "workspace" | "external";
 }
 
+/**
+ * 把主进程 stat 回来的真实类型按入列时记下的 id 贴回。拖入的条目先按 file 同步
+ * 入列（拖放与回车发送抢的是同一拍，不能等 IPC 往返），stat 回来再改真实类型——
+ * 这期间被移除的（id 已不在）自然跳过，贴不上的（回执比入列短）维持原样。
+ */
+export function withStatKinds<T extends { id: string; kind: "file" | "dir" }>(
+  current: readonly T[],
+  statted: readonly { id: string; kind: "file" | "dir" }[],
+): T[] {
+  const kinds = new Map(statted.map((item) => [item.id, item.kind]));
+  return current.map((item) => {
+    const kind = kinds.get(item.id);
+    return kind === undefined || kind === item.kind ? item : { ...item, kind };
+  });
+}
+
 /** 输入框里的一段粘贴文本（全文在内存里；发送时原文进模型，永不截断） */
 export interface ComposerPastedText {
   id: string;

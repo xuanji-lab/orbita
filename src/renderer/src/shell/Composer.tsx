@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
+import { Menu } from "./Menu";
 import { MaterialStack } from "./composer-material-stack.tsx";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge } from "@shared/prompt-attachments";
@@ -87,6 +88,8 @@ export function Composer(props: {
   /** 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收 */
   onAttach: (files: readonly File[]) => void;
   onRemoveAttachment: (id: string) => void;
+  /** 回形针菜单的「添加文件夹」：主进程目录选择器（Windows 不能与选文件同框，分两个入口） */
+  onPickFolders: () => void;
   /** 输入框里待发的文件引用与粘贴文本块（同一把会话草稿键隔离） */
   files: readonly ComposerFileRef[];
   pasted: readonly ComposerPastedText[];
@@ -617,15 +620,38 @@ export function Composer(props: {
           overflow:hidden 兜底——窄到连图标态都装不下时裁掉多出来的，而不是把
           发送键挤出可见区（`.composer-bottom-bar` 的容器查询规则见 styles.css）。
         */}
-        <IconButton
-          label={t.composer.attachFiles}
-          size={28}
-          disabled={disabled}
-          onClick={() => fileInputRef.current?.click()}
-          style={{ flex: "0 0 auto" }}
-        >
-          <Icon name="paperclip" size={15} strokeWidth={1.8} />
-        </IconButton>
+        <Menu
+          items={[
+            {
+              id: "files",
+              label: t.composer.attachFileAction,
+              icon: "file",
+              onSelect: () => fileInputRef.current?.click(),
+            },
+            {
+              id: "folders",
+              label: t.composer.attachFolderAction,
+              icon: "folder-plus",
+              onSelect: () => void props.onPickFolders(),
+            },
+          ]}
+          // 底栏芯片一律朝上开（同 menu-position 的 above 规则）：菜单盖住输入框，
+          // 不盖住底下正在看的内容
+          placement="above"
+          panelMinWidth={170}
+          trigger={({ open, toggle }) => (
+            <IconButton
+              label={t.composer.attachFiles}
+              size={28}
+              active={open}
+              disabled={disabled}
+              onClick={toggle}
+              style={{ flex: "0 0 auto" }}
+            >
+              <Icon name="paperclip" size={15} strokeWidth={1.8} />
+            </IconButton>
+          )}
+        />
         <input
           ref={fileInputRef}
           type="file"

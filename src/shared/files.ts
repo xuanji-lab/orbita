@@ -115,6 +115,14 @@ export function isWebPageFile(path: string): boolean {
   return WEB_PAGE_EXTENSIONS.test(path);
 }
 
+/**
+ * 盘上一条路径的类型（`fs:stat-kind` 的回执行）。与 `PromptFileRef` / `SentFileRef`
+ * （prompt-attachments.ts）的 `kind` 同一套词汇，不与面板的 `FileEntryKind`
+ * （还有 symlink / other）混用：这边只回答输入框附件分拣要问的那一问——
+ * 发给模型时是按文件（read）还是按目录（尾斜杠）记。
+ */
+export type FsEntryKind = "file" | "dir";
+
 /** 文本预览最多读的字节数（2 MB）：再大的日志 / 数据文件只读开头，截断如实标出 */
 export const PREVIEW_TEXT_LIMIT = 2 * 1024 * 1024;
 

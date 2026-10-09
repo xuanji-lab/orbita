@@ -814,6 +814,7 @@ function ChatViewBody(props: {
       attachments={session.attachments}
       onAttach={session.attachIncoming}
       onRemoveAttachment={session.removeAttachment}
+      onPickFolders={session.attachFolderRefs}
       files={session.files}
       pasted={session.pasted}
       onRemoveFile={session.removeFile}
