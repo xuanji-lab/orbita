@@ -6,6 +6,7 @@ import { ImageThumb } from "./ImageThumb";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { imageSrc } from "./composer-images.ts";
 import { quotePreview } from "./quote-label.ts";
+import { fileIcon } from "../features/files/tree-view.ts";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import type { TextQuote } from "@shared/quote";
 import { useT } from "../locale.ts";
@@ -174,9 +175,10 @@ function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "f
  * 文件 / 目录引用的胶囊：图标 + 名字（省略号）+ 移除键。
  *
  * **目录一眼可辨**（2026-10 用户验收「文件夹的图标跟文件区分不开」）靠三个信号：
- * folder 图标**填实**（file 是线框——形状先分，颜色后跟）、图标升一档到 secondary、
- * 名字后跟一条 `/`（目录的约定俗成记号，与发给模型的清单块同一约定）。填实是
- * Icon 的 fill（描边与填实在同一个 currentColor 里，同星标的做法）。
+ * folder 图标**填实**（文件按扩展名分形状，与文件面板树同一个 fileIcon——形状先分，
+ * 颜色后跟）、图标升一档到 secondary、名字后跟一条 `/`（目录的约定俗成记号，
+ * 与发给模型的清单块同一约定）。填实是 Icon 的 fill（描边与填实在同一个
+ * currentColor 里，同星标的做法）。
  *
  * **完整路径用自绘快速 tooltip**（useHoverTooltip，与 IconButton 同 200ms）而不用
  * 原生 title：原生要一秒多才出，且在胶囊行上时隐时现不可靠（同 IconButton 弃用
@@ -196,7 +198,7 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
         onMouseLeave={tooltip.handlers.onMouseLeave}
       >
         <Icon
-          name={isDir ? "folder" : "file"}
+          name={isDir ? "folder" : fileIcon(props.chip.name, "file")}
           size={13}
           strokeWidth={1.8}
           fill={isDir}

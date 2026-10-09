@@ -113,7 +113,7 @@ describe("fileIcon", () => {
     deepStrictEqual(fileIcon("index.ts", "file"), "file-code-2");
     deepStrictEqual(fileIcon("App.tsx", "file"), "file-code-2");
     deepStrictEqual(fileIcon("main.py", "file"), "file-code-2");
-    deepStrictEqual(fileIcon("styles.CSS", "file"), "file-code-2"); // 大小写不敏感
+    deepStrictEqual(fileIcon("styles.SCSS", "file"), "file-code-2"); // 大小写不敏感
   });
 
   it("配置扩展名 → file-json-2", () => {
@@ -141,9 +141,45 @@ describe("fileIcon", () => {
     deepStrictEqual(fileIcon("logo.svg", "file"), "image");
   });
 
-  it("文本扩展名 → file-text", () => {
+  it("文本扩展名 → file-text；markdown 也是文本形状", () => {
     deepStrictEqual(fileIcon("README.md", "file"), "file-text");
     deepStrictEqual(fileIcon("notes.txt", "file"), "file-text");
+    deepStrictEqual(fileIcon("guide.mdx", "file"), "file-text");
+  });
+
+  it("网页扩展名 → globe（html / css 与样式表同档）", () => {
+    deepStrictEqual(fileIcon("index.html", "file"), "globe");
+    deepStrictEqual(fileIcon("styles.CSS", "file"), "globe"); // 大小写不敏感
+    deepStrictEqual(fileIcon("page.htm", "file"), "globe");
+  });
+
+  it("文档扩展名 → book（排版过的成品文档）", () => {
+    deepStrictEqual(fileIcon("paper.pdf", "file"), "book");
+    deepStrictEqual(fileIcon("简历.DOCX", "file"), "book");
+    deepStrictEqual(fileIcon("report.rtf", "file"), "book");
+  });
+
+  it("演示扩展名 → presentation", () => {
+    deepStrictEqual(fileIcon("slides.pptx", "file"), "presentation");
+    deepStrictEqual(fileIcon("demo.KEY", "file"), "presentation");
+  });
+
+  it("表格扩展名 → file-spreadsheet（csv/tsv 从文本形状挪来——形状是表）", () => {
+    deepStrictEqual(fileIcon("budget.XLSX", "file"), "file-spreadsheet");
+    deepStrictEqual(fileIcon("data.csv", "file"), "file-spreadsheet");
+    deepStrictEqual(fileIcon("sheet.numbers", "file"), "file-spreadsheet");
+  });
+
+  it("压缩包扩展名 → file-archive", () => {
+    deepStrictEqual(fileIcon("bundle.zip", "file"), "file-archive");
+    deepStrictEqual(fileIcon("backup.7Z", "file"), "file-archive");
+    deepStrictEqual(fileIcon("src.tar.gz", "file"), "file-archive");
+  });
+
+  it("音视频分开：mp3 → file-audio-2，mp4 → file-video-2", () => {
+    deepStrictEqual(fileIcon("voice.MP3", "file"), "file-audio-2");
+    deepStrictEqual(fileIcon("clip.mov", "file"), "file-video-2");
+    deepStrictEqual(fileIcon("lecture.mp4", "file"), "file-video-2");
   });
 
   it("无扩展名、不在任何配置名单里、其它未知扩展名 → file（兜底）", () => {

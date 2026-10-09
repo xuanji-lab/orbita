@@ -47,11 +47,11 @@ export function footerSummary(groupCount: number, missingAttached: number, t: Me
   return missingAttached > 0 ? t.files.rootsMissing(roots, missingAttached) : roots;
 }
 
-/** 按扩展名归到「代码」形状的图标（file-code-2）。 */
+/** 按扩展名归到「代码」形状的图标（file-code-2）。样式表也是代码：css 归网页形状（globe） */
 const CODE_EXTS = new Set([
   "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "kt", "swift",
-  "c", "h", "cc", "cpp", "hpp", "cs", "sh", "bash", "zsh", "fish", "css", "scss", "less",
-  "html", "vue", "svelte", "sql", "lua", "php", "r", "dart",
+  "c", "h", "cc", "cpp", "hpp", "cs", "sh", "bash", "zsh", "fish", "scss", "less",
+  "vue", "svelte", "sql", "lua", "php", "r", "dart",
 ]);
 
 /** 按扩展名归到「配置」形状的图标（file-json-2）。 */
@@ -64,8 +64,27 @@ const CONFIG_NAMED_FILES = new Set(["dockerfile", "makefile"]);
 /** 按扩展名归到「图片」形状的图标（image）。 */
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "avif", "heic", "tiff"]);
 
-/** 按扩展名归到「文本」形状的图标（file-text）。 */
-const TEXT_EXTS = new Set(["md", "mdx", "markdown", "txt", "rst", "log", "csv", "tsv", "adoc", "org"]);
+/** 按扩展名归到「文本」形状的图标（file-text）。markdown 也在这里——它就是文本。 */
+const TEXT_EXTS = new Set(["md", "mdx", "markdown", "txt", "rst", "log", "adoc", "org"]);
+
+/** 网页（globe）：浏览器直接渲染 / 给样式的那几种，与 isWebPageFile 的清单一股 */
+const WEB_EXTS = new Set(["html", "htm", "xhtml", "css"]);
+
+/** 文档（book）：排版过的成品文档，不是源代码也不是纯文本 */
+const DOC_EXTS = new Set(["pdf", "doc", "docx", "rtf", "odt", "pages", "epub", "mobi"]);
+
+/** 演示（presentation）：幻灯片一族 */
+const SLIDE_EXTS = new Set(["ppt", "pptx", "odp", "key"]);
+
+/** 表格（file-spreadsheet）：csv/tsv 从 TEXT_EXTS 挪过来——形状是表，不是散文 */
+const SHEET_EXTS = new Set(["xls", "xlsx", "ods", "numbers", "csv", "tsv"]);
+
+/** 压缩包（file-archive） */
+const ARCHIVE_EXTS = new Set(["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "dmg", "iso"]);
+
+/** 音频（file-audio-2）与视频（file-video-2） */
+const AUDIO_EXTS = new Set(["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma", "aiff", "opus", "mid", "midi"]);
+const VIDEO_EXTS = new Set(["mp4", "mov", "avi", "mkv", "webm", "flv", "wmv", "m4v", "mpg", "mpeg", "ts"]);
 
 /**
  * 名字里「扩展名」那一段：取最后一个 `.` 之后的部分，小写。开头就是 `.` 的点文件
@@ -90,6 +109,11 @@ function isConfigDotfile(lowerName: string): boolean {
  * symlink 契约里没有目标路径、也不知道目标是文件还是目录，一律给中性的 `file`——
  * 角标另画（TreeRow 里叠加，不在这个函数管）。
  *
+ * 文件面板树与输入框胶囊（composer-material-stack 的 FileChip）**共用这一个函数**：
+ * 同一个名字在两处长同一个形状，扫读才不换脑筋。分类从粗到细：目录 → AGENTS.md →
+ * symlink → 配置点文件 → 代码 / 配置 / 网页 / 图片 / 文档 / 演示 / 表格 / 压缩包 /
+ * 音视频 / 文本，都不命中回退中性 `file`。
+ *
  * @param open 目录的展开态；只对 `kind === "directory"` 有意义。
  */
 export function fileIcon(name: string, kind: FileEntryKind, open = false): IconName {
@@ -101,7 +125,14 @@ export function fileIcon(name: string, kind: FileEntryKind, open = false): IconN
   const ext = extOf(name);
   if (CODE_EXTS.has(ext)) return "file-code-2";
   if (CONFIG_EXTS.has(ext)) return "file-json-2";
+  if (WEB_EXTS.has(ext)) return "globe";
   if (IMAGE_EXTS.has(ext)) return "image";
+  if (DOC_EXTS.has(ext)) return "book";
+  if (SLIDE_EXTS.has(ext)) return "presentation";
+  if (SHEET_EXTS.has(ext)) return "file-spreadsheet";
+  if (ARCHIVE_EXTS.has(ext)) return "file-archive";
+  if (AUDIO_EXTS.has(ext)) return "file-audio-2";
+  if (VIDEO_EXTS.has(ext)) return "file-video-2";
   if (TEXT_EXTS.has(ext)) return "file-text";
   return "file";
 }
