@@ -37,8 +37,13 @@ export interface SentFileRef {
   kind: "file" | "dir";
 }
 
-/** 一条消息最多几个文件引用。与图片各 10 个、互不挤占（wafo 裁决：槽位不按类型合并） */
-export const PROMPT_FILE_MAX_COUNT = 10;
+/**
+ * external 文件复制进会话目录的字节数上限（100 MB）。参照 Proma Agent 模式的
+ * 同一阈值：再大就开始 noticeable 地吃磁盘与拷贝时间（一份副本一份原件），而
+ * 引用原路径对模型同样可用——只是原文件挪走 / 删掉后引用会断，这一点在输入框
+ * 胶囊上明说（「未复制 · 原文件移动或删除后将无法读取」）。目录本就不复制。
+ */
+export const EXTERNAL_FILE_COPY_MAX_BYTES = 100 * 1024 * 1024;
 
 /** 粘贴文本折叠阈值：超过任一即从输入框抽出成折叠块（未超过照常留在输入框里） */
 export const PASTED_TEXT_MAX_LINES = 10;
