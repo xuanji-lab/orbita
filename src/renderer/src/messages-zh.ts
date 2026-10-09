@@ -124,6 +124,8 @@ export const zh: Messages = {
     pastedExpandToInput: "展开到输入框",
     pastedCollapse: "收起粘贴",
     removePasted: "移除粘贴文本",
+    pasteToken: (seq, lines) => `[粘贴 ${seq} · ${lines} 行]`,
+    pasteRunLabel: (lines) => `${lines} 行 · 收起`,
     commandPanel: "斜杠指令",
     commandNoMatch: "没有匹配的指令",
     slashSectionCommands: "指令",

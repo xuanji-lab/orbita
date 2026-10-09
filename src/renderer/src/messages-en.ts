@@ -149,6 +149,8 @@ export const en = {
     pastedExpandToInput: "Expand into the input box",
     pastedCollapse: "Collapse the pasted text",
     removePasted: "Remove pasted text",
+    pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
+    pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
     commandPanel: "Slash commands",
     commandNoMatch: "No matching command",
     slashSectionCommands: "Commands",
