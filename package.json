@@ -10,6 +10,7 @@
     "dev": "electron-vite dev --watch",
     "dev:isolated": "ORBITA_DEV_INSTANCE=2 ORBITA_DEV_PORT=5274 electron-vite dev --watch",
     "build": "electron-vite build",
+    "build:bridge": "node guest-bridge/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\"",
     "ui:smoke": "bun scripts/ui-smoke.mjs",
@@ -72,6 +73,13 @@
       {
         "from": "build/tray.png",
         "to": "tray.png"
+      },
+      {
+        "from": "guest-bridge/bin",
+        "to": "guest-bridge",
+        "filter": [
+          "orbita-guest-bridge.exe"
+        ]
       }
     ],
     "npmRebuild": false,

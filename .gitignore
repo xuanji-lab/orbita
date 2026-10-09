@@ -54,3 +54,6 @@ docs/plans/
 
 # 打包前由 scripts/fetch-search-bins.mjs 下载的 rg / fd（钉版本 + sha256），不进仓
 /build/bin/
+
+# guest bridge 编译产物（guest-bridge/build.mjs 产出，沙箱只读映射用，不入库）
+guest-bridge/bin/
