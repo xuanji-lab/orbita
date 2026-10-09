@@ -885,22 +885,38 @@ function AttachmentRow(props: {
             flex: "0 0 auto",
           }}
         />
+        {/* 名字区占剩余宽：名字在里面省略，目录的尾 `/` 紧跟其后（与输入框胶囊同款，
+            2026-10 验收 I：原先 `/` 挂在行的另一头，像另一列） */}
         <span
           style={{
             flex: "1 1 auto",
             minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
           }}
         >
-          {name}
-        </span>
-        {kind === "directory" && (
-          <span style={{ fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
-            /
+          <span
+            style={{
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {name}
           </span>
-        )}
+          {kind === "directory" && (
+            <span
+              style={{
+                flex: "0 0 auto",
+                fontSize: "var(--font-size-micro)",
+                color: "var(--color-text-tertiary)",
+            }}
+            >
+              /
+            </span>
+          )}
+        </span>
         {missing && (
           <span className="attachment-missing-mark" title={t.files.attachmentMissing}>
             <Icon name="triangle-alert" size={11} strokeWidth={2} />
