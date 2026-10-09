@@ -210,8 +210,10 @@ export class TerminalService {
 
   private async startRuntime(generation: number): Promise<void> {
     const runtimeProcess = await forkTerminalRuntime(resolveTerminalRuntimePath(__dirname));
-    const isCurrent = (): boolean => generation === this.generation && this.runtimeProcess === runtimeProcess;
-    if (!isCurrent()) {
+    // 先登记再判代际：等创建期间又来了一轮启动（dispose / 重连），这一轮就作废——
+    // 拿还没登记的进程比 current 会永远不等，把正常启动全判成「已取消」
+    this.runtimeProcess = runtimeProcess;
+    if (generation !== this.generation) {
       try {
         runtimeProcess.kill();
       } catch {
@@ -219,7 +221,6 @@ export class TerminalService {
       }
       throw new Error("终端运行时启动已取消");
     }
-    this.runtimeProcess = runtimeProcess;
     runtimeProcess.on("exit", () => {
       if (this.runtimeProcess !== runtimeProcess) return;
       // runtime 死了：全部 PTY 随它而去（exit code 未知，如实标 -1）。
@@ -243,7 +244,7 @@ export class TerminalService {
       const channel = new MessageChannelMain();
       const port = channel.port2;
       const timeout = setTimeout(() => reject(new Error("终端运行时启动超时")), STARTUP_TIMEOUT_MS);
-      const isCurrentPort = (): boolean => isCurrent() && this.port === port;
+      const isCurrentPort = (): boolean => generation === this.generation && this.port === port;
       port.on("message", (event) => {
         const message = event.data as TerminalRuntimeMessage;
         if (message.type === "ready") {

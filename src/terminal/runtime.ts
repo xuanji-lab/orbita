@@ -74,6 +74,9 @@ parentPort.on("message", (event) => {
   post({ type: "ready" });
 });
 
+// parentPort 也要 start：不启动消息事件不流动（agent runtime 同款）
+parentPort.start?.();
+
 function handleRequest(request: TerminalRuntimeRequest): void {
   switch (request.type) {
     case "create":
