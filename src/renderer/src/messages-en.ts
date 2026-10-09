@@ -139,7 +139,6 @@ export const en = {
     removeFile: "Remove file",
     fileNoPath: (name: string) =>
       `Couldn't tell where ${name} lives on disk — copy it into a folder, then drag it in.`,
-    tooManyFiles: (max: number) => `Up to ${max} files per message.`,
     fileAlreadyAttached: (name: string) => `${name} is already attached.`,
     pastedName: "Pasted text",
     pastedLines: (lines: number) => plural(lines, "line"),

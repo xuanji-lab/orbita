@@ -37,9 +37,6 @@ export interface SentFileRef {
   kind: "file" | "dir";
 }
 
-/** 一条消息最多几个文件引用。与图片各 10 个、互不挤占（wafo 裁决：槽位不按类型合并） */
-export const PROMPT_FILE_MAX_COUNT = 10;
-
 /** 粘贴文本折叠阈值：超过任一即从输入框抽出成折叠块（未超过照常留在输入框里） */
 export const PASTED_TEXT_MAX_LINES = 10;
 export const PASTED_TEXT_MAX_CHARS = 2000;

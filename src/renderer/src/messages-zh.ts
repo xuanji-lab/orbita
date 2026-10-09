@@ -114,7 +114,6 @@ export const zh: Messages = {
     noVision: "这个模型不能看图，图片不会发给它。换一个带图片标记的模型。",
     removeFile: "移除文件",
     fileNoPath: (name) => `拿不到 ${name} 在磁盘上的位置——先把它复制到文件夹里，再拖进来。`,
-    tooManyFiles: (max) => `一条消息最多 ${max} 个文件。`,
     fileAlreadyAttached: (name) => `${name} 已经在附件里了。`,
     pastedName: "粘贴的文本",
     pastedLines: (lines) => `${lines} 行`,

@@ -38,7 +38,6 @@ import {
 } from "../../shell/composer-attachments.ts";
 import {
   pastedTextSize,
-  PROMPT_FILE_MAX_COUNT,
   type PromptFileRef,
 } from "@shared/prompt-attachments";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
@@ -173,7 +172,7 @@ export interface ChatSession {
   attachFolderRefs: () => Promise<void>;
   /** 当前查看会话输入框里的文件引用（纯路径，模型用 read 工具自己读） */
   files: readonly ComposerFileRef[];
-  /** 文件面板「引用到输入卡」的入口：原位置引用（不复制），同名额与去重走同一套分拣 */
+  /** 文件面板「引用到输入卡」的入口：原位置引用（不复制），去重走同一套分拣 */
   attachFileRef: (ref: { path: string; name: string; kind: "file" | "dir" }) => void;
   removeFile: (id: string) => void;
   /** 当前查看会话输入框里的粘贴文本块（全文在内存里，发送时永不截断） */
@@ -1483,6 +1482,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           });
       }
       if (acceptedImages.length === 0) return;
+      // 图的名额在追加时再截一次：两批并发拖进来，各自分拣时都以为还有位子（文件不设名额）
       void Promise.allSettled(acceptedImages.map((file) => readAsPromptImage(file))).then((results) => {
         const read: ComposerImage[] = [];
         const failures: string[] = [];
@@ -1506,7 +1506,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   /**
    * 文件面板「引用到输入卡」：**原位置引用，不复制**——文件本来就在这条会话的
    * 根清单里（工作台 / 工作区 / 附加目录），agent 的 read 一定够得着，复制一份
-   * 只会过期。去重与名额走与拖入同一套分拣（重复引用会点名，不会无声无息）。
+   * 只会过期。去重走与拖入同一套分拣（重复引用会点名，不会无声无息）。
    */
   const attachFileRef = useCallback(
     (ref: { path: string; name: string; kind: "file" | "dir" }) => {
@@ -1617,7 +1617,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         writeAttachments(snap.draftKey, (current) => [...current, ...snap.images].slice(0, PROMPT_IMAGE_MAX_COUNT));
       }
       if (snap.files.length > 0) {
-        writeFiles(snap.draftKey, (current) => [...current, ...snap.files].slice(0, PROMPT_FILE_MAX_COUNT));
+        writeFiles(snap.draftKey, (current) => [...current, ...snap.files]);
       }
       if (snap.pasted.length > 0) writePasted(snap.draftKey, (current) => [...current, ...snap.pasted]);
       // 首页发首条消息时，submitTurn 已把新会话绑成本槽的活会话、输入框换到新会话的
@@ -2289,11 +2289,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           ),
         );
       }
-      // 文件引用与粘贴文本块同退：名额截断与图片同一条纪律
+      // 文件引用与粘贴文本块同退（文件不设条数上限）
       if (files.length > 0) {
-        writeFiles(draftKey, (current) =>
-          [...current, ...files.map((file) => ({ ...file, id: crypto.randomUUID() }))].slice(0, PROMPT_FILE_MAX_COUNT),
-        );
+        writeFiles(draftKey, (current) => [...current, ...files.map((file) => ({ ...file, id: crypto.randomUUID() }))]);
       }
       if (pasted.length > 0) {
         writePasted(draftKey, (current) => [
