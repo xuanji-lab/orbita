@@ -576,6 +576,8 @@ export const en = {
     oauthLoggedIn: (account: string | null) => (account === null ? "Logged in" : `Logged in as ${account}`),
     oauthLoggedOut: "Not logged in — log in to draw on your Claude Pro / Max subscription",
     oauthNote: "Opens the browser to claude.ai · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins",
+    oauthRisk:
+      "Subscription quota via third-party clients is currently tolerated but can be revoked at any time; use an API key instead if that concerns you",
     test: "Test",
     unsaved: "Unsaved",
     models: "Models",

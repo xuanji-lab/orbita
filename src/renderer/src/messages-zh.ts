@@ -530,6 +530,7 @@ export const zh: Messages = {
     oauthLoggedIn: (account) => (account === null ? "已登录" : `已登录 ${account}`),
     oauthLoggedOut: "未登录——登录后用 Claude Pro / Max 订阅额度",
     oauthNote: "会打开浏览器到 claude.ai · 令牌加密存在本机，快过期自动续期，不用重复登录",
+    oauthRisk: "订阅额度经第三方客户端使用属官方默许、可随时收紧；介意封号风险可改用 API 密钥接入",
     test: "测试",
     unsaved: "未保存",
     models: "模型",

@@ -964,6 +964,13 @@ export function ProvidersView(props: {
                       </div>
                     </div>
                   )}
+                  {/* 风险披露（调研结论）：官方现状是默许 + 「可酌情收回」，登录前要让用户知道——埋在 tooltip 里不如直接说清 */}
+                  {oauthEntry && (
+                    <div className="pv-fld">
+                      <span />
+                      <span className="pv-oauth-hint">{t.providers.oauthRisk}</span>
+                    </div>
+                  )}
                   {/* testing 时按钮本身已经说明「在跑」，busy 行不用再重复一遍 */}
                   {status !== null && !(testing && status.tone === "busy") && (
                     <div className="pv-fld">

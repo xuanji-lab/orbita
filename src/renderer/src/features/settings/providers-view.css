@@ -225,6 +225,13 @@
   color: var(--color-text-tertiary);
 }
 
+/* 风险披露行：与状态行同款两栏位（左空标签），弱视觉但不藏 */
+.pv-oauth-hint {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+}
+
 /* Save 条：只在连接区有没存的改动时出现，贴在连接区底边 */
 .pv-savebar {
   display: flex;
