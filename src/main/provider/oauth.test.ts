@@ -138,16 +138,19 @@ describe("fetchAccountEmail —— 展示信息，失败一律容忍", () => {
   });
 });
 
-describe("oauth 请求头的口径（discover / test-connection 与 agent 侧 pi 的行为对齐）", () => {
+describe("oauth 请求头的口径（探测与 agent 侧 pi 的真会话身份一致）", () => {
   test("令牌识别：只认 sk-ant-oat 前缀特征的串", () => {
     assert.equal(isClaudeOauthToken("sk-ant-oat-12345"), true);
     assert.equal(isClaudeOauthToken("sk-ant-api03-xxx"), false);
   });
-  test("Bearer + oauth beta 头，不带 x-api-key", () => {
+  test("Bearer + oauth beta + claude-cli 身份，不带 x-api-key", () => {
     const headers = anthropicOauthHeaders("sk-ant-oat-A");
     assert.equal(headers.Authorization, "Bearer sk-ant-oat-A");
     assert.match(headers["anthropic-beta"] ?? "", /oauth-2025-04-20/);
     assert.match(headers["anthropic-beta"] ?? "", /claude-code-20250219/);
+    assert.equal(headers["x-app"], "cli");
+    assert.match(headers["user-agent"] ?? "", /^claude-cli\//);
+    assert.equal(headers["anthropic-dangerous-direct-browser-access"], "true");
     assert.equal("x-api-key" in headers, false);
   });
 });
