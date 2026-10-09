@@ -69,6 +69,11 @@ bun run test         # 测试
 > **dev server 固定在 `http://127.0.0.1:5273`**（只绑 IPv4 回环 + `strictPort`，撞了当场失败）。
 > 再开实例设环境变量 `ORBITA_DEV_INSTANCE=<名>` + `ORBITA_DEV_PORT=<端口>` 后 `bun run dev`，不要改配置里的端口。
 > 停服务按 PID 杀，**不要 `pkill -f "electron-vite dev"`**——同机别的 electron-vite 应用会陪葬（陷阱史 #2）。
+> **新开 worktree 交给用户前**：`bun install`，`node_modules/electron/path.txt` 不在就跑 `node node_modules/electron/install.js`，
+> 确认 `node -e "require('electron')"` 打印出路径。不要拿软链主仓 node_modules 充数——用户进去 `bun run dev` 会报 `Electron uninstall`。
+> **CDP 驱动真应用验收**：起实例带 `-- --remote-debugging-port=<39xxx>`（Windows 保留段常吞 9xxx）；冒烟跑
+> `bun scripts/ui-smoke.mjs <CDP> <dev端口>`；临时脚本一律 import `scripts/cdp.mjs`（每步限时 + 看门狗，exit 2 会报停在哪一步），
+> 不裸写 WebSocket。每步重试 ≤ 2 次、CDP 折腾累计 ≤ 15 分钟，超了改用 DOM 取证并如实写「未 CDP 验收」。
 
 > **实测命令与打包**（2026-09-30，Windows 10.0.26200 实测；macOS 打包未实测）：
 >
