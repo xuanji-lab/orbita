@@ -20,6 +20,7 @@ import type { ReviewSource } from "../../shared/review.ts";
 const KNOWN_NOTES: Record<string, string> = {
   deepseek: "DeepSeek official API",
   zhipu: "Zhipu open platform standard API (billed per token)",
+  claude: "Claude Pro / Max subscription — log in with your browser, tokens renew automatically",
   "zhipu-coding": "GLM Coding Plan subscription, via the Anthropic-compatible endpoint",
   zai: "GLM Coding Plan on Zhipu's international site; accounts are separate from the China site",
   stepfun: "Step Plan subscription (the URL must include /v1)",
@@ -34,6 +35,7 @@ const KNOWN_LABELS: Record<string, string> = {
   zhipu: "Zhipu",
   "zhipu-coding": "Zhipu",
   stepfun: "StepFun",
+  claude: "Claude",
   "anthropic-compatible": "Anthropic-compatible",
   "openai-compatible": "OpenAI-compatible",
 };
@@ -564,6 +566,16 @@ export const en = {
     pasteKey: "Paste your API key",
     hideKey: "Hide key",
     showKey: "Show key",
+    // —— Claude 订阅登录（oauth 目录条目专用）——
+    oauthAccount: "Claude account",
+    oauthLoginButton: "Log in with Claude",
+    oauthRelogin: "Log in again",
+    oauthWaiting: "Waiting for authorization in the browser…",
+    oauthLoggedIn: (account: string | null) => (account === null ? "Logged in" : `Logged in as ${account}`),
+    oauthLoggedOut: "Not logged in — log in to draw on your Claude Pro / Max subscription",
+    oauthNote: "Opens the browser to claude.ai · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins",
+    oauthRisk:
+      "Subscription quota via third-party clients is currently tolerated but can be revoked at any time; use an API key instead if that concerns you",
     test: "Test",
     unsaved: "Unsaved",
     models: "Models",
@@ -1003,6 +1015,10 @@ export const en = {
     // 时长：秒数不足一分钟带小数，满一分钟「1m 05s」（秒两位补零由调用方做）
     seconds: (s: string) => `${s}s`,
     minutesSeconds: (m: number, s: string) => `${m}m ${s}s`,
+    // 运行中 shell 的时钟：上限与预计（elapsed 的 m:ss 由 formatRunClock 直出，不走字典）
+    limitLabel: (clock: string) => `limit ${clock}`,
+    expectedAbout: (duration: string) => `expected ~${duration}`,
+    slowerThanExpected: "slower than expected",
     tokensApprox: (before: string) => `~${before} tokens`,
     tokensArrow: (before: string, after: string) => `${before} → ${after} tokens`,
     // 工具结果摘要

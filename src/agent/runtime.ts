@@ -30,18 +30,19 @@ import {
   type PiModel,
 } from "./model-registration.ts";
 import {
-  COMMAND_TIMEOUT_FLOOR_SECONDS,
   createToolCallGate,
   describePermissionMode,
   ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
+import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
+import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -276,6 +277,48 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
   }
 }
 
+/** 探测的硬上限（主进程那头 60 秒兑底，这里先放手） */
+const PROBE_TIMEOUT_MS = 45_000;
+
+/**
+ * 连接探测（Test 的 OAuth 路由）：一次独立的 `completeSimple`——与真会话同一个
+ * pi 客户端（官方 SDK + 全套身份头），这是它存在的全部理由：主进程裸 fetch
+ * 的探测已被上游分类为非 Claude Code 流量而 429。模型没选时用声明清单第一个。
+ * 任何非 error 的响应（含 max_tokens 到顶）都算连通——凭据过了、模型应了。
+ */
+async function probeProvider(command: Extract<AgentCommand, { type: "probeProvider" }>): Promise<void> {
+  const reply = (ok: boolean, message: string): void => {
+    send({ type: "providerProbed", requestId: command.requestId, ok, message });
+  };
+  try {
+    const runtime = await ModelRuntime.create({});
+    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
+    if (model === undefined) {
+      reply(false, `unknown model "${command.provider.id}/${command.modelId}"`);
+      return;
+    }
+    const response = await completeSimple(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+      {
+        apiKey: command.provider.apiKey,
+        // 64 是硬上限不是目标：够模型吐一个字；思考型烧光了也是 max_tokens 而非 error，仍算连通
+        maxTokens: 64,
+        timeoutMs: PROBE_TIMEOUT_MS,
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
+      },
+    );
+    if (response.stopReason === "error") {
+      reply(false, response.errorMessage ?? `${model.id} returned an error`);
+      return;
+    }
+    reply(true, `Connected — ${model.id} responded.`);
+  } catch (cause) {
+    reply(false, cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 /**
  * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用。默认用会话当前模型；
  * 用户在设置里指了家务活模型就用那一个（连同它自己的密钥与自定义头）。
@@ -506,6 +549,19 @@ const TOOL_GUIDELINES =
   `Windows 上这些命令本来就慢，短超时会把正常的慢命令拦腰杀掉；填了小于 ${COMMAND_TIMEOUT_FLOOR_SECONDS} 秒的值不会生效。`;
 
 /**
+ * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
+ * 模型可以用 `expected_seconds` 告诉 UI「这条预计要跑多久」——**只影响界面**
+ * （运行行显示「预计约 X」，预计超 10 秒的调用开始就展开看实时输出），不影响
+ * 执行、不做硬性结束、也不进 shell。机制：pi 的 TypeBox 校验对未知字段放行
+ * （0.84.3 实测），字段随入参原样流到渲染层，bash 的 execute 只解构
+ * command/timeout、无视它——因此不需要 patch pi，也不需要在闸门里剔除。
+ */
+const EXPECTED_SECONDS_GUIDELINE =
+  "调 bash/powershell 时，如果你预计这条命令要跑 10 秒以上（测试、构建、装依赖、sleep、" +
+  "大目录扫描），可以在参数里额外带上 expected_seconds（数字，秒，你的估计值）。" +
+  "它只用于界面展示（进度提示与自动展开），不影响命令的执行与超时。";
+
+/**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
  *
  * 但这个 promise 也**不听 abort**：pi 的 prepareToolCall 是 `await beforeToolCall(...)`
@@ -659,6 +715,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       additionalSkillPaths: command.skillsDirs,
       extensionFactories: [
         {
+          name: "orbita-cc-billing",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            // Claude 订阅车道的最小改写（cc-billing-patch.ts）：只对带 pi OAuth
+            // 身份块的请求生效，返回 undefined 时 payload 原样过（其它 provider 零影响）
+            pi.on("before_provider_request", (event) => ccBillingPatch(event.payload));
+          },
+        },
+        {
           name: "orbita-permission",
           hidden: true,
           factory: (pi: PiExtensionApi) => {
@@ -689,6 +754,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 describeChannelRole(role),
                 STORE_TOOLS_GUIDELINES,
                 TOOL_GUIDELINES,
+                EXPECTED_SECONDS_GUIDELINE,
                 // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
                 // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
                 QUOTE_GUIDELINE,
@@ -1385,6 +1451,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "classifyGreetings") {
     // 不 await：判定是几秒量级的独立调用，不挡住后面进来的命令（与标题同理）
     void classifyGreetings(command);
+    return;
+  }
+  if (command.type === "probeProvider") {
+    // 同上：独立小调用，不挡后续命令
+    void probeProvider(command);
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——

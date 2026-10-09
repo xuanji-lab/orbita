@@ -217,6 +217,10 @@ describe("hasCredentials —— nav 状态点与模型菜单共用同一个判�
     assert.equal(hasCredentials({ scheme: "api_key", hasSecret: true, masked: "sk-***" }), true);
     assert.equal(hasCredentials({ scheme: "api_key", hasSecret: false, masked: null }), false);
   });
+  test("oauth 档看 loggedIn：有凭据才算配好，令牌失效时不假装能用", () => {
+    assert.equal(hasCredentials({ scheme: "oauth", loggedIn: true, account: "a@b.c" }), true);
+    assert.equal(hasCredentials({ scheme: "oauth", loggedIn: false, account: null }), false);
+  });
   test("env 档密钥来自环境变量，恒为 true", () => {
     assert.equal(hasCredentials({ scheme: "env", envKeys: ["OPENAI_API_KEY"] }), true);
   });

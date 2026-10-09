@@ -71,6 +71,8 @@ export function ProvidersView(props: {
   const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
   /** 正在跑的 guard 动作是不是 Test——按钮的转圈 / disabled 只认这个，不比对 status 文案 */
   const [testing, setTesting] = useState(false);
+  /** Claude OAuth 登录进行中：等浏览器回调，可能长达几分钟 */
+  const [loggingIn, setLoggingIn] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   /** 正等待二次确认删除的模型 id；一次只有一条，点别的行的 trash 就换成那条 */
@@ -160,6 +162,9 @@ export function ProvidersView(props: {
   const editingId = view.kind === "detail" ? selectedId : null;
   const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
   const known = KNOWN_PROVIDERS.find((k) => k.id === draft.kind);
+  /** 这张目录卡走 OAuth 登录（目前只有 Claude 订阅）：表单不画密钥框，画登录钮 */
+  const oauthEntry = known?.auth === "oauth";
+  const oauthLoggedIn = editing?.auth.scheme === "oauth" && editing.auth.loggedIn;
   const showForm = (view.kind === "detail" && editing !== undefined) || (isNew && known !== undefined);
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
   /**
@@ -392,6 +397,43 @@ export function ProvidersView(props: {
     }
   };
 
+  /**
+   * Claude OAuth 登录：登录即保存。主进程起回调服务器 + 开系统浏览器，授权完成
+   * 回来时 provider 连凭据已落盘——这里只负责切视图与展示结果。令牌全程不进 renderer。
+   */
+  const loginClaude = async (): Promise<void> => {
+    if (loggingIn || known === undefined) return;
+    setLoggingIn(true);
+    setStatus({ tone: "busy", text: t.providers.oauthWaiting });
+    try {
+      const result = await api.provider.oauthLogin({
+        id: draft.id.trim(),
+        displayName: draft.displayName.trim() || knownProviderDefaultName(known),
+        ...(isNew ? { create: true, models: draft.models } : {}),
+      });
+      if (!result.ok) {
+        setIssues(result.issues);
+        showIdIssue(result.issues);
+        return;
+      }
+      setIssues([]);
+      if (isNew) {
+        setSelectedId(draft.id.trim());
+        setView({ kind: "detail" });
+        resetTransient();
+      }
+      await refresh();
+      const updated = (await api.provider.list()).find((p) => p.id === draft.id.trim());
+      if (updated !== undefined) loadDraft(updated);
+      const account = updated?.auth.scheme === "oauth" ? updated.auth.account : null;
+      setStatus({ tone: "ok", text: t.providers.oauthLoggedIn(account) });
+    } catch (cause) {
+      setStatus({ tone: "bad", text: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
   /** 行内单模型测试：状态收在行内（图标转圈 / 结果徽标），不动布局。
    * 按模型 id 独立——连续点多个模型就是并行测试，谁也不顶谁。
    * 成功徽标 2.5s 后自动消失；失败原因留在行下，直到重测或切换。 */
@@ -496,7 +538,8 @@ export function ProvidersView(props: {
           ...(endpointHeaders === undefined ? {} : { headers: endpointHeaders }),
         },
         models: { declared: draft.models },
-        auth: { scheme: "api_key" },
+        // 编辑 oauth provider（改名 / 换地址）时保住 scheme：凭据在密钥库里，不能被这里抹掉
+        auth: { scheme: editing?.auth.scheme ?? "api_key" },
       },
       ...(draft.apiKey === "" ? {} : { apiKey: draft.apiKey }),
       ...(editingId === null ? { create: true } : {}),
@@ -846,41 +889,88 @@ export function ProvidersView(props: {
                       )}
                     </span>
                   </div>
-                  <div className="pv-fld">
-                    <label htmlFor="pv-key">{t.providers.apiKey}</label>
-                    <div className="pv-krow">
-                      <input
-                        id="pv-key"
-                        className="pv-input pv-mono"
-                        type={revealed ? "text" : "password"}
-                        value={draft.apiKey}
-                        placeholder={
-                          !isNew && editing?.auth.scheme === "api_key" && editing.auth.masked !== null
-                            ? t.providers.savedKey(editing.auth.masked)
-                            : t.providers.pasteKey
-                        }
-                        onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        className="pv-btn icon"
-                        aria-label={revealed ? t.providers.hideKey : t.providers.showKey}
-                        title={revealed ? t.providers.hideKey : t.providers.showKey}
-                        onClick={() => void toggleReveal()}
-                      >
-                        <Icon name={revealed ? "eye-off" : "eye"} size={15} strokeWidth={1.8} />
-                      </button>
-                      <button
-                        type="button"
-                        className="pv-btn line"
-                        disabled={testing}
-                        onClick={() => void test()}
-                      >
-                        <Icon name={testing ? "loader-circle" : "zap"} size={13} spin={testing} />
-                        {testing ? t.providers.testing : t.providers.test}
-                      </button>
+                  {oauthEntry ? (
+                    <div className="pv-fld">
+                      <label>{t.providers.oauthAccount}</label>
+                      <div className="pv-krow">
+                        <span className="pv-oauth-state">
+                          {loggingIn ? (
+                            <>
+                              <Icon name="loader-circle" size={14} spin />
+                              <span>{t.providers.oauthWaiting}</span>
+                            </>
+                          ) : oauthLoggedIn && editing?.auth.scheme === "oauth" ? (
+                            <>
+                              <Icon name="circle-check" size={14} strokeWidth={1.8} />
+                              <span title={t.providers.oauthNote}>
+                                {t.providers.oauthLoggedIn(editing.auth.account)}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="pv-oauth-out" title={t.providers.oauthNote}>
+                              {t.providers.oauthLoggedOut}
+                            </span>
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          className={oauthLoggedIn ? "pv-btn line" : "pv-btn accent"}
+                          disabled={loggingIn}
+                          onClick={() => void loginClaude()}
+                        >
+                          <Icon name="external-link" size={13} strokeWidth={1.8} />
+                          {oauthLoggedIn ? t.providers.oauthRelogin : t.providers.oauthLoginButton}
+                        </button>
+                        <button type="button" className="pv-btn line" disabled={testing} onClick={() => void test()}>
+                          <Icon name={testing ? "loader-circle" : "zap"} size={13} spin={testing} />
+                          {testing ? t.providers.testing : t.providers.test}
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="pv-fld">
+                      <label htmlFor="pv-key">{t.providers.apiKey}</label>
+                      <div className="pv-krow">
+                        <input
+                          id="pv-key"
+                          className="pv-input pv-mono"
+                          type={revealed ? "text" : "password"}
+                          value={draft.apiKey}
+                          placeholder={
+                            !isNew && editing?.auth.scheme === "api_key" && editing.auth.masked !== null
+                              ? t.providers.savedKey(editing.auth.masked)
+                              : t.providers.pasteKey
+                          }
+                          onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
+                        />
+                        <button
+                          type="button"
+                          className="pv-btn icon"
+                          aria-label={revealed ? t.providers.hideKey : t.providers.showKey}
+                          title={revealed ? t.providers.hideKey : t.providers.showKey}
+                          onClick={() => void toggleReveal()}
+                        >
+                          <Icon name={revealed ? "eye-off" : "eye"} size={15} strokeWidth={1.8} />
+                        </button>
+                        <button
+                          type="button"
+                          className="pv-btn line"
+                          disabled={testing}
+                          onClick={() => void test()}
+                        >
+                          <Icon name={testing ? "loader-circle" : "zap"} size={13} spin={testing} />
+                          {testing ? t.providers.testing : t.providers.test}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {/* 风险披露（调研结论）：官方现状是默许 + 「可酌情收回」，登录前要让用户知道——埋在 tooltip 里不如直接说清 */}
+                  {oauthEntry && (
+                    <div className="pv-fld">
+                      <span />
+                      <span className="pv-oauth-hint">{t.providers.oauthRisk}</span>
+                    </div>
+                  )}
                   {/* testing 时按钮本身已经说明「在跑」，busy 行不用再重复一遍 */}
                   {status !== null && !(testing && status.tone === "busy") && (
                     <div className="pv-fld">
@@ -889,7 +979,8 @@ export function ProvidersView(props: {
                     </div>
                   )}
                 </div>
-                {dirty && (
+                {/* oauth 新建没有 Save 条：登录即保存，登录钮就是主操作（编辑已有实例时改名仍走 Save） */}
+                {dirty && !(oauthEntry && isNew) && (
                   <div className="pv-savebar">
                     <span className="pv-savebar-note">
                       <Icon name="pencil-line" size={12} strokeWidth={1.8} /> {t.providers.unsaved}
