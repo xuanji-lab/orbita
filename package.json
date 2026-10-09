@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\"",
     "ui:smoke": "bun scripts/ui-smoke.mjs",
-    "dist": "electron-vite build && electron-builder --mac --arm64 --publish never",
-    "dist:win": "electron-vite build && electron-builder --win --publish never",
+    "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && electron-vite build && electron-builder --mac --arm64 --publish never",
+    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && electron-vite build && electron-builder --win --publish never",
     "icon": "bash scripts/make-icon.sh",
     "icon:win": "node scripts/make-icon-win.mjs"
   },
@@ -91,6 +91,13 @@
         }
       ],
       "category": "public.app-category.developer-tools",
+      "extraResources": [
+        {
+          "from": "build/bin/darwin-arm64",
+          "to": "bin",
+          "filter": ["rg", "fd"]
+        }
+      ],
       "extendInfo": {
         "NSMicrophoneUsageDescription": "orbita uses the microphone for voice input: what you say is transcribed into the message box."
       },
@@ -98,6 +105,13 @@
       "hardenedRuntime": false
     },
     "win": {
+      "extraResources": [
+        {
+          "from": "build/bin/win32-x64",
+          "to": "bin",
+          "filter": ["rg.exe", "fd.exe"]
+        }
+      ],
       "target": [
         {
           "target": "nsis",

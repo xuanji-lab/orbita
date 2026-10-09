@@ -9,6 +9,8 @@ import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
+import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
@@ -318,7 +320,17 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
-  const agentHost = new AgentHost(resolveRuntimePath(__dirname), (event) => {
+  // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
+  // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
+  const searchBins = bundledBinDir({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    platform: process.platform,
+    arch: process.arch,
+  });
+  const agentProcessEnv = existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : { ...process.env };
+  const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
     // 4-3：agent 工具的写盘请求——主进程落盘、回执、广播刷新。

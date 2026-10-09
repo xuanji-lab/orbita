@@ -8,8 +8,9 @@ import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { AgentHostCore } from "./host-core.ts";
 
 export class AgentHost extends AgentHostCore {
-  constructor(runtimePath: string, onEvent: (event: AgentEvent) => void) {
-    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit" }), onEvent);
+  /** env：agent 进程的环境变量（主进程挂上随包的 rg / fd，见 search-bins.ts） */
+  constructor(runtimePath: string, env: Record<string, string | undefined>, onEvent: (event: AgentEvent) => void) {
+    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent);
   }
 }
 
