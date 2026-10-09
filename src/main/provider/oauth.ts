@@ -116,9 +116,11 @@ async function postToken(
   }
 }
 
-/** 授权码换令牌（登录的最后一步） */
+/** 授权码换令牌（登录的最后一步）。state 必须回传：authorize 时用了它，
+ *  token 端点把它当必填——缺了报 400 invalid_request_error「Invalid request format」
+ *  （2026-10 实测；pi 与 sub2api 的实现都带）。 */
 export async function exchangeCodeForCredential(
-  input: { code: string; verifier: string; redirectUri: string },
+  input: { code: string; verifier: string; state: string; redirectUri: string },
   fetchImpl: FetchLike = globalThis.fetch,
 ): Promise<OauthCredential> {
   const tokens = await postToken(
@@ -126,6 +128,7 @@ export async function exchangeCodeForCredential(
       grant_type: "authorization_code",
       client_id: CLAUDE_CLIENT_ID,
       code: input.code,
+      state: input.state,
       redirect_uri: input.redirectUri,
       code_verifier: input.verifier,
     },
@@ -274,7 +277,7 @@ export async function runClaudeLogin(ports: LoginPorts): Promise<OauthCredential
     ]);
     if (result === null) throw new Error("登录没有在时限内完成（浏览器授权后需要回到本机回调）");
     const credential = await exchangeCodeForCredential(
-      { code: result.code, verifier, redirectUri: server.redirectUri },
+      { code: result.code, verifier, state: result.state, redirectUri: server.redirectUri },
       ports.fetchImpl ?? globalThis.fetch,
     );
     const accountEmail = await fetchAccountEmail(credential.accessToken, ports.fetchImpl ?? globalThis.fetch);

@@ -59,7 +59,7 @@ describe("parseCallbackQuery", () => {
 });
 
 describe("exchangeCodeForCredential / refreshClaudeCredential", () => {
-  test("授权码换令牌：expiresAt 已扣 5 分钟提前量", async () => {
+  test("授权码换令牌：state 回传，expiresAt 已扣 5 分钟提前量", async () => {
     let sawBody: Record<string, string> | undefined;
     const fetchImpl = fakeFetch((url, init) => {
       assert.equal(url, CLAUDE_TOKEN_URL);
@@ -71,12 +71,14 @@ describe("exchangeCodeForCredential / refreshClaudeCredential", () => {
     });
     const before = Date.now();
     const credential = await exchangeCodeForCredential(
-      { code: "c", verifier: "v", redirectUri: "http://localhost:1/callback" },
+      { code: "c", verifier: "v", state: "st-1", redirectUri: "http://localhost:1/callback" },
       fetchImpl,
     );
     assert.ok(sawBody);
     assert.equal(sawBody.grant_type, "authorization_code");
     assert.equal(sawBody.code_verifier, "v");
+    // token 端点把 state 当必填：缺了 400 invalid_request_error「Invalid request format」（实测）
+    assert.equal(sawBody.state, "st-1");
     assert.equal(credential.accessToken, "sk-ant-oat-A");
     assert.equal(credential.accountEmail, null);
     assert.ok(credential.expiresAt <= before + 28800 * 1000 - 5 * 60 * 1000 + 50);
@@ -116,7 +118,10 @@ describe("exchangeCodeForCredential / refreshClaudeCredential", () => {
   test("非 JSON 响应：报「无法解析」而不是把 HTML 当令牌", async () => {
     const fetchImpl = fakeFetch(() => ({ status: 200, body: "<html>login page</html>" }));
     await assert.rejects(
-      exchangeCodeForCredential({ code: "c", verifier: "v", redirectUri: "http://localhost:1/callback" }, fetchImpl),
+      exchangeCodeForCredential(
+        { code: "c", verifier: "v", state: "s", redirectUri: "http://localhost:1/callback" },
+        fetchImpl,
+      ),
       /无法解析/,
     );
   });
