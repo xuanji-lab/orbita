@@ -65,14 +65,17 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 
 ```bash
 bun install          # 依赖变更
-bun run dev          # 开发
-bun run dev:isolated # 第二个 dev 实例：userData/锁/工作区根（~/Orbita-dev-2）全分开，端口 5274
+bun run dev          # 开发（5273，留给用户自己跑）
 bun run typecheck    # 类型检查
 bun run test         # 测试
 ```
 
 > **dev server 固定在 `http://127.0.0.1:5273`**（只绑 IPv4 回环 + `strictPort`，撞了当场失败）。
-> 再开实例设环境变量 `ORBITA_DEV_INSTANCE=<名>` + `ORBITA_DEV_PORT=<端口>` 后 `bun run dev`，不要改配置里的端口。
+> **`bun run dev`（5273）留给用户**；agent 起验收实例用环境变量另起名字与 5300 以上端口，
+> 不要跟用户挤 5273：
+> `ORBITA_DEV_INSTANCE=<名> ORBITA_DEV_PORT=<端口> bun run dev`
+> （PowerShell：`$env:ORBITA_DEV_INSTANCE="<名>"; $env:ORBITA_DEV_PORT="<端口>"; bun run dev`）。
+> 不要改配置里的端口。
 > 停服务按 PID 杀，**不要 `pkill -f "electron-vite dev"`**——同机别的 electron-vite 应用会陪葬（陷阱史 #2）。
 > **新开 worktree 交给用户前**：`bun install`，`node_modules/electron/path.txt` 不在就跑 `node node_modules/electron/install.js`，
 > 确认 `node -e "require('electron')"` 打印出路径。不要拿软链主仓 node_modules 充数——用户进去 `bun run dev` 会报 `Electron uninstall`。
