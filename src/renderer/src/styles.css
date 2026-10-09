@@ -245,6 +245,21 @@
   grid-area: 1 / 1;
 }
 
+/* textarea 必须也是定位元素：镜像层改成 absolute 之后，未定位的 textarea 会被画在
+   它下面——chip 与展开段的底色盖住 textarea 的字（胶囊成了空白药丸、展开段只剩色条）。
+   两个都定位、textarea 在 DOM 里靠后，它就叠在镜像之上；收起标签 z-index: 1 仍在最上 */
+.composer-field > textarea {
+  position: relative;
+}
+
+/* 收起标签不进格子：`.composer-field > *` 给了所有子项 grid-area 1/1，绝对定位的
+   grid 子项以自己的格为包含块——格从头部空间带之下开始，标签的 top 又加了一次
+   textarea.offsetTop，结果落回段头那一行、压住字。脱出格子，包含块回到 field 的
+   padding box，标签就浮在头部空间带里 */
+.composer-field > .composer-paste-label {
+  grid-area: auto;
+}
+
 /* 镜像层（全主题常驻，垫在 textarea 下）：字透明，只画句中 chip 与（copybook 的）修正液；
    换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步）。
    曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06）。
