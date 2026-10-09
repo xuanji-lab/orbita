@@ -603,35 +603,92 @@ export function turnStats(
   };
 }
 
-/** 组行的状态汇总：结果索引上数一遍，失败/进行中/完成各多少。 */
+/** 组行的状态汇总：结果索引上数一遍，失败/进行中/已中断/完成各多少。 */
 export interface ToolGroupStatus {
   total: number;
   failed: number;
   running: number;
+  /** 已中断（无结果帧且结果永远不会来，见 `interruptedToolCallIds`）——不占 running，组头不为它呼吸 */
+  interrupted: number;
   done: number;
 }
 
 export function toolGroupStatus(
   calls: readonly ToolCallUnit[],
   results: ToolResultIndex,
+  interrupted: ReadonlySet<string> = new Set(),
 ): ToolGroupStatus {
   let failed = 0;
   let running = 0;
+  let broke = 0;
   let done = 0;
   for (const call of calls) {
     const result = results.get(call.toolCallId);
-    if (result === undefined || result.status === "running") running++;
-    else if (result.status === "error") failed++;
+    if (result === undefined || result.status === "running") {
+      // 连结果帧都没有、且判定已中断：按中断计，不算运行中
+      if (result === undefined && interrupted.has(call.toolCallId)) broke++;
+      else running++;
+    } else if (result.status === "error") failed++;
     else done++;
   }
-  return { total: calls.length, failed, running, done };
+  return { total: calls.length, failed, running, interrupted: broke, done };
 }
 
 /**
- * 思考折叠行的预览：取**最后一个非空行**。流式时每来一行新思考就顶替上一行
- * （一行顶替一行的活尾刷新，增量由 pi 归约器直接送达，这里只管取行）；
- * 结束后同一规则——无跳变，展开看全文是另一条路。
+ * 已中断的工具调用 id 集：调用**从未执行、结果永远不会来**——所在 assistant 消息
+ * 以 error / aborted 收场（模型流在发 tool call 参数途中被切断，2026-10-09 的
+ * 「委派中…」呼吸不停就是它），或消息已落定而轮已结束 / 后面已有新的对话记录，
+ * 结果帧却始终缺席。这类调用按「运行中」渲染就会永远呼吸（delegate 卡）/ 转圈，
+ * 界面要能说出「这一步没发生」。
+ *
+ * 判定护住几类真跑着的调用，不误伤：
+ * - **有结果帧**（含 running 帧）的一律不算——工具已经启动，结果只是还没到；
+ * - **流式中的消息**（status "streaming"，stopReason 尚未定）不算；
+ * - **活跃轮末条 assistant** 上的 complete 调用不算——那是「消息已完、工具即将/
+ *   正在启动」的正常窗口。**「末条」只看 assistant / user 记录，不看 tool 帧**：
+ *   pi 并行批次里每个调用先落 start 帧、再过审批闸门（可能等用户很久）才轮到
+ *   下一个（agent-loop 的 executeToolCallsParallel）——同批还没 start 的调用没有
+ *   帧，把 tool 帧当「后面有新记录」会在审批挂起时把它误判成已中断。反过来，
+ *   新的 assistant / user 一定在整批结果落定之后才出现（pi 只在整批工具落定后
+ *   才开下一条 assistant；steer 注入的 user 也落在批次之后），它们才是
+ *   「结果该齐了」的可信界碑。
  */
+export function interruptedToolCallIds(
+  records: readonly TranscriptRecord[],
+  results: ToolResultIndex,
+  turnActive: boolean,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  // 倒序扫：「右边已出现过 assistant / user」——对本条消息来说就是后面已有新对话。
+  // 收集到的 id 最后再倒回文档序（Set 按插入序迭代），调试与断言都稳定
+  const found: string[] = [];
+  let movedOn = false;
+  for (let i = records.length - 1; i >= 0; i -= 1) {
+    const record = records[i];
+    if (record === undefined) continue;
+    if (record.role === "user") {
+      movedOn = true;
+      continue;
+    }
+    if (record.role !== "assistant") continue; // tool 帧 / 界碑 / 通道标记都不是界碑
+    if (record.status === "streaming") {
+      // 轮已走到新的流式消息：它自己的调用不判（stopReason 未定），
+      // 但它左边的批次已经收账——结果缺席就是孤儿
+      movedOn = true;
+      continue;
+    }
+    for (const block of record.content) {
+      if (block.type !== "toolCall" || results.has(block.toolCallId)) continue;
+      if (record.status === "error" || record.status === "aborted" || !turnActive || movedOn) {
+        found.push(block.toolCallId);
+      }
+    }
+    movedOn = true;
+  }
+  for (const id of found.reverse()) ids.add(id);
+  return ids;
+}
+
 export function thinkingPreview(text: string): string {
   const lines = text.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
