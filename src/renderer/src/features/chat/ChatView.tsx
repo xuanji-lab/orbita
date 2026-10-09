@@ -22,6 +22,7 @@ import {
   selectHomeCards,
 } from "./home-cards";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
+import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import {
@@ -2462,7 +2463,9 @@ function UserBubble(props: {
   // scrollHeight == clientHeight，结论会丢，按钮就再也收不回了。
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
-  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  // 量的是折叠 wrapper（不是气泡本体）：scrollHeight 是全文高、clientHeight 是
+  // clamp 高，两者都在无 padding 的内容盒上量，判定才不被气泡 chrome 干扰
+  const clampRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1200);
@@ -2514,8 +2517,8 @@ function UserBubble(props: {
   const hasText = text.trim() !== "";
   useLayoutEffect(() => {
     if (expanded) return;
-    const el = bubbleRef.current;
-    if (el !== null) setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    const el = clampRef.current;
+    if (el !== null) setOverflowing(isBubbleOverflowing(el.scrollHeight, el.clientHeight));
   }, [text, expanded]);
   return (
     <div
@@ -2600,7 +2603,6 @@ function UserBubble(props: {
       )}
       {hasText && (
         <div
-          ref={bubbleRef}
           data-quote-id={props.item.id}
           data-quote-role="user"
           style={{
@@ -2615,11 +2617,16 @@ function UserBubble(props: {
             fontSize: "var(--font-size-chat)",
             lineHeight: "var(--line-height-bubble)",
             overflowWrap: "anywhere",
-            // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
-            ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
           }}
         >
-          <MarkdownBlock text={text} variant="bubble" />
+          {/* 折叠裁剪落在内容自己的 wrapper 上（无 padding / 边框）：裁剪边正好是
+              第 4 行底边，第 5 行整体藏在裁剪线以下。旧实现把 maxHeight 加在气泡
+              本体，裁剪边（padding box）比第 4 行低出一条 bottom padding，第 5 行
+              的上半截正好落进可见带——「最后一行被裁一半」的根因，详见
+              user-bubble-clamp.ts */}
+          <div ref={clampRef} style={bubbleClampStyle(expanded)}>
+            <MarkdownBlock text={text} variant="bubble" />
+          </div>
           {!expanded && overflowing && (
             <div
               aria-hidden
