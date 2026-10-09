@@ -1908,10 +1908,13 @@ body {
  * 说清 ↑↓ / Enter / Tab / Esc 各自干什么。不设 uppercase——那是组标签的待遇。
  */
 .panel-picker-hint {
+  /* 右栏窄时一行放不下（英文三段提示约 52 字符）：写死 24px 高会把第二行裁掉一半
+     （验收截图里「Esc cancels」只剩上半截）。改最小高度 + 纵向内边距，允许换行 */
   display: flex;
   align-items: center;
-  height: 24px;
-  padding: 0 14px;
+  min-height: 24px;
+  padding: 4px 14px;
+  line-height: 1.4;
   border-bottom: 1px solid var(--color-border-subtle);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
