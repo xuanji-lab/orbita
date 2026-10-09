@@ -6,6 +6,7 @@ import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
@@ -52,6 +53,9 @@ import { registerBrowserIpc } from "./browser/ipc.ts";
 import { registerExcerptIpc } from "./excerpt/ipc.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
+import { windowsSandboxExePath } from "./computer-use/capability.ts";
+import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { SandboxController } from "./computer-use/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
@@ -365,6 +369,24 @@ void app.whenReady().then(async () => {
   });
   registerBrowserIpc(browserSandbox, settings, configDir);
   mainWindows.onLastClosed(() => browserSandbox.dispose());
+
+  /*
+   * computer use v1（PR1 主进程部分）：Windows 沙箱生命周期 + 手动「看一眼」截图。
+   * guest 桥目录：开发 = 仓库 guest-bridge/bin（bun run build:bridge 出 exe），
+   * 打包 = resources/guest-bridge（electron-builder extraResources，见 package.json）。
+   * spawnSandbox 只在这里真接——测试全走假进程，沙箱窗口是用户可见面。
+   */
+  const sandboxExePath = windowsSandboxExePath();
+  const computerUse = new SandboxController({
+    computerUseDir: join(configDir, "computer-use"),
+    bridgeDir: app.isPackaged
+      ? join(process.resourcesPath, "guest-bridge")
+      : join(app.getAppPath(), "guest-bridge", "bin"),
+    sandboxExePath,
+    spawnSandbox: (wsbPath) => spawn(sandboxExePath, [wsbPath], { stdio: "ignore" }),
+    onStatus: broadcastComputerUseStatus,
+  });
+  registerComputerUseIpc(computerUse);
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
@@ -680,6 +702,8 @@ void app.whenReady().then(async () => {
     agentHost.dispose();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
+    // 沙箱是我们 spawn 的：应用退出时一并带走，别给用户留一个连不上宿主的孤儿沙箱窗口
+    computerUse.dispose();
   });
 
   /**
