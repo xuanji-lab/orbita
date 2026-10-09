@@ -40,6 +40,7 @@ import fileJson2 from "../../../../Orbita Design System/assets/icons/lucide/file
 import fileSpreadsheet from "../../../../Orbita Design System/assets/icons/lucide/file-spreadsheet.svg?raw";
 import fileVideo2 from "../../../../Orbita Design System/assets/icons/lucide/file-video-2.svg?raw";
 import presentation from "../../../../Orbita Design System/assets/icons/lucide/presentation.svg?raw";
+import scrollText from "../../../../Orbita Design System/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
 import info from "../../../../Orbita Design System/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
@@ -150,6 +151,7 @@ const ICONS = {
   "file-spreadsheet": fileSpreadsheet,
   "file-video-2": fileVideo2,
   presentation,
+  "scroll-text": scrollText,
   "fold-vertical": foldVertical,
   folder,
   "folder-open": folderOpen,

@@ -70,8 +70,13 @@ const TEXT_EXTS = new Set(["md", "mdx", "markdown", "txt", "rst", "log", "adoc",
 /** 网页（globe）：浏览器直接渲染 / 给样式的那几种，与 isWebPageFile 的清单一股 */
 const WEB_EXTS = new Set(["html", "htm", "xhtml", "css"]);
 
-/** 文档（book）：排版过的成品文档，不是源代码也不是纯文本 */
-const DOC_EXTS = new Set(["pdf", "doc", "docx", "rtf", "odt", "pages", "epub", "mobi"]);
+/** 文档（book）：排版过的成品文档，不是源代码也不是纯文本。pdf 单独走
+ *  scroll-text（卷轴）——与 docx 只靠颜色分不开（2026-10 验收 L），形状先分：
+ *  pdf 中性色不进三色 */
+const DOC_EXTS = new Set(["doc", "docx", "rtf", "odt", "pages", "epub", "mobi"]);
+
+/** pdf：独立的卷轴形状（与 book / file-text 都不同） */
+const PDF_EXTS = new Set(["pdf"]);
 
 /** 演示（presentation）：幻灯片一族 */
 const SLIDE_EXTS = new Set(["ppt", "pptx", "odp", "key"]);
@@ -147,6 +152,7 @@ export function fileIcon(name: string, kind: FileEntryKind, open = false): IconN
   if (CONFIG_EXTS.has(ext)) return "file-json-2";
   if (WEB_EXTS.has(ext)) return "globe";
   if (IMAGE_EXTS.has(ext)) return "image";
+  if (PDF_EXTS.has(ext)) return "scroll-text";
   if (DOC_EXTS.has(ext)) return "book";
   if (SLIDE_EXTS.has(ext)) return "presentation";
   if (SHEET_EXTS.has(ext)) return "file-spreadsheet";

@@ -154,8 +154,8 @@ describe("fileIcon", () => {
     deepStrictEqual(fileIcon("page.htm", "file"), "globe");
   });
 
-  it("文档扩展名 → book（排版过的成品文档）", () => {
-    deepStrictEqual(fileIcon("paper.pdf", "file"), "book");
+  it("文档扩展名 → book（排版过的成品文档）；pdf 单独走卷轴 scroll-text（与 docx 形状先分，2026-10 验收 L）", () => {
+    deepStrictEqual(fileIcon("paper.pdf", "file"), "scroll-text");
     deepStrictEqual(fileIcon("简历.DOCX", "file"), "book");
     deepStrictEqual(fileIcon("report.rtf", "file"), "book");
   });
