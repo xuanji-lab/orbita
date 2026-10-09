@@ -38,7 +38,10 @@ function varsOf(css: string, from: number, to: number): Map<string, string> {
 }
 
 function themeBlock(theme: string): Map<string, string> {
-  const css = readFileSync(join(TOKENS, "colors.css"), "utf8");
+  // 归一行尾：Windows runner 的 git 默认 autocrlf 会把仓库里的 LF 检出成 CRLF，
+  // 而下面的块定位用了硬编码的 "\n"。不归一的话 light 块找不到，CI 眼里就成了
+  // 「色相分离不足」的假报告（2026-10，main 上真实挂过）
+  const css = readFileSync(join(TOKENS, "colors.css"), "utf8").replace(/\r\n/g, "\n");
   if (theme === "light") {
     const open = css.indexOf(":root,\n[data-theme-preview=\"light\"] {");
     assert.ok(open >= 0, "colors.css 里找不到明档 token 块");
