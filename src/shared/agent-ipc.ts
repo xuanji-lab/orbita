@@ -570,6 +570,18 @@ export type AgentCommand =
       modelId: string;
       messages: string[];
     }
+  | {
+      /**
+       * 连接探测（设置 › 模型服务的 Test，OAuth 令牌专用路由）：主进程的裸 fetch
+       * 补齐身份头后仍被 429（实测 2026-10），官方 SDK 客户端自带的遥测指纹补不了——
+       * 干脆让探测走 agent 进程里 pi 的同一个客户端，与真会话完全同源。
+       * 结果经 `providerProbed` 事件按 requestId 回传。独立小调用，不开会话、不落盘。
+       */
+      type: "probeProvider";
+      requestId: string;
+      provider: ProviderSecrets;
+      modelId: string;
+    }
   | { type: "abort"; sessionId: string }
   | {
       /** 立即发送排队中的某一条：abort 当前轮（含正在跑的工具调用）→ 这条作为新一轮 submit */
@@ -931,6 +943,8 @@ export type AgentEvent =
    * 调用失败或回复读不懂时 throwaway 为 null、error 写原因。
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
+  /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
+  | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
    * 会话内模型切换成功（C-4 的 `setModel` 命令翻译而来）。主进程落 meta
    * （providerId / modelId——分支继承与重开恢复都读它）并转给 renderer 对齐

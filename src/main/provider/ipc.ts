@@ -5,8 +5,10 @@
 import { ipcMain, shell } from "electron";
 import { ipcChannels, type OauthLoginInput } from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
+import { resolveProviderSecrets } from "../agent/ipc.ts";
+import type { AgentHostCore } from "../agent/host-core.ts";
+import { isClaudeOauthToken, runClaudeLogin } from "./oauth.ts";
 import { discoverModels, type DiscoveredModels } from "./discover.ts";
-import { runClaudeLogin } from "./oauth.ts";
 import { testConnection, type ConnectionTestResult } from "./test-connection.ts";
 import { ProviderStore, ProviderValidationError } from "./store.ts";
 
@@ -28,7 +30,7 @@ async function resolveKey(
   return store.resolveApiKey(providerId);
 }
 
-export function registerProviderIpc(store: ProviderStore): void {
+export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore): void {
   ipcMain.handle(ipcChannels.providerList, (): Promise<ProviderDto[]> => store.list());
 
   ipcMain.handle(
@@ -91,6 +93,24 @@ export function registerProviderIpc(store: ProviderStore): void {
         return { ok: false, message: "Claude login expired — log in again from Settings › Providers." };
       }
       if (apiKey === null) return { ok: false, message: "Enter an API key first." };
+      /**
+       * OAuth 令牌的探测改走 agent 进程（真会话同源客户端）：主进程裸 fetch
+       * 即便补齐身份头仍被 429（实测），官方 SDK 自带的遥测指纹裸 fetch 补不了。
+       * 只认「已落盘的 provider + 没手填 key」：手贴令牌走兼容条目的，保持裸探测。
+       */
+      if (
+        host !== undefined &&
+        (input.apiKey === undefined || input.apiKey === "") &&
+        input.providerId !== undefined &&
+        isClaudeOauthToken(apiKey)
+      ) {
+        const provider = await resolveProviderSecrets(store, input.providerId);
+        const modelId = input.modelId.trim() !== "" ? input.modelId.trim() : provider.models[0]?.id ?? "";
+        if (modelId === "") {
+          return { ok: false, message: "Add a model first to test the connection." };
+        }
+        return host.probeProvider(provider, modelId);
+      }
       return testConnection({
         ...input,
         apiKey,

@@ -252,7 +252,6 @@ void app.whenReady().then(async () => {
   // 一个 secrets.json 一个实例：provider 的 API key 与语音厂商的密钥共用，读改写不互相踩
   const secrets = new SafeStorageSecrets(configDir);
   const providers = new ProviderStore(configDir, secrets);
-  registerProviderIpc(providers);
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
     new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
@@ -504,6 +503,9 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
+  // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
+  // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
+  registerProviderIpc(providers, agentHost);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
