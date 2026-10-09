@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   QUOTE_GUIDELINE,
   QUOTE_MAX_CHARS,
-  QUOTE_MAX_COUNT,
+  QUOTE_MAX_TOTAL_CHARS,
   acceptQuote,
   clampQuote,
   composeQuotedMessage,
@@ -119,13 +119,24 @@ describe("acceptQuote —— 引用准入", () => {
     });
   });
 
-  it("满 5 条拒新条（too-many）；边界：4 条在册时第 5 条仍收", () => {
-    const four = Array.from({ length: QUOTE_MAX_COUNT - 1 }, (_, i) => ({ messageId: `m-${i}`, text: `第${i}段` }));
-    assert.equal(acceptQuote(four, { messageId: "m-new", text: "新段" }).accepted, true);
-    const five = [...four, { messageId: "m-x", text: "第五段" }];
-    assert.deepEqual(acceptQuote(five, { messageId: "m-new", text: "新段" }), {
+  it("总字数超上限拒新条（too-long-total）；边界：恰好打满仍收，条数不再限制", () => {
+    // 10 条打满的引用 + 一条短的：能收（总字数还没过线，条数本身不是闸）
+    const full = Array.from({ length: QUOTE_MAX_TOTAL_CHARS / QUOTE_MAX_CHARS }, (_, i) => ({
+      messageId: `m-${i}`,
+      text: "字".repeat(QUOTE_MAX_CHARS - 10),
+    }));
+    const headroom = QUOTE_MAX_TOTAL_CHARS - full.reduce((sum, item) => sum + countChars(item.text), 0);
+    assert.equal(acceptQuote(full, { messageId: "m-new", text: "a".repeat(headroom) }).accepted, true);
+    // 再多一个字就过线
+    assert.deepEqual(acceptQuote(full, { messageId: "m-new", text: "a".repeat(headroom + 1) }), {
       accepted: false,
-      reason: "too-many",
+      reason: "too-long-total",
     });
+    // 超过上限的条数本身收得下：上限只看字数不看条数
+    const many = Array.from({ length: QUOTE_MAX_TOTAL_CHARS / 100 + 5 }, (_, i) => ({
+      messageId: `m-${i}`,
+      text: "x".repeat(90),
+    }));
+    assert.equal(acceptQuote(many, { messageId: "m-new", text: "短" }).accepted, true);
   });
 });

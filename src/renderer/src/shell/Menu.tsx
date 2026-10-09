@@ -142,6 +142,8 @@ export function Menu(props: {
   /**
    * 菜单开在锚点的哪一边。默认下方；`right` 给侧栏会话行——
    * 开在下方会盖住紧挨着的下一条会话，想看别的会话就得先关菜单。
+   * `above` 给输入卡底栏的芯片：首页输入卡悬在窗口中间，下方再空也朝上开，
+   * 与钉底的聊天页同一朝向（规则见 menu-position.ts）。
    */
   placement?: MenuPlacementSide;
   /**

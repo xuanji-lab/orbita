@@ -19,6 +19,7 @@ import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
+import type { MenuPlacementSide } from "../../shell/menu-position";
 import { hasCredentials, kindOf, modelAcceptsImage, modelContextText, railShortNames } from "./providers-view-model.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -153,6 +154,8 @@ export function ModelPickerMenu(props: {
   trigger: (state: { open: boolean; toggle: () => void }) => React.ReactNode;
   /** 底部固定行。只有输入卡给（「配置模型」）；设置面本身就在设置里，不用再来一个入口 */
   footer?: (close: () => void) => React.ReactNode;
+  /** 原样转发给 Menu：输入卡给 `above`（芯片菜单朝上开），设置面与子会话面板用默认下方 */
+  placement?: MenuPlacementSide;
 }): React.ReactNode {
   const [scope, setScope] = useState<ModelScope>(MODEL_SCOPE_ALL);
   const pick = (range: ModelScope) =>
@@ -205,6 +208,7 @@ export function ModelPickerMenu(props: {
       panelMaxWidth={480}
       widthItems={isCard ? withLeading(all) : undefined}
       listRows={isCard ? 6 : undefined}
+      placement={props.placement}
       trigger={props.trigger}
       footer={props.footer}
     />

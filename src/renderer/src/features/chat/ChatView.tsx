@@ -107,9 +107,10 @@ import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { parseQualifiedToolName } from "@shared/mcp";
-import { parseSkillBlock, skillForReadPath } from "@shared/skill";
-import type { SkillMeta } from "@shared/skill";
+import { isMcpServerOffered, parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
+import { parseSkillSegments, skillForReadPath } from "@shared/skill";
+import { stripInvocationBlock } from "@shared/invocation";
+import type { SkillMeta, SkillSegment } from "@shared/skill";
 import { api } from "../../api";
 import { retryCauseText, retryLineText } from "./retry-text";
 import { PERMISSION_MODES } from "@shared/permission";
@@ -396,19 +397,29 @@ function QuoteSelectionLayer(props: {
 }
 
 /**
- * 会话区的 skill 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug。
- * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
- * （新建的 skill 下一轮会话自然出现）。
+ * 会话区的 skill / MCP 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug，
+ * 指令面板的 skill 清单与 MCP 栏也用同一份。挂载读一次、失败静默——徽标是锦上
+ * 添花，不为它报错，也不为它做重读 UI（新建的 skill 下一轮会话自然出现）。
  */
-function useSkillIndex(): { skills: SkillMeta[]; reload: () => void } {
+function useSkillIndex(): {
+  skills: SkillMeta[];
+  reload: () => void;
+  servers: McpServerInfo[];
+  reloadServers: () => void;
+} {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  const [servers, setServers] = useState<McpServerInfo[]>([]);
   const reload = useCallback(() => {
     void api.skill.list().then(setSkills).catch(() => undefined);
+  }, []);
+  const reloadServers = useCallback(() => {
+    // main 的 mcp:list 回 { servers, warnings }（工作区配置分层后）；warnings 由 MCP 管理面显示，面板不管
+    void api.mcp.list().then((result) => setServers(result.servers)).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
   }, [reload]);
-  return { skills, reload };
+  return { skills, servers, reload, reloadServers };
 }
 
 function ChatViewBody(props: {
@@ -496,9 +507,14 @@ function ChatViewBody(props: {
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引 + 指令面板的 skill 清单（同一份数据）。
+  // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
   // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
-  const { skills, reload: reloadSkills } = useSkillIndex();
+  const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
+  const offeredWorkspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
+  const offeredServers = useMemo(
+    () => servers.filter((server) => isMcpServerOffered(server, offeredWorkspace)),
+    [servers, offeredWorkspace],
+  );
   const jumpToQuote = useContext(QuoteJumpContext);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
@@ -755,7 +771,11 @@ function ChatViewBody(props: {
       }}
       onStop={session.stop}
       skills={skills}
+      workspaceId={session.workspaceId}
       onReloadSkills={reloadSkills}
+      // 只给当前工作区能用的 server（isMcpServerOffered：与发送端判 /mcp: 可用同一依据）
+      servers={offeredServers}
+      onReloadServers={reloadServers}
       onCommand={(command) => {
         if (command === "compact") {
           // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
@@ -795,6 +815,7 @@ function ChatViewBody(props: {
       attachments={session.attachments}
       onAttach={session.attachIncoming}
       onRemoveAttachment={session.removeAttachment}
+      onPickFolders={session.attachFolderRefs}
       files={session.files}
       pasted={session.pasted}
       onRemoveFile={session.removeFile}
@@ -1849,8 +1870,14 @@ function ComposerBar(props: {
 
   return (
     <>
+      {/*
+        底栏芯片的菜单一律 placement="above"：首页里输入卡悬在窗口中间，默认
+        「哪边空往哪开」会往下方弹（还会同一排芯片朝向不一）；聊天页钉底又全朝上。
+        点名朝上，两边同一朝向（2026-10-03 用户定）
+      */}
       <Menu
         items={scopeItems}
+        placement="above"
         // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
         // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
         panelMaxHeight={520}
@@ -1917,6 +1944,7 @@ function ComposerBar(props: {
       />
       <Menu
         items={modeItems}
+        placement="above"
         panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
@@ -1942,6 +1970,7 @@ function ComposerBar(props: {
           starred={props.starredModels}
           onToggleStar={props.onToggleStarModel}
           onSelect={(providerId, modelId) => session.chooseModel(providerId, modelId)}
+          placement="above"
           // 底部固定行：卡片会筛掉没配 key 的厂商，这行是唯一能说清「别家不是不存在」的地方
           footer={(close) =>
             modelCardFooter({
@@ -1968,6 +1997,7 @@ function ComposerBar(props: {
       )}
       <Menu
         items={thinkingItems}
+        placement="above"
         panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
@@ -2090,6 +2120,7 @@ function UsageRing(props: { session: ChatSession }) {
     <span style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end" }}>
       <Menu
         items={items}
+        placement="above"
         align="end"
         hoverOpen
         onOpenChange={(next) => {
@@ -2436,11 +2467,30 @@ function UserBubble(props: {
   // 其余才是正文——「只发附件不打字」的消息第一块就是 <pasted-text>，按「第一块
   // 恒是正文」猜会把裸标签渲染进气泡（review #90 指出）。旧会话只有单块正文，
   // 这条路径同样走通、行为不变。
-  // `/skill:` 调用展开出的 <skill> 块（主进程拼的）同样拆成折叠卡：skill 正文几千字，
-  // 不能平铺进气泡；块后的附加指示才是用户自己的话，照常进气泡、照常被复制
+  // `/skill:` / `/mcp:` 的指令块先剥掉：转录存的是发给模型的全文（指令 + 原文），
+  // 气泡只显示用户自己写的话（token 以纯文字留在原文里，chip 化是后续另一个 PR）；
+  // 剩下的旧格式 `<skill>` 块（2026-10-02 前的存量转录）拆成折叠卡：skill 正文
+  // 几千字，不能平铺进气泡；句中展开时代一条消息可能有多块，逐张成卡，块前后的
+  // 文字按原顺序留在气泡里。新消息不再产生 `<skill>` 块，这条路径仅服务旧数据。
   const split = splitUserTextBlocks(textBlocks.map((block) => block.text));
-  const skillBlock = parseSkillBlock(split.body);
-  const parsed = skillBlock !== null ? parseQuotedMessage(skillBlock.rest) : parseQuotedMessage(split.body);
+  const body = stripInvocationBlock(split.body);
+  const skillSegments = parseSkillSegments(body);
+  const skillCards =
+    skillSegments === null
+      ? []
+      : skillSegments.filter(
+          (segment): segment is Extract<SkillSegment, { kind: "skill" }> => segment.kind === "skill",
+        );
+  const skillFreeText =
+    skillSegments === null
+      ? body
+      : skillSegments
+          .filter(
+            (segment): segment is Extract<SkillSegment, { kind: "text" }> => segment.kind === "text",
+          )
+          .map((segment) => segment.text)
+          .join("\n\n");
+  const parsed = parseQuotedMessage(skillFreeText);
   const quotes = parsed.quotes;
   const copyText = parsed.text;
   const pastedBlocks = split.pasted.map((content) => ({ content, lines: pastedTextSize(content).lines }));
@@ -2517,11 +2567,13 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {skillBlock !== null && (
-        // skill 卡落在统一排布的第四行：图片 → 引用 → 文件 → **skill** → 粘贴文字 →
-        // 文字气泡（2026-09-27 定稿）。它按内容也是「带进来的材料」，排在材料组末尾
-        <SkillInvocationCard name={skillBlock.name} content={skillBlock.content} />
-      )}
+      {skillCards.length > 0 &&
+        // 旧转录的 `<skill>` 块折叠卡，落在统一排布的第四行：图片 → 引用 → 文件 →
+        // **skill** → 粘贴文字 → 文字气泡（2026-09-27 定稿）。它按内容也是「带进来
+        // 的材料」，排在材料组末尾；句中多块调用就多张卡，同一行话语里挂多个 skill
+        skillCards.map((card, index) => (
+          <SkillInvocationCard key={`skill:${index}`} name={card.name} content={card.content} />
+        ))}
       {pastedBlocks.length > 0 && (
         // 粘贴文字行：贴着气泡（它是用户写的内容，不是从磁盘带来的材料）；
         // 折叠成一行——发出去之后它是背景，不该在对话流里再刷一次屏
@@ -2669,13 +2721,10 @@ function UserBubble(props: {
 }
 
 /**
- * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
- * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
- */
-/**
- * `<skill>` 块的折叠卡（pi TUI 同款形态）：默认一行「skill 名」，点开看全文——
- * skill 正文几千字，收着才不淹没对话。在右对齐的气泡列里要 fit-content 宽度，
- * 不复用 CollapseRow（那套是全宽的工具行骨架）。
+ * 旧转录 `<skill>` 块的折叠卡（pi TUI 同款形态）：默认一行「skill 名」，点开看
+ * 全文——skill 正文几千字，收着才不淹没对话。2026-10-02 起 `/skill:` 改指令式，
+ * 新消息不再产生这种块，这张卡只服务存量会话的显示。在右对齐的气泡列里要
+ * fit-content 宽度，不复用 CollapseRow（那套是全宽的工具行骨架）。
  */
 function SkillInvocationCard(props: { name: string; content: string }) {
   const [open, setOpen] = useState(false);
@@ -2752,6 +2801,10 @@ function SkillInvocationCard(props: { name: string; content: string }) {
   );
 }
 
+/**
+ * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
+ * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
+ */
 function UserImages(props: { images: readonly PromptImage[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);

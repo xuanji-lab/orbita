@@ -50,10 +50,11 @@ export interface TextQuote {
 export const QUOTE_MAX_CHARS = 2000;
 
 /**
- * 一条消息最多挂几条引用（2026-09-27 裁决）。与图片 / 文件的名额同量级——
- * 此前引用只有单条 2000 字的上限、条数不限，理论上能挂几十条把上下文撑爆。
+ * 一条消息里引用的**总字数上限**（码点，2026-10-03 裁决）。单条仍有 QUOTE_MAX_CHARS，
+ * 条数不再限制——引用是「带上下文回话」，上下文本身有价值，卡条数没有道理；
+ * 但完全不设防能把几万字堆进每轮请求。20000 ≈ 10 条打满的引用，够长对话用。
  */
-export const QUOTE_MAX_COUNT = 5;
+export const QUOTE_MAX_TOTAL_CHARS = 20000;
 
 /**
  * 引用准入：重复与超限都拒。重复沿用旧规则（静默去重——同一段引两次是噪音，
@@ -62,11 +63,12 @@ export const QUOTE_MAX_COUNT = 5;
 export function acceptQuote(
   current: readonly { messageId: string; text: string }[],
   quote: { messageId: string; text: string },
-): { accepted: boolean; reason?: "duplicate" | "too-many" } {
+): { accepted: boolean; reason?: "duplicate" | "too-long-total" } {
   if (current.some((item) => item.messageId === quote.messageId && item.text === quote.text)) {
     return { accepted: false, reason: "duplicate" };
   }
-  if (current.length >= QUOTE_MAX_COUNT) return { accepted: false, reason: "too-many" };
+  const total = current.reduce((sum, item) => sum + countChars(item.text), 0) + countChars(quote.text);
+  if (total > QUOTE_MAX_TOTAL_CHARS) return { accepted: false, reason: "too-long-total" };
   return { accepted: true };
 }
 

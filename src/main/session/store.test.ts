@@ -979,6 +979,29 @@ describe("SessionStore · 文件引用落盘", () => {
     ]);
     assert.equal(missing?.path, join(dir, "gone.txt"));
   });
+
+  test("超过复制上限的 external 文件不复制、按原位置引用；未超限的照旧复制（注入小阈值，不真写 100MB）", async () => {
+    await store.ensureSession(meta());
+    await mkdir(join(dir, "outside"), { recursive: true });
+    const big = join(dir, "outside", "big.bin");
+    await writeFile(big, "0123456789"); // 10 字节
+    const small = join(dir, "outside", "small.txt");
+    await writeFile(small, "abc");
+    const [bigSent, smallSent] = await store.saveExternalFiles(
+      ID,
+      [
+        { path: big, name: "big.bin", kind: "file", origin: "external" },
+        { path: small, name: "small.txt", kind: "file", origin: "external" },
+      ],
+      5, // 上限 5 字节：big 超限、small 不超
+    );
+    // 超限的按原位置引用（realpath 规范形），不进会话附件目录
+    assert.equal(bigSent?.kind, "file");
+    assert.equal(bigSent?.path, await realpath(big));
+    // 未超限的照旧复制进 <uuid>/原名 子目录
+    assert.match(smallSent?.path ?? "", new RegExp(`[\\\\/]${ID}\\.attachments[\\\\/][0-9a-f-]{36}[\\\\/]small\\.txt$`));
+    assert.equal(await readFile(smallSent?.path ?? "", "utf8"), "abc");
+  });
 });
 
 describe("SessionStore.assignModel（给导入的会话分配模型）", () => {

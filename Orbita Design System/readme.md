@@ -142,6 +142,12 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
+**Filetype colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): one job only —
+telling Word-ish docs, slide decks and spreadsheets apart **at a glance in their 13–14px icons**
+(files tree, composer pills, sent-attachment list; filenames stay in ink). Not the accent or any
+status colour; ≥ 3:1 on every theme's panel / muted / app grounds, hues ≥ 40° apart, guarded by
+`filetype-colors.test.ts`.
+
 **Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is
 unchanged — **the shell (the ground the left rail and right icon strip sit on) is the lighter
@@ -255,9 +261,20 @@ translucency step alone. No thick rules, no coloured left-border accents.
 border and **no** fill — they sit directly on the chat surface and are separated by 16px of space.
 External-capability events (skill use, MCP calls) render as **chip rows**: their identity (icon +
 kind word + name) sits in one pill chip — 1px hairline, fully rounded, no fill — the same language
-as the composer's attachment and quote chips, so an "external object" looks alike everywhere; the
+as the composer's attachment pills, so an "external object" looks alike everywhere; the
 row itself stays a process row. Within the family the skill name sets in the text face (a
 human-written instruction) while server/tool sets in mono (a machine service) (2026-09-27).
+**The composer's materials never enter the input card** (2026-10-03, the "stacked" ruling):
+screenshots, file/directory references, pasted-text blocks and quotes stack *above* the card,
+in that order — screenshots as one row of square thumbs; references and pasted text as one row
+of the same pill chips, single-row, horizontally scrolled, fading at the right edge; quotes as a
+floating-glass card of queue-strip rows, at most two visible and the rest folded behind
+"N more quotes…". Only the quote card takes a card; the other layers sit directly on the chat
+surface, each chip carrying its own `--glass-bg` and `--shadow-border`. Pasted text shows its
+full content in a floating popover above the row, never by growing the input area. The slash
+panel stays out of the flow the same way: it opens *downward* from the `/` line as a solid
+popover positioned inside the input card's bounds — it may cover the bottom bar (attach, model,
+send) but never leaves the card.
 Process rows live in the quiet tiers: while a row's activity is in progress its head (icon + label)
 is the only bright thing at secondary; once the state settles the **whole row** recedes to tertiary —
 one flat grey, with failure red as the only exception. Body text never competes with the past.
@@ -298,6 +315,16 @@ continuous animation that would otherwise sit on screen unattended, for a backgr
 isn't currently watching.
 
 ## Implementation rules
+
+**Trailing edges sit on the row's right hem.** A row / card / list item's trailing
+element — a status mark, footnote, count or timestamp — pins its right edge to the row's right
+padding, the same hem the leading element's left edge sits on (depth indent goes left only). Push
+it there with the shared `.row-trailing` primitive (`margin-left: auto; flex: 0 0 auto`) — never
+with a fixed width or magic padding. A hover-only action cluster never occupies space at rest: it
+overlays the corner (absolutely positioned) and the trailing element yields (fades) while it is up.
+The anti-pattern this rule kills: `padding-right: 44px` reserving room for hidden buttons, so a
+resting status mark floats mid-row while the left side hugs its hem. Geometry is guarded by
+`scripts/ui-edges.mjs`.
 
 **Stateful styling lives in CSS classes.** Hover, `:focus-visible`, `:active`, `:disabled`,
 `[aria-selected]` / `[aria-expanded]`, `:focus-within`, container queries, `prefers-reduced-motion`,

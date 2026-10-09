@@ -5,6 +5,11 @@
  * frontmatter 里的 `name` 与 `description` 是 pi 拼进 system prompt 的索引，
  * 正文是模型按索引 read 进去才看的详细指令。
  *
+ * 用户在输入框里用 `/skill:<target>` 点名 skill 的调用机制（token 扫描、指令块
+ * 组装与剥离）在 `invocation.ts`——那份契约同时服务 `/mcp:`，与这里的存储契约
+ * 分开。本文件剩下的解析画数只服务**旧转录的显示**（`<skill>` 块折叠卡，
+ * 2026-10-02 改指令式之前的存量格式）。
+ *
  * **归属不在这份契约里留字段**：一个 skill 属于哪些集合，由 `skill-links/` 里的
  * symlink 表达（磁盘布局就是全部真相，没有第二份清单）。`global` / `workspaces`
  * 是扫链接目录算出来的结果，不是我们存的值。
@@ -94,29 +99,29 @@ export function isSkillSlug(value: string): boolean {
 }
 
 /**
- * /skill: 展开失败的稳定错误码前缀：主进程 throw `SKILL_NOT_FOUND:<target>` /
- * `SKILL_UNREADABLE:<target>`（message 首段），renderer 按界面语言把它翻成人话——
- * 主进程不该猜界面语言，Electron 的 IPC 错误包装也不该原样上屏。
+ * 这条 skill 对归属为 `workspaceId` 的会话是否可用：global 链对所有会话生效
+ * （含无工作区的会话）；否则要看它链没链在这个工作区上。断链（missing）一律不可用。
+ *
+ * **发送端（主进程组装指令块）与输入框的斜杠面板共用这一份**——面板认的，
+ * 发送时必然认；两边各写一遍就会走出「面板里选得到、发出去却被告知不存在」
+ * 的分叉（2026-10-04 用户报的正是这个：面板列了别的工作区的 skill）。
+ * 归属的真源是 `skill-links/` 的链接表（`global` / `workspaces` 都是扫出来的）。
  */
-export const SKILL_NOT_FOUND_CODE = "SKILL_NOT_FOUND:";
-export const SKILL_UNREADABLE_CODE = "SKILL_UNREADABLE:";
-
-/**
- * `/skill:<target>` 指令的解析（主进程展开用）。**target 取到第一个空白为止**，
- * 其余全是附加指示。不是这个形状返回 null，照常发送。
- */
-export function parseSkillInvocation(text: string): { target: string; rest?: string } | null {
-  const match = /^\/skill:([^\s]+)(?:\s([\s\S]*))?$/.exec(text.trim());
-  if (match === null) return null;
-  const target = match[1] ?? "";
-  const rest = match[2]?.trim();
-  return target === "" ? null : rest !== undefined && rest !== "" ? { target, rest } : { target };
+export function isSkillAvailable(
+  meta: { missing: boolean; global: boolean; workspaces: readonly string[] },
+  workspaceId: string | null,
+): boolean {
+  return (
+    !meta.missing &&
+    (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId)))
+  );
 }
 
 /**
- * `/skill:` 的 target 匹配：先按 slug（面板插入的形态、文件系统安全字符集），
+ * `/skill:` 点名的 target 匹配：先按 slug（面板插入的形态、文件系统安全字符集），
  * 再按 frontmatter 名。可用性过滤（missing / global / workspace）由调用方先做，
- * 这里只管名字。找不到返回 null。
+ * 这里只管名字。找不到返回 null。主进程拿它把 target 解析成 SKILL.md 绝对路径，
+ * 写进指令块（invocation.ts）让模型自己 read。
  */
 export function matchSkillTarget<T extends { slug: string; name: string }>(
   available: readonly T[],
@@ -126,30 +131,33 @@ export function matchSkillTarget<T extends { slug: string; name: string }>(
 }
 
 /**
- * 展开成 pi 同款的 `<skill>` 块用户消息（pi 的 formatSkillInvocation 同一形状，
- * 两端必须一致：模型靠它认 skill，显示端靠它认折叠卡）。instructions 是
- * `/skill:x` 后面用户补的附加指示，拼在块后。
+ * 用户消息的段落：skill 块或纯文字（显示端用）。**只服务旧转录**：2026-10-02 起
+ * `/skill:` 改为指令式（invocation.ts），新消息不再产生 `<skill>` 块；存量会话
+ * 里已存的块仍按折叠卡显示，不做迁移。句中展开时代一条消息可能有任意多段，
+ * 块与块之间/前后的文字按原顺序保留在 text 段里。
  */
-export function formatSkillBlock(parts: {
-  name: string;
-  location: string;
-  body: string;
-  instructions?: string;
-}): string {
-  const slash = Math.max(parts.location.lastIndexOf("/"), parts.location.lastIndexOf("\\"));
-  const dir = slash > 0 ? parts.location.slice(0, slash) : "/";
-  const block = `<skill name="${parts.name}" location="${parts.location}">\nReferences are relative to ${dir}.\n\n${parts.body}\n</skill>`;
-  return parts.instructions !== undefined ? `${block}\n\n${parts.instructions}` : block;
-}
+export type SkillSegment =
+  | { kind: "text"; text: string }
+  | { kind: "skill"; name: string; content: string };
 
 /**
- * 从用户消息原文里解析 skill 块（显示端用）。解析出块时 rest 是块后面的
- * 附加指示（可能是空串）；没解析出返回 null，消息照常渲染。
+ * 从用户消息原文里解析全部 `<skill>` 块（任意位置、任意多段；旧转录的显示路径）。
+ * 一个块都没有时返回 null，消息照常渲染；块与块之间/前后的文字成为 text 段
+ * （可能为空串）。
  */
-export function parseSkillBlock(text: string): { name: string; content: string; rest: string } | null {
-  const match = /^<skill name="([^"]+)"[^>]*>\n([\s\S]*)\n<\/skill>(?:\n\n([\s\S]*))?$/.exec(text);
-  if (match === null) return null;
-  return { name: match[1] ?? "", content: match[2] ?? "", rest: match[3] ?? "" };
+export function parseSkillSegments(text: string): SkillSegment[] | null {
+  const pattern = /<skill name="([^"]+)"[^>]*>\n([\s\S]*?)\n<\/skill>/g;
+  const segments: SkillSegment[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) segments.push({ kind: "text", text: text.slice(cursor, match.index) });
+    segments.push({ kind: "skill", name: match[1] ?? "", content: match[2] ?? "" });
+    cursor = pattern.lastIndex;
+  }
+  if (segments.length === 0) return null;
+  if (cursor < text.length) segments.push({ kind: "text", text: text.slice(cursor) });
+  return segments;
 }
 
 /**
