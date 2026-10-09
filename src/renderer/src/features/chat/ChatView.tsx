@@ -39,6 +39,7 @@ import {
   groupToolUnits,
   groupTurns,
   indexToolResults,
+  interruptedToolCallIds,
   mcpFailureLead,
   channelSendMessageId,
   mcpInputSummary,
@@ -106,7 +107,7 @@ import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { parseQualifiedToolName } from "@shared/mcp";
+import { isMcpServerOffered, parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
@@ -396,19 +397,29 @@ function QuoteSelectionLayer(props: {
 }
 
 /**
- * 会话区的 skill 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug。
- * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
- * （新建的 skill 下一轮会话自然出现）。
+ * 会话区的 skill / MCP 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug，
+ * 指令面板的 skill 清单与 MCP 栏也用同一份。挂载读一次、失败静默——徽标是锦上
+ * 添花，不为它报错，也不为它做重读 UI（新建的 skill 下一轮会话自然出现）。
  */
-function useSkillIndex(): { skills: SkillMeta[]; reload: () => void } {
+function useSkillIndex(): {
+  skills: SkillMeta[];
+  reload: () => void;
+  servers: McpServerInfo[];
+  reloadServers: () => void;
+} {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  const [servers, setServers] = useState<McpServerInfo[]>([]);
   const reload = useCallback(() => {
     void api.skill.list().then(setSkills).catch(() => undefined);
+  }, []);
+  const reloadServers = useCallback(() => {
+    // main 的 mcp:list 回 { servers, warnings }（工作区配置分层后）；warnings 由 MCP 管理面显示，面板不管
+    void api.mcp.list().then((result) => setServers(result.servers)).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
   }, [reload]);
-  return { skills, reload };
+  return { skills, servers, reload, reloadServers };
 }
 
 function ChatViewBody(props: {
@@ -496,9 +507,14 @@ function ChatViewBody(props: {
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引 + 指令面板的 skill 清单（同一份数据）。
+  // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
   // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
-  const { skills, reload: reloadSkills } = useSkillIndex();
+  const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
+  const offeredWorkspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
+  const offeredServers = useMemo(
+    () => servers.filter((server) => isMcpServerOffered(server, offeredWorkspace)),
+    [servers, offeredWorkspace],
+  );
   const jumpToQuote = useContext(QuoteJumpContext);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
@@ -755,7 +771,11 @@ function ChatViewBody(props: {
       }}
       onStop={session.stop}
       skills={skills}
+      workspaceId={session.workspaceId}
       onReloadSkills={reloadSkills}
+      // 只给当前工作区能用的 server（isMcpServerOffered：与发送端判 /mcp: 可用同一依据）
+      servers={offeredServers}
+      onReloadServers={reloadServers}
       onCommand={(command) => {
         if (command === "compact") {
           // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
@@ -795,6 +815,7 @@ function ChatViewBody(props: {
       attachments={session.attachments}
       onAttach={session.attachIncoming}
       onRemoveAttachment={session.removeAttachment}
+      onPickFolders={session.attachFolderRefs}
       files={session.files}
       pasted={session.pasted}
       onRemoveFile={session.removeFile}
@@ -1175,6 +1196,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const entries = useMemo(() => groupToolUnits(units, props.skills), [units, props.skills]);
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = props.phase === "turn";
+  // 已中断的工具调用（interruptedToolCallIds）：结果永远不会来的调用按静止的
+  // 「已中断」渲染，不再呼吸/转圈——委派卡「委派中…」停不下来就是这类（2026-10-09）
+  const interruptedCalls = useMemo(
+    () => interruptedToolCallIds(records, toolResults, turnActive),
+    [records, toolResults, turnActive],
+  );
   // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
   const turnView = useMemo(() => groupTurns(entries, turnActive, toolResults), [entries, turnActive, toolResults]);
   // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
@@ -1330,6 +1357,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
                 sessionId={props.sessionId}
+                interruptedCalls={interruptedCalls}
               />
             ) : (
               <EntryView
@@ -1337,6 +1365,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 toolResults={toolResults}
                 activeThinkingKey={activeThinkingKey}
                 turnActive={turnActive}
+                interruptedCalls={interruptedCalls}
                 onOpenTask={props.onOpenTask}
                 carryoverCards={carryoverCards}
                 channel={props.channel}
@@ -2169,6 +2198,8 @@ function EntryView(props: {
   toolResults: ToolResultIndex;
   activeThinkingKey: string | null;
   turnActive: boolean;
+  /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
+  interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
   carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
@@ -2270,6 +2301,7 @@ function EntryView(props: {
         toolName={entry.toolName}
         input={entry.input}
         result={props.toolResults.get(entry.toolCallId)}
+        interrupted={props.interruptedCalls.has(entry.toolCallId)}
         onOpenTask={props.onOpenTask}
         channel={props.channel}
         skills={props.skills}
@@ -2281,6 +2313,7 @@ function EntryView(props: {
       group={entry}
       toolResults={props.toolResults}
       turnActive={props.turnActive}
+      interruptedCalls={props.interruptedCalls}
       onOpenTask={props.onOpenTask}
       channel={props.channel}
       skills={props.skills}
@@ -2324,6 +2357,8 @@ function TurnRollupLine(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
+  /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
+  interruptedCalls: ReadonlySet<string>;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2381,6 +2416,7 @@ function TurnRollupLine(props: {
               toolResults={props.toolResults}
               activeThinkingKey={null}
               turnActive={false}
+              interruptedCalls={props.interruptedCalls}
               onOpenTask={props.onOpenTask}
               carryoverCards={props.carryoverCards}
               channel={props.channel}
@@ -3144,6 +3180,9 @@ function ToolLine(props: {
   toolName: string;
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  /** 结果永远不会来（所在消息 error/aborted 收场且无结果帧，见 interruptedToolCallIds）：
+   * 按静止的「已中断」渲染，不呼吸不转圈 */
+  interrupted: boolean;
   /** B-1：read_task 的「Open」跳到被读的 task（侧栏点击同语义）；别的工具不传 */
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：delegate / reply_subsession / report_to_parent 三个通道工具要用 */
@@ -3155,7 +3194,9 @@ function ToolLine(props: {
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
-  const active = result === undefined || result.status === "running";
+  // 已中断：无结果帧且判定永不回来——不算运行中（不呼吸、不展开、状态词换「已中断」）
+  const interrupted = props.interrupted && result === undefined;
+  const active = !interrupted && (result === undefined || result.status === "running");
 
   // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
   // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败
@@ -3164,11 +3205,25 @@ function ToolLine(props: {
   // running 帧（`card === null` 时的「delegating…」呼吸）悄悄吞掉，永远显示
   // 「派出中」而不是「失败了」。
   if (props.toolName === "delegate" && !failed) {
-    return <DelegateToolLine input={props.input} result={result} channel={props.channel} />;
+    return (
+      <DelegateToolLine
+        input={props.input}
+        result={result}
+        interrupted={interrupted}
+        channel={props.channel}
+      />
+    );
   }
   // 交接（受管浏览器）：离开卡，与派出卡同一个骨架。失败照通用骨架走（红色 + 可展开看错误）
   if (props.toolName === "request_user_action" && !failed) {
-    return <HandoffToolLine toolCallId={props.toolCallId} input={props.input} result={result} />;
+    return (
+      <HandoffToolLine
+        toolCallId={props.toolCallId}
+        input={props.input}
+        result={result}
+        interrupted={interrupted}
+      />
+    );
   }
   if ((props.toolName === "reply_subsession" || props.toolName === "report_to_parent") && !failed) {
     return (
@@ -3177,6 +3232,7 @@ function ToolLine(props: {
         input={props.input}
         result={result}
         running={active}
+        interrupted={interrupted}
         channel={props.channel}
       />
     );
@@ -3261,11 +3317,15 @@ function ToolLine(props: {
             }}
           >
             <Icon
-              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : "plug"}
+              name={failed ? "triangle-alert" : interrupted ? "circle-off" : skillUse !== null ? "book-open" : "plug"}
               size={13}
               strokeWidth={1.8}
               style={{
-                color: failed ? "var(--color-danger)" : "var(--color-text-secondary)",
+                color: failed
+                  ? "var(--color-danger)"
+                  : interrupted
+                    ? "var(--color-text-tertiary)"
+                    : "var(--color-text-secondary)",
                 flex: "0 0 auto",
               }}
             />
@@ -3295,6 +3355,7 @@ function ToolLine(props: {
               {summary}
             </span>
           )}
+          {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
         </CollapseRow>
         {open && expandable && (
           <>
@@ -3321,7 +3382,15 @@ function ToolLine(props: {
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
           <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
             <Icon
-              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : toolIcon(props.toolName)}
+              name={
+                failed
+                  ? "triangle-alert"
+                  : interrupted
+                    ? "circle-off"
+                    : skillUse !== null
+                      ? "book-open"
+                      : toolIcon(props.toolName)
+              }
               size={14}
               strokeWidth={1.8}
             />
@@ -3357,6 +3426,8 @@ function ToolLine(props: {
             {summary}
           </span>
         )}
+        {/* 已中断（无结果帧且永不回来）：静止的中性状态词——不再呼吸、不假装在跑 */}
+        {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
         {/* shell 类的执行耗时——慢命令（install / typecheck）不展开也讲清楚花在哪 */}
         {shellDuration !== null && <span style={SLOT.status}>{shellDuration}</span>}
         {/* B-1：read_task 的任务卡动作——「Open」跳到被读的 task（与侧栏点击同语义）。
@@ -3409,11 +3480,29 @@ function ToolLine(props: {
  * 窗口顶部也有同样的交还按钮：用户登录完人在浏览器里，就地交还，不必切回来找这张卡。
  * 结束后：状态写「已交还 / 已取消」（主进程写进 details，不解析给模型的文字）。
  */
-function HandoffToolLine(props: { toolCallId: string; input: unknown; result: ToolTranscriptItem | undefined }) {
+function HandoffToolLine(props: {
+  toolCallId: string;
+  input: unknown;
+  result: ToolTranscriptItem | undefined;
+  interrupted: boolean;
+}) {
   const t = useT();
   const [gone, setGone] = useState(false);
   const reason = toolCallSummary("request_user_action", props.input) ?? "";
   const outcome = handoffOutcome(props.result);
+  // 已中断：请求从未发出（结果帧永远不来），不能再给「去完成 / 交还」的动作——
+  // 那些按钮会去 resolve 一个不存在的交接；退成静止的中性状态卡
+  if (props.interrupted && props.result === undefined) {
+    return (
+      <ExitCard
+        kicker={t.browser.handoffKicker}
+        icon="user"
+        title={reason}
+        status={{ text: t.chat.toolInterrupted, color: "var(--color-text-tertiary)", active: false }}
+        preview={t.browser.handoffWhere}
+      />
+    );
+  }
   const waiting = outcome === null && !gone;
   const status = waiting
     ? { text: t.browser.handoffWaiting, color: "var(--color-accent)", active: true }
@@ -3463,12 +3552,20 @@ function HandoffToolLine(props: { toolCallId: string; input: unknown; result: To
 function DelegateToolLine(props: {
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  interrupted: boolean;
   channel: ChannelViewContext;
 }) {
   const card = delegateCard(props.result);
   const taskPreview = deriveSessionTitle(toolCallSummary("delegate", props.input) ?? "");
   if (card === null) {
-    return <DelegateCardView card={null} status="running" taskPreview={taskPreview} />;
+    return (
+      <DelegateCardView
+        card={null}
+        status="running"
+        taskPreview={taskPreview}
+        interrupted={props.interrupted}
+      />
+    );
   }
   const summary = props.channel.channelSummaries.get(card.childId);
   // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
@@ -3506,10 +3603,23 @@ function ChannelSendToolLine(props: {
   input: unknown;
   result: ToolTranscriptItem | undefined;
   running: boolean;
+  interrupted: boolean;
   channel: ChannelViewContext;
 }) {
   const t = useT();
   const record = typeof props.input === "object" && props.input !== null ? (props.input as Record<string, unknown>) : {};
+  // 已中断：消息从未发出（结果帧永远不来）——不能按「已回复 / 已报告」的语气画
+  // 成功胶囊，换成静止的中性中断行
+  if (props.interrupted && props.result === undefined) {
+    return (
+      <ChannelToolMarkLine
+        icon="circle-off"
+        text={t.chat.toolInterrupted}
+        tone="neutral"
+        running={false}
+      />
+    );
+  }
   // 落账那条通道消息的 id（回执 details 里，channel-tools.ts）：点了滚到父子会话面板里
   // 的这一条并高亮。还在跑、或这一刀之前的旧记录没有 → null，退回滚到通道底部
   const messageId = channelSendMessageId(props.result);
@@ -3569,6 +3679,8 @@ function ToolGroupLine(props: {
   group: ToolGroupUnit;
   toolResults: ToolResultIndex;
   turnActive: boolean;
+  /** 已中断的调用 id 集（interruptedToolCallIds）：组头不为它们呼吸，按「N 个已中断」计 */
+  interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：展开后的成员行仍是 ToolLine，同一份上下文原样转发 */
   channel: ChannelViewContext;
@@ -3583,7 +3695,7 @@ function ToolGroupLine(props: {
     if (!props.turnActive) setOpen(false);
   }, [props.turnActive]);
 
-  const status = toolGroupStatus(group.calls, props.toolResults);
+  const status = toolGroupStatus(group.calls, props.toolResults, props.interruptedCalls);
   const active = status.running > 0;
   const failed = status.failed > 0;
   const fileCount = group.toolName === "edit" ? editGroupFileCount(group.calls, props.toolResults) : null;
@@ -3609,6 +3721,11 @@ function ToolGroupLine(props: {
             {t.chat.failedCount(status.failed)}
           </span>
         )}
+        {/* 已中断（中性色）：这几次调用从未发生——折了也不能无声消失，但也不染红
+            （不是失败，是没跑） */}
+        {!open && status.interrupted > 0 && (
+          <span style={SLOT.status}>{t.chat.interruptedCount(status.interrupted)}</span>
+        )}
       </CollapseRow>
       {open && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
@@ -3619,6 +3736,7 @@ function ToolGroupLine(props: {
               toolName={call.toolName}
               input={call.input}
               result={props.toolResults.get(call.toolCallId)}
+              interrupted={props.interruptedCalls.has(call.toolCallId)}
               onOpenTask={props.onOpenTask}
               channel={props.channel}
               skills={props.skills}

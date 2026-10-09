@@ -292,11 +292,47 @@ export function DelegateCardView(props: {
   card: DelegateCard | null;
   status: DelegateCardStatus;
   taskPreview: string;
+  /** 结果帧永远不来（interruptedToolCallIds）：null 卡不呼吸「委派中」，换静止的中性「已中断」 */
+  interrupted?: boolean;
   onClick?: () => void;
   lit?: boolean;
 }) {
   const t = useT();
   if (props.card === null) {
+    // 已中断：这次委派从未发生（参数没发完连接先断）——不呼吸、不假装在派，
+    // 任务预览留给用户看「当时要派什么」（入参里有，不必等结果）
+    if (props.interrupted === true) {
+      return (
+        <div style={EXIT_CARD_STYLE}>
+          <span
+            style={{
+              ...EXIT_CARD_KICKER,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              color: "var(--color-text-tertiary)",
+            }}
+          >
+            <Icon name="circle-off" size={11} strokeWidth={1.8} />
+            {t.chat.toolInterrupted}
+          </span>
+          {props.taskPreview !== "" && (
+            <p
+              style={{
+                margin: 0,
+                fontSize: "var(--font-size-caption)",
+                color: "var(--color-text-secondary)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {props.taskPreview}
+            </p>
+          )}
+        </div>
+      );
+    }
     return (
       <div style={EXIT_CARD_STYLE}>
         <span className="orbita-breath" style={{ ...EXIT_CARD_KICKER, color: "var(--color-accent)" }}>

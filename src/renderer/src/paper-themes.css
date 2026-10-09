@@ -51,16 +51,8 @@
   letter-spacing: normal;
 }
 
-/* 镜像：与 textarea 叠在同一格、在它下面（styles.css 的 .composer-field）。字透明，只有修正液
-   看得见；换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步） */
-:root[data-theme="copybook"] .composer-mirror {
-  color: transparent;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  overflow: hidden;
-  pointer-events: none;
-  user-select: none;
-}
+/* 镜像层的基础（透明字、不接指针、不出滚动条）已提升到 styles.css 的 .composer-mirror（全主题常驻）；
+   这里只留 copybook 的专属：字距跟随 .composer-input 的规则（上面的 [data-script] 两档） */
 
 /* 修正液（wafo 2026-09-25 选定）：一段英文一条白底，盖住竖格线。白底只有字体内容区高
    （Literata 14px 约 21px），24px 的格子上下各露一点横线，像一条条涂改带。
@@ -78,6 +70,17 @@
   box-decoration-break: clone;
 }
 
+/* 句中 chip（copybook 变体，2026-10-06）：修正液质感的 chip——白底盖住竖格线，绿描边
+   呼应方格。chip 区间优先于修正液（mirrorSegments）：token 不再另垫修正液，chip 自己
+   的 pill 就是那块「涂改带」。横向 padding 的禁令同 styles.css 的 .composer-chip */
+:root[data-theme="copybook"] .composer-chip {
+  background: var(--color-paper-whiteout);
+  box-shadow:
+    0 0 0 1px var(--color-paper-whiteout),
+    0 0 0 2px var(--color-paper-grid),
+    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+
 :root[data-theme="copybook"] .chat-md strong {
   text-decoration: underline wavy var(--color-paper-pen);
   text-decoration-thickness: 1px;
@@ -86,16 +89,22 @@
 
 /* ===== typescript ===== */
 
-/* 横线每 24px 一条，页边线在第 28px；字从页边线右边开始打 */
-:root[data-theme="typescript"] .composer-input {
-  padding-left: 40px;
-  line-height: 24px;
+/* 横线每 24px 一条，页边线在第 28px；字从页边线右边开始打。
+   背景画在输入框外层（.composer-field）而不是 .composer-input（textarea）上，与 copybook
+   的方格同一道理：层次得是 横线 < chip < 字。镜像层（chip）垫在 textarea 下面，横线要是
+   画在 textarea 自己的底上，会压在 chip 上面（2026-10-06 chip 层落地时投的同一课） */
+:root[data-theme="typescript"] .composer-field {
   background-image:
     linear-gradient(to bottom, transparent 23px, var(--color-paper-rule) 23px 24px),
     linear-gradient(to right, transparent 28px, var(--color-paper-margin) 28px 29px, transparent 29px);
   background-size:
     100% 24px,
     100% 100%;
+}
+
+:root[data-theme="typescript"] .composer-input {
+  padding-left: 40px;
+  line-height: 24px;
 }
 
 :root[data-theme="typescript"] .chat-md :is(h1, h2, h3, h4) {
