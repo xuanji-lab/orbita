@@ -61,6 +61,8 @@ const devDirs = devDataDirs({
   home: homedir(),
   // 隔离实例（--user-data-dir）：锁与 userData 由 Chromium 分开，工作区根在 devDataDirs 里跟着目录名派生
   userDataSwitch: app.commandLine.getSwitchValue("user-data-dir"),
+  // 一键隔离（bun run dev:isolated）：按名字分 userData 与工作区根，appData 由 Electron 按平台给
+  instance: process.env.ORBITA_DEV_INSTANCE,
 });
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);

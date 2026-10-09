@@ -8,7 +8,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev --watch",
-    "dev:isolated": "electron-vite dev --watch -- --user-data-dir=$APPDATA/orbita-dev-2",
+    "dev:isolated": "ORBITA_DEV_INSTANCE=2 ORBITA_DEV_PORT=5274 electron-vite dev --watch",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\"",

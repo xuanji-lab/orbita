@@ -61,12 +61,13 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 ```bash
 bun install          # 依赖变更
 bun run dev          # 开发
-bun run dev:isolated # 隔离实例验收：独立 userData/单实例锁/工作区根（~/Orbita-dev-2），不碰正在跑的实例
+bun run dev:isolated # 第二个 dev 实例：userData/锁/工作区根（~/Orbita-dev-2）全分开，端口 5274
 bun run typecheck    # 类型检查
 bun run test         # 测试
 ```
 
 > **dev server 固定在 `http://127.0.0.1:5273`**（只绑 IPv4 回环 + `strictPort`，撞了当场失败）。
+> 再开实例设环境变量 `ORBITA_DEV_INSTANCE=<名>` + `ORBITA_DEV_PORT=<端口>` 后 `bun run dev`，不要改配置里的端口。
 > 停服务按 PID 杀，**不要 `pkill -f "electron-vite dev"`**——同机别的 electron-vite 应用会陪葬（陷阱史 #2）。
 
 > **实测命令与打包**（2026-09-30，Windows 10.0.26200 实测；macOS 打包未实测）：

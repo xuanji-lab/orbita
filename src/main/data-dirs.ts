@@ -24,10 +24,13 @@ const DEV_ORBITA_ROOT = "Orbita-dev";
  * 开发版的两个数据根。**正式版返回 null**：正式版的路径不由这里决定，保持 Electron /
  * WorkspaceStore 的默认值——真实数据的位置不能因为这层逻辑的一个 bug 而漂走。
  *
- * 显式 `--user-data-dir`（隔离实例，如 `bun run dev:isolated`）：userData 用调用方给的值
- * （Chromium 已应用它，单实例锁也因此分开），工作区根从目录名派生——orbita-dev-2 →
- * ~/Orbita-dev-2。只分 userData 不分工作区根的话，两个进程还是写同一批会话文件，
- * 锁就白分了（2026-10-03「一键隔离实例」）。
+ * 隔离实例：只分 userData 不分工作区根的话，两个进程还是写同一批会话文件，单实例锁
+ * 就白分了（2026-10-03「一键隔离实例」）。两种给法，userData 与工作区根总是一起分：
+ * - `ORBITA_DEV_INSTANCE=<名字>`（`bun run dev:isolated` 用 2）：orbita-dev-<名字> 与
+ *   ~/Orbita-dev-<名字>，appData 由 Electron 按平台给——不在脚本里拼 `$APPDATA`
+ *   （那只在 Windows 有值，macOS 上会展开成根目录下的 `/orbita-dev-2`）。
+ * - 显式 `--user-data-dir`：userData 用调用方给的值（Chromium 已应用它），工作区根
+ *   从目录名派生——orbita-dev-2 → ~/Orbita-dev-2。两者都给时它优先：命令行比环境变量更近。
  */
 export function devDataDirs(input: {
   packaged: boolean;
@@ -35,6 +38,8 @@ export function devDataDirs(input: {
   home: string;
   /** `--user-data-dir` 的值；没给（或空串）走默认开发版目录 */
   userDataSwitch?: string;
+  /** `ORBITA_DEV_INSTANCE` 的值；没给（或空串）走默认开发版目录 */
+  instance?: string;
 }): { userData: string; orbitaRoot: string } | null {
   if (input.packaged) return null;
   // 尾部分隔符去掉再取名：目录名才是身份，斜杠不是
@@ -42,6 +47,14 @@ export function devDataDirs(input: {
   if (given !== undefined && given !== "") {
     const name = basename(given).replace(/^orbita-/i, "");
     return { userData: given, orbitaRoot: join(input.home, `Orbita-${name}`) };
+  }
+  const instance = input.instance ?? "";
+  if (instance !== "") {
+    // 名字直接拼进路径：只认字母数字与 - _，打错就当场失败——悄悄落回 orbita-dev 恰恰是隔离要防的事
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(instance)) {
+      throw new Error(`ORBITA_DEV_INSTANCE 只能含字母、数字、- 与 _：${instance}`);
+    }
+    return { userData: join(input.appData, `${DEV_USER_DATA}-${instance}`), orbitaRoot: join(input.home, `${DEV_ORBITA_ROOT}-${instance}`) };
   }
   return { userData: join(input.appData, DEV_USER_DATA), orbitaRoot: join(input.home, DEV_ORBITA_ROOT) };
 }
