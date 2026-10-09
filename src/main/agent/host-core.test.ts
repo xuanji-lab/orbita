@@ -487,6 +487,34 @@ describe("classifyGreetings（迁移的「只随手发了一句」检查）", ()
   });
 });
 
+describe("probeProvider（Test 的 OAuth 路由）", () => {
+  test("按 requestId 结回执：结果原样 resolve；回执不广播给窗口；进程退出 reject", async () => {
+    const child = new FakeChild();
+    const events: AgentEvent[] = [];
+    const host = new AgentHostCore(() => child, (event) => events.push(event));
+    const pending = host.probeProvider(TURN_FIELDS.provider, "claude-sonnet-5");
+    child.emit({ type: "ready" });
+    await flush();
+    const command = child.posted.find(
+      (command): command is Extract<AgentCommand, { type: "probeProvider" }> => command.type === "probeProvider",
+    );
+    assert.ok(command !== undefined);
+    assert.equal(command.modelId, "claude-sonnet-5");
+    child.emit({ type: "providerProbed", requestId: command.requestId, ok: true, message: "Connected — claude-sonnet-5 responded." });
+    assert.deepEqual(await pending, { ok: true, message: "Connected — claude-sonnet-5 responded." });
+    assert.equal(events.length, 0);
+
+    const late = host.probeProvider(TURN_FIELDS.provider, "m");
+    await flush();
+    const lateCommand = child.posted.filter(
+      (command): command is Extract<AgentCommand, { type: "probeProvider" }> => command.type === "probeProvider",
+    ).at(-1);
+    assert.ok(lateCommand !== undefined);
+    child.exitWith(1);
+    await assert.rejects(late, /exited/);
+  });
+});
+
 describe("mcpReload —— 回执共享在飞的一份（PR #163 验收：单槽顶号让面板永远冻结）", () => {
   /** 先把进程拉起来（mcpReload 不 ensure：进程没起直接 resolve，没有等待者） */
   async function runningHost(): Promise<{ host: AgentHostCore; child: () => FakeChild }> {

@@ -58,7 +58,18 @@ export async function resolveProviderSecrets(
 ): Promise<ProviderSecrets> {
   const dto = (await providers.list()).find((p) => p.id === providerId);
   if (!dto) throw new Error(`unknown provider "${providerId}"`);
-  const apiKey = await providers.resolveApiKey(providerId);
+  // OAuth 访问令牌优先：快到点会自动续期并落盘（非 oauth provider 返回 null）。
+  // 续期失败不能静默拿旧 token 硬发一轮——换成一句用户能行动的话
+  let apiKey = await providers.resolveOauthApiKey(providerId).catch((cause: unknown) => {
+    throw new Error(
+      `Claude 登录已失效，请到设置 › 模型服务里重新登录（${
+        cause instanceof Error ? cause.message : String(cause)
+      }）`,
+    );
+  });
+  if (apiKey === null) {
+    apiKey = await providers.resolveApiKey(providerId);
+  }
   if (apiKey === null) {
     throw new Error(`provider "${providerId}" has no API key stored`);
   }

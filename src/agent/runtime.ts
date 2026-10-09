@@ -42,6 +42,7 @@ import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
+import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -273,6 +274,48 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
     send({ type: "greetingsClassified", requestId: command.requestId, throwaway });
   } catch (cause) {
     fail(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
+/** 探测的硬上限（主进程那头 60 秒兑底，这里先放手） */
+const PROBE_TIMEOUT_MS = 45_000;
+
+/**
+ * 连接探测（Test 的 OAuth 路由）：一次独立的 `completeSimple`——与真会话同一个
+ * pi 客户端（官方 SDK + 全套身份头），这是它存在的全部理由：主进程裸 fetch
+ * 的探测已被上游分类为非 Claude Code 流量而 429。模型没选时用声明清单第一个。
+ * 任何非 error 的响应（含 max_tokens 到顶）都算连通——凭据过了、模型应了。
+ */
+async function probeProvider(command: Extract<AgentCommand, { type: "probeProvider" }>): Promise<void> {
+  const reply = (ok: boolean, message: string): void => {
+    send({ type: "providerProbed", requestId: command.requestId, ok, message });
+  };
+  try {
+    const runtime = await ModelRuntime.create({});
+    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
+    if (model === undefined) {
+      reply(false, `unknown model "${command.provider.id}/${command.modelId}"`);
+      return;
+    }
+    const response = await completeSimple(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+      {
+        apiKey: command.provider.apiKey,
+        // 64 是硬上限不是目标：够模型吐一个字；思考型烧光了也是 max_tokens 而非 error，仍算连通
+        maxTokens: 64,
+        timeoutMs: PROBE_TIMEOUT_MS,
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
+      },
+    );
+    if (response.stopReason === "error") {
+      reply(false, response.errorMessage ?? `${model.id} returned an error`);
+      return;
+    }
+    reply(true, `Connected — ${model.id} responded.`);
+  } catch (cause) {
+    reply(false, cause instanceof Error ? cause.message : String(cause));
   }
 }
 
@@ -671,6 +714,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       noSkills: true,
       additionalSkillPaths: command.skillsDirs,
       extensionFactories: [
+        {
+          name: "orbita-cc-billing",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            // Claude 订阅车道的最小改写（cc-billing-patch.ts）：只对带 pi OAuth
+            // 身份块的请求生效，返回 undefined 时 payload 原样过（其它 provider 零影响）
+            pi.on("before_provider_request", (event) => ccBillingPatch(event.payload));
+          },
+        },
         {
           name: "orbita-permission",
           hidden: true,
@@ -1390,6 +1442,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "classifyGreetings") {
     // 不 await：判定是几秒量级的独立调用，不挡住后面进来的命令（与标题同理）
     void classifyGreetings(command);
+    return;
+  }
+  if (command.type === "probeProvider") {
+    // 同上：独立小调用，不挡后续命令
+    void probeProvider(command);
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——

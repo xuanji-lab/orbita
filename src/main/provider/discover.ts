@@ -13,6 +13,8 @@
  * 这两条都是**协议级**的处理，不是按厂商特判：任何 anthropic 兼容网关都适用，
  * 任何「200 包错误」的网关都适用。厂商差异仍然只是 baseUrl 与鉴权头。
  */
+import { anthropicOauthHeaders, isClaudeOauthToken } from "./oauth.ts";
+
 export interface DiscoveredModels {
   ok: boolean;
   models: string[];
@@ -111,10 +113,16 @@ async function attemptModelsFetch(
   try {
     const response = await fetch(url, {
       headers: {
-        // 两种鉴权头都带上：不同网关认不同的那一个，而多带一个从不出错
-        Authorization: `Bearer ${input.apiKey}`,
-        "x-api-key": input.apiKey,
-        "anthropic-version": "2023-06-01",
+        // OAuth 访问令牌（sk-ant-oat）不能当 api key 用：上游只认 Bearer + oauth beta，
+        // 多带 x-api-key 反而会被判「非 Claude Code 请求」——所以这条分支里两个旧头都不带
+        ...(isClaudeOauthToken(input.apiKey)
+          ? anthropicOauthHeaders(input.apiKey)
+          : {
+              // 两种鉴权头都带上：不同网关认不同的那一个，而多带一个从不出错
+              Authorization: `Bearer ${input.apiKey}`,
+              "x-api-key": input.apiKey,
+              "anthropic-version": "2023-06-01",
+            }),
         Accept: "application/json",
         ...(input.headers ?? {}),
       },
