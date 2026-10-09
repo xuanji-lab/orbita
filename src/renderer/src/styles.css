@@ -2053,66 +2053,286 @@ body {
 }
 
 /*
- * ===== 文件预览（双击文件 / 分栏预览，2026-09-23 wafo 裁决） =====
- * `.files-panel-body` 是唯一的 container query 根：容器宽 ≥600px 且预览打开时
- * 两栏（目录 + 预览），<600px 且预览打开时只留预览、目录用 `display:none` 藏起来
- * ——不卸载，展开态与滚动位置都在原地，回到目录时不用重新展开。断点全在这里，
- * 不用 JS 量宽度（硬规则）。
+ * ===== 文件面板布局：标签页 + 文件树开关（2026-10-10 交互改版，原型
+ * files-panel-prototype.html，用户逐条裁决） =====
+ * `.files-panel-body` 是唯一的 container query 根。JS 只持有状态（tabs / treeOn，
+ * 见 features/files/panel-layout.ts），显示形态全部由这里的 container query 裁决：
  *
- * 容器与网格必须是两个元素：@container 只作用于容器的**后代**，查不到容器自己——
- * 网格若就挂在 `.files-panel-body` 上，宽面板时两栏规则永远不命中，预览会掉进隐式
- * 第二行、叠在目录下面（2026-09-23 实机验收抓到）。
+ * - data-file="none"：没打开文件，树就是整个面板（solo），标题开关禁用；
+ * - data-file="open" data-tree="off"：树隐藏但不卸载（展开态与滚动位置都在原地）；
+ * - data-tree="on" 且容器 <640px：树是浮层盖在文件内容上 + 遮罩（点遮罩收起）；
+ * - data-tree="on" 且容器 ≥640px：树是固定 224px 的并排窄列——拉宽的新增空间
+ *   全给文件内容，树列永不自动变宽、拉宽也永不反向展开树。
+ *
+ * 640px 断点与 panel-layout.ts 的 TREE_BREAKPOINT 成对改。JS 对宽度的唯一感知是
+ * FilesPanel 的 ResizeObserver 跨断点时把 treeOn 折叠（只在缩窄方向），显示判定
+ * 不进 JS。容器与内容层必须是两个元素：@container 只作用于容器的**后代**，查不到
+ * 容器自己（2026-09-23 实机验收抓到过）。
  */
 .files-panel-body {
   container-type: inline-size;
   height: 100%;
   min-height: 0;
 }
-.files-panel-split {
+.files-panel-layout {
+  position: relative;
+  display: flex;
   height: 100%;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
 }
 .files-panel-tree {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
+  width: 224px;
+  flex: none;
 }
-@container (min-width: 600px) {
-  .files-panel-split[data-preview="open"] {
-    grid-template-columns: minmax(220px, 40%) minmax(0, 1fr);
-  }
+/* 没打开文件：树占满整个面板（此时标题开关禁用，data-tree 恒 off） */
+.files-panel-layout[data-file="none"] .files-panel-tree {
+  width: auto;
+  flex: 1 1 auto;
 }
-/* 预览打开 + 窄容器：目录隐藏但不卸载；预览打开 + 宽容器：目录照常显示（两栏） */
-.files-panel-split[data-preview="open"] .files-panel-tree {
+/* 打开文件 + 树关：只显示文件。树 display:none 藏起来不卸载 */
+.files-panel-layout[data-file="open"][data-tree="off"] .files-panel-tree {
   display: none;
 }
-@container (min-width: 600px) {
-  .files-panel-split[data-preview="open"] .files-panel-tree {
-    display: grid;
+/*
+ * 树开（默认按窄容器写 = 浮层形态）：absolute 盖在文件内容上。浮层是「浮在任意
+ * 内容之上、背后不能透字」的场景，照 Transparency 规则给实色 --color-bg-panel +
+ * popover 阴影（同 .file-root-label sticky 底的选择）；入场滑动解释「树从哪来」。
+ */
+.files-panel-layout[data-file="open"][data-tree="on"] .files-panel-tree {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 20;
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  animation: files-tree-in var(--duration-fast) var(--ease-out-quint);
+}
+.files-panel-backdrop {
+  display: none;
+  position: absolute;
+  left: 224px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 15;
+  background: var(--overlay-backdrop-subtle);
+}
+.files-panel-layout[data-file="open"][data-tree="on"] .files-panel-backdrop {
+  display: block;
+}
+@container (min-width: 640px) {
+  /* 宽容器：树回到并排固定窄列，浮层与遮罩退场；分隔线由树列的右发丝线承担 */
+  .files-panel-layout[data-file="open"][data-tree="on"] .files-panel-tree {
+    position: static;
+    background: transparent;
+    box-shadow: none;
+    animation: none;
+    border-right: 1px solid var(--color-border-subtle);
+  }
+  .files-panel-layout[data-file="open"][data-tree="on"] .files-panel-backdrop {
+    display: none;
+  }
+}
+@keyframes files-tree-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
   }
 }
 
 .files-panel-preview {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   height: 100%;
 }
-@container (min-width: 600px) {
-  .files-panel-preview {
-    border-left: 1px solid var(--color-border-subtle);
-  }
+
+/*
+ * ===== 文件面板头部：标题开关 + 标签页（2026-10-10 交互改版） =====
+ * 「文件」标题本身就是文件树开关（原型裁决）：树开着时呈点亮态——用选中行的
+ * mode 淡底配方（明主题蓝、暗主题黄，随主题走，不另起 accent 炉灶）；没有打开
+ * 文件时开关禁用（那时树就是整个面板）。标签页与标题同一行：flex: 0 1 auto +
+ * 横向滚动，标签多时收缩自己滚动，永不把头部按钮挤出视野；激活态照选中行配方
+ * （--option-active-bg 淡底 + semibold），与树里当前文件行的选中高亮同一语言。
+ */
+.files-title-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 26px;
+  flex: none;
+  margin-left: -8px; /* 视觉左对齐标题文字（标题两侧 padding 内的负缩进，原型同款） */
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-title);
+  font-weight: var(--weight-bold);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.files-title-toggle:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.files-title-toggle[aria-expanded="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+.files-title-toggle:disabled {
+  cursor: default;
+}
+.files-title-chev {
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.files-title-toggle[aria-expanded="true"] .files-title-chev {
+  transform: rotate(90deg);
+}
+.files-head-sep {
+  width: 1px;
+  height: 16px;
+  flex: none;
+  background: var(--color-border-default);
+}
+.files-head-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.files-head-tabs::-webkit-scrollbar {
+  display: none;
+}
+.files-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  flex: none;
+  padding: 0 4px 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-control);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition-hover);
+}
+.files-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.files-tab[aria-selected="true"] {
+  background: var(--option-active-bg);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+.files-tab-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.files-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: var(--transition-hover);
+}
+.files-tab:hover .files-tab-close,
+.files-tab[aria-selected="true"] .files-tab-close {
+  opacity: 1;
+}
+.files-tab-close:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 /*
- * 头：返回 / 关闭按钮用同一个 onClose（宽窄只差图标与文案），两个都渲染、用
- * container query 切换显示——窄容器（<600px，此时预览独占整个面板宽度）显示
- * 「Back to files」，宽容器（两栏时）显示「Close preview」。
+ * 根分组头（session / workspace / attached）整行可点：折起 / 展开该组，chevron
+ * 指示开合（展开 = 旋转 90° 朝下），aria-expanded 交给可达性。排版从 RootLabel
+ * 的 inline 样式挪进类（有状态样式归 CSS 的 Implementation rules）。
+ */
+.files-root-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.files-root-toggle:hover {
+  background: var(--color-bg-hover);
+}
+/* 不可折叠的占位组头（还没有会话）不是按钮：不出手型、不亮 hover */
+div.files-root-toggle {
+  cursor: default;
+}
+div.files-root-toggle:hover {
+  background: transparent;
+}
+.files-root-chev {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.files-root-toggle[aria-expanded="true"] .files-root-chev {
+  transform: rotate(90deg);
+}
+.files-root-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-text-tertiary);
+}
+.files-root-detail[data-missing="true"] {
+  color: var(--color-warning);
+}
+
+/*
+ * 预览头：标签页模型下关闭归标签 ✕ 与 Esc 管，头部只剩面包屑（路径分段 +
+ * size·mtime）与动作。面包屑太长时在自身容器里裁掉尾部（激活标签上始终有文件
+ * 名）；meta 在面包屑容器外，不被路径挤走。
  */
 .file-preview-header {
   display: flex;
@@ -2123,42 +2343,37 @@ body {
   padding: var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
 }
-.file-preview-back {
-  display: inline-flex;
-}
-.file-preview-close {
-  display: none;
-}
-@container (min-width: 600px) {
-  .file-preview-back {
-    display: none;
-  }
-  .file-preview-close {
-    display: inline-flex;
-  }
-}
-.file-preview-title {
+.file-preview-crumb {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  align-items: center;
+  gap: 4px;
   flex: 1 1 auto;
-}
-.file-preview-name {
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-control);
-  font-weight: var(--weight-medium);
-  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.file-preview-crumb-seg {
+  flex: none;
+}
+.file-preview-crumb-seg.cur {
+  color: var(--color-text-secondary);
+}
+.file-preview-crumb-sep {
+  flex: none;
+  color: var(--color-text-tertiary);
 }
 .file-preview-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 0 0 auto;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 .file-preview-actions {
   display: flex;

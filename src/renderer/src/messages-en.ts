@@ -1281,6 +1281,10 @@ export const en = {
 
   files: {
     title: "Files",
+    treeToggleTip: "Toggle the file tree — side by side when wide, overlay when narrow; narrowing past the breakpoint collapses it",
+    tabsAria: "Open files",
+    closeTab: "Close tab",
+    groupToggleTip: "Collapse or expand this group",
     emptyWorkbench: "Empty workbench — created on the agent's first write",
     reference: "Add File Reference",
     refreshing: "Refreshing file tree…",
@@ -1313,8 +1317,6 @@ export const en = {
     ageWeeks: (n: number) => `${n}w`,
     ageMonths: (n: number) => `${n}mo`,
     ageYears: (n: number) => `${n}y`,
-    backToFiles: "Back to files",
-    closePreview: "Close preview",
     openDefault: "Open with default app",
     openInBrowser: "Open in built-in browser",
     copyPath: "Copy path",

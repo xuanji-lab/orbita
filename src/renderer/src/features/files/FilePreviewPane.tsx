@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { PanelButton, PanelIconButton, PanelLine } from "../../shell/RightPanel";
@@ -6,15 +6,18 @@ import { api } from "../../api";
 import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
+import { crumbSegments, fileTabName } from "./panel-layout.ts";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
-import { pathTail } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
 /**
- * 预览面板（分栏模式的右半边，窄屏下独占整个面板宽度——见 FilesPanel.tsx 的
- * `.files-panel-body` container query）。头：返回 / 关闭 + 文件身份 +（md 独有的
- * Rendered/Source）+ 四个动作；体：按 FilePreview 的 kind 与文件名判的排版走
+ * 文件预览面板（标签页模型的标签体：激活哪个标签就渲染哪个文件，见 FilesPanel）。
+ * 头按原型简化成**面包屑**——路径分段 + size·mtime，没有返回 / 关闭按钮：标签页
+ * 模型下关闭由标签 ✕ 与 Esc 承担（FilesPanel 的 escapeRef 契约不变）。头部动作
+ * 只留三个：网页文件进内置浏览器（2026-09-29 裁决，没有第二个入口）、复制路径、
+ * 重读文件；「用默认应用打开」与「在文件管理器中显示」各有别的落点（空态按钮 /
+ * 树行 hover），头部不再重复。体：按 FilePreview 的 kind 与文件名判的排版走
  * markdown 渲染 / 代码高亮 / 等宽原文 / 图片 / 空态。
  *
  * 契约里「怎么排版」不归 shared 管（`shared/files.ts` 顶注释），全部判定逻辑在
@@ -25,20 +28,19 @@ export function FilePreviewPane(props: {
   sessionId: string | null;
   workspaceId: string | null;
   root: string;
-  /** 文件绝对路径（FilesPanel 的 `preview.path`，同 fs:list 的 dir 语义） */
+  /** 文件绝对路径（标签的 path，同 fs:list 的 dir 语义） */
   path: string;
-  /** 窄屏「Back to files」与宽屏「Close preview」是同一个动作——见 FilesPanel 的 Esc 处理 */
-  onClose: () => void;
 }) {
   const t = useT();
-  const { sessionId, workspaceId, root, path, onClose } = props;
-  const name = baseName(path);
+  const { sessionId, workspaceId, root, path } = props;
+  const name = fileTabName(path);
+  const segments = crumbSegments(path);
   const previewMode = textPreviewMode(name);
   const { state, refreshing, refresh } = usePreviewData(sessionId, workspaceId, root, path);
   const loading = state.status === "loading" || refreshing;
 
   const [mode, setMode] = useState<"rendered" | "source">("rendered");
-  // 切文件：Source 模式不带过去，新文件一律先看 Rendered
+  // 切文件（标签重挂载或换 path）：Source 模式不带过去，新文件一律先看 Rendered
   useEffect(() => setMode("rendered"), [root, path]);
 
   const [copied, setCopied] = useState(false);
@@ -63,17 +65,11 @@ export function FilePreviewPane(props: {
     });
   };
 
-  // 网页文件的默认打开方式是内置浏览器（2026-09-29 裁决），系统默认应用退到后一个按钮
+  // 网页文件的默认打开方式是内置浏览器（2026-09-29 裁决）
   const webPage = isWebPageFile(path);
   const openInBrowser = (): void => {
     void api.files.openInBrowser({ sessionId, workspaceId, root, dir: path }).catch(() => {
       // 同 openDefault：失败时浏览器窗口自己显示错误页，面板不另开错误态
-    });
-  };
-
-  const reveal = (): void => {
-    void api.files.reveal({ sessionId, workspaceId, root, dir: path }).catch(() => {
-      // 同上：Finder 定位失败留给系统层
     });
   };
 
@@ -86,47 +82,51 @@ export function FilePreviewPane(props: {
   return (
     <div className="files-panel-preview">
       <header className="file-preview-header">
-        <span className="file-preview-back">
-          <PanelIconButton title={t.files.backToFiles} onClick={onClose}>
-            <Icon name="arrow-left" size={16} />
-          </PanelIconButton>
-        </span>
-        <span className="file-preview-close">
-          <PanelIconButton title={t.files.closePreview} onClick={onClose}>
-            <Icon name="x" size={16} />
-          </PanelIconButton>
-        </span>
         <Icon
           name={fileIcon(name, "file")}
           size={16}
           style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
         />
-        <div className="file-preview-title">
-          <span className="file-preview-name" title={name}>
-            {name}
-          </span>
-          {state.status === "ready" && (
-            <span
-              className="file-preview-meta"
-              title={t.time.dateTime(state.data.modifiedAt)}
-            >
-              {formatSize(state.data.size)} · {formatAge(state.data.modifiedAt, Date.now(), t)}
-            </span>
-          )}
+        {/* 面包屑：路径分段 + chevron 分隔；太长时整条在自身容器里裁掉尾部
+            （激活标签上始终有文件名，title 里始终有全路径），meta 在容器外不受挤 */}
+        <div className="file-preview-crumb">
+          {segments.map((segment, index) => (
+            <Fragment key={`${index}:${segment}`}>
+              {index > 0 && (
+                <Icon
+                  name="chevron-right"
+                  size={9}
+                  strokeWidth={2.4}
+                  className="file-preview-crumb-sep"
+                />
+              )}
+              <span
+                className={
+                  index === segments.length - 1
+                    ? "file-preview-crumb-seg cur"
+                    : "file-preview-crumb-seg"
+                }
+                title={segment}
+              >
+                {segment}
+              </span>
+            </Fragment>
+          ))}
         </div>
-        <span style={{ flex: 1 }} />
+        {state.status === "ready" && (
+          <span
+            className="file-preview-meta"
+            title={t.time.dateTime(state.data.modifiedAt)}
+          >
+            {formatSize(state.data.size)} · {formatAge(state.data.modifiedAt, Date.now(), t)}
+          </span>
+        )}
         <div className="file-preview-actions">
           {webPage && (
             <PanelIconButton title={t.files.openInBrowser} onClick={openInBrowser}>
               <Icon name="globe" size={16} />
             </PanelIconButton>
           )}
-          <PanelIconButton title={t.files.openDefault} onClick={openDefault}>
-            <Icon name="external-link" size={16} />
-          </PanelIconButton>
-          <PanelIconButton title={t.files.revealInFileManager} onClick={reveal}>
-            <Icon name="folder-open" size={16} />
-          </PanelIconButton>
           <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
             <Icon name={copied ? "check" : "copy"} size={16} />
           </PanelIconButton>
@@ -159,18 +159,12 @@ export function FilePreviewPane(props: {
   );
 }
 
-const failMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
-
-/** path 的最后一段（文件名，不含目录）。path 恒非空——FilesPanel 只用真实条目路径构造它 */
-function baseName(path: string): string {
-  const last = pathTail(path);
-  return last === "" ? path : last;
-}
-
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; data: FilePreview };
+
+const failMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
 
 /**
  * 预览的数据半边：root/path 变就重拉；`refresh` 重拉同一个。**竞态**：每次发起

@@ -1193,6 +1193,10 @@ export const zh: Messages = {
 
   files: {
     title: "文件",
+    treeToggleTip: "文件树开关——宽时并排，窄时浮层；缩窄过断点自动折叠",
+    tabsAria: "打开的文件",
+    closeTab: "关闭标签",
+    groupToggleTip: "折叠或展开这一组",
     emptyWorkbench: "工作台为空 — 智能体第一次写入时创建",
     reference: "添加文件引用",
     refreshing: "正在刷新文件树…",
@@ -1224,8 +1228,6 @@ export const zh: Messages = {
     ageWeeks: (n) => `${n} 周前`,
     ageMonths: (n) => `${n} 个月前`,
     ageYears: (n) => `${n} 年前`,
-    backToFiles: "返回文件",
-    closePreview: "关闭预览",
     openDefault: "用默认应用打开",
     openInBrowser: "在内置浏览器打开",
     copyPath: "复制路径",
