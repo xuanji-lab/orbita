@@ -39,6 +39,7 @@ import {
   groupToolUnits,
   groupTurns,
   indexToolResults,
+  interruptedToolCallIds,
   mcpFailureLead,
   channelSendMessageId,
   mcpInputSummary,
@@ -78,7 +79,7 @@ import { insertToken, type TokenPickResult } from "../../shell/panel-token.ts";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
-import { Menu, type MenuItem } from "../../shell/Menu";
+import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
@@ -94,7 +95,7 @@ import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelMenuItems, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardFooter, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -107,7 +108,7 @@ import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
+import { isMcpServerOffered, parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
@@ -125,7 +126,7 @@ import {
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
-import type { ThemePreference } from "@shared/settings";
+import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -413,7 +414,8 @@ function useSkillIndex(): {
     void api.skill.list().then(setSkills).catch(() => undefined);
   }, []);
   const reloadServers = useCallback(() => {
-    void api.mcp.list().then(setServers).catch(() => undefined);
+    // main 的 mcp:list 回 { servers, warnings }（工作区配置分层后）；warnings 由 MCP 管理面显示，面板不管
+    void api.mcp.list().then((result) => setServers(result.servers)).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
@@ -438,6 +440,14 @@ function ChatViewBody(props: {
    * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
    */
   homeBare?: boolean;
+  /** 星标（收藏）的模型。**不是会话元数据**——它跟着用户走，存在设置里 */
+  starredModels?: readonly ModelPair[];
+  onToggleStarModel?: (pair: ModelPair) => void;
+  /**
+   * 模型卡片底部「配置模型」的去处（设置面的服务商页）。不传时那行仍然在，
+   * 点了只是把卡片关上——比给一个点了没反应的东西好。
+   */
+  onOpenProviders?: () => void;
   /**
    * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
    * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
@@ -520,6 +530,11 @@ function ChatViewBody(props: {
   // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
   // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
   const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
+  const offeredWorkspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
+  const offeredServers = useMemo(
+    () => servers.filter((server) => isMcpServerOffered(server, offeredWorkspace)),
+    [servers, offeredWorkspace],
+  );
   const jumpToQuote = useContext(QuoteJumpContext);
 
   // ── 右栏选取的回执：插入 token、焦点回输入框（panel-token.ts）────────
@@ -808,7 +823,8 @@ function ChatViewBody(props: {
       skills={skills}
       workspaceId={session.workspaceId}
       onReloadSkills={reloadSkills}
-      servers={servers}
+      // 只给当前工作区能用的 server（isMcpServerOffered：与发送端判 /mcp: 可用同一依据）
+      servers={offeredServers}
       onReloadServers={reloadServers}
       onCommand={(command) => {
         if (command === "compact") {
@@ -834,7 +850,14 @@ function ChatViewBody(props: {
       }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}
-      bottomSlot={<ComposerBar session={session} />}
+      bottomSlot={
+        <ComposerBar
+          session={session}
+          starredModels={props.starredModels ?? []}
+          onToggleStarModel={props.onToggleStarModel ?? (() => {})}
+          onOpenProviders={props.onOpenProviders ?? (() => {})}
+        />
+      }
       dropActive={props.dropActive === true}
       quotes={session.quotes}
       onRemoveQuote={session.removeQuote}
@@ -842,11 +865,13 @@ function ChatViewBody(props: {
       attachments={session.attachments}
       onAttach={session.attachIncoming}
       onRemoveAttachment={session.removeAttachment}
+      onPickFolders={session.attachFolderRefs}
       files={session.files}
       pasted={session.pasted}
       onRemoveFile={session.removeFile}
-      onRemovePasted={session.removePasted}
-      onPasteLargeText={session.addPastedText}
+      onAddPasteBlock={session.addPasteBlock}
+      onExpandPaste={session.expandPaste}
+      onCollapsePaste={session.collapsePaste}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
       onSlashSpace={props.onSlashSpace}
     />
@@ -1223,6 +1248,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const entries = useMemo(() => groupToolUnits(units, props.skills), [units, props.skills]);
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = props.phase === "turn";
+  // 已中断的工具调用（interruptedToolCallIds）：结果永远不会来的调用按静止的
+  // 「已中断」渲染，不再呼吸/转圈——委派卡「委派中…」停不下来就是这类（2026-10-09）
+  const interruptedCalls = useMemo(
+    () => interruptedToolCallIds(records, toolResults, turnActive),
+    [records, toolResults, turnActive],
+  );
   // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
   const turnView = useMemo(() => groupTurns(entries, turnActive, toolResults), [entries, turnActive, toolResults]);
   // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
@@ -1378,6 +1409,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
                 sessionId={props.sessionId}
+                interruptedCalls={interruptedCalls}
               />
             ) : (
               <EntryView
@@ -1385,6 +1417,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 toolResults={toolResults}
                 activeThinkingKey={activeThinkingKey}
                 turnActive={turnActive}
+                interruptedCalls={interruptedCalls}
                 onOpenTask={props.onOpenTask}
                 carryoverCards={carryoverCards}
                 channel={props.channel}
@@ -1793,7 +1826,14 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
  * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
  * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
  */
-function ComposerBar(props: { session: ChatSession }) {
+function ComposerBar(props: {
+  session: ChatSession;
+  /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
+  /** 卡片底部「配置模型」→ 设置面的服务商页 */
+  onOpenProviders: () => void;
+}) {
   const t = useT();
   const { session } = props;
   const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
@@ -1819,27 +1859,25 @@ function ComposerBar(props: { session: ChatSession }) {
       id: "home",
       label: t.chat.home,
       icon: "folder",
-      hint: session.defaultCwd,
+      // 路径副行（mono 注脚）：主行报名字，副行说它在哪。路径的**尾段才是名字**
+      // （/Users/dama/Desktop/orbita → orbita），所以从头部省略，别把唯一有信息量的那段切掉
+      subLabel: session.defaultCwd,
+      subLabelMono: true,
+      subLabelEllipsis: "head",
       checked: session.workspaceId === null && session.cwd === null,
       onSelect: session.newTask,
     },
     ...session.workspaces.map((item): MenuItem => ({
       id: item.id,
-      // 名字原样（读时已治）；全路径放 hint 消歧（两个同名的工作区），
-      // 与 home 项的 defaultCwd 同构
+      // 名字原样（读时已治）；全路径放副行消歧（两个同名的工作区），与 home 项的 defaultCwd 同构
       label: item.name,
-      hint: item.path,
+      subLabel: item.path,
+      subLabelMono: true,
+      subLabelEllipsis: "head" as const,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
       onSelect: () => session.newTaskIn(item),
     })),
-    {
-      id: "new-workspace",
-      label: t.sidebar.newWorkspace,
-      icon: "plus",
-      onSelect: () => setNamingWorkspace(true),
-    },
-    { id: "add", label: t.sidebar.addFolder, icon: "folder-plus", onSelect: session.addWorkspace },
   ];
 
   // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
@@ -1852,13 +1890,12 @@ function ComposerBar(props: { session: ChatSession }) {
   }));
 
   // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
-  const modelItems: MenuItem[] = modelMenuItems({
-    t,
-    providers: session.usable,
-    catalog,
-    selected: session.model,
-    onSelect: (providerId, modelId) => session.chooseModel(providerId, modelId),
-  });
+  // 模型卡片的行（两行：模型名 + 厂商）与左栏（全部 / 各厂商）。
+  // 设置面那份「按厂商分组」的构造还在用，两边的参数口径（ctx 徽标、当前项）同源。
+  /**
+   * 宽度尺：**不过滤**的那一份（与上面同一套构造，只把 scope 换成「全部」）。
+   * 卡片按它定宽，所以左栏怎么筛宽、高、位置都不动。
+   */
 
   // 思考档菜单按模型真实支持集显示（官方档位表：glm-5.3 只有 low/high/max，
   // claude 按型号——fable 系关不掉思考、opus-4-6 没有 xhigh——写死档位只会递增假选项）。来源三级
@@ -1885,8 +1922,47 @@ function ComposerBar(props: { session: ChatSession }) {
 
   return (
     <>
+      {/*
+        底栏芯片的菜单一律 placement="above"：首页里输入卡悬在窗口中间，默认
+        「哪边空往哪开」会往下方弹（还会同一排芯片朝向不一）；聊天页钉底又全朝上。
+        点名朝上，两边同一朝向（2026-10-03 用户定）
+      */}
       <Menu
         items={scopeItems}
+        placement="above"
+        // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
+        // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
+        panelMaxHeight={520}
+        panelMaxWidth={640}
+        // 「去哪」与「往清单里加东西」是两件事：动作收进底栏，发卡线分隔（同模型卡片的「配置模型」）
+        footer={(close) => (
+          <>
+            <button
+              type="button"
+              className="option-row"
+              style={menuFooterRowStyle}
+              onClick={() => {
+                close();
+                setNamingWorkspace(true);
+              }}
+            >
+              <Icon name="plus" size={13} strokeWidth={1.8} />
+              <span>{t.sidebar.newWorkspace}</span>
+            </button>
+            <button
+              type="button"
+              className="option-row"
+              style={menuFooterRowStyle}
+              onClick={() => {
+                close();
+                session.addWorkspace();
+              }}
+            >
+              <Icon name="folder-plus" size={13} strokeWidth={1.8} />
+              <span>{t.sidebar.addFolder}</span>
+            </button>
+          </>
+        )}
         trigger={({ open, toggle }) =>
           namingWorkspace ? (
             // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
@@ -1920,6 +1996,7 @@ function ComposerBar(props: { session: ChatSession }) {
       />
       <Menu
         items={modeItems}
+        placement="above"
         panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
@@ -1936,10 +2013,26 @@ function ComposerBar(props: { session: ChatSession }) {
           </Chip>
         )}
       />
-      {modelItems.length > 0 && (
-        <Menu
-          items={modelItems}
-          searchable
+      {session.usable.length > 0 && (
+        <ModelPickerMenu
+          t={t}
+          providers={session.usable}
+          catalog={catalog}
+          selected={session.model}
+          starred={props.starredModels}
+          onToggleStar={props.onToggleStarModel}
+          onSelect={(providerId, modelId) => session.chooseModel(providerId, modelId)}
+          placement="above"
+          // 底部固定行：卡片会筛掉没配 key 的厂商，这行是唯一能说清「别家不是不存在」的地方
+          footer={(close) =>
+            modelCardFooter({
+              t,
+              onConfigure: () => {
+                close();
+                props.onOpenProviders();
+              },
+            })
+          }
           trigger={({ open, toggle }) => (
             <Chip
               active={open}
@@ -1956,6 +2049,7 @@ function ComposerBar(props: { session: ChatSession }) {
       )}
       <Menu
         items={thinkingItems}
+        placement="above"
         panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
@@ -2078,13 +2172,14 @@ function UsageRing(props: { session: ChatSession }) {
     <span style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end" }}>
       <Menu
         items={items}
+        placement="above"
         align="end"
         hoverOpen
         onOpenChange={(next) => {
           if (!next) setConfirming(false);
         }}
         trigger={({ open, toggle }) => (
-          <Chip active={open} onClick={toggle} aria-label={ring.label}>
+          <Chip active={open} onClick={toggle} ariaLabel={ring.label}>
             <Ring ring={ring} />
           </Chip>
         )}
@@ -2155,6 +2250,8 @@ function EntryView(props: {
   toolResults: ToolResultIndex;
   activeThinkingKey: string | null;
   turnActive: boolean;
+  /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
+  interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
   carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
@@ -2256,6 +2353,7 @@ function EntryView(props: {
         toolName={entry.toolName}
         input={entry.input}
         result={props.toolResults.get(entry.toolCallId)}
+        interrupted={props.interruptedCalls.has(entry.toolCallId)}
         onOpenTask={props.onOpenTask}
         channel={props.channel}
         skills={props.skills}
@@ -2267,6 +2365,7 @@ function EntryView(props: {
       group={entry}
       toolResults={props.toolResults}
       turnActive={props.turnActive}
+      interruptedCalls={props.interruptedCalls}
       onOpenTask={props.onOpenTask}
       channel={props.channel}
       skills={props.skills}
@@ -2310,6 +2409,8 @@ function TurnRollupLine(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
+  /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
+  interruptedCalls: ReadonlySet<string>;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2367,6 +2468,7 @@ function TurnRollupLine(props: {
               toolResults={props.toolResults}
               activeThinkingKey={null}
               turnActive={false}
+              interruptedCalls={props.interruptedCalls}
               onOpenTask={props.onOpenTask}
               carryoverCards={props.carryoverCards}
               channel={props.channel}
@@ -3130,6 +3232,9 @@ function ToolLine(props: {
   toolName: string;
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  /** 结果永远不会来（所在消息 error/aborted 收场且无结果帧，见 interruptedToolCallIds）：
+   * 按静止的「已中断」渲染，不呼吸不转圈 */
+  interrupted: boolean;
   /** B-1：read_task 的「Open」跳到被读的 task（侧栏点击同语义）；别的工具不传 */
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：delegate / reply_subsession / report_to_parent 三个通道工具要用 */
@@ -3141,7 +3246,9 @@ function ToolLine(props: {
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
-  const active = result === undefined || result.status === "running";
+  // 已中断：无结果帧且判定永不回来——不算运行中（不呼吸、不展开、状态词换「已中断」）
+  const interrupted = props.interrupted && result === undefined;
+  const active = !interrupted && (result === undefined || result.status === "running");
 
   // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
   // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败
@@ -3150,11 +3257,25 @@ function ToolLine(props: {
   // running 帧（`card === null` 时的「delegating…」呼吸）悄悄吞掉，永远显示
   // 「派出中」而不是「失败了」。
   if (props.toolName === "delegate" && !failed) {
-    return <DelegateToolLine input={props.input} result={result} channel={props.channel} />;
+    return (
+      <DelegateToolLine
+        input={props.input}
+        result={result}
+        interrupted={interrupted}
+        channel={props.channel}
+      />
+    );
   }
   // 交接（受管浏览器）：离开卡，与派出卡同一个骨架。失败照通用骨架走（红色 + 可展开看错误）
   if (props.toolName === "request_user_action" && !failed) {
-    return <HandoffToolLine toolCallId={props.toolCallId} input={props.input} result={result} />;
+    return (
+      <HandoffToolLine
+        toolCallId={props.toolCallId}
+        input={props.input}
+        result={result}
+        interrupted={interrupted}
+      />
+    );
   }
   if ((props.toolName === "reply_subsession" || props.toolName === "report_to_parent") && !failed) {
     return (
@@ -3163,6 +3284,7 @@ function ToolLine(props: {
         input={props.input}
         result={result}
         running={active}
+        interrupted={interrupted}
         channel={props.channel}
       />
     );
@@ -3247,11 +3369,15 @@ function ToolLine(props: {
             }}
           >
             <Icon
-              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : "plug"}
+              name={failed ? "triangle-alert" : interrupted ? "circle-off" : skillUse !== null ? "book-open" : "plug"}
               size={13}
               strokeWidth={1.8}
               style={{
-                color: failed ? "var(--color-danger)" : "var(--color-text-secondary)",
+                color: failed
+                  ? "var(--color-danger)"
+                  : interrupted
+                    ? "var(--color-text-tertiary)"
+                    : "var(--color-text-secondary)",
                 flex: "0 0 auto",
               }}
             />
@@ -3281,6 +3407,7 @@ function ToolLine(props: {
               {summary}
             </span>
           )}
+          {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
         </CollapseRow>
         {open && expandable && (
           <>
@@ -3307,7 +3434,15 @@ function ToolLine(props: {
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
           <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
             <Icon
-              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : toolIcon(props.toolName)}
+              name={
+                failed
+                  ? "triangle-alert"
+                  : interrupted
+                    ? "circle-off"
+                    : skillUse !== null
+                      ? "book-open"
+                      : toolIcon(props.toolName)
+              }
               size={14}
               strokeWidth={1.8}
             />
@@ -3343,6 +3478,8 @@ function ToolLine(props: {
             {summary}
           </span>
         )}
+        {/* 已中断（无结果帧且永不回来）：静止的中性状态词——不再呼吸、不假装在跑 */}
+        {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
         {/* shell 类的执行耗时——慢命令（install / typecheck）不展开也讲清楚花在哪 */}
         {shellDuration !== null && <span style={SLOT.status}>{shellDuration}</span>}
         {/* B-1：read_task 的任务卡动作——「Open」跳到被读的 task（与侧栏点击同语义）。
@@ -3395,11 +3532,29 @@ function ToolLine(props: {
  * 窗口顶部也有同样的交还按钮：用户登录完人在浏览器里，就地交还，不必切回来找这张卡。
  * 结束后：状态写「已交还 / 已取消」（主进程写进 details，不解析给模型的文字）。
  */
-function HandoffToolLine(props: { toolCallId: string; input: unknown; result: ToolTranscriptItem | undefined }) {
+function HandoffToolLine(props: {
+  toolCallId: string;
+  input: unknown;
+  result: ToolTranscriptItem | undefined;
+  interrupted: boolean;
+}) {
   const t = useT();
   const [gone, setGone] = useState(false);
   const reason = toolCallSummary("request_user_action", props.input) ?? "";
   const outcome = handoffOutcome(props.result);
+  // 已中断：请求从未发出（结果帧永远不来），不能再给「去完成 / 交还」的动作——
+  // 那些按钮会去 resolve 一个不存在的交接；退成静止的中性状态卡
+  if (props.interrupted && props.result === undefined) {
+    return (
+      <ExitCard
+        kicker={t.browser.handoffKicker}
+        icon="user"
+        title={reason}
+        status={{ text: t.chat.toolInterrupted, color: "var(--color-text-tertiary)", active: false }}
+        preview={t.browser.handoffWhere}
+      />
+    );
+  }
   const waiting = outcome === null && !gone;
   const status = waiting
     ? { text: t.browser.handoffWaiting, color: "var(--color-accent)", active: true }
@@ -3449,12 +3604,20 @@ function HandoffToolLine(props: { toolCallId: string; input: unknown; result: To
 function DelegateToolLine(props: {
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  interrupted: boolean;
   channel: ChannelViewContext;
 }) {
   const card = delegateCard(props.result);
   const taskPreview = deriveSessionTitle(toolCallSummary("delegate", props.input) ?? "");
   if (card === null) {
-    return <DelegateCardView card={null} status="running" taskPreview={taskPreview} />;
+    return (
+      <DelegateCardView
+        card={null}
+        status="running"
+        taskPreview={taskPreview}
+        interrupted={props.interrupted}
+      />
+    );
   }
   const summary = props.channel.channelSummaries.get(card.childId);
   // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
@@ -3492,10 +3655,23 @@ function ChannelSendToolLine(props: {
   input: unknown;
   result: ToolTranscriptItem | undefined;
   running: boolean;
+  interrupted: boolean;
   channel: ChannelViewContext;
 }) {
   const t = useT();
   const record = typeof props.input === "object" && props.input !== null ? (props.input as Record<string, unknown>) : {};
+  // 已中断：消息从未发出（结果帧永远不来）——不能按「已回复 / 已报告」的语气画
+  // 成功胶囊，换成静止的中性中断行
+  if (props.interrupted && props.result === undefined) {
+    return (
+      <ChannelToolMarkLine
+        icon="circle-off"
+        text={t.chat.toolInterrupted}
+        tone="neutral"
+        running={false}
+      />
+    );
+  }
   // 落账那条通道消息的 id（回执 details 里，channel-tools.ts）：点了滚到父子会话面板里
   // 的这一条并高亮。还在跑、或这一刀之前的旧记录没有 → null，退回滚到通道底部
   const messageId = channelSendMessageId(props.result);
@@ -3555,6 +3731,8 @@ function ToolGroupLine(props: {
   group: ToolGroupUnit;
   toolResults: ToolResultIndex;
   turnActive: boolean;
+  /** 已中断的调用 id 集（interruptedToolCallIds）：组头不为它们呼吸，按「N 个已中断」计 */
+  interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：展开后的成员行仍是 ToolLine，同一份上下文原样转发 */
   channel: ChannelViewContext;
@@ -3569,7 +3747,7 @@ function ToolGroupLine(props: {
     if (!props.turnActive) setOpen(false);
   }, [props.turnActive]);
 
-  const status = toolGroupStatus(group.calls, props.toolResults);
+  const status = toolGroupStatus(group.calls, props.toolResults, props.interruptedCalls);
   const active = status.running > 0;
   const failed = status.failed > 0;
   const fileCount = group.toolName === "edit" ? editGroupFileCount(group.calls, props.toolResults) : null;
@@ -3595,6 +3773,11 @@ function ToolGroupLine(props: {
             {t.chat.failedCount(status.failed)}
           </span>
         )}
+        {/* 已中断（中性色）：这几次调用从未发生——折了也不能无声消失，但也不染红
+            （不是失败，是没跑） */}
+        {!open && status.interrupted > 0 && (
+          <span style={SLOT.status}>{t.chat.interruptedCount(status.interrupted)}</span>
+        )}
       </CollapseRow>
       {open && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
@@ -3605,6 +3788,7 @@ function ToolGroupLine(props: {
               toolName={call.toolName}
               input={call.input}
               result={props.toolResults.get(call.toolCallId)}
+              interrupted={props.interruptedCalls.has(call.toolCallId)}
               onOpenTask={props.onOpenTask}
               channel={props.channel}
               skills={props.skills}

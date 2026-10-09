@@ -105,6 +105,35 @@ export function kindOf(provider: ProviderDto): string {
 }
 
 /**
+ * 模型卡片左栏每一格的短名（按传入顺序，键是 provider id）。
+ *
+ * **不靠「名字是否等于 label」猜用户改没改过名**：#140 把 label 改成纯厂商名（「智谱」），
+ * 新建实例的默认名还会带「（按量）/（套餐）」或序号，存量实例沿用旧名（「智谱 Coding
+ * Plan」）——按名字猜，几乎每个实例都会被误判成「改过名」，左栏显示完整长名。
+ *
+ * 规则：
+ *   - 目录里认得的厂商一律用它的 short；同一家有多个实例时，第二个起加序号（DS / DS 2），
+ *     完整实例名放格子的 title。
+ *   - 兼容入口（openai-compatible / anthropic-compatible）用实例名：那是用户自建的网关，
+ *     「OAI / OAI 2」说不出是哪个网关，用户起的名字才说得出。
+ */
+export function railShortNames(providers: readonly ProviderDto[]): Map<string, string> {
+  const names = new Map<string, string>();
+  const seen = new Map<string, number>();
+  for (const provider of providers) {
+    const known = knownProviderOf(provider);
+    if (known.id === "openai-compatible" || known.id === "anthropic-compatible") {
+      names.set(provider.id, provider.displayName);
+      continue;
+    }
+    const count = (seen.get(known.id) ?? 0) + 1;
+    seen.set(known.id, count);
+    names.set(provider.id, count === 1 ? known.short : `${known.short} ${count}`);
+  }
+  return names;
+}
+
+/**
  * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或密钥来自环境变量
  * （env 档没有 hasSecret 可查，scheme 本身就是「已配置」的声明）；none 恒为假。
  * nav 状态点与模型菜单的 usableProviders 是两个真实消费者——此前各写各的判定，

@@ -31,10 +31,13 @@ const realpath = async (path: string): Promise<string> => {
 };
 const roots = [wb, work, resolve("/not-created-yet")];
 
-test("looksLikeLocalPath：绝对路径、Windows 盘符、file:// 算；网址与搜索词不算", () => {
+test("looksLikeLocalPath：绝对路径、Windows 盘符、UNC、file:// 算；网址与搜索词不算", () => {
   assert.equal(looksLikeLocalPath("/wb/page.html"), true);
   assert.equal(looksLikeLocalPath("C:\\Users\\me\\a.html"), true);
   assert.equal(looksLikeLocalPath("file:///wb/page.html"), true);
+  // Windows 的 UNC 与设备路径也算本地路径：不认的话会被当成网址 / 搜索词送出去
+  assert.equal(looksLikeLocalPath("\\\\server\\share\\a.html"), true);
+  assert.equal(looksLikeLocalPath("\\\\?\\C:\\a.html"), true);
   assert.equal(looksLikeLocalPath("scopus.com"), false);
   assert.equal(looksLikeLocalPath("NUS library"), false);
 });

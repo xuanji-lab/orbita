@@ -4,11 +4,17 @@ import { deriveSessionTitle } from "@shared/session";
 import { Icon, type IconName } from "../../shell/Icon";
 import type { QueuedMessage } from "./session-states.ts";
 import { parseQuotedMessage } from "@shared/quote";
+import { draftFromSentText } from "../../shell/paste-blocks.ts";
 import { dropPlacement } from "./queue-drop.ts";
 import { channelMarkLabel } from "./tool-results.ts";
 import { channelKindIcon } from "./ChannelViews.tsx";
 import type { Messages } from "../../messages-en.ts";
 import { useT } from "../../locale.ts";
+
+/** 排队项正文里内联粘贴块的个数（只数，不拆内容） */
+function countPastedBlocks(text: string): number {
+  return draftFromSentText(text, () => 0, () => "").blocks.length;
+}
 
 
 /**
@@ -109,18 +115,21 @@ export function QueueStrip(props: {
 function labelOf(item: QueuedMessage, titles: ReadonlyMap<string, string>, t: Messages): string {
   if (item.kind === "text") {
     // 正文里展开过的引用块不照搬（那是给模型的标签）：只列用户自己的话，
-    // 引用与附件各说个数——只发图 / 只发附件的那条没有字，不写就是一行空白
-    const { quotes, text } = parseQuotedMessage(item.text);
+    // 引用与附件各说个数——只发图 / 只发附件的那条没有字，不写就是一行空白。
+    // 粘贴块已内联成 <pasted-text>（方案 C）：拆一遍拿个数与正文，标签不照搬标签
+    const { quotes, text: bare } = parseQuotedMessage(
+      draftFromSentText(item.text, () => 0, () => "").draft,
+    );
     const images = item.images?.length ?? 0;
     const files = item.files?.length ?? 0;
-    const pasted = item.pasted?.length ?? 0;
+    const pasted = countPastedBlocks(item.text);
     const extras = [
       ...(quotes.length > 0 ? [t.quote.count(quotes.length)] : []),
       ...(images > 0 ? [t.chat.images(images)] : []),
       ...(files > 0 ? [t.chat.files(files)] : []),
       ...(pasted > 0 ? [t.chat.pastedBlocks(pasted)] : []),
     ];
-    return [...(text === "" ? [] : [text]), ...extras].join(" · ");
+    return [...(bare === "" ? [] : [bare]), ...extras].join(" · ");
   }
   if (item.kind === "channel") {
     const childTitle = titles.get(item.childId) ?? t.channel.subSession;

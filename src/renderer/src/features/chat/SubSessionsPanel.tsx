@@ -13,13 +13,14 @@
  */
 import { useCallback, useState } from "react";
 import { childSessions, type SessionMeta } from "@shared/session";
+import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { api } from "../../api";
-import { modelMenuItems } from "../settings/model-menu";
+import { ModelPickerMenu } from "../settings/model-menu";
 import { useChannelSummaries } from "./useChannelSummaries";
 import {
   sortSubSessionRows,
@@ -76,6 +77,9 @@ export function SubSessionsPanel(props: {
   onOpenChannel: (childId: string, messageId: string | null) => void;
   onClose: () => void;
   providersError: string | null;
+  /** 模型星标（AppSettings.starredModels）与开关：会话层的模型卡片与输入卡同一张，星标也同一份 */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
 }) {
   const t = useT();
   const children = childSessions(props.session.sessions, props.parentId);
@@ -164,6 +168,8 @@ export function SubSessionsPanel(props: {
             childId={child.id}
             view={props.view}
             stopped={summaries.get(child.id)?.status === "stopped"}
+            starredModels={props.starredModels}
+            onToggleStarModel={props.onToggleStarModel}
           />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
@@ -237,7 +243,7 @@ export function SubSessionsPanel(props: {
 /**
  * 会话层的控制行（用户裁决原话：「我觉得用户应该有自己修改子会话的权限，不管是
  * mode、模型、终止与否，这些目前都没有。」）：档位 / 模型菜单在左，终止在右。
- * 档位与模型复用输入卡底栏同一套件（Menu + Chip + modelMenuItems + t.permissionModes），
+ * 档位与模型复用输入卡底栏同一套件（Menu + Chip + ModelPickerMenu + t.permissionModes），
  * 不另写一套；动作走查看槽的 changeMode / chooseModel（与「Open as main 后在输入卡
  * 底栏里改」同一条路，含 lastUsed 启动恢复点的跟随）。
  *
@@ -258,6 +264,8 @@ function SubSessionControls(props: {
   /** 会话层的查看槽（正开着这条子会话）：mode / model / usable / catalog 与两个改档函数都从它走 */
   view: ChatSession;
   stopped: boolean;
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
 }) {
   const t = useT();
   const { view } = props;
@@ -293,18 +301,9 @@ function SubSessionControls(props: {
     onSelect: () => view.changeMode(value),
   }));
 
-  const modelItems: MenuItem[] = modelMenuItems({
-    t,
-    providers: view.usable,
-    catalog: view.catalog,
-    selected: view.model,
-    onSelect: chooseModel,
-  });
-
   const stopItems: MenuItem[] = [
-    // 说明拆成两行短事实：Menu 行的 label 不换行，一整句会顶出面板右边缘（验收截图）
+    // 一句话说完的事实行：Menu 里无 hint 的事实行会换行，不会被省略号切掉半句
     { id: "stop-hint", label: t.subSessions.stopHint, fact: true },
-    { id: "stop-hint-reopen", label: t.subSessions.stopHintReopen, fact: true },
     {
       id: "stop-confirm",
       label: t.subSessions.stopConfirm,
@@ -344,12 +343,18 @@ function SubSessionControls(props: {
           </Chip>
         )}
       />
-      {modelItems.length > 0 && (
-        <Menu
-          items={modelItems}
-          searchable
+      {/* 与输入卡的模型芯片同一张卡片（ModelPickerMenu）：左栏过滤、星标、定高定宽 */}
+      {view.usable.length > 0 && (
+        <ModelPickerMenu
+          t={t}
+          providers={view.usable}
+          catalog={view.catalog}
+          selected={view.model}
+          starred={props.starredModels}
+          onToggleStar={props.onToggleStarModel}
+          onSelect={chooseModel}
           trigger={({ open, toggle }) => (
-            <Chip active={open} italic chevron title={t.chat.modelTip} onClick={toggle}>
+            <Chip active={open} chevron title={t.chat.modelTip} onClick={toggle}>
               {view.model?.modelId ?? t.chat.noModel}
             </Chip>
           )}

@@ -327,6 +327,26 @@ describe("parseSettings 的 gitAttribution", () => {
   });
 });
 
+describe("parseSettings 的 collapsePastedText", () => {
+  it("缺席 = 折叠（不落键，同 gitAttribution 的纪律）", () => {
+    deepStrictEqual(parseSettings({ theme: "graphite" }), {
+      theme: "graphite",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
+  });
+
+  it("true / false 都原样保留", () => {
+    deepStrictEqual(parseSettings({ collapsePastedText: true }).collapsePastedText, true);
+    deepStrictEqual(parseSettings({ collapsePastedText: false }).collapsePastedText, false);
+  });
+
+  it("非布尔一律丢掉，不当成真", () => {
+    deepStrictEqual(parseSettings({ collapsePastedText: "yes" }).collapsePastedText, undefined);
+    deepStrictEqual(parseSettings({ collapsePastedText: 1 }).collapsePastedText, undefined);
+    deepStrictEqual(parseSettings({ collapsePastedText: null }).collapsePastedText, undefined);
+  });
+});
+
 describe("parseSettings 的 choreModel", () => {
   it("缺席 = 各件家务退回会话模型，不落这个键", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }).choreModel, undefined);
@@ -475,7 +495,7 @@ describe("界面语言", () => {
 });
 
 describe("parseSettings 的 browserDownloadDir（受管浏览器下载目录）", () => {
-  it("绝对路径留下：POSIX、Windows 盘符、UNC", () => {
+  it("终对路径留下：POSIX、Windows 盘符、UNC", () => {
     deepStrictEqual(parseSettings({ browserDownloadDir: "/Users/me/Papers" }).browserDownloadDir, "/Users/me/Papers");
     deepStrictEqual(parseSettings({ browserDownloadDir: "C:\\Users\\me\\Papers" }).browserDownloadDir, "C:\\Users\\me\\Papers");
     deepStrictEqual(parseSettings({ browserDownloadDir: "\\\\nas\\share" }).browserDownloadDir, "\\\\nas\\share");
@@ -484,6 +504,57 @@ describe("parseSettings 的 browserDownloadDir（受管浏览器下载目录）"
     deepStrictEqual(parseSettings({ theme: "dark" }).browserDownloadDir, undefined);
     deepStrictEqual(parseSettings({ browserDownloadDir: "Papers" }).browserDownloadDir, undefined);
     deepStrictEqual(parseSettings({ browserDownloadDir: 42 }).browserDownloadDir, undefined);
+  });
+});
+
+describe("parseSettings 的 starredModels（模型星标）", () => {
+  it("成对的留下，顺序照旧", () => {
+    deepStrictEqual(
+      parseSettings({
+        starredModels: [
+          { providerId: "deepseek", modelId: "deepseek-v4-flash" },
+          { providerId: "zhipu", modelId: "glm-5.3" },
+        ],
+      }).starredModels,
+      [
+        { providerId: "deepseek", modelId: "deepseek-v4-flash" },
+        { providerId: "zhipu", modelId: "glm-5.3" },
+      ],
+    );
+  });
+
+  it("同一对只留一条：星标是开关，重复项会让取消星算错", () => {
+    deepStrictEqual(
+      parseSettings({
+        starredModels: [
+          { providerId: "zhipu", modelId: "glm-5.3" },
+          { providerId: "zhipu", modelId: "glm-5.3" },
+        ],
+      }).starredModels,
+      [{ providerId: "zhipu", modelId: "glm-5.3" }],
+    );
+  });
+
+  it("坏项丢掉：缺一个 id、空串、非对象都不进库", () => {
+    deepStrictEqual(
+      parseSettings({
+        starredModels: [
+          { providerId: "zhipu" },
+          { providerId: "", modelId: "glm-5.3" },
+          null,
+          "glm-5.3",
+          { providerId: "zhipu", modelId: "glm-5.3" },
+        ],
+      }).starredModels,
+      [{ providerId: "zhipu", modelId: "glm-5.3" }],
+    );
+  });
+
+  it("空数组与全无效都是「没有星标」：键不落盘，不为此留一个空数组", () => {
+    deepStrictEqual("starredModels" in parseSettings({ starredModels: [] }), false);
+    deepStrictEqual("starredModels" in parseSettings({ starredModels: [null, 7] }), false);
+    deepStrictEqual("starredModels" in parseSettings({ starredModels: "zhipu" }), false);
+    deepStrictEqual("starredModels" in parseSettings({}), false);
   });
 });
 

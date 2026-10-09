@@ -51,3 +51,6 @@ test-output.txt
 # 计划文档只留本地（2026-09-06 裁决）：设计意图与被否方案的草稿不进仓库，
 # PR 的 diff 与描述才是异步同步机制。已入库的历史计划保持跟踪不动。
 docs/plans/
+
+# 打包前由 scripts/fetch-search-bins.mjs 下载的 rg / fd（钉版本 + sha256），不进仓
+/build/bin/

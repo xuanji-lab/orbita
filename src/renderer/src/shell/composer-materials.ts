@@ -1,6 +1,7 @@
 /**
- * 输入框材料的**唯一数据来源**：把四路附件（截图 / 文件引用 / 粘贴文本 / 引用）
- * 摊平成一张带类型、显示名、元信息与移除回调的清单。
+ * 输入框材料的**唯一数据来源**：把三路附件（截图 / 文件引用 / 引用）摊平成
+ * 一张带类型、显示名、元信息与移除回调的清单。粘贴文本不走材料区（方案 C，
+ * 2026-10-09：大段粘贴在光标处成句中胶囊，paste-blocks.ts）。
  *
  * 为什么要集中：材料在今天有「B 叠放」一种排布（截图一行、胶囊一行、引用一张卡，
  * Composer.tsx 的材料层），之后还要换排布（游戏化）。排布会换，**材料是什么**不换——
@@ -11,13 +12,13 @@
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
 import type { TextQuote } from "../../../shared/quote.ts";
-import type { ComposerFileRef, ComposerPastedText } from "./composer-attachments.ts";
+import type { ComposerFileRef } from "./composer-attachments.ts";
 import type { ComposerImage } from "./composer-images.ts";
 import { quoteMeta } from "./quote-label.ts";
 import type { Messages } from "../messages-en.ts";
 
 /** 材料种类。file / dir 分开记：图标与语义都不同（模型对目录用 list、对文件用 read） */
-export type ComposerMaterialKind = "image" | "file" | "dir" | "pasted" | "quote";
+export type ComposerMaterialKind = "image" | "file" | "dir" | "quote";
 
 /**
  * 一条材料。`meta` 是排在名字后面的一小句机器事实（粘贴的行数、引用的来源与字数），
@@ -43,14 +44,6 @@ export type ComposerMaterial =
       ref: ComposerFileRef;
     }
   | {
-      kind: "pasted";
-      id: string;
-      name: string;
-      meta: string;
-      remove: () => void;
-      block: ComposerPastedText;
-    }
-  | {
       kind: "quote";
       id: string;
       name: string;
@@ -60,18 +53,16 @@ export type ComposerMaterial =
     };
 
 /**
- * 摊平四路附件。**顺序就是叠放的规范顺序**：截图（一眼认得出的锚点）→
- * 文件 / 目录 / 粘贴文本（同一层胶囊）→ 引用（贴着输入框）。排布层按 kind
- * 分层或重排，都从这张清单出发。
+ * 摊平三路附件。**顺序就是叠放的规范顺序**：截图（一眼认得出的锚点）→
+ * 文件 / 目录（同一层胶囊）→ 引用（贴着输入框）。排布层按 kind 分层或重排，
+ * 都从这张清单出发。
  */
 export function composerMaterials(input: {
   attachments: readonly ComposerImage[];
   files: readonly ComposerFileRef[];
-  pasted: readonly ComposerPastedText[];
   quotes: readonly TextQuote[];
   onRemoveAttachment: (id: string) => void;
   onRemoveFile: (id: string) => void;
-  onRemovePasted: (id: string) => void;
   onRemoveQuote: (index: number) => void;
   t: Messages;
 }): ComposerMaterial[] {
@@ -90,18 +81,10 @@ export function composerMaterials(input: {
       kind: ref.kind,
       id: ref.id,
       name: ref.name,
-      // 完整路径挂 title 就够，meta 不重复它
+      // 完整路径走胶囊的悬停 tooltip（FileChip），meta 不重复它
       meta: null,
       remove: () => input.onRemoveFile(ref.id),
       ref,
-    })),
-    ...input.pasted.map<ComposerMaterial>((block) => ({
-      kind: "pasted",
-      id: block.id,
-      name: t.composer.pastedName,
-      meta: t.composer.pastedLines(block.lines),
-      remove: () => input.onRemovePasted(block.id),
-      block,
     })),
     ...input.quotes.map<ComposerMaterial>((quote, index) => ({
       kind: "quote",

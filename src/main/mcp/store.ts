@@ -19,6 +19,22 @@ const TEMPLATE = `{
 }
 `;
 
+/**
+ * 读任意一个 MCP 配置文件（全局 `mcp.json` 与工作区自带的 `.mcp.json` 同构）。
+ * 文件不在 = 一台都没配（返回空）；JSON 坏了往上抛——把坏文件说成「没配」
+ * 会让用户以为自己的 server 丢了（D-3 同款）。
+ */
+export async function readMcpConfigFile(filePath: string): Promise<Record<string, McpServer>> {
+  let raw: string;
+  try {
+    raw = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (isNotFound(error)) return {};
+    throw error;
+  }
+  return parseMcpConfig(JSON.parse(raw));
+}
+
 export class McpStore {
   private readonly filePath: string;
 
@@ -37,14 +53,7 @@ export class McpStore {
    * JSON 坏了也抛：让用户看见「第 3 行少个逗号」，比默默当没配好得多。
    */
   async read(): Promise<Record<string, McpServer>> {
-    let raw: string;
-    try {
-      raw = await readFile(this.filePath, "utf8");
-    } catch (error) {
-      if (isNotFound(error)) return {};
-      throw error;
-    }
-    return parseMcpConfig(JSON.parse(raw));
+    return readMcpConfigFile(this.filePath);
   }
 
   /** 文件不存在时写一个空模板，好让「打开配置」有东西可开。 */

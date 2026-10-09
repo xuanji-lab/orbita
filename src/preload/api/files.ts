@@ -11,6 +11,7 @@ import type {
   FilePreview,
   FileRoot,
   FileRootsRequest,
+  FsEntryFact,
 } from "../../shared/files.ts";
 
 export const filesApi = {
@@ -26,4 +27,8 @@ export const filesApi = {
   open: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpen, req),
   /** 在内置浏览器「你的」tab 打开网页文件（同白名单，且须是网页文件） */
   openInBrowser: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpenInBrowser, req),
+  /** 把一批绝对路径 stat 成盘上事实（输入框附件分拣与面板已发送附件列表用；不在面板白名单内）。stat 不到两个字段都是 null */
+  statKind: (paths: readonly string[]): Promise<FsEntryFact[]> => ipcRenderer.invoke(ipcChannels.fsStatKind, paths),
+  /** 开系统目录选择器挑文件夹（多选，给回形针的「添加文件夹」）；取消返回 null */
+  pickFolders: (): Promise<string[] | null> => ipcRenderer.invoke(ipcChannels.fsPickFolders),
 } as const;
