@@ -248,6 +248,7 @@ export const en = {
     review: "Review changes",
     skills: "Skills",
     mcp: "MCP servers",
+    terminal: "Terminal",
     sideChat: "Side chat Ctrl+Alt+D",
     subSessions: (count: number) => `Sub-sessions (${count})`,
     channels: "Sub-session channels",
@@ -1237,6 +1238,15 @@ export const en = {
     more: (n: number) => `+${n} more`,
     emptyTitle: "No MCP server yet",
     emptyDesc: "Without a server the agent only has its built-in tools. Add one, or edit mcp.json directly.",
+  },
+
+  terminal: {
+    title: "Terminal",
+    newTerminal: "New terminal",
+    closeTab: "Close terminal",
+    exitNotice: (code: number) => `Process exited (${code})`,
+    runtimeLost: "The terminal runtime is gone. Close this tab and open a new one.",
+    spawnFailed: (message: string) => `Could not start a terminal: ${message}`,
   },
 
   skills: {

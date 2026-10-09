@@ -38,6 +38,7 @@ import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
+import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { CHANNEL_COLUMN_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
@@ -684,6 +685,8 @@ export function App() {
                 />
               ) : shownPanel === "mcp" ? (
                 <McpPanel skills={skills} onClose={() => handlePanel(null)} />
+              ) : shownPanel === "terminal" ? (
+                <TerminalPanel cwd={session.cwd} onClose={() => handlePanel(null)} />
               ) : shownPanel === "drawer" ? (
                 <Drawer
                   engine={engine}
