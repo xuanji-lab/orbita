@@ -2518,7 +2518,16 @@ function UserBubble(props: {
   useLayoutEffect(() => {
     if (expanded) return;
     const el = clampRef.current;
-    if (el !== null) setOverflowing(isBubbleOverflowing(el.scrollHeight, el.clientHeight));
+    if (el === null) return;
+    const measure = () => setOverflowing(isBubbleOverflowing(el.scrollHeight, el.clientHeight));
+    measure();
+    // 宽度变了要重量：右栏打开 / 拖窗口让聊天列变窄，原本 4 行内的消息会折到第 5 行——
+    // 折叠样式一直挂着（不论溢出与否），不重量的话正文被静默裁掉、却没有展开键与遮罩；
+    // 反过来列变宽，原本溢出的消息放得下了，展开键与遮罩还残留着。只在折叠态观察：
+    // 展开后两个高度相等，量了会把结论丢掉（收起时 expanded 变化会再量一次）
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [text, expanded]);
   return (
     <div
