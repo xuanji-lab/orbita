@@ -630,9 +630,8 @@ function TreeRow(props: {
           width: "100%",
           height: 30,
           paddingLeft: `calc(var(--space-3) + ${props.depth} * 16px)`,
-          // 右侧给浮在行上的两个 hover 按钮（引用 + Reveal，各 20px + 4px 缝）留位：
-          // 不留的话 AGENTS.md 的 rules 尾注会被它们压住
-          paddingRight: "calc(var(--space-3) + 44px)",
+          // 右内边距在 .file-row 的 CSS 里（给 hover 动作键留位的悬停组合例外，见
+          // styles.css 血线注释）；行内不再写死
           border: 0,
           font: "inherit",
           fontSize: "var(--font-size-control)",
@@ -868,7 +867,9 @@ function AttachmentRow(props: {
           width: "100%",
           height: 30,
           paddingLeft: `calc(var(--space-3) + 1 * 16px)`,
-          paddingRight: "calc(var(--space-3) + 44px)",
+          // 尾部（size / 已不在）是静止态元素：右缘直接钉在基础右内边距（右血线，
+          // 验收 M）；悬停动作键绝对定位盖上、尾部让位（styles.css）
+          paddingRight: "var(--space-3)",
           border: 0,
           font: "inherit",
           fontSize: "var(--font-size-control)",
@@ -889,15 +890,19 @@ function AttachmentRow(props: {
         {/* 名字 + 目录尾 `/`：共用组件 DirMarkName（胶囊 / 面板行 / 气泡三处同一段
             结构；2026-10 验收 I+K：斜杠紧跟名字，不再挂到行的另一头） */}
         <DirMarkName name={name} dir={kind === "directory"} wrapStyle={{ flex: "1 1 auto" }} />
-        {missing && (
-          <span className="attachment-missing-mark" title={t.files.attachmentMissing}>
-            <Icon name="triangle-alert" size={11} strokeWidth={2} />
-            {t.files.attachmentMissingShort}
-          </span>
-        )}
-        {!missing && props.fact?.size != null && props.fact.kind === "file" && (
-          <span className="file-row-meta">{formatSize(props.fact.size)}</span>
-        )}
+        {/* 尾部（size / 已不在）：静止态钉在右血线上（.row-trailing，验收 M），
+            悬停时让位给绝对定位的引用 / Reveal 动作键 */}
+        <span className="row-trailing attachment-row-tail">
+          {missing ? (
+            <span className="attachment-missing-mark" title={t.files.attachmentMissing}>
+              <Icon name="triangle-alert" size={11} strokeWidth={2} />
+              {t.files.attachmentMissingShort}
+            </span>
+          ) : (
+            props.fact?.size != null &&
+            props.fact.kind === "file" && <span>{formatSize(props.fact.size)}</span>
+          )}
+        </span>
       </button>
       {clickable && owner !== null && (
         <button

@@ -1956,6 +1956,15 @@ body {
 }
 
 /*
+ * 树行右内边距：给悬停才出的两个动作键（20px×2 + 缝）留位——它们绝对定位盖在
+ * 行尾，悬停元信息（size·mtime）停在它们之左（血线规则的悬停组合例外，见
+ * .row-trailing 的注释）。附件行不用这条：它的尾部是静止态元素，直接钉血线。
+ */
+.file-row {
+  padding-right: calc(var(--space-3) + 44px);
+}
+
+/*
  * hover 行尾的 size · mtime（`48 KB · 12m`）：只在 hover 时出现，不 hover 不占
  * 视觉——它们是「看一眼就够」的机器事实，常驻会让每行都背着两个数字（裁决见
  * 设计稿「待裁决」章节）。挂同一个 .file-hover-host 宿主，与 Reveal 同一套
@@ -1983,6 +1992,36 @@ body {
   font-size: var(--font-size-micro);
   color: var(--color-warning);
   white-space: nowrap;
+}
+
+/* ===== 行尾血线（2026-10 验收 M，用户原话「左侧顶格有血线的，右侧应该一样顶格」）=====
+ * 行 / 卡 / 列表项的尾部元素（状态标记、注脚、计数、时间），右缘必须钉在行的
+ * 右内边距上——与左侧首个元素的左缘同一条基线；有深度缩进的行，深度只加左缘，
+ * 右缘仍是基础内边距。尾部元素统一用 .row-trailing 推到右侧（margin-left: auto），
+ * 不用固定宽度 / 魔法数 padding 凑。悬停才出现的动作键不得在平时占位：绝对定位
+ * 盖在行尾（D 项同款），出现时尾部元素让位（opacity 0）；仅悬停可见的次要信息
+ * 可以停在动作键之左——血线管静止态。几何由 scripts/ui-edges.mjs 把关。
+ */
+.row-trailing {
+  margin-left: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* 附件行的尾部（size / 已不在）：静止态钉在右血线上，悬停时让位给绝对定位的
+   引用 / Reveal 动作键 */
+.attachment-row-tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  transition: opacity var(--transition-hover);
+}
+
+.file-hover-host:hover .attachment-row-tail {
+  opacity: 0;
 }
 
 /*
@@ -2841,10 +2880,10 @@ textarea.text-field {
   cursor: pointer;
 }
 
-/* 来源注脚（第几轮 · 谁说的 · 字数）：micro、tertiary，不与正文抢分量。
-   行尾顶格（右侧 = 行右内边距，与左侧引号图标的左缩进对称，2026-10 用户验收：
-   动作键占位把它挤离右缘）；悬停 / 聚焦时让位给动作键，各回各位 */
+/* 引用卡格子注脚：尾部元素，钉在格右血线上（动作键绝对定位，悬停时它让位——
+   D 项同款）；用 .row-trailing 同一套推右 */
 .material-quote-note {
+  margin-left: auto;
   flex: 0 0 auto;
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);

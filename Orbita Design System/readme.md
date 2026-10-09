@@ -316,6 +316,16 @@ isn't currently watching.
 
 ## Implementation rules
 
+**Trailing edges sit on the row's right hem.** A row / card / list item's trailing
+element — a status mark, footnote, count or timestamp — pins its right edge to the row's right
+padding, the same hem the leading element's left edge sits on (depth indent goes left only). Push
+it there with the shared `.row-trailing` primitive (`margin-left: auto; flex: 0 0 auto`) — never
+with a fixed width or magic padding. A hover-only action cluster never occupies space at rest: it
+overlays the corner (absolutely positioned) and the trailing element yields (fades) while it is up.
+The anti-pattern this rule kills: `padding-right: 44px` reserving room for hidden buttons, so a
+resting status mark floats mid-row while the left side hugs its hem. Geometry is guarded by
+`scripts/ui-edges.mjs`.
+
 **Stateful styling lives in CSS classes.** Hover, `:focus-visible`, `:active`, `:disabled`,
 `[aria-selected]` / `[aria-expanded]`, `:focus-within`, container queries, `prefers-reduced-motion`,
 and per-theme differences all belong in CSS (`src/renderer/src/styles.css` or a feature's own

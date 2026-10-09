@@ -34,6 +34,7 @@ export function FileRefChip(props: {
   return (
     <>
       <div
+        className="file-ref-chip"
         ref={tooltip.anchorRef}
         onMouseEnter={tooltip.handlers.onMouseEnter}
         onMouseLeave={tooltip.handlers.onMouseLeave}
