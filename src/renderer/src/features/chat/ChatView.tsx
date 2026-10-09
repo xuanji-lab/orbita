@@ -1323,7 +1323,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                   {t.chat.previewCut}
                 </div>
               )}
-              <div className={cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"}>
+              <div className={`${cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"} agent-lane`}>
               <ShowImageGalleryGroup cards={cards} />
               {branchAfter !== undefined && (
                 <BranchRow
@@ -1348,7 +1348,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 {t.chat.previewCut}
               </div>
             )}
-            <div className={doomed ? "revert-doomed" : "revert-keep"}>
+            {/* agent 一侧（回复、工具行、文件改动 / 撤销卡、轮尾统计…）共用一条右侧留白，
+                与用户气泡左侧的留白同宽——宽度绑在这一处，不逐个组件各加 */}
+            <div className={`${doomed ? "revert-doomed" : "revert-keep"}${entry.kind === "user" ? "" : " agent-lane"}`}>
             {entry.kind === "turnGroup" ? (
               <TurnRollupLine
                 group={entry}
@@ -2291,8 +2293,7 @@ function EntryView(props: {
     }
     // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找
     return (
-      // 右侧留出 --message-gutter：与用户气泡左侧的留白对称（设计系统 spacing token）
-      <div data-quote-id={entry.messageId} data-quote-role="assistant" style={{ paddingRight: "var(--message-gutter)" }}>
+      <div data-quote-id={entry.messageId} data-quote-role="assistant">
         <MarkdownBlock text={entry.text} />
       </div>
     );

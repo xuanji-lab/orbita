@@ -3038,3 +3038,13 @@ textarea.text-field {
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
 }
+
+/*
+ * 消息两侧对称留白（--message-gutter，设计系统 spacing token）：用户气泡从右往左伸、
+ * 左侧留白靠 --bubble-max-width；agent 一侧的所有块（回复正文、工具行、文件改动 /
+ * 撤销卡、轮尾统计、图片组）从左往右伸，右侧留同样宽——统一挂在转录行的包裹层上，
+ * 新加的块自动跟随，不必各自记得加 padding。
+ */
+.agent-lane {
+  padding-right: var(--message-gutter);
+}
