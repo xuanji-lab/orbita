@@ -58,39 +58,53 @@ export function chipRangeAfter(text: string, caret: number): ChipSpan | null {
   return parseChips(text).find((chip) => chip.start === caret) ?? null;
 }
 
-/** 镜像层的渲染分段：修正液与 chip 两层区间叠在同一份文本上 */
+/** 镜像层的渲染分段：修正液、chip 与粘贴展开段三层区间叠在同一份文本上 */
 export interface MirrorSegment {
   text: string;
   whiteout: boolean;
   chip: boolean;
+  /** 粘贴块的展开段：只铺浅底色（方案 C），文字与正文同字体可直接编辑 */
+  pasteRun: boolean;
 }
 
 /**
- * 把修正液分段按 chip 边界再切一刀。**chip 区间优先于修正液**：小学作业主题里
- * token 本来是英文段（会垫修正液），chip 自己的 pill 已经盖住竖格线，再垫一层
- * 白底只会把 chip 画没。非 copybook 主题传 `[{ text, whiteout: false }]` 进来
- * （只切 chip）。
+ * 把修正液分段按 chip 边界再切一刀，再按粘贴展开段切一刀。**chip 优先于两层**：
+ * 小学作业主题里 token 本来是英文段（会垫修正液），chip 自己的 pill 已经盖住竖格线，
+ * 再垫一层白底只会把 chip 画没；展开段里手打了 token 的形状时同理——chip 是更强的
+ * 视觉，先切。非 copybook 主题传 `[{ text, whiteout: false }]` 进来（只切 chip 与段）。
  */
 export function mirrorSegments(
   segments: readonly WhiteoutSegment[],
-  chips: readonly ChipSpan[],
+  /** 画成胶囊的区间（skill / mcp 的 token 与收起的粘贴 token——这里只吃区间，
+   *  kind / target 是发送端的事） */
+  chips: readonly { start: number; end: number }[],
+  pasteRuns: readonly { start: number; end: number }[] = [],
 ): MirrorSegment[] {
   const out: MirrorSegment[] = [];
   let offset = 0;
   for (const segment of segments) {
     let from = 0;
-    for (const chip of chips) {
-      const relStart = Math.max(chip.start - offset, 0);
-      const relEnd = Math.min(chip.end - offset, segment.text.length);
-      if (relStart >= relEnd) continue;
+    for (const span of [
+      ...chips.map((chip) => ({ start: chip.start, end: chip.end, chip: true })),
+      ...pasteRuns.map((run) => ({ start: run.start, end: run.end, chip: false })),
+    ].sort((a, b) => a.start - b.start)) {
+      const relStart = Math.max(span.start - offset, from);
+      const relEnd = Math.min(span.end - offset, segment.text.length);
+      // 与已切过的重叠（chip 与展开段交叠时，后切的让路）或空区间：跳过
+      if (relEnd <= from || relStart >= relEnd) continue;
       if (relStart > from) {
-        out.push({ text: segment.text.slice(from, relStart), whiteout: segment.whiteout, chip: false });
+        out.push({ text: segment.text.slice(from, relStart), whiteout: segment.whiteout, chip: false, pasteRun: false });
       }
-      out.push({ text: segment.text.slice(relStart, relEnd), whiteout: false, chip: true });
+      out.push({
+        text: segment.text.slice(relStart, relEnd),
+        whiteout: false,
+        chip: span.chip,
+        pasteRun: !span.chip,
+      });
       from = relEnd;
     }
     if (from < segment.text.length) {
-      out.push({ text: segment.text.slice(from), whiteout: segment.whiteout, chip: false });
+      out.push({ text: segment.text.slice(from), whiteout: segment.whiteout, chip: false, pasteRun: false });
     }
     offset += segment.text.length;
   }

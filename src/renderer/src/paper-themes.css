@@ -81,6 +81,19 @@
     0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
+/* 粘贴展开段（copybook 变体，方案 C）：不涂修正液也不白底——它是正文不是涂改，
+   铺一层淡淡的绿（方格线色当荧光笔）标出「这段是粘贴进来的」，竖格线从底下透出来 */
+:root[data-theme="copybook"] .composer-paste-run {
+  background: color-mix(in srgb, var(--color-paper-grid) 20%, transparent);
+}
+
+/* 收起标签在稿纸上换纸色浮层（实底盖字 + 发丝随格线） */
+:root[data-theme="copybook"] .composer-paste-label {
+  background: var(--color-paper-whiteout);
+  border-color: var(--color-paper-grid);
+  box-shadow: var(--shadow-popover);
+}
+
 :root[data-theme="copybook"] .chat-md strong {
   text-decoration: underline wavy var(--color-paper-pen);
   text-decoration-thickness: 1px;

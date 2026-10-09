@@ -139,6 +139,14 @@ export interface AppSettings {
    */
   compaction?: CompactionSetting;
   /**
+   * 大段粘贴是否收成句中胶囊（方案 C）。**缺席 = 收起**（现状）：超过阈值的粘贴在
+   * 光标处收成一颗「[粘贴 N · M 行]」胶囊，点开铺底色展开可编辑，发送时全文内联
+   * 进消息（位置保留）。关掉则输入框不拦截——大段粘贴作为普通文字直接进输入框；
+   * 转录里已发送消息的粘贴回显不受此开关影响（那已是既成消息）。
+   * 只认布尔，同 gitAttribution 的纪律。
+   */
+  collapsePastedText?: boolean;
+  /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
    * 只认布尔——这个文件手改得到，`"yes"` 该被丢掉而不是当成真。
@@ -341,6 +349,7 @@ export function parseSettings(raw: unknown): AppSettings {
     rightPanelWidth?: unknown;
     sidebarWidth?: unknown;
     compaction?: unknown;
+    collapsePastedText?: unknown;
     gitAttribution?: unknown;
     choreModel?: unknown;
     /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
@@ -397,6 +406,10 @@ export function parseSettings(raw: unknown): AppSettings {
     // 只会让设置面显示的状态和实际行为对不上
     ...(typeof record.gitAttribution === "boolean"
       ? { gitAttribution: record.gitAttribution }
+      : {}),
+    // 同 gitAttribution 的纪律：非布尔丢掉，缺席 = 折叠（现状）
+    ...(typeof record.collapsePastedText === "boolean"
+      ? { collapsePastedText: record.collapsePastedText }
       : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),

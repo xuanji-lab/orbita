@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createContext, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { useT } from "../locale.ts";
@@ -114,11 +114,19 @@ export function FileRefChip(props: {
 }
 
 /**
- * 一段粘贴文本：折叠成一行（「粘贴的文本 · N 行」），点开展开全文（限高滚动），
- * 再点收起——**全文永不截断**，折叠只是显示形态。展开态收在 chip 内部：
- * 粘贴的是要紧内容，展开时不该把它推到视线之外。
+ * 粘贴文本是否折叠成一行（设置 › collapsePastedText，缺席 = 折叠）。
+ * 消费方是输入框的粘贴拦截（Composer）：关掉后大段粘贴不成块，直接进输入框。
+ * App 根部提供一次，免得逐级透传。
  */
-export function PastedTextChip(props: { text: string; lines: number; onRemove?: () => void }) {
+export const PastedTextCollapseContext = createContext(true);
+
+/**
+ * 转录气泡里的一段已发送粘贴文本：折叠成一行（「粘贴的文本 · N 行」），点开就地
+ * 展开全文（限高滚动），再点收起。**全文永不截断**，折叠只是显示形态。
+ * 输入框那一侧已改道句中胶囊（方案 C，paste-blocks.ts / Composer 的镜像层），
+ * 这里只剩转录回显一个消费者。
+ */
+export function PastedTextChip(props: { text: string; lines: number }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   return (
@@ -171,31 +179,7 @@ export function PastedTextChip(props: { text: string; lines: number; onRemove?: 
             {t.composer.pastedTitle(props.lines)}
           </span>
         </button>
-        {props.onRemove !== undefined && (
-          <button
-            type="button"
-            aria-label={t.composer.removePasted}
-            title={t.composer.removePasted}
-            onClick={props.onRemove}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 18,
-              height: 18,
-              flex: "0 0 auto",
-              marginInlineStart: "auto",
-              padding: 0,
-              border: "1px solid var(--color-border-subtle)",
-              borderRadius: "var(--radius-pill)",
-              background: "var(--color-bg-panel)",
-              color: "var(--color-text-secondary)",
-              cursor: "pointer",
-            }}
-          >
-            <Icon name="x" size={11} strokeWidth={2} />
-          </button>
-        )}
+        <span style={{ flex: "1 1 auto" }} />
       </div>
       {expanded && (
         <div

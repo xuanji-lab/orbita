@@ -149,7 +149,8 @@ export const en = {
     pastedTitle: (lines: number) => `Pasted text · ${lines} lines`,
     pastedExpand: "Show the pasted text in full",
     pastedCollapse: "Collapse the pasted text",
-    removePasted: "Remove pasted text",
+    pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
+    pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
     commandPanel: "Slash commands",
     commandNoMatch: "No matching command",
     slashSectionCommands: "Commands",
@@ -432,6 +433,10 @@ export const en = {
     attributionAria: "Commit and PR attribution",
     attributionInfo:
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
+    pastedCollapse: "Collapse pasted text",
+    pastedCollapseAria: "Collapse pasted text",
+    pastedCollapseInfo:
+      "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",

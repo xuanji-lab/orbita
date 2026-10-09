@@ -826,8 +826,9 @@ function ChatViewBody(props: {
       files={session.files}
       pasted={session.pasted}
       onRemoveFile={session.removeFile}
-      onRemovePasted={session.removePasted}
-      onPasteLargeText={session.addPastedText}
+      onAddPasteBlock={session.addPasteBlock}
+      onExpandPaste={session.expandPaste}
+      onCollapsePaste={session.collapsePaste}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
     />
   );

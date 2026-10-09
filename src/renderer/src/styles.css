@@ -225,19 +225,47 @@
 }
 
 /* 输入框外层：textarea 与镜像层叠在同一格里，镜像在下、textarea 在上（修正液与句中 chip，
-   Composer.tsx）。只有 textarea 时就是一层普通包裹 */
+   Composer.tsx）。只有 textarea 时就是一层普通包裹。relative 给展开段的收起标签
+   （.composer-paste-label）当定位参照系——它浮在 textarea 之上、要能收点击 */
 .composer-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  position: relative;
+  /* 展开段的收起标签要浮在段头一行之上：先给 20px 头部空间（只在有展开段时），
+     标签落在带里不压字；镜像层随之对齐内容盒（top 吃同一变量） */
+  --paste-headroom: 0px;
+  padding-top: var(--paste-headroom);
+}
+
+.composer-field.has-paste-run {
+  --paste-headroom: 20px;
 }
 
 .composer-field > * {
   grid-area: 1 / 1;
 }
 
+/* textarea 必须也是定位元素：镜像层改成 absolute 之后，未定位的 textarea 会被画在
+   它下面——chip 与展开段的底色盖住 textarea 的字（胶囊成了空白药丸、展开段只剩色条）。
+   两个都定位、textarea 在 DOM 里靠后，它就叠在镜像之上；收起标签 z-index: 1 仍在最上 */
+.composer-field > textarea {
+  position: relative;
+}
+
+/* 收起标签不进格子：`.composer-field > *` 给了所有子项 grid-area 1/1，绝对定位的
+   grid 子项以自己的格为包含块——格从头部空间带之下开始，标签的 top 又加了一次
+   textarea.offsetTop，结果落回段头那一行、压住字。脱出格子，包含块回到 field 的
+   padding box，标签就浮在头部空间带里 */
+.composer-field > .composer-paste-label {
+  grid-area: auto;
+}
+
 /* 镜像层（全主题常驻，垫在 textarea 下）：字透明，只画句中 chip 与（copybook 的）修正液；
    换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步）。
-   曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06） */
+   曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06）。
+   absolute + inset:0：脱开 grid 的行高贡献——textarea 12 行封顶后，镜像若仍在流内，
+   几十行的草稿会把格子撑到 textarea 之外（方案 C 粘贴展开实测：field 长到 928px），
+   脱流后格子高度只由 textarea 决定，镜像随格子裁剪（overflow hidden + 滚动同步） */
 .composer-mirror {
   color: transparent;
   white-space: pre-wrap;
@@ -245,6 +273,10 @@
   overflow: hidden;
   pointer-events: none;
   user-select: none;
+  position: absolute;
+  /* 绝对定位的 grid 子项，containing block 是自己的 grid 区（= field 的内容盒，
+     头部空间垫之下）——inset:0 正好与 textarea 同格对齐；别再偏移 */
+  inset: 0;
 }
 
 /*
@@ -272,6 +304,47 @@
     0 0 0 2px var(--color-border-subtle);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
+}
+
+/*
+ * 粘贴展开段（方案 C，paste-blocks.ts）：一段粘贴进来的文字展开回正文，只铺浅底色
+ * 标出「这段是粘贴进来的」——文字与正文同字体、可直接编辑，区间随编辑伸缩。
+ * 没有描边没有圆角：它是一段话，不是一颗胶囊；chip 的描边语言留给收起态。
+ * 底色与 chip 同源（--color-bg-muted），跨行 clone 让每一截都铺满。
+ */
+.composer-paste-run {
+  background: var(--color-bg-muted);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/*
+ * 展开段的收起标签：浮在段头一行之上的小胶囊（图标 + 「N 行 · 收起」），点它把段
+ * 收回句中胶囊。实底 + 发丝 + popover 阴影的浮层配方（它叠在 textarea 上，半透明会
+ * 透出底下的字）；hover 与 focus-visible 走全局规则，这里只补底色微升——收起是
+ * 高频小动作，hover 回馈要能看见但不抢。行尾不出输入框：Composer 量宽时夹过 left。
+ */
+.composer-paste-label {
+  position: absolute;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.composer-paste-label:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
 }
 
 .composer-bottom-bar {
@@ -2804,71 +2877,6 @@ textarea.text-field {
 .material-chip-x:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
-}
-
-/* 粘贴全文浮层：floating layer（实底面板 + 发丝 + popover 阴影），开在胶囊行上方 */
-.material-popover {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 6px);
-  z-index: 30;
-  width: min(520px, 100%);
-  display: grid;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-panel);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow-popover);
-}
-
-.material-popover-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: 6px 6px 0 10px;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-secondary);
-}
-
-.material-popover-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-
-.material-popover-close:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-/* 全文永不截断，折叠只是显示形态：限高滚动 */
-.material-popover-body {
-  max-height: 220px;
-  overflow-y: auto;
-  margin: 6px 10px 10px;
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-bubble);
-  color: var(--color-text-secondary);
-}
-
-/* 引用卡两列版式的 container query 容器：composer 最外层（宽度 = 输入卡宽度） */
-.composer-stack {
-  container-type: inline-size;
 }
 
 /* 引用卡：**半行两列**（2026-10 用户裁决）——每条只占半行，两列并排堆更多引用；

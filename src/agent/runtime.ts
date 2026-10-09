@@ -920,7 +920,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
         if (echoed.has(text)) {
           echoed.delete(text);
         } else if (text !== "") {
-          for (const progress of adapter.userPrompt(text)) {
+          for (const progress of adapter.userPrompt(splitEchoBlocks(text))) {
             send({ type: "progress", sessionId: command.sessionId, progress });
           }
         }
@@ -1176,6 +1176,12 @@ async function listBuiltins(): Promise<void> {
  * - 文件引用与粘贴块组装进正文之后；回显块保留块界（粘贴块 / 文件清单各自独立
  *   text 块），显示层按块解析回 chip。
  */
+/** 正文按空行拆块回显（空段丢弃；整条为空保一个空块——纯图消息的形状不变） */
+function splitEchoBlocks(text: string): string[] {
+  const parts = text.split("\n\n").filter((part) => part !== "");
+  return parts.length > 0 ? parts : [""];
+}
+
 async function echoAndPrompt(
   opened: OpenedTurn,
   note: LedgerNote,
@@ -1186,7 +1192,10 @@ async function echoAndPrompt(
   const files = command.files ?? [];
   const promptText = composePromptText(command.text, pasted, files);
   note.echoed.add(promptText);
-  for (const progress of opened.adapter.userPrompt(command.text, images, attachmentBlocks(pasted, files))) {
+  // 正文按空行拆成块再回显：句中粘贴胶囊（方案 C）组装后就是 <pasted-text> 块内联
+  // 在正文里，拆开才能被显示层按内容认出来（splitUserTextBlocks）。纯正文拆了
+  // 再拼回去逐字不变（空行既是拆分符也是拼回符），旧消息行为不动
+  for (const progress of opened.adapter.userPrompt(splitEchoBlocks(command.text), images, attachmentBlocks(pasted, files))) {
     // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
     if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
     send({ type: "progress", sessionId: command.sessionId, progress });
