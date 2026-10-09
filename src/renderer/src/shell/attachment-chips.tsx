@@ -1,6 +1,9 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { useT } from "../locale.ts";
+import { useHoverTooltip } from "./useHoverTooltip.ts";
+import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
 
 /**
  * 文件引用与粘贴文本的 chip——输入框附件区与聊天流回显共用这两个形态：
@@ -8,7 +11,15 @@ import { useT } from "../locale.ts";
  * 同圆角、同底色），只是文件认不出内容，用图标与名字说话。
  */
 
-/** 一个文件引用：图标区分文件 / 目录，名字省略号，title 挂完整路径 */
+/** 路径 tooltip 的延迟，与 IconButton / 输入框胶囊同值：太慢感知等于没有 */
+const PATH_TOOLTIP_DELAY_MS = 200;
+
+/**
+ * 一个文件引用：图标 + 名字（目录带尾 `/`）+（输入框里的）移除键。
+ * 图标与颜色和文件面板、输入框胶囊**同一份** fileIcon / fileIconTone（2026-10
+ * 验收 J：三处长同一种形状，扫读不换脑筋）；目录沿用填实 folder。完整路径走
+ * useHoverTooltip 快速 tooltip（与输入框胶囊同 200ms），不再挂原生 title。
+ */
 export function FileRefChip(props: {
   name: string;
   path: string;
@@ -16,66 +27,98 @@ export function FileRefChip(props: {
   onRemove?: () => void;
 }) {
   const t = useT();
+  const isDir = props.kind === "dir";
+  const tone = isDir ? null : fileIconTone(props.name, "file");
+  const tooltip = useHoverTooltip<HTMLDivElement>(PATH_TOOLTIP_DELAY_MS, true);
   return (
-    <div
-      title={props.path}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        height: 28,
-        minWidth: 0,
-        maxWidth: 280,
-        padding: "0 6px 0 8px",
-        border: "1px solid var(--color-border-subtle)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--color-bg-muted)",
-      }}
-    >
-      <Icon
-        name={props.kind === "dir" ? "folder" : "file"}
-        size={13}
-        strokeWidth={1.8}
-        style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-      />
-      <span
+    <>
+      <div
+        ref={tooltip.anchorRef}
+        onMouseEnter={tooltip.handlers.onMouseEnter}
+        onMouseLeave={tooltip.handlers.onMouseLeave}
         style={{
-          flex: "0 1 auto",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          height: 28,
           minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          fontSize: "var(--font-size-caption)",
-          color: "var(--color-text-primary)",
+          maxWidth: 280,
+          padding: "0 6px 0 8px",
+          border: "1px solid var(--color-border-subtle)",
+          borderRadius: "var(--radius-md)",
+          background: "var(--color-bg-muted)",
         }}
       >
-        {props.name}
-      </span>
-      {props.onRemove !== undefined && (
-        <button
-          type="button"
-          aria-label={t.composer.removeFile}
-          title={t.composer.removeFile}
-          onClick={props.onRemove}
+        <Icon
+          name={isDir ? "folder" : fileIcon(props.name, "file")}
+          size={13}
+          strokeWidth={1.8}
+          fill={isDir}
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 18,
-            height: 18,
+            color: isDir
+              ? "var(--color-text-secondary)"
+              : tone === null
+                ? "var(--color-text-tertiary)"
+                : FILETYPE_TONE_COLOR[tone],
             flex: "0 0 auto",
-            padding: 0,
-            border: "1px solid var(--color-border-subtle)",
-            borderRadius: "var(--radius-pill)",
-            background: "var(--color-bg-panel)",
-            color: "var(--color-text-secondary)",
-            cursor: "pointer",
+          }}
+        />
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontSize: "var(--font-size-caption)",
+            color: "var(--color-text-primary)",
           }}
         >
-          <Icon name="x" size={11} strokeWidth={2} />
-        </button>
-      )}
-    </div>
+          {props.name}
+        </span>
+        {isDir && (
+          <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-micro)", color: "var(--color-text-tertiary)" }}>
+            /
+          </span>
+        )}
+        {props.onRemove !== undefined && (
+          <button
+            type="button"
+            aria-label={t.composer.removeFile}
+            title={t.composer.removeFile}
+            onClick={props.onRemove}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 18,
+              height: 18,
+              flex: "0 0 auto",
+              padding: 0,
+              border: "1px solid var(--color-border-subtle)",
+              borderRadius: "var(--radius-pill)",
+              background: "var(--color-bg-panel)",
+              color: "var(--color-text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <Icon name="x" size={11} strokeWidth={2} />
+          </button>
+        )}
+      </div>
+      {tooltip.open &&
+        createPortal(
+          <div
+            ref={tooltip.tooltipRef}
+            role="tooltip"
+            className="material-path-tip"
+            data-placed={tooltip.placement !== null}
+            style={{ top: tooltip.placement?.top ?? 0, left: tooltip.placement?.left ?? 0 }}
+          >
+            <div>{props.path}</div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
