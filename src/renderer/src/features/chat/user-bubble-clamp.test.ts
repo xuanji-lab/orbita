@@ -25,11 +25,11 @@ test("展开态：不 clamp、不 hidden", () => {
   assert.equal("overflow" in style, false);
 });
 
-/** 溢出判定：容差 1px（亚像素舍入不算溢出），超出 1px 以上才算。 */
-test("溢出判定：恰等于 / 差 1px 不算，差 2px 起算", () => {
+/** 溢出判定：容差 1px（亚像素舍入不算溢出），超出 1px 以上才算——与实现 `> clientHeight + 1` 同口径。 */
+test("溢出判定：恰等于 / 差 1px 不算，超出 1px 以上才算", () => {
   assert.equal(isBubbleOverflowing(96, 96), false);
   assert.equal(isBubbleOverflowing(97, 96), false);
-  assert.equal(isBubbleOverflowing(97.5, 96), false);
+  assert.equal(isBubbleOverflowing(97.5, 96), true);
   assert.equal(isBubbleOverflowing(98, 96), true);
   assert.equal(isBubbleOverflowing(162, 96), true);
 });
