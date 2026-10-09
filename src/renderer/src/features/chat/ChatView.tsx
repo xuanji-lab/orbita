@@ -2291,7 +2291,8 @@ function EntryView(props: {
     }
     // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找
     return (
-      <div data-quote-id={entry.messageId} data-quote-role="assistant">
+      // 右侧留出 --message-gutter：与用户气泡左侧的留白对称（设计系统 spacing token）
+      <div data-quote-id={entry.messageId} data-quote-role="assistant" style={{ paddingRight: "var(--message-gutter)" }}>
         <MarkdownBlock text={entry.text} />
       </div>
     );
