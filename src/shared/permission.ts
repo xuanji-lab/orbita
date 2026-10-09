@@ -19,6 +19,16 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
  */
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "skip";
 
+/**
+ * bash / powershell 的 timeout 下限（秒）：模型自填的小值会被权限闸门抬到这里
+ * （只升不降；闸门改的是 pi 传进来的入参对象、不回写会话记录，完整理由见
+ * `src/agent/permission.ts`）。**放 shared 是为了 UI 同源**：renderer 的「上限」
+ * 显示读的是模型原始入参，不套同一条规则的话，模型填 60 时界面说「上限 1:00」、
+ * 实际跑在 10 分钟上——界面对用户撒谎。规则与闸门一字不差：不填不动、填大尊重、
+ * 非法（≤0 / 非有限数）不修。
+ */
+export const COMMAND_TIMEOUT_FLOOR_SECONDS = 600;
+
 export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hint: string }> = {
   plan: { label: "Plan", hint: "Read-only. Writing and shell are refused." },
   manual: { label: "Manual", hint: "Ask before every tool call." },

@@ -116,7 +116,7 @@ export default defineConfig({
        * `strictPort` 让冲突当场失败。脚本里也一律用 `127.0.0.1:5273`，
        * 不用 `localhost`——把解析这一层的歧义整个去掉。
        *
-       * 端口可由 `ORBITA_DEV_PORT` 覆盖（`bun run dev:isolated` 用 5274）：第二个 dev 实例
+       * 端口可由 `ORBITA_DEV_PORT` 覆盖：第二个 dev 实例
        * 以前只能临时改这一行、再记得别提交。覆盖只换号，host 与 strictPort 不变——
        * 撞了照样当场失败。
        */
