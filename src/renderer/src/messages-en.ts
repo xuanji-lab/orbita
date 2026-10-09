@@ -985,7 +985,7 @@ export const en = {
     calls: (n: number) => `${n} calls`,
     tools: (n: number) => `tools ${n}`,
     failedCount: (n: number) => `${n} failed`,
-    toolInterrupted: "Interrupted · connection lost, not run",
+    toolInterrupted: "Interrupted · not run",
     interruptedCount: (n: number) => `${n} interrupted`,
     toolRead: "Read",
     toolSearch: "Search",

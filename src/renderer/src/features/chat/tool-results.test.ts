@@ -464,6 +464,33 @@ describe("interruptedToolCallIds", () => {
     assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), true)], ["r1"]);
   });
 
+  test("同批工具的 tool 帧不是界碑：审批挂起时未 start 的同批调用不算中断（PR 审查意见）", () => {
+    // pi 并行批次逐个 emit start → await prepareToolCall（审批闸门，等用户）→ 下一个：
+    // r1 的 running 帧落下后 assistant 不再是转录末条，但 r2 还没 start、无帧——
+    // 旧实现按「后面有任何新记录」判，审批卡挂多久 r2 就错多久
+    const records = [
+      userItem,
+      said("a1", [readCall("r1", "a.ts"), readCall("r2", "b.ts")], "complete"),
+      toolItem({ toolCallId: "r1", toolName: "read", status: "running", isError: false, content: [] }),
+    ];
+    assert.equal(interruptedToolCallIds(records, indexToolResults(records as TranscriptItem[]), true).size, 0);
+  });
+
+  test("变体：r1 已完成、r2 尚未 start——同样不算（末条只看 assistant / user）", () => {
+    const records = [
+      userItem,
+      said("a1", [readCall("r1", "a.ts"), readCall("r2", "b.ts")], "complete"),
+      toolItem({ toolCallId: "r1", toolName: "read", status: "running", isError: false, content: [] }),
+      toolItem({ toolCallId: "r1", toolName: "read" }),
+    ];
+    assert.equal(interruptedToolCallIds(records, indexToolResults(records as TranscriptItem[]), true).size, 0);
+  });
+
+  test("后面的 user 记录是界碑（steer 注入 / 新轮）：批次该收账了，缺席即孤儿", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete"), { ...userItem, id: "u2" }];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), true)], ["r1"]);
+  });
+
   test("轮已结束（turnActive false，含重开的旧会话）：complete 无结果也是中断", () => {
     const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete")];
     assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), false)], ["r1"]);
