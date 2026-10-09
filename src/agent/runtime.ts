@@ -42,6 +42,7 @@ import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
+import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -700,6 +701,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       noSkills: true,
       additionalSkillPaths: command.skillsDirs,
       extensionFactories: [
+        {
+          name: "orbita-cc-billing",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            // Claude 订阅车道的最小改写（cc-billing-patch.ts）：只对带 pi OAuth
+            // 身份块的请求生效，返回 undefined 时 payload 原样过（其它 provider 零影响）
+            pi.on("before_provider_request", (event) => ccBillingPatch(event.payload));
+          },
+        },
         {
           name: "orbita-permission",
           hidden: true,

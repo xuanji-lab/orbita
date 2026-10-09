@@ -225,7 +225,7 @@ function refusalMessage(dir: string, via: "path" | "command"): string {
   );
 }
 
-/** pi 扩展 API 里我们用到的两个钩子。上游类型没导出成可直接消费的形状，这里只声明用得着的部分。 */
+/** pi 扩展 API 里我们用到的钩子。上游类型没导出成可直接消费的形状，这里只声明用得着的部分。 */
 export interface PiExtensionApi {
   on(
     event: "tool_call",
@@ -234,6 +234,11 @@ export interface PiExtensionApi {
   on(
     event: "before_agent_start",
     handler: (event: { systemPrompt: string }) => { systemPrompt: string },
+  ): void;
+  /** 返回非 undefined 的值替换请求 payload（cc-billing-patch 用）；上游契约 BeforeProviderRequestEventResult = unknown */
+  on(
+    event: "before_provider_request",
+    handler: (event: { payload: unknown }) => unknown,
   ): void;
 }
 
