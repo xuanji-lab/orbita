@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { Chip } from "./Chip";
@@ -136,6 +136,8 @@ export function Sidebar(props: {
   width: number;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
+  /** 后台跑完、还没点进去看的会话（App 持有，completion-notice.ts 维护）：行画未读底色 */
+  unread: ReadonlySet<string>;
 }) {
   const t = useT();
   const { session } = props;
@@ -558,6 +560,7 @@ export function Sidebar(props: {
                 meta={meta}
                 session={session}
                 active={meta.id === openId}
+                unread={props.unread.has(meta.id)}
                 onClick={() => open(meta.id)}
               />
             ))}
@@ -691,6 +694,7 @@ export function Sidebar(props: {
                       sessions={scoped.filter((m) => m.workspaceId === workspace.id)}
                       session={session}
                       openId={openId}
+                      unread={props.unread}
                       folded={isGroupFolded(groups, foldKeyForWorkspace(workspace.id))}
                       onToggleFold={() =>
                         setGroups((current) =>
@@ -759,6 +763,7 @@ export function Sidebar(props: {
                         meta={meta}
                         session={session}
                         active={meta.id === openId}
+                        unread={props.unread.has(meta.id)}
                         onClick={() => open(meta.id)}
                       />
                     ))}
@@ -825,6 +830,7 @@ function WorkspaceGroup(props: {
   sessions: SessionMeta[];
   session: ChatSession;
   openId: string | null;
+  unread: ReadonlySet<string>;
   folded: boolean;
   onToggleFold: () => void;
   /** 眼下最多列几条（groupVisibleLimit）；expanded = 点过 Show more */
@@ -971,6 +977,7 @@ function WorkspaceGroup(props: {
               meta={meta}
               session={props.session}
               active={meta.id === props.openId}
+              unread={props.unread.has(meta.id)}
               onClick={() => props.onOpen(meta.id)}
             />
           ))}
@@ -1168,6 +1175,12 @@ function NavRow(props: {
   iconTitle?: string;
   /** 整行的悬停说明（planned 的东西用它讲为什么点不动） */
   hint?: string;
+  /**
+   * 会话行的运行底色（2026-10-10 用户裁决）：running = accent→透明的渐变带沿行扫过，
+   * unread = 静态浅 accent 底（跑完了、还没点进去看）。缺席 = 没有底色。规则在
+   * styles.css 的 `.option-row[data-run]`。
+   */
+  run?: "running" | "unread" | undefined;
   style?: React.CSSProperties;
 }) {
   const disabled = props.disabled === true;
@@ -1182,6 +1195,7 @@ function NavRow(props: {
       // 选中的视觉与是否可点无关（原 selectionStyle({ selected: props.active, … })
       // 不看 clickable）；aria-pressed 只在可点时才挂——两者分开，样式只认 data-active
       data-active={props.active || undefined}
+      data-run={props.run}
       onClick={props.onClick}
       style={{
         display: "flex",
@@ -1239,6 +1253,8 @@ function SessionRow(props: {
   meta: SessionMeta;
   session: ChatSession;
   active: boolean;
+  /** 后台跑完、还没点进去看（App 的未读集合）。行在跑时让给 running */
+  unread: boolean;
   onClick: () => void;
 }) {
   const t = useT();
@@ -1272,7 +1288,10 @@ function SessionRow(props: {
    * 行首状态槽：running > subRunning > failed > pinned > 空。优先级与理由在
    * `row-status.ts`（纯函数 + 测试）。`null` = 这一行没什么可说，槽留空。
    */
-  const status = rowStatusIcon({ running, subRunning, failed, pinned: meta.pinned === true }, t);
+  const status = rowStatusIcon(
+    { running, subRunning, failed, unread: props.unread, pinned: meta.pinned === true },
+    t,
+  );
   // 这条会话的未办遗留数（行尾角标，与筛选同口径）
   const openTodos = openTodoCount(session.carryovers, meta.id);
   // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）。子会话不参与
@@ -1469,6 +1488,8 @@ function SessionRow(props: {
           spin={status?.spin ?? false}
           iconTitle={status?.label}
           active={props.active}
+          // 底色只说母会话自己：子会话在跑仍是 git-fork 图标（已经够显眼，用户 2026-10-10）
+          run={running ? "running" : props.unread ? "unread" : undefined}
           onClick={props.onClick}
           style={{ flex: 1, minWidth: 0 }}
         />

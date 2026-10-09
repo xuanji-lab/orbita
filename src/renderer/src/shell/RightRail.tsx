@@ -1,5 +1,7 @@
+﻿import { useState, type ComponentProps } from "react";
 import { Icon, type IconName } from "./Icon";
 import { useT } from "../locale.ts";
+import { CompletionCard } from "../features/notify/CompletionCard";
 
 /**
  * 右图标条，32px，**常驻**（首页也可达）。与左栏同款「无自己的面」：直接坐在
@@ -57,8 +59,15 @@ export function RightRail(props: {
    * 根会话没有子会话）。与 `panel` 共用互斥语义，走 `onPanel` 同一条切换逻辑。
    */
   subSessions: { count: number } | null;
+  /**
+   * 后台会话跑完的提醒卡（2026-10-10）：钉在辅助对话图标左侧——三个去处里有一个
+   * 就是辅助对话，卡片从它旁边出来，人自然知道「辅助对话」指哪里。null = 没有提醒。
+   */
+  completionNotice: Omit<ComponentProps<typeof CompletionCard>, "anchor"> | null;
 }) {
   const t = useT();
+  // 卡片的定位锚点：用 state 而不是 ref，挂载后触发一次渲染，卡片才拿得到元素
+  const [sideChatAnchor, setSideChatAnchor] = useState<HTMLSpanElement | null>(null);
   return (
     <aside
       style={{

@@ -528,6 +528,69 @@
 }
 
 /*
+ * 会话行的运行底色（2026-10-10 用户裁决，Sidebar.tsx 的 NavRow `run`）：
+ * - running：accent → 透明的渐变带沿行从左扫到右，一直循环——一眼看出哪条在动；
+ * - unread：后台跑完、还没点进去看，渐变带停下，换成一层静态浅 accent 底；
+ *   点进去看过即恢复。
+ * 「动 / 静 / 无」三档表达「在跑 / 跑完未读 / 平常」。颜色是第二信号：行首状态槽
+ * 的图标（circle-dot / circle-check）与 tooltip 仍是正式表达。
+ *
+ * 画在 ::before 上、z-index -1 + 行本身 isolation，压在 hover / 选中底之上、文字之下；
+ * 渐变带只动 transform（合成层，不触发重绘）。窗口不在前台时与其它持续动效一起暂停
+ * （下方 data-window-inactive 规则），要求减少动效时退成静态浅底。
+ */
+.option-row[data-run] {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.option-row[data-run]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.option-row[data-run="unread"]::before {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.option-row[data-run="running"]::before {
+  right: auto;
+  width: 60%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-accent) 22%, transparent),
+    transparent
+  );
+  will-change: transform;
+  animation: row-run-sweep 2.4s linear infinite;
+}
+
+/* 带宽是行宽的 60%：从完全在左侧外（-100%）扫到完全在右侧外（100/60 ≈ 167%） */
+@keyframes row-run-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(167%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .option-row[data-run="running"]::before {
+    animation: none;
+    right: 0;
+    width: auto;
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
+}
+
+/*
  * 行右端带独立控件（今天的唯一消费者是模型卡片的星标）的行。
  *
  * 控件是行按钮的**兄弟**（button 不能嵌 button），所以底不能只画在行按钮上：
@@ -1871,8 +1934,81 @@ body {
  * `animation-play-state` 本来就管不到它，不需要额外排除。
  */
 [data-window-inactive="true"] .anim-continuous,
-[data-window-inactive="true"] .orbita-breath {
+[data-window-inactive="true"] .orbita-breath,
+[data-window-inactive="true"] .option-row[data-run="running"]::before {
   animation-play-state: paused !important;
+}
+
+/*
+ * 后台会话完成提醒卡（features/notify/CompletionCard.tsx）：钉在辅助对话图标左侧，
+ * portal 到 body、fixed 定位。浮在任意内容之上，走浮层配方（实色面板 + 发丝边 +
+ * popover 阴影，同 .menu-panel 的理由）。入场从图标方向滑出 8px——动效只解释
+ * 「它是从哪儿来的」；一次性动画，不进持续动效的暂停名单。
+ */
+.completion-card {
+  position: fixed;
+  z-index: 40;
+  width: 264px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  overflow: auto;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popover);
+  animation: completion-card-in var(--duration-enter) var(--ease-out-quint);
+}
+
+@keyframes completion-card-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+
+.completion-card-kicker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+.completion-card-glyph {
+  display: inline-grid;
+  place-items: center;
+}
+
+.completion-card-title {
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.completion-card-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.completion-card-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-control);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /*

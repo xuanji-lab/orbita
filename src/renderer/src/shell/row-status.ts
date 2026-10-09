@@ -5,12 +5,14 @@ import type { Messages } from "../messages-en.ts";
  * 会话行**行首状态槽**里该画什么。槽只有一个位置，而能落进来的事实有五种，
  * 所以它是一条**优先级链**而不是并列的 if：
  *
- * running > subRunning > failed > pinned > 空。
+ * running > subRunning > failed > unread > pinned > 空。
  *
  * 理由：前三档都是「正在发生的事」，比任何静态标记更该被看见。父会话自己在跑
  * （running）压过一切；父空闲但有任一直接子会话在跑（subRunning，画 git-fork）
  * 压过 failed——子会话此刻的活是正在发生的事，母会话上一轮的失败等子会话停下来
- * 再说；pinned 只是排序偏好，排最后。**done 不在这里**（2026-09-22 wafo）：完成
+ * 再说；unread（后台跑完、用户还没看，2026-10-10）是「有结果等你」，压过排序偏好
+ * pinned，但让给 failed——失败也是结果，而且更要紧（失败的行同样带未读底色）；
+ * pinned 只是排序偏好，排最后。**done 不在这里**（2026-09-22 wafo）：完成
  * 是用户亲手点的标记，与星标同槽、同规则，画在行尾，行首不再重复。
  *
  * **idle 不画东西**（2026-09-22 wafo）：以前 idle 画一个灰勾，一列灰勾只是噪音。
@@ -33,6 +35,8 @@ export function rowStatusIcon(
     /** 任一直接子会话在跑（母会话自己的行用；子会话自己的行恒 false） */
     subRunning: boolean;
     failed: boolean;
+    /** 后台跑完、用户还没点进去看（completion-notice.ts 维护，ephemeral） */
+    unread: boolean;
     pinned: boolean;
   },
   t: Messages,
@@ -49,6 +53,10 @@ export function rowStatusIcon(
     return { icon: "git-fork", tone: "var(--color-accent)", label: t.rowStatus.subRunning, spin: false };
   if (state.failed)
     return { icon: "triangle-alert", tone: "var(--color-danger)", label: t.common.failed, spin: false };
+  // 跑完未读：圈勾，accent。与侧栏行的浅 accent 底色同义——底色是第二信号，
+  // 图标与 tooltip 才是状态的正式表达（设计系统：状态优先图标与文字）
+  if (state.unread)
+    return { icon: "circle-check", tone: "var(--color-accent)", label: t.rowStatus.unread, spin: false };
   if (state.pinned)
     return { icon: "pin", tone: "var(--color-text-secondary)", label: t.rowStatus.pinned, spin: false };
   return null;

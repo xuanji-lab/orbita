@@ -214,6 +214,18 @@ export const zh: Messages = {
   rowStatus: {
     pinned: "已置顶",
     subRunning: "子会话运行中",
+    unread: "已完成，还没看",
+  },
+
+  notice: {
+    finished: "任务完成",
+    failed: "任务出错停下了",
+    openNow: "马上看",
+    sideChat: "辅助对话",
+    later: "稍后",
+    openNowTip: "在这里打开，替换当前对话",
+    sideChatTip: "在辅助对话里打开，当前对话不动",
+    laterTip: "侧栏里保持未读",
   },
 
   menu: {
@@ -415,6 +427,9 @@ export const zh: Messages = {
     pastedCollapse: "粘贴文本折叠",
     pastedCollapseAria: "粘贴文本折叠显示",
     pastedCollapseInfo: "大段粘贴在光标处收成句中胶囊，点开就地展开可编辑 · 关掉后大段粘贴作为普通文字直接进输入框",
+    completionSound: "完成提示音",
+    completionSoundAria: "完成提示音",
+    completionSoundInfo: "你在看别处时任务跑完，响一声客舱呼唤铃 · 关掉后侧栏高亮与提醒卡片照常出现",
     data: "数据",
     dataDirectory: "数据目录",
     dataDirectoryInfo: "会话、工作区、技能与 mcp.json 以普通文件存放在这里",

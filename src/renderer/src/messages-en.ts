@@ -245,6 +245,19 @@ export const en = {
   rowStatus: {
     pinned: "Pinned",
     subRunning: "Sub-session running",
+    unread: "Finished · not viewed yet",
+  },
+
+  /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */
+  notice: {
+    finished: "Task finished",
+    failed: "Task stopped with an error",
+    openNow: "Open now",
+    sideChat: "Side chat",
+    later: "Later",
+    openNowTip: "Open it here, replacing the current chat",
+    sideChatTip: "Open it in the side chat, keep the current chat",
+    laterTip: "Keep it marked unread in the sidebar",
   },
 
   menu: {
@@ -454,6 +467,10 @@ export const en = {
     pastedCollapseAria: "Collapse pasted text",
     pastedCollapseInfo:
       "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
+    completionSound: "Completion sound",
+    completionSoundAria: "Completion sound",
+    completionSoundInfo:
+      "Play a cabin-call chime when a task finishes while you are looking elsewhere · the sidebar highlight and the card still appear when it is off",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",

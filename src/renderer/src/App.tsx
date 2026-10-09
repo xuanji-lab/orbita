@@ -48,7 +48,10 @@ import { ReviewPanel } from "./features/review/ReviewPanel";
 import { CHANNEL_COLUMN_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
-import { NEW_TASK_TAB } from "./shell/drawer-state";
+import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
+import { isWindowInactive } from "./shell/window-activity.ts";
+import { addUnread, clearUnread, planNotice, settledSessions } from "./features/notify/completion-notice.ts";
+import { playCompletionChime } from "./features/notify/chime.ts";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -460,6 +463,91 @@ export function App() {
     [changeSettings],
   );
 
+  /**
+   * 后台会话完成提醒（用户 2026-10-10）：长程任务在一条会话里跑着，人去了别的会话，
+   * 跑完时界面上什么都不发生。现在跑完那一拍：
+   * - 响一声客舱呼唤铃（设置可关）；
+   * - 没在看它的话，侧栏那一行标未读（静态浅 accent 底），辅助对话图标旁弹卡片
+   *   问怎么看：马上看（主槽换成它）/ 辅助对话里看 / 稍后（保持未读）。
+   * 点进去看过（主槽或辅助对话正显示它）即清未读。判定在 completion-notice.ts。
+   *
+   * 未读是 ephemeral，不落盘：它说的是「这次运行里有结果你还没看」，重启后会话列表
+   * 本身就是新的一眼。只认根会话——子会话跑完由母会话的通道回报，不单独打扰人。
+   */
+  const [unread, setUnread] = useState<ReadonlySet<string>>(() => new Set());
+  /** 卡片正在提醒的会话 id；同时跑完多条只提醒最新的那条，其余靠侧栏未读底色 */
+  const [noticeId, setNoticeId] = useState<string | null>(null);
+  const [drawerFocus, setDrawerFocus] = useState<{ tab: string; token: number } | null>(null);
+  const drawerFocusTokenRef = useRef(0);
+  /** 此刻「在看」的会话：主槽（没被设置页盖住时）与开着的辅助对话 */
+  const drawerOpenId = drawerView.sessionId ?? drawerView.opened?.id ?? null;
+  const watchedIds = [
+    ...(overlay === "settings" || mainOpenId === "" ? [] : [mainOpenId]),
+    ...(rightPanel === "drawer" && drawerOpenId !== null ? [drawerOpenId] : []),
+  ];
+  const watchedKey = watchedIds.join("\n");
+  const prevStatesRef = useRef(engine.states);
+  useEffect(() => {
+    const prev = prevStatesRef.current;
+    prevStatesRef.current = engine.states;
+    // 只认根会话；列表里还查不到的（刚建）当根会话
+    const settled = settledSessions(prev, engine.states).filter(
+      (id) => session.sessions.find((meta) => meta.id === id)?.parentId === undefined,
+    );
+    if (settled.length === 0) return;
+    const windowActive = !isWindowInactive({
+      hasFocus: document.hasFocus(),
+      visibilityState: document.visibilityState,
+    });
+    let ring = false;
+    const fresh: string[] = [];
+    for (const id of settled) {
+      const plan = planNotice({
+        watched: watchedIds.includes(id),
+        windowActive,
+        soundOn: settings.completionSound ?? true,
+      });
+      ring ||= plan.sound;
+      if (plan.unread) fresh.push(id);
+    }
+    // 同拍多条只响一声
+    if (ring) playCompletionChime();
+    const latest = fresh[fresh.length - 1];
+    if (latest !== undefined) {
+      setUnread((current) => addUnread(current, fresh));
+      setNoticeId(latest);
+    }
+    // 只在槽变化时判定；在看谁、开关值读本次渲染的闭包，就是这一拍的真值
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.states]);
+  // 看过即清：主槽或辅助对话显示了它，未读与卡片一起退
+  useEffect(() => {
+    setUnread((current) => clearUnread(current, watchedIds));
+    setNoticeId((current) => (current !== null && watchedIds.includes(current) ? null : current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedKey]);
+  const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
+  const completionNotice =
+    noticeMeta === undefined
+      ? null
+      : {
+          title: noticeMeta.title,
+          failed: session.turnErrorOf(noticeMeta.id) !== null,
+          onOpenNow: () => {
+            setNoticeId(null);
+            setOverlay(null);
+            void session.openSession(noticeMeta.id);
+          },
+          onSideChat: () => {
+            setNoticeId(null);
+            changeDocked(dockTab(docked, noticeMeta.id));
+            drawerFocusTokenRef.current += 1;
+            setDrawerFocus({ tab: noticeMeta.id, token: drawerFocusTokenRef.current });
+            setRightPanel("drawer");
+          },
+          onLater: () => setNoticeId(null),
+        };
+
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
    *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
   const handlePanel = useCallback((next: RightPanelKind | null) => {
@@ -692,6 +780,7 @@ export function App() {
             setSidebarWidth(width);
             changeSettings({ sidebarWidth: width });
           }}
+          unread={unread}
         />
 
         <main className="pane" ref={paneRef}>
@@ -807,6 +896,8 @@ export function App() {
                   onToggleStarModel={toggleStarModel}
                   onOpenProviders={openProvidersTab}
                   docked={docked}
+                  focus={drawerFocus}
+                  onFocusConsumed={() => setDrawerFocus(null)}
                   onDockedChange={(list) =>
                     changeDocked(
                       // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
@@ -852,6 +943,7 @@ export function App() {
               : null
           }
           subSessions={channelParentId !== null && hasSubSessions ? { count: subSessionChildren.length } : null}
+          completionNotice={completionNotice}
         />
       </div>
     </div>

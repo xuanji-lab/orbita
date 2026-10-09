@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { rowStatusIcon } from "./row-status.ts";
 import { en } from "../messages-en.ts";
 
-const none = { running: false, subRunning: false, failed: false, pinned: false };
+const none = { running: false, subRunning: false, failed: false, unread: false, pinned: false };
 
 describe("rowStatusIcon", () => {
   it("运行中画静态实心点，颜色是 accent，不转圈", () => {
@@ -57,12 +57,29 @@ describe("rowStatusIcon", () => {
 
   it("正在跑压过置顶：正在发生的事优先", () => {
     strictEqual(
-      rowStatusIcon({ running: true, subRunning: false, failed: false, pinned: true }, en)?.icon,
+      rowStatusIcon({ ...none, running: true, pinned: true }, en)?.icon,
       "circle-dot",
     );
   });
 
   it("失败压过置顶：跑挂了比排序偏好更该被看见", () => {
     strictEqual(rowStatusIcon({ ...none, failed: true, pinned: true }, en)?.icon, "triangle-alert");
+  });
+
+  it("跑完未读画 accent 圈勾，压过置顶", () => {
+    deepStrictEqual(rowStatusIcon({ ...none, unread: true, pinned: true }, en), {
+      icon: "circle-check",
+      tone: "var(--color-accent)",
+      label: "Finished · not viewed yet",
+      spin: false,
+    });
+  });
+
+  it("失败压过未读：失败也是结果，而且更要紧", () => {
+    strictEqual(rowStatusIcon({ ...none, failed: true, unread: true }, en)?.icon, "triangle-alert");
+  });
+
+  it("正在跑压过未读：又开了一轮就不再是「跑完」", () => {
+    strictEqual(rowStatusIcon({ ...none, running: true, unread: true }, en)?.icon, "circle-dot");
   });
 });
