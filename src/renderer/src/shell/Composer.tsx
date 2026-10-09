@@ -364,8 +364,9 @@ export function Composer(props: {
   const dragging = props.dropActive === true;
   return (
     // 材料叠放（B 定稿）：四路附件全部移出输入卡，叠在卡片上方——截图一行、胶囊一行、
-    // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）
-    <div style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
+    // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）。
+    // composer-stack 同时是引用卡两列版式的 container query 容器（窄窗 / 抽屉里回落一列）
+    <div className="composer-stack" style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
       <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
       <div
         ref={cardRef}

@@ -2737,13 +2737,44 @@ textarea.text-field {
   color: var(--color-text-secondary);
 }
 
-/* 引用卡：排队卡（QueueStrip）同款整行——一张 glass-float 卡、行高 30 */
+/* 引用卡两列版式的 container query 容器：composer 最外层（宽度 = 输入卡宽度） */
+.composer-stack {
+  container-type: inline-size;
+}
+
+/* 引用卡：**半行两列**（2026-10 用户裁决）——每条只占半行，两列并排堆更多引用；
+   折叠态两行 = 4 条，展开限高滚动；「还有 N 条 / 收起」跨两列占整行 */
 .material-quote-card {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2px;
   padding: var(--space-2);
   max-height: 264px;
   overflow-y: auto;
+}
+
+/* 窄卡回落一列：容器宽度（composer 外层 .composer-stack）不足 480px 时，两列各
+   ~230px 放不下图标+编号+正文+注脚的一行 */
+@container (max-width: 639px) {
+  /* 两列但格子偏窄（480–639px，每格 < 320px）：注脚藏掉「谁说的」，只留「第 1 轮 · 6 字」 */
+  .material-quote-note-who {
+    display: none;
+  }
+}
+
+@container (max-width: 479px) {
+  .material-quote-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* 回落一列后格子宽了，「谁说的」那段注脚重新显出来（639px 那条的隐藏不再适用） */
+  .material-quote-note-who {
+    display: inline;
+  }
+}
+
+/* 「还有 N 条 / 收起」：跨两列占整行 */
+.material-quote-more {
+  grid-column: 1 / -1;
 }
 
 .material-quote-row {

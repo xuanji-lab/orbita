@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { quoteMeta, quotePreview, quoteRowPreview, quoteSource, QUOTE_ROW_PREVIEW_MAX_CHARS } from "./quote-label.ts";
+import { quoteMeta, quoteNoteParts, quotePreview, quoteRowPreview, quoteSource, QUOTE_ROW_PREVIEW_MAX_CHARS } from "./quote-label.ts";
 import { en } from "../messages-en.ts";
 import { zh } from "../messages-zh.ts";
 
@@ -16,6 +16,25 @@ describe("引用 chip 文案", () => {
     assert.equal(
       quoteMeta({ text: "字字", messageId: "m", role: "user", turn: 1, truncated: true }, zh),
       "第 1 轮 · 你的消息 · 只引了前 2 字",
+    );
+  });
+
+  test("注脚分段（引用卡两列窄格里藏「谁说的」用）：轮次 / 谁 / 字数三段", () => {
+    assert.deepEqual(quoteNoteParts({ text: "abc", messageId: "m", role: "user", turn: 2 }, en), {
+      lead: "Turn 2",
+      who: "Your message",
+      size: "3 chars",
+    });
+    // 没有轮号：lead 为 null，拼时不多出一个空段
+    assert.deepEqual(quoteNoteParts({ text: "abc", messageId: "m", role: "assistant" }, en), {
+      lead: null,
+      who: "Agent reply",
+      size: "3 chars",
+    });
+    // 文件来源：不拆 who
+    assert.deepEqual(
+      quoteNoteParts({ text: "abc", messageId: "", role: "user", filePath: "/a/b/notes.md" }, en),
+      { lead: "notes.md", who: null, size: "3 chars" },
     );
   });
 

@@ -5,7 +5,7 @@ import { ImageLightbox } from "./ImageLightbox";
 import { ImageThumb } from "./ImageThumb";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { imageSrc } from "./composer-images.ts";
-import { quoteRowPreview } from "./quote-label.ts";
+import { quoteNoteParts, quoteRowPreview } from "./quote-label.ts";
 import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import type { TextQuote } from "@shared/quote";
@@ -24,8 +24,11 @@ import { useT } from "../locale.ts";
 
 /** 截图缩略的边长（正方形）。64：比 72 的旧卡小一档——材料行是配角，不抢输入框。 */
 const IMAGE_SQUARE = 64;
-/** 引用卡折叠态显示的条数。2：再多就该折叠了——引用是上下文，不是正文。 */
-const QUOTE_COLLAPSED_ROWS = 2;
+/**
+ * 引用卡折叠态显示的条数。4 = 两列两行（2026-10 用户裁决「半行两列」）：与旧单列
+ * 两行高度相当，多放一倍。
+ */
+const QUOTE_COLLAPSED_ROWS = 4;
 /** 胶囊路径 tooltip 的延迟，与 IconButton 同值：太快手抖就闪，太慢感知等于没有 */
 const PATH_TOOLTIP_DELAY_MS = 200;
 
@@ -295,10 +298,11 @@ function PastedChip(props: {
 }
 
 /**
- * 引用卡：排队卡（QueueStrip）同款整行样式——一行 = 图标 + 编号 + 正文（省略号）+
- * 来源注脚，悬停出「跳回原文」「移除」。最多显示 2 条，其余折成「还有 N 条引用…」
- * 可展开 / 收起；**引用条数已不设上限**（shared/quote.ts 只限总字数），展开态限高
- * 内部滚动，卡片不无限长高。
+ * 引用卡：**半行两列**（2026-10 用户裁决「我还是想要半行两列」）——每条引用只占
+ * 半行，两列并排堆叠更多引用；卡窄（子会话抽屉、窄窗）时 container query 回落
+ * 一列。折叠态显示两行 = 4 条，其余折成「还有 N 条引用…」跨两列占整行；展开态
+ * 限高内部滚动。「还有 N 条 / 收起」跨两列占整行。行内仍是 D/E 的规矩：正文不预截
+ * 交给 CSS 省略、注脚贴右缘、动作键绝对定位不占位。
  */
 function QuoteCard(props: {
   quotes: readonly Extract<ComposerMaterial, { kind: "quote" }>[];
@@ -337,6 +341,8 @@ function QuoteRow(props: {
 }) {
   const t = useT();
   const preview = quoteRowPreview(props.item.quote);
+  // 注脚分三段（轮次 / 谁说的 / 字数）：窄格里 CSS 先藏「谁说的」；title 仍挂引用全文
+  const note = quoteNoteParts(props.item.quote, t);
   return (
     <div className="material-quote-row">
       <span style={{ display: "inline-flex", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
@@ -353,7 +359,9 @@ function QuoteRow(props: {
         </button>
       )}
       <span className="material-quote-note" title={props.item.quote.text}>
-        {props.item.meta}
+        {note.lead !== null && <span>{note.lead}</span>}
+        {note.who !== null && <span className="material-quote-note-who">{(note.lead !== null ? " · " : "") + note.who}</span>}
+        <span>{(note.lead !== null || note.who !== null ? " · " : "") + note.size}</span>
       </span>
       <span className="material-quote-actions">
         {props.onJump !== undefined && (

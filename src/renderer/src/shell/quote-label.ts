@@ -22,10 +22,27 @@ export function quoteSource(quote: TextQuote, t: Messages): string {
   return quote.turn === undefined ? who : `${t.quote.turn(quote.turn)} · ${who}`;
 }
 
+/**
+ * 引用卡一格的注脚，分三段返回：轮次（或文件名）、谁说的、字数。两列卡窄格里
+ * CSS 先藏掉「谁说的」（留「第 1 轮 · 6 字」），更窄时回落一列再全显——分段
+ * 只为给 CSS 藏，拼回整句就是 quoteMeta。
+ */
+export function quoteNoteParts(
+  quote: TextQuote,
+  t: Messages,
+): { lead: string | null; who: string | null; size: string } {
+  const size =
+    quote.truncated === true ? t.quote.truncated(countChars(quote.text)) : t.quote.chars(countChars(quote.text));
+  if (quote.filePath !== undefined) {
+    return { lead: quote.filePath.split(/[\\/]/).pop() || quote.filePath, who: null, size };
+  }
+  const who = quote.role === "user" ? t.quote.userMessage : t.quote.agentReply;
+  return { lead: quote.turn === undefined ? null : t.quote.turn(quote.turn), who, size };
+}
+
 /** 展开态的 meta 行：来源 · 字数（截过的标出来） */
 export function quoteMeta(quote: TextQuote, t: Messages): string {
-  const size = quote.truncated === true ? t.quote.truncated(countChars(quote.text)) : t.quote.chars(countChars(quote.text));
-  return `${quoteSource(quote, t)} · ${size}`;
+  return `${quoteSource(quote, t)} · ${quoteNoteParts(quote, t).size}`;
 }
 
 /** 收起态的正文：前 20 字，超出才加省略号，空白压成一格（meta 由 chip 排在它前面）。
