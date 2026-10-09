@@ -1840,8 +1840,14 @@ function ComposerBar(props: {
 
   return (
     <>
+      {/*
+        底栏芯片的菜单一律 placement="above"：首页里输入卡悬在窗口中间，默认
+        「哪边空往哪开」会往下方弹（还会同一排芯片朝向不一）；聊天页钉底又全朝上。
+        点名朝上，两边同一朝向（2026-10-03 用户定）
+      */}
       <Menu
         items={scopeItems}
+        placement="above"
         // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
         // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
         panelMaxHeight={520}
@@ -1908,6 +1914,7 @@ function ComposerBar(props: {
       />
       <Menu
         items={modeItems}
+        placement="above"
         panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
@@ -1933,6 +1940,7 @@ function ComposerBar(props: {
           starred={props.starredModels}
           onToggleStar={props.onToggleStarModel}
           onSelect={(providerId, modelId) => session.chooseModel(providerId, modelId)}
+          placement="above"
           // 底部固定行：卡片会筛掉没配 key 的厂商，这行是唯一能说清「别家不是不存在」的地方
           footer={(close) =>
             modelCardFooter({
@@ -1959,6 +1967,7 @@ function ComposerBar(props: {
       )}
       <Menu
         items={thinkingItems}
+        placement="above"
         panelMinWidth={112}
         trigger={({ open, toggle }) => (
           <Chip
@@ -2081,6 +2090,7 @@ function UsageRing(props: { session: ChatSession }) {
     <span style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end" }}>
       <Menu
         items={items}
+        placement="above"
         align="end"
         hoverOpen
         onOpenChange={(next) => {
