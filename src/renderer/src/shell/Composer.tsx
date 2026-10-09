@@ -16,6 +16,7 @@ import { moveSlashSelection, slashPanelBox, slashRowCount, slashSections, slashR
 import { caretPoint } from "./caret-point.ts";
 import { isSkillAvailable, type SkillMeta } from "@shared/skill";
 import type { McpServerInfo } from "@shared/mcp";
+import { chipRangeAfter, chipRangeBefore, mirrorSegments, parseChips } from "./composer-chips.ts";
 import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
 import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useDictation, type DictationPhase, type DictationProblem } from "../features/voice/useDictation.ts";
@@ -130,12 +131,18 @@ export function Composer(props: {
   const [script, setScript] = useState<DominantScript>("cjk");
   const nextScript = composerScript(script, props.value, composition !== null);
   if (nextScript !== script) setScript(nextScript);
-  // 修正液：小学作业主题下，textarea 下面垫一层同样排版的镜像，只给英文段画白底
-  // （whiteout-segments.ts）。别的主题不渲染镜像，每次按键不白白分段
+  // 镜像层（全主题常驻，垫在 textarea 下面）：句中 chip 画在这一层（composer-chips.ts
+  // 切区间）；小学作业主题的修正液也画在同一层（whiteout-segments.ts，主题开启时才分段）。
+  // 两层区间叠在同一份文本上，chip 区间优先于修正液（mirrorSegments）
   const [whiteout, setWhiteout] = useState(isCopybook);
+  const chips = useMemo(() => parseChips(props.value), [props.value]);
   const segments = useMemo(
-    () => (whiteout ? whiteoutSegments(props.value, composition ?? undefined) : []),
-    [whiteout, props.value, composition],
+    () =>
+      mirrorSegments(
+        whiteout ? whiteoutSegments(props.value, composition ?? undefined) : [{ text: props.value, whiteout: false }],
+        chips,
+      ),
+    [whiteout, props.value, composition, chips],
   );
   // 随内容长高：撤回能把好几条排队消息堆进来，写死两行就只能盲着改。
   // useLayoutEffect 而非 useEffect——量完就改高度，放到绘制后会闪一帧。
@@ -480,22 +487,28 @@ export function Composer(props: {
         </div>
       )}
       <div className="composer-field">
-        {whiteout && (
-          // 镜像：与 textarea 同字体、同字距、同宽，字是透明的，只有英文段的白底看得见。
-          // 末尾补一个零宽字符：textarea 末尾的换行会多出一行，div 里不会，滚动范围就对不上
-          <div ref={mirrorRef} className="composer-input composer-mirror" data-script={script} aria-hidden="true">
-            {segments.map((segment, index) =>
-              segment.whiteout ? (
-                <span key={index} className="composer-whiteout">
-                  {segment.text}
-                </span>
-              ) : (
-                segment.text
-              ),
-            )}
-            {"\u200b"}
-          </div>
-        )}
+        {/*
+          镜像层（全主题常驻）：与 textarea 同字体、同字距、同宽，字是透明的，只画 chip 与
+          （copybook 的）修正液。句中 token 在这里包成 .composer-chip——chip 的视觉垫在
+          textarea 的字底下，两者共用同一套排版才逐像素对齐（选型报告 §3-D）。
+          末尾补一个零宽字符：textarea 末尾的换行会多出一行，div 里不会，滚动范围就对不上
+        */}
+        <div ref={mirrorRef} className="composer-input composer-mirror" data-script={script} aria-hidden="true">
+          {segments.map((segment, index) =>
+            segment.chip ? (
+              <span key={index} className="composer-chip">
+                {segment.text}
+              </span>
+            ) : segment.whiteout ? (
+              <span key={index} className="composer-whiteout">
+                {segment.text}
+              </span>
+            ) : (
+              segment.text
+            ),
+          )}
+          {"\u200b"}
+        </div>
         <textarea
           ref={textareaRef}
           className="composer-input"
@@ -537,6 +550,34 @@ export function Composer(props: {
                 dictation.finish();
               }
               return;
+            }
+            // 句中 chip 的整块删除：光标贴在 chip 尾按 Backspace（chip 头按 Delete）删整个
+            // token——逐字删一个 chip 像撕票根。选区非空、组词中、带修饰键（Ctrl+Backspace
+            // 是删词）都走原生。选区整块选中后用 execCommand 删：它走原生输入路径，
+            // 撤销栈保住（Ctrl+Z 一步还原整个 token，原型验证）；execCommand 已 deprecated
+            // 但 Chromium/Electron 可用，失败时退 setRangeText（牺牲撤销粒度，行为不坏）。
+            // 删除触发的 input 事件照常走 onChange，光标状态由它同步
+            if (
+              (event.key === "Backspace" || event.key === "Delete") &&
+              !event.nativeEvent.isComposing &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.altKey
+            ) {
+              const el = event.currentTarget;
+              if (el.selectionStart === el.selectionEnd) {
+                const chip =
+                  event.key === "Backspace"
+                    ? chipRangeBefore(el.value, el.selectionStart)
+                    : chipRangeAfter(el.value, el.selectionEnd);
+                if (chip !== null) {
+                  event.preventDefault();
+                  el.setSelectionRange(chip.start, chip.end);
+                  if (!document.execCommand("delete")) {
+                    el.setRangeText("", chip.start, chip.end, "end");
+                  }
+                }
+              }
             }
             // 面板开着时方向键与 Enter 归面板；Esc 关面板，内容照在。组词中的按键不动面板。
             // ↑↓ 跨节线性移动（节边界自然续到下一节、两端循环）；←→ 跳相邻节并选中
