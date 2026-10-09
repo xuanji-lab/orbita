@@ -902,19 +902,9 @@ function AttachmentRow(props: {
           </span>
         )}
         {missing && (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              flex: "0 0 auto",
-              fontFamily: "var(--font-family-mono)",
-              fontSize: "var(--font-size-micro)",
-              color: "var(--color-warning)",
-            }}
-          >
-            <Icon name="triangle-alert" size={10} strokeWidth={2} />
-            {t.files.attachmentMissing}
+          <span className="attachment-missing-mark" title={t.files.attachmentMissing}>
+            <Icon name="triangle-alert" size={11} strokeWidth={2} />
+            {t.files.attachmentMissingShort}
           </span>
         )}
         {!missing && props.fact?.size != null && props.fact.kind === "file" && (

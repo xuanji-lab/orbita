@@ -1227,6 +1227,7 @@ export const zh: Messages = {
     attachments: "附件",
     attachmentsEmpty: "还没有发过附件",
     attachmentMissing: "已不在磁盘上",
+    attachmentMissingShort: "已不在",
     createAgentsMdTip: "在工作区文件夹里创建 AGENTS.md",
     createAgentsMd: "这个工作区还没有 AGENTS.md — 创建规则文件",
     roots: (n) => `${n} 个根目录`,

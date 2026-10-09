@@ -1973,6 +1973,18 @@ body {
   display: inline;
 }
 
+/* 附件行「已不在」标记（Session·附件列表）：图标 + 两三个字，短到不挤文件名
+   （名字优先占宽，可省略但要保住大部分）；完整说明放 title，颜色只做第二信号 */
+.attachment-missing-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-warning);
+  white-space: nowrap;
+}
+
 /*
  * symlink 的右下角角标：契约里的 `symlink` kind 没有目标路径、也不知道目标是
  * 文件还是目录，图标本体用中性的 file，角标只说「这是一条链接」。8px 叠在

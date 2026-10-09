@@ -1315,6 +1315,7 @@ export const en = {
     attachments: "Attachments",
     attachmentsEmpty: "No attachments sent yet",
     attachmentMissing: "Not on disk anymore",
+    attachmentMissingShort: "Missing",
     createAgentsMdTip: "Create AGENTS.md in the workspace folder",
     createAgentsMd: "This workspace has no AGENTS.md yet — create a rules file",
     roots: (n: number) => plural(n, "root"),
