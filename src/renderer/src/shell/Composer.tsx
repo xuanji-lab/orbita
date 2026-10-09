@@ -174,14 +174,16 @@ export function Composer(props: {
     () => pasted.flatMap((block) => (block.range !== null ? [block.range] : [])),
     [pasted],
   );
+  // 画成胶囊的区间：skill / mcp 的 token + 收着的粘贴 token（同一副药方）
+  const chipSpans = useMemo(() => [...chips, ...paintedPasteTokens], [chips, paintedPasteTokens]);
   const segments = useMemo(
     () =>
       mirrorSegments(
         whiteout ? whiteoutSegments(props.value, composition ?? undefined) : [{ text: props.value, whiteout: false }],
-        chips,
+        chipSpans,
         pasteRuns,
       ),
-    [whiteout, props.value, composition, chips, pasteRuns],
+    [whiteout, props.value, composition, chipSpans, pasteRuns],
   );
   /** 展开一块：token 换回全文（execCommand 保撤销栈），区间写回块状态。
    *  区间里的文字从块存的全文来——收起态下它就是唯一真相 */
@@ -553,7 +555,7 @@ export function Composer(props: {
           )}
         </div>
       )}
-      <div className="composer-field">
+      <div className={`composer-field${pasteRuns.length > 0 ? " has-paste-run" : ""}`}>
         {/*
           镜像层（全主题常驻）：与 textarea 同字体、同字距、同宽，字是透明的，只画 chip 与
           （copybook 的）修正液。句中 token 在这里包成 .composer-chip——chip 的视觉垫在
@@ -910,11 +912,14 @@ function PasteRunLabel(props: {
     const width = ref.current?.offsetWidth ?? 0;
     const height = 18;
     const left = Math.max(Math.min(point.left, ta.clientWidth - width), 0);
+    // point 是 textarea 边盒坐标，标签定位在 field（含头部空间带）——加 offsetTop
+    // 换到同一坐标系；有头部空间时标签正好落在带里，不压字
+    const base = point.top + ta.offsetTop;
     // 段头在视野上方 → 钉顶；在视野下方 → 藏起；否则浮在段头一行之上
     if (point.top > ta.clientHeight) {
       setBox(null);
     } else {
-      setBox({ left, top: point.top - height <= 0 ? 0 : point.top - height });
+      setBox({ left, top: base - height <= 0 ? 0 : base - height });
     }
   }, [props.textareaRef, props.range.start, props.range.end, props.textLength, props.scrollTop, props.label, resizeTick]);
   return (

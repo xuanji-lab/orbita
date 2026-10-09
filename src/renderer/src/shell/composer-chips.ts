@@ -75,7 +75,9 @@ export interface MirrorSegment {
  */
 export function mirrorSegments(
   segments: readonly WhiteoutSegment[],
-  chips: readonly ChipSpan[],
+  /** 画成胶囊的区间（skill / mcp 的 token 与收起的粘贴 token——这里只吃区间，
+   *  kind / target 是发送端的事） */
+  chips: readonly { start: number; end: number }[],
   pasteRuns: readonly { start: number; end: number }[] = [],
 ): MirrorSegment[] {
   const out: MirrorSegment[] = [];

@@ -157,7 +157,7 @@ describe("mirrorSegments —— 修正液与 chip 的叠加", () => {
 
   it("展开段与 chip 交叠：chip 优先，交叠部分归 chip", () => {
     deepStrictEqual(
-      mirrorSegments([{ text: "0123456789", whiteout: false }], [{ start: 2, end: 4, kind: "skill", target: "x" }], [{ start: 3, end: 7 }]),
+      mirrorSegments([{ text: "0123456789", whiteout: false }], [{ start: 2, end: 4 }], [{ start: 3, end: 7 }]),
       [
         { text: "01", whiteout: false, chip: false, pasteRun: false },
         { text: "23", whiteout: false, chip: true, pasteRun: false },

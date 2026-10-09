@@ -231,6 +231,14 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   position: relative;
+  /* 展开段的收起标签要浮在段头一行之上：先给 20px 头部空间（只在有展开段时），
+     标签落在带里不压字；镜像层随之对齐内容盒（top 吃同一变量） */
+  --paste-headroom: 0px;
+  padding-top: var(--paste-headroom);
+}
+
+.composer-field.has-paste-run {
+  --paste-headroom: 20px;
 }
 
 .composer-field > * {
@@ -239,7 +247,10 @@
 
 /* 镜像层（全主题常驻，垫在 textarea 下）：字透明，只画句中 chip 与（copybook 的）修正液；
    换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步）。
-   曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06） */
+   曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06）。
+   absolute + inset:0：脱开 grid 的行高贡献——textarea 12 行封顶后，镜像若仍在流内，
+   几十行的草稿会把格子撑到 textarea 之外（方案 C 粘贴展开实测：field 长到 928px），
+   脱流后格子高度只由 textarea 决定，镜像随格子裁剪（overflow hidden + 滚动同步） */
 .composer-mirror {
   color: transparent;
   white-space: pre-wrap;
@@ -247,6 +258,10 @@
   overflow: hidden;
   pointer-events: none;
   user-select: none;
+  position: absolute;
+  /* 绝对定位的 grid 子项，containing block 是自己的 grid 区（= field 的内容盒，
+     头部空间垫之下）——inset:0 正好与 textarea 同格对齐；别再偏移 */
+  inset: 0;
 }
 
 /*
