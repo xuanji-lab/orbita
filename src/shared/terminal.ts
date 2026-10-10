@@ -124,8 +124,13 @@ export type TerminalEvent =
    * agent 开了一个可见终端。renderer 收到后**自动点亮终端面板位并激活该 tab**
    * （Proma 的 terminal:agent-open 同款）：agent 要在用户眼前干活，而不是在
    * 用户看不见的地方跑。只对 agent 开的终端发——人工开的不需要（人自己点的）。
+   *
+   * `terminal` 是刚建成的现状，随事件一起给：面板据此**收养**这个 tab（它的 tabs 是
+   * 挂载时的一次性快照，不收养就没有 xterm 视图 → 没有人 ack → runtime 的输出背压
+   * 把这个终端永久卡在第 1 批）。带全文而不是让 renderer 再拉一次 list：那条路上
+   * 的旧清单会把用户刚关掉的 tab 复活。
    */
-  | { type: "agent-open"; terminalId: string; sessionId: string };
+  | { type: "agent-open"; terminalId: string; sessionId: string; terminal: TerminalInfo };
 
 /**
  * 重放缓冲的一条追加（main 侧每个终端一份，容量见 appendReplay）。

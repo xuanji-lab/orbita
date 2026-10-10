@@ -1,8 +1,12 @@
 /**
- * 终端面板（PR1：人工终端全链）。右图标条入口 → 右栏共享面板位（RightPanelKind
- * "terminal"），面板内多终端 tab。**面板可以随时拆**：收起 / 切面板 / renderer
- * 刷新都只是视图消失，PTY 与快照缓冲在主进程；重开面板时 terminal:list 收养现存
- * 的 tab，各视图拉 snapshot 续画。真正杀 PTY 的只有两件事：关 tab（×）与关窗口。
+ * 终端面板（PR1：人工终端全链；PR2：agent 开的终端也住在这里）。右图标条入口 →
+ * 右栏共享面板位（RightPanelKind "terminal"），面板内多终端 tab。**面板可以随时拆**：
+ * 收起 / 切面板 / renderer 刷新都只是视图消失，PTY 与快照缓冲在主进程；重开面板时
+ * terminal:list 收养现存的 tab，各视图拉 snapshot 续画。真正杀 PTY 的只有两件事：
+ * 关 tab（×）与关窗口。
+ *
+ * ⚠ agent 终端的收养是**硬要求**不是体验优化：没有视图就没有 ack，runtime 的输出
+ * 背压会把那个终端永久卡在第 1 批（见下面那个 effect 的注释）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api.ts";
@@ -12,6 +16,7 @@ import { IconButton } from "../../shell/IconButton";
 import { RightPanelFrame } from "../../shell/RightPanel";
 import type { TerminalInfo } from "@shared/terminal";
 import { TerminalView } from "./TerminalView";
+import { activeTerminalId, mergeTerminals } from "./terminal-tabs.ts";
 import "./terminal.css";
 
 export function TerminalPanel(props: {
@@ -60,7 +65,8 @@ export function TerminalPanel(props: {
   }, []);
 
   // 面板挂载：收养现存终端（renderer 整页刷新 / 收起再展开都在这条路上）；
-  // 一个都没有（首次打开 / 全关过）就自动开一个
+  // 一个都没有（首次打开 / 全关过）就自动开一个。**挂载后不重拉列表**——运行期的
+  // 新终端有两条明确来路：本面板的动作（pendingIds）与 agent-open 事件（下面收养）
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -79,10 +85,15 @@ export function TerminalPanel(props: {
     };
   }, [openTerminal]);
 
-  // 主进程推送：Panel 只关心退出；输出事件由各 View 自行消费（各自 ack）
+  // 主进程推送：Panel 只关心退出与「agent 开了新终端」；输出事件由各 View 自行
+  // 消费（各自 ack）
   useEffect(() => {
     return api.terminal.onEvent((event) => {
-      if (event.type === "exit") exitRef.current(event.terminalId, event.exitCode);
+      if (event.type === "exit") {
+        exitRef.current(event.terminalId, event.exitCode);
+        return;
+      }
+      if (event.type === "agent-open") setTabs((current) => mergeTerminals(current, [event.terminal]));
     });
   }, []);
 
@@ -94,8 +105,22 @@ export function TerminalPanel(props: {
     props.onActivated();
   }, [props.activateId, props.onActivated]);
 
+  /**
+   * **收养 agent 开的终端**（PR2 线上故障的根因，2026-10-10）。
+   *
+   * 面板的 tabs 是挂载时的一次性快照，而 agent 随时能开新终端。不收养的后果不是
+   * 「少一个 tab」：那个终端没有 xterm 视图 → 没有人给主进程回 ack → runtime 的
+   * 输出背压把它永久卡在第 1 批 → 主进程的重放缓冲不再增长 → agent 的
+   * `terminal_read` 永远读到空，而命令其实早就跑完了。现象是「execute 报成功但
+   * 命令从未落进 PTY」，且只在面板已经开着时出现（关着的时候 agent-open 会先把
+   * 面板挂起来，挂载时的 list 自然收养——这就是它表现为间歇性的原因）。
+   *
+   * 事件里带上了刚建成的 `terminal` 全文，所以这是**精确加法**：不必再拉一次 list
+   * （那条路上的旧清单会把用户刚关掉的 tab 复活），也不会漏。
+   */
+
   const allIds = [...tabs.map((tab) => tab.terminalId), ...pendingIds];
-  const active = activeId !== null && allIds.includes(activeId) ? activeId : (allIds[allIds.length - 1] ?? null);
+  const active = activeTerminalId(allIds, activeId);
 
   return (
     <RightPanelFrame

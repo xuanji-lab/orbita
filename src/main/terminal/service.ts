@@ -327,9 +327,10 @@ export class TerminalService {
         };
         this.terminals.set(message.terminalId, info);
         pending.resolve(info);
-        // agent 开的终端要可见：广播点亮。人工开的不发（人自己点的，不必再闪一下）
+        // agent 开的终端要可见：广播点亮（带上现状，面板据此收养这个 tab）。
+        // 人工开的不发——人自己点的，不必再闪一下
         if (info.owner.kind === "agent") {
-          this.broadcast({ type: "agent-open", terminalId: info.terminalId, sessionId: info.owner.sessionId });
+          this.broadcast({ type: "agent-open", terminalId: info.terminalId, sessionId: info.owner.sessionId, terminal: info });
         }
         return;
       }
