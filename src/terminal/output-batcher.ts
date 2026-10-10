@@ -6,6 +6,10 @@
  * `write` 是异步排干的，来一批写一批只会让队列无限涨。所以同一时刻只放**一批**
  * 在飞：runtime 等 renderer 画完（ack）才发下一批；攒着的输出超 1MB 就丢弃并插
  * 一行黄色标记，宁可丢字也不堆内存。
+ *
+ * 例外：在飞批等够 `IN_FLIGHT_TIMEOUT_MS` 还没人 ack 就放行——背压的前提是
+ * 「有个渲染层在画」，而终端完全可能此刻没有视图（面板收起 / agent 开的终端还没
+ * 被面板收养）。见那个常量的注释。
  */
 import type { TerminalOutputEvent } from "../shared/terminal.ts";
 
@@ -15,12 +19,30 @@ export const OUTPUT_FLUSH_DELAY_MS = 16;
 /** 单终端攒批的字符上限：超过就丢并插标记（UTF-16 code unit 计） */
 export const MAX_PENDING_OUTPUT_CHARS = 1_000_000;
 
+/**
+ * 在飞批的最长等待（毫秒）。renderer 画完一批就回 ack，正常是几毫秒；这里留 3 秒
+ * 宽限（比 PR1 测试里最长的 1.6 秒推进还富余，不会把正常背压误判成失联）。
+ *
+ * 为什么需要它：背压的前提是「有个渲染层在画」。可终端完全可能**此刻没有视图**——
+ * 面板收起、切到别的面板、renderer 整页刷新、或者 agent 开的终端还没被面板收养
+ * （2026-10-10 线上故障：面板已开着时 agent 开终端，那个 tab 没进面板的列表，没有
+ * xterm 视图 → 没有 ack → 这个终端的输出永久停在第 1 批，主进程的重放缓冲不再
+ * 增长，`terminal_read` 读到空，而命令早就跑完了）。
+ *
+ * 超时未 ack 就放行：背压防的是「渲染层被淹」（1MB 上限与丢字标记照样兜底），
+ * 不是「渲染层不在场」。后者死等没有任何好处。迟到的 ack 会在 acknowledge 里被
+ * 序号比较挡掉（比在飞批旧就不理），不会重复放行。
+ */
+export const IN_FLIGHT_TIMEOUT_MS = 3_000;
+
 interface TerminalPipelineState {
   pending: string;
   droppedChars: number;
   nextSequence: number;
   /** 在飞批的序号；null = 没有（可以冲新批） */
   inFlight: number | null;
+  /** 在飞批的超时放行计时器；null = 没排（见 IN_FLIGHT_TIMEOUT_MS） */
+  releaseTimer: ReturnType<typeof setTimeout> | null;
   timer: ReturnType<typeof setTimeout> | null;
   /** 进程已退出、等输出排空后要发的 exit code；null = 没在等 */
   exitPending: number | null;
@@ -47,6 +69,7 @@ export class OutputPipeline {
       droppedChars: 0,
       nextSequence: 1,
       inFlight: null,
+      releaseTimer: null,
       timer: null,
       exitPending: null,
     });
@@ -76,6 +99,7 @@ export class OutputPipeline {
     const terminal = this.state.get(terminalId);
     if (terminal === undefined || terminal.inFlight === null || sequence < terminal.inFlight) return;
     terminal.inFlight = null;
+    this.clearReleaseTimer(terminal);
     this.flush(terminalId);
     this.emitExitWhenDrained(terminalId);
   }
@@ -101,6 +125,7 @@ export class OutputPipeline {
     if (terminal === undefined) return;
     this.flush(terminalId);
     if (terminal.timer !== null) clearTimeout(terminal.timer);
+    this.clearReleaseTimer(terminal);
     this.state.delete(terminalId);
   }
 
@@ -108,6 +133,7 @@ export class OutputPipeline {
   dispose(): void {
     for (const [terminalId, terminal] of this.state) {
       if (terminal.timer !== null) clearTimeout(terminal.timer);
+      this.clearReleaseTimer(terminal);
       this.state.delete(terminalId);
     }
   }
@@ -134,6 +160,24 @@ export class OutputPipeline {
     terminal.nextSequence += 1;
     terminal.inFlight = sequence;
     this.send({ terminalId, sequence, data });
+    // 冲出去就排一个超时放行：没人 ack 也不至于把这个终端永久卡在这一批
+    terminal.releaseTimer = setTimeout(() => this.releaseStale(terminalId), IN_FLIGHT_TIMEOUT_MS);
+  }
+
+  /** 在飞批等够 IN_FLIGHT_TIMEOUT_MS 还没人 ack：放行并冲下一批（见常量的注释） */
+  private releaseStale(terminalId: string): void {
+    const terminal = this.state.get(terminalId);
+    if (terminal === undefined || terminal.inFlight === null) return;
+    terminal.inFlight = null;
+    terminal.releaseTimer = null;
+    this.flush(terminalId);
+    this.emitExitWhenDrained(terminalId);
+  }
+
+  private clearReleaseTimer(terminal: TerminalPipelineState): void {
+    if (terminal.releaseTimer === null) return;
+    clearTimeout(terminal.releaseTimer);
+    terminal.releaseTimer = null;
   }
 
   private emitExitWhenDrained(terminalId: string): void {
