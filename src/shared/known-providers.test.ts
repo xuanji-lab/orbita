@@ -257,6 +257,12 @@ describe("opencode-go 的模型口径（2026-10-10 按网关自己的 /v1/models
     assert.equal(knownModelParams("hy4-preview").maxTokens, 64_000);
   });
 
+  test("模态同样只纠纯文本：hy4-preview 写 [\"text\"]，收图的型号不写（落兜底 image）", () => {
+    assert.deepEqual(knownModelParams("hy4-preview").input, ["text"]);
+    assert.equal("input" in knownModelParams("mimo-v2.6-flash"), false);
+    assert.equal("input" in knownModelParams("longcat-2.5-preview-free"), false);
+  });
+
   test("档位只写有把握的：拿不准的型号不声明 reasoning（声明了就会默认发 medium，可能 400）", () => {
     assert.equal("reasoning" in knownModelParams("mimo-v2.6-pro"), false);
     assert.equal("reasoning" in knownModelParams("hy4-preview"), false);

@@ -392,11 +392,14 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
         // models.dev 的档位表就是 low → max 五档，medium 在集内（默认档落它，安全）
         thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
       },
-      // 这三条 models.dev 只给了窗口 / 输出，档位没给：只写数字，不碰思考
+      // 这四条 models.dev 没给档位：只写数字，不碰思考（档位只写有把握的，见上）。
+      // longcat 与 mimo 收图（兜底 image 正好），不用写模态；hy4-preview 是**纯文本**
+      // （models.dev 上 4 家 provider 的输入类型一致），写 ["text"] 纠掉兜底的 image——
+      // 不写的话每一次附图都会被网关 400
       "longcat-2.5-preview-free": { contextWindow: 1_000_000, maxTokens: 131_072 },
       "mimo-v2.6-flash": { contextWindow: 1_048_576, maxTokens: 131_072 },
       "mimo-v2.6-pro": { contextWindow: 1_048_576, maxTokens: 131_072 },
-      "hy4-preview": { contextWindow: 1_024_000, maxTokens: 64_000 },
+      "hy4-preview": { contextWindow: 1_024_000, maxTokens: 64_000, input: ["text"] },
     },
     note: "OpenCode Go 订阅——一个 key 调用多家开源模型（DeepSeek / MiniMax…）",
   },
