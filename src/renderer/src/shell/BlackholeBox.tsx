@@ -51,6 +51,11 @@ const HOVER_RAMP_MS = 1400;
 const ORIGIN_TTL_MS = 2500;
 /** 发送时记下的飞行起点多久内算数：消息进转录的那一刻消费 */
 const FLIGHT_TTL_MS = 2500;
+/** 悬停变黑的椭圆尺寸随输入卡宽走：用户调手感那版原型的输入卡是 760px、半径爬满
+ *  132px（rx = 264 = 卡宽的 35%）。真应用的卡更宽（默认 1000px），同一公式不缩放的话
+ *  在宽卡上只是中心一小团（2026-10 验收：深色首页的洞小得几乎看不出、光子环弱）。
+ *  按卡宽等比缩放，让洞在卡上的占比与原型一致。 */
+const PROTO_COMPOSER_W = 760;
 /** 「未复制」标记额外占的宽度：胶囊会因此长一截 */
 const UNCOPIED_EXTRA_PX = 80;
 /** 精确的 y = t² 曲线（三次贝塞尔的控制点 1/3、2/3） */
@@ -305,6 +310,7 @@ export function BlackholeBox(props: {
   const cells = useRef(new Map<string, HTMLDivElement>());
   const holeRef = useRef<HTMLDivElement | null>(null);
   const portholeRef = useRef<HTMLDivElement | null>(null);
+  const portholeRaf = useRef(0);
 
   // 输入卡排在盒子后面：盒子的 layout effect 跑的时候卡的 ref 可能还没挂上，等提交完再取
   useEffect(() => {
@@ -319,6 +325,9 @@ export function BlackholeBox(props: {
     const measure = (): void => {
       setColumns(columnsForWidth(box.clientWidth));
       setCap(boxHeightCap(box.getBoundingClientRect().bottom - portholeLine(box)));
+      // 舷窗开着时，盒子尺寸 / 窗口的变化都要把裁切边重新钉回舷窗线（ResizeObserver
+      // 在高度过渡的每一帧都会触发）
+      if (portholeRef.current?.dataset["open"] === "true") applyPorthole();
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -419,7 +428,7 @@ export function BlackholeBox(props: {
         const near = 1 - Math.min(1, distance / Math.max(1, rect.width / 2));
         const time = Math.min(1, (now - h.enter) / HOVER_RAMP_MS);
         h.target = time * (0.45 + 0.55 * near);
-        h.targetR = 36 + 96 * h.target;
+        h.targetR = ((36 + 96 * h.target) * rect.width) / PROTO_COMPOSER_W;
       }
       const lerp = Math.min(1, 1 - Math.exp(-dt / 90));
       h.k += (h.target - h.k) * lerp;
@@ -462,21 +471,43 @@ export function BlackholeBox(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.dragActive]);
   useEffect(() => () => window.cancelAnimationFrame(hole.current.raf), []);
+  useEffect(() => () => window.cancelAnimationFrame(portholeRaf.current), []);
 
   // ── 舷窗：吸入完到最后一块落地之间开着；舷窗线以上裁掉（材料从缝里「冒出来」） ───────
-  const openPorthole = (): void => {
+  /** 按盒子当前几何重贴舷窗与裁切。inset 是一次性像素值，而盒子长高 / 窗口缩放都会
+   *  挪动盒子上缘——不重算的话裁切边跟着上移，下落中的材料会画到舷窗线之上、盖住
+   *  会话头部（2026-10 验收：连拍里材料压住了标题栏）。开着的期间每逢几何变化都重贴。 */
+  const applyPorthole = (): void => {
     const box = boxRef.current;
     const el = portholeRef.current;
     if (box === null || el === null) return;
     const rect = box.getBoundingClientRect();
     const line = portholeLine(box);
     Object.assign(el.style, { left: `${rect.left - 12}px`, width: `${rect.width + 24}px`, top: `${line}px` });
-    el.dataset["open"] = "true";
     box.style.clipPath = `inset(${-(rect.top - line)}px -48px -16px -48px)`;
+  };
+  const openPorthole = (): void => {
+    const el = portholeRef.current;
+    if (el !== null) el.dataset["open"] = "true";
+    applyPorthole();
+    // 盒子长高有 220ms 高度过渡：inset 是一次性像素值，过渡的每一帧都得把裁切边
+    // 重钉回舷窗线。ResizeObserver 在过渡期间有一帧滞后（实测裁切边高出线 9–11px），
+    // 这里在 rAF 里强制同步布局——读到的是本帧动画插值后的值，零滞后。
+    const tick = (): void => {
+      if (portholeRef.current?.dataset["open"] !== "true") {
+        portholeRaf.current = 0;
+        return;
+      }
+      applyPorthole();
+      portholeRaf.current = window.requestAnimationFrame(tick);
+    };
+    if (portholeRaf.current === 0) portholeRaf.current = window.requestAnimationFrame(tick);
   };
   const closePorthole = (): void => {
     const el = portholeRef.current;
     if (el !== null) el.dataset["open"] = "false";
+    window.cancelAnimationFrame(portholeRaf.current);
+    portholeRaf.current = 0;
     const box = boxRef.current;
     if (box !== null) box.style.clipPath = "";
   };
@@ -529,9 +560,9 @@ export function BlackholeBox(props: {
     const origin = takeBatch(rect, arrived.length);
     for (const id of arrived) f.batchOf.set(id, origin);
     const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    // 没有悬停的入口（按钮 / 粘贴）：中心快速聚出一团黑接住替身
-    if (origin.hovered) setHole(Math.max(hole.current.k, 0.9), Math.max(hole.current.r, 120));
-    else setHole(0.8, 110);
+    // 没有悬停的入口（按钮 / 粘贴）：中心快速聚出一团黑接住替身（半径同样按卡宽等比）
+    if (origin.hovered) setHole(Math.max(hole.current.k, 0.9), Math.max(hole.current.r, (120 * rect.width) / PROTO_COMPOSER_W));
+    else setHole(0.8, (110 * rect.width) / PROTO_COMPOSER_W);
     await Promise.all(
       arrived.map(async (id, index) => {
         const staged = cells.current.get(id);
@@ -589,6 +620,9 @@ export function BlackholeBox(props: {
     const wasMounted = f.mounted;
     f.mounted = true;
     committed.current = new Map(placed);
+    // 舷窗开着时每次提交后重贴裁切：盒子的每次长高（含高度过渡中的每一帧）
+    // 都把裁切边钉回舷窗线，落体永远只画在缝以下
+    if (portholeRef.current?.dataset["open"] === "true") applyPorthole();
     if (!wasMounted) {
       // 首挂：账上没有的（列数还没量出）下一次渲染再落位
       bump();
