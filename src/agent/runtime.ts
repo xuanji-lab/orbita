@@ -23,6 +23,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
+import type { MemoryRetrieveOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
@@ -47,6 +48,13 @@ import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
+import {
+  buildDistillPrompt,
+  DISTILL_SYSTEM_PROMPT,
+  lastAssistantText,
+  parseDistillReply,
+} from "./memory-distill.ts";
+import { buildMemoryBlock } from "./memory-inject.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
@@ -480,6 +488,94 @@ async function generateSessionTitle(
   }
 }
 
+/** 轮前记忆召回的硬超时：主进程读 JSONL + 词法打分是毫秒级，5 秒已是「主进程出事了」。 */
+const MEMORY_RECALL_TIMEOUT_MS = 5_000;
+/** 蒸馏调用的硬超时（TITLE_TIMEOUT_MS 同款理由：与下一轮并发抢 provider，不能挂着不放）。 */
+const MEMORY_DISTILL_TIMEOUT_MS = 60_000;
+
+/**
+ * 轮前召回（memory v1）：拿用户输入问主进程要相关记忆，组装注入块。
+ * **任何失败都返回 null**（超时 / ok:false / 异常）——轮前是同步等的，
+ * 记忆的任何问题都不该拦住开轮。空命中也返回 null（没东西可注入不是错误）。
+ */
+async function recallMemories(sessionId: string, query: string): Promise<string | null> {
+  try {
+    const outcome = await requestBroker.request<MemoryRetrieveOutcome>(
+      { type: "memoryRetrieveRequest", sessionId, query },
+      MEMORY_RECALL_TIMEOUT_MS,
+    );
+    if (!outcome.ok || outcome.hits.length === 0) return null;
+    return buildMemoryBlock(outcome.hits);
+  } catch (cause) {
+    console.error("[memory] 轮前召回失败（不注入，照常开轮）", cause);
+    return null;
+  }
+}
+
+/**
+ * 轮后蒸馏（memory v1）：把刚结束的这轮蒸成原子条目发给主进程落盘。
+ * fire-and-forget + 在途守卫（titleInFlight 同款）：连发两轮也只蒸一次，
+ * 失败后下一轮自然带着新内容再试。鉴权面用会话自己的模型与账本密钥
+ * （generateSessionTitle 的退回路径同款）。全程失败静默——只 console.error。
+ *
+ * 注意时序：本函数在 echoAndPrompt 尾部、run 回调返回前触发，session 还活着；
+ * 但真正的读取（messages / model）都发生在 async 体的第一个 await 之前，
+ * 与之后 turn-cycle 的 dispose 不冲突。
+ */
+function scheduleMemoryDistill(
+  sessionId: string,
+  session: AgentSession,
+  note: LedgerNote,
+  userText: string,
+): void {
+  if (note.memoryDistillInFlight) return;
+  note.memoryDistillInFlight = true;
+  void (async () => {
+    try {
+      // 这两步必须在第一个 await 之前：turn-cycle 收尾会 dispose session
+      const assistantText = lastAssistantText(session.messages);
+      const model = session.model;
+      if (assistantText.trim() === "" || model === undefined) return;
+      const response = await completeSimple(
+        model,
+        {
+          systemPrompt: DISTILL_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: buildDistillPrompt({ userText, assistantText, now: Date.now() }),
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        {
+          apiKey: note.apiKey,
+          maxTokens: 1024,
+          timeoutMs: MEMORY_DISTILL_TIMEOUT_MS,
+          signal: AbortSignal.timeout(MEMORY_DISTILL_TIMEOUT_MS),
+          ...(note.headers ? { headers: note.headers } : {}),
+        },
+      );
+      if (response.stopReason === "error") {
+        console.error("[memory] 蒸馏调用失败：", response.errorMessage);
+        return;
+      }
+      let output = "";
+      for (const block of response.content) {
+        if (block.type === "text") output += block.text;
+      }
+      const drafts = parseDistillReply(output, Date.now());
+      if (drafts.length > 0) {
+        send({ type: "memoryAppend", sessionId, entries: drafts });
+      }
+    } catch (cause) {
+      console.error("[memory] 蒸馏失败（静默，下轮自然重试新内容）", cause);
+    }
+  })().finally(() => {
+    note.memoryDistillInFlight = false;
+  });
+}
+
 /**
  * 会话内换模型（C-4），**轮在跑**的路径：注册 + 解析目标模型（与 openTurn 同一条
  * 装配路径），然后 `session.setModel`——pi 自己校验 auth、把 model_change 落进它的
@@ -547,6 +643,8 @@ interface LedgerNote {
   echoed: Set<string>;
   /** 标题在途标记：连发两条消息也只生成一次，失败后下一条自然重试 */
   titleInFlight: boolean;
+  /** 蒸馏在途标记：同一会话同时在飞的记忆蒸馏最多一个（titleInFlight 同款守卫） */
+  memoryDistillInFlight: boolean;
   /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
   apiKey: string;
   headers?: Record<string, string>;
@@ -562,7 +660,7 @@ const ledger = new Map<string, LedgerNote>();
 function ledgerNote(sessionId: string): LedgerNote {
   let note = ledger.get(sessionId);
   if (note === undefined) {
-    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "" };
+    note = { mode: "plan", echoed: new Set(), titleInFlight: false, memoryDistillInFlight: false, apiKey: "" };
     ledger.set(sessionId, note);
   }
   return note;
@@ -1458,7 +1556,10 @@ async function echoAndPrompt(
   }
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
-  const promptText = composePromptText(command.text, pasted, files);
+  // 轮前记忆召回：块拼在 prompt 尾部（KV cache 只破尾段）；超时 / 报错 / 空命中
+  // 都是 null——不注入、照常开轮，记忆的失败不该拦对话。
+  const memoryBlock = await recallMemories(command.sessionId, command.text);
+  const promptText = composePromptText(command.text, pasted, files) + (memoryBlock ?? "");
   note.echoed.add(promptText);
   // 正文按空行拆成块再回显：句中粘贴胶囊（方案 C）组装后就是 <pasted-text> 块内联
   // 在正文里，拆开才能被显示层按内容认出来（splitUserTextBlocks）。纯正文拆了
@@ -1472,6 +1573,8 @@ async function echoAndPrompt(
     expandPromptTemplates: false,
     ...(images.length > 0 ? { images: forModel(images) } : {}),
   });
+  // 轮后蒸馏：fire-and-forget，与下一轮并发；失败静默（易耗品纪律同标题）
+  scheduleMemoryDistill(command.sessionId, opened.session, note, command.text);
 }
 
 async function handle(command: AgentCommand): Promise<void> {
