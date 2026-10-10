@@ -1,18 +1,20 @@
 /**
- * guest 桥的 HTTP 客户端 —— 宿主反向调沙箱里的桥。
+ * guest 桥的文件协议客户端 —— 宿主 ↔ 沙箱的唯一通道是映射文件夹。
  *
- * 协议（与 guest 桥实现严格一致）：GET http://<guestIP>:<port>/screenshot?maxWidth=<n>，
- * header 带 `Authorization: Bearer <token>`（双向鉴权里宿主出的这一半）；
- * 成功回 `image/jpeg` + 响应头 `X-Native-Width` / `X-Native-Height`（沙箱桌面的原始尺寸，
- * 模型换算点击坐标要用它与回图宽度的比值）。401 = token 对不上（桥和宿主不属于同一次会话）。
+ * 为什么不走网络：宿主防火墙把宿主↔沙箱的 TCP 当不可测（2026-10-10 真机：ICMP 通、
+ * TCP 被丢，且随每次启动时好时坏），调防火墙要提权弹窗，本地优先不接受。
+ *
+ * 协议（与 guest 桥 Program.cs 严格一致）：
+ *   宿主写 out/cmd/<名字>.req.json（tmp+rename 原子写）→ 桥轮询执行 →
+ *   写 <名字>.resp.json（截图的 JPEG 是同名 .jpg 兄弟文件，先于 resp 落盘）→ 删 req。
+ *   宿主读到响应后负责清理 resp / jpg。名字里带递增序号，桥按名字排序处理。
+ *
+ * 注意 host→guest 方向开机有 ~20 秒热身期（实测）：桥通告了不代表命令通道已通，
+ * 就绪握手（pingGuest）必须在截图之前完成（sandbox.ts 的启动链保证这个顺序）。
  */
-import type { GuestRegistration } from "./host-server.ts";
-
-export interface BridgeEndpoint {
-  ip: string;
-  port: number;
-  token: string;
-}
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { COMPUTER_USE_CMD_DIR } from "../../shared/computer-use.ts";
 
 export interface GuestScreenshot {
   jpeg: Uint8Array;
@@ -20,47 +22,140 @@ export interface GuestScreenshot {
   nativeHeight: number;
 }
 
-/** 桥不回话时的放弃线。桌面截图不是快操作，放宽到 15s（PR1 无注入动作，只有这一种调用）。 */
-export const GUEST_SCREENSHOT_TIMEOUT_MS = 15_000;
+/** 桥不应答时的放弃线（就绪握手之后的命令通道是即时的，15s 没响应 = 桥死了 / 沙箱卡了） */
+export const GUEST_COMMAND_TIMEOUT_MS = 15_000;
+
+/** 等响应文件的轮询节奏（映射文件夹同步即时，这只是读盘节奏） */
+const RESP_POLL_INTERVAL_MS = 200;
+
+/** 进程内单调递增序号（每次沙箱会话 out/cmd 会被清空，不会撞上一局的文件） */
+let commandSeq = 0;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+type Resp = Record<string, unknown>;
+
+function parseResp(raw: string): Resp | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null; // 半截文件（桥是原子写，极小概率撞上同步抖动）——下轮再读
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  if (typeof (parsed as Resp).ok !== "boolean") return null;
+  return parsed as Resp;
+}
+
+/**
+ * 文件协议的最小命令往返：写 req → 等 resp → 清理。
+ * 抛错：超时（人话）/ 桥回的错误响应（原话带出）。
+ */
+async function sendGuestCommand(
+  outDir: string,
+  command: string,
+  fields: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<{ resp: Resp; cmdDir: string; baseName: string }> {
+  commandSeq += 1;
+  const baseName = `cmd-${String(commandSeq).padStart(6, "0")}`;
+  const cmdDir = join(outDir, COMPUTER_USE_CMD_DIR);
+  const reqTmp = join(cmdDir, `${baseName}.tmp`);
+  const reqPath = join(cmdDir, `${baseName}.req.json`);
+  const respPath = join(cmdDir, `${baseName}.resp.json`);
+
+  await mkdir(cmdDir, { recursive: true });
+  // tmp + rename：桥轮询读目录，不许它读到半截请求
+  await writeFile(reqTmp, JSON.stringify({ seq: commandSeq, command, ...fields }), "utf8");
+  await rename(reqTmp, reqPath);
+
+  const cleanup = async (jpgName?: string): Promise<void> => {
+    // 清理是尽力而为：残留文件不影响协议（名字不重），下次会话 start() 会整个清掉
+    await rm(reqPath, { force: true }).catch(() => {});
+    await rm(respPath, { force: true }).catch(() => {});
+    if (jpgName !== undefined) await rm(join(cmdDir, jpgName), { force: true }).catch(() => {});
+  };
+
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let raw: string | null = null;
+    try {
+      raw = await readFile(respPath, "utf8");
+    } catch {
+      // 还没写好，继续等
+    }
+    if (raw !== null) {
+      const resp = parseResp(raw);
+      if (resp !== null) {
+        if (resp.ok === false) {
+          const message = typeof resp.error === "string" ? resp.error : "guest 桥执行失败（没给原因）";
+          await cleanup();
+          throw new Error(message);
+        }
+        return { resp, cmdDir, baseName };
+      }
+    }
+    if (Date.now() >= deadline) {
+      await cleanup();
+      throw new Error(`guest 桥 ${timeoutMs}ms 内没有响应（${command} 超时）`);
+    }
+    await sleep(RESP_POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * 就绪探针：桥通告了 bridge.json ≠ 命令通道已通（host→guest 有开机热身期）。
+ * start() 必须在宣布 running 之前等到 ping 应答。
+ */
+export async function pingGuest(outDir: string, timeoutMs: number): Promise<void> {
+  const { resp, cmdDir, baseName } = await sendGuestCommand(outDir, "ping", {}, timeoutMs);
+  await rm(join(cmdDir, `${baseName}.resp.json`), { force: true }).catch(() => {});
+  if (resp.ok !== true) throw new Error("guest 桥的 ping 响应畸形");
+}
 
 /**
  * 向 guest 桥要一张截图。所有失败都以 Error 抛出（消息已是人话，调用方直接展示）：
- * 超时 / 连不上 / 401 / 其他状态码 / 缺尺寸头 / 空响应。
+ * 超时 / 桥回的错误命令响应 / 响应缺字段 / JPEG 缺失。
  */
 export async function fetchGuestScreenshot(
-  endpoint: BridgeEndpoint,
+  outDir: string,
   maxWidth: number,
-  timeoutMs: number = GUEST_SCREENSHOT_TIMEOUT_MS,
+  timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
 ): Promise<GuestScreenshot> {
-  const url = `http://${endpoint.ip}:${endpoint.port}/screenshot?maxWidth=${maxWidth}`;
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: { authorization: `Bearer ${endpoint.token}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (cause: unknown) {
-    if (cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError")) {
-      throw new Error(`guest 桥 ${timeoutMs}ms 内没有响应（截图超时）`);
-    }
-    const message = cause instanceof Error ? cause.message : String(cause);
-    throw new Error(`连不上 guest 桥（${endpoint.ip}:${endpoint.port}）：${message}`);
+  const { resp, cmdDir, baseName } = await sendGuestCommand(outDir, "screenshot", { maxWidth }, timeoutMs);
+
+  const nativeWidth = resp.nativeWidth;
+  const nativeHeight = resp.nativeHeight;
+  const jpegName = resp.jpeg;
+  if (
+    typeof nativeWidth !== "number" ||
+    typeof nativeHeight !== "number" ||
+    nativeWidth <= 0 ||
+    nativeHeight <= 0 ||
+    typeof jpegName !== "string" ||
+    jpegName === ""
+  ) {
+    throw new Error("guest 桥的截图响应缺字段（nativeWidth / nativeHeight / jpeg）");
   }
 
-  if (response.status === 401) {
-    throw new Error("guest 桥拒绝了 token（401）——桥和宿主不属于同一次沙箱会话，重启沙箱再试");
+  // resp 里引用的 jpg 先于 resp 落盘（桥的顺序保证），读不到就是同步抖动，重读一次
+  const jpgPath = join(cmdDir, jpegName);
+  let jpeg: Buffer | null = null;
+  try {
+    jpeg = await readFile(jpgPath);
+  } catch {
+    await sleep(RESP_POLL_INTERVAL_MS);
+    try {
+      jpeg = await readFile(jpgPath);
+    } catch {
+      throw new Error("guest 桥的响应引用的 JPEG 文件不存在");
+    }
   }
-  if (!response.ok) {
-    throw new Error(`guest 桥返回了 ${response.status}`);
-  }
-  const nativeWidth = Number(response.headers.get("x-native-width"));
-  const nativeHeight = Number(response.headers.get("x-native-height"));
-  if (!Number.isFinite(nativeWidth) || !Number.isFinite(nativeHeight) || nativeWidth <= 0 || nativeHeight <= 0) {
-    throw new Error("guest 桥的响应缺少 X-Native-Width / X-Native-Height 头");
-  }
-  const jpeg = new Uint8Array(await response.arrayBuffer());
-  if (jpeg.length === 0) {
-    throw new Error("guest 桥返回了空截图");
-  }
-  return { jpeg, nativeWidth, nativeHeight };
+
+  // 读完清理（尽力而为；req 由桥在执行后删除）
+  await rm(join(cmdDir, `${baseName}.req.json`), { force: true }).catch(() => {});
+  await rm(join(cmdDir, `${baseName}.resp.json`), { force: true }).catch(() => {});
+  await rm(jpgPath, { force: true }).catch(() => {});
+
+  return { jpeg: new Uint8Array(jpeg), nativeWidth, nativeHeight };
 }
