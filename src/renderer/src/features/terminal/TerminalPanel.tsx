@@ -17,6 +17,13 @@ import "./terminal.css";
 export function TerminalPanel(props: {
   /** 新终端落在哪个目录（当前会话的工作区根；null = 主进程回退 homedir） */
   cwd: string | null;
+  /**
+   * agent 刚开的终端 id（App 从 terminal:agent-open 事件转来）：面板要点亮并**激活
+   * 这个 tab**——agent 在用户眼前干活，人一抬头就看见它，而不是要去 tab 条里翻。
+   * 一次性信号：消费完调 onActivated 清掉。
+   */
+  activateId: string | null;
+  onActivated: () => void;
   onClose: () => void;
 }) {
   const t = useT();
@@ -78,6 +85,14 @@ export function TerminalPanel(props: {
       if (event.type === "exit") exitRef.current(event.terminalId, event.exitCode);
     });
   }, []);
+
+  // agent 开的终端：激活它。list 可能还没回来（面板刚挂载），activeId 先记着——
+  // 下面的 `active` 只在 id 真在列表里时才认它，list 一到就自然落在那个 tab 上
+  useEffect(() => {
+    if (props.activateId === null) return;
+    setActiveId(props.activateId);
+    props.onActivated();
+  }, [props.activateId, props.onActivated]);
 
   const allIds = [...tabs.map((tab) => tab.terminalId), ...pendingIds];
   const active = activeId !== null && allIds.includes(activeId) ? activeId : (allIds[allIds.length - 1] ?? null);
