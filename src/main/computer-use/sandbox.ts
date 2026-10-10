@@ -226,7 +226,7 @@ export class SandboxController {
     if (this.state === "starting") return { ok: false, error: "沙箱已经在启动中" };
     if (this.state === "running") return { ok: false, error: "沙箱已经在运行" };
     if (this.state === "stopping") return { ok: false, error: "沙箱正在关闭，等它关完再启动" };
-    // 廉价前置检查（两个文件存在性；reg / dism 那种秒级慢查询留给 probe，不拖在这里）
+    // 廉价前置检查（两个文件存在性；reg query 那种秒级慢查询留给 probe，不拖在这里）
     const fileExists = this.deps.fileExists ?? existsSync;
     const bridgeExePath = join(this.deps.bridgeDir, GUEST_BRIDGE_EXE);
     if (!fileExists(bridgeExePath)) {

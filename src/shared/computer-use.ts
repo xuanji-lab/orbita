@@ -78,7 +78,7 @@ export type SandboxStatus =
  */
 export type WindowsEdition = "pro" | "enterprise" | "education" | "home" | "unknown";
 
-/** 「Windows 沙箱」可选功能（Containers-DisposableClientVM）的状态；查不到归 unknown */
+/** 「Windows 沙箱」可选功能的状态——由 WindowsSandbox.exe 存在性推导（非提权进程查不了 DISM，错误 740）；unknown 留作契约兼容，当前实现不产出 */
 export type SandboxFeatureState = "enabled" | "disabled" | "unknown";
 
 /** computerUseProbe 的结果。guidance 是给用户看的手动操作指引（弹窗文案），ready 时为 null */

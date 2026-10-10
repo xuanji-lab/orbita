@@ -1,11 +1,14 @@
 /**
  * computer use 能力探测 —— 全部只读，绝不自动执行提权命令。
  *
- * 三件事：
+ * 两件事：
  *   1. reg query 读 EditionID，判版本档位（沙箱仅 Pro / Enterprise / Education，Home 没有）；
- *   2. dism /English 查「Windows 沙箱」可选功能（Containers-DisposableClientVM）状态——
- *      /English 是为了绕开输出本地化（中文系统上 State 是「已启用」，没法稳定解析）；
- *   3. 检查 WindowsSandbox.exe 在不在 System32。
+ *   2. 查 WindowsSandbox.exe 在不在 System32——它是「沙箱功能已启用」的非提权信号：
+ *      功能启用时这个 exe 才出现，没启用就不在。
+ *
+ * 为什么不能查「可选功能状态」本身：DISM / Get-WindowsOptionalFeature 都需要管理员权限
+ * （非提权跑 DISM 直接吃错误 740「需要提升权限才能运行 DISM」，2026-10-10 实测），
+ * Orbita 以普通权限运行，这条路永远返回 unknown——所以删掉了 dism 探测，别加回来。
  *
  * 功能未启用时只报告 + 给手动开启指引文案（guidance），由用户自己去
  * 「启用或关闭 Windows 功能」勾选——Orbita 不代跑 dism /Enable-Feature 这类提权命令。
@@ -18,7 +21,7 @@ import type { ComputerUseProbeResult, SandboxFeatureState, WindowsEdition } from
 
 const execFileP = promisify(execFile);
 
-/** 探测命令的执行器。抽出来是为了测试注入 fixtures（不真跑 reg / dism）。 */
+/** 探测命令的执行器。抽出来是为了测试注入 fixtures（不真跑 reg）。 */
 export type RunCommand = (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
 const EDITION_REG_PATH = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -51,25 +54,19 @@ export function editionToSku(editionId: string | null): WindowsEdition {
 }
 
 /**
- * 从 dism /Get-FeatureInfo /English 的输出里抠功能状态。取「State :」那一行：
- *   Enabled / Enabled with Payload Removed → enabled（都算可用）
- *   Disabled / Disabled with Payload Removed → disabled
- * 没有这一行（本地化输出、命令失败）→ unknown，宁可如实说查不到。
+ * 「Windows 沙箱」可选功能的状态，由 WindowsSandbox.exe 存在性推导：
+ * 在 → enabled，不在 → disabled（功能没启用 / 载荷被移除都是这个结果）。
+ * 「unknown」保留给契约兼容（shared/computer-use.ts），当前实现不再产出——
+ * 非提权进程查不了功能状态真值（DISM 错误 740），exe 存在性是能拿到的最好信号。
  */
-export function parseDismState(stdout: string): SandboxFeatureState {
-  const match = /^\s*State\s*:\s*(.+)$/im.exec(stdout);
-  if (!match) return "unknown";
-  const value = match[1]?.trim().toLowerCase() ?? "";
-  if (value.startsWith("enabled")) return "enabled";
-  if (value.startsWith("disabled")) return "disabled";
-  return "unknown";
+export function featureStateFromExe(sandboxExeFound: boolean): SandboxFeatureState {
+  return sandboxExeFound ? "enabled" : "disabled";
 }
 
 function buildGuidance(result: {
   platformOk: boolean;
   edition: WindowsEdition;
   editionOk: boolean;
-  featureState: SandboxFeatureState;
   sandboxExeFound: boolean;
 }): string {
   const lines: string[] = [];
@@ -81,17 +78,14 @@ function buildGuidance(result: {
   } else if (result.edition === "unknown") {
     lines.push("读不到 Windows 版本档位（reg query 失败），无法确认沙箱可用。");
   }
-  if (result.featureState === "disabled") {
+  // 版本档位不是 Home 才有「去开功能」的意义；家庭版开不了，别误导
+  if (!result.sandboxExeFound && result.edition !== "home" && result.platformOk) {
     lines.push(
-      "Windows 沙箱功能未启用。手动开启：控制面板 → 程序 → 启用或关闭 Windows 功能 → 勾选「Windows 沙箱」，按提示重启；" +
-        '或在管理员 PowerShell 运行：Enable-WindowsOptionalFeature -Online -FeatureName "Containers-DisposableClientVM" -All。' +
+      "Windows 沙箱功能未启用（System32 下找不到 WindowsSandbox.exe）。手动开启：Win+R 输入 optionalfeatures.exe 回车 → " +
+        "勾选「Windows 沙箱」→ 确定 → 重启；或在管理员 PowerShell 运行：" +
+        'Enable-WindowsOptionalFeature -Online -FeatureName "Containers-DisposableClientVM" -All。' +
         "Orbita 不会替你执行这条提权命令。",
     );
-  } else if (result.featureState === "unknown") {
-    lines.push("查不到 Windows 沙箱功能的状态，可以打开「启用或关闭 Windows 功能」人工确认。");
-  }
-  if (!result.sandboxExeFound) {
-    lines.push(`找不到 ${windowsSandboxExePath()}——沙箱功能可能没有装全。`);
   }
   return lines.join("\n");
 }
@@ -116,7 +110,6 @@ export async function probe(deps: ProbeDeps = {}): Promise<ComputerUseProbeResul
   const platformOk = platform === "win32";
 
   let edition: WindowsEdition = "unknown";
-  let featureState: SandboxFeatureState = "unknown";
   if (platformOk) {
     try {
       const output = await run("reg", ["query", EDITION_REG_PATH, "/v", "EditionID"]);
@@ -124,23 +117,13 @@ export async function probe(deps: ProbeDeps = {}): Promise<ComputerUseProbeResul
     } catch {
       edition = "unknown";
     }
-    try {
-      // /English：固定输出英文，绕开中文系统上「State : 已启用」没法稳定解析的问题
-      const output = await run("dism", [
-        "/Online",
-        "/Get-FeatureInfo",
-        "/FeatureName:Containers-DisposableClientVM",
-        "/English",
-      ]);
-      featureState = parseDismState(output.stdout);
-    } catch {
-      featureState = "unknown";
-    }
   }
 
+  // 功能状态不走 DISM（非提权必失败，错误 740）：exe 在不在是唯一可靠的非提权信号
   const sandboxExeFound = platformOk && exeExists(windowsSandboxExePath(deps.systemRoot));
+  const featureState = featureStateFromExe(sandboxExeFound);
   const editionOk = edition === "pro" || edition === "enterprise" || edition === "education";
-  const ready = platformOk && editionOk && featureState === "enabled" && sandboxExeFound;
-  const partial = { platformOk, edition, editionOk, featureState, sandboxExeFound };
-  return { ...partial, ready, guidance: ready ? null : buildGuidance(partial) };
+  const ready = platformOk && editionOk && sandboxExeFound;
+  const partial = { platformOk, edition, editionOk, sandboxExeFound };
+  return { ...partial, featureState, ready, guidance: ready ? null : buildGuidance(partial) };
 }
