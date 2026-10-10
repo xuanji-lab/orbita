@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  BLACKHOLE_GAP_PX,
   BLACKHOLE_SAFE_PX,
   BLACKHOLE_STEP_PX,
   EMPTY_LEDGER,
@@ -216,8 +217,17 @@ describe("settleAfterRemoval：删除后的重力补位", () => {
 });
 
 describe("boxHeightCap：盒子限高", () => {
-  it("舷窗到盒底的距离减去安全距离", () => {
-    assert.equal(boxHeightCap(700), 700 - BLACKHOLE_SAFE_PX);
+  it("舷窗到盒底的距离减去安全距离，再向下取整到整行", () => {
+    // 700 - 160 = 540，540/34 = 15.9 行 → 15 整行（cellsToPx(15) = 15×34 - 4 = 506）
+    assert.equal(boxHeightCap(700), cellsToPx(15));
+    assert.equal(boxHeightCap(700), 506);
+  });
+
+  it("限高永远是整数行：可视窗口底边落在行间隙上，不把底行拦腰切断", () => {
+    for (const space of [300, 401, 522, 643, 764, 999]) {
+      const cap = boxHeightCap(space);
+      assert.equal((cap + BLACKHOLE_GAP_PX) % BLACKHOLE_STEP_PX, 0, `space=${space} cap=${cap}`);
+    }
   });
 
   it("窗口很矮时至少留两行格子", () => {

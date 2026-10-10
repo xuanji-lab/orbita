@@ -288,11 +288,14 @@ export function cellsToPx(cells: number): number {
 }
 
 /**
- * 盒子的限高：`spacePx` 是舷窗横条下沿到盒子底的距离。减掉安全距离，
- * 地板是两行格子。内容超过它时盒子内部滚动。
+ * 盒子的限高：`spacePx` 是舷窗横条下沿到盒子底的距离。减掉安全距离后**向下取整到整行**，
+ * 地板是两行格子。取整到整行是为了滚动态：可视窗口的高度永远是整数行，窗口底边
+ * 落在行与行的间隙上，最底一行不会被拦腰切断（2026-10 验收：不取整时底行半截沉在
+ * 盒子底边之下，看着像落进了输入卡）。内容超过它时盒子内部滚动。
  */
 export function boxHeightCap(spacePx: number): number {
-  return Math.max(cellsToPx(MIN_CAP_ROWS), Math.floor(spacePx - BLACKHOLE_SAFE_PX));
+  const rows = Math.floor((spacePx - BLACKHOLE_SAFE_PX) / BLACKHOLE_STEP_PX);
+  return Math.max(cellsToPx(MIN_CAP_ROWS), cellsToPx(Math.max(0, rows)));
 }
 
 /** 黑洞只在基础三套主题生效（浅 / 黛 / 玄）。纸面主题自带一套稿纸语言，不叠这层动效 */
