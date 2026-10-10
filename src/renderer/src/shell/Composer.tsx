@@ -2,7 +2,8 @@ import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useS
 import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { Menu } from "./Menu";
-import { MaterialStack } from "./composer-material-stack.tsx";
+import { MaterialStack, NoVisionHint, QuoteCard } from "./composer-material-stack.tsx";
+import { BlackholeBox, BlackholeContext, captureBlackholeFlight, type BoxMaterial } from "./BlackholeBox.tsx";
 import { PastedTextCollapseContext } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge, pastedTextSize } from "@shared/prompt-attachments";
@@ -436,6 +437,23 @@ export function Composer(props: {
       props.quotes.length > 0 ||
       props.files.length > 0);
   const stopping = running && !sendable;
+  // 输入框黑洞（设置开关 + 只在浅 / 黛 / 玄，App 根部算好）：截图 / 文件 / 目录进隐形盒子，
+  // 引用照旧是卡、待在盒子下面贴着输入卡。关着时整段与原叠放逐字相同
+  const blackhole = useContext(BlackholeContext);
+  const blackholeBoxRef = useRef<HTMLDivElement>(null);
+  const boxMaterials = useMemo(
+    () => materials.filter((item): item is BoxMaterial => item.kind !== "quote"),
+    [materials],
+  );
+  const quoteMaterials = useMemo(
+    () => materials.filter((item): item is Extract<typeof item, { kind: "quote" }> => item.kind === "quote"),
+    [materials],
+  );
+  /** 发送：黑洞开着时先记下盒子里每块的位置，让它们飞进转录里那条新消息 */
+  const submit = (): void => {
+    if (blackhole) captureBlackholeFlight(blackholeBoxRef.current);
+    props.onSubmit();
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragging = props.dropActive === true;
   return (
@@ -443,7 +461,15 @@ export function Composer(props: {
     // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）。
     // composer-stack 同时是引用卡两列版式的 container query 容器（窄窗 / 抽屉里回落一列）
     <div className="composer-stack" style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
-      <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
+      {blackhole ? (
+        <>
+          <BlackholeBox materials={boxMaterials} cardRef={cardRef} boxRef={blackholeBoxRef} dragActive={dragging} />
+          {props.imageUnsupported === true && boxMaterials.some((item) => item.kind === "image") && <NoVisionHint />}
+          {quoteMaterials.length > 0 && <QuoteCard quotes={quoteMaterials} jumpToQuote={props.jumpToQuote} />}
+        </>
+      ) : (
+        <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
+      )}
       <div
         ref={cardRef}
         className="glass-card"
@@ -754,7 +780,7 @@ export function Composer(props: {
               keyCode: event.keyCode,
             })) return;
             event.preventDefault();
-            if (sendable) props.onSubmit();
+            if (sendable) submit();
           }}
           onCompositionStart={(event) => {
             const start = event.currentTarget.selectionStart;
@@ -855,7 +881,7 @@ export function Composer(props: {
           title={sendable ? t.composer.send : stopping ? t.composer.stopTurn : t.composer.send}
           // 听写中不发送：识别文字还在变，先结束听写（回车或再点麦克风）再发
           disabled={dictating || (!sendable && !stopping)}
-          onClick={() => (sendable ? props.onSubmit() : props.onStop())}
+          onClick={() => (sendable ? submit() : props.onStop())}
           style={{
             display: "inline-flex",
             alignItems: "center",

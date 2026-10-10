@@ -35,6 +35,8 @@ import { RightPanelSlot } from "./shell/RightPanel";
 import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
+import { BlackholeContext } from "./shell/BlackholeBox.tsx";
+import { blackholeActive } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
@@ -575,6 +577,8 @@ export function App() {
   return (
     <LocaleContext.Provider value={locale}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
+    {/* 输入框黑洞：开关 × 主题（只在浅 / 黛 / 玄）在这里算一次，输入框与转录都读它 */}
+    <BlackholeContext.Provider value={blackholeActive(settings.composerBlackhole, resolvedTheme)}>
     <div className="app-shell">
       <Titlebar />
       <div className="layer">
@@ -745,6 +749,7 @@ export function App() {
         />
       </div>
     </div>
+    </BlackholeContext.Provider>
     </PastedTextCollapseContext.Provider>
     </LocaleContext.Provider>
   );

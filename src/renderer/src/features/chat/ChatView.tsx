@@ -110,6 +110,8 @@ import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
+import { BlackholeContext } from "../../shell/BlackholeBox.tsx";
+import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
@@ -1486,6 +1488,8 @@ function Pane(props: {
   const [editing, setEditing] = useState(false);
   return (
     <div
+      // 输入框黑洞的舷窗挂在滚动段顶边（data-porthole-anchor）：BlackholeBox 从输入框往上找这一对
+      data-chat-pane=""
       style={{
         height: "100%",
         minHeight: 0,
@@ -1653,7 +1657,7 @@ function Pane(props: {
       </header>
 
       {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走 */}
-      <div style={{ position: "relative", minHeight: 0, display: "grid" }}>
+      <div data-porthole-anchor="" style={{ position: "relative", minHeight: 0, display: "grid" }}>
         <div
           ref={props.scrollRef}
           onScroll={props.onScroll}
@@ -2516,6 +2520,8 @@ function UserBubble(props: {
   );
   // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
   const hasText = text.trim() !== "";
+  const blackhole = useContext(BlackholeContext);
+  const sentBox = blackhole && images.length + fileRefs.length > 0;
   useLayoutEffect(() => {
     if (expanded) return;
     const el = clampRef.current;
@@ -2531,7 +2537,15 @@ function UserBubble(props: {
         gap: 2,
       }}
     >
-      {images.length > 0 && <UserImages images={images} />}
+      {/* 输入框黑洞开着：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
+      {sentBox ? (
+        <SentBlackholeBox
+          images={images}
+          files={fileRefs.map((ref) => ({ name: fileRefName(ref.path), path: ref.path, kind: ref.kind }))}
+        />
+      ) : (
+        images.length > 0 && <UserImages images={images} />
+      )}
       {quotes.length > 0 && (
         <div
           style={{
@@ -2553,7 +2567,7 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {fileRefs.length > 0 && (
+      {!sentBox && fileRefs.length > 0 && (
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
@@ -2570,7 +2584,7 @@ function UserBubble(props: {
           {fileRefs.map((ref, index) => (
             <FileRefChip
               key={`file:${index}`}
-              name={ref.path.split(/[\\/]/).filter((part) => part !== "").pop() ?? ref.path}
+              name={fileRefName(ref.path)}
               path={ref.path}
               kind={ref.kind}
             />
@@ -2819,6 +2833,11 @@ function SkillInvocationCard(props: { name: string; content: string }) {
  * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
  * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
  */
+/** 文件引用的显示名：路径最后一段（目录的尾斜杠不算一段） */
+function fileRefName(path: string): string {
+  return path.split(/[\\/]/).filter((part) => part !== "").pop() ?? path;
+}
+
 function UserImages(props: { images: readonly PromptImage[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);
