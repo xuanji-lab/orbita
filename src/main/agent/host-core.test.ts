@@ -372,6 +372,46 @@ describe("answerReadTask —— 读 task 请求的发送侧（B-1）", () => {
   });
 });
 
+describe("answerMemoryRetrieve —— 记忆召回请求的发送侧", () => {
+  test("成功回执带 hits，失败只带 error；进程没了就静默（不 ensure）", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    // 没开机时静默：不为一条回执拉起整个 runtime（answerReadTask 同款理由）
+    ctx.host.answerMemoryRetrieve("r0", { ok: false, error: "gone" });
+    assert.equal(ctx.forks(), 0);
+    assert.equal(ctx.child(), undefined);
+
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    const entry = {
+      id: "mem_1",
+      text: "用户偏好用 bun 作为包管理器",
+      keywords: ["bun"],
+      sessionId: "s1",
+      timestamp: 1,
+    };
+    ctx.host.answerMemoryRetrieve("r1", { ok: true, hits: [{ entry, score: 0.8 }] });
+    ctx.host.answerMemoryRetrieve("r2", { ok: false, error: "scope unreadable" });
+    assert.equal(ctx.forks(), 1); // 不二次 fork
+    assert.deepEqual(ctx.child().posted.at(-2), {
+      type: "memoryRetrieveResult",
+      requestId: "r1",
+      ok: true,
+      hits: [{ entry, score: 0.8 }],
+    });
+    assert.deepEqual(ctx.child().posted.at(-1), {
+      type: "memoryRetrieveResult",
+      requestId: "r2",
+      ok: false,
+      error: "scope unreadable",
+    });
+  });
+});
+
 describe("steer —— 父→子注入的发送侧（子会话）", () => {
   test("进程活着就发 steer 命令，delivery 原样带上", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });

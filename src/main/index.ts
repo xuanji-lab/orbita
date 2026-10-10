@@ -12,6 +12,8 @@ import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
+import { MemoryStore } from "./memory/store.ts";
+import { applyMemoryAppend, applyMemoryRetrieve } from "./memory/requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
@@ -307,6 +309,8 @@ void app.whenReady().then(async () => {
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
+  // 会话记忆：每个作用域一个只追加 JSONL（sha1(scopeId).jsonl，见 memory/store.ts）
+  const memory = new MemoryStore(join(configDir, "memory"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
   // 日用量账本（usage:week / usage:event）：与 sessions 同目录的派生数据，
   // assistant 记录落盘的同一条路径上累计。注册即异步装载 + 回填，不阻塞启动
@@ -455,6 +459,26 @@ void app.whenReady().then(async () => {
             error: cause instanceof Error ? cause.message : String(cause),
           }),
         );
+      return;
+    }
+    // 记忆：轮前召回（读该作用域的记忆 → 词法打分 → 回执）与轮后追加（单向，无回执）。
+    // 召回任何路径都回执（同 readTaskRequest）——轮前是同步等的，挂着就开不了工；
+    // 追加写失败只记日志：记忆是易耗品，不该有报错通路打断对话（契约里的定性）。
+    if (event.type === "memoryRetrieveRequest") {
+      void applyMemoryRetrieve(sessions, memory, event)
+        .then((outcome) => agentHost.answerMemoryRetrieve(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerMemoryRetrieve(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    if (event.type === "memoryAppend") {
+      void applyMemoryAppend(sessions, memory, event).catch((cause: unknown) =>
+        console.error("[memory] 记忆条目追加落盘失败", event.sessionId, cause),
+      );
       return;
     }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
