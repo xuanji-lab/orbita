@@ -21,6 +21,7 @@ import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
+import type { MemoryDraft, MemoryRetrieveOutcome } from "./memory.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -766,6 +767,8 @@ export type AgentCommand =
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
+  /** 记忆：主进程对 memoryRetrieveRequest 的回执（requestId 问答，readTaskResult 同款） */
+  | ({ type: "memoryRetrieveResult"; requestId: string } & MemoryRetrieveOutcome)
   | {
       /**
        * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：打开源本子 →
@@ -921,6 +924,19 @@ export type AgentEvent =
    * 读错了组）。
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
+  /**
+   * 记忆召回的读盘请求。**读在主进程**（agent 进程不碰 userData，readTaskRequest
+   * 同一条边界）：主进程按 sessionId 解析作用域（workspaceId ?? cwd）→ 读该作用域的
+   * 记忆 JSONL → 词法打分（阈值门控 + 预算截断）→ 回 memoryRetrieveResult。
+   * 轮前同步路径：runtime 用收窄的超时调它，超时 / 报错 / 空命中都不注入、正常开轮。
+   */
+  | { type: "memoryRetrieveRequest"; requestId: string; sessionId: string; query: string }
+  /**
+   * 蒸馏条目的落盘事件。**单向、无回执**（title 事件同款）：轮结束后 runtime 蒸馏出
+   * 0–N 条 draft 发过来，主进程补 id / sessionId 追加进该会话作用域的 JSONL。
+   * 写失败只记日志——记忆是易耗品，不该有报错通路打断对话。
+   */
+  | { type: "memoryAppend"; sessionId: string; entries: MemoryDraft[] }
   /**
    * 受管浏览器：agent 的浏览器工具请求。**浏览器实例在主进程**（WebContentsView 只能在
    * 主进程建），agent 进程只剩「工具定义 → requestId 问答」一层薄包装——换内核只重写那层。

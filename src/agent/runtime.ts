@@ -1653,6 +1653,12 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
+  if (command.type === "memoryRetrieveResult") {
+    // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
+    // 轮前调用方自己对超时 / ok:false / 空 hits 做「不注入」处理。
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
   if (command.type === "browserResult") {
     requestBroker.resolve(
       command.requestId,
