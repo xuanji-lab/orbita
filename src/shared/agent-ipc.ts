@@ -20,6 +20,7 @@ import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -655,6 +656,8 @@ export type AgentCommand =
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
+  /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
+  | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
@@ -820,6 +823,15 @@ export type AgentEvent =
    * 作用于该会话自己的 agent tab（没有就建）。回 browserResult。
    */
   | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
+  /**
+   * 终端：agent 的终端工具请求（terminal_open / execute / read / list /
+   * interrupt / close，形状见 shared/terminal.ts 的 TerminalToolRequest）。
+   * **PTY 在主进程**（TerminalService，browserRequest 同一条边界）：agent 进程
+   * 不碰 node-pty、不碰 userData，只剩「工具定义 → requestId 问答」一层薄包装。
+   * 终端是**可见**的：主进程另广播 terminal:agent-open，renderer 自动点亮面板。
+   * 回 terminalResult。
+   */
+  | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
