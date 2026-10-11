@@ -212,7 +212,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
         },
       },
       {
-        pr: null,
+        pr: 212,
         date: "2026-10-12",
         note: {
           zh: "与『俄罗斯方块』互斥：打开这个会连带关掉俄罗斯方块（同一个材料盒的两种形态）。",
@@ -232,7 +232,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     },
     changelog: [
       {
-        pr: null,
+        pr: 212,
         date: "2026-10-12",
         note: {
           zh: "首版：材料从盒口纯随机落点落下（确定性种子，同一份清单永远同一个布局）。",
