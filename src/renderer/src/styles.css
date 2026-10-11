@@ -1286,49 +1286,14 @@ body {
 }
 
 /* task 选择器 */
-.drawer-picker {
-  overflow-y: auto;
-  padding: var(--space-3);
-}
-
-.drawer-picker-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 4px var(--space-2);
-  font-size: var(--font-size-control);
-  font-weight: 600;
-}
-
-.drawer-picker-back {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.drawer-picker-back:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-.drawer-picker-sub {
-  font-size: var(--font-size-caption);
-  color: var(--color-text-tertiary);
-  padding: 0 4px var(--space-2);
-}
-
 .drawer-pickrow {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 9px 10px;
+  min-width: 0;
+  height: var(--list-item-compact);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-md);
   border: 0;
   cursor: pointer;
@@ -1345,11 +1310,6 @@ body {
   color: var(--color-text-primary);
 }
 
-.drawer-pickrow.new {
-  color: var(--color-mode-active-fg);
-  font-weight: 600;
-}
-
 .drawer-pickrow-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1357,17 +1317,8 @@ body {
 }
 
 .drawer-pickrow-meta {
-  margin-left: auto;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
-  font-family: var(--font-family-mono);
-  flex: 0 0 auto;
-}
-
-.drawer-picksep {
-  height: 1px;
-  background: var(--color-border-subtle);
-  margin: var(--space-2) 4px;
 }
 
 .scroll {
@@ -1949,39 +1900,6 @@ body {
 /* ===== Skills 列表（过滤行、归属点阵、行 hover tooltip、missing 就地清理） ===== */
 
 /*
- * 过滤行：page header 下一条 34px 工具行，透明底 + 底部发丝线（对稿）——
- * 跟着列表一起滚动，不常驻贴顶（不 sticky）。左右内边距 14px，与组头、行内容
- * 对齐同一条竖线。
- */
-.skills-filter-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 34px;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--color-border-subtle);
-  color: var(--color-text-tertiary);
-}
-.skills-filter-row input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  font: inherit;
-  font-size: var(--font-size-control);
-  color: var(--color-text-primary);
-}
-.skills-filter-row input::placeholder {
-  color: var(--color-text-tertiary);
-}
-.skills-filter-count {
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-micro);
-  flex: 0 0 auto;
-}
-
-/*
  * 「/ + 空格」选取模式的键盘提示行（panel-token.ts）：过滤行下方一条微字，
  * 说清 ↑↓ / Enter / Tab / Esc 各自干什么。不设 uppercase——那是组标签的待遇。
  */
@@ -1991,9 +1909,8 @@ body {
   display: flex;
   align-items: center;
   min-height: 24px;
-  padding: 4px 14px;
+  padding: 6px var(--space-4) 0;
   line-height: 1.4;
-  border-bottom: 1px solid var(--color-border-subtle);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
@@ -2007,15 +1924,7 @@ body {
   font-weight: var(--weight-semibold);
 }
 .mcp-card.picker-active {
-  border-color: var(--color-border-strong);
   background: var(--option-active-bg);
-}
-
-/* 组间发丝线：组与组之间 1px 分隔，代替纯间距——长列表扫读时组边界更清楚 */
-.skill-group + .skill-group {
-  border-top: 1px solid var(--color-border-subtle);
-  margin-top: 2px;
-  padding-top: var(--space-1);
 }
 
 /*
@@ -2031,9 +1940,10 @@ body {
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  height: var(--list-item-default);
-  /* 14px 不是 --space-3（12px）——对齐过滤行与组头同一条左缘竖线 */
-  padding: 0 14px;
+  height: var(--list-item-compact);
+  /* 右栏统一：内缩在 .panel-list 里、圆角 md，内边距 = 行左右血线 */
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
 }
 .skill-row:hover,
 .skill-row:has(:focus-visible) {
@@ -2088,20 +1998,9 @@ body {
 /*
  * 行尾「选用」键（RowHoverAction，reveal 家族）：绝对定位盖在行尾——血线规则
  * 的悬停组合例外，静止态尾部（归属点阵）钉血线，悬停 / 键盘聚焦时让位淡出。
- * 集合信息不丢：行 tooltip（skill-row-tip，350ms）里有 slug · 集合全名。实底
- * 取悬停行底色，盖住让位过渡中还没淡尽的点（files 面板 .file-row-act 用面板
- * 底盖悬停元信息，同一职责、这里行底是 hover 底）。
+ * 集合信息不丢：行 tooltip（skill-row-tip，350ms）里有 slug · 集合全名。按钮本身
+ * 无底色（右栏统一的安静控件，配方在文件末尾「右栏面板统一」段）。
  */
-.skill-row-act {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-bg-hover);
-  color: var(--color-text-secondary);
-}
-.skill-row-act:hover {
-  color: var(--color-text-primary);
-}
 .skill-row .set-dots {
   transition: opacity var(--transition-hover);
 }
@@ -2198,10 +2097,6 @@ body {
   background: transparent;
   color: var(--color-text-secondary);
 }
-/* 行尾 hover 动作按钮（引用 / 在文件管理器中显示）浮在行上：实色底盖住行尾的名字 / size·mtime（设计稿 .row-act）——两个按钮共用。实色底只能写在 CSS，写在 inline 会压过 :hover（2026-09-23 实测同款坑） */
-.file-row-act {
-  background: var(--color-bg-panel);
-}
 .file-hover-act:hover {
   color: var(--color-text-primary);
 }
@@ -2231,30 +2126,28 @@ body {
 }
 
 /*
- * 树行右内边距：给悬停才出的两个动作键（20px×2 + 缝）留位——它们绝对定位盖在
- * 行尾，悬停元信息（size·mtime）停在它们之左（血线规则的悬停组合例外，见
- * .row-trailing 的注释）。附件行不用这条：它的尾部是静止态元素，直接钉血线。
+ * 树行 / 附件行（右栏统一）：内缩在 .panel-list 里、圆角 md；右内边距就是行右血线——
+ * 静止态尾部（size / rules 尾注）钉在这里，悬停时让位（opacity 0），绝对定位的
+ * 动作键（ROW_ACT_*）补位到同一条线上。
  */
 .file-row {
-  padding-right: calc(var(--space-3) + 44px);
+  padding-right: var(--space-2);
+  border-radius: var(--radius-md);
 }
 
-/*
- * hover 行尾的 size · mtime（`48 KB · 12m`）：只在 hover 时出现，不 hover 不占
- * 视觉——它们是「看一眼就够」的机器事实，常驻会让每行都背着两个数字（裁决见
- * 设计稿「待裁决」章节）。挂同一个 .file-hover-host 宿主，与 Reveal 同一套
- * 浮现机制。
- */
+/* 行尾静止信息：size（文件）与 AGENTS.md 的 rules 尾注；时间放进行 title */
 .file-row-meta {
-  display: none;
-  font-family: var(--font-family-mono);
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-regular);
   color: var(--color-text-tertiary);
-  flex: 0 0 auto;
-  white-space: nowrap;
+  transition: opacity var(--transition-hover);
 }
 .file-hover-host:hover .file-row-meta {
-  display: inline;
+  opacity: 0;
 }
 
 /* 附件行「已不在」标记（Session·附件列表）：图标 + 两三个字，短到不挤文件名
@@ -2289,9 +2182,10 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--font-size-micro);
+  /* 与树行的 size 同一写法（caption / tabular / 无衬线） */
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
-  font-family: var(--font-family-mono);
   transition: opacity var(--transition-hover);
 }
 
@@ -2313,25 +2207,6 @@ body {
   position: absolute;
   right: -3px;
   bottom: -3px;
-}
-
-/*
- * 根分组头 sticky：树很长时 Session / Workspace / Attached 组头钉在滚动容器顶部，
- * 盖住底下滚过去的树行——「现在滚在哪个根里」永远有答案。
- *
- * 背景选 --color-bg-panel（实色）而不是设计稿画的 --glass-bg-solid：那个 token
- * 在这套系统里不存在。读 RightPanel.tsx：右侧面板停靠态下 .right-panel-slot 本身
- * 不画背景，内容直接坐在 .pane 的 --glass-bg 玻璃层上（narrow 悬浮态才会再叠一层
- * --glass-bg 变实）——面板本体没有一个专门的「不透明」层可以照搬。这正是
- * Transparency 规则给 floating layers（菜单、popover）的处理：跳过玻璃阶梯，
- * 改用实色 --color-bg-panel + 发丝——sticky 头钉在滚动内容之上，是同一种「浮在
- * 任意内容之上、背后不能透字」的场景，用同一个 token。
- */
-.file-root-label {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--color-bg-panel);
 }
 
 /*
@@ -2360,85 +2235,266 @@ body {
 }
 
 /*
- * AgentsMdHint（虚线提示行）与 AttachRow（底部 Attach 按钮）的 hover：改成 CSS
- * class 而不是 onMouseEnter/onMouseLeave 手改 inline style（Implementation
- * rules 硬规则：有状态样式写 CSS class，不用 useState + onMouseEnter/Leave 画
- * hover）。**会随 hover 变的属性（底色、字色）只能写在这里**：留在 inline style
- * 里的话 inline 优先级压过 `:hover`，hover 就静默失效了。
+ * AgentsMdHint：工作区没有 AGENTS.md 时的一行浅灰可点行（右栏统一：原先是虚线卡）。
+ * 几何同树行（30px、内缩、圆角），只是字是 caption / tertiary。
  */
-.file-hint-row,
-.file-attach-row {
+.file-hint-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  height: var(--list-item-compact);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
   background: transparent;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  text-align: left;
   color: var(--color-text-tertiary);
+  cursor: pointer;
   transition: var(--transition-hover);
 }
-.file-hint-row:hover,
-.file-attach-row:hover {
+.file-hint-row:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
 
+
+/* 文件打开时，过滤框住在树的顶部（标题行让给标签页） */
+.files-tree-filter {
+  display: flex;
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-2) 0;
+}
+.files-tree-filter .panel-filter {
+  flex: 1 1 auto;
+  margin-left: 0;
+}
+
 /*
- * ===== 文件预览（双击文件 / 分栏预览，2026-09-23 wafo 裁决） =====
- * `.files-panel-body` 是唯一的 container query 根：容器宽 ≥600px 且预览打开时
- * 两栏（目录 + 预览），<600px 且预览打开时只留预览、目录用 `display:none` 藏起来
- * ——不卸载，展开态与滚动位置都在原地，回到目录时不用重新展开。断点全在这里，
- * 不用 JS 量宽度（硬规则）。
+ * ===== 文件面板布局：标签页 + 文件树开关（2026-10-10 交互改版，原型
+ * files-panel-prototype.html，用户逐条裁决） =====
+ * `.files-panel-body` 是唯一的 container query 根。JS 只持有状态（tabs / treeOn，
+ * 见 features/files/panel-layout.ts），显示形态全部由这里的 container query 裁决：
  *
- * 容器与网格必须是两个元素：@container 只作用于容器的**后代**，查不到容器自己——
- * 网格若就挂在 `.files-panel-body` 上，宽面板时两栏规则永远不命中，预览会掉进隐式
- * 第二行、叠在目录下面（2026-09-23 实机验收抓到）。
+ * - data-file="none"：没打开文件，树就是整个面板（solo），标题开关禁用；
+ * - data-file="open" data-tree="off"：树隐藏但不卸载（展开态与滚动位置都在原地）；
+ * - data-tree="on" 且容器 <640px：树是浮层盖在文件内容上 + 遮罩（点遮罩收起）；
+ * - data-tree="on" 且容器 ≥640px：树是固定 224px 的并排窄列——拉宽的新增空间
+ *   全给文件内容，树列永不自动变宽、拉宽也永不反向展开树。
+ *
+ * 640px 断点与 panel-layout.ts 的 TREE_BREAKPOINT 成对改。JS 对宽度的唯一感知是
+ * FilesPanel 的 ResizeObserver 跨断点时把 treeOn 折叠（只在缩窄方向），显示判定
+ * 不进 JS。容器与内容层必须是两个元素：@container 只作用于容器的**后代**，查不到
+ * 容器自己（2026-09-23 实机验收抓到过）。
  */
 .files-panel-body {
   container-type: inline-size;
   height: 100%;
   min-height: 0;
 }
-.files-panel-split {
+.files-panel-layout {
+  position: relative;
+  display: flex;
   height: 100%;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-}
-.files-panel-tree {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
 }
-@container (min-width: 600px) {
-  .files-panel-split[data-preview="open"] {
-    grid-template-columns: minmax(220px, 40%) minmax(0, 1fr);
-  }
+.files-panel-tree {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 224px;
+  flex: none;
 }
-/* 预览打开 + 窄容器：目录隐藏但不卸载；预览打开 + 宽容器：目录照常显示（两栏） */
-.files-panel-split[data-preview="open"] .files-panel-tree {
+/* 没打开文件：树占满整个面板（此时标题开关禁用，data-tree 恒 off） */
+.files-panel-layout[data-file="none"] .files-panel-tree {
+  width: auto;
+  flex: 1 1 auto;
+}
+/* 打开文件 + 树关：只显示文件。树 display:none 藏起来不卸载 */
+.files-panel-layout[data-file="open"][data-tree="off"] .files-panel-tree {
   display: none;
 }
-@container (min-width: 600px) {
-  .files-panel-split[data-preview="open"] .files-panel-tree {
-    display: grid;
+/*
+ * 树开（默认按窄容器写 = 浮层形态）：absolute 盖在文件内容上。浮层是「浮在任意
+ * 内容之上、背后不能透字」的场景，照 Transparency 规则给实色 --color-bg-panel +
+ * popover 阴影；入场滑动解释「树从哪来」。
+ */
+.files-panel-layout[data-file="open"][data-tree="on"] .files-panel-tree {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 20;
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  animation: files-tree-in var(--duration-fast) var(--ease-out-quint);
+}
+.files-panel-backdrop {
+  display: none;
+  position: absolute;
+  left: 224px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 15;
+  background: var(--overlay-backdrop-subtle);
+}
+.files-panel-layout[data-file="open"][data-tree="on"] .files-panel-backdrop {
+  display: block;
+}
+@container (min-width: 640px) {
+  /* 宽容器：树回到并排固定窄列，浮层与遮罩退场；分隔线由树列的右发丝线承担 */
+  .files-panel-layout[data-file="open"][data-tree="on"] .files-panel-tree {
+    position: static;
+    background: transparent;
+    box-shadow: none;
+    animation: none;
+    border-right: 1px solid var(--color-border-subtle);
+  }
+  .files-panel-layout[data-file="open"][data-tree="on"] .files-panel-backdrop {
+    display: none;
+  }
+}
+@keyframes files-tree-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
   }
 }
 
 .files-panel-preview {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   height: 100%;
 }
-@container (min-width: 600px) {
-  .files-panel-preview {
-    border-left: 1px solid var(--color-border-subtle);
-  }
+
+/*
+ * ===== 文件面板头部：标题开关 + 标签页（2026-10-10 交互改版） =====
+ * 「文件」标题本身就是文件树开关（原型裁决）：树开着时呈点亮态——用选中行的
+ * mode 淡底配方（明主题蓝、暗主题黄，随主题走，不另起 accent 炉灶）；没有打开
+ * 文件时开关禁用（那时树就是整个面板）。标签页与标题同一行：flex: 0 1 auto +
+ * 横向滚动，标签多时收缩自己滚动，永不把头部按钮挤出视野；激活态照选中行配方
+ * （--option-active-bg 淡底 + semibold），与树里当前文件行的选中高亮同一语言。
+ */
+.files-title-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 26px;
+  flex: none;
+  margin-left: -8px; /* 视觉左对齐标题文字（标题两侧 padding 内的负缩进，原型同款） */
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.files-title-toggle .orbita-icon:first-child {
+  color: var(--color-text-secondary);
+}
+.files-title-toggle:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.files-title-toggle[aria-expanded="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+.files-title-toggle:disabled {
+  cursor: default;
+}
+.files-title-chev {
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.files-title-toggle[aria-expanded="true"] .files-title-chev {
+  transform: rotate(90deg);
+}
+.files-head-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.files-head-tabs::-webkit-scrollbar {
+  display: none;
+}
+.files-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  flex: none;
+  padding: 0 4px 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-control);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition-hover);
+}
+.files-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.files-tab[aria-selected="true"] {
+  background: var(--option-active-bg);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+.files-tab-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.files-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: var(--transition-hover);
+}
+.files-tab:hover .files-tab-close,
+.files-tab[aria-selected="true"] .files-tab-close {
+  opacity: 1;
+}
+.files-tab-close:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 /*
- * 头：返回 / 关闭按钮用同一个 onClose（宽窄只差图标与文案），两个都渲染、用
- * container query 切换显示——窄容器（<600px，此时预览独占整个面板宽度）显示
- * 「Back to files」，宽容器（两栏时）显示「Close preview」。
+ * 预览头：标签页模型下关闭归标签 ✕ 与 Esc 管，头部只剩面包屑（从所在根开始的
+ * 路径分段 + size·mtime）与动作。面包屑分段由 crumbSegmentsFromRoot 从根的名
+ * 字起头；太长时在自身容器里**从左边裁**（组件挂载时把容器滚到最右，保住末尾
+ * 的文件段），完整绝对路径在容器 title；meta 在面包屑容器外，不被路径挤走。
  */
 .file-preview-header {
   display: flex;
@@ -2449,42 +2505,37 @@ body {
   padding: var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
 }
-.file-preview-back {
-  display: inline-flex;
-}
-.file-preview-close {
-  display: none;
-}
-@container (min-width: 600px) {
-  .file-preview-back {
-    display: none;
-  }
-  .file-preview-close {
-    display: inline-flex;
-  }
-}
-.file-preview-title {
+.file-preview-crumb {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  align-items: center;
+  gap: 4px;
   flex: 1 1 auto;
-}
-.file-preview-name {
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-control);
-  font-weight: var(--weight-medium);
-  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.file-preview-crumb-seg {
+  flex: none;
+}
+.file-preview-crumb-seg.cur {
+  color: var(--color-text-secondary);
+}
+.file-preview-crumb-sep {
+  flex: none;
+  color: var(--color-text-tertiary);
 }
 .file-preview-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 0 0 auto;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 .file-preview-actions {
   display: flex;
@@ -2565,19 +2616,28 @@ body {
  * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边
  * 加深，呼应稿子的「filesystem 卡演示 hover」帧。
  */
+/*
+ * MCP 条目（右栏统一）：不再是玻璃卡，是一块圆角行——内缩在 .panel-list 里、无边框、
+ * hover 用 --color-bg-hover（与文件 / 技能行同一配方）；第一行状态 + 名字 + 动作，
+ * 第二行起是命令 / 范围 / 实例状态（tertiary）。
+ */
 .mcp-card {
+  position: relative;
   display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3);
+  gap: 2px;
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-md);
+  transition: var(--transition-hover);
 }
 .mcp-card:hover,
 .mcp-card:focus-within {
-  border-color: var(--color-border-strong);
+  background: var(--color-bg-hover);
 }
 .mcp-name {
   flex: 1;
   min-width: 0;
-  font-weight: var(--weight-strong);
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2782,62 +2842,6 @@ button.mcp-tool-chip {
   color: var(--color-text-tertiary);
   overflow-wrap: anywhere;
   padding-left: 20px;
-}
-
-/*
- * 虚线「Add a server」卡（简报 4）：列表尾的第二入口，与页头 `+` 同一个
- * onClick（进添加表单）。
- */
-.mcp-add-card {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 44px;
-  border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-lg);
-  background: transparent;
-  color: var(--color-text-tertiary);
-  font: inherit;
-  font-size: var(--font-size-control);
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-.mcp-add-card:hover,
-.mcp-add-card:focus-visible {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-  border-color: var(--color-text-tertiary);
-}
-
-/* 空态（简报 4）：一台都没有时的主画面，两个出口都是现成动作 */
-.mcp-empty {
-  padding: 40px var(--space-5) 32px;
-  display: grid;
-  justify-items: center;
-  gap: var(--space-2);
-  text-align: center;
-}
-.mcp-empty-icon {
-  color: var(--color-text-tertiary);
-  margin-bottom: 2px;
-}
-.mcp-empty-title {
-  margin: 0;
-  font-size: var(--font-size-body);
-  font-weight: var(--weight-semibold);
-}
-.mcp-empty-desc {
-  margin: 0;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-tertiary);
-  max-width: 220px;
-  line-height: 1.6;
-}
-.mcp-empty-actions {
-  margin-top: var(--space-2);
-  display: flex;
-  gap: var(--space-2);
 }
 
 /*
@@ -3183,3 +3187,240 @@ textarea.text-field {
   color: var(--color-text-primary);
 }
 
+
+/*
+ * ===== 右栏面板统一（2026-10-11，用户在四个原型里选定 B「一体标题栏」）=====
+ * 六个面板（文件 / 技能 / MCP / 终端 / 辅助对话 / 改动审查）同一套语言：
+ *
+ * - 标题行就是工具行：图标 + 标题 → 中段（过滤框 / 终端标签 / 审查范围，
+ *   `.panel-head-grow` 占满剩余）→ 说明「?」→ 面板动作。没有第二条工具行，没有 ×。
+ * - 分组标题：小号半粗无衬线 + 浅灰补充（路径或计数），整行可折；组间只靠留白，
+ *   不画分隔线、不铺底色（用户：白色底带、横线、等宽大写都不要）。
+ * - 列表行：内缩 8px、圆角 md，hover 用 --color-bg-hover，选中用 --option-active-bg +
+ *   semibold（与侧栏 .option-row 同一配方）。行尾静止元素钉在行右内边距（血线），
+ *   悬停动作键绝对定位盖上、静止元素让位，按钮本身无底色（安静控件）。
+ */
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 48px;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 右栏在窗口最右，红绿灯净空（darwin 给 .titlebar 统一加的 66px）不适用——
+   不覆盖的话标题被推到中间（右栏统一验收实测） */
+:root[data-platform="darwin"] .panel-head {
+  padding-inline-start: 16px;
+}
+.panel-head-spacer {
+  flex: 1 1 0;
+}
+.panel-head:has(.panel-head-grow) > .panel-head-spacer {
+  display: none;
+}
+.panel-head-grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+  color: var(--color-text-primary);
+}
+.panel-title .orbita-icon {
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+.panel-title strong {
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+/* 标题行里的过滤框：浅底胶囊（--color-bg-muted），不画边框；聚焦只亮一圈 focus ring */
+.panel-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 96px;
+  height: 28px;
+  margin-left: 4px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--color-text-tertiary);
+  cursor: text;
+}
+.panel-filter:focus-within {
+  box-shadow: var(--focus-ring);
+}
+.panel-filter input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-primary);
+}
+.panel-filter input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.panel-filter-count {
+  flex: 0 0 auto;
+  font-size: var(--font-size-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分组标题 */
+.panel-group-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin-top: var(--space-3);
+}
+.panel-group-head:first-child {
+  margin-top: var(--space-1);
+}
+.panel-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: var(--color-text-secondary);
+  transition: var(--transition-hover);
+}
+button.panel-group-toggle {
+  cursor: pointer;
+}
+button.panel-group-toggle:hover {
+  color: var(--color-text-primary);
+}
+.panel-group-chev {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.panel-group-toggle[aria-expanded="true"] .panel-group-chev {
+  transform: rotate(90deg);
+}
+.panel-group-label {
+  flex: 0 0 auto;
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-semibold);
+}
+.panel-group-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+.panel-group-detail[data-warn="true"] {
+  color: var(--color-warning);
+}
+/* 组头行尾的悬停动作（排序 / 在访达显示 / 移除）：平时不占位，悬停或键盘聚焦才出现 */
+.panel-group-acts {
+  position: absolute;
+  right: var(--space-2);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-hover);
+}
+.panel-group-head:hover .panel-group-acts,
+.panel-group-head:focus-within .panel-group-acts {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 列表容器：内缩 8px，行在里面带圆角 */
+.panel-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  padding: 0 var(--space-2) var(--space-3);
+}
+/* 空态 / 说明：一行浅灰字，左缘与行内容对齐，不居中、不加粗、不画图标 */
+.panel-empty {
+  margin: 0;
+  padding: 6px var(--space-4);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* 行尾悬停动作键：无底色的安静控件，悬停时只有 bg-hover */
+.row-hover-act,
+.file-row-act,
+.skill-row-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  transition: var(--transition-hover);
+}
+.row-hover-act:hover,
+.file-row-act:hover,
+.skill-row-act:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 标题行中段的安静下拉（审查范围）：无边框，hover 才有底 */
+.panel-head-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  margin-left: 4px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+
+/* 改动审查的文件行：同一套圆角行，组间不画分隔线 */
+.review-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--list-item-compact);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: var(--color-text-primary);
+  transition: var(--transition-hover);
+}
+.review-row:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}

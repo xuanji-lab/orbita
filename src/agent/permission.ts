@@ -17,6 +17,7 @@ import {
   type PermissionMode,
 } from "../shared/permission.ts";
 import { isAbsolute, relative, resolve } from "node:path";
+import type { ContextMessage } from "./image-byte-budget.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
@@ -239,14 +240,27 @@ export interface PiExtensionApi {
   ): void;
   on(
     event: "before_agent_start",
-    handler: (event: { systemPrompt: string }) => { systemPrompt: string },
+    handler: (event: { systemPrompt: string }) => { systemPrompt: string } | void,
   ): void;
   /** 返回非 undefined 的值替换请求 payload（cc-billing-patch 用）；上游契约 BeforeProviderRequestEventResult = unknown */
   on(
     event: "before_provider_request",
     handler: (event: { payload: unknown }) => unknown,
   ): void;
+  /** 每次 LLM 调用前触发（transformContext）：返回 { messages } 替换发往 provider 的那份，
+   * 不写回 pi 本子（image-byte-budget 的 wire-only 替换用它）。上游契约 ContextEvent */
+  on(
+    event: "context",
+    handler: (
+      event: { type: "context"; messages: ContextBudgetMessage[] },
+    ) => { messages: ContextBudgetMessage[] } | undefined | void,
+  ): void;
+  /** 往 pi 本子追加 custom entry（不进 LLM 上下文）：跨轮持久化扩展自己的状态 */
+  appendEntry(customType: string, data?: unknown): void;
 }
+
+/** context 事件里的消息形状（AgentMessage 的结构化子集），image-byte-budget 定义 */
+export type ContextBudgetMessage = ContextMessage;
 
 /**
  * 生成 `tool_call` 处理器。纯逻辑 + 一个注入的询问函数，可被测试穷尽。

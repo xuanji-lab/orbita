@@ -3,6 +3,8 @@ import { iconMarkup } from "./icon-markup.ts";
 import archive from "../../../../Orbita Design System/assets/icons/lucide/archive.svg?raw";
 import archiveRestore from "../../../../Orbita Design System/assets/icons/lucide/archive-restore.svg?raw";
 import arrowDown from "../../../../Orbita Design System/assets/icons/lucide/arrow-down.svg?raw";
+import arrowDownAZ from "../../../../Orbita Design System/assets/icons/lucide/arrow-down-a-z.svg?raw";
+import arrowDownWideNarrow from "../../../../Orbita Design System/assets/icons/lucide/arrow-down-wide-narrow.svg?raw";
 import arrowLeft from "../../../../Orbita Design System/assets/icons/lucide/arrow-left.svg?raw";
 import arrowLeftRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-left-right.svg?raw";
 import arrowRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-right.svg?raw";
@@ -88,6 +90,7 @@ import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rota
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
 import squareTerminal from "../../../../Orbita Design System/assets/icons/lucide/square-terminal.svg?raw";
+import circleHelp from "../../../../Orbita Design System/assets/icons/lucide/circle-help.svg?raw";
 import search from "../../../../Orbita Design System/assets/icons/lucide/search.svg?raw";
 import terminal from "../../../../Orbita Design System/assets/icons/lucide/terminal.svg?raw";
 import fileText from "../../../../Orbita Design System/assets/icons/lucide/file-text.svg?raw";
@@ -118,6 +121,8 @@ const ICONS = {
   "book-open": bookOpen,
   "archive-restore": archiveRestore,
   "arrow-down": arrowDown,
+  "arrow-down-a-z": arrowDownAZ,
+  "arrow-down-wide-narrow": arrowDownWideNarrow,
   "arrow-left": arrowLeft,
   "arrow-left-right": arrowLeftRight,
   "arrow-right": arrowRight,
@@ -206,6 +211,7 @@ const ICONS = {
   star,
   square,
   "square-terminal": squareTerminal,
+  "circle-help": circleHelp,
   search,
   terminal,
   "file-text": fileText,

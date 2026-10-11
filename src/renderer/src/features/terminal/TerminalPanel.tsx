@@ -13,7 +13,7 @@ import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
-import { RightPanelFrame } from "../../shell/RightPanel";
+import { PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import type { TerminalInfo } from "@shared/terminal";
 import { TerminalView } from "./TerminalView";
 import { activeTerminalId, mergeTerminals } from "./terminal-tabs.ts";
@@ -29,7 +29,6 @@ export function TerminalPanel(props: {
    */
   activateId: string | null;
   onActivated: () => void;
-  onClose: () => void;
 }) {
   const t = useT();
   /** 现存终端（创建顺序即 tab 顺序）；pendingIds 是视图还在创建中的（info 未回） */
@@ -140,22 +139,10 @@ export function TerminalPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <Icon name="square-terminal" size={14} />
-          <strong style={{ fontSize: "var(--font-size-body)", fontWeight: 600 }}>{t.terminal.title}</strong>
-        </>
-      }
-      headerExtra={
-        <IconButton label={t.terminal.newTerminal} size={26} onClick={openTerminal}>
-          <Icon name="plus" size={16} />
-        </IconButton>
-      }
-      contentKey="terminal"
-      onClose={props.onClose}
-    >
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        {allIds.length > 0 ? (
-          <>
-            <div className="terminal-tabstrip" role="tablist" aria-label={t.terminal.title}>
+          <PanelTitle icon="square-terminal" title={t.terminal.title} />
+          {/* 终端标签住在标题行中段（右栏统一方案 B：没有第二条工具行） */}
+          {allIds.length > 0 && (
+            <div className="terminal-tabstrip panel-head-grow no-drag" role="tablist" aria-label={t.terminal.title}>
               {tabs.map((tab) => (
                 <TabButton
                   key={tab.terminalId}
@@ -174,27 +161,35 @@ export function TerminalPanel(props: {
                 </span>
               ))}
             </div>
-            <div className="terminal-views">
-              {allIds.map((id) => (
-                <TerminalView
-                  key={id}
-                  terminalId={id}
-                  cwd={props.cwd}
-                  exited={tabs.find((tab) => tab.terminalId === id)?.exited ?? null}
-                  active={id === active}
-                  onCreated={promoteTerminal}
-                />
-              ))}
-            </div>
-          </>
-        ) : (
-          <div className="terminal-empty">
-            <IconButton label={t.terminal.newTerminal} size={26} onClick={openTerminal}>
-              <Icon name="plus" size={16} />
-            </IconButton>
-          </div>
-        )}
-      </div>
+          )}
+        </>
+      }
+      headerExtra={
+        <IconButton label={t.terminal.newTerminal} size={26} onClick={openTerminal} className="no-drag">
+          <Icon name="plus" size={16} />
+        </IconButton>
+      }
+      contentKey="terminal"
+    >
+      {allIds.length > 0 ? (
+        <div className="terminal-views" style={{ height: "100%" }}>
+          {allIds.map((id) => (
+            <TerminalView
+              key={id}
+              terminalId={id}
+              cwd={props.cwd}
+              exited={tabs.find((tab) => tab.terminalId === id)?.exited ?? null}
+              active={id === active}
+              onCreated={promoteTerminal}
+            />
+          ))}
+        </div>
+      ) : (
+        // 空态：一行浅灰字（右栏统一），新建在标题行的 +
+        <p className="panel-empty" style={{ paddingTop: "var(--space-3)" }}>
+          {t.terminal.empty}
+        </p>
+      )}
     </RightPanelFrame>
   );
 }

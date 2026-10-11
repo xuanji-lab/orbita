@@ -236,6 +236,14 @@ export class SessionStore {
   }
 
   /**
+   * 某会话的附图原图目录（绝对路径）。给 agent 进程随轮发（图片字节预算的占位
+   * 要拼出可 read 回来的原图路径）；目录可能还不存在（首次存图才建）。
+   */
+  attachmentDirOf(id: string): string {
+    return this.attachmentsPath(id);
+  }
+
+  /**
    * 存下一批附图的原图，返回挂上 `original` 引用的同一批图（发给 agent 进程的那份）。
    *
    * **存不下不拦发送**：原图只是给人放大看的，模型收到的是缩放图——磁盘满了就不带引用，
@@ -449,15 +457,20 @@ export class SessionStore {
   }
 
   /**
-   * 轮尾文件账落盘（recorder 收到 fileTurn 事件时调）：正文写 blob、记录里只存
+   * 轮尾文件账落盘（主进程收到 fileTurn 事件时调）：正文写 blob、记录里只存
    * 引用。单个 blob 写失败降级成 unrecoverable（那一轮那一个文件回退不了，
    * 但整轮的账还在）——快照是回退能力的代价面，不是对话的依赖面。
+   *
+   * webArtifacts 是旁路网页产物（脚本生成、不在 changes 里、不参与撤销）：
+   * 只有它、没有 changes 的轮也落记录——卡片要出，冷启动从 JSONL 重建时
+   * 靠 isFileTurnRecord 把它原样读回来。
    */
   async recordFileTurn(
     id: string,
     changes: readonly FileChangePayload[],
+    webArtifacts: readonly string[] = [],
   ): Promise<FileTurnRecord | null> {
-    if (changes.length === 0) return null;
+    if (changes.length === 0 && webArtifacts.length === 0) return null;
     const persisted: FileChange[] = [];
     for (const change of changes) {
       persisted.push({
@@ -473,6 +486,7 @@ export class SessionStore {
       id: randomUUID(),
       timestamp: Date.now(),
       changes: persisted,
+      ...(webArtifacts.length > 0 ? { webArtifacts: [...webArtifacts] } : {}),
     };
     await this.record(id, record);
     return record;

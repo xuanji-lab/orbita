@@ -1,7 +1,7 @@
 {
   "name": "orbita",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.10",
   "description": "本地优先的 Electron AI 桌面 Agent —— 单 agent 重建分支",
   "license": "MIT",
   "packageManager": "bun@1.3.6",
@@ -11,9 +11,9 @@
     "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\"",
+    "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\" \"scripts/*.test.mjs\"",
     "ui:smoke": "bun scripts/ui-smoke.mjs",
-    "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && electron-vite build && electron-builder --mac --arm64 --publish never",
+    "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && electron-vite build && node scripts/dist-mac.mjs",
     "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && electron-vite build && electron-builder --win --publish never",
     "icon": "bash scripts/make-icon.sh",
     "icon:win": "node scripts/make-icon-win.mjs"

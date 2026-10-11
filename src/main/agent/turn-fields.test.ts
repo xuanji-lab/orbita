@@ -33,22 +33,42 @@ const environment = {
 
 describe("turnFields", () => {
   test("workspaceName 有值：透传进命令", () => {
-    const fields = turnFields(input, provider, "/pi", [], { ...environment, workspaceName: "论文 3" });
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], { ...environment, workspaceName: "论文 3" });
     assert.equal(fields.workspaceName, "论文 3");
     assert.equal(fields.workspaceId, "ws-1");
     assert.equal(fields.sessionId, "s1");
   });
 
   test("workspaceName 缺席（旧夹具 / 工作区已删）：键彻底不出现，不是 undefined 挂着", () => {
-    const fields = turnFields(input, provider, "/pi", [], environment);
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], environment);
     assert.equal("workspaceName" in fields, false);
     assert.equal(fields.workspaceId, "ws-1");
   });
 
   test("无工作区（workspaceId null）：照常，name 自然缺席", () => {
-    const fields = turnFields({ ...input, workspaceId: null }, provider, "/pi", [], environment);
+    const fields = turnFields({ ...input, workspaceId: null }, provider, "/pi", "/sessions/s1.attachments", [], environment);
     assert.equal(fields.workspaceId, null);
     assert.equal("workspaceName" in fields, false);
+  });
+
+  // 续会话的唯一通路：renderer 的 resume → 命令的 piSessionFile → runtime 的 SessionManager.open。
+  // 抽 turn-fields.ts 时漏过这一行（2026-10-11），每轮都新建 pi 本子：模型看不到前文，
+  // created 事件又把 meta 改指到新本子上，回退随之对不上账
+  test("resume 有值：piSessionFile 透传进命令（续跑旧本子）", () => {
+    const fields = turnFields(
+      { ...input, resume: { piSessionFile: "/pi/2026-10-09_book.jsonl" } },
+      provider,
+      "/pi",
+      "/sessions/s1.attachments",
+      [],
+      environment,
+    );
+    assert.equal(fields.piSessionFile, "/pi/2026-10-09_book.jsonl");
+  });
+
+  test("resume 为 null（新会话）：piSessionFile 键彻底不出现——runtime 据此新建、主进程据此等 created", () => {
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], environment);
+    assert.equal("piSessionFile" in fields, false);
   });
 });
 

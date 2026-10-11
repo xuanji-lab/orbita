@@ -43,13 +43,25 @@ import { attachmentBlocks, composePromptText } from "../shared/prompt-attachment
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
+import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
+import {
+  diffWebArtifacts,
+  scanWebArtifacts,
+  webScanRoots,
+  type WebScanResult,
+} from "./web-artifacts.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
+import {
+  RETRY_BASE_DELAY_MS,
+  RETRY_MAX_ATTEMPTS,
+  retryVisibleToUi,
+} from "./retry-policy.ts";
 import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { McpHub } from "./mcp.ts";
@@ -72,6 +84,15 @@ import {
 } from "./compaction-settings.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
+import { join } from "node:path";
+import {
+  IMAGE_BUDGET_ENTRY,
+  IMAGE_REFS_ENTRY,
+  hashImage,
+  planImageBudget,
+  readImageBudgetBook,
+  type ImageBudgetMark,
+} from "./image-byte-budget.ts";
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
 preferIPv4();
@@ -142,13 +163,57 @@ function pushStats(sessionId: string, session: AgentSession, persist?: true): vo
  * 轮落定的文件账上报：主进程写快照 blob、落 FileTurnRecord 并广播给轮尾卡片。
  * 没有改动的轮不发（不落空记录）；报失败只记日志——快照是回退能力的代价面，
  * 不是对话的依赖面，坏一条日志好过砸一轮对话。
+ *
+ * 旁路网页产物（web-artifacts.ts）在同一处结算：等开轮快照 + 轮尾重扫 + diff，
+ * 扣掉已在文件账里的路径。扫描失败只丢旁路那一栏，文件账照报。
  */
-async function reportFileTurn(sessionId: string, tracker: TurnFileTracker): Promise<void> {
+async function reportFileTurn(
+  sessionId: string,
+  tracker: TurnFileTracker,
+  webWatch: WebArtifactWatch,
+): Promise<void> {
   try {
-    const changes = await tracker.finalize();
-    if (changes.length > 0) send({ type: "fileTurn", sessionId, changes });
+    // 文件账与旁路扫描并行——轮尾收尾不该被其中一边白等
+    const [changes, before, after] = await Promise.all([
+      tracker.finalize(),
+      webWatch.before,
+      scanWebArtifactsLogged(webWatch.roots),
+    ]);
+    const tracked = new Set(changes.map((change) => change.path));
+    const webArtifacts = diffWebArtifacts(before.stamps, after.stamps).filter((path) => !tracked.has(path));
+    if (changes.length > 0 || webArtifacts.length > 0) {
+      send({
+        type: "fileTurn",
+        sessionId,
+        changes,
+        ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
+      });
+    }
   } catch (cause) {
     console.error("[agent] 轮尾文件账没报出去（回退会缺这一轮的快照）", sessionId, cause);
+  }
+}
+
+/**
+ * 本轮的网页产物旁路：扫描根 + 开轮拍下的快照（promise，与 pi 开机并行跑）。
+ * 轮尾 reportFileTurn 等它落定后再 diff。类型在 OpenedTurn / TurnParts 上透传。
+ */
+interface WebArtifactWatch {
+  roots: string[];
+  before: Promise<WebScanResult>;
+}
+
+/** 扫一遍并处理好日志面：截断 warn、失败按空结果（本轮没有旁路产物，不让扫描拖砸轮尾）。 */
+async function scanWebArtifactsLogged(roots: string[]): Promise<WebScanResult> {
+  try {
+    const result = await scanWebArtifacts(roots);
+    if (result.truncated) {
+      console.warn(`[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots.join(" | ")}`);
+    }
+    return result;
+  } catch (cause) {
+    console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
+    return { stamps: new Map(), truncated: false };
   }
 }
 
@@ -255,6 +320,9 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
         maxTokens: 2048,
         timeoutMs: GREETING_TIMEOUT_MS,
         signal: AbortSignal.timeout(GREETING_TIMEOUT_MS),
+        // 选中的模型可能是 OAuth Claude：completeSimple 不经主循环的扩展通路，
+        // 车道改写要随 options 带上（非 OAuth payload 原样过，见 cc-billing-patch.ts）
+        onPayload: ccBillingPatch,
         ...(command.provider.headers ? { headers: command.provider.headers } : {}),
       },
     );
@@ -307,6 +375,10 @@ async function probeProvider(command: Extract<AgentCommand, { type: "probeProvid
         maxTokens: 64,
         timeoutMs: PROBE_TIMEOUT_MS,
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        // 探测的使命就是复刻真会话的 Claude Code 形状：OAuth 车道上同样要带上
+        // billing header、去掉身份块，否则 opus-5-5 这类新模型会以
+        // claude_code_version_too_old 拒绝探测，而真会话其实是通的
+        onPayload: ccBillingPatch,
         ...(command.provider.headers ? { headers: command.provider.headers } : {}),
       },
     );
@@ -367,6 +439,9 @@ async function generateSessionTitle(
         maxTokens: 1024,
         timeoutMs: TITLE_TIMEOUT_MS,
         signal: AbortSignal.timeout(TITLE_TIMEOUT_MS),
+        // 会话模型（或家务活模型）可能是 OAuth Claude：标题调用不经主循环的扩展
+        // 通路，车道改写随 options 带上，否则 OAuth 车道上标题永远静默失败
+        onPayload: ccBillingPatch,
         ...(auth.headers ? { headers: auth.headers } : {}),
       },
     );
@@ -507,6 +582,10 @@ interface TurnParts {
   turn: TurnTiming;
   /** 本轮的文件快照跟踪器（OpenedTurn.tracker 的透传） */
   tracker: TurnFileTracker;
+  /** 本轮的网页产物旁路（OpenedTurn.webWatch 的透传） */
+  webWatch: WebArtifactWatch;
+  /** 本轮的图片字节预算状态（OpenedTurn.budget 的透传） */
+  budget: TurnImageBudget;
 }
 
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
@@ -633,6 +712,32 @@ interface OpenedTurn {
   turn: TurnTiming;
   /** 本轮的文件快照跟踪器：闸门放行记 before、执行落定读 after（file-tracker.ts） */
   tracker: TurnFileTracker;
+  /** 本轮的网页产物旁路：开轮 mtime 快照 + 扫描根，轮尾 diff（web-artifacts.ts） */
+  webWatch: WebArtifactWatch;
+  /** 本轮的图片字节预算状态（水位 + 附件引用），见 image-byte-budget.ts */
+  budget: TurnImageBudget;
+}
+
+/**
+ * 图片字节预算的轮内状态（image-byte-budget.ts 管算法，这里管装配与时序）：
+ *
+ * - `cut` / `refs` 开轮时从 pi 本子读一次（水位与附件引用都是跨轮持久化的
+ *   custom entry）；轮内推进后 `cut` 原地更新，后续 LLM 调用按新水位重放。
+ * - `pendingRefs` 是本轮 submit 附图的引用，在 echoAndPrompt 缩放后填
+ *   （hash 必须对缩放后的 data 算——pi 本子里存的是那份），before_agent_start
+ *   落成本子的 custom entry，此后任何一轮都能把占位路径拼回来。
+ * - `protectedFloor` 是本轮见过的最小保护起点：steer 注入会把「最后一条用户
+ *   消息」推后，不能让刚发过的本轮附图因此变成可替换。
+ */
+interface TurnImageBudget {
+  /** 现行水位（ImageBudgetMark）；null = 还没触发过。轮内推进后原地更新 */
+  mark: ImageBudgetMark | null;
+  /** 图片 hash → 原图绝对路径（本子 refs entry 合并而来） */
+  refs: Map<string, string>;
+  /** 本轮 submit 附图（缩放后）的 hash → 绝对路径，before_agent_start 落本子 */
+  pendingRefs: Map<string, string>;
+  /** 本轮见过的最小保护起点：steer 会把「最后一条用户消息」推后，不能让本轮附图因此可替换 */
+  protectedFloor: number;
 }
 
 /**
@@ -691,6 +796,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
   const tracker = new TurnFileTracker(command.cwd);
+  // 网页产物旁路（web-artifacts.ts）：开轮就拍目录 mtime 快照，**不 await**——
+  // 与 pi 开机并行，模型吐第一个字之前快照已拍完，轮内脚本生成的文件只会落进
+  // 轮尾那一遍。扫描根与开轮目录清单同源（cwd / attached / 会话工作台）。
+  const webRoots = webScanRoots(command.cwd, command.directories);
+  const webWatch: WebArtifactWatch = { roots: webRoots, before: scanWebArtifactsLogged(webRoots) };
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -774,16 +884,65 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             }));
           },
         },
+        {
+          name: "orbita-image-budget",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            // 本轮附图引用落本子：before_agent_start 在 prompt() 内、首个 LLM 调用
+            // （context 事件）之前触发，所以触发替换时这份账已经在盘上
+            pi.on("before_agent_start", () => {
+              if (budget.pendingRefs.size === 0) return;
+              pi.appendEntry(IMAGE_REFS_ENTRY, [...budget.pendingRefs]);
+              for (const [hash, path] of budget.pendingRefs) budget.refs.set(hash, path);
+            });
+            // wire-only 替换：只改发给模型的那份，pi 本子与 orbita 转录不动
+            pi.on("context", (event) => {
+              try {
+                let lastUser = -1;
+                for (let i = event.messages.length - 1; i >= 0; i -= 1) {
+                  if ((event.messages[i] as { role?: unknown }).role === "user") {
+                    lastUser = i;
+                    break;
+                  }
+                }
+                const floor = lastUser === -1 ? 0 : Math.min(budget.protectedFloor, lastUser);
+                budget.protectedFloor = floor;
+                const plan = planImageBudget(event.messages, budget.mark, budget.refs, floor);
+                if (plan.advancedCut !== null) {
+                  budget.mark = plan.advancedCut;
+                  pi.appendEntry(IMAGE_BUDGET_ENTRY, {
+                    cut: plan.advancedCut.cut,
+                    cutIndex: plan.advancedCut.cutIndex,
+                    replaced: plan.replaced,
+                    bytesAfter: plan.bytesAfter,
+                  } satisfies ImageBudgetMark);
+                  console.error(
+                    `[image-budget] 请求估算 ${(plan.bytesBefore / 1048576).toFixed(1)}MiB 超过 24MiB，` +
+                      `已把 ${plan.replaced} 张早期图片替换为占位（水位落在第 ${plan.advancedCut.cutIndex} 条消息，` +
+                      `估算降至 ${(plan.bytesAfter / 1048576).toFixed(1)}MiB）`,
+                  );
+                }
+                return plan.replaced > 0 ? { messages: plan.messages } : undefined;
+              } catch (cause) {
+                // fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送
+                console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
+                return undefined;
+              }
+            });
+          },
+        },
       ],
     },
   });
   /**
-   * 重试节奏由本应用自持：**固定 5 秒一次、最多 3 次**（pi 的指数退避已用 patch 拍平，
-   * 见 patches/README.md）。不显式覆盖的话会静默继承用户 pi TUI 的全局
+   * 重试节奏由本应用自持：**8 次、1 秒起指数退避**（参数与阈值的真源在
+   * ./retry-policy.ts，来历见那里）。不显式覆盖的话会静默继承用户 pi TUI 的全局
    * `~/.pi/agent/settings.json`——那是另一个应用的配置，不该左右这里等多久。
    * applyOverrides 只改内存、不落盘，不会写回用户的全局设置文件。
    */
-  services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
+  services.settingsManager.applyOverrides({
+    retry: { maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS },
+  });
   /**
    * bash 路径钉一次（A2）。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里
    * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 50~85ms 的同步 `where`）。
@@ -852,6 +1011,28 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    */
   const sessionManager = openOrCreate(command);
   /**
+   * 图片字节预算的轮内状态（image-byte-budget.ts 管算法，这里只管装配）：
+   * 水位与附件引用从 pi 本子（当前叶子路径）读；本轮 submit 的附图引用在
+   * echoAndPrompt 缩放后填进 pendingRefs，before_agent_start 落成本子的
+   * custom entry——占位里的「原图路径」要能跨重启拼回来，靠的就是这份账。
+   * attachmentsDir 由主进程随轮发（同 piSessionDir 的纪律：路径策略不进 agent 进程）。
+   *
+   * 定义在 extensionFactories 之后是安全的：factory 注册时只挂 handler，
+   * handler 真正触发（首个 LLM 调用 / before_agent_start）时它早已初始化。
+   */
+  const budgetBook = readImageBudgetBook(sessionManager.getBranch());
+  const budget: TurnImageBudget = {
+    mark: budgetBook.mark,
+    refs: new Map(
+      [...budgetBook.refs].map(([hash, ref]) => [
+        hash,
+        join(command.attachmentsDir, ref.slice(ref.indexOf("/") + 1)),
+      ]),
+    ),
+    pendingRefs: new Map(),
+    protectedFloor: Number.MAX_SAFE_INTEGER,
+  };
+  /**
    * MCP 工具。**连接按 (工作区, server) 建**，不是进程级一份——同一个 server 名
    * 在不同工作区往往是不同实例（参数不同、数据不同），共享一份就会静默串号。
    * `ensure` 幂等：已在的、配置没变的不动；**只连这一轮要用的工作区**。
@@ -898,6 +1079,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     thinkingLevel: command.thinkingLevel,
     ...(customTools.length > 0 ? { customTools } : {}),
   });
+  // 订阅车道改写的落点补全（cc-billing-stream.ts）：压缩 / 分支摘要绕过主循环的
+  // before_provider_request，包一层 streamFunction 把改写给到每一条出站请求
+  applyBillingStreamPatch(session);
   // 开轮即推一次真值：模型可能把我们传的档 clamp 到就近支持档（静默），
   // 芯片必须显示 clamp 后的事实而不是用户点的意图。每轮都推也兼容
   // 「换模型后支持集变了」——芯片每次开轮自我纠真
@@ -1017,7 +1201,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // 自动重试：对话主链路（auto_retry）与压缩/摘要调用（summarization_retry）共用这份翻译。
     // pi 只经事件暴露、不落盘。等待结束时 pi 会再发一次 agent_start（翻回 phase "turn"），
     // renderer 靠它清重试槽——不依赖下面 status: null 的到达，事件丢了也自愈。
-    if (event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled") {
+    // **前 N 次不进界面**（retryVisibleToUi，阈值与理由见 ./retry-policy.ts）：
+    // 拦在这层而不是 renderer，是因为 retry 事件只为驱动 UI 槽而存在，这里是它的
+    // 唯一生产者，策略与参数（./retry-policy.ts）同处一层。被拦掉的等待期间 phase
+    // 仍是 "turn"（pi 的 agent_settled 要等整轮 prompt+continue 收尾才发），
+    // renderer 底部的 Responding 行照常跳秒——用户看得到「还在跑」，不会误以为卡死。
+    if (
+      (event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled") &&
+      retryVisibleToUi(event.attempt)
+    ) {
       send({
         type: "retry",
         sessionId: command.sessionId,
@@ -1066,7 +1258,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe, turn, tracker };
+  return { session, adapter, unsubscribe, turn, tracker, webWatch, budget };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -1107,6 +1299,8 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         adapter: opened.adapter,
         turn: opened.turn,
         tracker: opened.tracker,
+        webWatch: opened.webWatch,
+        budget: opened.budget,
       };
     },
     async (parts) =>
@@ -1116,6 +1310,8 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         unsubscribe: parts.unsubscribe,
         turn: parts.turn,
         tracker: parts.tracker,
+        webWatch: parts.webWatch,
+        budget: parts.budget,
       }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
     // idle 时本轮已完全收尾，排队投递不会撞 already running
@@ -1205,6 +1401,13 @@ async function echoAndPrompt(
   command: Extract<AgentCommand, { type: "submit" | "interrupt" }>,
 ): Promise<void> {
   const images = await preparePromptImages(command.images);
+  // 附图引用记账（hash 对缩放后的 data 算——pi 本子里存的是那份）：占位文本要能给出
+  // 可 read 回来的原图绝对路径，靠这份账把 hash 对到文件
+  for (const image of images) {
+    if (image.original === undefined) continue;
+    const name = image.original.slice(image.original.indexOf("/") + 1);
+    opened.budget.pendingRefs.set(hashImage(image.data), join(command.attachmentsDir, name));
+  }
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
   const promptText = composePromptText(command.text, pasted, files);
@@ -1256,7 +1459,7 @@ async function handle(command: AgentCommand): Promise<void> {
       try {
         await echoAndPrompt(opened, ledgerNote(command.sessionId), command);
       } finally {
-        await reportFileTurn(command.sessionId, opened.tracker);
+        await reportFileTurn(command.sessionId, opened.tracker, opened.webWatch);
       }
     });
     return;
@@ -1277,7 +1480,7 @@ async function handle(command: AgentCommand): Promise<void> {
         try {
           await echoAndPrompt(opened, ledgerNote(command.sessionId), command);
         } finally {
-          await reportFileTurn(command.sessionId, opened.tracker);
+          await reportFileTurn(command.sessionId, opened.tracker, opened.webWatch);
         }
       });
     } catch (cause) {
@@ -1304,7 +1507,7 @@ async function handle(command: AgentCommand): Promise<void> {
         } finally {
           // 压缩轮不跑工具，finalize 恒为空——留着这行是为了「每轮都 finalize」的
           // 不变量不被将来加的压缩内工具破坏
-          await reportFileTurn(command.sessionId, opened.tracker);
+          await reportFileTurn(command.sessionId, opened.tracker, opened.webWatch);
         }
       });
     } catch (cause) {

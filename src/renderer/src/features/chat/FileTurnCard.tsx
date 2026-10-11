@@ -3,11 +3,9 @@ import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
 import type { FileTurnView, RevertRecord } from "@shared/revert";
+import { isWebArtifactFile } from "@shared/files";
 import { splitPathTail } from "./tool-results";
 import { RevertPreviewContext } from "./revert-preview.ts";
-
-/** 网页产物：浏览器能直接渲染、值得给「打开」动作的那几种（files.ts 同一张表）。 */
-const WEB_ARTIFACT = /\.(?:html?|svg)$/i;
 
 /**
  * 轮尾卡片家族 —— 每轮 assistant 结束后插在对话流的文件账（FileTurnRecord）与
@@ -53,9 +51,14 @@ const SLOT_DIR: React.CSSProperties = {
 };
 
 /**
- * 轮尾文件账卡。头：chevron｜「N 个文件已更改」｜+x −y｜撤销；展开：每文件一行
- * （文件名粗 + 目录淡 + +N −M）。已撤销的轮：数字列表保留、加「已撤销」徽标、
- * 撤销按钮禁用（不做重新应用——重新应用等于重跑那轮，交给回退后重发）。
+ * 轮尾文件账卡。头：chevron｜「N 个文件已更改」（· 生成了 M 个网页）｜+x −y｜撤销。
+ * **收起态也直接露出网页行**（文件账里的与旁路的都算）——网页产物是这一轮最
+ * 常被点开的东西，不该藏在展开里；其余文件行仍要展开才见。已撤销的轮：数字
+ * 列表保留、加「已撤销」徽标、撤销按钮禁用（不做重新应用——重新应用等于重跑
+ * 那轮，交给回退后重发）。
+ *
+ * 只有旁路网页产物、没有文件改动的轮也出卡（头部「生成了 N 个网页」，无 chevron、
+ * 无撤销——旁路产物开轮没拍内容快照，不参与撤销）。
  */
 export function FileTurnCard(props: {
   record: FileTurnView;
@@ -76,12 +79,43 @@ export function FileTurnCard(props: {
   const shown = open || previewing;
   const added = props.record.changes.reduce((sum, change) => sum + change.added, 0);
   const removed = props.record.changes.reduce((sum, change) => sum + change.removed, 0);
+  // 网页行两处来源：文件账里命中的（write / edit 写的，可撤销）与旁路（脚本生成，仅可打开）
+  const webFromAccount = props.record.changes.filter((change) => isWebArtifactFile(change.path));
+  const scripted = props.record.webArtifacts ?? [];
+  const fileRows = props.record.changes.filter((change) => !isWebArtifactFile(change.path));
+  const hasWeb = webFromAccount.length + scripted.length > 0;
+  // 展开键只在确有藏着的文件行时才给：网页行收起态就可见，chevron 展不出新东西就是噪音
+  const expandable = fileRows.length > 0;
+  // 撤销 / 已撤销只对文件账有意义：旁路产物撤不回去，没账的轮不给撤销按钮
+  const undoable = props.record.changes.length > 0;
+  const label = undoable
+    ? t.chat.fileCardChanged(props.record.changes.length) +
+      (scripted.length > 0 ? ` · ${t.chat.fileCardWebMade(scripted.length)}` : "")
+    : t.chat.fileCardWebMade(scripted.length);
+  const webSection = (bordered: boolean) => (
+    <div
+      style={{
+        display: "grid",
+        gap: 2,
+        ...(bordered
+          ? { marginTop: "var(--space-1)", paddingTop: "var(--space-1)", borderTop: "1px solid var(--color-border-subtle)" }
+          : null),
+      }}
+    >
+      {webFromAccount.map((change) => (
+        <ArtifactRow key={change.path} path={change.path} cwd={props.cwd} sessionId={props.sessionId} />
+      ))}
+      {scripted.map((path) => (
+        <ArtifactRow key={path} path={path} cwd={props.cwd} sessionId={props.sessionId} scripted />
+      ))}
+    </div>
+  );
   return (
     <div
       className="file-turn-card"
       style={{
         display: "grid",
-        gap: shown ? "var(--space-1)" : 0,
+        gap: shown || hasWeb ? "var(--space-1)" : 0,
         padding: "var(--space-2) var(--space-3)",
         background: "var(--color-chat-card-bg)",
         border: `1px solid ${previewing ? "var(--color-border-strong)" : "var(--color-border-subtle)"}`,
@@ -92,88 +126,107 @@ export function FileTurnCard(props: {
     >
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
         {/* 整个头部左段都是展开键（不是只有 13px 的 chevron）：zcode 同款，点哪都开 */}
-        <button
-          type="button"
-          title={shown ? t.chat.fileCardCollapse : t.chat.fileCardExpand}
-          aria-expanded={shown}
-          onClick={() => setOpen((value) => !value)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            flex: "1 1 auto",
-            minWidth: 0,
-            padding: 0,
-            border: "none",
-            background: "none",
-            font: "inherit",
-            color: "inherit",
-            textAlign: "left",
-            cursor: "pointer",
-          }}
-        >
-          <span
-            style={{
-              display: "inline-flex",
-              color: "var(--color-text-tertiary)",
-              transition: "transform var(--duration-fast) var(--ease-out-quint)",
-              transform: shown ? "rotate(90deg)" : "none",
-            }}
-          >
-            <Icon name="chevron-right" size={13} strokeWidth={1.8} />
-          </span>
-          <span style={{ color: "var(--color-text-secondary)", fontWeight: 600 }}>
-            {t.chat.fileCardChanged(props.record.changes.length)}
-          </span>
-          <Stats added={added} removed={removed} />
-        </button>
-        {props.undone ? (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              padding: "1px var(--space-2)",
-              borderRadius: "var(--radius-pill)",
-              background: "var(--color-bg-muted)",
-              fontSize: "var(--font-size-caption)",
-              color: "var(--color-text-tertiary)",
-              flex: "0 0 auto",
-            }}
-          >
-            <Icon name="check" size={11} strokeWidth={1.8} />
-            {t.chat.fileCardUndone}
-          </span>
-        ) : (
+        {expandable ? (
           <button
             type="button"
-            title={t.chat.fileCardUndoHint}
-            aria-label={t.chat.fileCardUndoHint}
-            disabled={props.busy}
-            onClick={() => props.onUndo(props.record.id)}
+            title={shown ? t.chat.fileCardCollapse : t.chat.fileCardExpand}
+            aria-expanded={shown}
+            onClick={() => setOpen((value) => !value)}
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 4,
-              padding: "2px var(--space-2)",
-              border: "1px solid var(--color-border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              background: "transparent",
-              color: props.busy ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
+              gap: "var(--space-2)",
+              flex: "1 1 auto",
+              minWidth: 0,
+              padding: 0,
+              border: "none",
+              background: "none",
               font: "inherit",
-              fontSize: "var(--font-size-caption)",
-              cursor: props.busy ? "default" : "pointer",
-              flex: "0 0 auto",
+              color: "inherit",
+              textAlign: "left",
+              cursor: "pointer",
             }}
           >
-            <Icon name="undo-2" size={11} strokeWidth={1.8} />
-            {t.chat.fileCardUndo}
+            <span
+              style={{
+                display: "inline-flex",
+                color: "var(--color-text-tertiary)",
+                transition: "transform var(--duration-fast) var(--ease-out-quint)",
+                transform: shown ? "rotate(90deg)" : "none",
+              }}
+            >
+              <Icon name="chevron-right" size={13} strokeWidth={1.8} />
+            </span>
+            <span style={{ color: "var(--color-text-secondary)", fontWeight: 600 }}>{label}</span>
+            <Stats added={added} removed={removed} />
           </button>
+        ) : (
+          // 没有藏着的行（只有网页行）：头部是静态的，不装展开键
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+              flex: "1 1 auto",
+              minWidth: 0,
+              color: "var(--color-text-secondary)",
+              fontWeight: 600,
+            }}
+          >
+            {label}
+            <Stats added={added} removed={removed} />
+          </span>
         )}
+        {undoable &&
+          (props.undone ? (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "1px var(--space-2)",
+                borderRadius: "var(--radius-pill)",
+                background: "var(--color-bg-muted)",
+                fontSize: "var(--font-size-caption)",
+                color: "var(--color-text-tertiary)",
+                flex: "0 0 auto",
+              }}
+            >
+              <Icon name="check" size={11} strokeWidth={1.8} />
+              {t.chat.fileCardUndone}
+            </span>
+          ) : (
+            <button
+              type="button"
+              title={t.chat.fileCardUndoHint}
+              aria-label={t.chat.fileCardUndoHint}
+              disabled={props.busy}
+              onClick={() => props.onUndo(props.record.id)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px var(--space-2)",
+                border: "1px solid var(--color-border-subtle)",
+                borderRadius: "var(--radius-sm)",
+                background: "transparent",
+                color: props.busy ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
+                font: "inherit",
+                fontSize: "var(--font-size-caption)",
+                cursor: props.busy ? "default" : "pointer",
+                flex: "0 0 auto",
+              }}
+            >
+              <Icon name="undo-2" size={11} strokeWidth={1.8} />
+              {t.chat.fileCardUndo}
+            </button>
+          ))}
       </div>
+      {/* 收起态也露出网页行（用户裁决）：文件账里的与旁路的都直接可见、可点 */}
+      {hasWeb && !shown && webSection(false)}
       {shown && (
         <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-          {props.record.changes.filter((change) => !WEB_ARTIFACT.test(change.path)).map((change) => {
+          {fileRows.map((change) => {
             const parts = pathParts(change.path, props.cwd);
             const clickable = props.onOpenFile !== undefined;
             return (
@@ -211,32 +264,31 @@ export function FileTurnCard(props: {
               </button>
             );
           })}
-          {props.record.changes.some((change) => WEB_ARTIFACT.test(change.path)) && (
-            <div style={{ display: "grid", gap: 2, marginTop: "var(--space-1)", paddingTop: "var(--space-1)", borderTop: "1px solid var(--color-border-subtle)" }}>
-              {props.record.changes
-                .filter((change) => WEB_ARTIFACT.test(change.path))
-                .map((change) => (
-                  <ArtifactRow
-                    key={change.path}
-                    path={change.path}
-                    cwd={props.cwd}
-                    sessionId={props.sessionId}
-                  />
-                ))}
-            </div>
-          )}
+          {hasWeb && webSection(true)}
         </div>
       )}
     </div>
   );
 }
 
+/** 旁路标记的槽位：小字、三级灰，不参与 rtl 折叠（它是固定文案，不是路径）。 */
+const SLOT_MARK: React.CSSProperties = {
+  fontSize: "var(--font-size-caption)",
+  color: "var(--color-text-tertiary)",
+  whiteSpace: "nowrap",
+  flex: "0 0 auto",
+};
+
 /**
  * 轮尾产物行（.html / .htm / .svg）：左图标、名称 + 类型「网页」（zcode 参考的
  * 形态），末端两个按钮——「在 Orbita 浏览器打开」（网页产物的默认出口，沙盒里
- * 还能开着 DevTools 看）与「打开文件所在位置」。主进程按会话文件账白名单校验。
+ * 还能开着 DevTools 看）与「打开文件所在位置」。主进程按会话文件账白名单校验
+ * （changes 与旁路 webArtifacts 都算）。
+ *
+ * scripted = 旁路产物（脚本生成）：行内标「脚本生成 · 仅可打开」——它不在文件
+ * 账里、不参与撤销，这是卡片上如实交代的两件事。
  */
-function ArtifactRow(props: { path: string; cwd: string | null; sessionId: string }) {
+function ArtifactRow(props: { path: string; cwd: string | null; sessionId: string; scripted?: boolean }) {
   const t = useT();
   const parts = pathParts(props.path, props.cwd);
   const openInBrowser = () => {
@@ -273,6 +325,7 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
           {parts.name}
         </span>
         <span style={{ ...SLOT_DIR, flex: "0 0 auto" }}>{t.chat.fileCardWebPage}</span>
+        {props.scripted === true && <span style={SLOT_MARK}>{t.chat.fileCardScripted}</span>}
         {parts.dir !== "" && <span style={SLOT_DIR}>{parts.dir}</span>}
       </span>
       <button type="button" style={button} onClick={openInBrowser} title={t.chat.openInOrbita}>

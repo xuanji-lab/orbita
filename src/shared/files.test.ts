@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fileRootLabel, isWebPageFile, sortFileEntries, type FileEntry } from "./files.ts";
+import { fileRootLabel, isWebArtifactFile, isWebPageFile, sortFileEntries, type FileEntry } from "./files.ts";
 
 const entry = (name: string, kind: FileEntry["kind"]): FileEntry => ({ name, kind, modifiedAt: 0 });
 
@@ -46,5 +46,12 @@ describe("isWebPageFile", () => {
   it("html / htm / xhtml / svg 算网页，大小写不敏感；别的不算", () => {
     for (const name of ["report.html", "a/b/INDEX.HTM", "page.xhtml", "chart.svg"]) strictEqual(isWebPageFile(name), true, name);
     for (const name of ["notes.md", "data.json", "html", "page.html.bak", "shot.png"]) strictEqual(isWebPageFile(name), false, name);
+  });
+});
+
+describe("isWebArtifactFile（轮尾网页产物：卡片行与轮内扫描同一张表）", () => {
+  it("只收 html / htm / svg，不认 xhtml（那是浏览器那套表）", () => {
+    for (const name of ["report.html", "a/b/INDEX.HTM", "chart.SVG"]) strictEqual(isWebArtifactFile(name), true, name);
+    for (const name of ["page.xhtml", "notes.md", "html", "page.html.bak"]) strictEqual(isWebArtifactFile(name), false, name);
   });
 });

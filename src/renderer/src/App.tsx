@@ -768,19 +768,17 @@ export function App() {
               }}
             >
               {shownPanel === "files" ? (
-                <FilesPanel session={session} onClose={() => handlePanel(null)} escapeRef={filesEscapeRef} />
+                <FilesPanel session={session} escapeRef={filesEscapeRef} />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
                   focus={reviewFocus}
                   revision={`${session.fileTurns.length}:${session.reverts.length}:${session.undos.length}:${session.phase}`}
                   cwd={session.cwd}
-                  onClose={() => handlePanel(null)}
                 />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel
                   skills={skills}
-                  onClose={() => handlePanel(null)}
                   defaultWorkspaceId={session.workspaceId}
                   onCreateSkill={createSkillDraft}
                   picker={tokenPickerOn ? skillsPicker : undefined}
@@ -789,7 +787,6 @@ export function App() {
               ) : shownPanel === "mcp" ? (
                 <McpPanel
                   skills={skills}
-                  onClose={() => handlePanel(null)}
                   picker={tokenPickerOn ? mcpPicker : undefined}
                   onInsert={insertPanelToken}
                 />
@@ -798,7 +795,6 @@ export function App() {
                   cwd={session.cwd}
                   activateId={pendingTerminal}
                   onActivated={() => setPendingTerminal(null)}
-                  onClose={() => handlePanel(null)}
                 />
               ) : shownPanel === "drawer" ? (
                 <Drawer
@@ -836,7 +832,6 @@ export function App() {
                   onBackToList={() => setSubSessionsNav(SUB_SESSIONS_LIST)}
                   onOpenAsMain={openAsMain}
                   onOpenChannel={openChannel}
-                  onClose={() => handlePanel(null)}
                   providersError={providersError}
                   starredModels={settings.starredModels ?? []}
                   onToggleStarModel={toggleStarModel}

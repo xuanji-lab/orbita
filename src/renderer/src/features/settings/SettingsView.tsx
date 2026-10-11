@@ -102,9 +102,10 @@ export function SettingsView(props: {
           display: "flex",
           alignItems: "center",
           minWidth: 0,
-          height: 30,
-          padding: "12px 18px",
-          boxSizing: "content-box",
+          // 页头 48（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线连成一条
+          height: 48,
+          padding: "0 18px",
+          boxSizing: "border-box",
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >

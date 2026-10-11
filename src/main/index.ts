@@ -440,7 +440,7 @@ void app.whenReady().then(async () => {
       // 等**落盘完**再广播，并带上落盘记录的真 id——renderer 的轮尾卡拿它当 key
       // 与撤销的 turnId（单轮撤销按它回查账本），自造 id 会对不上盘
       void sessions
-        .recordFileTurn(event.sessionId, event.changes)
+        .recordFileTurn(event.sessionId, event.changes, event.webArtifacts ?? [])
         .then((record) => {
           if (record === null) return;
           broadcastAgentEvent({
@@ -452,6 +452,8 @@ void app.whenReady().then(async () => {
               added: change.added,
               removed: change.removed,
             })),
+            // 旁路网页产物随视图过一道：卡片收起态就靠它出网页行
+            ...(record.webArtifacts !== undefined ? { webArtifacts: record.webArtifacts } : {}),
           });
         })
         .catch((cause: unknown) =>
@@ -533,6 +535,8 @@ void app.whenReady().then(async () => {
     workspaces,
     channels,
     join(configDir, "pi-sessions"),
+    // 图片字节预算的占位要拼附图原图的绝对路径（agent 进程不做路径策略）
+    (sessionId) => sessions.attachmentDirOf(sessionId),
     // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     (workspaceId) => skills.linkDirs(workspaceId),
