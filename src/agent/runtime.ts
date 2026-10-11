@@ -807,7 +807,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 网页产物旁路（web-artifacts.ts）：只记开轮时刻，不扫盘——按 mtime 判「本轮
   // 新出现」，批量文件操作会被批量折叠拦住，截断只可能漏报不会误报（上一版
   // 「开轮快照 + 轮尾 diff」两处误报的教训见 web-artifacts.ts 文件头）。
-  // 扫描根与开轮目录清单同源（cwd / attached / 会话工作台），预算按根分账。
+  // 扫描根只有 cwd 与会话工作台——附加目录跨会话共享，分不清是不是这一轮生成的。
   const webWatch: WebArtifactWatch = {
     roots: webScanRoots(command.cwd, command.directories),
     startedAt: Date.now(),

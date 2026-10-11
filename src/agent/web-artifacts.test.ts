@@ -4,7 +4,6 @@ import {
   foldWebArtifacts,
   scanWebArtifacts,
   webScanRoots,
-  SCAN_ATTACHED_MAX_ENTRIES,
   SCAN_MAX_ENTRIES,
   WEB_ARTIFACT_BATCH_LIMIT,
   type ScanFs,
@@ -233,8 +232,8 @@ describe("foldWebArtifacts —— 批量折叠", () => {
   });
 });
 
-describe("webScanRoots —— 根与预算同开轮目录清单分账", () => {
-  it("cwd 与工作台吃全预算，附加目录各吃小预算", () => {
+describe("webScanRoots —— 只扫 cwd 与工作台，不扫附加目录", () => {
+  it("附加目录不进扫描根（跨会话共享，别的会话的批量操作会被误认成本轮产物）", () => {
     const directories: TurnDirectories = {
       attached: ["/extra", "/repo"],
       workbench: "/userData/workbenches/s1",
@@ -242,26 +241,16 @@ describe("webScanRoots —— 根与预算同开轮目录清单分账", () => {
     deepStrictEqual(webScanRoots("/w", directories), [
       { root: "/w", maxEntries: SCAN_MAX_ENTRIES },
       { root: "/userData/workbenches/s1", maxEntries: SCAN_MAX_ENTRIES },
-      { root: "/extra", maxEntries: SCAN_ATTACHED_MAX_ENTRIES },
-      { root: "/repo", maxEntries: SCAN_ATTACHED_MAX_ENTRIES },
     ]);
   });
 
-  it("与 cwd / 工作台重复的附加目录不再单开一份小预算扫描", () => {
-    const directories: TurnDirectories = {
-      attached: ["/w", "/userData/workbenches/s1", "/extra"],
-      workbench: "/userData/workbenches/s1",
-    };
-    deepStrictEqual(webScanRoots("/w", directories), [
-      { root: "/w", maxEntries: SCAN_MAX_ENTRIES },
-      { root: "/userData/workbenches/s1", maxEntries: SCAN_MAX_ENTRIES },
-      { root: "/extra", maxEntries: SCAN_ATTACHED_MAX_ENTRIES },
-    ]);
+  it("工作台与 cwd 同路径时只扫一份", () => {
+    deepStrictEqual(webScanRoots("/w", { attached: [], workbench: "/w" }), [{ root: "/w", maxEntries: SCAN_MAX_ENTRIES }]);
   });
 
-  it("清单缺席 / 工作台空串：退回 cwd 一个（全预算）", () => {
+  it("清单缺席 / 工作台空串：退回 cwd 一个", () => {
     deepStrictEqual(webScanRoots("/w", undefined), [{ root: "/w", maxEntries: SCAN_MAX_ENTRIES }]);
-    deepStrictEqual(webScanRoots("/w", { attached: [], workbench: "" }), [
+    deepStrictEqual(webScanRoots("/w", { attached: ["/x"], workbench: "" }), [
       { root: "/w", maxEntries: SCAN_MAX_ENTRIES },
     ]);
   });
