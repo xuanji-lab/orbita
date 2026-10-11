@@ -397,7 +397,7 @@ export const en = {
     weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
     today: "Today",
     /** 悬停一天没有用量时 */
-    noUsage: "No usage",
+    noUsage: "A rest day. Enjoy it~",
     /** 悬停一格：只给当天总量（日期与星期在格子下面） */
     day: (tokens: string) => `${tokens} tokens`,
   },
