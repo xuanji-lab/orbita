@@ -136,8 +136,12 @@ export const en = {
     removeImage: "Remove image",
     materialBox: "Materials",
     imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
-    imageTooLarge: (name: string, mb: number) => `${name} is over ${mb} MB.`,
-    tooManyImages: (max: number) => `Up to ${max} images per message.`,
+    imageTooLarge: (name: string, mb: number) =>
+      `${name} is over ${mb} MB. Put it in a folder and attach the folder (drag it in or use the paperclip) — the model reads it from there as needed.`,
+    tooManyImages: (max: number) =>
+      `Up to ${max} images per message. Put them in a folder and attach the folder (drag it in or use the paperclip) — the model reads them one by one as needed.`,
+    imagesTotalTooLarge: (mb: number) =>
+      `Images in one message can't add up to more than ${mb} MB. Put them in a folder and attach the folder (drag it in or use the paperclip) — the model reads them one by one as needed.`,
     imageReadFailed: (name: string) => `Couldn't read ${name}.`,
     noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
     removeFile: "Remove file",

@@ -110,8 +110,12 @@ export const zh: Messages = {
     removeImage: "移除图片",
     materialBox: "材料",
     imageUnsupported: (name) => `${name}：只能发送 PNG、JPEG、GIF、WebP，请先转换格式。`,
-    imageTooLarge: (name, mb) => `${name} 超过 ${mb} MB。`,
-    tooManyImages: (max) => `一条消息最多 ${max} 张图片。`,
+    imageTooLarge: (name, mb) =>
+      `${name} 超过 ${mb} MB。可以把它放进一个文件夹，再把文件夹拖进来或用回形针附加——模型会按需读取。`,
+    tooManyImages: (max) =>
+      `一条消息最多 ${max} 张图片。可以把它们放进一个文件夹，再把文件夹拖进来或用回形针附加——模型会按需逐张读取。`,
+    imagesTotalTooLarge: (mb) =>
+      `这条消息的图片总大小不能超过 ${mb} MB。可以把它们放进一个文件夹，再把文件夹拖进来或用回形针附加——模型会按需逐张读取。`,
     imageReadFailed: (name) => `读不出 ${name}。`,
     noVision: "这个模型不能看图，图片不会发给它。换一个带图片标记的模型。",
     removeFile: "移除文件",
