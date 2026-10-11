@@ -406,7 +406,9 @@ export const en = {
     experimental: "Experimental features",
     experimentalAria: "Experimental features",
     experimentalInfo:
-      "Shows surfaces still being polished: the Copybook and Typescript paper themes, and the session lifecycle — star, done, carryover scan · anything you already have is kept and comes back when turned on",
+      "Shows features still being polished, each listed below with its changelog · anything you already have is kept and comes back when turned on",
+    experimentalList: "What's experimental",
+    experimentalLog: (count: number) => `Changelog · ${count}`,
     agent: "Agent",
     autoCompact: "Auto-compact",
     /** 说明中间夹着一个 <b>/compact</b>，拆成前后两段 */

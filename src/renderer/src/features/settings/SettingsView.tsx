@@ -25,6 +25,7 @@ import { InfoTip } from "./InfoTip";
 import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
+import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
 import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
@@ -368,6 +369,15 @@ function General(props: {
           </span>
         </SettingRow>
       </SettingGroup>
+      {/*
+        实验功能一览（experimental-features.ts）：开关关着也列——打开之前就该看得到里面
+        有什么、每一版改了什么。每项一行，「更新日志」芯片展开它的开发记录。
+      */}
+      <SettingGroup label={t.settings.experimentalList}>
+        {EXPERIMENTAL_FEATURES.map((feature) => (
+          <ExperimentalFeatureRow key={feature.id} feature={feature} language={shownLanguage} />
+        ))}
+      </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
           它们调的都是「agent 怎么干活」，并成一组 */}
       <SettingGroup label={t.settings.agent}>
@@ -580,6 +590,57 @@ function SettingRow(props: {
         {props.note}
       </span>
       <div className="set-row-ctl">{props.children}</div>
+    </div>
+  );
+}
+
+/**
+ * 实验功能一行：名字 + 一句说明，右侧「更新日志 · N」芯片展开开发记录（新的在上——
+ * 用户想知道的是「最近改了什么」）。PR 号可点，在内置浏览器里打开那个 PR。
+ */
+function ExperimentalFeatureRow(props: { feature: ExperimentalFeature; language: Language }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const { feature, language } = props;
+  const entries = [...feature.changelog].reverse();
+  return (
+    <div className="set-row exp-feature">
+      <span className="set-row-head">
+        <span className="set-row-name">{feature.name[language]}</span>
+        <span className="set-row-hint">{feature.summary[language]}</span>
+      </span>
+      <div className="set-row-ctl">
+        <Chip
+          icon={open ? "chevron-up" : "chevron-down"}
+          active={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {t.settings.experimentalLog(feature.changelog.length)}
+        </Chip>
+      </div>
+      {open && (
+        <ol className="exp-log">
+          {entries.map((entry, i) => (
+            <li key={i} className="exp-log-entry">
+              <span className="exp-log-meta">
+                {entry.pr !== null && (
+                  <a
+                    href={pullRequestUrl(entry.pr)}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      window.open(pullRequestUrl(entry.pr ?? 0));
+                    }}
+                  >
+                    #{entry.pr}
+                  </a>
+                )}
+                <span>{entry.date}</span>
+              </span>
+              <span className="exp-log-note">{entry.note[language]}</span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

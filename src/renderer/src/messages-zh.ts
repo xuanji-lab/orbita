@@ -374,8 +374,9 @@ export const zh: Messages = {
     languageLockedEn: "这个主题只有英文",
     experimental: "实验功能",
     experimentalAria: "实验功能",
-    experimentalInfo:
-      "显示仍在打磨的界面：小学作业与打字稿两档纸面皮肤，以及会话生命周期——星标、完成、收尾扫描 · 已有的数据保留，重新打开即恢复",
+    experimentalInfo: "显示仍在打磨的功能，每一项和它的更新日志列在下面 · 已有的数据保留，重新打开即恢复",
+    experimentalList: "实验功能一览",
+    experimentalLog: (count) => `更新日志 · ${count}`,
     agent: "智能体",
     autoCompact: "自动压缩",
     autoCompactInfoLead: "剩余上下文降到这一档时，把较早的历史折成摘要 · 关闭则只能手动 ",

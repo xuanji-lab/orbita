@@ -560,3 +560,44 @@
   color: var(--color-text-tertiary);
   word-break: break-all;
 }
+
+/* 实验功能一览（SettingsView 的 ExperimentalFeatureRow）：说明可能两行，行头顶对齐；
+   展开的更新日志跨满两列，挂在行下方，元信息（PR 号 · 日期）用等宽字、退到次要色 */
+.exp-feature {
+  align-items: start;
+}
+.exp-feature .set-row-hint {
+  line-height: var(--line-height-caption);
+}
+.exp-log {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid var(--color-border-subtle);
+  list-style: none;
+}
+.exp-log-entry {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: var(--space-3);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+}
+.exp-log-meta {
+  display: inline-flex;
+  gap: var(--space-2);
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+.exp-log-meta a {
+  color: var(--color-chat-link);
+  text-decoration: none;
+}
+.exp-log-meta a:hover {
+  text-decoration: underline;
+}
+.exp-log-note {
+  color: var(--color-text-secondary);
+}
