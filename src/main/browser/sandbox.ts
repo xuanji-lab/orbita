@@ -550,6 +550,22 @@ export class BrowserSandbox {
     });
     this.wireShortcuts(window.webContents);
 
+    /*
+     * 工具条页面与主窗口同信任级（带 preload），同样不许被页内导航顶掉：自己（reload /
+     * HMR 全量刷新）放行，其余 preventDefault——网页地址落进用户的 tab，非网页协议直接丢
+     * （不交给 open 的搜索兑底：拖进来的东西不该被整条送进搜索引擎）。window.open 同理。
+     */
+    const toolbar = window.webContents;
+    toolbar.on("will-navigate", (event, url) => {
+      if (url === toolbar.getURL()) return;
+      event.preventDefault();
+      if (normalizeAddress(url) !== null) void this.open(url).catch(() => undefined);
+    });
+    toolbar.setWindowOpenHandler(({ url }) => {
+      if (normalizeAddress(url) !== null) void this.open(url).catch(() => undefined);
+      return { action: "deny" };
+    });
+
     this.show(this.createTab({ kind: "user" }).id);
     this.deps.loadToolbar(window);
     return window;

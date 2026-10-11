@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isWebLink, normalizeAddress, resolveAddressOrSearch } from "./address.ts";
+import { isSystemHandoffLink, isWebLink, normalizeAddress, resolveAddressOrSearch } from "./address.ts";
 
 test("带 http / https 协议的原样放行（规范化成 href）", () => {
   assert.equal(normalizeAddress("https://www.scopus.com"), "https://www.scopus.com/");
@@ -74,5 +74,24 @@ test("isWebLink：http / https 进内置浏览器；mailto、file、javascript �
   }
   for (const url of ["mailto:a@b.com", "file:///Users/x/report.html", "javascript:alert(1)", "github.com", ""]) {
     assert.equal(isWebLink(url), false, url);
+  }
+});
+
+test("isSystemHandoffLink：只有 mailto 交给系统；其余非网页协议一律不交", () => {
+  assert.equal(isSystemHandoffLink("mailto:hi@example.com"), true);
+  assert.equal(isSystemHandoffLink(" MAILTO:hi@example.com "), true, "大小写与空白不敏感");
+  for (const url of [
+    "file:///Users/x/report.html",
+    "javascript:alert(1)",
+    "ms-msdt:/oops",
+    "search-ms:query=x",
+    "smb://server/share",
+    "chrome://settings",
+    "tel:+1234",
+    "https://github.com/",
+    "github.com",
+    "",
+  ]) {
+    assert.equal(isSystemHandoffLink(url), false, url);
   }
 });
