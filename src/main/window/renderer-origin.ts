@@ -45,7 +45,14 @@ export function isOwnRendererPage(url: string, deps: RendererOriginDeps): boolea
     return parsed.origin === own.origin;
   }
   if (parsed.protocol !== "file:") return false;
-  const path = deps.path ?? { relative };
-  const rel = path.relative(deps.rendererDir, fileURLToPath(parsed));
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  try {
+    const path = deps.path ?? { relative };
+    const rel = path.relative(deps.rendererDir, fileURLToPath(parsed));
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  } catch {
+    // 本平台解不了的 file URL（Windows 上 file:///Users/… 这类 POSIX 形态会抛
+    // ERR_INVALID_FILE_URL_PATH）：必然不是我们自己的 renderer 页。抛出去会穿透
+    // will-navigate 的 preventDefault，闸门整个失效
+    return false;
+  }
 }

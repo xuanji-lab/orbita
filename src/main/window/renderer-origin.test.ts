@@ -4,11 +4,11 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { win32 } from "node:path";
+import { posix, win32 } from "node:path";
 import { isOwnRendererPage } from "./renderer-origin.ts";
 
 const DEV = { devServerUrl: "http://127.0.0.1:5273", rendererDir: "/app/out/renderer" };
-const PACKED = { devServerUrl: undefined, rendererDir: "/app/out/renderer" };
+const PACKED = { devServerUrl: undefined, rendererDir: "/app/out/renderer", path: posix };
 
 test("dev：同源放行（含子路径与 HMR 全量刷新），异源拒绝", () => {
   assert.equal(isOwnRendererPage("http://127.0.0.1:5273/", DEV), true);
@@ -19,7 +19,9 @@ test("dev：同源放行（含子路径与 HMR 全量刷新），异源拒绝", 
   assert.equal(isOwnRendererPage("file:///app/out/renderer/index.html", DEV), false, "dev 下不认 file://");
 });
 
-test("打包：renderer 目录内的 file:// 放行，目录外与非 file 拒绝", () => {
+// POSIX 形态的 file URL 只在 POSIX 宿主上能过 fileURLToPath（Windows 上抛
+// ERR_INVALID_FILE_URL_PATH，见 win32 用例的负例）；Windows 的覆盖在下面 win32 用例
+test("打包：renderer 目录内的 file:// 放行，目录外与非 file 拒绝", { skip: process.platform === "win32" }, () => {
   assert.equal(isOwnRendererPage("file:///app/out/renderer/index.html", PACKED), true);
   assert.equal(isOwnRendererPage("file:///app/out/renderer/browser-toolbar.html", PACKED), true);
   assert.equal(isOwnRendererPage("file:///app/out/renderer/assets/x.js", PACKED), true);
