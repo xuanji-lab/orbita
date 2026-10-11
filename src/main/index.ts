@@ -34,6 +34,8 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { TerminalService } from "./terminal/service.ts";
+import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { isWebLink } from "./browser/address.ts";
@@ -506,6 +508,10 @@ void app.whenReady().then(async () => {
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);
+
+  // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
+  const terminals = new TerminalService();
+  registerTerminalIpc(terminals);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
@@ -544,6 +550,8 @@ void app.whenReady().then(async () => {
     appTray = null;
     browserSandbox.prepareQuit();
     agentHost.dispose();
+    // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
+    terminals.dispose();
   });
 
   /**

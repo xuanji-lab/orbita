@@ -227,6 +227,7 @@ export const zh: Messages = {
     review: "审查改动",
     skills: "技能",
     mcp: "MCP 服务",
+    terminal: "终端",
     sideChat: "辅助对话 Ctrl+Alt+D",
     subSessions: (count) => `子会话（${count}）`,
     channels: "子会话通道",
@@ -1178,6 +1179,15 @@ export const zh: Messages = {
     more: (n) => `还有 ${n} 个`,
     emptyTitle: "还没有 MCP 服务",
     emptyDesc: "没有服务时，智能体只有内建工具。添加一个，或直接编辑 mcp.json。",
+  },
+
+  terminal: {
+    title: "终端",
+    newTerminal: "新建终端",
+    closeTab: "关闭终端",
+    exitNotice: (code) => `进程已退出（${code}）`,
+    runtimeLost: "终端运行时已退出。关掉这个标签页，再开一个新的。",
+    spawnFailed: (message) => `终端启动失败：${message}`,
   },
 
   skills: {

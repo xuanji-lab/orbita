@@ -1,0 +1,152 @@
+/*
+ * 终端画布与 tab 条 —— 终端面板（PR1 人工终端）的 feature 样式。
+ *
+ * ANSI 16 色 + 画布四色是「终端这一块」的 feature 值：不进 tokens/（没有第二个
+ * 消费者），但仍然以 token 的形式声明——设计 token 扫描要求声明与引用对得上；
+ * xterm 的 theme 只吃运行时实色，所以这里声明、terminal-theme.ts 运行时读。
+ * 两档暗主题共用一套 ANSI（GitHub Dark 系），明主题与纸主题共用一套（GitHub Light 系）。
+ * 画布底色跟随 --color-bg-panel（明 = 白面板、暗 = 各档井色）、前景跟随主墨色、
+ * 光标跟随 accent（主操作色）——颜色各有明确职责，不另造第四套底色。
+ */
+
+:root {
+  --terminal-bg: var(--color-bg-panel);
+  --terminal-fg: var(--color-text-primary);
+  --terminal-cursor: var(--color-accent);
+  --terminal-selection: rgba(29, 78, 216, 0.28);
+  --terminal-ansi-black: rgb(31, 35, 40);
+  --terminal-ansi-red: rgb(207, 34, 46);
+  --terminal-ansi-green: rgb(26, 127, 55);
+  --terminal-ansi-yellow: rgb(154, 103, 0);
+  --terminal-ansi-blue: rgb(9, 105, 218);
+  --terminal-ansi-magenta: rgb(130, 80, 223);
+  --terminal-ansi-cyan: rgb(1, 97, 122);
+  --terminal-ansi-white: rgb(95, 103, 112);
+  --terminal-ansi-bright-black: rgb(87, 96, 106);
+  --terminal-ansi-bright-red: rgb(218, 54, 51);
+  --terminal-ansi-bright-green: rgb(28, 146, 67);
+  --terminal-ansi-bright-yellow: rgb(170, 122, 0);
+  --terminal-ansi-bright-blue: rgb(16, 62, 167);
+  --terminal-ansi-bright-magenta: rgb(153, 50, 236);
+  --terminal-ansi-bright-cyan: rgb(49, 147, 170);
+  --terminal-ansi-bright-white: rgb(240, 243, 246);
+}
+
+:root:is([data-theme="graphite"], [data-theme="black"]) {
+  --terminal-selection: rgba(214, 194, 69, 0.3);
+  --terminal-ansi-black: rgb(72, 77, 84);
+  --terminal-ansi-red: rgb(255, 123, 114);
+  --terminal-ansi-green: rgb(126, 231, 135);
+  --terminal-ansi-yellow: rgb(255, 166, 87);
+  --terminal-ansi-blue: rgb(121, 192, 255);
+  --terminal-ansi-magenta: rgb(210, 168, 255);
+  --terminal-ansi-cyan: rgb(126, 231, 191);
+  --terminal-ansi-white: rgb(182, 190, 201);
+  --terminal-ansi-bright-black: rgb(110, 118, 129);
+  --terminal-ansi-bright-red: rgb(255, 161, 152);
+  --terminal-ansi-bright-green: rgb(86, 211, 100);
+  --terminal-ansi-bright-yellow: rgb(227, 179, 65);
+  --terminal-ansi-bright-blue: rgb(121, 192, 255);
+  --terminal-ansi-bright-magenta: rgb(210, 168, 255);
+  --terminal-ansi-bright-cyan: rgb(126, 231, 191);
+  --terminal-ansi-bright-white: rgb(240, 243, 246);
+}
+
+/* 全部 tab 共享一行；面板头下、xterm 区上。超出横向滚动，不换行 */
+.terminal-tabstrip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) 0;
+  overflow-x: auto;
+  flex: 0 0 auto;
+}
+
+/* tab 是安静控件配方（.quiet-control 供色与选中态）的 tab 形状特化 */
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+  flex: 0 0 auto;
+  max-width: 160px;
+}
+
+/* tab 上的关闭键：hover / 选中才浮现，平时让位给标题 */
+.terminal-tab .terminal-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  flex: 0 0 auto;
+}
+
+.terminal-tab:hover .terminal-tab-close,
+.terminal-tab:focus-within .terminal-tab-close,
+.terminal-tab[aria-selected="true"] .terminal-tab-close {
+  opacity: 1;
+}
+
+.terminal-tab .terminal-tab-close:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 已退出的 tab 标题降一级：过程结束了，不再和活 tab 抢注意力 */
+.terminal-tab[aria-selected="false"] .terminal-tab.is-exited {
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * 视图容器：grid 叠放，所有 tab 常驻挂载（切 tab 只切 visibility，xterm 实例
+ * 与滚动位置不丢——Proma/ZCode 的同一招）。隐藏的 tab 保持布局尺寸，fit 的
+ * 0×0 守卫因此不会把它缩成 2×1。
+ */
+.terminal-views {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.terminal-view {
+  grid-area: 1 / 1;
+  overflow: hidden;
+  background: var(--terminal-bg);
+  border-top: 1px solid var(--color-border-subtle);
+  padding: var(--space-2);
+  box-sizing: border-box;
+}
+
+.terminal-view.is-inactive {
+  visibility: hidden;
+}
+
+.terminal-view .xterm,
+.terminal-view .xterm .xterm-screen {
+  height: 100%;
+}
+
+/* 空态：面板开着但一个终端都没有（全关了） */
+.terminal-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
