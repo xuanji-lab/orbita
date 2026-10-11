@@ -1187,7 +1187,9 @@ function AttachmentRow(props: {
   );
 }
 
-/** 灰字占位行（工作台为空 / 目录没了 / 还没有会话 / 加载中）——只占一行，不出空文件夹 */
+/** 灰字占位行（工作台为空 / 目录没了 / 还没有会话 / 加载中）——只占一行，不出空文件夹。
+ *  ellipsis 包在内层 span 上：外层是 flex（spinner 行里有图标），flex 容器自己的
+ * text-overflow 不作用于匿名子项，省略号根本不出来（树并排窄列实测被硬切） */
 function DimRow(props: { children: React.ReactNode; title?: string }) {
   return (
     <p
@@ -1200,12 +1202,19 @@ function DimRow(props: { children: React.ReactNode; title?: string }) {
         paddingLeft: "var(--space-3)",
         fontSize: "var(--font-size-caption)",
         color: "var(--color-text-tertiary)",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
       }}
     >
-      {props.children}
+      <span
+        style={{
+          display: "block",
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {props.children}
+      </span>
     </p>
   );
 }
