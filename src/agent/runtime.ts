@@ -50,6 +50,12 @@ import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./gr
 import { planBranchCut } from "./branch-cut.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
+import {
+  diffWebArtifacts,
+  scanWebArtifacts,
+  webScanRoots,
+  type WebScanResult,
+} from "./web-artifacts.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import {
   RETRY_BASE_DELAY_MS,
@@ -157,13 +163,57 @@ function pushStats(sessionId: string, session: AgentSession, persist?: true): vo
  * 轮落定的文件账上报：主进程写快照 blob、落 FileTurnRecord 并广播给轮尾卡片。
  * 没有改动的轮不发（不落空记录）；报失败只记日志——快照是回退能力的代价面，
  * 不是对话的依赖面，坏一条日志好过砸一轮对话。
+ *
+ * 旁路网页产物（web-artifacts.ts）在同一处结算：等开轮快照 + 轮尾重扫 + diff，
+ * 扣掉已在文件账里的路径。扫描失败只丢旁路那一栏，文件账照报。
  */
-async function reportFileTurn(sessionId: string, tracker: TurnFileTracker): Promise<void> {
+async function reportFileTurn(
+  sessionId: string,
+  tracker: TurnFileTracker,
+  webWatch: WebArtifactWatch,
+): Promise<void> {
   try {
-    const changes = await tracker.finalize();
-    if (changes.length > 0) send({ type: "fileTurn", sessionId, changes });
+    // 文件账与旁路扫描并行——轮尾收尾不该被其中一边白等
+    const [changes, before, after] = await Promise.all([
+      tracker.finalize(),
+      webWatch.before,
+      scanWebArtifactsLogged(webWatch.roots),
+    ]);
+    const tracked = new Set(changes.map((change) => change.path));
+    const webArtifacts = diffWebArtifacts(before.stamps, after.stamps).filter((path) => !tracked.has(path));
+    if (changes.length > 0 || webArtifacts.length > 0) {
+      send({
+        type: "fileTurn",
+        sessionId,
+        changes,
+        ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
+      });
+    }
   } catch (cause) {
     console.error("[agent] 轮尾文件账没报出去（回退会缺这一轮的快照）", sessionId, cause);
+  }
+}
+
+/**
+ * 本轮的网页产物旁路：扫描根 + 开轮拍下的快照（promise，与 pi 开机并行跑）。
+ * 轮尾 reportFileTurn 等它落定后再 diff。类型在 OpenedTurn / TurnParts 上透传。
+ */
+interface WebArtifactWatch {
+  roots: string[];
+  before: Promise<WebScanResult>;
+}
+
+/** 扫一遍并处理好日志面：截断 warn、失败按空结果（本轮没有旁路产物，不让扫描拖砸轮尾）。 */
+async function scanWebArtifactsLogged(roots: string[]): Promise<WebScanResult> {
+  try {
+    const result = await scanWebArtifacts(roots);
+    if (result.truncated) {
+      console.warn(`[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots.join(" | ")}`);
+    }
+    return result;
+  } catch (cause) {
+    console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
+    return { stamps: new Map(), truncated: false };
   }
 }
 
@@ -532,6 +582,8 @@ interface TurnParts {
   turn: TurnTiming;
   /** 本轮的文件快照跟踪器（OpenedTurn.tracker 的透传） */
   tracker: TurnFileTracker;
+  /** 本轮的网页产物旁路（OpenedTurn.webWatch 的透传） */
+  webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（OpenedTurn.budget 的透传） */
   budget: TurnImageBudget;
 }
@@ -660,6 +712,8 @@ interface OpenedTurn {
   turn: TurnTiming;
   /** 本轮的文件快照跟踪器：闸门放行记 before、执行落定读 after（file-tracker.ts） */
   tracker: TurnFileTracker;
+  /** 本轮的网页产物旁路：开轮 mtime 快照 + 扫描根，轮尾 diff（web-artifacts.ts） */
+  webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（水位 + 附件引用），见 image-byte-budget.ts */
   budget: TurnImageBudget;
 }
@@ -742,6 +796,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
   const tracker = new TurnFileTracker(command.cwd);
+  // 网页产物旁路（web-artifacts.ts）：开轮就拍目录 mtime 快照，**不 await**——
+  // 与 pi 开机并行，模型吐第一个字之前快照已拍完，轮内脚本生成的文件只会落进
+  // 轮尾那一遍。扫描根与开轮目录清单同源（cwd / attached / 会话工作台）。
+  const webRoots = webScanRoots(command.cwd, command.directories);
+  const webWatch: WebArtifactWatch = { roots: webRoots, before: scanWebArtifactsLogged(webRoots) };
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -1199,7 +1258,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe, turn, tracker, budget };
+  return { session, adapter, unsubscribe, turn, tracker, webWatch, budget };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -1240,6 +1299,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         adapter: opened.adapter,
         turn: opened.turn,
         tracker: opened.tracker,
+        webWatch: opened.webWatch,
         budget: opened.budget,
       };
     },
@@ -1250,6 +1310,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         unsubscribe: parts.unsubscribe,
         turn: parts.turn,
         tracker: parts.tracker,
+        webWatch: parts.webWatch,
         budget: parts.budget,
       }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
@@ -1398,7 +1459,7 @@ async function handle(command: AgentCommand): Promise<void> {
       try {
         await echoAndPrompt(opened, ledgerNote(command.sessionId), command);
       } finally {
-        await reportFileTurn(command.sessionId, opened.tracker);
+        await reportFileTurn(command.sessionId, opened.tracker, opened.webWatch);
       }
     });
     return;
@@ -1419,7 +1480,7 @@ async function handle(command: AgentCommand): Promise<void> {
         try {
           await echoAndPrompt(opened, ledgerNote(command.sessionId), command);
         } finally {
-          await reportFileTurn(command.sessionId, opened.tracker);
+          await reportFileTurn(command.sessionId, opened.tracker, opened.webWatch);
         }
       });
     } catch (cause) {
@@ -1446,7 +1507,7 @@ async function handle(command: AgentCommand): Promise<void> {
         } finally {
           // 压缩轮不跑工具，finalize 恒为空——留着这行是为了「每轮都 finalize」的
           // 不变量不被将来加的压缩内工具破坏
-          await reportFileTurn(command.sessionId, opened.tracker);
+          await reportFileTurn(command.sessionId, opened.tracker, opened.webWatch);
         }
       });
     } catch (cause) {
