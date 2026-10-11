@@ -255,7 +255,7 @@ export const en = {
   notice: {
     finished: "Task finished",
     failed: "Task stopped with an error",
-    openNow: "Open now",
+    openNow: "Open",
     sideChat: "Side chat",
     later: "Later",
     openNowTip: "Open it here, replacing the current chat",
@@ -267,7 +267,7 @@ export const en = {
   bell: {
     title: "Notifications",
     empty: "Nothing running, waiting, or unread",
-    markAllRead: "Mark all as read",
+    markAllRead: "Mark all read",
   },
 
   menu: {

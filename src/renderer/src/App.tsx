@@ -559,6 +559,13 @@ export function App() {
     setNoticeId((current) => (current !== null && watchedIds.includes(current) ? null : current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedKey]);
+  /** 在辅助对话里打开一条会话（当前主槽不动）：提醒卡与铃铛清单共用 */
+  const openInSideChat = (id: string): void => {
+    changeDocked(dockTab(docked, id));
+    drawerFocusTokenRef.current += 1;
+    setDrawerFocus({ tab: id, token: drawerFocusTokenRef.current });
+    setRightPanel("drawer");
+  };
   const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
   const completionNotice =
     noticeMeta === undefined
@@ -573,10 +580,7 @@ export function App() {
           },
           onSideChat: () => {
             setNoticeId(null);
-            changeDocked(dockTab(docked, noticeMeta.id));
-            drawerFocusTokenRef.current += 1;
-            setDrawerFocus({ tab: noticeMeta.id, token: drawerFocusTokenRef.current });
-            setRightPanel("drawer");
+            openInSideChat(noticeMeta.id);
           },
           onLater: () => setNoticeId(null),
         };
@@ -1037,6 +1041,7 @@ export function App() {
             count: unreadSessions.length,
             entries: noticeRows,
             onOpen: openFromNotice,
+            onSideChat: openInSideChat,
             onMarkAllRead: () => clearUnreadOf(unreadSessions.map((meta) => meta.id)),
           }}
         />

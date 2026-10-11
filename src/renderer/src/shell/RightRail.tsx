@@ -79,6 +79,8 @@ export function RightRail(props: {
     count: number;
     entries: readonly NoticeRow[];
     onOpen: (id: string) => void;
+    /** 在辅助对话里打开（主槽不动） */
+    onSideChat: (id: string) => void;
     onMarkAllRead: () => void;
   };
 }) {
@@ -203,6 +205,10 @@ export function RightRail(props: {
           onOpen={(id) => {
             setBellOpen(false);
             props.bell.onOpen(id);
+          }}
+          onSideChat={(id) => {
+            setBellOpen(false);
+            props.bell.onSideChat(id);
           }}
           onMarkAllRead={props.bell.count > 0 ? props.bell.onMarkAllRead : null}
         />

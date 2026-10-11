@@ -223,7 +223,7 @@ export const zh: Messages = {
   notice: {
     finished: "任务完成",
     failed: "任务出错停下了",
-    openNow: "马上看",
+    openNow: "打开",
     sideChat: "辅助对话",
     later: "稍后",
     openNowTip: "在这里打开，替换当前对话",
@@ -235,7 +235,7 @@ export const zh: Messages = {
   bell: {
     title: "通知",
     empty: "没有在跑、在等或未读的任务",
-    markAllRead: "全部标为已读",
+    markAllRead: "全部已读",
   },
 
   menu: {

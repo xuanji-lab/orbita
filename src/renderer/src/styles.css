@@ -1987,54 +1987,76 @@ body {
 .completion-card {
   /* 顶上没有输入卡可对齐：与右侧同取 --pane-pop-inline，右上角两边留白相等 */
   top: var(--pane-pop-inline);
-  width: 280px;
+  /* 紧凑两行（用户 2026-10-12 选 B）：原 280 宽、三行三按钮太占地方 */
+  width: 220px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
 }
 
-.completion-card-kicker {
+.completion-card-row {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  font-size: var(--font-size-caption);
-  color: var(--color-text-secondary);
-}
-
-.completion-card-glyph {
-  display: inline-grid;
-  place-items: center;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .completion-card-title {
-  font-size: var(--font-size-control);
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-caption);
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
+  white-space: nowrap;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+}
+
+.completion-card-close {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-tertiary);
 }
 
 .completion-card-actions {
   display: flex;
+  align-items: center;
   gap: var(--space-1);
+  /* 与名字左缘对齐：竖条 3px + 间距 8px */
+  padding-left: 11px;
 }
 
-.completion-card-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  height: var(--control-height-sm);
-  padding: 0 var(--space-2);
+.completion-card-link {
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
   font-family: var(--font-family-base);
-  font-size: var(--font-size-control);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+.completion-card-link:hover {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 主操作「打开」用 accent（设计系统：accent 只给主操作） */
+.completion-card-link[data-primary] {
+  color: var(--color-accent);
+}
+
+.completion-card-dot {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
 }
 
 /*
@@ -2043,11 +2065,13 @@ body {
  */
 .bell-card {
   bottom: var(--pane-pop-block);
-  width: 280px;
+  /* 紧凑清单（用户 2026-10-12 选 A）：原 280 宽、两行行高太占地方 */
+  width: 220px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3);
+  gap: 2px;
+  padding: var(--space-1) 0;
+  border-radius: var(--radius-lg);
 }
 
 .bell-card-head {
@@ -2055,37 +2079,36 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: 0 var(--space-1);
+  height: 22px;
+  padding: 0 var(--space-3);
 }
 
 .bell-card-title {
-  font-family: var(--font-family-business);
+  font-family: var(--font-family-base);
   font-size: var(--font-size-micro);
-  font-weight: var(--weight-bold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-text-secondary);
+  color: var(--color-text-tertiary);
 }
 
 .bell-card-mark {
-  height: 20px;
+  height: 18px;
   padding: 0 var(--space-1);
+  margin-right: calc(-1 * var(--space-1));
   border: 0;
   border-radius: var(--radius-xs);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
 }
 
 .bell-card-empty {
-  padding: var(--space-2) var(--space-1);
-  font-size: var(--font-size-control);
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  font-size: var(--font-size-caption);
   color: var(--color-text-secondary);
 }
 
 .bell-card-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
 .bell-card-row {
@@ -2093,30 +2116,50 @@ body {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+  height: 26px;
+  padding: 0 var(--space-3);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   text-align: left;
   cursor: pointer;
   background: transparent;
   transition: var(--transition-hover);
 }
 
-.bell-card-row:hover {
+.bell-card-row {
+  cursor: default;
+}
+
+.bell-card-row:hover,
+.bell-card-row:focus-within {
   background: var(--option-hover-bg);
 }
 
-.bell-card-names {
+/* 行尾两种看法：平时不渲染、不占位；悬停 / 键盘聚焦时顶替工作区名站到行尾，
+   会话名让出位置、按省略号截断（不叠字） */
+.bell-card-actions {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.bell-card-row:hover .bell-card-actions,
+.bell-card-row:focus-within .bell-card-actions {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  flex: 1;
+}
+
+.bell-card-row:hover .bell-card-ws,
+.bell-card-row:focus-within .bell-card-ws {
+  display: none;
 }
 
 .bell-card-name {
+  flex: 1;
+  min-width: 0;
   font-family: var(--font-family-base);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-caption);
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -2124,7 +2167,9 @@ body {
 }
 
 .bell-card-ws {
-  font-family: var(--font-family-business);
+  flex: 0 1 auto;
+  max-width: 40%;
+  font-family: var(--font-family-base);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
   white-space: nowrap;

@@ -34,6 +34,8 @@ export function BellCard(props: {
   cardRef: { current: HTMLDivElement | null };
   entries: readonly NoticeRow[];
   onOpen: (id: string) => void;
+  /** 在辅助对话里打开（主槽不动） */
+  onSideChat: (id: string) => void;
   /** 全部标为已读。null = 没有未读（角标为 0），按钮不出现 */
   onMarkAllRead: (() => void) | null;
 }) {
@@ -59,26 +61,28 @@ export function BellCard(props: {
       ) : (
         <div className="bell-card-list">
           {props.entries.map((row) => (
-            <button
-              key={row.id}
-              type="button"
-              className="bell-card-row"
-              onClick={() => props.onOpen(row.id)}
-              title={runStateLabel(row.state, t)}
-            >
+            // 一行两种看法（用户 2026-10-12）：「打开」= 主槽换成它；「辅助对话」= 右侧停靠里开，
+            // 当前对话不动。动作悬停 / 聚焦时浮出、盖住工作区名，不占位（行尾血线规矩）。
+            // 再点一次铃铛关清单，所以没有 ×
+            <div key={row.id} className="bell-card-row" title={runStateLabel(row.state, t)}>
               {/* 同款三节竖条（styles.css 的 .status-bar，清单里是行内档不贴左缘） */}
               <span className="status-bar" data-fill={row.state} aria-hidden="true">
                 <i />
                 <i />
                 <i />
               </span>
-              <span className="bell-card-names">
-                <span className="bell-card-name">
-                  {row.title === "" ? t.common.newTask : row.title}
-                </span>
-                {row.workspace !== null && <span className="bell-card-ws">{row.workspace}</span>}
+              <span className="bell-card-name">{row.title === "" ? t.common.newTask : row.title}</span>
+              {row.workspace !== null && <span className="bell-card-ws row-trailing">{row.workspace}</span>}
+              <span className="bell-card-actions">
+                <button type="button" className="completion-card-link" data-primary title={t.notice.openNowTip} onClick={() => props.onOpen(row.id)}>
+                  {t.notice.openNow}
+                </button>
+                <span className="completion-card-dot" aria-hidden="true">·</span>
+                <button type="button" className="completion-card-link" title={t.notice.sideChatTip} onClick={() => props.onSideChat(row.id)}>
+                  {t.notice.sideChat}
+                </button>
               </span>
-            </button>
+            </div>
           ))}
         </div>
       )}
