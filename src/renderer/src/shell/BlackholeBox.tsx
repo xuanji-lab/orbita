@@ -8,6 +8,7 @@ import { imageSrc } from "./composer-images.ts";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import {
   BLACKHOLE_STEP_PX,
+  blackholeSeedKey,
   blackholeSpan,
   boxHeightCap,
   cellsToPx,
@@ -21,17 +22,26 @@ import {
   releaseInto,
   releaseRank,
   supportersOf,
+  type BlackholeDropMode,
   type BlackholePlacement,
   type BlackholeSpan,
+  type MaterialBoxStyle,
 } from "./blackhole-layout.ts";
 import { useT } from "../locale.ts";
 
 /**
- * 输入框黑洞（设置 › Agent › 输入框黑洞，默认关；只在浅 / 黛 / 玄生效，判定见
- * blackhole-layout.ts 的 blackholeActive）。App 根部算好一次，输入框与转录里的
- * 用户消息都从这里读——开关关着时两处都走原样。
+ * 输入框上方的隐形材料盒（实验功能，默认关；只在浅 / 黛 / 玄生效，判定见
+ * blackhole-layout.ts 的 materialBoxStyle）。App 根部算好一次，输入框与转录里的
+ * 用户消息都从这里读——不启用时两处都走原材料叠放。
+ *
+ * 两种形态（2026-10-12 用户裁决：互斥的两个实验功能，不是父子）：
+ * - `blackhole`：全套特效——拖拽悬停时输入卡中心变黑，替身螺旋缩进中心，会话顶端
+ *   开一道舷窗，材料从缝里掉下来；发送时盒里的块飞进新消息。
+ * - `tetris`：不演任何黑洞特效——新块从盒子上缘直落（短落程 + 回弹），落位纯随机
+ *   （确定性种子，见 blackhole-layout.ts 的 dropOne）；盒口有沿（CSS 裁切，盒外不画）。
+ * 共用的是盒子的骨架：形状、重力堆叠、删除补位、限高与盒内滚动、已发送消息的缩小快照。
  */
-export const BlackholeContext = createContext(false);
+export const MaterialBoxContext = createContext<MaterialBoxStyle | null>(null);
 
 /** 进盒子的材料：截图 / 文件 / 目录。引用不进盒子——它算消息正文，待在盒子下面 */
 export type BoxMaterial = Extract<ComposerMaterial, { kind: "image" | "file" | "dir" }>;
@@ -294,7 +304,9 @@ export function flyBlackholeInto(targets: readonly HTMLElement[]): void {
  */
 export function BlackholeBox(props: {
   materials: readonly BoxMaterial[];
-  /** 输入卡：中心变黑那一层画在卡里 */
+  /** 盒子的形态（黑洞 = 全套特效；俄罗斯方块 = 只落块）。调用方用 key 钉住它：切形态时重挂，整盒按新形态重排 */
+  style: MaterialBoxStyle;
+  /** 输入卡：中心变黑那一层画在卡里（黑洞形态用） */
   cardRef: React.RefObject<HTMLDivElement | null>;
   /** 盒子本体：发送时 Composer 用它记下飞行起点 */
   boxRef: React.RefObject<HTMLDivElement | null>;
@@ -303,6 +315,9 @@ export function BlackholeBox(props: {
 }) {
   const t = useT();
   const boxRef = props.boxRef;
+  const blackholeFx = props.style === "blackhole";
+  /** 落位模式跟形态走：俄罗斯方块纯随机，黑洞取最低列位 */
+  const dropMode: BlackholeDropMode = props.style === "tetris" ? "random" : "lowest";
   const [columns, setColumns] = useState(0);
   const [cap, setCap] = useState(Number.POSITIVE_INFINITY);
   const [viewing, setViewing] = useState<number | null>(null);
@@ -341,6 +356,18 @@ export function BlackholeBox(props: {
 
   const items = props.materials;
   const ids = items.map((item) => item.id);
+  // 随机落点的种子键：截图按它在截图组里的序号、文件 / 目录按路径——与已发送快照
+  // （SentBlackholeBox）同一条公式，两边才能算出同一个布局（blackholeSeedKey 的注释）
+  const seedById = new Map<string, string>();
+  let imageSeq = 0;
+  for (const item of items) {
+    seedById.set(
+      item.id,
+      item.kind === "image"
+        ? blackholeSeedKey({ kind: "image", index: imageSeq++ })
+        : blackholeSeedKey({ kind: item.kind, path: item.ref.path }),
+    );
+  }
   const spanById = new Map(
     items.map((item) => [
       item.id,
@@ -348,10 +375,11 @@ export function BlackholeBox(props: {
     ]),
   );
   // 放出队列是异步跑的：它读的清单与形状必须是最新一次渲染的，不能是起跑那次闭包里的
-  const latest = useRef({ ids, spanById });
-  latest.current = { ids, spanById };
+  const latest = useRef({ ids, spanById, seedById });
+  latest.current = { ids, spanById, seedById };
   const spanOf = (id: string): BlackholeSpan =>
     latest.current.spanById.get(id) ?? { shape: "capsule", col: 3, row: 1 };
+  const seedOf = (id: string): string => latest.current.seedById.get(id) ?? "";
   // 放出排序：先按批（到达先后），批内按清单顺序（截图在前）
   const rankOf = (id: string): number =>
     releaseRank(flow.current.batchOf.get(id)?.seq ?? 0, latest.current.ids.indexOf(id));
@@ -382,7 +410,7 @@ export function BlackholeBox(props: {
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const f = flow.current;
   const present = new Set(ids);
-  if (columns > 0) f.ledger = reconcileLedger(f.ledger, present, columns, spanOf);
+  if (columns > 0) f.ledger = reconcileLedger(f.ledger, present, columns, spanOf, dropMode, seedOf);
   f.queue = f.queue.filter((id) => present.has(id));
   for (const id of Array.from(f.known)) if (!present.has(id)) f.known.delete(id);
   for (const id of ids) {
@@ -390,7 +418,7 @@ export function BlackholeBox(props: {
     f.known.add(id);
     // 首次挂上（切会话 / 开开关时已有草稿）、还没量出列数、减弱动态：直接落位，不演
     if (!f.mounted || columns === 0 || reducedMotion()) {
-      if (columns > 0) f.ledger = releaseInto(f.ledger, id, spanOf(id));
+      if (columns > 0) f.ledger = releaseInto(f.ledger, id, spanOf(id), dropMode, seedOf(id));
     } else {
       f.arrived.push(id);
     }
@@ -399,7 +427,7 @@ export function BlackholeBox(props: {
   if (columns > 0) {
     for (const id of ids) {
       if (!f.ledger.map.has(id) && !f.arrived.includes(id) && !f.queue.includes(id) && !f.sucking.has(id)) {
-        f.ledger = releaseInto(f.ledger, id, spanOf(id));
+        f.ledger = releaseInto(f.ledger, id, spanOf(id), dropMode, seedOf(id));
       }
     }
   }
@@ -455,7 +483,8 @@ export function BlackholeBox(props: {
   };
   useEffect(() => {
     const h = hole.current;
-    if (reducedMotion()) return;
+    // 中心变黑是黑洞形态独有的动效；俄罗斯方块不演
+    if (reducedMotion() || !blackholeFx) return;
     if (props.dragActive) {
       h.dragging = true;
       h.enter = performance.now();
@@ -512,9 +541,11 @@ export function BlackholeBox(props: {
     if (box !== null) box.style.clipPath = "";
   };
   const lift = (): void => {
+    if (!blackholeFx) return;
     if (f.airborne++ === 0) openPorthole();
   };
   const land = (): void => {
+    if (!blackholeFx) return;
     f.airborne = Math.max(0, f.airborne - 1);
     if (f.airborne === 0) void wait(220).then(() => f.airborne === 0 && closePorthole());
   };
@@ -535,7 +566,7 @@ export function BlackholeBox(props: {
         continue;
       }
       f.queue.shift();
-      f.ledger = releaseInto(f.ledger, id, spanOf(id));
+      f.ledger = releaseInto(f.ledger, id, spanOf(id), dropMode, seedOf(id));
       f.released.push(id);
       bump();
       await wait(FALL_STAGGER_MS);
@@ -591,7 +622,9 @@ export function BlackholeBox(props: {
     void pump();
   };
 
-  /** 刚放出的一块起跳：从舷窗线沿重力落到账上的落点；托它的块没落地之前不让它先到 */
+  /** 刚放出的一块起跳：沿重力落到账上的落点；托它的块没落地之前不让它先到。
+   *  起跳高度分形态：黑洞从舷窗线（会话顶端）一路穿过消息区掉下来；俄罗斯方块不演
+   *  舷窗，从盒子上缘冒进来（盒外不画，CSS 里 data-style="tetris" 裁掉了） */
   const launch = (id: string): void => {
     const el = cells.current.get(id);
     const box = boxRef.current;
@@ -601,7 +634,9 @@ export function BlackholeBox(props: {
       return;
     }
     const r = el.getBoundingClientRect();
-    const fromPx = r.top - portholeLine(box) + r.height + 4;
+    const fromPx = blackholeFx
+      ? r.top - portholeLine(box) + r.height + 4
+      : Math.max(0, r.top - box.getBoundingClientRect().top) + r.height + 4;
     const duration = fallDuration(fromPx);
     const now = performance.now();
     const supporters = supportersOf(p, f.ledger.map).map((sid) => f.landAt.get(sid) ?? 0);
@@ -635,13 +670,27 @@ export function BlackholeBox(props: {
     if (reducedMotion()) {
       if (arrived.length > 0) {
         f.queue = enqueueByRank(f.queue, arrived, rankOf);
-        for (const id of f.queue) f.ledger = releaseInto(f.ledger, id, spanOf(id));
+        for (const id of f.queue) f.ledger = releaseInto(f.ledger, id, spanOf(id), dropMode, seedOf(id));
         f.queue = [];
         bump();
       }
       return;
     }
-    if (arrived.length > 0) void suckIn(arrived);
+    if (arrived.length > 0) {
+      if (blackholeFx) {
+        void suckIn(arrived);
+      } else {
+        // 俄罗斯方块：不吸入。批次照样记（等齐才放出，批内截图先落——与快照重算的
+        // 清单顺序一致），只是起点无关紧要，直接排队从盒子上缘落
+        const rect = props.cardRef.current?.getBoundingClientRect();
+        if (rect !== undefined) {
+          const origin = takeBatch(rect, arrived.length);
+          for (const id of arrived) f.batchOf.set(id, origin);
+        }
+        f.queue = enqueueByRank(f.queue, arrived, rankOf);
+        void pump();
+      }
+    }
     for (const id of released) launch(id);
     for (const [id, p] of placed) {
       const old = before.get(id);
@@ -660,6 +709,7 @@ export function BlackholeBox(props: {
         ref={boxRef}
         className="bh-box"
         data-scroll={scroll}
+        data-style={props.style}
         style={{ height: scroll ? cap : contentHeight }}
         aria-label={t.composer.materialBox}
         role="group"

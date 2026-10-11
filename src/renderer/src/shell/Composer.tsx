@@ -3,7 +3,7 @@ import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { Menu } from "./Menu";
 import { MaterialStack, NoVisionHint, QuoteCard } from "./composer-material-stack.tsx";
-import { BlackholeBox, BlackholeContext, captureBlackholeFlight, type BoxMaterial } from "./BlackholeBox.tsx";
+import { BlackholeBox, MaterialBoxContext, captureBlackholeFlight, type BoxMaterial } from "./BlackholeBox.tsx";
 import { PastedTextCollapseContext } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge, pastedTextSize } from "@shared/prompt-attachments";
@@ -275,9 +275,9 @@ export function Composer(props: {
       props.quotes.length > 0 ||
       props.files.length > 0);
   const stopping = running && !sendable;
-  // 输入框黑洞（设置开关 + 只在浅 / 黛 / 玄，App 根部算好）：截图 / 文件 / 目录进隐形盒子，
-  // 引用照旧是卡、待在盒子下面贴着输入卡。关着时整段与原叠放逐字相同
-  const blackhole = useContext(BlackholeContext);
+  // 输入框材料盒（设置开关 + 只在浅 / 黛 / 玄，App 根部算好）：截图 / 文件 / 目录进隐形盒子，
+  // 引用照旧是卡、待在盒子下面贴着输入卡。不启用时整段与原叠放逐字相同
+  const boxStyle = useContext(MaterialBoxContext);
   const blackholeBoxRef = useRef<HTMLDivElement>(null);
   const boxMaterials = useMemo(
     () => materials.filter((item): item is BoxMaterial => item.kind !== "quote"),
@@ -287,9 +287,10 @@ export function Composer(props: {
     () => materials.filter((item): item is Extract<typeof item, { kind: "quote" }> => item.kind === "quote"),
     [materials],
   );
-  /** 发送：黑洞开着时先记下盒子里每块的位置，让它们飞进转录里那条新消息 */
+  /** 发送：黑洞形态开着时先记下盒子里每块的位置，让它们飞进转录里那条新消息
+   *  （俄罗斯方块不飞，快照直接就位） */
   const submit = (): void => {
-    if (blackhole) captureBlackholeFlight(blackholeBoxRef.current);
+    if (boxStyle === "blackhole") captureBlackholeFlight(blackholeBoxRef.current);
     props.onSubmit();
   };
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -299,9 +300,10 @@ export function Composer(props: {
     // 引用一张卡，都坐在聊天面上；输入卡只剩输入本身（叠放层在 composer-materials.tsx）。
     // composer-stack 同时是引用卡两列版式的 container query 容器（窄窗 / 抽屉里回落一列）
     <div className="composer-stack" style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
-      {blackhole ? (
+      {boxStyle !== null ? (
         <>
-          <BlackholeBox materials={boxMaterials} cardRef={cardRef} boxRef={blackholeBoxRef} dragActive={dragging} />
+          {/* key 钉住形态：黑洞 ↔ 俄罗斯方块切换时重挂，整盒按新形态重排（不带着旧落位混排） */}
+          <BlackholeBox key={boxStyle} style={boxStyle} materials={boxMaterials} cardRef={cardRef} boxRef={blackholeBoxRef} dragActive={dragging} />
           {props.imageUnsupported === true && boxMaterials.some((item) => item.kind === "image") && <NoVisionHint />}
           {quoteMaterials.length > 0 && <QuoteCard quotes={quoteMaterials} jumpToQuote={props.jumpToQuote} />}
         </>
