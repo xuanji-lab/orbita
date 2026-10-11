@@ -23,7 +23,7 @@ import {
 } from "./home-cards";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
-import { EXPANDED_FRAME } from "./expanded-body.ts";
+import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
