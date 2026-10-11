@@ -25,6 +25,48 @@ export function orderEntries(entries: readonly FileEntry[]): FileEntry[] {
   ];
 }
 
+/**
+ * 类型分档的档序：照 fileIcon 的分类瀑布从粗到细（代码 → 配置 → 网页 → 图片 →
+ * pdf → 文档 → 演示 → 表格 → 压缩包 → 音频 → 视频 → 文本），中性 file 压底。
+ * 只列 IconName 字面量，design-tokens 的静态扫描不需要进这里（没引 token）。
+ */
+const TYPE_RANK: readonly IconName[] = [
+  "file-code-2",
+  "file-json-2",
+  "globe",
+  "image",
+  "scroll-text",
+  "book",
+  "presentation",
+  "file-spreadsheet",
+  "file-archive",
+  "file-audio-2",
+  "file-video-2",
+  "file-text",
+  "file",
+];
+
+/** 按类型排时一条条目的档位：目录恒最前（结构不动），认不出的档序末尾 */
+function typeRankOf(entry: FileEntry): number {
+  if (entry.kind === "directory") return -1;
+  const index = TYPE_RANK.indexOf(fileIcon(entry.name, entry.kind));
+  return index === -1 ? TYPE_RANK.length : index;
+}
+
+/**
+ * 「按类型排」（Session 组的排序切换，2026-10-11 用户裁决）：同类文件聚在一起，
+ * 档序照 TYPE_RANK（即 fileIcon 的分类，不另造一套）；档内按名字（与主进程同
+ * 一比较器），目录仍最前。dotfile 不再垫底（那是按名字排的纪律）——按类型排时
+ * `.gitignore` 与 json 们聚在配置档，同类聚齐优先。
+ */
+export function orderEntriesByType(entries: readonly FileEntry[]): FileEntry[] {
+  return [...entries].sort(
+    (a, b) =>
+      typeRankOf(a) - typeRankOf(b) ||
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }),
+  );
+}
+
 /** 本地过滤：只裁剪已加载的条目名，不递归拉取。大小写不敏感；空白词 = 不过滤。 */
 export function filterEntries(entries: readonly FileEntry[], query: string): FileEntry[] {
   const q = query.trim().toLowerCase();
@@ -39,12 +81,6 @@ export function filterEntries(entries: readonly FileEntry[], query: string): Fil
  */
 export function hasAgentsMd(entries: readonly FileEntry[]): boolean {
   return entries.some((entry) => entry.name === "AGENTS.md");
-}
-
-/** footer 文案：`N roots`；attached 根在盘上缺席时追 `· N missing`（如实标出，不静默）。 */
-export function footerSummary(groupCount: number, missingAttached: number, t: Messages): string {
-  const roots = t.files.roots(groupCount);
-  return missingAttached > 0 ? t.files.rootsMissing(roots, missingAttached) : roots;
 }
 
 /** 按扩展名归到「代码」形状的图标（file-code-2）。样式表也是代码：css 归网页形状（globe） */

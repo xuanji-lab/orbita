@@ -7,12 +7,12 @@ import {
   fileIconTone,
   filterCountText,
   filterEntries,
-  footerSummary,
   formatAge,
   formatSize,
   hasAgentsMd,
   mergeRefresh,
   orderEntries,
+  orderEntriesByType,
   refreshTargets,
 } from "./tree-view.ts";
 import type { FileEntry, FileRoot } from "../../../../shared/files.ts";
@@ -38,6 +38,50 @@ describe("orderEntries", () => {
     deepStrictEqual(
       orderEntries([file(".zshrc"), file(".DS_Store"), file("readme")]),
       [file("readme"), file(".zshrc"), file(".DS_Store")],
+    );
+  });
+});
+
+describe("orderEntriesByType", () => {
+  it("目录最前，文件按 fileIcon 分档同类相聚，档内按名字", () => {
+    deepStrictEqual(
+      orderEntriesByType([
+        file("notes.md"),
+        dir("plans"),
+        file("index.html"),
+        file("a.ts"),
+        file("z.ts"),
+        file("logo.png"),
+        file("app.tsx"),
+      ]),
+      [
+        dir("plans"),
+        file("a.ts"),
+        file("app.tsx"),
+        file("z.ts"),
+        file("index.html"),
+        file("logo.png"),
+        file("notes.md"),
+      ],
+    );
+  });
+
+  it("dotfile 按自己的类型入档（不再垫底）：.gitignore 进配置档", () => {
+    deepStrictEqual(
+      orderEntriesByType([file("readme.md"), file(".gitignore"), file("main.py")]),
+      [file("main.py"), file(".gitignore"), file("readme.md")],
+    );
+  });
+
+  it("认不出的类型（symlink / 未知扩展）压底，名字序", () => {
+    deepStrictEqual(
+      orderEntriesByType([
+        file("data.xyz"),
+        file("a.ts"),
+        { name: "link", kind: "symlink", modifiedAt: 0 },
+        file("b.xyz"),
+      ]),
+      [file("a.ts"), file("b.xyz"), file("data.xyz"), { name: "link", kind: "symlink", modifiedAt: 0 }],
     );
   });
 });
@@ -76,21 +120,6 @@ describe("hasAgentsMd", () => {
 
   it("大小写不同的近似名不算（模板与 agent 写的都是 AGENTS.md，精确匹配）", () => {
     deepStrictEqual(hasAgentsMd([file("agents.md")]), false);
-  });
-});
-
-describe("footerSummary", () => {
-  it("单数 root", () => {
-    deepStrictEqual(footerSummary(1, 0, en), "1 root");
-  });
-
-  it("复数 roots", () => {
-    deepStrictEqual(footerSummary(3, 0, en), "3 roots");
-  });
-
-  it("attached 在盘上缺席：如实追加 missing，不静默", () => {
-    deepStrictEqual(footerSummary(4, 1, en), "4 roots · 1 missing");
-    deepStrictEqual(footerSummary(5, 2, en), "5 roots · 2 missing");
   });
 });
 

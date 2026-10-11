@@ -56,6 +56,7 @@ export const zh: Messages = {
     binary: "二进制",
   },
   common: {
+    more: "更多",
     cancel: "取消",
     close: "关闭",
     retry: "重试",
@@ -262,9 +263,11 @@ export const zh: Messages = {
   },
 
   drawer: {
+    title: "辅助对话",
+    filter: "过滤任务…",
+    helpLabel: "关于辅助对话",
     closeTab: "关闭标签页",
     newTab: "新开标签页",
-    pickTitle: "并排打开哪个任务？",
     pickSub: "辅助对话就是一个普通任务：并排显示、侧栏可见、随时切回。中间正开着的那条不列在这里。",
     noOther: "还没有别的任务——新建一条吧。",
   },
@@ -1116,6 +1119,7 @@ export const zh: Messages = {
   },
 
   mcp: {
+    helpLabel: "关于 MCP",
     title: "MCP 服务",
     addServer: "添加服务",
     filterPlaceholder: "筛选服务…",
@@ -1182,6 +1186,7 @@ export const zh: Messages = {
   },
 
   terminal: {
+    empty: "没有开着的终端，点 + 新开一个。",
     title: "终端",
     newTerminal: "新建终端",
     closeTab: "关闭终端",
@@ -1211,6 +1216,8 @@ export const zh: Messages = {
     cleanUpReferences: "清理引用",
     centralDir: "集中存放技能的目录",
     openDir: "打开技能目录",
+    helpLabel: "关于技能",
+    help: "技能是写给智能体的操作说明，任务对上了它就会加载。全局技能在所有任务可用，工作区技能只在那个工作区可用。悬停某一行、点回车箭头，就能把它用进这条消息。",
     reveal: "在访达中显示",
     missingTip: "文件已经不在了——清理引用，或把文件夹放回去。",
     backToList: "返回列表",
@@ -1236,6 +1243,11 @@ export const zh: Messages = {
 
   files: {
     title: "文件",
+    treeToggleTip: "文件树开关——宽时并排，窄时浮层；面板一拉窄就自动收起",
+    tabsAria: "打开的文件",
+    closeTab: "关闭标签",
+    sortByType: "按文件类型排序",
+    sortByName: "按名字排序",
     emptyWorkbench: "工作台为空 — 智能体第一次写入时创建",
     reference: "添加文件引用",
     refreshing: "正在刷新文件树…",
@@ -1248,7 +1260,7 @@ export const zh: Messages = {
     countTip: "只数已载入的条目——筛选不会去读收起的文件夹",
     session: "会话",
     workspace: "工作区",
-    attached: "附加",
+    attached: "附加文件夹",
     revealInFileManager: "在文件管理器中显示",
     detachTip: "移除这个附加目录",
     detach: "移除",
@@ -1262,8 +1274,6 @@ export const zh: Messages = {
     attachmentMissingShort: "已不在",
     createAgentsMdTip: "在工作区文件夹里创建 AGENTS.md",
     createAgentsMd: "这个工作区还没有 AGENTS.md — 创建规则文件",
-    roots: (n) => `${n} 个根目录`,
-    rootsMissing: (roots, missing) => `${roots} · ${missing} 个缺失`,
     ageNow: "刚刚",
     ageMinutes: (n) => `${n} 分钟前`,
     ageHours: (n) => `${n} 小时前`,
@@ -1271,8 +1281,6 @@ export const zh: Messages = {
     ageWeeks: (n) => `${n} 周前`,
     ageMonths: (n) => `${n} 个月前`,
     ageYears: (n) => `${n} 年前`,
-    backToFiles: "返回文件",
-    closePreview: "关闭预览",
     openDefault: "用默认应用打开",
     openInBrowser: "在内置浏览器打开",
     copyPath: "复制路径",

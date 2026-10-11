@@ -8,8 +8,12 @@ import { SetDots } from "../../shell/SetDots";
 import { useHoverTooltip } from "../../shell/useHoverTooltip.ts";
 import {
   PanelButton,
+  PanelFilter,
+  PanelGroupHead,
+  PanelHelp,
   PanelIconButton,
   PanelLine,
+  PanelTitle,
   RightPanelFrame,
 } from "../../shell/RightPanel";
 import { api } from "../../api";
@@ -37,7 +41,6 @@ const ROW_TOOLTIP_DELAY_MS = 350;
  */
 export function SkillsPanel(props: {
   skills: SkillsState;
-  onClose: () => void;
   /** 表单默认归属的 workspace（会话当前所在）；null = 默认 Global */
   defaultWorkspaceId: string | null;
   /** Create skill…：新建会话并预填 composer，让 agent 用 create_skill 落盘 */
@@ -77,7 +80,6 @@ export function SkillsPanel(props: {
         meta={meta}
         workspaceName={workspaceName}
         onBack={() => setSelected(null)}
-        onClose={props.onClose}
       />
     );
   }
@@ -90,39 +92,9 @@ export function SkillsPanel(props: {
         setView("detail");
       }}
       onCreateSkill={props.onCreateSkill}
-      onClose={props.onClose}
       picker={props.picker}
       onInsert={props.onInsert}
     />
-  );
-}
-
-/**
- * 组标题：mono/micro/大写/secondary（与侧栏 NodeLabel 同款字学）+ 计数。
- * 计数是**该组当前显示的行数**——搜索过滤时跟着变，不是集合里的总数。
- *
- * **自己带 `padding: 0 14px`**（不是外层 `.skill-group` 容器）：组间发丝线
- * （`.skill-group + .skill-group`）要通栏，缩进只能落在标题自己身上，不能
- * 落在包住发丝线的容器上——否则线也跟着缩进，两侧留白，不贴边。
- */
-function GroupLabel(props: { children: React.ReactNode; count: number; danger?: boolean }) {
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        minHeight: 26,
-        padding: "0 14px",
-        fontFamily: "var(--font-family-mono)",
-        fontSize: "var(--font-size-micro)",
-        letterSpacing: "0.06em",
-        textTransform: "uppercase",
-        color: props.danger === true ? "var(--color-danger)" : "var(--color-text-secondary)",
-      }}
-    >
-      {props.children}
-      <span style={{ color: "var(--color-text-tertiary)" }}>&nbsp;· {props.count}</span>
-    </span>
   );
 }
 
@@ -131,7 +103,6 @@ function SkillList(props: {
   workspaceName: (id: string) => string;
   onSelect: (slug: string) => void;
   onCreateSkill: () => void;
-  onClose: () => void;
   picker?: TokenPickerControl;
   onInsert: (token: string) => void;
 }) {
@@ -148,7 +119,7 @@ function SkillList(props: {
   const listRef = useRef<HTMLDivElement>(null);
   /** 选取模式的高亮行（↑↓ 移动，Enter 选中）；-1 = 无高亮 */
   const [pickIndex, setPickIndex] = useState(-1);
-  // 过滤与计数：列表 / 空态 / 加载三态共用（filterRow 的计数也在场）
+  // 过滤与计数：列表 / 空态 / 加载三态共用（标题行过滤框的计数也在场）
   const total = skills.skills.length;
   const filtered = filterSkills(skills.skills, query);
   const filtering = query.trim() !== "";
@@ -200,67 +171,51 @@ function SkillList(props: {
     }
   };
 
-  const header = (
-    <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-      {t.skills.title}
-    </strong>
-  );
-  // 过滤行（+ 选取模式的提示行）：列表 / 空态 / 加载三态共用同一份。**不能只长在
-  // 列表分支里**——「/ + 空格」开面板时清单常还在读盘，先渲染加载态，过滤行不在
-  // 场上，选取模式的聚焦就落空了
+  // 右栏统一（方案 B）：过滤框住在标题行里，列表 / 空态 / 加载三态共用同一份标题行。
+  // **不能只长在列表分支里**——「/ + 空格」开面板时清单常还在读盘，先渲染加载态，
+  // 过滤框不在场上，选取模式的聚焦就落空了
   const shownCount = picker !== undefined ? pickRows.length : filtered.length;
-  const filterRow = (
+  const header = (
     <>
-      <div className="skills-filter-row">
-        <Icon name="search" size={14} />
-        <input
-          ref={filterRef}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (picker !== undefined) {
-              onPickerKeyDown(e);
-              return;
-            }
-            // Esc 清空输入；已经空了就不拦截——让它照旧冒泡去关面板（App.tsx 的
-            // 全局 Esc 处理），两次 Esc 才关面板的手感和大多数搜索框一致
-            if (e.key === "Escape" && query !== "") {
-              e.stopPropagation();
-              setQuery("");
-            }
-          }}
-          placeholder={t.skills.filter}
-          aria-label={t.skills.filterAria}
-        />
-        <span className="skills-filter-count">{filtering ? `${shownCount} / ${total}` : total}</span>
-        {query !== "" && (
-          <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
-            <Icon name="x" size={12} />
-          </IconButton>
-        )}
-      </div>
-      {picker !== undefined && (
-        <div className="panel-picker-hint" aria-hidden="true">
-          {t.skills.pickerHint}
-        </div>
-      )}
+      <PanelTitle icon="book-open" title={t.skills.title} />
+      <PanelFilter
+        inputRef={filterRef}
+        value={query}
+        onChange={setQuery}
+        placeholder={t.skills.filter}
+        ariaLabel={t.skills.filterAria}
+        count={filtering ? `${shownCount} / ${total}` : String(total)}
+        onKeyDown={picker !== undefined ? onPickerKeyDown : undefined}
+      />
     </>
   );
+  const headerExtra = (
+    <>
+      <PanelHelp label={t.skills.helpLabel} text={t.skills.help} />
+      <PanelIconButton title={t.skills.openDir} onClick={() => skills.reveal(null)}>
+        <Icon name="folder-open" size={16} />
+      </PanelIconButton>
+      <AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />
+    </>
+  );
+  // 选取模式的键盘提示：列表顶上一行微字（只在选取模式）
+  const pickerHint =
+    picker !== undefined ? (
+      <div className="panel-picker-hint" aria-hidden="true">
+        {t.skills.pickerHint}
+      </div>
+    ) : null;
 
-  // 空态与加载：footer 的 reveal 行照常（新建的路一直在）
+  // 空态与加载：标题行照常（过滤、打开目录、新建的路一直在）
   if (load.kind === "loading" && skills.skills.length === 0) {
     return (
       <RightPanelFrame
         header={header}
         contentKey="list"
-        onClose={props.onClose}
-        headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
-        footer={<FooterReveal skills={skills} />}
+        headerExtra={headerExtra}
       >
-        {filterRow}
-        <div style={{ padding: "var(--space-4)" }}>
-          <PanelLine>{t.common.loading}</PanelLine>
-        </div>
+        {pickerHint}
+        <p className="panel-empty">{t.common.loading}</p>
       </RightPanelFrame>
     );
   }
@@ -269,25 +224,19 @@ function SkillList(props: {
       <RightPanelFrame
         header={header}
         contentKey="list"
-        onClose={props.onClose}
-        headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
-        footer={<FooterReveal skills={skills} />}
+        headerExtra={headerExtra}
       >
-        {filterRow}
-        {/* 空态自己包一层内容版式（与 MCP 面板同款）：列表行的 hover 要通到面板
-            两个侧缘（行自带内边距），所以壳的内容区不能统一加 padding——
-            空态没有行，忘了这层就会整段贴着面板左缘 */}
-        <div
-          style={{
-            padding: "var(--space-4)",
-            display: "grid",
-            gap: "var(--space-2)",
-            alignContent: "start",
-          }}
-        >
-          {error !== null && <PanelLine danger>{t.skills.readFailed} {error}</PanelLine>}
-          <p style={{ margin: 0, fontSize: "var(--font-size-body)" }}>{t.skills.none}</p>
-          <PanelLine>{t.skills.noneHint}</PanelLine>
+        {pickerHint}
+        {/* 空态：一行浅灰字（右栏统一，不居中、不加粗）——没有、以及怎么来 */}
+        <div style={{ paddingTop: "var(--space-2)" }}>
+          {error !== null && (
+            <p className="panel-empty" role="alert" style={{ color: "var(--color-danger)" }}>
+              {t.skills.readFailed} {error}
+            </p>
+          )}
+          <p className="panel-empty">
+            {t.skills.none} {t.skills.noneHint}
+          </p>
         </div>
       </RightPanelFrame>
     );
@@ -301,27 +250,23 @@ function SkillList(props: {
     <RightPanelFrame
       header={header}
       contentKey="list"
-      onClose={props.onClose}
-      headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
-      footer={<FooterReveal skills={skills} />}
+      headerExtra={headerExtra}
     >
       <>
-        {filterRow}
+        {pickerHint}
         {picker !== undefined ? (
           /* 选取模式：扁平列表（分组对 ↑↓ 导航只是噪声），点选即插 token */
-          <div ref={listRef} style={{ display: "grid", alignContent: "start" }}>
+          <div ref={listRef} className="panel-list" style={{ paddingTop: "var(--space-2)" }}>
             {error !== null && (
               <div style={{ padding: "var(--space-3)" }}>
                 <PanelLine danger>{t.skills.readFailed} {error}</PanelLine>
               </div>
             )}
             {pickRows.length === 0 ? (
-              <div style={{ padding: "var(--space-4)" }}>
-                {/* 查询词空着且一个可用 skill 都没有：说工作区，不说「没有匹配」*/}
-                <PanelLine>
-                  {query.trim() === "" ? t.composer.skillNoneInWorkspace : t.skills.noMatch(query.trim())}
-                </PanelLine>
-              </div>
+              // 查询词空着且一个可用 skill 都没有：说工作区，不说「没有匹配」
+              <p className="panel-empty">
+                {query.trim() === "" ? t.composer.skillNoneInWorkspace : t.skills.noMatch(query.trim())}
+              </p>
             ) : (
               pickRows.map((s, index) => (
                 <SkillRow
@@ -338,21 +283,19 @@ function SkillList(props: {
             )}
           </div>
         ) : (
-        <div style={{ display: "grid", alignContent: "start" }}>
+        <div className="panel-list">
           {error !== null && (
             <div style={{ padding: "var(--space-3)" }}>
               <PanelLine danger>{t.skills.readFailed} {error}</PanelLine>
             </div>
           )}
           {filtering && filtered.length === 0 ? (
-            <div style={{ padding: "var(--space-4)" }}>
-              <PanelLine>{t.skills.noMatch(query.trim())}</PanelLine>
-            </div>
+            <p className="panel-empty">{t.skills.noMatch(query.trim())}</p>
           ) : (
             <>
               {globalMembers.length > 0 && (
-                <div className="skill-group">
-                  <GroupLabel count={globalMembers.length}>{t.skills.global}</GroupLabel>
+                <div>
+                  <PanelGroupHead label={t.skills.global} detail={String(globalMembers.length)} />
                   {globalMembers.map((s) => (
                     <SkillRow
                       key={`g:${s.slug}`}
@@ -369,8 +312,8 @@ function SkillList(props: {
                 const members = linked.filter((s) => !s.global && s.workspaces.includes(ws.id));
                 if (members.length === 0) return null;
                 return (
-                  <div className="skill-group" key={ws.id}>
-                    <GroupLabel count={members.length}>{ws.name}</GroupLabel>
+                  <div key={ws.id}>
+                    <PanelGroupHead label={ws.name} detail={String(members.length)} />
                     {members.map((s) => (
                       <SkillRow
                         key={`${ws.id}:${s.slug}`}
@@ -385,8 +328,8 @@ function SkillList(props: {
                 );
               })}
               {disabled.length > 0 && (
-                <div className="skill-group">
-                  <GroupLabel count={disabled.length}>{t.skills.disabled}</GroupLabel>
+                <div>
+                  <PanelGroupHead label={t.skills.disabled} detail={String(disabled.length)} />
                   {disabled.map((s) => (
                     <SkillRow
                       key={s.slug}
@@ -533,8 +476,10 @@ function SkillRow(props: {
           icon="corner-down-left"
           title={t.skills.use}
           onClick={() => props.onInsert(skillToken(skill.slug))}
-          right={2}
-          top={8}
+          right={8}
+          top={5}
+          size={22}
+          iconSize={13}
           className="reveal skill-row-act"
         />
       )}
@@ -566,37 +511,11 @@ function SkillRow(props: {
 }
 
 /** footer：中央目录 reveal（新建 / 删除仍走访达——它们是文件管理器最擅长的事）。 */
-function FooterReveal(props: { skills: SkillsState }) {
-  const t = useT();
-  return (
-    <>
-      <code
-        style={{
-          fontSize: "var(--font-size-caption)",
-          color: "var(--color-text-tertiary)",
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          flex: 1,
-        }}
-        title={t.skills.centralDir}
-      >
-        skills/
-      </code>
-      <PanelButton onClick={() => props.skills.reveal(null)} title={t.skills.openDir}>
-        <Icon name="folder" size={14} /> {t.skills.reveal}
-      </PanelButton>
-    </>
-  );
-}
-
 function SkillDetail(props: {
   skills: SkillsState;
   meta: SkillMeta;
   workspaceName: (id: string) => string;
   onBack: () => void;
-  onClose: () => void;
 }) {
   const t = useT();
   const { skills, meta } = props;
@@ -655,7 +574,6 @@ function SkillDetail(props: {
   return (
     <RightPanelFrame
       contentKey={`detail:${meta.slug}`}
-      onClose={props.onClose}
       header={
         <>
           <PanelIconButton title={t.skills.backToList} onClick={props.onBack}>
@@ -663,8 +581,8 @@ function SkillDetail(props: {
           </PanelIconButton>
           <strong
             style={{
-              fontSize: "var(--font-size-title)",
-              fontWeight: "var(--weight-bold)",
+              fontSize: "var(--font-size-body)",
+              fontWeight: "var(--weight-semibold)",
               minWidth: 0,
               overflow: "hidden",
               textOverflow: "ellipsis",

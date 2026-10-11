@@ -3,10 +3,14 @@ import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { IconButton } from "../../shell/IconButton";
 import { RowHoverAction } from "../../shell/RowHoverAction";
+import { Menu } from "../../shell/Menu";
 import {
   PanelButton,
+  PanelFilter,
+  PanelHelp,
   PanelIconButton,
   PanelLine,
+  PanelTitle,
   RightPanelFrame,
 } from "../../shell/RightPanel";
 import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
@@ -28,7 +32,6 @@ import { useT } from "../../locale.ts";
  */
 export function McpPanel(props: {
   skills: SkillsState;
-  onClose: () => void;
   /** 「/ + 空格」右栏选取模式（panel-token.ts）：从 Skills 侧 Tab 切过来 */
   picker?: TokenPickerControl;
   /** 卡上「选用」键：把 /mcp:<server> 插到主槽输入框当前光标处（PanelInsertRequest） */
@@ -56,7 +59,7 @@ export function McpPanel(props: {
 
   // ── 选取模式（「/ + 空格」从 Skills 侧 Tab 切过来）─────────────────
   const picker = props.picker;
-  /** 选取模式的过滤词（面板平时没有过滤行，选取时才出现） */
+  /** 过滤词：标题行过滤框（右栏统一后常驻）；选取模式下另外只留启用中的 server */
   const [query, setQuery] = useState("");
   const filterRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -117,12 +120,21 @@ export function McpPanel(props: {
     void Promise.resolve(reloadMcp()).finally(() => setReloading(false));
   };
 
+  const q = query.trim().toLowerCase();
+  const shown = servers.filter(
+    (server) => (picker === undefined || !server.disabled) && server.name.toLowerCase().includes(q),
+  );
   const header = (
     <>
-      <Icon name="plug" size={16} style={{ color: "var(--color-text-secondary)" }} />
-      <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-        {t.mcp.title}
-      </strong>
+      <PanelTitle icon="plug" title={t.mcp.title} />
+      <PanelFilter
+        inputRef={filterRef}
+        value={query}
+        onChange={setQuery}
+        placeholder={t.mcp.filterPlaceholder}
+        count={q === "" ? String(servers.length) : `${shown.length} / ${servers.length}`}
+        onKeyDown={picker !== undefined ? onPickerKeyDown : undefined}
+      />
     </>
   );
 
@@ -132,7 +144,6 @@ export function McpPanel(props: {
         skills={props.skills}
         onCancel={() => setAdding(false)}
         onAdded={() => setAdding(false)}
-        onClose={props.onClose}
       />
     );
   }
@@ -141,79 +152,64 @@ export function McpPanel(props: {
     <RightPanelFrame
       header={header}
       contentKey="mcp"
-      onClose={props.onClose}
       headerExtra={
-        <PanelIconButton title={t.mcp.addServer} onClick={() => setAdding(true)}>
-          <Icon name="plus" size={16} />
-        </PanelIconButton>
-      }
-      footer={
         <>
-          <PanelButton onClick={openMcpConfig}>
-            <Icon name="pencil-line" size={14} /> {t.mcp.editConfig}
-          </PanelButton>
-          <PanelButton disabled={reloading} onClick={runReload}>
-            <Icon
-              name="refresh-cw"
-              size={14}
-              // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
-              className={reloading ? "anim-continuous" : undefined}
-              style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
-            />{" "}
-            {reloading ? t.mcp.reloading : t.mcp.reload}
-          </PanelButton>
+          {/* 原先铺在列表底部的两段说明（重载语义、工作区限定）收进「?」（右栏统一） */}
+          <PanelHelp label={t.mcp.helpLabel} text={`${t.mcp.reloadNote} ${t.mcp.workspaceHint}`} />
+          <PanelIconButton title={t.mcp.addServer} onClick={() => setAdding(true)}>
+            <Icon name="plus" size={16} />
+          </PanelIconButton>
+          {/* 低频的两件（编辑 mcp.json、重新加载）收进「更多」：320 宽的面板标题行
+              放不下过滤框 + 四颗键（右栏统一验收实测 + 被挤出视野） */}
+          <Menu
+            align="end"
+            items={[
+              { id: "edit", label: t.mcp.editConfig, icon: "pencil-line", onSelect: openMcpConfig },
+              {
+                id: "reload",
+                label: reloading ? t.mcp.reloading : t.mcp.reload,
+                icon: "refresh-cw",
+                disabled: reloading,
+                onSelect: runReload,
+              },
+            ]}
+            trigger={({ toggle }) => (
+              <PanelIconButton title={t.common.more} onClick={toggle}>
+                <Icon name={reloading ? "loader-circle" : "ellipsis-vertical"} size={16} spin={reloading} />
+              </PanelIconButton>
+            )}
+          />
         </>
       }
     >
       {picker !== undefined && (
-        <>
-          <div className="skills-filter-row">
-            <Icon name="search" size={14} />
-            <input
-              ref={filterRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onPickerKeyDown}
-              placeholder={t.mcp.filterPlaceholder}
-              aria-label={t.mcp.filterPlaceholder}
-            />
-            {query !== "" && (
-              <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
-                <Icon name="x" size={12} />
-              </IconButton>
-            )}
-          </div>
-          <div className="panel-picker-hint" aria-hidden="true">
-            {t.mcp.pickerHint}
-          </div>
-        </>
+        <div className="panel-picker-hint" aria-hidden="true">
+          {t.mcp.pickerHint}
+        </div>
       )}
-      <div
-        ref={listRef}
-        style={{
-          padding: "var(--space-4)",
-          display: "grid",
-          gap: "var(--space-2)",
-          alignContent: "start",
-        }}
-      >
-        {error !== null && <PanelLine danger>{error}</PanelLine>}
+      <div ref={listRef} className="panel-list" style={{ paddingTop: "var(--space-2)", gap: 2 }}>
+        {error !== null && (
+          <p className="panel-empty" role="alert" style={{ color: "var(--color-danger)" }}>
+            {error}
+          </p>
+        )}
         {serverWarnings.map((warning) => (
-          <PanelLine key={warning} danger>{warning}</PanelLine>
+          <p key={warning} className="panel-empty" role="alert" style={{ color: "var(--color-danger)" }}>
+            {warning}
+          </p>
         ))}
         {serversLoad.kind === "loading" && servers.length === 0 ? (
-          <PanelLine>{t.mcp.loadingServers}</PanelLine>
+          <p className="panel-empty">{t.mcp.loadingServers}</p>
         ) : servers.length === 0 ? (
-          <McpEmptyState onAdd={() => setAdding(true)} onEditConfig={openMcpConfig} />
+          // 空态：一行浅灰字（右栏统一）；添加与编辑配置都在标题行
+          <p className="panel-empty">
+            {t.mcp.emptyTitle} {t.mcp.emptyDesc}
+          </p>
+        ) : shown.length === 0 ? (
+          <p className="panel-empty">{t.skills.noMatch(query.trim())}</p>
         ) : (
           <>
-            {servers
-              .filter(
-                (server) =>
-                  picker === undefined ||
-                  (!server.disabled && server.name.toLowerCase().includes(query.trim().toLowerCase())),
-              )
-              .map((server, index) => (
+            {shown.map((server, index) => (
                 <McpServerCard
                   key={server.name}
                   server={server}
@@ -245,17 +241,6 @@ export function McpPanel(props: {
                   }
                 />
               ))}
-            <button type="button" className="mcp-add-card" onClick={() => setAdding(true)}>
-              <Icon name="plus" size={14} /> {t.mcp.addServer}
-            </button>
-            <span style={{ marginTop: "var(--space-2)" }}>
-              <PanelLine>
-                {t.mcp.reloadNote}
-              </PanelLine>
-              <PanelLine>
-                {t.mcp.workspaceHint}
-              </PanelLine>
-            </span>
           </>
         )}
       </div>
@@ -299,7 +284,7 @@ function McpServerCard(props: {
   );
   return (
     <div
-      className={`mcp-card glass-card${props.pickerActive === true ? " picker-active" : ""}`}
+      className={`mcp-card${props.pickerActive === true ? " picker-active" : ""}`}
       data-picker-active={props.pickerActive === true ? "true" : undefined}
       onClick={(event) => {
         if (props.onPickerSelect === undefined) return;
@@ -487,7 +472,6 @@ function AddServerForm(props: {
   skills: SkillsState;
   onCancel: () => void;
   onAdded: () => void;
-  onClose: () => void;
 }) {
   const t = useT();
   const [mode, setMode] = useState<"form" | "json">("form");
@@ -613,13 +597,12 @@ function AddServerForm(props: {
   return (
     <RightPanelFrame
       contentKey="add-server"
-      onClose={props.onClose}
       header={
         <>
           <PanelIconButton title={t.mcp.backToList} onClick={props.onCancel}>
             <Icon name="chevron-left" size={16} />
           </PanelIconButton>
-          <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
+          <strong style={{ fontSize: "var(--font-size-body)", fontWeight: "var(--weight-semibold)" }}>
             {t.mcp.addServer}
           </strong>
         </>
@@ -836,24 +819,3 @@ function ToolChips(props: { tools: string[]; expanded: boolean; onExpand: () => 
   );
 }
 
-/** 空态（简报 4）：一台 server 都没有时的主画面，两个出口都是现成动作，不新增契约 */
-function McpEmptyState(props: { onAdd: () => void; onEditConfig: () => void }) {
-  const t = useT();
-  return (
-    <div className="mcp-empty">
-      <Icon name="plug" size={26} strokeWidth={1.5} className="mcp-empty-icon" />
-      <p className="mcp-empty-title">{t.mcp.emptyTitle}</p>
-      <p className="mcp-empty-desc">
-        {t.mcp.emptyDesc}
-      </p>
-      <span className="mcp-empty-actions">
-        <PanelButton onClick={props.onAdd}>
-          <Icon name="plus" size={14} /> {t.mcp.addServer}
-        </PanelButton>
-        <PanelButton onClick={props.onEditConfig}>
-          <Icon name="pencil-line" size={14} /> {t.mcp.editConfig}
-        </PanelButton>
-      </span>
-    </div>
-  );
-}

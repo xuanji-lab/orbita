@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Menu, type MenuItem } from "../../shell/Menu";
-import { PanelIconButton, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { DiffBody } from "../../shell/DiffView";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
@@ -30,7 +30,6 @@ export function ReviewPanel(props: {
   revision: string;
   /** 会话 cwd：cwd 之内显示相对路径 */
   cwd: string | null;
-  onClose: () => void;
 }) {
   const t = useT();
   const [source, setSource] = useState<ReviewSource>("task");
@@ -136,28 +135,10 @@ export function ReviewPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <Icon name="file-text" size={14} strokeWidth={1.8} />
-          <span style={{ fontWeight: 650, fontSize: "var(--font-size-title)" }}>{t.review.title}</span>
+          <PanelTitle icon="file-diff" title={t.review.title} />
+          {/* 审查范围（本任务 / 工作区未提交 / 分支）：标题行中段的安静下拉（右栏统一） */}
           <Menu items={sourceItems} trigger={({ toggle: open }) => (
-            <button
-              type="button"
-              onClick={open}
-              title={t.review.source(source)}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                marginLeft: "var(--space-2)",
-                padding: "2px var(--space-2)",
-                border: "1px solid var(--color-border-subtle)",
-                borderRadius: "var(--radius-sm)",
-                background: "transparent",
-                color: "var(--color-text-secondary)",
-                font: "inherit",
-                fontSize: "var(--font-size-caption)",
-                cursor: "pointer",
-              }}
-            >
+            <button type="button" onClick={open} title={t.review.source(source)} className="quiet-control panel-head-select no-drag">
               {t.review.source(source)}
               <Icon name="chevron-down" size={11} strokeWidth={1.8} />
             </button>
@@ -166,30 +147,28 @@ export function ReviewPanel(props: {
       }
       headerExtra={
         <PanelIconButton title={t.review.refresh} onClick={() => refresh(source)} disabled={loading}>
-          <Icon name="refresh-cw" size={14} spin={loading} />
+          <Icon name="refresh-cw" size={15} spin={loading} />
         </PanelIconButton>
       }
-      onClose={props.onClose}
       contentKey={`${source}:${props.sessionId ?? "none"}`}
     >
       {props.sessionId === null ? (
-        <EmptyState icon="file-diff" title={t.review.noTask} />
+        <EmptyState title={t.review.noTask} />
       ) : loading && list === null ? (
-        <EmptyState icon="loader-circle" title={t.common.loading} />
+        <EmptyState title={t.common.loading} />
       ) : list === null || (list.kind === "ok" && entries.length === 0) ? (
-        <EmptyState icon="file-diff" title={t.review.emptyNoChanges} detail={t.review.emptyNoChangesDetail(source)} />
+        <EmptyState title={t.review.emptyNoChanges} detail={t.review.emptyNoChangesDetail(source)} />
       ) : list.kind !== "ok" ? (
         <EmptyState
-          icon={list.kind === "error" ? "triangle-alert" : "file-diff"}
           title={reviewEmptyTitle(list, t)}
           detail={reviewEmptyText(list, t)}
           danger={list.kind === "error"}
         />
       ) : (
         // minmax(0,1fr)：grid 项默认 min-width:auto，长文件名会把行撑出面板、把右端统计挤出视野（实机）
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", padding: "var(--space-2) var(--space-3) var(--space-5)" }}>
+        <div className="panel-list" style={{ paddingTop: "var(--space-2)" }}>
           {source === "branch" && list.upstream !== undefined && (
-            <p style={{ margin: "0 0 var(--space-2)", fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+            <p className="panel-empty" style={{ padding: "0 var(--space-2) var(--space-2)" }}>
               {t.review.againstUpstream(list.upstream)}
             </p>
           )}
@@ -198,26 +177,15 @@ export function ReviewPanel(props: {
             const diff = diffs.get(entry.path);
             const expandable = !entry.binary && entry.restored !== true && entry.noBaseline !== true;
             return (
-              <div key={entry.path} ref={open ? expandedRef : undefined} style={{ borderBottom: "1px solid var(--color-border-subtle)" }}>
+              <div key={entry.path} ref={open ? expandedRef : undefined}>
                 <button
                   type="button"
                   onClick={() => toggle(entry)}
                   aria-expanded={open}
                   disabled={!expandable}
                   title={entry.path}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "var(--space-2)",
-                    width: "100%",
-                    padding: "var(--space-2) var(--space-2) var(--space-2) 0",
-                    border: 0,
-                    background: "transparent",
-                    color: "var(--color-text-primary)",
-                    font: "inherit",
-                    textAlign: "left",
-                    cursor: expandable ? "pointer" : "default",
-                  }}
+                  className="review-row"
+                  style={{ cursor: expandable ? "pointer" : "default" }}
                 >
                   <span
                     style={{
@@ -322,32 +290,16 @@ function RowName(props: { path: string; cwd: string | null }) {
   );
 }
 
-/**
- * 空态：图标 + 一句标题 + 一句说明，居中（zcode 审查面板同款）。只有真正的失败
- * （git 报错）标题走 danger 色；「不是仓库 / 没装 git / 没改动」都是信息档。
- */
-function EmptyState(props: { icon: "file-diff" | "loader-circle" | "triangle-alert"; title: string; detail?: string; danger?: boolean }) {
+/** 空态 / 提示：一行浅灰字（右栏统一：不居中、不放大图标、不加粗；出错时红字） */
+function EmptyState(props: { title: string; detail?: string; danger?: boolean }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        justifyItems: "center",
-        gap: "var(--space-2)",
-        padding: "var(--space-8) var(--space-5)",
-        textAlign: "center",
-      }}
+    <p
+      className="panel-empty"
+      role={props.danger === true ? "alert" : undefined}
+      style={{ paddingTop: "var(--space-3)", color: props.danger === true ? "var(--color-danger)" : undefined }}
     >
-      <span style={{ color: props.danger === true ? "var(--color-danger)" : "var(--color-text-tertiary)" }}>
-        <Icon name={props.icon} size={28} strokeWidth={1.5} spin={props.icon === "loader-circle"} />
-      </span>
-      <span style={{ fontWeight: 600, color: props.danger === true ? "var(--color-danger)" : "var(--color-text-primary)" }}>
-        {props.title}
-      </span>
-      {props.detail !== undefined && (
-        <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)", maxWidth: 320 }}>
-          {props.detail}
-        </span>
-      )}
-    </div>
+      {props.title}
+      {props.detail !== undefined && ` ${props.detail}`}
+    </p>
   );
 }

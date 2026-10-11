@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { Icon } from "../shell/Icon";
+import { Icon, type IconName } from "../shell/Icon";
+import { IconButton } from "./IconButton";
 import { clampRightPanelWidth, RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 import { usePaneTotalWidth } from "./side-width.ts";
 import { useT } from "../locale.ts";
@@ -111,7 +112,9 @@ export function RightPanelSlot(props: {
             bottom: 0,
             width: 6,
             cursor: "col-resize",
-            zIndex: 5,
+            // 要在面板内容的浮层之上（文件树 overlay 是 z-20）：浮层盖住热区就把
+            // 拖宽没收了（2026-10-10 实机验收抓到）；全局浮层（contextmenu 70）仍更高
+            zIndex: 30,
           }}
         />
       )}
@@ -121,22 +124,25 @@ export function RightPanelSlot(props: {
 }
 
 /**
- * 面板内容的版式骨架：页头（标题区 + x）、内容区（120ms 淡入，contentKey 换帧）、
- * footer 动作区（发丝顶线分隔）。Skills / MCP 两个面板共用这一副骨架。
+ * 面板内容的版式骨架：页头（标题行）、内容区（120ms 淡入，contentKey 换帧）、
+ * footer 动作区（发丝顶线分隔，只有表单页用）。右栏全部面板共用这一副骨架。
  * 宽度、竖线与开合动画都在 RightPanelSlot（壳）上，这里只管内容怎么排。
+ *
+ * **标题行就是工具行**（2026-10-11 右栏统一，用户选定方案 B「一体标题栏」）：
+ * 图标 + 标题（PanelTitle）→ 中段（过滤框 PanelFilter / 终端标签 / 审查范围，
+ * 带 `.panel-head-grow` 的占满剩余宽度）→ 说明「?」（PanelHelp）→ 面板动作。
+ * 没有第二条工具行，也**没有 ×**——右图标条本身就是开关（同次裁决：全部去掉）。
  */
 export function RightPanelFrame(props: {
-  /** 页头标题区；x 按钮由框架按 onClose 出 */
+  /** 页头左段：PanelTitle + 可选的中段控件 */
   header: React.ReactNode;
   /** 内容切换的 key（换帧触发 120ms fade） */
   contentKey: string;
-  /** 页头右侧、x 左边的槽（添加按钮等） */
+  /** 页头最右的动作槽（说明 ?、添加、刷新等） */
   headerExtra?: React.ReactNode;
   footer?: React.ReactNode;
-  onClose?: () => void;
   children: React.ReactNode;
 }) {
-  const t = useT();
   return (
     <div
       style={{
@@ -145,27 +151,10 @@ export function RightPanelFrame(props: {
         gridTemplateRows: "auto minmax(0,1fr) auto",
       }}
     >
-      <header
-        className="titlebar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          minWidth: 0,
-          height: 30,
-          padding: "12px 14px",
-          boxSizing: "content-box",
-          borderBottom: "1px solid var(--color-border-subtle)",
-        }}
-      >
+      <header className="titlebar panel-head">
         {props.header}
-        <span style={{ flex: 1 }} />
+        <span className="panel-head-spacer" aria-hidden="true" />
         {props.headerExtra}
-        {props.onClose && (
-          <PanelIconButton title={t.common.close} onClick={props.onClose}>
-            <Icon name="x" size={16} />
-          </PanelIconButton>
-        )}
       </header>
 
       <div
@@ -193,46 +182,136 @@ export function RightPanelFrame(props: {
   );
 }
 
-/** 面板内的 26px 图标方块（x / ←）：hover 中性抬升，永不点亮。 */
+/**
+ * 面板内的 26px 图标方块：就是 IconButton（安静控件配方 + 自绘 tooltip）。
+ * 原先这里自己画 hover（onMouseEnter 写 style）、用原生 title——违反「状态样式归 CSS」
+ * 与「tooltip 自绘」两条规矩，右栏统一时收口到 IconButton。
+ */
 export function PanelIconButton(props: {
   title: string;
   onClick?: () => void;
   disabled?: boolean;
   children: React.ReactNode;
 }) {
-  const disabled = props.disabled === true;
   return (
-    <button
-      type="button"
-      title={props.title}
-      aria-label={props.title}
-      disabled={disabled}
-      onClick={props.onClick}
-      className="no-drag"
-      style={{
-        width: 26,
-        height: 26,
-        flex: "0 0 auto",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 0,
-        border: 0,
-        borderRadius: "var(--radius-sm)",
-        background: "transparent",
-        color: disabled ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
-        cursor: disabled ? "default" : "pointer",
-      }}
-      onMouseEnter={(e) => {
-        if (disabled) return;
-        e.currentTarget.style.background = "var(--color-bg-hover)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-      }}
-    >
+    <IconButton label={props.title} size={26} disabled={props.disabled} onClick={props.onClick} className="no-drag">
       {props.children}
-    </button>
+    </IconButton>
+  );
+}
+
+/** 标题行左段：图标 + 标题。六个面板同一种写法（字号 / 字重 / 图标色由 CSS 管） */
+export function PanelTitle(props: { icon: IconName; title: string; tip?: string }) {
+  return (
+    <span className="panel-title" title={props.tip}>
+      <Icon name={props.icon} size={16} />
+      <strong>{props.title}</strong>
+    </span>
+  );
+}
+
+/**
+ * 标题行里的过滤框（方案 B）：浅底胶囊、放大镜 + 输入 + 计数，占满标题与动作之间的空位。
+ * Esc 先清词、词空了才冒泡（照旧去关面板）——与各面板原过滤行同一手感。
+ */
+export function PanelFilter(props: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  ariaLabel?: string;
+  /** 右侧计数（可省） */
+  count?: string;
+  inputRef?: React.Ref<HTMLInputElement>;
+  /** 选取模式等需要自己接管键盘时传；不传走默认的 Esc 清词 */
+  onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <label className="panel-filter panel-head-grow no-drag">
+      <Icon name="search" size={13} />
+      <input
+        ref={props.inputRef}
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (props.onKeyDown !== undefined) {
+            props.onKeyDown(event);
+            return;
+          }
+          if (event.key === "Escape" && props.value !== "") {
+            event.stopPropagation();
+            props.onChange("");
+          }
+        }}
+        placeholder={props.placeholder}
+        aria-label={props.ariaLabel ?? props.placeholder}
+      />
+      {props.count !== undefined && <span className="panel-filter-count">{props.count}</span>}
+    </label>
+  );
+}
+
+/**
+ * 说明「?」：面板里原先成段铺开的解释（MCP 的重载与工作区说明、辅助对话是什么）
+ * 收进这里，悬停 / 聚焦读（IconButton 的自绘 tooltip，宽 240 会换行）。
+ */
+export function PanelHelp(props: { text: string; label: string }) {
+  return (
+    <IconButton label={props.label} title={props.text} size={26} className="no-drag">
+      <Icon name="circle-help" size={15} />
+    </IconButton>
+  );
+}
+
+/**
+ * 分组标题（文件的会话 / 工作区 / 附加目录、技能的全局 / 各工作区……）：
+ * 小号半粗无衬线 + 浅灰补充（路径或计数），整行可点折叠；组与组之间只靠留白，
+ * 不画分隔线、不铺底色（2026-10-11 用户：不要白色底带、不要横线、等宽大写可读性差）。
+ * `trailing` 是行尾悬停动作（排序 / 在访达显示…），平时不占位。
+ */
+export function PanelGroupHead(props: {
+  label: string;
+  /** 标题后的浅灰补充：路径（长了从左省略）或计数 */
+  detail?: string;
+  detailTitle?: string;
+  detailWarn?: boolean;
+  collapsed?: boolean;
+  /** 不传 = 不可折叠（组头只是标签） */
+  onToggle?: () => void;
+  onContextMenu?: (event: React.MouseEvent) => void;
+  trailing?: React.ReactNode;
+}) {
+  const collapsible = props.onToggle !== undefined;
+  const inner = (
+    <>
+      {collapsible && <Icon name="chevron-right" size={12} strokeWidth={2} className="panel-group-chev" />}
+      <span className="panel-group-label">{props.label}</span>
+      {props.detail !== undefined && props.detail !== "" && (
+        <span
+          className="panel-group-detail"
+          title={props.detailTitle ?? props.detail}
+          data-warn={props.detailWarn === true ? "true" : undefined}
+        >
+          {props.detail}
+        </span>
+      )}
+    </>
+  );
+  return (
+    <div className="panel-group-head" onContextMenu={props.onContextMenu}>
+      {collapsible ? (
+        <button
+          type="button"
+          className="panel-group-toggle"
+          aria-expanded={props.collapsed !== true}
+          onClick={props.onToggle}
+        >
+          {inner}
+        </button>
+      ) : (
+        <span className="panel-group-toggle">{inner}</span>
+      )}
+      {props.trailing !== undefined && <span className="panel-group-acts">{props.trailing}</span>}
+    </div>
   );
 }
 
