@@ -23,6 +23,7 @@ import {
 } from "./home-cards";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
+import { EXPANDED_FRAME } from "./expanded-body.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
@@ -53,6 +54,7 @@ import {
   expectedSecondsOf,
   formatRunClock,
   shellAutoExpand,
+  stripTrailingBlankLines,
   tailPreviewLines,
   timeoutSecondsOf,
   toolStartAt,
@@ -3177,28 +3179,15 @@ const SEP_DOT = {
 } satisfies React.CSSProperties;
 
 /**
- * 展开体的纵向导轨：与行首 icon 的**左缘相切**——x = 10px（按钮内边距，即 icon 的
- * 左缘）。展开内容一律不越过导轨左侧：展开体明确属于它上面那一行，不与
- * 别的行抢左缘；多条展开体并排时导轨与 icon 连成一条竖线。
- */
-const RAIL_X = 10;
-/** 导轨用 border-default 而非 subtle：深色下 subtle 与地面只差几阶（black #1e1e1e 对
- * #0a0a0a），孤立的 1px 竖线会隐形；default（#262626 / #333534）强一档才立得住。
- * 浅色下两者几乎无差，三主题同一 token。 */
-const RAIL_LINE = "1px solid var(--color-border-default)";
-
-/**
- * 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。
- * 左侧挂导轨（顶线与导轨在左上角相接成直角），正文从导轨右侧起。
+ * 展开体共用形态：圆角虚线框（EXPANDED_FRAME，语义见 expanded-body.ts）接在
+ * 折叠行下、无底色、mono caption。各展开体只叠各自排版，框只有这一份真源。
  */
 const EXPANDED_BODY = {
   margin: 0,
-  marginLeft: RAIL_X,
+  ...EXPANDED_FRAME,
   padding: "var(--space-2)",
   maxHeight: 320,
   overflow: "auto",
-  borderTop: "1px solid var(--color-border-subtle)",
-  borderLeft: RAIL_LINE,
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-caption)",
   lineHeight: 1.6,
@@ -3207,18 +3196,16 @@ const EXPANDED_BODY = {
 } satisfies React.CSSProperties;
 
 /**
- * markdown 展开体（压缩界碑行用）：EXPANDED_BODY 的骨架（hairline 顶线 + 320 封顶 +
+ * markdown 展开体（压缩界碑行用）：EXPANDED_BODY 的骨架（虚线框 + 320 封顶 +
  * 可滚），排版让给 .chat-md——摘要是结构化文档，不套 mono caption / pre-wrap。
- * 导轨照挂：界碑行虽无 icon，竖线仍与其余展开体同一位置（x=10px），内容列全体一致。
+ * 框的缩进与其余展开体同位（x=10px，见 expanded-body.ts），内容列全体一致。
  */
 const MARKDOWN_EXPANDED_BODY = {
   margin: 0,
-  marginLeft: RAIL_X,
+  ...EXPANDED_FRAME,
   padding: "var(--space-2)",
   maxHeight: 320,
   overflow: "auto",
-  borderTop: "1px solid var(--color-border-subtle)",
-  borderLeft: RAIL_LINE,
 } satisfies React.CSSProperties;
 
 // ── 信息区文案（本模块全部用户可见字符串集中在此；英文先行，中文化等真实需求出现再抽字典） ──
@@ -3649,11 +3636,25 @@ function ToolLine(props: {
         )}
       </CollapseRow>
       {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」
-          不展开也看得见。缩进对齐展开体的导轨但更轻：无框无底色，muted 的机器事实。 */}
+          不展开也看得见。与展开体同一个圆角虚线框（用户 2026-10-12：从开始显示
+          活尾的那一刻起就该有框，无框的裸文本像渲染错误）；行也走展开体同一套
+          排版（BODY_LINE + mono caption + lineHeight 1.6，容器只补纵向内边距），
+          展开那一刻框里的文字不跳。 */}
       {tailPreview.length > 0 && (
-        <div style={{ marginLeft: RAIL_X, display: "grid", minWidth: 0 }}>
+        <div
+          className="scroll"
+          style={{
+            ...EXPANDED_FRAME,
+            display: "grid",
+            minWidth: 0,
+            padding: "var(--space-2) 0",
+            fontFamily: "var(--font-family-mono)",
+            fontSize: "var(--font-size-caption)",
+            lineHeight: 1.6,
+          }}
+        >
           {tailPreview.map((line, index) => (
-            <div key={index} style={SLOT.sub}>
+            <div key={index} style={{ ...BODY_LINE, color: "var(--color-text-secondary)" }}>
               {line}
             </div>
           ))}
@@ -3965,10 +3966,8 @@ function DiffView(props: { diff: string }) {
   return (
     <div
       style={{
-        marginLeft: RAIL_X,
-        paddingLeft: "var(--space-2)",
-        borderTop: "1px solid var(--color-border-subtle)",
-        borderLeft: RAIL_LINE,
+        ...EXPANDED_FRAME,
+        padding: "var(--space-2) 0",
       }}
     >
       <DiffBody entries={entries} maxHeight={320} />
@@ -3998,8 +3997,10 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
   useEffect(() => {
     void highlighterReady.then(() => setWarm(true));
   }, []);
-  const lines = props.lang !== null ? highlightLines(props.text, props.lang) : null;
-  const rows: readonly (string | readonly TokenSpan[])[] = lines ?? props.text.split("\n");
+  // 文件以换行结尾时 split 出一个空的末行，框底多一行空白带行号（同 PlainToolBody 剥尾部空行）
+  const text = stripTrailingBlankLines(props.text);
+  const lines = props.lang !== null ? highlightLines(text, props.lang) : null;
+  const rows: readonly (string | readonly TokenSpan[])[] = lines ?? text.split("\n");
   const lastLine = props.startLine + rows.length - 1;
   // 轨道 = 位数 + 行号格的横向内边距（不算 padding 的话三位数起就顶穿竖线挤进正文）
   const digits = Math.max(3, String(lastLine).length);
@@ -4012,10 +4013,8 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
         gridTemplateColumns: `${gutter} 1fr`,
         maxHeight: 320,
         overflow: "auto",
-        marginLeft: RAIL_X,
-        paddingLeft: "var(--space-2)",
-        borderTop: "1px solid var(--color-border-subtle)",
-        borderLeft: RAIL_LINE,
+        ...EXPANDED_FRAME,
+        padding: "var(--space-2) 0",
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-caption)",
         lineHeight: 1.6,
@@ -4253,6 +4252,10 @@ function PlainToolBody(props: {
 }) {
   const t = useT();
   const follow = useFollowScroll(props.live === true);
+  // shell 输出几乎总以 \n 结尾，拆行后末尾多一个空行——以前没有下边框看不出来，
+  // 套了圆角虚线框后框底会多出一整行空白（2026-10-12 返工），渲染前剥掉尾部空行。
+  // 中间的空行是内容结构，保留。
+  const text = stripTrailingBlankLines(props.text);
   // 看大图：放在提前 return 之前（hook 顺序不能随内容变）
   const [viewing, setViewing] = useState<number | null>(null);
   const images = props.images ?? [];
@@ -4293,11 +4296,15 @@ function PlainToolBody(props: {
         ))}
       </div>
     ) : null;
-  if (props.text === "" && images.length === 0) {
+  if (text === "" && images.length === 0) {
     return (
       <div
         className="scroll"
-        style={{ ...PLAIN_BODY, color: "var(--color-text-secondary)", padding: "0 var(--space-2)" }}
+        style={{
+          ...PLAIN_BODY,
+          color: "var(--color-text-secondary)",
+          padding: "var(--space-2)",
+        }}
       >
         {props.live === true ? t.chat.waitingOutput : t.chat.noOutput}
       </div>
@@ -4306,7 +4313,7 @@ function PlainToolBody(props: {
   if (props.failed) {
     return (
       <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
-        {props.text.split("\n").map((line, index) => (
+        {text.split("\n").map((line, index) => (
           <div key={index} style={{ ...BODY_LINE, color: "var(--color-danger)" }}>
             {line === "" ? " " : line}
           </div>
@@ -4317,19 +4324,18 @@ function PlainToolBody(props: {
   }
   return (
     <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
-      {props.text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
+      {text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
       {imageStrip}
     </div>
   );
 }
 
-/** 展开体滚动容器的共用形态（无水平内边距——行自带）；左侧挂 RAIL 导轨，同 EXPANDED_BODY。 */
+/** 展开体滚动容器的共用形态（无水平内边距——行自带）；套圆角虚线框，同 EXPANDED_BODY。 */
 const PLAIN_BODY = {
+  ...EXPANDED_FRAME,
   maxHeight: 320,
   overflow: "auto",
-  marginLeft: RAIL_X,
-  borderTop: "1px solid var(--color-border-subtle)",
-  borderLeft: RAIL_LINE,
+  padding: "var(--space-2) 0",
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-caption)",
   lineHeight: 1.6,

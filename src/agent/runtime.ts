@@ -42,6 +42,7 @@ import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
+import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
@@ -633,8 +634,8 @@ const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>()
  * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
  */
 const TOOL_GUIDELINES =
-  "跑可能耗时的命令（依赖安装、构建、测试）时，不要给 bash/powershell 传 timeout 参数——" +
-  `Windows 上这些命令本来就慢，短超时会把正常的慢命令拦腰杀掉；填了小于 ${COMMAND_TIMEOUT_FLOOR_SECONDS} 秒的值不会生效。`;
+  "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
+  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway.`;
 
 /**
  * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
@@ -645,9 +646,9 @@ const TOOL_GUIDELINES =
  * command/timeout、无视它——因此不需要 patch pi，也不需要在闸门里剔除。
  */
 const EXPECTED_SECONDS_GUIDELINE =
-  "调 bash/powershell 时，如果你预计这条命令要跑 10 秒以上（测试、构建、装依赖、sleep、" +
-  "大目录扫描），可以在参数里额外带上 expected_seconds（数字，秒，你的估计值）。" +
-  "它只用于界面展示（进度提示与自动展开），不影响命令的执行与超时。";
+  "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +
+  "scanning large directories), you may add expected_seconds (a number of seconds, your estimate) to the arguments. " +
+  "It only drives the UI (progress hint and auto-expand) and does not affect execution or timeouts.";
 
 /**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
@@ -857,10 +858,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
+            // 基底先过 adaptSystemPrompt（2026-10-12）：替换 pi 写死的 concise 行
+            // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
+            // 开始跑，幂等由该函数自己兑底。
             pi.on("before_agent_start", (event) => ({
               // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
               systemPrompt: [
-                event.systemPrompt,
+                adaptSystemPrompt(event.systemPrompt),
                 describePermissionMode(currentMode(), [
                   ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
                   "create_skill",
@@ -889,6 +893,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 QUOTE_GUIDELINE,
                 // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
                 gitAttributionGuideline(command.gitAttribution ?? true, command.attributionLanguage ?? "en"),
+                // 回复语言放最末一段（离对话最近、权重最高），见 prompt-narration.ts
+                REPLY_LANGUAGE_GUIDELINE,
               ]
                 .filter((part) => part !== "")
                 .join("\n\n"),

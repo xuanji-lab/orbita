@@ -1348,6 +1348,18 @@ body {
 }
 
 /*
+ * 展开体虚线框的框色（expanded-body.ts 的 EXPANDED_FRAME 引用）。虚线一半是空的，
+ * 同色看上去比实线淡一截：深色 border-strong 够用；浅色三档的 border-strong（#d7d7cf）
+ * 在白底上几乎消失，改用 text-tertiary 混 60% 透明。从 token 派生，不落裸色值。
+ */
+:root {
+  --expanded-frame-border: color-mix(in srgb, var(--color-text-tertiary) 60%, transparent);
+}
+:root:is([data-theme="graphite"], [data-theme="black"]) {
+  --expanded-frame-border: var(--color-border-strong);
+}
+
+/*
  * 浮钮面全主题统一 60% 不透明（用户 2026-09-27）：
  *  - 浅色默认档：--glass-bg 本就是 rgba(255,255,255,.6)，基态不用动；
  *  - 两暗档（graphite / black）：--glass-bg 是实色，60% 混透明派生；描边同档透明
