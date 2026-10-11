@@ -27,13 +27,27 @@ import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import type { ChannelMarkRecord, SessionRecord } from "../../shared/session.ts";
 import { isEmptyErrorAssistant, type SessionStore } from "./store.ts";
+import type { UsageLedger } from "../usage/ledger.ts";
 
-export function createSessionRecorder(store: SessionStore): (event: AgentEvent) => void {
+export function createSessionRecorder(
+  store: SessionStore,
+  /** 日用量账本（可选——旧测试夹具不传则不计账）。assistant 记录落盘的同一条路径上落账 */
+  usage?: UsageLedger,
+): (event: AgentEvent) => void {
   // 写失败不该让对话中断——记一条到 stderr，界面照常
   const persist = (sessionId: string, item: SessionRecord): void => {
     void store.record(sessionId, item).catch((error: unknown) => {
       console.error("[session] 落盘失败", sessionId, error);
     });
+    // 用量落账：只认带 usage 的 assistant 记录（去重在账本里按 message id 做）。
+    // 失败同样不拦对话——账本是可以重建的派生数据，下一条消息还有机会补上今天的账
+    if (usage !== undefined && item.role === "assistant" && item.usage !== undefined) {
+      void usage.recordUsage({ id: item.id, timestamp: item.timestamp, usage: item.usage }).catch(
+        (error: unknown) => {
+          console.error("[usage] 日账本落账失败", sessionId, error);
+        },
+      );
+    }
   };
   return (event) => {
     if (event.type === "compaction") return persist(event.sessionId, event.record);

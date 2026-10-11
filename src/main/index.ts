@@ -28,6 +28,8 @@ import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
+import { UsageLedger } from "./usage/ledger.ts";
+import { registerUsageIpc } from "./usage/ipc.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
@@ -281,7 +283,11 @@ void app.whenReady().then(async () => {
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
-  const record = createSessionRecorder(sessions);
+  // 日用量账本（usage:week / usage:event）：与 sessions 同目录的派生数据，
+  // assistant 记录落盘的同一条路径上累计。注册即异步装载 + 回填，不阻塞启动
+  const usageLedger = new UsageLedger(join(configDir, "usage-daily.json"));
+  const record = createSessionRecorder(sessions, usageLedger);
+  registerUsageIpc(usageLedger, sessions);
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
