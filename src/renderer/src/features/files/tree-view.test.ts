@@ -7,7 +7,6 @@ import {
   fileIconTone,
   filterCountText,
   filterEntries,
-  footerSummary,
   formatAge,
   formatSize,
   hasAgentsMd,
@@ -121,21 +120,6 @@ describe("hasAgentsMd", () => {
 
   it("大小写不同的近似名不算（模板与 agent 写的都是 AGENTS.md，精确匹配）", () => {
     deepStrictEqual(hasAgentsMd([file("agents.md")]), false);
-  });
-});
-
-describe("footerSummary", () => {
-  it("单数 root", () => {
-    deepStrictEqual(footerSummary(1, 0, en), "1 root");
-  });
-
-  it("复数 roots", () => {
-    deepStrictEqual(footerSummary(3, 0, en), "3 roots");
-  });
-
-  it("attached 在盘上缺席：如实追加 missing，不静默", () => {
-    deepStrictEqual(footerSummary(4, 1, en), "4 roots · 1 missing");
-    deepStrictEqual(footerSummary(5, 2, en), "5 roots · 2 missing");
   });
 });
 

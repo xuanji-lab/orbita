@@ -54,6 +54,7 @@ const plural = (count: number, one: string, many: string = `${one}s`): string =>
 
 export const en = {
   common: {
+    more: "More",
     cancel: "Cancel",
     close: "Close",
     retry: "Retry",
@@ -291,9 +292,11 @@ export const en = {
   },
 
   drawer: {
+    title: "Side chat",
+    filter: "Filter tasks…",
+    helpLabel: "About side chat",
     closeTab: "Close tab",
     newTab: "New tab",
-    pickTitle: "Which task should open side by side?",
     pickSub:
       "A side chat is an ordinary task: shown side by side, listed in the sidebar, switch back any time. The one open in the middle isn't listed here.",
     noOther: "No other task yet — start a new one.",
@@ -1207,6 +1210,7 @@ export const en = {
   },
 
   mcp: {
+    helpLabel: "About MCP servers",
     title: "MCP servers",
     addServer: "Add a server",
     filterPlaceholder: "Filter servers…",
@@ -1274,6 +1278,7 @@ export const en = {
   },
 
   terminal: {
+    empty: "No terminal open. Press + to start one.",
     title: "Terminal",
     newTerminal: "New terminal",
     closeTab: "Close terminal",
@@ -1303,6 +1308,8 @@ export const en = {
     cleanUpReferences: "Clean up references",
     centralDir: "The central skills directory",
     openDir: "Open the skills directory",
+    helpLabel: "About skills",
+    help: "A skill is a written procedure the agent loads when the task matches it. Global skills work in every task; a workspace skill only inside that workspace. Hover a row and press the return arrow to use it in the message.",
     reveal: "Reveal",
     missingTip: "The file is gone — clean up the references or restore the folder.",
     backToList: "Back to list",
@@ -1331,7 +1338,6 @@ export const en = {
     treeToggleTip: "Toggle the file tree — side by side when wide, overlay when narrow; narrowing the panel collapses it",
     tabsAria: "Open files",
     closeTab: "Close tab",
-    groupToggleTip: "Collapse or expand this group",
     sortByType: "Sort by file type",
     sortByName: "Sort by name",
     emptyWorkbench: "Empty workbench — created on the agent's first write",
@@ -1360,8 +1366,6 @@ export const en = {
     attachmentMissingShort: "Missing",
     createAgentsMdTip: "Create AGENTS.md in the workspace folder",
     createAgentsMd: "This workspace has no AGENTS.md yet — create a rules file",
-    roots: (n: number) => plural(n, "root"),
-    rootsMissing: (roots: string, missing: number) => `${roots} · ${missing} missing`,
     // 修改时间的短写：now / 12m / 1h / 3d / 5w / 8mo / 2y
     ageNow: "now",
     ageMinutes: (n: number) => `${n}m`,

@@ -83,12 +83,6 @@ export function hasAgentsMd(entries: readonly FileEntry[]): boolean {
   return entries.some((entry) => entry.name === "AGENTS.md");
 }
 
-/** footer 文案：`N roots`；attached 根在盘上缺席时追 `· N missing`（如实标出，不静默）。 */
-export function footerSummary(groupCount: number, missingAttached: number, t: Messages): string {
-  const roots = t.files.roots(groupCount);
-  return missingAttached > 0 ? t.files.rootsMissing(roots, missingAttached) : roots;
-}
-
 /** 按扩展名归到「代码」形状的图标（file-code-2）。样式表也是代码：css 归网页形状（globe） */
 const CODE_EXTS = new Set([
   "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "kt", "swift",

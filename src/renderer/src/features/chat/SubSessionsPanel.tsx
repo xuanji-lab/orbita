@@ -16,7 +16,7 @@ import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
-import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { api } from "../../api";
@@ -75,7 +75,6 @@ export function SubSessionsPanel(props: {
    * 够宽开内联列，不够宽换进右栏槽——那时就替换掉本面板）
    */
   onOpenChannel: (childId: string, messageId: string | null) => void;
-  onClose: () => void;
   providersError: string | null;
   /** 模型星标（AppSettings.starredModels）与开关：会话层的模型卡片与输入卡同一张，星标也同一份 */
   starredModels: readonly ModelPair[];
@@ -155,9 +154,6 @@ export function SubSessionsPanel(props: {
           >
             {t.subSessions.openAsMain}
           </button>
-          <PanelIconButton title={t.common.close} onClick={props.onClose}>
-            <Icon name="x" size={16} />
-          </PanelIconButton>
         </div>
         {/* 用户对子会话的控制行（用户裁决：mode / 模型 / 终止都归用户，不归父模型）。
             key 按子会话 id：换一条就把确认步 / 错误行复位 */}
@@ -208,17 +204,10 @@ export function SubSessionsPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <Icon name="git-fork" size={16} style={{ color: "var(--color-text-secondary)" }} />
-          <strong
-            title={t.subSessions.of(props.parentTitle)}
-            style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}
-          >
-            {t.rail.subSessions(children.length)}
-          </strong>
+          <PanelTitle icon="git-fork" title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
         </>
       }
       contentKey="list"
-      onClose={props.onClose}
     >
       {rows.length === 0 ? (
         <div style={{ padding: "var(--space-3)" }}>

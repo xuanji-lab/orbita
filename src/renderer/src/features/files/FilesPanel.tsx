@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Icon } from "../../shell/Icon";
+import { Icon, type IconName } from "../../shell/Icon";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
-import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelFilter, PanelGroupHead, PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
+import { IconButton } from "../../shell/IconButton";
 import { api } from "../../api";
 import type { ChatSession } from "../chat/useChatSession";
 import {
@@ -14,8 +15,6 @@ import {
   FILETYPE_TONE_COLOR,
   filterCountText,
   filterEntries,
-  footerSummary,
-  formatAge,
   formatSize,
   hasAgentsMd,
   orderEntries,
@@ -328,10 +327,6 @@ export function FilesPanel(props: {
   /** 提示行只在第一层已加载后判（加载中闪一下「没有 AGENTS.md」是误报） */
   const workspaceEntries =
     workspaceRoot === null ? undefined : tree.dirs.get(workspaceRoot.path);
-  const missingAttached = tree.roots.filter((root) => root.kind === "attached" && !root.exists)
-    .length;
-  // sessionId 为 null 时 Session 分组仍在（占位行），照数进 footer
-  const groupCount = tree.roots.length + (sessionId === null ? 1 : 0);
   const error = actionError ?? tree.actionError;
 
   /**
@@ -347,20 +342,14 @@ export function FilesPanel(props: {
   // query 里裁决）；「无文件时开关禁用」的不变式也压在这里，不靠组件记得清
   const layoutAttrs = panelLayoutAttrs(fileOpen, treeOn);
 
-  const rootGroup = (root: FileRoot, index: number): React.ReactNode => {
+  const rootGroup = (root: FileRoot): React.ReactNode => {
     const collapsed = collapsedGroups.has(root.path);
     return (
-      <div
-        key={root.path}
-        style={{
-          padding: index === 0 ? "6px 0 4px" : "8px 0 4px",
-          marginTop: index === 0 ? 0 : 2,
-          borderTop: index === 0 ? "none" : "1px solid var(--color-border-subtle)",
-        }}
-      >
+      <div key={root.path}>
         <RootLabel
           kind={root.kind}
-          detail={root.kind === "session" ? root.label : root.path}
+          detail={root.label}
+          detailTitle={root.path}
           canReveal={root.exists}
           missing={root.kind === "attached" && !root.exists}
           collapsed={collapsed}
@@ -440,10 +429,19 @@ export function FilesPanel(props: {
             <span>{t.files.title}</span>
             <Icon name="chevron-right" size={11} strokeWidth={2.2} className="files-title-chev" />
           </button>
-          {tabs.length > 0 && (
+          {tabs.length === 0 ? (
+            // 没打开文件：树就是整个面板，过滤框住在标题行（方案 B）；打开文件后标题行
+            // 让给标签页，过滤框挪到树的顶部（树开着时才在场）
+            <PanelFilter
+              value={query}
+              onChange={setQuery}
+              placeholder={t.files.filter}
+              ariaLabel={t.files.filterAria}
+              count={filterCountText(shownCount, loadedCount, filtering)}
+            />
+          ) : (
             <>
-              <span className="files-head-sep" aria-hidden="true" />
-              <div className="files-head-tabs" role="tablist" aria-label={t.files.tabsAria} ref={tabsBarRef}>
+              <div className="files-head-tabs panel-head-grow" role="tablist" aria-label={t.files.tabsAria} ref={tabsBarRef}>
                 {tabs.map((tab) => {
                   const name = tab.name ?? fileTabName(tab.path);
                   const active = tab.path === activePath;
@@ -514,7 +512,6 @@ export function FilesPanel(props: {
           </PanelIconButton>
         </>
       }
-      footer={<PanelLine>{footerSummary(groupCount, missingAttached, t)}</PanelLine>}
     >
       {/* 右键菜单（portal 到 body，位置在指针处）。只有 Session 根分组头接了右键，
           仅一项「添加文件引用」——把工作台目录整个递给模型。条目行不接右键：
@@ -536,23 +533,21 @@ export function FilesPanel(props: {
           <div className="files-panel-tree">
             {/* 过滤行钉在面板头顶部不随树滚动（设计稿的位置）：壳的内容区是一个滚动层，
                 这里在内部分「固定过滤行 + 滚动树」两块，不动 RightPanelFrame */}
-            <FilterRow
-              value={query}
-              onChange={setQuery}
-              countText={filterCountText(shownCount, loadedCount, filtering)}
-            />
+            {fileOpen ? (
+              <div className="files-tree-filter">
+                <PanelFilter
+                  value={query}
+                  onChange={setQuery}
+                  placeholder={t.files.filter}
+                  ariaLabel={t.files.filterAria}
+                  count={filterCountText(shownCount, loadedCount, filtering)}
+                />
+              </div>
+            ) : null}
             {/* 列宽钉死在容器宽度（minmax(0,1fr)）：隐式列默认按内容撑开，一条很长的附加目录
                 路径（不换行）会把整列撑到几倍宽，整棵树横向溢出、居中的 Attach 文案与行尾的
                 Detach 都被推出视野——省略号只有在列宽受约束时才会出现 */}
-            <div
-              style={{
-                minHeight: 0,
-                overflowY: "auto",
-                display: "grid",
-                gridTemplateColumns: "minmax(0, 1fr)",
-                alignContent: "start",
-              }}
-            >
+            <div className="panel-list" style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto" }}>
               {error !== null && (
                 <div style={{ padding: "var(--space-3)" }}>
                   <PanelLine danger>{error}</PanelLine>
@@ -574,10 +569,11 @@ export function FilesPanel(props: {
                   组头同样可折叠（2026-10-11 用户裁决：Session 组「没东西的时候也应该可以折叠」，
                   不然那行解释词一直顶着）；折叠键用常量——真实根的键是绝对路径，撞不上 */}
               {sessionId === null && (
-                <div style={{ padding: "6px 0 4px" }}>
+                <div>
                   <RootLabel
                     kind="session"
                     detail=""
+                    detailTitle=""
                     canReveal={false}
                     collapsed={collapsedGroups.has(PLACEHOLDER_SESSION_GROUP)}
                     onToggle={() =>
@@ -589,7 +585,6 @@ export function FilesPanel(props: {
                   )}
                 </div>
               )}
-              <AttachRow onAttach={attach} />
             </div>
           </div>
           {/* 浮层形态的遮罩：常驻渲染，显隐由 container query 管（与树同源） */}
@@ -616,93 +611,69 @@ export function FilesPanel(props: {
 const failMessage = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
-/** 过滤行：本地过滤已加载的条目名（不递归拉取），右侧计数「命中 / 已加载总数」 */
-function FilterRow(props: { value: string; onChange: (value: string) => void; countText: string }) {
-  const t = useT();
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        height: 34,
-        padding: "0 var(--space-3)",
-        borderBottom: "1px solid var(--color-border-subtle)",
-        color: "var(--color-text-tertiary)",
-      }}
-    >
-      <Icon name="search" size={14} style={{ flex: "0 0 auto" }} />
-      <input
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        placeholder={t.files.filter}
-        aria-label={t.files.filterAria}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          border: 0,
-          outline: 0,
-          background: "transparent",
-          font: "inherit",
-          fontSize: "var(--font-size-control)",
-          color: "var(--color-text-primary)",
-        }}
-      />
-      <span
-        title={t.files.countTip}
-        style={{
-          flex: "0 0 auto",
-          fontFamily: "var(--font-family-mono)",
-          fontSize: "var(--font-size-micro)",
-          color: "var(--color-text-tertiary)",
-        }}
-      >
-        {props.countText}
-      </span>
-    </div>
-  );
-}
+/**
+ * 行尾悬停动作键的几何（树行 / 附件行共用）：22px 方块，在 32px 行（--list-item-compact）里上下各 5；
+ * 最外一颗的右缘钉在行右内边距（= .file-row 的 padding-right，var(--space-2)）——
+ * 血线规则的悬停组合：静止态尾部也钉在同一条线上，悬停时它让位、动作键补位。
+ */
+const ROW_ACT_SIZE = 22;
+const ROW_ACT_TOP = 5;
+const ROW_ACT_RIGHT = 8;
 
 /**
- * 根分组标签：mono 小写大写化 + 灰色路径尾随。组头整行可点：折起 / 展开该组
- * （chevron 指示开合、aria-expanded 交给可达性，原型裁决）——三组同样可折，
- * 包括还没有会话的 Session 占位组（2026-10-11 用户裁决：没东西的时候也可以折，
- * 不然解释词一直顶着）。hover 才浮现的 Reveal / Detach 是按钮的兄弟节点
- * （button 不能套 button），浮在行尾。
- * onToggle / collapsed 成对出现；占位组的折叠键用常量 PLACEHOLDER_SESSION_GROUP。
+ * 根分组头：右栏统一的 PanelGroupHead（小号半粗无衬线 + 浅灰补充，整行可折，组间只靠
+ * 留白）。补充一律是根的显示名（会话标题 / 工作区名 / 附加目录末段），完整绝对路径
+ * 在 title——原先在这里铺等宽绝对路径，窄栏里只剩 `/Users/guanhongli/Or…`。
+ * 三组同样可折，包括还没有会话的 Session 占位组（2026-10-11 用户裁决）；
+ * onToggle / collapsed 成对出现，占位组的折叠键用常量 PLACEHOLDER_SESSION_GROUP。
+ * 行尾的排序 / Reveal / Detach 是悬停才出现的安静键（平时不占位）。
  */
 function RootLabel(props: {
   kind: FileRootKind;
   detail: string;
+  detailTitle: string;
   canReveal: boolean;
-  /** 挂了但盘上找不到了：路径用 warning 色而不是 tertiary——颜色不是唯一信号，DimRow 那行的文字还在 */
+  /** 挂了但盘上找不到了：补充文字用 warning 色——颜色不是唯一信号，DimRow 那行的文字还在 */
   missing?: boolean;
   /** 该组当前是否折起；所有组头都可折（含 Session 占位组） */
   collapsed: boolean;
   onToggle: () => void;
   onReveal?: () => void;
   onDetach?: () => void;
-  /** 排序切换（只 Session 组接）：当前档位；渲染为行尾 hover 键，图标反映当前档、tooltip 说切换动作 */
+  /** 排序切换（只 Session 组接）：当前档位；图标反映当前档、tooltip 说切换动作 */
   sort?: { mode: "name" | "type" };
   onSort?: () => void;
   /** 右键（目前只有 Session 根接）：与条目行同一份 ContextMenu 机制 */
   onContextMenu?: (position: { x: number; y: number }) => void;
 }) {
   const t = useT();
-  const label = (
-    <>
-      <Icon name="chevron-right" size={11} strokeWidth={2.2} className="files-root-chev" />
-      <span style={{ flex: "0 0 auto" }}>
-        {props.kind === "session" ? t.files.session : props.kind === "workspace" ? t.files.workspace : t.files.attached}
-      </span>
-      <span className="files-root-detail" title={props.detail} data-missing={props.missing === true ? "true" : undefined}>
-        {props.detail}
-      </span>
-    </>
-  );
+  const actions: React.ReactNode[] = [];
+  if (props.sort !== undefined && props.onSort !== undefined) {
+    actions.push(
+      <LabelAction
+        key="sort"
+        title={props.sort.mode === "name" ? t.files.sortByType : t.files.sortByName}
+        onClick={props.onSort}
+        icon={props.sort.mode === "name" ? "arrow-down-a-z" : "arrow-down-wide-narrow"}
+      />,
+    );
+  }
+  if (props.canReveal && props.onReveal !== undefined) {
+    actions.push(
+      <LabelAction key="reveal" title={t.files.revealInFileManager} onClick={props.onReveal} icon="folder-open" />,
+    );
+  }
+  if (props.onDetach !== undefined) {
+    actions.push(<LabelAction key="detach" title={t.files.detachTip} onClick={props.onDetach} icon="unlink" />);
+  }
   return (
-    <div
-      className="file-hover-host file-root-label"
+    <PanelGroupHead
+      label={props.kind === "session" ? t.files.session : props.kind === "workspace" ? t.files.workspace : t.files.attached}
+      detail={props.detail}
+      detailTitle={props.detailTitle}
+      detailWarn={props.missing === true}
+      collapsed={props.collapsed}
+      onToggle={props.onToggle}
       onContextMenu={
         props.onContextMenu === undefined
           ? undefined
@@ -711,71 +682,17 @@ function RootLabel(props: {
               props.onContextMenu?.({ x: event.clientX, y: event.clientY });
             }
       }
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        minHeight: 24,
-        padding: "0 var(--space-3)",
-      }}
-    >
-      <button
-        type="button"
-        className="files-root-toggle"
-        aria-expanded={!props.collapsed}
-        title={t.files.groupToggleTip}
-        onClick={props.onToggle}
-      >
-        {label}
-      </button>
-      {props.sort !== undefined && props.onSort !== undefined && (
-        <LabelAction
-          title={props.sort.mode === "name" ? t.files.sortByType : t.files.sortByName}
-          onClick={props.onSort}
-        >
-          <Icon
-            name={props.sort.mode === "name" ? "arrow-down-a-z" : "arrow-down-wide-narrow"}
-            size={12}
-          />
-        </LabelAction>
-      )}
-      {props.canReveal && props.onReveal !== undefined && (
-        <LabelAction title={t.files.revealInFileManager} onClick={props.onReveal}>
-          <Icon name="folder-open" size={12} />
-        </LabelAction>
-      )}
-      {props.onDetach !== undefined && (
-        <LabelAction title={t.files.detachTip} onClick={props.onDetach}>
-          <Icon name="unlink" size={12} />
-        </LabelAction>
-      )}
-    </div>
+      trailing={actions.length > 0 ? actions : undefined}
+    />
   );
 }
 
-/** 标签行尾的 20px 小方块（hover 才出现） */
-function LabelAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
+/** 组头行尾的 22px 安静键（悬停组头才出现，显隐在 .panel-group-acts） */
+function LabelAction(props: { title: string; onClick: () => void; icon: IconName }) {
   return (
-    <button
-      type="button"
-      className="file-hover-act"
-      title={props.title}
-      onClick={props.onClick}
-      style={{
-        width: 20,
-        height: 20,
-        flex: "0 0 auto",
-        // display 由 .file-hover-act 的 CSS 管（hover 才出现）；写在 inline 会压过 CSS 的 display:none
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 0,
-        border: 0,
-        borderRadius: "var(--radius-sm)",
-        cursor: "pointer",
-      }}
-    >
-      {props.children}
-    </button>
+    <IconButton label={props.title} size={22} onClick={props.onClick}>
+      <Icon name={props.icon} size={13} />
+    </IconButton>
   );
 }
 
@@ -818,7 +735,7 @@ function TreeRow(props: {
   const title = isSymlink
     ? t.files.symlink
     : hasMeta
-      ? `${props.name} · ${t.time.dateTime(props.modifiedAt)}`
+      ? `${props.name} · ${props.size !== undefined ? `${formatSize(props.size)} · ` : ""}${t.time.dateTime(props.modifiedAt)}`
       : undefined;
   return (
     <div className="file-hover-host" style={{ position: "relative" }}>
@@ -846,10 +763,9 @@ function TreeRow(props: {
           alignItems: "center",
           gap: 6,
           width: "100%",
-          height: 30,
-          paddingLeft: `calc(var(--space-3) + ${props.depth} * 16px)`,
-          // 右内边距在 .file-row 的 CSS 里（给 hover 动作键留位的悬停组合例外，见
-          // styles.css 血线注释）；行内不再写死
+          height: "var(--list-item-compact)",
+          paddingLeft: `calc(var(--space-2) + ${props.depth} * 16px)`,
+          // 右内边距在 .file-row 的 CSS 里（= 行右血线）
           border: 0,
           font: "inherit",
           fontSize: "var(--font-size-control)",
@@ -903,21 +819,12 @@ function TreeRow(props: {
         >
           {props.name}
         </span>
-        {props.size !== undefined && (
-          <span className="file-row-meta">
-            {formatSize(props.size)} · {formatAge(props.modifiedAt, Date.now(), t)}
-          </span>
-        )}
-        {isRules && (
-          <span
-            style={{
-              fontFamily: "var(--font-family-mono)",
-              fontSize: "var(--font-size-micro)",
-              color: "var(--color-text-tertiary)",
-              flex: "0 0 auto",
-            }}
-          >
-            {t.files.rules}
+        {/* 行尾静止信息（size，AGENTS.md 再带一个 rules 尾注）：钉在行右血线上
+            （.row-trailing），悬停时让位给绝对定位的引用 / Reveal 键（右栏统一） */}
+        {(props.size !== undefined || isRules) && (
+          <span className="row-trailing file-row-meta">
+            {isRules && <span>{t.files.rules}</span>}
+            {props.size !== undefined && <span>{formatSize(props.size)}</span>}
           </span>
         )}
       </button>
@@ -929,14 +836,20 @@ function TreeRow(props: {
         icon="folder-open"
         title={t.files.revealInFileManager}
         onClick={props.onReveal}
-        right={2}
+        right={ROW_ACT_RIGHT}
+        top={ROW_ACT_TOP}
+        size={ROW_ACT_SIZE}
+        iconSize={13}
         className="file-hover-act file-row-act"
       />
       <RowHoverAction
         icon="paperclip"
         title={t.files.reference}
         onClick={props.onReference}
-        right={24}
+        right={ROW_ACT_RIGHT + ROW_ACT_SIZE + 2}
+        top={ROW_ACT_TOP}
+        size={ROW_ACT_SIZE}
+        iconSize={13}
         className="file-hover-act file-row-act"
       />
     </div>
@@ -965,24 +878,9 @@ function AttachmentSection(props: {
 }) {
   const t = useT();
   return (
-    <section aria-label={t.files.attachments} style={{ marginTop: 6 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          minHeight: 24,
-          padding: "0 var(--space-3)",
-          fontFamily: "var(--font-family-mono)",
-          fontSize: "var(--font-size-micro)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          color: "var(--color-text-secondary)",
-        }}
-      >
-        <Icon name="paperclip" size={11} style={{ flex: "0 0 auto" }} />
-        <span>{t.files.attachments}</span>
-      </div>
+    <section aria-label={t.files.attachments}>
+      {/* Session 组里的小节标题：比组头低一级（同字体、不加粗、tertiary），不画图标 */}
+      <div className="files-subhead">{t.files.attachments}</div>
       {props.attachments.length === 0 ? (
         <DimRow>{t.files.attachmentsEmpty}</DimRow>
       ) : (
@@ -1029,9 +927,8 @@ function ImageAttachmentRow(props: {
         alignItems: "center",
         gap: 6,
         width: "100%",
-        height: 30,
-        paddingLeft: `calc(var(--space-3) + 1 * 16px)`,
-        paddingRight: "var(--space-3)",
+        height: "var(--list-item-compact)",
+        paddingLeft: `calc(var(--space-2) + 1 * 16px)`,
         border: 0,
         font: "inherit",
         fontSize: "var(--font-size-control)",
@@ -1098,11 +995,10 @@ function AttachmentRow(props: {
           alignItems: "center",
           gap: 6,
           width: "100%",
-          height: 30,
-          paddingLeft: `calc(var(--space-3) + 1 * 16px)`,
-          // 尾部（size / 已不在）是静止态元素：右缘直接钉在基础右内边距（右血线，
+          height: "var(--list-item-compact)",
+          paddingLeft: `calc(var(--space-2) + 1 * 16px)`,
+          // 尾部（size / 已不在）是静止态元素：右缘钉在 .file-row 的右内边距（右血线，
           // 验收 M）；悬停动作键绝对定位盖上、尾部让位（styles.css）
-          paddingRight: "var(--space-3)",
           border: 0,
           font: "inherit",
           fontSize: "var(--font-size-control)",
@@ -1138,51 +1034,27 @@ function AttachmentRow(props: {
         </span>
       </button>
       {clickable && owner !== null && (
-        <button
-          type="button"
-          className="file-hover-act file-row-act"
+        <RowHoverAction
+          icon="folder-open"
           title={t.files.revealInFileManager}
-          aria-label={t.files.revealInFileManager}
           onClick={() => props.onReveal(owner.path, props.path)}
-          style={{
-            position: "absolute",
-            right: 2,
-            top: 5,
-            width: 20,
-            height: 20,
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 0,
-            border: 0,
-            borderRadius: "var(--radius-sm)",
-            cursor: "pointer",
-          }}
-        >
-          <Icon name="folder-open" size={12} />
-        </button>
+          right={ROW_ACT_RIGHT}
+          top={ROW_ACT_TOP}
+          size={ROW_ACT_SIZE}
+          iconSize={13}
+          className="file-hover-act file-row-act"
+        />
       )}
-      <button
-        type="button"
-        className="file-hover-act file-row-act"
+      <RowHoverAction
+        icon="paperclip"
         title={t.files.reference}
-        aria-label={t.files.reference}
         onClick={() => props.onReference({ path: props.path, name, kind: kind === "directory" ? "dir" : "file" })}
-        style={{
-          position: "absolute",
-          right: clickable ? 24 : 2,
-          top: 5,
-          width: 20,
-          height: 20,
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 0,
-          border: 0,
-          borderRadius: "var(--radius-sm)",
-          cursor: "pointer",
-        }}
-      >
-        <Icon name="paperclip" size={12} />
-      </button>
+        right={clickable ? ROW_ACT_RIGHT + ROW_ACT_SIZE + 2 : ROW_ACT_RIGHT}
+        top={ROW_ACT_TOP}
+        size={ROW_ACT_SIZE}
+        iconSize={13}
+        className="file-hover-act file-row-act"
+      />
     </div>
   );
 }
@@ -1196,10 +1068,10 @@ function DimRow(props: { children: React.ReactNode; title?: string }) {
       title={props.title}
       style={{
         margin: 0,
-        height: 30,
+        height: "var(--list-item-compact)",
         display: "flex",
         alignItems: "center",
-        paddingLeft: "var(--space-3)",
+        padding: "0 var(--space-2)",
         fontSize: "var(--font-size-caption)",
         color: "var(--color-text-tertiary)",
       }}
@@ -1227,7 +1099,7 @@ function DimRow(props: { children: React.ReactNode; title?: string }) {
 function MissingAttachedRow(props: { onDetach: () => void }) {
   const t = useT();
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 12 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: "var(--space-2)" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <DimRow title={t.files.missingTip}>{t.files.missing}</DimRow>
       </div>
@@ -1245,61 +1117,17 @@ function MissingAttachedRow(props: { onDetach: () => void }) {
 }
 
 /**
- * 工作区没有 AGENTS.md 时的虚线提示行：点击 reveal 工作区根（打开文件夹手建）。
+ * 工作区没有 AGENTS.md 时的一行提示（右栏统一：不再是虚线卡，是一行浅灰可点行）：点击 reveal 工作区根（打开文件夹手建）。
  * 创建动作等写文件 IPC 落地，这一版不替用户碰盘。
  */
 function AgentsMdHint(props: { onReveal: () => void }) {
   const t = useT();
   return (
-    <button
-      type="button"
-      className="file-hint-row"
-      title={t.files.createAgentsMdTip}
-      onClick={props.onReveal}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        margin: "4px 10px 6px",
-        padding: "8px 10px",
-        border: "1px dashed var(--color-border-strong)",
-        borderRadius: "var(--radius-md)",
-        font: "inherit",
-        fontSize: "var(--font-size-caption)",
-        textAlign: "left",
-        cursor: "pointer",
-      }}
-    >
+    <button type="button" className="file-hint-row" title={t.files.createAgentsMdTip} onClick={props.onReveal}>
       <Icon name="book" size={13} style={{ flex: "0 0 auto" }} />
-      {t.files.createAgentsMd}
-    </button>
-  );
-}
-
-/** 底部「挂一个目录」虚线按钮（与面板头 + 同一动作）。Home 会话同样能挂，不禁用了 */
-function AttachRow(props: { onAttach: () => void }) {
-  const t = useT();
-  return (
-    <button
-      type="button"
-      className="file-attach-row"
-      title={t.files.attach}
-      onClick={props.onAttach}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 7,
-        margin: "8px 10px 4px",
-        minHeight: 36,
-        border: "1px dashed var(--color-border-strong)",
-        borderRadius: "var(--radius-lg)",
-        font: "inherit",
-        fontSize: "var(--font-size-control)",
-        cursor: "pointer",
-      }}
-    >
-      <Icon name="plus" size={14} style={{ flex: "0 0 auto" }} /> {t.files.attach}
+      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {t.files.createAgentsMd}
+      </span>
     </button>
   );
 }

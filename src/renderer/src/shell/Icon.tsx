@@ -90,6 +90,7 @@ import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rota
 import settings from "../../../../Orbita Design System/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../Orbita Design System/assets/icons/lucide/square.svg?raw";
 import squareTerminal from "../../../../Orbita Design System/assets/icons/lucide/square-terminal.svg?raw";
+import circleHelp from "../../../../Orbita Design System/assets/icons/lucide/circle-help.svg?raw";
 import search from "../../../../Orbita Design System/assets/icons/lucide/search.svg?raw";
 import terminal from "../../../../Orbita Design System/assets/icons/lucide/terminal.svg?raw";
 import fileText from "../../../../Orbita Design System/assets/icons/lucide/file-text.svg?raw";
@@ -210,6 +211,7 @@ const ICONS = {
   star,
   square,
   "square-terminal": squareTerminal,
+  "circle-help": circleHelp,
   search,
   terminal,
   "file-text": fileText,
