@@ -46,6 +46,7 @@ import scrollText from "../../../../Orbita Design System/assets/icons/lucide/scr
 import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
 import info from "../../../../Orbita Design System/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
+import flaskConical from "../../../../Orbita Design System/assets/icons/lucide/flask-conical.svg?raw";
 import folder from "../../../../Orbita Design System/assets/icons/lucide/folder.svg?raw";
 import folderOpen from "../../../../Orbita Design System/assets/icons/lucide/folder-open.svg?raw";
 import folderPlus from "../../../../Orbita Design System/assets/icons/lucide/folder-plus.svg?raw";
@@ -159,6 +160,7 @@ const ICONS = {
   presentation,
   "scroll-text": scrollText,
   "fold-vertical": foldVertical,
+  "flask-conical": flaskConical,
   folder,
   "folder-open": folderOpen,
   "folder-plus": folderPlus,

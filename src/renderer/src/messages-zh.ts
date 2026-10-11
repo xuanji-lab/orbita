@@ -364,6 +364,7 @@ export const zh: Messages = {
       migration: "迁移",
       browser: "浏览器",
       voice: "语音",
+      experimental: "实验功能",
     },
     appearance: "外观",
     theme: "主题",

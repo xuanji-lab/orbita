@@ -54,6 +54,7 @@ export const SETTINGS_TABS = [
   { id: "migration", icon: "download" },
   { id: "browser", icon: "globe" },
   { id: "voice", icon: "mic" },
+  { id: "experimental", icon: "flask-conical" },
 ] as const satisfies readonly { id: string; icon: IconName }[];
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
@@ -145,6 +146,11 @@ export function SettingsView(props: {
       ) : props.tab === "voice" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
+        </div>
+      ) : props.tab === "experimental" ? (
+        // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <ExperimentalSettings settings={props.settings} onChange={props.onSettingsChange} />
         </div>
       ) : props.tab === "providers" ? (
         // 模型服务铺满内容面：卡片墙 / 详情页自己内部滚动
@@ -346,40 +352,9 @@ function General(props: {
             </span>
           )}
         </SettingRow>
-        {/*
-          实验功能总开关：纸面两档皮肤与会话生命周期三件套的入口挂它后面。
-          放 Appearance 组：它说的是「界面上出现什么」。开关用两个 Chip——设计系统
-          里没有 Switch，与 Attribution 行同一个形状。默认关：不成熟的功能在公开
-          快照里不出现（2026-10 用户裁决）；只藏入口不动数据，开了就原样回来。
-        */}
-        <SettingRow name={t.settings.experimental} info={t.settings.experimentalInfo}>
-          <span className="set-chips" role="group" aria-label={t.settings.experimentalAria}>
-            <Chip
-              active={props.settings.experimental === true}
-              onClick={() => props.onChange({ experimental: true })}
-            >
-              {t.common.on}
-            </Chip>
-            <Chip
-              active={props.settings.experimental !== true}
-              onClick={() => props.onChange({ experimental: false })}
-            >
-              {t.common.off}
-            </Chip>
-          </span>
-        </SettingRow>
-      </SettingGroup>
-      {/*
-        实验功能一览（experimental-features.ts）：开关关着也列——打开之前就该看得到里面
-        有什么、每一版改了什么。每项一行，「更新日志」芯片展开它的开发记录。
-      */}
-      <SettingGroup label={t.settings.experimentalList}>
-        {EXPERIMENTAL_FEATURES.map((feature) => (
-          <ExperimentalFeatureRow key={feature.id} feature={feature} language={shownLanguage} />
-        ))}
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
-          它们调的都是「agent 怎么干活」，并成一组 */}
+          它们调的都是「agent 怎么干活」，并成一组（实验开关与功能清单已搬到独立的实验功能 Tab） */}
       <SettingGroup label={t.settings.agent}>
         <SettingRow
           name={t.settings.autoCompact}
@@ -590,6 +565,48 @@ function SettingRow(props: {
         {props.note}
       </span>
       <div className="set-row-ctl">{props.children}</div>
+    </div>
+  );
+}
+
+/**
+ * 设置 › 实验功能（独立 Tab，2026-10 用户裁决：之前挤在通用页里）。内容就三样：
+ * 总开关、一句说明（info 悬停）、功能清单——每项带自己的更新日志。默认关：
+ * 不成熟的功能在公开快照里不出现；只藏入口不动数据，开了就原样回来。
+ */
+function ExperimentalSettings(props: {
+  settings: AppSettings;
+  onChange: (patch: SettingsPatch) => void;
+}) {
+  const t = useT();
+  // 单语主题定死的语言：与通用页语言行同一条解析规则（shared 的 effectiveLanguage）
+  const language = effectiveLanguage(props.settings.theme, props.settings.language);
+  return (
+    <div className="set-page">
+      {/* 开关用两个 Chip——设计系统里没有 Switch，与署名行同一个形状；
+          开关关着清单也列：打开之前就该看得到里面有什么，打开即是自愿为这些
+          功能接受不稳定。功能成熟后转正：从清单移除、日志搬进正式更新说明。 */}
+      <SettingGroup label={t.settings.experimentalList}>
+        <SettingRow name={t.settings.experimental} info={t.settings.experimentalInfo}>
+          <span className="set-chips" role="group" aria-label={t.settings.experimentalAria}>
+            <Chip
+              active={props.settings.experimental === true}
+              onClick={() => props.onChange({ experimental: true })}
+            >
+              {t.common.on}
+            </Chip>
+            <Chip
+              active={props.settings.experimental !== true}
+              onClick={() => props.onChange({ experimental: false })}
+            >
+              {t.common.off}
+            </Chip>
+          </span>
+        </SettingRow>
+        {EXPERIMENTAL_FEATURES.map((feature) => (
+          <ExperimentalFeatureRow key={feature.id} feature={feature} language={language} />
+        ))}
+      </SettingGroup>
     </div>
   );
 }
