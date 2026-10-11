@@ -1093,7 +1093,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const customTools = [
     ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
-    ...createPdfTools(command.cwd),
+    // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
+    ...createPdfTools(command.cwd, { pdfCitations: command.pdfCitations === true }),
     // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
     ...createDocxTools(command.cwd),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
