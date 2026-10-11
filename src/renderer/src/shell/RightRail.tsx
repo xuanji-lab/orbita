@@ -1,5 +1,8 @@
+import { useRef, useState, type ComponentProps } from "react";
 import { Icon, type IconName } from "./Icon";
 import { useT } from "../locale.ts";
+import { CompletionCard } from "../features/notify/CompletionCard";
+import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/BellCard";
 
 /**
  * 右图标条，32px，**常驻**（首页也可达）。与左栏同款「无自己的面」：直接坐在
@@ -57,8 +60,36 @@ export function RightRail(props: {
    * 根会话没有子会话）。与 `panel` 共用互斥语义，走 `onPanel` 同一条切换逻辑。
    */
   subSessions: { count: number } | null;
+  /**
+   * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
+   */
+  completionNotice: Omit<ComponentProps<typeof CompletionCard>, "host"> | null;
+  /**
+   * 两张卡的弹出宿主：主槽（`.pane-main`）里的 `.pane-pop-host`，App 挂好传进来。
+   * 卡片的开关与数据跟着入口住在右栏，渲染位置在主槽——层级属于内容面，不骑在
+   * 右栏与内容面之间（用户 2026-10-10 第三轮）。
+   */
+  popHost: HTMLElement | null;
+  /**
+   * 右下角铃铛（2026-10-10 二轮）：未读清单的第二个入口。常驻；count 是未读数
+   * （绿 + 红两档，角标只数它）；entries 是所有竖条亮着的根会话（等你 > 未读 >
+   * 在跑，新在前），点行在主槽打开那条会话。状态与侧栏竖条同一份推导（App 算好）。
+   */
+  bell: {
+    count: number;
+    entries: readonly NoticeRow[];
+    onOpen: (id: string) => void;
+    /** 在辅助对话里打开（主槽不动） */
+    onSideChat: (id: string) => void;
+    onMarkAllRead: () => void;
+  };
 }) {
   const t = useT();
+  // 铃铛锚点（外部关闭判定要排除它）+ 弹层开关；开关在本体（右栏不重建），不随内容变
+  const [bellOpen, setBellOpen] = useState(false);
+  const [bellAnchor, setBellAnchor] = useState<HTMLSpanElement | null>(null);
+  const bellCardRef = useRef<HTMLDivElement | null>(null);
+  useBellDismiss(bellOpen, () => setBellOpen(false), bellAnchor, bellCardRef);
   return (
     <aside
       style={{
@@ -156,6 +187,32 @@ export function RightRail(props: {
           onClick={entry.onClick}
         />
       ))}
+      {/* 铃铛在入口组最底（右下角）：它是常驻的状态入口，位置稳才扫得到 */}
+      <span ref={setBellAnchor} style={{ display: "inline-flex" }}>
+        <RailEntryButton
+          icon="bell"
+          label={t.rail.bell(props.bell.count)}
+          lit={bellOpen}
+          onClick={() => setBellOpen((open) => !open)}
+          badge={props.bell.count}
+        />
+      </span>
+      {bellOpen && (
+        <BellCard
+          host={props.popHost}
+          cardRef={bellCardRef}
+          entries={props.bell.entries}
+          onOpen={(id) => {
+            setBellOpen(false);
+            props.bell.onOpen(id);
+          }}
+          onSideChat={(id) => {
+            setBellOpen(false);
+            props.bell.onSideChat(id);
+          }}
+          onMarkAllRead={props.bell.count > 0 ? props.bell.onMarkAllRead : null}
+        />
+      )}
     </aside>
   );
 }
@@ -163,9 +220,17 @@ export function RightRail(props: {
 /**
  * 26px 入口方块：顶部三入口与底部应用入口**同规格同点亮配方**——点亮 =
  * `--glass-bg` + `--shadow-composer`（与面板融合的单层 token，见头注释），
- * 再点已点亮的由调用方表达成收起。
+ * 再点已点亮的由调用方表达成收起。badge（铃铛的未读角标）常驻在右上角，
+ * 0 / 缺席不渲染。
  */
-function RailEntryButton(props: { icon: IconName; label: string; lit: boolean; onClick: () => void }) {
+function RailEntryButton(props: {
+  icon: IconName;
+  label: string;
+  lit: boolean;
+  onClick: () => void;
+  /** 未读角标；缺席或 0 不渲染 */
+  badge?: number;
+}) {
   const lit = props.lit;
   return (
     <button
@@ -187,6 +252,8 @@ function RailEntryButton(props: { icon: IconName; label: string; lit: boolean; o
         background: lit ? "var(--glass-bg)" : "transparent",
         boxShadow: lit ? "var(--shadow-composer)" : "none",
         color: lit ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+        // 角标的定位基准
+        position: "relative",
       }}
       onMouseEnter={(e) => {
         if (lit) return;
@@ -198,6 +265,11 @@ function RailEntryButton(props: { icon: IconName; label: string; lit: boolean; o
       }}
     >
       <Icon name={props.icon} size={16} />
+      {props.badge !== undefined && props.badge > 0 && (
+        <span className="rail-badge" aria-hidden="true">
+          {props.badge > 99 ? "99+" : props.badge}
+        </span>
+      )}
     </button>
   );
 }

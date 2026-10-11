@@ -42,10 +42,27 @@ export function Drawer(props: {
   onOpenProviders: () => void;
   docked: DockedTab[];
   onDockedChange: (docked: DockedTab[]) => void;
+  /**
+   * 一次性「切到这个标签」的请求（完成提醒卡的「辅助对话」，2026-10-10）：调用方先把
+   * 它停靠进 docked，再发请求；本组件激活它后调 onFocusConsumed 作废请求——面板每次
+   * 打开都会重新挂载，请求不作废的话下次打开又会被拽回这一页。token 让同一 tab 连发
+   * 两次也能触发。
+   */
+  focus: { tab: string; token: number } | null;
+  onFocusConsumed: () => void;
 }) {
   const t = useT();
-  const [activeTab, setActiveTab] = useState<DockedTab | null>(props.docked[0] ?? null);
+  const [activeTab, setActiveTab] = useState<DockedTab | null>(props.focus?.tab ?? props.docked[0] ?? null);
   const [picking, setPicking] = useState(false);
+
+  useEffect(() => {
+    if (props.focus === null) return;
+    setActiveTab(props.focus.tab);
+    setPicking(false);
+    props.onFocusConsumed();
+    // 只认 token：同一请求不重复处理
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.focus?.token]);
 
   // 新任务发出第一句话、拿到真 id：把 "new" 占位换成它，激活跟随
   useEffect(() => {

@@ -348,6 +348,19 @@ describe("parseSettings 的 collapsePastedText", () => {
   });
 });
 
+describe("parseSettings 的 completionSound", () => {
+  it("true / false 原样保留，缺席不落键", () => {
+    deepStrictEqual(parseSettings({ completionSound: true }).completionSound, true);
+    deepStrictEqual(parseSettings({ completionSound: false }).completionSound, false);
+    deepStrictEqual(parseSettings({}).completionSound, undefined);
+  });
+
+  it("非布尔一律丢掉", () => {
+    deepStrictEqual(parseSettings({ completionSound: "on" }).completionSound, undefined);
+    deepStrictEqual(parseSettings({ completionSound: 0 }).completionSound, undefined);
+  });
+});
+
 describe("parseSettings 的 choreModel", () => {
   it("缺席 = 各件家务退回会话模型，不落这个键", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }).choreModel, undefined);

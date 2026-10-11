@@ -245,6 +245,29 @@ export const en = {
   rowStatus: {
     pinned: "Pinned",
     subRunning: "Sub-session running",
+    running: "Running",
+    waiting: "Waiting for your reply",
+    unread: "Finished · not viewed yet",
+    unreadFailed: "Stopped with an error · not viewed yet",
+  },
+
+  /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */
+  notice: {
+    finished: "Task finished",
+    failed: "Task stopped with an error",
+    openNow: "Open",
+    sideChat: "Side chat",
+    later: "Later",
+    openNowTip: "Open it here, replacing the current chat",
+    sideChatTip: "Open it in the side chat, keep the current chat",
+    laterTip: "Keep it marked unread in the sidebar",
+  },
+
+  /** 右下角铃铛弹出的清单（侧栏竖条的另一个入口） */
+  bell: {
+    title: "Notifications",
+    empty: "Nothing running, waiting, or unread",
+    markAllRead: "Mark all read",
   },
 
   menu: {
@@ -264,6 +287,7 @@ export const en = {
     subSessions: (count: number) => `Sub-sessions (${count})`,
     channels: "Sub-session channels",
     browser: "Built-in browser",
+    bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
   },
 
   browser: {
@@ -454,6 +478,10 @@ export const en = {
     pastedCollapseAria: "Collapse pasted text",
     pastedCollapseInfo:
       "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
+    completionSound: "Completion sound",
+    completionSoundAria: "Completion sound",
+    completionSoundInfo:
+      "Play a cabin-call chime when a task finishes while you are looking elsewhere · the sidebar highlight and the card still appear when it is off",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",

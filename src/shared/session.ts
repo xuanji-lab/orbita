@@ -320,6 +320,20 @@ export interface SessionMeta {
    */
   starred?: boolean;
   /**
+   * 未读：这条会话（后台）跑完了、人还没看过——2026-10-10 用户裁决**落盘**：
+   * 重启后侧栏竖条与右下角铃铛清单还要指得出「有结果没看」。**null / 缺席即已读**。
+   *
+   * - `at`：标未读那一刻（Unix ms）。铃铛清单同档排序（新→旧）与家务活模型
+   *   以后扫清单都要一个时间。
+   * - `failed`：那一轮以失败收尾（重试耗尽等）——竖条画 3/3 红而不是绿，
+   *   同样算未读。是**落定那一刻的快照**，不是运行时态。
+   *
+   * 谁写：renderer 判定（completion-notice 的 planNotice：没在看才标），经
+   * session:unread 通道落盘；看过（主槽 / 辅助对话显示了它）即清。新开一轮跑
+   * 完会覆盖成新值。
+   */
+  unread?: { at: number; failed: boolean } | null;
+  /**
    * 完成状态：open = 还在跑；done = 干完了；done_with_todos = 干完了但留了
    * 遗留事项。**可撤销**——重开 done 的会话继续干活就回 open。缺席即 open。
    */
@@ -433,6 +447,19 @@ function parseRecentQueries(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string").slice(0, RECENT_QUERIES_MAX);
 }
 
+/**
+ * 解磁盘上的一份未读标记。**坏了返回 null（当已读）**，不丢整条会话——
+ * 未读丢了只是少一个提醒，会话本体还在；同 parse 系列的纪律。
+ * 也用在 IPC 入口：renderer 传来的坏载荷当已读写回，不裸存进 meta。
+ */
+export function parseSessionUnread(raw: unknown): { at: number; failed: boolean } | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const at = num(value["at"]);
+  if (at === null) return null;
+  return { at, failed: value["failed"] === true };
+}
+
 /** 有限数字才算数字。NaN / Infinity 进了界面就是一行胡话 */
 function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -530,6 +557,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     starred: value["starred"] === true,
     completion: isSessionCompletion(value["completion"]) ? value["completion"] : "open",
     closedAt: num(value["closedAt"]),
+    // 未读标记：缺 at 整条丢（当已读）——见 parseSessionUnread 的纪律
+    unread: parseSessionUnread(value["unread"]),
     // 缺 recentQueries 的是会话卡之前存的会话：空槽显示，不补算（读日志太贵）
     recentQueries: parseRecentQueries(value["recentQueries"]),
     // 读不出用量就当没有——一份坏账本不该连带丢掉整条会话

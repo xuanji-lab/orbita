@@ -6,6 +6,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { writeFile } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
+  parseSessionUnread,
   transcriptToMarkdown,
   type CarryoverDraft,
   type CarryoverStatus,
@@ -100,6 +101,10 @@ export function registerSessionIpc(
   ipcMain.handle(
     ipcChannels.sessionSetCompletion,
     (_event, id: string, completion: SessionCompletion) => store.setCompletion(id, completion),
+  );
+  ipcMain.handle(ipcChannels.sessionUnread, (_event, id: string, unread: unknown) =>
+    // 载荷在入口就洗：坏形状当已读（null）写回，不裸存进 meta
+    store.setUnread(id, parseSessionUnread(unread)),
   );
   // —— 遗留事项（收尾仪式）三通道。store 铸 id/status/时间戳，renderer 不猜 ——
   ipcMain.handle(ipcChannels.carryoverList, () => carryovers.list());

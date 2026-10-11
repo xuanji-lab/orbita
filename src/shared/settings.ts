@@ -156,6 +156,12 @@ export interface AppSettings {
    */
   collapsePastedText?: boolean;
   /**
+   * 后台会话跑完时响一声提示音（客舱呼唤铃）。**缺席 = 响**：这个提醒的价值就在于
+   * 人不在跟前时也能知道，默认关等于没做。只管声音——侧栏未读底色与辅助对话旁的
+   * 卡片不受它影响（静音的人同样需要知道任务完了）。只认布尔，同 gitAttribution。
+   */
+  completionSound?: boolean;
+  /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
    * 只认布尔——这个文件手改得到，`"yes"` 该被丢掉而不是当成真。
@@ -390,6 +396,7 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebarWidth?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
+    completionSound?: unknown;
     gitAttribution?: unknown;
     choreModel?: unknown;
     /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
@@ -457,6 +464,10 @@ export function parseSettings(raw: unknown): AppSettings {
     // 同 gitAttribution 的纪律：非布尔丢掉，缺席 = 折叠（现状）
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }
+      : {}),
+    // 同上：非布尔丢掉，缺席 = 响
+    ...(typeof record.completionSound === "boolean"
+      ? { completionSound: record.completionSound }
       : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),

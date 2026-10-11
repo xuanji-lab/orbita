@@ -164,8 +164,10 @@ export interface ChatSession {
    * 与「当前看哪条」无关——后台在跑的会话切走了也照样转圈。
    */
   phaseOf: (id: string) => SessionEntry["phase"];
-  /** 按 id 查回合失败标注（槽里有真相）——侧栏失败图标用，与「当前看哪条」无关 */
+  /** 按 id 查回合失败标注（槽里有真相）——未读标记的 failed 快照用，与「当前看哪条」无关 */
   turnErrorOf: (id: string) => string | null;
+  /** 按 id 查挂着的工具审批（槽里有真相）——竖条「在等你」要读到后台会话的审批 */
+  approvalsOf: (id: string) => readonly PendingApproval[];
   error: string | null;
   /** 当前查看会话的输入框草稿——**按会话隔离**，切换 / 新开会话互不带走 */
   draft: string;
@@ -483,6 +485,7 @@ export interface SessionEngine {
   readonly usable: ProviderDto[];
   readonly phaseOf: (id: string) => SessionEntry["phase"];
   readonly turnErrorOf: (id: string) => string | null;
+  readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   readonly renameSession: (id: string, title: string) => void;
   readonly pinSession: (id: string, pinned: boolean) => void;
@@ -1104,6 +1107,12 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
     [],
   );
+  // 按 id 查挂着的审批（2026-10-10 未读/竖条一刀）：竖条「在等你」要读到后台
+  // 会话的审批，不只当前看着的那条；与 phaseOf / turnErrorOf 同一套 ref 读法
+  const approvalsOf = useCallback(
+    (id: string): readonly PendingApproval[] => statesRef.current.get(id)?.approvals ?? [],
+    [],
+  );
 
   return {
     catalog,
@@ -1137,6 +1146,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     usable,
     phaseOf,
     turnErrorOf,
+    approvalsOf,
     answerApproval,
     renameSession,
     pinSession,
@@ -2952,6 +2962,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     stats: entry.stats,
     phaseOf: engine.phaseOf,
     turnErrorOf: engine.turnErrorOf,
+    approvalsOf: engine.approvalsOf,
     error: engine.error,
     draft,
     setDraft,

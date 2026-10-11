@@ -492,6 +492,8 @@
   color: var(--color-text-primary);
   font-weight: var(--weight-regular);
   transition: var(--transition-hover);
+  /* 行内竖条（.option-row-bar）的定位基准：无偏移的 relative 不改变布局 */
+  position: relative;
 }
 
 /*
@@ -525,6 +527,59 @@
   background: transparent;
   color: var(--color-text-tertiary);
   font-weight: var(--weight-regular);
+}
+
+/*
+ * 会话行最左侧的三节竖条（2026-10-10 用户裁决，Sidebar.tsx 的 NavRow `bar` /
+ * 铃铛清单 BellCard）：取代上一版的渐变带（动效太耗 GPU，低端 Windows /
+ * MacBook 不友好）与未读浅底。**静态，无任何动效**。
+ *
+ * 三节从上往下依次是进度（同电池表）：
+ * - running：第 1 节亮，--color-info（蓝）——在跑（含任一直接子会话在跑）
+ * - waiting：前 2 节亮，--color-warning（橙）——挂着工具审批，在等用户
+ * - done：3 节全亮，--color-success（绿）——跑完、还没看（meta.unread）
+ * - failed：3 节全亮，--color-danger（红）——跑挂了、还没看（unread.failed）
+ * 读完就不渲染。颜色用固定 token 不用 accent：暗色主题的 accent 是黄，
+ * 会和橙混。选中仍是整行底色（.option-row 的 data-active），两者互不干扰。
+ */
+.status-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 3px;
+  height: 16px;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+.status-bar > i {
+  flex: 1;
+  border-radius: 1px;
+}
+
+.status-bar[data-fill="running"] > i:first-child {
+  background: var(--color-info);
+}
+
+.status-bar[data-fill="waiting"] > i:first-child,
+.status-bar[data-fill="waiting"] > i:nth-child(2) {
+  background: var(--color-warning);
+}
+
+.status-bar[data-fill="done"] > i {
+  background: var(--color-success);
+}
+
+.status-bar[data-fill="failed"] > i {
+  background: var(--color-danger);
+}
+
+/* 行内的那一根贴行最左缘（GitHub 选中项光标同款位置），垂直居中 */
+.option-row-bar {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 /*
@@ -768,9 +823,59 @@ body {
  * 壳是 pane 的子元素——**同一个面板**（2026-09-12 裁决：不要间隔，一条竖线）。
  */
 .pane-main {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+/*
+ * 主槽内的弹出卡（完成提醒卡 / 铃铛清单，features/notify/）：用户 2026-10-10 第三轮——
+ * 它们是**在 ChatView 里弹出的一层卡片**，不是挂在窗口上、骑在右栏与内容面边框之间的
+ * 浮层。宿主铺满 .pane-main（只给定位用，不吃指针），卡片守 ChatView 自己的血线：
+ * - 横向 `--pane-pop-inline` = ChatView 内容区的左右内边距（--space-5），卡片右缘与
+ *   输入卡右缘、正文右缘落在同一根线上；
+ * - 纵向 `--pane-pop-block` = 输入卡离主槽底边的距离（ChatView 底部行的 10px），
+ *   清单卡的底边与输入卡底边齐平；
+ * - 有会话页头时宿主顶边让到页头分隔线之下（页头 30px + 上下 12px 内边距 + 1px 线，
+ *   ChatView.tsx 的 header），提醒卡不骑在分隔线上。
+ * 各占离入口最近的角：提醒卡右上（辅助对话入口在右栏上部），清单右下（铃铛在右栏底）。
+ * 右栏面板开着时卡片停在主槽这一侧，不再压到面板上。
+ */
+.pane-pop-host {
+  --pane-pop-inline: var(--space-5);
+  --pane-pop-block: 10px;
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.pane-main:has(.chat-head) > .pane-pop-host {
+  top: 55px;
+}
+
+.pane-pop {
+  position: absolute;
+  right: var(--pane-pop-inline);
+  max-width: calc(100% - 2 * var(--pane-pop-inline));
+  max-height: calc(100% - 2 * var(--pane-pop-block));
+  box-sizing: border-box;
+  pointer-events: auto;
+  overflow: auto;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popover);
+  /* 入口都在右栏：从右侧滑进 8px，动效只解释「它从哪来」 */
+  animation: pane-pop-in var(--duration-enter) var(--ease-out-quint);
+}
+
+@keyframes pane-pop-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
 }
 
 /* ===== 右侧面板壳（Skills / MCP / 辅助对话三菜单共用，2026-09-13 裁决） =====
@@ -1873,6 +1978,222 @@ body {
 [data-window-inactive="true"] .anim-continuous,
 [data-window-inactive="true"] .orbita-breath {
   animation-play-state: paused !important;
+}
+
+/*
+ * 后台会话完成提醒卡（features/notify/CompletionCard.tsx）：主槽右上角的弹出卡，
+ * 定位、血线与浮层配方在上面的 `.pane-pop`，这里只管内部排版。
+ */
+.completion-card {
+  /* 顶上没有输入卡可对齐：与右侧同取 --pane-pop-inline，右上角两边留白相等 */
+  top: var(--pane-pop-inline);
+  /* 紧凑两行（用户 2026-10-12 选 B）：原 280 宽、三行三按钮太占地方 */
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+}
+
+.completion-card-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.completion-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.completion-card-close {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-tertiary);
+}
+
+.completion-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  /* 与名字左缘对齐：竖条 3px + 间距 8px */
+  padding-left: 11px;
+}
+
+.completion-card-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+.completion-card-link:hover {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 主操作「打开」用 accent（设计系统：accent 只给主操作） */
+.completion-card-link[data-primary] {
+  color: var(--color-accent);
+}
+
+.completion-card-dot {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * 铃铛弹出的未读清单（features/notify/BellCard.tsx）：主槽右下角的弹出卡，
+ * 定位、血线与浮层配方在 `.pane-pop`。清单行最左是同款三节竖条（.status-bar 的行内档）。
+ */
+.bell-card {
+  bottom: var(--pane-pop-block);
+  /* 紧凑清单（用户 2026-10-12 选 A）：原 280 宽、两行行高太占地方 */
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1) 0;
+  border-radius: var(--radius-lg);
+}
+
+.bell-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  height: 22px;
+  padding: 0 var(--space-3);
+}
+
+.bell-card-title {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+.bell-card-mark {
+  height: 18px;
+  padding: 0 var(--space-1);
+  margin-right: calc(-1 * var(--space-1));
+  border: 0;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+.bell-card-empty {
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+.bell-card-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.bell-card-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  transition: var(--transition-hover);
+}
+
+.bell-card-row {
+  cursor: default;
+}
+
+.bell-card-row:hover,
+.bell-card-row:focus-within {
+  background: var(--option-hover-bg);
+}
+
+/* 行尾两种看法：平时不渲染、不占位；悬停 / 键盘聚焦时顶替工作区名站到行尾，
+   会话名让出位置、按省略号截断（不叠字） */
+.bell-card-actions {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.bell-card-row:hover .bell-card-actions,
+.bell-card-row:focus-within .bell-card-actions {
+  display: flex;
+}
+
+.bell-card-row:hover .bell-card-ws,
+.bell-card-row:focus-within .bell-card-ws {
+  display: none;
+}
+
+.bell-card-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bell-card-ws {
+  flex: 0 1 auto;
+  max-width: 40%;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 铃铛入口的未读角标：常驻在方块右上角，0 时不渲染（RightRail） */
+.rail-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font-family: var(--font-family-business);
+  font-size: 9px;
+  font-weight: var(--weight-semibold);
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
 }
 
 /*

@@ -14,6 +14,7 @@ import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsVi
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
+import { runStateLabel, sessionRunState } from "../features/notify/completion-notice.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
 import { useExperimentalFeature } from "../experimental.ts";
@@ -57,6 +58,14 @@ const IDLE_SUGGEST_MS = IDLE_SUGGEST_DAYS * 24 * 60 * 60 * 1000;
  */
 function openTodoCount(carryovers: readonly Carryover[], sessionId: string): number {
   return carryovers.filter((item) => item.sourceSessionId === sessionId && item.status === "open").length;
+}
+
+/**
+ * 三节竖条的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与铃铛清单
+ * 同一套句子）。包一层是让调用点读起来像个本地词。
+ */
+function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages): string {
+  return runStateLabel(state, t);
 }
 
 /**
@@ -134,6 +143,8 @@ export function Sidebar(props: {
   onShowCarryovers: (next: boolean) => void;
   /** 当前宽度（px）。拖动中由调用方只改本地 state，松手才落 settings */
   width: number;
+  /** 未读（后台完成没看过的）会话 id 集：工作区组与 TASKS 行画未读点 */
+  unread: ReadonlySet<string>;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
 }) {
@@ -691,6 +702,7 @@ export function Sidebar(props: {
                       sessions={scoped.filter((m) => m.workspaceId === workspace.id)}
                       session={session}
                       openId={openId}
+                      unread={props.unread}
                       folded={isGroupFolded(groups, foldKeyForWorkspace(workspace.id))}
                       onToggleFold={() =>
                         setGroups((current) =>
@@ -825,6 +837,8 @@ function WorkspaceGroup(props: {
   sessions: SessionMeta[];
   session: ChatSession;
   openId: string | null;
+  /** 未读（后台完成没看过的）会话 id 集：行首画未读点 */
+  unread: ReadonlySet<string>;
   folded: boolean;
   onToggleFold: () => void;
   /** 眼下最多列几条（groupVisibleLimit）；expanded = 点过 Show more */
@@ -1168,6 +1182,16 @@ function NavRow(props: {
   iconTitle?: string;
   /** 整行的悬停说明（planned 的东西用它讲为什么点不动） */
   hint?: string;
+  /**
+   * 行最左侧的三节竖条（2026-10-10 用户裁决）：running = 1/3 蓝，waiting = 2/3 橙，
+   * done = 3/3 绿，failed = 3/3 红；读完就不亮（undefined）。状态由
+   * sessionRunState 推导（与铃铛清单同一份真源）；选中仍是整行底色，互不干扰。
+   * 规则在 styles.css 的 `.status-bar`。**静态，无动效**（低端机 GPU 友好，
+   * 取代上一版的渐变带）。
+   */
+  bar?: "running" | "waiting" | "done" | "failed" | undefined;
+  /** 竖条的悬停说明（状态的可读名字） */
+  barTitle?: string;
   style?: React.CSSProperties;
 }) {
   const disabled = props.disabled === true;
@@ -1200,6 +1224,15 @@ function NavRow(props: {
         ...props.style,
       }}
     >
+      {/* 三节竖条：贴行最左缘（GitHub 选中项同款位置）。不亮时不渲染——
+          「读完就不亮」是整个东西退场，不是留一根灰杠 */}
+      {props.bar !== undefined && (
+        <span className="status-bar option-row-bar" data-fill={props.bar} title={props.barTitle}>
+          <i />
+          <i />
+          <i />
+        </span>
+      )}
       <span
         title={props.iconTitle}
         style={{
@@ -1226,7 +1259,9 @@ function NavRow(props: {
 }
 
 /**
- * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**。
+ * 一条会话。状态在三处各说各的：行最左的三节竖条说运行态（在跑 / 在等你 / 跑完没看 /
+ * 跑挂没看），行首图标槽只剩静态标记（子会话 git-fork / 置顶图钉），行尾是星标、
+ * 完成勾与遗留角标——**状态优先用图标与文字，颜色是第二信号**（tooltip 补齐文字）。
  *
  * 右边是**一个星标键加三个点**，不是一排图标：288px 的一行挂不下六个动作。
  * 星标是唯一挂在行上的动作——它是一天里按得最多的那个（Proma 的悬停即星标，
@@ -1255,24 +1290,39 @@ function SessionRow(props: {
    * 或里面没文件，文案退回光秃秃的 Delete permanently。
    */
   const [workbenchFiles, setWorkbenchFiles] = useState<number | null>(null);
-  const live = meta.id === session.sessionId;
-  // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
-  const running = session.phaseOf(meta.id) !== "idle";
-  // 子会话在跑：任一**直接**子会话的 phase 不是 idle（childSessions 只取一层，
-  // 与删除确认的子会话数同一个口径）。父自己在跑时不必查——优先级链里 running
-  // 已压过 subRunning；子会话自己的行没有孩子，some 恒 false，不受影响
+  // 行的运行态查它自己的槽：后台在跑的会话切走了也照样亮竖条，与「当前看哪条」无关。
+  // 子会话只取一层（childSessions 同口径）——子会话在跑 / 在等审批都记到母会话
+  // 这一行的竖条上（入口在母），fork 图标再补「跑的是孩子」那一句
   const children = childSessions(session.sessions, meta.id);
-  const subRunning = !running && children.some((child) => session.phaseOf(child.id) !== "idle");
-  // 失败同样查槽：后台会话重试耗尽（turnError）也亮 Failed，不止正看着的那条。
-  // 只描述母会话自己的事实，与 subRunning 同时成立时谁上谁下交给优先级链（row-status.ts）
-  const failed =
-    !running && (session.turnErrorOf(meta.id) !== null || (live && session.error !== null));
+  // 三节竖条（2026-10-10 用户裁决）：状态由 sessionRunState 推导——与右下角
+  // 铃铛清单同一份真源，两个入口只是同一状态的两种看法。未读读 meta（落盘，
+  // 重启后还在）；在跑 / 在等你读槽。选中仍是整行底色，互不干扰
+  const bar = sessionRunState({
+    slot: {
+      phase: session.phaseOf(meta.id),
+      approvals: session.approvalsOf(meta.id).length,
+    },
+    children: children.map((child) => ({
+      phase: session.phaseOf(child.id),
+      approvals: session.approvalsOf(child.id).length,
+    })),
+    unread: meta.unread ?? null,
+  });
   const done = isSessionDone(meta);
   /**
-   * 行首状态槽：running > subRunning > failed > pinned > 空。优先级与理由在
-   * `row-status.ts`（纯函数 + 测试）。`null` = 这一行没什么可说，槽留空。
+   * 行首状态槽：subRunning > pinned > 空。运行 / 未读 / 失败已归竖条，槽里只剩
+   * 静态标记。优先级与理由在 `row-status.ts`（纯函数 + 测试）。`null` = 这一
+   * 行没什么可说，槽留空。
    */
-  const status = rowStatusIcon({ running, subRunning, failed, pinned: meta.pinned === true }, t);
+  const status = rowStatusIcon(
+    {
+      subRunning:
+        session.phaseOf(meta.id) === "idle" &&
+        children.some((child) => session.phaseOf(child.id) !== "idle"),
+      pinned: meta.pinned === true,
+    },
+    t,
+  );
   // 这条会话的未办遗留数（行尾角标，与筛选同口径）
   const openTodos = openTodoCount(session.carryovers, meta.id);
   // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）。子会话不参与
@@ -1466,9 +1516,10 @@ function SessionRow(props: {
           icon={status?.icon ?? null}
           label={meta.title === "" ? t.common.newTask : meta.title}
           tone={status?.tone}
-          spin={status?.spin ?? false}
           iconTitle={status?.label}
           active={props.active}
+          bar={bar ?? undefined}
+          barTitle={bar === null ? undefined : barLabel(bar, t)}
           onClick={props.onClick}
           style={{ flex: 1, minWidth: 0 }}
         />

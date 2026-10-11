@@ -48,7 +48,17 @@ import { ReviewPanel } from "./features/review/ReviewPanel";
 import { CHANNEL_COLUMN_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
-import { NEW_TASK_TAB } from "./shell/drawer-state";
+import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
+import { isWindowInactive } from "./shell/window-activity.ts";
+import {
+  noticeTierOf,
+  orderNoticeEntries,
+  planNotice,
+  sessionRunState,
+  settledSessions,
+  type NoticeTier,
+} from "./features/notify/completion-notice.ts";
+import { playCompletionChime } from "./features/notify/chime.ts";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -225,6 +235,8 @@ export function App() {
    * 宽只给内联列的拖宽夹取用。
    */
   const paneRef = useRef<HTMLElement | null>(null);
+  /** 主槽里的弹出宿主（完成提醒卡 / 铃铛清单 portal 进去）；state 而非 ref：挂上后要触发一次渲染 */
+  const [popHost, setPopHost] = useState<HTMLDivElement | null>(null);
   const { paneWidth, rightPanelWidth: rightPanelRendered } = usePaneAndRightPanelWidth(paneRef);
   const channelWide = channelPanelWide({
     narrow,
@@ -460,6 +472,172 @@ export function App() {
     [changeSettings],
   );
 
+  /**
+   * 后台会话完成提醒（用户 2026-10-10，同日二轮改需求）：长程任务在一条会话里
+   * 跑着，人去了别的会话，跑完时界面上什么都不发生。现在跑完那一拍：
+   * - 响一声客舱呼唤铃（设置可关）；
+   * - 没在看它的话，把未读写进 meta（SessionMeta.unread，session:unread 落盘，
+   *   **重启后还在**），侧栏那一行亮 3/3 竖条，辅助对话图标旁弹卡片问怎么看：
+   *   马上看（主槽换成它）/ 辅助对话里看 / 稍后（保持未读）。
+   * 点进去看过（主槽或辅助对话正显示它）即清未读（同样落盘）。判定在
+   * completion-notice.ts；侧栏竖条与右下角铃铛清单都从 sessionRunState 读同一份
+   * 状态。只认根会话——子会话跑完由母会话的通道回报，不单独打扰人。
+   */
+  const [noticeId, setNoticeId] = useState<string | null>(null);
+  const [drawerFocus, setDrawerFocus] = useState<{ tab: string; token: number } | null>(null);
+  const drawerFocusTokenRef = useRef(0);
+  /** 此刻「在看」的会话：主槽（没被设置页盖住时）与开着的辅助对话 */
+  const drawerOpenId = drawerView.sessionId ?? drawerView.opened?.id ?? null;
+  const watchedIds = [
+    ...(overlay === "settings" || mainOpenId === "" ? [] : [mainOpenId]),
+    ...(rightPanel === "drawer" && drawerOpenId !== null ? [drawerOpenId] : []),
+  ];
+  const watchedKey = watchedIds.join("\n");
+  /** 未读清单：从 meta 读（真源在盘上），不再另存一份 renderer state */
+  const unreadSessions = session.sessions.filter((meta) => meta.unread != null);
+  /** 把一批会话标成未读：at 此刻铸；failed 查槽的回合失败（重试耗尽），同样是快照 */
+  const markUnread = useCallback(
+    (ids: readonly string[]) => {
+      void Promise.all(
+        ids.map((id) =>
+          api.session.setUnread(id, { at: Date.now(), failed: session.turnErrorOf(id) !== null }),
+        ),
+      ).then(() => engine.refreshSessions());
+    },
+    [engine, session],
+  );
+  /** 清未读（看过即清 / 全部标为已读）：目标 id 由调用方从真值现算，不闭包旧列表 */
+  const clearUnreadOf = useCallback(
+    (ids: readonly string[]) => {
+      void Promise.all(ids.map((id) => api.session.setUnread(id, null))).then(() =>
+        engine.refreshSessions(),
+      );
+    },
+    [engine, session],
+  );
+  const prevStatesRef = useRef(engine.states);
+  useEffect(() => {
+    const prev = prevStatesRef.current;
+    prevStatesRef.current = engine.states;
+    // 只认根会话；列表里还查不到的（刚建）当根会话
+    const settled = settledSessions(prev, engine.states).filter(
+      (id) => session.sessions.find((meta) => meta.id === id)?.parentId === undefined,
+    );
+    if (settled.length === 0) return;
+    const windowActive = !isWindowInactive({
+      hasFocus: document.hasFocus(),
+      visibilityState: document.visibilityState,
+    });
+    let ring = false;
+    const fresh: string[] = [];
+    for (const id of settled) {
+      const plan = planNotice({
+        watched: watchedIds.includes(id),
+        windowActive,
+        soundOn: settings.completionSound ?? true,
+      });
+      ring ||= plan.sound;
+      if (plan.unread) fresh.push(id);
+    }
+    // 同拍多条只响一声
+    if (ring) playCompletionChime();
+    const latest = fresh[fresh.length - 1];
+    if (latest !== undefined) {
+      markUnread(fresh);
+      setNoticeId(latest);
+    }
+    // 只在槽变化时判定；在看谁、开关值读本次渲染的闭包，就是这一拍的真值
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.states]);
+  // 看过即清：主槽或辅助对话显示了它，未读（盘上的）与卡片一起退。
+  // 列表读本渲染闭包里的真值——watchedKey 变了的那一拍，列表必然是新的
+  useEffect(() => {
+    const hit = watchedIds.filter((id) =>
+      session.sessions.some((meta) => meta.id === id && meta.unread != null),
+    );
+    if (hit.length > 0) clearUnreadOf(hit);
+    setNoticeId((current) => (current !== null && watchedIds.includes(current) ? null : current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedKey]);
+  /** 在辅助对话里打开一条会话（当前主槽不动）：提醒卡与铃铛清单共用 */
+  const openInSideChat = (id: string): void => {
+    changeDocked(dockTab(docked, id));
+    drawerFocusTokenRef.current += 1;
+    setDrawerFocus({ tab: id, token: drawerFocusTokenRef.current });
+    setRightPanel("drawer");
+  };
+  const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
+  const completionNotice =
+    noticeMeta === undefined
+      ? null
+      : {
+          title: noticeMeta.title,
+          failed: session.turnErrorOf(noticeMeta.id) !== null,
+          onOpenNow: () => {
+            setNoticeId(null);
+            setOverlay(null);
+            void session.openSession(noticeMeta.id);
+          },
+          onSideChat: () => {
+            setNoticeId(null);
+            openInSideChat(noticeMeta.id);
+          },
+          onLater: () => setNoticeId(null),
+        };
+
+  /**
+   * 右下角铃铛的清单（2026-10-10 二轮）：所有竖条亮着的根会话——在等你、未读
+   * （跑完 / 跑挂没看）、在跑——排序「等你 > 未读 > 在跑，同档新在前」。与侧栏
+   * 竖条同一份推导（sessionRunState，单一真源）；点行在主槽打开那条会话，
+   * 打开即已读。角标只数未读（绿 + 红）：用户原话「数字 = 未读数」，在跑不算欠账。
+   */
+  const noticeRows = useMemo(() => {
+    const rows: {
+      id: string;
+      title: string;
+      workspace: string | null;
+      state: "running" | "waiting" | "done" | "failed";
+      tier: NoticeTier;
+      at: number;
+    }[] = [];
+    for (const meta of rootSessions(session.sessions)) {
+      const state = sessionRunState({
+        slot: {
+          phase: session.phaseOf(meta.id),
+          approvals: session.approvalsOf(meta.id).length,
+        },
+        children: childSessions(session.sessions, meta.id).map((child) => ({
+          phase: session.phaseOf(child.id),
+          approvals: session.approvalsOf(child.id).length,
+        })),
+        unread: meta.unread ?? null,
+      });
+      if (state === null) continue;
+      const tier = noticeTierOf(state);
+      if (tier === null) continue;
+      rows.push({
+        id: meta.id,
+        title: meta.title,
+        workspace: session.workspaces.find((w) => w.id === meta.workspaceId)?.name ?? null,
+        state,
+        tier,
+        at: meta.unread?.at ?? meta.updatedAt,
+      });
+    }
+    return orderNoticeEntries(rows);
+    // phaseOf / approvalsOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
+  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, engine.states]);
+  /** 铃铛清单点行：主槽打开它；有未读的话顺手清（watchedKey 那一拍也会清，
+   *  但它若已在主槽就没有那一拍了，这里兑底） */
+  const openFromNotice = useCallback(
+    (id: string) => {
+      setOverlay(null);
+      void session.openSession(id);
+      if (session.sessions.some((meta) => meta.id === id && meta.unread != null)) clearUnreadOf([id]);
+    },
+    [session, clearUnreadOf],
+  );
+
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
    *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
   const handlePanel = useCallback((next: RightPanelKind | null) => {
@@ -687,6 +865,7 @@ export function App() {
           onShowArchived={setShowArchived}
           onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}
+          unread={new Set(unreadSessions.map((meta) => meta.id))}
           onWidthChange={setSidebarWidth}
           onWidthCommit={(width) => {
             setSidebarWidth(width);
@@ -696,6 +875,9 @@ export function App() {
 
         <main className="pane" ref={paneRef}>
           <div className="pane-main">
+            {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
+                与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
+            <div className="pane-pop-host" ref={setPopHost} />
             {overlay === "settings" ? (
               <SettingsView
                 tab={settingsTab}
@@ -807,6 +989,8 @@ export function App() {
                   onToggleStarModel={toggleStarModel}
                   onOpenProviders={openProvidersTab}
                   docked={docked}
+                  focus={drawerFocus}
+                  onFocusConsumed={() => setDrawerFocus(null)}
                   onDockedChange={(list) =>
                     changeDocked(
                       // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
@@ -852,6 +1036,15 @@ export function App() {
               : null
           }
           subSessions={channelParentId !== null && hasSubSessions ? { count: subSessionChildren.length } : null}
+          completionNotice={completionNotice}
+          popHost={popHost}
+          bell={{
+            count: unreadSessions.length,
+            entries: noticeRows,
+            onOpen: openFromNotice,
+            onSideChat: openInSideChat,
+            onMarkAllRead: () => clearUnreadOf(unreadSessions.map((meta) => meta.id)),
+          }}
         />
       </div>
     </div>

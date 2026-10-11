@@ -654,6 +654,16 @@ export class SessionStore {
     );
   }
 
+  /**
+   * 未读标记（后台跑完还没看，2026-10-10 落盘）：`{ at, failed }` 标未读，null 清。
+   * at / failed 由 renderer 在落定那一刻铸——什么时候跑完的、是不是挂了，是落定时
+   * 的事实不是写盘时的事实。不做幂等判断：renderer 只在标 / 清那两次调，重复写
+   * 同值无害（setCompletion 防的是“重刷新关闭时刻”那类历史改写，这里没有）。
+   */
+  setUnread(id: string, unread: { at: number; failed: boolean } | null): Promise<void> {
+    return this.update(id, { unread });
+  }
+
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
   setArchived(id: string, archived: boolean): Promise<void> {
     return this.update(id, { archived });
