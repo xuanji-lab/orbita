@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import type { TerminalInfo } from "@shared/terminal";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { CONSERVATIVE_CONPTY_BUILD, readTerminalTheme } from "./terminal-theme.ts";
@@ -24,10 +25,18 @@ export function TerminalView(props: {
   /** 挂载时 tab 就已经是退出态（重挂载恢复）：snapshot 画完后补一行退场提示 */
   exited: number | null;
   active: boolean;
+  /**
+   * create 回来了（PTY 已起，或幂等收到现状）：面板据此把「创建中」的转圈 tab
+   * 换成真 tab。视图已卸载（tab 在创建途中被关）就不报——不会把关掉的 tab 复活。
+   */
+  onCreated: (info: TerminalInfo) => void;
 }) {
   const t = useT();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // 回调走 ref：视图 effect 只认 terminalId，父组件换回调不该重建 xterm
+  const onCreatedRef = useRef(props.onCreated);
+  onCreatedRef.current = props.onCreated;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -118,18 +127,17 @@ export function TerminalView(props: {
       void api.terminal.input(props.terminalId, data).catch(() => undefined);
     });
 
-    let creation: Promise<unknown> | null = null;
     void (async () => {
       try {
         // create 幂等：重挂载同一 id 直接回现状，PTY 不动
-        creation = api.terminal.create({
+        const info = await api.terminal.create({
           terminalId: props.terminalId,
           cols: Math.max(terminal.cols, 1),
           rows: Math.max(terminal.rows, 1),
           ...(props.cwd !== null && props.cwd !== "" ? { cwd: props.cwd } : {}),
         });
-        await creation;
         if (disposed) return;
+        onCreatedRef.current(info);
         fitNow();
         const snapshot = await api.terminal.snapshot(props.terminalId);
         terminal.write(snapshot.output, () => {
