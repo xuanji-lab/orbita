@@ -12,27 +12,64 @@
   /* 能量体的停机坪：80×48 的云悬在格子上方，云心对准当前格（petLeft） */
   padding-top: 46px;
   flex: 0 0 auto;
+  transition: padding-top var(--duration-enter) var(--ease-out-quint);
+}
+
+/* 星云收起：上方停机坪让给会话列表；星云钻回格子（缩小 + 淡出 + 下沉） */
+.usage-meter[data-hidden] {
+  padding-top: 0;
+}
+
+.usage-meter[data-hidden] .usage-pet {
+  opacity: 0;
+  transform: translateY(34px) scale(0.2);
+  pointer-events: none;
 }
 
 /* 能量体：绝对定位在格子上方，left 随悬停/今天移动（160ms 缓动，motion token） */
 .usage-pet {
   position: absolute;
   top: 0;
-  transition: left var(--duration-fast) var(--ease-out-quint);
-  /* 不挡格子与 tooltip 的指针路 */
+  transition:
+    left var(--duration-fast) var(--ease-out-quint),
+    opacity var(--duration-enter) var(--ease-out-quint),
+    transform var(--duration-enter) var(--ease-out-quint);
+  transform-origin: 40px 48px;
+  /* 盒子本身不挡格子的指针路；只有星云本体（.usage-pet-btn）可点 */
   pointer-events: none;
 }
 
-.usage-orb {
+/* 星云本体：点它收起。按钮去掉一切外观，只留指针与键盘焦点环 */
+.usage-pet-btn {
   display: block;
-  overflow: visible;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  border-radius: var(--radius-md);
 }
 
-/* 云的呼吸：4s 在 1 ↔ 1.06 之间。anim-continuous 是窗口失焦暂停的标记类
-   （styles.css 的 `[data-window-inactive]` 规则，orbita-spin 同款） */
-.usage-cloud {
+.usage-pet-btn:focus-visible {
+  outline: 1.5px solid var(--color-text-primary);
+  outline-offset: 2px;
+}
+
+/* 能量体：80×48 的盒子，云心在 (40, 24)。呼吸做在这一层（HTML 元素的 transform 动画
+   走合成器；SVG 内部的动画不走，见 UsageMeter.tsx 的 NebulaPet 注释） */
+.usage-orb {
+  position: relative;
+  width: 80px;
+  height: 48px;
+  transform-origin: 40px 24px;
   animation: usage-breathe 4s ease-in-out infinite;
-  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* 云与眼睛：静态 SVG，不在里面放任何动画 */
+.usage-cloud {
+  display: block;
+  overflow: visible;
 }
 
 /* 档位切换时云的大小平滑收放：r / cx / cy 在 Chromium 是 CSS 几何属性，可过渡 */
@@ -53,6 +90,55 @@
   }
 }
 
+/* 碎片轨道：原点钉在云心，压扁成椭圆（与首版 SVG 轨道同比例 0.55） */
+.usage-orbit {
+  position: absolute;
+  left: 40px;
+  top: 24px;
+  width: 0;
+  height: 0;
+  transform: scaleY(0.55);
+}
+
+/* 绕原点转一圈；时长与起点由行内 style 给（各颗不同） */
+.usage-spin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  animation: usage-spin linear infinite;
+  will-change: transform;
+}
+
+@keyframes usage-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 窗口失焦：碎片停在当前位置（呼吸由 anim-continuous 的全局规则暂停） */
+.usage-orb:not([data-orbit]) .usage-spin {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-orb,
+  .usage-spin {
+    animation-play-state: paused;
+  }
+}
+
+/* 一颗碎片：3.2px 小方块，left 是轨道半径（行内） */
+.usage-chunk {
+  position: absolute;
+  top: 0;
+  width: 3.2px;
+  height: 3.2px;
+  margin: -1.6px 0 0 -1.6px;
+  border-radius: 0.8px;
+}
+
 /* 云体渐变与碎片：三色都在 --color-nebula 一族里派生 */
 .neb-in {
   stop-color: var(--color-nebula);
@@ -63,13 +149,13 @@
   stop-opacity: 0;
 }
 .usage-chunk-0 {
-  fill: var(--color-nebula);
+  background: var(--color-nebula);
 }
 .usage-chunk-1 {
-  fill: color-mix(in srgb, var(--color-nebula) 55%, var(--color-text-primary));
+  background: color-mix(in srgb, var(--color-nebula) 55%, var(--color-text-primary));
 }
 .usage-chunk-2 {
-  fill: var(--color-text-secondary);
+  background: var(--color-text-secondary);
 }
 
 /* 眼睛：正墨。睡着（0 档）是两条弧线 */
@@ -92,6 +178,7 @@
 }
 
 .usage-col {
+  position: relative;
   display: grid;
   justify-items: center;
   /* 格子与周几标签之间：4px 太挤（2026-10-12 用户验收），给一档 space-2 */
@@ -204,4 +291,22 @@
   .usage-say {
     animation: none;
   }
+}
+
+/* 星云钉在这天：描一圈星云色（盖过「今天」的灰圈），顶上一个小点 */
+.usage-cell[data-pinned] {
+  outline: 1.5px solid var(--color-nebula);
+  outline-offset: 2px;
+}
+
+.usage-col:has(.usage-cell[data-pinned])::before {
+  content: "";
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: var(--color-nebula);
 }

@@ -390,6 +390,10 @@ export const zh: Messages = {
     noUsage: "休息，就好好享受休息吧~",
     /** 悬停一格：只给当天总量（日期与星期在格子下面） */
     day: (tokens: string) => `${tokens} tokens`,
+    pinPetHere: "点一下：星云停在这天",
+    backToToday: "点一下：星云回到今天",
+    showPetHere: "点一下：星云从这里出来",
+    hidePet: "收起星云",
   },
 
   settings: {
