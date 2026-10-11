@@ -3035,21 +3035,21 @@ textarea.text-field {
   color: var(--color-text-primary);
 }
 
-/* 引用卡：**半行两列**（2026-10 用户裁决）——每条只占半行，两列并排堆更多引用；
-   折叠态两行 = 4 条，展开限高滚动；「还有 N 条 / 收起」跨两列占整行 */
+/* 引用：**每条一张独立的半宽卡**（2026-10-11 用户裁决，取代「一张卡里排两列」）——
+   外层只排两列网格、不画卡、不加内边距：左卡左缘贴输入卡左缘，右卡右缘贴输入卡右缘；
+   卡与卡之间上下左右 8px。卡高统一（正文最多两行，长引用省略、title 挂全文），
+   折叠态 10 张（两列五行），其余收进「还有 N 条」 */
 .material-quote-card {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px;
-  padding: var(--space-2);
-  max-height: 264px;
+  gap: var(--space-2);
+  /* 展开态限高：约七行卡（10 条折叠线之上留一点余量），超出在卡区内滚动 */
+  max-height: 280px;
   overflow-y: auto;
 }
 
-/* 窄卡回落一列：容器宽度（composer 外层 .composer-stack）不足 480px 时，两列各
-   ~230px 放不下图标+编号+正文+注脚的一行 */
+/* 窄卡回落：两列格子偏窄时注脚藏「谁说的」；再窄回落一列 */
 @container (max-width: 639px) {
-  /* 两列但格子偏窄（480–639px，每格 < 320px）：注脚藏掉「谁说的」，只留「第 1 轮 · 6 字」 */
   .material-quote-note-who {
     display: none;
   }
@@ -3059,7 +3059,6 @@ textarea.text-field {
   .material-quote-card {
     grid-template-columns: minmax(0, 1fr);
   }
-  /* 回落一列后格子宽了，「谁说的」那段注脚重新显出来（639px 那条的隐藏不再适用） */
   .material-quote-note-who {
     display: inline;
   }
@@ -3070,31 +3069,38 @@ textarea.text-field {
   grid-column: 1 / -1;
 }
 
+/* 一张引用卡：单行 32px（卡高统一，长引用省略、title 挂全文）；扁平——玻璃底 + 发丝边、
+   不带阴影（材料是聊天面上的一层，不是浮起的卡）。注脚钉在卡右血线 */
 .material-quote-row {
   position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  height: 30px;
-  padding: 0 6px;
+  height: var(--list-item-compact);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
+  background: var(--glass-bg);
   font-size: var(--font-size-caption);
 }
 
-.material-quote-row:hover {
-  background: var(--color-bg-hover);
+.material-quote-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
 }
 
 .material-quote-idx {
-  flex: 0 0 auto;
   min-width: 10px;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-secondary);
 }
 
-/* 正文：一行省略；可跳时是按钮（title 挂全文——原文不在转录里时唯一看全文的地方） */
+/* 正文：最多两行省略；可跳时是按钮（title 挂全文——原文不在转录里时唯一看全文的地方） */
 .material-quote-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -3116,8 +3122,7 @@ textarea.text-field {
 /* 引用卡格子注脚：尾部元素，钉在格右血线上（动作键绝对定位，悬停时它让位——
    D 项同款）；用 .row-trailing 同一套推右 */
 .material-quote-note {
-  margin-left: auto;
-  flex: 0 0 auto;
+  white-space: nowrap;
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
   transition: opacity var(--transition-hover);
@@ -3128,7 +3133,7 @@ textarea.text-field {
    出现的同时注脚隐去（上一条规则），不需要底色遮罩 */
 .material-quote-actions {
   position: absolute;
-  right: 2px;
+  right: 6px;
   top: 4px;
   display: inline-flex;
   gap: 2px;

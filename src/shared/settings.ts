@@ -111,6 +111,15 @@ export interface ModelPair {
   modelId: string;
 }
 
+/**
+ * 实验功能的档位 id（2026-10-12 起逐项开关）。**唯一来源在这里**：设置键
+ * `experimentalFeatures` 按它记账，renderer 的 `experimental-features.ts` 清单与
+ * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
+ * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
+ */
+export const EXPERIMENTAL_FEATURE_IDS = ["paper-themes", "session-lifecycle", "composer-blackhole"] as const;
+export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -146,14 +155,6 @@ export interface AppSettings {
    * 只认布尔，同 gitAttribution 的纪律。
    */
   collapsePastedText?: boolean;
-  /**
-   * 输入框黑洞（材料区的重力变体）。**缺席 = 关**——这是口味不是能力，想要的人自己开一次。
-   * 开启后截图 / 文件 / 目录不再叠成两行，而是被吸进输入框中心、从会话顶端的舷窗掉进
-   * 输入框上方一个看不见的盒子里堆起来；发出去的消息顶上留一张同布局的缩小快照。
-   * 只在基础三套主题（浅 / 黛 / 玄）生效，纸面主题即使开着也走原材料区
-   * （判定在渲染层 blackhole-layout.ts 的 blackholeActive）。只认布尔，同 gitAttribution 的纪律。
-   */
-  composerBlackhole?: boolean;
   /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
@@ -211,6 +212,25 @@ export interface AppSettings {
    * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
    */
   providerCardSize?: ProviderCardSize;
+  /**
+   * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
+   * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
+   * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
+   * 不动数据——已存的主题照常应用、已星标 / 已完成的会话与遗留事项原样在盘上，
+   * 开了就回来。
+   *
+   * 三项各自的语义：
+   * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
+   * - `session-lifecycle`：星标 / 完成标记 / 收尾扫描与遗留事项的全部入口；
+   * - `composer-blackhole`：输入框黑洞——开启后截图 / 文件 / 目录不再叠成两行，
+   *   而是被吸进输入框中心、从舷窗掉进上方看不见的盒子堆起来；只在基础三套主题
+   *   （浅 / 黛 / 玄）生效，判定在渲染层 blackhole-layout.ts 的 blackholeActive。
+   *
+   * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
+   * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开；
+   * - 旧 `composerBlackhole` 原样并入 composer-blackhole 一项。
+   */
+  experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
 
 export type ProviderCardSize = "large" | "small";
@@ -334,6 +354,18 @@ function parseTheme(value: unknown): ThemePreference {
   return DEFAULT_SETTINGS.theme;
 }
 
+/**
+ * 主题选择卡的可选档位。实验功能 `paper-themes` 关闭时纸面两档（copybook /
+ * typescript）不出现（逐项开关 2026-10-12 之前的总开关 `experimental` 同此语义）。
+ * **只藏入口不动数据**：已存的主题照常应用、已星标 / 已完成的会话与遗留事项
+ * 原样在盘上，开关打开入口就回来。开源首发的默认门面（2026-10 用户裁决：
+ * 不成熟的功能在公开快照里默认不出现）。
+ */
+export function selectableThemes(paperThemes: boolean): readonly ThemePreference[] {
+  if (paperThemes) return THEME_PREFERENCES;
+  return THEME_PREFERENCES.filter((theme) => theme !== "copybook" && theme !== "typescript");
+}
+
 /** 只在区间内才认；钳制交给渲染层，这里不「猜」用户想要的宽度 */
 function parseWidth(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DRAWER_WIDTH.default;
@@ -358,7 +390,6 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebarWidth?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
-    composerBlackhole?: unknown;
     gitAttribution?: unknown;
     choreModel?: unknown;
     /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
@@ -370,6 +401,11 @@ export function parseSettings(raw: unknown): AppSettings {
     browserDownloadDir?: unknown;
     starredModels?: unknown;
     providerCardSize?: unknown;
+    experimentalFeatures?: unknown;
+    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes + session-lifecycle 都开 */
+    experimental?: unknown;
+    /** 旧黑洞开关：原样并入 experimentalFeatures["composer-blackhole"] */
+    composerBlackhole?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -387,6 +423,8 @@ export function parseSettings(raw: unknown): AppSettings {
       : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
   const starredModels = parseStarredModels(record.starredModels);
+  // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
+  const experimentalFeatures = parseExperimentalFeatures(record);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -420,10 +458,6 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }
       : {}),
-    // 黑洞开关同理：非布尔丢掉，缺席 = 关
-    ...(typeof record.composerBlackhole === "boolean"
-      ? { composerBlackhole: record.composerBlackhole }
-      : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
@@ -436,7 +470,42 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
       : {}),
+    // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
+    // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
+    ...(experimentalFeatures === undefined ? {} : { experimentalFeatures }),
   };
+}
+
+/**
+ * 实验功能逐项开关的解析与旧键迁移。逐项校验：id 必须在 EXPERIMENTAL_FEATURE_IDS
+ * 里（表里不认识的 id 直接丢——那属于「还没做就先占了位」的实验功能），值只认布尔。
+ * 旧键只在这一层兼容，解析产物永远是 experimentalFeatures，任何一次写入
+ * （parseSettings 白名单重建整个对象）都会把旧键从盘上带走。
+ */
+function parseExperimentalFeatures(record: {
+  experimentalFeatures?: unknown;
+  experimental?: unknown;
+  composerBlackhole?: unknown;
+}): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
+  const out: Partial<Record<ExperimentalFeatureId, boolean>> = {};
+  const raw = record.experimentalFeatures;
+  if (typeof raw === "object" && raw !== null) {
+    for (const id of EXPERIMENTAL_FEATURE_IDS) {
+      const value = (raw as Record<string, unknown>)[id];
+      if (typeof value === "boolean") out[id] = value;
+    }
+  }
+  // 旧总开关：true = 当年挂在它后面的两项都照常开（黑洞另有自己的旧键）。
+  // 新键里已显式给值的项以新键为准（??=）
+  if (record.experimental === true) {
+    out["paper-themes"] ??= true;
+    out["session-lifecycle"] ??= true;
+  }
+  // 旧黑洞开关原样并入：用户逃过的是「这一项」，不是「总开关 + 这一项」
+  if (typeof record.composerBlackhole === "boolean") {
+    out["composer-blackhole"] ??= record.composerBlackhole;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
 }
 
 function isAbsolutePath(path: string): boolean {

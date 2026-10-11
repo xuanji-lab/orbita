@@ -15,6 +15,11 @@ import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
+import { useExperimentalFeature } from "../experimental.ts";
+import {
+  effectiveSidebarFilters,
+  type StatusFilter,
+} from "./sidebar-filters.ts";
 import {
   SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
@@ -40,9 +45,6 @@ const COLLAPSE_BREAKPOINT = 960;
  */
 const IDLE_SUGGEST_DAYS = 7;
 const IDLE_SUGGEST_MS = IDLE_SUGGEST_DAYS * 24 * 60 * 60 * 1000;
-
-/** 完成状态筛选的单选组三档：全部 / 进行中 / 已完成（Starred 是叠加开关，正交） */
-type StatusFilter = "all" | "active" | "done";
 
 /**
  * 会话的未办遗留数（角标、Has todos 筛选共一口径）：按 sourceSessionId 现算。
@@ -133,6 +135,9 @@ export function Sidebar(props: {
 }) {
   const t = useT();
   const { session } = props;
+  // 会话生命周期开关：关着时三件套（完成 / 收尾扫描 / 星标）的入口不渲染——
+  // 筛选行五个 chip 全是它们的入口或依赖 done 概念，整行不渲染
+  const lifecycle = useExperimentalFeature("session-lifecycle");
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
@@ -246,13 +251,21 @@ export function Sidebar(props: {
    * 主列表的筛选管线（筛选区 chips）。状态（All/Active/Done，单选组）、星标与
    * Has todos（两个叠加开关）三条正交条件串在同一个 filter 里。**只作用于主浏览
    * 列表**——Archived / Carryovers 是存储与事项视图，不受（也不该隐形地受）筛选。
+   * 有效值过 effectiveSidebarFilters：会话生命周期开关关闭时恒为 null（筛选行不渲染、
+   * 残留的本地状态不再过滤），见 sidebar-filters.ts。
    */
-  const filtered = statusFilter !== "all" || starredOnly || hasTodosOnly;
+  const filters = effectiveSidebarFilters(lifecycle, {
+    status: statusFilter,
+    starredOnly,
+    hasTodosOnly,
+  });
+  const filtered = filters !== null;
   const scoped = live.filter((m) => {
-    if (statusFilter === "active" && isSessionDone(m)) return false;
-    if (statusFilter === "done" && !isSessionDone(m)) return false;
-    if (starredOnly && m.starred !== true) return false;
-    if (hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
+    if (filters === null) return true;
+    if (filters.status === "active" && isSessionDone(m)) return false;
+    if (filters.status === "done" && !isSessionDone(m)) return false;
+    if (filters.starredOnly && m.starred !== true) return false;
+    if (filters.hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
     return true;
   });
   const loose = scoped.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
@@ -426,9 +439,11 @@ export function Sidebar(props: {
         筛选区：会话浏览的过滤 chips。状态是单选组（All / Active / Done 互斥，
         点一个顶掉另一个），Starred 是叠加开关——两者正交，可组合出
         「进行中且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
-        筛选无从谈起，不摆。
+        筛选无从谈起，不摆。会话生命周期开关关闭时整行不渲染：五个 chip 全部属于
+        会话生命周期那批功能（Done / Starred / Has todos 是直接入口，Active
+        依赖 done 概念，All 单独存在没有意义），见 sidebar-filters.ts。
       */}
-      {live.length > 0 && !settingsOpen && !props.showArchived && !props.showCarryovers && (
+      {live.length > 0 && lifecycle && !settingsOpen && !props.showArchived && !props.showCarryovers && (
         <div
           ref={filterRowRef}
           style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
@@ -1176,6 +1191,8 @@ function SessionRow(props: {
   onClick: () => void;
 }) {
   const t = useT();
+  // 会话生命周期开关：行内入口（星标 / 完成标记 / 遗留角标）挂它后面
+  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { meta, session } = props;
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
@@ -1353,8 +1370,9 @@ function SessionRow(props: {
                   onSelect: () => setStep("archive"),
                 },
             // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
-            // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动
-            ...(doneCount > 0
+            // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动。
+            // 挂会话生命周期开关：它按 done 状态选目标，done 不在时这个入口也没有意义
+            ...(lifecycle && doneCount > 0
               ? [
                   {
                     id: "archive-done",
@@ -1411,22 +1429,25 @@ function SessionRow(props: {
         列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
         是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
         与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
+        会话生命周期开关关闭时不渲染：已星的会话不显示星（数据在盘上，开关打开回来）。
       */}
-      <IconButton
-        label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
-        title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
-        size={20}
-        onClick={() => session.starSession(meta.id, meta.starred !== true)}
-        className="reveal"
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          // 已星标常显，不等 hover / 键盘聚焦
-          opacity: meta.starred === true ? 1 : undefined,
-        }}
-      >
-        <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
-      </IconButton>
+      {lifecycle && (
+        <IconButton
+          label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
+          title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
+          size={20}
+          onClick={() => session.starSession(meta.id, meta.starred !== true)}
+          className="reveal"
+          style={{
+            borderRadius: "var(--radius-xs)",
+            color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
+            // 已星标常显，不等 hover / 键盘聚焦
+            opacity: meta.starred === true ? 1 : undefined,
+          }}
+        >
+          <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
+        </IconButton>
+      )}
       {/**
         完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
         hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后常显、accent；再点 = Reopen。
@@ -1434,39 +1455,44 @@ function SessionRow(props: {
         tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
         不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
         「还差几件」由右边那个灯泡角标单独说。
+        会话生命周期开关关闭时不渲染（闲置建议随它一起消失）：已完成的会话照常列出，
+        只是不再有可点的标记。
       */}
-      <IconButton
-        label={done ? t.sidebar.reopen : t.sidebar.markDone}
-        title={
-          done
-            ? openTodos > 0
-              ? t.sidebar.doneWithTodos(openTodos)
-              : t.sidebar.doneTip
-            : idleSuggested
-              ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
-              : t.sidebar.markDone
-        }
-        size={20}
-        onClick={() =>
-          session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
-        }
-        className="reveal"
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          // 已完成常显，不等 hover / 键盘聚焦
-          opacity: done ? 1 : undefined,
-        }}
-      >
-        <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
-      </IconButton>
+      {lifecycle && (
+        <IconButton
+          label={done ? t.sidebar.reopen : t.sidebar.markDone}
+          title={
+            done
+              ? openTodos > 0
+                ? t.sidebar.doneWithTodos(openTodos)
+                : t.sidebar.doneTip
+              : idleSuggested
+                ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
+                : t.sidebar.markDone
+          }
+          size={20}
+          onClick={() =>
+            session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
+          }
+          className="reveal"
+          style={{
+            borderRadius: "var(--radius-xs)",
+            color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
+            // 已完成常显，不等 hover / 键盘聚焦
+            opacity: done ? 1 : undefined,
+          }}
+        >
+          <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
+        </IconButton>
+      )}
       {/**
         遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
         （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
         **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
         角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
+        挂会话生命周期开关：它说的是 done + 遗留，两个概念都不在时角标无处挂靠。
       */}
-      {done && openTodos > 0 && (
+      {lifecycle && done && openTodos > 0 && (
         <span
           title={t.sidebar.openTodosLeft(openTodos)}
           style={{

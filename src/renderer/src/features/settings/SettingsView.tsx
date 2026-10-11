@@ -25,11 +25,13 @@ import { InfoTip } from "./InfoTip";
 import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
+import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
 import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
   type AppSettings,
   type CompactionSetting,
+  type ExperimentalFeatureId,
   type SettingsPatch,
 } from "@shared/settings";
 import { THINKING_LEVELS } from "@shared/thinking";
@@ -53,6 +55,7 @@ export const SETTINGS_TABS = [
   { id: "migration", icon: "download" },
   { id: "browser", icon: "globe" },
   { id: "voice", icon: "mic" },
+  { id: "experimental", icon: "flask-conical" },
 ] as const satisfies readonly { id: string; icon: IconName }[];
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
@@ -144,6 +147,11 @@ export function SettingsView(props: {
       ) : props.tab === "voice" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
+        </div>
+      ) : props.tab === "experimental" ? (
+        // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <ExperimentalSettings settings={props.settings} onChange={props.onSettingsChange} />
         </div>
       ) : props.tab === "providers" ? (
         // 模型服务铺满内容面：卡片墙 / 详情页自己内部滚动
@@ -242,7 +250,6 @@ function General(props: {
   // 同理：缺席 = 折叠（粘贴文本 chip 的出厂形态）
   const pastedCollapse = props.settings.collapsePastedText ?? true;
   // 缺席 = 关（口味不是能力）
-  const composerBlackhole = props.settings.composerBlackhole ?? false;
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -318,7 +325,11 @@ function General(props: {
     <div className="set-page">
       <SettingGroup label={t.settings.appearance}>
         <SettingRow name={t.settings.theme}>
-          <ThemePicker value={props.settings.theme} onChange={props.onChange} />
+          <ThemePicker
+            value={props.settings.theme}
+            paperThemes={props.settings.experimentalFeatures?.["paper-themes"] === true}
+            onChange={props.onChange}
+          />
         </SettingRow>
         <SettingRow name={t.settings.language} info={t.settings.languageInfo}>
           {/* 单语主题下两个芯片都置灰、亮的是主题定的那门语言，旁边说清为什么——
@@ -343,7 +354,7 @@ function General(props: {
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
-          它们调的都是「agent 怎么干活」，并成一组 */}
+          它们调的都是「agent 怎么干活」，并成一组（实验开关与功能清单已搬到独立的实验功能 Tab） */}
       <SettingGroup label={t.settings.agent}>
         <SettingRow
           name={t.settings.autoCompact}
@@ -490,20 +501,6 @@ function General(props: {
             </Chip>
           </span>
         </SettingRow>
-        <SettingRow
-          name={t.settings.composerBlackhole}
-          info={t.settings.composerBlackholeInfo}
-        >
-          {/* 同上两个开关的形状。纸面主题下开着也不生效（blackholeActive），值照存 */}
-          <span className="set-chips" role="group" aria-label={t.settings.composerBlackholeAria}>
-            <Chip active={composerBlackhole} onClick={() => props.onChange({ composerBlackhole: true })}>
-              {t.common.on}
-            </Chip>
-            <Chip active={!composerBlackhole} onClick={() => props.onChange({ composerBlackhole: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
-        </SettingRow>
       </SettingGroup>
       <SettingGroup label={t.settings.data}>
         <DataDirectoryRow />
@@ -552,6 +549,128 @@ function SettingRow(props: {
       </span>
       <div className="set-row-ctl">{props.children}</div>
     </div>
+  );
+}
+
+/**
+ * 设置 › 实验功能（独立 Tab，2026-10 用户裁决）。逐项开关（2026-10-12）：每个
+ * 功能一张卡（同「服务商」页的卡片配方 `pv-cards` / `pv-vcard`，原型 exp-B）：
+ * 图标 + 名字 + 开 / 关，一句说明，底部发丝线下面是最近一次更新与
+ * 「全部 N 条 ⌄」；点开后这张卡横跨两列铺开完整日志（新的在上，PR 号可点）。
+ * 没有总开关——每一项自己管自己。默认全关：不成熟的功能在公开快照里不出现；
+ * 只藏入口不动数据，开了就原样回来。
+ */
+function ExperimentalSettings(props: {
+  settings: AppSettings;
+  onChange: (patch: SettingsPatch) => void;
+}) {
+  const t = useT();
+  // 单语主题定死的语言：与通用页语言行同一条解析规则（shared 的 effectiveLanguage）
+  const language = effectiveLanguage(props.settings.theme, props.settings.language);
+  /** 展开哪一张卡的日志（一次至多一张）：默认都收着，只看最近一条 */
+  const [openId, setOpenId] = useState<ExperimentalFeatureId | null>(null);
+  return (
+    <div className="set-page">
+      <p className="exp-lead">{t.settings.experimentalLead}</p>
+      <div className="pv-cards large exp-cards">
+        {EXPERIMENTAL_FEATURES.map((feature) => (
+          <ExperimentalFeatureCard
+            key={feature.id}
+            feature={feature}
+            language={language}
+            on={props.settings.experimentalFeatures?.[feature.id] === true}
+            open={openId === feature.id}
+            onToggleLog={() => setOpenId(openId === feature.id ? null : feature.id)}
+            onSwitch={(value) => props.onChange({ experimentalFeatures: { [feature.id]: value } })}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 一张实验功能卡（原型 exp-B）：头部图标 + 名字 + 开 / 关两个 Chip；说明一到两行；
+ * 底部发丝线下面是最近一次更新（PR 号 + 一句话）与「全部 N 条 ⌄」。展开后
+ * （`.exp-card.open` 横跨两列）换出完整日志，新的在上；PR 号在内置浏览器里打开。
+ */
+function ExperimentalFeatureCard(props: {
+  feature: ExperimentalFeature;
+  language: Language;
+  on: boolean;
+  open: boolean;
+  onToggleLog: () => void;
+  onSwitch: (value: boolean) => void;
+}) {
+  const t = useT();
+  const { feature, language } = props;
+  const name = feature.name[language];
+  // 展开的日志新的在上——用户想知道的是「最近改了什么」
+  const entries = [...feature.changelog].reverse();
+  return (
+    <div className={`pv-vcard exp-card${props.open ? " open" : ""}`}>
+      <div className="exp-card-head">
+        <span className="exp-card-icon">
+          <Icon name={feature.icon} size={16} strokeWidth={1.8} />
+        </span>
+        <span className="exp-card-name">{name}</span>
+        {/* 开关用两个 Chip——设计系统里没有 Switch，与署名行同一个形状 */}
+        <span className="set-chips" role="group" aria-label={name}>
+          <Chip active={props.on} onClick={() => props.onSwitch(true)}>
+            {t.common.on}
+          </Chip>
+          <Chip active={!props.on} onClick={() => props.onSwitch(false)}>
+            {t.common.off}
+          </Chip>
+        </span>
+      </div>
+      <p className="exp-card-sum">{feature.summary[language]}</p>
+      {props.open ? (
+        <>
+          <ol className="exp-card-log">
+            {entries.map((entry, i) => (
+              <li key={i} className="exp-card-log-entry">
+                <ExperimentalPrLink pr={entry.pr} />
+                {/* 日期都是同年，卡片里只记月日；完整年份在 changelog 数据里 */}
+                <span className="exp-card-date">{entry.date.slice(5)}</span>
+                <span className="exp-card-note">{entry.note[language]}</span>
+              </li>
+            ))}
+          </ol>
+          <button type="button" className="exp-toggle" aria-expanded={true} onClick={props.onToggleLog}>
+            {t.settings.experimentalCollapse}
+            <Icon name="chevron-down" size={12} />
+          </button>
+        </>
+      ) : (
+        <div className="exp-card-latest">
+          <ExperimentalPrLink pr={entries[0]?.pr ?? null} />
+          <span className="exp-card-latest-note">{entries[0]?.note[language] ?? ""}</span>
+          <button type="button" className="exp-toggle" aria-expanded={false} onClick={props.onToggleLog}>
+            {t.settings.experimentalAllChanges(feature.changelog.length)}
+            <Icon name="chevron-down" size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** PR 号链接（无 PR 的旧条目画一个灰色的 —）：mono、次要色，点开在内置浏览器里打开 */
+function ExperimentalPrLink(props: { pr: number | null }) {
+  if (props.pr === null) return <span className="exp-pr">—</span>;
+  const url = pullRequestUrl(props.pr);
+  return (
+    <a
+      className="exp-pr"
+      href={url}
+      onClick={(event) => {
+        event.preventDefault();
+        window.open(url);
+      }}
+    >
+      #{props.pr}
+    </a>
   );
 }
 
