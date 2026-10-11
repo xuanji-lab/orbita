@@ -15,7 +15,7 @@ import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
-import { useExperimental } from "../experimental.ts";
+import { useExperimentalFeature } from "../experimental.ts";
 import {
   effectiveSidebarFilters,
   type StatusFilter,
@@ -135,8 +135,9 @@ export function Sidebar(props: {
 }) {
   const t = useT();
   const { session } = props;
-  // 实验功能开关：关着时会话生命周期三件套（完成 / 收尾扫描 / 星标）的入口不渲染
-  const experimental = useExperimental();
+  // 会话生命周期开关：关着时三件套（完成 / 收尾扫描 / 星标）的入口不渲染——
+  // 筛选行五个 chip 全是它们的入口或依赖 done 概念，整行不渲染
+  const lifecycle = useExperimentalFeature("session-lifecycle");
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
@@ -250,10 +251,10 @@ export function Sidebar(props: {
    * 主列表的筛选管线（筛选区 chips）。状态（All/Active/Done，单选组）、星标与
    * Has todos（两个叠加开关）三条正交条件串在同一个 filter 里。**只作用于主浏览
    * 列表**——Archived / Carryovers 是存储与事项视图，不受（也不该隐形地受）筛选。
-   * 有效值过 effectiveSidebarFilters：实验开关关闭时恒为 null（筛选行不渲染、
+   * 有效值过 effectiveSidebarFilters：会话生命周期开关关闭时恒为 null（筛选行不渲染、
    * 残留的本地状态不再过滤），见 sidebar-filters.ts。
    */
-  const filters = effectiveSidebarFilters(experimental, {
+  const filters = effectiveSidebarFilters(lifecycle, {
     status: statusFilter,
     starredOnly,
     hasTodosOnly,
@@ -438,11 +439,11 @@ export function Sidebar(props: {
         筛选区：会话浏览的过滤 chips。状态是单选组（All / Active / Done 互斥，
         点一个顶掉另一个），Starred 是叠加开关——两者正交，可组合出
         「进行中且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
-        筛选无从谈起，不摆。实验开关关闭时整行不渲染：五个 chip 全部属于
+        筛选无从谈起，不摆。会话生命周期开关关闭时整行不渲染：五个 chip 全部属于
         会话生命周期那批功能（Done / Starred / Has todos 是直接入口，Active
         依赖 done 概念，All 单独存在没有意义），见 sidebar-filters.ts。
       */}
-      {live.length > 0 && experimental && !settingsOpen && !props.showArchived && !props.showCarryovers && (
+      {live.length > 0 && lifecycle && !settingsOpen && !props.showArchived && !props.showCarryovers && (
         <div
           ref={filterRowRef}
           style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
@@ -1190,8 +1191,8 @@ function SessionRow(props: {
   onClick: () => void;
 }) {
   const t = useT();
-  // 会话生命周期三件套的行内入口（星标 / 完成标记 / 遗留角标）挂实验开关
-  const experimental = useExperimental();
+  // 会话生命周期开关：行内入口（星标 / 完成标记 / 遗留角标）挂它后面
+  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { meta, session } = props;
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
@@ -1370,8 +1371,8 @@ function SessionRow(props: {
                 },
             // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
             // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动。
-            // 挂实验开关：它按 done 状态选目标，done 不在时这个入口也没有意义
-            ...(experimental && doneCount > 0
+            // 挂会话生命周期开关：它按 done 状态选目标，done 不在时这个入口也没有意义
+            ...(lifecycle && doneCount > 0
               ? [
                   {
                     id: "archive-done",
@@ -1428,9 +1429,9 @@ function SessionRow(props: {
         列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
         是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
         与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
-        实验开关关闭时不渲染：已星的会话不显示星（数据在盘上，开关打开回来）。
+        会话生命周期开关关闭时不渲染：已星的会话不显示星（数据在盘上，开关打开回来）。
       */}
-      {experimental && (
+      {lifecycle && (
         <IconButton
           label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
           title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
@@ -1454,10 +1455,10 @@ function SessionRow(props: {
         tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
         不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
         「还差几件」由右边那个灯泡角标单独说。
-        实验开关关闭时不渲染（闲置建议随它一起消失）：已完成的会话照常列出，
+        会话生命周期开关关闭时不渲染（闲置建议随它一起消失）：已完成的会话照常列出，
         只是不再有可点的标记。
       */}
-      {experimental && (
+      {lifecycle && (
         <IconButton
           label={done ? t.sidebar.reopen : t.sidebar.markDone}
           title={
@@ -1489,9 +1490,9 @@ function SessionRow(props: {
         （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
         **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
         角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
-        挂实验开关：它说的是 done + 遗留，两个概念都不在时角标无处挂靠。
+        挂会话生命周期开关：它说的是 done + 遗留，两个概念都不在时角标无处挂靠。
       */}
-      {experimental && done && openTodos > 0 && (
+      {lifecycle && done && openTodos > 0 && (
         <span
           title={t.sidebar.openTodosLeft(openTodos)}
           style={{

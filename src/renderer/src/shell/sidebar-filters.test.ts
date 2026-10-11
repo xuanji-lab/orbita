@@ -4,7 +4,7 @@ import { effectiveSidebarFilters } from "./sidebar-filters.ts";
 
 const VALUES = { status: "all", starredOnly: false, hasTodosOnly: false } as const;
 
-describe("effectiveSidebarFilters（实验开关下的侧栏筛选）", () => {
+describe("effectiveSidebarFilters（会话生命周期开关下的侧栏筛选）", () => {
   it("开关关闭：一律不过滤——残留的本地筛选状态也归零（筛选行不渲染，旧选择不该继续藏会话）", () => {
     deepStrictEqual(effectiveSidebarFilters(false, VALUES), null);
     deepStrictEqual(

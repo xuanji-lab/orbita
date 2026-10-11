@@ -326,7 +326,7 @@ function General(props: {
         <SettingRow name={t.settings.theme}>
           <ThemePicker
             value={props.settings.theme}
-            experimental={props.settings.experimental === true}
+            paperThemes={props.settings.experimentalFeatures?.["paper-themes"] === true}
             onChange={props.onChange}
           />
         </SettingRow>
@@ -552,9 +552,10 @@ function SettingRow(props: {
 }
 
 /**
- * 设置 › 实验功能（独立 Tab，2026-10 用户裁决：之前挤在通用页里）。内容就三样：
- * 总开关、一句说明（info 悬停）、功能清单——每项带自己的更新日志。默认关：
- * 不成熟的功能在公开快照里不出现；只藏入口不动数据，开了就原样回来。
+ * 设置 › 实验功能（独立 Tab，2026-10 用户裁决：之前挤在通用页里）。逐项开关
+ * （2026-10-12）：每个功能自己开 / 关，不再设总开关。内容两样：功能清单
+ * ——每项带自己的更新日志——与各项自己的开关。默认关：不成熟的功能在公开
+ * 快照里不出现；只藏入口不动数据，开了就原样回来。
  */
 function ExperimentalSettings(props: {
   settings: AppSettings;
@@ -563,48 +564,34 @@ function ExperimentalSettings(props: {
   const t = useT();
   // 单语主题定死的语言：与通用页语言行同一条解析规则（shared 的 effectiveLanguage）
   const language = effectiveLanguage(props.settings.theme, props.settings.language);
+  const setFeature = (id: "composer-blackhole", value: boolean) =>
+    props.onChange({ experimentalFeatures: { [id]: value } });
   return (
     <div className="set-page">
-      {/* 开关用两个 Chip——设计系统里没有 Switch，与署名行同一个形状；
-          开关关着清单也列：打开之前就该看得到里面有什么，打开即是自愿为这些
-          功能接受不稳定。功能成熟后转正：从清单移除、日志搬进正式更新说明。 */}
       <SettingGroup label={t.settings.experimentalList}>
-        <SettingRow name={t.settings.experimental} info={t.settings.experimentalInfo}>
-          <span className="set-chips" role="group" aria-label={t.settings.experimentalAria}>
+        {EXPERIMENTAL_FEATURES.map((feature) => (
+          <ExperimentalFeatureRow key={feature.id} feature={feature} language={language} />
+        ))}
+      </SettingGroup>
+      {/* 黑洞自己的开关：开关就是它那一项的开关（纸面主题下开着也不生效，值照存） */}
+      <SettingGroup label={t.settings.experimentalToggles}>
+        <SettingRow name={t.settings.composerBlackhole} info={t.settings.composerBlackholeInfo}>
+          <span className="set-chips" role="group" aria-label={t.settings.composerBlackholeAria}>
             <Chip
-              active={props.settings.experimental === true}
-              onClick={() => props.onChange({ experimental: true })}
+              active={props.settings.experimentalFeatures?.["composer-blackhole"] === true}
+              onClick={() => setFeature("composer-blackhole", true)}
             >
               {t.common.on}
             </Chip>
             <Chip
-              active={props.settings.experimental !== true}
-              onClick={() => props.onChange({ experimental: false })}
+              active={props.settings.experimentalFeatures?.["composer-blackhole"] !== true}
+              onClick={() => setFeature("composer-blackhole", false)}
             >
               {t.common.off}
             </Chip>
           </span>
         </SettingRow>
-        {EXPERIMENTAL_FEATURES.map((feature) => (
-          <ExperimentalFeatureRow key={feature.id} feature={feature} language={language} />
-        ))}
       </SettingGroup>
-      {/* 各实验功能自己的开关：总开关打开后才出现（关着时只看清单，不给开关）。
-          输入框黑洞（2026-10-11 用户裁决挂到实验功能后面）；纸面主题下开着也不生效，值照存 */}
-      {props.settings.experimental === true && (
-        <SettingGroup label={t.settings.experimentalToggles}>
-          <SettingRow name={t.settings.composerBlackhole} info={t.settings.composerBlackholeInfo}>
-            <span className="set-chips" role="group" aria-label={t.settings.composerBlackholeAria}>
-              <Chip active={props.settings.composerBlackhole === true} onClick={() => props.onChange({ composerBlackhole: true })}>
-                {t.common.on}
-              </Chip>
-              <Chip active={props.settings.composerBlackhole !== true} onClick={() => props.onChange({ composerBlackhole: false })}>
-                {t.common.off}
-              </Chip>
-            </span>
-          </SettingRow>
-        </SettingGroup>
-      )}
     </div>
   );
 }

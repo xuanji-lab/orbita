@@ -25,21 +25,21 @@ type PreviewTheme = Exclude<ThemePreference, "system">;
  * `Orbita Design System/tokens/colors.css` 的 `[data-theme-preview]` 选择器）。
  * 只有 Theme 这一行用它，不拆成多个导出。
  *
- * 可选档位过 `selectableThemes(experimental)`：实验开关关闭时纸面两档
- * （copybook / typescript）不出现在选择卡里。**已存的主题不受影响**——恰好
- * 存着这两档之一的用户主题照常应用，只是没有选中卡可看（不崩、不退回
+ * 可选档位过 `selectableThemes(paperThemes)`：实验功能 paper-themes 关闭时
+ * 纸面两档（copybook / typescript）不出现在选择卡里。**已存的主题不受影响**
+ * ——恰好存着这两档之一的用户主题照常应用，只是没有选中卡可看（不崩、不退回
  * system），开关打开即恢复可选。
  */
 export function ThemePicker(props: {
   value: ThemePreference;
-  /** 实验功能开关（设置原值）：纸面两档挂它后面 */
-  experimental: boolean;
+  /** 实验功能 paper-themes（设置原值）：纸面两档挂它后面 */
+  paperThemes: boolean;
   onChange: (patch: SettingsPatch) => void;
 }) {
   const t = useT();
   return (
     <div className="theme-grid" role="group" aria-label={t.settings.theme}>
-      {selectableThemes(props.experimental).map((value) => (
+      {selectableThemes(props.paperThemes).map((value) => (
         <ThemeCard
           key={value}
           value={value}
