@@ -82,12 +82,21 @@ export async function applyMcpWrite(
   }
 }
 
-/** 会话 → 工作区。没有工作区（或会话不在了）就抛——「workspace」没有指称。 */
+/**
+ * 会话 → 工作区。没有工作区（或会话不在了）就抛——「workspace」没有指称。
+ * 报错要讲清两件事（2026-10-11 用户实测：两次撞「不属于任何工作区」的墙，
+ * 旧文案既不说为什么 cwd 明明是个目录还不算、也不说出路）：工作目录只是
+ * 这单活儿用哪个目录，不等于会话归属工作区；出路是改 global，或把会话
+ * 移进工作区再试。错误文案会作为工具结果回到模型手上，它照着改。 */
 async function workspaceOf(sessions: SessionStore, sessionId: string): Promise<string> {
-  const meta = await sessions.load(sessionId);
-  const workspaceId = meta?.meta.workspaceId ?? null;
+  const detail = await sessions.load(sessionId);
+  const workspaceId = detail?.meta.workspaceId ?? null;
   if (workspaceId === null) {
-    throw new Error("这条会话不属于任何工作区，scope 只能用 global");
+    const cwd = detail?.meta.cwd ?? "（未记录）";
+    throw new Error(
+      `这条会话没有归属工作区（它的工作目录是 ${cwd}，但会话不是从工作区里开的，工作目录不等于归属）：` +
+        `scope "workspace" 无处可挂。请改用 "global"，或在左栏把这条会话移进工作区后再试`,
+    );
   }
   return workspaceId;
 }

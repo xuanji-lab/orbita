@@ -87,7 +87,11 @@ describe("applySkillWrite（真 store）", () => {
     const result = await applySkillWrite(skills, sessions, skillEvent({ sessionId: S2, scope: "workspace" }));
     assert.equal(result.ok, false);
     if (result.ok) return;
-    assert.match(result.error, /不属于任何工作区/);
+    // 2026-10-11：报错要讲原因（工作目录≠归属）与出路（改 global / 移进工作区），
+    // 模型拿着工具结果能自己改
+    assert.match(result.error, /没有归属工作区/);
+    assert.match(result.error, /工作目录不等于归属/);
+    assert.match(result.error, /移进工作区/);
   });
 
   test("已存在：改写内容并重链（模型改了再试不该被「已存在」卡死）", async () => {
