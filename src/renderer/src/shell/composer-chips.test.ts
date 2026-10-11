@@ -100,7 +100,7 @@ describe("mirrorSegments —— 修正液与 chip 的叠加", () => {
     const chips = parseChips(text);
     deepStrictEqual(mirrorSegments(whiteoutSegments(text), chips), [
       { text: "先 ", whiteout: false, chip: false, pasteRun: false },
-      { text: "/skill:pdf-tools", whiteout: false, chip: true, pasteRun: false },
+      { text: "/skill:pdf-tools", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
       { text: " 处理", whiteout: false, chip: false, pasteRun: false },
     ]);
   });
@@ -109,7 +109,7 @@ describe("mirrorSegments —— 修正液与 chip 的叠加", () => {
     const text = "use /skill:pdf now";
     deepStrictEqual(mirrorSegments(whiteoutSegments(text), parseChips(text)), [
       { text: "use ", whiteout: true, chip: false, pasteRun: false },
-      { text: "/skill:pdf", whiteout: false, chip: true, pasteRun: false },
+      { text: "/skill:pdf", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
       { text: " now", whiteout: true, chip: false, pasteRun: false },
     ]);
   });
@@ -120,7 +120,7 @@ describe("mirrorSegments —— 修正液与 chip 的叠加", () => {
     const composition = { start: 15, end: 20 };
     deepStrictEqual(mirrorSegments(whiteoutSegments(text, composition), parseChips(text)), [
       { text: "abc ", whiteout: true, chip: false, pasteRun: false },
-      { text: "/skill:x", whiteout: false, chip: true, pasteRun: false },
+      { text: "/skill:x", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
       { text: " 拼音zhong", whiteout: false, chip: false, pasteRun: false },
     ]);
   });
@@ -138,7 +138,7 @@ describe("mirrorSegments —— 修正液与 chip 的叠加", () => {
       mirrorSegments([{ text: "先 /skill:x 后", whiteout: false }], parseChips("先 /skill:x 后")),
       [
         { text: "先 ", whiteout: false, chip: false, pasteRun: false },
-        { text: "/skill:x", whiteout: false, chip: true, pasteRun: false },
+        { text: "/skill:x", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
         { text: " 后", whiteout: false, chip: false, pasteRun: false },
       ],
     );
@@ -153,6 +153,18 @@ describe("mirrorSegments —— 修正液与 chip 的叠加", () => {
         { text: "如何", whiteout: false, chip: false, pasteRun: false },
       ],
     );
+  });
+
+  it("chip 分段带 kind（上色用）：skill / mcp 各自带上，不带 kind 的区间是中性胶囊", () => {
+    const text = "用 /skill:a 和 /mcp:b 两个";
+    deepStrictEqual(mirrorSegments([{ text, whiteout: false }], parseChips(text)).filter((seg) => seg.chip), [
+      { text: "/skill:a", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
+      { text: "/mcp:b", whiteout: false, chip: true, chipKind: "mcp", pasteRun: false },
+    ]);
+    // 粘贴 token 一类的中性胶囊（无 kind）不带 chipKind，落回默认配方
+    deepStrictEqual(mirrorSegments([{ text: "0123", whiteout: false }], [{ start: 1, end: 3 }]).filter((seg) => seg.chip), [
+      { text: "12", whiteout: false, chip: true, pasteRun: false },
+    ]);
   });
 
   it("展开段与 chip 交叠：chip 优先，交叠部分归 chip", () => {

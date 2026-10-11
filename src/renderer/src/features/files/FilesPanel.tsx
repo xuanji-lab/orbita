@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
@@ -703,55 +704,24 @@ function TreeRow(props: {
           </span>
         )}
       </button>
-      {/* 引用（最外侧，高频动作优先够到）与 Reveal 并排：同一套 hover 浮现语言 */}
-      {/* 外侧 folder-open = 在文件管理器中显示；内侧 paperclip = 添加文件引用。
+      {/* 引用（高频动作）与 Reveal 并排：同一套 hover 浮现语言，形态收进
+          shell/RowHoverAction（Skills 行 / MCP 卡的「选用」键其后的两个消费者）。
+          外侧 folder-open = 在文件管理器中显示；内侧 paperclip = 添加文件引用。
           图形与动作必须成对（2026-09-26 教训：只换图形不换动作，按钮就说谎了） */}
-      <button
-        type="button"
-        className="file-hover-act file-row-act"
+      <RowHoverAction
+        icon="folder-open"
         title={t.files.revealInFileManager}
-        aria-label={t.files.revealInFileManager}
         onClick={props.onReveal}
-        style={{
-          position: "absolute",
-          right: 2,
-          top: 5,
-          width: 20,
-          height: 20,
-          // display 由 .file-hover-act 的 CSS 管（hover 才出现）
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 0,
-          border: 0,
-          borderRadius: "var(--radius-sm)",
-          cursor: "pointer",
-        }}
-      >
-        <Icon name="folder-open" size={12} />
-      </button>
-      <button
-        type="button"
+        right={2}
         className="file-hover-act file-row-act"
+      />
+      <RowHoverAction
+        icon="paperclip"
         title={t.files.reference}
-        aria-label={t.files.reference}
         onClick={props.onReference}
-        style={{
-          position: "absolute",
-          right: 24,
-          top: 5,
-          width: 20,
-          height: 20,
-          // display 由 .file-hover-act 的 CSS 管（hover 才出现）
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 0,
-          border: 0,
-          borderRadius: "var(--radius-sm)",
-          cursor: "pointer",
-        }}
-      >
-        <Icon name="paperclip" size={12} />
-      </button>
+        right={24}
+        className="file-hover-act file-row-act"
+      />
     </div>
   );
 }

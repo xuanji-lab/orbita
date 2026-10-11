@@ -307,6 +307,28 @@
 }
 
 /*
+ * chip 按类别上色（2026-10 用户裁决：「直接用颜色给我区分吧，skills 一个颜色，
+ * mcp 一个颜色」）：skill = 表格绿（--color-filetype-sheet）、MCP = 文档蓝
+ * （--color-filetype-doc）——与文件类型图标同一组类别色，之后材料方块
+ * （Excel / Doc / PPT）也用它。淡底 + 同色描边、字保持正墨：token 原文照显
+ * （含 /skill: 前缀），底与描边都从同一变量 mix 出来，五档主题随各自那一组值
+ * 走。描边与呼吸仍全用 box-shadow，横向 padding 禁令不破；粘贴 token 的 chip
+ * 不带 data-kind，落回上面的中性配方（它不属于这三类）。
+ */
+.composer-chip[data-kind="skill"] {
+  background: color-mix(in srgb, var(--color-filetype-sheet) 12%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-filetype-sheet) 12%, transparent),
+    0 0 0 2px var(--color-filetype-sheet);
+}
+.composer-chip[data-kind="mcp"] {
+  background: color-mix(in srgb, var(--color-filetype-doc) 12%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-filetype-doc) 12%, transparent),
+    0 0 0 2px var(--color-filetype-doc);
+}
+
+/*
  * 粘贴展开段（方案 C，paste-blocks.ts）：一段粘贴进来的文字展开回正文，只铺浅底色
  * 标出「这段是粘贴进来的」——文字与正文同字体、可直接编辑，区间随编辑伸缩。
  * 没有描边没有圆角：它是一段话，不是一颗胶囊；chip 的描边语言留给收起态。
@@ -795,6 +817,25 @@ body {
 .reveal {
   opacity: 0;
   transition: opacity var(--duration-instant) var(--ease-standard);
+}
+
+/*
+ * 行尾悬停动作键的公共形态（shell/RowHoverAction.tsx 的默认 class）：显隐仍由
+ * 调用方的配对机制管（文件面板 .file-hover-act 的 display、skill 行 / MCP 卡
+ * .reveal 的 opacity），这里只定配色与居中——文件 / skill 两处带自己的配色
+ * class，这条只服务 MCP 卡动作组里的静态排布（与 PanelIconButton 同一副
+ * hover 语言：透明底 → hover 抬底色 + 正墨）。
+ */
+.row-hover-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+.row-hover-act:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 /*
@@ -1540,6 +1581,26 @@ body {
   font-weight: 500;
 }
 
+/*
+ * 气泡 chip 同一套类别色（与镜像层的 .composer-chip[data-kind] 同源）：淡底 +
+ * 同色描边 + 正墨字，图标用本色（图标处对比度按 ≥ 3:1 把过关的那组值）。
+ * chip-runs.ts 早已按 kind 输出 bubble-chip-skill / -mcp，这里补上色。
+ */
+.bubble-chip-skill {
+  background: color-mix(in srgb, var(--color-filetype-sheet) 10%, transparent);
+  border-color: var(--color-filetype-sheet);
+}
+.bubble-chip-skill .bubble-chip-icon {
+  color: var(--color-filetype-sheet);
+}
+.bubble-chip-mcp {
+  background: color-mix(in srgb, var(--color-filetype-doc) 10%, transparent);
+  border-color: var(--color-filetype-doc);
+}
+.bubble-chip-mcp .bubble-chip-icon {
+  color: var(--color-filetype-doc);
+}
+
 .chat-md li::marker {
   color: var(--color-text-tertiary);
 }
@@ -1903,6 +1964,36 @@ body {
   flex: 0 0 auto;
 }
 
+/*
+ * 「/ + 空格」选取模式的键盘提示行（panel-token.ts）：过滤行下方一条微字，
+ * 说清 ↑↓ / Enter / Tab / Esc 各自干什么。不设 uppercase——那是组标签的待遇。
+ */
+.panel-picker-hint {
+  /* 右栏窄时一行放不下（英文三段提示约 52 字符）：写死 24px 高会把第二行裁掉一半
+     （验收截图里「Esc cancels」只剩上半截）。改最小高度 + 纵向内边距，允许换行 */
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 14px;
+  line-height: 1.4;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* 选取模式的键盘高亮：淡底 + semibold（.option-row 选中同款口径），盖过 hover */
+.skill-row.picker-active {
+  background: var(--option-active-bg);
+}
+.skill-row.picker-active .skill-row-name {
+  font-weight: var(--weight-semibold);
+}
+.mcp-card.picker-active {
+  border-color: var(--color-border-strong);
+  background: var(--option-active-bg);
+}
+
 /* 组间发丝线：组与组之间 1px 分隔，代替纯间距——长列表扫读时组边界更清楚 */
 .skill-group + .skill-group {
   border-top: 1px solid var(--color-border-subtle);
@@ -1975,6 +2066,31 @@ body {
   white-space: nowrap;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
+}
+
+/*
+ * 行尾「选用」键（RowHoverAction，reveal 家族）：绝对定位盖在行尾——血线规则
+ * 的悬停组合例外，静止态尾部（归属点阵）钉血线，悬停 / 键盘聚焦时让位淡出。
+ * 集合信息不丢：行 tooltip（skill-row-tip，350ms）里有 slug · 集合全名。实底
+ * 取悬停行底色，盖住让位过渡中还没淡尽的点（files 面板 .file-row-act 用面板
+ * 底盖悬停元信息，同一职责、这里行底是 hover 底）。
+ */
+.skill-row-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+}
+.skill-row-act:hover {
+  color: var(--color-text-primary);
+}
+.skill-row .set-dots {
+  transition: opacity var(--transition-hover);
+}
+.skill-row:hover .set-dots,
+.skill-row:has(:focus-visible) .set-dots {
+  opacity: 0;
 }
 
 /*
@@ -2463,6 +2579,25 @@ body {
   display: inline-flex;
   gap: 2px;
   flex: 0 0 auto;
+}
+/*
+ * 悬停动作键不占位（设计系统 Implementation rules「行尾血线」）：平时动作组收成零宽，
+ * 名字拿满整行；悬停 / 键盘聚焦时动作组展开、状态文字让位——名字不会被三颗键与状态
+ * 一起挤成「de…」。用 max-width 收而不用 display:none：收起的键仍可 Tab 聚焦，
+ * focus-within 一到就展开。删除二次确认时常显（data-confirming）。
+ */
+.mcp-card .mcp-actions {
+  max-width: 0;
+  overflow: hidden;
+}
+.mcp-card:hover .mcp-actions,
+.mcp-card:focus-within .mcp-actions,
+.mcp-actions[data-confirming] {
+  max-width: 120px;
+}
+.mcp-card:hover .mcp-status-text,
+.mcp-card:focus-within .mcp-status-text {
+  display: none;
 }
 
 /*
@@ -3031,87 +3166,3 @@ textarea.text-field {
   color: var(--color-text-primary);
 }
 
-/*
- * ————— 斜杠指令面板（往下开、分节；模型与几何在 slash-panel.ts） —————
- * 面板绝对定位在输入卡内：顶缘在 / 所在行下方，可以盖住底栏（+、模型名、发送键），
- * 但不伸出卡外（几何已夹在卡内）。它是盖在内容上的浮层：实底面板 + 发丝 +
- * popover 阴影（floating layer 的配方，透底会让下面的字透出来读不了）。
- * 分节 kicker 是 sticky 吸顶：滚到哪一节，那一节的标头钉在面板顶上，
- * 不占「可见三行条目」的名额。
- */
-.slash-panel {
-  position: absolute;
-  z-index: 6;
-  display: grid;
-  gap: 2px;
-  align-content: start;
-  padding: 0 6px 6px;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-panel);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow-popover);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-/* 节标头：mono 大写微字号（分组标签的那一套），负 margin 盖满面板宽——
-   sticky 时两侧不留缝，内容不会从缝里漏过去 */
-.slash-kicker {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  margin: 0 -6px 2px;
-  padding: 5px 12px 3px;
-  background: var(--color-bg-panel);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-tertiary);
-}
-
-/* 第一个 kicker 顶到面板边（后面的节与上一节隔 4px） */
-.slash-panel > div:not(:first-child) .slash-kicker {
-  margin-top: 4px;
-}
-
-.slash-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  text-align: left;
-  font-size: var(--font-size-caption);
-}
-
-/* 等宽主名（/skill:xxx、/mcp:server——机器形态的名字）；可截断但不抢说明的位置 */
-.slash-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-family-mono);
-  color: var(--color-text-primary);
-}
-
-/* 说明：靠右、截断。面板窄了（几何判定）整段不渲染 */
-.slash-desc {
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-inline-start: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-tertiary);
-}
-
-.slash-empty {
-  padding: 6px 8px;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-tertiary);
-}

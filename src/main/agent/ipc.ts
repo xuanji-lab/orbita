@@ -325,7 +325,7 @@ export function registerAgentIpc(
     if (tokens.length === 0) return text;
     const skillTargets = [...new Set(tokens.filter((t) => t.kind === "skill").map((t) => t.target))];
     const mcpTargets = [...new Set(tokens.filter((t) => t.kind === "mcp").map((t) => t.target))];
-    // 可用性判定与输入框斜杠面板共用 isSkillAvailable（面板认的，发送时必然认）
+    // 可用性判定与右栏选取模式共用 isSkillAvailable（选取面认的，发送时必然认）
     const available =
       skillTargets.length > 0
         ? (await skills.list()).filter((meta) => isSkillAvailable(meta, workspaceId))
