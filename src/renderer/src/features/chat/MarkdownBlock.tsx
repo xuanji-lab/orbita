@@ -195,7 +195,13 @@ function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) 
   const { className, children, node: _node, ...rest } = props;
   const classes = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
   if (!classes.includes("bubble-chip")) {
-    return <span className={className}>{children}</span>;
+    // 非 chip 的 span 原样透传全部属性：KaTeX 的上下标靠 vlist 上的内联 style（top / height）
+    // 定位、MathML 副本靠 aria-hidden——吞掉 rest 时 x^2 的 2 掉到下面变成下标
+    return (
+      <span className={className} {...rest}>
+        {children}
+      </span>
+    );
   }
   const token = String(children);
   const mcp = token.startsWith("/mcp:");
