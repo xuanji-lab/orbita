@@ -8,8 +8,10 @@ import { highlightBlock, highlighterReady, langFromPath } from "../chat/highligh
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
-import { isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
+import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
+import { PdfView, type PdfJump } from "./PdfView";
+import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
 /**
@@ -36,10 +38,17 @@ export function FilePreviewPane(props: {
   sentImage?: { name: string };
   /** 所在根的显示名（面包屑第一段：workspace / attached 的名字、session 的标题） */
   rootLabel: string;
+  /** PDF 引用跳转（点了正文里的引用编号）：滚到原文处并高亮。非 PDF / 没有跳转时 null */
+  jump?: PdfJump | null;
 }) {
   const t = useT();
   const { sessionId, workspaceId, root, path } = props;
   const sentImage = props.sentImage;
+  // PDF 预览挂在自己的实验开关后面（实验功能「PDF 引用」）：关着时 PDF 照旧读不出
+  // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF
+  const pdfCitations = useExperimentalFeature("pdf-citations");
+  const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
+  const [pdfReload, setPdfReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
@@ -160,7 +169,13 @@ export function FilePreviewPane(props: {
             <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
               <Icon name={copied ? "check" : "copy"} size={16} />
             </PanelIconButton>
-            <PanelIconButton title={t.files.refreshPreview} onClick={refresh}>
+            <PanelIconButton
+              title={t.files.refreshPreview}
+              onClick={() => {
+                refresh();
+                if (pdf) setPdfReload((n) => n + 1);
+              }}
+            >
               <Icon name="refresh-cw" size={16} spin={loading} />
             </PanelIconButton>
           </div>
@@ -176,8 +191,14 @@ export function FilePreviewPane(props: {
           </Chip>
         </div>
       )}
-      <div className="file-preview-body">
-        {sentImage === undefined ? (
+      <div className="file-preview-body" data-kind={pdf ? "pdf" : undefined}>
+        {pdf ? (
+          <PdfView
+            request={{ sessionId, workspaceId, root, dir: path }}
+            jump={props.jump ?? null}
+            reloadToken={pdfReload}
+          />
+        ) : sentImage === undefined ? (
           <PreviewBody
             name={name}
             mode={mode}

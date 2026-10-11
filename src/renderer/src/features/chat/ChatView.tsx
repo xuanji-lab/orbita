@@ -6,15 +6,15 @@ import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
-  ChannelMarkLine,
-  ChannelTaskCard,
+  ChannelFromChildPill,
+  ChannelFromParentBubble,
   ChannelToolMarkLine,
   DelegateCardView,
   peerTitleOf,
   type ChannelViewContext,
   type DelegateCardStatus,
 } from "./ChannelViews";
-import { useChannelMessages } from "./useChannelMessages";
+import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
 import {
   HOME_CARD_CARRYOVER_ROWS,
@@ -44,7 +44,6 @@ import {
   indexToolResults,
   interruptedToolCallIds,
   mcpFailureLead,
-  channelSendMessageId,
   mcpInputSummary,
   readTaskCard,
   showImageCard,
@@ -106,6 +105,8 @@ import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import { DiffBody } from "../../shell/DiffView";
 import { RevertPreviewBar } from "./RevertPreviewBar";
+import { collectCitations } from "./citation-markers.ts";
+import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
@@ -121,10 +122,11 @@ import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
-import { BlackholeContext } from "../../shell/BlackholeBox.tsx";
+import { MaterialBoxContext } from "../../shell/BlackholeBox.tsx";
 import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
+import type { ChannelMessage } from "@shared/channel";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
@@ -210,6 +212,8 @@ export function ChatView(props: ChatViewProps) {
     },
     [session.transcript],
   );
+  // PDF 引用表（实验功能「PDF 引用」）：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
+  const citations = useMemo(() => collectCitations(session.transcript), [session.transcript]);
   return (
     <div
       ref={paneRef}
@@ -233,7 +237,9 @@ export function ChatView(props: ChatViewProps) {
       }}
     >
       <QuoteJumpContext.Provider value={jumpToQuote}>
-        <ChatViewBody {...props} dropActive={dropActive} />
+        <CitationTableContext.Provider value={citations}>
+          <ChatViewBody {...props} dropActive={dropActive} />
+        </CitationTableContext.Provider>
       </QuoteJumpContext.Provider>
       {accepts && (
         <QuoteSelectionLayer
@@ -466,24 +472,10 @@ function ChatViewBody(props: {
    */
   onOpenProviders?: () => void;
   /**
-   * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
-   * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
-   * ChatView 不传（undefined），标记保持不可点——那里没有通道列可跳。
-   */
-  onOpenChannel?: (childId: string, messageId: string | null) => void;
-  /**
-   * 子会话视图里点标记 → 打开父子会话面板并跳到那条消息（用户 2026-09-25：子会话
-   * 工作记录里看到它发给母会话的标记，自己点进去）。只有 Sub-sessions 面板里查看
-   * 子会话的 ChatView 拿到它——那时主槽正看着母会话，父子会话面板打得开。子会话
-   * 在主槽打开（Open as main）时主槽没有母会话、也就没有父子会话面板，不传，标记
-   * 保持不可点，不给一个点了没反应的东西。
-   */
-  onOpenOwnChannel?: (messageId: string | null) => void;
-  /**
-   * 点派出卡 → 打开右栏 Sub-sessions 面板并直接进入这条子会话的会话层（子会话
-   * PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与 Sub-sessions 面板自己
-   * 内部渲染的 ChatView（查看子会话）都不传，派出卡保持不可点，也符合「UI 只做
-   * 一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
+   * 点主流里的派出卡 / 子会话问询胶囊 → 打开右栏 Sub-sessions 面板并直接进入这条
+   * 子会话的会话层（子会话 PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与
+   * Sub-sessions 面板自己内部渲染的 ChatView（查看子会话）都不传，派出卡保持不可点，
+   * 也符合「UI 只做一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
    */
   onOpenSubSession?: (childId: string) => void;
   /**
@@ -784,31 +776,35 @@ function ChatViewBody(props: {
     [session.sessions],
   );
   const channelSummaries = useChannelSummaries(openId === "" ? null : openId);
-  // 标记点了打开父子会话面板：根会话（ownSide "parent"）走 onOpenChannel，按对面的
-  // childId 定位；子会话走 onOpenOwnChannel——通道的 childId 就是它自己，标记里的
-  // peerId 是母会话，所以不透传、只要 messageId。主槽的 ChatView 看子会话时两个都
-  // 接不上（onOpenChannel 只认根会话，onOpenOwnChannel 只有 Sub-sessions 面板给），
-  // 标记不可点；辅助对话抽屉两个都不传。
-  const onOpenOwnChannel = props.onOpenOwnChannel;
-  const onOpenParentChannel = props.onOpenChannel;
-  const openChannel = useMemo<((childId: string, messageId: string | null) => void) | null>(() => {
-    if (ownSide === "parent") return onOpenParentChannel ?? null;
-    if (onOpenOwnChannel === undefined) return null;
-    return (_peerId, messageId) => onOpenOwnChannel(messageId);
-  }, [ownSide, onOpenParentChannel, onOpenOwnChannel]);
-  // 子会话 PR4c：派出卡的点击与描边同一套「只有主槽才接」的门槛，openChannel 上面已有先例
+  // 子会话 PR4c：派出卡 / 问询胶囊的点击入口——只有主槽的根会话视图接得上
+  // （onOpenSubSession 由 App 给），辅助对话抽屉与面板内查看的子会话都接不上，
+  // 不可点。
   const openSubSession = ownSide === "parent" ? (props.onOpenSubSession ?? null) : null;
   const litSubSessionId = props.litSubSessionId ?? null;
-  // 子会话 2026-09-23 裁决①：任务卡的正文来自自己父子这条通道的账本——只有
-  // `ownSide` 为 "child" 时才有意义（根会话没有 task 标记要渲染），key 为 null
-  // 时 `useChannelMessages` 内部直接短路成空态，不发请求（同它自己的既有语义）。
+  // 通道正文的两个来源（2026-10-12 沟通回对话流）：
+  //   - 子会话视图：拉**自己那条父子通道**的全文——任务 / 回复 / 叫停的气泡正文都在
+  //     这里；key 为 null 时 `useChannelMessages` 内部短路成空态，不发请求。
+  //   - 根会话视图：拉**全部子通道**的合并——问询胶囊按 messageId 取正文首行。
+  // 两个 hook 都在分支外无条件调用（首页让位给聊天页时 hooks 数量不变）。
+  const ownChildren = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
   const taskChannelKey =
     ownSide === "child" && ownParentId !== null && openId !== "" ? { parentId: ownParentId, childId: openId } : null;
   const taskChannel = useChannelMessages(taskChannelKey);
-  const channelMessages = useMemo(
-    () => new Map(taskChannel.messages.map((message) => [message.id, message])),
-    [taskChannel.messages],
+  const parentChannels = useParentChannels(
+    ownSide === "parent" && openId !== "" ? openId : null,
+    ownChildren.map((meta) => meta.id),
   );
+  const channelMessages = useMemo(() => {
+    if (ownSide === "child") return new Map(taskChannel.messages.map((message) => [message.id, message]));
+    const merged = new Map<string, ChannelMessage>();
+    for (const messages of parentChannels.values()) {
+      for (const message of messages) merged.set(message.id, message);
+    }
+    return merged;
+  }, [ownSide, taskChannel.messages, parentChannels]);
+  // 加载 / 错误态跟各自的那仨定：只有气泡（子侧）用得到，父流胶囊没有正文也退化为只报名字
+  const channelLoading = ownSide === "child" ? taskChannel.loading : false;
+  const channelError = ownSide === "child" ? taskChannel.error : null;
   const channel = useMemo<ChannelViewContext>(
     () => ({
       ownSide,
@@ -816,12 +812,11 @@ function ChatViewBody(props: {
       titles,
       channelSummaries,
       childPhaseOf: session.phaseOf,
-      openChannel,
       openSubSession,
       litSubSessionId,
       channelMessages,
-      channelMessagesLoading: taskChannel.loading,
-      channelMessagesError: taskChannel.error,
+      channelMessagesLoading: channelLoading,
+      channelMessagesError: channelError,
     }),
     [
       ownSide,
@@ -829,12 +824,11 @@ function ChatViewBody(props: {
       titles,
       channelSummaries,
       session.phaseOf,
-      openChannel,
       openSubSession,
       litSubSessionId,
       channelMessages,
-      taskChannel.loading,
-      taskChannel.error,
+      channelLoading,
+      channelError,
     ],
   );
 
@@ -845,7 +839,7 @@ function ChatViewBody(props: {
    * 的子会话数；为 0 时芯片只显示前半（不拼出 "· 0 waiting"）。点击调用方按
    * `onOpenSubSessions` 是否给了决定是否可点，同 `ChannelMarkPill` 的门槛。
    */
-  const subSessionRows = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
+  const subSessionRows = ownChildren;
   const subSessionsChip =
     subSessionRows.length === 0
       ? null
@@ -2376,28 +2370,26 @@ function EntryView(props: {
     return <RevertMarkView record={entry.record} cwd={props.cwd} onOpenFile={props.onOpenReviewAt} />;
   }
   if (entry.kind === "channelMark") {
-    // 子会话自己流里的 task 标记：渲染成完整任务卡而不是一行胶囊（子会话
-    // 2026-09-23 裁决①）——父给子的第一条任务是这条会话最该显眼的内容。
-    // 其它标记（reply 等）与根会话视图仍走下面的胶囊，行为不变。
-    if (props.channel.ownSide === "child" && entry.mark.kind === "task") {
+    // 子会话流里的父侧消息（task / reply / stop）：正文直接进对话流——虚线气泡 +
+    // 引子（2026-10-12 用户裁决：父会话给子会话的命令要直接出现在子会话的 UI 里），
+    // 不再是一行「在通道里查看」的胶囊。
+    if (props.channel.ownSide === "child" && entry.mark.from === "parent") {
       return (
-        <ChannelTaskCard
-          peerTitle={peerTitleOf(props.channel, entry.mark.peerId, t)}
+        <ChannelFromParentBubble
+          mark={entry.mark}
           message={props.channel.channelMessages.get(entry.mark.messageId)}
           loading={props.channel.channelMessagesLoading}
           error={props.channel.channelMessagesError}
         />
       );
     }
-    const openChannel = props.channel.openChannel;
-    return (
-      <ChannelMarkLine
-        mark={entry.mark}
-        ownSide={props.channel.ownSide}
-        peerTitle={peerTitleOf(props.channel, entry.mark.peerId, t)}
-        onClick={openChannel === null ? undefined : () => openChannel(entry.mark.peerId, entry.mark.messageId)}
-      />
-    );
+    // 父流里子发来的消息：问询 / 完成 / 失败胶囊（下一刀接上），进度不进父流。
+    if (props.channel.ownSide === "parent" && entry.mark.from === "child" && entry.mark.kind !== "progress") {
+      return <ChannelFromChildPill mark={entry.mark} channel={props.channel} />;
+    }
+    // 其余组合（父流里的 progress 标记、防御性兜底）：不渲染——进度是子会话自己的
+    // 事，父流里它的落点就是没有落点
+    return null;
   }
   if (entry.kind === "text") {
     const card = props.carryoverCards.get(entry.messageId);
@@ -2651,8 +2643,7 @@ function UserBubble(props: {
   );
   // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
   const hasText = text.trim() !== "";
-  const blackhole = useContext(BlackholeContext);
-  const sentBox = blackhole && images.length + fileRefs.length > 0;
+  const boxStyle = useContext(MaterialBoxContext);
   useLayoutEffect(() => {
     if (expanded) return;
     const el = clampRef.current;
@@ -2677,9 +2668,10 @@ function UserBubble(props: {
         gap: 2,
       }}
     >
-      {/* 输入框黑洞开着：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
-      {sentBox ? (
+      {/* 材料盒启用（黑洞 / 俄罗斯方块）：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
+      {boxStyle !== null && images.length + fileRefs.length > 0 ? (
         <SentBlackholeBox
+          style={boxStyle}
           images={images}
           files={fileRefs.map((ref) => ({ name: fileRefName(ref.path), path: ref.path, kind: ref.kind }))}
         />
@@ -2707,7 +2699,7 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {!sentBox && fileRefs.length > 0 && (
+      {boxStyle === null && fileRefs.length > 0 && (
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
@@ -3882,10 +3874,9 @@ function ChannelSendToolLine(props: {
       />
     );
   }
-  // 落账那条通道消息的 id（回执 details 里，channel-tools.ts）：点了滚到父子会话面板里
-  // 的这一条并高亮。还在跑、或这一刀之前的旧记录没有 → null，退回滚到通道底部
-  const messageId = channelSendMessageId(props.result);
-  const openChannel = props.channel.openChannel;
+  // 面板删除后发送侧标记不再有「滚到某一条」的去处；reply_subsession 的点击改成
+  // 打开右栏 Sub-sessions 面板进入该子会话（与派出卡 / 问询胶囊同一个入口）。
+  const openSubSession = props.channel.openSubSession;
   if (props.toolName === "reply_subsession") {
     const childId = typeof record["childId"] === "string" ? record["childId"] : "";
     const childTitle = peerTitleOf(props.channel, childId, t);
@@ -3897,12 +3888,14 @@ function ChannelSendToolLine(props: {
         text={text}
         tone="reply"
         running={props.running}
-        onClick={openChannel === null || childId === "" ? undefined : () => openChannel(childId, messageId)}
+        onClick={openSubSession !== null && childId !== "" ? () => openSubSession(childId) : undefined}
+        clickTitle={t.subSessions.openInPanel}
       />
     );
   }
   // report_to_parent：对面恒是本会话自己的父——ownParentId 是这条会话固定的事实，
-  // 不像 reply_subsession 那样按入参里的 id 变化。
+  // 不像 reply_subsession 那样按入参里的 id 变化。面板删除后不可点：它发给母会话
+  // 的话就留在母会话的对话流里（问询胶囊），这里只留一行工具标记。
   const parentTitle = peerTitleOf(props.channel, props.channel.ownParentId ?? "", t);
   const kind = record["kind"];
   const label: { text: string; icon: IconName; tone: ChannelMarkTone } =
@@ -3913,18 +3906,8 @@ function ChannelSendToolLine(props: {
         : kind === "failed"
           ? { text: t.chat.reportedFailed, icon: "triangle-alert", tone: "failed" }
           : { text: t.chat.reportedProgress, icon: "refresh-cw", tone: "neutral" };
-  // 子会话工作记录里的这一行（用户 2026-09-25：看到它发给母会话的消息，自己点进去）。
-  // 子会话视图的 openChannel 不看第一个参数（通道的 childId 就是它自己），传对面的 id 只为
-  // 与 reply_subsession 同一个签名
-  const parentId = props.channel.ownParentId ?? "";
   return (
-    <ChannelToolMarkLine
-      icon={label.icon}
-      text={label.text}
-      tone={label.tone}
-      running={props.running}
-      onClick={openChannel === null ? undefined : () => openChannel(parentId, messageId)}
-    />
+    <ChannelToolMarkLine icon={label.icon} text={label.text} tone={label.tone} running={props.running} />
   );
 }
 

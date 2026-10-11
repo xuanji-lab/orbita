@@ -8,6 +8,7 @@
  * 两边各写一份的话，跨午夜那一刻格子与账会对不上。
  */
 import { localDateKey } from "../../../shared/usage.ts";
+import type { UsagePetPref } from "../../../shared/settings.ts";
 
 /** 档位：0 = 没用量（睡着），1/2/3 = 低 / 中 / 高 */
 export type UsageTier = 0 | 1 | 2 | 3;
@@ -69,4 +70,43 @@ const PET_WIDTH = 80;
  */
 export function petLeft(index: number): number {
   return index * 32 + 12 - PET_WIDTH / 2;
+}
+
+/**
+ * 星云平时停在哪一格：钉住的日期还在这 7 天里就停那格，否则（没钉 / 已滑出窗口）停今天。
+ * 按**日期**钉（2026-10-12 用户裁决）：钉在「周二」就一直是周二那天的样子，满 7 天后自然回到今天。
+ */
+export function petAnchor(cells: readonly UsageCell[], pref: UsagePetPref | undefined): number {
+  const pinned = pref?.pinnedDate === undefined ? -1 : cells.findIndex((cell) => cell.date === pref.pinnedDate);
+  return pinned === -1 ? cells.length - 1 : pinned;
+}
+
+/** 有效的钉日期：还在窗口里且不是今天（钉今天 = 没钉） */
+export function effectivePin(cells: readonly UsageCell[], pref: UsagePetPref | undefined): string | undefined {
+  const anchor = petAnchor(cells, pref);
+  const cell = cells[anchor];
+  return cell === undefined || cell.isToday ? undefined : cell.date;
+}
+
+/**
+ * 点一格之后的偏好：
+ * - 收起着 → 星云从这格出来（点的是今天就是回到默认）；
+ * - 点的是已钉的那格或今天 → 解钉，回到今天；
+ * - 其余 → 钉在这天。
+ */
+export function petPrefAfterCellClick(
+  cells: readonly UsageCell[],
+  pref: UsagePetPref | undefined,
+  index: number,
+): UsagePetPref {
+  const cell = cells[index];
+  if (cell === undefined) return pref ?? {};
+  if (pref?.hidden === true) return cell.isToday ? {} : { pinnedDate: cell.date };
+  if (cell.isToday || effectivePin(cells, pref) === cell.date) return {};
+  return { pinnedDate: cell.date };
+}
+
+/** 点星云：收起（钉的日期保留，再出来时先回原处——除非用户点了别的格） */
+export function petPrefAfterHide(pref: UsagePetPref | undefined): UsagePetPref {
+  return { ...(pref?.pinnedDate === undefined ? {} : { pinnedDate: pref.pinnedDate }), hidden: true };
 }

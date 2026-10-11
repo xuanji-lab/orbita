@@ -86,6 +86,15 @@ const CHECKS = [
     rightPad: 8,
     skipNoTrailing: true,
   },
+  {
+    name: "Sub-sessions·收件箱行：相对时间钉在右血线",
+    row: ".inbox-row-main",
+    leading: ".status-bar",
+    trailing: ".inbox-row-ago",
+    // .inbox-row-main 的右内边距 var(--space-3)；stopped / idle 行没有竖条，跳过
+    rightPad: 12,
+    skipNoTrailing: true,
+  },
 ];
 
 const { evaluate, close } = await connectCdp({ cdpPort, devPort, watchdogMs: 60_000 });

@@ -5,14 +5,16 @@ import {
   BLACKHOLE_SAFE_PX,
   BLACKHOLE_STEP_PX,
   EMPTY_LEDGER,
+  blackholeSeedKey,
   enqueueByRank,
   fallStartAt,
   isSupported,
+  materialBoxStyle,
   reconcileLedger,
   releaseInto,
   supportersOf,
+  type BlackholeDropMode,
   type BlackholeLedger,
-  blackholeActive,
   blackholeSpan,
   boxHeightCap,
   cellsToPx,
@@ -171,6 +173,78 @@ describe("dropOne：往已有的堆上再掉一块", () => {
   });
 });
 
+describe("random 落位（俄罗斯方块）", () => {
+  /** 混合清单：每块自带种子键（截图按组内序号、文件按路径——与两个消费者同一条公式） */
+  const spans40 = Array.from({ length: 40 }, (_, i) => ({
+    col: [3, 2, 6, 11, 5][i % 5] ?? 3,
+    row: i % 5 === 1 ? 2 : 1,
+    seed: i % 5 === 1 ? blackholeSeedKey({ kind: "image", index: Math.floor(i / 5) }) : blackholeSeedKey({ kind: "file", path: `/repo/src/file-${i}.ts` }),
+  }));
+
+  it("同一份清单永远算出同一个布局（种子确定，不碰 Math.random）", () => {
+    assert.deepEqual(packPlacements(spans40, 22, "random"), packPlacements(spans40, 22, "random"));
+    // 种子一变布局就变——证明随机数真的来自种子键
+    const other = spans40.map((s, i) => ({ ...s, seed: `x${i}` }));
+    assert.notDeepEqual(packPlacements(spans40, 22, "random"), packPlacements(other, 22, "random"));
+  });
+
+  it("后加一块不重排已落定的块：前 N 块的落位一字不动（种子只由每块自己决定）", () => {
+    const before = packPlacements(spans40.slice(0, 25), 22, "random");
+    const after = packPlacements(spans40, 22, "random");
+    assert.deepEqual(after.slice(0, 25), before);
+  });
+
+  it("都在盒内、不重叠、不悬空；随机落位天然堆得比 lowest 高", () => {
+    const placed = packPlacements(spans40, 22, "random");
+    assert.equal(placed.length, 40);
+    for (const p of placed) {
+      assert.ok(p.x >= 0 && p.x + p.w <= 22, `出了盒子：${JSON.stringify(p)}`);
+      assert.ok(p.y >= 0);
+    }
+    assertNoOverlap(placed);
+    assertSupported(placed);
+    // 纯随机不填低的洞，同样 40 块堆得比最低列位模式高——限高与盒内滚动因此更常触发
+    assert.ok(packedExtent(placed).rows > packedExtent(packPlacements(spans40, 22, "lowest")).rows);
+  });
+
+  it("种子键：截图按组内序号、文件 / 目录按路径（两处消费者算出同一个键）", () => {
+    assert.equal(blackholeSeedKey({ kind: "image", index: 3 }), blackholeSeedKey({ kind: "image", index: 3 }));
+    assert.notEqual(blackholeSeedKey({ kind: "image", index: 3 }), blackholeSeedKey({ kind: "image", index: 4 }));
+    assert.equal(blackholeSeedKey({ kind: "dir", path: "/a/b" }), "/a/b");
+  });
+
+  it("缺省模式不生变：不传 mode 时与 lowest 逐字相同（黑洞的现状）", () => {
+    assert.deepEqual(packPlacements(spans40, 22), packPlacements(spans40, 22, "lowest"));
+  });
+
+  it("删除后的补位不重抽列位：random 模式也只往下掉，不往旁边挪", () => {
+    const placed = packPlacements(spans40.slice(0, 24), 22, "random");
+    const rest = placed.filter((_, i) => i % 3 !== 0);
+    const settled = settleAfterRemoval(rest);
+    settled.forEach((p, i) => assert.equal(p.x, rest[i]?.x));
+    assertNoOverlap(settled);
+    assertSupported(settled);
+  });
+
+  it("列数变了整盒重排：同样的清单 + 种子，重排也是确定的", () => {
+    const ledger = { columns: 22, order: ["a", "b", "c"], map: new Map([["a", { x: 0, y: 0, w: 3, h: 1 }]]) } as const;
+    const again = reconcileLedger(
+      { ...ledger, map: new Map(ledger.map) } as BlackholeLedger,
+      new Set(["a", "b", "c"]),
+      16,
+      (id) => ({ col: id === "a" ? 3 : 5, row: 1 }),
+      "random",
+      (id) => (id === "a" ? "/a" : id === "b" ? "/b" : "/c"),
+    );
+    const rePacked = packPlacements(
+      ["a", "b", "c"].map((id) => ({ col: id === "a" ? 3 : 5, row: 1, seed: `/${id}` })),
+      16,
+      "random",
+    );
+    assert.deepEqual(Array.from(again.map.values()), rePacked);
+  });
+});
+
 describe("settleAfterRemoval：删除后的重力补位", () => {
   it("抽掉底下一块，正上方的块直接掉下来，列位不动", () => {
     const placed = packPlacements(
@@ -236,21 +310,31 @@ describe("boxHeightCap：盒子限高", () => {
   });
 });
 
-describe("blackholeActive：只在基础三套主题生效", () => {
-  it("开关开着 + 浅 / 黛 / 玄 = 生效", () => {
-    assert.equal(blackholeActive(true, "light"), true);
-    assert.equal(blackholeActive(true, "graphite"), true);
-    assert.equal(blackholeActive(true, "black"), true);
+describe("materialBoxStyle：材料盒形态的判定", () => {
+  it("黑洞开着 + 浅 / 黛 / 玄 = 黑洞形态", () => {
+    assert.equal(materialBoxStyle(true, false, "light"), "blackhole");
+    assert.equal(materialBoxStyle(true, false, "graphite"), "blackhole");
+    assert.equal(materialBoxStyle(true, false, "black"), "blackhole");
   });
 
-  it("纸面主题即使开着也不生效", () => {
-    assert.equal(blackholeActive(true, "copybook"), false);
-    assert.equal(blackholeActive(true, "typescript"), false);
+  it("俄罗斯方块开着（黑洞关着）= tetris 形态", () => {
+    assert.equal(materialBoxStyle(false, true, "light"), "tetris");
+    assert.equal(materialBoxStyle(undefined, true, "graphite"), "tetris");
   });
 
-  it("开关关着或缺席一律不生效", () => {
-    assert.equal(blackholeActive(false, "light"), false);
-    assert.equal(blackholeActive(undefined, "black"), false);
+  it("两个都开时黑洞优先（parseSettings 已兑底，这里再防一手）", () => {
+    assert.equal(materialBoxStyle(true, true, "light"), "blackhole");
+  });
+
+  it("纸面主题即使开着也不启用（落块动效不叠在稿纸上，首版沿用黑洞的限制）", () => {
+    assert.equal(materialBoxStyle(true, false, "copybook"), null);
+    assert.equal(materialBoxStyle(false, true, "typescript"), null);
+    assert.equal(materialBoxStyle(true, true, "copybook"), null);
+  });
+
+  it("都关着 / 缺席一律不启用", () => {
+    assert.equal(materialBoxStyle(false, false, "light"), null);
+    assert.equal(materialBoxStyle(undefined, undefined, "black"), null);
   });
 });
 
@@ -267,15 +351,22 @@ function rng(seed: number): () => number {
   };
 }
 
-type Mat = { id: string; kind: "image" | "file" | "dir"; name: string };
+type Mat = { id: string; kind: "image" | "file" | "dir"; name: string; seed: string };
 const NAMES = ["a.ts", "design-notes.md", "renderer", "quarterly-report-final-v3-reviewed-by-legal.pdf", "设计说明文档.md", "src", "README.md", "Orbita Design System", "x"];
 
 function mixed(count: number, seed: number): Mat[] {
   const r = rng(seed);
+  let images = 0;
   return Array.from({ length: count }, (_, i) => {
     const roll = r();
     const kind = roll < 0.3 ? "image" : roll < 0.55 ? "dir" : "file";
-    return { id: `m${i}`, kind, name: NAMES[Math.floor(r() * NAMES.length)] ?? "x" };
+    // 种子键与真实消费者同源：截图按组内序号（追加序，与清单序一致）、文件按路径
+    return {
+      id: `m${i}`,
+      kind,
+      name: NAMES[Math.floor(r() * NAMES.length)] ?? "x",
+      seed: kind === "image" ? blackholeSeedKey({ kind: "image", index: images++ }) : blackholeSeedKey({ kind: kind, path: `/repo/${i}/${NAMES[i % NAMES.length] ?? "x"}` }),
+    };
   });
 }
 
@@ -284,21 +375,28 @@ function listOrder(arrived: readonly Mat[]): string[] {
   return [...arrived.filter((m) => m.kind === "image"), ...arrived.filter((m) => m.kind !== "image")].map((m) => m.id);
 }
 
-/** 自由落体时长（与 BlackholeBox 同一个公式，重力 2600px/s²） */
-const duration = (fromPx: number): number => Math.max(160, Math.sqrt((2 * fromPx) / 2600) * 1000);
+/** 自由落体时长（与 BlackholeBox 同一个公式，重力 2600px/s²；负落程钳到 0——
+ *  random 模式堆得高，块会落在起点线以上，不钳会出现 NaN 时长） */
+const duration = (fromPx: number): number => Math.max(160, Math.sqrt((2 * Math.max(0, fromPx)) / 2600) * 1000);
 
 /**
  * 模拟：材料按 `batches` 分批到达（每批吸入 680ms 后按清单顺序插队），队列每 110ms
  * 放出一块；每一步都断言新块被已放出的块或盒底托着、全盒没有悬空块，并按
  * fallStartAt 排起跳时刻、断言没有块先于托它的块落地。
  */
-function simulate(batches: readonly (readonly Mat[])[], columns: number, arriveEveryMs: number) {
+function simulate(
+  batches: readonly (readonly Mat[])[],
+  columns: number,
+  arriveEveryMs: number,
+  mode: BlackholeDropMode = "lowest",
+) {
   const all = batches.flat();
   const byId = new Map(all.map((m) => [m.id, m]));
   const spanOf = (id: string) => {
     const m = byId.get(id);
     return blackholeSpan(m?.kind ?? "file", m?.name ?? "", columns);
   };
+  const seedOf = (id: string): string => byId.get(id)?.seed ?? "";
   let ledger: BlackholeLedger = { ...EMPTY_LEDGER, columns };
   let queue: string[] = [];
   const arrived: Mat[] = [];
@@ -320,7 +418,7 @@ function simulate(batches: readonly (readonly Mat[])[], columns: number, arriveE
       clock = events[next]?.at ?? clock;
       continue;
     }
-    ledger = releaseInto(ledger, id, spanOf(id));
+    ledger = releaseInto(ledger, id, spanOf(id), mode, seedOf(id));
     const p = ledger.map.get(id);
     assert.ok(p !== undefined);
     // 不变量 1：新块只踩已放出的块或盒底
@@ -338,7 +436,7 @@ function simulate(batches: readonly (readonly Mat[])[], columns: number, arriveE
     }
     clock += 110;
   }
-  return { ledger, arrived, spanOf };
+  return { ledger, arrived, spanOf, seedOf };
 }
 
 describe("放出流程：落点在放出那一刻只对已放出的块算", () => {
@@ -366,17 +464,17 @@ describe("放出流程：落点在放出那一刻只对已放出的块算", () =
   });
 
   it("跨批次按到达顺序落：后到的截图不插到先到的文件前面", () => {
-    const file: Mat = { id: "f", kind: "file", name: "a.ts" };
-    const image: Mat = { id: "i", kind: "image", name: "shot.png" };
+    const file: Mat = { id: "f", kind: "file", name: "a.ts", seed: blackholeSeedKey({ kind: "file", path: "/a.ts" }) };
+    const image: Mat = { id: "i", kind: "image", name: "shot.png", seed: blackholeSeedKey({ kind: "image", index: 0 }) };
     const { ledger } = simulate([[file], [image]], 22, 2000);
     assert.deepEqual(ledger.order, ["f", "i"]);
   });
 
   it("单批到齐：发送后按清单重算的布局与发送前逐块一致", () => {
     const mats = mixed(26, 5);
-    const { ledger, arrived, spanOf } = simulate([mats], 22, 0);
+    const { ledger, arrived, spanOf, seedOf } = simulate([mats], 22, 0);
     const order = listOrder(arrived);
-    const resent = packPlacements(order.map(spanOf), 22);
+    const resent = packPlacements(order.map((id) => ({ ...spanOf(id), seed: seedOf(id) })), 22);
     order.forEach((id, i) => assert.deepEqual(ledger.map.get(id), resent[i], `${id} 发送前后不一致`));
   });
 
@@ -385,10 +483,27 @@ describe("放出流程：落点在放出那一刻只对已放出的块算", () =
     const files = mats.filter((m) => m.kind !== "image");
     const images = mats.filter((m) => m.kind === "image");
     // 两拨都在第一块放出前吸入完（吸入 560ms ≫ 截图解码的几十毫秒）
-    const { ledger, arrived, spanOf } = simulate([files, images], 22, 0);
+    const { ledger, arrived, spanOf, seedOf } = simulate([files, images], 22, 0);
     const order = listOrder(arrived);
-    const resent = packPlacements(order.map(spanOf), 22);
+    const resent = packPlacements(order.map((id) => ({ ...spanOf(id), seed: seedOf(id) })), 22);
     order.forEach((id, i) => assert.deepEqual(ledger.map.get(id), resent[i]));
+  });
+
+  it("random 模式：逐块放出也步步有支撑、无悬空，40 个分 8 批到齐", () => {
+    const mats = mixed(40, 11);
+    const batches = Array.from({ length: 8 }, (_, i) => mats.slice(i * 5, i * 5 + 5));
+    const { ledger } = simulate(batches, 22, 150, "random");
+    assert.equal(ledger.order.length, 40);
+    for (const [, p] of ledger.map) assert.ok(isSupported(p, ledger.map));
+    assertNoOverlap(Array.from(ledger.map.values()));
+  });
+
+  it("random 模式：单批到齐时发送前后仍逐块一致（种子只由每块自己决定）", () => {
+    const mats = mixed(26, 5);
+    const { ledger, arrived, spanOf, seedOf } = simulate([mats], 22, 0, "random");
+    const order = listOrder(arrived);
+    const resent = packPlacements(order.map((id) => ({ ...spanOf(id), seed: seedOf(id) })), 22, "random");
+    order.forEach((id, i) => assert.deepEqual(ledger.map.get(id), resent[i], `${id} 发送前后不一致`));
   });
 });
 

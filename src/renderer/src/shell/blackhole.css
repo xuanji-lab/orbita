@@ -1,6 +1,8 @@
 /**
- * 输入框黑洞（BlackholeBox.tsx / SentBlackholeBox.tsx；设置 › Agent › 输入框黑洞，默认关，
- * 只在浅 / 黛 / 玄三套主题生效）。
+ * 输入框上方的隐形材料盒（BlackholeBox.tsx / SentBlackholeBox.tsx；实验功能，
+ * 默认关，只在浅 / 黛 / 玄三套主题生效）。两种形态共用盒子骨架，特效各是各的：
+ * 黑洞（data-style="blackhole"）带中心变黑 / 舷窗 / 吸入；俄罗斯方块
+ * （data-style="tetris"）只有落块。
  *
  * 颜色只从 token 派生，这里不写任何色值：
  * - 浅色：视界 = 正墨；舷窗下方的「光晕」是一层冷灰雾（次级墨 16%）——白底上发光看不见，
@@ -39,6 +41,12 @@
 .bh-box[data-scroll="true"] {
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* 俄罗斯方块：盒口有沿——新块从上缘冒进来，盒外不画（并到并滚动时上面的滚动态规则
+   接管，同样裁）。黑洞的落体要穿过消息区从舷窗掉下来，不能裁 */
+.bh-box[data-style="tetris"]:not([data-scroll="true"]) {
+  overflow: hidden;
 }
 
 /* 内层贴着盒底：盒子长高有 220ms 过渡，内层是新高度——贴盒顶的话，过渡期间已落定的

@@ -4,14 +4,13 @@ import {
   effectiveLanguage,
   selectableThemes,
   themeLanguage,
-  CHANNEL_COLUMN_WIDTH_DEFAULT,
-  clampChannelColumnWidth,
   clampRightPanelWidth,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
+  parseUsagePet,
   SIDEBAR_WIDTH_MAX,
   SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
@@ -192,65 +191,12 @@ describe("parseSettings 的 rightPanelWidth", () => {
   });
 });
 
-describe("parseSettings 的 channelColumnWidth（子会话 2026-09-23：通道列可拖宽）", () => {
-  it("缺席 = 没拖过，不落这个键", () => {
-    deepStrictEqual(parseSettings({ theme: "graphite" }).channelColumnWidth, undefined);
-  });
-
-  // 上界依赖当前 chat 区宽度（clampChannelColumnWidth），存储层判不了：同 rightPanelWidth 的纪律
-  it("只拦 <180 的坏值，大值留着交给渲染层夹", () => {
-    deepStrictEqual(parseSettings({ channelColumnWidth: 180 }).channelColumnWidth, 180);
-    deepStrictEqual(parseSettings({ channelColumnWidth: 240.4 }).channelColumnWidth, 240);
-    deepStrictEqual(parseSettings({ channelColumnWidth: 179 }).channelColumnWidth, undefined);
-    deepStrictEqual(parseSettings({ channelColumnWidth: 900 }).channelColumnWidth, 900);
-    deepStrictEqual(parseSettings({ channelColumnWidth: "wide" }).channelColumnWidth, undefined);
-    deepStrictEqual(parseSettings({ channelColumnWidth: Number.NaN }).channelColumnWidth, undefined);
-  });
-});
-
-describe("clampChannelColumnWidth：区间是 chat 区（主槽 + 通道列）的 1/6–1/3", () => {
-  it("默认值是 300", () => {
-    deepStrictEqual(CHANNEL_COLUMN_WIDTH_DEFAULT, 300);
-  });
-
-  it("区间两端就是 C/6 与 C/3", () => {
-    deepStrictEqual(clampChannelColumnWidth(200, 1200), 200);
-    deepStrictEqual(clampChannelColumnWidth(400, 1200), 400);
-    deepStrictEqual(200, 1200 / 6);
-    deepStrictEqual(400, 1200 / 3);
-  });
-
-  it("区间内原样收下并取整", () => {
-    deepStrictEqual(clampChannelColumnWidth(300, 1200), 300);
-    deepStrictEqual(clampChannelColumnWidth(300.6, 1200), 301);
-  });
-
-  it("越界两头都夹回来", () => {
-    deepStrictEqual(clampChannelColumnWidth(100, 1200), 200);
-    deepStrictEqual(clampChannelColumnWidth(500, 1200), 400);
-  });
-
-  it("chat 区小到 C/6 落在地板以下时地板接管（上限仍按 C/3）", () => {
-    // C = 900：C/6 = 150 < 180 → 下界 180；上界 C/3 = 300
-    deepStrictEqual(clampChannelColumnWidth(100, 900), 180);
-    deepStrictEqual(clampChannelColumnWidth(250, 900), 250);
-    deepStrictEqual(clampChannelColumnWidth(500, 900), 300);
-  });
-
-  it("地板压过上限的退化情况：返回地板，宁可挤主槽也不把通道列收成一条线", () => {
-    // C = 480：上界 C/3 = 160 < 地板 180
-    deepStrictEqual(clampChannelColumnWidth(300, 480), 180);
-    deepStrictEqual(clampChannelColumnWidth(100, 480), 180);
-  });
-
-  it("量不到 C（元素未挂载）时只保地板，不拿假的 C 去夹", () => {
-    deepStrictEqual(clampChannelColumnWidth(300, 0), 300);
-    deepStrictEqual(clampChannelColumnWidth(100, 0), 180);
-    deepStrictEqual(clampChannelColumnWidth(300, Number.NaN), 300);
-  });
-
-  it("非数的宽度退到地板，再按 C 夹", () => {
-    deepStrictEqual(clampChannelColumnWidth(Number.NaN, 1200), 200);
+describe("parseSettings 对已删除的 channelColumnWidth（通道列随面板删除）", () => {
+  it("存量文件里还带着这个键：解析不炸、产物与没有它时相同（白名单纪律：不认识的键丢掉）", () => {
+    deepStrictEqual(
+      parseSettings({ theme: "graphite", channelColumnWidth: 320 }),
+      parseSettings({ theme: "graphite" }),
+    );
   });
 });
 
@@ -636,6 +582,26 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
       { "paper-themes": true, "session-lifecycle": false, "composer-blackhole": false },
     );
   });
+
+  it("黑洞与俄罗斯方块互斥：盘上手改出两个都开时，以黑洞为准、tetris 当作没开", () => {
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "composer-blackhole": true, "composer-tetris": true } })
+        .experimentalFeatures,
+      { "composer-blackhole": true },
+    );
+  });
+
+  it("互斥只砸「两个都开」：黑洞关着时 tetris 照常能开（也允许反过来单独开黑洞）", () => {
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "composer-blackhole": false, "composer-tetris": true } })
+        .experimentalFeatures,
+      { "composer-blackhole": false, "composer-tetris": true },
+    );
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "composer-tetris": true } }).experimentalFeatures,
+      { "composer-tetris": true },
+    );
+  });
 });
 
 describe("selectableThemes（主题选择卡的可选档位）", () => {
@@ -650,5 +616,22 @@ describe("selectableThemes（主题选择卡的可选档位）", () => {
   it("过滤只动选择卡：已存的 copybook 仍被 parseTheme 认（照常应用，只是不再可选）", () => {
     deepStrictEqual(parseSettings({ theme: "copybook" }).theme, "copybook");
     ok(selectableThemes(false).includes(parseSettings({ theme: "copybook" }).theme) === false);
+  });
+});
+
+describe("parseSettings 的 usagePet（星云钉日期 / 收起）", () => {
+  it("合法值原样保留，缺席不落键", () => {
+    deepStrictEqual(parseSettings({ usagePet: { pinnedDate: "2026-10-09", hidden: true } }).usagePet, {
+      pinnedDate: "2026-10-09",
+      hidden: true,
+    });
+    deepStrictEqual(parseSettings({}).usagePet, undefined);
+  });
+
+  it("日期格式不对丢掉、hidden 只认 true、两样都没有不落键", () => {
+    deepStrictEqual(parseUsagePet({ pinnedDate: "10-09", hidden: "yes" }), undefined);
+    deepStrictEqual(parseUsagePet({ hidden: false }), undefined);
+    deepStrictEqual(parseUsagePet({ pinnedDate: "2026-10-09", hidden: false }), { pinnedDate: "2026-10-09" });
+    deepStrictEqual(parseUsagePet([]), undefined);
   });
 });

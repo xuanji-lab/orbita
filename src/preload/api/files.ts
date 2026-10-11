@@ -12,6 +12,7 @@ import type {
   FileRoot,
   FileRootsRequest,
   FsEntryFact,
+  PdfFile,
 } from "../../shared/files.ts";
 
 export const filesApi = {
@@ -23,6 +24,8 @@ export const filesApi = {
   reveal: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsReveal, req),
   /** 读一个文件给面板预览（同 root/dir 白名单，`dir` 就是文件路径） */
   read: (req: FileListRequest): Promise<FilePreview> => ipcRenderer.invoke(ipcChannels.fsRead, req),
+  /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf；实验功能「PDF 引用」） */
+  readPdf: (req: FileListRequest): Promise<PdfFile> => ipcRenderer.invoke(ipcChannels.fsReadPdf, req),
   /** 用系统默认应用打开 dir（同白名单） */
   open: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpen, req),
   /** 在内置浏览器「你的」tab 打开网页文件（同白名单，且须是网页文件） */

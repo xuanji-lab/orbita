@@ -285,7 +285,6 @@ export const en = {
     terminal: "Terminal",
     sideChat: "Side chat Ctrl+Alt+D",
     subSessions: (count: number) => `Sub-sessions (${count})`,
-    channels: "Sub-session channels",
     browser: "Built-in browser",
     bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
   },
@@ -424,6 +423,12 @@ export const en = {
     noUsage: "A rest day. Enjoy it~",
     /** 悬停一格：只给当天总量（日期与星期在格子下面） */
     day: (tokens: string) => `${tokens} tokens`,
+    /** 点一格的效果（格子的悬停 title） */
+    pinPetHere: "Click to keep the nebula on this day",
+    backToToday: "Click to bring the nebula back to today",
+    showPetHere: "Click to bring the nebula out here",
+    /** 点星云本体 */
+    hidePet: "Tuck the nebula away",
   },
 
   settings: {
@@ -1147,30 +1152,6 @@ export const en = {
     markOther: (peer: string, kind: string) => `${peer} · ${kind}`,
     taskFrom: (peer: string) => `task from ${peer}`,
     replyFrom: (peer: string) => `reply from ${peer}`,
-    viewInChannel: (text: string) => `${text} · view in channel`,
-    viewInChannelTip: "View in channel",
-    whoReplySteer: "reply · steer",
-    whoReplyTurnEnd: "reply · turn end",
-    you: "you",
-    empty: "No messages yet — speak as parent to steer it.",
-    deliveryTip:
-      "steer: injects at the next tool call without stopping it · turn end: waits until its current turn ends",
-    closed: "closed ·",
-    /** stopped 专用那一行（与 closed 同一个 reopen 入口，但话说清楚是谁停的） */
-    closedStopped: "stopped by you ·",
-    reopenToSpeak: "reopen to speak",
-    steer: "steer",
-    turnEnd: "turn end",
-    speakAsParent: "Speak as parent…",
-    status: {
-      running: "running",
-      waiting: "waiting",
-      approval: "needs approval",
-      done: "done",
-      failed: "failed",
-      idle: "idle",
-      stopped: "stopped",
-    },
     subSession: "Sub-session",
     parentSession: "Parent session",
     delegateStatus: {
@@ -1183,11 +1164,23 @@ export const en = {
     },
     delegating: "delegating…",
     delegated: "DELEGATED",
-    taskKicker: "TASK",
-    from: (peer: string) => `from ${peer}`,
-    collapse: "Collapse",
-    showFullTask: "Show full task",
-    taskNotFound: "Task message not found in the channel.",
+    fromParentTask: "Task from the parent session",
+    fromParentReply: "Parent session replied",
+    fromParentYouReply: "You (as the parent) replied",
+    fromParentStop: "Stopped by the parent session",
+    messageNotFound: "Message not found in the channel.",
+    asksYou: (peer: string) => `${peer} asks:`,
+    goAnswer: "Answer ›",
+    childDone: (peer: string) => `${peer} finished`,
+    childFailed: (peer: string) => `${peer} failed`,
+    answerIt: "Answer it…",
+    notSpokenRunning: "running · hasn't spoken yet",
+    notSpoken: "hasn't spoken yet",
+    latestQuestion: (text: string) => `Q: ${text}`,
+    latestProgress: (text: string) => `Progress: ${text}`,
+    latestDone: "Done",
+    latestFailed: "Failed",
+    latestReply: (text: string) => `Replied: ${text}`,
   },
 
   queue: {
@@ -1218,6 +1211,9 @@ export const en = {
     },
     back: "Back to sub-sessions",
     openAsMain: "Open as main",
+    openInPanel: "Open in the Sub-sessions panel",
+    waitingCount: (count: number) => `${count} waiting on you`,
+    inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
     openAsMainTip: "Switch the main pane to this sub-session",
     gone: "This sub-session is gone.",
     of: (title: string) => `Sub-sessions of "${title}"`,
@@ -1452,6 +1448,11 @@ export const en = {
     tooLarge: (size: string, limit: string) => `Too large to preview (${size} — the limit is ${limit})`,
     emptyFile: "Empty file",
     truncated: (shown: string, total: string) => `Showing the first ${shown} of ${total}`,
+    pdfFailed: "Couldn't open this PDF:",
+    pdfPassword: "This PDF is password-protected and can't be previewed.",
+    citeNotFound: (page: number) =>
+      `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
+    citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
   },
 };
 
