@@ -51,6 +51,11 @@ import { planBranchCut } from "./branch-cut.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
+import {
+  RETRY_BASE_DELAY_MS,
+  RETRY_MAX_ATTEMPTS,
+  retryVisibleToUi,
+} from "./retry-policy.ts";
 import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { McpHub } from "./mcp.ts";
@@ -789,12 +794,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     },
   });
   /**
-   * 重试节奏由本应用自持：**固定 5 秒一次、最多 3 次**（pi 的指数退避已用 patch 拍平，
-   * 见 patches/README.md）。不显式覆盖的话会静默继承用户 pi TUI 的全局
+   * 重试节奏由本应用自持：**8 次、1 秒起指数退避**（参数与阈值的真源在
+   * ./retry-policy.ts，来历见那里）。不显式覆盖的话会静默继承用户 pi TUI 的全局
    * `~/.pi/agent/settings.json`——那是另一个应用的配置，不该左右这里等多久。
    * applyOverrides 只改内存、不落盘，不会写回用户的全局设置文件。
    */
-  services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
+  services.settingsManager.applyOverrides({
+    retry: { maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS },
+  });
   /**
    * bash 路径钉一次（A2）。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里
    * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 50~85ms 的同步 `where`）。
@@ -1031,7 +1038,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // 自动重试：对话主链路（auto_retry）与压缩/摘要调用（summarization_retry）共用这份翻译。
     // pi 只经事件暴露、不落盘。等待结束时 pi 会再发一次 agent_start（翻回 phase "turn"），
     // renderer 靠它清重试槽——不依赖下面 status: null 的到达，事件丢了也自愈。
-    if (event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled") {
+    // **前 N 次不进界面**（retryVisibleToUi，阈值与理由见 ./retry-policy.ts）：
+    // 拦在这层而不是 renderer，是因为 retry 事件只为驱动 UI 槽而存在，这里是它的
+    // 唯一生产者，策略与参数（./retry-policy.ts）同处一层。被拦掉的等待期间 phase
+    // 仍是 "turn"（pi 的 agent_settled 要等整轮 prompt+continue 收尾才发），
+    // renderer 底部的 Responding 行照常跳秒——用户看得到「还在跑」，不会误以为卡死。
+    if (
+      (event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled") &&
+      retryVisibleToUi(event.attempt)
+    ) {
       send({
         type: "retry",
         sessionId: command.sessionId,
