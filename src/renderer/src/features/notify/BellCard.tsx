@@ -1,12 +1,7 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../locale.ts";
 import { runStateLabel } from "./completion-notice.ts";
-
-/** 卡片右缘与锚点（铃铛图标）左缘之间的空隙 */
-const GAP = 8;
-/** 卡片离窗口边的最小留白 */
-const EDGE = 8;
 
 /** 清单里的一行：竖条状态 + 会话名 + 工作区名（数据由 App 按 sessionRunState 算好） */
 export interface NoticeRow {
@@ -29,12 +24,12 @@ export interface NoticeRow {
  * 清单以后也是家务活模型扫描「哪些会话有结果没看」的入口，所以未读落盘、
  * 重启后还在。
  *
- * 浮层配方同 CompletionCard（实色 `--color-bg-panel` + 发丝边 + popover 阴影）。
- * 铃铛在窗口最底部，卡片从锚点向左展开、底边对齐锚点，向上长。
+ * 层级与血线同 CompletionCard：弹在主槽的右下角（铃铛在右栏底部，卡片就在它
+ * 最近的那个角），守 ChatView 的血线（styles.css 的 `.pane-pop`），向上长。
  */
 export function BellCard(props: {
-  /** 定位锚点：铃铛图标。null = 还没挂载，先不画 */
-  anchor: HTMLElement | null;
+  /** 弹出宿主（主槽里的 `.pane-pop-host`）。null = 还没挂载，先不画 */
+  host: HTMLElement | null;
   /** 卡片根元素的 ref（外部关闭判定要用：卡片在 portal 里，父级查不到它） */
   cardRef: { current: HTMLDivElement | null };
   entries: readonly NoticeRow[];
@@ -43,28 +38,13 @@ export function BellCard(props: {
   onMarkAllRead: (() => void) | null;
 }) {
   const t = useT();
-  const [pos, setPos] = useState<{ bottom: number; right: number } | null>(null);
-  const anchor = props.anchor;
-
-  useLayoutEffect(() => {
-    if (anchor === null) return;
-    const place = (): void => {
-      const rect = anchor.getBoundingClientRect();
-      setPos({ bottom: window.innerHeight - rect.bottom, right: window.innerWidth - rect.left + GAP });
-    };
-    place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [anchor]);
-
-  if (anchor === null || pos === null) return null;
+  if (props.host === null) return null;
   return createPortal(
     <div
       ref={props.cardRef}
-      className="bell-card"
+      className="pane-pop bell-card"
       role="dialog"
       aria-label={t.bell.title}
-      style={{ bottom: pos.bottom, right: pos.right, maxHeight: `calc(100vh - ${EDGE * 2}px)` }}
     >
       <div className="bell-card-head">
         <span className="bell-card-title">{t.bell.title}</span>
@@ -103,12 +83,12 @@ export function BellCard(props: {
         </div>
       )}
     </div>,
-    document.body,
+    props.host,
   );
 }
 
 /**
- * 铃铛弹层的外部关闭（Esc + 点卡片 / 铃铛之外）：卡片 portal 到 body，判定
+ * 铃铛弹层的外部关闭（Esc + 点卡片 / 铃铛之外）：卡片 portal 在主槽里、铃铛在右栏，判定
  * 「点的是不是自己」只能靠传入的卡片 ref 与锚点 ref。
  */
 export function useBellDismiss(

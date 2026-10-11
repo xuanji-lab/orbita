@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-﻿import { useState, type ComponentProps } from "react";
-=======
-import { useRef, useState, type ComponentProps } from "react";
->>>>>>> 76c89b6 (feat(notify): 行首三节竖条、未读落盘与右下角铃铛清单)
+﻿import { useRef, useState, type ComponentProps } from "react";
 import { Icon, type IconName } from "./Icon";
 import { useT } from "../locale.ts";
 import { CompletionCard } from "../features/notify/CompletionCard";
@@ -65,10 +61,15 @@ export function RightRail(props: {
    */
   subSessions: { count: number } | null;
   /**
-   * 后台会话跑完的提醒卡（2026-10-10）：钉在辅助对话图标左侧——三个去处里有一个
-   * 就是辅助对话，卡片从它旁边出来，人自然知道「辅助对话」指哪里。null = 没有提醒。
+   * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
    */
-  completionNotice: Omit<ComponentProps<typeof CompletionCard>, "anchor"> | null;
+  completionNotice: Omit<ComponentProps<typeof CompletionCard>, "host"> | null;
+  /**
+   * 两张卡的弹出宿主：主槽（`.pane-main`）里的 `.pane-pop-host`，App 挂好传进来。
+   * 卡片的开关与数据跟着入口住在右栏，渲染位置在主槽——层级属于内容面，不骑在
+   * 右栏与内容面之间（用户 2026-10-10 第三轮）。
+   */
+  popHost: HTMLElement | null;
   /**
    * 右下角铃铛（2026-10-10 二轮）：未读清单的第二个入口。常驻；count 是未读数
    * （绿 + 红两档，角标只数它）；entries 是所有竖条亮着的根会话（等你 > 未读 >
@@ -82,9 +83,7 @@ export function RightRail(props: {
   };
 }) {
   const t = useT();
-  // 卡片的定位锚点：用 state 而不是 ref，挂载后触发一次渲染，卡片才拿得到元素
-  const [sideChatAnchor, setSideChatAnchor] = useState<HTMLSpanElement | null>(null);
-  // 铃铛同款锚点 + 弹层开关；开关在本体（右栏不重建），不随内容变
+  // 铃铛锚点（外部关闭判定要排除它）+ 弹层开关；开关在本体（右栏不重建），不随内容变
   const [bellOpen, setBellOpen] = useState(false);
   const [bellAnchor, setBellAnchor] = useState<HTMLSpanElement | null>(null);
   const bellCardRef = useRef<HTMLDivElement | null>(null);
@@ -198,7 +197,7 @@ export function RightRail(props: {
       </span>
       {bellOpen && (
         <BellCard
-          anchor={bellAnchor}
+          host={props.popHost}
           cardRef={bellCardRef}
           entries={props.bell.entries}
           onOpen={(id) => {

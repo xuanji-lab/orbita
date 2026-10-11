@@ -823,9 +823,59 @@ body {
  * 壳是 pane 的子元素——**同一个面板**（2026-09-12 裁决：不要间隔，一条竖线）。
  */
 .pane-main {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+/*
+ * 主槽内的弹出卡（完成提醒卡 / 铃铛清单，features/notify/）：用户 2026-10-10 第三轮——
+ * 它们是**在 ChatView 里弹出的一层卡片**，不是挂在窗口上、骑在右栏与内容面边框之间的
+ * 浮层。宿主铺满 .pane-main（只给定位用，不吃指针），卡片守 ChatView 自己的血线：
+ * - 横向 `--pane-pop-inline` = ChatView 内容区的左右内边距（--space-5），卡片右缘与
+ *   输入卡右缘、正文右缘落在同一根线上；
+ * - 纵向 `--pane-pop-block` = 输入卡离主槽底边的距离（ChatView 底部行的 10px），
+ *   清单卡的底边与输入卡底边齐平；
+ * - 有会话页头时宿主顶边让到页头分隔线之下（页头 30px + 上下 12px 内边距 + 1px 线，
+ *   ChatView.tsx 的 header），提醒卡不骑在分隔线上。
+ * 各占离入口最近的角：提醒卡右上（辅助对话入口在右栏上部），清单右下（铃铛在右栏底）。
+ * 右栏面板开着时卡片停在主槽这一侧，不再压到面板上。
+ */
+.pane-pop-host {
+  --pane-pop-inline: var(--space-5);
+  --pane-pop-block: 10px;
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.pane-main:has(.chat-head) > .pane-pop-host {
+  top: 55px;
+}
+
+.pane-pop {
+  position: absolute;
+  right: var(--pane-pop-inline);
+  max-width: calc(100% - 2 * var(--pane-pop-inline));
+  max-height: calc(100% - 2 * var(--pane-pop-block));
+  box-sizing: border-box;
+  pointer-events: auto;
+  overflow: auto;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popover);
+  /* 入口都在右栏：从右侧滑进 8px，动效只解释「它从哪来」 */
+  animation: pane-pop-in var(--duration-enter) var(--ease-out-quint);
+}
+
+@keyframes pane-pop-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
 }
 
 /* ===== 右侧面板壳（Skills / MCP / 辅助对话三菜单共用，2026-09-13 裁决） =====
@@ -1931,32 +1981,17 @@ body {
 }
 
 /*
- * 后台会话完成提醒卡（features/notify/CompletionCard.tsx）：钉在辅助对话图标左侧，
- * portal 到 body、fixed 定位。浮在任意内容之上，走浮层配方（实色面板 + 发丝边 +
- * popover 阴影，同 .menu-panel 的理由）。入场从图标方向滑出 8px——动效只解释
- * 「它是从哪儿来的」；一次性动画，不进持续动效的暂停名单。
+ * 后台会话完成提醒卡（features/notify/CompletionCard.tsx）：主槽右上角的弹出卡，
+ * 定位、血线与浮层配方在上面的 `.pane-pop`，这里只管内部排版。
  */
 .completion-card {
-  position: fixed;
-  z-index: 40;
-  width: 264px;
+  /* 顶上没有输入卡可对齐：与右侧同取 --pane-pop-inline，右上角两边留白相等 */
+  top: var(--pane-pop-inline);
+  width: 280px;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3);
-  overflow: auto;
-  background: var(--color-bg-panel);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-popover);
-  animation: completion-card-in var(--duration-enter) var(--ease-out-quint);
-}
-
-@keyframes completion-card-in {
-  from {
-    opacity: 0;
-    transform: translateX(8px);
-  }
 }
 
 .completion-card-kicker {
@@ -2003,31 +2038,16 @@ body {
 }
 
 /*
- * 右下角铃铛弹出的未读清单（features/notify/BellCard.tsx）：浮层配方同
- * .completion-card（实色面板 + 发丝边 + popover 阴影），但从底部锚点向左展开、
- * 向上长。清单行最左是同款三节竖条（.status-bar 的行内档）。
+ * 铃铛弹出的未读清单（features/notify/BellCard.tsx）：主槽右下角的弹出卡，
+ * 定位、血线与浮层配方在 `.pane-pop`。清单行最左是同款三节竖条（.status-bar 的行内档）。
  */
 .bell-card {
-  position: fixed;
-  z-index: 40;
+  bottom: var(--pane-pop-block);
   width: 280px;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   padding: var(--space-3);
-  overflow: auto;
-  background: var(--color-bg-panel);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-popover);
-  animation: bell-card-in var(--duration-enter) var(--ease-out-quint);
-}
-
-@keyframes bell-card-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
 }
 
 .bell-card-head {

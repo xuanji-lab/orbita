@@ -1,28 +1,25 @@
-import { useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 
-/** 卡片右缘与锚点（辅助对话图标）左缘之间的空隙 */
-const GAP = 8;
-/** 卡片离窗口底边的最小留白：图标靠下时整张卡上移，不出窗 */
-const EDGE = 8;
-
 /**
- * 后台会话跑完的提醒卡（用户 2026-10-10）：钉在右图标条「辅助对话」图标的左侧，
+ * 后台会话跑完的提醒卡（用户 2026-10-10）：在主槽（ChatView 那张卡）的右上角弹出，
  * 问用户这条结果怎么看——
  *
  * - 马上看：主槽换成这条会话（取代当前 ChatView）；
  * - 辅助对话：在右侧辅助对话里打开它，当前对话不动；
  * - 稍后：收起卡片，侧栏那一行保持未读底色。
  *
- * 浮在任意内容之上，所以走浮层配方（实色 `--color-bg-panel` + 发丝边 + popover 阴影，
- * 同 Menu）。**不抢焦点**：卡片弹出时用户多半正在别的会话里打字，自动聚焦会把
+ * **层级**（用户 2026-10-10 第三轮）：它属于内容面（`.pane`）里的一层，不是挂在窗口上、
+ * 骑在右栏与内容面之间的浮层——portal 进主槽的弹出宿主（`.pane-pop-host`），守
+ * ChatView 的血线（styles.css 的 `.pane-pop`）；右栏面板开着时自然停在主槽这一侧。
+ * 实色 `--color-bg-panel` + 发丝边 + popover 阴影：压在正文上，背后的字不能透出来。
+ * **不抢焦点**：卡片弹出时用户多半正在别的会话里打字，自动聚焦会把
  * 正在输入的字吞掉；键盘用户 Tab 能走到它。
  */
 export function CompletionCard(props: {
-  /** 定位锚点：辅助对话图标。null = 还没挂载，先不画 */
-  anchor: HTMLElement | null;
+  /** 弹出宿主（主槽里的 `.pane-pop-host`）。null = 还没挂载，先不画 */
+  host: HTMLElement | null;
   title: string;
   /** 这一轮以失败收尾（重试耗尽等）：kicker 换成出错的说法，图标换警示 */
   failed: boolean;
@@ -31,27 +28,12 @@ export function CompletionCard(props: {
   onLater: () => void;
 }) {
   const t = useT();
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-  const anchor = props.anchor;
-
-  useLayoutEffect(() => {
-    if (anchor === null) return;
-    const place = (): void => {
-      const rect = anchor.getBoundingClientRect();
-      setPos({ top: rect.top, right: window.innerWidth - rect.left + GAP });
-    };
-    place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [anchor]);
-
-  if (anchor === null || pos === null) return null;
+  if (props.host === null) return null;
   return createPortal(
     <div
-      className="completion-card"
+      className="pane-pop completion-card"
       role="status"
       aria-live="polite"
-      style={{ top: pos.top, right: pos.right, maxHeight: `calc(100vh - ${pos.top + EDGE}px)` }}
     >
       <div className="completion-card-kicker">
         <span
@@ -77,6 +59,6 @@ export function CompletionCard(props: {
         </button>
       </div>
     </div>,
-    document.body,
+    props.host,
   );
 }

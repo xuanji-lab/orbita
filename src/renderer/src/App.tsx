@@ -235,6 +235,8 @@ export function App() {
    * 宽只给内联列的拖宽夹取用。
    */
   const paneRef = useRef<HTMLElement | null>(null);
+  /** 主槽里的弹出宿主（完成提醒卡 / 铃铛清单 portal 进去）；state 而非 ref：挂上后要触发一次渲染 */
+  const [popHost, setPopHost] = useState<HTMLDivElement | null>(null);
   const { paneWidth, rightPanelWidth: rightPanelRendered } = usePaneAndRightPanelWidth(paneRef);
   const channelWide = channelPanelWide({
     narrow,
@@ -868,6 +870,9 @@ export function App() {
 
         <main className="pane" ref={paneRef}>
           <div className="pane-main">
+            {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
+                与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
+            <div className="pane-pop-host" ref={setPopHost} />
             {overlay === "settings" ? (
               <SettingsView
                 tab={settingsTab}
@@ -1027,6 +1032,7 @@ export function App() {
           }
           subSessions={channelParentId !== null && hasSubSessions ? { count: subSessionChildren.length } : null}
           completionNotice={completionNotice}
+          popHost={popHost}
           bell={{
             count: unreadSessions.length,
             entries: noticeRows,

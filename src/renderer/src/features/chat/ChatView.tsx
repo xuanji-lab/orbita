@@ -1606,7 +1606,8 @@ function Pane(props: {
     >
       {/* 页头兼窗口拖拽区：整行可拖可双击缩放，里面的铅笔与输入框由 `.titlebar button/input` 自动豁免 */}
       <header
-        className="titlebar"
+        // chat-head：主槽弹出卡的宿主据它让到页头之下（styles.css 的 .pane-pop-host）
+        className="titlebar chat-head"
         style={{
           display: "flex",
           alignItems: "center",
