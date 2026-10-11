@@ -126,23 +126,26 @@ const NEBULA_BLOBS: readonly (readonly [number, number, number])[] = [
   [0.5, 0.35, 0.5],
 ];
 
-/** prefers-reduced-motion：SMIL 不吃 CSS 的 collapsed animation，得在渲染层掐掉 */
-function prefersReducedMotion(): boolean {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
 /**
  * 星云能量体：几团径向渐变叠成软云（呼吸 1 ↔ 1.06），小方块碎片沿椭圆轨道绕行，
  * 两只眼睛。0 档（没用量）闭眼睡着、没有碎片。
- * `orbit=false`（窗口失焦 / 减少动效）时碎片停在轨道上的静态分位，云的呼吸
- * 由全局 reduced-motion / 失焦暂停规则接管（anim-continuous 标记类）。
+ *
+ * **动画全走合成层**（2026-10-12 实测）：首版用 SVG 的 `<animateMotion>` 让碎片绕轨、
+ * CSS 让 SVG 里的 `<g>` 呼吸——SVG 内的动画 Chromium 不放上合成器，每帧都要在主线程
+ * 重新算样式、排版、重绘这块带径向渐变的 SVG：空闲时主线程常驻 ~70ms/秒（120Hz 屏每秒
+ * 120 次排版），用户感到整个应用变卡。改成：云与眼睛是一张**静态** SVG，呼吸做在包着它的
+ * HTML 层上；每颗碎片是一个 HTML 小方块，外层压扁成椭圆（scaleY 0.55）、内层做 transform
+ * 旋转——两者都只动 transform，合成器自己跑，主线程降到 ~7ms/秒。转速不影响开销（每帧都
+ * 在算），所以没有靠「转慢点」省。
+ *
+ * `orbit=false`（窗口失焦）时碎片暂停在当前位置；减少动效与失焦暂停由 CSS 接管
+ * （usage.css 的 prefers-reduced-motion、styles.css 的 anim-continuous）。
  */
 function NebulaPet(props: { tier: UsageTier; orbit: boolean; fast: boolean }) {
   // useId 带「:」等字符，不能直接当 SVG id 用（url(#…) 引用会失效），洗成字母数字
   const gradientId = `neb${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const radius = NEBULA_RADIUS[props.tier];
   const chunks = NEBULA_CHUNKS[props.tier];
-  const orbiting = props.orbit && !prefersReducedMotion();
   const eyes =
     props.tier === 0 ? (
       // 睡着：两条下弧线
@@ -154,47 +157,34 @@ function NebulaPet(props: { tier: UsageTier; orbit: boolean; fast: boolean }) {
       </>
     );
   return (
-    <svg viewBox="-40 -24 80 48" width={80} height={48} className="usage-orb" aria-hidden="true">
-      <defs>
-        <radialGradient id={gradientId}>
-          <stop offset={0} className="neb-in" />
-          <stop offset={1} className="neb-out" />
-        </radialGradient>
-      </defs>
-      <g className="usage-cloud anim-continuous">
+    <div className="usage-orb anim-continuous" data-orbit={props.orbit || undefined} aria-hidden="true">
+      <svg viewBox="-40 -24 80 48" width={80} height={48} className="usage-cloud">
+        <defs>
+          <radialGradient id={gradientId}>
+            <stop offset={0} className="neb-in" />
+            <stop offset={1} className="neb-out" />
+          </radialGradient>
+        </defs>
         {NEBULA_BLOBS.map(([x, y, scale], index) => (
           <circle key={index} cx={x * radius} cy={y * radius * 0.7} r={radius * scale} fill={`url(#${gradientId})`} />
         ))}
-      </g>
+        {eyes}
+      </svg>
       {Array.from({ length: chunks }, (_, j) => {
         const orbitRadius = radius * (0.55 + (j % 3) * 0.15);
-        const path = `M ${-orbitRadius} 0 A ${orbitRadius} ${orbitRadius * 0.55} 0 1 0 ${orbitRadius} 0 A ${orbitRadius} ${orbitRadius * 0.55} 0 1 0 ${-orbitRadius} 0`;
-        const angle = (j / Math.max(chunks, 1)) * 2 * Math.PI;
+        const seconds = (7 + j) / (props.fast ? 3 : 1);
         return (
-          <rect
-            key={j}
-            x={-1.6}
-            y={-1.6}
-            width={3.2}
-            height={3.2}
-            rx={0.8}
-            className={`usage-chunk-${j % 3}`}
-            // 静帧（失焦 / 减少动效）：碎片均匀分布在轨道分位上
-            transform={orbiting ? undefined : `translate(${orbitRadius * Math.cos(angle)}, ${orbitRadius * 0.55 * Math.sin(angle)})`}
-          >
-            {orbiting && (
-              <animateMotion
-                dur={`${(7 + j) / (props.fast ? 3 : 1)}s`}
-                repeatCount="indefinite"
-                begin={`-${j * 1.3}s`}
-                rotate="auto"
-                path={path}
-              />
-            )}
-          </rect>
+          // 外层压扁成椭圆轨道；内层转圈。负 delay = 起始相位按 j / chunks 均匀散开一圈
+          <span key={j} className="usage-orbit">
+            <span
+              className="usage-spin anim-continuous"
+              style={{ animationDuration: `${seconds}s`, animationDelay: `-${((j / chunks) * seconds).toFixed(2)}s` }}
+            >
+              <span className={`usage-chunk usage-chunk-${j % 3}`} style={{ left: orbitRadius }} />
+            </span>
+          </span>
         );
       })}
-      {eyes}
-    </svg>
+    </div>
   );
 }

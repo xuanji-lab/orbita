@@ -23,16 +23,21 @@
   pointer-events: none;
 }
 
+/* 能量体：80×48 的盒子，云心在 (40, 24)。呼吸做在这一层（HTML 元素的 transform 动画
+   走合成器；SVG 内部的动画不走，见 UsageMeter.tsx 的 NebulaPet 注释） */
 .usage-orb {
-  display: block;
-  overflow: visible;
+  position: relative;
+  width: 80px;
+  height: 48px;
+  transform-origin: 40px 24px;
+  animation: usage-breathe 4s ease-in-out infinite;
+  will-change: transform;
 }
 
-/* 云的呼吸：4s 在 1 ↔ 1.06 之间。anim-continuous 是窗口失焦暂停的标记类
-   （styles.css 的 `[data-window-inactive]` 规则，orbita-spin 同款） */
+/* 云与眼睛：静态 SVG，不在里面放任何动画 */
 .usage-cloud {
-  animation: usage-breathe 4s ease-in-out infinite;
-  transform-origin: 0 0;
+  display: block;
+  overflow: visible;
 }
 
 /* 档位切换时云的大小平滑收放：r / cx / cy 在 Chromium 是 CSS 几何属性，可过渡 */
@@ -53,6 +58,55 @@
   }
 }
 
+/* 碎片轨道：原点钉在云心，压扁成椭圆（与首版 SVG 轨道同比例 0.55） */
+.usage-orbit {
+  position: absolute;
+  left: 40px;
+  top: 24px;
+  width: 0;
+  height: 0;
+  transform: scaleY(0.55);
+}
+
+/* 绕原点转一圈；时长与起点由行内 style 给（各颗不同） */
+.usage-spin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  animation: usage-spin linear infinite;
+  will-change: transform;
+}
+
+@keyframes usage-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 窗口失焦：碎片停在当前位置（呼吸由 anim-continuous 的全局规则暂停） */
+.usage-orb:not([data-orbit]) .usage-spin {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-orb,
+  .usage-spin {
+    animation-play-state: paused;
+  }
+}
+
+/* 一颗碎片：3.2px 小方块，left 是轨道半径（行内） */
+.usage-chunk {
+  position: absolute;
+  top: 0;
+  width: 3.2px;
+  height: 3.2px;
+  margin: -1.6px 0 0 -1.6px;
+  border-radius: 0.8px;
+}
+
 /* 云体渐变与碎片：三色都在 --color-nebula 一族里派生 */
 .neb-in {
   stop-color: var(--color-nebula);
@@ -63,13 +117,13 @@
   stop-opacity: 0;
 }
 .usage-chunk-0 {
-  fill: var(--color-nebula);
+  background: var(--color-nebula);
 }
 .usage-chunk-1 {
-  fill: color-mix(in srgb, var(--color-nebula) 55%, var(--color-text-primary));
+  background: color-mix(in srgb, var(--color-nebula) 55%, var(--color-text-primary));
 }
 .usage-chunk-2 {
-  fill: var(--color-text-secondary);
+  background: var(--color-text-secondary);
 }
 
 /* 眼睛：正墨。睡着（0 档）是两条弧线 */
