@@ -23,21 +23,32 @@ import { pathTail, looksLikeWindowsPath } from "../../../../shared/path.ts";
  */
 export const TREE_BREAKPOINT = 640;
 
-/** 一个打开的文件标签。path 是绝对路径，全面板唯一，就用它当标签的身份。 */
+/**
+ * 一个打开的文件标签。path 是绝对路径（附图标签则是原图引用，而者命名空间不同、
+ * 不会撞），全面板唯一，就用它当标签的身份——同一张图重复点开自然复用同一个标签。
+ */
 export interface FileTab {
-  /** 文件所在分组的根路径（api.files.read 的白名单参数） */
+  /** 文件所在分组的根路径（api.files.read 的白名单参数）；附图标签不走 fs:read，传空串 */
   root: string;
-  /** 文件绝对路径 */
+  /** 文件绝对路径，或附图的原图引用 */
   path: string;
+  /** 显示名缺省取 path 末段；附图标签传合成名（image-1.png——末段是 uuid，谁也认不出） */
+  name?: string;
 }
 
 /**
  * 单击文件行：打开（或激活）一个标签。同一文件复用已有标签——不重复、不换位
- * （原型：标签按打开顺序排队）；返回新数组，不改传入值。
+ * （原型：标签按打开顺序排队）；返回新数组，不改传入值。name 只在新标签落队时
+ * 记下（复用标签不改名，与「不换位」同一条纪律）。
  */
-export function openTab(tabs: readonly FileTab[], root: string, path: string): FileTab[] {
+export function openTab(
+  tabs: readonly FileTab[],
+  root: string,
+  path: string,
+  name?: string,
+): FileTab[] {
   if (tabs.some((tab) => tab.path === path)) return [...tabs];
-  return [...tabs, { root, path }];
+  return [...tabs, name === undefined ? { root, path } : { root, path, name }];
 }
 
 export interface CloseTabResult {

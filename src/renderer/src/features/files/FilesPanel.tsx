@@ -22,7 +22,12 @@ import {
   orderEntriesByType,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
-import { collectSentAttachments } from "./sent-attachments.ts";
+import {
+  attachmentName,
+  collectSentAttachments,
+  type SentAttachment,
+  type SentFileRef,
+} from "./sent-attachments.ts";
 import { FilePreviewPane } from "./FilePreviewPane";
 import {
   closeTab,
@@ -98,26 +103,28 @@ export function FilesPanel(props: {
   } | null>(null);
   const tree = useFileTree(sessionId, workspaceId, session.workspaces);
 
-  // Session · 附件：已发送过的文件引用从已加载转录派生（sent-attachments.ts，不动盘、
-  // 不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问。
+  // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
+  // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，
+  // 只问文件引用——附图按原图引用走 session.attachment 读，没有 stat 这回事。
   // 转录每变一次（新发送）重问一次；面板头的刷新也顺带重问
   const sentAttachments = useMemo(() => collectSentAttachments(session.transcript), [session.transcript]);
   const [attachFacts, setAttachFacts] = useState<ReadonlyMap<string, FsEntryFact>>(new Map());
   // 重问一次盘上事实的把手（面板头刷新时一并触发）：effect 的依赖加一个自增的轮次
   const [attachStatRound, setAttachStatRound] = useState(0);
   useEffect(() => {
-    if (sentAttachments.length === 0) {
+    const refs = sentAttachments.filter((item): item is SentFileRef => item.kind === "ref");
+    if (refs.length === 0) {
       setAttachFacts(new Map());
       return;
     }
     let alive = true;
     void api.files
-      .statKind(sentAttachments.map((item) => item.path))
+      .statKind(refs.map((item) => item.path))
       .then((facts) => {
         if (!alive) return;
         setAttachFacts(
           new Map(
-            sentAttachments.map((item, index) => [
+            refs.map((item, index) => [
               item.path,
               facts[index] ?? { kind: null, size: null },
             ]),
@@ -199,6 +206,14 @@ export function FilesPanel(props: {
   const openFile = (root: FileRoot, path: string): void => {
     setTabs((prev) => openTab(prev, root.path, path));
     setActivePath(path);
+    if (narrowRef.current) setTreeOn(false);
+  };
+
+  /** 单击附图行 = 打开 / 激活附图标签：身份用原图引用（同一张图复用同一个标签），
+   * 显示名用合成名；root 传空串——附图预览走 session.attachment，不过 fs:read 白名单 */
+  const openSentImage = (ref: string, name: string): void => {
+    setTabs((prev) => openTab(prev, "", ref, name));
+    setActivePath(ref);
     if (narrowRef.current) setTreeOn(false);
   };
 
@@ -377,6 +392,7 @@ export function FilesPanel(props: {
                 facts={attachFacts}
                 roots={tree.roots}
                 onSelectPreview={openFile}
+                onOpenImage={openSentImage}
                 onReveal={tree.reveal}
                 onReference={(ref) => session.attachFileRef(ref)}
               />
@@ -410,7 +426,7 @@ export function FilesPanel(props: {
               <span className="files-head-sep" aria-hidden="true" />
               <div className="files-head-tabs" role="tablist" aria-label={t.files.tabsAria}>
                 {tabs.map((tab) => {
-                  const name = fileTabName(tab.path);
+                  const name = tab.name ?? fileTabName(tab.path);
                   const active = tab.path === activePath;
                   return (
                     <div
@@ -565,6 +581,7 @@ export function FilesPanel(props: {
               workspaceId={workspaceId}
               root={activeTab.root}
               path={activeTab.path}
+              {...(activeTab.name !== undefined ? { sentImage: { name: activeTab.name } } : {})}
             />
           )}
         </div>
@@ -903,25 +920,23 @@ function TreeRow(props: {
   );
 }
 
-/** 附件列表吃同一条过滤词（按末段名字，与树同大小写口径） */
-function filterAttachments(
-  attachments: readonly { path: string; kind: "file" | "dir" }[],
-  query: string,
-): { path: string; kind: "file" | "dir" }[] {
+/** 附件列表吃同一条过滤词（按显示名：文件引用的末段 / 附图的合成名，与树同大小写口径） */
+function filterAttachments(attachments: readonly SentAttachment[], query: string): SentAttachment[] {
   const q = query.trim().toLowerCase();
   if (q === "") return [...attachments];
-  return attachments.filter((item) => pathTail(item.path).toLowerCase().includes(q));
+  return attachments.filter((item) => attachmentName(item).toLowerCase().includes(q));
 }
 
 /**
- * Session 分组下的「附件」小节：标题行 + 已发送引用清单（或空态一句）。
- * 存在性由 facts 提供（fs:stat-kind 现问）；还没回来时按未知显示（不标不在）。
+ * Session 分组下的「附件」小节：标题行 + 已发送清单（文件引用与附图，或空态一句）。
+ * 文件引用的存在性由 facts 提供（fs:stat-kind 现问）；还没回来时按未知显示（不标不在）。
  */
 function AttachmentSection(props: {
-  attachments: readonly { path: string; kind: "file" | "dir" }[];
+  attachments: readonly SentAttachment[];
   facts: ReadonlyMap<string, FsEntryFact>;
   roots: readonly FileRoot[];
   onSelectPreview: (root: FileRoot, path: string) => void;
+  onOpenImage: (ref: string, name: string) => void;
   onReveal: (root: string, dir: string) => void;
   onReference: (ref: { path: string; name: string; kind: "file" | "dir" }) => void;
 }) {
@@ -948,20 +963,68 @@ function AttachmentSection(props: {
       {props.attachments.length === 0 ? (
         <DimRow>{t.files.attachmentsEmpty}</DimRow>
       ) : (
-        props.attachments.map((item) => (
-          <AttachmentRow
-            key={item.path}
-            path={item.path}
-            declaredKind={item.kind}
-            fact={props.facts.get(item.path)}
-            roots={props.roots}
-            onSelectPreview={props.onSelectPreview}
-            onReveal={props.onReveal}
-            onReference={props.onReference}
-          />
-        ))
+        props.attachments.map((item) =>
+          item.kind === "image" ? (
+            <ImageAttachmentRow key={item.ref} attachment={item} onOpen={props.onOpenImage} />
+          ) : (
+            <AttachmentRow
+              key={item.path}
+              path={item.path}
+              declaredKind={item.fileKind}
+              fact={props.facts.get(item.path)}
+              roots={props.roots}
+              onSelectPreview={props.onSelectPreview}
+              onReveal={props.onReveal}
+              onReference={props.onReference}
+            />
+          ),
+        )
       )}
     </section>
+  );
+}
+
+/**
+ * 一张已发送附图：图标吃 fileIcon（png → image 形状），名字是合成名，title 挂
+ * 原图引用。点击走 session.attachment 的附图预览（标签身份 = 引用）。
+ * **没有**行尾的 Reveal / 「添加文件引用」：原图只有相对引用、拿不到绝对路径，
+ * 做出来就是假按钮（2026-10-11 裁决不给）；等有路径的通道再补。
+ */
+function ImageAttachmentRow(props: {
+  attachment: Extract<SentAttachment, { kind: "image" }>;
+  onOpen: (ref: string, name: string) => void;
+}) {
+  const name = props.attachment.name;
+  return (
+    <button
+      type="button"
+      className="file-row"
+      title={props.attachment.ref}
+      onClick={() => props.onOpen(props.attachment.ref, name)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        width: "100%",
+        height: 30,
+        paddingLeft: `calc(var(--space-3) + 1 * 16px)`,
+        paddingRight: "var(--space-3)",
+        border: 0,
+        font: "inherit",
+        fontSize: "var(--font-size-control)",
+        textAlign: "left",
+        cursor: "pointer",
+        color: "var(--color-text-primary)",
+      }}
+    >
+      <span style={{ width: 12, flex: "0 0 auto" }} />
+      <Icon
+        name={fileIcon(name, "file")}
+        size={14}
+        style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
+      />
+      <DirMarkName name={name} dir={false} wrapStyle={{ flex: "1 1 auto" }} />
+    </button>
   );
 }
 
