@@ -1,4 +1,4 @@
-﻿import "./settings-view.css";
+import "./settings-view.css";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";

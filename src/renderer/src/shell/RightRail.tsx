@@ -1,4 +1,4 @@
-﻿import { useRef, useState, type ComponentProps } from "react";
+import { useRef, useState, type ComponentProps } from "react";
 import { Icon, type IconName } from "./Icon";
 import { useT } from "../locale.ts";
 import { CompletionCard } from "../features/notify/CompletionCard";
