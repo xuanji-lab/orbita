@@ -83,6 +83,8 @@ import {
   type ToolResultIndex,
   type TurnGroupUnit,
 } from "./tool-results";
+import { useToday } from "./today.ts";
+import { formatMessageTime, fullTimestamp } from "./message-time.ts";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
 import {
@@ -2470,6 +2472,8 @@ function TurnRollupLine(props: {
   const t = useT();
   const [open, setOpen] = useState(false);
   const { group } = props;
+  // 「今天只写时分」的档位随日历日走：跨午夜翻档（today.ts 的 useToday）
+  const today = useToday();
   const stats = turnStats(group, props.toolResults, Date.now(), props.skills);
   // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
   // 工具次数与它的失败数字是一个段，中间不插
@@ -2501,6 +2505,18 @@ function TurnRollupLine(props: {
   }
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      {/* 轮头时间（用户裁决 2026-10-12）：这轮开始流式回复的时刻，放在「用时」
+          那行上面——时长与起点摆在一起看。左缘对齐 CollapseRow 的文本起点（按钮
+          padding 10px）。缺时间戳（诚实未知）不渲染 */}
+      {group.startedAt !== null && (
+        <div
+          className="turn-start-time"
+          style={{ ...TIME_LABEL, paddingLeft: RAIL_X }}
+          title={fullTimestamp(group.startedAt, t.chat.timeWeekdays)}
+        >
+          {formatMessageTime(group.startedAt, today)}
+        </div>
+      )}
       <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
         {props.turnFailed && (
           <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
@@ -2557,6 +2573,7 @@ function UserBubble(props: {
   revertDisabledWhy?: string;
 }) {
   const t = useT();
+  const today = useToday();
   const [copied, setCopied] = useState(false);
   // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
   // 渐变遮罩 + Show more/less 开合。overflowing 只在折叠态量——展开后
@@ -2847,6 +2864,16 @@ function UserBubble(props: {
             <Icon name="rotate-ccw" size={12} strokeWidth={1.8} />
           </button>
         )}
+        {/* 发送时间（用户裁决 2026-10-12）：钉在这排动作的最右（行尾血线——时间戳
+            是 trailing 元素），与按钮同一排、不占气泡上方（引用多时会被顶高）。
+            常显不随按钮变化：这排动作本就常驻，时间不会跳动 */}
+        <span
+          className="user-msg-time"
+          style={{ ...TIME_LABEL, flex: "0 0 auto" }}
+          title={fullTimestamp(props.item.timestamp, t.chat.timeWeekdays)}
+        >
+          {formatMessageTime(props.item.timestamp, today)}
+        </span>
       </div>
     </div>
   );
@@ -3122,6 +3149,17 @@ function CollapseRow(props: {
     </div>
   );
 }
+
+/**
+ * 消息时间标签的共用字音（与 SLOT.status 同一套灰色小字 token）：轮头时间
+ * （TurnRollupLine）与用户气泡旁的时间（UserBubble）共用，保持两处观感一致。
+ */
+const TIME_LABEL = {
+  color: "var(--color-text-tertiary)",
+  fontFamily: "var(--font-family-business)",
+  fontSize: "var(--font-size-micro)",
+  fontVariantNumeric: "tabular-nums",
+} satisfies React.CSSProperties;
 
 const SLOT = {
   /** 副标不占满整行（flex 0 1 auto）：状态词紧跟其后，行不被拉长 */

@@ -59,6 +59,7 @@ import {
   type ScanRoot,
   type WebScanResult,
 } from "./web-artifacts.ts";
+import { injectUserContext } from "./user-context.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import {
   RETRY_BASE_DELAY_MS,
@@ -813,6 +814,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     roots: webScanRoots(command.cwd, command.directories),
     startedAt: Date.now(),
   };
+  /**
+   * 用户情境的时区（IANA 名）：在本进程解析一次、本轮内全部消息同一口径（详见
+   * user-context.ts）。agent 是独立 utility 进程，Intl 的默认时区就是系统时区，
+   * 不需要过 IPC 向主进程 / renderer 要——四层契约不为此多一层。时区跨轮变了
+   * （用户旅行）下一轮自然换标，代价是那一轮历史前缀重算一次、缓存失效一回。
+   */
+  const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -943,6 +951,24 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               } catch (cause) {
                 // fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送
                 console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
+                return undefined;
+              }
+            });
+          },
+        },
+        {
+          // 用户情境（user-context.ts）：发往模型的每条用户消息前面附一段发送时间 / 时区，
+          // wire-only（pi 本子与 orbita 转录不落）。与 image-budget 同一个 `context` 事件，
+          // 两者改的东西不相交（它动图片块、我们前插文本块），注册先后无所谓
+          name: "orbita-user-context",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            pi.on("context", (event) => {
+              try {
+                return injectUserContext(event.messages, userTimeZone);
+              } catch (cause) {
+                // fail-open：情境是锦上添花，自己的故障不该砸掉对话，本轮按原样发送
+                console.error("[user-context] 注入失败，本轮请求按原样发送", cause);
                 return undefined;
               }
             });

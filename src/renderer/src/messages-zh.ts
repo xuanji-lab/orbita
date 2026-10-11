@@ -943,6 +943,8 @@ export const zh: Messages = {
     openInOrbita: "在 orbita 打开",
     revealArtifact: "打开文件位置",
     worked: "用时",
+    // 消息时间悬停全称里的星期（getDay() 序，周日打头）——短标签不带星期，全称给足
+    timeWeekdays: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
     thought: "思考",
     lines: (n) => `${n} 行`,
     files: (n) => `${n} 个文件`,
