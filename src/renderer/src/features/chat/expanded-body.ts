@@ -21,14 +21,15 @@ import type { CSSProperties } from "react";
 export const RAIL_X = 10;
 
 /**
- * 框色用 border-strong（2026-10-12 返工：default 太淡）：虚线本身比同宽度实线
- * 淡一截（一半长度是空的），深色下 default（rgba(255,255,255,.10)）的 1px 虚线
- * 要凑近才看得出来；用户要的是「一眼看出这是个框」。strong（深色 .16 /
- * 浅色 #d7d7cf）在五个主题都有定义且强一档才立得住。
+ * 框色走 `--expanded-frame-border`（styles.css 按主题定义，2026-10-12 第二次返工）：
+ * 虚线本身比同宽实线淡一截（一半长度是空的），用户要的是「一眼看出这是个框」。
+ * - 深色（黛 / 玄）：border-strong（.16 白）够了；
+ * - 浅色三档（浅色 / 小学作业 / 打字稿）：border-strong（#d7d7cf）在白底上几乎看不见，
+ *   改用 text-tertiary 混 60% 透明——比边框档深、比正文浅，仍是「辅助线」的分量。
  * 圆角取 --radius-md：设计系统「矩形停在 radius-md，pill 只给真圆」。
  */
 export const EXPANDED_FRAME: CSSProperties = {
   marginLeft: RAIL_X,
-  border: "1px dashed var(--color-border-strong)",
+  border: "1px dashed var(--expanded-frame-border)",
   borderRadius: "var(--radius-md)",
 };

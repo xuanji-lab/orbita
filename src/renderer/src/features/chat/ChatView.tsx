@@ -3997,8 +3997,10 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
   useEffect(() => {
     void highlighterReady.then(() => setWarm(true));
   }, []);
-  const lines = props.lang !== null ? highlightLines(props.text, props.lang) : null;
-  const rows: readonly (string | readonly TokenSpan[])[] = lines ?? props.text.split("\n");
+  // 文件以换行结尾时 split 出一个空的末行，框底多一行空白带行号（同 PlainToolBody 剥尾部空行）
+  const text = stripTrailingBlankLines(props.text);
+  const lines = props.lang !== null ? highlightLines(text, props.lang) : null;
+  const rows: readonly (string | readonly TokenSpan[])[] = lines ?? text.split("\n");
   const lastLine = props.startLine + rows.length - 1;
   // 轨道 = 位数 + 行号格的横向内边距（不算 padding 的话三位数起就顶穿竖线挤进正文）
   const digits = Math.max(3, String(lastLine).length);
