@@ -57,6 +57,26 @@ const CHECKS = [
     maxInnerGap: 7,
     skipNoTrailing: true,
   },
+  {
+    name: "Skills·行：归属点阵钉在右血线",
+    row: ".skill-row",
+    leading: ".skill-row-main",
+    trailing: ".set-dots",
+    // .skill-row 的右内边距 14px（对齐过滤行与组头的左缘竖线）；dim / missing
+    // 行没有点阵，跳过。悬停时点阵让位给「选用」键是血线规则的悬停组合例外，
+    // 这里量静止态
+    rightPad: 14,
+    skipNoTrailing: true,
+  },
+  {
+    name: "MCP·卡头行：展开键钉在卡右血线",
+    row: ".mcp-card > span:first-of-type",
+    leading: ".orbita-icon",
+    trailing: ".mcp-expand",
+    // .mcp-card 的 --space-3；没有实例的卡不出展开键，跳过
+    rightPad: 12,
+    skipNoTrailing: true,
+  },
 ];
 
 const { evaluate, close } = await connectCdp({ cdpPort, devPort, watchdogMs: 60_000 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { ImageLightbox } from "./ImageLightbox";
@@ -42,8 +42,8 @@ export function MaterialStack(props: {
 }) {
   const images = props.materials.filter((item): item is Extract<ComposerMaterial, { kind: "image" }> => item.kind === "image");
   const chips = props.materials.filter(
-    (item): item is Extract<ComposerMaterial, { kind: "file" | "dir" | "pasted" }> =>
-      item.kind === "file" || item.kind === "dir" || item.kind === "pasted",
+    (item): item is Extract<ComposerMaterial, { kind: "file" | "dir" }> =>
+      item.kind === "file" || item.kind === "dir",
   );
   const quotes = props.materials.filter((item): item is Extract<ComposerMaterial, { kind: "quote" }> => item.kind === "quote");
   return (
@@ -90,8 +90,9 @@ function ImageLayer(props: { images: readonly Extract<ComposerMaterial, { kind: 
   );
 }
 
-/** 模型看不了图的一句话提示：跟在截图行下面，图标 + 文字（颜色是第二信号） */
-function NoVisionHint() {
+/** 模型看不了图的一句话提示：跟在截图行下面，图标 + 文字（颜色是第二信号）。
+ *  黑洞排布（BlackholeBox）也用它——它是材料的状态，跟排布无关 */
+export function NoVisionHint() {
   const t = useT();
   return (
     <div
@@ -111,66 +112,26 @@ function NoVisionHint() {
 }
 
 /**
- * 文件 / 目录 / 粘贴文本共用的一种胶囊：**顶到就换行铺满**（2026-10 用户裁决
+ * 文件 / 目录共用的一种胶囊：**顶到就换行铺满**（2026-10 用户裁决
  * 「我喜欢全部看到，自然的 stack，顶到了就换行」），不再横滚、不再右侧渐隐。
- * 粘贴文本点开看全文——不撑高输入区：全文放浮层（点开的那颗胶囊上方），
- * 浮层是 floating layer（实底面板 + 发丝 + popover 阴影），滚动限高。
+ * 粘贴文本已改道句中胶囊（方案 C，paste-blocks.ts），材料区只剩截图、文件 /
+ * 目录、引用三路。
  */
-function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "file" | "dir" | "pasted" }>[] }) {
-  const t = useT();
-  const [openId, setOpenId] = useState<string | null>(null);
-  const layerRef = useRef<HTMLDivElement>(null);
-  // 点浮层与胶囊以外的地方收起全文；Esc 同义。指针与键盘两条路都收
-  useEffect(() => {
-    if (openId === null) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (layerRef.current !== null && !layerRef.current.contains(event.target as Node)) setOpenId(null);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpenId(null);
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [openId]);
-  const open = props.chips.find(
-    (chip): chip is Extract<ComposerMaterial, { kind: "pasted" }> => chip.id === openId && chip.kind === "pasted",
-  );
+function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "file" | "dir" }>[] }) {
   return (
-    <div className="material-chip-row" ref={layerRef}>
+    <div className="material-chip-row">
       <div className="material-chip-scroll">
-        {props.chips.map((chip) =>
-          chip.kind === "pasted" ? (
-            <PastedChip
-              key={chip.id}
-              chip={chip}
-              open={openId === chip.id}
-              onToggle={() => setOpenId((current) => (current === chip.id ? null : chip.id))}
-            />
-          ) : (
-            <FileChip key={chip.id} chip={chip} />
-          ),
-        )}
+        {props.chips.map((chip) => (
+          <FileChip
+            key={chip.id}
+            name={chip.name}
+            path={chip.ref.path}
+            kind={chip.kind}
+            uncopied={chip.ref.uncopied === true}
+            onRemove={chip.remove}
+          />
+        ))}
       </div>
-      {open !== undefined && (
-        <div className="material-popover" role="region" aria-label={t.composer.pastedTitle(open.block.lines)}>
-          <div className="material-popover-head">
-            <span>{t.composer.pastedTitle(open.block.lines)}</span>
-            <button
-              type="button"
-              aria-label={t.composer.pastedCollapse}
-              onClick={() => setOpenId(null)}
-              className="material-popover-close"
-            >
-              <Icon name="x" size={12} strokeWidth={2} />
-            </button>
-          </div>
-          <div className="material-popover-body">{open.block.text}</div>
-        </div>
-      )}
     </div>
   );
 }
@@ -188,13 +149,24 @@ function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "f
  * 原生 title：原生要一秒多才出，且在胶囊行上时隐时现不可靠（同 IconButton 弃用
  * title 的理由）。路径是机器事实，mono 字体；长路径换行不截断——看全正是它的存在
  * 理由。键盘路径不给：胶囊本身不是焦点停点，与原生 title 时代一致。
+ *
+ * 黑洞排布也用这颗胶囊（输入框里带移除键、已发送消息的快照里只读——不给 onRemove），
+ * 所以吃的是名字 / 路径 / 种类，不是整条材料。
  */
-function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir" }> }) {
+export function FileChip(props: {
+  name: string;
+  path: string;
+  kind: "file" | "dir";
+  /** 超限未复制（发送时按原位置引用） */
+  uncopied?: boolean;
+  /** 只读（已发送消息）时不给 */
+  onRemove?: () => void;
+}) {
   const t = useT();
-  const isDir = props.chip.kind === "dir";
+  const isDir = props.kind === "dir";
   const tooltip = useHoverTooltip<HTMLSpanElement>(PATH_TOOLTIP_DELAY_MS, true);
   // 文档 / 演示 / 表格三族上色（fileIconTone，与文件面板同一份），其余中性
-  const tone = isDir ? null : fileIconTone(props.chip.name, "file");
+  const tone = isDir ? null : fileIconTone(props.name, "file");
   const iconColor =
     isDir
       ? "var(--color-text-secondary)"
@@ -210,7 +182,7 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
         onMouseLeave={tooltip.handlers.onMouseLeave}
       >
         <Icon
-          name={isDir ? "folder" : fileIcon(props.chip.name, "file")}
+          name={isDir ? "folder" : fileIcon(props.name, "file")}
           size={13}
           strokeWidth={1.8}
           fill={isDir}
@@ -220,17 +192,19 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
           }}
         />
         {/* 名字 + 目录尾 `/`：共用组件（胶囊 / 面板行 / 气泡三处同一段结构） */}
-        <DirMarkName name={props.chip.name} dir={isDir} wrapStyle={{ flex: "0 1 auto" }} nameClassName="material-chip-name" />
+        <DirMarkName name={props.name} dir={isDir} wrapStyle={{ flex: "0 1 auto" }} nameClassName="material-chip-name" />
         {/* 超限未复制（发送时按原位置引用）：icon + 文字，warning 色只做第二信号 */}
-        {props.chip.ref.uncopied === true && (
+        {props.uncopied === true && (
           <span className="material-chip-uncopied">
             <Icon name="triangle-alert" size={10} strokeWidth={2} />
             {t.composer.notCopied}
           </span>
         )}
-        <button type="button" className="material-chip-x" aria-label={t.composer.removeFile} title={t.composer.removeFile} onClick={props.chip.remove}>
-          <Icon name="x" size={11} strokeWidth={2} />
-        </button>
+        {props.onRemove !== undefined && (
+          <button type="button" className="material-chip-x" aria-label={t.composer.removeFile} title={t.composer.removeFile} onClick={props.onRemove}>
+            <Icon name="x" size={11} strokeWidth={2} />
+          </button>
+        )}
       </span>
       {tooltip.open &&
         createPortal(
@@ -241,8 +215,8 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
             data-placed={tooltip.placement !== null}
             style={{ top: tooltip.placement?.top ?? 0, left: tooltip.placement?.left ?? 0 }}
           >
-            <div>{props.chip.ref.path}</div>
-            {props.chip.ref.uncopied === true && (
+            <div>{props.path}</div>
+            {props.uncopied === true && (
               <div className="material-path-note">
                 <Icon name="triangle-alert" size={10} strokeWidth={2} />
                 {t.composer.notCopiedTip}
@@ -255,44 +229,6 @@ function FileChip(props: { chip: Extract<ComposerMaterial, { kind: "file" | "dir
   );
 }
 
-/** 粘贴文本的胶囊：点胶囊本体开 / 关全文浮层；行数是元信息，跟在名字后 */
-function PastedChip(props: {
-  chip: Extract<ComposerMaterial, { kind: "pasted" }>;
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const t = useT();
-  return (
-    <span className="material-chip">
-      <button
-        type="button"
-        className="material-chip-toggle"
-        aria-expanded={props.open}
-        title={props.open ? t.composer.pastedCollapse : t.composer.pastedExpand}
-        onClick={props.onToggle}
-      >
-        <Icon
-          name={props.open ? "chevron-down" : "chevron-right"}
-          size={12}
-          style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-        />
-        <Icon name="file-text" size={13} strokeWidth={1.8} style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }} />
-        <span className="material-chip-name">{props.chip.name}</span>
-        <span className="material-chip-meta">{props.chip.meta}</span>
-      </button>
-      <button
-        type="button"
-        className="material-chip-x"
-        aria-label={t.composer.removePasted}
-        title={t.composer.removePasted}
-        onClick={props.chip.remove}
-      >
-        <Icon name="x" size={11} strokeWidth={2} />
-      </button>
-    </span>
-  );
-}
-
 /**
  * 引用卡：**半行两列**（2026-10 用户裁决「我还是想要半行两列」）——每条引用只占
  * 半行，两列并排堆叠更多引用；卡窄（子会话抽屉、窄窗）时 container query 回落
@@ -300,7 +236,7 @@ function PastedChip(props: {
  * 限高内部滚动。「还有 N 条 / 收起」跨两列占整行。行内仍是 D/E 的规矩：正文不预截
  * 交给 CSS 省略、注脚贴右缘、动作键绝对定位不占位。
  */
-function QuoteCard(props: {
+export function QuoteCard(props: {
   quotes: readonly Extract<ComposerMaterial, { kind: "quote" }>[];
   jumpToQuote: (quote: TextQuote) => (() => void) | undefined;
 }) {

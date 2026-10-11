@@ -15,6 +15,7 @@ import type {
 import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
+import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -442,6 +443,17 @@ export class AgentHostCore {
             card: outcome.card,
             ...(outcome.image === undefined ? {} : { image: outcome.image }),
           }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 终端：terminalRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerTerminal(requestId: string, outcome: TerminalToolOutcome): void {
+    this.child?.postMessage({
+      type: "terminalResult",
+      requestId,
+      ...(outcome.ok
+        ? { ok: true as const, text: outcome.text, ...(outcome.terminal === undefined ? {} : { terminal: outcome.terminal }) }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }

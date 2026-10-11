@@ -82,6 +82,12 @@ import {
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import {
+  insertToken,
+  panelInsertPosition,
+  type PanelInsertRequest,
+  type TokenPickResult,
+} from "../../shell/panel-token.ts";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
@@ -111,11 +117,13 @@ import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
+import { BlackholeContext } from "../../shell/BlackholeBox.tsx";
+import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { isMcpServerOffered, parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
+import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
@@ -405,30 +413,35 @@ function QuoteSelectionLayer(props: {
 }
 
 /**
- * 会话区的 skill / MCP 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug，
- * 指令面板的 skill 清单与 MCP 栏也用同一份。挂载读一次、失败静默——徽标是锦上
- * 添花，不为它报错，也不为它做重读 UI（新建的 skill 下一轮会话自然出现）。
+ * 会话区的 skill 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug。
+ * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
+ * （新建的 skill 下一轮会话自然出现）。
  */
 function useSkillIndex(): {
   skills: SkillMeta[];
-  reload: () => void;
-  servers: McpServerInfo[];
-  reloadServers: () => void;
 } {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
-  const [servers, setServers] = useState<McpServerInfo[]>([]);
   const reload = useCallback(() => {
     void api.skill.list().then(setSkills).catch(() => undefined);
-  }, []);
-  const reloadServers = useCallback(() => {
-    // main 的 mcp:list 回 { servers, warnings }（工作区配置分层后）；warnings 由 MCP 管理面显示，面板不管
-    void api.mcp.list().then((result) => setServers(result.servers)).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
   }, [reload]);
-  return { skills, servers, reload, reloadServers };
+  return { skills };
 }
+
+/*
+ * 右栏选取回执与行内选用插入的消费水位（模块级）：只有主槽的 ChatView 拿
+ * tokenPickResult / panelInsert，不会串合；但主槽会在设置页来回切时重挂——
+ * 实例 ref 会归零，旧回执被重放、token 插两遍。水位放模块级，重挂也记得
+ * 消费过哪一条。
+ */
+let consumedPickNonce = 0;
+let consumedPanelInsertNonce = 0;
+
+/** 主槽输入框（选取回执与行内选用的插入目标）：面板 / 抽屉里的 Composer 不算 */
+const mainComposerTextarea = (): HTMLTextAreaElement | null =>
+  document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
 
 function ChatViewBody(props: {
   /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
@@ -512,21 +525,99 @@ function ChatViewBody(props: {
    * End 变成同时滚两个面——面板的回底走浮钮，不抢全局键。
    */
   scrollToEndHotkey?: boolean;
+  /**
+   * 「/ + 空格」打开右栏选取（panel-token.ts）：行首或空白后孤立的 / 按下空格时
+   * （句中同样触发，2026-10-11 用户裁定）交出插入锚点。**只有主槽的 ChatView
+   * 拿到它**（App 在那边接住去开面板）；抽屉 / 面板内的 Composer 不参与，
+   * 那边的 / 空格就是普通文字。
+   */
+  onSlashSpace?: (position: number) => boolean;
+  /**
+   * 右栏选取的一次性回执（nonce 单调递增，同 channelOpenRequest 的先例）：token
+   * 非空 = 插到 position（execCommand 保撤销栈）；null = 取消，只把焦点送回输入框。
+   * 只有主槽的 ChatView 拿到它。
+   */
+  tokenPickResult?: TokenPickResult | null;
+  /**
+   * 右栏行内「选用」按钮的一次性插入请求（nonce 单调递增，同 tokenPickResult 的
+   * 先例）：token 插到输入框**当前光标处**（从未聚焦过则落到草稿末尾），焦点回
+   * 输入框。面板不关——浏览态可以连插几条。只有主槽的 ChatView 拿到它。
+   */
+  panelInsert?: PanelInsertRequest | null;
 }) {
   const t = useT();
   // 会话生命周期三件套的入口（头部完成标记、收尾扫描的全部面）挂实验开关；
   // 关闭时收尾相关数据源一并在渲染前置空（首页卡退回提问行位、消息流不出扫描卡）
   const experimental = useExperimental();
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
-  // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
-  const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
-  const offeredWorkspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
-  const offeredServers = useMemo(
-    () => servers.filter((server) => isMcpServerOffered(server, offeredWorkspace)),
-    [servers, offeredWorkspace],
-  );
+  // read SKILL.md 徽标的识别索引（徽标与工具行共用同一份数据）
+  const { skills } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
+
+  // ── 右栏选取的回执：插入 token、焦点回输入框（panel-token.ts）────────
+  useEffect(() => {
+    const result = props.tokenPickResult;
+    if (result == null || result.nonce <= consumedPickNonce) return;
+    consumedPickNonce = result.nonce;
+    if (result.token === null) {
+      // 取消（Esc）：把触发时删掉的「/ 」还回原处。句中也会触发之后，「a / b」这类
+      // 正文打出 / 加空格就开了面板——Esc 必须让它回到用户打的原样，不能吞字
+      const anchor = result.position;
+      requestAnimationFrame(() => {
+        const el = mainComposerTextarea();
+        const position = Math.max(0, Math.min(anchor, session.draft.length));
+        const restored = session.draft.slice(0, position) + "/ " + session.draft.slice(position);
+        if (el === null) {
+          session.setDraft(restored);
+          return;
+        }
+        el.focus();
+        el.setSelectionRange(position, position);
+        if (!document.execCommand("insertText", false, "/ ")) session.setDraft(restored);
+      });
+      return;
+    }
+    const token = result.token;
+    const anchor = result.position;
+    requestAnimationFrame(() => {
+      const el = mainComposerTextarea();
+      const position = Math.max(0, Math.min(anchor, session.draft.length));
+      const next = insertToken(session.draft, position, token);
+      // execCommand("insertText") 保撤销栈：input 事件会把最终值送回 onChange →
+      // draft 自动同步；输入框不在（设置页盖着）或被拒（只读）就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tokenPickResult]);
+
+  // ── 行内「选用」按钮的插入：token 落到输入框当前光标处（panel-token.ts）──
+  // 光标从 DOM 读（失焦后 selectionStart 仍停在最后一次的位置）；「从未聚焦过」
+  // 的判定在 panelInsertPosition（纯函数，有测试）
+  useEffect(() => {
+    const request = props.panelInsert;
+    if (request == null || request.nonce <= consumedPanelInsertNonce) return;
+    consumedPanelInsertNonce = request.nonce;
+    requestAnimationFrame(() => {
+      const el = mainComposerTextarea();
+      const position = panelInsertPosition(el === null ? 0 : el.selectionStart, session.draft.length);
+      const next = insertToken(session.draft, position, request.token);
+      // 同选取回执：execCommand 保撤销栈，被拒 / 不在就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.panelInsert]);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -782,24 +873,6 @@ function ChatViewBody(props: {
         session.send();
       }}
       onStop={session.stop}
-      skills={skills}
-      workspaceId={session.workspaceId}
-      onReloadSkills={reloadSkills}
-      // 只给当前工作区能用的 server（isMcpServerOffered：与发送端判 /mcp: 可用同一依据）
-      servers={offeredServers}
-      onReloadServers={reloadServers}
-      onCommand={(command) => {
-        if (command === "compact") {
-          // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
-          session.sendText("/compact");
-        } else {
-          // /new：清掉打了一半的草稿与挂着的附件再开新会话（先清再切——
-          // newTask 换槽后 draftKey 变了，附件就清不到了）
-          session.clearComposerExtras();
-          session.setDraft("");
-          session.newTask();
-        }
-      }}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
       // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
@@ -831,9 +904,11 @@ function ChatViewBody(props: {
       files={session.files}
       pasted={session.pasted}
       onRemoveFile={session.removeFile}
-      onRemovePasted={session.removePasted}
-      onPasteLargeText={session.addPastedText}
+      onAddPasteBlock={session.addPasteBlock}
+      onExpandPaste={session.expandPaste}
+      onCollapsePaste={session.collapsePaste}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
+      onSlashSpace={props.onSlashSpace}
     />
   );
 
@@ -1501,6 +1576,8 @@ function Pane(props: {
   const [editing, setEditing] = useState(false);
   return (
     <div
+      // 输入框黑洞的舷窗挂在滚动段顶边（data-porthole-anchor）：BlackholeBox 从输入框往上找这一对
+      data-chat-pane=""
       style={{
         height: "100%",
         minHeight: 0,
@@ -1668,7 +1745,7 @@ function Pane(props: {
       </header>
 
       {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走 */}
-      <div style={{ position: "relative", minHeight: 0, display: "grid" }}>
+      <div data-porthole-anchor="" style={{ position: "relative", minHeight: 0, display: "grid" }}>
         <div
           ref={props.scrollRef}
           onScroll={props.onScroll}
@@ -2531,10 +2608,21 @@ function UserBubble(props: {
   );
   // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
   const hasText = text.trim() !== "";
+  const blackhole = useContext(BlackholeContext);
+  const sentBox = blackhole && images.length + fileRefs.length > 0;
   useLayoutEffect(() => {
     if (expanded) return;
     const el = clampRef.current;
-    if (el !== null) setOverflowing(isBubbleOverflowing(el.scrollHeight, el.clientHeight));
+    if (el === null) return;
+    const measure = () => setOverflowing(isBubbleOverflowing(el.scrollHeight, el.clientHeight));
+    measure();
+    // 宽度变了要重量：右栏打开 / 拖窗口让聊天列变窄，原本 4 行内的消息会折到第 5 行——
+    // 折叠样式一直挂着（不论溢出与否），不重量的话正文被静默裁掉、却没有展开键与遮罩；
+    // 反过来列变宽，原本溢出的消息放得下了，展开键与遮罩还残留着。只在折叠态观察：
+    // 展开后两个高度相等，量了会把结论丢掉（收起时 expanded 变化会再量一次）
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [text, expanded]);
   return (
     <div
@@ -2546,7 +2634,15 @@ function UserBubble(props: {
         gap: 2,
       }}
     >
-      {images.length > 0 && <UserImages images={images} />}
+      {/* 输入框黑洞开着：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
+      {sentBox ? (
+        <SentBlackholeBox
+          images={images}
+          files={fileRefs.map((ref) => ({ name: fileRefName(ref.path), path: ref.path, kind: ref.kind }))}
+        />
+      ) : (
+        images.length > 0 && <UserImages images={images} />
+      )}
       {quotes.length > 0 && (
         <div
           style={{
@@ -2568,7 +2664,7 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {fileRefs.length > 0 && (
+      {!sentBox && fileRefs.length > 0 && (
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
@@ -2585,7 +2681,7 @@ function UserBubble(props: {
           {fileRefs.map((ref, index) => (
             <FileRefChip
               key={`file:${index}`}
-              name={ref.path.split(/[\\/]/).filter((part) => part !== "").pop() ?? ref.path}
+              name={fileRefName(ref.path)}
               path={ref.path}
               kind={ref.kind}
             />
@@ -2834,6 +2930,11 @@ function SkillInvocationCard(props: { name: string; content: string }) {
  * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
  * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
  */
+/** 文件引用的显示名：路径最后一段（目录的尾斜杠不算一段） */
+function fileRefName(path: string): string {
+  return path.split(/[\\/]/).filter((part) => part !== "").pop() ?? path;
+}
+
 function UserImages(props: { images: readonly PromptImage[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);

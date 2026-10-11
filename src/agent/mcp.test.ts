@@ -625,6 +625,38 @@ describe("parseMcpConfig", () => {
     assert.deepEqual(parsed["remote"], { transport: "http", url: "https://example.com/mcp" });
   });
 
+  // Claude Desktop 系的 type 写法 / 只给 url（2026-10-11）：读侧认得，不再静默丢
+  test("type:「http」/ type:「streamable-http」认作 http，规范成自家格式", () => {
+    const parsed = parseMcpConfig({
+      mcpServers: {
+        a: { type: "http", url: "https://a.example/mcp" },
+        b: { type: "streamable-http", url: "https://b.example/mcp" },
+      },
+    });
+    assert.deepEqual(parsed["a"], { transport: "http", url: "https://a.example/mcp" });
+    assert.deepEqual(parsed["b"], { transport: "http", url: "https://b.example/mcp" });
+  });
+
+  test("只给 url（无传输声明无 command）当 http；已废弃的 sse 不认", () => {
+    const parsed = parseMcpConfig({
+      mcpServers: {
+        bare: { url: "https://bare.example/mcp" },
+        sse: { type: "sse", url: "https://sse.example/mcp" },
+        noUrl: { type: "http" },
+      },
+    });
+    assert.deepEqual(parsed["bare"], { transport: "http", url: "https://bare.example/mcp" });
+    assert.equal(parsed["sse"], undefined);
+    assert.equal(parsed["noUrl"], undefined);
+  });
+
+  test("command 与 url 同给（无传输声明）：按 stdio 的 command 认", () => {
+    const parsed = parseMcpConfig({
+      mcpServers: { both: { command: "node", url: "https://x.example/mcp" } },
+    });
+    assert.deepEqual(parsed["both"], { transport: "stdio", command: "node" });
+  });
+
   test("workspaces 白名单原样带出来，非字符串项丢掉", () => {
     const parsed = parseMcpConfig({
       mcpServers: {

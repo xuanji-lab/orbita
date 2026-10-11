@@ -57,9 +57,10 @@ import { createImageTools } from "./image-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
-import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
+import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import {
   COMPACTION_DEFAULT,
 } from "../shared/settings.ts";
@@ -744,6 +745,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   "create_skill",
                   "add_mcp_server",
                   "read_task",
+                  // 终端工具组（PR2）：不列的话模型不知道 manual 档下每次开终端 / 写命令
+                  // 都会停下来等它批准，plan 档下更是直接被拒
+                  ...TERMINAL_TOOL_NAMES,
                   // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
                   ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
                 ]),
@@ -752,7 +756,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 describeDirectories(command.cwd, command.directories),
                 // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
                 describeChannelRole(role),
-                STORE_TOOLS_GUIDELINES,
+                // 会话的工作区归属随轮讲（旧静态文案不说归属，模型只能瞎猜 scope）：
+                // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
+                storeToolsGuideline(
+                  command.workspaceId === null ? null : { name: command.workspaceName },
+                ),
                 TOOL_GUIDELINES,
                 EXPECTED_SECONDS_GUIDELINE,
                 // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
@@ -868,6 +876,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
+    // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
+    // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
+    // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是
+    // 「没有用户在场的来源不配拿可见终端」（它会悄悄扩大权限）
+    ...createTerminalTools(requestBroker, command.sessionId, {
+      cwd: command.cwd,
+      // 授权目录与开轮目录清单同源：prompt 里说「你可以去这些目录」，这里就认这些
+      authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
+    }),
     ...createChannelTools(requestBroker, command.sessionId, role),
   ];
   const { session } = await createAgentSessionFromServices({
@@ -920,7 +937,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
         if (echoed.has(text)) {
           echoed.delete(text);
         } else if (text !== "") {
-          for (const progress of adapter.userPrompt(text)) {
+          for (const progress of adapter.userPrompt(splitEchoBlocks(text))) {
             send({ type: "progress", sessionId: command.sessionId, progress });
           }
         }
@@ -1176,6 +1193,12 @@ async function listBuiltins(): Promise<void> {
  * - 文件引用与粘贴块组装进正文之后；回显块保留块界（粘贴块 / 文件清单各自独立
  *   text 块），显示层按块解析回 chip。
  */
+/** 正文按空行拆块回显（空段丢弃；整条为空保一个空块——纯图消息的形状不变） */
+function splitEchoBlocks(text: string): string[] {
+  const parts = text.split("\n\n").filter((part) => part !== "");
+  return parts.length > 0 ? parts : [""];
+}
+
 async function echoAndPrompt(
   opened: OpenedTurn,
   note: LedgerNote,
@@ -1186,7 +1209,10 @@ async function echoAndPrompt(
   const files = command.files ?? [];
   const promptText = composePromptText(command.text, pasted, files);
   note.echoed.add(promptText);
-  for (const progress of opened.adapter.userPrompt(command.text, images, attachmentBlocks(pasted, files))) {
+  // 正文按空行拆成块再回显：句中粘贴胶囊（方案 C）组装后就是 <pasted-text> 块内联
+  // 在正文里，拆开才能被显示层按内容认出来（splitUserTextBlocks）。纯正文拆了
+  // 再拼回去逐字不变（空行既是拆分符也是拼回符），旧消息行为不动
+  for (const progress of opened.adapter.userPrompt(splitEchoBlocks(command.text), images, attachmentBlocks(pasted, files))) {
     // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
     if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
     send({ type: "progress", sessionId: command.sessionId, progress });
@@ -1388,6 +1414,12 @@ async function handle(command: AgentCommand): Promise<void> {
           }
         : { ok: false, error: command.error ?? "Browser request failed" },
     );
+    return;
+  }
+  if (command.type === "terminalResult") {
+    // 终端工具的回执：形状即契约（ok 双分支），原样结掉在途 promise。
+    // 主进程那边任何路径都回执（agent-requests.ts），这里不做二次加工
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "delegateResult") {

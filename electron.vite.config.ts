@@ -68,6 +68,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, "src/main/index.ts"),
           "agent-runtime": resolve(__dirname, "src/agent/runtime.ts"),
+          "terminal-runtime": resolve(__dirname, "src/terminal/runtime.ts"),
         },
         /**
          * @napi-rs/canvas（read_pdf 页图渲染）保持 external：它的入口是一串平台包
@@ -77,8 +78,12 @@ export default defineConfig({
          * `"families" in GlobalFonts`）。external 后 require 原样保留，从项目
          * node_modules 解析——与 photon 的 wasm 资产拷贝是两种病：wasm 是文件
          * 丢了可以拷，.node 是原生模块必须留在原地 require。正则覆盖平台子包。
+         *
+         * node-pty（terminal runtime 的 PTY）同理：.node 预构建 + ConPTY 的
+         * conpty.dll / OpenConsole.exe 靠 __dirname 定位，打进 bundle 必断。
+         * N-API 预构建跨 Electron ABI，不需要 electron-rebuild。
          */
-        external: [/^@napi-rs\/canvas/],
+        external: [/^@napi-rs\/canvas/, /^node-pty$/],
         output: { entryFileNames: "[name].js" },
       },
     },

@@ -224,15 +224,161 @@
   font-size: var(--font-size-input);
 }
 
-/* 输入框外层：textarea 与小学作业主题的镜像层叠在同一格里，镜像在下、textarea 在上
-   （修正液，Composer.tsx）。只有 textarea 时就是一层普通包裹 */
+/* 输入框外层：textarea 与镜像层叠在同一格里，镜像在下、textarea 在上（修正液与句中 chip，
+   Composer.tsx）。只有 textarea 时就是一层普通包裹。relative 给展开段的收起标签
+   （.composer-paste-label）当定位参照系——它浮在 textarea 之上、要能收点击 */
 .composer-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  position: relative;
+  /* 展开段的收起标签要浮在段头一行之上：先给 20px 头部空间（只在有展开段时），
+     标签落在带里不压字；镜像层随之对齐内容盒（top 吃同一变量） */
+  --paste-headroom: 0px;
+  padding-top: var(--paste-headroom);
+  /* 句中胶囊淡色底的预混基（不透明）：胶囊铺在输入卡上，底色要混入「卡叠完的
+     实际颜色」才能不透明。明 / 纸面输入卡叠完近纯白（= --color-bg-panel，
+     实测 #ffffff / 打字稿 #fdfcf8 差 ≤7/255）；两暗档玻璃实底（= --glass-bg，
+     实测精确相等）。见 .composer-chip 注释 */
+  --chip-ground: var(--color-bg-panel);
+}
+
+:root:is([data-theme="graphite"], [data-theme="black"]) .composer-field {
+  --chip-ground: var(--glass-bg);
+}
+
+.composer-field.has-paste-run {
+  --paste-headroom: 20px;
 }
 
 .composer-field > * {
   grid-area: 1 / 1;
+}
+
+/* textarea 必须也是定位元素：镜像层改成 absolute 之后，未定位的 textarea 会被画在
+   它下面——chip 与展开段的底色盖住 textarea 的字（胶囊成了空白药丸、展开段只剩色条）。
+   两个都定位、textarea 在 DOM 里靠后，它就叠在镜像之上；收起标签 z-index: 1 仍在最上 */
+.composer-field > textarea {
+  position: relative;
+}
+
+/* 收起标签不进格子：`.composer-field > *` 给了所有子项 grid-area 1/1，绝对定位的
+   grid 子项以自己的格为包含块——格从头部空间带之下开始，标签的 top 又加了一次
+   textarea.offsetTop，结果落回段头那一行、压住字。脱出格子，包含块回到 field 的
+   padding box，标签就浮在头部空间带里 */
+.composer-field > .composer-paste-label {
+  grid-area: auto;
+}
+
+/* 镜像层（全主题常驻，垫在 textarea 下）：字透明，只画句中 chip 与（copybook 的）修正液；
+   换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步）。
+   曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06）。
+   absolute + inset:0：脱开 grid 的行高贡献——textarea 12 行封顶后，镜像若仍在流内，
+   几十行的草稿会把格子撑到 textarea 之外（方案 C 粘贴展开实测：field 长到 928px），
+   脱流后格子高度只由 textarea 决定，镜像随格子裁剪（overflow hidden + 滚动同步） */
+.composer-mirror {
+  color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  position: absolute;
+  /* 绝对定位的 grid 子项，containing block 是自己的 grid 区（= field 的内容盒，
+     头部空间垫之下）——inset:0 正好与 textarea 同格对齐；别再偏移 */
+  inset: 0;
+}
+
+/*
+ * 句中 chip：镜像层里 token（/skill:…）的视觉包装。两条硬约束（选型报告 §3-D，
+ * 原型实测）：
+ *
+ * 1. **不能有横向 padding**——会把 chip 自己的字推右、与 textarea 的字错位
+ *    （原型实测 native=18/mirror=23，差值正好是 padding）；
+ * 2. **字体继承输入框**（.composer-input 同时挂在镜像上），换字体就错位。
+ *
+ * 配方照 Proma 的 mention chip（2026-10-11 用户裁决：不要描边胶囊，只换底色）：
+ * **无描边、不透明淡色底、4px 圆角**（--radius-xs）。pill 的横向留白用
+ * **带水平偏移的 box-shadow** 铺出来：三份同色阴影（0 / -2px / +2px，各
+ * 扩散 1px）的并集 = 横向每侧多 3px、纵向仅 1px 的加宽 pill——横向 padding
+ * 禁令不破，纵向多铺会压到 22px 行高的相邻行。token 前后各有一个空格
+ * （14px Manrope 约 3.9px），3px 留白吃掉空格的大半但碰不到相邻字的字形。
+ *
+ * 底色必须**不透明**（2026-10-11 像素实测教训）：半透明 tint 会被三份阴影
+ * 叠画发深，重叠处颜色不均。所以统一走 --chip-fill（不透明预混色，
+ * --chip-ground 的取法见 .composer-field），底色与阴影同一变量。
+ *
+ * 跨行换行时 clone：断开的每一截各自是一个完整的 pill，与底下文字同步换行。
+ * copybook 主题的变体（中性淡墨、skill / MCP 同色系淡底混白）在 paper-themes.css。
+ *
+ * 中性胶囊（粘贴 token）是正墨 10% 混卡底，不是 bg-muted：去描边后 muted 与
+ * 卡面几乎同色（明档 / 稿纸实测看不见），淡墨底的可见度才与 skill / MCP 的
+ * 15% 类别色淡底相当（ΔL* 对齐：明 7.7 vs 8.0、暗 8.8–9.4 vs 8.9–9.6、
+ * 稿纸 7.7 vs 7.8，全部差在 ±0.8 内）。
+ */
+.composer-chip {
+  --chip-fill: color-mix(in srgb, var(--color-text-primary) 10%, var(--chip-ground));
+  border-radius: var(--radius-xs);
+  padding: 1px 0;
+  background: var(--chip-fill);
+  box-shadow:
+    0 0 0 1px var(--chip-fill);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/*
+ * chip 按类别上色（2026-10 用户裁决：「直接用颜色给我区分吧，skills 一个颜色，
+ * mcp 一个颜色」）：skill = 表格绿（--color-filetype-sheet）、MCP = 文档蓝
+ * （--color-filetype-doc）——与文件类型图标同一组类别色。只换底不描边，
+ * 字保持正墨（textarea 无法按区间染色，彩色字要做只能全部文字透明 +
+ * 镜像层代画，本 PR 不做）；粘贴 token 的 chip 不带 data-kind，落回中性配方。
+ */
+.composer-chip[data-kind="skill"] {
+  --chip-fill: color-mix(in srgb, var(--color-filetype-sheet) 15%, var(--chip-ground));
+}
+.composer-chip[data-kind="mcp"] {
+  --chip-fill: color-mix(in srgb, var(--color-filetype-doc) 15%, var(--chip-ground));
+}
+
+/*
+ * 粘贴展开段（方案 C，paste-blocks.ts）：一段粘贴进来的文字展开回正文，只铺浅底色
+ * 标出「这段是粘贴进来的」——文字与正文同字体、可直接编辑，区间随编辑伸缩。
+ * 没有描边没有圆角：它是一段话，不是一颗胶囊；chip 的描边语言留给收起态。
+ * 底色与 chip 同源（--color-bg-muted），跨行 clone 让每一截都铺满。
+ */
+.composer-paste-run {
+  background: var(--color-bg-muted);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/*
+ * 展开段的收起标签：浮在段头一行之上的小胶囊（图标 + 「N 行 · 收起」），点它把段
+ * 收回句中胶囊。实底 + 发丝 + popover 阴影的浮层配方（它叠在 textarea 上，半透明会
+ * 透出底下的字）；hover 与 focus-visible 走全局规则，这里只补底色微升——收起是
+ * 高频小动作，hover 回馈要能看见但不抢。行尾不出输入框：Composer 量宽时夹过 left。
+ */
+.composer-paste-label {
+  position: absolute;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.composer-paste-label:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
 }
 
 .composer-bottom-bar {
@@ -683,6 +829,25 @@ body {
 .reveal {
   opacity: 0;
   transition: opacity var(--duration-instant) var(--ease-standard);
+}
+
+/*
+ * 行尾悬停动作键的公共形态（shell/RowHoverAction.tsx 的默认 class）：显隐仍由
+ * 调用方的配对机制管（文件面板 .file-hover-act 的 display、skill 行 / MCP 卡
+ * .reveal 的 opacity），这里只定配色与居中——文件 / skill 两处带自己的配色
+ * class，这条只服务 MCP 卡动作组里的静态排布（与 PanelIconButton 同一副
+ * hover 语言：透明底 → hover 抬底色 + 正墨）。
+ */
+.row-hover-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+.row-hover-act:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 /*
@@ -1398,6 +1563,61 @@ body {
   margin-bottom: 0;
 }
 
+/*
+ * 气泡里的句中 chip：用户原文里的 /skill: / /mcp: token（chip-runs.ts 的 rehype 变换塞进
+ * span.bubble-chip，MarkdownBlock 的 ChipSpan 换成图标 + 名字）。与输入框镜像层的
+ * .composer-chip 是同一语言的另一形态：气泡没有对齐约束，可以有横向 padding 与
+ * 图标；配方照 Proma 的 mention chip（2026-10-11 用户裁决）：**无描边、4px 圆角、
+ * 不透明淡色底**，padding 1px 4px 1px 2px。图标与文字缩到 caption 号——chip 是
+ * 句子里的一个对象，不与正文争字号。
+ * 纵向不採行高：气泡行高 1.68（约 25px），chip 装得下 22px。
+ */
+.bubble-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px 1px 2px;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-caption);
+  box-decoration-break: clone;
+}
+
+.bubble-chip-icon {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+
+.bubble-chip-target {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+/*
+ * 气泡 chip 同一套类别色（与镜像层的 .composer-chip[data-kind] 同源）：
+ * 15% 类别色混入气泡实底（--color-chat-card-bg，不透明预混），无描边。
+ * 文字与图标同用「类别色 70% 混正墨」：纯类别色在明档绿 / 暗档蓝上
+ * 对 15% 淡底的对比度只有 3.9–4.4:1（wcag 4.5 不达标），混入 30% 正墨后
+ * 五档主题两类色全部 ≥ 5.7:1（比例见 commit），色相仍读得出类别。
+ * 中性 chip 保持 muted。
+ */
+.bubble-chip-skill {
+  --chip-ink: color-mix(in srgb, var(--color-filetype-sheet) 70%, var(--color-text-primary));
+  background: color-mix(in srgb, var(--color-filetype-sheet) 15%, var(--color-chat-card-bg));
+}
+.bubble-chip-skill .bubble-chip-icon,
+.bubble-chip-skill .bubble-chip-target {
+  color: var(--chip-ink);
+}
+.bubble-chip-mcp {
+  --chip-ink: color-mix(in srgb, var(--color-filetype-doc) 70%, var(--color-text-primary));
+  background: color-mix(in srgb, var(--color-filetype-doc) 15%, var(--color-chat-card-bg));
+}
+.bubble-chip-mcp .bubble-chip-icon,
+.bubble-chip-mcp .bubble-chip-target {
+  color: var(--chip-ink);
+}
+
 .chat-md li::marker {
   color: var(--color-text-tertiary);
 }
@@ -1761,6 +1981,36 @@ body {
   flex: 0 0 auto;
 }
 
+/*
+ * 「/ + 空格」选取模式的键盘提示行（panel-token.ts）：过滤行下方一条微字，
+ * 说清 ↑↓ / Enter / Tab / Esc 各自干什么。不设 uppercase——那是组标签的待遇。
+ */
+.panel-picker-hint {
+  /* 右栏窄时一行放不下（英文三段提示约 52 字符）：写死 24px 高会把第二行裁掉一半
+     （验收截图里「Esc cancels」只剩上半截）。改最小高度 + 纵向内边距，允许换行 */
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 14px;
+  line-height: 1.4;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* 选取模式的键盘高亮：淡底 + semibold（.option-row 选中同款口径），盖过 hover */
+.skill-row.picker-active {
+  background: var(--option-active-bg);
+}
+.skill-row.picker-active .skill-row-name {
+  font-weight: var(--weight-semibold);
+}
+.mcp-card.picker-active {
+  border-color: var(--color-border-strong);
+  background: var(--option-active-bg);
+}
+
 /* 组间发丝线：组与组之间 1px 分隔，代替纯间距——长列表扫读时组边界更清楚 */
 .skill-group + .skill-group {
   border-top: 1px solid var(--color-border-subtle);
@@ -1833,6 +2083,31 @@ body {
   white-space: nowrap;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
+}
+
+/*
+ * 行尾「选用」键（RowHoverAction，reveal 家族）：绝对定位盖在行尾——血线规则
+ * 的悬停组合例外，静止态尾部（归属点阵）钉血线，悬停 / 键盘聚焦时让位淡出。
+ * 集合信息不丢：行 tooltip（skill-row-tip，350ms）里有 slug · 集合全名。实底
+ * 取悬停行底色，盖住让位过渡中还没淡尽的点（files 面板 .file-row-act 用面板
+ * 底盖悬停元信息，同一职责、这里行底是 hover 底）。
+ */
+.skill-row-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+}
+.skill-row-act:hover {
+  color: var(--color-text-primary);
+}
+.skill-row .set-dots {
+  transition: opacity var(--transition-hover);
+}
+.skill-row:hover .set-dots,
+.skill-row:has(:focus-visible) .set-dots {
+  opacity: 0;
 }
 
 /*
@@ -2322,6 +2597,25 @@ body {
   gap: 2px;
   flex: 0 0 auto;
 }
+/*
+ * 悬停动作键不占位（设计系统 Implementation rules「行尾血线」）：平时动作组收成零宽，
+ * 名字拿满整行；悬停 / 键盘聚焦时动作组展开、状态文字让位——名字不会被三颗键与状态
+ * 一起挤成「de…」。用 max-width 收而不用 display:none：收起的键仍可 Tab 聚焦，
+ * focus-within 一到就展开。删除二次确认时常显（data-confirming）。
+ */
+.mcp-card .mcp-actions {
+  max-width: 0;
+  overflow: hidden;
+}
+.mcp-card:hover .mcp-actions,
+.mcp-card:focus-within .mcp-actions,
+.mcp-actions[data-confirming] {
+  max-width: 120px;
+}
+.mcp-card:hover .mcp-status-text,
+.mcp-card:focus-within .mcp-status-text {
+  display: none;
+}
 
 /*
  * 工具 chips（简报 1）：mono 小胶囊横排换行，纯函数 `visibleTools`
@@ -2737,71 +3031,6 @@ textarea.text-field {
   color: var(--color-text-primary);
 }
 
-/* 粘贴全文浮层：floating layer（实底面板 + 发丝 + popover 阴影），开在胶囊行上方 */
-.material-popover {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 6px);
-  z-index: 30;
-  width: min(520px, 100%);
-  display: grid;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-panel);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow-popover);
-}
-
-.material-popover-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: 6px 6px 0 10px;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-secondary);
-}
-
-.material-popover-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-
-.material-popover-close:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-/* 全文永不截断，折叠只是显示形态：限高滚动 */
-.material-popover-body {
-  max-height: 220px;
-  overflow-y: auto;
-  margin: 6px 10px 10px;
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-bubble);
-  color: var(--color-text-secondary);
-}
-
-/* 引用卡两列版式的 container query 容器：composer 最外层（宽度 = 输入卡宽度） */
-.composer-stack {
-  container-type: inline-size;
-}
-
 /* 引用卡：**半行两列**（2026-10 用户裁决）——每条只占半行，两列并排堆更多引用；
    折叠态两行 = 4 条，展开限高滚动；「还有 N 条 / 收起」跨两列占整行 */
 .material-quote-card {
@@ -2954,87 +3183,3 @@ textarea.text-field {
   color: var(--color-text-primary);
 }
 
-/*
- * ————— 斜杠指令面板（往下开、分节；模型与几何在 slash-panel.ts） —————
- * 面板绝对定位在输入卡内：顶缘在 / 所在行下方，可以盖住底栏（+、模型名、发送键），
- * 但不伸出卡外（几何已夹在卡内）。它是盖在内容上的浮层：实底面板 + 发丝 +
- * popover 阴影（floating layer 的配方，透底会让下面的字透出来读不了）。
- * 分节 kicker 是 sticky 吸顶：滚到哪一节，那一节的标头钉在面板顶上，
- * 不占「可见三行条目」的名额。
- */
-.slash-panel {
-  position: absolute;
-  z-index: 6;
-  display: grid;
-  gap: 2px;
-  align-content: start;
-  padding: 0 6px 6px;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-panel);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow-popover);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-/* 节标头：mono 大写微字号（分组标签的那一套），负 margin 盖满面板宽——
-   sticky 时两侧不留缝，内容不会从缝里漏过去 */
-.slash-kicker {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  margin: 0 -6px 2px;
-  padding: 5px 12px 3px;
-  background: var(--color-bg-panel);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-tertiary);
-}
-
-/* 第一个 kicker 顶到面板边（后面的节与上一节隔 4px） */
-.slash-panel > div:not(:first-child) .slash-kicker {
-  margin-top: 4px;
-}
-
-.slash-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  text-align: left;
-  font-size: var(--font-size-caption);
-}
-
-/* 等宽主名（/skill:xxx、/mcp:server——机器形态的名字）；可截断但不抢说明的位置 */
-.slash-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-family-mono);
-  color: var(--color-text-primary);
-}
-
-/* 说明：靠右、截断。面板窄了（几何判定）整段不渲染 */
-.slash-desc {
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-inline-start: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-tertiary);
-}
-
-.slash-empty {
-  padding: 6px 8px;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-tertiary);
-}

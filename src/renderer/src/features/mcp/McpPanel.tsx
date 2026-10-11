@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
+import { IconButton } from "../../shell/IconButton";
+import { RowHoverAction } from "../../shell/RowHoverAction";
 import {
   PanelButton,
   PanelIconButton,
@@ -9,9 +11,10 @@ import {
 } from "../../shell/RightPanel";
 import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
 import type { SkillsState } from "../skills/useSkills";
-import type { McpServer, McpStatus, McpInstanceInfo } from "@shared/mcp";
+import type { McpServer, McpStatus, McpInstanceInfo, McpServerInfo } from "@shared/mcp";
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
 import { headIconKind, statusLine, summarizeInstances } from "./row-display.ts";
+import { mcpToken, type TokenPickerControl } from "../../shell/panel-token.ts";
 import { useT } from "../../locale.ts";
 
 /**
@@ -26,6 +29,10 @@ import { useT } from "../../locale.ts";
 export function McpPanel(props: {
   skills: SkillsState;
   onClose: () => void;
+  /** 「/ + 空格」右栏选取模式（panel-token.ts）：从 Skills 侧 Tab 切过来 */
+  picker?: TokenPickerControl;
+  /** 卡上「选用」键：把 /mcp:<server> 插到主槽输入框当前光标处（PanelInsertRequest） */
+  onInsert: (token: string) => void;
 }) {
   const t = useT();
   const { servers, serversLoad, serverWarnings, openMcpConfig, reloadMcp } = props.skills;
@@ -46,6 +53,59 @@ export function McpPanel(props: {
       return next;
     });
   const error = serversLoad.kind === "failed" ? serversLoad.message : null;
+
+  // ── 选取模式（「/ + 空格」从 Skills 侧 Tab 切过来）─────────────────
+  const picker = props.picker;
+  /** 选取模式的过滤词（面板平时没有过滤行，选取时才出现） */
+  const [query, setQuery] = useState("");
+  const filterRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  /** 选取模式的高亮卡（↑↓ 移动，Enter 选中）；-1 = 无高亮 */
+  const [pickIndex, setPickIndex] = useState(-1);
+  // 可选行：没被文件停用的 server（停用的展不开工具，token 落进输入框也没用）
+  const pickRows =
+    picker !== undefined
+      ? servers.filter(
+          (s) => !s.disabled && s.name.toLowerCase().includes(query.trim().toLowerCase()),
+        )
+      : [];
+  useEffect(() => {
+    if (picker === undefined) return;
+    setQuery("");
+    setPickIndex(-1);
+    filterRef.current?.focus();
+  }, [picker?.request]);
+  // 列表还在读盘 / 过滤后越界：补首行高亮 / 夹回
+  useEffect(() => {
+    if (picker === undefined) return;
+    setPickIndex((i) => (pickRows.length === 0 ? -1 : i === -1 ? 0 : Math.min(i, pickRows.length - 1)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickRows.length]);
+  useEffect(() => {
+    listRef.current?.querySelector('[data-picker-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [pickIndex]);
+  const onPickerKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (picker === undefined) return;
+    const count = pickRows.length;
+    if (event.key === "ArrowDown" && count > 0) {
+      event.preventDefault();
+      setPickIndex((i) => (i === -1 ? 0 : (i + 1) % count));
+    } else if (event.key === "ArrowUp" && count > 0) {
+      event.preventDefault();
+      setPickIndex((i) => (i === -1 ? count - 1 : (i - 1 + count) % count));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const row = pickRows[pickIndex >= 0 ? pickIndex : 0];
+      if (row !== undefined) picker.onSelect(mcpToken(row.name));
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      picker.onSwitch();
+    } else if (event.key === "Escape") {
+      event.stopPropagation();
+      if (query !== "") setQuery("");
+      else picker.onCancel();
+    }
+  };
 
   // Reload 期间：非 disabled 行都转 connecting（实时状态还没回来，不装作不变）
   const statusOf = (status: McpStatus): McpStatus =>
@@ -105,7 +165,31 @@ export function McpPanel(props: {
         </>
       }
     >
+      {picker !== undefined && (
+        <>
+          <div className="skills-filter-row">
+            <Icon name="search" size={14} />
+            <input
+              ref={filterRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onPickerKeyDown}
+              placeholder={t.mcp.filterPlaceholder}
+              aria-label={t.mcp.filterPlaceholder}
+            />
+            {query !== "" && (
+              <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
+                <Icon name="x" size={12} />
+              </IconButton>
+            )}
+          </div>
+          <div className="panel-picker-hint" aria-hidden="true">
+            {t.mcp.pickerHint}
+          </div>
+        </>
+      )}
       <div
+        ref={listRef}
         style={{
           padding: "var(--space-4)",
           display: "grid",
@@ -123,187 +207,44 @@ export function McpPanel(props: {
           <McpEmptyState onAdd={() => setAdding(true)} onEditConfig={openMcpConfig} />
         ) : (
           <>
-            {servers.map((server) => {
-              const summary = summarizeInstances(server.instances);
-              const line = statusLine(summary);
-              const failedInstances = server.instances.filter(
-                (instance): instance is McpInstanceInfo & { status: { kind: "failed"; message: string } } =>
-                  instance.status.kind === "failed",
-              );
-              return (
-              <div key={server.name} className="mcp-card glass-card">
-                <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  {/* 有实例失败就红三角——哪怕合并状态是就绪（失败不许被遮住） */}
-                  <StatusIcon kind={headIconKind(statusOf(server.status), summary)} />
-                  <strong className="mcp-name">{server.name}</strong>
-                  <StatusText status={statusOf(server.status)} />
-                  {/* 悬停/键盘聚焦浮现（简报 3）；删除确认行出现时强制常显，见 .reveal 注释 */}
-                  <span
-                    className="mcp-actions reveal"
-                    style={{ opacity: confirming === server.name ? 1 : undefined }}
-                  >
-                    {/* 只来自工作区自带 .mcp.json 的：写全局文件够不着它，
-                        按钮禁用并指到真正的文件（遮蔽不是编辑） */}
-                    <PanelIconButton
-                      title={
-                        server.source.global
-                          ? server.disabled
-                            ? t.mcp.enable
-                            : t.mcp.disable
-                          : t.mcp.workspaceFileOnly
-                      }
-                      disabled={!server.source.global}
-                      onClick={() => props.skills.setServerDisabled(server.name, !server.disabled)}
-                    >
-                      <Icon name="power" size={14} />
-                    </PanelIconButton>
-                    <PanelIconButton
-                      title={server.source.global ? t.mcp.removeTip : t.mcp.workspaceFileOnly}
-                      disabled={!server.source.global}
-                      onClick={() => setConfirming(server.name)}
-                    >
-                      <Icon name="trash-2" size={14} />
-                    </PanelIconButton>
-                  </span>
-                  {server.instances.length > 0 && (
-                    <button
-                      type="button"
-                      className="mcp-expand"
-                      aria-expanded={expandedInstances.has(server.name)}
-                      title={expandedInstances.has(server.name) ? t.mcp.collapseInstances : t.mcp.expandInstances}
-                      onClick={() => toggleInstances(server.name)}
-                    >
-                      <Icon name="chevron-right" size={13} />
-                    </button>
-                  )}
-                </span>
-                <code
-                  style={{
-                    fontSize: "var(--font-size-caption)",
-                    color: "var(--color-text-tertiary)",
-                    overflowWrap: "anywhere",
+            {servers
+              .filter(
+                (server) =>
+                  picker === undefined ||
+                  (!server.disabled && server.name.toLowerCase().includes(query.trim().toLowerCase())),
+              )
+              .map((server, index) => (
+                <McpServerCard
+                  key={server.name}
+                  server={server}
+                  reloading={reloading}
+                  statusOf={statusOf}
+                  confirming={confirming === server.name}
+                  expandedTools={expandedTools.has(server.name)}
+                  expandedInstances={expandedInstances.has(server.name)}
+                  onExpandTools={() =>
+                    setExpandedTools((prev) => {
+                      const next = new Set(prev);
+                      next.add(server.name);
+                      return next;
+                    })
+                  }
+                  onToggleInstances={() => toggleInstances(server.name)}
+                  onSetDisabled={(disabled) => props.skills.setServerDisabled(server.name, disabled)}
+                  onAskRemove={() => setConfirming(server.name)}
+                  onConfirmRemove={() => {
+                    setConfirming(null);
+                    void props.skills.removeServer(server.name).catch(() => undefined);
                   }}
-                >
-                  {server.detail}
-                </code>
-                {/* 限定工作区：不显示的话，用户会以为「配了却没生效」是自己的错 */}
-                {server.scopedTo.length > 0 && (
-                  <span className="mcp-scope">
-                    <Icon name="folder" size={12} />
-                    {t.mcp.scopedTo(server.scopedTo.join("、"))}
-                  </span>
-                )}
-                {/* 定义来源：工作区自带的 .mcp.json（配置跟文件夹走）。全局的不标——默认即全局 */}
-                {server.source.workspaces.length > 0 && (
-                  <span className="mcp-scope">
-                    <Icon name="folder" size={12} />
-                    {server.source.global
-                      ? t.mcp.sourceOverride(server.source.workspaces.join("、"))
-                      : t.mcp.sourceWorkspace(server.source.workspaces.join("、"))}
-                  </span>
-                )}
-                {/* 实例状态行：独占一行不挤头行。全灭时 null——错误块接管，不重复说 */}
-                {line !== null && (
-                  <span className={`mcp-ws-status${line.failed.length > 0 ? " bad" : ""}`}>
-                    {line.failed.length > 0
-                      ? t.mcp.instancesPartial(line.ready, line.total, line.failed.join("、"))
-                      : t.mcp.instancesReady(line.ready, line.total)}
-                  </span>
-                )}
-                {/* 实例明细：诊断层——哪一份坏了、它指向哪里；错误块就地放在明细尾 */}
-                {expandedInstances.has(server.name) && server.instances.length > 0 && (
-                  <div className="mcp-instances">
-                    {server.instances.map((instance) => (
-                      <div key={instance.scope} className="mcp-instance">
-                        <Icon
-                          name={instance.status.kind === "failed" ? "triangle-alert" : "folder"}
-                          size={13}
-                          style={{
-                            color:
-                              instance.status.kind === "failed"
-                                ? "var(--color-danger)"
-                                : "var(--color-text-tertiary)",
-                          }}
-                        />
-                        <span className="ws">{instance.workspace}</span>
-                        <span className={`st${instance.status.kind === "failed" ? " bad" : ""}`}>
-                          {instance.status.kind === "ready"
-                            ? t.mcp.instanceReady(instance.status.tools.length)
-                            : instance.status.kind === "failed"
-                              ? t.mcp.connectFailed
-                              : instance.status.kind === "connecting"
-                                ? t.mcp.connecting
-                                : t.mcp.notConnected}
-                        </span>
-                        {instance.label !== "" && <span className="bind">→ {instance.label}</span>}
-                      </div>
-                    ))}
-                    {failedInstances.map((instance) => (
-                      <div key={instance.scope} className="mcp-error">
-                        <p className="mcp-error-text">{instance.status.message}</p>
-                        <span className="mcp-error-actions">
-                          <button type="button" className="mcp-retry-btn" disabled={reloading} onClick={runReload}>
-                            <Icon
-                              name="refresh-cw"
-                              size={11}
-                              className={reloading ? "anim-continuous" : undefined}
-                              style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
-                            />
-                            {t.mcp.reload}
-                          </button>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {server.status.kind === "ready" && server.status.tools.length > 0 && (
-                  <ToolChips
-                    tools={server.status.tools}
-                    expanded={expandedTools.has(server.name)}
-                    onExpand={() =>
-                      setExpandedTools((prev) => {
-                        const next = new Set(prev);
-                        next.add(server.name);
-                        return next;
-                      })
-                    }
-                  />
-                )}
-                {server.status.kind === "failed" && (
-                  <div className="mcp-error">
-                    <p className="mcp-error-text">{server.status.message}</p>
-                    <span className="mcp-error-actions">
-                      <button type="button" className="mcp-retry-btn" disabled={reloading} onClick={runReload}>
-                        <Icon
-                          name="refresh-cw"
-                          size={11}
-                          // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
-                          className={reloading ? "anim-continuous" : undefined}
-                          style={reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
-                        />
-                        {t.mcp.reload}
-                      </button>
-                    </span>
-                  </div>
-                )}
-                {confirming === server.name && (
-                  <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
-                    <PanelLine>{t.mcp.removeConfirm(server.name)}</PanelLine>
-                    <PanelButton
-                      danger
-                      onClick={() => {
-                        setConfirming(null);
-                        void props.skills.removeServer(server.name).catch(() => undefined);
-                      }}
-                    >
-                      {t.mcp.remove}
-                    </PanelButton>
-                    <PanelButton onClick={() => setConfirming(null)}>{t.common.cancel}</PanelButton>
-                  </span>
-                )}
-              </div>
-              );
-            })}
+                  onCancelRemove={() => setConfirming(null)}
+                  onReload={runReload}
+                  onInsert={() => props.onInsert(mcpToken(server.name))}
+                  pickerActive={picker !== undefined && index === pickIndex}
+                  onPickerSelect={
+                    picker !== undefined ? () => picker.onSelect(mcpToken(server.name)) : undefined
+                  }
+                />
+              ))}
             <button type="button" className="mcp-add-card" onClick={() => setAdding(true)}>
               <Icon name="plus" size={14} /> {t.mcp.addServer}
             </button>
@@ -319,6 +260,221 @@ export function McpPanel(props: {
         )}
       </div>
     </RightPanelFrame>
+  );
+}
+
+/*
+ * 一台 server 的卡片（从 McpPanel 列表里提出来的组件）：卡头动作组里带「选用」
+ * 键（RowHoverAction，随组 reveal）——插 /mcp:<name> 进输入框；选取模式下点
+ * 选即插 token、高亮卡随 ↑↓ 移动。短按的原行为（启停 / 删除 / 展开实例与
+ * 工具）不变。
+ */
+function McpServerCard(props: {
+  server: McpServerInfo;
+  /** Reload 进行中：非 disabled 行实时转 connecting（状态换算在面板侧算好传进来） */
+  reloading: boolean;
+  statusOf: (status: McpStatus) => McpStatus;
+  confirming: boolean;
+  expandedTools: boolean;
+  expandedInstances: boolean;
+  onExpandTools: () => void;
+  onToggleInstances: () => void;
+  onSetDisabled: (disabled: boolean) => void;
+  onAskRemove: () => void;
+  onConfirmRemove: () => void;
+  onCancelRemove: () => void;
+  onReload: () => void;
+  /** 「选用」键：插 token 进输入框（停用的 server 没有——展不开工具，token 没用） */
+  onInsert: () => void;
+  pickerActive?: boolean;
+  onPickerSelect?: () => void;
+}) {
+  const t = useT();
+  const { server } = props;
+  const summary = summarizeInstances(server.instances);
+  const line = statusLine(summary);
+  const failedInstances = server.instances.filter(
+    (instance): instance is McpInstanceInfo & { status: { kind: "failed"; message: string } } =>
+      instance.status.kind === "failed",
+  );
+  return (
+    <div
+      className={`mcp-card glass-card${props.pickerActive === true ? " picker-active" : ""}`}
+      data-picker-active={props.pickerActive === true ? "true" : undefined}
+      onClick={(event) => {
+        if (props.onPickerSelect === undefined) return;
+        // 行内动作键（启停 / 删除 / 展开实例与工具）各自干活，不当作整卡选取
+        if ((event.target as HTMLElement).closest("button, a, input, textarea") !== null) return;
+        props.onPickerSelect();
+      }}
+      style={{ cursor: props.onPickerSelect !== undefined ? "pointer" : undefined }}
+    >
+      <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+        {/* 有实例失败就红三角——哪怕合并状态是就绪（失败不许被遮住） */}
+        <StatusIcon kind={headIconKind(props.statusOf(server.status), summary)} />
+        <strong className="mcp-name">{server.name}</strong>
+        <StatusText status={props.statusOf(server.status)} />
+        {/* 悬停/键盘聚焦浮现（简报 3）；删除确认行出现时强制常显，见 .reveal 注释 */}
+        <span
+          className="mcp-actions reveal"
+          data-confirming={props.confirming ? "true" : undefined}
+          style={{ opacity: props.confirming ? 1 : undefined }}
+        >
+          {/* 「选用」键排在启停 / 删除之前（建设性动作在前）；与 PanelIconButton
+              同尺寸，随本组 reveal。停用的 server 不给（展不开工具） */}
+          {!server.disabled && (
+            <RowHoverAction
+              icon="corner-down-left"
+              title={t.mcp.use}
+              onClick={props.onInsert}
+              size={26}
+              iconSize={14}
+            />
+          )}
+          {/* 只来自工作区自带 .mcp.json 的：写全局文件够不着它，
+              按钮禁用并指到真正的文件（遮蔽不是编辑） */}
+          <PanelIconButton
+            title={
+              server.source.global
+                ? server.disabled
+                  ? t.mcp.enable
+                  : t.mcp.disable
+                : t.mcp.workspaceFileOnly
+            }
+            disabled={!server.source.global}
+            onClick={() => props.onSetDisabled(!server.disabled)}
+          >
+            <Icon name="power" size={14} />
+          </PanelIconButton>
+          <PanelIconButton
+            title={server.source.global ? t.mcp.removeTip : t.mcp.workspaceFileOnly}
+            disabled={!server.source.global}
+            onClick={props.onAskRemove}
+          >
+            <Icon name="trash-2" size={14} />
+          </PanelIconButton>
+        </span>
+        {server.instances.length > 0 && (
+          <button
+            type="button"
+            className="mcp-expand"
+            aria-expanded={props.expandedInstances}
+            title={props.expandedInstances ? t.mcp.collapseInstances : t.mcp.expandInstances}
+            onClick={props.onToggleInstances}
+          >
+            <Icon name="chevron-right" size={13} />
+          </button>
+        )}
+      </span>
+      <code
+        style={{
+          fontSize: "var(--font-size-caption)",
+          color: "var(--color-text-tertiary)",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {server.detail}
+      </code>
+      {/* 限定工作区：不显示的话，用户会以为「配了却没生效」是自己的错 */}
+      {server.scopedTo.length > 0 && (
+        <span className="mcp-scope">
+          <Icon name="folder" size={12} />
+          {t.mcp.scopedTo(server.scopedTo.join("、"))}
+        </span>
+      )}
+      {/* 定义来源：工作区自带的 .mcp.json（配置跟文件夹走）。全局的不标——默认即全局 */}
+      {server.source.workspaces.length > 0 && (
+        <span className="mcp-scope">
+          <Icon name="folder" size={12} />
+          {server.source.global
+            ? t.mcp.sourceOverride(server.source.workspaces.join("、"))
+            : t.mcp.sourceWorkspace(server.source.workspaces.join("、"))}
+        </span>
+      )}
+      {/* 实例状态行：独占一行不挤头行。全灭时 null——错误块接管，不重复说 */}
+      {line !== null && (
+        <span className={`mcp-ws-status${line.failed.length > 0 ? " bad" : ""}`}>
+          {line.failed.length > 0
+            ? t.mcp.instancesPartial(line.ready, line.total, line.failed.join("、"))
+            : t.mcp.instancesReady(line.ready, line.total)}
+        </span>
+      )}
+      {/* 实例明细：诊断层——哪一份坏了、它指向哪里；错误块就地放在明细尾 */}
+      {props.expandedInstances && server.instances.length > 0 && (
+        <div className="mcp-instances">
+          {server.instances.map((instance) => (
+            <div key={instance.scope} className="mcp-instance">
+              <Icon
+                name={instance.status.kind === "failed" ? "triangle-alert" : "folder"}
+                size={13}
+                style={{
+                  color:
+                    instance.status.kind === "failed"
+                      ? "var(--color-danger)"
+                      : "var(--color-text-tertiary)",
+                }}
+              />
+              <span className="ws">{instance.workspace}</span>
+              <span className={`st${instance.status.kind === "failed" ? " bad" : ""}`}>
+                {instance.status.kind === "ready"
+                  ? t.mcp.instanceReady(instance.status.tools.length)
+                  : instance.status.kind === "failed"
+                    ? t.mcp.connectFailed
+                    : instance.status.kind === "connecting"
+                      ? t.mcp.connecting
+                      : t.mcp.notConnected}
+              </span>
+              {instance.label !== "" && <span className="bind">→ {instance.label}</span>}
+            </div>
+          ))}
+          {failedInstances.map((instance) => (
+            <div key={instance.scope} className="mcp-error">
+              <p className="mcp-error-text">{instance.status.message}</p>
+              <span className="mcp-error-actions">
+                <button type="button" className="mcp-retry-btn" disabled={props.reloading} onClick={props.onReload}>
+                  <Icon
+                    name="refresh-cw"
+                    size={11}
+                    className={props.reloading ? "anim-continuous" : undefined}
+                    style={props.reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
+                  />
+                  {t.mcp.reload}
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {server.status.kind === "ready" && server.status.tools.length > 0 && (
+        <ToolChips tools={server.status.tools} expanded={props.expandedTools} onExpand={props.onExpandTools} />
+      )}
+      {server.status.kind === "failed" && (
+        <div className="mcp-error">
+          <p className="mcp-error-text">{server.status.message}</p>
+          <span className="mcp-error-actions">
+            <button type="button" className="mcp-retry-btn" disabled={props.reloading} onClick={props.onReload}>
+              <Icon
+                name="refresh-cw"
+                size={11}
+                // anim-continuous：窗口失焦时暂停（styles.css），持续动效不是 spin prop 的 orbita-spin
+                className={props.reloading ? "anim-continuous" : undefined}
+                style={props.reloading ? { animation: "mcp-spin 1s linear infinite" } : undefined}
+              />
+              {t.mcp.reload}
+            </button>
+          </span>
+        </div>
+      )}
+      {props.confirming && (
+        <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+          <PanelLine>{t.mcp.removeConfirm(server.name)}</PanelLine>
+          <PanelButton danger onClick={props.onConfirmRemove}>
+            {t.mcp.remove}
+          </PanelButton>
+          <PanelButton onClick={props.onCancelRemove}>{t.common.cancel}</PanelButton>
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -645,6 +801,7 @@ function StatusText(props: { status: McpStatus }) {
           : t.mcp.notConnected;
   return (
     <span
+      className="mcp-status-text"
       style={{
         fontSize: "var(--font-size-caption)",
         color: status.kind === "failed" ? "var(--color-danger)" : "var(--color-text-tertiary)",

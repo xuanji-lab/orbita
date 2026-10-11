@@ -1,0 +1,170 @@
+/**
+ * 输入框黑洞（BlackholeBox.tsx / SentBlackholeBox.tsx；设置 › Agent › 输入框黑洞，默认关，
+ * 只在浅 / 黛 / 玄三套主题生效）。
+ *
+ * 颜色只从 token 派生，这里不写任何色值：
+ * - 浅色：视界 = 正墨；舷窗下方的「光晕」是一层冷灰雾（次级墨 16%）——白底上发光看不见，
+ *   读成从缝里漏出来的暗光。
+ * - 深色（黛 / 玄）：黑在深底上看不出来——视界取全主题最深的井色、再压一层 overlay 暗幕，
+ *   外加一圈「光子环」（正墨 55%）：靠亮边把黑勾出来；舷窗同理带一道亮边。
+ * 盒子本身没有盖子、没有边框、没有底色——它只是一块会长高的空间。
+ */
+:root {
+  --bh-core: var(--color-text-primary);
+  --bh-mid: color-mix(in srgb, var(--color-text-primary) 42%, transparent);
+  --bh-ring: transparent;
+  --bh-veil: transparent;
+  --bh-halo: color-mix(in srgb, var(--color-text-secondary) 16%, transparent);
+  --bh-rim: transparent;
+}
+
+:root:is([data-theme="graphite"], [data-theme="black"]) {
+  --bh-core: var(--color-bg-panel);
+  --bh-mid: color-mix(in srgb, var(--color-bg-panel) 75%, transparent);
+  --bh-ring: color-mix(in srgb, var(--color-text-primary) 55%, transparent);
+  --bh-veil: var(--overlay-backdrop);
+  --bh-halo: color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+  --bh-rim: color-mix(in srgb, var(--color-text-primary) 70%, transparent);
+}
+
+/* ── 隐形盒子 ─────────────────────────────────────────── */
+.bh-box {
+  /* 掉落的材料要盖在消息区上面穿过去：比滚动区里的浮层（回底钮 z 1）高一层 */
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  transition: height var(--duration-enter) var(--ease-out-quint);
+}
+
+.bh-box[data-scroll="true"] {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* 内层贴着盒底：盒子长高有 220ms 过渡，内层是新高度——贴盒顶的话，过渡期间已落定的
+   块会先往下沉再升回来（CDP 时间序列抓到过：整盒块每长一行抖 17px）。
+   滚动态内层要在流里撑出滚动高度，才回到 relative */
+.bh-inner {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.bh-box[data-scroll="true"] .bh-inner {
+  position: relative;
+}
+
+.bh-cell {
+  position: absolute;
+  display: flex;
+  min-width: 0;
+  /* 落地压扁、回弹都以底边为支点 */
+  transform-origin: 50% 100%;
+}
+
+/* 胶囊在格子里撑满格宽（叠放区的胶囊是按内容收缩、上限 260px） */
+.bh-cell .material-chip {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+}
+
+.bh-cell .material-chip-x {
+  margin-left: auto;
+}
+
+/* ── 中心变黑：输入卡里的一层径向渐变，浓度与半径由 JS 写 ──────────────── */
+.bh-hole {
+  --bh-rx: 80px;
+  --bh-ry: 30px;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    radial-gradient(ellipse var(--bh-rx) var(--bh-ry) at 50% 50%, transparent 0 30%, var(--bh-ring) 37%, transparent 52%),
+    radial-gradient(ellipse var(--bh-rx) var(--bh-ry) at 50% 50%, var(--bh-veil) 0 26%, transparent 44%),
+    radial-gradient(
+      ellipse var(--bh-rx) var(--bh-ry) at 50% 50%,
+      var(--bh-core) 0 12%,
+      color-mix(in srgb, var(--bh-core) 72%, transparent) 26%,
+      color-mix(in srgb, var(--bh-core) 34%, transparent) 50%,
+      color-mix(in srgb, var(--bh-core) 10%, transparent) 76%,
+      transparent 100%
+    );
+}
+
+/* ── 舷窗：会话顶端一道扁椭圆的下半剖面 + 向下的柔光 ─────────────────── */
+.bh-porthole {
+  position: fixed;
+  z-index: 30;
+  height: 120px;
+  pointer-events: none;
+  opacity: 0;
+  transform: scaleX(0.25);
+  transition:
+    opacity var(--duration-enter) var(--ease-out-quint),
+    transform 260ms var(--ease-out-quint);
+}
+
+.bh-porthole[data-open="true"] {
+  opacity: 1;
+  transform: none;
+}
+
+.bh-porthole[data-open="false"] {
+  transition-duration: 380ms;
+}
+
+.bh-porthole-slit {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -9px;
+  height: 18px;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse closest-side, transparent 0 78%, var(--bh-rim) 90%, transparent 100%),
+    radial-gradient(ellipse closest-side, var(--bh-core) 0 70%, var(--bh-mid) 86%, transparent 100%);
+}
+
+.bh-porthole-glow {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  top: 0;
+  height: 110px;
+  background: radial-gradient(ellipse 50% 100% at 50% 0, var(--bh-halo), transparent 100%);
+}
+
+/* 吸入 / 飞入的替身：fixed 层，只走 transform 与 opacity */
+.bh-ghost {
+  position: fixed;
+  z-index: 31;
+  margin: 0;
+  pointer-events: none;
+}
+
+/* ── 已发送消息顶上的缩小快照：外层占缩后的尺寸，内层整体 scale ─────────── */
+.bh-sent {
+  position: relative;
+  flex: 0 0 auto;
+  margin-bottom: var(--space-1);
+}
+
+.bh-sent-inner {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bh-box,
+  .bh-porthole {
+    transition: none;
+  }
+}

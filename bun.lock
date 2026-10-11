@@ -11,10 +11,13 @@
         "@earendil-works/pi-protocol": "0.84.3",
         "@modelcontextprotocol/sdk": "1.30.0",
         "@napi-rs/canvas": "1.0.9",
+        "@xterm/addon-fit": "0.11.0",
+        "@xterm/xterm": "6.0.0",
         "diff": "^9.0.0",
         "jszip": "3.10.2",
         "katex": "0.16.47",
         "mammoth": "1.13.0",
+        "node-pty": "1.1.0",
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
         "react-markdown": "^10.1.0",
@@ -459,6 +462,10 @@
     "@vitejs/plugin-react": ["@vitejs/plugin-react@5.2.0", "https://registry.npmmirror.com/@vitejs/plugin-react/-/plugin-react-5.2.0.tgz", { "dependencies": { "@babel/core": "^7.29.0", "@babel/plugin-transform-react-jsx-self": "^7.27.1", "@babel/plugin-transform-react-jsx-source": "^7.27.1", "@rolldown/pluginutils": "1.0.0-rc.3", "@types/babel__core": "^7.20.5", "react-refresh": "^0.18.0" }, "peerDependencies": { "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0" } }, "sha512-YmKkfhOAi3wsB1PhJq5Scj3GXMn3WvtQ/JC0xoopuHoXSdmtdStOpFrYaT1kie2YgFBcIe64ROzMYRjCrYOdYw=="],
 
     "@xmldom/xmldom": ["@xmldom/xmldom@0.8.15", "https://registry.npmmirror.com/@xmldom/xmldom/-/xmldom-0.8.15.tgz", {}, "sha512-/5NV/vDALVFDXgLmfsy9TRCBlKwO2LNBFzpzvb9iIj+jR+eSc6DLYYvVOdivT/jm7MtU6TebYuRmzEOI7w40UA=="],
+
+    "@xterm/addon-fit": ["@xterm/addon-fit@0.11.0", "https://registry.npmmirror.com/@xterm/addon-fit/-/addon-fit-0.11.0.tgz", {}, "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g=="],
+
+    "@xterm/xterm": ["@xterm/xterm@6.0.0", "https://registry.npmmirror.com/@xterm/xterm/-/xterm-6.0.0.tgz", {}, "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg=="],
 
     "abbrev": ["abbrev@4.0.0", "https://registry.npmmirror.com/abbrev/-/abbrev-4.0.0.tgz", {}, "sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA=="],
 
@@ -1044,6 +1051,8 @@
 
     "node-abi": ["node-abi@4.35.0", "https://registry.npmmirror.com/node-abi/-/node-abi-4.35.0.tgz", { "dependencies": { "semver": "^7.6.3" } }, "sha512-ymk4aIzxdPopw2giv8Fs1Ec6vybGkjmyxUwVqhkI4MCy2tVfXdkOGGWieWVjL0THgH+7a8lRdevyupoYj3Js/Q=="],
 
+    "node-addon-api": ["node-addon-api@7.1.1", "https://registry.npmmirror.com/node-addon-api/-/node-addon-api-7.1.1.tgz", {}, "sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ=="],
+
     "node-api-version": ["node-api-version@0.2.1", "https://registry.npmmirror.com/node-api-version/-/node-api-version-0.2.1.tgz", { "dependencies": { "semver": "^7.3.5" } }, "sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q=="],
 
     "node-domexception": ["node-domexception@1.0.0", "https://registry.npmmirror.com/node-domexception/-/node-domexception-1.0.0.tgz", {}, "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ=="],
@@ -1053,6 +1062,8 @@
     "node-gyp": ["node-gyp@12.4.0", "https://registry.npmmirror.com/node-gyp/-/node-gyp-12.4.0.tgz", { "dependencies": { "env-paths": "^2.2.0", "exponential-backoff": "^3.1.1", "graceful-fs": "^4.2.6", "nopt": "^9.0.0", "proc-log": "^6.0.0", "semver": "^7.3.5", "tar": "^7.5.4", "tinyglobby": "^0.2.12", "undici": "^6.25.0", "which": "^6.0.0" }, "bin": { "node-gyp": "bin/node-gyp.js" } }, "sha512-OMcPNvqTCFUnNaBlmdgq+lfNqY7gTiSmNRDjY3uAXRyudeKZEZxu3CLtjMQrx4zZxCX2b/mpNqTtwuCJgXhHkw=="],
 
     "node-int64": ["node-int64@0.4.0", "https://registry.npmmirror.com/node-int64/-/node-int64-0.4.0.tgz", {}, "sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw=="],
+
+    "node-pty": ["node-pty@1.1.0", "https://registry.npmmirror.com/node-pty/-/node-pty-1.1.0.tgz", { "dependencies": { "node-addon-api": "^7.1.0" } }, "sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg=="],
 
     "node-releases": ["node-releases@2.0.53", "https://registry.npmmirror.com/node-releases/-/node-releases-2.0.53.tgz", {}, "sha512-D9UOmYG3UH1V+ENW56t5QXBwJw1YEY18ruVeus89Rw+SyIgjPkCO84bRzO3uNIYosJbNwiabWVn48o3uJLjxFQ=="],
 

@@ -328,6 +328,46 @@ describe("parseSettings 的 gitAttribution", () => {
   });
 });
 
+describe("parseSettings 的 collapsePastedText", () => {
+  it("缺席 = 折叠（不落键，同 gitAttribution 的纪律）", () => {
+    deepStrictEqual(parseSettings({ theme: "graphite" }), {
+      theme: "graphite",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
+  });
+
+  it("true / false 都原样保留", () => {
+    deepStrictEqual(parseSettings({ collapsePastedText: true }).collapsePastedText, true);
+    deepStrictEqual(parseSettings({ collapsePastedText: false }).collapsePastedText, false);
+  });
+
+  it("非布尔一律丢掉，不当成真", () => {
+    deepStrictEqual(parseSettings({ collapsePastedText: "yes" }).collapsePastedText, undefined);
+    deepStrictEqual(parseSettings({ collapsePastedText: 1 }).collapsePastedText, undefined);
+    deepStrictEqual(parseSettings({ collapsePastedText: null }).collapsePastedText, undefined);
+  });
+});
+
+describe("parseSettings 的 composerBlackhole", () => {
+  it("缺席 = 关（不落键）", () => {
+    deepStrictEqual(parseSettings({ theme: "light" }), {
+      theme: "light",
+      drawer: DEFAULT_SETTINGS.drawer,
+    });
+  });
+
+  it("true / false 都原样保留", () => {
+    deepStrictEqual(parseSettings({ composerBlackhole: true }).composerBlackhole, true);
+    deepStrictEqual(parseSettings({ composerBlackhole: false }).composerBlackhole, false);
+  });
+
+  it("非布尔一律丢掉，不当成真", () => {
+    deepStrictEqual(parseSettings({ composerBlackhole: "on" }).composerBlackhole, undefined);
+    deepStrictEqual(parseSettings({ composerBlackhole: 1 }).composerBlackhole, undefined);
+    deepStrictEqual(parseSettings({ composerBlackhole: null }).composerBlackhole, undefined);
+  });
+});
+
 describe("parseSettings 的 choreModel", () => {
   it("缺席 = 各件家务退回会话模型，不落这个键", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }).choreModel, undefined);

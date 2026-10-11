@@ -47,14 +47,6 @@ export function withStatKinds<T extends { id: string; kind: "file" | "dir"; unco
   });
 }
 
-/** 输入框里的一段粘贴文本（全文在内存里；发送时原文进模型，永不截断） */
-export interface ComposerPastedText {
-  id: string;
-  text: string;
-  /** 折叠行显示的行数（去尾换行后算） */
-  lines: number;
-}
-
 export type FileRefRejection = "no-path" | "duplicate";
 
 /**
