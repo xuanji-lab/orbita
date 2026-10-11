@@ -305,6 +305,14 @@ export interface TurnGroupUnit {
    * 不需要现场计时。缺时间戳的单元在场时 null（诚实未知）。
    */
   durationMs: number | null;
+  /**
+   * 这轮开始流式回复的时刻 = 段内最早的 assistant 记录 timestamp（渲染单元的
+   * timestamp 从记录上原样带来，即首条 assistant 的 message_start 时刻——含先吐
+   * 正文再思考的前导 text，它不在 members 里但在段内）。轮头时间标签的取值
+   * （ChatView 的 TurnRollupLine）；缺时间戳的单元在场时 null，同 durationMs 的
+   * 诚实未知口径。
+   */
+  startedAt: number | null;
 }
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit;
@@ -485,9 +493,27 @@ function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): Tu
     // 首末成员之间的全部内容收进折叠——含穿插正文（BUG-6）：展开即回原位
     members: chunk.slice(firstMember, lastMember + 1).filter(isTurnContent),
     durationMs: segmentSpan(chunk, results),
+    startedAt: chunkStartAt(chunk),
   });
   view.push(...chunk.slice(lastMember + 1));
   return view;
+}
+
+/**
+ * 段内最早的 **assistant 侧**渲染单元 timestamp = 这轮开始流式回复的时刻。
+ * 段里还带着开轮的 user 单元（它不是 assistant 的输出，且它早于任何回答），
+ * 用 isTurnContent 排掉；缺时间戳的单元在场时 null（同 segmentSpan 的口径：
+ * 宁可不显示，不编造）。
+ */
+function chunkStartAt(chunk: readonly RenderEntry[]): number | null {
+  let min: number | null = null;
+  for (const entry of chunk) {
+    if (!isTurnContent(entry)) continue;
+    const ts = entryTimestamp(entry);
+    if (ts === null) return null;
+    if (min === null || ts < min) min = ts;
+  }
+  return min;
 }
 
 /**

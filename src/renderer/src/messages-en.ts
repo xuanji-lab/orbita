@@ -1016,6 +1016,8 @@ export const en = {
     openInOrbita: "Open in orbita",
     revealArtifact: "Show in folder",
     worked: "Worked",
+    // Weekday names for the full timestamp on message-time hover (getDay() order, Sunday first)
+    timeWeekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     thought: "thought",
     lines: (n: number) => `${n} lines`,
     files: (n: number) => `${n} files`,

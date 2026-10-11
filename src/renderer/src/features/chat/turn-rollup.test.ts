@@ -84,6 +84,8 @@ describe("groupTurns", () => {
     // key 挂在首成员上（跨渲染稳定），轮耗时 = 段内 timestamp 极差（含正文完成时刻）
     assert.equal(fold.key, "turn:a1:0");
     assert.equal(fold.durationMs, 8000);
+    // 轮头时间 = 段内最早的 assistant 记录 timestamp（这轮开始流式回复的时刻）
+    assert.equal(fold.startedAt, 2000);
   });
 
   test("活跃轮原样铺开，已落定的前段照收——折叠只发生在落定的轮次上", () => {
@@ -128,6 +130,8 @@ describe("groupTurns", () => {
       view.map((entry) => entry.kind),
       ["user", "text", "turnGroup", "text"],
     );
+    // 前导正文不在 members 里，但轮头时间仍取到它（首条 assistant 的开始时刻）
+    assert.equal(foldUnits(view)[0]?.startedAt, 2000);
   });
 
   test("界碑与用户气泡是轮边界，永远在外面；界碑劈开前后的轮", () => {
