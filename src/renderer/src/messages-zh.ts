@@ -214,7 +214,10 @@ export const zh: Messages = {
   rowStatus: {
     pinned: "已置顶",
     subRunning: "子会话运行中",
+    running: "运行中",
+    waiting: "在等你回复",
     unread: "已完成，还没看",
+    unreadFailed: "出错停下了，还没看",
   },
 
   notice: {
@@ -226,6 +229,13 @@ export const zh: Messages = {
     openNowTip: "在这里打开，替换当前对话",
     sideChatTip: "在辅助对话里打开，当前对话不动",
     laterTip: "侧栏里保持未读",
+  },
+
+  /** 右下角铃铛弹出的清单（侧栏竖条的另一个入口） */
+  bell: {
+    title: "通知",
+    empty: "没有在跑、在等或未读的任务",
+    markAllRead: "全部标为已读",
   },
 
   menu: {
@@ -249,6 +259,7 @@ export const zh: Messages = {
     subSessions: (count) => `子会话（${count}）`,
     channels: "子会话通道",
     browser: "内置浏览器",
+    bell: (count) => (count > 0 ? `通知 · ${count} 条未读` : "通知"),
   },
 
   browser: {

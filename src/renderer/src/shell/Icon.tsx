@@ -11,6 +11,7 @@ import arrowRight from "../../../../Orbita Design System/assets/icons/lucide/arr
 import arrowUp from "../../../../Orbita Design System/assets/icons/lucide/arrow-up.svg?raw";
 import arrowUpRight from "../../../../Orbita Design System/assets/icons/lucide/arrow-up-right.svg?raw";
 import blend from "../../../../Orbita Design System/assets/icons/lucide/blend.svg?raw";
+import bell from "../../../../Orbita Design System/assets/icons/lucide/bell.svg?raw";
 import book from "../../../../Orbita Design System/assets/icons/lucide/book.svg?raw";
 import bookOpen from "../../../../Orbita Design System/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../Orbita Design System/assets/icons/lucide/bot.svg?raw";
@@ -120,6 +121,7 @@ import zap from "../../../../Orbita Design System/assets/icons/lucide/zap.svg?ra
  */
 const ICONS = {
   archive,
+  bell,
   blend,
   book,
   "book-open": bookOpen,

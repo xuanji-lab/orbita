@@ -50,7 +50,14 @@ import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
-import { addUnread, clearUnread, planNotice, settledSessions } from "./features/notify/completion-notice.ts";
+import {
+  noticeTierOf,
+  orderNoticeEntries,
+  planNotice,
+  sessionRunState,
+  settledSessions,
+  type NoticeTier,
+} from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
 
 /**
@@ -464,18 +471,16 @@ export function App() {
   );
 
   /**
-   * 后台会话完成提醒（用户 2026-10-10）：长程任务在一条会话里跑着，人去了别的会话，
-   * 跑完时界面上什么都不发生。现在跑完那一拍：
+   * 后台会话完成提醒（用户 2026-10-10，同日二轮改需求）：长程任务在一条会话里
+   * 跑着，人去了别的会话，跑完时界面上什么都不发生。现在跑完那一拍：
    * - 响一声客舱呼唤铃（设置可关）；
-   * - 没在看它的话，侧栏那一行标未读（静态浅 accent 底），辅助对话图标旁弹卡片
-   *   问怎么看：马上看（主槽换成它）/ 辅助对话里看 / 稍后（保持未读）。
-   * 点进去看过（主槽或辅助对话正显示它）即清未读。判定在 completion-notice.ts。
-   *
-   * 未读是 ephemeral，不落盘：它说的是「这次运行里有结果你还没看」，重启后会话列表
-   * 本身就是新的一眼。只认根会话——子会话跑完由母会话的通道回报，不单独打扰人。
+   * - 没在看它的话，把未读写进 meta（SessionMeta.unread，session:unread 落盘，
+   *   **重启后还在**），侧栏那一行亮 3/3 竖条，辅助对话图标旁弹卡片问怎么看：
+   *   马上看（主槽换成它）/ 辅助对话里看 / 稍后（保持未读）。
+   * 点进去看过（主槽或辅助对话正显示它）即清未读（同样落盘）。判定在
+   * completion-notice.ts；侧栏竖条与右下角铃铛清单都从 sessionRunState 读同一份
+   * 状态。只认根会话——子会话跑完由母会话的通道回报，不单独打扰人。
    */
-  const [unread, setUnread] = useState<ReadonlySet<string>>(() => new Set());
-  /** 卡片正在提醒的会话 id；同时跑完多条只提醒最新的那条，其余靠侧栏未读底色 */
   const [noticeId, setNoticeId] = useState<string | null>(null);
   const [drawerFocus, setDrawerFocus] = useState<{ tab: string; token: number } | null>(null);
   const drawerFocusTokenRef = useRef(0);
@@ -486,6 +491,28 @@ export function App() {
     ...(rightPanel === "drawer" && drawerOpenId !== null ? [drawerOpenId] : []),
   ];
   const watchedKey = watchedIds.join("\n");
+  /** 未读清单：从 meta 读（真源在盘上），不再另存一份 renderer state */
+  const unreadSessions = session.sessions.filter((meta) => meta.unread != null);
+  /** 把一批会话标成未读：at 此刻铸；failed 查槽的回合失败（重试耗尽），同样是快照 */
+  const markUnread = useCallback(
+    (ids: readonly string[]) => {
+      void Promise.all(
+        ids.map((id) =>
+          api.session.setUnread(id, { at: Date.now(), failed: session.turnErrorOf(id) !== null }),
+        ),
+      ).then(() => engine.refreshSessions());
+    },
+    [engine, session],
+  );
+  /** 清未读（看过即清 / 全部标为已读）：目标 id 由调用方从真值现算，不闭包旧列表 */
+  const clearUnreadOf = useCallback(
+    (ids: readonly string[]) => {
+      void Promise.all(ids.map((id) => api.session.setUnread(id, null))).then(() =>
+        engine.refreshSessions(),
+      );
+    },
+    [engine, session],
+  );
   const prevStatesRef = useRef(engine.states);
   useEffect(() => {
     const prev = prevStatesRef.current;
@@ -514,15 +541,19 @@ export function App() {
     if (ring) playCompletionChime();
     const latest = fresh[fresh.length - 1];
     if (latest !== undefined) {
-      setUnread((current) => addUnread(current, fresh));
+      markUnread(fresh);
       setNoticeId(latest);
     }
     // 只在槽变化时判定；在看谁、开关值读本次渲染的闭包，就是这一拍的真值
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine.states]);
-  // 看过即清：主槽或辅助对话显示了它，未读与卡片一起退
+  // 看过即清：主槽或辅助对话显示了它，未读（盘上的）与卡片一起退。
+  // 列表读本渲染闭包里的真值——watchedKey 变了的那一拍，列表必然是新的
   useEffect(() => {
-    setUnread((current) => clearUnread(current, watchedIds));
+    const hit = watchedIds.filter((id) =>
+      session.sessions.some((meta) => meta.id === id && meta.unread != null),
+    );
+    if (hit.length > 0) clearUnreadOf(hit);
     setNoticeId((current) => (current !== null && watchedIds.includes(current) ? null : current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedKey]);
@@ -547,6 +578,59 @@ export function App() {
           },
           onLater: () => setNoticeId(null),
         };
+
+  /**
+   * 右下角铃铛的清单（2026-10-10 二轮）：所有竖条亮着的根会话——在等你、未读
+   * （跑完 / 跑挂没看）、在跑——排序「等你 > 未读 > 在跑，同档新在前」。与侧栏
+   * 竖条同一份推导（sessionRunState，单一真源）；点行在主槽打开那条会话，
+   * 打开即已读。角标只数未读（绿 + 红）：用户原话「数字 = 未读数」，在跑不算欠账。
+   */
+  const noticeRows = useMemo(() => {
+    const rows: {
+      id: string;
+      title: string;
+      workspace: string | null;
+      state: "running" | "waiting" | "done" | "failed";
+      tier: NoticeTier;
+      at: number;
+    }[] = [];
+    for (const meta of rootSessions(session.sessions)) {
+      const state = sessionRunState({
+        slot: {
+          phase: session.phaseOf(meta.id),
+          approvals: session.approvalsOf(meta.id).length,
+        },
+        children: childSessions(session.sessions, meta.id).map((child) => ({
+          phase: session.phaseOf(child.id),
+          approvals: session.approvalsOf(child.id).length,
+        })),
+        unread: meta.unread ?? null,
+      });
+      if (state === null) continue;
+      const tier = noticeTierOf(state);
+      if (tier === null) continue;
+      rows.push({
+        id: meta.id,
+        title: meta.title,
+        workspace: session.workspaces.find((w) => w.id === meta.workspaceId)?.name ?? null,
+        state,
+        tier,
+        at: meta.unread?.at ?? meta.updatedAt,
+      });
+    }
+    return orderNoticeEntries(rows);
+    // phaseOf / approvalsOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
+  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, engine.states]);
+  /** 铃铛清单点行：主槽打开它；有未读的话顺手清（watchedKey 那一拍也会清，
+   *  但它若已在主槽就没有那一拍了，这里兑底） */
+  const openFromNotice = useCallback(
+    (id: string) => {
+      setOverlay(null);
+      void session.openSession(id);
+      if (session.sessions.some((meta) => meta.id === id && meta.unread != null)) clearUnreadOf([id]);
+    },
+    [session, clearUnreadOf],
+  );
 
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
    *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
@@ -780,7 +864,6 @@ export function App() {
             setSidebarWidth(width);
             changeSettings({ sidebarWidth: width });
           }}
-          unread={unread}
         />
 
         <main className="pane" ref={paneRef}>
@@ -944,6 +1027,12 @@ export function App() {
           }
           subSessions={channelParentId !== null && hasSubSessions ? { count: subSessionChildren.length } : null}
           completionNotice={completionNotice}
+          bell={{
+            count: unreadSessions.length,
+            entries: noticeRows,
+            onOpen: openFromNotice,
+            onMarkAllRead: () => clearUnreadOf(unreadSessions.map((meta) => meta.id)),
+          }}
         />
       </div>
     </div>

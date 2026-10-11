@@ -237,8 +237,8 @@ IDE-crowded.
 
 **Backgrounds.** No imagery, no illustration, no pattern, no texture, no photography — the product
 ships none and this system adds none. The only gradient is the desk behind the glass (a soft warm
-off-white wash) plus three functional gradients in the app (a radial accent glow on the boot screen,
-the mark gradient on the legacy logo block, and the running band on task rows — see *Motion*). Depth comes from translucency and hairlines, not
+off-white wash) plus two functional gradients in the app (a radial accent glow on the boot screen
+and the mark gradient on the legacy logo block). Depth comes from translucency and hairlines, not
 from colour.
 
 **Transparency.** No blur (2026-09-23): translucency comes from a single `--glass-bg` alpha, stacked
@@ -335,15 +335,19 @@ and stops the moment the state settles. Beyond those two there is no idle
 animation, no bounce, no parallax; `prefers-reduced-motion` collapses everything to 0.01ms.
 Continuous motion also pauses whenever the window is not in front (unfocused or hidden) — a moving
 pixel anywhere forces the whole window to recomposite every frame, so a spinner nobody is looking at
-still costs GPU. The task row's "running" mark is a static `circle-dot`, not a spinner: it is the one
-continuous animation that would otherwise sit on screen unattended, for a background session the user
-isn't currently watching.
-The task row itself is the one exception (2026-10-10, user ruling): a running row carries a soft
-accent → transparent band sweeping left to right across it — transform only, paused with the rest
-when the window is not in front, a static light fill under reduced motion — so the eye finds which
-task is moving; once it settles while the user is elsewhere the band stops and the row keeps a
-static light accent fill ("finished, not seen yet", leading mark `circle-check`) until it is opened.
-Moving / still / none reads running / unread / idle.
+still costs GPU.
+
+The task row's run state is a **three-segment vertical bar** pinned to the row's left edge
+(2026-10-10, user ruling — it replaced the running band and the leading status glyphs, both
+withdrawn the same day): **static, no motion at all**, cheap for low-end GPUs. Segments fill
+top-down as the task progresses and the colour names the state — 1/3 `--color-info` (blue) =
+running, 2/3 `--color-warning` (orange) = waiting for your reply (a pending tool approval),
+3/3 `--color-success` (green) = finished and not yet viewed, 3/3 `--color-danger` (red) = stopped
+with an error and not yet viewed. A viewed row shows nothing; selection stays a full-row fill and
+the two never interfere. Fixed tokens rather than the accent are deliberate — the dark theme's
+accent is yellow and would blur into the orange. The same bar (same derivation, same state) heads
+each row of the notifications list behind the `bell` at the bottom of the action rail; unread
+marks persist in the session meta, so the bar survives a restart.
 
 ## Implementation rules
 
@@ -410,11 +414,11 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
   thinking glyph, the accent inside the send button. The `Icon` component inlines the SVG so this works.
 - **Recurring vocabulary**: `bot` = agent mode, `workflow` = orchestration, `folder` = a workspace,
   `plus` = new task, `folder-plus` = new workspace, `archive` = archived tasks,
-  `git-branch` = a worktree, and the task-row status slot — `circle-dot` running,
-  `check` finished, `triangle-alert` failed, empty when idle,
+  `git-branch` = a worktree, and the task-row status slot — `git-fork` when a sub-session
+  is running, empty otherwise (run states live on the row's status bar, see *Motion*),
   `lock` = a field fixed by its preset or identity (Providers), `brain` = thinking,
   `terminal`/`wrench`/`file-text` = tool calls, `panel-left`/`panel-right` = the two sidebars,
-  `arrow-up` = send.
+  `arrow-up` = send, `bell` = the unread notifications list (bottom of the action rail).
 - **No emoji, no Unicode glyphs as icons, no icon font, no PNG icons.** The renderer source ships no
   raster images at all.
 

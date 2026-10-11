@@ -245,7 +245,10 @@ export const en = {
   rowStatus: {
     pinned: "Pinned",
     subRunning: "Sub-session running",
+    running: "Running",
+    waiting: "Waiting for your reply",
     unread: "Finished · not viewed yet",
+    unreadFailed: "Stopped with an error · not viewed yet",
   },
 
   /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */
@@ -258,6 +261,13 @@ export const en = {
     openNowTip: "Open it here, replacing the current chat",
     sideChatTip: "Open it in the side chat, keep the current chat",
     laterTip: "Keep it marked unread in the sidebar",
+  },
+
+  /** 右下角铃铛弹出的清单（侧栏竖条的另一个入口） */
+  bell: {
+    title: "Notifications",
+    empty: "Nothing running, waiting, or unread",
+    markAllRead: "Mark all as read",
   },
 
   menu: {
@@ -277,6 +287,7 @@ export const en = {
     subSessions: (count: number) => `Sub-sessions (${count})`,
     channels: "Sub-session channels",
     browser: "Built-in browser",
+    bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
   },
 
   browser: {

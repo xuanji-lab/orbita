@@ -1,9 +1,18 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addUnread, clearUnread, planNotice, settledSessions, type PhaseSlot } from "./completion-notice.ts";
+import {
+  noticeTierOf,
+  orderNoticeEntries,
+  planNotice,
+  sessionRunState,
+  settledSessions,
+  type PhaseSlot,
+  type RunSlot,
+} from "./completion-notice.ts";
 
 const slot = (phase: PhaseSlot["phase"], queued = 0): PhaseSlot => ({ phase, queued: Array(queued).fill(null) });
 const map = (entries: Record<string, PhaseSlot>) => new Map(Object.entries(entries));
+const run = (phase: RunSlot["phase"], approvals = 0): RunSlot => ({ phase, approvals });
 
 describe("settledSessions", () => {
   it("turn → idle 且队列空算跑完", () => {
@@ -55,16 +64,62 @@ describe("planNotice", () => {
   });
 });
 
-describe("未读集合", () => {
-  it("没有变化时返回原引用", () => {
-    const unread: ReadonlySet<string> = new Set(["a"]);
-    strictEqual(addUnread(unread, ["a"]), unread);
-    strictEqual(clearUnread(unread, ["b"]), unread);
+describe("sessionRunState（竖条与铃铛清单的单一真源）", () => {
+  const idle: RunSlot = run("idle");
+
+  it("自己或子会话在跑 → running（1/3 蓝）", () => {
+    strictEqual(sessionRunState({ slot: run("turn"), children: [], unread: null }), "running");
+    strictEqual(sessionRunState({ slot: run("compaction"), children: [], unread: null }), "running");
+    strictEqual(sessionRunState({ slot: idle, children: [run("turn")], unread: null }), "running");
   });
 
-  it("加与清", () => {
-    const added = addUnread(new Set(["a"]), ["b"]);
-    deepStrictEqual([...added].sort(), ["a", "b"]);
-    deepStrictEqual([...clearUnread(added, ["a", "x"])], ["b"]);
+  it("自己或子会话挂着审批 → waiting（2/3 橙），压过 running", () => {
+    strictEqual(sessionRunState({ slot: run("turn", 1), children: [], unread: null }), "waiting");
+    // 审批挂着时 phase 还是 turn：橙必须压过蓝，否则永远不亮
+    strictEqual(sessionRunState({ slot: idle, children: [run("turn", 1)], unread: null }), "waiting");
+    // 母会话自己空闲、孩子在等审批：亮在母会话那一行
+    strictEqual(sessionRunState({ slot: idle, children: [run("idle", 1)], unread: null }), "waiting");
+  });
+
+  it("meta 带未读 → done（3/3 绿）；带 failed → failed（3/3 红）", () => {
+    strictEqual(sessionRunState({ slot: idle, children: [], unread: { at: 1, failed: false } }), "done");
+    strictEqual(sessionRunState({ slot: idle, children: [], unread: { at: 1, failed: true } }), "failed");
+  });
+
+  it("在读即不亮；没建过槽的（刚建 / 纯浏览）当 idle 空槽", () => {
+    strictEqual(sessionRunState({ slot: undefined, children: [], unread: null }), null);
+    strictEqual(sessionRunState({ slot: idle, children: [idle], unread: null }), null);
+  });
+
+  it("在跑压过未读：又开了一轮就不再是「跑完」", () => {
+    strictEqual(
+      sessionRunState({ slot: run("turn"), children: [], unread: { at: 1, failed: true } }),
+      "running",
+    );
+  });
+});
+
+describe("铃铛清单分档与排序", () => {
+  it("档位映射：done / failed 都是未读档，null 不进清单", () => {
+    strictEqual(noticeTierOf("waiting"), "waiting");
+    strictEqual(noticeTierOf("done"), "unread");
+    strictEqual(noticeTierOf("failed"), "unread");
+    strictEqual(noticeTierOf("running"), "running");
+    strictEqual(noticeTierOf(null), null);
+  });
+
+  it("等你 > 未读 > 在跑，同档新的在前；不改原数组", () => {
+    const rows = [
+      { id: "old-running", tier: "running" as const, at: 1 },
+      { id: "fresh-unread", tier: "unread" as const, at: 90 },
+      { id: "waiting", tier: "waiting" as const, at: 5 },
+      { id: "stale-unread", tier: "unread" as const, at: 20 },
+      { id: "fresh-running", tier: "running" as const, at: 80 },
+    ];
+    deepStrictEqual(
+      orderNoticeEntries(rows).map((row) => row.id),
+      ["waiting", "fresh-unread", "stale-unread", "fresh-running", "old-running"],
+    );
+    strictEqual(rows[0]?.id, "old-running");
   });
 });

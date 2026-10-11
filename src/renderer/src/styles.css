@@ -492,6 +492,8 @@
   color: var(--color-text-primary);
   font-weight: var(--weight-regular);
   transition: var(--transition-hover);
+  /* 行内竖条（.option-row-bar）的定位基准：无偏移的 relative 不改变布局 */
+  position: relative;
 }
 
 /*
@@ -528,66 +530,56 @@
 }
 
 /*
- * 会话行的运行底色（2026-10-10 用户裁决，Sidebar.tsx 的 NavRow `run`）：
- * - running：accent → 透明的渐变带沿行从左扫到右，一直循环——一眼看出哪条在动；
- * - unread：后台跑完、还没点进去看，渐变带停下，换成一层静态浅 accent 底；
- *   点进去看过即恢复。
- * 「动 / 静 / 无」三档表达「在跑 / 跑完未读 / 平常」。颜色是第二信号：行首状态槽
- * 的图标（circle-dot / circle-check）与 tooltip 仍是正式表达。
+ * 会话行最左侧的三节竖条（2026-10-10 用户裁决，Sidebar.tsx 的 NavRow `bar` /
+ * 铃铛清单 BellCard）：取代上一版的渐变带（动效太耗 GPU，低端 Windows /
+ * MacBook 不友好）与未读浅底。**静态，无任何动效**。
  *
- * 画在 ::before 上、z-index -1 + 行本身 isolation，压在 hover / 选中底之上、文字之下；
- * 渐变带只动 transform（合成层，不触发重绘）。窗口不在前台时与其它持续动效一起暂停
- * （下方 data-window-inactive 规则），要求减少动效时退成静态浅底。
+ * 三节从上往下依次是进度（同电池表）：
+ * - running：第 1 节亮，--color-info（蓝）——在跑（含任一直接子会话在跑）
+ * - waiting：前 2 节亮，--color-warning（橙）——挂着工具审批，在等用户
+ * - done：3 节全亮，--color-success（绿）——跑完、还没看（meta.unread）
+ * - failed：3 节全亮，--color-danger（红）——跑挂了、还没看（unread.failed）
+ * 读完就不渲染。颜色用固定 token 不用 accent：暗色主题的 accent 是黄，
+ * 会和橙混。选中仍是整行底色（.option-row 的 data-active），两者互不干扰。
  */
-.option-row[data-run] {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-}
-
-.option-row[data-run]::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
+.status-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 3px;
+  height: 16px;
+  flex: 0 0 auto;
   pointer-events: none;
 }
 
-.option-row[data-run="unread"]::before {
-  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+.status-bar > i {
+  flex: 1;
+  border-radius: 1px;
 }
 
-.option-row[data-run="running"]::before {
-  right: auto;
-  width: 60%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--color-accent) 22%, transparent),
-    transparent
-  );
-  will-change: transform;
-  animation: row-run-sweep 2.4s linear infinite;
+.status-bar[data-fill="running"] > i:first-child {
+  background: var(--color-info);
 }
 
-/* 带宽是行宽的 60%：从完全在左侧外（-100%）扫到完全在右侧外（100/60 ≈ 167%） */
-@keyframes row-run-sweep {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(167%);
-  }
+.status-bar[data-fill="waiting"] > i:first-child,
+.status-bar[data-fill="waiting"] > i:nth-child(2) {
+  background: var(--color-warning);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .option-row[data-run="running"]::before {
-    animation: none;
-    right: 0;
-    width: auto;
-    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
-  }
+.status-bar[data-fill="done"] > i {
+  background: var(--color-success);
+}
+
+.status-bar[data-fill="failed"] > i {
+  background: var(--color-danger);
+}
+
+/* 行内的那一根贴行最左缘（GitHub 选中项光标同款位置），垂直居中 */
+.option-row-bar {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 /*
@@ -1934,8 +1926,7 @@ body {
  * `animation-play-state` 本来就管不到它，不需要额外排除。
  */
 [data-window-inactive="true"] .anim-continuous,
-[data-window-inactive="true"] .orbita-breath,
-[data-window-inactive="true"] .option-row[data-run="running"]::before {
+[data-window-inactive="true"] .orbita-breath {
   animation-play-state: paused !important;
 }
 
@@ -2009,6 +2000,135 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/*
+ * 右下角铃铛弹出的未读清单（features/notify/BellCard.tsx）：浮层配方同
+ * .completion-card（实色面板 + 发丝边 + popover 阴影），但从底部锚点向左展开、
+ * 向上长。清单行最左是同款三节竖条（.status-bar 的行内档）。
+ */
+.bell-card {
+  position: fixed;
+  z-index: 40;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  overflow: auto;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popover);
+  animation: bell-card-in var(--duration-enter) var(--ease-out-quint);
+}
+
+@keyframes bell-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.bell-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+}
+
+.bell-card-title {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.bell-card-mark {
+  height: 20px;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-caption);
+}
+
+.bell-card-empty {
+  padding: var(--space-2) var(--space-1);
+  font-size: var(--font-size-control);
+  color: var(--color-text-secondary);
+}
+
+.bell-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bell-card-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  transition: var(--transition-hover);
+}
+
+.bell-card-row:hover {
+  background: var(--option-hover-bg);
+}
+
+.bell-card-names {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.bell-card-name {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-control);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bell-card-ws {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 铃铛入口的未读角标：常驻在方块右上角，0 时不渲染（RightRail） */
+.rail-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font-family: var(--font-family-business);
+  font-size: 9px;
+  font-weight: var(--weight-semibold);
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
 }
 
 /*
