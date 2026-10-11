@@ -479,6 +479,13 @@ export type AgentCommand =
        * 工具描述里的工作区绑定也用它——agent 进程不认工作区，只收这个 id。
        */
       workspaceId: string | null;
+      /**
+       * 所属工作区的名字（workspaceId 翻译过来的那份，给模型的提示词用：
+       * store-tools 的 scope 指引要告诉模型这条会话属不属于工作区）。
+       * **可选，缺席 = 有工作区但翻不出名字**（旧夹具 / 工作区已删）——提示词里
+       * 如实说「未知」，不猜。workspaceId 为 null 时省略。
+       */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -598,6 +605,8 @@ export type AgentCommand =
       cwd: string;
       /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
       workspaceId: string | null;
+      /** 所属工作区名字，语义同 submit（scope 指引用；缺席 = 翻不出名字，说未知） */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -653,6 +662,8 @@ export type AgentCommand =
       cwd: string;
       /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
       workspaceId: string | null;
+      /** 所属工作区名字，语义同 submit（scope 指引用；缺席 = 翻不出名字，说未知） */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;

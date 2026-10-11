@@ -69,28 +69,43 @@ export class McpStore {
    * 读-改-写的公共底座：读原文（文件不在 = 空配置起步），改 `mcpServers`，
    * 原子写回整棵树（其它顶层键原样、键序不动）。JSON 坏了往上抛——写路径上
    * 把坏文件悄悄重置成空等于删用户配置。
+   *
+   * **串行化**（2026-10-11 用户实测事故）：模型一轮并发调两次 add_mcp_server
+   * （http 一台、stdio 一台），两次 mutate 都从同一份旧文件读起，后写的把
+   * 先写的整条覆盖掉，而先写的已回「Server added」。Promise 链排队执行；
+   * 一次失败不拖死后续（错误只传给那一次的调用方）。
    */
-  private async mutate(
+  private queue: Promise<void> = Promise.resolve();
+
+  private mutate(
     change: (servers: Record<string, unknown>) => void,
   ): Promise<void> {
-    let root: Record<string, unknown>;
-    try {
-      root = JSON.parse(await readFile(this.filePath, "utf8")) as Record<string, unknown>;
-    } catch (error) {
-      if (!isNotFound(error)) throw error;
-      // 文件不在 = 空配置起步（预置 mcpServers）；文件在但形状不对是另一回事，往下抛
-      root = { mcpServers: {} };
-    }
-    const servers = root["mcpServers"];
-    if (
-      typeof servers !== "object" ||
-      servers === null ||
-      Array.isArray(servers)
-    ) {
-      throw new Error("mcp.json has the wrong shape (expected a top-level mcpServers object) — not written");
-    }
-    change(servers as Record<string, unknown>);
-    await writeJsonAtomic(this.filePath, root);
+    const run = this.queue.then(async () => {
+      let root: Record<string, unknown>;
+      try {
+        root = JSON.parse(await readFile(this.filePath, "utf8")) as Record<string, unknown>;
+      } catch (error) {
+        if (!isNotFound(error)) throw error;
+        // 文件不在 = 空配置起步（预置 mcpServers）；文件在但形状不对是另一回事，往下抛
+        root = { mcpServers: {} };
+      }
+      const servers = root["mcpServers"];
+      if (
+        typeof servers !== "object" ||
+        servers === null ||
+        Array.isArray(servers)
+      ) {
+        throw new Error("mcp.json has the wrong shape (expected a top-level mcpServers object) — not written");
+      }
+      change(servers as Record<string, unknown>);
+      await writeJsonAtomic(this.filePath, root);
+    });
+    // 队尾只记成败：下一次 mutate 照常接棒，错误传给当次调用方
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   /** 加一台。重名拒绝——覆盖等于吃掉用户现有配置。 */
