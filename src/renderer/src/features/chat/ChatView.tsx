@@ -23,6 +23,7 @@ import {
 } from "./home-cards";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
+import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import {
@@ -934,6 +935,9 @@ function ChatViewBody(props: {
                 border: 0,
                 background: "transparent",
                 padding: 0,
+                // 文字与按钮如今同在 Notice 的文字 wrapper 里（原来靠 flex gap 隔开），
+                // 这里自己补上同一间距，保持与旧版一致的视觉分隔
+                marginLeft: "var(--space-2)",
                 fontFamily: "var(--font-family-base)",
                 fontSize: "var(--font-size-control)",
                 color: "var(--color-text-primary)",
@@ -4590,27 +4594,19 @@ function Retrying(props: { status: RetryStatus }) {
   );
 }
 
-/** 提示行：文字是主信号，颜色是第二信号 */
+/** 提示行：文字是主信号，颜色是第二信号。样式口径见 notice.ts（文字断行 / 图标对首行）。 */
 function Notice(props: { tone?: "bad"; children: React.ReactNode }) {
   return (
     <p
       role={props.tone === "bad" ? "alert" : undefined}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        margin: 0,
-        padding: "0 var(--space-2)",
-        color: props.tone === "bad" ? "var(--color-danger)" : "var(--color-text-secondary)",
-        fontSize: "var(--font-size-control)",
-      }}
+      style={noticeParagraphStyle(props.tone === "bad")}
     >
       {props.tone === "bad" && (
-        <span style={{ display: "inline-flex", flex: "0 0 auto" }}>
+        <span style={noticeIconBoxStyle}>
           <Icon name="triangle-alert" size={13} strokeWidth={1.8} />
         </span>
       )}
-      {props.children}
+      <span style={noticeTextStyle}>{props.children}</span>
     </p>
   );
 }
