@@ -865,6 +865,7 @@ export function App() {
           onShowArchived={setShowArchived}
           onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}
+          unread={new Set(unreadSessions.map((meta) => meta.id))}
           onWidthChange={setSidebarWidth}
           onWidthCommit={(width) => {
             setSidebarWidth(width);

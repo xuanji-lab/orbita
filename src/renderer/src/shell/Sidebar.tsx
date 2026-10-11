@@ -143,6 +143,8 @@ export function Sidebar(props: {
   onShowCarryovers: (next: boolean) => void;
   /** 当前宽度（px）。拖动中由调用方只改本地 state，松手才落 settings */
   width: number;
+  /** 未读（后台完成没看过的）会话 id 集：工作区组与 TASKS 行画未读点 */
+  unread: ReadonlySet<string>;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
 }) {
