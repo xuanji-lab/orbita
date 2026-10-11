@@ -63,3 +63,59 @@ export function useChannelMessages(key: ChannelKey | null): ChannelMessagesState
 
   return state;
 }
+
+/**
+ * 一条根会话下**全部子通道的全文**（收件箱与父流问询胶囊共用，2026-10-12）：
+ * key 是 childId、值是该通道时间正序的全部消息。父流里的通道标记只有 messageId
+ * （正文在通道账本），问询胶囊要按它取回正文首行；Sub-sessions 面板的收件箱行
+ * 要按 childId 取「最新一句」。一次拉全部分小的通道文件（一对父子的往来本来就
+ * 短），事件到达时按 childId 追加、按 id 去重——与 `useChannelMessages` 同一条
+ * 纪律，只是通道数从 1 变 N。
+ *
+ * `childIds` 用逗号拼成字符串再进 effect 依赖：调用方每次渲染重建数组不该触发
+ * N 份账本重拉（子会话清单只在真的增删时变化）。
+ */
+export function useParentChannels(
+  parentId: string | null,
+  childIds: readonly string[],
+): ReadonlyMap<string, readonly ChannelMessage[]> {
+  const childKey = childIds.join(",");
+  const [channels, setChannels] = useState<ReadonlyMap<string, readonly ChannelMessage[]>>(new Map());
+
+  useEffect(() => {
+    if (parentId === null || childKey === "") {
+      setChannels(new Map());
+      return;
+    }
+    const ids = childKey.split(",");
+    let cancelled = false;
+    // 逐条拉而不是并发 `Promise.all` 后统一 set：先到先画，慢通道不拖住快通道
+    const loads = ids.map((childId) =>
+      api.channel
+        .load({ parentId, childId })
+        .then((list) => {
+          if (cancelled) return;
+          setChannels((prev) => new Map(prev).set(childId, sortChannelMessages(list)));
+        })
+        .catch((cause: unknown) => {
+          // 错误不吞：打到控制台；这一条通道缺席，其余照常（收件箱行退回「还没说话」）
+          console.error("[channel] 通道全文读取失败", { parentId, childId }, cause);
+        }),
+    );
+    const off = api.channel.onEvent((event) => {
+      if (event.type !== "message" || event.parentId !== parentId) return;
+      setChannels((prev) => {
+        const current = prev.get(event.childId);
+        if (current !== undefined && current.some((m) => m.id === event.message.id)) return prev;
+        return new Map(prev).set(event.childId, sortChannelMessages([...(current ?? []), event.message]));
+      });
+    });
+    return () => {
+      cancelled = true;
+      off();
+      void loads;
+    };
+  }, [parentId, childKey]);
+
+  return channels;
+}

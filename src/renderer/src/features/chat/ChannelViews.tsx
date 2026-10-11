@@ -21,9 +21,8 @@
 import type { ChannelMessage, ChannelMessageKind, ChannelSummary } from "@shared/channel";
 import type { DelegateCard } from "@shared/agent-ipc";
 import { thinkingLevelLabel } from "@shared/thinking";
-import { useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
-import { channelMarkLabel, type ChannelMarkTone } from "./tool-results";
+import type { ChannelMarkTone } from "./tool-results";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "./ExitCard";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { SessionEntry } from "./session-states";
@@ -192,22 +191,9 @@ export function ChannelMarkPill(props: {
   );
 }
 
-/** 主流里的接收侧标记行：盘上 / 实时都落到这一行（`flattenRenderUnits` 保证 key 稳定）。
- *
- * 面板删除后的过渡形态：不可点。下一刀换成子侧虚线气泡与父侧问询胶囊后本组件整体退场。 */
-export function ChannelMarkLine(props: {
-  mark: { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind };
-  ownSide: "parent" | "child";
-  peerTitle: string;
-}) {
-  const t = useT();
-  const label = channelMarkLabel(props.mark, props.ownSide, props.peerTitle, t);
-  return <ChannelMarkPill icon={channelKindIcon(props.mark.kind)} text={label.text} tone={label.tone} />;
-}
-
 /**
  * 发送侧的标记行：`reply_subsession` / `report_to_parent` 工具调用的折叠展示，
- * 与 `ChannelMarkLine` 同一套胶囊语言。`ToolLine` 只在**非失败**时用它——
+ * 虚线胶囊语言（`ChannelMarkPill`）。`ToolLine` 只在**非失败**时用它——
  * 工具调用本身失败（`result.status === "error"`）要照 `ToolLine` 的失败样式走
  * （红色 triangle-alert + 可展开看错误），不能被这行的「成功语气」盖过去。
  */
@@ -345,66 +331,111 @@ const TASK_CARD_TOGGLE_STYLE = {
 } satisfies React.CSSProperties;
 
 /**
- * 子会话流里任务卡正文默认展示的行数——够看清任务在做什么，长任务不占满整个首屏。
- * （随通道列一起从 channel-column.ts 搬来，任务卡退场时一并删。）
- */
-const TASK_CARD_PREVIEW_LINES = 12;
-
-/** 任务卡正文的展开 / 折叠取值（纯函数化，组件本身按仓库惯例不测）。 */
-function taskCardBody(text: string, expanded: boolean): { body: string; hasMore: boolean } {
-  const lines = text.split("\n");
-  const hasMore = lines.length > TASK_CARD_PREVIEW_LINES;
-  const body = !expanded && hasMore ? lines.slice(0, TASK_CARD_PREVIEW_LINES).join("\n") : text;
-  return { body, hasMore };
-}
-
-/**
- * 子会话自己 session 里的完整任务卡（子会话 2026-09-23 裁决①：父给子的第一条
- * 任务应该渲染在子会话自己的对话流里，不再是一行「task from … · view in
- * channel」胶囊）。样式照抄派出卡（`DelegateCardView`）：1px subtle 边框、lg
- * 圆角、panel 底。
+ * 子会话对话流里的「来自父会话」消息（2026-10-12 用户裁决：父会话给子会话的命令
+ * 要直接出现在子会话的渲染 UI 里）：一条虚线边的气泡，头顶一行小引子说清这是谁
+ * 的什么话——「父会话派来的任务 / 父会话回复 / 你（以父会话身份）回复 / 父会话叫停」。
+ * 正文走 MarkdownBlock（bubble 变体，与用户气泡同一套轻量渲染）。
  *
- * `message` 是 undefined 时说明通道账本还没拉到（`loading`）或拉失败
- * （`error`，不吞错，原样显示）；两者都只画卡头 + 一行状态，不假装有正文。
- * 正文超过 `TASK_CARD_PREVIEW_LINES` 行时默认截断，`Show full task` / `Collapse`
- * 切换（原生 `<button>`，键盘可达）。
+ * `message` 为 undefined 时说明通道账本还没拉到（loading）或拉失败（error 不吞，
+ * 原样显示）——只画引子和一行状态，不假装有正文。stop 是用户的裁决标记不是谁说
+ * 的话（applyStop 落的是空文本），只有引子没有气泡。
  */
-export function ChannelTaskCard(props: {
-  peerTitle: string;
+export function ChannelFromParentBubble(props: {
+  mark: { peerId: string; messageId: string; kind: ChannelMessageKind };
   message: ChannelMessage | undefined;
   loading: boolean;
   error: string | null;
 }) {
   const t = useT();
-  const [expanded, setExpanded] = useState(false);
-  const { message } = props;
-  const { body, hasMore } = taskCardBody(message?.text ?? "", expanded);
+  const { mark, message } = props;
+  // author 区分「模型回的」还是「你代父回的」；账本没到时按 model（多数路径），
+  // 到了如果不对会随重渲染纠正
+  const author = message?.author ?? "model";
+  const lead =
+    mark.kind === "task"
+      ? t.channel.fromParentTask
+      : mark.kind === "stop"
+        ? t.channel.fromParentStop
+        : author === "user"
+          ? t.channel.fromParentYouReply
+          : t.channel.fromParentReply;
   return (
-    <div style={EXIT_CARD_STYLE}>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <span style={EXIT_CARD_KICKER}>{t.channel.taskKicker}</span>
-        <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
-          {t.channel.from(props.peerTitle)}
-        </span>
-      </div>
+    <div className="channel-from-parent">
+      <p className="channel-from-lead">
+        <Icon name="corner-down-left" size={11} strokeWidth={1.8} />
+        {lead}
+      </p>
       {message !== undefined ? (
-        <>
-          <MarkdownBlock text={body} />
-          {hasMore && (
-            <button type="button" style={TASK_CARD_TOGGLE_STYLE} onClick={() => setExpanded((value) => !value)}>
-              {expanded ? t.channel.collapse : t.channel.showFullTask}
-            </button>
-          )}
-        </>
+        message.text !== "" && (
+          <div className="channel-from-bubble">
+            <MarkdownBlock text={message.text} variant="bubble" />
+          </div>
+        )
       ) : props.error !== null ? (
-        <p role="alert" style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+        <p role="alert" className="channel-from-note channel-from-note-error">
           {props.error}
         </p>
       ) : (
-        <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
-          {props.loading ? t.common.loading : t.channel.taskNotFound}
-        </p>
+        <p className="channel-from-note">{props.loading ? t.common.loading : t.channel.messageNotFound}</p>
       )}
     </div>
   );
+}
+
+/**
+ * 父会话对话流里的子会话问询胶囊（2026-10-12 用户裁决）：子发来的 question /
+ * done / failed 各一行——问询带正文首行（截断）与「去回答 ›」尾签，完成 / 失败
+ * 只报名字不转述结论（结论由父会话的模型自己转述，我们不多控制）。**progress
+ * 不进父流**（调用方已过滤）：进度是子会话自己的事，父只关心要它拿主意的三种。
+ *
+ * 整行可点：打开右栏 Sub-sessions 面板并进入该子会话的会话层（`openSubSession`，
+ * 与派出卡同一个入口）。辅助对话抽屉里接不上它——胶囊退化为不可点的静态行。
+ * 颜色走状态色（warning / success / danger），只给行首图标——图标在说话，颜色是
+ * 第二信号。
+ */
+export function ChannelFromChildPill(props: {
+  mark: { peerId: string; messageId: string; kind: ChannelMessageKind };
+  channel: ChannelViewContext;
+}) {
+  const t = useT();
+  const { mark, channel } = props;
+  const childTitle = peerTitleOf(channel, mark.peerId, t);
+  const message = channel.channelMessages.get(mark.messageId);
+  const openSubSession = channel.openSubSession;
+  const clickable = openSubSession !== null;
+  const common = {
+    className: "channel-from-child-pill",
+    onClick: clickable ? () => openSubSession(mark.peerId) : undefined,
+    title: clickable ? t.subSessions.openInPanel : undefined,
+  } satisfies React.ButtonHTMLAttributes<HTMLButtonElement>;
+  if (mark.kind === "question") {
+    return (
+      <button type="button" {...common} data-tone="question">
+        <Icon name="circle-help" size={13} strokeWidth={1.8} />
+        <span className="channel-from-child-name">{t.channel.asksYou(childTitle)}</span>
+        <span className="channel-from-child-text">{firstLineOf(message?.text ?? "")}</span>
+        <span className="channel-from-child-go">{t.channel.goAnswer}</span>
+      </button>
+    );
+  }
+  if (mark.kind === "failed") {
+    return (
+      <button type="button" {...common} data-tone="failed">
+        <Icon name="triangle-alert" size={13} strokeWidth={1.8} />
+        <span className="channel-from-child-name">{t.channel.childFailed(childTitle)}</span>
+      </button>
+    );
+  }
+  return (
+    <button type="button" {...common} data-tone="done">
+      <Icon name="circle-check" size={13} strokeWidth={1.8} />
+      <span className="channel-from-child-name">{t.channel.childDone(childTitle)}</span>
+    </button>
+  );
+}
+
+/** 问题正文的首行：多行取第一行，压掉成段的空白——胶囊里只放得下一句话。 */
+function firstLineOf(text: string): string {
+  const line = text.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
+  return line.trim();
 }

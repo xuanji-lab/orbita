@@ -6,15 +6,15 @@ import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
-  ChannelMarkLine,
-  ChannelTaskCard,
+  ChannelFromChildPill,
+  ChannelFromParentBubble,
   ChannelToolMarkLine,
   DelegateCardView,
   peerTitleOf,
   type ChannelViewContext,
   type DelegateCardStatus,
 } from "./ChannelViews";
-import { useChannelMessages } from "./useChannelMessages";
+import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
 import {
   HOME_CARD_CARRYOVER_ROWS,
@@ -126,6 +126,7 @@ import { MaterialBoxContext } from "../../shell/BlackholeBox.tsx";
 import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
+import type { ChannelMessage } from "@shared/channel";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
@@ -780,16 +781,30 @@ function ChatViewBody(props: {
   // 不可点。
   const openSubSession = ownSide === "parent" ? (props.onOpenSubSession ?? null) : null;
   const litSubSessionId = props.litSubSessionId ?? null;
-  // 子会话 2026-09-23 裁决①：任务卡的正文来自自己父子这条通道的账本——只有
-  // `ownSide` 为 "child" 时才有意义（根会话没有 task 标记要渲染），key 为 null
-  // 时 `useChannelMessages` 内部直接短路成空态，不发请求（同它自己的既有语义）。
+  // 通道正文的两个来源（2026-10-12 沟通回对话流）：
+  //   - 子会话视图：拉**自己那条父子通道**的全文——任务 / 回复 / 叫停的气泡正文都在
+  //     这里；key 为 null 时 `useChannelMessages` 内部短路成空态，不发请求。
+  //   - 根会话视图：拉**全部子通道**的合并——问询胶囊按 messageId 取正文首行。
+  // 两个 hook 都在分支外无条件调用（首页让位给聊天页时 hooks 数量不变）。
+  const ownChildren = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
   const taskChannelKey =
     ownSide === "child" && ownParentId !== null && openId !== "" ? { parentId: ownParentId, childId: openId } : null;
   const taskChannel = useChannelMessages(taskChannelKey);
-  const channelMessages = useMemo(
-    () => new Map(taskChannel.messages.map((message) => [message.id, message])),
-    [taskChannel.messages],
+  const parentChannels = useParentChannels(
+    ownSide === "parent" && openId !== "" ? openId : null,
+    ownChildren.map((meta) => meta.id),
   );
+  const channelMessages = useMemo(() => {
+    if (ownSide === "child") return new Map(taskChannel.messages.map((message) => [message.id, message]));
+    const merged = new Map<string, ChannelMessage>();
+    for (const messages of parentChannels.values()) {
+      for (const message of messages) merged.set(message.id, message);
+    }
+    return merged;
+  }, [ownSide, taskChannel.messages, parentChannels]);
+  // 加载 / 错误态跟各自的那仨定：只有气泡（子侧）用得到，父流胶囊没有正文也退化为只报名字
+  const channelLoading = ownSide === "child" ? taskChannel.loading : false;
+  const channelError = ownSide === "child" ? taskChannel.error : null;
   const channel = useMemo<ChannelViewContext>(
     () => ({
       ownSide,
@@ -800,8 +815,8 @@ function ChatViewBody(props: {
       openSubSession,
       litSubSessionId,
       channelMessages,
-      channelMessagesLoading: taskChannel.loading,
-      channelMessagesError: taskChannel.error,
+      channelMessagesLoading: channelLoading,
+      channelMessagesError: channelError,
     }),
     [
       ownSide,
@@ -812,8 +827,8 @@ function ChatViewBody(props: {
       openSubSession,
       litSubSessionId,
       channelMessages,
-      taskChannel.loading,
-      taskChannel.error,
+      channelLoading,
+      channelError,
     ],
   );
 
@@ -824,7 +839,7 @@ function ChatViewBody(props: {
    * 的子会话数；为 0 时芯片只显示前半（不拼出 "· 0 waiting"）。点击调用方按
    * `onOpenSubSessions` 是否给了决定是否可点，同 `ChannelMarkPill` 的门槛。
    */
-  const subSessionRows = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
+  const subSessionRows = ownChildren;
   const subSessionsChip =
     subSessionRows.length === 0
       ? null
@@ -2355,26 +2370,26 @@ function EntryView(props: {
     return <RevertMarkView record={entry.record} cwd={props.cwd} onOpenFile={props.onOpenReviewAt} />;
   }
   if (entry.kind === "channelMark") {
-    // 子会话自己流里的 task 标记：渲染成完整任务卡而不是一行胶囊（子会话
-    // 2026-09-23 裁决①）——父给子的第一条任务是这条会话最该显眼的内容。
-    // 其它标记（reply 等）与根会话视图仍走下面的胶囊，行为不变。
-    if (props.channel.ownSide === "child" && entry.mark.kind === "task") {
+    // 子会话流里的父侧消息（task / reply / stop）：正文直接进对话流——虚线气泡 +
+    // 引子（2026-10-12 用户裁决：父会话给子会话的命令要直接出现在子会话的 UI 里），
+    // 不再是一行「在通道里查看」的胶囊。
+    if (props.channel.ownSide === "child" && entry.mark.from === "parent") {
       return (
-        <ChannelTaskCard
-          peerTitle={peerTitleOf(props.channel, entry.mark.peerId, t)}
+        <ChannelFromParentBubble
+          mark={entry.mark}
           message={props.channel.channelMessages.get(entry.mark.messageId)}
           loading={props.channel.channelMessagesLoading}
           error={props.channel.channelMessagesError}
         />
       );
     }
-    return (
-      <ChannelMarkLine
-        mark={entry.mark}
-        ownSide={props.channel.ownSide}
-        peerTitle={peerTitleOf(props.channel, entry.mark.peerId, t)}
-      />
-    );
+    // 父流里子发来的消息：问询 / 完成 / 失败胶囊（下一刀接上），进度不进父流。
+    if (props.channel.ownSide === "parent" && entry.mark.from === "child" && entry.mark.kind !== "progress") {
+      return <ChannelFromChildPill mark={entry.mark} channel={props.channel} />;
+    }
+    // 其余组合（父流里的 progress 标记、防御性兜底）：不渲染——进度是子会话自己的
+    // 事，父流里它的落点就是没有落点
+    return null;
   }
   if (entry.kind === "text") {
     const card = props.carryoverCards.get(entry.messageId);

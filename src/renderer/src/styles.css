@@ -1030,6 +1030,112 @@ body {
   color: var(--color-text-primary);
 }
 
+/*
+ * 子会话对话流里的「来自父会话」消息（ChannelFromParentBubble）：头顶一行小引子
+ * （谁在说话、说的是什么），下面一条虚线边的气泡——与用户气泡同一套底 / 圆角 /
+ * 字号（--color-chat-card-bg / --radius-bubble / --font-size-chat），只有两点不同：
+ * 铺满整列（父的指令不是某一侧的话，是这条会话的上下文）与虚线描边
+ * （它不是子会话自己说的话）。
+ */
+.channel-from-parent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-2) 0;
+}
+
+.channel-from-lead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.channel-from-bubble {
+  padding: 9px 13px;
+  background: var(--color-chat-card-bg);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-bubble);
+  font-size: var(--font-size-chat);
+  line-height: var(--line-height-bubble);
+  overflow-wrap: anywhere;
+}
+
+/* 账本未到 / 拉失败时的一行说明：引子还在，正文不假装 */
+.channel-from-note {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.channel-from-note[role="alert"] {
+  color: var(--color-danger);
+}
+
+/*
+ * 父会话对话流里的子会话问询胶囊（ChannelFromChildPill）：一行、muted 底、
+ * 行首图标按状态色（warning / success / danger——颜色是第二信号），问询带正文
+ * 首行（截断）与「去回答 ›」尾签。整行可点：打开 Sub-sessions 面板进入该子会话。
+ */
+.channel-from-child-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--space-1) 0;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.channel-from-child-pill:hover {
+  background: var(--color-bg-hover);
+}
+
+.channel-from-child-pill[data-tone="question"] > .orbita-icon {
+  color: var(--color-warning);
+}
+
+.channel-from-child-pill[data-tone="done"] > .orbita-icon {
+  color: var(--color-success);
+}
+
+.channel-from-child-pill[data-tone="failed"] > .orbita-icon {
+  color: var(--color-danger);
+}
+
+/* 「谁在问」固定不变宽；正文吃掉剩余空间后截断，尾签不受挤 */
+.channel-from-child-name {
+  flex: 0 0 auto;
+  color: var(--color-text-primary);
+}
+
+.channel-from-child-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+
+.channel-from-child-go {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--color-accent);
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}
+
 .drawer-tabs {
   flex: 0 0 auto;
   display: flex;
