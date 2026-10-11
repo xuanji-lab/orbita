@@ -497,6 +497,13 @@ export type AgentCommand =
        */
       piSessionDir: string;
       /**
+       * 本会话的附图原图目录（`sessions/<会话id>.attachments/` 的绝对路径）。
+       * 图片字节预算把早期图片换成占位时要给出可 read 回来的原图绝对路径
+       * （image-byte-budget.ts），而 `original` 引用是相对的、目录布局是主进程的
+       * 路径策略——同 `piSessionDir` 的纪律，由主进程铸好随轮发。
+       */
+      attachmentsDir: string;
+      /**
        * 工具永不许写的目录（会话账本 sessions/ 与 pi 的本子 pi-sessions/）。
        * **主进程定，agent 进程只收数据**（同 piSessionDir 的纪律）：tool_call 闸门
        * 在权限档判定**之前**拦——「会话记录不可变」是全档不变量，Skip 也抬不掉。
@@ -614,6 +621,8 @@ export type AgentCommand =
       /** 这轮的思考档，语义同 submit */
       thinkingLevel: ThinkingLevel;
       piSessionDir: string;
+      /** 本会话的附图原图目录（图片字节预算占位用），语义同 submit */
+      attachmentsDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
@@ -671,6 +680,8 @@ export type AgentCommand =
       /** 这轮的思考档，语义同 submit（压缩轮内部照旧强制 off，这里传的是会话意图档） */
       thinkingLevel: ThinkingLevel;
       piSessionDir: string;
+      /** 本会话的附图原图目录（图片字节预算占位用；压缩轮不开主链路，随开轮装配统一携带） */
+      attachmentsDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */

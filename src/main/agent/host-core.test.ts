@@ -65,6 +65,7 @@ const TURN_FIELDS = {
   mode: "manual" as const,
   thinkingLevel: "medium" as const,
   piSessionDir: "C:/pi-sessions",
+  attachmentsDir: "C:/sessions/test.attachments",
   protectedPaths: ["C:/pi-sessions"],
   skillsDirs: ["C:/skills"],
   workspaceId: null,

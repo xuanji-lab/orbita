@@ -533,6 +533,8 @@ void app.whenReady().then(async () => {
     workspaces,
     channels,
     join(configDir, "pi-sessions"),
+    // 图片字节预算的占位要拼附图原图的绝对路径（agent 进程不做路径策略）
+    (sessionId) => sessions.attachmentDirOf(sessionId),
     // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     (workspaceId) => skills.linkDirs(workspaceId),
