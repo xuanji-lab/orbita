@@ -230,7 +230,7 @@ export class SessionStore {
    * 不放工作台：那里模型可写，原图不该被工具改掉。目录不预建，首次存图才建。
    * list() 只认 `.meta.json`，这个子目录不会被当成会话。
    */
-  private attachmentsPath(id: string): string {
+  attachmentsPath(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
     return join(this.dir, `${id}.attachments`);
   }

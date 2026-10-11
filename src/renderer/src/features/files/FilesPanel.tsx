@@ -391,7 +391,8 @@ export function FilesPanel(props: {
               <AttachmentSection
                 attachments={filteredAttachments}
                 facts={attachFacts}
-                roots={tree.roots}
+                // 附件副本在不进树的 attachments 根里：拼进来当白名单 root，副本才点得开
+                roots={tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot]}
                 onSelectPreview={openFile}
                 onOpenImage={openSentImage}
                 onReveal={tree.reveal}
@@ -986,8 +987,8 @@ function ImageAttachmentRow(props: {
  * 一条已发送附件：图标吃 fileIcon（类型以盘上事实优先，转录里的 kind 兑底），
  * 名字是路径末段，title 挂模型实际拿到的那条完整路径。不在盘上的如实标出、
  * 不报错也不可点；文件点击走现有预览、目录点击 reveal——都要求落在某个在盘的
- * 根之内（副本在会话工作台、workspace 引用在工作区根；超限未复制的原位置引用
- * 可能在根外，只展示）。行尾 hover 的「添加文件引用」把这条再引回输入框。
+ * 根之内（副本在不进树的 attachments 根、workspace 引用在工作区根；超限未复制的
+ * 原位置引用可能在根外，只展示）。行尾 hover 的「添加文件引用」把这条再引回输入框。
  */
 function AttachmentRow(props: {
   path: string;
