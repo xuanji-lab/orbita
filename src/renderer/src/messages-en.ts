@@ -408,6 +408,7 @@ export const en = {
     experimentalAria: "Experimental features",
     experimentalInfo:
       "Shows features still being polished, each listed below with its changelog · anything you already have is kept and comes back when turned on",
+    experimentalToggles: "Feature switches",
     experimentalList: "What's experimental",
     experimentalLog: (count: number) => `Changelog · ${count}`,
     agent: "Agent",

@@ -249,7 +249,6 @@ function General(props: {
   // 同理：缺席 = 折叠（粘贴文本 chip 的出厂形态）
   const pastedCollapse = props.settings.collapsePastedText ?? true;
   // 缺席 = 关（口味不是能力）
-  const composerBlackhole = props.settings.composerBlackhole ?? false;
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -501,23 +500,6 @@ function General(props: {
             </Chip>
           </span>
         </SettingRow>
-        {/* 输入框黑洞挂在实验功能后面（2026-10-11 用户裁决）：总开关关着时不出这一行 */}
-        {props.settings.experimental === true && (
-          <SettingRow
-            name={t.settings.composerBlackhole}
-            info={t.settings.composerBlackholeInfo}
-          >
-            {/* 同上两个开关的形状。纸面主题下开着也不生效（blackholeActive），值照存 */}
-            <span className="set-chips" role="group" aria-label={t.settings.composerBlackholeAria}>
-              <Chip active={composerBlackhole} onClick={() => props.onChange({ composerBlackhole: true })}>
-                {t.common.on}
-              </Chip>
-              <Chip active={!composerBlackhole} onClick={() => props.onChange({ composerBlackhole: false })}>
-                {t.common.off}
-              </Chip>
-            </span>
-          </SettingRow>
-        )}
       </SettingGroup>
       <SettingGroup label={t.settings.data}>
         <DataDirectoryRow />
@@ -607,6 +589,22 @@ function ExperimentalSettings(props: {
           <ExperimentalFeatureRow key={feature.id} feature={feature} language={language} />
         ))}
       </SettingGroup>
+      {/* 各实验功能自己的开关：总开关打开后才出现（关着时只看清单，不给开关）。
+          输入框黑洞（2026-10-11 用户裁决挂到实验功能后面）；纸面主题下开着也不生效，值照存 */}
+      {props.settings.experimental === true && (
+        <SettingGroup label={t.settings.experimentalToggles}>
+          <SettingRow name={t.settings.composerBlackhole} info={t.settings.composerBlackholeInfo}>
+            <span className="set-chips" role="group" aria-label={t.settings.composerBlackholeAria}>
+              <Chip active={props.settings.composerBlackhole === true} onClick={() => props.onChange({ composerBlackhole: true })}>
+                {t.common.on}
+              </Chip>
+              <Chip active={props.settings.composerBlackhole !== true} onClick={() => props.onChange({ composerBlackhole: false })}>
+                {t.common.off}
+              </Chip>
+            </span>
+          </SettingRow>
+        </SettingGroup>
+      )}
     </div>
   );
 }

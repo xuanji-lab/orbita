@@ -376,6 +376,7 @@ export const zh: Messages = {
     experimental: "实验功能",
     experimentalAria: "实验功能",
     experimentalInfo: "显示仍在打磨的功能，每一项和它的更新日志列在下面 · 已有的数据保留，重新打开即恢复",
+    experimentalToggles: "功能开关",
     experimentalList: "实验功能一览",
     experimentalLog: (count) => `更新日志 · ${count}`,
     agent: "智能体",

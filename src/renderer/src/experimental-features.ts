@@ -148,19 +148,27 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     ],
   },
   {
-    id: "pdf-citations",
-    name: { zh: "PDF 引用", en: "PDF citations" },
+    id: "composer-blackhole",
+    name: { zh: "输入框黑洞", en: "Input box black hole" },
     summary: {
-      zh: "让智能体讲解 PDF 时，它引用的原文会先核对过，句子后面挂一个编号；点编号就在文件面板里打开 PDF，跳到那段原文并高亮。",
-      en: "When the agent explains a PDF, every passage it quotes is checked first and marked with a number after the sentence; click it to open the PDF in the Files panel at that passage, highlighted.",
+      zh: "拖进来的文件被吸进输入框中心，再从聊天区顶上的舷窗掉进输入框上方的隐形盒子，堆起来；发送后消息顶上留一份缩小的快照。只在浅色、黛、玄三套主题生效。",
+      en: "Dropped files are pulled into the centre of the composer, then fall from a porthole at the top of the chat into an invisible box above it and pile up; sent messages keep a shrunken snapshot. Light, Slate and Onyx themes only.",
     },
     changelog: [
       {
-        pr: null,
+        pr: 188,
         date: "2026-10-11",
         note: {
-          zh: "首版：引用前核对原文（找不到的引不进对话）、正文里的引用编号、文件面板里的 PDF 预览与原文高亮；拖进来的附件在文件面板里也能点开了。",
-          en: "First version: quotes are checked before citing (ones not in the PDF never reach the chat), numbered citations in replies, PDF preview with the passage highlighted; dragged-in attachments now open in the Files panel too.",
+          zh: "首版：中心变黑、吸入、舷窗掉落、重力堆叠与删除补位，发送后消息里留缩小快照。",
+          en: "First version: the centre darkens, files are pulled in, fall from the porthole, stack under gravity and settle when one is removed; sent messages keep a shrunken snapshot.",
+        },
+      },
+      {
+        pr: 184,
+        date: "2026-10-11",
+        note: {
+          zh: "挂到实验开关后面：关着时设置里不出这个开关，存过的选择也不生效。",
+          en: "Moved behind the experimental switch: the toggle is hidden when off, and a saved choice has no effect.",
         },
       },
     ],
