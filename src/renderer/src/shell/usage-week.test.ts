@@ -7,7 +7,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { petLeft, shortDate, usageTier, usageWeekCells, weekdayIndex } from "./usage-week.ts";
+import { petLeft, usageTier, usageWeekCells, weekdayIndex } from "./usage-week.ts";
 
 /** 2026-10-12 是周一：一周七天恰好周一→周日，星期索引最好对 */
 const MONDAY = new Date(2026, 9, 12, 15, 30, 0);
@@ -82,10 +82,6 @@ describe("杂项", () => {
   test("weekdayIndex 是周一基（周日是 6）", () => {
     assert.equal(weekdayIndex(new Date(2026, 9, 12)), 0); // 周一
     assert.equal(weekdayIndex(new Date(2026, 9, 18)), 6); // 周日
-  });
-
-  test("shortDate 去掉年份：10-08", () => {
-    assert.equal(shortDate("2026-10-08"), "10-08");
   });
 
   test("petLeft：云心始终对准格子中心（SVG 宽 80，左缘 = 中心 - 40）", () => {

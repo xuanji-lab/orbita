@@ -58,11 +58,6 @@ export function usageWeekCells(now: Date, totals: ReadonlyMap<string, number>): 
   return raw.map((cell) => ({ ...cell, tier: usageTier(cell.tokens, max) }));
 }
 
-/** 日期键 → 悬停文案里的短日期 `10-08`（去年掉年份：格子本身就说的是「最近这周」） */
-export function shortDate(dateKey: string): string {
-  return dateKey.slice(5);
-}
-
 /** 能量体的 SVG 宽（viewBox 80×48，云心在正中） */
 const PET_WIDTH = 80;
 

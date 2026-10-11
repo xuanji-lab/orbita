@@ -365,7 +365,8 @@ export const zh: Messages = {
     weekdays: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
     today: "今天",
     noUsage: "没有用量",
-    day: (date: string, weekday: string, tokens: string) => `${date} ${weekday} · ${tokens} tokens`,
+    /** 悬停一格：只给当天总量（日期与星期在格子下面） */
+    day: (tokens: string) => `${tokens} tokens`,
   },
 
   settings: {

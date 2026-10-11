@@ -6,7 +6,7 @@ import { useT } from "../locale.ts";
 import { formatTokens } from "../utils/format-tokens.ts";
 import { isWindowInactive } from "./window-activity.ts";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
-import { petLeft, shortDate, usageWeekCells, type UsageCell, type UsageTier } from "./usage-week.ts";
+import { petLeft, usageWeekCells, type UsageCell, type UsageTier } from "./usage-week.ts";
 import type { UsageDayTotal } from "@shared/usage";
 
 /**
@@ -75,11 +75,8 @@ function UsageSquare(props: { cell: UsageCell; index: number; onHover: (index: n
   const t = useT();
   const tooltip = useHoverTooltip<HTMLButtonElement>(200, true, { gap: 52 });
   const { cell } = props;
-  const weekday = t.usage.weekdays[cell.weekday] ?? "";
-  const text =
-    cell.tokens > 0
-      ? t.usage.day(shortDate(cell.date), weekday, formatTokens(cell.tokens))
-      : t.usage.noUsage;
+  // 悬停只给用量（2026-10-12 用户验收：日期与星期格子下已有，不重复）
+  const text = cell.tokens > 0 ? t.usage.day(formatTokens(cell.tokens)) : t.usage.noUsage;
   return (
     <div
       className="usage-col"
@@ -100,7 +97,7 @@ function UsageSquare(props: { cell: UsageCell; index: number; onHover: (index: n
         onMouseLeave={tooltip.handlers.onMouseLeave}
       />
       <span className="usage-wd" data-now={cell.isToday || undefined}>
-        {cell.isToday ? t.usage.today : weekday}
+        {cell.isToday ? t.usage.today : (t.usage.weekdays[cell.weekday] ?? "")}
       </span>
       {tooltip.open &&
         createPortal(
