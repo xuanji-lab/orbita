@@ -10,7 +10,6 @@ import {
   branchAnchorEntries,
   branchAnchorIds,
   channelMarkLabel,
-  channelSendMessageId,
   delegateCard,
   handoffOutcome,
   editDiffEntries,
@@ -1600,42 +1599,6 @@ describe("toolCallSummary —— 自我配置工具", () => {
   });
 });
 
-describe("channelSendMessageId（发送侧标记点了定位到父子会话面板里的那一条）", () => {
-  const toolItem = (
-    patch: Partial<Extract<ToolTranscriptItem, { status: "complete" }>> = {},
-    status: "complete" | "running" = "complete",
-  ): ToolTranscriptItem => ({
-    id: "i1",
-    role: "tool",
-    toolCallId: "c1",
-    toolName: "report_to_parent",
-    input: { kind: "question", text: "要不要改 X？" },
-    content: [{ type: "text", text: "Reported to parent." }],
-    timestamp: 1,
-    status,
-    isError: false,
-    ...patch,
-  });
-
-  test("终态帧 details.messageId 原样带回", () => {
-    assert.equal(channelSendMessageId(toolItem({ details: { messageId: "m-1" } })), "m-1");
-  });
-
-  test("还没结果 / running 帧：null（details 随终态帧来）", () => {
-    assert.equal(channelSendMessageId(undefined), null);
-    assert.equal(channelSendMessageId(toolItem({ details: { messageId: "m-1" } }, "running")), null);
-  });
-
-  test("这一刀之前的旧记录 details 是 {}：null，调用方退回滚到通道底部", () => {
-    assert.equal(channelSendMessageId(toolItem({ details: {} })), null);
-    assert.equal(channelSendMessageId(toolItem({})), null);
-  });
-
-  test("字段坏了（非字符串 / 空串）：null，不编造 id", () => {
-    assert.equal(channelSendMessageId(toolItem({ details: { messageId: 42 } })), null);
-    assert.equal(channelSendMessageId(toolItem({ details: { messageId: "" } })), null);
-  });
-});
 
 describe("delegateCard（子会话 PR4a）", () => {
   const toolItem = (
@@ -1701,41 +1664,41 @@ describe("channelMarkLabel（子会话 PR4a）", () => {
     const parentSide = (kind: "question" | "progress" | "done" | "failed") =>
       channelMarkLabel({ from: "child", kind }, "parent", "审查 session/star", en);
     assert.deepEqual(parentSide("question"), {
-      text: "审查 session/star asked · view in channel",
+      text: "审查 session/star asked",
       tone: "question",
     });
     assert.deepEqual(parentSide("progress"), {
-      text: "审查 session/star · progress · view in channel",
+      text: "审查 session/star · progress",
       tone: "neutral",
     });
     assert.deepEqual(parentSide("done"), {
-      text: "审查 session/star done · view in channel",
+      text: "审查 session/star done",
       tone: "done",
     });
     assert.deepEqual(parentSide("failed"), {
-      text: "审查 session/star failed · view in channel",
+      text: "审查 session/star failed",
       tone: "failed",
     });
   });
 
   test("本会话是子（ownSide child，mark.from parent）：task/reply 的文案与 tone", () => {
     assert.deepEqual(channelMarkLabel({ from: "parent", kind: "task" }, "child", "审查栈", en), {
-      text: "task from 审查栈 · view in channel",
+      text: "task from 审查栈",
       tone: "neutral",
     });
     assert.deepEqual(channelMarkLabel({ from: "parent", kind: "reply" }, "child", "审查栈", en), {
-      text: "reply from 审查栈 · view in channel",
+      text: "reply from 审查栈",
       tone: "reply",
     });
   });
 
   test("其余组合（理论上不出现）兜底成 <peer> · <kind>，tone 中性", () => {
     assert.deepEqual(channelMarkLabel({ from: "parent", kind: "task" }, "parent", "谁", en), {
-      text: "谁 · task · view in channel",
+      text: "谁 · task",
       tone: "neutral",
     });
     assert.deepEqual(channelMarkLabel({ from: "child", kind: "question" }, "child", "谁", en), {
-      text: "谁 · question · view in channel",
+      text: "谁 · question",
       tone: "neutral",
     });
   });

@@ -55,7 +55,7 @@ import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protoc
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import { defaultThinkingLevel } from "@shared/model-defaults";
 import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
-import { composeChannelPrompt } from "@shared/channel";
+import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
@@ -826,10 +826,17 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // buildTurn 已支持从 meta 装配从没在本窗口打开过的会话（新会话/新槽由
         // dequeue/enqueue 就地建），父会话不必先被用户点开过才能收到子的消息。
         const childTitle = sessionsRef.current.find((meta) => meta.id === head.childId)?.title ?? "";
-        const text = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
+        const envelope = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
         const turn = buildTurn(id);
         if (turn === null) return;
-        dispatch(() => api.agent.submit({ sessionId: id, text, ...turn }));
+        // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在信封后
+        // （userRepliesSincePreviousReport 的注释）。读账本失败就照原样投递，不拦这一轮。
+        dispatch(async () => {
+          const ledger = await api.channel.load({ parentId: id, childId: head.childId }).catch(() => []);
+          const note = userRepliesNote(userRepliesSincePreviousReport(ledger, head.message.id));
+          const text = note === "" ? envelope : `${envelope}\n${note}`;
+          await api.agent.submit({ sessionId: id, text, ...turn });
+        });
       } else {
         const turn = buildTurn(id);
         if (turn === null) return;
