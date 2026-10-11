@@ -121,7 +121,7 @@ import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
-import { BlackholeContext } from "../../shell/BlackholeBox.tsx";
+import { MaterialBoxContext } from "../../shell/BlackholeBox.tsx";
 import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
@@ -2651,8 +2651,7 @@ function UserBubble(props: {
   );
   // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
   const hasText = text.trim() !== "";
-  const blackhole = useContext(BlackholeContext);
-  const sentBox = blackhole && images.length + fileRefs.length > 0;
+  const boxStyle = useContext(MaterialBoxContext);
   useLayoutEffect(() => {
     if (expanded) return;
     const el = clampRef.current;
@@ -2677,9 +2676,10 @@ function UserBubble(props: {
         gap: 2,
       }}
     >
-      {/* 输入框黑洞开着：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
-      {sentBox ? (
+      {/* 材料盒启用（黑洞 / 俄罗斯方块）：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
+      {boxStyle !== null && images.length + fileRefs.length > 0 ? (
         <SentBlackholeBox
+          style={boxStyle}
           images={images}
           files={fileRefs.map((ref) => ({ name: fileRefName(ref.path), path: ref.path, kind: ref.kind }))}
         />
@@ -2707,7 +2707,7 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {!sentBox && fileRefs.length > 0 && (
+      {boxStyle === null && fileRefs.length > 0 && (
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
