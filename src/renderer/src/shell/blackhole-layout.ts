@@ -1,15 +1,21 @@
 /**
- * 输入框黑洞的纯逻辑：材料的形状（截图 / 文件 / 目录 → 列跨度、行跨度）、
+ * 输入框材料盒的纯逻辑：材料的形状（截图 / 文件 / 目录 → 列跨度、行跨度）、
  * 重力落位（天际线装箱）、删除后的重力补位、盒子的限高，以及「哪些主题生效」。
  *
  * 消费者是 BlackholeBox.tsx（输入框上方的隐形盒子）与 SentBlackholeBox.tsx
  * （已发送用户消息顶上的缩小快照）。这里不碰 DOM：名字宽度按字符估（全宽 13px、
  * 半宽 7.2px，caption 12px 字号的实测近似），差一两像素由省略号吸收。
  *
- * **落位是确定性的，不是物理模拟**：每块「往下掉」时选落点最低的列位（平手取最左），
- * 停在那几列已有的最高处之上——跟真的掉下去一样不填悬空的洞，但同一份清单永远算出
- * 同一个布局。所以发出去的消息只凭附件清单就能重算出盒子，**不改会话存储协议**；
- * 也不会出现物理引擎那种方块歪斜、互相推挤、可点击的胶囊位置不稳的情况。
+ * **落位是确定性的，不是物理模拟**：同一份清单永远算出同一个布局。所以发出去的
+ * 消息只凭附件清单就能重算出盒子，**不改会话存储协议**；也不会出现物理引擎那种
+ * 方块歪斜、互相推挤、可点击的胶囊位置不稳的情况。两种落位模式（2026-10-12
+ * 用户裁决「pure random 好玩一些」）：
+ * - `lowest`（黑洞）：每块选落点最低的列位（平手取最左），跟真的掉下去一样
+ *   不填悬空的洞；视觉上块从左到右排。
+ * - `random`（俄罗斯方块）：在放得下的列位里**纯随机**挑一个，停在那几列已有
+ *   的最高处之上——大量悬空与空洞是有意的玩法。随机数也是确定性的：每块的
+ *   抽签只由它自己的种子键决定（见 blackholeSeedKey），与别的块无关——后加一块
+ *   不会重排已落定的块，快照重算才能与输入框逐块一致。
  *
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
@@ -91,40 +97,98 @@ export function blackholeSpan(
   return { shape: "strip", col: Math.max(CAPSULE_MIN_COLS, Math.min(want, half)), row: 1 };
 }
 
+/** 落位模式：黑洞 = 落点最低的列位（平手取最左）；俄罗斯方块 = 纯随机列位 */
+export type BlackholeDropMode = "lowest" | "random";
+
+/** 盒子的形态：黑洞带全套特效（变黑 / 吸入 / 舷窗 / 飞入），俄罗斯方块只落块 */
+export type MaterialBoxStyle = "blackhole" | "tetris";
+
+/** 一块材料在随机落点下的种子键素材：截图用它在截图组里的序号，文件 / 目录用路径 */
+export type BlackholeSeedInput = { kind: "image"; index: number } | { kind: "file" | "dir"; path: string };
+
 /**
- * 掉一块：在已落定的块上找落点最低的列位（平手取最左），停在该列位最高处之上。
- * 块比盒子还宽时压到盒宽。
+ * 随机落点的种子键：同一块材料在两处要算出**同一个键**——输入框里（放出的那一刻）
+ * 与已发送消息的快照里（只凭消息附件重算）。稳定的标识两边都有的是：
+ * - 文件 / 目录：路径（分拣时已去重，清单里唯一；消息里也带着）；
+ * - 截图：它在截图组里的序号（图片总是追加进清单，已有截图的序号不会被后加的
+ *   挪动；消息里的图没有 id，只有组内顺序可复现——转录存的是缩放后的图，
+ *   拿图字节做哈希在两边对不上）。
+ */
+export function blackholeSeedKey(input: BlackholeSeedInput): string {
+  return input.kind === "image" ? `image:${input.index}` : input.path;
+}
+
+/** 种子键 → 32 位种子（FNV-1a，稳定且跨平台一致） */
+function seedFromKey(key: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/** mulberry32：小而够用的确定性伪随机，首拍即满周期（种子不同序列不同） */
+function mulberry32(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 掉一块：`lowest` 在已落定的块上找落点最低的列位（平手取最左）；`random` 在
+ * 放得下列位里纯随机挑一个（确定性：抽签只由这块自己的种子键决定）。两种都
+ * 停在那几列已有的最高处之上。块比盒子还宽时压到盒宽。
  */
 export function dropOne(
   placed: readonly BlackholePlacement[],
   span: { col: number; row: number },
   columns: number,
+  mode: BlackholeDropMode = "lowest",
+  seed = "",
 ): BlackholePlacement {
   const heights = new Array<number>(columns).fill(0);
   for (const p of placed) {
     for (let i = p.x; i < p.x + p.w && i < columns; i++) heights[i] = Math.max(heights[i] ?? 0, p.y + p.h);
   }
   const w = Math.max(1, Math.min(span.col, columns));
-  let bestX = 0;
-  let bestY = Number.POSITIVE_INFINITY;
-  for (let x = 0; x + w <= columns; x++) {
-    let base = 0;
-    for (let i = x; i < x + w; i++) base = Math.max(base, heights[i] ?? 0);
-    if (base < bestY) {
-      bestY = base;
-      bestX = x;
+  let x = 0;
+  if (mode === "random") {
+    // 纯随机：每个放得下的列位机会均等，抽签只看这块自己的种子键
+    const roll = mulberry32(seedFromKey(seed))();
+    x = Math.min(columns - w, Math.floor(roll * (columns - w + 1)));
+  } else {
+    let bestY = Number.POSITIVE_INFINITY;
+    for (let candidate = 0; candidate + w <= columns; candidate++) {
+      let base = 0;
+      for (let i = candidate; i < candidate + w; i++) base = Math.max(base, heights[i] ?? 0);
+      if (base < bestY) {
+        bestY = base;
+        x = candidate;
+      }
     }
   }
-  return { x: bestX, y: bestY, w, h: span.row };
+  // 两种模式都停在那几列已有的最高处之上（random 因此大量悬空与空洞——玩法如此）
+  let y = 0;
+  for (let i = x; i < x + w; i++) y = Math.max(y, heights[i] ?? 0);
+  return { x, y, w, h: span.row };
 }
 
-/** 按清单顺序逐块往下掉：同一份清单 + 同一个列数永远得到同一个布局 */
+/**
+ * 按清单顺序逐块往下掉：同一份清单 + 同一个列数 + 同一个模式永远得到同一个布局。
+ * `seed` 是每块自己的种子键（blackholeSeedKey），只在 random 模式下被读。
+ */
 export function packPlacements(
-  spans: readonly { col: number; row: number }[],
+  spans: readonly { col: number; row: number; seed?: string }[],
   columns: number,
+  mode: BlackholeDropMode = "lowest",
 ): BlackholePlacement[] {
   const placed: BlackholePlacement[] = [];
-  for (const span of spans) placed.push(dropOne(placed, span, columns));
+  for (const span of spans) placed.push(dropOne(placed, span, columns, mode, span.seed ?? ""));
   return placed;
 }
 
@@ -170,18 +234,26 @@ export interface BlackholeLedger {
 export const EMPTY_LEDGER: BlackholeLedger = { columns: 0, order: [], map: new Map() };
 
 /**
- * 账本跟上现状：清单里没了的块拿掉、其余沿重力补位（列位不动）；列数变了就按放出顺序
- * 整份重排。`spanOf` 给出每个 id 当前的形状（半宽长条跟列数走）。
+ * 账本跟上现状：清单里没了的块拿掉、其余沿重力补位（**列位不动**，两种落位模式
+ * 同一条规矩——删掉一块后旁边的块不拐弯，只往下掉，随机落点不重抽）；列数变了就
+ * 按放出顺序整份重排（重排要用与当初相同的模式与种子，才不会一改窗口宽度整盒变样）。
+ * `spanOf` 给出每个 id 当前的形状（半宽长条跟列数走），`seedOf` 给出随机模式的种子键。
  */
 export function reconcileLedger(
   ledger: BlackholeLedger,
   present: ReadonlySet<string>,
   columns: number,
   spanOf: (id: string) => { col: number; row: number },
+  mode: BlackholeDropMode = "lowest",
+  seedOf: (id: string) => string = () => "",
 ): BlackholeLedger {
   const order = ledger.order.filter((id) => present.has(id));
   if (columns !== ledger.columns) {
-    const packed = packPlacements(order.map(spanOf), columns);
+    const packed = packPlacements(
+      order.map((id) => ({ ...spanOf(id), seed: seedOf(id) })),
+      columns,
+      mode,
+    );
     return { columns, order, map: new Map(order.map((id, i) => [id, packed[i] ?? { x: 0, y: 0, w: 1, h: 1 }])) };
   }
   if (order.length === ledger.order.length) return ledger;
@@ -195,8 +267,10 @@ export function releaseInto(
   ledger: BlackholeLedger,
   id: string,
   span: { col: number; row: number },
+  mode: BlackholeDropMode = "lowest",
+  seed = "",
 ): BlackholeLedger {
-  const placed = dropOne(Array.from(ledger.map.values()), span, ledger.columns);
+  const placed = dropOne(Array.from(ledger.map.values()), span, ledger.columns, mode, seed);
   const map = new Map(ledger.map);
   map.set(id, placed);
   return { columns: ledger.columns, order: [...ledger.order, id], map };
@@ -298,16 +372,27 @@ export function boxHeightCap(spacePx: number): number {
   return Math.max(cellsToPx(MIN_CAP_ROWS), cellsToPx(Math.max(0, rows)));
 }
 
-/** 黑洞只在基础三套主题生效（浅 / 黛 / 玄）。纸面主题自带一套稿纸语言，不叠这层动效 */
+/** 材料盒只在基础三套主题生效（浅 / 黛 / 玄）。纸面主题的裁决（2026-10 首版黑洞
+ *  定下）是「稿纸自带一套语言，不叠这层动效」——俄罗斯方块虽然不演黑洞特效，但
+ *  落块 + 回弹仍是叠在稿纸上的动效，首版沿用同一条限制（放开是一行改动，等用户在
+ *  纸面主题上验收过再说）。 */
 export const BLACKHOLE_THEMES = ["light", "graphite", "black"] as const;
 
 /**
- * 输入框黑洞此刻是否生效：开关开着，且当前（已解析的）主题是基础三套之一。
- * 其他主题即使开关开着也走原材料区——开关的值不动，切回基础主题自动恢复。
+ * 输入框材料盒此刻的形态：null = 不启用（走原材料叠放）。开关开着，且当前
+ * （已解析的）主题是基础三套之一。其他主题即使开关开着也走原材料区——开关的值
+ * 不动，切回基础主题自动恢复。
+ *
+ * 黑洞与俄罗斯方块互斥（settings.ts 的 parseSettings 兑底过「两个都开」，这里
+ * 再防一手）：两个都开时**黑洞优先**——先落盘的既有功能不让后来的实验玩法顶掉。
  */
-export function blackholeActive(
-  setting: boolean | undefined,
+export function materialBoxStyle(
+  blackhole: boolean | undefined,
+  tetris: boolean | undefined,
   theme: Exclude<ThemePreference, "system">,
-): boolean {
-  return setting === true && (BLACKHOLE_THEMES as readonly string[]).includes(theme);
+): MaterialBoxStyle | null {
+  const basic = (BLACKHOLE_THEMES as readonly string[]).includes(theme);
+  if (blackhole === true && basic) return "blackhole";
+  if (tetris === true && basic) return "tetris";
+  return null;
 }
