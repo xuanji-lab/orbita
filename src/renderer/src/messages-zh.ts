@@ -107,6 +107,7 @@ export const zh: Messages = {
     attachFileAction: "添加文件…",
     attachFolderAction: "添加文件夹…",
     removeImage: "移除图片",
+    materialBox: "材料",
     imageUnsupported: (name) => `${name}：只能发送 PNG、JPEG、GIF、WebP，请先转换格式。`,
     imageTooLarge: (name, mb) => `${name} 超过 ${mb} MB。`,
     tooManyImages: (max) => `一条消息最多 ${max} 张图片。`,
@@ -392,6 +393,10 @@ export const zh: Messages = {
     attributionInfo: "给智能体代写的提交加尾注、PR 描述加一行 · 不设 Co-Authored-By，也不改作者",
     pastedCollapse: "粘贴文本折叠",
     pastedCollapseAria: "粘贴文本折叠显示",
+    composerBlackhole: "输入框黑洞",
+    composerBlackholeAria: "输入框黑洞",
+    composerBlackholeInfo:
+      "截图与文件被吸进输入框，再从会话顶上掉下来，堆在输入框上方；发出的消息顶上留一张缩小的快照 · 只在浅色、黛、玄三套主题生效",
     pastedCollapseInfo: "大段粘贴在光标处收成句中胶囊，点开就地展开可编辑 · 关掉后大段粘贴作为普通文字直接进输入框",
     data: "数据",
     dataDirectory: "数据目录",

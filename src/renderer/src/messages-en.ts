@@ -133,6 +133,7 @@ export const en = {
     attachFileAction: "Add files…",
     attachFolderAction: "Add folders…",
     removeImage: "Remove image",
+    materialBox: "Materials",
     imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
     imageTooLarge: (name: string, mb: number) => `${name} is over ${mb} MB.`,
     tooManyImages: (max: number) => `Up to ${max} images per message.`,
@@ -428,6 +429,10 @@ export const en = {
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
     pastedCollapse: "Collapse pasted text",
     pastedCollapseAria: "Collapse pasted text",
+    composerBlackhole: "Input box black hole",
+    composerBlackholeAria: "Input box black hole",
+    composerBlackholeInfo:
+      "Screenshots and files are pulled into the input box and drop from the top of the chat into a pile above it; a sent message keeps a small snapshot of the pile · Light, Slate and Onyx themes only",
     pastedCollapseInfo:
       "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
     data: "Data",
