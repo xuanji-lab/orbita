@@ -58,14 +58,23 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
+    name: "文件树行：size 钉在右血线（悬停动作键补位到同一条线）",
+    row: ".file-hover-host .file-row",
+    leading: ".orbita-icon",
+    trailing: ".file-row-meta",
+    // .file-row 的右内边距 var(--space-2)；目录行没有 size，跳过
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
     name: "Skills·行：归属点阵钉在右血线",
     row: ".skill-row",
     leading: ".skill-row-main",
     trailing: ".set-dots",
-    // .skill-row 的右内边距 14px（对齐过滤行与组头的左缘竖线）；dim / missing
-    // 行没有点阵，跳过。悬停时点阵让位给「选用」键是血线规则的悬停组合例外，
-    // 这里量静止态
-    rightPad: 14,
+    // .skill-row 的右内边距 var(--space-2)（右栏统一：行内缩在 .panel-list 里）；
+    // dim / missing 行没有点阵，跳过。悬停时点阵让位给「选用」键是血线规则的悬停
+    // 组合例外，这里量静止态
+    rightPad: 8,
     skipNoTrailing: true,
   },
   {
@@ -73,8 +82,8 @@ const CHECKS = [
     row: ".mcp-card > span:first-of-type",
     leading: ".orbita-icon",
     trailing: ".mcp-expand",
-    // .mcp-card 的 --space-3；没有实例的卡不出展开键，跳过
-    rightPad: 12,
+    // .mcp-card 的横向内边距 var(--space-2)（右栏统一）；没有实例的卡不出展开键，跳过
+    rightPad: 8,
     skipNoTrailing: true,
   },
 ];
