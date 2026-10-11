@@ -131,6 +131,7 @@ export function Composer(props: {
   const dictation = useDictation({ value: props.value, onChange: props.onChange, textareaRef });
   const dictating = dictation.phase !== "idle";
   const mirrorRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   // 输入法组词中的范围（没在组词是 null）。拼音字母会先进 value：字距判法在组词期间沿用
   // 上一次的结果，修正液不涂这一截
   const [composition, setComposition] = useState<CompositionRange | null>(null);
@@ -307,6 +308,7 @@ export function Composer(props: {
         <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
       )}
       <div
+        ref={cardRef}
         className="glass-card"
         style={{
           width: "100%",
