@@ -1352,7 +1352,7 @@ export const en = {
     countTip: "Counts loaded entries only — the filter doesn't fetch collapsed folders",
     session: "Session",
     workspace: "Workspace",
-    attached: "Attached",
+    attached: "Attached folders",
     revealInFileManager: "Reveal in File Manager",
     detachTip: "Detach this directory",
     detach: "Detach",

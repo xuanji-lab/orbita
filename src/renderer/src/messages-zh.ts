@@ -1260,7 +1260,7 @@ export const zh: Messages = {
     countTip: "只数已载入的条目——筛选不会去读收起的文件夹",
     session: "会话",
     workspace: "工作区",
-    attached: "附加",
+    attached: "附加文件夹",
     revealInFileManager: "在文件管理器中显示",
     detachTip: "移除这个附加目录",
     detach: "移除",

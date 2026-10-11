@@ -2182,9 +2182,10 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--font-size-micro);
+  /* 与树行的 size 同一写法（caption / tabular / 无衬线） */
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
-  font-family: var(--font-family-mono);
   transition: opacity var(--transition-hover);
 }
 
@@ -2260,16 +2261,6 @@ body {
   color: var(--color-text-primary);
 }
 
-/* Session 组里的小节标题（附件）：比组头低一级——同字体、caption、tertiary、不加粗 */
-.files-subhead {
-  display: flex;
-  align-items: center;
-  height: 26px;
-  margin-top: var(--space-1);
-  padding: 0 var(--space-2);
-  font-size: var(--font-size-caption);
-  color: var(--color-text-tertiary);
-}
 
 /* 文件打开时，过滤框住在树的顶部（标题行让给标签页） */
 .files-tree-filter {

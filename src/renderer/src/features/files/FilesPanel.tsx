@@ -384,14 +384,7 @@ export function FilesPanel(props: {
               !hasAgentsMd(workspaceEntries) && (
                 <AgentsMdHint onReveal={() => tree.reveal(root.path, root.path)} />
               )}
-            {!root.exists && root.kind === "session" && (
-              <DimRow>{t.files.emptyWorkbench}</DimRow>
-            )}
-            {!root.exists && root.kind === "attached" && (
-              <MissingAttachedRow onDetach={() => detach(root.path)} />
-            )}
-            {root.exists && rowsOf(root, root.path, 0)}
-            {/* Session · 附件：本会话已发给过模型的引用清单（方案 A——不动盘、不建链接、
+            {/* Session · 附件（像一个子文件夹，排在会话组最前，同树里目录先于文件）：本会话已发给过模型的引用清单（方案 A——不动盘、不建链接、
                 不新增副本），从转录派生；点文件走现有预览（单击 = 开标签），目录走 reveal，
                 不在任何根内的（超限未复制的原位置引用等）只展示不可点 */}
             {root.kind === "session" && (query.trim() === "" || filteredAttachments.length > 0) && (
@@ -405,6 +398,13 @@ export function FilesPanel(props: {
                 onReference={(ref) => session.attachFileRef(ref)}
               />
             )}
+            {!root.exists && root.kind === "session" && (
+              <DimRow>{t.files.emptyWorkbench}</DimRow>
+            )}
+            {!root.exists && root.kind === "attached" && (
+              <MissingAttachedRow onDetach={() => detach(root.path)} />
+            )}
+            {root.exists && rowsOf(root, root.path, 0)}
           </>
         )}
       </div>
@@ -877,30 +877,64 @@ function AttachmentSection(props: {
   onReference: (ref: { path: string; name: string; kind: "file" | "dir" }) => void;
 }) {
   const t = useT();
+  // 附件是 Session 里的一个「虚拟子文件夹」（2026-10-11 用户验收：要能折叠、与树对齐）：
+  // 头部就是一条深度 0 的目录行（chevron + 文件夹图标 + 名字 + 计数），条目是深度 1 的
+  // 文件行——与树里目录及其子项同一几何
+  const [open, setOpen] = useState(true);
   return (
     <section aria-label={t.files.attachments}>
-      {/* Session 组里的小节标题：比组头低一级（同字体、不加粗、tertiary），不画图标 */}
-      <div className="files-subhead">{t.files.attachments}</div>
-      {props.attachments.length === 0 ? (
-        <DimRow>{t.files.attachmentsEmpty}</DimRow>
-      ) : (
-        props.attachments.map((item) =>
-          item.kind === "image" ? (
-            <ImageAttachmentRow key={item.ref} attachment={item} onOpen={props.onOpenImage} />
-          ) : (
-            <AttachmentRow
-              key={item.path}
-              path={item.path}
-              declaredKind={item.fileKind}
-              fact={props.facts.get(item.path)}
-              roots={props.roots}
-              onSelectPreview={props.onSelectPreview}
-              onReveal={props.onReveal}
-              onReference={props.onReference}
-            />
-          ),
-        )
-      )}
+      <button
+        type="button"
+        className="file-row"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          height: "var(--list-item-compact)",
+          paddingLeft: "var(--space-2)",
+          border: 0,
+          font: "inherit",
+          fontSize: "var(--font-size-control)",
+          textAlign: "left",
+          cursor: "pointer",
+          color: "var(--color-text-primary)",
+        }}
+      >
+        <Icon
+          name={open ? "chevron-down" : "chevron-right"}
+          size={12}
+          style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
+        />
+        <Icon name={open ? "folder-open" : "folder"} size={14} style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }} />
+        <span style={{ flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {t.files.attachments}
+        </span>
+        <span className="row-trailing file-row-meta">{props.attachments.length}</span>
+      </button>
+      {open &&
+        (props.attachments.length === 0 ? (
+          <DimRow indent={1}>{t.files.attachmentsEmpty}</DimRow>
+        ) : (
+          props.attachments.map((item) =>
+            item.kind === "image" ? (
+              <ImageAttachmentRow key={item.ref} attachment={item} onOpen={props.onOpenImage} />
+            ) : (
+              <AttachmentRow
+                key={item.path}
+                path={item.path}
+                declaredKind={item.fileKind}
+                fact={props.facts.get(item.path)}
+                roots={props.roots}
+                onSelectPreview={props.onSelectPreview}
+                onReveal={props.onReveal}
+                onReference={props.onReference}
+              />
+            ),
+          )
+        ))}
     </section>
   );
 }
@@ -1062,7 +1096,7 @@ function AttachmentRow(props: {
 /** 灰字占位行（工作台为空 / 目录没了 / 还没有会话 / 加载中）——只占一行，不出空文件夹。
  *  ellipsis 包在内层 span 上：外层是 flex（spinner 行里有图标），flex 容器自己的
  * text-overflow 不作用于匿名子项，省略号根本不出来（树并排窄列实测被硬切） */
-function DimRow(props: { children: React.ReactNode; title?: string }) {
+function DimRow(props: { children: React.ReactNode; title?: string; indent?: number }) {
   return (
     <p
       title={props.title}
@@ -1072,6 +1106,8 @@ function DimRow(props: { children: React.ReactNode; title?: string }) {
         display: "flex",
         alignItems: "center",
         padding: "0 var(--space-2)",
+        // indent：挂在某一层目录下时与该层文件名对齐（chevron 12 + 图标 14 + 两个 gap）
+        paddingLeft: `calc(var(--space-2) + ${(props.indent ?? 0) * 16}px + ${props.indent ? 32 : 0}px)`,
         fontSize: "var(--font-size-caption)",
         color: "var(--color-text-tertiary)",
       }}
