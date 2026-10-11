@@ -63,12 +63,15 @@ export function shortDate(dateKey: string): string {
   return dateKey.slice(5);
 }
 
+/** 能量体的 SVG 宽（viewBox 80×48，云心在正中） */
+const PET_WIDTH = 80;
+
 /**
- * 星云能量体的落位：第 index 格上方（能量体宽 80，格子行宽 216——
- * SIDEBAR_WIDTH_MIN 240 减两侧 12px 内边距，恰与「新任务」按钮同宽）。
- * 两端夹取：悬停第一格 / 最后一格时能量体贴边而不出界。
+ * 星云能量体的落位（返回 SVG 左缘）：**云心始终对准第 index 格的中心**（2026-10-12
+ * 用户验收：按盒子夹取时云心落在周日与今天之间；按可见边缘右对齐又「偏、不舒服」——
+ * 居中最稳）。最大的云可见半径约 20px、格子半宽 12px，两端各出界约 8px，落在侧栏
+ * 12px 内边距里，不出侧栏；SVG overflow 可见，盒子出界无妨。
  */
 export function petLeft(index: number): number {
-  const center = index * 32 + 12;
-  return Math.max(0, Math.min(center - 40, 216 - 80));
+  return index * 32 + 12 - PET_WIDTH / 2;
 }

@@ -88,9 +88,9 @@ describe("杂项", () => {
     assert.equal(shortDate("2026-10-08"), "10-08");
   });
 
-  test("petLeft：格子中心的上方，两端夹取不出 216 的行宽", () => {
-    assert.equal(petLeft(0), 0); // 第一格：中心 12 - 40 < 0，贴左缘
-    assert.equal(petLeft(3), 68); // 3*32+12-40 = 68
-    assert.equal(petLeft(6), 136); // 6*32+12-40 = 164 > 136（216-80），贴右缘
+  test("petLeft：云心始终对准格子中心（SVG 宽 80，左缘 = 中心 - 40）", () => {
+    assert.equal(petLeft(0) + 40, 12);
+    assert.equal(petLeft(3) + 40, 108);
+    assert.equal(petLeft(6) + 40, 204); // 今天
   });
 });
