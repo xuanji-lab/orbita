@@ -321,9 +321,7 @@
   padding: 1px 0;
   background: var(--chip-fill);
   box-shadow:
-    0 0 0 1px var(--chip-fill),
-    -2px 0 0 1px var(--chip-fill),
-    2px 0 0 1px var(--chip-fill);
+    0 0 0 1px var(--chip-fill);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }

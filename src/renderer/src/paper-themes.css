@@ -80,8 +80,6 @@
   --chip-fill: color-mix(in srgb, var(--color-text-primary) 10%, var(--color-paper-whiteout));
   box-shadow:
     0 0 0 1px var(--chip-fill),
-    -2px 0 0 1px var(--chip-fill),
-    2px 0 0 1px var(--chip-fill),
     0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
