@@ -1736,6 +1736,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           restoreRef.current = null;
           return;
         }
+        // 回合级失败（turn: true）一定出自一轮已经回显过用户消息的轮——快照那条还没回显，
+        // 这条失败就不是它的，而是它前面那一轮的（典型：抢跑打断工具执行中的旧轮）。
+        // 当成「没发出去」回填，已经发出去的话就会回到输入框（2026-09-29 用户稳定复现）
+        if (event.type === "failed" && event.turn === true) return;
         if (event.type === "failed" || (event.type === "phase" && event.phase === "idle")) {
           restoreRef.current = null;
           restoreSent(snap);

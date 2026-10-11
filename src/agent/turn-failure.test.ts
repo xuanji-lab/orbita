@@ -116,3 +116,28 @@ describe("createTurnFailureTracker —— 不重试的模型错误要报出来",
     );
   });
 });
+
+describe("createTurnFailureTracker —— 被我们自己停下的轮不报", () => {
+  // 真实时序（2026-09-29 CDP 复现）：bash 执行中被抢跑 → 工具出错 → pi 再调一次模型，
+  // 拿着已 abort 的 signal 立刻得到 stopReason=error 的空回答
+  const abortedInTool: TurnFailureEvent[] = [
+    { type: "agent_start" },
+    { type: "agent_end", willRetry: false, messages: [user, errorReply("This operation was aborted")] },
+    { type: "agent_settled" },
+  ];
+
+  test("停止 / 抢跑过的轮：abort 带出的错误回答不报", () => {
+    const observe = createTurnFailureTracker(() => true);
+    assert.deepEqual(abortedInTool.map(observe).filter((value) => value !== null), []);
+  });
+
+  test("没停过的轮照报：判定读的是 settled 那一刻的 abort 状态", () => {
+    let aborted = false;
+    const observe = createTurnFailureTracker(() => aborted);
+    assert.equal(observe(abortedInTool[1] as TurnFailureEvent), null);
+    assert.equal(observe({ type: "agent_settled" }), "This operation was aborted");
+    aborted = true;
+    observe(abortedInTool[1] as TurnFailureEvent);
+    assert.equal(observe({ type: "agent_settled" }), null);
+  });
+});

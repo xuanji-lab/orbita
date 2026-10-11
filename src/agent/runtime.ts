@@ -1098,7 +1098,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 下面的订阅置位。预检压缩（prompt 前那一次）发生时 echoedAt 已有、sawAssistant
   // 还是 false——compaction_end 据此盖回显的时间戳，界碑落到刚发那句之前。
   const turn: TurnTiming = { echoedAt: null, sawAssistant: false };
-  const observeTurnFailure = createTurnFailureTracker();
+  // 本轮被停止 / 抢跑过就不报回合失败：abort 后 pi 再调一次模型得到的 aborted 错误不是模型错误
+  const observeTurnFailure = createTurnFailureTracker(
+    () => running.get(command.sessionId)?.abortRequested === true,
+  );
   const unsubscribe = session.subscribe((event) => {
     // 文件快照的 after：工具落定即读盘。不 await（读盘是毫秒级，不该卡事件流），
     // finalize 自己等在途读全部落定
