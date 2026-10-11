@@ -4,6 +4,7 @@ import { IconButton } from "./IconButton";
 import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
+import { UsageMeter } from "./UsageMeter";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
@@ -217,6 +218,14 @@ export function Sidebar(props: {
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
+  /**
+   * 任意会话在跑（含后台与子会话）：用量格的星云碎片 3 倍速——「今在干活」
+   * 是全应用的状态，不是当前会话的。phaseOf 读引擎的同步镜像；每次 phase
+   * 事件都会把 App 重渲染、侧栏跟着拿到新鲜值。**不套 useMemo**：列表引用
+   * 在轮内不变，memo 会把「开跑」那一拍漏掉（idle 后的重拉才换引用）。
+   */
+  const anyRunning = session.sessions.some((meta) => session.phaseOf(meta.id) !== "idle");
+
   const width = props.width;
   /** 高亮哪一条：盖着别的面时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.overlay !== null ? null : (session.sessionId ?? session.opened?.id ?? null);
@@ -767,6 +776,13 @@ export function Sidebar(props: {
           </>
         )}
       </div>
+
+      {/**
+       * 左下角的 7 天 token 用量格 + 星云能量体：常驻（不是实验功能），
+       * 宽度钉在 216px（SIDEBAR_WIDTH_MIN 的内容宽），侧栏拖宽时保持左对齐。
+       * 折叠态（48px 图标条）不渲染——那里放不下 7 格。
+       */}
+      <UsageMeter running={anyRunning} />
     </aside>
     {/*
       拖宽热区：侧栏与对话面之间那道缝里的 6px，紧贴面的左缘。

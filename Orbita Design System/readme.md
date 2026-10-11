@@ -153,6 +153,14 @@ theme's panel / muted / app grounds (icon use), hues ≥ 40° apart, guarded by
 `filetype-colors.test.ts`. Chip usage is tint-and-stroke: a light `color-mix` tint of the same
 variable as the fill, the full colour as the stroke, text in ink; icons may use the full colour.
 
+**Nebula colour** (`--color-nebula`, added 2026-10): the colour of the sidebar's daily
+token-usage squares and the nebula energy creature sitting on them (bottom-left) — usage is
+data, not an action or a status, so it borrows neither the accent nor any status colour; tiers
+are the same colour mixed at 30 / 62 / 100 % opacity. **Each theme carries its own nebula, like
+real nebulae each have a colour**: light reflection blue `#2f6bf0`, 黛 oxygen-emission cyan
+`#3ec1c9`, 玄 hydrogen-emission magenta `#e0588f`, Copybook ink green `#3b7a55`, Typescript
+red-pen vermilion `#c0442e`.
+
 **Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is
 unchanged — **the shell (the ground the left rail and right icon strip sit on) is the lighter

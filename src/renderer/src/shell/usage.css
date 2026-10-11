@@ -1,0 +1,207 @@
+/*
+ * 7 天用量格 + 星云能量体（侧栏左下角，UsageMeter.tsx）。
+ *
+ * 颜色一律 var(--color-nebula)——设计系统 token，五主题各一值（反射蓝 / 氧青 /
+ * 氢品红 / 墨绿 / 红笔朱）；档位是同一色的透明度（30 / 62 / 100%）。
+ * 几何：格子行 216px = SIDEBAR_WIDTH_MIN(240) − 两侧 12px 内边距，恰与
+ * 「新任务」按钮同宽；侧栏拖宽时格子**不拉伸**、保持左对齐（grid 定宽列）。
+ */
+
+.usage-meter {
+  position: relative;
+  /* 能量体的停机坪：80×48 的云悬在格子上方，云心对准当前格（petLeft） */
+  padding-top: 46px;
+  flex: 0 0 auto;
+}
+
+/* 能量体：绝对定位在格子上方，left 随悬停/今天移动（160ms 缓动，motion token） */
+.usage-pet {
+  position: absolute;
+  top: 0;
+  transition: left var(--duration-fast) var(--ease-out-quint);
+  /* 不挡格子与 tooltip 的指针路 */
+  pointer-events: none;
+}
+
+.usage-orb {
+  display: block;
+  overflow: visible;
+}
+
+/* 云的呼吸：4s 在 1 ↔ 1.06 之间。anim-continuous 是窗口失焦暂停的标记类
+   （styles.css 的 `[data-window-inactive]` 规则，orbita-spin 同款） */
+.usage-cloud {
+  animation: usage-breathe 4s ease-in-out infinite;
+  transform-origin: 0 0;
+}
+
+/* 档位切换时云的大小平滑收放：r / cx / cy 在 Chromium 是 CSS 几何属性，可过渡 */
+.usage-cloud circle {
+  transition:
+    r var(--duration-fast) var(--ease-out-quint),
+    cx var(--duration-fast) var(--ease-out-quint),
+    cy var(--duration-fast) var(--ease-out-quint);
+}
+
+@keyframes usage-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+/* 云体渐变与碎片：三色都在 --color-nebula 一族里派生 */
+.neb-in {
+  stop-color: var(--color-nebula);
+  stop-opacity: 0.6;
+}
+.neb-out {
+  stop-color: var(--color-nebula);
+  stop-opacity: 0;
+}
+.usage-chunk-0 {
+  fill: var(--color-nebula);
+}
+.usage-chunk-1 {
+  fill: color-mix(in srgb, var(--color-nebula) 55%, var(--color-text-primary));
+}
+.usage-chunk-2 {
+  fill: var(--color-text-secondary);
+}
+
+/* 眼睛：正墨。睡着（0 档）是两条弧线 */
+.usage-eye {
+  fill: var(--color-text-primary);
+}
+.usage-eye-line {
+  fill: none;
+  stroke: var(--color-text-primary);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+/* 格子行：7 × 24px + 6 × 8px = 216px，与「新任务」按钮同宽（不随侧栏拉伸） */
+.usage-cells {
+  display: grid;
+  grid-template-columns: repeat(7, 24px);
+  gap: 8px;
+  width: 216px;
+}
+
+.usage-col {
+  display: grid;
+  justify-items: center;
+  /* 格子与周几标签之间：4px 太挤（2026-10-12 用户验收），给一档 space-2 */
+  gap: var(--space-2);
+}
+
+/* 一格：档位是 --usage-p 透明度；0 档是空格（发丝内描边） */
+.usage-cell {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-nebula) var(--usage-p), transparent);
+  cursor: default;
+}
+.usage-cell[data-tier="0"] {
+  --usage-p: 0%;
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+}
+.usage-cell[data-tier="1"] {
+  --usage-p: 30%;
+}
+.usage-cell[data-tier="2"] {
+  --usage-p: 62%;
+}
+.usage-cell[data-tier="3"] {
+  --usage-p: 100%;
+}
+
+/* 今天：tertiary 描边；悬停 / 键盘聚焦：primary 描边（后写覆盖同一天的同款描边） */
+.usage-cell[data-today],
+.usage-cell:hover,
+.usage-cell:focus-visible {
+  outline: 1.5px solid var(--color-text-tertiary);
+  outline-offset: 2px;
+}
+.usage-cell:hover,
+.usage-cell:focus-visible {
+  outline-color: var(--color-text-primary);
+}
+
+/* 星期短标：11px 微字（设计系统字阶最小档），今天的加粗正墨 */
+.usage-wd {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-micro);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+}
+.usage-wd[data-now] {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+/*
+ * 星云说的话：悬停一格时从云头顶冒出的小气泡（不是浮层 tooltip——跟着星云走）。
+ * 字号与格子下的星期同档（micro），尾巴是一个转 45° 的小方块，同底同描边，指向云。
+ * 默认居中在云上方；靠两端的格子（data-edge）把气泡往里收，尾巴仍对准云心。
+ */
+.usage-say {
+  position: absolute;
+  bottom: calc(100% - 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-micro);
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  animation: usage-say-in var(--duration-fast) var(--ease-out-quint);
+}
+.usage-say::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  background: var(--color-bg-panel);
+  border-right: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+  transform: rotate(45deg);
+}
+.usage-say[data-edge="start"] {
+  transform: translateX(-14px);
+}
+.usage-say[data-edge="start"]::after {
+  left: 14px;
+}
+.usage-say[data-edge="end"] {
+  transform: translateX(calc(-100% + 14px));
+}
+.usage-say[data-edge="end"]::after {
+  left: calc(100% - 14px);
+}
+@keyframes usage-say-in {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .usage-say {
+    animation: none;
+  }
+}

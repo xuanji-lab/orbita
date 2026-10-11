@@ -89,6 +89,13 @@
   --color-filetype-slides: #c2410c;
   --color-filetype-sheet: #15803d;
 
+  /* 星云色（2026-10 起，读法见 readme *Nebula colour*）：侧栏左下角「7 天用量格 +
+     星云能量体」的专用色。用量是数据不是操作也不是状态，不借 accent / 状态色；
+     格子按档位混透明（30 / 62 / 100%）、能量体的云与碎片同色。每个主题一种
+     星云主色，像宇宙里不同星云各有主色：浅色是反射星云蓝，黛是氧发射青，
+     玄是氢发射品红，纸面两档取各自的笔色。 */
+  --color-nebula: #2f6bf0;
+
 }
 
 /*
@@ -152,6 +159,9 @@
   --color-filetype-doc: #6ea8fe;
   --color-filetype-slides: #ff9466;
   --color-filetype-sheet: #4ecf7e;
+  /* 星云色（读法见亮档注释与 readme *Nebula colour*）：黛档取氧发射青——深空星云
+     看的是发射线自己的颜色，暗档整体换亮值 */
+  --color-nebula: #3ec1c9;
 
 }
 
@@ -204,6 +214,9 @@
   --color-filetype-doc: #6ea8fe;
   --color-filetype-slides: #ff9466;
   --color-filetype-sheet: #4ecf7e;
+  /* 星云色（读法见亮档注释与 readme *Nebula colour*）：玄档取氢发射品红——与黛的
+     氧发射青是两种不同的发射星云 */
+  --color-nebula: #e0588f;
 
 }
 
@@ -264,6 +277,9 @@
   --color-filetype-doc: #1b5dc7;
   --color-filetype-slides: #c2410c;
   --color-filetype-sheet: #15803d;
+  /* 星云色（读法见亮档注释与 readme *Nebula colour*）：小学作业取作业本格线的墨绿——
+     纸面上用量就该是笔色，不是荧光 */
+  --color-nebula: #3b7a55;
 
 }
 
@@ -319,5 +335,8 @@
   --color-filetype-doc: #1b5dc7;
   --color-filetype-slides: #c2410c;
   --color-filetype-sheet: #15803d;
+  /* 星云色（读法见亮档注释与 readme *Nebula colour*）：打字稿取红笔朱——纸面两档
+     各取自己的笔色 */
+  --color-nebula: #c0442e;
 
 }

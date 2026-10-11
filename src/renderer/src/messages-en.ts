@@ -392,6 +392,16 @@ export const en = {
     jumpToSourceTip: "Open the task this came from",
   },
 
+  usage: {
+    /** 周一基的星期短标（侧栏左下角 7 天用量格下方的字） */
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    today: "Today",
+    /** 悬停一天没有用量时 */
+    noUsage: "A rest day. Enjoy it~",
+    /** 悬停一格：只给当天总量（日期与星期在格子下面） */
+    day: (tokens: string) => `${tokens} tokens`,
+  },
+
   settings: {
     tabs: {
       general: "General",
