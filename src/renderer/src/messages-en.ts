@@ -405,7 +405,7 @@ export const en = {
     languageLockedZh: "This theme is Chinese-only",
     languageLockedEn: "This theme is English-only",
     experimentalLead:
-      "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays",
+      "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
     experimentalAllChanges: (count: number) => `All ${count} entries`,
     experimentalCollapse: "Collapse",
     agent: "Agent",

@@ -587,6 +587,10 @@
 .pv-vcard.exp-card.open {
   grid-column: 1 / -1;
 }
+/* 右列的卡展开后横跨两列、整行下移，左边会空出一格——dense 让后面的卡回填进去，不留洞 */
+.exp-cards {
+  grid-auto-flow: row dense;
+}
 
 .exp-card-head {
   display: flex;
