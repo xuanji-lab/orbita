@@ -30,7 +30,7 @@ export function turnFields(
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
   },
-): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "mode" | "thinkingLevel" | "piSessionDir" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage"> {
+): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "mode" | "thinkingLevel" | "piSessionDir" | "piSessionFile" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage"> {
   // workspaceName 缺席时彻底不进命令对象（可送化与深比较都要稳定形状）：
   // 有工作区但翻不出名字是「未知」，不是「无工作区」——两态靠 workspaceId 区分
   const { workspaceName, ...rest } = environment;
@@ -47,5 +47,9 @@ export function turnFields(
     piSessionDir,
     protectedPaths,
     ...rest,
+    // 续会话的唯一通路：把 pi 自己的本子还给它（runtime 的 SessionManager.open）。
+    // 缺了它 runtime 每轮都新建本子——模型看不到前文，created 事件还会把 meta 改指到
+    // 新本子上，回退从此对不上账（2026-10-11 抽出本模块时漏过这一行的事故）
+    ...(input.resume !== null ? { piSessionFile: input.resume.piSessionFile } : {}),
   };
 }
