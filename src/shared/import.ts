@@ -16,8 +16,10 @@
 /**
  * 迁移来源（2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
  *
- * - proma：Proma 桌面应用。数据根是家目录下的 `.proma` 与它的变体（`.proma-dev`、`.proma-dev-fork`…，
- *   开发版与正式版各用一个），有几个读几个；同一条会话在几个根里都有时只导一份（跳过原因 duplicate）
+ * - proma：Proma 桌面应用。数据根是家目录下的 `.proma`（自动定位只认它——名字变体
+ *   `.proma-dev`、`.proma-dev-fork` 这类是开发实例，不自动扫，理由见 import-locate.ts 模块头；
+ *   散落的历史数据目录走 Migration 页的自定义路径入口手动添加）。同一条会话在几个根里都有时
+ *   只导一份（跳过原因 duplicate）
  * - claude-code：Claude Code 的会话存储（~/.claude/projects），命令行与 Claude 桌面应用共用；
  *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题；另有 ~/.claude/skills
  * - kimi-code：Kimi Code 命令行（~/.kimi-code）：会话在 sessions/<工作区>/<会话>/ 下，对话是

@@ -16,6 +16,12 @@
  * 环境变量（CLAUDE_CONFIG_DIR / CODEX_HOME）优先：用户显式指定压过一切命名惯例——名字可以
  * 不含产品名、也不必在基础目录下，validate 过就算。
  *
+ * **proma 例外（matchVariants = false，2026-10 开源准备）**：开源后，按名字能撞出来的
+ * `.proma-dev`、`.proma-worktree` 这类变体是 orbita 团队自己的开发实例，不是用户数据，不该被
+ * 自动扫描收进来——proma 的自动定位只认 canonical（`~/.proma`，同款小写比较）。真实用户手上
+ * 散落的历史数据目录（备份、改名过的旧目录）走 Migration 页的自定义路径入口：手动添加、
+ * validate 过了才参与扫描。其余来源的变体匹配不变——那是真实用户需求（上面的裁决记录）。
+ *
  * 顺序必须稳定（env → canonical → 其余按名字）：执行导入时会重扫，用户在页面上勾的是扫描时
  * 看到的路径，两次扫描顺序不一样勾选会对错位。这个顺序同时决定几个目录里内容相同的会话留
  * 哪一份（排前面的胜），见 importer.ts 的 dedupeAcrossRoots。
@@ -64,6 +70,12 @@ export interface DataRootSpec {
   /** 在哪个基础目录的第一层找 */
   base: DataRootBase;
   /**
+   * 按名字变体找不找：缺省 true = 基础目录第一层里名字含 token 的目录都进候选；false = 只认
+   * canonical（小写比较）。只有 proma 设 false（理由见模块头注释）：开源后名字撞出来的
+   * `.proma-dev` 这类变体是开发实例，不是用户数据。env 入口不受影响——那要用户显式设变量
+   */
+  matchVariants?: boolean;
+  /**
    * 环境变量直接指定一个数据目录：有值（非空串）时先于一切命名惯例检查，目录名可以
    * 不含 token、也不必在 base 下，validate 过就算。不设 = 没有这个入口
    */
@@ -101,6 +113,8 @@ export const DATA_ROOT_SPECS: Record<Exclude<ImportSourceId, "agent-skills">, Da
     token: "proma",
     canonical: ".proma",
     base: "home",
+    // 不按名字收变体（模块头注释）：自动定位只认 ~/.proma，散落的历史目录走自定义路径入口
+    matchVariants: false,
     // agent-sessions.json 是会话索引；旧数据根可能只剩 sdk-config/sessions（pi 真源）——
     // 索引里的源文件路径会指过去，两处入口任一在就算
     validate: async (dir) =>
@@ -193,7 +207,14 @@ export async function findDataRoots(spec: DataRootSpec, ctx: LocateContext): Pro
     return out;
   }
   const canonicalLower = spec.canonical.toLowerCase();
-  const matched = names.filter((name) => name.toLowerCase().includes(spec.token)).sort(byLowerName);
+  // 名字收编：canonical 恒收（小写比较）；变体（名字含 token）只在 spec.matchVariants 时收
+  const matchVariants = spec.matchVariants !== false;
+  const matched = names
+    .filter((name) => {
+      const lower = name.toLowerCase();
+      return lower === canonicalLower || (matchVariants && lower.includes(spec.token));
+    })
+    .sort(byLowerName);
   const ordered = [
     ...matched.filter((name) => name.toLowerCase() === canonicalLower),
     ...matched.filter((name) => name.toLowerCase() !== canonicalLower),

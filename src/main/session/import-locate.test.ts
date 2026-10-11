@@ -175,21 +175,34 @@ describe("findDataRoots（codex：CODEX_HOME 优先）", () => {
 // findDataRoots：各来源的 validate 依据与误判样本
 // ---------------------------------------------------------------------------
 
-describe("findDataRoots（proma：agent-sessions.json 或 sdk-config/sessions 任一即可）", () => {
-  test("有会话索引文件的数据根算", async () => {
+describe("findDataRoots（proma：只认 canonical，名字变体不进自动扫描）", () => {
+  // 变体匹配収窄只针对 proma；其它来源的变体照常命中、env 指定仍然优先，由下面 zcode / codex
+  // 两组用例背书——它们与本组同文件同跑，收窄误伤会在那里红
+  test("canonical 命中：agent-sessions.json 在就算；-dev / -worktree 变体有同款数据也不收", async () => {
     await mkdir(join(home, ".proma"), { recursive: true });
     await writeFile(join(home, ".proma", "agent-sessions.json"), "{}");
     await mkdir(join(home, ".proma-dev"), { recursive: true });
     await writeFile(join(home, ".proma-dev", "agent-sessions.json"), "{}");
-    assert.deepEqual(await findDataRoots(DATA_ROOT_SPECS["proma"], ctx()), [
-      join(home, ".proma"),
-      join(home, ".proma-dev"),
-    ]);
+    await mkdir(join(home, ".proma-worktree"), { recursive: true });
+    await writeFile(join(home, ".proma-worktree", "agent-sessions.json"), "{}");
+    assert.deepEqual(await findDataRoots(DATA_ROOT_SPECS["proma"], ctx()), [join(home, ".proma")]);
   });
 
-  test("旧数据根只剩 sdk-config/sessions（pi 真源）也算——索引里的源文件会指过去", async () => {
-    await mkdir(join(home, ".proma-old", "sdk-config", "sessions"), { recursive: true });
-    assert.deepEqual(await findDataRoots(DATA_ROOT_SPECS["proma"], ctx()), [join(home, ".proma-old")]);
+  test("canonical 只剩 sdk-config/sessions（pi 真源）也算——索引里的源文件会指过去", async () => {
+    await mkdir(join(home, ".proma", "sdk-config", "sessions"), { recursive: true });
+    assert.deepEqual(await findDataRoots(DATA_ROOT_SPECS["proma"], ctx()), [join(home, ".proma")]);
+  });
+
+  test("canonical 大小写不同也算（与变体匹配同款的小写比较）", async () => {
+    await mkdir(join(home, ".PROMA"), { recursive: true });
+    await writeFile(join(home, ".PROMA", "agent-sessions.json"), "{}");
+    assert.deepEqual(await findDataRoots(DATA_ROOT_SPECS["proma"], ctx()), [join(home, ".PROMA")]);
+  });
+
+  test("盘上只有变体、没有 canonical 时 proma 判为没找到（变体不顶替 canonical）", async () => {
+    await mkdir(join(home, ".proma-dev"), { recursive: true });
+    await writeFile(join(home, ".proma-dev", "agent-sessions.json"), "{}");
+    assert.deepEqual(await findDataRoots(DATA_ROOT_SPECS["proma"], ctx()), []);
   });
 });
 
