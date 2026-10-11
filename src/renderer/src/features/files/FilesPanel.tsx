@@ -632,9 +632,6 @@ function RootLabel(props: {
   const label = (
     <>
       <Icon name="chevron-right" size={11} strokeWidth={2.2} className="files-root-chev" />
-      {props.kind === "session" && (
-        <Icon name="message-square" size={11} style={{ flex: "0 0 auto" }} />
-      )}
       <span style={{ flex: "0 0 auto" }}>
         {props.kind === "session" ? t.files.session : props.kind === "workspace" ? t.files.workspace : t.files.attached}
       </span>
