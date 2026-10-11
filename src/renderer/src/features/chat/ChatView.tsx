@@ -525,9 +525,10 @@ function ChatViewBody(props: {
    */
   scrollToEndHotkey?: boolean;
   /**
-   * 「/ + 空格」打开右栏选取（panel-token.ts）：消息开头孤立的 / 按空格时交出插入
-   * 锚点。**只有主槽的 ChatView 拿到它**（App 在那边接住去开面板）；抽屉 / 面板内
-   * 的 Composer 不参与，那边的 / 空格就是普通文字。
+   * 「/ + 空格」打开右栏选取（panel-token.ts）：行首或空白后孤立的 / 按下空格时
+   * （句中同样触发，2026-10-11 用户裁定）交出插入锚点。**只有主槽的 ChatView
+   * 拿到它**（App 在那边接住去开面板）；抽屉 / 面板内的 Composer 不参与，
+   * 那边的 / 空格就是普通文字。
    */
   onSlashSpace?: (position: number) => boolean;
   /**

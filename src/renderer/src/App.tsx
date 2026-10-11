@@ -449,7 +449,8 @@ export function App() {
   }, []);
 
   // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
-  // Composer 把消息开头孤立的 / 按空格时交来插入锚点（那个 / 的位置）；面板选中后
+  // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
+  // 交来插入锚点（那个 / 的位置）；面板选中后
   // 经 tokenPickResult（nonce 一次性请求，同 channelOpenRequest / reviewFocus 的
   // 先例）传回 ChatView 插入并焦点回输入框。选完即收面板：选取是输入辅助，与指令
   // 面板同一种临时性；拖拽入口不受影响（面板开着时随时能拖）。

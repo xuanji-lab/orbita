@@ -115,8 +115,9 @@ export function Composer(props: {
   /** 当前模型看不了图：有附图时在缩略图下说一句（pi 会把图换成占位文字，不报错） */
   imageUnsupported?: boolean;
   /**
-   * 「/ + 空格」打开右栏选取（panel-token.ts）：消息开头孤立的 / 按下空格时，
-   * Composer 删掉这个 / 并把插入锚点交给调用方（App 开面板）。返回 false 或
+   * 「/ + 空格」打开右栏选取（panel-token.ts）：行首或空白后孤立的 / 按下空格时
+   * （句中同样触发，2026-10-11 用户裁定），Composer 删掉这个 / 并把插入锚点
+   * 交给调用方（App 开面板）。返回 false 或
    * 不传 = 没人接，空格照常逃字。只有主槽的
    * ChatView 提供；抽屉 / 面板内的 Composer 不参与（那边没有右栏选取可接）。
    */
@@ -432,9 +433,10 @@ export function Composer(props: {
               }
               return;
             }
-            // 「/ + 空格」打开右栏 Skills 面板选取（panel-token.ts）：只认消息开头
-            // 孤立的 /，句中的「a / b」是普通文字。删 / 走 execCommand("delete")
-            // 保撤销栈；被拒退回 onChange 直写。组词中不触发
+            // 「/ + 空格」打开右栏 Skills 面板选取（panel-token.ts）：行首或空白后
+            // 孤立的 /（句中同样触发，2026-10-11 用户裁定；a/ 、/tmp/ 这类由
+            // slashTokenAt 的闸门拦下）。删 / 走 execCommand("delete") 保撤销栈；
+            // 被拒退回 onChange 直写。组词中不触发
             if (
               event.key === " " &&
               !event.nativeEvent.isComposing &&
