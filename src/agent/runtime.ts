@@ -43,6 +43,7 @@ import { attachmentBlocks, composePromptText } from "../shared/prompt-attachment
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
+import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -255,6 +256,9 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
         maxTokens: 2048,
         timeoutMs: GREETING_TIMEOUT_MS,
         signal: AbortSignal.timeout(GREETING_TIMEOUT_MS),
+        // 选中的模型可能是 OAuth Claude：completeSimple 不经主循环的扩展通路，
+        // 车道改写要随 options 带上（非 OAuth payload 原样过，见 cc-billing-patch.ts）
+        onPayload: ccBillingPatch,
         ...(command.provider.headers ? { headers: command.provider.headers } : {}),
       },
     );
@@ -307,6 +311,10 @@ async function probeProvider(command: Extract<AgentCommand, { type: "probeProvid
         maxTokens: 64,
         timeoutMs: PROBE_TIMEOUT_MS,
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        // 探测的使命就是复刻真会话的 Claude Code 形状：OAuth 车道上同样要带上
+        // billing header、去掉身份块，否则 opus-5-5 这类新模型会以
+        // claude_code_version_too_old 拒绝探测，而真会话其实是通的
+        onPayload: ccBillingPatch,
         ...(command.provider.headers ? { headers: command.provider.headers } : {}),
       },
     );
@@ -367,6 +375,9 @@ async function generateSessionTitle(
         maxTokens: 1024,
         timeoutMs: TITLE_TIMEOUT_MS,
         signal: AbortSignal.timeout(TITLE_TIMEOUT_MS),
+        // 会话模型（或家务活模型）可能是 OAuth Claude：标题调用不经主循环的扩展
+        // 通路，车道改写随 options 带上，否则 OAuth 车道上标题永远静默失败
+        onPayload: ccBillingPatch,
         ...(auth.headers ? { headers: auth.headers } : {}),
       },
     );
@@ -898,6 +909,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     thinkingLevel: command.thinkingLevel,
     ...(customTools.length > 0 ? { customTools } : {}),
   });
+  // 订阅车道改写的落点补全（cc-billing-stream.ts）：压缩 / 分支摘要绕过主循环的
+  // before_provider_request，包一层 streamFunction 把改写给到每一条出站请求
+  applyBillingStreamPatch(session);
   // 开轮即推一次真值：模型可能把我们传的档 clamp 到就近支持档（静默），
   // 芯片必须显示 clamp 后的事实而不是用户点的意图。每轮都推也兼容
   // 「换模型后支持集变了」——芯片每次开轮自我纠真
