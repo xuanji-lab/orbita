@@ -5,13 +5,16 @@ import {
   defaultGroupFolded,
   foldKeyForWorkspace,
   isGroupFolded,
+  groupVisibleLimit,
+  nextPageSize,
+  showLessInGroup,
+  showMoreInGroup,
   toggleGroupFold,
-  toggleGroupFull,
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
 
-const empty = (): SidebarGroupState => ({ overrides: new Set<string>(), full: new Set<string>() });
+const empty = (): SidebarGroupState => ({ overrides: new Set<string>(), pages: new Map<string, number>() });
 
 describe("默认折叠态", () => {
   it("工作区组默认折叠（只留组头），TASKS 默认展开", () => {
@@ -40,17 +43,18 @@ describe("toggleGroupFold", () => {
     deepStrictEqual(refolded.overrides.has("workspace:a"), false);
   });
 
-  it("折叠时清掉「全部显示」——重开回到默认预览，折叠才算归位", () => {
+  it("折叠时清掉 Show more 放出的页——重开回到默认预览，折叠才算归位", () => {
     const opened = toggleGroupFold(empty(), "workspace:a");
-    const expanded = toggleGroupFull(opened, "workspace:a");
+    const expanded = showMoreInGroup(showMoreInGroup(opened, "workspace:a"), "workspace:a");
     const folded = toggleGroupFold(expanded, "workspace:a");
-    deepStrictEqual(folded.full.has("workspace:a"), false);
+    deepStrictEqual(folded.pages.has("workspace:a"), false);
+    deepStrictEqual(groupVisibleLimit(toggleGroupFold(folded, "workspace:a"), "workspace:a"), 5);
   });
 
-  it("展开不动「全部显示」——点过 Show more 的组加新任务，列不变回预览", () => {
-    const expanded = toggleGroupFull(empty(), "workspace:a");
+  it("展开不动 Show more 放出的页——点过 Show more 的组加新任务，列不变回预览", () => {
+    const expanded = showMoreInGroup(empty(), "workspace:a");
     const unfolded = unfoldGroup(expanded, "workspace:a");
-    deepStrictEqual(unfolded.full.has("workspace:a"), true);
+    deepStrictEqual(unfolded.pages.get("workspace:a"), 1);
   });
 
   it("不改动原状态——React 靠新引用才知道要重渲染", () => {
@@ -61,18 +65,38 @@ describe("toggleGroupFold", () => {
   });
 });
 
-describe("toggleGroupFull", () => {
-  it("Show more 铺开全组，Show less 收回最近的 N 条（双向）", () => {
-    const expanded = toggleGroupFull(empty(), "workspace:a");
-    deepStrictEqual(expanded.full.has("workspace:a"), true);
-    const collapsed = toggleGroupFull(expanded, "workspace:a");
-    deepStrictEqual(collapsed.full.has("workspace:a"), false);
+describe("Show more / Show less", () => {
+  it("工作区组默认列 5 条，每点一次 Show more 多 5 条；Show less 收回 5 条", () => {
+    const key = "workspace:a";
+    deepStrictEqual(groupVisibleLimit(empty(), key), 5);
+    const once = showMoreInGroup(empty(), key);
+    deepStrictEqual(groupVisibleLimit(once, key), 10);
+    const twice = showMoreInGroup(once, key);
+    deepStrictEqual(groupVisibleLimit(twice, key), 15);
+    deepStrictEqual(groupVisibleLimit(showLessInGroup(twice, key), key), 5);
+  });
+
+  it("TASKS 维持原样：默认 10 条，Show more 一次放完", () => {
+    deepStrictEqual(groupVisibleLimit(empty(), TASKS_FOLD_KEY), 10);
+    deepStrictEqual(groupVisibleLimit(showMoreInGroup(empty(), TASKS_FOLD_KEY), TASKS_FOLD_KEY), Number.POSITIVE_INFINITY);
+  });
+
+  it("下一页放几条：工作区不超过 5 也不超过剩下的；TASKS 一次放完", () => {
+    deepStrictEqual(nextPageSize("workspace:a", 23), 5);
+    deepStrictEqual(nextPageSize("workspace:a", 3), 3);
+    deepStrictEqual(nextPageSize(TASKS_FOLD_KEY, 23), 23);
+  });
+
+  it("各组互不影响", () => {
+    const a = showMoreInGroup(empty(), "workspace:a");
+    deepStrictEqual(groupVisibleLimit(a, "workspace:b"), 5);
   });
 
   it("不动折叠态——收起 Show more 不该顺带把组折了", () => {
     const folded = toggleGroupFold(empty(), TASKS_FOLD_KEY);
-    const full = toggleGroupFull(folded, TASKS_FOLD_KEY);
-    deepStrictEqual(isGroupFolded(full, TASKS_FOLD_KEY), true);
+    const more = showMoreInGroup(folded, TASKS_FOLD_KEY);
+    deepStrictEqual(isGroupFolded(more, TASKS_FOLD_KEY), true);
+    deepStrictEqual(isGroupFolded(showLessInGroup(more, TASKS_FOLD_KEY), TASKS_FOLD_KEY), true);
   });
 });
 

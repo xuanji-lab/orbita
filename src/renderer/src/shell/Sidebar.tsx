@@ -16,12 +16,14 @@ import { rowStatusIcon } from "./row-status.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
 import {
-  SESSIONS_PREVIEW_LIMIT,
   TASKS_FOLD_KEY,
   foldKeyForWorkspace,
+  groupVisibleLimit,
   isGroupFolded,
+  nextPageSize,
+  showLessInGroup,
+  showMoreInGroup,
   toggleGroupFold,
-  toggleGroupFull,
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
@@ -201,7 +203,7 @@ export function Sidebar(props: {
    */
   const [groups, setGroups] = useState<SidebarGroupState>({
     overrides: new Set<string>(),
-    full: new Set<string>(),
+    pages: new Map<string, number>(),
   });
   useEffect(() => {
     const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
@@ -273,8 +275,7 @@ export function Sidebar(props: {
     : session.workspaces;
   const tasksFolded = isGroupFolded(groups, TASKS_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
-  const tasksFull = groups.full.has(TASKS_FOLD_KEY);
-  const looseVisible = tasksFull ? loose : loose.slice(0, SESSIONS_PREVIEW_LIMIT);
+  const looseVisible = visibleWithOpen(loose, groupVisibleLimit(groups, TASKS_FOLD_KEY), openId);
   const open = (id: string) => {
     props.onOverlay(null);
     session.openSession(id);
@@ -672,11 +673,13 @@ export function Sidebar(props: {
                           toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
                         )
                       }
-                      full={groups.full.has(foldKeyForWorkspace(workspace.id))}
-                      onToggleFull={() =>
-                        setGroups((current) =>
-                          toggleGroupFull(current, foldKeyForWorkspace(workspace.id)),
-                        )
+                      limit={groupVisibleLimit(groups, foldKeyForWorkspace(workspace.id))}
+                      expanded={groups.pages.has(foldKeyForWorkspace(workspace.id))}
+                      onMore={() =>
+                        setGroups((current) => showMoreInGroup(current, foldKeyForWorkspace(workspace.id)))
+                      }
+                      onLess={() =>
+                        setGroups((current) => showLessInGroup(current, foldKeyForWorkspace(workspace.id)))
                       }
                       onNewTask={() => {
                         // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
@@ -735,15 +738,13 @@ export function Sidebar(props: {
                         onClick={() => open(meta.id)}
                       />
                     ))}
-                    {loose.length > SESSIONS_PREVIEW_LIMIT && (
-                      <ShowAllRow
-                        full={tasksFull}
-                        hidden={loose.length - SESSIONS_PREVIEW_LIMIT}
-                        onClick={() =>
-                          setGroups((current) => toggleGroupFull(current, TASKS_FOLD_KEY))
-                        }
-                      />
-                    )}
+                    <ShowMoreRow
+                      hidden={loose.length - looseVisible.length}
+                      next={nextPageSize(TASKS_FOLD_KEY, loose.length - looseVisible.length)}
+                      expanded={groups.pages.has(TASKS_FOLD_KEY)}
+                      onMore={() => setGroups((current) => showMoreInGroup(current, TASKS_FOLD_KEY))}
+                      onLess={() => setGroups((current) => showLessInGroup(current, TASKS_FOLD_KEY))}
+                    />
                   </>
                 )}
               </div>
@@ -795,8 +796,11 @@ function WorkspaceGroup(props: {
   openId: string | null;
   folded: boolean;
   onToggleFold: () => void;
-  full: boolean;
-  onToggleFull: () => void;
+  /** 眼下最多列几条（groupVisibleLimit）；expanded = 点过 Show more */
+  limit: number;
+  expanded: boolean;
+  onMore: () => void;
+  onLess: () => void;
   onNewTask: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
@@ -805,9 +809,8 @@ function WorkspaceGroup(props: {
   const t = useT();
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  // 超过预览数只列前 N 条，其余收进「Show N more」；点了才全量铺开
-  const truncated = !props.full && props.sessions.length > SESSIONS_PREVIEW_LIMIT;
-  const visible = truncated ? props.sessions.slice(0, SESSIONS_PREVIEW_LIMIT) : props.sessions;
+  // 只列前 limit 条，其余收进「Show N more」；每点一次多放一页。打开着的那条恒可见
+  const visible = visibleWithOpen(props.sessions, props.limit, props.openId);
 
   const commit = () => {
     if (editing !== null) props.onRename(editing);
@@ -940,13 +943,13 @@ function WorkspaceGroup(props: {
               onClick={() => props.onOpen(meta.id)}
             />
           ))}
-          {props.sessions.length > SESSIONS_PREVIEW_LIMIT && (
-            <ShowAllRow
-              full={props.full}
-              hidden={props.sessions.length - SESSIONS_PREVIEW_LIMIT}
-              onClick={props.onToggleFull}
-            />
-          )}
+          <ShowMoreRow
+            hidden={props.sessions.length - visible.length}
+            next={nextPageSize(foldKeyForWorkspace(props.workspace.id), props.sessions.length - visible.length)}
+            expanded={props.expanded}
+            onMore={props.onMore}
+            onLess={props.onLess}
+          />
         </>
       )}
     </div>
@@ -1076,19 +1079,40 @@ function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () 
 }
 
 /**
- * 「Show N more / Show less」行：一组超过预览数时垫在列表尾。**条数写进文案**——
- * 被藏起来多少这件事不能是悄悄的。双向：铺开后原地变成「Show less」，
- * 点一下收回最近的 N 条（排序保证前 N 条就是最近 N 条，置顶恒在最前）。
+ * 列哪几条：前 limit 条；打开着的会话排在线以下时**单独补在末尾**——不然组展开了、
+ * 高亮的那行却藏在「Show more」里，用户照样看不出自己在哪。只补它一条，不把线
+ * 整段拉到它那里（否则排第 13 的会话一打开，Show less 就形同虚设）。
  */
-function ShowAllRow(props: { full: boolean; hidden: number; onClick: () => void }) {
+function visibleWithOpen<T extends { id: string }>(sessions: readonly T[], limit: number, openId: string | null): T[] {
+  const head = sessions.slice(0, limit);
+  const open = openId === null ? undefined : sessions.find((m) => m.id === openId);
+  return open !== undefined && !head.includes(open) ? [...head, open] : head;
+}
+
+/**
+ * 「Show N more / Show less」行：垫在列表尾。**条数写进文案**——被藏起来多少
+ * 这件事不能是悄悄的（下一次放几条、一共还藏几条）。还有藏着的就是 Show more；
+ * 全放完了且点过 Show more，原地变成 Show less，收回默认预览（排序保证前 N 条
+ * 就是最近 N 条，置顶恒在最前）。没藏、也没点过，就不出现。
+ */
+function ShowMoreRow(props: {
+  hidden: number;
+  next: number;
+  expanded: boolean;
+  onMore: () => void;
+  onLess: () => void;
+}) {
   const t = useT();
+  const hidden = props.hidden;
+  if (hidden === 0 && !props.expanded) return null;
+  const more = hidden > 0;
   return (
     <NavRow
-      icon={props.full ? "chevron-up" : "chevron-down"}
-      label={props.full ? t.sidebar.showLess : t.sidebar.showMore(props.hidden)}
+      icon={more ? "chevron-down" : "chevron-up"}
+      label={more ? t.sidebar.showMore(props.next, hidden) : t.sidebar.showLess}
       active={false}
       tone="var(--color-text-tertiary)"
-      onClick={props.onClick}
+      onClick={more ? props.onMore : props.onLess}
     />
   );
 }

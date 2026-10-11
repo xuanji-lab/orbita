@@ -318,7 +318,7 @@ export const zh: Messages = {
     removeTip: "从列表移除。磁盘上的文件夹不受影响。",
     newTaskInWorkspace: "在此工作区新建任务",
     showLess: "收起",
-    showMore: (hidden) => `再显示 ${hidden} 条`,
+    showMore: (next, hidden) => (next === hidden ? `再显示 ${hidden} 条` : `再显示 ${next} 条（还有 ${hidden} 条）`),
     deletePermanently: "永久删除",
     deleteHintSub: (count) => `+${count} 子会话`,
     deleteHintFiles: (count) => `+${count} 文件`,

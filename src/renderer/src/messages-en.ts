@@ -346,7 +346,7 @@ export const en = {
     removeTip: "Remove from the list. The folder on disk is not touched.",
     newTaskInWorkspace: "New task in this workspace",
     showLess: "Show less",
-    showMore: (hidden: number) => `Show ${hidden} more`,
+    showMore: (next: number, hidden: number) => (next === hidden ? `Show ${hidden} more` : `Show ${next} more (${hidden} hidden)`),
     deletePermanently: "Delete permanently",
     deleteHintSub: (count: number) => `+${count} sub`,
     deleteHintFiles: (count: number) => `+${plural(count, "file")}`,
