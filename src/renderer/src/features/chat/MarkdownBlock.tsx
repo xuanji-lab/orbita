@@ -58,11 +58,17 @@ const BUBBLE_BANNED = ["h1", "h2", "h3", "h4", "h5", "h6"];
 export const MarkdownBlock = memo(function MarkdownBlock({
   text,
   variant = "full",
+  streaming = false,
 }: {
   text: string;
   /** "bubble"：用户气泡内的轻量渲染——标题摊平成文本；单个换行保留为 <br>
    *（remark-breaks，用户消息里按 Enter 的换行不该被 markdown 吞掉）。 */
   variant?: "full" | "bubble";
+  /** 仅流式中的那条消息传 true：尾部未闭合的 `$…` 补上闭合符让公式逐字成形
+   *（pending-math.ts）。落定的消息必须 false——已写完的文本里孤立的 `$`（如
+   * 「价格 $5 起」）不该被凭空补一个闭合符变成公式（2026-10 事故）。memo 按 prop
+   * 浅比较，布尔翻转不引发无关重渲染。 */
+  streaming?: boolean;
 }) {
   const bubble = variant === "bubble";
   return (
@@ -87,7 +93,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
           components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre, span: ChipSpan }}
           {...(bubble ? { disallowedElements: BUBBLE_BANNED, unwrapDisallowed: true } : {})}
         >
-          {closePendingMath(text)}
+          {streaming ? closePendingMath(text) : text}
         </ReactMarkdown>
       </MarkdownErrorBoundary>
     </div>
@@ -189,7 +195,13 @@ function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) 
   const { className, children, node: _node, ...rest } = props;
   const classes = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
   if (!classes.includes("bubble-chip")) {
-    return <span className={className}>{children}</span>;
+    // 非 chip 的 span 原样透传全部属性：KaTeX 的上下标靠 vlist 上的内联 style（top / height）
+    // 定位、MathML 副本靠 aria-hidden——吞掉 rest 时 x^2 的 2 掉到下面变成下标
+    return (
+      <span className={className} {...rest}>
+        {children}
+      </span>
+    );
   }
   const token = String(children);
   const mcp = token.startsWith("/mcp:");
