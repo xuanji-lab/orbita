@@ -837,6 +837,8 @@ function WorkspaceGroup(props: {
   sessions: SessionMeta[];
   session: ChatSession;
   openId: string | null;
+  /** 未读（后台完成没看过的）会话 id 集：行首画未读点 */
+  unread: ReadonlySet<string>;
   folded: boolean;
   onToggleFold: () => void;
   /** 眼下最多列几条（groupVisibleLimit）；expanded = 点过 Show more */
