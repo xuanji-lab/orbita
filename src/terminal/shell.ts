@@ -12,7 +12,11 @@
  * 所以链条必有终点，探测永不失败。
  */
 import { accessSync, constants } from "node:fs";
-import { join } from "node:path";
+import { win32 } from "node:path";
+
+/** Windows 回退链只在 win32 上跑，路径一律按 win32 规则拼——不随宿主平台的 node:path
+ * （macOS 上跑单测时 posix join 会拼出 `C:\\Program Files/PowerShell/...` 的混合分隔符） */
+const join = win32.join;
 
 export interface ResolvedShell {
   /** 可执行文件的绝对路径（cmd 允许是 `cmd.exe` 裸名，交给 PATH 解析） */
