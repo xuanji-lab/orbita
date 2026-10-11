@@ -308,10 +308,15 @@
  * --chip-ground 的取法见 .composer-field），底色与阴影同一变量。
  *
  * 跨行换行时 clone：断开的每一截各自是一个完整的 pill，与底下文字同步换行。
- * copybook 主题的修正液白底变体在 paper-themes.css。
+ * copybook 主题的变体（中性淡墨、skill / MCP 同色系淡底混白）在 paper-themes.css。
+ *
+ * 中性胶囊（粘贴 token）是正墨 10% 混卡底，不是 bg-muted：去描边后 muted 与
+ * 卡面几乎同色（明档 / 稿纸实测看不见），淡墨底的可见度才与 skill / MCP 的
+ * 15% 类别色淡底相当（ΔL* 对齐：明 7.7 vs 8.0、暗 8.8–9.4 vs 8.9–9.6、
+ * 稿纸 7.7 vs 7.8，全部差在 ±0.8 内）。
  */
 .composer-chip {
-  --chip-fill: var(--color-bg-muted);
+  --chip-fill: color-mix(in srgb, var(--color-text-primary) 10%, var(--chip-ground));
   border-radius: var(--radius-xs);
   padding: 1px 0;
   background: var(--chip-fill);
