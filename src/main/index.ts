@@ -42,6 +42,7 @@ import { isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
+import { applyTerminalRequest } from "./terminal/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
 import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
@@ -394,6 +395,19 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerBrowser(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerBrowser(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 终端：agent 的终端工具——PTY 在主进程的 TerminalService（浏览器同一条边界）。
+    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
+    if (event.type === "terminalRequest") {
+      void applyTerminalRequest(terminals, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerTerminal(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerTerminal(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),

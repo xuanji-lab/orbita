@@ -391,6 +391,22 @@ export function App() {
    * 几十毫秒就到。只认主槽正看着的那条母会话：后台会话派出的只出现入口，不弹。
    */
   const [pendingDelegate, setPendingDelegate] = useState<{ parentId: string; childId: string } | null>(null);
+  /**
+   * agent 开了可见终端（terminal:agent-open）→ **自动点亮终端面板位并激活那个 tab**。
+   * agent 的活要让人看见（Proma 的 terminal:agent-open 同款裁决）：否则它在你背后的
+   * 面板里跑 dev server，你想接手都不知道去哪接。信号是一次性的，TerminalPanel
+   * 消费完就清。
+   */
+  const [pendingTerminal, setPendingTerminal] = useState<string | null>(null);
+  useEffect(
+    () =>
+      api.terminal.onEvent((event) => {
+        if (event.type !== "agent-open") return;
+        setRightPanel("terminal");
+        setPendingTerminal(event.terminalId);
+      }),
+    [],
+  );
   const channelParentIdRef = useRef(channelParentId);
   useEffect(() => {
     channelParentIdRef.current = channelParentId;
@@ -767,7 +783,12 @@ export function App() {
                   onInsert={insertPanelToken}
                 />
               ) : shownPanel === "terminal" ? (
-                <TerminalPanel cwd={session.cwd} onClose={() => handlePanel(null)} />
+                <TerminalPanel
+                  cwd={session.cwd}
+                  activateId={pendingTerminal}
+                  onActivated={() => setPendingTerminal(null)}
+                  onClose={() => handlePanel(null)}
+                />
               ) : shownPanel === "drawer" ? (
                 <Drawer
                   engine={engine}

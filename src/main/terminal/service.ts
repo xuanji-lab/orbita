@@ -8,6 +8,7 @@
  * （dispose）全杀。
  */
 import { MessageChannelMain, utilityProcess, type MessagePortMain, type UtilityProcess } from "electron";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   appendReplay,
@@ -18,6 +19,7 @@ import {
   type TerminalEvent,
   type TerminalInfo,
   type TerminalOutputEvent,
+  type TerminalOwner,
   type TerminalSnapshot,
 } from "../../shared/terminal.ts";
 import type { TerminalRuntimeMessage, TerminalRuntimeRequest } from "../../shared/terminal-runtime.ts";
@@ -45,7 +47,16 @@ interface PendingCreate {
   resolve: (info: TerminalInfo) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** 归属跟着创建在途一起记：created 回来时 request 已经不在手边了 */
+  owner: TerminalOwner;
 }
+
+/** create 的内部入参 = IPC 载荷 + 归属（归属只有主进程说得准，不进 IPC 形状） */
+type TerminalOpenRequest = TerminalCreateRequest & { owner: TerminalOwner };
+
+/** agent 终端开出来时的首屏尺寸。视图挂载后 fit 立刻同步真实尺寸（resize 不杀 PTY） */
+const AGENT_TERMINAL_COLS = 80;
+const AGENT_TERMINAL_ROWS = 24;
 
 export class TerminalService {
   private runtimeProcess: UtilityProcess | null = null;
@@ -63,8 +74,35 @@ export class TerminalService {
   /**
    * 开一个终端。幂等：id 已知直接回现状。cwd 只是意愿（失效回退 homedir）；
    * shell 由 runtime 探测。title 按解析后的 cwd 末段铸（tab 上显示的文件夹名）。
+   * **这是人工入口**（renderer IPC）：归属恒为 human。
    */
   create(request: TerminalCreateRequest): Promise<TerminalInfo> {
+    if (!isTerminalId(request.terminalId)) throw new Error(`终端 id 不合法：${String(request.terminalId)}`);
+    const existing = this.terminals.get(request.terminalId);
+    if (existing !== undefined) return Promise.resolve(existing);
+    // 并发 create 同一 id（手快双击）共享同一个 promise
+    const inFlight = this.pendingCreates.get(request.terminalId);
+    if (inFlight !== undefined) return inFlight.promise;
+    return this.open({ ...request, owner: { kind: "human" } });
+  }
+
+  /**
+   * agent 开的终端：id 由**主进程**铸（agent 只说「在哪开」），归属记成该会话。
+   * 开成之后广播 agent-open——renderer 据此点亮面板并激活这个 tab，用户在眼前
+   * 就能看着 agent 干活、随时接手敲键盘。
+   */
+  createForAgent(sessionId: string, request: { cwd?: string; title?: string }): Promise<TerminalInfo> {
+    return this.open({
+      terminalId: randomUUID(),
+      // 首屏尺寸给经典值：视图挂载后 fit 会立刻把真实尺寸同步过来（resize 不杀 PTY）
+      cols: AGENT_TERMINAL_COLS,
+      rows: AGENT_TERMINAL_ROWS,
+      owner: { kind: "agent", sessionId },
+      ...request,
+    });
+  }
+
+  private open(request: TerminalOpenRequest): Promise<TerminalInfo> {
     if (!isTerminalId(request.terminalId)) throw new Error(`终端 id 不合法：${String(request.terminalId)}`);
     const existing = this.terminals.get(request.terminalId);
     if (existing !== undefined) return Promise.resolve(existing);
@@ -74,7 +112,7 @@ export class TerminalService {
     return this.startCreate(request);
   }
 
-  private async startCreate(request: TerminalCreateRequest): Promise<TerminalInfo> {
+  private async startCreate(request: TerminalOpenRequest): Promise<TerminalInfo> {
     await this.ensureRuntime();
     // ensureRuntime 期间 kill 已经到过：不再创建（created 回执里的补杀兜同一意图）
     if (this.cancelledCreates.has(request.terminalId)) throw new Error("终端已在启动完成前关闭");
@@ -103,6 +141,7 @@ export class TerminalService {
         rejectPromise(error);
       },
       timer,
+      owner: request.owner,
     });
     this.post({ type: "create", terminalId, cols: request.cols, rows: request.rows, cwd });
     return promise;
@@ -284,9 +323,15 @@ export class TerminalService {
           cwd: message.cwd,
           pid: message.pid,
           exited: null,
+          owner: pending.owner,
         };
         this.terminals.set(message.terminalId, info);
         pending.resolve(info);
+        // agent 开的终端要可见：广播点亮（带上现状，面板据此收养这个 tab）。
+        // 人工开的不发——人自己点的，不必再闪一下
+        if (info.owner.kind === "agent") {
+          this.broadcast({ type: "agent-open", terminalId: info.terminalId, sessionId: info.owner.sessionId, terminal: info });
+        }
         return;
       }
       case "output":
