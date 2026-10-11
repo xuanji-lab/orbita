@@ -116,6 +116,16 @@ export function isWebPageFile(path: string): boolean {
 }
 
 /**
+ * 轮尾「网页产物」判定（.html / .htm / .svg）：agent 的轮内 mtime 扫描与轮尾卡片的
+ * 网页行用同一张表——扫描收进来的是它、卡片把 changes 里命中的抬成网页行的也是它。
+ * 与 isWebPageFile（面板 / 内置浏览器那套，多认 xhtml）是两张表：本表只收文件账
+ * 与卡片当作「网页产物」的那几种，浏览器能多开的不自动进卡。
+ */
+export function isWebArtifactFile(path: string): boolean {
+  return /\.(?:html?|svg)$/i.test(path);
+}
+
+/**
  * 盘上一条路径的类型（`fs:stat-kind` 的回执字段）。与 `PromptFileRef` / `SentFileRef`
  * （prompt-attachments.ts）的 `kind` 同一套词汇，不与面板的 `FileEntryKind`
  * （还有 symlink / other）混用：这边只回答输入框附件分拣要问的那一问——

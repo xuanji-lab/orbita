@@ -952,14 +952,27 @@ export type AgentEvent =
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**
    * 一轮落定时的文件账（agent 进程的快照跟踪器报来）：正文内联，主进程写 blob
-   * 后落 FileTurnRecord。没有改动的轮不发（不落空记录）。
+   * 后落 FileTurnRecord。没有改动的轮不发（不落空记录）。webArtifacts 是旁路
+   * 网页产物（脚本生成的 .html / .htm / .svg，不在 changes 里、不参与撤销）；
+   * 只有它、没有 changes 的轮也发（卡片要出）。
    */
-  | { type: "fileTurn"; sessionId: string; changes: readonly FileChangePayload[] }
+  | {
+      type: "fileTurn";
+      sessionId: string;
+      changes: readonly FileChangePayload[];
+      webArtifacts?: readonly string[];
+    }
   /**
    * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
    * 与统计——renderer 的轮尾卡片不吃正文，1MB 的文件内容没有理由过这道 IPC。
    */
-  | { type: "fileTurnView"; sessionId: string; turnId: string; changes: readonly FileChangeView[] }
+  | {
+      type: "fileTurnView";
+      sessionId: string;
+      turnId: string;
+      changes: readonly FileChangeView[];
+      webArtifacts?: readonly string[];
+    }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的
    * pending 等待者吃掉它——renderer 不消费，不广播。
