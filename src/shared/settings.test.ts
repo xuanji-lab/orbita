@@ -348,26 +348,6 @@ describe("parseSettings 的 collapsePastedText", () => {
   });
 });
 
-describe("parseSettings 的 composerBlackhole", () => {
-  it("缺席 = 关（不落键）", () => {
-    deepStrictEqual(parseSettings({ theme: "light" }), {
-      theme: "light",
-      drawer: DEFAULT_SETTINGS.drawer,
-    });
-  });
-
-  it("true / false 都原样保留", () => {
-    deepStrictEqual(parseSettings({ composerBlackhole: true }).composerBlackhole, true);
-    deepStrictEqual(parseSettings({ composerBlackhole: false }).composerBlackhole, false);
-  });
-
-  it("非布尔一律丢掉，不当成真", () => {
-    deepStrictEqual(parseSettings({ composerBlackhole: "on" }).composerBlackhole, undefined);
-    deepStrictEqual(parseSettings({ composerBlackhole: 1 }).composerBlackhole, undefined);
-    deepStrictEqual(parseSettings({ composerBlackhole: null }).composerBlackhole, undefined);
-  });
-});
-
 describe("parseSettings 的 choreModel", () => {
   it("缺席 = 各件家务退回会话模型，不落这个键", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }).choreModel, undefined);
@@ -588,29 +568,69 @@ describe("parseSettings 的 providerCardSize（模型服务的卡片尺寸）", 
   });
 });
 
-describe("parseSettings 的 experimental（实验功能总开关）", () => {
-  it("缺席 = 键不在：默认关，不带一个显式的 false 进盘", () => {
-    deepStrictEqual("experimental" in parseSettings({}), false);
+describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
+  it("缺席 = 键不在：全部默认关，不为此落一个空对象", () => {
+    deepStrictEqual("experimentalFeatures" in parseSettings({}), false);
+    deepStrictEqual("experimentalFeatures" in parseSettings({ experimentalFeatures: {} }), false);
   });
 
-  it("显式 true / false 都认", () => {
-    deepStrictEqual(parseSettings({ experimental: true }).experimental, true);
-    deepStrictEqual(parseSettings({ experimental: false }).experimental, false);
+  it("逐项只认布尔；不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "session-lifecycle": false } })
+        .experimentalFeatures,
+      { "paper-themes": true, "session-lifecycle": false },
+    );
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "made-up": true } }).experimentalFeatures,
+      undefined,
+    );
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "paper-themes": "yes" } }).experimentalFeatures,
+      undefined,
+    );
   });
 
-  it("非布尔丢掉（手改得出 \"yes\"，该被丢而不是当成真）", () => {
-    deepStrictEqual("experimental" in parseSettings({ experimental: "yes" }), false);
-    deepStrictEqual("experimental" in parseSettings({ experimental: 1 }), false);
-    deepStrictEqual("experimental" in parseSettings({ experimental: null }), false);
+  it("旧总开关 experimental: true = paper-themes 与 session-lifecycle 都开（黑洞不在其内）", () => {
+    deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, {
+      "paper-themes": true,
+      "session-lifecycle": true,
+    });
+  });
+
+  it("旧总开关 false / 非布尔：不产生任何逐项键", () => {
+    deepStrictEqual(parseSettings({ experimental: false }).experimentalFeatures, undefined);
+    deepStrictEqual(parseSettings({ experimental: "yes" }).experimentalFeatures, undefined);
+  });
+
+  it("旧黑洞开关 composerBlackhole 原样并入 composer-blackhole", () => {
+    deepStrictEqual(parseSettings({ composerBlackhole: true }).experimentalFeatures, {
+      "composer-blackhole": true,
+    });
+    // false 也并入：用户明确关过这一项，比「从未有过这个键」多一层意思，照原样带走
+    deepStrictEqual(parseSettings({ composerBlackhole: false }).experimentalFeatures, {
+      "composer-blackhole": false,
+    });
+    deepStrictEqual(parseSettings({ composerBlackhole: "on" }).experimentalFeatures, undefined);
+  });
+
+  it("新键里已显式给值的项以新键为准，旧键只补缺席的项", () => {
+    deepStrictEqual(
+      parseSettings({
+        experimental: true,
+        composerBlackhole: true,
+        experimentalFeatures: { "session-lifecycle": false, "composer-blackhole": false },
+      }).experimentalFeatures,
+      { "paper-themes": true, "session-lifecycle": false, "composer-blackhole": false },
+    );
   });
 });
 
 describe("selectableThemes（主题选择卡的可选档位）", () => {
-  it("实验开关开着：全六档都可选", () => {
+  it("paper-themes 开：全六档都可选", () => {
     deepStrictEqual(selectableThemes(true), THEME_PREFERENCES);
   });
 
-  it("实验开关关着：纸面两档（copybook / typescript）不出现", () => {
+  it("paper-themes 关：纸面两档（copybook / typescript）不出现", () => {
     deepStrictEqual(selectableThemes(false), ["system", "light", "graphite", "black"]);
   });
 

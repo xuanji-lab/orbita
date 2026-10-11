@@ -46,7 +46,12 @@ export class SettingsStore {
       patch.lastUsed === undefined
         ? current.lastUsed
         : { ...current.lastUsed, ...patch.lastUsed };
-    const next = parseSettings({ ...current, ...patch, drawer, lastUsed });
+    // 实验功能同款按键合并：设置页每张卡只发自己那个 id，不该把别的卡刚写的开关抹掉
+    const experimentalFeatures =
+      patch.experimentalFeatures === undefined
+        ? current.experimentalFeatures
+        : { ...current.experimentalFeatures, ...patch.experimentalFeatures };
+    const next = parseSettings({ ...current, ...patch, drawer, lastUsed, experimentalFeatures });
     await writeJsonAtomic(this.filePath, next);
     this.cache = next;
     return next;
