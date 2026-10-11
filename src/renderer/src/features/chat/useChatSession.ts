@@ -27,7 +27,7 @@ import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import { shouldRefreshSessions } from "./session-list-refresh.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
-import { admitImages, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
+import { admitImages, promptImagesBytes, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
 import {
   admitFileRefs,
@@ -1464,9 +1464,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const t = engine.messagesRef.current;
       const imageCandidates = incoming.filter((file) => PROMPT_IMAGE_MIME_TYPES.includes(file.type));
       const fileCandidates = incoming.filter((file) => !PROMPT_IMAGE_MIME_TYPES.includes(file.type));
+      // 总量线要算上已在输入框里的图：两批各自不超线、叠加却超线时，第二批该被拦下
+      const currentImages = attachmentMap.get(key) ?? [];
       const { accepted: acceptedImages, rejected: imageRejected } = admitImages(
         imageCandidates,
-        attachmentMap.get(key)?.length ?? 0,
+        currentImages.length,
+        promptImagesBytes(currentImages.map((item) => item.image)),
       );
       const { accepted: acceptedFiles, rejected: fileRejected } = admitFileRefs(
         fileCandidates.map((file) => ({ path: api.window.getPathForFile(file), name: file.name })),
