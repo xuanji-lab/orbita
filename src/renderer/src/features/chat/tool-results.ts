@@ -1016,25 +1016,12 @@ export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCa
   return { childId, title, modelId, workbench, thinkingLevel };
 }
 
-/**
- * 子会话：`reply_subsession` / `report_to_parent` 结果 `details` 里落账那条通道消息的 id
- * （`channel-tools.ts` 的 `details: { messageId }`）。发送侧标记点了凭它滚到父子会话面板里
- * 的这一条。running 帧还没有结果、这一刀之前的旧记录 `details` 是空的、字段坏了——
- * 一律 null，调用方退回「滚到通道底部」。
- */
-export function channelSendMessageId(result: ToolTranscriptItem | undefined): string | null {
-  if (result === undefined || result.status === "running") return null;
-  const details = result.details;
-  if (typeof details !== "object" || details === null) return null;
-  const messageId = (details as Record<string, unknown>)["messageId"];
-  return typeof messageId === "string" && messageId !== "" ? messageId : null;
-}
 
 /** channelMarkLabel 的 tone：颜色是第二信号，与 ChannelMarkLine 的取色一一对应。 */
 export type ChannelMarkTone = "question" | "reply" | "neutral" | "done" | "failed";
 
 /**
- * 通道标记行的文案与语气（纯函数，`ChannelMarkLine` 消费）。`ownSide` 是被查看
+ * 通道标记的文案与语气（纯函数；QueueStrip 的排队条目在用）。`ownSide` 是被查看
  * 会话相对通道的身份（父还是子），`peerTitle` 是对面会话的标题（查不到时调用方
  * 传 "Sub-session" / "Parent session" 兜底）。
  *
@@ -1042,9 +1029,6 @@ export type ChannelMarkTone = "question" | "reply" | "neutral" | "done" | "faile
  * question/progress/done/failed（allowedKinds("child")）；本会话是子时看到的是
  * 父发来的 task/reply（allowedKinds("parent")）——两个方向的 kind 空间天然不交叠，
  * "其余组合" 分支理论上不会命中，只是防御性兜底。
- *
- * 标记本 PR 不可点（打开通道是下一个 PR 的事），但行尾仍统一带 ` · view in
- * channel` 次要文字——文案先把「这是可以点开看全文的东西」的期待立住。
  */
 export function channelMarkLabel(
   mark: { from: "parent" | "child"; kind: ChannelMessageKind },
@@ -1080,7 +1064,7 @@ export function channelMarkLabel(
     }
     return { text: c.markOther(peerTitle, c.kinds[mark.kind]), tone: "neutral" };
   })();
-  return { text: c.viewInChannel(label.text), tone: label.tone };
+  return label;
 }
 
 export function summarizeToolResult(result: ToolTranscriptItem | undefined, t: Messages): string | null {

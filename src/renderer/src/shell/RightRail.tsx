@@ -14,10 +14,7 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
- * `--radius-sm`（md 太圆）。辅助对话之后再加一个父子会话面板入口（子会话 PR4b，
- * `channelColumn` prop 非 null 时才出现）——够宽时它是独立的一列、不占面板位；
- * 不够宽时住进面板位（`"channels"`），与其它入口互斥（用户 2026-09-25 裁决，
- * 规则见 `channel-column.ts` 的 `channelPanelWide`）。点亮与开关由 App 按模式算好传入。
+ * `--radius-sm`（md 太圆）。点亮与开关由 App 按模式算好传入。
  *
  * 底部：应用入口（Archived / Carryovers / Settings），**首页常驻**——它们是
  * 应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，覆盖 2026-09-12
@@ -26,12 +23,12 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  *
  * 顶部第五个入口 Sub-sessions（子会话 PR4c）：与 Files/Skills/MCP/辅助对话
  * 共用同一个面板位（互斥），只在主槽正看着一条**有子会话的根会话**时出现——
- * 入口数据（要不要出现、N 是多少）由 App 传入，本组件不自己算（同通道列开关
- * `channelColumn` 先例）。
+ * 入口数据（要不要出现、N 是多少、「在等你」几个）由 App 传入，本组件不自己算。
+ * 面板删除后（2026-10-12）这里是父子沟通的唯一面板位：收件箱。
  */
 
-/** 右栏面板位里放什么。`"channels"` 只在不够宽时出现：够宽时父子会话面板是独立的一列 */
-export type RightPanelKind = "files" | "review" | "skills" | "mcp" | "terminal" | "drawer" | "subsessions" | "channels";
+/** 右栏面板位里放什么（"channels" 随父子会话面板一起删除：沟通回到两边对话流，子会话面板变收件箱） */
+export type RightPanelKind = "files" | "review" | "skills" | "mcp" | "terminal" | "drawer" | "subsessions";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -49,17 +46,12 @@ export function RightRail(props: {
   /** 底部应用入口组（Carryovers / Archived / Settings），调用方组装；顺序即堆叠顺序 */
   railEntries: RailEntry[];
   /**
-   * 父子会话面板的入口（子会话 PR4b）：只在当前根会话有可见通道时出现——
-   * null = 不出现（没在看根会话，或这条根会话没有可见通道）。够宽时它与 `panel`
-   * 不互斥、不占面板位，所以不走 `railEntries`；不够宽时它是面板位里的 `"channels"`。
-   * 两种模式下的「亮不亮」与「点了做什么」都由 App 算好（`toggleChannelPanel`）。
-   */
-  channelColumn: { open: boolean; onToggle: () => void } | null;
-  /**
    * Sub-sessions 面板入口（子会话 PR4c）：null = 不出现（没在看根会话，或这条
    * 根会话没有子会话）。与 `panel` 共用互斥语义，走 `onPanel` 同一条切换逻辑。
+   * `waiting` 是「在等你」（question + 待审批）的子会话数：右上角角标，为 0 不显示。
+   * **入口不自己弹开**（2026-10-12 用户裁决）：需要你看的事用角标说话，不抢面板位。
    */
-  subSessions: { count: number } | null;
+  subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
    */
@@ -167,14 +159,7 @@ export function RightRail(props: {
           label={t.rail.subSessions(props.subSessions.count)}
           lit={props.panel === "subsessions"}
           onClick={() => props.onPanel(props.panel === "subsessions" ? null : "subsessions")}
-        />
-      )}
-      {props.channelColumn !== null && (
-        <RailEntryButton
-          icon="messages-square"
-          label={t.rail.channels}
-          lit={props.channelColumn.open}
-          onClick={props.channelColumn.onToggle}
+          badge={props.subSessions.waiting}
         />
       )}
       <span style={{ flex: 1 }} />

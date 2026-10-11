@@ -11,7 +11,7 @@
  * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
  * （自带标题头 + transcript + 审批条，`hideComposer` 关掉输入框与排队条）。
  */
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
@@ -70,11 +70,6 @@ export function SubSessionsPanel(props: {
   onBackToList: () => void;
   /** 「Open as main」：主槽换看这条子会话，面板关闭 */
   onOpenAsMain: (childId: string) => void;
-  /**
-   * 子会话工作记录里点标记 → 打开父子会话面板定位到那条消息（App 的 openChannel：
-   * 够宽开内联列，不够宽换进右栏槽——那时就替换掉本面板）
-   */
-  onOpenChannel: (childId: string, messageId: string | null) => void;
   providersError: string | null;
   /** 模型星标（AppSettings.starredModels）与开关：会话层的模型卡片与输入卡同一张，星标也同一份 */
   starredModels: readonly ModelPair[];
@@ -83,16 +78,6 @@ export function SubSessionsPanel(props: {
   const t = useT();
   const children = childSessions(props.session.sessions, props.parentId);
   const summaries = useChannelSummaries(props.parentId);
-  // 稳定引用：ChatView 把它折进 memo 过的通道上下文，每次渲染新建一个函数会打穿
-  // TranscriptColumn 的 memo，子会话流式输出时整列逐帧重渲染。hook 放在分支之前
-  const sessionChildId = props.nav.kind === "session" ? props.nav.sessionId : null;
-  const { onOpenChannel } = props;
-  const openOwnChannel = useCallback(
-    (messageId: string | null) => {
-      if (sessionChildId !== null) onOpenChannel(sessionChildId, messageId);
-    },
-    [onOpenChannel, sessionChildId],
-  );
 
   if (props.nav.kind === "session") {
     const childId = props.nav.sessionId;
@@ -170,14 +155,12 @@ export function SubSessionsPanel(props: {
           />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
-          {/* 只读查看 + 审批：不给输入框（hideComposer），不传 onOpenSubSession(s)/onOpenParent——
-              「UI 只做一层」，面板里查看的子会话不再嵌一层它自己的子会话入口。标记可点
-              （onOpenOwnChannel）不违背这条：打开的是母会话那一个父子会话面板，不是新的一层 */}
+          {/* 只读查看 + 审批：不给输入框（hideComposer）。「UI 只做一层」：面板里
+              查看的子会话不再嵌一层它自己的子会话入口 */}
           <ChatView
             session={props.view}
             providersError={props.providersError}
             hideComposer
-            onOpenOwnChannel={openOwnChannel}
             scrollToEnd
           />
         </div>
