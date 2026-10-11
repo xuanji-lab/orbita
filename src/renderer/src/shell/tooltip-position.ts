@@ -46,12 +46,6 @@ export interface PlaceTooltipOptions {
   align?: "center" | "start";
   /** `align: "start"` 时，锚点左缘到 tooltip 左缘的偏移量。默认 0。 */
   alignOffset?: number;
-  /**
-   * tooltip 离锚点的间距。默认 TOOLTIP_GAP（6px）。用量格传一个大值——
-   * 它的 tooltip 要落在星云能量体上方，而能量体就悬在格子上方那 40 多像素里，
-   * 默认间距会把牌匾盖在云上。
-   */
-  gap?: number;
 }
 
 /**
@@ -69,14 +63,13 @@ export function placeTooltip(
   const side = options.side ?? "above";
   const align = options.align ?? "center";
   const alignOffset = options.alignOffset ?? 0;
-  const gap = options.gap ?? TOOLTIP_GAP;
 
   if (anchor.bottom <= 0 || anchor.top >= viewport.height) {
     return { top: 0, left: 0, visible: false };
   }
 
-  const above = anchor.top - gap - tooltip.height;
-  const below = anchor.bottom + gap;
+  const above = anchor.top - TOOLTIP_GAP - tooltip.height;
+  const below = anchor.bottom + TOOLTIP_GAP;
   const fitsAbove = above >= TOOLTIP_EDGE;
   const fitsBelow = below + tooltip.height <= viewport.height - TOOLTIP_EDGE;
   const top =

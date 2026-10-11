@@ -1,11 +1,9 @@
 import "./usage.css";
 import { useEffect, useId, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import { api } from "../api";
 import { useT } from "../locale.ts";
 import { formatTokens } from "../utils/format-tokens.ts";
 import { isWindowInactive } from "./window-activity.ts";
-import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { petLeft, usageWeekCells, type UsageCell, type UsageTier } from "./usage-week.ts";
 import type { UsageDayTotal } from "@shared/usage";
 
@@ -14,7 +12,8 @@ import type { UsageDayTotal } from "@shared/usage";
  *
  * - 7 格从今天往回数，**右端是今天**；档位按「当天 / 7 天最大值」的比例。
  * - 星云默认坐在今天上方、显示今天的档位；悬停某格时移过去、换那天的档位
- *   （移动与大小收放都是 160ms 缓动）。
+ *   （移动与大小收放都是 160ms 缓动），并**像在说话**一样从头顶冒一个小气泡报当天用量
+ *   （2026-10-12 用户验收：不用浮层 tooltip，气泡跟着星云走；字号同格子下的星期）。
  * - 任意会话在跑（props.running）→ 碎片轨道 3 倍速；窗口失焦 / 减少动效 → 静帧。
  * - 数据：usage:week 拉一次 + usage:event 推送整份快照（每次模型调用落账即刷新）。
  */
@@ -55,10 +54,22 @@ export function UsageMeter(props: { running: boolean }) {
   );
   const active = hover ?? cells.length - 1;
   const activeTier: UsageTier = cells[active]?.tier ?? 0;
+  const t = useT();
+  const hovered = hover === null ? undefined : cells[hover];
 
   return (
     <div className="usage-meter">
       <div className="usage-pet" style={{ left: petLeft(active) }}>
+        {hovered !== undefined && (
+          // 气泡尾巴指向云；两端的格子把气泡往里收，免得出侧栏（data-edge）
+          <div
+            className="usage-say"
+            role="status"
+            data-edge={active <= 1 ? "start" : active >= cells.length - 2 ? "end" : undefined}
+          >
+            {usageText(hovered, t)}
+          </div>
+        )}
         <NebulaPet tier={activeTier} orbit={windowActive} fast={props.running} />
       </div>
       <div className="usage-cells">
@@ -70,13 +81,15 @@ export function UsageMeter(props: { running: boolean }) {
   );
 }
 
-/** 一格 + 星期短标 + 悬停 tooltip（tooltip 落在能量体上方，不吃默认 6px 间距） */
+/** 悬停时星云说的那句：当天总量，零用量说「没有用量」 */
+function usageText(cell: UsageCell, t: ReturnType<typeof useT>): string {
+  return cell.tokens > 0 ? t.usage.day(formatTokens(cell.tokens)) : t.usage.noUsage;
+}
+
+/** 一格 + 星期短标（悬停时由星云头顶的气泡报用量） */
 function UsageSquare(props: { cell: UsageCell; index: number; onHover: (index: number | null) => void }) {
   const t = useT();
-  const tooltip = useHoverTooltip<HTMLButtonElement>(200, true, { gap: 52 });
   const { cell } = props;
-  // 悬停只给用量（2026-10-12 用户验收：日期与星期格子下已有，不重复）
-  const text = cell.tokens > 0 ? t.usage.day(formatTokens(cell.tokens)) : t.usage.noUsage;
   return (
     <div
       className="usage-col"
@@ -84,50 +97,18 @@ function UsageSquare(props: { cell: UsageCell; index: number; onHover: (index: n
       onMouseLeave={() => props.onHover(null)}
     >
       <button
-        ref={tooltip.anchorRef}
         type="button"
         className="usage-cell"
         data-tier={cell.tier}
         data-today={cell.isToday || undefined}
-        aria-label={text}
+        aria-label={usageText(cell, t)}
         // 键盘聚焦同样把能量体叫过来（指针之外的第二条路）
         onFocus={() => props.onHover(props.index)}
         onBlur={() => props.onHover(null)}
-        onMouseEnter={tooltip.handlers.onMouseEnter}
-        onMouseLeave={tooltip.handlers.onMouseLeave}
       />
       <span className="usage-wd" data-now={cell.isToday || undefined}>
         {cell.isToday ? t.usage.today : (t.usage.weekdays[cell.weekday] ?? "")}
       </span>
-      {tooltip.open &&
-        createPortal(
-          <div
-            ref={tooltip.tooltipRef}
-            role="tooltip"
-            style={{
-              position: "fixed",
-              top: tooltip.placement?.top ?? 0,
-              left: tooltip.placement?.left ?? 0,
-              padding: "2px 8px",
-              border: "1px solid var(--color-border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              background: "var(--color-bg-panel)",
-              boxShadow: "var(--shadow-popover)",
-              color: "var(--color-text-secondary)",
-              fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-caption)",
-              lineHeight: "var(--line-height-caption)",
-              whiteSpace: "nowrap",
-              pointerEvents: "none",
-              zIndex: 70,
-              opacity: tooltip.placement === null ? 0 : 1,
-              transition: "opacity var(--duration-fast) var(--ease-standard)",
-            }}
-          >
-            {text}
-          </div>,
-          document.body,
-        )}
     </div>
   );
 }

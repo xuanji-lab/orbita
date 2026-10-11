@@ -146,3 +146,62 @@
   color: var(--color-text-primary);
   font-weight: var(--weight-semibold);
 }
+
+/*
+ * 星云说的话：悬停一格时从云头顶冒出的小气泡（不是浮层 tooltip——跟着星云走）。
+ * 字号与格子下的星期同档（micro），尾巴是一个转 45° 的小方块，同底同描边，指向云。
+ * 默认居中在云上方；靠两端的格子（data-edge）把气泡往里收，尾巴仍对准云心。
+ */
+.usage-say {
+  position: absolute;
+  bottom: calc(100% - 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-micro);
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  animation: usage-say-in var(--duration-fast) var(--ease-out-quint);
+}
+.usage-say::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  background: var(--color-bg-panel);
+  border-right: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+  transform: rotate(45deg);
+}
+.usage-say[data-edge="start"] {
+  transform: translateX(-14px);
+}
+.usage-say[data-edge="start"]::after {
+  left: 14px;
+}
+.usage-say[data-edge="end"] {
+  transform: translateX(calc(-100% + 14px));
+}
+.usage-say[data-edge="end"]::after {
+  left: calc(100% - 14px);
+}
+@keyframes usage-say-in {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .usage-say {
+    animation: none;
+  }
+}

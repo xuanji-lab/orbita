@@ -36,14 +36,6 @@ describe("placeTooltip —— 优先上方与翻转", () => {
     );
     assert.equal(placed.top, 30 + TOOLTIP_GAP);
   });
-
-  test("自定义间距（gap）：用量格的 tooltip 要落在星云上方，不吃默认 6px", () => {
-    const placed = placeTooltip(anchor(), tooltip, viewport, { gap: 52 });
-    assert.equal(placed.top, 600 - 52 - 24);
-    // 翻转判定同样按它算：上方放不下时翻到下方，也按 52 展开
-    const flipped = placeTooltip(anchor({ top: 70, bottom: 90 }), tooltip, viewport, { gap: 52 });
-    assert.equal(flipped.top, 90 + 52);
-  });
 });
 
 describe("placeTooltip —— 水平居中与夹回", () => {
