@@ -165,12 +165,31 @@ export function parseMcpConfig(raw: unknown): Record<string, McpServer> {
   return parsed;
 }
 
-function parseServer(raw: unknown): McpServer | null {
+/**
+ * 解析单个 server 条目（unknown → 规范形状）。写路径（applyMcpWrite）也用它做
+ * 入口校验与规范化：模型给的配置什么形状都可能有（Claude Desktop 的 `type`
+ * 写法、只给 url），认不出的返回 null，由调用方报错——不能写进文件却在读回时
+ * 被静默丢弃（用户 2026-10-11 报的「写进去了但列表里没有」就是这类裂缝）。
+ *
+ * 传输声明的认法：自家 `transport` 优先；缺席时看 Claude Desktop 系的 `type`
+ * （`"http"` / `"streamable-http"`）；两处都没写但给了 `url` 也当 http
+ * （stdio 必有 command，只有 url 的只可能是远端）。已废弃的 `"sse"` 不认：
+ * 客户端不支持，认了等于静默空转。
+ */
+export function parseServer(raw: unknown): McpServer | null {
   if (typeof raw !== "object" || raw === null) return null;
   const value = raw as Record<string, unknown>;
   const disabled = value["disabled"] === true;
-  if (value["transport"] === "http") {
-    const url = str(value["url"]);
+  const declared = value["transport"] ?? value["type"];
+  const url = str(value["url"]);
+  const command = str(value["command"]);
+  const isHttp =
+    declared === "http" ||
+    declared === "streamable-http" ||
+    // 两处都没声明传输但只给了 url：stdio 必有 command，只可能是一台远端。
+    // 同时给了 command 与 url 的是矛盾配置，落回 stdio 分支按 command 认
+    (declared === undefined && url !== null && command === null);
+  if (isHttp) {
     if (url === null) return null;
     return {
       transport: "http",
@@ -180,7 +199,6 @@ function parseServer(raw: unknown): McpServer | null {
       ...scoped(value["workspaces"]),
     };
   }
-  const command = str(value["command"]);
   if (command === null) return null;
   const args = Array.isArray(value["args"])
     ? value["args"].filter((a): a is string => typeof a === "string")

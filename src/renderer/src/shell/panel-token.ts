@@ -3,8 +3,10 @@ import { slashTokenAt } from "./slash-trigger.ts";
 /**
  * 右栏面板 → 输入框的「token 通道」纯逻辑：
  *
- * 「`/` + 空格」选取：消息开头孤立的 `/` 按空格 → 删掉 `/`、打开右栏 Skills
- * 面板进入选取模式，选中后把 token 插回原光标位置。
+ * 「`/` + 空格」选取：行首或空白后孤立的 `/` 按空格 → 删掉 `/`、打开右栏
+ * Skills 面板进入选取模式，选中后把 token 插回原光标位置。**句中同样触发**
+ *（2026-10-11 用户裁定：只认消息开头是 bug，句中打 `/` 加空格要和开头完全
+ * 一样）；防误触靠 slashTokenAt 自带的前导空白闸门与字符集闸门。
  *（曾有第二条路——面板卡片长按后 HTML5 拖入输入框；2026-10 用户裁决删去。）
  *
  * token 形态由发送端定义：skill → `/skill:<slug> `，MCP → `/mcp:<server> `
@@ -49,10 +51,11 @@ export function insertToken(
 }
 
 /**
- * 「`/` + 空格」是否打开右栏 Skills 面板：光标紧跟在消息开头的孤立 `/` 之后
- * （`/` 之前只有空白，`/` 之后还没打任何字）。与 slash-trigger 的 token 规则
- * 同源；**只认消息开头**——句中的 `/ ` 是普通文字（「a / b」），中途的插入
- * 走句中补全面板，不该被空格劫持。
+ * 「`/` + 空格」是否打开右栏 Skills 面板：光标紧跟在孤立 `/` 之后（`/` 之前
+ * 是行首或空白，`/` 之后还没打任何字）。与 slash-trigger 的 token 规则同源；
+ * **句中同样开**（2026-10-11 用户裁定：只认消息开头是 bug）——防误触由
+ * slashTokenAt 的前导空白闸门与字符集闸门把关：`a/ `、`https:/ `、`C:/ `、
+ * `/tmp/ `、`//` 都不命中。
  *
  * 命中返回 `/` 的下标（删掉它、并把 token 插回的位置），否则 null。
  */
@@ -60,7 +63,7 @@ export function slashSpaceOpensPanel(value: string, cursor: number): number | nu
   if (cursor <= 0 || cursor > value.length) return null;
   if (value.charAt(cursor - 1) !== "/") return null;
   const token = slashTokenAt(value, cursor);
-  if (token === null || !token.atMessageStart || token.query !== "") return null;
+  if (token === null || token.query !== "") return null;
   return token.start;
 }
 

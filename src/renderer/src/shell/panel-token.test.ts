@@ -98,11 +98,24 @@ describe("slashSpaceOpensPanel", () => {
     equal(slashSpaceOpensPanel("\n/", 2), 1);
     equal(slashSpaceOpensPanel("\u3000/", 2), 1);
   });
-  it("句中的 / 不触发：「a / b」是普通文字", () => {
-    equal(slashSpaceOpensPanel("a /", 3), null);
-    equal(slashSpaceOpensPanel("a / b", 3), null);
-    equal(slashSpaceOpensPanel("第一行\n/", 6), null);
-    equal(slashSpaceOpensPanel("先按住 /", 5), null);
+  it("句中同样触发（2026-10-11 用户裁定：只认开头是 bug）：返回 / 的下标", () => {
+    equal(slashSpaceOpensPanel("hello /", 7), 6);
+    equal(slashSpaceOpensPanel("a /", 3), 2);
+    equal(slashSpaceOpensPanel("先按住 /", 5), 4);
+    // token 后再打一个孤立的 / 也要能选取（用户实测：已有 /skill:mock-greeting 后再打 / 加空格）
+    equal(slashSpaceOpensPanel("/skill:mock-greeting /", 22), 21);
+    // 换行后的 /：行首闸门认换行
+    equal(slashSpaceOpensPanel("第一行\n/", 5), 4);
+  });
+  it("防误触闸门拦下：a/ 、https:/ 、C:/ 、/tmp/ 、// 都不触发", () => {
+    // `/` 前不是空白（字母 / 冒号）：路径与 URL 出局
+    equal(slashSpaceOpensPanel("a/", 2), null);
+    equal(slashSpaceOpensPanel("https:/", 7), null);
+    equal(slashSpaceOpensPanel("C:/", 3), null);
+    // 光标在第二个 / 后：它前一个字符是字母（tmp 的 p），前导空白闸门拦下
+    equal(slashSpaceOpensPanel("/tmp/", 5), null);
+    // 字符集闸门：光标前的查询词里已有第二个 /，不是指令字符
+    equal(slashSpaceOpensPanel("//", 2), null);
   });
   it("/ 后已打出内容、光标不在 / 紧后、停在 / 上：都不触发", () => {
     equal(slashSpaceOpensPanel("/c", 2), null);
