@@ -42,6 +42,7 @@ import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
+import { adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
@@ -846,10 +847,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
+            // 基底先过 adaptSystemPrompt（2026-10-12）：替换 pi 写死的 concise 行
+            // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
+            // 开始跑，幂等由该函数自己兑底。
             pi.on("before_agent_start", (event) => ({
               // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
               systemPrompt: [
-                event.systemPrompt,
+                adaptSystemPrompt(event.systemPrompt),
                 describePermissionMode(currentMode(), [
                   ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
                   "create_skill",
