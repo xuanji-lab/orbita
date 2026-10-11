@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PROGRESS_NARRATION_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
+import { PROGRESS_NARRATION_GUIDELINE, REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
 
 /**
  * 系统提示词改写（进度说明）的契约：
@@ -51,14 +51,13 @@ test("追加段措辞锚定（防手滑漂移）", () => {
     PROGRESS_NARRATION_GUIDELINE,
     "Tool calls and thinking are collapsed by default in the UI; the user only sees the text you write.\n" +
       "Before a group of tool calls, say in one sentence what you are about to do; after each stage (research done, cause found, change made, verification done), state the outcome in one or two sentences.\n" +
-      "Do not narrate every tool call, and do not paste your thinking into the reply.\n" +
-      "Write all user-visible text, progress notes and final answers alike, in the language of the user's latest message, unless the user asks for a different language.",
+      "Do not narrate every tool call, and do not paste your thinking into the reply.\n",
   );
 });
 
 test("回复语言跟随用户：段落要求按用户最近一条消息的语言写正文，且段落本身不带中文（不把模型往中文带）", () => {
-  assert.match(PROGRESS_NARRATION_GUIDELINE, /language of the user's latest message/);
-  assert.equal(/[\u4e00-\u9fff]/.test(PROGRESS_NARRATION_GUIDELINE), false);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /language of the user's latest message/);
+  assert.equal(/[\u4e00-\u9fff]/.test(PROGRESS_NARRATION_GUIDELINE + REPLY_LANGUAGE_GUIDELINE), false);
 });
 
 test("其余内容不动：替换与追加之外的基底逐字保留", () => {

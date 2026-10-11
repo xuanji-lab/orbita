@@ -34,8 +34,16 @@ const CONCISE_LINE_REPLACEMENT = "- Be concise in your final answers.";
 export const PROGRESS_NARRATION_GUIDELINE =
   "Tool calls and thinking are collapsed by default in the UI; the user only sees the text you write.\n" +
   "Before a group of tool calls, say in one sentence what you are about to do; after each stage (research done, cause found, change made, verification done), state the outcome in one or two sentences.\n" +
-  "Do not narrate every tool call, and do not paste your thinking into the reply.\n" +
-  "Write all user-visible text, progress notes and final answers alike, in the language of the user's latest message, unless the user asks for a different language.";
+  "Do not narrate every tool call, and do not paste your thinking into the reply.\n";
+
+/**
+ * 回复语言（2026-10-12 用户裁决：正文跟随用户当前使用的语言）。单独成段、由 runtime
+ * 拼在系统提示词**最末**：离对话最近的指令权重最高；放在进度说明段里时，前面整篇
+ * 提示词与工作区 AGENTS.md 的中文会把模型往中文带（实测英文提问仍回中文）。
+ */
+export const REPLY_LANGUAGE_GUIDELINE =
+  "Reply language: write all user-visible text, progress notes and final answers alike, in the language of the user's latest message, " +
+  "even if these instructions, project files or earlier messages are in another language. Switch only if the user asks you to.";
 
 /**
  * 改写主循环的系统提示词：替换 concise 行 + 追加进度说明段。
