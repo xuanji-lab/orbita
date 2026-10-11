@@ -337,6 +337,52 @@ describe("压缩界碑的进出槽", () => {
   });
 });
 
+describe("轮尾账的旁路网页产物（webArtifacts）", () => {
+  test("fileTurnView 只有 webArtifacts、没有 changes 也进槽（卡片要出）", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
+    states = applyAgentEvent(states, {
+      type: "fileTurnView",
+      sessionId: "A",
+      turnId: "t1",
+      changes: [],
+      webArtifacts: ["/w/out/proto.html"],
+    });
+    const turns = states.get("A")?.fileTurns ?? [];
+    assert.equal(turns.length, 1);
+    assert.deepEqual(turns[0]?.changes, []);
+    assert.deepEqual(turns[0]?.webArtifacts, ["/w/out/proto.html"]);
+  });
+
+  test("fileTurnView 两样都空不进槽（没有产出的轮不产卡）", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
+    states = applyAgentEvent(states, { type: "fileTurnView", sessionId: "A", turnId: "t1", changes: [] });
+    assert.equal(states.get("A")?.fileTurns.length, 0);
+  });
+
+  test("seedFromDisk：新记录带 webArtifacts 还原；旧记录没有字段照常显示", () => {
+    const withWeb: FileTurnRecord = {
+      role: "file-turn",
+      id: "t1",
+      timestamp: 1000,
+      changes: [],
+      webArtifacts: ["/w/out/report.html"],
+    };
+    const legacy: FileTurnRecord = {
+      role: "file-turn",
+      id: "t2",
+      timestamp: 2000,
+      changes: [
+        { path: "/w/src/a.ts", before: { kind: "absent" }, after: { kind: "text", blob: "x" }, added: 1, removed: 0 },
+      ],
+    };
+    const states = seedFromDisk(new Map(), "A", [userItem("u1", 500), withWeb, legacy]);
+    const turns = states.get("A")?.fileTurns ?? [];
+    assert.equal(turns.length, 2);
+    assert.deepEqual(turns[0]?.webArtifacts, ["/w/out/report.html"]);
+    assert.equal("webArtifacts" in (turns[1] ?? {}), false);
+  });
+});
+
 describe("mergeSideRecords —— 界碑与通道标记就地插回，历史一条不少", () => {
   test("没有界碑也没有标记时原样全显", () => {
     const items = [userItem("u1", 1), userItem("u2", 2)];

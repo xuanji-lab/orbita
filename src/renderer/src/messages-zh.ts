@@ -907,6 +907,8 @@ export const zh: Messages = {
     undoTitle: "撤销文件改动",
     undoConfirm: "撤销改动",
     fileCardChanged: (n: number) => `${n} 个文件已更改`,
+    fileCardWebMade: (n: number) => `生成了 ${n} 个网页`,
+    fileCardScripted: "脚本生成 · 仅可打开",
     fileCardExpand: "展开改动的文件",
     fileCardCollapse: "收起改动的文件",
     fileCardUndo: "撤销",
