@@ -361,6 +361,13 @@ export const zh: Messages = {
     jumpToSourceTip: "打开这一项所在的任务",
   },
 
+  usage: {
+    weekdays: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+    today: "今天",
+    noUsage: "没有用量",
+    day: (date: string, weekday: string, tokens: string) => `${date} ${weekday} · ${tokens} tokens`,
+  },
+
   settings: {
     tabs: {
       general: "通用",

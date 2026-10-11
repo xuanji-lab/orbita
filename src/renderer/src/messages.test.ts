@@ -39,9 +39,10 @@ const ALLOWED_LATIN = new Set([
   "node",
   "npx",
   "mcp",
-  // 计量单位（与原型「42 tok/s」一致）
+  // 计量单位（与原型「42 tok/s」一致；复数形式同属一个单位词）
   "token",
   "tok",
+  "tokens",
   // 通用缩写：代码托管与模型的 ID
   "PR",
   "ID",
