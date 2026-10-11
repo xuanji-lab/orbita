@@ -38,6 +38,9 @@ import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared
 import { pathTail, pathWithin } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
+/** 占位 Session 组（还没有会话）的折叠键：真实根的键是绝对路径，常量撞不上 */
+const PLACEHOLDER_SESSION_GROUP = "session";
+
 /**
  * 文件面板（设计稿 files-panel (b) 形态）：三组根——Session（本会话工作台，唯一随
  * 会话变的根，用户最常来找 plan / handoff）→ Workspace → Attached，往下每层
@@ -512,15 +515,27 @@ export function FilesPanel(props: {
                   <PanelLine>{t.common.loading}</PanelLine>
                 </div>
               )}
+              {tree.roots.map(rootGroup)}
               {/* 还没有会话（新任务没发首条消息）：Session 分组留在最前，但只给一行灰字——
-                  此刻工作台既不该请求也不存在，roots 里的 session 根已被 useFileTree 过滤 */}
+                  此刻工作台既不该请求也不存在，roots 里的 session 根已被 useFileTree 过滤。
+                  组头同样可折叠（2026-10-11 用户裁决：Session 组「没东西的时候也应该可以折叠」，
+                  不然那行解释词一直顶着）；折叠键用常量——真实根的键是绝对路径，撞不上 */}
               {sessionId === null && (
                 <div style={{ padding: "6px 0 4px" }}>
-                  <RootLabel kind="session" detail="" canReveal={false} />
-                  <DimRow>{t.files.noWorkbench}</DimRow>
+                  <RootLabel
+                    kind="session"
+                    detail=""
+                    canReveal={false}
+                    collapsed={collapsedGroups.has(PLACEHOLDER_SESSION_GROUP)}
+                    onToggle={() =>
+                      setCollapsedGroups((prev) => toggleGroupCollapsed(prev, PLACEHOLDER_SESSION_GROUP))
+                    }
+                  />
+                  {!collapsedGroups.has(PLACEHOLDER_SESSION_GROUP) && (
+                    <DimRow>{t.files.noWorkbench}</DimRow>
+                  )}
                 </div>
               )}
-              {tree.roots.map(rootGroup)}
               <AttachRow onAttach={attach} />
             </div>
           </div>
@@ -593,9 +608,11 @@ function FilterRow(props: { value: string; onChange: (value: string) => void; co
 
 /**
  * 根分组标签：mono 小写大写化 + 灰色路径尾随。组头整行可点：折起 / 展开该组
- * （chevron 指示开合、aria-expanded 交给可达性，原型裁决）。hover 才浮现的
- * Reveal / Detach 是按钮的兄弟节点（button 不能套 button），浮在行尾。
- * onToggle 缺省 = 不可折叠（还没有会话的占位组），不出 chevron、不出手型。
+ * （chevron 指示开合、aria-expanded 交给可达性，原型裁决）——三组同样可折，
+ * 包括还没有会话的 Session 占位组（2026-10-11 用户裁决：没东西的时候也可以折，
+ * 不然解释词一直顶着）。hover 才浮现的 Reveal / Detach 是按钮的兄弟节点
+ * （button 不能套 button），浮在行尾。
+ * onToggle / collapsed 成对出现；占位组的折叠键用常量 PLACEHOLDER_SESSION_GROUP。
  */
 function RootLabel(props: {
   kind: FileRootKind;
@@ -603,21 +620,18 @@ function RootLabel(props: {
   canReveal: boolean;
   /** 挂了但盘上找不到了：路径用 warning 色而不是 tertiary——颜色不是唯一信号，DimRow 那行的文字还在 */
   missing?: boolean;
-  /** 该组当前是否折起；与 onToggle 成对出现 */
-  collapsed?: boolean;
-  onToggle?: () => void;
+  /** 该组当前是否折起；所有组头都可折（含 Session 占位组） */
+  collapsed: boolean;
+  onToggle: () => void;
   onReveal?: () => void;
   onDetach?: () => void;
   /** 右键（目前只有 Session 根接）：与条目行同一份 ContextMenu 机制 */
   onContextMenu?: (position: { x: number; y: number }) => void;
 }) {
   const t = useT();
-  const collapsible = props.onToggle !== undefined && props.collapsed !== undefined;
   const label = (
     <>
-      {collapsible && (
-        <Icon name="chevron-right" size={11} strokeWidth={2.2} className="files-root-chev" />
-      )}
+      <Icon name="chevron-right" size={11} strokeWidth={2.2} className="files-root-chev" />
       {props.kind === "session" && (
         <Icon name="message-square" size={11} style={{ flex: "0 0 auto" }} />
       )}
@@ -648,20 +662,15 @@ function RootLabel(props: {
         padding: "0 var(--space-3)",
       }}
     >
-      {collapsible ? (
-        <button
-          type="button"
-          className="files-root-toggle"
-          aria-expanded={!props.collapsed}
-          title={t.files.groupToggleTip}
-          onClick={props.onToggle}
-        >
-          {label}
-        </button>
-      ) : (
-        // 占位组头（还没有会话）：不是按钮，不出手型、不亮 hover（CSS 同款规则）
-        <div className="files-root-toggle">{label}</div>
-      )}
+      <button
+        type="button"
+        className="files-root-toggle"
+        aria-expanded={!props.collapsed}
+        title={t.files.groupToggleTip}
+        onClick={props.onToggle}
+      >
+        {label}
+      </button>
       {props.canReveal && props.onReveal !== undefined && (
         <LabelAction title={t.files.revealInFileManager} onClick={props.onReveal}>
           <Icon name="folder-open" size={12} />
