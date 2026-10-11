@@ -32,6 +32,17 @@
 - **不用 `sandbox`**：本仓 `SECURITY_INVARIANTS = { sandbox: true }` 已经占了这个词（Electron 渲染进程沙箱）。再给它第二个意思，正是这份表要治的病。
 - **不用 `container`**：Docker 联想太强，而且中文「容器」已经被用来指本表意义上的 workspace（「命名工作区容器」）。
 
+### 工作区规则 vs. workspace skill
+
+两句都像「对这个工作区生效」，去处与语义完全不同：
+
+| | |
+|---|---|
+| **「工作区规则」指** | 工作区目录下 `AGENTS.md` 里的常驻规则：pi 每轮把它当 project instructions 读进上下文，**每一轮都在场**。 |
+| **workspace scope 的 skill 指** | `create_skill(scope: "workspace")` 写下的手册：只在该工作区的任务里**列出名字与描述**，正文**只在描述匹配任务时才被读入**——不是每轮生效。 |
+| **为什么必须分** | 规则存成 skill 会在描述不匹配的轮次里**静默不在场**——用户以为立了规矩，其实大多数轮次它根本没进上下文。 |
+| **撞过的地方** | 2026-10 用户实测（PR #167）：说「把规则加进这个工作区」，模型调 create_skill——旧提示词把 skill 写成 "applies to every task"，又从没告诉模型 AGENTS.md 是可写的常驻规则文件。修法在 `src/agent/store-tools.ts` 的 `storeToolsGuideline`：文案如实写按需加载，常驻规则指路 cwd 下的 `AGENTS.md`。 |
+
 ### task / session（任务 / 会话）
 
 | | |

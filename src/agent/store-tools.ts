@@ -30,23 +30,51 @@ export type WriteResult =
  *           workspace scope 必被拒，明说，别试；
  *   - 有名字 报名字，模型知道 workspace scope 落在哪；
  *   - 缺席   有工作区但翻不出名字（旧夹具 / 工作区已删）——如实说「未知」，不猜。
+ *
+ * **常驻规则的去处也是这段话的职责**（2026-10 用户实测：「把规则加进这个工作区」
+ * 直接触发 create_skill——旧文案把 skill 说成 "applies to every task"，又从没告诉
+ * 模型 AGENTS.md 是可写的常驻规则文件，提示词里唯一的持久化出口就是这俩工具）。
+ * 修的是文案而不是加路由黑名单：skill 的真实语义（每任务只列名字与描述，正文
+ * 描述匹配时才被读）如实写；常驻规则指路 cwd 下的 AGENTS.md（pi 每轮当 project
+ * instructions 读进来，不存在可新建，路径写死进提示词）。没有工作区的会话没有
+ * 项目规则文件可指——让模型问用户放哪，不许自己挑地方（Home 也不是全局规则的
+ * 定案去处，~/.pi/agent 是 pi CLI 自己的全局配置，写它会外溢，都不提）。
  */
-export function storeToolsGuideline(workspace: { name?: string } | null): string {
+export function storeToolsGuideline(workspace: { name?: string } | null, cwd: string): string {
   const membership =
     workspace === null
       ? 'This session does NOT belong to any workspace (it was not opened inside one): create_skill with scope "workspace" will be rejected — use "global".'
       : workspace.name === undefined
         ? 'This session belongs to a workspace whose name is not available here; scope "workspace" is allowed.'
-        : `This session belongs to workspace "${workspace.name}"; skills with scope "workspace" apply to that workspace's sessions only.`;
+        : `This session belongs to workspace "${workspace.name}"; skills with scope "workspace" are listed only in that workspace's sessions.`;
+  // 常驻规则落点：有工作区 = cwd 下的 AGENTS.md（文件不存在也要把路径写进提示词，
+  // 并说明可以新建）；无工作区 = 没有项目规则文件，让模型问用户，别自己挑地方
+  const rulesDestination =
+    workspace === null
+      ? `- A standing rule ("run tests before committing", "reply in Chinese in this project") → this session has no
+  workspace, so there is no project rules file to write it to: ask the user where to keep such a rule
+  instead of picking a place yourself.`
+      : `- A standing rule ("run tests before committing", "reply in Chinese in this project") → this workspace's
+  rules file at ${cwd}/AGENTS.md, read into context as project instructions every turn. The file may not
+  exist yet — create it; a few lines are enough.`;
   return `<orbita-store-tools>
 You can configure this agent itself with two tools:
 - create_skill writes a skill the agent will use in later sessions. The skill is a folder with a SKILL.md:
-  a frontmatter block (name, description) followed by markdown instructions. description is the index the
-  agent sees in every task — write when-to-use-it, not the content. scope "global" applies to every task;
-  "workspace" applies to the current workspace only. Both are subject to user approval.
+  a frontmatter block (name, description) followed by markdown instructions. Each task lists the skill's
+  name and description only; the body is read when the task matches that description — a skill is a
+  manual loaded on demand, not something in effect every turn. scope "global" = listed in every task;
+  "workspace" = listed only in this workspace's tasks. Both are subject to user approval.
 - add_mcp_server adds an MCP server from its config (stdio command or http url). The result reports the
   connection status; a failed server can be fixed by editing mcp.json.
-Both tools change disk state and require approval. Prefer them over telling the user to "add this manually".
+Both tools change disk state and require approval. When the user asks for a new skill or a new MCP server,
+use these tools instead of telling the user to copy files into place by hand.
+
+Where a lasting instruction belongs — pick by when it must apply:
+${rulesDestination}
+- A reusable procedure for specific situations ("how to release", "how to migrate") → create_skill.
+- Never store a standing rule as a skill: the body is read only when the description matches the task,
+  so the rule would silently not apply in most turns.
+- If the user states a rule without asking to persist it, ask once whether to write it into the rules file.
 
 Writing a skill body (this matters — a skill is instructions for a future agent, not a reply to this user):
 - Write for the reader that will load it cold: start with WHEN to use it (trigger conditions), then the
@@ -66,7 +94,9 @@ export function createStoreTools(broker: RequestBroker, sessionId: string): Tool
     label: "create_skill",
     description:
       "Write a skill (folder with SKILL.md) into this agent's central store and link it. " +
-      'scope "global" applies to every task; "workspace" applies to the current workspace only.',
+      "A skill is listed by name and description in each task; its body is read only when the task matches " +
+      "the description — a rule that must apply every turn belongs in the workspace's AGENTS.md instead. " +
+      'scope "global" = listed in every task; "workspace" = listed only in this workspace\'s tasks.',
     parameters: {
       type: "object",
       properties: {
