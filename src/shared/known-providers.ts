@@ -109,6 +109,12 @@ export interface KnownProvider {
   >;
   /** 一句话说明这条什么时候该选 */
   note: string;
+  /**
+   * 这一条不用 API key，而是浏览器 OAuth 登录（目前只有 Anthropic 一家：
+   * Claude Pro / Max 订阅，凭据自动续期，见 main/provider/oauth.ts）。
+   * 设置面对这种条目不画密钥框，只给登录按钮；upsert 时 scheme 落 oauth。
+   */
+  auth?: "oauth";
 }
 
 type ModelParams = NonNullable<KnownProvider["modelParams"]>[string];
@@ -190,6 +196,21 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     catalogId: "zai-coding-cn",
     note: "智谱开放平台标准 API（按 token 计费）",
+  },
+  {
+    id: "claude",
+    label: "Claude",
+    short: "Claude",
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    catalogId: "anthropic",
+    billing: "plan",
+    auth: "oauth",
+    /*
+     * 模型参数不用意气声明：claude 各型号的档位 / 默认档已经在 anthropic-compatible
+     * 条目的 modelParams 里（knownModelParams 按模型 id 跨条目查），这里自接享用。
+     */
+    note: "Claude Pro / Max 订阅，浏览器登录授权，令牌自动续期",
   },
   {
     id: "zhipu-coding",

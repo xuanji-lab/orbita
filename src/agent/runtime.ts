@@ -32,13 +32,17 @@ import {
 import {
   createToolCallGate,
   describePermissionMode,
+  ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
+import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
+import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
+import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -273,6 +277,48 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
   }
 }
 
+/** 探测的硬上限（主进程那头 60 秒兑底，这里先放手） */
+const PROBE_TIMEOUT_MS = 45_000;
+
+/**
+ * 连接探测（Test 的 OAuth 路由）：一次独立的 `completeSimple`——与真会话同一个
+ * pi 客户端（官方 SDK + 全套身份头），这是它存在的全部理由：主进程裸 fetch
+ * 的探测已被上游分类为非 Claude Code 流量而 429。模型没选时用声明清单第一个。
+ * 任何非 error 的响应（含 max_tokens 到顶）都算连通——凭据过了、模型应了。
+ */
+async function probeProvider(command: Extract<AgentCommand, { type: "probeProvider" }>): Promise<void> {
+  const reply = (ok: boolean, message: string): void => {
+    send({ type: "providerProbed", requestId: command.requestId, ok, message });
+  };
+  try {
+    const runtime = await ModelRuntime.create({});
+    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
+    if (model === undefined) {
+      reply(false, `unknown model "${command.provider.id}/${command.modelId}"`);
+      return;
+    }
+    const response = await completeSimple(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+      {
+        apiKey: command.provider.apiKey,
+        // 64 是硬上限不是目标：够模型吐一个字；思考型烧光了也是 max_tokens 而非 error，仍算连通
+        maxTokens: 64,
+        timeoutMs: PROBE_TIMEOUT_MS,
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
+      },
+    );
+    if (response.stopReason === "error") {
+      reply(false, response.errorMessage ?? `${model.id} returned an error`);
+      return;
+    }
+    reply(true, `Connected — ${model.id} responded.`);
+  } catch (cause) {
+    reply(false, cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 /**
  * 生成会话标题（C-3）：一次独立的 `completeSimple` 小调用。默认用会话当前模型；
  * 用户在设置里指了家务活模型就用那一个（连同它自己的密钥与自定义头）。
@@ -473,6 +519,13 @@ const mcpHub = new McpHub();
 // 闲置工作区的实例被回收后，主进程缓存的状态就陈旧了（显示就绪但进程已退）——推新快照
 mcpHub.onIdleDrop = () => send({ type: "mcp", servers: mcpHub.describe() });
 /**
+ * bash 可执行文件路径探测。**进程级缓存**——pi 每轮都会重跑 `getShellConfig()`，而 Git
+ * 不在默认安装位置的机器上那一步是 `spawnSync("where", …)`（本机多轮实测 50~85ms，同步、
+ * 卡事件循环），每一次 bash 调用都要付。探一次、把结果钉在 pi 的 `shellPath` 上，之后只剩一次的
+ * `existsSync`。完整理由与平台边界见 ./shell-path.ts。
+ */
+const resolveShellPath = createShellPathResolver();
+/**
  * 工具请求的在途表（4-3 立，B-1 泛化）：create_skill / add_mcp_server /
  * read_task / browser_* 的回执由 handle 的命令分支结掉。进程级一份——主进程是唯一的
  * 对端，不需要按会话分。
@@ -484,12 +537,29 @@ const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>()
 
 /**
  * 每轮重讲的工具使用指引。bash 的 schema 暴露了可选 `timeout`（秒），模型会自作主张
- * 给大扫描带上 60 秒这种小值，把 node_modules 级别的正常慢命令拦腰杀掉（实测：
- * `grep -r node_modules/` + `timeout:60` → "Command timed out after 60 seconds"）。
- * 短命令不受影响，只要求慢命令别自己设短超时。
+ * 给慢命令带上 60 秒这种小值（2026-10-01 统计：60s ×128、30s ×27、10s ×12），
+ * 把依赖安装 / 构建 / 测试这类正常慢命令拦腰砍掉——短命令不受影响，只要求慢命令
+ * 别自己设短超时。
+ *
+ * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS`）：低于下限的会被抬
+ * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
  */
 const TOOL_GUIDELINES =
-  "跑可能耗时的命令（大目录/全仓搜索、依赖安装、构建、测试）时，不要给 bash/powershell 传 timeout 参数，或至少设 300 秒以上——Windows 上扫大目录本来就慢，短超时会把正常的慢命令拦腰杀掉。";
+  "跑可能耗时的命令（依赖安装、构建、测试）时，不要给 bash/powershell 传 timeout 参数——" +
+  `Windows 上这些命令本来就慢，短超时会把正常的慢命令拦腰杀掉；填了小于 ${COMMAND_TIMEOUT_FLOOR_SECONDS} 秒的值不会生效。`;
+
+/**
+ * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
+ * 模型可以用 `expected_seconds` 告诉 UI「这条预计要跑多久」——**只影响界面**
+ * （运行行显示「预计约 X」，预计超 10 秒的调用开始就展开看实时输出），不影响
+ * 执行、不做硬性结束、也不进 shell。机制：pi 的 TypeBox 校验对未知字段放行
+ * （0.84.3 实测），字段随入参原样流到渲染层，bash 的 execute 只解构
+ * command/timeout、无视它——因此不需要 patch pi，也不需要在闸门里剔除。
+ */
+const EXPECTED_SECONDS_GUIDELINE =
+  "调 bash/powershell 时，如果你预计这条命令要跑 10 秒以上（测试、构建、装依赖、sleep、" +
+  "大目录扫描），可以在参数里额外带上 expected_seconds（数字，秒，你的估计值）。" +
+  "它只用于界面展示（进度提示与自动展开），不影响命令的执行与超时。";
 
 /**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
@@ -645,6 +715,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       additionalSkillPaths: command.skillsDirs,
       extensionFactories: [
         {
+          name: "orbita-cc-billing",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            // Claude 订阅车道的最小改写（cc-billing-patch.ts）：只对带 pi OAuth
+            // 身份块的请求生效，返回 undefined 时 payload 原样过（其它 provider 零影响）
+            pi.on("before_provider_request", (event) => ccBillingPatch(event.payload));
+          },
+        },
+        {
           name: "orbita-permission",
           hidden: true,
           factory: (pi: PiExtensionApi) => {
@@ -675,6 +754,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 describeChannelRole(role),
                 STORE_TOOLS_GUIDELINES,
                 TOOL_GUIDELINES,
+                EXPECTED_SECONDS_GUIDELINE,
                 // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
                 // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
                 QUOTE_GUIDELINE,
@@ -696,6 +776,46 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * applyOverrides 只改内存、不落盘，不会写回用户的全局设置文件。
    */
   services.settingsManager.applyOverrides({ retry: { maxRetries: 3, baseDelayMs: 5000 } });
+  /**
+   * bash 路径钉一次（A2）。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里
+   * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 50~85ms 的同步 `where`）。
+   *
+   * **只在用户没显式设过时补**：`shellPath` 是 pi 的设置项，用户可能在自己的
+   * `~/.pi/agent/settings.json` 里指定了别的 shell（MSYS2、WSL bash）——那是当事人的选择，
+   * `applyOverrides` 盖掉它等于替用户改配置。空着才是我们该补的那种机器。
+   * 探不到（没装 Git Bash）也不填：pi 会照旧走它自己的报错路径，那种机器上行为不变。
+   * 钉住后不复探：bash 二进制中途消失会一路抛「Custom shell path not found」直到重启
+   * （已知代价，取舍见 ./shell-path.ts）。
+   */
+  if (services.settingsManager.getShellPath() === undefined) {
+    const shellPath = resolveShellPath();
+    if (shellPath !== undefined) services.settingsManager.applyOverrides({ shellPath });
+  }
+  /**
+   * 内建工具集**显式给**，不吃 pi 的默认四件套（read/bash/edit/write）。
+   *
+   * 因为 pi 的 system prompt 里有一条规则：**有 bash 而 grep / find / ls 一个都不在**时，
+   * 它给模型下一句 "Use bash for file operations like ls, rg, find"（实测：默认四件套下这句
+   * 就在 systemPrompt 里）——搜索于是全走 shell。后果实测：真实会话 33,201 次 bash 调用里
+   * 52.4% 是搜索类命令；`grep -rn X .` 会递归进 node_modules（本仓 34,337 个文件里 30,997 个
+   * 是它）耗 5.57s，而 pi 自带的 grep 工具走 ripgrep、尊重 .gitignore，同一任务 0.08s。
+   *
+   * 补上这三个，那条规则的**触发条件不再成立，它自己就消失**（实测：同一句从 systemPrompt
+   * 里消失）——不用去提示词里劝模型。我们只能往 pi 的 system prompt 后面**追加**，删不掉它写的
+   * 那句。
+   *
+   * **走 defaultTools 设置，不走 `tools` 白名单**：`tools` 是**全局**白名单，
+   * `_refreshToolRegistry` 里同一个 `isAllowedTool` 会**连自定义工具一起过滤**——
+   * 2026-10-04 实测：传 `tools: [七个内建]` 后 MCP、read_pdf、read_docx、show_image、store / task /
+   * browser / channel 工具与 pi 自己的 ask_question / todo **全部消失**，而且不报错。
+   * `defaultTools` 是设置项，只决定**内建工具的初始选择**，不构成白名单，自定义工具不受影响
+   * （实测：七个内建 + 自定义工具同时在位）。
+   *
+   * 覆盖用户 pi 全局的 `defaultTools` 是刻意的：那是另一个应用的配置，不该决定 orbita
+   * 手里有哪些工具——同 retry / compaction / shellPath 那几处同一个口径。
+   * 名单与权限提示词同一份真源：./permission.ts 的 ENABLED_BUILTIN_TOOLS。
+   */
+  services.settingsManager.applyOverrides({ defaultTools: [...ENABLED_BUILTIN_TOOLS] });
   /**
    * 压缩阈值（A-1）：用户设置走「剩余百分比」，按**本轮模型**的窗口换算成 pi 的
    * reserveTokens——pi 的判定（agent-session 的 shouldCompact）拿当前模型窗口比，
@@ -754,6 +874,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     services,
     sessionManager,
     model,
+    // 内建工具集走上面那句 applyOverrides({ defaultTools })，**不在这里传 `tools`**——
+    // `tools` 是全局白名单，会把自定义工具（MCP / read_pdf / browser / …）一并过滤掉。
     // 思考档每轮显式给：不传的话 pi 退到用户全局 ~/.pi/agent/settings.json，
     // 那是另一个应用的配置——这一刀收归己有的就是它
     thinkingLevel: command.thinkingLevel,
@@ -798,7 +920,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
         if (echoed.has(text)) {
           echoed.delete(text);
         } else if (text !== "") {
-          for (const progress of adapter.userPrompt(text)) {
+          for (const progress of adapter.userPrompt(splitEchoBlocks(text))) {
             send({ type: "progress", sessionId: command.sessionId, progress });
           }
         }
@@ -1054,6 +1176,12 @@ async function listBuiltins(): Promise<void> {
  * - 文件引用与粘贴块组装进正文之后；回显块保留块界（粘贴块 / 文件清单各自独立
  *   text 块），显示层按块解析回 chip。
  */
+/** 正文按空行拆块回显（空段丢弃；整条为空保一个空块——纯图消息的形状不变） */
+function splitEchoBlocks(text: string): string[] {
+  const parts = text.split("\n\n").filter((part) => part !== "");
+  return parts.length > 0 ? parts : [""];
+}
+
 async function echoAndPrompt(
   opened: OpenedTurn,
   note: LedgerNote,
@@ -1064,7 +1192,10 @@ async function echoAndPrompt(
   const files = command.files ?? [];
   const promptText = composePromptText(command.text, pasted, files);
   note.echoed.add(promptText);
-  for (const progress of opened.adapter.userPrompt(command.text, images, attachmentBlocks(pasted, files))) {
+  // 正文按空行拆成块再回显：句中粘贴胶囊（方案 C）组装后就是 <pasted-text> 块内联
+  // 在正文里，拆开才能被显示层按内容认出来（splitUserTextBlocks）。纯正文拆了
+  // 再拼回去逐字不变（空行既是拆分符也是拼回符），旧消息行为不动
+  for (const progress of opened.adapter.userPrompt(splitEchoBlocks(command.text), images, attachmentBlocks(pasted, files))) {
     // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
     if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
     send({ type: "progress", sessionId: command.sessionId, progress });
@@ -1320,6 +1451,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "classifyGreetings") {
     // 不 await：判定是几秒量级的独立调用，不挡住后面进来的命令（与标题同理）
     void classifyGreetings(command);
+    return;
+  }
+  if (command.type === "probeProvider") {
+    // 同上：独立小调用，不挡后续命令
+    void probeProvider(command);
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——

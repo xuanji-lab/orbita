@@ -83,3 +83,98 @@ describe("createToolCallGate", () => {
     assert.equal((await gate(event("bash"))).block, true);
   });
 });
+
+/**
+ * 命令超时兜底。背景：pi 的 bash 工具没有系统超时（上限 2147483.647 秒），唯一的时间是
+ * 模型自己填的 `timeout`。它经常填保守的小值（60s / 30s / 10s，2026-10-01 统计），
+ * 慢命令就被自己的秒表砍掉——白等一分钟再重试。
+ *
+ * 抬升函数不导出（消费者纪律：测试不算真实调用点），全部经闸门测——顺带连「跑在
+ * 早退之前」的顺序也一起被钉住。
+ */
+describe("命令超时兜底（经 createToolCallGate）", () => {
+  /** 只看 `timeout` 一个键，其余原样返回，断言好写。skip 档直达放行，input 被原地抬 */
+  async function clampedTimeout(toolName: string, timeout: unknown): Promise<unknown> {
+    const { gate } = gateFor("skip");
+    const input: Record<string, unknown> = { command: "bun run test" };
+    if (timeout !== undefined) input["timeout"] = timeout;
+    await gate({ toolCallId: "c1", toolName, input });
+    return input["timeout"];
+  }
+
+  test("填了但太小 → 抬到下限 600 秒", async () => {
+    assert.equal(await clampedTimeout("bash", 60), 600);
+    assert.equal(await clampedTimeout("bash", 30), 600);
+    assert.equal(await clampedTimeout("bash", 1), 600);
+    assert.equal(await clampedTimeout("bash", 599), 600);
+  });
+
+  test("powershell 同一条兜底（Windows 上一样会自伤）", async () => {
+    assert.equal(await clampedTimeout("powershell", 10), 600);
+  });
+
+  test("不填不动——不设超时是最宽的选择，抬它反而变窄", async () => {
+    assert.equal(await clampedTimeout("bash", undefined), undefined);
+  });
+
+  test("填得比下限大就尊重模型自己的判断", async () => {
+    assert.equal(await clampedTimeout("bash", 600), 600);
+    assert.equal(await clampedTimeout("bash", 900), 900);
+    assert.equal(await clampedTimeout("bash", 120000), 120000);
+  });
+
+  test("非法值不在这里修：pi 自己会报 Invalid timeout，不替它做第二套校验", async () => {
+    assert.equal(await clampedTimeout("bash", 0), 0);
+    assert.equal(await clampedTimeout("bash", -5), -5);
+    assert.equal(await clampedTimeout("bash", Number.NaN), Number.NaN);
+    assert.equal(await clampedTimeout("bash", "60"), "60");
+    assert.equal(await clampedTimeout("bash", null), null);
+  });
+
+  test("只动命令类工具：read 带上同名字段不碰", async () => {
+    assert.equal(await clampedTimeout("read", 5), 5);
+    assert.equal(await clampedTimeout("mcp__fs__read", 5), 5);
+  });
+
+  /**
+   * 下面两条是**位置**守卫：兜底必须跑在每条早退之前。
+   * default 档（skip）直接走「放行」那条早退——模型填小超时最常见的场景——
+   * 把兜底挪到后面就会在这条路径上失效。
+   */
+  test("skip 档（直接放行那条早退）也抬", async () => {
+    const { gate } = gateFor("skip");
+    const e = event("bash", { command: "bun run test", timeout: 60 });
+    await gate(e);
+    assert.equal(e.input["timeout"], 600);
+  });
+
+  test("manual 档（问过用户之后）也抬", async () => {
+    const { gate, asked } = gateFor("manual");
+    const e = event("bash", { command: "bun run test", timeout: 30 });
+    await gate(e);
+    assert.equal(asked.length, 1, "该问就问");
+    assert.equal(e.input["timeout"], 600);
+  });
+
+  test("protectedPaths 拦住的那条早退也先抬（否则拒绝理由里带的是旧值）", async () => {
+    const gate = createToolCallGate(
+      () => "skip",
+      async () => ({ behavior: "allow" }),
+      // 用正斜杠的绝对路径：两平台字面一致。写成 C:\\secrets 只在 Windows 上成立
+      // （反斜杠与大小写的折叠只在 win32 做），macOS 上这条会误红
+      ["/secrets"],
+      "/work",
+    );
+    const e = event("bash", { command: "cat /secrets/a.json", timeout: 30 });
+    const result = await gate(e);
+    assert.equal(result.block, true, "受保护路径本就该拒");
+    assert.equal(e.input["timeout"], 600, "拒绝这条路上也要先抬");
+  });
+
+  test("人在审批卡片里明确填的秒表说了算——兜底不覆盖人工选择", async () => {
+    const { gate } = gateFor("manual", { behavior: "allow", input: { command: "bun run test", timeout: 30 } });
+    const e = event("bash", { command: "bun run test", timeout: 60 });
+    await gate(e);
+    assert.equal(e.input["timeout"], 30);
+  });
+});

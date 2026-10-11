@@ -142,6 +142,17 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
+**Category colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): a shared
+three-colour set — blue for doc-ish, green for sheets, orange-red for slides — that tells file
+types apart **at a glance in their 13–14px icons** (files tree, composer pills, sent-attachment
+list; filenames stay in ink) and colours tool-type chips: skill chips green (`-sheet`), MCP chips
+blue (`-doc`); orange (`-slides`) is reserved for command chips (`/new`, `/compact` — not wired
+yet). The material blocks (Excel / Doc / PPT — the blue / green / orange of the later tetris
+view) join the same set when they land. Not the accent or any status colour; ≥ 3:1 on every
+theme's panel / muted / app grounds (icon use), hues ≥ 40° apart, guarded by
+`filetype-colors.test.ts`. Chip usage is tint-and-stroke: a light `color-mix` tint of the same
+variable as the fill, the full colour as the stroke, text in ink; icons may use the full colour.
+
 **Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is
 unchanged — **the shell (the ground the left rail and right icon strip sit on) is the lighter
@@ -255,9 +266,32 @@ translucency step alone. No thick rules, no coloured left-border accents.
 border and **no** fill — they sit directly on the chat surface and are separated by 16px of space.
 External-capability events (skill use, MCP calls) render as **chip rows**: their identity (icon +
 kind word + name) sits in one pill chip — 1px hairline, fully rounded, no fill — the same language
-as the composer's attachment and quote chips, so an "external object" looks alike everywhere; the
+as the composer's attachment pills, so an "external object" looks alike everywhere; the
 row itself stays a process row. Within the family the skill name sets in the text face (a
 human-written instruction) while server/tool sets in mono (a machine service) (2026-09-27).
+**The composer's materials never enter the input card** (2026-10-03, the "stacked" ruling):
+screenshots, file/directory references and quotes stack *above* the card, in that order —
+screenshots as one row of square thumbs; references as one row of the same pill chips,
+single-row, wrapping to fill the row when crowded; quotes as a floating-glass card of
+queue-strip rows, at most two visible and the rest folded behind "N more quotes…". Only the
+quote card takes a card; the other layers sit directly on the chat surface, each chip carrying
+its own `--glass-bg` and `--shadow-border`. Pasted text left the stack in 2026-10-09 (plan C): a
+large paste collapses into an **inline chip in the text** at the caret (below), so the stack no
+longer carries it. Skill / MCP tokens enter the text the same way: typing a lone `/` at the very
+start of the draft and pressing **space** opens the right-rail Skills picker (Tab switches to MCP,
+Enter inserts the token back at the caret) — there is no in-composer slash panel anymore
+(2026-10-10 ruling; drag a Skills/MCP card into the box as the other path).
+The same language extends **inline**: a `/skill:` or `/mcp:` token typed mid-sentence renders as a chip in the
+composer (a mirror layer beneath the textarea paints the pill exactly under the token's glyphs —
+no horizontal padding or icon, or the text would shift out of alignment) and in the sent user
+bubble (icon + name, the pill recipe above); the composer variant can therefore only ever show
+the token's literal text (2026-10-06, chip-overlay option D). A large paste joins the same
+family (2026-10-09, plan C): it lands **at the caret** as a chip whose token is its literal label
+(`[粘贴 1 · 42 行]`), deletable as one block by a backspace at its tail, restored whole by one
+undo step, and assembled into a `<pasted-text>` block in place when sent. Clicking the chip
+expands the full text back into the box — editable normal text wearing only a muted background
+run, with a small floating pill (icon + "42 行 · 收起") at the run's head to fold it back; the run
+stretches as you edit, and the composer keeps its 12-row cap with internal scrolling.
 Process rows live in the quiet tiers: while a row's activity is in progress its head (icon + label)
 is the only bright thing at secondary; once the state settles the **whole row** recedes to tertiary —
 one flat grey, with failure red as the only exception. Body text never competes with the past.
@@ -298,6 +332,16 @@ continuous animation that would otherwise sit on screen unattended, for a backgr
 isn't currently watching.
 
 ## Implementation rules
+
+**Trailing edges sit on the row's right hem.** A row / card / list item's trailing
+element — a status mark, footnote, count or timestamp — pins its right edge to the row's right
+padding, the same hem the leading element's left edge sits on (depth indent goes left only). Push
+it there with the shared `.row-trailing` primitive (`margin-left: auto; flex: 0 0 auto`) — never
+with a fixed width or magic padding. A hover-only action cluster never occupies space at rest: it
+overlays the corner (absolutely positioned) and the trailing element yields (fades) while it is up.
+The anti-pattern this rule kills: `padding-right: 44px` reserving room for hidden buttons, so a
+resting status mark floats mid-row while the left side hugs its hem. Geometry is guarded by
+`scripts/ui-edges.mjs`.
 
 **Stateful styling lives in CSS classes.** Hover, `:focus-visible`, `:active`, `:disabled`,
 `[aria-selected]` / `[aria-expanded]`, `:focus-within`, container queries, `prefers-reduced-motion`,

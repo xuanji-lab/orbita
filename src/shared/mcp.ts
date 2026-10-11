@@ -326,6 +326,7 @@ export function appliesToWorkspace(
   return scoped.includes(workspace.name) || scoped.includes(workspace.id);
 }
 
+
 /**
  * 把 `${workspaceFolder}` 换成工作区根。
  *

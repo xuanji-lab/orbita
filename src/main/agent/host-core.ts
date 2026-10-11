@@ -68,6 +68,12 @@ export class AgentHostCore {
     { resolve: (throwaway: number[]) => void; reject: (error: Error) => void }
   >();
   private greetingSeq = 0;
+  /** 在等的 probeProvider 回执（Test 的 OAuth 路由），按 requestId；进程退出全部 reject */
+  private readonly pendingProbes = new Map<
+    string,
+    { resolve: (result: { ok: boolean; message: string }) => void; reject: (error: Error) => void }
+  >();
+  private probeSeq = 0;
 
   constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
     this.forkRuntime = forkRuntime;
@@ -110,6 +116,13 @@ export class AgentHostCore {
           this.pendingGreetings.delete(message.requestId);
           if (message.throwaway === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
           else pending?.resolve(message.throwaway);
+          return;
+        }
+        if (message.type === "providerProbed") {
+          // 同 greetingsClassified：只结发起方，不广播
+          const pending = this.pendingProbes.get(message.requestId);
+          this.pendingProbes.delete(message.requestId);
+          pending?.resolve({ ok: message.ok, message: message.message });
           return;
         }
         if (message.type === "created") {
@@ -158,6 +171,8 @@ export class AgentHostCore {
         this.mcpReloadInFlight = null;
         for (const pending of this.pendingGreetings.values()) pending.reject(new Error(message));
         this.pendingGreetings.clear();
+        for (const pending of this.pendingProbes.values()) pending.reject(new Error(message));
+        this.pendingProbes.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -314,6 +329,37 @@ export class AgentHostCore {
         },
       });
       this.post({ type: "classifyGreetings", requestId, provider, modelId, messages });
+    });
+  }
+
+  /**
+   * 连接探测（Test 的 OAuth 路由）：让 agent 进程用 pi 的客户端（与真会话同源）
+   * 发一条小消息。1 分钟没回当失败——网关挂住时不让 Test 按钮一直转。
+   */
+  async probeProvider(
+    provider: Extract<AgentCommand, { type: "probeProvider" }>["provider"],
+    modelId: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    await this.ensure();
+    this.probeSeq += 1;
+    const requestId = `probe-${this.probeSeq}`;
+    return new Promise<{ ok: boolean; message: string }>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingProbes.has(requestId)) return;
+        this.pendingProbes.delete(requestId);
+        reject(new Error("the model didn't answer in time"));
+      }, 60_000);
+      this.pendingProbes.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.post({ type: "probeProvider", requestId, provider, modelId });
     });
   }
 

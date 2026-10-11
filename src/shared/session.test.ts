@@ -1,6 +1,6 @@
 import { deepStrictEqual, doesNotMatch, match, notStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatSkillBlock } from "./skill.ts";
+import { composeInvocationPrompt } from "./invocation.ts";
 import {
   deriveSessionTitle,
   isChannelMarkRecord,
@@ -64,14 +64,26 @@ describe("deriveSessionTitle", () => {
     strictEqual(deriveSessionTitle("   \n  "), "");
   });
 
-  it("<skill> 块不进标题：剥掉取附加指示，剥完为空给空标题", () => {
-    const block = formatSkillBlock({
-      name: "TDD",
-      location: "C:/Orbita/skills/tdd/SKILL.md",
-      body: "# TDD\n先写测试",
-    });
+  it("<skill> 块不进标题（旧格式）：剥掉取附加指示，剥完为空给空标题", () => {
+    const block = [
+      '<skill name="TDD" location="C:/Orbita/skills/tdd/SKILL.md">',
+      "References are relative to C:/Orbita/skills/tdd.",
+      "",
+      "# TDD",
+      "先写测试",
+      "</skill>",
+    ].join("\n");
     strictEqual(deriveSessionTitle(block), "");
     strictEqual(deriveSessionTitle(`${block}\n\n先只做第一步`), "先只做第一步");
+  });
+
+  it("/skill: / /mcp: 的指令块不进标题：转录存的是发给模型的全文，标题取用户自己的话", () => {
+    const sent = composeInvocationPrompt(
+      "/skill:review 审一下 auth 模块",
+      [{ target: "review", location: "/Orbita/skills/review/SKILL.md" }],
+      [],
+    );
+    strictEqual(deriveSessionTitle(sent), "/skill:review 审一下 auth 模块");
   });
 
   it("附件块不进标题——「只发附件不打字」开会话不显示裸 XML", () => {
@@ -360,6 +372,17 @@ describe("transcriptToMarkdown", () => {
     const md = transcriptToMarkdown([user]);
     doesNotMatch(md, /^#/);
     match(md, /\*\*User\*\*\n\n重做外壳/);
+  });
+
+  it("用户消息里的 /skill: 指令块不进导出——XML 是给模型的，存档给人读", () => {
+    const sent = composeInvocationPrompt(
+      "/skill:review 重做外壳",
+      [{ target: "review", location: "/Orbita/skills/review/SKILL.md" }],
+      [],
+    );
+    const md = transcriptToMarkdown([{ ...user, content: [{ type: "text" as const, text: sent }] }]);
+    doesNotMatch(md, /mentioned_tools/);
+    match(md, /\*\*User\*\*\n\n\/skill:review 重做外壳/);
   });
 
   // 导出是给人看的存档，把过程抹掉就没法追溯了

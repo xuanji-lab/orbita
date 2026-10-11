@@ -6,7 +6,8 @@
  * renderer 拿到的永远是 ProviderDto —— **密钥不过 IPC**，只有 SecretRef 与掩码预览。
  *
  * 本轮只落「配置一个 provider 并持久化」需要的字段。`discovered`（发现的模型缓存）、
- * `capabilities`（能力旗标矩阵）、`oauth` 都留到有真实调用点时再加——协议加字段是加法。
+ * `capabilities`（能力旗标矩阵）留到有真实调用点时再加——协议加字段是加法
+ * （`oauth` 认证方式已随 Claude 订阅登录落地，见 main/provider/oauth.ts）。
  */
 
 /** provider 稳定标识；用户可改 displayName，id 不变 */
@@ -30,8 +31,21 @@ export type ProviderApi = (typeof PROVIDER_APIS)[number];
 /** 密钥引用。明文永不进 Provider 对象，也永不过 IPC。 */
 export type SecretRef = { kind: "keychain"; account: string };
 
+/**
+ * OAuth 凭据在密钥库里的落盘形状（JSON 字符串整体加密，永不过 IPC）。
+ * 账号邮箱是登录时顺手问 /v1/me 拿的展示信息，失败可空。
+ */
+export interface OauthCredential {
+  accessToken: string;
+  refreshToken: string;
+  /** 毫秒时间戳，已扣掉安全提前量（过期前该刷新） */
+  expiresAt: number;
+  accountEmail: string | null;
+}
+
 export type ProviderAuth =
   | { scheme: "api_key"; secretRef: SecretRef }
+  | { scheme: "oauth"; secretRef: SecretRef }
   | { scheme: "env"; envKeys: string[] }
   | { scheme: "none" };
 
@@ -87,10 +101,11 @@ export interface Provider {
   models: { declared: ModelDecl[] };
 }
 
-/** 过 IPC 给 renderer 的形状：与 Provider 同构，但密钥只有掩码预览。 */
+/** 过 IPC 给 renderer 的形状：与 Provider 同构，但密钥只有掩码预览；OAuth 只有账号与在登状态。 */
 export type ProviderDto = Omit<Provider, "auth"> & {
   auth:
     | { scheme: "api_key"; hasSecret: boolean; masked: string | null }
+    | { scheme: "oauth"; loggedIn: boolean; account: string | null }
     | { scheme: "env"; envKeys: string[] }
     | { scheme: "none" };
 };

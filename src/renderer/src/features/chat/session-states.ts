@@ -18,7 +18,7 @@ import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem 
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
-import type { ComposerFileRef, ComposerPastedText } from "../../shell/composer-attachments.ts";
+import type { ComposerFileRef } from "../../shell/composer-attachments.ts";
 import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { TranscriptRecord } from "@shared/session";
@@ -47,15 +47,14 @@ export interface PendingApproval {
  */
 export type QueuedMessage =
   /** images：随这条排队的附图（缺席 = 纯文字）。排队时就读成 base64，投递时原样交出去。
-   * files / pasted：同行的文件引用与粘贴文本块（语义见 shared/prompt-attachments.ts），
-   * 投递时原样交出去；撤回时原样回输入框 */
+   * files：同行的文件引用，投递时原样交出去；撤回时回输入框。粘贴块已内联进 text
+   * （token 换 <pasted-text> 块，方案 C），撤回时 draftFromSentText 拆回句中胶囊 */
   | {
       id: string;
       kind: "text";
       text: string;
       images?: readonly PromptImage[];
       files?: readonly ComposerFileRef[];
-      pasted?: readonly ComposerPastedText[];
     }
   | { id: string; kind: "compact"; instructions?: string }
   | { id: string; kind: "channel"; childId: string; message: ChannelMessage };

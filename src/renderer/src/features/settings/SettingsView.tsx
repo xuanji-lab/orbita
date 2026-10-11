@@ -238,6 +238,10 @@ function General(props: {
   const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
   // 同理：缺席 = 开启，UI 要把这一层兜回来，否则新用户看到的是 Off、实际在签名
   const gitAttribution = props.settings.gitAttribution ?? true;
+  // 同理：缺席 = 折叠（粘贴文本 chip 的出厂形态）
+  const pastedCollapse = props.settings.collapsePastedText ?? true;
+  // 缺席 = 关（口味不是能力）
+  const composerBlackhole = props.settings.composerBlackhole ?? false;
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -470,6 +474,34 @@ function General(props: {
             </Chip>
           </span>
           <AttributionPreview enabled={gitAttribution} language={shownLanguage} />
+        </SettingRow>
+        <SettingRow
+          name={t.settings.pastedCollapse}
+          info={t.settings.pastedCollapseInfo}
+        >
+          {/* 设计系统里没有 Switch，开关就用两个 Chip——与署名开关同一个形状 */}
+          <span className="set-chips" role="group" aria-label={t.settings.pastedCollapseAria}>
+            <Chip active={pastedCollapse} onClick={() => props.onChange({ collapsePastedText: true })}>
+              {t.common.on}
+            </Chip>
+            <Chip active={!pastedCollapse} onClick={() => props.onChange({ collapsePastedText: false })}>
+              {t.common.off}
+            </Chip>
+          </span>
+        </SettingRow>
+        <SettingRow
+          name={t.settings.composerBlackhole}
+          info={t.settings.composerBlackholeInfo}
+        >
+          {/* 同上两个开关的形状。纸面主题下开着也不生效（blackholeActive），值照存 */}
+          <span className="set-chips" role="group" aria-label={t.settings.composerBlackholeAria}>
+            <Chip active={composerBlackhole} onClick={() => props.onChange({ composerBlackhole: true })}>
+              {t.common.on}
+            </Chip>
+            <Chip active={!composerBlackhole} onClick={() => props.onChange({ composerBlackhole: false })}>
+              {t.common.off}
+            </Chip>
+          </span>
         </SettingRow>
       </SettingGroup>
       <SettingGroup label={t.settings.data}>
