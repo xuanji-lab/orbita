@@ -213,6 +213,16 @@ export function Sidebar(props: {
   const width = props.width;
   /** 高亮哪一条：盖着别的面时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.overlay !== null ? null : (session.sessionId ?? session.opened?.id ?? null);
+  /**
+   * 打开的会话落在收着的工作区组里（工作区默认折叠：从首页卡片 / 引用跳转等入口打开时
+   * 常见），就把那组展开——不然左栏没有一行是高亮的，用户看不出自己在哪。
+   * 只在打开的会话（或它的归属）变的时候展开一次：之后用户再把它折上，尊重用户。
+   */
+  const openWorkspaceId = session.sessions.find((m) => m.id === openId)?.workspaceId ?? null;
+  useEffect(() => {
+    if (openWorkspaceId === null) return;
+    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(openWorkspaceId)));
+  }, [openId, openWorkspaceId]);
 
   /**
    * 新建任务顺带退出设置页（wafo 2026-09-03：此前停在 Settings 里点 New Task
