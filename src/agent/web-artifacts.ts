@@ -18,10 +18,11 @@
  * 这些产物**不参与撤销**（没拍内容快照，撤不回去），只供轮尾卡片展示与
  * 「在内置浏览器打开」。
  *
- * 扫描范围与开轮目录清单（TurnDirectories）同源：cwd + attached + 会话工作台，
- * 但**预算按根分账**：cwd 与工作台是 agent 自己的地盘，各吃全预算；附加目录
- * 可能是 `/Users/x/Documents/repo` 这种巨目录，只值小预算，撞了自己截断，
- * 不吃掉 cwd / 工作台的额度。跳过 node_modules / .git / dist / out / build /
+ * 扫描范围只有 cwd 与会话工作台，**不扫附加目录**（2026-10-12 用户实测）：
+ * 附加目录是跨会话共享的大盘（如 `/Users/x/Documents/repo`），同一时段别的会话 /
+ * 子会话在里面 `git worktree add`、跑脚本，新文件的 mtime 落在本轮窗口里，mtime
+ * 判定分不出「是不是这一轮生成的」——误报不可避免；而 agent 真在附加目录里生成
+ * 网页的情况少见，漏报代价小。预算按根分账：cwd 与工作台各吃一份。跳过 node_modules / .git / dist / out / build /
  * .next；限深度、限访问条目数，超限就地截断（truncated = true，调用方记日志）
  * ——轮尾扫描不能明显拖慢收尾。
  *
@@ -59,16 +60,8 @@ export const SCAN_MAX_DEPTH = 8;
 export const SCAN_MAX_ENTRIES = 20000;
 
 /**
- * 每个附加目录的条目预算。附加目录按「用户挂进来的大盘」处理：里面通常还有
- * 别的仓 / 别的 worktree（一次 `git worktree add` 就能塞进几千个文件），扫全量
- * 的代价每轮白付两遍；3 千条够覆盖「agent 真在附加目录里干活」的常见深度，
- * 撞了就地截断并记日志——宁可漏报，不可拖慢收尾、更不可误报。
- */
-export const SCAN_ATTACHED_MAX_ENTRIES = 3000;
-
-/**
  * 一个扫描根：目录 + 它自己的条目预算。预算按根分账，见文件头。
- * `webScanRoots` 负责把 cwd / 工作台 / 附加目录分进正确的档位。
+ * `webScanRoots` 给出 cwd 与工作台两个根。
  */
 export interface ScanRoot {
   root: string;
@@ -173,19 +166,11 @@ export function foldWebArtifacts(
 }
 
 /**
- * 旁路扫描的根与预算：与开轮目录清单（describeDirectories 讲的三层地盘）同源——
- * cwd、会话工作台吃全预算，附加目录各吃小预算。去重时全预算根优先：与 cwd /
- * 工作台同路径的附加目录条目不再单开一份小预算扫描。
+ * 旁路扫描的根与预算：cwd 与会话工作台，各吃全预算。**附加目录不在内**——理由见文件头。
  */
 export function webScanRoots(cwd: string, directories: TurnDirectories | undefined): ScanRoot[] {
-  const full: string[] = [cwd];
-  if (directories?.workbench !== undefined && directories.workbench !== "") full.push(directories.workbench);
-  const seen = new Set(full);
-  const roots: ScanRoot[] = full.map((root) => ({ root, maxEntries: SCAN_MAX_ENTRIES }));
-  for (const root of directories?.attached ?? []) {
-    if (seen.has(root)) continue;
-    seen.add(root);
-    roots.push({ root, maxEntries: SCAN_ATTACHED_MAX_ENTRIES });
-  }
-  return roots;
+  const roots = [cwd];
+  const workbench = directories?.workbench;
+  if (workbench !== undefined && workbench !== "" && workbench !== cwd) roots.push(workbench);
+  return roots.map((root) => ({ root, maxEntries: SCAN_MAX_ENTRIES }));
 }
