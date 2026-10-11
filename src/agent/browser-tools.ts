@@ -197,6 +197,8 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       "browser_extract is cheaper and more accurate. Pixel coordinates in a screenshot of your own tab can be " +
       "passed to browser_click / browser_scroll — for things browser_observe gives no ref (canvas, charts, custom " +
       "widgets). To read small print or chart details, pass region to zoom into part of your latest screenshot. " +
+      "If the result says the page cannot be captured, do not retry the same call — the page is not producing " +
+      "frames; read it with browser_extract or browser_observe instead. " +
       UNTRUSTED,
     parameters: {
       type: "object",

@@ -7,6 +7,12 @@ import type { WebContents } from "electron";
 
 const CDP_TIMEOUT_MS = 10_000;
 
+/**
+ * cdp 命令超时。单独一个类型：截图路径（frame-capture.ts）要认出它来换补拍路径、
+ * 换给模型的说法——其它错误（页面崩了、调试器装不上）照原样抛。
+ */
+export class CdpTimeoutError extends Error {}
+
 /** 懒 attach 调试器；页面崩溃或被别的调试器抢走后下次调用自己重连。每条命令带超时 */
 export async function cdp(contents: WebContents, method: string, params?: object): Promise<unknown> {
   const debuggerApi = contents.debugger;
@@ -17,15 +23,20 @@ export async function cdp(contents: WebContents, method: string, params?: object
       throw new Error(`Could not inspect the page (${cause instanceof Error ? cause.message : String(cause)}).`);
     }
   }
-  return withTimeout(debuggerApi.sendCommand(method, params), CDP_TIMEOUT_MS, "The page did not respond in time.");
+  return withTimeout(debuggerApi.sendCommand(method, params), CDP_TIMEOUT_MS, "The page did not respond in time.", CdpTimeoutError);
 }
 
-export function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+  ErrorCtor: new (message: string) => Error = Error,
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   return Promise.race([
     promise,
     new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
+      timer = setTimeout(() => reject(new ErrorCtor(message)), ms);
     }),
   ]).finally(() => clearTimeout(timer));
 }
