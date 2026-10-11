@@ -601,6 +601,9 @@ export function FilesPanel(props: {
               workspaceId={workspaceId}
               root={activeTab.root}
               path={activeTab.path}
+              rootLabel={
+                tree.roots.find((r) => r.path === activeTab.root)?.label ?? pathTail(activeTab.root)
+              }
               {...(activeTab.name !== undefined ? { sentImage: { name: activeTab.name } } : {})}
             />
           )}

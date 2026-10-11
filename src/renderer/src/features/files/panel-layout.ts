@@ -146,6 +146,25 @@ export function crumbSegments(path: string): string[] {
 }
 
 /**
+ * 预览面包屑的分段，**从所在的根开始**（2026-10-11 验收：绝对路径从 /Users › …
+ * 起头，放不下时截掉的偏偏是末尾的文件名）。第一段是根的显示名（workspace /
+ * attached 的名字、session 的会话标题——原型同款），其后是根之内的相对段，
+ * 末段（文件名）由渲染方加亮。path 不在 rootPath 之内（标签只从根内条目构造，
+ * 不该发生）时退全路径分段，诚实兑底。
+ */
+export function crumbSegmentsFromRoot(rootPath: string, rootLabel: string, path: string): string[] {
+  if (path !== rootPath) {
+    for (const sep of ["/", "\\"] as const) {
+      if (path.startsWith(rootPath + sep)) {
+        const below = path.slice(rootPath.length + sep.length);
+        return [rootLabel, ...below.split(/[\\/]/).filter((segment) => segment !== "")];
+      }
+    }
+  }
+  return crumbSegments(path);
+}
+
+/**
  * 分组折叠态的切换：session / workspace / attached 三组根的组头整行可点，折起 /
  * 展开该组。键用根的绝对路径（随会话 / 工作区切换整表重置）。返回新 Set，不改传入值。
  */

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   closeTab,
   crumbSegments,
+  crumbSegmentsFromRoot,
   fileTabName,
   openTab,
   panelLayoutAttrs,
@@ -146,6 +147,44 @@ describe("crumbSegments", () => {
 
   it("滤掉空段（双分隔符 / 尾分隔符）", () => {
     deepStrictEqual(crumbSegments("/ws//a.ts/"), ["ws", "a.ts"]);
+  });
+});
+
+describe("crumbSegmentsFromRoot", () => {
+  it("从根的显示名起头，其后是根之内的相对段", () => {
+    deepStrictEqual(crumbSegmentsFromRoot("/Users/guanhongli/demo", "demo", "/Users/guanhongli/demo/docs/index.html"), [
+      "demo",
+      "docs",
+      "index.html",
+    ]);
+  });
+
+  it("根下一层的文件：根名 + 文件名两段", () => {
+    deepStrictEqual(crumbSegmentsFromRoot("/Users/x/ws", "orbita", "/Users/x/ws/AGENTS.md"), [
+      "orbita",
+      "AGENTS.md",
+    ]);
+  });
+
+  it("Windows 反斜杠根与渲染端拼的正斜杠子路径都接得住（分隔前缀两种都试）", () => {
+    deepStrictEqual(crumbSegmentsFromRoot("C:\\work\\demo", "demo", "C:\\work\\demo\\src\\main.ts"), [
+      "demo",
+      "src",
+      "main.ts",
+    ]);
+    deepStrictEqual(crumbSegmentsFromRoot("C:\\work\\demo", "demo", "C:\\work\\demo/src/a.ts"), [
+      "demo",
+      "src",
+      "a.ts",
+    ]);
+  });
+
+  it("路径不在根之内（不该发生）：退全路径分段，不拼假段", () => {
+    deepStrictEqual(crumbSegmentsFromRoot("/ws", "ws", "/other/a.ts"), ["other", "a.ts"]);
+  });
+
+  it("路径就是根本身：退全路径分段", () => {
+    deepStrictEqual(crumbSegmentsFromRoot("/ws", "ws", "/ws"), ["ws"]);
   });
 });
 

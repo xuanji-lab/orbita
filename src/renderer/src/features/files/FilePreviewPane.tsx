@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { PanelButton, PanelIconButton, PanelLine } from "../../shell/RightPanel";
@@ -6,7 +6,7 @@ import { api } from "../../api";
 import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
-import { crumbSegments, fileTabName } from "./panel-layout.ts";
+import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
@@ -34,12 +34,16 @@ export function FilePreviewPane(props: {
   /** 发送附图模式：path 是原图引用，读走 session.attachment（不过 fs:read 白名单），
    * root 不再有意义（标签存的是空串）；name 是合成显示名（image-1.png） */
   sentImage?: { name: string };
+  /** 所在根的显示名（面包屑第一段：workspace / attached 的名字、session 的标题） */
+  rootLabel: string;
 }) {
   const t = useT();
   const { sessionId, workspaceId, root, path } = props;
   const sentImage = props.sentImage;
   const name = sentImage?.name ?? fileTabName(path);
-  const segments = sentImage === undefined ? crumbSegments(path) : [name];
+  // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
+  const segments =
+    sentImage === undefined ? crumbSegmentsFromRoot(root, props.rootLabel, path) : [name];
   const previewMode = sentImage === undefined ? textPreviewMode(name) : "plain";
   const { state, refreshing, refresh } = usePreviewData(
     sentImage === undefined,
@@ -64,6 +68,14 @@ export function FilePreviewPane(props: {
     const timer = window.setTimeout(() => setCopied(false), 1500);
     return () => window.clearTimeout(timer);
   }, [copied]);
+
+  // 面包屑放不下时从左边裁（保住末尾的文件段）：容器 overflow:hidden 仍可程序滚动，
+  // 挂载时一把滚到最右；面板随后拖宽 / 拖窄由浏览器自动夹取 scrollLeft，无需跟踪
+  const crumbRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = crumbRef.current;
+    if (el !== null) el.scrollLeft = el.scrollWidth;
+  }, [segments]);
 
   const copyPath = (): void => {
     navigator.clipboard
@@ -104,9 +116,10 @@ export function FilePreviewPane(props: {
           size={16}
           style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
         />
-        {/* 面包屑：路径分段 + chevron 分隔；太长时整条在自身容器里裁掉尾部
-            （激活标签上始终有文件名，title 里始终有全路径），meta 在容器外不受挤 */}
-        <div className="file-preview-crumb">
+        {/* 面包屑：从所在的根开始的路径分段 + chevron 分隔；太长时在自身容器里
+            **从左边裁**（保住末尾的文件段，激活标签上始终有文件名），完整绝对路径
+            在本容器的 title 里；meta 在容器外不受挤 */}
+        <div className="file-preview-crumb" ref={crumbRef} title={path}>
           {segments.map((segment, index) => (
             <Fragment key={`${index}:${segment}`}>
               {index > 0 && (
@@ -123,7 +136,6 @@ export function FilePreviewPane(props: {
                     ? "file-preview-crumb-seg cur"
                     : "file-preview-crumb-seg"
                 }
-                title={segment}
               >
                 {segment}
               </span>
