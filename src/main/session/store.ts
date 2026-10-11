@@ -463,14 +463,16 @@ export class SessionStore {
    *
    * webArtifacts 是旁路网页产物（脚本生成、不在 changes 里、不参与撤销）：
    * 只有它、没有 changes 的轮也落记录——卡片要出，冷启动从 JSONL 重建时
-   * 靠 isFileTurnRecord 把它原样读回来。
+   * 靠 isFileTurnRecord 把它原样读回来。webArtifactsBatch 同理：批量折叠的
+   * 轮一个路径都不列，只有计数——没有计数的那轮卡片就什么都没有了。
    */
   async recordFileTurn(
     id: string,
     changes: readonly FileChangePayload[],
     webArtifacts: readonly string[] = [],
+    webArtifactsBatch?: number,
   ): Promise<FileTurnRecord | null> {
-    if (changes.length === 0 && webArtifacts.length === 0) return null;
+    if (changes.length === 0 && webArtifacts.length === 0 && webArtifactsBatch === undefined) return null;
     const persisted: FileChange[] = [];
     for (const change of changes) {
       persisted.push({
@@ -487,6 +489,7 @@ export class SessionStore {
       timestamp: Date.now(),
       changes: persisted,
       ...(webArtifacts.length > 0 ? { webArtifacts: [...webArtifacts] } : {}),
+      ...(webArtifactsBatch !== undefined ? { webArtifactsBatch } : {}),
     };
     await this.record(id, record);
     return record;

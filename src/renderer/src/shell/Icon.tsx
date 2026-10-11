@@ -64,6 +64,7 @@ import key from "../../../../Orbita Design System/assets/icons/lucide/key.svg?ra
 import lightbulb from "../../../../Orbita Design System/assets/icons/lucide/lightbulb.svg?raw";
 import loaderCircle from "../../../../Orbita Design System/assets/icons/lucide/loader-circle.svg?raw";
 import layoutGrid from "../../../../Orbita Design System/assets/icons/lucide/layout-grid.svg?raw";
+import layers from "../../../../Orbita Design System/assets/icons/lucide/layers.svg?raw";
 import list from "../../../../Orbita Design System/assets/icons/lucide/list.svg?raw";
 import listFilter from "../../../../Orbita Design System/assets/icons/lucide/list-filter.svg?raw";
 import listTodo from "../../../../Orbita Design System/assets/icons/lucide/list-todo.svg?raw";
@@ -183,6 +184,7 @@ const ICONS = {
   "loader-circle": loaderCircle,
   list,
   "layout-grid": layoutGrid,
+  layers,
   "list-filter": listFilter,
   "list-todo": listTodo,
   // 三条等长横线。列表用 `list`（带项目符号，读作「清单」），这一枚是「全部」——

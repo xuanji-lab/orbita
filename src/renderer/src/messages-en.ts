@@ -1007,6 +1007,9 @@ export const en = {
     fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
     fileCardWebMade: (n: number) => `${n} web page${n === 1 ? "" : "s"} generated`,
     fileCardScripted: "Script-generated · open only",
+    fileCardWebBatchShort: "Web files changed in bulk",
+    fileCardWebBatch: (n: number) =>
+      `${n} web file${n === 1 ? "" : "s"} changed this turn (looks like a bulk operation, not listed)`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
     fileCardUndo: "Undo",
