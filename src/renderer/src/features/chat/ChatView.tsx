@@ -93,7 +93,6 @@ import {
   type PanelInsertRequest,
   type TokenPickResult,
 } from "../../shell/panel-token.ts";
-import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
@@ -1298,6 +1297,17 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = useMemo(() => flattenRenderUnits(records), [records]);
   const entries = useMemo(() => groupToolUnits(units, props.skills), [units, props.skills]);
+  // 流式中的 assistant 记录 id 集：这些消息的 text 块渲染时传 streaming，
+  // closePendingMath 只该作用于打字未完成的文本（MarkdownBlock 的 streaming prop）
+  const streamingIds = useMemo(
+    () =>
+      new Set(
+        records
+          .filter((record) => record.role === "assistant" && record.status === "streaming")
+          .map((record) => record.id),
+      ),
+    [records],
+  );
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = props.phase === "turn";
   // 已中断的工具调用（interruptedToolCallIds）：结果永远不会来的调用按静止的
@@ -1483,6 +1493,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onOpenReviewAt={props.onOpenReviewAt}
                 sessionId={props.sessionId}
                 onRevertTo={props.onRevertTo}
+                streamingIds={streamingIds}
               />
             )}
             {branchAfter !== undefined && (
@@ -2307,6 +2318,9 @@ function EntryView(props: {
   toolResults: ToolResultIndex;
   activeThinkingKey: string | null;
   turnActive: boolean;
+  /** 流式中的 assistant 记录 id 集：text 块的 MarkdownBlock 据此传 streaming——
+   * closePendingMath 只作用于打字未完成的文本，落定消息里孤立的 $ 不补闭合符 */
+  streamingIds: ReadonlySet<string>;
   /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
   interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
@@ -2391,10 +2405,11 @@ function EntryView(props: {
       if (entry.key !== card.firstKey) return null;
       return <CarryoverScanCard drafts={card.drafts} />;
     }
-    // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找
+    // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找。
+    // streaming：正在流式的那条才补尾部闭合符（pending-math.ts），落定后不再补
     return (
       <div data-quote-id={entry.messageId} data-quote-role="assistant">
-        <MarkdownBlock text={entry.text} />
+        <MarkdownBlock text={entry.text} streaming={props.streamingIds.has(entry.messageId)} />
       </div>
     );
   }
@@ -2550,6 +2565,7 @@ function TurnRollupLine(props: {
               actionsBusy={props.actionsBusy}
               onOpenReviewAt={props.onOpenReviewAt}
               sessionId={props.sessionId}
+              streamingIds={EMPTY_STREAMING_IDS}
             />
           ))}
         </div>
@@ -2558,10 +2574,12 @@ function TurnRollupLine(props: {
   );
 }
 
+/** 折叠行只收已落定轮次，成员永远不在流式——空集占位，避免每次渲染新建 Set */
+const EMPTY_STREAMING_IDS: ReadonlySet<string> = new Set<string>();
+
 /**
- * 用户消息：右对齐的独立气泡；只有 text 块进气泡。text 走 MathText——
- * 公式就地渲染（行内随文、块级居中），**不解析 markdown**：其余一切按原样，
- * 用户气泡与模型回复（MarkdownBlock）刻意是两套渲染。
+ * 用户消息：右对齐的独立气泡；只有 text 块进气泡。text 走 MarkdownBlock 的
+ * bubble 变体（标题摊平、换行保留，其余与模型回复同一套管线）。
  * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
  */
 function UserBubble(props: {
