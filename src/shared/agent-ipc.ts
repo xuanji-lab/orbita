@@ -96,6 +96,12 @@ export const ipcChannels = {
   sessionStar: "session:star",
   /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
   sessionSetCompletion: "session:set-completion",
+  /**
+   * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
+   * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
+   * 是否标未读由 renderer 判（没在看才标，planNotice）。
+   */
+  sessionUnread: "session:unread",
   sessionArchive: "session:archive",
   /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
   sessionMove: "session:move",

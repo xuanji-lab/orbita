@@ -30,6 +30,7 @@ const valid = {
   starred: false,
   completion: "open" as const,
   closedAt: null,
+  unread: null,
   providerId: "zai",
   modelId: "glm-5.3",
   mode: "manual",
@@ -219,6 +220,23 @@ describe("parseSessionMeta", () => {
       null,
     );
     strictEqual(parseSessionMeta({ ...valid, closedAt: "yesterday" })?.closedAt, null);
+  });
+
+  // 未读标记（2026-10-10 落盘）：缺席 / 坏值都当已读，不丢整条会话
+  it("未读标记：合法透传；缺 at / 坏 at 一律当已读，failed 只认真布尔", () => {
+    deepStrictEqual(
+      parseSessionMeta({ ...valid, unread: { at: 1234, failed: true } })?.unread,
+      { at: 1234, failed: true },
+    );
+    deepStrictEqual(parseSessionMeta({ ...valid, unread: { at: 1234 } })?.unread, {
+      at: 1234,
+      failed: false,
+    });
+    strictEqual(parseSessionMeta({ ...valid, unread: undefined })?.unread, null);
+    strictEqual(parseSessionMeta({ ...valid, unread: { failed: true } })?.unread, null);
+    strictEqual(parseSessionMeta({ ...valid, unread: { at: Number.NaN, failed: true } })?.unread, null);
+    strictEqual(parseSessionMeta({ ...valid, unread: "later" })?.unread, null);
+    strictEqual(parseSessionMeta({ ...valid, unread: { at: "soon", failed: false } })?.unread, null);
   });
 });
 

@@ -222,6 +222,18 @@ describe("SessionStore", () => {
     assert.deepEqual(await store.list(), []);
   });
 
+  // 未读标记（2026-10-10 落盘）：标 / 清只动这一个字段；重启后读回还是它
+  test("setUnread 标未读与清未读，别的字段不被波及", async () => {
+    await store.ensureSession(meta({ pinned: true }));
+    await store.setUnread(ID, { at: 1234, failed: true });
+    let after = (await store.list()).find((m) => m.id === ID);
+    assert.deepEqual(after?.unread, { at: 1234, failed: true });
+    assert.equal(after?.pinned, true);
+    await store.setUnread(ID, null);
+    after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.unread, null);
+  });
+
   // 完成状态机：翻到 done 的那一刻记下关闭时刻；reopen（回 open）清空——
   // closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态
   test("setCompletion：done 记关闭时刻，reopen 清空，done_with_todos 也可写", async () => {
