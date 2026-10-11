@@ -236,6 +236,14 @@ export class SessionStore {
   }
 
   /**
+   * 某会话的附图原图目录（绝对路径）。给 agent 进程随轮发（图片字节预算的占位
+   * 要拼出可 read 回来的原图路径）；目录可能还不存在（首次存图才建）。
+   */
+  attachmentDirOf(id: string): string {
+    return this.attachmentsPath(id);
+  }
+
+  /**
    * 存下一批附图的原图，返回挂上 `original` 引用的同一批图（发给 agent 进程的那份）。
    *
    * **存不下不拦发送**：原图只是给人放大看的，模型收到的是缩放图——磁盘满了就不带引用，
