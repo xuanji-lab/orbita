@@ -45,3 +45,22 @@ describe("isFileTurnRecord —— webArtifacts 加法字段", () => {
     );
   });
 });
+
+describe("isFileTurnRecord —— webArtifactsBatch 加法字段", () => {
+  it("旧记录没有字段照常收下", () => {
+    strictEqual(isFileTurnRecord(baseRecord), true);
+  });
+
+  it("带合法计数（≥ 1 的整数）收下", () => {
+    strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: 12 }), true);
+    strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: 1 }), true);
+  });
+
+  it("字段在场但不是 ≥ 1 的整数 → 整条拒掉", () => {
+    strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: 0 }), false);
+    strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: 1.5 }), false);
+    strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: -3 }), false);
+    strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: "12" }), false);
+    strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: null }), false);
+  });
+});

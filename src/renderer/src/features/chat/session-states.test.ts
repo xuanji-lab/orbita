@@ -359,6 +359,21 @@ describe("轮尾账的旁路网页产物（webArtifacts）", () => {
     assert.equal(states.get("A")?.fileTurns.length, 0);
   });
 
+  test("fileTurnView 只有批量折叠计数也进槽（卡片要出那一行计数）", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
+    states = applyAgentEvent(states, {
+      type: "fileTurnView",
+      sessionId: "A",
+      turnId: "t1",
+      changes: [],
+      webArtifactsBatch: 12,
+    });
+    const turns = states.get("A")?.fileTurns ?? [];
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0]?.webArtifactsBatch, 12);
+    assert.equal(turns[0]?.webArtifacts, undefined);
+  });
+
   test("seedFromDisk：新记录带 webArtifacts 还原；旧记录没有字段照常显示", () => {
     const withWeb: FileTurnRecord = {
       role: "file-turn",
@@ -380,6 +395,29 @@ describe("轮尾账的旁路网页产物（webArtifacts）", () => {
     assert.equal(turns.length, 2);
     assert.deepEqual(turns[0]?.webArtifacts, ["/w/out/report.html"]);
     assert.equal("webArtifacts" in (turns[1] ?? {}), false);
+  });
+
+  test("seedFromDisk：批量折叠计数随种子还原；旧记录没有字段照常显示", () => {
+    const folded: FileTurnRecord = {
+      role: "file-turn",
+      id: "t1",
+      timestamp: 1000,
+      changes: [],
+      webArtifactsBatch: 12,
+    };
+    const legacy: FileTurnRecord = {
+      role: "file-turn",
+      id: "t2",
+      timestamp: 2000,
+      changes: [
+        { path: "/w/src/a.ts", before: { kind: "absent" }, after: { kind: "text", blob: "x" }, added: 1, removed: 0 },
+      ],
+    };
+    const states = seedFromDisk(new Map(), "A", [userItem("u1", 500), folded, legacy]);
+    const turns = states.get("A")?.fileTurns ?? [];
+    assert.equal(turns.length, 2);
+    assert.equal(turns[0]?.webArtifactsBatch, 12);
+    assert.equal("webArtifactsBatch" in (turns[1] ?? {}), false);
   });
 });
 

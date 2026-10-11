@@ -963,13 +963,17 @@ export type AgentEvent =
    * 一轮落定时的文件账（agent 进程的快照跟踪器报来）：正文内联，主进程写 blob
    * 后落 FileTurnRecord。没有改动的轮不发（不落空记录）。webArtifacts 是旁路
    * 网页产物（脚本生成的 .html / .htm / .svg，不在 changes 里、不参与撤销）；
-   * 只有它、没有 changes 的轮也发（卡片要出）。
+   * 只有它、没有 changes 的轮也发（卡片要出）。webArtifactsBatch 是批量折叠：
+   * 本轮网页文件变动超过上限时不逐个列（webArtifacts 缺席），只报计数——
+   * git checkout / 解压归档这类批量操作不该被当成「本轮生成了 N 个网页」。
+   * 与 webArtifacts 互斥：折叠时不给列表。
    */
   | {
       type: "fileTurn";
       sessionId: string;
       changes: readonly FileChangePayload[];
       webArtifacts?: readonly string[];
+      webArtifactsBatch?: number;
     }
   /**
    * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
@@ -981,6 +985,8 @@ export type AgentEvent =
       turnId: string;
       changes: readonly FileChangeView[];
       webArtifacts?: readonly string[];
+      /** 批量折叠计数：本轮网页文件变动超过上限，不逐个列（与 webArtifacts 互斥） */
+      webArtifactsBatch?: number;
     }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的

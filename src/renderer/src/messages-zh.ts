@@ -928,6 +928,8 @@ export const zh: Messages = {
     fileCardChanged: (n: number) => `${n} 个文件已更改`,
     fileCardWebMade: (n: number) => `生成了 ${n} 个网页`,
     fileCardScripted: "脚本生成 · 仅可打开",
+    fileCardWebBatchShort: "网页文件有批量变动",
+    fileCardWebBatch: (n: number) => `本轮有 ${n} 个网页文件变动（像是批量操作，未逐个列出）`,
     fileCardExpand: "展开改动的文件",
     fileCardCollapse: "收起改动的文件",
     fileCardUndo: "撤销",
