@@ -13,12 +13,17 @@ import type { TurnDirectories } from "../shared/agent-ipc.ts";
 function fakeFs(dirs: Record<string, { name: string; isDir: boolean }[]>, stats: Record<string, WebFileStamp> = {}): ScanFs {
   return {
     readDir: async (dir) => {
-      const entries = dirs[dir];
+      const entries = dirs[dir] ?? dirs[normPosix(dir)];
       if (entries === undefined) throw new Error(`ENOENT: ${dir}`);
       return entries;
     },
-    statFile: async (path) => stats[path] ?? null,
+    statFile: async (path) => stats[path] ?? stats[normPosix(path)] ?? null,
   };
+}
+
+/** 扫描用 node:path join 拼路径——win 上产出反斜杠，而假树的键是 POSIX 形。查表与断言前先归一到正斜杠，测试才与宿主平台无关。 */
+function normPosix(p: string): string {
+  return p.replaceAll("\\", "/");
 }
 
 const stamp = (mtimeMs: number, size: number): WebFileStamp => ({ mtimeMs, size });
@@ -41,7 +46,7 @@ describe("scanWebArtifacts —— 收集", () => {
       },
     );
     const result = await scanWebArtifacts(["/w"], fs);
-    deepStrictEqual([...result.stamps.keys()].sort(), ["/w/a.html", "/w/b.HTM", "/w/c.svg"]);
+    deepStrictEqual([...result.stamps.keys()].map(normPosix).sort(), ["/w/a.html", "/w/b.HTM", "/w/c.svg"]);
     strictEqual(result.truncated, false);
   });
 
@@ -79,7 +84,7 @@ describe("scanWebArtifacts —— 收集", () => {
       },
     );
     const result = await scanWebArtifacts(["/w"], fs);
-    deepStrictEqual([...result.stamps.keys()].sort(), ["/w/src/deep.html", "/w/src/vendor/ok.html"]);
+    deepStrictEqual([...result.stamps.keys()].map(normPosix).sort(), ["/w/src/deep.html", "/w/src/vendor/ok.html"]);
   });
 
   it("根不在（工作台还没建）→ 空结果，不抛", async () => {
@@ -99,7 +104,7 @@ describe("scanWebArtifacts —— 收集", () => {
       { "/w/real.html": stamp(1, 1) },
     );
     const result = await scanWebArtifacts(["/w"], fs);
-    deepStrictEqual([...result.stamps.keys()], ["/w/real.html"]);
+    deepStrictEqual([...result.stamps.keys()].map(normPosix), ["/w/real.html"]);
   });
 
   it("重复根只扫一遍", async () => {
@@ -150,7 +155,7 @@ describe("scanWebArtifacts —— 上限", () => {
     );
     const result = await scanWebArtifacts(["/w"], fs, { maxEntries: 2 });
     strictEqual(result.truncated, true);
-    deepStrictEqual([...result.stamps.keys()], ["/w/a.html", "/w/b.html"]);
+    deepStrictEqual([...result.stamps.keys()].map(normPosix), ["/w/a.html", "/w/b.html"]);
   });
 });
 
