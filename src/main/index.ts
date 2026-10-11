@@ -34,12 +34,15 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { TerminalService } from "./terminal/service.ts";
+import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
+import { applyTerminalRequest } from "./terminal/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
 import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
@@ -63,7 +66,7 @@ const devDirs = devDataDirs({
   home: homedir(),
   // 隔离实例（--user-data-dir）：锁与 userData 由 Chromium 分开，工作区根在 devDataDirs 里跟着目录名派生
   userDataSwitch: app.commandLine.getSwitchValue("user-data-dir"),
-  // 一键隔离（bun run dev:isolated）：按名字分 userData 与工作区根，appData 由 Electron 按平台给
+  // 隔离实例（ORBITA_DEV_INSTANCE）：按名字分 userData 与工作区根，appData 由 Electron 按平台给
   instance: process.env.ORBITA_DEV_INSTANCE,
 });
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
@@ -252,7 +255,6 @@ void app.whenReady().then(async () => {
   // 一个 secrets.json 一个实例：provider 的 API key 与语音厂商的密钥共用，读改写不互相踩
   const secrets = new SafeStorageSecrets(configDir);
   const providers = new ProviderStore(configDir, secrets);
-  registerProviderIpc(providers);
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
     new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
@@ -399,6 +401,19 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 终端：agent 的终端工具——PTY 在主进程的 TerminalService（浏览器同一条边界）。
+    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
+    if (event.type === "terminalRequest") {
+      void applyTerminalRequest(terminals, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerTerminal(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerTerminal(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "readTaskRequest") {
       void applyReadTask(sessions, event, workspaces, channels)
         .then((result) => agentHost.answerReadTask(event.requestId, result))
@@ -504,6 +519,13 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
+  // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
+  // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
+  registerProviderIpc(providers, agentHost);
+
+  // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
+  const terminals = new TerminalService();
+  registerTerminalIpc(terminals);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
@@ -542,6 +564,8 @@ void app.whenReady().then(async () => {
     appTray = null;
     browserSandbox.prepareQuit();
     agentHost.dispose();
+    // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
+    terminals.dispose();
   });
 
   /**

@@ -22,8 +22,23 @@ export type WriteResult =
  * 讲给模型听的说明（拼进 system prompt，同 describePermissionMode 的注入方式）。
  * 工具的参数 schema 已经讲了字段；这里讲格式与语义：SKILL.md 长什么样、
  * scope 两个值各意味着什么、写盘要过审批。
+ *
+ * **会话的工作区归属是参数**（2026-10-11 用户实测：模型两次拿 scope:"workspace"
+ * 撞「不属于任何工作区」的墙——旧文案只说「属于工作区时默认 workspace」，
+ * 却从不告诉模型这条会话属不属于，它只能瞎猜）：
+ *   - null   这条会话不属于任何工作区（从首页 New task 建的、cwd 只是目录）——
+ *           workspace scope 必被拒，明说，别试；
+ *   - 有名字 报名字，模型知道 workspace scope 落在哪；
+ *   - 缺席   有工作区但翻不出名字（旧夹具 / 工作区已删）——如实说「未知」，不猜。
  */
-export const STORE_TOOLS_GUIDELINES = `<orbita-store-tools>
+export function storeToolsGuideline(workspace: { name?: string } | null): string {
+  const membership =
+    workspace === null
+      ? 'This session does NOT belong to any workspace (it was not opened inside one): create_skill with scope "workspace" will be rejected — use "global".'
+      : workspace.name === undefined
+        ? 'This session belongs to a workspace whose name is not available here; scope "workspace" is allowed.'
+        : `This session belongs to workspace "${workspace.name}"; skills with scope "workspace" apply to that workspace's sessions only.`;
+  return `<orbita-store-tools>
 You can configure this agent itself with two tools:
 - create_skill writes a skill the agent will use in later sessions. The skill is a folder with a SKILL.md:
   a frontmatter block (name, description) followed by markdown instructions. description is the index the
@@ -40,8 +55,9 @@ Writing a skill body (this matters — a skill is instructions for a future agen
   beats a paragraph of explanation.
 - description carries the matching burden: the future agent decides whether to read the body from it
   alone, so name the situations it covers and excludes.
-- scope: default to "workspace" when this session belongs to one, else "global".
+- scope: ${membership}
 </orbita-store-tools>`;
+}
 
 /** 铸工具对。broker 由 runtime 持有并接回执；这里只包 execute 的翻译。 */
 export function createStoreTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {

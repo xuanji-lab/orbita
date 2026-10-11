@@ -20,6 +20,7 @@ import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -68,6 +69,12 @@ export const ipcChannels = {
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
+  /**
+   * Claude 订阅账号的 OAuth 登录：主进程起回调服务器 + 开系统浏览器，成功后直接
+   * 落盘 provider 与凭据，返回 UpsertResult。凭据（access / refresh token）全程
+   * 不进 renderer——登录本身就是保存。
+   */
+  providerOauthLogin: "provider:oauth-login",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
   /**
@@ -320,9 +327,24 @@ export interface ProviderSecrets {
   id: string;
   api: string;
   baseUrl: string;
+  /** api_key 的明文，或 OAuth 的访问令牌（sk-ant-oat…，pi 端自动切换 Bearer 头） */
   apiKey: string;
   headers?: Record<string, string>;
   models: ModelDecl[];
+}
+
+/**
+ * `provider:oauth-login` 的入参。登录即保存：主进程成功后 upsert 这条 provider
+ * （scheme oauth）并落盘凭据。重登录（create=false）时模型清单沿用盘上的——
+ * 换令牌不该把用户配好的模型一并抹掉。
+ */
+export interface OauthLoginInput {
+  id: string;
+  displayName: string;
+  /** 新建时 true（id 撞名拒绝）；已有 provider 重登录时缺省 */
+  create?: boolean;
+  /** 仅 create 时生效：登录后启用的模型清单（一般空，登录后用 Fetch 拉取） */
+  models?: ModelDecl[];
 }
 
 /**
@@ -458,6 +480,13 @@ export type AgentCommand =
        * 工具描述里的工作区绑定也用它——agent 进程不认工作区，只收这个 id。
        */
       workspaceId: string | null;
+      /**
+       * 所属工作区的名字（workspaceId 翻译过来的那份，给模型的提示词用：
+       * store-tools 的 scope 指引要告诉模型这条会话属不属于工作区）。
+       * **可选，缺席 = 有工作区但翻不出名字**（旧夹具 / 工作区已删）——提示词里
+       * 如实说「未知」，不猜。workspaceId 为 null 时省略。
+       */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -549,6 +578,18 @@ export type AgentCommand =
       modelId: string;
       messages: string[];
     }
+  | {
+      /**
+       * 连接探测（设置 › 模型服务的 Test，OAuth 令牌专用路由）：主进程的裸 fetch
+       * 补齐身份头后仍被 429（实测 2026-10），官方 SDK 客户端自带的遥测指纹补不了——
+       * 干脆让探测走 agent 进程里 pi 的同一个客户端，与真会话完全同源。
+       * 结果经 `providerProbed` 事件按 requestId 回传。独立小调用，不开会话、不落盘。
+       */
+      type: "probeProvider";
+      requestId: string;
+      provider: ProviderSecrets;
+      modelId: string;
+    }
   | { type: "abort"; sessionId: string }
   | {
       /** 立即发送排队中的某一条：abort 当前轮（含正在跑的工具调用）→ 这条作为新一轮 submit */
@@ -565,6 +606,8 @@ export type AgentCommand =
       cwd: string;
       /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
       workspaceId: string | null;
+      /** 所属工作区名字，语义同 submit（scope 指引用；缺席 = 翻不出名字，说未知） */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -620,6 +663,8 @@ export type AgentCommand =
       cwd: string;
       /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
       workspaceId: string | null;
+      /** 所属工作区名字，语义同 submit（scope 指引用；缺席 = 翻不出名字，说未知） */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -670,6 +715,8 @@ export type AgentCommand =
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
+  /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
+  | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
@@ -836,6 +883,15 @@ export type AgentEvent =
    */
   | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
   /**
+   * 终端：agent 的终端工具请求（terminal_open / execute / read / list /
+   * interrupt / close，形状见 shared/terminal.ts 的 TerminalToolRequest）。
+   * **PTY 在主进程**（TerminalService，browserRequest 同一条边界）：agent 进程
+   * 不碰 node-pty、不碰 userData，只剩「工具定义 → requestId 问答」一层薄包装。
+   * 终端是**可见**的：主进程另广播 terminal:agent-open，renderer 自动点亮面板。
+   * 回 terminalResult。
+   */
+  | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
+  /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
    * cwd / workspaceId 同父）、解析模型（delegate 参数 > settings.subSessionModel > 同父）
@@ -910,6 +966,8 @@ export type AgentEvent =
    * 调用失败或回复读不懂时 throwaway 为 null、error 写原因。
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
+  /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
+  | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
    * 会话内模型切换成功（C-4 的 `setModel` 命令翻译而来）。主进程落 meta
    * （providerId / modelId——分支继承与重开恢复都读它）并转给 renderer 对齐

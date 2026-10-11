@@ -22,6 +22,7 @@ import type { CompactedRecord, SessionRecord, TranscriptRecord } from "@shared/s
 import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
+import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -602,35 +603,92 @@ export function turnStats(
   };
 }
 
-/** 组行的状态汇总：结果索引上数一遍，失败/进行中/完成各多少。 */
+/** 组行的状态汇总：结果索引上数一遍，失败/进行中/已中断/完成各多少。 */
 export interface ToolGroupStatus {
   total: number;
   failed: number;
   running: number;
+  /** 已中断（无结果帧且结果永远不会来，见 `interruptedToolCallIds`）——不占 running，组头不为它呼吸 */
+  interrupted: number;
   done: number;
 }
 
 export function toolGroupStatus(
   calls: readonly ToolCallUnit[],
   results: ToolResultIndex,
+  interrupted: ReadonlySet<string> = new Set(),
 ): ToolGroupStatus {
   let failed = 0;
   let running = 0;
+  let broke = 0;
   let done = 0;
   for (const call of calls) {
     const result = results.get(call.toolCallId);
-    if (result === undefined || result.status === "running") running++;
-    else if (result.status === "error") failed++;
+    if (result === undefined || result.status === "running") {
+      // 连结果帧都没有、且判定已中断：按中断计，不算运行中
+      if (result === undefined && interrupted.has(call.toolCallId)) broke++;
+      else running++;
+    } else if (result.status === "error") failed++;
     else done++;
   }
-  return { total: calls.length, failed, running, done };
+  return { total: calls.length, failed, running, interrupted: broke, done };
 }
 
 /**
- * 思考折叠行的预览：取**最后一个非空行**。流式时每来一行新思考就顶替上一行
- * （一行顶替一行的活尾刷新，增量由 pi 归约器直接送达，这里只管取行）；
- * 结束后同一规则——无跳变，展开看全文是另一条路。
+ * 已中断的工具调用 id 集：调用**从未执行、结果永远不会来**——所在 assistant 消息
+ * 以 error / aborted 收场（模型流在发 tool call 参数途中被切断，2026-10-09 的
+ * 「委派中…」呼吸不停就是它），或消息已落定而轮已结束 / 后面已有新的对话记录，
+ * 结果帧却始终缺席。这类调用按「运行中」渲染就会永远呼吸（delegate 卡）/ 转圈，
+ * 界面要能说出「这一步没发生」。
+ *
+ * 判定护住几类真跑着的调用，不误伤：
+ * - **有结果帧**（含 running 帧）的一律不算——工具已经启动，结果只是还没到；
+ * - **流式中的消息**（status "streaming"，stopReason 尚未定）不算；
+ * - **活跃轮末条 assistant** 上的 complete 调用不算——那是「消息已完、工具即将/
+ *   正在启动」的正常窗口。**「末条」只看 assistant / user 记录，不看 tool 帧**：
+ *   pi 并行批次里每个调用先落 start 帧、再过审批闸门（可能等用户很久）才轮到
+ *   下一个（agent-loop 的 executeToolCallsParallel）——同批还没 start 的调用没有
+ *   帧，把 tool 帧当「后面有新记录」会在审批挂起时把它误判成已中断。反过来，
+ *   新的 assistant / user 一定在整批结果落定之后才出现（pi 只在整批工具落定后
+ *   才开下一条 assistant；steer 注入的 user 也落在批次之后），它们才是
+ *   「结果该齐了」的可信界碑。
  */
+export function interruptedToolCallIds(
+  records: readonly TranscriptRecord[],
+  results: ToolResultIndex,
+  turnActive: boolean,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  // 倒序扫：「右边已出现过 assistant / user」——对本条消息来说就是后面已有新对话。
+  // 收集到的 id 最后再倒回文档序（Set 按插入序迭代），调试与断言都稳定
+  const found: string[] = [];
+  let movedOn = false;
+  for (let i = records.length - 1; i >= 0; i -= 1) {
+    const record = records[i];
+    if (record === undefined) continue;
+    if (record.role === "user") {
+      movedOn = true;
+      continue;
+    }
+    if (record.role !== "assistant") continue; // tool 帧 / 界碑 / 通道标记都不是界碑
+    if (record.status === "streaming") {
+      // 轮已走到新的流式消息：它自己的调用不判（stopReason 未定），
+      // 但它左边的批次已经收账——结果缺席就是孤儿
+      movedOn = true;
+      continue;
+    }
+    for (const block of record.content) {
+      if (block.type !== "toolCall" || results.has(block.toolCallId)) continue;
+      if (record.status === "error" || record.status === "aborted" || !turnActive || movedOn) {
+        found.push(block.toolCallId);
+      }
+    }
+    movedOn = true;
+  }
+  for (const id of found.reverse()) ids.add(id);
+  return ids;
+}
+
 export function thinkingPreview(text: string): string {
   const lines = text.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -717,6 +775,91 @@ export function toolDurationText(toolCallId: string, t: Messages): string | null
   const entry = toolTimers.get(toolCallId);
   if (entry === undefined || entry.end === null) return null;
   return formatToolDuration(entry.end - entry.start, t);
+}
+
+/**
+ * 运行中的 shell 工具还差多久说不清，但「已经跑了多久」必须说得清（2026-10 用户
+ * 反馈：长 bash 一行不动，像卡死）。起点读现场计时表：还在跑的条目 end 为 null，
+ * 没记到（旧会话重开、或 renderer 晚于工具启动才挂上）返回 null，界面退化为不显示计时。
+ */
+export function toolStartAt(toolCallId: string): number | null {
+  const entry = toolTimers.get(toolCallId);
+  return entry !== undefined && entry.end === null ? entry.start : null;
+}
+
+// ── 运行中 shell 的可见性（长命令自动展开 + 活尾 + 计时）──
+
+/**
+ * 自动展开阈值（秒）。依据：全量 46,363 次 bash 调用里 P90 ≈ 6.3s——10s 只会
+ * 打进约 8% 的慢命令，快命令（读文件、小 grep）永不展开，界面的安静不被破坏。
+ */
+export const SHELL_AUTO_EXPAND_SECONDS = 10;
+
+/** expected_seconds 的合法上限（秒）：超过一天的一定不是认真的估计，当坏值丢弃。 */
+const EXPECTED_SECONDS_MAX = 86_400;
+
+/**
+ * 模型自估的执行秒数（`expected_seconds`）。**只给 UI**（展开时机与「预计约」文案），
+ * 不影响执行、不做硬性结束——pi 的 TypeBox 校验对未知字段放行（实测 0.84.3），
+ * 字段随入参原样流到渲染层，bash 的 execute 只解构 command/timeout、无视它。
+ * 逐字段校验：非有限正数、超上限、字符串数字都判 null（字符串数字不猜——
+ * 「预计约 abc」比没有预计更糟）。
+ */
+export function expectedSecondsOf(input: unknown): number | null {
+  return secondsFieldOf(input, "expected_seconds");
+}
+
+/**
+ * 本次调用的 timeout 上限（秒），运行行显示「/ 上限 10:00」。**套闸门同一条下限规则**
+ * （COMMAND_TIMEOUT_FLOOR_SECONDS）：闸门抬超时改的是入参对象、不回写会话记录，
+ * 这里读到的是模型原始值——模型填 60 实际跑在 600 上，显示也得说 600，否则界面撒谎。
+ * 规则一字不差：不填 = null（不设上限，不显示）、比下限小 → 抬到下限、比下限大 → 尊重、
+ * 非法 → null（不替 pi 做第二套校验）。
+ */
+export function timeoutSecondsOf(input: unknown): number | null {
+  const raw = secondsFieldOf(input, "timeout");
+  if (raw === null) return null;
+  return Math.max(raw, COMMAND_TIMEOUT_FLOOR_SECONDS);
+}
+
+function secondsFieldOf(input: unknown, key: string): number | null {
+  if (typeof input !== "object" || input === null) return null;
+  const value = (input as Record<string, unknown>)[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  if (value > EXPECTED_SECONDS_MAX) return null;
+  return value;
+}
+
+/** 运行中计时的 m:ss 形态（0:45 / 12:03）：秒两位补零，分钟不限位。 */
+export function formatRunClock(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * 折叠行下的活尾预览：让「它在动」不展开也看得见。取末尾最多 keep 个**非空**行
+ * （尾部空行是噪音），每行截到 maxChars——预览是信号不是正文，长行以「…」收口。
+ * 从尾往前找，返回按原顺序排列。
+ */
+export function tailPreviewLines(text: string, keep = 2, maxChars = 160): string[] {
+  const lines = text.split("\n");
+  const picked: string[] = [];
+  for (let i = lines.length - 1; i >= 0 && picked.length < keep; i--) {
+    const line = lines[i];
+    if (line === undefined || line.trim() === "") continue;
+    picked.push(line.length > maxChars ? `${line.slice(0, maxChars)}…` : line);
+  }
+  return picked.reverse();
+}
+
+/**
+ * 自动展开判定（纯函数，驱动方拿着它在每秒重算）：模型给了 expected 且达阈值 →
+ * **开跑就展**（一秒都不让用户盯着静止的行）；没给或没达 → 已运行时长达阈值再展。
+ * elapsed 记不到（晚挂载）时只认 expected——两个信号都没有就不自动展开。
+ */
+export function shellAutoExpand(expectedSeconds: number | null, elapsedMs: number | null): boolean {
+  if (expectedSeconds !== null && expectedSeconds >= SHELL_AUTO_EXPAND_SECONDS) return true;
+  return elapsedMs !== null && elapsedMs >= SHELL_AUTO_EXPAND_SECONDS * 1000;
 }
 
 /** 工具时长格式：不足一分钟带一位小数（毫秒级工具是噪音，只有慢命令值得看），满一分钟「1m 04s」（秒两位补零）。 */

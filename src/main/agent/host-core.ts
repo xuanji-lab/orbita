@@ -15,6 +15,7 @@ import type {
 import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
+import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -68,6 +69,12 @@ export class AgentHostCore {
     { resolve: (throwaway: number[]) => void; reject: (error: Error) => void }
   >();
   private greetingSeq = 0;
+  /** 在等的 probeProvider 回执（Test 的 OAuth 路由），按 requestId；进程退出全部 reject */
+  private readonly pendingProbes = new Map<
+    string,
+    { resolve: (result: { ok: boolean; message: string }) => void; reject: (error: Error) => void }
+  >();
+  private probeSeq = 0;
 
   constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
     this.forkRuntime = forkRuntime;
@@ -110,6 +117,13 @@ export class AgentHostCore {
           this.pendingGreetings.delete(message.requestId);
           if (message.throwaway === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
           else pending?.resolve(message.throwaway);
+          return;
+        }
+        if (message.type === "providerProbed") {
+          // 同 greetingsClassified：只结发起方，不广播
+          const pending = this.pendingProbes.get(message.requestId);
+          this.pendingProbes.delete(message.requestId);
+          pending?.resolve({ ok: message.ok, message: message.message });
           return;
         }
         if (message.type === "created") {
@@ -158,6 +172,8 @@ export class AgentHostCore {
         this.mcpReloadInFlight = null;
         for (const pending of this.pendingGreetings.values()) pending.reject(new Error(message));
         this.pendingGreetings.clear();
+        for (const pending of this.pendingProbes.values()) pending.reject(new Error(message));
+        this.pendingProbes.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -317,6 +333,37 @@ export class AgentHostCore {
     });
   }
 
+  /**
+   * 连接探测（Test 的 OAuth 路由）：让 agent 进程用 pi 的客户端（与真会话同源）
+   * 发一条小消息。1 分钟没回当失败——网关挂住时不让 Test 按钮一直转。
+   */
+  async probeProvider(
+    provider: Extract<AgentCommand, { type: "probeProvider" }>["provider"],
+    modelId: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    await this.ensure();
+    this.probeSeq += 1;
+    const requestId = `probe-${this.probeSeq}`;
+    return new Promise<{ ok: boolean; message: string }>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingProbes.has(requestId)) return;
+        this.pendingProbes.delete(requestId);
+        reject(new Error("the model didn't answer in time"));
+      }, 60_000);
+      this.pendingProbes.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.post({ type: "probeProvider", requestId, provider, modelId });
+    });
+  }
+
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
     await this.ensure();
     this.post({ type: "setMode", sessionId, mode });
@@ -396,6 +443,17 @@ export class AgentHostCore {
             card: outcome.card,
             ...(outcome.image === undefined ? {} : { image: outcome.image }),
           }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 终端：terminalRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerTerminal(requestId: string, outcome: TerminalToolOutcome): void {
+    this.child?.postMessage({
+      type: "terminalResult",
+      requestId,
+      ...(outcome.ok
+        ? { ok: true as const, text: outcome.text, ...(outcome.terminal === undefined ? {} : { terminal: outcome.terminal }) }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }

@@ -28,6 +28,29 @@ describe("McpStore 读-改-写", () => {
     assert.deepEqual(parsed.mcpServers, { demo: { transport: "stdio", command: "node" } });
   });
 
+  // 2026-10-11 用户实测事故：agent 并发两次 add，后写的覆盖先写的。mutate 必须
+  // 串行化——写路径的测试在 write-requests.test.ts（走 applyMcpWrite），这里直接打 store
+  test("并发 add 两台：两台都在（读-改-写串行化）", async () => {
+    await Promise.all([
+      store.add("first", { transport: "http", url: "https://a.example/mcp" }),
+      store.add("second", { transport: "stdio", command: "node" }),
+    ]);
+    const parsed = JSON.parse(await readFile(file(), "utf8"));
+    assert.deepEqual(Object.keys(parsed.mcpServers).sort(), ["first", "second"]);
+  });
+
+  test("一次失败的 mutate 不拖死后续（重名抛错后排队的照常执行）", async () => {
+    await store.add("dup", { transport: "stdio", command: "node" });
+    await assert.rejects(
+      () => store.add("dup", { transport: "stdio", command: "other" }),
+      /already exists/,
+    );
+    await store.add("after-failure", { transport: "stdio", command: "node" });
+    const parsed = JSON.parse(await readFile(file(), "utf8"));
+    assert.deepEqual(Object.keys(parsed.mcpServers).sort(), ["after-failure", "dup"]);
+    assert.deepEqual(parsed.mcpServers["dup"], { transport: "stdio", command: "node" });
+  });
+
   test("只改 mcpServers[name]：其它顶层键与键序原样保留", async () => {
     await writeFile(
       file(),

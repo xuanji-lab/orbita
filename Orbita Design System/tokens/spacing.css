@@ -34,5 +34,9 @@
   --sidebar-rail-width: 48px;
   --content-max-width: 1000px;
   --app-card-max-width: 1080px;
-  --bubble-max-width: min(66.7%, 80ch); /* @kind spacing */
+  /* 用户气泡左侧留白：气泡从右往左伸，最宽到「内容列 - 这么宽」。按列宽比例走，
+     窄窗口不至于只剩一条缝、宽窗口不至于空一大片。agent 回复不留右白，始终贴满整列
+     （侧栏挤窄时它本来就贴边，一直贴边才统一——2026-10-10 用户裁决） */
+  --message-gutter: clamp(32px, 12%, 120px); /* @kind spacing */
+  --bubble-max-width: calc(100% - var(--message-gutter)); /* @kind spacing */
 }

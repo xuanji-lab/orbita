@@ -34,10 +34,15 @@ import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRai
 import { RightPanelSlot } from "./shell/RightPanel";
 import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
+import { PastedTextCollapseContext } from "./shell/attachment-chips";
+import { BlackholeContext } from "./shell/BlackholeBox.tsx";
+import { blackholeActive } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
+import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { CHANNEL_COLUMN_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
@@ -386,6 +391,22 @@ export function App() {
    * 几十毫秒就到。只认主槽正看着的那条母会话：后台会话派出的只出现入口，不弹。
    */
   const [pendingDelegate, setPendingDelegate] = useState<{ parentId: string; childId: string } | null>(null);
+  /**
+   * agent 开了可见终端（terminal:agent-open）→ **自动点亮终端面板位并激活那个 tab**。
+   * agent 的活要让人看见（Proma 的 terminal:agent-open 同款裁决）：否则它在你背后的
+   * 面板里跑 dev server，你想接手都不知道去哪接。信号是一次性的，TerminalPanel
+   * 消费完就清。
+   */
+  const [pendingTerminal, setPendingTerminal] = useState<string | null>(null);
+  useEffect(
+    () =>
+      api.terminal.onEvent((event) => {
+        if (event.type !== "agent-open") return;
+        setRightPanel("terminal");
+        setPendingTerminal(event.terminalId);
+      }),
+    [],
+  );
   const channelParentIdRef = useRef(channelParentId);
   useEffect(() => {
     channelParentIdRef.current = channelParentId;
@@ -442,6 +463,70 @@ export function App() {
    *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
   const handlePanel = useCallback((next: RightPanelKind | null) => {
     setRightPanel(next);
+  }, []);
+
+  // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
+  // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
+  // 交来插入锚点（那个 / 的位置）；面板选中后
+  // 经 tokenPickResult（nonce 一次性请求，同 channelOpenRequest / reviewFocus 的
+  // 先例）传回 ChatView 插入并焦点回输入框。选完即收面板：选取是输入辅助，与指令
+  // 面板同一种临时性；拖拽入口不受影响（面板开着时随时能拖）。
+  const [tokenPickerOn, setTokenPickerOn] = useState(false);
+  const tokenPickAnchorRef = useRef<number | null>(null);
+  const [tokenPickResult, setTokenPickResult] = useState<TokenPickResult | null>(null);
+  const tokenPickNonceRef = useRef(0);
+  /** 发起号：面板可能已开着，选取态可能已在——靠它重新聚焦/重置 */
+  const [tokenPickRequest, setTokenPickRequest] = useState(0);
+  const openTokenPicker = useCallback((position: number): boolean => {
+    tokenPickAnchorRef.current = position;
+    setTokenPickerOn(true);
+    setTokenPickRequest((n) => n + 1);
+    setRightPanel("skills");
+    return true;
+  }, []);
+  const finishTokenPick = useCallback(
+    (token: string | null): void => {
+      // 锚点丢失（面板被切走等）就落到草稿末尾——选取的意图仍是「插进来」
+      const position = tokenPickAnchorRef.current ?? session.draft.length;
+      tokenPickAnchorRef.current = null;
+      setTokenPickerOn(false);
+      setRightPanel(null);
+      tokenPickNonceRef.current += 1;
+      setTokenPickResult({ token, position, nonce: tokenPickNonceRef.current });
+    },
+    [session.draft],
+  );
+  // 面板被切走 / 关掉（rail 点了别的、× 、全局 Esc）：选取态跟着退，锚点一并丢
+  useEffect(() => {
+    if (tokenPickerOn && rightPanel !== "skills" && rightPanel !== "mcp") {
+      setTokenPickerOn(false);
+      tokenPickAnchorRef.current = null;
+    }
+  }, [rightPanel, tokenPickerOn]);
+  const skillsPicker: TokenPickerControl = {
+    onSelect: finishTokenPick,
+    onCancel: () => finishTokenPick(null),
+    onSwitch: () => setRightPanel("mcp"),
+    request: tokenPickRequest,
+    workspaceId: session.workspaceId,
+  };
+  const mcpPicker: TokenPickerControl = {
+    onSelect: finishTokenPick,
+    onCancel: () => finishTokenPick(null),
+    onSwitch: () => setRightPanel("skills"),
+    request: tokenPickRequest,
+    workspaceId: session.workspaceId,
+  };
+
+  // ── 面板行内「选用」按钮的插入（panel-token.ts）─────────────────
+  // Skills 行 / MCP 卡尾的选用键（RowHoverAction）：token 落到主槽输入框当前
+  // 光标处（从未聚焦过则草稿末尾）、焦点回输入框。与选取的锚点回执分开走：
+  // 按钮是浏览态入口，面板不关，可以连插几条
+  const [panelInsert, setPanelInsert] = useState<PanelInsertRequest | null>(null);
+  const panelInsertNonceRef = useRef(0);
+  const insertPanelToken = useCallback((token: string): void => {
+    panelInsertNonceRef.current += 1;
+    setPanelInsert({ token, nonce: panelInsertNonceRef.current });
   }, []);
 
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
@@ -573,6 +658,9 @@ export function App() {
 
   return (
     <LocaleContext.Provider value={locale}>
+    <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
+    {/* 输入框黑洞：开关 × 主题（只在浅 / 黛 / 玄）在这里算一次，输入框与转录都读它 */}
+    <BlackholeContext.Provider value={blackholeActive(settings.composerBlackhole, resolvedTheme)}>
     <div className="app-shell">
       <Titlebar />
       <div className="layer">
@@ -628,6 +716,9 @@ export function App() {
                 onOpenProviders={openProvidersTab}
                 scrollToEnd
                 scrollToEndHotkey
+                onSlashSpace={openTokenPicker}
+                tokenPickResult={tokenPickResult}
+                panelInsert={panelInsert}
               />
             )}
           </div>
@@ -681,9 +772,23 @@ export function App() {
                   onClose={() => handlePanel(null)}
                   defaultWorkspaceId={session.workspaceId}
                   onCreateSkill={createSkillDraft}
+                  picker={tokenPickerOn ? skillsPicker : undefined}
+                  onInsert={insertPanelToken}
                 />
               ) : shownPanel === "mcp" ? (
-                <McpPanel skills={skills} onClose={() => handlePanel(null)} />
+                <McpPanel
+                  skills={skills}
+                  onClose={() => handlePanel(null)}
+                  picker={tokenPickerOn ? mcpPicker : undefined}
+                  onInsert={insertPanelToken}
+                />
+              ) : shownPanel === "terminal" ? (
+                <TerminalPanel
+                  cwd={session.cwd}
+                  activateId={pendingTerminal}
+                  onActivated={() => setPendingTerminal(null)}
+                  onClose={() => handlePanel(null)}
+                />
               ) : shownPanel === "drawer" ? (
                 <Drawer
                   engine={engine}
@@ -743,6 +848,8 @@ export function App() {
         />
       </div>
     </div>
+    </BlackholeContext.Provider>
+    </PastedTextCollapseContext.Provider>
     </LocaleContext.Provider>
   );
 }

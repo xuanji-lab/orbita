@@ -5,7 +5,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
-import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 
 /** 收走请求事件，稍后人工回执——模拟主进程 */
 class FakeMain {
@@ -72,15 +72,33 @@ describe("create_skill / add_mcp_server（4-3）", () => {
   });
 
   test("prompt 注入：两个工具名、SKILL.md 格式与 scope 语义都讲了", () => {
-    assert.match(STORE_TOOLS_GUIDELINES, /create_skill/);
-    assert.match(STORE_TOOLS_GUIDELINES, /add_mcp_server/);
-    assert.match(STORE_TOOLS_GUIDELINES, /SKILL\.md/);
-    assert.match(STORE_TOOLS_GUIDELINES, /"global"/);
-    assert.match(STORE_TOOLS_GUIDELINES, /"workspace"/);
-    assert.match(STORE_TOOLS_GUIDELINES, /approval/);
-    // 4-7 补刀：正文写法要讲给「未来读它的 agent」，scope 有默认取向
-    assert.match(STORE_TOOLS_GUIDELINES, /WHEN to use it/);
-    assert.match(STORE_TOOLS_GUIDELINES, /No greetings/);
-    assert.match(STORE_TOOLS_GUIDELINES, /default to "workspace"/);
+    const text = storeToolsGuideline({ name: "orbita" });
+    assert.match(text, /create_skill/);
+    assert.match(text, /add_mcp_server/);
+    assert.match(text, /SKILL\.md/);
+    assert.match(text, /"global"/);
+    assert.match(text, /"workspace"/);
+    assert.match(text, /approval/);
+    // 4-7 补刀：正文写法要讲给「未来读它的 agent」
+    assert.match(text, /WHEN to use it/);
+    assert.match(text, /No greetings/);
+    // 归属要讲名字（2026-10-11：旧静态文案不说归属，模型只能瞎猜 scope）
+    assert.match(text, /workspace "orbita"/);
+  });
+
+  test("归属三态：无工作区明说必拒；有工作区报名字；翻不出名字说未知不猜", () => {
+    const none = storeToolsGuideline(null);
+    assert.match(none, /does NOT belong to any workspace/);
+    assert.match(none, /will be rejected/);
+    assert.match(none, /use "global"/);
+
+    const named = storeToolsGuideline({ name: "论文 3" });
+    assert.match(named, /workspace "论文 3"/);
+    assert.doesNotMatch(named, /unknown/);
+
+    const unknown = storeToolsGuideline({});
+    assert.match(unknown, /name is not available here/);
+    assert.match(unknown, /scope "workspace" is allowed/);
+    assert.doesNotMatch(unknown, /belongs to workspace "/);
   });
 });

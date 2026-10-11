@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelsBody, resolveModelsUrl } from "./discover.ts";
+import { parseModelsBody, resolveModelsUrl, discoverModels } from "./discover.ts";
 
 /**
  * 两组用例锁的都是**实测出来的真实行为**（2026-08-25 探测智谱 Coding Plan）：
@@ -81,5 +81,52 @@ describe("parseModelsBody", () => {
   test("脏条目被跳过，不产生空 id", () => {
     const result = parseModelsBody({ data: [{ id: "a" }, { id: "" }, { id: 42 }, {}] }, true);
     assert.deepEqual(result.models, ["a"]);
+  });
+});
+
+describe("discoverModels 的鉴权头口径（Claude OAuth 令牌不是 api key）", () => {
+  test("oauth 令牌：Bearer + oauth beta，不再带 x-api-key（上游会判非 Claude Code 请求）", async () => {
+    const original = globalThis.fetch;
+    let saw: Record<string, string> | undefined;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      saw = init?.headers as Record<string, string>;
+      return new Response(JSON.stringify({ data: [{ id: "claude-sonnet-5" }] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const result = await discoverModels({
+        baseUrl: "https://api.anthropic.com",
+        api: "anthropic-messages",
+        apiKey: "sk-ant-oat-A",
+      });
+      assert.equal(result.ok, true);
+      assert.ok(saw !== undefined);
+      assert.equal(saw.Authorization, "Bearer sk-ant-oat-A");
+      assert.match(saw["anthropic-beta"] ?? "", /oauth-2025-04-20/);
+      assert.equal("x-api-key" in saw, false);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("普通 api key：仍是双鉴权头（不同网关认不同的那一个）", async () => {
+    const original = globalThis.fetch;
+    let saw: Record<string, string> | undefined;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      saw = init?.headers as Record<string, string>;
+      return new Response(JSON.stringify({ data: [{ id: "glm-5.3" }] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const result = await discoverModels({
+        baseUrl: "https://open.bigmodel.cn/api/anthropic",
+        api: "anthropic-messages",
+        apiKey: "sk-id.key",
+      });
+      assert.equal(result.ok, true);
+      assert.ok(saw !== undefined);
+      assert.equal(saw["x-api-key"], "sk-id.key");
+      assert.equal(saw.Authorization, "Bearer sk-id.key");
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

@@ -22,6 +22,12 @@ let sessions: SessionStore;
 const S1 = "11111111-2222-3333-4444-555555555555";
 const S2 = "22222222-3333-4444-5555-666666666666";
 
+/** 契约里 server 字段类型是规范后的 McpServer，但模型运行时传什么形状都可能
+ *  （applyMcpWrite 的入口校验就是为这个差距立韵）——测试里用这把钥匙进 */
+const asServer = (
+  value: object,
+): Extract<AgentEvent, { type: "mcpWriteRequest" }>["server"] => value as unknown as Extract<AgentEvent, { type: "mcpWriteRequest" }>["server"];
+
 const skillEvent = (over: Partial<Extract<AgentEvent, { type: "skillWriteRequest" }>> = {}): Extract<AgentEvent, { type: "skillWriteRequest" }> => ({
   type: "skillWriteRequest",
   requestId: "r1",
@@ -81,7 +87,11 @@ describe("applySkillWrite（真 store）", () => {
     const result = await applySkillWrite(skills, sessions, skillEvent({ sessionId: S2, scope: "workspace" }));
     assert.equal(result.ok, false);
     if (result.ok) return;
-    assert.match(result.error, /不属于任何工作区/);
+    // 2026-10-11：报错要讲原因（工作目录≠归属）与出路（改 global / 移进工作区），
+    // 模型拿着工具结果能自己改
+    assert.match(result.error, /没有归属工作区/);
+    assert.match(result.error, /工作目录不等于归属/);
+    assert.match(result.error, /移进工作区/);
   });
 
   test("已存在：改写内容并重链（模型改了再试不该被「已存在」卡死）", async () => {
@@ -95,6 +105,30 @@ describe("applySkillWrite（真 store）", () => {
 });
 
 describe("applyMcpWrite（真 store）", () => {
+  test("并发两台（http + stdio）：两台都要落盘——读-改-写不串行化会丢更新", async () => {
+    // 用户实测事故（2026-10-11）：模型一轮并发调两次 add_mcp_server，两次
+    // mutate 都从同一份旧文件读起，后写的把先写的整条覆盖掉，而先写的已回
+    // 「Server added」。两台必须都在。
+    const [http, stdio] = await Promise.all([
+      applyMcpWrite(mcp, async () => {}, () => undefined, {
+        type: "mcpWriteRequest",
+        requestId: "r-a",
+        name: "mock-notes",
+        server: { transport: "http", url: "http://localhost:4100/mock-notes" },
+      }),
+      applyMcpWrite(mcp, async () => {}, () => undefined, {
+        type: "mcpWriteRequest",
+        requestId: "r-b",
+        name: "mock-weather",
+        server: { transport: "stdio", command: "sleep", args: ["1000"] },
+      }),
+    ]);
+    assert.equal(http.ok, true);
+    assert.equal(stdio.ok, true);
+    const saved = await mcp.read();
+    assert.deepEqual(Object.keys(saved).sort(), ["mock-notes", "mock-weather"]);
+  });
+
   test("加一台 + reload 被调 + 回执带状态", async () => {
     const reloaded: number[] = [];
     const result = await applyMcpWrite(
@@ -127,5 +161,65 @@ describe("applyMcpWrite（真 store）", () => {
     if (result.ok) return;
     assert.match(result.error, /already exists/);
     assert.equal(reloads, 0);
+  });
+
+  test("Claude Desktop 的 type:「http」写法：落盘时规范成 transport:「http」，读回还在", async () => {
+    const result = await applyMcpWrite(mcp, async () => {}, () => undefined, {
+      type: "mcpWriteRequest",
+      requestId: "r4",
+      name: "remote",
+      server: asServer({ type: "http", url: "https://example.com/mcp" }),
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(await mcp.read(), { remote: { transport: "http", url: "https://example.com/mcp" } });
+  });
+
+  test("type:「streamable-http」与只给 url 的极简写法：都规范成 http 落盘", async () => {
+    await applyMcpWrite(mcp, async () => {}, () => undefined, {
+      type: "mcpWriteRequest",
+      requestId: "r5",
+      name: "a",
+      server: asServer({ type: "streamable-http", url: "https://a.example/mcp" }),
+    });
+    const bare = await applyMcpWrite(mcp, async () => {}, () => undefined, {
+      type: "mcpWriteRequest",
+      requestId: "r6",
+      name: "b",
+      server: asServer({ url: "https://b.example/mcp" }),
+    });
+    assert.equal(bare.ok, true);
+    const saved = await mcp.read();
+    assert.deepEqual(saved["a"], { transport: "http", url: "https://a.example/mcp" });
+    assert.deepEqual(saved["b"], { transport: "http", url: "https://b.example/mcp" });
+  });
+
+  test("认不出的配置：报错不落盘，不回「Server added」；reload 不被调", async () => {
+    let reloads = 0;
+    const result = await applyMcpWrite(
+      mcp,
+      async () => {
+        reloads += 1;
+      },
+      () => undefined,
+      { type: "mcpWriteRequest", requestId: "r7", name: "broken", server: asServer({ type: "http" }) },
+    );
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.match(result.error, /认不出来/);
+    assert.deepEqual(await mcp.read(), {});
+    assert.equal(reloads, 0);
+  });
+
+  test("非法名字（拼不进工具名）：报错不落盘", async () => {
+    const result = await applyMcpWrite(mcp, async () => {}, () => undefined, {
+      type: "mcpWriteRequest",
+      requestId: "r8",
+      name: "bad name!",
+      server: { transport: "stdio", command: "node" },
+    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.match(result.error, /非法 server 名/);
+    assert.deepEqual(await mcp.read(), {});
   });
 });

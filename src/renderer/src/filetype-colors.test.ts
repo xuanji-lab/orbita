@@ -1,10 +1,12 @@
 /**
  * 文件类型色的对比度守卫（F，2026-10）。
  *
- * 文档 / 演示 / 表格三族的图标色只用在 13–14px 的小图标上——图标级别的可辨底线
- * 取 3:1（WCAG 非文字对比度）。这组色在五档主题里各配一套（明与两纸面共用深值、
- * 黛 / 玄共用亮值），消费面（文件面板树、输入框胶囊、Session·附件列表）坐在
- * 井、卡、壳三种底上，所以三个底面（--color-bg-panel / muted / app）都要过线；
+ * 文档 / 演示 / 表格三族的共享类别色（2026-10 起也按淡底 + 同色描边用于工具胶囊：
+ * skill 绿、MCP 蓝，见 readme *Category colours*；胶囊的字保持正墨，全色只落在描边
+ * 与图标上）。实色底线取 3:1（WCAG 非文字对比度，13–14px 小图标级别）。这组色在
+ * 五档主题里各配一套（明与两纸面共用深值、黛 / 玄共用亮值），消费面（文件面板树、
+ * 输入框胶囊、Session·附件列表）坐在井、卡、壳三种底上，所以三个底面
+ * （--color-bg-panel / muted / app）都要过线；
  * 另断言三色色相彼此分开 ≥ 40°——色相不分开，「颜色差异」就只剩明度在撑。
  *
  * 解析口径同 dark-contrast.test.ts：只认 `#rrggbb`，遇 var() / rgba 的 token 跳过
@@ -38,9 +40,9 @@ function varsOf(css: string, from: number, to: number): Map<string, string> {
 }
 
 function themeBlock(theme: string): Map<string, string> {
-  // 先折 CRLF：明档块靠两行字面量定位，Windows 工作区（core.autocrlf=true）拉
-  // 下来的 colors.css 带 \r\n，字面量会找不到（2026-10-10 Windows CI 与本地同报
-  // 「找不到明档 token 块」；Linux 上一直绿）
+  // 归一行尾：Windows runner 的 git 默认 autocrlf 会把仓库里的 LF 检出成 CRLF，
+  // 而下面的块定位用了硬编码的 "\n"。不归一的话 light 块找不到，CI 眼里就成了
+  // 「色相分离不足」的假报告（2026-10，main 上真实挂过）
   const css = readFileSync(join(TOKENS, "colors.css"), "utf8").replace(/\r\n/g, "\n");
   if (theme === "light") {
     const open = css.indexOf(":root,\n[data-theme-preview=\"light\"] {");

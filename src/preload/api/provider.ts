@@ -4,7 +4,7 @@
  * 注意 API 形状：明文密钥只有 renderer → main 这一个方向，回来的永远是 ProviderDto。
  */
 import { ipcRenderer } from "electron";
-import { ipcChannels, type BuiltinProvider } from "../../shared/agent-ipc.ts";
+import { ipcChannels, type BuiltinProvider, type OauthLoginInput } from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
 
 export type UpsertResult =
@@ -32,6 +32,12 @@ export const providerApi = {
   }): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke(ipcChannels.providerTest, input),
   /** 显示明文密钥（用户点眼睛时才调，不随 list 下发） */
   reveal: (id: string): Promise<string | null> => ipcRenderer.invoke(ipcChannels.providerReveal, id),
+  /**
+   * Claude OAuth 登录：主进程开系统浏览器并等回调，返回时 provider 已连凭据落盘。
+   * promise 会挂着等用户在浏览器里完成授权（上限 10 分钟）。
+   */
+  oauthLogin: (input: OauthLoginInput): Promise<UpsertResult> =>
+    ipcRenderer.invoke(ipcChannels.providerOauthLogin, input),
   discover: (input: {
     baseUrl: string;
     api: string;

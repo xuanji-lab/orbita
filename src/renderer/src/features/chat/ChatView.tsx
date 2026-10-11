@@ -22,6 +22,7 @@ import {
   selectHomeCards,
 } from "./home-cards";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
+import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import {
@@ -39,6 +40,7 @@ import {
   groupToolUnits,
   groupTurns,
   indexToolResults,
+  interruptedToolCallIds,
   mcpFailureLead,
   channelSendMessageId,
   mcpInputSummary,
@@ -47,6 +49,12 @@ import {
   type ShowImageCardView,
   summarizeMcpResult,
   liveTailLines,
+  expectedSecondsOf,
+  formatRunClock,
+  shellAutoExpand,
+  tailPreviewLines,
+  timeoutSecondsOf,
+  toolStartAt,
   parseEditDiff,
   editDiffEntries,
   parseGrepLine,
@@ -74,6 +82,12 @@ import {
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import {
+  insertToken,
+  panelInsertPosition,
+  type PanelInsertRequest,
+  type TokenPickResult,
+} from "../../shell/panel-token.ts";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
@@ -102,11 +116,13 @@ import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
+import { BlackholeContext } from "../../shell/BlackholeBox.tsx";
+import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { isMcpServerOffered, parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
+import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
@@ -396,30 +412,35 @@ function QuoteSelectionLayer(props: {
 }
 
 /**
- * 会话区的 skill / MCP 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug，
- * 指令面板的 skill 清单与 MCP 栏也用同一份。挂载读一次、失败静默——徽标是锦上
- * 添花，不为它报错，也不为它做重读 UI（新建的 skill 下一轮会话自然出现）。
+ * 会话区的 skill 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug。
+ * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
+ * （新建的 skill 下一轮会话自然出现）。
  */
 function useSkillIndex(): {
   skills: SkillMeta[];
-  reload: () => void;
-  servers: McpServerInfo[];
-  reloadServers: () => void;
 } {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
-  const [servers, setServers] = useState<McpServerInfo[]>([]);
   const reload = useCallback(() => {
     void api.skill.list().then(setSkills).catch(() => undefined);
-  }, []);
-  const reloadServers = useCallback(() => {
-    // main 的 mcp:list 回 { servers, warnings }（工作区配置分层后）；warnings 由 MCP 管理面显示，面板不管
-    void api.mcp.list().then((result) => setServers(result.servers)).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
   }, [reload]);
-  return { skills, servers, reload, reloadServers };
+  return { skills };
 }
+
+/*
+ * 右栏选取回执与行内选用插入的消费水位（模块级）：只有主槽的 ChatView 拿
+ * tokenPickResult / panelInsert，不会串合；但主槽会在设置页来回切时重挂——
+ * 实例 ref 会归零，旧回执被重放、token 插两遍。水位放模块级，重挂也记得
+ * 消费过哪一条。
+ */
+let consumedPickNonce = 0;
+let consumedPanelInsertNonce = 0;
+
+/** 主槽输入框（选取回执与行内选用的插入目标）：面板 / 抽屉里的 Composer 不算 */
+const mainComposerTextarea = (): HTMLTextAreaElement | null =>
+  document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
 
 function ChatViewBody(props: {
   /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
@@ -503,18 +524,96 @@ function ChatViewBody(props: {
    * End 变成同时滚两个面——面板的回底走浮钮，不抢全局键。
    */
   scrollToEndHotkey?: boolean;
+  /**
+   * 「/ + 空格」打开右栏选取（panel-token.ts）：行首或空白后孤立的 / 按下空格时
+   * （句中同样触发，2026-10-11 用户裁定）交出插入锚点。**只有主槽的 ChatView
+   * 拿到它**（App 在那边接住去开面板）；抽屉 / 面板内的 Composer 不参与，
+   * 那边的 / 空格就是普通文字。
+   */
+  onSlashSpace?: (position: number) => boolean;
+  /**
+   * 右栏选取的一次性回执（nonce 单调递增，同 channelOpenRequest 的先例）：token
+   * 非空 = 插到 position（execCommand 保撤销栈）；null = 取消，只把焦点送回输入框。
+   * 只有主槽的 ChatView 拿到它。
+   */
+  tokenPickResult?: TokenPickResult | null;
+  /**
+   * 右栏行内「选用」按钮的一次性插入请求（nonce 单调递增，同 tokenPickResult 的
+   * 先例）：token 插到输入框**当前光标处**（从未聚焦过则落到草稿末尾），焦点回
+   * 输入框。面板不关——浏览态可以连插几条。只有主槽的 ChatView 拿到它。
+   */
+  panelInsert?: PanelInsertRequest | null;
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
-  // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
-  const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
-  const offeredWorkspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
-  const offeredServers = useMemo(
-    () => servers.filter((server) => isMcpServerOffered(server, offeredWorkspace)),
-    [servers, offeredWorkspace],
-  );
+  // read SKILL.md 徽标的识别索引（徽标与工具行共用同一份数据）
+  const { skills } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
+
+  // ── 右栏选取的回执：插入 token、焦点回输入框（panel-token.ts）────────
+  useEffect(() => {
+    const result = props.tokenPickResult;
+    if (result == null || result.nonce <= consumedPickNonce) return;
+    consumedPickNonce = result.nonce;
+    if (result.token === null) {
+      // 取消（Esc）：把触发时删掉的「/ 」还回原处。句中也会触发之后，「a / b」这类
+      // 正文打出 / 加空格就开了面板——Esc 必须让它回到用户打的原样，不能吞字
+      const anchor = result.position;
+      requestAnimationFrame(() => {
+        const el = mainComposerTextarea();
+        const position = Math.max(0, Math.min(anchor, session.draft.length));
+        const restored = session.draft.slice(0, position) + "/ " + session.draft.slice(position);
+        if (el === null) {
+          session.setDraft(restored);
+          return;
+        }
+        el.focus();
+        el.setSelectionRange(position, position);
+        if (!document.execCommand("insertText", false, "/ ")) session.setDraft(restored);
+      });
+      return;
+    }
+    const token = result.token;
+    const anchor = result.position;
+    requestAnimationFrame(() => {
+      const el = mainComposerTextarea();
+      const position = Math.max(0, Math.min(anchor, session.draft.length));
+      const next = insertToken(session.draft, position, token);
+      // execCommand("insertText") 保撤销栈：input 事件会把最终值送回 onChange →
+      // draft 自动同步；输入框不在（设置页盖着）或被拒（只读）就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tokenPickResult]);
+
+  // ── 行内「选用」按钮的插入：token 落到输入框当前光标处（panel-token.ts）──
+  // 光标从 DOM 读（失焦后 selectionStart 仍停在最后一次的位置）；「从未聚焦过」
+  // 的判定在 panelInsertPosition（纯函数，有测试）
+  useEffect(() => {
+    const request = props.panelInsert;
+    if (request == null || request.nonce <= consumedPanelInsertNonce) return;
+    consumedPanelInsertNonce = request.nonce;
+    requestAnimationFrame(() => {
+      const el = mainComposerTextarea();
+      const position = panelInsertPosition(el === null ? 0 : el.selectionStart, session.draft.length);
+      const next = insertToken(session.draft, position, request.token);
+      // 同选取回执：execCommand 保撤销栈，被拒 / 不在就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.panelInsert]);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -769,24 +868,6 @@ function ChatViewBody(props: {
         session.send();
       }}
       onStop={session.stop}
-      skills={skills}
-      workspaceId={session.workspaceId}
-      onReloadSkills={reloadSkills}
-      // 只给当前工作区能用的 server（isMcpServerOffered：与发送端判 /mcp: 可用同一依据）
-      servers={offeredServers}
-      onReloadServers={reloadServers}
-      onCommand={(command) => {
-        if (command === "compact") {
-          // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
-          session.sendText("/compact");
-        } else {
-          // /new：清掉打了一半的草稿与挂着的附件再开新会话（先清再切——
-          // newTask 换槽后 draftKey 变了，附件就清不到了）
-          session.clearComposerExtras();
-          session.setDraft("");
-          session.newTask();
-        }
-      }}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
       // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
@@ -818,9 +899,11 @@ function ChatViewBody(props: {
       files={session.files}
       pasted={session.pasted}
       onRemoveFile={session.removeFile}
-      onRemovePasted={session.removePasted}
-      onPasteLargeText={session.addPastedText}
+      onAddPasteBlock={session.addPasteBlock}
+      onExpandPaste={session.expandPaste}
+      onCollapsePaste={session.collapsePaste}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
+      onSlashSpace={props.onSlashSpace}
     />
   );
 
@@ -1195,6 +1278,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const entries = useMemo(() => groupToolUnits(units, props.skills), [units, props.skills]);
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = props.phase === "turn";
+  // 已中断的工具调用（interruptedToolCallIds）：结果永远不会来的调用按静止的
+  // 「已中断」渲染，不再呼吸/转圈——委派卡「委派中…」停不下来就是这类（2026-10-09）
+  const interruptedCalls = useMemo(
+    () => interruptedToolCallIds(records, toolResults, turnActive),
+    [records, toolResults, turnActive],
+  );
   // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
   const turnView = useMemo(() => groupTurns(entries, turnActive, toolResults), [entries, turnActive, toolResults]);
   // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
@@ -1350,6 +1439,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
                 sessionId={props.sessionId}
+                interruptedCalls={interruptedCalls}
               />
             ) : (
               <EntryView
@@ -1357,6 +1447,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 toolResults={toolResults}
                 activeThinkingKey={activeThinkingKey}
                 turnActive={turnActive}
+                interruptedCalls={interruptedCalls}
                 onOpenTask={props.onOpenTask}
                 carryoverCards={carryoverCards}
                 channel={props.channel}
@@ -1469,6 +1560,8 @@ function Pane(props: {
   const [editing, setEditing] = useState(false);
   return (
     <div
+      // 输入框黑洞的舷窗挂在滚动段顶边（data-porthole-anchor）：BlackholeBox 从输入框往上找这一对
+      data-chat-pane=""
       style={{
         height: "100%",
         minHeight: 0,
@@ -1636,7 +1729,7 @@ function Pane(props: {
       </header>
 
       {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走 */}
-      <div style={{ position: "relative", minHeight: 0, display: "grid" }}>
+      <div data-porthole-anchor="" style={{ position: "relative", minHeight: 0, display: "grid" }}>
         <div
           ref={props.scrollRef}
           onScroll={props.onScroll}
@@ -2189,6 +2282,8 @@ function EntryView(props: {
   toolResults: ToolResultIndex;
   activeThinkingKey: string | null;
   turnActive: boolean;
+  /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
+  interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
   carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
@@ -2290,6 +2385,7 @@ function EntryView(props: {
         toolName={entry.toolName}
         input={entry.input}
         result={props.toolResults.get(entry.toolCallId)}
+        interrupted={props.interruptedCalls.has(entry.toolCallId)}
         onOpenTask={props.onOpenTask}
         channel={props.channel}
         skills={props.skills}
@@ -2301,6 +2397,7 @@ function EntryView(props: {
       group={entry}
       toolResults={props.toolResults}
       turnActive={props.turnActive}
+      interruptedCalls={props.interruptedCalls}
       onOpenTask={props.onOpenTask}
       channel={props.channel}
       skills={props.skills}
@@ -2344,6 +2441,8 @@ function TurnRollupLine(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
+  /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
+  interruptedCalls: ReadonlySet<string>;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2401,6 +2500,7 @@ function TurnRollupLine(props: {
               toolResults={props.toolResults}
               activeThinkingKey={null}
               turnActive={false}
+              interruptedCalls={props.interruptedCalls}
               onOpenTask={props.onOpenTask}
               carryoverCards={props.carryoverCards}
               channel={props.channel}
@@ -2440,7 +2540,9 @@ function UserBubble(props: {
   // scrollHeight == clientHeight，结论会丢，按钮就再也收不回了。
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
-  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  // 量的是折叠 wrapper（不是气泡本体）：scrollHeight 是全文高、clientHeight 是
+  // clamp 高，两者都在无 padding 的内容盒上量，判定才不被气泡 chrome 干扰
+  const clampRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1200);
@@ -2490,10 +2592,21 @@ function UserBubble(props: {
   );
   // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
   const hasText = text.trim() !== "";
+  const blackhole = useContext(BlackholeContext);
+  const sentBox = blackhole && images.length + fileRefs.length > 0;
   useLayoutEffect(() => {
     if (expanded) return;
-    const el = bubbleRef.current;
-    if (el !== null) setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    const el = clampRef.current;
+    if (el === null) return;
+    const measure = () => setOverflowing(isBubbleOverflowing(el.scrollHeight, el.clientHeight));
+    measure();
+    // 宽度变了要重量：右栏打开 / 拖窗口让聊天列变窄，原本 4 行内的消息会折到第 5 行——
+    // 折叠样式一直挂着（不论溢出与否），不重量的话正文被静默裁掉、却没有展开键与遮罩；
+    // 反过来列变宽，原本溢出的消息放得下了，展开键与遮罩还残留着。只在折叠态观察：
+    // 展开后两个高度相等，量了会把结论丢掉（收起时 expanded 变化会再量一次）
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [text, expanded]);
   return (
     <div
@@ -2505,7 +2618,15 @@ function UserBubble(props: {
         gap: 2,
       }}
     >
-      {images.length > 0 && <UserImages images={images} />}
+      {/* 输入框黑洞开着：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
+      {sentBox ? (
+        <SentBlackholeBox
+          images={images}
+          files={fileRefs.map((ref) => ({ name: fileRefName(ref.path), path: ref.path, kind: ref.kind }))}
+        />
+      ) : (
+        images.length > 0 && <UserImages images={images} />
+      )}
       {quotes.length > 0 && (
         <div
           style={{
@@ -2527,7 +2648,7 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {fileRefs.length > 0 && (
+      {!sentBox && fileRefs.length > 0 && (
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
@@ -2544,7 +2665,7 @@ function UserBubble(props: {
           {fileRefs.map((ref, index) => (
             <FileRefChip
               key={`file:${index}`}
-              name={ref.path.split(/[\\/]/).filter((part) => part !== "").pop() ?? ref.path}
+              name={fileRefName(ref.path)}
               path={ref.path}
               kind={ref.kind}
             />
@@ -2578,7 +2699,6 @@ function UserBubble(props: {
       )}
       {hasText && (
         <div
-          ref={bubbleRef}
           data-quote-id={props.item.id}
           data-quote-role="user"
           style={{
@@ -2593,11 +2713,16 @@ function UserBubble(props: {
             fontSize: "var(--font-size-chat)",
             lineHeight: "var(--line-height-bubble)",
             overflowWrap: "anywhere",
-            // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
-            ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
           }}
         >
-          <MarkdownBlock text={text} variant="bubble" />
+          {/* 折叠裁剪落在内容自己的 wrapper 上（无 padding / 边框）：裁剪边正好是
+              第 4 行底边，第 5 行整体藏在裁剪线以下。旧实现把 maxHeight 加在气泡
+              本体，裁剪边（padding box）比第 4 行低出一条 bottom padding，第 5 行
+              的上半截正好落进可见带——「最后一行被裁一半」的根因，详见
+              user-bubble-clamp.ts */}
+          <div ref={clampRef} style={bubbleClampStyle(expanded)}>
+            <MarkdownBlock text={text} variant="bubble" />
+          </div>
           {!expanded && overflowing && (
             <div
               aria-hidden
@@ -2789,6 +2914,11 @@ function SkillInvocationCard(props: { name: string; content: string }) {
  * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
  * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
  */
+/** 文件引用的显示名：路径最后一段（目录的尾斜杠不算一段） */
+function fileRefName(path: string): string {
+  return path.split(/[\\/]/).filter((part) => part !== "").pop() ?? path;
+}
+
 function UserImages(props: { images: readonly PromptImage[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);
@@ -3164,6 +3294,9 @@ function ToolLine(props: {
   toolName: string;
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  /** 结果永远不会来（所在消息 error/aborted 收场且无结果帧，见 interruptedToolCallIds）：
+   * 按静止的「已中断」渲染，不呼吸不转圈 */
+  interrupted: boolean;
   /** B-1：read_task 的「Open」跳到被读的 task（侧栏点击同语义）；别的工具不传 */
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：delegate / reply_subsession / report_to_parent 三个通道工具要用 */
@@ -3175,7 +3308,46 @@ function ToolLine(props: {
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
-  const active = result === undefined || result.status === "running";
+  // 已中断：无结果帧且判定永不回来——不算运行中（不呼吸、不展开、状态词换「已中断」）
+  const interrupted = props.interrupted && result === undefined;
+  const active = !interrupted && (result === undefined || result.status === "running");
+  // ── 运行中 shell 的可见性（长 bash 不再「一行不动」）。active 已含「中断不算
+  // 运行」（PR 168）：被中断的 bash 不计时、不自动展开，与真跑着的命令分流 ──
+  const shell = props.toolName === "bash" || props.toolName === "powershell";
+  const shellActive = shell && active;
+  // 秒针：只挂运行中的 shell（Responding 同款，一秒一跳）。睡眠中的命令没有任何
+  // 事件帧，计时只能靠自己跳；跑完即停，不留空转的 interval。
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!shellActive) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [shellActive]);
+  const runStart = shellActive ? toolStartAt(props.toolCallId) : null;
+  const expectedSeconds = shell ? expectedSecondsOf(props.input) : null;
+  const limitSeconds = shell ? timeoutSecondsOf(props.input) : null;
+  // 自动展开的账：用户手动碰过折叠就不再自动改（尊重人）；autoOpened 记「这次
+  // 展开是自动的」，跑完只有自动开的才自动收。两个都是 ref——这些是过程状态，
+  // 不参与渲染，不值得每次跳秒重算。
+  const userToggled = useRef(false);
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!shellActive) {
+      // 跑完了：自动展开的自动收回去；用户碰过的保持用户的选择
+      if (autoOpened.current && !userToggled.current) setOpen(false);
+      return;
+    }
+    if (userToggled.current) return;
+    const elapsed = runStart !== null ? now - runStart : null;
+    if (shellAutoExpand(expectedSeconds, elapsed)) {
+      autoOpened.current = true;
+      setOpen(true);
+    }
+  }, [shellActive, now, runStart, expectedSeconds]);
+  const toggleOpen = () => {
+    userToggled.current = true;
+    setOpen((value) => !value);
+  };
 
   // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
   // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败
@@ -3184,11 +3356,25 @@ function ToolLine(props: {
   // running 帧（`card === null` 时的「delegating…」呼吸）悄悄吞掉，永远显示
   // 「派出中」而不是「失败了」。
   if (props.toolName === "delegate" && !failed) {
-    return <DelegateToolLine input={props.input} result={result} channel={props.channel} />;
+    return (
+      <DelegateToolLine
+        input={props.input}
+        result={result}
+        interrupted={interrupted}
+        channel={props.channel}
+      />
+    );
   }
   // 交接（受管浏览器）：离开卡，与派出卡同一个骨架。失败照通用骨架走（红色 + 可展开看错误）
   if (props.toolName === "request_user_action" && !failed) {
-    return <HandoffToolLine toolCallId={props.toolCallId} input={props.input} result={result} />;
+    return (
+      <HandoffToolLine
+        toolCallId={props.toolCallId}
+        input={props.input}
+        result={result}
+        interrupted={interrupted}
+      />
+    );
   }
   if ((props.toolName === "reply_subsession" || props.toolName === "report_to_parent") && !failed) {
     return (
@@ -3197,6 +3383,7 @@ function ToolLine(props: {
         input={props.input}
         result={result}
         running={active}
+        interrupted={interrupted}
         channel={props.channel}
       />
     );
@@ -3254,6 +3441,23 @@ function ToolLine(props: {
     (props.toolName === "bash" || props.toolName === "powershell") && !active
       ? toolDurationText(props.toolCallId, t)
       : null;
+  // 运行中时钟：已跑多久（+上限，+预计）。起点没记到（旧会话重开）时退化为只报预计，
+  // 连预计都没有就什么都不报——宁缺勿假。超出预计如实说「比预计慢」，不给负数倒计时。
+  const runClock =
+    shellActive && runStart !== null
+      ? formatRunClock(Math.max(0, now - runStart)) +
+        (limitSeconds !== null ? ` / ${t.chat.limitLabel(formatRunClock(limitSeconds * 1000))}` : "")
+      : null;
+  const runExpected = (() => {
+    if (!shellActive || expectedSeconds === null) return null;
+    const about = t.chat.expectedAbout(formatThinkingDuration(expectedSeconds * 1000, t));
+    // 起点没记到就没有时钟可比，「比预计慢」判断不了——只报预计，不猜
+    if (runStart === null) return about;
+    return now - runStart >= expectedSeconds * 1000 ? t.chat.slowerThanExpected : about;
+  })();
+  // 折叠行下的活尾：有流式输出时取末几行，让「它在动」不展开也看得见；
+  // 展开时藏起（展开体本身就是完整活尾，别显两遍）
+  const tailPreview = shellActive && !open ? tailPreviewLines(rawBody) : [];
 
   // 外部能力芯片行（2026-09-27 两轮裁决）：skill 使用与 MCP 调用的身份收进一枚
   // 药丸芯片（图标 + 类型词 + 名字），与输入框附件 chip / 引用 chip 同族——「外部
@@ -3263,7 +3467,7 @@ function ToolLine(props: {
     const mcpBrief = mcp === null ? null : (callLabel ?? mcpInputSummary(props.input));
     return (
       <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-        <CollapseRow open={open} disabled={!expandable} onToggle={() => setOpen((value) => !value)}>
+        <CollapseRow open={open} disabled={!expandable} onToggle={toggleOpen}>
           <span
             className={active ? "orbita-breath" : undefined}
             style={{
@@ -3281,11 +3485,15 @@ function ToolLine(props: {
             }}
           >
             <Icon
-              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : "plug"}
+              name={failed ? "triangle-alert" : interrupted ? "circle-off" : skillUse !== null ? "book-open" : "plug"}
               size={13}
               strokeWidth={1.8}
               style={{
-                color: failed ? "var(--color-danger)" : "var(--color-text-secondary)",
+                color: failed
+                  ? "var(--color-danger)"
+                  : interrupted
+                    ? "var(--color-text-tertiary)"
+                    : "var(--color-text-secondary)",
                 flex: "0 0 auto",
               }}
             />
@@ -3315,6 +3523,7 @@ function ToolLine(props: {
               {summary}
             </span>
           )}
+          {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
         </CollapseRow>
         {open && expandable && (
           <>
@@ -3337,11 +3546,19 @@ function ToolLine(props: {
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      <CollapseRow open={open} disabled={!expandable} onToggle={() => setOpen((value) => !value)}>
+      <CollapseRow open={open} disabled={!expandable} onToggle={toggleOpen}>
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
           <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
             <Icon
-              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : toolIcon(props.toolName)}
+              name={
+                failed
+                  ? "triangle-alert"
+                  : interrupted
+                    ? "circle-off"
+                    : skillUse !== null
+                      ? "book-open"
+                      : toolIcon(props.toolName)
+              }
               size={14}
               strokeWidth={1.8}
             />
@@ -3377,7 +3594,13 @@ function ToolLine(props: {
             {summary}
           </span>
         )}
-        {/* shell 类的执行耗时——慢命令（install / typecheck）不展开也讲清楚花在哪 */}
+        {/* 运行中 shell 的时钟（已跑多久 / 上限）与预计——「像卡死」的正解：让时间说话。
+            active 已含「中断不算运行」（PR 168），被中断的 bash 这里拿不到时钟 */}
+        {runClock !== null && <span style={SLOT.status}>{runClock}</span>}
+        {runExpected !== null && <span style={SLOT.status}>{runExpected}</span>}
+        {/* 已中断（无结果帧且永不回来）：静止的中性状态词——不再呼吸、不假装在跑 */}
+        {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
+        {/* shell 类的执行耗时（落定后显示）——慢命令不展开也讲清楚花在哪 */}
         {shellDuration !== null && <span style={SLOT.status}>{shellDuration}</span>}
         {/* B-1：read_task 的任务卡动作——「Open」跳到被读的 task（与侧栏点击同语义）。
             stopPropagation：这个按钮不是折叠开关。card 走 details 通路，模型看不见。 */}
@@ -3404,6 +3627,17 @@ function ToolLine(props: {
           </button>
         )}
       </CollapseRow>
+      {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」
+          不展开也看得见。缩进对齐展开体的导轨但更轻：无框无底色，muted 的机器事实。 */}
+      {tailPreview.length > 0 && (
+        <div style={{ marginLeft: RAIL_X, display: "grid", minWidth: 0 }}>
+          {tailPreview.map((line, index) => (
+            <div key={index} style={SLOT.sub}>
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
       {open && expandable && diff !== null && <DiffView diff={diff} />}
       {open && expandable && diff === null && fileView !== null && (
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
@@ -3429,11 +3663,29 @@ function ToolLine(props: {
  * 窗口顶部也有同样的交还按钮：用户登录完人在浏览器里，就地交还，不必切回来找这张卡。
  * 结束后：状态写「已交还 / 已取消」（主进程写进 details，不解析给模型的文字）。
  */
-function HandoffToolLine(props: { toolCallId: string; input: unknown; result: ToolTranscriptItem | undefined }) {
+function HandoffToolLine(props: {
+  toolCallId: string;
+  input: unknown;
+  result: ToolTranscriptItem | undefined;
+  interrupted: boolean;
+}) {
   const t = useT();
   const [gone, setGone] = useState(false);
   const reason = toolCallSummary("request_user_action", props.input) ?? "";
   const outcome = handoffOutcome(props.result);
+  // 已中断：请求从未发出（结果帧永远不来），不能再给「去完成 / 交还」的动作——
+  // 那些按钮会去 resolve 一个不存在的交接；退成静止的中性状态卡
+  if (props.interrupted && props.result === undefined) {
+    return (
+      <ExitCard
+        kicker={t.browser.handoffKicker}
+        icon="user"
+        title={reason}
+        status={{ text: t.chat.toolInterrupted, color: "var(--color-text-tertiary)", active: false }}
+        preview={t.browser.handoffWhere}
+      />
+    );
+  }
   const waiting = outcome === null && !gone;
   const status = waiting
     ? { text: t.browser.handoffWaiting, color: "var(--color-accent)", active: true }
@@ -3483,12 +3735,20 @@ function HandoffToolLine(props: { toolCallId: string; input: unknown; result: To
 function DelegateToolLine(props: {
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  interrupted: boolean;
   channel: ChannelViewContext;
 }) {
   const card = delegateCard(props.result);
   const taskPreview = deriveSessionTitle(toolCallSummary("delegate", props.input) ?? "");
   if (card === null) {
-    return <DelegateCardView card={null} status="running" taskPreview={taskPreview} />;
+    return (
+      <DelegateCardView
+        card={null}
+        status="running"
+        taskPreview={taskPreview}
+        interrupted={props.interrupted}
+      />
+    );
   }
   const summary = props.channel.channelSummaries.get(card.childId);
   // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
@@ -3526,10 +3786,23 @@ function ChannelSendToolLine(props: {
   input: unknown;
   result: ToolTranscriptItem | undefined;
   running: boolean;
+  interrupted: boolean;
   channel: ChannelViewContext;
 }) {
   const t = useT();
   const record = typeof props.input === "object" && props.input !== null ? (props.input as Record<string, unknown>) : {};
+  // 已中断：消息从未发出（结果帧永远不来）——不能按「已回复 / 已报告」的语气画
+  // 成功胶囊，换成静止的中性中断行
+  if (props.interrupted && props.result === undefined) {
+    return (
+      <ChannelToolMarkLine
+        icon="circle-off"
+        text={t.chat.toolInterrupted}
+        tone="neutral"
+        running={false}
+      />
+    );
+  }
   // 落账那条通道消息的 id（回执 details 里，channel-tools.ts）：点了滚到父子会话面板里
   // 的这一条并高亮。还在跑、或这一刀之前的旧记录没有 → null，退回滚到通道底部
   const messageId = channelSendMessageId(props.result);
@@ -3589,6 +3862,8 @@ function ToolGroupLine(props: {
   group: ToolGroupUnit;
   toolResults: ToolResultIndex;
   turnActive: boolean;
+  /** 已中断的调用 id 集（interruptedToolCallIds）：组头不为它们呼吸，按「N 个已中断」计 */
+  interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：展开后的成员行仍是 ToolLine，同一份上下文原样转发 */
   channel: ChannelViewContext;
@@ -3603,7 +3878,7 @@ function ToolGroupLine(props: {
     if (!props.turnActive) setOpen(false);
   }, [props.turnActive]);
 
-  const status = toolGroupStatus(group.calls, props.toolResults);
+  const status = toolGroupStatus(group.calls, props.toolResults, props.interruptedCalls);
   const active = status.running > 0;
   const failed = status.failed > 0;
   const fileCount = group.toolName === "edit" ? editGroupFileCount(group.calls, props.toolResults) : null;
@@ -3629,6 +3904,11 @@ function ToolGroupLine(props: {
             {t.chat.failedCount(status.failed)}
           </span>
         )}
+        {/* 已中断（中性色）：这几次调用从未发生——折了也不能无声消失，但也不染红
+            （不是失败，是没跑） */}
+        {!open && status.interrupted > 0 && (
+          <span style={SLOT.status}>{t.chat.interruptedCount(status.interrupted)}</span>
+        )}
       </CollapseRow>
       {open && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
@@ -3639,6 +3919,7 @@ function ToolGroupLine(props: {
               toolName={call.toolName}
               input={call.input}
               result={props.toolResults.get(call.toolCallId)}
+              interrupted={props.interruptedCalls.has(call.toolCallId)}
               onOpenTask={props.onOpenTask}
               channel={props.channel}
               skills={props.skills}

@@ -12,6 +12,7 @@ import { providerApi } from "./api/provider.ts";
 import { reviewApi } from "./api/review.ts";
 import { sessionApi } from "./api/session.ts";
 import { settingsApi } from "./api/settings.ts";
+import { terminalApi } from "./api/terminal.ts";
 import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
 import { windowApi } from "./api/window.ts";
@@ -30,6 +31,7 @@ const api = {
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
+  terminal: terminalApi,
   import: importApi,
   browser: browserApi,
   voice: voiceApi,
