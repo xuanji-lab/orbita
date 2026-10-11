@@ -317,6 +317,8 @@ export function Composer(props: {
           flexDirection: "column",
           gap: 6,
           padding: "10px 12px 8px",
+          // 黑洞的洞（.bh-hole，portal 进本卡、inset: 0）以本卡为定位容器
+          position: "relative",
           // 文件 / 图片拖在聊天面板上方时的落点提示（dropActive）：中性虚线，
           // 不染 accent（accent 只给主操作）
           outline: dragging ? "1.5px dashed var(--color-border-strong)" : undefined,
