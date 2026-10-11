@@ -96,7 +96,8 @@ async function hasFile(path: string): Promise<boolean> {
   }
 }
 
-async function hasDirectory(path: string): Promise<boolean> {
+/** 目录在不在（ENOENT / 断链 / 权限都算不在）。两个消费者：validate 小件与自定义路径。 */
+export async function hasDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory();
   } catch {

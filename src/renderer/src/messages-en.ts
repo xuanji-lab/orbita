@@ -717,6 +717,24 @@ export const en = {
     foundTip: "Only checked that it exists · nothing read yet",
     notScanned: "Not scanned",
     nothingNew: "Nothing new",
+    // 步骤 1 · 自定义路径（自动定位漏掉的散落目录手动补上）
+    customRootsNote:
+      "Missed a data folder — a backup, a renamed copy? Point orbita at it · checked for that source's chat history, then scanned like the found ones",
+    customRootsSourceLabel: "Which source the folder belongs to",
+    customRootsPathLabel: "Data folder path",
+    customRootsPathPlaceholder: "Paste a data folder path",
+    customRootsBrowse: "Browse…",
+    customRootsAdd: "Add",
+    customRootsAdding: "Adding…",
+    customRootsRemove: "Remove",
+    customRootsRemoveTip: "Stop reading this folder · the folder itself is never touched",
+    customRootsAddedFor: (source: string) => `Data folder for ${source}`,
+    customRootsInvalid: {
+      "not-found": "That folder doesn't exist",
+      "no-data": "No chat history of that source found there",
+      duplicate: "Already added",
+    },
+    customRootsAddFailed: "Couldn't add:",
     // 步骤 2：会话
     stepSessions: "Sessions",
     rangeTip: "Show sessions updated within",
