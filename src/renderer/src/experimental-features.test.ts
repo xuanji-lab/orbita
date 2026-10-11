@@ -1,15 +1,17 @@
 /**
- * 实验功能清单的账：这张表是设置页的「更新日志」，也是转正时整理正式更新说明的底稿，
+ * 实验功能清单的账：这张表是设置页卡片墙的数据源，也是转正时整理正式更新说明的底稿，
  * 坏一条就是用户看到一行空白或错乱的历史。
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { EXPERIMENTAL_FEATURE_IDS } from "../../shared/settings.ts";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl } from "./experimental-features.ts";
 
 describe("EXPERIMENTAL_FEATURES", () => {
-  it("id 唯一，名字与说明中英俱全", () => {
+  it("id 唯一，与 shared 的 EXPERIMENTAL_FEATURE_IDS 一一对应（图标是 IconName 类型，登记由 typecheck 把关）", () => {
     const ids = EXPERIMENTAL_FEATURES.map((feature) => feature.id);
     assert.equal(new Set(ids).size, ids.length);
+    assert.deepEqual([...ids].sort(), [...EXPERIMENTAL_FEATURE_IDS].sort());
     for (const feature of EXPERIMENTAL_FEATURES) {
       for (const text of [feature.name, feature.summary]) {
         assert.ok(text.zh.trim() !== "" && text.en.trim() !== "", feature.id);

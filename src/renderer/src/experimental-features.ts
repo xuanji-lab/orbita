@@ -1,20 +1,24 @@
 /**
- * 实验功能清单：每个挂在实验开关（settings.experimental）后面的功能，连同它的开发日志。
- * 设置页「实验功能」开关下面按这张表列出来——用户打开开关之前就看得到里面有什么、
- * 每一版改了什么，打开即是自己愿意为这些功能接受不稳定（2026-10 用户裁决）。
+ * 实验功能清单：每个挂在实验开关后面的功能，连同它的开发日志与卡片图标。
+ * 设置页「实验功能」Tab 按这张表铺卡片墙——每张卡自带开关（`experimentalFeatures`
+ * 里那一项）与更新日志，用户打开一项之前就看得到里面有什么、每一版改了什么，
+ * 打开即是自己愿意为这个功能接受不稳定（2026-10-12 用户裁决：逐项开关）。
  *
  * **怎么维护**（agent 照做）：
- * - 新功能挂到开关后面：在表里加一项，`changelog` 记第一条。
+ * - 新功能挂进实验区：先在 `@shared/settings` 的 EXPERIMENTAL_FEATURE_IDS 加 id
+ *   （id 的唯一来源在那里），再在这里加一项，`changelog` 记第一条；
  * - 给实验功能加东西 / 修 bug 的 PR：在对应项的 `changelog` **末尾**追加一条
- *   （PR 号、日期、一句用户看得懂的话，中英各一）。PR 号开 PR 后回填。
+ *   （PR 号、日期、一句用户看得懂的话，中英各一）。PR 号开 PR 后回填；
  * - **转正**（用户说「把 X 移出实验功能」）：
- *   1. 去掉该功能所有 `useExperimental()` / `experimental` 门，入口常驻；
+ *   1. 去掉该功能所有 `useExperimentalFeature("…")` 门，入口常驻；
  *   2. 把这一项的 changelog 整理成正式版本的更新说明（`UPDATE_NOTES.md` 一节）；
- *   3. 从这张表里删掉这一项。
- *   表空了不删开关：下一个实验功能还要用它。
+ *   3. 从这张表里删掉这一项，并把它在 EXPERIMENTAL_FEATURE_IDS 里的 id 一并删掉。
+ *   表空了不删设置键：下一个实验功能还要用它。
  *
  * 文案中英内联而不进 messages-*：一个功能的全部历史放在一处，转正时整段搬走。
  */
+import type { ExperimentalFeatureId } from "@shared/settings";
+import type { IconName } from "./shell/Icon.tsx";
 
 /** 中英两份文案（界面语言二选一） */
 export interface LocalizedText {
@@ -32,8 +36,10 @@ export interface ExperimentalChange {
 }
 
 export interface ExperimentalFeature {
-  /** 稳定标识（React key、测试用），不上屏 */
-  id: string;
+  /** 稳定标识（React key、settings.experimentalFeatures 的键），不上屏 */
+  id: ExperimentalFeatureId;
+  /** 卡片头部的图标（lucide，需在 shell/Icon.tsx 登记） */
+  icon: IconName;
   name: LocalizedText;
   /** 一句话：这个功能是什么、在哪里看得到 */
   summary: LocalizedText;
@@ -49,6 +55,7 @@ export function pullRequestUrl(pr: number): string {
 export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
   {
     id: "paper-themes",
+    icon: "notebook-pen",
     name: { zh: "纸面皮肤", en: "Paper themes" },
     summary: {
       zh: "小学作业（中文稿纸）与打字稿（英文打字机）两档主题，在外观 › 主题里选。",
@@ -95,10 +102,19 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
           en: "Moved behind the experimental switch: hidden from the theme picker when off; a theme already chosen keeps applying.",
         },
       },
+      {
+        pr: 184,
+        date: "2026-10-12",
+        note: {
+          zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
+          en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
+        },
+      },
     ],
   },
   {
     id: "session-lifecycle",
+    icon: "circle-check",
     name: { zh: "会话生命周期", en: "Session lifecycle" },
     summary: {
       zh: "给会话加星标、标记完成；完成时扫描遗留事项，挂在右栏「遗留事项」里。",
@@ -145,10 +161,19 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
           en: "Moved behind the experimental switch: stars, done and carryover entries hide when off; the data stays.",
         },
       },
+      {
+        pr: 184,
+        date: "2026-10-12",
+        note: {
+          zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
+          en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
+        },
+      },
     ],
   },
   {
     id: "composer-blackhole",
+    icon: "orbit",
     name: { zh: "输入框黑洞", en: "Input box black hole" },
     summary: {
       zh: "拖进来的文件被吸进输入框中心，再从聊天区顶上的舷窗掉进输入框上方的隐形盒子，堆起来；发送后消息顶上留一份缩小的快照。只在浅色、黛、玄三套主题生效。",
@@ -169,6 +194,14 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
         note: {
           zh: "挂到实验开关后面：关着时设置里不出这个开关，存过的选择也不生效。",
           en: "Moved behind the experimental switch: the toggle is hidden when off, and a saved choice has no effect.",
+        },
+      },
+      {
+        pr: 184,
+        date: "2026-10-12",
+        note: {
+          zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
+          en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
         },
       },
     ],

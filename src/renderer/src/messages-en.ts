@@ -404,13 +404,10 @@ export const en = {
       "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
     languageLockedZh: "This theme is Chinese-only",
     languageLockedEn: "This theme is English-only",
-    experimental: "Experimental features",
-    experimentalAria: "Experimental features",
-    experimentalInfo:
-      "Shows features still being polished, each listed below with its changelog · anything you already have is kept and comes back when turned on",
-    experimentalToggles: "Feature switches",
-    experimentalList: "What's experimental",
-    experimentalLog: (count: number) => `Changelog · ${count}`,
+    experimentalLead:
+      "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays",
+    experimentalAllChanges: (count: number) => `All ${count} entries`,
+    experimentalCollapse: "Collapse",
     agent: "Agent",
     autoCompact: "Auto-compact",
     /** 说明中间夹着一个 <b>/compact</b>，拆成前后两段 */
@@ -441,10 +438,6 @@ export const en = {
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
     pastedCollapse: "Collapse pasted text",
     pastedCollapseAria: "Collapse pasted text",
-    composerBlackhole: "Input box black hole",
-    composerBlackholeAria: "Input box black hole",
-    composerBlackholeInfo:
-      "Screenshots and files are pulled into the input box and drop from the top of the chat into a pile above it; a sent message keeps a small snapshot of the pile · Light, Slate and Onyx themes only",
     pastedCollapseInfo:
       "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
     data: "Data",

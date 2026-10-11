@@ -84,7 +84,9 @@ import power from "../../../../Orbita Design System/assets/icons/lucide/power.sv
 import messageSquareDashed from "../../../../Orbita Design System/assets/icons/lucide/message-square-dashed.svg?raw";
 import messageSquare from "../../../../Orbita Design System/assets/icons/lucide/message-square.svg?raw";
 import messagesSquare from "../../../../Orbita Design System/assets/icons/lucide/messages-square.svg?raw";
+import notebookPen from "../../../../Orbita Design System/assets/icons/lucide/notebook-pen.svg?raw";
 import octagonX from "../../../../Orbita Design System/assets/icons/lucide/octagon-x.svg?raw";
+import orbit from "../../../../Orbita Design System/assets/icons/lucide/orbit.svg?raw";
 import plus from "../../../../Orbita Design System/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../Orbita Design System/assets/icons/lucide/refresh-cw.svg?raw";
 import rotateCcw from "../../../../Orbita Design System/assets/icons/lucide/rotate-ccw.svg?raw";
@@ -192,8 +194,10 @@ const ICONS = {
   mic,
   "message-square-dashed": messageSquareDashed,
   "messages-square": messagesSquare,
+  "notebook-pen": notebookPen,
   minus,
   "octagon-x": octagonX,
+  orbit,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
