@@ -50,5 +50,24 @@ describe("turnFields", () => {
     assert.equal(fields.workspaceId, null);
     assert.equal("workspaceName" in fields, false);
   });
+
+  // 续会话的唯一通路：renderer 的 resume → 命令的 piSessionFile → runtime 的 SessionManager.open。
+  // 抽 turn-fields.ts 时漏过这一行（2026-10-11），每轮都新建 pi 本子：模型看不到前文，
+  // created 事件又把 meta 改指到新本子上，回退随之对不上账
+  test("resume 有值：piSessionFile 透传进命令（续跑旧本子）", () => {
+    const fields = turnFields(
+      { ...input, resume: { piSessionFile: "/pi/2026-10-09_book.jsonl" } },
+      provider,
+      "/pi",
+      [],
+      environment,
+    );
+    assert.equal(fields.piSessionFile, "/pi/2026-10-09_book.jsonl");
+  });
+
+  test("resume 为 null（新会话）：piSessionFile 键彻底不出现——runtime 据此新建、主进程据此等 created", () => {
+    const fields = turnFields(input, provider, "/pi", [], environment);
+    assert.equal("piSessionFile" in fields, false);
+  });
 });
 
