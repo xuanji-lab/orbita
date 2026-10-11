@@ -424,6 +424,12 @@ export const en = {
     noUsage: "A rest day. Enjoy it~",
     /** 悬停一格：只给当天总量（日期与星期在格子下面） */
     day: (tokens: string) => `${tokens} tokens`,
+    /** 点一格的效果（格子的悬停 title） */
+    pinPetHere: "Click to keep the nebula on this day",
+    backToToday: "Click to bring the nebula back to today",
+    showPetHere: "Click to bring the nebula out here",
+    /** 点星云本体 */
+    hidePet: "Tuck the nebula away",
   },
 
   settings: {

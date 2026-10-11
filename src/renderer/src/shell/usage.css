@@ -12,15 +12,47 @@
   /* 能量体的停机坪：80×48 的云悬在格子上方，云心对准当前格（petLeft） */
   padding-top: 46px;
   flex: 0 0 auto;
+  transition: padding-top var(--duration-enter) var(--ease-out-quint);
+}
+
+/* 星云收起：上方停机坪让给会话列表；星云钻回格子（缩小 + 淡出 + 下沉） */
+.usage-meter[data-hidden] {
+  padding-top: 0;
+}
+
+.usage-meter[data-hidden] .usage-pet {
+  opacity: 0;
+  transform: translateY(34px) scale(0.2);
+  pointer-events: none;
 }
 
 /* 能量体：绝对定位在格子上方，left 随悬停/今天移动（160ms 缓动，motion token） */
 .usage-pet {
   position: absolute;
   top: 0;
-  transition: left var(--duration-fast) var(--ease-out-quint);
-  /* 不挡格子与 tooltip 的指针路 */
+  transition:
+    left var(--duration-fast) var(--ease-out-quint),
+    opacity var(--duration-enter) var(--ease-out-quint),
+    transform var(--duration-enter) var(--ease-out-quint);
+  transform-origin: 40px 48px;
+  /* 盒子本身不挡格子的指针路；只有星云本体（.usage-pet-btn）可点 */
   pointer-events: none;
+}
+
+/* 星云本体：点它收起。按钮去掉一切外观，只留指针与键盘焦点环 */
+.usage-pet-btn {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  border-radius: var(--radius-md);
+}
+
+.usage-pet-btn:focus-visible {
+  outline: 1.5px solid var(--color-text-primary);
+  outline-offset: 2px;
 }
 
 /* 能量体：80×48 的盒子，云心在 (40, 24)。呼吸做在这一层（HTML 元素的 transform 动画
@@ -146,6 +178,7 @@
 }
 
 .usage-col {
+  position: relative;
   display: grid;
   justify-items: center;
   /* 格子与周几标签之间：4px 太挤（2026-10-12 用户验收），给一档 space-2 */
@@ -258,4 +291,22 @@
   .usage-say {
     animation: none;
   }
+}
+
+/* 星云钉在这天：描一圈星云色（盖过「今天」的灰圈），顶上一个小点 */
+.usage-cell[data-pinned] {
+  outline: 1.5px solid var(--color-nebula);
+  outline-offset: 2px;
+}
+
+.usage-col:has(.usage-cell[data-pinned])::before {
+  content: "";
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: var(--color-nebula);
 }

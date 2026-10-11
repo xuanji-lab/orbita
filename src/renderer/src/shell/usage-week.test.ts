@@ -7,7 +7,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { petLeft, usageTier, usageWeekCells, weekdayIndex } from "./usage-week.ts";
+import { effectivePin, petAnchor, petLeft, petPrefAfterCellClick, petPrefAfterHide, usageTier, usageWeekCells, weekdayIndex } from "./usage-week.ts";
 
 /** 2026-10-12 是周一：一周七天恰好周一→周日，星期索引最好对 */
 const MONDAY = new Date(2026, 9, 12, 15, 30, 0);
@@ -88,5 +88,37 @@ describe("杂项", () => {
     assert.equal(petLeft(0) + 40, 12);
     assert.equal(petLeft(3) + 40, 108);
     assert.equal(petLeft(6) + 40, 204); // 今天
+  });
+});
+
+describe("星云摆放偏好（按日期钉 / 收起）", () => {
+  const cells = usageWeekCells(new Date(2026, 9, 12, 15), new Map([["2026-10-08", 5]]));
+  // cells[0] = 10-06 … cells[6] = 10-12（今天）
+
+  test("没钉 / 钉的日期滑出窗口 / 钉今天：停在今天", () => {
+    assert.equal(petAnchor(cells, undefined), 6);
+    assert.equal(petAnchor(cells, { pinnedDate: "2026-09-30" }), 6);
+    assert.equal(effectivePin(cells, { pinnedDate: "2026-09-30" }), undefined);
+    assert.equal(effectivePin(cells, { pinnedDate: "2026-10-12" }), undefined);
+  });
+
+  test("钉的日期还在窗口里：停在那格", () => {
+    assert.equal(petAnchor(cells, { pinnedDate: "2026-10-08" }), 2);
+    assert.equal(effectivePin(cells, { pinnedDate: "2026-10-08" }), "2026-10-08");
+  });
+
+  test("点格子：钉 → 再点同格解钉 → 点今天解钉", () => {
+    const pinned = petPrefAfterCellClick(cells, undefined, 2);
+    assert.deepEqual(pinned, { pinnedDate: "2026-10-08" });
+    assert.deepEqual(petPrefAfterCellClick(cells, pinned, 2), {});
+    assert.deepEqual(petPrefAfterCellClick(cells, pinned, 6), {});
+    assert.deepEqual(petPrefAfterCellClick(cells, pinned, 4), { pinnedDate: "2026-10-10" });
+  });
+
+  test("点星云收起（保留钉的日期）；收起后点格子从那格出来", () => {
+    const hidden = petPrefAfterHide({ pinnedDate: "2026-10-08" });
+    assert.deepEqual(hidden, { pinnedDate: "2026-10-08", hidden: true });
+    assert.deepEqual(petPrefAfterCellClick(cells, hidden, 0), { pinnedDate: "2026-10-06" });
+    assert.deepEqual(petPrefAfterCellClick(cells, hidden, 6), {});
   });
 });
