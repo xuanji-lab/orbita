@@ -700,12 +700,8 @@ export function Sidebar(props: {
                       sessions={scoped.filter((m) => m.workspaceId === workspace.id)}
                       session={session}
                       openId={openId}
-<<<<<<< HEAD
                       unread={props.unread}
                       folded={isGroupFolded(groups, foldKeyForWorkspace(workspace.id))}
-=======
-                      folded={groups.folds.has(foldKeyForWorkspace(workspace.id))}
->>>>>>> 76c89b6 (feat(notify): 行首三节竖条、未读落盘与右下角铃铛清单)
                       onToggleFold={() =>
                         setGroups((current) =>
                           toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
