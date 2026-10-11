@@ -208,13 +208,21 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   }
   if (event.type === "fileTurnView") {
     // 轮尾文件账的渲染视图：转成记录形状进槽。盘上那份主进程会铸自己的 id，
-    // 重读会话后自然对齐；活会话期这帧就是卡片的数据源
-    if (event.changes.length === 0) return states;
+    // 重读会话后自然对齐；活会话期这帧就是卡片的数据源。只有旁路网页产物、
+    // 没有 changes 的轮也进来（卡片要出）
+    const webArtifacts = event.webArtifacts ?? [];
+    if (event.changes.length === 0 && webArtifacts.length === 0) return states;
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       fileTurns: [
         ...entry.fileTurns,
-        { role: "file-turn", id: event.turnId, timestamp: Date.now(), changes: event.changes },
+        {
+          role: "file-turn",
+          id: event.turnId,
+          timestamp: Date.now(),
+          changes: event.changes,
+          ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
+        },
       ],
     }));
   }
@@ -339,6 +347,10 @@ export function seedFromDisk(
           added: change.added,
           removed: change.removed,
         })),
+        // 旁路网页产物随种子还原（旧记录没有这个字段 → 缺席，照常显示）
+        ...(record.webArtifacts !== undefined && record.webArtifacts.length > 0
+          ? { webArtifacts: record.webArtifacts }
+          : {}),
       });
     } else if (record.role === "revert") {
       reverts.push(record);
