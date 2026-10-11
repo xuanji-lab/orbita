@@ -8,7 +8,7 @@
  * 「workspace」对它没有指称，宁可报错也不猜成 global）。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import type { McpStatus } from "../../shared/mcp.ts";
+import { isMcpServerName, parseServer, type McpStatus } from "../../shared/mcp.ts";
 import type { SkillScope } from "../../shared/skill.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { McpStore } from "../mcp/store.ts";
@@ -54,8 +54,27 @@ export async function applyMcpWrite(
   event: Extract<AgentEvent, { type: "mcpWriteRequest" }>,
 ): Promise<WriteOutcome> {
   try {
+    // 入口校验（2026-10-11 用户报的「回执 Server added 但配置没了」的另一半裂缝）：
+    // 模型传什么形状都可能，认不出的直接报错，不落盘——写进去却在读回时被
+    // parseMcpConfig 静默丢弃，比拒绝更糟。顺带规范化：type:"http" / 只有 url
+    // 都归一成 transport:"http"，文件里只存自家格式。
+    if (!isMcpServerName(event.name)) {
+      return {
+        ok: false,
+        error: `非法 server 名「${event.name}」：只能字母 / 数字 / 连字符 / 下划线，它要拼进工具名`,
+      };
+    }
+    const server = parseServer(event.server);
+    if (server === null) {
+      return {
+        ok: false,
+        error:
+          `server 配置认不出来：要 stdio {transport:"stdio", command, args?, env?} ` +
+          `或 http {transport:"http", url, headers?}；收到的是 ${JSON.stringify(event.server)}`,
+      };
+    }
     // 已存在同名：拒绝（覆盖等于吃掉用户现有配置）；模型要改就去编辑文件
-    await mcp.add(event.name, event.server);
+    await mcp.add(event.name, server);
     await reload().catch(() => undefined); // 重连失败不算写失败（配置已在）
     return { ok: true, status: statusOf(event.name) };
   } catch (cause) {
