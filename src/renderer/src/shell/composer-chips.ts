@@ -63,6 +63,9 @@ export interface MirrorSegment {
   text: string;
   whiteout: boolean;
   chip: boolean;
+  /** chip 的类别（skill / mcp）——按类别上色用（2026-10 用户裁决：skill 绿、
+   *  MCP 蓝）。粘贴 token 的 chip是中性的，不带这个字段，落回默认配方 */
+  chipKind?: ChipKind;
   /** 粘贴块的展开段：只铺浅底色（方案 C），文字与正文同字体可直接编辑 */
   pasteRun: boolean;
 }
@@ -75,9 +78,9 @@ export interface MirrorSegment {
  */
 export function mirrorSegments(
   segments: readonly WhiteoutSegment[],
-  /** 画成胶囊的区间（skill / mcp 的 token 与收起的粘贴 token——这里只吃区间，
-   *  kind / target 是发送端的事） */
-  chips: readonly { start: number; end: number }[],
+  /** 画成胶囊的区间（skill / mcp 的 token 与收起的粘贴 token）；kind 缺省 =
+   *  中性胶囊（粘贴 token）——上色量入，区间与边界仍是发送端的事 */
+  chips: readonly { start: number; end: number; kind?: ChipKind | null }[],
   pasteRuns: readonly { start: number; end: number }[] = [],
 ): MirrorSegment[] {
   const out: MirrorSegment[] = [];
@@ -85,8 +88,8 @@ export function mirrorSegments(
   for (const segment of segments) {
     let from = 0;
     for (const span of [
-      ...chips.map((chip) => ({ start: chip.start, end: chip.end, chip: true })),
-      ...pasteRuns.map((run) => ({ start: run.start, end: run.end, chip: false })),
+      ...chips.map((chip) => ({ start: chip.start, end: chip.end, chip: true, kind: chip.kind ?? null })),
+      ...pasteRuns.map((run) => ({ start: run.start, end: run.end, chip: false, kind: null })),
     ].sort((a, b) => a.start - b.start)) {
       const relStart = Math.max(span.start - offset, from);
       const relEnd = Math.min(span.end - offset, segment.text.length);
@@ -99,6 +102,7 @@ export function mirrorSegments(
         text: segment.text.slice(relStart, relEnd),
         whiteout: false,
         chip: span.chip,
+        ...(span.chip && span.kind !== null ? { chipKind: span.kind } : {}),
         pasteRun: !span.chip,
       });
       from = relEnd;

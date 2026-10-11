@@ -181,7 +181,7 @@ type AnchorProps = ComponentPropsWithoutRef<"a"> & { node?: unknown };
  * 气泡里的句中 chip：chip-runs.ts 的 rehype 变换把 token 塞进
  * `<span class="bubble-chip bubble-chip-<kind>">token</span>`（skill / mcp 同构），
  * react-markdown 把它交到这里换成图标 + 名字的胶囊。图标随 kind：skill 是
- * book-open，mcp 是 plug（与指令面板同一套词汇）。其余 span（sanitize 白名单
+ * book-open，mcp 是 plug（与右栏 Skills / MCP 面板同一套词汇）。其余 span（sanitize 白名单
  * 幸存的）原样放行。chip 元素里只有一个文本子节点（chip-runs.ts 放进去的），
  * String(children) 拿到的就是 token 原文。
  */

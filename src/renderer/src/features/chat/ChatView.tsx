@@ -82,6 +82,12 @@ import {
 } from "./tool-results";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
+import {
+  insertToken,
+  panelInsertPosition,
+  type PanelInsertRequest,
+  type TokenPickResult,
+} from "../../shell/panel-token.ts";
 import { MathText } from "../../shell/MathText";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
@@ -114,7 +120,7 @@ import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select
 import type { PromptImage } from "@shared/prompt-images";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { isMcpServerOffered, parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
+import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
@@ -404,30 +410,35 @@ function QuoteSelectionLayer(props: {
 }
 
 /**
- * 会话区的 skill / MCP 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug，
- * 指令面板的 skill 清单与 MCP 栏也用同一份。挂载读一次、失败静默——徽标是锦上
- * 添花，不为它报错，也不为它做重读 UI（新建的 skill 下一轮会话自然出现）。
+ * 会话区的 skill 索引：read SKILL.md 的行要标成「在用 skill」就靠它认 slug。
+ * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
+ * （新建的 skill 下一轮会话自然出现）。
  */
 function useSkillIndex(): {
   skills: SkillMeta[];
-  reload: () => void;
-  servers: McpServerInfo[];
-  reloadServers: () => void;
 } {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
-  const [servers, setServers] = useState<McpServerInfo[]>([]);
   const reload = useCallback(() => {
     void api.skill.list().then(setSkills).catch(() => undefined);
-  }, []);
-  const reloadServers = useCallback(() => {
-    // main 的 mcp:list 回 { servers, warnings }（工作区配置分层后）；warnings 由 MCP 管理面显示，面板不管
-    void api.mcp.list().then((result) => setServers(result.servers)).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
   }, [reload]);
-  return { skills, servers, reload, reloadServers };
+  return { skills };
 }
+
+/*
+ * 右栏选取回执与行内选用插入的消费水位（模块级）：只有主槽的 ChatView 拿
+ * tokenPickResult / panelInsert，不会串合；但主槽会在设置页来回切时重挂——
+ * 实例 ref 会归零，旧回执被重放、token 插两遍。水位放模块级，重挂也记得
+ * 消费过哪一条。
+ */
+let consumedPickNonce = 0;
+let consumedPanelInsertNonce = 0;
+
+/** 主槽输入框（选取回执与行内选用的插入目标）：面板 / 抽屉里的 Composer 不算 */
+const mainComposerTextarea = (): HTMLTextAreaElement | null =>
+  document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
 
 function ChatViewBody(props: {
   /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
@@ -511,18 +522,81 @@ function ChatViewBody(props: {
    * End 变成同时滚两个面——面板的回底走浮钮，不抢全局键。
    */
   scrollToEndHotkey?: boolean;
+  /**
+   * 「/ + 空格」打开右栏选取（panel-token.ts）：消息开头孤立的 / 按空格时交出插入
+   * 锚点。**只有主槽的 ChatView 拿到它**（App 在那边接住去开面板）；抽屉 / 面板内
+   * 的 Composer 不参与，那边的 / 空格就是普通文字。
+   */
+  onSlashSpace?: (position: number) => boolean;
+  /**
+   * 右栏选取的一次性回执（nonce 单调递增，同 channelOpenRequest 的先例）：token
+   * 非空 = 插到 position（execCommand 保撤销栈）；null = 取消，只把焦点送回输入框。
+   * 只有主槽的 ChatView 拿到它。
+   */
+  tokenPickResult?: TokenPickResult | null;
+  /**
+   * 右栏行内「选用」按钮的一次性插入请求（nonce 单调递增，同 tokenPickResult 的
+   * 先例）：token 插到输入框**当前光标处**（从未聚焦过则落到草稿末尾），焦点回
+   * 输入框。面板不关——浏览态可以连插几条。只有主槽的 ChatView 拿到它。
+   */
+  panelInsert?: PanelInsertRequest | null;
 }) {
   const t = useT();
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引 + 指令面板的 skill / MCP 清单（同一份数据）。
-  // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
-  const { skills, reload: reloadSkills, servers, reloadServers } = useSkillIndex();
-  const offeredWorkspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
-  const offeredServers = useMemo(
-    () => servers.filter((server) => isMcpServerOffered(server, offeredWorkspace)),
-    [servers, offeredWorkspace],
-  );
+  // read SKILL.md 徽标的识别索引（徽标与工具行共用同一份数据）
+  const { skills } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
+
+  // ── 右栏选取的回执：插入 token、焦点回输入框（panel-token.ts）────────
+  useEffect(() => {
+    const result = props.tokenPickResult;
+    if (result == null || result.nonce <= consumedPickNonce) return;
+    consumedPickNonce = result.nonce;
+    if (result.token === null) {
+      requestAnimationFrame(() => mainComposerTextarea()?.focus());
+      return;
+    }
+    const token = result.token;
+    const anchor = result.position;
+    requestAnimationFrame(() => {
+      const el = mainComposerTextarea();
+      const position = Math.max(0, Math.min(anchor, session.draft.length));
+      const next = insertToken(session.draft, position, token);
+      // execCommand("insertText") 保撤销栈：input 事件会把最终值送回 onChange →
+      // draft 自动同步；输入框不在（设置页盖着）或被拒（只读）就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tokenPickResult]);
+
+  // ── 行内「选用」按钮的插入：token 落到输入框当前光标处（panel-token.ts）──
+  // 光标从 DOM 读（失焦后 selectionStart 仍停在最后一次的位置）；「从未聚焦过」
+  // 的判定在 panelInsertPosition（纯函数，有测试）
+  useEffect(() => {
+    const request = props.panelInsert;
+    if (request == null || request.nonce <= consumedPanelInsertNonce) return;
+    consumedPanelInsertNonce = request.nonce;
+    requestAnimationFrame(() => {
+      const el = mainComposerTextarea();
+      const position = panelInsertPosition(el === null ? 0 : el.selectionStart, session.draft.length);
+      const next = insertToken(session.draft, position, request.token);
+      // 同选取回执：execCommand 保撤销栈，被拒 / 不在就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.panelInsert]);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -777,24 +851,6 @@ function ChatViewBody(props: {
         session.send();
       }}
       onStop={session.stop}
-      skills={skills}
-      workspaceId={session.workspaceId}
-      onReloadSkills={reloadSkills}
-      // 只给当前工作区能用的 server（isMcpServerOffered：与发送端判 /mcp: 可用同一依据）
-      servers={offeredServers}
-      onReloadServers={reloadServers}
-      onCommand={(command) => {
-        if (command === "compact") {
-          // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
-          session.sendText("/compact");
-        } else {
-          // /new：清掉打了一半的草稿与挂着的附件再开新会话（先清再切——
-          // newTask 换槽后 draftKey 变了，附件就清不到了）
-          session.clearComposerExtras();
-          session.setDraft("");
-          session.newTask();
-        }
-      }}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
       // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
@@ -830,6 +886,7 @@ function ChatViewBody(props: {
       onExpandPaste={session.expandPaste}
       onCollapsePaste={session.collapsePaste}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
+      onSlashSpace={props.onSlashSpace}
     />
   );
 
