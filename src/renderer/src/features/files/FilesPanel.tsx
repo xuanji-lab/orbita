@@ -35,6 +35,7 @@ import {
   openTab,
   panelLayoutAttrs,
   shouldCollapseOnNarrow,
+  tabScrollTarget,
   toggleGroupCollapsed,
   TREE_BREAKPOINT,
   type FileTab,
@@ -90,6 +91,10 @@ export function FilesPanel(props: {
   const [sessionSort, setSessionSort] = useState<"name" | "type">("name");
   const activeTab =
     activePath === null ? null : (tabs.find((tab) => tab.path === activePath) ?? null);
+  // 标签栏 / 激活标签的把手：切换或新开标签时把当前标签滚进可视区（见下面的
+  // effect）——标签多了以后新开的被截在右沿、连 ✕ 都看不到，是验收实测问题
+  const tabsBarRef = useRef<HTMLDivElement | null>(null);
+  const activeTabRef = useRef<HTMLDivElement | null>(null);
   /** 右键菜单：打开位置 + 被右键的根（目前只有 Session 根接了右键，
    * 只有「添加文件引用」一项——把工作台目录整个递给模型）。条目行不接右键：
    * 行尾 hover 按钮已覆盖引用，打开/复制路径类动作频率不足以撑一张菜单 */
@@ -216,6 +221,20 @@ export function FilesPanel(props: {
     setActivePath(ref);
     if (narrowRef.current) setTreeOn(false);
   };
+
+  // 切换或新开标签：把激活标签滚进标签栏可视区（纯函数 tabScrollTarget 裁决
+  // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，
+  // 重跑一次也只是无事发生
+  useEffect(() => {
+    const bar = tabsBarRef.current;
+    const tab = activeTabRef.current;
+    if (bar === null || tab === null) return;
+    const target = tabScrollTarget(
+      { scrollLeft: bar.scrollLeft, clientWidth: bar.clientWidth },
+      { offsetLeft: tab.offsetLeft, offsetWidth: tab.offsetWidth },
+    );
+    if (target !== null) bar.scrollTo({ left: target });
+  }, [activePath, tabs.length]);
 
   /**
    * 挂目录。成功后 reloadWorkspaces——workspaces 引用一变，useFileTree 的 roots
@@ -424,13 +443,14 @@ export function FilesPanel(props: {
           {tabs.length > 0 && (
             <>
               <span className="files-head-sep" aria-hidden="true" />
-              <div className="files-head-tabs" role="tablist" aria-label={t.files.tabsAria}>
+              <div className="files-head-tabs" role="tablist" aria-label={t.files.tabsAria} ref={tabsBarRef}>
                 {tabs.map((tab) => {
                   const name = tab.name ?? fileTabName(tab.path);
                   const active = tab.path === activePath;
                   return (
                     <div
                       key={tab.path}
+                      ref={active ? activeTabRef : undefined}
                       role="tab"
                       tabIndex={0}
                       aria-selected={active}

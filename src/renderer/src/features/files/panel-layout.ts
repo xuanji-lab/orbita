@@ -119,6 +119,23 @@ export function fileTabName(path: string): string {
 }
 
 /**
+ * 标签栏把激活标签滚进可视区要落到哪个 scrollLeft；null = 已完整可见，不动。
+ * 标签左出界时贴左、右出界时贴右；标签比栏还宽时仍贴右——保 ✕ 可见（名字有
+ * 省略号兑底，验证问题正是「新开的标签被截在右沿、连 ✕ 都看不到」）。
+ * 纯函数，FilesPanel 量好 offsetLeft / offsetWidth / scrollLeft / clientWidth 再喂。
+ */
+export function tabScrollTarget(
+  bar: { scrollLeft: number; clientWidth: number },
+  tab: { offsetLeft: number; offsetWidth: number },
+): number | null {
+  const left = tab.offsetLeft;
+  const right = left + tab.offsetWidth;
+  if (left < bar.scrollLeft) return left;
+  if (right > bar.scrollLeft + bar.clientWidth) return right - bar.clientWidth;
+  return null;
+}
+
+/**
  * 预览面包屑的分段：按路径自己的形切（Windows 反斜杠 / POSIX 正斜杠，与
  * shared/path.ts 同一条规则），滤掉空段。末段（文件名）由渲染方加亮。
  */

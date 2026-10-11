@@ -7,6 +7,7 @@ import {
   openTab,
   panelLayoutAttrs,
   shouldCollapseOnNarrow,
+  tabScrollTarget,
   toggleGroupCollapsed,
   TREE_BREAKPOINT,
   type FileTab,
@@ -155,5 +156,26 @@ describe("toggleGroupCollapsed", () => {
     deepStrictEqual([...folded], ["/ws"]);
     deepStrictEqual([...toggleGroupCollapsed(folded, "/ws")], []);
     deepStrictEqual([...collapsed], []);
+  });
+});
+
+describe("tabScrollTarget", () => {
+  it("已完整可见：不动", () => {
+    strictEqual(tabScrollTarget({ scrollLeft: 0, clientWidth: 300 }, { offsetLeft: 10, offsetWidth: 100 }), null);
+    strictEqual(tabScrollTarget({ scrollLeft: 50, clientWidth: 300 }, { offsetLeft: 60, offsetWidth: 100 }), null);
+  });
+
+  it("右出界：贴右（末段与 ✕ 完整落进可视区）", () => {
+    // 栏 [0,300)，标签 [280,420)：目标让右缘 420 落在 300 → scrollLeft=120
+    strictEqual(tabScrollTarget({ scrollLeft: 0, clientWidth: 300 }, { offsetLeft: 280, offsetWidth: 140 }), 120);
+  });
+
+  it("左出界：贴左", () => {
+    // 栏滚到 [100,400)，标签 [20,120)：目标回到 20
+    strictEqual(tabScrollTarget({ scrollLeft: 100, clientWidth: 300 }, { offsetLeft: 20, offsetWidth: 100 }), 20);
+  });
+
+  it("标签比栏还宽：贴右（保 ✕ 可见，名字有省略号兑底）", () => {
+    strictEqual(tabScrollTarget({ scrollLeft: 0, clientWidth: 200 }, { offsetLeft: 50, offsetWidth: 300 }), 150);
   });
 });
