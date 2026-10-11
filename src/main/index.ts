@@ -41,7 +41,7 @@ import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
-import { isWebLink } from "./browser/address.ts";
+import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
@@ -49,6 +49,7 @@ import { applyTerminalRequest } from "./terminal/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
 import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
+import { isOwnRendererPage, type RendererOriginDeps } from "./window/renderer-origin.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
@@ -177,6 +178,19 @@ function createMainWindow(
   });
 
   /*
+   * 页内发起的导航（拖链接进窗、页面动 location）不许顶掉我们自己的页面：preload 跟着
+   * WebContents 走，换成任何别的页面都等于把整面 IPC 交给它。renderer 侧 main.tsx 只拦
+   * 带文件的拖拽，链接拖拽（text/uri-list）没人拦，所以这道闸必须在主进程。我们自己的
+   * 页面（dev 同源 / 包内 renderer）放行——reload 与 HMR 全量刷新走的都是这条；其余一律
+   * preventDefault，网页链接转交 openLink，非网页协议由 openLink 的白名单处置。
+   */
+  window.webContents.on("will-navigate", (event, url) => {
+    if (isOwnRendererPage(url, ownRendererOrigin())) return;
+    event.preventDefault();
+    openLink(url);
+  });
+
+  /*
    * 关窗 = 收进托盘（Windows / Linux）。**托盘先建成功，才接这道闸门**：藏了却找不回来
    * 比直接退出更糟，所以图标缺失时这里什么都不做，关窗保持原语义。
    * macOS 不接——那边关窗本来就留进程，点 Dock 回来，与这套闸门是两种惯例。
@@ -224,8 +238,7 @@ function rendererPreferences(theme: ThemePreference, language: Language | undefi
 function loadRendererPage(window: BrowserWindow, page: "index.html" | "browser-toolbar.html"): void {
   // 打包产物一律读包内 renderer，不认这个环境变量：在 dev 版 orbita 的 agent 终端里
   // 直接启动打包产物时，这个变量会从 electron-vite dev 一路继承下来，不拦就会连到 dev server
-  const devServerUrl = app.isPackaged ? undefined : process.env["ELECTRON_RENDERER_URL"];
-  if (devServerUrl) {
+  const devServerUrl = app.isPackaged ? undefined : process.env["ELECTRON_RENDERER_URL"];  if (devServerUrl) {
     const pageUrl = page === "index.html" ? devServerUrl : new URL(page, `${devServerUrl.replace(/\/?$/, "/")}`).href;
     // 两类 dev 首载故障都会把窗口留在底色上（真实事故 2026-09-10：白屏只能手动 Ctrl+R）：
     // ① server 未就绪 loadURL 拒绝——退避重试；ready-to-show 没到窗口不可见，重试无感。
@@ -249,6 +262,17 @@ function loadRendererPage(window: BrowserWindow, page: "index.html" | "browser-t
       }, 1500);
     });
   } else void window.loadFile(join(__dirname, "../renderer", page));
+}
+
+/**
+ * will-navigate 闸门的真实环境值：判定逻辑与注入参数见 window/renderer-origin.ts。
+ * 与 loadRendererPage 同一套取值口径（isPackaged 先于读环境变量），两处不会各说各话。
+ */
+function ownRendererOrigin(): RendererOriginDeps {
+  return {
+    devServerUrl: app.isPackaged ? undefined : process.env["ELECTRON_RENDERER_URL"],
+    rendererDir: join(__dirname, "../renderer"),
+  };
 }
 
 void app.whenReady().then(async () => {
@@ -584,13 +608,17 @@ void app.whenReady().then(async () => {
   /**
    * 界面里点到的外链（聊天里的链接、设置页的文档链接……）：网页默认进内置浏览器「你的」tab
    * （2026-09-29 裁决「全都默认用内置，想用系统默认有个 button 足矣」——那个按钮在沙盒工具条上，
-   * browser:open-external）。mailto 这类别的协议内置浏览器接不了，照旧交给系统。
+   * browser:open-external）。mailto 这类别的协议内置浏览器接不了，照旧交给系统；**其余非网页
+   * 协议一律不交**——`shell.openExternal` 对未知协议各平台行为不一，是拖链接 / 钓鱼链接的
+   * 落地点，交接白名单见 isSystemHandoffLink。
    */
   const openLink = (url: string): void => {
     if (isWebLink(url)) {
       void browserSandbox.open(url).catch((cause: unknown) => console.error("[browser] 链接打开失败", url, cause));
-    } else {
+    } else if (isSystemHandoffLink(url)) {
       void shell.openExternal(url);
+    } else {
+      console.warn(`[links] 未放行的协议，不交给系统：${url}`);
     }
   };
 
