@@ -636,6 +636,26 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
       { "paper-themes": true, "session-lifecycle": false, "composer-blackhole": false },
     );
   });
+
+  it("黑洞与俄罗斯方块互斥：盘上手改出两个都开时，以黑洞为准、tetris 当作没开", () => {
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "composer-blackhole": true, "composer-tetris": true } })
+        .experimentalFeatures,
+      { "composer-blackhole": true },
+    );
+  });
+
+  it("互斥只砸「两个都开」：黑洞关着时 tetris 照常能开（也允许反过来单独开黑洞）", () => {
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "composer-blackhole": false, "composer-tetris": true } })
+        .experimentalFeatures,
+      { "composer-blackhole": false, "composer-tetris": true },
+    );
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "composer-tetris": true } }).experimentalFeatures,
+      { "composer-tetris": true },
+    );
+  });
 });
 
 describe("selectableThemes（主题选择卡的可选档位）", () => {

@@ -117,7 +117,14 @@ export interface ModelPair {
  * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
  * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
  */
-export const EXPERIMENTAL_FEATURE_IDS = ["paper-themes", "session-lifecycle", "composer-blackhole", "pdf-citations"] as const;
+   *   （浅 / 黛 / 玄）生效，判定在渲染层 blackhole-layout.ts 的 blackholeActive；
+   * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
+   *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
+   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
+   * - `composer-tetris`：俄罗斯方块——同一只盒子的另一种形态：材料不演黑洞特效，
+   *   从盒子上缘随机落下（确定性种子）。**与 composer-blackhole 互斥**：设置页打开
+   *   一个会连带关掉另一个（experimental-features.ts 的 exclusiveWith）；盘上手改出
+   *   两个都开时 parseSettings 以黑洞为准、丢掉 tetris（见 parseExperimentalFeatures）。
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
 export interface AppSettings {
@@ -230,10 +237,7 @@ export interface AppSettings {
    * - `session-lifecycle`：星标 / 完成标记 / 收尾扫描与遗留事项的全部入口；
    * - `composer-blackhole`：输入框黑洞——开启后截图 / 文件 / 目录不再叠成两行，
    *   而是被吸进输入框中心、从舷窗掉进上方看不见的盒子堆起来；只在基础三套主题
-   *   （浅 / 黛 / 玄）生效，判定在渲染层 blackhole-layout.ts 的 blackholeActive；
-   * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
-   *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
-   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
+export const EXPERIMENTAL_FEATURE_IDS = ["paper-themes", "session-lifecycle", "composer-blackhole", "pdf-citations", "composer-tetris"] as const;
    *
    * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
    * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开；
@@ -518,6 +522,12 @@ function parseExperimentalFeatures(record: {
   // 旧黑洞开关原样并入：用户逃过的是「这一项」，不是「总开关 + 这一项」
   if (typeof record.composerBlackhole === "boolean") {
     out["composer-blackhole"] ??= record.composerBlackhole;
+  }
+  // 黑洞与俄罗斯方块互斥（两种材料盒形态，同一时刻只能有一种）。设置页的开关已经
+  // 连带关掉对方，这里兜住手改的盘：两个都开时以黑洞为准（先落盘的既有功能优先），
+  // tetris 当作没开——下一次任何设置写入都会把这个裁决写回盘上
+  if (out["composer-blackhole"] === true && out["composer-tetris"] === true) {
+    delete out["composer-tetris"];
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }
