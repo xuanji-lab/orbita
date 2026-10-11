@@ -13,6 +13,7 @@ import {
   dirsOf,
   expandHome,
   mergeCustomRoots,
+  normalizeInputDir,
 } from "./import-custom-roots.ts";
 import { DATA_ROOT_SPECS } from "./import-locate.ts";
 import { IMPORT_CUSTOM_ROOT_INVALID_CODE } from "../../shared/import.ts";
@@ -50,6 +51,24 @@ describe("expandHome", () => {
     assert.equal(expandHome("~/.proma", "/home/u"), join("/home/u", ".proma"));
     assert.equal(expandHome("~foo/bar", "/home/u"), "~foo/bar");
     assert.equal(expandHome("/abs/path", "/home/u"), "/abs/path");
+  });
+
+  test("Windows 的 ~\\ 写法同 ~/", () => {
+    assert.equal(expandHome("~\\.proma-old", "/home/u"), join("/home/u", ".proma-old"));
+  });
+});
+
+describe("normalizeInputDir", () => {
+  test("去首尾空白与两头成对的引号（资源管理器「复制文件地址」带双引号），再展开 ~", () => {
+    assert.equal(normalizeInputDir('  "C:\\Users\\u\\.proma-old"  ', "/home/u"), "C:\\Users\\u\\.proma-old");
+    assert.equal(normalizeInputDir("'/data/proma backup'", "/home/u"), "/data/proma backup");
+    assert.equal(normalizeInputDir('"~/.proma-old"', "/home/u"), join("/home/u", ".proma-old"));
+  });
+
+  test("不成对或只有一个引号时原样（不猜）", () => {
+    assert.equal(normalizeInputDir('"/a/b', "/home/u"), '"/a/b');
+    assert.equal(normalizeInputDir(`"/a/b'`, "/home/u"), `"/a/b'`);
+    assert.equal(normalizeInputDir('"', "/home/u"), '"');
   });
 });
 

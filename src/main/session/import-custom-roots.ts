@@ -38,8 +38,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function expandHome(rawDir: string, home: string): string {
   if (rawDir === "~") return home;
-  if (rawDir.startsWith("~/")) return join(home, rawDir.slice(2));
+  // Windows 上顺手写的 `~\` 与 `~/` 同义
+  if (rawDir.startsWith("~/") || rawDir.startsWith("~\\")) return join(home, rawDir.slice(2));
   return rawDir;
+}
+
+/**
+ * 粘贴进来的路径先整形：去首尾空白、去掉包在两头的一对引号（Windows 资源管理器「复制文件地址 /
+ * Copy as path」带双引号，macOS 终端拖入有时带单引号），再展开 `~`。不去引号的话，粘进来的是
+ * `"C:\..."` 这个字面量，当场报「目录不存在」。纯函数。
+ */
+export function normalizeInputDir(rawDir: string, home: string): string {
+  let dir = rawDir.trim();
+  const quoted = dir.length >= 2 && (dir[0] === '"' || dir[0] === "'") && dir.at(-1) === dir[0];
+  if (quoted) dir = dir.slice(1, -1).trim();
+  return expandHome(dir, home);
 }
 
 export class CustomRootsStore {
@@ -76,7 +89,7 @@ export class CustomRootsStore {
    */
   async add(source: CustomRootSource, rawDir: string): Promise<ImportCustomRoot[]> {
     const spec = DATA_ROOT_SPECS[source];
-    const dir = resolve(expandHome(rawDir, homedir()));
+    const dir = resolve(normalizeInputDir(rawDir, homedir()));
     if (!(await hasDirectory(dir))) {
       throw new Error(IMPORT_CUSTOM_ROOT_INVALID_CODE + "not-found");
     }
@@ -92,7 +105,7 @@ export class CustomRootsStore {
 
   /** 移除一条（按 resolve 后的路径认；不在清单里是幂等空操作）。目录本身永不被碰。 */
   async remove(source: CustomRootSource, rawDir: string): Promise<ImportCustomRoot[]> {
-    const dir = resolve(expandHome(rawDir, homedir()));
+    const dir = resolve(normalizeInputDir(rawDir, homedir()));
     const next = (await this.read()).filter(
       (root) => !(root.source === source && resolve(root.dir) === dir),
     );
