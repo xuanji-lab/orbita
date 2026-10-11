@@ -1048,6 +1048,12 @@ body {
   background: transparent;
 }
 
+/* 行内竖条：与标题行同高、跟在行内左侧（不用 .option-row-bar 的绝对定位——那要求父级
+   relative，收件箱行是两行高，贴行首一行对齐更清楚） */
+.inbox-row-bar {
+  margin-top: 2px;
+}
+
 .inbox-row-item {
   flex: 1;
   min-width: 0;

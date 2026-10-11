@@ -261,7 +261,7 @@ function SubSessionRow(props: {
     <div className={`inbox-row${props.asking ? " asking" : ""}`}>
       <button type="button" className="inbox-row-main" onClick={props.onClick}>
         {bar !== undefined && (
-          <span className="status-bar option-row-bar" data-fill={bar} title={t.subSessions.rowStatus[status]}>
+          <span className="status-bar inbox-row-bar" data-fill={bar} title={t.subSessions.rowStatus[status]}>
             <i />
             <i />
             <i />
