@@ -52,6 +52,20 @@ export function TerminalPanel(props: {
     setActiveId((active) => (active === terminalId ? null : active));
   }, []);
 
+  /**
+   * 视图报 create 回来：转圈 tab → 真 tab（标题 / shell / 可关）。之前没有这一步，
+   * 「+」新开的 tab 永远停在转圈、也没有 ×，只有整页刷新后靠 list 收养才变回来。
+   * 已在 tabs 里（收养来的 tab 重挂载也会走 create）只更新不重复。
+   */
+  const promoteTerminal = useCallback((info: TerminalInfo): void => {
+    setPendingIds((current) => current.filter((id) => id !== info.terminalId));
+    setTabs((current) =>
+      current.some((tab) => tab.terminalId === info.terminalId)
+        ? current
+        : [...current, info],
+    );
+  }, []);
+
   // 面板挂载：收养现存终端（renderer 整页刷新 / 收起再展开都在这条路上）；
   // 一个都没有（首次打开 / 全关过）就自动开一个
   useEffect(() => {
@@ -128,6 +142,7 @@ export function TerminalPanel(props: {
                   cwd={props.cwd}
                   exited={tabs.find((tab) => tab.terminalId === id)?.exited ?? null}
                   active={id === active}
+                  onCreated={promoteTerminal}
                 />
               ))}
             </div>
