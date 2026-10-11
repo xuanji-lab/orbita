@@ -1452,6 +1452,11 @@ export const en = {
     tooLarge: (size: string, limit: string) => `Too large to preview (${size} — the limit is ${limit})`,
     emptyFile: "Empty file",
     truncated: (shown: string, total: string) => `Showing the first ${shown} of ${total}`,
+    pdfFailed: "Couldn't open this PDF:",
+    pdfPassword: "This PDF is password-protected and can't be previewed.",
+    citeNotFound: (page: number) =>
+      `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
+    citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
   },
 };
 

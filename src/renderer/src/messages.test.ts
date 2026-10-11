@@ -32,6 +32,8 @@ const ALLOWED_LATIN = new Set([
   "GIF",
   "WebP",
   "MB",
+  // 文档格式名（PDF 预览与引用）
+  "PDF",
   // 格式记号（环境变量 / 请求头一行的写法，原样照填）
   "KEY",
   "VALUE",

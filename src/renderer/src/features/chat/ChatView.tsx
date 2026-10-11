@@ -106,6 +106,8 @@ import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import { DiffBody } from "../../shell/DiffView";
 import { RevertPreviewBar } from "./RevertPreviewBar";
+import { collectCitations } from "./citation-markers.ts";
+import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
@@ -210,6 +212,8 @@ export function ChatView(props: ChatViewProps) {
     },
     [session.transcript],
   );
+  // PDF 引用表（实验功能「PDF 引用」）：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
+  const citations = useMemo(() => collectCitations(session.transcript), [session.transcript]);
   return (
     <div
       ref={paneRef}
@@ -233,7 +237,9 @@ export function ChatView(props: ChatViewProps) {
       }}
     >
       <QuoteJumpContext.Provider value={jumpToQuote}>
-        <ChatViewBody {...props} dropActive={dropActive} />
+        <CitationTableContext.Provider value={citations}>
+          <ChatViewBody {...props} dropActive={dropActive} />
+        </CitationTableContext.Provider>
       </QuoteJumpContext.Provider>
       {accepts && (
         <QuoteSelectionLayer

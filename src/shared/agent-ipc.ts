@@ -162,6 +162,11 @@ export const ipcChannels = {
    * renderer 在 sandbox 里没有文件系统访问权，也不该自己决定读多少。
    */
   fsRead: "fs:read",
+  /**
+   * 读一个 PDF 的字节给预览面板渲染（同 root/dir 白名单，回 `PdfFile`，files.ts）。
+   * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
+   */
+  fsReadPdf: "fs:read-pdf",
   /** 用系统默认应用打开一个文件（同 root/dir 白名单）；预览不了或想编辑时的出口 */
   fsOpen: "fs:open",
   /**
@@ -574,6 +579,12 @@ export type AgentCommand =
        * 单语主题说了算，双语主题听语言设置），runtime 只收数据。缺席 = "en"。
        */
       attributionLanguage?: Language;
+      /**
+       * 实验功能「PDF 引用」的开关（settings.experimentalFeatures["pdf-citations"]）。
+       * **主进程从设置装配**（同 gitAttribution）。开着时 runtime 才注册 cite_pdf
+       * 并讲它的用法；缺席 = 关
+       */
+      pdfCitations?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -655,6 +666,8 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
+      /** 实验功能「PDF 引用」的开关，语义同 submit */
+      pdfCitations?: boolean;
     }
   | {
       /**
@@ -714,6 +727,8 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
+      /** 实验功能「PDF 引用」的开关，语义同 submit */
+      pdfCitations?: boolean;
     }
   | { type: "listBuiltins" }
   /**

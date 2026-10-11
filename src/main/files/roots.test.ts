@@ -1,4 +1,4 @@
-/** resolveFileRoots 的账：顺序 session → workspace → attached，label 与 exists 的来源。 */
+/** resolveFileRoots 的账：顺序 session → workspace → attached（→ 不进树的 attachments），label 与 exists 的来源。 */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
@@ -46,10 +46,10 @@ afterEach(async () => {
 });
 
 describe("resolveFileRoots", () => {
-  test("Home 会话：两个根 session + workspace，session 工作台未建 exists=false", async () => {
+  test("Home 会话：session + workspace（+ attachments），session 工作台未建 exists=false", async () => {
     await workspaces.ensureHome(); // Home 目录建出来，workspace 根该是 true
     const roots = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: null });
-    assert.equal(roots.length, 2);
+    assert.equal(roots.length, 3);
     const [sessionRoot, workspaceRoot] = roots;
     assert.equal(sessionRoot?.kind, "session");
     assert.equal(sessionRoot?.label, "Untitled task"); // meta 还没落 → 退 fallback
@@ -90,17 +90,17 @@ describe("resolveFileRoots", () => {
     const roots = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: ws.id });
     assert.deepEqual(
       roots.map((root) => root.kind),
-      ["session", "workspace", "attached", "attached"],
+      ["session", "workspace", "attached", "attached", "attachments"],
     );
     assert.equal(roots[1]?.label, "我的仓库");
     assert.equal(roots[1]?.path, join(dir, "Orbita", "my-repo"));
     assert.deepEqual(
-      roots.slice(2).map((root) => root.label),
+      roots.slice(2, 4).map((root) => root.label),
       ["vault", "refs"], // attached label = 路径末段，顺序是挂上的顺序
     );
     assert.deepEqual(
       roots.map((root) => root.exists),
-      [false, true, true, true], // session 工作台没建是 false，其余都是真目录
+      [false, true, true, true, false], // session 工作台与附件目录没建是 false，其余都是真目录
     );
   });
 
@@ -112,11 +112,11 @@ describe("resolveFileRoots", () => {
     const roots = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: null });
     assert.deepEqual(
       roots.map((root) => root.kind),
-      ["session", "workspace", "attached"],
+      ["session", "workspace", "attached", "attachments"],
     );
     assert.equal(roots[1]?.label, "Home");
     assert.deepEqual(
-      roots.slice(2).map((root) => root.path),
+      roots.slice(2, 3).map((root) => root.path),
       [await realpath(attached)], // 存的是 realpath 后的真身
     );
   });
@@ -139,7 +139,17 @@ describe("resolveFileRoots", () => {
     });
     assert.deepEqual(
       roots.map((root) => root.label),
-      ["Untitled task", "Home"],
+      ["Untitled task", "Home", `${S1}.attachments`],
     );
+  });
+
+  test("attachments 根：指向本会话的附件副本目录，附图 / 附件落盘后 exists=true", async () => {
+    const before = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: null });
+    const root = before.find((entry) => entry.kind === "attachments");
+    assert.equal(root?.path, join(dir, "sessions", `${S1}.attachments`));
+    assert.equal(root?.exists, false);
+    await mkdir(join(dir, "sessions", `${S1}.attachments`), { recursive: true });
+    const after = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: null });
+    assert.equal(after.find((entry) => entry.kind === "attachments")?.exists, true);
   });
 });

@@ -206,4 +206,31 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
       },
     ],
   },
+  {
+    id: "pdf-citations",
+    icon: "quote",
+    name: { zh: "PDF 引用", en: "PDF citations" },
+    summary: {
+      zh: "拖个 PDF 进来让 agent 讲解：引用原文前先核验，点正文里的编号就在文件面板里跳到那一段并高亮。",
+      en: "Drop a PDF in and ask the agent about it: quotes are verified before they appear, and clicking a citation number jumps to the passage in the Files panel and highlights it.",
+    },
+    changelog: [
+      {
+        pr: 191,
+        date: "2026-10-11",
+        note: {
+          zh: "首版：引用前先核验原文，核验过的才发编号；点编号跳到原文并荧光笔高亮。",
+          en: "First version: quotes are verified against the PDF before they appear; clicking a number jumps to the source and highlights it.",
+        },
+      },
+      {
+        pr: 191,
+        date: "2026-10-12",
+        note: {
+          zh: "改为单独开关：这一项自己有开 / 关；关着时编号退回纯文本、PDF 不进预览。",
+          en: "Given its own switch: on and off by itself; when off, citation numbers fall back to plain text and PDFs stay out of the preview.",
+        },
+      },
+    ],
+  },
 ];
