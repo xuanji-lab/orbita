@@ -1,6 +1,10 @@
-import { useState } from "react";
+import { createContext, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { useT } from "../locale.ts";
+import { useHoverTooltip } from "./useHoverTooltip.ts";
+import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
+import { DirMarkName } from "./DirMarkName.tsx";
 
 /**
  * 文件引用与粘贴文本的 chip——输入框附件区与聊天流回显共用这两个形态：
@@ -8,7 +12,15 @@ import { useT } from "../locale.ts";
  * 同圆角、同底色），只是文件认不出内容，用图标与名字说话。
  */
 
-/** 一个文件引用：图标区分文件 / 目录，名字省略号，title 挂完整路径 */
+/** 路径 tooltip 的延迟，与 IconButton / 输入框胶囊同值：太慢感知等于没有 */
+const PATH_TOOLTIP_DELAY_MS = 200;
+
+/**
+ * 一个文件引用：图标 + 名字（目录带尾 `/`）+（输入框里的）移除键。
+ * 图标与颜色和文件面板、输入框胶囊**同一份** fileIcon / fileIconTone（2026-10
+ * 验收 J：三处长同一种形状，扫读不换脑筋）；目录沿用填实 folder。完整路径走
+ * useHoverTooltip 快速 tooltip（与输入框胶囊同 200ms），不再挂原生 title。
+ */
 export function FileRefChip(props: {
   name: string;
   path: string;
@@ -16,75 +28,105 @@ export function FileRefChip(props: {
   onRemove?: () => void;
 }) {
   const t = useT();
+  const isDir = props.kind === "dir";
+  const tone = isDir ? null : fileIconTone(props.name, "file");
+  const tooltip = useHoverTooltip<HTMLDivElement>(PATH_TOOLTIP_DELAY_MS, true);
   return (
-    <div
-      title={props.path}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        height: 28,
-        minWidth: 0,
-        maxWidth: 280,
-        padding: "0 6px 0 8px",
-        border: "1px solid var(--color-border-subtle)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--color-bg-muted)",
-      }}
-    >
-      <Icon
-        name={props.kind === "dir" ? "folder" : "file"}
-        size={13}
-        strokeWidth={1.8}
-        style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-      />
-      <span
+    <>
+      <div
+        className="file-ref-chip"
+        ref={tooltip.anchorRef}
+        onMouseEnter={tooltip.handlers.onMouseEnter}
+        onMouseLeave={tooltip.handlers.onMouseLeave}
         style={{
-          flex: "0 1 auto",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          height: 28,
           minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          fontSize: "var(--font-size-caption)",
-          color: "var(--color-text-primary)",
+          maxWidth: 280,
+          padding: "0 6px 0 8px",
+          border: "1px solid var(--color-border-subtle)",
+          borderRadius: "var(--radius-md)",
+          background: "var(--color-bg-muted)",
         }}
       >
-        {props.name}
-      </span>
-      {props.onRemove !== undefined && (
-        <button
-          type="button"
-          aria-label={t.composer.removeFile}
-          title={t.composer.removeFile}
-          onClick={props.onRemove}
+        <Icon
+          name={isDir ? "folder" : fileIcon(props.name, "file")}
+          size={13}
+          strokeWidth={1.8}
+          fill={isDir}
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 18,
-            height: 18,
+            color: isDir
+              ? "var(--color-text-secondary)"
+              : tone === null
+                ? "var(--color-text-tertiary)"
+                : FILETYPE_TONE_COLOR[tone],
             flex: "0 0 auto",
-            padding: 0,
-            border: "1px solid var(--color-border-subtle)",
-            borderRadius: "var(--radius-pill)",
-            background: "var(--color-bg-panel)",
-            color: "var(--color-text-secondary)",
-            cursor: "pointer",
           }}
-        >
-          <Icon name="x" size={11} strokeWidth={2} />
-        </button>
-      )}
-    </div>
+        />
+        <DirMarkName
+          name={props.name}
+          dir={isDir}
+          wrapStyle={{ flex: "0 1 auto" }}
+          nameStyle={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-primary)" }}
+        />
+        {props.onRemove !== undefined && (
+          <button
+            type="button"
+            aria-label={t.composer.removeFile}
+            title={t.composer.removeFile}
+            onClick={props.onRemove}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 18,
+              height: 18,
+              flex: "0 0 auto",
+              padding: 0,
+              border: "1px solid var(--color-border-subtle)",
+              borderRadius: "var(--radius-pill)",
+              background: "var(--color-bg-panel)",
+              color: "var(--color-text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <Icon name="x" size={11} strokeWidth={2} />
+          </button>
+        )}
+      </div>
+      {tooltip.open &&
+        createPortal(
+          <div
+            ref={tooltip.tooltipRef}
+            role="tooltip"
+            className="material-path-tip"
+            data-placed={tooltip.placement !== null}
+            style={{ top: tooltip.placement?.top ?? 0, left: tooltip.placement?.left ?? 0 }}
+          >
+            <div>{props.path}</div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
 /**
- * 一段粘贴文本：折叠成一行（「粘贴的文本 · N 行」），点开展开全文（限高滚动），
- * 再点收起——**全文永不截断**，折叠只是显示形态。展开态收在 chip 内部：
- * 粘贴的是要紧内容，展开时不该把它推到视线之外。
+ * 粘贴文本是否折叠成一行（设置 › collapsePastedText，缺席 = 折叠）。
+ * 消费方是输入框的粘贴拦截（Composer）：关掉后大段粘贴不成块，直接进输入框。
+ * App 根部提供一次，免得逐级透传。
  */
-export function PastedTextChip(props: { text: string; lines: number; onRemove?: () => void }) {
+export const PastedTextCollapseContext = createContext(true);
+
+/**
+ * 转录气泡里的一段已发送粘贴文本：折叠成一行（「粘贴的文本 · N 行」），点开就地
+ * 展开全文（限高滚动），再点收起。**全文永不截断**，折叠只是显示形态。
+ * 输入框那一侧已改道句中胶囊（方案 C，paste-blocks.ts / Composer 的镜像层），
+ * 这里只剩转录回显一个消费者。
+ */
+export function PastedTextChip(props: { text: string; lines: number }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   return (
@@ -137,31 +179,7 @@ export function PastedTextChip(props: { text: string; lines: number; onRemove?: 
             {t.composer.pastedTitle(props.lines)}
           </span>
         </button>
-        {props.onRemove !== undefined && (
-          <button
-            type="button"
-            aria-label={t.composer.removePasted}
-            title={t.composer.removePasted}
-            onClick={props.onRemove}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 18,
-              height: 18,
-              flex: "0 0 auto",
-              marginInlineStart: "auto",
-              padding: 0,
-              border: "1px solid var(--color-border-subtle)",
-              borderRadius: "var(--radius-pill)",
-              background: "var(--color-bg-panel)",
-              color: "var(--color-text-secondary)",
-              cursor: "pointer",
-            }}
-          >
-            <Icon name="x" size={11} strokeWidth={2} />
-          </button>
-        )}
+        <span style={{ flex: "1 1 auto" }} />
       </div>
       {expanded && (
         <div

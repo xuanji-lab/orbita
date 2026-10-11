@@ -12,6 +12,8 @@ import { Component, memo } from "react";
 import { MdPre } from "./CodeBlock";
 import { closePendingMath } from "./pending-math";
 import { remarkDemoteBoundaryMath } from "./math-guard";
+import { rehypeBubbleChips } from "./chip-runs.ts";
+import { Icon } from "../../shell/Icon";
 import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
 
@@ -69,12 +71,20 @@ export const MarkdownBlock = memo(function MarkdownBlock({
       <MarkdownErrorBoundary>
         <ReactMarkdown
           remarkPlugins={bubble ? [remarkGfm, remarkMath, remarkBreaks, remarkDemoteBoundaryMath] : [remarkGfm, remarkMath, remarkDemoteBoundaryMath]}
-          rehypePlugins={[
-            rehypeRaw,
-            [rehypeSanitize, SANITIZE_SCHEMA],
-            [rehypeKatex, { throwOnError: false, strict: false, trust: false }],
-          ]}
-          components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre }}
+          rehypePlugins={
+            bubble
+              ? // bubble 变体在 sanitize 之后多挂 rehypeBubbleChips：用户原文里的 /skill: token
+                // 就地换成 chip（span.bubble-chip，chip-runs.ts）。必须排在 sanitize 之后
+                // ——span 不在白名单里，先换会被剥掉；排在 katex 之前——数学节点是 code，
+                // 与 chip 互不碰面
+                [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA], rehypeBubbleChips, [rehypeKatex, { throwOnError: false, strict: false, trust: false }]]
+              : [
+                  rehypeRaw,
+                  [rehypeSanitize, SANITIZE_SCHEMA],
+                  [rehypeKatex, { throwOnError: false, strict: false, trust: false }],
+                ]
+          }
+          components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre, span: ChipSpan }}
           {...(bubble ? { disallowedElements: BUBBLE_BANNED, unwrapDisallowed: true } : {})}
         >
           {closePendingMath(text)}
@@ -166,3 +176,27 @@ type ImageProps = ComponentPropsWithoutRef<"img"> & { node?: unknown };
 
 /** react-markdown v10 会多传一个 `node`，不能落到 <a> 的 DOM 属性上 */
 type AnchorProps = ComponentPropsWithoutRef<"a"> & { node?: unknown };
+
+/**
+ * 气泡里的句中 chip：chip-runs.ts 的 rehype 变换把 token 塞进
+ * `<span class="bubble-chip bubble-chip-<kind>">token</span>`（skill / mcp 同构），
+ * react-markdown 把它交到这里换成图标 + 名字的胶囊。图标随 kind：skill 是
+ * book-open，mcp 是 plug（与右栏 Skills / MCP 面板同一套词汇）。其余 span（sanitize 白名单
+ * 幸存的）原样放行。chip 元素里只有一个文本子节点（chip-runs.ts 放进去的），
+ * String(children) 拿到的就是 token 原文。
+ */
+function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) {
+  const { className, children, node: _node, ...rest } = props;
+  const classes = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
+  if (!classes.includes("bubble-chip")) {
+    return <span className={className}>{children}</span>;
+  }
+  const token = String(children);
+  const mcp = token.startsWith("/mcp:");
+  return (
+    <span className={classes.join(" ")} title={token}>
+      <Icon name={mcp ? "plug" : "book-open"} size={12} strokeWidth={1.8} className="bubble-chip-icon" />
+      <span className="bubble-chip-target">{token.replace(/^\/(?:skill|mcp):/, "")}</span>
+    </span>
+  );
+}

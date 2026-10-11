@@ -51,6 +51,10 @@ const ALLOWED_LATIN = new Set([
   "Proma",
   "Claude",
   "Code",
+  // Claude 订阅的档位名（产品自称，不译）与登录域名
+  "Pro",
+  "Max",
+  "claude.ai",
   "Kimi",
   "opencode",
   "Reasonix",
@@ -90,6 +94,7 @@ const ALLOWED_LATIN = new Set([
   "Shift",
   "Enter",
   "Esc",
+  "Tab",
   "Cmd",
 ]);
 

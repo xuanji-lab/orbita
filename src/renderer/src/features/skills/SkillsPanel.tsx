@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { IconButton } from "../../shell/IconButton";
+import { RowHoverAction } from "../../shell/RowHoverAction";
 import { SetDots } from "../../shell/SetDots";
 import { useHoverTooltip } from "../../shell/useHoverTooltip.ts";
 import {
@@ -14,8 +15,12 @@ import {
 import { api } from "../../api";
 import type { SkillsState } from "./useSkills";
 import type { SkillContent, SkillMeta } from "@shared/skill";
-import { isSkillSlug } from "@shared/skill";
+import { isSkillAvailable, isSkillSlug } from "@shared/skill";
 import { filterSkills } from "./skill-filter.ts";
+import {
+  skillToken,
+  type TokenPickerControl,
+} from "../../shell/panel-token.ts";
 import { useT } from "../../locale.ts";
 
 /** 行 hover tooltip 出现的延迟——比 IconButton 的 200ms 更慢，快速划过列表不惊扰 */
@@ -37,6 +42,10 @@ export function SkillsPanel(props: {
   defaultWorkspaceId: string | null;
   /** Create skill…：新建会话并预填 composer，让 agent 用 create_skill 落盘 */
   onCreateSkill: () => void;
+  /** 「/ + 空格」右栏选取模式（panel-token.ts）：只主槽的 App 提供，rail 开的面板不传 */
+  picker?: TokenPickerControl;
+  /** 行尾「选用」键：把 token 插到主槽输入框当前光标处（PanelInsertRequest） */
+  onInsert: (token: string) => void;
 }) {
   const { skills } = props;
   /** 当前面板视图：列表 / 详情 / 新建表单（4-1） */
@@ -49,6 +58,13 @@ export function SkillsPanel(props: {
   useEffect(() => {
     if (selected !== null && meta === null) setView("list");
   }, [selected, meta]);
+
+  // 进入选取模式时回列表视图：详情页里没有可选取的行，「/ + 空格」要把人带到
+  // 能选的地方（rail 正常开面板不受影响——那边 picker 恒 undefined）。靠 request
+  // 重触发：面板可能已开着，选取态可能已在
+  useEffect(() => {
+    if (props.picker !== undefined) setSelected(null);
+  }, [props.picker?.request]);
 
   // 名字原样显示——「名字 == 路径」的老数据在 store 读时已治，显示层不截尾
   const workspaceName = (id: string): string =>
@@ -75,6 +91,8 @@ export function SkillsPanel(props: {
       }}
       onCreateSkill={props.onCreateSkill}
       onClose={props.onClose}
+      picker={props.picker}
+      onInsert={props.onInsert}
     />
   );
 }
@@ -114,6 +132,8 @@ function SkillList(props: {
   onSelect: (slug: string) => void;
   onCreateSkill: () => void;
   onClose: () => void;
+  picker?: TokenPickerControl;
+  onInsert: (token: string) => void;
 }) {
   const t = useT();
   const { skills } = props;
@@ -123,11 +143,108 @@ function SkillList(props: {
   const [menuOpen, setMenuOpen] = useState(false);
   /** 过滤行的查询词；分组仍在这个组件里做，过滤只决定哪些行留下（skill-filter.ts） */
   const [query, setQuery] = useState("");
+  const picker = props.picker;
+  const filterRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  /** 选取模式的高亮行（↑↓ 移动，Enter 选中）；-1 = 无高亮 */
+  const [pickIndex, setPickIndex] = useState(-1);
+  // 过滤与计数：列表 / 空态 / 加载三态共用（filterRow 的计数也在场）
+  const total = skills.skills.length;
+  const filtered = filterSkills(skills.skills, query);
+  const filtering = query.trim() !== "";
+  // 选取模式的可行行：扁平、按发起输入框的工作区可用（isSkillAvailable，与
+  // 主进程发送端同一谓词——这里选得到的，发出去必然认）。拖拽源不在选取
+  // 态也用同一份，与浏览视图的分组展示互不影响
+  const pickRows = picker !== undefined ? filtered.filter((s) => isSkillAvailable(s, picker.workspaceId)) : [];
+  // 进入选取模式：清词、聚焦过滤行、高亮首行。
+  // 靠 request 重触发：第二次「/ + 空格」时面板可能已开、选取态可能已在
+  useEffect(() => {
+    if (picker === undefined) return;
+    setQuery("");
+    setPickIndex(-1);
+    filterRef.current?.focus();
+  }, [picker?.request]);
+  // 面板刚开时清单还在读盘（空表），读回来后补上首行高亮；过滤后越界则夹回
+  useEffect(() => {
+    if (picker === undefined) return;
+    setPickIndex((i) => (pickRows.length === 0 ? -1 : i === -1 ? 0 : Math.min(i, pickRows.length - 1)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickRows.length]);
+  // 高亮行滚进视野（block:"nearest"，只在需要时滚，不抖）
+  useEffect(() => {
+    listRef.current?.querySelector('[data-picker-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [pickIndex]);
+  /** 选取模式的键盘导航：↑↓ 移动、Enter 选中、Tab 切到 MCP、Esc 清词→退出 */
+  const onPickerKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (picker === undefined) return;
+    const count = pickRows.length;
+    if (event.key === "ArrowDown" && count > 0) {
+      event.preventDefault();
+      setPickIndex((i) => (i === -1 ? 0 : (i + 1) % count));
+    } else if (event.key === "ArrowUp" && count > 0) {
+      event.preventDefault();
+      setPickIndex((i) => (i === -1 ? count - 1 : (i - 1 + count) % count));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const row = pickRows[pickIndex >= 0 ? pickIndex : 0];
+      if (row !== undefined) picker.onSelect(skillToken(row.slug));
+    } else if (event.key === "Tab") {
+      // Tab 切面板（skills ↔ MCP）：搜索框里的 ←→ 仍归光标移动，不抢
+      event.preventDefault();
+      picker.onSwitch();
+    } else if (event.key === "Escape") {
+      // 两段式：先清词（人还在搜），词空了才退出选取
+      event.stopPropagation();
+      if (query !== "") setQuery("");
+      else picker.onCancel();
+    }
+  };
 
   const header = (
     <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
       {t.skills.title}
     </strong>
+  );
+  // 过滤行（+ 选取模式的提示行）：列表 / 空态 / 加载三态共用同一份。**不能只长在
+  // 列表分支里**——「/ + 空格」开面板时清单常还在读盘，先渲染加载态，过滤行不在
+  // 场上，选取模式的聚焦就落空了
+  const shownCount = picker !== undefined ? pickRows.length : filtered.length;
+  const filterRow = (
+    <>
+      <div className="skills-filter-row">
+        <Icon name="search" size={14} />
+        <input
+          ref={filterRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (picker !== undefined) {
+              onPickerKeyDown(e);
+              return;
+            }
+            // Esc 清空输入；已经空了就不拦截——让它照旧冒泡去关面板（App.tsx 的
+            // 全局 Esc 处理），两次 Esc 才关面板的手感和大多数搜索框一致
+            if (e.key === "Escape" && query !== "") {
+              e.stopPropagation();
+              setQuery("");
+            }
+          }}
+          placeholder={t.skills.filter}
+          aria-label={t.skills.filterAria}
+        />
+        <span className="skills-filter-count">{filtering ? `${shownCount} / ${total}` : total}</span>
+        {query !== "" && (
+          <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
+            <Icon name="x" size={12} />
+          </IconButton>
+        )}
+      </div>
+      {picker !== undefined && (
+        <div className="panel-picker-hint" aria-hidden="true">
+          {t.skills.pickerHint}
+        </div>
+      )}
+    </>
   );
 
   // 空态与加载：footer 的 reveal 行照常（新建的路一直在）
@@ -140,6 +257,7 @@ function SkillList(props: {
         headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
+        {filterRow}
         <div style={{ padding: "var(--space-4)" }}>
           <PanelLine>{t.common.loading}</PanelLine>
         </div>
@@ -155,6 +273,7 @@ function SkillList(props: {
         headerExtra={<AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />}
         footer={<FooterReveal skills={skills} />}
       >
+        {filterRow}
         {/* 空态自己包一层内容版式（与 MCP 面板同款）：列表行的 hover 要通到面板
             两个侧缘（行自带内边距），所以壳的内容区不能统一加 padding——
             空态没有行，忘了这层就会整段贴着面板左缘 */}
@@ -174,10 +293,6 @@ function SkillList(props: {
     );
   }
 
-  const total = skills.skills.length;
-  const filtered = filterSkills(skills.skills, query);
-  const filtering = query.trim() !== "";
-
   const linked = filtered.filter((s) => s.global || s.workspaces.length > 0);
   const disabled = filtered.filter((s) => !s.global && s.workspaces.length === 0);
   const globalMembers = filtered.filter((s) => s.global);
@@ -191,29 +306,38 @@ function SkillList(props: {
       footer={<FooterReveal skills={skills} />}
     >
       <>
-        <div className="skills-filter-row">
-          <Icon name="search" size={14} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              // Esc 清空输入；已经空了就不拦截——让它照旧冒泡去关面板（App.tsx 的
-              // 全局 Esc 处理），两次 Esc 才关面板的手感和大多数搜索框一致
-              if (e.key === "Escape" && query !== "") {
-                e.stopPropagation();
-                setQuery("");
-              }
-            }}
-            placeholder={t.skills.filter}
-            aria-label={t.skills.filterAria}
-          />
-          <span className="skills-filter-count">{filtering ? `${filtered.length} / ${total}` : total}</span>
-          {query !== "" && (
-            <IconButton label={t.skills.clear} size={20} onClick={() => setQuery("")}>
-              <Icon name="x" size={12} />
-            </IconButton>
-          )}
-        </div>
+        {filterRow}
+        {picker !== undefined ? (
+          /* 选取模式：扁平列表（分组对 ↑↓ 导航只是噪声），点选即插 token */
+          <div ref={listRef} style={{ display: "grid", alignContent: "start" }}>
+            {error !== null && (
+              <div style={{ padding: "var(--space-3)" }}>
+                <PanelLine danger>{t.skills.readFailed} {error}</PanelLine>
+              </div>
+            )}
+            {pickRows.length === 0 ? (
+              <div style={{ padding: "var(--space-4)" }}>
+                {/* 查询词空着且一个可用 skill 都没有：说工作区，不说「没有匹配」*/}
+                <PanelLine>
+                  {query.trim() === "" ? t.composer.skillNoneInWorkspace : t.skills.noMatch(query.trim())}
+                </PanelLine>
+              </div>
+            ) : (
+              pickRows.map((s, index) => (
+                <SkillRow
+                  key={s.slug}
+                  skill={s}
+                  onSelect={props.onSelect}
+                  workspaceName={props.workspaceName}
+                  onClean={skills.clean}
+                  onInsert={props.onInsert}
+                  pickerActive={index === pickIndex}
+                  onPickerSelect={() => picker.onSelect(skillToken(s.slug))}
+                />
+              ))
+            )}
+          </div>
+        ) : (
         <div style={{ display: "grid", alignContent: "start" }}>
           {error !== null && (
             <div style={{ padding: "var(--space-3)" }}>
@@ -236,6 +360,7 @@ function SkillList(props: {
                       onSelect={props.onSelect}
                       workspaceName={props.workspaceName}
                       onClean={skills.clean}
+                      onInsert={props.onInsert}
                     />
                   ))}
                 </div>
@@ -253,6 +378,7 @@ function SkillList(props: {
                         onSelect={props.onSelect}
                         workspaceName={props.workspaceName}
                         onClean={skills.clean}
+                        onInsert={props.onInsert}
                       />
                     ))}
                   </div>
@@ -269,6 +395,7 @@ function SkillList(props: {
                       onSelect={props.onSelect}
                       workspaceName={props.workspaceName}
                       onClean={skills.clean}
+                      onInsert={props.onInsert}
                     />
                   ))}
                 </div>
@@ -276,6 +403,7 @@ function SkillList(props: {
             </>
           )}
         </div>
+        )}
       </>
     </RightPanelFrame>
   );
@@ -314,6 +442,12 @@ function SkillRow(props: {
   onSelect: (slug: string) => void;
   workspaceName: (id: string) => string;
   onClean: (slug: string) => void;
+  /** 行尾「选用」键：插 /skill:<slug> 进输入框（浏览态与选取态都在） */
+  onInsert: (token: string) => void;
+  /** 选取模式：本行是否高亮（↑↓ 键盘导航的位置） */
+  pickerActive?: boolean;
+  /** 选取模式：点选即插 token（替换「点开详情」） */
+  onPickerSelect?: () => void;
 }) {
   const t = useT();
   const { skill } = props;
@@ -351,13 +485,18 @@ function SkillRow(props: {
 
   return (
     <div
-      className={`skill-row${skill.missing ? " skill-row-missing" : dim ? " skill-row-dim" : ""}`}
+      className={`skill-row${skill.missing ? " skill-row-missing" : dim ? " skill-row-dim" : ""}${
+        props.pickerActive === true ? " picker-active" : ""
+      }`}
+      data-picker-active={props.pickerActive === true ? "true" : undefined}
     >
       <button
         ref={tooltip.anchorRef}
         type="button"
         className="skill-row-main"
-        onClick={() => props.onSelect(skill.slug)}
+        onClick={() =>
+          props.onPickerSelect !== undefined ? props.onPickerSelect() : props.onSelect(skill.slug)
+        }
         onMouseEnter={tooltip.handlers.onMouseEnter}
         onMouseLeave={tooltip.handlers.onMouseLeave}
         onFocus={tooltip.handlers.onFocus}
@@ -386,6 +525,18 @@ function SkillRow(props: {
       )}
       {!skill.missing && !dim && (
         <SetDots global={skill.global} workspaces={skill.workspaces.length} title={setNames.join(", ")} />
+      )}
+      {/* 「选用」键：悬停 / 键盘聚焦浮现，绝对定位盖在行尾（血线规则的悬停组合
+          例外，归属点阵让位）。missing 的不给——token 落进输入框也展开不了 */}
+      {!skill.missing && (
+        <RowHoverAction
+          icon="corner-down-left"
+          title={t.skills.use}
+          onClick={() => props.onInsert(skillToken(skill.slug))}
+          right={2}
+          top={8}
+          className="reveal skill-row-act"
+        />
       )}
       {tooltip.open &&
         createPortal(

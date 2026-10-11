@@ -42,7 +42,7 @@
   终止判定、工具执行（串行 / 并行 / 超时 / 审批）、上下文压缩、错误分类与退避重试、abort 穿透与清理、
   截断消息的工具失败回填。**这六件在 pi 的 796 行循环里已是成品**，我们不重造。
 - 旧 SDK（`cell-base` 49,879 行、`coding-pack` 4,018 行）**不进本分支**。cell-base 的循环只做了六件里的四件
-  （缺并行工具执行与截断恢复）；coding-pack 的十个工具与 pi 内建的 `bash/edit/find/glob/grep/ls/read/write`
+  （缺并行工具执行与截断恢复）；coding-pack 的十个工具与 pi 内建的 `bash/edit/find/grep/ls/read/write`
   重叠八成。缺 `multi_edit` / `patch` 时补单个文件，不建包。
 
 ## 二、进程模型
@@ -110,7 +110,9 @@
 
 ## 五、工具
 
-pi 内建八个全开：`bash` / `edit` / `find` / `glob` / `grep` / `ls` / `read` / `write`。
+pi 内建开七个：`bash` / `edit` / `find` / `grep` / `ls` / `read` / `write`
+（旧名单里的 `glob` 是 pi 0.84.3 根本没有的工具，已除名；真源在 `permission.ts` 的
+`ENABLED_BUILTIN_TOOLS`，pi 的第八个 `powershell` 不启用）。
 `bash` 全开的安全前提是**工具审批 UI 必须在第一版就有**（见下）。
 
 ## 六、Provider 与设置面

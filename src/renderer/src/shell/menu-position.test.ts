@@ -123,6 +123,33 @@ describe("placeMenu —— 开在右侧（side=right）", () => {
   });
 });
 
+describe("placeMenu —— 开在上方（side=above）", () => {
+  test("两侧都装得下：也选上方（默认 below 会开在下方）", () => {
+    const placed = placeMenu(anchor(), menu, "start", viewport, "above");
+    assert.equal(placed.top, 600 - 6 - 120); // 顶边 = 锚点 top − GAP − 菜单高
+    assert.equal(placed.maxHeight, 600 - 6 - 8); // 上方那侧的余量
+    assert.equal(placed.visible, true);
+  });
+
+  test("上方装不下、下方装得下：回落到下方——偏好不是硬压", () => {
+    // 锚点 top 40：上方只剩 26px，菜单 120 装不下；下方很空
+    const placed = placeMenu(anchor({ top: 40, bottom: 60 }), menu, "start", viewport, "above");
+    assert.equal(placed.top, 66); // bottom 60 + GAP 6
+    assert.equal(placed.maxHeight, 800 - 66 - 8);
+  });
+
+  test("上下都装不下：仍挑空间大的那一侧并封顶（与默认同一规则）", () => {
+    // 视口 100 高、锚点 50–60、菜单 120：上方 36 > 下方 26
+    const placed = placeMenu(anchor({ top: 50, bottom: 60 }), menu, "start", {
+      width: 1200,
+      height: 100,
+    }, "above");
+    assert.equal(placed.visible, true);
+    assert.equal(placed.maxHeight, 36);
+    assert.equal(placed.top, 8);
+  });
+});
+
 describe("placeMenu —— 锚点出视口就是关门信号", () => {
   test("锚点整个滚出上方（bottom ≤ 0）：visible=false", () => {
     const placed = placeMenu(anchor({ top: -80, bottom: -60 }), menu, "start", viewport);

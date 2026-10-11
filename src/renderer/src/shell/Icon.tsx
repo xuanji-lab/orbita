@@ -33,8 +33,14 @@ import eye from "../../../../Orbita Design System/assets/icons/lucide/eye.svg?ra
 import eyeOff from "../../../../Orbita Design System/assets/icons/lucide/eye-off.svg?raw";
 import externalLink from "../../../../Orbita Design System/assets/icons/lucide/external-link.svg?raw";
 import file from "../../../../Orbita Design System/assets/icons/lucide/file.svg?raw";
+import fileArchive from "../../../../Orbita Design System/assets/icons/lucide/file-archive.svg?raw";
+import fileAudio2 from "../../../../Orbita Design System/assets/icons/lucide/file-audio-2.svg?raw";
 import fileCode2 from "../../../../Orbita Design System/assets/icons/lucide/file-code-2.svg?raw";
 import fileJson2 from "../../../../Orbita Design System/assets/icons/lucide/file-json-2.svg?raw";
+import fileSpreadsheet from "../../../../Orbita Design System/assets/icons/lucide/file-spreadsheet.svg?raw";
+import fileVideo2 from "../../../../Orbita Design System/assets/icons/lucide/file-video-2.svg?raw";
+import presentation from "../../../../Orbita Design System/assets/icons/lucide/presentation.svg?raw";
+import scrollText from "../../../../Orbita Design System/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../Orbita Design System/assets/icons/lucide/image.svg?raw";
 import info from "../../../../Orbita Design System/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../Orbita Design System/assets/icons/lucide/fold-vertical.svg?raw";
@@ -139,8 +145,14 @@ const ICONS = {
   "eye-off": eyeOff,
   "external-link": externalLink,
   file,
+  "file-archive": fileArchive,
+  "file-audio-2": fileAudio2,
   "file-code-2": fileCode2,
   "file-json-2": fileJson2,
+  "file-spreadsheet": fileSpreadsheet,
+  "file-video-2": fileVideo2,
+  presentation,
+  "scroll-text": scrollText,
   "fold-vertical": foldVertical,
   folder,
   "folder-open": folderOpen,

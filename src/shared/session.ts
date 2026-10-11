@@ -14,7 +14,8 @@ import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
-import { parseSkillBlock } from "./skill.ts";
+import { parseSkillSegments } from "./skill.ts";
+import { stripInvocationBlock } from "./invocation.ts";
 import { splitUserTextBlocks } from "./prompt-attachments.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 
@@ -390,11 +391,18 @@ export function deriveSessionTitle(text: string): string {
   // 引用块不是用户自己说的话：剥掉再取首行，否则标题是一行 `<quoted_context …>`。
   // 附件块同理（粘贴块 / 文件清单）：「只发附件不打字」开会话时，第一条用户消息的
   // 文本块就是它们，不剥的话标题栏与最近提问是一行裸 XML。
-  // `<skill>` 块同理（/skill: 展开的正文，wafo 二轮：同 3fbe362 的裸 XML 病）——
-  // 剥掉取附加指示，剥完为空则标题为空，侧栏按「等首条带字消息」规则处理
+  // `/skill:` / `/mcp:` 的指令块同理（转录存的是发给模型的全文，用户自己写的从
+  // 指令块之后开始）——剥掉取正文，剥完为空则标题为空，侧栏按「等首条带字消息」
+  // 规则处理。
+  // 旧格式的 `<skill>` 块（2026-10-02 前句中展开时代的存量）同样全剥，不迁移。
+  const invocationStripped = stripInvocationBlock(text);
   const skillStripped = (() => {
-    const parsed = parseSkillBlock(text);
-    return parsed === null ? text : parsed.rest;
+    const segments = parseSkillSegments(invocationStripped);
+    if (segments === null) return invocationStripped;
+    return segments
+      .filter((segment): segment is Extract<typeof segment, { kind: "text" }> => segment.kind === "text")
+      .map((segment) => segment.text)
+      .join("\n\n");
   })();
   // 标题 / 最近提问 / 渲染层给当前会话算标题都走这里，一处剥全处生效
   const body = splitUserTextBlocks([withoutQuotes(skillStripped)]).body;
@@ -656,8 +664,9 @@ export function transcriptToMarkdown(
     const body: string[] = [];
     for (const block of item.content) {
       if (block.type === "text" && item.role === "user") {
-        // 用户消息里的引用块导成引用段落：存档给人读，XML 标签是给模型的
-        const { quotes, text } = parseQuotedMessage(block.text);
+        // 用户消息里的引用块导成引用段落，/skill: / /mcp: 的指令块剥掉：存档给人读，
+        // XML 标签是给模型的
+        const { quotes, text } = parseQuotedMessage(stripInvocationBlock(block.text));
         for (const quote of quotes) {
           body.push(
             quote.text

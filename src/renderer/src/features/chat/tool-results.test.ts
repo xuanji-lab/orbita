@@ -4,6 +4,7 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 tool-results.ts 本身的纪律）
 import { composeChannelPrompt } from "../../../../shared/channel.ts";
+import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
 import {
   answerText,
   branchAnchorEntries,
@@ -19,10 +20,13 @@ import {
   fileViewFor,
   flattenRenderUnits,
   formatThinkingDuration,
+  formatRunClock,
+  expectedSecondsOf,
   groupToolUnits,
   rollupToolKey,
   indexToolResults,
   intraLineTokens,
+  interruptedToolCallIds,
   liveTailLines,
   parseDiffLines,
   parseEditDiff,
@@ -30,6 +34,10 @@ import {
   readTaskCard,
   formatToolDuration,
   recordToolFrame,
+  shellAutoExpand,
+  tailPreviewLines,
+  timeoutSecondsOf,
+  toolStartAt,
   splitPathTail,
   streamingThinkingKey,
   mcpFailureKind,
@@ -392,7 +400,123 @@ describe("toolGroupStatus", () => {
       toolItem({ toolCallId: "r2", toolName: "read", status: "error", isError: true }),
       toolItem({ toolCallId: "r3", toolName: "read" }),
     ]);
-    assert.deepEqual(toolGroupStatus(calls, results), { total: 3, failed: 1, running: 1, done: 1 });
+    assert.deepEqual(toolGroupStatus(calls, results), {
+      total: 3,
+      failed: 1,
+      running: 1,
+      interrupted: 0,
+      done: 1,
+    });
+  });
+
+  test("已中断的成员不占 running（组头不再为它呼吸），单另计入 interrupted", () => {
+    const calls = flattenRenderUnits([
+      assistantItem("a1", [readCall("r1", "a.ts"), readCall("r9", "x.ts")]),
+    ]).filter((unit): unit is Extract<typeof unit, { kind: "toolCall" }> => unit.kind === "toolCall");
+    const results = indexToolResults([toolItem({ toolCallId: "r1", toolName: "read" })]);
+    const interrupted = interruptedToolCallIds(
+      [said("a1", [readCall("r1", "a.ts"), readCall("r9", "x.ts")], "error")],
+      results,
+      false,
+    );
+    assert.deepEqual(toolGroupStatus(calls, results, interrupted), {
+      total: 2,
+      failed: 0,
+      running: 0,
+      interrupted: 1,
+      done: 1,
+    });
+  });
+});
+
+describe("interruptedToolCallIds", () => {
+  test("正常运行中：有 running 结果帧的调用不算中断——工具已启动，结果只是没到", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete")];
+    const results = indexToolResults([
+      toolItem({ toolCallId: "r1", toolName: "read", status: "running", isError: false, content: [] }),
+    ]);
+    assert.equal(interruptedToolCallIds(records, results, true).size, 0);
+  });
+
+  test("活跃轮末条的 complete 调用不算——那是「消息已完、工具即将启动」的正常窗口", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete")];
+    assert.equal(interruptedToolCallIds(records, indexToolResults([]), true).size, 0);
+  });
+
+  test("消息以 error 收场且无结果 → 中断（参数没发完，调用从未执行）", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "error")];
+    // 轮还活跃也算：error 是那条消息的终态，重试会另起 toolCallId，这个永远没有结果
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), true)], ["r1"]);
+  });
+
+  test("消息以 aborted 收场且无结果 → 中断", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "aborted")];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), false)], ["r1"]);
+  });
+
+  test("有结果（含 error 结果）的一律不算——结果说了算", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "error")];
+    const results = indexToolResults([
+      toolItem({ toolCallId: "r1", toolName: "read", status: "error", isError: true }),
+    ]);
+    assert.equal(interruptedToolCallIds(records, results, false).size, 0);
+  });
+
+  test("后续已有消息（错误后的自动重试另起一条）→ 前一条的孤儿调用中断", () => {
+    const records = [
+      userItem,
+      said("a1", [readCall("r1", "a.ts")], "complete"),
+      said("a2", [readCall("r2", "b.ts")], "streaming"),
+    ];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), true)], ["r1"]);
+  });
+
+  test("同批工具的 tool 帧不是界碑：审批挂起时未 start 的同批调用不算中断（PR 审查意见）", () => {
+    // pi 并行批次逐个 emit start → await prepareToolCall（审批闸门，等用户）→ 下一个：
+    // r1 的 running 帧落下后 assistant 不再是转录末条，但 r2 还没 start、无帧——
+    // 旧实现按「后面有任何新记录」判，审批卡挂多久 r2 就错多久
+    const records = [
+      userItem,
+      said("a1", [readCall("r1", "a.ts"), readCall("r2", "b.ts")], "complete"),
+      toolItem({ toolCallId: "r1", toolName: "read", status: "running", isError: false, content: [] }),
+    ];
+    assert.equal(interruptedToolCallIds(records, indexToolResults(records as TranscriptItem[]), true).size, 0);
+  });
+
+  test("变体：r1 已完成、r2 尚未 start——同样不算（末条只看 assistant / user）", () => {
+    const records = [
+      userItem,
+      said("a1", [readCall("r1", "a.ts"), readCall("r2", "b.ts")], "complete"),
+      toolItem({ toolCallId: "r1", toolName: "read", status: "running", isError: false, content: [] }),
+      toolItem({ toolCallId: "r1", toolName: "read" }),
+    ];
+    assert.equal(interruptedToolCallIds(records, indexToolResults(records as TranscriptItem[]), true).size, 0);
+  });
+
+  test("后面的 user 记录是界碑（steer 注入 / 新轮）：批次该收账了，缺席即孤儿", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete"), { ...userItem, id: "u2" }];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), true)], ["r1"]);
+  });
+
+  test("轮已结束（turnActive false，含重开的旧会话）：complete 无结果也是中断", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "complete")];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), false)], ["r1"]);
+  });
+
+  test("流式中的消息不算——stopReason 尚未定，不能误杀正在长的调用", () => {
+    const records = [userItem, said("a1", [readCall("r1", "a.ts")], "streaming")];
+    assert.equal(interruptedToolCallIds(records, indexToolResults([]), true).size, 0);
+  });
+
+  test("非 assistant 记录与 thinking/text 块不干扰；多条孤儿都收", () => {
+    const records: SessionRecord[] = [
+      userItem,
+      compacted,
+      said("a1", [{ type: "text", text: "先说" }, readCall("r1", "a.ts")], "error"),
+      channelMark,
+      said("a2", [{ type: "thinking", thinking: "想" }, readCall("r2", "b.ts")], "aborted"),
+    ];
+    assert.deepEqual([...interruptedToolCallIds(records, indexToolResults([]), false)], ["r1", "r2"]);
   });
 });
 
@@ -1621,5 +1745,119 @@ describe("时长与结果摘要 —— 中文（小学作业）", () => {
     assert.equal(formatToolDuration(12_345, zh), "12.3 秒");
     assert.equal(formatToolDuration(64_000, zh), "1 分 04 秒");
     assert.equal(formatThinkingDuration(400, zh), "1 秒");
+  });
+});
+
+// ── 运行中 shell 的可见性：expected_seconds / 运行时钟 / 自动展开 / 活尾 ──
+
+describe("expectedSecondsOf / timeoutSecondsOf", () => {
+  test("合法数字照收；额外字段不挤占 command 的读取", () => {
+    assert.equal(expectedSecondsOf({ command: "sleep 40", timeout: 600, expected_seconds: 40 }), 40);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 600, expected_seconds: 40 }), 600);
+  });
+  test("timeout 套闸门同一条下限规则：比下限小抬到下限、填大尊重、不填不动、非法不修", () => {
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 60 }), COMMAND_TIMEOUT_FLOOR_SECONDS, "模型填 60，实际跑在下限上，显示也得说下限");
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 900 }), 900);
+    assert.equal(timeoutSecondsOf({ command: "x" }), null, "不填 = 不设超时，不显示上限");
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: -5 }), null);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: "600" }), null, "字符串数字不猜");
+  });
+  test("expected_seconds 不套下限——它是估计不是超时，估计 3 秒是合法的", () => {
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: 3 }), 3);
+  });
+  test("坏值判 null：缺失、零、负数、NaN、字符串数字、超一天", () => {
+    assert.equal(expectedSecondsOf({ command: "x" }), null);
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: 0 }), null);
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: -5 }), null);
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: Number.NaN }), null);
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: "40" }), null, "字符串数字不猜");
+    assert.equal(expectedSecondsOf({ command: "x", expected_seconds: 100_000 }), null);
+    assert.equal(expectedSecondsOf(null), null);
+    assert.equal(expectedSecondsOf("sleep 40"), null);
+  });
+  test("整数与浮点都收（预计 1.5 秒也是认真的估计）", () => {
+    assert.equal(expectedSecondsOf({ expected_seconds: 1.5 }), 1.5);
+  });
+});
+
+describe("formatRunClock", () => {
+  test("m:ss，秒两位补零，分钟不限位；负数归零", () => {
+    assert.equal(formatRunClock(0), "0:00");
+    assert.equal(formatRunClock(45_000), "0:45");
+    assert.equal(formatRunClock(60_000), "1:00");
+    assert.equal(formatRunClock(723_000), "12:03");
+    assert.equal(formatRunClock(4_335_000), "72:15", "超一小时继续涨分钟，不进位小时");
+    assert.equal(formatRunClock(-3_000), "0:00");
+  });
+});
+
+describe("shellAutoExpand", () => {
+  test("expected 达阈值：开跑就展（elapsed 未知也展）", () => {
+    assert.equal(shellAutoExpand(10, null), true);
+    assert.equal(shellAutoExpand(120, 0), true);
+  });
+  test("expected 没给或没达：等已运行时长达阈值", () => {
+    assert.equal(shellAutoExpand(null, 9_999), false);
+    assert.equal(shellAutoExpand(null, 10_000), true);
+    assert.equal(shellAutoExpand(5, 9_999), false, "预计 5 秒的快命令不打扰");
+    assert.equal(shellAutoExpand(5, 10_000), true, "但真跑了 10 秒还是展");
+  });
+  test("两个信号都没有（旧会话重开、没记到起点）：不展", () => {
+    assert.equal(shellAutoExpand(null, null), false);
+  });
+});
+
+describe("tailPreviewLines", () => {
+  test("取末尾非空行，跳过尾部空行，按原顺序返回", () => {
+    assert.deepEqual(tailPreviewLines("a\nb\nc\n\n"), ["b", "c"]);
+    assert.deepEqual(tailPreviewLines("only"), ["only"]);
+    assert.deepEqual(tailPreviewLines(""), []);
+    assert.deepEqual(tailPreviewLines("\n\n"), []);
+  });
+  test("行数多于 keep 只留最后 keep 行；长行截断带省略号", () => {
+    assert.deepEqual(tailPreviewLines("1\n2\n3\n4", 2), ["3", "4"]);
+    const long = "x".repeat(200);
+    const preview = tailPreviewLines(long)[0];
+    assert.ok(preview !== undefined && preview.endsWith("…") && preview.length < 200);
+  });
+});
+
+describe("toolStartAt", () => {
+  test("跑着的条目给起点（end 为 null）；落定后不再给（运行时钟退场）", () => {
+    recordToolFrame(toolItem({ toolCallId: "clock-1", status: "running", timestamp: 1_000 }));
+    assert.equal(toolStartAt("clock-1"), 1_000);
+    recordToolFrame(toolItem({ toolCallId: "clock-1", timestamp: 4_000 }));
+    assert.equal(toolStartAt("clock-1"), null, "落定后运行时钟该退场");
+    assert.equal(toolStartAt("clock-unknown"), null);
+  });
+});
+
+describe("中断的 bash 不进运行态（PR 168 交汇）", () => {
+  test("孤儿 bash 判入中断集，且无任何 running 帧——计时无从起", () => {
+    const bashCall = {
+      type: "toolCall",
+      toolCallId: "b9",
+      toolName: "bash",
+      input: { command: "sleep 60", expected_seconds: 60 },
+    };
+    const records = [userItem, said("a1", [bashCall], "error")];
+    const results = indexToolResults([]);
+    // 纯函数面一：无结果帧 + error 收场 → 已中断（组件里 active = !interrupted && …
+    // 据此为 false，shellActive 继承——不计时、不活尾、不自动展开，状态词走「已中断」；
+    // “PR 168”指 fix/interrupted-tool-call 那一刀）
+    assert.deepEqual([...interruptedToolCallIds(records, results, true)], ["b9"]);
+    // 纯函数面二：从未启动就没有起点——即使 expected_seconds 很大，计时也无从显示
+    assert.equal(toolStartAt("b9"), null);
+  });
+});
+
+describe("运行时钟文案（en / zh）", () => {
+  test("上限与预计的字典键在两种语言下都成句", () => {
+    assert.equal(en.chat.limitLabel("10:00"), "limit 10:00");
+    assert.equal(zh.chat.limitLabel("10:00"), "上限 10:00");
+    assert.equal(en.chat.expectedAbout("40s"), "expected ~40s");
+    assert.equal(zh.chat.expectedAbout("40 秒"), "预计约 40 秒");
+    assert.equal(en.chat.slowerThanExpected, "slower than expected");
+    assert.equal(zh.chat.slowerThanExpected, "比预计慢");
   });
 });

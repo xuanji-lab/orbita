@@ -19,6 +19,16 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
  */
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "skip";
 
+/**
+ * bash / powershell 的 timeout 下限（秒）：模型自填的小值会被权限闸门抬到这里
+ * （只升不降；闸门改的是 pi 传进来的入参对象、不回写会话记录，完整理由见
+ * `src/agent/permission.ts`）。**放 shared 是为了 UI 同源**：renderer 的「上限」
+ * 显示读的是模型原始入参，不套同一条规则的话，模型填 60 时界面说「上限 1:00」、
+ * 实际跑在 10 分钟上——界面对用户撒谎。规则与闸门一字不差：不填不动、填大尊重、
+ * 非法（≤0 / 非有限数）不修。
+ */
+export const COMMAND_TIMEOUT_FLOOR_SECONDS = 600;
+
 export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hint: string }> = {
   plan: { label: "Plan", hint: "Read-only. Writing and shell are refused." },
   manual: { label: "Manual", hint: "Ask before every tool call." },
@@ -26,8 +36,15 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
 };
 
 /**
- * 不改变任何东西的工具：pi 内建五个，加我们自己的 read_task（B-1）——它经主进程
- * 读别的 task 的落盘记录，不改任何盘。其余（write / edit / bash…）一律视为有副作用。
+ * 不改变任何东西的工具：pi 内建四个（read / grep / ls / find），加我们自己的
+ * read_task（B-1）——它经主进程读别的 task 的落盘记录，不改任何盘。
+ * 其余（write / edit / bash…）一律视为有副作用。
+ *
+ * **名单里不放 pi 没有的工具**：以前这里（与 agent/permission.ts 的内建名单）都带着一个
+ * `glob`，而 pi 0.84.3 的 createAllToolDefinitions 里没有这个工具（只有
+ * read / bash / powershell / edit / write / grep / find / ls）。一个永远不会被调到的名字
+ * 放在这里只是假的声明——它不会多拦任何东西，但会让读的人以为有这条路。
+ * 真源与启用的内建工具集同源：`src/agent/permission.ts` 的 `ENABLED_BUILTIN_TOOLS`。
  *
  * read_task 是「跨会话读」，曾在 2026-09-18 短暂立过「plan 档也弹审批」的桶
  * （CROSS_SESSION_READ_TOOLS），同日二次裁决撤销：读取而已，每次点击不值；
@@ -41,7 +58,6 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hin
 export const READ_ONLY_TOOLS = [
   "read",
   "grep",
-  "glob",
   "ls",
   "find",
   "read_task",
