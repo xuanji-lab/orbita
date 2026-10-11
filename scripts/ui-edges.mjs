@@ -38,7 +38,7 @@ const CHECKS = [
     row: ".material-quote-row",
     leading: ".orbita-icon",
     trailing: ".material-quote-note",
-    rightPad: 6,
+    rightPad: 12, // 每条一张卡（2026-10-11）：卡的横向内边距 var(--space-3)
   },
   {
     name: "输入框胶囊：移除键贴胶囊右内边距",

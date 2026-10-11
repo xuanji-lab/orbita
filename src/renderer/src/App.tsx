@@ -671,7 +671,7 @@ export function App() {
     <ExperimentalContext.Provider value={experimental}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
     {/* 输入框黑洞：开关 × 主题（只在浅 / 黛 / 玄）在这里算一次，输入框与转录都读它 */}
-    <BlackholeContext.Provider value={blackholeActive(settings.composerBlackhole, resolvedTheme)}>
+    <BlackholeContext.Provider value={blackholeActive(experimental && settings.composerBlackhole === true, resolvedTheme)}>
     <div className="app-shell">
       <Titlebar />
       <div className="layer">

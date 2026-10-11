@@ -26,10 +26,10 @@ import { useT } from "../locale.ts";
 /** 截图缩略的边长（正方形）。64：比 72 的旧卡小一档——材料行是配角，不抢输入框。 */
 const IMAGE_SQUARE = 64;
 /**
- * 引用卡折叠态显示的条数。4 = 两列两行（2026-10 用户裁决「半行两列」）：与旧单列
- * 两行高度相当，多放一倍。
+ * 引用折叠态显示的条数。10 = 两列五行（2026-10-11 用户：「第五条就 collapse 了，太早，
+ * 10 条之后再 collapse」）——卡已改单行 32px，五行约 200px，不至于把聊天区挤没。
  */
-const QUOTE_COLLAPSED_ROWS = 4;
+const QUOTE_COLLAPSED_ROWS = 10;
 /** 胶囊路径 tooltip 的延迟，与 IconButton 同值：太快手抖就闪，太慢感知等于没有 */
 const PATH_TOOLTIP_DELAY_MS = 200;
 
@@ -245,7 +245,9 @@ export function QuoteCard(props: {
   const visible = expanded ? props.quotes : props.quotes.slice(0, QUOTE_COLLAPSED_ROWS);
   const hidden = props.quotes.length - visible.length;
   return (
-    <section className="glass-card glass-float material-quote-card" aria-label={t.quote.add}>
+    // 每条引用一张独立的半宽卡（2026-10-11 用户裁决）：外层只排两列、不画卡；左卡贴
+    // 输入卡左缘、右卡贴右缘，卡与卡之间留缝；卡高统一单行（长引用省略），扁平无阴影
+    <section className="material-quote-card" aria-label={t.quote.add}>
       {visible.map((item, index) => (
         <QuoteRow key={item.id} item={item} index={index + 1} onJump={props.jumpToQuote(item.quote)} />
       ))}
@@ -277,10 +279,10 @@ function QuoteRow(props: {
   const note = quoteNoteParts(props.item.quote, t);
   return (
     <div className="material-quote-row">
-      <span style={{ display: "inline-flex", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
+      <span className="material-quote-head">
         <Icon name="quote" size={12} />
+        <span className="material-quote-idx">{props.index}</span>
       </span>
-      <span className="material-quote-idx">{props.index}</span>
       {props.onJump === undefined ? (
         <span className="material-quote-text" title={props.item.quote.text}>
           {preview}
@@ -290,7 +292,7 @@ function QuoteRow(props: {
           {preview}
         </button>
       )}
-      <span className="material-quote-note" title={props.item.quote.text}>
+      <span className="material-quote-note row-trailing" title={props.item.quote.text}>
         {note.lead !== null && <span>{note.lead}</span>}
         {note.who !== null && <span className="material-quote-note-who">{(note.lead !== null ? " · " : "") + note.who}</span>}
         <span>{(note.lead !== null || note.who !== null ? " · " : "") + note.size}</span>
