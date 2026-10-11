@@ -441,7 +441,7 @@ void app.whenReady().then(async () => {
       // 等**落盘完**再广播，并带上落盘记录的真 id——renderer 的轮尾卡拿它当 key
       // 与撤销的 turnId（单轮撤销按它回查账本），自造 id 会对不上盘
       void sessions
-        .recordFileTurn(event.sessionId, event.changes, event.webArtifacts ?? [])
+        .recordFileTurn(event.sessionId, event.changes, event.webArtifacts ?? [], event.webArtifactsBatch)
         .then((record) => {
           if (record === null) return;
           broadcastAgentEvent({
@@ -453,8 +453,9 @@ void app.whenReady().then(async () => {
               added: change.added,
               removed: change.removed,
             })),
-            // 旁路网页产物随视图过一道：卡片收起态就靠它出网页行
+            // 旁路网页产物随视图过一道：卡片收起态就靠它出网页行；批量折叠的计数同路
             ...(record.webArtifacts !== undefined ? { webArtifacts: record.webArtifacts } : {}),
+            ...(record.webArtifactsBatch !== undefined ? { webArtifactsBatch: record.webArtifactsBatch } : {}),
           });
         })
         .catch((cause: unknown) =>

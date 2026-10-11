@@ -51,9 +51,11 @@ import { planBranchCut } from "./branch-cut.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import {
-  diffWebArtifacts,
+  foldWebArtifacts,
   scanWebArtifacts,
   webScanRoots,
+  WEB_ARTIFACT_MTIME_SLACK_MS,
+  type ScanRoot,
   type WebScanResult,
 } from "./web-artifacts.ts";
 import { injectUserContext } from "./user-context.ts";
@@ -165,8 +167,9 @@ function pushStats(sessionId: string, session: AgentSession, persist?: true): vo
  * 没有改动的轮不发（不落空记录）；报失败只记日志——快照是回退能力的代价面，
  * 不是对话的依赖面，坏一条日志好过砸一轮对话。
  *
- * 旁路网页产物（web-artifacts.ts）在同一处结算：等开轮快照 + 轮尾重扫 + diff，
- * 扣掉已在文件账里的路径。扫描失败只丢旁路那一栏，文件账照报。
+ * 旁路网页产物（web-artifacts.ts）在同一处结算：轮尾扫一遍、按 mtime ≥ 开轮时刻
+ * 收「本轮新出现」的网页文件，扣掉已在文件账里的路径；命中数超过批量上限就
+ * 折叠成计数（webArtifactsBatch），不逐个列。扫描失败只丢旁路那一栏，文件账照报。
  */
 async function reportFileTurn(
   sessionId: string,
@@ -175,19 +178,19 @@ async function reportFileTurn(
 ): Promise<void> {
   try {
     // 文件账与旁路扫描并行——轮尾收尾不该被其中一边白等
-    const [changes, before, after] = await Promise.all([
+    const [changes, scan] = await Promise.all([
       tracker.finalize(),
-      webWatch.before,
-      scanWebArtifactsLogged(webWatch.roots),
+      scanWebArtifactsLogged(webWatch.roots, webWatch.startedAt),
     ]);
     const tracked = new Set(changes.map((change) => change.path));
-    const webArtifacts = diffWebArtifacts(before.stamps, after.stamps).filter((path) => !tracked.has(path));
-    if (changes.length > 0 || webArtifacts.length > 0) {
+    const folded = foldWebArtifacts(scan.paths.filter((path) => !tracked.has(path)));
+    if (changes.length > 0 || folded.webArtifacts.length > 0 || folded.webArtifactsBatch !== undefined) {
       send({
         type: "fileTurn",
         sessionId,
         changes,
-        ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
+        ...(folded.webArtifacts.length > 0 ? { webArtifacts: folded.webArtifacts } : {}),
+        ...(folded.webArtifactsBatch !== undefined ? { webArtifactsBatch: folded.webArtifactsBatch } : {}),
       });
     }
   } catch (cause) {
@@ -196,25 +199,30 @@ async function reportFileTurn(
 }
 
 /**
- * 本轮的网页产物旁路：扫描根 + 开轮拍下的快照（promise，与 pi 开机并行跑）。
- * 轮尾 reportFileTurn 等它落定后再 diff。类型在 OpenedTurn / TurnParts 上透传。
+ * 本轮的网页产物旁路：扫描根（含各自的预算）+ 开轮时刻。类型在 OpenedTurn /
+ * TurnParts 上透传，轮尾 reportFileTurn 按它扫描。
  */
 interface WebArtifactWatch {
-  roots: string[];
-  before: Promise<WebScanResult>;
+  roots: ScanRoot[];
+  /** 开轮时刻（Date.now()）：轮尾扫描收 mtime ≥ startedAt − slack 的文件 */
+  startedAt: number;
 }
 
 /** 扫一遍并处理好日志面：截断 warn、失败按空结果（本轮没有旁路产物，不让扫描拖砸轮尾）。 */
-async function scanWebArtifactsLogged(roots: string[]): Promise<WebScanResult> {
+async function scanWebArtifactsLogged(roots: readonly ScanRoot[], startedAt: number): Promise<WebScanResult> {
   try {
-    const result = await scanWebArtifacts(roots);
+    const result = await scanWebArtifacts(roots, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS);
     if (result.truncated) {
-      console.warn(`[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots.join(" | ")}`);
+      console.warn(
+        `[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots
+          .map((entry) => entry.root)
+          .join(" | ")}`,
+      );
     }
     return result;
   } catch (cause) {
     console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
-    return { stamps: new Map(), truncated: false };
+    return { paths: [], truncated: false };
   }
 }
 
@@ -797,11 +805,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
   const tracker = new TurnFileTracker(command.cwd);
-  // 网页产物旁路（web-artifacts.ts）：开轮就拍目录 mtime 快照，**不 await**——
-  // 与 pi 开机并行，模型吐第一个字之前快照已拍完，轮内脚本生成的文件只会落进
-  // 轮尾那一遍。扫描根与开轮目录清单同源（cwd / attached / 会话工作台）。
-  const webRoots = webScanRoots(command.cwd, command.directories);
-  const webWatch: WebArtifactWatch = { roots: webRoots, before: scanWebArtifactsLogged(webRoots) };
+  // 网页产物旁路（web-artifacts.ts）：只记开轮时刻，不扫盘——按 mtime 判「本轮
+  // 新出现」，批量文件操作会被批量折叠拦住，截断只可能漏报不会误报（上一版
+  // 「开轮快照 + 轮尾 diff」两处误报的教训见 web-artifacts.ts 文件头）。
+  // 扫描根只有 cwd 与会话工作台——附加目录跨会话共享，分不清是不是这一轮生成的。
+  const webWatch: WebArtifactWatch = {
+    roots: webScanRoots(command.cwd, command.directories),
+    startedAt: Date.now(),
+  };
   /**
    * 用户情境的时区（IANA 名）：在本进程解析一次、本轮内全部消息同一口径（详见
    * user-context.ts）。agent 是独立 utility 进程，Intl 的默认时区就是系统时区，

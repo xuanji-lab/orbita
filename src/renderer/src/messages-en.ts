@@ -136,8 +136,12 @@ export const en = {
     removeImage: "Remove image",
     materialBox: "Materials",
     imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
-    imageTooLarge: (name: string, mb: number) => `${name} is over ${mb} MB.`,
-    tooManyImages: (max: number) => `Up to ${max} images per message.`,
+    imageTooLarge: (name: string, mb: number) =>
+      `${name} is over ${mb} MB. Put it in a folder and attach the folder (drag it in or use the paperclip) — the model reads it from there as needed.`,
+    tooManyImages: (max: number) =>
+      `Up to ${max} images per message. Put them in a folder and attach the folder (drag it in or use the paperclip) — the model reads them one by one as needed.`,
+    imagesTotalTooLarge: (mb: number) =>
+      `Images in one message can't add up to more than ${mb} MB. Put them in a folder and attach the folder (drag it in or use the paperclip) — the model reads them one by one as needed.`,
     imageReadFailed: (name: string) => `Couldn't read ${name}.`,
     noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
     removeFile: "Remove file",
@@ -347,7 +351,7 @@ export const en = {
     removeTip: "Remove from the list. The folder on disk is not touched.",
     newTaskInWorkspace: "New task in this workspace",
     showLess: "Show less",
-    showMore: (hidden: number) => `Show ${hidden} more`,
+    showMore: (next: number, hidden: number) => (next === hidden ? `Show ${hidden} more` : `Show ${next} more (${hidden} hidden)`),
     deletePermanently: "Delete permanently",
     deleteHintSub: (count: number) => `+${count} sub`,
     deleteHintFiles: (count: number) => `+${plural(count, "file")}`,
@@ -1007,6 +1011,9 @@ export const en = {
     fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
     fileCardWebMade: (n: number) => `${n} web page${n === 1 ? "" : "s"} generated`,
     fileCardScripted: "Script-generated · open only",
+    fileCardWebBatchShort: "Web files changed in bulk",
+    fileCardWebBatch: (n: number) =>
+      `${n} web file${n === 1 ? "" : "s"} changed this turn (looks like a bulk operation, not listed)`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
     fileCardUndo: "Undo",

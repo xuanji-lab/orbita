@@ -8,6 +8,7 @@
 import {
   PROMPT_IMAGE_MAX_BYTES,
   PROMPT_IMAGE_MAX_COUNT,
+  PROMPT_IMAGES_TOTAL_MAX_BYTES,
   checkPromptImage,
   type PromptImage,
   type PromptImageRejection,
@@ -24,31 +25,48 @@ export interface ComposerImage {
 
 export interface ImageRejection {
   name: string;
-  reason: PromptImageRejection | "too-many";
+  reason: PromptImageRejection | "too-many" | "total-too-large";
+}
+
+/**
+ * 已在输入框里的图占的原始字节数（base64 长度反推，不去 padding：多算不少算、
+ * 方向保守——准入只要这个量级，不值得为它真解码）。批间累计总量用。
+ */
+export function promptImagesBytes(images: readonly PromptImage[]): number {
+  return images.reduce((sum, image) => sum + Math.floor((image.data.length * 3) / 4), 0);
 }
 
 /**
  * 分拣一批文件。**按顺序收**：前面的先占名额，名额满了之后的每一张都记 too-many
- * （而不是只报一句「太多了」——用户得知道是哪几张没进来）。
+ * （而不是只报一句「太多了」——用户得知道是哪几张没进来）；总量同理——加入某张
+ * 会让原始字节总和超过 PROMPT_IMAGES_TOTAL_MAX_BYTES 时拒收这张、记 total-too-large，
+ * 后面更小的图仍可入列（单张体积不超标但十张大图叠加会撞服务商请求上限）。
  */
 export function admitImages<F extends { name: string; type: string; size: number }>(
   files: readonly F[],
   existing: number,
+  existingBytes: number,
 ): { accepted: F[]; rejected: ImageRejection[] } {
   const accepted: F[] = [];
   const rejected: ImageRejection[] = [];
+  let totalBytes = existingBytes;
   for (const file of files) {
     const reason = checkPromptImage(file);
     if (reason !== null) rejected.push({ name: file.name, reason });
     else if (existing + accepted.length >= PROMPT_IMAGE_MAX_COUNT) rejected.push({ name: file.name, reason: "too-many" });
-    else accepted.push(file);
+    else if (totalBytes + file.size > PROMPT_IMAGES_TOTAL_MAX_BYTES)
+      rejected.push({ name: file.name, reason: "total-too-large" });
+    else {
+      accepted.push(file);
+      totalBytes += file.size;
+    }
   }
   return { accepted, rejected };
 }
 
 /**
- * 一批拒绝 → 一句提示。too-many 合并成一句（它的原因跟哪张图无关），
- * 其余逐张列名字。
+ * 一批拒绝 → 一句提示。too-many 与 total-too-large 合并成一句（原因跟哪张图无关），
+ * 其余逐张列名字；三种超限都附带「改用文件夹附加」的办法，不足只报一句原因。
  */
 export function rejectionText(rejected: readonly ImageRejection[], t: Messages): string | null {
   if (rejected.length === 0) return null;
@@ -60,6 +78,8 @@ export function rejectionText(rejected: readonly ImageRejection[], t: Messages):
     }
   }
   if (rejected.some((item) => item.reason === "too-many")) lines.push(t.composer.tooManyImages(PROMPT_IMAGE_MAX_COUNT));
+  if (rejected.some((item) => item.reason === "total-too-large"))
+    lines.push(t.composer.imagesTotalTooLarge(PROMPT_IMAGES_TOTAL_MAX_BYTES / 1024 / 1024));
   return lines.join(" ");
 }
 

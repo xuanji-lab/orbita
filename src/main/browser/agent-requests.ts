@@ -4,10 +4,13 @@
  * 观察走 Electron 内建的 CDP（`webContents.debugger`），不引第三方浏览器库：
  *   observe   `Accessibility.getFullAXTree` → page-outline.ts 排成大纲
  *   extract   `Runtime.evaluate` 页内取 innerText 与链接 → page-text.ts 规整分段
- *   screenshot `Page.captureScreenshot` → 缩放压 JPEG。**不用 `capturePage()`**：窗口没显示过
- *              （agent 在后台用浏览器是常态）时它报 "Current display surface not available"，
- *              后台 tab 报 UnknownVizError；CDP 截图在隐藏窗口、后台 tab 都拍得到真内容
- *              （2026-09-27 在主进程里实测五种窗口 / 视图状态）。
+ *   screenshot `Page.captureScreenshot` → 缩放压 JPEG（取帧见 frame-capture.ts）。CDP 截图在隐藏
+ *              窗口、后台 tab 都拍得到真内容（2026-09-27 在主进程里实测五种窗口 / 视图状态）；
+ *              但后来线上也出现过同一 tab 连续超时——页面活着（extract 秒回）却等不来新帧
+ *              （2026-10-09：15 次×10s，未能稳定复现触发状态）。因此取帧有三层：拍前 invalidate
+ *              强制出帧；超时换 Electron 原生 capturePage() 补拍一次（它在未显示过的窗口会立刻
+ *              报错而非挂住，只当补路）；都不行时给模型明确说法：这页暂时截不到、不是命令用错、
+ *              改用 browser_extract / browser_observe。
  * 交互（点击 / 输入 / 按键 / 滚动 / 后退）在 interactions.ts；这里派发，并把「动作之后页面怎么样了」
  * （换页、下载、弹框）统一报给模型。每个 CDP 命令都有超时（cdp.ts）：卡死的页面不能把 agent 的一轮拖死。
  */
@@ -25,6 +28,7 @@ import { cdp, delay } from "./cdp.ts";
 import { HostPacer } from "./host-pacer.ts";
 import { describeTabs } from "./user-tabs.ts";
 import { click, goHistory, guardDialogs, press, scroll, typeText, watchPageChange } from "./interactions.ts";
+import { captureFrame, captureRegion } from "./frame-capture.ts";
 import { fitWithin, regionClip, shotSize, SHOT_MAX_HEIGHT, SHOT_MAX_WIDTH } from "./screenshot-geometry.ts";
 
 /** 页面加载最多等这么久；到点不算失败，如实说「还在加载」（慢站的正文往往已经可读） */
@@ -347,8 +351,7 @@ async function screenshot(
   clickable: boolean,
 ): Promise<BrowserToolOutcome> {
   const viewport = await visualViewport(contents);
-  const shot = (await cdp(contents, "Page.captureScreenshot", { format: "png" })) as { data?: unknown };
-  const png = typeof shot.data === "string" ? Buffer.from(shot.data, "base64") : null;
+  const png = await captureFrame(contents);
   let image = png === null ? null : nativeImage.createFromBuffer(png);
   if (png === null || image === null || image.isEmpty()) {
     throw new Error("The page has not rendered anything yet. Try again after it finishes loading.");
@@ -409,8 +412,8 @@ async function zoom(
   if (clip === null) {
     throw new Error(`The region is outside your latest screenshot (${tab.shot.width}×${tab.shot.height}) or smaller than 8 px.`);
   }
-  const shot = (await cdp(contents, "Page.captureScreenshot", { format: "png", clip })) as { data?: unknown };
-  let image = typeof shot.data === "string" ? nativeImage.createFromBuffer(Buffer.from(shot.data, "base64")) : null;
+  const png = await captureRegion(contents, clip);
+  let image = png === null ? null : nativeImage.createFromBuffer(png);
   if (image === null || image.isEmpty()) throw new Error("Could not capture that region. Take a fresh screenshot and try again.");
   const raw = image.getSize();
   const target = fitWithin(raw.width, raw.height, SHOT_MAX_WIDTH, SHOT_MAX_HEIGHT);

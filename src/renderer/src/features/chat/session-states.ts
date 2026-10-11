@@ -209,9 +209,11 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   if (event.type === "fileTurnView") {
     // 轮尾文件账的渲染视图：转成记录形状进槽。盘上那份主进程会铸自己的 id，
     // 重读会话后自然对齐；活会话期这帧就是卡片的数据源。只有旁路网页产物、
-    // 没有 changes 的轮也进来（卡片要出）
+    // 没有 changes 的轮也进来（卡片要出）；批量折叠的轮同理——只有计数也进
     const webArtifacts = event.webArtifacts ?? [];
-    if (event.changes.length === 0 && webArtifacts.length === 0) return states;
+    if (event.changes.length === 0 && webArtifacts.length === 0 && event.webArtifactsBatch === undefined) {
+      return states;
+    }
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       fileTurns: [
@@ -222,6 +224,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
           timestamp: Date.now(),
           changes: event.changes,
           ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
+          ...(event.webArtifactsBatch !== undefined ? { webArtifactsBatch: event.webArtifactsBatch } : {}),
         },
       ],
     }));
@@ -347,10 +350,11 @@ export function seedFromDisk(
           added: change.added,
           removed: change.removed,
         })),
-        // 旁路网页产物随种子还原（旧记录没有这个字段 → 缺席，照常显示）
+        // 旁路网页产物随种子还原（旧记录没有这个字段 → 缺席，照常显示）；批量折叠计数同路
         ...(record.webArtifacts !== undefined && record.webArtifacts.length > 0
           ? { webArtifacts: record.webArtifacts }
           : {}),
+        ...(record.webArtifactsBatch !== undefined ? { webArtifactsBatch: record.webArtifactsBatch } : {}),
       });
     } else if (record.role === "revert") {
       reverts.push(record);

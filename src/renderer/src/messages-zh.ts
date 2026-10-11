@@ -110,8 +110,12 @@ export const zh: Messages = {
     removeImage: "移除图片",
     materialBox: "材料",
     imageUnsupported: (name) => `${name}：只能发送 PNG、JPEG、GIF、WebP，请先转换格式。`,
-    imageTooLarge: (name, mb) => `${name} 超过 ${mb} MB。`,
-    tooManyImages: (max) => `一条消息最多 ${max} 张图片。`,
+    imageTooLarge: (name, mb) =>
+      `${name} 超过 ${mb} MB。可以把它放进一个文件夹，再把文件夹拖进来或用回形针附加——模型会按需读取。`,
+    tooManyImages: (max) =>
+      `一条消息最多 ${max} 张图片。可以把它们放进一个文件夹，再把文件夹拖进来或用回形针附加——模型会按需逐张读取。`,
+    imagesTotalTooLarge: (mb) =>
+      `这条消息的图片总大小不能超过 ${mb} MB。可以把它们放进一个文件夹，再把文件夹拖进来或用回形针附加——模型会按需逐张读取。`,
     imageReadFailed: (name) => `读不出 ${name}。`,
     noVision: "这个模型不能看图，图片不会发给它。换一个带图片标记的模型。",
     removeFile: "移除文件",
@@ -317,7 +321,7 @@ export const zh: Messages = {
     removeTip: "从列表移除。磁盘上的文件夹不受影响。",
     newTaskInWorkspace: "在此工作区新建任务",
     showLess: "收起",
-    showMore: (hidden) => `再显示 ${hidden} 条`,
+    showMore: (next, hidden) => (next === hidden ? `再显示 ${hidden} 条` : `再显示 ${next} 条（还有 ${hidden} 条）`),
     deletePermanently: "永久删除",
     deleteHintSub: (count) => `+${count} 子会话`,
     deleteHintFiles: (count) => `+${count} 文件`,
@@ -928,6 +932,8 @@ export const zh: Messages = {
     fileCardChanged: (n: number) => `${n} 个文件已更改`,
     fileCardWebMade: (n: number) => `生成了 ${n} 个网页`,
     fileCardScripted: "脚本生成 · 仅可打开",
+    fileCardWebBatchShort: "网页文件有批量变动",
+    fileCardWebBatch: (n: number) => `本轮有 ${n} 个网页文件变动（像是批量操作，未逐个列出）`,
     fileCardExpand: "展开改动的文件",
     fileCardCollapse: "收起改动的文件",
     fileCardUndo: "撤销",
