@@ -6,17 +6,19 @@ import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
  * 展开体「圆角虚线框」的几何口径（2026-10-12 用户裁决：折叠行下挂出来的内容
  * 统一这一个语义）。锚定的不变量：
  *
- * 1. 框必须是 **1px dashed**，色走 `--color-border-default`（深色下 subtle 与地面
- *    只差几阶，孤立的 1px 线会隐形——沿导轨竖线的旧理由）；回潮成 solid（旧顶线 /
- *    导轨形态）即违规；
+ * 1. 框必须是 **1px dashed**，色走 `--color-border-strong`（虚线本身比实线淡一截，
+ *    深色下 default 几乎看不见——2026-10-12 返工从 default 提的档）；回潮成 solid
+ *    （旧顶线 / 导轨形态）即违规；
  * 2. 圆角走 `--radius-md` token（设计系统：矩形停在 radius-md，pill 只给真圆），
  *    不许像素字面量；
  * 3. 左缩进 = RAIL_X（与折叠行行首 icon 左缘相切），右缘无 margin（钉在行右
  *    内边距的血线上）——两个方向都不许各自写死数字。
  */
 
-test("框：1px dashed + border-default（不是 solid，不是 subtle）", () => {
-  assert.equal(EXPANDED_FRAME.border, "1px dashed var(--color-border-default)");
+test("框：1px dashed + border-strong（不是 solid，不是 default/subtle）", () => {
+  assert.equal(EXPANDED_FRAME.border, "1px dashed var(--color-border-strong)");
+  // 2026-10-12 返工：虚线比实线淡一截，default 在深色下几乎看不见，退回即回潮
+  assert.notEqual(EXPANDED_FRAME.border, "1px dashed var(--color-border-default)");
 });
 
 test("圆角只走 --radius-md token，无像素字面量", () => {

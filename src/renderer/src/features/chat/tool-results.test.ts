@@ -36,6 +36,7 @@ import {
   recordToolFrame,
   shellAutoExpand,
   tailPreviewLines,
+  stripTrailingBlankLines,
   timeoutSecondsOf,
   toolStartAt,
   splitPathTail,
@@ -1819,6 +1820,26 @@ describe("tailPreviewLines", () => {
     const long = "x".repeat(200);
     const preview = tailPreviewLines(long)[0];
     assert.ok(preview !== undefined && preview.endsWith("…") && preview.length < 200);
+  });
+});
+
+describe("stripTrailingBlankLines", () => {
+  test("shell 输出尾部的换行不再多出一行空白（套框后框底离文字一整行，2026-10-12 返工）", () => {
+    assert.equal(stripTrailingBlankLines("Auto-merging a.ts\nAuto-merging b.ts\n"), "Auto-merging a.ts\nAuto-merging b.ts");
+    assert.equal(stripTrailingBlankLines("a\n\n\n"), "a");
+  });
+
+  test("只剥尾部：中间的空行是内容结构，保留", () => {
+    assert.equal(stripTrailingBlankLines("a\n\nb\n"), "a\n\nb");
+  });
+
+  test("全空 / 空串退化为空串，不报错", () => {
+    assert.equal(stripTrailingBlankLines(""), "");
+    assert.equal(stripTrailingBlankLines("\n\n"), "");
+  });
+
+  test("没有尾部空行时原样返回", () => {
+    assert.equal(stripTrailingBlankLines("a\nb"), "a\nb");
   });
 });
 

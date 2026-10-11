@@ -853,6 +853,21 @@ export function tailPreviewLines(text: string, keep = 2, maxChars = 160): string
 }
 
 /**
+ * 剥掉末尾的空行（只剥尾部，中间的空行保留——它们是内容结构）。shell 输出几乎
+ * 总以 `\n` 结尾，按行拆分后末尾多一个空行；展开体以前没有下边框看不出来，
+ * 2026-10-12 套圆角虚线框后框底多出一整行空白，渲染前先剥。
+ */
+export function stripTrailingBlankLines(text: string): string {
+  const lines = text.split("\n");
+  while (lines.length > 0) {
+    const last = lines[lines.length - 1];
+    if (last === undefined || last.trim() === "") lines.pop();
+    else break;
+  }
+  return lines.join("\n");
+}
+
+/**
  * 自动展开判定（纯函数，驱动方拿着它在每秒重算）：模型给了 expected 且达阈值 →
  * **开跑就展**（一秒都不让用户盯着静止的行）；没给或没达 → 已运行时长达阈值再展。
  * elapsed 记不到（晚挂载）时只认 expected——两个信号都没有就不自动展开。

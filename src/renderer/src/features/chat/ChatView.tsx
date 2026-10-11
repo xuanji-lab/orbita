@@ -54,6 +54,7 @@ import {
   expectedSecondsOf,
   formatRunClock,
   shellAutoExpand,
+  stripTrailingBlankLines,
   tailPreviewLines,
   timeoutSecondsOf,
   toolStartAt,
@@ -3636,18 +3637,24 @@ function ToolLine(props: {
       </CollapseRow>
       {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」
           不展开也看得见。与展开体同一个圆角虚线框（用户 2026-10-12：从开始显示
-          活尾的那一刻起就该有框，无框的裸文本像渲染错误）；muted 的机器事实。 */}
+          活尾的那一刻起就该有框，无框的裸文本像渲染错误）；行也走展开体同一套
+          排版（BODY_LINE + mono caption + lineHeight 1.6，容器只补纵向内边距），
+          展开那一刻框里的文字不跳。 */}
       {tailPreview.length > 0 && (
         <div
+          className="scroll"
           style={{
             ...EXPANDED_FRAME,
             display: "grid",
             minWidth: 0,
-            padding: "var(--space-2)",
+            padding: "var(--space-2) 0",
+            fontFamily: "var(--font-family-mono)",
+            fontSize: "var(--font-size-caption)",
+            lineHeight: 1.6,
           }}
         >
           {tailPreview.map((line, index) => (
-            <div key={index} style={SLOT.sub}>
+            <div key={index} style={{ ...BODY_LINE, color: "var(--color-text-secondary)" }}>
               {line}
             </div>
           ))}
@@ -4243,6 +4250,10 @@ function PlainToolBody(props: {
 }) {
   const t = useT();
   const follow = useFollowScroll(props.live === true);
+  // shell 输出几乎总以 \n 结尾，拆行后末尾多一个空行——以前没有下边框看不出来，
+  // 套了圆角虚线框后框底会多出一整行空白（2026-10-12 返工），渲染前剥掉尾部空行。
+  // 中间的空行是内容结构，保留。
+  const text = stripTrailingBlankLines(props.text);
   // 看大图：放在提前 return 之前（hook 顺序不能随内容变）
   const [viewing, setViewing] = useState<number | null>(null);
   const images = props.images ?? [];
@@ -4283,7 +4294,7 @@ function PlainToolBody(props: {
         ))}
       </div>
     ) : null;
-  if (props.text === "" && images.length === 0) {
+  if (text === "" && images.length === 0) {
     return (
       <div
         className="scroll"
@@ -4300,7 +4311,7 @@ function PlainToolBody(props: {
   if (props.failed) {
     return (
       <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
-        {props.text.split("\n").map((line, index) => (
+        {text.split("\n").map((line, index) => (
           <div key={index} style={{ ...BODY_LINE, color: "var(--color-danger)" }}>
             {line === "" ? " " : line}
           </div>
@@ -4311,7 +4322,7 @@ function PlainToolBody(props: {
   }
   return (
     <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
-      {props.text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
+      {text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
       {imageStrip}
     </div>
   );

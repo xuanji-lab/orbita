@@ -21,13 +21,14 @@ import type { CSSProperties } from "react";
 export const RAIL_X = 10;
 
 /**
- * 框色用 border-default 而非 subtle（沿导轨竖线的旧理由）：深色下 subtle 与地面
- * 只差几阶（black 主题 #1e1e1e 对 #0a0a0a），孤立的 1px 线会隐形；default
- * （rgba(255,255,255,.10)）强一档才立得住。浅色下两者几乎无差，三主题同一 token。
+ * 框色用 border-strong（2026-10-12 返工：default 太淡）：虚线本身比同宽度实线
+ * 淡一截（一半长度是空的），深色下 default（rgba(255,255,255,.10)）的 1px 虚线
+ * 要凑近才看得出来；用户要的是「一眼看出这是个框」。strong（深色 .16 /
+ * 浅色 #d7d7cf）在五个主题都有定义且强一档才立得住。
  * 圆角取 --radius-md：设计系统「矩形停在 radius-md，pill 只给真圆」。
  */
 export const EXPANDED_FRAME: CSSProperties = {
   marginLeft: RAIL_X,
-  border: "1px dashed var(--color-border-default)",
+  border: "1px dashed var(--color-border-strong)",
   borderRadius: "var(--radius-md)",
 };
