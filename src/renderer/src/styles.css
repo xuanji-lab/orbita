@@ -1706,6 +1706,29 @@ body {
   text-decoration: underline;
 }
 
+/* PDF 引用编号（实验功能「PDF 引用」）：上标、mono 数字，一圈发丝描边让它读作「可点的标记」
+   而不是正文里的数字；不用 accent（主操作专用），颜色同链接 */
+.chat-md sup.chat-cite {
+  margin: 0 1px;
+  font-family: var(--font-family-mono);
+  font-size: 0.72em;
+  line-height: 0;
+}
+.chat-md sup.chat-cite a,
+.chat-md sup.chat-cite:not(:has(a)) {
+  display: inline-block;
+  min-width: 1.5em;
+  padding: 0 4px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  line-height: 1.5;
+  text-align: center;
+}
+.chat-md sup.chat-cite a:hover {
+  border-color: var(--color-chat-link);
+  text-decoration: none;
+}
+
 /* <details> 折叠（sanitize 白名单唯二放行的标签）：模型常用它包长输出 */
 .chat-md details {
   border: 1px solid var(--color-border-subtle);
@@ -2941,6 +2964,105 @@ body {
 .file-preview-source[data-wrap="off"] {
   white-space: pre;
   overflow-wrap: normal;
+}
+
+/*
+ * PDF 预览（实验功能「PDF 引用」，PdfView.tsx）：预览体让出滚动，滚动层是 .pdf-view
+ * 自己——页的懒渲染（IntersectionObserver）与跳转滚动都以它为根。页与页之间、页与
+ * 面板边缘之间的间隙由 PDF_PAGE_GAP（12px）在 TS 侧统一算，这里不另加左右内边距。
+ */
+.file-preview-body[data-kind="pdf"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.pdf-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 12px;
+  background: var(--color-bg-muted);
+}
+.pdf-view-notice {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 12px 12px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+}
+/* 一页：固定尺寸占位，canvas / 文本层 / 高亮覆盖层叠在里面。
+   --total-scale-factor 由 TSX 按适宽缩放写入；下面几个是 pdf.js TextLayer 排版用的变量，
+   声明默认值（pdf.js 运行时逐 span 改写），与 pdfjs-dist/web/pdf_viewer.css 的 .textLayer 同构 */
+.pdf-page {
+  --total-scale-factor: 1;
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  position: relative;
+  margin-left: auto;
+  margin-right: auto;
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+}
+.pdf-page-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.pdf-page .textLayer {
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+}
+.pdf-page .textLayer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+.pdf-page .textLayer > :not(.markedContent),
+.pdf-page .textLayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  z-index: 1;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.pdf-page .textLayer .markedContent {
+  display: contents;
+}
+/* 选区落在白纸上：accent 掺透明，三种 accent（蓝 / 黄 / 绿）在白底上都看得见 */
+.pdf-page .textLayer ::selection {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  color: transparent;
+}
+/* 引用高亮：叠在文本层之上、不吃指针（文字照样能选），multiply 让墨色透出来 */
+.pdf-cite-mark {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 2px;
+  background: var(--color-citation-mark);
+  mix-blend-mode: multiply;
 }
 
 /*

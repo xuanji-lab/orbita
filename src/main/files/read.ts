@@ -9,7 +9,13 @@
  * 图片格式不在图片判定表里，自然落进二进制判定（这类容器格式开头基本都有 NUL）。
  */
 import { open, readFile, stat } from "node:fs/promises";
-import { type FilePreview, PREVIEW_IMAGE_LIMIT, PREVIEW_TEXT_LIMIT } from "../../shared/files.ts";
+import {
+  type FilePreview,
+  type PdfFile,
+  PREVIEW_IMAGE_LIMIT,
+  PREVIEW_PDF_LIMIT,
+  PREVIEW_TEXT_LIMIT,
+} from "../../shared/files.ts";
 
 /** Chromium `<img>` 画得了的图片扩展名 → MIME（大小写不敏感，调用方先转小写）。 */
 const IMAGE_MIME: Readonly<Record<string, string>> = {
@@ -89,4 +95,27 @@ export async function readPreview(path: string, limits: PreviewLimits = DEFAULT_
   }
   const text = new TextDecoder("utf-8").decode(head);
   return { kind: "text", text, truncated: size > limits.text, size, modifiedAt };
+}
+
+/**
+ * 读一个 PDF 的整份字节（`fs:read-pdf`，实验功能「PDF 引用」的预览面板）。调用方
+ * 已过白名单并确认扩展名；这里只管大小上限。`limit` 只为测试注入。
+ * 回 Uint8Array 而不是 Buffer：Buffer 过 IPC 结构化克隆后也是 Uint8Array，契约上
+ * 直接写成它，renderer 交给 pdf.js 不必再转。
+ */
+export async function readPdfFile(path: string, limit: number = PREVIEW_PDF_LIMIT): Promise<PdfFile> {
+  const stats = await stat(path);
+  if (!stats.isFile()) {
+    throw new Error(`Not a file: ${path}`);
+  }
+  if (stats.size > limit) {
+    return { kind: "too-large", limit, size: stats.size, modifiedAt: stats.mtimeMs };
+  }
+  const buffer = await readFile(path);
+  return {
+    kind: "pdf",
+    data: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+    size: stats.size,
+    modifiedAt: stats.mtimeMs,
+  };
 }

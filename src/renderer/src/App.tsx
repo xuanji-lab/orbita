@@ -42,6 +42,9 @@ import { materialBoxStyle } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
+import type { PdfJump } from "./features/files/PdfView";
+import { CitationOpenContext } from "./features/chat/citation-context.ts";
+import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
@@ -339,6 +342,18 @@ export function App() {
     reviewFocusTokenRef.current += 1;
     setReviewFocus({ path, token: reviewFocusTokenRef.current });
     setRightPanel("review");
+  }, []);
+  /**
+   * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
+   * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
+   * PDF 所在的根、打开预览、滚到原文并高亮。
+   */
+  const [citeFocus, setCiteFocus] = useState<PdfJump | null>(null);
+  const citeFocusTokenRef = useRef(0);
+  const openCitation = useCallback((citation: PdfCitation) => {
+    citeFocusTokenRef.current += 1;
+    setCiteFocus({ citation, token: citeFocusTokenRef.current });
+    setRightPanel("files");
   }, []);
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
@@ -858,6 +873,7 @@ export function App() {
         resolvedTheme,
       )}
     >
+    <CitationOpenContext.Provider value={openCitation}>
     <div className="app-shell">
       <Titlebar />
       <div className="layer">
@@ -958,7 +974,7 @@ export function App() {
               }}
             >
               {shownPanel === "files" ? (
-                <FilesPanel session={session} escapeRef={filesEscapeRef} />
+                <FilesPanel session={session} escapeRef={filesEscapeRef} citeFocus={citeFocus} />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
@@ -1055,6 +1071,7 @@ export function App() {
         />
       </div>
     </div>
+    </CitationOpenContext.Provider>
     </MaterialBoxContext.Provider>
     </PastedTextCollapseContext.Provider>
     </ExperimentalFeaturesContext.Provider>

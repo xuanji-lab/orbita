@@ -117,7 +117,13 @@ export interface ModelPair {
  * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
  * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
  */
-export const EXPERIMENTAL_FEATURE_IDS = ["paper-themes", "session-lifecycle", "composer-blackhole", "composer-tetris"] as const;
+export const EXPERIMENTAL_FEATURE_IDS = [
+  "paper-themes",
+  "session-lifecycle",
+  "composer-blackhole",
+  "composer-tetris",
+  "pdf-citations",
+] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
 export interface AppSettings {
@@ -235,6 +241,9 @@ export interface AppSettings {
    *   从盒子上缘随机落下（确定性种子）。**与 composer-blackhole 互斥**：设置页打开
    *   一个会连带关掉另一个（experimental-features.ts 的 exclusiveWith）；盘上手改出
    *   两个都开时 parseSettings 以黑洞为准、丢掉 tetris（见 parseExperimentalFeatures）。
+   * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
+   *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
+   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
    *
    * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
    * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开；

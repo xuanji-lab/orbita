@@ -88,6 +88,10 @@
   --color-filetype-doc: #1b5dc7;
   --color-filetype-slides: #c2410c;
   --color-filetype-sheet: #15803d;
+  /* PDF 引用高亮（实验功能「PDF 引用」，2026-10 新增）：点正文里的引用编号，PDF 预览里
+     被引的那段原文盖上这层荧光笔黄。只此一用。只在 light 根块声明一次：PDF 页面在
+     每个主题下都是白纸（canvas 自己画底），覆盖层配 multiply 混合，深浅主题同一个值。 */
+  --color-citation-mark: rgba(250, 204, 21, 0.45);
 
   /* 星云色（2026-10 起，读法见 readme *Nebula colour*）：侧栏左下角「7 天用量格 +
      星云能量体」的专用色。用量是数据不是操作也不是状态，不借 accent / 状态色；
