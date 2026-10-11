@@ -57,7 +57,7 @@ import { createImageTools } from "./image-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
-import { createStoreTools, STORE_TOOLS_GUIDELINES } from "./store-tools.ts";
+import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
@@ -756,7 +756,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 describeDirectories(command.cwd, command.directories),
                 // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
                 describeChannelRole(role),
-                STORE_TOOLS_GUIDELINES,
+                // 会话的工作区归属随轮讲（旧静态文案不说归属，模型只能瞎猜 scope）：
+                // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
+                storeToolsGuideline(
+                  command.workspaceId === null ? null : { name: command.workspaceName },
+                ),
                 TOOL_GUIDELINES,
                 EXPECTED_SECONDS_GUIDELINE,
                 // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。

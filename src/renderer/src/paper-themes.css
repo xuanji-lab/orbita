@@ -70,30 +70,26 @@
   box-decoration-break: clone;
 }
 
-/* 句中 chip（copybook 变体，2026-10-06）：修正液质感的 chip——白底盖住竖格线，绿描边
-   呼应方格。chip 区间优先于修正液（mirrorSegments）：token 不再另垫修正液，chip 自己
-   的 pill 就是那块「涂改带」。横向 padding 的禁令同 styles.css 的 .composer-chip */
+/* 句中 chip（copybook 变体，2026-10-06）：修正液质感——底色要盖住竖格线。
+   chip 区间优先于修正液（mirrorSegments）：token 不再另垫修正液，chip 自己
+   的 pill 就是那块「涂改带」。无描边同 styles.css 的 .composer-chip（2026-10-11
+   用户裁决照 Proma：只换底不描边）；横向留白同款 -2px/+2px 偏移组，另保留
+   修正液那条 1px 柔影（涂改带搭在纸上的质感，只跟字形盒走，不到两侧铺开）。
+   中性胶囊也换淡墨底（正墨 10% 混修正液白）：纯白底和纸面同色看不见 */
 :root[data-theme="copybook"] .composer-chip {
-  background: var(--color-paper-whiteout);
+  --chip-fill: color-mix(in srgb, var(--color-text-primary) 10%, var(--color-paper-whiteout));
   box-shadow:
-    0 0 0 1px var(--color-paper-whiteout),
-    0 0 0 2px var(--color-paper-grid),
+    0 0 0 1px var(--chip-fill),
     0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
-/* 类别上色在稿纸上的变体：涂改带底不变（叠彩底会胜），只把描边换成类别色——
-   像用彩笔把这块涂改带描了个边 */
+/* 类别上色在稿纸上的变体：描边取消后只剩「同色系淡底混白」——像用彩笔在
+   涂改带上淡淡扫了一层 */
 :root[data-theme="copybook"] .composer-chip[data-kind="skill"] {
-  box-shadow:
-    0 0 0 1px var(--color-paper-whiteout),
-    0 0 0 2px var(--color-filetype-sheet),
-    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  --chip-fill: color-mix(in srgb, var(--color-filetype-sheet) 15%, var(--color-paper-whiteout));
 }
 :root[data-theme="copybook"] .composer-chip[data-kind="mcp"] {
-  box-shadow:
-    0 0 0 1px var(--color-paper-whiteout),
-    0 0 0 2px var(--color-filetype-doc),
-    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  --chip-fill: color-mix(in srgb, var(--color-filetype-doc) 15%, var(--color-paper-whiteout));
 }
 
 /* 粘贴展开段（copybook 变体，方案 C）：不涂修正液也不白底——它是正文不是涂改，
