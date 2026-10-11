@@ -46,13 +46,19 @@ test("整行精确匹配：前缀相同但更长的行不被替换", () => {
   assert.equal(out.includes("- Be concise in your final answers."), false, "没有整行命中就不替换");
 });
 
-test("追加段措辞锚定（用户认可版本，一字不差）", () => {
+test("追加段措辞锚定（防手滑漂移）", () => {
   assert.equal(
     PROGRESS_NARRATION_GUIDELINE,
-    "工具调用和思考在界面上默认折叠，用户只能看到你写出的正文。\n" +
-      "开始一组工具调用前，用一句话说明接下来要做什么；每完成一个阶段（调研结束、定位到原因、改完、验证完），用一两句话写出阶段性结论。\n" +
-      "不要逐个工具复述命令，也不要把思考原文搬进正文。",
+    "Tool calls and thinking are collapsed by default in the UI; the user only sees the text you write.\n" +
+      "Before a group of tool calls, say in one sentence what you are about to do; after each stage (research done, cause found, change made, verification done), state the outcome in one or two sentences.\n" +
+      "Do not narrate every tool call, and do not paste your thinking into the reply.\n" +
+      "Write all user-visible text, progress notes and final answers alike, in the language of the user's latest message, unless the user asks for a different language.",
   );
+});
+
+test("回复语言跟随用户：段落要求按用户最近一条消息的语言写正文，且段落本身不带中文（不把模型往中文带）", () => {
+  assert.match(PROGRESS_NARRATION_GUIDELINE, /language of the user's latest message/);
+  assert.equal(/[\u4e00-\u9fff]/.test(PROGRESS_NARRATION_GUIDELINE), false);
 });
 
 test("其余内容不动：替换与追加之外的基底逐字保留", () => {

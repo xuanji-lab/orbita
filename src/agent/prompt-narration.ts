@@ -8,7 +8,7 @@
  * 两件事（都在 orbita 侧做，不改 pi 的 patch）：
  * 1. 把 `- Be concise in your responses` 整行替换成 `- Be concise in your final answers.`
  *    ——简洁的是最终答复，过程要说话；
- * 2. 追加一段进度说明要求（措辞用户已认可），讲清楚折叠机制下何时写正文。
+ * 2. 追加一段进度说明要求，讲清楚折叠机制下何时写正文，并要求正文跟随用户当前使用的语言。
  *
  * 健壮性：替换按**整行精确匹配**——pi 升级改了措辞就匹配不到，此时只追加、
  * 不报错（升级后首次跑回归测试会发现，线上不炸）。追加段幂等：输入里已含
@@ -24,11 +24,18 @@ const CONCISE_LINE = "- Be concise in your responses";
 /** 替换后的句：简洁的是最终答复，不是过程 */
 const CONCISE_LINE_REPLACEMENT = "- Be concise in your final answers.";
 
-/** 进度说明段（措辞用户已认可，一字不改；prompt-narration.test.ts 锚定全文） */
+/**
+ * 进度说明段 + 回复语言（2026-10-12 用户裁决：正文跟随用户当前使用的语言）。
+ *
+ * **用英文写**：上一版是中文段落，提示词本身的语言会把模型往中文带——英文提问也回中文。
+ * 段落语言中立化后，再明说「跟随用户最近一条消息的语言」，进度说明与最终答复都算。
+ * prompt-narration.test.ts 锚定全文。
+ */
 export const PROGRESS_NARRATION_GUIDELINE =
-  "工具调用和思考在界面上默认折叠，用户只能看到你写出的正文。\n" +
-  "开始一组工具调用前，用一句话说明接下来要做什么；每完成一个阶段（调研结束、定位到原因、改完、验证完），用一两句话写出阶段性结论。\n" +
-  "不要逐个工具复述命令，也不要把思考原文搬进正文。";
+  "Tool calls and thinking are collapsed by default in the UI; the user only sees the text you write.\n" +
+  "Before a group of tool calls, say in one sentence what you are about to do; after each stage (research done, cause found, change made, verification done), state the outcome in one or two sentences.\n" +
+  "Do not narrate every tool call, and do not paste your thinking into the reply.\n" +
+  "Write all user-visible text, progress notes and final answers alike, in the language of the user's latest message, unless the user asks for a different language.";
 
 /**
  * 改写主循环的系统提示词：替换 concise 行 + 追加进度说明段。
