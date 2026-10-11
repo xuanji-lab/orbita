@@ -1328,5 +1328,9 @@ export const zh: Messages = {
     tooLarge: (size, limit) => `太大，没法预览（${size}，上限 ${limit}）`,
     emptyFile: "空文件",
     truncated: (shown, total) => `只显示了前 ${shown}，共 ${total}`,
+    pdfFailed: "这个 PDF 打不开：",
+    pdfPassword: "这个 PDF 有密码保护，没法预览。",
+    citeNotFound: (page) => `第 ${page} 页上已经找不到被引的那段了。文件可能在引用之后改过。`,
+    citeOutside: (name) => `${name} 不在这条任务能看到的文件夹里，这里打不开。`,
   },
 };

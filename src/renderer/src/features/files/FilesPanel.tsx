@@ -39,6 +39,7 @@ import {
   TREE_BREAKPOINT,
   type FileTab,
 } from "./panel-layout.ts";
+import type { PdfJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
 import { pathTail, pathWithin } from "../../../../shared/path.ts";
@@ -70,6 +71,11 @@ export function FilesPanel(props: {
    * 更早、先执行，两个都挂的话一下 Esc 会连标签带面板一起关掉。
    */
   escapeRef: { current: (() => boolean) | null };
+  /**
+   * PDF 引用跳转请求（实验功能「PDF 引用」：点了正文里的引用编号，App 打开本面板并
+   * 递进来）。token 单调递增，同一条引用连点也会重新定位。null = 没有请求
+   */
+  citeFocus?: PdfJump | null;
 }) {
   const t = useT();
   const session = props.session;
@@ -220,6 +226,31 @@ export function FilesPanel(props: {
     setActivePath(ref);
     if (narrowRef.current) setTreeOn(false);
   };
+
+  // 引用跳转（实验功能「PDF 引用」）：找到 PDF 所在的根（含不进树的附件根）→
+  // 打开它的标签并带上跳转。根清单可能还没回来（面板刚被点开）：等 roots 到了
+  // 再消费；已消费的 token 不重放（同一条引用连点两次，每次都是新 token）
+  const citeFocus = props.citeFocus ?? null;
+  const consumedCiteRef = useRef<number | null>(null);
+  const [jump, setJump] = useState<PdfJump | null>(null);
+  useEffect(() => {
+    if (citeFocus === null || consumedCiteRef.current === citeFocus.token) return;
+    const path = citeFocus.citation.path;
+    const candidates = tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot];
+    const owner = candidates.find((root) => root.exists && pathWithin(root.path, path)) ?? null;
+    if (owner === null) {
+      if (tree.rootsLoading) return;
+      consumedCiteRef.current = citeFocus.token;
+      setActionError(t.files.citeOutside(pathTail(path) || path));
+      return;
+    }
+    consumedCiteRef.current = citeFocus.token;
+    setActionError(null);
+    setTabs((prev) => openTab(prev, owner.path, path));
+    setActivePath(path);
+    if (narrowRef.current) setTreeOn(false);
+    setJump(citeFocus);
+  }, [citeFocus, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
 
   // 切换或新开标签：把激活标签滚进标签栏可视区（纯函数 tabScrollTarget 裁决
   // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，
@@ -601,6 +632,8 @@ export function FilesPanel(props: {
                 tree.roots.find((r) => r.path === activeTab.root)?.label ?? pathTail(activeTab.root)
               }
               {...(activeTab.name !== undefined ? { sentImage: { name: activeTab.name } } : {})}
+              // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上
+              jump={jump !== null && jump.citation.path === activeTab.path ? jump : null}
             />
           )}
         </div>
