@@ -86,6 +86,9 @@ export function SubSessionsPanel(props: {
   const t = useT();
   const children = childSessions(props.session.sessions, props.parentId);
   const summaries = useChannelSummaries(props.parentId);
+  // 通道全文（收件箱行的最新一句）：hook 必须在两层分支之前——列表层用它，会话层
+  // 不用也不能少这一条（hook 数量不能随层切换变，同 ChatView 首页分支的纪律）
+  const channels = useParentChannels(props.parentId, children.map((meta) => meta.id));
 
   if (props.nav.kind === "session") {
     const childId = props.nav.sessionId;
@@ -185,8 +188,7 @@ export function SubSessionsPanel(props: {
 
   // 列表层 = 收件箱（2026-10-12 用户裁决）：每个子会话一行——等你（question / 审批）
   // 最前，其次 failed、done、running，同组新的在前（sub-sessions-rows.ts）。
-  // 最新一句来自通道账本（useParentChannels：一次拉全部子通道）。
-  const channels = useParentChannels(props.parentId, children.map((meta) => meta.id));
+  // 最新一句来自通道账本（useParentChannels，上面已拉）。
   const rows = sortSubSessionRows(
     children.map((meta) => {
       const status = subSessionStatusOf(meta.id, summaries.get(meta.id)?.status, props.engine);
