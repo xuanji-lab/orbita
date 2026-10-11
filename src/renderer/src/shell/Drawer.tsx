@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { relativeTime } from "./relative-time.ts";
 import { PanelFilter, PanelHelp, PanelIconButton, PanelTitle, RightPanelFrame } from "./RightPanel";
 import { ChatView } from "../features/chat/ChatView";
 import type { ChatSession, SessionEngine } from "../features/chat/useChatSession";
@@ -14,7 +15,6 @@ import {
   type DockedTab,
 } from "./drawer-state";
 import { useT } from "../locale.ts";
-import type { Messages } from "../messages-en.ts";
 
 export type { DockedTab };
 
@@ -242,7 +242,7 @@ function Picker(props: {
           <button key={meta.id} className="drawer-pickrow" onClick={() => props.onPick(meta.id)}>
             <Icon name="message-square" size={14} />
             <span className="drawer-pickrow-name">{meta.title}</span>
-            <span className="drawer-pickrow-meta row-trailing">{formatWhen(meta.updatedAt, t)}</span>
+            <span className="drawer-pickrow-meta row-trailing">{relativeTime(meta.updatedAt, t)}</span>
           </button>
         ))}
         {candidates.length === 0 && <p className="panel-empty">{t.drawer.noOther}</p>}
@@ -254,12 +254,3 @@ function Picker(props: {
   );
 }
 
-/** 相对时间的最简口径：侧栏的同款信息，不引入第二个日期库 */
-function formatWhen(updatedAt: number, t: Messages): string {
-  const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60000));
-  if (minutes < 1) return t.time.justNow;
-  if (minutes < 60) return t.time.minutesAgo(minutes);
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return t.time.hoursAgo(hours);
-  return t.time.daysAgo(Math.round(hours / 24));
-}

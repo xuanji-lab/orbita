@@ -7,7 +7,8 @@
  * 纯模块：不 import React、不 import `@shared/*` 的值（只用类型），可被
  * `node --test` 直接加载。
  */
-import type { ChannelStatus } from "@shared/channel";
+import type { ChannelMessage, ChannelStatus } from "@shared/channel";
+import type { Messages } from "../../messages-en.ts";
 
 /**
  * 一行的显示状态（七档，字面对应设计裁决的颜色/图标分配）：
@@ -52,30 +53,101 @@ export function subSessionRowStatus(input: {
   return "idle";
 }
 
-/** 排序优先级：数字越小越靠前；done/failed/stopped/idle 同一档（终局，不需要用户
- * 再动手），靠原始顺序（派出顺序）分先后。注意与 subSessionRowStatus 的支配关系不是
- * 一回事：那一处说的是这一行自己标什么，这里说的是它排在哪里。 */
+/**
+ * 排序优先级（2026-10-12 收件箱裁决）：数字越小越靠前——**等你（question / 审批）
+ * 最前，其次 failed，其次 done，其次 running**；stopped / idle 收尾（终局或还没
+ * 说话，都不需要用户动手）。注意与 subSessionRowStatus 的支配关系不是一回事：
+ * 那一处说的是这一行自己标什么，这里说的是它排在哪里。failed 压过 done：失败
+ * 常要人善后，完成只是知会。
+ */
 const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
   waiting: 0,
-  approval: 1,
-  running: 2,
-  done: 3,
-  failed: 3,
-  stopped: 3,
-  idle: 3,
+  approval: 0,
+  failed: 1,
+  done: 2,
+  running: 3,
+  stopped: 4,
+  idle: 4,
 };
 
 /**
- * 列表层的行排序（交接原话）：**waiting 最前，其次需要审批的，其次 running，
- * 其余按派出顺序**。`Array.prototype.sort` 是稳定排序（ES2019 起规范保证），
- * 调用方按派出顺序（`childSessions` 已经是创建时间正序）传入即可，同优先级
- * 的行不需要再传第二个 tiebreaker。stopped 归「其余」档：终止是终局，不需要
- * 用户再动手，不该还压在待办之上。
+ * 列表层的行排序（收件箱）：**等你（question / 审批）最前，其次 failed，其次
+ * done，其次 running**；同组之内**新的在前**（lastAt 倒序——通道里最后一条消息
+ * 的时间，没有账本的按会话创建时间）。收件箱是待办清单：越新的越可能是你现在
+ * 要处理的，老的沉下去。
  */
-export function sortSubSessionRows<T extends { status: SubSessionRowStatus }>(
+export function sortSubSessionRows<T extends { status: SubSessionRowStatus; lastAt: number }>(
   rows: readonly T[],
 ): T[] {
-  return [...rows].sort((a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]);
+  return [...rows].sort(
+    (a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status] || b.lastAt - a.lastAt,
+  );
+}
+
+/**
+ * 行首三节竖条亮几节（styles.css 的 `.status-bar`，与侧栏 / 铃铛清单同一根）：
+ * running = 1/3 蓝、waiting / approval = 2/3 橙、done = 3/3 绿、failed = 3/3 红；
+ * stopped / idle 不亮——「没什么要你做的」是整个东西退场，不是留一根灰杠。
+ * stopped 是用户的裁决不是故障，与 idle 同槽。
+ */
+export function subSessionBarFill(status: SubSessionRowStatus): "running" | "waiting" | "done" | "failed" | undefined {
+  switch (status) {
+    case "running":
+      return "running";
+    case "waiting":
+    case "approval":
+      return "waiting";
+    case "done":
+      return "done";
+    case "failed":
+      return "failed";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * 收件箱行的「最新一句」（2026-10-12 用户裁决：只需要看到沟通，不需要看到子会话
+ * 在干嘛）：通道里**最新一条非 task 消息**的一句话概括——问：…/ 进度：…/ 完成 /
+ * 失败 / 回复：…（最新的是父侧回信时）。done / failed 不带结论（结论由父会话的
+ * 模型转述，我们不过多控制）。还没有非 task 消息时按状态说「在跑 · 还没说话」
+ * （idle / stopped 只说「还没说话」——它没在跑）。
+ *
+ * `messages` 为该子通道时间正序的全文（useParentChannels）；通道拉不到（undefined）
+ * 与空列表同待遇——行不缺席，说「还没说话」。
+ */
+export function latestChannelLine(
+  messages: readonly ChannelMessage[] | undefined,
+  status: SubSessionRowStatus,
+  t: Messages,
+): string {
+  const spoken = [...(messages ?? [])].reverse().find((message) => message.kind !== "task");
+  if (spoken === undefined) {
+    return status === "running" || status === "waiting" || status === "approval"
+      ? t.channel.notSpokenRunning
+      : t.channel.notSpoken;
+  }
+  switch (spoken.kind) {
+    case "question":
+      return t.channel.latestQuestion(firstLineOf(spoken.text));
+    case "progress":
+      return t.channel.latestProgress(firstLineOf(spoken.text));
+    case "done":
+      return t.channel.latestDone;
+    case "failed":
+      return t.channel.latestFailed;
+    case "reply":
+      return t.channel.latestReply(firstLineOf(spoken.text));
+    default:
+      // stop：账本里可能有（旧数据），行上不渲染裁决细节——状态条已经说了 stopped
+      return t.channel.notSpoken;
+  }
+}
+
+/** 多行正文取第一个非空行并压掉首尾空白——收件箱行里只放得下一句话。 */
+function firstLineOf(text: string): string {
+  const line = text.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
+  return line.trim();
 }
 
 /**

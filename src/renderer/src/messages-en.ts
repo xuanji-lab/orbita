@@ -1167,6 +1167,14 @@ export const en = {
     goAnswer: "Answer ›",
     childDone: (peer: string) => `${peer} finished`,
     childFailed: (peer: string) => `${peer} failed`,
+    answerIt: "Answer it…",
+    notSpokenRunning: "running · hasn't spoken yet",
+    notSpoken: "hasn't spoken yet",
+    latestQuestion: (text: string) => `Q: ${text}`,
+    latestProgress: (text: string) => `Progress: ${text}`,
+    latestDone: "Done",
+    latestFailed: "Failed",
+    latestReply: (text: string) => `Replied: ${text}`,
   },
 
   queue: {
@@ -1198,6 +1206,8 @@ export const en = {
     back: "Back to sub-sessions",
     openAsMain: "Open as main",
     openInPanel: "Open in the Sub-sessions panel",
+    waitingCount: (count: number) => `${count} waiting on you`,
+    inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
     openAsMainTip: "Switch the main pane to this sub-session",
     gone: "This sub-session is gone.",
     of: (title: string) => `Sub-sessions of "${title}"`,

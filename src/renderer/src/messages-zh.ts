@@ -1079,6 +1079,14 @@ export const zh: Messages = {
     goAnswer: "去回答 ›",
     childDone: (peer) => `「${peer}」完成`,
     childFailed: (peer) => `「${peer}」失败`,
+    answerIt: "回答它…",
+    notSpokenRunning: "在跑 · 还没说话",
+    notSpoken: "还没说话",
+    latestQuestion: (text) => `问：${text}`,
+    latestProgress: (text) => `进度：${text}`,
+    latestDone: "完成",
+    latestFailed: "失败",
+    latestReply: (text) => `回复：${text}`,
   },
 
   queue: {
@@ -1109,6 +1117,8 @@ export const zh: Messages = {
     back: "返回子会话列表",
     openAsMain: "在主面板打开",
     openInPanel: "在子会话面板里查看",
+    waitingCount: (count) => `${count} 个在等你`,
+    inboxFoot: "点一行：看这个子会话与父会话的完整往来",
     openAsMainTip: "把主面板切到这个子会话",
     gone: "这个子会话已不存在。",
     of: (title) => `「${title}」的子会话`,

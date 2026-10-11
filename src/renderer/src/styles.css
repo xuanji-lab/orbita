@@ -1008,13 +1008,155 @@ body {
   background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
 }
 
-/* 子会话面板的一行 */
-.sub-session-row {
+/* ===== Sub-sessions 收件箱（2026-10-12：列表层改为收件箱） =====
+ * 一个子会话一行：行首三节竖条（.status-bar，与侧栏 / 铃铛清单同一根）+ 名字 +
+ * 最新一句 + 相对时间（行尾，钉在行的右内边距上）。「在问你」的行展开回答框
+ * （.channel-reply-box）并给一抹 warning 底，其余行单行收着。行按钮与回答框是
+ * 兄弟（button 不能嵌 button），整行 hover 由外层 .inbox-row 统一画。 */
+.inbox-rows {
+  display: grid;
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+.inbox-row {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* 在问你：一抹 warning 底（color-mix 7%，同铃铛清单选中项的调制），回答框在行下 */
+.inbox-row.asking {
+  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
+}
+
+.inbox-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.inbox-row.asking:hover {
+  background: color-mix(in srgb, var(--color-warning) 11%, transparent);
+}
+
+.inbox-row-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   background: transparent;
 }
 
-.sub-session-row:hover {
+.inbox-row-item {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.inbox-row-l1 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.inbox-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-strong);
+  font-size: var(--font-size-control);
+  color: var(--color-text-primary);
+}
+
+.inbox-row-ago {
+  flex: 0 0 auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+.inbox-row-l2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+/* 列表尾的一句用法说明：最新一句是概括，完整往来进会话层看 */
+.inbox-foot {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) 0;
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+/* 页头里「N 个在等你」的计数（warning 色由 inline 给） */
+.inbox-waiting-count {
+  flex: 0 0 auto;
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}
+
+/* 「在问你」的行下展开的回答框：代父回信（channel:speak），Enter 发送 */
+.channel-reply-box {
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-2) + 3px + var(--space-2));
+}
+
+.channel-reply-error {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-caption);
+  color: var(--color-danger);
+}
+
+.channel-reply-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.channel-reply-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  outline: none;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  padding: 3px 8px;
+}
+
+.channel-reply-input:focus {
+  border-color: var(--color-accent);
+}
+
+.channel-reply-send {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  cursor: pointer;
+}
+
+.channel-reply-send:disabled {
   background: var(--color-bg-hover);
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
 }
 
 /*
