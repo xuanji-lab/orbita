@@ -893,6 +893,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
                 storeToolsGuideline(
                   command.workspaceId === null ? null : { name: command.workspaceName },
+                  command.cwd,
                 ),
                 TOOL_GUIDELINES,
                 EXPECTED_SECONDS_GUIDELINE,
