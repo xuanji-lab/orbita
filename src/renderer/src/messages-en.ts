@@ -1332,6 +1332,8 @@ export const en = {
     tabsAria: "Open files",
     closeTab: "Close tab",
     groupToggleTip: "Collapse or expand this group",
+    sortByType: "Sort by file type",
+    sortByName: "Sort by name",
     emptyWorkbench: "Empty workbench — created on the agent's first write",
     reference: "Add File Reference",
     refreshing: "Refreshing file tree…",

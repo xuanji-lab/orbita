@@ -19,6 +19,7 @@ import {
   formatSize,
   hasAgentsMd,
   orderEntries,
+  orderEntriesByType,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
 import { collectSentAttachments } from "./sent-attachments.ts";
@@ -79,6 +80,9 @@ export function FilesPanel(props: {
   const [treeOn, setTreeOn] = useState(false);
   /** 折叠的根分组（键 = 根的绝对路径，随会话 / 工作区切换重置） */
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set());
+  /** Session 组的排序：默认按名字，可切按类型（用户 2026-10-11 点名只要 Session；
+   * 视图偏好而非会话状态，不随会话 / 工作区切换重置） */
+  const [sessionSort, setSessionSort] = useState<"name" | "type">("name");
   const activeTab =
     activePath === null ? null : (tabs.find((tab) => tab.path === activePath) ?? null);
   /** 右键菜单：打开位置 + 被右键的根（目前只有 Session 根接了右键，
@@ -248,7 +252,12 @@ export function FilesPanel(props: {
         </DimRow>
       );
     }
-    const shown = filterEntries(orderEntries(entries), query);
+    const shown = filterEntries(
+      root.kind === "session" && sessionSort === "type"
+        ? orderEntriesByType(entries)
+        : orderEntries(entries),
+      query,
+    );
     if (shown.length === 0) return null; // 空目录 / 全被过滤：安静，不出空文件夹
     return shown.map((entry) => {
       const child = `${dir}/${entry.name}`;
@@ -323,6 +332,14 @@ export function FilesPanel(props: {
           collapsed={collapsed}
           onToggle={() => setCollapsedGroups((prev) => toggleGroupCollapsed(prev, root.path))}
           onReveal={root.exists ? () => tree.reveal(root.path, root.path) : undefined}
+          // Session 组的排序切换（2026-10-11 用户裁决：只要 Session）：图标反映当前
+          // 档位，tooltip 说点击后的动作；与 Reveal / Detach 同一套行尾 hover 键
+          sort={root.kind === "session" ? { mode: sessionSort } : undefined}
+          onSort={
+            root.kind === "session"
+              ? () => setSessionSort((mode) => (mode === "name" ? "type" : "name"))
+              : undefined
+          }
           // missing 的 attached 根下面有常驻 Detach（见 MissingAttachedRow）——组头
           // 不再重复一个 hover 才出的 Detach，一个状态只留一个处理入口
           onDetach={root.kind === "attached" && root.exists ? () => detach(root.path) : undefined}
@@ -625,6 +642,9 @@ function RootLabel(props: {
   onToggle: () => void;
   onReveal?: () => void;
   onDetach?: () => void;
+  /** 排序切换（只 Session 组接）：当前档位；渲染为行尾 hover 键，图标反映当前档、tooltip 说切换动作 */
+  sort?: { mode: "name" | "type" };
+  onSort?: () => void;
   /** 右键（目前只有 Session 根接）：与条目行同一份 ContextMenu 机制 */
   onContextMenu?: (position: { x: number; y: number }) => void;
 }) {
@@ -668,6 +688,17 @@ function RootLabel(props: {
       >
         {label}
       </button>
+      {props.sort !== undefined && props.onSort !== undefined && (
+        <LabelAction
+          title={props.sort.mode === "name" ? t.files.sortByType : t.files.sortByName}
+          onClick={props.onSort}
+        >
+          <Icon
+            name={props.sort.mode === "name" ? "arrow-down-a-z" : "arrow-down-wide-narrow"}
+            size={12}
+          />
+        </LabelAction>
+      )}
       {props.canReveal && props.onReveal !== undefined && (
         <LabelAction title={t.files.revealInFileManager} onClick={props.onReveal}>
           <Icon name="folder-open" size={12} />

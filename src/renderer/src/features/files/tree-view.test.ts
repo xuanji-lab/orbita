@@ -13,6 +13,7 @@ import {
   hasAgentsMd,
   mergeRefresh,
   orderEntries,
+  orderEntriesByType,
   refreshTargets,
 } from "./tree-view.ts";
 import type { FileEntry, FileRoot } from "../../../../shared/files.ts";
@@ -38,6 +39,50 @@ describe("orderEntries", () => {
     deepStrictEqual(
       orderEntries([file(".zshrc"), file(".DS_Store"), file("readme")]),
       [file("readme"), file(".zshrc"), file(".DS_Store")],
+    );
+  });
+});
+
+describe("orderEntriesByType", () => {
+  it("目录最前，文件按 fileIcon 分档同类相聚，档内按名字", () => {
+    deepStrictEqual(
+      orderEntriesByType([
+        file("notes.md"),
+        dir("plans"),
+        file("index.html"),
+        file("a.ts"),
+        file("z.ts"),
+        file("logo.png"),
+        file("app.tsx"),
+      ]),
+      [
+        dir("plans"),
+        file("a.ts"),
+        file("app.tsx"),
+        file("z.ts"),
+        file("index.html"),
+        file("logo.png"),
+        file("notes.md"),
+      ],
+    );
+  });
+
+  it("dotfile 按自己的类型入档（不再垫底）：.gitignore 进配置档", () => {
+    deepStrictEqual(
+      orderEntriesByType([file("readme.md"), file(".gitignore"), file("main.py")]),
+      [file("main.py"), file(".gitignore"), file("readme.md")],
+    );
+  });
+
+  it("认不出的类型（symlink / 未知扩展）压底，名字序", () => {
+    deepStrictEqual(
+      orderEntriesByType([
+        file("data.xyz"),
+        file("a.ts"),
+        { name: "link", kind: "symlink", modifiedAt: 0 },
+        file("b.xyz"),
+      ]),
+      [file("a.ts"), file("b.xyz"), file("data.xyz"), { name: "link", kind: "symlink", modifiedAt: 0 }],
     );
   });
 });

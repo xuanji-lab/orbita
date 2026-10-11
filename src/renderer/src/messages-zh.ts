@@ -1240,6 +1240,8 @@ export const zh: Messages = {
     tabsAria: "打开的文件",
     closeTab: "关闭标签",
     groupToggleTip: "折叠或展开这一组",
+    sortByType: "按文件类型排序",
+    sortByName: "按名字排序",
     emptyWorkbench: "工作台为空 — 智能体第一次写入时创建",
     reference: "添加文件引用",
     refreshing: "正在刷新文件树…",
