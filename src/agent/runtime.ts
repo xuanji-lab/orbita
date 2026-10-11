@@ -72,6 +72,15 @@ import {
 } from "./compaction-settings.ts";
 
 import { preferIPv4 } from "../shared/dial-v4.ts";
+import { join } from "node:path";
+import {
+  IMAGE_BUDGET_ENTRY,
+  IMAGE_REFS_ENTRY,
+  hashImage,
+  planImageBudget,
+  readImageBudgetBook,
+  type ImageBudgetMark,
+} from "./image-byte-budget.ts";
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
 preferIPv4();
@@ -507,6 +516,8 @@ interface TurnParts {
   turn: TurnTiming;
   /** 本轮的文件快照跟踪器（OpenedTurn.tracker 的透传） */
   tracker: TurnFileTracker;
+  /** 本轮的图片字节预算状态（OpenedTurn.budget 的透传） */
+  budget: TurnImageBudget;
 }
 
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
@@ -633,6 +644,30 @@ interface OpenedTurn {
   turn: TurnTiming;
   /** 本轮的文件快照跟踪器：闸门放行记 before、执行落定读 after（file-tracker.ts） */
   tracker: TurnFileTracker;
+  /** 本轮的图片字节预算状态（水位 + 附件引用），见 image-byte-budget.ts */
+  budget: TurnImageBudget;
+}
+
+/**
+ * 图片字节预算的轮内状态（image-byte-budget.ts 管算法，这里管装配与时序）：
+ *
+ * - `cut` / `refs` 开轮时从 pi 本子读一次（水位与附件引用都是跨轮持久化的
+ *   custom entry）；轮内推进后 `cut` 原地更新，后续 LLM 调用按新水位重放。
+ * - `pendingRefs` 是本轮 submit 附图的引用，在 echoAndPrompt 缩放后填
+ *   （hash 必须对缩放后的 data 算——pi 本子里存的是那份），before_agent_start
+ *   落成本子的 custom entry，此后任何一轮都能把占位路径拼回来。
+ * - `protectedFloor` 是本轮见过的最小保护起点：steer 注入会把「最后一条用户
+ *   消息」推后，不能让刚发过的本轮附图因此变成可替换。
+ */
+interface TurnImageBudget {
+  /** 现行水位（ImageBudgetMark）；null = 还没触发过。轮内推进后原地更新 */
+  mark: ImageBudgetMark | null;
+  /** 图片 hash → 原图绝对路径（本子 refs entry 合并而来） */
+  refs: Map<string, string>;
+  /** 本轮 submit 附图（缩放后）的 hash → 绝对路径，before_agent_start 落本子 */
+  pendingRefs: Map<string, string>;
+  /** 本轮见过的最小保护起点：steer 会把「最后一条用户消息」推后，不能让本轮附图因此可替换 */
+  protectedFloor: number;
 }
 
 /**
@@ -774,6 +809,53 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             }));
           },
         },
+        {
+          name: "orbita-image-budget",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            // 本轮附图引用落本子：before_agent_start 在 prompt() 内、首个 LLM 调用
+            // （context 事件）之前触发，所以触发替换时这份账已经在盘上
+            pi.on("before_agent_start", () => {
+              if (budget.pendingRefs.size === 0) return;
+              pi.appendEntry(IMAGE_REFS_ENTRY, [...budget.pendingRefs]);
+              for (const [hash, path] of budget.pendingRefs) budget.refs.set(hash, path);
+            });
+            // wire-only 替换：只改发给模型的那份，pi 本子与 orbita 转录不动
+            pi.on("context", (event) => {
+              try {
+                let lastUser = -1;
+                for (let i = event.messages.length - 1; i >= 0; i -= 1) {
+                  if ((event.messages[i] as { role?: unknown }).role === "user") {
+                    lastUser = i;
+                    break;
+                  }
+                }
+                const floor = lastUser === -1 ? 0 : Math.min(budget.protectedFloor, lastUser);
+                budget.protectedFloor = floor;
+                const plan = planImageBudget(event.messages, budget.mark, budget.refs, floor);
+                if (plan.advancedCut !== null) {
+                  budget.mark = plan.advancedCut;
+                  pi.appendEntry(IMAGE_BUDGET_ENTRY, {
+                    cut: plan.advancedCut.cut,
+                    cutIndex: plan.advancedCut.cutIndex,
+                    replaced: plan.replaced,
+                    bytesAfter: plan.bytesAfter,
+                  } satisfies ImageBudgetMark);
+                  console.error(
+                    `[image-budget] 请求估算 ${(plan.bytesBefore / 1048576).toFixed(1)}MiB 超过 24MiB，` +
+                      `已把 ${plan.replaced} 张早期图片替换为占位（水位落在第 ${plan.advancedCut.cutIndex} 条消息，` +
+                      `估算降至 ${(plan.bytesAfter / 1048576).toFixed(1)}MiB）`,
+                  );
+                }
+                return plan.replaced > 0 ? { messages: plan.messages } : undefined;
+              } catch (cause) {
+                // fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送
+                console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
+                return undefined;
+              }
+            });
+          },
+        },
       ],
     },
   });
@@ -851,6 +933,28 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * 用户至少还能接着说话，而不是对着一条打不开的会话干瞪眼。
    */
   const sessionManager = openOrCreate(command);
+  /**
+   * 图片字节预算的轮内状态（image-byte-budget.ts 管算法，这里只管装配）：
+   * 水位与附件引用从 pi 本子（当前叶子路径）读；本轮 submit 的附图引用在
+   * echoAndPrompt 缩放后填进 pendingRefs，before_agent_start 落成本子的
+   * custom entry——占位里的「原图路径」要能跨重启拼回来，靠的就是这份账。
+   * attachmentsDir 由主进程随轮发（同 piSessionDir 的纪律：路径策略不进 agent 进程）。
+   *
+   * 定义在 extensionFactories 之后是安全的：factory 注册时只挂 handler，
+   * handler 真正触发（首个 LLM 调用 / before_agent_start）时它早已初始化。
+   */
+  const budgetBook = readImageBudgetBook(sessionManager.getBranch());
+  const budget: TurnImageBudget = {
+    mark: budgetBook.mark,
+    refs: new Map(
+      [...budgetBook.refs].map(([hash, ref]) => [
+        hash,
+        join(command.attachmentsDir, ref.slice(ref.indexOf("/") + 1)),
+      ]),
+    ),
+    pendingRefs: new Map(),
+    protectedFloor: Number.MAX_SAFE_INTEGER,
+  };
   /**
    * MCP 工具。**连接按 (工作区, server) 建**，不是进程级一份——同一个 server 名
    * 在不同工作区往往是不同实例（参数不同、数据不同），共享一份就会静默串号。
@@ -1066,7 +1170,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe, turn, tracker };
+  return { session, adapter, unsubscribe, turn, tracker, budget };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -1107,6 +1211,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         adapter: opened.adapter,
         turn: opened.turn,
         tracker: opened.tracker,
+        budget: opened.budget,
       };
     },
     async (parts) =>
@@ -1116,6 +1221,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         unsubscribe: parts.unsubscribe,
         turn: parts.turn,
         tracker: parts.tracker,
+        budget: parts.budget,
       }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
     // idle 时本轮已完全收尾，排队投递不会撞 already running
@@ -1205,6 +1311,13 @@ async function echoAndPrompt(
   command: Extract<AgentCommand, { type: "submit" | "interrupt" }>,
 ): Promise<void> {
   const images = await preparePromptImages(command.images);
+  // 附图引用记账（hash 对缩放后的 data 算——pi 本子里存的是那份）：占位文本要能给出
+  // 可 read 回来的原图绝对路径，靠这份账把 hash 对到文件
+  for (const image of images) {
+    if (image.original === undefined) continue;
+    const name = image.original.slice(image.original.indexOf("/") + 1);
+    opened.budget.pendingRefs.set(hashImage(image.data), join(command.attachmentsDir, name));
+  }
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
   const promptText = composePromptText(command.text, pasted, files);
