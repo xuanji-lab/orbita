@@ -556,7 +556,21 @@ function ChatViewBody(props: {
     if (result == null || result.nonce <= consumedPickNonce) return;
     consumedPickNonce = result.nonce;
     if (result.token === null) {
-      requestAnimationFrame(() => mainComposerTextarea()?.focus());
+      // 取消（Esc）：把触发时删掉的「/ 」还回原处。句中也会触发之后，「a / b」这类
+      // 正文打出 / 加空格就开了面板——Esc 必须让它回到用户打的原样，不能吞字
+      const anchor = result.position;
+      requestAnimationFrame(() => {
+        const el = mainComposerTextarea();
+        const position = Math.max(0, Math.min(anchor, session.draft.length));
+        const restored = session.draft.slice(0, position) + "/ " + session.draft.slice(position);
+        if (el === null) {
+          session.setDraft(restored);
+          return;
+        }
+        el.focus();
+        el.setSelectionRange(position, position);
+        if (!document.execCommand("insertText", false, "/ ")) session.setDraft(restored);
+      });
       return;
     }
     const token = result.token;
