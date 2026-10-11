@@ -9,7 +9,7 @@ import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
+import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, type UsagePetPref } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
@@ -147,6 +147,9 @@ export function Sidebar(props: {
   unread: ReadonlySet<string>;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
+  /** 左下角星云的摆放偏好（settings.usagePet）与改它的回调 */
+  usagePet: UsagePetPref | undefined;
+  onUsagePetChange: (next: UsagePetPref) => void;
 }) {
   const t = useT();
   const { session } = props;
@@ -794,7 +797,7 @@ export function Sidebar(props: {
        * 宽度钉在 216px（SIDEBAR_WIDTH_MIN 的内容宽），侧栏拖宽时保持左对齐。
        * 折叠态（48px 图标条）不渲染——那里放不下 7 格。
        */}
-      <UsageMeter running={anyRunning} />
+      <UsageMeter running={anyRunning} pet={props.usagePet} onPetChange={props.onUsagePetChange} />
     </aside>
     {/*
       拖宽热区：侧栏与对话面之间那道缝里的 6px，紧贴面的左缘。

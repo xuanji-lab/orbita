@@ -42,6 +42,17 @@ export function isWebLink(url: string): boolean {
   return parsed !== null && (parsed.protocol === "http:" || parsed.protocol === "https:");
 }
 
+/**
+ * `shell.openExternal` 的系统交接闸：非网页协议里**只放行 mailto**——应用里实际用到的
+ * 就只有它（Markdown 链接的过滤白名单同样只认 http(s)+mailto，见 MarkdownBlock 的
+ * ExternalAnchor）。file: / javascript: / 自定义 scheme 一律不交：openExternal 对未知
+ * 协议各平台行为不一，Windows 上历史攻击面（ms-msdt: 一类）都集中在这里。
+ */
+export function isSystemHandoffLink(url: string): boolean {
+  const parsed = parse(url.trim());
+  return parsed !== null && parsed.protocol === "mailto:";
+}
+
 function parse(text: string): URL | null {
   try {
     return new URL(text);

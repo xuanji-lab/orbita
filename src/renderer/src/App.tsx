@@ -738,6 +738,8 @@ export function App() {
             setSidebarWidth(width);
             changeSettings({ sidebarWidth: width });
           }}
+          usagePet={settings.usagePet}
+          onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
         />
 
         <main className="pane">

@@ -10,6 +10,7 @@ import {
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
+  parseUsagePet,
   SIDEBAR_WIDTH_MAX,
   SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
@@ -615,5 +616,22 @@ describe("selectableThemes（主题选择卡的可选档位）", () => {
   it("过滤只动选择卡：已存的 copybook 仍被 parseTheme 认（照常应用，只是不再可选）", () => {
     deepStrictEqual(parseSettings({ theme: "copybook" }).theme, "copybook");
     ok(selectableThemes(false).includes(parseSettings({ theme: "copybook" }).theme) === false);
+  });
+});
+
+describe("parseSettings 的 usagePet（星云钉日期 / 收起）", () => {
+  it("合法值原样保留，缺席不落键", () => {
+    deepStrictEqual(parseSettings({ usagePet: { pinnedDate: "2026-10-09", hidden: true } }).usagePet, {
+      pinnedDate: "2026-10-09",
+      hidden: true,
+    });
+    deepStrictEqual(parseSettings({}).usagePet, undefined);
+  });
+
+  it("日期格式不对丢掉、hidden 只认 true、两样都没有不落键", () => {
+    deepStrictEqual(parseUsagePet({ pinnedDate: "10-09", hidden: "yes" }), undefined);
+    deepStrictEqual(parseUsagePet({ hidden: false }), undefined);
+    deepStrictEqual(parseUsagePet({ pinnedDate: "2026-10-09", hidden: false }), { pinnedDate: "2026-10-09" });
+    deepStrictEqual(parseUsagePet([]), undefined);
   });
 });

@@ -126,6 +126,12 @@ export const EXPERIMENTAL_FEATURE_IDS = [
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
+/** 星云摆放偏好：钉在哪天（本地日期键 YYYY-MM-DD）、收没收起 */
+export interface UsagePetPref {
+  pinnedDate?: string;
+  hidden?: true;
+}
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -207,6 +213,12 @@ export interface AppSettings {
   starredModels?: ModelPair[];
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
+  /**
+   * 左下角星云的摆放（2026-10-12 用户：不加设置项，直接在左下角点）：点一格把星云钉在
+   * 那天（按**日期**记，滑出 7 天窗口后自然回到今天），点星云把它收起、让出空间。
+   * 缺席 = 跟着今天、显示着。设置页里不出现。
+   */
+  usagePet?: UsagePetPref;
   /**
    * 受管浏览器「你的」tab 的下载目录（绝对路径）。**缺席 = 系统下载文件夹**（主进程解析）。
    * 用户指定，agent 每轮被告知（TurnDirectories.browserDownloads）。
@@ -380,6 +392,7 @@ export function parseSettings(raw: unknown): AppSettings {
     lastUsed?: unknown;
     browserDownloadDir?: unknown;
     starredModels?: unknown;
+    usagePet?: unknown;
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
     /** 旧总开关（逐项开关之前）：true 等价于 paper-themes + session-lifecycle 都开 */
@@ -402,6 +415,7 @@ export function parseSettings(raw: unknown): AppSettings {
       : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
   const starredModels = parseStarredModels(record.starredModels);
+  const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record);
   return {
@@ -421,6 +435,7 @@ export function parseSettings(raw: unknown): AppSettings {
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
+    ...(usagePet === undefined ? {} : { usagePet }),
     ...(compaction === undefined ? {} : { compaction }),
     // 非布尔一律当作「没动过」丢掉：缺席与 true 是同一个行为，落一个坏值进来
     // 只会让设置面显示的状态和实际行为对不上
@@ -507,6 +522,19 @@ function parseModelPair(raw: unknown): ModelPair | undefined {
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;
   if (typeof record.modelId !== "string" || record.modelId === "") return undefined;
   return { providerId: record.providerId, modelId: record.modelId };
+}
+
+/** 星云偏好：日期键格式不对就丢、hidden 只认 true；两样都没有 = 不落键 */
+export function parseUsagePet(raw: unknown): UsagePetPref | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const record = raw as { pinnedDate?: unknown; hidden?: unknown };
+  const pinnedDate =
+    typeof record.pinnedDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(record.pinnedDate)
+      ? record.pinnedDate
+      : undefined;
+  const hidden = record.hidden === true ? true : undefined;
+  if (pinnedDate === undefined && hidden === undefined) return undefined;
+  return { ...(pinnedDate === undefined ? {} : { pinnedDate }), ...(hidden === undefined ? {} : { hidden }) };
 }
 
 /**
