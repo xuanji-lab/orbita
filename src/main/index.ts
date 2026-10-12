@@ -383,7 +383,43 @@ void app.whenReady().then(async () => {
       ? join(process.resourcesPath, "guest-bridge")
       : join(app.getAppPath(), "guest-bridge", "bin"),
     sandboxExePath,
-    spawnSandbox: (wsbPath) => spawn(sandboxExePath, [wsbPath], { stdio: "ignore" }),
+    /**
+     * 沙箱进程适配。**关闭必须杀整棵树**：spawn 出来的 WindowsSandbox.exe 是 launcher，
+     * 看得见的沙箱窗口是它的子进程 WindowsSandboxClient.exe——只杀 launcher 会留下
+     * 孤儿窗口，VM 一拆它就弹「与沙盒的连接已丢失 0x80072746」（2026-10-12 实测）。
+     * taskkill /T 是异步火力覆盖（同 terminal/runtime.ts 的杀树纪律）；它起不来 /
+     * 失败时退回单进程杀——宁可退化回孤儿窗口，也不能让「关闭」本身失效。
+     */
+    spawnSandbox: (wsbPath) => {
+      const child = spawn(sandboxExePath, [wsbPath], { stdio: "ignore" });
+      const killChild = child.kill.bind(child);
+      const killTree = (): boolean => {
+        const pid = child.pid;
+        if (pid === undefined) return killChild();
+        const taskkill = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        taskkill.on("error", () => {
+          try {
+            killChild();
+          } catch {
+            // 进程已退出
+          }
+        });
+        taskkill.on("exit", (code) => {
+          if (code !== 0) {
+            try {
+              killChild();
+            } catch {
+              // 进程已退出
+            }
+          }
+        });
+        return true;
+      };
+      return Object.assign(child, { kill: killTree });
+    },
     onStatus: broadcastComputerUseStatus,
   });
   registerComputerUseIpc(computerUse);
