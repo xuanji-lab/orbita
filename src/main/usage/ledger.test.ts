@@ -101,8 +101,10 @@ describe("UsageLedger —— 累计与切天", () => {
   });
 
   test("跨午夜：同一时刻在不同时区切到不同的天（账本用时区切，不赌机器）", async () => {
-    // UTC 16:00 = 上海次日 00:00 之后：上海账本把这条记到「明天」
-    const ts = new Date(NOW).setUTCHours(16, 0, 0, 0);
+    // 锚到昨天 16:00 UTC（= 上海今天 00:00）：同一时刻 UTC 账本记「昨天」、上海账本记「今天」，
+    // 两侧都落在各自 week() 的 7 天窗口（只到今天）内。不能锚今天——上海侧会落到「明天」，
+    // 掉出窗口，测试就只在 UTC 16–24 点（上海 0–8 点）跑得过，其余时段必挂。
+    const ts = new Date(NOW - DAY).setUTCHours(16, 0, 0, 0);
     const utc = new UsageLedger(join(dir, "utc.json"), { timeZone: "UTC" });
     const shanghai = new UsageLedger(join(dir, "sh.json"), { timeZone: "Asia/Shanghai" });
     await utc.recordUsage({ id: "m1", timestamp: ts, usage: { input: 5 } });
