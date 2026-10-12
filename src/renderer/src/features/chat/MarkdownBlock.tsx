@@ -8,7 +8,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { Component, memo } from "react";
+import { Component, memo, useContext } from "react";
 import { MdPre } from "./CodeBlock";
 import { closePendingMath } from "./pending-math";
 import { remarkDemoteBoundaryMath } from "./math-guard";
@@ -16,6 +16,9 @@ import { rehypeBubbleChips } from "./chip-runs.ts";
 import { Icon } from "../../shell/Icon";
 import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
+import { useExperimentalFeature } from "../../experimental.ts";
+import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
+import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
 
 /**
  * sanitize 白名单：defaultSchema 之上只放行 `<details>`/`<summary>`，其余标签
@@ -58,19 +61,33 @@ const BUBBLE_BANNED = ["h1", "h2", "h3", "h4", "h5", "h6"];
 export const MarkdownBlock = memo(function MarkdownBlock({
   text,
   variant = "full",
+  streaming = false,
 }: {
   text: string;
   /** "bubble"：用户气泡内的轻量渲染——标题摊平成文本；单个换行保留为 <br>
    *（remark-breaks，用户消息里按 Enter 的换行不该被 markdown 吞掉）。 */
   variant?: "full" | "bubble";
+  /** 仅流式中的那条消息传 true：尾部未闭合的 `$…` 补上闭合符让公式逐字成形
+   *（pending-math.ts）。落定的消息必须 false——已写完的文本里孤立的 `$`（如
+   * 「价格 $5 起」）不该被凭空补一个闭合符变成公式（2026-10 事故）。memo 按 prop
+   * 浅比较，布尔翻转不引发无关重渲染。 */
+  streaming?: boolean;
 }) {
   const bubble = variant === "bubble";
+  // PDF 引用标记（实验功能「PDF 引用」）只在 assistant 正文里认：用户气泡里打出来的
+  // `[^c4k2]` 是用户的字，不是 agent 核验过的引用；开关关着时标记退回纯文本
+  const citations = useExperimentalFeature("pdf-citations") && !bubble;
+  const remarkPlugins = bubble
+    ? [remarkGfm, remarkMath, remarkBreaks, remarkDemoteBoundaryMath]
+    : citations
+      ? [remarkGfm, remarkMath, remarkDemoteBoundaryMath, remarkCitationMarkers]
+      : [remarkGfm, remarkMath, remarkDemoteBoundaryMath];
   return (
     // data-script：以中文为主还是拉丁为主（dominant-script.ts），Typescript 主题按它换阅读字
     <div className={bubble ? "chat-md bubble-md" : "chat-md"} data-script={dominantScript(text)}>
       <MarkdownErrorBoundary>
         <ReactMarkdown
-          remarkPlugins={bubble ? [remarkGfm, remarkMath, remarkBreaks, remarkDemoteBoundaryMath] : [remarkGfm, remarkMath, remarkDemoteBoundaryMath]}
+          remarkPlugins={remarkPlugins}
           rehypePlugins={
             bubble
               ? // bubble 变体在 sanitize 之后多挂 rehypeBubbleChips：用户原文里的 /skill: token
@@ -87,7 +104,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
           components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre, span: ChipSpan }}
           {...(bubble ? { disallowedElements: BUBBLE_BANNED, unwrapDisallowed: true } : {})}
         >
-          {closePendingMath(text)}
+          {streaming ? closePendingMath(text) : text}
         </ReactMarkdown>
       </MarkdownErrorBoundary>
     </div>
@@ -127,6 +144,8 @@ function RenderFailed(props: { message: string }) {
 
 function ExternalAnchor(props: AnchorProps) {
   const { href, children, node: _node, ...rest } = props;
+  const citeId = citationIdOfHref(href);
+  if (citeId !== null) return <CitationAnchor id={citeId} label={children} />;
   const external = href !== undefined && /^(https?:|mailto:)/i.test(href);
   return (
     <a
@@ -143,6 +162,40 @@ function ExternalAnchor(props: AnchorProps) {
     >
       {children}
     </a>
+  );
+}
+
+/**
+ * PDF 引用编号（remarkCitationMarkers 切出来的 `#orbita-cite-<id>` 锚点）：上标小号，
+ * 悬停给页码与原文，点开在文件面板里跳到 PDF 原文处。编号在本会话的引用表里查不到
+ * （模型写错了编号、引用所在的历史被压缩掉）就原样显示 `[^c4k2]`——写错的编号对
+ * 用户可见，而不是悄悄消失。
+ */
+function CitationAnchor(props: { id: string; label: ReactNode }) {
+  const citation = useContext(CitationTableContext).get(props.id);
+  const open = useContext(CitationOpenContext);
+  if (citation === undefined) return <>{`[^${props.id}]`}</>;
+  const title = citationTitle(citation.page, citation.text);
+  if (open === null) {
+    return (
+      <sup className="chat-cite" title={title}>
+        {props.label}
+      </sup>
+    );
+  }
+  return (
+    <sup className="chat-cite">
+      <a
+        href={`#${props.id}`}
+        title={title}
+        onClick={(event) => {
+          event.preventDefault();
+          open(citation);
+        }}
+      >
+        {props.label}
+      </a>
+    </sup>
   );
 }
 
@@ -189,7 +242,13 @@ function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) 
   const { className, children, node: _node, ...rest } = props;
   const classes = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
   if (!classes.includes("bubble-chip")) {
-    return <span className={className}>{children}</span>;
+    // 非 chip 的 span 原样透传全部属性：KaTeX 的上下标靠 vlist 上的内联 style（top / height）
+    // 定位、MathML 副本靠 aria-hidden——吞掉 rest 时 x^2 的 2 掉到下面变成下标
+    return (
+      <span className={className} {...rest}>
+        {children}
+      </span>
+    );
   }
   const token = String(children);
   const mcp = token.startsWith("/mcp:");

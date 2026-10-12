@@ -230,7 +230,7 @@ export class SessionStore {
    * 不放工作台：那里模型可写，原图不该被工具改掉。目录不预建，首次存图才建。
    * list() 只认 `.meta.json`，这个子目录不会被当成会话。
    */
-  private attachmentsPath(id: string): string {
+  attachmentsPath(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
     return join(this.dir, `${id}.attachments`);
   }
@@ -463,14 +463,16 @@ export class SessionStore {
    *
    * webArtifacts 是旁路网页产物（脚本生成、不在 changes 里、不参与撤销）：
    * 只有它、没有 changes 的轮也落记录——卡片要出，冷启动从 JSONL 重建时
-   * 靠 isFileTurnRecord 把它原样读回来。
+   * 靠 isFileTurnRecord 把它原样读回来。webArtifactsBatch 同理：批量折叠的
+   * 轮一个路径都不列，只有计数——没有计数的那轮卡片就什么都没有了。
    */
   async recordFileTurn(
     id: string,
     changes: readonly FileChangePayload[],
     webArtifacts: readonly string[] = [],
+    webArtifactsBatch?: number,
   ): Promise<FileTurnRecord | null> {
-    if (changes.length === 0 && webArtifacts.length === 0) return null;
+    if (changes.length === 0 && webArtifacts.length === 0 && webArtifactsBatch === undefined) return null;
     const persisted: FileChange[] = [];
     for (const change of changes) {
       persisted.push({
@@ -487,6 +489,7 @@ export class SessionStore {
       timestamp: Date.now(),
       changes: persisted,
       ...(webArtifacts.length > 0 ? { webArtifacts: [...webArtifacts] } : {}),
+      ...(webArtifactsBatch !== undefined ? { webArtifactsBatch } : {}),
     };
     await this.record(id, record);
     return record;
@@ -649,6 +652,16 @@ export class SessionStore {
         ? null
         : { completion, closedAt: completion === "open" ? null : Date.now() },
     );
+  }
+
+  /**
+   * 未读标记（后台跑完还没看，2026-10-10 落盘）：`{ at, failed }` 标未读，null 清。
+   * at / failed 由 renderer 在落定那一刻铸——什么时候跑完的、是不是挂了，是落定时
+   * 的事实不是写盘时的事实。不做幂等判断：renderer 只在标 / 清那两次调，重复写
+   * 同值无害（setCompletion 防的是“重刷新关闭时刻”那类历史改写，这里没有）。
+   */
+  setUnread(id: string, unread: { at: number; failed: boolean } | null): Promise<void> {
+    return this.update(id, { unread });
   }
 
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */

@@ -79,11 +79,13 @@ export function FileTurnCard(props: {
   const shown = open || previewing;
   const added = props.record.changes.reduce((sum, change) => sum + change.added, 0);
   const removed = props.record.changes.reduce((sum, change) => sum + change.removed, 0);
-  // 网页行两处来源：文件账里命中的（write / edit 写的，可撤销）与旁路（脚本生成，仅可打开）
+  // 网页行两处来源：文件账里命中的（write / edit 写的，可撤销）与旁路（脚本生成，仅可打开）；
+  // batch 是批量折叠：本轮网页文件变动超过上限，不逐个列、只报一行计数（无按钮）
   const webFromAccount = props.record.changes.filter((change) => isWebArtifactFile(change.path));
   const scripted = props.record.webArtifacts ?? [];
+  const batch = props.record.webArtifactsBatch;
   const fileRows = props.record.changes.filter((change) => !isWebArtifactFile(change.path));
-  const hasWeb = webFromAccount.length + scripted.length > 0;
+  const hasWeb = webFromAccount.length + scripted.length > 0 || batch !== undefined;
   // 展开键只在确有藏着的文件行时才给：网页行收起态就可见，chevron 展不出新东西就是噪音
   const expandable = fileRows.length > 0;
   // 撤销 / 已撤销只对文件账有意义：旁路产物撤不回去，没账的轮不给撤销按钮
@@ -91,7 +93,10 @@ export function FileTurnCard(props: {
   const label = undoable
     ? t.chat.fileCardChanged(props.record.changes.length) +
       (scripted.length > 0 ? ` · ${t.chat.fileCardWebMade(scripted.length)}` : "")
-    : t.chat.fileCardWebMade(scripted.length);
+    : scripted.length > 0
+      ? t.chat.fileCardWebMade(scripted.length)
+      : // 没账、没逐个列的网页行，只剩批量折叠一行：头部给短摘要，计数全句在行里
+        t.chat.fileCardWebBatchShort;
   const webSection = (bordered: boolean) => (
     <div
       style={{
@@ -108,6 +113,7 @@ export function FileTurnCard(props: {
       {scripted.map((path) => (
         <ArtifactRow key={path} path={path} cwd={props.cwd} sessionId={props.sessionId} scripted />
       ))}
+      {batch !== undefined && <WebBatchRow count={batch} />}
     </div>
   );
   return (
@@ -336,6 +342,26 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
         <Icon name="folder-open" size={11} strokeWidth={1.8} />
         {t.chat.revealArtifact}
       </button>
+    </div>
+  );
+}
+
+/**
+ * 批量折叠行：本轮网页文件变动超过上限（git checkout / 解压归档这类批量操作）
+ * 时不逐个列，只报一行计数。与 ArtifactRow 同款行风格（左图标 + 说明），但
+ * **不带任何按钮**——没有具体路径可打开，给了按钮就是空承诺。
+ */
+function WebBatchRow(props: { count: number }) {
+  const t = useT();
+  return (
+    <div
+      className="web-batch-row"
+      style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0, padding: "2px 0" }}
+    >
+      <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto", display: "inline-flex" }}>
+        <Icon name="layers" size={12} strokeWidth={1.8} />
+      </span>
+      <span style={{ minWidth: 0, color: "var(--color-text-secondary)" }}>{t.chat.fileCardWebBatch(props.count)}</span>
     </div>
   );
 }

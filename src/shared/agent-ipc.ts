@@ -96,6 +96,12 @@ export const ipcChannels = {
   sessionStar: "session:star",
   /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
   sessionSetCompletion: "session:set-completion",
+  /**
+   * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
+   * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
+   * 是否标未读由 renderer 判（没在看才标，planNotice）。
+   */
+  sessionUnread: "session:unread",
   sessionArchive: "session:archive",
   /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
   sessionMove: "session:move",
@@ -156,6 +162,11 @@ export const ipcChannels = {
    * renderer 在 sandbox 里没有文件系统访问权，也不该自己决定读多少。
    */
   fsRead: "fs:read",
+  /**
+   * 读一个 PDF 的字节给预览面板渲染（同 root/dir 白名单，回 `PdfFile`，files.ts）。
+   * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
+   */
+  fsReadPdf: "fs:read-pdf",
   /** 用系统默认应用打开一个文件（同 root/dir 白名单）；预览不了或想编辑时的出口 */
   fsOpen: "fs:open",
   /**
@@ -180,6 +191,10 @@ export const ipcChannels = {
   fsPickFolders: "fs:pick-folders",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
+  /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
+  usageWeek: "usage:week",
+  /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
+  usageEvent: "usage:event",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
   carryoverCreate: "carryover:create",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
@@ -211,6 +226,15 @@ export const ipcChannels = {
    * hi / test（返回 ImportGreetingCheckResult）。只判断、不落盘
    */
   importCheckGreetings: "import:check-greetings",
+  /**
+   * 自定义来源路径：添加（入参 ImportCustomRootInput）——目录经该来源 validate 过才落盘，
+   * 失败抛稳定错误码 IMPORT_CUSTOM_ROOT_INVALID:*；成功返回更新后的清单（ImportCustomRoot[]）
+   */
+  importCustomRootsAdd: "import:custom-roots:add",
+  /** 自定义来源路径：移除一条（入参 ImportCustomRootInput），返回更新后的清单 */
+  importCustomRootsRemove: "import:custom-roots:remove",
+  /** 目录选择框（renderer 无文件系统权，主进程开）：选中返回绝对路径，取消返回 null */
+  importPickDirectory: "import:pick-directory",
   /** 中心存储里的全部 skill（含没链进任何集合的） */
   skillList: "skill:list",
   /** 把 skill 链进一个集合（global 或某个 workspace）；互斥规则见 SkillScope */
@@ -555,6 +579,12 @@ export type AgentCommand =
        * 单语主题说了算，双语主题听语言设置），runtime 只收数据。缺席 = "en"。
        */
       attributionLanguage?: Language;
+      /**
+       * 实验功能「PDF 引用」的开关（settings.experimentalFeatures["pdf-citations"]）。
+       * **主进程从设置装配**（同 gitAttribution）。开着时 runtime 才注册 cite_pdf
+       * 并讲它的用法；缺席 = 关
+       */
+      pdfCitations?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -636,6 +666,8 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
+      /** 实验功能「PDF 引用」的开关，语义同 submit */
+      pdfCitations?: boolean;
     }
   | {
       /**
@@ -695,6 +727,8 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
+      /** 实验功能「PDF 引用」的开关，语义同 submit */
+      pdfCitations?: boolean;
     }
   | { type: "listBuiltins" }
   /**
@@ -954,13 +988,17 @@ export type AgentEvent =
    * 一轮落定时的文件账（agent 进程的快照跟踪器报来）：正文内联，主进程写 blob
    * 后落 FileTurnRecord。没有改动的轮不发（不落空记录）。webArtifacts 是旁路
    * 网页产物（脚本生成的 .html / .htm / .svg，不在 changes 里、不参与撤销）；
-   * 只有它、没有 changes 的轮也发（卡片要出）。
+   * 只有它、没有 changes 的轮也发（卡片要出）。webArtifactsBatch 是批量折叠：
+   * 本轮网页文件变动超过上限时不逐个列（webArtifacts 缺席），只报计数——
+   * git checkout / 解压归档这类批量操作不该被当成「本轮生成了 N 个网页」。
+   * 与 webArtifacts 互斥：折叠时不给列表。
    */
   | {
       type: "fileTurn";
       sessionId: string;
       changes: readonly FileChangePayload[];
       webArtifacts?: readonly string[];
+      webArtifactsBatch?: number;
     }
   /**
    * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
@@ -972,6 +1010,8 @@ export type AgentEvent =
       turnId: string;
       changes: readonly FileChangeView[];
       webArtifacts?: readonly string[];
+      /** 批量折叠计数：本轮网页文件变动超过上限，不逐个列（与 webArtifacts 互斥） */
+      webArtifactsBatch?: number;
     }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的

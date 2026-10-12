@@ -136,8 +136,12 @@ export const en = {
     removeImage: "Remove image",
     materialBox: "Materials",
     imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
-    imageTooLarge: (name: string, mb: number) => `${name} is over ${mb} MB.`,
-    tooManyImages: (max: number) => `Up to ${max} images per message.`,
+    imageTooLarge: (name: string, mb: number) =>
+      `${name} is over ${mb} MB. Put it in a folder and attach the folder (drag it in or use the paperclip) — the model reads it from there as needed.`,
+    tooManyImages: (max: number) =>
+      `Up to ${max} images per message. Put them in a folder and attach the folder (drag it in or use the paperclip) — the model reads them one by one as needed.`,
+    imagesTotalTooLarge: (mb: number) =>
+      `Images in one message can't add up to more than ${mb} MB. Put them in a folder and attach the folder (drag it in or use the paperclip) — the model reads them one by one as needed.`,
     imageReadFailed: (name: string) => `Couldn't read ${name}.`,
     noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
     removeFile: "Remove file",
@@ -241,6 +245,29 @@ export const en = {
   rowStatus: {
     pinned: "Pinned",
     subRunning: "Sub-session running",
+    running: "Running",
+    waiting: "Waiting for your reply",
+    unread: "Finished · not viewed yet",
+    unreadFailed: "Stopped with an error · not viewed yet",
+  },
+
+  /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */
+  notice: {
+    finished: "Task finished",
+    failed: "Task stopped with an error",
+    openNow: "Open",
+    sideChat: "Side chat",
+    later: "Later",
+    openNowTip: "Open it here, replacing the current chat",
+    sideChatTip: "Open it in the side chat, keep the current chat",
+    laterTip: "Keep it marked unread in the sidebar",
+  },
+
+  /** 右下角铃铛弹出的清单（侧栏竖条的另一个入口） */
+  bell: {
+    title: "Notifications",
+    empty: "Nothing running, waiting, or unread",
+    markAllRead: "Mark all read",
   },
 
   menu: {
@@ -258,8 +285,8 @@ export const en = {
     terminal: "Terminal",
     sideChat: "Side chat Ctrl+Alt+D",
     subSessions: (count: number) => `Sub-sessions (${count})`,
-    channels: "Sub-session channels",
     browser: "Built-in browser",
+    bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
   },
 
   browser: {
@@ -347,7 +374,7 @@ export const en = {
     removeTip: "Remove from the list. The folder on disk is not touched.",
     newTaskInWorkspace: "New task in this workspace",
     showLess: "Show less",
-    showMore: (hidden: number) => `Show ${hidden} more`,
+    showMore: (next: number, hidden: number) => (next === hidden ? `Show ${hidden} more` : `Show ${next} more (${hidden} hidden)`),
     deletePermanently: "Delete permanently",
     deleteHintSub: (count: number) => `+${count} sub`,
     deleteHintFiles: (count: number) => `+${plural(count, "file")}`,
@@ -386,6 +413,22 @@ export const en = {
     continueTip: "Start a new task with this item's context",
     jumpToSource: "Jump to the source task",
     jumpToSourceTip: "Open the task this came from",
+  },
+
+  usage: {
+    /** 周一基的星期短标（侧栏左下角 7 天用量格下方的字） */
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    today: "Today",
+    /** 悬停一天没有用量时 */
+    noUsage: "A rest day. Enjoy it~",
+    /** 悬停一格：只给当天总量（日期与星期在格子下面） */
+    day: (tokens: string) => `${tokens} tokens`,
+    /** 点一格的效果（格子的悬停 title） */
+    pinPetHere: "Click to keep the nebula on this day",
+    backToToday: "Click to bring the nebula back to today",
+    showPetHere: "Click to bring the nebula out here",
+    /** 点星云本体 */
+    hidePet: "Tuck the nebula away",
   },
 
   settings: {
@@ -440,6 +483,10 @@ export const en = {
     pastedCollapseAria: "Collapse pasted text",
     pastedCollapseInfo:
       "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
+    completionSound: "Completion sound",
+    completionSoundAria: "Completion sound",
+    completionSoundInfo:
+      "Play a cabin-call chime when a task finishes while you are looking elsewhere · the sidebar highlight and the card still appear when it is off",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",
@@ -717,6 +764,24 @@ export const en = {
     foundTip: "Only checked that it exists · nothing read yet",
     notScanned: "Not scanned",
     nothingNew: "Nothing new",
+    // 步骤 1 · 自定义路径（自动定位漏掉的散落目录手动补上）
+    customRootsNote:
+      "Missed a data folder — a backup, a renamed copy? Point orbita at it · checked for that source's chat history, then scanned like the found ones",
+    customRootsSourceLabel: "Which source the folder belongs to",
+    customRootsPathLabel: "Data folder path",
+    customRootsPathPlaceholder: "Paste a data folder path",
+    customRootsBrowse: "Browse…",
+    customRootsAdd: "Add",
+    customRootsAdding: "Adding…",
+    customRootsRemove: "Remove",
+    customRootsRemoveTip: "Stop reading this folder · the folder itself is never touched",
+    customRootsAddedFor: (source: string) => `Data folder for ${source}`,
+    customRootsInvalid: {
+      "not-found": "That folder doesn't exist",
+      "no-data": "No chat history of that source found there",
+      duplicate: "Already added",
+    },
+    customRootsAddFailed: "Couldn't add:",
     // 步骤 2：会话
     stepSessions: "Sessions",
     rangeTip: "Show sessions updated within",
@@ -989,6 +1054,9 @@ export const en = {
     fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
     fileCardWebMade: (n: number) => `${n} web page${n === 1 ? "" : "s"} generated`,
     fileCardScripted: "Script-generated · open only",
+    fileCardWebBatchShort: "Web files changed in bulk",
+    fileCardWebBatch: (n: number) =>
+      `${n} web file${n === 1 ? "" : "s"} changed this turn (looks like a bulk operation, not listed)`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
     fileCardUndo: "Undo",
@@ -998,6 +1066,8 @@ export const en = {
     openInOrbita: "Open in orbita",
     revealArtifact: "Show in folder",
     worked: "Worked",
+    // Weekday names for the full timestamp on message-time hover (getDay() order, Sunday first)
+    timeWeekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     thought: "thought",
     lines: (n: number) => `${n} lines`,
     files: (n: number) => `${n} files`,
@@ -1082,30 +1152,6 @@ export const en = {
     markOther: (peer: string, kind: string) => `${peer} · ${kind}`,
     taskFrom: (peer: string) => `task from ${peer}`,
     replyFrom: (peer: string) => `reply from ${peer}`,
-    viewInChannel: (text: string) => `${text} · view in channel`,
-    viewInChannelTip: "View in channel",
-    whoReplySteer: "reply · steer",
-    whoReplyTurnEnd: "reply · turn end",
-    you: "you",
-    empty: "No messages yet — speak as parent to steer it.",
-    deliveryTip:
-      "steer: injects at the next tool call without stopping it · turn end: waits until its current turn ends",
-    closed: "closed ·",
-    /** stopped 专用那一行（与 closed 同一个 reopen 入口，但话说清楚是谁停的） */
-    closedStopped: "stopped by you ·",
-    reopenToSpeak: "reopen to speak",
-    steer: "steer",
-    turnEnd: "turn end",
-    speakAsParent: "Speak as parent…",
-    status: {
-      running: "running",
-      waiting: "waiting",
-      approval: "needs approval",
-      done: "done",
-      failed: "failed",
-      idle: "idle",
-      stopped: "stopped",
-    },
     subSession: "Sub-session",
     parentSession: "Parent session",
     delegateStatus: {
@@ -1118,11 +1164,23 @@ export const en = {
     },
     delegating: "delegating…",
     delegated: "DELEGATED",
-    taskKicker: "TASK",
-    from: (peer: string) => `from ${peer}`,
-    collapse: "Collapse",
-    showFullTask: "Show full task",
-    taskNotFound: "Task message not found in the channel.",
+    fromParentTask: "Task from the parent session",
+    fromParentReply: "Parent session replied",
+    fromParentYouReply: "You (as the parent) replied",
+    fromParentStop: "Stopped by the parent session",
+    messageNotFound: "Message not found in the channel.",
+    asksYou: (peer: string) => `${peer} asks:`,
+    goAnswer: "Answer ›",
+    childDone: (peer: string) => `${peer} finished`,
+    childFailed: (peer: string) => `${peer} failed`,
+    answerIt: "Answer it…",
+    notSpokenRunning: "running · hasn't spoken yet",
+    notSpoken: "hasn't spoken yet",
+    latestQuestion: (text: string) => `Q: ${text}`,
+    latestProgress: (text: string) => `Progress: ${text}`,
+    latestDone: "Done",
+    latestFailed: "Failed",
+    latestReply: (text: string) => `Replied: ${text}`,
   },
 
   queue: {
@@ -1153,6 +1211,9 @@ export const en = {
     },
     back: "Back to sub-sessions",
     openAsMain: "Open as main",
+    openInPanel: "Open in the Sub-sessions panel",
+    waitingCount: (count: number) => `${count} waiting on you`,
+    inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
     openAsMainTip: "Switch the main pane to this sub-session",
     gone: "This sub-session is gone.",
     of: (title: string) => `Sub-sessions of "${title}"`,
@@ -1387,6 +1448,11 @@ export const en = {
     tooLarge: (size: string, limit: string) => `Too large to preview (${size} — the limit is ${limit})`,
     emptyFile: "Empty file",
     truncated: (shown: string, total: string) => `Showing the first ${shown} of ${total}`,
+    pdfFailed: "Couldn't open this PDF:",
+    pdfPassword: "This PDF is password-protected and can't be previewed.",
+    citeNotFound: (page: number) =>
+      `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
+    citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
   },
 };
 

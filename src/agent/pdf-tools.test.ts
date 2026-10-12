@@ -19,6 +19,7 @@ import {
   PDF_IMAGE_WIDTH_MIN,
   PDF_MAX_PAGES_PER_CALL,
 } from "./pdf-tools.ts";
+import { citationsOfDetails } from "../shared/pdf-quote.ts";
 
 /** 夹具里的每页正文要够长（阈值 PDF_NO_TEXT_LAYER_MIN_CHARS 以上），除非在测扫描件 */
 /**
@@ -392,5 +393,57 @@ describe("read_pdf", () => {
     const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
     assert.ok(text.includes("read_pdf"), text.slice(0, 120));
     assert.ok(!text.includes("%PDF-"), text.slice(0, 120));
+  });
+});
+
+/**
+ * cite_pdf 的账（实验功能「PDF 引用」）：只在实验开关开着时注册；跨行引文核验通过、
+ * 编号与 details 一一对应；编造的引文不发编号、附最近处；扫描件直说不能引。
+ * 匹配算法本身的边界在 shared/pdf-quote.test.ts，这里只验工具这一层的接线。
+ */
+describe("cite_pdf", () => {
+  const cite = async (path: string, quotes: unknown) => {
+    const citeTool = createPdfTools(dir, { pdfCitations: true }).find((t) => t.name === "cite_pdf")!;
+    const result = await citeTool.execute("call-c", { path, quotes }, undefined, undefined, undefined as never);
+    const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
+    return { text, citations: citationsOfDetails(result.details) };
+  };
+
+  test("实验开关关着不注册，开着才有", () => {
+    assert.deepEqual(createPdfTools(dir).map((t) => t.name), ["read_pdf"]);
+    assert.deepEqual(createPdfTools(dir, { pdfCitations: true }).map((t) => t.name), ["read_pdf", "cite_pdf"]);
+  });
+
+  test("跨行引文核验通过：编号写进正文提示，details 记 PDF 原文与页码", async () => {
+    const { text, citations } = await cite(join(dir, "three-pages.pdf"), [
+      { text: "lazy dog near the river bank every morning. The valley keeps its slow pace", page: 2 },
+    ]);
+    assert.equal(citations.length, 1);
+    const [c] = citations;
+    assert.equal(c?.page, 2);
+    assert.equal(c?.path, join(dir, "three-pages.pdf"));
+    assert.equal(c?.text, "lazy dog near the river bank every morning. The valley keeps its slow pace");
+    assert.ok(text.includes(`[^${c?.id}] page 2`), text);
+    assert.ok(text.startsWith("Verified 1 quote."), text);
+  });
+
+  test("编造的引文不发编号，回最近处；其余照常核验", async () => {
+    const { text, citations } = await cite("three-pages.pdf", [
+      { text: "The quick brown fox jumps over the sleeping cat in the barn at noon" },
+      { text: "The valley keeps its slow pace without answering anybody" },
+    ]);
+    assert.equal(citations.length, 1);
+    assert.ok(text.includes("Verified 1 of 2 quotes"), text);
+    assert.ok(text.includes("NOT CITED — not found"), text);
+    assert.ok(text.includes("Closest passage, page 1"), text);
+    assert.ok(text.includes("appears 3 times"), text);
+  });
+
+  test("扫描件（无文本层）直说不能引", async () => {
+    await assert.rejects(cite(join(dir, "scanned.pdf"), [{ text: "anything at all here" }]), /no text layer/);
+  });
+
+  test("没给 quotes 报错指路", async () => {
+    await assert.rejects(cite(join(dir, "three-pages.pdf"), []), /requires "quotes"/);
   });
 });

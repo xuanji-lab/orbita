@@ -2,7 +2,7 @@
  * 设计 token 契约的静态扫描（AGENTS.md「禁裸 hex / 未定义 CSS 变量」）。
  *
  * 两条检查：
- *  1. **每个 `var(--x)` 引用都得有声明**——声明来自 `Orbita Design System/tokens/*.css`、
+ *  1. **每个 `var(--x)` 引用都得有声明**——声明来自 `design-system/tokens/*.css`、
  *     渲染层 `.css`，以及渲染层 TS/TSX 在运行时写的自定义属性（对象字面量 `"--x": …` 或
  *     `el.style.setProperty("--x", …)`）。少了任何一处，token 就是静默回落到继承值，
  *     `--font-size-label` 就是这么死的（McpPanel.tsx / SkillsPanel.tsx 两处）。
@@ -24,7 +24,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // HERE = <repo>/src/renderer/src —— 上三层到仓库根
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const RENDERER_SRC = join(REPO_ROOT, "src/renderer/src");
-const TOKENS_DIR = join(REPO_ROOT, "Orbita Design System/tokens");
+const TOKENS_DIR = join(REPO_ROOT, "design-system/tokens");
 
 // 本文件自己的绝对路径：声明/引用扫描都要把自己排除在外（字符串里写满了 token 名与
 // 正则片段，混进去只会污染结果）。

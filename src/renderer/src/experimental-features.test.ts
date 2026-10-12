@@ -37,4 +37,19 @@ describe("EXPERIMENTAL_FEATURES", () => {
   it("PR 链接指向仓库的 PR 页", () => {
     assert.equal(pullRequestUrl(184), "https://github.com/xuanji-lab/orbita/pull/184");
   });
+
+  it("exclusiveWith 指向存在的 id，且双方对称声明（今天只有黑洞 ↔ 俄罗斯方块一对）", () => {
+    const byId = new Map(EXPERIMENTAL_FEATURES.map((feature) => [feature.id, feature]));
+    for (const feature of EXPERIMENTAL_FEATURES) {
+      if (feature.exclusiveWith === undefined) continue;
+      const other = byId.get(feature.exclusiveWith);
+      assert.ok(other !== undefined, `${feature.id} 的 exclusiveWith 指向不存在的 ${feature.exclusiveWith}`);
+      assert.equal(other.exclusiveWith, feature.id, `${feature.id} 与 ${feature.exclusiveWith} 的互斥要对称声明`);
+    }
+    // 互斥的双方文案里都要说清（用户在打开之前就该知道会关掉什么）
+    const tetris = byId.get("composer-tetris");
+    const blackhole = byId.get("composer-blackhole");
+    assert.ok(tetris?.summary.zh.includes("互斥") === true && tetris?.summary.en.includes("Mutually exclusive") === true);
+    assert.ok(blackhole?.summary.zh.includes("互斥") === true && blackhole?.summary.en.includes("Mutually exclusive") === true);
+  });
 });

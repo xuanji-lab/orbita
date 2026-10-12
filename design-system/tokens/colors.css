@@ -1,0 +1,346 @@
+/* `[data-theme-preview="light"]` 是设置页 Theme 预览卡专用的选择器（ThemeCard.tsx）：
+   卡片要在「当前主题不是 light」时仍然画出 light 档的真实颜色，而 token 平时挂在
+   `:root` / `:root[data-theme="…"]` 上，子树拿不到别的主题的值——`data-theme-preview`
+   子树因此单独复述同一批声明。三块顺序（light 在前、dark/black 在后）保证在 light
+   根下渲染 dark/black 预览时，后面的块能覆盖前面的声明。 */
+:root,
+[data-theme-preview="light"] {
+  color-scheme: light;
+
+  /* surfaces */
+  --color-bg-app: #f3f4f1;
+  --color-bg-sidebar: #f7f7f3;
+  --color-bg-panel: #ffffff;
+  --color-bg-muted: #f8f8f5;
+  /* hover 是**半透明**的一层，不是一块实色（wafo 2026-09-23）：实色 #f0f1ed 叠在白面板上
+     看得清，叠在侧栏的米白壳底（#f3f4f1）上几乎同色、等于没有 hover。半透明压暗的量
+     与底色无关，面板与侧栏一样清楚。取次级文字色（#5f6368，略带冷）12%：冷灰与蓝 accent 相配 */
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+  --color-bg-active: #e7eefd;
+
+  /* text */
+  --color-text-primary: #202124;
+  --color-text-secondary: #5f6368;
+  --color-text-tertiary: #8b8f94;
+  --color-text-inverse: #ffffff;
+  /* 永远压在深色地上的字（遮罩 / toast / 图片预览控件），不随主题翻转 */
+  --color-text-on-dark: #ffffff;
+
+  /* borders */
+  --color-border-subtle: #e5e5df;
+  --color-border-default: #dfdfd7;
+  --color-border-strong: #d7d7cf;
+
+  /* accent — reserved for the primary action and selection. Nothing else.
+     Light theme is white + blue; the dark theme is black + yellow. */
+  --color-accent: #1d4ed8;
+  --color-accent-strong: #16379c;
+  --color-accent-soft: #e7eefd;
+  /* text/glyph colour on a filled accent surface */
+  --color-accent-fg: #ffffff;
+
+  /* selected mode / panel — same hue as the accent */
+  --color-mode-active-bg: #e7eefd;
+  --color-mode-active-fg: #1d4ed8;
+
+  /* status — prefers icons and words; color is the quiet second signal.
+     A filled status surface takes its own foreground token: --color-*-fg. The plain
+     --color-danger / --color-info values are tuned to read as TEXT on the theme ground;
+     as a fill they need -solid, which is darker so white text clears contrast. */
+  --color-danger: #b42318;
+  --color-danger-solid: #b42318;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #fdecea;
+  --color-warning: #b7791f;
+  --color-info: #2563eb;
+  --color-info-fg: #ffffff;
+  /* success (added 2026-08-23, R9-05): the app marks git additions, passed validation
+     and editor badges with it. Kept as quiet as the rest of the status set. */
+  --color-success: #1a7f37;
+  --color-success-soft: color-mix(in srgb, var(--color-success) 16%, transparent);
+  --color-success-bg: #f0fdf4;
+  --color-success-border: #bbf7d0;
+
+  /* chat surfaces */
+  --color-chat-card-bg: #fafafa;
+  --color-chat-muted-bg: #f4f4f5;
+  --color-chat-control-bg: #ffffff;
+  --color-chat-table-bg: #ffffff;
+  --color-chat-link: #2762ea;
+  --color-code-bg: #111418;
+  --color-code-text: #d1d5db;
+
+  /* semantic aliases */
+  --surface-app: var(--color-bg-app);
+  --surface-card: var(--color-bg-panel);
+  --surface-muted: var(--color-bg-muted);
+  --text-body: var(--color-text-primary);
+  --text-quiet: var(--color-text-secondary);
+  --text-faint: var(--color-text-tertiary);
+  --border-hairline: var(--color-border-subtle);
+  --action-primary: var(--color-accent);
+  --action-primary-hover: var(--color-accent-strong);  /* 类别色（2026-10 起，读法见 readme *Category colours*）：文档 / 演示 / 表格三族的
+     共享类别色——文件类型图标（fileIconTone）与工具胶囊（skill 绿、MCP 蓝；橙留给
+     以后的命令）同用一组，之后材料方块（Excel / Doc / PPT）也接进来。文件名文字仍
+     是正墨；胶囊用法是淡底 + 同色描边（color-mix 派生，不另立值）。不借 accent /
+     info / success / warning（各有语义）；图标处对比度 ≥ 3:1、色相彼此分开
+     （filetype-colors.test.ts 把关）。 */
+  --color-filetype-doc: #1b5dc7;
+  --color-filetype-slides: #c2410c;
+  --color-filetype-sheet: #15803d;
+  /* PDF 引用高亮（实验功能「PDF 引用」，2026-10 新增）：点正文里的引用编号，PDF 预览里
+     被引的那段原文盖上这层荧光笔黄。只此一用。只在 light 根块声明一次：PDF 页面在
+     每个主题下都是白纸（canvas 自己画底），覆盖层配 multiply 混合，深浅主题同一个值。 */
+  --color-citation-mark: rgba(250, 204, 21, 0.45);
+
+  /* 星云色（2026-10 起，读法见 readme *Nebula colour*）：侧栏左下角「7 天用量格 +
+     星云能量体」的专用色。用量是数据不是操作也不是状态，不借 accent / 状态色；
+     格子按档位混透明（30 / 62 / 100%）、能量体的云与碎片同色。每个主题一种
+     星云主色，像宇宙里不同星云各有主色：浅色是反射星云蓝，黛是氧发射青，
+     玄是氢发射品红，纸面两档取各自的笔色。 */
+  --color-nebula: #2f6bf0;
+
+}
+
+/*
+ * 暗色两档（2026-09-30 定稿，色值取自两家参考应用的安装包实测——见 PR 描述）：
+ * **黛 = DeepSeek Harness 深色**（蓝灰，收敛：壳 #202021 / 井 #151517 / 卡 #2c2c2e，
+ * 灰字是三家参考里最亮的一档 #cfd3d6 / #adb2b8）；
+ * **玄 = ZCode zai-dark 的真实结构**（纯灰，张开：亮壳 #2b2b2b / 井 #161616 / 卡 #262626——
+ * 左栏透窗口框架底色 #2b2b2b，会话区另盖 #161616，代码块与井同色靠边框分）。
+ * 两井几乎同深，**分野全在外壳与卡面的亮度**：黛的壳比井高一档（ΔL* 5.5），玄的壳比井亮
+ * 一大截（ΔL* 10.3）。**两档的壳都必须与井拉开看得见的台阶**——旧石墨糊成一片（ΔL* 5.0）
+ * 是换血的根因，DeepSeek 原样的壳只比井高 3.0（同病，甚至更糊），所以黛的壳从 #1b1b1c
+ * 提到 #202021：井、卡与三档墨仍是 DeepSeek 原值，只有壳离开原样。
+ * 层次语法不变：外壳 → 会话井 → 卡面/输入卡浮起 → 发丝线白色低透明。
+ * accent 琥珀黄全链不动；文字三档必须实色且过对比度底线（dark-contrast.test）。
+ */
+/* graphite — 黛 Slate（2026-09-30 换血，顶替原石墨槽位）：DeepSeek 蓝灰档。
+   壳 #202021 不是 DeepSeek 原值（原值 #1b1b1c 与井只差 ΔL* 3.0，比它替换掉的旧石墨还糊）；
+   井 / 卡 / 三档墨仍是原值。`--color-bg-muted` 跟着壳一起 +5（原值 #232324 走的是
+   「壳 +8 通道」的关系，不跟就会贴在壳上——右栏 soft 图标按钮的底就是它）。
+   手动档，system 不落。显示名见 messages；档位 id 沿用 graphite（IPC 契约不动）。 */
+/* `[data-theme-preview="graphite"]` 同上，给 Theme 预览卡的黛缩略窗用。 */
+:root[data-theme="graphite"],
+[data-theme-preview="graphite"] {
+  color-scheme: dark;
+  --color-bg-app: #202021;
+  --color-bg-sidebar: #202021;
+  --color-bg-panel: #151517;
+  --color-bg-muted: #282829;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
+  --color-bg-active: rgba(214, 194, 69, 0.08);
+  --color-text-primary: #f9fafb;
+  --color-text-secondary: #cfd3d6;
+  --color-text-tertiary: #adb2b8;
+  --color-text-inverse: #202021;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-default: rgba(255, 255, 255, 0.12);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-accent: #d6c245;
+  --color-accent-strong: #e2d05e;
+  --color-accent-soft: rgba(214, 194, 69, 0.08);
+  --color-accent-fg: #1b1a15;
+  --color-mode-active-bg: rgba(214, 194, 69, 0.08);
+  --color-mode-active-fg: #d6c245;
+  --color-danger: #ff7b72;
+  --color-danger-solid: #c9372c;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #3b1f1d;
+  --color-warning: #d4a72c;
+  --color-info: #52a8ff;
+  --color-info-fg: #1b1a15;
+  --color-success: #56d364;
+  --color-success-bg: #12251a;
+  --color-success-border: #1d4429;
+  --color-chat-card-bg: #2c2c2e;
+  --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
+  --color-chat-control-bg: #2c2c2e;
+  --color-chat-table-bg: #151517;
+  --color-chat-link: #52a8ff;  /* 类别色（同明档，换亮值；读法见 readme *Category colours* 与亮档注释）：三色在黛 /
+     玄的井、卡与壳上都 ≥ 3:1，色相彼此分开 */
+  --color-filetype-doc: #6ea8fe;
+  --color-filetype-slides: #ff9466;
+  --color-filetype-sheet: #4ecf7e;
+  /* 星云色（读法见亮档注释与 readme *Nebula colour*）：黛档取氧发射青——深空星云
+     看的是发射线自己的颜色，暗档整体换亮值 */
+  --color-nebula: #3ec1c9;
+
+}
+
+/* black — 玄 Onyx（2026-09-30 换血，顶替原墨槽位）：ZCode zai-dark 纯灰档。
+   **system 的深色落点仍是这档**（沿用原墨的位）。灰字不用 ZCode 的透明度派生，钉成实色，
+   取它的档位（白 0.90 / 0.72 / 0.50 → #e5e5e5 / #b8b8b8 / #808080）：
+   30% 白的三级在井上只有 ~2.2:1，过不了 4.5；二级从换血时的 #a6a6a6 抬了一档——壳亮起来
+   之后它压在壳（#2b2b2b）上只有 5.82:1，破了 secondary ≥ 7，而左栏标签与空态提示就落在壳上；
+   #b8b8b8 是壳上 7.14 / 井上 9.12。档位 id 沿用 black。 */
+/* `[data-theme-preview="black"]` 同上，给 Theme 预览卡的玄缩略窗（与 System 卡右半）用。 */
+:root[data-theme="black"],
+[data-theme-preview="black"] {
+  color-scheme: dark;
+  --color-bg-app: #2b2b2b;
+  --color-bg-sidebar: #2b2b2b;
+  --color-bg-panel: #161616;
+  --color-bg-muted: #202020;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
+  --color-bg-active: rgba(214, 194, 69, 0.08);
+  --color-text-primary: #e5e5e5;
+  --color-text-secondary: #b8b8b8;
+  --color-text-tertiary: #808080;
+  --color-text-inverse: #2b2b2b;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-border-default: rgba(255, 255, 255, 0.1);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-accent: #d6c245;
+  --color-accent-strong: #e2d05e;
+  --color-accent-soft: rgba(214, 194, 69, 0.08);
+  --color-accent-fg: #1b1a15;
+  --color-mode-active-bg: rgba(214, 194, 69, 0.08);
+  --color-mode-active-fg: #d6c245;
+  --color-danger: #ff7b72;
+  --color-danger-solid: #c9372c;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #3b1f1d;
+  --color-warning: #d4a72c;
+  --color-info: #52a8ff;
+  --color-info-fg: #1b1a15;
+  --color-success: #56d364;
+  --color-success-bg: #12251a;
+  --color-success-border: #1d4429;
+  --color-chat-card-bg: #262626;
+  --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
+  --color-chat-control-bg: #262626;
+  --color-chat-table-bg: #161616;
+  --color-chat-link: #52a8ff;  /* 类别色（同明档，换亮值；读法见 readme *Category colours* 与亮档注释）：三色在黛 /
+     玄的井、卡与壳上都 ≥ 3:1，色相彼此分开 */
+  --color-filetype-doc: #6ea8fe;
+  --color-filetype-slides: #ff9466;
+  --color-filetype-sheet: #4ecf7e;
+  /* 星云色（读法见亮档注释与 readme *Nebula colour*）：玄档取氢发射品红——与黛的
+     氧发射青是两种不同的发射星云 */
+  --color-nebula: #e0588f;
+
+}
+
+/* copybook — 小学作业（中文）：璇玑载体谱「稿纸」一档的中文版（2026-09-25 载入，同日由
+   Manuscript / 稿纸改名——那个年代小学生写字用的是绿格作业本，不是稿纸）。米白纸、绿格、
+   老师的红笔。accent 取格线的绿（主操作、选中、勾选）；红笔色给 danger
+   与纸面批注（--color-paper-pen）。只有明，system 不落这档。
+   `[data-theme-preview="copybook"]` 同上，给 Theme 预览卡用。 */
+:root[data-theme="copybook"],
+[data-theme-preview="copybook"] {
+  color-scheme: light;
+  --color-bg-app: #e6e4dc;
+  --color-bg-sidebar: #e8e6df;
+  --color-bg-panel: #ffffff;
+  --color-bg-muted: #f4f4ef;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+  --color-bg-active: rgba(59, 122, 85, 0.1);
+  --color-text-primary: #1f1f1d;
+  --color-text-secondary: #52524e;
+  --color-text-tertiary: #6e6e68;
+  --color-text-inverse: #ffffff;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: #e4e3dc;
+  --color-border-default: #d6d5cd;
+  --color-border-strong: #c9c8bf;
+  --color-accent: #3b7a55;
+  --color-accent-strong: #2f6444;
+  --color-accent-soft: rgba(59, 122, 85, 0.1);
+  --color-accent-fg: #ffffff;
+  --color-mode-active-bg: rgba(59, 122, 85, 0.1);
+  --color-mode-active-fg: #2a6041;
+  --color-danger: #cc3a2e;
+  --color-danger-solid: #b3322a;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #fbeae8;
+  --color-warning: #9a6614;
+  --color-info: #22345a;
+  --color-info-fg: #ffffff;
+  --color-success: #2e7d4f;
+  --color-success-bg: #eef7f0;
+  --color-success-border: #bfe0c9;
+  --color-chat-card-bg: #ffffff;
+  --color-chat-muted-bg: #f4f4ef;
+  --color-chat-control-bg: #ffffff;
+  --color-chat-table-bg: #ffffff;
+  --color-chat-link: #22345a;
+  /* 纸面：绿格线、红笔、首页 slogan 的红田字格、输入框里垫在英文下的修正液
+     （装饰层 src/renderer/src/paper-themes.css 用）。修正液是纯白，比米白的纸面更白 */
+  --color-paper-grid: rgba(59, 122, 85, 0.42);
+  --color-paper-pen: #cc3a2e;
+  --color-paper-tian: #cf4a3c;
+  --color-paper-whiteout: #ffffff;  /* 类别色（2026-10 起，读法见 readme *Category colours*）：文档 / 演示 / 表格三族的
+     共享类别色——文件类型图标（fileIconTone）与工具胶囊（skill 绿、MCP 蓝；橙留给
+     以后的命令）同用一组，之后材料方块（Excel / Doc / PPT）也接进来。文件名文字仍
+     是正墨；胶囊用法是淡底 + 同色描边（color-mix 派生，不另立值）。不借 accent /
+     info / success / warning（各有语义）；图标处对比度 ≥ 3:1、色相彼此分开
+     （filetype-colors.test.ts 把关）。 */
+  --color-filetype-doc: #1b5dc7;
+  --color-filetype-slides: #c2410c;
+  --color-filetype-sheet: #15803d;
+  /* 星云色（读法见亮档注释与 readme *Nebula colour*）：小学作业取作业本格线的墨绿——
+     纸面上用量就该是笔色，不是荧光 */
+  --color-nebula: #3b7a55;
+
+}
+
+/* typescript — 打字稿（英文）：同一档的英文版。同一张米白纸，不画格也不满屏画线，
+   只留红色页边线，横线只在输入框；墨是打字机色带的蓝黑。只有明，system 不落这档。 */
+:root[data-theme="typescript"],
+[data-theme-preview="typescript"] {
+  color-scheme: light;
+  --color-bg-app: #e6e4dc;
+  --color-bg-sidebar: #e8e6df;
+  --color-bg-panel: #ffffff;
+  --color-bg-muted: #f4f4ef;
+  --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+  --color-bg-active: rgba(47, 79, 127, 0.1);
+  --color-text-primary: #1f1f1d;
+  --color-text-secondary: #52524e;
+  --color-text-tertiary: #6e6e68;
+  --color-text-inverse: #ffffff;
+  --color-text-on-dark: #ffffff;
+  --color-border-subtle: #e4e3dc;
+  --color-border-default: #d6d5cd;
+  --color-border-strong: #c9c8bf;
+  --color-accent: #2f4f7f;
+  --color-accent-strong: #243d63;
+  --color-accent-soft: rgba(47, 79, 127, 0.1);
+  --color-accent-fg: #ffffff;
+  --color-mode-active-bg: rgba(47, 79, 127, 0.1);
+  --color-mode-active-fg: #2f4f7f;
+  --color-danger: #cc3a2e;
+  --color-danger-solid: #b3322a;
+  --color-danger-fg: #ffffff;
+  --color-danger-soft: #fbeae8;
+  --color-warning: #9a6614;
+  --color-info: #2f4f7f;
+  --color-info-fg: #ffffff;
+  --color-success: #2e7d4f;
+  --color-success-bg: #eef7f0;
+  --color-success-border: #bfe0c9;
+  --color-chat-card-bg: #ffffff;
+  --color-chat-muted-bg: #f4f4ef;
+  --color-chat-control-bg: #ffffff;
+  --color-chat-table-bg: #ffffff;
+  --color-chat-link: #2f4f7f;
+  /* 纸面：输入框的蓝横线与红页边线；首页批语的红笔 */
+  --color-paper-rule: #a9c6e2;
+  --color-paper-margin: #e38f86;
+  --color-paper-pen: #cc3a2e;  /* 类别色（2026-10 起，读法见 readme *Category colours*）：文档 / 演示 / 表格三族的
+     共享类别色——文件类型图标（fileIconTone）与工具胶囊（skill 绿、MCP 蓝；橙留给
+     以后的命令）同用一组，之后材料方块（Excel / Doc / PPT）也接进来。文件名文字仍
+     是正墨；胶囊用法是淡底 + 同色描边（color-mix 派生，不另立值）。不借 accent /
+     info / success / warning（各有语义）；图标处对比度 ≥ 3:1、色相彼此分开
+     （filetype-colors.test.ts 把关）。 */
+  --color-filetype-doc: #1b5dc7;
+  --color-filetype-slides: #c2410c;
+  --color-filetype-sheet: #15803d;
+  /* 星云色（读法见亮档注释与 readme *Nebula colour*）：打字稿取红笔朱——纸面两档
+     各取自己的笔色 */
+  --color-nebula: #c0442e;
+
+}

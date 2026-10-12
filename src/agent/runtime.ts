@@ -42,6 +42,7 @@ import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
+import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
@@ -51,11 +52,14 @@ import { planBranchCut } from "./branch-cut.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import {
-  diffWebArtifacts,
+  foldWebArtifacts,
   scanWebArtifacts,
   webScanRoots,
+  WEB_ARTIFACT_MTIME_SLACK_MS,
+  type ScanRoot,
   type WebScanResult,
 } from "./web-artifacts.ts";
+import { injectUserContext } from "./user-context.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import {
   RETRY_BASE_DELAY_MS,
@@ -164,8 +168,9 @@ function pushStats(sessionId: string, session: AgentSession, persist?: true): vo
  * 没有改动的轮不发（不落空记录）；报失败只记日志——快照是回退能力的代价面，
  * 不是对话的依赖面，坏一条日志好过砸一轮对话。
  *
- * 旁路网页产物（web-artifacts.ts）在同一处结算：等开轮快照 + 轮尾重扫 + diff，
- * 扣掉已在文件账里的路径。扫描失败只丢旁路那一栏，文件账照报。
+ * 旁路网页产物（web-artifacts.ts）在同一处结算：轮尾扫一遍、按 mtime ≥ 开轮时刻
+ * 收「本轮新出现」的网页文件，扣掉已在文件账里的路径；命中数超过批量上限就
+ * 折叠成计数（webArtifactsBatch），不逐个列。扫描失败只丢旁路那一栏，文件账照报。
  */
 async function reportFileTurn(
   sessionId: string,
@@ -174,19 +179,19 @@ async function reportFileTurn(
 ): Promise<void> {
   try {
     // 文件账与旁路扫描并行——轮尾收尾不该被其中一边白等
-    const [changes, before, after] = await Promise.all([
+    const [changes, scan] = await Promise.all([
       tracker.finalize(),
-      webWatch.before,
-      scanWebArtifactsLogged(webWatch.roots),
+      scanWebArtifactsLogged(webWatch.roots, webWatch.startedAt),
     ]);
     const tracked = new Set(changes.map((change) => change.path));
-    const webArtifacts = diffWebArtifacts(before.stamps, after.stamps).filter((path) => !tracked.has(path));
-    if (changes.length > 0 || webArtifacts.length > 0) {
+    const folded = foldWebArtifacts(scan.paths.filter((path) => !tracked.has(path)));
+    if (changes.length > 0 || folded.webArtifacts.length > 0 || folded.webArtifactsBatch !== undefined) {
       send({
         type: "fileTurn",
         sessionId,
         changes,
-        ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
+        ...(folded.webArtifacts.length > 0 ? { webArtifacts: folded.webArtifacts } : {}),
+        ...(folded.webArtifactsBatch !== undefined ? { webArtifactsBatch: folded.webArtifactsBatch } : {}),
       });
     }
   } catch (cause) {
@@ -195,25 +200,30 @@ async function reportFileTurn(
 }
 
 /**
- * 本轮的网页产物旁路：扫描根 + 开轮拍下的快照（promise，与 pi 开机并行跑）。
- * 轮尾 reportFileTurn 等它落定后再 diff。类型在 OpenedTurn / TurnParts 上透传。
+ * 本轮的网页产物旁路：扫描根（含各自的预算）+ 开轮时刻。类型在 OpenedTurn /
+ * TurnParts 上透传，轮尾 reportFileTurn 按它扫描。
  */
 interface WebArtifactWatch {
-  roots: string[];
-  before: Promise<WebScanResult>;
+  roots: ScanRoot[];
+  /** 开轮时刻（Date.now()）：轮尾扫描收 mtime ≥ startedAt − slack 的文件 */
+  startedAt: number;
 }
 
 /** 扫一遍并处理好日志面：截断 warn、失败按空结果（本轮没有旁路产物，不让扫描拖砸轮尾）。 */
-async function scanWebArtifactsLogged(roots: string[]): Promise<WebScanResult> {
+async function scanWebArtifactsLogged(roots: readonly ScanRoot[], startedAt: number): Promise<WebScanResult> {
   try {
-    const result = await scanWebArtifacts(roots);
+    const result = await scanWebArtifacts(roots, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS);
     if (result.truncated) {
-      console.warn(`[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots.join(" | ")}`);
+      console.warn(
+        `[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots
+          .map((entry) => entry.root)
+          .join(" | ")}`,
+      );
     }
     return result;
   } catch (cause) {
     console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
-    return { stamps: new Map(), truncated: false };
+    return { paths: [], truncated: false };
   }
 }
 
@@ -625,8 +635,8 @@ const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>()
  * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
  */
 const TOOL_GUIDELINES =
-  "跑可能耗时的命令（依赖安装、构建、测试）时，不要给 bash/powershell 传 timeout 参数——" +
-  `Windows 上这些命令本来就慢，短超时会把正常的慢命令拦腰杀掉；填了小于 ${COMMAND_TIMEOUT_FLOOR_SECONDS} 秒的值不会生效。`;
+  "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
+  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway.`;
 
 /**
  * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
@@ -637,9 +647,9 @@ const TOOL_GUIDELINES =
  * command/timeout、无视它——因此不需要 patch pi，也不需要在闸门里剔除。
  */
 const EXPECTED_SECONDS_GUIDELINE =
-  "调 bash/powershell 时，如果你预计这条命令要跑 10 秒以上（测试、构建、装依赖、sleep、" +
-  "大目录扫描），可以在参数里额外带上 expected_seconds（数字，秒，你的估计值）。" +
-  "它只用于界面展示（进度提示与自动展开），不影响命令的执行与超时。";
+  "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +
+  "scanning large directories), you may add expected_seconds (a number of seconds, your estimate) to the arguments. " +
+  "It only drives the UI (progress hint and auto-expand) and does not affect execution or timeouts.";
 
 /**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
@@ -796,11 +806,21 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
   const tracker = new TurnFileTracker(command.cwd);
-  // 网页产物旁路（web-artifacts.ts）：开轮就拍目录 mtime 快照，**不 await**——
-  // 与 pi 开机并行，模型吐第一个字之前快照已拍完，轮内脚本生成的文件只会落进
-  // 轮尾那一遍。扫描根与开轮目录清单同源（cwd / attached / 会话工作台）。
-  const webRoots = webScanRoots(command.cwd, command.directories);
-  const webWatch: WebArtifactWatch = { roots: webRoots, before: scanWebArtifactsLogged(webRoots) };
+  // 网页产物旁路（web-artifacts.ts）：只记开轮时刻，不扫盘——按 mtime 判「本轮
+  // 新出现」，批量文件操作会被批量折叠拦住，截断只可能漏报不会误报（上一版
+  // 「开轮快照 + 轮尾 diff」两处误报的教训见 web-artifacts.ts 文件头）。
+  // 扫描根只有 cwd 与会话工作台——附加目录跨会话共享，分不清是不是这一轮生成的。
+  const webWatch: WebArtifactWatch = {
+    roots: webScanRoots(command.cwd, command.directories),
+    startedAt: Date.now(),
+  };
+  /**
+   * 用户情境的时区（IANA 名）：在本进程解析一次、本轮内全部消息同一口径（详见
+   * user-context.ts）。agent 是独立 utility 进程，Intl 的默认时区就是系统时区，
+   * 不需要过 IPC 向主进程 / renderer 要——四层契约不为此多一层。时区跨轮变了
+   * （用户旅行）下一轮自然换标，代价是那一轮历史前缀重算一次、缓存失效一回。
+   */
+  const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -846,10 +866,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
+            // 基底先过 adaptSystemPrompt（2026-10-12）：替换 pi 写死的 concise 行
+            // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
+            // 开始跑，幂等由该函数自己兑底。
             pi.on("before_agent_start", (event) => ({
               // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
               systemPrompt: [
-                event.systemPrompt,
+                adaptSystemPrompt(event.systemPrompt),
                 describePermissionMode(currentMode(), [
                   ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
                   "create_skill",
@@ -870,6 +893,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
                 storeToolsGuideline(
                   command.workspaceId === null ? null : { name: command.workspaceName },
+                  command.cwd,
                 ),
                 TOOL_GUIDELINES,
                 EXPECTED_SECONDS_GUIDELINE,
@@ -878,6 +902,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 QUOTE_GUIDELINE,
                 // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
                 gitAttributionGuideline(command.gitAttribution ?? true, command.attributionLanguage ?? "en"),
+                // 回复语言放最末一段（离对话最近、权重最高），见 prompt-narration.ts
+                REPLY_LANGUAGE_GUIDELINE,
               ]
                 .filter((part) => part !== "")
                 .join("\n\n"),
@@ -926,6 +952,24 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               } catch (cause) {
                 // fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送
                 console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
+                return undefined;
+              }
+            });
+          },
+        },
+        {
+          // 用户情境（user-context.ts）：发往模型的每条用户消息前面附一段发送时间 / 时区，
+          // wire-only（pi 本子与 orbita 转录不落）。与 image-budget 同一个 `context` 事件，
+          // 两者改的东西不相交（它动图片块、我们前插文本块），注册先后无所谓
+          name: "orbita-user-context",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            pi.on("context", (event) => {
+              try {
+                return injectUserContext(event.messages, userTimeZone);
+              } catch (cause) {
+                // fail-open：情境是锦上添花，自己的故障不该砸掉对话，本轮按原样发送
+                console.error("[user-context] 注入失败，本轮请求按原样发送", cause);
                 return undefined;
               }
             });
@@ -1049,7 +1093,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const customTools = [
     ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
-    ...createPdfTools(command.cwd),
+    // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
+    ...createPdfTools(command.cwd, { pdfCitations: command.pdfCitations === true }),
     // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
     ...createDocxTools(command.cwd),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
@@ -1098,7 +1143,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 下面的订阅置位。预检压缩（prompt 前那一次）发生时 echoedAt 已有、sawAssistant
   // 还是 false——compaction_end 据此盖回显的时间戳，界碑落到刚发那句之前。
   const turn: TurnTiming = { echoedAt: null, sawAssistant: false };
-  const observeTurnFailure = createTurnFailureTracker();
+  // 本轮被停止 / 抢跑过就不报回合失败：abort 后 pi 再调一次模型得到的 aborted 错误不是模型错误
+  const observeTurnFailure = createTurnFailureTracker(
+    () => running.get(command.sessionId)?.abortRequested === true,
+  );
   const unsubscribe = session.subscribe((event) => {
     // 文件快照的 after：工具落定即读盘。不 await（读盘是毫秒级，不该卡事件流），
     // finalize 自己等在途读全部落定

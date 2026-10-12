@@ -9,6 +9,8 @@ import {
   parseChannelPrompt,
   sortChannelMessages,
   summarizeChannel,
+  userRepliesNote,
+  userRepliesSincePreviousReport,
   type ChannelMessage,
 } from "./channel.ts";
 
@@ -425,5 +427,42 @@ describe("composeChannelPrompt / parseChannelPrompt", () => {
       title: "x",
     });
     strictEqual(parseChannelPrompt(`Some preface\n${prompt}`), null);
+  });
+});
+
+describe("userRepliesSincePreviousReport —— 用户代父回复要转告父模型", () => {
+  const msg = (id: string, from: "parent" | "child", kind: ChannelMessage["kind"], createdAt: number, author: "model" | "user" = "model"): ChannelMessage => ({
+    id,
+    from,
+    author,
+    kind,
+    text: id,
+    delivery: "followUp",
+    createdAt,
+  });
+
+  it("取上一条子回报之后、这条子回报之前，用户代父说的话", () => {
+    const ledger = [
+      msg("t", "parent", "task", 1),
+      msg("q", "child", "question", 2),
+      msg("u1", "parent", "reply", 3, "user"),
+      msg("m", "parent", "reply", 4),
+      msg("u2", "parent", "reply", 5, "user"),
+      msg("d", "child", "done", 6),
+    ];
+    deepStrictEqual(userRepliesSincePreviousReport(ledger, "d").map((m) => m.id), ["u1", "u2"]);
+    deepStrictEqual(userRepliesSincePreviousReport(ledger, "q"), []);
+  });
+
+  it("没有代父回复 / 找不到这条回报：空，说明为空串", () => {
+    deepStrictEqual(userRepliesSincePreviousReport([msg("d", "child", "done", 1)], "d"), []);
+    deepStrictEqual(userRepliesSincePreviousReport([], "x"), []);
+    deepStrictEqual(userRepliesNote([]), "");
+  });
+
+  it("说明里逐条带上原话", () => {
+    const note = userRepliesNote([msg("先不支持扫描件", "parent", "reply", 1, "user")]);
+    deepStrictEqual(note.includes('- "先不支持扫描件"'), true);
+    deepStrictEqual(note.includes("on your behalf"), true);
   });
 });

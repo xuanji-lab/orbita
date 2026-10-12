@@ -1,0 +1,97 @@
+/* Orbita webfonts. Source: upstream releases (all SIL OFL 1.1; licences beside the files in assets/fonts/), except the Typescript theme's two
+   typewriter faces, taken from google/fonts: Courier Prime (SIL OFL 1.1, OFL-CourierPrime.txt)
+   and Special Elite (Apache 2.0, LICENSE-SpecialElite.txt).
+   Note: the renderer loads these faces — styles.css @imports this file, and
+   `body`/`--font-family-brand` consume them (readme.md § Type). */
+@font-face {
+  font-family: "Literata";
+  src: url("../assets/fonts/Literata-Variable.ttf") format("truetype-variations");
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Literata";
+  src: url("../assets/fonts/Literata-Italic-Variable.ttf") format("truetype-variations");
+  font-weight: 200 900;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Manrope";
+  src: url("../assets/fonts/Manrope-Variable.ttf") format("truetype-variations");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Source Han Serif SC";
+  src: url("../assets/fonts/SourceHanSerifSC-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: "Source Han Sans SC";
+  src: url("../assets/fonts/SourceHanSansSC-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF;
+}
+/* 纸面两档首页门面的手写字，都是**子集**（只含用得到的字，几 KB 到二十来 KB）：
+   马善政只有 slogan「璇玑运转，诸事得序」9 个字（小学作业的田字格）；
+   龙藏体只有批语用字「字迹工整阅」、全角空格、破折号与 ASCII 可打印区（英文批语与日期）。
+   整套各 5–6MB，只为首页一行字不值得。SIL OFL 1.1，无保留字体名，子集化与再分发都允许；
+   许可证 OFL-MaShanZheng.txt / OFL-LongCang.txt。源文件 github.com/google/fonts
+   ofl/mashanzheng（Version 2.003）、ofl/longcang（Version 2.001），2026-09-25 取；
+   子集命令：pyftsubset <源> --text=<字> [--unicodes=U+0020-007E] --layout-features='*' --no-hinting。
+   换 slogan 或批语用字时要重新子集化，否则缺的字落回备用字体。 */
+@font-face {
+  font-family: "Ma Shan Zheng";
+  src: url("../assets/fonts/MaShanZheng-Slogan.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Long Cang";
+  src: url("../assets/fonts/LongCang-Mark.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+/* Typescript 主题（纸面两档的英文版）的打字机字：正文 Courier Prime，标题 Special Elite。
+   Courier Prime 只有 400 / 700 两个静态字面，字重要**按区间**声明：orbita 的正文字重是 450
+   （--weight-regular），CSS 字重匹配对 400–500 之间的目标会先往上找到 500——Bold 若声明成
+   500–800，整个界面就全落成粗体（2026-09-25 截图对比时发现：侧栏每一行都是粗的）。
+   所以 Regular 管到 550（450 / 500 都算常规），Bold 从 551 起（semibold 600 起才加粗）。 */
+@font-face {
+  font-family: "Courier Prime";
+  src: url("../assets/fonts/CourierPrime-Regular.ttf") format("truetype");
+  font-weight: 100 550;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Courier Prime";
+  src: url("../assets/fonts/CourierPrime-Bold.ttf") format("truetype");
+  font-weight: 551 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Courier Prime";
+  src: url("../assets/fonts/CourierPrime-Italic.ttf") format("truetype");
+  font-weight: 100 550;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Special Elite";
+  src: url("../assets/fonts/SpecialElite-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

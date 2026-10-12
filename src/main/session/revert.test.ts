@@ -444,6 +444,36 @@ describe("轮尾账 · 旁路网页产物（webArtifacts）", () => {
     assert.equal(record, null);
   });
 
+  test("只有批量折叠计数、没有路径的轮也落记录，字段原样读回", async () => {
+    await store.record(ID, userItem("u1", "拉了个 worktree", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    const record = await store.recordFileTurn(ID, [], [], 12);
+    assert.ok(record !== null);
+    assert.equal(record.webArtifacts, undefined);
+    assert.equal(record.webArtifactsBatch, 12);
+    // 冷启动重建（readLog → isFileTurnRecord）后计数还在
+    const detail = await store.load(ID);
+    const turns = detail?.transcript.filter((entry) => entry.role === "file-turn") ?? [];
+    assert.equal(turns.length, 1);
+    assert.equal((turns[0] as FileTurnRecord).webArtifactsBatch, 12);
+  });
+
+  test("旧记录没有 webArtifactsBatch 字段照常读回（字段可选）", async () => {
+    // 直接落一条不带新字段的记录，模拟升级前的旧会话
+    const legacy: FileTurnRecord = {
+      role: "file-turn",
+      id: "legacy-1",
+      timestamp: 42,
+      changes: [],
+      webArtifacts: [join(lab, "out", "old.html")],
+    };
+    await store.record(ID, legacy);
+    const detail = await store.load(ID);
+    const turns = detail?.transcript.filter((entry) => entry.role === "file-turn") ?? [];
+    assert.equal(turns.length, 1);
+    assert.equal("webArtifactsBatch" in (turns[0] as FileTurnRecord), false);
+  });
+
   test("回退 / 撤销计划都不含旁路路径：它们不参与撤销", async () => {
     await store.record(ID, userItem("u1", "画个原型", 1000));
     await store.record(ID, assistantItem("a1", 1100));

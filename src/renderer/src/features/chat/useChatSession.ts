@@ -27,7 +27,7 @@ import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import { shouldRefreshSessions } from "./session-list-refresh.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
-import { admitImages, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
+import { admitImages, promptImagesBytes, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
 import {
   admitFileRefs,
@@ -54,7 +54,7 @@ import { DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } f
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
-import { composeChannelPrompt } from "@shared/channel";
+import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { modelThinkingLevels, reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
@@ -163,8 +163,10 @@ export interface ChatSession {
    * 与「当前看哪条」无关——后台在跑的会话切走了也照样转圈。
    */
   phaseOf: (id: string) => SessionEntry["phase"];
-  /** 按 id 查回合失败标注（槽里有真相）——侧栏失败图标用，与「当前看哪条」无关 */
+  /** 按 id 查回合失败标注（槽里有真相）——未读标记的 failed 快照用，与「当前看哪条」无关 */
   turnErrorOf: (id: string) => string | null;
+  /** 按 id 查挂着的工具审批（槽里有真相）——竖条「在等你」要读到后台会话的审批 */
+  approvalsOf: (id: string) => readonly PendingApproval[];
   error: string | null;
   /** 当前查看会话的输入框草稿——**按会话隔离**，切换 / 新开会话互不带走 */
   draft: string;
@@ -482,6 +484,7 @@ export interface SessionEngine {
   readonly usable: ProviderDto[];
   readonly phaseOf: (id: string) => SessionEntry["phase"];
   readonly turnErrorOf: (id: string) => string | null;
+  readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   readonly renameSession: (id: string, title: string) => void;
   readonly pinSession: (id: string, pinned: boolean) => void;
@@ -822,10 +825,17 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // buildTurn 已支持从 meta 装配从没在本窗口打开过的会话（新会话/新槽由
         // dequeue/enqueue 就地建），父会话不必先被用户点开过才能收到子的消息。
         const childTitle = sessionsRef.current.find((meta) => meta.id === head.childId)?.title ?? "";
-        const text = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
+        const envelope = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
         const turn = buildTurn(id);
         if (turn === null) return;
-        dispatch(() => api.agent.submit({ sessionId: id, text, ...turn }));
+        // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在信封后
+        // （userRepliesSincePreviousReport 的注释）。读账本失败就照原样投递，不拦这一轮。
+        dispatch(async () => {
+          const ledger = await api.channel.load({ parentId: id, childId: head.childId }).catch(() => []);
+          const note = userRepliesNote(userRepliesSincePreviousReport(ledger, head.message.id));
+          const text = note === "" ? envelope : `${envelope}\n${note}`;
+          await api.agent.submit({ sessionId: id, text, ...turn });
+        });
       } else {
         const turn = buildTurn(id);
         if (turn === null) return;
@@ -1103,6 +1113,12 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
     [],
   );
+  // 按 id 查挂着的审批（2026-10-10 未读/竖条一刀）：竖条「在等你」要读到后台
+  // 会话的审批，不只当前看着的那条；与 phaseOf / turnErrorOf 同一套 ref 读法
+  const approvalsOf = useCallback(
+    (id: string): readonly PendingApproval[] => statesRef.current.get(id)?.approvals ?? [],
+    [],
+  );
 
   return {
     catalog,
@@ -1136,6 +1152,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     usable,
     phaseOf,
     turnErrorOf,
+    approvalsOf,
     answerApproval,
     renameSession,
     pinSession,
@@ -1463,9 +1480,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const t = engine.messagesRef.current;
       const imageCandidates = incoming.filter((file) => PROMPT_IMAGE_MIME_TYPES.includes(file.type));
       const fileCandidates = incoming.filter((file) => !PROMPT_IMAGE_MIME_TYPES.includes(file.type));
+      // 总量线要算上已在输入框里的图：两批各自不超线、叠加却超线时，第二批该被拦下
+      const currentImages = attachmentMap.get(key) ?? [];
       const { accepted: acceptedImages, rejected: imageRejected } = admitImages(
         imageCandidates,
-        attachmentMap.get(key)?.length ?? 0,
+        currentImages.length,
+        promptImagesBytes(currentImages.map((item) => item.image)),
       );
       const { accepted: acceptedFiles, rejected: fileRejected } = admitFileRefs(
         fileCandidates.map((file) => ({ path: api.window.getPathForFile(file), name: file.name })),
@@ -1735,6 +1755,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           restoreRef.current = null;
           return;
         }
+        // 回合级失败（turn: true）一定出自一轮已经回显过用户消息的轮——快照那条还没回显，
+        // 这条失败就不是它的，而是它前面那一轮的（典型：抢跑打断工具执行中的旧轮）。
+        // 当成「没发出去」回填，已经发出去的话就会回到输入框（2026-09-29 用户稳定复现）
+        if (event.type === "failed" && event.turn === true) return;
         if (event.type === "failed" || (event.type === "phase" && event.phase === "idle")) {
           restoreRef.current = null;
           restoreSent(snap);
@@ -2960,6 +2984,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     stats: entry.stats,
     phaseOf: engine.phaseOf,
     turnErrorOf: engine.turnErrorOf,
+    approvalsOf: engine.approvalsOf,
     error: engine.error,
     draft,
     setDraft,

@@ -32,6 +32,8 @@ const ALLOWED_LATIN = new Set([
   "GIF",
   "WebP",
   "MB",
+  // 文档格式名（PDF 预览与引用）
+  "PDF",
   // 格式记号（环境变量 / 请求头一行的写法，原样照填）
   "KEY",
   "VALUE",
@@ -39,9 +41,10 @@ const ALLOWED_LATIN = new Set([
   "node",
   "npx",
   "mcp",
-  // 计量单位（与原型「42 tok/s」一致）
+  // 计量单位（与原型「42 tok/s」一致；复数形式同属一个单位词）
   "token",
   "tok",
+  "tokens",
   // 通用缩写：代码托管与模型的 ID
   "PR",
   "ID",

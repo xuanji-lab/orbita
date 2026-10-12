@@ -3,7 +3,7 @@
  * **纯模块**（store 注入），可被 `node --test` 直接测——ipc.ts import electron，
  * 逻辑放那里就没法直接测（turn-directories.ts 的同款先例）。
  *
- * 顺序固定 session → workspace → attached：session 是唯一随会话变的根（「这条任务
+ * 顺序固定 session → workspace → attached（→ 不进树的 attachments，见下）：session 是唯一随会话变的根（「这条任务
  * 的草稿在这」），排最前；workspace 是 agent 的常驻地盘；attached 是用户后挂的，
  * 按挂上的顺序。每次现算、不缓存——工作台首次写入、挂 / 摘目录，面板下一次展开即生效。
  */
@@ -54,6 +54,13 @@ export async function resolveFileRoots(
       path: dir,
       exists: await pathExists(dir),
     });
+  }
+  // attachments 根：拖入的外部文件发送时复制到 sessions/<id>.attachments/（store 的
+  // saveExternalFiles），不在上面任何一根之内。只为白名单，renderer 不把它画进树——
+  // 没有它，附件列表点不开副本，PDF 引用也跳不过去
+  if (req.sessionId !== null) {
+    const path = sessions.attachmentsPath(req.sessionId);
+    roots.push({ kind: "attachments", label: fileRootLabel("attachments", path, "", ""), path, exists: await pathExists(path) });
   }
   return roots;
 }

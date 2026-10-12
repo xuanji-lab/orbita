@@ -24,7 +24,7 @@ const TOKENS = join(
   "..",
   "..",
   "..",
-  "Orbita Design System",
+  "design-system",
   "tokens",
 );
 

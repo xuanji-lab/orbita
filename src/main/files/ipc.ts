@@ -6,9 +6,11 @@ import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { stat } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
+  isPdfFile,
   isWebPageFile,
   type FileListRequest,
   type FilePreview,
+  type PdfFile,
   type FileRootsRequest,
   type FsEntryFact,
 } from "../../shared/files.ts";
@@ -16,7 +18,7 @@ import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
-import { readPreview } from "./read.ts";
+import { readPdfFile, readPreview } from "./read.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
@@ -62,6 +64,17 @@ export function registerFilesIpc(
     const roots = await resolveFileRoots(workspaces, sessions, req);
     const path = await whitelistedPath(roots, req);
     return readPreview(path);
+  });
+
+  /**
+   * 读 PDF 字节给预览面板（同白名单，外加只认 .pdf——判定用 realpath 之后的路径，
+   * 改名成 foo.pdf 的软链接指向别的文件同样被拒；这条通道不能变成「整份读任意文件」）
+   */
+  ipcMain.handle(ipcChannels.fsReadPdf, async (_event, req: FileListRequest): Promise<PdfFile> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isPdfFile(path)) throw new Error(`Not a PDF file: ${path}`);
+    return readPdfFile(path);
   });
 
   /**

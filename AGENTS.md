@@ -1,7 +1,7 @@
 # ORBITA — Agent 入口（AGENTS.md）
 
 > 本文件是所有 agent / 协作者进入本分支的必读入口。
-> **维护原则**：只放「每次开工都会用到的」；深度内容路由到 `docs/`。上限 120 行——每轮对话都在为超出部分付上下文税。
+> **维护原则**：只放「每次开工都会用到的」；深度内容路由到 `docs/`（**仅维护者本地，不在公开仓库里**，见文末路由表）。每轮对话都在为这里的每一行付上下文税，能短则短。
 > **优先级**：用户当次明示指令 > 本文件。
 
 ## 30 秒定位
@@ -96,7 +96,7 @@ bun run test         # 测试
 
 ## 设计系统
 
-UI 真源是 `Orbita Design System/readme.md`，**所有用户可见渲染面无豁免区**。动手前先读它；
+UI 真源是 `design-system/readme.md`，**所有用户可见渲染面无豁免区**。动手前先读它；
 token 规范与实现不一致时以设计系统为准。
 
 - 禁裸 hex / 未定义 CSS 变量；accent 只给主操作（明主题蓝、暗主题黄）。
@@ -139,15 +139,22 @@ token 规范与实现不一致时以设计系统为准。
    dev server 侧都是新的（`curl http://127.0.0.1:5273/src/...` 可验证），但改动前启动的 Electron 窗口
    还在跑旧模块——表现为「功能没实现」，对着不存在的 bug 排查了一整轮。
    对策：renderer 行为与代码不符时，先在窗口里 **Ctrl+R 硬刷新**再排查；刷新即从 vite 重新拉全量模块。
+5. **删远端分支前要查 open PR 的 base，不只查 head**——叠层 PR 的 base 是已合并分支时，
+   删掉 base 会连带静默关闭整串 PR（2026-10-09 清理 53 支已合并分支，
+   `feat/composer-material-stack` 上的 #150/#152/#153 三个 Draft 被连关，靠本地分支重建 + 逐个
+   reopen 才救回）。对策：删除名单过一遍 open PR 列表的 base 字段，有叠层的先把那串 PR 改 base
+   到 main，或留着那支分支。
 
 ## 深度路由（用到再读，不要背进上下文）
+
+> 标 `docs/` 的条目只在维护者本地（`.gitignore` 忽略，2026-10 开源时移出仓库）；外部贡献者没有它们，以代码与 commit 历史为准。
 
 | 主题 | 位置 |
 |---|---|
 | **单 agent 的范围、架构决定与理由** | `docs/single-agent-guideline.md` |
 | **通用语言**（同一个词在两处指不同东西时，以本表为准） | `docs/ubiquitous-language.md` |
-| UI 设计语言真源 | `Orbita Design System/readme.md` |
-| 品牌原始资产（字体 / lucide 图标 / logo） | `design/` |
+| UI 设计语言真源 | `design-system/readme.md` |
+| 新图标 / 字体 | 从上游拷单个文件进 `design-system/assets/`（lucide.dev，`lucide-static@1.33.0`），再在 `Icon.tsx` 登记 |
 | 会话存储规格 | `docs/architecture/orbita_v4.5.1/28-session-storage.md` |
 | 多 agent 编排设计资产（**参考，未实现**） | `docs/architecture/orbita_v4.5.1/` |
 | 明朝制度参考（编排文档的术语背景） | `docs/architecture/ming-dynasty-reference/` |

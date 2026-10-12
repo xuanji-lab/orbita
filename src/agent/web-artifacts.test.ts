@@ -1,23 +1,25 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  diffWebArtifacts,
+  foldWebArtifacts,
   scanWebArtifacts,
   webScanRoots,
+  SCAN_MAX_ENTRIES,
+  WEB_ARTIFACT_BATCH_LIMIT,
   type ScanFs,
-  type WebFileStamp,
+  type ScanRoot,
 } from "./web-artifacts.ts";
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
 
-/** 假目录树：目录 → 条目；stats 给网页文件的指纹。readDir 对不在的目录抛错（同真实 fs）。 */
-function fakeFs(dirs: Record<string, { name: string; isDir: boolean }[]>, stats: Record<string, WebFileStamp> = {}): ScanFs {
+/** 假目录树：目录 → 条目；mtimes 给网页文件的 mtime（毫秒）。readDir 对不在的目录抛错（同真实 fs）。 */
+function fakeFs(dirs: Record<string, { name: string; isDir: boolean }[]>, mtimes: Record<string, number> = {}): ScanFs {
   return {
     readDir: async (dir) => {
       const entries = dirs[dir] ?? dirs[normPosix(dir)];
       if (entries === undefined) throw new Error(`ENOENT: ${dir}`);
       return entries;
     },
-    statFile: async (path) => stats[path] ?? stats[normPosix(path)] ?? null,
+    statFile: async (path) => mtimes[path] ?? mtimes[normPosix(path)] ?? null,
   };
 }
 
@@ -26,27 +28,31 @@ function normPosix(p: string): string {
   return p.replaceAll("\\", "/");
 }
 
-const stamp = (mtimeMs: number, size: number): WebFileStamp => ({ mtimeMs, size });
+/** 单根便捷入口：预算给足，测「收集什么」。 */
+function oneRoot(root: string, maxEntries = 1000): ScanRoot[] {
+  return [{ root, maxEntries }];
+}
 
-describe("scanWebArtifacts —— 收集", () => {
-  it("只收 .html / .htm / .svg（大小写不敏感），其余扩展名不进账", async () => {
+describe("scanWebArtifacts —— 收集（按 mtime 判本轮新出现）", () => {
+  it("只收 .html / .htm / .svg（大小写不敏感）且 mtime ≥ 起判线的；旧文件与其它扩展名不进账", async () => {
     const fs = fakeFs(
       { "/w": [
-        { name: "a.html", isDir: false },
-        { name: "b.HTM", isDir: false },
-        { name: "c.svg", isDir: false },
+        { name: "fresh.html", isDir: false },
+        { name: "edge.HTM", isDir: false }, // 恰好压在起判线上（>=）
+        { name: "old.svg", isDir: false },
+        { name: "old.html", isDir: false },
+        { name: "fresh.md", isDir: false },
         { name: "d.xhtml", isDir: false },
-        { name: "e.md", isDir: false },
-        { name: "html", isDir: false },
       ] },
       {
-        "/w/a.html": stamp(1, 10),
-        "/w/b.HTM": stamp(2, 20),
-        "/w/c.svg": stamp(3, 30),
+        "/w/fresh.html": 2000,
+        "/w/edge.HTM": 1000,
+        "/w/old.svg": 999,
+        "/w/old.html": 1,
       },
     );
-    const result = await scanWebArtifacts(["/w"], fs);
-    deepStrictEqual([...result.stamps.keys()].map(normPosix).sort(), ["/w/a.html", "/w/b.HTM", "/w/c.svg"]);
+    const result = await scanWebArtifacts(oneRoot("/w"), 1000, fs);
+    deepStrictEqual(result.paths.map(normPosix), ["/w/edge.HTM", "/w/fresh.html"]);
     strictEqual(result.truncated, false);
   });
 
@@ -77,19 +83,19 @@ describe("scanWebArtifacts —— 收集", () => {
         "/w/.next": [],
       },
       {
-        "/w/src/deep.html": stamp(1, 1),
-        "/w/src/vendor/ok.html": stamp(2, 2),
-        "/w/node_modules/pkg/hidden.html": stamp(3, 3),
-        "/w/dist/d.html": stamp(4, 4),
+        "/w/src/deep.html": 100,
+        "/w/src/vendor/ok.html": 100,
+        "/w/node_modules/pkg/hidden.html": 100,
+        "/w/dist/d.html": 100,
       },
     );
-    const result = await scanWebArtifacts(["/w"], fs);
-    deepStrictEqual([...result.stamps.keys()].map(normPosix).sort(), ["/w/src/deep.html", "/w/src/vendor/ok.html"]);
+    const result = await scanWebArtifacts(oneRoot("/w"), 0, fs);
+    deepStrictEqual(result.paths.map(normPosix).sort(), ["/w/src/deep.html", "/w/src/vendor/ok.html"]);
   });
 
   it("根不在（工作台还没建）→ 空结果，不抛", async () => {
-    const result = await scanWebArtifacts(["/nope"], fakeFs({}));
-    strictEqual(result.stamps.size, 0);
+    const result = await scanWebArtifacts([{ root: "/nope", maxEntries: 10 }], 0, fakeFs({}));
+    strictEqual(result.paths.length, 0);
     strictEqual(result.truncated, false);
   });
 
@@ -101,13 +107,13 @@ describe("scanWebArtifacts —— 收集", () => {
           { name: "real.html", isDir: false },
         ],
       },
-      { "/w/real.html": stamp(1, 1) },
+      { "/w/real.html": 1 },
     );
-    const result = await scanWebArtifacts(["/w"], fs);
-    deepStrictEqual([...result.stamps.keys()].map(normPosix), ["/w/real.html"]);
+    const result = await scanWebArtifacts(oneRoot("/w"), 0, fs);
+    deepStrictEqual(result.paths.map(normPosix), ["/w/real.html"]);
   });
 
-  it("重复根只扫一遍", async () => {
+  it("重复根只扫一遍（按首次出现的预算）", async () => {
     let reads = 0;
     const fs: ScanFs = {
       readDir: async (dir) => {
@@ -115,83 +121,137 @@ describe("scanWebArtifacts —— 收集", () => {
         if (dir !== "/w") throw new Error("ENOENT");
         return [{ name: "a.html", isDir: false }];
       },
-      statFile: async () => stamp(1, 1),
+      statFile: async () => 1,
     };
-    const result = await scanWebArtifacts(["/w", "/w"], fs);
+    const result = await scanWebArtifacts(
+      [
+        { root: "/w", maxEntries: 10 },
+        { root: "/w", maxEntries: 10 },
+      ],
+      0,
+      fs,
+    );
     strictEqual(reads, 1);
-    strictEqual(result.stamps.size, 1);
+    strictEqual(result.paths.length, 1);
+  });
+
+  it("结果按路径排序（卡片显示稳定）", async () => {
+    const fs = fakeFs(
+      { "/w": [
+        { name: "z.html", isDir: false },
+        { name: "a.html", isDir: false },
+      ] },
+      { "/w/z.html": 1, "/w/a.html": 2 },
+    );
+    const result = await scanWebArtifacts(oneRoot("/w"), 0, fs);
+    deepStrictEqual(result.paths.map(normPosix), ["/w/a.html", "/w/z.html"]);
   });
 });
 
-describe("scanWebArtifacts —— 上限", () => {
-  it("深度上限：更深的目录不下探", async () => {
+describe("scanWebArtifacts —— 上限（按根分账）", () => {
+  it("深度上限：更深的目录不下探（是剪枝，不是截断）", async () => {
     const fs = fakeFs(
       {
         "/w": [{ name: "a", isDir: true }],
         "/w/a": [{ name: "b", isDir: true }],
         "/w/a/b": [{ name: "too-deep.html", isDir: false }],
       },
-      { "/w/a/b/too-deep.html": stamp(1, 1) },
+      { "/w/a/b/too-deep.html": 1 },
     );
-    const result = await scanWebArtifacts(["/w"], fs, { maxDepth: 1 });
-    strictEqual(result.stamps.size, 0);
-    strictEqual(result.truncated, false); // 深度是剪枝，不是截断
+    const result = await scanWebArtifacts(oneRoot("/w"), 0, fs, { maxDepth: 1 });
+    strictEqual(result.paths.length, 0);
+    strictEqual(result.truncated, false);
   });
 
-  it("条目上限：撞到就地截断（truncated=true），部分结果保留", async () => {
+  it("条目上限：撞到就地截断；旧文件即使被扫到也不报，新文件截断线之前的保留", async () => {
     const fs = fakeFs(
       {
         "/w": [
+          { name: "old.html", isDir: false }, // 截断线之前被扫到，但 mtime 早于开轮 → 不报
           { name: "a.html", isDir: false },
           { name: "b.html", isDir: false },
-          { name: "c.html", isDir: false },
+          { name: "c.html", isDir: false }, // 截断线之后，没被扫到
         ],
       },
       {
-        "/w/a.html": stamp(1, 1),
-        "/w/b.html": stamp(2, 2),
-        "/w/c.html": stamp(3, 3),
+        "/w/old.html": 1,
+        "/w/a.html": 100,
+        "/w/b.html": 100,
+        "/w/c.html": 100,
       },
     );
-    const result = await scanWebArtifacts(["/w"], fs, { maxEntries: 2 });
+    const result = await scanWebArtifacts([{ root: "/w", maxEntries: 3 }], 50, fs);
     strictEqual(result.truncated, true);
-    deepStrictEqual([...result.stamps.keys()].map(normPosix), ["/w/a.html", "/w/b.html"]);
+    deepStrictEqual(result.paths.map(normPosix), ["/w/a.html", "/w/b.html"]);
+  });
+
+  it("一个附加目录撞自己的预算截断，不吃掉 cwd / 工作台根的预算", async () => {
+    // 附加目录里塞满目录条目，把小预算耗尽；预算内的新文件照收，预算后的收不到
+    const filler = Array.from({ length: 20 }, (_, i) => ({ name: `d${i}`, isDir: true }));
+    const fs = fakeFs(
+      {
+        "/repo": [{ name: "seen.html", isDir: false }, ...filler],
+        "/repo/d0": [{ name: "missed.html", isDir: false }], // 在截断线之后，没被扫到
+        "/cwd": [{ name: "made.html", isDir: false }],
+        "/bench": [{ name: "proto.html", isDir: false }],
+      },
+      {
+        "/repo/seen.html": 100,
+        "/repo/d0/missed.html": 100,
+        "/cwd/made.html": 100,
+        "/bench/proto.html": 100,
+      },
+    );
+    const result = await scanWebArtifacts(
+      [
+        { root: "/cwd", maxEntries: 100 },
+        { root: "/bench", maxEntries: 100 },
+        { root: "/repo", maxEntries: 10 }, // 附加目录的小预算：第一个文件 + 20 个子目录，撞线
+      ],
+      50,
+      fs,
+    );
+    strictEqual(result.truncated, true); // 只有 /repo 截断
+    deepStrictEqual(result.paths.map(normPosix).sort(), ["/bench/proto.html", "/cwd/made.html", "/repo/seen.html"]);
   });
 });
 
-describe("diffWebArtifacts —— 两遍快照对账", () => {
-  const s = (mtimeMs: number, size = 1): WebFileStamp => ({ mtimeMs, size });
-  const m = (entries: Record<string, WebFileStamp>) => new Map(Object.entries(entries));
-
-  it("新出现的、mtime 变的、size 变的都算；没变的与被删的不算", () => {
-    const before = m({ "/w/a.html": s(1), "/w/b.html": s(2), "/w/c.html": s(3, 9), "/w/gone.html": s(4) });
-    const after = m({
-      "/w/a.html": s(1), // 没变
-      "/w/b.html": s(5), // mtime 变了
-      "/w/c.html": s(3, 10), // size 变了
-      "/w/new.html": s(6), // 新出现
-    });
-    deepStrictEqual(diffWebArtifacts(before, after), ["/w/b.html", "/w/c.html", "/w/new.html"]);
+describe("foldWebArtifacts —— 批量折叠", () => {
+  it("超过上限：一个不列，只报计数", () => {
+    const paths = Array.from({ length: WEB_ARTIFACT_BATCH_LIMIT + 1 }, (_, i) => `/w/${i}.html`);
+    deepStrictEqual(foldWebArtifacts(paths), { webArtifacts: [], webArtifactsBatch: paths.length });
   });
 
-  it("结果按路径排序（卡片显示稳定）", () => {
-    const before = m({});
-    const after = m({ "/w/z.html": s(1), "/w/a.html": s(2) });
-    deepStrictEqual(diffWebArtifacts(before, after), ["/w/a.html", "/w/z.html"]);
+  it("恰好等于上限：仍逐个列出（不给计数）", () => {
+    const paths = Array.from({ length: WEB_ARTIFACT_BATCH_LIMIT }, (_, i) => `/w/${i}.html`);
+    deepStrictEqual(foldWebArtifacts(paths), { webArtifacts: paths });
+  });
+
+  it("空清单：空列表、无计数（没产出的轮不产卡）", () => {
+    deepStrictEqual(foldWebArtifacts([]), { webArtifacts: [] });
   });
 });
 
-describe("webScanRoots —— 扫描根与开轮目录清单同源", () => {
-  it("cwd + attached + 会话工作台，去重", () => {
+describe("webScanRoots —— 只扫 cwd 与工作台，不扫附加目录", () => {
+  it("附加目录不进扫描根（跨会话共享，别的会话的批量操作会被误认成本轮产物）", () => {
     const directories: TurnDirectories = {
-      attached: ["/extra", "/w"], // 与 cwd 重复的那条要被去掉
+      attached: ["/extra", "/repo"],
       workbench: "/userData/workbenches/s1",
     };
-    deepStrictEqual(webScanRoots("/w", directories), ["/w", "/extra", "/userData/workbenches/s1"]);
+    deepStrictEqual(webScanRoots("/w", directories), [
+      { root: "/w", maxEntries: SCAN_MAX_ENTRIES },
+      { root: "/userData/workbenches/s1", maxEntries: SCAN_MAX_ENTRIES },
+    ]);
+  });
+
+  it("工作台与 cwd 同路径时只扫一份", () => {
+    deepStrictEqual(webScanRoots("/w", { attached: [], workbench: "/w" }), [{ root: "/w", maxEntries: SCAN_MAX_ENTRIES }]);
   });
 
   it("清单缺席 / 工作台空串：退回 cwd 一个", () => {
-    deepStrictEqual(webScanRoots("/w", undefined), ["/w"]);
-    deepStrictEqual(webScanRoots("/w", { attached: [], workbench: "" }), ["/w"]);
+    deepStrictEqual(webScanRoots("/w", undefined), [{ root: "/w", maxEntries: SCAN_MAX_ENTRIES }]);
+    deepStrictEqual(webScanRoots("/w", { attached: ["/x"], workbench: "" }), [
+      { root: "/w", maxEntries: SCAN_MAX_ENTRIES },
+    ]);
   });
 });

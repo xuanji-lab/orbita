@@ -305,6 +305,14 @@ export interface TurnGroupUnit {
    * 不需要现场计时。缺时间戳的单元在场时 null（诚实未知）。
    */
   durationMs: number | null;
+  /**
+   * 这轮开始流式回复的时刻 = 段内最早的 assistant 记录 timestamp（渲染单元的
+   * timestamp 从记录上原样带来，即首条 assistant 的 message_start 时刻——含先吐
+   * 正文再思考的前导 text，它不在 members 里但在段内）。轮头时间标签的取值
+   * （ChatView 的 TurnRollupLine）；缺时间戳的单元在场时 null，同 durationMs 的
+   * 诚实未知口径。
+   */
+  startedAt: number | null;
 }
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit;
@@ -485,9 +493,27 @@ function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): Tu
     // 首末成员之间的全部内容收进折叠——含穿插正文（BUG-6）：展开即回原位
     members: chunk.slice(firstMember, lastMember + 1).filter(isTurnContent),
     durationMs: segmentSpan(chunk, results),
+    startedAt: chunkStartAt(chunk),
   });
   view.push(...chunk.slice(lastMember + 1));
   return view;
+}
+
+/**
+ * 段内最早的 **assistant 侧**渲染单元 timestamp = 这轮开始流式回复的时刻。
+ * 段里还带着开轮的 user 单元（它不是 assistant 的输出，且它早于任何回答），
+ * 用 isTurnContent 排掉；缺时间戳的单元在场时 null（同 segmentSpan 的口径：
+ * 宁可不显示，不编造）。
+ */
+function chunkStartAt(chunk: readonly RenderEntry[]): number | null {
+  let min: number | null = null;
+  for (const entry of chunk) {
+    if (!isTurnContent(entry)) continue;
+    const ts = entryTimestamp(entry);
+    if (ts === null) return null;
+    if (min === null || ts < min) min = ts;
+  }
+  return min;
 }
 
 /**
@@ -853,6 +879,21 @@ export function tailPreviewLines(text: string, keep = 2, maxChars = 160): string
 }
 
 /**
+ * 剥掉末尾的空行（只剥尾部，中间的空行保留——它们是内容结构）。shell 输出几乎
+ * 总以 `\n` 结尾，按行拆分后末尾多一个空行；展开体以前没有下边框看不出来，
+ * 2026-10-12 套圆角虚线框后框底多出一整行空白，渲染前先剥。
+ */
+export function stripTrailingBlankLines(text: string): string {
+  const lines = text.split("\n");
+  while (lines.length > 0) {
+    const last = lines[lines.length - 1];
+    if (last === undefined || last.trim() === "") lines.pop();
+    else break;
+  }
+  return lines.join("\n");
+}
+
+/**
  * 自动展开判定（纯函数，驱动方拿着它在每秒重算）：模型给了 expected 且达阈值 →
  * **开跑就展**（一秒都不让用户盯着静止的行）；没给或没达 → 已运行时长达阈值再展。
  * elapsed 记不到（晚挂载）时只认 expected——两个信号都没有就不自动展开。
@@ -975,25 +1016,12 @@ export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCa
   return { childId, title, modelId, workbench, thinkingLevel };
 }
 
-/**
- * 子会话：`reply_subsession` / `report_to_parent` 结果 `details` 里落账那条通道消息的 id
- * （`channel-tools.ts` 的 `details: { messageId }`）。发送侧标记点了凭它滚到父子会话面板里
- * 的这一条。running 帧还没有结果、这一刀之前的旧记录 `details` 是空的、字段坏了——
- * 一律 null，调用方退回「滚到通道底部」。
- */
-export function channelSendMessageId(result: ToolTranscriptItem | undefined): string | null {
-  if (result === undefined || result.status === "running") return null;
-  const details = result.details;
-  if (typeof details !== "object" || details === null) return null;
-  const messageId = (details as Record<string, unknown>)["messageId"];
-  return typeof messageId === "string" && messageId !== "" ? messageId : null;
-}
 
 /** channelMarkLabel 的 tone：颜色是第二信号，与 ChannelMarkLine 的取色一一对应。 */
 export type ChannelMarkTone = "question" | "reply" | "neutral" | "done" | "failed";
 
 /**
- * 通道标记行的文案与语气（纯函数，`ChannelMarkLine` 消费）。`ownSide` 是被查看
+ * 通道标记的文案与语气（纯函数；QueueStrip 的排队条目在用）。`ownSide` 是被查看
  * 会话相对通道的身份（父还是子），`peerTitle` 是对面会话的标题（查不到时调用方
  * 传 "Sub-session" / "Parent session" 兜底）。
  *
@@ -1001,9 +1029,6 @@ export type ChannelMarkTone = "question" | "reply" | "neutral" | "done" | "faile
  * question/progress/done/failed（allowedKinds("child")）；本会话是子时看到的是
  * 父发来的 task/reply（allowedKinds("parent")）——两个方向的 kind 空间天然不交叠，
  * "其余组合" 分支理论上不会命中，只是防御性兜底。
- *
- * 标记本 PR 不可点（打开通道是下一个 PR 的事），但行尾仍统一带 ` · view in
- * channel` 次要文字——文案先把「这是可以点开看全文的东西」的期待立住。
  */
 export function channelMarkLabel(
   mark: { from: "parent" | "child"; kind: ChannelMessageKind },
@@ -1039,7 +1064,7 @@ export function channelMarkLabel(
     }
     return { text: c.markOther(peerTitle, c.kinds[mark.kind]), tone: "neutral" };
   })();
-  return { text: c.viewInChannel(label.text), tone: label.tone };
+  return label;
 }
 
 export function summarizeToolResult(result: ToolTranscriptItem | undefined, t: Messages): string | null {

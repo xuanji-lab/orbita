@@ -43,6 +43,7 @@ const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" }
 import { defaultThinkingLevel } from "@shared/model-defaults";
 import { modelThinkingLevels } from "../chat/thinking-choice.ts";
 import { useT } from "../../locale.ts";
+import { playCompletionChime } from "../notify/chime.ts";
 
 /**
  * 设置面。**它不是弹窗，是内容面的另一种内容**——tab 列表浮在侧栏上（透明、无面），
@@ -249,7 +250,8 @@ function General(props: {
   const gitAttribution = props.settings.gitAttribution ?? true;
   // 同理：缺席 = 折叠（粘贴文本 chip 的出厂形态）
   const pastedCollapse = props.settings.collapsePastedText ?? true;
-  // 缺席 = 关（口味不是能力）
+  // 完成提示音：缺席 = 响（这个提醒的价值在人不在跟前时也成立；只管声音，卡片与未读不受它影响）
+  const completionSound = props.settings.completionSound ?? true;
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -501,6 +503,23 @@ function General(props: {
             </Chip>
           </span>
         </SettingRow>
+        <SettingRow name={t.settings.completionSound} info={t.settings.completionSoundInfo}>
+          <span className="set-chips" role="group" aria-label={t.settings.completionSoundAria}>
+            <Chip
+              active={completionSound}
+              onClick={() => {
+                props.onChange({ completionSound: true });
+                // 打开时当场响一声：开关的意义就是这个声音，让人先听到它是什么
+                playCompletionChime();
+              }}
+            >
+              {t.common.on}
+            </Chip>
+            <Chip active={!completionSound} onClick={() => props.onChange({ completionSound: false })}>
+              {t.common.off}
+            </Chip>
+          </span>
+        </SettingRow>
       </SettingGroup>
       <SettingGroup label={t.settings.data}>
         <DataDirectoryRow />
@@ -581,7 +600,16 @@ function ExperimentalSettings(props: {
             on={props.settings.experimentalFeatures?.[feature.id] === true}
             open={openId === feature.id}
             onToggleLog={() => setOpenId(openId === feature.id ? null : feature.id)}
-            onSwitch={(value) => props.onChange({ experimentalFeatures: { [feature.id]: value } })}
+            onSwitch={(value) =>
+              props.onChange({
+                experimentalFeatures: {
+                  [feature.id]: value,
+                  // 互斥的项连带关掉（黑洞 ↔ 俄罗斯方块）：两个都开没有定义的行为，
+                  // 与其让 parseSettings 静默裁决，不如打开的这一制替用户关上另一个
+                  ...(value && feature.exclusiveWith !== undefined ? { [feature.exclusiveWith]: false } : {}),
+                },
+              })
+            }
           />
         ))}
       </div>

@@ -1,7 +1,11 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { ChannelMessage } from "@shared/channel";
+import type { Messages } from "../../messages-en.ts";
 import {
+  latestChannelLine,
   sortSubSessionRows,
+  subSessionBarFill,
   subSessionRowStatus,
   subSessionStatusOf,
   type SubSessionEngineSlots,
@@ -99,12 +103,13 @@ describe("subSessionStatusOf", () => {
 });
 
 describe("sortSubSessionRows", () => {
-  const row = (id: string, status: SubSessionRowStatus): { id: string; status: SubSessionRowStatus } => ({
+  const row = (id: string, status: SubSessionRowStatus, lastAt = 0): { id: string; status: SubSessionRowStatus; lastAt: number } => ({
     id,
     status,
+    lastAt,
   });
 
-  it("waiting 最前，其次 approval，其次 running，其余（含 stopped）按原序（派出顺序）", () => {
+  it("收件箱次序：等你（question/approval）最前，其次 failed，其次 done，其次 running，stopped/idle 收尾", () => {
     const rows = [
       row("idle-1", "idle"),
       row("running-1", "running"),
@@ -112,19 +117,33 @@ describe("sortSubSessionRows", () => {
       row("done-1", "done"),
       row("stopped-1", "stopped"),
       row("approval-1", "approval"),
+      row("failed-1", "failed"),
       row("running-2", "running"),
     ];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["waiting-1", "approval-1", "running-1", "running-2", "idle-1", "done-1", "stopped-1"],
+      ["waiting-1", "approval-1", "failed-1", "done-1", "running-1", "running-2", "idle-1", "stopped-1"],
     );
   });
 
-  it("done/failed/stopped/idle 同一档，稳定排序保留原始（派出）顺序", () => {
-    const rows = [row("failed-1", "failed"), row("stopped-1", "stopped"), row("idle-1", "idle"), row("done-1", "done")];
+  it("同组之内新的在前（lastAt 倒序）——收件箱是待办清单，新的更可能是现在要处理的", () => {
+    const rows = [
+      row("old-question", "waiting", 100),
+      row("new-question", "waiting", 200),
+      row("run-a", "running", 50),
+      row("run-b", "running", 80),
+    ];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["failed-1", "stopped-1", "idle-1", "done-1"],
+      ["new-question", "old-question", "run-b", "run-a"],
+    );
+  });
+
+  it("stopped/idle 同档按 lastAt 分先后（终局行也保序，不抖动）", () => {
+    const rows = [row("stopped-2", "stopped", 20), row("idle-1", "idle", 10), row("stopped-1", "stopped", 30)];
+    deepStrictEqual(
+      sortSubSessionRows(rows).map((r) => r.id),
+      ["stopped-1", "stopped-2", "idle-1"],
     );
   });
 
@@ -133,5 +152,84 @@ describe("sortSubSessionRows", () => {
     const sorted = sortSubSessionRows(rows);
     strictEqual(sorted === rows, false);
     strictEqual(rows[0]?.id, "a");
+  });
+});
+
+describe("subSessionBarFill（行首三节竖条亮几节）", () => {
+  it("running = 1/3 蓝（running）；waiting 与 approval 同为 2/3 橙（waiting）", () => {
+    strictEqual(subSessionBarFill("running"), "running");
+    strictEqual(subSessionBarFill("waiting"), "waiting");
+    strictEqual(subSessionBarFill("approval"), "waiting");
+  });
+
+  it("done = 3/3 绿、failed = 3/3 红", () => {
+    strictEqual(subSessionBarFill("done"), "done");
+    strictEqual(subSessionBarFill("failed"), "failed");
+  });
+
+  it("stopped / idle 不亮（undefined = 不渲染竖条）", () => {
+    strictEqual(subSessionBarFill("stopped"), undefined);
+    strictEqual(subSessionBarFill("idle"), undefined);
+  });
+});
+
+describe("latestChannelLine（收件箱行的最新一句）", () => {
+  // 文案表用测试自己的桩：latestChannelLine 只做拼接，不依赖真实翻译
+  const t = {
+    channel: {
+      notSpokenRunning: "在跑 · 还没说话",
+      notSpoken: "还没说话",
+      latestQuestion: (text: string) => `问：${text}`,
+      latestProgress: (text: string) => `进度：${text}`,
+      latestDone: "完成",
+      latestFailed: "失败",
+      latestReply: (text: string) => `回复：${text}`,
+    },
+  } as unknown as Messages;
+
+  it("最新一条非 task 消息说了什么就写什么；task 不算「说话」", () => {
+    const messages: ChannelMessage[] = [
+      { id: "t", from: "parent", author: "model", kind: "task", text: "任务正文", delivery: "steer", createdAt: 1 },
+      { id: "p", from: "child", author: "model", kind: "progress", text: "写完一半", delivery: "followUp", createdAt: 2 },
+      { id: "q", from: "child", author: "model", kind: "question", text: "要不要这样？\n第二行", delivery: "followUp", createdAt: 3 },
+    ];
+    strictEqual(latestChannelLine(messages, "waiting", t), "问：要不要这样？");
+  });
+
+  it("多行正文只取第一个非空行并去空白", () => {
+    const messages: ChannelMessage[] = [
+      { id: "t", from: "parent", author: "model", kind: "task", text: "任务", delivery: "steer", createdAt: 1 },
+      { id: "p", from: "child", author: "model", kind: "progress", text: "\n\n  第一行  \n后面", delivery: "followUp", createdAt: 2 },
+    ];
+    strictEqual(latestChannelLine(messages, "running", t), "进度：第一行");
+  });
+
+  it("done / failed 只说结果不带结论（结论由父会话的模型转述）", () => {
+    const done: ChannelMessage[] = [
+      { id: "d", from: "child", author: "model", kind: "done", text: "PR 210 已开", delivery: "followUp", createdAt: 2 },
+    ];
+    const failed: ChannelMessage[] = [
+      { id: "f", from: "child", author: "model", kind: "failed", text: "下载超时", delivery: "followUp", createdAt: 2 },
+    ];
+    strictEqual(latestChannelLine(done, "done", t), "完成");
+    strictEqual(latestChannelLine(failed, "failed", t), "失败");
+  });
+
+  it("最新的是父侧回信：回复：首行", () => {
+    const messages: ChannelMessage[] = [
+      { id: "q", from: "child", author: "model", kind: "question", text: "问个事", delivery: "followUp", createdAt: 1 },
+      { id: "r", from: "parent", author: "user", kind: "reply", text: "先不支持扫描件", delivery: "steer", createdAt: 2 },
+    ];
+    strictEqual(latestChannelLine(messages, "running", t), "回复：先不支持扫描件");
+  });
+
+  it("还没说过话：在跑的说「在跑 · 还没说话」，idle / stopped 只说「还没说话」", () => {
+    const taskOnly: ChannelMessage[] = [
+      { id: "t", from: "parent", author: "model", kind: "task", text: "任务", delivery: "steer", createdAt: 1 },
+    ];
+    strictEqual(latestChannelLine(taskOnly, "running", t), "在跑 · 还没说话");
+    strictEqual(latestChannelLine(taskOnly, "idle", t), "还没说话");
+    strictEqual(latestChannelLine(undefined, "running", t), "在跑 · 还没说话");
+    strictEqual(latestChannelLine([], "stopped", t), "还没说话");
   });
 });

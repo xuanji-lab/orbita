@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { relativeTime } from "./relative-time.ts";
 import { PanelFilter, PanelHelp, PanelIconButton, PanelTitle, RightPanelFrame } from "./RightPanel";
 import { ChatView } from "../features/chat/ChatView";
 import type { ChatSession, SessionEngine } from "../features/chat/useChatSession";
@@ -14,7 +15,6 @@ import {
   type DockedTab,
 } from "./drawer-state";
 import { useT } from "../locale.ts";
-import type { Messages } from "../messages-en.ts";
 
 export type { DockedTab };
 
@@ -42,10 +42,27 @@ export function Drawer(props: {
   onOpenProviders: () => void;
   docked: DockedTab[];
   onDockedChange: (docked: DockedTab[]) => void;
+  /**
+   * 一次性「切到这个标签」的请求（完成提醒卡的「辅助对话」，2026-10-10）：调用方先把
+   * 它停靠进 docked，再发请求；本组件激活它后调 onFocusConsumed 作废请求——面板每次
+   * 打开都会重新挂载，请求不作废的话下次打开又会被拽回这一页。token 让同一 tab 连发
+   * 两次也能触发。
+   */
+  focus: { tab: string; token: number } | null;
+  onFocusConsumed: () => void;
 }) {
   const t = useT();
-  const [activeTab, setActiveTab] = useState<DockedTab | null>(props.docked[0] ?? null);
+  const [activeTab, setActiveTab] = useState<DockedTab | null>(props.focus?.tab ?? props.docked[0] ?? null);
   const [picking, setPicking] = useState(false);
+
+  useEffect(() => {
+    if (props.focus === null) return;
+    setActiveTab(props.focus.tab);
+    setPicking(false);
+    props.onFocusConsumed();
+    // 只认 token：同一请求不重复处理
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.focus?.token]);
 
   // 新任务发出第一句话、拿到真 id：把 "new" 占位换成它，激活跟随
   useEffect(() => {
@@ -225,7 +242,7 @@ function Picker(props: {
           <button key={meta.id} className="drawer-pickrow" onClick={() => props.onPick(meta.id)}>
             <Icon name="message-square" size={14} />
             <span className="drawer-pickrow-name">{meta.title}</span>
-            <span className="drawer-pickrow-meta row-trailing">{formatWhen(meta.updatedAt, t)}</span>
+            <span className="drawer-pickrow-meta row-trailing">{relativeTime(meta.updatedAt, t)}</span>
           </button>
         ))}
         {candidates.length === 0 && <p className="panel-empty">{t.drawer.noOther}</p>}
@@ -237,12 +254,3 @@ function Picker(props: {
   );
 }
 
-/** 相对时间的最简口径：侧栏的同款信息，不引入第二个日期库 */
-function formatWhen(updatedAt: number, t: Messages): string {
-  const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60000));
-  if (minutes < 1) return t.time.justNow;
-  if (minutes < 60) return t.time.minutesAgo(minutes);
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return t.time.hoursAgo(hours);
-  return t.time.daysAgo(Math.round(hours / 24));
-}

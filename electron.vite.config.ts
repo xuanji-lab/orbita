@@ -56,7 +56,7 @@ function devServerPort(raw: string | undefined): number {
 
 /**
  * electron-vite 三段构建：main / preload / renderer。
- * renderer 直接 @import 仓库根的「Orbita Design System」——设计系统是 UI 真源，
+ * renderer 直接 @import 仓库根的 design-system/——设计系统是 UI 真源，
  * 不复制一份到 src 下，避免 token 漂移（AGENTS.md「设计系统」一节）。
  * 该目录在 renderer root 之外，故显式放行 fs 访问。
  */

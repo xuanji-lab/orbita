@@ -29,6 +29,7 @@ const environment = {
   compaction: { enabled: true } as CompactionSetting,
   gitAttribution: true,
   attributionLanguage: "en" as const,
+  pdfCitations: false,
 };
 
 describe("turnFields", () => {
