@@ -297,7 +297,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     },
     changelog: [
       {
-        pr: null,
+        pr: 218,
         date: "2026-10-12",
         note: {
           zh: "首版：能力检测、沙箱启停与手动「看一眼」，先作为沙箱管理的入口。",
