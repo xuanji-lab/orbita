@@ -89,7 +89,13 @@ export function SettingsView(props: {
   onTab: (tab: SettingsTab) => void;
 }) {
   const t = useT();
-  const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
+  /** 实验功能「电脑使用」（设置原值）：关着时侧栏导航与这一页的内容都藏起来。
+   *  正常操作进不到这个门：App 的 settingsTab 只由侧栏导航行改写，导航行已过滤。
+   *  这里再拦一道是兼容盘上手改 settings.json 的情形——页头与内容各自退回通用页。 */
+  const computerUse = props.settings.experimentalFeatures?.["computer-use"] === true;
+  const active =
+    SETTINGS_TABS.find((tab) => tab.id === props.tab && (tab.id !== "computer-use" || computerUse)) ??
+    SETTINGS_TABS[0];
   /**
    * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
    * Providers / General 再回来，每次回来都重扫就又回到「懵逼」（wafo 2026-09-28）。
@@ -159,7 +165,7 @@ export function SettingsView(props: {
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
         </div>
-      ) : props.tab === "computer-use" ? (
+      ) : props.tab === "computer-use" && computerUse ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <ComputerUseView />
         </div>
