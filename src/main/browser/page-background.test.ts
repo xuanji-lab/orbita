@@ -14,7 +14,7 @@ const COLORS_CSS = join(
   "..",
   "..",
   "..",
-  "Orbita Design System",
+  "design-system",
   "tokens",
   "colors.css",
 );

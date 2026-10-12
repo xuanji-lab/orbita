@@ -1,5 +1,5 @@
 /**
- * Windows 图标：`Orbita Design System/assets/app-icon.svg` → `build/icon.png`（1024²）。
+ * Windows 图标：`design-system/assets/app-icon.svg` → `build/icon.png`（1024²）。
  *
  * 两张图，同一个源：
  * - `build/icon.png`（1024²）：Windows / NSIS 的应用图标。与 `scripts/make-icon.sh`
@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const source = join(root, "Orbita Design System", "assets", "app-icon.svg");
+const source = join(root, "design-system", "assets", "app-icon.svg");
 const target = join(root, "build", "icon.png");
 const trayTarget = join(root, "build", "tray.png");
 

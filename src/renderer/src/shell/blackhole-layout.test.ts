@@ -144,7 +144,7 @@ describe("packPlacements：重力落位", () => {
       "renderer",
       "quarterly-report-final-v3-reviewed-by-legal.pdf",
       "Composer.tsx",
-      "Orbita Design System",
+      "design-system",
       "README.md",
     ];
     const spans = Array.from({ length: 40 }, (_, i) =>
@@ -352,7 +352,7 @@ function rng(seed: number): () => number {
 }
 
 type Mat = { id: string; kind: "image" | "file" | "dir"; name: string; seed: string };
-const NAMES = ["a.ts", "design-notes.md", "renderer", "quarterly-report-final-v3-reviewed-by-legal.pdf", "设计说明文档.md", "src", "README.md", "Orbita Design System", "x"];
+const NAMES = ["a.ts", "design-notes.md", "renderer", "quarterly-report-final-v3-reviewed-by-legal.pdf", "设计说明文档.md", "src", "README.md", "design-system", "x"];
 
 function mixed(count: number, seed: number): Mat[] {
   const r = rng(seed);

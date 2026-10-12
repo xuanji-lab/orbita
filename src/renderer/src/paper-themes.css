@@ -1,6 +1,6 @@
 /*
  * 纸面两档的装饰（璇玑载体谱「稿纸」一档，wafo 2026-09-25 载入）。颜色与字体全部是 token
- * （Orbita Design System/tokens：colors.css 的 --color-paper-*、typography.css 的换字）；这里只放
+ * （design-system/tokens：colors.css 的 --color-paper-*、typography.css 的换字）；这里只放
  * 每档一两层装饰，DOM 不动。
  *
  * - copybook（小学作业）：面板一圈双线绿框；输入框是绿方格，英文垫修正液；正文里的加粗是老师的
