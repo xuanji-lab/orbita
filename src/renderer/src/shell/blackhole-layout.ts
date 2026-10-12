@@ -9,13 +9,19 @@
  * **落位是确定性的，不是物理模拟**：同一份清单永远算出同一个布局。所以发出去的
  * 消息只凭附件清单就能重算出盒子，**不改会话存储协议**；也不会出现物理引擎那种
  * 方块歪斜、互相推挤、可点击的胶囊位置不稳的情况。两种落位模式（2026-10-12
- * 用户裁决「pure random 好玩一些」）：
+ * 用户裁决）：
  * - `lowest`（黑洞）：每块选落点最低的列位（平手取最左），跟真的掉下去一样
  *   不填悬空的洞；视觉上块从左到右排。
- * - `random`（俄罗斯方块）：在放得下的列位里**纯随机**挑一个，停在那几列已有
- *   的最高处之上——大量悬空与空洞是有意的玩法。随机数也是确定性的：每块的
- *   抽签只由它自己的种子键决定（见 blackholeSeedKey），与别的块无关——后加一块
- *   不会重排已落定的块，快照重算才能与输入框逐块一致。
+ * - `fit`（俄罗斯方块·拼合，取代首版的纯随机）：对每个可行列位求直落落点，
+ *   打分 = 落地后顶部高度 + 0.6 × 新增空洞数 ÷ 块宽列数，取最低分；平手用该块
+ *   的种子键随机挑一个。随机数是确定性的：每块的抽签只由它自己的种子键决定
+ *   （见 blackholeSeedKey），与别的块无关——后加一块不会重排已落定的块，快照
+ *   重算才能与输入框逐块一致。
+ *
+ * 判碰撞一律**按格子占用**（脚印，见 BlackholeCells），不再用矩形天际线：矩形块
+ * （黑洞的胶囊 / 正方形）的脚印就是满外接框，算出来的落位与旧实现逐字相同；
+ * 四格方块（tetris-geometry.ts）的脚印是格子并集，S 块能滑进两个凸块之间的槽，
+ * 「拼合」因此才成立。
  *
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
@@ -47,17 +53,26 @@ const CHIP_CHROME_PX = 56;
 const CHAR_WIDE_PX = 13;
 const CHAR_NARROW_PX = 7.2;
 
-/** 材料在盒子里的形状：截图 = 正方形，名字短 = 小胶囊，名字长 = 半宽长条 */
-export type BlackholeShape = "square" | "capsule" | "strip";
+/** 材料在盒子里的形状：黑洞 = 截图正方形 / 小胶囊 / 半宽长条；俄罗斯方块 = 七种四格方块（tetris-geometry） */
+export type BlackholeShape = "square" | "capsule" | "strip" | "I" | "O" | "T" | "S" | "Z" | "J" | "L";
 /** 盒子只装这三种；引用不进盒子（它算消息正文的一部分，待在盒子下面） */
 export type BlackholeKind = "image" | "file" | "dir";
 
+/**
+ * 块的脚印：格子坐标 [列, 行从盒底数]。span 里是块内相对坐标；placement 里同样
+ * 存块内相对坐标（绝对格子 = x + cx / y + cy 现算）。**矩形块省略 cells = 满外接框**
+ * ——黑洞的胶囊 / 正方形不带这个字段，行为与泛化前逐字相同；四格方块带格子并集。
+ */
+export type BlackholeCells = readonly (readonly [number, number])[];
+
 export interface BlackholeSpan {
   shape: BlackholeShape;
-  /** 占几列 */
+  /** 占几列（外接框） */
   col: number;
-  /** 占几行 */
+  /** 占几行（外接框） */
   row: number;
+  /** 脚印（块内相对坐标）；省略 = 满外接框 */
+  cells?: BlackholeCells;
 }
 
 /** 一块的落位：x 从盒子左缘数（列），y 从盒底往上数（行），w / h 是实际占的列与行 */
@@ -66,12 +81,17 @@ export interface BlackholePlacement {
   y: number;
   w: number;
   h: number;
+  /** 脚印（块内相对坐标）；省略 = 满外接框 */
+  cells?: BlackholeCells;
 }
 
-/** 文本估宽（px）。码位 > 0x2e80 起按全宽算（CJK 与注音、假名都在其上） */
-export function textWidthPx(text: string): number {
+/** 文本估宽（px）。码位 > 0x2e80 起按全宽算（CJK 与注音、假名都在其上）；
+ *  `fontSize` 缺省 12（caption 档），其余档位按比例折算（micro 11 等） */
+export function textWidthPx(text: string, fontSize = 12): number {
+  const wide = (CHAR_WIDE_PX * fontSize) / 12;
+  const narrow = (CHAR_NARROW_PX * fontSize) / 12;
   let px = 0;
-  for (const ch of text) px += (ch.codePointAt(0) ?? 0) > 0x2e80 ? CHAR_WIDE_PX : CHAR_NARROW_PX;
+  for (const ch of text) px += (ch.codePointAt(0) ?? 0) > 0x2e80 ? wide : narrow;
   return px;
 }
 
@@ -97,8 +117,8 @@ export function blackholeSpan(
   return { shape: "strip", col: Math.max(CAPSULE_MIN_COLS, Math.min(want, half)), row: 1 };
 }
 
-/** 落位模式：黑洞 = 落点最低的列位（平手取最左）；俄罗斯方块 = 纯随机列位 */
-export type BlackholeDropMode = "lowest" | "random";
+/** 落位模式：黑洞 = 落点最低的列位（平手取最左）；俄罗斯方块 = 拼合（打分挑列位） */
+export type BlackholeDropMode = "lowest" | "fit";
 
 /** 盒子的形态：黑洞带全套特效（变黑 / 吸入 / 舷窗 / 飞入），俄罗斯方块只落块 */
 export type MaterialBoxStyle = "blackhole" | "tetris";
@@ -139,51 +159,120 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+/** 一块的脚印（块内相对坐标）；矩形块（没带 cells 的）就是满外接框 */
+function placementCells(p: BlackholePlacement): BlackholeCells {
+  if (p.cells !== undefined) return p.cells;
+  const out: [number, number][] = [];
+  for (let x = 0; x < p.w; x++) {
+    for (let y = 0; y < p.h; y++) out.push([x, y]);
+  }
+  return out;
+}
+
+/** 落下块的脚印：压到盒宽后超出部分的格子直接丢弃（与旧实现的 w 钳制同义） */
+function spanCells(span: { col: number; row: number; cells?: BlackholeCells }, w: number): BlackholeCells {
+  if (span.cells === undefined) {
+    const out: [number, number][] = [];
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < span.row; y++) out.push([x, y]);
+    }
+    return out;
+  }
+  return span.cells.filter(([cx]) => cx < w);
+}
+
+/** 每列的天际线（该列已占到的最高行 + 1）；空列是 0 */
+function skylineOf(placed: readonly BlackholePlacement[], columns: number): number[] {
+  const sky = new Array<number>(Math.max(1, columns)).fill(0);
+  for (const p of placed) {
+    for (const [cx, cy] of placementCells(p)) {
+      const col = p.x + cx;
+      if (col < 0 || col >= sky.length) continue;
+      sky[col] = Math.max(sky[col] ?? 0, p.y + cy + 1);
+    }
+  }
+  return sky;
+}
+
+/** 每列最底的格子（从盒底数）：直落时这些格先碰到东西。没有格子的列按块顶算（保守） */
+function bottomProfile(cells: BlackholeCells, w: number, h: number): number[] {
+  const prof = new Array<number>(Math.max(1, w)).fill(h);
+  for (const [cx, cy] of cells) {
+    if (cx >= 0 && cx < prof.length) prof[cx] = Math.min(prof[cx] ?? h, cy);
+  }
+  return prof;
+}
+
+/** 在列位 x 直落的落点（行，从盒底数）：每列各自贴住该列的天际线 */
+function landingY(sky: readonly number[], x: number, prof: readonly number[]): number {
+  let y = 0;
+  for (let i = 0; i < prof.length; i++) {
+    y = Math.max(y, (sky[x + i] ?? 0) - (prof[i] ?? 0));
+  }
+  return y;
+}
+
 /**
- * 掉一块：`lowest` 在已落定的块上找落点最低的列位（平手取最左）；`random` 在
- * 放得下列位里纯随机挑一个（确定性：抽签只由这块自己的种子键决定）。两种都
- * 停在那几列已有的最高处之上。块比盒子还宽时压到盒宽。
+ * 掉一块。两种模式都按格子占用判碰撞、停在接触处（列连续的块直落 = 每列各自
+ * 贴住天际线；四格方块因此能滑进两凸块之间的槽）:
+ * - `lowest`：落点最低的列位，平手取最左（黑洞的现状；矩形块的输出与旧实现相同）；
+ * - `fit`：每个可行列位求直落落点，打分 = 落地后顶部高度 + 0.6 × 新增空洞数 ÷
+ *   块宽列数，取最低分；平手用种子键抽签（确定性）。块比盒子还宽时压到盒宽。
  */
 export function dropOne(
   placed: readonly BlackholePlacement[],
-  span: { col: number; row: number },
+  span: { col: number; row: number; cells?: BlackholeCells },
   columns: number,
   mode: BlackholeDropMode = "lowest",
   seed = "",
 ): BlackholePlacement {
-  const heights = new Array<number>(columns).fill(0);
-  for (const p of placed) {
-    for (let i = p.x; i < p.x + p.w && i < columns; i++) heights[i] = Math.max(heights[i] ?? 0, p.y + p.h);
-  }
   const w = Math.max(1, Math.min(span.col, columns));
+  const h = span.row;
+  const cells = spanCells(span, w);
+  const prof = bottomProfile(cells, w, h);
+  const sky = skylineOf(placed, columns);
+  const maxX = Math.max(0, columns - w);
   let x = 0;
-  if (mode === "random") {
-    // 纯随机：每个放得下的列位机会均等，抽签只看这块自己的种子键
+  if (mode === "fit") {
+    // 拼合：每个可行列位求直落落点，打分取最低；平手用种子随机挑
     const roll = mulberry32(seedFromKey(seed))();
-    x = Math.min(columns - w, Math.floor(roll * (columns - w + 1)));
+    let best = Number.POSITIVE_INFINITY;
+    let cands: number[] = [];
+    for (let cx = 0; cx <= maxX; cx++) {
+      const y = landingY(sky, cx, prof);
+      let holes = 0;
+      for (let i = 0; i < w; i++) holes += Math.max(0, y + (prof[i] ?? 0) - (sky[cx + i] ?? 0));
+      const score = y + h + (0.6 * holes) / Math.max(1, w);
+      if (score < best - 1e-6) {
+        best = score;
+        cands = [cx];
+      } else if (Math.abs(score - best) <= 1e-6) {
+        cands.push(cx);
+      }
+    }
+    x = cands[Math.min(cands.length - 1, Math.floor(roll * cands.length))] ?? 0;
   } else {
+    // lowest：落点最低的列位，平手取最左
     let bestY = Number.POSITIVE_INFINITY;
-    for (let candidate = 0; candidate + w <= columns; candidate++) {
-      let base = 0;
-      for (let i = candidate; i < candidate + w; i++) base = Math.max(base, heights[i] ?? 0);
-      if (base < bestY) {
-        bestY = base;
-        x = candidate;
+    for (let cx = 0; cx <= maxX; cx++) {
+      const y = landingY(sky, cx, prof);
+      if (y < bestY) {
+        bestY = y;
+        x = cx;
       }
     }
   }
-  // 两种模式都停在那几列已有的最高处之上（random 因此大量悬空与空洞——玩法如此）
-  let y = 0;
-  for (let i = x; i < x + w; i++) y = Math.max(y, heights[i] ?? 0);
-  return { x, y, w, h: span.row };
+  const y = landingY(sky, x, prof);
+  const base: BlackholePlacement = { x, y, w, h };
+  return span.cells === undefined ? base : { ...base, cells };
 }
 
 /**
  * 按清单顺序逐块往下掉：同一份清单 + 同一个列数 + 同一个模式永远得到同一个布局。
- * `seed` 是每块自己的种子键（blackholeSeedKey），只在 random 模式下被读。
+ * `seed` 是每块自己的种子键（blackholeSeedKey），只在 fit 模式下被读。
  */
 export function packPlacements(
-  spans: readonly { col: number; row: number; seed?: string }[],
+  spans: readonly { col: number; row: number; seed?: string; cells?: BlackholeCells }[],
   columns: number,
   mode: BlackholeDropMode = "lowest",
 ): BlackholePlacement[] {
@@ -193,26 +282,30 @@ export function packPlacements(
 }
 
 /**
- * 抽掉一块之后的重力补位：**列位不动**，按原高度从低到高逐块重新往下落——正上方的
- * 块掉进空出来的位置，旁边的不挪（跟抽掉一块积木一样）。传入的是剩下的块（已去掉
- * 被删的那块），返回同顺序的新落位。
+ * 抽掉一块之后的重力补位：**列位不动**，按原高度从低到高逐块重新直落到放不下
+ * 为止（按格子占用判碰撞——四格方块的支架能落进旁边让出的槽；矩形块与旧实现
+ * 相同）。传入的是剩下的块（已去掉被删的那块），返回同顺序的新落位。
  */
 export function settleAfterRemoval(placed: readonly BlackholePlacement[]): BlackholePlacement[] {
   const order = placed
     .map((_, index) => index)
     .sort((a, b) => (placed[a]?.y ?? 0) - (placed[b]?.y ?? 0) || a - b);
+  let columns = 1;
+  for (const p of placed) columns = Math.max(columns, p.x + p.w);
+  const sky = new Array<number>(columns).fill(0);
   const out = placed.slice();
-  const done: BlackholePlacement[] = [];
   for (const index of order) {
     const p = placed[index];
     if (p === undefined) continue;
-    let base = 0;
-    for (const q of done) {
-      if (q.x < p.x + p.w && p.x < q.x + q.w) base = Math.max(base, q.y + q.h);
-    }
-    const next = { ...p, y: base };
+    const cells = placementCells(p);
+    const prof = bottomProfile(cells, p.w, p.h);
+    const next = { ...p, y: landingY(sky, p.x, prof) };
     out[index] = next;
-    done.push(next);
+    for (const [cx, cy] of cells) {
+      const col = p.x + cx;
+      if (col < 0 || col >= columns) continue;
+      sky[col] = Math.max(sky[col] ?? 0, next.y + cy + 1);
+    }
   }
   return out;
 }
@@ -235,7 +328,7 @@ export const EMPTY_LEDGER: BlackholeLedger = { columns: 0, order: [], map: new M
 
 /**
  * 账本跟上现状：清单里没了的块拿掉、其余沿重力补位（**列位不动**，两种落位模式
- * 同一条规矩——删掉一块后旁边的块不拐弯，只往下掉，随机落点不重抽）；列数变了就
+ * 同一条规矩——删掉一块后旁边的块不拐弯，只往下掉，拼合的落点不重抽）；列数变了就
  * 按放出顺序整份重排（重排要用与当初相同的模式与种子，才不会一改窗口宽度整盒变样）。
  * `spanOf` 给出每个 id 当前的形状（半宽长条跟列数走），`seedOf` 给出随机模式的种子键。
  */
@@ -243,7 +336,7 @@ export function reconcileLedger(
   ledger: BlackholeLedger,
   present: ReadonlySet<string>,
   columns: number,
-  spanOf: (id: string) => { col: number; row: number },
+  spanOf: (id: string) => { col: number; row: number; cells?: BlackholeCells },
   mode: BlackholeDropMode = "lowest",
   seedOf: (id: string) => string = () => "",
 ): BlackholeLedger {
@@ -266,7 +359,7 @@ export function reconcileLedger(
 export function releaseInto(
   ledger: BlackholeLedger,
   id: string,
-  span: { col: number; row: number },
+  span: { col: number; row: number; cells?: BlackholeCells },
   mode: BlackholeDropMode = "lowest",
   seed = "",
 ): BlackholeLedger {
@@ -276,15 +369,24 @@ export function releaseInto(
   return { columns: ledger.columns, order: [...ledger.order, id], map };
 }
 
-/** 托住 p 的块：顶边正好贴着 p 的底、列有重叠的那些。p 在盒底时没有（盒底托着） */
+/** 托住 p 的块：有格子正好在 p 的某格正下方（同列、行差一）的那些。p 在盒底时没有（盒底托着它）；
+ *  矩形块退化成「顶边贴底、列有重叠」，与旧实现同义 */
 export function supportersOf(
   p: BlackholePlacement,
   placed: Iterable<[string, BlackholePlacement]>,
 ): string[] {
   const out: string[] = [];
   if (p.y === 0) return out;
+  const above = new Set<string>();
+  for (const [cx, cy] of placementCells(p)) above.add(`${p.x + cx},${p.y + cy}`);
   for (const [id, q] of placed) {
-    if (q !== p && q.y + q.h === p.y && q.x < p.x + p.w && p.x < q.x + q.w) out.push(id);
+    if (q === p) continue;
+    for (const [cx, cy] of placementCells(q)) {
+      if (above.has(`${q.x + cx},${q.y + cy + 1}`)) {
+        out.push(id);
+        break;
+      }
+    }
   }
   return out;
 }

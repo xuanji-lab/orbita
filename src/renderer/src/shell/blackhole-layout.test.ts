@@ -25,6 +25,7 @@ import {
   settleAfterRemoval,
   type BlackholePlacement,
 } from "./blackhole-layout.ts";
+import { tetrisGeometry, tetrisSpan } from "./tetris-geometry.ts";
 
 /** 两块是否占了同一格 */
 function overlaps(a: BlackholePlacement, b: BlackholePlacement): boolean {
@@ -173,7 +174,7 @@ describe("dropOne：往已有的堆上再掉一块", () => {
   });
 });
 
-describe("random 落位（俄罗斯方块）", () => {
+describe("fit 落位（俄罗斯方块·拼合）", () => {
   /** 混合清单：每块自带种子键（截图按组内序号、文件按路径——与两个消费者同一条公式） */
   const spans40 = Array.from({ length: 40 }, (_, i) => ({
     col: [3, 2, 6, 11, 5][i % 5] ?? 3,
@@ -182,20 +183,20 @@ describe("random 落位（俄罗斯方块）", () => {
   }));
 
   it("同一份清单永远算出同一个布局（种子确定，不碰 Math.random）", () => {
-    assert.deepEqual(packPlacements(spans40, 22, "random"), packPlacements(spans40, 22, "random"));
+    assert.deepEqual(packPlacements(spans40, 22, "fit"), packPlacements(spans40, 22, "fit"));
     // 种子一变布局就变——证明随机数真的来自种子键
     const other = spans40.map((s, i) => ({ ...s, seed: `x${i}` }));
-    assert.notDeepEqual(packPlacements(spans40, 22, "random"), packPlacements(other, 22, "random"));
+    assert.notDeepEqual(packPlacements(spans40, 22, "fit"), packPlacements(other, 22, "fit"));
   });
 
   it("后加一块不重排已落定的块：前 N 块的落位一字不动（种子只由每块自己决定）", () => {
-    const before = packPlacements(spans40.slice(0, 25), 22, "random");
-    const after = packPlacements(spans40, 22, "random");
+    const before = packPlacements(spans40.slice(0, 25), 22, "fit");
+    const after = packPlacements(spans40, 22, "fit");
     assert.deepEqual(after.slice(0, 25), before);
   });
 
-  it("都在盒内、不重叠、不悬空；随机落位天然堆得比 lowest 高", () => {
-    const placed = packPlacements(spans40, 22, "random");
+  it("都在盒内、不重叠、不悬空；同一堆上矩形块的 fit 落点高度 = lowest（矩形无空洞，分数就是高度）", () => {
+    const placed = packPlacements(spans40, 22, "fit");
     assert.equal(placed.length, 40);
     for (const p of placed) {
       assert.ok(p.x >= 0 && p.x + p.w <= 22, `出了盒子：${JSON.stringify(p)}`);
@@ -203,8 +204,41 @@ describe("random 落位（俄罗斯方块）", () => {
     }
     assertNoOverlap(placed);
     assertSupported(placed);
-    // 纯随机不填低的洞，同样 40 块堆得比最低列位模式高——限高与盒内滚动因此更常触发
-    assert.ok(packedExtent(placed).rows > packedExtent(packPlacements(spans40, 22, "lowest")).rows);
+    // 矩形块的底格永远贴着天际线（无空洞可省），fit 与 lowest 在同一堆上落得一样高；
+    // 平手抽签只改列位，总堆高因此与 lowest 同级（不保证逐块同位）
+    const pile: BlackholePlacement[] = [
+      { x: 0, y: 0, w: 3, h: 1 },
+      { x: 4, y: 0, w: 2, h: 2 },
+      { x: 7, y: 0, w: 11, h: 1 },
+    ];
+    assert.equal(dropOne(pile, { col: 4, row: 1 }, 22, "fit", "s").y, dropOne(pile, { col: 4, row: 1 }, 22, "lowest").y);
+    assert.equal(dropOne(pile, { col: 22, row: 1 }, 22, "fit", "s").y, dropOne(pile, { col: 22, row: 1 }, 22, "lowest").y);
+  });
+
+  it("平手的列位由种子抽签：空盒里 1×1 块的落点列随种子变", () => {
+    const a = packPlacements([{ col: 1, row: 1, seed: "a" }], 22, "fit")[0];
+    const b = packPlacements([{ col: 1, row: 1, seed: "b" }], 22, "fit")[0];
+    assert.ok(a !== undefined && b !== undefined);
+    assert.notEqual(a.x, b.x);
+  });
+
+  it("四格方块滑进槽里：T 块的支架落进两个墩子之间的空档（矩形逻辑做不到）", () => {
+    const bumps: BlackholePlacement[] = [
+      { x: 0, y: 0, w: 1, h: 1 },
+      { x: 2, y: 0, w: 1, h: 1 },
+      { x: 3, y: 0, w: 1, h: 1 },
+    ];
+    // T（mw=1）：底行只有中间一格（支架），上面一横三格
+    const tSpan = { shape: "T" as const, col: 3, row: 2, cells: [[1, 0], [0, 1], [1, 1], [2, 1]] as const };
+    assert.deepEqual(dropOne(bumps, tSpan, 5, "fit", "/t.pptx"), {
+      x: 0,
+      y: 0,
+      w: 3,
+      h: 2,
+      cells: [[1, 0], [0, 1], [1, 1], [2, 1]],
+    });
+    // 同一位换成矩形块只能停在墩子顶上——拼合靠的是按格子占用判碰撞
+    assert.equal(dropOne(bumps, { col: 3, row: 2 }, 5, "lowest").y, 1);
   });
 
   it("种子键：截图按组内序号、文件 / 目录按路径（两处消费者算出同一个键）", () => {
@@ -217,8 +251,8 @@ describe("random 落位（俄罗斯方块）", () => {
     assert.deepEqual(packPlacements(spans40, 22), packPlacements(spans40, 22, "lowest"));
   });
 
-  it("删除后的补位不重抽列位：random 模式也只往下掉，不往旁边挪", () => {
-    const placed = packPlacements(spans40.slice(0, 24), 22, "random");
+  it("删除后的补位不重抽列位：fit 模式也只往下掉，不往旁边挪", () => {
+    const placed = packPlacements(spans40.slice(0, 24), 22, "fit");
     const rest = placed.filter((_, i) => i % 3 !== 0);
     const settled = settleAfterRemoval(rest);
     settled.forEach((p, i) => assert.equal(p.x, rest[i]?.x));
@@ -233,13 +267,13 @@ describe("random 落位（俄罗斯方块）", () => {
       new Set(["a", "b", "c"]),
       16,
       (id) => ({ col: id === "a" ? 3 : 5, row: 1 }),
-      "random",
+      "fit",
       (id) => (id === "a" ? "/a" : id === "b" ? "/b" : "/c"),
     );
     const rePacked = packPlacements(
       ["a", "b", "c"].map((id) => ({ col: id === "a" ? 3 : 5, row: 1, seed: `/${id}` })),
       16,
-      "random",
+      "fit",
     );
     assert.deepEqual(Array.from(again.map.values()), rePacked);
   });
@@ -489,20 +523,20 @@ describe("放出流程：落点在放出那一刻只对已放出的块算", () =
     order.forEach((id, i) => assert.deepEqual(ledger.map.get(id), resent[i]));
   });
 
-  it("random 模式：逐块放出也步步有支撑、无悬空，40 个分 8 批到齐", () => {
+  it("fit 模式：逐块放出也步步有支撑、无悬空，40 个分 8 批到齐", () => {
     const mats = mixed(40, 11);
     const batches = Array.from({ length: 8 }, (_, i) => mats.slice(i * 5, i * 5 + 5));
-    const { ledger } = simulate(batches, 22, 150, "random");
+    const { ledger } = simulate(batches, 22, 150, "fit");
     assert.equal(ledger.order.length, 40);
     for (const [, p] of ledger.map) assert.ok(isSupported(p, ledger.map));
     assertNoOverlap(Array.from(ledger.map.values()));
   });
 
-  it("random 模式：单批到齐时发送前后仍逐块一致（种子只由每块自己决定）", () => {
+  it("fit 模式：单批到齐时发送前后仍逐块一致（种子只由每块自己决定）", () => {
     const mats = mixed(26, 5);
-    const { ledger, arrived, spanOf, seedOf } = simulate([mats], 22, 0, "random");
+    const { ledger, arrived, spanOf, seedOf } = simulate([mats], 22, 0, "fit");
     const order = listOrder(arrived);
-    const resent = packPlacements(order.map((id) => ({ ...spanOf(id), seed: seedOf(id) })), 22, "random");
+    const resent = packPlacements(order.map((id) => ({ ...spanOf(id), seed: seedOf(id) })), 22, "fit");
     order.forEach((id, i) => assert.deepEqual(ledger.map.get(id), resent[i], `${id} 发送前后不一致`));
   });
 });
@@ -564,5 +598,84 @@ describe("删除后的连锁掉落（三层堆叠）", () => {
     const before = layers();
     const after = reconcileLedger(before, new Set(["C", "E", "F", "H", "I"]), 8, () => ({ col: 2, row: 1 }));
     for (const id of after.order) assert.equal(after.map.get(id)?.x, before.map.get(id)?.x);
+  });
+});
+
+// ── 俄罗斯方块形态：真实方块几何（tetris-geometry.ts）下的落位 ─────────────────
+
+describe("tetris 形态：四格方块的拼合与快照一致", () => {
+  /** 混合清单：形状覆盖七种方块；种子键与两个消费者同一条公式 */
+  const items: { kind: "image" | "file" | "dir"; name: string; seed: string }[] = [
+    { kind: "image", name: "截图 2026-10-12 17.20.png", seed: blackholeSeedKey({ kind: "image", index: 0 }) },
+    { kind: "image", name: "截图 2026-10-12 17.31.png", seed: blackholeSeedKey({ kind: "image", index: 1 }) },
+    { kind: "file", name: "BlackholeBox.tsx", seed: "/repo/src/BlackholeBox.tsx" },
+    { kind: "file", name: "a.ts", seed: "/repo/src/a.ts" },
+    { kind: "file", name: "index.html", seed: "/repo/web/index.html" },
+    { kind: "file", name: "package.json", seed: "/repo/package.json" },
+    { kind: "file", name: "electron-builder.yml", seed: "/repo/electron-builder.yml" },
+    { kind: "file", name: "Q3 营收预测.xlsx", seed: "/repo/docs/Q3 营收预测.xlsx" },
+    { kind: "file", name: "发布会-终稿.pptx", seed: "/repo/docs/发布会-终稿.pptx" },
+    { kind: "file", name: "orbita-roadmap.docx", seed: "/repo/docs/orbita-roadmap.docx" },
+    { kind: "file", name: "design-review-2026-10.pdf", seed: "/repo/docs/design-review-2026-10.pdf" },
+    { kind: "file", name: "release-0.9.3-mac-arm64.zip", seed: "/repo/dist/release-0.9.3-mac-arm64.zip" },
+    { kind: "file", name: "voice-memo.m4a", seed: "/repo/voice-memo.m4a" },
+    { kind: "file", name: "demo.mp4", seed: "/repo/demo.mp4" },
+    { kind: "file", name: "README.md", seed: "/repo/README.md" },
+    { kind: "file", name: "notes.txt", seed: "/repo/notes.txt" },
+    { kind: "file", name: "makefile-stuff.dat", seed: "/repo/makefile-stuff.dat" },
+    { kind: "dir", name: "src", seed: "/repo/src" },
+    { kind: "dir", name: "design-system", seed: "/repo/design-system" },
+    { kind: "file", name: "会议纪要 · 产品评审 第三轮.docx", seed: "/repo/docs/会议纪要.docx" },
+  ];
+  const spans = items.map((item) => ({
+    ...tetrisSpan(tetrisGeometry({ kind: item.kind, name: item.name, columns: 22 })),
+    seed: item.seed,
+  }));
+
+  /** 一块的绝对格子（矩形块 = 满外接框） */
+  const absoluteCells = (p: BlackholePlacement): [number, number][] =>
+    (p.cells ?? []).map(([cx, cy]) => [p.x + cx, p.y + cy]);
+  const rectCells = (p: BlackholePlacement): [number, number][] => {
+    const out: [number, number][] = [];
+    for (let dx = 0; dx < p.w; dx++) for (let dy = 0; dy < p.h; dy++) out.push([p.x + dx, p.y + dy]);
+    return out;
+  };
+
+  it("同一份清单两次计算结果相同；后加一块不重排已落定的块", () => {
+    const placed = packPlacements(spans, 22, "fit");
+    assert.deepEqual(placed, packPlacements(spans, 22, "fit"));
+    const shorter = packPlacements(spans.slice(0, 12), 22, "fit");
+    assert.deepEqual(placed.slice(0, 12), shorter);
+  });
+
+  it("都在盒内、格子级不重叠、不悬空（拼合的真不变量）", () => {
+    const placed = packPlacements(spans, 22, "fit");
+    const withIds = placed.map((p, i): [string, BlackholePlacement] => [`t${i}`, p]);
+    const occupied = new Set<string>();
+    for (const p of placed) {
+      assert.ok(p.x >= 0 && p.x + p.w <= 22, `出了盒子：${JSON.stringify(p)}`);
+      for (const [gx, gy] of p.cells === undefined ? rectCells(p) : absoluteCells(p)) {
+        assert.ok(gx >= 0 && gx < 22 && gy >= 0, `格子出界：${gx},${gy}`);
+        const key = `${gx},${gy}`;
+        assert.ok(!occupied.has(key), `格子被两块占了：${key}`);
+        occupied.add(key);
+      }
+      assert.ok(isSupported(p, withIds), `悬空的块：${JSON.stringify(p)}`);
+    }
+  });
+
+  it("逐块放出与整份重排逐块一致（快照只凭附件清单重算）", () => {
+    const live: BlackholePlacement[] = [];
+    for (const span of spans) live.push(dropOne(live, span, 22, "fit", span.seed));
+    assert.deepEqual(live, packPlacements(spans, 22, "fit"));
+  });
+
+  it("删除后的重力补位：T 架在两个墩子上，抽掉一个，支架落进旁边让出的槽", () => {
+    const t: BlackholePlacement = { x: 0, y: 1, w: 3, h: 2, cells: [[1, 0], [0, 1], [1, 1], [2, 1]] };
+    const bump: BlackholePlacement = { x: 2, y: 0, w: 1, h: 1 };
+    const settled = settleAfterRemoval([t, bump]);
+    // 矩形逻辑会把 T 挡在 y=1（第 2 列的墩子顶住外接框）；按格子占用，支架落进第 1 列的槽
+    assert.deepEqual(settled[0], { x: 0, y: 0, w: 3, h: 2, cells: [[1, 0], [0, 1], [1, 1], [2, 1]] });
+    assert.deepEqual(settled[1], bump);
   });
 });
