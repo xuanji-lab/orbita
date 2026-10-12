@@ -239,6 +239,40 @@ export function composeChannelPrompt(
   ].join("\n");
 }
 
+/**
+ * 用户在收件箱里「代父会话回复」过的话——父模型自己的上下文里没有（代父发言不进父的
+ * pi 本子，见 main/channel/requests.ts 的 applySpeak），父模型下次收到这个子会话的
+ * 回报时会以为子会话在自说自话（2026-10-12 实测：父模型指控子会话「自己编了答案」）。
+ *
+ * 取「这条子→父消息之前、上一条子→父消息之后」用户代父发出的 reply，按时间顺序。
+ * 纯函数，renderer 投递子→父消息时调用，把结果拼进信封后的说明里。
+ */
+export function userRepliesSincePreviousReport(
+  messages: readonly ChannelMessage[],
+  reportId: string,
+): ChannelMessage[] {
+  const sorted = sortChannelMessages(messages);
+  const at = sorted.findIndex((message) => message.id === reportId);
+  if (at === -1) return [];
+  const out: ChannelMessage[] = [];
+  for (let i = at - 1; i >= 0; i -= 1) {
+    const message = sorted[i];
+    if (message === undefined || message.from === "child") break;
+    if (message.author === "user" && message.kind === "reply") out.unshift(message);
+  }
+  return out;
+}
+
+/** 拼在子→父信封后面的一段：用户代你回复过这个子会话的话（模型读得懂，界面不显示） */
+export function userRepliesNote(replies: readonly ChannelMessage[]): string {
+  if (replies.length === 0) return "";
+  return [
+    "Before this report, the user answered this sub-session directly on your behalf (you did not send these; they are not in your context):",
+    ...replies.map((reply) => `- "${reply.text}"`),
+    "Treat them as the user's decisions, not as something the sub-session made up.",
+  ].join("\n");
+}
+
 /** 信封首行的属性顺序固定（from / kind / peer / message），锚定在字符串开头——只认首行。 */
 const CHANNEL_PROMPT_HEADER =
   /^<channel from="(parent|child)" kind="([a-z]+)" peer="([^"]+)" message="([^"]+)"/;

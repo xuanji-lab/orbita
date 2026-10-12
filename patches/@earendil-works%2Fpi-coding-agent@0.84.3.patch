@@ -4,19 +4,6 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-ec94782b6fff3ae b/.bun-tag-ec94782b6fff3ae
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
-index f4fd9f37d9826a3e791f25c9ec748645a33d5616..2dac44fc00c4db60f9063a8acc0b1f3ee2ae2899 100644
---- a/dist/core/agent-session.js
-+++ b/dist/core/agent-session.js
-@@ -2219,7 +2219,7 @@ export class AgentSession {
-             this._retryAttempt--;
-             return false;
-         }
--        const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
-+        const delayMs = settings.baseDelayMs;
-         this._emit({
-             type: "auto_retry_start",
-             attempt: this._retryAttempt,
 diff --git a/dist/core/tools/read.js b/dist/core/tools/read.js
 index 3e145b0e23bc3f25640907aeb9ff25f71eb328aa..83b05a1b75448e92c8b38c407735744b28d01e92 100644
 --- a/dist/core/tools/read.js

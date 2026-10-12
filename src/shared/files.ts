@@ -5,6 +5,9 @@
  *   session    本会话工作台 `<userData>/workbenches/<id>/`（唯一随会话变的根，排最前）
  *   workspace  工作区文件夹（cwd；Home 会话是 `~/Orbita/Home`）
  *   attached   工作区挂的附加目录，按用户挂上的顺序
+ *   attachments 本会话已发送附件的副本目录 `sessions/<id>.attachments/`——**不进树**，
+ *               只为白名单：拖进来的外部文件发送时复制到这里（不在上面三根之内），
+ *               没有它，附件列表与 PDF 引用都打不开这份副本
  *
  * **renderer 侧 IPC 有白名单，agent 工具面没有**——两者不冲突：工具面「只告知」是
  * 关于模型的（Q2）；这里的白名单是关于 renderer 的：sandbox 里的 renderer 只能列
@@ -13,7 +16,7 @@
 
 import { pathTail } from "./path.ts";
 
-export type FileRootKind = "session" | "workspace" | "attached";
+export type FileRootKind = "session" | "workspace" | "attached" | "attachments";
 
 export interface FileRoot {
   kind: FileRootKind;
@@ -79,7 +82,7 @@ export function sortFileEntries(entries: readonly FileEntry[]): FileEntry[] {
  * 空标题（会话还没命名）退回 fallback，不留空行。
  */
 export function fileRootLabel(kind: FileRootKind, path: string, title: string, fallback: string): string {
-  if (kind === "attached") {
+  if (kind === "attached" || kind === "attachments") {
     const last = pathTail(path);
     return last === "" ? path : last;
   }
@@ -115,8 +118,53 @@ export function isWebPageFile(path: string): boolean {
   return WEB_PAGE_EXTENSIONS.test(path);
 }
 
+/**
+ * 轮尾「网页产物」判定（.html / .htm / .svg）：agent 的轮内 mtime 扫描与轮尾卡片的
+ * 网页行用同一张表——扫描收进来的是它、卡片把 changes 里命中的抬成网页行的也是它。
+ * 与 isWebPageFile（面板 / 内置浏览器那套，多认 xhtml）是两张表：本表只收文件账
+ * 与卡片当作「网页产物」的那几种，浏览器能多开的不自动进卡。
+ */
+export function isWebArtifactFile(path: string): boolean {
+  return /\.(?:html?|svg)$/i.test(path);
+}
+
+/**
+ * 盘上一条路径的类型（`fs:stat-kind` 的回执字段）。与 `PromptFileRef` / `SentFileRef`
+ * （prompt-attachments.ts）的 `kind` 同一套词汇，不与面板的 `FileEntryKind`
+ * （还有 symlink / other）混用：这边只回答输入框附件分拣要问的那一问——
+ * 发给模型时是按文件（read）还是按目录（尾斜杠）记。
+ */
+export type FsEntryKind = "file" | "dir";
+
+/**
+ * `fs:stat-kind` 的回执行：一条路径的盘上事实。`kind` 为 null = stat 不到
+ * （路径已不在、无权限）——调用方自己兑底：附件分拣按 file 收下，文件面板的
+ * 已发送附件列表据此如实标「不在盘上」。`size` 只对文件有意义，目录与 stat
+ * 不到的都是 null（大文件复制阈值判定只看文件）。
+ */
+export interface FsEntryFact {
+  kind: FsEntryKind | null;
+  size: number | null;
+}
+
 /** 文本预览最多读的字节数（2 MB）：再大的日志 / 数据文件只读开头，截断如实标出 */
 export const PREVIEW_TEXT_LIMIT = 2 * 1024 * 1024;
 
 /** 图片预览上限（20 MB）：base64 过 IPC 再进 <img>，再大就不读 */
 export const PREVIEW_IMAGE_LIMIT = 20 * 1024 * 1024;
+
+/**
+ * PDF 预览（`fs:read-pdf` 的回执，实验功能「PDF 引用」）。字节原样过 IPC
+ * （Uint8Array 走结构化克隆，不转 base64），renderer 交给 pdf.js 渲染。白名单与
+ * fs:read 同一道。上限与外部附件的复制上限同值：再大的 PDF 本来也不会被复制进会话。
+ */
+export type PdfFile =
+  | { kind: "pdf"; data: Uint8Array; size: number; modifiedAt: number }
+  | { kind: "too-large"; limit: number; size: number; modifiedAt: number };
+
+/** PDF 预览上限（100 MB） */
+export const PREVIEW_PDF_LIMIT = 100 * 1024 * 1024;
+
+export function isPdfFile(path: string): boolean {
+  return /\.pdf$/i.test(path);
+}

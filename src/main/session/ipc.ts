@@ -6,6 +6,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { writeFile } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
+  parseSessionUnread,
   transcriptToMarkdown,
   type CarryoverDraft,
   type CarryoverStatus,
@@ -101,6 +102,10 @@ export function registerSessionIpc(
     ipcChannels.sessionSetCompletion,
     (_event, id: string, completion: SessionCompletion) => store.setCompletion(id, completion),
   );
+  ipcMain.handle(ipcChannels.sessionUnread, (_event, id: string, unread: unknown) =>
+    // 载荷在入口就洗：坏形状当已读（null）写回，不裸存进 meta
+    store.setUnread(id, parseSessionUnread(unread)),
+  );
   // —— 遗留事项（收尾仪式）三通道。store 铸 id/status/时间戳，renderer 不猜 ——
   ipcMain.handle(ipcChannels.carryoverList, () => carryovers.list());
   ipcMain.handle(
@@ -157,13 +162,19 @@ export function registerSessionIpc(
   );
 
   /**
-   * 轮尾产物的两个打开方式。白名单是「这条会话的文件账里记过的路径」——
-   * 面板/卡片不是通用文件浏览器，账上没有的路径一概不碰（同 fs:open 的纪律，
-   * 但根不是目录树而是会话自己的账本）。内置浏览器再叠加 isWebPageFile。
+   * 轮尾产物的两个打开方式。白名单是「这条会话的文件账里记过的路径」
+   * （changes 或旁路 webArtifacts 都算——后者也是本轮产出的网页，只是不经
+   * write / edit）——面板/卡片不是通用文件浏览器，账上没有的路径一概不碰
+   * （同 fs:open 的纪律，但根不是目录树而是会话自己的账本）。内置浏览器再叠加
+   * isWebPageFile。
    */
   const knownArtifact = async (id: string, path: string): Promise<void> => {
     const turns = fileTurnsIn(await store.readRawLog(id));
-    const known = turns.some((turn) => turn.changes.some((change) => change.path === path));
+    const known = turns.some(
+      (turn) =>
+        turn.changes.some((change) => change.path === path) ||
+        (turn.webArtifacts?.includes(path) ?? false),
+    );
     if (!known) throw new Error(`That file is not in this task's change record: ${path}`);
   };
   ipcMain.handle(ipcChannels.sessionOpenArtifactInBrowser, async (_event, id: string, path: string) => {

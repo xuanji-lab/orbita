@@ -20,6 +20,7 @@ import type { ReviewSource } from "../../shared/review.ts";
 const KNOWN_NOTES: Record<string, string> = {
   deepseek: "DeepSeek official API",
   zhipu: "Zhipu open platform standard API (billed per token)",
+  claude: "Claude Pro / Max subscription — log in with your browser, tokens renew automatically",
   "zhipu-coding": "GLM Coding Plan subscription, via the Anthropic-compatible endpoint",
   zai: "GLM Coding Plan on Zhipu's international site; accounts are separate from the China site",
   stepfun: "Step Plan subscription (the URL must include /v1)",
@@ -34,6 +35,7 @@ const KNOWN_LABELS: Record<string, string> = {
   zhipu: "Zhipu",
   "zhipu-coding": "Zhipu",
   stepfun: "StepFun",
+  claude: "Claude",
   "anthropic-compatible": "Anthropic-compatible",
   "openai-compatible": "OpenAI-compatible",
 };
@@ -52,6 +54,7 @@ const plural = (count: number, one: string, many: string = `${one}s`): string =>
 
 export const en = {
   common: {
+    more: "More",
     cancel: "Cancel",
     close: "Close",
     retry: "Retry",
@@ -127,25 +130,34 @@ export const en = {
     send: "Send",
     stop: "Stop",
     stopTurn: "Stop this turn",
-    attachFiles: "Attach files (or paste / drop them)",
+    attachFiles: "Attach files or folders (or paste / drop them)",
+    attachFileAction: "Add files…",
+    attachFolderAction: "Add folders…",
     removeImage: "Remove image",
+    materialBox: "Materials",
     imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
-    imageTooLarge: (name: string, mb: number) => `${name} is over ${mb} MB.`,
-    tooManyImages: (max: number) => `Up to ${max} images per message.`,
+    imageTooLarge: (name: string, mb: number) =>
+      `${name} is over ${mb} MB. Put it in a folder and attach the folder (drag it in or use the paperclip) — the model reads it from there as needed.`,
+    tooManyImages: (max: number) =>
+      `Up to ${max} images per message. Put them in a folder and attach the folder (drag it in or use the paperclip) — the model reads them one by one as needed.`,
+    imagesTotalTooLarge: (mb: number) =>
+      `Images in one message can't add up to more than ${mb} MB. Put them in a folder and attach the folder (drag it in or use the paperclip) — the model reads them one by one as needed.`,
     imageReadFailed: (name: string) => `Couldn't read ${name}.`,
     noVision: "This model doesn't take images — they'll be left out. Pick a model with the image badge.",
     removeFile: "Remove file",
+    notCopied: "Not copied",
+    notCopiedTip: "Not copied — the reference breaks if the original file is moved or deleted",
     fileNoPath: (name: string) =>
       `Couldn't tell where ${name} lives on disk — copy it into a folder, then drag it in.`,
-    tooManyFiles: (max: number) => `Up to ${max} files per message.`,
     fileAlreadyAttached: (name: string) => `${name} is already attached.`,
+    pastedName: "Pasted text",
+    pastedLines: (lines: number) => plural(lines, "line"),
     pastedTitle: (lines: number) => `Pasted text · ${lines} lines`,
     pastedExpand: "Show the pasted text in full",
     pastedCollapse: "Collapse the pasted text",
-    removePasted: "Remove pasted text",
-    commandNoMatch: "No matching command",
-    cmdCompact: "Compact the context now",
-    cmdNew: "Start a new session",
+    pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
+    pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
+    skillNoneInWorkspace: "No skills available in this workspace",
   },
 
   /** 语音（shared/voice.ts）：输入框的听写 + 设置 › 语音 */
@@ -217,7 +229,8 @@ export const en = {
     chars: (n: number) => plural(n, "char"),
     truncated: (n: number) => `first ${n} chars only`,
     count: (n: number) => plural(n, "quote"),
-    tooMany: (max: number) => `Up to ${max} quotes per message.`,
+    tooLongTotal: (max: number) => `Quotes are capped at ${max} characters in total — remove a few first.`,
+    more: (n: number) => `${n} more quotes…`,
     expand: "Show quoted text in full",
     collapse: "Collapse quotes",
   },
@@ -232,6 +245,29 @@ export const en = {
   rowStatus: {
     pinned: "Pinned",
     subRunning: "Sub-session running",
+    running: "Running",
+    waiting: "Waiting for your reply",
+    unread: "Finished · not viewed yet",
+    unreadFailed: "Stopped with an error · not viewed yet",
+  },
+
+  /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */
+  notice: {
+    finished: "Task finished",
+    failed: "Task stopped with an error",
+    openNow: "Open",
+    sideChat: "Side chat",
+    later: "Later",
+    openNowTip: "Open it here, replacing the current chat",
+    sideChatTip: "Open it in the side chat, keep the current chat",
+    laterTip: "Keep it marked unread in the sidebar",
+  },
+
+  /** 右下角铃铛弹出的清单（侧栏竖条的另一个入口） */
+  bell: {
+    title: "Notifications",
+    empty: "Nothing running, waiting, or unread",
+    markAllRead: "Mark all read",
   },
 
   menu: {
@@ -246,10 +282,11 @@ export const en = {
     review: "Review changes",
     skills: "Skills",
     mcp: "MCP servers",
+    terminal: "Terminal",
     sideChat: "Side chat Ctrl+Alt+D",
     subSessions: (count: number) => `Sub-sessions (${count})`,
-    channels: "Sub-session channels",
     browser: "Built-in browser",
+    bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
   },
 
   browser: {
@@ -317,9 +354,11 @@ export const en = {
   },
 
   drawer: {
+    title: "Side chat",
+    filter: "Filter tasks…",
+    helpLabel: "About side chat",
     closeTab: "Close tab",
     newTab: "New tab",
-    pickTitle: "Which task should open side by side?",
     pickSub:
       "A side chat is an ordinary task: shown side by side, listed in the sidebar, switch back any time. The one open in the middle isn't listed here.",
     noOther: "No other task yet — start a new one.",
@@ -370,7 +409,7 @@ export const en = {
     removeTip: "Remove from the list. The folder on disk is not touched.",
     newTaskInWorkspace: "New task in this workspace",
     showLess: "Show less",
-    showMore: (hidden: number) => `Show ${hidden} more`,
+    showMore: (next: number, hidden: number) => (next === hidden ? `Show ${hidden} more` : `Show ${next} more (${hidden} hidden)`),
     deletePermanently: "Delete permanently",
     deleteHintSub: (count: number) => `+${count} sub`,
     deleteHintFiles: (count: number) => `+${plural(count, "file")}`,
@@ -411,6 +450,22 @@ export const en = {
     jumpToSourceTip: "Open the task this came from",
   },
 
+  usage: {
+    /** 周一基的星期短标（侧栏左下角 7 天用量格下方的字） */
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    today: "Today",
+    /** 悬停一天没有用量时 */
+    noUsage: "A rest day. Enjoy it~",
+    /** 悬停一格：只给当天总量（日期与星期在格子下面） */
+    day: (tokens: string) => `${tokens} tokens`,
+    /** 点一格的效果（格子的悬停 title） */
+    pinPetHere: "Click to keep the nebula on this day",
+    backToToday: "Click to bring the nebula back to today",
+    showPetHere: "Click to bring the nebula out here",
+    /** 点星云本体 */
+    hidePet: "Tuck the nebula away",
+  },
+
   settings: {
     tabs: {
       general: "General",
@@ -419,6 +474,7 @@ export const en = {
       browser: "Browser",
       voice: "Voice",
       "computer-use": "Computer use",
+      experimental: "Experimental",
     },
     appearance: "Appearance",
     theme: "Theme",
@@ -427,6 +483,10 @@ export const en = {
       "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
     languageLockedZh: "This theme is Chinese-only",
     languageLockedEn: "This theme is English-only",
+    experimentalLead:
+      "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
+    experimentalAllChanges: (count: number) => `All ${count} entries`,
+    experimentalCollapse: "Collapse",
     agent: "Agent",
     autoCompact: "Auto-compact",
     /** 说明中间夹着一个 <b>/compact</b>，拆成前后两段 */
@@ -455,6 +515,14 @@ export const en = {
     attributionAria: "Commit and PR attribution",
     attributionInfo:
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
+    pastedCollapse: "Collapse pasted text",
+    pastedCollapseAria: "Collapse pasted text",
+    pastedCollapseInfo:
+      "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
+    completionSound: "Completion sound",
+    completionSoundAria: "Completion sound",
+    completionSoundInfo:
+      "Play a cabin-call chime when a task finishes while you are looking elsewhere · the sidebar highlight and the card still appear when it is off",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",
@@ -591,6 +659,16 @@ export const en = {
     pasteKey: "Paste your API key",
     hideKey: "Hide key",
     showKey: "Show key",
+    // —— Claude 订阅登录（oauth 目录条目专用）——
+    oauthAccount: "Claude account",
+    oauthLoginButton: "Log in with Claude",
+    oauthRelogin: "Log in again",
+    oauthWaiting: "Waiting for authorization in the browser…",
+    oauthLoggedIn: (account: string | null) => (account === null ? "Logged in" : `Logged in as ${account}`),
+    oauthLoggedOut: "Not logged in — log in to draw on your Claude Pro / Max subscription",
+    oauthNote: "Opens the browser to claude.ai · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins",
+    oauthRisk:
+      "Subscription quota via third-party clients is currently tolerated but can be revoked at any time; use an API key instead if that concerns you",
     test: "Test",
     unsaved: "Unsaved",
     models: "Models",
@@ -722,6 +800,24 @@ export const en = {
     foundTip: "Only checked that it exists · nothing read yet",
     notScanned: "Not scanned",
     nothingNew: "Nothing new",
+    // 步骤 1 · 自定义路径（自动定位漏掉的散落目录手动补上）
+    customRootsNote:
+      "Missed a data folder — a backup, a renamed copy? Point orbita at it · checked for that source's chat history, then scanned like the found ones",
+    customRootsSourceLabel: "Which source the folder belongs to",
+    customRootsPathLabel: "Data folder path",
+    customRootsPathPlaceholder: "Paste a data folder path",
+    customRootsBrowse: "Browse…",
+    customRootsAdd: "Add",
+    customRootsAdding: "Adding…",
+    customRootsRemove: "Remove",
+    customRootsRemoveTip: "Stop reading this folder · the folder itself is never touched",
+    customRootsAddedFor: (source: string) => `Data folder for ${source}`,
+    customRootsInvalid: {
+      "not-found": "That folder doesn't exist",
+      "no-data": "No chat history of that source found there",
+      duplicate: "Already added",
+    },
+    customRootsAddFailed: "Couldn't add:",
     // 步骤 2：会话
     stepSessions: "Sessions",
     rangeTip: "Show sessions updated within",
@@ -992,6 +1088,11 @@ export const en = {
     undoTitle: "Undo file changes",
     undoConfirm: "Undo changes",
     fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
+    fileCardWebMade: (n: number) => `${n} web page${n === 1 ? "" : "s"} generated`,
+    fileCardScripted: "Script-generated · open only",
+    fileCardWebBatchShort: "Web files changed in bulk",
+    fileCardWebBatch: (n: number) =>
+      `${n} web file${n === 1 ? "" : "s"} changed this turn (looks like a bulk operation, not listed)`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
     fileCardUndo: "Undo",
@@ -1001,6 +1102,8 @@ export const en = {
     openInOrbita: "Open in orbita",
     revealArtifact: "Show in folder",
     worked: "Worked",
+    // Weekday names for the full timestamp on message-time hover (getDay() order, Sunday first)
+    timeWeekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     thought: "thought",
     lines: (n: number) => `${n} lines`,
     files: (n: number) => `${n} files`,
@@ -1010,6 +1113,8 @@ export const en = {
     calls: (n: number) => `${n} calls`,
     tools: (n: number) => `tools ${n}`,
     failedCount: (n: number) => `${n} failed`,
+    toolInterrupted: "Interrupted · not run",
+    interruptedCount: (n: number) => `${n} interrupted`,
     toolRead: "Read",
     toolSearch: "Search",
     toolWrite: "Write",
@@ -1028,6 +1133,10 @@ export const en = {
     // 时长：秒数不足一分钟带小数，满一分钟「1m 05s」（秒两位补零由调用方做）
     seconds: (s: string) => `${s}s`,
     minutesSeconds: (m: number, s: string) => `${m}m ${s}s`,
+    // 运行中 shell 的时钟：上限与预计（elapsed 的 m:ss 由 formatRunClock 直出，不走字典）
+    limitLabel: (clock: string) => `limit ${clock}`,
+    expectedAbout: (duration: string) => `expected ~${duration}`,
+    slowerThanExpected: "slower than expected",
     tokensApprox: (before: string) => `~${before} tokens`,
     tokensArrow: (before: string, after: string) => `${before} → ${after} tokens`,
     // 工具结果摘要
@@ -1079,30 +1188,6 @@ export const en = {
     markOther: (peer: string, kind: string) => `${peer} · ${kind}`,
     taskFrom: (peer: string) => `task from ${peer}`,
     replyFrom: (peer: string) => `reply from ${peer}`,
-    viewInChannel: (text: string) => `${text} · view in channel`,
-    viewInChannelTip: "View in channel",
-    whoReplySteer: "reply · steer",
-    whoReplyTurnEnd: "reply · turn end",
-    you: "you",
-    empty: "No messages yet — speak as parent to steer it.",
-    deliveryTip:
-      "steer: injects at the next tool call without stopping it · turn end: waits until its current turn ends",
-    closed: "closed ·",
-    /** stopped 专用那一行（与 closed 同一个 reopen 入口，但话说清楚是谁停的） */
-    closedStopped: "stopped by you ·",
-    reopenToSpeak: "reopen to speak",
-    steer: "steer",
-    turnEnd: "turn end",
-    speakAsParent: "Speak as parent…",
-    status: {
-      running: "running",
-      waiting: "waiting",
-      approval: "needs approval",
-      done: "done",
-      failed: "failed",
-      idle: "idle",
-      stopped: "stopped",
-    },
     subSession: "Sub-session",
     parentSession: "Parent session",
     delegateStatus: {
@@ -1115,11 +1200,23 @@ export const en = {
     },
     delegating: "delegating…",
     delegated: "DELEGATED",
-    taskKicker: "TASK",
-    from: (peer: string) => `from ${peer}`,
-    collapse: "Collapse",
-    showFullTask: "Show full task",
-    taskNotFound: "Task message not found in the channel.",
+    fromParentTask: "Task from the parent session",
+    fromParentReply: "Parent session replied",
+    fromParentYouReply: "You (as the parent) replied",
+    fromParentStop: "Stopped by the parent session",
+    messageNotFound: "Message not found in the channel.",
+    asksYou: (peer: string) => `${peer} asks:`,
+    goAnswer: "Answer ›",
+    childDone: (peer: string) => `${peer} finished`,
+    childFailed: (peer: string) => `${peer} failed`,
+    answerIt: "Answer it…",
+    notSpokenRunning: "running · hasn't spoken yet",
+    notSpoken: "hasn't spoken yet",
+    latestQuestion: (text: string) => `Q: ${text}`,
+    latestProgress: (text: string) => `Progress: ${text}`,
+    latestDone: "Done",
+    latestFailed: "Failed",
+    latestReply: (text: string) => `Replied: ${text}`,
   },
 
   queue: {
@@ -1150,6 +1247,9 @@ export const en = {
     },
     back: "Back to sub-sessions",
     openAsMain: "Open as main",
+    openInPanel: "Open in the Sub-sessions panel",
+    waitingCount: (count: number) => `${count} waiting on you`,
+    inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
     openAsMainTip: "Switch the main pane to this sub-session",
     gone: "This sub-session is gone.",
     of: (title: string) => `Sub-sessions of "${title}"`,
@@ -1210,14 +1310,18 @@ export const en = {
   },
 
   mcp: {
+    helpLabel: "About MCP servers",
     title: "MCP servers",
     addServer: "Add a server",
+    filterPlaceholder: "Filter servers…",
+    pickerHint: "Enter inserts · Tab switches to skills · Esc cancels",
     editConfig: "Edit mcp.json",
     reloading: "Reloading…",
     reload: "Reload",
     loadingServers: "Loading servers…",
     enable: "Enable this server",
     disable: "Disable this server",
+    use: "Use this MCP server",
     removeTip: "Remove this server",
     scopedTo: (names: string) => `Only in workspace: ${names}`,
     sourceWorkspace: (names: string) => `From workspace config: ${names}`,
@@ -1273,6 +1377,16 @@ export const en = {
     emptyDesc: "Without a server the agent only has its built-in tools. Add one, or edit mcp.json directly.",
   },
 
+  terminal: {
+    empty: "No terminal open. Press + to start one.",
+    title: "Terminal",
+    newTerminal: "New terminal",
+    closeTab: "Close terminal",
+    exitNotice: (code: number) => `Process exited (${code})`,
+    runtimeLost: "The terminal runtime is gone. Close this tab and open a new one.",
+    spawnFailed: (message: string) => `Could not start a terminal: ${message}`,
+  },
+
   skills: {
     title: "Skills",
     readFailed: "Couldn’t read skills.",
@@ -1281,7 +1395,9 @@ export const en = {
     filter: "Filter skills…",
     filterAria: "Filter skills",
     clear: "Clear",
+    use: "Use this skill",
     noMatch: (query: string) => `No skill matches “${query}”.`,
+    pickerHint: "Enter inserts · Tab switches to MCP servers · Esc cancels",
     global: "Global",
     disabled: "Disabled",
     missing: "Missing",
@@ -1292,6 +1408,8 @@ export const en = {
     cleanUpReferences: "Clean up references",
     centralDir: "The central skills directory",
     openDir: "Open the skills directory",
+    helpLabel: "About skills",
+    help: "A skill is a written procedure the agent loads when the task matches it. Global skills work in every task; a workspace skill only inside that workspace. Hover a row and press the return arrow to use it in the message.",
     reveal: "Reveal",
     missingTip: "The file is gone — clean up the references or restore the folder.",
     backToList: "Back to list",
@@ -1317,6 +1435,11 @@ export const en = {
 
   files: {
     title: "Files",
+    treeToggleTip: "Toggle the file tree — side by side when wide, overlay when narrow; narrowing the panel collapses it",
+    tabsAria: "Open files",
+    closeTab: "Close tab",
+    sortByType: "Sort by file type",
+    sortByName: "Sort by name",
     emptyWorkbench: "Empty workbench — created on the agent's first write",
     reference: "Add File Reference",
     refreshing: "Refreshing file tree…",
@@ -1329,7 +1452,7 @@ export const en = {
     countTip: "Counts loaded entries only — the filter doesn't fetch collapsed folders",
     session: "Session",
     workspace: "Workspace",
-    attached: "Attached",
+    attached: "Attached folders",
     revealInFileManager: "Reveal in File Manager",
     detachTip: "Detach this directory",
     detach: "Detach",
@@ -1337,10 +1460,12 @@ export const en = {
     rules: "rules",
     missingTip: "Directory not found — moved or renamed outside orbita",
     missing: "Directory not found — moved or renamed",
+    attachments: "Attachments",
+    attachmentsEmpty: "No attachments sent yet",
+    attachmentMissing: "Not on disk anymore",
+    attachmentMissingShort: "Missing",
     createAgentsMdTip: "Create AGENTS.md in the workspace folder",
     createAgentsMd: "This workspace has no AGENTS.md yet — create a rules file",
-    roots: (n: number) => plural(n, "root"),
-    rootsMissing: (roots: string, missing: number) => `${roots} · ${missing} missing`,
     // 修改时间的短写：now / 12m / 1h / 3d / 5w / 8mo / 2y
     ageNow: "now",
     ageMinutes: (n: number) => `${n}m`,
@@ -1349,8 +1474,6 @@ export const en = {
     ageWeeks: (n: number) => `${n}w`,
     ageMonths: (n: number) => `${n}mo`,
     ageYears: (n: number) => `${n}y`,
-    backToFiles: "Back to files",
-    closePreview: "Close preview",
     openDefault: "Open with default app",
     openInBrowser: "Open in built-in browser",
     copyPath: "Copy path",
@@ -1361,6 +1484,11 @@ export const en = {
     tooLarge: (size: string, limit: string) => `Too large to preview (${size} — the limit is ${limit})`,
     emptyFile: "Empty file",
     truncated: (shown: string, total: string) => `Showing the first ${shown} of ${total}`,
+    pdfFailed: "Couldn't open this PDF:",
+    pdfPassword: "This PDF is password-protected and can't be previewed.",
+    citeNotFound: (page: number) =>
+      `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
+    citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
   },
 };
 

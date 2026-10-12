@@ -41,6 +41,15 @@ export function closePendingMath(text: string): string {
       continue;
     }
 
+    // 行内 code span 内除反引号外一切都是字面内容——里面的 `$`、`\` 都不是定界符 /
+    // 转义（2026-10 事故：句中 `` `$` `` 的 $ 被当成开定界符，回复结尾凭空多出一个 $）。
+    // 放在围栏判定之前：span 里行首的 ``` 长串也只是内容，不开围栏。
+    if (inCode && ch !== "`") {
+      i += 1;
+      atLineStart = false;
+      continue;
+    }
+
     // 围栏开：行首 ≥3 连的 ` 或 ~
     if (atLineStart && (ch === "`" || ch === "~")) {
       const n = runOf(text, i);

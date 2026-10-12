@@ -15,6 +15,7 @@ import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
+import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
@@ -28,6 +29,8 @@ import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
+import { UsageLedger } from "./usage/ledger.ts";
+import { registerUsageIpc } from "./usage/ipc.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
@@ -35,18 +38,22 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { TerminalService } from "./terminal/service.ts";
+import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
-import { isWebLink } from "./browser/address.ts";
+import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
+import { applyTerminalRequest } from "./terminal/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
 import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
+import { isOwnRendererPage, type RendererOriginDeps } from "./window/renderer-origin.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
 import { devDataDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
@@ -67,7 +74,7 @@ const devDirs = devDataDirs({
   home: homedir(),
   // 隔离实例（--user-data-dir）：锁与 userData 由 Chromium 分开，工作区根在 devDataDirs 里跟着目录名派生
   userDataSwitch: app.commandLine.getSwitchValue("user-data-dir"),
-  // 一键隔离（bun run dev:isolated）：按名字分 userData 与工作区根，appData 由 Electron 按平台给
+  // 隔离实例（ORBITA_DEV_INSTANCE）：按名字分 userData 与工作区根，appData 由 Electron 按平台给
   instance: process.env.ORBITA_DEV_INSTANCE,
 });
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
@@ -175,6 +182,19 @@ function createMainWindow(
   });
 
   /*
+   * 页内发起的导航（拖链接进窗、页面动 location）不许顶掉我们自己的页面：preload 跟着
+   * WebContents 走，换成任何别的页面都等于把整面 IPC 交给它。renderer 侧 main.tsx 只拦
+   * 带文件的拖拽，链接拖拽（text/uri-list）没人拦，所以这道闸必须在主进程。我们自己的
+   * 页面（dev 同源 / 包内 renderer）放行——reload 与 HMR 全量刷新走的都是这条；其余一律
+   * preventDefault，网页链接转交 openLink，非网页协议由 openLink 的白名单处置。
+   */
+  window.webContents.on("will-navigate", (event, url) => {
+    if (isOwnRendererPage(url, ownRendererOrigin())) return;
+    event.preventDefault();
+    openLink(url);
+  });
+
+  /*
    * 关窗 = 收进托盘（Windows / Linux）。**托盘先建成功，才接这道闸门**：藏了却找不回来
    * 比直接退出更糟，所以图标缺失时这里什么都不做，关窗保持原语义。
    * macOS 不接——那边关窗本来就留进程，点 Dock 回来，与这套闸门是两种惯例。
@@ -249,6 +269,17 @@ function loadRendererPage(window: BrowserWindow, page: "index.html" | "browser-t
   } else void window.loadFile(join(__dirname, "../renderer", page));
 }
 
+/**
+ * will-navigate 闸门的真实环境值：判定逻辑与注入参数见 window/renderer-origin.ts。
+ * 与 loadRendererPage 同一套取值口径（isPackaged 先于读环境变量），两处不会各说各话。
+ */
+function ownRendererOrigin(): RendererOriginDeps {
+  return {
+    devServerUrl: app.isPackaged ? undefined : process.env["ELECTRON_RENDERER_URL"],
+    rendererDir: join(__dirname, "../renderer"),
+  };
+}
+
 void app.whenReady().then(async () => {
   // 配置落在 Electron 的 userData 目录，不再依赖 pi 的 ~/.pi/agent。
   // 从旧 models.json / auth.json 的迁移等到真有旧数据的用户时再单独立项（落库纪律：没有消费者不写）。
@@ -256,7 +287,6 @@ void app.whenReady().then(async () => {
   // 一个 secrets.json 一个实例：provider 的 API key 与语音厂商的密钥共用，读改写不互相踩
   const secrets = new SafeStorageSecrets(configDir);
   const providers = new ProviderStore(configDir, secrets);
-  registerProviderIpc(providers);
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
     new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
@@ -282,7 +312,11 @@ void app.whenReady().then(async () => {
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
-  const record = createSessionRecorder(sessions);
+  // 日用量账本（usage:week / usage:event）：与 sessions 同目录的派生数据，
+  // assistant 记录落盘的同一条路径上累计。注册即异步装载 + 回填，不阻塞启动
+  const usageLedger = new UsageLedger(join(configDir, "usage-daily.json"));
+  const record = createSessionRecorder(sessions, usageLedger);
+  registerUsageIpc(usageLedger, sessions);
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
@@ -421,6 +455,19 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 终端：agent 的终端工具——PTY 在主进程的 TerminalService（浏览器同一条边界）。
+    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
+    if (event.type === "terminalRequest") {
+      void applyTerminalRequest(terminals, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerTerminal(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerTerminal(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "readTaskRequest") {
       void applyReadTask(sessions, event, workspaces, channels)
         .then((result) => agentHost.answerReadTask(event.requestId, result))
@@ -447,7 +494,7 @@ void app.whenReady().then(async () => {
       // 等**落盘完**再广播，并带上落盘记录的真 id——renderer 的轮尾卡拿它当 key
       // 与撤销的 turnId（单轮撤销按它回查账本），自造 id 会对不上盘
       void sessions
-        .recordFileTurn(event.sessionId, event.changes)
+        .recordFileTurn(event.sessionId, event.changes, event.webArtifacts ?? [], event.webArtifactsBatch)
         .then((record) => {
           if (record === null) return;
           broadcastAgentEvent({
@@ -459,6 +506,9 @@ void app.whenReady().then(async () => {
               added: change.added,
               removed: change.removed,
             })),
+            // 旁路网页产物随视图过一道：卡片收起态就靠它出网页行；批量折叠的计数同路
+            ...(record.webArtifacts !== undefined ? { webArtifacts: record.webArtifacts } : {}),
+            ...(record.webArtifactsBatch !== undefined ? { webArtifactsBatch: record.webArtifactsBatch } : {}),
           });
         })
         .catch((cause: unknown) =>
@@ -508,6 +558,7 @@ void app.whenReady().then(async () => {
     settings,
     join(configDir, "pi-sessions"),
     join(configDir, "imports.jsonl"),
+    new CustomRootsStore(configDir),
     skills,
     mcp,
     async () => agentHost.mcpReload(),
@@ -526,6 +577,13 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
+  // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
+  // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
+  registerProviderIpc(providers, agentHost);
+
+  // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
+  const terminals = new TerminalService();
+  registerTerminalIpc(terminals);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
@@ -533,6 +591,8 @@ void app.whenReady().then(async () => {
     workspaces,
     channels,
     join(configDir, "pi-sessions"),
+    // 图片字节预算的占位要拼附图原图的绝对路径（agent 进程不做路径策略）
+    (sessionId) => sessions.attachmentDirOf(sessionId),
     // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     (workspaceId) => skills.linkDirs(workspaceId),
@@ -566,18 +626,24 @@ void app.whenReady().then(async () => {
     agentHost.dispose();
     // 沙箱是我们 spawn 的：应用退出时一并带走，别给用户留一个连不上宿主的孤儿沙箱窗口
     computerUse.dispose();
+    // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
+    terminals.dispose();
   });
 
   /**
    * 界面里点到的外链（聊天里的链接、设置页的文档链接……）：网页默认进内置浏览器「你的」tab
    * （2026-09-29 裁决「全都默认用内置，想用系统默认有个 button 足矣」——那个按钮在沙盒工具条上，
-   * browser:open-external）。mailto 这类别的协议内置浏览器接不了，照旧交给系统。
+   * browser:open-external）。mailto 这类别的协议内置浏览器接不了，照旧交给系统；**其余非网页
+   * 协议一律不交**——`shell.openExternal` 对未知协议各平台行为不一，是拖链接 / 钓鱼链接的
+   * 落地点，交接白名单见 isSystemHandoffLink。
    */
   const openLink = (url: string): void => {
     if (isWebLink(url)) {
       void browserSandbox.open(url).catch((cause: unknown) => console.error("[browser] 链接打开失败", url, cause));
-    } else {
+    } else if (isSystemHandoffLink(url)) {
       void shell.openExternal(url);
+    } else {
+      console.warn(`[links] 未放行的协议，不交给系统：${url}`);
     }
   };
 

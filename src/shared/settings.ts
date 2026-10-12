@@ -111,6 +111,27 @@ export interface ModelPair {
   modelId: string;
 }
 
+/**
+ * 实验功能的档位 id（2026-10-12 起逐项开关）。**唯一来源在这里**：设置键
+ * `experimentalFeatures` 按它记账，renderer 的 `experimental-features.ts` 清单与
+ * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
+ * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
+ */
+export const EXPERIMENTAL_FEATURE_IDS = [
+  "paper-themes",
+  "session-lifecycle",
+  "composer-blackhole",
+  "composer-tetris",
+  "pdf-citations",
+] as const;
+export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
+
+/** 星云摆放偏好：钉在哪天（本地日期键 YYYY-MM-DD）、收没收起 */
+export interface UsagePetPref {
+  pinnedDate?: string;
+  hidden?: true;
+}
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -138,6 +159,20 @@ export interface AppSettings {
    * 改动**下一轮对话即生效**：pi 的压缩判定每次现读设置，runtime 每轮重新覆盖。
    */
   compaction?: CompactionSetting;
+  /**
+   * 大段粘贴是否收成句中胶囊（方案 C）。**缺席 = 收起**（现状）：超过阈值的粘贴在
+   * 光标处收成一颗「[粘贴 N · M 行]」胶囊，点开铺底色展开可编辑，发送时全文内联
+   * 进消息（位置保留）。关掉则输入框不拦截——大段粘贴作为普通文字直接进输入框；
+   * 转录里已发送消息的粘贴回显不受此开关影响（那已是既成消息）。
+   * 只认布尔，同 gitAttribution 的纪律。
+   */
+  collapsePastedText?: boolean;
+  /**
+   * 后台会话跑完时响一声提示音（客舱呼唤铃）。**缺席 = 响**：这个提醒的价值就在于
+   * 人不在跟前时也能知道，默认关等于没做。只管声音——侧栏未读底色与辅助对话旁的
+   * 卡片不受它影响（静音的人同样需要知道任务完了）。只认布尔，同 gitAttribution。
+   */
+  completionSound?: boolean;
   /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
@@ -179,12 +214,11 @@ export interface AppSettings {
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
   /**
-   * 通道列的宽度（子会话 2026-09-23 用户裁决：通道列可拖宽）。缺席 = 默认 300。
-   * **这里只做 ≥ 地板的硬校验**：合法上界依赖当前 chat 区宽度（见
-   * `clampChannelColumnWidth`），落盘的值换个窗口大小就可能越界，真正的夹取在
-   * 渲染层每次渲染时做，同 `rightPanelWidth` 的纪律。拖动中不落盘，松手才写。
+   * 左下角星云的摆放（2026-10-12 用户：不加设置项，直接在左下角点）：点一格把星云钉在
+   * 那天（按**日期**记，滑出 7 天窗口后自然回到今天），点星云把它收起、让出空间。
+   * 缺席 = 跟着今天、显示着。设置页里不出现。
    */
-  channelColumnWidth?: number;
+  usagePet?: UsagePetPref;
   /**
    * 受管浏览器「你的」tab 的下载目录（绝对路径）。**缺席 = 系统下载文件夹**（主进程解析）。
    * 用户指定，agent 每轮被告知（TurnDirectories.browserDownloads）。
@@ -195,6 +229,32 @@ export interface AppSettings {
    * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
    */
   providerCardSize?: ProviderCardSize;
+  /**
+   * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
+   * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
+   * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
+   * 不动数据——已存的主题照常应用、已星标 / 已完成的会话与遗留事项原样在盘上，
+   * 开了就回来。
+   *
+   * 四项各自的语义：
+   * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
+   * - `session-lifecycle`：星标 / 完成标记 / 收尾扫描与遗留事项的全部入口；
+   * - `composer-blackhole`：输入框黑洞——开启后截图 / 文件 / 目录不再叠成两行，
+   *   而是被吸进输入框中心、从舷窗掉进上方看不见的盒子堆起来；只在基础三套主题
+   *   （浅 / 黛 / 玄）生效，判定在渲染层 blackhole-layout.ts 的 materialBoxStyle；
+   * - `composer-tetris`：俄罗斯方块——同一只盒子的另一种形态：材料不演黑洞特效，
+   *   从盒子上缘随机落下（确定性种子）。**与 composer-blackhole 互斥**：设置页打开
+   *   一个会连带关掉另一个（experimental-features.ts 的 exclusiveWith）；盘上手改出
+   *   两个都开时 parseSettings 以黑洞为准、丢掉 tetris（见 parseExperimentalFeatures）。
+   * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
+   *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
+   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
+   *
+   * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
+   * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开；
+   * - 旧 `composerBlackhole` 原样并入 composer-blackhole 一项。
+   */
+  experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
 
 export type ProviderCardSize = "large" | "small";
@@ -269,38 +329,6 @@ export function clampRightPanelWidth(width: number, paneTotal: number): number {
   return Math.max(floor, Math.min(ceiling, wanted));
 }
 
-/** 通道列宽度的默认值（双击热区复位的目标，会再按当前 chat 区宽度夹一次）。 */
-export const CHANNEL_COLUMN_WIDTH_DEFAULT = 300;
-
-/**
- * 通道列宽度的硬地板（px）。再窄消息正文每行只剩几个字——比右栏的地板（200）更紧，
- * 因为通道卡内部还要留出父左子右两栏气泡的横向余量，180 是两栏对话仍读得下去的下限。
- */
-const CHANNEL_COLUMN_WIDTH_FLOOR = 180;
-
-/**
- * 把通道列宽度夹进合法区间（用户 2026-09-23 裁决：通道列可拖宽，最小 = chat 区的
- * 1/6，最大 = chat 区的 1/3——「现在固定 300px，子会话 session 里只剩工具调用，
- * 反倒像陪衬」）。
- *
- * 设 C = `chatTotal` = **主槽（chat 主区）+ 通道列**的总宽（拖动中恒定：主槽是
- * flex:1，通道列拿多少它就让多少）——**不包含右栏**：右栏是另一块独立空间，
- * 用户说的「chatview」指的是主槽与通道列这一对，同 `clampRightPanelWidth` 只管
- * 「chat 主区与右栏」那一对、不含左侧栏的先例，这里对称地不含右栏。
- * 区间就是 **[C/6, C/3]**。
- *
- * 地板与上限撞车（C 小到 C/3 < 180）时**地板胜出**，见 `CHANNEL_COLUMN_WIDTH_FLOOR`。
- * `chatTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 C 去夹。
- */
-export function clampChannelColumnWidth(width: number, chatTotal: number): number {
-  const wanted = Number.isFinite(width) ? Math.round(width) : CHANNEL_COLUMN_WIDTH_FLOOR;
-  if (!Number.isFinite(chatTotal) || chatTotal <= 0) {
-    return Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, wanted);
-  }
-  const floor = Math.max(CHANNEL_COLUMN_WIDTH_FLOOR, Math.round(chatTotal / 6));
-  const ceiling = Math.round(chatTotal / 3);
-  return Math.max(floor, Math.min(ceiling, wanted));
-}
 
 function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value);
@@ -316,6 +344,18 @@ function parseTheme(value: unknown): ThemePreference {
   if (value === "manuscript") return "copybook";
   if (value === "dark") return "graphite";
   return DEFAULT_SETTINGS.theme;
+}
+
+/**
+ * 主题选择卡的可选档位。实验功能 `paper-themes` 关闭时纸面两档（copybook /
+ * typescript）不出现（逐项开关 2026-10-12 之前的总开关 `experimental` 同此语义）。
+ * **只藏入口不动数据**：已存的主题照常应用、已星标 / 已完成的会话与遗留事项
+ * 原样在盘上，开关打开入口就回来。开源首发的默认门面（2026-10 用户裁决：
+ * 不成熟的功能在公开快照里默认不出现）。
+ */
+export function selectableThemes(paperThemes: boolean): readonly ThemePreference[] {
+  if (paperThemes) return THEME_PREFERENCES;
+  return THEME_PREFERENCES.filter((theme) => theme !== "copybook" && theme !== "typescript");
 }
 
 /** 只在区间内才认；钳制交给渲染层，这里不「猜」用户想要的宽度 */
@@ -341,6 +381,8 @@ export function parseSettings(raw: unknown): AppSettings {
     rightPanelWidth?: unknown;
     sidebarWidth?: unknown;
     compaction?: unknown;
+    collapsePastedText?: unknown;
+    completionSound?: unknown;
     gitAttribution?: unknown;
     choreModel?: unknown;
     /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
@@ -348,15 +390,19 @@ export function parseSettings(raw: unknown): AppSettings {
     subSessionModel?: unknown;
     subSessionThinking?: unknown;
     lastUsed?: unknown;
-    channelColumnWidth?: unknown;
     browserDownloadDir?: unknown;
     starredModels?: unknown;
+    usagePet?: unknown;
     providerCardSize?: unknown;
+    experimentalFeatures?: unknown;
+    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes + session-lifecycle 都开 */
+    experimental?: unknown;
+    /** 旧黑洞开关：原样并入 experimentalFeatures["composer-blackhole"] */
+    composerBlackhole?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
-  const channelColumnWidth = record.channelColumnWidth;
   const compaction = parseCompaction(record.compaction);
   // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
   // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
@@ -369,6 +415,9 @@ export function parseSettings(raw: unknown): AppSettings {
       : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
   const starredModels = parseStarredModels(record.starredModels);
+  const usagePet = parseUsagePet(record.usagePet);
+  // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
+  const experimentalFeatures = parseExperimentalFeatures(record);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -384,19 +433,22 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebar <= SIDEBAR_WIDTH_MAX
       ? { sidebarWidth: Math.round(sidebar) }
       : {}),
-    // 通道列同右栏的纪律：只做 ≥ 地板的硬校验，上界随 chat 区宽度变，渲染层每次夹
-    ...(typeof channelColumnWidth === "number" &&
-    Number.isFinite(channelColumnWidth) &&
-    channelColumnWidth >= CHANNEL_COLUMN_WIDTH_FLOOR
-      ? { channelColumnWidth: Math.round(channelColumnWidth) }
-      : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
+    ...(usagePet === undefined ? {} : { usagePet }),
     ...(compaction === undefined ? {} : { compaction }),
     // 非布尔一律当作「没动过」丢掉：缺席与 true 是同一个行为，落一个坏值进来
     // 只会让设置面显示的状态和实际行为对不上
     ...(typeof record.gitAttribution === "boolean"
       ? { gitAttribution: record.gitAttribution }
+      : {}),
+    // 同 gitAttribution 的纪律：非布尔丢掉，缺席 = 折叠（现状）
+    ...(typeof record.collapsePastedText === "boolean"
+      ? { collapsePastedText: record.collapsePastedText }
+      : {}),
+    // 同上：非布尔丢掉，缺席 = 响
+    ...(typeof record.completionSound === "boolean"
+      ? { completionSound: record.completionSound }
       : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
@@ -410,7 +462,48 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
       : {}),
+    // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
+    // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
+    ...(experimentalFeatures === undefined ? {} : { experimentalFeatures }),
   };
+}
+
+/**
+ * 实验功能逐项开关的解析与旧键迁移。逐项校验：id 必须在 EXPERIMENTAL_FEATURE_IDS
+ * 里（表里不认识的 id 直接丢——那属于「还没做就先占了位」的实验功能），值只认布尔。
+ * 旧键只在这一层兼容，解析产物永远是 experimentalFeatures，任何一次写入
+ * （parseSettings 白名单重建整个对象）都会把旧键从盘上带走。
+ */
+function parseExperimentalFeatures(record: {
+  experimentalFeatures?: unknown;
+  experimental?: unknown;
+  composerBlackhole?: unknown;
+}): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
+  const out: Partial<Record<ExperimentalFeatureId, boolean>> = {};
+  const raw = record.experimentalFeatures;
+  if (typeof raw === "object" && raw !== null) {
+    for (const id of EXPERIMENTAL_FEATURE_IDS) {
+      const value = (raw as Record<string, unknown>)[id];
+      if (typeof value === "boolean") out[id] = value;
+    }
+  }
+  // 旧总开关：true = 当年挂在它后面的两项都照常开（黑洞另有自己的旧键）。
+  // 新键里已显式给值的项以新键为准（??=）
+  if (record.experimental === true) {
+    out["paper-themes"] ??= true;
+    out["session-lifecycle"] ??= true;
+  }
+  // 旧黑洞开关原样并入：用户逃过的是「这一项」，不是「总开关 + 这一项」
+  if (typeof record.composerBlackhole === "boolean") {
+    out["composer-blackhole"] ??= record.composerBlackhole;
+  }
+  // 黑洞与俄罗斯方块互斥（两种材料盒形态，同一时刻只能有一种）。设置页的开关已经
+  // 连带关掉对方，这里兜住手改的盘：两个都开时以黑洞为准（先落盘的既有功能优先），
+  // tetris 当作没开——下一次任何设置写入都会把这个裁决写回盘上
+  if (out["composer-blackhole"] === true && out["composer-tetris"] === true) {
+    delete out["composer-tetris"];
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
 }
 
 function isAbsolutePath(path: string): boolean {
@@ -429,6 +522,19 @@ function parseModelPair(raw: unknown): ModelPair | undefined {
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;
   if (typeof record.modelId !== "string" || record.modelId === "") return undefined;
   return { providerId: record.providerId, modelId: record.modelId };
+}
+
+/** 星云偏好：日期键格式不对就丢、hidden 只认 true；两样都没有 = 不落键 */
+export function parseUsagePet(raw: unknown): UsagePetPref | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const record = raw as { pinnedDate?: unknown; hidden?: unknown };
+  const pinnedDate =
+    typeof record.pinnedDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(record.pinnedDate)
+      ? record.pinnedDate
+      : undefined;
+  const hidden = record.hidden === true ? true : undefined;
+  if (pinnedDate === undefined && hidden === undefined) return undefined;
+  return { ...(pinnedDate === undefined ? {} : { pinnedDate }), ...(hidden === undefined ? {} : { hidden }) };
 }
 
 /**

@@ -1,6 +1,7 @@
 /**
  * 迁移（设置 › Migration）的契约 —— IPC 四层的第 1 层（与引擎同 PR 落地，消费者纪律）。
- * 三个通道：探测（只 stat）→ 扫描（dry-run，只读勾选的来源）→ 执行（按用户的选择落盘）。
+ * 通道：探测（只 stat）→ 扫描（dry-run，只读勾选的来源）→ 执行（按用户的选择落盘），
+ * 外加自定义来源路径的三个（添加 / 移除 / 目录选择框，见 ImportCustomRoot）。
  *
  * 通路背景（调研 2026-09-21）：Proma 的 pi 真源（`<数据根>/sdk-config/sessions/`，
  * header version 3）与 orbita 锁定的 pi 0.84.3 同版本同格式——这层导入是**同构复制 +
@@ -16,8 +17,10 @@
 /**
  * 迁移来源（2026-09-24 裁决：暂不支持的来源不列，支持了再出现）。
  *
- * - proma：Proma 桌面应用。数据根是家目录下的 `.proma` 与它的变体（`.proma-dev`、`.proma-dev-fork`…，
- *   开发版与正式版各用一个），有几个读几个；同一条会话在几个根里都有时只导一份（跳过原因 duplicate）
+ * - proma：Proma 桌面应用。数据根是家目录下的 `.proma`（自动定位只认它——名字变体
+ *   `.proma-dev`、`.proma-dev-fork` 这类是开发实例，不自动扫，理由见 import-locate.ts 模块头；
+ *   散落的历史数据目录走 Migration 页的自定义路径入口手动添加）。同一条会话在几个根里都有时
+ *   只导一份（跳过原因 duplicate）
  * - claude-code：Claude Code 的会话存储（~/.claude/projects），命令行与 Claude 桌面应用共用；
  *   桌面应用的会话清单只用来认出「被续接取代的旧文件」与取它显示的标题；另有 ~/.claude/skills
  * - kimi-code：Kimi Code 命令行（~/.kimi-code）：会话在 sessions/<工作区>/<会话>/ 下，对话是
@@ -58,7 +61,46 @@ export interface ImportSourceProbe {
 export interface ImportDetectResult {
   home: string;
   sources: ImportSourceProbe[];
+  /** 已添加的自定义来源路径（第 1 步的管理清单；各来源 paths 里也已并入这些目录） */
+  customRoots: ImportCustomRoot[];
 }
+
+// ---------------------------------------------------------------------------
+// 自定义来源路径
+// ---------------------------------------------------------------------------
+
+/**
+ * 一条用户手动指定的来源数据目录（第 1 步的「自定义路径」入口）。
+ *
+ * 背景：proma 的自动定位只认 canonical（开源后名字变体是开发实例，见 import-locate.ts
+ * 模块头）；其它来源的自动定位也可能漏掉用户手上散落的历史目录（改过名、挪过地方的
+ * 备份）。用户自己找到目录、粘进来，经该来源的 validate（聊天记录在不在）检查后，
+ * 这个目录作为该来源的额外数据目录参与探测 / 扫描 / 导入，与自动定位到的目录并列出现
+ * 在扫描会读的路径清单里（隐私声明同样覆盖它）。
+ *
+ * agent-skills 没有定位规格（它是单一共用目录，不在 DATA_ROOT_SPECS 里），不支持
+ * 自定义路径。
+ */
+export interface ImportCustomRoot {
+  source: Exclude<ImportSourceId, "agent-skills">;
+  /** resolve 后的绝对路径（添加时已展开开头的 ~、过该来源的 validate） */
+  dir: string;
+}
+
+/** 添加 / 移除的入参。dir 原样传（renderer 不碰文件系统；~ 开头在主进程展开）。 */
+export interface ImportCustomRootInput {
+  source: Exclude<ImportSourceId, "agent-skills">;
+  dir: string;
+}
+
+/** 添加失败的原因（词汇进错误码，UI 按它给文案）。 */
+export type ImportCustomRootInvalidReason =
+  /** 目录不存在，或不足目录（断链也算） */
+  | "not-found"
+  /** 该来源的 validate 不过：里面没有可识别的聊天记录 */
+  | "no-data"
+  /** 同一来源已经添加过同一个目录 */
+  | "duplicate";
 
 /** 扫描请求：只扫勾选的来源。空数组 = 什么都不读，返回空报告。 */
 export interface ImportScanInput {
@@ -356,6 +398,13 @@ export type ImportGreetingCheckInput = ImportScanInput;
  */
 export const IMPORT_GREETING_UNAVAILABLE_CODE = "IMPORT_GREETING_UNAVAILABLE:";
 
+/**
+ * `import:custom-roots:add` 失败时抛的稳定错误码（附 ImportCustomRootInvalidReason 原文，
+ * 如 `IMPORT_CUSTOM_ROOT_INVALID:no-data`）——主进程只给稳定码、不猜界面语言，renderer
+ * 按码翻文案（与 IMPORT_GREETING_UNAVAILABLE_CODE 同款）。
+ */
+export const IMPORT_CUSTOM_ROOT_INVALID_CODE = "IMPORT_CUSTOM_ROOT_INVALID:";
+
 export interface ImportGreetingCheckResult {
   /** 判为「只是随手一句」的会话，按 sourceFile（与执行请求的勾选同一个键） */
   greetingOnly: string[];
@@ -527,6 +576,17 @@ const SOURCE_ID_TABLE: Record<ImportSourceId, true> = {
 };
 const SOURCE_IDS: readonly string[] = Object.keys(SOURCE_ID_TABLE);
 
+/** 自定义路径入口支持的来源（= 有定位规格 DATA_ROOT_SPECS 的那批；agent-skills 不支持）。 */
+const CUSTOM_ROOT_SOURCES: readonly Exclude<ImportSourceId, "agent-skills">[] = (
+  Object.keys(SOURCE_ID_TABLE) as ImportSourceId[]
+).filter((id): id is Exclude<ImportSourceId, "agent-skills"> => id !== "agent-skills");
+
+/** 来源 id 是不是支持自定义路径的那批（IPC 入参校验用；新来源登记进 SOURCE_ID_TABLE
+ * 后自动进这里，但主进程的 DATA_ROOT_SPECS 同样会因类型缺它而编译不过——两边都不至遗漏）。 */
+export function isCustomRootSource(value: unknown): value is Exclude<ImportSourceId, "agent-skills"> {
+  return typeof value === "string" && (CUSTOM_ROOT_SOURCES as readonly string[]).includes(value);
+}
+
 /** 来源 id 的运行时判定：IPC 入参与导入清单（imports.jsonl）读回时共用。 */
 export function isImportSourceId(value: unknown): value is ImportSourceId {
   return typeof value === "string" && SOURCE_IDS.includes(value);
@@ -574,6 +634,19 @@ function parseDestination(raw: unknown): ImportDestination {
 export function parseImportScanInput(raw: unknown): ImportScanInput {
   if (!isRecord(raw)) throw new Error("scan input must be an object");
   return { sources: parseSources(raw["sources"]) };
+}
+
+/**
+ * 自定义路径的入参：坏形状整体拒绝（与 parseImportScanInput 同款纪律）——静默丢掉
+ * 会让「添加了但没生效」看起来像「检查过了但不行」。
+ */
+export function parseImportCustomRootInput(raw: unknown): ImportCustomRootInput {
+  if (!isRecord(raw)) throw new Error("custom root input must be an object");
+  const source = raw["source"];
+  if (!isCustomRootSource(source)) throw new Error(`unknown import source: ${String(source)}`);
+  const dir = raw["dir"];
+  if (typeof dir !== "string" || dir.trim() === "") throw new Error("custom root dir must be a non-empty string");
+  return { source, dir: dir.trim() };
 }
 
 export function parseImportRunInput(raw: unknown): ImportRunInput {

@@ -18,7 +18,7 @@ import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem 
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
-import type { ComposerFileRef, ComposerPastedText } from "../../shell/composer-attachments.ts";
+import type { ComposerFileRef } from "../../shell/composer-attachments.ts";
 import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { TranscriptRecord } from "@shared/session";
@@ -47,15 +47,14 @@ export interface PendingApproval {
  */
 export type QueuedMessage =
   /** images：随这条排队的附图（缺席 = 纯文字）。排队时就读成 base64，投递时原样交出去。
-   * files / pasted：同行的文件引用与粘贴文本块（语义见 shared/prompt-attachments.ts），
-   * 投递时原样交出去；撤回时原样回输入框 */
+   * files：同行的文件引用，投递时原样交出去；撤回时回输入框。粘贴块已内联进 text
+   * （token 换 <pasted-text> 块，方案 C），撤回时 draftFromSentText 拆回句中胶囊 */
   | {
       id: string;
       kind: "text";
       text: string;
       images?: readonly PromptImage[];
       files?: readonly ComposerFileRef[];
-      pasted?: readonly ComposerPastedText[];
     }
   | { id: string; kind: "compact"; instructions?: string }
   | { id: string; kind: "channel"; childId: string; message: ChannelMessage };
@@ -209,13 +208,24 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   }
   if (event.type === "fileTurnView") {
     // 轮尾文件账的渲染视图：转成记录形状进槽。盘上那份主进程会铸自己的 id，
-    // 重读会话后自然对齐；活会话期这帧就是卡片的数据源
-    if (event.changes.length === 0) return states;
+    // 重读会话后自然对齐；活会话期这帧就是卡片的数据源。只有旁路网页产物、
+    // 没有 changes 的轮也进来（卡片要出）；批量折叠的轮同理——只有计数也进
+    const webArtifacts = event.webArtifacts ?? [];
+    if (event.changes.length === 0 && webArtifacts.length === 0 && event.webArtifactsBatch === undefined) {
+      return states;
+    }
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       fileTurns: [
         ...entry.fileTurns,
-        { role: "file-turn", id: event.turnId, timestamp: Date.now(), changes: event.changes },
+        {
+          role: "file-turn",
+          id: event.turnId,
+          timestamp: Date.now(),
+          changes: event.changes,
+          ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
+          ...(event.webArtifactsBatch !== undefined ? { webArtifactsBatch: event.webArtifactsBatch } : {}),
+        },
       ],
     }));
   }
@@ -340,6 +350,11 @@ export function seedFromDisk(
           added: change.added,
           removed: change.removed,
         })),
+        // 旁路网页产物随种子还原（旧记录没有这个字段 → 缺席，照常显示）；批量折叠计数同路
+        ...(record.webArtifacts !== undefined && record.webArtifacts.length > 0
+          ? { webArtifacts: record.webArtifacts }
+          : {}),
+        ...(record.webArtifactsBatch !== undefined ? { webArtifactsBatch: record.webArtifactsBatch } : {}),
       });
     } else if (record.role === "revert") {
       reverts.push(record);

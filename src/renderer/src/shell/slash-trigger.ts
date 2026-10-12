@@ -1,21 +1,17 @@
 /**
- * 指令面板（/）的触发判定与选中后的文本改写。
- *
- * 触发 = 光标所在的「指令 token」：一个 `/`，其前一个字符是行首或空白（含全角
- * 空格），光标在 token 内（`/` 之后、下一个空白之前），且 `/` 与光标之间已打出的
- * 查询词只含指令名字符集 `[A-Za-z0-9.-]`。三道闸挡文件路径与 URL（竞品调研结论，
- * 见 PR 描述）：
- *   1. 前导空白闸：`C:\Users\x.md`、`https://a/b`（`/` 前是 `:` 或字母）不触发；
+ * 「指令 token」的判定（slashTokenAt）：一个 `/`，其前一个字符是行首或空白
+ * （含全角空格），光标在 token 内（`/` 之后、下一个空白之前），且 `/` 与光标之间
+ * 已打出的查询词只含指令名字符集 `[A-Za-z0-9.-]`。三道闸挡文件路径与 URL：
+ *   1. 前导空白闸：`C:\Users\x.md`、`https://a/b`（`/` 前是 `:` 或字母）不命中；
  *   2. 字符集闸：`/tmp/notes.md`、`//注释` 打出第二个 `/` 即判非指令；
- *   3. 前缀命中闸（补全模式，见 Composer）：无命中不弹、不渲染空态。
+ *   3. 消费方自定：`/skill:` `/mcp:` 手打全形态因 `:` 不在字符集而出局。
  *
- * token 处于消息开头（之前只有空白）→ **主模式**：面板列动作项 + skill、空态可
- * 显示、Enter 选中（PR #146 已验收的语义，不动）。中途 token → **补全模式**：只列
- * 前缀命中的 skill 行、默认不高亮（Enter 原样落下，打路径时不抢键——Claude Code
- * fullscreen 同款）。
+ * 唯一消费者是「`/` + 空格」开右栏选取（panel-token.ts 的 slashSpaceOpensPanel）：
+ * 命中是还没打任何字的孤立 `/`——**句中也算**（2026-10-11 用户裁定：只认
+ * 消息开头是 bug）；防误触全部由上面的三道闸承担。
  *
  * `/skill:` / `/mcp:` 的展开边界与这里的 token 语法同源：`src/shared/invocation.ts` 的
- * findInvocationTokens 同样认「行首或空白后的 /」——面板补出来的东西发送时必然被组装。
+ * findInvocationTokens 同样认「行首或空白后的 /」——右栏插进来的东西发送时必然被组装。
  *
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
@@ -24,10 +20,10 @@
 export interface SlashToken {
   /** `/` 的下标 */
   start: number;
-  /** token 终点（下一个空白或文末）——补全选中的替换范围 */
+  /** token 终点（下一个空白或文末） */
   end: number;
   query: string;
-  /** token 之前只有空白 = 消息开头的主模式 */
+  /** token 之前只有空白 = 消息开头 */
   atMessageStart: boolean;
 }
 
@@ -60,26 +56,4 @@ export function slashTokenAt(value: string, cursor: number): SlashToken | null {
     query: raw.toLowerCase(),
     atMessageStart: value.slice(0, start).trim() === "",
   };
-}
-
-/**
- * 选中指令后只替换 token 本身，前后文（含同行的附加指示）原样保留。
- * 插入串自带的尾随空格遇到 token 后面本来就有的空白时省掉，不叠成双空格——
- * 省掉后 `token.start + insertion.length` 恰好落在原有那个空白之后，光标位置不变。
- */
-export function replaceToken(value: string, token: SlashToken, insertion: string): string {
-  const after = value.slice(token.end);
-  const text = /\s$/.test(insertion) && /^\s/.test(after) ? insertion.slice(0, -1) : insertion;
-  return value.slice(0, token.start) + text + after;
-}
-
-/**
- * 输入是否可能处于主模式（第一行以 / 开头）。与光标无关——主模式关闭态
- * （esc / insert）的重置跟内容走，不跟光标走。
- */
-export function slashMode(value: string): boolean {
-  const newline = value.indexOf("\n");
-  const firstLine = newline === -1 ? value : value.slice(0, newline);
-  const trimmed = firstLine.trimStart();
-  return trimmed.startsWith("/") && !trimmed.startsWith("//");
 }

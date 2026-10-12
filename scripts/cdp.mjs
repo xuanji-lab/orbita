@@ -12,7 +12,7 @@
  *
  * 用法（临时脚本放会话工作台，import 用绝对路径）：
  *   import { connectCdp } from "<仓库>/scripts/cdp.mjs";
- *   const cdp = await connectCdp({ cdpPort: 9334, devPort: 5274 });
+ *   const cdp = await connectCdp({ cdpPort: 39334, devPort: 5310 });
  *   await cdp.evaluate("document.title");
  *   await cdp.screenshot("/tmp/shot.png");
  *   cdp.close();
@@ -65,7 +65,10 @@ export async function connectCdp({ cdpPort, devPort, commandTimeoutMs = 10_000, 
   }
 
   const marker = `127.0.0.1:${devPort}`;
-  const page = targets.find((t) => t.type === "page" && t.url.includes(marker));
+  // 主窗口优先：内置浏览器的工具条（browser-toolbar.html）同源同端口，用 includes 会先撞上它
+  const pages = targets.filter((t) => t.type === "page" && t.url.includes(marker));
+  const page =
+    pages.find((t) => /^http:\/\/127\.0\.0\.1:\d+\/(index\.html)?([?#].*)?$/.test(t.url)) ?? pages[0];
   if (!page) {
     console.error(`✖ 这个 CDP 端口上没有 ${marker} 的页面——连到的不是你要验的那个实例。当前 targets：`);
     for (const t of targets) console.error(`  [${t.type}] ${t.url}`);

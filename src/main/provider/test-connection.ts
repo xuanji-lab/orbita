@@ -8,6 +8,7 @@
  *
  * 所以这里只有两个分支，而且它不会随支持的厂商变多而增长。
  */
+import { anthropicOauthHeaders, isClaudeOauthToken } from "./oauth.ts";
 import { discoverModels } from "./discover.ts";
 
 export interface ConnectionTestResult {
@@ -56,7 +57,10 @@ export async function testConnection(input: TestInput): Promise<ConnectionTestRe
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(anthropic
-      ? { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01" }
+      ? // OAuth 访问令牌只认 Bearer + oauth beta 头（同 discover 的处理）
+        isClaudeOauthToken(input.apiKey)
+        ? anthropicOauthHeaders(input.apiKey)
+        : { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01" }
       : { Authorization: `Bearer ${input.apiKey}` }),
     ...(input.headers ?? {}),
   };

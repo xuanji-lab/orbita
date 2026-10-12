@@ -70,4 +70,52 @@ describe("demoteBoundaryMath", () => {
       "text",
     );
   });
+
+  // ---- 代码/命令特征降级（2026-10：shell 命令被渲染成公式）----
+  // 样本均按 remark-math 6.0.0 真实输出构造：整句
+  // `… for i in $(seq 1 12); do echo '<html></html>' > x/$i.html; done`
+  // 恰好配成一个行内公式，值如下
+
+  it("shell 命令整句（含 ; 与直引号）降级回文本", () => {
+    const tree = root([{ type: "inlineMath", value: "(seq 1 12); do echo '<html></html>' > x/" }]);
+    demoteBoundaryMath(tree);
+    deepStrictEqual(tree.children?.[0]?.children?.[0], {
+      type: "text",
+      value: "$(seq 1 12); do echo '<html></html>' > x/$",
+    });
+  });
+
+  it("echo $HOME and $PATH（尾部空白，金额同路）降级", () => {
+    const tree = root([{ type: "inlineMath", value: "HOME and " }]);
+    demoteBoundaryMath(tree);
+    deepStrictEqual(tree.children?.[0]?.children?.[0]?.type, "text");
+  });
+
+  it("$10 到 $20（尾部空白）降级", () => {
+    const tree = root([{ type: "inlineMath", value: "10 到 " }]);
+    demoteBoundaryMath(tree);
+    deepStrictEqual(tree.children?.[0]?.children?.[0]?.type, "text");
+  });
+
+  it("含 && 或 || 的值降级（shell 逻辑运算符）", () => {
+    for (const value of ["cmd1 && cmd2", "a || b"]) {
+      const tree = root([{ type: "inlineMath", value }]);
+      demoteBoundaryMath(tree);
+      deepStrictEqual(tree.children?.[0]?.children?.[0]?.type, "text");
+    }
+  });
+
+  it("常见 LaTeX 不误伤：x^2 / a<b / \\frac{a}{b} / (a+b)^2", () => {
+    for (const value of ["x^2", "a<b", "\\frac{a}{b}", "(a+b)^2"]) {
+      const tree = root([{ type: "inlineMath", value }]);
+      demoteBoundaryMath(tree);
+      deepStrictEqual(tree.children?.[0]?.children?.[0]?.type, "inlineMath", value);
+    }
+  });
+
+  it("LaTeX 厚空格 \\; 不降级（裸 ; 才是 shell 特征）", () => {
+    const tree = root([{ type: "inlineMath", value: "x\\;y" }]);
+    demoteBoundaryMath(tree);
+    deepStrictEqual(tree.children?.[0]?.children?.[0]?.type, "inlineMath");
+  });
 });

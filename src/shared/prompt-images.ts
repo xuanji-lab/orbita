@@ -83,6 +83,14 @@ export const PROMPT_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
 /** 一条消息最多几张。多了既贵又慢，模型也看不过来。 */
 export const PROMPT_IMAGE_MAX_COUNT = 10;
 
+/**
+ * 一条消息内所有图片的**原始字节总和**上限。原图进 agent 进程后各自会被缩到
+ * 2000px / 4.5MB，缩放前的总量是一个保守的代理指标；20MB 给服务商约 32MB 的
+ * 单请求上限留余量（历史轮次还会占预算，见 agent/image-byte-budget.ts）。
+ * 超线时门口拒收并建议改用文件夹附加（只传路径，模型按需逐张 read）。
+ */
+export const PROMPT_IMAGES_TOTAL_MAX_BYTES = 20 * 1024 * 1024;
+
 export type PromptImageRejection = "unsupported" | "too-large";
 
 /** 一张图能不能进输入框。null = 可以 */

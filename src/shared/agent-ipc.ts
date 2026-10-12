@@ -20,6 +20,7 @@ import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -68,6 +69,12 @@ export const ipcChannels = {
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
+  /**
+   * Claude 订阅账号的 OAuth 登录：主进程起回调服务器 + 开系统浏览器，成功后直接
+   * 落盘 provider 与凭据，返回 UpsertResult。凭据（access / refresh token）全程
+   * 不进 renderer——登录本身就是保存。
+   */
+  providerOauthLogin: "provider:oauth-login",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
   /**
@@ -89,6 +96,12 @@ export const ipcChannels = {
   sessionStar: "session:star",
   /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
   sessionSetCompletion: "session:set-completion",
+  /**
+   * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
+   * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
+   * 是否标未读由 renderer 判（没在看才标，planNotice）。
+   */
+  sessionUnread: "session:unread",
   sessionArchive: "session:archive",
   /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
   sessionMove: "session:move",
@@ -149,6 +162,11 @@ export const ipcChannels = {
    * renderer 在 sandbox 里没有文件系统访问权，也不该自己决定读多少。
    */
   fsRead: "fs:read",
+  /**
+   * 读一个 PDF 的字节给预览面板渲染（同 root/dir 白名单，回 `PdfFile`，files.ts）。
+   * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
+   */
+  fsReadPdf: "fs:read-pdf",
   /** 用系统默认应用打开一个文件（同 root/dir 白名单）；预览不了或想编辑时的出口 */
   fsOpen: "fs:open",
   /**
@@ -156,8 +174,27 @@ export const ipcChannels = {
    * 网页文件的默认打开方式——系统默认应用（fs:open）退为次要按钮
    */
   fsOpenInBrowser: "fs:open-in-browser",
+  /**
+   * 把一批绝对路径 stat 成盘上事实（回 `FsEntryFact[]`，与路径等长同序：kind 是
+   * file / dir 还是 null、size 多大）。消费者是输入框的附件分拣与文件面板的已发送
+   * 附件列表：拖入 / 粘贴的 `File` 对象在 renderer 里分不清是文件还是目录，主进程
+   * 发送时的 lstat 纠正来得太晚——图标与名字当场就该是对的；面板那侧还要靠它
+   * 如实标出已不在盘上的附件。不走面板的根白名单——拖入条目本来就在三根之外
+   * （发送时复制或原位置引用），问类型不构成通用文件浏览器：不读内容、不列目录。
+   */
+  fsStatKind: "fs:stat-kind",
+  /**
+   * 开系统目录选择器（openDirectory + multiSelections），回选中目录的绝对路径数组，
+   * 取消返回 null。给输入框回形针的「添加文件夹」用——Windows 不允许同一个对话框
+   * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
+   */
+  fsPickFolders: "fs:pick-folders",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
+  /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
+  usageWeek: "usage:week",
+  /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
+  usageEvent: "usage:event",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
   carryoverCreate: "carryover:create",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
@@ -189,6 +226,15 @@ export const ipcChannels = {
    * hi / test（返回 ImportGreetingCheckResult）。只判断、不落盘
    */
   importCheckGreetings: "import:check-greetings",
+  /**
+   * 自定义来源路径：添加（入参 ImportCustomRootInput）——目录经该来源 validate 过才落盘，
+   * 失败抛稳定错误码 IMPORT_CUSTOM_ROOT_INVALID:*；成功返回更新后的清单（ImportCustomRoot[]）
+   */
+  importCustomRootsAdd: "import:custom-roots:add",
+  /** 自定义来源路径：移除一条（入参 ImportCustomRootInput），返回更新后的清单 */
+  importCustomRootsRemove: "import:custom-roots:remove",
+  /** 目录选择框（renderer 无文件系统权，主进程开）：选中返回绝对路径，取消返回 null */
+  importPickDirectory: "import:pick-directory",
   /** 中心存储里的全部 skill（含没链进任何集合的） */
   skillList: "skill:list",
   /** 把 skill 链进一个集合（global 或某个 workspace）；互斥规则见 SkillScope */
@@ -305,9 +351,24 @@ export interface ProviderSecrets {
   id: string;
   api: string;
   baseUrl: string;
+  /** api_key 的明文，或 OAuth 的访问令牌（sk-ant-oat…，pi 端自动切换 Bearer 头） */
   apiKey: string;
   headers?: Record<string, string>;
   models: ModelDecl[];
+}
+
+/**
+ * `provider:oauth-login` 的入参。登录即保存：主进程成功后 upsert 这条 provider
+ * （scheme oauth）并落盘凭据。重登录（create=false）时模型清单沿用盘上的——
+ * 换令牌不该把用户配好的模型一并抹掉。
+ */
+export interface OauthLoginInput {
+  id: string;
+  displayName: string;
+  /** 新建时 true（id 撞名拒绝）；已有 provider 重登录时缺省 */
+  create?: boolean;
+  /** 仅 create 时生效：登录后启用的模型清单（一般空，登录后用 Fetch 拉取） */
+  models?: ModelDecl[];
 }
 
 /**
@@ -443,6 +504,13 @@ export type AgentCommand =
        * 工具描述里的工作区绑定也用它——agent 进程不认工作区，只收这个 id。
        */
       workspaceId: string | null;
+      /**
+       * 所属工作区的名字（workspaceId 翻译过来的那份，给模型的提示词用：
+       * store-tools 的 scope 指引要告诉模型这条会话属不属于工作区）。
+       * **可选，缺席 = 有工作区但翻不出名字**（旧夹具 / 工作区已删）——提示词里
+       * 如实说「未知」，不猜。workspaceId 为 null 时省略。
+       */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
@@ -452,6 +520,13 @@ export type AgentCommand =
        * pi 把自己的 session 文件放在哪。**由主进程给**——runtime 不做路径策略决定。
        */
       piSessionDir: string;
+      /**
+       * 本会话的附图原图目录（`sessions/<会话id>.attachments/` 的绝对路径）。
+       * 图片字节预算把早期图片换成占位时要给出可 read 回来的原图绝对路径
+       * （image-byte-budget.ts），而 `original` 引用是相对的、目录布局是主进程的
+       * 路径策略——同 `piSessionDir` 的纪律，由主进程铸好随轮发。
+       */
+      attachmentsDir: string;
       /**
        * 工具永不许写的目录（会话账本 sessions/ 与 pi 的本子 pi-sessions/）。
        * **主进程定，agent 进程只收数据**（同 piSessionDir 的纪律）：tool_call 闸门
@@ -504,6 +579,12 @@ export type AgentCommand =
        * 单语主题说了算，双语主题听语言设置），runtime 只收数据。缺席 = "en"。
        */
       attributionLanguage?: Language;
+      /**
+       * 实验功能「PDF 引用」的开关（settings.experimentalFeatures["pdf-citations"]）。
+       * **主进程从设置装配**（同 gitAttribution）。开着时 runtime 才注册 cite_pdf
+       * 并讲它的用法；缺席 = 关
+       */
+      pdfCitations?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -534,6 +615,18 @@ export type AgentCommand =
       modelId: string;
       messages: string[];
     }
+  | {
+      /**
+       * 连接探测（设置 › 模型服务的 Test，OAuth 令牌专用路由）：主进程的裸 fetch
+       * 补齐身份头后仍被 429（实测 2026-10），官方 SDK 客户端自带的遥测指纹补不了——
+       * 干脆让探测走 agent 进程里 pi 的同一个客户端，与真会话完全同源。
+       * 结果经 `providerProbed` 事件按 requestId 回传。独立小调用，不开会话、不落盘。
+       */
+      type: "probeProvider";
+      requestId: string;
+      provider: ProviderSecrets;
+      modelId: string;
+    }
   | { type: "abort"; sessionId: string }
   | {
       /** 立即发送排队中的某一条：abort 当前轮（含正在跑的工具调用）→ 这条作为新一轮 submit */
@@ -550,12 +643,16 @@ export type AgentCommand =
       cwd: string;
       /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
       workspaceId: string | null;
+      /** 所属工作区名字，语义同 submit（scope 指引用；缺席 = 翻不出名字，说未知） */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
       /** 这轮的思考档，语义同 submit */
       thinkingLevel: ThinkingLevel;
       piSessionDir: string;
+      /** 本会话的附图原图目录（图片字节预算占位用），语义同 submit */
+      attachmentsDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
@@ -569,6 +666,8 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
+      /** 实验功能「PDF 引用」的开关，语义同 submit */
+      pdfCitations?: boolean;
     }
   | {
       /**
@@ -605,12 +704,16 @@ export type AgentCommand =
       cwd: string;
       /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
       workspaceId: string | null;
+      /** 所属工作区名字，语义同 submit（scope 指引用；缺席 = 翻不出名字，说未知） */
+      workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
       mode: PermissionMode;
       /** 这轮的思考档，语义同 submit（压缩轮内部照旧强制 off，这里传的是会话意图档） */
       thinkingLevel: ThinkingLevel;
       piSessionDir: string;
+      /** 本会话的附图原图目录（图片字节预算占位用；压缩轮不开主链路，随开轮装配统一携带） */
+      attachmentsDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
@@ -624,6 +727,8 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
+      /** 实验功能「PDF 引用」的开关，语义同 submit */
+      pdfCitations?: boolean;
     }
   | { type: "listBuiltins" }
   /**
@@ -655,6 +760,8 @@ export type AgentCommand =
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
+  /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
+  | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
@@ -821,6 +928,15 @@ export type AgentEvent =
    */
   | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
   /**
+   * 终端：agent 的终端工具请求（terminal_open / execute / read / list /
+   * interrupt / close，形状见 shared/terminal.ts 的 TerminalToolRequest）。
+   * **PTY 在主进程**（TerminalService，browserRequest 同一条边界）：agent 进程
+   * 不碰 node-pty、不碰 userData，只剩「工具定义 → requestId 问答」一层薄包装。
+   * 终端是**可见**的：主进程另广播 terminal:agent-open，renderer 自动点亮面板。
+   * 回 terminalResult。
+   */
+  | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
+  /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
    * cwd / workspaceId 同父）、解析模型（delegate 参数 > settings.subSessionModel > 同父）
@@ -870,14 +986,33 @@ export type AgentEvent =
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**
    * 一轮落定时的文件账（agent 进程的快照跟踪器报来）：正文内联，主进程写 blob
-   * 后落 FileTurnRecord。没有改动的轮不发（不落空记录）。
+   * 后落 FileTurnRecord。没有改动的轮不发（不落空记录）。webArtifacts 是旁路
+   * 网页产物（脚本生成的 .html / .htm / .svg，不在 changes 里、不参与撤销）；
+   * 只有它、没有 changes 的轮也发（卡片要出）。webArtifactsBatch 是批量折叠：
+   * 本轮网页文件变动超过上限时不逐个列（webArtifacts 缺席），只报计数——
+   * git checkout / 解压归档这类批量操作不该被当成「本轮生成了 N 个网页」。
+   * 与 webArtifacts 互斥：折叠时不给列表。
    */
-  | { type: "fileTurn"; sessionId: string; changes: readonly FileChangePayload[] }
+  | {
+      type: "fileTurn";
+      sessionId: string;
+      changes: readonly FileChangePayload[];
+      webArtifacts?: readonly string[];
+      webArtifactsBatch?: number;
+    }
   /**
    * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
    * 与统计——renderer 的轮尾卡片不吃正文，1MB 的文件内容没有理由过这道 IPC。
    */
-  | { type: "fileTurnView"; sessionId: string; turnId: string; changes: readonly FileChangeView[] }
+  | {
+      type: "fileTurnView";
+      sessionId: string;
+      turnId: string;
+      changes: readonly FileChangeView[];
+      webArtifacts?: readonly string[];
+      /** 批量折叠计数：本轮网页文件变动超过上限，不逐个列（与 webArtifacts 互斥） */
+      webArtifactsBatch?: number;
+    }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的
    * pending 等待者吃掉它——renderer 不消费，不广播。
@@ -895,6 +1030,8 @@ export type AgentEvent =
    * 调用失败或回复读不懂时 throwaway 为 null、error 写原因。
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
+  /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
+  | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
    * 会话内模型切换成功（C-4 的 `setModel` 命令翻译而来）。主进程落 meta
    * （providerId / modelId——分支继承与重开恢复都读它）并转给 renderer 对齐

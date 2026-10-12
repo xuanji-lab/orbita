@@ -3,9 +3,9 @@ import { describe, test } from "node:test";
 import { calendarDay, msUntilNextMidnight } from "./today.ts";
 
 describe("calendarDay", () => {
-  test("月份从 1 数起", () => {
-    assert.deepEqual(calendarDay(new Date(2026, 8, 25, 13, 45)), { month: 9, day: 25 });
-    assert.deepEqual(calendarDay(new Date(2026, 0, 1, 0, 0)), { month: 1, day: 1 });
+  test("年份照求份、月份从 1 数起", () => {
+    assert.deepEqual(calendarDay(new Date(2026, 8, 25, 13, 45)), { year: 2026, month: 9, day: 25 });
+    assert.deepEqual(calendarDay(new Date(2026, 0, 1, 0, 0)), { year: 2026, month: 1, day: 1 });
   });
 });
 

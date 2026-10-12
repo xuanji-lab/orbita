@@ -1,0 +1,42 @@
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* radius: 8px base, shadcn-derived. pill is for true circles only
+     (dots, spinners, switch knobs) — rectangles stay on radius-md. */
+  --radius: 0.5rem;
+  --radius-xs: calc(var(--radius) - 4px);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 2px); /* every glass surface, all three layers */
+  --radius-pill: 999px;
+  /* solid composer + user bubble use a literal 14px, not a scale step.
+     the glass composer is a glass card first, so it takes --radius-xl. */
+  --radius-composer: 14px;
+  --radius-bubble: 14px;
+
+  --control-height-xs: 24px;
+  --control-height-sm: 28px;
+  --control-height-md: 32px;
+  --control-height-lg: 36px;
+
+  --list-item-compact: 32px;
+  --list-item-default: 36px;
+  --list-item-rich: 48px;
+
+  /* layout */
+  --sidebar-rail-width: 48px;
+  --content-max-width: 1000px;
+  --app-card-max-width: 1080px;
+  /* 用户气泡左侧留白：气泡从右往左伸，最宽到「内容列 - 这么宽」。按列宽比例走，
+     窄窗口不至于只剩一条缝、宽窗口不至于空一大片。agent 回复不留右白，始终贴满整列
+     （侧栏挤窄时它本来就贴边，一直贴边才统一——2026-10-10 用户裁决） */
+  --message-gutter: clamp(32px, 12%, 120px); /* @kind spacing */
+  --bubble-max-width: calc(100% - var(--message-gutter)); /* @kind spacing */
+}

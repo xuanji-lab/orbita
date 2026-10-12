@@ -27,27 +27,35 @@ import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import { shouldRefreshSessions } from "./session-list-refresh.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
-import { admitImages, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
+import { admitImages, promptImagesBytes, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
 import {
   admitFileRefs,
   fileRefRejectionText,
+  withStatKinds,
   type ComposerFileRef,
-  type ComposerPastedText,
 } from "../../shell/composer-attachments.ts";
 import {
   pastedTextSize,
-  PROMPT_FILE_MAX_COUNT,
+  EXTERNAL_FILE_COPY_MAX_BYTES,
   type PromptFileRef,
 } from "@shared/prompt-attachments";
-import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_COUNT, type TextQuote } from "../../../../shared/quote.ts";
+import {
+  assemblePasteDraft,
+  draftFromSentBlocks,
+  draftFromSentText,
+  parsePasteTokens,
+  repositionBlocks,
+  type ComposerPasteBlock,
+} from "../../shell/paste-blocks.ts";
+import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import { DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import { defaultThinkingLevel } from "@shared/model-defaults";
 import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
-import { composeChannelPrompt } from "@shared/channel";
+import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
@@ -74,6 +82,7 @@ import {
 import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
 import { splitUserTextBlocks } from "@shared/prompt-attachments";
 import type { Workspace } from "@shared/workspace";
+import { pathTail } from "@shared/path";
 import { stripInvocationBlock } from "../../../../shared/invocation.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -155,8 +164,10 @@ export interface ChatSession {
    * 与「当前看哪条」无关——后台在跑的会话切走了也照样转圈。
    */
   phaseOf: (id: string) => SessionEntry["phase"];
-  /** 按 id 查回合失败标注（槽里有真相）——侧栏失败图标用，与「当前看哪条」无关 */
+  /** 按 id 查回合失败标注（槽里有真相）——未读标记的 failed 快照用，与「当前看哪条」无关 */
   turnErrorOf: (id: string) => string | null;
+  /** 按 id 查挂着的工具审批（槽里有真相）——竖条「在等你」要读到后台会话的审批 */
+  approvalsOf: (id: string) => readonly PendingApproval[];
   error: string | null;
   /** 当前查看会话的输入框草稿——**按会话隔离**，切换 / 新开会话互不带走 */
   draft: string;
@@ -167,16 +178,21 @@ export interface ChatSession {
   /** 挑选 / 粘贴 / 拖进来的文件：图片读成 base64、其余按路径引用；被拒的点名报在 error 上 */
   attachIncoming: (files: readonly File[]) => void;
   removeAttachment: (id: string) => void;
+  /** 回形针「添加文件夹」：主进程目录选择器，选中目录按拖入同一套分拣入列 */
+  attachFolderRefs: () => Promise<void>;
   /** 当前查看会话输入框里的文件引用（纯路径，模型用 read 工具自己读） */
   files: readonly ComposerFileRef[];
-  /** 文件面板「引用到输入卡」的入口：原位置引用（不复制），同名额与去重走同一套分拣 */
+  /** 文件面板「引用到输入卡」的入口：原位置引用（不复制），去重走同一套分拣 */
   attachFileRef: (ref: { path: string; name: string; kind: "file" | "dir" }) => void;
   removeFile: (id: string) => void;
-  /** 当前查看会话输入框里的粘贴文本块（全文在内存里，发送时永不截断） */
-  pasted: readonly ComposerPastedText[];
-  /** 粘贴的一大段文字（超折叠阈值，Composer 拦下的）抽成粘贴块 */
-  addPastedText: (text: string) => void;
-  removePasted: (id: string) => void;
+  /** 当前查看会话草稿里的粘贴块（方案 C：收起 = 句中胶囊 token，展开 = 铺底色区间） */
+  pasted: readonly ComposerPasteBlock[];
+  /** 大段粘贴成块（Composer 已按阈值拦下、在光标处插 token）：建块并返回 seq */
+  addPasteBlock: (text: string) => number;
+  /** 展开：区间写回块状态（文本替换 Composer 已做） */
+  expandPaste: (seq: number, range: { start: number; end: number }) => void;
+  /** 收起：把区间里的现文（可能已编辑过）存回块，折回收起态 */
+  collapsePaste: (seq: number, text: string, lines: number) => void;
   /** 当前查看会话输入框里的文字引用（同一把键隔离）；发送时展开成引用块拼在文字前面 */
   quotes: readonly TextQuote[];
   /** 加一条引用。同一条消息里的同一段重复加不重复记 */
@@ -334,10 +350,6 @@ export interface ChatSession {
   confirmUndo: () => void;
   cancelUndo: () => void;
   send: () => void;
-  /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
-  sendText: (text: string) => void;
-  /** 指令面板 /new 用：清当前槽的引用与附件。必须在 newTask 之前调 */
-  clearComposerExtras: () => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
   /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
@@ -473,6 +485,7 @@ export interface SessionEngine {
   readonly usable: ProviderDto[];
   readonly phaseOf: (id: string) => SessionEntry["phase"];
   readonly turnErrorOf: (id: string) => string | null;
+  readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   readonly renameSession: (id: string, title: string) => void;
   readonly pinSession: (id: string, pinned: boolean) => void;
@@ -813,10 +826,17 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // buildTurn 已支持从 meta 装配从没在本窗口打开过的会话（新会话/新槽由
         // dequeue/enqueue 就地建），父会话不必先被用户点开过才能收到子的消息。
         const childTitle = sessionsRef.current.find((meta) => meta.id === head.childId)?.title ?? "";
-        const text = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
+        const envelope = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
         const turn = buildTurn(id);
         if (turn === null) return;
-        dispatch(() => api.agent.submit({ sessionId: id, text, ...turn }));
+        // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在信封后
+        // （userRepliesSincePreviousReport 的注释）。读账本失败就照原样投递，不拦这一轮。
+        dispatch(async () => {
+          const ledger = await api.channel.load({ parentId: id, childId: head.childId }).catch(() => []);
+          const note = userRepliesNote(userRepliesSincePreviousReport(ledger, head.message.id));
+          const text = note === "" ? envelope : `${envelope}\n${note}`;
+          await api.agent.submit({ sessionId: id, text, ...turn });
+        });
       } else {
         const turn = buildTurn(id);
         if (turn === null) return;
@@ -826,7 +846,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
             text: head.text,
             ...imagesField(head.images),
             ...filesField(head.files),
-            ...pastedField(head.pasted),
             ...turn,
           }),
         );
@@ -1095,6 +1114,12 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
     [],
   );
+  // 按 id 查挂着的审批（2026-10-10 未读/竖条一刀）：竖条「在等你」要读到后台
+  // 会话的审批，不只当前看着的那条；与 phaseOf / turnErrorOf 同一套 ref 读法
+  const approvalsOf = useCallback(
+    (id: string): readonly PendingApproval[] => statesRef.current.get(id)?.approvals ?? [],
+    [],
+  );
 
   return {
     catalog,
@@ -1128,6 +1153,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     usable,
     phaseOf,
     turnErrorOf,
+    approvalsOf,
     answerApproval,
     renameSession,
     pinSession,
@@ -1148,10 +1174,24 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
  * 查看槽——某个「正在看」的全部。主槽与抽屉槽各来一份，互不串：
  * 草稿、模型/权限档意图、cwd 归属都是槽内的；每轮 submit 显式带上自己槽内的值。
  */
+/** 草稿 = 文本 + 粘贴块同体（paste-blocks.ts 的方案 C：token 在文本里，全文在块里） */
+interface DraftState {
+  text: string;
+  pasted: readonly ComposerPasteBlock[];
+}
+
+/** 粘贴块的 token 序号：模块级只增计数器——不随块删除回收，撤销 / 回退还原出的
+ *  token 永不与后来的块撞号；两个查看槽（主槽 / 抽屉）共用同一把，天然不撞 */
+let pasteSeqCounter = 0;
+function nextPasteSeq(): number {
+  pasteSeqCounter += 1;
+  return pasteSeqCounter;
+}
+
 /** 没有附图时的稳定引用——每次渲染一个新 [] 会让 send 的依赖每帧都变 */
 const NO_ATTACHMENTS: readonly ComposerImage[] = [];
 const NO_FILES: readonly ComposerFileRef[] = [];
-const NO_PASTED: readonly ComposerPastedText[] = [];
+const NO_PASTED: readonly ComposerPasteBlock[] = [];
 const NO_QUOTES: readonly TextQuote[] = [];
 
 /** 附图载荷：空就不带字段，纯文字消息的 IPC 载荷与以前一字不差 */
@@ -1164,11 +1204,6 @@ function filesField(files: readonly ComposerFileRef[] | undefined): { files?: Pr
   return files !== undefined && files.length > 0
     ? { files: files.map(({ path, name, kind, origin }) => ({ path, name, kind, origin })) }
     : {};
-}
-
-/** 粘贴文本载荷：全文按加入顺序 */
-function pastedField(pasted: readonly ComposerPastedText[] | undefined): { pasted?: string[] } {
-  return pasted !== undefined && pasted.length > 0 ? { pasted: pasted.map((block) => block.text) } : {};
 }
 
 export function useSessionView(engine: SessionEngine, key: string): ChatSession {
@@ -1236,10 +1271,31 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 以前是全局单份，切换 / 新开会话草稿跟着走（2026-09-10 用户裁决：新会话就是
    * 新的，旧会话的草稿留在原地等他回来）。纯内存，不落盘——与旧行为一致。
    */
-  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
-  const writeDraft = useCallback(
-    (draftKey: string, value: string) => {
-      setDrafts((prev) => (prev.get(draftKey) === value ? prev : new Map(prev).set(draftKey, value)));
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, DraftState>>(new Map());
+  /** 草稿 = 文本 + 粘贴块同体（paste-blocks.ts）：展开区间随每次文本编辑搬运、
+   *  撤销对账也在这里做——两个状态分开存，搬运就没有单点可依 */
+  const writeDraft = useCallback((draftKey: string, value: string) => {
+    setDrafts((prev) => {
+      const current = prev.get(draftKey);
+      if (current?.text === value) return prev;
+      const pasted =
+        current === undefined || current.pasted.length === 0
+          ? NO_PASTED
+          : repositionBlocks(current.text, value, current.pasted);
+      return new Map(prev).set(draftKey, { text: value, pasted });
+    });
+  }, []);
+  /** 只动粘贴块（成块 / 展开 / 收起），文本不动——文本那条路自己会搬运区间 */
+  const writeBlocks = useCallback(
+    (draftKey: string, update: (current: readonly ComposerPasteBlock[]) => readonly ComposerPasteBlock[]) => {
+      setDrafts((prev) => {
+        const current = prev.get(draftKey);
+        const before = current?.pasted ?? [];
+        const after = update(before);
+        if (after === before) return prev;
+        if (current === undefined && after.length === 0) return prev;
+        return new Map(prev).set(draftKey, { text: current?.text ?? "", pasted: after });
+      });
     },
     [],
   );
@@ -1291,22 +1347,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [],
   );
-  const [pastedMap, setPastedMap] = useState<ReadonlyMap<string, readonly ComposerPastedText[]>>(new Map());
-  const writePasted = useCallback(
-    (draftKey: string, update: (current: readonly ComposerPastedText[]) => readonly ComposerPastedText[]) => {
-      setPastedMap((prev) => {
-        const current = prev.get(draftKey) ?? [];
-        const next = update(current);
-        if (next === current) return prev;
-        const map = new Map(prev);
-        if (next.length === 0) map.delete(draftKey);
-        else map.set(draftKey, next);
-        return map;
-      });
-    },
-    [],
-  );
-
   // 会话 meta 里存的模型可能已随 provider 被删而失效——失效就清空，让上面的
   // 默认播种兜住。真实事故（2026-09-04）：旧会话存着已删除的 openai-compatible，
   // 打开后直接发送，主进程炸 unknown provider。providers 未加载完（usable 空）不判。
@@ -1400,20 +1440,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 草稿键 = 当前查看的会话；send 与收回都写自己的键，互不串。
   // 兜底键带槽名：主槽与抽屉槽的「首页」是两份草稿
   const draftKey = sessionId ?? opened?.id ?? `home:${key}`;
-  const draft = drafts.get(draftKey) ?? "";
+  const draft = drafts.get(draftKey)?.text ?? "";
   const setDraft = (value: string) => writeDraft(draftKey, value);
   const attachments = attachmentMap.get(draftKey) ?? NO_ATTACHMENTS;
   const files = fileMap.get(draftKey) ?? NO_FILES;
-  const pasted = pastedMap.get(draftKey) ?? NO_PASTED;
+  const pasted = drafts.get(draftKey)?.pasted ?? NO_PASTED;
   const quotes = quoteMap.get(draftKey) ?? NO_QUOTES;
 
   const addQuote = useCallback(
     (quote: TextQuote) => {
       // 准入（shared/quote.ts 的 acceptQuote）：重复沿用旧规则静默去重；
-      // 超上限（QUOTE_MAX_COUNT=5）要说出原因——藏住一条用户看得见却发不出
+      // 总字数超上限要说出原因——藏住一条用户看得见却发不出
       // 的引用，比报一句更糟
       const verdict = acceptQuote(quoteMap.get(draftKey) ?? [], quote);
-      engine.setError(verdict.reason === "too-many" ? engine.messagesRef.current.quote.tooMany(QUOTE_MAX_COUNT) : null);
+      engine.setError(verdict.reason === "too-long-total" ? engine.messagesRef.current.quote.tooLongTotal(QUOTE_MAX_TOTAL_CHARS) : null);
       if (!verdict.accepted) return;
       writeQuotes(draftKey, (current) => [...current, quote]);
     },
@@ -1430,7 +1470,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * **纯路径引用**（admitFileRefs，发送时主进程把副本收进会话目录）——内容模型
    * 用 read 工具自己读。分拣是同步的（被拒的当场点名）；读图是异步的——**键在
    * 进来那一刻定下**，读完时用户就算切到别的会话，图也落回它被拖进来的那个输入框。
-   * 名额在追加时再截一次：两批并发拖进来，各自分拣时都以为还有位子。
+   * 文件先按 file 同步入列、再向主进程问一次真实类型（拖入的目录在 renderer 里
+   * 分不出来，发送时的 lstat 纠正又太晚——图标与名字当场就该是对的）；问不到就
+   * 留在 file，发送侧的纠正仍兑底。
    */
   const attachIncoming = useCallback(
     (incoming: readonly File[]) => {
@@ -1439,9 +1481,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const t = engine.messagesRef.current;
       const imageCandidates = incoming.filter((file) => PROMPT_IMAGE_MIME_TYPES.includes(file.type));
       const fileCandidates = incoming.filter((file) => !PROMPT_IMAGE_MIME_TYPES.includes(file.type));
+      // 总量线要算上已在输入框里的图：两批各自不超线、叠加却超线时，第二批该被拦下
+      const currentImages = attachmentMap.get(key) ?? [];
       const { accepted: acceptedImages, rejected: imageRejected } = admitImages(
         imageCandidates,
-        attachmentMap.get(key)?.length ?? 0,
+        currentImages.length,
+        promptImagesBytes(currentImages.map((item) => item.image)),
       );
       const { accepted: acceptedFiles, rejected: fileRejected } = admitFileRefs(
         fileCandidates.map((file) => ({ path: api.window.getPathForFile(file), name: file.name })),
@@ -1452,18 +1497,38 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .join(" ");
       engine.setError(notice === "" ? null : notice);
       if (acceptedFiles.length > 0) {
-        writeFiles(key, (current) => [
-          ...current,
-          ...acceptedFiles.map((ref) => ({
-            id: crypto.randomUUID(),
-            name: ref.name,
-            path: ref.path,
-            kind: "file" as const,
-            origin: "external" as const,
-          })),
-        ]);
+        // id 在入列那一刻铸好，stat 回来按它贴回类型；发送与这次写入不互相等
+        const entries = acceptedFiles.map((ref) => ({
+          id: crypto.randomUUID(),
+          name: ref.name,
+          path: ref.path,
+          kind: "file" as const,
+          origin: "external" as const,
+        }));
+        writeFiles(key, (current) => [...current, ...entries]);
+        void api.files
+          .statKind(entries.map((entry) => entry.path))
+          .then((facts) => {
+            // kind 为 null（stat 不到）时按 file 收下：分拣不给附件添堵；超过复制
+            // 上限的标「未复制」——发送时主进程会按原位置引用，胶囊上明说代价
+            writeFiles(key, (current) =>
+              withStatKinds(
+                current,
+                entries.map((entry, index) => ({
+                  id: entry.id,
+                  kind: facts[index]?.kind ?? "file",
+                  uncopied: (facts[index]?.size ?? 0) > EXTERNAL_FILE_COPY_MAX_BYTES,
+                })),
+              ),
+            );
+          })
+          .catch((cause: unknown) => {
+            // 通道坏了维持 file 入列：发送时主进程的 lstat 纠正仍会给出真实类型
+            console.error("[chat] 附件类型没问到，按文件入列", cause);
+          });
       }
       if (acceptedImages.length === 0) return;
+      // 图的名额在追加时再截一次：两批并发拖进来，各自分拣时都以为还有位子（文件不设名额）
       void Promise.allSettled(acceptedImages.map((file) => readAsPromptImage(file))).then((results) => {
         const read: ComposerImage[] = [];
         const failures: string[] = [];
@@ -1487,7 +1552,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   /**
    * 文件面板「引用到输入卡」：**原位置引用，不复制**——文件本来就在这条会话的
    * 根清单里（工作台 / 工作区 / 附加目录），agent 的 read 一定够得着，复制一份
-   * 只会过期。去重与名额走与拖入同一套分拣（重复引用会点名，不会无声无息）。
+   * 只会过期。去重走与拖入同一套分拣（重复引用会点名，不会无声无息）。
    */
   const attachFileRef = useCallback(
     (ref: { path: string; name: string; kind: "file" | "dir" }) => {
@@ -1515,20 +1580,72 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [draftKey, writeFiles],
   );
 
-  /** 粘贴的一大段文字（Composer 已按阈值拦下）抽成粘贴块。全文在内存里，永不截断 */
-  const addPastedText = useCallback(
-    (text: string) => {
-      writePasted(draftKey, (current) => [
+  /**
+   * 回形针「添加文件夹」：主进程开目录选择器（多选；Windows 不允许与选文件同框，
+   * 所以与「添加文件」分两个入口），选回来的与拖入同一套分拣入列。kind 直接记
+   * dir——选择器只会给出目录，不必再问一遍 stat；origin external（发送时主进程
+   * 不复制目录、按原位置引用，路径仍 realpath 成规范形）。取消选择器是用户的
+   * 正常退出，不报错也不动草稿。
+   */
+  const attachFolderRefs = useCallback(async () => {
+    const key = draftKey;
+    let picked: string[] | null;
+    try {
+      picked = await api.files.pickFolders();
+    } catch (cause: unknown) {
+      console.error("[chat] 文件夹选择器打不开", cause);
+      return;
+    }
+    if (picked === null || picked.length === 0) return;
+    const t = engine.messagesRef.current;
+    const { accepted, rejected } = admitFileRefs(
+      picked.map((path) => ({ path, name: pathTail(path) === "" ? path : pathTail(path) })),
+      fileMap.get(key) ?? [],
+    );
+    engine.setError(fileRefRejectionText(rejected, t));
+    if (accepted.length === 0) return;
+    writeFiles(key, (current) => [
+      ...current,
+      ...accepted.map((item) => ({
+        id: crypto.randomUUID(),
+        name: item.name,
+        path: item.path,
+        kind: "dir" as const,
+        origin: "external" as const,
+      })),
+    ]);
+  }, [draftKey, fileMap, writeFiles, engine]);
+
+  /** 大段粘贴成块（方案 C）。seq 用模块级计数器发——只增不复用：撤销 / 回退还原
+   *  出的 token 永不与后来的块撞号。返回值给 Composer 拼 token 用（同步要） */
+  const addPasteBlock = useCallback(
+    (text: string): number => {
+      const seq = nextPasteSeq();
+      writeBlocks(draftKey, (current) => [
         ...current,
-        { id: crypto.randomUUID(), text, lines: pastedTextSize(text).lines },
+        { id: crypto.randomUUID(), seq, text, lines: pastedTextSize(text).lines, range: null },
       ]);
+      return seq;
     },
-    [draftKey, writePasted],
+    [draftKey, writeBlocks],
   );
 
-  const removePasted = useCallback(
-    (id: string) => writePasted(draftKey, (current) => current.filter((item) => item.id !== id)),
-    [draftKey, writePasted],
+  const expandPaste = useCallback(
+    (seq: number, range: { start: number; end: number }) => {
+      writeBlocks(draftKey, (current) =>
+        current.map((block) => (block.seq === seq ? { ...block, range } : block)),
+      );
+    },
+    [draftKey, writeBlocks],
+  );
+
+  const collapsePaste = useCallback(
+    (seq: number, text: string, lines: number) => {
+      writeBlocks(draftKey, (current) =>
+        current.map((block) => (block.seq === seq ? { ...block, text, lines, range: null } : block)),
+      );
+    },
+    [draftKey, writeBlocks],
   );
 
   /**
@@ -1549,22 +1666,39 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     quotes: readonly TextQuote[];
     images: readonly ComposerImage[];
     files: readonly ComposerFileRef[];
-    pasted: readonly ComposerPastedText[];
+    /** 草稿当时的粘贴块（区间指向 text——快照存的就是那份原文） */
+    pasted: readonly ComposerPasteBlock[];
   }
   const restoreRef = useRef<SentSnapshot | null>(null);
   const restoreSent = useCallback(
     (snap: SentSnapshot) => {
       if (snap.text !== "") {
-        setDrafts((prev) => new Map(prev).set(snap.draftKey, appendWithdrawn(prev.get(snap.draftKey) ?? "", snap.text)));
+        // 回填是把快照原文**接在现草稿末尾**：块的区间随接缝平移（快照的区间都指
+        // 向 snap.text 自己，落在接回后的同一段文字上）
+        setDrafts((prev) => {
+          const current = prev.get(snap.draftKey);
+          const merged = appendWithdrawn(current?.text ?? "", snap.text);
+          const offset = merged.length - snap.text.length;
+          const pasted =
+            snap.pasted.length === 0
+              ? current?.pasted ?? []
+              : (current?.pasted ?? []).concat(
+                  snap.pasted.map((block) =>
+                    block.range === null
+                      ? block
+                      : { ...block, range: { start: block.range.start + offset, end: block.range.end + offset } },
+                  ),
+                );
+          return new Map(prev).set(snap.draftKey, { text: merged, pasted });
+        });
       }
       if (snap.quotes.length > 0) writeQuotes(snap.draftKey, (current) => [...current, ...snap.quotes]);
       if (snap.images.length > 0) {
         writeAttachments(snap.draftKey, (current) => [...current, ...snap.images].slice(0, PROMPT_IMAGE_MAX_COUNT));
       }
       if (snap.files.length > 0) {
-        writeFiles(snap.draftKey, (current) => [...current, ...snap.files].slice(0, PROMPT_FILE_MAX_COUNT));
+        writeFiles(snap.draftKey, (current) => [...current, ...snap.files]);
       }
-      if (snap.pasted.length > 0) writePasted(snap.draftKey, (current) => [...current, ...snap.pasted]);
       // 首页发首条消息时，submitTurn 已把新会话绑成本槽的活会话、输入框换到新会话的
       // 草稿键上——回填写回出发键（home:main）的话界面读的是新键，两头错过（2026-09-27
       // CDP 实测复现：回填执行了、界面还是空的）。这条会话没落任何内容，解绑回首页，
@@ -1574,10 +1708,30 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 若失败落地前用户已在新键上打了字（亚秒级窗口），一并搬回出发键，不丢
       if (snap.fresh && sessionRef.current === snap.sessionId) {
         setDrafts((prev) => {
-          const stray = prev.get(snap.sessionId) ?? "";
+          const stray = prev.get(snap.sessionId);
           const map = new Map(prev);
-          if (stray.trim() !== "") {
-            map.set(snap.draftKey, appendWithdrawn(map.get(snap.draftKey) ?? "", stray));
+          if (stray !== undefined && stray.text.trim() !== "") {
+            const into = map.get(snap.draftKey);
+            const intoText = into?.text ?? "";
+            const merged = appendWithdrawn(intoText, stray.text);
+            // 块的区间指向 stray.text 自己：接缝在 merged 末尾，末端锚定算偏移
+            const offset = merged.length - stray.text.length;
+            map.set(snap.draftKey, {
+              text: merged,
+              pasted: (into?.pasted ?? []).concat(
+                stray.pasted.map((block) =>
+                  block.range === null
+                    ? block
+                    : {
+                        ...block,
+                        range: {
+                          start: block.range.start + offset,
+                          end: block.range.end + offset,
+                        },
+                      },
+                ),
+              ),
+            });
           }
           map.delete(snap.sessionId);
           return map;
@@ -1587,7 +1741,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         setOpened(null);
       }
     },
-    [writeQuotes, writeAttachments, writeFiles, writePasted],
+    [writeQuotes, writeAttachments, writeFiles],
   );
   useEffect(
     () =>
@@ -1602,6 +1756,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           restoreRef.current = null;
           return;
         }
+        // 回合级失败（turn: true）一定出自一轮已经回显过用户消息的轮——快照那条还没回显，
+        // 这条失败就不是它的，而是它前面那一轮的（典型：抢跑打断工具执行中的旧轮）。
+        // 当成「没发出去」回填，已经发出去的话就会回到输入框（2026-09-29 用户稳定复现）
+        if (event.type === "failed" && event.turn === true) return;
         if (event.type === "failed" || (event.type === "phase" && event.phase === "idle")) {
           restoreRef.current = null;
           restoreSent(snap);
@@ -1627,7 +1785,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       workspace: string | null,
       resume: { piSessionFile: string } | null,
       images?: readonly PromptImage[],
-      extras?: { files?: readonly ComposerFileRef[]; pasted?: readonly ComposerPastedText[] },
+      extras?: { files?: readonly ComposerFileRef[] },
     ): Promise<void> => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -1649,7 +1807,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           text,
           ...imagesField(images),
           ...filesField(extras?.files),
-          ...pastedField(extras?.pasted),
           cwd: target,
           workspaceId: workspace,
           resume,
@@ -1676,33 +1833,33 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, model, mode, thinkingLevel, restoreSent],
   );
 
-  const send = useCallback(async (override?: string) => {
-    const own = (override ?? draft).trim();
+  const send = useCallback(async () => {
+    const own = draft.trim();
     const images = attachments.map((item) => item.image);
+    // 有主的粘贴（句中胶囊或展开区间）也算「有内容」——纯粘贴一条也能发
+    const pasteActive =
+      pasted.some((block) => block.range !== null) || parsePasteTokens(own).length > 0;
     if (
       own === "" &&
       images.length === 0 &&
       quotes.length === 0 &&
       files.length === 0 &&
-      pasted.length === 0
+      !pasteActive
     ) {
       return;
     }
-    // override（指令面板的显式动作，如 sendText("/compact")）是另一回事：文本就用
-    // 指令本身，不拼槽里的引用；压缩判定**不设附件门**——面板选中是显式意图，挂着
-    // 附件时把 /compact 降级成普通消息（连附件一起喂给模型）才是错的（wafo 一轮 #4）。
-    // 附件留在输入框不动，压缩完用户自己决定去留。
-    const explicit = override !== undefined;
-    // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）
-    const text = explicit ? own : composeQuotedMessage(quotes, own);
+    // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）。
+    // 句中粘贴胶囊就地组装成 <pasted-text> 块——位置保留（方案 C），展开的区间本就是
+    // 正文。组装后的 text 从这里往下走：排队、投递都以它为准（回填快照另存草稿原文）
+    const raw = composeQuotedMessage(quotes, own);
+    const text = assemblePasteDraft(raw, pasted);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
     // 手工输入时带附件（图 / 文件 / 粘贴块）不认压缩指令：压缩吃不了附件，当命令
     // 拦下会把附件悉数丢掉——按普通消息发。
-    const compact = explicit
-      ? parseCompactCommand(text)
-      : images.length === 0 && quotes.length === 0 && files.length === 0 && pasted.length === 0
+    const compact =
+      images.length === 0 && quotes.length === 0 && files.length === 0 && !pasteActive
         ? parseCompactCommand(text)
         : null;
     if (compact !== null) {
@@ -1767,15 +1924,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           kind: "text",
           text,
           ...imagesField(images),
-          // 队列存 renderer 原生形状（带 id），投递 / 撤回原样交出或退回输入框
+          // 队列存 renderer 原生形状（带 id），投递 / 撤回原样交出或退回输入框。
+          // 粘贴块已内联进 text（token 换块），撤回时 draftFromSentText 拆回来
           ...(files.length > 0 ? { files } : {}),
-          ...(pasted.length > 0 ? { pasted } : {}),
         }),
       );
       setDraft("");
       writeAttachments(draftKey, () => []);
       writeFiles(draftKey, () => []);
-      writePasted(draftKey, () => []);
+      writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
       return;
     }
@@ -1796,6 +1953,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         sessionId: id,
         draftKey,
         fresh: resume === null,
+        // 回填快照存**草稿原文**（带 token / 展开区间）：失败放回输入框要的是
+        // 还原成发送前的样子，不是已组装的消息
         text: draft,
         quotes,
         images: attachments,
@@ -1805,13 +1964,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       writeDraft(draftKey, "");
       writeAttachments(draftKey, () => []);
       writeFiles(draftKey, () => []);
-      writePasted(draftKey, () => []);
+      writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
-      await submitTurn(id, text, target, workspace, resume, images, { files, pasted });
+      await submitTurn(id, text, target, workspace, resume, images, { files });
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writePasted, writeQuotes, submitTurn]);
+  }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -1821,29 +1980,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, []);
 
   /** 回到首页（本槽）。会话在首条消息提交时才真正创建（R8-01 ①）。 */
-  /**
-   * 指令面板 `/new` 用：清空当前槽挂着的引用、附图、文件与粘贴块（草稿由调用方清）。
-   * **必须在 newTask 之前调**——reset 换槽后 draftKey 变了，挂着的就清不到了
-   * （review 挂账项：/new 只清草稿，附件会跟到下一条新消息里）。
-   */
-  const clearComposerExtras = useCallback(() => {
-    const key = draftKey;
-    const dropKey = <T,>(
-      setMap: (updater: (prev: ReadonlyMap<string, T>) => ReadonlyMap<string, T>) => void,
-    ): void => {
-      setMap((prev) => {
-        if (!prev.has(key)) return prev;
-        const next = new Map(prev);
-        next.delete(key);
-        return next;
-      });
-    };
-    dropKey(setQuoteMap);
-    dropKey(setAttachmentMap);
-    dropKey(setFileMap);
-    dropKey(setPastedMap);
-  }, [draftKey]);
-
   const reset = useCallback(() => {
     setSessionId(null);
     sessionRef.current = null;
@@ -2214,15 +2350,32 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       message: string,
       images: readonly PromptImage[] = [],
       files: readonly ComposerFileRef[] = [],
-      pasted: readonly ComposerPastedText[] = [],
     ) => {
-      // 排队项的正文里引用已展开：解析回 chip，只把用户自己的话退回文字框
-      const { quotes: withdrawn, text } = parseQuotedMessage(message);
-      if (text !== "") {
-        setDrafts((prev) =>
-          new Map(prev).set(draftKey, appendWithdrawn(prev.get(draftKey) ?? "", text)),
-        );
-      }
+      // 排队项的正文是已组装的（粘贴块已内联、引用已展开）：先拆粘贴块回句中
+      // 胶囊（位置保留），再解析回引用，只把用户自己的话退回文字框
+      const pasteLang = engine.messagesRef.current.composer.pasteToken;
+      const { draft: textWithTokens, blocks: pastedBack } = draftFromSentText(
+        message,
+        nextPasteSeq,
+        pasteLang,
+      );
+      const { quotes: withdrawn, text } = parseQuotedMessage(textWithTokens);
+      // 文本与粘贴块同拍写回：块的 token 在 text 里，分两拍会有一帧对不上账
+      setDrafts((prev) => {
+        const current = prev.get(draftKey);
+        const merged = appendWithdrawn(current?.text ?? "", text);
+        const restored = pastedBack.map((block) => ({
+          id: crypto.randomUUID(),
+          seq: block.seq,
+          text: block.text,
+          lines: block.lines,
+          range: null,
+        }));
+        return new Map(prev).set(draftKey, {
+          text: merged,
+          pasted: (current?.pasted ?? []).concat(restored),
+        });
+      });
       if (withdrawn.length > 0) writeQuotes(draftKey, (current) => [...current, ...withdrawn]);
       // 附图一起退回输入框（接在已有的后面）——撤回是「这条我要改」，图是这条的一部分。
       // 超出名额的截掉：输入框里多于上限的图发不出去，留着只会让发送卡住
@@ -2234,20 +2387,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           ),
         );
       }
-      // 文件引用与粘贴文本块同退：名额截断与图片同一条纪律
+      // 文件引用同退（文件不设条数上限）
       if (files.length > 0) {
-        writeFiles(draftKey, (current) =>
-          [...current, ...files.map((file) => ({ ...file, id: crypto.randomUUID() }))].slice(0, PROMPT_FILE_MAX_COUNT),
-        );
-      }
-      if (pasted.length > 0) {
-        writePasted(draftKey, (current) => [
-          ...current,
-          ...pasted.map((block) => ({ ...block, id: crypto.randomUUID() })),
-        ]);
+        writeFiles(draftKey, (current) => [...current, ...files.map((file) => ({ ...file, id: crypto.randomUUID() }))]);
       }
     },
-    [draftKey, writeAttachments, writeQuotes, writeFiles, writePasted],
+    [draftKey, engine, writeAttachments, writeQuotes, writeFiles],
   );
 
   // ————————————————— 会话回退 / 单轮撤销（revert.ts） —————————————————
@@ -2313,18 +2458,19 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         setRevertDialog(null);
         engine.refreshSessions();
         void reloadSession(sessionId);
-        // 原文放回输入框：拆回正文 / 引用 / 粘贴块 / 文件引用 / 附图（restoreToDraft
-        // 的同一条纪律——发出去的块解析回 chip，输入框不留裸 XML；/skill: 指令块
-        // 剥掉，回到输入框的必须是用户自己当时打的那句）
+        // 原文放回输入框：拆回正文 / 引用 / 粘贴块 / 文件引用 / 附图。粘贴块按
+        // **块序**拆回句中胶囊——位置即发送时的位置（draftFromSentBlocks）；
+        // /skill: 指令块剥掉，回到输入框的必须是用户自己当时打的那句
         const texts = message.content
           .filter((block) => block.type === "text")
           .map((block) => (block.type === "text" ? block.text : ""));
+        const back = draftFromSentBlocks(texts, nextPasteSeq, engine.messagesRef.current.composer.pasteToken);
         const split = splitUserTextBlocks(texts);
         const images = message.content
           .filter((block): block is Extract<typeof block, { type: "image" }> => block.type === "image")
           .map((block) => ({ type: "image" as const, data: block.data, mimeType: block.mimeType }));
         restoreToDraft(
-          stripInvocationBlock(split.body),
+          stripInvocationBlock(back.draft),
           images,
           split.files.map((file) => ({
             id: crypto.randomUUID(),
@@ -2333,18 +2479,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
             kind: file.kind,
             origin: "workspace" as const,
           })),
-          split.pasted.map((content) => {
-            const size = pastedTextSize(content);
-            return { id: crypto.randomUUID(), text: content, lines: size.lines };
-          }),
         );
+        if (back.pasted.length > 0) {
+          writeBlocks(draftKey, (current) => [
+            ...current,
+            ...back.pasted.map((block) => ({ id: crypto.randomUUID(), ...block, range: null })),
+          ]);
+        }
+
       })
       .catch((cause: unknown) => {
         // 失败留在框里（计划还有效），错误亮出来
         engine.setError(ipcErrorText(cause));
       })
       .finally(() => setRevertBusy(false));
-  }, [revertDialog, revertBusy, engine, reloadSession, restoreToDraft]);
+  }, [revertDialog, revertBusy, engine, reloadSession, restoreToDraft, draftKey, writeBlocks]);
 
   const cancelRevert = useCallback((): void => {
     if (revertBusy) return;
@@ -2402,7 +2551,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 塞进输入框只会变成一条普通消息。它的撤回就是单纯取消。
       // channel 项同样不进草稿（子会话 PR4a）：它不是用户自己的话，是子会话
       // 发来的消息——撤回只是不再投给父模型，消息仍在通道账本里，不提供编辑。
-      if (item.kind === "text") restoreToDraft(item.text, item.images, item.files, item.pasted);
+      if (item.kind === "text") restoreToDraft(item.text, item.images, item.files);
     },
     [engine, restoreToDraft],
   );
@@ -2462,17 +2611,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
             })
           : item.text;
       const images = imagesField(item.kind === "text" ? item.images : undefined);
-      const extras =
-        item.kind === "text"
-          ? { ...filesField(item.files), ...pastedField(item.pasted) }
-          : {};
+      const extras = item.kind === "text" ? { ...filesField(item.files) } : {};
       // 留回填快照（wafo 二轮：出队后失败即丢——9e2d7e5 的回填没覆盖这条路径）：
       // 已从队列删掉，失败时 nowhere 可归，只有快照能把内容放回输入框。排队时引用
       // 已展开进 text，这里解析回净文与 chip（撤回 restoreToDraft 同纪律），输入框
       // 不留裸 XML；compact/channel 分支不建——压缩无内容可丢，channel 的正文在
       // 通道账本里丢不了。
       if (item.kind === "text") {
-        const { quotes: queuedQuotes, text: queuedText } = parseQuotedMessage(item.text);
+        // 排队的 text 里粘贴块已内联：拆回 token 与块，快照还原成发送前的草稿样子
+        const tokenized = draftFromSentText(item.text, nextPasteSeq, engine.messagesRef.current.composer.pasteToken);
+        const { quotes: queuedQuotes, text: queuedText } = parseQuotedMessage(tokenized.draft);
         restoreRef.current = {
           sessionId: id,
           draftKey,
@@ -2482,7 +2630,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           // PromptImage → ComposerImage 与撤回同款转换（排队时名字已丢，name 空串是既有先例）
           images: (item.images ?? []).map((image) => ({ id: crypto.randomUUID(), name: "", image })),
           files: item.files ?? [],
-          pasted: item.pasted ?? [],
+          pasted: tokenized.blocks.map((block) => ({
+            id: crypto.randomUUID(),
+            seq: block.seq,
+            text: block.text,
+            lines: block.lines,
+            range: null,
+          })),
         };
       }
       if (entry.phase === "idle") {
@@ -2815,18 +2969,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     stats: entry.stats,
     phaseOf: engine.phaseOf,
     turnErrorOf: engine.turnErrorOf,
+    approvalsOf: engine.approvalsOf,
     error: engine.error,
     draft,
     setDraft,
     attachments,
     attachIncoming,
     removeAttachment,
+    attachFolderRefs,
     files,
     attachFileRef,
     removeFile,
     pasted,
-    addPastedText,
-    removePasted,
+    addPasteBlock,
+    expandPaste,
+    collapsePaste,
     quotes,
     addQuote,
     removeQuote,
@@ -2896,9 +3053,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     confirmUndo,
     cancelUndo,
     send: () => void send(),
-    /** 指令面板的立即执行路径：/compact 之类不经草稿（草稿里是用户打了一半的字） */
-    sendText: (text: string) => void send(text),
-    clearComposerExtras,
     stop,
     queued: entry.queued,
     sendQueuedNow,

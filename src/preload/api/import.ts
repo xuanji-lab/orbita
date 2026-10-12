@@ -5,6 +5,8 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
+  ImportCustomRoot,
+  ImportCustomRootInput,
   ImportDetectResult,
   ImportGreetingCheckInput,
   ImportGreetingCheckResult,
@@ -27,4 +29,15 @@ export const importApi = {
    */
   checkGreetings: (input: ImportGreetingCheckInput): Promise<ImportGreetingCheckResult> =>
     ipcRenderer.invoke(ipcChannels.importCheckGreetings, input),
+  /**
+   * 自定义来源路径：把用户手动指定的目录经该来源 validate 后加进扫描清单。失败以稳定
+   * 错误码 IMPORT_CUSTOM_ROOT_INVALID:* reject；成功返回更新后的清单
+   */
+  addCustomRoot: (input: ImportCustomRootInput): Promise<ImportCustomRoot[]> =>
+    ipcRenderer.invoke(ipcChannels.importCustomRootsAdd, input),
+  /** 移除一条自定义路径；目录本身永不被碰。返回更新后的清单 */
+  removeCustomRoot: (input: ImportCustomRootInput): Promise<ImportCustomRoot[]> =>
+    ipcRenderer.invoke(ipcChannels.importCustomRootsRemove, input),
+  /** 目录选择框（主进程开）：选中返回绝对路径，取消返回 null */
+  pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(ipcChannels.importPickDirectory),
 };

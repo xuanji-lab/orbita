@@ -1,8 +1,10 @@
 /**
- * 右栏 Sub-sessions 面板（子会话 PR4c）：主槽正看着一条有子会话的根会话时，这里
- * 是它们的入口——列表层（全部子会话，按 2.1 的规则排序）与会话层（挑中的那条，
- * 只读查看 + 审批，不给输入框）。两层状态机在 `sub-sessions-state.ts`（纯函数，
- * App 持有，本组件受控渲染）；排序/状态推导在 `sub-sessions-rows.ts`。
+ * 右栏 Sub-sessions 面板（子会话 PR4c；2026-10-12 起列表层是**收件箱**）：主槽
+ * 正看着一条有子会话的根会话时，这里是它们的唯一面板位——列表层（每个子会话
+ * 一行：三节竖条 + 名字 + 最新一句 + 相对时间；「在问你」的行展开回答框）与
+ * 会话层（挑中的那条，只读查看 + 审批，不给输入框）。两层状态机在
+ * `sub-sessions-state.ts`（纯函数，App 持有，本组件受控渲染）；排序 / 状态 /
+ * 最新一句的推导在 `sub-sessions-rows.ts`。
  *
  * 会话层不用 `RightPanelFrame`——那会在 `ChatView` 自己的 `Pane` 头之上再叠一层
  * 标题栏，两条标题挤在一起（`Pane` 已经画标题/改名/完成入口）。照辅助对话抽屉的
@@ -11,19 +13,25 @@
  * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
  * （自带标题头 + transcript + 审批条，`hideComposer` 关掉输入框与排队条）。
  */
-import { useCallback, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
-import { PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
+import { isSubmitKey } from "../../shell/composer-keys.ts";
+import { composerBoxHeight } from "../../shell/composer-height.ts";
+import { relativeTime } from "../../shell/relative-time.ts";
+import { PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { api } from "../../api";
 import { ModelPickerMenu } from "../settings/model-menu";
 import { useChannelSummaries } from "./useChannelSummaries";
+import { useParentChannels } from "./useChannelMessages";
 import {
+  latestChannelLine,
   sortSubSessionRows,
+  subSessionBarFill,
   subSessionStatusOf,
   type SubSessionRowStatus,
 } from "./sub-sessions-rows";
@@ -70,12 +78,6 @@ export function SubSessionsPanel(props: {
   onBackToList: () => void;
   /** 「Open as main」：主槽换看这条子会话，面板关闭 */
   onOpenAsMain: (childId: string) => void;
-  /**
-   * 子会话工作记录里点标记 → 打开父子会话面板定位到那条消息（App 的 openChannel：
-   * 够宽开内联列，不够宽换进右栏槽——那时就替换掉本面板）
-   */
-  onOpenChannel: (childId: string, messageId: string | null) => void;
-  onClose: () => void;
   providersError: string | null;
   /** 模型星标（AppSettings.starredModels）与开关：会话层的模型卡片与输入卡同一张，星标也同一份 */
   starredModels: readonly ModelPair[];
@@ -84,16 +86,9 @@ export function SubSessionsPanel(props: {
   const t = useT();
   const children = childSessions(props.session.sessions, props.parentId);
   const summaries = useChannelSummaries(props.parentId);
-  // 稳定引用：ChatView 把它折进 memo 过的通道上下文，每次渲染新建一个函数会打穿
-  // TranscriptColumn 的 memo，子会话流式输出时整列逐帧重渲染。hook 放在分支之前
-  const sessionChildId = props.nav.kind === "session" ? props.nav.sessionId : null;
-  const { onOpenChannel } = props;
-  const openOwnChannel = useCallback(
-    (messageId: string | null) => {
-      if (sessionChildId !== null) onOpenChannel(sessionChildId, messageId);
-    },
-    [onOpenChannel, sessionChildId],
-  );
+  // 通道全文（收件箱行的最新一句）：hook 必须在两层分支之前——列表层用它，会话层
+  // 不用也不能少这一条（hook 数量不能随层切换变，同 ChatView 首页分支的纪律）
+  const channels = useParentChannels(props.parentId, children.map((meta) => meta.id));
 
   if (props.nav.kind === "session") {
     const childId = props.nav.sessionId;
@@ -108,9 +103,10 @@ export function SubSessionsPanel(props: {
             alignItems: "center",
             gap: "var(--space-2)",
             minWidth: 0,
-            height: 30,
-            padding: "12px 14px",
-            boxSizing: "content-box",
+            // 页头 48（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线连成一条
+            height: 48,
+            padding: "0 14px",
+            boxSizing: "border-box",
             borderBottom: "1px solid var(--color-border-subtle)",
           }}
         >
@@ -155,9 +151,6 @@ export function SubSessionsPanel(props: {
           >
             {t.subSessions.openAsMain}
           </button>
-          <PanelIconButton title={t.common.close} onClick={props.onClose}>
-            <Icon name="x" size={16} />
-          </PanelIconButton>
         </div>
         {/* 用户对子会话的控制行（用户裁决：mode / 模型 / 终止都归用户，不归父模型）。
             key 按子会话 id：换一条就把确认步 / 错误行复位 */}
@@ -173,14 +166,12 @@ export function SubSessionsPanel(props: {
           />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
-          {/* 只读查看 + 审批：不给输入框（hideComposer），不传 onOpenSubSession(s)/onOpenParent——
-              「UI 只做一层」，面板里查看的子会话不再嵌一层它自己的子会话入口。标记可点
-              （onOpenOwnChannel）不违背这条：打开的是母会话那一个父子会话面板，不是新的一层 */}
+          {/* 只读查看 + 审批：不给输入框（hideComposer）。「UI 只做一层」：面板里
+              查看的子会话不再嵌一层它自己的子会话入口 */}
           <ChatView
             session={props.view}
             providersError={props.providersError}
             hideComposer
-            onOpenOwnChannel={openOwnChannel}
             scrollToEnd
           />
         </div>
@@ -195,48 +186,189 @@ export function SubSessionsPanel(props: {
     );
   }
 
-  // 列表层：waiting 最前，其次 needs approval，其次 running，其余按派出顺序（sub-sessions-rows.ts）。
-  // 状态与通道卡同源（subSessionStatusOf）——两处必须画出同一个状态
+  // 列表层 = 收件箱（2026-10-12 用户裁决）：每个子会话一行——等你（question / 审批）
+  // 最前，其次 failed、done、running，同组新的在前（sub-sessions-rows.ts）。
+  // 最新一句来自通道账本（useParentChannels，上面已拉）。
   const rows = sortSubSessionRows(
-    children.map((meta) => ({
-      meta,
-      status: subSessionStatusOf(meta.id, summaries.get(meta.id)?.status, props.engine),
-    })),
+    children.map((meta) => {
+      const status = subSessionStatusOf(meta.id, summaries.get(meta.id)?.status, props.engine);
+      const messages = channels.get(meta.id);
+      const last = messages?.[messages.length - 1];
+      const lastAt = last !== undefined ? last.createdAt : meta.createdAt;
+      return { meta, status, lastAt, messages };
+    }),
   );
+  const waitingCount = rows.filter((row) => row.status === "waiting" || row.status === "approval").length;
 
   return (
     <RightPanelFrame
       header={
         <>
-          <Icon name="git-fork" size={16} style={{ color: "var(--color-text-secondary)" }} />
-          <strong
-            title={t.subSessions.of(props.parentTitle)}
-            style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}
-          >
-            {t.rail.subSessions(children.length)}
-          </strong>
+          <PanelTitle icon="git-fork" title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
+          {waitingCount > 0 && (
+            <span className="inbox-waiting-count" style={{ color: "var(--color-warning)" }}>
+              {t.subSessions.waitingCount(waitingCount)}
+            </span>
+          )}
         </>
       }
       contentKey="list"
-      onClose={props.onClose}
     >
       {rows.length === 0 ? (
         <div style={{ padding: "var(--space-3)" }}>
           <PanelLine>{t.subSessions.none}</PanelLine>
         </div>
       ) : (
-        <div style={{ display: "grid", padding: "var(--space-2) 0" }}>
+        <div className="inbox-rows">
           {rows.map((row) => (
             <SubSessionRow
               key={row.meta.id}
               meta={row.meta}
               status={row.status}
+              latest={latestChannelLine(row.messages, row.status, t)}
+              lastAt={row.lastAt}
+              asking={row.status === "waiting"}
               onClick={() => props.onOpenChild(row.meta.id)}
             />
           ))}
+          <p className="inbox-foot">{t.subSessions.inboxFoot}</p>
         </div>
       )}
     </RightPanelFrame>
+  );
+}
+
+/**
+ * 收件箱的一行（2026-10-12）：行首三节竖条（与侧栏 / 铃铛清单同一根 `.status-bar`，
+ * `subSessionBarFill` 定亮几节）+ 名字 + 最新一句 + 相对时间（行尾，钉在行的右内
+ * 边距上）。**只有「在问你」的行展开回答框**（ChannelReplyBox）——其余行单行收着，
+ * 点击进会话层看完整往来。行按钮与回答框是兄弟（button 不能嵌 button），整行 hover
+ * 由外层 `.inbox-row` 统一画。
+ */
+function SubSessionRow(props: {
+  meta: SessionMeta;
+  status: SubSessionRowStatus;
+  latest: string;
+  lastAt: number;
+  /** waiting：行下展开「回答它」输入框（代父回信，同一个 send 路径） */
+  asking: boolean;
+  onClick: () => void;
+}) {
+  const t = useT();
+  const status = props.status;
+  const bar = subSessionBarFill(status);
+  return (
+    <div className={`inbox-row${props.asking ? " asking" : ""}`}>
+      <button type="button" className="inbox-row-main" onClick={props.onClick}>
+        {bar !== undefined && (
+          <span className="status-bar inbox-row-bar" data-fill={bar} title={t.subSessions.rowStatus[status]}>
+            <i />
+            <i />
+            <i />
+          </span>
+        )}
+        <span className="inbox-row-item">
+          <span className="inbox-row-l1">
+            <b className="inbox-row-title">{props.meta.title === "" ? t.subSessions.untitled : props.meta.title}</b>
+            <span className="inbox-row-ago row-trailing">{relativeTime(props.lastAt, t)}</span>
+          </span>
+          <span className="inbox-row-l2">{props.latest}</span>
+        </span>
+      </button>
+      {props.asking && <ChannelReplyBox parentId={props.meta.parentId ?? ""} childId={props.meta.id} />}
+    </div>
+  );
+}
+
+/**
+ * 「在问你」的行下展开的回答框：发送走 channel:speak（代父回信的既有路径，
+ * author=user 的 reply），delivery 固定 steer——等回答的子会话是空闲的，steer
+ * 本就退化为普通开轮；往它正在跑的那一轮里插话的场景留给父模型的 reply_subsession。
+ * 原 ChannelColumn 的 composer（随面板删除）搬来：按内容定高（1–6 行）、Enter 发送
+ * Shift+Enter 换行、失败就地亮错不吞。
+ */
+function ChannelReplyBox(props: { parentId: string; childId: string }) {
+  const t = useT();
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // 按内容定高（1–6 行，composerBoxHeight 同一套口径）：面板宽度稳定，只听文字
+  const fitHeight = useCallback(() => {
+    const el = textareaRef.current;
+    if (el === null) return;
+    el.style.height = "auto";
+    const computed = getComputedStyle(el);
+    const lineHeight = Number.parseFloat(computed.lineHeight);
+    const padding = Number.parseFloat(computed.paddingTop) + Number.parseFloat(computed.paddingBottom);
+    const { height, scrollable } = composerBoxHeight(
+      el.scrollHeight,
+      Number.isFinite(lineHeight) ? lineHeight : 18,
+      Number.isFinite(padding) ? padding : 0,
+      1,
+      6,
+    );
+    el.style.height = `${height}px`;
+    el.style.overflowY = scrollable ? "auto" : "hidden";
+  }, []);
+  useLayoutEffect(fitHeight, [text, fitHeight]);
+
+  const send = (): void => {
+    const value = text.trim();
+    if (value === "" || sending) return;
+    setSending(true);
+    setError(null);
+    void api.channel
+      .speak({ parentId: props.parentId, childId: props.childId, text: value, delivery: "steer" })
+      .then(() => setText(""))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setSending(false));
+  };
+
+  return (
+    <div className="channel-reply-box">
+      {error !== null && (
+        <p role="alert" className="channel-reply-error">
+          {error}
+        </p>
+      )}
+      <div className="channel-reply-row">
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          className="channel-reply-input"
+          placeholder={t.channel.answerIt}
+          value={text}
+          disabled={sending}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (
+              !isSubmitKey({
+                key: event.key,
+                shiftKey: event.shiftKey,
+                isComposing: event.nativeEvent.isComposing,
+                keyCode: event.keyCode,
+              })
+            ) {
+              return;
+            }
+            event.preventDefault();
+            send();
+          }}
+        />
+        <button
+          type="button"
+          className="channel-reply-send"
+          aria-label={t.composer.send}
+          title={t.composer.send}
+          disabled={sending || text.trim() === ""}
+          onClick={send}
+        >
+          <Icon name="arrow-up" size={14} />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -386,69 +518,5 @@ function SubSessionControls(props: {
         />
       </span>
     </div>
-  );
-}
-
-function SubSessionRow(props: { meta: SessionMeta; status: SubSessionRowStatus; onClick: () => void }) {
-  const t = useT();
-  const status = props.status;
-  return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      className="sub-session-row"
-      style={{
-        display: "grid",
-        gap: 2,
-        width: "100%",
-        padding: "var(--space-2) var(--space-4)",
-        border: 0,
-        font: "inherit",
-        textAlign: "left",
-        cursor: "pointer",
-      }}
-    >
-      <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
-        <Icon
-          name={STATUS_ICON[status]}
-          size={13}
-          strokeWidth={1.8}
-          spin={status === "running"}
-          style={{ flex: "0 0 auto", color: STATUS_COLOR[status] }}
-        />
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontSize: "var(--font-size-control)",
-            color: "var(--color-text-primary)",
-          }}
-        >
-          {props.meta.title === "" ? t.subSessions.untitled : props.meta.title}
-        </span>
-        <span
-          style={{
-            flex: "0 0 auto",
-            fontSize: "var(--font-size-caption)",
-            color: STATUS_COLOR[status],
-          }}
-        >
-          {t.subSessions.rowStatus[status]}
-        </span>
-      </span>
-      <span
-        style={{
-          paddingInlineStart: 21,
-          fontFamily: "var(--font-family-mono)",
-          fontSize: "var(--font-size-micro)",
-          color: "var(--color-text-tertiary)",
-        }}
-      >
-        {props.meta.modelId}
-      </span>
-    </button>
   );
 }

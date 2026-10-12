@@ -99,6 +99,25 @@ export function isSkillSlug(value: string): boolean {
 }
 
 /**
+ * 这条 skill 对归属为 `workspaceId` 的会话是否可用：global 链对所有会话生效
+ * （含无工作区的会话）；否则要看它链没链在这个工作区上。断链（missing）一律不可用。
+ *
+ * **发送端（主进程组装指令块）与右栏选取模式共用这一份**——选取模式认的，
+ * 发送时必然认；两边各写一遍就会走出「面板里选得到、发出去却被告知不存在」
+ * 的分叉（2026-10-04 用户报的正是这个：面板列了别的工作区的 skill）。
+ * 归属的真源是 `skill-links/` 的链接表（`global` / `workspaces` 都是扫出来的）。
+ */
+export function isSkillAvailable(
+  meta: { missing: boolean; global: boolean; workspaces: readonly string[] },
+  workspaceId: string | null,
+): boolean {
+  return (
+    !meta.missing &&
+    (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId)))
+  );
+}
+
+/**
  * `/skill:` 点名的 target 匹配：先按 slug（面板插入的形态、文件系统安全字符集），
  * 再按 frontmatter 名。可用性过滤（missing / global / workspace）由调用方先做，
  * 这里只管名字。找不到返回 null。主进程拿它把 target 解析成 SKILL.md 绝对路径，

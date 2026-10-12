@@ -56,7 +56,7 @@ function devServerPort(raw: string | undefined): number {
 
 /**
  * electron-vite 三段构建：main / preload / renderer。
- * renderer 直接 @import 仓库根的「Orbita Design System」——设计系统是 UI 真源，
+ * renderer 直接 @import 仓库根的 design-system/——设计系统是 UI 真源，
  * 不复制一份到 src 下，避免 token 漂移（AGENTS.md「设计系统」一节）。
  * 该目录在 renderer root 之外，故显式放行 fs 访问。
  */
@@ -68,6 +68,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, "src/main/index.ts"),
           "agent-runtime": resolve(__dirname, "src/agent/runtime.ts"),
+          "terminal-runtime": resolve(__dirname, "src/terminal/runtime.ts"),
         },
         /**
          * @napi-rs/canvas（read_pdf 页图渲染）保持 external：它的入口是一串平台包
@@ -77,8 +78,12 @@ export default defineConfig({
          * `"families" in GlobalFonts`）。external 后 require 原样保留，从项目
          * node_modules 解析——与 photon 的 wasm 资产拷贝是两种病：wasm 是文件
          * 丢了可以拷，.node 是原生模块必须留在原地 require。正则覆盖平台子包。
+         *
+         * node-pty（terminal runtime 的 PTY）同理：.node 预构建 + ConPTY 的
+         * conpty.dll / OpenConsole.exe 靠 __dirname 定位，打进 bundle 必断。
+         * N-API 预构建跨 Electron ABI，不需要 electron-rebuild。
          */
-        external: [/^@napi-rs\/canvas/],
+        external: [/^@napi-rs\/canvas/, /^node-pty$/],
         output: { entryFileNames: "[name].js" },
       },
     },
@@ -116,7 +121,7 @@ export default defineConfig({
        * `strictPort` 让冲突当场失败。脚本里也一律用 `127.0.0.1:5273`，
        * 不用 `localhost`——把解析这一层的歧义整个去掉。
        *
-       * 端口可由 `ORBITA_DEV_PORT` 覆盖（`bun run dev:isolated` 用 5274）：第二个 dev 实例
+       * 端口可由 `ORBITA_DEV_PORT` 覆盖：第二个 dev 实例
        * 以前只能临时改这一行、再记得别提交。覆盖只换号，host 与 strictPort 不变——
        * 撞了照样当场失败。
        */

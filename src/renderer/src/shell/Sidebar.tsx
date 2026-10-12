@@ -4,23 +4,33 @@ import { IconButton } from "./IconButton";
 import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
+import { UsageMeter } from "./UsageMeter";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from "@shared/settings";
+import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, type UsagePetPref } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
+import { runStateLabel, sessionRunState } from "../features/notify/completion-notice.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
+import { useExperimentalFeature } from "../experimental.ts";
 import {
-  SESSIONS_PREVIEW_LIMIT,
+  effectiveSidebarFilters,
+  type StatusFilter,
+} from "./sidebar-filters.ts";
+import {
   TASKS_FOLD_KEY,
   foldKeyForWorkspace,
+  groupVisibleLimit,
+  isGroupFolded,
+  nextPageSize,
+  showLessInGroup,
+  showMoreInGroup,
   toggleGroupFold,
-  toggleGroupFull,
   unfoldGroup,
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
@@ -41,9 +51,6 @@ const COLLAPSE_BREAKPOINT = 960;
 const IDLE_SUGGEST_DAYS = 7;
 const IDLE_SUGGEST_MS = IDLE_SUGGEST_DAYS * 24 * 60 * 60 * 1000;
 
-/** 完成状态筛选的单选组三档：全部 / 进行中 / 已完成（Starred 是叠加开关，正交） */
-type StatusFilter = "all" | "active" | "done";
-
 /**
  * 会话的未办遗留数（角标、Has todos 筛选共一口径）：按 sourceSessionId 现算。
  * 抽出来是因为两个消费者（行内角标 / 筛选管线）用同一个「还有几件没办」的判定，
@@ -51,6 +58,14 @@ type StatusFilter = "all" | "active" | "done";
  */
 function openTodoCount(carryovers: readonly Carryover[], sessionId: string): number {
   return carryovers.filter((item) => item.sourceSessionId === sessionId && item.status === "open").length;
+}
+
+/**
+ * 三节竖条的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与铃铛清单
+ * 同一套句子）。包一层是让调用点读起来像个本地词。
+ */
+function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages): string {
+  return runStateLabel(state, t);
 }
 
 /**
@@ -128,11 +143,19 @@ export function Sidebar(props: {
   onShowCarryovers: (next: boolean) => void;
   /** 当前宽度（px）。拖动中由调用方只改本地 state，松手才落 settings */
   width: number;
+  /** 未读（后台完成没看过的）会话 id 集：工作区组与 TASKS 行画未读点 */
+  unread: ReadonlySet<string>;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
+  /** 左下角星云的摆放偏好（settings.usagePet）与改它的回调 */
+  usagePet: UsagePetPref | undefined;
+  onUsagePetChange: (next: UsagePetPref) => void;
 }) {
   const t = useT();
   const { session } = props;
+  // 会话生命周期开关：关着时三件套（完成 / 收尾扫描 / 星标）的入口不渲染——
+  // 筛选行五个 chip 全是它们的入口或依赖 done 概念，整行不渲染
+  const lifecycle = useExperimentalFeature("session-lifecycle");
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
@@ -199,8 +222,8 @@ export function Sidebar(props: {
    * `sidebar-fold.ts`；同样**不持久化**，理由同上——列表每次启动从盘上重读。
    */
   const [groups, setGroups] = useState<SidebarGroupState>({
-    folds: new Set<string>(),
-    full: new Set<string>(),
+    overrides: new Set<string>(),
+    pages: new Map<string, number>(),
   });
   useEffect(() => {
     const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
@@ -209,9 +232,27 @@ export function Sidebar(props: {
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
+  /**
+   * 任意会话在跑（含后台与子会话）：用量格的星云碎片 3 倍速——「今在干活」
+   * 是全应用的状态，不是当前会话的。phaseOf 读引擎的同步镜像；每次 phase
+   * 事件都会把 App 重渲染、侧栏跟着拿到新鲜值。**不套 useMemo**：列表引用
+   * 在轮内不变，memo 会把「开跑」那一拍漏掉（idle 后的重拉才换引用）。
+   */
+  const anyRunning = session.sessions.some((meta) => session.phaseOf(meta.id) !== "idle");
+
   const width = props.width;
   /** 高亮哪一条：盖着别的面时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.overlay !== null ? null : (session.sessionId ?? session.opened?.id ?? null);
+  /**
+   * 打开的会话落在收着的工作区组里（工作区默认折叠：从首页卡片 / 引用跳转等入口打开时
+   * 常见），就把那组展开——不然左栏没有一行是高亮的，用户看不出自己在哪。
+   * 只在打开的会话（或它的归属）变的时候展开一次：之后用户再把它折上，尊重用户。
+   */
+  const openWorkspaceId = session.sessions.find((m) => m.id === openId)?.workspaceId ?? null;
+  useEffect(() => {
+    if (openWorkspaceId === null) return;
+    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(openWorkspaceId)));
+  }, [openId, openWorkspaceId]);
 
   /**
    * 新建任务顺带退出设置页（wafo 2026-09-03：此前停在 Settings 里点 New Task
@@ -246,13 +287,21 @@ export function Sidebar(props: {
    * 主列表的筛选管线（筛选区 chips）。状态（All/Active/Done，单选组）、星标与
    * Has todos（两个叠加开关）三条正交条件串在同一个 filter 里。**只作用于主浏览
    * 列表**——Archived / Carryovers 是存储与事项视图，不受（也不该隐形地受）筛选。
+   * 有效值过 effectiveSidebarFilters：会话生命周期开关关闭时恒为 null（筛选行不渲染、
+   * 残留的本地状态不再过滤），见 sidebar-filters.ts。
    */
-  const filtered = statusFilter !== "all" || starredOnly || hasTodosOnly;
+  const filters = effectiveSidebarFilters(lifecycle, {
+    status: statusFilter,
+    starredOnly,
+    hasTodosOnly,
+  });
+  const filtered = filters !== null;
   const scoped = live.filter((m) => {
-    if (statusFilter === "active" && isSessionDone(m)) return false;
-    if (statusFilter === "done" && !isSessionDone(m)) return false;
-    if (starredOnly && m.starred !== true) return false;
-    if (hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
+    if (filters === null) return true;
+    if (filters.status === "active" && isSessionDone(m)) return false;
+    if (filters.status === "done" && !isSessionDone(m)) return false;
+    if (filters.starredOnly && m.starred !== true) return false;
+    if (filters.hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
     return true;
   });
   const loose = scoped.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
@@ -260,10 +309,9 @@ export function Sidebar(props: {
   const workspaceMatches = filtered
     ? session.workspaces.filter((workspace) => scoped.some((m) => m.workspaceId === workspace.id))
     : session.workspaces;
-  const tasksFolded = groups.folds.has(TASKS_FOLD_KEY);
+  const tasksFolded = isGroupFolded(groups, TASKS_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
-  const tasksFull = groups.full.has(TASKS_FOLD_KEY);
-  const looseVisible = tasksFull ? loose : loose.slice(0, SESSIONS_PREVIEW_LIMIT);
+  const looseVisible = visibleWithOpen(loose, groupVisibleLimit(groups, TASKS_FOLD_KEY), openId);
   const open = (id: string) => {
     props.onOverlay(null);
     session.openSession(id);
@@ -426,9 +474,11 @@ export function Sidebar(props: {
         筛选区：会话浏览的过滤 chips。状态是单选组（All / Active / Done 互斥，
         点一个顶掉另一个），Starred 是叠加开关——两者正交，可组合出
         「进行中且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
-        筛选无从谈起，不摆。
+        筛选无从谈起，不摆。会话生命周期开关关闭时整行不渲染：五个 chip 全部属于
+        会话生命周期那批功能（Done / Starred / Has todos 是直接入口，Active
+        依赖 done 概念，All 单独存在没有意义），见 sidebar-filters.ts。
       */}
-      {live.length > 0 && !settingsOpen && !props.showArchived && !props.showCarryovers && (
+      {live.length > 0 && lifecycle && !settingsOpen && !props.showArchived && !props.showCarryovers && (
         <div
           ref={filterRowRef}
           style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
@@ -655,17 +705,20 @@ export function Sidebar(props: {
                       sessions={scoped.filter((m) => m.workspaceId === workspace.id)}
                       session={session}
                       openId={openId}
-                      folded={groups.folds.has(foldKeyForWorkspace(workspace.id))}
+                      unread={props.unread}
+                      folded={isGroupFolded(groups, foldKeyForWorkspace(workspace.id))}
                       onToggleFold={() =>
                         setGroups((current) =>
                           toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
                         )
                       }
-                      full={groups.full.has(foldKeyForWorkspace(workspace.id))}
-                      onToggleFull={() =>
-                        setGroups((current) =>
-                          toggleGroupFull(current, foldKeyForWorkspace(workspace.id)),
-                        )
+                      limit={groupVisibleLimit(groups, foldKeyForWorkspace(workspace.id))}
+                      expanded={groups.pages.has(foldKeyForWorkspace(workspace.id))}
+                      onMore={() =>
+                        setGroups((current) => showMoreInGroup(current, foldKeyForWorkspace(workspace.id)))
+                      }
+                      onLess={() =>
+                        setGroups((current) => showLessInGroup(current, foldKeyForWorkspace(workspace.id)))
                       }
                       onNewTask={() => {
                         // 新任务落进这个组——先展开，不能让会话落进一个收着的组里无声无息
@@ -724,15 +777,13 @@ export function Sidebar(props: {
                         onClick={() => open(meta.id)}
                       />
                     ))}
-                    {loose.length > SESSIONS_PREVIEW_LIMIT && (
-                      <ShowAllRow
-                        full={tasksFull}
-                        hidden={loose.length - SESSIONS_PREVIEW_LIMIT}
-                        onClick={() =>
-                          setGroups((current) => toggleGroupFull(current, TASKS_FOLD_KEY))
-                        }
-                      />
-                    )}
+                    <ShowMoreRow
+                      hidden={loose.length - looseVisible.length}
+                      next={nextPageSize(TASKS_FOLD_KEY, loose.length - looseVisible.length)}
+                      expanded={groups.pages.has(TASKS_FOLD_KEY)}
+                      onMore={() => setGroups((current) => showMoreInGroup(current, TASKS_FOLD_KEY))}
+                      onLess={() => setGroups((current) => showLessInGroup(current, TASKS_FOLD_KEY))}
+                    />
                   </>
                 )}
               </div>
@@ -740,6 +791,13 @@ export function Sidebar(props: {
           </>
         )}
       </div>
+
+      {/**
+       * 左下角的 7 天 token 用量格 + 星云能量体：常驻（不是实验功能），
+       * 宽度钉在 216px（SIDEBAR_WIDTH_MIN 的内容宽），侧栏拖宽时保持左对齐。
+       * 折叠态（48px 图标条）不渲染——那里放不下 7 格。
+       */}
+      <UsageMeter running={anyRunning} pet={props.usagePet} onPetChange={props.onUsagePetChange} />
     </aside>
     {/*
       拖宽热区：侧栏与对话面之间那道缝里的 6px，紧贴面的左缘。
@@ -782,10 +840,15 @@ function WorkspaceGroup(props: {
   sessions: SessionMeta[];
   session: ChatSession;
   openId: string | null;
+  /** 未读（后台完成没看过的）会话 id 集：行首画未读点 */
+  unread: ReadonlySet<string>;
   folded: boolean;
   onToggleFold: () => void;
-  full: boolean;
-  onToggleFull: () => void;
+  /** 眼下最多列几条（groupVisibleLimit）；expanded = 点过 Show more */
+  limit: number;
+  expanded: boolean;
+  onMore: () => void;
+  onLess: () => void;
   onNewTask: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
@@ -794,9 +857,8 @@ function WorkspaceGroup(props: {
   const t = useT();
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  // 超过预览数只列前 N 条，其余收进「Show N more」；点了才全量铺开
-  const truncated = !props.full && props.sessions.length > SESSIONS_PREVIEW_LIMIT;
-  const visible = truncated ? props.sessions.slice(0, SESSIONS_PREVIEW_LIMIT) : props.sessions;
+  // 只列前 limit 条，其余收进「Show N more」；每点一次多放一页。打开着的那条恒可见
+  const visible = visibleWithOpen(props.sessions, props.limit, props.openId);
 
   const commit = () => {
     if (editing !== null) props.onRename(editing);
@@ -929,13 +991,13 @@ function WorkspaceGroup(props: {
               onClick={() => props.onOpen(meta.id)}
             />
           ))}
-          {props.sessions.length > SESSIONS_PREVIEW_LIMIT && (
-            <ShowAllRow
-              full={props.full}
-              hidden={props.sessions.length - SESSIONS_PREVIEW_LIMIT}
-              onClick={props.onToggleFull}
-            />
-          )}
+          <ShowMoreRow
+            hidden={props.sessions.length - visible.length}
+            next={nextPageSize(foldKeyForWorkspace(props.workspace.id), props.sessions.length - visible.length)}
+            expanded={props.expanded}
+            onMore={props.onMore}
+            onLess={props.onLess}
+          />
         </>
       )}
     </div>
@@ -1065,19 +1127,40 @@ function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () 
 }
 
 /**
- * 「Show N more / Show less」行：一组超过预览数时垫在列表尾。**条数写进文案**——
- * 被藏起来多少这件事不能是悄悄的。双向：铺开后原地变成「Show less」，
- * 点一下收回最近的 N 条（排序保证前 N 条就是最近 N 条，置顶恒在最前）。
+ * 列哪几条：前 limit 条；打开着的会话排在线以下时**单独补在末尾**——不然组展开了、
+ * 高亮的那行却藏在「Show more」里，用户照样看不出自己在哪。只补它一条，不把线
+ * 整段拉到它那里（否则排第 13 的会话一打开，Show less 就形同虚设）。
  */
-function ShowAllRow(props: { full: boolean; hidden: number; onClick: () => void }) {
+function visibleWithOpen<T extends { id: string }>(sessions: readonly T[], limit: number, openId: string | null): T[] {
+  const head = sessions.slice(0, limit);
+  const open = openId === null ? undefined : sessions.find((m) => m.id === openId);
+  return open !== undefined && !head.includes(open) ? [...head, open] : head;
+}
+
+/**
+ * 「Show N more / Show less」行：垫在列表尾。**条数写进文案**——被藏起来多少
+ * 这件事不能是悄悄的（下一次放几条、一共还藏几条）。还有藏着的就是 Show more；
+ * 全放完了且点过 Show more，原地变成 Show less，收回默认预览（排序保证前 N 条
+ * 就是最近 N 条，置顶恒在最前）。没藏、也没点过，就不出现。
+ */
+function ShowMoreRow(props: {
+  hidden: number;
+  next: number;
+  expanded: boolean;
+  onMore: () => void;
+  onLess: () => void;
+}) {
   const t = useT();
+  const hidden = props.hidden;
+  if (hidden === 0 && !props.expanded) return null;
+  const more = hidden > 0;
   return (
     <NavRow
-      icon={props.full ? "chevron-up" : "chevron-down"}
-      label={props.full ? t.sidebar.showLess : t.sidebar.showMore(props.hidden)}
+      icon={more ? "chevron-down" : "chevron-up"}
+      label={more ? t.sidebar.showMore(props.next, hidden) : t.sidebar.showLess}
       active={false}
       tone="var(--color-text-tertiary)"
-      onClick={props.onClick}
+      onClick={more ? props.onMore : props.onLess}
     />
   );
 }
@@ -1102,6 +1185,16 @@ function NavRow(props: {
   iconTitle?: string;
   /** 整行的悬停说明（planned 的东西用它讲为什么点不动） */
   hint?: string;
+  /**
+   * 行最左侧的三节竖条（2026-10-10 用户裁决）：running = 1/3 蓝，waiting = 2/3 橙，
+   * done = 3/3 绿，failed = 3/3 红；读完就不亮（undefined）。状态由
+   * sessionRunState 推导（与铃铛清单同一份真源）；选中仍是整行底色，互不干扰。
+   * 规则在 styles.css 的 `.status-bar`。**静态，无动效**（低端机 GPU 友好，
+   * 取代上一版的渐变带）。
+   */
+  bar?: "running" | "waiting" | "done" | "failed" | undefined;
+  /** 竖条的悬停说明（状态的可读名字） */
+  barTitle?: string;
   style?: React.CSSProperties;
 }) {
   const disabled = props.disabled === true;
@@ -1134,6 +1227,15 @@ function NavRow(props: {
         ...props.style,
       }}
     >
+      {/* 三节竖条：贴行最左缘（GitHub 选中项同款位置）。不亮时不渲染——
+          「读完就不亮」是整个东西退场，不是留一根灰杠 */}
+      {props.bar !== undefined && (
+        <span className="status-bar option-row-bar" data-fill={props.bar} title={props.barTitle}>
+          <i />
+          <i />
+          <i />
+        </span>
+      )}
       <span
         title={props.iconTitle}
         style={{
@@ -1160,7 +1262,9 @@ function NavRow(props: {
 }
 
 /**
- * 一条会话。状态槽在最前面——**状态优先用图标与文字，颜色是第二信号**。
+ * 一条会话。状态在三处各说各的：行最左的三节竖条说运行态（在跑 / 在等你 / 跑完没看 /
+ * 跑挂没看），行首图标槽只剩静态标记（子会话 git-fork / 置顶图钉），行尾是星标、
+ * 完成勾与遗留角标——**状态优先用图标与文字，颜色是第二信号**（tooltip 补齐文字）。
  *
  * 右边是**一个星标键加三个点**，不是一排图标：288px 的一行挂不下六个动作。
  * 星标是唯一挂在行上的动作——它是一天里按得最多的那个（Proma 的悬停即星标，
@@ -1176,6 +1280,8 @@ function SessionRow(props: {
   onClick: () => void;
 }) {
   const t = useT();
+  // 会话生命周期开关：行内入口（星标 / 完成标记 / 遗留角标）挂它后面
+  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { meta, session } = props;
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
@@ -1187,24 +1293,39 @@ function SessionRow(props: {
    * 或里面没文件，文案退回光秃秃的 Delete permanently。
    */
   const [workbenchFiles, setWorkbenchFiles] = useState<number | null>(null);
-  const live = meta.id === session.sessionId;
-  // 行的运行态查它自己的槽：后台在跑的会话切走了也照样转圈，与「当前看哪条」无关
-  const running = session.phaseOf(meta.id) !== "idle";
-  // 子会话在跑：任一**直接**子会话的 phase 不是 idle（childSessions 只取一层，
-  // 与删除确认的子会话数同一个口径）。父自己在跑时不必查——优先级链里 running
-  // 已压过 subRunning；子会话自己的行没有孩子，some 恒 false，不受影响
+  // 行的运行态查它自己的槽：后台在跑的会话切走了也照样亮竖条，与「当前看哪条」无关。
+  // 子会话只取一层（childSessions 同口径）——子会话在跑 / 在等审批都记到母会话
+  // 这一行的竖条上（入口在母），fork 图标再补「跑的是孩子」那一句
   const children = childSessions(session.sessions, meta.id);
-  const subRunning = !running && children.some((child) => session.phaseOf(child.id) !== "idle");
-  // 失败同样查槽：后台会话重试耗尽（turnError）也亮 Failed，不止正看着的那条。
-  // 只描述母会话自己的事实，与 subRunning 同时成立时谁上谁下交给优先级链（row-status.ts）
-  const failed =
-    !running && (session.turnErrorOf(meta.id) !== null || (live && session.error !== null));
+  // 三节竖条（2026-10-10 用户裁决）：状态由 sessionRunState 推导——与右下角
+  // 铃铛清单同一份真源，两个入口只是同一状态的两种看法。未读读 meta（落盘，
+  // 重启后还在）；在跑 / 在等你读槽。选中仍是整行底色，互不干扰
+  const bar = sessionRunState({
+    slot: {
+      phase: session.phaseOf(meta.id),
+      approvals: session.approvalsOf(meta.id).length,
+    },
+    children: children.map((child) => ({
+      phase: session.phaseOf(child.id),
+      approvals: session.approvalsOf(child.id).length,
+    })),
+    unread: meta.unread ?? null,
+  });
   const done = isSessionDone(meta);
   /**
-   * 行首状态槽：running > subRunning > failed > pinned > 空。优先级与理由在
-   * `row-status.ts`（纯函数 + 测试）。`null` = 这一行没什么可说，槽留空。
+   * 行首状态槽：subRunning > pinned > 空。运行 / 未读 / 失败已归竖条，槽里只剩
+   * 静态标记。优先级与理由在 `row-status.ts`（纯函数 + 测试）。`null` = 这一
+   * 行没什么可说，槽留空。
    */
-  const status = rowStatusIcon({ running, subRunning, failed, pinned: meta.pinned === true }, t);
+  const status = rowStatusIcon(
+    {
+      subRunning:
+        session.phaseOf(meta.id) === "idle" &&
+        children.some((child) => session.phaseOf(child.id) !== "idle"),
+      pinned: meta.pinned === true,
+    },
+    t,
+  );
   // 这条会话的未办遗留数（行尾角标，与筛选同口径）
   const openTodos = openTodoCount(session.carryovers, meta.id);
   // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）。子会话不参与
@@ -1353,8 +1474,9 @@ function SessionRow(props: {
                   onSelect: () => setStep("archive"),
                 },
             // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
-            // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动
-            ...(doneCount > 0
+            // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动。
+            // 挂会话生命周期开关：它按 done 状态选目标，done 不在时这个入口也没有意义
+            ...(lifecycle && doneCount > 0
               ? [
                   {
                     id: "archive-done",
@@ -1397,9 +1519,10 @@ function SessionRow(props: {
           icon={status?.icon ?? null}
           label={meta.title === "" ? t.common.newTask : meta.title}
           tone={status?.tone}
-          spin={status?.spin ?? false}
           iconTitle={status?.label}
           active={props.active}
+          bar={bar ?? undefined}
+          barTitle={bar === null ? undefined : barLabel(bar, t)}
           onClick={props.onClick}
           style={{ flex: 1, minWidth: 0 }}
         />
@@ -1411,22 +1534,25 @@ function SessionRow(props: {
         列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
         是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
         与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
+        会话生命周期开关关闭时不渲染：已星的会话不显示星（数据在盘上，开关打开回来）。
       */}
-      <IconButton
-        label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
-        title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
-        size={20}
-        onClick={() => session.starSession(meta.id, meta.starred !== true)}
-        className="reveal"
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          // 已星标常显，不等 hover / 键盘聚焦
-          opacity: meta.starred === true ? 1 : undefined,
-        }}
-      >
-        <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
-      </IconButton>
+      {lifecycle && (
+        <IconButton
+          label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
+          title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
+          size={20}
+          onClick={() => session.starSession(meta.id, meta.starred !== true)}
+          className="reveal"
+          style={{
+            borderRadius: "var(--radius-xs)",
+            color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
+            // 已星标常显，不等 hover / 键盘聚焦
+            opacity: meta.starred === true ? 1 : undefined,
+          }}
+        >
+          <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
+        </IconButton>
+      )}
       {/**
         完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
         hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后常显、accent；再点 = Reopen。
@@ -1434,39 +1560,44 @@ function SessionRow(props: {
         tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
         不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
         「还差几件」由右边那个灯泡角标单独说。
+        会话生命周期开关关闭时不渲染（闲置建议随它一起消失）：已完成的会话照常列出，
+        只是不再有可点的标记。
       */}
-      <IconButton
-        label={done ? t.sidebar.reopen : t.sidebar.markDone}
-        title={
-          done
-            ? openTodos > 0
-              ? t.sidebar.doneWithTodos(openTodos)
-              : t.sidebar.doneTip
-            : idleSuggested
-              ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
-              : t.sidebar.markDone
-        }
-        size={20}
-        onClick={() =>
-          session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
-        }
-        className="reveal"
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          // 已完成常显，不等 hover / 键盘聚焦
-          opacity: done ? 1 : undefined,
-        }}
-      >
-        <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
-      </IconButton>
+      {lifecycle && (
+        <IconButton
+          label={done ? t.sidebar.reopen : t.sidebar.markDone}
+          title={
+            done
+              ? openTodos > 0
+                ? t.sidebar.doneWithTodos(openTodos)
+                : t.sidebar.doneTip
+              : idleSuggested
+                ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
+                : t.sidebar.markDone
+          }
+          size={20}
+          onClick={() =>
+            session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
+          }
+          className="reveal"
+          style={{
+            borderRadius: "var(--radius-xs)",
+            color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
+            // 已完成常显，不等 hover / 键盘聚焦
+            opacity: done ? 1 : undefined,
+          }}
+        >
+          <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
+        </IconButton>
+      )}
       {/**
         遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
         （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
         **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
         角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
+        挂会话生命周期开关：它说的是 done + 遗留，两个概念都不在时角标无处挂靠。
       */}
-      {done && openTodos > 0 && (
+      {lifecycle && done && openTodos > 0 && (
         <span
           title={t.sidebar.openTodosLeft(openTodos)}
           style={{

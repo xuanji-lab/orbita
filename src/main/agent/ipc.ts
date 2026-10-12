@@ -18,7 +18,7 @@ import {
   type InvokedMcp,
   type InvokedSkill,
 } from "../../shared/invocation.ts";
-import { matchSkillTarget } from "../../shared/skill.ts";
+import { isSkillAvailable, matchSkillTarget } from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -44,6 +44,7 @@ import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
+import { turnFields } from "./turn-fields.ts";
 import { applyModeCascade } from "./mode-cascade.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
@@ -58,7 +59,18 @@ export async function resolveProviderSecrets(
 ): Promise<ProviderSecrets> {
   const dto = (await providers.list()).find((p) => p.id === providerId);
   if (!dto) throw new Error(`unknown provider "${providerId}"`);
-  const apiKey = await providers.resolveApiKey(providerId);
+  // OAuth 访问令牌优先：快到点会自动续期并落盘（非 oauth provider 返回 null）。
+  // 续期失败不能静默拿旧 token 硬发一轮——换成一句用户能行动的话
+  let apiKey = await providers.resolveOauthApiKey(providerId).catch((cause: unknown) => {
+    throw new Error(
+      `Claude 登录已失效，请到设置 › 模型服务里重新登录（${
+        cause instanceof Error ? cause.message : String(cause)
+      }）`,
+    );
+  });
+  if (apiKey === null) {
+    apiKey = await providers.resolveApiKey(providerId);
+  }
   if (apiKey === null) {
     throw new Error(`provider "${providerId}" has no API key stored`);
   }
@@ -93,38 +105,6 @@ export async function resolveProviderSecrets(
   };
 }
 
-/** AgentTurnContext 的 renderer 载荷 → AgentCommand 的公共字段（submit / interrupt / compact 共用）。 */
-function turnFields(
-  input: SubmitAgentInput | CompactAgentInput,
-  provider: ProviderSecrets,
-  piSessionDir: string,
-  /** 工具禁区（sessions/ 与 pi-sessions/）：主进程定，随每轮发给闸门 */
-  protectedPaths: string[],
-  /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好 + Git 标识 + 目录清单）：无状态化后每轮命令都要带全 */
-  environment: {
-    skillsDirs: string[];
-    directories: TurnDirectories;
-    mcpServers: Record<string, McpServer>;
-    compaction: CompactionSetting;
-    gitAttribution: boolean;
-    attributionLanguage: Language;
-  },
-) {
-  return {
-    sessionId: input.sessionId,
-    cwd: input.cwd,
-    // MCP 连接按工作区分片（同一工作区共用一份，不同工作区各一份实例）
-    workspaceId: input.workspaceId,
-    provider,
-    modelId: input.modelId,
-    mode: input.mode,
-    thinkingLevel: input.thinkingLevel,
-    piSessionDir,
-    protectedPaths,
-    ...environment,
-    ...(input.resume ? { piSessionFile: input.resume.piSessionFile } : {}),
-  };
-}
 
 export function registerAgentIpc(
   host: AgentHost,
@@ -136,6 +116,8 @@ export function registerAgentIpc(
   channels: ChannelStore,
   /** pi 把自己的 session 文件放在哪。**路径策略在主进程**，agent 进程只收数据 */
   piSessionDir: string,
+  /** 附图原图目录的解析画（`sessions/<id>.attachments/`）：图片字节预算的占位拼路径用 */
+  attachmentDirOf: (sessionId: string) => string,
   /** 工具禁区（sessions/ 与 pi-sessions/）。**路径策略在主进程**，随每轮发给闸门 */
   protectedPaths: string[],
   /** 某条会话该拿哪些 skill 集合目录（global 恒在 + 它的工作区）；路径策略在主进程 */
@@ -187,6 +169,16 @@ export function registerAgentIpc(
     return resolveServersForWorkspace(mergeMcpConfigs(configured, local), scope);
   };
 
+  /**
+   * 这轮开轮的工作区名字（给 store-tools 的 scope 指引讲归属用）：
+   * workspaceId 为 null → 不带（不属于任何工作区）；翻不到（旧夹具 /
+   * 工作区已删）→ 也不带——提示词里如实说「未知」，不猜。
+   */
+  const workspaceNameOf = async (workspaceId: string | null): Promise<string | undefined> => {
+    if (workspaceId === null) return undefined;
+    return (await workspaces.list()).find((workspace) => workspace.id === workspaceId)?.name;
+  };
+
   /** 每轮现读压缩偏好：设置改动下一轮即生效，无需重启会话 */
   const readCompaction = async (): Promise<CompactionSetting> =>
     (await settings.read()).compaction ?? COMPACTION_DEFAULT;
@@ -194,6 +186,10 @@ export function registerAgentIpc(
   /** Git 标识同款每轮现读；缺席 = 开启（兼容从没动过这个开关的旧设置文件） */
   const readGitAttribution = async (): Promise<boolean> =>
     (await settings.read()).gitAttribution ?? true;
+
+  /** 实验功能「PDF 引用」的开关同款每轮现读；缺席 = 关（与设置契约同一口径） */
+  const readPdfCitations = async (): Promise<boolean> =>
+    (await settings.read()).experimentalFeatures?.["pdf-citations"] === true;
 
   /** 署名语言同样每轮现读：换主题 / 改语言，下一轮的署名就跟上（规则在 shared 的 effectiveLanguage） */
   const readAttributionLanguage = async (): Promise<Language> => {
@@ -314,13 +310,10 @@ export function registerAgentIpc(
     if (tokens.length === 0) return text;
     const skillTargets = [...new Set(tokens.filter((t) => t.kind === "skill").map((t) => t.target))];
     const mcpTargets = [...new Set(tokens.filter((t) => t.kind === "mcp").map((t) => t.target))];
+    // 可用性判定与右栏选取模式共用 isSkillAvailable（选取面认的，发送时必然认）
     const available =
       skillTargets.length > 0
-        ? (await skills.list()).filter(
-            (meta) =>
-              !meta.missing &&
-              (meta.global || (workspaceId !== null && meta.workspaces.includes(workspaceId))),
-          )
+        ? (await skills.list()).filter((meta) => isSkillAvailable(meta, workspaceId))
         : [];
     const invokedSkills: InvokedSkill[] = [];
     for (const target of skillTargets) {
@@ -363,13 +356,15 @@ export function registerAgentIpc(
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
-      ...turnFields(input, provider, piSessionDir, protectedPaths, {
+      ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
         directories: await readDirectories(input),
         mcpServers: await readMcpServers(input.workspaceId),
         compaction: await readCompaction(),
         gitAttribution: await readGitAttribution(),
         attributionLanguage: await readAttributionLanguage(),
+        workspaceName: await workspaceNameOf(input.workspaceId),
+        pdfCitations: await readPdfCitations(),
       }),
     });
     await settleFirstTurn(input, piSessionFile);
@@ -397,12 +392,12 @@ export function registerAgentIpc(
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage() }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 

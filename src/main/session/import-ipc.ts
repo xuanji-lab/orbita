@@ -5,15 +5,17 @@
  * 那一刻 UI 刷新，下一次扫描必须看到刚落盘的 meta（幂等判重的底），拿启动时的
  * 快照会把已导入的再导一遍。
  */
-import { ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain } from "electron";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
+  parseImportCustomRootInput,
   parseImportRunInput,
   parseImportScanInput,
   IMPORT_GREETING_UNAVAILABLE_CODE,
+  type ImportCustomRoot,
   type ImportDetectResult,
   type ImportGreetingCheckResult,
   type ImportGreetingModelStatus,
@@ -31,6 +33,7 @@ import { findGreetingOnly } from "./greeting-only.ts";
 import type { CodexPaths } from "./importer.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
 import { DATA_ROOT_SPECS, baseDir, findDataRoots, type LocateContext } from "./import-locate.ts";
+import { CustomRootsStore, dirsOf, mergeCustomRoots, type CustomRootSource } from "./import-custom-roots.ts";
 import {
   emptyScanReport,
   probeAgentSkills,
@@ -61,6 +64,8 @@ export function registerImportIpc(
   piSessionDir: string,
   /** 导入清单 imports.jsonl（import-ledger.ts），与会话数据同在 userData 下 */
   ledgerFile: string,
+  /** 自定义来源路径清单（import-custom-roots.ts），同在 userData 下 */
+  customRoots: CustomRootsStore,
   skills: SkillStore,
   mcp: McpStore,
   /** mcp.json 改完之后让运行时重读（与 MCP 面板加 server 同一个回调） */
@@ -87,9 +92,11 @@ export function registerImportIpc(
   }
 
   async function deps(): Promise<ImporterDeps> {
+    // 每次现读：则刚添加 / 删除的自定义路径下一遭扫描就生效
+    const custom = await customRoots.read();
     return {
-      promaRoots: await findDataRoots(DATA_ROOT_SPECS.proma, locateContext()),
-      ...(await convertedPaths()),
+      promaRoots: await mergedRoots("proma", custom),
+      ...(await convertedPaths(custom)),
       agentSkillsDir: agentSkillsDir(),
       existingSkills: (await skills.list()).map((skill) => skill.slug),
       // mcp.json 坏了不挡扫描：会话与 skills 照导，MCP 写入时会各自报错
@@ -105,14 +112,18 @@ export function registerImportIpc(
   }
 
   // 探测只 stat，不装配 deps：没配 provider 的新用户也该看得到本机有哪些来源
-  ipcMain.handle(ipcChannels.importDetect, async (): Promise<ImportDetectResult> => ({
-    home: homedir(),
-    sources: [
-      await probeProma(await findDataRoots(DATA_ROOT_SPECS.proma, locateContext()), join(homedir(), ".proma")),
-      ...(await probeConverted()),
-      await probeAgentSkills(agentSkillsDir()),
-    ],
-  }));
+  ipcMain.handle(ipcChannels.importDetect, async (): Promise<ImportDetectResult> => {
+    const custom = await customRoots.read();
+    return {
+      home: homedir(),
+      customRoots: custom,
+      sources: [
+        await probeProma(await mergedRoots("proma", custom), join(homedir(), ".proma")),
+        ...(await probeConverted(custom)),
+        await probeAgentSkills(agentSkillsDir()),
+      ],
+    };
+  });
   ipcMain.handle(ipcChannels.importScan, async (_event, raw: unknown): Promise<ImportScanReport> => {
     const input = parseImportScanInput(raw);
     // 一个来源都没勾 = 一个字节都不读；勾了的才读（scanImport 按 sources 分来源读）
@@ -166,6 +177,30 @@ export function registerImportIpc(
       },
     );
   });
+  // 自定义来源路径：三通道都是「校验 / 落盘在主进程，renderer 只传字符串」——
+  // renderer 在 sandbox 里没有文件系统访问权，路径真伪不该由它判断
+  ipcMain.handle(
+    ipcChannels.importCustomRootsAdd,
+    async (_event, raw: unknown): Promise<ImportCustomRoot[]> => {
+      const input = parseImportCustomRootInput(raw);
+      return customRoots.add(input.source, input.dir);
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.importCustomRootsRemove,
+    async (_event, raw: unknown): Promise<ImportCustomRoot[]> => {
+      const input = parseImportCustomRootInput(raw);
+      return customRoots.remove(input.source, input.dir);
+    },
+  );
+  // 目录选择框：同 skill:import 的纪律，主进程开；选中返回路径，取消返回 null
+  ipcMain.handle(ipcChannels.importPickDirectory, async (event): Promise<string | null> => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = await (window
+      ? dialog.showOpenDialog(window, { properties: ["openDirectory"] })
+      : dialog.showOpenDialog({ properties: ["openDirectory"] }));
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
 }
 
 /** findDataRoots 的环境：真实平台、家目录、环境变量。 */
@@ -173,22 +208,31 @@ function locateContext(): LocateContext {
   return { platform: process.platform, home: homedir(), env: process.env };
 }
 
+/** 一个来源的自动定位 + 自定义路径（合并去重，顺序见 mergeCustomRoots）。 */
+async function mergedRoots(
+  source: CustomRootSource,
+  custom: readonly ImportCustomRoot[],
+): Promise<string[]> {
+  const spec = DATA_ROOT_SPECS[source];
+  return mergeCustomRoots(await findDataRoots(spec, locateContext()), dirsOf(custom, source), spec);
+}
+
 /**
- * 一个转换类来源的数据目录（import-locate：名字含产品名 + 聊天记录在不在，环境变量优先）。
- * 一个都没找到时给规范位置（环境变量指的、或基础目录下的默认名）：扫描照常扫空、探测照样
- * 列出「找过哪里」、found 为 false。
+ * 一个转换类来源的数据目录（import-locate：名字含产品名 + 聊天记录在不在，环境变量优先；
+ * 自定义路径垫后）。一个都没找到时给规范位置（环境变量指的、或基础目录下的默认名）：
+ * 扫描照常扫空、探测照样列出「找过哪里」、found 为 false。
  */
-async function rootsOf(source: keyof typeof DATA_ROOT_SPECS): Promise<string[]> {
+async function rootsOf(source: keyof typeof DATA_ROOT_SPECS, custom: readonly ImportCustomRoot[]): Promise<string[]> {
   const spec = DATA_ROOT_SPECS[source];
   const ctx = locateContext();
-  const found = await findDataRoots(spec, ctx);
+  const found = await mergeCustomRoots(await findDataRoots(spec, ctx), dirsOf(custom, source), spec);
   if (found.length > 0) return found;
   const fromEnv = spec.env === undefined ? undefined : ctx.env[spec.env];
   return [fromEnv || join(baseDir(spec.base, ctx), spec.canonical)];
 }
 
-/** 各转换类来源的数据目录，按 findDataRoots 的顺序（环境变量 → 规范目录 → 其余按名字）。 */
-async function dataRoots(): Promise<{
+/** 各转换类来源的数据目录，按 findDataRoots 的顺序（环境变量 → 规范目录 → 其余按名字 → 自定义）。 */
+async function dataRoots(custom: readonly ImportCustomRoot[]): Promise<{
   claudeCode: string[];
   kimiCode: string[];
   opencode: string[];
@@ -197,19 +241,19 @@ async function dataRoots(): Promise<{
   codex: string[];
 }> {
   return {
-    claudeCode: await rootsOf("claude-code"),
-    kimiCode: await rootsOf("kimi-code"),
-    opencode: await rootsOf("opencode"),
-    reasonix: await rootsOf("reasonix"),
-    zcode: await rootsOf("zcode"),
-    codex: await rootsOf("codex"),
+    claudeCode: await rootsOf("claude-code", custom),
+    kimiCode: await rootsOf("kimi-code", custom),
+    opencode: await rootsOf("opencode", custom),
+    reasonix: await rootsOf("reasonix", custom),
+    zcode: await rootsOf("zcode", custom),
+    codex: await rootsOf("codex", custom),
   };
 }
 
 /** 扫描用：每个找到的数据目录一份路径。 */
-async function convertedPaths(): Promise<Pick<ImporterDeps, "claudeCode" | "kimiCode" | "opencode" | "reasonix" | "zcode" | "codex">> {
+async function convertedPaths(custom: readonly ImportCustomRoot[]): Promise<Pick<ImporterDeps, "claudeCode" | "kimiCode" | "opencode" | "reasonix" | "zcode" | "codex">> {
   const home = homedir();
-  const roots = await dataRoots();
+  const roots = await dataRoots(custom);
   return {
     claudeCode: roots.claudeCode.map((root) => claudeCodePaths(root, home)),
     kimiCode: roots.kimiCode.map((root) => kimiCodePaths(root, home)),
@@ -221,8 +265,8 @@ async function convertedPaths(): Promise<Pick<ImporterDeps, "claudeCode" | "kimi
 }
 
 /** 探测用：与扫描同一份路径（一个都没找到时由 dataRoots 的规范目录兜着，页面照样列出找过哪里）。 */
-async function probeConverted(): Promise<ImportSourceProbe[]> {
-  const paths = await convertedPaths();
+async function probeConverted(custom: readonly ImportCustomRoot[]): Promise<ImportSourceProbe[]> {
+  const paths = await convertedPaths(custom);
   return [
     await probeClaudeCode(paths.claudeCode ?? []),
     await probeKimiCode(paths.kimiCode ?? []),

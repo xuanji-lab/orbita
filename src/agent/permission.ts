@@ -10,8 +10,14 @@
  *
  * 这层因此只剩一件事：把「模式 + 用户回答」翻成 pi 的 ToolCallEventResult。
  */
-import { decidePermission, type PermissionAnswer, type PermissionMode } from "../shared/permission.ts";
+import {
+  decidePermission,
+  COMMAND_TIMEOUT_FLOOR_SECONDS,
+  type PermissionAnswer,
+  type PermissionMode,
+} from "../shared/permission.ts";
 import { isAbsolute, relative, resolve } from "node:path";
+import type { ContextMessage } from "./image-byte-budget.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
@@ -127,9 +133,10 @@ const COMMAND_TOOLS = new Set(["bash", "powershell"]);
  * （900s）是模型自己的判断，尊重它。非法值（≤ 0 / 非有限数）不在这里修——
  * pi 自己会报「Invalid timeout」，我们不替它做第二套校验。
  *
- * 导出只为让提示词那段话引用它：同一个数有两处真源的话，改了常量提示词还说着旧数。
+ * 常量本体在 shared/permission.ts（闸门与 renderer 的「上限」显示同源：闸门改的是
+ * clone、不回写入参，显示若不套同一条规则，模型填 60 时界面说「上限 1:00」、
+ * 实际跑在 10 分钟上）。提示词那段话也引它：同一个数有两处真源的话，改了常量提示词还说着旧数。
  */
-export const COMMAND_TIMEOUT_FLOOR_SECONDS = 600;
 
 /** 原地抬 `event.input.timeout`（pi 的约定，与下面的改写入参同一套）。闸门内部用，行为经 `createToolCallGate` 测。 */
 function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): void {
@@ -225,7 +232,7 @@ function refusalMessage(dir: string, via: "path" | "command"): string {
   );
 }
 
-/** pi 扩展 API 里我们用到的两个钩子。上游类型没导出成可直接消费的形状，这里只声明用得着的部分。 */
+/** pi 扩展 API 里我们用到的钩子。上游类型没导出成可直接消费的形状，这里只声明用得着的部分。 */
 export interface PiExtensionApi {
   on(
     event: "tool_call",
@@ -233,9 +240,27 @@ export interface PiExtensionApi {
   ): void;
   on(
     event: "before_agent_start",
-    handler: (event: { systemPrompt: string }) => { systemPrompt: string },
+    handler: (event: { systemPrompt: string }) => { systemPrompt: string } | void,
   ): void;
+  /** 返回非 undefined 的值替换请求 payload（cc-billing-patch 用）；上游契约 BeforeProviderRequestEventResult = unknown */
+  on(
+    event: "before_provider_request",
+    handler: (event: { payload: unknown }) => unknown,
+  ): void;
+  /** 每次 LLM 调用前触发（transformContext）：返回 { messages } 替换发往 provider 的那份，
+   * 不写回 pi 本子（image-byte-budget 的 wire-only 替换用它）。上游契约 ContextEvent */
+  on(
+    event: "context",
+    handler: (
+      event: { type: "context"; messages: ContextBudgetMessage[] },
+    ) => { messages: ContextBudgetMessage[] } | undefined | void,
+  ): void;
+  /** 往 pi 本子追加 custom entry（不进 LLM 上下文）：跨轮持久化扩展自己的状态 */
+  appendEntry(customType: string, data?: unknown): void;
 }
+
+/** context 事件里的消息形状（AgentMessage 的结构化子集），image-byte-budget 定义 */
+export type ContextBudgetMessage = ContextMessage;
 
 /**
  * 生成 `tool_call` 处理器。纯逻辑 + 一个注入的询问函数，可被测试穷尽。

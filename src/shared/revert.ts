@@ -58,6 +58,17 @@ export interface FileTurnView {
   id: string;
   timestamp: number;
   changes: readonly FileChangeView[];
+  /**
+   * 旁路网页产物（脚本生成）的绝对路径，与 changes 同一张卡的另一栏：不在文件账里
+   * （write / edit 之外的手段产出）、不参与撤销，卡片上只能打开。缺席 = 本轮没有。
+   */
+  webArtifacts?: readonly string[];
+  /**
+   * 批量折叠：本轮网页文件变动超过上限时不逐个列（webArtifacts 缺席），只报计数。
+   * 卡片出一行「本轮有 N 个网页文件变动（像是批量操作，未逐个列出）」，不带打开
+   * 按钮。缺席 = 没折叠过（旧记录没有这个字段，照常解析）。
+   */
+  webArtifactsBatch?: number;
 }
 
 /** agent 进程报上来的轮内改动：正文内联，主进程负责写 blob。 */
@@ -80,6 +91,20 @@ export interface FileTurnRecord {
   id: string;
   timestamp: number;
   changes: readonly FileChange[];
+  /**
+   * 旁路网页产物：本轮经脚本（bash 等）生成 / 改动、文件账看不见的 .html / .htm / .svg
+   * 绝对路径（轮尾扫描按 mtime ≥ 开轮时刻收出来、扣掉已在 changes 里的）。
+   * **不参与撤销**——没拍内容快照，撤不回去；卡片上标「脚本生成 · 仅可打开」。
+   * 缺席 = 本轮没有（旧记录没有这个字段，照常解析）。只有旁路产物、没有 changes
+   * 的轮也落记录、也出卡。
+   */
+  webArtifacts?: readonly string[];
+  /**
+   * 批量折叠计数：本轮网页文件变动超过上限（批量操作嫌疑），不逐个列、只报计数。
+   * 与 webArtifacts 互斥（折叠时不给列表）。缺席 = 没折叠过；只有它、没有 changes
+   * 的轮也落记录（卡片要出那一行计数）。
+   */
+  webArtifactsBatch?: number;
 }
 
 /** 回退记录（role: "revert"）。readLog 按它折叠生效列表。 */
@@ -116,6 +141,24 @@ export function isSnapshotRef(raw: unknown): raw is SnapshotRef {
   return value["kind"] === "text" && typeof value["blob"] === "string" && value["blob"] !== "";
 }
 
+function parseWebArtifacts(raw: unknown): readonly string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const paths: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string" || item === "") return undefined;
+    paths.push(item);
+  }
+  return paths;
+}
+
+/** webArtifactsBatch 的逐字段校验：可选；在场必须是 ≥ 1 的整数（折叠计数不会是 0）。 */
+function parseWebArtifactsBatch(raw: unknown): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1) return undefined;
+  return raw;
+}
+
 function parseFileChange(raw: unknown): FileChange | null {
   if (typeof raw !== "object" || raw === null) return null;
   const value = raw as Record<string, unknown>;
@@ -137,7 +180,15 @@ export function isFileTurnRecord(raw: unknown): raw is FileTurnRecord {
   if (value["role"] !== "file-turn" || typeof value["id"] !== "string") return false;
   if (typeof value["timestamp"] !== "number") return false;
   if (!Array.isArray(value["changes"])) return false;
-  return value["changes"].every((change) => parseFileChange(change) !== null);
+  if (!value["changes"].every((change) => parseFileChange(change) !== null)) return false;
+  // webArtifacts 可选（旧记录没有）；**在场就必须是合法路径数组**——旁路行挂在卡上、
+  // 还要过主进程的打开白名单，半个坏值整条拒掉（同「逐字段校验，坏行跳过」的纪律）。
+  // webArtifactsBatch 同一张纪律：在场就必须是 ≥ 1 的整数。
+  if ("webArtifacts" in value && parseWebArtifacts(value["webArtifacts"]) === undefined) return false;
+  if ("webArtifactsBatch" in value && parseWebArtifactsBatch(value["webArtifactsBatch"]) === undefined) {
+    return false;
+  }
+  return true;
 }
 
 function parseOutcome(raw: unknown): RevertFileOutcome | null {

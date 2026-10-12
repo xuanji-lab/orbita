@@ -2,15 +2,23 @@
  * 文件面板的 IPC —— 四层契约的第 2 层。
  * Finder 定位与目录读取都走主进程：renderer 在 sandbox 里没有文件系统访问权。
  */
-import { ipcMain, shell } from "electron";
+import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { stat } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import { isWebPageFile, type FileListRequest, type FilePreview, type FileRootsRequest } from "../../shared/files.ts";
+import {
+  isPdfFile,
+  isWebPageFile,
+  type FileListRequest,
+  type FilePreview,
+  type PdfFile,
+  type FileRootsRequest,
+  type FsEntryFact,
+} from "../../shared/files.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
-import { readPreview } from "./read.ts";
+import { readPdfFile, readPreview } from "./read.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
@@ -59,6 +67,17 @@ export function registerFilesIpc(
   });
 
   /**
+   * 读 PDF 字节给预览面板（同白名单，外加只认 .pdf——判定用 realpath 之后的路径，
+   * 改名成 foo.pdf 的软链接指向别的文件同样被拒；这条通道不能变成「整份读任意文件」）
+   */
+  ipcMain.handle(ipcChannels.fsReadPdf, async (_event, req: FileListRequest): Promise<PdfFile> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isPdfFile(path)) throw new Error(`Not a PDF file: ${path}`);
+    return readPdfFile(path);
+  });
+
+  /**
    * 用系统默认应用打开 dir（同白名单）。`shell.openPath` 失败时回一个非空字符串
    * 而不是抛错——这里统一成异常，让 renderer 一条 catch 处理到底。
    */
@@ -81,5 +100,40 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
     await openInBrowser(path);
+  });
+
+  /**
+   * 输入框附件分拣与文件面板已发送附件列表共用的类型 / 存在性问询（不上面板的
+   * 白名单）：拖入 / 粘贴的条目本来就在三根之外（发送时复制进会话或原位置引用），
+   * 问它是什么类型不构成「通用文件浏览器」——不读内容、不列目录。用 stat
+   * （跟 symlink）：软链接指向目录就报 dir，与发送侧 realpath 后 lstat 的判定
+   * 一致，两边不各说各话。stat 不到回 { kind: null, size: null }——分拣自己
+   * 兑底成 file（不拦附件），面板据此标「不在盘上」。
+   */
+  ipcMain.handle(ipcChannels.fsStatKind, (_event, paths: string[]): Promise<FsEntryFact[]> =>
+    Promise.all(
+      paths.map(async (path): Promise<FsEntryFact> => {
+        try {
+          const stats = await stat(path);
+          return stats.isDirectory()
+            ? { kind: "dir", size: null }
+            : { kind: "file", size: stats.size };
+        } catch {
+          return { kind: null, size: null };
+        }
+      }),
+    ),
+  );
+
+  /**
+   * 回形针「添加文件夹」的系统目录选择器（多选；Windows 不允许 openFile+
+   * openDirectory 同框，文件仍走 renderer 的隐藏 input）。取消返回 null。
+   */
+  ipcMain.handle(ipcChannels.fsPickFolders, async (event): Promise<string[] | null> => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = await (window
+      ? dialog.showOpenDialog(window, { properties: ["openDirectory", "multiSelections"] })
+      : dialog.showOpenDialog({ properties: ["openDirectory", "multiSelections"] }));
+    return result.canceled ? null : result.filePaths;
   });
 }

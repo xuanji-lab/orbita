@@ -628,3 +628,164 @@
 .cu-shot-meta code {
   font-family: var(--font-family-mono);
 }
+
+/* ===== 设置 › 实验功能（卡片墙，原型 exp-B；同「服务商」页的配方） =====
+ * 卡片本体复用 providers-view.css 的 .pv-vcard / .pv-cards.large（设置页顶部
+ * import ProvidersView，样式已在产物里）；这里只补实验卡自己的部分：
+ * 卡不是按钮（去 cursor / hover 抬升）、展开横跨两列、头部图标砖、
+ * 底部发丝线 + 最近一次更新、展开的日志与安静文字钮。 */
+.exp-lead {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* 卡不是可点的（开关 / 链接 / 展开钮各自可点）：去掉厂商卡的指针与 hover 抬升。
+ * 选择器带上 .pv-vcard 提高特异性：providers-view.css 在本文件之后进包，
+ * 同特异的规则会被它压回去 */
+.pv-vcard.exp-card {
+  cursor: default;
+}
+.pv-vcard.exp-card:hover {
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
+}
+/* 展开的卡横跨两列：日志一行一条，宽度够铺开 */
+.pv-vcard.exp-card.open {
+  grid-column: 1 / -1;
+}
+/* 右列的卡展开后横跨两列、整行下移，左边会空出一格——dense 让后面的卡回填进去，不留洞 */
+.exp-cards {
+  grid-auto-flow: row dense;
+}
+
+.exp-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* 图标砖：32 见方、muted 底（原型 exp-B），同厂商卡 logo 砖的作法但更小 */
+.exp-card-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+}
+
+.exp-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-semibold);
+}
+
+.exp-card-sum {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* 底部：发丝线下面一行「最近一次更新」——PR 号 + 一句话（超长省略）+ 展开钮 */
+.exp-card-latest {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.exp-card-latest-note {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+/* PR 号：机器事实，mono；无 PR 的旧条目是灰色的 — */
+.exp-pr {
+  flex: none;
+  min-width: 34px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-secondary);
+}
+a.exp-pr {
+  text-decoration: none;
+  color: var(--color-chat-link);
+}
+a.exp-pr:hover {
+  text-decoration: underline;
+}
+
+/* 展开钮 / 收起钮：安静文字钮（原型 exp-B 的 .toggle），箭头展开时转 180° */
+.exp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  border: 0;
+  padding: 3px 6px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.exp-toggle:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.exp-toggle .orbita-icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+.exp-toggle[aria-expanded="true"] .orbita-icon {
+  transform: rotate(180deg);
+}
+/* 展开态的收起钮靠左（日志整块铺满，收起是这一块的尾巴不是卡尾的血线） */
+.exp-card.open .exp-toggle {
+  justify-self: start;
+  align-self: flex-start;
+}
+
+/* 完整日志：新的在上，一行一条（PR 号 · 月日 · 一句话） */
+.exp-card-log {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.exp-card-log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.exp-card-date {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.exp-card-note {
+  min-width: 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-secondary);
+}

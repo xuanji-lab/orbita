@@ -158,4 +158,15 @@ describe("selectHomeCards", () => {
     assert.deepEqual(texts(cards[0]!.rows), ["d 的遗留"]);
     assert.equal(cards[1]!.todo, false);
   });
+
+  // 实验开关关闭时 ChatView 传空遗留清单（见 ChatView 的 homeCards）：这里把
+  // 契约钉住——盘上再多的 open 遗留也不出待办卡，全部退回「最近提问」行位
+  test("遗留清单为空（实验开关关闭）：不出待办卡，行位全部退回最近提问", () => {
+    const sessions = [meta({ id: "a", updatedAt: 50, recentQueries: ["问 a"] })];
+    const cards = selectHomeCards(sessions, []);
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0]!.todo, false);
+    assert.ok(cards[0]!.rows.every((row) => row.kind === "query"));
+    assert.deepEqual(texts(cards[0]!.rows), ["问 a"]);
+  });
 });

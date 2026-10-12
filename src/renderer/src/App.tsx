@@ -1,24 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
+import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { ChatView } from "./features/chat/ChatView";
-import { ChannelCards, ChannelColumn, type ChannelOpenRequest } from "./features/chat/ChannelColumn";
-import {
-  channelInlineMaxWidth,
-  channelPanelWide,
-  delegateAutoOpen,
-  reconcileChannelPanel,
-  revealChannelPanel,
-  toggleChannelPanel,
-  visibleChannels,
-  type ChannelPanelChange,
-} from "./features/chat/channel-column.ts";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
+import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
 import { SubSessionsPanel } from "./features/chat/SubSessionsPanel";
 import {
   SUB_SESSIONS_LIST,
@@ -32,17 +23,34 @@ import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { RightPanelSlot } from "./shell/RightPanel";
-import { usePaneAndRightPanelWidth } from "./shell/side-width.ts";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
+import { PastedTextCollapseContext } from "./shell/attachment-chips";
+import { MaterialBoxContext } from "./shell/BlackholeBox.tsx";
+import { materialBoxStyle } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
+import type { PdfJump } from "./features/files/PdfView";
+import { CitationOpenContext } from "./features/chat/citation-context.ts";
+import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
+import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
-import { CHANNEL_COLUMN_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
-import { NEW_TASK_TAB } from "./shell/drawer-state";
+import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
+import { isWindowInactive } from "./shell/window-activity.ts";
+import {
+  noticeTierOf,
+  orderNoticeEntries,
+  planNotice,
+  sessionRunState,
+  settledSessions,
+  type NoticeTier,
+} from "./features/notify/completion-notice.ts";
+import { playCompletionChime } from "./features/notify/chime.ts";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -162,20 +170,15 @@ export function App() {
     if (settings.sidebarWidth !== undefined) setSidebarWidth(settings.sidebarWidth);
   }, [settings.sidebarWidth]);
 
-  /** 通道列宽度（子会话 2026-09-23 裁决：可拖宽）：同一套口径——拖动中只改本地，松手才落 settings */
-  const [channelColumnWidth, setChannelColumnWidth] = useState(CHANNEL_COLUMN_WIDTH_DEFAULT);
-  useEffect(() => {
-    if (settings.channelColumnWidth !== undefined) setChannelColumnWidth(settings.channelColumnWidth);
-  }, [settings.channelColumnWidth]);
-
   const { session, engine } = useChatSession(providers, t);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
   const drawerView = useSessionView(engine, "drawer");
 
   /**
-   * 通道列（子会话 PR4b）：只在主槽正看着一条**根会话**（meta 没有 parentId）且
+   * 通道/子会话数据只在主槽正看着一条**根会话**（meta 没有 parentId）且
    * 没盖着设置页时才有意义——同 ChatView.tsx 里 `ownSide` 的推导口径（meta 查不到
-   * 时缺省当根会话），两处必须一致，否则标记可点但通道列不出来。
+   * 时缺省当根会话），两处必须一致，否则入口出现但点开是空的，或入口消失了
+   * 通道数据还在算。
    */
   const mainOpenId = session.sessionId ?? session.opened?.id ?? "";
   const mainOpenMeta = session.sessions.find((m) => m.id === mainOpenId) ?? session.opened;
@@ -183,110 +186,14 @@ export function App() {
     overlay === "settings" || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";
 
-  /**
-   * 用户对每个父会话显隐**内联列**的显式选择（ephemeral，不落盘，按父会话 id 记——
-   * 3.2 裁决）。缺席 = 没有显式选择，走默认：够宽且有「有往来」的通道时显示。
-   * 不够宽时父子会话面板住在右栏槽里（`rightPanel === "channels"`），不看这份选择。
-   */
-  const [channelShown, setChannelShown] = useState<ReadonlyMap<string, boolean>>(new Map());
-  const channelShownOverride = channelParentId !== null ? (channelShown.get(channelParentId) ?? null) : null;
-  const setChannelShownOverride = useCallback(
-    (shown: boolean) => {
-      if (channelParentId === null) return;
-      setChannelShown((prev) => {
-        if (prev.get(channelParentId) === shown) return prev;
-        return new Map(prev).set(channelParentId, shown);
-      });
-    },
-    [channelParentId],
-  );
-
-  // 通道清单：内联列与右栏槽两处都要，在这里拉一次（以前 ChannelColumn 自己拉、再把
-  // 可见性上报上来）。只派出没说话的通道要看子会话此刻在不在跑
+  // 通道清单：右栏入口的「在等你」角标（waiting + approval）从这里算。父子会话面板
+  // 已删（2026-10-12 用户裁决）：它总是自己弹出，且把两边对话抽到第三个又长又啰嗦
+  // 的地方——沟通回到两边对话流，Sub-sessions 面板变收件箱，不再有任何自动弹出。
   const channelSummaries = useChannelSummaries(channelParentId);
-  const phaseOf = session.phaseOf;
-  const channelLiveRunning = useCallback((childId: string) => phaseOf(childId) !== "idle", [phaseOf]);
-  const { entries: channelEntries, autoShow: channelAutoShow } = useMemo(
-    () => visibleChannels(channelSummaries, channelLiveRunning),
-    [channelSummaries, channelLiveRunning],
-  );
-  const hasVisibleChannels = channelParentId !== null && channelEntries.length > 0;
 
-  /**
-   * 够宽 / 不够宽（`channelPanelWide`，用户 2026-09-25 裁决）：够宽时父子会话面板是
-   * 主槽与右栏之间独立的一列；不够宽时它住进右栏槽，与其它入口互斥、继承槽宽。
-   * 量 `.pane` 本身——它的宽由窗口与左栏决定，不受自己的子级影响；右栏量出来的实际
-   * 宽只给内联列的拖宽夹取用。
-   */
-  const paneRef = useRef<HTMLElement | null>(null);
-  const { paneWidth, rightPanelWidth: rightPanelRendered } = usePaneAndRightPanelWidth(paneRef);
-  const channelWide = channelPanelWide({
-    narrow,
-    paneWidth,
-    rightPanelWidth: panelWidth,
-    channelWidth: channelColumnWidth,
-  });
-  const channelInlineOpen = channelWide && hasVisibleChannels && (channelShownOverride ?? channelAutoShow);
+  /** 主槽里的弹出宿主（完成提醒卡 / 铃铛清单 portal 进去）；state 而非 ref：挂上后要触发一次渲染 */
+  const [popHost, setPopHost] = useState<HTMLDivElement | null>(null);
 
-  /** 一次父子会话面板的状态改动（channel-column.ts 的纯函数算好的）落到 state 上 */
-  const applyChannelChange = useCallback(
-    (change: ChannelPanelChange | null) => {
-      if (change === null) return;
-      if (change.rightPanel !== undefined) setRightPanel(change.rightPanel);
-      if (change.shown !== undefined) setChannelShownOverride(change.shown);
-    },
-    [setChannelShownOverride],
-  );
-
-  // 宽窄切换的调和（reconcileChannelPanel）：够宽时它不占槽；够宽 → 不够宽那一拍，
-  // 正显示的内联列在槽空着时进槽，槽里有别的就收起、等拖回够宽再回来。
-  // 两个 ref 记「上一拍」：effect 每次跑完才更新，切换那一拍读到的是切换前的值
-  const channelWideRef = useRef(channelWide);
-  const channelInlineOpenRef = useRef(channelInlineOpen);
-  useEffect(() => {
-    const change = reconcileChannelPanel({
-      wide: channelWide,
-      wasWide: channelWideRef.current,
-      inlineWasOpen: channelInlineOpenRef.current,
-      rightPanel,
-    });
-    channelWideRef.current = channelWide;
-    channelInlineOpenRef.current = channelInlineOpen;
-    applyChannelChange(change);
-  }, [channelWide, channelInlineOpen, rightPanel, applyChannelChange]);
-
-  // 槽里是父子会话面板，但主槽已不在看根会话、或这条根会话没有可见通道了 → 收起
-  // （同下面 Sub-sessions 面板的守卫：不继续挂着一份够不到数据的内容）
-  useEffect(() => {
-    if (rightPanel === "channels" && !hasVisibleChannels) setRightPanel(null);
-  }, [rightPanel, hasVisibleChannels]);
-
-  /**
-   * 点标记 → 父子会话面板的一次性请求：够宽开内联列、不够宽换进槽，再展开对应通道、
-   * 滚到那条消息并高亮。token 用单调递增的计数器——请求作废（置 null）之后再来的
-   * 请求不能撞上旧 token（`ChannelMessageList` 按 token 判「处理过没有」）。
-   */
-  const [channelOpenRequest, setChannelOpenRequest] = useState<ChannelOpenRequest | null>(null);
-  const channelOpenTokenRef = useRef(0);
-  const openChannel = useCallback(
-    (childId: string, messageId: string | null) => {
-      applyChannelChange(revealChannelPanel(channelWide));
-      channelOpenTokenRef.current += 1;
-      setChannelOpenRequest({ childId, messageId, token: channelOpenTokenRef.current });
-    },
-    [applyChannelChange, channelWide],
-  );
-  // 请求只发给此刻看得见的那一处（内联列常驻挂载，隐藏时宽 0——不该在看不见的地方
-  // 展开、滚动、高亮一遍）。两处都不显示了 → 请求作废：下次打开时不该再滚一遍旧请求
-  const channelPanelVisible = channelInlineOpen || rightPanel === "channels";
-  useEffect(() => {
-    if (!channelPanelVisible) setChannelOpenRequest(null);
-  }, [channelPanelVisible]);
-  /** 右图标条入口的点击（与 Esc 同一个出口）：够宽开关内联列，不够宽同其它入口互斥 */
-  const toggleChannel = useCallback(
-    () => applyChannelChange(toggleChannelPanel({ wide: channelWide, inlineOpen: channelInlineOpen, rightPanel })),
-    [applyChannelChange, channelWide, channelInlineOpen, rightPanel],
-  );
 
   /**
    * Sub-sessions 面板（子会话 PR4c）：入口只在主槽正看着一条有子会话的根会话时出现，
@@ -295,12 +202,16 @@ export function App() {
    */
   const subSessionChildren = channelParentId === null ? [] : childSessions(session.sessions, channelParentId);
   const hasSubSessions = subSessionChildren.length > 0;
+  /** 「在等你」的子会话数（question + 待审批）：右栏入口的角标，为 0 不显示 */
+  const waitingOnYou = subSessionChildren.filter((meta) => {
+    const status = subSessionStatusOf(meta.id, channelSummaries.get(meta.id)?.status, engine);
+    return status === "waiting" || status === "approval";
+  }).length;
 
   /**
    * 面板两层状态机（`sub-sessions-state.ts`，原样搬自旧 wip）：App 持有，
-   * `SubSessionsPanel` 受控渲染——理由同 `channelShown`/`channelOpenRequest`：
-   * 派出卡点击（主槽的 `ChatView`）与面板本体分处两棵子树，accent 描边要在
-   * 主槽里知道「面板会话层现在开着哪条」，状态放子组件里够不到。
+   * `SubSessionsPanel` 受控渲染——派出卡点击（主槽的 `ChatView`）与面板本体分处
+   * 两棵子树，accent 描边要在主槽里知道「面板会话层现在开着哪条」，状态放子组件里够不到。
    */
   const [subSessionsNav, setSubSessionsNav] = useState<SubSessionsView>(SUB_SESSIONS_LIST);
   /** 会话层的查看槽：与主槽/抽屉槽同一份引擎，互不串（同 drawerView 的先例） */
@@ -321,6 +232,18 @@ export function App() {
     reviewFocusTokenRef.current += 1;
     setReviewFocus({ path, token: reviewFocusTokenRef.current });
     setRightPanel("review");
+  }, []);
+  /**
+   * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
+   * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
+   * PDF 所在的根、打开预览、滚到原文并高亮。
+   */
+  const [citeFocus, setCiteFocus] = useState<PdfJump | null>(null);
+  const citeFocusTokenRef = useRef(0);
+  const openCitation = useCallback((citation: PdfCitation) => {
+    citeFocusTokenRef.current += 1;
+    setCiteFocus({ citation, token: citeFocusTokenRef.current });
+    setRightPanel("files");
   }, []);
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
@@ -378,48 +301,21 @@ export function App() {
     rightPanel === "subsessions" && subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
 
   /**
-   * 母会话刚派出子会话 → 自动弹出（`delegateAutoOpen`，用户 2026-09-25 裁决：派出后要
-   * 让人感知到子会话在干活。不够宽弹子会话工作记录；够宽连父子会话面板一起，三分屏）。
-   * 信号是主进程 applyDelegate 广播的那条 task 消息。**等子会话出现在会话列表里再开**：
-   * Sub-sessions 面板按列表找子会话，开早了会被上面「没有子会话就关面板」的守卫当场
-   * 关掉；子会话首轮开跑的 phase 会触发列表重拉（session-list-refresh.ts），通常派出后
-   * 几十毫秒就到。只认主槽正看着的那条母会话：后台会话派出的只出现入口，不弹。
+   * agent 开了可见终端（terminal:agent-open）→ **自动点亮终端面板位并激活那个 tab**。
+   * agent 的活要让人看见（Proma 的 terminal:agent-open 同款裁决）：否则它在你背后的
+   * 面板里跑 dev server，你想接手都不知道去哪接。信号是一次性的，TerminalPanel
+   * 消费完就清。
    */
-  const [pendingDelegate, setPendingDelegate] = useState<{ parentId: string; childId: string } | null>(null);
-  const channelParentIdRef = useRef(channelParentId);
-  useEffect(() => {
-    channelParentIdRef.current = channelParentId;
-  }, [channelParentId]);
+  const [pendingTerminal, setPendingTerminal] = useState<string | null>(null);
   useEffect(
     () =>
-      api.channel.onEvent((event) => {
-        if (event.type !== "message" || event.message.kind !== "task" || event.message.from !== "parent") return;
-        if (event.parentId !== channelParentIdRef.current) return;
-        setPendingDelegate({ parentId: event.parentId, childId: event.childId });
+      api.terminal.onEvent((event) => {
+        if (event.type !== "agent-open") return;
+        setRightPanel("terminal");
+        setPendingTerminal(event.terminalId);
       }),
     [],
   );
-  useEffect(() => {
-    if (pendingDelegate === null) return;
-    if (channelParentId !== pendingDelegate.parentId) {
-      setPendingDelegate(null);
-      return;
-    }
-    if (!session.sessions.some((meta) => meta.id === pendingDelegate.childId)) return;
-    const plan = delegateAutoOpen({ wide: channelWide, rightPanel });
-    if (plan.openSubSession) openSubSessionInPanel(pendingDelegate.childId);
-    if (plan.showChannel) setChannelShownOverride(true);
-    setPendingDelegate(null);
-  }, [
-    pendingDelegate,
-    channelParentId,
-    session.sessions,
-    channelWide,
-    rightPanel,
-    openSubSessionInPanel,
-    setChannelShownOverride,
-  ]);
-
   // 停靠记忆在设置里（哪些 task 开在辅助对话的标签条上）；兼容存量文件：
   // 旧版本可能把 "new" 占位写进了 docked，启动时一并洗掉。
   // 抽屉并入统一面板壳后 drawer.width 不再有消费者——宽度共用 rightPanelWidth（Q3）。
@@ -438,16 +334,245 @@ export function App() {
     [changeSettings],
   );
 
+  /**
+   * 后台会话完成提醒（用户 2026-10-10，同日二轮改需求）：长程任务在一条会话里
+   * 跑着，人去了别的会话，跑完时界面上什么都不发生。现在跑完那一拍：
+   * - 响一声客舱呼唤铃（设置可关）；
+   * - 没在看它的话，把未读写进 meta（SessionMeta.unread，session:unread 落盘，
+   *   **重启后还在**），侧栏那一行亮 3/3 竖条，辅助对话图标旁弹卡片问怎么看：
+   *   马上看（主槽换成它）/ 辅助对话里看 / 稍后（保持未读）。
+   * 点进去看过（主槽或辅助对话正显示它）即清未读（同样落盘）。判定在
+   * completion-notice.ts；侧栏竖条与右下角铃铛清单都从 sessionRunState 读同一份
+   * 状态。只认根会话——子会话跑完由母会话的通道回报，不单独打扰人。
+   */
+  const [noticeId, setNoticeId] = useState<string | null>(null);
+  const [drawerFocus, setDrawerFocus] = useState<{ tab: string; token: number } | null>(null);
+  const drawerFocusTokenRef = useRef(0);
+  /** 此刻「在看」的会话：主槽（没被设置页盖住时）与开着的辅助对话 */
+  const drawerOpenId = drawerView.sessionId ?? drawerView.opened?.id ?? null;
+  const watchedIds = [
+    ...(overlay === "settings" || mainOpenId === "" ? [] : [mainOpenId]),
+    ...(rightPanel === "drawer" && drawerOpenId !== null ? [drawerOpenId] : []),
+  ];
+  const watchedKey = watchedIds.join("\n");
+  /** 未读清单：从 meta 读（真源在盘上），不再另存一份 renderer state */
+  const unreadSessions = session.sessions.filter((meta) => meta.unread != null);
+  /** 把一批会话标成未读：at 此刻铸；failed 查槽的回合失败（重试耗尽），同样是快照 */
+  const markUnread = useCallback(
+    (ids: readonly string[]) => {
+      void Promise.all(
+        ids.map((id) =>
+          api.session.setUnread(id, { at: Date.now(), failed: session.turnErrorOf(id) !== null }),
+        ),
+      ).then(() => engine.refreshSessions());
+    },
+    [engine, session],
+  );
+  /** 清未读（看过即清 / 全部标为已读）：目标 id 由调用方从真值现算，不闭包旧列表 */
+  const clearUnreadOf = useCallback(
+    (ids: readonly string[]) => {
+      void Promise.all(ids.map((id) => api.session.setUnread(id, null))).then(() =>
+        engine.refreshSessions(),
+      );
+    },
+    [engine, session],
+  );
+  const prevStatesRef = useRef(engine.states);
+  useEffect(() => {
+    const prev = prevStatesRef.current;
+    prevStatesRef.current = engine.states;
+    // 只认根会话；列表里还查不到的（刚建）当根会话
+    const settled = settledSessions(prev, engine.states).filter(
+      (id) => session.sessions.find((meta) => meta.id === id)?.parentId === undefined,
+    );
+    if (settled.length === 0) return;
+    const windowActive = !isWindowInactive({
+      hasFocus: document.hasFocus(),
+      visibilityState: document.visibilityState,
+    });
+    let ring = false;
+    const fresh: string[] = [];
+    for (const id of settled) {
+      const plan = planNotice({
+        watched: watchedIds.includes(id),
+        windowActive,
+        soundOn: settings.completionSound ?? true,
+      });
+      ring ||= plan.sound;
+      if (plan.unread) fresh.push(id);
+    }
+    // 同拍多条只响一声
+    if (ring) playCompletionChime();
+    const latest = fresh[fresh.length - 1];
+    if (latest !== undefined) {
+      markUnread(fresh);
+      setNoticeId(latest);
+    }
+    // 只在槽变化时判定；在看谁、开关值读本次渲染的闭包，就是这一拍的真值
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.states]);
+  // 看过即清：主槽或辅助对话显示了它，未读（盘上的）与卡片一起退。
+  // 列表读本渲染闭包里的真值——watchedKey 变了的那一拍，列表必然是新的
+  useEffect(() => {
+    const hit = watchedIds.filter((id) =>
+      session.sessions.some((meta) => meta.id === id && meta.unread != null),
+    );
+    if (hit.length > 0) clearUnreadOf(hit);
+    setNoticeId((current) => (current !== null && watchedIds.includes(current) ? null : current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedKey]);
+  /** 在辅助对话里打开一条会话（当前主槽不动）：提醒卡与铃铛清单共用 */
+  const openInSideChat = (id: string): void => {
+    changeDocked(dockTab(docked, id));
+    drawerFocusTokenRef.current += 1;
+    setDrawerFocus({ tab: id, token: drawerFocusTokenRef.current });
+    setRightPanel("drawer");
+  };
+  const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
+  const completionNotice =
+    noticeMeta === undefined
+      ? null
+      : {
+          title: noticeMeta.title,
+          failed: session.turnErrorOf(noticeMeta.id) !== null,
+          onOpenNow: () => {
+            setNoticeId(null);
+            setOverlay(null);
+            void session.openSession(noticeMeta.id);
+          },
+          onSideChat: () => {
+            setNoticeId(null);
+            openInSideChat(noticeMeta.id);
+          },
+          onLater: () => setNoticeId(null),
+        };
+
+  /**
+   * 右下角铃铛的清单（2026-10-10 二轮）：所有竖条亮着的根会话——在等你、未读
+   * （跑完 / 跑挂没看）、在跑——排序「等你 > 未读 > 在跑，同档新在前」。与侧栏
+   * 竖条同一份推导（sessionRunState，单一真源）；点行在主槽打开那条会话，
+   * 打开即已读。角标只数未读（绿 + 红）：用户原话「数字 = 未读数」，在跑不算欠账。
+   */
+  const noticeRows = useMemo(() => {
+    const rows: {
+      id: string;
+      title: string;
+      workspace: string | null;
+      state: "running" | "waiting" | "done" | "failed";
+      tier: NoticeTier;
+      at: number;
+    }[] = [];
+    for (const meta of rootSessions(session.sessions)) {
+      const state = sessionRunState({
+        slot: {
+          phase: session.phaseOf(meta.id),
+          approvals: session.approvalsOf(meta.id).length,
+        },
+        children: childSessions(session.sessions, meta.id).map((child) => ({
+          phase: session.phaseOf(child.id),
+          approvals: session.approvalsOf(child.id).length,
+        })),
+        unread: meta.unread ?? null,
+      });
+      if (state === null) continue;
+      const tier = noticeTierOf(state);
+      if (tier === null) continue;
+      rows.push({
+        id: meta.id,
+        title: meta.title,
+        workspace: session.workspaces.find((w) => w.id === meta.workspaceId)?.name ?? null,
+        state,
+        tier,
+        at: meta.unread?.at ?? meta.updatedAt,
+      });
+    }
+    return orderNoticeEntries(rows);
+    // phaseOf / approvalsOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
+  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, engine.states]);
+  /** 铃铛清单点行：主槽打开它；有未读的话顺手清（watchedKey 那一拍也会清，
+   *  但它若已在主槽就没有那一拍了，这里兑底） */
+  const openFromNotice = useCallback(
+    (id: string) => {
+      setOverlay(null);
+      void session.openSession(id);
+      if (session.sessions.some((meta) => meta.id === id && meta.unread != null)) clearUnreadOf([id]);
+    },
+    [session, clearUnreadOf],
+  );
+
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
    *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
   const handlePanel = useCallback((next: RightPanelKind | null) => {
     setRightPanel(next);
   }, []);
 
+  // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
+  // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
+  // 交来插入锚点（那个 / 的位置）；面板选中后
+  // 经 tokenPickResult（nonce 一次性请求，同 channelOpenRequest / reviewFocus 的
+  // 先例）传回 ChatView 插入并焦点回输入框。选完即收面板：选取是输入辅助，与指令
+  // 面板同一种临时性；拖拽入口不受影响（面板开着时随时能拖）。
+  const [tokenPickerOn, setTokenPickerOn] = useState(false);
+  const tokenPickAnchorRef = useRef<number | null>(null);
+  const [tokenPickResult, setTokenPickResult] = useState<TokenPickResult | null>(null);
+  const tokenPickNonceRef = useRef(0);
+  /** 发起号：面板可能已开着，选取态可能已在——靠它重新聚焦/重置 */
+  const [tokenPickRequest, setTokenPickRequest] = useState(0);
+  const openTokenPicker = useCallback((position: number): boolean => {
+    tokenPickAnchorRef.current = position;
+    setTokenPickerOn(true);
+    setTokenPickRequest((n) => n + 1);
+    setRightPanel("skills");
+    return true;
+  }, []);
+  const finishTokenPick = useCallback(
+    (token: string | null): void => {
+      // 锚点丢失（面板被切走等）就落到草稿末尾——选取的意图仍是「插进来」
+      const position = tokenPickAnchorRef.current ?? session.draft.length;
+      tokenPickAnchorRef.current = null;
+      setTokenPickerOn(false);
+      setRightPanel(null);
+      tokenPickNonceRef.current += 1;
+      setTokenPickResult({ token, position, nonce: tokenPickNonceRef.current });
+    },
+    [session.draft],
+  );
+  // 面板被切走 / 关掉（rail 点了别的、× 、全局 Esc）：选取态跟着退，锚点一并丢
+  useEffect(() => {
+    if (tokenPickerOn && rightPanel !== "skills" && rightPanel !== "mcp") {
+      setTokenPickerOn(false);
+      tokenPickAnchorRef.current = null;
+    }
+  }, [rightPanel, tokenPickerOn]);
+  const skillsPicker: TokenPickerControl = {
+    onSelect: finishTokenPick,
+    onCancel: () => finishTokenPick(null),
+    onSwitch: () => setRightPanel("mcp"),
+    request: tokenPickRequest,
+    workspaceId: session.workspaceId,
+  };
+  const mcpPicker: TokenPickerControl = {
+    onSelect: finishTokenPick,
+    onCancel: () => finishTokenPick(null),
+    onSwitch: () => setRightPanel("skills"),
+    request: tokenPickRequest,
+    workspaceId: session.workspaceId,
+  };
+
+  // ── 面板行内「选用」按钮的插入（panel-token.ts）─────────────────
+  // Skills 行 / MCP 卡尾的选用键（RowHoverAction）：token 落到主槽输入框当前
+  // 光标处（从未聚焦过则草稿末尾）、焦点回输入框。与选取的锚点回执分开走：
+  // 按钮是浏览态入口，面板不关，可以连插几条
+  const [panelInsert, setPanelInsert] = useState<PanelInsertRequest | null>(null);
+  const panelInsertNonceRef = useRef(0);
+  const insertPanelToken = useCallback((token: string): void => {
+    panelInsertNonceRef.current += 1;
+    setPanelInsert({ token, nonce: panelInsertNonceRef.current });
+  }, []);
+
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
   // 会话层时，Esc 只退一层回列表（escapeFrom），不直接关掉整个面板——与面板内部
-  // 「返回」按钮同一个退出台阶（子会话 PR4c 2.1）。槽里是父子会话面板（不够宽）时
-  // 走与再点入口同一个出口（记成显式收起）；够宽时的内联列不归 Esc 管，同 PR4b
+  // 「返回」按钮同一个退出台阶（子会话 PR4c 2.1）。
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
@@ -457,15 +582,13 @@ export function App() {
         else setSubSessionsNav(next);
       } else if (rightPanel === "files" && filesEscapeRef.current?.() === true) {
         // 文件面板开着预览：这一下 Esc 只关预览（退一层），面板留着
-      } else if (rightPanel === "channels") {
-        toggleChannel();
       } else if (rightPanel !== null) {
         setRightPanel(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightPanel, subSessionsNav, toggleChannel]);
+  }, [rightPanel, subSessionsNav]);
 
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）。判定抽在 shell/drawer-shortcut.ts：
   // macOS 上 Option 会把 event.key 变成 ∂，只看 key 在 mac 上永远匹配不到
@@ -534,6 +657,11 @@ export function App() {
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
+  // 实验功能逐项开关（会话生命周期挂在其中）：关着时右栏底部的遗留事项
+  // 入口不渲染；showCarryovers 的本地状态可能残留（开着面板去设置里关了开关），
+  // 在传给 Sidebar 的路上一并压掉——开关关了，这个子视图就不该再出得来
+  const experimentalFeatures = settings.experimentalFeatures ?? {};
+  const sessionLifecycle = experimentalFeatures["session-lifecycle"] === true;
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -541,12 +669,17 @@ export function App() {
     setShowCarryovers(next.showCarryovers);
   };
   const railEntries: RailEntry[] = [
-    {
-      icon: "list-todo" as const,
-      label: t.app.carryoversEntry(openCarryoverCount),
-      lit: railSubviewLit(subviewState, "carryovers"),
-      onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
-    },
+    // 遗留事项入口（收尾扫描的下游）挂会话生命周期开关；Archived / Browser / Settings 不挂
+    ...(sessionLifecycle
+      ? [
+          {
+            icon: "list-todo" as const,
+            label: t.app.carryoversEntry(openCarryoverCount),
+            lit: railSubviewLit(subviewState, "carryovers"),
+            onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
+          },
+        ]
+      : []),
     {
       icon: "archive" as const,
       label: t.app.archivedEntry(archivedCount),
@@ -573,6 +706,18 @@ export function App() {
 
   return (
     <LocaleContext.Provider value={locale}>
+    <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
+    <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
+    {/* 输入框材料盒：开关 × 主题（只在浅 / 黛 / 玄）× 黑洞与俄罗斯方块的互斥优先级，
+        在这里用 materialBoxStyle 算一次，输入框与转录都读它 */}
+    <MaterialBoxContext.Provider
+      value={materialBoxStyle(
+        experimentalFeatures["composer-blackhole"] === true,
+        experimentalFeatures["composer-tetris"] === true,
+        resolvedTheme,
+      )}
+    >
+    <CitationOpenContext.Provider value={openCitation}>
     <div className="app-shell">
       <Titlebar />
       <div className="layer">
@@ -583,19 +728,25 @@ export function App() {
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
           showArchived={showArchived}
-          showCarryovers={showCarryovers}
+          showCarryovers={showCarryovers && sessionLifecycle}
           onShowArchived={setShowArchived}
           onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}
+          unread={new Set(unreadSessions.map((meta) => meta.id))}
           onWidthChange={setSidebarWidth}
           onWidthCommit={(width) => {
             setSidebarWidth(width);
             changeSettings({ sidebarWidth: width });
           }}
+          usagePet={settings.usagePet}
+          onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
         />
 
-        <main className="pane" ref={paneRef}>
+        <main className="pane">
           <div className="pane-main">
+            {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
+                与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
+            <div className="pane-pop-host" ref={setPopHost} />
             {overlay === "settings" ? (
               <SettingsView
                 tab={settingsTab}
@@ -617,7 +768,6 @@ export function App() {
                 session={session}
                 providersError={providersError}
                 onOpenReviewAt={openReviewAt}
-                onOpenChannel={openChannel}
                 onOpenSubSession={openSubSessionInPanel}
                 onOpenSubSessions={openSubSessionsList}
                 onOpenParent={openParent}
@@ -628,27 +778,12 @@ export function App() {
                 onOpenProviders={openProvidersTab}
                 scrollToEnd
                 scrollToEndHotkey
+                onSlashSpace={openTokenPicker}
+                tokenPickResult={tokenPickResult}
+                panelInsert={panelInsert}
               />
             )}
           </div>
-          {/* 父子会话面板的内联列（够宽时）：主槽与右栏之间，常驻挂载同 RightPanelSlot 的先例——
-              不显示时宽度为 0，宽度过渡才不会被条件卸载打断。不够宽时同一份卡片在右栏槽里 */}
-          <ChannelColumn
-            parentId={channelParentId}
-            parentTitle={channelParentTitle}
-            entries={channelEntries}
-            engine={engine}
-            open={channelInlineOpen}
-            wide={channelWide}
-            paneWidth={paneWidth}
-            rightPanelWidth={rightPanelRendered}
-            maxWidth={channelInlineMaxWidth({ paneWidth, rightPanelWidth: panelWidth })}
-            width={channelColumnWidth}
-            onWidthChange={setChannelColumnWidth}
-            onWidthCommit={(width) => changeSettings({ channelColumnWidth: width })}
-            onShownChange={setChannelShownOverride}
-            openRequest={channelInlineOpen ? channelOpenRequest : null}
-          />
           {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
           <RightPanelSlot
             open={rightPanel !== null}
@@ -666,24 +801,34 @@ export function App() {
               }}
             >
               {shownPanel === "files" ? (
-                <FilesPanel session={session} onClose={() => handlePanel(null)} escapeRef={filesEscapeRef} />
+                <FilesPanel session={session} escapeRef={filesEscapeRef} citeFocus={citeFocus} />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
                   focus={reviewFocus}
                   revision={`${session.fileTurns.length}:${session.reverts.length}:${session.undos.length}:${session.phase}`}
                   cwd={session.cwd}
-                  onClose={() => handlePanel(null)}
                 />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel
                   skills={skills}
-                  onClose={() => handlePanel(null)}
                   defaultWorkspaceId={session.workspaceId}
                   onCreateSkill={createSkillDraft}
+                  picker={tokenPickerOn ? skillsPicker : undefined}
+                  onInsert={insertPanelToken}
                 />
               ) : shownPanel === "mcp" ? (
-                <McpPanel skills={skills} onClose={() => handlePanel(null)} />
+                <McpPanel
+                  skills={skills}
+                  picker={tokenPickerOn ? mcpPicker : undefined}
+                  onInsert={insertPanelToken}
+                />
+              ) : shownPanel === "terminal" ? (
+                <TerminalPanel
+                  cwd={session.cwd}
+                  activateId={pendingTerminal}
+                  onActivated={() => setPendingTerminal(null)}
+                />
               ) : shownPanel === "drawer" ? (
                 <Drawer
                   engine={engine}
@@ -694,19 +839,14 @@ export function App() {
                   onToggleStarModel={toggleStarModel}
                   onOpenProviders={openProvidersTab}
                   docked={docked}
+                  focus={drawerFocus}
+                  onFocusConsumed={() => setDrawerFocus(null)}
                   onDockedChange={(list) =>
                     changeDocked(
                       // 没发过首条消息的新任务占位不是 task，不落盘——重启后从选择卡重新开
                       list.filter((tab) => tab !== NEW_TASK_TAB),
                     )
                   }
-                />
-              ) : shownPanel === "channels" && channelParentId !== null ? (
-                <ChannelCards
-                  parentTitle={channelParentTitle}
-                  entries={channelEntries}
-                  engine={engine}
-                  openRequest={channelOpenRequest}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel
@@ -719,9 +859,7 @@ export function App() {
                   onOpenChild={openSubSessionInPanel}
                   onBackToList={() => setSubSessionsNav(SUB_SESSIONS_LIST)}
                   onOpenAsMain={openAsMain}
-                  onOpenChannel={openChannel}
-                  onClose={() => handlePanel(null)}
-                  providersError={providersError}
+                    providersError={providersError}
                   starredModels={settings.starredModels ?? []}
                   onToggleStarModel={toggleStarModel}
                 />
@@ -734,15 +872,27 @@ export function App() {
           panel={rightPanel}
           onPanel={handlePanel}
           railEntries={railEntries}
-          channelColumn={
-            hasVisibleChannels
-              ? { open: channelWide ? channelInlineOpen : rightPanel === "channels", onToggle: toggleChannel }
+          subSessions={
+            channelParentId !== null && hasSubSessions
+              ? { count: subSessionChildren.length, waiting: waitingOnYou }
               : null
           }
-          subSessions={channelParentId !== null && hasSubSessions ? { count: subSessionChildren.length } : null}
+          completionNotice={completionNotice}
+          popHost={popHost}
+          bell={{
+            count: unreadSessions.length,
+            entries: noticeRows,
+            onOpen: openFromNotice,
+            onSideChat: openInSideChat,
+            onMarkAllRead: () => clearUnreadOf(unreadSessions.map((meta) => meta.id)),
+          }}
         />
       </div>
     </div>
+    </CitationOpenContext.Provider>
+    </MaterialBoxContext.Provider>
+    </PastedTextCollapseContext.Provider>
+    </ExperimentalFeaturesContext.Provider>
     </LocaleContext.Provider>
   );
 }

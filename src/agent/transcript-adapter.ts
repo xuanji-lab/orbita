@@ -194,12 +194,18 @@ export class TranscriptAdapter {
    * 我们这本账不记这种残影。
    */
   userPrompt(
-    text: string,
+    /** 正文块：调用方按空行拆好的（粘贴块内联后一段一块，显示层按内容识别）。
+     *  空数组 = 整条没字（纯图消息），此时除非还有 extras / images 才造块 */
+    blocks: readonly string[],
     images: readonly Extract<UserContent, { type: "image" }>[] = [],
     extras: readonly string[] = [],
   ): TranscriptProgress[] {
     const content: UserContent[] = [
-      ...(text !== "" || (images.length === 0 && extras.length === 0) ? [{ type: "text" as const, text }] : []),
+      ...(blocks.length > 0
+        ? blocks.map((block): UserContent => ({ type: "text", text: block }))
+        : images.length === 0 && extras.length === 0
+          ? [{ type: "text" as const, text: "" }]
+          : []),
       ...extras.map((extra): UserContent => ({ type: "text", text: extra })),
       ...images,
     ];

@@ -1,11 +1,11 @@
-import anthropic from "../../../../../Orbita Design System/assets/vendor-logos/anthropic.svg?raw";
-import deepseek from "../../../../../Orbita Design System/assets/vendor-logos/deepseek.svg?raw";
-import kimi from "../../../../../Orbita Design System/assets/vendor-logos/kimi.svg?raw";
-import openai from "../../../../../Orbita Design System/assets/vendor-logos/openai.svg?raw";
-import opencode from "../../../../../Orbita Design System/assets/vendor-logos/opencode.svg?raw";
-import stepfun from "../../../../../Orbita Design System/assets/vendor-logos/stepfun.svg?raw";
-import zai from "../../../../../Orbita Design System/assets/vendor-logos/zai.svg?raw";
-import zhipu from "../../../../../Orbita Design System/assets/vendor-logos/zhipu.svg?raw";
+import anthropic from "../../../../../design-system/assets/vendor-logos/anthropic.svg?raw";
+import deepseek from "../../../../../design-system/assets/vendor-logos/deepseek.svg?raw";
+import kimi from "../../../../../design-system/assets/vendor-logos/kimi.svg?raw";
+import openai from "../../../../../design-system/assets/vendor-logos/openai.svg?raw";
+import opencode from "../../../../../design-system/assets/vendor-logos/opencode.svg?raw";
+import stepfun from "../../../../../design-system/assets/vendor-logos/stepfun.svg?raw";
+import zai from "../../../../../design-system/assets/vendor-logos/zai.svg?raw";
+import zhipu from "../../../../../design-system/assets/vendor-logos/zhipu.svg?raw";
 import { iconMarkup } from "../../shell/icon-markup.ts";
 
 /**

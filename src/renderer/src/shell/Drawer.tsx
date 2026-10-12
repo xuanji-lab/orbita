@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { relativeTime } from "./relative-time.ts";
+import { PanelFilter, PanelHelp, PanelIconButton, PanelTitle, RightPanelFrame } from "./RightPanel";
 import { ChatView } from "../features/chat/ChatView";
 import type { ChatSession, SessionEngine } from "../features/chat/useChatSession";
 import { rootSessions, type SessionMeta } from "@shared/session";
@@ -13,7 +15,6 @@ import {
   type DockedTab,
 } from "./drawer-state";
 import { useT } from "../locale.ts";
-import type { Messages } from "../messages-en.ts";
 
 export type { DockedTab };
 
@@ -41,10 +42,27 @@ export function Drawer(props: {
   onOpenProviders: () => void;
   docked: DockedTab[];
   onDockedChange: (docked: DockedTab[]) => void;
+  /**
+   * 一次性「切到这个标签」的请求（完成提醒卡的「辅助对话」，2026-10-10）：调用方先把
+   * 它停靠进 docked，再发请求；本组件激活它后调 onFocusConsumed 作废请求——面板每次
+   * 打开都会重新挂载，请求不作废的话下次打开又会被拽回这一页。token 让同一 tab 连发
+   * 两次也能触发。
+   */
+  focus: { tab: string; token: number } | null;
+  onFocusConsumed: () => void;
 }) {
   const t = useT();
-  const [activeTab, setActiveTab] = useState<DockedTab | null>(props.docked[0] ?? null);
+  const [activeTab, setActiveTab] = useState<DockedTab | null>(props.focus?.tab ?? props.docked[0] ?? null);
   const [picking, setPicking] = useState(false);
+
+  useEffect(() => {
+    if (props.focus === null) return;
+    setActiveTab(props.focus.tab);
+    setPicking(false);
+    props.onFocusConsumed();
+    // 只认 token：同一请求不重复处理
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.focus?.token]);
 
   // 新任务发出第一句话、拿到真 id：把 "new" 占位换成它，激活跟随
   useEffect(() => {
@@ -172,6 +190,9 @@ function findMeta(engine: SessionEngine, id: string): SessionMeta | null {
  * task 选择器（Q7=C）：把另一条 task 并排打开，或当场新建一条。
  * 中间正在看的那条不列——它已经在它该在的位置上。
  * onBack 为 null = 身后没有标签可回（空态直达），返回键不渲染。
+ *
+ * 右栏统一（2026-10-11）：与其他面板同一副骨架——标题行（图标 + 辅助对话 + 过滤框 +
+ * 「?」+ 新建），下面是任务列表；原先铺在列表上方的问句与解释收进「?」。
  */
 function Picker(props: {
   sessions: SessionMeta[];
@@ -181,48 +202,55 @@ function Picker(props: {
   onBack: (() => void) | null;
 }) {
   const t = useT();
+  const [query, setQuery] = useState("");
   // 子会话不进选择器（子会话 PR4c 2.3）：它唯一的入口是母会话的右栏 Sub-sessions
   // 面板，并排打开挑的是「另一条 task」，不该在这里意外把某条子会话拽出来单独开
   const candidates = rootSessions(props.sessions).filter((meta) => meta.id !== props.excludeId);
+  const q = query.trim().toLowerCase();
+  const shown = q === "" ? candidates : candidates.filter((meta) => meta.title.toLowerCase().includes(q));
   const onBack = props.onBack;
   return (
-    <div className="drawer-picker">
-      <div className="drawer-picker-head">
-        {onBack !== null && (
-          <button className="drawer-picker-back" title={t.common.back} onClick={onBack}>
-            <Icon name="chevron-down" size={14} style={{ transform: "rotate(90deg)" }} />
+    <RightPanelFrame
+      contentKey="drawer-picker"
+      header={
+        <>
+          {onBack !== null && (
+            <PanelIconButton title={t.common.back} onClick={onBack}>
+              <Icon name="chevron-left" size={16} />
+            </PanelIconButton>
+          )}
+          <PanelTitle icon="panel-right" title={t.drawer.title} />
+          <PanelFilter
+            value={query}
+            onChange={setQuery}
+            placeholder={t.drawer.filter}
+            count={q === "" ? String(candidates.length) : `${shown.length} / ${candidates.length}`}
+          />
+        </>
+      }
+      headerExtra={
+        <>
+          <PanelHelp label={t.drawer.helpLabel} text={t.drawer.pickSub} />
+          <PanelIconButton title={t.common.newTask} onClick={props.onNew}>
+            <Icon name="plus" size={16} />
+          </PanelIconButton>
+        </>
+      }
+    >
+      <div className="panel-list" style={{ paddingTop: "var(--space-2)" }}>
+        {shown.map((meta) => (
+          <button key={meta.id} className="drawer-pickrow" onClick={() => props.onPick(meta.id)}>
+            <Icon name="message-square" size={14} />
+            <span className="drawer-pickrow-name">{meta.title}</span>
+            <span className="drawer-pickrow-meta row-trailing">{relativeTime(meta.updatedAt, t)}</span>
           </button>
+        ))}
+        {candidates.length === 0 && <p className="panel-empty">{t.drawer.noOther}</p>}
+        {candidates.length > 0 && shown.length === 0 && (
+          <p className="panel-empty">{t.skills.noMatch(query.trim())}</p>
         )}
-        {t.drawer.pickTitle}
       </div>
-      <div className="drawer-picker-sub">
-        {t.drawer.pickSub}
-      </div>
-      <button className="drawer-pickrow new" onClick={props.onNew}>
-        <Icon name="plus" size={15} />
-        {t.common.newTask}
-      </button>
-      <div className="drawer-picksep" />
-      {candidates.map((meta) => (
-        <button key={meta.id} className="drawer-pickrow" onClick={() => props.onPick(meta.id)}>
-          <Icon name="message-square" size={15} />
-          <span className="drawer-pickrow-name">{meta.title}</span>
-          <span className="drawer-pickrow-meta">{formatWhen(meta.updatedAt, t)}</span>
-        </button>
-      ))}
-      {candidates.length === 0 && (
-        <div className="drawer-picker-sub">{t.drawer.noOther}</div>
-      )}
-    </div>
+    </RightPanelFrame>
   );
 }
 
-/** 相对时间的最简口径：侧栏的同款信息，不引入第二个日期库 */
-function formatWhen(updatedAt: number, t: Messages): string {
-  const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60000));
-  if (minutes < 1) return t.time.justNow;
-  if (minutes < 60) return t.time.minutesAgo(minutes);
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return t.time.hoursAgo(hours);
-  return t.time.daysAgo(Math.round(hours / 24));
-}

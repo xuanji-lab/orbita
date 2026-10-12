@@ -1,8 +1,19 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import * as ncanvas from "@napi-rs/canvas";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { extractText, getDocumentProxy, renderPageAsImage } from "unpdf";
+import {
+  displayText,
+  findQuote,
+  indexPageText,
+  newCitationId,
+  QUOTE_MIN_CHARS,
+  sourceSpan,
+  type PageTextIndex,
+  type PdfCitation,
+  type PdfTextRun,
+} from "../shared/pdf-quote.ts";
 
 /**
  * agent 的 PDF 工具：read_pdf。
@@ -261,7 +272,7 @@ async function renderPages(
   return { images, sizeNotes };
 }
 
-export function createPdfTools(cwd: string): ToolDefinition[] {
+export function createPdfTools(cwd: string, options: { pdfCitations?: boolean } = {}): ToolDefinition[] {
   const readPdf: ToolDefinition = {
     name: "read_pdf",
     label: "read_pdf",
@@ -473,7 +484,8 @@ export function createPdfTools(cwd: string): ToolDefinition[] {
       };
     },
   };
-  return [readPdf];
+  // cite_pdf 挂在实验开关后面（实验功能「PDF 引用」）：关着时模型看不到这个工具
+  return options.pdfCitations === true ? [readPdf, createCitePdfTool(cwd)] : [readPdf];
 }
 
 /** 连续页码列表（renderPages 的批转适配） */
@@ -481,4 +493,201 @@ function rangeList(first: number, last: number): number[] {
   const pages: number[] = [];
   for (let page = first; page <= last; page++) pages.push(page);
   return pages;
+}
+
+/** cite_pdf 一次最多核验几段引文：一次讲解用到的引用量级，再多是在贴全文 */
+export const CITE_MAX_QUOTES = 12;
+
+/** 引文回显给模型的截断长度：近似命中 / 最近处要让模型看清差在哪，但不复读整页 */
+const CITE_ECHO_MAX = 240;
+
+/** 文本索引缓存：同一份 PDF 一次讲解里会被引好几轮，每次重解析全文白费 */
+const INDEX_CACHE_MAX = 4;
+
+interface PdfTextCache {
+  key: string;
+  pages: { runs: PdfTextRun[]; index: PageTextIndex }[];
+}
+
+const indexCache: PdfTextCache[] = [];
+
+/**
+ * 一份 PDF 的逐页文本索引（按 路径 + 大小 + mtime 缓存，文件被改即失效）。
+ * 取 `getTextContent({ disableNormalization: true })`——与 renderer 文本层同一个
+ * 参数（shared/pdf-quote.ts 顶注释：两边必须量同一份文本）。
+ */
+async function pdfTextIndex(absolute: string, pathRaw: string): Promise<PdfTextCache["pages"]> {
+  const info = await stat(absolute);
+  const key = `${absolute}\0${info.size}\0${info.mtimeMs}`;
+  const hit = indexCache.find((entry) => entry.key === key);
+  if (hit !== undefined) return hit.pages;
+
+  const buffer = await readFile(absolute);
+  if (!buffer.subarray(0, 1024).toString("latin1").includes("%PDF-")) {
+    throw new Error(`Not a PDF file: ${pathRaw}.`);
+  }
+  let pdf: Awaited<ReturnType<typeof getDocumentProxy>>;
+  try {
+    pdf = await getDocumentProxy(new Uint8Array(buffer));
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "PasswordException") {
+      throw new Error(`The PDF is password-protected and cannot be cited: ${pathRaw}`);
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to parse PDF (${pathRaw}): ${reason}`);
+  }
+  const pages: PdfTextCache["pages"] = [];
+  for (let number = 1; number <= pdf.numPages; number++) {
+    const page = await pdf.getPage(number);
+    const content = await page.getTextContent({ disableNormalization: true });
+    const runs: PdfTextRun[] = [];
+    for (const item of content.items) {
+      if ("str" in item) runs.push({ str: item.str, hasEOL: item.hasEOL });
+    }
+    pages.push({ runs, index: indexPageText(runs) });
+  }
+  indexCache.unshift({ key, pages });
+  indexCache.length = Math.min(indexCache.length, INDEX_CACHE_MAX);
+  return pages;
+}
+
+function clip(text: string): string {
+  return text.length <= CITE_ECHO_MAX ? text : `${text.slice(0, CITE_ECHO_MAX)}…`;
+}
+
+/**
+ * cite_pdf：把要引用的原文**先核验再写进对话**（实验功能「PDF 引用」）。
+ *
+ * 用户场景：拖进一个 PDF 让 agent 讲解，agent 讲到某处时挂一个引用，用户点开就跳到
+ * PDF 里那段原文、已经高亮好。以前 agent 只能自己抄一段 callout——那段字用户从没
+ * 在 PDF 里亲眼见过，抄错了也看不出来。
+ *
+ * 核验在这里而不是点击时：找不到的引文当场报错（附最近处），模型改了再引，编出来
+ * 的原文进不了对话。命中的记录（PdfCitation，原文取自 PDF）走 details 落盘给 UI，
+ * 模型只拿到编号与核验结果，在正文里写 `[^编号]`。
+ */
+export function createCitePdfTool(cwd: string): ToolDefinition {
+  return {
+    name: "cite_pdf",
+    label: "cite_pdf",
+    description:
+      "Verify passages you want to cite from a PDF and get citation markers for them. Use it when you explain " +
+      "a PDF to the user and a statement relies on specific wording in the document: pass the exact original " +
+      "text (copy it from read_pdf output; line breaks and spacing do not matter), optionally with the page. " +
+      "Each verified quote returns a marker like [^c4k2] — put the marker right after the sentence it supports, " +
+      "in your reply. The user can click it to open the PDF at that passage, highlighted. Quotes that cannot be " +
+      "found come back as errors with the closest passage; fix them and call again instead of citing from " +
+      "memory. Do not paste the quoted text into your reply as well — the marker already shows it.",
+    promptSnippet: "cite_pdf: verify quotes from a PDF and get clickable citation markers for your reply",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to the PDF file (relative to the workspace or absolute)",
+        },
+        quotes: {
+          type: "array",
+          description: `Passages to cite, at most ${CITE_MAX_QUOTES} per call.`,
+          items: {
+            type: "object",
+            properties: {
+              text: {
+                type: "string",
+                description:
+                  "The original text exactly as it appears in the PDF — a sentence or phrase, not a paraphrase.",
+              },
+              page: {
+                type: "number",
+                description: "Page number where it appears (1-indexed), if known. Only a hint.",
+              },
+            },
+            required: ["text"],
+          },
+        },
+      },
+      required: ["path", "quotes"],
+    } as never,
+    async execute(_toolCallId, params) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const pathRaw = typeof args["path"] === "string" ? args["path"].trim() : "";
+      if (pathRaw === "") throw new Error('cite_pdf requires a "path" pointing at a PDF file');
+      const quotesRaw = Array.isArray(args["quotes"]) ? args["quotes"] : [];
+      const quotes: { text: string; page?: number }[] = [];
+      for (const entry of quotesRaw) {
+        if (typeof entry !== "object" || entry === null) continue;
+        const value = entry as Record<string, unknown>;
+        const text = typeof value["text"] === "string" ? value["text"] : "";
+        const page = typeof value["page"] === "number" && Number.isFinite(value["page"]) ? Math.floor(value["page"]) : undefined;
+        quotes.push(page === undefined ? { text } : { text, page });
+      }
+      if (quotes.length === 0) throw new Error('cite_pdf requires "quotes": [{ "text": "...", "page": 3 }]');
+      if (quotes.length > CITE_MAX_QUOTES) {
+        throw new Error(`At most ${CITE_MAX_QUOTES} quotes per call (got ${quotes.length}).`);
+      }
+      const absolute = isAbsolute(pathRaw) ? pathRaw : join(cwd, pathRaw);
+      const pages = await pdfTextIndex(absolute, pathRaw);
+      const totalChars = pages.reduce((sum, page) => sum + page.index.norm.length, 0);
+      if (totalChars < PDF_NO_TEXT_LAYER_MIN_CHARS) {
+        throw new Error(
+          `The PDF has no text layer (probably scanned): ${pathRaw}. Citations need a text layer; describe the page instead.`,
+        );
+      }
+
+      const indexes = pages.map((page) => page.index);
+      const citations: PdfCitation[] = [];
+      const lines: string[] = [];
+      const used = new Set<string>();
+      quotes.forEach((quote, i) => {
+        const label = `${i + 1}.`;
+        const match = findQuote(indexes, quote.text, quote.page);
+        if (match.kind === "too-short") {
+          lines.push(`${label} NOT CITED — quote too short (need at least ${QUOTE_MIN_CHARS} letters/digits): "${clip(quote.text)}"`);
+          return;
+        }
+        if (match.kind === "not-found") {
+          const near = match.nearest;
+          const span = near === null ? null : sourceSpan(indexes[near.page - 1]!, near.start, near.end);
+          const closest =
+            near === null || span === null
+              ? " No similar passage found — check that this text is really in the document."
+              : ` Closest passage, page ${near.page}: "${clip(displayText(pages[near.page - 1]!.runs, span))}"`;
+          lines.push(`${label} NOT CITED — not found in the PDF: "${clip(quote.text)}".${closest}`);
+          return;
+        }
+        const page = pages[match.page - 1]!;
+        const span = sourceSpan(page.index, match.start, match.end);
+        if (span === null) {
+          lines.push(`${label} NOT CITED — internal error locating the passage.`);
+          return;
+        }
+        const text = displayText(page.runs, span);
+        let id = newCitationId();
+        while (used.has(id)) id = newCitationId();
+        used.add(id);
+        citations.push({ id, path: absolute, page: match.page, start: match.start, end: match.end, text });
+        const notes: string[] = [];
+        if (quote.page !== undefined && quote.page !== match.page) notes.push(`found on page ${match.page}, not ${quote.page}`);
+        if (match.occurrences > 1) notes.push(`appears ${match.occurrences} times; cited the one on page ${match.page}`);
+        if (match.kind === "approximate") {
+          notes.push(`approximate match — the PDF actually reads: "${clip(text)}"; make sure your sentence fits it`);
+        }
+        lines.push(`${label} [^${id}] page ${match.page}${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`);
+      });
+
+      const header =
+        citations.length === quotes.length
+          ? `Verified ${citations.length} quote${citations.length === 1 ? "" : "s"}.`
+          : `Verified ${citations.length} of ${quotes.length} quotes; fix the ones marked NOT CITED and call again.`;
+      const footer =
+        citations.length > 0
+          ? "Put each marker right after the sentence it supports, e.g. \"…uses double buffering[^" +
+            `${citations[0]!.id}].\" Write markers exactly as shown.`
+          : "";
+      return {
+        content: [{ type: "text", text: [header, ...lines, footer].filter((part) => part !== "").join("\n") }],
+        details: citations.length > 0 ? { pdfCitations: citations } : {},
+      };
+    },
+  };
 }

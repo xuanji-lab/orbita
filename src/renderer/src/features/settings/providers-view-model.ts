@@ -141,6 +141,7 @@ export function railShortNames(providers: readonly ProviderDto[]): Map<string, s
  */
 export function hasCredentials(auth: ProviderDto["auth"]): boolean {
   if (auth.scheme === "api_key") return auth.hasSecret;
+  if (auth.scheme === "oauth") return auth.loggedIn;
   return auth.scheme === "env";
 }
 

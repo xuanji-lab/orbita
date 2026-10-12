@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readPreview } from "./read.ts";
+import { readPdfFile, readPreview } from "./read.ts";
 
 let dir = "";
 
@@ -84,5 +84,29 @@ describe("readPreview", () => {
     const path = join(dir, "sub");
     await mkdir(path);
     await assert.rejects(() => readPreview(path), /Not a file/);
+  });
+});
+
+describe("readPdfFile", () => {
+  test("整份字节读回 Uint8Array，size 与盘上一致", async () => {
+    const path = join(dir, "doc.pdf");
+    await writeFile(path, Buffer.from("%PDF-1.4\nbody"));
+    const result = await readPdfFile(path);
+    assert.ok(result.kind === "pdf");
+    assert.ok(result.data instanceof Uint8Array);
+    assert.equal(Buffer.from(result.data).toString("latin1"), "%PDF-1.4\nbody");
+    assert.equal(result.size, 13);
+  });
+
+  test("超过上限不读，回 too-large", async () => {
+    const path = join(dir, "big.pdf");
+    await writeFile(path, Buffer.alloc(32));
+    const result = await readPdfFile(path, 16);
+    assert.deepEqual({ kind: result.kind, size: result.size }, { kind: "too-large", size: 32 });
+  });
+
+  test("目录被拒", async () => {
+    await mkdir(join(dir, "x.pdf"));
+    await assert.rejects(readPdfFile(join(dir, "x.pdf")), /Not a file/);
   });
 });

@@ -222,6 +222,18 @@ describe("SessionStore", () => {
     assert.deepEqual(await store.list(), []);
   });
 
+  // 未读标记（2026-10-10 落盘）：标 / 清只动这一个字段；重启后读回还是它
+  test("setUnread 标未读与清未读，别的字段不被波及", async () => {
+    await store.ensureSession(meta({ pinned: true }));
+    await store.setUnread(ID, { at: 1234, failed: true });
+    let after = (await store.list()).find((m) => m.id === ID);
+    assert.deepEqual(after?.unread, { at: 1234, failed: true });
+    assert.equal(after?.pinned, true);
+    await store.setUnread(ID, null);
+    after = (await store.list()).find((m) => m.id === ID);
+    assert.equal(after?.unread, null);
+  });
+
   // 完成状态机：翻到 done 的那一刻记下关闭时刻；reopen（回 open）清空——
   // closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态
   test("setCompletion：done 记关闭时刻，reopen 清空，done_with_todos 也可写", async () => {
@@ -978,6 +990,29 @@ describe("SessionStore · 文件引用落盘", () => {
       { path: join(dir, "gone.txt"), name: "gone.txt", kind: "file", origin: "external" },
     ]);
     assert.equal(missing?.path, join(dir, "gone.txt"));
+  });
+
+  test("超过复制上限的 external 文件不复制、按原位置引用；未超限的照旧复制（注入小阈值，不真写 100MB）", async () => {
+    await store.ensureSession(meta());
+    await mkdir(join(dir, "outside"), { recursive: true });
+    const big = join(dir, "outside", "big.bin");
+    await writeFile(big, "0123456789"); // 10 字节
+    const small = join(dir, "outside", "small.txt");
+    await writeFile(small, "abc");
+    const [bigSent, smallSent] = await store.saveExternalFiles(
+      ID,
+      [
+        { path: big, name: "big.bin", kind: "file", origin: "external" },
+        { path: small, name: "small.txt", kind: "file", origin: "external" },
+      ],
+      5, // 上限 5 字节：big 超限、small 不超
+    );
+    // 超限的按原位置引用（realpath 规范形），不进会话附件目录
+    assert.equal(bigSent?.kind, "file");
+    assert.equal(bigSent?.path, await realpath(big));
+    // 未超限的照旧复制进 <uuid>/原名 子目录
+    assert.match(smallSent?.path ?? "", new RegExp(`[\\\\/]${ID}\\.attachments[\\\\/][0-9a-f-]{36}[\\\\/]small\\.txt$`));
+    assert.equal(await readFile(smallSent?.path ?? "", "utf8"), "abc");
   });
 });
 

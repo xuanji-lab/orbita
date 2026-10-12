@@ -1,7 +1,7 @@
 # ORBITA — Agent 入口（AGENTS.md）
 
 > 本文件是所有 agent / 协作者进入本分支的必读入口。
-> **维护原则**：只放「每次开工都会用到的」；深度内容路由到 `docs/`。上限 120 行——每轮对话都在为超出部分付上下文税。
+> **维护原则**：只放「每次开工都会用到的」；深度内容路由到 `docs/`（**仅维护者本地，不在公开仓库里**，见文末路由表）。每轮对话都在为这里的每一行付上下文税，能短则短。
 > **优先级**：用户当次明示指令 > 本文件。
 
 ## 30 秒定位
@@ -65,14 +65,17 @@ ORBITA 是一个本地优先的 Electron AI 桌面 Agent。本分支**从零重�
 
 ```bash
 bun install          # 依赖变更
-bun run dev          # 开发
-bun run dev:isolated # 第二个 dev 实例：userData/锁/工作区根（~/Orbita-dev-2）全分开，端口 5274
+bun run dev          # 开发（5273，留给用户自己跑）
 bun run typecheck    # 类型检查
 bun run test         # 测试
 ```
 
 > **dev server 固定在 `http://127.0.0.1:5273`**（只绑 IPv4 回环 + `strictPort`，撞了当场失败）。
-> 再开实例设环境变量 `ORBITA_DEV_INSTANCE=<名>` + `ORBITA_DEV_PORT=<端口>` 后 `bun run dev`，不要改配置里的端口。
+> **`bun run dev`（5273）留给用户**；agent 起验收实例用环境变量另起名字与 5300 以上端口，
+> 不要跟用户挤 5273：
+> `ORBITA_DEV_INSTANCE=<名> ORBITA_DEV_PORT=<端口> bun run dev`
+> （PowerShell：`$env:ORBITA_DEV_INSTANCE="<名>"; $env:ORBITA_DEV_PORT="<端口>"; bun run dev`）。
+> 不要改配置里的端口。
 > 停服务按 PID 杀，**不要 `pkill -f "electron-vite dev"`**——同机别的 electron-vite 应用会陪葬（陷阱史 #2）。
 > **新开 worktree 交给用户前**：`bun install`，`node_modules/electron/path.txt` 不在就跑 `node node_modules/electron/install.js`，
 > 确认 `node -e "require('electron')"` 打印出路径。不要拿软链主仓 node_modules 充数——用户进去 `bun run dev` 会报 `Electron uninstall`。
@@ -93,10 +96,11 @@ bun run test         # 测试
 
 ## 设计系统
 
-UI 真源是 `Orbita Design System/readme.md`，**所有用户可见渲染面无豁免区**。动手前先读它；
+UI 真源是 `design-system/readme.md`，**所有用户可见渲染面无豁免区**。动手前先读它；
 token 规范与实现不一致时以设计系统为准。
 
 - 禁裸 hex / 未定义 CSS 变量；accent 只给主操作（明主题蓝、暗主题黄）。
+- **行尾血线**：行 / 卡尾部元素右缘钉在行右内边距（`.row-trailing` 推右，悬停动作键不占位）；规矩见设计系统 readme *Implementation rules*，几何由 `scripts/ui-edges.mjs` 把关。
 - **禁 emoji 与 Unicode 字符当图标**——只用 lucide。状态优先用图标与文字，颜色是第二信号。
 - 重视空态、键盘操作、加载态、深浅主题。
 
@@ -112,9 +116,9 @@ token 规范与实现不一致时以设计系统为准。
   计划、调研、progress 笔记一律留在 agent 自己的会话工作台，**不进仓**。
   `docs/plans/`、`UPDATE_NOTES.md` 及任何新增 `.md`，只在**用户当次明确点名**时才写。
   理由：多出来的文字要么过期后误导后来者，要么每轮吃上下文，而它描述的事实代码里都有。
-- **版本号**：2026-09-30 起恢复使用（内测包落地，版本号进了安装包名、安装程序页与卸载项的 DisplayVersion）：
-  内测期走 `0.x.y`（首个内测包 `0.1.0`），每次改动至少 patch +1；对外首发时抬 `1.0.0`。
-  **必须是合法 semver**——四段号（`0.0.0.0`）electron-builder 直接拒（`Invalid version`）。
+- **版本号**：内测期 `0.x.y`（2026-09-30 起，进安装包名与卸载项 DisplayVersion），对外首发抬 `1.0.0`；须是合法 semver（四段号 electron-builder 直接拒）。
+  每个合入 main 的 PR 至少 patch +1。**并行派出的一批 PR 各自不改版本号**（各自 +1 必在 `package.json` 上冲突），
+  全部合入后由一个 `chore(release)` PR 统一 +1。
 - 提交前 `git diff` / `git status` 核对：不含无关文件、不覆盖他人未提交改动。
 
 ## 工程陷阱史（真实事故，新会话必读）
@@ -135,15 +139,22 @@ token 规范与实现不一致时以设计系统为准。
    dev server 侧都是新的（`curl http://127.0.0.1:5273/src/...` 可验证），但改动前启动的 Electron 窗口
    还在跑旧模块——表现为「功能没实现」，对着不存在的 bug 排查了一整轮。
    对策：renderer 行为与代码不符时，先在窗口里 **Ctrl+R 硬刷新**再排查；刷新即从 vite 重新拉全量模块。
+5. **删远端分支前要查 open PR 的 base，不只查 head**——叠层 PR 的 base 是已合并分支时，
+   删掉 base 会连带静默关闭整串 PR（2026-10-09 清理 53 支已合并分支，
+   `feat/composer-material-stack` 上的 #150/#152/#153 三个 Draft 被连关，靠本地分支重建 + 逐个
+   reopen 才救回）。对策：删除名单过一遍 open PR 列表的 base 字段，有叠层的先把那串 PR 改 base
+   到 main，或留着那支分支。
 
 ## 深度路由（用到再读，不要背进上下文）
+
+> 标 `docs/` 的条目只在维护者本地（`.gitignore` 忽略，2026-10 开源时移出仓库）；外部贡献者没有它们，以代码与 commit 历史为准。
 
 | 主题 | 位置 |
 |---|---|
 | **单 agent 的范围、架构决定与理由** | `docs/single-agent-guideline.md` |
 | **通用语言**（同一个词在两处指不同东西时，以本表为准） | `docs/ubiquitous-language.md` |
-| UI 设计语言真源 | `Orbita Design System/readme.md` |
-| 品牌原始资产（字体 / lucide 图标 / logo） | `design/` |
+| UI 设计语言真源 | `design-system/readme.md` |
+| 新图标 / 字体 | 从上游拷单个文件进 `design-system/assets/`（lucide.dev，`lucide-static@1.33.0`），再在 `Icon.tsx` 登记 |
 | 会话存储规格 | `docs/architecture/orbita_v4.5.1/28-session-storage.md` |
 | 多 agent 编排设计资产（**参考，未实现**） | `docs/architecture/orbita_v4.5.1/` |
 | 明朝制度参考（编排文档的术语背景） | `docs/architecture/ming-dynasty-reference/` |

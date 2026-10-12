@@ -6,15 +6,15 @@ import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
-  ChannelMarkLine,
-  ChannelTaskCard,
+  ChannelFromChildPill,
+  ChannelFromParentBubble,
   ChannelToolMarkLine,
   DelegateCardView,
   peerTitleOf,
   type ChannelViewContext,
   type DelegateCardStatus,
 } from "./ChannelViews";
-import { useChannelMessages } from "./useChannelMessages";
+import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
 import {
   HOME_CARD_CARRYOVER_ROWS,
@@ -22,6 +22,9 @@ import {
   selectHomeCards,
 } from "./home-cards";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
+import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
+import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
+import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import {
@@ -39,14 +42,21 @@ import {
   groupToolUnits,
   groupTurns,
   indexToolResults,
+  interruptedToolCallIds,
   mcpFailureLead,
-  channelSendMessageId,
   mcpInputSummary,
   readTaskCard,
   showImageCard,
   type ShowImageCardView,
   summarizeMcpResult,
   liveTailLines,
+  expectedSecondsOf,
+  formatRunClock,
+  shellAutoExpand,
+  stripTrailingBlankLines,
+  tailPreviewLines,
+  timeoutSecondsOf,
+  toolStartAt,
   parseEditDiff,
   editDiffEntries,
   parseGrepLine,
@@ -72,9 +82,16 @@ import {
   type ToolResultIndex,
   type TurnGroupUnit,
 } from "./tool-results";
+import { useToday } from "./today.ts";
+import { formatMessageTime, fullTimestamp } from "./message-time.ts";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
-import { MathText } from "../../shell/MathText";
+import {
+  insertToken,
+  panelInsertPosition,
+  type PanelInsertRequest,
+  type TokenPickResult,
+} from "../../shell/panel-token.ts";
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
@@ -84,9 +101,12 @@ import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { CarryoverChecklist } from "./CarryoverChecklist";
+import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import { DiffBody } from "../../shell/DiffView";
 import { RevertPreviewBar } from "./RevertPreviewBar";
+import { collectCitations } from "./citation-markers.ts";
+import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
@@ -102,11 +122,14 @@ import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
+import { MaterialBoxContext } from "../../shell/BlackholeBox.tsx";
+import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
+import type { ChannelMessage } from "@shared/channel";
 import { modelThinkingLevels } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
-import { parseQualifiedToolName } from "@shared/mcp";
+import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
 import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
@@ -189,6 +212,8 @@ export function ChatView(props: ChatViewProps) {
     },
     [session.transcript],
   );
+  // PDF 引用表（实验功能「PDF 引用」）：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
+  const citations = useMemo(() => collectCitations(session.transcript), [session.transcript]);
   return (
     <div
       ref={paneRef}
@@ -212,7 +237,9 @@ export function ChatView(props: ChatViewProps) {
       }}
     >
       <QuoteJumpContext.Provider value={jumpToQuote}>
-        <ChatViewBody {...props} dropActive={dropActive} />
+        <CitationTableContext.Provider value={citations}>
+          <ChatViewBody {...props} dropActive={dropActive} />
+        </CitationTableContext.Provider>
       </QuoteJumpContext.Provider>
       {accepts && (
         <QuoteSelectionLayer
@@ -400,7 +427,9 @@ function QuoteSelectionLayer(props: {
  * 挂载读一次、失败静默——徽标是锦上添花，不为它报错，也不为它做重读 UI
  * （新建的 skill 下一轮会话自然出现）。
  */
-function useSkillIndex(): { skills: SkillMeta[]; reload: () => void } {
+function useSkillIndex(): {
+  skills: SkillMeta[];
+} {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const reload = useCallback(() => {
     void api.skill.list().then(setSkills).catch(() => undefined);
@@ -408,8 +437,21 @@ function useSkillIndex(): { skills: SkillMeta[]; reload: () => void } {
   useEffect(() => {
     reload();
   }, [reload]);
-  return { skills, reload };
+  return { skills };
 }
+
+/*
+ * 右栏选取回执与行内选用插入的消费水位（模块级）：只有主槽的 ChatView 拿
+ * tokenPickResult / panelInsert，不会串合；但主槽会在设置页来回切时重挂——
+ * 实例 ref 会归零，旧回执被重放、token 插两遍。水位放模块级，重挂也记得
+ * 消费过哪一条。
+ */
+let consumedPickNonce = 0;
+let consumedPanelInsertNonce = 0;
+
+/** 主槽输入框（选取回执与行内选用的插入目标）：面板 / 抽屉里的 Composer 不算 */
+const mainComposerTextarea = (): HTMLTextAreaElement | null =>
+  document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
 
 function ChatViewBody(props: {
   /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
@@ -430,24 +472,10 @@ function ChatViewBody(props: {
    */
   onOpenProviders?: () => void;
   /**
-   * 点主流里的通道标记 → 显示 / 展开通道列并跳到那条消息（子会话 PR4b）。
-   * App 传一个 `useCallback` 出来的稳定引用给主槽的 ChatView；辅助对话抽屉里的
-   * ChatView 不传（undefined），标记保持不可点——那里没有通道列可跳。
-   */
-  onOpenChannel?: (childId: string, messageId: string | null) => void;
-  /**
-   * 子会话视图里点标记 → 打开父子会话面板并跳到那条消息（用户 2026-09-25：子会话
-   * 工作记录里看到它发给母会话的标记，自己点进去）。只有 Sub-sessions 面板里查看
-   * 子会话的 ChatView 拿到它——那时主槽正看着母会话，父子会话面板打得开。子会话
-   * 在主槽打开（Open as main）时主槽没有母会话、也就没有父子会话面板，不传，标记
-   * 保持不可点，不给一个点了没反应的东西。
-   */
-  onOpenOwnChannel?: (messageId: string | null) => void;
-  /**
-   * 点派出卡 → 打开右栏 Sub-sessions 面板并直接进入这条子会话的会话层（子会话
-   * PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与 Sub-sessions 面板自己
-   * 内部渲染的 ChatView（查看子会话）都不传，派出卡保持不可点，也符合「UI 只做
-   * 一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
+   * 点主流里的派出卡 / 子会话问询胶囊 → 打开右栏 Sub-sessions 面板并直接进入这条
+   * 子会话的会话层（子会话 PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与
+   * Sub-sessions 面板自己内部渲染的 ChatView（查看子会话）都不传，派出卡保持不可点，
+   * 也符合「UI 只做一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
    */
   onOpenSubSession?: (childId: string) => void;
   /**
@@ -493,13 +521,99 @@ function ChatViewBody(props: {
    * End 变成同时滚两个面——面板的回底走浮钮，不抢全局键。
    */
   scrollToEndHotkey?: boolean;
+  /**
+   * 「/ + 空格」打开右栏选取（panel-token.ts）：行首或空白后孤立的 / 按下空格时
+   * （句中同样触发，2026-10-11 用户裁定）交出插入锚点。**只有主槽的 ChatView
+   * 拿到它**（App 在那边接住去开面板）；抽屉 / 面板内的 Composer 不参与，
+   * 那边的 / 空格就是普通文字。
+   */
+  onSlashSpace?: (position: number) => boolean;
+  /**
+   * 右栏选取的一次性回执（nonce 单调递增，同 channelOpenRequest 的先例）：token
+   * 非空 = 插到 position（execCommand 保撤销栈）；null = 取消，只把焦点送回输入框。
+   * 只有主槽的 ChatView 拿到它。
+   */
+  tokenPickResult?: TokenPickResult | null;
+  /**
+   * 右栏行内「选用」按钮的一次性插入请求（nonce 单调递增，同 tokenPickResult 的
+   * 先例）：token 插到输入框**当前光标处**（从未聚焦过则落到草稿末尾），焦点回
+   * 输入框。面板不关——浏览态可以连插几条。只有主槽的 ChatView 拿到它。
+   */
+  panelInsert?: PanelInsertRequest | null;
 }) {
   const t = useT();
+  // 会话生命周期开关：头部完成标记、收尾扫描的全部面挂它后面；
+  // 关闭时收尾相关数据源一并在渲染前置空（首页卡退回提问行位、消息流不出扫描卡）
+  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { session, providersError, homeBare, hideComposer } = props;
-  // read SKILL.md 徽标的识别索引 + 指令面板的 skill 清单（同一份数据）。
-  // reload 暴露给 Composer：面板每次打开重拉，新建/删除的 skill 立即可见
-  const { skills, reload: reloadSkills } = useSkillIndex();
+  // read SKILL.md 徽标的识别索引（徽标与工具行共用同一份数据）
+  const { skills } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
+
+  // ── 右栏选取的回执：插入 token、焦点回输入框（panel-token.ts）────────
+  useEffect(() => {
+    const result = props.tokenPickResult;
+    if (result == null || result.nonce <= consumedPickNonce) return;
+    consumedPickNonce = result.nonce;
+    if (result.token === null) {
+      // 取消（Esc）：把触发时删掉的「/ 」还回原处。句中也会触发之后，「a / b」这类
+      // 正文打出 / 加空格就开了面板——Esc 必须让它回到用户打的原样，不能吞字
+      const anchor = result.position;
+      requestAnimationFrame(() => {
+        const el = mainComposerTextarea();
+        const position = Math.max(0, Math.min(anchor, session.draft.length));
+        const restored = session.draft.slice(0, position) + "/ " + session.draft.slice(position);
+        if (el === null) {
+          session.setDraft(restored);
+          return;
+        }
+        el.focus();
+        el.setSelectionRange(position, position);
+        if (!document.execCommand("insertText", false, "/ ")) session.setDraft(restored);
+      });
+      return;
+    }
+    const token = result.token;
+    const anchor = result.position;
+    requestAnimationFrame(() => {
+      const el = mainComposerTextarea();
+      const position = Math.max(0, Math.min(anchor, session.draft.length));
+      const next = insertToken(session.draft, position, token);
+      // execCommand("insertText") 保撤销栈：input 事件会把最终值送回 onChange →
+      // draft 自动同步；输入框不在（设置页盖着）或被拒（只读）就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tokenPickResult]);
+
+  // ── 行内「选用」按钮的插入：token 落到输入框当前光标处（panel-token.ts）──
+  // 光标从 DOM 读（失焦后 selectionStart 仍停在最后一次的位置）；「从未聚焦过」
+  // 的判定在 panelInsertPosition（纯函数，有测试）
+  useEffect(() => {
+    const request = props.panelInsert;
+    if (request == null || request.nonce <= consumedPanelInsertNonce) return;
+    consumedPanelInsertNonce = request.nonce;
+    requestAnimationFrame(() => {
+      const el = mainComposerTextarea();
+      const position = panelInsertPosition(el === null ? 0 : el.selectionStart, session.draft.length);
+      const next = insertToken(session.draft, position, request.token);
+      // 同选取回执：execCommand 保撤销栈，被拒 / 不在就退回直接写
+      if (el === null) {
+        session.setDraft(next.value);
+        return;
+      }
+      el.focus();
+      el.setSelectionRange(position, position);
+      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.panelInsert]);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
@@ -638,9 +752,10 @@ function ChatViewBody(props: {
   // 选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），这里只接线。
   // **必须在首页分支之外无条件调用**——hook 不能长在条件分支里，首页让位给聊天页时
   // hooks 数量一变 React 直接卸载整棵树（灰屏）。纯函数毫秒级，恒算不亏。
+  // 会话生命周期开关关闭时遗留清单传空——首页卡全部退回「最近提问」行位，不出待办卡。
   const homeCards = useMemo(
-    () => selectHomeCards(session.sessions, session.carryovers),
-    [session.sessions, session.carryovers],
+    () => selectHomeCards(session.sessions, lifecycle ? session.carryovers : []),
+    [session.sessions, session.carryovers, lifecycle],
   );
 
   // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
@@ -661,31 +776,35 @@ function ChatViewBody(props: {
     [session.sessions],
   );
   const channelSummaries = useChannelSummaries(openId === "" ? null : openId);
-  // 标记点了打开父子会话面板：根会话（ownSide "parent"）走 onOpenChannel，按对面的
-  // childId 定位；子会话走 onOpenOwnChannel——通道的 childId 就是它自己，标记里的
-  // peerId 是母会话，所以不透传、只要 messageId。主槽的 ChatView 看子会话时两个都
-  // 接不上（onOpenChannel 只认根会话，onOpenOwnChannel 只有 Sub-sessions 面板给），
-  // 标记不可点；辅助对话抽屉两个都不传。
-  const onOpenOwnChannel = props.onOpenOwnChannel;
-  const onOpenParentChannel = props.onOpenChannel;
-  const openChannel = useMemo<((childId: string, messageId: string | null) => void) | null>(() => {
-    if (ownSide === "parent") return onOpenParentChannel ?? null;
-    if (onOpenOwnChannel === undefined) return null;
-    return (_peerId, messageId) => onOpenOwnChannel(messageId);
-  }, [ownSide, onOpenParentChannel, onOpenOwnChannel]);
-  // 子会话 PR4c：派出卡的点击与描边同一套「只有主槽才接」的门槛，openChannel 上面已有先例
+  // 子会话 PR4c：派出卡 / 问询胶囊的点击入口——只有主槽的根会话视图接得上
+  // （onOpenSubSession 由 App 给），辅助对话抽屉与面板内查看的子会话都接不上，
+  // 不可点。
   const openSubSession = ownSide === "parent" ? (props.onOpenSubSession ?? null) : null;
   const litSubSessionId = props.litSubSessionId ?? null;
-  // 子会话 2026-09-23 裁决①：任务卡的正文来自自己父子这条通道的账本——只有
-  // `ownSide` 为 "child" 时才有意义（根会话没有 task 标记要渲染），key 为 null
-  // 时 `useChannelMessages` 内部直接短路成空态，不发请求（同它自己的既有语义）。
+  // 通道正文的两个来源（2026-10-12 沟通回对话流）：
+  //   - 子会话视图：拉**自己那条父子通道**的全文——任务 / 回复 / 叫停的气泡正文都在
+  //     这里；key 为 null 时 `useChannelMessages` 内部短路成空态，不发请求。
+  //   - 根会话视图：拉**全部子通道**的合并——问询胶囊按 messageId 取正文首行。
+  // 两个 hook 都在分支外无条件调用（首页让位给聊天页时 hooks 数量不变）。
+  const ownChildren = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
   const taskChannelKey =
     ownSide === "child" && ownParentId !== null && openId !== "" ? { parentId: ownParentId, childId: openId } : null;
   const taskChannel = useChannelMessages(taskChannelKey);
-  const channelMessages = useMemo(
-    () => new Map(taskChannel.messages.map((message) => [message.id, message])),
-    [taskChannel.messages],
+  const parentChannels = useParentChannels(
+    ownSide === "parent" && openId !== "" ? openId : null,
+    ownChildren.map((meta) => meta.id),
   );
+  const channelMessages = useMemo(() => {
+    if (ownSide === "child") return new Map(taskChannel.messages.map((message) => [message.id, message]));
+    const merged = new Map<string, ChannelMessage>();
+    for (const messages of parentChannels.values()) {
+      for (const message of messages) merged.set(message.id, message);
+    }
+    return merged;
+  }, [ownSide, taskChannel.messages, parentChannels]);
+  // 加载 / 错误态跟各自的那仨定：只有气泡（子侧）用得到，父流胶囊没有正文也退化为只报名字
+  const channelLoading = ownSide === "child" ? taskChannel.loading : false;
+  const channelError = ownSide === "child" ? taskChannel.error : null;
   const channel = useMemo<ChannelViewContext>(
     () => ({
       ownSide,
@@ -693,12 +812,11 @@ function ChatViewBody(props: {
       titles,
       channelSummaries,
       childPhaseOf: session.phaseOf,
-      openChannel,
       openSubSession,
       litSubSessionId,
       channelMessages,
-      channelMessagesLoading: taskChannel.loading,
-      channelMessagesError: taskChannel.error,
+      channelMessagesLoading: channelLoading,
+      channelMessagesError: channelError,
     }),
     [
       ownSide,
@@ -706,12 +824,11 @@ function ChatViewBody(props: {
       titles,
       channelSummaries,
       session.phaseOf,
-      openChannel,
       openSubSession,
       litSubSessionId,
       channelMessages,
-      taskChannel.loading,
-      taskChannel.error,
+      channelLoading,
+      channelError,
     ],
   );
 
@@ -722,7 +839,7 @@ function ChatViewBody(props: {
    * 的子会话数；为 0 时芯片只显示前半（不拼出 "· 0 waiting"）。点击调用方按
    * `onOpenSubSessions` 是否给了决定是否可点，同 `ChannelMarkPill` 的门槛。
    */
-  const subSessionRows = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
+  const subSessionRows = ownChildren;
   const subSessionsChip =
     subSessionRows.length === 0
       ? null
@@ -754,20 +871,6 @@ function ChatViewBody(props: {
         session.send();
       }}
       onStop={session.stop}
-      skills={skills}
-      onReloadSkills={reloadSkills}
-      onCommand={(command) => {
-        if (command === "compact") {
-          // 压缩走既有解析流（忙碌感知、排队同手工输入 /compact）
-          session.sendText("/compact");
-        } else {
-          // /new：清掉打了一半的草稿与挂着的附件再开新会话（先清再切——
-          // newTask 换槽后 draftKey 变了，附件就清不到了）
-          session.clearComposerExtras();
-          session.setDraft("");
-          session.newTask();
-        }
-      }}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
       // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
@@ -795,12 +898,15 @@ function ChatViewBody(props: {
       attachments={session.attachments}
       onAttach={session.attachIncoming}
       onRemoveAttachment={session.removeAttachment}
+      onPickFolders={session.attachFolderRefs}
       files={session.files}
       pasted={session.pasted}
       onRemoveFile={session.removeFile}
-      onRemovePasted={session.removePasted}
-      onPasteLargeText={session.addPastedText}
+      onAddPasteBlock={session.addPasteBlock}
+      onExpandPaste={session.expandPaste}
+      onCollapsePaste={session.collapsePaste}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
+      onSlashSpace={props.onSlashSpace}
     />
   );
 
@@ -831,6 +937,9 @@ function ChatViewBody(props: {
                 border: 0,
                 background: "transparent",
                 padding: 0,
+                // 文字与按钮如今同在 Notice 的文字 wrapper 里（原来靠 flex gap 隔开），
+                // 这里自己补上同一间距，保持与旧版一致的视觉分隔
+                marginLeft: "var(--space-2)",
                 fontFamily: "var(--font-family-base)",
                 fontSize: "var(--font-size-control)",
                 color: "var(--color-text-primary)",
@@ -995,13 +1104,18 @@ function ChatViewBody(props: {
         scrollRef={scrollRef}
         onScroll={handleScroll}
         scrollToEnd={props.scrollToEnd === true ? { visible: showScrollToEnd, onClick: scrollToEnd } : null}
-        // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用
-        completion={openId === "" ? null : (openMeta?.completion ?? "open")}
+        // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用。
+        // 会话生命周期开关关闭时整组不传（Pane 头部的完成入口随之不渲染）
+        completion={
+          lifecycle && openId !== "" ? (openMeta?.completion ?? "open") : null
+        }
         onSetCompletion={
-          openId === "" ? undefined : (next) => session.setCompletionSession(openId, next)
+          lifecycle && openId !== ""
+            ? (next) => session.setCompletionSession(openId, next)
+            : undefined
         }
         // open 态点击走收尾仪式（降级矩阵在 hook）；Reopen 仍走 onSetCompletion
-        onMarkDone={openId === "" ? undefined : session.startClosingRitual}
+        onMarkDone={lifecycle && openId !== "" ? session.startClosingRitual : undefined}
         closing={session.closingScan}
         busy={session.phase !== "idle"}
         scanless={openMeta?.piSessionFile == null}
@@ -1040,8 +1154,9 @@ function ChatViewBody(props: {
               <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
             )}
             {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示
-                （scanResult 由 hook 查看槽持有，切走再切回还在） */}
-            {session.scanResult !== null && session.scanResult.sessionId === openId && (
+                （scanResult 由 hook 查看槽持有，切走再切回还在）。挂会话生命周期开关：
+                开关在确认卡开着时被关掉（去设置里关）的话，回来不再渲染 */}
+            {lifecycle && session.scanResult !== null && session.scanResult.sessionId === openId && (
               <CarryoverChecklist
                 drafts={session.scanResult.drafts}
                 onConfirm={session.confirmCarryovers}
@@ -1153,6 +1268,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   sessionId: string;
 }) {
   const t = useT();
+  // 会话生命周期开关：关闭时消息流不出收尾扫描卡（同 useT 读 Context 的先例——开关
+  // 几乎不变，偶尔破一次 memo 无妨）
+  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
   const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
@@ -1173,8 +1291,25 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = useMemo(() => flattenRenderUnits(records), [records]);
   const entries = useMemo(() => groupToolUnits(units, props.skills), [units, props.skills]);
+  // 流式中的 assistant 记录 id 集：这些消息的 text 块渲染时传 streaming，
+  // closePendingMath 只该作用于打字未完成的文本（MarkdownBlock 的 streaming prop）
+  const streamingIds = useMemo(
+    () =>
+      new Set(
+        records
+          .filter((record) => record.role === "assistant" && record.status === "streaming")
+          .map((record) => record.id),
+      ),
+    [records],
+  );
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = props.phase === "turn";
+  // 已中断的工具调用（interruptedToolCallIds）：结果永远不会来的调用按静止的
+  // 「已中断」渲染，不再呼吸/转圈——委派卡「委派中…」停不下来就是这类（2026-10-09）
+  const interruptedCalls = useMemo(
+    () => interruptedToolCallIds(records, toolResults, turnActive),
+    [records, toolResults, turnActive],
+  );
   // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
   const turnView = useMemo(() => groupTurns(entries, turnActive, toolResults), [entries, turnActive, toolResults]);
   // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
@@ -1204,6 +1339,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 渲染一次卡片，其余跳过——整条消息已进卡。消息里命中与 user 关闭无关，
   // 挂在 records 上（扫描历史会话的旧回答同样卡片化）。
   const carryoverCards = useMemo(() => {
+    // 会话生命周期开关关闭：消息流不出收尾扫描卡（历史会话里的旧扫描回答同样不卡片化）
+    if (!lifecycle) return new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
     const cards = new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
     for (const record of records) {
       if (record.role !== "assistant" || record.status === "streaming") continue;
@@ -1219,7 +1356,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       if (drafts !== null) cards.set(record.id, { drafts, firstKey });
     }
     return cards;
-  }, [records]);
+  }, [records, lifecycle]);
   // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
   // 那轮没折叠就不挂，红字自带的图标是全部。
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
@@ -1330,6 +1467,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
                 sessionId={props.sessionId}
+                interruptedCalls={interruptedCalls}
               />
             ) : (
               <EntryView
@@ -1337,6 +1475,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 toolResults={toolResults}
                 activeThinkingKey={activeThinkingKey}
                 turnActive={turnActive}
+                interruptedCalls={interruptedCalls}
                 onOpenTask={props.onOpenTask}
                 carryoverCards={carryoverCards}
                 channel={props.channel}
@@ -1348,6 +1487,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onOpenReviewAt={props.onOpenReviewAt}
                 sessionId={props.sessionId}
                 onRevertTo={props.onRevertTo}
+                streamingIds={streamingIds}
               />
             )}
             {branchAfter !== undefined && (
@@ -1449,6 +1589,8 @@ function Pane(props: {
   const [editing, setEditing] = useState(false);
   return (
     <div
+      // 输入框黑洞的舷窗挂在滚动段顶边（data-porthole-anchor）：BlackholeBox 从输入框往上找这一对
+      data-chat-pane=""
       style={{
         height: "100%",
         minHeight: 0,
@@ -1458,15 +1600,17 @@ function Pane(props: {
     >
       {/* 页头兼窗口拖拽区：整行可拖可双击缩放，里面的铅笔与输入框由 `.titlebar button/input` 自动豁免 */}
       <header
-        className="titlebar"
+        // chat-head：主槽弹出卡的宿主据它让到页头之下（styles.css 的 .pane-pop-host）
+        className="titlebar chat-head"
         style={{
           display: "flex",
           alignItems: "center",
           gap: "var(--space-2)",
           minWidth: 0,
-          height: 30,
-          padding: "12px 18px",
-          boxSizing: "content-box",
+          // 页头 48（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线连成一条
+          height: 48,
+          padding: "0 18px",
+          boxSizing: "border-box",
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
@@ -1616,7 +1760,7 @@ function Pane(props: {
       </header>
 
       {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走 */}
-      <div style={{ position: "relative", minHeight: 0, display: "grid" }}>
+      <div data-porthole-anchor="" style={{ position: "relative", minHeight: 0, display: "grid" }}>
         <div
           ref={props.scrollRef}
           onScroll={props.onScroll}
@@ -2169,6 +2313,11 @@ function EntryView(props: {
   toolResults: ToolResultIndex;
   activeThinkingKey: string | null;
   turnActive: boolean;
+  /** 流式中的 assistant 记录 id 集：text 块的 MarkdownBlock 据此传 streaming——
+   * closePendingMath 只作用于打字未完成的文本，落定消息里孤立的 $ 不补闭合符 */
+  streamingIds: ReadonlySet<string>;
+  /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
+  interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
   carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
@@ -2221,28 +2370,26 @@ function EntryView(props: {
     return <RevertMarkView record={entry.record} cwd={props.cwd} onOpenFile={props.onOpenReviewAt} />;
   }
   if (entry.kind === "channelMark") {
-    // 子会话自己流里的 task 标记：渲染成完整任务卡而不是一行胶囊（子会话
-    // 2026-09-23 裁决①）——父给子的第一条任务是这条会话最该显眼的内容。
-    // 其它标记（reply 等）与根会话视图仍走下面的胶囊，行为不变。
-    if (props.channel.ownSide === "child" && entry.mark.kind === "task") {
+    // 子会话流里的父侧消息（task / reply / stop）：正文直接进对话流——虚线气泡 +
+    // 引子（2026-10-12 用户裁决：父会话给子会话的命令要直接出现在子会话的 UI 里），
+    // 不再是一行「在通道里查看」的胶囊。
+    if (props.channel.ownSide === "child" && entry.mark.from === "parent") {
       return (
-        <ChannelTaskCard
-          peerTitle={peerTitleOf(props.channel, entry.mark.peerId, t)}
+        <ChannelFromParentBubble
+          mark={entry.mark}
           message={props.channel.channelMessages.get(entry.mark.messageId)}
           loading={props.channel.channelMessagesLoading}
           error={props.channel.channelMessagesError}
         />
       );
     }
-    const openChannel = props.channel.openChannel;
-    return (
-      <ChannelMarkLine
-        mark={entry.mark}
-        ownSide={props.channel.ownSide}
-        peerTitle={peerTitleOf(props.channel, entry.mark.peerId, t)}
-        onClick={openChannel === null ? undefined : () => openChannel(entry.mark.peerId, entry.mark.messageId)}
-      />
-    );
+    // 父流里子发来的消息：问询 / 完成 / 失败胶囊（下一刀接上），进度不进父流。
+    if (props.channel.ownSide === "parent" && entry.mark.from === "child" && entry.mark.kind !== "progress") {
+      return <ChannelFromChildPill mark={entry.mark} channel={props.channel} />;
+    }
+    // 其余组合（父流里的 progress 标记、防御性兜底）：不渲染——进度是子会话自己的
+    // 事，父流里它的落点就是没有落点
+    return null;
   }
   if (entry.kind === "text") {
     const card = props.carryoverCards.get(entry.messageId);
@@ -2251,10 +2398,11 @@ function EntryView(props: {
       if (entry.key !== card.firstKey) return null;
       return <CarryoverScanCard drafts={card.drafts} />;
     }
-    // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找
+    // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找。
+    // streaming：正在流式的那条才补尾部闭合符（pending-math.ts），落定后不再补
     return (
       <div data-quote-id={entry.messageId} data-quote-role="assistant">
-        <MarkdownBlock text={entry.text} />
+        <MarkdownBlock text={entry.text} streaming={props.streamingIds.has(entry.messageId)} />
       </div>
     );
   }
@@ -2270,6 +2418,7 @@ function EntryView(props: {
         toolName={entry.toolName}
         input={entry.input}
         result={props.toolResults.get(entry.toolCallId)}
+        interrupted={props.interruptedCalls.has(entry.toolCallId)}
         onOpenTask={props.onOpenTask}
         channel={props.channel}
         skills={props.skills}
@@ -2281,6 +2430,7 @@ function EntryView(props: {
       group={entry}
       toolResults={props.toolResults}
       turnActive={props.turnActive}
+      interruptedCalls={props.interruptedCalls}
       onOpenTask={props.onOpenTask}
       channel={props.channel}
       skills={props.skills}
@@ -2324,10 +2474,14 @@ function TurnRollupLine(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
+  /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
+  interruptedCalls: ReadonlySet<string>;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const { group } = props;
+  // 「今天只写时分」的档位随日历日走：跨午夜翻档（today.ts 的 useToday）
+  const today = useToday();
   const stats = turnStats(group, props.toolResults, Date.now(), props.skills);
   // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
   // 工具次数与它的失败数字是一个段，中间不插
@@ -2359,6 +2513,18 @@ function TurnRollupLine(props: {
   }
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      {/* 轮头时间（用户裁决 2026-10-12）：这轮开始流式回复的时刻，放在「用时」
+          那行上面——时长与起点摆在一起看。左缘对齐 CollapseRow 的文本起点（按钮
+          padding 10px）。缺时间戳（诚实未知）不渲染 */}
+      {group.startedAt !== null && (
+        <div
+          className="turn-start-time"
+          style={{ ...TIME_LABEL, paddingLeft: RAIL_X }}
+          title={fullTimestamp(group.startedAt, t.chat.timeWeekdays)}
+        >
+          {formatMessageTime(group.startedAt, today)}
+        </div>
+      )}
       <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
         {props.turnFailed && (
           <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
@@ -2381,6 +2547,7 @@ function TurnRollupLine(props: {
               toolResults={props.toolResults}
               activeThinkingKey={null}
               turnActive={false}
+              interruptedCalls={props.interruptedCalls}
               onOpenTask={props.onOpenTask}
               carryoverCards={props.carryoverCards}
               channel={props.channel}
@@ -2391,6 +2558,7 @@ function TurnRollupLine(props: {
               actionsBusy={props.actionsBusy}
               onOpenReviewAt={props.onOpenReviewAt}
               sessionId={props.sessionId}
+              streamingIds={EMPTY_STREAMING_IDS}
             />
           ))}
         </div>
@@ -2399,10 +2567,12 @@ function TurnRollupLine(props: {
   );
 }
 
+/** 折叠行只收已落定轮次，成员永远不在流式——空集占位，避免每次渲染新建 Set */
+const EMPTY_STREAMING_IDS: ReadonlySet<string> = new Set<string>();
+
 /**
- * 用户消息：右对齐的独立气泡；只有 text 块进气泡。text 走 MathText——
- * 公式就地渲染（行内随文、块级居中），**不解析 markdown**：其余一切按原样，
- * 用户气泡与模型回复（MarkdownBlock）刻意是两套渲染。
+ * 用户消息：右对齐的独立气泡；只有 text 块进气泡。text 走 MarkdownBlock 的
+ * bubble 变体（标题摊平、换行保留，其余与模型回复同一套管线）。
  * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
  */
 function UserBubble(props: {
@@ -2414,13 +2584,16 @@ function UserBubble(props: {
   revertDisabledWhy?: string;
 }) {
   const t = useT();
+  const today = useToday();
   const [copied, setCopied] = useState(false);
   // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
   // 渐变遮罩 + Show more/less 开合。overflowing 只在折叠态量——展开后
   // scrollHeight == clientHeight，结论会丢，按钮就再也收不回了。
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
-  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  // 量的是折叠 wrapper（不是气泡本体）：scrollHeight 是全文高、clientHeight 是
+  // clamp 高，两者都在无 padding 的内容盒上量，判定才不被气泡 chrome 干扰
+  const clampRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1200);
@@ -2470,10 +2643,20 @@ function UserBubble(props: {
   );
   // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
   const hasText = text.trim() !== "";
+  const boxStyle = useContext(MaterialBoxContext);
   useLayoutEffect(() => {
     if (expanded) return;
-    const el = bubbleRef.current;
-    if (el !== null) setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    const el = clampRef.current;
+    if (el === null) return;
+    const measure = () => setOverflowing(isBubbleOverflowing(el.scrollHeight, el.clientHeight));
+    measure();
+    // 宽度变了要重量：右栏打开 / 拖窗口让聊天列变窄，原本 4 行内的消息会折到第 5 行——
+    // 折叠样式一直挂着（不论溢出与否），不重量的话正文被静默裁掉、却没有展开键与遮罩；
+    // 反过来列变宽，原本溢出的消息放得下了，展开键与遮罩还残留着。只在折叠态观察：
+    // 展开后两个高度相等，量了会把结论丢掉（收起时 expanded 变化会再量一次）
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [text, expanded]);
   return (
     <div
@@ -2485,7 +2668,16 @@ function UserBubble(props: {
         gap: 2,
       }}
     >
-      {images.length > 0 && <UserImages images={images} />}
+      {/* 材料盒启用（黑洞 / 俄罗斯方块）：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
+      {boxStyle !== null && images.length + fileRefs.length > 0 ? (
+        <SentBlackholeBox
+          style={boxStyle}
+          images={images}
+          files={fileRefs.map((ref) => ({ name: fileRefName(ref.path), path: ref.path, kind: ref.kind }))}
+        />
+      ) : (
+        images.length > 0 && <UserImages images={images} />
+      )}
       {quotes.length > 0 && (
         <div
           style={{
@@ -2507,7 +2699,7 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {fileRefs.length > 0 && (
+      {boxStyle === null && fileRefs.length > 0 && (
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
@@ -2524,7 +2716,7 @@ function UserBubble(props: {
           {fileRefs.map((ref, index) => (
             <FileRefChip
               key={`file:${index}`}
-              name={ref.path.split(/[\\/]/).filter((part) => part !== "").pop() ?? ref.path}
+              name={fileRefName(ref.path)}
               path={ref.path}
               kind={ref.kind}
             />
@@ -2558,7 +2750,6 @@ function UserBubble(props: {
       )}
       {hasText && (
         <div
-          ref={bubbleRef}
           data-quote-id={props.item.id}
           data-quote-role="user"
           style={{
@@ -2573,11 +2764,16 @@ function UserBubble(props: {
             fontSize: "var(--font-size-chat)",
             lineHeight: "var(--line-height-bubble)",
             overflowWrap: "anywhere",
-            // 约 4 行：行高 1.6em × 4 + 上下 padding 18 + border 2；展开时放开
-            ...(expanded ? {} : { maxHeight: "calc(1.6em * 4 + 20px)", overflow: "hidden" }),
           }}
         >
-          <MarkdownBlock text={text} variant="bubble" />
+          {/* 折叠裁剪落在内容自己的 wrapper 上（无 padding / 边框）：裁剪边正好是
+              第 4 行底边，第 5 行整体藏在裁剪线以下。旧实现把 maxHeight 加在气泡
+              本体，裁剪边（padding box）比第 4 行低出一条 bottom padding，第 5 行
+              的上半截正好落进可见带——「最后一行被裁一半」的根因，详见
+              user-bubble-clamp.ts */}
+          <div ref={clampRef} style={bubbleClampStyle(expanded)}>
+            <MarkdownBlock text={text} variant="bubble" />
+          </div>
           {!expanded && overflowing && (
             <div
               aria-hidden
@@ -2679,6 +2875,16 @@ function UserBubble(props: {
             <Icon name="rotate-ccw" size={12} strokeWidth={1.8} />
           </button>
         )}
+        {/* 发送时间（用户裁决 2026-10-12）：钉在这排动作的最右（行尾血线——时间戳
+            是 trailing 元素），与按钮同一排、不占气泡上方（引用多时会被顶高）。
+            常显不随按钮变化：这排动作本就常驻，时间不会跳动 */}
+        <span
+          className="user-msg-time"
+          style={{ ...TIME_LABEL, flex: "0 0 auto" }}
+          title={fullTimestamp(props.item.timestamp, t.chat.timeWeekdays)}
+        >
+          {formatMessageTime(props.item.timestamp, today)}
+        </span>
       </div>
     </div>
   );
@@ -2769,6 +2975,11 @@ function SkillInvocationCard(props: { name: string; content: string }) {
  * 用户消息里的图：右对齐、按原比例缩在 240px 框内（同 MCP 工具图的内联口径）。
  * 显示的是 agent 进程缩放后、真正送给模型的那一份——模型看到什么，这里就是什么。
  */
+/** 文件引用的显示名：路径最后一段（目录的尾斜杠不算一段） */
+function fileRefName(path: string): string {
+  return path.split(/[\\/]/).filter((part) => part !== "").pop() ?? path;
+}
+
 function UserImages(props: { images: readonly PromptImage[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);
@@ -2950,6 +3161,17 @@ function CollapseRow(props: {
   );
 }
 
+/**
+ * 消息时间标签的共用字音（与 SLOT.status 同一套灰色小字 token）：轮头时间
+ * （TurnRollupLine）与用户气泡旁的时间（UserBubble）共用，保持两处观感一致。
+ */
+const TIME_LABEL = {
+  color: "var(--color-text-tertiary)",
+  fontFamily: "var(--font-family-business)",
+  fontSize: "var(--font-size-micro)",
+  fontVariantNumeric: "tabular-nums",
+} satisfies React.CSSProperties;
+
 const SLOT = {
   /** 副标不占满整行（flex 0 1 auto）：状态词紧跟其后，行不被拉长 */
   sub: {
@@ -3006,28 +3228,15 @@ const SEP_DOT = {
 } satisfies React.CSSProperties;
 
 /**
- * 展开体的纵向导轨：与行首 icon 的**左缘相切**——x = 10px（按钮内边距，即 icon 的
- * 左缘）。展开内容一律不越过导轨左侧：展开体明确属于它上面那一行，不与
- * 别的行抢左缘；多条展开体并排时导轨与 icon 连成一条竖线。
- */
-const RAIL_X = 10;
-/** 导轨用 border-default 而非 subtle：深色下 subtle 与地面只差几阶（black #1e1e1e 对
- * #0a0a0a），孤立的 1px 竖线会隐形；default（#262626 / #333534）强一档才立得住。
- * 浅色下两者几乎无差，三主题同一 token。 */
-const RAIL_LINE = "1px solid var(--color-border-default)";
-
-/**
- * 展开体共用形态：细分隔线接在折叠行下、无底色、mono caption——chat 内卡片无框无填充。
- * 左侧挂导轨（顶线与导轨在左上角相接成直角），正文从导轨右侧起。
+ * 展开体共用形态：圆角虚线框（EXPANDED_FRAME，语义见 expanded-body.ts）接在
+ * 折叠行下、无底色、mono caption。各展开体只叠各自排版，框只有这一份真源。
  */
 const EXPANDED_BODY = {
   margin: 0,
-  marginLeft: RAIL_X,
+  ...EXPANDED_FRAME,
   padding: "var(--space-2)",
   maxHeight: 320,
   overflow: "auto",
-  borderTop: "1px solid var(--color-border-subtle)",
-  borderLeft: RAIL_LINE,
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-caption)",
   lineHeight: 1.6,
@@ -3036,18 +3245,16 @@ const EXPANDED_BODY = {
 } satisfies React.CSSProperties;
 
 /**
- * markdown 展开体（压缩界碑行用）：EXPANDED_BODY 的骨架（hairline 顶线 + 320 封顶 +
+ * markdown 展开体（压缩界碑行用）：EXPANDED_BODY 的骨架（虚线框 + 320 封顶 +
  * 可滚），排版让给 .chat-md——摘要是结构化文档，不套 mono caption / pre-wrap。
- * 导轨照挂：界碑行虽无 icon，竖线仍与其余展开体同一位置（x=10px），内容列全体一致。
+ * 框的缩进与其余展开体同位（x=10px，见 expanded-body.ts），内容列全体一致。
  */
 const MARKDOWN_EXPANDED_BODY = {
   margin: 0,
-  marginLeft: RAIL_X,
+  ...EXPANDED_FRAME,
   padding: "var(--space-2)",
   maxHeight: 320,
   overflow: "auto",
-  borderTop: "1px solid var(--color-border-subtle)",
-  borderLeft: RAIL_LINE,
 } satisfies React.CSSProperties;
 
 // ── 信息区文案（本模块全部用户可见字符串集中在此；英文先行，中文化等真实需求出现再抽字典） ──
@@ -3144,6 +3351,9 @@ function ToolLine(props: {
   toolName: string;
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  /** 结果永远不会来（所在消息 error/aborted 收场且无结果帧，见 interruptedToolCallIds）：
+   * 按静止的「已中断」渲染，不呼吸不转圈 */
+  interrupted: boolean;
   /** B-1：read_task 的「Open」跳到被读的 task（侧栏点击同语义）；别的工具不传 */
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：delegate / reply_subsession / report_to_parent 三个通道工具要用 */
@@ -3155,7 +3365,46 @@ function ToolLine(props: {
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
-  const active = result === undefined || result.status === "running";
+  // 已中断：无结果帧且判定永不回来——不算运行中（不呼吸、不展开、状态词换「已中断」）
+  const interrupted = props.interrupted && result === undefined;
+  const active = !interrupted && (result === undefined || result.status === "running");
+  // ── 运行中 shell 的可见性（长 bash 不再「一行不动」）。active 已含「中断不算
+  // 运行」（PR 168）：被中断的 bash 不计时、不自动展开，与真跑着的命令分流 ──
+  const shell = props.toolName === "bash" || props.toolName === "powershell";
+  const shellActive = shell && active;
+  // 秒针：只挂运行中的 shell（Responding 同款，一秒一跳）。睡眠中的命令没有任何
+  // 事件帧，计时只能靠自己跳；跑完即停，不留空转的 interval。
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!shellActive) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [shellActive]);
+  const runStart = shellActive ? toolStartAt(props.toolCallId) : null;
+  const expectedSeconds = shell ? expectedSecondsOf(props.input) : null;
+  const limitSeconds = shell ? timeoutSecondsOf(props.input) : null;
+  // 自动展开的账：用户手动碰过折叠就不再自动改（尊重人）；autoOpened 记「这次
+  // 展开是自动的」，跑完只有自动开的才自动收。两个都是 ref——这些是过程状态，
+  // 不参与渲染，不值得每次跳秒重算。
+  const userToggled = useRef(false);
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!shellActive) {
+      // 跑完了：自动展开的自动收回去；用户碰过的保持用户的选择
+      if (autoOpened.current && !userToggled.current) setOpen(false);
+      return;
+    }
+    if (userToggled.current) return;
+    const elapsed = runStart !== null ? now - runStart : null;
+    if (shellAutoExpand(expectedSeconds, elapsed)) {
+      autoOpened.current = true;
+      setOpen(true);
+    }
+  }, [shellActive, now, runStart, expectedSeconds]);
+  const toggleOpen = () => {
+    userToggled.current = true;
+    setOpen((value) => !value);
+  };
 
   // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
   // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败
@@ -3164,11 +3413,25 @@ function ToolLine(props: {
   // running 帧（`card === null` 时的「delegating…」呼吸）悄悄吞掉，永远显示
   // 「派出中」而不是「失败了」。
   if (props.toolName === "delegate" && !failed) {
-    return <DelegateToolLine input={props.input} result={result} channel={props.channel} />;
+    return (
+      <DelegateToolLine
+        input={props.input}
+        result={result}
+        interrupted={interrupted}
+        channel={props.channel}
+      />
+    );
   }
   // 交接（受管浏览器）：离开卡，与派出卡同一个骨架。失败照通用骨架走（红色 + 可展开看错误）
   if (props.toolName === "request_user_action" && !failed) {
-    return <HandoffToolLine toolCallId={props.toolCallId} input={props.input} result={result} />;
+    return (
+      <HandoffToolLine
+        toolCallId={props.toolCallId}
+        input={props.input}
+        result={result}
+        interrupted={interrupted}
+      />
+    );
   }
   if ((props.toolName === "reply_subsession" || props.toolName === "report_to_parent") && !failed) {
     return (
@@ -3177,6 +3440,7 @@ function ToolLine(props: {
         input={props.input}
         result={result}
         running={active}
+        interrupted={interrupted}
         channel={props.channel}
       />
     );
@@ -3234,6 +3498,23 @@ function ToolLine(props: {
     (props.toolName === "bash" || props.toolName === "powershell") && !active
       ? toolDurationText(props.toolCallId, t)
       : null;
+  // 运行中时钟：已跑多久（+上限，+预计）。起点没记到（旧会话重开）时退化为只报预计，
+  // 连预计都没有就什么都不报——宁缺勿假。超出预计如实说「比预计慢」，不给负数倒计时。
+  const runClock =
+    shellActive && runStart !== null
+      ? formatRunClock(Math.max(0, now - runStart)) +
+        (limitSeconds !== null ? ` / ${t.chat.limitLabel(formatRunClock(limitSeconds * 1000))}` : "")
+      : null;
+  const runExpected = (() => {
+    if (!shellActive || expectedSeconds === null) return null;
+    const about = t.chat.expectedAbout(formatThinkingDuration(expectedSeconds * 1000, t));
+    // 起点没记到就没有时钟可比，「比预计慢」判断不了——只报预计，不猜
+    if (runStart === null) return about;
+    return now - runStart >= expectedSeconds * 1000 ? t.chat.slowerThanExpected : about;
+  })();
+  // 折叠行下的活尾：有流式输出时取末几行，让「它在动」不展开也看得见；
+  // 展开时藏起（展开体本身就是完整活尾，别显两遍）
+  const tailPreview = shellActive && !open ? tailPreviewLines(rawBody) : [];
 
   // 外部能力芯片行（2026-09-27 两轮裁决）：skill 使用与 MCP 调用的身份收进一枚
   // 药丸芯片（图标 + 类型词 + 名字），与输入框附件 chip / 引用 chip 同族——「外部
@@ -3243,7 +3524,7 @@ function ToolLine(props: {
     const mcpBrief = mcp === null ? null : (callLabel ?? mcpInputSummary(props.input));
     return (
       <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-        <CollapseRow open={open} disabled={!expandable} onToggle={() => setOpen((value) => !value)}>
+        <CollapseRow open={open} disabled={!expandable} onToggle={toggleOpen}>
           <span
             className={active ? "orbita-breath" : undefined}
             style={{
@@ -3261,11 +3542,15 @@ function ToolLine(props: {
             }}
           >
             <Icon
-              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : "plug"}
+              name={failed ? "triangle-alert" : interrupted ? "circle-off" : skillUse !== null ? "book-open" : "plug"}
               size={13}
               strokeWidth={1.8}
               style={{
-                color: failed ? "var(--color-danger)" : "var(--color-text-secondary)",
+                color: failed
+                  ? "var(--color-danger)"
+                  : interrupted
+                    ? "var(--color-text-tertiary)"
+                    : "var(--color-text-secondary)",
                 flex: "0 0 auto",
               }}
             />
@@ -3295,6 +3580,7 @@ function ToolLine(props: {
               {summary}
             </span>
           )}
+          {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
         </CollapseRow>
         {open && expandable && (
           <>
@@ -3317,11 +3603,19 @@ function ToolLine(props: {
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      <CollapseRow open={open} disabled={!expandable} onToggle={() => setOpen((value) => !value)}>
+      <CollapseRow open={open} disabled={!expandable} onToggle={toggleOpen}>
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
           <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
             <Icon
-              name={failed ? "triangle-alert" : skillUse !== null ? "book-open" : toolIcon(props.toolName)}
+              name={
+                failed
+                  ? "triangle-alert"
+                  : interrupted
+                    ? "circle-off"
+                    : skillUse !== null
+                      ? "book-open"
+                      : toolIcon(props.toolName)
+              }
               size={14}
               strokeWidth={1.8}
             />
@@ -3357,7 +3651,13 @@ function ToolLine(props: {
             {summary}
           </span>
         )}
-        {/* shell 类的执行耗时——慢命令（install / typecheck）不展开也讲清楚花在哪 */}
+        {/* 运行中 shell 的时钟（已跑多久 / 上限）与预计——「像卡死」的正解：让时间说话。
+            active 已含「中断不算运行」（PR 168），被中断的 bash 这里拿不到时钟 */}
+        {runClock !== null && <span style={SLOT.status}>{runClock}</span>}
+        {runExpected !== null && <span style={SLOT.status}>{runExpected}</span>}
+        {/* 已中断（无结果帧且永不回来）：静止的中性状态词——不再呼吸、不假装在跑 */}
+        {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
+        {/* shell 类的执行耗时（落定后显示）——慢命令不展开也讲清楚花在哪 */}
         {shellDuration !== null && <span style={SLOT.status}>{shellDuration}</span>}
         {/* B-1：read_task 的任务卡动作——「Open」跳到被读的 task（与侧栏点击同语义）。
             stopPropagation：这个按钮不是折叠开关。card 走 details 通路，模型看不见。 */}
@@ -3384,6 +3684,31 @@ function ToolLine(props: {
           </button>
         )}
       </CollapseRow>
+      {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」
+          不展开也看得见。与展开体同一个圆角虚线框（用户 2026-10-12：从开始显示
+          活尾的那一刻起就该有框，无框的裸文本像渲染错误）；行也走展开体同一套
+          排版（BODY_LINE + mono caption + lineHeight 1.6，容器只补纵向内边距），
+          展开那一刻框里的文字不跳。 */}
+      {tailPreview.length > 0 && (
+        <div
+          className="scroll"
+          style={{
+            ...EXPANDED_FRAME,
+            display: "grid",
+            minWidth: 0,
+            padding: "var(--space-2) 0",
+            fontFamily: "var(--font-family-mono)",
+            fontSize: "var(--font-size-caption)",
+            lineHeight: 1.6,
+          }}
+        >
+          {tailPreview.map((line, index) => (
+            <div key={index} style={{ ...BODY_LINE, color: "var(--color-text-secondary)" }}>
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
       {open && expandable && diff !== null && <DiffView diff={diff} />}
       {open && expandable && diff === null && fileView !== null && (
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
@@ -3409,11 +3734,29 @@ function ToolLine(props: {
  * 窗口顶部也有同样的交还按钮：用户登录完人在浏览器里，就地交还，不必切回来找这张卡。
  * 结束后：状态写「已交还 / 已取消」（主进程写进 details，不解析给模型的文字）。
  */
-function HandoffToolLine(props: { toolCallId: string; input: unknown; result: ToolTranscriptItem | undefined }) {
+function HandoffToolLine(props: {
+  toolCallId: string;
+  input: unknown;
+  result: ToolTranscriptItem | undefined;
+  interrupted: boolean;
+}) {
   const t = useT();
   const [gone, setGone] = useState(false);
   const reason = toolCallSummary("request_user_action", props.input) ?? "";
   const outcome = handoffOutcome(props.result);
+  // 已中断：请求从未发出（结果帧永远不来），不能再给「去完成 / 交还」的动作——
+  // 那些按钮会去 resolve 一个不存在的交接；退成静止的中性状态卡
+  if (props.interrupted && props.result === undefined) {
+    return (
+      <ExitCard
+        kicker={t.browser.handoffKicker}
+        icon="user"
+        title={reason}
+        status={{ text: t.chat.toolInterrupted, color: "var(--color-text-tertiary)", active: false }}
+        preview={t.browser.handoffWhere}
+      />
+    );
+  }
   const waiting = outcome === null && !gone;
   const status = waiting
     ? { text: t.browser.handoffWaiting, color: "var(--color-accent)", active: true }
@@ -3463,12 +3806,20 @@ function HandoffToolLine(props: { toolCallId: string; input: unknown; result: To
 function DelegateToolLine(props: {
   input: unknown;
   result: ToolTranscriptItem | undefined;
+  interrupted: boolean;
   channel: ChannelViewContext;
 }) {
   const card = delegateCard(props.result);
   const taskPreview = deriveSessionTitle(toolCallSummary("delegate", props.input) ?? "");
   if (card === null) {
-    return <DelegateCardView card={null} status="running" taskPreview={taskPreview} />;
+    return (
+      <DelegateCardView
+        card={null}
+        status="running"
+        taskPreview={taskPreview}
+        interrupted={props.interrupted}
+      />
+    );
   }
   const summary = props.channel.channelSummaries.get(card.childId);
   // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
@@ -3506,14 +3857,26 @@ function ChannelSendToolLine(props: {
   input: unknown;
   result: ToolTranscriptItem | undefined;
   running: boolean;
+  interrupted: boolean;
   channel: ChannelViewContext;
 }) {
   const t = useT();
   const record = typeof props.input === "object" && props.input !== null ? (props.input as Record<string, unknown>) : {};
-  // 落账那条通道消息的 id（回执 details 里，channel-tools.ts）：点了滚到父子会话面板里
-  // 的这一条并高亮。还在跑、或这一刀之前的旧记录没有 → null，退回滚到通道底部
-  const messageId = channelSendMessageId(props.result);
-  const openChannel = props.channel.openChannel;
+  // 已中断：消息从未发出（结果帧永远不来）——不能按「已回复 / 已报告」的语气画
+  // 成功胶囊，换成静止的中性中断行
+  if (props.interrupted && props.result === undefined) {
+    return (
+      <ChannelToolMarkLine
+        icon="circle-off"
+        text={t.chat.toolInterrupted}
+        tone="neutral"
+        running={false}
+      />
+    );
+  }
+  // 面板删除后发送侧标记不再有「滚到某一条」的去处；reply_subsession 的点击改成
+  // 打开右栏 Sub-sessions 面板进入该子会话（与派出卡 / 问询胶囊同一个入口）。
+  const openSubSession = props.channel.openSubSession;
   if (props.toolName === "reply_subsession") {
     const childId = typeof record["childId"] === "string" ? record["childId"] : "";
     const childTitle = peerTitleOf(props.channel, childId, t);
@@ -3525,12 +3888,14 @@ function ChannelSendToolLine(props: {
         text={text}
         tone="reply"
         running={props.running}
-        onClick={openChannel === null || childId === "" ? undefined : () => openChannel(childId, messageId)}
+        onClick={openSubSession !== null && childId !== "" ? () => openSubSession(childId) : undefined}
+        clickTitle={t.subSessions.openInPanel}
       />
     );
   }
   // report_to_parent：对面恒是本会话自己的父——ownParentId 是这条会话固定的事实，
-  // 不像 reply_subsession 那样按入参里的 id 变化。
+  // 不像 reply_subsession 那样按入参里的 id 变化。面板删除后不可点：它发给母会话
+  // 的话就留在母会话的对话流里（问询胶囊），这里只留一行工具标记。
   const parentTitle = peerTitleOf(props.channel, props.channel.ownParentId ?? "", t);
   const kind = record["kind"];
   const label: { text: string; icon: IconName; tone: ChannelMarkTone } =
@@ -3541,18 +3906,8 @@ function ChannelSendToolLine(props: {
         : kind === "failed"
           ? { text: t.chat.reportedFailed, icon: "triangle-alert", tone: "failed" }
           : { text: t.chat.reportedProgress, icon: "refresh-cw", tone: "neutral" };
-  // 子会话工作记录里的这一行（用户 2026-09-25：看到它发给母会话的消息，自己点进去）。
-  // 子会话视图的 openChannel 不看第一个参数（通道的 childId 就是它自己），传对面的 id 只为
-  // 与 reply_subsession 同一个签名
-  const parentId = props.channel.ownParentId ?? "";
   return (
-    <ChannelToolMarkLine
-      icon={label.icon}
-      text={label.text}
-      tone={label.tone}
-      running={props.running}
-      onClick={openChannel === null ? undefined : () => openChannel(parentId, messageId)}
-    />
+    <ChannelToolMarkLine icon={label.icon} text={label.text} tone={label.tone} running={props.running} />
   );
 }
 
@@ -3569,6 +3924,8 @@ function ToolGroupLine(props: {
   group: ToolGroupUnit;
   toolResults: ToolResultIndex;
   turnActive: boolean;
+  /** 已中断的调用 id 集（interruptedToolCallIds）：组头不为它们呼吸，按「N 个已中断」计 */
+  interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
   /** 子会话 PR4a：展开后的成员行仍是 ToolLine，同一份上下文原样转发 */
   channel: ChannelViewContext;
@@ -3583,7 +3940,7 @@ function ToolGroupLine(props: {
     if (!props.turnActive) setOpen(false);
   }, [props.turnActive]);
 
-  const status = toolGroupStatus(group.calls, props.toolResults);
+  const status = toolGroupStatus(group.calls, props.toolResults, props.interruptedCalls);
   const active = status.running > 0;
   const failed = status.failed > 0;
   const fileCount = group.toolName === "edit" ? editGroupFileCount(group.calls, props.toolResults) : null;
@@ -3609,6 +3966,11 @@ function ToolGroupLine(props: {
             {t.chat.failedCount(status.failed)}
           </span>
         )}
+        {/* 已中断（中性色）：这几次调用从未发生——折了也不能无声消失，但也不染红
+            （不是失败，是没跑） */}
+        {!open && status.interrupted > 0 && (
+          <span style={SLOT.status}>{t.chat.interruptedCount(status.interrupted)}</span>
+        )}
       </CollapseRow>
       {open && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
@@ -3619,6 +3981,7 @@ function ToolGroupLine(props: {
               toolName={call.toolName}
               input={call.input}
               result={props.toolResults.get(call.toolCallId)}
+              interrupted={props.interruptedCalls.has(call.toolCallId)}
               onOpenTask={props.onOpenTask}
               channel={props.channel}
               skills={props.skills}
@@ -3643,10 +4006,8 @@ function DiffView(props: { diff: string }) {
   return (
     <div
       style={{
-        marginLeft: RAIL_X,
-        paddingLeft: "var(--space-2)",
-        borderTop: "1px solid var(--color-border-subtle)",
-        borderLeft: RAIL_LINE,
+        ...EXPANDED_FRAME,
+        padding: "var(--space-2) 0",
       }}
     >
       <DiffBody entries={entries} maxHeight={320} />
@@ -3676,8 +4037,10 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
   useEffect(() => {
     void highlighterReady.then(() => setWarm(true));
   }, []);
-  const lines = props.lang !== null ? highlightLines(props.text, props.lang) : null;
-  const rows: readonly (string | readonly TokenSpan[])[] = lines ?? props.text.split("\n");
+  // 文件以换行结尾时 split 出一个空的末行，框底多一行空白带行号（同 PlainToolBody 剥尾部空行）
+  const text = stripTrailingBlankLines(props.text);
+  const lines = props.lang !== null ? highlightLines(text, props.lang) : null;
+  const rows: readonly (string | readonly TokenSpan[])[] = lines ?? text.split("\n");
   const lastLine = props.startLine + rows.length - 1;
   // 轨道 = 位数 + 行号格的横向内边距（不算 padding 的话三位数起就顶穿竖线挤进正文）
   const digits = Math.max(3, String(lastLine).length);
@@ -3690,10 +4053,8 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
         gridTemplateColumns: `${gutter} 1fr`,
         maxHeight: 320,
         overflow: "auto",
-        marginLeft: RAIL_X,
-        paddingLeft: "var(--space-2)",
-        borderTop: "1px solid var(--color-border-subtle)",
-        borderLeft: RAIL_LINE,
+        ...EXPANDED_FRAME,
+        padding: "var(--space-2) 0",
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-caption)",
         lineHeight: 1.6,
@@ -3931,6 +4292,10 @@ function PlainToolBody(props: {
 }) {
   const t = useT();
   const follow = useFollowScroll(props.live === true);
+  // shell 输出几乎总以 \n 结尾，拆行后末尾多一个空行——以前没有下边框看不出来，
+  // 套了圆角虚线框后框底会多出一整行空白（2026-10-12 返工），渲染前剥掉尾部空行。
+  // 中间的空行是内容结构，保留。
+  const text = stripTrailingBlankLines(props.text);
   // 看大图：放在提前 return 之前（hook 顺序不能随内容变）
   const [viewing, setViewing] = useState<number | null>(null);
   const images = props.images ?? [];
@@ -3971,11 +4336,15 @@ function PlainToolBody(props: {
         ))}
       </div>
     ) : null;
-  if (props.text === "" && images.length === 0) {
+  if (text === "" && images.length === 0) {
     return (
       <div
         className="scroll"
-        style={{ ...PLAIN_BODY, color: "var(--color-text-secondary)", padding: "0 var(--space-2)" }}
+        style={{
+          ...PLAIN_BODY,
+          color: "var(--color-text-secondary)",
+          padding: "var(--space-2)",
+        }}
       >
         {props.live === true ? t.chat.waitingOutput : t.chat.noOutput}
       </div>
@@ -3984,7 +4353,7 @@ function PlainToolBody(props: {
   if (props.failed) {
     return (
       <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
-        {props.text.split("\n").map((line, index) => (
+        {text.split("\n").map((line, index) => (
           <div key={index} style={{ ...BODY_LINE, color: "var(--color-danger)" }}>
             {line === "" ? " " : line}
           </div>
@@ -3995,19 +4364,18 @@ function PlainToolBody(props: {
   }
   return (
     <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
-      {props.text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
+      {text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
       {imageStrip}
     </div>
   );
 }
 
-/** 展开体滚动容器的共用形态（无水平内边距——行自带）；左侧挂 RAIL 导轨，同 EXPANDED_BODY。 */
+/** 展开体滚动容器的共用形态（无水平内边距——行自带）；套圆角虚线框，同 EXPANDED_BODY。 */
 const PLAIN_BODY = {
+  ...EXPANDED_FRAME,
   maxHeight: 320,
   overflow: "auto",
-  marginLeft: RAIL_X,
-  borderTop: "1px solid var(--color-border-subtle)",
-  borderLeft: RAIL_LINE,
+  padding: "var(--space-2) 0",
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-caption)",
   lineHeight: 1.6,
@@ -4288,27 +4656,19 @@ function Retrying(props: { status: RetryStatus }) {
   );
 }
 
-/** 提示行：文字是主信号，颜色是第二信号 */
+/** 提示行：文字是主信号，颜色是第二信号。样式口径见 notice.ts（文字断行 / 图标对首行）。 */
 function Notice(props: { tone?: "bad"; children: React.ReactNode }) {
   return (
     <p
       role={props.tone === "bad" ? "alert" : undefined}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        margin: 0,
-        padding: "0 var(--space-2)",
-        color: props.tone === "bad" ? "var(--color-danger)" : "var(--color-text-secondary)",
-        fontSize: "var(--font-size-control)",
-      }}
+      style={noticeParagraphStyle(props.tone === "bad")}
     >
       {props.tone === "bad" && (
-        <span style={{ display: "inline-flex", flex: "0 0 auto" }}>
+        <span style={noticeIconBoxStyle}>
           <Icon name="triangle-alert" size={13} strokeWidth={1.8} />
         </span>
       )}
-      {props.children}
+      <span style={noticeTextStyle}>{props.children}</span>
     </p>
   );
 }

@@ -1,6 +1,6 @@
 /*
  * 纸面两档的装饰（璇玑载体谱「稿纸」一档，wafo 2026-09-25 载入）。颜色与字体全部是 token
- * （Orbita Design System/tokens：colors.css 的 --color-paper-*、typography.css 的换字）；这里只放
+ * （design-system/tokens：colors.css 的 --color-paper-*、typography.css 的换字）；这里只放
  * 每档一两层装饰，DOM 不动。
  *
  * - copybook（小学作业）：面板一圈双线绿框；输入框是绿方格，英文垫修正液；正文里的加粗是老师的
@@ -51,16 +51,8 @@
   letter-spacing: normal;
 }
 
-/* 镜像：与 textarea 叠在同一格、在它下面（styles.css 的 .composer-field）。字透明，只有修正液
-   看得见；换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步） */
-:root[data-theme="copybook"] .composer-mirror {
-  color: transparent;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  overflow: hidden;
-  pointer-events: none;
-  user-select: none;
-}
+/* 镜像层的基础（透明字、不接指针、不出滚动条）已提升到 styles.css 的 .composer-mirror（全主题常驻）；
+   这里只留 copybook 的专属：字距跟随 .composer-input 的规则（上面的 [data-script] 两档） */
 
 /* 修正液（wafo 2026-09-25 选定）：一段英文一条白底，盖住竖格线。白底只有字体内容区高
    （Literata 14px 约 21px），24px 的格子上下各露一点横线，像一条条涂改带。
@@ -78,6 +70,41 @@
   box-decoration-break: clone;
 }
 
+/* 句中 chip（copybook 变体，2026-10-06）：修正液质感——底色要盖住竖格线。
+   chip 区间优先于修正液（mirrorSegments）：token 不再另垫修正液，chip 自己
+   的 pill 就是那块「涂改带」。无描边同 styles.css 的 .composer-chip（2026-10-11
+   用户裁决照 Proma：只换底不描边）；横向留白同款 -2px/+2px 偏移组，另保留
+   修正液那条 1px 柔影（涂改带搭在纸上的质感，只跟字形盒走，不到两侧铺开）。
+   中性胶囊也换淡墨底（正墨 10% 混修正液白）：纯白底和纸面同色看不见 */
+:root[data-theme="copybook"] .composer-chip {
+  --chip-fill: color-mix(in srgb, var(--color-text-primary) 10%, var(--color-paper-whiteout));
+  box-shadow:
+    0 0 0 1px var(--chip-fill),
+    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+
+/* 类别上色在稿纸上的变体：描边取消后只剩「同色系淡底混白」——像用彩笔在
+   涂改带上淡淡扫了一层 */
+:root[data-theme="copybook"] .composer-chip[data-kind="skill"] {
+  --chip-fill: color-mix(in srgb, var(--color-filetype-sheet) 15%, var(--color-paper-whiteout));
+}
+:root[data-theme="copybook"] .composer-chip[data-kind="mcp"] {
+  --chip-fill: color-mix(in srgb, var(--color-filetype-doc) 15%, var(--color-paper-whiteout));
+}
+
+/* 粘贴展开段（copybook 变体，方案 C）：不涂修正液也不白底——它是正文不是涂改，
+   铺一层淡淡的绿（方格线色当荧光笔）标出「这段是粘贴进来的」，竖格线从底下透出来 */
+:root[data-theme="copybook"] .composer-paste-run {
+  background: color-mix(in srgb, var(--color-paper-grid) 20%, transparent);
+}
+
+/* 收起标签在稿纸上换纸色浮层（实底盖字 + 发丝随格线） */
+:root[data-theme="copybook"] .composer-paste-label {
+  background: var(--color-paper-whiteout);
+  border-color: var(--color-paper-grid);
+  box-shadow: var(--shadow-popover);
+}
+
 :root[data-theme="copybook"] .chat-md strong {
   text-decoration: underline wavy var(--color-paper-pen);
   text-decoration-thickness: 1px;
@@ -86,16 +113,22 @@
 
 /* ===== typescript ===== */
 
-/* 横线每 24px 一条，页边线在第 28px；字从页边线右边开始打 */
-:root[data-theme="typescript"] .composer-input {
-  padding-left: 40px;
-  line-height: 24px;
+/* 横线每 24px 一条，页边线在第 28px；字从页边线右边开始打。
+   背景画在输入框外层（.composer-field）而不是 .composer-input（textarea）上，与 copybook
+   的方格同一道理：层次得是 横线 < chip < 字。镜像层（chip）垫在 textarea 下面，横线要是
+   画在 textarea 自己的底上，会压在 chip 上面（2026-10-06 chip 层落地时投的同一课） */
+:root[data-theme="typescript"] .composer-field {
   background-image:
     linear-gradient(to bottom, transparent 23px, var(--color-paper-rule) 23px 24px),
     linear-gradient(to right, transparent 28px, var(--color-paper-margin) 28px 29px, transparent 29px);
   background-size:
     100% 24px,
     100% 100%;
+}
+
+:root[data-theme="typescript"] .composer-input {
+  padding-left: 40px;
+  line-height: 24px;
 }
 
 :root[data-theme="typescript"] .chat-md :is(h1, h2, h3, h4) {

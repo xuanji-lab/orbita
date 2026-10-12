@@ -11,7 +11,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 master="$work/master.png"
-swift "$root/scripts/icon/render-icon.swift" "$root/Orbita Design System/assets/app-icon.svg" "$master"
+swift "$root/scripts/icon/render-icon.swift" "$root/design-system/assets/app-icon.svg" "$master"
 
 iconset="$work/icon.iconset"
 mkdir -p "$iconset"
