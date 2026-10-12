@@ -22,7 +22,7 @@ type PreviewTheme = Exclude<ThemePreference, "system">;
 /**
  * Theme 行的预览卡组：每张卡画一份缩略窗（壳色 + 侧栏 + 面板 + accent 发送点），
  * 用**各自主题**的 token 画——不是当前主题的（见 ThemeThumb 与
- * `Orbita Design System/tokens/colors.css` 的 `[data-theme-preview]` 选择器）。
+ * `design-system/tokens/colors.css` 的 `[data-theme-preview]` 选择器）。
  * 只有 Theme 这一行用它，不拆成多个导出。
  *
  * 可选档位过 `selectableThemes(paperThemes)`：实验功能 paper-themes 关闭时

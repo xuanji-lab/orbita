@@ -2,7 +2,7 @@
  * 渲染层样式入口。token 与字体全部来自设计系统真源，不在此重定义。
  * 设计系统是 UI 唯一真源（AGENTS.md「设计系统」）——这里只放 app shell 自身的构图。
  */
-@import "../../../Orbita Design System/styles.css";
+@import "../../../design-system/styles.css";
 
 /*
  * 「选择项」的 hover 与选中底色：侧栏会话行、设置 tab、菜单项共用——**它们是同一件事**。
