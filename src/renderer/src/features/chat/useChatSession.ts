@@ -53,12 +53,11 @@ import { recordAssistantStart } from "./stats-format.ts";
 import { DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
-import { defaultThinkingLevel } from "@shared/model-defaults";
 import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
 import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
-import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
+import { modelThinkingLevels, reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
 import {
   CLOSING_SCAN_PROMPT,
@@ -2020,8 +2019,23 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           // 切走再切回时若拿 meta 重置 chip，chip 就会说 plan 而下一轮实际跑 skip
           const own = engine.sessionIntent.current.get(id);
           setMode(own?.mode ?? detail.meta.mode);
-          setModel(own?.model ?? { providerId: detail.meta.providerId, modelId: detail.meta.modelId });
-          setThinkingLevelState(own?.thinkingLevel ?? detail.meta.thinkingLevel);
+          const restoredModel = own?.model ?? { providerId: detail.meta.providerId, modelId: detail.meta.modelId };
+          setModel(restoredModel);
+          /**
+           * 档位来自会话账——**要过一遍这个型号**（reconcileThinkingLevel）。会话记的
+           * 档可以是这个型号进白名单之前选的：step-5-preview 在没有白名单条目时被
+           * 当成不能思考的型号（pi 的支持集就是 `["off"]`），会话账里因此留着 off；
+           * 而官方口径是三档、还关不掉思考——不纠的话 chip 说 Off、模型其实一直在思考
+           * （2026-10-10 wafo 实测）。纠完同时记回会话意图：下一轮发出去的也是纠过的档。
+           */
+          const storedThinking = own?.thinkingLevel ?? detail.meta.thinkingLevel;
+          const nextThinking = reconcileThinkingLevel(
+            storedThinking,
+            restoredModel.modelId,
+            modelThinkingLevels(restoredModel.modelId, engine.catalog),
+          );
+          setThinkingLevelState(nextThinking);
+          if (nextThinking !== storedThinking) engine.rememberSessionIntent(id, { thinkingLevel: nextThinking });
           // 无状态：没有「活会话集合」要重连——正在跑的会话它的槽本来就在 states
           // 里（事件一直实时进），不种盘上的快照（种盘等于把画面倒回去）；
           // 没在跑的才从盘上种，readOnly 与「说话时才续跑」（send 带 resume）语义照旧。
@@ -2238,10 +2252,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 启动恢复点跟随（bug A）：下次启动应用从这个模型开始
       void api.settings.set({ lastUsed: { providerId, modelId } }).catch(() => undefined);
       // 这条会话的档要不要跟着动：新模型仍支持当前档（或支持集未知）就不动，
-      // 不支持才落新模型的默认档——换模型不该顺手改掉会话自己的设定
+      // 不支持才落新模型的默认档（reconcileThinkingLevel）——换模型不该顺手改掉会话
+      // 自己的设定，但也不该留一个这个型号发不出去的档
       const supported = modelThinkingLevels(modelId, catalog);
-      const switched =
-        supported !== null && !supported.includes(thinkingLevel) ? defaultThinkingLevel(modelId, supported) : null;
+      const reconciled = reconcileThinkingLevel(thinkingLevel, modelId, supported);
+      const switched = reconciled === thinkingLevel ? null : reconciled;
       // 盘上打开的旧会话按它的 id 记账与注入（理由见函数头）；首页新任务槽两者皆空
       const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {

@@ -97,11 +97,25 @@ export function toFallbackModels(
           "forceAdaptiveThinking" in model.compat &&
           model.compat.forceAdaptiveThinking === true,
       );
-    // 档位表：目录的优先；目录没有而白名单声明了 adaptive，就按白名单档位生成——
-    // 否则 pi 按「无表」规则不认 xhigh / max，用户选的这两档会被夹成 high
-    const levelMap =
-      borrowedMap ??
-      (declaredAdaptive && patch.thinkingLevels !== undefined ? effortLevelMap(patch.thinkingLevels) : undefined);
+    /**
+     * 档位表：目录的优先；目录借不到就按**白名单声明的档位**生成。不生成的话 pi 按
+     * 「无表」规则自己算一套：xhigh / max 一律当不支持（菜单列了 Max、用户选了，发出去的
+     * 是 high），而 off / minimal / medium 反过来一律当支持（菜单没有的档也照发）——
+     * 菜单与协议两处对同一个型号说出两个支持集，卡的就是这道表。
+     *
+     * 白名单的档位能直接拿来当表的两族：
+     *   - anthropic-messages 的 adaptive 型号（claude）：表是**唯一**来源（目录没收录，
+     *     借不到 compat.forceAdaptiveThinking）；
+     *   - openai-completions：那一族的表只决定「发哪个 reasoning_effort」
+     *     （`map[level] ?? level`），没有别的副作用。
+     * **anthropic-messages 的非 adaptive 型号不走这条路**：那一族的表还牵着
+     * budget_tokens 与 `thinking: disabled` 两处判断（见 pi 的 mapThinkingLevelToEffort
+     * 与 `thinkingEnabled === false` 分支），改它得单独核一遍，不在这一刀里。
+     */
+    const levels = patch.thinkingLevels;
+    const whitelistMapUsable =
+      levels !== undefined && (declaredAdaptive || prefer.api === "openai-completions");
+    const levelMap = borrowedMap ?? (whitelistMapUsable ? effortLevelMap(levels) : undefined);
     const base =
       known === undefined
         ? {

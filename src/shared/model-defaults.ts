@@ -53,6 +53,7 @@ export const FALLBACK_MODEL = {
 export interface ModelDefaults {
   contextWindow: number;
   maxTokens: number;
+  /** 吃不吃图：白名单（知道它是纯文本的型号）> 目录 > 兜底（兜底默认吃图，理由见 FALLBACK_MODEL） */
   input: ModelInput;
   /** 能不能思考：**兑底语义与 contextWindow 相反**——那边是「猜一个能用的」，这边是「不确定就不发」（发出去不支持的档位会 400） */
   reasoning: boolean;
@@ -162,13 +163,15 @@ export function resolveModelDefaults(
         : "catalog-family"
       : patch.contextWindow !== undefined ||
           patch.maxTokens !== undefined ||
-          patch.reasoning !== undefined
+          patch.reasoning !== undefined ||
+          patch.input !== undefined
         ? "known"
         : "fallback";
   return {
     contextWindow: patch.contextWindow ?? entry?.contextWindow ?? FALLBACK_MODEL.contextWindow,
     maxTokens: patch.maxTokens ?? entry?.maxTokens ?? FALLBACK_MODEL.maxTokens,
-    input: [...(entry?.input ?? FALLBACK_MODEL.input)],
+    // 白名单也能纠模态：目录没收的型号靠它说「这是纯文本」，别让兜底的 image 把图送上去
+    input: [...(patch.input ?? entry?.input ?? FALLBACK_MODEL.input)],
     reasoning: patch.reasoning ?? entry?.reasoning ?? FALLBACK_MODEL.reasoning,
     cost: { ...(entry?.cost ?? FALLBACK_MODEL.cost) },
     source,

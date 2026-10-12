@@ -164,6 +164,14 @@ describe("resolveModelDefaults —— 白名单 > 目录 > 兜底", () => {
     assert.equal(defaults.source, "catalog");
   });
 
+  test("白名单也能纠模态：纯文本的 step-3.5-flash 不给 image（目录里没有它，否则会落兜底的 image）", () => {
+    const defaults = resolveModelDefaults(CATALOG, "step-3.5-flash");
+    assert.deepEqual(defaults.input, ["text"]);
+    assert.equal(defaults.source, "known");
+    // 白名单与目录都不知道的型号仍然赌 image——静默剥图比网关 400 更坏
+    assert.deepEqual(resolveModelDefaults(CATALOG, "step-9-flash").input, ["text", "image"]);
+  });
+
   test("两边都没有：落兜底，且 input 带 image——图片被静默剥掉比网关 400 更坏", () => {
     const defaults = resolveModelDefaults(CATALOG, "my-gateway-model");
     assert.equal(defaults.contextWindow, FALLBACK_MODEL.contextWindow);
