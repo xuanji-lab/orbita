@@ -48,7 +48,7 @@ export type TetrisKey = "I" | "O" | "T" | "S" | "Z" | "J" | "L";
 
 interface ShapeDef {
   cells: readonly (readonly [number, number])[];
-  /** 名字所在行（从上数）：这一横内部不画竖向接缝，免得穿过文字 */
+  /** 名字所在行（从上数）：带文字的那一横内部不画竖向接缝，免得穿过文字 */
   labelRow: number;
 }
 
@@ -132,7 +132,8 @@ export interface TetrisGeometry {
   footprint: readonly (readonly [number, number])[];
   /** 外轮廓 SVG path：格子并集的边界内缩 GAP/2，凸角凹角都做小圆角 */
   outline: string;
-  /** 显示接缝：格与格之间的淡虚线（名字行内部不画竖向接缝） */
+  /** 显示接缝：格与格之间的淡虚线。带文字的那一横（名字行 / 放了扩展名的凸块行）
+   *  内部不画竖向接缝，免得穿过文字；凸块空着（目录）就照常画 */
   seams: readonly TetrisSeam[];
   labelRect: TetrisRect | null;
   nubRect: TetrisRect | null;
@@ -249,22 +250,29 @@ export function tetrisGeometry(input: {
   const labelRow = def.labelRow;
   const labelRect = input.kind === "image" ? null : runRect(labelRow);
   let nubRect: TetrisRect | null = null;
+  /** 凸块所在行（从上数）：nubText 非空时第一非空非名字行 */
+  let nubRow: number | null = null;
   if (nubText !== "") {
     for (let r = 0; r < rows; r++) {
       if (r === labelRow) continue;
       const rect = runRect(r);
       if (rect !== null) {
         nubRect = rect;
+        nubRow = r;
         break;
       }
     }
   }
 
-  // 接缝：格与格之间的淡虚线。竖向接缝在名字那一横内部不画（免得穿过文字）；
-  // 横向接缝落在行与行的间隙里，不碰任何文字
+  // 接缝：格与格之间的淡虚线。竖向接缝在**带文字的那一横**内部不画——名字行如此，
+  // 放了扩展名 / 子项数的凸块行也如此（2026-10-12 验收：接缝从「XLSX」「JSON」
+  // 中间穿过去）；凸块空着（目录 / 无扩展名）就照常画。横向接缝落在行与行的间隙里，
+  // 不碰任何文字
+  const textRows = new Set<number>([labelRow]);
+  if (nubRow !== null) textRows.add(nubRow);
   const seams: TetrisSeam[] = [];
   for (const [c, r] of shapeCells) {
-    if (hasMino(c + 1, r) && r !== labelRow) {
+    if (hasMino(c + 1, r) && !textRows.has(r)) {
       seams.push({
         x1: minoX1(c),
         y1: rowY0(r) + BLACKHOLE_GAP_PX / 2 + SEAM_INSET_PX,

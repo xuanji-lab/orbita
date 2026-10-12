@@ -190,17 +190,26 @@ describe("tetrisGeometry：脚印与渲染几何", () => {
     }
   });
 
-  it("接缝：名字那一横内部没有竖向接缝，其他横有；行与行之间有横向接缝", () => {
+  it("接缝：带文字的那一横（名字行 / 放了扩展名的凸块行）内部没有竖向接缝；行与行之间有横向接缝", () => {
     const g = geo("file", "quarterly-report-final-v3-reviewed-by-legal.md"); // I：名字行是唯一的一横
     assert.equal(g.seams.filter((s) => s.x1 !== s.x2).length, 0);
-    const sheet = geo("file", "quarterly-report-final-v3-reviewed-by-legal-by-finance.xlsx"); // O
-    // O 的名字行（底行）没有竖向接缝；顶行有一道（mw ≥ 2 时两格之间）
-    const verticals = sheet.seams.filter((s) => s.x1 === s.x2);
-    const horizontals = sheet.seams.filter((s) => s.y1 === s.y2);
-    const bandTop = sheet.labelRow * BLACKHOLE_STEP_PX;
-    const bandBottom = (sheet.labelRow + 1) * BLACKHOLE_STEP_PX;
-    for (const v of verticals) assert.ok(v.y2 <= bandTop || v.y1 >= bandBottom, "名字行里画了竖缝");
-    assert.ok(horizontals.length >= 1);
+    // O（xlsx）：两横都有文字（名字 + XLSX 凸块）→ 一条竖缝都没有，横向接缝照常
+    // （2026-10-12 验收：接缝曾从「XL¦SX」中间穿过去）
+    const sheet = geo("file", "quarterly-report-final-v3-reviewed-by-legal-by-finance.xlsx");
+    assert.equal(sheet.seams.filter((s) => s.x1 === s.x2).length, 0);
+    assert.ok(sheet.seams.filter((s) => s.y1 === s.y2).length >= 1);
+    // Z（json）：凸块行放 JSON，名字行在底 → 顶行那一道竖缝也被略过
+    const z = geo("file", "package.json");
+    assert.equal(z.seams.filter((s) => s.x1 === s.x2).length, 0);
+    assert.ok(z.seams.filter((s) => s.y1 === s.y2).length >= 1);
+  });
+
+  it("凸块空着的行（无扩展名的 Z / 目录）照常画竖向接缝", () => {
+    // Makefile 归 Z 族但没有扩展名：凸块空 → 顶行两格之间照常一道竖缝
+    const bare = geo("file", "Makefile");
+    assert.equal(bare.key, "Z");
+    assert.equal(bare.nubText, "");
+    assert.equal(bare.seams.filter((s) => s.x1 === s.x2).length, 1);
   });
 
   it("tetrisSpan：脚印与外接框都交给落位层", () => {
