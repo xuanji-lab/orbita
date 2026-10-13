@@ -135,6 +135,10 @@ import { stripInvocationBlock } from "@shared/invocation";
 import type { SkillMeta, SkillSegment } from "@shared/skill";
 import { api } from "../../api";
 import { retryCauseText, retryLineText } from "./retry-text";
+import { IntentRecallFinalCard, IntentRecallRunCard } from "./IntentRecallCard.tsx";
+import { IntentConfirmCard } from "./IntentConfirmCard.tsx";
+import type { IntentRecallRecord } from "@shared/session";
+import type { RecallCardState } from "@shared/intent-recall";
 import { PERMISSION_MODES } from "@shared/permission";
 import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 import {
@@ -540,12 +544,23 @@ function ChatViewBody(props: {
    * 输入框。面板不关——浏览态可以连插几条。只有主槽的 ChatView 拿到它。
    */
   panelInsert?: PanelInsertRequest | null;
+  /** 意图系统（实验功能）：新会话的召回默认（settings.intent.newSessionOn 已解缺省）。
+   *  可选：副槽（抽屉 / 子会话面板）不传——那里不出开关 */
+  intentNewSessionDefault?: boolean;
 }) {
   const t = useT();
   // 会话生命周期开关：头部完成标记、收尾扫描的全部面挂它后面；
   // 关闭时收尾相关数据源一并在渲染前置空（首页卡退回提问行位、消息流不出扫描卡）
   const lifecycle = useExperimentalFeature("session-lifecycle");
   const { session, providersError, homeBare, hideComposer } = props;
+  // 意图系统（实验功能）：确认卡、输入框开关挂它后面；转录里的终态卡另在
+  // TranscriptColumn 里判（历史记录照渲染，入口才藏）
+  const intentOn = useExperimentalFeature("intent-system");
+  // 会话级开关只在根会话上出现（子会话不召回，开存在主会话）；没有会话（新任务）
+  // 也不出——首条消息按设置里的新会话默认建
+  const intentToggleVisible = intentOn && session.opened !== null && session.opened.parentId === undefined;
+  const intentToggleOn =
+    session.intentEnabled ?? session.opened?.intentEnabled ?? (props.intentNewSessionDefault === true);
   // read SKILL.md 徽标的识别索引（徽标与工具行共用同一份数据）
   const { skills } = useSkillIndex();
   const jumpToQuote = useContext(QuoteJumpContext);
@@ -889,6 +904,11 @@ function ChatViewBody(props: {
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
           onOpenProviders={props.onOpenProviders ?? (() => {})}
+          intentToggle={
+            intentToggleVisible
+              ? { on: intentToggleOn, onToggle: session.setIntentEnabled }
+              : null
+          }
         />
       }
       dropActive={props.dropActive === true}
@@ -1153,6 +1173,18 @@ function ChatViewBody(props: {
             {session.approvals[0] && (
               <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
             )}
+            {/* 回答前确认（实验功能 intent-system）：与审批条同位同配方——比聊天面高
+                一层、要求一个回答才继续，但不霸屏、不抢焦点、不藏输入框。草稿不跨
+                刷新（实验功能：内存态即可，重弹重选） */}
+            {intentOn && session.intentAsk !== null && (
+              <IntentConfirmCard
+                ask={session.intentAsk.ask}
+                requestId={session.intentAsk.requestId}
+                draft={null}
+                onDraftChange={() => {}}
+                onAnswer={session.answerIntentConfirm}
+              />
+            )}
             {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示
                 （scanResult 由 hook 查看槽持有，切走再切回还在）。挂会话生命周期开关：
                 开关在确认卡开着时被关掉（去设置里关）的话，回来不再渲染 */}
@@ -1199,6 +1231,9 @@ function ChatViewBody(props: {
           onOpenTask={session.openSession}
           channel={channel}
           skills={skills}
+          intentRecalls={session.intentRecalls}
+          intentRun={session.intentRun}
+          onAbort={session.stop}
           fileTurns={session.fileTurns}
           reverts={session.reverts}
           undos={session.undos}
@@ -1266,19 +1301,35 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
+  /** 意图召回（实验功能 intent-system）：终态卡（按时间插回流）与运行中卡（转录末尾） */
+  intentRecalls: readonly IntentRecallRecord[];
+  intentRun: RecallCardState | null;
+  /** 停止当前轮（= 取消召回）。引用稳定，不破 memo */
+  onAbort: () => void;
 }) {
   const t = useT();
   // 会话生命周期开关：关闭时消息流不出收尾扫描卡（同 useT 读 Context 的先例——开关
   // 几乎不变，偶尔破一次 memo 无妨）
   const lifecycle = useExperimentalFeature("session-lifecycle");
+  // 意图系统开关：关着时终态记录照渲染（历史还在），运行卡与入口全藏
+  const intentOn = useExperimentalFeature("intent-system");
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
   const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
   // 界碑、通道标记、轮尾账与回退界碑按发生位置插回往来流：压缩摘要收进「已压缩」
   // 折叠行、通道标记画成一行虚线标记、轮尾账是卡片、回退界碑是标记行 + 还原卡
   const records = useMemo(
-    () => mergeSideRecords(props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript),
-    [props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript],
+    () =>
+      mergeSideRecords(
+        props.compactions,
+        props.marks,
+        props.fileTurns,
+        props.reverts,
+        props.undos,
+        transcript,
+        props.intentRecalls,
+      ),
+    [props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript, props.intentRecalls],
   );
   // 被撤销的轮 id 集：轮尾卡据此挂「已撤销」徽标（undo 记录不是渲染单元）
   const undoneTurnIds = useMemo(
@@ -1503,6 +1554,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           </Fragment>
         );
       })}
+      {intentOn && props.intentRun !== null && props.intentRun.status === "running" && (
+        <IntentRecallRunCard card={props.intentRun} onCancel={props.onAbort} />
+      )}
       {props.turnError !== null && (
         /*
          * 回合失败标注（重试耗尽）：跟着失败的归属走——它追在谁后面，就贴着谁的
@@ -1896,6 +1950,8 @@ function ComposerBar(props: {
   onToggleStarModel: (pair: ModelPair) => void;
   /** 卡片底部「配置模型」→ 设置面的服务商页 */
   onOpenProviders: () => void;
+  /** 意图召回的会话级开关（实验功能）：null = 不渲染（实验关 / 子会话 / 新任务） */
+  intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
 }) {
   const t = useT();
   const { session } = props;
@@ -2076,6 +2132,17 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
+      {props.intentToggle !== null && (
+        <Chip
+          icon="waypoints"
+          active={props.intentToggle.on}
+          title={props.intentToggle.on ? t.composer.intentToggleOnHint : t.composer.intentToggleOffHint}
+          onClick={() => props.intentToggle?.onToggle(!props.intentToggle.on)}
+          className="chip-intent"
+        >
+          {t.composer.intentToggle}
+        </Chip>
+      )}
       {session.usable.length > 0 && (
         <ModelPickerMenu
           t={t}
@@ -2368,6 +2435,9 @@ function EntryView(props: {
   }
   if (entry.kind === "revertMark") {
     return <RevertMarkView record={entry.record} cwd={props.cwd} onOpenFile={props.onOpenReviewAt} />;
+  }
+  if (entry.kind === "intentRecall") {
+    return <IntentRecallFinalCard record={entry.record} />;
   }
   if (entry.kind === "channelMark") {
     // 子会话流里的父侧消息（task / reply / stop）：正文直接进对话流——虚线气泡 +

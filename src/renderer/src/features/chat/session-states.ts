@@ -19,7 +19,17 @@ import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ComposerFileRef } from "../../shell/composer-attachments.ts";
-import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
+import type {
+  ChannelMarkRecord,
+  CompactedRecord,
+  IntentRecallRecord,
+  SessionRecord,
+} from "@shared/session";
+import {
+  applyRecallEvent,
+  initialRecallCard,
+  type RecallCardState,
+} from "../../../../shared/intent-recall.ts";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { TranscriptRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
@@ -140,6 +150,13 @@ export interface SessionEntry {
   reverts: readonly RevertRecord[];
   /** 撤销记录（同上，盘上种子）：不渲染单元，轮尾卡据此挂「已撤销」徽标 */
   undos: readonly UndoRecord[];
+  /* ---------- 意图系统（实验功能 intent-system）：三个槽 ---------- */
+  /** 运行中的召回卡（intentRecall 流事件归约而来；终态记录到达后清空）。ephemeral */
+  intentRun: RecallCardState | null;
+  /** 终态召回卡：intentRecallRecord 实时事件 + 盘上种子 */
+  intentRecalls: readonly IntentRecallRecord[];
+  /** 挂起的回答前确认（intentAsk 事件；应答 / 取消后清空）。ephemeral */
+  intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
 }
 
 /** 全部会话的槽。**不可变**：每个事件产出新 Map，没变的槽保持同一引用。 */
@@ -165,6 +182,9 @@ export const EMPTY_ENTRY: SessionEntry = {
   fileTurns: [],
   reverts: [],
   undos: [],
+  intentRun: null,
+  intentRecalls: [],
+  intentAsk: null,
 };
 
 /**
@@ -246,6 +266,30 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
         { requestId: event.requestId, toolName: event.toolName, input: event.input },
       ],
     }));
+  }
+  // 意图系统（实验功能）：流事件归约运行卡、终态记录落桶并收摊运行卡、确认请示挂起
+  if (event.type === "intentRecall") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      intentRun:
+        entry.intentRun === null || entry.intentRun.turnId !== event.turnId || entry.intentRun.status !== "running"
+          ? applyRecallEvent(initialRecallCard(event.turnId, Date.now()), event.event)
+          : applyRecallEvent(entry.intentRun, event.event),
+    }));
+  }
+  if (event.type === "intentRecallRecord") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      intentRun: null,
+      // 同一 turn 重跑只留最后一张（盘上也是这个语义：新记录追加，渲染按 turnId 去尾）
+      intentRecalls: [
+        ...entry.intentRecalls.filter((record) => record.turnId !== event.record.turnId),
+        event.record,
+      ],
+    }));
+  }
+  if (event.type === "intentAsk") {
+    return update(states, event.sessionId, (entry) => ({ ...entry, intentAsk: event }));
   }
   if (event.type === "failed") {
     // runtime 整个没了：所有槽归位；单条失败只归位那条（不存在的槽不凭空造）
@@ -339,6 +383,7 @@ export function seedFromDisk(
   const fileTurns: FileTurnView[] = [];
   const reverts: RevertRecord[] = [];
   const undos: UndoRecord[] = [];
+  const intentRecalls: IntentRecallRecord[] = [];
   for (const record of transcript) {
     if (record.role === "file-turn") {
       fileTurns.push({
@@ -360,6 +405,8 @@ export function seedFromDisk(
       reverts.push(record);
     } else if (record.role === "undo") {
       undos.push(record);
+    } else if (record.role === "intent-recall") {
+      intentRecalls.push(record);
     }
   }
   const next = new Map(states);
@@ -385,8 +432,19 @@ export function seedFromDisk(
     fileTurns,
     reverts,
     undos,
+    // 同一 turn 重跑只留最后一张（重读盘后与实时事件的去重口径一致）
+    intentRecalls: dedupeRecalls(intentRecalls),
+    intentRun: null,
+    intentAsk: null,
   });
   return next;
+}
+
+/** 同一 turnId 只留最后一张（重跑 recall 会追加新记录）。 */
+function dedupeRecalls(records: readonly IntentRecallRecord[]): IntentRecallRecord[] {
+  const lastOf = new Map<string, IntentRecallRecord>();
+  for (const record of records) lastOf.set(record.turnId, record);
+  return records.filter((record) => lastOf.get(record.turnId) === record);
 }
 
 /**
@@ -406,17 +464,27 @@ export function mergeSideRecords(
   reverts: readonly RevertRecord[],
   undos: readonly UndoRecord[],
   transcript: readonly TranscriptItem[],
+  intentRecalls: readonly IntentRecallRecord[] = [],
 ): TranscriptRecord[] {
   if (
     compactions.length === 0 &&
     marks.length === 0 &&
     fileTurns.length === 0 &&
     reverts.length === 0 &&
-    undos.length === 0
+    undos.length === 0 &&
+    intentRecalls.length === 0
   ) {
     return [...transcript];
   }
-  const records: TranscriptRecord[] = [...transcript, ...compactions, ...marks, ...fileTurns, ...reverts, ...undos];
+  const records: TranscriptRecord[] = [
+    ...transcript,
+    ...compactions,
+    ...marks,
+    ...fileTurns,
+    ...reverts,
+    ...undos,
+    ...intentRecalls,
+  ];
   // 同毫秒时非 transcript 的一侧记录（界碑 / 通道标记 / 轮尾账 / 回退界碑）排在前
   // ——界碑在前的老规则原样保留：混排靠落盘时间戳定序，非 transcript 的一侧优先
   // 出现在同刻的前面（轮尾账的时戳晚于本轮末条消息，不受这条影响）。
@@ -450,6 +518,17 @@ export function compactionBoundaryStatus(record: CompactedRecord, t: Messages): 
       ...entry,
       approvals: entry.approvals.filter((approval) => approval.requestId !== requestId),
     });
+    return next;
+  }
+  return states;
+}
+
+/** 按 requestId 跨槽摘掉挂起的意图确认请示。没有匹配就原样返回（同一引用）。 */
+export function removeIntentAsk(states: SessionStates, requestId: string): SessionStates {
+  for (const [sessionId, entry] of states) {
+    if (entry.intentAsk?.requestId !== requestId) continue;
+    const next = new Map(states);
+    next.set(sessionId, { ...entry, intentAsk: null });
     return next;
   }
   return states;
