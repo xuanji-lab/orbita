@@ -278,7 +278,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     },
     changelog: [
       {
-        pr: null,
+        pr: 221,
         date: "2026-10-13",
         note: {
           zh: "首版：意图闸门（门卫 → 理解 → 打分 → 理由 → 摘句 → 确认 → 上下文）插在回显与回答之间；回答前确认卡（对 / 不对 / 不表态 / 改字）；右栏意图图谱（六岗泳道 + 本问 + 历史联系）；会话级开关与渠道（Proma / DeepSeek）；token 记进 7 天用量；回退作废、每轮存档。",
