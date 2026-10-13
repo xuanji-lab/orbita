@@ -9,7 +9,6 @@ import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
-import { panelTurns } from "./features/intent/intent-graph.ts";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
@@ -288,6 +287,24 @@ export function App() {
   const openAsMain = useCallback(
     (childId: string) => {
       void session.openSession(childId);
+      setRightPanel(null);
+    },
+    [session],
+  );
+  // 意图面板（实验功能）：仍在转录里的 user item id 集（被回退的问不进轮次）与
+  // 「打开会话」出口（与子会话的 openAsMain 同一条路）
+  const intentLiveTurnIds = useMemo(
+    () =>
+      new Set(
+        session.transcript
+          .filter((record): record is Extract<typeof record, { role: "user" }> => record.role === "user")
+          .map((record) => record.id),
+      ),
+    [session.transcript],
+  );
+  const openSessionFromIntent = useCallback(
+    (id: string) => {
+      void session.openSession(id);
       setRightPanel(null);
     },
     [session],
@@ -625,15 +642,6 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
-  // 意图面板的 turn 列表：新的在前、去掉被回退的那几问（见 panelTurns）
-  const intentPanelTurns = useMemo(
-    () =>
-      panelTurns(
-        session.intentRecalls,
-        new Set(session.transcript.filter((item) => item.role === "user").map((item) => item.id)),
-      ),
-    [session.intentRecalls, session.transcript],
-  );
   // MCP 面板与 Skills 面板共用这个 hook（servers 也在里面）：只认 skills 的话，
   // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
   // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
@@ -864,9 +872,15 @@ export function App() {
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
-                  turns={intentPanelTurns}
+                  turns={session.intentRecalls}
                   liveRun={session.intentRun}
-                  pendingAsk={session.intentAsk?.ask ?? null}
+                  pendingAsk={
+                    session.intentAsk === null
+                      ? null
+                      : { requestId: session.intentAsk.requestId, ask: session.intentAsk.ask }
+                  }
+                  liveTurnIds={intentLiveTurnIds}
+                  onOpenSession={openSessionFromIntent}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel

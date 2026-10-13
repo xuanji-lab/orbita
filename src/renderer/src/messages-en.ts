@@ -1537,48 +1537,48 @@ export const en = {
     citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
   },
 
-  /* ---------- 右栏「意图」面板（实验功能 intent-system）：图 + 卡片列表 ---------- */
+  /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
   intentPanel: {
     title: "Intent",
-    /** 面板副题：这一问的图 */
-    subtitle: "This question's graph",
-    /** turn 选择器：本问与更早 */
-    latestTurn: "This question",
-    earlierTurn: (when: string) => when,
-    /** 汇总行：入选（high / promoted）与拿不准（mid）分开数——混说「入选」会跟召回卡对不上 */
-    summary: (qas: number, high: number, mid: number, sessions: number) =>
-      `${qas} past Q&As · selected ${high} · unsure ${mid} · ${sessions} session${sessions === 1 ? "" : "s"}. Earliest at top, all flowing into this question.`,
-    deniedLine: (n: number) => ` ${n} you marked wrong are withdrawn.`,
-    /** 图例 */
-    legendHigh: "Selected",
-    legendMid: "Unsure",
-    legendPromoted: "You confirmed",
-    legendWithdrawn: "Withdrawn",
-    legendLink: "Past link",
-    denseNote: "Dense view — unsure picks shown as dust, only selected ones connect",
-    /** 空态 / 错误 */
+    /** 轮选择器（累积图的高亮，不切图） */
+    allRounds: (n: number) => `All · ${n} question${n === 1 ? "" : "s"}`,
+    roundChip: (round: number, when: string) =>
+      when === "" ? `Q${round}` : `Q${round} · ${when}`,
+    roundShort: (round: number) => `Q${round}`,
+    loading: "Loading…",
+    liveBadge: "Recalling…",
     emptyNoRecall: "No recall for this question yet.",
     emptyNoTurns: "This task has no intent recall yet.",
     errorFetch: "Couldn't load the graph from intent-lab.",
-    loading: "Loading…",
-    liveBadge: "Recalling…",
-    /** 卡片里的引文（Q / A） */
-    nodeQuote: (q: string) => `“${q}”`,
-    /** 卡片列表 */
-    cardsTitle: "Selected cards",
+    readUnknown: "?",
+    /** 图区摘要（读的条数可能是 "?"） */
+    summary: (read: number | string, high: number, mid: number) =>
+      `Read ${typeof read === "number" ? read.toLocaleString("en-US") : read} · selected ${high} · unsure ${mid}`,
+    /** 图区顶部的两视图开关 */
+    viewSlots: "By slot",
+    viewQuestions: "By question",
+    /** 图角着色开关：颜色编码的维度 */
+    colorTime: "Time",
+    colorScore: "Relevance",
+    /** 分隔条 */
+    entriesLabel: "Entries",
+    selectedCount: (n: number) => `selected ${n}`,
+    splitHint: "Drag to resize · double-click to reset",
+    foldList: "Fold entries to the bottom",
+    unfoldList: "Unfold entries",
+    /** 条目行 */
+    youSaid: "You said",
+    answerThen: "The answer then",
+    quote: (q: string) => `“${q}”`,
+    rowYes: "Right",
+    rowNo: "Wrong",
+    openSession: "Open session",
     cardVerdictAsked: "You confirmed",
     cardVerdictDenied: "You marked wrong · withdrawn",
     cardVerdictEdited: "You reworded it",
     cardVerdictSkipped: "Left blank · used as-is",
     cardVerdictPending: "Waiting for your confirmation",
     cardVerdictUnasked: "Not asked",
-    cardYou: "Q · you said",
-    cardAnswer: "A · the answer then",
-    cardScore: (score: string) => score,
-    cardDup: (n: number) => `merged ${n}`,
-    cardSlotHigh: "selected",
-    cardSlotMid: "unsure",
-    cardSlotPromoted: "promoted",
   },
 };
 

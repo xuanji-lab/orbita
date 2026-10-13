@@ -3879,243 +3879,348 @@ button.panel-group-toggle:hover {
 }
 .review-row:hover:not(:disabled) {
   background: var(--color-bg-hover);
-}
-/* ================================================================ 意图系统（实验功能 intent-system）
-   右栏「意图」面板（图 / 卡片）与聊天里的召回过程卡。颜色全走语义 token（深浅
-   主题各自成立）；accent 只给「你确认过」的绿圈；warning 只给进行中的转圈图标。 */
+}/* ================================================================ 意图系统（实验功能 intent-system）
+   右栏「意图」面板：会话累积簇图 + 条目。数据色只有一条带——--color-nebula（用量格
+   同款 token，五主题各一值）按 30/62/100 三档 color-mix（时间=轮次新旧 / 相关度），
+   这是用户 2026-10-14 的决定：复用用量格已有的色 token，不另造新色；桥与「你确认过」
+   用 accent / success，旧中心与被高亮轮以外的节点退一档。 */
 
-/* —— 聊天里的召回过程卡（2026-10-13 用户裁决）：无底色无边框，直接坐在聊天面上，
-   与 ToolCard / ThinkingCard 的过程行同款语言；进行中只有头部（图标 + 标题）呼吸，
-   图标用 warning 色当第二信号；落定整行 tertiary（组件内联）。 */
-.intent-run-icon {
-  color: var(--color-warning);
-  flex: 0 0 auto;
+/* —— 面板体：图钉顶部（高度可拖），分隔条，条目列表占余下 —— */
+.intent-panel-body {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
-.intent-run-title {
-  flex: 0 0 auto;
-  white-space: nowrap;
+.intent-graph-area {
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.intent-cluster {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+/* 图区浮层：视图开关（左上）、摘要（其下）、着色开关（右下） */
+.intent-graph-top {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  display: flex;
+  gap: 4px;
+  z-index: 1;
+}
+.intent-gtoggle {
+  height: 22px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-control);
-  animation: intent-head-breathe 1.8s ease-in-out infinite;
-}
-@keyframes intent-head-breathe {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-
-/* —— 面板的图 —— */
-.intent-lane {
-  stroke: var(--color-border-subtle);
-  stroke-width: 1;
-  stroke-dasharray: 2 4;
-}
-.intent-lane-head {
-  font: var(--font-size-micro) var(--font-family-base);
-  fill: var(--color-text-tertiary);
-}
-.intent-gutter {
-  font: var(--font-size-micro) var(--font-family-mono);
-  fill: var(--color-text-tertiary);
-}
-/* 连线：纯展示（不做悬停 / 点击，无命中区——2026-10-13 用户裁决） */
-.intent-edge {
-  fill: none;
-  stroke: var(--color-text-tertiary);
-}
-.intent-edge.slot {
-  stroke-opacity: 0.55;
-}
-.intent-edge.session {
-  stroke-dasharray: 5 4;
-  stroke-opacity: 0.4;
-}
-.intent-edge.link {
-  stroke-dasharray: 1.5 3;
-  stroke-opacity: 0.75;
-  stroke-width: 1.4;
-}
-
-/* 节点：入选实心、拿不准空心；选中描边；「等你确认」呼吸 */
-.intent-node {
+  font: inherit;
+  font-size: var(--font-size-caption);
   cursor: pointer;
 }
-.intent-node .intent-halo {
-  fill: transparent;
+.intent-gtoggle:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
-.intent-node .intent-core {
-  fill: var(--color-text-primary);
-  stroke: none;
+.intent-gtoggle.on {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
 }
-.intent-node.hollow .intent-core {
-  fill: transparent;
-  stroke: var(--color-text-secondary);
+.intent-gtoggle.sm {
+  height: 20px;
+  padding: 0 8px;
+  font-size: var(--font-size-micro);
+}
+.intent-summary {
+  position: absolute;
+  top: 34px;
+  left: 12px;
+  right: 12px;
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+}
+.intent-summary b {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-semibold);
+}
+.intent-legend {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 1;
+}
+
+/* —— 图元：枝 / 桥 / 簇心 / 叶 / 胞体 —— */
+.ibr {
+  stroke: var(--color-text-primary);
+  stroke-linecap: round;
+}
+.ibr.dim,
+.ileaf.dim {
+  opacity: 0.22;
+}
+.ibridge {
+  stroke: var(--color-accent);
+  stroke-dasharray: 1.5 3.5;
+  stroke-linecap: round;
+  stroke-opacity: 0.75;
+}
+.ihub {
+  fill: var(--color-text-secondary);
+}
+.ihub-label {
+  font-size: 9.5px;
+  font-weight: 450;
+  fill: var(--color-text-tertiary);
+  paint-order: stroke;
+  stroke: var(--color-bg-panel);
+  stroke-width: 3px;
+}
+.ileaf {
+  cursor: pointer;
+}
+.ileaf-halo {
+  opacity: 0.16;
+}
+.ileaf-core {
   stroke-width: 1.2;
 }
-.intent-node.sel .intent-core {
-  stroke: var(--color-accent);
-  stroke-width: 2;
-}
-.intent-node.hollow.sel .intent-core {
-  fill: var(--color-bg-muted);
-}
-.intent-node.ask .intent-halo {
-  stroke: var(--color-text-secondary);
-  stroke-width: 1;
-  stroke-dasharray: 3 3;
-  fill: none;
-  animation: intent-breathe 1.6s ease-in-out infinite;
-}
-/* 「你确认过」：绿圈（accent） */
-.intent-node .intent-ring,
-.intent-soma .intent-ring {
-  fill: none;
+.ileaf.shared .ileaf-core {
   stroke: var(--color-accent);
   stroke-width: 1.6;
 }
-.intent-node .intent-ring {
-  opacity: 0.8;
+.ileaf.yes .ileaf-core {
+  stroke: var(--color-success);
+  stroke-width: 1.8;
 }
-.intent-soma .intent-core {
-  fill: var(--color-text-primary);
+.ileaf.sel .ileaf-core {
+  stroke: var(--color-accent);
+  stroke-width: 2.2;
 }
-.intent-soma .intent-ring {
-  stroke: var(--color-border-subtle);
-}
-.intent-dendrite {
-  stroke: var(--color-text-tertiary);
-  stroke-width: 0.8;
-  stroke-opacity: 0.5;
-}
-.intent-syn {
-  fill: var(--color-text-secondary);
-}
-.intent-syn.ask {
-  fill: transparent;
-  stroke: var(--color-text-secondary);
-  stroke-width: 1;
-}
-.intent-edit-mark {
-  font: var(--font-size-micro) var(--font-family-base);
+.ileaf-round {
+  font-family: var(--font-family-mono);
+  font-size: 8.5px;
   fill: var(--color-text-tertiary);
 }
-@keyframes intent-breathe {
-  0%,
-  100% {
-    stroke-opacity: 0.9;
-  }
-  50% {
-    stroke-opacity: 0.25;
-  }
+.imembrane {
+  fill: none;
+  stroke: var(--color-text-primary);
+  stroke-opacity: 0.16;
+}
+.isoma-core {
+  fill: var(--color-text-primary);
+}
+.isoma-label {
+  font-size: 10.5px;
+  fill: var(--color-text-secondary);
+}
+.isoma.past .isoma-core {
+  fill: var(--color-text-tertiary);
+}
+.isoma.past .isoma-label {
+  fill: var(--color-text-tertiary);
 }
 
-/* —— 入选卡片：排版纪律（2026-10-13 真机：长路径把卡片撑叠）：所有文本容器
-   minWidth:0 + overflow-wrap:anywhere（@/Users/… 无空格长串必须能断行），引文按
-   行数收口（clamp-2 / clamp-3），列表纵向 flex——行高由内容撑，卡片之间不可能叠。 */
-.intent-card-list {
+/* —— 分隔条（条目区组头）：拖高 / 双击复原 / 折叠 —— */
+.intent-split {
+  flex: none;
+  height: 32px;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-height: 0;
-  max-height: 420px;
-  overflow-y: auto;
-  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  cursor: row-resize;
+  user-select: none;
+  background: transparent;
 }
-.intent-card {
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
+.intent-split:hover {
+  background: var(--color-bg-hover);
+}
+.intent-split .lbl {
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.intent-split .det {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.intent-split .grip {
+  margin: 0 auto;
+  color: var(--color-text-tertiary);
+  display: inline-flex;
+  transform: rotate(90deg);
+}
+.intent-split-fold {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
   cursor: pointer;
-  overflow-wrap: anywhere;
 }
-.intent-card.sel {
-  border-color: var(--color-accent);
+.intent-split-fold:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
-.intent-card-head {
+
+/* —— 条目行（收件箱行语言）：顶发丝线、整行 hover、选中 option-active-bg —— */
+.intent-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.intent-row {
   display: flex;
-  align-items: baseline;
   gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+}
+.panel-group-head + .intent-row,
+.intent-row:first-child {
+  border-top: 0;
+}
+.intent-row:hover {
+  background: var(--color-bg-hover);
+}
+.intent-row.sel {
+  background: var(--option-active-bg);
+}
+.intent-row-mk {
+  margin-top: 3px;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+}
+.intent-row-mk.mid {
+  color: var(--color-text-tertiary);
+}
+.intent-row-mk.yes {
+  color: var(--color-success);
+}
+.intent-row-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.intent-row-l1 {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
   min-width: 0;
 }
-.intent-card-title {
+.intent-row-title {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-caption);
-  font-weight: var(--weight-bold);
-  color: var(--color-text-primary);
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-medium);
 }
-.intent-card-meta {
-  flex: 0 0 auto;
+.intent-row-when {
+  flex: none;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
 }
-.intent-card-slotrow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-.intent-card-slotname {
-  flex: 0 0 auto;
-  font-size: var(--font-size-micro);
-  color: var(--color-text-secondary);
-}
-.intent-card-slotstate {
-  flex: 0 0 auto;
+.intent-row-meta {
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
 }
-.intent-card-conn,
-.intent-card-qa {
+.intent-row-conn {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: var(--font-size-micro);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-caption);
   color: var(--color-text-secondary);
-}
-.intent-card-qa {
-  color: var(--color-text-tertiary);
-}
-.intent-card-conn-original {
-  color: var(--color-text-tertiary);
-  opacity: 0.8;
-}
-.clamp-2,
-.clamp-3 {
+  line-height: 1.55;
   display: -webkit-box;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.clamp-2 {
-  -webkit-line-clamp: 2;
+.intent-row.sel .intent-row-conn {
+  -webkit-line-clamp: unset;
 }
-.clamp-3 {
-  -webkit-line-clamp: 3;
+.intent-row-more {
+  margin-top: 4px;
+  display: grid;
+  gap: 4px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  line-height: 1.55;
 }
-.intent-score-track {
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 24px;
-  height: 3px;
-  border-radius: var(--radius-xs);
-  background: var(--color-border-subtle);
-  overflow: hidden;
+.intent-row-more b {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
 }
-.intent-score-track i {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: var(--radius-xs);
-  background: var(--color-text-secondary);
+.intent-row-more p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.intent-row-acts {
+  display: flex;
+  gap: 2px;
+  margin-top: 6px;
+}
+.intent-mini {
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.intent-mini:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 轮选择 chip（标题行中段） */
+.intent-turn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.intent-turn-chip:hover,
+.intent-turn-chip.open {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.intent-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-warning);
 }
