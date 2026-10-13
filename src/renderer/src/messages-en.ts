@@ -1036,6 +1036,7 @@ export const en = {
     compacting: "Compacting context…",
     /* ---------- 意图召回（实验功能 intent-system）：卡片 + 回答前确认 ---------- */
     recall: {
+      detailInPanel: "Picks and verdicts are in the Intent panel on the right.",
       label: "Intent recall",
       /** 11 格阶段条的格名（顺序即流水线顺序） */
       stageGate: "Gate",
@@ -1084,18 +1085,14 @@ export const en = {
       confirm: {
         title: "Confirm before answering",
         intro:
-          "I connected your message to the past conversations below, but haven't confirmed them with you. Mark the ones that are right, the wrong ones, or edit the wording. Anything left blank is still used this time and asked again later.",
+          "I connected your message to the past conversations below, but haven't confirmed them with you. Mark the ones that are right, the wrong ones, or edit the wording. Anything marked right or reworded is used for this answer; anything left blank is not.",
         verdictYes: "Right",
         verdictNo: "Wrong",
-        verdictSkip: "Skip",
         statementLabel: "Statement (editable)",
         noteLabel: "Add background",
         notePlaceholder: "Anything missing? Add a line…",
         confirmAndAnswer: "Confirm and answer",
         answerWithoutConfirming: "Answer without confirming",
-        askedLine: (k: number, y: number, n: number, s: number) =>
-          `Asked ${k} · right ${y} / wrong ${n} / skipped ${s}`,
-        yourEdit: "Your wording",
         feedbackFailed: "Couldn't deliver your confirmation to intent-lab",
         feedbackGone: "This recall run has expired — send the message again",
       },

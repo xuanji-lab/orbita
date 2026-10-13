@@ -950,6 +950,7 @@ export const zh: Messages = {
     compacting: "正在压缩上下文…",
     /* ---------- 意图召回（实验功能 intent-system）：卡片 + 回答前确认 ---------- */
     recall: {
+      detailInPanel: "入选与表态在右栏「意图」面板里看。",
       label: "意图召回",
       stageGate: "门卫",
       stageUnderstand: "理解问题",
@@ -991,17 +992,14 @@ export const zh: Messages = {
       confirm: {
         title: "回答前先确认",
         intro:
-          "我把你这句话和下面几段旧对话连了起来，但还没经过你确认。对的点「对」，不对的点「不对」，说法不准就直接改字。没表态的这次照样参考，下次再问。",
+          "我把你这句话和下面几段旧对话连了起来，但还没经过你确认。对的点「对」，不对的点「不对」，说法不准就直接改字。点「对」或改了字的，这一问就交给模型；没表态的这一问不用。",
         verdictYes: "对",
         verdictNo: "不对",
-        verdictSkip: "不表态",
         statementLabel: "陈述（可改字）",
         noteLabel: "补充背景",
         notePlaceholder: "漏了什么？补一句背景…",
         confirmAndAnswer: "确认并回答",
         answerWithoutConfirming: "不确认，直接回答",
-        askedLine: (k, y, n, s) => `问了你 ${k} 条 · 对 ${y} / 不对 ${n} / 不表态 ${s}`,
-        yourEdit: "你改的说法",
         feedbackFailed: "确认结果没送进 intent-lab",
         feedbackGone: "这次召回已经过期——把那句话重发一遍即可",
       },

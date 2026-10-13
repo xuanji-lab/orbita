@@ -92,18 +92,6 @@ export function buildSkipAllAnswers(ask: readonly IntentAskView[]): IntentConfir
   return ask.map((item) => ({ askId: item.askId, verdict: "skip" as const }));
 }
 
-/** 终态卡第 4 步的统计：对 x / 不对 y / 不表态 z。 */
-export function confirmVerdictCounts(answers: readonly IntentConfirmAnswer[]): { yes: number; no: number; skip: number } {
-  let yes = 0;
-  let no = 0;
-  let skip = 0;
-  for (const answer of answers) {
-    if (answer.verdict === "yes") yes++;
-    else if (answer.verdict === "no") no++;
-    else skip++;
-  }
-  return { yes, no, skip };
-}
 
 /**
  * 草稿内容是否与本地态真的不同（P0 2026-09-27：确认卡「对 / 不对」没反应）。

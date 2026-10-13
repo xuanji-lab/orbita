@@ -12,7 +12,6 @@ import { INTENT_FEEDBACK_FAILED } from "../shared/intent-recall.ts";
 import {
   buildConfirmAnswers,
   buildSkipAllAnswers,
-  confirmVerdictCounts,
   editConfirmRow,
   initialConfirmRows,
   toggleConfirmVerdict,
@@ -187,8 +186,6 @@ test("两个按钮的 answers：确认按钮按行态生成；不确认按钮全
     skipped.map((a) => a.verdict),
     ["skip", "skip"],
   );
-  assert.deepEqual(confirmVerdictCounts(confirmed), { yes: 1, no: 1, skip: 0 });
-  assert.deepEqual(confirmVerdictCounts(skipped), { yes: 0, no: 0, skip: 2 });
 });
 
 const WITH_CONFIRM: IntentRecallRecord = {

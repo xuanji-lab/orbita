@@ -7,8 +7,8 @@
  * 状态色是出错行的 danger 文字。标题不换行（窄列里「意图召回」四字被拆两行过）。
  *
  * 运行卡（RecallCardState）：阶段条 + 场景行 + 已用时间 + 取消。
- * 终态卡（IntentRecallRecord）：收起一行结论，展开看逐格用时、S4 总结、确认表态
- * 与入选表。数据归约（applyRecallEvent）在 shared，本文件不持状态机。
+ * 终态卡（IntentRecallRecord）：收起一行结论，展开只看逐格用时与错误；入选条目与
+ * 确认表态不在聊天面重复，统一在右栏「意图」面板（图 + 卡片）。数据归约（applyRecallEvent）在 shared，本文件不持状态机。
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { Icon } from "../../shell/Icon.tsx";
@@ -24,7 +24,6 @@ import {
   type RecallStageCell,
 } from "../../../../shared/intent-recall.ts";
 import type { IntentRecallRecord } from "../../../../shared/session.ts";
-import { confirmVerdictCounts } from "../../../../shared/intent-confirm.ts";
 import { formatThinkingDuration } from "./tool-results.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -193,7 +192,7 @@ export function IntentRecallRunCard(props: { card: RecallCardState; onCancel: ()
   );
 }
 
-/** 终态卡：收起一行结论（整行 tertiary；错误文字用 danger），展开看细节。 */
+/** 终态卡：收起一行结论（整行 tertiary；错误文字用 danger），展开只看阶段条与错误；条目细节在右栏「意图」面板。 */
 export function IntentRecallFinalCard(props: { record: IntentRecallRecord }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -275,105 +274,19 @@ export function IntentRecallFinalCard(props: { record: IntentRecallRecord }) {
               {haltedLine(record, t)} · {recallErrorText(record.error.message, t)}
             </p>
           )}
-          {record.status === "done" && record.confirm != null && (
-            <ConfirmVerdictBlock record={record} />
+          {/* 入选、问到的条目与表态在右栏「意图」面板里看（图 + 卡片），聊天面只留阶段条 */}
+          {record.status === "done" && (record.selected.length > 0 || record.ask.length > 0) && (
+            <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+              {t.chat.recall.detailInPanel}
+            </p>
           )}
-          {record.status === "done" && record.selected.length > 0 && <SelectedBlock record={record} />}
         </div>
       )}
     </div>
   );
 }
 
-/** 确认表态的展开块：问了几条、每条的表态与改字。 */
-function ConfirmVerdictBlock(props: { record: IntentRecallRecord }) {
-  const t = useT();
-  const record = props.record;
-  const confirm = record.confirm;
-  if (confirm === null || confirm === undefined) return null;
-  const counts = confirmVerdictCounts(confirm.answers);
-  return (
-    <div style={{ display: "grid", gap: "var(--space-1)" }}>
-      <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
-        {t.chat.recall.confirm.askedLine(record.ask.length, counts.yes, counts.no, counts.skip)}
-        {confirm.note !== "" ? ` · ${confirm.note}` : ""}
-      </p>
-      {record.ask.map((item) => {
-        const answer = confirm.answers.find((a) => a.askId === item.askId);
-        if (answer === undefined) return null;
-        const verdict =
-          answer.verdict === "yes"
-            ? t.chat.recall.confirm.verdictYes
-            : answer.verdict === "no"
-              ? t.chat.recall.confirm.verdictNo
-              : t.chat.recall.confirm.verdictSkip;
-        return (
-          <p
-            key={item.askId}
-            style={{
-              margin: 0,
-              fontSize: "var(--font-size-micro)",
-              lineHeight: "var(--line-height-caption)",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            <span style={{ fontFamily: "var(--font-family-mono)" }}>{item.slot}</span> {item.statement}
-            {answer.edited !== undefined && (
-              <>
-                {" → "}
-                <span style={{ color: "var(--color-text-secondary)" }}>
-                  {answer.edited}（{t.chat.recall.confirm.yourEdit}）
-                </span>
-              </>
-            )}
-            {" · "}
-            <span>{verdict}</span>
-          </p>
-        );
-      })}
-    </div>
-  );
-}
 
-/** 入选表的展开块：时间 · 会话 · 岗 · 摘句（human 优先，退回 why）。 */
-function SelectedBlock(props: { record: IntentRecallRecord }) {
-  return (
-    <div style={{ display: "grid", gap: "var(--space-1)" }}>
-      {props.record.selected.map((item) => (
-        <div
-          key={item.qaId}
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(56px, auto) minmax(0, 1fr) minmax(48px, auto)",
-            gap: "var(--space-2)",
-            fontSize: "var(--font-size-micro)",
-            lineHeight: "var(--line-height-caption)",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          <span style={{ fontFamily: "var(--font-family-mono)", color: "var(--color-text-tertiary)" }}>{item.when}</span>
-          <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{item.title}</span>
-          <span style={{ fontFamily: "var(--font-family-mono)", color: "var(--color-text-tertiary)" }}>
-            {item.slots.join(" · ")}
-            {item.score !== undefined ? ` ${item.score.toFixed(1)}` : ""}
-          </span>
-          <span
-            style={{
-              gridColumn: "1 / -1",
-              color: "var(--color-text-tertiary)",
-              overflowWrap: "anywhere",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {item.human !== undefined && item.human !== "" ? item.human : item.why}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 /** 终态卡的标题字音：不换行（窄列里四字标题被拆过两行）。 */
 const finalTitleStyle: CSSProperties = {
