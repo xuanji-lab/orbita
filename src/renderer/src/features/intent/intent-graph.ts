@@ -85,6 +85,19 @@ function edgeSolid(edge: IntentEdge): boolean {
 }
 
 /** /edges → 图数据。verdict=no 的入选不画（同岗链自然跳过它重连）。 */
+/**
+ * 面板的 turn 列表：**新的在前**（第 0 项 = 本问），且只留还在生效列表里的那几问。
+ * 会话记录里召回记录按时间追加（旧在前），被回退的那几问的记录也还在盘上；
+ * 回退后它们的用户消息已不在生效 transcript 里，按 turnId 对不上就丢掉。
+ * 运行中的那一问不靠这张表：面板对它直接用 liveRun.turnId。
+ */
+export function panelTurns<T extends { turnId: string; startedAt: number }>(
+  recalls: readonly T[],
+  userIds: ReadonlySet<string>,
+): T[] {
+  return recalls.filter((record) => userIds.has(record.turnId)).sort((a, b) => b.startedAt - a.startedAt);
+}
+
 export function buildIntentGraph(data: IntentEdges): IntentGraphData {
   const byQa = new Map<string, GraphNode>();
   let withdrawn = 0;

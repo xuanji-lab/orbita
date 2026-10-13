@@ -36,6 +36,15 @@ export function IntentPanel(props: {
       : (props.liveRun?.turnId ?? props.turns[0]?.turnId ?? null);
   const isLive = props.liveRun !== null && props.liveRun.turnId === turnId;
 
+  // 取数的版本键：选中那一问的召回落定 / 表态写回 / 运行态变化时都要重取——
+  // 只按 turnId 取的话，召回刚开始打开面板拿到的空数据会一直留着（边在 done 时才写）
+  const turnRecord = props.turns.find((turn) => turn.turnId === turnId);
+  const fetchKey = [
+    turnRecord?.id ?? "",
+    turnRecord?.confirm?.edgesWritten ?? "",
+    isLive ? props.liveRun?.status ?? "" : "",
+    isLive ? (props.pendingAsk?.length ?? 0) : "",
+  ].join("|");
   const [edges, setEdges] = useState<IntentEdges | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   useEffect(() => {
@@ -59,7 +68,7 @@ export function IntentPanel(props: {
     return () => {
       cancelled = true;
     };
-  }, [props.sessionId, turnId]);
+  }, [props.sessionId, turnId, fetchKey]);
 
   const graph = useMemo(() => (edges !== null ? buildIntentGraph(edges) : null), [edges]);
   const [selectedQa, setSelectedQa] = useState<string | null>(null);

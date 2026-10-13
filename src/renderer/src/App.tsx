@@ -9,6 +9,7 @@ import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
+import { panelTurns } from "./features/intent/intent-graph.ts";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
@@ -624,6 +625,15 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
+  // 意图面板的 turn 列表：新的在前、去掉被回退的那几问（见 panelTurns）
+  const intentPanelTurns = useMemo(
+    () =>
+      panelTurns(
+        session.intentRecalls,
+        new Set(session.transcript.filter((item) => item.role === "user").map((item) => item.id)),
+      ),
+    [session.intentRecalls, session.transcript],
+  );
   // MCP 面板与 Skills 面板共用这个 hook（servers 也在里面）：只认 skills 的话，
   // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
   // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
@@ -854,7 +864,7 @@ export function App() {
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
-                  turns={session.intentRecalls}
+                  turns={intentPanelTurns}
                   liveRun={session.intentRun}
                   pendingAsk={session.intentAsk?.ask ?? null}
                 />

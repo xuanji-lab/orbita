@@ -4,7 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildIntentGraph, layoutIntentGraph } from "./intent-graph.ts";
+import { buildIntentGraph, layoutIntentGraph, panelTurns } from "./intent-graph.ts";
 import type { IntentEdges } from "@shared/intent-edges";
 
 const DAY = 86_400_000;
@@ -152,3 +152,16 @@ test("超过 40 条 QA 进密集模式；布局按真实时间比例", () => {
   assert.ok(sparse.yOf(g.nodes[1]!) - sparse.yOf(g.nodes[0]!) === 50);
 });
 
+
+test("panelTurns：新的在前（第 0 项 = 本问），被回退的那几问不列", () => {
+  const recalls = [
+    { turnId: "t1", startedAt: 100 },
+    { turnId: "t2-reverted", startedAt: 200 },
+    { turnId: "t3", startedAt: 300 },
+  ];
+  assert.deepEqual(
+    panelTurns(recalls, new Set(["t1", "t3"])).map((turn) => turn.turnId),
+    ["t3", "t1"],
+  );
+  assert.deepEqual(panelTurns(recalls, new Set()), []);
+});
