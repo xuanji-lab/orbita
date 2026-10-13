@@ -1015,11 +1015,16 @@ body {
  * 兄弟（button 不能嵌 button），整行 hover 由外层 .inbox-row 统一画。 */
 .inbox-rows {
   display: grid;
-  padding: var(--space-1) 0 var(--space-2);
+  padding: 0 0 var(--space-2);
 }
 
 .inbox-row {
   border-top: 1px solid var(--color-border-subtle);
+}
+
+/* 第一行紧贴标题行：标题行自带底线，第一行再画顶线、中间再隔 4px，就成了两条线夹一道缝 */
+.inbox-row:first-child {
+  border-top: 0;
 }
 
 /* 在问你：一抹 warning 底（color-mix 7%，同铃铛清单选中项的调制），回答框在行下 */
