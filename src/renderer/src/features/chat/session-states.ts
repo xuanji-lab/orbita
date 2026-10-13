@@ -157,6 +157,13 @@ export interface SessionEntry {
   intentRecalls: readonly IntentRecallRecord[];
   /** 挂起的回答前确认（intentAsk 事件；应答 / 取消后清空）。ephemeral */
   intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
+  /**
+   * 乐观回显（发出即画的用户气泡）：agent 进程冷启 / 开轮装配要几秒，真回显
+   * （runtime 的 progress item_started）之前聊天面会有一段只有「回应中」的空窗。
+   * 这里存**与 runtime 同款切法**的正文块（splitEchoBlocks），真回显一到即清。
+   * ephemeral。
+   */
+  pendingEcho: { blocks: readonly string[] } | null;
 }
 
 /** 全部会话的槽。**不可变**：每个事件产出新 Map，没变的槽保持同一引用。 */
@@ -185,6 +192,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   intentRun: null,
   intentRecalls: [],
   intentAsk: null,
+  pendingEcho: null,
 };
 
 /**
@@ -197,6 +205,10 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       transcript: applyTranscriptProgress(entry.transcript, event.progress),
+      // 真回显到了：乐观气泡在这一帧换成转录里的正式条目（同款分块，无缝）
+      ...(event.progress.type === "item_started" && event.progress.item.role === "user"
+        ? { pendingEcho: null }
+        : {}),
     }));
   }
   if (event.type === "phase") {
@@ -214,7 +226,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       ...(event.phase === "idle" ? null : { turnError: null }),
       // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
       // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
-      ...(event.phase === "idle" ? { approvals: [] } : null),
+      // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
+      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null } : null),
     }));
   }
   if (event.type === "retry") {
@@ -323,7 +336,7 @@ export function setEntryPhase(
     ...entry,
     phase,
     retry: null,
-    ...(phase === "idle" ? null : { turnError: null }),
+    ...(phase === "idle" ? { pendingEcho: null } : { turnError: null }),
   }));
 }
 
@@ -436,6 +449,7 @@ export function seedFromDisk(
     intentRecalls: dedupeRecalls(intentRecalls),
     intentRun: null,
     intentAsk: null,
+    pendingEcho: null,
   });
   return next;
 }
@@ -485,14 +499,18 @@ export function mergeSideRecords(
     ...undos,
     ...intentRecalls,
   ];
-  // 同毫秒时非 transcript 的一侧记录（界碑 / 通道标记 / 轮尾账 / 回退界碑）排在前
-  // ——界碑在前的老规则原样保留：混排靠落盘时间戳定序，非 transcript 的一侧优先
-  // 出现在同刻的前面（轮尾账的时戳晚于本轮末条消息，不受这条影响）。
-  const isSideRecord = (record: TranscriptRecord): boolean =>
-    record.role !== "user" && record.role !== "assistant" && record.role !== "tool";
-  records.sort(
-    (a, b) => a.timestamp - b.timestamp || Number(isSideRecord(b)) - Number(isSideRecord(a)),
-  );
+  // 同毫秒排序（混排靠落盘时间戳定序，同刻时给确定序）：
+  // - 界碑 / 通道标记 / 轮尾账 / 回退界碑（side 记录）排在前——界碑要落到
+  //   「刚发那句」之前的老规则；
+  // - 意图召回卡是唯一的例外：它服务的那条 user 回显与它几乎必然同毫秒
+  //   （回显循环后立刻进闸门），按老规则会排到气泡**上方**（2026-10-13 真机），
+  //   给它单独一档排在同刻的最后——正好落在它服务的气泡之后、回答之前。
+  const sameMsRank = (record: TranscriptRecord): number => {
+    if (record.role === "intent-recall") return 2;
+    if (record.role === "user" || record.role === "assistant" || record.role === "tool") return 1;
+    return 0; // 界碑 / 通道标记 / 轮尾账 / 回退界碑：老规则，同刻在前
+  };
+  records.sort((a, b) => a.timestamp - b.timestamp || sameMsRank(a) - sameMsRank(b));
   return records;
 }
 
@@ -532,6 +550,11 @@ export function removeIntentAsk(states: SessionStates, requestId: string): Sessi
     return next;
   }
   return states;
+}
+
+/** 发出即画：记下乐观回显的正文块（与 runtime 的回显同款切法）。 */
+export function setPendingEcho(states: SessionStates, sessionId: string, blocks: readonly string[]): SessionStates {
+  return update(states, sessionId, (entry) => ({ ...entry, pendingEcho: { blocks } }));
 }
 
 /** runtime 没了：所有还在忙的槽（turn / 压缩中 / 重试等待中）一并归位。全是 idle 时返回原引用。 */

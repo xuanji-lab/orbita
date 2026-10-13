@@ -39,7 +39,7 @@ import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
-import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
+import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
@@ -1477,12 +1477,6 @@ async function listBuiltins(): Promise<void> {
  * - 文件引用与粘贴块组装进正文之后；回显块保留块界（粘贴块 / 文件清单各自独立
  *   text 块），显示层按块解析回 chip。
  */
-/** 正文按空行拆块回显（空段丢弃；整条为空保一个空块——纯图消息的形状不变） */
-function splitEchoBlocks(text: string): string[] {
-  const parts = text.split("\n\n").filter((part) => part !== "");
-  return parts.length > 0 ? parts : [""];
-}
-
 /**
  * 意图系统（实验功能 intent-system）的轮内闸门：回显之后、调模型之前跑 /recall。
  *

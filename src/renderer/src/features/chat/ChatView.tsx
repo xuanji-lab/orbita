@@ -1234,6 +1234,7 @@ function ChatViewBody(props: {
           intentRecalls={session.intentRecalls}
           intentRun={session.intentRun}
           onAbort={session.stop}
+          pendingEcho={session.pendingEcho}
           fileTurns={session.fileTurns}
           reverts={session.reverts}
           undos={session.undos}
@@ -1306,6 +1307,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   intentRun: RecallCardState | null;
   /** 停止当前轮（= 取消召回）。引用稳定，不破 memo */
   onAbort: () => void;
+  /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
+  pendingEcho: { blocks: readonly string[] } | null;
 }) {
   const t = useT();
   // 会话生命周期开关：关闭时消息流不出收尾扫描卡（同 useT 读 Context 的先例——开关
@@ -1554,7 +1557,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           </Fragment>
         );
       })}
-      {intentOn && props.intentRun !== null && props.intentRun.status === "running" && (
+      {props.pendingEcho !== null && <PendingEchoRow blocks={props.pendingEcho.blocks} />}
+      {props.intentRun !== null && props.intentRun.status === "running" && (
         <IntentRecallRunCard card={props.intentRun} onCancel={props.onAbort} />
       )}
       {props.turnError !== null && (
@@ -2645,6 +2649,18 @@ const EMPTY_STREAMING_IDS: ReadonlySet<string> = new Set<string>();
  * bubble 变体（标题摊平、换行保留，其余与模型回复同一套管线）。
  * 气泡下方的复制图标（与回答行同款反馈）：拷输入的原文（只含 text，图片不进）。
  */
+/** 乐观回显行：发出即画的用户气泡。真回显（转录 item_started）一到，这行被换下。 */
+function PendingEchoRow(props: { blocks: readonly string[] }) {
+  const item = {
+    role: "user" as const,
+    id: "pending-echo",
+    content: props.blocks.map((text) => ({ type: "text" as const, text })),
+    timestamp: Date.now(),
+  };
+  // 回退入口不给：这条还没落进转录，回退目标不存在（真回显落定后入口自然出现）
+  return <UserBubble item={item} revertDisabled />;
+}
+
 function UserBubble(props: {
   item: Extract<TranscriptItem, { role: "user" }>;
   /** 「回到这里」：回退到这条消息之前（含原文放回输入框）；undefined = 不给入口 */

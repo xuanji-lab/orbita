@@ -5,6 +5,7 @@ import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
+import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import {
   EMPTY_ENTRY,
   dequeue,
@@ -16,6 +17,7 @@ import {
   parseCompactCommand,
   removeApproval,
   removeIntentAsk,
+  setPendingEcho,
   nextDeliverable,
   removeSessionEntry,
   revertOptimisticTurn,
@@ -381,6 +383,8 @@ export interface ChatSession {
   /** 会话级召回开关：null = 没有会话（新任务）；undefined = 没开实验功能 */
   intentEnabled: boolean | null | undefined;
   setIntentEnabled: (next: boolean) => void;
+  /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
+  pendingEcho: { blocks: readonly string[] } | null;
 }
 
 /** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */
@@ -505,6 +509,8 @@ export interface SessionEngine {
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
   readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /** 乐观回显：发出即画用户气泡（真回显事件一到即清）。ephemeral */
+  readonly setPendingEcho: (id: string, blocks: readonly string[]) => void;
   readonly renameSession: (id: string, title: string) => void;
   readonly pinSession: (id: string, pinned: boolean) => void;
   readonly starSession: (id: string, starred: boolean) => void;
@@ -858,6 +864,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       } else {
         const turn = buildTurn(id);
         if (turn === null) return;
+        // 乐观回显同直发路径：投递那一刻先画气泡（真回显一到即换下）
+        applyStates((prev) => setPendingEcho(prev, id, splitEchoBlocks(head.text)));
         dispatch(() =>
           api.agent.submit({
             sessionId: id,
@@ -1002,6 +1010,14 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (requestId: string, answer: PermissionAnswer) => {
       applyStates((prev) => removeApproval(prev, requestId));
       void api.agent.answerPermission(requestId, answer);
+    },
+    [applyStates],
+  );
+
+  /** 乐观回显：与 beginOptimisticTurn 同拍写入（发出那一刻），真回显清掉它 */
+  const setPendingEchoCb = useCallback(
+    (id: string, blocks: readonly string[]) => {
+      applyStates((prev) => setPendingEcho(prev, id, blocks));
     },
     [applyStates],
   );
@@ -1154,6 +1170,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     pickedThinkingRef,
     states,
     answerIntentConfirm,
+    setPendingEcho: setPendingEchoCb,
     statesRef,
     views: views.current,
     applyStates,
@@ -1827,6 +1844,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       }
       // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子
       const revertTurn = engine.beginOptimisticTurn(id);
+      // 乐观回显：agent 进程冷启 / 开轮装配要几秒，真回显之前先就地画用户气泡
+      // （与 runtime 的回显同款切法，真回显一到无缝换下）
+      engine.setPendingEcho(id, splitEchoBlocks(text));
       try {
         // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效。
         // 文件引用与粘贴块跟图同行：主进程落盘副本 / agent 进程组装进正文
@@ -3039,6 +3059,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     approvals: entry.approvals,
     intentRecalls: entry.intentRecalls,
     intentRun: entry.intentRun,
+    pendingEcho: entry.pendingEcho,
     intentAsk: entry.intentAsk,
     answerIntentConfirm: engine.answerIntentConfirm,
     intentEnabled: opened === null ? null : opened.intentEnabled,
