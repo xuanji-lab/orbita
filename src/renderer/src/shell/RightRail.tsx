@@ -28,7 +28,15 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  */
 
 /** 右栏面板位里放什么（"channels" 随父子会话面板一起删除：沟通回到两边对话流，子会话面板变收件箱） */
-export type RightPanelKind = "files" | "review" | "skills" | "mcp" | "terminal" | "drawer" | "subsessions";
+export type RightPanelKind =
+  | "files"
+  | "review"
+  | "skills"
+  | "mcp"
+  | "terminal"
+  | "drawer"
+  | "subsessions"
+  | "intent";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -51,6 +59,8 @@ export function RightRail(props: {
    * `waiting` 是「在等你」（question + 待审批）的子会话数：右上角角标，为 0 不显示。
    * **入口不自己弹开**（2026-10-12 用户裁决）：需要你看的事用角标说话，不抢面板位。
    */
+  /** 意图面板入口（实验功能 intent-system）：null = 不出现（实验开关关着） */
+  intentAvailable: boolean;
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -153,6 +163,14 @@ export function RightRail(props: {
         lit={props.panel === "drawer"}
         onClick={() => props.onPanel(props.panel === "drawer" ? null : "drawer")}
       />
+      {props.intentAvailable && (
+        <RailEntryButton
+          icon="waypoints"
+          label={t.rail.intent}
+          lit={props.panel === "intent"}
+          onClick={() => props.onPanel(props.panel === "intent" ? null : "intent")}
+        />
+      )}
       {props.subSessions !== null && (
         <RailEntryButton
           icon="git-fork"

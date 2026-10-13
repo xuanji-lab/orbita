@@ -7,6 +7,8 @@ import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
+import { effectiveIntentSettings } from "@shared/settings";
+import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
@@ -781,6 +783,7 @@ export function App() {
                 onSlashSpace={openTokenPicker}
                 tokenPickResult={tokenPickResult}
                 panelInsert={panelInsert}
+                intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
               />
             )}
           </div>
@@ -848,6 +851,13 @@ export function App() {
                     )
                   }
                 />
+              ) : shownPanel === "intent" ? (
+                <IntentPanel
+                  sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  turns={session.intentRecalls}
+                  liveRun={session.intentRun}
+                  pendingAsk={session.intentAsk?.ask ?? null}
+                />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel
                   parentId={channelParentId}
@@ -872,6 +882,7 @@ export function App() {
           panel={rightPanel}
           onPanel={handlePanel}
           railEntries={railEntries}
+          intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }

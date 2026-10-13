@@ -268,4 +268,23 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
       },
     ],
   },
+  {
+    id: "intent-system",
+    icon: "waypoints",
+    name: { zh: "意图系统", en: "Intent system" },
+    summary: {
+      zh: "发消息前先召回相关旧对话：门卫拦截寒暄，过岗打分入选进上下文，拿不准的先问你。右栏「意图」看每一问的入选图谱；召回走本机 intent-lab 服务（自己 bun run serve 起）。",
+      en: "Before answering, relevant past conversations are recalled: a gate skips small talk, scoring picks entries into context, and unsure ones are confirmed with you first. See each question's pick graph under Intent in the right rail; recall runs on a local intent-lab service you start yourself.",
+    },
+    changelog: [
+      {
+        pr: null,
+        date: "2026-10-13",
+        note: {
+          zh: "首版：意图闸门（门卫 → 理解 → 打分 → 理由 → 摘句 → 确认 → 上下文）插在回显与回答之间；回答前确认卡（对 / 不对 / 不表态 / 改字）；右栏意图图谱（六岗泳道 + 本问 + 历史联系）；会话级开关与渠道（Proma / DeepSeek）；token 记进 7 天用量；回退作废、每轮存档。",
+          en: "First version: the intent gate (gate → understand → score → reasons → excerpt → confirm → context) sits between your message and the answer; a confirm-before-answering card (right / wrong / skip / reword); the Intent graph in the right rail (six slot lanes + this question + past links); per-task switch and pipeline (Proma / DeepSeek); recall tokens counted into the 7-day usage; revert invalidates, every turn archived.",
+        },
+      },
+    ],
+  },
 ];

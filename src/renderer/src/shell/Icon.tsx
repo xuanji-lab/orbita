@@ -102,6 +102,7 @@ import terminal from "../../../../design-system/assets/icons/lucide/terminal.svg
 import fileText from "../../../../design-system/assets/icons/lucide/file-text.svg?raw";
 import trash2 from "../../../../design-system/assets/icons/lucide/trash-2.svg?raw";
 import shieldCheck from "../../../../design-system/assets/icons/lucide/shield-check.svg?raw";
+import waypoints from "../../../../design-system/assets/icons/lucide/waypoints.svg?raw";
 import sliders from "../../../../design-system/assets/icons/lucide/sliders.svg?raw";
 import star from "../../../../design-system/assets/icons/lucide/star.svg?raw";
 import triangleAlert from "../../../../design-system/assets/icons/lucide/triangle-alert.svg?raw";
@@ -219,6 +220,7 @@ const ICONS = {
   "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,
+  waypoints,
   sliders,
   star,
   square,

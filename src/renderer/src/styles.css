@@ -3875,3 +3875,159 @@ button.panel-group-toggle:hover {
 .review-row:hover:not(:disabled) {
   background: var(--color-bg-hover);
 }
+
+/* ================================================================ 意图系统（实验功能 intent-system）
+   右栏「意图」面板：图（泳道 / 连线 / 节点）与入选卡片。颜色全走语义 token
+   （深浅主题各自成立）；accent 只给「你确认过」的绿圈——它是面板里唯一的主操作语义。 */
+
+.intent-lane {
+  stroke: var(--color-border-subtle);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.intent-lane-head {
+  font: var(--font-size-micro) var(--font-family-base);
+  fill: var(--color-text-tertiary);
+}
+
+.intent-gutter {
+  font: var(--font-size-micro) var(--font-family-mono);
+  fill: var(--color-text-tertiary);
+}
+
+/* 连线：同岗时间链（实线，亮度=相关度）/ 同会话（虚线）/ 历史理由边（点线） */
+.intent-edge {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  pointer-events: stroke;
+}
+.intent-edge.slot {
+  stroke-opacity: 0.55;
+}
+.intent-edge.session {
+  stroke-dasharray: 5 4;
+  stroke-opacity: 0.4;
+}
+.intent-edge.link {
+  stroke-dasharray: 1.5 3;
+  stroke-opacity: 0.75;
+  stroke-width: 1.4;
+}
+
+/* 节点：入选实心、拿不准空心；选中放大一圈；halo 只在悬停区起作用 */
+.intent-node {
+  cursor: pointer;
+}
+.intent-node .intent-halo {
+  fill: transparent;
+}
+.intent-node .intent-core {
+  fill: var(--color-text-primary);
+  stroke: none;
+}
+.intent-node.hollow .intent-core {
+  fill: transparent;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1.2;
+}
+.intent-node.sel .intent-core {
+  stroke: var(--color-accent);
+  stroke-width: 2;
+}
+.intent-node.hollow.sel .intent-core {
+  fill: var(--color-bg-muted);
+}
+/* 「等你确认」：呼吸的外框（与确认卡联动） */
+.intent-node.ask .intent-halo {
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  fill: none;
+  animation: intent-breathe 1.6s ease-in-out infinite;
+}
+/* 「你确认过」：绿圈（accent 只给这一处） */
+.intent-node .intent-ring,
+.intent-soma .intent-ring {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1.6;
+}
+.intent-node .intent-ring {
+  opacity: 0.8;
+}
+.intent-soma .intent-core {
+  fill: var(--color-text-primary);
+}
+.intent-soma .intent-ring {
+  stroke: var(--color-border-subtle);
+}
+
+/* 突触点（同一 QA 在其它岗位上的入选）与连回主节点的细线 */
+.intent-dendrite {
+  stroke: var(--color-text-tertiary);
+  stroke-width: 0.8;
+  stroke-opacity: 0.5;
+}
+.intent-syn {
+  fill: var(--color-text-secondary);
+}
+.intent-syn.ask {
+  fill: transparent;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+}
+
+.intent-edit-mark {
+  font: var(--font-size-micro) var(--font-family-base);
+  fill: var(--color-text-tertiary);
+}
+
+@keyframes intent-breathe {
+  0%,
+  100% {
+    stroke-opacity: 0.9;
+  }
+  50% {
+    stroke-opacity: 0.25;
+  }
+}
+
+/* 入选卡片：列表在图下面并列看；选中描边与图节点同源 */
+.intent-card {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  cursor: pointer;
+}
+.intent-card.sel {
+  border-color: var(--color-accent);
+}
+
+.intent-score-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 3px;
+  border-radius: var(--radius-xs);
+  background: var(--color-border-subtle);
+  overflow: hidden;
+}
+.intent-score-track i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: var(--radius-xs);
+  background: var(--color-text-secondary);
+}
+
+.intent-tip-head {
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.intent-tip-body {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  white-space: pre-line;
+}
