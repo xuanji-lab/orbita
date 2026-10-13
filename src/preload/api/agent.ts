@@ -12,6 +12,7 @@ import {
 } from "../../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
+import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 
 export const agentApi = {
   /**
@@ -40,6 +41,9 @@ export const agentApi = {
   /** 回答一次工具审批 */
   answerPermission: (requestId: string, answer: PermissionAnswer): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentAnswerPermission, requestId, answer),
+  /** 意图确认卡的回答（实验功能 intent-system）：对不上号的陈旧应答丢弃不串台 */
+  answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentAnswerIntentConfirm, requestId, decision),
   onEvent: (listener: (event: AgentEvent) => void): (() => void) => {
     const handler = (_e: unknown, event: AgentEvent) => listener(event);
     ipcRenderer.on(ipcChannels.agentEvent, handler);

@@ -16,6 +16,9 @@ import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
+import { IntentIngestTracker } from "./agent/intent-ingest.ts";
+import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
+import { effectiveIntentSettings } from "../shared/settings.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
@@ -494,6 +497,9 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 意图存档（实验功能）：盯回显 / 回答完成 / 轮落定，落定时发 /ingest。
+    // 在 record 之前喂：与 recorder 各自独立，互不阻塞
+    intentIngest.onEvent(event);
     record(event);
     broadcastAgentEvent(event);
   });
@@ -504,17 +510,52 @@ void app.whenReady().then(async () => {
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
   const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
+  /*
+   * 意图系统（实验功能 intent-system）的主进程三件套：
+   * 1. 存档跟踪器（/ingest）：submit 判定要存档时 begin，事件泵喂 onEvent；
+   * 2. 回退作废钩子（/invalidate）：会话回退成功后把被退轮次的 turnId 送 intent-lab，
+   *    服务端重生的上下文文件覆盖写回会话工作台；
+   * 3. token 记账：intentRecallRecord 的 usage 进日账本（记录本身落会话 JSONL，
+   *    账本可从那回填重建）。三者都只在实验开关开着时生效。
+   */
+  const intentIngest = new IntentIngestTracker({
+    http: { post: (url, body) => postIntentIngest(url, body) },
+    load: async (id) => {
+      const detail = await sessions.load(id);
+      return detail === null ? null : { title: detail.meta.title, transcript: detail.transcript };
+    },
+    readIntent: async () => {
+      const current = await settings.read();
+      if (current.experimentalFeatures?.["intent-system"] !== true) return null;
+      return { baseUrl: effectiveIntentSettings(current.intent).baseUrl };
+    },
+  });
+  const intentOnReverted = async (sessionId: string, turnIds: readonly string[]): Promise<void> => {
+    try {
+      const current = await settings.read();
+      if (current.experimentalFeatures?.["intent-system"] !== true) return;
+      const baseUrl = effectiveIntentSettings(current.intent).baseUrl;
+      const outcome = await postIntentInvalidate(baseUrl, sessionId, turnIds);
+      if (!outcome.ok) {
+        console.error("[intent] 回退后的作废没送成（不影响回退；下一次召回会覆盖写上下文）", outcome.error);
+      }
+    } catch (cause) {
+      console.error("[intent] 回退后的作废抛错（不影响回退）", cause);
+    }
+  };
   registerSessionIpc(
     sessions,
     (id) => {
       agentHost.disposeSession(id);
-      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉
+      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档的尾账也丢
       browserSandbox.closeSessionTab(id);
+      intentIngest.forget(id);
     },
     agentHost,
     carryovers,
     providers,
     (path) => browserSandbox.openLocalFile(path),
+    intentOnReverted,
   );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
@@ -577,6 +618,7 @@ void app.whenReady().then(async () => {
     skills,
     mcp,
     settings,
+    intentIngest,
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍

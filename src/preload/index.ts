@@ -8,6 +8,7 @@ import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
 import { filesApi } from "./api/files.ts";
 import { importApi } from "./api/import.ts";
+import { intentApi } from "./api/intent.ts";
 import { providerApi } from "./api/provider.ts";
 import { reviewApi } from "./api/review.ts";
 import { sessionApi } from "./api/session.ts";
@@ -35,6 +36,7 @@ const api = {
   terminal: terminalApi,
   usage: usageApi,
   import: importApi,
+  intent: intentApi,
   browser: browserApi,
   voice: voiceApi,
   /**
