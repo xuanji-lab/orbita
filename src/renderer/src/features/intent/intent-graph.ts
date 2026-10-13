@@ -246,11 +246,3 @@ export function layoutIntentGraph(width: number, nodes: readonly GraphNode[], de
   };
 }
 
-/* ---------------------------------------------------------------- 悬停文案的两端时间差 */
-
-/** 两个时刻相差多久（不到一天给小时，否则给天；向下取整至少 1）。 */
-export function apartLabelUnit(a: number, b: number): { hours: number | null; days: number | null } {
-  const diff = Math.abs(b - a);
-  if (diff < 86_400_000) return { hours: Math.max(1, Math.round(diff / 3_600_000)), days: null };
-  return { hours: null, days: Math.max(1, Math.round(diff / 86_400_000)) };
-}

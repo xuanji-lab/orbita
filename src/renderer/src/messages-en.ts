@@ -1548,9 +1548,9 @@ export const en = {
     /** turn 选择器：本问与更早 */
     latestTurn: "This question",
     earlierTurn: (when: string) => when,
-    /** 汇总行（原型 summary） */
-    summary: (qas: number, entries: number, sessions: number) =>
-      `${qas} past Q&As · ${entries} (Q&A, slot) picks · ${sessions} session${sessions === 1 ? "" : "s"}. Earliest at top, all flowing into this question.`,
+    /** 汇总行：入选（high / promoted）与拿不准（mid）分开数——混说「入选」会跟召回卡对不上 */
+    summary: (qas: number, high: number, mid: number, sessions: number) =>
+      `${qas} past Q&As · selected ${high} · unsure ${mid} · ${sessions} session${sessions === 1 ? "" : "s"}. Earliest at top, all flowing into this question.`,
     deniedLine: (n: number) => ` ${n} you marked wrong are withdrawn.`,
     /** 图例 */
     legendHigh: "Selected",
@@ -1565,17 +1565,8 @@ export const en = {
     errorFetch: "Couldn't load the graph from intent-lab.",
     loading: "Loading…",
     liveBadge: "Recalling…",
-    /** 节点悬停（QA 摘要） */
-    nodeMeta: (when: string, source: string, title: string) => `${when} · ${source} · ${title}`,
-    nodeSlots: (slots: string) => slots,
+    /** 卡片里的引文（Q / A） */
     nodeQuote: (q: string) => `“${q}”`,
-    /** 连线悬停 */
-    edgeToQuestion: (slot: string, score: string) => `${slot} → this question · relevance ${score}`,
-    edgeBetween: (slot: string, score: string, days: string) => `Both “${slot}” · relevance ${score} · ${days} apart`,
-    edgeSession: (title: string, a: string, b: string) => `Two questions in “${title}”: one picked “${a}”, the other “${b}”.`,
-    edgeLink: (when: string) => `Past link · ${when}`,
-    hoursApart: (n: number) => `${n}h apart`,
-    daysApart: (n: number) => `${n}d apart`,
     /** 卡片列表 */
     cardsTitle: "Selected cards",
     cardVerdictAsked: "You confirmed",

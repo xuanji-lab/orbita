@@ -4,7 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { apartLabelUnit, buildIntentGraph, layoutIntentGraph } from "./intent-graph.ts";
+import { buildIntentGraph, layoutIntentGraph } from "./intent-graph.ts";
 import type { IntentEdges } from "@shared/intent-edges";
 
 const DAY = 86_400_000;
@@ -152,9 +152,3 @@ test("超过 40 条 QA 进密集模式；布局按真实时间比例", () => {
   assert.ok(sparse.yOf(g.nodes[1]!) - sparse.yOf(g.nodes[0]!) === 50);
 });
 
-test("apartLabelUnit：不到一天给小时，否则给天，至少 1", () => {
-  assert.deepEqual(apartLabelUnit(0, 3 * 3_600_000), { hours: 3, days: null });
-  assert.deepEqual(apartLabelUnit(0, 2 * DAY), { hours: null, days: 2 });
-  assert.deepEqual(apartLabelUnit(0, 1), { hours: 1, days: null });
-  assert.deepEqual(apartLabelUnit(DAY, 0), { hours: null, days: 1 });
-});

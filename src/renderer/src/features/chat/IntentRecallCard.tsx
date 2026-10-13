@@ -1,12 +1,14 @@
 /**
  * 意图召回的流水线卡片（实验功能 intent-system）—— 聊天流里的过程卡。
  *
- * 运行卡（RecallCardState）：11 格阶段条（门卫 → 理解 → 打分 → 过线 → 写理由 →
- * 去重 → 摘句 → 确认 → 写上下文 → 回答 → 回写边）+ 场景行 + 已用时间 + 取消。
- * 终态卡（IntentRecallRecord）：默认收起一行（完成给数字、失败给原因、取消一句话），
- * 展开看阶段条逐格用时、S4 总结与确认表态。
+ * 视觉语言与 ToolCard / ThinkingCard 的过程行同款（2026-10-13 用户裁决）：**无底色、
+ * 无边框，直接坐在聊天面上**；颜色只当第二信号——进行中仅头部（图标 + 标题）用
+ * secondary 色并呼吸（转圈图标可用 warning 色），落定后整行退到 tertiary；唯一的
+ * 状态色是出错行的 danger 文字。标题不换行（窄列里「意图召回」四字被拆两行过）。
  *
- * 纯展示组件；数据归约（applyRecallEvent）在 shared，本文件不持状态机。
+ * 运行卡（RecallCardState）：阶段条 + 场景行 + 已用时间 + 取消。
+ * 终态卡（IntentRecallRecord）：收起一行结论，展开看逐格用时、S4 总结、确认表态
+ * 与入选表。数据归约（applyRecallEvent）在 shared，本文件不持状态机。
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { Icon } from "../../shell/Icon.tsx";
@@ -89,7 +91,7 @@ function stageCellLabel(cell: RecallStageCell, t: Messages): string {
 export function RecallStageBar(props: { cells: readonly RecallStageCell[]; withMs?: boolean }) {
   const t = useT();
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", paddingLeft: 22 }}>
       {props.cells.map((cell) => {
         const label = stageCellLabel(cell, t);
         const ms =
@@ -129,7 +131,7 @@ export function RecallStageBar(props: { cells: readonly RecallStageCell[]; withM
   );
 }
 
-/** 运行卡：转录末尾、Responding 之前。 */
+/** 运行卡：转录末尾、Responding 之前。过程行语言：无底无边框，头部呼吸，图标用 warning。 */
 export function IntentRecallRunCard(props: { card: RecallCardState; onCancel: () => void }) {
   const t = useT();
   const { card } = props;
@@ -145,25 +147,15 @@ export function IntentRecallRunCard(props: { card: RecallCardState; onCancel: ()
     ? formatThinkingDuration(card.timings.totalMs, t)
     : formatThinkingDuration(Math.max(0, now - card.startedAt), t);
   return (
-    <div
-      style={{
-        display: "grid",
-        gap: "var(--space-2)",
-        minWidth: 0,
-        marginTop: "var(--space-4)",
-        padding: "var(--space-3)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--color-bg-muted)",
-      }}
-    >
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0, marginTop: "var(--space-3)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
-        <Icon name="shield-check" size={14} style={{ color: "var(--color-text-secondary)" }} />
-        <span style={{ fontSize: "var(--font-size-control)", fontWeight: "var(--weight-bold)" }}>
-          {t.chat.recall.label}
-        </span>
+        {/* 进行中的状态本体：图标（warning 色转圈）+ 标题（secondary 呼吸，不换行） */}
+        <Icon name="loader-circle" size={14} className="orbita-spin intent-run-icon" />
+        <span className="intent-run-title">{t.chat.recall.label}</span>
         {(card.scene !== null || card.want !== "") && (
           <span
             style={{
+              flex: "0 1 auto",
               minWidth: 0,
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -177,7 +169,7 @@ export function IntentRecallRunCard(props: { card: RecallCardState; onCancel: ()
         )}
         <span style={{ flex: 1 }} />
         {awaitingConfirm && (
-          <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
+          <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)", color: "var(--color-text-secondary)" }}>
             {t.chat.recall.waitingForYou}
           </span>
         )}
@@ -201,7 +193,7 @@ export function IntentRecallRunCard(props: { card: RecallCardState; onCancel: ()
   );
 }
 
-/** 终态卡：收起一行结论，展开看阶段用时、S4 总结与确认表态。 */
+/** 终态卡：收起一行结论（整行 tertiary；错误文字用 danger），展开看细节。 */
 export function IntentRecallFinalCard(props: { record: IntentRecallRecord }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -233,7 +225,7 @@ export function IntentRecallFinalCard(props: { record: IntentRecallRecord }) {
             : t.chat.recall.failed;
   const failed = record.status === "error";
   return (
-    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0, marginTop: "var(--space-4)" }}>
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0, marginTop: "var(--space-3)" }}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -244,22 +236,20 @@ export function IntentRecallFinalCard(props: { record: IntentRecallRecord }) {
           minWidth: 0,
           padding: 0,
           border: 0,
-          borderTop: "1px solid var(--color-border-subtle)",
-          paddingTop: "var(--space-3)",
           background: "transparent",
           cursor: "pointer",
           textAlign: "left",
-          color: "var(--color-text-secondary)",
+          color: "var(--color-text-tertiary)",
+          fontFamily: "var(--font-family-base)",
+          fontSize: "var(--font-size-caption)",
         }}
       >
         <Icon
           name={record.status === "done" ? "shield-check" : failed ? "triangle-alert" : "circle-off"}
           size={14}
-          style={{ color: failed ? "var(--color-danger)" : "var(--color-text-tertiary)" }}
+          style={{ color: failed ? "var(--color-danger)" : undefined, flex: "0 0 auto" }}
         />
-        <span style={{ fontSize: "var(--font-size-caption)", fontWeight: "var(--weight-bold)" }}>
-          {t.chat.recall.label}
-        </span>
+        <span style={{ ...finalTitleStyle, color: failed ? "var(--color-danger)" : undefined }}>{t.chat.recall.label}</span>
         <span
           style={{
             flex: "0 1 auto",
@@ -275,7 +265,7 @@ export function IntentRecallFinalCard(props: { record: IntentRecallRecord }) {
           {line}
         </span>
         <span style={{ flex: 1 }} />
-        <Icon name={open ? "chevron-up" : "chevron-down"} size={12} />
+        <Icon name={open ? "chevron-up" : "chevron-down"} size={12} style={{ flex: "0 0 auto" }} />
       </button>
       {open && (
         <div style={{ display: "grid", gap: "var(--space-2)", paddingLeft: 10 }}>
@@ -362,9 +352,7 @@ function SelectedBlock(props: { record: IntentRecallRecord }) {
           }}
         >
           <span style={{ fontFamily: "var(--font-family-mono)", color: "var(--color-text-tertiary)" }}>{item.when}</span>
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {item.title}
-          </span>
+          <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{item.title}</span>
           <span style={{ fontFamily: "var(--font-family-mono)", color: "var(--color-text-tertiary)" }}>
             {item.slots.join(" · ")}
             {item.score !== undefined ? ` ${item.score.toFixed(1)}` : ""}
@@ -373,6 +361,7 @@ function SelectedBlock(props: { record: IntentRecallRecord }) {
             style={{
               gridColumn: "1 / -1",
               color: "var(--color-text-tertiary)",
+              overflowWrap: "anywhere",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -386,8 +375,16 @@ function SelectedBlock(props: { record: IntentRecallRecord }) {
   );
 }
 
+/** 终态卡的标题字音：不换行（窄列里四字标题被拆过两行）。 */
+const finalTitleStyle: CSSProperties = {
+  flex: "0 0 auto",
+  whiteSpace: "nowrap",
+  fontSize: "var(--font-size-caption)",
+  fontWeight: "var(--weight-bold)",
+};
+
 /** 小号边框按钮（取消 / 次要动作共用）。 */
-const miniButtonStyle: CSSProperties & React.HTMLAttributes<HTMLButtonElement>["style"] = {
+const miniButtonStyle: CSSProperties = {
   flex: "0 0 auto",
   display: "inline-flex",
   alignItems: "center",
