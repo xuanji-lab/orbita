@@ -334,6 +334,26 @@ describe("setModel —— 会话内换模型的发送侧（C-4）", () => {
   });
 });
 
+describe("answerIntentConfirm —— 意图确认卡应答的发送侧", () => {
+  test("进程在时按 requestId 原样转给 runtime；进程没了就静默（不 ensure）", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const decision = { action: "confirm" as const, answers: [{ askId: "a1", verdict: "yes" as const }], note: "" };
+    ctx.host.answerIntentConfirm("q0", decision);
+    assert.equal(ctx.forks(), 0);
+
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    ctx.host.answerIntentConfirm("q1", decision);
+    assert.equal(ctx.forks(), 1);
+    assert.deepEqual(ctx.child().posted.at(-1), { type: "intentConfirmResult", requestId: "q1", decision });
+  });
+});
+
 describe("answerReadTask —— 读 task 请求的发送侧（B-1）", () => {
   test("成功回执带 card 与 text；失败回执只带 error；进程没了就静默（不 ensure）", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });

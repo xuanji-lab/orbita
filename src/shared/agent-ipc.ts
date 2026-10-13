@@ -871,7 +871,7 @@ export type AgentCommand =
   /** 用户对一次工具审批的回答，按 requestId 对回去 */
   | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   /** 意图确认卡的回答（实验功能 intent-system），按 requestId 对回去；停止 / 抢跑时 runtime 侧按取消结掉 */
-  | { type: "intentConfirmResult"; sessionId: string; requestId: string; decision: IntentConfirmDecision }
+  | { type: "intentConfirmResult"; requestId: string; decision: IntentConfirmDecision }
   | { type: "dispose"; sessionId: string };
 
 /**

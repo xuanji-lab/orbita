@@ -21,6 +21,7 @@ import {
 import { isSkillAvailable, matchSkillTarget } from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { knownModelParams, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
@@ -497,6 +498,10 @@ export function registerAgentIpc(
   ipcMain.handle(
     ipcChannels.agentAnswerPermission,
     (_e, requestId: string, answer: PermissionAnswer) => host.answerPermission(requestId, answer),
+  );
+  ipcMain.handle(
+    ipcChannels.agentAnswerIntentConfirm,
+    (_e, requestId: string, decision: IntentConfirmDecision) => host.answerIntentConfirm(requestId, decision),
   );
 
   return { submitTurn };
