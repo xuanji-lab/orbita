@@ -29,7 +29,7 @@ import { IconButton } from "../../shell/IconButton.tsx";
 import { useT } from "../../locale.ts";
 import { api } from "../../api.ts";
 import type { IntentAskView } from "../../../../shared/intent-recall.ts";
-import { findAskEdge, type IntentEdges } from "../../../../shared/intent-edges.ts";
+import { findAskEdge, type ExcerptWindow, type IntentEdges } from "../../../../shared/intent-edges.ts";
 import {
   buildConfirmAnswers,
   buildSkipAllAnswers,
@@ -42,6 +42,7 @@ import {
 import type { IntentConfirmDecision, IntentConfirmDraft } from "../../../../shared/intent-confirm.ts";
 import { MarkdownBlock } from "./MarkdownBlock.tsx";
 import { locateQuote } from "./quote-select.ts";
+import { closeOpenFence, markScrollTop, windowCounts } from "./conv-window.ts";
 import { useDictation } from "../voice/useDictation.ts";
 import { DictationStatus } from "../voice/DictationStatus.tsx";
 
@@ -60,32 +61,157 @@ function autofit(el: HTMLTextAreaElement | null): void {
 }
 
 /**
- * 把摘句在渲染好的 markdown 里高亮成 <mark>：locateQuote 忽略空白差异找到起止，
- * 逐文本节点分段包（每段都是纯文本区间，surroundContents 安全）。摘句逐字对不上
- * 渲染文本（markdown 改写、服务端摘句本身带省略）就不高亮——不硬凑。
+ * 把摘句在渲染好的 markdown 里高亮成 <mark>：locateQuote 忽略空白差异找到起止。
+ * 起止在同一块级元素里（段落 / 列表项）：extractContents 整个抽出来包**一个** mark
+ * （跨 strong/em 边界也行——部分选中的行内元素被克隆进片段），一个摘句一个高亮；
+ * 跨块（段落边界）包一个会出非法嵌套，退回逐文本节点分段包。
+ * 摘句逐字对不上渲染文本（markdown 改写、服务端摘句本身带省略）就不高亮——不硬凑。
+ * 返回是否标上了（调用方据此决定要不要滚动定位）。
  */
-function markExcerpt(root: HTMLElement | null, excerpt: string): void {
-  if (root === null || excerpt.trim() === "") return;
+const BLOCK_SEL = "p, li, pre, td, th, blockquote, h1, h2, h3, h4, h5, h6";
+function markExcerpt(root: HTMLElement | null, excerpt: string): boolean {
+  if (root === null || excerpt.trim() === "") return false;
   // 幂等：同一份 DOM 上再跑一次（effect 重跑）不叠第二层
-  if (root.querySelector("mark.intent-mark") !== null) return;
+  if (root.querySelector("mark.intent-mark") !== null) return true;
   const nodes: Text[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) nodes.push(node as Text);
   const at = locateQuote(nodes.map((node) => node.data), excerpt);
-  if (at === null) return;
+  if (at === null) return false;
+  const startNode = nodes[at.start.node];
+  const endNode = nodes[at.end.node];
+  if (startNode === undefined || endNode === undefined || !root.contains(startNode) || !root.contains(endNode)) {
+    return false;
+  }
+  const range = document.createRange();
+  range.setStart(startNode, at.start.offset);
+  range.setEnd(endNode, at.end.offset);
+  const sameBlock =
+    (startNode.parentElement?.closest(BLOCK_SEL) ?? null) === (endNode.parentElement?.closest(BLOCK_SEL) ?? null);
+  if (sameBlock) {
+    const frag = range.extractContents();
+    const mark = document.createElement("mark");
+    mark.className = "intent-mark";
+    mark.appendChild(frag);
+    range.insertNode(mark);
+    return true;
+  }
   for (let i = at.start.node; i <= at.end.node; i += 1) {
     const node = nodes[i];
     if (node === undefined || !root.contains(node)) continue;
     const start = i === at.start.node ? at.start.offset : 0;
     const end = i === at.end.node ? at.end.offset : node.data.length;
     if (end <= start) continue;
-    const range = document.createRange();
-    range.setStart(node, start);
-    range.setEnd(node, end);
+    const seg = document.createRange();
+    seg.setStart(node, start);
+    seg.setEnd(node, end);
     const mark = document.createElement("mark");
     mark.className = "intent-mark";
-    range.surroundContents(mark);
+    seg.surroundContents(mark);
   }
+  return true;
+}
+
+/**
+ * 「当时那段对话」的一个滚动区（Q 或 A，2026-10-14 用户裁决拆成两个各自滚动）：
+ * max-height 160px，挂载 / 翻页 / 宽度变化时把这个区的摘句高亮滚到居中（摘句比可视区
+ * 高则开头顶上）；用户自己滚过就不再拉回来（wheel / touch 落闩，翻页重挂复位）。
+ *
+ * 窗口元数据（qWindow / aWindow，契约 2026-10-14 增补）：
+ * - cutBefore / cutAfter：区首 / 区尾一行小字「… 前面还有 N 字」，点了 = 在辅助对话打开；
+ * - located=false：摘句不是逐字原文——不高亮、从头显示、加一行说明；
+ * - fallback=true 或摘句为空：从头显示、不高亮、不说话（A 的摘句经常是空的，正常）；
+ * - 没有窗口元数据（旧服务端）：退回旧行为——全文里逐字找摘句，找到才高亮。
+ */
+function ConvArea(props: {
+  who: string;
+  /** 原文（窗口或全文）；渲染前过 closeOpenFence（截断可能劈开代码块） */
+  text: string;
+  /** 要高亮的摘句（Q 用 evidence、A 用 assistant 摘句） */
+  excerpt: string;
+  window: ExcerptWindow | undefined;
+  variant: "bubble" | "full";
+  /** 「前面 / 后面还有 N 字」能不能点（来源会话在本机）；点了打开辅助对话 */
+  openable: boolean;
+  onOpen?: () => void;
+}) {
+  const t = useT();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // 用户手动滚过的闩：一旦自己动手，宽度变化 / effect 重跑都不再拉回高亮处
+  const userScrolled = useRef(false);
+  const counts = windowCounts(props.window, props.text.length);
+  const notLocated = props.window?.located === false;
+  const noMark = props.excerpt.trim() === "" || props.window?.fallback === true || notLocated;
+
+  // 标高亮 + 滚到位（useLayoutEffect：绘制前摆好，不闪）
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    const scroller = scrollRef.current;
+    if (body === null || scroller === null) return;
+    const marked = noMark ? false : markExcerpt(body, props.excerpt);
+    if (userScrolled.current) return;
+    if (!marked) {
+      scroller.scrollTop = 0;
+      return;
+    }
+    const marks = [...body.querySelectorAll("mark.intent-mark")];
+    const first = marks[0];
+    const last = marks[marks.length - 1];
+    if (first === undefined || last === undefined) return;
+    const cbox = scroller.getBoundingClientRect();
+    const top = first.getBoundingClientRect().top - cbox.top + scroller.scrollTop;
+    const bottom = last.getBoundingClientRect().bottom - cbox.top + scroller.scrollTop;
+    scroller.scrollTop = markScrollTop(top, bottom, scroller.clientHeight);
+  }, [props.text, props.excerpt, noMark]);
+
+  // 宽度变化（栏拖宽 / 窗口缩放）重排后重摆高亮；用户滚过就不动
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller === null) return;
+    const observer = new ResizeObserver(() => {
+      if (userScrolled.current) return;
+      const body = bodyRef.current;
+      const first = body?.querySelector("mark.intent-mark");
+      if (body === undefined || body === null || first === null || first === undefined) return;
+      const marks = [...body.querySelectorAll("mark.intent-mark")];
+      const last = marks[marks.length - 1] ?? first;
+      const cbox = scroller.getBoundingClientRect();
+      const top = first.getBoundingClientRect().top - cbox.top + scroller.scrollTop;
+      const bottom = last.getBoundingClientRect().bottom - cbox.top + scroller.scrollTop;
+      scroller.scrollTop = markScrollTop(top, bottom, scroller.clientHeight);
+    });
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, []);
+
+  const cutHint = (n: number, label: string) =>
+    props.openable && props.onOpen !== undefined ? (
+      <button type="button" className="intent-conv-cut openable" onClick={props.onOpen}>
+        {label}
+      </button>
+    ) : (
+      <span className="intent-conv-cut">{label}</span>
+    );
+
+  return (
+    <div className="intent-conv-turn">
+      <div className="intent-conv-who">{props.who}</div>
+      {notLocated && <div className="intent-conv-located-note">{t.chat.recall.confirm.excerptNotLocated}</div>}
+      <div
+        ref={scrollRef}
+        className="intent-conv-scroll scroll"
+        onWheel={() => (userScrolled.current = true)}
+        onTouchMove={() => (userScrolled.current = true)}
+      >
+        {counts !== null && counts.before > 0 && cutHint(counts.before, t.chat.recall.confirm.moreBefore(counts.before))}
+        <div ref={bodyRef} className="intent-conv-md">
+          <MarkdownBlock text={closeOpenFence(props.text)} variant={props.variant} />
+        </div>
+        {counts !== null && counts.after > 0 && cutHint(counts.after, t.chat.recall.confirm.moreAfter(counts.after))}
+      </div>
+    </div>
+  );
 }
 
 export function IntentConfirmCard(props: {
@@ -115,7 +241,6 @@ export function IntentConfirmCard(props: {
   const [editing, setEditing] = useState(false);
   /** 本问的 /edges；null = 还没拉到或拉失败（join 不到的条目只显示 ask 自带的字段） */
   const [edges, setEdges] = useState<IntentEdges | null>(null);
-  const [edgesSettled, setEdgesSettled] = useState(false);
 
   /*
    * P0（2026-09-27 真机：确认卡「对 / 不对」没反应，138 秒 1,552 次 Maximum update
@@ -149,7 +274,6 @@ export function IntentConfirmCard(props: {
       .then((result) => {
         if (!alive) return;
         setEdges(result);
-        setEdgesSettled(true);
       });
     return () => {
       alive = false;
@@ -189,19 +313,12 @@ export function IntentConfirmCard(props: {
   useLayoutEffect(() => autofit(stmtRef.current), [stmtText, editing]);
   useLayoutEffect(() => autofit(noteRef.current), [note]);
 
-  // 摘句高亮：Q 里高亮 evidence、A 里高亮 assistant 摘句（翻页 / 边到达后重标）
-  const qBodyRef = useRef<HTMLDivElement>(null);
-  const aBodyRef = useRef<HTMLDivElement>(null);
+  // 当时那段对话的原文与摘句（Q 用 evidence、A 用 assistant 摘句）；滚动区是 ConvArea
+  // （各自滚动、自动把高亮滚到居中），按 askId 作 key——翻条重挂一份干净 DOM
   const qText = edge?.qa.q ?? "";
   const aText = edge?.qa.a ?? "";
   const evidence = edge?.evidence ?? "";
   const assistantExcerpt = edge?.assistant ?? "";
-  useEffect(() => {
-    markExcerpt(qBodyRef.current, evidence);
-  }, [qText, evidence, edgesSettled, cur, item?.askId]);
-  useEffect(() => {
-    markExcerpt(aBodyRef.current, assistantExcerpt);
-  }, [aText, assistantExcerpt, edgesSettled, cur, item?.askId]);
 
   const answered = useMemo(() => buildConfirmAnswers(rows, props.ask), [rows, props.ask]);
   const taken = rows.filter((r) => r.verdict !== "skip").length;
@@ -402,6 +519,9 @@ export function IntentConfirmCard(props: {
             <b>{edge?.qa.title ?? item.title}</b>
             <span className="intent-confirm-pos">{item.when}</span>
             {edge !== null && ` · ${edge.qa.source}`}
+            {edge !== null && edge.dupCount > 1 && (
+              <span className="intent-conv-dup">{t.chat.recall.confirm.askedTimes(edge.dupCount)}</span>
+            )}
             <span style={{ flex: 1 }} />
             {edge !== null && (
               <>
@@ -419,33 +539,35 @@ export function IntentConfirmCard(props: {
               </>
             )}
           </div>
-          <div className="intent-conv-b scroll">
-            {edge !== null ? (
-              <>
-                <div className="intent-conv-turn">
-                  <div className="intent-conv-who">{t.chat.recall.confirm.youSaid}</div>
-                  {/* key 按条换：高亮是直接改 MarkdownBlock 渲染出的 DOM（包 <mark>），同一份 Q/A
-                      在相邻几条里不变时 React 不重渲，上一条的 mark 会留着、新的再叠上去，React
-                      再协调还会把被拆过的文本节点重复插一遍（真机：1/2/5 条同一处高亮、正文重复一截）。
-                      每条重挂一份干净的 DOM，再只包这一条自己的摘句。 */}
-                  <div key={`q:${item.askId}`} ref={qBodyRef} className="intent-conv-md">
-                    <MarkdownBlock text={qText} variant="bubble" />
-                  </div>
-                </div>
-                <div className="intent-conv-turn">
-                  <div className="intent-conv-who">{t.chat.recall.confirm.assistantSaid}</div>
-                  <div key={`a:${item.askId}`} ref={aBodyRef} className="intent-conv-md">
-                    <MarkdownBlock text={aText} />
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="intent-conv-turn">
-                <div className="intent-conv-who">{t.chat.recall.confirm.youSaid}</div>
-                <div className="intent-conv-quote">“{item.quote}”</div>
-              </div>
-            )}
-          </div>
+          {edge !== null ? (
+            <div className="intent-conv-areas">
+              <ConvArea
+                key={`q:${item.askId}`}
+                who={t.chat.recall.confirm.youSaid}
+                text={qText}
+                excerpt={evidence}
+                window={edge.qa.qWindow}
+                variant="bubble"
+                openable={openable}
+                onOpen={openable && props.onOpenSideChat !== undefined ? () => props.onOpenSideChat?.(edge.qa.sessionId) : undefined}
+              />
+              <ConvArea
+                key={`a:${item.askId}`}
+                who={t.chat.recall.confirm.assistantSaid}
+                text={aText}
+                excerpt={assistantExcerpt}
+                window={edge.qa.aWindow}
+                variant="full"
+                openable={openable}
+                onOpen={openable && props.onOpenSideChat !== undefined ? () => props.onOpenSideChat?.(edge.qa.sessionId) : undefined}
+              />
+            </div>
+          ) : (
+            <div className="intent-conv-turn">
+              <div className="intent-conv-who">{t.chat.recall.confirm.youSaid}</div>
+              <div className="intent-conv-quote">“{item.quote}”</div>
+            </div>
+          )}
         </div>
       </div>
 

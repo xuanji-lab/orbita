@@ -1010,6 +1010,13 @@ export const zh: Messages = {
         whyUncertainLabel: "为什么拿不准",
         youSaid: "你当时说",
         assistantSaid: "当时的回答",
+        /** 摘句窗口：区首 / 区尾的小字提示（点了 = 在辅助对话打开） */
+        moreBefore: (n) => `… 前面还有 ${n} 字`,
+        moreAfter: (n) => `… 后面还有 ${n} 字`,
+        /** located=false：摘句不是逐字原文，没法定位置 */
+        excerptNotLocated: "摘句不是逐字原文，未定位",
+        /** dupCount > 1：会话表头的小字 */
+        askedTimes: (n) => `这句话问过 ${n} 次`,
         openInSideChat: "在辅助对话打开",
         prevItem: "上一条",
         nextItem: "下一条",

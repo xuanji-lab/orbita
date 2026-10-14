@@ -1101,6 +1101,13 @@ export const en = {
         whyUncertainLabel: "Why I'm not sure",
         youSaid: "You said",
         assistantSaid: "The answer then",
+        /** 摘句窗口：区首 / 区尾的小字提示（点了 = 在辅助对话打开） */
+        moreBefore: (n: number) => `… ${n} more characters before`,
+        moreAfter: (n: number) => `… ${n} more characters after`,
+        /** located=false：摘句不是逐字原文，没法定位置 */
+        excerptNotLocated: "The excerpt isn't verbatim — can't locate it",
+        /** dupCount > 1：会话表头的小字 */
+        askedTimes: (n: number) => `This came up ${n} times`,
         openInSideChat: "Open in side chat",
         prevItem: "Previous",
         nextItem: "Next",

@@ -4192,7 +4192,7 @@ button.panel-group-toggle:hover {
   padding-left: 10px;
   border-left: 2px solid color-mix(in srgb, var(--color-warning) 60%, transparent);
 }
-/* 「当时那段对话」面板：表头（标题 / 时间 / 来源 / 在辅助对话打开）+ 滚动体 */
+/* 「当时那段对话」面板：表头（标题 / 时间 / 来源 / 在辅助对话打开）+ 两个各自滚动的区 */
 .intent-conv {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
@@ -4213,6 +4213,10 @@ button.panel-group-toggle:hover {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.intent-conv-dup {
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 .intent-conv-note {
@@ -4238,19 +4242,48 @@ button.panel-group-toggle:hover {
   color: var(--color-text-tertiary);
   cursor: default;
 }
-.intent-conv-b {
-  max-height: 210px;
-  overflow: auto;
-  padding: 9px 11px;
+/* Q / A 两个区各自滚动（max-height 160），摘句高亮自动居中，用户滚过就不再拉回 */
+.intent-conv-turn {
+  padding: 7px 11px;
   display: grid;
-  gap: 8px;
-  font-size: var(--font-size-caption);
-  line-height: 1.7;
+  gap: 3px;
+}
+.intent-conv-turn + .intent-conv-turn {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.intent-conv-scroll {
+  max-height: 160px;
+  overflow: auto;
 }
 .intent-conv-who {
   font-size: var(--font-size-micro);
   color: var(--color-text-tertiary);
   margin-bottom: 1px;
+}
+.intent-conv-located-note {
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+/* 「… 前面 / 后面还有 N 字」：区首区尾的小字；来源在本机时是链接（点了在辅助对话打开） */
+.intent-conv-cut {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  text-align: left;
+}
+button.intent-conv-cut.openable {
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-strong);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+button.intent-conv-cut.openable:hover {
+  color: var(--color-text-primary);
 }
 .intent-conv-md .chat-md {
   font-size: var(--font-size-caption);
