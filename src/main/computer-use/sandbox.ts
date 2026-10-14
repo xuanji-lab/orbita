@@ -18,7 +18,7 @@
  */
 import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join, win32 } from "node:path";
 import {
   BRIDGE_INFO_FILE,
   COMPUTER_USE_CMD_DIR,
@@ -72,7 +72,9 @@ function escapeXml(value: string): string {
  *
  * 为什么只能查末段名：MappedFolder 没有客机路径参数，映射目录只会落在沙箱桌面的
  * `<目录名>/` 下，所以**末段名**（basename）就是沙箱里那一段；宿主路径前面的空格 / 中文
- * 都不参与那条命令，不该被拦。
+ * 都不参与那条命令，不该被拦。末段名按 Windows 规则切（win32.basename）：这条名字要进
+ * 沙箱内的 junction 命令，真机路径是 `C:\...`，posix basename 在 macOS/Linux 开发机上
+ * 切不开它（测试也要在任何平台过）。
  *
  * 为什么不能带空格 / cmd 特殊字符：整条命令包在 `cmd.exe /c "…"` 里，路径再各自套一层
  * 引号会把自己绕死（cmd 的引号规则与 XML 转义叠加），所以 `mklink /J C:\orbita-bridge
@@ -82,7 +84,7 @@ function escapeXml(value: string): string {
  * 返回人话错误（带上是哪个目录），没问题回 null。
  */
 export function junctionPathIssue(bridgeDir: string, outputDir: string): string | null {
-  const names = [basename(bridgeDir), basename(outputDir)];
+  const names = [win32.basename(bridgeDir), win32.basename(outputDir)];
   const bad = names.find((name) => /[\s&()^|<>%"]/.test(name));
   if (bad === undefined) return null;
   return (
@@ -105,8 +107,9 @@ export function junctionPathIssue(bridgeDir: string, outputDir: string): string 
  * 别把沙箱当成「防网络的隔离层」。将来考虑加开关（禁出网 = 只做本地桌面自动化）。
  */
 export function renderWsbXml(input: WsbRenderInput): string {
-  const bridgeOnDesktop = `${WSB_DESKTOP_USER}\\${basename(input.bridgeDir)}`;
-  const outOnDesktop = `${WSB_DESKTOP_USER}\\${basename(input.outputDir)}`;
+  // 末段名按 Windows 规则切（映射目录落在沙箱桌面 <目录名>/ 下，名字进 junction 命令）
+  const bridgeOnDesktop = `${WSB_DESKTOP_USER}\\${win32.basename(input.bridgeDir)}`;
+  const outOnDesktop = `${WSB_DESKTOP_USER}\\${win32.basename(input.outputDir)}`;
   const guestCommand = [
     "cmd.exe /c \"",
     `mklink /J ${COMPUTER_USE_GUEST_BRIDGE_DIR} ${bridgeOnDesktop}`,
