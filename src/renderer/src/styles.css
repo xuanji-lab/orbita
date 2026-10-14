@@ -1427,6 +1427,20 @@ body {
 }
 
 /*
+ * 会话页的滚动段外壳（ChatView 骨架的中间一行，回底浮钮的定位容器）。
+ * overflow: hidden 是要害：页脚（确认卡 + 输入卡）高到把中间行挤成 0 时，里面滚动区的
+ * 上下 padding 仍会撑出 ~48px、溢出到页脚那一行底下——页脚后画、盖在上面，于是消息流
+ * 最底下那截（召回运行卡的细节行）和确认卡的标题叠在一起（用户 2026-10-14 23:27 截图）。
+ * 外壳自己裁掉，滚动段再挤也不越界。舷窗（BlackholeBox）只读这层的上沿，不受影响。
+ */
+.chat-scroll-seg {
+  position: relative;
+  min-height: 0;
+  display: grid;
+  overflow: hidden;
+}
+
+/*
  * 一键回底浮钮（feat/scroll-to-bottom-X）：浮在消息列底端靠右。
  * 面与描边同输入卡（.glass-card 的 --glass-bg / --glass-border）——实色
  * --color-bg-panel 在暗档与井太接近（用户 2026-09-27：要跟输入框一个颜色）；
@@ -4134,6 +4148,15 @@ button.panel-group-toggle:hover {
   padding: 14px 16px 4px;
   display: grid;
   gap: 12px;
+  /* 确认卡挂在会话页脚，不能高到把消息流挤没（用户 2026-10-14 23:27：确认卡压在运行卡上）。
+     正文封顶 = 窗口高 − 固定开销 − 给消息流留的 120px：固定开销 ≈ 页头 48 + 输入卡 108 + 页脚留白 22
+     + 卡片自身（顶行 / 表态行 / 底行 / 描边）162 ≈ 340。放不下的在正文里滚；再小的窗口至少留 160px */
+  max-height: max(160px, calc(100vh - 460px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 行高按内容走、不被封顶压扁：「当时那段对话」带 overflow（圆角裁切），grid 默认会把它压到
+     只剩表头，正文反而不滚——max-content 让放不下的部分交给正文自己滚 */
+  grid-auto-rows: max-content;
 }
 .intent-kick {
   font-family: var(--font-family-mono);

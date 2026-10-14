@@ -1840,8 +1840,9 @@ function Pane(props: {
         </span>
       </header>
 
-      {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走 */}
-      <div data-porthole-anchor="" style={{ position: "relative", minHeight: 0, display: "grid" }}>
+      {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走。
+          样式在 styles.css 的 .chat-scroll-seg（含 overflow: hidden——页脚很高时滚动段不越界盖到页脚下） */}
+      <div data-porthole-anchor="" className="chat-scroll-seg">
         <div
           ref={props.scrollRef}
           onScroll={props.onScroll}
