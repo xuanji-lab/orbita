@@ -362,6 +362,28 @@ void app.whenReady().then(async () => {
    * spawnSandbox 只在这里真接——测试全走假进程，沙箱窗口是用户可见面。
    */
   const sandboxExePath = windowsSandboxExePath();
+  /**
+   * 按 PID 杀整棵沙箱进程树（`taskkill /T /F`，与 spawnSandbox 里那套同一份火力）。
+   * 抽成独立函数是因为 stop() 的收尾链在「第一次 kill 没确认退出」时还要再打一次；
+   * 那时手上只有 pid，没有 child 对象。
+   * onFailure 只在第一次 kill 用（那里还拿得到 child，可以退回单进程杀）；升级那次不传，
+   * 失败交给收尾链的下一个窗口留痕迹。
+   */
+  const killTreeByPid = (pid: number, onFailure?: () => void): void => {
+    try {
+      const taskkill = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.on("error", () => onFailure?.());
+      taskkill.on("exit", (code) => {
+        if (code !== 0) onFailure?.();
+      });
+    } catch {
+      onFailure?.();
+    }
+  };
+
   const computerUse = new SandboxController({
     computerUseDir: join(configDir, "computer-use"),
     bridgeDir: app.isPackaged
@@ -381,30 +403,19 @@ void app.whenReady().then(async () => {
       const killTree = (): boolean => {
         const pid = child.pid;
         if (pid === undefined) return killChild();
-        const taskkill = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
-          stdio: "ignore",
-          windowsHide: true,
-        });
-        taskkill.on("error", () => {
+        killTreeByPid(pid, () => {
           try {
             killChild();
           } catch {
             // 进程已退出
           }
         });
-        taskkill.on("exit", (code) => {
-          if (code !== 0) {
-            try {
-              killChild();
-            } catch {
-              // 进程已退出
-            }
-          }
-        });
         return true;
       };
       return Object.assign(child, { kill: killTree });
     },
+    // 升级杀：第一次 kill 在兜底窗口内没换来退出时，按 PID 再打一次进程树
+    killTreeByPid,
     onStatus: broadcastComputerUseStatus,
   });
   registerComputerUseIpc(computerUse);
