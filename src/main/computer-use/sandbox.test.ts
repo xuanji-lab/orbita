@@ -1,11 +1,18 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BRIDGE_INFO_FILE, COMPUTER_USE_CMD_DIR, type SandboxStatus } from "../../shared/computer-use.ts";
 import { parseBridgeInfo, waitForBridgeInfo } from "./bridge-ready.ts";
-import { renderWsbXml, SandboxController, type SandboxDeps, type SandboxProcess } from "./sandbox.ts";
+import {
+  junctionPathIssue,
+  renderWsbXml,
+  SandboxController,
+  type SandboxDeps,
+  type SandboxProcess,
+} from "./sandbox.ts";
 
 // ── 假沙箱进程：只实现状态机用到的 on / kill，exit / error 由测试手动发射 ─────────
 
@@ -512,6 +519,48 @@ describe("手动截图", () => {
       const shot = await harness.controller.screenshot(1280);
       assert.equal(shot.ok, false);
       assert.ok(shot.ok === false && /桌面会话没就绪/.test(shot.error));
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+
+
+// ── junction 末段名闸门（审查意见 F）──────────────────────────────────────
+//
+// .wsb 里那条 junction 命令不加引号（整条包在 cmd.exe /c "…" 里，路径再套引号会把自己
+// 绕死），所以映射目录的末段名带空格 / cmd 特殊字符就会把命令切坏——以前这条约束只活在
+// 注释里，现在它可执行：start() 在落 .wsb 之前先卡一次。
+// 路径一律用 join() 拼（不写反斜杠字面量）：win32 与 posix 的 basename 都认自己那套分隔符。
+
+describe("junction 末段名闸门", () => {
+  test("junctionPathIssue：干净名字放行；空格 / cmd 特殊字符拦下；只看末段名", () => {
+    const p = (...parts: string[]): string => join(...parts);
+    assert.equal(junctionPathIssue(p("app", "guest-bridge", "bin"), p("u", "orbita", "computer-use", "out")), null);
+    // 宿主路径前面的空格 / 中文不参与那条命令，不该被拦
+    assert.equal(junctionPathIssue(p("Users", "达 玛", "guest-bridge", "bin"), p("Users", "达 玛", "orbita", "out")), null);
+    assert.match(String(junctionPathIssue(p("x", "my bridge"), p("y", "out"))), /my bridge/);
+    assert.match(String(junctionPathIssue(p("x", "bin"), p("y", "my out"))), /my out/);
+    for (const [bridgeDir, outputDir] of [
+      [p("x", "bin & co"), p("y", "out")],
+      [p("x", "bin"), p("y", "a(b)")],
+      [p("x", "a^b"), p("y", "out")],
+      [p("x", "100%done"), p("y", "out")],
+    ] as const) {
+      assert.ok(junctionPathIssue(bridgeDir, outputDir) !== null, `${bridgeDir} / ${outputDir}`);
+    }
+  });
+
+  test("start：末段名带空格 → 人话错误，不 spawn、不落 .wsb、状态停在 off", async () => {
+    const harness = await makeHarness({ bridgeDir: join("some path", "my bridge") });
+    try {
+      const result = await harness.controller.start();
+      assert.equal(result.ok, false);
+      assert.ok(result.ok === false && /my bridge/.test(result.error), result.ok ? "" : result.error);
+      assert.deepEqual(harness.spawned, [], "闸门在 spawn 之前，不该起沙箱进程");
+      assert.equal(existsSync(join(harness.dir, "session.wsb")), false, "不该落 .wsb");
+      assert.deepEqual(harness.controller.status(), { state: "off" });
     } finally {
       await harness.close();
     }
