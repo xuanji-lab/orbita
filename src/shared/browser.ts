@@ -172,7 +172,20 @@ export type BrowserToolRequest =
   /** 在 agent tab 的历史里后退 / 前进一步（browser_navigate 的 url 传 back / forward） */
   | { action: "history"; direction: "back" | "forward" }
   | { action: "observe"; maxNodes?: number; tab?: BrowserReadTarget }
-  | { action: "extract"; offset?: number; maxChars?: number; links?: boolean; tab?: BrowserReadTarget }
+  /**
+   * format：markdown 保留结构（标题层级、有序 / 无序列表、链接 `[文字](URL)`、GFM 管道表、强调、代码块），
+   * 默认 text（`document.body.innerText`，行为不变）。ref：`browser_observe` 大纲里的元素引用，只提取那个
+   * 元素的子树（页面里只要一块时用），不传就整页。两者都照旧对超长内容走 offset / maxChars 分段。
+   */
+  | {
+      action: "extract";
+      offset?: number;
+      maxChars?: number;
+      links?: boolean;
+      format?: "text" | "markdown";
+      ref?: string;
+      tab?: BrowserReadTarget;
+    }
   /**
    * save：另存一份原图进会话工作台 screenshots/，结果给路径（默认不存，截图只给模型看）。
    * region：只拍整页截图里的这一块、放大给模型看（小字、图表细节）；放大图的像素不是点击坐标
