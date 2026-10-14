@@ -3885,6 +3885,20 @@ button.panel-group-toggle:hover {
    这是用户 2026-10-14 的决定：复用用量格已有的色 token，不另造新色；桥与「你确认过」
    用 accent / success，旧中心与被高亮轮以外的节点退一档。 */
 
+/* 聊天面的召回运行卡：标题不换行、不被挤（场景行再长也只截它自己）。之前这两个 class
+   在组件里用了却没写规则——场景一长，「意图召回」被压成一字一行（2026-10-14 真机） */
+.intent-run-title {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-bold);
+  color: var(--color-text-secondary);
+}
+.intent-run-icon {
+  flex: 0 0 auto;
+  color: var(--color-warning);
+}
+
 /* —— 面板体：图钉顶部（高度可拖），分隔条，条目列表占余下 —— */
 .intent-panel-body {
   height: 100%;
