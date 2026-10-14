@@ -60,12 +60,22 @@ describe("retrieveMemories", () => {
     assert.ok((hits[0]?.score ?? 0) >= 0.3);
   });
 
-  test("阈值门控：只沾一个边的低分条目不返回", () => {
-    // query 有 8 个 token，条目只在关键词里中 1 个 → (0.7 + 0.3) / 8，过不了 0.3
-    const hits = retrieveMemories([entry("终端面板在右栏，可以拖宽度", ["终端"])], "终端的字号能不能调", {
+  test("阈值门控：只有 bigram 偶然重叠的低分条目不返回", () => {
+    // query 与条目正文共享「右栏/宽度」两个 bigram，但关键词（终端）原样没出现
+    // → 只有 token 通道的 (0.3+0.3)/7 ≈ 0.09，过不了 0.3
+    const hits = retrieveMemories([entry("终端面板在右栏，可以拖宽度", ["终端"])], "右栏的宽度怎么调", {
       now: NOW,
     });
     assert.deepEqual(hits, []);
+  });
+
+  test("关键词在 query 原文中原样出现 = 刻意命中，压线过闸（子串通道语义）", () => {
+    // 同一对 query/条目，关键词「终端」出现在问句里——哪怕 bigram 打分低，
+    // 子串通道也把它抬到阈值线（真机验收缺陷修复的语义，见 lexicalScore 头注）
+    const hits = retrieveMemories([entry("终端面板在右栏，可以拖宽度", ["终端"])], "终端的字号能不能调", {
+      now: NOW,
+    });
+    assert.equal(hits.length, 1);
   });
 
   test("top5：第八条强命中也只装 5 条", () => {
@@ -121,5 +131,35 @@ describe("retrieveMemories", () => {
     assert.deepEqual(strict, []);
     const one = retrieveMemories(CORPUS, "包管理器用什么", { now: NOW, limit: 1 });
     assert.equal(one.length, 1);
+  });
+});
+
+describe("关键词子串通道（真机验收缺陷回归：中文自然问句打 0 分）", () => {
+  // 验收时的真实条目与真实问句：「我的猫叫什么名字？」对雪球条目 bigram 零交集，
+  // 修复前得分 0.000 过不了阈值
+  const cat = entry("用户养了一只叫「雪球」的橘猫，是 2023-05-04 捡到的。", ["雪球", "猫", "橘猫", "宠物", "2023-05-04"]);
+
+  test("自然问句命中一个关键词即过阈值", () => {
+    const hits = retrieveMemories([cat], "我的猫叫什么名字？", { now: NOW });
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0]?.entry.text, cat.text);
+    assert.ok(hits[0]!.score >= 0.3);
+  });
+
+  test("多个关键词命中排更高（雪球+猫 > 只有猫）", () => {
+    const single = lexicalScore({ text: "我的猫叫什么", tokens: new Set(tokenize("我的猫叫什么")) }, cat);
+    const multi = lexicalScore({ text: "雪球这只猫", tokens: new Set(tokenize("雪球这只猫")) }, cat);
+    assert.ok(multi > single);
+    assert.ok(single >= 0.3);
+  });
+
+  test("与条目无关的问句仍然 0 分（阈值门控不被稀释）", () => {
+    assert.equal(lexicalScore({ text: "今晚吃什么", tokens: new Set(tokenize("今晚吃什么")) }, cat), 0);
+    assert.deepEqual(retrieveMemories([cat], "今晚吃什么", { now: NOW }), []);
+  });
+
+  test("关键词大小写不敏感（latin）", () => {
+    const bun = CORPUS[0]!;
+    assert.ok(lexicalScore({ text: "BUN 好用吗", tokens: new Set(tokenize("BUN 好用吗")) }, bun) >= 0.3);
   });
 });

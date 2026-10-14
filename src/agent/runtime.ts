@@ -498,10 +498,14 @@ const MEMORY_DISTILL_TIMEOUT_MS = 60_000;
  * **任何失败都返回 null**（超时 / ok:false / 异常）——轮前是同步等的，
  * 记忆的任何问题都不该拦住开轮。空命中也返回 null（没东西可注入不是错误）。
  */
-async function recallMemories(sessionId: string, query: string): Promise<string | null> {
+async function recallMemories(
+  sessionId: string,
+  query: string,
+  scope: { workspaceId: string | null; cwd: string },
+): Promise<string | null> {
   try {
     const outcome = await requestBroker.request<MemoryRetrieveOutcome>(
-      { type: "memoryRetrieveRequest", sessionId, query },
+      { type: "memoryRetrieveRequest", sessionId, query, scope },
       MEMORY_RECALL_TIMEOUT_MS,
     );
     if (!outcome.ok || outcome.hits.length === 0) return null;
@@ -1558,7 +1562,10 @@ async function echoAndPrompt(
   const files = command.files ?? [];
   // 轮前记忆召回：块拼在 prompt 尾部（KV cache 只破尾段）；超时 / 报错 / 空命中
   // 都是 null——不注入、照常开轮，记忆的失败不该拦对话。
-  const memoryBlock = await recallMemories(command.sessionId, command.text);
+  const memoryBlock = await recallMemories(command.sessionId, command.text, {
+    workspaceId: command.workspaceId,
+    cwd: command.cwd,
+  });
   const promptText = composePromptText(command.text, pasted, files) + (memoryBlock ?? "");
   note.echoed.add(promptText);
   // 正文按空行拆成块再回显：句中粘贴胶囊（方案 C）组装后就是 <pasted-text> 块内联

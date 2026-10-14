@@ -120,3 +120,35 @@ describe("applyMemoryRetrieve", () => {
     });
   });
 });
+
+describe("event.scope 优先（首轮竞态回归：meta 未落盘也要能召回）", () => {
+  test("带 scope 的请求不读 meta，首轮即可召回", async () => {
+    const sessions = new FakeSessions();
+    await applyMemoryAppend(sessions, memory, append("in-workspace", [
+      { text: "用户养了一只叫「雪球」的橘猫", keywords: ["雪球", "猫"], timestamp: NOW },
+    ]));
+    // "gone" 查无此会话（meta 还没落盘的首轮）；但请求带了开轮命令里的 scope
+    const outcome = await applyMemoryRetrieve(sessions, memory, {
+      ...retrieve("gone", "我的猫叫什么名字"),
+      scope: { workspaceId: "ws-a", cwd: "C:/elsewhere" },
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.hits.length, 1);
+    // 只有 append 问过一次 meta；带 scope 的召回没有再问——竞态从根上消失
+    assert.deepEqual(sessions.asked, ["in-workspace"]);
+  });
+
+  test("scope 缺席时退回 meta 解析（旧调用方兼容）", async () => {
+    const sessions = new FakeSessions();
+    await applyMemoryAppend(sessions, memory, append("in-workspace", [
+      { text: "项目 dev 端口固定 5273", keywords: ["端口"], timestamp: NOW },
+    ]));
+    const outcome = await applyMemoryRetrieve(sessions, memory, retrieve("in-workspace", "端口是多少"));
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.hits.length, 1);
+    // append 一次 + 退回 meta 的召回一次
+    assert.deepEqual(sessions.asked, ["in-workspace", "in-workspace"]);
+  });
+});

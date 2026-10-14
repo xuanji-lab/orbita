@@ -46,7 +46,12 @@ export async function applyMemoryRetrieve(
   memory: MemoryStore,
   event: Extract<AgentEvent, { type: "memoryRetrieveRequest" }>,
 ): Promise<MemoryRetrieveOutcome> {
-  const scope = await scopeOfSession(sessions, event.sessionId);
+  // 开轮命令自带的 scope 优先（首轮 meta 还没落盘，meta 解析是必输的竞态）；
+  // 缺席才退回 meta（旧调用方兼容）。
+  const scope =
+    event.scope !== undefined
+      ? memoryScopeOf(event.scope)
+      : await scopeOfSession(sessions, event.sessionId);
   if (scope === null) return { ok: true, hits: [] };
   return { ok: true, hits: retrieveMemories(await memory.list(scope), event.query) };
 }

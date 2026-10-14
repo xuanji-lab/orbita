@@ -86,20 +86,38 @@ function decayOf(timestamp: number, now: number): number {
 }
 
 /**
- * 词法打分：命中的 query token 里，关键词里的算 0.7、只在正文里的算 0.3，
- * 按 query token 总数归一化。所以「关键词全中」= 0.7+，「正文全中」= 0.3+，
- * 一个都不中 = 0（过不了阈值门控）。
+ * 词法打分 = max(token 通道, 关键词子串通道)。
+ *
+ * token 通道：命中的 query token 里，关键词里的算 0.7、只在正文里的算 0.3，
+ * 按 query token 总数归一化。CJK bigram 的局限（真机验收实测）：自然中文问句
+ * 「我的猫叫什么名字？」切成「我的/的猫/猫叫/…」，与条目关键词「猫」零交集，
+ * 再被分母稀释——日常问句几乎永远过不了阈值。
+ *
+ * 关键词子串通道补的就是这个：关键词是蒸馏时模型自己标的检索靶子，它在 query
+ * **原文**里原样出现是刻意命中（不是 bigram 的偶然重叠）。首个命中给到阈值线
+ * 0.3（勉强过闸，注入一条勉强相关的记忆代价很小——top5 + 1500 字符预算兜着），
+ * 之后每个 +0.15，封顶 0.7（不超过 token 通道「关键词全中」的量级）。
  */
 export function lexicalScore(query: MemoryQuery, entry: MemoryEntry): number {
-  if (query.tokens.size === 0) return 0;
-  const keywords = new Set(entry.keywords.flatMap(tokenize));
-  const body = new Set(tokenize(entry.text));
-  let weighted = 0;
-  for (const token of query.tokens) {
-    if (keywords.has(token)) weighted += KEYWORD_WEIGHT;
-    if (body.has(token)) weighted += BODY_WEIGHT;
+  let tokenChannel = 0;
+  if (query.tokens.size > 0) {
+    const keywords = new Set(entry.keywords.flatMap(tokenize));
+    const body = new Set(tokenize(entry.text));
+    let weighted = 0;
+    for (const token of query.tokens) {
+      if (keywords.has(token)) weighted += KEYWORD_WEIGHT;
+      if (body.has(token)) weighted += BODY_WEIGHT;
+    }
+    tokenChannel = weighted / query.tokens.size;
   }
-  return weighted / query.tokens.size;
+  const haystack = query.text.toLowerCase();
+  const substringHits = entry.keywords.filter((k) => {
+    const needle = k.trim().toLowerCase();
+    return needle !== "" && haystack.includes(needle);
+  }).length;
+  const keywordChannel =
+    substringHits === 0 ? 0 : Math.min(KEYWORD_WEIGHT, MIN_SCORE + 0.15 * (substringHits - 1));
+  return Math.max(tokenChannel, keywordChannel);
 }
 
 /**
@@ -123,8 +141,13 @@ export function retrieveMemories(
   const parsed: MemoryQuery = { text: query, tokens: new Set(tokens) };
 
   const ranked = entries
-    .map((entry) => ({ entry, score: scorer(parsed, entry) * decayOf(entry.timestamp, now) }))
-    .filter((hit) => hit.score >= threshold)
+    .map((entry) => {
+      // 门控看原始相关度，衰减只管排序与展示分——阈值是相关性的地板，
+      // 「老了一点」不该把正好压线的命中挤出门外（0.3 × 0.999… < 0.3 的假阴性）
+      const relevance = scorer(parsed, entry);
+      return { entry, relevance, score: relevance * decayOf(entry.timestamp, now) };
+    })
+    .filter((hit) => hit.relevance >= threshold)
     .sort((a, b) => b.score - a.score || b.entry.timestamp - a.entry.timestamp);
 
   const hits: MemoryHit[] = [];
