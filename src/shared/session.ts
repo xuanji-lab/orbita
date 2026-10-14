@@ -18,6 +18,8 @@ import { parseSkillSegments } from "./skill.ts";
 import { stripInvocationBlock } from "./invocation.ts";
 import { splitUserTextBlocks } from "./prompt-attachments.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
+import type { IntentAskView, IntentSelectedView, IntentUsageCount, RecallStageCell } from "./intent-recall.ts";
+import type { IntentConfirmAnswer } from "./intent-confirm.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -106,6 +108,110 @@ export function isChannelMarkRecord(raw: unknown): raw is ChannelMarkRecord {
 }
 
 /**
+ * 意图召回的终态卡片记录（实验功能 intent-system）：一轮 /recall 的摘要，落在
+ * 它服务的那条 user 消息之后、回答之前。与 CompactedRecord / ChannelMarkRecord
+ * 同一个做法：单独一个 role、逐字段校验、坏行跳过；不是轮边界，branchRoles
+ * 不计它。**injection 永不落盘**（它引用历史 QA 的原文，只活在 pi 本子与模型
+ * 上下文里）。usage 落在这里是刻意的：日账本可从会话 JSONL 回填重建，意图
+ * 召回花的 token（DeepSeek / Proma 管线，用户自己的钱）不能在重建后丢账。
+ */
+export interface IntentRecallRecord {
+  role: "intent-recall";
+  /** 转录记录 id（重跑同一 turn 只留最后一张：renderer 按 turnId 去重取最后一张） */
+  id: string;
+  /** 本轮回显 user item 的 id（与 /recall 的 turnId 同一个值） */
+  turnId: string;
+  status: "done" | "error" | "cancelled";
+  runId: string | null;
+  /** 记录时刻（epoch ms）——与其它记录一样用于混排定序，值 = 召回开始时刻 */
+  timestamp: number;
+  /** recall 开始与终态落定的时刻（epoch ms；timestamp = startedAt） */
+  startedAt: number;
+  finishedAt: number;
+  /** S1 判定的场景标签 */
+  scene: string | null;
+  /** /health→accepted 的 qaTotal（历史 QA 总量） */
+  qaTotal: number | null;
+  /** S3 通过数（最后一帧 progress 的 passed） */
+  passed: number | null;
+  budgetMs: number | null;
+  peak: boolean;
+  timings: { totalMs: number; gateMs: number; s1Ms: number; s3Ms: number; s4Ms: number } | null;
+  summary: string | null;
+  selected: IntentSelectedView[];
+  ask: IntentAskView[];
+  /** 待问队列里还没问到的条数（本轮之外） */
+  askRemaining?: number;
+  /** 落卡时刻的阶段条（含每格数字与用时） */
+  stages?: RecallStageCell[];
+  error: { stage: string; message: string; retryable: boolean } | null;
+  /** 门卫跳过（done.skipped="gate"）：why 与 gate 事件同一句；null = 正常走完 */
+  skipped: "gate" | null;
+  gateWhy: string | null;
+  /** 出错停在哪一步（stage + 最后一帧进度）；error 态之外为 null */
+  halted: { stage: string; done: number | null; total: number | null } | null;
+  /** 回答前确认的用户表态；null = 没弹过卡 */
+  confirm?: {
+    action: "confirm" | "skip-all";
+    answers: IntentConfirmAnswer[];
+    note: string;
+    /** /feedback 写回的边数 */
+    edgesWritten: number | null;
+    /** 表态提升为入选的条数（契约 7 增补，可选） */
+    promoted?: number;
+  } | null;
+  /** 契约 7：这一轮召回的 token 用量（DeepSeek / Proma 管线）；服务端没报则缺席 */
+  usage?: IntentUsageCount;
+}
+
+/** 逐字段校验（宽松版：渲染可用的字段齐就行，畸形字段缺席、不丢整行）。 */
+export function isIntentRecallRecord(raw: unknown): raw is IntentRecallRecord {
+  if (typeof raw !== "object" || raw === null) return false;
+  const value = raw as Record<string, unknown>;
+  if (
+    value["role"] !== "intent-recall" ||
+    typeof value["id"] !== "string" ||
+    typeof value["turnId"] !== "string" ||
+    (value["status"] !== "done" && value["status"] !== "error" && value["status"] !== "cancelled") ||
+    typeof value["timestamp"] !== "number" ||
+    typeof value["startedAt"] !== "number" ||
+    typeof value["finishedAt"] !== "number" ||
+    (value["peak"] !== false && value["peak"] !== true)
+  ) {
+    return false;
+  }
+  if (!Array.isArray(value["selected"]) || !Array.isArray(value["ask"])) return false;
+  if (value["skipped"] !== null && value["skipped"] !== undefined && value["skipped"] !== "gate") return false;
+  if (value["gateWhy"] !== null && value["gateWhy"] !== undefined && typeof value["gateWhy"] !== "string") return false;
+  if (value["error"] !== null && typeof value["error"] !== "object") return false;
+  if (value["halted"] !== null && value["halted"] !== undefined) {
+    const halted = value["halted"];
+    if (typeof halted !== "object" || halted === null) return false;
+    const h = halted as Record<string, unknown>;
+    if (typeof h["stage"] !== "string") return false;
+    if (h["done"] !== null && typeof h["done"] !== "number") return false;
+    if (h["total"] !== null && typeof h["total"] !== "number") return false;
+  }
+  if (value["confirm"] !== null && value["confirm"] !== undefined) {
+    const confirm = value["confirm"];
+    if (typeof confirm !== "object" || confirm === null) return false;
+    const c = confirm as Record<string, unknown>;
+    if (c["action"] !== "confirm" && c["action"] !== "skip-all") return false;
+    if (typeof c["note"] !== "string") return false;
+    if (!Array.isArray(c["answers"])) return false;
+    for (const answer of c["answers"]) {
+      if (typeof answer !== "object" || answer === null) return false;
+      const a = answer as Record<string, unknown>;
+      if (typeof a["askId"] !== "string") return false;
+      if (a["verdict"] !== "yes" && a["verdict"] !== "no" && a["verdict"] !== "skip") return false;
+      if (a["edited"] !== undefined && typeof a["edited"] !== "string") return false;
+    }
+  }
+  return true;
+}
+
+
+/**
  * 日志与视图里的一条记录：往来消息（pi 的 TranscriptItem）、压缩界碑、通道标记
  * 或文件账三件（`revert.ts`：轮尾文件账 / 回退界碑 / 单轮撤销标记）。
  */
@@ -115,7 +221,8 @@ export type SessionRecord =
   | ChannelMarkRecord
   | FileTurnRecord
   | RevertRecord
-  | UndoRecord;
+  | UndoRecord
+  | IntentRecallRecord;
 
 /**
  * 渲染层的合并记录：SessionRecord 外加轮尾账的**视图形**（FileTurnView——剥掉快照
@@ -271,6 +378,12 @@ export interface SessionMeta {
   /** 首条用户消息的第一行；模型生成成功后替换为概括（titleSource = auto） */
   title: string;
   titleSource: TitleSource;
+  /**
+   * 意图召回的会话级开关（实验功能 intent-system，输入框旁的小开关）。
+   * 缺席 = 跟随设置里的新会话默认（settings.intent.newSessionOn）；
+   * 开着实验功能但某条会话关了召回时，回答照常 /ingest 攒历史。
+   */
+  intentEnabled?: boolean;
   /**
    * 这一单跑在哪儿。**创建时固定、不可改**——pi 的 session 在 `createAgentSession`
    * 时锁定 cwd，所以换目录只能换会话。
@@ -573,6 +686,11 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 母会话 id：非字符串 / 空串一律当根会话——一条指向乌有的 parentId 会让会话
     // 从左栏消失又无处可达，比多列一条根会话糟得多
     ...(parentId === null ? null : { parentId }),
+    // 意图召回的会话级开关（实验功能 intent-system）：缺席 = 跟随设置里的
+    // 新会话默认。只认布尔，坏值丢掉
+    ...(value["intentEnabled"] === true || value["intentEnabled"] === false
+      ? { intentEnabled: value["intentEnabled"] }
+      : {}),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
@@ -676,6 +794,14 @@ export function transcriptToMarkdown(
       parts.push("---");
       parts.push(
         `**[Reverted]** (${item.restored.length} file(s) restored · conversation below this point was rolled back and re-run)`,
+      );
+      continue;
+    }
+    // 意图召回卡（实验功能）：一行过程记录——召回服务过哪一句、结局如何；
+    // 注入块永不落盘（见 IntentRecallRecord），导出也不谈
+    if (item.role === "intent-recall") {
+      parts.push(
+        `**Intent recall · ${item.status}** (qa ${item.qaTotal ?? "?"}, selected ${item.selected.length})`,
       );
       continue;
     }

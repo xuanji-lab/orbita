@@ -52,16 +52,23 @@ export interface TextPoint {
  * 在一串文本节点里找引用原文的起止位置，**忽略空白差异**：划选出来的文本经过规整
  * （块元素之间的换行、缩进被收掉），和 DOM 里的原样对不上逐字匹配；按非空白字符
  * 比就稳了。找不到返回 null——调用方退回整块闪一下。
+ *
+ * skip：比对时跳过的单字符（缺省只跳空白）。确认卡的摘句高亮传更宽的集合，与
+ * intent-lab 定位摘句的口径一致（见 conv-window.ts 的 EXCERPT_SKIP）。
  */
-export function locateQuote(segments: readonly string[], quote: string): { start: TextPoint; end: TextPoint } | null {
-  const needle = quote.replace(/\s+/g, "");
+export function locateQuote(
+  segments: readonly string[],
+  quote: string,
+  skip: RegExp = /\s/,
+): { start: TextPoint; end: TextPoint } | null {
+  const needle = [...quote].filter((char) => !skip.test(char)).join("");
   if (needle === "") return null;
   const points: TextPoint[] = [];
   let hay = "";
   segments.forEach((segment, node) => {
     for (let offset = 0; offset < segment.length; offset += 1) {
       const char = segment[offset] as string;
-      if (/\s/.test(char)) continue;
+      if (skip.test(char)) continue;
       hay += char;
       points.push({ node, offset });
     }
