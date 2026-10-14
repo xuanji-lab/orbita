@@ -24,7 +24,9 @@ import {
 import type { AgentHost } from "../agent/host.ts";
 import type { CarryoverStore } from "./carryover-store.ts";
 import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo } from "./revert.ts";
+import type { RevertFileOutcome } from "../../shared/revert.ts";
 import { isWebPageFile } from "../../shared/files.ts";
+import type { SessionRecord } from "../../shared/session.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
 
@@ -37,6 +39,8 @@ export function registerSessionIpc(
   providers: ProviderStore,
   /** 轮尾产物在内置浏览器「你的」tab 打开（BrowserSandbox.openLocalFile） */
   openArtifactInBrowser: (path: string) => Promise<void>,
+  /** 会话回退成功后的意图系统作度钩子（实验功能 intent-system；undefined = 不启用） */
+  onReverted?: (sessionId: string, turnIds: readonly string[]) => Promise<void>,
 ): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
   ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.load(id));
@@ -102,6 +106,11 @@ export function registerSessionIpc(
     ipcChannels.sessionSetCompletion,
     (_event, id: string, completion: SessionCompletion) => store.setCompletion(id, completion),
   );
+  // 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效
+  ipcMain.handle(
+    ipcChannels.sessionSetIntentEnabled,
+    (_event, id: string, enabled: boolean) => store.setIntentEnabled(id, enabled),
+  );
   ipcMain.handle(ipcChannels.sessionUnread, (_event, id: string, unread: unknown) =>
     // 载荷在入口就洗：坏形状当已读（null）写回，不裸存进 meta
     store.setUnread(id, parseSessionUnread(unread)),
@@ -151,8 +160,36 @@ export function registerSessionIpc(
   ipcMain.handle(ipcChannels.sessionRevertPlan, (_event, id: string, targetMessageId: string) =>
     planRevert(store, id, targetMessageId),
   );
-  ipcMain.handle(ipcChannels.sessionRevert, (_event, id: string, targetMessageId: string) =>
-    executeRevert({ store, host: agentHost }, id, targetMessageId),
+  ipcMain.handle(
+    ipcChannels.sessionRevert,
+    async (_event, id: string, targetMessageId: string): Promise<RevertFileOutcome[]> => {
+      // 被回退轮次的 user 记录 id（intent-lab /invalidate 要作度的 turnId 就是它们）。
+      // 回退前先取——executeRevert 落 RevertRecord 后 readLog 就是折叠后的新世界
+      let invalidatedTurnIds: string[] = [];
+      try {
+        const detail = await store.load(id);
+        if (detail !== null) {
+          const index = detail.transcript.findIndex(
+            (record) => record.id === targetMessageId && record.role === "user",
+          );
+          if (index >= 0) {
+            invalidatedTurnIds = detail.transcript
+              .slice(index)
+              .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
+              .map((record) => record.id);
+          }
+        }
+      } catch {
+        invalidatedTurnIds = [];
+      }
+      const outcomes = await executeRevert({ store, host: agentHost }, id, targetMessageId);
+      // 意图系统（实验）：被回退轮次的 QA 送 intent-lab 作度（fire-and-forget，
+      // 绝不动回退本身；开关关 / 连不上都只记日志）。回调由 index.ts 注入
+      if (onReverted !== undefined && invalidatedTurnIds.length > 0) {
+        void onReverted(id, invalidatedTurnIds);
+      }
+      return outcomes;
+    },
   );
   ipcMain.handle(ipcChannels.sessionUndoPlan, (_event, id: string, turnId: string) =>
     planUndo(store, id, turnId),

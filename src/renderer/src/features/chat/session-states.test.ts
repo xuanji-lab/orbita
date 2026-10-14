@@ -5,7 +5,7 @@ import type { FileTurnRecord, RevertRecord } from "@shared/revert";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
-import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
+import type { ChannelMarkRecord, CompactedRecord, IntentRecallRecord, SessionRecord } from "@shared/session";
 import {
   EMPTY_ENTRY,
   dequeue,
@@ -17,7 +17,9 @@ import {
   mergeSideRecords,
   moveQueued,
   parseCompactCommand,
+  createSessionStates,
   removeApproval,
+  setPendingEcho,
   nextDeliverable,
   removeSessionEntry,
   revertOptimisticTurn,
@@ -925,5 +927,94 @@ describe("seedFromDisk 播种用量", () => {
       stats: stats({ cost: 0.5 }),
     });
     assert.equal(states.get("A")?.stats?.cost, 0.5);
+  });
+});
+
+describe("意图系统的槽位（实验功能 intent-system）", () => {
+  test("intentRecall 流事件归约运行卡；终态记录落桶并收摊运行卡（同 turn 只留最后一张）", () => {
+    let states = createSessionStates();
+    states = applyAgentEvent(states, {
+      type: "intentRecall",
+      sessionId: "s1",
+      turnId: "t1",
+      event: { type: "gate", needIntent: true, why: "需要", forced: false },
+    });
+    assert.deepEqual(states.get("s1")?.intentRun?.turnId, "t1");
+    assert.deepEqual(states.get("s1")?.intentRun?.gate?.needIntent, true);
+    const record: IntentRecallRecord = {
+      role: "intent-recall",
+      id: "c1",
+      turnId: "t1",
+      status: "done",
+      runId: "r1",
+      timestamp: 1,
+      startedAt: 1,
+      finishedAt: 2,
+      scene: null,
+      qaTotal: null,
+      passed: null,
+      budgetMs: null,
+      peak: false,
+      timings: null,
+      summary: null,
+      selected: [],
+      ask: [],
+      error: null,
+      halted: null,
+      skipped: null,
+      gateWhy: null,
+    };
+    states = applyAgentEvent(states, { type: "intentRecallRecord", sessionId: "s1", record });
+    assert.deepEqual(states.get("s1")?.intentRun, null);
+    assert.deepEqual(states.get("s1")?.intentRecalls.length, 1);
+  });
+
+  test("乐观回显：真回显（item_started user）一到即清；phase idle 与失败归位也清", () => {
+    let states = setPendingEcho(createSessionStates(), "s1", ["第一句"]);
+    assert.deepEqual(states.get("s1")?.pendingEcho?.blocks, ["第一句"]);
+    // 同拍置 turn 后真回显到达 → 清
+    states = applyAgentEvent(states, {
+      type: "progress",
+      sessionId: "s1",
+      progress: {
+        type: "item_started",
+        item: { role: "user", id: "u1", content: [{ type: "text", text: "第一句" }], timestamp: 1 },
+      },
+    });
+    assert.deepEqual(states.get("s1")?.pendingEcho, null);
+    // 提交失败归位（乐观置 turn 后 setEntryPhase idle）也清——不留鬼影
+    states = setPendingEcho(states, "s1", ["第二句"]);
+    states = setEntryPhase(states, "s1", "idle");
+    assert.deepEqual(states.get("s1")?.pendingEcho, null);
+  });
+
+  test("意图卡混排：同毫秒时排在它服务的 user 之后（界碑在前的老规则对它相反）", () => {
+    const user = { role: "user" as const, id: "u1", content: [{ type: "text" as const, text: "问" }], timestamp: 100 };
+    const recall: IntentRecallRecord = {
+      role: "intent-recall",
+      id: "c1",
+      turnId: "u1",
+      status: "done",
+      runId: "r1",
+      timestamp: 100,
+      startedAt: 100,
+      finishedAt: 101,
+      scene: null,
+      qaTotal: null,
+      passed: null,
+      budgetMs: null,
+      peak: false,
+      timings: null,
+      summary: null,
+      selected: [],
+      ask: [],
+      error: null,
+      halted: null,
+      skipped: null,
+      gateWhy: null,
+    };
+    // 故意倒序传入（卡在前、气泡在后）：混排必须把卡排到气泡之后
+    const merged = mergeSideRecords([], [], [], [], [], [user], [recall]);
+    assert.deepEqual(merged.map((record) => record.role), ["user", "intent-recall"]);
   });
 });

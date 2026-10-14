@@ -19,7 +19,17 @@ import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ComposerFileRef } from "../../shell/composer-attachments.ts";
-import type { ChannelMarkRecord, CompactedRecord, SessionRecord } from "@shared/session";
+import type {
+  ChannelMarkRecord,
+  CompactedRecord,
+  IntentRecallRecord,
+  SessionRecord,
+} from "@shared/session";
+import {
+  applyRecallEvent,
+  initialRecallCard,
+  type RecallCardState,
+} from "../../../../shared/intent-recall.ts";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { TranscriptRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
@@ -140,6 +150,20 @@ export interface SessionEntry {
   reverts: readonly RevertRecord[];
   /** 撤销记录（同上，盘上种子）：不渲染单元，轮尾卡据此挂「已撤销」徽标 */
   undos: readonly UndoRecord[];
+  /* ---------- 意图系统（实验功能 intent-system）：三个槽 ---------- */
+  /** 运行中的召回卡（intentRecall 流事件归约而来；终态记录到达后清空）。ephemeral */
+  intentRun: RecallCardState | null;
+  /** 终态召回卡：intentRecallRecord 实时事件 + 盘上种子 */
+  intentRecalls: readonly IntentRecallRecord[];
+  /** 挂起的回答前确认（intentAsk 事件；应答 / 取消后清空）。ephemeral */
+  intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
+  /**
+   * 乐观回显（发出即画的用户气泡）：agent 进程冷启 / 开轮装配要几秒，真回显
+   * （runtime 的 progress item_started）之前聊天面会有一段只有「回应中」的空窗。
+   * 这里存**与 runtime 同款切法**的正文块（splitEchoBlocks），真回显一到即清。
+   * ephemeral。
+   */
+  pendingEcho: { blocks: readonly string[] } | null;
 }
 
 /** 全部会话的槽。**不可变**：每个事件产出新 Map，没变的槽保持同一引用。 */
@@ -165,6 +189,10 @@ export const EMPTY_ENTRY: SessionEntry = {
   fileTurns: [],
   reverts: [],
   undos: [],
+  intentRun: null,
+  intentRecalls: [],
+  intentAsk: null,
+  pendingEcho: null,
 };
 
 /**
@@ -177,6 +205,10 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       transcript: applyTranscriptProgress(entry.transcript, event.progress),
+      // 真回显到了：乐观气泡在这一帧换成转录里的正式条目（同款分块，无缝）
+      ...(event.progress.type === "item_started" && event.progress.item.role === "user"
+        ? { pendingEcho: null }
+        : {}),
     }));
   }
   if (event.type === "phase") {
@@ -194,7 +226,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       ...(event.phase === "idle" ? null : { turnError: null }),
       // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
       // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
-      ...(event.phase === "idle" ? { approvals: [] } : null),
+      // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
+      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null } : null),
     }));
   }
   if (event.type === "retry") {
@@ -247,6 +280,30 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       ],
     }));
   }
+  // 意图系统（实验功能）：流事件归约运行卡、终态记录落桶并收摊运行卡、确认请示挂起
+  if (event.type === "intentRecall") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      intentRun:
+        entry.intentRun === null || entry.intentRun.turnId !== event.turnId || entry.intentRun.status !== "running"
+          ? applyRecallEvent(initialRecallCard(event.turnId, Date.now()), event.event)
+          : applyRecallEvent(entry.intentRun, event.event),
+    }));
+  }
+  if (event.type === "intentRecallRecord") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      intentRun: null,
+      // 同一 turn 重跑只留最后一张（盘上也是这个语义：新记录追加，渲染按 turnId 去尾）
+      intentRecalls: [
+        ...entry.intentRecalls.filter((record) => record.turnId !== event.record.turnId),
+        event.record,
+      ],
+    }));
+  }
+  if (event.type === "intentAsk") {
+    return update(states, event.sessionId, (entry) => ({ ...entry, intentAsk: event }));
+  }
   if (event.type === "failed") {
     // runtime 整个没了：所有槽归位；单条失败只归位那条（不存在的槽不凭空造）
     if (event.sessionId === null) return markAllIdle(states);
@@ -279,7 +336,7 @@ export function setEntryPhase(
     ...entry,
     phase,
     retry: null,
-    ...(phase === "idle" ? null : { turnError: null }),
+    ...(phase === "idle" ? { pendingEcho: null } : { turnError: null }),
   }));
 }
 
@@ -339,6 +396,7 @@ export function seedFromDisk(
   const fileTurns: FileTurnView[] = [];
   const reverts: RevertRecord[] = [];
   const undos: UndoRecord[] = [];
+  const intentRecalls: IntentRecallRecord[] = [];
   for (const record of transcript) {
     if (record.role === "file-turn") {
       fileTurns.push({
@@ -360,6 +418,8 @@ export function seedFromDisk(
       reverts.push(record);
     } else if (record.role === "undo") {
       undos.push(record);
+    } else if (record.role === "intent-recall") {
+      intentRecalls.push(record);
     }
   }
   const next = new Map(states);
@@ -385,8 +445,20 @@ export function seedFromDisk(
     fileTurns,
     reverts,
     undos,
+    // 同一 turn 重跑只留最后一张（重读盘后与实时事件的去重口径一致）
+    intentRecalls: dedupeRecalls(intentRecalls),
+    intentRun: null,
+    intentAsk: null,
+    pendingEcho: null,
   });
   return next;
+}
+
+/** 同一 turnId 只留最后一张（重跑 recall 会追加新记录）。 */
+function dedupeRecalls(records: readonly IntentRecallRecord[]): IntentRecallRecord[] {
+  const lastOf = new Map<string, IntentRecallRecord>();
+  for (const record of records) lastOf.set(record.turnId, record);
+  return records.filter((record) => lastOf.get(record.turnId) === record);
 }
 
 /**
@@ -406,25 +478,39 @@ export function mergeSideRecords(
   reverts: readonly RevertRecord[],
   undos: readonly UndoRecord[],
   transcript: readonly TranscriptItem[],
+  intentRecalls: readonly IntentRecallRecord[] = [],
 ): TranscriptRecord[] {
   if (
     compactions.length === 0 &&
     marks.length === 0 &&
     fileTurns.length === 0 &&
     reverts.length === 0 &&
-    undos.length === 0
+    undos.length === 0 &&
+    intentRecalls.length === 0
   ) {
     return [...transcript];
   }
-  const records: TranscriptRecord[] = [...transcript, ...compactions, ...marks, ...fileTurns, ...reverts, ...undos];
-  // 同毫秒时非 transcript 的一侧记录（界碑 / 通道标记 / 轮尾账 / 回退界碑）排在前
-  // ——界碑在前的老规则原样保留：混排靠落盘时间戳定序，非 transcript 的一侧优先
-  // 出现在同刻的前面（轮尾账的时戳晚于本轮末条消息，不受这条影响）。
-  const isSideRecord = (record: TranscriptRecord): boolean =>
-    record.role !== "user" && record.role !== "assistant" && record.role !== "tool";
-  records.sort(
-    (a, b) => a.timestamp - b.timestamp || Number(isSideRecord(b)) - Number(isSideRecord(a)),
-  );
+  const records: TranscriptRecord[] = [
+    ...transcript,
+    ...compactions,
+    ...marks,
+    ...fileTurns,
+    ...reverts,
+    ...undos,
+    ...intentRecalls,
+  ];
+  // 同毫秒排序（混排靠落盘时间戳定序，同刻时给确定序）：
+  // - 界碑 / 通道标记 / 轮尾账 / 回退界碑（side 记录）排在前——界碑要落到
+  //   「刚发那句」之前的老规则；
+  // - 意图召回卡是唯一的例外：它服务的那条 user 回显与它几乎必然同毫秒
+  //   （回显循环后立刻进闸门），按老规则会排到气泡**上方**（2026-10-13 真机），
+  //   给它单独一档排在同刻的最后——正好落在它服务的气泡之后、回答之前。
+  const sameMsRank = (record: TranscriptRecord): number => {
+    if (record.role === "intent-recall") return 2;
+    if (record.role === "user" || record.role === "assistant" || record.role === "tool") return 1;
+    return 0; // 界碑 / 通道标记 / 轮尾账 / 回退界碑：老规则，同刻在前
+  };
+  records.sort((a, b) => a.timestamp - b.timestamp || sameMsRank(a) - sameMsRank(b));
   return records;
 }
 
@@ -453,6 +539,22 @@ export function compactionBoundaryStatus(record: CompactedRecord, t: Messages): 
     return next;
   }
   return states;
+}
+
+/** 按 requestId 跨槽摘掉挂起的意图确认请示。没有匹配就原样返回（同一引用）。 */
+export function removeIntentAsk(states: SessionStates, requestId: string): SessionStates {
+  for (const [sessionId, entry] of states) {
+    if (entry.intentAsk?.requestId !== requestId) continue;
+    const next = new Map(states);
+    next.set(sessionId, { ...entry, intentAsk: null });
+    return next;
+  }
+  return states;
+}
+
+/** 发出即画：记下乐观回显的正文块（与 runtime 的回显同款切法）。 */
+export function setPendingEcho(states: SessionStates, sessionId: string, blocks: readonly string[]): SessionStates {
+  return update(states, sessionId, (entry) => ({ ...entry, pendingEcho: { blocks } }));
 }
 
 /** runtime 没了：所有还在忙的槽（turn / 压缩中 / 重试等待中）一并归位。全是 idle 时返回原引用。 */
