@@ -60,7 +60,7 @@ export function SessionCard(props: {
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
                 fontWeight: "var(--weight-strong)",
-                fontSize: "var(--font-size-control)",
+                fontSize: "var(--font-size-base)",
                 color: "var(--color-text-primary)",
               }}
             >
@@ -109,8 +109,8 @@ export function SessionCard(props: {
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
-                        fontSize: "var(--font-size-caption)",
-                        lineHeight: "var(--line-height-caption)",
+                        fontSize: "var(--font-size-sm)",
+                        lineHeight: "var(--line-height-ui)",
                         color: "var(--color-text-secondary)",
                       }}
                     >

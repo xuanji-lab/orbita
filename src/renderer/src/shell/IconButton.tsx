@@ -106,8 +106,8 @@ export function IconButton(props: {
               boxShadow: "var(--shadow-popover)",
               color: "var(--color-text-primary)",
               fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-caption)",
-              lineHeight: "var(--line-height-caption)",
+              fontSize: "var(--font-size-sm)",
+              lineHeight: "var(--line-height-ui)",
               pointerEvents: "none",
               // 浮层顶格：高于 Menu 的 portal（40）与 SkillsPanel 的命令条（30）
               zIndex: 70,

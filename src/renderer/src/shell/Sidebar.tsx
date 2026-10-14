@@ -415,7 +415,7 @@ export function Sidebar(props: {
           alignItems: "center",
           height: 34,
           fontFamily: "var(--font-family-brand)",
-          fontSize: 22,
+          fontSize: "var(--font-size-wordmark)",
           fontWeight: 500,
           lineHeight: 1,
           letterSpacing: "0.01em",
@@ -460,7 +460,7 @@ export function Sidebar(props: {
           background: "var(--color-accent)",
           color: "var(--color-accent-fg)",
           fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-control)",
+          fontSize: "var(--font-size-base)",
           fontWeight: "var(--weight-medium)",
           cursor: "pointer",
           transition: "var(--transition-hover)",
@@ -915,7 +915,7 @@ function WorkspaceGroup(props: {
             onDoubleClick={() => setEditing(props.workspace.name)}
             style={{
               minWidth: 0,
-              fontSize: "var(--font-size-control)",
+              fontSize: "var(--font-size-base)",
               fontWeight: "var(--weight-semibold)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -947,7 +947,7 @@ function WorkspaceGroup(props: {
               background: "var(--color-bg-panel)",
               color: "var(--color-text-primary)",
               fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-control)",
+              fontSize: "var(--font-size-base)",
               fontWeight: "var(--weight-semibold)",
               outline: "none",
               boxShadow: "var(--focus-ring)",
@@ -1004,7 +1004,7 @@ function WorkspaceGroup(props: {
   );
 }
 
-/** 分组标题：机器面的小字用 business/mono，字号 micro，大写加字距 */
+/** 分组标题：UI 字、sm、semibold、secondary，句首大写照原文（设计系统 *Group labels*） */
 function NodeLabel(props: { children: React.ReactNode }) {
   return (
     <span
@@ -1012,11 +1012,9 @@ function NodeLabel(props: { children: React.ReactNode }) {
         display: "inline-flex",
         alignItems: "center",
         minHeight: 28,
-        fontFamily: "var(--font-family-business)",
-        fontSize: "var(--font-size-micro)",
-        letterSpacing: "0.06em",
-        textTransform: "uppercase",
-        fontWeight: "var(--weight-bold)",
+        fontFamily: "var(--font-family-base)",
+        fontSize: "var(--font-size-sm)",
+        fontWeight: "var(--weight-semibold)",
         color: "var(--color-text-secondary)",
       }}
     >
@@ -1221,7 +1219,7 @@ function NavRow(props: {
         border: 0,
         borderRadius: "var(--radius-sm)",
         fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         textAlign: "left",
         cursor: disabled ? "not-allowed" : clickable ? "pointer" : "default",
         ...props.style,
@@ -1509,7 +1507,7 @@ function SessionRow(props: {
               session.renameSession(meta.id, value);
             }}
             onCancel={() => setEditing(false)}
-            style={{ height: 22, fontSize: "var(--font-size-control)" }}
+            style={{ height: 22, fontSize: "var(--font-size-base)" }}
           >
             {null}
           </InlineName>
@@ -1607,7 +1605,7 @@ function SessionRow(props: {
             flex: "0 0 auto",
             marginInlineStart: -2,
             fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-micro)",
+            fontSize: "var(--font-size-xs)",
             fontWeight: "var(--weight-semibold)",
             lineHeight: 1,
             color: "var(--color-text-secondary)",
@@ -1731,7 +1729,7 @@ function CarryoverPanel(props: {
               textAlign: "left",
               cursor: group.session === null ? "default" : "pointer",
               fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-control)",
+              fontSize: "var(--font-size-base)",
               fontWeight: "var(--weight-semibold)",
               color:
                 group.session === null
@@ -1813,7 +1811,7 @@ function CarryoverRow(props: {
         <span
           style={{
             display: "block",
-            fontSize: "var(--font-size-control)",
+            fontSize: "var(--font-size-base)",
             color: done ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
             textDecoration: done ? "line-through" : "none",
             whiteSpace: "nowrap",
@@ -1828,8 +1826,8 @@ function CarryoverRow(props: {
             title={item.detail}
             style={{
               display: "block",
-              fontSize: "var(--font-size-micro)",
-              lineHeight: "var(--line-height-caption)",
+              fontSize: "var(--font-size-xs)",
+              lineHeight: "var(--line-height-ui)",
               color: "var(--color-text-tertiary)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -1893,8 +1891,8 @@ function Empty(props: { children: React.ReactNode }) {
       style={{
         margin: "var(--space-2) 0",
         padding: "0 var(--space-1)",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: "var(--line-height-caption)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-ui)",
         color: "var(--color-text-secondary)",
       }}
     >
@@ -1918,8 +1916,8 @@ function ListError(props: { message: string; onRetry: () => void }) {
         alignItems: "baseline",
         gap: 6,
         flexWrap: "wrap",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: "var(--line-height-caption)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-ui)",
         color: "var(--color-text-secondary)",
       }}
     >
@@ -1938,7 +1936,7 @@ function ListError(props: { message: string; onRetry: () => void }) {
           background: "transparent",
           padding: 0,
           fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-caption)",
+          fontSize: "var(--font-size-sm)",
           color: "var(--color-text-primary)",
           textDecoration: "underline",
           cursor: "pointer",
@@ -2023,7 +2021,7 @@ function ModeChip(props: {
         border: 0,
         borderRadius: "var(--radius-md)",
         fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         fontWeight: "var(--weight-medium)",
         whiteSpace: "nowrap",
       }}

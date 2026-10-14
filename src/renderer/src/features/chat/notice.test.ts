@@ -33,7 +33,7 @@ test("提示行本体：minWidth 0 + maxWidth 100%，flex 子项能被压到可�
 
 test("图标盒：高度只由行高 token 构成，无像素常量", () => {
   const style = noticeIconBoxStyle;
-  assert.equal(style.height, "var(--line-height-body)");
+  assert.equal(style.height, "var(--line-height-ui)");
   for (const value of Object.values(style)) {
     assert.equal(/\d+px/.test(String(value)), false, `不许像素常量：${String(value)}`);
   }
