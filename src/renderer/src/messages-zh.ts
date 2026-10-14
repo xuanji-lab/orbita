@@ -402,6 +402,7 @@ export const zh: Messages = {
       migration: "迁移",
       browser: "浏览器",
       voice: "语音",
+      memory: "记忆",
       experimental: "实验功能",
     },
     appearance: "外观",
@@ -501,6 +502,14 @@ export const zh: Messages = {
       failed: "导入未能完成",
       expired: "所选内容已过期，请重新读取",
     },
+    // ── 记忆管理面（与英文表同一段）──
+    memoryEmpty: "会话中蒸馏出的记忆会出现在这里 · 之后的对话会召回它们 · 删除后无法恢复",
+    memoryCount: (count) => `${count} 条记忆`,
+    memoryKeywords: "关键词",
+    memoryRemove: "删除这条记忆",
+    memoryRemoveConfirm: "确认删除",
+    memoryRemoveTip: "再点一次删除这条记忆 · 删除后无法恢复",
+    memoryRemoveFailed: "未能删除这条记忆",
   },
 
   themes: {

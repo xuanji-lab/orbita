@@ -438,6 +438,7 @@ export const en = {
       migration: "Migration",
       browser: "Browser",
       voice: "Voice",
+      memory: "Memory",
       experimental: "Experimental",
     },
     appearance: "Appearance",
@@ -546,6 +547,15 @@ export const en = {
       failed: "Could not complete the import",
       expired: "The selection expired · read again",
     },
+    // ── 记忆管理面（设置 › 记忆）：按工作区列蒸馏条目、删一条 ──
+    memoryEmpty:
+      "Memories distilled from your sessions appear here · later turns recall them · deleting one cannot be undone",
+    memoryCount: (count: number) => (count === 1 ? "1 memory" : `${count} memories`),
+    memoryKeywords: "Keywords",
+    memoryRemove: "Delete this memory",
+    memoryRemoveConfirm: "Confirm delete",
+    memoryRemoveTip: "Click again to delete this memory · this cannot be undone",
+    memoryRemoveFailed: "Could not delete that memory",
   },
 
   themes: {

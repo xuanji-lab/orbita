@@ -22,6 +22,7 @@ import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
 import { InfoTip } from "./InfoTip";
+import { MemorySettings } from "./MemorySettings";
 import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
@@ -56,6 +57,7 @@ export const SETTINGS_TABS = [
   { id: "migration", icon: "download" },
   { id: "browser", icon: "globe" },
   { id: "voice", icon: "mic" },
+  { id: "memory", icon: "brain-circuit" },
   { id: "experimental", icon: "flask-conical" },
 ] as const satisfies readonly { id: string; icon: IconName }[];
 
@@ -148,6 +150,11 @@ export function SettingsView(props: {
       ) : props.tab === "voice" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
+        </div>
+      ) : props.tab === "memory" ? (
+        // 记忆管理面：按工作区列蒸馏条目、删一条（信任边界，用户要能审查）
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <MemorySettings />
         </div>
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
