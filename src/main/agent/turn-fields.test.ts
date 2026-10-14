@@ -30,6 +30,7 @@ const environment = {
   gitAttribution: true,
   attributionLanguage: "en" as const,
   pdfCitations: false,
+  computerUse: false,
 };
 
 describe("turnFields", () => {

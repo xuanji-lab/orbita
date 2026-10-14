@@ -1289,6 +1289,13 @@ export function branchAnchorEntries(
 }
 
 
+/** 数字入参：模型偶尔把数字写成字符串（"120"），工具层认，摘要同样认 */
+function numOf(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  return undefined;
+}
+
 /**
  * 折叠行上工具名右边的参数摘要：`bash · git status`、`edit · src/app.ts`。
  * 字段名按 pi 工具 schema 的真名（bash→command，路径类→path，搜索类→pattern）；
@@ -1301,6 +1308,12 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
   const str = (key: string): string | null => {
     const value = record[key];
     return typeof value === "string" && value !== "" ? value : null;
+  };
+  /** x / y 都在且可读才给坐标（半个坐标没有意义，与工具层的纪律一致） */
+  const pointArg = (record: Record<string, unknown>): string | null => {
+    const x = numOf(record["x"]);
+    const y = numOf(record["y"]);
+    return x !== undefined && y !== undefined ? `${x}, ${y}` : null;
   };
   switch (toolName) {
     case "bash":
@@ -1355,6 +1368,25 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     // 交接：摘要就是 agent 说的原因（交接卡的标题）
     case "request_user_action":
       return str("reason");
+    // 电脑使用（agent/computer-tools.ts）：坐标是模型给的截图像素（工具层下发前才换算成
+    // 物理像素），对用户它就是「点了图的哪里」；数字也可能被模型写成字符串，工具层认，这里也认
+    case "computer_click": {
+      const point = pointArg(record);
+      return point === null ? null : point;
+    }
+    case "computer_scroll": {
+      // 缺省落点 = 屏幕正中，没有值得摘的；给了坐标才说
+      return pointArg(record);
+    }
+    case "computer_type": {
+      const text = str("text");
+      if (text === null) return null;
+      // 打字内容可能成段：摘要只取压平后的头部（全文在展开的入参里），照 mcpInputSummary 的尺度
+      const flat = text.replace(/\s+/g, " ").trim();
+      return flat.length > 40 ? `${flat.slice(0, 40)}…` : flat;
+    }
+    case "computer_key":
+      return str("key");
     default:
       return null;
   }

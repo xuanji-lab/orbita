@@ -24,6 +24,9 @@ import {
   COMPUTER_USE_CMD_DIR,
   COMPUTER_USE_GUEST_BRIDGE_DIR,
   COMPUTER_USE_GUEST_OUT_DIR,
+  computerUseGuestCommands,
+  GUEST_COMMAND_TIMEOUT_MS,
+  type ComputerUseGuestCommand,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
@@ -33,7 +36,12 @@ import {
 } from "../../shared/computer-use.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
 import { probe as probeCapability } from "./capability.ts";
-import { fetchGuestScreenshot, pingGuest, GUEST_COMMAND_TIMEOUT_MS } from "./bridge-client.ts";
+import {
+  fetchGuestScreenshot,
+  pingGuest,
+  resetGuestCommandSeq,
+  sendGuestCommand,
+} from "./bridge-client.ts";
 import { waitForBridgeInfo, type BridgeInfo } from "./bridge-ready.ts";
 
 /** guest 桥 exe 的文件名（guest-bridge 子代理的产物，宿主只按这个名字找） */
@@ -159,6 +167,13 @@ export interface SandboxProcess {
   readonly exitCode?: number | null;
 }
 
+/**
+ * guest 命令下发的回执（controller 内部形状）。只有成/败：输入类命令的语义就是
+ * 「事件已送出」，屏幕变成什么样要看下一张截图。**不进 shared/**：它不过进程边界，
+ * 跨边界的那份是 shared/computer-use.ts 的 ComputerUseToolOutcome。
+ */
+export type GuestCommandResult = { ok: true } | { ok: false; error: string };
+
 export interface SandboxDeps {
   /** userData/computer-use：session.wsb 与 out/（读写映射的宿主侧）都落这里 */
   computerUseDir: string;
@@ -176,7 +191,7 @@ export interface SandboxDeps {
   readyTimeoutMs?: number;
   /** bridge.json 轮询间隔，默认 500ms；测试传小值 */
   bridgePollIntervalMs?: number;
-  /** 截图超时，默认 15_000 */
+  /** 截图 / 命令超时，默认 45_000（黑窗余量，见 bridge-client.ts 的 GUEST_COMMAND_TIMEOUT_MS） */
   guestTimeoutMs?: number;
   /** 状态机每次迁移的出口（index.ts 接 broadcastComputerUseStatus） */
   onStatus?: (status: SandboxStatus) => void;
@@ -287,9 +302,12 @@ export class SandboxController {
     try {
       // .wsb 原子落盘（临时文件 + rename 的仓规同样管它）；读写映射的 out 目录顺手建好
       await mkdir(outputDir, { recursive: true });
-      // 上一局残留的通告与命令文件必须先清掉，不然轮询会捡到上一局沙箱的死人文件
+      // 上一局残留的通告与命令文件必须先清掉，不然轮询会捡到上一局沙箱的死人文件；
+      // 序号一并归零：guest 桥的快路径直探 cmd-000001.req.json，宿主接着上局的数字往下走
+      // 会让它一直落空，只能等 4 秒一次的全量枚举（bridge-client.ts 的 resetGuestCommandSeq）
       await rm(join(outputDir, BRIDGE_INFO_FILE), { force: true });
       await rm(join(outputDir, COMPUTER_USE_CMD_DIR), { recursive: true, force: true });
+      resetGuestCommandSeq();
       const wsbPath = join(this.deps.computerUseDir, WSB_FILE_NAME);
       await writeTextAtomic(
         wsbPath,
@@ -374,22 +392,48 @@ export class SandboxController {
 
   /** 手动「看一眼」：向 guest 桥要一张沙箱桌面截图（文件协议）。只在 running 可用。 */
   async screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult> {
-    if (this.state !== "running" || this.bridge === null) {
-      return { ok: false, error: "沙箱没有在运行，先启动沙箱再截图" };
-    }
+    const gate = this.notRunning("截图");
+    if (gate !== null) return gate;
     try {
       const shot = await fetchGuestScreenshot(
-        join(this.deps.computerUseDir, "out"),
+        this.outDir(),
         clampMaxWidth(maxWidth),
         this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
       );
       return {
         ok: true,
         jpegBase64: Buffer.from(shot.jpeg).toString("base64"),
+        width: shot.width,
+        height: shot.height,
         nativeWidth: shot.nativeWidth,
         nativeHeight: shot.nativeHeight,
         takenAt: Date.now(),
       };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * agent 工具的通用命令下发（PR2 的 click / type / key / scroll 走它）。
+   * 闸门与 screenshot 同一处：只有 running 才发得出去——没在跑时命令会石沉大海（上一局的
+   * out/cmd 已被清空），等 45 秒超时再报错对模型毫无信息量。
+   * 回执只有成/败：这些命令的语义就是「事件已送出」，屏幕变成什么样要看下一张截图。
+   */
+  async guestCommand(
+    command: ComputerUseGuestCommand,
+    fields: Record<string, unknown>,
+  ): Promise<GuestCommandResult> {
+    const gate = this.notRunning("沙箱操作");
+    if (gate !== null) return gate;
+    try {
+      await sendGuestCommand(
+        this.outDir(),
+        command,
+        fields,
+        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+      );
+      return { ok: true };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
@@ -413,6 +457,24 @@ export class SandboxController {
   }
 
   // ── 内部 ──
+
+  /** 读写映射的宿主侧输出目录（桥的 bridge.json 与 cmd/ 都在它下面） */
+  private outDir(): string {
+    return join(this.deps.computerUseDir, "out");
+  }
+
+  /**
+   * 「沙箱没在跑」的闸门。两个调用方（renderer 的「看一眼」与 agent 的工具）拿的是
+   * 同一句话，所以这句里必须带**下一步怎么办**：agent 自己启不了沙箱，它只能把这句
+   * 转告用户；只回一句「沙箱没运行」它大概率会重试。
+   */
+  private notRunning(what: string): { ok: false; error: string } | null {
+    if (this.state === "running" && this.bridge !== null) return null;
+    return {
+      ok: false,
+      error: `沙箱没有在运行（当前状态：${this.state}），${what}不可用——先在「设置 › 实验功能 › 电脑使用」里启动沙箱`,
+    };
+  }
 
   /**
    * ping 握手包装：把「取消」与「真超时」分开——取消 resolve false（start 走取消结算），

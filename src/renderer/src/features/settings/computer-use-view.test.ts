@@ -31,6 +31,8 @@ function screenshotResult(overrides: Partial<Extract<ComputerUseScreenshotResult
   return {
     ok: true,
     jpegBase64: "amVwZw==",
+    width: 1120,
+    height: 700,
     nativeWidth: 2240,
     nativeHeight: 1400,
     takenAt: 1_760_000_000_000,

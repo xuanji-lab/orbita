@@ -76,6 +76,7 @@ import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
+import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import {
   applyRecallEvent,
@@ -909,6 +910,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   // 终端工具组（PR2）：不列的话模型不知道 manual 档下每次开终端 / 写命令
                   // 都会停下来等它批准，plan 档下更是直接被拒
                   ...TERMINAL_TOOL_NAMES,
+                  // computer use 工具组：同样不列的话模型不知道 manual 档下每次点击都
+                  // 会停下来等批准、plan 档下更是直接被拒。**开关关着时不列**：那时它们
+                  // 根本没注册，说给模型听就是一句假话
+                  ...(command.computerUse === true ? COMPUTER_USE_TOOL_NAMES : []),
                   // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
                   ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
                 ]),
@@ -1135,6 +1140,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
+    // computer use（PR2）：Windows 沙箱桌面上的像素工具组（截图 / 点击 / 打字 / 按键 /
+    // 滚动）。**挂在实验功能「电脑使用」开关后面**（缺席 = 关）：关着时工具根本不注册，
+    // 模型连它们的名字都看不到——比“执行时再拒绝”诚实（同 cite_pdf 的纪律）。
+    // 沙箱本身由用户在设置页启停，工具只经 computerUseRequest 下发。
+    ...(command.computerUse === true ? createComputerUseTools(requestBroker, command.sessionId) : []),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
     // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是
@@ -1916,6 +1926,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "terminalResult") {
     // 终端工具的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 主进程那边任何路径都回执（agent-requests.ts），这里不做二次加工
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "computerUseResult") {
+    // computer use 工具的回执：同 terminalResult，形状即契约（ok 双分支，截图多一个 shot）
     requestBroker.resolve(command.requestId, command);
     return;
   }
