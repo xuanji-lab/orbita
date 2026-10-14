@@ -808,6 +808,8 @@ export function App() {
                 panelInsert={panelInsert}
                 intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
                 onOpenIntentPanel={openIntentPanel}
+                onOpenSideChat={openInSideChat}
+                intentOpenableIds={intentOpenableIds}
               />
             )}
           </div>

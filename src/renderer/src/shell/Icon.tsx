@@ -59,6 +59,7 @@ import gitFork from "../../../../design-system/assets/icons/lucide/git-fork.svg?
 import gitPullRequest from "../../../../design-system/assets/icons/lucide/git-pull-request.svg?raw";
 import globe from "../../../../design-system/assets/icons/lucide/globe.svg?raw";
 import hardDrive from "../../../../design-system/assets/icons/lucide/hard-drive.svg?raw";
+import history from "../../../../design-system/assets/icons/lucide/history.svg?raw";
 import fileDiff from "../../../../design-system/assets/icons/lucide/file-diff.svg?raw";
 import grid3x3 from "../../../../design-system/assets/icons/lucide/grid-3x3.svg?raw";
 import gripVertical from "../../../../design-system/assets/icons/lucide/grip-vertical.svg?raw";
@@ -183,6 +184,7 @@ const ICONS = {
   "git-pull-request": gitPullRequest,
   globe,
   "hard-drive": hardDrive,
+  history,
   "file-diff": fileDiff,
   "grid-3x3": grid3x3,
   "grip-vertical": gripVertical,

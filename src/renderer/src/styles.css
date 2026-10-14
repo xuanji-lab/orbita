@@ -4068,6 +4068,310 @@ button.panel-group-toggle:hover {
   height: 22px;
 }
 
+/* —— 回答前确认卡（2026-10-14 逐条版，confirm-card-v2.html 方案 2）：一次一条、
+   大字陈述 + 完整上下文（连接 / 拿不准 / 当时那段对话），键盘 Y / N / ← → / E。 —— */
+.intent-confirm {
+  display: grid;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+.intent-confirm-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.intent-confirm-title {
+  font-weight: var(--weight-bold);
+  font-size: var(--font-size-control);
+}
+.intent-confirm-pos {
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+/* 进度条：一根小条一条，绿 = 对、红 = 不对、accent = 当前；点了跳到那条 */
+.intent-dots {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.intent-dot {
+  width: 22px;
+  height: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: var(--color-bg-hover);
+  cursor: pointer;
+}
+.intent-dot[data-state="yes"] {
+  background: var(--color-success);
+}
+.intent-dot[data-state="no"] {
+  background: var(--color-danger);
+}
+.intent-dot[data-state="cur"] {
+  background: var(--color-accent);
+}
+.intent-slot-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-default);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.intent-confirm-main {
+  padding: 14px 16px 4px;
+  display: grid;
+  gap: 12px;
+}
+.intent-kick {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary);
+  margin-bottom: 3px;
+}
+/* 大字陈述：自动长高的 textarea，只读态无框、改字态描 accent 边 */
+.intent-stmt-wrap {
+  position: relative;
+}
+.intent-stmt {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  background: transparent;
+  resize: none;
+  overflow-y: hidden;
+  outline: none;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-title);
+  line-height: 1.55;
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.intent-stmt[readonly] {
+  cursor: text;
+}
+.intent-stmt.editing {
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+.intent-stmt.no {
+  text-decoration: line-through;
+  color: var(--color-text-tertiary);
+}
+.intent-stmt-mic {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+}
+.intent-box {
+  border-radius: var(--radius-lg);
+  padding: 9px 11px;
+  background: var(--color-bg-hover);
+  font-size: var(--font-size-caption);
+  line-height: 1.65;
+  color: var(--color-text-secondary);
+}
+.intent-why {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  line-height: 1.65;
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--color-warning) 60%, transparent);
+}
+/* 「当时那段对话」面板：表头（标题 / 时间 / 来源 / 在辅助对话打开）+ 滚动体 */
+.intent-conv {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.intent-conv-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.intent-conv-h b {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-semibold);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.intent-conv-note {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.intent-conv-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.intent-conv-open:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+.intent-conv-open:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+.intent-conv-b {
+  max-height: 210px;
+  overflow: auto;
+  padding: 9px 11px;
+  display: grid;
+  gap: 8px;
+  font-size: var(--font-size-caption);
+  line-height: 1.7;
+}
+.intent-conv-who {
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  margin-bottom: 1px;
+}
+.intent-conv-md .chat-md {
+  font-size: var(--font-size-caption);
+  line-height: 1.7;
+}
+.intent-conv-turn:last-child .intent-conv-md {
+  color: var(--color-text-secondary);
+}
+.intent-conv-quote {
+  font-style: italic;
+  color: var(--color-text-secondary);
+}
+/* 摘句高亮（evidence / assistant 摘句在渲染好的 markdown 上包 mark） */
+mark.intent-mark {
+  background: color-mix(in srgb, var(--color-warning) 26%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+/* 表态行：← / 不对 N / 对 Y / 改字 E / → */
+.intent-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.intent-sq {
+  width: 36px;
+  height: 36px;
+}
+.intent-sq.on {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+.intent-big {
+  flex: 1;
+  height: 36px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-control);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.intent-big:hover {
+  background: var(--color-bg-hover);
+}
+.intent-big.yes:hover,
+.intent-big.yes.on {
+  border-color: var(--color-success);
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+.intent-big.no:hover,
+.intent-big.no.on {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+}
+.intent-kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+/* 底行：背景补充框（麦克风在框内右端）+ 两个出口 */
+.intent-foot {
+  display: grid;
+  gap: 6px;
+  padding: 0 16px 12px;
+}
+.intent-foot-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.intent-note-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.intent-note {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 30px;
+  padding: 5px 34px 5px 10px;
+  resize: none;
+  overflow-y: hidden;
+}
+.intent-note-mic {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+}
+.intent-foot-quiet {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-control);
+  white-space: nowrap;
+}
+.intent-foot-accent {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-control);
+  white-space: nowrap;
+}
+
 /* —— 面板体：图钉顶部（高度可拖），分隔条，条目列表占余下 —— */
 .intent-panel-body {
   height: 100%;

@@ -498,6 +498,12 @@ function ChatViewBody(props: {
    */
   theme?: Exclude<ThemePreference, "system">;
   /**
+   * 确认卡「在辅助对话打开」：来源会话在右抽屉打开（主槽不动）。只有主槽拿到它。
+   */
+  onOpenSideChat?: (sessionId: string) => void;
+  /** 本机存在的会话 id 集：确认卡渲染时就判定「打开」能不能点（主槽才有） */
+  intentOpenableIds?: ReadonlySet<string>;
+  /**
    * 右栏 Sub-sessions 面板会话层正开着的子会话 id（子会话 PR4c）：派出卡按它描边。
    * 只有主槽的 ChatView 拿到非 null 值。
    */
@@ -1185,9 +1191,13 @@ function ChatViewBody(props: {
               <IntentConfirmCard
                 ask={session.intentAsk.ask}
                 requestId={session.intentAsk.requestId}
+                sessionId={session.intentAsk.sessionId}
+                turnId={session.intentAsk.turnId}
                 draft={null}
                 onDraftChange={() => {}}
                 onAnswer={session.answerIntentConfirm}
+                onOpenSideChat={props.onOpenSideChat}
+                openableSessionIds={props.intentOpenableIds}
               />
             )}
             {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示

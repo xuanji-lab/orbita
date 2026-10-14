@@ -1094,14 +1094,24 @@ export const en = {
       /** 回答前确认卡 */
       confirm: {
         title: "Confirm before answering",
-        intro:
-          "I connected your message to the past conversations below, but haven't confirmed them with you. Mark the ones that are right, the wrong ones, or edit the wording. Anything marked right or reworded is used for this answer; anything left blank is not.",
+        /** 大字陈述的标签：join 到边是 prediction（「如果对，这次回答会…」），join 不到退回假设原文 */
+        ifRight: "If this is right, this answer will",
+        hypothesis: "My assumption",
+        whyConnected: "Why it connects",
+        whyUncertainLabel: "Why I'm not sure",
+        youSaid: "You said",
+        assistantSaid: "The answer then",
+        openInSideChat: "Open in side chat",
+        prevItem: "Previous",
+        nextItem: "Next",
+        editStatement: "Edit",
         verdictYes: "Right",
         verdictNo: "Wrong",
         statementLabel: "Statement (editable)",
         noteLabel: "Add background",
         notePlaceholder: "Anything missing? Add a line…",
         confirmAndAnswer: "Confirm and answer",
+        confirmAndAnswerCount: (done: number, total: number) => `Confirm and answer · ${done} / ${total}`,
         answerWithoutConfirming: "Answer without confirming",
         feedbackFailed: "Couldn't deliver your confirmation to intent-lab",
         feedbackGone: "This recall run has expired — send the message again",
