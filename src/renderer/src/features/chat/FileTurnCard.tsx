@@ -70,6 +70,10 @@ export function FileTurnCard(props: {
   onOpenFile?: (path: string) => void;
   /** 产物打开按钮要按会话对账（主进程白名单：会话文件账里的路径才打得开） */
   sessionId: string;
+  /** 这轮的记忆摘要（实验功能「会话记忆」开着且这轮有记忆活动才有） */
+  memory?: { added: number; conflicts: number; used: number };
+  /** 点记忆行 → 审查面板切到记忆页签（与文件行同一条通路） */
+  onOpenMemory?: () => void;
 }) {
   const t = useT();
   const preview = useContext(RevertPreviewContext);
@@ -228,6 +232,20 @@ export function FileTurnCard(props: {
             </button>
           ))}
       </div>
+      {/* 记忆行（实验功能「会话记忆」）：这轮新增 / 可能推翻 / 用到——与文件行
+          同一张卡、同一种「在面板里看」的通路，记忆不在右栏另开入口 */}
+      {props.memory !== undefined && props.onOpenMemory !== undefined && (
+        <button
+          type="button"
+          className="file-turn-memory"
+          onClick={props.onOpenMemory}
+          title={t.chat.memoryTurnTip}
+        >
+          <Icon name="brain-circuit" size={12} strokeWidth={1.8} />
+          {t.chat.memoryTurn(props.memory.added, props.memory.conflicts, props.memory.used)}
+          <Icon name="chevron-right" size={12} strokeWidth={1.8} className="file-turn-memory-go" />
+        </button>
+      )}
       {/* 收起态也露出网页行（用户裁决）：文件账里的与旁路的都直接可见、可点 */}
       {hasWeb && !shown && webSection(false)}
       {shown && (

@@ -80,6 +80,8 @@ export function SettingsView(props: {
   workspaces: readonly Workspace[];
   /** 跳去某条会话某轮（记忆库条目的出处点击） */
   onOpenOrigin?: (jump: MemoryOriginJump) => void;
+  /** 「去记忆库」带的直达作用域（记忆页签 / 摘抄反馈进设置时选中它） */
+  memoryLibraryToken?: string | null;
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
 }) {
@@ -160,7 +162,7 @@ export function SettingsView(props: {
       ) : props.tab === "memory" && memoryOn ? (
         // 记忆库：两栏铺满内容面（Providers 同款）——自带滚动区，不套 .set-page 的列。
         // 作用域按 token 寻址，条目可编辑 / 删除 / 移到全局，冲突就地拍板（信任边界）
-        <MemorySettings onOpenOrigin={props.onOpenOrigin} />
+        <MemorySettings onOpenOrigin={props.onOpenOrigin} initialToken={props.memoryLibraryToken ?? null} />
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>

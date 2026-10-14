@@ -1,0 +1,331 @@
+/*
+ * 审查面板 › 记忆 / 摘抄页签。右栏统一的两段结构：页签栏贴着标题行，
+ * 内容区自己滚。行风格与记忆库页（memory-view.css）同族但更紧（右栏窄）。
+ */
+
+.memtab-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.memtab-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+
+.memtab-tabs button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.memtab-tabs button[aria-selected="true"] {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.memtab-count {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.memtab-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font-size: var(--font-size-micro);
+  display: inline-grid;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 记忆页签 ── */
+
+.memtab {
+  padding: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+}
+
+.memtab-turn {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.memtab-turn-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+
+.memtab-turn-head b {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.memtab-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-subtle);
+}
+
+.memtab-none {
+  margin: 0;
+  padding: var(--space-1) var(--space-2) var(--space-1) 26px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+
+.memtab-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+  line-height: 1.65;
+}
+
+.memtab-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.memtab-row-icon {
+  padding-top: 2px;
+  color: var(--color-text-tertiary);
+  display: inline-flex;
+}
+
+.memtab-row-icon.add {
+  color: var(--color-success);
+}
+
+.memtab-row-icon.used {
+  color: var(--color-text-secondary);
+}
+
+.memtab-row-cell {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.memtab-row-text {
+  margin: 0;
+  color: var(--color-text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memtab-row-text.excerpt {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.memtab-row-text.excerpt:hover {
+  text-decoration: underline;
+}
+
+.memtab-row-text.excerpt:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+
+.memtab-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-micro);
+}
+
+.memtab-row-acts {
+  position: absolute;
+  right: 6px;
+  top: 4px;
+  display: none;
+  gap: 2px;
+  background: var(--color-bg-panel);
+  border-radius: var(--radius-sm);
+}
+
+.memtab-row:hover .memtab-row-acts,
+.memtab-row-acts:focus-within {
+  display: flex;
+}
+
+/* 冲突卡 */
+.memtab-conflict {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-1) 0;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+  line-height: 1.65;
+}
+
+.memtab-conflict-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.memtab-conflict-head svg {
+  color: var(--color-warning);
+}
+
+.memtab-conflict-old {
+  color: var(--color-text-tertiary);
+}
+
+.memtab-conflict-day {
+  margin-left: 6px;
+  font-size: var(--font-size-micro);
+}
+
+.memtab-conflict-new {
+  margin: 0;
+}
+
+.memtab-conflict-acts,
+.memtab-conflict-resolved {
+  display: flex;
+  gap: 6px;
+  margin-top: var(--space-1);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.memtab-conflict-resolved {
+  color: var(--color-text-tertiary);
+}
+
+/* 注入折叠 */
+.memtab-injected {
+  margin: 0;
+}
+
+.memtab-injected summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-1) var(--space-1);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+  list-style: none;
+}
+
+.memtab-injected summary::-webkit-details-marker {
+  display: none;
+}
+
+.memtab-injected summary:hover {
+  background: var(--color-bg-hover);
+}
+
+.memtab-chevron {
+  display: inline-flex;
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+
+.memtab-injected[open] .memtab-chevron {
+  transform: rotate(90deg);
+}
+
+.memtab-injected .memtab-row {
+  padding-left: var(--space-5);
+}
+
+/* 摘抄页签的工具行 */
+.memtab-tools {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.memtab-seg {
+  display: inline-flex;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.memtab-seg button {
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+
+.memtab-seg button[aria-pressed="true"] {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.memtab-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+}
+
+.memtab-search input {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-primary);
+}
+
+.memtab-empty-hint {
+  display: block;
+  margin-top: 4px;
+}

@@ -37,6 +37,8 @@ import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
+import type { MemoryJumpRequest } from "./features/chat/ChatView";
+import type { MemoryOriginJump } from "./features/settings/MemorySettings";
 import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
@@ -233,6 +235,40 @@ export function App() {
     setReviewFocus({ path, token: reviewFocusTokenRef.current });
     setRightPanel("review");
   }, []);
+  /**
+   * 轮尾卡记忆行「在面板里看」（实验功能「会话记忆」）：打开审查面板的记忆页签。
+   * token 同 reviewFocus 的机制——连点两次也切得动。
+   */
+  const [reviewMemoryFocus, setReviewMemoryFocus] = useState<{ token: number } | null>(null);
+  const reviewMemoryTokenRef = useRef(0);
+  const openReviewMemory = useCallback(() => {
+    reviewMemoryTokenRef.current += 1;
+    setReviewMemoryFocus({ token: reviewMemoryTokenRef.current });
+    setRightPanel("review");
+  }, []);
+  /**
+   * 「去记忆库」（记忆页签 / 摘抄反馈）：打开设置 › 记忆，带 token 时直达那个作用域。
+   */
+  const [memoryLibraryToken, setMemoryLibraryToken] = useState<string | null>(null);
+  const openMemoryLibrary = useCallback((token?: string) => {
+    setMemoryLibraryToken(token ?? null);
+    setSettingsTab("memory");
+    setOverlay("settings");
+  }, []);
+  /**
+   * 摘抄 / 记忆出处「回到原会话那一轮」（实验功能「会话记忆」）：目标不是当前会话
+   * 时先切过去，跳转请求由 ChatView 在转录加载到那一轮后消费（滚到 + 闪烁）。
+   */
+  const [memoryJump, setMemoryJump] = useState<MemoryJumpRequest | null>(null);
+  const memoryJumpTokenRef = useRef(0);
+  const openMemoryOrigin = useCallback(
+    (jump: MemoryOriginJump) => {
+      memoryJumpTokenRef.current += 1;
+      setMemoryJump({ ...jump, token: memoryJumpTokenRef.current });
+      if (jump.sessionId !== mainOpenId) void session.openSession(jump.sessionId);
+    },
+    [mainOpenId, session],
+  );
   /**
    * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
@@ -762,12 +798,17 @@ export function App() {
                 }}
                 workspaces={session.workspaces}
                 onTab={setSettingsTab}
+                memoryLibraryToken={memoryLibraryToken}
+                onOpenOrigin={openMemoryOrigin}
               />
             ) : (
               <ChatView
                 session={session}
                 providersError={providersError}
                 onOpenReviewAt={openReviewAt}
+                onOpenReviewMemory={openReviewMemory}
+                onOpenMemoryLibrary={() => openMemoryLibrary()}
+                memoryJump={memoryJump}
                 onOpenSubSession={openSubSessionInPanel}
                 onOpenSubSessions={openSubSessionsList}
                 onOpenParent={openParent}
@@ -806,8 +847,11 @@ export function App() {
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
                   focus={reviewFocus}
+                  memoryFocus={reviewMemoryFocus}
                   revision={`${session.fileTurns.length}:${session.reverts.length}:${session.undos.length}:${session.phase}`}
                   cwd={session.cwd}
+                  onOpenMemoryLibrary={openMemoryLibrary}
+                  onOpenOrigin={openMemoryOrigin}
                 />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel

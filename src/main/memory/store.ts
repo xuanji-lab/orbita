@@ -321,7 +321,7 @@ export class MemoryStore {
   async patch(
     token: MemoryScopeToken,
     entryId: string,
-    patch: { text?: string; pinned?: boolean; status?: MemoryStatus },
+    patch: { text?: string; pinned?: boolean; status?: MemoryStatus; stance?: MemoryStance },
   ): Promise<MemoryEntry | null> {
     let updated: MemoryEntry | null = null;
     const kept = await this.mapEntries(token, (entry) => {
@@ -332,6 +332,7 @@ export class MemoryStore {
         text: text === "" ? entry.text : text,
         ...(patch.pinned !== undefined ? { pinned: patch.pinned } : null),
         ...(patch.status !== undefined ? { status: patch.status } : null),
+        ...(patch.stance !== undefined ? { stance: patch.stance } : null),
         ...(patch.text !== undefined && text !== "" ? { editedAt: Date.now() } : null),
       };
       updated = next;

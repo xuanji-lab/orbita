@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
+import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import { composeQuotedMessage } from "../../../../shared/quote.ts";
 import { QUOTE_MAX_CHARS } from "../../../../shared/quote.ts";
 
@@ -92,5 +92,17 @@ describe("findQuoteSource", () => {
   test("找不到、文件引用都返回 null", () => {
     assert.equal(findQuoteSource(log, { text: "没说过", messageId: "", role: "assistant" }), null);
     assert.equal(findQuoteSource(log, { text: "同一句话", messageId: "", role: "user", filePath: "/a.md" }), null);
+  });
+});
+
+describe("nthUserMessageId（记忆 / 摘抄的「回到那一轮」）", () => {
+  test("第 N 轮 = 第 N 条用户消息的 id；轮不存在 / 非法轮号返回 null", () => {
+    const items = [user("u1"), reply("a1"), user("u2"), reply("a2"), user("u3")];
+    assert.equal(nthUserMessageId(items, 1), "u1");
+    assert.equal(nthUserMessageId(items, 2), "u2");
+    assert.equal(nthUserMessageId(items, 3), "u3");
+    assert.equal(nthUserMessageId(items, 4), null);
+    assert.equal(nthUserMessageId(items, 0), null);
+    assert.equal(nthUserMessageId(items, 1.5), null);
   });
 });

@@ -340,7 +340,7 @@ describe("sessionTurns（审查面板 › 记忆页签的数据）", () => {
 
   test("meta 读不到 = 空汇总（会话已删），不抛", async () => {
     const summary = await sessionTurns(new FakeSessions(), memory, usage, "gone");
-    assert.deepEqual(summary, { turns: [], pendingConflicts: 0 });
+    assert.deepEqual(summary, { turns: [], pendingConflicts: 0, scopeToken: "" });
   });
 
   test("注入账本里的条目已删时，那一项从展示里退场", async () => {

@@ -168,6 +168,8 @@ export interface MemoryPatchRequest {
   pinned?: boolean;
   /** 状态（muted = 不再注入；active = 解除） */
   status?: MemoryStatus;
+  /** 改态度（摘抄的三选 / 立场） */
+  stance?: MemoryStance;
 }
 export type MemoryPatchResponse = { entry: MemoryEntry | null };
 
@@ -234,6 +236,8 @@ export interface MemoryTurnInjected {
   /** 相关度（0..1）；常驻摘抄 = 1 */
   score: number;
   pinned: boolean;
+  /** 所在作用域（「以后不再注入」等改动要带 token 回去寻址） */
+  token: MemoryScopeToken;
 }
 
 export interface MemoryTurnSummary {
@@ -251,6 +255,8 @@ export interface MemorySessionTurnsResponse {
   turns: readonly MemoryTurnSummary[];
   /** 该作用域（含全局）待处理冲突数——记忆页签的徽标 */
   pendingConflicts: number;
+  /** 本会话作用域的 token：面板上的改动（撤一条 / 不再注入 / 拍板）按它寻址 */
+  scopeToken: string;
 }
 
 /** 右栏 › 摘抄页签的一行：所有作用域里的 excerpt 条目（含全局），跨会话跳转用。 */

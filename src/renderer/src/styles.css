@@ -1979,6 +1979,33 @@ body {
   background: var(--color-bg-active);
 }
 
+/* 摘抄相位（实验功能「会话记忆」）：态度三选、存入中、已摘抄反馈 */
+.quote-toolbar-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}
+
+.quote-toolbar-done {
+  color: var(--color-text-primary);
+}
+
+.quote-toolbar-link {
+  border: none;
+  padding: 0 2px;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+
 .quote-flash {
   animation: quote-flash 1.6s cubic-bezier(0.4, 0, 0.6, 1);
   border-radius: var(--radius-md);
@@ -3901,4 +3928,30 @@ button.panel-group-toggle:hover {
 }
 .review-row:hover:not(:disabled) {
   background: var(--color-bg-hover);
+}
+
+/* 轮尾卡的记忆行（实验功能「会话记忆」）：与文件行同一张卡、同一种「在面板里看」 */
+.file-turn-memory {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.file-turn-memory:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.file-turn-memory-go {
+  color: var(--color-text-tertiary);
 }

@@ -8,6 +8,10 @@ import { api } from "../../api";
 import { REVIEW_SOURCES, type ReviewDiff, type ReviewEntry, type ReviewList, type ReviewSource } from "@shared/review";
 import { reviewEmptyText, reviewEmptyTitle, unifiedDiffEntries } from "./review-panel";
 import { pathParts, Stats } from "../chat/FileTurnCard";
+import { useExperimentalFeature } from "../../experimental.ts";
+import { ReviewExcerptsTab, ReviewMemoryTab } from "./MemoryTabs";
+import type { MemoryOriginJump } from "../settings/MemorySettings";
+import "./memory-tabs.css";
 
 /**
  * 审查面板（右栏新入口，与 Files / Skills / MCP 互斥）：四种来源——本任务改动
@@ -23,6 +27,12 @@ export function ReviewPanel(props: {
   sessionId: string | null;
   /** 轮尾卡 / 界碑卡的「在面板里看」请求：带 token 的一次性定位（展开 + 滚到） */
   focus: { path: string; token: number } | null;
+  /** 轮尾卡记忆行「在面板里看」（实验功能「会话记忆」）：切到记忆页签的一次性请求 */
+  memoryFocus: { token: number } | null;
+  /** 记忆页签「去记忆库」：打开设置 › 记忆（带 token 直达作用域） */
+  onOpenMemoryLibrary: (token?: string) => void;
+  /** 摘抄「回到原会话那一轮」：切会话并滚到原文 */
+  onOpenOrigin: (jump: MemoryOriginJump) => void;
   /**
    * 会话文件账的版本（轮尾账 / 回退 / 撤销的条数拼成的串）：变了就重拉当前来源。
    * 不接它的话，面板开着时 agent 又改了一轮文件，列表停在旧状态（实测）。
@@ -32,7 +42,31 @@ export function ReviewPanel(props: {
   cwd: string | null;
 }) {
   const t = useT();
+  // 记忆 / 摘抄页签只在实验功能「会话记忆」开着时出现（与设置 › 记忆入口同源）
+  const memoryOn = useExperimentalFeature("session-memory");
+  const [tab, setTab] = useState<"files" | "memory" | "excerpts">("files");
+  useEffect(() => {
+    if (props.memoryFocus !== null) setTab("memory");
+  }, [props.memoryFocus?.token]);
   const [source, setSource] = useState<ReviewSource>("task");
+  /** 记忆页签的徽标：作用域待处理冲突数（拉一次轮汇总才有；没拉到不亮数字） */
+  const [memoryBadge, setMemoryBadge] = useState<number | null>(null);
+  useEffect(() => {
+    if (!memoryOn || props.sessionId === null) {
+      setMemoryBadge(null);
+      return;
+    }
+    let cancelled = false;
+    void api.memory
+      .sessionTurns(props.sessionId)
+      .then((result) => {
+        if (!cancelled) setMemoryBadge(result.pendingConflicts);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [memoryOn, props.sessionId, props.revision]);
   const [list, setList] = useState<ReviewList | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -136,13 +170,24 @@ export function ReviewPanel(props: {
       header={
         <>
           <PanelTitle icon="file-diff" title={t.review.title} />
-          {/* 审查范围（本任务 / 工作区未提交 / 分支）：标题行中段的安静下拉（右栏统一） */}
-          <Menu items={sourceItems} trigger={({ toggle: open }) => (
-            <button type="button" onClick={open} title={t.review.source(source)} className="quiet-control panel-head-select no-drag">
-              {t.review.source(source)}
-              <Icon name="chevron-down" size={11} strokeWidth={1.8} />
-            </button>
-          )} />
+          {/* 审查范围（本任务 / 工作区未提交 / 分支）：标题行中段的安静下拉（右栏统一）。
+              记忆 / 摘抄页签不吃 git 来源，切过去时收起 */}
+          {tab === "files" && (
+            <Menu
+              items={sourceItems}
+              trigger={({ toggle: open }) => (
+                <button
+                  type="button"
+                  onClick={open}
+                  title={t.review.source(source)}
+                  className="quiet-control panel-head-select no-drag"
+                >
+                  {t.review.source(source)}
+                  <Icon name="chevron-down" size={11} strokeWidth={1.8} />
+                </button>
+              )}
+            />
+          )}
         </>
       }
       headerExtra={
@@ -150,9 +195,35 @@ export function ReviewPanel(props: {
           <Icon name="refresh-cw" size={15} spin={loading} />
         </PanelIconButton>
       }
-      contentKey={`${source}:${props.sessionId ?? "none"}`}
+      contentKey={`${source}:${tab}:${props.sessionId ?? "none"}`}
     >
-      {props.sessionId === null ? (
+      {memoryOn && props.sessionId !== null && (
+        <div className="memtab-tabs" role="tablist">
+          <button type="button" role="tab" aria-selected={tab === "files"} onClick={() => setTab("files")}>
+            <Icon name="file-diff" size={12} strokeWidth={1.8} />
+            {t.memoryPanel.tabFiles}
+            {tab !== "files" && list?.kind === "ok" && (
+              <span className="mono memtab-count">{list.entries.length}</span>
+            )}
+          </button>
+          <button type="button" role="tab" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
+            <Icon name="brain-circuit" size={12} strokeWidth={1.8} />
+            {t.memoryPanel.tabMemory}
+            {memoryBadge !== null && memoryBadge > 0 && (
+              <span className="memtab-badge">{t.memoryPanel.badge(memoryBadge)}</span>
+            )}
+          </button>
+          <button type="button" role="tab" aria-selected={tab === "excerpts"} onClick={() => setTab("excerpts")}>
+            <Icon name="quote" size={12} strokeWidth={1.8} />
+            {t.memoryPanel.tabExcerpts}
+          </button>
+        </div>
+      )}
+      {tab === "memory" && props.sessionId !== null ? (
+        <ReviewMemoryTab sessionId={props.sessionId} revision={props.revision} onOpenLibrary={props.onOpenMemoryLibrary} />
+      ) : tab === "excerpts" && props.sessionId !== null ? (
+        <ReviewExcerptsTab sessionId={props.sessionId} revision={props.revision} onOpenOrigin={props.onOpenOrigin} />
+      ) : props.sessionId === null ? (
         <EmptyState title={t.review.noTask} />
       ) : loading && list === null ? (
         <EmptyState title={t.common.loading} />

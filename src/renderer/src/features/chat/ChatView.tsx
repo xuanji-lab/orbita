@@ -120,11 +120,13 @@ import { PaperclipMark } from "../../shell/PaperclipMark";
 import { ImageThumb } from "../../shell/ImageThumb";
 import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
+import type { MemoryStance } from "@shared/memory";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { MaterialBoxContext } from "../../shell/BlackholeBox.tsx";
 import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
-import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
+import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
+import { memoryTurnCounts, useMemoryTurns, type MemoryTurnCounts } from "./memory-turns.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
 import { modelThinkingLevels } from "./thinking-choice.ts";
@@ -182,6 +184,15 @@ function useFollowScroll(enabled: boolean) {
  * 这就是 R8-01 ②「输入框宽度跨页面保持一致」：两页的差别只有 slogan 消失、
  * 输入框从居中落到底部，别的都不动。
  */
+/** 摘抄 / 记忆出处的一次性跳转请求（App 发起，ChatView 消费后滚到原文并闪烁）。 */
+export interface MemoryJumpRequest {
+  sessionId: string;
+  turn: number;
+  role: "user" | "assistant";
+  text: string;
+  token: number;
+}
+
 type ChatViewProps = Parameters<typeof ChatViewBody>[0];
 
 /**
@@ -214,6 +225,26 @@ export function ChatView(props: ChatViewProps) {
   );
   // PDF 引用表（实验功能「PDF 引用」）：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
   const citations = useMemo(() => collectCitations(session.transcript), [session.transcript]);
+  // 摘抄 / 记忆出处跳转：切会话后转录异步加载，token + 已应用水位保证「加载到那一轮
+  // 了再滚一次、只滚一次」；找不到逐字原文就整块闪一下（highlightQuote 的兜底）
+  const jumpApplied = useRef(0);
+  useEffect(() => {
+    const jump = props.memoryJump;
+    if (jump === null || jump === undefined || jump.token === jumpApplied.current) return;
+    if (jump.sessionId !== (session.sessionId ?? "")) return;
+    if (session.transcript.filter((item) => item.role === "user").length < jump.turn) return;
+    jumpApplied.current = jump.token;
+    const sourceId = nthUserMessageId(session.transcript, jump.turn);
+    const pane = paneRef.current;
+    if (sourceId === null || pane === null) return;
+    // 闪的是那一轮里「谁说的」那条消息：用户轮的摘抄闪用户气泡，agent 轮闪回答
+    const target = jump.role === "user" ? sourceId : findQuoteSource(session.transcript, { messageId: "", role: "assistant", text: jump.text, ...(jump.turn !== undefined ? { turn: jump.turn } : {}) });
+    highlightQuote(pane, target ?? sourceId, jump.text);
+  }, [props.memoryJump?.token, session.transcript, session.sessionId]);
+  // 划选摘抄（实验功能「会话记忆」）：关着时工具栏不出第三键。sessionId 在这里
+  // 收窄一次——闭包里的 ?. 判空保不住 TS 的流分析
+  const memoryOn = useExperimentalFeature("session-memory");
+  const excerptSessionId = session.sessionId;
   return (
     <div
       ref={paneRef}
@@ -250,6 +281,23 @@ export function ChatView(props: ChatViewProps) {
             // 引完回到输入框接着写——引用就是为了下一句话
             paneRef.current?.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
           }}
+          excerpt={
+            memoryOn && excerptSessionId !== null
+              ? {
+                  save: async (quote, stance) => {
+                    const result = await api.memory.addExcerpt({
+                      sessionId: excerptSessionId,
+                      verbatim: quote.text,
+                      role: quote.role,
+                      turn: quote.turn ?? 1,
+                      stance,
+                    });
+                    return result.entry !== null;
+                  },
+                  onOpenLibrary: props.onOpenMemoryLibrary,
+                }
+              : undefined
+          }
         />
       )}
     </div>
@@ -320,12 +368,24 @@ function highlightQuote(pane: HTMLElement, messageId: string, text: string): voi
  *   从首页进聊天页之后监听就不在了。主槽与抽屉各自只认落在自己面板里的选区。
  * - 按下浮层时 preventDefault，选区不丢；在别处按下、滚动都收起浮层。
  */
+/** 划选摘抄的配置（实验功能「会话记忆」开着时由外层给出）。 */
+interface ExcerptTool {
+  /** 存摘抄；resolve true = 存下（含幂等的「已经在库里」） */
+  save: (quote: TextQuote, stance: MemoryStance) => Promise<boolean>;
+  /** 「在记忆库查看」的去处（设置 › 记忆）；缺席则反馈只报「已摘抄」 */
+  onOpenLibrary?: () => void;
+}
+
 function QuoteSelectionLayer(props: {
   paneRef: React.RefObject<HTMLDivElement | null>;
   transcript: readonly TranscriptItem[];
   onQuote: (quote: TextQuote) => void;
+  /** 缺席 = 摘抄键不出现（实验开关关着 / 只读面板） */
+  excerpt?: ExcerptTool;
 }) {
   const t = useT();
+  /** 摘抄小流程的相位：stance = agent 的话在等态度；saving / saved / failed 各自短暂停留 */
+  const [excerptPhase, setExcerptPhase] = useState<"stance" | "saving" | "saved" | "failed" | null>(null);
   const [candidate, setCandidate] = useState<{
     quote: TextQuote;
     /** 选区原文（复制用，保留换行；quote.text 是规整过的） */
@@ -408,6 +468,37 @@ function QuoteSelectionLayer(props: {
     return () => window.clearTimeout(timer);
   }, [copied]);
 
+  // 摘自己 vs 摘 agent 的话：自己的话直接按「立场」存；agent 的话原地展开三选，
+  // 不选则几秒后按「认同」存（原型裁决：默认动作是认同，别让人多等一步）
+  const saveExcerpt = (stance: MemoryStance): void => {
+    if (candidate === null || props.excerpt === undefined) return;
+    const quote = candidate.quote;
+    setExcerptPhase("saving");
+    void props.excerpt
+      .save(quote, stance)
+      .then((saved) => setExcerptPhase(saved ? "saved" : "failed"))
+      .catch(() => setExcerptPhase("failed"));
+  };
+  // 自动认同的倒数：展开三选后 4 秒没动静就按「认同」存；任何手动选择都会先清掉它
+  useEffect(() => {
+    if (excerptPhase !== "stance") return;
+    const timer = window.setTimeout(() => saveExcerpt("agree"), 4000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [excerptPhase, candidate?.quote.text]);
+  // 存完的反馈停两拍半再收起（选区收掉：这句话已经处理完了）
+  useEffect(() => {
+    if (excerptPhase !== "saved" && excerptPhase !== "failed") return;
+    const timer = window.setTimeout(() => {
+      setExcerptPhase(null);
+      if (excerptPhase === "saved") {
+        window.getSelection()?.removeAllRanges();
+        setCandidate(null);
+      }
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [excerptPhase]);
+
   if (candidate === null) return null;
   // 贴着窗口顶的选区往上弹会被裁掉，改弹到选区下方
   const below = candidate.top < 56;
@@ -460,6 +551,59 @@ function QuoteSelectionLayer(props: {
         <Icon name="quote" size={13} strokeWidth={1.8} />
         {t.quote.add}
       </button>
+      {props.excerpt !== undefined &&
+        (excerptPhase === "stance" ? (
+          // agent 的话：先说态度（几秒不选按「认同」存）
+          <>
+            <span className="quote-toolbar-hint">{t.memoryPanel.excerptAutoAgree}</span>
+            {(["agree", "doubt", "oppose"] as const).map((stance) => (
+              <button
+                key={stance}
+                type="button"
+                className="quote-toolbar-stance"
+                title={t.memoryPanel.excerptStanceHint}
+                onClick={() => saveExcerpt(stance)}
+              >
+                {stance === "agree"
+                  ? t.memoryPanel.excerptStanceAgree
+                  : stance === "doubt"
+                    ? t.memoryPanel.excerptStanceDoubt
+                    : t.memoryPanel.excerptStanceOppose}
+              </button>
+            ))}
+          </>
+        ) : excerptPhase === "saving" ? (
+          <span className="quote-toolbar-hint">
+            <Icon name="loader-circle" size={13} spin />
+            {t.memoryPanel.excerptSaving}
+          </span>
+        ) : excerptPhase === "saved" ? (
+          <span className="quote-toolbar-hint quote-toolbar-done">
+            <Icon name="check" size={13} strokeWidth={1.8} />
+            {t.memoryPanel.excerptSaved}
+            {props.excerpt.onOpenLibrary !== undefined && (
+              <button type="button" className="quote-toolbar-link" onClick={props.excerpt.onOpenLibrary}>
+                {t.memoryPanel.excerptViewLibrary}
+              </button>
+            )}
+          </span>
+        ) : excerptPhase === "failed" ? (
+          <span className="quote-toolbar-hint" role="alert">
+            {t.memoryPanel.excerptFailed}
+          </span>
+        ) : (
+          <button
+            type="button"
+            title={t.memoryPanel.excerptTitle}
+            onClick={() => {
+              if (candidate.quote.role === "user") saveExcerpt("position");
+              else setExcerptPhase("stance");
+            }}
+          >
+            <Icon name="pin" size={13} strokeWidth={1.8} />
+            {t.memoryPanel.excerpt}
+          </button>
+        ))}
     </div>,
     document.body,
   );
@@ -552,6 +696,22 @@ function ChatViewBody(props: {
    * 只有主槽的 ChatView 拿到它（面板开在主槽旁边）；右栏与抽屉里不传，行不可点。
    */
   onOpenReviewAt?: (path: string) => void;
+  /**
+   * 轮尾卡记忆行的「在面板里看」（实验功能「会话记忆」）：打开审查面板的记忆
+   * 页签。只有主槽的 ChatView 拿到它；关着或这轮没记忆活动时不渲染那行。
+   */
+  onOpenReviewMemory?: () => void;
+  /**
+   * 摘抄 / 记忆条目「回到原会话那一轮」的一次性跳转请求（token 单调递增，
+   * 同 reviewFocus 的先例）：外层 ChatView 消费它——本会话直接滚，切过来的
+   * 会话等转录加载到那一轮再滚。只有主槽的 ChatView 拿到它。
+   */
+  memoryJump?: MemoryJumpRequest | null;
+  /**
+   * 摘抄完成反馈里的「在记忆库查看」（实验功能「会话记忆」）：打开设置 › 记忆。
+   * 只有主槽的 ChatView 拿到它。
+   */
+  onOpenMemoryLibrary?: () => void;
   /**
    * 一键回底浮钮（feat/scroll-to-bottom-X）：距底超过 300px 时在消息列底端浮现「回底」
    * 浮钮，点击 smooth 滚到底。三个会话区都开：主槽、辅助对话抽屉、Sub-sessions 面板的
@@ -1251,6 +1411,7 @@ function ChatViewBody(props: {
           actionsBusy={session.phase !== "idle" || session.queued.length > 0 || revertPreview !== null}
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
+          onOpenReviewMemory={props.onOpenReviewMemory}
           sessionId={openId}
         />
         </RevertPreviewContext.Provider>
@@ -1307,6 +1468,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   readOnly: boolean;
   /** 轮尾卡文件行的「在面板里看」（主槽才有；引用稳定） */
   onOpenReviewAt?: (path: string) => void;
+  /** 轮尾卡记忆行「在面板里看」（实验功能「会话记忆」；引用稳定） */
+  onOpenReviewMemory?: () => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
 }) {
@@ -1323,6 +1486,21 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     () => mergeSideRecords(props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript),
     [props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript],
   );
+  // 会话记忆（实验功能）的按轮账：轮尾卡的记忆行吃它；关着时 hook 拿 null
+  const memoryOn = useExperimentalFeature("session-memory");
+  const memoryTurns = useMemoryTurns(memoryOn ? props.sessionId : null, props.phase);
+  const memoryCounts = useMemo(() => memoryTurnCounts(memoryTurns), [memoryTurns]);
+  // 轮尾卡 ↔ 轮号：按用户消息计数（与划选引用、注入账本同一个口径），卡拿到轮号
+  // 才能从 memoryCounts 里找到自己那轮的三个数
+  const recordTurns = useMemo(() => {
+    const turns = new Map<string, number>();
+    let seen = 0;
+    for (const record of records) {
+      if (record.role === "user") seen += 1;
+      turns.set(record.id, seen);
+    }
+    return turns;
+  }, [records]);
   // 被撤销的轮 id 集：轮尾卡据此挂「已撤销」徽标（undo 记录不是渲染单元）
   const undoneTurnIds = useMemo(
     () =>
@@ -1511,6 +1689,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onOpenReviewAt={props.onOpenReviewAt}
                 sessionId={props.sessionId}
                 interruptedCalls={interruptedCalls}
+                recordTurns={recordTurns}
+                memoryCounts={memoryCounts}
+                onOpenMemory={props.onOpenReviewMemory}
               />
             ) : (
               <EntryView
@@ -1531,6 +1712,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 sessionId={props.sessionId}
                 onRevertTo={props.onRevertTo}
                 streamingIds={streamingIds}
+                recordTurns={recordTurns}
+                memoryCounts={memoryCounts}
+                onOpenMemory={props.onOpenReviewMemory}
               />
             )}
             {branchAfter !== undefined && (
@@ -2382,6 +2566,12 @@ function EntryView(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 产物打开按钮的会话对账（主进程白名单按它查） */
   sessionId: string;
+  /** 记录 id → 轮号（轮尾卡记忆行找自己那轮的账；undefined = 记忆关着） */
+  recordTurns?: ReadonlyMap<string, number>;
+  /** 轮号 → 记忆摘要（新增 / 冲突 / 用到） */
+  memoryCounts?: ReadonlyMap<number, MemoryTurnCounts>;
+  /** 记忆行点击 → 审查面板记忆页签 */
+  onOpenMemory?: () => void;
 }) {
   const t = useT();
   const { entry } = props;
@@ -2397,6 +2587,7 @@ function EntryView(props: {
     );
   }
   if (entry.kind === "fileTurn") {
+    const turnNo = props.recordTurns?.get(entry.record.id);
     return (
       <FileTurnCard
         record={entry.record}
@@ -2406,6 +2597,8 @@ function EntryView(props: {
         onUndo={props.onUndoTurn}
         onOpenFile={props.onOpenReviewAt}
         sessionId={props.sessionId}
+        memory={turnNo !== undefined ? props.memoryCounts?.get(turnNo) : undefined}
+        onOpenMemory={props.onOpenMemory}
       />
     );
   }
@@ -2519,6 +2712,10 @@ function TurnRollupLine(props: {
   sessionId: string;
   /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
   interruptedCalls: ReadonlySet<string>;
+  /** 记忆行（成员里的 fileTurn 单元用，原样转发 EntryView） */
+  recordTurns?: ReadonlyMap<string, number>;
+  memoryCounts?: ReadonlyMap<number, MemoryTurnCounts>;
+  onOpenMemory?: () => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -2602,6 +2799,9 @@ function TurnRollupLine(props: {
               onOpenReviewAt={props.onOpenReviewAt}
               sessionId={props.sessionId}
               streamingIds={EMPTY_STREAMING_IDS}
+              recordTurns={props.recordTurns}
+              memoryCounts={props.memoryCounts}
+              onOpenMemory={props.onOpenMemory}
             />
           ))}
         </div>

@@ -236,11 +236,17 @@ export async function sessionTurns(
   sessionId: string,
 ): Promise<MemorySessionTurnsResponse> {
   const meta = await sessions.readMeta(sessionId);
-  if (meta === null) return { turns: [], pendingConflicts: 0 };
+  if (meta === null) return { turns: [], pendingConflicts: 0, scopeToken: "" };
   const globalToken = memory.tokenOf(MEMORY_GLOBAL_SCOPE);
   const token = memory.tokenOf(memoryScopeOf(meta));
-  const pool = dedupeById([...(await memory.list(token)), ...(await memory.list(globalToken))]);
+  const ownEntries = await memory.list(token);
+  const globalEntries = await memory.list(globalToken);
+  const pool = dedupeById([...ownEntries, ...globalEntries]);
   const byId = new Map(pool.map((entry) => [entry.id, entry]));
+  // 注入条目在哪个作用域文件（自己的 / 全局的）——面板上的改动要按它寻址
+  const tokenOfEntry = new Map<string, string>();
+  for (const entry of ownEntries) tokenOfEntry.set(entry.id, token);
+  for (const entry of globalEntries) if (!tokenOfEntry.has(entry.id)) tokenOfEntry.set(entry.id, globalToken);
 
   /** 待处理的冲突建议：判过、没拍板、旧条目还在库里。 */
   const pendingOldOf = (entry: MemoryEntry): MemoryEntry | null => {
@@ -276,6 +282,7 @@ export async function sessionTurns(
             timestamp: entry.timestamp,
             score: hit.score,
             pinned: entry.pinned === true,
+            token: tokenOfEntry.get(entry.id) ?? globalToken,
           },
         ];
       });
@@ -285,7 +292,7 @@ export async function sessionTurns(
       );
       return { turn, at: record?.at ?? fallbackAt, added, injected };
     });
-  return { turns, pendingConflicts };
+  return { turns, pendingConflicts, scopeToken: token };
 }
 
 /* ---------- 摘抄页签（右栏）：所有作用域的 excerpt 条目 ---------- */
@@ -355,6 +362,7 @@ export function parsePatchRequest(raw: unknown): {
   text?: string;
   pinned?: boolean;
   status?: "active" | "superseded" | "muted";
+  stance?: "position" | "agree" | "doubt" | "oppose";
 } {
   const req = asRequestObject(raw);
   const entryId = req.entryId;
@@ -362,10 +370,14 @@ export function parsePatchRequest(raw: unknown): {
   const text = req.text;
   const pinned = req.pinned;
   const status = req.status;
+  const stance = req.stance;
   if (text !== undefined && typeof text !== "string") throw new Error("memory patch text must be a string");
   if (pinned !== undefined && typeof pinned !== "boolean") throw new Error("memory patch pinned must be a boolean");
   if (status !== undefined && status !== "active" && status !== "superseded" && status !== "muted") {
     throw new Error("memory patch status is invalid");
+  }
+  if (stance !== undefined && stance !== "position" && stance !== "agree" && stance !== "doubt" && stance !== "oppose") {
+    throw new Error("memory patch stance is invalid");
   }
   return {
     token: parseScopeToken(req.token),
@@ -373,6 +385,7 @@ export function parsePatchRequest(raw: unknown): {
     ...(text !== undefined ? { text } : null),
     ...(pinned !== undefined ? { pinned } : null),
     ...(status !== undefined ? { status } : null),
+    ...(stance !== undefined ? { stance } : null),
   };
 }
 

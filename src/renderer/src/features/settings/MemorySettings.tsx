@@ -41,14 +41,21 @@ export interface MemoryOriginJump {
  * 选中哪个就拿着它的 token 去 mutation——scopeId 单向哈希，管理面从头到尾
  * 不需要知道 cwd / workspaceId。
  */
-export function MemorySettings(props: { onOpenOrigin?: (jump: MemoryOriginJump) => void }) {
+export function MemorySettings(props: {
+  onOpenOrigin?: (jump: MemoryOriginJump) => void;
+  /** 直达的作用域（「去记忆库」带 token 进来时选中它；之后以用户自己的点击为准） */
+  initialToken?: string | null;
+}) {
   const t = useT();
   /** 日期格式只看「今年还是往年」，取一次钉住——删一条不让全页日期换一遍 */
   const [now] = useState(() => Date.now());
   const [scopes, setScopes] = useState<{ kind: "loading" } | { kind: "failed" } | { kind: "ready"; list: MemoryScopeInfo[] }>({
     kind: "loading",
   });
-  const [token, setToken] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(props.initialToken ?? null);
+  useEffect(() => {
+    if (props.initialToken !== undefined && props.initialToken !== null) setToken(props.initialToken);
+  }, [props.initialToken]);
   const [items, setItems] = useState<MemoryLibraryItem[] | null>(null);
   const [itemsFailed, setItemsFailed] = useState(false);
   const [query, setQuery] = useState("");
