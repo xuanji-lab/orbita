@@ -22,7 +22,7 @@ import {
   SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
+import type { AgentCommand, AgentEvent, ChoreModelPayload, ProviderSecrets } from "../shared/agent-ipc.ts";
 import type { MemoryRetrieveOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
@@ -50,8 +50,8 @@ import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import {
   buildDistillPrompt,
+  completedTurnAssistantText,
   DISTILL_SYSTEM_PROMPT,
-  lastAssistantText,
   parseDistillReply,
 } from "./memory-distill.ts";
 import { buildMemoryBlock } from "./memory-inject.ts";
@@ -285,11 +285,9 @@ interface ResolvedChoreModel {
  * 自建一次性 ModelRuntime 走同一套「注册 + 解析」（同 setLedgerModel）：
  * 「能不能用某个模型」在本仓只应该有一套真相。
  * 解不出来返回 null，由调用方退回会话模型——用户删了那家 provider 不该
- * 连带把标题停掉。
+ * 连带把这件家务停掉。
  */
-async function resolveChoreModel(
-  payload: NonNullable<Extract<AgentCommand, { type: "generateTitle" }>["model"]>,
-): Promise<ResolvedChoreModel | null> {
+async function resolveChoreModel(payload: ChoreModelPayload): Promise<ResolvedChoreModel | null> {
   try {
     const runtime = await ModelRuntime.create({});
     const model = registerAndResolveModel(runtime, payload.provider, payload.modelId);
@@ -431,7 +429,7 @@ async function generateSessionTitle(
   sessionId: string,
   text: string,
   /** 家务活模型（设置里的 choreModel）；缺席或解析失败都退回会话模型 */
-  choreModel?: Extract<AgentCommand, { type: "generateTitle" }>["model"],
+  choreModel?: ChoreModelPayload,
 ): Promise<void> {
   if (note.titleInFlight) return;
   note.titleInFlight = true;
@@ -519,11 +517,16 @@ async function recallMemories(
 /**
  * 轮后蒸馏（memory v1）：把刚结束的这轮蒸成原子条目发给主进程落盘。
  * fire-and-forget + 在途守卫（titleInFlight 同款）：连发两轮也只蒸一次，
- * 失败后下一轮自然带着新内容再试。鉴权面用会话自己的模型与账本密钥
- * （generateSessionTitle 的退回路径同款）。全程失败静默——只 console.error。
+ * 失败后下一轮自然带着新内容再试。全程失败静默——只 console.error。
+ *
+ * 只蒸正常结束的轮：completedTurnAssistantText 拿 baseline 之后新增的最后一条
+ * assistant 判（被打断 / 报错返回 null，本轮没回答过也不回落到上一轮的回答）。
+ * 模型两级（generateSessionTitle 同款）：优先家务活模型（连它自己的密钥面，
+ * 主进程在 sessionMemory 开着时装配）；缺席或解析不到退回会话模型与账本密钥——
+ * 用户删了那家 provider 不该连带把蒸馏停掉。
  *
  * 注意时序：本函数在 echoAndPrompt 尾部、run 回调返回前触发，session 还活着；
- * 但真正的读取（messages / model）都发生在 async 体的第一个 await 之前，
+ * 但对 session 的读取（messages / model）都发生在 async 体的第一个 await 之前，
  * 与之后 turn-cycle 的 dispose 不冲突。
  */
 function scheduleMemoryDistill(
@@ -531,15 +534,26 @@ function scheduleMemoryDistill(
   session: AgentSession,
   note: LedgerNote,
   userText: string,
+  /** prompt 前 session.messages 的长度——蒸馏只认这之后新增的 assistant */
+  baseline: number,
+  /** 家务活模型（主进程在 sessionMemory 开着时装配）；缺席或解析失败退回会话模型 */
+  choreModel?: ChoreModelPayload,
 ): void {
   if (note.memoryDistillInFlight) return;
   note.memoryDistillInFlight = true;
   void (async () => {
     try {
       // 这两步必须在第一个 await 之前：turn-cycle 收尾会 dispose session
-      const assistantText = lastAssistantText(session.messages);
-      const model = session.model;
-      if (assistantText.trim() === "" || model === undefined) return;
+      const assistantText = completedTurnAssistantText(session.messages, baseline);
+      const sessionModel = session.model;
+      // null = 本轮没正常结束（打断 / 报错 / 还没开始回答就被打断），不蒸
+      if (assistantText === null || assistantText.trim() === "" || sessionModel === undefined) return;
+      const dedicated = choreModel === undefined ? null : await resolveChoreModel(choreModel);
+      const model = dedicated?.model ?? sessionModel;
+      // 鉴权面跟着模型走（generateSessionTitle 同款）：家务活模型没解析到时
+      // 用账本里那份（会话当前 provider 的密钥）
+      const auth: { apiKey: string; headers?: Record<string, string> } =
+        dedicated ?? { apiKey: note.apiKey, ...(note.headers ? { headers: note.headers } : {}) };
       const response = await completeSimple(
         model,
         {
@@ -553,11 +567,14 @@ function scheduleMemoryDistill(
           ],
         },
         {
-          apiKey: note.apiKey,
+          apiKey: auth.apiKey,
           maxTokens: 1024,
           timeoutMs: MEMORY_DISTILL_TIMEOUT_MS,
           signal: AbortSignal.timeout(MEMORY_DISTILL_TIMEOUT_MS),
-          ...(note.headers ? { headers: note.headers } : {}),
+          // 家务活模型（或退回的会话模型）可能是 OAuth Claude：蒸馏调用不经主循环的
+          // 扩展通路，车道改写随 options 带上（generateSessionTitle 同款）
+          onPayload: ccBillingPatch,
+          ...(auth.headers ? { headers: auth.headers } : {}),
         },
       );
       if (response.stopReason === "error") {
@@ -1580,13 +1597,25 @@ async function echoAndPrompt(
     if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
     send({ type: "progress", sessionId: command.sessionId, progress });
   }
+  // 本轮基线：prompt 前的消息数。轮后蒸馏只认这之后新增的 assistant——
+  // 「还没开始回答就被打断」时最后一条 assistant 是上一轮的，拿它会蒸出
+  // 张冠李戴的条目（上一轮的回答 × 本轮的提问）
+  const baseline = opened.session.messages.length;
   await opened.session.prompt(promptText, {
     expandPromptTemplates: false,
     ...(images.length > 0 ? { images: forModel(images) } : {}),
   });
-  // 轮后蒸馏：fire-and-forget，与下一轮并发；失败静默（易耗品纪律同标题）
+  // 轮后蒸馏：fire-and-forget，与下一轮并发；失败静默（易耗品纪律同标题）。
+  // 只蒸正常结束的轮（打断 / 报错不蒸，判定在 memory-distill.ts）
   if (memoryEnabled) {
-    scheduleMemoryDistill(command.sessionId, opened.session, note, command.text);
+    scheduleMemoryDistill(
+      command.sessionId,
+      opened.session,
+      note,
+      command.text,
+      baseline,
+      command.choreModel,
+    );
   }
 }
 

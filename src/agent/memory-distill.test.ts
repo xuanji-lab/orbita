@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildDistillPrompt,
+  completedTurnAssistantText,
   DISTILL_SYSTEM_PROMPT,
   formatDate,
-  lastAssistantText,
   parseDistillReply,
 } from "./memory-distill.ts";
 
@@ -61,25 +61,89 @@ test("buildDistillPrompt：带绝对日期锚点，超长输入截断", () => {
   assert.ok(prompt.includes("（中段略）"));
 });
 
-test("lastAssistantText：取最后一条 assistant 的文本块，拼接并跳过非文本块", () => {
+test("completedTurnAssistantText：正常轮——取本轮新增的最后一条 assistant，拼接文本块并跳过非文本块", () => {
   const messages = [
-    { role: "user", content: [{ type: "text", text: "问" }] },
+    { role: "assistant", content: [{ type: "text", text: "上一轮的回答" }], stopReason: "stop" },
+    { role: "user", content: [{ type: "text", text: "本轮提问" }] },
     {
       role: "assistant",
       content: [
-        { type: "text", text: "前半。" },
         { type: "toolCall", id: "t1" },
+      ],
+      stopReason: "toolUse",
+    },
+    { role: "toolResult", toolCallId: "t1", content: [] },
+    {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "思考不算回答" },
+        { type: "text", text: "前半。" },
         { type: "text", text: "后半。" },
       ],
+      stopReason: "stop",
     },
   ];
-  assert.equal(lastAssistantText(messages), "前半。\n后半。");
+  // baseline = 1：prompt 前只有上一轮的回答，本轮从 user 那条开始
+  assert.equal(completedTurnAssistantText(messages, 1), "前半。\n后半。");
 });
 
-test("lastAssistantText：没有 assistant 或没有文本返回空串", () => {
-  assert.equal(lastAssistantText([]), "");
-  assert.equal(lastAssistantText([{ role: "user", content: [] }]), "");
-  assert.equal(lastAssistantText([{ role: "assistant", content: [{ type: "toolCall", id: "x" }] }]), "");
+test("completedTurnAssistantText：打断且还没开始回答——本轮无新增 assistant，不回落到上一轮的回答", () => {
+  const messages = [
+    { role: "user", content: [{ type: "text", text: "上一轮提问" }] },
+    { role: "assistant", content: [{ type: "text", text: "上一轮的回答" }], stopReason: "stop" },
+    { role: "user", content: [{ type: "text", text: "本轮提问，还没回答就被打断" }] },
+  ];
+  // 张冠李戴的根源：不看基线的话「最后一条 assistant」是上一轮的回答，
+  // 会和本轮提问拼在一起蒸出错误条目
+  assert.equal(completedTurnAssistantText(messages, 2), null);
+});
+
+test("completedTurnAssistantText：打断但有半截回答——stopReason aborted 不蒸", () => {
+  const messages = [
+    { role: "user", content: [{ type: "text", text: "本轮提问" }] },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "刚说了半句就被打断了" }],
+      stopReason: "aborted",
+    },
+  ];
+  assert.equal(completedTurnAssistantText(messages, 0), null);
+});
+
+test("completedTurnAssistantText：报错轮——stopReason error 不蒸（pi 停止后补的那条 error 同样拦下）", () => {
+  const messages = [
+    { role: "user", content: [{ type: "text", text: "本轮提问" }] },
+    { role: "toolResult", toolCallId: "t1", content: [] },
+    {
+      role: "assistant",
+      // 被我们停下时 pi 拿着已 abort 的信号再调一次模型，得到的就是这条 error
+      content: [{ type: "text", text: "" }],
+      stopReason: "error",
+      errorMessage: "This operation was aborted",
+    },
+  ];
+  assert.equal(completedTurnAssistantText(messages, 0), null);
+});
+
+test("completedTurnAssistantText：正常但纯工具轮（最后一条 assistant 没有文本）返回空串，由调用方跳过", () => {
+  const messages = [
+    { role: "user", content: [{ type: "text", text: "问" }] },
+    { role: "assistant", content: [{ type: "toolCall", id: "x" }], stopReason: "stop" },
+  ];
+  assert.equal(completedTurnAssistantText(messages, 0), "");
+});
+
+test("completedTurnAssistantText：长度截断（length）与延迟（deferred）算正常结束", () => {
+  const lengthCut = [
+    { role: "user", content: [{ type: "text", text: "问" }] },
+    { role: "assistant", content: [{ type: "text", text: "被 maxTokens 截断的回答" }], stopReason: "length" },
+  ];
+  assert.equal(completedTurnAssistantText(lengthCut, 0), "被 maxTokens 截断的回答");
+  const deferred = [
+    { role: "user", content: [{ type: "text", text: "问" }] },
+    { role: "assistant", content: [{ type: "text", text: "延迟完成的回答" }], stopReason: "deferred" },
+  ];
+  assert.equal(completedTurnAssistantText(deferred, 0), "延迟完成的回答");
 });
 
 test("formatDate：YYYY-MM-DD 且补零", () => {
