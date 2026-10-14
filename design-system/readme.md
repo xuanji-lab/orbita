@@ -362,7 +362,7 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
 | `--font-size-xl` | base + 4 | 18px | Markdown h1, page / conversation titles |
 | `--font-size-lg` | base + 2 | 16px | Markdown h2, settings and panel titles |
 | `--font-size-base` | base | 14px | Body, transcript, composer, buttons, menus, list rows, card titles, Markdown h3–h6 |
-| `--font-size-sm` | base − 2 | 12px | Secondary copy, helper text, descriptions, timestamps, tooltips |
+| `--font-size-sm` | base − 2 | 12px | Secondary copy, helper text, descriptions, timestamps, tooltips, quiet chips (composer bar, On / Off segments) |
 | `--font-size-xs` | base − 3 | 11px | Badges, counters, uppercase group labels, very weak metadata |
 
 - **A card uses at most three sizes**: title `base` + semibold, body `base` or `sm`, metadata `xs`.

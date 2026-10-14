@@ -203,14 +203,14 @@
  * JS 量宽度的逻辑（全走 CSS 容器查询 + overflow:hidden 兜底），允许它的 chip 收缩
  * 正是这里要的效果，只是不能外溢到别的消费者。
  *
- * 断点用实际内容量出来（都按 14px base 字号 + 现有 padding/gap 估算）：
- *   - 展开态：工作区芯片（图标12+gap5+文字~43+gap5+chevron11+padding16）≈92px、
- *     权限芯片固定 84px、模型芯片（无图标，文字~96+chevron11+padding16）≈123px
+ * 断点用实际内容量出来（都按 12px sm 字号——Chip 的字号——+ 现有 padding/gap 估算）：
+ *   - 展开态：工作区芯片（图标12+gap5+文字~37+gap5+chevron11+padding16）≈86px、
+ *     权限芯片固定 84px、模型芯片（无图标，文字~83+chevron11+padding16）≈110px
  *     起步（还会随模型名变长）、思考档固定 84px、用量环 ≈30px、4 个 gap ≈24px——
- *     全展开至少要 ~440px，装不下就已经开始互相挤。
+ *     全展开至少要 ~420px，装不下就已经开始互相挤。
  *   - 紧凑态（只留图标）：图标 12 + gap 5 + chevron 11 + padding 16 ≈ 44px 一个，
  *     工作区与权限各省 ~40–45px，留给模型名与思考档。
- * 取 430px 做断点——比展开态最小需求（~440px）略窄一点，容器一旦装不下当前展开
+ * 取 410px 做断点——比展开态最小需求（~420px）略窄一点，容器一旦装不下当前展开
  * 内容就立刻收，不留一段「即将重叠」的中间态。
  */
 /* 输入框本体。底、内边距与行高放在 class 上（不在 Composer.tsx 的 inline style 里）：
@@ -395,7 +395,7 @@
   min-width: 0;
 }
 
-@container (max-width: 430px) {
+@container (max-width: 410px) {
   /* 工作区与权限芯片只留图标，文字仍在 title 里（Chip 本来就总是设 title） */
   .composer-bottom-bar .chip-scope .chip-label,
   .composer-bottom-bar .chip-mode .chip-label {
