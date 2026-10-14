@@ -18,7 +18,7 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { win32 } from "node:path";
 import { promisify } from "node:util";
 import type {
   ComputerUseProbeResult,
@@ -40,9 +40,11 @@ export const PROBE_COMMAND_TIMEOUT_MS = 5_000;
 
 const EDITION_REG_PATH = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
 
-/** WindowsSandbox.exe 的绝对路径（SystemRoot 可注入，测试里不用真环境变量）。 */
+/** WindowsSandbox.exe 的绝对路径（SystemRoot 可注入，测试里不用真环境变量）。
+ * 用 win32.join：SystemRoot 是 Windows 侧路径，macOS/Linux 开发机上 host join 会拼出
+ * `C:\Windows/System32/...` 这种混合分隔符——真机只在 Windows 上跑，但测试在任何平台都要过。 */
 export function windowsSandboxExePath(systemRoot: string = process.env.SystemRoot ?? "C:\\Windows"): string {
-  return join(systemRoot, "System32", "WindowsSandbox.exe");
+  return win32.join(systemRoot, "System32", "WindowsSandbox.exe");
 }
 
 /**
@@ -114,7 +116,8 @@ function buildGuidance(result: {
   }
   if (result.edition === "home") {
     lines.push("Windows 家庭版没有 Windows 沙箱功能，需要专业版 / 企业版 / 教育版。");
-  } else if (result.edition === "unknown") {
+  } else if (result.edition === "unknown" && result.platformOk) {
+    // reg query 真的跑过才报「读不到」；非 Windows 上根本没跑，报这条只会稀释平台那一条
     lines.push("读不到 Windows 版本档位（reg query 失败），无法确认沙箱可用。");
   }
   // 版本档位不是 Home 才有「去开功能」的意义；家庭版开不了，别误导
