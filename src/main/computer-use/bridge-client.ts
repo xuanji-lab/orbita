@@ -13,13 +13,28 @@
  * 就绪握手（pingGuest）必须在截图之前完成（sandbox.ts 的启动链保证这个顺序）。
  */
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { COMPUTER_USE_CMD_DIR } from "../../shared/computer-use.ts";
 
 export interface GuestScreenshot {
   jpeg: Uint8Array;
   nativeWidth: number;
   nativeHeight: number;
+}
+
+/**
+ * resp 里的 jpeg 字段必须是**纯文件名**（`cmd-000001.jpg` 这种），不许带目录、不许有 `..`。
+ *
+ * 为什么必须有这一关：resp 是 guest 进程写的内容，是整条协议里**唯一的不可信输入**。
+ * 直接 `join(cmdDir, jpegName)` 的话，被攻陷 / 被换掉的 guest 回一个
+ * `..\..\Users\<me>\.ssh\id_ed25519`，宿主就会替它把任意文件读出来、base64 之后
+ * 经 IPC 送进 renderer（2026-10-14 审查意见 A）。
+ *
+ * 用 `win32.basename` 而不是 posix 的：宿主的路径规则是 Windows，`..\..\x` 在 posix
+ * 眼里只是一个普通文件名（不含 `/`），只有 win32 才认反斜杠。
+ */
+export function isPlainScreenshotFileName(name: string): boolean {
+  return name !== "" && name === win32.basename(name) && !name.includes("..");
 }
 
 /** 桥不应答时的放弃线（就绪握手之后的命令通道是即时的，15s 没响应 = 桥死了 / 沙箱卡了） */
@@ -115,7 +130,7 @@ export async function pingGuest(outDir: string, timeoutMs: number): Promise<void
 
 /**
  * 向 guest 桥要一张截图。所有失败都以 Error 抛出（消息已是人话，调用方直接展示）：
- * 超时 / 桥回的错误命令响应 / 响应缺字段 / JPEG 缺失。
+ * 超时 / 桥回的错误命令响应 / 响应缺字段 / 文件名非法 / JPEG 缺失。
  */
 export async function fetchGuestScreenshot(
   outDir: string,
@@ -136,6 +151,10 @@ export async function fetchGuestScreenshot(
     jpegName === ""
   ) {
     throw new Error("guest 桥的截图响应缺字段（nativeWidth / nativeHeight / jpeg）");
+  }
+  // 路径穿越闸门：读盘之前先卡死（理由见 isPlainScreenshotFileName）
+  if (!isPlainScreenshotFileName(jpegName)) {
+    throw new Error(`guest 桥回了非法的截图文件名：${jpegName}`);
   }
 
   // resp 里引用的 jpg 先于 resp 落盘（桥的顺序保证），读不到就是同步抖动，重读一次
