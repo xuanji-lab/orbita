@@ -3288,6 +3288,14 @@ function toolIcon(toolName: string): IconName {
     case "browser_type":
     case "browser_press":
       return "globe";
+    // 电脑使用：动作都落在沙箱那台「机器」上（monitor）；截图是看不是操作，单独的图形状
+    case "computer_screenshot":
+      return "image";
+    case "computer_click":
+    case "computer_type":
+    case "computer_key":
+    case "computer_scroll":
+      return "monitor";
     default:
       // MCP 工具（mcp__server__tool）：专属插头图标——外部能力，与内置工具一眼区分
       return parseQualifiedToolName(toolName) !== null ? "plug" : "wrench";
